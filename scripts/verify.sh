@@ -37,7 +37,10 @@ resolve_script_dir() {
 }
 
 SCRIPT_DIR="$(resolve_script_dir "${BASH_SOURCE[0]}")"
-ENSURE="$SCRIPT_DIR/ensure-maestro-runner.sh"
+VERIFY_CLI="$SCRIPT_DIR/../packages/rn-dev-agent-core/dist/maestro-runner-pin.js"
+if [ ! -f "$VERIFY_CLI" ]; then
+  VERIFY_CLI="$SCRIPT_DIR/../rn-dev-agent-core/dist/maestro-runner-pin.js"
+fi
 
 PLATFORM=""
 FLOW_DIR=""
@@ -60,17 +63,10 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# Require the exact pin-cache runner (version + checksum). Never PATH or ~/.maestro-runner.
-if [ ! -f "$ENSURE" ]; then
-  echo "ERROR: ensure-maestro-runner.sh not found next to verify.sh."
+if [ ! -f "$VERIFY_CLI" ]; then
+  echo "ERROR: packaged maestro-runner replay entry point was not found."
   exit 2
 fi
-RUNNER="$(bash "$ENSURE" --print-bin)" || {
-  echo "ERROR: exact maestro-runner pin is required before verify."
-  echo "Supported correction: bash \"$ENSURE\""
-  echo "Never resolve PATH, ~/.maestro-runner, brew maestro, or maestro-cli."
-  exit 2
-}
 
 # Auto-detect platform if not specified
 if [ -z "$PLATFORM" ]; then
@@ -112,70 +108,7 @@ if [ -z "$FLOW_DIR" ]; then
   fi
 fi
 
-# Discover flows
-FLOWS=()
-while IFS= read -r -d '' f; do
-  if [ -n "$PATTERN" ]; then
-    if echo "$f" | grep -qiE "$PATTERN"; then
-      FLOWS+=("$f")
-    fi
-  else
-    FLOWS+=("$f")
-  fi
-done < <(find "$FLOW_DIR" -name '*.yaml' -o -name '*.yml' | sort | tr '\n' '\0')
-
-if [ ${#FLOWS[@]} -eq 0 ]; then
-  echo "ERROR: No Maestro flows found in $FLOW_DIR"
-  [ -n "$PATTERN" ] && echo "  (pattern: $PATTERN)"
-  exit 2
-fi
-
-# Run flows
-echo "rn-verify — Maestro E2E Regression Suite"
-echo "========================================="
-echo "Platform:  $PLATFORM"
-echo "Flow dir:  $FLOW_DIR"
-echo "Flows:     ${#FLOWS[@]}"
-echo "Timeout:   ${TIMEOUT}ms per flow"
-[ -n "$PATTERN" ] && echo "Pattern:   $PATTERN"
-echo ""
-
-PASSED=0
-FAILED=0
-ERRORS=()
-
-for FLOW in "${FLOWS[@]}"; do
-  NAME=$(basename "$FLOW")
-  START=$(python3 -c 'import time; print(int(time.time()*1000))')
-
-  if "$RUNNER" --platform "$PLATFORM" --timeout "$((TIMEOUT / 1000))" test "$FLOW" > /tmp/rn-verify-output.txt 2>&1; then
-    DURATION=$(( $(python3 -c 'import time; print(int(time.time()*1000))') - START ))
-    echo "  PASS  $NAME  (${DURATION}ms)"
-    PASSED=$((PASSED + 1))
-  else
-    DURATION=$(( $(python3 -c 'import time; print(int(time.time()*1000))') - START ))
-    echo "  FAIL  $NAME  (${DURATION}ms)"
-    FAILED=$((FAILED + 1))
-    ERRORS+=("$NAME")
-    if $STOP_ON_FAILURE; then
-      echo ""
-      echo "Stopped after first failure (--stop-on-failure)"
-      break
-    fi
-  fi
-done
-
-echo ""
-echo "-----------------------------------------"
-echo "Results: $PASSED passed, $FAILED failed (${#FLOWS[@]} total)"
-
-if [ $FAILED -gt 0 ]; then
-  echo ""
-  echo "Failed flows:"
-  for E in "${ERRORS[@]}"; do
-    echo "  - $E"
-  done
-  exit 1
-fi
-
-exit 0
+VERIFY_ARGS=(verify-actions --platform "$PLATFORM" --flow-dir "$FLOW_DIR" --timeout "$TIMEOUT")
+[ -n "$PATTERN" ] && VERIFY_ARGS+=(--pattern "$PATTERN")
+$STOP_ON_FAILURE && VERIFY_ARGS+=(--stop-on-failure)
+exec node "$VERIFY_CLI" "${VERIFY_ARGS[@]}"

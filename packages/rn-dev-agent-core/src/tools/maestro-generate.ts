@@ -8,6 +8,10 @@ import {
   isValidBundleId,
   MaestroValidationError,
 } from '../domain/maestro-validator.js';
+import { ACTION_ENGINE_PIN } from '../domain/engine-pin.js';
+import { regexSelectorCapabilityRefusal } from '../domain/action-engine-compat.js';
+import { joinYaml, splitYaml } from '../domain/action-store.js';
+import { serializeM7Header } from '../domain/reusable-action.js';
 
 interface MaestroStep {
   action: 'tap' | 'fill' | 'assert' | 'scroll' | 'navigate' | 'back' | 'wait' | 'swipe' | 'launch';
@@ -83,7 +87,7 @@ function stepToMaestroCommands(step: MaestroStep): unknown[] {
 
     case 'wait':
       if (step.waitMs && step.waitMs > 0) {
-        return [{ extendedWaitUntil: { visible: '.*', timeout: step.waitMs } }];
+        return [{ waitForAnimationToEnd: { timeout: step.waitMs } }];
       }
       return [];
 
@@ -109,6 +113,9 @@ export function createMaestroGenerateHandler(): (args: MaestroGenerateArgs) => P
     }
 
     const sanitizedName = args.name.replace(/[^a-zA-Z0-9_-]/g, '-').toLowerCase();
+    if (!sanitizedName.replace(/-/g, '')) {
+      return failResult('Flow name must contain at least one letter, number, or underscore.');
+    }
     const fileName = `${sanitizedName}.yaml`;
     const filePath = join(outputDir, fileName);
 
@@ -123,9 +130,22 @@ export function createMaestroGenerateHandler(): (args: MaestroGenerateArgs) => P
       }
     }
 
+    const compatibilityRefusal = regexSelectorCapabilityRefusal(commands);
+    if (compatibilityRefusal) return failResult(compatibilityRefusal, 'ENGINE_PIN_MISMATCH');
+
     let content: string;
     try {
-      content = buildMaestroFlow(args.appId ? { appId: args.appId } : {}, commands);
+      const generated = buildMaestroFlow(args.appId ? { appId: args.appId } : {}, commands);
+      const parts = splitYaml(generated);
+      content = joinYaml({
+        ...parts,
+        headerLines: serializeM7Header({
+          id: sanitizedName,
+          intent: args.name.replace(/[\r\n]+/g, ' '),
+          status: 'experimental',
+          enginePin: ACTION_ENGINE_PIN,
+        }).split('\n'),
+      });
     } catch (err) {
       if (err instanceof MaestroValidationError) {
         return failResult(`Refusing to write Maestro flow: ${err.message} (Phase 134.1)`);

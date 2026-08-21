@@ -199,7 +199,7 @@ export function enginePinCaveat(status: ReplayEngineStatus): string | null {
     return `maestro-runner ${status.version} differs from the tested pin ${status.pin.pinned} (untested drift — B223-class behavior changes arrive silently; see the upgrade ritual in engine-pin.ts)`;
   }
   if (cls === 'checksum-mismatch') {
-    return `maestro-runner reports the pinned version ${status.pin.pinned} but its binary checksum does not match the manifest — possible corruption or tampering; reinstall via ensure-maestro-runner.sh`;
+    return `maestro-runner pin-cache binary checksum does not match the ${status.pin.pinned} manifest — possible corruption or tampering; reinstall via ensure-maestro-runner.sh`;
   }
   return null;
 }
@@ -238,29 +238,63 @@ const TEXT_SELECTOR_KEYS = new Set([
   'longPressOn',
   'assertVisible',
   'assertNotVisible',
-  'visible',
-  'notVisible',
-  'text',
+  'copyTextFrom',
 ]);
+
+const RELATIVE_SELECTOR_KEYS = new Set([
+  'above',
+  'below',
+  'leftOf',
+  'rightOf',
+  'childOf',
+  'containsChild',
+  'containsDescendants',
+]);
+
+function selectorTextValues(value: unknown, found: string[]): void {
+  if (typeof value === 'string') {
+    if (isRegexShapedSelector(value)) found.push(value);
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const entry of value) selectorTextValues(entry, found);
+    return;
+  }
+  if (!value || typeof value !== 'object') return;
+  for (const [key, nested] of Object.entries(value)) {
+    if (key === 'text' || RELATIVE_SELECTOR_KEYS.has(key)) {
+      selectorTextValues(nested, found);
+    }
+  }
+}
+
+function conditionTextValues(value: unknown, found: string[]): void {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return;
+  for (const [key, nested] of Object.entries(value)) {
+    if (key === 'visible' || key === 'notVisible') selectorTextValues(nested, found);
+  }
+}
 
 export function findRegexTextSelectors(commands: readonly unknown[]): string[] {
   const found: string[] = [];
-  const visit = (value: unknown, underSelectorKey: boolean): void => {
-    if (typeof value === 'string') {
-      if (underSelectorKey && isRegexShapedSelector(value)) found.push(value);
-      return;
-    }
+  const visit = (value: unknown): void => {
     if (Array.isArray(value)) {
-      for (const entry of value) visit(entry, underSelectorKey);
+      for (const entry of value) visit(entry);
       return;
     }
     if (value && typeof value === 'object') {
       for (const [key, nested] of Object.entries(value)) {
-        visit(nested, TEXT_SELECTOR_KEYS.has(key));
+        if (TEXT_SELECTOR_KEYS.has(key)) selectorTextValues(nested, found);
+        if (key === 'scrollUntilVisible' && nested && typeof nested === 'object') {
+          selectorTextValues((nested as Record<string, unknown>).element, found);
+        }
+        if (key === 'extendedWaitUntil') conditionTextValues(nested, found);
+        if (key === 'when') conditionTextValues(nested, found);
+        visit(nested);
       }
     }
   };
-  visit([...commands], false);
+  visit(commands);
   return found;
 }
 
@@ -311,7 +345,7 @@ export function pinCorrection(status: ReplayEngineStatus, platformKey = nodePlat
     case 'drift-newer':
       return `Session maestro-runner ${installed} is newer than the required pin ${pinned}. ${install}`;
     case 'checksum-mismatch':
-      return `Session maestro-runner reports ${pinned} but the binary checksum does not match the pin manifest. ${install}`;
+      return `Session maestro-runner binary checksum does not match the ${pinned} pin manifest. ${install}`;
     case 'unknown-version':
       return `Session maestro-runner version could not be read. ${install}`;
     case 'unverified':
@@ -335,6 +369,8 @@ export function exactPinRefusal(
 export interface PinDoctorReport {
   ok: boolean;
   status: EnginePinClassification;
+  platformStatus: 'supported' | 'unsupported';
+  platformKey: string;
   pinned: string;
   installedVersion: string | null;
   selectedPath: string | null;
@@ -346,10 +382,13 @@ export function doctorPinnedRunner(
   status: ReplayEngineStatus,
   platformKey = nodePlatformKey(),
 ): PinDoctorReport {
-  const ok = status.pin.status === 'pinned-ok';
+  const platformStatus = pinArchiveCoords(platformKey) === null ? 'unsupported' : 'supported';
+  const ok = status.pin.status === 'pinned-ok' && platformStatus === 'supported';
   return {
     ok,
     status: status.pin.status,
+    platformStatus,
+    platformKey,
     pinned: status.pin.pinned,
     installedVersion: status.version,
     selectedPath: status.selectedPath ?? null,
@@ -402,6 +441,19 @@ async function detect(resolvers: EngineStatusResolvers): Promise<ReplayEngineSta
     sha256 = (resolvers.hashFile ?? defaultHashFile)(binPath);
   } catch {
     sha256 = null;
+  }
+  const expectedSha256 = MAESTRO_RUNNER_PIN.sha256[platformKey];
+  if (!expectedSha256 || !sha256) {
+    return buildReplayEngineStatus('unverified', null, false, {
+      selectedPath: binPath,
+      provenance: 'pin-cache',
+    });
+  }
+  if (sha256 !== expectedSha256) {
+    return buildReplayEngineStatus('checksum-mismatch', null, false, {
+      selectedPath: binPath,
+      provenance: 'pin-cache',
+    });
   }
   let version: string | null = null;
   try {

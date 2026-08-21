@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { basename, join, dirname } from 'node:path';
 import { okResult, failResult, warnResult } from '../utils.js';
 import { getEngineStatus, enginePinCaveat, exactPinRefusal, preOAndroidApiRefusal, isOlderSdkInstallFailure, olderSdkInstallDiagnosis, MAESTRO_RUNNER_MIN_ANDROID_API, } from '../domain/engine-pin.js';
-import { actionReplayPreflight, isLearnedActionPath, regexSelectorCapabilityRefusal, } from '../domain/action-engine-compat.js';
+import { actionReplayPreflight, isLearnedActionPath, replayCompatibilityPreflight, } from '../domain/action-engine-compat.js';
 import { parseM7Header } from '../domain/reusable-action.js';
 import { getActiveSession } from '../agent-device-wrapper.js';
 import { resolveBundleId, readExpoSlug } from '../project-config.js';
@@ -448,7 +448,11 @@ export function createMaestroRunHandler(deps = {}) {
                 commands: validatedCommands,
                 engineStatus,
             })
-            : regexSelectorCapabilityRefusal(validatedCommands);
+            : replayCompatibilityPreflight({
+                commands: validatedCommands,
+                engineStatus,
+                requireEnginePin: false,
+            });
         if (compatibilityRefusal) {
             return failResult(compatibilityRefusal, 'ENGINE_PIN_MISMATCH', {
                 pin: engineStatus?.pin,

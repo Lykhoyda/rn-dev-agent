@@ -13,13 +13,12 @@
 // recorder. Keeping emission explicit means the agent has to make the
 // classification decision (which is the right place for it).
 
-import { existsSync } from 'node:fs';
 import { okResult, failResult } from '../utils.js';
 import type { ToolResult } from '../utils.js';
 import { getStoredEvents, getRecordingStartRoute } from './test-recorder.js';
 import { generateMaestro } from './test-recorder-generators.js';
 import { type ActionLifecycle, freshRuntimeState } from '../domain/reusable-action.js';
-import { actionPathFor } from '../domain/action-store.js';
+import { actionPathFor, resolveActionPath } from '../domain/action-store.js';
 import { mirrorToDb } from '../domain/action-state-store.js';
 import { sidecarPathFor } from '../domain/sidecar-io.js';
 import { atomicWriter } from '../domain/atomic-writer.js';
@@ -114,19 +113,28 @@ export function createSaveAsActionHandler() {
     }
 
     const projectRoot = args.projectRoot ?? process.cwd();
-    const filePath = actionPathFor(projectRoot, args.id);
+    let existingPath: string | null;
+    try {
+      existingPath = resolveActionPath(projectRoot, args.id);
+    } catch (err) {
+      return failResult(
+        err instanceof Error ? err.message : String(err),
+        'BAD_FILENAME',
+      );
+    }
+    const filePath = existingPath ?? actionPathFor(projectRoot, args.id);
     // Phase 130 (post-review): capture pre-existence ONCE before any
     // write — `existsSync(filePath)` after `writeFileSync` is always
     // true and inverted the `created`/`overwritten` flags in the
     // success payload (multi-LLM review caught this).
-    const preexisted = existsSync(filePath);
+    const preexisted = existingPath !== null;
     if (preexisted && !args.overwrite) {
       return failResult(
-        `cdp_record_test_save_as_action: action "${args.id}" already exists at ${filePath}. Pass overwrite=true to replace, or pick a different id.`,
+        `cdp_record_test_save_as_action: action "${args.id}" already exists at ${existingPath}. Pass overwrite=true to replace, or pick a different id.`,
         'BAD_FILENAME',
         {
           actionId: args.id,
-          filePath,
+          filePath: existingPath,
           hint: 'Existing actions should be repaired (cdp_repair_action) or extended in place, not silently overwritten.',
         },
       );

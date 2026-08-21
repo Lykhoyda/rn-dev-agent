@@ -16,10 +16,9 @@ export async function listActions(projectRoot: string): Promise<ActionSummary[]>
   } catch {
     return [];
   }
-  const yamlFiles = files.filter((f) => f.endsWith('.yaml')).sort();
+  const yamlFiles = files.filter((f) => /\.ya?ml$/.test(f)).sort();
   const results: ActionSummary[] = [];
-  for (const file of yamlFiles) {
-    const id = file.slice(0, -5);
+  for (const id of [...new Set(yamlFiles.map((file) => file.replace(/\.ya?ml$/, '')))]) {
     let action;
     try {
       action = loadAction(projectRoot, id);

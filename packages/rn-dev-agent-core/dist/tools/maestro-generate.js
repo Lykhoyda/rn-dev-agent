@@ -3,6 +3,10 @@ import { join } from 'node:path';
 import { okResult, failResult } from '../utils.js';
 import { findProjectRoot } from '../nav-graph/storage.js';
 import { buildMaestroFlow, isValidBundleId, MaestroValidationError, } from '../domain/maestro-validator.js';
+import { ACTION_ENGINE_PIN } from '../domain/engine-pin.js';
+import { regexSelectorCapabilityRefusal } from '../domain/action-engine-compat.js';
+import { joinYaml, splitYaml } from '../domain/action-store.js';
+import { serializeM7Header } from '../domain/reusable-action.js';
 /**
  * Phase 134.1 (deepsec CRITICAL #3): every step is now produced as a
  * structured object that flows through `buildMaestroFlow` for serialization,
@@ -57,7 +61,7 @@ function stepToMaestroCommands(step) {
             return [{ pressKey: 'back' }];
         case 'wait':
             if (step.waitMs && step.waitMs > 0) {
-                return [{ extendedWaitUntil: { visible: '.*', timeout: step.waitMs } }];
+                return [{ waitForAnimationToEnd: { timeout: step.waitMs } }];
             }
             return [];
         default:
@@ -78,6 +82,9 @@ export function createMaestroGenerateHandler() {
             mkdirSync(outputDir, { recursive: true });
         }
         const sanitizedName = args.name.replace(/[^a-zA-Z0-9_-]/g, '-').toLowerCase();
+        if (!sanitizedName.replace(/-/g, '')) {
+            return failResult('Flow name must contain at least one letter, number, or underscore.');
+        }
         const fileName = `${sanitizedName}.yaml`;
         const filePath = join(outputDir, fileName);
         if (args.appId !== undefined && !isValidBundleId(args.appId)) {
@@ -89,9 +96,22 @@ export function createMaestroGenerateHandler() {
                 commands.push(cmd);
             }
         }
+        const compatibilityRefusal = regexSelectorCapabilityRefusal(commands);
+        if (compatibilityRefusal)
+            return failResult(compatibilityRefusal, 'ENGINE_PIN_MISMATCH');
         let content;
         try {
-            content = buildMaestroFlow(args.appId ? { appId: args.appId } : {}, commands);
+            const generated = buildMaestroFlow(args.appId ? { appId: args.appId } : {}, commands);
+            const parts = splitYaml(generated);
+            content = joinYaml({
+                ...parts,
+                headerLines: serializeM7Header({
+                    id: sanitizedName,
+                    intent: args.name.replace(/[\r\n]+/g, ' '),
+                    status: 'experimental',
+                    enginePin: ACTION_ENGINE_PIN,
+                }).split('\n'),
+            });
         }
         catch (err) {
             if (err instanceof MaestroValidationError) {

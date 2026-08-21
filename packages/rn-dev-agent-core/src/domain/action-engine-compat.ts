@@ -43,10 +43,21 @@ export function actionReplayPreflight(opts: {
   commands: readonly unknown[];
   engineStatus: ReplayEngineStatus | null;
 }): string | null {
+  return replayCompatibilityPreflight({ ...opts, requireEnginePin: true });
+}
+
+export function replayCompatibilityPreflight(opts: {
+  enginePin?: string;
+  commands: readonly unknown[];
+  engineStatus: ReplayEngineStatus | null;
+  requireEnginePin: boolean;
+}): string | null {
   const pin = exactPinRefusal(opts.engineStatus);
   if (pin) return pin;
-  const format = actionEnginePinRefusal(opts.enginePin);
-  if (format) return format;
+  if (opts.requireEnginePin) {
+    const format = actionEnginePinRefusal(opts.enginePin);
+    if (format) return format;
+  }
   return regexSelectorCapabilityRefusal(opts.commands);
 }
 
@@ -59,13 +70,21 @@ const ENGINE_PIN_LINE = new RegExp(`^#\\s*enginePin\\s*:\\s*.+$`);
 
 export function upsertEnginePinHeader(text: string): { text: string; changed: boolean } {
   const parts = splitYaml(text);
-  const existingIdx = parts.headerLines.findIndex((line) => ENGINE_PIN_LINE.test(line));
   const nextLine = `# enginePin: ${ACTION_ENGINE_PIN}`;
-  if (existingIdx >= 0) {
-    if (parts.headerLines[existingIdx] === nextLine) return { text, changed: false };
-    const headerLines = [...parts.headerLines];
-    headerLines[existingIdx] = nextLine;
-    return { text: joinYaml({ ...parts, headerLines }), changed: true };
+  const existing = parts.headerLines.filter((line) => ENGINE_PIN_LINE.test(line));
+  if (existing.length > 0) {
+    const headerLines: string[] = [];
+    let inserted = false;
+    for (const line of parts.headerLines) {
+      if (!ENGINE_PIN_LINE.test(line)) {
+        headerLines.push(line);
+      } else if (!inserted) {
+        headerLines.push(nextLine);
+        inserted = true;
+      }
+    }
+    const nextText = joinYaml({ ...parts, headerLines });
+    return { text: nextText, changed: nextText !== text };
   }
   const statusIdx = parts.headerLines.findIndex((line) => /^#\s*status\s*:/.test(line));
   const headerLines = [...parts.headerLines];
@@ -133,8 +152,18 @@ export function migrateLearnedActions(projectRoot: string): ActionMigrationResul
   let files: string[] = [];
   try {
     files = readdirSync(dir).filter(isOwnedActionFile);
-  } catch {
-    return [];
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT') return [];
+    return [
+      {
+        id: 'actions',
+        path: dir,
+        status: 'unreadable',
+        reason: err instanceof Error ? err.message : String(err),
+        mutated: false,
+      },
+    ];
   }
   const results: ActionMigrationResult[] = [];
   for (const name of files) {

@@ -198,7 +198,7 @@ function replayHint(id: string | null, flowPath: string, params: string[]): stri
   const actionsDir = path.dirname(flowPath);
   const canonicalYaml =
     id !== null &&
-    path.basename(flowPath) === `${id}.yaml` &&
+    path.basename(flowPath).replace(/\.ya?ml$/, '') === id &&
     path.basename(actionsDir) === 'actions' &&
     path.basename(path.dirname(actionsDir)) === '.rn-agent';
   if (canonicalYaml) {

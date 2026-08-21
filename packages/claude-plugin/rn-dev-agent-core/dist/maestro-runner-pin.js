@@ -12,6 +12,14 @@ var __require = /* @__PURE__ */ ((x) => typeof require !== "undefined" ? require
   if (typeof require !== "undefined") return require.apply(this, arguments);
   throw Error('Dynamic require of "' + x + '" is not supported');
 });
+var __esm = (fn, res, err) => function __init() {
+  if (err) throw err[0];
+  try {
+    return fn && (res = (0, fn[__getOwnPropNames(fn)[0]])(fn = 0)), res;
+  } catch (e) {
+    throw err = [e], e;
+  }
+};
 var __commonJS = (cb, mod) => function __require2() {
   try {
     return mod || (0, cb[__getOwnPropNames(cb)[0]])((mod = { exports: {} }).exports, mod), mod.exports;
@@ -35,6 +43,350 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   isNodeMode || !mod || !mod.__esModule ? __defProp(target, "default", { value: mod, enumerable: true }) : target,
   mod
 ));
+
+// packages/rn-dev-agent-core/dist/domain/maestro-runner-pin.json
+var maestro_runner_pin_default;
+var init_maestro_runner_pin = __esm({
+  "packages/rn-dev-agent-core/dist/domain/maestro-runner-pin.json"() {
+    maestro_runner_pin_default = {
+      version: "1.1.24",
+      sha256: {
+        "darwin-arm64": "170f12521de83322823dd5fc0ce16e48abeba9952cdbb242670592566c2fd1f3",
+        "darwin-x64": "af7f5ea044afc72ea780c835f05b32203e443d2e26d310a864bfb2bc84959bf6",
+        "linux-x64": "e9bdef6f08f855ca1a884f99b54a519a1eae0a342917181a53eb414a5b00d6d8",
+        "linux-arm64": "8d8a6483ad04da2109636b7192398750657801b8a8d512688d1be3b033a105b8"
+      },
+      knownQuirks: [
+        {
+          id: "android-pre-o-unsupported",
+          ref: "GH #741",
+          note: "bundled UiAutomator2 server APK declares minSdk 26; API 23-25 installs fail with INSTALL_FAILED_OLDER_SDK"
+        }
+      ]
+    };
+  }
+});
+
+// packages/rn-dev-agent-core/dist/domain/engine-pin.js
+import { execFile as execFileCb } from "node:child_process";
+import { promisify } from "node:util";
+import { createHash } from "node:crypto";
+import { existsSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
+function engineLabel(_runner) {
+  return `the pinned maestro-runner ${MAESTRO_RUNNER_PIN.version}`;
+}
+function preOAndroidApiRefusal(apiLevel) {
+  if (apiLevel >= MAESTRO_RUNNER_MIN_ANDROID_API)
+    return null;
+  return `maestro_run refused: Android API ${apiLevel} is below API ${MAESTRO_RUNNER_MIN_ANDROID_API}, the minimum the pinned maestro-runner ${MAESTRO_RUNNER_PIN.version} can drive \u2014 its bundled UiAutomator2 server APK declares minSdk ${MAESTRO_RUNNER_MIN_ANDROID_API}, so the install fails with INSTALL_FAILED_OLDER_SDK. ${PRE_O_REMEDY}`;
+}
+function isOlderSdkInstallFailure(output) {
+  return output.split(/\r?\n/).some((line) => line.includes("INSTALL_FAILED_OLDER_SDK") && INSTALL_REJECT_CONTEXT.test(line.replace(OLDER_SDK_TOKEN, " ")));
+}
+function olderSdkInstallDiagnosis(runner = "maestro-runner") {
+  return `The device rejected the bundled UiAutomator2 server APK with INSTALL_FAILED_OLDER_SDK: ${engineLabel(runner)} requires Android API ${MAESTRO_RUNNER_MIN_ANDROID_API}+ and this device is below it. ${PRE_O_REMEDY}`;
+}
+function compareVersions(a, b) {
+  const pa = a.split(".").map(Number);
+  const pb = b.split(".").map(Number);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const x = pa[i] ?? 0;
+    const y = pb[i] ?? 0;
+    if (x > y)
+      return 1;
+    if (x < y)
+      return -1;
+  }
+  return 0;
+}
+function classifyEnginePin(detected, platformKey) {
+  if (!detected.installed)
+    return "not-installed";
+  if (!detected.version || !/^\d+(\.\d+)*$/.test(detected.version))
+    return "unknown-version";
+  const cmp = compareVersions(detected.version, MAESTRO_RUNNER_PIN.version);
+  if (cmp > 0)
+    return "drift-newer";
+  if (cmp < 0)
+    return "drift-older";
+  const expected = MAESTRO_RUNNER_PIN.sha256[platformKey];
+  if (!expected || !detected.sha256)
+    return "unverified";
+  if (detected.sha256 !== expected)
+    return "checksum-mismatch";
+  return "pinned-ok";
+}
+function pinCacheRoot(home = homedir()) {
+  const override = process.env.RN_DEV_AGENT_RUNNER_CACHE;
+  const base = override && override.length > 0 ? override : join(home, ".cache", "rn-dev-agent");
+  return join(base, "maestro-runner", MAESTRO_RUNNER_PIN.version);
+}
+function pinnedRunnerBinPath(home) {
+  return join(pinCacheRoot(home), "bin", "maestro-runner");
+}
+function getMaestroRunnerPath() {
+  const path = pinnedRunnerBinPath();
+  return existsSync(path) ? path : null;
+}
+function nodePlatformKey(platform = process.platform, arch = process.arch) {
+  return `${platform}-${arch}`;
+}
+function pinArchiveCoords(platformKey) {
+  switch (platformKey) {
+    case "darwin-arm64":
+      return { os: "darwin", arch: "arm64" };
+    case "darwin-x64":
+      return { os: "darwin", arch: "amd64" };
+    case "linux-x64":
+      return { os: "linux", arch: "amd64" };
+    case "linux-arm64":
+      return { os: "linux", arch: "arm64" };
+    default:
+      return null;
+  }
+}
+function buildReplayEngineStatus(cls, version, _cliPresent, extras = {}) {
+  const engine = cls === "not-installed" ? "none" : "maestro-runner";
+  return {
+    engine,
+    version,
+    pin: { pinned: MAESTRO_RUNNER_PIN.version, status: cls },
+    quirks: MAESTRO_RUNNER_PIN.knownQuirks.map((q) => q.id),
+    selectedPath: extras.selectedPath ?? null,
+    provenance: extras.provenance ?? (cls === "not-installed" ? "none" : "pin-cache")
+  };
+}
+function enginePinCaveat(status) {
+  const cls = status.pin.status;
+  if (cls === "drift-newer" || cls === "drift-older") {
+    return `maestro-runner ${status.version} differs from the tested pin ${status.pin.pinned} (untested drift \u2014 B223-class behavior changes arrive silently; see the upgrade ritual in engine-pin.ts)`;
+  }
+  if (cls === "checksum-mismatch") {
+    return `maestro-runner pin-cache binary checksum does not match the ${status.pin.pinned} manifest \u2014 possible corruption or tampering; reinstall via ensure-maestro-runner.sh`;
+  }
+  return null;
+}
+function isRegexShapedSelector(value) {
+  for (let i = 0; i < value.length; i += 1) {
+    const ch = value[i];
+    if (ch === "\\")
+      return true;
+    if (REGEX_METACHARACTERS.has(ch))
+      return true;
+  }
+  return false;
+}
+function selectorTextValues(value, found) {
+  if (typeof value === "string") {
+    if (isRegexShapedSelector(value))
+      found.push(value);
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const entry of value)
+      selectorTextValues(entry, found);
+    return;
+  }
+  if (!value || typeof value !== "object")
+    return;
+  for (const [key, nested] of Object.entries(value)) {
+    if (key === "text" || RELATIVE_SELECTOR_KEYS.has(key)) {
+      selectorTextValues(nested, found);
+    }
+  }
+}
+function conditionTextValues(value, found) {
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    return;
+  for (const [key, nested] of Object.entries(value)) {
+    if (key === "visible" || key === "notVisible")
+      selectorTextValues(nested, found);
+  }
+}
+function findRegexTextSelectors(commands) {
+  const found = [];
+  const visit = (value) => {
+    if (Array.isArray(value)) {
+      for (const entry of value)
+        visit(entry);
+      return;
+    }
+    if (value && typeof value === "object") {
+      for (const [key, nested] of Object.entries(value)) {
+        if (TEXT_SELECTOR_KEYS.has(key))
+          selectorTextValues(nested, found);
+        if (key === "scrollUntilVisible" && nested && typeof nested === "object") {
+          selectorTextValues(nested.element, found);
+        }
+        if (key === "extendedWaitUntil")
+          conditionTextValues(nested, found);
+        if (key === "when")
+          conditionTextValues(nested, found);
+        visit(nested);
+      }
+    }
+  };
+  visit(commands);
+  return found;
+}
+function pinCorrection(status, platformKey = nodePlatformKey()) {
+  const cls = status.pin.status;
+  const pinned = status.pin.pinned;
+  const installed = status.version ?? "unknown";
+  const install2 = `Reinstall exactly ${pinned} via ${PINNED_RUNNER_INSTALL_HINT} (session pin-cache; do not use PATH or brew maestro).`;
+  if (pinArchiveCoords(platformKey) === null) {
+    return `maestro-runner is unsupported on ${platformKey}. Supported platforms: darwin-arm64, darwin-x64, linux-x64, linux-arm64. ${install2}`;
+  }
+  switch (cls) {
+    case "not-installed":
+      return `Session maestro-runner ${pinned} is not installed. ${install2}`;
+    case "drift-older":
+      return `Session maestro-runner ${installed} is older than the required pin ${pinned}. ${install2}`;
+    case "drift-newer":
+      return `Session maestro-runner ${installed} is newer than the required pin ${pinned}. ${install2}`;
+    case "checksum-mismatch":
+      return `Session maestro-runner binary checksum does not match the ${pinned} pin manifest. ${install2}`;
+    case "unknown-version":
+      return `Session maestro-runner version could not be read. ${install2}`;
+    case "unverified":
+      return `Session maestro-runner ${installed} could not be checksum-verified on ${platformKey}. ${install2}`;
+    case "pinned-ok":
+      return `Session maestro-runner ${pinned} is selected from the pin-cache.`;
+  }
+}
+function exactPinRefusal(status, platformKey = nodePlatformKey()) {
+  if (!status) {
+    return `maestro_run refused: session runner ${MAESTRO_RUNNER_PIN.version} could not be detected. ${pinCorrection(buildReplayEngineStatus("not-installed", null, false), platformKey)}`;
+  }
+  if (status.pin.status === "pinned-ok")
+    return null;
+  return `maestro_run refused: ${pinCorrection(status, platformKey)}`;
+}
+function doctorPinnedRunner(status, platformKey = nodePlatformKey()) {
+  const platformStatus = pinArchiveCoords(platformKey) === null ? "unsupported" : "supported";
+  const ok = status.pin.status === "pinned-ok" && platformStatus === "supported";
+  return {
+    ok,
+    status: status.pin.status,
+    platformStatus,
+    platformKey,
+    pinned: status.pin.pinned,
+    installedVersion: status.version,
+    selectedPath: status.selectedPath ?? null,
+    provenance: status.provenance ?? (status.pin.status === "not-installed" ? "none" : "pin-cache"),
+    correction: ok ? null : pinCorrection(status, platformKey)
+  };
+}
+function _resetEngineStatusForTest() {
+  testStatus = void 0;
+}
+async function defaultExecVersion(bin) {
+  const { stdout, stderr } = await execFile(bin, ["--version"], {
+    timeout: 5e3,
+    encoding: "utf8"
+  });
+  return stdout + "\n" + stderr;
+}
+function defaultHashFile(bin) {
+  return createHash("sha256").update(readFileSync(bin)).digest("hex");
+}
+async function detect(resolvers) {
+  const binPath = (resolvers.binPath ?? getMaestroRunnerPath)();
+  const platformKey = resolvers.platformKey ?? nodePlatformKey();
+  if (!binPath) {
+    return buildReplayEngineStatus("not-installed", null, false, {
+      selectedPath: null,
+      provenance: "none"
+    });
+  }
+  let sha256 = null;
+  try {
+    sha256 = (resolvers.hashFile ?? defaultHashFile)(binPath);
+  } catch {
+    sha256 = null;
+  }
+  const expectedSha256 = MAESTRO_RUNNER_PIN.sha256[platformKey];
+  if (!expectedSha256 || !sha256) {
+    return buildReplayEngineStatus("unverified", null, false, {
+      selectedPath: binPath,
+      provenance: "pin-cache"
+    });
+  }
+  if (sha256 !== expectedSha256) {
+    return buildReplayEngineStatus("checksum-mismatch", null, false, {
+      selectedPath: binPath,
+      provenance: "pin-cache"
+    });
+  }
+  let version = null;
+  try {
+    const out = await (resolvers.execVersion ?? defaultExecVersion)(binPath);
+    version = out.match(/(\d+\.\d+\.\d+)/)?.[1] ?? null;
+  } catch {
+    version = null;
+  }
+  const cls = classifyEnginePin({ installed: true, version, sha256 }, platformKey);
+  return buildReplayEngineStatus(cls, version, false, {
+    selectedPath: binPath,
+    provenance: "pin-cache"
+  });
+}
+function getEngineStatus(resolvers) {
+  if (testStatus)
+    return Promise.resolve(testStatus);
+  return detect(resolvers ?? {}).catch(() => buildReplayEngineStatus("unknown-version", null, false));
+}
+var execFile, MAESTRO_RUNNER_PIN, ACTION_ENGINE_PIN, HOST_PLUGIN_ROOT, PINNED_RUNNER_INSTALL_HINT, PINNED_RUNNER_DIAGNOSE_HINT, MAESTRO_RUNNER_MIN_ANDROID_API, PRE_O_REMEDY, OLDER_SDK_TOKEN, INSTALL_REJECT_CONTEXT, REGEX_METACHARACTERS, TEXT_SELECTOR_KEYS, RELATIVE_SELECTOR_KEYS, testStatus;
+var init_engine_pin = __esm({
+  "packages/rn-dev-agent-core/dist/domain/engine-pin.js"() {
+    "use strict";
+    init_maestro_runner_pin();
+    execFile = promisify(execFileCb);
+    MAESTRO_RUNNER_PIN = maestro_runner_pin_default;
+    ACTION_ENGINE_PIN = `maestro-runner@${MAESTRO_RUNNER_PIN.version}`;
+    HOST_PLUGIN_ROOT = "${CLAUDE_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}";
+    PINNED_RUNNER_INSTALL_HINT = `bash ${HOST_PLUGIN_ROOT}/scripts/ensure-maestro-runner.sh`;
+    PINNED_RUNNER_DIAGNOSE_HINT = `node ${HOST_PLUGIN_ROOT}/rn-dev-agent-core/dist/maestro-runner-pin.js diagnose`;
+    MAESTRO_RUNNER_MIN_ANDROID_API = 26;
+    PRE_O_REMEDY = "Action replay / E2E via the maestro engine is unsupported on this device; the direct device_* interaction tier still works (rn-android-runner supports API 23+), except for the few device_* paths that fall back to maestro (dev-client picker, system dialogs, device_fill correction), which hit this same limit.";
+    OLDER_SDK_TOKEN = /INSTALL_FAILED_OLDER_SDK/g;
+    INSTALL_REJECT_CONTEXT = /\b(?:adb|install|installing|failure|uiautomator2)\b|\.apk\b/i;
+    REGEX_METACHARACTERS = /* @__PURE__ */ new Set([
+      ".",
+      "^",
+      "$",
+      "*",
+      "+",
+      "?",
+      "(",
+      ")",
+      "[",
+      "]",
+      "{",
+      "}",
+      "|"
+    ]);
+    TEXT_SELECTOR_KEYS = /* @__PURE__ */ new Set([
+      "tapOn",
+      "doubleTapOn",
+      "longPressOn",
+      "assertVisible",
+      "assertNotVisible",
+      "copyTextFrom"
+    ]);
+    RELATIVE_SELECTOR_KEYS = /* @__PURE__ */ new Set([
+      "above",
+      "below",
+      "leftOf",
+      "rightOf",
+      "childOf",
+      "containsChild",
+      "containsDescendants"
+    ]);
+  }
+});
 
 // node_modules/yaml/dist/nodes/identity.js
 var require_identity = __commonJS({
@@ -431,8 +783,8 @@ var require_anchors = __commonJS({
     function anchorIsValid(anchor) {
       if (/[\x00-\x19\s,[\]{}]/.test(anchor)) {
         const sa = JSON.stringify(anchor);
-        const msg = `Anchor must not contain whitespace or control characters: ${sa}`;
-        throw new Error(msg);
+        const msg2 = `Anchor must not contain whitespace or control characters: ${sa}`;
+        throw new Error(msg2);
       }
       return true;
     }
@@ -668,8 +1020,8 @@ var require_Alias = __commonJS({
         const { anchors: anchors2, doc, maxAliasCount } = ctx;
         const source = this.resolve(doc, ctx);
         if (!source) {
-          const msg = `Unresolved alias (the anchor must be set before the alias): ${this.source}`;
-          throw new ReferenceError(msg);
+          const msg2 = `Unresolved alias (the anchor must be set before the alias): ${this.source}`;
+          throw new ReferenceError(msg2);
         }
         let data = anchors2.get(source);
         if (!data) {
@@ -677,16 +1029,16 @@ var require_Alias = __commonJS({
           data = anchors2.get(source);
         }
         if (data?.res === void 0) {
-          const msg = "This should not happen: Alias anchor was not resolved?";
-          throw new ReferenceError(msg);
+          const msg2 = "This should not happen: Alias anchor was not resolved?";
+          throw new ReferenceError(msg2);
         }
         if (maxAliasCount >= 0) {
           data.count += 1;
           if (data.aliasCount === 0)
             data.aliasCount = getAliasCount(doc, source, anchors2);
           if (data.count * data.aliasCount > maxAliasCount) {
-            const msg = "Excessive alias count indicates a resource exhaustion attack";
-            throw new ReferenceError(msg);
+            const msg2 = "Excessive alias count indicates a resource exhaustion attack";
+            throw new ReferenceError(msg2);
           }
         }
         return data.res;
@@ -696,8 +1048,8 @@ var require_Alias = __commonJS({
         if (ctx) {
           anchors.anchorIsValid(this.source);
           if (ctx.options.verifyAliasOrder && !ctx.anchors.has(this.source)) {
-            const msg = `Unresolved alias (the anchor must be set before the alias): ${this.source}`;
-            throw new Error(msg);
+            const msg2 = `Unresolved alias (the anchor must be set before the alias): ${this.source}`;
+            throw new Error(msg2);
           }
           if (ctx.implicitKey)
             return `${src} `;
@@ -1553,8 +1905,8 @@ var require_stringifyPair = __commonJS({
           throw new Error("With simple keys, key nodes cannot have comments");
         }
         if (identity.isCollection(key) || !identity.isNode(key) && typeof key === "object") {
-          const msg = "With simple keys, collection cannot be used as a key value";
-          throw new Error(msg);
+          const msg2 = "With simple keys, collection cannot be used as a key value";
+          throw new Error(msg2);
         }
       }
       let explicitKey = !simpleKeys && (!key || keyComment && value == null && !ctx.inFlow || identity.isCollection(key) || (identity.isScalar(key) ? key.type === Scalar.Scalar.BLOCK_FOLDED || key.type === Scalar.Scalar.BLOCK_LITERAL : typeof key === "object"));
@@ -2044,7 +2396,7 @@ var require_YAMLMap = __commonJS({
       static from(schema, obj, ctx) {
         const { keepUndefined, replacer } = ctx;
         const map = new this(schema);
-        const add = (key, value) => {
+        const add2 = (key, value) => {
           if (typeof replacer === "function")
             value = replacer.call(obj, key, value);
           else if (Array.isArray(replacer) && !replacer.includes(key))
@@ -2054,10 +2406,10 @@ var require_YAMLMap = __commonJS({
         };
         if (obj instanceof Map) {
           for (const [key, value] of obj)
-            add(key, value);
+            add2(key, value);
         } else if (obj && typeof obj === "object") {
           for (const key of Object.keys(obj))
-            add(key, obj[key]);
+            add2(key, obj[key]);
         }
         if (typeof schema.sortMapEntries === "function") {
           map.items.sort(schema.sortMapEntries);
@@ -3787,29 +4139,29 @@ var require_resolve_props = __commonJS({
       let comma = null;
       let found = null;
       let start = null;
-      for (const token of tokens) {
+      for (const token2 of tokens) {
         if (reqSpace) {
-          if (token.type !== "space" && token.type !== "newline" && token.type !== "comma")
-            onError(token.offset, "MISSING_CHAR", "Tags and anchors must be separated from the next token by white space");
+          if (token2.type !== "space" && token2.type !== "newline" && token2.type !== "comma")
+            onError(token2.offset, "MISSING_CHAR", "Tags and anchors must be separated from the next token by white space");
           reqSpace = false;
         }
         if (tab) {
-          if (atNewline && token.type !== "comment" && token.type !== "newline") {
+          if (atNewline && token2.type !== "comment" && token2.type !== "newline") {
             onError(tab, "TAB_AS_INDENT", "Tabs are not allowed as indentation");
           }
           tab = null;
         }
-        switch (token.type) {
+        switch (token2.type) {
           case "space":
-            if (!flow && (indicator !== "doc-start" || next?.type !== "flow-collection") && token.source.includes("	")) {
-              tab = token;
+            if (!flow && (indicator !== "doc-start" || next?.type !== "flow-collection") && token2.source.includes("	")) {
+              tab = token2;
             }
             hasSpace = true;
             break;
           case "comment": {
             if (!hasSpace)
-              onError(token, "MISSING_CHAR", "Comments must be separated from other tokens by white space characters");
-            const cb = token.source.substring(1) || " ";
+              onError(token2, "MISSING_CHAR", "Comments must be separated from other tokens by white space characters");
+            const cb = token2.source.substring(1) || " ";
             if (!comment)
               comment = cb;
             else
@@ -3821,33 +4173,33 @@ var require_resolve_props = __commonJS({
           case "newline":
             if (atNewline) {
               if (comment)
-                comment += token.source;
+                comment += token2.source;
               else if (!found || indicator !== "seq-item-ind")
                 spaceBefore = true;
             } else
-              commentSep += token.source;
+              commentSep += token2.source;
             atNewline = true;
             hasNewline = true;
             if (anchor || tag)
-              newlineAfterProp = token;
+              newlineAfterProp = token2;
             hasSpace = true;
             break;
           case "anchor":
             if (anchor)
-              onError(token, "MULTIPLE_ANCHORS", "A node can have at most one anchor");
-            if (token.source.endsWith(":"))
-              onError(token.offset + token.source.length - 1, "BAD_ALIAS", "Anchor ending in : is ambiguous", true);
-            anchor = token;
-            start ?? (start = token.offset);
+              onError(token2, "MULTIPLE_ANCHORS", "A node can have at most one anchor");
+            if (token2.source.endsWith(":"))
+              onError(token2.offset + token2.source.length - 1, "BAD_ALIAS", "Anchor ending in : is ambiguous", true);
+            anchor = token2;
+            start ?? (start = token2.offset);
             atNewline = false;
             hasSpace = false;
             reqSpace = true;
             break;
           case "tag": {
             if (tag)
-              onError(token, "MULTIPLE_TAGS", "A node can have at most one tag");
-            tag = token;
-            start ?? (start = token.offset);
+              onError(token2, "MULTIPLE_TAGS", "A node can have at most one tag");
+            tag = token2;
+            start ?? (start = token2.offset);
             atNewline = false;
             hasSpace = false;
             reqSpace = true;
@@ -3855,25 +4207,25 @@ var require_resolve_props = __commonJS({
           }
           case indicator:
             if (anchor || tag)
-              onError(token, "BAD_PROP_ORDER", `Anchors and tags must be after the ${token.source} indicator`);
+              onError(token2, "BAD_PROP_ORDER", `Anchors and tags must be after the ${token2.source} indicator`);
             if (found)
-              onError(token, "UNEXPECTED_TOKEN", `Unexpected ${token.source} in ${flow ?? "collection"}`);
-            found = token;
+              onError(token2, "UNEXPECTED_TOKEN", `Unexpected ${token2.source} in ${flow ?? "collection"}`);
+            found = token2;
             atNewline = indicator === "seq-item-ind" || indicator === "explicit-key-ind";
             hasSpace = false;
             break;
           case "comma":
             if (flow) {
               if (comma)
-                onError(token, "UNEXPECTED_TOKEN", `Unexpected , in ${flow}`);
-              comma = token;
+                onError(token2, "UNEXPECTED_TOKEN", `Unexpected , in ${flow}`);
+              comma = token2;
               atNewline = false;
               hasSpace = false;
               break;
             }
           // else fallthrough
           default:
-            onError(token, "UNEXPECTED_TOKEN", `Unexpected ${token.type} token`);
+            onError(token2, "UNEXPECTED_TOKEN", `Unexpected ${token2.type} token`);
             atNewline = false;
             hasSpace = false;
         }
@@ -3953,8 +4305,8 @@ var require_util_flow_indent_check = __commonJS({
       if (fc?.type === "flow-collection") {
         const end = fc.end[0];
         if (end.indent === indent && (end.source === "]" || end.source === "}") && utilContainsNewline.containsNewline(fc)) {
-          const msg = "Flow end indicator should be more indented than parent";
-          onError(end, "BAD_INDENT", msg, true);
+          const msg2 = "Flow end indicator should be more indented than parent";
+          onError(end, "BAD_INDENT", msg2, true);
         }
       }
     }
@@ -4146,15 +4498,15 @@ var require_resolve_end = __commonJS({
       if (end) {
         let hasSpace = false;
         let sep2 = "";
-        for (const token of end) {
-          const { source, type } = token;
+        for (const token2 of end) {
+          const { source, type } = token2;
           switch (type) {
             case "space":
               hasSpace = true;
               break;
             case "comment": {
               if (reqSpace && !hasSpace)
-                onError(token, "MISSING_CHAR", "Comments must be separated from other tokens by white space characters");
+                onError(token2, "MISSING_CHAR", "Comments must be separated from other tokens by white space characters");
               const cb = source.substring(1) || " ";
               if (!comment)
                 comment = cb;
@@ -4169,7 +4521,7 @@ var require_resolve_end = __commonJS({
               hasSpace = true;
               break;
             default:
-              onError(token, "UNEXPECTED_TOKEN", `Unexpected ${type} at node end`);
+              onError(token2, "UNEXPECTED_TOKEN", `Unexpected ${type} at node end`);
           }
           offset += source.length;
         }
@@ -4193,7 +4545,7 @@ var require_resolve_flow_collection = __commonJS({
     var utilContainsNewline = require_util_contains_newline();
     var utilMapIncludes = require_util_map_includes();
     var blockMsg = "Block collections are not allowed within flow collections";
-    var isBlock = (token) => token && (token.type === "block-map" || token.type === "block-seq");
+    var isBlock = (token2) => token2 && (token2.type === "block-map" || token2.type === "block-seq");
     function resolveFlowCollection({ composeNode, composeEmptyNode }, ctx, fc, onError, tag) {
       const isMap = fc.start.source === "{";
       const fcName = isMap ? "flow map" : "flow sequence";
@@ -4351,8 +4703,8 @@ var require_resolve_flow_collection = __commonJS({
         cePos = ce.offset + ce.source.length;
       else {
         const name = fcName[0].toUpperCase() + fcName.substring(1);
-        const msg = atRoot ? `${name} must end with a ${expectedEnd}` : `${name} in block collection must be sufficiently indented and end with a ${expectedEnd}`;
-        onError(offset, atRoot ? "MISSING_CHAR" : "BAD_INDENT", msg);
+        const msg2 = atRoot ? `${name} must end with a ${expectedEnd}` : `${name} in block collection must be sufficiently indented and end with a ${expectedEnd}`;
+        onError(offset, atRoot ? "MISSING_CHAR" : "BAD_INDENT", msg2);
         if (ce && ce.source.length !== 1)
           ee.unshift(ce);
       }
@@ -4385,8 +4737,8 @@ var require_compose_collection = __commonJS({
     var resolveBlockMap = require_resolve_block_map();
     var resolveBlockSeq = require_resolve_block_seq();
     var resolveFlowCollection = require_resolve_flow_collection();
-    function resolveCollection(CN, ctx, token, onError, tagName, tag) {
-      const coll = token.type === "block-map" ? resolveBlockMap.resolveBlockMap(CN, ctx, token, onError, tag) : token.type === "block-seq" ? resolveBlockSeq.resolveBlockSeq(CN, ctx, token, onError, tag) : resolveFlowCollection.resolveFlowCollection(CN, ctx, token, onError, tag);
+    function resolveCollection(CN, ctx, token2, onError, tagName, tag) {
+      const coll = token2.type === "block-map" ? resolveBlockMap.resolveBlockMap(CN, ctx, token2, onError, tag) : token2.type === "block-seq" ? resolveBlockSeq.resolveBlockSeq(CN, ctx, token2, onError, tag) : resolveFlowCollection.resolveFlowCollection(CN, ctx, token2, onError, tag);
       const Coll = coll.constructor;
       if (tagName === "!" || tagName === Coll.tagName) {
         coll.tag = Coll.tagName;
@@ -4396,10 +4748,10 @@ var require_compose_collection = __commonJS({
         coll.tag = tagName;
       return coll;
     }
-    function composeCollection(CN, ctx, token, props, onError) {
+    function composeCollection(CN, ctx, token2, props, onError) {
       const tagToken = props.tag;
-      const tagName = !tagToken ? null : ctx.directives.tagName(tagToken.source, (msg) => onError(tagToken, "TAG_RESOLVE_FAILED", msg));
-      if (token.type === "block-seq") {
+      const tagName = !tagToken ? null : ctx.directives.tagName(tagToken.source, (msg2) => onError(tagToken, "TAG_RESOLVE_FAILED", msg2));
+      if (token2.type === "block-seq") {
         const { anchor, newlineAfterProp: nl } = props;
         const lastProp = anchor && tagToken ? anchor.offset > tagToken.offset ? anchor : tagToken : anchor ?? tagToken;
         if (lastProp && (!nl || nl.offset < lastProp.offset)) {
@@ -4407,9 +4759,9 @@ var require_compose_collection = __commonJS({
           onError(lastProp, "MISSING_CHAR", message);
         }
       }
-      const expType = token.type === "block-map" ? "map" : token.type === "block-seq" ? "seq" : token.start.source === "{" ? "map" : "seq";
+      const expType = token2.type === "block-map" ? "map" : token2.type === "block-seq" ? "seq" : token2.start.source === "{" ? "map" : "seq";
       if (!tagToken || !tagName || tagName === "!" || tagName === YAMLMap.YAMLMap.tagName && expType === "map" || tagName === YAMLSeq.YAMLSeq.tagName && expType === "seq") {
-        return resolveCollection(CN, ctx, token, onError, tagName);
+        return resolveCollection(CN, ctx, token2, onError, tagName);
       }
       let tag = ctx.schema.tags.find((t) => t.tag === tagName && t.collection === expType);
       if (!tag) {
@@ -4423,11 +4775,11 @@ var require_compose_collection = __commonJS({
           } else {
             onError(tagToken, "TAG_RESOLVE_FAILED", `Unresolved tag: ${tagName}`, true);
           }
-          return resolveCollection(CN, ctx, token, onError, tagName);
+          return resolveCollection(CN, ctx, token2, onError, tagName);
         }
       }
-      const coll = resolveCollection(CN, ctx, token, onError, tagName, tag);
-      const res = tag.resolve?.(coll, (msg) => onError(tagToken, "TAG_RESOLVE_FAILED", msg), ctx.options) ?? coll;
+      const coll = resolveCollection(CN, ctx, token2, onError, tagName, tag);
+      const res = tag.resolve?.(coll, (msg2) => onError(tagToken, "TAG_RESOLVE_FAILED", msg2), ctx.options) ?? coll;
       const node = identity.isNode(res) ? res : new Scalar.Scalar(res);
       node.range = coll.range;
       node.tag = tagName;
@@ -4576,31 +4928,31 @@ var require_resolve_block_scalar = __commonJS({
       let comment = "";
       let length = source.length;
       for (let i = 1; i < props.length; ++i) {
-        const token = props[i];
-        switch (token.type) {
+        const token2 = props[i];
+        switch (token2.type) {
           case "space":
             hasSpace = true;
           // fallthrough
           case "newline":
-            length += token.source.length;
+            length += token2.source.length;
             break;
           case "comment":
             if (strict && !hasSpace) {
               const message = "Comments must be separated from other tokens by white space characters";
-              onError(token, "MISSING_CHAR", message);
+              onError(token2, "MISSING_CHAR", message);
             }
-            length += token.source.length;
-            comment = token.source.substring(1);
+            length += token2.source.length;
+            comment = token2.source.substring(1);
             break;
           case "error":
-            onError(token, "UNEXPECTED_TOKEN", token.message);
-            length += token.source.length;
+            onError(token2, "UNEXPECTED_TOKEN", token2.message);
+            length += token2.source.length;
             break;
           /* istanbul ignore next should not happen */
           default: {
-            const message = `Unexpected token in block scalar header: ${token.type}`;
-            onError(token, "UNEXPECTED_TOKEN", message);
-            const ts = token.source;
+            const message = `Unexpected token in block scalar header: ${token2.type}`;
+            onError(token2, "UNEXPECTED_TOKEN", message);
+            const ts = token2.source;
             if (ts && typeof ts === "string")
               length += ts.length;
           }
@@ -4632,7 +4984,7 @@ var require_resolve_flow_scalar = __commonJS({
       const { offset, type, source, end } = scalar;
       let _type;
       let value;
-      const _onError = (rel, code, msg) => onError(offset + rel, code, msg);
+      const _onError = (rel, code, msg2) => onError(offset + rel, code, msg2);
       switch (type) {
         case "scalar":
           _type = Scalar.Scalar.PLAIN;
@@ -4850,25 +5202,25 @@ var require_compose_scalar = __commonJS({
     var Scalar = require_Scalar();
     var resolveBlockScalar = require_resolve_block_scalar();
     var resolveFlowScalar = require_resolve_flow_scalar();
-    function composeScalar(ctx, token, tagToken, onError) {
-      const { value, type, comment, range } = token.type === "block-scalar" ? resolveBlockScalar.resolveBlockScalar(ctx, token, onError) : resolveFlowScalar.resolveFlowScalar(token, ctx.options.strict, onError);
-      const tagName = tagToken ? ctx.directives.tagName(tagToken.source, (msg) => onError(tagToken, "TAG_RESOLVE_FAILED", msg)) : null;
+    function composeScalar(ctx, token2, tagToken, onError) {
+      const { value, type, comment, range } = token2.type === "block-scalar" ? resolveBlockScalar.resolveBlockScalar(ctx, token2, onError) : resolveFlowScalar.resolveFlowScalar(token2, ctx.options.strict, onError);
+      const tagName = tagToken ? ctx.directives.tagName(tagToken.source, (msg2) => onError(tagToken, "TAG_RESOLVE_FAILED", msg2)) : null;
       let tag;
       if (ctx.options.stringKeys && ctx.atKey) {
         tag = ctx.schema[identity.SCALAR];
       } else if (tagName)
         tag = findScalarTagByName(ctx.schema, value, tagName, tagToken, onError);
-      else if (token.type === "scalar")
-        tag = findScalarTagByTest(ctx, value, token, onError);
+      else if (token2.type === "scalar")
+        tag = findScalarTagByTest(ctx, value, token2, onError);
       else
         tag = ctx.schema[identity.SCALAR];
       let scalar;
       try {
-        const res = tag.resolve(value, (msg) => onError(tagToken ?? token, "TAG_RESOLVE_FAILED", msg), ctx.options);
+        const res = tag.resolve(value, (msg2) => onError(tagToken ?? token2, "TAG_RESOLVE_FAILED", msg2), ctx.options);
         scalar = identity.isScalar(res) ? res : new Scalar.Scalar(res);
       } catch (error) {
-        const msg = error instanceof Error ? error.message : String(error);
-        onError(tagToken ?? token, "TAG_RESOLVE_FAILED", msg);
+        const msg2 = error instanceof Error ? error.message : String(error);
+        onError(tagToken ?? token2, "TAG_RESOLVE_FAILED", msg2);
         scalar = new Scalar.Scalar(value);
       }
       scalar.range = range;
@@ -4906,15 +5258,15 @@ var require_compose_scalar = __commonJS({
       onError(tagToken, "TAG_RESOLVE_FAILED", `Unresolved tag: ${tagName}`, tagName !== "tag:yaml.org,2002:str");
       return schema[identity.SCALAR];
     }
-    function findScalarTagByTest({ atKey, directives, schema }, value, token, onError) {
+    function findScalarTagByTest({ atKey, directives, schema }, value, token2, onError) {
       const tag = schema.tags.find((tag2) => (tag2.default === true || atKey && tag2.default === "key") && tag2.test?.test(value)) || schema[identity.SCALAR];
       if (schema.compat) {
         const compat = schema.compat.find((tag2) => tag2.default && tag2.test?.test(value)) ?? schema[identity.SCALAR];
         if (tag.tag !== compat.tag) {
           const ts = directives.tagString(tag.tag);
           const cs = directives.tagString(compat.tag);
-          const msg = `Value may be parsed as either ${ts} or ${cs}`;
-          onError(token, "TAG_RESOLVE_FAILED", msg, true);
+          const msg2 = `Value may be parsed as either ${ts} or ${cs}`;
+          onError(token2, "TAG_RESOLVE_FAILED", msg2, true);
         }
       }
       return tag;
@@ -4964,22 +5316,22 @@ var require_compose_node = __commonJS({
     var resolveEnd = require_resolve_end();
     var utilEmptyScalarPosition = require_util_empty_scalar_position();
     var CN = { composeNode, composeEmptyNode };
-    function composeNode(ctx, token, props, onError) {
+    function composeNode(ctx, token2, props, onError) {
       const atKey = ctx.atKey;
       const { spaceBefore, comment, anchor, tag } = props;
       let node;
       let isSrcToken = true;
-      switch (token.type) {
+      switch (token2.type) {
         case "alias":
-          node = composeAlias(ctx, token, onError);
+          node = composeAlias(ctx, token2, onError);
           if (anchor || tag)
-            onError(token, "ALIAS_PROPS", "An alias node must not specify any properties");
+            onError(token2, "ALIAS_PROPS", "An alias node must not specify any properties");
           break;
         case "scalar":
         case "single-quoted-scalar":
         case "double-quoted-scalar":
         case "block-scalar":
-          node = composeScalar.composeScalar(ctx, token, tag, onError);
+          node = composeScalar.composeScalar(ctx, token2, tag, onError);
           if (anchor)
             node.anchor = anchor.source.substring(1);
           break;
@@ -4987,47 +5339,47 @@ var require_compose_node = __commonJS({
         case "block-seq":
         case "flow-collection":
           try {
-            node = composeCollection.composeCollection(CN, ctx, token, props, onError);
+            node = composeCollection.composeCollection(CN, ctx, token2, props, onError);
             if (anchor)
               node.anchor = anchor.source.substring(1);
           } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
-            onError(token, "RESOURCE_EXHAUSTION", message);
+            onError(token2, "RESOURCE_EXHAUSTION", message);
           }
           break;
         default: {
-          const message = token.type === "error" ? token.message : `Unsupported token (type: ${token.type})`;
-          onError(token, "UNEXPECTED_TOKEN", message);
+          const message = token2.type === "error" ? token2.message : `Unsupported token (type: ${token2.type})`;
+          onError(token2, "UNEXPECTED_TOKEN", message);
           isSrcToken = false;
         }
       }
-      node ?? (node = composeEmptyNode(ctx, token.offset, void 0, null, props, onError));
+      node ?? (node = composeEmptyNode(ctx, token2.offset, void 0, null, props, onError));
       if (anchor && node.anchor === "")
         onError(anchor, "BAD_ALIAS", "Anchor cannot be an empty string");
       if (atKey && ctx.options.stringKeys && (!identity.isScalar(node) || typeof node.value !== "string" || node.tag && node.tag !== "tag:yaml.org,2002:str")) {
-        const msg = "With stringKeys, all keys must be strings";
-        onError(tag ?? token, "NON_STRING_KEY", msg);
+        const msg2 = "With stringKeys, all keys must be strings";
+        onError(tag ?? token2, "NON_STRING_KEY", msg2);
       }
       if (spaceBefore)
         node.spaceBefore = true;
       if (comment) {
-        if (token.type === "scalar" && token.source === "")
+        if (token2.type === "scalar" && token2.source === "")
           node.comment = comment;
         else
           node.commentBefore = comment;
       }
       if (ctx.options.keepSourceTokens && isSrcToken)
-        node.srcToken = token;
+        node.srcToken = token2;
       return node;
     }
     function composeEmptyNode(ctx, offset, before, pos, { spaceBefore, comment, anchor, tag, end }, onError) {
-      const token = {
+      const token2 = {
         type: "scalar",
         offset: utilEmptyScalarPosition.emptyScalarPosition(offset, before, pos),
         indent: -1,
         source: ""
       };
-      const node = composeScalar.composeScalar(ctx, token, tag, onError);
+      const node = composeScalar.composeScalar(ctx, token2, tag, onError);
       if (anchor) {
         node.anchor = anchor.source.substring(1);
         if (node.anchor === "")
@@ -5218,28 +5570,28 @@ ${cb}` : comment;
        * @param endOffset - Should be set if `forceDoc` is also set, to set the document range end and to indicate errors correctly.
        */
       *compose(tokens, forceDoc = false, endOffset = -1) {
-        for (const token of tokens)
-          yield* this.next(token);
+        for (const token2 of tokens)
+          yield* this.next(token2);
         yield* this.end(forceDoc, endOffset);
       }
       /** Advance the composer by one CST token. */
-      *next(token) {
+      *next(token2) {
         if (node_process.env.LOG_STREAM)
-          console.dir(token, { depth: null });
-        switch (token.type) {
+          console.dir(token2, { depth: null });
+        switch (token2.type) {
           case "directive":
-            this.directives.add(token.source, (offset, message, warning) => {
-              const pos = getErrorPos(token);
+            this.directives.add(token2.source, (offset, message, warning) => {
+              const pos = getErrorPos(token2);
               pos[0] += offset;
               this.onError(pos, "BAD_DIRECTIVE", message, warning);
             });
-            this.prelude.push(token.source);
+            this.prelude.push(token2.source);
             this.atDirectives = true;
             break;
           case "document": {
-            const doc = composeDoc.composeDoc(this.options, this.directives, token, this.onError);
+            const doc = composeDoc.composeDoc(this.options, this.directives, token2, this.onError);
             if (this.atDirectives && !doc.directives.docStart)
-              this.onError(token, "MISSING_CHAR", "Missing directives-end/doc-start indicator line");
+              this.onError(token2, "MISSING_CHAR", "Missing directives-end/doc-start indicator line");
             this.decorate(doc, false);
             if (this.doc)
               yield this.doc;
@@ -5252,11 +5604,11 @@ ${cb}` : comment;
             break;
           case "comment":
           case "newline":
-            this.prelude.push(token.source);
+            this.prelude.push(token2.source);
             break;
           case "error": {
-            const msg = token.source ? `${token.message}: ${JSON.stringify(token.source)}` : token.message;
-            const error = new errors.YAMLParseError(getErrorPos(token), "UNEXPECTED_TOKEN", msg);
+            const msg2 = token2.source ? `${token2.message}: ${JSON.stringify(token2.source)}` : token2.message;
+            const error = new errors.YAMLParseError(getErrorPos(token2), "UNEXPECTED_TOKEN", msg2);
             if (this.atDirectives || !this.doc)
               this.errors.push(error);
             else
@@ -5265,12 +5617,12 @@ ${cb}` : comment;
           }
           case "doc-end": {
             if (!this.doc) {
-              const msg = "Unexpected doc-end without preceding document";
-              this.errors.push(new errors.YAMLParseError(getErrorPos(token), "UNEXPECTED_TOKEN", msg));
+              const msg2 = "Unexpected doc-end without preceding document";
+              this.errors.push(new errors.YAMLParseError(getErrorPos(token2), "UNEXPECTED_TOKEN", msg2));
               break;
             }
             this.doc.directives.docEnd = true;
-            const end = resolveEnd.resolveEnd(token.end, token.offset + token.source.length, this.doc.options.strict, this.onError);
+            const end = resolveEnd.resolveEnd(token2.end, token2.offset + token2.source.length, this.doc.options.strict, this.onError);
             this.decorate(this.doc, true);
             if (end.comment) {
               const dc = this.doc.comment;
@@ -5281,7 +5633,7 @@ ${end.comment}` : end.comment;
             break;
           }
           default:
-            this.errors.push(new errors.YAMLParseError(getErrorPos(token), "UNEXPECTED_TOKEN", `Unsupported token ${token.type}`));
+            this.errors.push(new errors.YAMLParseError(getErrorPos(token2), "UNEXPECTED_TOKEN", `Unsupported token ${token2.type}`));
         }
       }
       /**
@@ -5318,8 +5670,8 @@ var require_cst_scalar = __commonJS({
     var resolveFlowScalar = require_resolve_flow_scalar();
     var errors = require_errors();
     var stringifyString = require_stringifyString();
-    function resolveAsScalar(token, strict = true, onError) {
-      if (token) {
+    function resolveAsScalar(token2, strict = true, onError) {
+      if (token2) {
         const _onError = (pos, code, message) => {
           const offset = typeof pos === "number" ? pos : Array.isArray(pos) ? pos[0] : pos.offset;
           if (onError)
@@ -5327,13 +5679,13 @@ var require_cst_scalar = __commonJS({
           else
             throw new errors.YAMLParseError([offset, offset + 1], code, message);
         };
-        switch (token.type) {
+        switch (token2.type) {
           case "scalar":
           case "single-quoted-scalar":
           case "double-quoted-scalar":
-            return resolveFlowScalar.resolveFlowScalar(token, strict, _onError);
+            return resolveFlowScalar.resolveFlowScalar(token2, strict, _onError);
           case "block-scalar":
-            return resolveBlockScalar.resolveBlockScalar({ options: { strict } }, token, _onError);
+            return resolveBlockScalar.resolveBlockScalar({ options: { strict } }, token2, _onError);
         }
       }
       return null;
@@ -5370,13 +5722,13 @@ var require_cst_scalar = __commonJS({
           return { type: "scalar", offset, indent, source, end };
       }
     }
-    function setScalarValue(token, value, context = {}) {
+    function setScalarValue(token2, value, context = {}) {
       let { afterKey = false, implicitKey = false, inFlow = false, type } = context;
-      let indent = "indent" in token ? token.indent : null;
+      let indent = "indent" in token2 ? token2.indent : null;
       if (afterKey && typeof indent === "number")
         indent += 2;
       if (!type)
-        switch (token.type) {
+        switch (token2.type) {
           case "single-quoted-scalar":
             type = "QUOTE_SINGLE";
             break;
@@ -5384,7 +5736,7 @@ var require_cst_scalar = __commonJS({
             type = "QUOTE_DOUBLE";
             break;
           case "block-scalar": {
-            const header = token.props[0];
+            const header = token2.props[0];
             if (header.type !== "block-scalar-header")
               throw new Error("Invalid block scalar header");
             type = header.source[0] === ">" ? "BLOCK_FOLDED" : "BLOCK_LITERAL";
@@ -5402,40 +5754,40 @@ var require_cst_scalar = __commonJS({
       switch (source[0]) {
         case "|":
         case ">":
-          setBlockScalarValue(token, source);
+          setBlockScalarValue(token2, source);
           break;
         case '"':
-          setFlowScalarValue(token, source, "double-quoted-scalar");
+          setFlowScalarValue(token2, source, "double-quoted-scalar");
           break;
         case "'":
-          setFlowScalarValue(token, source, "single-quoted-scalar");
+          setFlowScalarValue(token2, source, "single-quoted-scalar");
           break;
         default:
-          setFlowScalarValue(token, source, "scalar");
+          setFlowScalarValue(token2, source, "scalar");
       }
     }
-    function setBlockScalarValue(token, source) {
+    function setBlockScalarValue(token2, source) {
       const he = source.indexOf("\n");
       const head = source.substring(0, he);
       const body = source.substring(he + 1) + "\n";
-      if (token.type === "block-scalar") {
-        const header = token.props[0];
+      if (token2.type === "block-scalar") {
+        const header = token2.props[0];
         if (header.type !== "block-scalar-header")
           throw new Error("Invalid block scalar header");
         header.source = head;
-        token.source = body;
+        token2.source = body;
       } else {
-        const { offset } = token;
-        const indent = "indent" in token ? token.indent : -1;
+        const { offset } = token2;
+        const indent = "indent" in token2 ? token2.indent : -1;
         const props = [
           { type: "block-scalar-header", offset, indent, source: head }
         ];
-        if (!addEndtoBlockProps(props, "end" in token ? token.end : void 0))
+        if (!addEndtoBlockProps(props, "end" in token2 ? token2.end : void 0))
           props.push({ type: "newline", offset: -1, indent, source: "\n" });
-        for (const key of Object.keys(token))
+        for (const key of Object.keys(token2))
           if (key !== "type" && key !== "offset")
-            delete token[key];
-        Object.assign(token, { type: "block-scalar", indent, props, source: body });
+            delete token2[key];
+        Object.assign(token2, { type: "block-scalar", indent, props, source: body });
       }
     }
     function addEndtoBlockProps(props, end) {
@@ -5452,40 +5804,40 @@ var require_cst_scalar = __commonJS({
           }
       return false;
     }
-    function setFlowScalarValue(token, source, type) {
-      switch (token.type) {
+    function setFlowScalarValue(token2, source, type) {
+      switch (token2.type) {
         case "scalar":
         case "double-quoted-scalar":
         case "single-quoted-scalar":
-          token.type = type;
-          token.source = source;
+          token2.type = type;
+          token2.source = source;
           break;
         case "block-scalar": {
-          const end = token.props.slice(1);
+          const end = token2.props.slice(1);
           let oa = source.length;
-          if (token.props[0].type === "block-scalar-header")
-            oa -= token.props[0].source.length;
+          if (token2.props[0].type === "block-scalar-header")
+            oa -= token2.props[0].source.length;
           for (const tok of end)
             tok.offset += oa;
-          delete token.props;
-          Object.assign(token, { type, source, end });
+          delete token2.props;
+          Object.assign(token2, { type, source, end });
           break;
         }
         case "block-map":
         case "block-seq": {
-          const offset = token.offset + source.length;
-          const nl = { type: "newline", offset, indent: token.indent, source: "\n" };
-          delete token.items;
-          Object.assign(token, { type, source, end: [nl] });
+          const offset = token2.offset + source.length;
+          const nl = { type: "newline", offset, indent: token2.indent, source: "\n" };
+          delete token2.items;
+          Object.assign(token2, { type, source, end: [nl] });
           break;
         }
         default: {
-          const indent = "indent" in token ? token.indent : -1;
-          const end = "end" in token && Array.isArray(token.end) ? token.end.filter((st) => st.type === "space" || st.type === "comment" || st.type === "newline") : [];
-          for (const key of Object.keys(token))
+          const indent = "indent" in token2 ? token2.indent : -1;
+          const end = "end" in token2 && Array.isArray(token2.end) ? token2.end.filter((st) => st.type === "space" || st.type === "comment" || st.type === "newline") : [];
+          for (const key of Object.keys(token2))
             if (key !== "type" && key !== "offset")
-              delete token[key];
-          Object.assign(token, { type, indent, source, end });
+              delete token2[key];
+          Object.assign(token2, { type, indent, source, end });
         }
       }
     }
@@ -5500,40 +5852,40 @@ var require_cst_stringify = __commonJS({
   "node_modules/yaml/dist/parse/cst-stringify.js"(exports) {
     "use strict";
     var stringify = (cst) => "type" in cst ? stringifyToken(cst) : stringifyItem(cst);
-    function stringifyToken(token) {
-      switch (token.type) {
+    function stringifyToken(token2) {
+      switch (token2.type) {
         case "block-scalar": {
           let res = "";
-          for (const tok of token.props)
+          for (const tok of token2.props)
             res += stringifyToken(tok);
-          return res + token.source;
+          return res + token2.source;
         }
         case "block-map":
         case "block-seq": {
           let res = "";
-          for (const item of token.items)
+          for (const item of token2.items)
             res += stringifyItem(item);
           return res;
         }
         case "flow-collection": {
-          let res = token.start.source;
-          for (const item of token.items)
+          let res = token2.start.source;
+          for (const item of token2.items)
             res += stringifyItem(item);
-          for (const st of token.end)
+          for (const st of token2.end)
             res += st.source;
           return res;
         }
         case "document": {
-          let res = stringifyItem(token);
-          if (token.end)
-            for (const st of token.end)
+          let res = stringifyItem(token2);
+          if (token2.end)
+            for (const st of token2.end)
               res += st.source;
           return res;
         }
         default: {
-          let res = token.source;
-          if ("end" in token && token.end)
-            for (const st of token.end)
+          let res = token2.source;
+          if ("end" in token2 && token2.end)
+            for (const st of token2.end)
               res += st.source;
           return res;
         }
@@ -5595,16 +5947,16 @@ var require_cst_visit = __commonJS({
       if (typeof ctrl === "symbol")
         return ctrl;
       for (const field of ["key", "value"]) {
-        const token = item[field];
-        if (token && "items" in token) {
-          for (let i = 0; i < token.items.length; ++i) {
-            const ci = _visit(Object.freeze(path.concat([[field, i]])), token.items[i], visitor);
+        const token2 = item[field];
+        if (token2 && "items" in token2) {
+          for (let i = 0; i < token2.items.length; ++i) {
+            const ci = _visit(Object.freeze(path.concat([[field, i]])), token2.items[i], visitor);
             if (typeof ci === "number")
               i = ci - 1;
             else if (ci === BREAK)
               return BREAK;
             else if (ci === REMOVE) {
-              token.items.splice(i, 1);
+              token2.items.splice(i, 1);
               i -= 1;
             }
           }
@@ -5629,10 +5981,10 @@ var require_cst = __commonJS({
     var DOCUMENT = "";
     var FLOW_END = "";
     var SCALAR = "";
-    var isCollection = (token) => !!token && "items" in token;
-    var isScalar = (token) => !!token && (token.type === "scalar" || token.type === "single-quoted-scalar" || token.type === "double-quoted-scalar" || token.type === "block-scalar");
-    function prettyToken(token) {
-      switch (token) {
+    var isCollection = (token2) => !!token2 && "items" in token2;
+    var isScalar = (token2) => !!token2 && (token2.type === "scalar" || token2.type === "single-quoted-scalar" || token2.type === "double-quoted-scalar" || token2.type === "block-scalar");
+    function prettyToken(token2) {
+      switch (token2) {
         case BOM:
           return "<BOM>";
         case DOCUMENT:
@@ -5642,7 +5994,7 @@ var require_cst = __commonJS({
         case SCALAR:
           return "<SCALAR>";
         default:
-          return JSON.stringify(token);
+          return JSON.stringify(token2);
       }
     }
     function tokenType(source) {
@@ -6366,8 +6718,8 @@ var require_parser = __commonJS({
       }
       return -1;
     }
-    function isFlowToken(token) {
-      switch (token?.type) {
+    function isFlowToken(token2) {
+      switch (token2?.type) {
         case "alias":
         case "scalar":
         case "single-quoted-scalar":
@@ -6574,38 +6926,38 @@ var require_parser = __commonJS({
         return this.stack[this.stack.length - n];
       }
       *pop(error) {
-        const token = error ?? this.stack.pop();
-        if (!token) {
+        const token2 = error ?? this.stack.pop();
+        if (!token2) {
           const message = "Tried to pop an empty stack";
           yield { type: "error", offset: this.offset, source: "", message };
         } else if (this.stack.length === 0) {
-          yield token;
+          yield token2;
         } else {
           const top = this.peek(1);
-          if (token.type === "block-scalar") {
-            token.indent = "indent" in top ? top.indent : 0;
-          } else if (token.type === "flow-collection" && top.type === "document") {
-            token.indent = 0;
+          if (token2.type === "block-scalar") {
+            token2.indent = "indent" in top ? top.indent : 0;
+          } else if (token2.type === "flow-collection" && top.type === "document") {
+            token2.indent = 0;
           }
-          if (token.type === "flow-collection")
-            fixFlowSeqItems(token);
+          if (token2.type === "flow-collection")
+            fixFlowSeqItems(token2);
           switch (top.type) {
             case "document":
-              top.value = token;
+              top.value = token2;
               break;
             case "block-scalar":
-              top.props.push(token);
+              top.props.push(token2);
               break;
             case "block-map": {
               const it = top.items[top.items.length - 1];
               if (it.value) {
-                top.items.push({ start: [], key: token, sep: [] });
+                top.items.push({ start: [], key: token2, sep: [] });
                 this.onKeyLine = true;
                 return;
               } else if (it.sep) {
-                it.value = token;
+                it.value = token2;
               } else {
-                Object.assign(it, { key: token, sep: [] });
+                Object.assign(it, { key: token2, sep: [] });
                 this.onKeyLine = !it.explicitKey;
                 return;
               }
@@ -6614,34 +6966,34 @@ var require_parser = __commonJS({
             case "block-seq": {
               const it = top.items[top.items.length - 1];
               if (it.value)
-                top.items.push({ start: [], value: token });
+                top.items.push({ start: [], value: token2 });
               else
-                it.value = token;
+                it.value = token2;
               break;
             }
             case "flow-collection": {
               const it = top.items[top.items.length - 1];
               if (!it || it.value)
-                top.items.push({ start: [], key: token, sep: [] });
+                top.items.push({ start: [], key: token2, sep: [] });
               else if (it.sep)
-                it.value = token;
+                it.value = token2;
               else
-                Object.assign(it, { key: token, sep: [] });
+                Object.assign(it, { key: token2, sep: [] });
               return;
             }
             /* istanbul ignore next should not happen */
             default:
               yield* this.pop();
-              yield* this.pop(token);
+              yield* this.pop(token2);
           }
-          if ((top.type === "document" || top.type === "block-map" || top.type === "block-seq") && (token.type === "block-map" || token.type === "block-seq")) {
-            const last = token.items[token.items.length - 1];
-            if (last && !last.sep && !last.value && last.start.length > 0 && findNonEmptyIndex(last.start) === -1 && (token.indent === 0 || last.start.every((st) => st.type !== "comment" || st.indent < token.indent))) {
+          if ((top.type === "document" || top.type === "block-map" || top.type === "block-seq") && (token2.type === "block-map" || token2.type === "block-seq")) {
+            const last = token2.items[token2.items.length - 1];
+            if (last && !last.sep && !last.value && last.start.length > 0 && findNonEmptyIndex(last.start) === -1 && (token2.indent === 0 || last.start.every((st) => st.type !== "comment" || st.indent < token2.indent))) {
               if (top.type === "document")
                 top.end = last.start;
               else
                 top.items.push({ start: last.start });
-              token.items.splice(-1, 1);
+              token2.items.splice(-1, 1);
             }
           }
         }
@@ -7184,7 +7536,7 @@ var require_parser = __commonJS({
             yield* this.pop();
         }
       }
-      *lineEnd(token) {
+      *lineEnd(token2) {
         switch (this.type) {
           case "comma":
           case "doc-start":
@@ -7201,10 +7553,10 @@ var require_parser = __commonJS({
           case "space":
           case "comment":
           default:
-            if (token.end)
-              token.end.push(this.sourceToken);
+            if (token2.end)
+              token2.end.push(this.sourceToken);
             else
-              token.end = [this.sourceToken];
+              token2.end = [this.sourceToken];
             if (this.type === "newline")
               yield* this.pop();
         }
@@ -7363,273 +7715,9 @@ var require_dist = __commonJS({
   }
 });
 
-// packages/rn-dev-agent-core/dist/maestro-runner-pin.js
-import { spawnSync } from "node:child_process";
-import { existsSync as existsSync3 } from "node:fs";
-import { dirname as dirname3, join as join5 } from "node:path";
-import { fileURLToPath } from "node:url";
-
-// packages/rn-dev-agent-core/dist/domain/engine-pin.js
-import { execFile as execFileCb } from "node:child_process";
-import { promisify } from "node:util";
-import { createHash } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
-
-// packages/rn-dev-agent-core/dist/domain/maestro-runner-pin.json
-var maestro_runner_pin_default = {
-  version: "1.1.24",
-  sha256: {
-    "darwin-arm64": "170f12521de83322823dd5fc0ce16e48abeba9952cdbb242670592566c2fd1f3",
-    "darwin-x64": "af7f5ea044afc72ea780c835f05b32203e443d2e26d310a864bfb2bc84959bf6",
-    "linux-x64": "e9bdef6f08f855ca1a884f99b54a519a1eae0a342917181a53eb414a5b00d6d8",
-    "linux-arm64": "8d8a6483ad04da2109636b7192398750657801b8a8d512688d1be3b033a105b8"
-  },
-  knownQuirks: [
-    {
-      id: "android-pre-o-unsupported",
-      ref: "GH #741",
-      note: "bundled UiAutomator2 server APK declares minSdk 26; API 23-25 installs fail with INSTALL_FAILED_OLDER_SDK"
-    }
-  ]
-};
-
-// packages/rn-dev-agent-core/dist/domain/engine-pin.js
-var execFile = promisify(execFileCb);
-var MAESTRO_RUNNER_PIN = maestro_runner_pin_default;
-var ACTION_ENGINE_PIN = `maestro-runner@${MAESTRO_RUNNER_PIN.version}`;
-var HOST_PLUGIN_ROOT = "${CLAUDE_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}";
-var PINNED_RUNNER_INSTALL_HINT = `bash ${HOST_PLUGIN_ROOT}/scripts/ensure-maestro-runner.sh`;
-var PINNED_RUNNER_DIAGNOSE_HINT = `node ${HOST_PLUGIN_ROOT}/rn-dev-agent-core/dist/maestro-runner-pin.js diagnose`;
-function compareVersions(a, b) {
-  const pa = a.split(".").map(Number);
-  const pb = b.split(".").map(Number);
-  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
-    const x = pa[i] ?? 0;
-    const y = pb[i] ?? 0;
-    if (x > y)
-      return 1;
-    if (x < y)
-      return -1;
-  }
-  return 0;
-}
-function classifyEnginePin(detected, platformKey) {
-  if (!detected.installed)
-    return "not-installed";
-  if (!detected.version || !/^\d+(\.\d+)*$/.test(detected.version))
-    return "unknown-version";
-  const cmp = compareVersions(detected.version, MAESTRO_RUNNER_PIN.version);
-  if (cmp > 0)
-    return "drift-newer";
-  if (cmp < 0)
-    return "drift-older";
-  const expected = MAESTRO_RUNNER_PIN.sha256[platformKey];
-  if (!expected || !detected.sha256)
-    return "unverified";
-  if (detected.sha256 !== expected)
-    return "checksum-mismatch";
-  return "pinned-ok";
-}
-function pinCacheRoot(home = homedir()) {
-  const override = process.env.RN_DEV_AGENT_RUNNER_CACHE;
-  const base = override && override.length > 0 ? override : join(home, ".cache", "rn-dev-agent");
-  return join(base, "maestro-runner", MAESTRO_RUNNER_PIN.version);
-}
-function pinnedRunnerBinPath(home) {
-  return join(pinCacheRoot(home), "bin", "maestro-runner");
-}
-function getMaestroRunnerPath() {
-  const path = pinnedRunnerBinPath();
-  return existsSync(path) ? path : null;
-}
-function nodePlatformKey(platform = process.platform, arch = process.arch) {
-  return `${platform}-${arch}`;
-}
-function pinArchiveCoords(platformKey) {
-  switch (platformKey) {
-    case "darwin-arm64":
-      return { os: "darwin", arch: "arm64" };
-    case "darwin-x64":
-      return { os: "darwin", arch: "amd64" };
-    case "linux-x64":
-      return { os: "linux", arch: "amd64" };
-    case "linux-arm64":
-      return { os: "linux", arch: "arm64" };
-    default:
-      return null;
-  }
-}
-function buildReplayEngineStatus(cls, version, _cliPresent, extras = {}) {
-  const engine = cls === "not-installed" ? "none" : "maestro-runner";
-  return {
-    engine,
-    version,
-    pin: { pinned: MAESTRO_RUNNER_PIN.version, status: cls },
-    quirks: MAESTRO_RUNNER_PIN.knownQuirks.map((q) => q.id),
-    selectedPath: extras.selectedPath ?? null,
-    provenance: extras.provenance ?? (cls === "not-installed" ? "none" : "pin-cache")
-  };
-}
-var REGEX_METACHARACTERS = /* @__PURE__ */ new Set([
-  ".",
-  "^",
-  "$",
-  "*",
-  "+",
-  "?",
-  "(",
-  ")",
-  "[",
-  "]",
-  "{",
-  "}",
-  "|"
-]);
-function isRegexShapedSelector(value) {
-  for (let i = 0; i < value.length; i += 1) {
-    const ch = value[i];
-    if (ch === "\\")
-      return true;
-    if (REGEX_METACHARACTERS.has(ch))
-      return true;
-  }
-  return false;
-}
-var TEXT_SELECTOR_KEYS = /* @__PURE__ */ new Set([
-  "tapOn",
-  "doubleTapOn",
-  "longPressOn",
-  "assertVisible",
-  "assertNotVisible",
-  "visible",
-  "notVisible",
-  "text"
-]);
-function findRegexTextSelectors(commands) {
-  const found = [];
-  const visit = (value, underSelectorKey) => {
-    if (typeof value === "string") {
-      if (underSelectorKey && isRegexShapedSelector(value))
-        found.push(value);
-      return;
-    }
-    if (Array.isArray(value)) {
-      for (const entry of value)
-        visit(entry, underSelectorKey);
-      return;
-    }
-    if (value && typeof value === "object") {
-      for (const [key, nested] of Object.entries(value)) {
-        visit(nested, TEXT_SELECTOR_KEYS.has(key));
-      }
-    }
-  };
-  visit([...commands], false);
-  return found;
-}
-function pinCorrection(status, platformKey = nodePlatformKey()) {
-  const cls = status.pin.status;
-  const pinned = status.pin.pinned;
-  const installed = status.version ?? "unknown";
-  const install2 = `Reinstall exactly ${pinned} via ${PINNED_RUNNER_INSTALL_HINT} (session pin-cache; do not use PATH or brew maestro).`;
-  if (pinArchiveCoords(platformKey) === null) {
-    return `maestro-runner is unsupported on ${platformKey}. Supported platforms: darwin-arm64, darwin-x64, linux-x64, linux-arm64. ${install2}`;
-  }
-  switch (cls) {
-    case "not-installed":
-      return `Session maestro-runner ${pinned} is not installed. ${install2}`;
-    case "drift-older":
-      return `Session maestro-runner ${installed} is older than the required pin ${pinned}. ${install2}`;
-    case "drift-newer":
-      return `Session maestro-runner ${installed} is newer than the required pin ${pinned}. ${install2}`;
-    case "checksum-mismatch":
-      return `Session maestro-runner reports ${pinned} but the binary checksum does not match the pin manifest. ${install2}`;
-    case "unknown-version":
-      return `Session maestro-runner version could not be read. ${install2}`;
-    case "unverified":
-      return `Session maestro-runner ${installed} could not be checksum-verified on ${platformKey}. ${install2}`;
-    case "pinned-ok":
-      return `Session maestro-runner ${pinned} is selected from the pin-cache.`;
-  }
-}
-function doctorPinnedRunner(status, platformKey = nodePlatformKey()) {
-  const ok = status.pin.status === "pinned-ok";
-  return {
-    ok,
-    status: status.pin.status,
-    pinned: status.pin.pinned,
-    installedVersion: status.version,
-    selectedPath: status.selectedPath ?? null,
-    provenance: status.provenance ?? (status.pin.status === "not-installed" ? "none" : "pin-cache"),
-    correction: ok ? null : pinCorrection(status, platformKey)
-  };
-}
-var testStatus;
-function _resetEngineStatusForTest() {
-  testStatus = void 0;
-}
-async function defaultExecVersion(bin) {
-  const { stdout, stderr } = await execFile(bin, ["--version"], {
-    timeout: 5e3,
-    encoding: "utf8"
-  });
-  return stdout + "\n" + stderr;
-}
-function defaultHashFile(bin) {
-  return createHash("sha256").update(readFileSync(bin)).digest("hex");
-}
-async function detect(resolvers) {
-  const binPath = (resolvers.binPath ?? getMaestroRunnerPath)();
-  const platformKey = resolvers.platformKey ?? nodePlatformKey();
-  if (!binPath) {
-    return buildReplayEngineStatus("not-installed", null, false, {
-      selectedPath: null,
-      provenance: "none"
-    });
-  }
-  let sha256 = null;
-  try {
-    sha256 = (resolvers.hashFile ?? defaultHashFile)(binPath);
-  } catch {
-    sha256 = null;
-  }
-  let version = null;
-  try {
-    const out = await (resolvers.execVersion ?? defaultExecVersion)(binPath);
-    version = out.match(/(\d+\.\d+\.\d+)/)?.[1] ?? null;
-  } catch {
-    version = null;
-  }
-  const cls = classifyEnginePin({ installed: true, version, sha256 }, platformKey);
-  return buildReplayEngineStatus(cls, version, false, {
-    selectedPath: binPath,
-    provenance: "pin-cache"
-  });
-}
-function getEngineStatus(resolvers) {
-  if (testStatus)
-    return Promise.resolve(testStatus);
-  return detect(resolvers ?? {}).catch(() => buildReplayEngineStatus("unknown-version", null, false));
-}
-
-// packages/rn-dev-agent-core/dist/domain/action-engine-compat.js
-import { lstatSync, readdirSync, readFileSync as readFileSync3, writeFileSync } from "node:fs";
-import { basename, dirname as dirname2, join as join4, resolve } from "node:path";
-
 // packages/rn-dev-agent-core/dist/domain/maestro-validator.js
-var import_yaml = __toESM(require_dist(), 1);
 import { join as join2, dirname, isAbsolute, sep } from "node:path";
 import { readFileSync as readFileSync2, realpathSync } from "node:fs";
-var MaestroValidationError = class extends Error {
-  constructor(message) {
-    super(message);
-    this.name = "MaestroValidationError";
-  }
-};
-var BUNDLE_ID_RE = /^[A-Za-z][A-Za-z0-9_-]*(\.[A-Za-z][A-Za-z0-9_-]*)+$/;
-var BUNDLE_ID_MAX_LEN = 256;
 function isValidBundleId(s) {
   if (typeof s !== "string")
     return false;
@@ -7643,8 +7731,6 @@ function assertValidBundleId(s, context) {
     throw new MaestroValidationError(`Invalid bundle ID for ${context}: ${preview}`);
   }
 }
-var UNSAFE_SCALAR_RE = /[\u0000-\u0008\u000A-\u001F\u0085\u2028\u2029]/;
-var SCALAR_MAX_LEN = 4096;
 function isSafeMaestroScalar(s) {
   if (typeof s !== "string")
     return false;
@@ -7654,58 +7740,6 @@ function isSafeMaestroScalar(s) {
     return false;
   return true;
 }
-var ALLOWED_COMMANDS = /* @__PURE__ */ new Set([
-  "launchApp",
-  "tapOn",
-  "doubleTapOn",
-  "longPressOn",
-  "assertVisible",
-  "assertNotVisible",
-  "inputText",
-  "eraseText",
-  "scroll",
-  "scrollUntilVisible",
-  "swipe",
-  // Multi-LLM review caught these: test-recorder-generators emits the
-  // shorthand `- swipeUp` / `- swipeDown` / `- swipeLeft` / `- swipeRight`
-  // top-level commands. Without these in the allowlist, every recorded
-  // action containing a swipe would be refused at replay time. The
-  // deepsec attack vector (newline-injected direction) is already
-  // mitigated by isSafeMaestroScalar catching the embedded newline.
-  "swipeUp",
-  "swipeDown",
-  "swipeLeft",
-  "swipeRight",
-  "back",
-  "pressKey",
-  "openLink",
-  "waitForAnimationToEnd",
-  "extendedWaitUntil",
-  "hideKeyboard",
-  "takeScreenshot",
-  "clearState",
-  "addMedia",
-  "copyTextFrom",
-  "pasteText",
-  "travel",
-  "setLocation",
-  "setAirplaneMode",
-  "killApp",
-  "stopApp",
-  "tap",
-  // GH #186: runFlow (conditional dialog handling — deep-link "Open in", Expo
-  // dev-client picker). Validated specially (validateRunFlowValue) so nested
-  // `commands` get full command-level allowlist checks, and {file} refs are
-  // securely resolved + expanded inline (expandRunFlows) — they are NOT passed
-  // through generic validateValue, which would miss nested denied commands.
-  "runFlow"
-]);
-var DENIED_COMMANDS = /* @__PURE__ */ new Set([
-  "runScript",
-  "evalScript",
-  "startRecording",
-  "stopRecording"
-]);
 function buildMaestroFlow(opts, commands) {
   if (opts.appId !== void 0) {
     assertValidBundleId(opts.appId, "appId header");
@@ -7946,6 +7980,75 @@ function parseAndValidateFlow(yamlText, opts = {}) {
   const raw = buildMaestroFlow(appId !== void 0 ? { appId } : {}, expanded);
   return { appId, commands: expanded, raw };
 }
+var import_yaml, MaestroValidationError, BUNDLE_ID_RE, BUNDLE_ID_MAX_LEN, UNSAFE_SCALAR_RE, SCALAR_MAX_LEN, ALLOWED_COMMANDS, DENIED_COMMANDS;
+var init_maestro_validator = __esm({
+  "packages/rn-dev-agent-core/dist/domain/maestro-validator.js"() {
+    "use strict";
+    import_yaml = __toESM(require_dist(), 1);
+    MaestroValidationError = class extends Error {
+      constructor(message) {
+        super(message);
+        this.name = "MaestroValidationError";
+      }
+    };
+    BUNDLE_ID_RE = /^[A-Za-z][A-Za-z0-9_-]*(\.[A-Za-z][A-Za-z0-9_-]*)+$/;
+    BUNDLE_ID_MAX_LEN = 256;
+    UNSAFE_SCALAR_RE = /[\u0000-\u0008\u000A-\u001F\u0085\u2028\u2029]/;
+    SCALAR_MAX_LEN = 4096;
+    ALLOWED_COMMANDS = /* @__PURE__ */ new Set([
+      "launchApp",
+      "tapOn",
+      "doubleTapOn",
+      "longPressOn",
+      "assertVisible",
+      "assertNotVisible",
+      "inputText",
+      "eraseText",
+      "scroll",
+      "scrollUntilVisible",
+      "swipe",
+      // Multi-LLM review caught these: test-recorder-generators emits the
+      // shorthand `- swipeUp` / `- swipeDown` / `- swipeLeft` / `- swipeRight`
+      // top-level commands. Without these in the allowlist, every recorded
+      // action containing a swipe would be refused at replay time. The
+      // deepsec attack vector (newline-injected direction) is already
+      // mitigated by isSafeMaestroScalar catching the embedded newline.
+      "swipeUp",
+      "swipeDown",
+      "swipeLeft",
+      "swipeRight",
+      "back",
+      "pressKey",
+      "openLink",
+      "waitForAnimationToEnd",
+      "extendedWaitUntil",
+      "hideKeyboard",
+      "takeScreenshot",
+      "clearState",
+      "addMedia",
+      "copyTextFrom",
+      "pasteText",
+      "travel",
+      "setLocation",
+      "setAirplaneMode",
+      "killApp",
+      "stopApp",
+      "tap",
+      // GH #186: runFlow (conditional dialog handling — deep-link "Open in", Expo
+      // dev-client picker). Validated specially (validateRunFlowValue) so nested
+      // `commands` get full command-level allowlist checks, and {file} refs are
+      // securely resolved + expanded inline (expandRunFlows) — they are NOT passed
+      // through generic validateValue, which would miss nested denied commands.
+      "runFlow"
+    ]);
+    DENIED_COMMANDS = /* @__PURE__ */ new Set([
+      "runScript",
+      "evalScript",
+      "startRecording",
+      "stopRecording"
+    ]);
+  }
+});
 
 // packages/rn-dev-agent-core/dist/domain/reusable-action.js
 function parseM7Header(yamlText, fallbackId) {
@@ -8024,15 +8127,48 @@ function parseProducesMap(raw) {
   }
   return Object.keys(result).length ? result : void 0;
 }
+var init_reusable_action = __esm({
+  "packages/rn-dev-agent-core/dist/domain/reusable-action.js"() {
+    "use strict";
+  }
+});
+
+// packages/rn-dev-agent-core/dist/session/runtime-paths.js
+var init_runtime_paths = __esm({
+  "packages/rn-dev-agent-core/dist/session/runtime-paths.js"() {
+    "use strict";
+  }
+});
+
+// packages/rn-dev-agent-core/dist/domain/sidecar-io.js
+var init_sidecar_io = __esm({
+  "packages/rn-dev-agent-core/dist/domain/sidecar-io.js"() {
+    "use strict";
+    init_reusable_action();
+    init_runtime_paths();
+  }
+});
 
 // packages/rn-dev-agent-core/dist/domain/atomic-writer.js
-var ORPHAN_MAX_AGE_MS = 5 * 60 * 1e3;
+var ORPHAN_MAX_AGE_MS;
+var init_atomic_writer = __esm({
+  "packages/rn-dev-agent-core/dist/domain/atomic-writer.js"() {
+    "use strict";
+    ORPHAN_MAX_AGE_MS = 5 * 60 * 1e3;
+  }
+});
+
+// packages/rn-dev-agent-core/dist/domain/path-safety.js
+var init_path_safety = __esm({
+  "packages/rn-dev-agent-core/dist/domain/path-safety.js"() {
+    "use strict";
+  }
+});
 
 // packages/rn-dev-agent-core/dist/logger.js
 import { createWriteStream, mkdirSync, existsSync as existsSync2 } from "node:fs";
 import { join as join3 } from "node:path";
 import { tmpdir, homedir as homedir2 } from "node:os";
-var configuredLevel = process.env.LOG_LEVEL ?? process.env.RN_DEV_AGENT_LOG_LEVEL ?? "warn";
 function resolveLogPath() {
   if (process.argv.includes("--diagnostic-contract-probe"))
     return null;
@@ -8056,11 +8192,35 @@ function resolveLogPath() {
   }
   return join3(tmpdir(), "rn-dev-agent-cdp-bridge.log");
 }
-var logFilePath = resolveLogPath();
+var configuredLevel, logFilePath;
+var init_logger = __esm({
+  "packages/rn-dev-agent-core/dist/logger.js"() {
+    "use strict";
+    configuredLevel = process.env.LOG_LEVEL ?? process.env.RN_DEV_AGENT_LOG_LEVEL ?? "warn";
+    logFilePath = resolveLogPath();
+  }
+});
 
 // packages/rn-dev-agent-core/dist/domain/action-db.js
 import { createRequire } from "node:module";
-var _require = createRequire(import.meta.url);
+var _require;
+var init_action_db = __esm({
+  "packages/rn-dev-agent-core/dist/domain/action-db.js"() {
+    "use strict";
+    init_runtime_paths();
+    _require = createRequire(import.meta.url);
+  }
+});
+
+// packages/rn-dev-agent-core/dist/domain/action-state-store.js
+var init_action_state_store = __esm({
+  "packages/rn-dev-agent-core/dist/domain/action-state-store.js"() {
+    "use strict";
+    init_logger();
+    init_action_db();
+    init_sidecar_io();
+  }
+});
 
 // packages/rn-dev-agent-core/dist/domain/action-store.js
 function splitYaml(text) {
@@ -8122,25 +8282,70 @@ function joinYaml(parts) {
     out.push(b);
   return out.join("\n");
 }
+var init_action_store = __esm({
+  "packages/rn-dev-agent-core/dist/domain/action-store.js"() {
+    "use strict";
+    init_reusable_action();
+    init_sidecar_io();
+    init_atomic_writer();
+    init_path_safety();
+    init_action_state_store();
+  }
+});
 
 // packages/rn-dev-agent-core/dist/domain/action-engine-compat.js
+import { lstatSync, readdirSync, readFileSync as readFileSync3, writeFileSync } from "node:fs";
+import { basename, dirname as dirname2, join as join4, resolve } from "node:path";
+function actionEnginePinRefusal(enginePin) {
+  if (!enginePin) {
+    return `Action is not migrated to ${ACTION_ENGINE_PIN}. Run node <plugin-root>/rn-dev-agent-core/dist/maestro-runner-pin.js migrate-actions --root <app> before replay. Incompatible actions are terminal \u2014 no manual fallback.`;
+  }
+  if (enginePin !== ACTION_ENGINE_PIN) {
+    return `Action enginePin ${enginePin} is incompatible with the session pin ${ACTION_ENGINE_PIN}. Migrate or re-record the action. Incompatible actions are terminal \u2014 no manual fallback.`;
+  }
+  return null;
+}
 function regexSelectorCapabilityRefusal(commands) {
   const selectors = findRegexTextSelectors(commands);
   if (selectors.length === 0)
     return null;
   return `Action uses regex text selectors (${selectors[0]}) which are not a validated maestro-runner ${MAESTRO_RUNNER_PIN.version} capability (GH #750 CONTAINS mistranslation). Rewrite as id or literal text selectors before replay. No UI mutation will run.`;
 }
-var ENGINE_PIN_LINE = new RegExp(`^#\\s*enginePin\\s*:\\s*.+$`);
+function actionReplayPreflight(opts) {
+  return replayCompatibilityPreflight({ ...opts, requireEnginePin: true });
+}
+function replayCompatibilityPreflight(opts) {
+  const pin = exactPinRefusal(opts.engineStatus);
+  if (pin)
+    return pin;
+  if (opts.requireEnginePin) {
+    const format = actionEnginePinRefusal(opts.enginePin);
+    if (format)
+      return format;
+  }
+  return regexSelectorCapabilityRefusal(opts.commands);
+}
+function isLearnedActionPath(path) {
+  const parent = dirname2(resolve(path));
+  return basename(parent) === "actions" && basename(dirname2(parent)) === ".rn-agent";
+}
 function upsertEnginePinHeader(text) {
   const parts = splitYaml(text);
-  const existingIdx = parts.headerLines.findIndex((line) => ENGINE_PIN_LINE.test(line));
   const nextLine = `# enginePin: ${ACTION_ENGINE_PIN}`;
-  if (existingIdx >= 0) {
-    if (parts.headerLines[existingIdx] === nextLine)
-      return { text, changed: false };
-    const headerLines2 = [...parts.headerLines];
-    headerLines2[existingIdx] = nextLine;
-    return { text: joinYaml({ ...parts, headerLines: headerLines2 }), changed: true };
+  const existing = parts.headerLines.filter((line) => ENGINE_PIN_LINE.test(line));
+  if (existing.length > 0) {
+    const headerLines2 = [];
+    let inserted = false;
+    for (const line of parts.headerLines) {
+      if (!ENGINE_PIN_LINE.test(line)) {
+        headerLines2.push(line);
+      } else if (!inserted) {
+        headerLines2.push(nextLine);
+        inserted = true;
+      }
+    }
+    const nextText = joinYaml({ ...parts, headerLines: headerLines2 });
+    return { text: nextText, changed: nextText !== text };
   }
   const statusIdx = parts.headerLines.findIndex((line) => /^#\s*status\s*:/.test(line));
   const headerLines = [...parts.headerLines];
@@ -8192,8 +8397,19 @@ function migrateLearnedActions(projectRoot) {
   let files = [];
   try {
     files = readdirSync(dir).filter(isOwnedActionFile);
-  } catch {
-    return [];
+  } catch (err) {
+    const code = err.code;
+    if (code === "ENOENT")
+      return [];
+    return [
+      {
+        id: "actions",
+        path: dir,
+        status: "unreadable",
+        reason: err instanceof Error ? err.message : String(err),
+        mutated: false
+      }
+    ];
   }
   const results = [];
   for (const name of files) {
@@ -8269,17 +8485,3650 @@ function migrateLearnedActions(projectRoot) {
   }
   return results;
 }
+var ENGINE_PIN_LINE;
+var init_action_engine_compat = __esm({
+  "packages/rn-dev-agent-core/dist/domain/action-engine-compat.js"() {
+    "use strict";
+    init_engine_pin();
+    init_maestro_validator();
+    init_reusable_action();
+    init_action_store();
+    ENGINE_PIN_LINE = new RegExp(`^#\\s*enginePin\\s*:\\s*.+$`);
+  }
+});
+
+// packages/rn-dev-agent-core/dist/lifecycle/settle-hash.js
+var init_settle_hash = __esm({
+  "packages/rn-dev-agent-core/dist/lifecycle/settle-hash.js"() {
+    "use strict";
+  }
+});
+
+// packages/rn-dev-agent-core/dist/fast-runner-ref-map.js
+var init_fast_runner_ref_map = __esm({
+  "packages/rn-dev-agent-core/dist/fast-runner-ref-map.js"() {
+    "use strict";
+    init_settle_hash();
+  }
+});
+
+// packages/rn-dev-agent-core/dist/runners/keyboard-guard.js
+var init_keyboard_guard = __esm({
+  "packages/rn-dev-agent-core/dist/runners/keyboard-guard.js"() {
+    "use strict";
+    init_utils();
+  }
+});
+
+// packages/rn-dev-agent-core/dist/util/secure-state-file.js
+import { readFileSync as readFileSync4, writeFileSync as writeFileSync2, unlinkSync, mkdirSync as mkdirSync2, renameSync, lstatSync as lstatSync2 } from "node:fs";
+import { join as join5, dirname as dirname3 } from "node:path";
+import { homedir as homedir3 } from "node:os";
+function getStateDir() {
+  if (process.env.XDG_STATE_HOME) {
+    return join5(process.env.XDG_STATE_HOME, "rn-dev-agent");
+  }
+  if (process.platform === "darwin") {
+    return join5(homedir3(), "Library", "Application Support", "rn-dev-agent");
+  }
+  return join5(homedir3(), ".rn-dev-agent");
+}
+function runnerStatePath(key) {
+  const safe = key.replace(/[^A-Za-z0-9._:-]/g, "_");
+  return join5(getStateDir(), "runner-state", `${safe}.json`);
+}
+function readJsonStateFile(path) {
+  try {
+    const stat = lstatSync2(path);
+    if (stat.isSymbolicLink())
+      return null;
+    return JSON.parse(readFileSync4(path, "utf8"));
+  } catch {
+    return null;
+  }
+}
+function writeJsonStateFileAtomic(path, value) {
+  mkdirSync2(dirname3(path), { recursive: true });
+  const tmpPath = `${path}.tmp.${process.pid}`;
+  writeFileSync2(tmpPath, JSON.stringify(value), { encoding: "utf8", mode: 384 });
+  renameSync(tmpPath, path);
+}
+function deleteStateFile(path) {
+  try {
+    unlinkSync(path);
+  } catch {
+  }
+}
+function readLegacyTmpState(kind) {
+  return readJsonStateFile(LEGACY_TMP_STATE_FILES[kind]);
+}
+function cleanupLegacyTmpState() {
+  for (const p of Object.values(LEGACY_TMP_STATE_FILES))
+    deleteStateFile(p);
+}
+var LEGACY_TMP_STATE_FILES;
+var init_secure_state_file = __esm({
+  "packages/rn-dev-agent-core/dist/util/secure-state-file.js"() {
+    "use strict";
+    LEGACY_TMP_STATE_FILES = {
+      ios: "/tmp/rn-fast-runner-state.json",
+      android: "/tmp/rn-android-runner-state.json"
+    };
+  }
+});
+
+// packages/rn-dev-agent-core/dist/runners/runtime-paths.js
+import { existsSync as existsSync3, statSync } from "node:fs";
+import { join as join6 } from "node:path";
+function compactUnique(paths) {
+  const out = [];
+  for (const path of paths) {
+    if (!path || out.includes(path))
+      continue;
+    out.push(path);
+  }
+  return out;
+}
+function isDirectory(path) {
+  try {
+    return statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
+}
+function candidateNativeRunnerDirs(runnerName, baseDir = import.meta.dirname) {
+  const runnerRoot = process.env.RN_DEV_AGENT_NATIVE_RUNNER_ROOT;
+  const repoRoot = process.env.RN_DEV_AGENT_ROOT;
+  const codexPluginRoot = process.env.RN_DEV_AGENT_CODEX_PLUGIN_ROOT;
+  const claudePluginRoot = process.env.CLAUDE_PLUGIN_ROOT;
+  return compactUnique([
+    runnerRoot ? join6(runnerRoot, runnerName) : void 0,
+    repoRoot ? join6(repoRoot, "packages", runnerName) : void 0,
+    repoRoot ? join6(repoRoot, "scripts", runnerName) : void 0,
+    codexPluginRoot ? join6(codexPluginRoot, "scripts", runnerName) : void 0,
+    claudePluginRoot ? join6(claudePluginRoot, "..", runnerName) : void 0,
+    claudePluginRoot ? join6(claudePluginRoot, "..", "..", "packages", runnerName) : void 0,
+    claudePluginRoot ? join6(claudePluginRoot, "..", "..", "scripts", runnerName) : void 0,
+    claudePluginRoot ? join6(claudePluginRoot, "scripts", runnerName) : void 0,
+    // Bundled Codex runtime: <plugin>/rn-dev-agent-core/dist.
+    join6(baseDir, "..", "..", "scripts", runnerName),
+    // Source checkout: packages/rn-dev-agent-core/dist/runners.
+    // Also covers the legacy scripts/cdp-bridge/dist/runners layout.
+    join6(baseDir, "..", "..", "..", runnerName),
+    // Legacy source checkout: packages/rn-dev-agent-core/dist/runners before runner package split.
+    join6(baseDir, "..", "..", "..", "..", "scripts", runnerName)
+  ]);
+}
+function resolveNativeRunnerDir(runnerName, baseDir = import.meta.dirname) {
+  const candidates = candidateNativeRunnerDirs(runnerName, baseDir);
+  return candidates.find(isDirectory) ?? candidates[0];
+}
+var init_runtime_paths2 = __esm({
+  "packages/rn-dev-agent-core/dist/runners/runtime-paths.js"() {
+    "use strict";
+  }
+});
+
+// packages/rn-dev-agent-core/dist/runners/protocol.js
+var init_protocol = __esm({
+  "packages/rn-dev-agent-core/dist/runners/protocol.js"() {
+    "use strict";
+    init_runtime_paths2();
+  }
+});
+
+// packages/rn-dev-agent-core/dist/runners/quiescence.js
+var init_quiescence = __esm({
+  "packages/rn-dev-agent-core/dist/runners/quiescence.js"() {
+    "use strict";
+  }
+});
+
+// packages/rn-dev-agent-core/dist/runners/runner-artifacts.js
+var init_runner_artifacts = __esm({
+  "packages/rn-dev-agent-core/dist/runners/runner-artifacts.js"() {
+    "use strict";
+    init_runtime_paths2();
+  }
+});
+
+// packages/rn-dev-agent-core/dist/runners/transport-recovery.js
+var init_transport_recovery = __esm({
+  "packages/rn-dev-agent-core/dist/runners/transport-recovery.js"() {
+    "use strict";
+  }
+});
+
+// packages/rn-dev-agent-core/dist/util/trusted-system-executable.js
+import { existsSync as existsSync4 } from "node:fs";
+import { win32 } from "node:path";
+function trustedWindowsRoots(environment) {
+  return [
+    ...new Set([environment.SystemRoot, environment.SYSTEMROOT, environment.windir, environment.WINDIR].filter((root2) => typeof root2 === "string" && /^[a-z]:\\/i.test(root2) && win32.basename(win32.normalize(root2)).toLowerCase() === "windows").map((root2) => win32.normalize(root2)).concat("C:\\Windows"))
+  ];
+}
+function resolveTrustedSystemExecutable(executable, platform, dependencies = {}) {
+  const exists = dependencies.exists ?? existsSync4;
+  const environment = dependencies.environment ?? process.env;
+  let candidates;
+  if (platform === "win32" && executable === "powershell") {
+    candidates = trustedWindowsRoots(environment).map((root2) => win32.join(root2, "System32", "WindowsPowerShell", "v1.0", "powershell.exe"));
+  } else if (platform === "win32" && executable === "taskkill") {
+    candidates = trustedWindowsRoots(environment).map((root2) => win32.join(root2, "System32", "taskkill.exe"));
+  } else if (platform === "linux" && executable === "ss") {
+    candidates = ["/usr/bin/ss", "/usr/sbin/ss", "/bin/ss", "/sbin/ss"];
+  } else if (platform === "linux" && executable === "lsof") {
+    candidates = ["/usr/bin/lsof", "/usr/sbin/lsof", "/bin/lsof", "/sbin/lsof"];
+  } else if (platform === "linux" && executable === "ps") {
+    candidates = ["/usr/bin/ps", "/bin/ps"];
+  } else if (platform === "darwin" && executable === "lsof") {
+    candidates = ["/usr/sbin/lsof"];
+  } else if (platform === "darwin" && executable === "ps") {
+    candidates = ["/bin/ps", "/usr/bin/ps"];
+  } else {
+    return null;
+  }
+  return candidates.find(exists) ?? null;
+}
+var init_trusted_system_executable = __esm({
+  "packages/rn-dev-agent-core/dist/util/trusted-system-executable.js"() {
+    "use strict";
+  }
+});
+
+// packages/rn-dev-agent-core/dist/session/process-birth.js
+import { execFileSync } from "node:child_process";
+import { createHash as createHash2 } from "node:crypto";
+import { closeSync, constants, existsSync as existsSync5, fstatSync, lstatSync as lstatSync3, openSync, readFileSync as readFileSync5, readSync, realpathSync as realpathSync2 } from "node:fs";
+import { dirname as dirname4, join as join7 } from "node:path";
+import { fileURLToPath } from "node:url";
+function defaultRun(command, args) {
+  try {
+    return execFileSync(command, [...args], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 2e3
+    });
+  } catch (error) {
+    if (command === "/bin/ps" && typeof error === "object" && error !== null && "status" in error && error.status === 1) {
+      return "";
+    }
+    throw error;
+  }
+}
+function defaultRunVerifiedHelper(path, pid, requirement) {
+  return execFileSync("/bin/zsh", ["-f", "-c", VERIFIED_HELPER_SCRIPT, "rn-process-birth", path, String(pid), requirement], {
+    encoding: "utf8",
+    env: { PATH: "/usr/bin:/bin:/usr/sbin:/sbin" },
+    maxBuffer: 1024 * 1024,
+    stdio: ["ignore", "pipe", "ignore"],
+    timeout: 2e3
+  });
+}
+function token(parts) {
+  return createHash2("sha256").update(parts.join("\0")).digest("hex");
+}
+function darwinProcessBirthHelperPath() {
+  const moduleDirectory = dirname4(fileURLToPath(import.meta.url));
+  const candidates = [
+    join7(moduleDirectory, "native", "darwin-process-birth"),
+    join7(moduleDirectory, "..", "native", "darwin-process-birth")
+  ];
+  for (const candidate of candidates) {
+    if (existsSync5(candidate))
+      return candidate;
+  }
+  return candidates[0];
+}
+function sameFile(before, after) {
+  return before.dev === after.dev && before.ino === after.ino && before.mode === after.mode && before.size === after.size && before.uid === after.uid;
+}
+function darwinProcessBirthRequirement() {
+  return `(${DARWIN_HELPER_MANIFEST.cdhashes.map((cdhash) => `cdhash H"${cdhash}"`).join(" or ")})`;
+}
+function verifyDarwinProcessBirthHelper(dependencies) {
+  const helper = (dependencies.helperPath ?? darwinProcessBirthHelperPath)();
+  const manifestPath = `${helper}.json`;
+  const canonicalize = dependencies.canonicalize ?? realpathSync2;
+  const metadata = dependencies.lstat ?? lstatSync3;
+  const descriptorMetadata = dependencies.fstat ?? fstatSync;
+  const readBinary = dependencies.readBinary ?? ((path) => readFileSync5(path));
+  const readDescriptor = dependencies.readDescriptor ?? ((fd2) => {
+    const size = descriptorMetadata(fd2).size;
+    const buffer = Buffer.alloc(size);
+    let offset = 0;
+    while (offset < size) {
+      const bytesRead = readSync(fd2, buffer, offset, size - offset, offset);
+      if (bytesRead === 0)
+        break;
+      offset += bytesRead;
+    }
+    return buffer.subarray(0, offset);
+  });
+  const open = dependencies.open ?? openSync;
+  const close = dependencies.close ?? closeSync;
+  const uid = dependencies.uid ?? process.getuid?.();
+  if (canonicalize(helper) !== helper || canonicalize(manifestPath) !== manifestPath) {
+    throw new Error("Darwin process-birth helper path is not canonical");
+  }
+  const helperBefore = metadata(helper);
+  const manifestBefore = metadata(manifestPath);
+  const trustedOwners = /* @__PURE__ */ new Set([0, ...uid === void 0 ? [] : [uid]]);
+  if (!helperBefore.isFile() || !manifestBefore.isFile() || !trustedOwners.has(helperBefore.uid) || !trustedOwners.has(manifestBefore.uid) || (helperBefore.mode & 18) !== 0 || (manifestBefore.mode & 18) !== 0 || (helperBefore.mode & 73) === 0) {
+    throw new Error("Darwin process-birth helper metadata is untrusted");
+  }
+  const manifestBytes = readBinary(manifestPath);
+  const manifest = JSON.parse(manifestBytes.toString("utf8"));
+  if (Object.entries(DARWIN_HELPER_MANIFEST).some(([key, expected]) => JSON.stringify(manifest[key]) !== JSON.stringify(expected))) {
+    throw new Error("Darwin process-birth helper provenance is invalid");
+  }
+  const fd = open(helper, constants.O_RDONLY | constants.O_NOFOLLOW);
+  try {
+    const opened = descriptorMetadata(fd);
+    if (!opened.isFile() || !sameFile(helperBefore, opened) || createHash2("sha256").update(readDescriptor(fd)).digest("hex") !== DARWIN_HELPER_MANIFEST.binarySha256 || !sameFile(manifestBefore, metadata(manifestPath))) {
+      throw new Error("Darwin process-birth helper changed during verification");
+    }
+    return {
+      path: helper,
+      requirement: darwinProcessBirthRequirement()
+    };
+  } finally {
+    close(fd);
+  }
+}
+function defaultProcessSignalPermission(pid) {
+  try {
+    process.kill(pid, 0);
+    return "permitted";
+  } catch (error) {
+    const code = error.code;
+    if (code === "ESRCH")
+      return "absent";
+    if (code === "EPERM")
+      return "denied";
+    return "unknown";
+  }
+}
+function probeProcessBirth(pid, dependencies = {}) {
+  const probe = probeRecordedProcessBirth(pid, dependencies);
+  if (probe.status !== "unknown")
+    return probe;
+  if (!Number.isSafeInteger(pid) || pid <= 0)
+    return probe;
+  if ((dependencies.platform ?? process.platform) === "win32")
+    return probe;
+  const permission = (dependencies.signalPermission ?? defaultProcessSignalPermission)(pid);
+  return permission === "denied" ? { status: "absent", reason: "foreign" } : probe;
+}
+function probeRecordedProcessBirth(pid, dependencies) {
+  if (!Number.isSafeInteger(pid) || pid <= 0)
+    return { status: "unknown" };
+  const platform = dependencies.platform ?? process.platform;
+  const read = dependencies.read ?? ((path) => readFileSync5(path, "utf8"));
+  const run = dependencies.run ?? defaultRun;
+  const runVerifiedHelper = dependencies.runVerifiedHelper ?? defaultRunVerifiedHelper;
+  try {
+    if (platform === "darwin") {
+      const observed = run("/bin/ps", ["-p", String(pid), "-o", "pid=,state="]).trim();
+      if (observed.length === 0)
+        return { status: "absent" };
+      const observedFields = /^(\d+)(?:\s+(\S+))?$/.exec(observed);
+      if (!observedFields || Number(observedFields[1]) !== pid)
+        return { status: "unknown" };
+      if (observedFields[2]?.startsWith("Z"))
+        return { status: "absent" };
+      const helper = verifyDarwinProcessBirthHelper(dependencies);
+      const processInfo = runVerifiedHelper(helper.path, pid, helper.requirement).trim();
+      const processMatch = /^(\d+):(\d+):(\d+)$/.exec(processInfo);
+      if (!processMatch || Number(processMatch[1]) !== pid)
+        return { status: "unknown" };
+      const bootSession = run("/usr/sbin/sysctl", ["-n", "kern.bootsessionuuid"]).trim();
+      if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(bootSession)) {
+        return { status: "unknown" };
+      }
+      return {
+        status: "present",
+        birth: {
+          pid,
+          source: "darwin-libproc",
+          token: token([platform, bootSession.toLowerCase(), processMatch[2], processMatch[3]])
+        }
+      };
+    }
+    if (platform === "linux") {
+      const boot = read("/proc/sys/kernel/random/boot_id").trim();
+      let stat;
+      try {
+        stat = read(`/proc/${pid}/stat`).trim();
+      } catch (error) {
+        return error.code === "ENOENT" ? { status: "absent" } : { status: "unknown" };
+      }
+      const commandEnd = stat.lastIndexOf(")");
+      const fields = commandEnd >= 0 ? stat.slice(commandEnd + 1).trim().split(/\s+/) : [];
+      if (fields[0] === "Z")
+        return { status: "absent" };
+      const started = fields[19];
+      if (!boot || !started || !/^\d+$/.test(started))
+        return { status: "unknown" };
+      return {
+        status: "present",
+        birth: { pid, source: "linux-proc", token: token([platform, boot, started]) }
+      };
+    }
+    if (platform === "win32") {
+      const powershell = resolveTrustedSystemExecutable("powershell", platform, dependencies.executableDependencies);
+      if (!powershell)
+        return { status: "unknown" };
+      const script = `$p = Get-Process -Id ${pid} -ErrorAction SilentlyContinue; if ($null -eq $p) { 'ABSENT' } else { $p.StartTime.ToUniversalTime().Ticks }`;
+      const started = run(powershell, ["-NoProfile", "-NonInteractive", "-Command", script]).trim();
+      if (started === "ABSENT")
+        return { status: "absent" };
+      if (!/^\d+$/.test(started))
+        return { status: "unknown" };
+      return {
+        status: "present",
+        birth: { pid, source: "windows-powershell", token: token([platform, started]) }
+      };
+    }
+  } catch {
+    return { status: "unknown" };
+  }
+  return { status: "unknown" };
+}
+var DARWIN_HELPER_MANIFEST, VERIFIED_HELPER_SCRIPT;
+var init_process_birth = __esm({
+  "packages/rn-dev-agent-core/dist/session/process-birth.js"() {
+    "use strict";
+    init_trusted_system_executable();
+    DARWIN_HELPER_MANIFEST = {
+      sourceSha256: "99a8025ab1c3cfbe32db184f6e030216d75c535143bd4684a2a89aac61c54c4a",
+      recipeSha256: "4f40539bce137f7bcae4731fd1494fae5704cba5327177d7f2a2a47aec95afb3",
+      stableBinarySha256: "6b5db7f7a6933f3d11d4c53ecafba9c3ef82c2533faf4bfe07a11b3cb4022dea",
+      binarySha256: "fee005927e8d680b1589574211002d8809e3478446b97d3c9291157ea57b0dd5",
+      cdhashes: [
+        "1e67841d4d49a5e5088d283e26430130f017b989",
+        "7f25b0eca55913e522781923a16c6b0cd98bb4fc"
+      ]
+    };
+    VERIFIED_HELPER_SCRIPT = `
+set -euo pipefail
+helper_pid=
+cleanup() {
+  if [[ -n "$helper_pid" ]]; then
+    /bin/kill -CONT "$helper_pid" 2>/dev/null || true
+    /bin/kill -KILL "$helper_pid" 2>/dev/null || true
+    wait "$helper_pid" 2>/dev/null || true
+  fi
+}
+trap cleanup EXIT HUP INT TERM
+coproc "$1" "$2" --hold
+helper_pid=$!
+IFS= read -r -p result
+attempt=0
+state=
+while (( attempt < 100 )); do
+  state=$(/bin/ps -p "$helper_pid" -o state= 2>/dev/null || true)
+  [[ "$state" == T* ]] && break
+  [[ -z "$state" || "$state" == Z* ]] && exit 1
+  /bin/sleep 0.01
+  (( attempt += 1 ))
+done
+[[ "$state" == T* ]]
+/usr/bin/codesign --verify --strict "-R=$3" "$1" >/dev/null 2>&1
+/usr/bin/codesign --verify --strict "+$helper_pid" >/dev/null 2>&1
+live_cdhash=$(
+  /usr/bin/codesign --display --verbose=4 "+$helper_pid" 2>&1 |
+    /usr/bin/awk -F= '/^CDHash=/{print tolower($2); exit}'
+)
+[[ "$live_cdhash" != *[^0-9a-f]* ]]
+[[ "\${#live_cdhash}" == 40 ]]
+expected_cdhash="H\\"\${live_cdhash}\\""
+[[ "$3" == *"$expected_cdhash"* ]]
+/bin/kill -CONT "$helper_pid"
+attempt=0
+while (( attempt < 100 )); do
+  state=$(/bin/ps -p "$helper_pid" -o state= 2>/dev/null || true)
+  [[ -z "$state" || "$state" == Z* ]] && break
+  /bin/sleep 0.01
+  (( attempt += 1 ))
+done
+[[ -z "$state" || "$state" == Z* ]]
+wait "$helper_pid" 2>/dev/null || true
+helper_pid=
+trap - EXIT HUP INT TERM
+print -r -- "$result"
+`;
+  }
+});
+
+// packages/rn-dev-agent-core/dist/runners/rn-fast-runner-client.js
+import { join as join8 } from "node:path";
+function resolveReadyTimeoutMs() {
+  const raw = Number(process.env.RN_FAST_RUNNER_READY_TIMEOUT_MS);
+  return Number.isFinite(raw) && raw > 0 ? raw : 3e4;
+}
+function iosStatePath(deviceId) {
+  return runnerStatePath(`ios-${deviceId}`);
+}
+function parsePersistedRunnerState(raw, pidAlive = defaultProcessAlive) {
+  if (!raw || typeof raw !== "object")
+    return null;
+  const s = raw;
+  if (s.schemaVersion !== 1)
+    return null;
+  if (typeof s.pid !== "number" || typeof s.port !== "number")
+    return null;
+  if (typeof s.deviceId !== "string" || typeof s.bundleId !== "string")
+    return null;
+  if (!pidAlive(s.pid))
+    return null;
+  return s;
+}
+function parseLegacyRunnerState(raw, pidAlive = defaultProcessAlive) {
+  if (!raw || typeof raw !== "object")
+    return null;
+  const s = raw;
+  if (typeof s.pid !== "number" || typeof s.port !== "number")
+    return null;
+  if (typeof s.deviceId !== "string")
+    return null;
+  if (!pidAlive(s.pid))
+    return null;
+  return {
+    schemaVersion: 1,
+    pid: s.pid,
+    port: s.port,
+    deviceId: s.deviceId,
+    bundleId: typeof s.bundleId === "string" ? s.bundleId : "",
+    startedAt: "",
+    protocolVersion: 0
+  };
+}
+function adoptPersistedFastRunnerState(deviceId) {
+  if (runnerState || !deviceId)
+    return;
+  const path = iosStatePath(deviceId);
+  const raw = readJsonStateFile(path);
+  if (raw !== null) {
+    const parsed = parsePersistedRunnerState(raw);
+    if (!parsed) {
+      deleteStateFile(path);
+      return;
+    }
+    runnerState = parsed;
+    quiescenceAnnouncementPending = true;
+    return;
+  }
+  const legacy = readLegacyTmpState("ios");
+  if (legacy === null)
+    return;
+  const parsedLegacy = parseLegacyRunnerState(legacy);
+  if (!parsedLegacy) {
+    cleanupLegacyTmpState();
+    return;
+  }
+  if (parsedLegacy.deviceId === deviceId) {
+    runnerState = parsedLegacy;
+    quiescenceAnnouncementPending = true;
+  }
+}
+async function stopFastRunner(deviceId) {
+  adoptPersistedFastRunnerState(deviceId);
+  await reapStaleFastRunner();
+}
+async function fastHealthCheck() {
+  if (!runnerState)
+    return false;
+  try {
+    const result = await defaultHttpProbe(runnerState.port, 2e3);
+    return result.ok && result.status === 200 && result.bodyOk === true;
+  } catch {
+    return false;
+  }
+}
+function defaultProcessAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+async function defaultHttpProbe(port, timeoutMs, capabilityOverride) {
+  const url = `http://127.0.0.1:${port}/health`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const capability = capabilityOverride ?? (runnerState?.port === port ? runnerState.capability : void 0);
+    const res = await fetchImpl(url, {
+      signal: controller.signal,
+      headers: capability ? { authorization: `Bearer ${capability}` } : {}
+    });
+    if (!res.ok)
+      return { ok: false, status: res.status };
+    let bodyOk;
+    let protocolVersion;
+    let runnerVersion;
+    let capabilities;
+    let commands;
+    let instanceId;
+    let sessionId;
+    let claimEpoch;
+    let deviceId;
+    let appId;
+    try {
+      const body = await res.json();
+      bodyOk = body.ok === true;
+      if (typeof body.protocolVersion === "number")
+        protocolVersion = body.protocolVersion;
+      if (typeof body.runnerVersion === "string")
+        runnerVersion = body.runnerVersion;
+      if (Array.isArray(body.capabilities)) {
+        capabilities = body.capabilities.filter((c) => typeof c === "string");
+      }
+      if (Array.isArray(body.commands)) {
+        commands = body.commands.filter((c) => typeof c === "string");
+      }
+      if (typeof body.instanceId === "string")
+        instanceId = body.instanceId;
+      if (typeof body.sessionId === "string")
+        sessionId = body.sessionId;
+      if (typeof body.claimEpoch === "number")
+        claimEpoch = body.claimEpoch;
+      if (typeof body.deviceId === "string")
+        deviceId = body.deviceId;
+      if (typeof body.appId === "string")
+        appId = body.appId;
+    } catch {
+      bodyOk = false;
+    }
+    return {
+      ok: true,
+      status: res.status,
+      bodyOk,
+      ...protocolVersion !== void 0 ? { protocolVersion } : {},
+      ...runnerVersion !== void 0 ? { runnerVersion } : {},
+      ...capabilities !== void 0 ? { capabilities } : {},
+      ...commands !== void 0 ? { commands } : {},
+      ...instanceId !== void 0 ? { instanceId } : {},
+      ...sessionId !== void 0 ? { sessionId } : {},
+      ...claimEpoch !== void 0 ? { claimEpoch } : {},
+      ...deviceId !== void 0 ? { deviceId } : {},
+      ...appId !== void 0 ? { appId } : {}
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+function clearStateFileIfMatches(expected) {
+  const identityMatches = (observed) => observed.pid === expected.pid && observed.deviceId === expected.deviceId && observed.processBirth === expected.processBirth;
+  const path = iosStatePath(expected.deviceId);
+  const persisted = readJsonStateFile(path);
+  let clearedCurrent = false;
+  if (runnerState && identityMatches(runnerState)) {
+    runnerState = null;
+    clearedCurrent = true;
+  }
+  if (runnerProcess?.pid === expected.pid) {
+    runnerProcess = null;
+    clearedCurrent = true;
+  }
+  if (persisted && identityMatches(persisted))
+    deleteStateFile(path);
+  if (clearedCurrent)
+    lastKnownCapabilities = [];
+}
+async function reapStaleFastRunner(deps = {}) {
+  const getState = deps.getState ?? (() => runnerState);
+  const sendSignal = deps.sendSignal ?? ((pid, sig) => process.kill(pid, sig));
+  const sleep = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
+  const clearState = deps.clearState ?? clearStateFileIfMatches;
+  const graceMs = deps.graceMs ?? 500;
+  const state = getState();
+  if (!state)
+    return;
+  const expectedBirth = typeof state.processBirth === "string" ? { pid: state.pid, token: state.processBirth } : null;
+  if (!expectedBirth) {
+    const observed = deps.probeProcessBirth ? deps.probeProcessBirth(state.pid) : deps.processAlive ? deps.processAlive(state.pid) ? { status: "present" } : { status: "absent" } : probeProcessBirth(state.pid);
+    if (observed.status === "absent") {
+      clearState(state);
+      return;
+    }
+    throw new Error("RUNNER_ADOPTION_REQUIRED: live persisted iOS runner lacks process-birth authority");
+  }
+  const probeExpected = () => {
+    if (deps.probeProcessBirth) {
+      const observed2 = deps.probeProcessBirth(expectedBirth.pid);
+      if (observed2.status === "unknown")
+        return "unknown";
+      if (observed2.status === "absent")
+        return "gone";
+      return observed2.birth.token === expectedBirth.token ? "match" : "gone";
+    }
+    if (deps.matchesProcessBirth) {
+      return deps.matchesProcessBirth(expectedBirth) ? "match" : "gone";
+    }
+    const observed = probeProcessBirth(expectedBirth.pid);
+    if (observed.status === "unknown")
+      return "unknown";
+    if (observed.status === "absent")
+      return "gone";
+    return observed.birth.token === expectedBirth.token ? "match" : "gone";
+  };
+  const initial = probeExpected();
+  if (initial === "unknown") {
+    throw new Error("RUNNER_ADOPTION_REQUIRED: iOS runner process identity is unproven");
+  }
+  if (initial === "gone") {
+    clearState(state);
+    return;
+  }
+  const spawnedChild = runnerProcess?.pid === state.pid ? runnerProcess : null;
+  const spawnedExit = spawnedChild ? new Promise((resolve3) => spawnedChild.once("exit", () => resolve3())) : null;
+  try {
+    sendSignal(state.pid, "SIGTERM");
+  } catch {
+  }
+  await sleep(graceMs);
+  const afterTerm = probeExpected();
+  if (afterTerm === "unknown") {
+    throw new Error("RUNNER_ADOPTION_REQUIRED: iOS runner termination is unproven");
+  }
+  if (afterTerm === "gone") {
+    clearState(state);
+    return;
+  }
+  try {
+    sendSignal(state.pid, "SIGKILL");
+  } catch {
+  }
+  if (spawnedExit) {
+    await Promise.race([spawnedExit, sleep(250)]);
+  } else {
+    await sleep(50);
+  }
+  const afterKill = probeExpected();
+  if (afterKill !== "gone") {
+    throw new Error("RUNNER_ADOPTION_REQUIRED: iOS runner termination is unproven");
+  }
+  clearState(state);
+}
+var READY_TIMEOUT_MS, FAST_RUNNER_PROJECT, runnerProcess, runnerState, lastKnownCapabilities, quiescenceAnnouncementPending, REBUILD_LOCK_DIR, REBUILD_LOCK_STALE_MS, REBUILD_BUDGET_FILE, fetchImpl;
+var init_rn_fast_runner_client = __esm({
+  "packages/rn-dev-agent-core/dist/runners/rn-fast-runner-client.js"() {
+    "use strict";
+    init_utils();
+    init_fast_runner_ref_map();
+    init_keyboard_guard();
+    init_secure_state_file();
+    init_protocol();
+    init_quiescence();
+    init_runner_artifacts();
+    init_runtime_paths2();
+    init_transport_recovery();
+    init_process_birth();
+    READY_TIMEOUT_MS = resolveReadyTimeoutMs();
+    FAST_RUNNER_PROJECT = resolveNativeRunnerDir("rn-fast-runner");
+    runnerProcess = null;
+    runnerState = null;
+    lastKnownCapabilities = [];
+    quiescenceAnnouncementPending = false;
+    REBUILD_LOCK_DIR = join8(FAST_RUNNER_PROJECT, "build", ".rebuild-lock");
+    REBUILD_LOCK_STALE_MS = 15 * 6e4;
+    REBUILD_BUDGET_FILE = join8(FAST_RUNNER_PROJECT, "build", "commands-rebuild.json");
+    fetchImpl = globalThis.fetch;
+  }
+});
+
+// packages/rn-dev-agent-core/dist/session/authority-store.js
+import { createRequire as createRequire2 } from "node:module";
+var require2, INITIALIZATION_WAIT;
+var init_authority_store = __esm({
+  "packages/rn-dev-agent-core/dist/session/authority-store.js"() {
+    "use strict";
+    require2 = createRequire2(import.meta.url);
+    INITIALIZATION_WAIT = new Int32Array(new SharedArrayBuffer(4));
+  }
+});
+
+// packages/rn-dev-agent-core/dist/session/cleanup-identity.js
+var init_cleanup_identity = __esm({
+  "packages/rn-dev-agent-core/dist/session/cleanup-identity.js"() {
+    "use strict";
+  }
+});
+
+// packages/rn-dev-agent-core/dist/session/declared-source-contract.js
+var DECLARED_ROOT_ENV, DECLARED_MANIFESTS_ENV, NON_GIT_DECLARATION_NEXT_ACTION;
+var init_declared_source_contract = __esm({
+  "packages/rn-dev-agent-core/dist/session/declared-source-contract.js"() {
+    "use strict";
+    DECLARED_ROOT_ENV = "RN_DEV_AGENT_DECLARED_ROOT";
+    DECLARED_MANIFESTS_ENV = "RN_DEV_AGENT_DECLARED_MANIFESTS";
+    NON_GIT_DECLARATION_NEXT_ACTION = `Declare the non-Git source explicitly: set ${DECLARED_ROOT_ENV} to the exact existing application root, and set ${DECLARED_MANIFESTS_ENV} to a comma-separated list of required existing manifest files inside that root, then restart the supervisor. Neither value is inferred from the working directory or generated.`;
+  }
+});
+
+// packages/rn-dev-agent-core/dist/nav-graph/storage.js
+import { readFileSync as readFileSync6, writeFileSync as writeFileSync3, existsSync as existsSync6, renameSync as renameSync2, readdirSync as readdirSync2, lstatSync as lstatSync4, mkdirSync as mkdirSync3, realpathSync as realpathSync3 } from "node:fs";
+import { join as join9, dirname as dirname5 } from "node:path";
+function isRnProject(dir) {
+  const pkgPath = join9(dir, "package.json");
+  if (!existsSync6(pkgPath))
+    return false;
+  try {
+    const pkg = JSON.parse(readFileSync6(pkgPath, "utf-8"));
+    const deps = { ...pkg.dependencies, ...pkg.devDependencies };
+    return !!(deps["react-native"] || deps["expo"]);
+  } catch {
+    return false;
+  }
+}
+function scanForRnProject(rootDir, maxDepth) {
+  if (maxDepth < 0)
+    return null;
+  let entries;
+  try {
+    entries = readdirSync2(rootDir);
+  } catch {
+    return null;
+  }
+  entries.sort();
+  const subdirs = [];
+  for (const name of entries) {
+    if (name.startsWith(".") || name === "node_modules")
+      continue;
+    const full = join9(rootDir, name);
+    try {
+      const stat = lstatSync4(full);
+      if (!(stat.isDirectory() || stat.isSymbolicLink()))
+        continue;
+    } catch {
+      continue;
+    }
+    if (isRnProject(full))
+      return full;
+    subdirs.push(full);
+  }
+  if (maxDepth > 0) {
+    for (const dir of subdirs) {
+      const deeper = scanForRnProject(dir, maxDepth - 1);
+      if (deeper)
+        return deeper;
+    }
+  }
+  return null;
+}
+function collectRnProjects(rootDir, maxDepth, out) {
+  if (maxDepth < 0)
+    return;
+  let entries;
+  try {
+    entries = readdirSync2(rootDir);
+  } catch {
+    return;
+  }
+  entries.sort();
+  const subdirs = [];
+  for (const name of entries) {
+    if (name.startsWith(".") || name === "node_modules")
+      continue;
+    const full = join9(rootDir, name);
+    try {
+      const stat = lstatSync4(full);
+      if (!(stat.isDirectory() || stat.isSymbolicLink()))
+        continue;
+    } catch {
+      continue;
+    }
+    if (isRnProject(full)) {
+      out.push(full);
+    } else {
+      subdirs.push(full);
+    }
+  }
+  if (maxDepth > 0) {
+    for (const dir of subdirs)
+      collectRnProjects(dir, maxDepth - 1, out);
+  }
+}
+function readProjectBundleId(projectRoot) {
+  const appJsonPath = join9(projectRoot, "app.json");
+  if (!existsSync6(appJsonPath))
+    return null;
+  try {
+    const raw = JSON.parse(readFileSync6(appJsonPath, "utf-8"));
+    const iosId = raw.expo?.ios?.bundleIdentifier ?? raw.ios?.bundleIdentifier;
+    const androidId = raw.expo?.android?.package ?? raw.android?.package;
+    if (typeof iosId === "string" && iosId.length > 0)
+      return iosId;
+    if (typeof androidId === "string" && androidId.length > 0)
+      return androidId;
+    return null;
+  } catch {
+    return null;
+  }
+}
+function findProjectRoot(opts = {}) {
+  const targetBundleId = opts.bundleId;
+  const envRoot = process.env.RN_PROJECT_ROOT;
+  if (envRoot && isRnProject(envRoot))
+    return envRoot;
+  let walkupHit = null;
+  const starts = [process.env.CLAUDE_USER_CWD, process.cwd()].filter(Boolean);
+  for (const start of starts) {
+    if (isRnProject(start)) {
+      if (targetBundleId && readProjectBundleId(start) === targetBundleId)
+        return start;
+      walkupHit = walkupHit ?? start;
+      continue;
+    }
+    let dir = start;
+    for (let i = 0; i < 10; i++) {
+      if (isRnProject(dir)) {
+        if (targetBundleId && readProjectBundleId(dir) === targetBundleId)
+          return dir;
+        walkupHit = walkupHit ?? dir;
+        break;
+      }
+      const parent = join9(dir, "..");
+      if (parent === dir)
+        break;
+      dir = parent;
+    }
+  }
+  if (!targetBundleId && walkupHit)
+    return walkupHit;
+  const cwd = process.cwd();
+  const parentOfCwd = join9(cwd, "..");
+  if (targetBundleId) {
+    const all = [];
+    collectRnProjects(cwd, 0, all);
+    if (parentOfCwd !== cwd)
+      collectRnProjects(parentOfCwd, 1, all);
+    for (const candidate of all) {
+      if (readProjectBundleId(candidate) === targetBundleId)
+        return candidate;
+    }
+    if (walkupHit)
+      return walkupHit;
+    return all[0] ?? null;
+  }
+  const cwdScan = scanForRnProject(cwd, 0);
+  if (cwdScan)
+    return cwdScan;
+  if (parentOfCwd !== cwd) {
+    const siblingScan = scanForRnProject(parentOfCwd, 1);
+    if (siblingScan)
+      return siblingScan;
+  }
+  return null;
+}
+var import_yaml2, STRIKE_COOLDOWN_MS;
+var init_storage = __esm({
+  "packages/rn-dev-agent-core/dist/nav-graph/storage.js"() {
+    "use strict";
+    import_yaml2 = __toESM(require_dist(), 1);
+    STRIKE_COOLDOWN_MS = 5 * 60 * 1e3;
+  }
+});
+
+// packages/rn-dev-agent-core/dist/cdp/metro-cwd.js
+var init_metro_cwd = __esm({
+  "packages/rn-dev-agent-core/dist/cdp/metro-cwd.js"() {
+    "use strict";
+    init_storage();
+    init_trusted_system_executable();
+  }
+});
+
+// packages/rn-dev-agent-core/dist/session/metro-binding.js
+var init_metro_binding = __esm({
+  "packages/rn-dev-agent-core/dist/session/metro-binding.js"() {
+    "use strict";
+    init_metro_cwd();
+    init_trusted_system_executable();
+    init_process_birth();
+    init_trusted_system_executable();
+  }
+});
+
+// packages/rn-dev-agent-core/dist/session/recovery-remedy.js
+var SESSION_DOCTOR, HEADLESS_SESSION_RECOVERY_COMMAND, HEADLESS_SESSION_REPORT_COMMAND;
+var init_recovery_remedy = __esm({
+  "packages/rn-dev-agent-core/dist/session/recovery-remedy.js"() {
+    "use strict";
+    SESSION_DOCTOR = '"${CLAUDE_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}/rn-dev-agent-core/dist/session-doctor.js"';
+    HEADLESS_SESSION_RECOVERY_COMMAND = `node ${SESSION_DOCTOR} repair`;
+    HEADLESS_SESSION_REPORT_COMMAND = `node ${SESSION_DOCTOR} report`;
+  }
+});
+
+// packages/rn-dev-agent-core/dist/session/registry.js
+var INITIALIZATION_WAIT2, SessionAuthorityError, RECOVERY_HANDLE_TTL_MS;
+var init_registry = __esm({
+  "packages/rn-dev-agent-core/dist/session/registry.js"() {
+    "use strict";
+    init_authority_store();
+    init_cleanup_identity();
+    init_declared_source_contract();
+    init_metro_binding();
+    init_recovery_remedy();
+    INITIALIZATION_WAIT2 = new Int32Array(new SharedArrayBuffer(4));
+    SessionAuthorityError = class extends Error {
+      code;
+      holder;
+      supplementalMeta;
+      details;
+      constructor(code, message, holder, details) {
+        super(`${code}: ${message}`);
+        this.name = "SessionAuthorityError";
+        this.code = code;
+        this.holder = holder;
+        this.details = details;
+      }
+      attachMeta(meta) {
+        this.supplementalMeta = { ...this.supplementalMeta, ...meta };
+      }
+      getSupplementalMeta() {
+        return { ...this.supplementalMeta };
+      }
+    };
+    RECOVERY_HANDLE_TTL_MS = 5 * 6e4;
+  }
+});
+
+// packages/rn-dev-agent-core/dist/util/public-diagnostics.js
+var init_public_diagnostics = __esm({
+  "packages/rn-dev-agent-core/dist/util/public-diagnostics.js"() {
+    "use strict";
+    init_registry();
+  }
+});
+
+// packages/rn-dev-agent-core/dist/tools/device-screenshot-raw.js
+import { execFile as execFile2, spawn } from "node:child_process";
+import { promisify as promisify2 } from "node:util";
+var execFileAsync;
+var init_device_screenshot_raw = __esm({
+  "packages/rn-dev-agent-core/dist/tools/device-screenshot-raw.js"() {
+    "use strict";
+    init_public_diagnostics();
+    execFileAsync = promisify2(execFile2);
+  }
+});
+
+// packages/rn-dev-agent-core/dist/lifecycle/no-change-tracker.js
+var WEDGED_DISTINCT_TARGETS, WEDGED_RUNTIME_HINT;
+var init_no_change_tracker = __esm({
+  "packages/rn-dev-agent-core/dist/lifecycle/no-change-tracker.js"() {
+    "use strict";
+    WEDGED_DISTINCT_TARGETS = 3;
+    WEDGED_RUNTIME_HINT = `${WEDGED_DISTINCT_TARGETS} consecutive taps on distinct targets produced no UI change \u2014 the app runtime may be wedged (JS thread paused or touch events swallowed). Run cdp_status (iOS auto-recovers a paused JS thread), then cdp_restart with hardReset=true if it persists.`;
+  }
+});
+
+// packages/rn-dev-agent-core/dist/observability/mirror/jpeg-stream.js
+var SOI, EOI;
+var init_jpeg_stream = __esm({
+  "packages/rn-dev-agent-core/dist/observability/mirror/jpeg-stream.js"() {
+    "use strict";
+    SOI = Buffer.from([255, 216]);
+    EOI = Buffer.from([255, 217]);
+  }
+});
+
+// packages/rn-dev-agent-core/dist/observability/mirror/sources.js
+var IDB_INSTALL_COMMAND, SIMCTL_HINT, IDB_HINT;
+var init_sources = __esm({
+  "packages/rn-dev-agent-core/dist/observability/mirror/sources.js"() {
+    "use strict";
+    init_jpeg_stream();
+    IDB_INSTALL_COMMAND = "brew install python@3.13 && brew tap facebook/fb && brew trust facebook/fb && brew install idb-companion && pipx install --python python3.13 --force fb-idb";
+    SIMCTL_HINT = `install idb for smoother mirroring (${IDB_INSTALL_COMMAND})`;
+    IDB_HINT = `idb not found \u2014 ${IDB_INSTALL_COMMAND}`;
+  }
+});
+
+// packages/rn-dev-agent-core/dist/project-config.js
+import { existsSync as existsSync7, readFileSync as readFileSync7 } from "node:fs";
+import { join as join10 } from "node:path";
+function readAppId(projectRoot, platform) {
+  for (const filename of ["app.json", "app.config.json"]) {
+    const p = join10(projectRoot, filename);
+    if (!existsSync7(p))
+      continue;
+    try {
+      const raw = JSON.parse(readFileSync7(p, "utf-8"));
+      const expo = raw.expo ?? raw;
+      const iosBundleId = expo?.ios?.bundleIdentifier;
+      const androidPkg = expo?.android?.package;
+      if (platform === "android")
+        return androidPkg ?? iosBundleId ?? null;
+      return iosBundleId ?? androidPkg ?? null;
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+function resolveBundleId(platform) {
+  const projectRoot = findProjectRoot();
+  if (!projectRoot)
+    return null;
+  return readAppId(projectRoot, platform);
+}
+function readExpoSlug() {
+  const projectRoot = findProjectRoot();
+  if (!projectRoot)
+    return null;
+  for (const filename of ["app.json", "app.config.json"]) {
+    const p = join10(projectRoot, filename);
+    if (!existsSync7(p))
+      continue;
+    try {
+      const raw = JSON.parse(readFileSync7(p, "utf-8"));
+      return raw.expo?.slug ?? null;
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+var init_project_config = __esm({
+  "packages/rn-dev-agent-core/dist/project-config.js"() {
+    "use strict";
+    init_storage();
+    init_logger();
+    init_sources();
+  }
+});
+
+// packages/rn-dev-agent-core/dist/agent-device-wrapper.js
+import { join as join11 } from "node:path";
+import { createHash as createHash3 } from "node:crypto";
+function getSessionFilePath() {
+  const projectId = createHash3("sha256").update(process.cwd()).digest("hex").slice(0, 12);
+  return join11(getStateDir(), `session-${projectId}.json`);
+}
+function getActiveSession() {
+  return activeSession;
+}
+function getAdbSerial() {
+  const session2 = getActiveSession();
+  if (session2?.platform === "android" && session2.deviceId)
+    return ["-s", session2.deviceId];
+  if (process.env.ANDROID_SERIAL)
+    return ["-s", process.env.ANDROID_SERIAL];
+  return [];
+}
+var SESSION_FILE, LEGACY_SESSION_FILE, activeSession;
+var init_agent_device_wrapper = __esm({
+  "packages/rn-dev-agent-core/dist/agent-device-wrapper.js"() {
+    "use strict";
+    init_utils();
+    init_rn_fast_runner_client();
+    init_protocol();
+    init_device_screenshot_raw();
+    init_fast_runner_ref_map();
+    init_no_change_tracker();
+    init_project_config();
+    init_secure_state_file();
+    SESSION_FILE = getSessionFilePath();
+    LEGACY_SESSION_FILE = "/tmp/rn-dev-agent-session.json";
+    activeSession = null;
+    activeSession = readJsonStateFile(SESSION_FILE);
+    if (!activeSession) {
+      const legacy = readJsonStateFile(LEGACY_SESSION_FILE);
+      if (legacy) {
+        activeSession = legacy;
+        try {
+          writeJsonStateFileAtomic(SESSION_FILE, legacy);
+        } catch {
+        }
+      }
+    }
+  }
+});
+
+// packages/rn-dev-agent-core/dist/tools/platform-utils.js
+import { execFile as execFileCb2 } from "node:child_process";
+import { promisify as promisify3 } from "node:util";
+var execFile3;
+var init_platform_utils = __esm({
+  "packages/rn-dev-agent-core/dist/tools/platform-utils.js"() {
+    "use strict";
+    init_agent_device_wrapper();
+    execFile3 = promisify3(execFileCb2);
+  }
+});
+
+// packages/rn-dev-agent-core/dist/runners/free-port.js
+var init_free_port = __esm({
+  "packages/rn-dev-agent-core/dist/runners/free-port.js"() {
+    "use strict";
+  }
+});
+
+// packages/rn-dev-agent-core/dist/runners/rn-android-runner-client.js
+import { spawn as spawn2, execFile as execFile4 } from "node:child_process";
+import { promisify as promisify4 } from "node:util";
+import { join as join12 } from "node:path";
+function androidStatePath(serial) {
+  return runnerStatePath(`android-${serial}`);
+}
+function defaultProcessAlive2(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+function parsePersistedAndroidState(raw, pidAlive = defaultProcessAlive2) {
+  if (!raw || typeof raw !== "object")
+    return null;
+  const s = raw;
+  if (s.schemaVersion !== 1)
+    return null;
+  if (typeof s.hostPort !== "number" || typeof s.devicePort !== "number")
+    return null;
+  if (typeof s.pid !== "number")
+    return null;
+  if (!pidAlive(s.pid))
+    return null;
+  return s;
+}
+function parseLegacyAndroidState(raw, pidAlive = defaultProcessAlive2) {
+  if (!raw || typeof raw !== "object")
+    return null;
+  const s = raw;
+  if (typeof s.hostPort !== "number" || typeof s.devicePort !== "number")
+    return null;
+  if (typeof s.pid !== "number")
+    return null;
+  if (!pidAlive(s.pid))
+    return null;
+  return {
+    schemaVersion: 1,
+    hostPort: s.hostPort,
+    devicePort: s.devicePort,
+    pid: s.pid,
+    ...typeof s.deviceId === "string" ? { deviceId: s.deviceId } : {},
+    ...typeof s.bundleId === "string" ? { bundleId: s.bundleId } : {},
+    startedAt: "",
+    protocolVersion: 0
+  };
+}
+function adoptPersistedAndroidState(serial) {
+  if (runnerState2)
+    return;
+  if (serial) {
+    const path = androidStatePath(serial);
+    const raw = readJsonStateFile(path);
+    if (raw !== null) {
+      const parsed = parsePersistedAndroidState(raw);
+      if (!parsed) {
+        deleteStateFile(path);
+        return;
+      }
+      runnerState2 = parsed;
+      return;
+    }
+  }
+  const legacy = readLegacyTmpState("android");
+  if (legacy === null)
+    return;
+  const parsedLegacy = parseLegacyAndroidState(legacy);
+  if (!parsedLegacy) {
+    cleanupLegacyTmpState();
+    return;
+  }
+  if (!serial || !parsedLegacy.deviceId || parsedLegacy.deviceId === serial) {
+    runnerState2 = parsedLegacy;
+  }
+}
+function clearAndroidStateFile() {
+  const path = runnerState2?.deviceId ? androidStatePath(runnerState2.deviceId) : null;
+  runnerState2 = null;
+  runnerProcess2 = null;
+  if (path)
+    deleteStateFile(path);
+}
+function adbSerialArgs(deviceId) {
+  if (deviceId)
+    return ["-s", deviceId];
+  if (process.env.ANDROID_SERIAL)
+    return ["-s", process.env.ANDROID_SERIAL];
+  return [];
+}
+function buildAdbForwardRemoveArgs(deviceId, hostPort) {
+  return [...adbSerialArgs(deviceId), "forward", "--remove", `tcp:${hostPort}`];
+}
+async function stopAndroidRunner(deviceId, signal) {
+  signal?.throwIfAborted();
+  adoptPersistedAndroidState(deviceId ?? void 0);
+  const stoppedState = runnerState2;
+  runnerProcess2?.kill("SIGTERM");
+  clearAndroidStateFile();
+  if (typeof stoppedState?.hostPort === "number") {
+    const resolvedDeviceId = deviceId ?? stoppedState.deviceId;
+    try {
+      await execFileAsync2("adb", buildAdbForwardRemoveArgs(resolvedDeviceId, stoppedState.hostPort), { timeout: ADB_CLEANUP_TIMEOUT_MS, signal });
+    } catch {
+    }
+  }
+}
+var execFileAsync2, RN_ANDROID_RUNNER_DIR, GRADLEW, APK_APP, APK_TEST, ANDROID_REBUILD_ROOT, ANDROID_REBUILD_LOCK_DATABASE, ANDROID_REBUILD_LOCK_STALE_MS, ADB_CLEANUP_TIMEOUT_MS, runnerProcess2, runnerState2, fetchImpl2;
+var init_rn_android_runner_client = __esm({
+  "packages/rn-dev-agent-core/dist/runners/rn-android-runner-client.js"() {
+    "use strict";
+    init_utils();
+    init_fast_runner_ref_map();
+    init_free_port();
+    init_keyboard_guard();
+    init_secure_state_file();
+    init_protocol();
+    init_runner_artifacts();
+    init_runtime_paths2();
+    init_transport_recovery();
+    init_process_birth();
+    init_authority_store();
+    execFileAsync2 = promisify4(execFile4);
+    RN_ANDROID_RUNNER_DIR = resolveNativeRunnerDir("rn-android-runner");
+    GRADLEW = join12(RN_ANDROID_RUNNER_DIR, "gradlew");
+    APK_APP = join12(RN_ANDROID_RUNNER_DIR, "app", "build", "outputs", "apk", "debug", "app-debug.apk");
+    APK_TEST = join12(RN_ANDROID_RUNNER_DIR, "app", "build", "outputs", "apk", "androidTest", "debug", "app-debug-androidTest.apk");
+    ANDROID_REBUILD_ROOT = join12(RN_ANDROID_RUNNER_DIR, "app", "build");
+    ANDROID_REBUILD_LOCK_DATABASE = join12(ANDROID_REBUILD_ROOT, ".authority-rebuild", "lock.sqlite");
+    ANDROID_REBUILD_LOCK_STALE_MS = 15 * 6e4;
+    ADB_CLEANUP_TIMEOUT_MS = 5e3;
+    runnerProcess2 = null;
+    runnerState2 = null;
+    fetchImpl2 = globalThis.fetch;
+  }
+});
+
+// packages/rn-dev-agent-core/dist/tools/maestro-dispatch.js
+function shouldWarnFallback(reason) {
+  if (warnedFallbackReasons.has(reason))
+    return false;
+  warnedFallbackReasons.add(reason);
+  return true;
+}
+function flowContainsHideKeyboard(commands) {
+  return commands.some((c) => c === "hideKeyboard" || typeof c === "object" && c !== null && "hideKeyboard" in c);
+}
+function chooseMaestroDispatch(inputs) {
+  const runnerPath = (inputs.maestroRunnerPath ?? getMaestroRunnerPath)();
+  if (runnerPath) {
+    return {
+      runner: "maestro-runner",
+      binPath: runnerPath,
+      buildArgs: (platform, flowFile, appFile, deviceId) => [
+        ...appFile ? ["--app-file", appFile] : [],
+        "--platform",
+        platform,
+        ...deviceId ? ["--device", deviceId] : [],
+        "test",
+        flowFile
+      ]
+    };
+  }
+  return {
+    error: `Session maestro-runner ${MAESTRO_RUNNER_PIN.version} is not installed in the pin-cache. Install exactly ${MAESTRO_RUNNER_PIN.version} via ${PINNED_RUNNER_INSTALL_HINT}. Ambient PATH maestro-runner, ~/.maestro-runner, and brew maestro are never used.`,
+    hint: `run ensure-maestro-runner.sh for exactly ${MAESTRO_RUNNER_PIN.version}`
+  };
+}
+var warnedFallbackReasons;
+var init_maestro_dispatch = __esm({
+  "packages/rn-dev-agent-core/dist/tools/maestro-dispatch.js"() {
+    "use strict";
+    init_engine_pin();
+    warnedFallbackReasons = /* @__PURE__ */ new Set();
+  }
+});
+
+// packages/rn-dev-agent-core/dist/domain/ansi.js
+function stripAnsi(value) {
+  return value.replace(ANSI_RE, "");
+}
+var ANSI_RE;
+var init_ansi = __esm({
+  "packages/rn-dev-agent-core/dist/domain/ansi.js"() {
+    "use strict";
+    ANSI_RE = new RegExp(String.fromCharCode(27) + "\\[[0-9;]*m", "g");
+  }
+});
+
+// packages/rn-dev-agent-core/dist/domain/maestro-error-parser.js
+function blockReasons(lines, stepIndex) {
+  const reasons = [];
+  for (let i = stepIndex + 1; i < lines.length; i++) {
+    if (RUNNER_STEP_RE.test(lines[i]))
+      break;
+    if (REASON_LINE_RE.test(lines[i]))
+      reasons.push(lines[i]);
+  }
+  return reasons;
+}
+function idWaitStepAmongDuplicates(lines, terminalIndex, terminalReason) {
+  for (let i = terminalIndex - 1; i >= 0; i--) {
+    const step = RUNNER_STEP_RE.exec(lines[i]);
+    if (!step)
+      continue;
+    if (step[1] !== "\u2717")
+      return null;
+    if (!blockReasons(lines, i).includes(terminalReason))
+      return null;
+    const stepMatch = ID_WAIT_STEP_RE.exec(step[2]);
+    if (stepMatch)
+      return stepMatch;
+  }
+  return null;
+}
+function parseTerminalIdWait(output, suppliedFailedStep) {
+  const lines = stripAnsi(output).split("\n");
+  let terminalStep;
+  for (let index = 0; index < lines.length; index++) {
+    const match = RUNNER_STEP_RE.exec(lines[index]);
+    if (match)
+      terminalStep = { index, status: match[1], name: match[2] };
+  }
+  if (terminalStep?.status === "\u2713")
+    return null;
+  if (suppliedFailedStep && terminalStep && terminalStep.name !== suppliedFailedStep)
+    return null;
+  const failedStep = suppliedFailedStep ?? terminalStep?.name;
+  if (!failedStep || terminalStep && terminalStep.status !== "\u2717")
+    return null;
+  const reasonLine = lines.slice(terminalStep ? terminalStep.index + 1 : 0).filter((line) => REASON_LINE_RE.test(line)).at(-1);
+  if (!reasonLine)
+    return null;
+  const reasonMatch = ID_WAIT_REASON_RE.exec(reasonLine);
+  if (!reasonMatch)
+    return null;
+  const stepMatch = ID_WAIT_STEP_RE.exec(failedStep) ?? (terminalStep && SELECTOR_LESS_ID_WAIT_SUMMARY_RE.test(failedStep) ? idWaitStepAmongDuplicates(lines, terminalStep.index, reasonLine) : null);
+  if (!stepMatch || reasonMatch[2] !== stepMatch[2])
+    return null;
+  return {
+    kind: "SELECTOR_NOT_FOUND",
+    selectorKind: "id",
+    selector: stepMatch[2],
+    raw: output
+  };
+}
+function parseMaestroFailure(output, terminal) {
+  const raw = typeof output === "string" ? output : "";
+  if (terminal?.exitClass === "timed-out") {
+    return { kind: "TIMEOUT", selector: terminal.failureSelector ?? null, raw };
+  }
+  if (terminal?.failureKind === "SELECTOR_NOT_FOUND") {
+    return {
+      kind: "SELECTOR_NOT_FOUND",
+      selectorKind: "unknown",
+      selector: terminal.failureSelector ?? "",
+      raw
+    };
+  }
+  if (terminal?.failureKind === "TIMEOUT") {
+    return { kind: "TIMEOUT", selector: terminal.failureSelector ?? null, raw };
+  }
+  if (terminal?.failureKind === "ASSERTION_FAILED") {
+    return { kind: "ASSERTION_FAILED", selector: terminal.failureSelector ?? null, raw };
+  }
+  if (terminal?.exitClass === "before-first-step" && terminal.bootstrapEvidence) {
+    return {
+      kind: "WDA_BOOTSTRAP_FAILED",
+      detail: terminal.bootstrapEvidence.slice(0, 500),
+      raw
+    };
+  }
+  if (!raw) {
+    return { kind: "UNKNOWN", raw: "" };
+  }
+  output = raw;
+  const terminalIdWait = parseTerminalIdWait(output, terminal?.failedStep);
+  if (terminalIdWait)
+    return terminalIdWait;
+  const lines = output.split("\n");
+  for (const { re, build } of PATTERNS) {
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const line = lines[i];
+      if (!line)
+        continue;
+      const m = line.match(re);
+      if (m)
+        return build(m, output);
+    }
+  }
+  for (const { re, build } of PATTERNS) {
+    const m = output.match(re);
+    if (m)
+      return build(m, output);
+  }
+  return { kind: "UNKNOWN", raw: output };
+}
+function outputIndicatesFlowFailure(output) {
+  return /^\s*(?:\[FAILED\]|(?:Test|Flow) FAILED\b|FAILED\s*$)/m.test(output);
+}
+var PATTERNS, RUNNER_STEP_RE, REASON_LINE_RE, ID_WAIT_STEP_RE, SELECTOR_LESS_ID_WAIT_SUMMARY_RE, ID_WAIT_REASON_RE;
+var init_maestro_error_parser = __esm({
+  "packages/rn-dev-agent-core/dist/domain/maestro-error-parser.js"() {
+    "use strict";
+    init_ansi();
+    PATTERNS = [
+      {
+        re: /Element with id (['"])((?:(?!\1).)+)\1 (?:was )?not found/i,
+        build: (m, raw) => ({ kind: "SELECTOR_NOT_FOUND", selectorKind: "id", selector: m[2], raw })
+      },
+      {
+        re: /Element with text (['"])((?:(?!\1).)+)\1 (?:was )?not found/i,
+        build: (m, raw) => ({ kind: "SELECTOR_NOT_FOUND", selectorKind: "text", selector: m[2], raw })
+      },
+      // maestro-runner 1.0.x shape — issue #105.
+      // "Element not found: id='X'" or "Element not found: text='X'".
+      {
+        re: /Element not found:\s*id=(['"])((?:(?!\1).)+)\1/i,
+        build: (m, raw) => ({ kind: "SELECTOR_NOT_FOUND", selectorKind: "id", selector: m[2], raw })
+      },
+      {
+        re: /Element not found:\s*text=(['"])((?:(?!\1).)+)\1/i,
+        build: (m, raw) => ({ kind: "SELECTOR_NOT_FOUND", selectorKind: "text", selector: m[2], raw })
+      },
+      {
+        re: /Element (['"])((?:(?!\1).)+)\1 (?:was )?not found/i,
+        build: (m, raw) => ({
+          kind: "SELECTOR_NOT_FOUND",
+          selectorKind: "unknown",
+          selector: m[2],
+          raw
+        })
+      },
+      {
+        re: /Timed out waiting for element with id (['"])((?:(?!\1).)+)\1/i,
+        build: (m, raw) => ({ kind: "TIMEOUT", selector: m[2], raw })
+      },
+      {
+        re: /Timed out waiting for element (['"])((?:(?!\1).)+)\1/i,
+        build: (m, raw) => ({ kind: "TIMEOUT", selector: m[2], raw })
+      },
+      {
+        re: /Assertion failed: (['"])((?:(?!\1).)+)\1 (?:is )?not visible/i,
+        build: (m, raw) => ({ kind: "ASSERTION_FAILED", selector: m[2], raw })
+      },
+      {
+        re: /Element (['"])((?:(?!\1).)+)\1 is not visible/i,
+        build: (m, raw) => ({ kind: "ASSERTION_FAILED", selector: m[2], raw })
+      }
+    ];
+    RUNNER_STEP_RE = /^[ \t]+([✓✗])\s+(\S.*\S|\S)\s*\(([\d.]+)s\)\s*$/;
+    REASON_LINE_RE = /^[ \t]+╰─\s+/;
+    ID_WAIT_STEP_RE = /^extendedWaitUntil:\s+visible\s+id=(['"])((?:(?!\1).)+)\1$/i;
+    SELECTOR_LESS_ID_WAIT_SUMMARY_RE = /^extendedWaitUntil$/;
+    ID_WAIT_REASON_RE = /^[ \t]+╰─\s+Element (['"])#((?:(?!\1).)+)\1 not visible within\b/i;
+  }
+});
+
+// packages/rn-dev-agent-core/dist/tools/resolve-ios-app-file.js
+import { execFileSync as execFileSync2 } from "node:child_process";
+import { existsSync as existsSync8, cpSync, rmSync, mkdirSync as mkdirSync4, readdirSync as readdirSync3, statSync as statSync2 } from "node:fs";
+import { tmpdir as tmpdir2 } from "node:os";
+import { join as join13, basename as basename2 } from "node:path";
+function flowUsesClearState(flowText) {
+  return /clearState:\s*true\b/.test(flowText) || /^[ \t]*-[ \t]*clearState[ \t]*$/m.test(flowText);
+}
+function defaultSnapshotApp(appPath) {
+  try {
+    const destDir = join13(tmpdir2(), "rn-appfile-snapshots");
+    const dest = join13(destDir, basename2(appPath));
+    rmSync(dest, { recursive: true, force: true });
+    mkdirSync4(destDir, { recursive: true });
+    try {
+      execFileSync2("cp", ["-Rc", appPath, dest], { timeout: 3e4, stdio: "ignore" });
+    } catch {
+      cpSync(appPath, dest, { recursive: true });
+    }
+    return dest;
+  } catch {
+    return null;
+  }
+}
+function resolveIosAppFile(bundleId, deps = {}) {
+  const exists = deps.exists ?? existsSync8;
+  const getAppContainer = deps.getAppContainer ?? defaultGetAppContainer;
+  const snapshotApp = deps.snapshotApp ?? defaultSnapshotApp;
+  const fromContainer = getAppContainer(bundleId, deps.deviceId);
+  if (fromContainer && exists(fromContainer)) {
+    const snapshot = snapshotApp(fromContainer);
+    if (snapshot)
+      return snapshot;
+  }
+  const fromDerived = (deps.newestDerivedDataApp ?? (() => null))();
+  if (fromDerived && exists(fromDerived))
+    return fromDerived;
+  return null;
+}
+function resolveAppFileForClearState(platform, flowText, headerAppId, explicitAppFile, deps) {
+  if (explicitAppFile)
+    return { ok: true, appFile: explicitAppFile };
+  if (platform !== "ios" || !flowUsesClearState(flowText))
+    return { ok: true };
+  if (!headerAppId) {
+    return {
+      ok: false,
+      error: "Flow uses clearState on iOS but no appId is known to locate the .app. Add `appId:` to the flow header or pass appFile=<path-to-.app>."
+    };
+  }
+  const appFile = resolveIosAppFile(headerAppId, deps) ?? void 0;
+  if (!appFile) {
+    return {
+      ok: false,
+      error: `Flow uses clearState on iOS but no built .app could be located for ${headerAppId}. Pass appFile=<path-to-.app> (e.g. <DerivedData>/Build/Products/Debug-iphonesimulator/<App>.app).`
+    };
+  }
+  return { ok: true, appFile };
+}
+function defaultGetAppContainer(bundleId, deviceId) {
+  try {
+    const target = deviceId && !/\s/.test(deviceId) ? deviceId : "booted";
+    const out = execFileSync2("xcrun", ["simctl", "get_app_container", target, bundleId, "app"], {
+      encoding: "utf8",
+      timeout: 5e3
+    }).trim();
+    return out || null;
+  } catch {
+    return null;
+  }
+}
+var init_resolve_ios_app_file = __esm({
+  "packages/rn-dev-agent-core/dist/tools/resolve-ios-app-file.js"() {
+    "use strict";
+  }
+});
+
+// packages/rn-dev-agent-core/dist/domain/maestro-device-authority.js
+function canonicalDeviceId(value) {
+  return value.toLowerCase();
+}
+function sameDevice(left, right) {
+  return canonicalDeviceId(left) === canonicalDeviceId(right);
+}
+function uniqueValues(values) {
+  const seen = /* @__PURE__ */ new Map();
+  for (const value of values) {
+    if (!value)
+      continue;
+    const key = canonicalDeviceId(value);
+    if (!seen.has(key))
+      seen.set(key, value);
+  }
+  return [...seen.values()];
+}
+function uniqueMatches(output, pattern) {
+  return uniqueValues([...output.matchAll(pattern)].map((match) => match[1]));
+}
+function verifyMaestroDeviceAuthority(input) {
+  const requestedDeviceId = input.requestedDeviceId?.trim() || null;
+  const reportedIds = uniqueValues([
+    ...input.directReportDeviceIds ?? [],
+    ...uniqueMatches(input.output, /\b(?:Found|Using specified|Connecting to) (?:(?:iOS|Android) )?device:\s*([A-Za-z0-9._:-]+)/gi)
+  ]);
+  const wdaDeviceIds = uniqueMatches(input.output, /\b(?:Building|Starting|Launching|Installing)\s+(?:WDA|WebDriverAgent(?:Runner)?)\s+(?:for|on|to)\s+device\s+([A-Za-z0-9._:-]+)/gi);
+  const observedDeviceIds = uniqueValues([...reportedIds, ...wdaDeviceIds]);
+  const reportedDeviceId = reportedIds.length === 1 ? reportedIds[0] : null;
+  if (!requestedDeviceId) {
+    return {
+      requestedDeviceId,
+      reportedDeviceId,
+      observedDeviceIds,
+      wdaDeviceIds,
+      verified: false,
+      source: reportedIds.length > 0 ? "maestro-runner-log" : "none",
+      reason: "no-exact-device-request"
+    };
+  }
+  if (input.runner !== "maestro-runner") {
+    return {
+      requestedDeviceId,
+      reportedDeviceId,
+      observedDeviceIds,
+      wdaDeviceIds,
+      verified: false,
+      source: "maestro-cli-explicit-udid",
+      reason: "direct-runner-evidence-unavailable"
+    };
+  }
+  const base = {
+    requestedDeviceId,
+    reportedDeviceId,
+    observedDeviceIds,
+    wdaDeviceIds,
+    source: "maestro-runner-log"
+  };
+  if (reportedIds.length === 0) {
+    return { ...base, verified: false, reason: "reported-device-missing" };
+  }
+  if (reportedIds.length !== 1) {
+    return { ...base, verified: false, reason: "reported-device-ambiguous" };
+  }
+  if (!reportedDeviceId || !sameDevice(reportedDeviceId, requestedDeviceId)) {
+    const weakOnly = input.directReportIdentityStrength === "weak" && (input.directReportDeviceIds ?? []).some((id) => sameDevice(id, reportedDeviceId ?? ""));
+    return {
+      ...base,
+      verified: false,
+      reason: weakOnly ? "reported-device-weak-identity" : "reported-device-mismatch"
+    };
+  }
+  if (observedDeviceIds.some((id) => !sameDevice(id, requestedDeviceId))) {
+    return { ...base, verified: false, reason: "wda-device-mismatch" };
+  }
+  return {
+    ...base,
+    verified: true,
+    ...input.platform === "ios" && input.requireWdaProvenance === true ? {
+      wdaProvenance: wdaDeviceIds.length > 0 ? "exact-match" : "unavailable"
+    } : {},
+    reason: input.platform === "ios" && wdaDeviceIds.length > 0 ? "exact-runner-and-wda-match" : "exact-runner-match"
+  };
+}
+function shouldRejectMaestroDeviceAuthority(authority) {
+  return authority.requestedDeviceId !== null && authority.source === "maestro-runner-log" && !authority.verified;
+}
+function maestroAuthorityRefusal(authority, underlyingError) {
+  if (!shouldRejectMaestroDeviceAuthority(authority))
+    return null;
+  const headline = `Maestro device authority refused: requested ${authority.requestedDeviceId}, direct runner/WDA evidence was ${authority.reportedDeviceId ?? "missing"} (${authority.reason}).`;
+  return underlyingError ? `${headline} Underlying failure: ${underlyingError}` : headline;
+}
+var init_maestro_device_authority = __esm({
+  "packages/rn-dev-agent-core/dist/domain/maestro-device-authority.js"() {
+    "use strict";
+  }
+});
+
+// packages/rn-dev-agent-core/dist/domain/maestro-runner-report.js
+import { existsSync as existsSync9, readFileSync as readFileSync8, rmSync as rmSync2 } from "node:fs";
+import { tmpdir as tmpdir3 } from "node:os";
+import { join as join14 } from "node:path";
+function idsFrom(value, keys) {
+  if (!value || typeof value !== "object")
+    return [];
+  const record = value;
+  for (const key of keys) {
+    const id = record[key];
+    if (typeof id === "string")
+      return [id];
+  }
+  return [];
+}
+function deviceIdsFrom(value) {
+  return idsFrom(value, DEVICE_ID_KEYS);
+}
+function weakDeviceIdsFrom(value) {
+  if (typeof value === "string")
+    return [value];
+  return idsFrom(value, WEAK_DEVICE_ID_KEYS);
+}
+function containerDeviceIdsFrom(value) {
+  return idsFrom(value, CONTAINER_DEVICE_ID_KEYS);
+}
+function reportDeviceIds(reportDir) {
+  const reportPath = join14(reportDir, "report.json");
+  if (!existsSync9(reportPath))
+    return { ids: [], strength: "none" };
+  try {
+    const report = JSON.parse(readFileSync8(reportPath, "utf8"));
+    const flows = Array.isArray(report.flows) ? report.flows : [];
+    const devices = [report.device, ...flows.map((flow) => flow?.device)];
+    const strong = [
+      ...devices.flatMap((device) => deviceIdsFrom(device)),
+      ...[report, ...flows].flatMap((container) => containerDeviceIdsFrom(container))
+    ];
+    const usingStrong = strong.length > 0;
+    const ids = usingStrong ? strong : devices.flatMap((device) => weakDeviceIdsFrom(device));
+    const accepted = [
+      ...new Set(ids.map((id) => id.trim()).filter((id) => DIRECT_DEVICE_ID_RE.test(id)))
+    ];
+    return {
+      ids: accepted,
+      strength: accepted.length === 0 ? "none" : usingStrong ? "strong" : "weak"
+    };
+  } catch {
+    return { ids: [], strength: "none" };
+  }
+}
+function createRunnerReportDir(runner, prefix) {
+  if (runner !== "maestro-runner")
+    return null;
+  return join14(tmpdir3(), `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+}
+function runnerReportArgs(reportDir) {
+  return reportDir ? ["--output", reportDir, "--flatten"] : [];
+}
+function collectDirectRunnerEvidence(reportDir, output) {
+  if (!reportDir)
+    return { output, reportDeviceIds: [], reportDeviceIdStrength: "none" };
+  const report = reportDeviceIds(reportDir);
+  const evidence = {
+    output,
+    reportDeviceIds: report.ids,
+    reportDeviceIdStrength: report.strength
+  };
+  const logPath = join14(reportDir, "maestro-runner.log");
+  if (!existsSync9(logPath))
+    return evidence;
+  try {
+    evidence.output = `${output}
+${readFileSync8(logPath, "utf8")}`;
+  } catch {
+  }
+  return evidence;
+}
+function disposeRunnerReportDir(reportDir) {
+  if (!reportDir)
+    return;
+  try {
+    rmSync2(reportDir, { recursive: true, force: true });
+  } catch {
+  }
+}
+var DIRECT_DEVICE_ID_RE, DEVICE_ID_KEYS, WEAK_DEVICE_ID_KEYS, CONTAINER_DEVICE_ID_KEYS;
+var init_maestro_runner_report = __esm({
+  "packages/rn-dev-agent-core/dist/domain/maestro-runner-report.js"() {
+    "use strict";
+    DIRECT_DEVICE_ID_RE = /^[A-Za-z0-9._:-]{1,256}$/;
+    DEVICE_ID_KEYS = ["udid", "deviceId", "serial"];
+    WEAK_DEVICE_ID_KEYS = ["id"];
+    CONTAINER_DEVICE_ID_KEYS = ["udid", "deviceId", "deviceSerial"];
+  }
+});
+
+// packages/rn-dev-agent-core/dist/session/managed-automation.js
+var OUTPUT_LIMIT;
+var init_managed_automation = __esm({
+  "packages/rn-dev-agent-core/dist/session/managed-automation.js"() {
+    "use strict";
+    OUTPUT_LIMIT = 10 * 1024 * 1024;
+  }
+});
+
+// packages/rn-dev-agent-core/dist/runners/external-runner-detect.js
+import { execFile as execFile5 } from "node:child_process";
+import { promisify as promisify5 } from "node:util";
+function executableBasename(command) {
+  const executable = command.trimStart().split(/\s+/, 1)[0] ?? "";
+  return executable.slice(executable.lastIndexOf("/") + 1);
+}
+function shellWrappedMaestro(command) {
+  const tokens = command.trimStart().split(/\s+/);
+  if (!SHELL_WRAPPERS.test(executableBasename(tokens[0] ?? "")))
+    return false;
+  return tokens.slice(1).some((token2) => token2.startsWith("/") && /^maestro(?:\.\w+)?$/i.test(executableBasename(token2)));
+}
+function isIosExternalRunnerProcessLine(line) {
+  const match = line.match(/^\s*\d+\s+(.+)$/);
+  if (!match)
+    return false;
+  const command = match[1];
+  const executable = executableBasename(command);
+  if (/^maestro(?:-driver-iosUITests-Runner)?$/i.test(executable))
+    return true;
+  if (shellWrappedMaestro(command))
+    return true;
+  if (/^WebDriverAgent(?:Runner)?(?:-Runner)?$/i.test(executable))
+    return true;
+  if (/^java$/i.test(executable) && /(?:^|\s)maestro\.cli\.[\w.$]+(?:\s|$)/i.test(command)) {
+    return true;
+  }
+  if (/^xcodebuild$/i.test(executable) && /(?:maestro[^\s]*|WebDriverAgent[^\s]*)\.xctestrun(?:\s|$)/i.test(command)) {
+    return true;
+  }
+  return false;
+}
+async function detectIosExternalRunner(execFileImpl = execFile5, udid) {
+  try {
+    const opts = { timeout: 2e3, encoding: "utf8" };
+    const run = execFileImpl === execFile5 ? promisify5(execFileImpl) : execFileImpl;
+    const { stdout } = await run("ps", ["axww", "-o", "pid=,command="], opts);
+    const lines = stdout.split("\n").filter((line) => isIosExternalRunnerProcessLine(line)).filter((line) => !RN_FAST_RUNNER_RE.test(line)).filter((line) => udid ? line.includes(udid) : true).map((line) => line.trim()).filter((line) => line.length > 0);
+    if (lines.length === 0)
+      return null;
+    return {
+      platform: "ios",
+      code: "IOS_XCUITEST_COMPETITOR",
+      message: "A foreign maestro/WebDriverAgent automation session is driving this simulator. Interleaving device_* with it may trigger a re-foreground of your app; CDP reads are unaffected. (If this is your own maestro flow, it is expected.)",
+      processLines: lines
+    };
+  } catch {
+    return null;
+  }
+}
+var SHELL_WRAPPERS, RN_FAST_RUNNER_RE;
+var init_external_runner_detect = __esm({
+  "packages/rn-dev-agent-core/dist/runners/external-runner-detect.js"() {
+    "use strict";
+    SHELL_WRAPPERS = /^(?:sh|bash|zsh|dash|ksh|env)$/i;
+    RN_FAST_RUNNER_RE = /RnFastRunner/i;
+  }
+});
+
+// packages/rn-dev-agent-core/dist/lifecycle/foreign-flow-gate.js
+var ForeignFlowGate, foreignFlowGate;
+var init_foreign_flow_gate = __esm({
+  "packages/rn-dev-agent-core/dist/lifecycle/foreign-flow-gate.js"() {
+    "use strict";
+    init_external_runner_detect();
+    ForeignFlowGate = class {
+      detect;
+      ttlMs;
+      now;
+      cachedAt = -Infinity;
+      cachedUdid = null;
+      cached = null;
+      inFlight = null;
+      inFlightUdid = null;
+      _lastActive = false;
+      constructor(deps = {}) {
+        this.detect = deps.detect ?? ((udid) => detectIosExternalRunner(void 0, udid));
+        this.ttlMs = deps.ttlMs ?? 5e3;
+        this.now = deps.now ?? Date.now;
+      }
+      get lastActive() {
+        return this._lastActive;
+      }
+      async check(udid) {
+        const t = this.now();
+        if (this.cachedUdid === udid && t - this.cachedAt < this.ttlMs) {
+          return { active: this.cached !== null, warning: this.cached, fromCache: true, scanMs: 0 };
+        }
+        if (this.inFlight && this.inFlightUdid === udid)
+          return this.inFlight;
+        this.inFlightUdid = udid;
+        const scan = (async () => {
+          const started = this.now();
+          let warning = null;
+          try {
+            warning = await this.detect(udid);
+          } catch {
+            warning = null;
+          }
+          this.cached = warning;
+          this.cachedUdid = udid;
+          this.cachedAt = this.now();
+          this._lastActive = warning !== null;
+          return { active: warning !== null, warning, fromCache: false, scanMs: this.now() - started };
+        })();
+        this.inFlight = scan;
+        try {
+          return await scan;
+        } finally {
+          if (this.inFlight === scan) {
+            this.inFlight = null;
+            this.inFlightUdid = null;
+          }
+        }
+      }
+    };
+    foreignFlowGate = new ForeignFlowGate();
+  }
+});
+
+// packages/rn-dev-agent-core/dist/lifecycle/device-arbiter.js
+import { AsyncLocalStorage } from "node:async_hooks";
+var DeviceSessionArbiter, arbiter, activeLease;
+var init_device_arbiter = __esm({
+  "packages/rn-dev-agent-core/dist/lifecycle/device-arbiter.js"() {
+    "use strict";
+    init_utils();
+    init_foreign_flow_gate();
+    init_public_diagnostics();
+    DeviceSessionArbiter = class {
+      flowLeaseHeldBy = null;
+      ops = /* @__PURE__ */ new Map();
+      nextOpId = 1;
+      now;
+      constructor(now = Date.now) {
+        this.now = now;
+      }
+      tryAcquire(plane, tool) {
+        if (plane === "flow") {
+          if (this.flowLeaseHeldBy !== null || this.ops.size > 0) {
+            return { ok: false, code: "BUSY_FLOW_ACTIVE", holder: this.describeBlocker() };
+          }
+          return this.grant(plane, tool, true);
+        }
+        if (this.flowLeaseHeldBy !== null) {
+          return { ok: false, code: "BUSY_FLOW_ACTIVE", holder: this.describeBlocker() };
+        }
+        return this.grant(plane, tool, false);
+      }
+      /** Promote only the currently held interaction lease when it is the sole op.
+       * Ordinary interactions remain interactions and therefore do not start the
+       * pinned post-flow grace window. Inline Maestro escalates lazily at dispatch. */
+      promoteToFlow(lease) {
+        const info = this.ops.get(lease.opId);
+        if (!info || info.plane === "introspection") {
+          return { ok: false, code: "BUSY_FLOW_ACTIVE", holder: this.describeBlocker() };
+        }
+        if (this.flowLeaseHeldBy === lease.opId) {
+          return { ok: true, lease: { plane: "flow", opId: lease.opId } };
+        }
+        if (this.flowLeaseHeldBy !== null || this.ops.size !== 1) {
+          return { ok: false, code: "BUSY_FLOW_ACTIVE", holder: this.describeBlocker() };
+        }
+        info.plane = "flow";
+        this.flowLeaseHeldBy = lease.opId;
+        return { ok: true, lease: { plane: "flow", opId: lease.opId } };
+      }
+      grant(plane, tool, isFlow) {
+        const opId = this.nextOpId++;
+        this.ops.set(opId, { plane, tool, startedAtMs: this.now() });
+        if (isFlow)
+          this.flowLeaseHeldBy = opId;
+        return { ok: true, lease: { plane, opId } };
+      }
+      describeBlocker() {
+        const id = this.flowLeaseHeldBy ?? this.oldestOpId();
+        if (id === null)
+          return null;
+        const info = this.ops.get(id);
+        return info ? { plane: info.plane, tool: info.tool, opId: id } : null;
+      }
+      oldestOpId() {
+        let oldest = null;
+        let oldestAt = Infinity;
+        for (const [id, info] of this.ops) {
+          if (info.startedAtMs < oldestAt) {
+            oldestAt = info.startedAtMs;
+            oldest = id;
+          }
+        }
+        return oldest;
+      }
+      /** GH#186: set when a FLOW lease releases. Our own maestro driver (argv
+       * carries the udid) keeps tearing down WDA for seconds after release and
+       * matches the foreign detector — taps inside this window must not scan. */
+      lastFlowReleasedAt = -Infinity;
+      get msSinceFlowReleased() {
+        return this.now() - this.lastFlowReleasedAt;
+      }
+      release(lease) {
+        this.ops.delete(lease.opId);
+        if (this.flowLeaseHeldBy === lease.opId) {
+          this.flowLeaseHeldBy = null;
+          this.lastFlowReleasedAt = this.now();
+        }
+      }
+      reset(reason) {
+        const clearedOps = this.ops.size;
+        const hadFlow = this.flowLeaseHeldBy !== null;
+        this.ops.clear();
+        this.flowLeaseHeldBy = null;
+        return { clearedOps, hadFlow, reason };
+      }
+      get snapshot() {
+        return {
+          flowLeaseHeldBy: this.flowLeaseHeldBy,
+          activeOps: this.ops.size,
+          ops: [...this.ops.entries()].map(([opId, i]) => ({ opId, plane: i.plane, tool: i.tool }))
+        };
+      }
+      /** #210: true while a flow (Maestro) owns the device. Flow-fallback tools consult this to take an OS-level path. */
+      get flowActive() {
+        return this.flowLeaseHeldBy !== null;
+      }
+    };
+    arbiter = new DeviceSessionArbiter();
+    activeLease = new AsyncLocalStorage();
+  }
+});
+
+// packages/rn-dev-agent-core/dist/cdp/discovery.js
+var init_discovery = __esm({
+  "packages/rn-dev-agent-core/dist/cdp/discovery.js"() {
+    "use strict";
+    init_agent_device_wrapper();
+    init_logger();
+    init_maestro_validator();
+    init_metro_cwd();
+  }
+});
+
+// packages/rn-dev-agent-core/dist/session/target-device-authority.js
+var init_target_device_authority = __esm({
+  "packages/rn-dev-agent-core/dist/session/target-device-authority.js"() {
+    "use strict";
+  }
+});
+
+// packages/rn-dev-agent-core/dist/session/metro-origin.js
+var init_metro_origin = __esm({
+  "packages/rn-dev-agent-core/dist/session/metro-origin.js"() {
+    "use strict";
+    init_discovery();
+    init_registry();
+    init_target_device_authority();
+  }
+});
+
+// packages/rn-dev-agent-core/dist/session/install-authority.js
+var init_install_authority = __esm({
+  "packages/rn-dev-agent-core/dist/session/install-authority.js"() {
+    "use strict";
+  }
+});
+
+// packages/rn-dev-agent-core/dist/session/install-reissue.js
+var init_install_reissue = __esm({
+  "packages/rn-dev-agent-core/dist/session/install-reissue.js"() {
+    "use strict";
+    init_install_authority();
+    init_registry();
+  }
+});
+
+// packages/rn-dev-agent-core/dist/session/tool-profiles.js
+function facetsOf(groups, narrowing = {}) {
+  const facets = new Set(groups.flatMap((group) => [...groupFacets[group]]));
+  for (const facet of narrowing.overlay ?? [])
+    facets.add(facet);
+  for (const facet of narrowing.without ?? [])
+    facets.delete(facet);
+  return facetOrder.filter((facet) => facets.has(facet));
+}
+function add(names, profile) {
+  for (const name of names) {
+    if (profiles.has(name))
+      throw new Error(`DUPLICATE_AUTHORITY_PROFILE: ${name}`);
+    profiles.set(name, profile);
+  }
+}
+var groupFacets, facetOrder, session, osScoped, nativeControl, throughRuntime, allGroups, diagnostic, transition, sourceState, nativeRead, nativeVerdict, nativeMutation, managedNativeMutation, hybridMutation, optionalHybridMutation, nativeDiagnostic, cdpRead, pickerRecovery, cdpMutation, observe, proof, profiles;
+var init_tool_profiles = __esm({
+  "packages/rn-dev-agent-core/dist/session/tool-profiles.js"() {
+    "use strict";
+    groupFacets = {
+      session: ["C", "S"],
+      target: ["D", "I"],
+      runtime: ["M", "B", "A"],
+      automation: ["R"]
+    };
+    facetOrder = ["C", "S", "I", "M", "A", "B", "D", "R", "P"];
+    session = ["session"];
+    osScoped = ["session", "target"];
+    nativeControl = ["session", "target", "automation"];
+    throughRuntime = ["session", "target", "runtime"];
+    allGroups = ["session", "target", "runtime", "automation"];
+    diagnostic = ["cdp_status", "cdp_targets", "device_list"];
+    transition = ["rn_session", "cdp_connect", "cdp_disconnect"];
+    sourceState = [
+      "cdp_nav_graph",
+      "cdp_record_test_generate",
+      "cdp_record_test_list",
+      "cdp_record_test_load",
+      "cdp_record_test_save",
+      "cdp_record_test_save_as_action",
+      "maestro_generate"
+    ];
+    nativeRead = ["device_find", "device_screenshot", "device_snapshot"];
+    nativeVerdict = ["cross_platform_verify"];
+    nativeMutation = [
+      "device_accept_system_dialog",
+      "device_back",
+      "device_batch",
+      "device_deeplink",
+      "device_dismiss_system_dialog",
+      "device_fill",
+      "device_focus_next",
+      "device_longpress",
+      "device_permission",
+      "device_pick_date",
+      "device_pick_value",
+      "device_pinch",
+      "device_press",
+      "device_record",
+      "device_reset_state",
+      "device_scroll",
+      "device_scrollintoview",
+      "device_swipe"
+    ];
+    managedNativeMutation = [
+      "cdp_lock_e2e_test",
+      "cdp_repair_action",
+      "maestro_run",
+      "maestro_test_all"
+    ];
+    hybridMutation = ["cdp_auto_login", "cdp_run_e2e_suite"];
+    optionalHybridMutation = ["cdp_run_action"];
+    nativeDiagnostic = ["cdp_native_errors"];
+    cdpRead = [
+      "cdp_component_state",
+      "cdp_component_tree",
+      "cdp_console_log",
+      "cdp_cpu_profile",
+      "cdp_diagnostic_renderers",
+      "cdp_error_log",
+      "cdp_heap_usage",
+      "cdp_metro_events",
+      "cdp_navigation_state",
+      "cdp_network_body",
+      "cdp_network_log",
+      "cdp_object_inspect",
+      "cdp_open_devtools",
+      "cdp_store_state",
+      "cdp_wait_for_network",
+      "collect_logs",
+      "expect_redux",
+      "expect_route",
+      "expect_text",
+      "expect_visible_by_testid"
+    ];
+    pickerRecovery = ["cdp_dismiss_dev_client_picker"];
+    cdpMutation = [
+      "cdp_dev_settings",
+      "cdp_dispatch",
+      "cdp_evaluate",
+      "cdp_exception_breakpoint",
+      "cdp_interact",
+      "cdp_mmkv",
+      "cdp_navigate",
+      "cdp_record_test_annotate",
+      "cdp_record_test_start",
+      "cdp_record_test_stop",
+      "cdp_reload",
+      "cdp_restart",
+      "cdp_set_shared_value"
+    ];
+    observe = ["observe"];
+    proof = ["proof_capture", "proof_step"];
+    profiles = /* @__PURE__ */ new Map();
+    add(diagnostic, {
+      kind: "diagnostic",
+      groups: [],
+      axes: [],
+      mutation: false,
+      liveBundleProbe: false
+    });
+    add(transition, {
+      kind: "transition",
+      groups: session,
+      axes: facetsOf(session),
+      mutation: true,
+      liveBundleProbe: false
+    });
+    add(sourceState, {
+      kind: "authoritative",
+      groups: session,
+      axes: facetsOf(session),
+      mutation: true,
+      liveBundleProbe: false
+    });
+    add(nativeRead, {
+      kind: "authoritative",
+      groups: nativeControl,
+      axes: facetsOf(nativeControl),
+      nativeOrigin: "optional",
+      mutation: false,
+      liveBundleProbe: false
+    });
+    add(nativeVerdict, {
+      kind: "authoritative",
+      groups: allGroups,
+      axes: facetsOf(allGroups, { without: ["B"] }),
+      nativeOrigin: "required",
+      mutation: false,
+      liveBundleProbe: false
+    });
+    add(nativeMutation, {
+      kind: "authoritative",
+      groups: nativeControl,
+      axes: facetsOf(nativeControl),
+      nativeOrigin: "optional",
+      mutation: true,
+      liveBundleProbe: false
+    });
+    add(managedNativeMutation, {
+      kind: "authoritative",
+      groups: allGroups,
+      axes: facetsOf(allGroups, { without: ["B"] }),
+      nativeOrigin: "required",
+      mutation: true,
+      liveBundleProbe: false
+    });
+    add(hybridMutation, {
+      kind: "authoritative",
+      groups: allGroups,
+      axes: facetsOf(allGroups, { without: ["A"] }),
+      mutation: true,
+      liveBundleProbe: true
+    });
+    add(optionalHybridMutation, {
+      kind: "authoritative",
+      groups: allGroups,
+      axes: facetsOf(allGroups, { without: ["A", "B"] }),
+      optionalAxes: ["B"],
+      managedOrigin: true,
+      managedRunnerPark: true,
+      managedInstallReissue: true,
+      mutation: true,
+      liveBundleProbe: true
+    });
+    add(nativeDiagnostic, {
+      kind: "authoritative",
+      groups: osScoped,
+      axes: facetsOf(osScoped),
+      mutation: false,
+      liveBundleProbe: false
+    });
+    add(cdpRead, {
+      kind: "authoritative",
+      groups: throughRuntime,
+      axes: facetsOf(throughRuntime, { without: ["A"] }),
+      mutation: false,
+      liveBundleProbe: true
+    });
+    add(cdpMutation, {
+      kind: "authoritative",
+      groups: throughRuntime,
+      axes: facetsOf(throughRuntime, { without: ["A"] }),
+      mutation: true,
+      liveBundleProbe: true
+    });
+    add(pickerRecovery, {
+      kind: "authoritative",
+      groups: throughRuntime,
+      axes: facetsOf(throughRuntime, { without: ["A", "B"] }),
+      managedOrigin: true,
+      mutation: true,
+      liveBundleProbe: false
+    });
+    add(observe, {
+      kind: "authoritative",
+      groups: session,
+      axes: facetsOf(session),
+      mutation: false,
+      liveBundleProbe: false
+    });
+    add(proof, {
+      kind: "authoritative",
+      groups: allGroups,
+      axes: facetsOf(allGroups, { overlay: ["P"] }),
+      nativeOrigin: "required",
+      mutation: true,
+      liveBundleProbe: true
+    });
+  }
+});
+
+// packages/rn-dev-agent-core/dist/session/authority-gate.js
+async function claimManagedNativeOriginAuthority(args) {
+  const authority = args[managedNativeOrigin];
+  if (!authority) {
+    throw new SessionAuthorityError("METRO_ORIGIN_MISMATCH", "managed native origin authority is unavailable");
+  }
+  await authority.claim();
+}
+async function completeManagedNativeOriginAuthority(args, targetExpected) {
+  const authority = args[managedNativeOrigin];
+  if (!authority) {
+    throw new SessionAuthorityError("METRO_ORIGIN_MISMATCH", "managed native origin authority is unavailable");
+  }
+  await authority.complete(targetExpected);
+}
+async function relaunchManagedNativeOriginApp(args) {
+  const authority = args[managedNativeOrigin];
+  if (!authority) {
+    throw new SessionAuthorityError("METRO_ORIGIN_MISMATCH", "managed native origin relaunch authority is unavailable");
+  }
+  await authority.relaunch();
+}
+async function reproveManagedNativeOrigin(args, options) {
+  const authority = args[managedNativeOrigin];
+  if (!authority) {
+    throw new SessionAuthorityError("METRO_ORIGIN_MISMATCH", "managed native origin re-prove authority is unavailable");
+  }
+  await authority.reprove(options);
+}
+async function reissueManagedInstallAuthority(args) {
+  const reissue = args[managedInstallReissue];
+  if (!reissue) {
+    throw new SessionAuthorityError("APP_INSTALL_IDENTITY_CHANGED", "managed install re-issue authority is unavailable");
+  }
+  await reissue();
+}
+function hasManagedInstallReissueAuthority(args) {
+  return typeof args[managedInstallReissue] === "function";
+}
+async function completeManagedRunnerParkAuthority(args) {
+  const complete = args[managedRunnerPark];
+  if (!complete) {
+    throw new SessionAuthorityError("RUNNER_OWNERSHIP_MISMATCH", "managed runner parking authority is unavailable");
+  }
+  await complete();
+}
+var managedNativeOrigin, managedRunnerPark, managedInstallReissue;
+var init_authority_gate = __esm({
+  "packages/rn-dev-agent-core/dist/session/authority-gate.js"() {
+    "use strict";
+    init_utils();
+    init_registry();
+    init_metro_origin();
+    init_install_reissue();
+    init_tool_profiles();
+    managedNativeOrigin = /* @__PURE__ */ Symbol("managedNativeOrigin");
+    managedRunnerPark = /* @__PURE__ */ Symbol("managedRunnerPark");
+    managedInstallReissue = /* @__PURE__ */ Symbol("managedInstallReissue");
+  }
+});
+
+// packages/rn-dev-agent-core/dist/maestro-invoke.js
+var init_maestro_invoke = __esm({
+  "packages/rn-dev-agent-core/dist/maestro-invoke.js"() {
+    "use strict";
+    init_project_config();
+    init_maestro_validator();
+    init_maestro_dispatch();
+    init_maestro_error_parser();
+    init_engine_pin();
+    init_action_engine_compat();
+    init_resolve_ios_app_file();
+    init_maestro_run();
+    init_agent_device_wrapper();
+    init_maestro_device_authority();
+    init_maestro_runner_report();
+    init_managed_automation();
+    init_device_arbiter();
+    init_authority_gate();
+    init_utils();
+    init_engine_pin();
+  }
+});
+
+// packages/rn-dev-agent-core/dist/tools/runner-leak-recovery.js
+var init_runner_leak_recovery = __esm({
+  "packages/rn-dev-agent-core/dist/tools/runner-leak-recovery.js"() {
+    "use strict";
+  }
+});
+
+// packages/rn-dev-agent-core/dist/tools/app-lifecycle.js
+import { execFile as execFileCb3 } from "node:child_process";
+import { promisify as promisify6 } from "node:util";
+var execFile6;
+var init_app_lifecycle = __esm({
+  "packages/rn-dev-agent-core/dist/tools/app-lifecycle.js"() {
+    "use strict";
+    execFile6 = promisify6(execFileCb3);
+  }
+});
+
+// packages/rn-dev-agent-core/dist/cdp/recovery.js
+function markCdpStale() {
+  cdpStale = true;
+}
+var cdpStale;
+var init_recovery = __esm({
+  "packages/rn-dev-agent-core/dist/cdp/recovery.js"() {
+    "use strict";
+    cdpStale = false;
+  }
+});
+
+// packages/rn-dev-agent-core/dist/runners/ensure-single-runner.js
+import { homedir as homedir4 } from "node:os";
+import { join as join15 } from "node:path";
+var DAEMON_JSON, DAEMON_LOCK;
+var init_ensure_single_runner = __esm({
+  "packages/rn-dev-agent-core/dist/runners/ensure-single-runner.js"() {
+    "use strict";
+    init_discovery();
+    DAEMON_JSON = join15(homedir4(), ".agent-device", "daemon.json");
+    DAEMON_LOCK = join15(homedir4(), ".agent-device", "daemon.lock");
+  }
+});
+
+// packages/rn-dev-agent-core/dist/runners/suppress-ios-autocorrect.js
+import { execFile as execFileCb4 } from "node:child_process";
+import { promisify as promisify7 } from "node:util";
+var execFile7;
+var init_suppress_ios_autocorrect = __esm({
+  "packages/rn-dev-agent-core/dist/runners/suppress-ios-autocorrect.js"() {
+    "use strict";
+    execFile7 = promisify7(execFileCb4);
+  }
+});
+
+// packages/rn-dev-agent-core/dist/cdp/recover-wedge.js
+import { execFile as execFileCb5 } from "node:child_process";
+import { promisify as promisify8 } from "node:util";
+var execFile8;
+var init_recover_wedge = __esm({
+  "packages/rn-dev-agent-core/dist/cdp/recover-wedge.js"() {
+    "use strict";
+    init_agent_device_wrapper();
+    init_rn_fast_runner_client();
+    init_device_arbiter();
+    init_recovery();
+    execFile8 = promisify8(execFileCb5);
+  }
+});
+
+// packages/rn-dev-agent-core/dist/cdp/app-installed-probe.js
+import { execFile as execFileCb6 } from "node:child_process";
+import { promisify as promisify9 } from "node:util";
+var execFile9;
+var init_app_installed_probe = __esm({
+  "packages/rn-dev-agent-core/dist/cdp/app-installed-probe.js"() {
+    "use strict";
+    execFile9 = promisify9(execFileCb6);
+  }
+});
+
+// packages/rn-dev-agent-core/dist/cdp/recover-detached.js
+import { execFile as execFileCb7 } from "node:child_process";
+import { promisify as promisify10 } from "node:util";
+var execFile10;
+var init_recover_detached = __esm({
+  "packages/rn-dev-agent-core/dist/cdp/recover-detached.js"() {
+    "use strict";
+    init_agent_device_wrapper();
+    init_rn_fast_runner_client();
+    init_device_arbiter();
+    init_recovery();
+    init_app_installed_probe();
+    init_maestro_validator();
+    execFile10 = promisify10(execFileCb7);
+  }
+});
+
+// packages/rn-dev-agent-core/dist/lifecycle/device-lock.js
+var init_device_lock = __esm({
+  "packages/rn-dev-agent-core/dist/lifecycle/device-lock.js"() {
+    "use strict";
+  }
+});
+
+// packages/rn-dev-agent-core/dist/tools/device-session-close.js
+var init_device_session_close = __esm({
+  "packages/rn-dev-agent-core/dist/tools/device-session-close.js"() {
+    "use strict";
+    init_utils();
+  }
+});
+
+// packages/rn-dev-agent-core/dist/tools/device-session.js
+import { execFile as execFileCb8 } from "node:child_process";
+import { promisify as promisify11 } from "node:util";
+var execFile11;
+var init_device_session = __esm({
+  "packages/rn-dev-agent-core/dist/tools/device-session.js"() {
+    "use strict";
+    init_agent_device_wrapper();
+    init_rn_fast_runner_client();
+    init_rn_android_runner_client();
+    init_app_lifecycle();
+    init_recovery();
+    init_external_runner_detect();
+    init_ensure_single_runner();
+    init_suppress_ios_autocorrect();
+    init_recover_wedge();
+    init_recover_detached();
+    init_utils();
+    init_project_config();
+    init_maestro_validator();
+    init_logger();
+    init_runner_leak_recovery();
+    init_device_lock();
+    init_device_arbiter();
+    init_device_session_close();
+    execFile11 = promisify11(execFileCb8);
+  }
+});
+
+// packages/rn-dev-agent-core/dist/tools/fill-verify.js
+var init_fill_verify = __esm({
+  "packages/rn-dev-agent-core/dist/tools/fill-verify.js"() {
+    "use strict";
+  }
+});
+
+// packages/rn-dev-agent-core/dist/tools/device-interact.js
+import { execFile as execFileCb9 } from "node:child_process";
+import { promisify as promisify12 } from "node:util";
+var execFile12;
+var init_device_interact = __esm({
+  "packages/rn-dev-agent-core/dist/tools/device-interact.js"() {
+    "use strict";
+    init_agent_device_wrapper();
+    init_rn_fast_runner_client();
+    init_rn_android_runner_client();
+    init_keyboard_guard();
+    init_project_config();
+    init_maestro_validator();
+    init_utils();
+    init_utils();
+    init_maestro_invoke();
+    init_runner_leak_recovery();
+    init_device_session();
+    init_fast_runner_ref_map();
+    init_fill_verify();
+    execFile12 = promisify12(execFileCb9);
+  }
+});
+
+// packages/rn-dev-agent-core/dist/tools/dev-client-picker.js
+var init_dev_client_picker = __esm({
+  "packages/rn-dev-agent-core/dist/tools/dev-client-picker.js"() {
+    "use strict";
+    init_agent_device_wrapper();
+    init_platform_utils();
+    init_utils();
+    init_device_interact();
+    init_authority_gate();
+  }
+});
+
+// packages/rn-dev-agent-core/dist/utils.js
+function okResult(data, opts) {
+  const envelope = { ok: true, data };
+  if (opts?.truncated)
+    envelope.truncated = true;
+  if (opts?.meta)
+    envelope.meta = opts.meta;
+  return { content: [{ type: "text", text: JSON.stringify(envelope) }] };
+}
+function failResult(error, metaOrCode, maybeMeta) {
+  const envelope = { ok: false, error };
+  if (typeof metaOrCode === "string") {
+    envelope.code = metaOrCode;
+    if (maybeMeta)
+      envelope.meta = maybeMeta;
+  } else if (metaOrCode) {
+    envelope.meta = metaOrCode;
+  }
+  return {
+    content: [{ type: "text", text: JSON.stringify(envelope) }],
+    isError: true
+  };
+}
+function warnResult(data, warning, meta) {
+  const envelope = { ok: true, data, meta: { ...meta, warning } };
+  return { content: [{ type: "text", text: JSON.stringify(envelope) }] };
+}
+var init_utils = __esm({
+  "packages/rn-dev-agent-core/dist/utils.js"() {
+    "use strict";
+    init_agent_device_wrapper();
+    init_dev_client_picker();
+    init_recovery();
+  }
+});
+
+// packages/rn-dev-agent-core/dist/domain/maestro-step-parser.js
+function cap(s) {
+  return s.length > MAX_FIELD ? s.slice(0, MAX_FIELD) + "\u2026" : s;
+}
+function combineRunnerOutput(stdout, stderr) {
+  return (stdout + "\n" + stderr).replace(/^[\r\n]+/, "").trimEnd();
+}
+function parseExactSteps(output) {
+  if (!output || typeof output !== "string")
+    return [];
+  const steps = [];
+  let index = 0;
+  for (const raw of stripAnsi(output).split("\n")) {
+    const m = STEP_RE.exec(raw);
+    if (!m)
+      continue;
+    const name = m[2];
+    const verb = cap(name.split(/\s+/)[0].replace(/:$/, ""));
+    if (verb === "rn-maestro-run")
+      continue;
+    const seconds = Number(m[3]);
+    if (!Number.isFinite(seconds))
+      continue;
+    steps.push({
+      index: index++,
+      name,
+      verb,
+      status: m[1] === "\u2713" ? "pass" : "fail",
+      durationMs: Math.round(seconds * 1e3)
+    });
+  }
+  return steps.length > MAX_STEPS ? steps.slice(-MAX_STEPS) : steps;
+}
+function boundStep(step) {
+  return { ...step, name: cap(step.name) };
+}
+function parseSteps(output) {
+  return parseExactSteps(output).map(boundStep);
+}
+function findFailedStep(steps) {
+  const last = steps.length ? steps[steps.length - 1] : null;
+  return last && last.status === "fail" ? last : null;
+}
+function lastObservedStep(steps) {
+  return steps.length ? steps[steps.length - 1] : null;
+}
+function summarizeExactReason(output, failedStep) {
+  const f = parseMaestroFailure(output, failedStep ? { failedStep } : void 0);
+  if (f.kind === "UNKNOWN" || f.kind === "WDA_BOOTSTRAP_FAILED")
+    return null;
+  const selector = "selector" in f ? f.selector ?? null : null;
+  return { kind: f.kind, selector };
+}
+function buildStepSummary(output, opts) {
+  const exactSteps = parseExactSteps(output);
+  const exactFailedStep = opts.failed ? findFailedStep(exactSteps) : null;
+  const exactReason = opts.failed ? summarizeExactReason(output, exactFailedStep?.name) : null;
+  const steps = exactSteps.map(boundStep);
+  return {
+    steps,
+    failedStep: exactFailedStep ? boundStep(exactFailedStep) : null,
+    reason: exactReason ? {
+      ...exactReason,
+      selector: exactReason.selector === null ? null : cap(exactReason.selector)
+    } : null,
+    lastStep: lastObservedStep(steps)
+  };
+}
+function isWdaFailureLine(line) {
+  return WDA_TOKEN_RE.test(line) && WDA_FAILURE_RE.test(line);
+}
+function buildTerminalEvidence(output, opts = {}) {
+  const exactSteps = parseExactSteps(output);
+  const failedStep = findFailedStep(exactSteps);
+  const reason = summarizeExactReason(output, failedStep?.name);
+  const bootstrapEvidence = stripAnsi(output).split("\n").filter((line) => isWdaFailureLine(line)).join("\n").slice(0, 500);
+  const exitClass = opts.timedOut ? "timed-out" : opts.spawnError ? "spawn-error" : exactSteps.length === 0 ? "before-first-step" : "step-failure";
+  return {
+    completedSteps: exactSteps.filter((step) => step.status === "pass").length,
+    ...failedStep ? { failedStep: failedStep.name } : {},
+    exitClass,
+    ...bootstrapEvidence ? { bootstrapEvidence } : {},
+    ...reason ? {
+      failureKind: reason.kind,
+      failureSelector: reason.selector
+    } : {}
+  };
+}
+function classifyExecError(err) {
+  const e = err;
+  const killed = e?.killed === true;
+  const overflow = e?.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER";
+  return { timedOut: (killed || e?.code === "ETIMEDOUT") && !overflow, outputTruncated: overflow };
+}
+function formatFailureHeadline(summary, cls, fallbackMsg) {
+  if (cls.timedOut) {
+    return `Maestro flow timed out${summary.lastStep ? ` after step "${summary.lastStep.name}"` : ""}`;
+  }
+  if (cls.outputTruncated) {
+    return "Maestro flow output exceeded the 10MB buffer";
+  }
+  if (summary.failedStep) {
+    const r = summary.reason;
+    const reasonStr = r ? ` (${r.kind}${r.selector ? `: ${r.selector}` : ""})` : "";
+    return `Maestro flow failed at step "${summary.failedStep.name}"${reasonStr}`;
+  }
+  if (summary.reason) {
+    const r = summary.reason;
+    return `Maestro flow failed (${r.kind}${r.selector ? `: ${r.selector}` : ""})`;
+  }
+  return `Maestro flow failed: ${fallbackMsg.slice(0, 500)}`;
+}
+var STEP_RE, MAX_FIELD, MAX_STEPS, WDA_TOKEN_RE, WDA_FAILURE_RE;
+var init_maestro_step_parser = __esm({
+  "packages/rn-dev-agent-core/dist/domain/maestro-step-parser.js"() {
+    "use strict";
+    init_maestro_error_parser();
+    init_ansi();
+    init_ansi();
+    STEP_RE = /^[ \t]+([✓✗])\s+(\S.*\S|\S)\s*\(([\d.]+)s\)\s*$/;
+    MAX_FIELD = 200;
+    MAX_STEPS = 1e3;
+    WDA_TOKEN_RE = /\bWDA\b|WebDriverAgent/i;
+    WDA_FAILURE_RE = /\b(?:fail(?:ed|ure|s)?|error|unable|cannot|can't|could not|timed out|timeout|refused|denied|crash(?:ed)?|panic|aborted)\b/i;
+  }
+});
+
+// packages/rn-dev-agent-core/dist/domain/tap-latency.js
+function parseTapLatencies(output) {
+  return parseSteps(output).filter((s) => s.verb === "tapOn" && s.status === "pass").map((s) => s.durationMs);
+}
+function median(samples) {
+  if (samples.length === 0)
+    return null;
+  const s = [...samples].sort((a, b) => a - b);
+  const mid = Math.floor(s.length / 2);
+  return s.length % 2 === 0 ? Math.round((s[mid - 1] + s[mid]) / 2) : s[mid];
+}
+function resolveFloorMs(envVal) {
+  if (envVal === void 0)
+    return DEFAULT_FLOOR_MS;
+  const n = Number(envVal);
+  return Number.isFinite(n) && n > 0 ? n : DEFAULT_FLOOR_MS;
+}
+function classifyRuntimeDegradation(output, floorMs) {
+  const samples = parseTapLatencies(output);
+  const medianMs = median(samples);
+  return {
+    degraded: medianMs != null && samples.length >= MIN_SAMPLES_FOR_DEGRADED && medianMs >= floorMs,
+    medianMs,
+    floorMs,
+    sampleCount: samples.length
+  };
+}
+function formatRuntimeDegradedHint(d) {
+  return `RUNTIME_DEGRADED: median tapOn latency ${d.medianMs}ms (>= ${d.floorMs}ms) \u2014 the simulator test runtime is likely wedged; reboot it (xcrun simctl shutdown <udid> && xcrun simctl boot <udid>), relaunch the app, and retry.`;
+}
+function augmentFailureWithDegradation(output, floorMs, baseMessage, baseMeta) {
+  const d = classifyRuntimeDegradation(output, floorMs);
+  if (!d.degraded)
+    return { message: baseMessage, meta: baseMeta };
+  return {
+    message: `${baseMessage} \u2014 ${formatRuntimeDegradedHint(d)}`,
+    meta: {
+      ...baseMeta,
+      runtimeDegraded: { medianTapMs: d.medianMs, floorMs: d.floorMs, sampleCount: d.sampleCount }
+    }
+  };
+}
+var DEFAULT_FLOOR_MS, MIN_SAMPLES_FOR_DEGRADED;
+var init_tap_latency = __esm({
+  "packages/rn-dev-agent-core/dist/domain/tap-latency.js"() {
+    "use strict";
+    init_maestro_step_parser();
+    DEFAULT_FLOOR_MS = 1500;
+    MIN_SAMPLES_FOR_DEGRADED = 2;
+  }
+});
+
+// packages/rn-dev-agent-core/dist/runners/release-android-slot.js
+import { execFile as execFileCb10 } from "node:child_process";
+import { promisify as promisify13 } from "node:util";
+import { existsSync as existsSync10, readFileSync as readFileSync9, unlinkSync as unlinkSync2 } from "node:fs";
+import { homedir as homedir5 } from "node:os";
+import { join as join16 } from "node:path";
+function isProtectedPid(pid, selfPid, parentPid) {
+  return pid === selfPid || pid === parentPid;
+}
+function defaultDeps() {
+  return {
+    stopOwnRunner: (deviceId, signal) => stopAndroidRunner(deviceId, signal),
+    adbForceStop: async (pkg, serial, signal) => {
+      await execFile13("adb", [...serial, "shell", "am", "force-stop", pkg], {
+        timeout: ADB_TIMEOUT_MS,
+        encoding: "utf8",
+        signal
+      });
+    },
+    resolveSerial: (deviceId) => deviceId ? ["-s", deviceId] : getAdbSerial(),
+    readDaemonPid: () => {
+      try {
+        const parsed = JSON.parse(readFileSync9(DAEMON_JSON2, "utf8"));
+        return typeof parsed.pid === "number" ? parsed.pid : null;
+      } catch {
+        return null;
+      }
+    },
+    isAlive: (pid) => {
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    protectedPids: () => ({ selfPid: process.pid, parentPid: process.ppid }),
+    kill: (pid, sig) => process.kill(pid, sig),
+    fileExists: (p) => existsSync10(p),
+    removeFile: (p) => unlinkSync2(p),
+    delay: (ms) => new Promise((resolve3) => setTimeout(resolve3, ms)),
+    killLegacy: () => process.env.RN_DEVICE_KILL_LEGACY !== "0",
+    now: () => Date.now()
+  };
+}
+function resolveExactSerialArgs(deps, deviceId) {
+  try {
+    return deps.resolveSerial(deviceId);
+  } catch (err) {
+    throw new ExactAndroidDeviceRequiredError(err);
+  }
+}
+function exactSerial(deviceId, serialArgs) {
+  const serial = serialArgs.length === 2 && serialArgs[0] === "-s" ? serialArgs[1] : void 0;
+  if (!serial || deviceId !== void 0 && serial !== deviceId || serial.length > 256 || /\s/.test(serial)) {
+    throw new ExactAndroidDeviceRequiredError();
+  }
+  return serial;
+}
+async function releaseAndroidInteractionSlot(opts = {}, deps = defaultDeps()) {
+  opts.signal?.throwIfAborted();
+  const serialArgs = resolveExactSerialArgs(deps, opts.deviceId);
+  const deviceId = exactSerial(opts.deviceId, serialArgs);
+  const timings = {};
+  const warnings = [];
+  const forceStoppedPackages = [];
+  const killedDaemonPids = [];
+  const removedFiles = [];
+  let stoppedOwnRunner = false;
+  const tStop = deps.now();
+  try {
+    await deps.stopOwnRunner(deviceId, opts.signal);
+    opts.signal?.throwIfAborted();
+    stoppedOwnRunner = true;
+  } catch (err) {
+    opts.signal?.throwIfAborted();
+    warnings.push(`stopping the Android runner failed: ${msg(err)}`);
+  }
+  timings.stopOwnRunner = deps.now() - tStop;
+  const tForceStop = deps.now();
+  for (const pkg of OWNED_PACKAGES) {
+    opts.signal?.throwIfAborted();
+    try {
+      await deps.adbForceStop(pkg, serialArgs, opts.signal);
+      opts.signal?.throwIfAborted();
+      forceStoppedPackages.push(pkg);
+    } catch (err) {
+      opts.signal?.throwIfAborted();
+      warnings.push(`am force-stop ${pkg} failed: ${msg(err)}`);
+    }
+  }
+  timings.forceStop = deps.now() - tForceStop;
+  const tLegacy = deps.now();
+  if (opts.includeLegacy !== false && deps.killLegacy()) {
+    try {
+      const pid = deps.readDaemonPid();
+      let keepFiles = false;
+      if (pid !== null && deps.isAlive(pid)) {
+        const { selfPid, parentPid } = deps.protectedPids();
+        if (isProtectedPid(pid, selfPid, parentPid)) {
+          warnings.push(`Refusing to kill agent-device daemon PID ${pid} \u2014 it is our own process/parent.`);
+          keepFiles = true;
+        } else {
+          try {
+            deps.kill(pid, "SIGTERM");
+            await deps.delay(SIGKILL_GRACE_MS);
+            if (deps.isAlive(pid))
+              deps.kill(pid, "SIGKILL");
+            killedDaemonPids.push(pid);
+          } catch (err) {
+            warnings.push(`kill daemon ${pid} failed: ${msg(err)}`);
+            keepFiles = true;
+          }
+        }
+      }
+      if (!keepFiles) {
+        for (const f of DAEMON_FILES) {
+          if (!deps.fileExists(f))
+            continue;
+          try {
+            deps.removeFile(f);
+            removedFiles.push(f);
+          } catch (err) {
+            warnings.push(`rm ${f} failed: ${msg(err)}`);
+          }
+        }
+      }
+    } catch (err) {
+      warnings.push(`legacy daemon cleanup failed: ${msg(err)}`);
+    }
+  }
+  timings.legacyDaemon = deps.now() - tLegacy;
+  return {
+    deviceId,
+    stoppedOwnRunner,
+    forceStoppedPackages,
+    killedDaemonPids,
+    removedFiles,
+    warnings,
+    meta: { timings_ms: timings }
+  };
+}
+function msg(err) {
+  return err instanceof Error ? err.message : String(err);
+}
+var execFile13, DAEMON_JSON2, DAEMON_LOCK2, DAEMON_FILES, SIGKILL_GRACE_MS, ADB_TIMEOUT_MS, OWNED_PACKAGES, ExactAndroidDeviceRequiredError;
+var init_release_android_slot = __esm({
+  "packages/rn-dev-agent-core/dist/runners/release-android-slot.js"() {
+    "use strict";
+    init_rn_android_runner_client();
+    init_agent_device_wrapper();
+    execFile13 = promisify13(execFileCb10);
+    DAEMON_JSON2 = join16(homedir5(), ".agent-device", "daemon.json");
+    DAEMON_LOCK2 = join16(homedir5(), ".agent-device", "daemon.lock");
+    DAEMON_FILES = [DAEMON_JSON2, DAEMON_LOCK2];
+    SIGKILL_GRACE_MS = 500;
+    ADB_TIMEOUT_MS = 5e3;
+    OWNED_PACKAGES = [
+      "dev.lykhoyda.rndevagent.androidrunner.test",
+      "dev.lykhoyda.rndevagent.androidrunner"
+    ];
+    ExactAndroidDeviceRequiredError = class extends Error {
+      code = "EXACT_ANDROID_DEVICE_REQUIRED";
+      constructor(cause) {
+        super("Refusing to release the Android interaction slot without an exact serial. When multiple adb targets are attached, open or bind a session to the intended device, pass deviceId, or set ANDROID_SERIAL, then retry. No device was mutated.", cause === void 0 ? void 0 : { cause });
+        this.name = "ExactAndroidDeviceRequiredError";
+      }
+    };
+  }
+});
+
+// packages/rn-dev-agent-core/dist/tools/maestro-run.js
+import { execFile as execFileCb11 } from "node:child_process";
+import { promisify as promisify14 } from "node:util";
+import { existsSync as existsSync11, readFileSync as readFileSync10, writeFileSync as writeFileSync4 } from "node:fs";
+import { tmpdir as tmpdir4 } from "node:os";
+import { basename as basename3, join as join17, dirname as dirname6 } from "node:path";
+async function runFlowParked(run, opts = {}) {
+  const stale = opts.markCdpStale ?? markCdpStale;
+  try {
+    if (opts.platform === "android") {
+      const release = opts.releaseAndroidSlot ?? releaseAndroidInteractionSlot;
+      const outcome = await release({ deviceId: opts.deviceId });
+      opts.onAndroidRelease?.(outcome);
+    } else {
+      await (opts.stopFastRunner ?? stopFastRunner)(opts.deviceId);
+    }
+    await opts.completeRunnerPark?.();
+    return await run();
+  } finally {
+    stale();
+  }
+}
+function assembleMaestroArgs(baseArgs, paramArgs) {
+  if (paramArgs.length === 0)
+    return baseArgs;
+  return [...baseArgs.slice(0, -1), ...paramArgs, baseArgs[baseArgs.length - 1]];
+}
+function nestedMaestroAuthorityCallbacks(args) {
+  return {
+    claimNativeOrigin: () => claimManagedNativeOriginAuthority(args),
+    completeNativeOrigin: (targetExpected) => completeManagedNativeOriginAuthority(args, targetExpected),
+    relaunchManagedApp: () => relaunchManagedNativeOriginApp(args),
+    reproveManagedOrigin: () => reproveManagedNativeOrigin(args),
+    completeRunnerPark: () => completeManagedRunnerParkAuthority(args),
+    reissueInstallReceipt: hasManagedInstallReissueAuthority(args) ? () => reissueManagedInstallAuthority(args) : null
+  };
+}
+function commandName(command) {
+  if (typeof command === "string")
+    return command;
+  if (!command || typeof command !== "object" || Array.isArray(command))
+    return null;
+  const keys = Object.keys(command);
+  return keys.length === 1 ? keys[0] : null;
+}
+function nestedLifecycleCommand(command) {
+  if (!command || typeof command !== "object" || Array.isArray(command))
+    return false;
+  const runFlow = command.runFlow;
+  if (!runFlow || typeof runFlow !== "object" || Array.isArray(runFlow))
+    return false;
+  const commands = runFlow.commands;
+  return Array.isArray(commands) && commands.some(nestedLifecycleCommandOrSelf);
+}
+function nestedLifecycleCommandOrSelf(command) {
+  const name = commandName(command);
+  return name !== null && lifecycleCommands.has(name) || nestedLifecycleCommand(command);
+}
+function planMaestroAuthorityStages(commands) {
+  const stages = [];
+  let pending = [];
+  let targetExpected = true;
+  const flushPending = () => {
+    if (pending.length === 0)
+      return;
+    stages.push({ commands: pending, requiresOrigin: true });
+    pending = [];
+  };
+  for (const command of commands) {
+    const name = commandName(command);
+    if (nestedLifecycleCommand(command)) {
+      throw new MaestroValidationError("conditional runFlow commands cannot contain app lifecycle transitions");
+    }
+    if (name !== null && lifecycleCommands.has(name)) {
+      flushPending();
+      stages.push({ commands: [command], requiresOrigin: false });
+      targetExpected = name === "launchApp";
+      continue;
+    }
+    pending.push(command);
+  }
+  flushPending();
+  return { stages, targetExpected };
+}
+async function executeMaestroAuthorityStages(commands, executeStage, claimOrigin, completeOrigin, relaunchManagedApp, reproveManagedOrigin) {
+  const plan = planMaestroAuthorityStages(commands);
+  const results = [];
+  let pendingOriginError;
+  for (const stage of plan.stages) {
+    if (stage.requiresOrigin && pendingOriginError === void 0)
+      await claimOrigin();
+    try {
+      results.push(await executeStage(stage.commands));
+      if (stage.commands.length === 1 && commandName(stage.commands[0]) === "launchApp") {
+        try {
+          await relaunchManagedApp();
+          pendingOriginError = void 0;
+        } catch (error) {
+          if (!reproveManagedOrigin || error instanceof SessionAuthorityError)
+            throw error;
+          pendingOriginError = error;
+        }
+      }
+    } catch (error) {
+      await completeOrigin(false);
+      throw new MaestroStageExecutionError(results, error);
+    }
+  }
+  if (pendingOriginError !== void 0) {
+    try {
+      await reproveManagedOrigin();
+    } catch {
+      await completeOrigin(false);
+      throw new MaestroStageExecutionError(results, pendingOriginError);
+    }
+  }
+  await completeOrigin(plan.targetExpected);
+  return results;
+}
+function resolveMaestroFlowAppId(boundAppId, parsedAppId) {
+  if (boundAppId !== void 0 && !isValidBundleId(boundAppId)) {
+    throw new MaestroValidationError(`Invalid bundle ID for authority-bound app: ${JSON.stringify(boundAppId).slice(0, 80)}`);
+  }
+  if (boundAppId && parsedAppId && parsedAppId !== boundAppId) {
+    throw new MaestroValidationError(`Flow appId ${parsedAppId} does not match authority-bound appId ${boundAppId}`);
+  }
+  return boundAppId ?? parsedAppId;
+}
+function resolvePlatform(override) {
+  if (override === "ios" || override === "android")
+    return override;
+  const session2 = getActiveSession();
+  return session2?.platform ?? null;
+}
+function resolveAppId(override, platform) {
+  if (override)
+    return override;
+  if (platform)
+    return resolveBundleId(platform) ?? readExpoSlug() ?? "";
+  return readExpoSlug() ?? "";
+}
+async function defaultProbeAndroidApiLevel(deviceId) {
+  try {
+    const { stdout } = await defaultExecFile("adb", ["-s", deviceId, "shell", "getprop", "ro.build.version.sdk"], { timeout: 5e3, encoding: "utf8", maxBuffer: 1024 * 1024 });
+    const parsed = Number.parseInt(String(stdout).trim(), 10);
+    return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+function attachCause(error, cause) {
+  if (error instanceof Error && error.cause === void 0) {
+    try {
+      Object.defineProperty(error, "cause", { value: cause, configurable: true, writable: true });
+    } catch {
+    }
+  }
+  return error;
+}
+function isExactDeviceIdShape(value) {
+  return value.length > 0 && value.length <= 256 && !/\s/.test(value);
+}
+function isPreSpawnMaestroError(error) {
+  const candidate = error;
+  return typeof candidate?.code === "string" && !candidate.stdout && !candidate.stderr;
+}
+function isUiAutomationNotConnectedSessionCreationFailure(error) {
+  const candidate = error;
+  if (typeof candidate?.code !== "number" || candidate.code === 0 || typeof candidate.stderr !== "string") {
+    return false;
+  }
+  const records = candidate.stderr.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  return records.length === 1 && UIAUTOMATION_SESSION_CREATION_FAILURE.test(records[0]);
+}
+async function buildRunnerResume(platform, probe) {
+  if (platform !== "ios")
+    return void 0;
+  return { attempted: true, healthy: await probe().catch(() => false) };
+}
+function createMaestroRunHandler(deps = {}) {
+  const fastHealthCheck2 = deps.fastHealthCheck ?? fastHealthCheck;
+  const activeSession2 = deps.getActiveSession ?? getActiveSession;
+  const selectDispatch = deps.chooseDispatch ?? chooseMaestroDispatch;
+  const parkFlow = deps.parkFlow ?? runFlowParked;
+  const execute = deps.execFile ?? defaultExecFile;
+  const probeApiLevel = deps.probeAndroidApiLevel ?? defaultProbeAndroidApiLevel;
+  const now = deps.now ?? Date.now;
+  const resolveEngineStatus = deps.resolveEngineStatus ?? (() => getEngineStatus().catch(() => null));
+  return async (args) => {
+    if (args.params) {
+      for (const [key, value] of Object.entries(args.params)) {
+        if (!PARAM_KEY_RE.test(key)) {
+          return failResult(`Refusing to run Maestro: invalid param key '${String(key).slice(0, 60)}' \u2014 must match ${PARAM_KEY_RE.source} (GH #116).`);
+        }
+        if (typeof value !== "string") {
+          return failResult(`Refusing to run Maestro: param '${key}' has non-string value (GH #116).`);
+        }
+      }
+    }
+    const platform = resolvePlatform(args.platform);
+    if (!platform) {
+      return failResult("Cannot determine platform. Pass platform or open a device session first.");
+    }
+    const session2 = activeSession2();
+    const matchingSessionDeviceId = session2?.platform === platform && session2.deviceId ? session2.deviceId : void 0;
+    if (args.deviceId && matchingSessionDeviceId && !sameDevice(args.deviceId, matchingSessionDeviceId)) {
+      return failResult(`Refusing Maestro target ${args.deviceId}: active ${platform} session is bound to ${matchingSessionDeviceId}.`, "TARGET_SESSION_MISMATCH", { requestedDeviceId: args.deviceId, activeSessionDeviceId: matchingSessionDeviceId });
+    }
+    const envAndroidSerial = platform === "android" && process.env.ANDROID_SERIAL ? process.env.ANDROID_SERIAL : void 0;
+    if (envAndroidSerial !== void 0 && !isExactDeviceIdShape(envAndroidSerial)) {
+      return failResult("Refusing Maestro: ANDROID_SERIAL must be 1-256 non-whitespace characters. Unset it or set an exact serial, then retry. No device was mutated.", "INVALID_ARGUMENT");
+    }
+    const requestedDeviceId = args.deviceId ?? matchingSessionDeviceId ?? envAndroidSerial;
+    if (requestedDeviceId !== void 0 && !isExactDeviceIdShape(requestedDeviceId)) {
+      return failResult("Refusing Maestro: deviceId must be 1-256 non-whitespace characters.", "INVALID_ARGUMENT");
+    }
+    let flowHasHideKeyboard = false;
+    let flowFile;
+    let rawYaml;
+    let validatedContent;
+    let validatedCommands;
+    let headerAppId;
+    if (args.inlineYaml) {
+      rawYaml = args.inlineYaml;
+    } else if (args.flowPath) {
+      if (!existsSync11(args.flowPath)) {
+        return failResult(`Flow file not found: ${args.flowPath}`);
+      }
+      try {
+        rawYaml = readFileSync10(args.flowPath, "utf-8");
+      } catch (err) {
+        return failResult(`Failed to read flow file: ${err.message}`);
+      }
+    } else {
+      return failResult("Provide either flowPath or inlineYaml.");
+    }
+    try {
+      const runFlowOpts = args.flowPath ? { flowDir: dirname6(args.flowPath), flowRoot: dirname6(args.flowPath) } : {};
+      const parsed = parseAndValidateFlow(rawYaml, runFlowOpts);
+      planMaestroAuthorityStages(parsed.commands);
+      validatedCommands = parsed.commands;
+      flowHasHideKeyboard = flowContainsHideKeyboard(parsed.commands);
+      const rawAppId = resolveAppId(args.appId, platform);
+      headerAppId = resolveMaestroFlowAppId(rawAppId || void 0, parsed.appId);
+      validatedContent = buildMaestroFlow(headerAppId ? { appId: headerAppId } : {}, parsed.commands);
+      flowFile = join17(tmpdir4(), `rn-maestro-run-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.yaml`);
+      writeFileSync4(flowFile, validatedContent, "utf-8");
+    } catch (err) {
+      if (err instanceof MaestroValidationError) {
+        return failResult(`Refusing to run Maestro: ${err.message} (Phase 134.1)`);
+      }
+      throw err;
+    }
+    const dispatch = selectDispatch({ platform, flowHasHideKeyboard });
+    if ("error" in dispatch) {
+      return failResult(dispatch.error);
+    }
+    const timeout = args.timeoutMs ?? 12e4;
+    const flowDeadline = now() + timeout;
+    const appFileResolution = resolveAppFileForClearState(platform, validatedContent, headerAppId, args.appFile, { deviceId: requestedDeviceId });
+    if (!appFileResolution.ok) {
+      return failResult(appFileResolution.error);
+    }
+    const reinstallsApp = Boolean(appFileResolution.appFile) && flowUsesClearState(validatedContent);
+    const reissueInstallReceipt = args.reissueInstallReceipt ?? deps.reissueInstallReceipt ?? nestedMaestroAuthorityCallbacks(args).reissueInstallReceipt;
+    let installReceiptCommitted = false;
+    const commitReinstalledInstall = async () => {
+      if (!reinstallsApp || installReceiptCommitted || !reissueInstallReceipt)
+        return;
+      installReceiptCommitted = true;
+      await reissueInstallReceipt();
+    };
+    const baseArgs = dispatch.buildArgs(platform, flowFile, appFileResolution.appFile, requestedDeviceId);
+    const paramArgs = [];
+    if (args.params) {
+      for (const [key, value] of Object.entries(args.params)) {
+        paramArgs.push("-e", `${key}=${value}`);
+      }
+    }
+    const runnerReportDir = createRunnerReportDir(dispatch.runner, "rn-maestro-report");
+    const finalArgs = assembleMaestroArgs(baseArgs, [
+      ...runnerReportArgs(runnerReportDir),
+      ...paramArgs
+    ]);
+    const directRunnerEvidence = (output) => collectDirectRunnerEvidence(runnerReportDir, output);
+    const releaseAndroidSlot = deps.releaseAndroidSlot ?? releaseAndroidInteractionSlot;
+    const androidSlotReleaseWarnings = [];
+    let releasedAndroidDeviceId;
+    let uiAutomationRecoveryAttempted = false;
+    let uiAutomationRecoveryRetried = false;
+    const recordAndroidRelease = (outcome) => {
+      if (outcome?.deviceId)
+        releasedAndroidDeviceId = outcome.deviceId;
+      if (outcome?.warnings?.length)
+        androidSlotReleaseWarnings.push(...outcome.warnings);
+    };
+    const androidReleaseMeta = () => ({
+      ...androidSlotReleaseWarnings.length > 0 ? { androidSlotReleaseWarnings: [...androidSlotReleaseWarnings] } : {},
+      ...uiAutomationRecoveryAttempted ? {
+        androidUiAutomationRecovery: {
+          retried: uiAutomationRecoveryRetried,
+          retryCount: uiAutomationRecoveryRetried ? 1 : 0
+        }
+      } : {}
+    });
+    const androidReleaseCaveat = () => androidSlotReleaseWarnings.length > 0 ? `Android interaction-slot release warnings: ${androidSlotReleaseWarnings.join("; ")}` : void 0;
+    const engineStatus = dispatch.runner === "maestro-runner" ? await resolveEngineStatus() : null;
+    const pinCaveat = engineStatus ? enginePinCaveat(engineStatus) : null;
+    const exactRefusal = exactPinRefusal(engineStatus);
+    if (exactRefusal) {
+      return failResult(exactRefusal, "ENGINE_PIN_MISMATCH", {
+        pin: engineStatus?.pin,
+        installedVersion: engineStatus?.version ?? null,
+        selectedPath: engineStatus?.selectedPath ?? null,
+        provenance: engineStatus?.provenance ?? "none"
+      });
+    }
+    const learnedAction = args.flowPath ? isLearnedActionPath(args.flowPath) : false;
+    const actionMeta = learnedAction && args.flowPath ? parseM7Header(rawYaml, basename3(args.flowPath).replace(/\.ya?ml$/i, "")) : null;
+    const compatibilityRefusal = learnedAction ? actionReplayPreflight({
+      enginePin: actionMeta?.enginePin,
+      commands: validatedCommands,
+      engineStatus
+    }) : replayCompatibilityPreflight({
+      commands: validatedCommands,
+      engineStatus,
+      requireEnginePin: false
+    });
+    if (compatibilityRefusal) {
+      return failResult(compatibilityRefusal, "ENGINE_PIN_MISMATCH", {
+        pin: engineStatus?.pin,
+        installedVersion: engineStatus?.version ?? null,
+        selectedPath: engineStatus?.selectedPath ?? null,
+        provenance: engineStatus?.provenance ?? "none"
+      });
+    }
+    let probedAndroidApiLevel = null;
+    if (platform === "android" && dispatch.runner === "maestro-runner" && requestedDeviceId) {
+      const apiLevel = await probeApiLevel(requestedDeviceId).catch(() => null);
+      probedAndroidApiLevel = apiLevel;
+      const apiRefusal = apiLevel === null ? null : preOAndroidApiRefusal(apiLevel);
+      if (apiRefusal) {
+        return failResult(apiRefusal, "ANDROID_API_UNSUPPORTED", {
+          platform,
+          runner: dispatch.runner,
+          transport: dispatch.runner,
+          passed: false,
+          androidApiLevel: apiLevel
+        });
+      }
+    }
+    try {
+      const managedAuthority = nestedMaestroAuthorityCallbacks(args);
+      const claimOrigin = args.claimNativeOrigin ?? deps.claimNativeOrigin ?? managedAuthority.claimNativeOrigin;
+      const completeOrigin = args.completeNativeOrigin ?? deps.completeNativeOrigin ?? managedAuthority.completeNativeOrigin;
+      const relaunchManagedApp = args.relaunchManagedApp ?? deps.relaunchManagedApp ?? managedAuthority.relaunchManagedApp;
+      const reproveManagedOrigin = args.reproveManagedOrigin ?? deps.reproveManagedOrigin ?? managedAuthority.reproveManagedOrigin;
+      const stageResults = await parkFlow(() => executeMaestroAuthorityStages(validatedCommands, async (commands) => {
+        writeFileSync4(flowFile, buildMaestroFlow(headerAppId ? { appId: headerAppId } : {}, [...commands]), "utf-8");
+        const executeOnce = async (beforeDispatch) => {
+          const remainingTimeout = flowDeadline - now();
+          if (remainingTimeout <= 0) {
+            const error = new Error("Maestro flow timeout exhausted before the next stage");
+            Object.assign(error, { code: "ETIMEDOUT" });
+            throw error;
+          }
+          beforeDispatch?.();
+          return execute(dispatch.binPath, finalArgs, {
+            timeout: remainingTimeout,
+            encoding: "utf8",
+            maxBuffer: 10 * 1024 * 1024
+          });
+        };
+        try {
+          return await executeOnce();
+        } catch (error) {
+          const recoveryDeviceId = requestedDeviceId ?? releasedAndroidDeviceId;
+          if (platform !== "android" || uiAutomationRecoveryAttempted || !recoveryDeviceId || !isUiAutomationNotConnectedSessionCreationFailure(error)) {
+            throw error;
+          }
+          uiAutomationRecoveryAttempted = true;
+          const recoveryTimeout = flowDeadline - now();
+          if (recoveryTimeout <= 0) {
+            androidSlotReleaseWarnings.push("UiAutomation recovery skipped: Maestro flow timeout was exhausted");
+            throw error;
+          }
+          const recoveryAbort = new AbortController();
+          const recoveryDeadlineTimer = setTimeout(() => {
+            recoveryAbort.abort(new Error("UiAutomation recovery cleanup exceeded the remaining Maestro flow timeout"));
+          }, recoveryTimeout);
+          try {
+            recordAndroidRelease(await releaseAndroidSlot({
+              deviceId: recoveryDeviceId,
+              includeLegacy: false,
+              signal: recoveryAbort.signal
+            }));
+          } catch (releaseError) {
+            androidSlotReleaseWarnings.push(`UiAutomation recovery release failed: ${releaseError instanceof Error ? releaseError.message : String(releaseError)}`);
+            throw attachCause(error, releaseError);
+          } finally {
+            clearTimeout(recoveryDeadlineTimer);
+          }
+          try {
+            return await executeOnce(() => {
+              uiAutomationRecoveryRetried = true;
+            });
+          } catch (retryError) {
+            if (uiAutomationRecoveryRetried && !isPreSpawnMaestroError(retryError)) {
+              throw retryError;
+            }
+            uiAutomationRecoveryRetried = false;
+            androidSlotReleaseWarnings.push(`UiAutomation recovery retry did not start: ${retryError instanceof Error ? retryError.message : String(retryError)}`);
+            throw attachCause(error, retryError);
+          }
+        }
+      }, claimOrigin, completeOrigin, relaunchManagedApp, reproveManagedOrigin), {
+        platform,
+        deviceId: requestedDeviceId,
+        releaseAndroidSlot,
+        onAndroidRelease: recordAndroidRelease,
+        completeRunnerPark: args.completeRunnerPark ?? managedAuthority.completeRunnerPark
+      });
+      await commitReinstalledInstall();
+      const stdout = stageResults.map((result) => result.stdout).join("\n");
+      const stderr = stageResults.map((result) => result.stderr).join("\n");
+      const output = combineRunnerOutput(stdout, stderr);
+      const passed = !outputIndicatesFlowFailure(output);
+      const directEvidence = directRunnerEvidence(output);
+      const deviceAuthority = verifyMaestroDeviceAuthority({
+        runner: dispatch.runner,
+        platform,
+        requestedDeviceId,
+        output: directEvidence.output,
+        directReportDeviceIds: directEvidence.reportDeviceIds,
+        directReportIdentityStrength: directEvidence.reportDeviceIdStrength,
+        requireWdaProvenance: passed
+      });
+      const authorityRefusal = maestroAuthorityRefusal(deviceAuthority);
+      if (authorityRefusal) {
+        return failResult(authorityRefusal, "DEVICE_AUTHORITY_MISMATCH", {
+          flowFile,
+          platform,
+          runner: dispatch.runner,
+          transport: dispatch.runner,
+          passed: false,
+          deviceAuthority,
+          output: output.slice(0, 4e3),
+          ...androidReleaseMeta()
+        });
+      }
+      const summary = buildStepSummary(output, { failed: !passed });
+      const runnerResume = !passed ? await buildRunnerResume(platform, fastHealthCheck2) : void 0;
+      const meta = {
+        passed,
+        flowFile,
+        platform,
+        runner: dispatch.runner,
+        transport: dispatch.runner,
+        transportVersion: engineStatus?.version ?? null,
+        fallback: dispatch.fallbackReason ? dispatch.runner : "none",
+        deviceAuthority,
+        output: output.slice(0, 2e3),
+        ...summary,
+        ...!passed ? { terminal: buildTerminalEvidence(output), ...runnerResume ? { runnerResume } : {} } : {},
+        timedOut: false,
+        outputTruncated: false,
+        ...dispatch.fallbackReason ? { fallbackReason: dispatch.fallbackReason } : {},
+        ...dispatch.degradedReason ? { degradedReason: dispatch.degradedReason } : {},
+        ...engineStatus && engineStatus.pin.status !== "pinned-ok" ? { enginePin: engineStatus.pin } : {},
+        ...androidReleaseMeta()
+      };
+      const caveat = dispatch.fallbackReason ?? dispatch.degradedReason ?? pinCaveat ?? void 0;
+      const releaseCaveat = androidReleaseCaveat();
+      if (passed) {
+        const warnCaveat = caveat && shouldWarnFallback(caveat) ? caveat : void 0;
+        if (releaseCaveat) {
+          return warnResult(meta, warnCaveat ? `${warnCaveat}; ${releaseCaveat}` : releaseCaveat);
+        }
+        if (warnCaveat) {
+          return warnResult(meta, warnCaveat);
+        }
+        return okResult(meta);
+      }
+      const baseWarnMsg = [caveat, releaseCaveat, "Flow completed with warnings or failures"].filter((part) => Boolean(part)).join("; ");
+      const warnAug = augmentFailureWithDegradation(output, resolveFloorMs(process.env.RN_RUNTIME_DEGRADED_FLOOR_MS), baseWarnMsg, meta);
+      return warnResult(warnAug.meta, warnAug.message);
+    } catch (err) {
+      await commitReinstalledInstall();
+      if (err instanceof SessionAuthorityError) {
+        err.attachMeta(androidReleaseMeta());
+        throw err;
+      }
+      const stageError = err instanceof MaestroStageExecutionError ? err.stageError : err;
+      const msg2 = stageError instanceof Error ? stageError.message : String(stageError);
+      if (stageError instanceof ExactAndroidDeviceRequiredError) {
+        return failResult(stageError.message, stageError.code, {
+          platform,
+          runner: dispatch.runner,
+          transport: dispatch.runner,
+          passed: false,
+          ...androidReleaseMeta()
+        });
+      }
+      const errAny = stageError;
+      const completed = err instanceof MaestroStageExecutionError ? err.completedResults : [];
+      const stdout = [
+        ...completed.map((result) => typeof result.stdout === "string" ? result.stdout : ""),
+        typeof errAny?.stdout === "string" ? errAny.stdout : ""
+      ].join("\n");
+      const stderr = [
+        ...completed.map((result) => typeof result.stderr === "string" ? result.stderr : ""),
+        typeof errAny?.stderr === "string" ? errAny.stderr : ""
+      ].join("\n");
+      const combined = combineRunnerOutput(stdout, stderr);
+      const apiLevelAllowsPreO = probedAndroidApiLevel === null || probedAndroidApiLevel < MAESTRO_RUNNER_MIN_ANDROID_API;
+      if (platform === "android" && apiLevelAllowsPreO && isOlderSdkInstallFailure(combined)) {
+        return failResult(olderSdkInstallDiagnosis(dispatch.runner), "ANDROID_API_UNSUPPORTED", {
+          platform,
+          runner: dispatch.runner,
+          transport: dispatch.runner,
+          passed: false,
+          output: combined.slice(0, 4e3),
+          ...androidReleaseMeta()
+        });
+      }
+      const { timedOut, outputTruncated } = classifyExecError(stageError);
+      const directEvidence = directRunnerEvidence(combined);
+      const deviceAuthority = verifyMaestroDeviceAuthority({
+        runner: dispatch.runner,
+        platform,
+        requestedDeviceId,
+        output: directEvidence.output,
+        directReportDeviceIds: directEvidence.reportDeviceIds,
+        directReportIdentityStrength: directEvidence.reportDeviceIdStrength
+      });
+      const summary = buildStepSummary(combined, { failed: true });
+      const spawnError = combined.length === 0 && isPreSpawnMaestroError(stageError);
+      const terminal = buildTerminalEvidence(combined, { timedOut, spawnError });
+      const runnerResume = await buildRunnerResume(platform, fastHealthCheck2);
+      const catchRefusal = combined.length > 0 ? maestroAuthorityRefusal(deviceAuthority, msg2) : null;
+      if (catchRefusal) {
+        return failResult(catchRefusal, "DEVICE_AUTHORITY_MISMATCH", {
+          flowFile,
+          platform,
+          runner: dispatch.runner,
+          transport: dispatch.runner,
+          passed: false,
+          deviceAuthority,
+          output: combined.slice(0, 4e3),
+          ...summary,
+          terminal,
+          ...runnerResume ? { runnerResume } : {},
+          timedOut,
+          outputTruncated,
+          ...androidReleaseMeta()
+        });
+      }
+      const rawHeadline = formatFailureHeadline(summary, { timedOut, outputTruncated }, msg2);
+      const releaseCaveat = androidReleaseCaveat();
+      const headline = releaseCaveat ? `${rawHeadline}; ${releaseCaveat}` : rawHeadline;
+      const failAug = augmentFailureWithDegradation(combined, resolveFloorMs(process.env.RN_RUNTIME_DEGRADED_FLOOR_MS), headline, {
+        flowFile,
+        platform,
+        runner: dispatch.runner,
+        transport: dispatch.runner,
+        transportVersion: engineStatus?.version ?? null,
+        fallback: dispatch.fallbackReason ? dispatch.runner : "none",
+        deviceAuthority,
+        passed: false,
+        // `output` mirrors the success/warn shape so callers can read
+        // it the same way regardless of which path they hit.
+        output: combined.slice(0, 4e3),
+        ...summary,
+        terminal,
+        ...runnerResume ? { runnerResume } : {},
+        timedOut,
+        outputTruncated,
+        // GH #397: a drifted/mismatched engine causing a real failure is
+        // exactly when the pin state matters — carry it on this path too.
+        ...engineStatus && engineStatus.pin.status !== "pinned-ok" ? { enginePin: engineStatus.pin } : {},
+        ...androidReleaseMeta()
+      });
+      return failResult(failAug.message, failAug.meta);
+    } finally {
+      try {
+        writeFileSync4(flowFile, validatedContent, "utf-8");
+      } finally {
+        disposeRunnerReportDir(runnerReportDir);
+      }
+    }
+  };
+}
+var defaultExecFile, MaestroStageExecutionError, lifecycleCommands, PARAM_KEY_RE, UIAUTOMATION_SESSION_CREATION_FAILURE;
+var init_maestro_run = __esm({
+  "packages/rn-dev-agent-core/dist/tools/maestro-run.js"() {
+    "use strict";
+    init_utils();
+    init_engine_pin();
+    init_action_engine_compat();
+    init_reusable_action();
+    init_agent_device_wrapper();
+    init_project_config();
+    init_maestro_dispatch();
+    init_resolve_ios_app_file();
+    init_maestro_validator();
+    init_maestro_error_parser();
+    init_tap_latency();
+    init_maestro_step_parser();
+    init_rn_fast_runner_client();
+    init_release_android_slot();
+    init_recovery();
+    init_maestro_device_authority();
+    init_maestro_runner_report();
+    init_authority_gate();
+    init_registry();
+    defaultExecFile = promisify14(execFileCb11);
+    MaestroStageExecutionError = class extends Error {
+      completedResults;
+      stageError;
+      constructor(completedResults, stageError) {
+        super(stageError instanceof Error ? stageError.message : String(stageError), {
+          cause: stageError
+        });
+        this.name = "MaestroStageExecutionError";
+        this.completedResults = [...completedResults];
+        this.stageError = stageError;
+      }
+    };
+    lifecycleCommands = /* @__PURE__ */ new Set(["launchApp", "clearState", "killApp", "stopApp"]);
+    PARAM_KEY_RE = /^[A-Z_][A-Z0-9_]*$/;
+    UIAUTOMATION_SESSION_CREATION_FAILURE = /^Error: failed to create driver: create session: session not created: java\.lang\.IllegalStateException: UiAutomation not connected(?:, UiAutomation@[^\r\n]+)?$/;
+  }
+});
 
 // packages/rn-dev-agent-core/dist/maestro-runner-pin.js
-var USAGE = "usage: maestro-runner-pin [diagnose|install|migrate-actions] [--json] [--root <app>]";
+init_engine_pin();
+init_action_engine_compat();
+init_action_engine_compat();
+init_maestro_validator();
+init_reusable_action();
+init_maestro_run();
+import { spawnSync } from "node:child_process";
+import { existsSync as existsSync12, readFileSync as readFileSync11, readdirSync as readdirSync4 } from "node:fs";
+import { dirname as dirname7, join as join18, resolve as resolve2 } from "node:path";
+import { fileURLToPath as fileURLToPath2 } from "node:url";
+var USAGE = "usage: maestro-runner-pin [diagnose|install|migrate-actions|verify-actions] [--json] [--root <app>]";
 function ensureScriptPath() {
-  const here = dirname3(fileURLToPath(import.meta.url));
+  const here = dirname7(fileURLToPath2(import.meta.url));
   const candidates = [
-    join5(here, "..", "..", "..", "scripts", "ensure-maestro-runner.sh"),
-    join5(here, "..", "scripts", "ensure-maestro-runner.sh"),
-    join5(here, "..", "..", "scripts", "ensure-maestro-runner.sh")
+    join18(here, "..", "..", "..", "scripts", "ensure-maestro-runner.sh"),
+    join18(here, "..", "scripts", "ensure-maestro-runner.sh"),
+    join18(here, "..", "..", "scripts", "ensure-maestro-runner.sh")
   ];
-  return candidates.find((path) => existsSync3(path)) ?? candidates[0];
+  return candidates.find((path) => existsSync12(path)) ?? candidates[0];
 }
 async function diagnose(json2) {
   _resetEngineStatusForTest();
@@ -8309,6 +12158,115 @@ function migrate(root2, json2) {
   }
   return failed.length === 0 ? 0 : 1;
 }
+async function verifyActions(argv) {
+  const valueAfter = (flag) => {
+    const index = argv.indexOf(flag);
+    return index >= 0 ? argv[index + 1] : void 0;
+  };
+  const platform = valueAfter("--platform");
+  const flowDirArg = valueAfter("--flow-dir");
+  const pattern = valueAfter("--pattern");
+  const timeout = Number(valueAfter("--timeout") ?? "120000");
+  const stopOnFailure = argv.includes("--stop-on-failure");
+  if (platform !== "ios" && platform !== "android" || !flowDirArg) {
+    console.error("verify-actions requires --platform ios|android and --flow-dir <directory>");
+    return 2;
+  }
+  if (!Number.isInteger(timeout) || timeout < 5e3 || timeout > 3e5) {
+    console.error("verify-actions --timeout must be an integer from 5000 to 300000");
+    return 2;
+  }
+  _resetEngineStatusForTest();
+  const engineStatus = await getEngineStatus();
+  const pinRefusal = exactPinRefusal(engineStatus);
+  if (pinRefusal) {
+    console.error(pinRefusal);
+    return 2;
+  }
+  let matcher = null;
+  if (pattern) {
+    if (pattern.length > 256) {
+      console.error("verify-actions --pattern must be at most 256 characters");
+      return 2;
+    }
+    try {
+      matcher = new RegExp(pattern, "i");
+    } catch (err) {
+      console.error(`verify-actions pattern is invalid: ${String(err)}`);
+      return 2;
+    }
+  }
+  const flowDir = resolve2(flowDirArg);
+  let files;
+  try {
+    files = readdirSync4(flowDir, { recursive: true }).filter((file) => /\.ya?ml$/i.test(file)).filter((file) => matcher?.test(file) ?? true).map((file) => join18(flowDir, file)).sort();
+  } catch (err) {
+    console.error(`verify-actions could not read ${flowDir}: ${String(err)}`);
+    return 2;
+  }
+  if (files.length === 0) {
+    console.error(`No Maestro flows found in ${flowDir}`);
+    return 2;
+  }
+  const preflightErrors = [];
+  const ownedIds = /* @__PURE__ */ new Set();
+  for (const file of files) {
+    try {
+      const text = readFileSync11(file, "utf8");
+      const parsed = parseAndValidateFlow(text, { flowDir: dirname7(file), flowRoot: flowDir });
+      const id = file.split("/").pop().replace(/\.ya?ml$/i, "");
+      const meta = parseM7Header(text, id);
+      const owned = isLearnedActionPath(file);
+      if (owned && ownedIds.has(id)) {
+        throw new Error(`both ${id}.yaml and ${id}.yml exist; keep exactly one action file`);
+      }
+      if (owned)
+        ownedIds.add(id);
+      const refusal = replayCompatibilityPreflight({
+        enginePin: meta?.enginePin,
+        commands: parsed.commands,
+        engineStatus,
+        requireEnginePin: meta !== null || owned
+      });
+      if (refusal)
+        throw new Error(refusal);
+    } catch (err) {
+      preflightErrors.push({ file, error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+  if (preflightErrors.length > 0) {
+    console.error(`Suite preflight refused ${preflightErrors.length} of ${files.length} flows before execution.`);
+    for (const row of preflightErrors)
+      console.error(`  FAIL  ${row.file}: ${row.error}`);
+    return 1;
+  }
+  console.log("rn-verify \u2014 Maestro E2E Regression Suite");
+  console.log(`Platform:  ${platform}`);
+  console.log(`Flow dir:  ${flowDir}`);
+  console.log(`Flows:     ${files.length}`);
+  console.log(`Timeout:   ${timeout}ms per flow`);
+  const run = createMaestroRunHandler();
+  let passed = 0;
+  let failed = 0;
+  for (const file of files) {
+    const startedAt = Date.now();
+    const result = await run({ platform, flowPath: file, timeoutMs: timeout });
+    const envelope = JSON.parse(result.content[0].text);
+    const ok = envelope.ok && envelope.data?.passed !== false;
+    console.log(`  ${ok ? "PASS" : "FAIL"}  ${file.split("/").pop()}  (${Date.now() - startedAt}ms)`);
+    if (ok)
+      passed += 1;
+    else {
+      failed += 1;
+      if (envelope.error)
+        console.error(`    ${envelope.error}`);
+      if (stopOnFailure)
+        break;
+    }
+  }
+  console.log(`Results: ${passed} passed, ${failed} failed (${files.length} total)`);
+  return failed === 0 ? 0 : 1;
+}
 function parseArgs(argv) {
   const json2 = argv.includes("--json");
   const rootIdx = argv.indexOf("--root");
@@ -8324,6 +12282,8 @@ if (cmd === "diagnose") {
   process.exit(install());
 } else if (cmd === "migrate-actions") {
   process.exit(migrate(root, json));
+} else if (cmd === "verify-actions") {
+  process.exit(await verifyActions(process.argv.slice(2)));
 } else {
   console.error(USAGE);
   process.exit(2);

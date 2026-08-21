@@ -128,6 +128,8 @@ test('doctorPinnedRunner truth table names missing/older/newer/checksum/unsuppor
     buildReplayEngineStatus('unverified', '1.1.24', false),
     'win32-x64',
   );
+  assert.equal(unsupported.platformStatus, 'unsupported');
+  assert.equal(unsupported.platformKey, 'win32-x64');
   assert.match(String(unsupported.correction), /unsupported on win32-x64/);
 });
 
@@ -210,7 +212,7 @@ test('--print-bin emits the pin-cache path only when version and checksum match'
     env: {
       ...process.env,
       RN_DEV_AGENT_RUNNER_CACHE: cache,
-      RN_DEV_AGENT_PIN_MANIFEST: manifest,
+      RN_DEV_AGENT_TEST_PIN_MANIFEST: manifest,
     },
   });
   assert.equal(result.status, 0);
@@ -243,6 +245,42 @@ test('--print-bin ignores a PATH maestro-runner when the pin-cache is missing', 
   assert.throws(() => readFileSync(marker));
 });
 
+test('test manifest cannot redefine the production pin version', () => {
+  const cache = mkdtempSync(join(tmpdir(), 'mr-version-override-'));
+  const marker = join(cache, 'runner-executed');
+  const pinDir = join(cache, 'maestro-runner', MAESTRO_RUNNER_PIN.version, 'bin');
+  mkdirSync(pinDir, { recursive: true });
+  const bin = join(pinDir, 'maestro-runner');
+  writeFileSync(bin, `#!/bin/sh\necho hit > "${marker}"\necho maestro-runner 9.9.9\n`);
+  chmodSync(bin, 0o755);
+  const sha = createHash('sha256').update(readFileSync(bin)).digest('hex');
+  const manifest = join(cache, 'other-pin.json');
+  writeFileSync(
+    manifest,
+    JSON.stringify({
+      version: '9.9.9',
+      sha256: {
+        'darwin-arm64': sha,
+        'darwin-x64': sha,
+        'linux-x64': sha,
+        'linux-arm64': sha,
+      },
+      knownQuirks: [],
+    }),
+  );
+  const result = spawnSync('bash', [SCRIPT, '--print-bin'], {
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      RN_DEV_AGENT_RUNNER_CACHE: cache,
+      RN_DEV_AGENT_TEST_PIN_MANIFEST: manifest,
+    },
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(`${result.stdout}${result.stderr}`, /must be 1\.1\.24/);
+  assert.throws(() => readFileSync(marker));
+});
+
 test('verify.sh refuses PATH or ~/.maestro-runner and names the supported correction', () => {
   const cache = mkdtempSync(join(tmpdir(), 'mr-verify-'));
   const pathDir = mkdtempSync(join(tmpdir(), 'mr-verify-path-'));
@@ -267,6 +305,32 @@ test('verify.sh refuses PATH or ~/.maestro-runner and names the supported correc
   assert.match(out, /ensure-maestro-runner\.sh/);
   assert.doesNotMatch(out, /open\.devicelab\.dev\/install\/maestro-runner/);
   assert.throws(() => readFileSync(marker));
+});
+
+test('verify.sh delegates replay to the packaged semantic verifier', () => {
+  const root = mkdtempSync(join(tmpdir(), 'mr-verify-delegate-'));
+  const pathDir = join(root, 'bin');
+  const flowDir = join(root, 'flows');
+  const marker = join(root, 'node-args');
+  mkdirSync(pathDir);
+  mkdirSync(flowDir);
+  writeFileSync(join(flowDir, 'flow.yaml'), '- launchApp\n');
+  writeFileSync(join(pathDir, 'node'), `#!/bin/sh\nprintf '%s\\n' "$@" > "${marker}"\n`);
+  chmodSync(join(pathDir, 'node'), 0o755);
+  const result = spawnSync('bash', [VERIFY, '--platform', 'ios', '--flow-dir', flowDir], {
+    encoding: 'utf8',
+    env: { ...process.env, PATH: `${pathDir}:${process.env.PATH ?? ''}` },
+  });
+  assert.equal(result.status, 0);
+  const args = readFileSync(marker, 'utf8').trim().split('\n');
+  assert.match(args[0], /maestro-runner-pin\.js$/);
+  assert.deepEqual(args.slice(1, 6), [
+    'verify-actions',
+    '--platform',
+    'ios',
+    '--flow-dir',
+    flowDir,
+  ]);
 });
 
 test('tracked bin/rn-verify resolves the pin helper through its symlink', () => {

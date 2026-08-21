@@ -124,7 +124,7 @@ function classifyFailure(failure: MaestroFailure): {
 }
 
 export interface RunActionArgs {
-  /** Action id matching `<projectRoot>/.rn-agent/actions/<actionId>.yaml`. */
+  /** Action id matching `<projectRoot>/.rn-agent/actions/<actionId>.yaml` or `.yml`. */
   actionId: string;
   appId?: string;
   /**
@@ -505,10 +505,19 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
         { proofReplay: true },
       );
     }
-    const loaded = loadAction(projectRoot, args.actionId);
+    let loaded: ReturnType<typeof loadAction>;
+    try {
+      loaded = loadAction(projectRoot, args.actionId);
+    } catch (err) {
+      return failResult(
+        err instanceof Error ? err.message : String(err),
+        'BAD_FILENAME',
+        { actionId: args.actionId, fallback: 'none' },
+      );
+    }
     if (!loaded) {
       return failResult(
-        `cdp_run_action: action "${args.actionId}" not found at ${projectRoot}/.rn-agent/actions/${args.actionId}.yaml`,
+        `cdp_run_action: action "${args.actionId}" not found at ${projectRoot}/.rn-agent/actions/${args.actionId}.yaml or ${args.actionId}.yml`,
         'NO_PROJECT_ROOT',
         {
           hint: 'Verify with /list-learned-actions, or pass projectRoot if cdp-bridge is invoked outside the project dir.',
@@ -523,11 +532,15 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
     const action = forceReload ? acknowledgeExternalEdit(loaded) : loaded;
 
     const engineStatus = await resolveEngineStatus();
-    let preflightCommands: unknown[] = [];
+    let preflightCommands: unknown[];
     try {
       preflightCommands = parseAndValidateFlow(action.body).commands;
-    } catch {
-      preflightCommands = [];
+    } catch (err) {
+      return failResult(
+        `Action ${args.actionId} is not valid Maestro YAML: ${err instanceof Error ? err.message : String(err)}`,
+        'BAD_RECORDING',
+        { actionId: args.actionId, fallback: 'none' },
+      );
     }
     const compatRefusal = actionReplayPreflight({
       enginePin: action.metadata.enginePin,

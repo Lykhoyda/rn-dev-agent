@@ -9,29 +9,40 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PIN_MANIFEST="${RN_DEV_AGENT_PIN_MANIFEST:-$SCRIPT_DIR/maestro-runner-pin.json}"
-if [ ! -f "$PIN_MANIFEST" ]; then
-  PIN_MANIFEST="$SCRIPT_DIR/../packages/rn-dev-agent-core/src/domain/maestro-runner-pin.json"
+CANONICAL_PIN_MANIFEST="$SCRIPT_DIR/maestro-runner-pin.json"
+if [ ! -f "$CANONICAL_PIN_MANIFEST" ]; then
+  CANONICAL_PIN_MANIFEST="$SCRIPT_DIR/../packages/rn-dev-agent-core/src/domain/maestro-runner-pin.json"
 fi
-if [ ! -f "$PIN_MANIFEST" ]; then
+if [ ! -f "$CANONICAL_PIN_MANIFEST" ]; then
   echo "ERROR: maestro-runner pin manifest is missing."
   exit 1
 fi
 
 manifest_value() {
-  node -e 'const m=require(process.argv[1]); const v=process.argv[2].split(".").reduce((o,k)=>o?.[k],m); if(typeof v!=="string") process.exit(1); process.stdout.write(v)' "$PIN_MANIFEST" "$1"
+  node -e 'const m=require(process.argv[1]); const v=process.argv[2].split(".").reduce((o,k)=>o?.[k],m); if(typeof v!=="string") process.exit(1); process.stdout.write(v)' "$1" "$2"
 }
+
+MAESTRO_RUNNER_PIN_VERSION="$(manifest_value "$CANONICAL_PIN_MANIFEST" version)"
+PIN_MANIFEST="${RN_DEV_AGENT_TEST_PIN_MANIFEST:-$CANONICAL_PIN_MANIFEST}"
+if [ ! -f "$PIN_MANIFEST" ]; then
+  echo "ERROR: maestro-runner test pin manifest is missing."
+  exit 1
+fi
+MANIFEST_VERSION="$(manifest_value "$PIN_MANIFEST" version)"
+if [ "$MANIFEST_VERSION" != "$MAESTRO_RUNNER_PIN_VERSION" ]; then
+  echo "ERROR: maestro-runner pin manifest version must be $MAESTRO_RUNNER_PIN_VERSION."
+  exit 1
+fi
 
 if [ "${1:-}" = "--print-pin-json" ]; then
   node -e 'const m=require(process.argv[1]); process.stdout.write(JSON.stringify(m))' "$PIN_MANIFEST"
   exit 0
 fi
 
-MAESTRO_RUNNER_PIN_VERSION="$(manifest_value version)"
-MAESTRO_RUNNER_PIN_SHA256_DARWIN_ARM64="$(manifest_value sha256.darwin-arm64)"
-MAESTRO_RUNNER_PIN_SHA256_DARWIN_X64="$(manifest_value sha256.darwin-x64)"
-MAESTRO_RUNNER_PIN_SHA256_LINUX_X64="$(manifest_value sha256.linux-x64)"
-MAESTRO_RUNNER_PIN_SHA256_LINUX_ARM64="$(manifest_value sha256.linux-arm64)"
+MAESTRO_RUNNER_PIN_SHA256_DARWIN_ARM64="$(manifest_value "$PIN_MANIFEST" sha256.darwin-arm64)"
+MAESTRO_RUNNER_PIN_SHA256_DARWIN_X64="$(manifest_value "$PIN_MANIFEST" sha256.darwin-x64)"
+MAESTRO_RUNNER_PIN_SHA256_LINUX_X64="$(manifest_value "$PIN_MANIFEST" sha256.linux-x64)"
+MAESTRO_RUNNER_PIN_SHA256_LINUX_ARM64="$(manifest_value "$PIN_MANIFEST" sha256.linux-arm64)"
 
 CACHE_PARENT="${RN_DEV_AGENT_RUNNER_CACHE:-$HOME/.cache/rn-dev-agent}"
 PIN_DIR="$CACHE_PARENT/maestro-runner/$MAESTRO_RUNNER_PIN_VERSION"
@@ -160,8 +171,11 @@ if [ "${1:-}" = "--print-bin" ]; then
 fi
 
 if [ -x "$BIN" ]; then
-  GOT_V="$(installed_version "$BIN")"
   GOT_SHA="$(file_sha "$BIN")"
+  GOT_V=""
+  if [ -n "$GOT_SHA" ] && [ "$GOT_SHA" = "$EXPECTED_SHA" ]; then
+    GOT_V="$(installed_version "$BIN")"
+  fi
   echo "NOTE: pin-cache maestro-runner is not exactly $MAESTRO_RUNNER_PIN_VERSION (got version=${GOT_V:-unknown} sha=${GOT_SHA:-unhashed}). Converging."
 fi
 
@@ -216,8 +230,11 @@ if [ "$(platform_key)" = "darwin" ]; then
 fi
 
 if ! bin_matches_pin; then
-  GOT_V="$(installed_version "$BIN")"
   GOT_SHA="$(file_sha "$BIN")"
+  GOT_V=""
+  if [ -n "$GOT_SHA" ] && [ "$GOT_SHA" = "$EXPECTED_SHA" ]; then
+    GOT_V="$(installed_version "$BIN")"
+  fi
   echo "ERROR: just-installed binary is not exactly $MAESTRO_RUNNER_PIN_VERSION."
   echo "  expected version: $MAESTRO_RUNNER_PIN_VERSION"
   echo "  got version:      ${GOT_V:-unknown}"

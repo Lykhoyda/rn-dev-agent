@@ -284,7 +284,7 @@ test('--section a: only memories section, no flows', () => {
   }
 });
 
-test('yml flows with an id replay through maestro_run using the discovered path', () => {
+test('yml flows with an id replay through cdp_run_action', () => {
   const dir = makeFixture();
   const ymlPath = join(dir, '.rn-agent', 'actions', 'login-alt.yml');
   writeFileSync(
@@ -308,9 +308,9 @@ appId: com.example.testapp
     const out = JSON.parse(raw);
     const alt = out.sections.flows.items.find((f) => f.id === 'login-alt');
     assert.ok(alt, 'login-alt yml should be inventoried');
-    assert.ok(alt.replay.includes('maestro_run'), 'yml replay must use maestro_run');
-    assert.ok(alt.replay.includes(`flowPath: "${ymlPath}"`));
-    assert.doesNotMatch(alt.replay, /cdp_run_action/);
+    assert.ok(alt.replay.includes('cdp_run_action'), 'yml replay must use cdp_run_action');
+    assert.ok(alt.replay.includes('actionId: "login-alt"'));
+    assert.ok(alt.replay.includes(`projectRoot: "${dir}"`));
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

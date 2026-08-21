@@ -6,7 +6,7 @@ import { buildMaestroFlow, parseAndValidateFlow, isValidBundleId, MaestroValidat
 import { chooseMaestroDispatch } from './tools/maestro-dispatch.js';
 import { outputIndicatesFlowFailure } from './domain/maestro-error-parser.js';
 import { exactPinRefusal, getEngineStatus, isOlderSdkInstallFailure, olderSdkInstallDiagnosis, } from './domain/engine-pin.js';
-import { regexSelectorCapabilityRefusal } from './domain/action-engine-compat.js';
+import { replayCompatibilityPreflight } from './domain/action-engine-compat.js';
 import { resolveAppFileForClearState } from './tools/resolve-ios-app-file.js';
 import { assembleMaestroArgs, runFlowParked } from './tools/maestro-run.js';
 import { getActiveSession } from './agent-device-wrapper.js';
@@ -56,7 +56,11 @@ export async function runMaestroInline(yaml, opts, dependencies = {}) {
     let headerAppId;
     try {
         const parsed = parseAndValidateFlow(yaml, { rejectHeader: true });
-        const selectorRefusal = regexSelectorCapabilityRefusal(parsed.commands);
+        const selectorRefusal = replayCompatibilityPreflight({
+            commands: parsed.commands,
+            engineStatus,
+            requireEnginePin: false,
+        });
         if (selectorRefusal) {
             return { passed: false, output: '', flowFile, error: selectorRefusal };
         }

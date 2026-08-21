@@ -107,7 +107,7 @@ test('gh-397: getEngineStatus revalidates across sequential spawn boundaries', a
   assert.equal(s2.version, '1.2.0');
 });
 
-test('gh-397: exact-version checksum mismatch preserves the detected version', async () => {
+test('gh-397: checksum mismatch is classified before executing the binary', async () => {
   _resetEngineStatusForTest();
   let execCalls = 0;
   const s = await getEngineStatus({
@@ -120,23 +120,23 @@ test('gh-397: exact-version checksum mismatch preserves the detected version', a
     platformKey: KEY,
   });
   assert.equal(s.pin.status, 'checksum-mismatch');
-  assert.equal(s.version, '1.1.24');
-  assert.equal(execCalls, 1);
+  assert.equal(s.version, null);
+  assert.equal(execCalls, 0);
   _resetEngineStatusForTest();
 });
 
-test('gh-397: version drift is diagnosed before the mismatched binary checksum', async () => {
+test('gh-397: version drift is diagnosed only after checksum verification', async () => {
   _resetEngineStatusForTest();
   const older = await getEngineStatus({
     binPath: () => '/fake/maestro-runner',
     execVersion: async () => 'maestro-runner 1.0.9',
-    hashFile: () => 'f'.repeat(64),
+    hashFile: () => PIN_HASH,
     platformKey: KEY,
   });
   const newer = await getEngineStatus({
     binPath: () => '/fake/maestro-runner',
     execVersion: async () => 'maestro-runner 1.2.0',
-    hashFile: () => 'e'.repeat(64),
+    hashFile: () => PIN_HASH,
     platformKey: KEY,
   });
   assert.equal(older.pin.status, 'drift-older');
@@ -146,11 +146,13 @@ test('gh-397: version drift is diagnosed before the mismatched binary checksum',
   _resetEngineStatusForTest();
 });
 
-test('gh-397: getEngineStatus fails open on resolver errors', async () => {
+test('gh-397: getEngineStatus refuses execution when hashing fails', async () => {
   _resetEngineStatusForTest();
+  let execCalls = 0;
   const s = await getEngineStatus({
     binPath: () => '/fake/maestro-runner',
     execVersion: async () => {
+      execCalls += 1;
       throw new Error('spawn failure');
     },
     hashFile: () => {
@@ -159,8 +161,9 @@ test('gh-397: getEngineStatus fails open on resolver errors', async () => {
     cliPresent: () => true,
     platformKey: KEY,
   });
-  assert.equal(s.pin.status, 'unknown-version');
+  assert.equal(s.pin.status, 'unverified');
   assert.equal(s.engine, 'maestro-runner');
+  assert.equal(execCalls, 0);
   _resetEngineStatusForTest();
 });
 

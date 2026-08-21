@@ -25,12 +25,17 @@ export function regexSelectorCapabilityRefusal(commands) {
         `Rewrite as id or literal text selectors before replay. No UI mutation will run.`);
 }
 export function actionReplayPreflight(opts) {
+    return replayCompatibilityPreflight({ ...opts, requireEnginePin: true });
+}
+export function replayCompatibilityPreflight(opts) {
     const pin = exactPinRefusal(opts.engineStatus);
     if (pin)
         return pin;
-    const format = actionEnginePinRefusal(opts.enginePin);
-    if (format)
-        return format;
+    if (opts.requireEnginePin) {
+        const format = actionEnginePinRefusal(opts.enginePin);
+        if (format)
+            return format;
+    }
     return regexSelectorCapabilityRefusal(opts.commands);
 }
 export function isLearnedActionPath(path) {
@@ -40,14 +45,22 @@ export function isLearnedActionPath(path) {
 const ENGINE_PIN_LINE = new RegExp(`^#\\s*enginePin\\s*:\\s*.+$`);
 export function upsertEnginePinHeader(text) {
     const parts = splitYaml(text);
-    const existingIdx = parts.headerLines.findIndex((line) => ENGINE_PIN_LINE.test(line));
     const nextLine = `# enginePin: ${ACTION_ENGINE_PIN}`;
-    if (existingIdx >= 0) {
-        if (parts.headerLines[existingIdx] === nextLine)
-            return { text, changed: false };
-        const headerLines = [...parts.headerLines];
-        headerLines[existingIdx] = nextLine;
-        return { text: joinYaml({ ...parts, headerLines }), changed: true };
+    const existing = parts.headerLines.filter((line) => ENGINE_PIN_LINE.test(line));
+    if (existing.length > 0) {
+        const headerLines = [];
+        let inserted = false;
+        for (const line of parts.headerLines) {
+            if (!ENGINE_PIN_LINE.test(line)) {
+                headerLines.push(line);
+            }
+            else if (!inserted) {
+                headerLines.push(nextLine);
+                inserted = true;
+            }
+        }
+        const nextText = joinYaml({ ...parts, headerLines });
+        return { text: nextText, changed: nextText !== text };
     }
     const statusIdx = parts.headerLines.findIndex((line) => /^#\s*status\s*:/.test(line));
     const headerLines = [...parts.headerLines];
@@ -104,8 +117,19 @@ export function migrateLearnedActions(projectRoot) {
     try {
         files = readdirSync(dir).filter(isOwnedActionFile);
     }
-    catch {
-        return [];
+    catch (err) {
+        const code = err.code;
+        if (code === 'ENOENT')
+            return [];
+        return [
+            {
+                id: 'actions',
+                path: dir,
+                status: 'unreadable',
+                reason: err instanceof Error ? err.message : String(err),
+                mutated: false,
+            },
+        ];
     }
     const results = [];
     for (const name of files) {

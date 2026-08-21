@@ -24182,7 +24182,7 @@ function enginePinCaveat(status) {
     return `maestro-runner ${status.version} differs from the tested pin ${status.pin.pinned} (untested drift \u2014 B223-class behavior changes arrive silently; see the upgrade ritual in engine-pin.ts)`;
   }
   if (cls === "checksum-mismatch") {
-    return `maestro-runner reports the pinned version ${status.pin.pinned} but its binary checksum does not match the manifest \u2014 possible corruption or tampering; reinstall via ensure-maestro-runner.sh`;
+    return `maestro-runner pin-cache binary checksum does not match the ${status.pin.pinned} manifest \u2014 possible corruption or tampering; reinstall via ensure-maestro-runner.sh`;
   }
   return null;
 }
@@ -24196,26 +24196,57 @@ function isRegexShapedSelector(value) {
   }
   return false;
 }
+function selectorTextValues(value, found) {
+  if (typeof value === "string") {
+    if (isRegexShapedSelector(value))
+      found.push(value);
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const entry of value)
+      selectorTextValues(entry, found);
+    return;
+  }
+  if (!value || typeof value !== "object")
+    return;
+  for (const [key, nested] of Object.entries(value)) {
+    if (key === "text" || RELATIVE_SELECTOR_KEYS.has(key)) {
+      selectorTextValues(nested, found);
+    }
+  }
+}
+function conditionTextValues(value, found) {
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    return;
+  for (const [key, nested] of Object.entries(value)) {
+    if (key === "visible" || key === "notVisible")
+      selectorTextValues(nested, found);
+  }
+}
 function findRegexTextSelectors(commands) {
   const found = [];
-  const visit = (value, underSelectorKey) => {
-    if (typeof value === "string") {
-      if (underSelectorKey && isRegexShapedSelector(value))
-        found.push(value);
-      return;
-    }
+  const visit = (value) => {
     if (Array.isArray(value)) {
       for (const entry of value)
-        visit(entry, underSelectorKey);
+        visit(entry);
       return;
     }
     if (value && typeof value === "object") {
       for (const [key, nested] of Object.entries(value)) {
-        visit(nested, TEXT_SELECTOR_KEYS.has(key));
+        if (TEXT_SELECTOR_KEYS.has(key))
+          selectorTextValues(nested, found);
+        if (key === "scrollUntilVisible" && nested && typeof nested === "object") {
+          selectorTextValues(nested.element, found);
+        }
+        if (key === "extendedWaitUntil")
+          conditionTextValues(nested, found);
+        if (key === "when")
+          conditionTextValues(nested, found);
+        visit(nested);
       }
     }
   };
-  visit([...commands], false);
+  visit(commands);
   return found;
 }
 function pinCorrection(status, platformKey = nodePlatformKey()) {
@@ -24234,7 +24265,7 @@ function pinCorrection(status, platformKey = nodePlatformKey()) {
     case "drift-newer":
       return `Session maestro-runner ${installed} is newer than the required pin ${pinned}. ${install}`;
     case "checksum-mismatch":
-      return `Session maestro-runner reports ${pinned} but the binary checksum does not match the pin manifest. ${install}`;
+      return `Session maestro-runner binary checksum does not match the ${pinned} pin manifest. ${install}`;
     case "unknown-version":
       return `Session maestro-runner version could not be read. ${install}`;
     case "unverified":
@@ -24276,6 +24307,19 @@ async function detect(resolvers) {
   } catch {
     sha2562 = null;
   }
+  const expectedSha256 = MAESTRO_RUNNER_PIN.sha256[platformKey];
+  if (!expectedSha256 || !sha2562) {
+    return buildReplayEngineStatus("unverified", null, false, {
+      selectedPath: binPath,
+      provenance: "pin-cache"
+    });
+  }
+  if (sha2562 !== expectedSha256) {
+    return buildReplayEngineStatus("checksum-mismatch", null, false, {
+      selectedPath: binPath,
+      provenance: "pin-cache"
+    });
+  }
   let version2 = null;
   try {
     const out = await (resolvers.execVersion ?? defaultExecVersion)(binPath);
@@ -24294,7 +24338,7 @@ function getEngineStatus(resolvers) {
     return Promise.resolve(testStatus);
   return detect(resolvers ?? {}).catch(() => buildReplayEngineStatus("unknown-version", null, false));
 }
-var execFile5, MAESTRO_RUNNER_PIN, ACTION_ENGINE_PIN, HOST_PLUGIN_ROOT, PINNED_RUNNER_INSTALL_HINT, PINNED_RUNNER_DIAGNOSE_HINT, MAESTRO_RUNNER_MIN_ANDROID_API, PRE_O_REMEDY, OLDER_SDK_TOKEN, INSTALL_REJECT_CONTEXT, REGEX_METACHARACTERS, TEXT_SELECTOR_KEYS, testStatus;
+var execFile5, MAESTRO_RUNNER_PIN, ACTION_ENGINE_PIN, HOST_PLUGIN_ROOT, PINNED_RUNNER_INSTALL_HINT, PINNED_RUNNER_DIAGNOSE_HINT, MAESTRO_RUNNER_MIN_ANDROID_API, PRE_O_REMEDY, OLDER_SDK_TOKEN, INSTALL_REJECT_CONTEXT, REGEX_METACHARACTERS, TEXT_SELECTOR_KEYS, RELATIVE_SELECTOR_KEYS, testStatus;
 var init_engine_pin = __esm({
   "packages/rn-dev-agent-core/dist/domain/engine-pin.js"() {
     "use strict";
@@ -24330,9 +24374,16 @@ var init_engine_pin = __esm({
       "longPressOn",
       "assertVisible",
       "assertNotVisible",
-      "visible",
-      "notVisible",
-      "text"
+      "copyTextFrom"
+    ]);
+    RELATIVE_SELECTOR_KEYS = /* @__PURE__ */ new Set([
+      "above",
+      "below",
+      "leftOf",
+      "rightOf",
+      "childOf",
+      "containsChild",
+      "containsDescendants"
     ]);
   }
 });
@@ -25350,6 +25401,20 @@ function actionPathFor(projectRoot, actionId) {
   assertWithinDir(fileName, actionsDir);
   return join19(actionsDir, fileName);
 }
+function resolveActionPath(projectRoot, actionId) {
+  const yamlPath = actionPathFor(projectRoot, actionId);
+  const ymlPath = yamlPath.replace(/\.yaml$/, ".yml");
+  const yamlExists = existsSync16(yamlPath);
+  const ymlExists = existsSync16(ymlPath);
+  if (yamlExists && ymlExists) {
+    throw new Error(`Action ${actionId} is ambiguous because both ${actionId}.yaml and ${actionId}.yml exist; keep exactly one file before replay.`);
+  }
+  if (yamlExists)
+    return yamlPath;
+  if (ymlExists)
+    return ymlPath;
+  return null;
+}
 function splitYaml(text) {
   const allLines = text.split("\n");
   let separatorIdx = -1;
@@ -25410,8 +25475,8 @@ function joinYaml(parts) {
   return out.join("\n");
 }
 function loadAction(projectRoot, actionId) {
-  const filePath = actionPathFor(projectRoot, actionId);
-  if (!existsSync16(filePath))
+  const filePath = resolveActionPath(projectRoot, actionId);
+  if (!filePath)
     return null;
   const text = readFileSync14(filePath, "utf8");
   const metadata = parseM7Header(text, actionId);
@@ -25567,12 +25632,17 @@ function regexSelectorCapabilityRefusal(commands) {
   return `Action uses regex text selectors (${selectors[0]}) which are not a validated maestro-runner ${MAESTRO_RUNNER_PIN.version} capability (GH #750 CONTAINS mistranslation). Rewrite as id or literal text selectors before replay. No UI mutation will run.`;
 }
 function actionReplayPreflight(opts) {
+  return replayCompatibilityPreflight({ ...opts, requireEnginePin: true });
+}
+function replayCompatibilityPreflight(opts) {
   const pin = exactPinRefusal(opts.engineStatus);
   if (pin)
     return pin;
-  const format = actionEnginePinRefusal(opts.enginePin);
-  if (format)
-    return format;
+  if (opts.requireEnginePin) {
+    const format = actionEnginePinRefusal(opts.enginePin);
+    if (format)
+      return format;
+  }
   return regexSelectorCapabilityRefusal(opts.commands);
 }
 function isLearnedActionPath(path) {
@@ -32131,7 +32201,11 @@ function createMaestroRunHandler(deps = {}) {
       enginePin: actionMeta?.enginePin,
       commands: validatedCommands,
       engineStatus
-    }) : regexSelectorCapabilityRefusal(validatedCommands);
+    }) : replayCompatibilityPreflight({
+      commands: validatedCommands,
+      engineStatus,
+      requireEnginePin: false
+    });
     if (compatibilityRefusal) {
       return failResult(compatibilityRefusal, "ENGINE_PIN_MISMATCH", {
         pin: engineStatus?.pin,
@@ -33150,7 +33224,11 @@ async function runMaestroInline(yaml2, opts, dependencies = {}) {
   let headerAppId;
   try {
     const parsed = parseAndValidateFlow(yaml2, { rejectHeader: true });
-    const selectorRefusal = regexSelectorCapabilityRefusal(parsed.commands);
+    const selectorRefusal = replayCompatibilityPreflight({
+      commands: parsed.commands,
+      engineStatus,
+      requireEnginePin: false
+    });
     if (selectorRefusal) {
       return { passed: false, output: "", flowFile, error: selectorRefusal };
     }
@@ -74402,7 +74480,6 @@ function createRepairActionHandler() {
 
 // packages/rn-dev-agent-core/dist/tools/save-as-action.js
 init_utils();
-import { existsSync as existsSync28 } from "node:fs";
 
 // packages/rn-dev-agent-core/dist/tools/test-recorder.js
 init_utils();
@@ -75371,12 +75448,18 @@ function createSaveAsActionHandler() {
       return failResult("No recorded events to save \u2014 call cdp_record_test_start, interact, then cdp_record_test_stop before save_as_action", "NO_EVENTS");
     }
     const projectRoot = args.projectRoot ?? process.cwd();
-    const filePath = actionPathFor(projectRoot, args.id);
-    const preexisted = existsSync28(filePath);
+    let existingPath;
+    try {
+      existingPath = resolveActionPath(projectRoot, args.id);
+    } catch (err) {
+      return failResult(err instanceof Error ? err.message : String(err), "BAD_FILENAME");
+    }
+    const filePath = existingPath ?? actionPathFor(projectRoot, args.id);
+    const preexisted = existingPath !== null;
     if (preexisted && !args.overwrite) {
-      return failResult(`cdp_record_test_save_as_action: action "${args.id}" already exists at ${filePath}. Pass overwrite=true to replace, or pick a different id.`, "BAD_FILENAME", {
+      return failResult(`cdp_record_test_save_as_action: action "${args.id}" already exists at ${existingPath}. Pass overwrite=true to replace, or pick a different id.`, "BAD_FILENAME", {
         actionId: args.id,
-        filePath,
+        filePath: existingPath,
         hint: "Existing actions should be repaired (cdp_repair_action) or extended in place, not silently overwritten."
       });
     }
@@ -76136,20 +76219,25 @@ function createRunActionHandler(deps = {}) {
     if (proofReplay && (args.autoRepair !== false || args.forceReload !== false)) {
       return failResult("cdp_run_action proofReplay requires autoRepair=false and forceReload=false", { proofReplay: true });
     }
-    const loaded = loadAction(projectRoot, args.actionId);
+    let loaded;
+    try {
+      loaded = loadAction(projectRoot, args.actionId);
+    } catch (err) {
+      return failResult(err instanceof Error ? err.message : String(err), "BAD_FILENAME", { actionId: args.actionId, fallback: "none" });
+    }
     if (!loaded) {
-      return failResult(`cdp_run_action: action "${args.actionId}" not found at ${projectRoot}/.rn-agent/actions/${args.actionId}.yaml`, "NO_PROJECT_ROOT", {
+      return failResult(`cdp_run_action: action "${args.actionId}" not found at ${projectRoot}/.rn-agent/actions/${args.actionId}.yaml or ${args.actionId}.yml`, "NO_PROJECT_ROOT", {
         hint: "Verify with /list-learned-actions, or pass projectRoot if cdp-bridge is invoked outside the project dir."
       });
     }
     const forceReload = proofReplay ? false : args.forceReload !== false;
     const action = forceReload ? acknowledgeExternalEdit(loaded) : loaded;
     const engineStatus = await resolveEngineStatus();
-    let preflightCommands = [];
+    let preflightCommands;
     try {
       preflightCommands = parseAndValidateFlow(action.body).commands;
-    } catch {
-      preflightCommands = [];
+    } catch (err) {
+      return failResult(`Action ${args.actionId} is not valid Maestro YAML: ${err instanceof Error ? err.message : String(err)}`, "BAD_RECORDING", { actionId: args.actionId, fallback: "none" });
     }
     const compatRefusal = actionReplayPreflight({
       enginePin: action.metadata.enginePin,
@@ -78664,7 +78752,7 @@ init_path_safety();
 init_process_birth();
 import { execFile as execFile23 } from "node:child_process";
 import { createHash as createHash14 } from "node:crypto";
-import { existsSync as existsSync29 } from "node:fs";
+import { existsSync as existsSync28 } from "node:fs";
 import { promisify as promisify24 } from "node:util";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
 import { dirname as dirname18, join as join41 } from "node:path";
@@ -78771,7 +78859,7 @@ function resolveRecordScript(baseDir = dirname18(fileURLToPath3(import.meta.url)
     return process.env.RN_DEV_AGENT_RECORD_PROOF_SCRIPT;
   }
   const candidates = candidateRecordScripts(baseDir);
-  return candidates.find((path) => existsSync29(path)) ?? candidates[0];
+  return candidates.find((path) => existsSync28(path)) ?? candidates[0];
 }
 function getRecordScript() {
   return resolveRecordScript();
@@ -79086,7 +79174,7 @@ function createDeviceRecordHandler(deps = {}) {
 // packages/rn-dev-agent-core/dist/tools/proof-capture.js
 import { createHash as createHash16, randomUUID as randomUUID8 } from "node:crypto";
 import { execFileSync as execFileSync14 } from "node:child_process";
-import { chmodSync as chmodSync4, closeSync as closeSync9, existsSync as existsSync30, fsyncSync, lstatSync as lstatSync11, mkdirSync as mkdirSync17, openSync as openSync9, readFileSync as readFileSync29, realpathSync as realpathSync11, renameSync as renameSync7, unlinkSync as unlinkSync10, writeFileSync as writeFileSync14 } from "node:fs";
+import { chmodSync as chmodSync4, closeSync as closeSync9, existsSync as existsSync29, fsyncSync, lstatSync as lstatSync11, mkdirSync as mkdirSync17, openSync as openSync9, readFileSync as readFileSync29, realpathSync as realpathSync11, renameSync as renameSync7, unlinkSync as unlinkSync10, writeFileSync as writeFileSync14 } from "node:fs";
 import { basename as basename9, dirname as dirname19, extname, isAbsolute as isAbsolute9, join as join42, relative as relative5, resolve as resolve13, sep as sep6 } from "node:path";
 import { fileURLToPath as fileURLToPath4 } from "node:url";
 init_action_store();
@@ -79811,7 +79899,7 @@ function resolveProofCandidateEntrypoint(candidateRoot, argv) {
       };
     }
     if (host === "codex-plugin" && arg === realpathOrSelf(join42(hostRoot, "bin", "cdp-supervisor.js"))) {
-      if (!existsSync30(coreIndex) || !existsSync30(coreSupervisor))
+      if (!existsSync29(coreIndex) || !existsSync29(coreSupervisor))
         return null;
       return {
         host,
@@ -82442,7 +82530,7 @@ init_engine_pin();
 init_action_engine_compat();
 import { execFile as execFileCb19 } from "node:child_process";
 import { promisify as promisify25 } from "node:util";
-import { existsSync as existsSync31, readFileSync as readFileSync30, writeFileSync as writeFileSync15, readdirSync as readdirSync10 } from "node:fs";
+import { existsSync as existsSync30, readFileSync as readFileSync30, writeFileSync as writeFileSync15, readdirSync as readdirSync10 } from "node:fs";
 import { dirname as dirname21, join as join44 } from "node:path";
 var execFile24 = promisify25(execFileCb19);
 var AUTH_ROUTE_PATTERNS = [
@@ -82506,7 +82594,7 @@ async function isOnAuthScreen(client2) {
 function findLoginFlow(projectRoot) {
   const searchDirs = [join44(projectRoot, ".maestro", "subflows"), join44(projectRoot, ".maestro")];
   for (const dir of searchDirs) {
-    if (!existsSync31(dir))
+    if (!existsSync30(dir))
       continue;
     let files;
     try {
@@ -83066,7 +83154,7 @@ function buildGracefulShutdown(deps) {
 // packages/rn-dev-agent-core/dist/lifecycle/lockfile.js
 import { createHash as createHash18 } from "node:crypto";
 import { execFileSync as execFileSync16 } from "node:child_process";
-import { closeSync as closeSync10, existsSync as existsSync32, mkdirSync as mkdirSync18, openSync as openSync10, readFileSync as readFileSync31, statSync as statSync13, unlinkSync as unlinkSync11, writeFileSync as writeFileSync16, writeSync as writeSync3 } from "node:fs";
+import { closeSync as closeSync10, existsSync as existsSync31, mkdirSync as mkdirSync18, openSync as openSync10, readFileSync as readFileSync31, statSync as statSync13, unlinkSync as unlinkSync11, writeFileSync as writeFileSync16, writeSync as writeSync3 } from "node:fs";
 import { tmpdir as tmpdir12, userInfo as userInfo2 } from "node:os";
 import { join as join45, resolve as resolve14 } from "node:path";
 var DEFAULT_MAX_AGE_MS = 24 * 60 * 60 * 1e3;
@@ -83201,7 +83289,7 @@ var Lockfile = class {
     if (!this.acquired)
       return;
     try {
-      if (existsSync32(this.lockPath)) {
+      if (existsSync31(this.lockPath)) {
         const body = this.readExisting();
         if (body?.pid === this.opts.pid) {
           unlinkSync11(this.lockPath);
@@ -83235,7 +83323,7 @@ var Lockfile = class {
     return true;
   }
   readExisting() {
-    if (!existsSync32(this.lockPath))
+    if (!existsSync31(this.lockPath))
       return null;
     try {
       const raw = readFileSync31(this.lockPath, "utf8");
@@ -83308,7 +83396,7 @@ var Lockfile = class {
       version: this.opts.version || void 0
     };
     const dir = this.opts.tmpDir;
-    if (!existsSync32(dir)) {
+    if (!existsSync31(dir)) {
       mkdirSync18(dir, { recursive: true });
     }
     const fd = openSync10(this.lockPath, "wx");
@@ -83384,7 +83472,11 @@ init_maestro_run();
 init_utils();
 init_storage();
 init_maestro_validator();
-import { existsSync as existsSync33, mkdirSync as mkdirSync19, writeFileSync as writeFileSync17 } from "node:fs";
+init_engine_pin();
+init_action_engine_compat();
+init_action_store();
+init_reusable_action();
+import { existsSync as existsSync32, mkdirSync as mkdirSync19, writeFileSync as writeFileSync17 } from "node:fs";
 import { join as join46 } from "node:path";
 function stepToMaestroCommands(step) {
   const ALLOWED_DIRECTIONS = /* @__PURE__ */ new Set(["up", "down", "left", "right"]);
@@ -83428,7 +83520,7 @@ function stepToMaestroCommands(step) {
       return [{ pressKey: "back" }];
     case "wait":
       if (step.waitMs && step.waitMs > 0) {
-        return [{ extendedWaitUntil: { visible: ".*", timeout: step.waitMs } }];
+        return [{ waitForAnimationToEnd: { timeout: step.waitMs } }];
       }
       return [];
     default:
@@ -83445,10 +83537,13 @@ function createMaestroGenerateHandler() {
     if (!outputDir) {
       return failResult("Cannot determine project root. Pass outputDir explicitly.");
     }
-    if (!existsSync33(outputDir)) {
+    if (!existsSync32(outputDir)) {
       mkdirSync19(outputDir, { recursive: true });
     }
     const sanitizedName = args.name.replace(/[^a-zA-Z0-9_-]/g, "-").toLowerCase();
+    if (!sanitizedName.replace(/-/g, "")) {
+      return failResult("Flow name must contain at least one letter, number, or underscore.");
+    }
     const fileName = `${sanitizedName}.yaml`;
     const filePath = join46(outputDir, fileName);
     if (args.appId !== void 0 && !isValidBundleId(args.appId)) {
@@ -83460,9 +83555,22 @@ function createMaestroGenerateHandler() {
         commands.push(cmd);
       }
     }
+    const compatibilityRefusal = regexSelectorCapabilityRefusal(commands);
+    if (compatibilityRefusal)
+      return failResult(compatibilityRefusal, "ENGINE_PIN_MISMATCH");
     let content;
     try {
-      content = buildMaestroFlow(args.appId ? { appId: args.appId } : {}, commands);
+      const generated = buildMaestroFlow(args.appId ? { appId: args.appId } : {}, commands);
+      const parts = splitYaml(generated);
+      content = joinYaml({
+        ...parts,
+        headerLines: serializeM7Header({
+          id: sanitizedName,
+          intent: args.name.replace(/[\r\n]+/g, " "),
+          status: "experimental",
+          enginePin: ACTION_ENGINE_PIN
+        }).split("\n")
+      });
     } catch (err) {
       if (err instanceof MaestroValidationError) {
         return failResult(`Refusing to write Maestro flow: ${err.message} (Phase 134.1)`);
@@ -83496,12 +83604,12 @@ init_maestro_runner_report();
 init_registry();
 import { execFile as execFileCb21 } from "node:child_process";
 import { promisify as promisify27 } from "node:util";
-import { existsSync as existsSync34, readdirSync as readdirSync11, readFileSync as readFileSync32, writeFileSync as writeFileSync18 } from "node:fs";
+import { existsSync as existsSync33, readdirSync as readdirSync11, readFileSync as readFileSync32, writeFileSync as writeFileSync18 } from "node:fs";
 import { dirname as dirname22, join as join47 } from "node:path";
 import { tmpdir as tmpdir13 } from "node:os";
 var defaultExecFile4 = promisify27(execFileCb21);
 function discoverFlows(dir, pattern) {
-  if (!existsSync34(dir))
+  if (!existsSync33(dir))
     return [];
   const files = readdirSync11(dir, { recursive: true });
   const yamls = files.filter((f) => f.endsWith(".yaml") || f.endsWith(".yml")).map((f) => join47(dir, f)).sort();
@@ -83556,6 +83664,67 @@ function createMaestroTestAllHandler(deps = {}) {
     if (flows.length === 0) {
       return failResult(`No Maestro flows found in ${flowDir}. Generate flows with maestro_generate first.`);
     }
+    const preflightResults = [];
+    const preparedFlows = [];
+    for (const flow of flows) {
+      const name = flow.replace(flowDir + "/", "");
+      const start = now();
+      try {
+        const yamlText = readFileSync32(flow, "utf-8");
+        const parsed = parseAndValidateFlow(yamlText, {
+          flowDir: dirname22(flow),
+          flowRoot: flowDir
+        });
+        const flowId = name.replace(/\.ya?ml$/i, "");
+        const meta = parseM7Header(yamlText, flowId);
+        const requireEnginePin = meta !== null || isLearnedActionPath(flow);
+        const preflight2 = replayCompatibilityPreflight({
+          enginePin: meta?.enginePin,
+          commands: parsed.commands,
+          engineStatus,
+          requireEnginePin
+        });
+        if (preflight2)
+          throw new Error(preflight2);
+        planMaestroAuthorityStages(parsed.commands);
+        const parsedAppId = resolveMaestroFlowAppId(boundAppId, parsed.appId);
+        const canonical = buildMaestroFlow(parsedAppId !== void 0 ? { appId: parsedAppId } : {}, parsed.commands);
+        const appFileResolution = resolveAppFile(platform, canonical, parsedAppId, void 0, {
+          deviceId: requestedDeviceId
+        });
+        if (!appFileResolution.ok)
+          throw new Error(appFileResolution.error);
+        preparedFlows.push({
+          name,
+          commands: parsed.commands,
+          appId: parsedAppId,
+          canonical,
+          appFile: appFileResolution.appFile,
+          reinstallsApp: Boolean(appFileResolution.appFile) && flowUsesClearState(canonical)
+        });
+      } catch (err) {
+        const reason = err instanceof MaestroValidationError ? `Refused by validator: ${err.message}` : err instanceof Error ? err.message : String(err);
+        preflightResults.push({
+          name,
+          passed: false,
+          durationMs: now() - start,
+          error: reason.slice(0, 300)
+        });
+      }
+    }
+    if (preflightResults.length > 0) {
+      return failResult(`Suite preflight refused ${preflightResults.length} of ${flows.length} flows before execution.`, {
+        total: flows.length,
+        executed: 0,
+        passed: 0,
+        failed: preflightResults.length,
+        platform,
+        flowDir,
+        runner: dispatch.runner,
+        requestedDeviceId: requestedDeviceId ?? null,
+        results: preflightResults
+      });
+    }
     const timeout = args.timeoutPerFlow ?? 12e4;
     const managedAuthority = nestedMaestroAuthorityCallbacks(args);
     const claimOrigin = deps.claimNativeOrigin ?? managedAuthority.claimNativeOrigin;
@@ -83567,75 +83736,15 @@ function createMaestroTestAllHandler(deps = {}) {
     const results = [];
     let passed = 0;
     let failed = 0;
-    for (const flow of flows) {
-      const name = flow.replace(flowDir + "/", "");
+    for (const prepared of preparedFlows) {
+      const { name } = prepared;
       const start = now();
-      let safeFlowFile;
-      let appFile;
-      let parsedCommands = [];
-      let parsedAppId;
-      let reinstallsApp = false;
-      try {
-        const yamlText = readFileSync32(flow, "utf-8");
-        const parsed = parseAndValidateFlow(yamlText, {
-          flowDir: dirname22(flow),
-          flowRoot: flowDir
-        });
-        const flowId = name.replace(/\.ya?ml$/i, "");
-        const meta = parseM7Header(yamlText, flowId);
-        const preflight2 = meta || isLearnedActionPath(flow) ? actionReplayPreflight({
-          enginePin: meta?.enginePin,
-          commands: parsed.commands,
-          engineStatus
-        }) : regexSelectorCapabilityRefusal(parsed.commands);
-        if (preflight2) {
-          results.push({
-            name,
-            passed: false,
-            durationMs: now() - start,
-            error: preflight2.slice(0, 300)
-          });
-          failed++;
-          if (args.stopOnFailure)
-            break;
-          continue;
-        }
-        planMaestroAuthorityStages(parsed.commands);
-        parsedCommands = parsed.commands;
-        parsedAppId = resolveMaestroFlowAppId(boundAppId, parsed.appId);
-        const canonical = buildMaestroFlow(parsedAppId !== void 0 ? { appId: parsedAppId } : {}, parsed.commands);
-        safeFlowFile = join47(tmpdir13(), `rn-maestro-validated-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.yaml`);
-        writeFileSync18(safeFlowFile, canonical, "utf-8");
-        const appFileResolution = resolveAppFile(platform, canonical, parsedAppId, void 0, {
-          deviceId: requestedDeviceId
-        });
-        if (!appFileResolution.ok) {
-          results.push({
-            name,
-            passed: false,
-            durationMs: now() - start,
-            error: appFileResolution.error.slice(0, 300)
-          });
-          failed++;
-          if (args.stopOnFailure)
-            break;
-          continue;
-        }
-        appFile = appFileResolution.appFile;
-        reinstallsApp = Boolean(appFile) && flowUsesClearState(canonical);
-      } catch (err) {
-        const reason = err instanceof MaestroValidationError ? `Refused by validator: ${err.message}` : `Read/parse error: ${err.message}`;
-        results.push({
-          name,
-          passed: false,
-          durationMs: now() - start,
-          error: reason.slice(0, 300)
-        });
-        failed++;
-        if (args.stopOnFailure)
-          break;
-        continue;
-      }
+      const safeFlowFile = join47(tmpdir13(), `rn-maestro-validated-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.yaml`);
+      writeFileSync18(safeFlowFile, prepared.canonical, "utf-8");
+      const parsedCommands = prepared.commands;
+      const parsedAppId = prepared.appId;
+      const appFile = prepared.appFile;
+      const reinstallsApp = prepared.reinstallsApp;
       let flowDispatch = dispatch;
       const runnerReportDir = createRunnerReportDir(flowDispatch.runner, "rn-maestro-suite-report");
       const baseArgs = flowDispatch.buildArgs(platform, safeFlowFile, appFile, requestedDeviceId);
@@ -84124,7 +84233,7 @@ function instrumentTool(toolName, handler) {
 
 // packages/rn-dev-agent-core/dist/experience/evidence.js
 import { createHash as createHash19, randomUUID as randomUUID9 } from "node:crypto";
-import { chmodSync as chmodSync5, existsSync as existsSync35, mkdirSync as mkdirSync20, readFileSync as readFileSync34, renameSync as renameSync8, unlinkSync as unlinkSync12, writeFileSync as writeFileSync19 } from "node:fs";
+import { chmodSync as chmodSync5, existsSync as existsSync34, mkdirSync as mkdirSync20, readFileSync as readFileSync34, renameSync as renameSync8, unlinkSync as unlinkSync12, writeFileSync as writeFileSync19 } from "node:fs";
 import { homedir as homedir9, platform as hostPlatform, release } from "node:os";
 import { dirname as dirname23, join as join49 } from "node:path";
 import { fileURLToPath as fileURLToPath5 } from "node:url";
@@ -84215,7 +84324,7 @@ function readAppIdentity() {
 function loadAppIdentity(root) {
   const manifest = join49(root, "app.json");
   try {
-    if (!existsSync35(manifest))
+    if (!existsSync34(manifest))
       return { name: null, slug: null };
     const parsed = JSON.parse(readFileSync34(manifest, "utf8"));
     const expo = parsed.expo ?? parsed;
@@ -84428,7 +84537,7 @@ function discoverPluginVersion(fromUrl = import.meta.url) {
   return null;
 }
 function readExperienceStore(path) {
-  if (!existsSync35(path))
+  if (!existsSync34(path))
     return [];
   const contents = readFileSync34(path, "utf8");
   if (!contents.trim())
@@ -85962,7 +86071,7 @@ import { readFileSync as readFileSync38 } from "node:fs";
 // packages/rn-dev-agent-core/dist/domain/e2e-test.js
 init_path_safety();
 import { dirname as dirname25, join as join53 } from "node:path";
-import { mkdirSync as mkdirSync21, writeFileSync as writeFileSync20, renameSync as renameSync9, readFileSync as readFileSync36, readdirSync as readdirSync13, existsSync as existsSync36 } from "node:fs";
+import { mkdirSync as mkdirSync21, writeFileSync as writeFileSync20, renameSync as renameSync9, readFileSync as readFileSync36, readdirSync as readdirSync13, existsSync as existsSync35 } from "node:fs";
 import { createHash as createHash20 } from "node:crypto";
 var FLOW_SENTINEL = "# e2e-locked-flow-below";
 function e2eDirFor(projectRoot) {
@@ -86019,13 +86128,13 @@ function freezeLockedTest(projectRoot, source, ctx) {
 }
 function loadLockedTest(projectRoot, id) {
   const filePath = e2ePathFor(projectRoot, id);
-  if (!existsSync36(filePath))
+  if (!existsSync35(filePath))
     return null;
   return parseLockedTest(readFileSync36(filePath, "utf8"), filePath);
 }
 function discoverLockedTests(projectRoot) {
   const dir = e2eDirFor(projectRoot);
-  if (!existsSync36(dir))
+  if (!existsSync35(dir))
     return [];
   return readdirSync13(dir).filter((f) => f.endsWith(".yaml")).map((f) => f.replace(/\.yaml$/, "")).sort();
 }
@@ -86203,7 +86312,7 @@ init_maestro_error_parser();
 init_path_safety();
 init_runtime_paths2();
 import { join as join55 } from "node:path";
-import { mkdirSync as mkdirSync22, writeFileSync as writeFileSync21, renameSync as renameSync10, readFileSync as readFileSync39, existsSync as existsSync37 } from "node:fs";
+import { mkdirSync as mkdirSync22, writeFileSync as writeFileSync21, renameSync as renameSync10, readFileSync as readFileSync39, existsSync as existsSync36 } from "node:fs";
 function classifyFlowResult(input) {
   if (input.passed) {
     return {
@@ -86268,7 +86377,7 @@ function writeJsonAtomic(file, value) {
 }
 function loadIndex(projectRoot) {
   const file = join55(e2eRunsDirFor(projectRoot), "index.json");
-  if (!existsSync37(file))
+  if (!existsSync36(file))
     return [];
   try {
     const parsed = JSON.parse(readFileSync39(file, "utf8"));
@@ -86293,7 +86402,7 @@ function writeRunRecord(projectRoot, rec) {
 function loadRunRecord(projectRoot, runId) {
   assertValidActionId(runId, "loadRunRecord");
   const file = join55(e2eRunsDirFor(projectRoot), `${runId}.json`);
-  if (!existsSync37(file))
+  if (!existsSync36(file))
     return null;
   try {
     return JSON.parse(readFileSync39(file, "utf8"));
@@ -86314,7 +86423,7 @@ init_utils();
 // packages/rn-dev-agent-core/dist/domain/e2e-run-request.js
 init_path_safety();
 import { join as join56 } from "node:path";
-import { mkdirSync as mkdirSync23, writeFileSync as writeFileSync22, renameSync as renameSync11, readFileSync as readFileSync40, readdirSync as readdirSync14, existsSync as existsSync38 } from "node:fs";
+import { mkdirSync as mkdirSync23, writeFileSync as writeFileSync22, renameSync as renameSync11, readFileSync as readFileSync40, readdirSync as readdirSync14, existsSync as existsSync37 } from "node:fs";
 var TERMINAL_STATUSES = /* @__PURE__ */ new Set([
   "done",
   "failed",
@@ -86337,7 +86446,7 @@ function writeRequest(projectRoot, req) {
 }
 function loadRequest(projectRoot, runId) {
   const file = requestPath(projectRoot, runId);
-  if (!existsSync38(file))
+  if (!existsSync37(file))
     return null;
   try {
     return JSON.parse(readFileSync40(file, "utf8"));
@@ -86355,7 +86464,7 @@ function updateRequest(projectRoot, runId, patch) {
 }
 function listRequests(projectRoot) {
   const dir = requestsDir(projectRoot);
-  if (!existsSync38(dir))
+  if (!existsSync37(dir))
     return [];
   const out = [];
   for (const f of readdirSync14(dir)) {
@@ -86656,10 +86765,9 @@ async function listActions(projectRoot) {
   } catch {
     return [];
   }
-  const yamlFiles = files.filter((f) => f.endsWith(".yaml")).sort();
+  const yamlFiles = files.filter((f) => /\.ya?ml$/.test(f)).sort();
   const results = [];
-  for (const file of yamlFiles) {
-    const id = file.slice(0, -5);
+  for (const id of [...new Set(yamlFiles.map((file) => file.replace(/\.ya?ml$/, "")))]) {
     let action;
     try {
       action = loadAction(projectRoot, id);
@@ -89357,7 +89465,7 @@ trackedTool("cdp_record_test_save_as_action", 'Promote the in-memory recording (
   produces: external_exports.record(external_exports.union([external_exports.string(), external_exports.number(), external_exports.boolean()])).optional().describe('D1209 \u2014 state postconditions this action establishes when it runs cleanly. Flat map of primitive values for hybrid composition (e.g. { authenticated: true, route: "home" }). Optional. Values containing commas or newlines are not supported; use multiple keys instead.')
 }, createSaveAsActionHandler());
 trackedTool("cdp_repair_action", "Repair a learned action using a fresh snapshot from the exact authority-bound device and capability-bound native runner.", {
-  actionId: external_exports.string().describe("Action id matching <projectRoot>/.rn-agent/actions/<actionId>.yaml."),
+  actionId: external_exports.string().describe("Owned action id; resolves one .yaml or .yml file."),
   failedSelector: external_exports.string().describe(`The testID that the prior maestro_run reported as missing. Parse it from stderr like "Element with id 'X' not found" \u2192 X.`),
   projectRoot: external_exports.string().optional().describe("Override project root (default: process.cwd())."),
   threshold: external_exports.number().min(0).max(1).optional().describe("Fuzzy-match similarity threshold (0..1). Default 0.6. Lower if the screen has many similar testIDs and Levenshtein on the original is too strict."),
@@ -89369,9 +89477,9 @@ trackedTool("cdp_repair_action", "Repair a learned action using a fresh snapshot
 }, createRepairActionHandler());
 trackedTool(
   "cdp_run_action",
-  `Replay a learned action by id with end-to-end auto-repair. Loads the action from .rn-agent/actions/<actionId>.yaml, forwards the matching active session's exact device ID to Maestro, rejects mismatched direct runner/WDA evidence, and on a SELECTOR_NOT_FOUND failure automatically invokes cdp_repair_action and retries once. Appends a RunRecord to the sidecar with full auto-repair telemetry (passed/failed/refused/skipped + diff); its Maestro deviceId comes from direct runner evidence, never requested metadata. The repair attempt counts toward cdp_repair_action's 24h budget. Pass autoRepair=false to opt out of auto-repair (returns the raw maestro_run failure verbatim). forceReload defaults true: any human edit to the YAML since the agent's last write is acknowledged as the new baseline so downstream repair does not abort with STALE_TARGET (the right default for active composition). Pass forceReload=false for the strict "respect offline human edits" behavior: a successful replay still appends its RunRecord to the sidecar when only the tracked YAML mtime baseline is stale, while YAML-mutating promotion and repair stay refused. proofReplay=true is reserved for proof_capture rehearsal and requires autoRepair=false plus forceReload=false; it executes without RunRecord, promotion, YAML, sidecar, or DB persistence. The orchestrated home for the L3 self-healing loop \u2014 prefer this over invoking maestro_run + cdp_repair_action manually for any flow you intend to re-run on schedule. blindProbeMode provides per-call control of the proactive CDP/JS compatibility path: inherit (default) honors RN_BLIND_PROBE, allow explicitly enables it for this call, and forbid forces maestro-first for this call.`,
+  `Replay a learned action by id with end-to-end auto-repair. Loads the action from .rn-agent/actions/<actionId>.yaml or .yml, forwards the matching active session's exact device ID to Maestro, rejects mismatched direct runner/WDA evidence, and on a SELECTOR_NOT_FOUND failure automatically invokes cdp_repair_action and retries once. Appends a RunRecord to the sidecar with full auto-repair telemetry (passed/failed/refused/skipped + diff); its Maestro deviceId comes from direct runner evidence, never requested metadata. The repair attempt counts toward cdp_repair_action's 24h budget. Pass autoRepair=false to opt out of auto-repair (returns the raw maestro_run failure verbatim). forceReload defaults true: any human edit to the YAML since the agent's last write is acknowledged as the new baseline so downstream repair does not abort with STALE_TARGET (the right default for active composition). Pass forceReload=false for the strict "respect offline human edits" behavior: a successful replay still appends its RunRecord to the sidecar when only the tracked YAML mtime baseline is stale, while YAML-mutating promotion and repair stay refused. proofReplay=true is reserved for proof_capture rehearsal and requires autoRepair=false plus forceReload=false; it executes without RunRecord, promotion, YAML, sidecar, or DB persistence. The orchestrated home for the L3 self-healing loop \u2014 prefer this over invoking maestro_run + cdp_repair_action manually for any flow you intend to re-run on schedule. blindProbeMode provides per-call control of the proactive CDP/JS compatibility path: inherit (default) honors RN_BLIND_PROBE, allow explicitly enables it for this call, and forbid forces maestro-first for this call.`,
   {
-    actionId: external_exports.string().describe("Action id matching <projectRoot>/.rn-agent/actions/<actionId>.yaml."),
+    actionId: external_exports.string().describe("Owned action id; resolves one .yaml or .yml file."),
     projectRoot: external_exports.string().optional().describe("Override project root (default: process.cwd())."),
     platform: external_exports.enum(["ios", "android"]).optional().describe("Force a specific platform; otherwise auto-detected from the active device session."),
     appFile: external_exports.string().optional().describe("GH #705: path to the .app Maestro reinstalls from after a clearState uninstall. Normally omit it \u2014 an iOS clearState flow resolves the bundle from the session's attested install receipt, and the receipt is re-issued after the reinstall so later device_*/maestro_run calls keep working."),

@@ -18,7 +18,7 @@ import {
 import {
   actionReplayPreflight,
   isLearnedActionPath,
-  regexSelectorCapabilityRefusal,
+  replayCompatibilityPreflight,
 } from '../domain/action-engine-compat.js';
 import { parseM7Header } from '../domain/reusable-action.js';
 import { getActiveSession } from '../agent-device-wrapper.js';
@@ -673,7 +673,11 @@ export function createMaestroRunHandler(
           commands: validatedCommands,
           engineStatus,
         })
-      : regexSelectorCapabilityRefusal(validatedCommands);
+      : replayCompatibilityPreflight({
+          commands: validatedCommands,
+          engineStatus,
+          requireEnginePin: false,
+        });
     if (compatibilityRefusal) {
       return failResult(compatibilityRefusal, 'ENGINE_PIN_MISMATCH', {
         pin: engineStatus?.pin,

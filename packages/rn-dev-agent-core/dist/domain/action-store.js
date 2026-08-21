@@ -31,6 +31,20 @@ export function actionPathFor(projectRoot, actionId) {
     assertWithinDir(fileName, actionsDir);
     return join(actionsDir, fileName);
 }
+export function resolveActionPath(projectRoot, actionId) {
+    const yamlPath = actionPathFor(projectRoot, actionId);
+    const ymlPath = yamlPath.replace(/\.yaml$/, '.yml');
+    const yamlExists = existsSync(yamlPath);
+    const ymlExists = existsSync(ymlPath);
+    if (yamlExists && ymlExists) {
+        throw new Error(`Action ${actionId} is ambiguous because both ${actionId}.yaml and ${actionId}.yml exist; keep exactly one file before replay.`);
+    }
+    if (yamlExists)
+        return yamlPath;
+    if (ymlExists)
+        return ymlPath;
+    return null;
+}
 /**
  * Split a YAML file into (top-section before `---`, header comments
  * sitting above the first non-`#` content, body that follows). The body
@@ -138,8 +152,8 @@ export function joinYaml(parts) {
  * (no id/intent — required fields).
  */
 export function loadAction(projectRoot, actionId) {
-    const filePath = actionPathFor(projectRoot, actionId);
-    if (!existsSync(filePath))
+    const filePath = resolveActionPath(projectRoot, actionId);
+    if (!filePath)
         return null;
     const text = readFileSync(filePath, 'utf8');
     const metadata = parseM7Header(text, actionId);

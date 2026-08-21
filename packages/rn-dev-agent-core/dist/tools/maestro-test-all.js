@@ -11,7 +11,7 @@ import { buildMaestroFlow, parseAndValidateFlow, MaestroValidationError, } from 
 import { assembleMaestroArgs, executeMaestroAuthorityStages, MaestroStageExecutionError, nestedMaestroAuthorityCallbacks, planMaestroAuthorityStages, resolveMaestroFlowAppId, runFlowParked, } from './maestro-run.js';
 import { outputIndicatesFlowFailure } from '../domain/maestro-error-parser.js';
 import { exactPinRefusal, getEngineStatus, isOlderSdkInstallFailure, olderSdkInstallDiagnosis, } from '../domain/engine-pin.js';
-import { actionReplayPreflight, isLearnedActionPath, regexSelectorCapabilityRefusal, } from '../domain/action-engine-compat.js';
+import { isLearnedActionPath, replayCompatibilityPreflight, } from '../domain/action-engine-compat.js';
 import { parseM7Header } from '../domain/reusable-action.js';
 import { flowUsesClearState, resolveAppFileForClearState } from './resolve-ios-app-file.js';
 import { maestroAuthorityRefusal, sameDevice, verifyMaestroDeviceAuthority, } from '../domain/maestro-device-authority.js';
@@ -85,6 +85,72 @@ export function createMaestroTestAllHandler(deps = {}) {
         if (flows.length === 0) {
             return failResult(`No Maestro flows found in ${flowDir}. Generate flows with maestro_generate first.`);
         }
+        const preflightResults = [];
+        const preparedFlows = [];
+        for (const flow of flows) {
+            const name = flow.replace(flowDir + '/', '');
+            const start = now();
+            try {
+                const yamlText = readFileSync(flow, 'utf-8');
+                const parsed = parseAndValidateFlow(yamlText, {
+                    flowDir: dirname(flow),
+                    flowRoot: flowDir,
+                });
+                const flowId = name.replace(/\.ya?ml$/i, '');
+                const meta = parseM7Header(yamlText, flowId);
+                const requireEnginePin = meta !== null || isLearnedActionPath(flow);
+                const preflight = replayCompatibilityPreflight({
+                    enginePin: meta?.enginePin,
+                    commands: parsed.commands,
+                    engineStatus,
+                    requireEnginePin,
+                });
+                if (preflight)
+                    throw new Error(preflight);
+                planMaestroAuthorityStages(parsed.commands);
+                const parsedAppId = resolveMaestroFlowAppId(boundAppId, parsed.appId);
+                const canonical = buildMaestroFlow(parsedAppId !== undefined ? { appId: parsedAppId } : {}, parsed.commands);
+                const appFileResolution = resolveAppFile(platform, canonical, parsedAppId, undefined, {
+                    deviceId: requestedDeviceId,
+                });
+                if (!appFileResolution.ok)
+                    throw new Error(appFileResolution.error);
+                preparedFlows.push({
+                    name,
+                    commands: parsed.commands,
+                    appId: parsedAppId,
+                    canonical,
+                    appFile: appFileResolution.appFile,
+                    reinstallsApp: Boolean(appFileResolution.appFile) && flowUsesClearState(canonical),
+                });
+            }
+            catch (err) {
+                const reason = err instanceof MaestroValidationError
+                    ? `Refused by validator: ${err.message}`
+                    : err instanceof Error
+                        ? err.message
+                        : String(err);
+                preflightResults.push({
+                    name,
+                    passed: false,
+                    durationMs: now() - start,
+                    error: reason.slice(0, 300),
+                });
+            }
+        }
+        if (preflightResults.length > 0) {
+            return failResult(`Suite preflight refused ${preflightResults.length} of ${flows.length} flows before execution.`, {
+                total: flows.length,
+                executed: 0,
+                passed: 0,
+                failed: preflightResults.length,
+                platform,
+                flowDir,
+                runner: dispatch.runner,
+                requestedDeviceId: requestedDeviceId ?? null,
+                results: preflightResults,
+            });
+        }
         const timeout = args.timeoutPerFlow ?? 120_000;
         const managedAuthority = nestedMaestroAuthorityCallbacks(args);
         const claimOrigin = deps.claimNativeOrigin ?? managedAuthority.claimNativeOrigin;
@@ -96,93 +162,15 @@ export function createMaestroTestAllHandler(deps = {}) {
         const results = [];
         let passed = 0;
         let failed = 0;
-        for (const flow of flows) {
-            const name = flow.replace(flowDir + '/', '');
+        for (const prepared of preparedFlows) {
+            const { name } = prepared;
             const start = now();
-            // Phase 134.1 (deepsec CRITICAL #5): read + validate every
-            // discovered flow before execution. Auto-discovery is the highest-
-            // trust gap in the codebase: a malicious project file (or a
-            // prompt-injected save earlier in the session) lands here for
-            // replay otherwise. Write the canonical re-serialization to a temp
-            // file and execute that — never the on-disk YAML directly, so
-            // any inert metadata or duplicated headers can't sneak through.
-            let safeFlowFile;
-            let appFile;
-            let parsedCommands = [];
-            let parsedAppId;
-            let reinstallsApp = false;
-            try {
-                const yamlText = readFileSync(flow, 'utf-8');
-                const parsed = parseAndValidateFlow(yamlText, {
-                    flowDir: dirname(flow),
-                    flowRoot: flowDir,
-                });
-                const flowId = name.replace(/\.ya?ml$/i, '');
-                const meta = parseM7Header(yamlText, flowId);
-                const preflight = meta || isLearnedActionPath(flow)
-                    ? actionReplayPreflight({
-                        enginePin: meta?.enginePin,
-                        commands: parsed.commands,
-                        engineStatus,
-                    })
-                    : regexSelectorCapabilityRefusal(parsed.commands);
-                if (preflight) {
-                    results.push({
-                        name,
-                        passed: false,
-                        durationMs: now() - start,
-                        error: preflight.slice(0, 300),
-                    });
-                    failed++;
-                    if (args.stopOnFailure)
-                        break;
-                    continue;
-                }
-                planMaestroAuthorityStages(parsed.commands);
-                parsedCommands = parsed.commands;
-                parsedAppId = resolveMaestroFlowAppId(boundAppId, parsed.appId);
-                const canonical = buildMaestroFlow(parsedAppId !== undefined ? { appId: parsedAppId } : {}, parsed.commands);
-                safeFlowFile = join(tmpdir(), `rn-maestro-validated-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.yaml`);
-                writeFileSync(safeFlowFile, canonical, 'utf-8');
-                // GH#201 parity with maestro_run: an iOS clearState flow must reinstall
-                // the app, which maestro-runner can only do given --app-file. GH #705
-                // follow-up: the container must come from the authority-bound
-                // simulator, never generic `booted`.
-                const appFileResolution = resolveAppFile(platform, canonical, parsedAppId, undefined, {
-                    deviceId: requestedDeviceId,
-                });
-                if (!appFileResolution.ok) {
-                    results.push({
-                        name,
-                        passed: false,
-                        durationMs: now() - start,
-                        error: appFileResolution.error.slice(0, 300),
-                    });
-                    failed++;
-                    if (args.stopOnFailure)
-                        break;
-                    continue;
-                }
-                appFile = appFileResolution.appFile;
-                // GH #705 follow-up: only a clearState flow uninstalls and reinstalls;
-                // an --app-file carried by any other flow must not re-issue the receipt.
-                reinstallsApp = Boolean(appFile) && flowUsesClearState(canonical);
-            }
-            catch (err) {
-                const reason = err instanceof MaestroValidationError
-                    ? `Refused by validator: ${err.message}`
-                    : `Read/parse error: ${err.message}`;
-                results.push({
-                    name,
-                    passed: false,
-                    durationMs: now() - start,
-                    error: reason.slice(0, 300),
-                });
-                failed++;
-                if (args.stopOnFailure)
-                    break;
-                continue;
-            }
+            const safeFlowFile = join(tmpdir(), `rn-maestro-validated-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.yaml`);
+            writeFileSync(safeFlowFile, prepared.canonical, 'utf-8');
+            const parsedCommands = prepared.commands;
+            const parsedAppId = prepared.appId;
+            const appFile = prepared.appFile;
+            const reinstallsApp = prepared.reinstallsApp;
             let flowDispatch = dispatch;
             const runnerReportDir = createRunnerReportDir(flowDispatch.runner, 'rn-maestro-suite-report');
             const baseArgs = flowDispatch.buildArgs(platform, safeFlowFile, appFile, requestedDeviceId);

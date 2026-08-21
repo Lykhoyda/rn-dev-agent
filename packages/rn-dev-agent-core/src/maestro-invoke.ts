@@ -17,7 +17,7 @@ import {
   olderSdkInstallDiagnosis,
   type ReplayEngineStatus,
 } from './domain/engine-pin.js';
-import { regexSelectorCapabilityRefusal } from './domain/action-engine-compat.js';
+import { replayCompatibilityPreflight } from './domain/action-engine-compat.js';
 import { resolveAppFileForClearState } from './tools/resolve-ios-app-file.js';
 import { assembleMaestroArgs, runFlowParked } from './tools/maestro-run.js';
 import { getActiveSession } from './agent-device-wrapper.js';
@@ -130,7 +130,11 @@ export async function runMaestroInline(
   let headerAppId: string | undefined;
   try {
     const parsed = parseAndValidateFlow(yaml, { rejectHeader: true });
-    const selectorRefusal = regexSelectorCapabilityRefusal(parsed.commands);
+    const selectorRefusal = replayCompatibilityPreflight({
+      commands: parsed.commands,
+      engineStatus,
+      requireEnginePin: false,
+    });
     if (selectorRefusal) {
       return { passed: false, output: '', flowFile, error: selectorRefusal };
     }

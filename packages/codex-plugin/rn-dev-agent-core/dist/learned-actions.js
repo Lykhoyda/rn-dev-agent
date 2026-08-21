@@ -113,7 +113,7 @@ function scanFlows() {
 function replayHint(id, flowPath, params) {
   const paramObj = params.length > 0 ? `, params: { ${params.map((p) => `${p}: "..."`).join(", ")} }` : "";
   const actionsDir = path.dirname(flowPath);
-  const canonicalYaml = id !== null && path.basename(flowPath) === `${id}.yaml` && path.basename(actionsDir) === "actions" && path.basename(path.dirname(actionsDir)) === ".rn-agent";
+  const canonicalYaml = id !== null && path.basename(flowPath).replace(/\.ya?ml$/, "") === id && path.basename(actionsDir) === "actions" && path.basename(path.dirname(actionsDir)) === ".rn-agent";
   if (canonicalYaml) {
     const projectRoot = path.dirname(path.dirname(actionsDir));
     return `cdp_run_action({ actionId: "${id}", projectRoot: "${projectRoot}", blindProbeMode: "forbid"${paramObj} })`;

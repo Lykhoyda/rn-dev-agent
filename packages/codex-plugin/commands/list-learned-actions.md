@@ -27,7 +27,7 @@ The inventory includes:
 
 1. Legacy Claude feedback memories when they exist. Their presence is historical
    compatibility, not evidence that Codex owns a hidden memory surface.
-2. `.rn-agent/actions/*.yaml` discovered from the active workspace/test-app
+2. `.rn-agent/actions/*.yaml` and `*.yml` discovered from the active workspace/test-app
    locations, with action metadata and parameter requirements.
 3. `.rn-agent/skeleton.yaml` UI skeletons.
 4. Plugin workflow names when running in the plugin repository.
