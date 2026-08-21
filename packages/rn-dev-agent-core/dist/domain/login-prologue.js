@@ -43,24 +43,38 @@ function tokenMatches(expected, supplied) {
     const suppliedHash = createHash('sha256').update(supplied).digest();
     return timingSafeEqual(expectedHash, suppliedHash);
 }
-export function evaluateLoginPrologueGuard(input) {
+export function inspectLoginPrologueGuard(input) {
     const outcome = readLoginPrologueOutcome(input.binding);
-    if (outcome?.state !== LOGIN_PROLOGUE_BLOCKED || !input.mutation) {
-        return { allowed: true, override: false };
+    if (outcome?.state !== LOGIN_PROLOGUE_BLOCKED ||
+        !input.mutation ||
+        cleanupAllowed(input.tool, input.args)) {
+        return { blocked: false };
     }
-    if (cleanupAllowed(input.tool, input.args))
+    return {
+        blocked: true,
+        suppliedOverride: typeof input.args.supervisorOverrideToken === 'string'
+            ? input.args.supervisorOverrideToken
+            : undefined,
+    };
+}
+export function authorizeLoginSupervisorOverride(input) {
+    if (!tokenMatches(input.expectedOverrideToken, input.suppliedOverrideToken))
+        return null;
+    return { tool: input.tool, usedAt: (input.now ?? (() => new Date()))().toISOString() };
+}
+export function evaluateLoginPrologueGuard(input) {
+    const inspection = inspectLoginPrologueGuard(input);
+    if (!inspection.blocked)
         return { allowed: true, override: false };
-    const supplied = typeof input.args.supervisorOverrideToken === 'string'
-        ? input.args.supervisorOverrideToken
-        : undefined;
-    if (tokenMatches(input.expectedOverrideToken, supplied)) {
-        return {
-            allowed: true,
-            override: true,
-            audit: { tool: input.tool, usedAt: (input.now ?? (() => new Date()))().toISOString() },
-        };
-    }
-    return { allowed: false, suppliedOverride: supplied !== undefined };
+    const audit = authorizeLoginSupervisorOverride({
+        expectedOverrideToken: input.expectedOverrideToken,
+        suppliedOverrideToken: inspection.suppliedOverride,
+        tool: input.tool,
+        now: input.now,
+    });
+    return audit
+        ? { allowed: true, override: true, audit }
+        : { allowed: false, suppliedOverride: inspection.suppliedOverride !== undefined };
 }
 export function appendLoginOverrideAudit(outcome, audit) {
     return { ...outcome, overrides: [...(outcome.overrides ?? []), audit].slice(-20) };

@@ -12,6 +12,7 @@ import {
   createPinnedRunActionHandler as createRunActionHandler,
   createTmpProject,
 } from '../helpers/tmp-project.js';
+import { sealStrictRunAction } from '../../dist/tools/run-action.js';
 
 let project;
 
@@ -306,12 +307,13 @@ test('strict replay blocks selector failure without reactive CDP fallback', asyn
     },
   });
 
-  const result = await handler({
-    actionId: 'demo',
-    projectRoot: project.root,
-    autoRepair: false,
-    cdpFallbackMode: 'forbid',
-  });
+  const result = await handler(
+    sealStrictRunAction({
+      actionId: 'demo',
+      projectRoot: project.root,
+      autoRepair: false,
+    }),
+  );
   const env = JSON.parse(result.content[0].text);
 
   assert.equal(env.code, 'TESTID_NOT_FOUND');

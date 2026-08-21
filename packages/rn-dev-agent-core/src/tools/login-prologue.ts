@@ -8,7 +8,7 @@ import {
 } from '../domain/login-prologue.js';
 import type { RunRecord } from '../domain/reusable-action.js';
 import { failResult, okResult, type ToolResult } from '../utils.js';
-import type { RunActionArgs } from './run-action.js';
+import { sealStrictRunAction, type RunActionArgs } from './run-action.js';
 
 export type LoginPrologueArgs = Omit<RunActionArgs, 'actionId' | 'autoRepair' | 'forceReload'>;
 
@@ -120,9 +120,9 @@ export function createLoginPrologueHandler(deps: LoginPrologueDependencies) {
         forceReload: false,
         proofReplay: false,
         blindProbeMode: 'forbid',
-        cdpFallbackMode: 'forbid',
         trigger: args.trigger ?? 'agent',
       });
+      sealStrictRunAction(replayArgs);
 
       let replayResult: ToolResult;
       try {

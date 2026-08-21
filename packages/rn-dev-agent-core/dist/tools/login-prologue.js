@@ -2,6 +2,7 @@ import { listActions } from '../domain/action-inventory.js';
 import { loadAction } from '../domain/action-store.js';
 import { LOGIN_PROLOGUE_ALIAS, LOGIN_PROLOGUE_BLOCKED, } from '../domain/login-prologue.js';
 import { failResult, okResult } from '../utils.js';
+import { sealStrictRunAction } from './run-action.js';
 function parseEnvelope(result) {
     try {
         return JSON.parse(result.content[0]?.text ?? '{}');
@@ -74,9 +75,9 @@ export function createLoginPrologueHandler(deps) {
                 forceReload: false,
                 proofReplay: false,
                 blindProbeMode: 'forbid',
-                cdpFallbackMode: 'forbid',
                 trigger: args.trigger ?? 'agent',
             });
+            sealStrictRunAction(replayArgs);
             let replayResult;
             try {
                 replayResult = await measure('replay', () => deps.runAction(replayArgs));

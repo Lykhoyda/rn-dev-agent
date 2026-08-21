@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createLoginPrologueHandler } from '../../dist/tools/login-prologue.js';
+import { createRunActionHandler } from '../../dist/tools/run-action.js';
 import { failResult, okResult } from '../../dist/utils.js';
 import { appendRunRecordToSidecar } from '../helpers/action-state.ts';
 import { createTmpProject, fixtureYaml } from '../helpers/tmp-project.js';
@@ -80,32 +81,20 @@ test('login prologue resolves the exact alias and requires a fresh passing RunRe
   }
 
   assert.deepEqual(
-    seenArgs.map(
-      ({
-        actionId,
-        autoRepair,
-        forceReload,
-        proofReplay,
-        blindProbeMode,
-        cdpFallbackMode,
-        trigger,
-      }) => ({
-        actionId,
-        autoRepair,
-        forceReload,
-        proofReplay,
-        blindProbeMode,
-        cdpFallbackMode,
-        trigger,
-      }),
-    ),
+    seenArgs.map(({ actionId, autoRepair, forceReload, proofReplay, blindProbeMode, trigger }) => ({
+      actionId,
+      autoRepair,
+      forceReload,
+      proofReplay,
+      blindProbeMode,
+      trigger,
+    })),
     [1, 2].map(() => ({
       actionId: 'user-login',
       autoRepair: false,
       forceReload: false,
       proofReplay: false,
       blindProbeMode: 'forbid',
-      cdpFallbackMode: 'forbid',
       trigger: 'agent',
     })),
   );
@@ -136,6 +125,49 @@ test('login prologue preserves non-enumerable replay authority', async (t) => {
   const envelope = parse(await handler(args));
   assert.equal(envelope.ok, true);
   assert.equal(envelope.data.runRecord.runId, 'login-run-authoritative');
+});
+
+test('login prologue seals selector replay against every CDP fallback', async (t) => {
+  const project = createTmpProject();
+  t.after(() => project.cleanup());
+  seedLoginAction(project);
+  let replayDepsCalled = false;
+  const runAction = createRunActionHandler({
+    maestroRun: async () => ({
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify({
+            ok: false,
+            data: {
+              passed: false,
+              output: "Element with id 'fab-create-task' not found",
+              flowFile: 'user-login.yaml',
+              platform: 'ios',
+            },
+          }),
+        },
+      ],
+      isError: true,
+    }),
+    replayDeps: () => {
+      replayDepsCalled = true;
+      return {
+        treeFor: async () => ({ testID: 'fab-create-task', children: [] }),
+        pressByTestId: async () => {},
+        typeByTestId: async () => {},
+        launchApp: async () => {},
+        settle: async () => {},
+      };
+    },
+  });
+  const handler = createLoginPrologueHandler({ now: deterministicClock(), runAction });
+
+  const envelope = parse(await handler({ projectRoot: project.root }));
+
+  assert.equal(envelope.code, 'LOGIN_PROLOGUE_BLOCKED');
+  assert.equal(envelope.meta.loginPrologue.failure.code, 'TESTID_NOT_FOUND');
+  assert.equal(replayDepsCalled, false);
 });
 
 test('login prologue blocks when the exact user-login action is missing', async (t) => {

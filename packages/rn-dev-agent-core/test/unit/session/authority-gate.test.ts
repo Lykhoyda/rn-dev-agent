@@ -2745,6 +2745,42 @@ test('a login prologue transaction blocks before dispatch and stays blocked on t
   assert.equal(status.bindings.loginPrologue.failure.code, 'LOGIN_PROLOGUE_IN_PROGRESS');
 });
 
+test('login preflight failures replace stale passing authority before returning', async () => {
+  for (const failure of ['runner-drift', 'reconnect-timeout']) {
+    const { runtime, status } = fixture();
+    status.bindings.loginPrologue = loginOutcome('passed');
+    if (failure === 'runner-drift') status.bindings.runner = null;
+    let dispatched = false;
+    const gate = createAuthorityGate(runtime, {
+      probe: async ({ axis, phase }) => {
+        if (failure === 'reconnect-timeout' && phase === 'preflight' && axis === 'M') {
+          throw new SessionAuthorityError('RECONNECT_TIMEOUT', 'runtime did not reconnect');
+        }
+        return { axis, identity: `${axis}-identity` };
+      },
+    });
+
+    const result = await gate.wrap('cdp_login_prologue', async () => {
+      dispatched = true;
+      return okResult(loginOutcome('passed'));
+    })({});
+    const envelope = JSON.parse(result.content[0].text);
+
+    assert.equal(envelope.ok, false, failure);
+    assert.equal(dispatched, false, failure);
+    assert.equal(status.bindings.loginPrologue.state, 'LOGIN_PROLOGUE_BLOCKED', failure);
+    assert.equal(status.bindings.loginPrologue.failure.code, 'LOGIN_PROLOGUE_IN_PROGRESS', failure);
+
+    let mutationDispatched = false;
+    const mutation = await gate.wrap('cdp_evaluate', async () => {
+      mutationDispatched = true;
+      return okResult({});
+    })({ expression: 'mutate()' });
+    assert.equal(JSON.parse(mutation.content[0].text).code, 'LOGIN_PROLOGUE_BLOCKED', failure);
+    assert.equal(mutationDispatched, false, failure);
+  }
+});
+
 test('a supervisor token authorizes one blocked mutation and records a redacted audit', async () => {
   const { runtime, status } = fixture();
   status.bindings.loginPrologue = loginOutcome('LOGIN_PROLOGUE_BLOCKED', {

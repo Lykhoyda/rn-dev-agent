@@ -46,6 +46,14 @@ import { getWorkerAuthorityRuntime } from '../session/runtime.js';
 import { flowUsesClearState, resolveIosAppFile } from './resolve-ios-app-file.js';
 import { actionReplayPreflight } from '../domain/action-engine-compat.js';
 import { getEngineStatus, PINNED_RUNNER_DIAGNOSE_HINT, PINNED_RUNNER_INSTALL_HINT, } from '../domain/engine-pin.js';
+const strictRunActionPolicy = Symbol('strictRunActionPolicy');
+export function sealStrictRunAction(args) {
+    Object.defineProperty(args, strictRunActionPolicy, { value: true });
+    return args;
+}
+function usesStrictRunActionPolicy(args) {
+    return args[strictRunActionPolicy] === true;
+}
 /** GH #705: the session's attested install receipt, or null outside a session. */
 function boundInstallReceipt() {
     try {
@@ -411,9 +419,9 @@ export function createRunActionHandler(deps = {}) {
             // directly. Every branch fails open to the maestro-first path below.
             // Opt out globally with RN_BLIND_PROBE=0.
             let atRisk = null;
-            const cdpFallbackForbidden = args.cdpFallbackMode === 'forbid';
+            const strictExecutor = usesStrictRunActionPolicy(args);
             const inheritedBlindProbeDisabled = process.env.RN_BLIND_PROBE === '0' || process.env.RN_BLIND_PROBE === 'false';
-            const blindProbeDisabled = cdpFallbackForbidden ||
+            const blindProbeDisabled = strictExecutor ||
                 args.blindProbeMode === 'forbid' ||
                 (args.blindProbeMode !== 'allow' && inheritedBlindProbeDisabled);
             if (args.platform !== 'android') {
@@ -644,7 +652,7 @@ export function createRunActionHandler(deps = {}) {
             // usually just relaunched the app), and every skip records its reason —
             // a silent skip surfaced in the field as an unexplained UNKNOWN.
             let cdpJsFallback;
-            if (!cdpFallbackForbidden &&
+            if (!strictExecutor &&
                 (failure.kind === 'SELECTOR_NOT_FOUND' || failure.kind === 'UNKNOWN')) {
                 const candidate = getReplayDeps(args);
                 const replayDeps = candidate && (await claimBundleAuthority(args)) ? candidate : null;

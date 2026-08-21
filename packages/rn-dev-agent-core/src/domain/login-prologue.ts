@@ -84,6 +84,43 @@ export type LoginPrologueGuardDecision =
   | { allowed: true; override: true; audit: LoginOverrideAudit }
   | { allowed: false; suppliedOverride: boolean };
 
+export type LoginPrologueGuardInspection =
+  | { blocked: false }
+  | { blocked: true; suppliedOverride: string | undefined };
+
+export function inspectLoginPrologueGuard(input: {
+  binding: unknown;
+  tool: string;
+  args: Record<string, unknown>;
+  mutation: boolean;
+}): LoginPrologueGuardInspection {
+  const outcome = readLoginPrologueOutcome(input.binding);
+  if (
+    outcome?.state !== LOGIN_PROLOGUE_BLOCKED ||
+    !input.mutation ||
+    cleanupAllowed(input.tool, input.args)
+  ) {
+    return { blocked: false };
+  }
+  return {
+    blocked: true,
+    suppliedOverride:
+      typeof input.args.supervisorOverrideToken === 'string'
+        ? input.args.supervisorOverrideToken
+        : undefined,
+  };
+}
+
+export function authorizeLoginSupervisorOverride(input: {
+  expectedOverrideToken?: string;
+  suppliedOverrideToken?: string;
+  tool: string;
+  now?: () => Date;
+}): LoginOverrideAudit | null {
+  if (!tokenMatches(input.expectedOverrideToken, input.suppliedOverrideToken)) return null;
+  return { tool: input.tool, usedAt: (input.now ?? (() => new Date()))().toISOString() };
+}
+
 export function evaluateLoginPrologueGuard(input: {
   binding: unknown;
   tool: string;
@@ -92,24 +129,17 @@ export function evaluateLoginPrologueGuard(input: {
   expectedOverrideToken?: string;
   now?: () => Date;
 }): LoginPrologueGuardDecision {
-  const outcome = readLoginPrologueOutcome(input.binding);
-  if (outcome?.state !== LOGIN_PROLOGUE_BLOCKED || !input.mutation) {
-    return { allowed: true, override: false };
-  }
-  if (cleanupAllowed(input.tool, input.args)) return { allowed: true, override: false };
-
-  const supplied =
-    typeof input.args.supervisorOverrideToken === 'string'
-      ? input.args.supervisorOverrideToken
-      : undefined;
-  if (tokenMatches(input.expectedOverrideToken, supplied)) {
-    return {
-      allowed: true,
-      override: true,
-      audit: { tool: input.tool, usedAt: (input.now ?? (() => new Date()))().toISOString() },
-    };
-  }
-  return { allowed: false, suppliedOverride: supplied !== undefined };
+  const inspection = inspectLoginPrologueGuard(input);
+  if (!inspection.blocked) return { allowed: true, override: false };
+  const audit = authorizeLoginSupervisorOverride({
+    expectedOverrideToken: input.expectedOverrideToken,
+    suppliedOverrideToken: inspection.suppliedOverride,
+    tool: input.tool,
+    now: input.now,
+  });
+  return audit
+    ? { allowed: true, override: true, audit }
+    : { allowed: false, suppliedOverride: inspection.suppliedOverride !== undefined };
 }
 
 export function appendLoginOverrideAudit(

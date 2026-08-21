@@ -86,6 +86,19 @@ import {
   type ReplayEngineStatus,
 } from '../domain/engine-pin.js';
 
+const strictRunActionPolicy = Symbol('strictRunActionPolicy');
+
+type StrictRunActionArgs = RunActionArgs & { [strictRunActionPolicy]?: true };
+
+export function sealStrictRunAction(args: RunActionArgs): RunActionArgs {
+  Object.defineProperty(args, strictRunActionPolicy, { value: true });
+  return args;
+}
+
+function usesStrictRunActionPolicy(args: RunActionArgs): boolean {
+  return (args as StrictRunActionArgs)[strictRunActionPolicy] === true;
+}
+
 /** GH #705: the session's attested install receipt, or null outside a session. */
 function boundInstallReceipt(): { platform?: unknown; deviceId?: unknown; appId?: unknown } | null {
   try {
@@ -184,7 +197,6 @@ export interface RunActionArgs {
    * unchanged.
    */
   blindProbeMode?: 'inherit' | 'allow' | 'forbid';
-  cdpFallbackMode?: 'allow' | 'forbid';
 }
 
 interface MaestroTerminal {
@@ -663,11 +675,11 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
       // directly. Every branch fails open to the maestro-first path below.
       // Opt out globally with RN_BLIND_PROBE=0.
       let atRisk: BlindProbeAtRisk | null = null;
-      const cdpFallbackForbidden = args.cdpFallbackMode === 'forbid';
+      const strictExecutor = usesStrictRunActionPolicy(args);
       const inheritedBlindProbeDisabled =
         process.env.RN_BLIND_PROBE === '0' || process.env.RN_BLIND_PROBE === 'false';
       const blindProbeDisabled =
-        cdpFallbackForbidden ||
+        strictExecutor ||
         args.blindProbeMode === 'forbid' ||
         (args.blindProbeMode !== 'allow' && inheritedBlindProbeDisabled);
       if (args.platform !== 'android') {
@@ -923,7 +935,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
       // a silent skip surfaced in the field as an unexplained UNKNOWN.
       let cdpJsFallback: CdpJsFallbackSkip | undefined;
       if (
-        !cdpFallbackForbidden &&
+        !strictExecutor &&
         (failure.kind === 'SELECTOR_NOT_FOUND' || failure.kind === 'UNKNOWN')
       ) {
         const candidate = getReplayDeps(args);
