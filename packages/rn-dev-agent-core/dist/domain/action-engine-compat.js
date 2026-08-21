@@ -1,9 +1,9 @@
-import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync, } from 'node:fs';
+import { existsSync, lstatSync, readdirSync, realpathSync, } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { ACTION_ENGINE_PIN, MAESTRO_RUNNER_PIN, exactPinRefusal, findRegexTextSelectors, } from './engine-pin.js';
 import { parseAndValidateFlow, MaestroValidationError } from './maestro-validator.js';
 import { parseM7Header } from './reusable-action.js';
-import { commitMigratedActionText, splitYaml, joinYaml, resolveActionPath, } from './action-store.js';
+import { commitMigratedActionText, loadActionMigrationBaseline, splitYaml, joinYaml, resolveActionPath, } from './action-store.js';
 export function actionEnginePinRefusal(enginePin) {
     if (!enginePin) {
         return (`Action is not migrated to ${ACTION_ENGINE_PIN}. Run ` +
@@ -233,9 +233,9 @@ export function migrateLearnedActions(projectRoot) {
             });
             continue;
         }
-        let text;
+        let baseline;
         try {
-            text = readFileSync(path, 'utf8');
+            baseline = loadActionMigrationBaseline(path);
         }
         catch (err) {
             results.push({
@@ -247,6 +247,7 @@ export function migrateLearnedActions(projectRoot) {
             });
             continue;
         }
+        const text = baseline.yamlText;
         const meta = parseM7Header(text, id);
         if (!meta) {
             results.push({
@@ -275,7 +276,7 @@ export function migrateLearnedActions(projectRoot) {
         const updated = upsertEnginePinHeader(text);
         if (updated.changed) {
             try {
-                commitMigratedActionText(path, updated.text);
+                commitMigratedActionText(path, baseline, updated.text);
             }
             catch (err) {
                 results.push({

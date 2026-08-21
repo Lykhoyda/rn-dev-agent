@@ -93,8 +93,9 @@ node <package-root>/rn-dev-agent-core/dist/maestro-runner-pin.js diagnose --json
 node <package-root>/rn-dev-agent-core/dist/maestro-runner-pin.js migrate-actions --root "$APP_ROOT" --json
 ```
 
-Continue only when diagnosis reports `pinned-ok`, version `1.1.24`, provenance
-`pin-cache`, and every owned action is migrated or already pinned. Missing,
+Continue only when diagnosis reports `status: pinned-ok`, `installedVersion:
+1.1.24`, `pin: 1.1.24`, `provenance: pin-cache`, and every owned action is
+migrated or already pinned. Missing,
 older, newer, checksum-mismatched, unknown, unverified, unsupported, unreadable,
 or incompatible results are terminal setup failures. Setup uses Codex
 `AGENTS.md`, not Claude instruction files. Every AGENTS/scaffold/source/tsconfig

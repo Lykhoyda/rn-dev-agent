@@ -120,8 +120,9 @@ bash ${CLAUDE_PLUGIN_ROOT}/scripts/ensure-maestro-runner.sh
 node ${CLAUDE_PLUGIN_ROOT}/rn-dev-agent-core/dist/maestro-runner-pin.js diagnose --json
 ```
 
-Success requires `status: pinned-ok`, `version: 1.1.24`, `provenance: pin-cache`, and a
-`selectedPath` under `$RN_DEV_AGENT_RUNNER_CACHE` or `$HOME/.cache/rn-dev-agent/maestro-runner/1.1.24/bin/maestro-runner`.
+Success requires `status: pinned-ok`, `installedVersion: 1.1.24`, `pin: 1.1.24`,
+`provenance: pin-cache`, and a `selectedPath` under `$RN_DEV_AGENT_RUNNER_CACHE`
+or `$HOME/.cache/rn-dev-agent/maestro-runner/1.1.24/bin/maestro-runner`.
 
 Doctor rows — never silently accept another version:
 

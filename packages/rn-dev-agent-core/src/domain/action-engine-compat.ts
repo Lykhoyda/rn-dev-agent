@@ -1,7 +1,6 @@
 import {
   existsSync,
   lstatSync,
-  readFileSync,
   readdirSync,
   realpathSync,
 } from 'node:fs';
@@ -17,6 +16,7 @@ import { parseAndValidateFlow, MaestroValidationError } from './maestro-validato
 import { parseM7Header } from './reusable-action.js';
 import {
   commitMigratedActionText,
+  loadActionMigrationBaseline,
   splitYaml,
   joinYaml,
   resolveActionPath,
@@ -278,9 +278,9 @@ export function migrateLearnedActions(projectRoot: string): ActionMigrationResul
       });
       continue;
     }
-    let text: string;
+    let baseline: ReturnType<typeof loadActionMigrationBaseline>;
     try {
-      text = readFileSync(path, 'utf8');
+      baseline = loadActionMigrationBaseline(path);
     } catch (err) {
       results.push({
         id,
@@ -291,6 +291,7 @@ export function migrateLearnedActions(projectRoot: string): ActionMigrationResul
       });
       continue;
     }
+    const text = baseline.yamlText;
     const meta = parseM7Header(text, id);
     if (!meta) {
       results.push({
@@ -318,7 +319,7 @@ export function migrateLearnedActions(projectRoot: string): ActionMigrationResul
     const updated = upsertEnginePinHeader(text);
     if (updated.changed) {
       try {
-        commitMigratedActionText(path, updated.text);
+        commitMigratedActionText(path, baseline, updated.text);
       } catch (err) {
         results.push({
           id,

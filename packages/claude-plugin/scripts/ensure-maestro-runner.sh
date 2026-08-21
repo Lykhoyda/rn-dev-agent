@@ -198,19 +198,24 @@ if [ "${1:-}" = "--print-bin" ]; then
   exit 1
 fi
 
-LOCK_DIR="$RUNNER_CACHE_ROOT/.install-${MAESTRO_RUNNER_PIN_VERSION}.lock"
+LOCK_FILE="$RUNNER_CACHE_ROOT/.install-${MAESTRO_RUNNER_PIN_VERSION}.lock"
+RECLAIM_DIR="$RUNNER_CACHE_ROOT/.install-${MAESTRO_RUNNER_PIN_VERSION}.reclaim"
 LOCK_HELD=0
+LOCK_OWNER_FILE=""
 TEMP_DIR=""
 
 cleanup() {
   if [ -n "$TEMP_DIR" ]; then
     rm -rf "$TEMP_DIR"
   fi
-  if [ "$LOCK_HELD" = "1" ] && [ -d "$LOCK_DIR" ] && [ ! -L "$LOCK_DIR" ]; then
+  if [ -n "$LOCK_OWNER_FILE" ]; then
+    rm -f "$LOCK_OWNER_FILE"
+  fi
+  if [ "$LOCK_HELD" = "1" ] && [ -f "$LOCK_FILE" ] && [ ! -L "$LOCK_FILE" ]; then
     local owner
-    owner="$(sed -n '1p' "$LOCK_DIR/pid" 2>/dev/null || true)"
+    owner="$(sed -n '1p' "$LOCK_FILE" 2>/dev/null || true)"
     if [ "$owner" = "$$" ]; then
-      rm -rf "$LOCK_DIR"
+      rm -f "$LOCK_FILE"
     fi
   fi
 }
@@ -218,22 +223,76 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+lock_age_seconds() {
+  node -e 'const fs=require("node:fs"); try { const age=Math.max(0, Math.floor((Date.now()-fs.statSync(process.argv[1]).mtimeMs)/1000)); process.stdout.write(String(age)); } catch { process.stdout.write("0"); }' "$1"
+}
+
+reclaim_stale_lock() {
+  if ! mkdir "$RECLAIM_DIR" 2>/dev/null; then
+    if [ -d "$RECLAIM_DIR" ] && [ ! -L "$RECLAIM_DIR" ] && [ "$(lock_age_seconds "$RECLAIM_DIR")" -ge 10 ]; then
+      rmdir "$RECLAIM_DIR" 2>/dev/null || true
+    fi
+    return
+  fi
+  local owner="" age="0"
+  if [ -L "$LOCK_FILE" ]; then
+    rmdir "$RECLAIM_DIR"
+    return
+  fi
+  if [ -d "$LOCK_FILE" ]; then
+    owner="$(sed -n '1p' "$LOCK_FILE/pid" 2>/dev/null || true)"
+  elif [ -f "$LOCK_FILE" ]; then
+    owner="$(sed -n '1p' "$LOCK_FILE" 2>/dev/null || true)"
+  fi
+  if [[ "$owner" =~ ^[0-9]+$ ]] && ! kill -0 "$owner" 2>/dev/null; then
+    if [ -d "$LOCK_FILE" ]; then
+      rm -rf "$LOCK_FILE"
+    else
+      rm -f "$LOCK_FILE"
+    fi
+  elif [ -z "$owner" ]; then
+    age="$(lock_age_seconds "$LOCK_FILE")"
+    if [ "$age" -ge 5 ]; then
+      if [ -d "$LOCK_FILE" ]; then
+        rm -rf "$LOCK_FILE"
+      else
+        rm -f "$LOCK_FILE"
+      fi
+    fi
+  fi
+  rmdir "$RECLAIM_DIR"
+}
+
+try_claim_lock() {
+  node -e 'const fs=require("node:fs"); try { fs.linkSync(process.argv[1], process.argv[2]); } catch { process.exit(1); }' "$LOCK_OWNER_FILE" "$LOCK_FILE"
+}
+
 acquire_install_lock() {
   mkdir -p "$RUNNER_CACHE_ROOT"
-  local attempts=0 owner=""
-  while ! mkdir "$LOCK_DIR" 2>/dev/null; do
-    if [ -L "$LOCK_DIR" ]; then
-      echo "ERROR: refusing maestro-runner install lock symlink at $LOCK_DIR."
+  LOCK_OWNER_FILE="$(mktemp "$RUNNER_CACHE_ROOT/.install-owner.XXXXXX")"
+  if ! printf '%s\n' "$$" > "$LOCK_OWNER_FILE"; then
+    echo "ERROR: failed to create maestro-runner install lock owner record."
+    correction
+    exit 1
+  fi
+  local attempts=0
+  while ! try_claim_lock; do
+    if [ -L "$LOCK_FILE" ]; then
+      echo "ERROR: refusing maestro-runner install lock symlink at $LOCK_FILE."
       correction
       exit 1
     fi
-    owner="$(sed -n '1p' "$LOCK_DIR/pid" 2>/dev/null || true)"
-    if [[ "$owner" =~ ^[0-9]+$ ]] && ! kill -0 "$owner" 2>/dev/null; then
-      rm -rf "$LOCK_DIR"
-      continue
-    fi
+    reclaim_stale_lock
     attempts=$((attempts + 1))
-    if [ "$attempts" -ge 100 ]; then
+    if [ $((attempts % 10)) -eq 0 ] && bin_matches_pin; then
+      report_success
+      exit 0
+    fi
+    if [ "$attempts" -ge 900 ]; then
+      if bin_matches_pin; then
+        report_success
+        exit 0
+      fi
       echo "ERROR: timed out waiting for maestro-runner pin-cache install lock."
       correction
       exit 1
@@ -241,7 +300,8 @@ acquire_install_lock() {
     sleep 0.1
   done
   LOCK_HELD=1
-  printf '%s\n' "$$" > "$LOCK_DIR/pid"
+  rm -f "$LOCK_OWNER_FILE"
+  LOCK_OWNER_FILE=""
 }
 
 acquire_install_lock
@@ -274,7 +334,7 @@ DOWNLOAD_URL="${RN_DEV_AGENT_MAESTRO_DOWNLOAD_URL:-${DOWNLOAD_BASE}/${MAESTRO_RU
 echo "Installing maestro-runner $MAESTRO_RUNNER_PIN_VERSION into the session pin-cache..."
 echo "Destination: $PIN_DIR"
 
-TEMP_DIR="$(mktemp -d)"
+TEMP_DIR="$(mktemp -d "$RUNNER_CACHE_ROOT/.install-stage.XXXXXX")"
 
 if ! curl -fsSL --connect-timeout 10 --max-time 75 -o "$TEMP_DIR/$ARCHIVE" "$DOWNLOAD_URL"; then
   echo "ERROR: failed to download $DOWNLOAD_URL"

@@ -34,6 +34,10 @@ import { listActions } from '../../dist/domain/action-inventory.js';
 import { atomicWriter } from '../../dist/domain/atomic-writer.js';
 import { freshRuntimeState } from '../../dist/domain/reusable-action.js';
 import { sidecarPathFor } from '../../dist/domain/sidecar-io.js';
+import {
+  commitMigratedActionText,
+  loadActionMigrationBaseline,
+} from '../../dist/domain/action-store.js';
 import { runMaestroInline } from '../../dist/maestro-invoke.js';
 import { createTmpProject } from '../helpers/tmp-project.js';
 
@@ -196,6 +200,39 @@ test('migrateLearnedActions atomically rebaselines an existing action sidecar', 
   assert.equal(result?.status, 'migrated');
   assert.equal(nextState.revision, 7);
   assert.ok(nextState.lastSeenMtimeMs >= statSync(actionPath).mtimeMs);
+});
+
+test('migration commit refuses stale YAML and sidecar baselines', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-action-migrate-cas-'));
+  const dir = join(root, '.rn-agent', 'actions');
+  mkdirSync(dir, { recursive: true });
+  const actionPath = join(dir, 'checkout.yaml');
+  const source = actionYaml('checkout');
+  writeFileSync(actionPath, source, 'utf8');
+
+  const yamlBaseline = loadActionMigrationBaseline(actionPath);
+  const humanEdit = `${source}# human edit\n`;
+  writeFileSync(actionPath, humanEdit, 'utf8');
+  assert.throws(
+    () => commitMigratedActionText(actionPath, yamlBaseline, upsertEnginePinHeader(source).text),
+    /changed during migration/,
+  );
+  assert.equal(readFileSync(actionPath, 'utf8'), humanEdit);
+
+  writeFileSync(actionPath, source, 'utf8');
+  const sidecarPath = sidecarPathFor(actionPath);
+  mkdirSync(join(sidecarPath, '..'), { recursive: true });
+  const initialState = freshRuntimeState(() => new Date('2026-01-01T00:00:00Z'), 1);
+  writeFileSync(sidecarPath, `${JSON.stringify(initialState)}\n`, 'utf8');
+  const sidecarBaseline = loadActionMigrationBaseline(actionPath);
+  const concurrentState = { ...initialState, revision: 8 };
+  writeFileSync(sidecarPath, `${JSON.stringify(concurrentState)}\n`, 'utf8');
+  assert.throws(
+    () => commitMigratedActionText(actionPath, sidecarBaseline, upsertEnginePinHeader(source).text),
+    /changed during migration/,
+  );
+  assert.equal(JSON.parse(readFileSync(sidecarPath, 'utf8')).revision, 8);
+  assert.equal(readFileSync(actionPath, 'utf8'), source);
 });
 
 test('migrateLearnedActions preserves the previous YAML when its atomic write fails', (t) => {

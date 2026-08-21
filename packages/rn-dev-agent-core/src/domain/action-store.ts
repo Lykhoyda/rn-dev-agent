@@ -308,15 +308,51 @@ export class SaveActionPreconditionError extends Error {
   }
 }
 
+export interface ActionMigrationBaseline {
+  yamlText: string;
+  state: ReusableAction['state'];
+  sidecarExisted: boolean;
+}
+
+function migrationConflict(filePath: string): Error {
+  return new Error(`Action changed during migration: ${filePath}. Re-run migration.`);
+}
+
+function migrationBaselineMatches(
+  filePath: string,
+  baseline: ActionMigrationBaseline,
+): boolean {
+  try {
+    if (readFileSync(filePath, 'utf8') !== baseline.yamlText) return false;
+  } catch {
+    return false;
+  }
+  const sidecarPath = sidecarPathFor(filePath);
+  const sidecarExists = existsSync(sidecarPath);
+  if (sidecarExists !== baseline.sidecarExisted) return false;
+  return !sidecarExists || runtimeSidecarMatches(sidecarPath, baseline.state);
+}
+
+export function loadActionMigrationBaseline(filePath: string): ActionMigrationBaseline {
+  assertWritableActionFile(filePath);
+  const yamlText = readFileSync(filePath, 'utf8');
+  const sidecarExisted = existsSync(sidecarPathFor(filePath));
+  const state = loadOrInitSidecar(filePath);
+  const baseline = { yamlText, state, sidecarExisted };
+  if (!migrationBaselineMatches(filePath, baseline)) throw migrationConflict(filePath);
+  return baseline;
+}
+
 export function commitMigratedActionText(
   filePath: string,
+  baseline: ActionMigrationBaseline,
   yamlText: string,
 ): { filePath: string; sidecarPath: string } {
   assertWritableActionFile(filePath);
-  const state = loadOrInitSidecar(filePath);
+  if (!migrationBaselineMatches(filePath, baseline)) throw migrationConflict(filePath);
   const sidecarPath = sidecarPathFor(filePath);
-  const result = atomicWriter.pairWrite(filePath, yamlText, sidecarPath, state);
-  const nextState = { ...state, lastSeenMtimeMs: result.finalMtimeMs };
+  const result = atomicWriter.pairWrite(filePath, yamlText, sidecarPath, baseline.state);
+  const nextState = { ...baseline.state, lastSeenMtimeMs: result.finalMtimeMs };
   const metadata = parseM7Header(yamlText, basename(filePath).replace(/\.ya?ml$/i, ''));
   mirrorToDb({
     yamlFilePath: filePath,

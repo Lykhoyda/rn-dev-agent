@@ -9218,12 +9218,39 @@ function joinYaml(parts) {
     out.push(b);
   return out.join("\n");
 }
-function commitMigratedActionText(filePath, yamlText) {
-  assertWritableActionFile(filePath);
-  const state = loadOrInitSidecar(filePath);
+function migrationConflict(filePath) {
+  return new Error(`Action changed during migration: ${filePath}. Re-run migration.`);
+}
+function migrationBaselineMatches(filePath, baseline) {
+  try {
+    if (readFileSync6(filePath, "utf8") !== baseline.yamlText)
+      return false;
+  } catch {
+    return false;
+  }
   const sidecarPath = sidecarPathFor(filePath);
-  const result = atomicWriter.pairWrite(filePath, yamlText, sidecarPath, state);
-  const nextState = { ...state, lastSeenMtimeMs: result.finalMtimeMs };
+  const sidecarExists = existsSync6(sidecarPath);
+  if (sidecarExists !== baseline.sidecarExisted)
+    return false;
+  return !sidecarExists || runtimeSidecarMatches(sidecarPath, baseline.state);
+}
+function loadActionMigrationBaseline(filePath) {
+  assertWritableActionFile(filePath);
+  const yamlText = readFileSync6(filePath, "utf8");
+  const sidecarExisted = existsSync6(sidecarPathFor(filePath));
+  const state = loadOrInitSidecar(filePath);
+  const baseline = { yamlText, state, sidecarExisted };
+  if (!migrationBaselineMatches(filePath, baseline))
+    throw migrationConflict(filePath);
+  return baseline;
+}
+function commitMigratedActionText(filePath, baseline, yamlText) {
+  assertWritableActionFile(filePath);
+  if (!migrationBaselineMatches(filePath, baseline))
+    throw migrationConflict(filePath);
+  const sidecarPath = sidecarPathFor(filePath);
+  const result = atomicWriter.pairWrite(filePath, yamlText, sidecarPath, baseline.state);
+  const nextState = { ...baseline.state, lastSeenMtimeMs: result.finalMtimeMs };
   const metadata = parseM7Header(yamlText, basename4(filePath).replace(/\.ya?ml$/i, ""));
   mirrorToDb({
     yamlFilePath: filePath,
@@ -9235,6 +9262,25 @@ function commitMigratedActionText(filePath, yamlText) {
     }
   });
   return { filePath, sidecarPath };
+}
+function canonicalRuntimeJson(state) {
+  return JSON.stringify(state, (_key, value) => {
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      const record = value;
+      return Object.fromEntries(Object.keys(record).sort().map((k) => [k, record[k]]));
+    }
+    return value;
+  });
+}
+function runtimeSidecarMatches(sidecarPath, expected) {
+  let onDisk;
+  try {
+    onDisk = JSON.parse(readFileSync6(sidecarPath, "utf8"));
+  } catch {
+    return false;
+  }
+  const normalized = typeof onDisk?.lastSeenMtimeMs === "number" ? onDisk : { ...onDisk, lastSeenMtimeMs: expected.lastSeenMtimeMs };
+  return canonicalRuntimeJson(normalized) === canonicalRuntimeJson(expected);
 }
 function assertWritableActionFile(filePath) {
   const actionsDir = dirname8(filePath);
@@ -9258,7 +9304,7 @@ var init_action_store = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/domain/action-engine-compat.js
-import { existsSync as existsSync7, lstatSync as lstatSync5, readFileSync as readFileSync7, readdirSync as readdirSync4, realpathSync as realpathSync4 } from "node:fs";
+import { existsSync as existsSync7, lstatSync as lstatSync5, readdirSync as readdirSync4, realpathSync as realpathSync4 } from "node:fs";
 import { basename as basename5, dirname as dirname9, join as join9, resolve as resolve5 } from "node:path";
 function actionEnginePinRefusal(enginePin) {
   if (!enginePin) {
@@ -9472,9 +9518,9 @@ function migrateLearnedActions(projectRoot) {
       });
       continue;
     }
-    let text;
+    let baseline;
     try {
-      text = readFileSync7(path, "utf8");
+      baseline = loadActionMigrationBaseline(path);
     } catch (err) {
       results.push({
         id,
@@ -9485,6 +9531,7 @@ function migrateLearnedActions(projectRoot) {
       });
       continue;
     }
+    const text = baseline.yamlText;
     const meta = parseM7Header(text, id);
     if (!meta) {
       results.push({
@@ -9512,7 +9559,7 @@ function migrateLearnedActions(projectRoot) {
     const updated = upsertEnginePinHeader(text);
     if (updated.changed) {
       try {
-        commitMigratedActionText(path, updated.text);
+        commitMigratedActionText(path, baseline, updated.text);
       } catch (err) {
         results.push({
           id,
@@ -9569,7 +9616,7 @@ var init_keyboard_guard = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/util/secure-state-file.js
-import { readFileSync as readFileSync8, writeFileSync as writeFileSync3, unlinkSync as unlinkSync3, mkdirSync as mkdirSync7, renameSync as renameSync3, lstatSync as lstatSync6 } from "node:fs";
+import { readFileSync as readFileSync7, writeFileSync as writeFileSync3, unlinkSync as unlinkSync3, mkdirSync as mkdirSync7, renameSync as renameSync3, lstatSync as lstatSync6 } from "node:fs";
 import { join as join10, dirname as dirname10 } from "node:path";
 import { homedir as homedir3 } from "node:os";
 function getStateDir() {
@@ -9590,7 +9637,7 @@ function readJsonStateFile(path) {
     const stat = lstatSync6(path);
     if (stat.isSymbolicLink())
       return null;
-    return JSON.parse(readFileSync8(path, "utf8"));
+    return JSON.parse(readFileSync7(path, "utf8"));
   } catch {
     return null;
   }
@@ -9747,7 +9794,7 @@ var init_trusted_system_executable = __esm({
 // packages/rn-dev-agent-core/dist/session/process-birth.js
 import { execFileSync } from "node:child_process";
 import { createHash as createHash2 } from "node:crypto";
-import { closeSync as closeSync2, constants as constants2, existsSync as existsSync10, fstatSync as fstatSync2, lstatSync as lstatSync7, openSync as openSync2, readFileSync as readFileSync9, readSync, realpathSync as realpathSync5 } from "node:fs";
+import { closeSync as closeSync2, constants as constants2, existsSync as existsSync10, fstatSync as fstatSync2, lstatSync as lstatSync7, openSync as openSync2, readFileSync as readFileSync8, readSync, realpathSync as realpathSync5 } from "node:fs";
 import { dirname as dirname11, join as join12 } from "node:path";
 import { fileURLToPath } from "node:url";
 function defaultRun(command, args) {
@@ -9800,7 +9847,7 @@ function verifyDarwinProcessBirthHelper(dependencies) {
   const canonicalize = dependencies.canonicalize ?? realpathSync5;
   const metadata = dependencies.lstat ?? lstatSync7;
   const descriptorMetadata = dependencies.fstat ?? fstatSync2;
-  const readBinary = dependencies.readBinary ?? ((path) => readFileSync9(path));
+  const readBinary = dependencies.readBinary ?? ((path) => readFileSync8(path));
   const readDescriptor = dependencies.readDescriptor ?? ((fd2) => {
     const size = descriptorMetadata(fd2).size;
     const buffer = Buffer.alloc(size);
@@ -9872,7 +9919,7 @@ function probeRecordedProcessBirth(pid, dependencies) {
   if (!Number.isSafeInteger(pid) || pid <= 0)
     return { status: "unknown" };
   const platform = dependencies.platform ?? process.platform;
-  const read = dependencies.read ?? ((path) => readFileSync9(path, "utf8"));
+  const read = dependencies.read ?? ((path) => readFileSync8(path, "utf8"));
   const run = dependencies.run ?? defaultRun;
   const runVerifiedHelper = dependencies.runVerifiedHelper ?? defaultRunVerifiedHelper;
   try {
@@ -10318,14 +10365,14 @@ var init_declared_source_contract = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/nav-graph/storage.js
-import { readFileSync as readFileSync10, writeFileSync as writeFileSync4, existsSync as existsSync11, renameSync as renameSync4, readdirSync as readdirSync5, lstatSync as lstatSync8, mkdirSync as mkdirSync8, realpathSync as realpathSync6 } from "node:fs";
+import { readFileSync as readFileSync9, writeFileSync as writeFileSync4, existsSync as existsSync11, renameSync as renameSync4, readdirSync as readdirSync5, lstatSync as lstatSync8, mkdirSync as mkdirSync8, realpathSync as realpathSync6 } from "node:fs";
 import { join as join14, dirname as dirname12 } from "node:path";
 function isRnProject(dir) {
   const pkgPath = join14(dir, "package.json");
   if (!existsSync11(pkgPath))
     return false;
   try {
-    const pkg = JSON.parse(readFileSync10(pkgPath, "utf-8"));
+    const pkg = JSON.parse(readFileSync9(pkgPath, "utf-8"));
     const deps = { ...pkg.dependencies, ...pkg.devDependencies };
     return !!(deps["react-native"] || deps["expo"]);
   } catch {
@@ -10405,7 +10452,7 @@ function readProjectBundleId(projectRoot) {
   if (!existsSync11(appJsonPath))
     return null;
   try {
-    const raw = JSON.parse(readFileSync10(appJsonPath, "utf-8"));
+    const raw = JSON.parse(readFileSync9(appJsonPath, "utf-8"));
     const iosId = raw.expo?.ios?.bundleIdentifier ?? raw.ios?.bundleIdentifier;
     const androidId = raw.expo?.android?.package ?? raw.android?.package;
     if (typeof iosId === "string" && iosId.length > 0)
@@ -10599,7 +10646,7 @@ var init_sources = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/project-config.js
-import { existsSync as existsSync12, readFileSync as readFileSync11 } from "node:fs";
+import { existsSync as existsSync12, readFileSync as readFileSync10 } from "node:fs";
 import { join as join15 } from "node:path";
 function readAppId(projectRoot, platform) {
   for (const filename of ["app.json", "app.config.json"]) {
@@ -10607,7 +10654,7 @@ function readAppId(projectRoot, platform) {
     if (!existsSync12(p))
       continue;
     try {
-      const raw = JSON.parse(readFileSync11(p, "utf-8"));
+      const raw = JSON.parse(readFileSync10(p, "utf-8"));
       const expo = raw.expo ?? raw;
       const iosBundleId = expo?.ios?.bundleIdentifier;
       const androidPkg = expo?.android?.package;
@@ -10635,7 +10682,7 @@ function readExpoSlug() {
     if (!existsSync12(p))
       continue;
     try {
-      const raw = JSON.parse(readFileSync11(p, "utf-8"));
+      const raw = JSON.parse(readFileSync10(p, "utf-8"));
       return raw.expo?.slug ?? null;
     } catch {
       continue;
@@ -11256,7 +11303,7 @@ var init_maestro_device_authority = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/domain/maestro-runner-report.js
-import { existsSync as existsSync14, readFileSync as readFileSync12, rmSync as rmSync2 } from "node:fs";
+import { existsSync as existsSync14, readFileSync as readFileSync11, rmSync as rmSync2 } from "node:fs";
 import { tmpdir as tmpdir3 } from "node:os";
 import { join as join19 } from "node:path";
 function idsFrom(value, keys) {
@@ -11286,7 +11333,7 @@ function reportDeviceIds(reportDir) {
   if (!existsSync14(reportPath))
     return { ids: [], strength: "none" };
   try {
-    const report = JSON.parse(readFileSync12(reportPath, "utf8"));
+    const report = JSON.parse(readFileSync11(reportPath, "utf8"));
     const flows = Array.isArray(report.flows) ? report.flows : [];
     const devices = [report.device, ...flows.map((flow) => flow?.device)];
     const strong = [
@@ -11328,7 +11375,7 @@ function collectDirectRunnerEvidence(reportDir, output) {
     return evidence;
   try {
     evidence.output = `${output}
-${readFileSync12(logPath, "utf8")}`;
+${readFileSync11(logPath, "utf8")}`;
   } catch {
   }
   return evidence;
@@ -12355,7 +12402,7 @@ var init_tap_latency = __esm({
 // packages/rn-dev-agent-core/dist/runners/release-android-slot.js
 import { execFile as execFileCb10 } from "node:child_process";
 import { promisify as promisify13 } from "node:util";
-import { existsSync as existsSync15, readFileSync as readFileSync13, unlinkSync as unlinkSync4 } from "node:fs";
+import { existsSync as existsSync15, readFileSync as readFileSync12, unlinkSync as unlinkSync4 } from "node:fs";
 import { homedir as homedir5 } from "node:os";
 import { join as join21 } from "node:path";
 function isProtectedPid(pid, selfPid, parentPid) {
@@ -12374,7 +12421,7 @@ function defaultDeps() {
     resolveSerial: (deviceId) => deviceId ? ["-s", deviceId] : getAdbSerial(),
     readDaemonPid: () => {
       try {
-        const parsed = JSON.parse(readFileSync13(DAEMON_JSON2, "utf8"));
+        const parsed = JSON.parse(readFileSync12(DAEMON_JSON2, "utf8"));
         return typeof parsed.pid === "number" ? parsed.pid : null;
       } catch {
         return null;
@@ -12526,7 +12573,7 @@ var init_release_android_slot = __esm({
 // packages/rn-dev-agent-core/dist/tools/maestro-run.js
 import { execFile as execFileCb11 } from "node:child_process";
 import { promisify as promisify14 } from "node:util";
-import { existsSync as existsSync16, readFileSync as readFileSync14, writeFileSync as writeFileSync5 } from "node:fs";
+import { existsSync as existsSync16, readFileSync as readFileSync13, writeFileSync as writeFileSync5 } from "node:fs";
 import { tmpdir as tmpdir4 } from "node:os";
 import { basename as basename7, join as join22, dirname as dirname13 } from "node:path";
 async function runFlowParked(run, opts = {}) {
@@ -12752,7 +12799,7 @@ function createMaestroRunHandler(deps = {}) {
         return failResult(`Flow file not found: ${args.flowPath}`);
       }
       try {
-        rawYaml = readFileSync14(args.flowPath, "utf-8");
+        rawYaml = readFileSync13(args.flowPath, "utf-8");
       } catch (err) {
         return failResult(`Failed to read flow file: ${err.message}`);
       }
@@ -13170,7 +13217,7 @@ init_reusable_action();
 init_action_store();
 init_maestro_run();
 import { spawnSync as spawnSync2 } from "node:child_process";
-import { existsSync as existsSync17, readFileSync as readFileSync15, readdirSync as readdirSync7 } from "node:fs";
+import { existsSync as existsSync17, readFileSync as readFileSync14, readdirSync as readdirSync7 } from "node:fs";
 import { dirname as dirname14, join as join23, resolve as resolve6 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 var USAGE = "usage: maestro-runner-pin [diagnose|install|migrate-actions|verify-actions] [--json] [--root <app>]";
@@ -13274,7 +13321,7 @@ async function verifyActions(argv) {
       const actionPathRefusal = standaloneLearnedActionPathRefusal(file);
       if (actionPathRefusal)
         throw new Error(actionPathRefusal);
-      const text = readFileSync15(file, "utf8");
+      const text = readFileSync14(file, "utf8");
       const parsed = parseAndValidateFlow(text, { flowDir: dirname14(file), flowRoot: flowDir });
       const id = file.split("/").pop().replace(/\.ya?ml$/i, "");
       const meta = parseM7Header(text, id);

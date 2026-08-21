@@ -1,7 +1,15 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, readFileSync } from 'node:fs';
-import { spawnSync } from 'node:child_process';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  utimesSync,
+  writeFileSync,
+} from 'node:fs';
+import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -131,18 +139,99 @@ test('installer verifies the complete archive before replacing the live pin-cach
   mkdirSync(dirname(liveBin), { recursive: true });
   writeFileSync(liveBin, '#!/bin/sh\necho existing\n');
   chmodSync(liveBin, 0o755);
+  const toolDir = join(root, 'tools');
+  const outsideStageMarker = join(root, 'outside-stage');
+  const realMktemp = (process.env.PATH ?? '')
+    .split(':')
+    .map((entry) => join(entry, 'mktemp'))
+    .find(existsSync);
+  assert.ok(realMktemp);
+  mkdirSync(toolDir);
+  writeFileSync(
+    join(toolDir, 'mktemp'),
+    `#!/bin/sh\ncase "$*" in\n  *"$EXPECTED_STAGE_ROOT"*) exec "$REAL_MKTEMP" "$@" ;;\n  *) printf outside > "$OUTSIDE_STAGE_MARKER"; exit 97 ;;\nesac\n`,
+  );
+  chmodSync(join(toolDir, 'mktemp'), 0o755);
 
   const result = runEnsure({
     RN_DEV_AGENT_RUNNER_CACHE: cache,
     RN_DEV_AGENT_UNAME_S: 'Darwin',
     RN_DEV_AGENT_UNAME_M: 'arm64',
     RN_DEV_AGENT_MAESTRO_DOWNLOAD_URL: pathToFileURL(archive).href,
+    EXPECTED_STAGE_ROOT: join(cache, 'maestro-runner'),
+    OUTSIDE_STAGE_MARKER: outsideStageMarker,
+    REAL_MKTEMP: realMktemp,
+    PATH: `${toolDir}:${process.env.PATH ?? ''}`,
   });
 
   assert.notEqual(result.status, 0);
   assert.match(`${result.stdout}${result.stderr}`, /archive checksum/);
   assert.equal(readFileSync(liveBin, 'utf8'), '#!/bin/sh\necho existing\n');
   assert.throws(() => readFileSync(join(dirname(dirname(liveBin)), 'drivers', 'altered.apk')));
+  assert.equal(existsSync(outsideStageMarker), false);
+});
+
+test('installer reclaims a stale ownerless legacy lock', () => {
+  const cache = mkdtempSync(join(tmpdir(), 'mr-ownerless-lock-'));
+  const lock = join(
+    cache,
+    'maestro-runner',
+    `.install-${MAESTRO_RUNNER_PIN.version}.lock`,
+  );
+  mkdirSync(lock, { recursive: true });
+  const stale = new Date(Date.now() - 10_000);
+  utimesSync(lock, stale, stale);
+
+  const result = runEnsure({
+    RN_DEV_AGENT_RUNNER_CACHE: cache,
+    RN_DEV_AGENT_UNAME_S: 'Darwin',
+    RN_DEV_AGENT_UNAME_M: 'arm64',
+    RN_DEV_AGENT_MAESTRO_DOWNLOAD_URL: 'http://127.0.0.1:1/missing.tar.gz',
+  });
+
+  assert.notEqual(result.status, 0);
+  assert.match(`${result.stdout}${result.stderr}`, /failed to download/);
+  assert.doesNotMatch(`${result.stdout}${result.stderr}`, /timed out waiting/);
+  assert.equal(existsSync(lock), false);
+});
+
+test('installer waits beyond ten seconds for a healthy lock owner', async () => {
+  const cache = mkdtempSync(join(tmpdir(), 'mr-lock-wait-'));
+  const lock = join(
+    cache,
+    'maestro-runner',
+    `.install-${MAESTRO_RUNNER_PIN.version}.lock`,
+  );
+  mkdirSync(dirname(lock), { recursive: true });
+  const holder = spawn(
+    process.execPath,
+    [
+      '-e',
+      'const fs=require("node:fs"); const p=process.argv[1]; fs.writeFileSync(p, String(process.pid)); setTimeout(() => { fs.unlinkSync(p); }, 11000);',
+      lock,
+    ],
+    { stdio: 'ignore' },
+  );
+  for (let attempt = 0; attempt < 100 && !existsSync(lock); attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.equal(existsSync(lock), true);
+
+  const startedAt = Date.now();
+  const result = runEnsure({
+    RN_DEV_AGENT_RUNNER_CACHE: cache,
+    RN_DEV_AGENT_UNAME_S: 'Darwin',
+    RN_DEV_AGENT_UNAME_M: 'arm64',
+    RN_DEV_AGENT_MAESTRO_DOWNLOAD_URL: 'http://127.0.0.1:1/missing.tar.gz',
+  });
+  const elapsedMs = Date.now() - startedAt;
+  if (holder.exitCode === null) {
+    await new Promise<void>((resolve) => holder.once('exit', () => resolve()));
+  }
+
+  assert.ok(elapsedMs >= 10_000);
+  assert.match(`${result.stdout}${result.stderr}`, /failed to download/);
+  assert.doesNotMatch(`${result.stdout}${result.stderr}`, /timed out waiting/);
 });
 
 test('pin manifest owns checksums for every supported release archive', () => {
