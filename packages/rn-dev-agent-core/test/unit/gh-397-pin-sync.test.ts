@@ -40,3 +40,19 @@ test('gh-397: darwin-arm64 sha256 agrees between engine-pin.ts and installer', (
   );
   assert.equal(sh, ts);
 });
+
+test('gh-397: remaining platform sha256 values agree with the installer', () => {
+  const pairs: Array<[string, string, string]> = [
+    ['darwin-x64', /'darwin-x64':\s*'([0-9a-f]{64})'/, 'MAESTRO_RUNNER_PIN_SHA256_DARWIN_X64'],
+    ['linux-x64', /'linux-x64':\s*'([0-9a-f]{64})'/, 'MAESTRO_RUNNER_PIN_SHA256_LINUX_X64'],
+    ['linux-arm64', /'linux-arm64':\s*'([0-9a-f]{64})'/, 'MAESTRO_RUNNER_PIN_SHA256_LINUX_ARM64'],
+  ];
+  for (const [platform, tsRe, shName] of pairs) {
+    const ts = extract(join(BRIDGE_ROOT, 'src', 'domain', 'engine-pin.ts'), tsRe);
+    const sh = extract(
+      join(REPO_ROOT, 'scripts', 'ensure-maestro-runner.sh'),
+      new RegExp(`${shName}="([0-9a-f]{64})"`),
+    );
+    assert.equal(sh, ts, platform);
+  }
+});

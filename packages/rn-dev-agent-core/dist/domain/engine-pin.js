@@ -7,28 +7,22 @@
 //   2. Run the committed action corpus (cdp_run_e2e_suite) on iOS AND Android.
 //   3. Reconcile knownQuirks (retest each listed quirk; add/remove entries).
 //   4. Update version + sha256 here AND in ensure-maestro-runner.sh; add a changeset.
-import { execFile as execFileCb, spawnSync } from 'node:child_process';
+import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
-import { getMaestroRunnerPath } from '../maestro-invoke.js';
+import { existsSync, readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 const execFile = promisify(execFileCb);
 export const MAESTRO_RUNNER_PIN = {
-    version: '1.0.9',
+    version: '1.1.24',
     sha256: {
-        'darwin-arm64': '7d3777a67f8cc3d5e3927f498ddda8a56c424a10158f7cd4fa494ecc3ed97923',
+        'darwin-arm64': '170f12521de83322823dd5fc0ce16e48abeba9952cdbb242670592566c2fd1f3',
+        'darwin-x64': 'af7f5ea044afc72ea780c835f05b32203e443d2e26d310a864bfb2bc84959bf6',
+        'linux-x64': 'e9bdef6f08f855ca1a884f99b54a519a1eae0a342917181a53eb414a5b00d6d8',
+        'linux-arm64': '8d8a6483ad04da2109636b7192398750657801b8a8d512688d1be3b033a105b8',
     },
     knownQuirks: [
-        {
-            id: 'android-hidekeyboard-noop',
-            ref: 'B223 / #369',
-            note: 'hideKeyboard reports pass in ~5ms on Android; keyboard stays up',
-        },
-        {
-            id: 'requires-adb-on-ios',
-            ref: 'B59',
-            note: 'requires adb in PATH even with --platform ios',
-        },
         {
             id: 'android-pre-o-unsupported',
             ref: 'GH #741',
@@ -36,6 +30,8 @@ export const MAESTRO_RUNNER_PIN = {
         },
     ],
 };
+export const ACTION_ENGINE_PIN = `maestro-runner@${MAESTRO_RUNNER_PIN.version}`;
+export const PINNED_RUNNER_INSTALL_HINT = `bash \${CLAUDE_PLUGIN_ROOT:-<plugin-root>}/scripts/ensure-maestro-runner.sh`;
 // GH #741: the pinned engine's bundled appium-uiautomator2-server APK declares
 // minSdk 26, so pre-O devices reject it with INSTALL_FAILED_OLDER_SDK.
 export const MAESTRO_RUNNER_MIN_ANDROID_API = 26;
@@ -103,13 +99,45 @@ export function classifyEnginePin(detected, platformKey) {
         return 'checksum-mismatch';
     return 'pinned-ok';
 }
-export function buildReplayEngineStatus(cls, version, cliPresent) {
-    const engine = cls === 'not-installed' ? (cliPresent ? 'maestro-cli' : 'none') : 'maestro-runner';
+export function pinCacheRoot(home = homedir()) {
+    const override = process.env.RN_DEV_AGENT_RUNNER_CACHE;
+    const base = override && override.length > 0 ? override : join(home, '.cache', 'rn-dev-agent');
+    return join(base, 'maestro-runner', MAESTRO_RUNNER_PIN.version);
+}
+export function pinnedRunnerBinPath(home) {
+    return join(pinCacheRoot(home), 'bin', 'maestro-runner');
+}
+export function getMaestroRunnerPath() {
+    const path = pinnedRunnerBinPath();
+    return existsSync(path) ? path : null;
+}
+export function nodePlatformKey(platform = process.platform, arch = process.arch) {
+    return `${platform}-${arch}`;
+}
+export function pinArchiveCoords(platformKey) {
+    switch (platformKey) {
+        case 'darwin-arm64':
+            return { os: 'darwin', arch: 'arm64' };
+        case 'darwin-x64':
+            return { os: 'darwin', arch: 'amd64' };
+        case 'linux-x64':
+            return { os: 'linux', arch: 'amd64' };
+        case 'linux-arm64':
+            return { os: 'linux', arch: 'arm64' };
+        default:
+            return null;
+    }
+}
+export function buildReplayEngineStatus(cls, version, _cliPresent, extras = {}) {
+    // Ambient Maestro CLI is never a session engine. Missing pin-cache → none.
+    const engine = cls === 'not-installed' ? 'none' : 'maestro-runner';
     return {
         engine,
         version,
         pin: { pinned: MAESTRO_RUNNER_PIN.version, status: cls },
         quirks: MAESTRO_RUNNER_PIN.knownQuirks.map((q) => q.id),
+        selectedPath: extras.selectedPath ?? null,
+        provenance: extras.provenance ?? (cls === 'not-installed' ? 'none' : 'pin-cache'),
     };
 }
 export function enginePinCaveat(status) {
@@ -175,13 +203,56 @@ export function strictPinRefusal(status, envValue) {
     const strict = envValue === '1' || envValue === 'true';
     if (!strict || !status)
         return null;
-    // Strict mode refuses PROVEN divergence only — 'unverified' (no hash shipped
-    // for this platform / hashing failed) and 'unknown-version' (detection gap)
-    // never refuse, or strict-mode users without a manifest hash could never run.
     const cls = status.pin.status;
     if (cls !== 'drift-newer' && cls !== 'drift-older' && cls !== 'checksum-mismatch')
         return null;
     return `maestro_run refused: RN_ENGINE_PIN_STRICT is set and the engine pin status is ${cls} (installed ${status.version ?? 'unknown'}, pinned ${status.pin.pinned}). Reinstall the pin via ensure-maestro-runner.sh, or unset RN_ENGINE_PIN_STRICT.`;
+}
+export function pinCorrection(status, platformKey = nodePlatformKey()) {
+    const cls = status.pin.status;
+    const pinned = status.pin.pinned;
+    const installed = status.version ?? 'unknown';
+    const install = `Reinstall exactly ${pinned} via ${PINNED_RUNNER_INSTALL_HINT} (session pin-cache; do not use PATH or brew maestro).`;
+    if (pinArchiveCoords(platformKey) === null) {
+        return (`maestro-runner is unsupported on ${platformKey}. Supported platforms: darwin-arm64, darwin-x64, ` +
+            `linux-x64, linux-arm64. ${install}`);
+    }
+    switch (cls) {
+        case 'not-installed':
+            return `Session maestro-runner ${pinned} is not installed. ${install}`;
+        case 'drift-older':
+            return `Session maestro-runner ${installed} is older than the required pin ${pinned}. ${install}`;
+        case 'drift-newer':
+            return `Session maestro-runner ${installed} is newer than the required pin ${pinned}. ${install}`;
+        case 'checksum-mismatch':
+            return `Session maestro-runner reports ${pinned} but the binary checksum does not match the pin manifest. ${install}`;
+        case 'unknown-version':
+            return `Session maestro-runner version could not be read. ${install}`;
+        case 'unverified':
+            return `Session maestro-runner ${installed} could not be checksum-verified on ${platformKey}. ${install}`;
+        case 'pinned-ok':
+            return `Session maestro-runner ${pinned} is selected from the pin-cache.`;
+    }
+}
+export function exactPinRefusal(status, platformKey = nodePlatformKey()) {
+    if (!status) {
+        return `maestro_run refused: session runner ${MAESTRO_RUNNER_PIN.version} could not be detected. ${pinCorrection(buildReplayEngineStatus('not-installed', null, false), platformKey)}`;
+    }
+    if (status.pin.status === 'pinned-ok')
+        return null;
+    return `maestro_run refused: ${pinCorrection(status, platformKey)}`;
+}
+export function doctorPinnedRunner(status, platformKey = nodePlatformKey()) {
+    const ok = status.pin.status === 'pinned-ok';
+    return {
+        ok,
+        status: status.pin.status,
+        pinned: status.pin.pinned,
+        installedVersion: status.version,
+        selectedPath: status.selectedPath ?? null,
+        provenance: status.provenance ?? (status.pin.status === 'not-installed' ? 'none' : 'pin-cache'),
+        correction: ok ? null : pinCorrection(status, platformKey),
+    };
 }
 let cachedStatus = null;
 export function _resetEngineStatusForTest() {
@@ -189,10 +260,6 @@ export function _resetEngineStatusForTest() {
 }
 export function _setEngineStatusForTest(s) {
     cachedStatus = Promise.resolve(s);
-}
-function defaultCliPresent() {
-    const r = spawnSync('which', ['maestro'], { encoding: 'utf8', timeout: 2000 });
-    return r.status === 0 && r.stdout.trim().length > 0;
 }
 async function defaultExecVersion(bin) {
     const { stdout, stderr } = await execFile(bin, ['--version'], {
@@ -204,20 +271,14 @@ async function defaultExecVersion(bin) {
 function defaultHashFile(bin) {
     return createHash('sha256').update(readFileSync(bin)).digest('hex');
 }
-function safeBool(fn) {
-    try {
-        return fn();
-    }
-    catch {
-        return false;
-    }
-}
 async function detect(resolvers) {
     const binPath = (resolvers.binPath ?? getMaestroRunnerPath)();
-    const cliPresent = safeBool(resolvers.cliPresent ?? defaultCliPresent);
-    const platformKey = resolvers.platformKey ?? `${process.platform}-${process.arch}`;
+    const platformKey = resolvers.platformKey ?? nodePlatformKey();
     if (!binPath) {
-        return buildReplayEngineStatus('not-installed', null, cliPresent);
+        return buildReplayEngineStatus('not-installed', null, false, {
+            selectedPath: null,
+            provenance: 'none',
+        });
     }
     let version = null;
     try {
@@ -235,7 +296,10 @@ async function detect(resolvers) {
         sha256 = null;
     }
     const cls = classifyEnginePin({ installed: true, version, sha256 }, platformKey);
-    return buildReplayEngineStatus(cls, version, cliPresent);
+    return buildReplayEngineStatus(cls, version, false, {
+        selectedPath: binPath,
+        provenance: 'pin-cache',
+    });
 }
 // Single-flight, process-wide: concurrent callers (cdp_status, maestro_run)
 // share one detection promise. `resolvers` exists ONLY for tests, which must

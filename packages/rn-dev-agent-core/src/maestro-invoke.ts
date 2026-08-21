@@ -1,6 +1,6 @@
 import { existsSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { homedir, tmpdir } from 'node:os';
+import { tmpdir } from 'node:os';
 import { resolveBundleId, readExpoSlug } from './project-config.js';
 import {
   buildMaestroFlow,
@@ -88,10 +88,7 @@ export function maestroRefusalResult(
   });
 }
 
-export function getMaestroRunnerPath(): string | null {
-  const path = join(homedir(), '.maestro-runner', 'bin', 'maestro-runner');
-  return existsSync(path) ? path : null;
-}
+export { getMaestroRunnerPath } from './domain/engine-pin.js';
 
 export async function runMaestroInline(
   yaml: string,

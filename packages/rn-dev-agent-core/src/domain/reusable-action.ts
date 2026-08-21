@@ -156,6 +156,8 @@ export interface M7Metadata {
    * the drift checks.
    */
   expectedRouteSequence?: string[];
+  /** `maestro-runner@<semver>`; replay refuses any other value. */
+  enginePin?: string;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -537,7 +539,8 @@ export function parseM7Header(yamlText: string, fallbackId?: string): M7Metadata
         key === 'status' ||
         key === 'appId' ||
         key === 'createdAt' ||
-        key === 'author'
+        key === 'author' ||
+        key === 'enginePin'
       ) {
         meta[key] = raw;
       }
@@ -564,6 +567,7 @@ export function parseM7Header(yamlText: string, fallbackId?: string): M7Metadata
     author: meta.author as ActionAuthor | undefined,
     produces: meta.produces as Record<string, string | number | boolean> | undefined,
     expectedRouteSequence: meta.expectedRouteSequence as string[] | undefined,
+    enginePin: meta.enginePin as string | undefined,
   };
 }
 
@@ -614,7 +618,8 @@ export function serializeM7Header(metadata: M7Metadata): string {
   if (typeof metadata.mutates === 'boolean') {
     lines.push(`# mutates: ${metadata.mutates}`);
   }
-  lines.push(`# status: ${stripNewlines(metadata.status)}`);
+  if (metadata.status) lines.push(`# status: ${stripNewlines(metadata.status)}`);
+  if (metadata.enginePin) lines.push(`# enginePin: ${stripNewlines(metadata.enginePin)}`);
   if (metadata.params && metadata.params.length) {
     lines.push(`# params: [${metadata.params.map(stripNewlines).join(', ')}]`);
   }

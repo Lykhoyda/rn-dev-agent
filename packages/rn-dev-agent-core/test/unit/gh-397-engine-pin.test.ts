@@ -17,11 +17,10 @@ const KEY = 'darwin-arm64';
 const PIN_HASH = MAESTRO_RUNNER_PIN.sha256[KEY] as string;
 
 test('gh-397: pin constant matches the tested engine', () => {
-  assert.equal(MAESTRO_RUNNER_PIN.version, '1.0.9');
+  assert.equal(MAESTRO_RUNNER_PIN.version, '1.1.24');
   assert.match(PIN_HASH, /^[0-9a-f]{64}$/);
   const ids = MAESTRO_RUNNER_PIN.knownQuirks.map((q) => q.id);
-  assert.ok(ids.includes('android-hidekeyboard-noop'));
-  assert.ok(ids.includes('requires-adb-on-ios'));
+  assert.deepEqual(ids, ['android-pre-o-unsupported']);
 });
 
 test('gh-397: compareVersions is numeric per segment', () => {
@@ -39,17 +38,17 @@ test('gh-397: classification truth table', () => {
   });
   assert.equal(classifyEnginePin(d(null, null, false), KEY), 'not-installed');
   assert.equal(classifyEnginePin(d(null, PIN_HASH), KEY), 'unknown-version');
-  assert.equal(classifyEnginePin(d('1.1.0', 'f'.repeat(64)), KEY), 'drift-newer');
+  assert.equal(classifyEnginePin(d('1.2.0', 'f'.repeat(64)), KEY), 'drift-newer');
   assert.equal(classifyEnginePin(d('1.0.8', 'f'.repeat(64)), KEY), 'drift-older');
-  assert.equal(classifyEnginePin(d('1.0.9', 'f'.repeat(64)), KEY), 'checksum-mismatch');
-  assert.equal(classifyEnginePin(d('1.0.9', PIN_HASH), KEY), 'pinned-ok');
+  assert.equal(classifyEnginePin(d('1.1.24', 'f'.repeat(64)), KEY), 'checksum-mismatch');
+  assert.equal(classifyEnginePin(d('1.1.24', PIN_HASH), KEY), 'pinned-ok');
   assert.equal(
-    classifyEnginePin(d('1.0.9', 'f'.repeat(64)), 'linux-x64'),
+    classifyEnginePin(d('1.1.24', 'f'.repeat(64)), 'win32-x64'),
     'unverified',
     'no manifest hash for this platform — pinned-ok must mean version AND hash verified',
   );
   assert.equal(
-    classifyEnginePin(d('1.0.9', null), KEY),
+    classifyEnginePin(d('1.1.24', null), KEY),
     'unverified',
     'expected hash exists but hashing failed — must not claim pinned-ok',
   );
@@ -58,28 +57,28 @@ test('gh-397: classification truth table', () => {
     'unknown-version',
     'malformed version must not compare equal via NaN',
   );
-  assert.equal(classifyEnginePin(d('1.0.9-beta', PIN_HASH), KEY), 'unknown-version');
+  assert.equal(classifyEnginePin(d('1.1.24-beta', PIN_HASH), KEY), 'unknown-version');
 });
 
 test('gh-397: buildReplayEngineStatus picks engine + carries quirk ids', () => {
-  const ok = buildReplayEngineStatus('pinned-ok', '1.0.9', true);
+  const ok = buildReplayEngineStatus('pinned-ok', '1.1.24', true);
   assert.equal(ok.engine, 'maestro-runner');
-  assert.deepEqual(ok.pin, { pinned: '1.0.9', status: 'pinned-ok' });
-  assert.ok(ok.quirks.includes('android-hidekeyboard-noop'));
-  assert.equal(buildReplayEngineStatus('not-installed', null, true).engine, 'maestro-cli');
+  assert.deepEqual(ok.pin, { pinned: '1.1.24', status: 'pinned-ok' });
+  assert.ok(ok.quirks.includes('android-pre-o-unsupported'));
+  assert.equal(buildReplayEngineStatus('not-installed', null, true).engine, 'none');
   assert.equal(buildReplayEngineStatus('not-installed', null, false).engine, 'none');
 });
 
 test('gh-397: enginePinCaveat only fires on drift/checksum states', () => {
-  assert.equal(enginePinCaveat(buildReplayEngineStatus('pinned-ok', '1.0.9', true)), null);
+  assert.equal(enginePinCaveat(buildReplayEngineStatus('pinned-ok', '1.1.24', true)), null);
   assert.equal(enginePinCaveat(buildReplayEngineStatus('not-installed', null, true)), null);
   assert.equal(enginePinCaveat(buildReplayEngineStatus('unknown-version', null, true)), null);
-  const drift = enginePinCaveat(buildReplayEngineStatus('drift-newer', '1.1.0', true));
+  const drift = enginePinCaveat(buildReplayEngineStatus('drift-newer', '1.2.0', true));
   assert.ok(drift !== null);
-  assert.match(drift, /1\.1\.0/);
-  assert.match(drift, /1\.0\.9/);
+  assert.match(drift, /1\.2\.0/);
+  assert.match(drift, /1\.1\.24/);
   assert.match(drift, /untested/i);
-  const bad = enginePinCaveat(buildReplayEngineStatus('checksum-mismatch', '1.0.9', true));
+  const bad = enginePinCaveat(buildReplayEngineStatus('checksum-mismatch', '1.1.24', true));
   assert.ok(bad !== null);
   assert.match(bad, /checksum/i);
 });
@@ -91,7 +90,7 @@ test('gh-397: getEngineStatus detects via injected resolvers and caches', async 
     binPath: () => '/fake/maestro-runner',
     execVersion: async () => {
       execCalls++;
-      return 'maestro-runner 1.0.9\n  Commit:  c25dc55';
+      return 'maestro-runner 1.1.24\n  Commit:  9728809';
     },
     hashFile: () => PIN_HASH,
     cliPresent: () => false,
@@ -99,7 +98,7 @@ test('gh-397: getEngineStatus detects via injected resolvers and caches', async 
   };
   const s1 = await getEngineStatus(resolvers);
   assert.equal(s1.pin.status, 'pinned-ok');
-  assert.equal(s1.version, '1.0.9');
+  assert.equal(s1.version, '1.1.24');
   const s2 = await getEngineStatus(resolvers);
   assert.equal(execCalls, 1, 'second call must hit the cache');
   assert.equal(s2, s1);

@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { okResult, failResult, warnResult } from '../utils.js';
 import { getActiveSession } from '../agent-device-wrapper.js';
 import { findProjectRoot } from '../nav-graph/storage.js';
-import { chooseMaestroDispatch, shouldWarnFallback, flowContainsHideKeyboard, } from './maestro-dispatch.js';
+import { chooseMaestroDispatch, shouldWarnFallback } from './maestro-dispatch.js';
 import { buildMaestroFlow, parseAndValidateFlow, MaestroValidationError, } from '../domain/maestro-validator.js';
 import { assembleMaestroArgs, executeMaestroAuthorityStages, MaestroStageExecutionError, nestedMaestroAuthorityCallbacks, planMaestroAuthorityStages, resolveMaestroFlowAppId, runFlowParked, } from './maestro-run.js';
 import { outputIndicatesFlowFailure } from '../domain/maestro-error-parser.js';
@@ -91,9 +91,6 @@ export function createMaestroTestAllHandler(deps = {}) {
         const results = [];
         let passed = 0;
         let failed = 0;
-        // GH #356/B223: surfaced once if any Android flow needed hideKeyboard but
-        // the Maestro CLI was unavailable, so it ran on maestro-runner (no-op).
-        let keyboardCaveat = null;
         for (const flow of flows) {
             const name = flow.replace(flowDir + '/', '');
             const start = now();
@@ -106,7 +103,6 @@ export function createMaestroTestAllHandler(deps = {}) {
             // any inert metadata or duplicated headers can't sneak through.
             let safeFlowFile;
             let appFile;
-            let flowHasHideKeyboard = false;
             let parsedCommands = [];
             let parsedAppId;
             let reinstallsApp = false;
@@ -116,7 +112,6 @@ export function createMaestroTestAllHandler(deps = {}) {
                 planMaestroAuthorityStages(parsed.commands);
                 parsedCommands = parsed.commands;
                 parsedAppId = resolveMaestroFlowAppId(boundAppId, parsed.appId);
-                flowHasHideKeyboard = flowContainsHideKeyboard(parsed.commands);
                 const canonical = buildMaestroFlow(parsedAppId !== undefined ? { appId: parsedAppId } : {}, parsed.commands);
                 safeFlowFile = join(tmpdir(), `rn-maestro-validated-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.yaml`);
                 writeFileSync(safeFlowFile, canonical, 'utf-8');
@@ -159,18 +154,7 @@ export function createMaestroTestAllHandler(deps = {}) {
                     break;
                 continue;
             }
-            // GH #356/B223: Android flows that use hideKeyboard must run via the
-            // official Maestro CLI (maestro-runner no-ops hideKeyboard on Android).
-            // Re-route per flow; fall back to the base dispatch if re-selection errors.
             let flowDispatch = dispatch;
-            if (platform === 'android' && flowHasHideKeyboard) {
-                const rerouted = selectDispatch({ platform, flowHasHideKeyboard: true });
-                if (!('error' in rerouted)) {
-                    flowDispatch = rerouted;
-                    if (rerouted.degradedReason)
-                        keyboardCaveat ??= rerouted.degradedReason;
-                }
-            }
             const runnerReportDir = createRunnerReportDir(flowDispatch.runner, 'rn-maestro-suite-report');
             const baseArgs = flowDispatch.buildArgs(platform, safeFlowFile, appFile, requestedDeviceId);
             const finalArgs = assembleMaestroArgs(baseArgs, runnerReportArgs(runnerReportDir));
@@ -302,7 +286,7 @@ export function createMaestroTestAllHandler(deps = {}) {
         }
         // GH #356/B223: surface the base dispatch's fallback reason, or (if any
         // Android hideKeyboard flow had to degrade to maestro-runner) the keyboard caveat.
-        const batchCaveat = dispatch.fallbackReason ?? keyboardCaveat;
+        const batchCaveat = dispatch.fallbackReason;
         const summary = {
             total: flows.length,
             executed: results.length,

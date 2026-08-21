@@ -263,6 +263,16 @@ test('Phase127 serializeM7Header: stable order, all fields', () => {
   assert.match(out, /# appId: com\.foo\.app/);
 });
 
+test('serializeM7Header emits enginePin when present', () => {
+  const out = serializeM7Header({
+    id: 'x',
+    intent: 'y',
+    status: 'active',
+    enginePin: 'maestro-runner@1.1.24',
+  });
+  assert.match(out, /# enginePin: maestro-runner@1\.1\.24/);
+});
+
 test('Phase127 serializeM7Header: omits absent optional fields', () => {
   const meta = { id: 'x', intent: 'y', status: 'experimental' };
   const out = serializeM7Header(meta);

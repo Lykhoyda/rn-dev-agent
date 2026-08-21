@@ -145,6 +145,7 @@ test('M7 Maestro: metadata header emits id/intent/tags/mutates/status', () => {
   assert.match(out, /# tags: \[tasks, wizard\]/);
   assert.match(out, /# mutates: true/);
   assert.match(out, /# status: active/);
+  assert.match(out, /# enginePin: maestro-runner@1\.1\.24/);
 });
 
 test('M7 Maestro: omitted metadata fields are not emitted', () => {

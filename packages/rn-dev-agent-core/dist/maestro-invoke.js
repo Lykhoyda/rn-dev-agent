@@ -1,6 +1,6 @@
-import { existsSync, writeFileSync } from 'node:fs';
+import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { homedir, tmpdir } from 'node:os';
+import { tmpdir } from 'node:os';
 import { resolveBundleId, readExpoSlug } from './project-config.js';
 import { buildMaestroFlow, parseAndValidateFlow, isValidBundleId, MaestroValidationError, } from './domain/maestro-validator.js';
 import { chooseMaestroDispatch } from './tools/maestro-dispatch.js';
@@ -35,10 +35,7 @@ export function maestroRefusalResult(result, fallbackMessage, meta) {
         ...(result.cleanupRefusal ? { cleanupRefusal: result.cleanupRefusal } : {}),
     });
 }
-export function getMaestroRunnerPath() {
-    const path = join(homedir(), '.maestro-runner', 'bin', 'maestro-runner');
-    return existsSync(path) ? path : null;
-}
+export { getMaestroRunnerPath } from './domain/engine-pin.js';
 export async function runMaestroInline(yaml, opts, dependencies = {}) {
     const dispatch = (dependencies.chooseDispatch ?? chooseMaestroDispatch)({
         platform: opts.platform,

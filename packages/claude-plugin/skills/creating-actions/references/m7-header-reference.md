@@ -31,6 +31,7 @@ The `appId: <bundle>` + `---` **top section** above the comments is Maestro's ow
 | `author` | optional | `auto` \| `human` \| `imported` | Provenance: `auto` = emitted by the recorder pipeline (`cdp_record_test_save_as_action`); `human` = hand-authored YAML (including agent-direct-authored); `imported` = landed via import. Drives diff-noise expectations and trust. |
 | `produces` | optional | `{ key: value, ... }` single line, primitive values, no commas/newlines inside values | State postconditions a clean run establishes (e.g. `{ authenticated: true, route: home }`). Enables hybrid composition: an agent needing that state replays this action as a prologue. |
 | `expectedRouteSequence` | optional | `[Route1, Route2]` | Ordered route names the flow walks (from `cdp_nav_graph` / nav events). Enables structural drift detection: a live route off this sequence reclassifies `SELECTOR_NOT_FOUND` as `ROUTE_DRIFT`, which correctly refuses fuzzy selector repair. |
+| `enginePin` | required for replay | `maestro-runner@1.1.24` | Session pin the action was migrated or recorded against. `cdp_run_action` refuses any other value, including a missing field. Migrate with `maestro-runner-pin.js migrate-actions`. Regex text selectors are also refused before any UI mutation. |
 
 ## Lifecycle transitions (enforced in code — do not hand-set)
 

@@ -11669,10 +11669,39 @@ var init_maestro_validator = __esm({
   }
 });
 
+// packages/rn-dev-agent-core/dist/domain/engine-pin.js
+import { execFile as execFileCb2 } from "node:child_process";
+import { promisify as promisify3 } from "node:util";
+var execFile3, MAESTRO_RUNNER_PIN, ACTION_ENGINE_PIN;
+var init_engine_pin = __esm({
+  "packages/rn-dev-agent-core/dist/domain/engine-pin.js"() {
+    "use strict";
+    execFile3 = promisify3(execFileCb2);
+    MAESTRO_RUNNER_PIN = {
+      version: "1.1.24",
+      sha256: {
+        "darwin-arm64": "170f12521de83322823dd5fc0ce16e48abeba9952cdbb242670592566c2fd1f3",
+        "darwin-x64": "af7f5ea044afc72ea780c835f05b32203e443d2e26d310a864bfb2bc84959bf6",
+        "linux-x64": "e9bdef6f08f855ca1a884f99b54a519a1eae0a342917181a53eb414a5b00d6d8",
+        "linux-arm64": "8d8a6483ad04da2109636b7192398750657801b8a8d512688d1be3b033a105b8"
+      },
+      knownQuirks: [
+        {
+          id: "android-pre-o-unsupported",
+          ref: "GH #741",
+          note: "bundled UiAutomator2 server APK declares minSdk 26; API 23-25 installs fail with INSTALL_FAILED_OLDER_SDK"
+        }
+      ]
+    };
+    ACTION_ENGINE_PIN = `maestro-runner@${MAESTRO_RUNNER_PIN.version}`;
+  }
+});
+
 // packages/rn-dev-agent-core/dist/tools/maestro-dispatch.js
 var init_maestro_dispatch = __esm({
   "packages/rn-dev-agent-core/dist/tools/maestro-dispatch.js"() {
     "use strict";
+    init_engine_pin();
   }
 });
 
@@ -11693,22 +11722,95 @@ var init_maestro_error_parser = __esm({
   }
 });
 
-// packages/rn-dev-agent-core/dist/domain/engine-pin.js
-import { execFile as execFileCb2, spawnSync as spawnSync2 } from "node:child_process";
-import { promisify as promisify3 } from "node:util";
-var execFile3;
-var init_engine_pin = __esm({
-  "packages/rn-dev-agent-core/dist/domain/engine-pin.js"() {
-    "use strict";
-    init_maestro_invoke();
-    execFile3 = promisify3(execFileCb2);
-  }
-});
-
 // packages/rn-dev-agent-core/dist/tools/resolve-ios-app-file.js
 var init_resolve_ios_app_file = __esm({
   "packages/rn-dev-agent-core/dist/tools/resolve-ios-app-file.js"() {
     "use strict";
+  }
+});
+
+// packages/rn-dev-agent-core/dist/domain/reusable-action.js
+var init_reusable_action = __esm({
+  "packages/rn-dev-agent-core/dist/domain/reusable-action.js"() {
+    "use strict";
+  }
+});
+
+// packages/rn-dev-agent-core/dist/session/runtime-paths.js
+var init_runtime_paths2 = __esm({
+  "packages/rn-dev-agent-core/dist/session/runtime-paths.js"() {
+    "use strict";
+  }
+});
+
+// packages/rn-dev-agent-core/dist/domain/sidecar-io.js
+var init_sidecar_io = __esm({
+  "packages/rn-dev-agent-core/dist/domain/sidecar-io.js"() {
+    "use strict";
+    init_reusable_action();
+    init_runtime_paths2();
+  }
+});
+
+// packages/rn-dev-agent-core/dist/domain/atomic-writer.js
+var ORPHAN_MAX_AGE_MS;
+var init_atomic_writer = __esm({
+  "packages/rn-dev-agent-core/dist/domain/atomic-writer.js"() {
+    "use strict";
+    ORPHAN_MAX_AGE_MS = 5 * 60 * 1e3;
+  }
+});
+
+// packages/rn-dev-agent-core/dist/domain/path-safety.js
+var init_path_safety = __esm({
+  "packages/rn-dev-agent-core/dist/domain/path-safety.js"() {
+    "use strict";
+  }
+});
+
+// packages/rn-dev-agent-core/dist/domain/action-db.js
+import { createRequire as createRequire2 } from "node:module";
+var _require;
+var init_action_db = __esm({
+  "packages/rn-dev-agent-core/dist/domain/action-db.js"() {
+    "use strict";
+    init_runtime_paths2();
+    _require = createRequire2(import.meta.url);
+  }
+});
+
+// packages/rn-dev-agent-core/dist/domain/action-state-store.js
+var init_action_state_store = __esm({
+  "packages/rn-dev-agent-core/dist/domain/action-state-store.js"() {
+    "use strict";
+    init_logger();
+    init_action_db();
+    init_sidecar_io();
+  }
+});
+
+// packages/rn-dev-agent-core/dist/domain/action-store.js
+var init_action_store = __esm({
+  "packages/rn-dev-agent-core/dist/domain/action-store.js"() {
+    "use strict";
+    init_reusable_action();
+    init_sidecar_io();
+    init_atomic_writer();
+    init_path_safety();
+    init_action_state_store();
+  }
+});
+
+// packages/rn-dev-agent-core/dist/domain/action-engine-compat.js
+var ENGINE_PIN_LINE;
+var init_action_engine_compat = __esm({
+  "packages/rn-dev-agent-core/dist/domain/action-engine-compat.js"() {
+    "use strict";
+    init_engine_pin();
+    init_maestro_validator();
+    init_reusable_action();
+    init_action_store();
+    ENGINE_PIN_LINE = new RegExp(`^#\\s*enginePin\\s*:\\s*.+$`);
   }
 });
 
@@ -12042,6 +12144,7 @@ var init_maestro_run = __esm({
     "use strict";
     init_utils();
     init_engine_pin();
+    init_action_engine_compat();
     init_agent_device_wrapper();
     init_project_config();
     init_maestro_dispatch();
@@ -12319,6 +12422,7 @@ var init_maestro_invoke = __esm({
     init_device_arbiter();
     init_authority_gate();
     init_utils();
+    init_engine_pin();
   }
 });
 

@@ -60,13 +60,13 @@ test('gh-750: drifted runner refuses regex-selector flows with a typed message',
   const refusal = driftedRegexSelectorRefusal(drifted, [{ tapOn: '.*Getsafe.*http://.*' }]);
   assert.ok(refusal);
   assert.match(refusal, /1\.1\.20/);
-  assert.match(refusal, /1\.0\.9/);
+  assert.match(refusal, /1\.1\.24/);
   assert.match(refusal, /CONTAINS/);
   assert.match(refusal, /\.\*Getsafe\.\*/);
 });
 
 test('gh-750: pinned runner and literal-only flows replay without refusal', () => {
-  const pinned = buildReplayEngineStatus('pinned-ok', '1.0.9', false);
+  const pinned = buildReplayEngineStatus('pinned-ok', '1.1.24', false);
   const drifted = buildReplayEngineStatus('drift-newer', '1.1.20', false);
   assert.equal(driftedRegexSelectorRefusal(pinned, [{ tapOn: '.*regex.*' }]), null);
   assert.equal(driftedRegexSelectorRefusal(drifted, [{ tapOn: 'Continue' }]), null);

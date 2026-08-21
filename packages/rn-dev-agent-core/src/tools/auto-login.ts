@@ -2,7 +2,6 @@ import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { existsSync, readFileSync, writeFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { homedir } from 'node:os';
 import type { CDPClient } from '../cdp-client.js';
 import { findProjectRoot } from '../nav-graph/storage.js';
 import { getActiveSession } from '../agent-device-wrapper.js';
@@ -14,6 +13,7 @@ import {
   MaestroValidationError,
 } from '../domain/maestro-validator.js';
 import { runFlowParked } from './maestro-run.js';
+import { exactPinRefusal, getEngineStatus, getMaestroRunnerPath } from '../domain/engine-pin.js';
 
 const execFile = promisify(execFileCb);
 
@@ -232,13 +232,18 @@ export async function handleAutoLogin(
   const wrapperPath = '/tmp/rn-auto-login-wrapper.yaml';
   writeFileSync(wrapperPath, wrapperContent, 'utf-8');
 
-  const runnerPath = join(homedir(), '.maestro-runner', 'bin', 'maestro-runner');
-  if (!existsSync(runnerPath)) {
+  const runnerPath = getMaestroRunnerPath();
+  if (!runnerPath) {
     return {
       loggedIn: false,
       reason:
-        'maestro-runner not found. Install with: curl -fsSL https://open.devicelab.dev/install/maestro-runner | bash',
+        exactPinRefusal(await getEngineStatus().catch(() => null)) ??
+        'Session maestro-runner pin is not installed.',
     };
+  }
+  const pinRefusal = exactPinRefusal(await getEngineStatus().catch(() => null));
+  if (pinRefusal) {
+    return { loggedIn: false, reason: pinRefusal };
   }
 
   try {

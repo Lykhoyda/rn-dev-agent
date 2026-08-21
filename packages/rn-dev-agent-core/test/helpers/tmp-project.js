@@ -54,6 +54,15 @@ export function createTmpProject() {
      * with the YAML's actual mtime AFTER write.
      */
     seedAction(id, yamlText, state) {
+      if (!/#\s*enginePin\s*:/.test(yamlText)) {
+        yamlText = yamlText.replace(
+          /(#\s*status\s*:\s*.+)$/m,
+          `$1\n# enginePin: maestro-runner@1.1.24`,
+        );
+        if (!/#\s*enginePin\s*:/.test(yamlText)) {
+          yamlText = `${yamlText.replace(/\s*$/, '')}\n# enginePin: maestro-runner@1.1.24\n`;
+        }
+      }
       const yamlPath = join(actionsDir, `${id}.yaml`);
       const statePath = join(stateDir, `${id}.state.json`);
       writeFileSync(yamlPath, yamlText, 'utf8');
@@ -134,6 +143,7 @@ export function fixtureYaml({
     `# tags: [${tags.join(', ')}]`,
     '# mutates: false',
     `# status: ${status}`,
+    '# enginePin: maestro-runner@1.1.24',
     '',
     '- launchApp',
     tapLines,

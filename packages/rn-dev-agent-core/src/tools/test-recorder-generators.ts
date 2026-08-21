@@ -6,6 +6,7 @@
 
 import { stringify as yamlStringify } from 'yaml';
 import type { RecordedEvent } from './test-recorder.js';
+import { ACTION_ENGINE_PIN } from '../domain/engine-pin.js';
 
 /**
  * CDP-013: serialise a user-controlled string as a single-line YAML scalar.
@@ -56,6 +57,7 @@ function metaPairs(opts: GenerateOpts): MetaPair[] {
   }
   if (typeof opts.mutates === 'boolean') out.push(['mutates', String(opts.mutates)]);
   if (opts.status) out.push(['status', stripNewlines(opts.status)]);
+  if (opts.id && opts.intent) out.push(['enginePin', ACTION_ENGINE_PIN]);
   if (opts.produces && Object.keys(opts.produces).length > 0) {
     // Phase 134.1 (deepsec CRITICAL #6): keys MUST also pass through
     // stripNewlines, or a crafted key like `user.id\n- runScript: ...`

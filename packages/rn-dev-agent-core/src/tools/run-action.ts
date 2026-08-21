@@ -76,6 +76,14 @@ import {
 } from '../session/authority-gate.js';
 import { getWorkerAuthorityRuntime } from '../session/runtime.js';
 import { flowUsesClearState, resolveIosAppFile } from './resolve-ios-app-file.js';
+import { parseAndValidateFlow } from '../domain/maestro-validator.js';
+import { actionReplayPreflight } from '../domain/action-engine-compat.js';
+import {
+  buildReplayEngineStatus,
+  getEngineStatus,
+  MAESTRO_RUNNER_PIN,
+  type ReplayEngineStatus,
+} from '../domain/engine-pin.js';
 
 /** GH #705: the session's attested install receipt, or null outside a session. */
 function boundInstallReceipt(): { platform?: unknown; deviceId?: unknown; appId?: unknown } | null {
@@ -419,6 +427,7 @@ export interface RunActionDeps {
   /** GH #705: the session's attested install receipt, for appFile auto-resolution. */
   installReceipt?: () => { platform?: unknown; deviceId?: unknown; appId?: unknown } | null;
   resolveAppFile?: (appId: string, deviceId: string) => string | null;
+  engineStatus?: () => Promise<ReplayEngineStatus | null>;
 }
 
 /** GH #423: why the CDP/JS fallback did not replay — surfaced in failure meta. */
@@ -473,6 +482,15 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
   const resolveAppFile =
     deps.resolveAppFile ??
     ((appId: string, deviceId: string) => resolveIosAppFile(appId, { deviceId }));
+  const resolveEngineStatus =
+    deps.engineStatus ??
+    (process.env.NODE_TEST_CONTEXT
+      ? async () =>
+          buildReplayEngineStatus('pinned-ok', MAESTRO_RUNNER_PIN.version, false, {
+            selectedPath: '/test/pin-cache/maestro-runner/bin/maestro-runner',
+            provenance: 'pin-cache',
+          })
+      : () => getEngineStatus().catch(() => null));
   return async (args: RunActionArgs): Promise<ToolResult> => {
     if (!args.actionId || typeof args.actionId !== 'string') {
       return failResult('cdp_run_action requires actionId', 'BAD_FILENAME');
@@ -511,6 +529,28 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
     // get the strict Phase 129 "respect external edits" behavior back.
     const forceReload = proofReplay ? false : args.forceReload !== false;
     const action = forceReload ? acknowledgeExternalEdit(loaded) : loaded;
+
+    const engineStatus = await resolveEngineStatus();
+    let preflightCommands: unknown[] = [];
+    try {
+      preflightCommands = parseAndValidateFlow(action.body).commands;
+    } catch {
+      preflightCommands = [];
+    }
+    const compatRefusal = actionReplayPreflight({
+      enginePin: action.metadata.enginePin,
+      commands: preflightCommands,
+      engineStatus,
+    });
+    if (compatRefusal) {
+      return failResult(compatRefusal, 'ENGINE_PIN_MISMATCH', {
+        actionId: args.actionId,
+        fallback: 'none',
+        pin: engineStatus?.pin,
+        selectedPath: engineStatus?.selectedPath ?? null,
+        provenance: engineStatus?.provenance ?? 'none',
+      });
+    }
 
     const autoRepairEnabled = args.autoRepair !== false;
     const blindProbeControl = args.blindProbeMode ? { blindProbeMode: args.blindProbeMode } : {};

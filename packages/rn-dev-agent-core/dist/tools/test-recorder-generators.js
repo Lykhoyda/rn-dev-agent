@@ -4,6 +4,7 @@
 // the handler layer with NOT_IMPLEMENTED). Both generators consume the same
 // RecordedEvent[] shape and emit replayable test code.
 import { stringify as yamlStringify } from 'yaml';
+import { ACTION_ENGINE_PIN } from '../domain/engine-pin.js';
 /**
  * CDP-013: serialise a user-controlled string as a single-line YAML scalar.
  * Quoting / escaping rules are delegated to the `yaml` package, which picks
@@ -32,6 +33,8 @@ function metaPairs(opts) {
         out.push(['mutates', String(opts.mutates)]);
     if (opts.status)
         out.push(['status', stripNewlines(opts.status)]);
+    if (opts.id && opts.intent)
+        out.push(['enginePin', ACTION_ENGINE_PIN]);
     if (opts.produces && Object.keys(opts.produces).length > 0) {
         // Phase 134.1 (deepsec CRITICAL #6): keys MUST also pass through
         // stripNewlines, or a crafted key like `user.id\n- runScript: ...`

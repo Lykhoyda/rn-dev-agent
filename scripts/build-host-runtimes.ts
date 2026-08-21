@@ -88,6 +88,7 @@ const RUNTIME_ENTRIES = [
   'experience-trends.js',
   'worktree-inheritance.js',
   'workflow-check.js',
+  'maestro-runner-pin.js',
 ];
 
 // Helper scripts the Claude package's hooks and skills invoke at runtime.

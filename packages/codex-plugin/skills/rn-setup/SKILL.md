@@ -62,7 +62,7 @@ Read/report without mutation:
 | Core package | selected package runtime files | marketplace refresh/materialization |
 | iOS runner | packaged Xcode project/artifact presence | one-time build command |
 | Android runner | packaged Gradle/APK presence | one-time Gradle command |
-| Maestro runner | version/help | package helper/install guidance |
+| Maestro runner | `maestro-runner-pin.js diagnose --json` must be `pinned-ok` / `1.1.24` / `pin-cache` | package `ensure-maestro-runner.sh` for exactly 1.1.24; never PATH, `~/.maestro-runner`, or brew maestro |
 | iOS/Android devices | list-only platform commands | boot guidance |
 | Metro | `rn_session` and passive `cdp_status` reads | integrated package script |
 | CDP/app | prior supplied observation only | active `check-env` later |
