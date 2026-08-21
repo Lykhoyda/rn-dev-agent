@@ -10,7 +10,7 @@ import { chooseMaestroDispatch, shouldWarnFallback } from './maestro-dispatch.js
 import { buildMaestroFlow, parseAndValidateFlow, MaestroValidationError, } from '../domain/maestro-validator.js';
 import { assembleMaestroArgs, executeMaestroAuthorityStages, MaestroStageExecutionError, nestedMaestroAuthorityCallbacks, planMaestroAuthorityStages, resolveMaestroFlowAppId, runFlowParked, } from './maestro-run.js';
 import { outputIndicatesFlowFailure } from '../domain/maestro-error-parser.js';
-import { exactPinRefusal, getEngineStatus, immediateRunnerPinRefusal, isOlderSdkInstallFailure, olderSdkInstallDiagnosis, } from '../domain/engine-pin.js';
+import { exactPinRefusal, getEngineStatus, withImmediatePinnedRunner, isOlderSdkInstallFailure, olderSdkInstallDiagnosis, } from '../domain/engine-pin.js';
 import { classifyLearnedActionPath, isLearnedActionPath, replayCompatibilityPreflight, standaloneLearnedActionPathRefusal, } from '../domain/action-engine-compat.js';
 import { parseM7Header } from '../domain/reusable-action.js';
 import { resolveActionPath } from '../domain/action-store.js';
@@ -216,14 +216,20 @@ export function createMaestroTestAllHandler(deps = {}) {
                     writeFileSync(safeFlowFile, buildMaestroFlow(parsedAppId !== undefined ? { appId: parsedAppId } : {}, [
                         ...commands,
                     ]), 'utf-8');
-                    const immediateRefusal = await immediateRunnerPinRefusal(flowDispatch.binPath, resolveEngineStatus);
-                    if (immediateRefusal)
-                        throw new Error(immediateRefusal);
-                    return execute(flowDispatch.binPath, finalArgs, {
+                    const executeRunner = (runnerPath) => execute(runnerPath, finalArgs, {
                         timeout: remainingTimeout,
                         encoding: 'utf8',
                         maxBuffer: 10 * 1024 * 1024,
                     });
+                    if (deps.execFile) {
+                        const immediateStatus = await resolveEngineStatus();
+                        const refusal = exactPinRefusal(immediateStatus);
+                        const immediateRefusal = refusal ? `RUNNER_PIN_CHANGED: ${refusal}` : null;
+                        if (immediateRefusal)
+                            throw new Error(immediateRefusal);
+                        return executeRunner(flowDispatch.binPath);
+                    }
+                    return withImmediatePinnedRunner(flowDispatch.binPath, resolveEngineStatus, executeRunner);
                 }, claimOrigin, completeOrigin, relaunchManagedApp, reproveManagedOrigin), {
                     platform,
                     deviceId: requestedDeviceId,

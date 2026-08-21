@@ -323,7 +323,7 @@ export function loadActionMigrationBaseline(filePath) {
 export function commitMigratedActionText(filePath, baseline, yamlText) {
     assertWritableActionFile(filePath);
     const sidecarPath = sidecarPathFor(filePath);
-    const result = atomicWriter.pairWriteConditional(filePath, yamlText, sidecarPath, baseline.state, () => migrationBaselineMatches(filePath, baseline), () => migrationYamlBaselineMatches(filePath, baseline));
+    const result = atomicWriter.pairWriteConditional(filePath, yamlText, sidecarPath, baseline.state, () => migrationBaselineMatches(filePath, baseline), () => migrationYamlBaselineMatches(filePath, baseline), baseline.yamlText);
     if (!result)
         throw migrationConflict(filePath);
     const nextState = { ...baseline.state, lastSeenMtimeMs: result.finalMtimeMs };
@@ -598,7 +598,7 @@ export function promoteActionRuntimeWithCAS(expected, nextState) {
         catch {
             return false;
         }
-    });
+    }, undefined, yaml);
     if (!written)
         return { ok: false, conflict: 'EXTERNAL_WRITE' };
     expected.state = { ...nextState, lastSeenMtimeMs: written.finalMtimeMs };

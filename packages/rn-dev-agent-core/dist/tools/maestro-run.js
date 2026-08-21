@@ -4,7 +4,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join, dirname } from 'node:path';
 import { okResult, failResult, warnResult } from '../utils.js';
-import { getEngineStatus, enginePinCaveat, exactPinRefusal, immediateRunnerPinRefusal, preOAndroidApiRefusal, isOlderSdkInstallFailure, olderSdkInstallDiagnosis, MAESTRO_RUNNER_MIN_ANDROID_API, } from '../domain/engine-pin.js';
+import { getEngineStatus, enginePinCaveat, exactPinRefusal, withImmediatePinnedRunner, preOAndroidApiRefusal, isOlderSdkInstallFailure, olderSdkInstallDiagnosis, MAESTRO_RUNNER_MIN_ANDROID_API, } from '../domain/engine-pin.js';
 import { actionReplayPreflight, isLearnedActionPath, replayCompatibilityPreflight, standaloneLearnedActionPathRefusal, } from '../domain/action-engine-compat.js';
 import { parseM7Header } from '../domain/reusable-action.js';
 import { getActiveSession } from '../agent-device-wrapper.js';
@@ -507,15 +507,23 @@ export function createMaestroRunHandler(deps = {}) {
                         Object.assign(error, { code: 'ETIMEDOUT' });
                         throw error;
                     }
-                    const immediateRefusal = await immediateRunnerPinRefusal(dispatch.binPath, resolveEngineStatus);
-                    if (immediateRefusal)
-                        throw new Error(immediateRefusal);
-                    beforeDispatch?.();
-                    return execute(dispatch.binPath, finalArgs, {
-                        timeout: remainingTimeout,
-                        encoding: 'utf8',
-                        maxBuffer: 10 * 1024 * 1024,
-                    });
+                    const executeRunner = (runnerPath) => {
+                        beforeDispatch?.();
+                        return execute(runnerPath, finalArgs, {
+                            timeout: remainingTimeout,
+                            encoding: 'utf8',
+                            maxBuffer: 10 * 1024 * 1024,
+                        });
+                    };
+                    if (deps.execFile) {
+                        const immediateStatus = await resolveEngineStatus();
+                        const refusal = exactPinRefusal(immediateStatus);
+                        const immediateRefusal = refusal ? `RUNNER_PIN_CHANGED: ${refusal}` : null;
+                        if (immediateRefusal)
+                            throw new Error(immediateRefusal);
+                        return executeRunner(dispatch.binPath);
+                    }
+                    return withImmediatePinnedRunner(dispatch.binPath, resolveEngineStatus, executeRunner);
                 };
                 try {
                     return await executeOnce();

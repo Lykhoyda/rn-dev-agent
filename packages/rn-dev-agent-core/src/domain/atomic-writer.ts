@@ -48,6 +48,7 @@ import {
   fstatSync,
   lstatSync,
   readFileSync,
+  linkSync,
 } from 'node:fs';
 import { dirname, basename } from 'node:path';
 import type { ActionRuntimeState } from './reusable-action.js';
@@ -177,6 +178,7 @@ function pairWriteImpl(
   state: ActionRuntimeState,
   publicationPrecondition?: () => boolean,
   yamlPublicationPrecondition?: () => boolean,
+  expectedYamlContent?: string,
 ): PairWriteResult | null {
   ensureDir(yamlPath);
   ensureDir(sidecarPath);
@@ -207,7 +209,11 @@ function pairWriteImpl(
   const priorSidecar = priorSidecarExisted ? readFileSync(sidecarPath, 'utf8') : null;
   atomicWriter._rename(sidecarTmp, sidecarPath);
 
-  if (yamlPublicationPrecondition && !yamlPublicationPrecondition()) {
+  const yamlPublished =
+    expectedYamlContent === undefined
+      ? !yamlPublicationPrecondition || yamlPublicationPrecondition()
+      : atomicWriter._publishIfUnchanged(yamlTmp, yamlPath, expectedYamlContent, stamp);
+  if (!yamlPublished) {
     if (priorSidecar === null) {
       atomicWriter._unlink(sidecarPath);
     } else {
@@ -217,8 +223,7 @@ function pairWriteImpl(
     atomicWriter._unlink(yamlTmp);
     return null;
   }
-
-  atomicWriter._rename(yamlTmp, yamlPath);
+  if (expectedYamlContent === undefined) atomicWriter._rename(yamlTmp, yamlPath);
 
   // Step 5 (mandatory after PR #109 review): resync sidecar to the
   // ACTUAL YAML mtime, but never let the recorded value regress below
@@ -329,6 +334,53 @@ export const atomicWriter = {
     return readdirSync(path);
   },
 
+  _publishIfUnchanged(
+    candidatePath: string,
+    targetPath: string,
+    expectedContent: string,
+    stamp: string,
+  ): boolean {
+    const displacedPath = `${targetPath}.cas.${stamp}`;
+    try {
+      renameSync(targetPath, displacedPath);
+    } catch {
+      return false;
+    }
+    let matches = false;
+    try {
+      const displaced = lstatSync(displacedPath);
+      matches =
+        displaced.isFile() &&
+        !displaced.isSymbolicLink() &&
+        readFileSync(displacedPath, 'utf8') === expectedContent;
+    } catch {
+      matches = false;
+    }
+    if (!matches) {
+      try {
+        linkSync(displacedPath, targetPath);
+        unlinkSync(displacedPath);
+      } catch {}
+      return false;
+    }
+    try {
+      linkSync(candidatePath, targetPath);
+      try {
+        unlinkSync(candidatePath);
+      } catch {}
+      try {
+        unlinkSync(displacedPath);
+      } catch {}
+      return true;
+    } catch {
+      try {
+        linkSync(displacedPath, targetPath);
+        unlinkSync(displacedPath);
+      } catch {}
+      return false;
+    }
+  },
+
   withLock<T>(yamlPath: string, operation: () => T): T {
     return withPairWriteLock(yamlPath, operation);
   },
@@ -359,6 +411,7 @@ export const atomicWriter = {
     state: ActionRuntimeState,
     precondition: () => boolean,
     yamlPublicationPrecondition: () => boolean = precondition,
+    expectedYamlContent?: string,
   ): PairWriteResult | null {
     return withPairWriteLock(yamlPath, () => {
       if (!precondition()) return null;
@@ -370,6 +423,7 @@ export const atomicWriter = {
         state,
         precondition,
         yamlPublicationPrecondition,
+        expectedYamlContent,
       );
     });
   },

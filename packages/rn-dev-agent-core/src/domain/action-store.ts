@@ -390,6 +390,7 @@ export function commitMigratedActionText(
     baseline.state,
     () => migrationBaselineMatches(filePath, baseline),
     () => migrationYamlBaselineMatches(filePath, baseline),
+    baseline.yamlText,
   );
   if (!result) throw migrationConflict(filePath);
   const nextState = { ...baseline.state, lastSeenMtimeMs: result.finalMtimeMs };
@@ -695,6 +696,8 @@ export function promoteActionRuntimeWithCAS(
         return false;
       }
     },
+    undefined,
+    yaml,
   );
   if (!written) return { ok: false, conflict: 'EXTERNAL_WRITE' };
   expected.state = { ...nextState, lastSeenMtimeMs: written.finalMtimeMs };

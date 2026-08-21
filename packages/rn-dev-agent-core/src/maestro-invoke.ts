@@ -14,9 +14,9 @@ import {
   exactPinRefusal,
   getEngineStatus,
   getMaestroRunnerPath,
-  immediateRunnerPinRefusal,
   isOlderSdkInstallFailure,
   olderSdkInstallDiagnosis,
+  withImmediatePinnedRunner,
   type ReplayEngineStatus,
 } from './domain/engine-pin.js';
 import { replayCompatibilityPreflight } from './domain/action-engine-compat.js';
@@ -228,17 +228,20 @@ export async function runMaestroInline(
     );
     const finalArgs = assembleMaestroArgs(baseArgs, runnerReportArgs(runnerReportDir));
     const execute = async () => {
-      const immediateRefusal = await immediateRunnerPinRefusal(
-        dispatch.binPath,
-        resolveEngineStatus,
-      );
-      if (immediateRefusal) throw new Error(immediateRefusal);
-      return (dependencies.spawnManaged ?? spawnManagedProcessGroup)(dispatch.binPath, finalArgs, {
-        timeoutMs: timeout,
-        platform: opts.platform,
-        deviceId: requestedDeviceId,
-        tool: opts.slug ?? 'inline-maestro',
-      });
+      const spawn = (runnerPath: string) =>
+        (dependencies.spawnManaged ?? spawnManagedProcessGroup)(runnerPath, finalArgs, {
+          timeoutMs: timeout,
+          platform: opts.platform,
+          deviceId: requestedDeviceId,
+          tool: opts.slug ?? 'inline-maestro',
+        });
+      if (dependencies.spawnManaged) {
+        const immediateStatus = await resolveEngineStatus();
+        const refusal = exactPinRefusal(immediateStatus);
+        if (refusal) throw new Error(`RUNNER_PIN_CHANGED: ${refusal}`);
+        return spawn(dispatch.binPath);
+      }
+      return withImmediatePinnedRunner(dispatch.binPath, resolveEngineStatus, spawn);
     };
 
     let execution;

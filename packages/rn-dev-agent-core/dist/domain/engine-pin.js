@@ -8,7 +8,7 @@
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createHash } from 'node:crypto';
-import { accessSync, constants, lstatSync, readFileSync, readdirSync, readlinkSync } from 'node:fs';
+import { accessSync, chmodSync, constants, copyFileSync, lstatSync, readFileSync, readdirSync, readlinkSync, unlinkSync, } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { gunzipSync } from 'node:zlib';
@@ -466,13 +466,52 @@ export async function immediateRunnerPinRefusal(runnerPath, resolveStatus = () =
     if (refusal)
         return `RUNNER_PIN_CHANGED: ${refusal}`;
     const canonicalPath = getMaestroRunnerPath();
-    if (canonicalPath &&
-        status?.selectedPath &&
-        (resolve(canonicalPath) !== resolve(runnerPath) ||
-            resolve(status.selectedPath) !== resolve(runnerPath))) {
+    if (!canonicalPath || !status?.selectedPath) {
+        return 'RUNNER_PIN_CHANGED: verified runner path disappeared before execution.';
+    }
+    if (resolve(canonicalPath) !== resolve(runnerPath) ||
+        resolve(status.selectedPath) !== resolve(runnerPath)) {
         return 'RUNNER_PIN_CHANGED: verified runner path changed before execution.';
     }
     return null;
+}
+export async function withBoundExecutable(executablePath, expectedSha256, execute) {
+    const boundPath = join(dirname(executablePath), `.maestro-runner.spawn.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}`);
+    const original = lstatSync(executablePath);
+    if (!original.isFile() || original.isSymbolicLink()) {
+        throw new Error('RUNNER_PIN_CHANGED: executable identity changed before execution.');
+    }
+    copyFileSync(executablePath, boundPath, constants.COPYFILE_EXCL | constants.COPYFILE_FICLONE);
+    chmodSync(boundPath, original.mode & 0o777);
+    try {
+        const bound = lstatSync(boundPath);
+        if (!bound.isFile() || bound.isSymbolicLink()) {
+            throw new Error('RUNNER_PIN_CHANGED: executable identity changed before execution.');
+        }
+        const sha256 = createHash('sha256').update(readFileSync(boundPath)).digest('hex');
+        if (sha256 !== expectedSha256) {
+            throw new Error('RUNNER_PIN_CHANGED: executable content changed before execution.');
+        }
+        const execution = execute(boundPath);
+        unlinkSync(boundPath);
+        return await execution;
+    }
+    finally {
+        try {
+            unlinkSync(boundPath);
+        }
+        catch { }
+    }
+}
+export async function withImmediatePinnedRunner(runnerPath, resolveStatus, execute) {
+    const refusal = await immediateRunnerPinRefusal(runnerPath, resolveStatus);
+    if (refusal)
+        throw new Error(refusal);
+    const expectedSha256 = MAESTRO_RUNNER_PIN.sha256[nodePlatformKey()];
+    if (!expectedSha256) {
+        throw new Error('RUNNER_PIN_CHANGED: runner checksum is unavailable for this platform.');
+    }
+    return withBoundExecutable(runnerPath, expectedSha256, execute);
 }
 export function doctorPinnedRunner(status, platformKey = nodePlatformKey()) {
     const platformStatus = pinArchiveCoords(platformKey) === null ? 'unsupported' : 'supported';

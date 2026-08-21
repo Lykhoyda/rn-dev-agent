@@ -24095,7 +24095,7 @@ var init_maestro_runner_pin = __esm({
 import { execFile as execFileCb3 } from "node:child_process";
 import { promisify as promisify4 } from "node:util";
 import { createHash as createHash4 } from "node:crypto";
-import { accessSync, constants as constants2, lstatSync as lstatSync5, readFileSync as readFileSync11, readdirSync as readdirSync4, readlinkSync } from "node:fs";
+import { accessSync, chmodSync as chmodSync2, constants as constants2, copyFileSync, lstatSync as lstatSync5, readFileSync as readFileSync11, readdirSync as readdirSync4, readlinkSync, unlinkSync as unlinkSync4 } from "node:fs";
 import { homedir as homedir5 } from "node:os";
 import { basename, dirname as dirname7, join as join15, relative, resolve, sep as sep2 } from "node:path";
 import { gunzipSync } from "node:zlib";
@@ -24441,10 +24441,50 @@ async function immediateRunnerPinRefusal(runnerPath, resolveStatus = () => getEn
   if (refusal)
     return `RUNNER_PIN_CHANGED: ${refusal}`;
   const canonicalPath3 = getMaestroRunnerPath();
-  if (canonicalPath3 && status?.selectedPath && (resolve(canonicalPath3) !== resolve(runnerPath) || resolve(status.selectedPath) !== resolve(runnerPath))) {
+  if (!canonicalPath3 || !status?.selectedPath) {
+    return "RUNNER_PIN_CHANGED: verified runner path disappeared before execution.";
+  }
+  if (resolve(canonicalPath3) !== resolve(runnerPath) || resolve(status.selectedPath) !== resolve(runnerPath)) {
     return "RUNNER_PIN_CHANGED: verified runner path changed before execution.";
   }
   return null;
+}
+async function withBoundExecutable(executablePath, expectedSha256, execute2) {
+  const boundPath = join15(dirname7(executablePath), `.maestro-runner.spawn.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}`);
+  const original = lstatSync5(executablePath);
+  if (!original.isFile() || original.isSymbolicLink()) {
+    throw new Error("RUNNER_PIN_CHANGED: executable identity changed before execution.");
+  }
+  copyFileSync(executablePath, boundPath, constants2.COPYFILE_EXCL | constants2.COPYFILE_FICLONE);
+  chmodSync2(boundPath, original.mode & 511);
+  try {
+    const bound = lstatSync5(boundPath);
+    if (!bound.isFile() || bound.isSymbolicLink()) {
+      throw new Error("RUNNER_PIN_CHANGED: executable identity changed before execution.");
+    }
+    const sha2562 = createHash4("sha256").update(readFileSync11(boundPath)).digest("hex");
+    if (sha2562 !== expectedSha256) {
+      throw new Error("RUNNER_PIN_CHANGED: executable content changed before execution.");
+    }
+    const execution = execute2(boundPath);
+    unlinkSync4(boundPath);
+    return await execution;
+  } finally {
+    try {
+      unlinkSync4(boundPath);
+    } catch {
+    }
+  }
+}
+async function withImmediatePinnedRunner(runnerPath, resolveStatus, execute2) {
+  const refusal = await immediateRunnerPinRefusal(runnerPath, resolveStatus);
+  if (refusal)
+    throw new Error(refusal);
+  const expectedSha256 = MAESTRO_RUNNER_PIN.sha256[nodePlatformKey()];
+  if (!expectedSha256) {
+    throw new Error("RUNNER_PIN_CHANGED: runner checksum is unavailable for this platform.");
+  }
+  return withBoundExecutable(runnerPath, expectedSha256, execute2);
 }
 async function defaultExecVersion(bin) {
   const { stdout, stderr } = await execFile5(bin, ["--version"], {
@@ -25029,7 +25069,7 @@ var init_reusable_action = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/session/runtime-paths.js
-import { chmodSync as chmodSync2, lstatSync as lstatSync6, mkdirSync as mkdirSync7 } from "node:fs";
+import { chmodSync as chmodSync3, lstatSync as lstatSync6, mkdirSync as mkdirSync7 } from "node:fs";
 import { join as join16, resolve as resolve2 } from "node:path";
 function privateDirectory(path) {
   mkdirSync7(path, { recursive: true, mode: 448 });
@@ -25037,7 +25077,7 @@ function privateDirectory(path) {
   if (stat2.isSymbolicLink() || !stat2.isDirectory()) {
     throw new Error("SESSION_RUNTIME_ROOT_UNSAFE: runtime root must be a real directory");
   }
-  chmodSync2(path, 448);
+  chmodSync3(path, 448);
   return path;
 }
 function sessionRuntimeRoot(projectRoot) {
@@ -25123,7 +25163,7 @@ var init_sidecar_io = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/domain/atomic-writer.js
-import { writeFileSync as writeFileSync8, renameSync as renameSync3, statSync as statSync5, mkdirSync as mkdirSync9, existsSync as existsSync13, unlinkSync as unlinkSync4, readdirSync as readdirSync5, openSync as openSync2, closeSync as closeSync2, fstatSync as fstatSync2, lstatSync as lstatSync7, readFileSync as readFileSync13 } from "node:fs";
+import { writeFileSync as writeFileSync8, renameSync as renameSync3, statSync as statSync5, mkdirSync as mkdirSync9, existsSync as existsSync13, unlinkSync as unlinkSync5, readdirSync as readdirSync5, openSync as openSync2, closeSync as closeSync2, fstatSync as fstatSync2, lstatSync as lstatSync7, readFileSync as readFileSync13, linkSync } from "node:fs";
 import { dirname as dirname9, basename as basename2 } from "node:path";
 function generateTmpStamp() {
   const rand = Math.random().toString(36).slice(2, 10);
@@ -25155,7 +25195,7 @@ function withPairWriteLock(yamlPath, operation) {
         try {
           const current = lstatSync7(lockPath);
           if (current.dev === lockStat.dev && current.ino === lockStat.ino)
-            unlinkSync4(lockPath);
+            unlinkSync5(lockPath);
         } catch (unlinkError) {
           if (unlinkError.code !== "ENOENT")
             throw unlinkError;
@@ -25175,13 +25215,13 @@ function withPairWriteLock(yamlPath, operation) {
     try {
       const current = lstatSync7(lockPath);
       if (current.dev === identity2.dev && current.ino === identity2.ino)
-        unlinkSync4(lockPath);
+        unlinkSync5(lockPath);
     } catch {
     }
     closeSync2(lockFd);
   }
 }
-function pairWriteImpl(yamlPath, yamlContent, sidecarPath, state, publicationPrecondition, yamlPublicationPrecondition) {
+function pairWriteImpl(yamlPath, yamlContent, sidecarPath, state, publicationPrecondition, yamlPublicationPrecondition, expectedYamlContent) {
   ensureDir(yamlPath);
   ensureDir(sidecarPath);
   const stamp = generateTmpStamp();
@@ -25202,7 +25242,8 @@ function pairWriteImpl(yamlPath, yamlContent, sidecarPath, state, publicationPre
   const priorSidecarExisted = publicationPrecondition ? atomicWriter._exists(sidecarPath) : false;
   const priorSidecar = priorSidecarExisted ? readFileSync13(sidecarPath, "utf8") : null;
   atomicWriter._rename(sidecarTmp, sidecarPath);
-  if (yamlPublicationPrecondition && !yamlPublicationPrecondition()) {
+  const yamlPublished = expectedYamlContent === void 0 ? !yamlPublicationPrecondition || yamlPublicationPrecondition() : atomicWriter._publishIfUnchanged(yamlTmp, yamlPath, expectedYamlContent, stamp);
+  if (!yamlPublished) {
     if (priorSidecar === null) {
       atomicWriter._unlink(sidecarPath);
     } else {
@@ -25212,7 +25253,8 @@ function pairWriteImpl(yamlPath, yamlContent, sidecarPath, state, publicationPre
     atomicWriter._unlink(yamlTmp);
     return null;
   }
-  atomicWriter._rename(yamlTmp, yamlPath);
+  if (expectedYamlContent === void 0)
+    atomicWriter._rename(yamlTmp, yamlPath);
   const actualMtimeMs = atomicWriter._statMtimeMs(yamlPath);
   const finalMtimeMs = Math.max(actualMtimeMs, projectedMtimeMs);
   const finalState = {
@@ -25287,11 +25329,53 @@ var init_atomic_writer = __esm({
       },
       /** Underlying `fs.unlinkSync(path)`. Used by orphan-cleanup. */
       _unlink(path) {
-        unlinkSync4(path);
+        unlinkSync5(path);
       },
       /** Underlying `fs.readdirSync(path)`. Used by GH #111 prefix-scan cleanup. */
       _readdir(path) {
         return readdirSync5(path);
+      },
+      _publishIfUnchanged(candidatePath, targetPath, expectedContent, stamp) {
+        const displacedPath = `${targetPath}.cas.${stamp}`;
+        try {
+          renameSync3(targetPath, displacedPath);
+        } catch {
+          return false;
+        }
+        let matches = false;
+        try {
+          const displaced = lstatSync7(displacedPath);
+          matches = displaced.isFile() && !displaced.isSymbolicLink() && readFileSync13(displacedPath, "utf8") === expectedContent;
+        } catch {
+          matches = false;
+        }
+        if (!matches) {
+          try {
+            linkSync(displacedPath, targetPath);
+            unlinkSync5(displacedPath);
+          } catch {
+          }
+          return false;
+        }
+        try {
+          linkSync(candidatePath, targetPath);
+          try {
+            unlinkSync5(candidatePath);
+          } catch {
+          }
+          try {
+            unlinkSync5(displacedPath);
+          } catch {
+          }
+          return true;
+        } catch {
+          try {
+            linkSync(displacedPath, targetPath);
+            unlinkSync5(displacedPath);
+          } catch {
+          }
+          return false;
+        }
       },
       withLock(yamlPath, operation) {
         return withPairWriteLock(yamlPath, operation);
@@ -25310,12 +25394,12 @@ var init_atomic_writer = __esm({
           return result;
         });
       },
-      pairWriteConditional(yamlPath, yamlContent, sidecarPath, state, precondition, yamlPublicationPrecondition = precondition) {
+      pairWriteConditional(yamlPath, yamlContent, sidecarPath, state, precondition, yamlPublicationPrecondition = precondition, expectedYamlContent) {
         return withPairWriteLock(yamlPath, () => {
           if (!precondition())
             return null;
           cleanupOrphans(yamlPath, sidecarPath);
-          return pairWriteImpl(yamlPath, yamlContent, sidecarPath, state, precondition, yamlPublicationPrecondition);
+          return pairWriteImpl(yamlPath, yamlContent, sidecarPath, state, precondition, yamlPublicationPrecondition, expectedYamlContent);
         });
       }
     };
@@ -25708,7 +25792,7 @@ var init_worktree_repair_remedy = __esm({
 
 // packages/rn-dev-agent-core/dist/session/worktree-inheritance.js
 import { spawnSync } from "node:child_process";
-import { closeSync as closeSync3, existsSync as existsSync15, fstatSync as fstatSync3, lstatSync as lstatSync8, mkdirSync as mkdirSync11, openSync as openSync3, readFileSync as readFileSync15, readlinkSync as readlinkSync2, realpathSync as realpathSync4, renameSync as renameSync4, statSync as statSync6, symlinkSync, unlinkSync as unlinkSync5 } from "node:fs";
+import { closeSync as closeSync3, existsSync as existsSync15, fstatSync as fstatSync3, lstatSync as lstatSync8, mkdirSync as mkdirSync11, openSync as openSync3, readFileSync as readFileSync15, readlinkSync as readlinkSync2, realpathSync as realpathSync4, renameSync as renameSync4, statSync as statSync6, symlinkSync, unlinkSync as unlinkSync6 } from "node:fs";
 import { dirname as dirname12, isAbsolute as isAbsolute2, join as join19, relative as relative2, resolve as resolve4, sep as sep5 } from "node:path";
 function gitEnvironment() {
   const env = { ...process.env };
@@ -25891,7 +25975,7 @@ var init_worktree_inheritance = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/domain/action-store.js
-import { existsSync as existsSync16, lstatSync as lstatSync9, readFileSync as readFileSync16, realpathSync as realpathSync5, statSync as statSync7, unlinkSync as unlinkSync6, writeFileSync as writeFileSync9 } from "node:fs";
+import { existsSync as existsSync16, lstatSync as lstatSync9, readFileSync as readFileSync16, realpathSync as realpathSync5, statSync as statSync7, unlinkSync as unlinkSync7, writeFileSync as writeFileSync9 } from "node:fs";
 import { basename as basename4, dirname as dirname13, join as join20 } from "node:path";
 function actionPathFor(projectRoot, actionId) {
   assertValidActionId(actionId, "actionPathFor");
@@ -25990,7 +26074,7 @@ function createActionTextExclusive(projectRoot, actionId, yamlText) {
       throw new Error(`Action ${actionId} changed during creation; keep exactly one extension.`);
     } catch (err) {
       if (readFileSync16(yamlPath, "utf8") === yamlText)
-        unlinkSync6(yamlPath);
+        unlinkSync7(yamlPath);
       throw err;
     }
   });
@@ -26187,7 +26271,7 @@ function promoteActionRuntimeWithCAS(expected, nextState) {
     } catch {
       return false;
     }
-  });
+  }, void 0, yaml2);
   if (!written)
     return { ok: false, conflict: "EXTERNAL_WRITE" };
   expected.state = { ...nextState, lastSeenMtimeMs: written.finalMtimeMs };
@@ -32919,15 +33003,23 @@ function createMaestroRunHandler(deps = {}) {
             Object.assign(error2, { code: "ETIMEDOUT" });
             throw error2;
           }
-          const immediateRefusal = await immediateRunnerPinRefusal(dispatch.binPath, resolveEngineStatus);
-          if (immediateRefusal)
-            throw new Error(immediateRefusal);
-          beforeDispatch?.();
-          return execute2(dispatch.binPath, finalArgs, {
-            timeout: remainingTimeout,
-            encoding: "utf8",
-            maxBuffer: 10 * 1024 * 1024
-          });
+          const executeRunner = (runnerPath) => {
+            beforeDispatch?.();
+            return execute2(runnerPath, finalArgs, {
+              timeout: remainingTimeout,
+              encoding: "utf8",
+              maxBuffer: 10 * 1024 * 1024
+            });
+          };
+          if (deps.execFile) {
+            const immediateStatus = await resolveEngineStatus();
+            const refusal = exactPinRefusal(immediateStatus);
+            const immediateRefusal = refusal ? `RUNNER_PIN_CHANGED: ${refusal}` : null;
+            if (immediateRefusal)
+              throw new Error(immediateRefusal);
+            return executeRunner(dispatch.binPath);
+          }
+          return withImmediatePinnedRunner(dispatch.binPath, resolveEngineStatus, executeRunner);
         };
         try {
           return await executeOnce();
@@ -33192,7 +33284,7 @@ var init_maestro_run = __esm({
 
 // packages/rn-dev-agent-core/dist/session/managed-automation.js
 import { spawn as spawn4 } from "node:child_process";
-import { readdirSync as readdirSync10, readFileSync as readFileSync20, unlinkSync as unlinkSync7 } from "node:fs";
+import { readdirSync as readdirSync10, readFileSync as readFileSync20, unlinkSync as unlinkSync8 } from "node:fs";
 function sleep4(ms) {
   return new Promise((resolve19) => setTimeout(resolve19, ms));
 }
@@ -33402,7 +33494,7 @@ async function spawnManagedProcessGroup(bin, args, options, dependencies = {}) {
 }
 function removeTemporaryInlineFlow(path) {
   try {
-    unlinkSync7(path);
+    unlinkSync8(path);
   } catch {
   }
 }
@@ -33974,15 +34066,20 @@ async function runMaestroInline(yaml2, opts, dependencies = {}) {
     const baseArgs = dispatch.buildArgs(opts.platform, flowFile, appFileResolution.appFile, requestedDeviceId);
     const finalArgs = assembleMaestroArgs(baseArgs, runnerReportArgs(runnerReportDir));
     const execute2 = async () => {
-      const immediateRefusal = await immediateRunnerPinRefusal(dispatch.binPath, resolveEngineStatus);
-      if (immediateRefusal)
-        throw new Error(immediateRefusal);
-      return (dependencies.spawnManaged ?? spawnManagedProcessGroup)(dispatch.binPath, finalArgs, {
+      const spawn10 = (runnerPath) => (dependencies.spawnManaged ?? spawnManagedProcessGroup)(runnerPath, finalArgs, {
         timeoutMs: timeout,
         platform: opts.platform,
         deviceId: requestedDeviceId,
         tool: opts.slug ?? "inline-maestro"
       });
+      if (dependencies.spawnManaged) {
+        const immediateStatus = await resolveEngineStatus();
+        const refusal = exactPinRefusal(immediateStatus);
+        if (refusal)
+          throw new Error(`RUNNER_PIN_CHANGED: ${refusal}`);
+        return spawn10(dispatch.binPath);
+      }
+      return withImmediatePinnedRunner(dispatch.binPath, resolveEngineStatus, spawn10);
     };
     let execution;
     try {
@@ -34293,7 +34390,7 @@ var init_app_lifecycle = __esm({
 
 // packages/rn-dev-agent-core/dist/runners/ensure-single-runner.js
 import { execFileSync as execFileSync7 } from "node:child_process";
-import { existsSync as existsSync21, readFileSync as readFileSync21, unlinkSync as unlinkSync8 } from "node:fs";
+import { existsSync as existsSync21, readFileSync as readFileSync21, unlinkSync as unlinkSync9 } from "node:fs";
 import { homedir as homedir6 } from "node:os";
 import { join as join27 } from "node:path";
 function selectInstalledLegacyApps(installed) {
@@ -34369,7 +34466,7 @@ function defaultDeps2() {
       }
     },
     fileExists: (path) => existsSync21(path),
-    removeFile: (path) => unlinkSync8(path),
+    removeFile: (path) => unlinkSync9(path),
     delay: (ms) => new Promise((resolve19) => setTimeout(resolve19, ms)),
     listApps: (udid) => execFileSync7("xcrun", ["simctl", "listapps", udid], {
       encoding: "utf8",
@@ -34579,7 +34676,7 @@ var init_recover_detached = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/lifecycle/device-lock.js
-import { existsSync as existsSync22, mkdirSync as mkdirSync13, openSync as openSync4, writeSync, closeSync as closeSync4, readFileSync as readFileSync22, unlinkSync as unlinkSync9, writeFileSync as writeFileSync12 } from "node:fs";
+import { existsSync as existsSync22, mkdirSync as mkdirSync13, openSync as openSync4, writeSync, closeSync as closeSync4, readFileSync as readFileSync22, unlinkSync as unlinkSync10, writeFileSync as writeFileSync12 } from "node:fs";
 import { tmpdir as tmpdir9, userInfo } from "node:os";
 import { join as join28 } from "node:path";
 function defaultProcessAlive3(pid) {
@@ -34654,7 +34751,7 @@ var init_device_lock = __esm({
           return { status: "conflict", lockPath: this.lockPath, holder: before };
         }
         try {
-          unlinkSync9(this.lockPath);
+          unlinkSync10(this.lockPath);
         } catch {
         }
         try {
@@ -34686,7 +34783,7 @@ var init_device_lock = __esm({
         try {
           const holder = this.readExisting();
           if (holder?.pid === this.pid)
-            unlinkSync9(this.lockPath);
+            unlinkSync10(this.lockPath);
         } catch {
         }
         this.acquired = false;
@@ -37313,7 +37410,7 @@ var init_utils = __esm({
 
 // packages/rn-dev-agent-core/dist/tools/device-screenshot-raw.js
 import { execFile as execFile14, spawn as spawn5 } from "node:child_process";
-import { createWriteStream as createWriteStream2, renameSync as renameSync5, statSync as statSync10, unlinkSync as unlinkSync10 } from "node:fs";
+import { createWriteStream as createWriteStream2, renameSync as renameSync5, statSync as statSync10, unlinkSync as unlinkSync11 } from "node:fs";
 import { basename as basename9, dirname as dirname16, join as join29 } from "node:path";
 import { promisify as promisify14 } from "node:util";
 function parseSimctlBootedAll(jsonText) {
@@ -37531,7 +37628,7 @@ var init_device_screenshot_raw = __esm({
       const out = createWriteStream2(tmp);
       const cleanupTemp = () => {
         try {
-          unlinkSync10(tmp);
+          unlinkSync11(tmp);
         } catch {
         }
       };
@@ -37778,7 +37875,7 @@ var init_settle = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/agent-device-wrapper.js
-import { unlinkSync as unlinkSync11, rmSync as rmSync6 } from "node:fs";
+import { unlinkSync as unlinkSync12, rmSync as rmSync6 } from "node:fs";
 import { join as join30 } from "node:path";
 import { createHash as createHash7 } from "node:crypto";
 function getSessionFilePath() {
@@ -37800,7 +37897,7 @@ function clearActiveSession() {
   clearRefMap();
   recordUiChange();
   try {
-    unlinkSync11(SESSION_FILE);
+    unlinkSync12(SESSION_FILE);
   } catch {
   }
 }
@@ -60686,7 +60783,7 @@ import { join as join33 } from "node:path";
 // packages/rn-dev-agent-core/dist/session/state-root.js
 init_secure_state_file();
 import { randomBytes as randomBytes5, randomUUID as randomUUID6 } from "node:crypto";
-import { chmodSync as chmodSync3, linkSync, lstatSync as lstatSync12, mkdirSync as mkdirSync14, readFileSync as readFileSync24, renameSync as renameSync6, rmSync as rmSync7, statSync as statSync11, writeFileSync as writeFileSync13 } from "node:fs";
+import { chmodSync as chmodSync4, linkSync as linkSync2, lstatSync as lstatSync12, mkdirSync as mkdirSync14, readFileSync as readFileSync24, renameSync as renameSync6, rmSync as rmSync7, statSync as statSync11, writeFileSync as writeFileSync13 } from "node:fs";
 import { join as join32, resolve as resolve8 } from "node:path";
 function fail(code, detail) {
   throw new Error(`${code}: ${detail}`);
@@ -60699,7 +60796,7 @@ function ensurePrivateDirectory(path) {
     if (link.isSymbolicLink() || !link.isDirectory() || typeof process.getuid === "function" && stat2.uid !== process.getuid()) {
       fail("AUTHORITY_STATE_ROOT_UNSAFE", "state directory is not private and user-owned");
     }
-    chmodSync3(path, 448);
+    chmodSync4(path, 448);
   } catch (error2) {
     if (error2 instanceof Error && error2.message.startsWith("AUTHORITY_STATE_ROOT_UNSAFE")) {
       throw error2;
@@ -60762,7 +60859,7 @@ function getBoundDirectoryJournalKey(layout = createAuthorityStateLayout()) {
     try {
       writeFileSync13(temporary, randomBytes5(32), { flag: "wx", mode: 384, flush: true });
       try {
-        linkSync(temporary, path);
+        linkSync2(temporary, path);
       } catch (error2) {
         if (error2.code !== "EEXIST")
           throw error2;
@@ -60776,7 +60873,7 @@ function getBoundDirectoryJournalKey(layout = createAuthorityStateLayout()) {
     if (link.isSymbolicLink() || !link.isFile() || key.length !== 32 || typeof process.getuid === "function" && stat2.uid !== process.getuid()) {
       fail("AUTHORITY_STATE_ROOT_UNSAFE", "bound-directory journal key is invalid");
     }
-    chmodSync3(path, 384);
+    chmodSync4(path, 384);
     return key.toString("base64url");
   } catch (error2) {
     if (error2 instanceof Error && error2.message.startsWith("AUTHORITY_STATE_ROOT_UNSAFE")) {
@@ -79940,7 +80037,7 @@ function createDeviceRecordHandler(deps = {}) {
 // packages/rn-dev-agent-core/dist/tools/proof-capture.js
 import { createHash as createHash16, randomUUID as randomUUID8 } from "node:crypto";
 import { execFileSync as execFileSync14 } from "node:child_process";
-import { chmodSync as chmodSync4, closeSync as closeSync11, existsSync as existsSync30, fsyncSync, lstatSync as lstatSync16, mkdirSync as mkdirSync18, openSync as openSync11, readFileSync as readFileSync31, realpathSync as realpathSync14, renameSync as renameSync8, unlinkSync as unlinkSync12, writeFileSync as writeFileSync15 } from "node:fs";
+import { chmodSync as chmodSync5, closeSync as closeSync11, existsSync as existsSync30, fsyncSync, lstatSync as lstatSync16, mkdirSync as mkdirSync18, openSync as openSync11, readFileSync as readFileSync31, realpathSync as realpathSync14, renameSync as renameSync8, unlinkSync as unlinkSync13, writeFileSync as writeFileSync15 } from "node:fs";
 import { basename as basename11, dirname as dirname23, extname, isAbsolute as isAbsolute10, join as join43, relative as relative7, resolve as resolve15, sep as sep8 } from "node:path";
 import { fileURLToPath as fileURLToPath4 } from "node:url";
 init_action_store();
@@ -81031,12 +81128,12 @@ function writeProofReceiptAtomic(path, receipt2) {
     closeSync11(descriptor);
     descriptor = null;
     renameSync8(temporary, path);
-    chmodSync4(path, 384);
+    chmodSync5(path, 384);
   } catch (error2) {
     if (descriptor !== null)
       closeSync11(descriptor);
     try {
-      unlinkSync12(temporary);
+      unlinkSync13(temporary);
     } catch {
     }
     throw error2;
@@ -83996,7 +84093,7 @@ function buildGracefulShutdown(deps) {
 // packages/rn-dev-agent-core/dist/lifecycle/lockfile.js
 import { createHash as createHash18 } from "node:crypto";
 import { execFileSync as execFileSync16 } from "node:child_process";
-import { closeSync as closeSync12, existsSync as existsSync31, mkdirSync as mkdirSync19, openSync as openSync12, readFileSync as readFileSync33, statSync as statSync14, unlinkSync as unlinkSync13, writeFileSync as writeFileSync16, writeSync as writeSync3 } from "node:fs";
+import { closeSync as closeSync12, existsSync as existsSync31, mkdirSync as mkdirSync19, openSync as openSync12, readFileSync as readFileSync33, statSync as statSync14, unlinkSync as unlinkSync14, writeFileSync as writeFileSync16, writeSync as writeSync3 } from "node:fs";
 import { tmpdir as tmpdir12, userInfo as userInfo2 } from "node:os";
 import { join as join46, resolve as resolve17 } from "node:path";
 var DEFAULT_MAX_AGE_MS = 24 * 60 * 60 * 1e3;
@@ -84101,7 +84198,7 @@ var Lockfile = class {
       return this.conflictOf(before);
     }
     try {
-      unlinkSync13(this.lockPath);
+      unlinkSync14(this.lockPath);
     } catch {
     }
     try {
@@ -84134,7 +84231,7 @@ var Lockfile = class {
       if (existsSync31(this.lockPath)) {
         const body = this.readExisting();
         if (body?.pid === this.opts.pid) {
-          unlinkSync13(this.lockPath);
+          unlinkSync14(this.lockPath);
         }
       }
     } catch {
@@ -84642,14 +84739,20 @@ function createMaestroTestAllHandler(deps = {}) {
           writeFileSync17(safeFlowFile, buildMaestroFlow(parsedAppId !== void 0 ? { appId: parsedAppId } : {}, [
             ...commands
           ]), "utf-8");
-          const immediateRefusal = await immediateRunnerPinRefusal(flowDispatch.binPath, resolveEngineStatus);
-          if (immediateRefusal)
-            throw new Error(immediateRefusal);
-          return execute2(flowDispatch.binPath, finalArgs, {
+          const executeRunner = (runnerPath) => execute2(runnerPath, finalArgs, {
             timeout: remainingTimeout,
             encoding: "utf8",
             maxBuffer: 10 * 1024 * 1024
           });
+          if (deps.execFile) {
+            const immediateStatus = await resolveEngineStatus();
+            const refusal = exactPinRefusal(immediateStatus);
+            const immediateRefusal = refusal ? `RUNNER_PIN_CHANGED: ${refusal}` : null;
+            if (immediateRefusal)
+              throw new Error(immediateRefusal);
+            return executeRunner(flowDispatch.binPath);
+          }
+          return withImmediatePinnedRunner(flowDispatch.binPath, resolveEngineStatus, executeRunner);
         }, claimOrigin, completeOrigin, relaunchManagedApp, reproveManagedOrigin), {
           platform,
           deviceId: requestedDeviceId,
@@ -85111,7 +85214,7 @@ function instrumentTool(toolName, handler) {
 
 // packages/rn-dev-agent-core/dist/experience/evidence.js
 import { createHash as createHash19, randomUUID as randomUUID9 } from "node:crypto";
-import { chmodSync as chmodSync5, existsSync as existsSync33, mkdirSync as mkdirSync20, readFileSync as readFileSync36, renameSync as renameSync9, unlinkSync as unlinkSync14, writeFileSync as writeFileSync18 } from "node:fs";
+import { chmodSync as chmodSync6, existsSync as existsSync33, mkdirSync as mkdirSync20, readFileSync as readFileSync36, renameSync as renameSync9, unlinkSync as unlinkSync15, writeFileSync as writeFileSync18 } from "node:fs";
 import { homedir as homedir9, platform as hostPlatform, release } from "node:os";
 import { dirname as dirname28, join as join50 } from "node:path";
 import { fileURLToPath as fileURLToPath5 } from "node:url";
@@ -85384,10 +85487,10 @@ var ExperienceRecorder = class {
         mode: 384
       });
       renameSync9(temp, this.path);
-      chmodSync5(this.path, 384);
+      chmodSync6(this.path, 384);
     } catch (error2) {
       try {
-        unlinkSync14(temp);
+        unlinkSync15(temp);
       } catch {
       }
       throw error2;

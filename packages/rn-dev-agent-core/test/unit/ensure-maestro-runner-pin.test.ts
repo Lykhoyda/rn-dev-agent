@@ -6,6 +6,8 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  renameSync,
+  symlinkSync,
   utimesSync,
   writeFileSync,
 } from 'node:fs';
@@ -24,6 +26,7 @@ import {
   getMaestroRunnerPath,
   pinCacheRoot,
   pinnedRunnerBinPath,
+  withBoundExecutable,
 } from '../../dist/domain/engine-pin.js';
 
 const SCRIPT = join(
@@ -456,6 +459,30 @@ test('pin-cache helpers never resolve PATH or ~/.maestro-runner', () => {
     if (prev === undefined) delete process.env.RN_DEV_AGENT_RUNNER_CACHE;
     else process.env.RN_DEV_AGENT_RUNNER_CACHE = prev;
   }
+});
+
+test('bound executable keeps verified bytes when the source path is replaced', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'mr-bound-executable-'));
+  const executable = join(root, 'maestro-runner');
+  const replacement = join(root, 'replacement');
+  writeFileSync(executable, '#!/bin/sh\necho trusted\n', 'utf8');
+  writeFileSync(replacement, '#!/bin/sh\necho replaced\n', 'utf8');
+  const expected = createHash('sha256').update(readFileSync(executable)).digest('hex');
+
+  const observed = await withBoundExecutable(executable, expected, async (boundPath) => {
+    renameSync(replacement, executable);
+    return readFileSync(boundPath, 'utf8');
+  });
+
+  assert.equal(observed, '#!/bin/sh\necho trusted\n');
+  assert.equal(readFileSync(executable, 'utf8'), '#!/bin/sh\necho replaced\n');
+
+  const symlink = join(root, 'symlink-runner');
+  symlinkSync(executable, symlink);
+  await assert.rejects(
+    () => withBoundExecutable(symlink, expected, async () => 'unreachable'),
+    /identity changed/,
+  );
 });
 
 const VERIFY = join(

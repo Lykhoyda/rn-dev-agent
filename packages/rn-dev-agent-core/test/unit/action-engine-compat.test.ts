@@ -299,6 +299,29 @@ test('migration rechecks YAML immediately before publication', (t) => {
   assert.equal(existsSync(sidecarPathFor(actionPath)), false);
 });
 
+test('migration conditional publication preserves an edit at the commit boundary', (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-action-migrate-cas-'));
+  const dir = join(root, '.rn-agent', 'actions');
+  mkdirSync(dir, { recursive: true });
+  const actionPath = join(dir, 'checkout.yaml');
+  const source = actionYaml('checkout');
+  const humanEdit = `${source}\n# edit at publication\n`;
+  writeFileSync(actionPath, source, 'utf8');
+  const baseline = loadActionMigrationBaseline(actionPath);
+  const originalPublish = atomicWriter._publishIfUnchanged;
+  t.mock.method(atomicWriter, '_publishIfUnchanged', (...args) => {
+    writeFileSync(actionPath, humanEdit, 'utf8');
+    return originalPublish(...args);
+  });
+
+  assert.throws(
+    () => commitMigratedActionText(actionPath, baseline, upsertEnginePinHeader(source).text),
+    /changed during migration/,
+  );
+  assert.equal(readFileSync(actionPath, 'utf8'), humanEdit);
+  assert.equal(existsSync(sidecarPathFor(actionPath)), false);
+});
+
 test('migrateLearnedActions preserves the previous YAML when its atomic write fails', (t) => {
   const root = mkdtempSync(join(tmpdir(), 'rn-action-migrate-atomic-'));
   const dir = join(root, '.rn-agent', 'actions');

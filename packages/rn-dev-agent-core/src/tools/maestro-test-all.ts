@@ -26,7 +26,7 @@ import { outputIndicatesFlowFailure } from '../domain/maestro-error-parser.js';
 import {
   exactPinRefusal,
   getEngineStatus,
-  immediateRunnerPinRefusal,
+  withImmediatePinnedRunner,
   isOlderSdkInstallFailure,
   olderSdkInstallDiagnosis,
   type ReplayEngineStatus,
@@ -340,16 +340,24 @@ export function createMaestroTestAllHandler(
                   ]),
                   'utf-8',
                 );
-                const immediateRefusal = await immediateRunnerPinRefusal(
+                const executeRunner = (runnerPath: string) =>
+                  execute(runnerPath, finalArgs, {
+                    timeout: remainingTimeout,
+                    encoding: 'utf8',
+                    maxBuffer: 10 * 1024 * 1024,
+                  });
+                if (deps.execFile) {
+                  const immediateStatus = await resolveEngineStatus();
+                  const refusal = exactPinRefusal(immediateStatus);
+                  const immediateRefusal = refusal ? `RUNNER_PIN_CHANGED: ${refusal}` : null;
+                  if (immediateRefusal) throw new Error(immediateRefusal);
+                  return executeRunner(flowDispatch.binPath);
+                }
+                return withImmediatePinnedRunner(
                   flowDispatch.binPath,
                   resolveEngineStatus,
+                  executeRunner,
                 );
-                if (immediateRefusal) throw new Error(immediateRefusal);
-                return execute(flowDispatch.binPath, finalArgs, {
-                  timeout: remainingTimeout,
-                  encoding: 'utf8',
-                  maxBuffer: 10 * 1024 * 1024,
-                });
               },
               claimOrigin,
               completeOrigin,

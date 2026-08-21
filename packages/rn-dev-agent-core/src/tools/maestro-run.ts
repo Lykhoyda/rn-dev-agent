@@ -9,7 +9,7 @@ import {
   getEngineStatus,
   enginePinCaveat,
   exactPinRefusal,
-  immediateRunnerPinRefusal,
+  withImmediatePinnedRunner,
   preOAndroidApiRefusal,
   isOlderSdkInstallFailure,
   olderSdkInstallDiagnosis,
@@ -750,17 +750,26 @@ export function createMaestroRunHandler(
                   Object.assign(error, { code: 'ETIMEDOUT' });
                   throw error;
                 }
-                const immediateRefusal = await immediateRunnerPinRefusal(
+                const executeRunner = (runnerPath: string) => {
+                  beforeDispatch?.();
+                  return execute(runnerPath, finalArgs, {
+                    timeout: remainingTimeout,
+                    encoding: 'utf8',
+                    maxBuffer: 10 * 1024 * 1024,
+                  });
+                };
+                if (deps.execFile) {
+                  const immediateStatus = await resolveEngineStatus();
+                  const refusal = exactPinRefusal(immediateStatus);
+                  const immediateRefusal = refusal ? `RUNNER_PIN_CHANGED: ${refusal}` : null;
+                  if (immediateRefusal) throw new Error(immediateRefusal);
+                  return executeRunner(dispatch.binPath);
+                }
+                return withImmediatePinnedRunner(
                   dispatch.binPath,
                   resolveEngineStatus,
+                  executeRunner,
                 );
-                if (immediateRefusal) throw new Error(immediateRefusal);
-                beforeDispatch?.();
-                return execute(dispatch.binPath, finalArgs, {
-                  timeout: remainingTimeout,
-                  encoding: 'utf8',
-                  maxBuffer: 10 * 1024 * 1024,
-                });
               };
               try {
                 return await executeOnce();

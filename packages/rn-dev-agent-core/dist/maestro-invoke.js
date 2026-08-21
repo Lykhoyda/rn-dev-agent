@@ -5,7 +5,7 @@ import { resolveBundleId, readExpoSlug } from './project-config.js';
 import { buildMaestroFlow, parseAndValidateFlow, isValidBundleId, MaestroValidationError, } from './domain/maestro-validator.js';
 import { chooseMaestroDispatch } from './tools/maestro-dispatch.js';
 import { outputIndicatesFlowFailure } from './domain/maestro-error-parser.js';
-import { exactPinRefusal, getEngineStatus, getMaestroRunnerPath, immediateRunnerPinRefusal, isOlderSdkInstallFailure, olderSdkInstallDiagnosis, } from './domain/engine-pin.js';
+import { exactPinRefusal, getEngineStatus, getMaestroRunnerPath, isOlderSdkInstallFailure, olderSdkInstallDiagnosis, withImmediatePinnedRunner, } from './domain/engine-pin.js';
 import { replayCompatibilityPreflight } from './domain/action-engine-compat.js';
 import { resolveAppFileForClearState } from './tools/resolve-ios-app-file.js';
 import { assembleMaestroArgs, runFlowParked } from './tools/maestro-run.js';
@@ -136,15 +136,20 @@ export async function runMaestroInline(yaml, opts, dependencies = {}) {
         const baseArgs = dispatch.buildArgs(opts.platform, flowFile, appFileResolution.appFile, requestedDeviceId);
         const finalArgs = assembleMaestroArgs(baseArgs, runnerReportArgs(runnerReportDir));
         const execute = async () => {
-            const immediateRefusal = await immediateRunnerPinRefusal(dispatch.binPath, resolveEngineStatus);
-            if (immediateRefusal)
-                throw new Error(immediateRefusal);
-            return (dependencies.spawnManaged ?? spawnManagedProcessGroup)(dispatch.binPath, finalArgs, {
+            const spawn = (runnerPath) => (dependencies.spawnManaged ?? spawnManagedProcessGroup)(runnerPath, finalArgs, {
                 timeoutMs: timeout,
                 platform: opts.platform,
                 deviceId: requestedDeviceId,
                 tool: opts.slug ?? 'inline-maestro',
             });
+            if (dependencies.spawnManaged) {
+                const immediateStatus = await resolveEngineStatus();
+                const refusal = exactPinRefusal(immediateStatus);
+                if (refusal)
+                    throw new Error(`RUNNER_PIN_CHANGED: ${refusal}`);
+                return spawn(dispatch.binPath);
+            }
+            return withImmediatePinnedRunner(dispatch.binPath, resolveEngineStatus, spawn);
         };
         let execution;
         try {
