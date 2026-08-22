@@ -69,6 +69,28 @@ export function discoverLockedTests(projectRoot) {
         .map((f) => f.replace(/\.yaml$/, ''))
         .sort();
 }
+export function resolveLockedTestIds(projectRoot, pattern, discover = discoverLockedTests) {
+    const ids = discover(projectRoot);
+    if (!pattern || pattern.length > 256)
+        return ids;
+    try {
+        const matcher = new RegExp(pattern, 'i');
+        return ids.filter((id) => matcher.test(id));
+    }
+    catch {
+        return ids;
+    }
+}
+const resolvedLockedTestIds = Symbol('resolvedLockedTestIds');
+export function setResolvedLockedTestIds(args, ids) {
+    Object.defineProperty(args, resolvedLockedTestIds, {
+        value: Object.freeze([...ids]),
+        configurable: true,
+    });
+}
+export function getResolvedLockedTestIds(args) {
+    return args[resolvedLockedTestIds];
+}
 export function parseLockedTest(text, filePath) {
     if (!/^#\s*e2e-locked-test:\s*true\s*$/m.test(text))
         return null;

@@ -13032,6 +13032,14 @@ var init_login_prologue = __esm({
   }
 });
 
+// packages/rn-dev-agent-core/dist/domain/e2e-test.js
+var init_e2e_test = __esm({
+  "packages/rn-dev-agent-core/dist/domain/e2e-test.js"() {
+    "use strict";
+    init_path_safety();
+  }
+});
+
 // packages/rn-dev-agent-core/dist/session/tool-profiles.js
 function facetsOf(groups, narrowing = {}) {
   const facets = new Set(groups.flatMap((group) => [...groupFacets[group]]));
@@ -13320,6 +13328,7 @@ var init_authority_gate = __esm({
     init_metro_origin();
     init_install_reissue();
     init_login_prologue();
+    init_e2e_test();
     init_tool_profiles();
     managedNativeOrigin = /* @__PURE__ */ Symbol("managedNativeOrigin");
     managedRunnerPark = /* @__PURE__ */ Symbol("managedRunnerPark");

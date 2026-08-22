@@ -2680,6 +2680,7 @@ test('locked e2e proof coexists with a blocked login helper and does not rewrite
     const gate = createAuthorityGate(runtime, {
       probe: async ({ axis }) => ({ axis, identity: `${axis}-identity` }),
       refreshRuntimeBinding: async () => status.bindings.bundle,
+      resolveLockedE2eTestIds: () => ['user-login'],
     });
 
     const result = await gate.wrap(tool, async () => {
@@ -2688,11 +2689,7 @@ test('locked e2e proof coexists with a blocked login helper and does not rewrite
         locked: tool === 'cdp_lock_e2e_test',
         suite: tool === 'cdp_run_e2e_suite',
       });
-    })(
-      tool === 'cdp_lock_e2e_test'
-        ? { actionId: 'user-login' }
-        : { pattern: '^user-login$' },
-    );
+    })(tool === 'cdp_lock_e2e_test' ? { actionId: 'user-login' } : { pattern: '.*' });
     const envelope = JSON.parse(result.content[0].text);
     assert.equal(envelope.ok, true, `${tool}: ${envelope.code ?? envelope.error ?? 'ok'}`);
     assert.equal(dispatched, true, tool);
@@ -2711,6 +2708,27 @@ test('locked e2e proof coexists with a blocked login helper and does not rewrite
   })({ text: 'secret' });
   assert.equal(JSON.parse(fill.content[0].text).code, 'LOGIN_PROLOGUE_BLOCKED');
   assert.equal(fillDispatched, false);
+});
+
+test('blocked login helper rejects a case-insensitive multi-match after suite resolution', async () => {
+  const { runtime, status } = fixture();
+  status.bindings.loginPrologue = loginOutcome('LOGIN_PROLOGUE_BLOCKED', {
+    code: 'ENGINE_PIN_MISMATCH',
+    detail: 'runner drift',
+  });
+  let dispatched = false;
+  const gate = createAuthorityGate(runtime, {
+    probe: async ({ axis }) => ({ axis, identity: `${axis}-identity` }),
+    resolveLockedE2eTestIds: () => ['user-login', 'USER-LOGIN'],
+  });
+
+  const result = await gate.wrap('cdp_run_e2e_suite', async () => {
+    dispatched = true;
+    return okResult({});
+  })({ pattern: '^user-login$' });
+
+  assert.equal(JSON.parse(result.content[0].text).code, 'LOGIN_PROLOGUE_BLOCKED');
+  assert.equal(dispatched, false);
 });
 
 test('blocked login helper refuses non-exact locked e2e selections', async () => {

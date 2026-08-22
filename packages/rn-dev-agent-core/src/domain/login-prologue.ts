@@ -58,10 +58,14 @@ export function readLoginPrologueOutcome(value: unknown): LoginPrologueOutcome |
   return candidate as LoginPrologueOutcome;
 }
 
-function lockedE2eProofAllowed(tool: string, args: Record<string, unknown>): boolean {
+function lockedE2eProofAllowed(
+  tool: string,
+  args: Record<string, unknown>,
+  resolvedLockedTestIds?: readonly string[],
+): boolean {
   if (tool === 'cdp_lock_e2e_test') return args.actionId === LOGIN_PROLOGUE_ALIAS;
   if (tool === 'cdp_run_e2e_suite') {
-    return args.pattern === `^${LOGIN_PROLOGUE_ALIAS}$`;
+    return resolvedLockedTestIds?.length === 1 && resolvedLockedTestIds[0] === LOGIN_PROLOGUE_ALIAS;
   }
   return false;
 }
@@ -105,13 +109,14 @@ export function inspectLoginPrologueGuard(input: {
   tool: string;
   args: Record<string, unknown>;
   mutation: boolean;
+  resolvedLockedTestIds?: readonly string[];
 }): LoginPrologueGuardInspection {
   const outcome = readLoginPrologueOutcome(input.binding);
   if (
     outcome?.state !== LOGIN_PROLOGUE_BLOCKED ||
     !input.mutation ||
     cleanupAllowed(input.tool, input.args) ||
-    lockedE2eProofAllowed(input.tool, input.args)
+    lockedE2eProofAllowed(input.tool, input.args, input.resolvedLockedTestIds)
   ) {
     return { blocked: false };
   }
@@ -139,6 +144,7 @@ export function evaluateLoginPrologueGuard(input: {
   tool: string;
   args: Record<string, unknown>;
   mutation: boolean;
+  resolvedLockedTestIds?: readonly string[];
   expectedOverrideToken?: string;
   now?: () => Date;
 }): LoginPrologueGuardDecision {

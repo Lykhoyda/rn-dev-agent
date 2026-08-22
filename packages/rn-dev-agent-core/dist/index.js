@@ -99,6 +99,7 @@ import { createMirrorSource, IosSimctlLoopSource, idbDemotionHint, } from './obs
 import { parseAllAdbDevices } from './tools/device-record.js';
 import { createLockE2eTestHandler } from './tools/lock-e2e-test.js';
 import { createRunE2eSuiteHandler } from './tools/run-e2e-suite.js';
+import { resolveLockedTestIds } from './domain/e2e-test.js';
 import { recoverInterruptedRequests } from './domain/e2e-run-request.js';
 import { preflight, probeMetro } from './e2e/preflight.js';
 import { resolveIosUdid } from './tools/device-screenshot-raw.js';
@@ -463,6 +464,13 @@ const createRuntimeAuthorityProbe = (resolveClient) => createLocalAuthorityProbe
 const localAuthorityProbe = createRuntimeAuthorityProbe(getClient);
 const authorityGate = createAuthorityGate(authorityRuntime, {
     loginSupervisorOverrideToken: () => process.env.RN_LOGIN_PROLOGUE_OVERRIDE_TOKEN,
+    resolveLockedE2eTestIds: (args, status) => {
+        const projectRoot = typeof args.projectRoot === 'string' ? args.projectRoot : status.source.appRoot;
+        if (typeof projectRoot !== 'string')
+            return [];
+        args.projectRoot = projectRoot;
+        return resolveLockedTestIds(projectRoot, typeof args.pattern === 'string' ? args.pattern : undefined);
+    },
     probe: async ({ axis, phase, status, tool, args }) => localAuthorityProbe({ axis, phase, status, tool, args }),
     recoverRuntimeConnection: async (status) => {
         const current = getClient();

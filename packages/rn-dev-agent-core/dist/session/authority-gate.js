@@ -6,6 +6,7 @@ import { authorityErrorMeta, SessionAuthorityError, shortAuthorityIdentity } fro
 import { isProvenMetroOriginMismatch } from './metro-origin.js';
 import { reissueInstallBinding } from './install-reissue.js';
 import { LOGIN_PROLOGUE_ALIAS, LOGIN_PROLOGUE_BLOCKED, appendLoginOverrideAudit, authorizeLoginSupervisorOverride, inspectLoginPrologueGuard, readLoginPrologueOutcome, } from '../domain/login-prologue.js';
+import { setResolvedLockedTestIds } from '../domain/e2e-test.js';
 import { authorityProfileFor, requiresExactInstalledArtifact, } from './tool-profiles.js';
 const optionalBundleAdmission = Symbol('optionalBundleAdmission');
 const managedNativeOrigin = Symbol('managedNativeOrigin');
@@ -814,7 +815,12 @@ export function createAuthorityGate(runtime, dependencies) {
             const pendingSupervisorOverrideToken = loginGuard.blocked
                 ? suppliedSupervisorOverrideToken
                 : undefined;
-            if (loginGuard.blocked && pendingSupervisorOverrideToken === undefined) {
+            const pendingLockedE2eAdmission = loginGuard.blocked &&
+                tool === 'cdp_run_e2e_suite' &&
+                pendingSupervisorOverrideToken === undefined;
+            if (loginGuard.blocked &&
+                pendingSupervisorOverrideToken === undefined &&
+                !pendingLockedE2eAdmission) {
                 return failResult('LOGIN_PROLOGUE_BLOCKED: the deterministic login action did not produce an authoritative passing RunRecord; mutating tools are disabled for this session.', 'LOGIN_PROLOGUE_BLOCKED', {
                     loginPrologue: runtimeStatus.available
                         ? runtimeStatus.bindings.loginPrologue
@@ -1137,6 +1143,20 @@ export function createAuthorityGate(runtime, dependencies) {
                 if (!deferredAdmissionChecks) {
                     requireCompleteAxes(status, profile);
                     bindSessionArguments(status, profile, args, tool);
+                }
+                if (pendingLockedE2eAdmission) {
+                    const resolvedLockedTestIds = dependencies.resolveLockedE2eTestIds?.(args, status);
+                    if (!resolvedLockedTestIds ||
+                        inspectLoginPrologueGuard({
+                            binding: status.bindings.loginPrologue,
+                            tool,
+                            args,
+                            mutation: profile.mutation,
+                            resolvedLockedTestIds,
+                        }).blocked) {
+                        throw new SessionAuthorityError('LOGIN_PROLOGUE_BLOCKED', 'the locked e2e suite did not resolve to the exact user-login candidate');
+                    }
+                    setResolvedLockedTestIds(args, resolvedLockedTestIds);
                 }
                 operation = registry.beginOperation(available.session, {
                     operationId: randomUUID(),

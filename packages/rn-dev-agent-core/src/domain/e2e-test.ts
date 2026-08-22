@@ -108,6 +108,38 @@ export function discoverLockedTests(projectRoot: string): string[] {
     .sort();
 }
 
+export function resolveLockedTestIds(
+  projectRoot: string,
+  pattern?: string,
+  discover: (root: string) => string[] = discoverLockedTests,
+): string[] {
+  const ids = discover(projectRoot);
+  if (!pattern || pattern.length > 256) return ids;
+  try {
+    const matcher = new RegExp(pattern, 'i');
+    return ids.filter((id) => matcher.test(id));
+  } catch {
+    return ids;
+  }
+}
+
+const resolvedLockedTestIds = Symbol('resolvedLockedTestIds');
+
+type ResolvedLockedTestArgs = Record<string | symbol, unknown> & {
+  [resolvedLockedTestIds]?: readonly string[];
+};
+
+export function setResolvedLockedTestIds(args: object, ids: readonly string[]): void {
+  Object.defineProperty(args, resolvedLockedTestIds, {
+    value: Object.freeze([...ids]),
+    configurable: true,
+  });
+}
+
+export function getResolvedLockedTestIds(args: object): readonly string[] | undefined {
+  return (args as ResolvedLockedTestArgs)[resolvedLockedTestIds];
+}
+
 export function parseLockedTest(text: string, filePath: string): LockedE2eTest | null {
   if (!/^#\s*e2e-locked-test:\s*true\s*$/m.test(text)) return null;
   const sentinelIdx = text.indexOf(FLOW_SENTINEL);

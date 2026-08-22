@@ -383,13 +383,14 @@ test('blocked helper still allows locked e2e proof without a supervisor override
   const binding = blockedBinding();
   for (const [tool, args] of [
     ['cdp_lock_e2e_test', { actionId: 'user-login' }],
-    ['cdp_run_e2e_suite', { pattern: '^user-login$' }],
+    ['cdp_run_e2e_suite', { pattern: '.*' }],
   ] as const) {
     const decision = evaluateLoginPrologueGuard({
       binding,
       tool,
       args,
       mutation: true,
+      ...(tool === 'cdp_run_e2e_suite' ? { resolvedLockedTestIds: ['user-login'] } : {}),
     });
     assert.deepEqual(decision, { allowed: true, override: false }, tool);
   }
@@ -410,6 +411,25 @@ test('blocked helper refuses locked e2e requests outside the exact login candida
       mutation: true,
     });
     assert.deepEqual(decision, { allowed: false, suppliedOverride: false }, tool);
+  }
+});
+
+test('blocked helper requires case-sensitive exact resolved locked e2e ids', () => {
+  const binding = blockedBinding();
+  for (const resolvedLockedTestIds of [
+    [],
+    ['USER-LOGIN'],
+    ['user-login', 'USER-LOGIN'],
+    ['user-login', 'other-login'],
+  ]) {
+    const decision = evaluateLoginPrologueGuard({
+      binding,
+      tool: 'cdp_run_e2e_suite',
+      args: { pattern: '^user-login$' },
+      mutation: true,
+      resolvedLockedTestIds,
+    });
+    assert.deepEqual(decision, { allowed: false, suppliedOverride: false });
   }
 });
 

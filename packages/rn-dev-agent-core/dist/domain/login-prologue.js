@@ -18,11 +18,11 @@ export function readLoginPrologueOutcome(value) {
     }
     return candidate;
 }
-function lockedE2eProofAllowed(tool, args) {
+function lockedE2eProofAllowed(tool, args, resolvedLockedTestIds) {
     if (tool === 'cdp_lock_e2e_test')
         return args.actionId === LOGIN_PROLOGUE_ALIAS;
     if (tool === 'cdp_run_e2e_suite') {
-        return args.pattern === `^${LOGIN_PROLOGUE_ALIAS}$`;
+        return resolvedLockedTestIds?.length === 1 && resolvedLockedTestIds[0] === LOGIN_PROLOGUE_ALIAS;
     }
     return false;
 }
@@ -58,7 +58,7 @@ export function inspectLoginPrologueGuard(input) {
     if (outcome?.state !== LOGIN_PROLOGUE_BLOCKED ||
         !input.mutation ||
         cleanupAllowed(input.tool, input.args) ||
-        lockedE2eProofAllowed(input.tool, input.args)) {
+        lockedE2eProofAllowed(input.tool, input.args, input.resolvedLockedTestIds)) {
         return { blocked: false };
     }
     return {

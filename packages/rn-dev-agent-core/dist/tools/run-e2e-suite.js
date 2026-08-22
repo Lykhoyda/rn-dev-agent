@@ -1,4 +1,4 @@
-import { discoverLockedTests, loadLockedTest } from '../domain/e2e-test.js';
+import { discoverLockedTests, getResolvedLockedTestIds, loadLockedTest, resolveLockedTestIds, } from '../domain/e2e-test.js';
 import { classifyFlowResult, skippedResult, unloadableResult, computeVerdict, diffNewlyFailing, writeRunRecord, loadRunRecord, lastGreenRunId, } from '../domain/e2e-run.js';
 import { loadE2eConfig, resolveParams, secretValuesFor, redactSecrets, } from '../domain/e2e-config.js';
 import { getGitInfo as realGetGitInfo } from '../e2e/git-info.js';
@@ -22,17 +22,6 @@ function readMaestro(result) {
         return { passed: false, output: 'unparseable maestro result' };
     }
 }
-function filterByPattern(ids, pattern) {
-    if (!pattern || pattern.length > 256)
-        return ids;
-    try {
-        const re = new RegExp(pattern, 'i');
-        return ids.filter((id) => re.test(id));
-    }
-    catch {
-        return ids;
-    }
-}
 export async function runE2eSuiteCore(args, deps = {}) {
     const projectRoot = args.projectRoot ?? findProjectRoot() ?? process.cwd();
     const discover = deps.discover ?? discoverLockedTests;
@@ -43,7 +32,10 @@ export async function runE2eSuiteCore(args, deps = {}) {
     const now = deps.now ?? (() => new Date());
     const mkRunId = deps.makeRunId ?? makeRunId;
     const rand = () => Math.random().toString(36).slice(2, 8);
-    const ids = filterByPattern(discover(projectRoot), args.pattern);
+    const ids = [
+        ...(getResolvedLockedTestIds(args) ??
+            resolveLockedTestIds(projectRoot, args.pattern, discover)),
+    ];
     if (ids.length === 0) {
         return warnResult({
             runId: null,
