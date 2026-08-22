@@ -1,6 +1,6 @@
 import { listActions } from '../domain/action-inventory.js';
 import { loadAction } from '../domain/action-store.js';
-import { LOGIN_PROLOGUE_ALIAS, LOGIN_PROLOGUE_BLOCKED, } from '../domain/login-prologue.js';
+import { ACTION_LOGIN_HELPER, LOGIN_PROLOGUE_ALIAS, LOGIN_PROLOGUE_BLOCKED, } from '../domain/login-prologue.js';
 import { failResult, okResult } from '../utils.js';
 import { sealStrictRunAction } from './run-action.js';
 function parseEnvelope(result) {
@@ -38,6 +38,7 @@ export function createLoginPrologueHandler(deps) {
             return {
                 schemaVersion: 1,
                 state,
+                role: ACTION_LOGIN_HELPER,
                 alias: LOGIN_PROLOGUE_ALIAS,
                 startedAt: prologueStarted.toISOString(),
                 endedAt: ended.toISOString(),

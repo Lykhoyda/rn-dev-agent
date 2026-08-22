@@ -9,7 +9,8 @@ your project.
 If your project also has a `.maestro/` folder for hand-authored E2E tests,
 that's yours alone. Authentication prologues resolve the exact
 `.rn-agent/actions/user-login.yaml` learned action and never infer a login flow
-from `.maestro/` filenames.
+from `.maestro/` filenames. `cdp_login_prologue` is a navigation helper, not PR
+proof; lock and run the login e2e on the exact candidate for formal proof.
 
 ## Layout
 

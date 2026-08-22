@@ -60,7 +60,7 @@ Do not silently take the cheaper path. The user reviewing your output cannot tel
 
 ### When shortcuts are legitimate
 
-- **Auth pre-flight** (`cdp_login_prologue` with a passing RunRecord) — bootstrap, not verification surface
+- **Auth pre-flight** (`cdp_login_prologue` with a passing RunRecord) — bootstrap helper, not PR proof or a durable authority capability
 - **Permission pre-flight** (granting via `device_permission`) — platform setup, declared upfront
 - **Test data seeding** (via app's test-only fixtures) — declared in the test plan
 - **Explicit user instruction** ("just deep-link to the details screen and check the layout") — user-sanctioned scope
@@ -332,7 +332,12 @@ and replays it with conservative runner and selector safety checks.
 
 Continue only when the result has `state: "passed"` and a fresh passing
 `runRecord`. The returned prologue and RunRecord timing fields separate
-inventory, resolution, replay, verification, and transport time.
+inventory, resolution, replay, verification, and transport time. Treat that
+pass as a navigation helper only: it is not PR proof and must not be used as
+a durable authority capability. Formal login proof is locking and running
+the login e2e on the exact candidate (`cdp_lock_e2e_test` /
+`cdp_run_e2e_suite`). Helper replay and locked e2e coexist without sharing
+that proof or rewriting each other's artifacts.
 
 `LOGIN_PROLOGUE_BLOCKED` is a terminal journey boundary. A missing action,
 runner drift, selector failure, timeout, or missing fresh RunRecord must not

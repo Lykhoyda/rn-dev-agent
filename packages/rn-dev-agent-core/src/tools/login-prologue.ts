@@ -1,6 +1,7 @@
 import { listActions } from '../domain/action-inventory.js';
 import { loadAction } from '../domain/action-store.js';
 import {
+  ACTION_LOGIN_HELPER,
   LOGIN_PROLOGUE_ALIAS,
   LOGIN_PROLOGUE_BLOCKED,
   type LoginPrologueOutcome,
@@ -67,6 +68,7 @@ export function createLoginPrologueHandler(deps: LoginPrologueDependencies) {
       return {
         schemaVersion: 1,
         state,
+        role: ACTION_LOGIN_HELPER,
         alias: LOGIN_PROLOGUE_ALIAS,
         startedAt: prologueStarted.toISOString(),
         endedAt: ended.toISOString(),

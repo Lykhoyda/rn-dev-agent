@@ -2666,6 +2666,49 @@ test('a failed login prologue becomes a durable terminal mutation gate', async (
   assert.equal(readDispatched, true);
 });
 
+test('locked e2e proof coexists with a blocked login helper and does not rewrite it', async () => {
+  const blocked = loginOutcome('LOGIN_PROLOGUE_BLOCKED', {
+    code: 'ENGINE_PIN_MISMATCH',
+    detail: 'runner drift',
+  });
+
+  for (const tool of ['cdp_lock_e2e_test', 'cdp_run_e2e_suite']) {
+    const { runtime, status } = fixture();
+    status.bindings.loginPrologue = structuredClone(blocked);
+    const frozenHelper = structuredClone(blocked);
+    let dispatched = false;
+    const gate = createAuthorityGate(runtime, {
+      probe: async ({ axis }) => ({ axis, identity: `${axis}-identity` }),
+      refreshRuntimeBinding: async () => status.bindings.bundle,
+    });
+
+    const result = await gate.wrap(tool, async () => {
+      dispatched = true;
+      return okResult({
+        locked: tool === 'cdp_lock_e2e_test',
+        suite: tool === 'cdp_run_e2e_suite',
+      });
+    })(tool === 'cdp_lock_e2e_test' ? { actionId: 'user-login' } : {});
+    const envelope = JSON.parse(result.content[0].text);
+    assert.equal(envelope.ok, true, `${tool}: ${envelope.code ?? envelope.error ?? 'ok'}`);
+    assert.equal(dispatched, true, tool);
+    assert.deepEqual(status.bindings.loginPrologue, frozenHelper, tool);
+  }
+
+  const { runtime, status } = fixture();
+  status.bindings.loginPrologue = structuredClone(blocked);
+  const gate = createAuthorityGate(runtime, {
+    probe: async ({ axis }) => ({ axis, identity: `${axis}-identity` }),
+  });
+  let fillDispatched = false;
+  const fill = await gate.wrap('device_fill', async () => {
+    fillDispatched = true;
+    return okResult({});
+  })({ text: 'secret' });
+  assert.equal(JSON.parse(fill.content[0].text).code, 'LOGIN_PROLOGUE_BLOCKED');
+  assert.equal(fillDispatched, false);
+});
+
 test('a failed login prologue persists before fallible postflight checks', async () => {
   const { runtime, status } = fixture();
   const blocked = loginOutcome('LOGIN_PROLOGUE_BLOCKED', {

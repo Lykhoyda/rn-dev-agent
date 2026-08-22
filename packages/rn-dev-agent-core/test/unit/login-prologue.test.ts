@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict';
-import { writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { test } from 'node:test';
+import {
+  ACTION_LOGIN_HELPER,
+  evaluateLoginPrologueGuard,
+  LOGIN_PROLOGUE_BLOCKED,
+} from '../../dist/domain/login-prologue.js';
 import { createLoginPrologueHandler } from '../../dist/tools/login-prologue.js';
 import { createRunActionHandler } from '../../dist/tools/run-action.js';
 import { failResult, okResult } from '../../dist/utils.js';
@@ -66,6 +72,7 @@ test('login prologue resolves the exact alias and requires a fresh passing RunRe
     const envelope = parse(await handler({ projectRoot: project.root }));
     assert.equal(envelope.ok, true);
     assert.equal(envelope.data.state, 'passed');
+    assert.equal(envelope.data.role, ACTION_LOGIN_HELPER);
     assert.equal(envelope.data.actionId, 'user-login');
     assert.equal(envelope.data.runRecord.runId, expectedRunId);
     assert.deepEqual(
@@ -355,4 +362,82 @@ test('login prologue rejects transport success without a fresh passing RunRecord
   assert.equal(envelope.ok, false);
   assert.equal(envelope.code, 'LOGIN_PROLOGUE_BLOCKED');
   assert.equal(envelope.meta.loginPrologue.failure.code, 'AUTHORITATIVE_RUN_RECORD_MISSING');
+});
+
+function blockedBinding() {
+  return {
+    schemaVersion: 1,
+    state: LOGIN_PROLOGUE_BLOCKED,
+    role: ACTION_LOGIN_HELPER,
+    alias: 'user-login',
+    startedAt: '2026-08-21T10:00:00.000Z',
+    endedAt: '2026-08-21T10:00:00.100Z',
+    elapsedMs: 100,
+    steps: [],
+    inventory: { count: 1, actionIds: ['user-login'] },
+    failure: { code: 'ENGINE_PIN_MISMATCH', detail: 'runner drift' },
+  };
+}
+
+test('blocked helper still allows locked e2e proof without a supervisor override', () => {
+  const binding = blockedBinding();
+  for (const tool of ['cdp_lock_e2e_test', 'cdp_run_e2e_suite']) {
+    const decision = evaluateLoginPrologueGuard({
+      binding,
+      tool,
+      args: { actionId: 'user-login' },
+      mutation: true,
+    });
+    assert.deepEqual(decision, { allowed: true, override: false }, tool);
+  }
+});
+
+test('blocked helper still refuses credential and ad-hoc login mutations', () => {
+  const binding = blockedBinding();
+  for (const [tool, args] of [
+    ['device_fill', { text: 'secret' }],
+    ['cdp_evaluate', { expression: 'credential()' }],
+    ['cdp_interact', { action: 'press', testID: 'submit' }],
+    ['maestro_run', { yaml: '- tapOn: Login' }],
+  ]) {
+    const decision = evaluateLoginPrologueGuard({
+      binding,
+      tool,
+      args,
+      mutation: true,
+    });
+    assert.deepEqual(decision, { allowed: false, suppliedOverride: false }, tool);
+  }
+});
+
+test('login prologue does not freeze or rewrite locked e2e artifacts', async (t) => {
+  const project = createTmpProject();
+  t.after(() => project.cleanup());
+  seedLoginAction(project);
+  const e2eDir = join(project.root, '.rn-agent', 'e2e');
+  mkdirSync(e2eDir, { recursive: true });
+  const frozenPath = join(e2eDir, 'user-login.yaml');
+  writeFileSync(frozenPath, 'frozen-login-proof: true\n', 'utf8');
+  const handler = createLoginPrologueHandler({
+    now: deterministicClock(),
+    runAction: async () => {
+      appendRunRecordToSidecar(project.root, 'user-login', {
+        runId: 'login-run-helper',
+        timestamp: '2026-08-21T10:00:01.000Z',
+        durationMs: 125,
+        status: 'pass',
+        trigger: 'agent',
+      });
+      return okResult({
+        passed: true,
+        strictRunRecordId: 'login-run-helper',
+        transport: 'maestro',
+      });
+    },
+  });
+
+  const envelope = parse(await handler({ projectRoot: project.root }));
+  assert.equal(envelope.ok, true);
+  assert.equal(envelope.data.role, ACTION_LOGIN_HELPER);
+  assert.equal(readFileSync(frozenPath, 'utf8'), 'frozen-login-proof: true\n');
 });

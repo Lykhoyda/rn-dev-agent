@@ -3,6 +3,8 @@ import type { RunRecord } from './reusable-action.js';
 
 export const LOGIN_PROLOGUE_ALIAS = 'user-login';
 export const LOGIN_PROLOGUE_BLOCKED = 'LOGIN_PROLOGUE_BLOCKED';
+export const ACTION_LOGIN_HELPER = 'ACTION_LOGIN_HELPER';
+export const LOCKED_E2E_LOGIN_TOOLS = ['cdp_lock_e2e_test', 'cdp_run_e2e_suite'] as const;
 
 export interface LoginPrologueStepTiming {
   name: 'inventory' | 'resolve' | 'replay' | 'verify-run-record';
@@ -19,6 +21,7 @@ export interface LoginOverrideAudit {
 export interface LoginPrologueOutcome {
   schemaVersion: 1;
   state: 'passed' | typeof LOGIN_PROLOGUE_BLOCKED;
+  role?: typeof ACTION_LOGIN_HELPER;
   alias: typeof LOGIN_PROLOGUE_ALIAS;
   actionId?: string;
   attemptId?: string;
@@ -53,6 +56,11 @@ export function readLoginPrologueOutcome(value: unknown): LoginPrologueOutcome |
     return null;
   }
   return candidate as LoginPrologueOutcome;
+}
+
+function lockedE2eProofAllowed(tool: string): boolean {
+  // Locked e2e is the formal PR-proof path and must coexist with the helper gate.
+  return (LOCKED_E2E_LOGIN_TOOLS as readonly string[]).includes(tool);
 }
 
 function cleanupAllowed(tool: string, args: Record<string, unknown>): boolean {
@@ -99,7 +107,8 @@ export function inspectLoginPrologueGuard(input: {
   if (
     outcome?.state !== LOGIN_PROLOGUE_BLOCKED ||
     !input.mutation ||
-    cleanupAllowed(input.tool, input.args)
+    cleanupAllowed(input.tool, input.args) ||
+    lockedE2eProofAllowed(input.tool)
   ) {
     return { blocked: false };
   }

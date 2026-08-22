@@ -2,7 +2,7 @@ import type { InstallIdentityInspection } from './install-identity-inspection.js
 import { inspectAuthorityMigration } from './migration-diagnostic.js';
 import { authorityRemedyNextAction, type RecoveryRequirementInspection } from './registry.js';
 import type { WorkerAuthorityStatus } from './runtime.js';
-import { readLoginPrologueOutcome } from '../domain/login-prologue.js';
+import { ACTION_LOGIN_HELPER, readLoginPrologueOutcome } from '../domain/login-prologue.js';
 
 interface BoundedHandle {
   token?: unknown;
@@ -196,6 +196,7 @@ export function projectPublicAuthorityStatus(
     ...(loginPrologue
       ? {
           loginPrologue: {
+            role: ACTION_LOGIN_HELPER,
             state: loginPrologue.state,
             alias: loginPrologue.alias,
             actionId: loginPrologue.actionId,

@@ -2917,7 +2917,7 @@ trackedTool('cdp_run_action', "Replay a learned action by id with end-to-end aut
         .optional()
         .describe("Parameter bindings for the action's ${VAR} placeholders, forwarded to maestro as -e KEY=VALUE on the first attempt AND the post-repair retry (GH #116). Keys must match /^[A-Z_][A-Z0-9_]*$/ (validated in maestro_run)."),
 }, runActionHandler);
-trackedTool('cdp_login_prologue', 'Inventory learned actions, replay the exact user-login action strictly, and require a fresh passing RunRecord before lifting the session login gate.', {
+trackedTool('cdp_login_prologue', 'Fail-stop user-login helper: replay the exact action and require a fresh passing RunRecord; not PR proof.', {
     projectRoot: z.string().optional().describe('Override project root (default: process.cwd()).'),
     platform: z
         .enum(['ios', 'android'])

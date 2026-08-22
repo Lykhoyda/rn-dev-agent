@@ -3985,7 +3985,7 @@ trackedTool(
 
 trackedTool(
   'cdp_login_prologue',
-  'Inventory learned actions, replay the exact user-login action strictly, and require a fresh passing RunRecord before lifting the session login gate.',
+  'Fail-stop user-login helper: replay the exact action and require a fresh passing RunRecord; not PR proof.',
   {
     projectRoot: z.string().optional().describe('Override project root (default: process.cwd()).'),
     platform: z

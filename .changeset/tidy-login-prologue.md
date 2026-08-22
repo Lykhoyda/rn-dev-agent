@@ -3,4 +3,4 @@
 "rn-dev-agent-plugin": patch
 ---
 
-The login prologue now requires the exact user-login action to produce a fresh passing RunRecord, terminally gates session mutations on failure, and records auditable replay timings and supervisor overrides.
+The login prologue remains a fail-stop navigation helper: it requires a fresh user-login RunRecord, terminally blocks credential fallbacks, and coexists with locked e2e login proof. A passing helper is not PR proof.

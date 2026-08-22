@@ -1,6 +1,8 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 export const LOGIN_PROLOGUE_ALIAS = 'user-login';
 export const LOGIN_PROLOGUE_BLOCKED = 'LOGIN_PROLOGUE_BLOCKED';
+export const ACTION_LOGIN_HELPER = 'ACTION_LOGIN_HELPER';
+export const LOCKED_E2E_LOGIN_TOOLS = ['cdp_lock_e2e_test', 'cdp_run_e2e_suite'];
 export function readLoginPrologueOutcome(value) {
     if (!value || typeof value !== 'object' || Array.isArray(value))
         return null;
@@ -15,6 +17,10 @@ export function readLoginPrologueOutcome(value) {
         return null;
     }
     return candidate;
+}
+function lockedE2eProofAllowed(tool) {
+    // Locked e2e is the formal PR-proof path and must coexist with the helper gate.
+    return LOCKED_E2E_LOGIN_TOOLS.includes(tool);
 }
 function cleanupAllowed(tool, args) {
     if (tool === 'cdp_login_prologue')
@@ -47,7 +53,8 @@ export function inspectLoginPrologueGuard(input) {
     const outcome = readLoginPrologueOutcome(input.binding);
     if (outcome?.state !== LOGIN_PROLOGUE_BLOCKED ||
         !input.mutation ||
-        cleanupAllowed(input.tool, input.args)) {
+        cleanupAllowed(input.tool, input.args) ||
+        lockedE2eProofAllowed(input.tool)) {
         return { blocked: false };
     }
     return {

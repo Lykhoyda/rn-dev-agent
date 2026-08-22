@@ -120,6 +120,7 @@ test('session status exposes bounded login-prologue evidence without action para
   });
 
   assert.deepEqual(projected.loginPrologue, {
+    role: 'ACTION_LOGIN_HELPER',
     state: 'LOGIN_PROLOGUE_BLOCKED',
     alias: 'user-login',
     actionId: 'user-login',

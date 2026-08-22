@@ -32053,6 +32053,9 @@ function readLoginPrologueOutcome(value) {
   }
   return candidate;
 }
+function lockedE2eProofAllowed(tool) {
+  return LOCKED_E2E_LOGIN_TOOLS.includes(tool);
+}
 function cleanupAllowed(tool, args) {
   if (tool === "cdp_login_prologue")
     return true;
@@ -32078,7 +32081,7 @@ function tokenMatches(expected, supplied) {
 }
 function inspectLoginPrologueGuard(input) {
   const outcome = readLoginPrologueOutcome(input.binding);
-  if (outcome?.state !== LOGIN_PROLOGUE_BLOCKED || !input.mutation || cleanupAllowed(input.tool, input.args)) {
+  if (outcome?.state !== LOGIN_PROLOGUE_BLOCKED || !input.mutation || cleanupAllowed(input.tool, input.args) || lockedE2eProofAllowed(input.tool)) {
     return { blocked: false };
   }
   return {
@@ -32094,12 +32097,14 @@ function authorizeLoginSupervisorOverride(input) {
 function appendLoginOverrideAudit(outcome, audit) {
   return { ...outcome, overrides: [...outcome.overrides ?? [], audit].slice(-20) };
 }
-var LOGIN_PROLOGUE_ALIAS, LOGIN_PROLOGUE_BLOCKED;
+var LOGIN_PROLOGUE_ALIAS, LOGIN_PROLOGUE_BLOCKED, ACTION_LOGIN_HELPER, LOCKED_E2E_LOGIN_TOOLS;
 var init_login_prologue = __esm({
   "packages/rn-dev-agent-core/dist/domain/login-prologue.js"() {
     "use strict";
     LOGIN_PROLOGUE_ALIAS = "user-login";
     LOGIN_PROLOGUE_BLOCKED = "LOGIN_PROLOGUE_BLOCKED";
+    ACTION_LOGIN_HELPER = "ACTION_LOGIN_HELPER";
+    LOCKED_E2E_LOGIN_TOOLS = ["cdp_lock_e2e_test", "cdp_run_e2e_suite"];
   }
 });
 
@@ -73546,6 +73551,7 @@ function projectPublicAuthorityStatus(status, options = {}) {
     proofOverlay: { active: Boolean(status.bindings.proof) },
     ...loginPrologue ? {
       loginPrologue: {
+        role: ACTION_LOGIN_HELPER,
         state: loginPrologue.state,
         alias: loginPrologue.alias,
         actionId: loginPrologue.actionId,
@@ -81014,6 +81020,7 @@ function createLoginPrologueHandler(deps) {
       return {
         schemaVersion: 1,
         state,
+        role: ACTION_LOGIN_HELPER,
         alias: LOGIN_PROLOGUE_ALIAS,
         startedAt: prologueStarted.toISOString(),
         endedAt: ended.toISOString(),
@@ -94409,7 +94416,7 @@ var init_index = __esm({
       blindProbeMode: external_exports.enum(["inherit", "allow", "forbid"]).optional().describe("Per-call proactive CDP/JS compatibility control. inherit (default) honors RN_BLIND_PROBE; allow explicitly enables the at-risk probe even when the process default is disabled; forbid keeps this call maestro-first. Reactive fallback behavior is unchanged."),
       params: external_exports.record(external_exports.string(), external_exports.string()).optional().describe("Parameter bindings for the action's ${VAR} placeholders, forwarded to maestro as -e KEY=VALUE on the first attempt AND the post-repair retry (GH #116). Keys must match /^[A-Z_][A-Z0-9_]*$/ (validated in maestro_run).")
     }, runActionHandler);
-    trackedTool("cdp_login_prologue", "Inventory learned actions, replay the exact user-login action strictly, and require a fresh passing RunRecord before lifting the session login gate.", {
+    trackedTool("cdp_login_prologue", "Fail-stop user-login helper: replay the exact action and require a fresh passing RunRecord; not PR proof.", {
       projectRoot: external_exports.string().optional().describe("Override project root (default: process.cwd())."),
       platform: external_exports.enum(["ios", "android"]).optional().describe("Force a platform; otherwise use the authority-bound device."),
       appFile: external_exports.string().optional().describe("iOS app artifact used only when the saved action contains clearState."),

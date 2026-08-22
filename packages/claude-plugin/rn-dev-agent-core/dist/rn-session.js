@@ -11390,12 +11390,13 @@ function readLoginPrologueOutcome(value) {
   }
   return candidate;
 }
-var LOGIN_PROLOGUE_ALIAS, LOGIN_PROLOGUE_BLOCKED;
+var LOGIN_PROLOGUE_ALIAS, LOGIN_PROLOGUE_BLOCKED, ACTION_LOGIN_HELPER;
 var init_login_prologue = __esm({
   "packages/rn-dev-agent-core/dist/domain/login-prologue.js"() {
     "use strict";
     LOGIN_PROLOGUE_ALIAS = "user-login";
     LOGIN_PROLOGUE_BLOCKED = "LOGIN_PROLOGUE_BLOCKED";
+    ACTION_LOGIN_HELPER = "ACTION_LOGIN_HELPER";
   }
 });
 
@@ -17753,6 +17754,7 @@ function projectPublicAuthorityStatus(status, options = {}) {
     proofOverlay: { active: Boolean(status.bindings.proof) },
     ...loginPrologue ? {
       loginPrologue: {
+        role: ACTION_LOGIN_HELPER,
         state: loginPrologue.state,
         alias: loginPrologue.alias,
         actionId: loginPrologue.actionId,
