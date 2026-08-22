@@ -58766,7 +58766,7 @@ var INJECTED_HELPERS = `
         }
         // M10 / Phase 110: architecture detection. Fabric wins on "both present"
         // (transient interop state); __fbBatchedBridge alone \u2192 classic bridge;
-        // neither \u2192 unknown. See docs/DECISIONS.md D667.
+        // neither \u2192 unknown.
         try {
           var fabric = typeof globalThis.nativeFabricUIManager === 'object'
             && globalThis.nativeFabricUIManager !== null;

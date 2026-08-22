@@ -25,7 +25,8 @@ notes here.
 - Engineering processes, plans, stories/specifications, diagnostics, comparisons,
   and research live in the workspace [`docs/`](https://github.com/Lykhoyda/rn-dev-agent-workspace/tree/main/docs/);
   never add a top-level `docs/` tree here. Captain-approved architecture records
-  belong in Anton Factory `architect-docs`; link to either owner instead of copying.
+  belong in [Anton Factory `architect-docs`](https://github.com/Lykhoyda/anton-factory/tree/main/architect-docs/);
+  link to either owner instead of copying.
 
 The plugin repo ships user-visible code and docs. Internal proof artifacts,
 bench reports, and project planning belong in GitHub Issues, PRs, or the

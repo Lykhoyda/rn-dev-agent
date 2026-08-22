@@ -402,7 +402,7 @@ a PASS.
 1. Summarize:
    - **What was built** (one paragraph)
    - **Files created/modified** (table with file path + change type)
-   - **Key decisions made** (align with docs/DECISIONS.md format)
+   - **Key decisions made** (context, choice, rejected alternatives, and durable lesson)
    - **Verification results** (the Phase 5.5 table)
    - **Review findings** (count fixed / count deferred)
 

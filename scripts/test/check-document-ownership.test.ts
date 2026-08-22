@@ -46,6 +46,9 @@ test('rejects documents in the repository top-level docs tree', () => {
 
     assert.equal(result.status, 1);
     assert.match(result.stderr, /docs\/plans\/next-stage\.md/);
-    assert.match(result.stderr, /rn-dev-agent-workspace\/docs/);
+    assert.match(
+      result.stderr,
+      /https:\/\/github\.com\/Lykhoyda\/rn-dev-agent-workspace\/tree\/main\/docs\//,
+    );
   });
 });
