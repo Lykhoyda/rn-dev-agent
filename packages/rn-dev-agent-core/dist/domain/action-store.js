@@ -285,11 +285,6 @@ export function joinYaml(parts) {
         out.push(b);
     return out.join('\n');
 }
-/**
- * Load a ReusableAction from disk by id, under the given project root.
- * Returns null if the YAML doesn't exist OR if M7 metadata is missing
- * (no id/intent — required fields).
- */
 export function loadAction(projectRoot, actionId) {
     assertValidActionId(actionId, 'loadAction');
     const corpus = resolveReadableActionCorpus(projectRoot);
@@ -316,6 +311,7 @@ export function loadAction(projectRoot, actionId) {
         body: bodyLines.join('\n'),
         filePath,
         state,
+        yamlText: text,
     };
 }
 /**

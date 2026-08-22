@@ -26858,7 +26858,8 @@ function loadAction(projectRoot, actionId) {
     metadata,
     body: bodyLines.join("\n"),
     filePath,
-    state
+    state,
+    yamlText: text
   };
 }
 function saveAction(action) {
@@ -40543,7 +40544,7 @@ ensureCwd();
 
 // packages/rn-dev-agent-core/dist/index.js
 import { createHash as createHash22, createHmac as createHmac5, randomUUID as randomUUID10 } from "node:crypto";
-import { readFileSync as readFileSync45, rmSync as rmSync12 } from "node:fs";
+import { readFileSync as readFileSync44, rmSync as rmSync12 } from "node:fs";
 import { execFile as execFile23 } from "node:child_process";
 import { promisify as promisify26 } from "node:util";
 import { fileURLToPath as fileURLToPath7 } from "node:url";
@@ -77960,6 +77961,7 @@ function createRunActionHandler(deps = {}) {
       probeDeviceId = null;
       const firstResult = await maestroRun({
         flowPath: action.filePath,
+        inlineYaml: loaded.yamlText,
         platform: args.platform,
         appId: args.appId,
         ...appFile ? { appFile } : {},
@@ -78243,6 +78245,7 @@ function createRunActionHandler(deps = {}) {
       probeDeviceId = null;
       const retryResult = await maestroRun({
         flowPath: reloadedAction.filePath,
+        inlineYaml: reloadedAction.yamlText,
         platform: args.platform,
         appId: args.appId,
         ...appFile ? { appFile } : {},
@@ -87792,7 +87795,6 @@ init_sources();
 
 // packages/rn-dev-agent-core/dist/tools/lock-e2e-test.js
 init_action_store();
-import { readFileSync as readFileSync42 } from "node:fs";
 
 // packages/rn-dev-agent-core/dist/domain/e2e-test.js
 init_path_safety();
@@ -87972,7 +87974,6 @@ function readPassed(result) {
 async function lockE2eTestCore(args, deps = {}) {
   const projectRoot = args.projectRoot ?? findProjectRoot() ?? process.cwd();
   const load = deps.loadAction ?? loadAction;
-  const readFile3 = deps.readActionFile ?? ((p) => readFileSync42(p, "utf8"));
   const getGit = deps.getGitInfo ?? getGitInfo;
   const getSession = deps.getSession ?? getActiveSession;
   const now = deps.now ?? (() => /* @__PURE__ */ new Date());
@@ -87997,6 +87998,7 @@ async function lockE2eTestCore(args, deps = {}) {
   const platform = session2?.platform ?? void 0;
   const runArgs = {
     flowPath: action.filePath,
+    inlineYaml: action.yamlText,
     platform,
     ...session2?.deviceId ? { deviceId: session2.deviceId } : {},
     ...nestedMaestroAuthorityCallbacks(args)
@@ -88018,7 +88020,7 @@ async function lockE2eTestCore(args, deps = {}) {
     id: action.metadata.id,
     intent: action.metadata.intent,
     sourceActionId: action.metadata.id,
-    flow: readFile3(action.filePath),
+    flow: action.yamlText,
     appId: action.metadata.appId
   }, { gitSha: git2.sha, now });
   return okResult({
@@ -88038,7 +88040,7 @@ init_maestro_error_parser();
 init_path_safety();
 init_runtime_paths2();
 import { join as join56 } from "node:path";
-import { mkdirSync as mkdirSync23, writeFileSync as writeFileSync19, renameSync as renameSync11, readFileSync as readFileSync43, existsSync as existsSync35 } from "node:fs";
+import { mkdirSync as mkdirSync23, writeFileSync as writeFileSync19, renameSync as renameSync11, readFileSync as readFileSync42, existsSync as existsSync35 } from "node:fs";
 function classifyFlowResult(input) {
   if (input.passed) {
     return {
@@ -88106,7 +88108,7 @@ function loadIndex(projectRoot) {
   if (!existsSync35(file))
     return [];
   try {
-    const parsed = JSON.parse(readFileSync43(file, "utf8"));
+    const parsed = JSON.parse(readFileSync42(file, "utf8"));
     return Array.isArray(parsed) ? parsed : [];
   } catch {
     return [];
@@ -88131,7 +88133,7 @@ function loadRunRecord(projectRoot, runId) {
   if (!existsSync35(file))
     return null;
   try {
-    return JSON.parse(readFileSync43(file, "utf8"));
+    return JSON.parse(readFileSync42(file, "utf8"));
   } catch {
     return null;
   }
@@ -88149,7 +88151,7 @@ init_utils();
 // packages/rn-dev-agent-core/dist/domain/e2e-run-request.js
 init_path_safety();
 import { join as join57 } from "node:path";
-import { mkdirSync as mkdirSync24, writeFileSync as writeFileSync20, renameSync as renameSync12, readFileSync as readFileSync44, readdirSync as readdirSync16, existsSync as existsSync36 } from "node:fs";
+import { mkdirSync as mkdirSync24, writeFileSync as writeFileSync20, renameSync as renameSync12, readFileSync as readFileSync43, readdirSync as readdirSync16, existsSync as existsSync36 } from "node:fs";
 var TERMINAL_STATUSES = /* @__PURE__ */ new Set([
   "done",
   "failed",
@@ -88175,7 +88177,7 @@ function loadRequest(projectRoot, runId) {
   if (!existsSync36(file))
     return null;
   try {
-    return JSON.parse(readFileSync44(file, "utf8"));
+    return JSON.parse(readFileSync43(file, "utf8"));
   } catch {
     return null;
   }
@@ -89482,7 +89484,7 @@ async function connectExactSessionTarget(input, timeoutMs, dependencies) {
 
 // packages/rn-dev-agent-core/dist/index.js
 var pkgPath = join59(dirname31(fileURLToPath7(import.meta.url)), "..", "package.json");
-var pkgVersion = JSON.parse(readFileSync45(pkgPath, "utf8")).version;
+var pkgVersion = JSON.parse(readFileSync44(pkgPath, "utf8")).version;
 var lockfile = null;
 var diagnosticContractProbe = process.argv.includes("--diagnostic-contract-probe");
 var noLock = diagnosticContractProbe || process.argv.includes("--no-lock");
@@ -89930,7 +89932,7 @@ var liveDeps = buildLiveDeps({
   readRoute: (c) => readLiveRoute(c),
   readShotFile: (path) => {
     try {
-      const buf = readFileSync45(path);
+      const buf = readFileSync44(path);
       const isPng = buf.length >= 4 && buf[0] === 137 && buf[1] === 80 && buf[2] === 78 && buf[3] === 71;
       return { buf, contentType: isPng ? "image/png" : "image/jpeg" };
     } catch {

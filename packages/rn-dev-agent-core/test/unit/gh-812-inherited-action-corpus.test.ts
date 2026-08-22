@@ -209,11 +209,63 @@ test('approved linked corpus shares action IDs and reaches runner preflight', as
       projectRoot: worktree,
       autoRepair: false,
       forceReload: false,
+      proofReplay: true,
     });
     const env = JSON.parse(result.content[0]!.text) as { ok?: boolean; code?: string };
     assert.notEqual(env.code, 'BAD_FILENAME');
-    assert.equal(env.ok, true);
+    assert.equal(env.ok, true, result.content[0]!.text);
     assert.equal(maestroCalls, 1);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('exact-ID replay executes the safely loaded YAML after a file symlink swap', async () => {
+  const fixture = makeFixture();
+  try {
+    mkdirSync(join(fixture.primary, '.rn-agent', 'actions'), { recursive: true });
+    mkdirSync(join(fixture.primary, '.rn-agent', 'state'), { recursive: true });
+    const capturedYaml = fixtureYaml({ id: 'login', selectors: ['captured-selector'] });
+    const actionPath = join(fixture.primary, '.rn-agent', 'actions', 'login.yaml');
+    writeFileSync(actionPath, capturedYaml);
+    const worktree = addWorktree(fixture);
+    inherit(worktree);
+    const swappedPath = join(fixture.root, 'swapped-login.yaml');
+    writeFileSync(
+      swappedPath,
+      fixtureYaml({ id: 'login', selectors: ['swapped-selector'] }),
+    );
+
+    const handler = createRunActionHandler({
+      maestroRun: async (args) => {
+        rmSync(actionPath);
+        symlinkSync(swappedPath, actionPath);
+        const replayYaml = args.inlineYaml ?? readFileSync(args.flowPath!, 'utf8');
+        const passed =
+          replayYaml.includes('captured-selector') && !replayYaml.includes('swapped-selector');
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({
+                ok: passed,
+                data: { passed, output: passed ? 'Flow passed' : 'Wrong flow executed' },
+              }),
+            },
+          ],
+        };
+      },
+    });
+    const result = await handler({
+      actionId: 'login',
+      projectRoot: worktree,
+      autoRepair: false,
+      forceReload: false,
+      proofReplay: true,
+    });
+    const env = JSON.parse(result.content[0]!.text) as { ok?: boolean };
+    assert.equal(env.ok, true);
+    assert.throws(() => loadAction(worktree, 'login'), /symlink/);
   } finally {
     fixture.cleanup();
   }

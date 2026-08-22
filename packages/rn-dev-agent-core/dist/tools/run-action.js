@@ -490,6 +490,7 @@ export function createRunActionHandler(deps = {}) {
             probeDeviceId = null;
             const firstResult = await maestroRun({
                 flowPath: action.filePath,
+                inlineYaml: loaded.yamlText,
                 platform: args.platform,
                 appId: args.appId,
                 ...(appFile ? { appFile } : {}),
@@ -834,6 +835,7 @@ export function createRunActionHandler(deps = {}) {
             probeDeviceId = null;
             const retryResult = await maestroRun({
                 flowPath: reloadedAction.filePath,
+                inlineYaml: reloadedAction.yamlText,
                 platform: args.platform,
                 appId: args.appId,
                 ...(appFile ? { appFile } : {}),

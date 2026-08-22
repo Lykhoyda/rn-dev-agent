@@ -354,7 +354,11 @@ export function joinYaml(parts: {
  * Returns null if the YAML doesn't exist OR if M7 metadata is missing
  * (no id/intent — required fields).
  */
-export function loadAction(projectRoot: string, actionId: string): ReusableAction | null {
+export interface LoadedReusableAction extends ReusableAction {
+  yamlText: string;
+}
+
+export function loadAction(projectRoot: string, actionId: string): LoadedReusableAction | null {
   assertValidActionId(actionId, 'loadAction');
   const corpus = resolveReadableActionCorpus(projectRoot);
   if (corpus.status === 'refused') throw new Error(corpus.reason);
@@ -375,6 +379,7 @@ export function loadAction(projectRoot: string, actionId: string): ReusableActio
     body: bodyLines.join('\n'),
     filePath,
     state,
+    yamlText: text,
   };
 }
 

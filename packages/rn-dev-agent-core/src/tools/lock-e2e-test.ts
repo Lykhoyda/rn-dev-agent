@@ -1,4 +1,3 @@
-import { readFileSync } from 'node:fs';
 import { loadAction } from '../domain/action-store.js';
 import { freezeLockedTest, loadLockedTest } from '../domain/e2e-test.js';
 import {
@@ -59,7 +58,6 @@ export async function lockE2eTestCore(
 ): Promise<ToolResult> {
   const projectRoot = args.projectRoot ?? findProjectRoot() ?? process.cwd();
   const load = deps.loadAction ?? loadAction;
-  const readFile = deps.readActionFile ?? ((p: string) => readFileSync(p, 'utf8'));
   const getGit = deps.getGitInfo ?? realGetGitInfo;
   const getSession = deps.getSession ?? getActiveSession;
   const now = deps.now ?? (() => new Date());
@@ -95,6 +93,7 @@ export async function lockE2eTestCore(
 
   const runArgs: MaestroRunArgs = {
     flowPath: action.filePath,
+    inlineYaml: action.yamlText,
     platform,
     ...(session?.deviceId ? { deviceId: session.deviceId } : {}),
     ...nestedMaestroAuthorityCallbacks(args),
@@ -123,7 +122,7 @@ export async function lockE2eTestCore(
       id: action.metadata.id,
       intent: action.metadata.intent,
       sourceActionId: action.metadata.id,
-      flow: readFile(action.filePath),
+      flow: action.yamlText,
       appId: action.metadata.appId,
     },
     { gitSha: git.sha, now },

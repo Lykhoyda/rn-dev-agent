@@ -29781,7 +29781,8 @@ function loadAction(projectRoot, actionId) {
     metadata,
     body: bodyLines.join("\n"),
     filePath,
-    state
+    state,
+    yamlText: text
   };
 }
 function saveAction(action) {
@@ -79885,6 +79886,7 @@ function createRunActionHandler(deps = {}) {
       probeDeviceId = null;
       const firstResult = await maestroRun({
         flowPath: action.filePath,
+        inlineYaml: loaded.yamlText,
         platform: args.platform,
         appId: args.appId,
         ...appFile ? { appFile } : {},
@@ -80168,6 +80170,7 @@ function createRunActionHandler(deps = {}) {
       probeDeviceId = null;
       const retryResult = await maestroRun({
         flowPath: reloadedAction.filePath,
+        inlineYaml: reloadedAction.yamlText,
         platform: args.platform,
         appId: args.appId,
         ...appFile ? { appFile } : {},
@@ -89839,7 +89842,6 @@ var init_git_info = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/tools/lock-e2e-test.js
-import { readFileSync as readFileSync42 } from "node:fs";
 function readPassed(result) {
   try {
     const env = JSON.parse(result.content[0].text);
@@ -89854,7 +89856,6 @@ function readPassed(result) {
 async function lockE2eTestCore(args, deps = {}) {
   const projectRoot = args.projectRoot ?? findProjectRoot() ?? process.cwd();
   const load = deps.loadAction ?? loadAction;
-  const readFile3 = deps.readActionFile ?? ((p) => readFileSync42(p, "utf8"));
   const getGit = deps.getGitInfo ?? getGitInfo;
   const getSession = deps.getSession ?? getActiveSession;
   const now = deps.now ?? (() => /* @__PURE__ */ new Date());
@@ -89879,6 +89880,7 @@ async function lockE2eTestCore(args, deps = {}) {
   const platform = session2?.platform ?? void 0;
   const runArgs = {
     flowPath: action.filePath,
+    inlineYaml: action.yamlText,
     platform,
     ...session2?.deviceId ? { deviceId: session2.deviceId } : {},
     ...nestedMaestroAuthorityCallbacks(args)
@@ -89900,7 +89902,7 @@ async function lockE2eTestCore(args, deps = {}) {
     id: action.metadata.id,
     intent: action.metadata.intent,
     sourceActionId: action.metadata.id,
-    flow: readFile3(action.filePath),
+    flow: action.yamlText,
     appId: action.metadata.appId
   }, { gitSha: git2.sha, now });
   return okResult({
@@ -89930,7 +89932,7 @@ var init_lock_e2e_test = __esm({
 
 // packages/rn-dev-agent-core/dist/domain/e2e-run.js
 import { join as join57 } from "node:path";
-import { mkdirSync as mkdirSync23, writeFileSync as writeFileSync19, renameSync as renameSync11, readFileSync as readFileSync43, existsSync as existsSync35 } from "node:fs";
+import { mkdirSync as mkdirSync23, writeFileSync as writeFileSync19, renameSync as renameSync11, readFileSync as readFileSync42, existsSync as existsSync35 } from "node:fs";
 function classifyFlowResult(input) {
   if (input.passed) {
     return {
@@ -89997,7 +89999,7 @@ function loadIndex(projectRoot) {
   if (!existsSync35(file))
     return [];
   try {
-    const parsed = JSON.parse(readFileSync43(file, "utf8"));
+    const parsed = JSON.parse(readFileSync42(file, "utf8"));
     return Array.isArray(parsed) ? parsed : [];
   } catch {
     return [];
@@ -90022,7 +90024,7 @@ function loadRunRecord(projectRoot, runId) {
   if (!existsSync35(file))
     return null;
   try {
-    return JSON.parse(readFileSync43(file, "utf8"));
+    return JSON.parse(readFileSync42(file, "utf8"));
   } catch {
     return null;
   }
@@ -90043,7 +90045,7 @@ var init_e2e_run = __esm({
 
 // packages/rn-dev-agent-core/dist/domain/e2e-run-request.js
 import { join as join58 } from "node:path";
-import { mkdirSync as mkdirSync24, writeFileSync as writeFileSync20, renameSync as renameSync12, readFileSync as readFileSync44, readdirSync as readdirSync16, existsSync as existsSync36 } from "node:fs";
+import { mkdirSync as mkdirSync24, writeFileSync as writeFileSync20, renameSync as renameSync12, readFileSync as readFileSync43, readdirSync as readdirSync16, existsSync as existsSync36 } from "node:fs";
 function requestsDir(projectRoot) {
   return join58(e2eRunsDirFor(projectRoot), "requests");
 }
@@ -90063,7 +90065,7 @@ function loadRequest(projectRoot, runId) {
   if (!existsSync36(file))
     return null;
   try {
-    return JSON.parse(readFileSync44(file, "utf8"));
+    return JSON.parse(readFileSync43(file, "utf8"));
   } catch {
     return null;
   }
@@ -91436,7 +91438,7 @@ __export(index_exports, {
   strictProofMonitor: () => strictProofMonitor
 });
 import { createHash as createHash23, createHmac as createHmac5, randomUUID as randomUUID11 } from "node:crypto";
-import { readFileSync as readFileSync45, rmSync as rmSync12 } from "node:fs";
+import { readFileSync as readFileSync44, rmSync as rmSync12 } from "node:fs";
 import { execFile as execFile23 } from "node:child_process";
 import { promisify as promisify26 } from "node:util";
 import { fileURLToPath as fileURLToPath7 } from "node:url";
@@ -92045,7 +92047,7 @@ var init_index = __esm({
     init_managed_metro();
     init_process_cleanup();
     pkgPath = join60(dirname33(fileURLToPath7(import.meta.url)), "..", "package.json");
-    pkgVersion = JSON.parse(readFileSync45(pkgPath, "utf8")).version;
+    pkgVersion = JSON.parse(readFileSync44(pkgPath, "utf8")).version;
     lockfile = null;
     diagnosticContractProbe = process.argv.includes("--diagnostic-contract-probe");
     noLock = diagnosticContractProbe || process.argv.includes("--no-lock");
@@ -92492,7 +92494,7 @@ var init_index = __esm({
       readRoute: (c) => readLiveRoute(c),
       readShotFile: (path) => {
         try {
-          const buf = readFileSync45(path);
+          const buf = readFileSync44(path);
           const isPng = buf.length >= 4 && buf[0] === 137 && buf[1] === 80 && buf[2] === 78 && buf[3] === 71;
           return { buf, contentType: isPng ? "image/png" : "image/jpeg" };
         } catch {
@@ -93634,7 +93636,7 @@ init_lockfile();
 init_parent_watch();
 import { randomUUID as randomUUID12 } from "node:crypto";
 import { spawn as spawn10 } from "node:child_process";
-import { lstatSync as lstatSync19, readFileSync as readFileSync46 } from "node:fs";
+import { lstatSync as lstatSync19, readFileSync as readFileSync45 } from "node:fs";
 import { dirname as dirname34, join as join61, resolve as resolve19 } from "node:path";
 import { fileURLToPath as fileURLToPath8 } from "node:url";
 
@@ -94125,7 +94127,7 @@ if (process.env.RN_BRIDGE_SUPERVISOR === "0") {
   const diagnosticContractProbe2 = process.argv.includes("--diagnostic-contract-probe");
   let lockfile2 = null;
   if (!noLock2) {
-    const pkg = JSON.parse(readFileSync46(join61(here, "..", "package.json"), "utf8"));
+    const pkg = JSON.parse(readFileSync45(join61(here, "..", "package.json"), "utf8"));
     lockfile2 = new Lockfile({ version: pkg.version });
     const lockResult = lockfile2.acquire();
     if (lockResult.status === "conflict") {
