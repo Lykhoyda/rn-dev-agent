@@ -1,5 +1,5 @@
 import { okResult, failResult, warnResult, withConnection } from '../utils.js';
-import { hideExpoDevMenu } from './expo-dev-menu.js';
+import { hideExpoDevMenu, } from './expo-dev-menu.js';
 const RESOLVE_DEV_SETTINGS = `(function() {
   if (typeof __turboModuleProxy === 'function') try { var ds = __turboModuleProxy("DevSettings"); if (ds) return ds; } catch(e) {}
   if (typeof globalThis.nativeModuleProxy !== 'undefined') try { var ds2 = globalThis.nativeModuleProxy.DevSettings; if (ds2) return ds2; } catch(e) {}
@@ -30,14 +30,48 @@ const ACTION_EXPRESSIONS = {
     return "no_method_available";
   })()`,
 };
-export function createDevSettingsHandler(getClient) {
+function unverifiedHideResult(call, before, after) {
+    return failResult(`${call.reason} The Expo Developer Menu close could not be verified; classify the foreground surface again before choosing a remedy.`, 'DEV_MENU_HIDE_UNVERIFIED', {
+        action: 'hideDevMenu',
+        outcome: 'DEV_MENU_HIDE_UNVERIFIED',
+        callSent: call.callSent,
+        attempts: call.attempts,
+        method: call.method,
+        surfaceBefore: before,
+        surfaceAfter: after,
+        remedy: 'Classify the foreground surface again and invoke only its matching remedy.',
+    });
+}
+export function createDevSettingsHandler(getClient, dependencies = {}) {
     return withConnection(getClient, async (args, client) => {
         if (args.action === 'hideDevMenu') {
-            const outcome = await hideExpoDevMenu(client);
-            if (outcome.dismissed) {
-                return okResult({ action: args.action, executed: true, method: outcome.method });
+            const probe = dependencies.probeForegroundSurface;
+            const before = probe ? await probe().catch(() => 'unknown') : 'unknown';
+            if (before !== 'unknown' && before !== 'expo_dev_menu') {
+                return okResult({
+                    action: args.action,
+                    executed: false,
+                    outcome: 'no_menu_present',
+                    surface: before,
+                });
             }
-            return warnResult({ action: args.action, executed: false }, outcome.reason);
+            const call = await hideExpoDevMenu(client, { retries: 1 });
+            if (!call.callSent)
+                return unverifiedHideResult(call, before, before);
+            await (dependencies.settleAfterHide?.() ??
+                new Promise((resolve) => setTimeout(resolve, 300)));
+            const after = probe ? await probe().catch(() => 'unknown') : 'unknown';
+            if (before === 'expo_dev_menu' && after === 'app') {
+                return okResult({
+                    action: args.action,
+                    executed: true,
+                    outcome: 'hidden',
+                    method: call.method,
+                    attempts: call.attempts,
+                    surface: after,
+                });
+            }
+            return unverifiedHideResult(call, before, after);
         }
         const expression = ACTION_EXPRESSIONS[args.action];
         try {

@@ -1,143 +1,182 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  hideExpoDevMenu,
   autoDismissDevMenuMeta,
+  classifyForegroundSurface,
+  foregroundSurfaceFromSnapshot,
+  hideExpoDevMenu,
   HIDE_EXPO_DEV_MENU_EXPRESSION,
   RESOLVE_EXPO_DEV_MENU,
 } from '../../dist/tools/expo-dev-menu.js';
 import { createDevSettingsHandler } from '../../dist/tools/dev-settings.js';
 import { createMockClient } from '../helpers/mock-cdp-client.js';
-import { expectOk, expectWarn } from '../helpers/result-helpers.js';
+import { expectOk, parseEnvelope } from '../helpers/result-helpers.js';
 
-const fastRetry = { retries: 2, retryDelayMs: 0 };
+function surfaceProbe(...surfaces) {
+  let index = 0;
+  return async () => surfaces[Math.min(index++, surfaces.length - 1)];
+}
 
-function clientReturning(...values) {
-  let i = 0;
-  const calls = { count: 0 };
-  const client = {
-    evaluate: async () => {
-      calls.count += 1;
-      const v = values[Math.min(i, values.length - 1)];
-      i += 1;
-      if (v && typeof v === 'object' && 'throw' in v) throw new Error(v.throw);
-      return v;
+function hideEval(platform, ...values) {
+  let index = 0;
+  const calls = [];
+  const client = createMockClient({
+    _connectedTarget: {
+      id: 'page1',
+      title: 'React Native (Hermes)',
+      vm: 'Hermes',
+      webSocketDebuggerUrl: 'ws://127.0.0.1:8081/debugger/page1',
+      platform,
     },
-  };
+    evaluate: async (expression, awaitPromise, timeoutMs) => {
+      if (expression.includes('__RN_AGENT')) return { value: 40 };
+      if (expression.includes('__DEV__')) return { value: true };
+      calls.push({ expression, awaitPromise, timeoutMs });
+      const value = values[Math.min(index++, values.length - 1)];
+      if (value && typeof value === 'object' && 'throw' in value) {
+        throw new Error(value.throw);
+      }
+      return value;
+    },
+  });
   return { client, calls };
 }
 
-test('hideExpoDevMenu: ok:hideMenu → dismissed via hideMenu', async () => {
-  const { client } = clientReturning({ value: 'ok:hideMenu' });
-  const r = await hideExpoDevMenu(client);
-  assert.equal(r.dismissed, true);
-  assert.equal(r.method, 'hideMenu');
-});
-
-test('hideExpoDevMenu: ok:closeMenu → dismissed via closeMenu', async () => {
-  const { client } = clientReturning({ value: 'ok:closeMenu' });
-  const r = await hideExpoDevMenu(client);
-  assert.equal(r.dismissed, true);
-  assert.equal(r.method, 'closeMenu');
-});
-
-test('hideExpoDevMenu: no_module → not dismissed, actionable reason', async () => {
-  const { client } = clientReturning({ value: 'no_module' });
-  const r = await hideExpoDevMenu(client);
-  assert.equal(r.dismissed, false);
-  assert.match(r.reason, /expo dev-menu module/i);
-});
-
-test('hideExpoDevMenu: no_method_available → not dismissed', async () => {
-  const { client } = clientReturning({ value: 'no_method_available' });
-  const r = await hideExpoDevMenu(client);
-  assert.equal(r.dismissed, false);
-});
-
-test('hideExpoDevMenu: error sentinel → not dismissed, surfaces message', async () => {
-  const { client } = clientReturning({ value: 'error:boom' });
-  const r = await hideExpoDevMenu(client);
-  assert.equal(r.dismissed, false);
-  assert.match(r.reason, /boom/);
-});
-
-test('hideExpoDevMenu: eval {error} → not dismissed, does not throw', async () => {
-  const { client } = clientReturning({ error: 'WebSocket closed' });
-  const r = await hideExpoDevMenu(client);
-  assert.equal(r.dismissed, false);
-});
-
-test('hideExpoDevMenu: eval throws → not dismissed, does not throw', async () => {
-  const { client } = clientReturning({ throw: 'kaboom' });
-  const r = await hideExpoDevMenu(client);
-  assert.equal(r.dismissed, false);
-  assert.match(r.reason, /kaboom/);
-});
-
-test('hideExpoDevMenu: retries fire N+1 evaluations on ok', async () => {
-  const { client, calls } = clientReturning({ value: 'ok:hideMenu' });
-  await hideExpoDevMenu(client, fastRetry);
-  assert.equal(calls.count, 3);
-});
-
-test('hideExpoDevMenu: no_module short-circuits retries', async () => {
-  const { client, calls } = clientReturning({ value: 'no_module' });
-  await hideExpoDevMenu(client, fastRetry);
-  assert.equal(calls.count, 1);
-});
-
-test('hideExpoDevMenu: a later transient eval error does not downgrade an earlier success', async () => {
-  const { client } = clientReturning({ value: 'ok:hideMenu' }, { error: 'WebSocket closed' });
-  const r = await hideExpoDevMenu(client, { retries: 1, retryDelayMs: 0 });
-  assert.equal(r.dismissed, true);
-  assert.equal(r.method, 'hideMenu');
-});
-
-test('hideExpoDevMenu: a later eval throw does not downgrade an earlier success', async () => {
-  const { client } = clientReturning({ value: 'ok:hideMenu' }, { throw: 'blip' });
-  const r = await hideExpoDevMenu(client, { retries: 1, retryDelayMs: 0 });
-  assert.equal(r.dismissed, true);
-});
-
-test('autoDismissDevMenuMeta: iOS + dismissed → meta with method', async () => {
-  const client = {
-    connectedTarget: { platform: 'ios' },
-    evaluate: async () => ({ value: 'ok:hideMenu' }),
+function handlerFor(platform, surfaces, values) {
+  const { client, calls } = hideEval(platform, ...values);
+  return {
+    calls,
+    handler: createDevSettingsHandler(() => client, {
+      probeForegroundSurface: surfaceProbe(...surfaces),
+      settleAfterHide: async () => {},
+    }),
   };
-  const meta = await autoDismissDevMenuMeta(client);
-  assert.equal(meta.dev_menu_dismissed, true);
-  assert.equal(meta.dev_menu_method, 'hideMenu');
+}
+
+test('foreground classifier keeps Expo sheet, picker, tutorial, RN core menu, and app distinct', () => {
+  assert.equal(
+    classifyForegroundSurface([
+      { label: 'Toggle performance monitor' },
+      { label: 'Toggle element inspector' },
+    ]),
+    'expo_dev_menu',
+  );
+  assert.equal(classifyForegroundSurface([{ label: 'Development servers' }]), 'dev_client_picker');
+  assert.equal(
+    classifyForegroundSurface([{ label: 'This is the developer menu. It gives you access.' }]),
+    'first_run_tutorial',
+  );
+  assert.equal(classifyForegroundSurface([{ label: 'Open Debugger' }]), 'react_native_dev_menu');
+  assert.equal(classifyForegroundSurface([{ label: 'Home' }]), 'app');
+  assert.equal(classifyForegroundSurface([]), 'unknown');
 });
 
-test('autoDismissDevMenuMeta: Android → empty (platform gate)', async () => {
-  let evaluated = false;
-  const client = {
-    connectedTarget: { platform: 'android' },
-    evaluate: async () => {
-      evaluated = true;
-      return { value: 'ok:hideMenu' };
-    },
+test('foregroundSurfaceFromSnapshot classifies a typed native snapshot envelope', () => {
+  const result = {
+    content: [
+      {
+        type: 'text',
+        text: JSON.stringify({
+          ok: true,
+          data: { nodes: [{ label: 'Copy system info' }, { label: 'Open DevTools' }] },
+        }),
+      },
+    ],
   };
-  const meta = await autoDismissDevMenuMeta(client);
-  assert.deepEqual(meta, {});
-  assert.equal(evaluated, false, 'must not evaluate on Android');
+  assert.equal(foregroundSurfaceFromSnapshot(result), 'expo_dev_menu');
 });
 
-test('autoDismissDevMenuMeta: iOS + no_module → empty', async () => {
-  const client = {
-    connectedTarget: { platform: 'ios' },
-    evaluate: async () => ({ value: 'no_module' }),
-  };
-  assert.deepEqual(await autoDismissDevMenuMeta(client), {});
+for (const platform of ['ios', 'android']) {
+  test(`dev_settings hideDevMenu: ${platform} sheet present -> typed hidden after clean probe`, async () => {
+    const { handler, calls } = handlerFor(
+      platform,
+      ['expo_dev_menu', 'app'],
+      [{ value: 'ok:hideMenu' }, { value: 'ok:hideMenu' }],
+    );
+    const data = expectOk(await handler({ action: 'hideDevMenu' }));
+    assert.equal(data.outcome, 'hidden');
+    assert.equal(data.method, 'hideMenu');
+    assert.equal(data.surface, 'app');
+    assert.equal(calls.length, 2);
+    assert.equal(calls[0].awaitPromise, true);
+    assert.equal(calls[0].timeoutMs, 5_000);
+  });
+
+  test(`dev_settings hideDevMenu: ${platform} app surface -> no_menu_present without close call`, async () => {
+    const { handler, calls } = handlerFor(platform, ['app'], [{ value: 'ok:hideMenu' }]);
+    const data = expectOk(await handler({ action: 'hideDevMenu' }));
+    assert.equal(data.outcome, 'no_menu_present');
+    assert.equal(data.executed, false);
+    assert.equal(calls.length, 0);
+  });
+}
+
+for (const sentinel of ['no_module', 'no_method_available']) {
+  test(`dev_settings hideDevMenu: ${sentinel} -> DEV_MENU_HIDE_UNVERIFIED`, async () => {
+    const { handler } = handlerFor(
+      'ios',
+      ['expo_dev_menu'],
+      [{ value: sentinel }, { value: sentinel }],
+    );
+    const result = await handler({ action: 'hideDevMenu' });
+    const envelope = parseEnvelope(result);
+    assert.equal(envelope.ok, false);
+    assert.equal(envelope.code, 'DEV_MENU_HIDE_UNVERIFIED');
+    assert.equal(envelope.meta.outcome, 'DEV_MENU_HIDE_UNVERIFIED');
+    assert.equal(envelope.meta.callSent, false);
+  });
+}
+
+test('dev_settings hideDevMenu: close sent but post-probe remains occluded -> unverified', async () => {
+  const { handler } = handlerFor(
+    'android',
+    ['expo_dev_menu', 'expo_dev_menu'],
+    [{ value: 'ok:closeMenu' }, { value: 'ok:closeMenu' }],
+  );
+  const envelope = parseEnvelope(await handler({ action: 'hideDevMenu' }));
+  assert.equal(envelope.code, 'DEV_MENU_HIDE_UNVERIFIED');
+  assert.equal(envelope.meta.callSent, true);
+  assert.equal(envelope.meta.surfaceAfter, 'expo_dev_menu');
+  assert.match(envelope.meta.remedy, /classify/i);
 });
 
-test('autoDismissDevMenuMeta: iOS + eval throws → empty (best-effort)', async () => {
-  const client = {
-    connectedTarget: { platform: 'ios' },
-    evaluate: async () => {
-      throw new Error('detached');
-    },
-  };
+test('hideExpoDevMenu: a timeout retries once and remains bounded to five seconds', async () => {
+  const { client, calls } = hideEval(
+    'android',
+    { throw: 'Runtime.evaluate timeout (5000ms)' },
+    { value: 'ok:hideMenu' },
+  );
+  const outcome = await hideExpoDevMenu(client, { retries: 7, retryDelayMs: 0 });
+  assert.equal(outcome.callSent, true);
+  assert.equal(outcome.attempts, 2);
+  assert.equal(calls.length, 2);
+  assert.deepEqual(
+    calls.map((call) => call.timeoutMs),
+    [5_000, 5_000],
+  );
+});
+
+test('dev_settings hideDevMenu has no touch, coordinate, or BACK fallback', async () => {
+  const { handler, calls } = handlerFor(
+    'android',
+    ['expo_dev_menu', 'expo_dev_menu'],
+    [{ value: 'ok:hideMenu' }, { value: 'ok:hideMenu' }],
+  );
+  await handler({ action: 'hideDevMenu' });
+  assert.equal(calls.length, 2);
+  assert.ok(calls.every((call) => call.expression === HIDE_EXPO_DEV_MENU_EXPRESSION));
+});
+
+test('autoDismissDevMenuMeta reports dismissal only after before/after proof', async () => {
+  const { client } = hideEval('ios', { value: 'ok:hideMenu' }, { value: 'ok:hideMenu' });
+  assert.deepEqual(await autoDismissDevMenuMeta(client, surfaceProbe('expo_dev_menu', 'app')), {
+    dev_menu_dismissed: true,
+    dev_menu_method: 'hideMenu',
+  });
+});
+
+test('autoDismissDevMenuMeta never reports success from the close call alone', async () => {
+  const { client } = hideEval('ios', { value: 'ok:hideMenu' }, { value: 'ok:hideMenu' });
   assert.deepEqual(await autoDismissDevMenuMeta(client), {});
 });
 
@@ -147,30 +186,4 @@ test('HIDE_EXPO_DEV_MENU_EXPRESSION is syntactically valid JS', () => {
 
 test('RESOLVE_EXPO_DEV_MENU is syntactically valid JS', () => {
   assert.doesNotThrow(() => new Function('return ' + RESOLVE_EXPO_DEV_MENU));
-});
-
-// Return the hide sentinel only for the hide expression; keep the withConnection
-// freshness probe (`typeof globalThis.__RN_AGENT`) returning a number.
-function hideEval(sentinel) {
-  return async (expr) => {
-    if (expr.includes('__RN_AGENT')) return { value: 13 };
-    if (expr.includes('__DEV__')) return { value: true };
-    return { value: sentinel };
-  };
-}
-
-test('dev_settings hideDevMenu: dismissed → ok with method', async () => {
-  const client = createMockClient({ evaluate: hideEval('ok:hideMenu') });
-  const handler = createDevSettingsHandler(() => client);
-  const data = expectOk(await handler({ action: 'hideDevMenu' }));
-  assert.equal(data.executed, true);
-  assert.equal(data.method, 'hideMenu');
-});
-
-test('dev_settings hideDevMenu: no_module → warn, not executed', async () => {
-  const client = createMockClient({ evaluate: hideEval('no_module') });
-  const handler = createDevSettingsHandler(() => client);
-  const { data, warning } = expectWarn(await handler({ action: 'hideDevMenu' }));
-  assert.equal(data.executed, false);
-  assert.match(warning, /expo dev-menu module/i);
 });

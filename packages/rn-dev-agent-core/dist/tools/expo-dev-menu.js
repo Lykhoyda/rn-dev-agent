@@ -9,78 +9,141 @@ export const HIDE_EXPO_DEV_MENU_EXPRESSION = `(function () {
   var m = ${RESOLVE_EXPO_DEV_MENU};
   if (!m) return "no_module";
   try {
-    if (typeof m.hideMenu === "function") { m.hideMenu(); return "ok:hideMenu"; }
-    if (typeof m.closeMenu === "function") { m.closeMenu(); return "ok:closeMenu"; }
+    var method = typeof m.hideMenu === "function" ? "hideMenu" : (typeof m.closeMenu === "function" ? "closeMenu" : null);
+    if (!method) return "no_method_available";
+    return Promise.resolve(m[method]()).then(function () { return "ok:" + method; }, function (e) { return "error:" + (e && e.message ? e.message : String(e)); });
   } catch (e) { return "error:" + (e && e.message ? e.message : String(e)); }
-  return "no_method_available";
 })()`;
-function parseSentinel(value) {
-    const s = typeof value === 'string' ? value : '';
-    if (s === 'ok:hideMenu')
-        return { dismissed: true, method: 'hideMenu', reason: 'Dev menu hidden via hideMenu().' };
-    if (s === 'ok:closeMenu')
-        return { dismissed: true, method: 'closeMenu', reason: 'Dev menu hidden via closeMenu().' };
-    if (s === 'no_module')
-        return {
-            dismissed: false,
-            reason: 'No expo dev-menu module found — is this an expo-dev-client build?',
-        };
-    if (s === 'no_method_available')
-        return { dismissed: false, reason: 'ExpoDevMenu resolved but exposes no hideMenu/closeMenu.' };
-    if (s.startsWith('error:'))
-        return { dismissed: false, reason: `ExpoDevMenu hide threw: ${s.slice(6)}` };
-    return { dismissed: false, reason: `Unexpected dev-menu hide result: ${s || '(empty)'}` };
+function surfaceText(nodes) {
+    return nodes.flatMap((node) => [node.label, node.identifier]
+        .filter((value) => typeof value === 'string')
+        .map((value) => value.trim().toLowerCase())
+        .filter(Boolean));
 }
-export async function hideExpoDevMenu(client, opts = {}) {
-    const retries = Math.max(0, opts.retries ?? 0);
-    const retryDelayMs = opts.retryDelayMs ?? 500;
-    let outcome = { dismissed: false, reason: 'Dev menu hide not attempted.' };
-    // Sticky success: the settle loop fires the hide up to `retries + 1` times to
-    // beat the present-animation no-op, but an earlier dismissal must never be
-    // downgraded by a later transient eval failure — so a `dismissed:true` outcome
-    // is only ever replaced by another `dismissed:true`.
-    for (let attempt = 0; attempt <= retries; attempt++) {
-        let value;
-        try {
-            const result = await client.evaluate(HIDE_EXPO_DEV_MENU_EXPRESSION);
-            if (result.error) {
-                if (!outcome.dismissed) {
-                    outcome = { dismissed: false, reason: `Dev menu hide eval failed: ${result.error}` };
-                }
-            }
-            else {
-                value = result.value;
-            }
-        }
-        catch (err) {
-            if (!outcome.dismissed) {
-                outcome = {
-                    dismissed: false,
-                    reason: `Dev menu hide eval threw: ${err instanceof Error ? err.message : String(err)}`,
-                };
-            }
-        }
-        if (value === 'no_module')
-            return parseSentinel(value);
-        if (value !== undefined) {
-            const parsed = parseSentinel(value);
-            if (parsed.dismissed || !outcome.dismissed)
-                outcome = parsed;
-        }
-        if (attempt < retries) {
-            await new Promise((r) => setTimeout(r, retryDelayMs));
-        }
+export function classifyForegroundSurface(nodes) {
+    const text = surfaceText(nodes);
+    if (text.length === 0)
+        return 'unknown';
+    const has = (value) => text.some((candidate) => candidate.includes(value));
+    if (has('development servers'))
+        return 'dev_client_picker';
+    if (has('this is the developer menu'))
+        return 'first_run_tutorial';
+    if ((has('toggle performance monitor') && has('toggle element inspector')) ||
+        (has('copy system info') && has('open devtools'))) {
+        return 'expo_dev_menu';
     }
-    return outcome;
+    if (has('open debugger') || has('configure bundler'))
+        return 'react_native_dev_menu';
+    return 'app';
 }
-export async function autoDismissDevMenuMeta(client) {
+export function foregroundSurfaceFromSnapshot(result) {
+    if (result.isError)
+        return 'unknown';
+    try {
+        const envelope = JSON.parse(result.content[0]?.text ?? '');
+        if (!envelope.ok || !Array.isArray(envelope.data?.nodes))
+            return 'unknown';
+        return classifyForegroundSurface(envelope.data.nodes);
+    }
+    catch {
+        return 'unknown';
+    }
+}
+function parseSentinel(value, attempts) {
+    const sentinel = typeof value === 'string' ? value : '';
+    if (sentinel === 'ok:hideMenu') {
+        return {
+            callSent: true,
+            method: 'hideMenu',
+            reason: 'ExpoDevMenu.hideMenu() completed.',
+            attempts,
+        };
+    }
+    if (sentinel === 'ok:closeMenu') {
+        return {
+            callSent: true,
+            method: 'closeMenu',
+            reason: 'ExpoDevMenu.closeMenu() completed.',
+            attempts,
+        };
+    }
+    if (sentinel === 'no_module') {
+        return {
+            callSent: false,
+            reason: 'No ExpoDevMenu native module resolved.',
+            attempts,
+        };
+    }
+    if (sentinel === 'no_method_available') {
+        return {
+            callSent: false,
+            reason: 'ExpoDevMenu resolved but exposes no hideMenu/closeMenu method.',
+            attempts,
+        };
+    }
+    if (sentinel.startsWith('error:')) {
+        return {
+            callSent: false,
+            reason: `ExpoDevMenu hide failed: ${sentinel.slice(6)}`,
+            attempts,
+        };
+    }
+    return {
+        callSent: false,
+        reason: `Unexpected dev-menu hide result: ${sentinel || '(empty)'}`,
+        attempts,
+    };
+}
+export async function hideExpoDevMenu(client, options = {}) {
+    const retries = Math.min(1, Math.max(0, options.retries ?? 0));
+    const retryDelayMs = Math.max(0, options.retryDelayMs ?? 300);
+    const evaluationTimeoutMs = Math.min(5_000, Math.max(1, options.evaluationTimeoutMs ?? 5_000));
+    let outcome = {
+        callSent: false,
+        reason: 'Dev menu hide not attempted.',
+        attempts: 0,
+    };
+    let successfulCall;
+    for (let attempt = 0; attempt <= retries; attempt++) {
+        const attempts = attempt + 1;
+        try {
+            const result = await client.evaluate(HIDE_EXPO_DEV_MENU_EXPRESSION, true, evaluationTimeoutMs);
+            const attemptOutcome = result.error
+                ? {
+                    callSent: false,
+                    reason: `Dev menu hide evaluation failed: ${result.error}`,
+                    attempts,
+                }
+                : parseSentinel(result.value, attempts);
+            outcome = attemptOutcome;
+            if (attemptOutcome.callSent)
+                successfulCall = attemptOutcome;
+        }
+        catch (error) {
+            outcome = {
+                callSent: false,
+                reason: `Dev menu hide evaluation threw: ${error instanceof Error ? error.message : String(error)}`,
+                attempts,
+            };
+        }
+        if (outcome.reason.startsWith('No ExpoDevMenu'))
+            return outcome;
+        if (attempt < retries)
+            await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+    }
+    return successfulCall ? { ...successfulCall, attempts: outcome.attempts } : outcome;
+}
+export async function autoDismissDevMenuMeta(client, probeSurface) {
     try {
         if (client.connectedTarget?.platform !== 'ios')
             return {};
-        // One retry (short delay) covers the dev-menu present-animation window —
-        // hideMenu() called mid-animation can no-op, so a second hide settles it.
-        const dm = await hideExpoDevMenu(client, { retries: 1, retryDelayMs: 300 });
-        return dm.dismissed ? { dev_menu_dismissed: true, dev_menu_method: dm.method } : {};
+        const before = probeSurface ? await probeSurface() : 'unknown';
+        const call = await hideExpoDevMenu(client, { retries: 1 });
+        const after = probeSurface ? await probeSurface() : 'unknown';
+        return before === 'expo_dev_menu' && call.callSent && after === 'app'
+            ? { dev_menu_dismissed: true, dev_menu_method: call.method }
+            : {};
     }
     catch {
         return {};

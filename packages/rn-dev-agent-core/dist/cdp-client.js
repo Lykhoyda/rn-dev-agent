@@ -749,11 +749,11 @@ export class CDPClient {
     get effectivePlatform() {
         return this._connectedTarget?.platform ?? null;
     }
-    async evaluate(expression, awaitPromise = false) {
+    async evaluate(expression, awaitPromise = false, timeoutMs) {
         if (awaitPromise) {
-            return this.evaluateAsync(expression);
+            return this.evaluateAsync(expression, timeoutMs);
         }
-        const timeout = defaultTimeout(this.effectivePlatform);
+        const timeout = timeoutMs ?? defaultTimeout(this.effectivePlatform);
         const result = (await this.sendWithTimeout('Runtime.evaluate', {
             expression,
             returnByValue: true,
@@ -767,11 +767,11 @@ export class CDPClient {
         }
         return { value: result?.result?.value };
     }
-    async evaluateAsync(expression) {
+    async evaluateAsync(expression, timeoutMs) {
         // Hermes CDP doesn't support awaitPromise — use global slot + polling
         // Values are JSON-serialized inside Hermes to handle non-serializable objects
         // A deferred cleanup timer ensures the slot is removed even if the caller times out
-        const timeout = defaultTimeout(this.effectivePlatform);
+        const timeout = timeoutMs ?? defaultTimeout(this.effectivePlatform);
         const slot = '__rn_agent_async_' + ++this.slotId + '_' + Date.now();
         const ASYNC_CLEANUP_MS = timeout * 2;
         const wrapper = `(function() {

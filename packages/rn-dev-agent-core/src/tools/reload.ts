@@ -3,6 +3,7 @@ import { promisify } from 'node:util';
 import type { CDPClient } from '../cdp-client.js';
 import { okResult, failResult, warnResult, withConnection } from '../utils.js';
 import { autoDismissDevMenuMeta } from './expo-dev-menu.js';
+import type { ForegroundSurface } from './expo-dev-menu.js';
 import { isValidBundleId } from '../domain/maestro-validator.js';
 import { targetMatchesSession } from './status.js';
 import { filterTargetsForExactDevice } from '../session/target-device-authority.js';
@@ -136,6 +137,7 @@ export interface ReloadHandlerDeps {
   ) => Promise<{ stdout: string; stderr: string }>;
   sleep?: (ms: number) => Promise<void>;
   resolveExactTargetId?: ResolveExactTargetId;
+  probeForegroundSurface?: () => Promise<ForegroundSurface>;
 }
 
 async function resolveExactReloadTargetId(
@@ -483,7 +485,7 @@ export function createReloadHandler(
         }
       }
 
-      const devMenuMeta = await autoDismissDevMenuMeta(client);
+      const devMenuMeta = await autoDismissDevMenuMeta(client, deps.probeForegroundSurface);
       const mergedMeta = { ...forceMeta, ...devMenuMeta };
 
       sessionReloadCount++;

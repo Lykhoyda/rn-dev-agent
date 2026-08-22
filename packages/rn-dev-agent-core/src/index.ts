@@ -47,6 +47,7 @@ import type { CdpReplayDeps } from './tools/cdp-replay-dispatch.js';
 import { createDispatchHandler } from './tools/dispatch.js';
 import { createMmkvHandler } from './tools/mmkv.js';
 import { createDevSettingsHandler } from './tools/dev-settings.js';
+import { foregroundSurfaceFromSnapshot, type ForegroundSurface } from './tools/expo-dev-menu.js';
 import { createInteractHandler } from './tools/interact.js';
 import { createCollectLogsHandler } from './tools/collect-logs.js';
 import { createDeviceListHandler, createDeviceScreenshotHandler } from './tools/device-list.js';
@@ -116,6 +117,7 @@ import {
   getSnapshotCaptureCheckpoint,
   markSnapshotDirty,
   promoteSnapshotOriginSince,
+  runNative,
   setSnapshotAuthorityProvider,
   validateCachedSnapshotEvidenceAuthority,
 } from './agent-device-wrapper.js';
@@ -426,6 +428,22 @@ addToolObserver((o) => strictProofMonitor.record(o));
 addToolObserver((o) => experienceRecorder.observe(o));
 
 const authorityRuntime = getWorkerAuthorityRuntime();
+const probeForegroundSurface = async (): Promise<ForegroundSurface> => {
+  const status = authorityRuntime.status();
+  const session = getActiveSession();
+  if (!status.available || !status.bindings.runner || !session) return 'unknown';
+  const device = status.bindings.device as Record<string, unknown> | undefined;
+  const platform = device?.platform;
+  if (
+    (platform !== 'ios' && platform !== 'android') ||
+    session.platform !== platform ||
+    session.deviceId !== device?.deviceId ||
+    session.appId !== device?.appId
+  ) {
+    return 'unknown';
+  }
+  return foregroundSurfaceFromSnapshot(await runNative(['snapshot'], { platform }));
+};
 setRegistryDeviceBindingProvider(() =>
   mapRegistryDeviceBinding(authorityRuntime.status(), authorityRuntime.available),
 );
@@ -1663,7 +1681,7 @@ trackedTool(
       .default(true)
       .describe('Always performs a full reload via DevSettings.reload()'),
   },
-  createReloadHandler(getClient, setClient, createClient),
+  createReloadHandler(getClient, setClient, createClient, { probeForegroundSurface }),
 );
 
 trackedTool(
@@ -2173,7 +2191,7 @@ trackedTool(
 
 trackedTool(
   'cdp_dev_settings',
-  'Control React Native dev settings programmatically (no visual dev menu needed). dismissRedBox clears LogBox overlays and RedBox errors via a 4-tier fallback chain. disableDevMenu suppresses shake-to-show dev menu (use before proof recordings). hideDevMenu dismisses the iOS expo-dev-client dev menu bottom sheet over CDP (no touch, keeps Hermes attached and the JS store intact). For reload with auto-reconnect, use cdp_reload instead.',
+  'Control React Native dev settings programmatically (no visual dev menu needed). dismissRedBox clears LogBox overlays and RedBox errors via a 4-tier fallback chain. disableDevMenu suppresses the React Native core dev menu gesture. hideDevMenu dismisses the iOS or Android Expo Developer Menu sheet over CDP, verifies the foreground surface, and returns hidden, no_menu_present, or DEV_MENU_HIDE_UNVERIFIED. For reload with auto-reconnect, use cdp_reload instead.',
   {
     action: z
       .enum([
@@ -2186,7 +2204,7 @@ trackedTool(
       ])
       .describe('Dev menu action to execute'),
   },
-  createDevSettingsHandler(getClient),
+  createDevSettingsHandler(getClient, { probeForegroundSurface }),
 );
 
 trackedTool(
@@ -4006,11 +4024,9 @@ const e2eReload = async (): Promise<boolean> => {
   const sessionPlatform =
     session.platform === 'ios' || session.platform === 'android' ? session.platform : undefined;
   try {
-    const r = await createReloadHandler(
-      getClient,
-      setClient,
-      createClient,
-    )({
+    const r = await createReloadHandler(getClient, setClient, createClient, {
+      probeForegroundSurface,
+    })({
       full: true,
       ...(sessionPlatform ? { platform: sessionPlatform } : {}),
       deviceId: session.deviceId,

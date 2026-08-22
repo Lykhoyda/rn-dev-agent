@@ -271,6 +271,7 @@ export type ToolErrorCode =
   | 'RECONNECT_TIMEOUT'
   | 'CONNECT_IN_FLIGHT' // GH #616: a reconnect/connect is in flight; force=true supersedes it
   | 'APP_DETACHED' // GH #208 (RC2/RC3): Metro up but 0 Hermes targets (app detached)
+  | 'DEV_MENU_HIDE_UNVERIFIED'
   | 'APP_NOT_INSTALLED' // GH #262: relaunch failed and get_app_container confirms the bundle is missing
   | 'NOT_CONNECTED'
   | 'HELPERS_NOT_INJECTED'

@@ -170,7 +170,14 @@ A healthy live holder is never stolen or changed by this refusal.
 ### Step 5 — Bind remaining authority; run only the requested proof
 
 `pin_dev_client` (Expo dev-client) or the exact-app launch, then
-`device_snapshot action=open` to bind the runner. Only now is replay
+`device_snapshot action=open` to bind the runner. Before any navigation, run
+the foreground-surface preflight owned by `check-env`: status/connect the exact
+target, classify one fresh native snapshot, invoke exactly one remedy for the
+Expo Developer Menu sheet, Expo `Development servers` picker, Expo first-run
+tutorial, or React Native core dev menu, then require a fresh post-remedy
+snapshot of the app surface. A `DEV_MENU_HIDE_UNVERIFIED` result is a
+stop-and-reclassify outcome, never permission for a coordinate or BACK
+fallback. USB transport remains a separate readiness axis. Only now is replay
 authorized — and only via `cdp_run_action` (never raw `maestro_run` for a
 learned action): the core parks the runner and re-proves flow, device, and
 runner authority itself. Run ONLY what the journey asked for — a saved action,

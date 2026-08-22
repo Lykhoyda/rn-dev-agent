@@ -5,7 +5,7 @@ sidebar:
   order: 13
 ---
 
-Control React Native dev settings programmatically (no visual dev menu needed). dismissRedBox clears LogBox overlays and RedBox errors via a 4-tier fallback chain. disableDevMenu suppresses shake-to-show dev menu (use before proof recordings). hideDevMenu dismisses the iOS expo-dev-client dev menu bottom sheet over CDP (no touch, keeps Hermes attached and the JS store intact). For reload with auto-reconnect, use cdp_reload instead.
+Control React Native dev settings programmatically (no visual dev menu needed). dismissRedBox clears LogBox overlays and RedBox errors via a 4-tier fallback chain. disableDevMenu suppresses the React Native core dev menu gesture. hideDevMenu dismisses the iOS or Android Expo Developer Menu sheet over CDP, verifies the foreground surface, and returns hidden, no_menu_present, or DEV_MENU_HIDE_UNVERIFIED. For reload with auto-reconnect, use cdp_reload instead.
 
 ## Parameters
 
