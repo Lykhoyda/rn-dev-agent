@@ -37,6 +37,7 @@ import {
 } from '../../dist/runners/protocol.js';
 import {
   _setImePackageResolverForTest,
+  createDeviceFindHandler,
   createDeviceFocusNextHandler,
   focusNextPressArgs,
   parseDefaultInputMethodPackage,
@@ -70,6 +71,22 @@ const systemHome = {
   packageName: 'com.android.systemui',
   rect: { x: 180, y: 780, width: 80, height: 80 },
 };
+const systemBack = {
+  ref: '@e4',
+  type: 'android.widget.ImageView',
+  label: 'Back',
+  identifier: 'back',
+  packageName: 'com.android.systemui',
+  rect: { x: 20, y: 780, width: 80, height: 80 },
+};
+const systemOverview = {
+  ref: '@e5',
+  type: 'android.widget.ImageView',
+  label: 'Overview',
+  identifier: 'recent_apps',
+  packageName: 'com.android.systemui',
+  rect: { x: 340, y: 780, width: 80, height: 80 },
+};
 
 afterEach(() => {
   clearRefMap();
@@ -89,6 +106,60 @@ test('Android find scope excludes system chrome unless explicitly opted in', () 
 
 test('Android find scope fails closed when app ownership is unavailable', () => {
   assert.deepEqual(scopeSnapshotNodesForFind([systemHome], 'android', undefined, false), []);
+});
+
+test('device_find excludes Android Home, Back, and Overview unless explicitly opted in', async () => {
+  _setActiveSessionForTest({
+    name: 'gh-736',
+    platform: 'android',
+    appId,
+    openedAt: '2026-08-10T00:00:00.000Z',
+  });
+  const nodes = [appHome, systemHome, systemBack, systemOverview];
+  let snapshots = 0;
+  _setRunAgentDeviceForTest(async (cliArgs: string[]) => {
+    assert.equal(cliArgs[0], 'snapshot');
+    snapshots++;
+    return okResult({ nodes });
+  });
+  const find = createDeviceFindHandler();
+
+  const ownedHome = JSON.parse((await find({ text: 'Home', exact: true })).content[0].text) as {
+    ok: boolean;
+    data: { ref: string; testID: string };
+  };
+  assert.equal(ownedHome.ok, true);
+  assert.deepEqual(ownedHome.data, { ref: appHome.ref, label: 'Home', testID: 'tab-home' });
+
+  for (const label of ['Back', 'Overview']) {
+    const excluded = JSON.parse((await find({ text: label, exact: true })).content[0].text) as {
+      ok: boolean;
+      meta: { code: string; query: string };
+    };
+    assert.equal(excluded.ok, false);
+    assert.equal(excluded.meta.code, 'NOT_FOUND');
+    assert.equal(excluded.meta.query, label);
+  }
+
+  for (const node of [systemHome, systemBack, systemOverview]) {
+    const explicit = JSON.parse(
+      (
+        await find({
+          text: node.identifier,
+          exact: true,
+          includeSystemUi: true,
+        })
+      ).content[0].text,
+    ) as {
+      ok: boolean;
+      data: { ref: string; scope: string };
+    };
+    assert.equal(explicit.ok, true);
+    assert.equal(explicit.data.ref, node.ref);
+    assert.equal(explicit.data.scope, 'system-ui-explicit');
+  }
+
+  assert.equal(snapshots, 1, 'all matches must be scoped from one authoritative snapshot');
 });
 
 test('explicit system-UI find scope is preserved on the returned ref', async () => {
