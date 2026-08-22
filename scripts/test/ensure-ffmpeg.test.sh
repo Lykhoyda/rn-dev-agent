@@ -25,10 +25,12 @@ make_stub() {
 
 run_case() {
   local name="$1"
-  local expected_status="$2"
-  local ffmpeg_body="$3"
-  local brew_body="$4"
-  local expect_skip="$5"
+  local initiating_condition="$2"
+  local path_masking="$3"
+  local expected_status="$4"
+  local ffmpeg_body="$5"
+  local brew_body="$6"
+  local expect_skip="$7"
   local stubs="$TMP/$name/stubs"
   local stdout="$TMP/$name/stdout"
   local stderr="$TMP/$name/stderr"
@@ -58,15 +60,15 @@ run_case() {
     fail "$name: unexpected skip-GIF guidance"
   fi
 
-  CASE_RECEIPTS="${CASE_RECEIPTS}${CASE_RECEIPTS:+,}{\"case\":\"$name\",\"expectedExit\":$expected_status,\"actualExit\":$actual_status}"
+  CASE_RECEIPTS="${CASE_RECEIPTS}${CASE_RECEIPTS:+,}{\"case\":\"$name\",\"initiatingCondition\":\"$initiating_condition\",\"pathMasking\":\"$path_masking\",\"expectedExit\":$expected_status,\"actualExit\":$actual_status,\"skipGuidanceOnStderr\":$expect_skip}"
 }
 
 [ -f "$SCRIPT" ] || fail "helper not found: $SCRIPT"
 
 CASE_RECEIPTS=""
-run_case "pre-installed" 0 'echo "ffmpeg version test"; exit 0' '' false
-run_case "homebrew-install-success" 0 '' '[ "$1" = install ] && [ "$2" = ffmpeg ]; exit $?' false
-run_case "homebrew-install-failure" 1 '' 'exit 42' true
-run_case "homebrew-absent" 1 '' '' true
+run_case "pre-installed" "ffmpeg already installed" "host ffmpeg and brew masked; ffmpeg stub exposed" 0 'echo "ffmpeg version test"; exit 0' '' false
+run_case "homebrew-install-success" "ffmpeg absent; Homebrew install succeeds" "host ffmpeg and brew masked; brew stub exposed" 0 '' '[ "$1" = install ] && [ "$2" = ffmpeg ]; exit $?' false
+run_case "homebrew-install-failure" "ffmpeg absent; Homebrew install fails" "host ffmpeg and brew masked; failing brew stub exposed" 1 '' 'exit 42' true
+run_case "homebrew-absent" "ffmpeg and Homebrew absent" "host ffmpeg and brew masked; no command stubs exposed" 1 '' '' true
 
 printf '{"status":"passed","helper":"%s","cases":[%s]}\n' "$LABEL" "$CASE_RECEIPTS"
