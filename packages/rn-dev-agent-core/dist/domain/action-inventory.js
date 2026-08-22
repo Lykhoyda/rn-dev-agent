@@ -1,17 +1,26 @@
 import { readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { assertReadableActionCorpus, loadAction } from './action-store.js';
+import { loadAction } from './action-store.js';
+import { readableActionsDirectory, resolveReadableActionCorpus, sameReadableActionCorpus, } from '../session/worktree-inheritance.js';
 export async function listActions(projectRoot) {
-    const actionsDir = join(projectRoot, '.rn-agent', 'actions');
-    assertReadableActionCorpus(projectRoot);
+    const corpus = resolveReadableActionCorpus(projectRoot);
+    if (corpus.status === 'refused')
+        throw new Error(corpus.reason);
+    const readableDir = readableActionsDirectory(corpus);
+    if (!readableDir)
+        return [];
     let files;
     try {
-        files = readdirSync(actionsDir);
+        files = readdirSync(readableDir);
     }
     catch (err) {
         if (err.code === 'ENOENT')
             return [];
         throw err;
+    }
+    const after = resolveReadableActionCorpus(projectRoot);
+    if (!sameReadableActionCorpus(corpus, after)) {
+        throw new Error(`Refusing replaced learned-action corpus symlink at ${join(projectRoot, '.rn-agent', 'actions')}.`);
     }
     const yamlFiles = files.filter((f) => /\.ya?ml$/.test(f)).sort();
     const results = [];

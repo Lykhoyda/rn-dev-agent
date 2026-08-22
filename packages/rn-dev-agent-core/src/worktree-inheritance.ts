@@ -38,6 +38,7 @@ interface Flags {
   subcommand: string;
   appRoot?: string;
   cwd: string;
+  cwdGiven: boolean;
   host: HostId;
   json: boolean;
   allowRepair: boolean;
@@ -63,6 +64,7 @@ function parseFlagsStrict(argv: string[]): Flags | null {
     command: 'plan',
     subcommand: '',
     cwd: process.cwd(),
+    cwdGiven: false,
     host: 'claude',
     json: false,
     allowRepair: false,
@@ -90,6 +92,7 @@ function parseFlagsStrict(argv: string[]): Flags | null {
         break;
       case '--cwd':
         flags.cwd = next();
+        flags.cwdGiven = true;
         break;
       case '--config':
         flags.config = next();
@@ -155,6 +158,7 @@ function redactPlan(plan: InheritancePlan) {
       regime: resource.regime,
       state: resource.state,
       action: resource.action,
+      repair: resource.action === 'repair',
       ignoreSafe: resource.ignoreSafe,
       sourcePresent: resource.sourceState === 'AVAILABLE',
       remediation: resource.remediation,
@@ -174,6 +178,15 @@ function planLines(plan: InheritancePlan): string[] {
 // Refusals that mean "this layout cannot inherit" are reported; refusals that mean
 // "inheritance does not apply here" (not Git, bare, not an RN app) stay silent.
 const SILENT_REFUSALS = new Set(['NOT_GIT', 'BARE', 'NOT_RN_APP', 'APP_OUTSIDE_WORKTREE']);
+
+function layoutAppRoot(flags: Flags): string | undefined {
+  return flags.appRoot === undefined ? undefined : resolve(flags.cwd, flags.appRoot);
+}
+
+function layoutCwd(flags: Flags): string {
+  if (flags.cwdGiven || flags.appRoot === undefined) return flags.cwd;
+  return layoutAppRoot(flags)!;
+}
 
 function actionableLines(plan: InheritancePlan): string[] {
   if (plan.refusal) {
@@ -391,13 +404,14 @@ function manualComposition(): string {
 }
 
 function installHook(flags: Flags): number {
-  const layout = resolveWorktreeLayout({ cwd: flags.cwd, appRoot: flags.appRoot });
+  const cwd = layoutCwd(flags);
+  const layout = resolveWorktreeLayout({ cwd, appRoot: layoutAppRoot(flags) });
   if (!('worktreeRoot' in layout) || layout.refusal) {
     const refusal = 'refusal' in layout ? layout.refusal! : 'GIT_UNAVAILABLE';
     console.error(`refused: ${REFUSAL_TEXT[refusal]}`);
     return 3;
   }
-  const state = hookState(layout.commonDir, flags.cwd);
+  const state = hookState(layout.commonDir, cwd);
   const paths = hookPaths(layout.commonDir);
   const requested = (flags.resources ??
     resourcesForHost(flags.host).map((r) => r.id)) as ResourceId[];
@@ -422,7 +436,7 @@ function installHook(flags: Flags): number {
   const stagedHelper = join(paths.stateDir, `worktree-inheritance.${process.pid}.staged.js`);
   const stagedConfig = `${paths.config}.${process.pid}.tmp`;
   copyFileSync(selfPath(), stagedHelper);
-  if (!helperRuns(stagedHelper, flags.cwd)) {
+  if (!helperRuns(stagedHelper, cwd)) {
     rmSync(stagedHelper, { force: true });
     console.error(
       'refused: the packaged helper copy is not self-contained; install from the host plugin package.',
@@ -457,18 +471,19 @@ function installHook(flags: Flags): number {
 }
 
 function uninstallHook(flags: Flags): number {
-  const layout = resolveWorktreeLayout({ cwd: flags.cwd, appRoot: flags.appRoot });
+  const cwd = layoutCwd(flags);
+  const layout = resolveWorktreeLayout({ cwd, appRoot: layoutAppRoot(flags) });
   if (!('worktreeRoot' in layout)) {
     console.error(`refused: ${REFUSAL_TEXT[layout.refusal]}`);
     return 3;
   }
-  const state = hookState(layout.commonDir, flags.cwd);
+  const state = hookState(layout.commonDir, cwd);
   if (state.status !== 'installed') {
     console.log(`nothing to remove: ${state.status}`);
     return 0;
   }
   const paths = hookPaths(layout.commonDir);
-  if (hookState(layout.commonDir, flags.cwd).status !== 'installed') {
+  if (hookState(layout.commonDir, cwd).status !== 'installed') {
     console.error('refused: the post-checkout hook changed during removal; nothing was deleted.');
     return 3;
   }
@@ -486,12 +501,13 @@ function uninstallHook(flags: Flags): number {
 }
 
 function reportHook(flags: Flags): number {
-  const layout = resolveWorktreeLayout({ cwd: flags.cwd, appRoot: flags.appRoot });
+  const cwd = layoutCwd(flags);
+  const layout = resolveWorktreeLayout({ cwd, appRoot: layoutAppRoot(flags) });
   if (!('worktreeRoot' in layout)) {
     console.log(`hook: unavailable (${REFUSAL_TEXT[layout.refusal]})`);
     return 0;
   }
-  const state = hookState(layout.commonDir, flags.cwd);
+  const state = hookState(layout.commonDir, cwd);
   const paths = hookPaths(layout.commonDir);
   const config = readHookConfig(paths.config);
   if (flags.json) {
@@ -574,7 +590,7 @@ function main(): number {
   if (flags.command === 'post-checkout') return runPostCheckout(flags);
 
   if (flags.command === 'repair') {
-    const report = repairLegacyRoot({ cwd: flags.cwd, appRoot: flags.appRoot });
+    const report = repairLegacyRoot({ cwd: layoutCwd(flags), appRoot: layoutAppRoot(flags) });
     if (flags.json) {
       console.log(JSON.stringify(report, null, 2));
     } else {
@@ -586,8 +602,8 @@ function main(): number {
 
   if (flags.command === 'apply') {
     const report = applyInheritance({
-      cwd: flags.cwd,
-      appRoot: flags.appRoot,
+      cwd: layoutCwd(flags),
+      appRoot: layoutAppRoot(flags),
       host: flags.host,
       resources: flags.resources,
       allowRepair: flags.allowRepair,
@@ -608,8 +624,8 @@ function main(): number {
   }
 
   const plan = planInheritance({
-    cwd: flags.cwd,
-    appRoot: flags.appRoot,
+    cwd: layoutCwd(flags),
+    appRoot: layoutAppRoot(flags),
     host: flags.host,
     resources: flags.resources,
   });

@@ -880,11 +880,11 @@ async function immediateRunnerPinRefusal(runnerPath, resolveStatus = () => getEn
   const refusal = exactPinRefusal(status);
   if (refusal)
     return `RUNNER_PIN_CHANGED: ${refusal}`;
-  const canonicalPath2 = getMaestroRunnerPath();
-  if (!canonicalPath2 || !status?.selectedPath) {
+  const canonicalPath = getMaestroRunnerPath();
+  if (!canonicalPath || !status?.selectedPath) {
     return "RUNNER_PIN_CHANGED: verified runner path disappeared before execution.";
   }
-  if (resolve(canonicalPath2) !== resolve(runnerPath) || resolve(status.selectedPath) !== resolve(runnerPath)) {
+  if (resolve(canonicalPath) !== resolve(runnerPath) || resolve(status.selectedPath) !== resolve(runnerPath)) {
     return "RUNNER_PIN_CHANGED: verified runner path changed before execution.";
   }
   return null;
@@ -9466,6 +9466,13 @@ var init_path_safety = __esm({
   }
 });
 
+// packages/rn-dev-agent-core/dist/domain/unfollowed-file.js
+var init_unfollowed_file = __esm({
+  "packages/rn-dev-agent-core/dist/domain/unfollowed-file.js"() {
+    "use strict";
+  }
+});
+
 // packages/rn-dev-agent-core/dist/logger.js
 import { createWriteStream, mkdirSync as mkdirSync5, existsSync as existsSync5 } from "node:fs";
 import { join as join6 } from "node:path";
@@ -9893,7 +9900,7 @@ var init_worktree_repair_remedy = __esm({
 
 // packages/rn-dev-agent-core/dist/session/worktree-inheritance.js
 import { spawnSync } from "node:child_process";
-import { closeSync as closeSync3, existsSync as existsSync7, fstatSync as fstatSync3, lstatSync as lstatSync5, mkdirSync as mkdirSync7, openSync as openSync3, readFileSync as readFileSync7, readlinkSync as readlinkSync2, realpathSync as realpathSync3, renameSync as renameSync2, statSync as statSync3, symlinkSync as symlinkSync2, unlinkSync as unlinkSync4 } from "node:fs";
+import { closeSync as closeSync3, constants as constants4, existsSync as existsSync7, fstatSync as fstatSync3, lstatSync as lstatSync5, mkdirSync as mkdirSync7, openSync as openSync3, readFileSync as readFileSync7, readlinkSync as readlinkSync2, realpathSync as realpathSync3, renameSync as renameSync2, statSync as statSync3, symlinkSync as symlinkSync2, unlinkSync as unlinkSync4 } from "node:fs";
 import { dirname as dirname8, isAbsolute as isAbsolute2, join as join8, relative as relative2, resolve as resolve4, sep as sep5 } from "node:path";
 function gitEnvironment() {
   const env = { ...process.env };
@@ -10059,6 +10066,231 @@ function resolveWorktreeLayout(input) {
   }
   return { ...base, primaryRoot, primaryAppRoot };
 }
+function classifySource(path, type, boundary) {
+  const rel = relative2(boundary, path);
+  if (rel === ".." || rel.startsWith(`..${sep5}`) || isAbsolute2(rel)) {
+    return { state: "WRONG_TYPE" };
+  }
+  const paths = [boundary];
+  let cursor = boundary;
+  for (const component of rel.split(sep5).filter(Boolean)) {
+    cursor = join8(cursor, component);
+    paths.push(cursor);
+  }
+  const inspect = () => {
+    const evidence = [];
+    for (let index = 0; index < paths.length; index += 1) {
+      let node;
+      try {
+        node = lstatSync5(paths[index], { bigint: true });
+      } catch (error) {
+        const code = error.code;
+        if (code === "EACCES" || code === "EPERM")
+          return { state: "PERMISSION_DENIED" };
+        return { state: "MISSING" };
+      }
+      if (node.isSymbolicLink())
+        return { state: "WRONG_TYPE" };
+      const isLeaf = index === paths.length - 1;
+      const typeOk = isLeaf ? type === "directory" ? node.isDirectory() : node.isFile() : node.isDirectory();
+      if (!typeOk)
+        return { state: "WRONG_TYPE" };
+      evidence.push({ dev: String(node.dev), ino: String(node.ino) });
+    }
+    const resolved = canonical(path);
+    if (!resolved || !contained(boundary, resolved))
+      return { state: "WRONG_TYPE" };
+    return { state: "AVAILABLE", evidence };
+  };
+  const before = inspect();
+  if (before.state !== "AVAILABLE")
+    return before;
+  const after = inspect();
+  if (after.state !== "AVAILABLE" || !sameSourceEvidence(before.evidence, after.evidence)) {
+    return { state: "WRONG_TYPE" };
+  }
+  return after;
+}
+function sameSourceEvidence(left, right) {
+  if (!left || !right)
+    return left === right;
+  return left.length === right.length && left.every((identity, index) => {
+    const candidate = right[index];
+    return identity.dev === candidate.dev && identity.ino === candidate.ino;
+  });
+}
+function classifyDestination(path, sourcePath, type) {
+  let link;
+  try {
+    link = lstatSync5(path, { bigint: true });
+  } catch (error) {
+    const code = error.code;
+    if (code === "EACCES" || code === "EPERM")
+      return { state: "PERMISSION_DENIED" };
+    return { state: "MISSING" };
+  }
+  if (!link.isSymbolicLink()) {
+    if (link.isDirectory())
+      return { state: "DIRECTORY" };
+    return { state: "FILE" };
+  }
+  const evidence = { dev: String(link.dev), ino: String(link.ino) };
+  const resolved = canonical(path);
+  if (!resolved)
+    return { state: "LINK_STALE", evidence };
+  const expected = sourcePath ? canonical(sourcePath) : null;
+  if (!expected || resolved !== expected)
+    return { state: "LINK_FOREIGN", evidence };
+  try {
+    const stats = statSync3(resolved);
+    const typeOk = type === "directory" ? stats.isDirectory() : stats.isFile();
+    return { state: typeOk ? "LINK_VALID" : "LINK_FOREIGN", evidence };
+  } catch {
+    return { state: "LINK_STALE", evidence };
+  }
+}
+function identityOf(stat) {
+  return { dev: String(stat.dev), ino: String(stat.ino) };
+}
+function lstatIfPresent(path) {
+  try {
+    return lstatSync5(path, { bigint: true });
+  } catch (error) {
+    if (error.code === "ENOENT")
+      return null;
+    throw error;
+  }
+}
+function refuseCorpus(reason) {
+  return { status: "refused", reason };
+}
+function refuseForeignActions(actionsDir) {
+  return refuseCorpus(`Refusing foreign learned-action corpus symlink at ${actionsDir}.`);
+}
+function refuseReplacedActions(actionsDir) {
+  return refuseCorpus(`Refusing replaced learned-action corpus symlink at ${actionsDir}.`);
+}
+function refuseDanglingActions(actionsDir) {
+  return refuseCorpus(`Refusing dangling learned-action corpus symlink at ${actionsDir}.`);
+}
+function directoryIdentityUnchanged(path, expected) {
+  const current = lstatIfPresent(path);
+  return Boolean(current && !current.isSymbolicLink() && current.isDirectory() && String(current.dev) === expected.dev && String(current.ino) === expected.ino);
+}
+function openUnfollowedDirectory(path, expected) {
+  let fd;
+  try {
+    fd = openSync3(path, constants4.O_RDONLY | constants4.O_NOFOLLOW | constants4.O_DIRECTORY);
+  } catch {
+    return false;
+  }
+  try {
+    const opened = fstatSync3(fd, { bigint: true });
+    return opened.isDirectory() && String(opened.dev) === expected.dev && String(opened.ino) === expected.ino;
+  } finally {
+    closeSync3(fd);
+  }
+}
+function resolveReadableActionCorpus(projectRoot) {
+  const root2 = canonical(projectRoot) ?? resolve4(projectRoot);
+  const rnAgentDir = join8(root2, ".rn-agent");
+  const actionsDir = join8(rnAgentDir, "actions");
+  const rnAgentStat = lstatIfPresent(rnAgentDir);
+  if (!rnAgentStat)
+    return { status: "absent" };
+  if (rnAgentStat.isSymbolicLink() || !rnAgentStat.isDirectory()) {
+    return refuseCorpus(`Refusing learned-action corpus symlink at ${rnAgentDir}.`);
+  }
+  const rnAgentIdentity = identityOf(rnAgentStat);
+  if (!openUnfollowedDirectory(rnAgentDir, rnAgentIdentity)) {
+    return refuseCorpus(`Refusing learned-action corpus symlink at ${rnAgentDir}.`);
+  }
+  const actionsStat = lstatIfPresent(actionsDir);
+  if (!directoryIdentityUnchanged(rnAgentDir, rnAgentIdentity)) {
+    return refuseCorpus(`Refusing learned-action corpus symlink at ${rnAgentDir}.`);
+  }
+  if (!actionsStat)
+    return { status: "absent" };
+  if (!actionsStat.isSymbolicLink()) {
+    if (!actionsStat.isDirectory())
+      return { status: "absent" };
+    const identity = identityOf(actionsStat);
+    if (!openUnfollowedDirectory(actionsDir, identity)) {
+      return refuseReplacedActions(actionsDir);
+    }
+    if (!directoryIdentityUnchanged(rnAgentDir, rnAgentIdentity)) {
+      return refuseCorpus(`Refusing learned-action corpus symlink at ${rnAgentDir}.`);
+    }
+    if (!directoryIdentityUnchanged(actionsDir, identity)) {
+      return refuseReplacedActions(actionsDir);
+    }
+    return {
+      status: "owned-directory",
+      projectRoot: root2,
+      rnAgentDir,
+      actionsDir,
+      identity
+    };
+  }
+  const layout = resolveWorktreeLayout({ cwd: root2, appRoot: root2 });
+  if (!("kind" in layout) || layout.kind !== "linked" || layout.refusal || !layout.primaryRoot || !layout.primaryAppRoot) {
+    return refuseForeignActions(actionsDir);
+  }
+  const primaryRnAgentDir = join8(layout.primaryAppRoot, ".rn-agent");
+  const primaryActionsDir = join8(primaryRnAgentDir, "actions");
+  const source = classifySource(primaryActionsDir, "directory", layout.primaryRoot);
+  const destination = classifyDestination(actionsDir, primaryActionsDir, "directory");
+  if (destination.state === "LINK_STALE")
+    return refuseDanglingActions(actionsDir);
+  if (source.state !== "AVAILABLE" || destination.state !== "LINK_VALID" || !destination.evidence) {
+    return refuseForeignActions(actionsDir);
+  }
+  const targetDir = canonical(primaryActionsDir);
+  if (!targetDir)
+    return refuseForeignActions(actionsDir);
+  const targetStat = lstatIfPresent(targetDir);
+  if (!targetStat || targetStat.isSymbolicLink() || !targetStat.isDirectory()) {
+    return refuseForeignActions(actionsDir);
+  }
+  const targetIdentity = identityOf(targetStat);
+  if (!openUnfollowedDirectory(targetDir, targetIdentity)) {
+    return refuseReplacedActions(actionsDir);
+  }
+  const destinationAfter = classifyDestination(actionsDir, primaryActionsDir, "directory");
+  const sourceAfter = classifySource(primaryActionsDir, "directory", layout.primaryRoot);
+  if (destinationAfter.state !== "LINK_VALID" || !destinationAfter.evidence || destinationAfter.evidence.dev !== destination.evidence.dev || destinationAfter.evidence.ino !== destination.evidence.ino || sourceAfter.state !== "AVAILABLE" || !sameSourceEvidence(source.evidence, sourceAfter.evidence) || !directoryIdentityUnchanged(rnAgentDir, rnAgentIdentity)) {
+    return refuseReplacedActions(actionsDir);
+  }
+  return {
+    status: "approved-inherited",
+    projectRoot: root2,
+    rnAgentDir,
+    actionsDir,
+    targetDir,
+    linkIdentity: destination.evidence,
+    targetIdentity
+  };
+}
+function sameReadableActionCorpus(left, right) {
+  if (left.status !== right.status)
+    return false;
+  if (left.status === "absent")
+    return true;
+  if (left.status === "refused") {
+    return right.status === "refused" && left.reason === right.reason;
+  }
+  if (left.status === "owned-directory" && right.status === "owned-directory") {
+    return left.actionsDir === right.actionsDir && left.identity.dev === right.identity.dev && left.identity.ino === right.identity.ino;
+  }
+  return left.status === "approved-inherited" && right.status === "approved-inherited" && left.actionsDir === right.actionsDir && left.targetDir === right.targetDir && left.linkIdentity.dev === right.linkIdentity.dev && left.linkIdentity.ino === right.linkIdentity.ino && left.targetIdentity.dev === right.targetIdentity.dev && left.targetIdentity.ino === right.targetIdentity.ino;
+}
+function readableActionsDirectory(corpus) {
+  if (corpus.status === "owned-directory")
+    return corpus.actionsDir;
+  if (corpus.status === "approved-inherited")
+    return corpus.targetDir;
+  return null;
+}
 var GIT_ENV_OVERRIDES;
 var init_worktree_inheritance = __esm({
   "packages/rn-dev-agent-core/dist/session/worktree-inheritance.js"() {
@@ -10076,47 +10308,24 @@ var init_worktree_inheritance = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/domain/action-store.js
-import { existsSync as existsSync8, lstatSync as lstatSync6, readFileSync as readFileSync8, realpathSync as realpathSync4, statSync as statSync4, unlinkSync as unlinkSync5 } from "node:fs";
+import { existsSync as existsSync8, lstatSync as lstatSync6, readFileSync as readFileSync8, statSync as statSync4, unlinkSync as unlinkSync5 } from "node:fs";
 import { basename as basename4, dirname as dirname9, join as join9 } from "node:path";
 function assertOwnedActionCorpus(projectRoot) {
   for (const path of [join9(projectRoot, ".rn-agent"), join9(projectRoot, ".rn-agent", "actions")]) {
-    const stat = lstatIfPresent(path);
+    const stat = lstatIfPresent2(path);
     if (stat?.isSymbolicLink()) {
       throw new Error(`Refusing learned-action corpus symlink at ${path}.`);
     }
   }
 }
-function assertReadableActionCorpus(projectRoot) {
-  const rnAgentDir = join9(projectRoot, ".rn-agent");
-  const actionsDir = join9(rnAgentDir, "actions");
-  const rnAgentStat = lstatIfPresent(rnAgentDir);
-  if (rnAgentStat?.isSymbolicLink()) {
-    throw new Error(`Refusing learned-action corpus symlink at ${rnAgentDir}.`);
-  }
-  const actionsStat = lstatIfPresent(actionsDir);
-  if (!actionsStat?.isSymbolicLink())
-    return;
-  const target = realpathSync4(actionsDir);
-  const layout = resolveWorktreeLayout({ cwd: projectRoot, appRoot: projectRoot });
-  const primaryRnAgentDir = "primaryAppRoot" in layout && layout.primaryAppRoot ? join9(layout.primaryAppRoot, ".rn-agent") : null;
-  const primaryActionsDir = primaryRnAgentDir ? join9(primaryRnAgentDir, "actions") : null;
-  const expectedTarget = primaryRnAgentDir && primaryActionsDir && "kind" in layout && layout.kind === "linked" && !layout.refusal && isOwnedDirectory(primaryRnAgentDir) && isOwnedDirectory(primaryActionsDir) ? canonicalPath(primaryActionsDir) : null;
-  if (!expectedTarget || target !== expectedTarget || !statSync4(target).isDirectory()) {
-    throw new Error(`Refusing foreign learned-action corpus symlink at ${actionsDir}.`);
+function assertStableReadableCorpus(projectRoot, expected) {
+  const after = resolveReadableActionCorpus(projectRoot);
+  if (!sameReadableActionCorpus(expected, after)) {
+    const actionsDir = join9(projectRoot, ".rn-agent", "actions");
+    throw new Error(`Refusing replaced learned-action corpus symlink at ${actionsDir}.`);
   }
 }
-function isOwnedDirectory(path) {
-  const stat = lstatIfPresent(path);
-  return Boolean(stat?.isDirectory() && !stat.isSymbolicLink());
-}
-function canonicalPath(path) {
-  try {
-    return realpathSync4(path);
-  } catch {
-    return null;
-  }
-}
-function lstatIfPresent(path) {
+function lstatIfPresent2(path) {
   try {
     return lstatSync6(path);
   } catch (err) {
@@ -10126,7 +10335,7 @@ function lstatIfPresent(path) {
   }
 }
 function actionFileExists(path) {
-  const stat = lstatIfPresent(path);
+  const stat = lstatIfPresent2(path);
   if (!stat)
     return false;
   if (stat.isSymbolicLink()) {
@@ -10134,13 +10343,14 @@ function actionFileExists(path) {
   }
   return true;
 }
-function resolveActionPath(projectRoot, actionId) {
-  assertValidActionId(actionId, "resolveActionPath");
-  assertReadableActionCorpus(projectRoot);
-  const actionsDir = join9(projectRoot, ".rn-agent", "actions");
+function resolveActionPathFromCorpus(actionId, corpus) {
+  const readableDir = readableActionsDirectory(corpus);
+  if (!readableDir)
+    return null;
   const fileName = `${actionId}.yaml`;
-  assertWithinDir(fileName, actionsDir);
-  const yamlPath = join9(actionsDir, fileName);
+  assertWithinDir(fileName, corpus.actionsDir);
+  assertWithinDir(fileName, readableDir);
+  const yamlPath = join9(readableDir, fileName);
   const ymlPath = yamlPath.replace(/\.yaml$/, ".yml");
   const yamlExists = actionFileExists(yamlPath);
   const ymlExists = actionFileExists(ymlPath);
@@ -10148,10 +10358,22 @@ function resolveActionPath(projectRoot, actionId) {
     throw new Error(`Action ${actionId} is ambiguous because both ${actionId}.yaml and ${actionId}.yml exist; keep exactly one file before replay.`);
   }
   if (yamlExists)
-    return yamlPath;
+    return join9(corpus.actionsDir, fileName);
   if (ymlExists)
-    return ymlPath;
+    return join9(corpus.actionsDir, `${actionId}.yml`);
   return null;
+}
+function resolveActionPath(projectRoot, actionId) {
+  assertValidActionId(actionId, "resolveActionPath");
+  const corpus = resolveReadableActionCorpus(projectRoot);
+  if (corpus.status === "refused")
+    throw new Error(corpus.reason);
+  if (corpus.status !== "owned-directory" && corpus.status !== "approved-inherited")
+    return null;
+  const filePath = resolveActionPathFromCorpus(actionId, corpus);
+  if (filePath)
+    assertStableReadableCorpus(projectRoot, corpus);
+  return filePath;
 }
 function splitYaml(text) {
   const allLines = text.split("\n");
@@ -10336,6 +10558,7 @@ var init_action_store = __esm({
     init_sidecar_io();
     init_atomic_writer();
     init_path_safety();
+    init_unfollowed_file();
     init_action_state_store();
     init_worktree_inheritance();
     migrationPathIdentities = /* @__PURE__ */ new WeakMap();
@@ -10343,7 +10566,7 @@ var init_action_store = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/domain/action-engine-compat.js
-import { existsSync as existsSync9, lstatSync as lstatSync7, readFileSync as readFileSync9, readdirSync as readdirSync4, realpathSync as realpathSync5 } from "node:fs";
+import { existsSync as existsSync9, lstatSync as lstatSync7, readFileSync as readFileSync9, readdirSync as readdirSync4, realpathSync as realpathSync4 } from "node:fs";
 import { basename as basename5, dirname as dirname10, join as join10, resolve as resolve5 } from "node:path";
 function actionEnginePinRefusal(enginePin) {
   if (!enginePin) {
@@ -10418,7 +10641,7 @@ function canonicalizeExistingPath(path) {
     suffix.unshift(basename5(cursor));
     cursor = parent;
   }
-  return resolve5(realpathSync5(cursor), ...suffix);
+  return resolve5(realpathSync4(cursor), ...suffix);
 }
 function standaloneLearnedActionPathRefusal(path) {
   const classification = classifyLearnedActionPath(path);
@@ -11120,7 +11343,7 @@ var init_declared_source_contract = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/nav-graph/storage.js
-import { readFileSync as readFileSync12, writeFileSync as writeFileSync4, existsSync as existsSync11, renameSync as renameSync4, readdirSync as readdirSync5, lstatSync as lstatSync9, mkdirSync as mkdirSync9, realpathSync as realpathSync6 } from "node:fs";
+import { readFileSync as readFileSync12, writeFileSync as writeFileSync4, existsSync as existsSync11, renameSync as renameSync4, readdirSync as readdirSync5, lstatSync as lstatSync9, mkdirSync as mkdirSync9, realpathSync as realpathSync5 } from "node:fs";
 import { join as join14, dirname as dirname13 } from "node:path";
 function isRnProject(dir) {
   const pkgPath = join14(dir, "package.json");

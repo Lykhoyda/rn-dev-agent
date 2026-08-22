@@ -5,6 +5,439 @@ import { createRequire as __rnCreateRequire } from "node:module"; const require 
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
+
+// packages/rn-dev-agent-core/dist/domain/unfollowed-file.js
+import { closeSync, constants, fstatSync, openSync, readFileSync } from "node:fs";
+function readUnfollowedFile(path2) {
+  let fd;
+  try {
+    fd = openSync(path2, constants.O_RDONLY | constants.O_NOFOLLOW);
+  } catch (err) {
+    const code = err.code;
+    if (code === "ENOENT")
+      throw err;
+    throw new Error(`Refusing inherited action symlink at ${path2}.`);
+  }
+  try {
+    const opened = fstatSync(fd);
+    if (!opened.isFile()) {
+      throw new Error(`Refusing inherited action symlink at ${path2}.`);
+    }
+    return readFileSync(fd, "utf8");
+  } finally {
+    closeSync(fd);
+  }
+}
+
+// packages/rn-dev-agent-core/dist/session/worktree-inheritance.js
+import { spawnSync } from "node:child_process";
+import { closeSync as closeSync2, constants as constants2, existsSync, fstatSync as fstatSync2, lstatSync, mkdirSync, openSync as openSync2, readFileSync as readFileSync2, readlinkSync, realpathSync, renameSync, statSync, symlinkSync, unlinkSync } from "node:fs";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+
+// packages/rn-dev-agent-core/dist/session/worktree-repair-remedy.js
+var WORKTREE_REPAIR_ENTRY = '"${CLAUDE_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}/rn-dev-agent-core/dist/worktree-inheritance.js"';
+var HEADLESS_WORKTREE_REPAIR_COMMAND = `node ${WORKTREE_REPAIR_ENTRY} repair --app-root "$PWD"`;
+
+// packages/rn-dev-agent-core/dist/session/worktree-inheritance.js
+var GIT_ENV_OVERRIDES = [
+  "GIT_DIR",
+  "GIT_WORK_TREE",
+  "GIT_INDEX_FILE",
+  "GIT_COMMON_DIR",
+  "GIT_OBJECT_DIRECTORY",
+  "GIT_NAMESPACE"
+];
+function gitEnvironment() {
+  const env = { ...process.env };
+  for (const key of GIT_ENV_OVERRIDES)
+    delete env[key];
+  return env;
+}
+function git(cwd, args) {
+  const result = spawnSync("git", args, {
+    cwd,
+    encoding: "utf8",
+    env: gitEnvironment(),
+    stdio: ["ignore", "pipe", "pipe"]
+  });
+  if (result.error || result.status !== 0)
+    return { ok: false, stdout: "" };
+  return { ok: true, stdout: (result.stdout ?? "").replace(/\n$/, "") };
+}
+function canonical(path2) {
+  try {
+    return realpathSync(path2);
+  } catch {
+    return null;
+  }
+}
+function contained(parent, child) {
+  if (parent === child)
+    return true;
+  const rel = relative(parent, child);
+  return rel !== "" && !rel.startsWith(`..${sep}`) && rel !== ".." && !isAbsolute(rel);
+}
+function toPosix(path2) {
+  return sep === "/" ? path2 : path2.split(sep).join("/");
+}
+function isRnAppRoot(directory) {
+  const manifest = join(directory, "package.json");
+  try {
+    const parsed = JSON.parse(readFileSync2(manifest, "utf8"));
+    const deps = { ...parsed.dependencies, ...parsed.devDependencies };
+    return Boolean(deps["react-native"] || deps["expo"]);
+  } catch {
+    return false;
+  }
+}
+function parseWorktreeRecords(porcelain) {
+  const records = [];
+  let current = null;
+  for (const line of porcelain.split("\n")) {
+    if (line.startsWith("worktree ")) {
+      if (current)
+        records.push(current);
+      current = { path: line.slice("worktree ".length), bare: false, prunable: false };
+      continue;
+    }
+    if (!current)
+      continue;
+    if (line === "bare")
+      current.bare = true;
+    if (line === "prunable" || line.startsWith("prunable "))
+      current.prunable = true;
+  }
+  if (current)
+    records.push(current);
+  return records;
+}
+function verifiedPrimaries(worktreeRoot, commonDir) {
+  const listing = git(worktreeRoot, ["worktree", "list", "--porcelain"]);
+  if (!listing.ok)
+    return [];
+  const verified = /* @__PURE__ */ new Set();
+  for (const record of parseWorktreeRecords(listing.stdout)) {
+    if (record.bare || record.prunable)
+      continue;
+    const candidate = canonical(record.path);
+    if (!candidate)
+      continue;
+    try {
+      if (!statSync(candidate).isDirectory())
+        continue;
+    } catch {
+      continue;
+    }
+    const top = git(candidate, ["rev-parse", "--show-toplevel"]);
+    if (!top.ok || canonical(top.stdout) !== candidate)
+      continue;
+    const candidateGitDir = git(candidate, ["rev-parse", "--path-format=absolute", "--git-dir"]);
+    const candidateCommon = git(candidate, [
+      "rev-parse",
+      "--path-format=absolute",
+      "--git-common-dir"
+    ]);
+    if (!candidateGitDir.ok || !candidateCommon.ok)
+      continue;
+    const resolvedGitDir = canonical(candidateGitDir.stdout);
+    const resolvedCommon = canonical(candidateCommon.stdout);
+    if (!resolvedGitDir || !resolvedCommon)
+      continue;
+    if (resolvedCommon !== commonDir || resolvedGitDir !== resolvedCommon)
+      continue;
+    verified.add(candidate);
+  }
+  return [...verified];
+}
+function resolveWorktreeLayout(input) {
+  const cwd = canonical(input.cwd);
+  if (!cwd)
+    return { refusal: "NOT_GIT" };
+  const insideWorkTree = git(cwd, ["rev-parse", "--is-inside-work-tree"]);
+  if (!insideWorkTree.ok) {
+    const bare = git(cwd, ["rev-parse", "--is-bare-repository"]);
+    if (bare.ok && bare.stdout === "true")
+      return { refusal: "BARE" };
+    return { refusal: "NOT_GIT" };
+  }
+  if (insideWorkTree.stdout !== "true")
+    return { refusal: "BARE" };
+  const top = git(cwd, ["rev-parse", "--show-toplevel"]);
+  const gitDirRaw = git(cwd, ["rev-parse", "--path-format=absolute", "--git-dir"]);
+  const commonRaw = git(cwd, ["rev-parse", "--path-format=absolute", "--git-common-dir"]);
+  if (!top.ok || !gitDirRaw.ok || !commonRaw.ok)
+    return { refusal: "GIT_UNAVAILABLE" };
+  const worktreeRoot = canonical(top.stdout);
+  const gitDir = canonical(gitDirRaw.stdout);
+  const commonDir = canonical(commonRaw.stdout);
+  if (!worktreeRoot || !gitDir || !commonDir)
+    return { refusal: "GIT_UNAVAILABLE" };
+  const appRootInput = canonical(input.appRoot ? resolve(input.appRoot) : cwd);
+  if (!appRootInput)
+    return { refusal: "NOT_RN_APP" };
+  if (!contained(worktreeRoot, appRootInput))
+    return { refusal: "APP_OUTSIDE_WORKTREE" };
+  if (!input.allowNonRnApp && !isRnAppRoot(appRootInput))
+    return { refusal: "NOT_RN_APP" };
+  const appRelative = worktreeRoot === appRootInput ? "." : toPosix(relative(worktreeRoot, appRootInput));
+  const base = {
+    kind: gitDir === commonDir ? "primary" : "linked",
+    worktreeRoot,
+    commonDir,
+    gitDir,
+    appRoot: appRootInput,
+    appRelative
+  };
+  if (base.kind === "primary")
+    return base;
+  const primaries = verifiedPrimaries(worktreeRoot, commonDir);
+  if (primaries.length === 0)
+    return { ...base, refusal: "NO_PRIMARY" };
+  if (primaries.length > 1)
+    return { ...base, refusal: "AMBIGUOUS" };
+  const primaryRoot = primaries[0];
+  const primaryAppRoot = appRelative === "." ? primaryRoot : join(primaryRoot, appRelative);
+  if (!contained(primaryRoot, primaryAppRoot))
+    return { ...base, refusal: "PRIMARY_APP_MISSING" };
+  let primaryAppReal = null;
+  try {
+    if (lstatSync(primaryAppRoot).isDirectory())
+      primaryAppReal = canonical(primaryAppRoot);
+  } catch {
+    primaryAppReal = null;
+  }
+  if (!primaryAppReal || !contained(primaryRoot, primaryAppReal)) {
+    return { ...base, refusal: "PRIMARY_APP_MISSING" };
+  }
+  return { ...base, primaryRoot, primaryAppRoot };
+}
+function classifySource(path2, type, boundary) {
+  const rel = relative(boundary, path2);
+  if (rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
+    return { state: "WRONG_TYPE" };
+  }
+  const paths = [boundary];
+  let cursor = boundary;
+  for (const component of rel.split(sep).filter(Boolean)) {
+    cursor = join(cursor, component);
+    paths.push(cursor);
+  }
+  const inspect = () => {
+    const evidence = [];
+    for (let index = 0; index < paths.length; index += 1) {
+      let node;
+      try {
+        node = lstatSync(paths[index], { bigint: true });
+      } catch (error) {
+        const code = error.code;
+        if (code === "EACCES" || code === "EPERM")
+          return { state: "PERMISSION_DENIED" };
+        return { state: "MISSING" };
+      }
+      if (node.isSymbolicLink())
+        return { state: "WRONG_TYPE" };
+      const isLeaf = index === paths.length - 1;
+      const typeOk = isLeaf ? type === "directory" ? node.isDirectory() : node.isFile() : node.isDirectory();
+      if (!typeOk)
+        return { state: "WRONG_TYPE" };
+      evidence.push({ dev: String(node.dev), ino: String(node.ino) });
+    }
+    const resolved = canonical(path2);
+    if (!resolved || !contained(boundary, resolved))
+      return { state: "WRONG_TYPE" };
+    return { state: "AVAILABLE", evidence };
+  };
+  const before = inspect();
+  if (before.state !== "AVAILABLE")
+    return before;
+  const after = inspect();
+  if (after.state !== "AVAILABLE" || !sameSourceEvidence(before.evidence, after.evidence)) {
+    return { state: "WRONG_TYPE" };
+  }
+  return after;
+}
+function sameSourceEvidence(left, right) {
+  if (!left || !right)
+    return left === right;
+  return left.length === right.length && left.every((identity, index) => {
+    const candidate = right[index];
+    return identity.dev === candidate.dev && identity.ino === candidate.ino;
+  });
+}
+function classifyDestination(path2, sourcePath, type) {
+  let link;
+  try {
+    link = lstatSync(path2, { bigint: true });
+  } catch (error) {
+    const code = error.code;
+    if (code === "EACCES" || code === "EPERM")
+      return { state: "PERMISSION_DENIED" };
+    return { state: "MISSING" };
+  }
+  if (!link.isSymbolicLink()) {
+    if (link.isDirectory())
+      return { state: "DIRECTORY" };
+    return { state: "FILE" };
+  }
+  const evidence = { dev: String(link.dev), ino: String(link.ino) };
+  const resolved = canonical(path2);
+  if (!resolved)
+    return { state: "LINK_STALE", evidence };
+  const expected = sourcePath ? canonical(sourcePath) : null;
+  if (!expected || resolved !== expected)
+    return { state: "LINK_FOREIGN", evidence };
+  try {
+    const stats = statSync(resolved);
+    const typeOk = type === "directory" ? stats.isDirectory() : stats.isFile();
+    return { state: typeOk ? "LINK_VALID" : "LINK_FOREIGN", evidence };
+  } catch {
+    return { state: "LINK_STALE", evidence };
+  }
+}
+function identityOf(stat) {
+  return { dev: String(stat.dev), ino: String(stat.ino) };
+}
+function lstatIfPresent(path2) {
+  try {
+    return lstatSync(path2, { bigint: true });
+  } catch (error) {
+    if (error.code === "ENOENT")
+      return null;
+    throw error;
+  }
+}
+function refuseCorpus(reason) {
+  return { status: "refused", reason };
+}
+function refuseForeignActions(actionsDir) {
+  return refuseCorpus(`Refusing foreign learned-action corpus symlink at ${actionsDir}.`);
+}
+function refuseReplacedActions(actionsDir) {
+  return refuseCorpus(`Refusing replaced learned-action corpus symlink at ${actionsDir}.`);
+}
+function refuseDanglingActions(actionsDir) {
+  return refuseCorpus(`Refusing dangling learned-action corpus symlink at ${actionsDir}.`);
+}
+function directoryIdentityUnchanged(path2, expected) {
+  const current = lstatIfPresent(path2);
+  return Boolean(current && !current.isSymbolicLink() && current.isDirectory() && String(current.dev) === expected.dev && String(current.ino) === expected.ino);
+}
+function openUnfollowedDirectory(path2, expected) {
+  let fd;
+  try {
+    fd = openSync2(path2, constants2.O_RDONLY | constants2.O_NOFOLLOW | constants2.O_DIRECTORY);
+  } catch {
+    return false;
+  }
+  try {
+    const opened = fstatSync2(fd, { bigint: true });
+    return opened.isDirectory() && String(opened.dev) === expected.dev && String(opened.ino) === expected.ino;
+  } finally {
+    closeSync2(fd);
+  }
+}
+function resolveReadableActionCorpus(projectRoot) {
+  const root = canonical(projectRoot) ?? resolve(projectRoot);
+  const rnAgentDir = join(root, ".rn-agent");
+  const actionsDir = join(rnAgentDir, "actions");
+  const rnAgentStat = lstatIfPresent(rnAgentDir);
+  if (!rnAgentStat)
+    return { status: "absent" };
+  if (rnAgentStat.isSymbolicLink() || !rnAgentStat.isDirectory()) {
+    return refuseCorpus(`Refusing learned-action corpus symlink at ${rnAgentDir}.`);
+  }
+  const rnAgentIdentity = identityOf(rnAgentStat);
+  if (!openUnfollowedDirectory(rnAgentDir, rnAgentIdentity)) {
+    return refuseCorpus(`Refusing learned-action corpus symlink at ${rnAgentDir}.`);
+  }
+  const actionsStat = lstatIfPresent(actionsDir);
+  if (!directoryIdentityUnchanged(rnAgentDir, rnAgentIdentity)) {
+    return refuseCorpus(`Refusing learned-action corpus symlink at ${rnAgentDir}.`);
+  }
+  if (!actionsStat)
+    return { status: "absent" };
+  if (!actionsStat.isSymbolicLink()) {
+    if (!actionsStat.isDirectory())
+      return { status: "absent" };
+    const identity = identityOf(actionsStat);
+    if (!openUnfollowedDirectory(actionsDir, identity)) {
+      return refuseReplacedActions(actionsDir);
+    }
+    if (!directoryIdentityUnchanged(rnAgentDir, rnAgentIdentity)) {
+      return refuseCorpus(`Refusing learned-action corpus symlink at ${rnAgentDir}.`);
+    }
+    if (!directoryIdentityUnchanged(actionsDir, identity)) {
+      return refuseReplacedActions(actionsDir);
+    }
+    return {
+      status: "owned-directory",
+      projectRoot: root,
+      rnAgentDir,
+      actionsDir,
+      identity
+    };
+  }
+  const layout = resolveWorktreeLayout({ cwd: root, appRoot: root });
+  if (!("kind" in layout) || layout.kind !== "linked" || layout.refusal || !layout.primaryRoot || !layout.primaryAppRoot) {
+    return refuseForeignActions(actionsDir);
+  }
+  const primaryRnAgentDir = join(layout.primaryAppRoot, ".rn-agent");
+  const primaryActionsDir = join(primaryRnAgentDir, "actions");
+  const source = classifySource(primaryActionsDir, "directory", layout.primaryRoot);
+  const destination = classifyDestination(actionsDir, primaryActionsDir, "directory");
+  if (destination.state === "LINK_STALE")
+    return refuseDanglingActions(actionsDir);
+  if (source.state !== "AVAILABLE" || destination.state !== "LINK_VALID" || !destination.evidence) {
+    return refuseForeignActions(actionsDir);
+  }
+  const targetDir = canonical(primaryActionsDir);
+  if (!targetDir)
+    return refuseForeignActions(actionsDir);
+  const targetStat = lstatIfPresent(targetDir);
+  if (!targetStat || targetStat.isSymbolicLink() || !targetStat.isDirectory()) {
+    return refuseForeignActions(actionsDir);
+  }
+  const targetIdentity = identityOf(targetStat);
+  if (!openUnfollowedDirectory(targetDir, targetIdentity)) {
+    return refuseReplacedActions(actionsDir);
+  }
+  const destinationAfter = classifyDestination(actionsDir, primaryActionsDir, "directory");
+  const sourceAfter = classifySource(primaryActionsDir, "directory", layout.primaryRoot);
+  if (destinationAfter.state !== "LINK_VALID" || !destinationAfter.evidence || destinationAfter.evidence.dev !== destination.evidence.dev || destinationAfter.evidence.ino !== destination.evidence.ino || sourceAfter.state !== "AVAILABLE" || !sameSourceEvidence(source.evidence, sourceAfter.evidence) || !directoryIdentityUnchanged(rnAgentDir, rnAgentIdentity)) {
+    return refuseReplacedActions(actionsDir);
+  }
+  return {
+    status: "approved-inherited",
+    projectRoot: root,
+    rnAgentDir,
+    actionsDir,
+    targetDir,
+    linkIdentity: destination.evidence,
+    targetIdentity
+  };
+}
+function sameReadableActionCorpus(left, right) {
+  if (left.status !== right.status)
+    return false;
+  if (left.status === "absent")
+    return true;
+  if (left.status === "refused") {
+    return right.status === "refused" && left.reason === right.reason;
+  }
+  if (left.status === "owned-directory" && right.status === "owned-directory") {
+    return left.actionsDir === right.actionsDir && left.identity.dev === right.identity.dev && left.identity.ino === right.identity.ino;
+  }
+  return left.status === "approved-inherited" && right.status === "approved-inherited" && left.actionsDir === right.actionsDir && left.targetDir === right.targetDir && left.linkIdentity.dev === right.linkIdentity.dev && left.linkIdentity.ino === right.linkIdentity.ino && left.targetIdentity.dev === right.targetIdentity.dev && left.targetIdentity.ino === right.targetIdentity.ino;
+}
+function readableActionsDirectory(corpus) {
+  if (corpus.status === "owned-directory")
+    return corpus.actionsDir;
+  if (corpus.status === "approved-inherited")
+    return corpus.targetDir;
+  return null;
+}
+
+// packages/rn-dev-agent-core/dist/learned-actions.js
 var argv = process.argv.slice(2);
 var flags = {
   json: false,
@@ -90,33 +523,67 @@ function resolveFlowFile(actionsDir, id) {
     return ymlPath;
   return null;
 }
+function classifyFlowRoot(actionsDir) {
+  if (path.basename(actionsDir) !== "actions" || path.basename(path.dirname(actionsDir)) !== ".rn-agent") {
+    return null;
+  }
+  const corpus = resolveReadableActionCorpus(path.dirname(path.dirname(actionsDir)));
+  if (corpus.status !== "owned-directory" && corpus.status !== "approved-inherited")
+    return null;
+  return corpus;
+}
 function scanFlows() {
   const roots = collectFlowRoots(flags.workspaceRoot);
   const items = [];
   for (const root of roots) {
-    if (!isDirectNode(root, "directory"))
+    const corpus = classifyFlowRoot(root);
+    if (!corpus)
+      continue;
+    const readable = readableActionsDirectory(corpus);
+    if (!readable)
+      continue;
+    let files;
+    try {
+      files = fs.readdirSync(readable);
+    } catch {
+      continue;
+    }
+    const afterRead = classifyFlowRoot(root);
+    if (!afterRead || !sameReadableActionCorpus(corpus, afterRead))
       continue;
     const ids = [
-      ...new Set(fs.readdirSync(root).filter((file) => /\.ya?ml$/.test(file)).map((file) => file.replace(/\.ya?ml$/, "")))
+      ...new Set(files.filter((file) => /\.ya?ml$/.test(file)).map((file) => file.replace(/\.ya?ml$/, "")))
     ];
+    const rootItems = [];
     for (const id of ids) {
-      const fp = resolveFlowFile(root, id);
+      const fp = resolveFlowFile(readable, id);
       if (!fp)
         continue;
       const f = path.basename(fp);
-      const text = fs.readFileSync(fp, "utf8");
+      const reportedPath = path.join(root, f);
+      let text;
+      try {
+        text = readUnfollowedFile(fp);
+      } catch {
+        continue;
+      }
+      const afterFile = classifyFlowRoot(root);
+      if (!afterFile || !sameReadableActionCorpus(corpus, afterFile)) {
+        rootItems.length = 0;
+        break;
+      }
       const meta = parseFlowMeta(text);
       if (flags.appId && meta.appId !== flags.appId)
         continue;
       const tagsStr = (meta.tags || []).join(",");
-      if (!matchKw(meta.purpose, meta.appId, meta.intent, tagsStr, f, fp))
+      if (!matchKw(meta.purpose, meta.appId, meta.intent, tagsStr, f, reportedPath))
         continue;
       const params = (text.match(/\$\{([A-Z_][A-Z0-9_]*)\}/g) || []).map((s) => s.slice(2, -1));
       const uniqParams = Array.from(new Set(params));
-      const replay = replayHint(meta.id, fp, uniqParams);
-      items.push({
+      const replay = replayHint(meta.id, reportedPath, uniqParams);
+      rootItems.push({
         flow: f.replace(/\.ya?ml$/, ""),
-        path: fp,
+        path: reportedPath,
         appId: meta.appId,
         purpose: truncate(meta.purpose, 140),
         id: meta.id,
@@ -131,6 +598,9 @@ function scanFlows() {
         replay
       });
     }
+    const finalCorpus = classifyFlowRoot(root);
+    if (finalCorpus && sameReadableActionCorpus(corpus, finalCorpus))
+      items.push(...rootItems);
   }
   items.sort((a, b) => a.flow.localeCompare(b.flow));
   return { items: items.slice(0, flags.max), roots };

@@ -11792,6 +11792,13 @@ var init_path_safety = __esm({
   }
 });
 
+// packages/rn-dev-agent-core/dist/domain/unfollowed-file.js
+var init_unfollowed_file = __esm({
+  "packages/rn-dev-agent-core/dist/domain/unfollowed-file.js"() {
+    "use strict";
+  }
+});
+
 // packages/rn-dev-agent-core/dist/domain/action-db.js
 import { createRequire as createRequire2 } from "node:module";
 var _require;
@@ -11839,6 +11846,7 @@ var init_action_store = __esm({
     init_sidecar_io();
     init_atomic_writer();
     init_path_safety();
+    init_unfollowed_file();
     init_action_state_store();
     init_worktree_inheritance();
   }

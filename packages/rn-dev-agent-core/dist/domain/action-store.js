@@ -5,14 +5,15 @@
 // composite. Underpins /run-action, self-repair, and auto-emission —
 // they all read/write through this single chokepoint so schema
 // invariants stay enforced.
-import { existsSync, lstatSync, readFileSync, realpathSync, statSync, unlinkSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync, statSync, unlinkSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { parseM7Header, serializeM7Header, } from './reusable-action.js';
 import { loadOrInitSidecar, markSeen, saveSidecar, sidecarPathFor, yamlEditedSinceLastSeen, } from './sidecar-io.js';
 import { atomicWriter } from './atomic-writer.js';
 import { assertValidActionId, assertWithinDir } from './path-safety.js';
+import { readUnfollowedFile } from './unfollowed-file.js';
 import { mirrorToDb } from './action-state-store.js';
-import { resolveWorktreeLayout } from '../session/worktree-inheritance.js';
+import { readableActionsDirectory, resolveReadableActionCorpus, sameReadableActionCorpus, } from '../session/worktree-inheritance.js';
 /**
  * Resolve the canonical YAML path for an action id under a project root.
  * Mirrors the .rn-agent/actions/ convention (D1208 single-folder doctrine,
@@ -42,44 +43,15 @@ export function assertOwnedActionCorpus(projectRoot) {
     }
 }
 export function assertReadableActionCorpus(projectRoot) {
-    const rnAgentDir = join(projectRoot, '.rn-agent');
-    const actionsDir = join(rnAgentDir, 'actions');
-    const rnAgentStat = lstatIfPresent(rnAgentDir);
-    if (rnAgentStat?.isSymbolicLink()) {
-        throw new Error(`Refusing learned-action corpus symlink at ${rnAgentDir}.`);
-    }
-    const actionsStat = lstatIfPresent(actionsDir);
-    if (!actionsStat?.isSymbolicLink())
-        return;
-    const target = realpathSync(actionsDir);
-    const layout = resolveWorktreeLayout({ cwd: projectRoot, appRoot: projectRoot });
-    const primaryRnAgentDir = 'primaryAppRoot' in layout && layout.primaryAppRoot
-        ? join(layout.primaryAppRoot, '.rn-agent')
-        : null;
-    const primaryActionsDir = primaryRnAgentDir ? join(primaryRnAgentDir, 'actions') : null;
-    const expectedTarget = primaryRnAgentDir &&
-        primaryActionsDir &&
-        'kind' in layout &&
-        layout.kind === 'linked' &&
-        !layout.refusal &&
-        isOwnedDirectory(primaryRnAgentDir) &&
-        isOwnedDirectory(primaryActionsDir)
-        ? canonicalPath(primaryActionsDir)
-        : null;
-    if (!expectedTarget || target !== expectedTarget || !statSync(target).isDirectory()) {
-        throw new Error(`Refusing foreign learned-action corpus symlink at ${actionsDir}.`);
-    }
+    const corpus = resolveReadableActionCorpus(projectRoot);
+    if (corpus.status === 'refused')
+        throw new Error(corpus.reason);
 }
-function isOwnedDirectory(path) {
-    const stat = lstatIfPresent(path);
-    return Boolean(stat?.isDirectory() && !stat.isSymbolicLink());
-}
-function canonicalPath(path) {
-    try {
-        return realpathSync(path);
-    }
-    catch {
-        return null;
+function assertStableReadableCorpus(projectRoot, expected) {
+    const after = resolveReadableActionCorpus(projectRoot);
+    if (!sameReadableActionCorpus(expected, after)) {
+        const actionsDir = join(projectRoot, '.rn-agent', 'actions');
+        throw new Error(`Refusing replaced learned-action corpus symlink at ${actionsDir}.`);
     }
 }
 function lstatIfPresent(path) {
@@ -130,13 +102,14 @@ function ownedActionPathIdentityMatches(entries) {
         return false;
     }
 }
-export function resolveActionPath(projectRoot, actionId) {
-    assertValidActionId(actionId, 'resolveActionPath');
-    assertReadableActionCorpus(projectRoot);
-    const actionsDir = join(projectRoot, '.rn-agent', 'actions');
+function resolveActionPathFromCorpus(actionId, corpus) {
+    const readableDir = readableActionsDirectory(corpus);
+    if (!readableDir)
+        return null;
     const fileName = `${actionId}.yaml`;
-    assertWithinDir(fileName, actionsDir);
-    const yamlPath = join(actionsDir, fileName);
+    assertWithinDir(fileName, corpus.actionsDir);
+    assertWithinDir(fileName, readableDir);
+    const yamlPath = join(readableDir, fileName);
     const ymlPath = yamlPath.replace(/\.yaml$/, '.yml');
     const yamlExists = actionFileExists(yamlPath);
     const ymlExists = actionFileExists(ymlPath);
@@ -144,10 +117,22 @@ export function resolveActionPath(projectRoot, actionId) {
         throw new Error(`Action ${actionId} is ambiguous because both ${actionId}.yaml and ${actionId}.yml exist; keep exactly one file before replay.`);
     }
     if (yamlExists)
-        return yamlPath;
+        return join(corpus.actionsDir, fileName);
     if (ymlExists)
-        return ymlPath;
+        return join(corpus.actionsDir, `${actionId}.yml`);
     return null;
+}
+export function resolveActionPath(projectRoot, actionId) {
+    assertValidActionId(actionId, 'resolveActionPath');
+    const corpus = resolveReadableActionCorpus(projectRoot);
+    if (corpus.status === 'refused')
+        throw new Error(corpus.reason);
+    if (corpus.status !== 'owned-directory' && corpus.status !== 'approved-inherited')
+        return null;
+    const filePath = resolveActionPathFromCorpus(actionId, corpus);
+    if (filePath)
+        assertStableReadableCorpus(projectRoot, corpus);
+    return filePath;
 }
 export function createActionTextExclusive(projectRoot, actionId, yamlText) {
     const yamlPath = actionPathFor(projectRoot, actionId);
@@ -306,10 +291,20 @@ export function joinYaml(parts) {
  * (no id/intent — required fields).
  */
 export function loadAction(projectRoot, actionId) {
-    const filePath = resolveActionPath(projectRoot, actionId);
+    assertValidActionId(actionId, 'loadAction');
+    const corpus = resolveReadableActionCorpus(projectRoot);
+    if (corpus.status === 'refused')
+        throw new Error(corpus.reason);
+    if (corpus.status !== 'owned-directory' && corpus.status !== 'approved-inherited')
+        return null;
+    const filePath = resolveActionPathFromCorpus(actionId, corpus);
     if (!filePath)
         return null;
-    const text = readFileSync(filePath, 'utf8');
+    const readableDir = readableActionsDirectory(corpus);
+    if (!readableDir)
+        return null;
+    const text = readUnfollowedFile(join(readableDir, basename(filePath)));
+    assertStableReadableCorpus(projectRoot, corpus);
     const metadata = parseM7Header(text, actionId);
     if (!metadata)
         return null;
