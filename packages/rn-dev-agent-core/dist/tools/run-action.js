@@ -27,7 +27,6 @@
 //     intentionally NOT in scope for phase 1 (each repair attempt is a
 //     30s+ device snapshot; cascading retries would be slow and could
 //     mask underlying screen churn).
-import { dirname } from 'node:path';
 import { okResult, failResult } from '../utils.js';
 import { acknowledgeExternalEdit, loadAction, promoteActionRuntimeWithCAS, saveActionRuntimeWithCAS, } from '../domain/action-store.js';
 import { mirrorToDb } from '../domain/action-state-store.js';
@@ -44,7 +43,6 @@ import { evaluateBlindProbeGate } from '../domain/blind-probe-gate.js';
 import { claimManagedNativeOriginAuthority, completeManagedRunnerParkAuthority, completeManagedNativeOriginAuthority, reissueManagedInstallAuthority, relaunchManagedNativeOriginApp, reproveManagedNativeOrigin, } from '../session/authority-gate.js';
 import { getWorkerAuthorityRuntime } from '../session/runtime.js';
 import { flowUsesClearState, resolveIosAppFile } from './resolve-ios-app-file.js';
-import { parseAndValidateFlow } from '../domain/maestro-validator.js';
 import { actionReplayPreflight } from '../domain/action-engine-compat.js';
 import { getEngineStatus, PINNED_RUNNER_DIAGNOSE_HINT, PINNED_RUNNER_INSTALL_HINT, } from '../domain/engine-pin.js';
 /** GH #705: the session's attested install receipt, or null outside a session. */
@@ -295,6 +293,11 @@ export function createRunActionHandler(deps = {}) {
                 hint: 'Verify with /list-learned-actions, or pass projectRoot if cdp-bridge is invoked outside the project dir.',
             });
         }
+        if (!loaded.replay.ok) {
+            return failResult(`Action ${args.actionId} is not valid Maestro YAML: ${loaded.replay.error}`, 'BAD_RECORDING', { actionId: args.actionId, fallback: 'none' });
+        }
+        const replayYaml = loaded.replay.yamlText;
+        const preflightCommands = loaded.replay.commands;
         // GH #173 (sub-issue 3): default-true forceReload acknowledges any
         // human edit to the YAML as the new baseline so downstream auto-repair
         // doesn't abort with STALE_TARGET. Opt out with forceReload: false to
@@ -302,16 +305,6 @@ export function createRunActionHandler(deps = {}) {
         const forceReload = proofReplay ? false : args.forceReload !== false;
         const action = forceReload ? acknowledgeExternalEdit(loaded) : loaded;
         const engineStatus = await resolveEngineStatus();
-        let preflightCommands;
-        try {
-            preflightCommands = parseAndValidateFlow(action.body, {
-                flowDir: dirname(action.filePath),
-                flowRoot: dirname(action.filePath),
-            }).commands;
-        }
-        catch (err) {
-            return failResult(`Action ${args.actionId} is not valid Maestro YAML: ${err instanceof Error ? err.message : String(err)}`, 'BAD_RECORDING', { actionId: args.actionId, fallback: 'none' });
-        }
         const compatRefusal = actionReplayPreflight({
             enginePin: action.metadata.enginePin,
             commands: preflightCommands,
@@ -344,7 +337,7 @@ export function createRunActionHandler(deps = {}) {
         // "Pass appFile=<path>" advice is followable through this tool.
         const receipt = args.appFile ? null : installReceipt();
         const appFile = args.appFile ??
-            (flowUsesClearState(action.body) &&
+            (flowUsesClearState(replayYaml) &&
                 receipt?.platform === 'ios' &&
                 typeof receipt.appId === 'string' &&
                 typeof receipt.deviceId === 'string'
@@ -410,14 +403,14 @@ export function createRunActionHandler(deps = {}) {
             if (atRisk) {
                 const candidate = getReplayDeps(args);
                 const replayDeps = candidate && (await claimBundleAuthority(args)) ? candidate : null;
-                const probe = replayDeps ? firstReplayTestId(action.body, args.params ?? {}) : null;
+                const probe = replayDeps ? firstReplayTestId(replayYaml, args.params ?? {}) : null;
                 if (replayDeps && probe) {
                     const tProbe = Date.now();
                     const probeOutcome = await probeTreeWithRetry(replayDeps, probe, probeRetry);
                     if (probeOutcome.found) {
                         const tReplay = Date.now();
                         try {
-                            const replay = await runCdpReplay(action.body, args.params ?? {}, replayDeps);
+                            const replay = await runCdpReplay(replayYaml, args.params ?? {}, replayDeps);
                             const timings_ms = { probe: tReplay - tProbe, replay: Date.now() - tReplay };
                             const blindProbe = { atRisk, skippedMaestro: true };
                             const autoRepair = {
@@ -489,8 +482,8 @@ export function createRunActionHandler(deps = {}) {
             // dispatch; only direct maestro-runner evidence may repopulate it.
             probeDeviceId = null;
             const firstResult = await maestroRun({
-                flowPath: action.filePath,
-                inlineYaml: loaded.yamlText,
+                inlineYaml: replayYaml,
+                actionMetadata: action.metadata,
                 platform: args.platform,
                 appId: args.appId,
                 ...(appFile ? { appFile } : {}),
@@ -618,7 +611,7 @@ export function createRunActionHandler(deps = {}) {
                     ? null
                     : failure.kind === 'SELECTOR_NOT_FOUND'
                         ? failure.selector
-                        : firstReplayTestId(action.body, args.params ?? {});
+                        : firstReplayTestId(replayYaml, args.params ?? {});
                 if (!replayDeps) {
                     cdpJsFallback = { attempted: false, reason: 'no-replay-deps' };
                 }
@@ -648,7 +641,7 @@ export function createRunActionHandler(deps = {}) {
                         try {
                             // GH #580: resume at the proven failed selector; UNKNOWN failed before
                             // any step, so it keeps start-at-zero.
-                            const replay = await runCdpReplay(action.body, args.params ?? {}, replayDeps, {
+                            const replay = await runCdpReplay(replayYaml, args.params ?? {}, replayDeps, {
                                 resumeAtSelector: failure.kind === 'SELECTOR_NOT_FOUND' ? failure.selector : null,
                             });
                             const status = replay.passed ? 'pass' : 'fail';
@@ -831,11 +824,14 @@ export function createRunActionHandler(deps = {}) {
                 });
                 return failResult(`cdp_run_action: action disappeared between repair and retry — investigate filesystem`, 'NO_PROJECT_ROOT');
             }
+            if (!reloadedAction.replay.ok) {
+                return failResult(`cdp_run_action: repaired action is not valid Maestro YAML: ${reloadedAction.replay.error}`, 'BAD_RECORDING', { actionId: args.actionId });
+            }
             const tBeforeRetry = Date.now();
             probeDeviceId = null;
             const retryResult = await maestroRun({
-                flowPath: reloadedAction.filePath,
-                inlineYaml: reloadedAction.yamlText,
+                inlineYaml: reloadedAction.replay.yamlText,
+                actionMetadata: reloadedAction.metadata,
                 platform: args.platform,
                 appId: args.appId,
                 ...(appFile ? { appFile } : {}),

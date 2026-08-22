@@ -2336,6 +2336,41 @@ test('production action identity reads exact app-root YAML bytes and runtime rev
   assert.equal(module.readProofActionIdentity(root, 'missing'), null);
 });
 
+test('proof action identity hashes the loadAction snapshot', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'strict-proof-action-snapshot-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await mkdir(join(root, '.rn-agent', 'actions'), { recursive: true });
+  await mkdir(join(root, '.rn-agent', 'state'), { recursive: true });
+  const actionPath = join(root, '.rn-agent', 'actions', 'canonical-proof.yaml');
+  await writeFile(actionPath, ACTION_YAML_BYTES);
+  await writeFile(
+    join(root, '.rn-agent', 'state', 'canonical-proof.state.json'),
+    `${JSON.stringify({
+      schemaVersion: 1,
+      revision: 7,
+      updatedAt: '2026-07-13T00:00:00.000Z',
+      lastSeenMtimeMs: 0,
+      runHistory: [],
+      repairHistory: [],
+      stats: { totalRuns: 0, successCount: 0, failureCount: 0, avgDurationMs: 0 },
+    })}\n`,
+  );
+  const actionStore = await import('../../dist/domain/action-store.js');
+  const proof = await import('../../dist/tools/proof-capture.js');
+  const captured = actionStore.loadAction(root, 'canonical-proof');
+  assert.ok(captured);
+  await writeFile(actionPath, ACTION_YAML_BYTES.replace('open-task-form', 'foreign-task-form'));
+
+  assert.deepEqual(
+    proof.readProofActionIdentity(root, 'canonical-proof', { loadAction: () => captured }),
+    {
+      id: 'canonical-proof',
+      version: '7',
+      sha256: HASH(ACTION_YAML_BYTES),
+    },
+  );
+});
+
 test('real canonical action proof replay is read-only while normal replay persists', async (t) => {
   const proofModule = await import('../../dist/tools/proof-capture.js');
   const { createPinnedRunActionHandler: createRunActionHandler } =

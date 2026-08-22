@@ -7,6 +7,7 @@ import {
   readFileSync,
   readlinkSync,
   realpathSync,
+  renameSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -20,11 +21,14 @@ import { test } from 'node:test';
 import { createHash } from 'node:crypto';
 import {
   applyInheritance,
+  planInheritance,
+  readableActionsSnapshot,
   resolveReadableActionCorpus,
   sameReadableActionCorpus,
 } from '../../dist/session/worktree-inheritance.js';
 import { listActions } from '../../dist/domain/action-inventory.js';
 import { loadAction } from '../../dist/domain/action-store.js';
+import { listUnfollowedDirectory, readUnfollowedFile } from '../../dist/domain/unfollowed-file.js';
 import {
   createPinnedRunActionHandler as createRunActionHandler,
   fixtureYaml,
@@ -231,15 +235,13 @@ test('exact-ID replay executes the safely loaded YAML after a file symlink swap'
     const worktree = addWorktree(fixture);
     inherit(worktree);
     const swappedPath = join(fixture.root, 'swapped-login.yaml');
-    writeFileSync(
-      swappedPath,
-      fixtureYaml({ id: 'login', selectors: ['swapped-selector'] }),
-    );
+    writeFileSync(swappedPath, fixtureYaml({ id: 'login', selectors: ['swapped-selector'] }));
 
     const handler = createRunActionHandler({
       maestroRun: async (args) => {
         rmSync(actionPath);
         symlinkSync(swappedPath, actionPath);
+        assert.equal(args.flowPath, undefined);
         const replayYaml = args.inlineYaml ?? readFileSync(args.flowPath!, 'utf8');
         const passed =
           replayYaml.includes('captured-selector') && !replayYaml.includes('swapped-selector');
@@ -268,6 +270,122 @@ test('exact-ID replay executes the safely loaded YAML after a file symlink swap'
     assert.throws(() => loadAction(worktree, 'login'), /symlink/);
   } finally {
     fixture.cleanup();
+  }
+});
+
+test('replay expands a safely captured subflow before mutable paths can change', async () => {
+  const fixture = makeFixture();
+  try {
+    mkdirSync(join(fixture.primary, '.rn-agent', 'actions'), { recursive: true });
+    mkdirSync(join(fixture.primary, '.rn-agent', 'state'), { recursive: true });
+    const actionPath = join(fixture.primary, '.rn-agent', 'actions', 'login.yaml');
+    const childPath = join(fixture.primary, '.rn-agent', 'actions', 'child.yaml');
+    writeFileSync(
+      actionPath,
+      fixtureYaml({ id: 'login', selectors: [] }).replace(
+        '- launchApp\n',
+        '- runFlow: child.yaml\n',
+      ),
+    );
+    writeFileSync(childPath, '- tapOn:\n    id: "captured-child"\n');
+    const worktree = addWorktree(fixture);
+    inherit(worktree);
+
+    const handler = createRunActionHandler({
+      maestroRun: async (args) => {
+        writeFileSync(childPath, '- tapOn:\n    id: "swapped-child"\n');
+        assert.equal(args.flowPath, undefined);
+        const replayYaml = args.inlineYaml ?? '';
+        const passed =
+          replayYaml.includes('captured-child') && !replayYaml.includes('swapped-child');
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({ ok: passed, data: { passed, output: 'Flow result' } }),
+            },
+          ],
+        };
+      },
+    });
+    const result = await handler({
+      actionId: 'login',
+      projectRoot: worktree,
+      autoRepair: false,
+      forceReload: false,
+      proofReplay: true,
+    });
+    assert.equal((JSON.parse(result.content[0]!.text) as { ok?: boolean }).ok, true);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('verified directory operations refuse a replaced inherited target', () => {
+  const fixture = makeFixture();
+  try {
+    seedLoginCorpus(fixture.primary);
+    const worktree = addWorktree(fixture);
+    inherit(worktree);
+    const corpus = resolveReadableActionCorpus(worktree);
+    assert.equal(corpus.status, 'approved-inherited');
+    const snapshot = readableActionsSnapshot(corpus);
+    assert.ok(snapshot);
+    assert.match(
+      readUnfollowedFile(snapshot.directory, snapshot.identity, 'login.yaml'),
+      /# id: login/,
+    );
+
+    const original = join(fixture.root, 'original-actions');
+    renameSync(snapshot.directory, original);
+    mkdirSync(snapshot.directory);
+    writeFileSync(
+      join(snapshot.directory, 'login.yaml'),
+      fixtureYaml({ id: 'login', intent: 'foreign' }),
+    );
+    assert.throws(
+      () => readUnfollowedFile(snapshot.directory, snapshot.identity, 'login.yaml'),
+      /Refusing inherited action symlink/,
+    );
+    assert.throws(
+      () => listUnfollowedDirectory(snapshot.directory, snapshot.identity),
+      /Refusing replaced learned-action corpus/,
+    );
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('read approval requires setup LINK_VALID_SAFE classification', () => {
+  for (const scenario of ['tracked', 'git-visible'] as const) {
+    const fixture = makeFixture();
+    try {
+      seedLoginCorpus(fixture.primary);
+      if (scenario === 'git-visible') {
+        writeFileSync(join(fixture.primary, '.gitignore'), '');
+        git(fixture.primary, ['add', '.gitignore']);
+        git(fixture.primary, ['commit', '-qm', 'make action link visible']);
+      }
+      const worktree = addWorktree(fixture, scenario);
+      mkdirSync(join(worktree, '.rn-agent'), { recursive: true });
+      symlinkSync(
+        join(fixture.primary, '.rn-agent', 'actions'),
+        join(worktree, '.rn-agent', 'actions'),
+        'dir',
+      );
+      if (scenario === 'tracked') {
+        git(worktree, ['add', '-f', '.rn-agent/actions']);
+        git(worktree, ['commit', '-qm', 'track action link']);
+      }
+      const plan = planInheritance({ cwd: worktree, appRoot: worktree, host: 'claude' });
+      const expected = scenario === 'tracked' ? 'TRACKED' : 'LINK_VALID_GIT_VISIBLE';
+      assert.equal(plan.resources[0]?.state, expected);
+      const corpus = resolveReadableActionCorpus(worktree);
+      assert.equal(corpus.status, 'refused');
+      if (corpus.status === 'refused') assert.match(corpus.reason, new RegExp(expected));
+    } finally {
+      fixture.cleanup();
+    }
   }
 });
 
@@ -318,8 +436,8 @@ test('follow-all-symlinks would accept a foreign corpus that the allowlist refus
     assert.equal(statSync(join(worktree, '.rn-agent', 'actions')).isDirectory(), true);
     const corpus = resolveReadableActionCorpus(worktree);
     assert.equal(corpus.status, 'refused');
-    assert.match(corpus.reason, /foreign learned-action corpus symlink/);
-    await assert.rejects(() => listActions(worktree), /foreign learned-action corpus symlink/);
+    assert.match(corpus.reason, /LINK_FOREIGN/);
+    await assert.rejects(() => listActions(worktree), /LINK_FOREIGN/);
     assert.equal(sameReadableActionCorpus(corpus, resolveReadableActionCorpus(worktree)), true);
     const inventory = nodeCli(
       LEARNED_CLI,

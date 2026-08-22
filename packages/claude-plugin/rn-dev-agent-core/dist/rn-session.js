@@ -7913,13 +7913,13 @@ var init_process_birth = __esm({
     "use strict";
     init_trusted_system_executable();
     DARWIN_HELPER_MANIFEST = {
-      sourceSha256: "5cafc275ab929026203e64527f993cd77e2854f1697cdb419b7d901293e1bc48",
-      recipeSha256: "a1293ae1f70a5da3a4ea9b1b79a095a5f182f7cb39e37521abe87cb1864f625b",
-      stableBinarySha256: "e5dffbe66f7fa52f8e2554fb397b4b44000d8c092feff35e0c42f5f3e0150c3f",
-      binarySha256: "dd8346dab2ccb6e3ce11840bbca5f8ea2f4cbd95efae34ddb130f98824a065aa",
+      sourceSha256: "f97feaa1c0434cd2ee31c0dce56c9308eb17f893a6a771ac1333b62fcec8b702",
+      recipeSha256: "9617fe093885ac5c1043b39aa467754db8427080b52ebafea6f780535c2b3685",
+      stableBinarySha256: "9887a09246c4fc9c7765ef8fee2ae30027bcf0b9227ae408e48682107e4d88b8",
+      binarySha256: "49db19d9cd0ca2e7a78379c1e4b9551532d85447c043c51f06c6e03573c104ad",
       cdhashes: [
-        "0471a3583ce2363ee96afe3e85951dd5fd154dec",
-        "1998527647f4fef05eae6007fe7a1f945aa7c54d"
+        "cebd22e7adf08990d4ff69b3156de03962d44b74",
+        "e3de1b27f4da23957a3acf60ae8f01c6402bd424"
       ]
     };
     VERIFIED_HELPER_SCRIPT = `
@@ -11796,6 +11796,7 @@ var init_path_safety = __esm({
 var init_unfollowed_file = __esm({
   "packages/rn-dev-agent-core/dist/domain/unfollowed-file.js"() {
     "use strict";
+    init_process_birth();
   }
 });
 
@@ -11847,6 +11848,7 @@ var init_action_store = __esm({
     init_atomic_writer();
     init_path_safety();
     init_unfollowed_file();
+    init_maestro_validator();
     init_action_state_store();
     init_worktree_inheritance();
   }

@@ -68,19 +68,19 @@ export interface VerifiedNativePublicationHelper {
 }
 
 const DARWIN_HELPER_MANIFEST = {
-  sourceSha256: '5cafc275ab929026203e64527f993cd77e2854f1697cdb419b7d901293e1bc48',
-  recipeSha256: 'a1293ae1f70a5da3a4ea9b1b79a095a5f182f7cb39e37521abe87cb1864f625b',
-  stableBinarySha256: 'e5dffbe66f7fa52f8e2554fb397b4b44000d8c092feff35e0c42f5f3e0150c3f',
-  binarySha256: 'dd8346dab2ccb6e3ce11840bbca5f8ea2f4cbd95efae34ddb130f98824a065aa',
+  sourceSha256: 'f97feaa1c0434cd2ee31c0dce56c9308eb17f893a6a771ac1333b62fcec8b702',
+  recipeSha256: '9617fe093885ac5c1043b39aa467754db8427080b52ebafea6f780535c2b3685',
+  stableBinarySha256: '9887a09246c4fc9c7765ef8fee2ae30027bcf0b9227ae408e48682107e4d88b8',
+  binarySha256: '49db19d9cd0ca2e7a78379c1e4b9551532d85447c043c51f06c6e03573c104ad',
   cdhashes: [
-    '0471a3583ce2363ee96afe3e85951dd5fd154dec',
-    '1998527647f4fef05eae6007fe7a1f945aa7c54d',
+    'cebd22e7adf08990d4ff69b3156de03962d44b74',
+    'e3de1b27f4da23957a3acf60ae8f01c6402bd424',
   ],
 } as const;
 
 const LINUX_PUBLICATION_HELPER_SHA256 = {
-  x64: '3851cbf2d01caf77b282f477365613e6d903caf1aff88ea99e8d855eab9bacfb',
-  arm64: '76ba6597b964d6541ec2657195ee515728f9a1270636275b3a55d110267f34da',
+  x64: '93bcb6e186470efd2a0944756d7b2de790182b59a5dcb3377334291076ad6032',
+  arm64: '1d0f2fc75e9eff675f8fd5ca329eca03950339796d2f339a4f59a85c2f97ba63',
 } as const;
 
 function defaultRun(command: string, args: readonly string[]): string {
@@ -388,6 +388,75 @@ function runVerifiedPublicationHelper(
   } finally {
     unlinkSync(boundPath);
   }
+}
+
+function verifiedFilesystemHelper(): { path: string; sha256: string } {
+  if (process.platform === 'darwin') {
+    const helper = verifyDarwinProcessBirthHelper({});
+    return { path: helper.path, sha256: DARWIN_HELPER_MANIFEST.binarySha256 };
+  }
+  if (process.platform === 'linux' && (process.arch === 'x64' || process.arch === 'arm64')) {
+    const architecture = process.arch;
+    return {
+      path: verifiedLinuxPublicationHelper(architecture),
+      sha256: LINUX_PUBLICATION_HELPER_SHA256[architecture],
+    };
+  }
+  throw new Error(
+    `Verified directory reads are unavailable on ${process.platform}/${process.arch}.`,
+  );
+}
+
+function runVerifiedFilesystemHelper(args: readonly string[]): Buffer {
+  const helper = verifiedFilesystemHelper();
+  const boundPath = `${helper.path}.read.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}`;
+  copyFileSync(helper.path, boundPath, constants.COPYFILE_EXCL | constants.COPYFILE_FICLONE);
+  chmodSync(boundPath, 0o700);
+  try {
+    if (createHash('sha256').update(readFileSync(boundPath)).digest('hex') !== helper.sha256) {
+      throw new Error('Verified directory helper changed before execution.');
+    }
+    return execFileSync(boundPath, [...args], {
+      maxBuffer: 32 * 1024 * 1024,
+      stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: 10_000,
+    });
+  } finally {
+    unlinkSync(boundPath);
+  }
+}
+
+export function readFileFromVerifiedDirectory(
+  directoryPath: string,
+  identity: { dev: string; ino: string },
+  relativePath: string,
+): Buffer {
+  return runVerifiedFilesystemHelper([
+    '--read-directory-entry',
+    directoryPath,
+    relativePath,
+    identity.dev,
+    identity.ino,
+  ]);
+}
+
+export function listVerifiedDirectory(
+  directoryPath: string,
+  identity: { dev: string; ino: string },
+): string[] {
+  const output = runVerifiedFilesystemHelper([
+    '--list-directory',
+    directoryPath,
+    identity.dev,
+    identity.ino,
+  ]);
+  if (output.length === 0) return [];
+  if (output[output.length - 1] !== 0) throw new Error('Verified directory listing was malformed.');
+  return output
+    .subarray(0, -1)
+    .toString('utf8')
+    .split('\0')
+    .filter((entry) => entry.length > 0 && entry !== '.' && entry !== '..' && !entry.includes('/'));
 }
 
 function linuxConditionalPublicationHelperPath(architecture: 'x64' | 'arm64'): string {

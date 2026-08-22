@@ -1,17 +1,17 @@
-import { readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { loadAction } from './action-store.js';
-import { readableActionsDirectory, resolveReadableActionCorpus, sameReadableActionCorpus, } from '../session/worktree-inheritance.js';
+import { listUnfollowedDirectory } from './unfollowed-file.js';
+import { readableActionsSnapshot, resolveReadableActionCorpus, sameReadableActionCorpus, } from '../session/worktree-inheritance.js';
 export async function listActions(projectRoot) {
     const corpus = resolveReadableActionCorpus(projectRoot);
     if (corpus.status === 'refused')
         throw new Error(corpus.reason);
-    const readableDir = readableActionsDirectory(corpus);
-    if (!readableDir)
+    const snapshot = readableActionsSnapshot(corpus);
+    if (!snapshot)
         return [];
     let files;
     try {
-        files = readdirSync(readableDir);
+        files = listUnfollowedDirectory(snapshot.directory, snapshot.identity);
     }
     catch (err) {
         if (err.code === 'ENOENT')

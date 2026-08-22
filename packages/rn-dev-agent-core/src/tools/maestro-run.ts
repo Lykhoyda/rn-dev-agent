@@ -22,7 +22,7 @@ import {
   replayCompatibilityPreflight,
   standaloneLearnedActionPathRefusal,
 } from '../domain/action-engine-compat.js';
-import { parseM7Header } from '../domain/reusable-action.js';
+import { parseM7Header, type M7Metadata } from '../domain/reusable-action.js';
 import { getActiveSession } from '../agent-device-wrapper.js';
 import { resolveBundleId, readExpoSlug } from '../project-config.js';
 import {
@@ -139,6 +139,7 @@ export function assembleMaestroArgs(baseArgs: string[], paramArgs: string[]): st
 export interface MaestroRunArgs {
   flowPath?: string;
   inlineYaml?: string;
+  actionMetadata?: Pick<M7Metadata, 'id' | 'enginePin'>;
   platform?: 'ios' | 'android';
   appId?: string;
   appFile?: string;
@@ -670,10 +671,13 @@ export function createMaestroRunHandler(
     if (learnedActionPathRefusal) {
       return failResult(learnedActionPathRefusal, 'BAD_RECORDING');
     }
-    const learnedAction = args.flowPath ? isLearnedActionPath(args.flowPath) : false;
-    const actionMeta = args.flowPath
-      ? parseM7Header(rawYaml, basename(args.flowPath).replace(/\.ya?ml$/i, ''))
-      : null;
+    const learnedAction =
+      Boolean(args.actionMetadata) || (args.flowPath ? isLearnedActionPath(args.flowPath) : false);
+    const actionMeta =
+      args.actionMetadata ??
+      (args.flowPath
+        ? parseM7Header(rawYaml, basename(args.flowPath).replace(/\.ya?ml$/i, ''))
+        : null);
     const compatibilityRefusal =
       learnedAction || actionMeta !== null
         ? actionReplayPreflight({

@@ -579,10 +579,14 @@ export function resolveReadableActionCorpus(projectRoot: string): ReadableAction
   }
   const primaryRnAgentDir = join(layout.primaryAppRoot, '.rn-agent');
   const primaryActionsDir = join(primaryRnAgentDir, 'actions');
-  const source = classifySource(primaryActionsDir, 'directory', layout.primaryRoot);
-  const destination = classifyDestination(actionsDir, primaryActionsDir, 'directory');
-  if (destination.state === 'LINK_STALE') return refuseDanglingActions(actionsDir);
-  if (source.state !== 'AVAILABLE' || destination.state !== 'LINK_VALID' || !destination.evidence) {
+  const planned = planResource(layout, SHAREABLE_RESOURCES[0]);
+  if (planned.destinationState === 'LINK_STALE') return refuseDanglingActions(actionsDir);
+  if (planned.state !== 'LINK_VALID_SAFE' || !planned.evidence) {
+    return refuseCorpus(
+      `Refusing learned-action corpus at ${actionsDir}; setup classified it as ${planned.state}.`,
+    );
+  }
+  if (planned.sourceState !== 'AVAILABLE' || !planned.sourceEvidence) {
     return refuseForeignActions(actionsDir);
   }
   const targetDir = canonical(primaryActionsDir);
@@ -595,15 +599,14 @@ export function resolveReadableActionCorpus(projectRoot: string): ReadableAction
   if (!openUnfollowedDirectory(targetDir, targetIdentity)) {
     return refuseReplacedActions(actionsDir);
   }
-  const destinationAfter = classifyDestination(actionsDir, primaryActionsDir, 'directory');
-  const sourceAfter = classifySource(primaryActionsDir, 'directory', layout.primaryRoot);
+  const plannedAfter = planResource(layout, SHAREABLE_RESOURCES[0]);
   if (
-    destinationAfter.state !== 'LINK_VALID' ||
-    !destinationAfter.evidence ||
-    destinationAfter.evidence.dev !== destination.evidence.dev ||
-    destinationAfter.evidence.ino !== destination.evidence.ino ||
-    sourceAfter.state !== 'AVAILABLE' ||
-    !sameSourceEvidence(source.evidence, sourceAfter.evidence) ||
+    plannedAfter.state !== 'LINK_VALID_SAFE' ||
+    !plannedAfter.evidence ||
+    plannedAfter.evidence.dev !== planned.evidence.dev ||
+    plannedAfter.evidence.ino !== planned.evidence.ino ||
+    plannedAfter.sourceState !== 'AVAILABLE' ||
+    !sameSourceEvidence(planned.sourceEvidence, plannedAfter.sourceEvidence) ||
     !directoryIdentityUnchanged(rnAgentDir, rnAgentIdentity)
   ) {
     return refuseReplacedActions(actionsDir);
@@ -614,7 +617,7 @@ export function resolveReadableActionCorpus(projectRoot: string): ReadableAction
     rnAgentDir,
     actionsDir,
     targetDir,
-    linkIdentity: destination.evidence,
+    linkIdentity: planned.evidence,
     targetIdentity,
   };
 }
@@ -650,6 +653,18 @@ export function sameReadableActionCorpus(
 export function readableActionsDirectory(corpus: ReadableActionCorpus): string | null {
   if (corpus.status === 'owned-directory') return corpus.actionsDir;
   if (corpus.status === 'approved-inherited') return corpus.targetDir;
+  return null;
+}
+
+export function readableActionsSnapshot(
+  corpus: ReadableActionCorpus,
+): { directory: string; identity: PathIdentity } | null {
+  if (corpus.status === 'owned-directory') {
+    return { directory: corpus.actionsDir, identity: corpus.identity };
+  }
+  if (corpus.status === 'approved-inherited') {
+    return { directory: corpus.targetDir, identity: corpus.targetIdentity };
+  }
   return null;
 }
 

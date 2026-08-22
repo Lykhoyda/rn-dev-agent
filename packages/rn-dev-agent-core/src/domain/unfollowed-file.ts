@@ -1,22 +1,33 @@
-import { closeSync, constants, fstatSync, openSync, readFileSync } from 'node:fs';
+import { listVerifiedDirectory, readFileFromVerifiedDirectory } from '../session/process-birth.js';
 
-/** Read a regular file without following a final-path symlink. */
-export function readUnfollowedFile(path: string): string {
-  let fd: number;
+export interface VerifiedDirectoryIdentity {
+  dev: string;
+  ino: string;
+}
+
+export function readUnfollowedFile(
+  directoryPath: string,
+  identity: VerifiedDirectoryIdentity,
+  relativePath: string,
+): string {
   try {
-    fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    return readFileFromVerifiedDirectory(directoryPath, identity, relativePath).toString('utf8');
   } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code;
-    if (code === 'ENOENT') throw err;
-    throw new Error(`Refusing inherited action symlink at ${path}.`);
+    throw new Error(
+      `Refusing inherited action symlink at ${directoryPath}/${relativePath}: ${err instanceof Error ? err.message : String(err)}`,
+    );
   }
+}
+
+export function listUnfollowedDirectory(
+  directoryPath: string,
+  identity: VerifiedDirectoryIdentity,
+): string[] {
   try {
-    const opened = fstatSync(fd);
-    if (!opened.isFile()) {
-      throw new Error(`Refusing inherited action symlink at ${path}.`);
-    }
-    return readFileSync(fd, 'utf8');
-  } finally {
-    closeSync(fd);
+    return listVerifiedDirectory(directoryPath, identity);
+  } catch (err) {
+    throw new Error(
+      `Refusing replaced learned-action corpus at ${directoryPath}: ${err instanceof Error ? err.message : String(err)}`,
+    );
   }
 }

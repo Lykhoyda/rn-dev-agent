@@ -18,8 +18,10 @@ const manifestOutput = `${output}.json`;
 const temporaryOutput = `${output}.tmp-${process.pid}`;
 const temporarySource = `${output}.c.tmp-${process.pid}`;
 const source = `#include <errno.h>
+#include <dirent.h>
 #include <fcntl.h>
 #include <inttypes.h>
+#include <limits.h>
 #include <libproc.h>
 #include <signal.h>
 #include <stdint.h>
@@ -124,6 +126,127 @@ static int link_into_directory(
   return 0;
 }
 
+static int parse_identity(const char *raw_dev, const char *raw_ino, uint64_t *dev, uint64_t *ino) {
+  char *dev_end = NULL;
+  char *ino_end = NULL;
+  errno = 0;
+  *dev = strtoull(raw_dev, &dev_end, 10);
+  *ino = strtoull(raw_ino, &ino_end, 10);
+  return errno == 0 && dev_end != raw_dev && *dev_end == '\\0' &&
+      ino_end != raw_ino && *ino_end == '\\0';
+}
+
+static int open_verified_directory(
+    const char *directory_path,
+    uint64_t expected_dev,
+    uint64_t expected_ino) {
+  int directory = open(directory_path, O_RDONLY | O_NOFOLLOW | O_DIRECTORY);
+  struct stat opened = {0};
+  if (directory < 0 || fstat(directory, &opened) != 0 || !S_ISDIR(opened.st_mode) ||
+      (uint64_t)opened.st_dev != expected_dev || (uint64_t)opened.st_ino != expected_ino) {
+    if (directory >= 0) close(directory);
+    return -1;
+  }
+  return directory;
+}
+
+static int open_relative_regular(int directory, const char *relative_path) {
+  size_t length = strlen(relative_path);
+  if (length == 0 || length >= PATH_MAX || relative_path[0] == '/') return -1;
+  char path[PATH_MAX];
+  memcpy(path, relative_path, length + 1);
+  int current = dup(directory);
+  if (current < 0) return -1;
+  char *component = path;
+  while (*component) {
+    char *slash = strchr(component, '/');
+    if (slash) *slash = '\\0';
+    if (!*component || strcmp(component, ".") == 0 || strcmp(component, "..") == 0) {
+      close(current);
+      return -1;
+    }
+    int next = openat(
+        current,
+        component,
+        O_RDONLY | O_NOFOLLOW | (slash ? O_DIRECTORY : 0));
+    close(current);
+    if (next < 0) return -1;
+    current = next;
+    if (!slash) break;
+    component = slash + 1;
+  }
+  struct stat opened = {0};
+  if (fstat(current, &opened) != 0 || !S_ISREG(opened.st_mode)) {
+    close(current);
+    return -1;
+  }
+  return current;
+}
+
+static int write_all(int output, const void *bytes, size_t length) {
+  const unsigned char *cursor = bytes;
+  while (length > 0) {
+    ssize_t written = write(output, cursor, length);
+    if (written <= 0) return 0;
+    cursor += written;
+    length -= (size_t)written;
+  }
+  return 1;
+}
+
+static int read_directory_entry(
+    const char *directory_path,
+    const char *relative_path,
+    uint64_t expected_dev,
+    uint64_t expected_ino) {
+  int directory = open_verified_directory(directory_path, expected_dev, expected_ino);
+  if (directory < 0) return 10;
+  int entry = open_relative_regular(directory, relative_path);
+  close(directory);
+  if (entry < 0) return 10;
+  unsigned char buffer[16384];
+  for (;;) {
+    ssize_t count = read(entry, buffer, sizeof(buffer));
+    if (count < 0) {
+      close(entry);
+      return 11;
+    }
+    if (count == 0) break;
+    if (!write_all(STDOUT_FILENO, buffer, (size_t)count)) {
+      close(entry);
+      return 11;
+    }
+  }
+  close(entry);
+  return 0;
+}
+
+static int list_directory(
+    const char *directory_path,
+    uint64_t expected_dev,
+    uint64_t expected_ino) {
+  int directory = open_verified_directory(directory_path, expected_dev, expected_ino);
+  if (directory < 0) return 10;
+  DIR *stream = fdopendir(directory);
+  if (!stream) {
+    close(directory);
+    return 11;
+  }
+  errno = 0;
+  struct dirent *entry = NULL;
+  while ((entry = readdir(stream)) != NULL) {
+    if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) continue;
+    size_t length = strlen(entry->d_name) + 1;
+    if (!write_all(STDOUT_FILENO, entry->d_name, length)) {
+      closedir(stream);
+      return 11;
+    }
+  }
+  int result = errno == 0 ? 0 : 11;
+  closedir(stream);
+  return result;
+}
+
 int main(int argc, char **argv) {
   if (argc >= 7 && strcmp(argv[1], "--exec-file") == 0) {
     char *dev_end = NULL;
@@ -187,6 +310,18 @@ int main(int argc, char **argv) {
     if (errno != 0 || dev_end == argv[5] || *dev_end != '\\0' ||
         ino_end == argv[6] || *ino_end != '\\0') return 2;
     return link_into_directory(argv[2], argv[3], argv[4], expected_dev, expected_ino);
+  }
+  if (argc == 6 && strcmp(argv[1], "--read-directory-entry") == 0) {
+    uint64_t expected_dev = 0;
+    uint64_t expected_ino = 0;
+    if (!parse_identity(argv[4], argv[5], &expected_dev, &expected_ino)) return 2;
+    return read_directory_entry(argv[2], argv[3], expected_dev, expected_ino);
+  }
+  if (argc == 5 && strcmp(argv[1], "--list-directory") == 0) {
+    uint64_t expected_dev = 0;
+    uint64_t expected_ino = 0;
+    if (!parse_identity(argv[3], argv[4], &expected_dev, &expected_ino)) return 2;
+    return list_directory(argv[2], expected_dev, expected_ino);
   }
   if (argc == 8 && strcmp(argv[1], "--publish-if-unchanged") == 0 &&
       strcmp(argv[7], "--hold") == 0) {

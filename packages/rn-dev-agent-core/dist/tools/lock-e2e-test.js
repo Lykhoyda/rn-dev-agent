@@ -28,6 +28,9 @@ export async function lockE2eTestCore(args, deps = {}) {
     const action = load(projectRoot, args.actionId);
     if (!action)
         return failResult(`Action '${args.actionId}' not found`, 'NOT_FOUND');
+    if (!action.replay.ok) {
+        return failResult(`Action '${args.actionId}' is invalid: ${action.replay.error}`, 'BAD_RECORDING');
+    }
     const loadCfg = deps.loadConfig ?? loadE2eConfig;
     let resolvedParams;
     if (action.metadata.params?.length) {
@@ -44,8 +47,8 @@ export async function lockE2eTestCore(args, deps = {}) {
     const session = getSession();
     const platform = session?.platform ?? undefined;
     const runArgs = {
-        flowPath: action.filePath,
-        inlineYaml: action.yamlText,
+        inlineYaml: action.replay.yamlText,
+        actionMetadata: action.metadata,
         platform,
         ...(session?.deviceId ? { deviceId: session.deviceId } : {}),
         ...nestedMaestroAuthorityCallbacks(args),
@@ -67,7 +70,7 @@ export async function lockE2eTestCore(args, deps = {}) {
         id: action.metadata.id,
         intent: action.metadata.intent,
         sourceActionId: action.metadata.id,
-        flow: action.yamlText,
+        flow: action.replay.yamlText,
         appId: action.metadata.appId,
     }, { gitSha: git.sha, now });
     return okResult({

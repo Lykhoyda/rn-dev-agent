@@ -444,10 +444,11 @@ export function createMaestroRunHandler(deps = {}) {
         if (learnedActionPathRefusal) {
             return failResult(learnedActionPathRefusal, 'BAD_RECORDING');
         }
-        const learnedAction = args.flowPath ? isLearnedActionPath(args.flowPath) : false;
-        const actionMeta = args.flowPath
-            ? parseM7Header(rawYaml, basename(args.flowPath).replace(/\.ya?ml$/i, ''))
-            : null;
+        const learnedAction = Boolean(args.actionMetadata) || (args.flowPath ? isLearnedActionPath(args.flowPath) : false);
+        const actionMeta = args.actionMetadata ??
+            (args.flowPath
+                ? parseM7Header(rawYaml, basename(args.flowPath).replace(/\.ya?ml$/i, ''))
+                : null);
         const compatibilityRefusal = learnedAction || actionMeta !== null
             ? actionReplayPreflight({
                 enginePin: actionMeta?.enginePin,

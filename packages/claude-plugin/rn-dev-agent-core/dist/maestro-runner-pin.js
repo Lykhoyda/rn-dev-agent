@@ -275,6 +275,60 @@ function runVerifiedPublicationHelper(helperPath, expectedSha256, args) {
     unlinkSync(boundPath);
   }
 }
+function verifiedFilesystemHelper() {
+  if (process.platform === "darwin") {
+    const helper = verifyDarwinProcessBirthHelper({});
+    return { path: helper.path, sha256: DARWIN_HELPER_MANIFEST.binarySha256 };
+  }
+  if (process.platform === "linux" && (process.arch === "x64" || process.arch === "arm64")) {
+    const architecture = process.arch;
+    return {
+      path: verifiedLinuxPublicationHelper(architecture),
+      sha256: LINUX_PUBLICATION_HELPER_SHA256[architecture]
+    };
+  }
+  throw new Error(`Verified directory reads are unavailable on ${process.platform}/${process.arch}.`);
+}
+function runVerifiedFilesystemHelper(args) {
+  const helper = verifiedFilesystemHelper();
+  const boundPath = `${helper.path}.read.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}`;
+  copyFileSync(helper.path, boundPath, constants.COPYFILE_EXCL | constants.COPYFILE_FICLONE);
+  chmodSync(boundPath, 448);
+  try {
+    if (createHash("sha256").update(readFileSync(boundPath)).digest("hex") !== helper.sha256) {
+      throw new Error("Verified directory helper changed before execution.");
+    }
+    return execFileSync(boundPath, [...args], {
+      maxBuffer: 32 * 1024 * 1024,
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 1e4
+    });
+  } finally {
+    unlinkSync(boundPath);
+  }
+}
+function readFileFromVerifiedDirectory(directoryPath, identity, relativePath) {
+  return runVerifiedFilesystemHelper([
+    "--read-directory-entry",
+    directoryPath,
+    relativePath,
+    identity.dev,
+    identity.ino
+  ]);
+}
+function listVerifiedDirectory(directoryPath, identity) {
+  const output = runVerifiedFilesystemHelper([
+    "--list-directory",
+    directoryPath,
+    identity.dev,
+    identity.ino
+  ]);
+  if (output.length === 0)
+    return [];
+  if (output[output.length - 1] !== 0)
+    throw new Error("Verified directory listing was malformed.");
+  return output.subarray(0, -1).toString("utf8").split("\0").filter((entry) => entry.length > 0 && entry !== "." && entry !== ".." && !entry.includes("/"));
+}
 function linuxConditionalPublicationHelperPath(architecture) {
   const moduleDirectory = dirname(fileURLToPath(import.meta.url));
   const name = `linux-conditional-publication-${architecture}`;
@@ -447,18 +501,18 @@ var init_process_birth = __esm({
     "use strict";
     init_trusted_system_executable();
     DARWIN_HELPER_MANIFEST = {
-      sourceSha256: "5cafc275ab929026203e64527f993cd77e2854f1697cdb419b7d901293e1bc48",
-      recipeSha256: "a1293ae1f70a5da3a4ea9b1b79a095a5f182f7cb39e37521abe87cb1864f625b",
-      stableBinarySha256: "e5dffbe66f7fa52f8e2554fb397b4b44000d8c092feff35e0c42f5f3e0150c3f",
-      binarySha256: "dd8346dab2ccb6e3ce11840bbca5f8ea2f4cbd95efae34ddb130f98824a065aa",
+      sourceSha256: "f97feaa1c0434cd2ee31c0dce56c9308eb17f893a6a771ac1333b62fcec8b702",
+      recipeSha256: "9617fe093885ac5c1043b39aa467754db8427080b52ebafea6f780535c2b3685",
+      stableBinarySha256: "9887a09246c4fc9c7765ef8fee2ae30027bcf0b9227ae408e48682107e4d88b8",
+      binarySha256: "49db19d9cd0ca2e7a78379c1e4b9551532d85447c043c51f06c6e03573c104ad",
       cdhashes: [
-        "0471a3583ce2363ee96afe3e85951dd5fd154dec",
-        "1998527647f4fef05eae6007fe7a1f945aa7c54d"
+        "cebd22e7adf08990d4ff69b3156de03962d44b74",
+        "e3de1b27f4da23957a3acf60ae8f01c6402bd424"
       ]
     };
     LINUX_PUBLICATION_HELPER_SHA256 = {
-      x64: "3851cbf2d01caf77b282f477365613e6d903caf1aff88ea99e8d855eab9bacfb",
-      arm64: "76ba6597b964d6541ec2657195ee515728f9a1270636275b3a55d110267f34da"
+      x64: "93bcb6e186470efd2a0944756d7b2de790182b59a5dcb3377334291076ad6032",
+      arm64: "1d0f2fc75e9eff675f8fd5ca329eca03950339796d2f339a4f59a85c2f97ba63"
     };
     VERIFIED_HELPER_SCRIPT = `
 set -euo pipefail
@@ -5098,10 +5152,10 @@ var require_resolve_block_map = __commonJS({
       let offset = bm.offset;
       let commentEnd = null;
       for (const collItem of bm.items) {
-        const { start, key, sep: sep6, value } = collItem;
+        const { start, key, sep: sep7, value } = collItem;
         const keyProps = resolveProps.resolveProps(start, {
           indicator: "explicit-key-ind",
-          next: key ?? sep6?.[0],
+          next: key ?? sep7?.[0],
           offset,
           onError,
           parentIndent: bm.indent,
@@ -5115,7 +5169,7 @@ var require_resolve_block_map = __commonJS({
             else if ("indent" in key && key.indent !== bm.indent)
               onError(offset, "BAD_INDENT", startColMsg);
           }
-          if (!keyProps.anchor && !keyProps.tag && !sep6) {
+          if (!keyProps.anchor && !keyProps.tag && !sep7) {
             commentEnd = keyProps.end;
             if (keyProps.comment) {
               if (map.comment)
@@ -5139,7 +5193,7 @@ var require_resolve_block_map = __commonJS({
         ctx.atKey = false;
         if (utilMapIncludes.mapIncludes(ctx, map.items, keyNode))
           onError(keyStart, "DUPLICATE_KEY", "Map keys must be unique");
-        const valueProps = resolveProps.resolveProps(sep6 ?? [], {
+        const valueProps = resolveProps.resolveProps(sep7 ?? [], {
           indicator: "map-value-ind",
           next: value,
           offset: keyNode.range[2],
@@ -5155,7 +5209,7 @@ var require_resolve_block_map = __commonJS({
             if (ctx.options.strict && keyProps.start < valueProps.found.offset - 1024)
               onError(keyNode.range, "KEY_OVER_1024_CHARS", "The : indicator must be at most 1024 chars after the start of an implicit block mapping key");
           }
-          const valueNode = value ? composeNode(ctx, value, valueProps, onError) : composeEmptyNode(ctx, offset, sep6, null, valueProps, onError);
+          const valueNode = value ? composeNode(ctx, value, valueProps, onError) : composeEmptyNode(ctx, offset, sep7, null, valueProps, onError);
           if (ctx.schema.compat)
             utilFlowIndentCheck.flowIndentCheck(bm.indent, value, onError);
           offset = valueNode.range[2];
@@ -5246,7 +5300,7 @@ var require_resolve_end = __commonJS({
       let comment = "";
       if (end) {
         let hasSpace = false;
-        let sep6 = "";
+        let sep7 = "";
         for (const token2 of end) {
           const { source, type } = token2;
           switch (type) {
@@ -5260,13 +5314,13 @@ var require_resolve_end = __commonJS({
               if (!comment)
                 comment = cb;
               else
-                comment += sep6 + cb;
-              sep6 = "";
+                comment += sep7 + cb;
+              sep7 = "";
               break;
             }
             case "newline":
               if (comment)
-                sep6 += source;
+                sep7 += source;
               hasSpace = true;
               break;
             default:
@@ -5309,18 +5363,18 @@ var require_resolve_flow_collection = __commonJS({
       let offset = fc.offset + fc.start.source.length;
       for (let i = 0; i < fc.items.length; ++i) {
         const collItem = fc.items[i];
-        const { start, key, sep: sep6, value } = collItem;
+        const { start, key, sep: sep7, value } = collItem;
         const props = resolveProps.resolveProps(start, {
           flow: fcName,
           indicator: "explicit-key-ind",
-          next: key ?? sep6?.[0],
+          next: key ?? sep7?.[0],
           offset,
           onError,
           parentIndent: fc.indent,
           startOnNewline: false
         });
         if (!props.found) {
-          if (!props.anchor && !props.tag && !sep6 && !value) {
+          if (!props.anchor && !props.tag && !sep7 && !value) {
             if (i === 0 && props.comma)
               onError(props.comma, "UNEXPECTED_TOKEN", `Unexpected , in ${fcName}`);
             else if (i < fc.items.length - 1)
@@ -5374,8 +5428,8 @@ var require_resolve_flow_collection = __commonJS({
             }
           }
         }
-        if (!isMap && !sep6 && !props.found) {
-          const valueNode = value ? composeNode(ctx, value, props, onError) : composeEmptyNode(ctx, props.end, sep6, null, props, onError);
+        if (!isMap && !sep7 && !props.found) {
+          const valueNode = value ? composeNode(ctx, value, props, onError) : composeEmptyNode(ctx, props.end, sep7, null, props, onError);
           coll.items.push(valueNode);
           offset = valueNode.range[2];
           if (isBlock(value))
@@ -5387,7 +5441,7 @@ var require_resolve_flow_collection = __commonJS({
           if (isBlock(key))
             onError(keyNode.range, "BLOCK_IN_FLOW", blockMsg);
           ctx.atKey = false;
-          const valueProps = resolveProps.resolveProps(sep6 ?? [], {
+          const valueProps = resolveProps.resolveProps(sep7 ?? [], {
             flow: fcName,
             indicator: "map-value-ind",
             next: value,
@@ -5398,8 +5452,8 @@ var require_resolve_flow_collection = __commonJS({
           });
           if (valueProps.found) {
             if (!isMap && !props.found && ctx.options.strict) {
-              if (sep6)
-                for (const st of sep6) {
+              if (sep7)
+                for (const st of sep7) {
                   if (st === valueProps.found)
                     break;
                   if (st.type === "newline") {
@@ -5416,7 +5470,7 @@ var require_resolve_flow_collection = __commonJS({
             else
               onError(valueProps.start, "MISSING_CHAR", `Missing , or : between ${fcName} items`);
           }
-          const valueNode = value ? composeNode(ctx, value, valueProps, onError) : valueProps.found ? composeEmptyNode(ctx, valueProps.end, sep6, null, valueProps, onError) : null;
+          const valueNode = value ? composeNode(ctx, value, valueProps, onError) : valueProps.found ? composeEmptyNode(ctx, valueProps.end, sep7, null, valueProps, onError) : null;
           if (valueNode) {
             if (isBlock(value))
               onError(valueNode.range, "BLOCK_IN_FLOW", blockMsg);
@@ -5596,7 +5650,7 @@ var require_resolve_block_scalar = __commonJS({
           chompStart = i + 1;
       }
       let value = "";
-      let sep6 = "";
+      let sep7 = "";
       let prevMoreIndented = false;
       for (let i = 0; i < contentStart; ++i)
         value += lines[i][0].slice(trimIndent) + "\n";
@@ -5613,24 +5667,24 @@ var require_resolve_block_scalar = __commonJS({
           indent = "";
         }
         if (type === Scalar.Scalar.BLOCK_LITERAL) {
-          value += sep6 + indent.slice(trimIndent) + content;
-          sep6 = "\n";
+          value += sep7 + indent.slice(trimIndent) + content;
+          sep7 = "\n";
         } else if (indent.length > trimIndent || content[0] === "	") {
-          if (sep6 === " ")
-            sep6 = "\n";
-          else if (!prevMoreIndented && sep6 === "\n")
-            sep6 = "\n\n";
-          value += sep6 + indent.slice(trimIndent) + content;
-          sep6 = "\n";
+          if (sep7 === " ")
+            sep7 = "\n";
+          else if (!prevMoreIndented && sep7 === "\n")
+            sep7 = "\n\n";
+          value += sep7 + indent.slice(trimIndent) + content;
+          sep7 = "\n";
           prevMoreIndented = true;
         } else if (content === "") {
-          if (sep6 === "\n")
+          if (sep7 === "\n")
             value += "\n";
           else
-            sep6 = "\n";
+            sep7 = "\n";
         } else {
-          value += sep6 + content;
-          sep6 = " ";
+          value += sep7 + content;
+          sep7 = " ";
           prevMoreIndented = false;
         }
       }
@@ -5812,25 +5866,25 @@ var require_resolve_flow_scalar = __commonJS({
       if (!match)
         return source;
       let res = match[1];
-      let sep6 = " ";
+      let sep7 = " ";
       let pos = first.lastIndex;
       line.lastIndex = pos;
       while (match = line.exec(source)) {
         if (match[1] === "") {
-          if (sep6 === "\n")
-            res += sep6;
+          if (sep7 === "\n")
+            res += sep7;
           else
-            sep6 = "\n";
+            sep7 = "\n";
         } else {
-          res += sep6 + match[1];
-          sep6 = " ";
+          res += sep7 + match[1];
+          sep7 = " ";
         }
         pos = line.lastIndex;
       }
       const last = /[ \t]*(.*)/sy;
       last.lastIndex = pos;
       match = last.exec(source);
-      return res + sep6 + (match?.[1] ?? "");
+      return res + sep7 + (match?.[1] ?? "");
     }
     function doubleQuotedValue(source, onError) {
       let res = "";
@@ -6640,14 +6694,14 @@ var require_cst_stringify = __commonJS({
         }
       }
     }
-    function stringifyItem({ start, key, sep: sep6, value }) {
+    function stringifyItem({ start, key, sep: sep7, value }) {
       let res = "";
       for (const st of start)
         res += st.source;
       if (key)
         res += stringifyToken(key);
-      if (sep6)
-        for (const st of sep6)
+      if (sep7)
+        for (const st of sep7)
           res += st.source;
       if (value)
         res += stringifyToken(value);
@@ -7814,18 +7868,18 @@ var require_parser = __commonJS({
         if (this.type === "map-value-ind") {
           const prev = getPrevProps(this.peek(2));
           const start = getFirstKeyStartProps(prev);
-          let sep6;
+          let sep7;
           if (scalar.end) {
-            sep6 = scalar.end;
-            sep6.push(this.sourceToken);
+            sep7 = scalar.end;
+            sep7.push(this.sourceToken);
             delete scalar.end;
           } else
-            sep6 = [this.sourceToken];
+            sep7 = [this.sourceToken];
           const map = {
             type: "block-map",
             offset: scalar.offset,
             indent: scalar.indent,
-            items: [{ start, key: scalar, sep: sep6 }]
+            items: [{ start, key: scalar, sep: sep7 }]
           };
           this.onKeyLine = true;
           this.stack[this.stack.length - 1] = map;
@@ -7978,15 +8032,15 @@ var require_parser = __commonJS({
                 } else if (isFlowToken(it.key) && !includesToken(it.sep, "newline")) {
                   const start2 = getFirstKeyStartProps(it.start);
                   const key = it.key;
-                  const sep6 = it.sep;
-                  sep6.push(this.sourceToken);
+                  const sep7 = it.sep;
+                  sep7.push(this.sourceToken);
                   delete it.key;
                   delete it.sep;
                   this.stack.push({
                     type: "block-map",
                     offset: this.offset,
                     indent: this.indent,
-                    items: [{ start: start2, key, sep: sep6 }]
+                    items: [{ start: start2, key, sep: sep7 }]
                   });
                 } else if (start.length > 0) {
                   it.sep = it.sep.concat(start, this.sourceToken);
@@ -8180,13 +8234,13 @@ var require_parser = __commonJS({
             const prev = getPrevProps(parent);
             const start = getFirstKeyStartProps(prev);
             fixFlowSeqItems(fc);
-            const sep6 = fc.end.splice(1, fc.end.length);
-            sep6.push(this.sourceToken);
+            const sep7 = fc.end.splice(1, fc.end.length);
+            sep7.push(this.sourceToken);
             const map = {
               type: "block-map",
               offset: fc.offset,
               indent: fc.indent,
-              items: [{ start, key: fc, sep: sep6 }]
+              items: [{ start, key: fc, sep: sep7 }]
             };
             this.onKeyLine = true;
             this.stack[this.stack.length - 1] = map;
@@ -9467,9 +9521,24 @@ var init_path_safety = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/domain/unfollowed-file.js
+function readUnfollowedFile(directoryPath, identity, relativePath) {
+  try {
+    return readFileFromVerifiedDirectory(directoryPath, identity, relativePath).toString("utf8");
+  } catch (err) {
+    throw new Error(`Refusing inherited action symlink at ${directoryPath}/${relativePath}: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+function listUnfollowedDirectory(directoryPath, identity) {
+  try {
+    return listVerifiedDirectory(directoryPath, identity);
+  } catch (err) {
+    throw new Error(`Refusing replaced learned-action corpus at ${directoryPath}: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
 var init_unfollowed_file = __esm({
   "packages/rn-dev-agent-core/dist/domain/unfollowed-file.js"() {
     "use strict";
+    init_process_birth();
   }
 });
 
@@ -9889,12 +9958,16 @@ var init_action_state_store = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/session/worktree-repair-remedy.js
-var WORKTREE_REPAIR_ENTRY, HEADLESS_WORKTREE_REPAIR_COMMAND;
+function legacyRootRepairRemedy(lead) {
+  return `${LEGACY_ROOT_REPAIR_REQUIRED}: ${lead} Run ${HEADLESS_WORKTREE_REPAIR_COMMAND}.`;
+}
+var WORKTREE_REPAIR_ENTRY, HEADLESS_WORKTREE_REPAIR_COMMAND, LEGACY_ROOT_REPAIR_REQUIRED;
 var init_worktree_repair_remedy = __esm({
   "packages/rn-dev-agent-core/dist/session/worktree-repair-remedy.js"() {
     "use strict";
     WORKTREE_REPAIR_ENTRY = '"${CLAUDE_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}/rn-dev-agent-core/dist/worktree-inheritance.js"';
     HEADLESS_WORKTREE_REPAIR_COMMAND = `node ${WORKTREE_REPAIR_ENTRY} repair --app-root "$PWD"`;
+    LEGACY_ROOT_REPAIR_REQUIRED = "RN_AGENT_LEGACY_ROOT_REPAIR_REQUIRED";
   }
 });
 
@@ -10238,11 +10311,13 @@ function resolveReadableActionCorpus(projectRoot) {
   }
   const primaryRnAgentDir = join8(layout.primaryAppRoot, ".rn-agent");
   const primaryActionsDir = join8(primaryRnAgentDir, "actions");
-  const source = classifySource(primaryActionsDir, "directory", layout.primaryRoot);
-  const destination = classifyDestination(actionsDir, primaryActionsDir, "directory");
-  if (destination.state === "LINK_STALE")
+  const planned = planResource(layout, SHAREABLE_RESOURCES[0]);
+  if (planned.destinationState === "LINK_STALE")
     return refuseDanglingActions(actionsDir);
-  if (source.state !== "AVAILABLE" || destination.state !== "LINK_VALID" || !destination.evidence) {
+  if (planned.state !== "LINK_VALID_SAFE" || !planned.evidence) {
+    return refuseCorpus(`Refusing learned-action corpus at ${actionsDir}; setup classified it as ${planned.state}.`);
+  }
+  if (planned.sourceState !== "AVAILABLE" || !planned.sourceEvidence) {
     return refuseForeignActions(actionsDir);
   }
   const targetDir = canonical(primaryActionsDir);
@@ -10256,9 +10331,8 @@ function resolveReadableActionCorpus(projectRoot) {
   if (!openUnfollowedDirectory(targetDir, targetIdentity)) {
     return refuseReplacedActions(actionsDir);
   }
-  const destinationAfter = classifyDestination(actionsDir, primaryActionsDir, "directory");
-  const sourceAfter = classifySource(primaryActionsDir, "directory", layout.primaryRoot);
-  if (destinationAfter.state !== "LINK_VALID" || !destinationAfter.evidence || destinationAfter.evidence.dev !== destination.evidence.dev || destinationAfter.evidence.ino !== destination.evidence.ino || sourceAfter.state !== "AVAILABLE" || !sameSourceEvidence(source.evidence, sourceAfter.evidence) || !directoryIdentityUnchanged(rnAgentDir, rnAgentIdentity)) {
+  const plannedAfter = planResource(layout, SHAREABLE_RESOURCES[0]);
+  if (plannedAfter.state !== "LINK_VALID_SAFE" || !plannedAfter.evidence || plannedAfter.evidence.dev !== planned.evidence.dev || plannedAfter.evidence.ino !== planned.evidence.ino || plannedAfter.sourceState !== "AVAILABLE" || !sameSourceEvidence(planned.sourceEvidence, plannedAfter.sourceEvidence) || !directoryIdentityUnchanged(rnAgentDir, rnAgentIdentity)) {
     return refuseReplacedActions(actionsDir);
   }
   return {
@@ -10267,7 +10341,7 @@ function resolveReadableActionCorpus(projectRoot) {
     rnAgentDir,
     actionsDir,
     targetDir,
-    linkIdentity: destination.evidence,
+    linkIdentity: planned.evidence,
     targetIdentity
   };
 }
@@ -10284,18 +10358,230 @@ function sameReadableActionCorpus(left, right) {
   }
   return left.status === "approved-inherited" && right.status === "approved-inherited" && left.actionsDir === right.actionsDir && left.targetDir === right.targetDir && left.linkIdentity.dev === right.linkIdentity.dev && left.linkIdentity.ino === right.linkIdentity.ino && left.targetIdentity.dev === right.targetIdentity.dev && left.targetIdentity.ino === right.targetIdentity.ino;
 }
-function readableActionsDirectory(corpus) {
-  if (corpus.status === "owned-directory")
-    return corpus.actionsDir;
-  if (corpus.status === "approved-inherited")
-    return corpus.targetDir;
+function readableActionsSnapshot(corpus) {
+  if (corpus.status === "owned-directory") {
+    return { directory: corpus.actionsDir, identity: corpus.identity };
+  }
+  if (corpus.status === "approved-inherited") {
+    return { directory: corpus.targetDir, identity: corpus.targetIdentity };
+  }
   return null;
 }
-var GIT_ENV_OVERRIDES;
+function isTracked(worktreeRoot, relativePath) {
+  const listed = git(worktreeRoot, ["ls-files", "--", relativePath]);
+  return listed.ok && listed.stdout.trim().length > 0;
+}
+function isIgnoreSafe(worktreeRoot, relativePath) {
+  const result = spawnSync("git", ["check-ignore", "--no-index", "-q", "--", relativePath], {
+    cwd: worktreeRoot,
+    encoding: "utf8",
+    env: gitEnvironment(),
+    stdio: "ignore"
+  });
+  return !result.error && result.status === 0;
+}
+function anchorFor(layout, resource) {
+  if (resource.anchor === "worktree-root") {
+    return { local: layout.worktreeRoot, source: layout.primaryRoot ?? "" };
+  }
+  return { local: layout.appRoot, source: layout.primaryAppRoot ?? "" };
+}
+function destinationRelative(layout, resource) {
+  if (resource.anchor === "worktree-root")
+    return resource.path;
+  return layout.appRelative === "." ? resource.path : `${layout.appRelative}/${resource.path}`;
+}
+function planResource(layout, resource) {
+  const anchor = anchorFor(layout, resource);
+  const destination = join8(anchor.local, resource.path);
+  const destinationRel = destinationRelative(layout, resource);
+  const source = anchor.source ? join8(anchor.source, resource.path) : void 0;
+  const sourceBoundary = layout.primaryRoot;
+  const sourceBefore = source && sourceBoundary ? classifySource(source, resource.type, sourceBoundary) : { state: "MISSING" };
+  const { state: destinationState, evidence } = classifyDestination(destination, sourceBefore.state === "AVAILABLE" ? source : void 0, resource.type);
+  const sourceAfter = source && sourceBoundary ? classifySource(source, resource.type, sourceBoundary) : { state: "MISSING" };
+  const sourceStable = sourceBefore.state === sourceAfter.state && sameSourceEvidence(sourceBefore.evidence, sourceAfter.evidence);
+  const sourceState2 = sourceStable ? sourceAfter.state : "WRONG_TYPE";
+  const sourceEvidence = sourceStable ? sourceAfter.evidence : void 0;
+  const linkedParent = resource.parent !== void 0 ? classifyLegacyParent(layout, anchor.local, resource.parent) : null;
+  const parentRelative = resource.parent === void 0 ? void 0 : toPosix(layout.appRelative === "." ? resource.parent : `${layout.appRelative}/${resource.parent}`);
+  const ignoreSafe = isIgnoreSafe(layout.worktreeRoot, destinationRel) || linkedParent !== null && parentRelative !== void 0 && (isIgnoreSafe(layout.worktreeRoot, parentRelative) || isIgnoreSafe(layout.worktreeRoot, `${parentRelative}/`));
+  const base = {
+    id: resource.id,
+    label: resource.label,
+    destination: toPosix(destinationRel),
+    sourceState: sourceState2,
+    destinationState,
+    ignoreSafe,
+    evidence,
+    sourceEvidence
+  };
+  const gitManaged = isTracked(layout.worktreeRoot, destinationRel) || resource.parent !== void 0 && isTracked(layout.worktreeRoot, toPosix(layout.appRelative === "." ? resource.parent : `${layout.appRelative}/${resource.parent}`));
+  if (gitManaged) {
+    return {
+      ...base,
+      regime: "GIT_MANAGED",
+      state: "TRACKED",
+      action: "none",
+      remediation: "Git owns this path; the tracked/team regime is never replaced or inherited."
+    };
+  }
+  const regime = sourceState2 === "AVAILABLE" ? "PRIVATE_SOURCE_AVAILABLE" : "NO_SOURCE";
+  if (linkedParent) {
+    if (linkedParent !== "expected") {
+      return {
+        ...base,
+        regime,
+        state: "LINK_FOREIGN",
+        action: "none",
+        remediation: `The whole "${resource.parent}" directory is a foreign symlink. Nothing is read from or written through it.`
+      };
+    }
+    if (sourceState2 !== "AVAILABLE") {
+      return {
+        ...base,
+        regime,
+        state: sourceState2 === "WRONG_TYPE" ? "SOURCE_WRONG_TYPE" : "SOURCE_MISSING",
+        action: "none",
+        remediation: "The legacy root link is recognized, but the canonical actions source is unavailable."
+      };
+    }
+    return {
+      ...base,
+      regime,
+      state: "LEGACY_ROOT_LINK",
+      action: "none",
+      remediation: legacyRootRepairRemedy("A legacy whole-root link was detected; startup and reconnect never mutate it.")
+    };
+  }
+  if (destinationState === "PERMISSION_DENIED" || sourceState2 === "PERMISSION_DENIED") {
+    return {
+      ...base,
+      regime,
+      state: "PERMISSION_DENIED",
+      action: "none",
+      remediation: "Permission denied while inspecting this path; fix permissions and re-run."
+    };
+  }
+  if (destinationState === "FILE") {
+    return { ...base, regime, state: "COLLISION_FILE", action: "none", remediation: LOCAL_CONTENT };
+  }
+  if (destinationState === "DIRECTORY") {
+    return {
+      ...base,
+      regime,
+      state: "COLLISION_DIRECTORY",
+      action: "none",
+      remediation: LOCAL_CONTENT
+    };
+  }
+  if (destinationState === "LINK_VALID") {
+    if (sourceState2 !== "AVAILABLE") {
+      return {
+        ...base,
+        regime,
+        state: sourceState2 === "WRONG_TYPE" ? "SOURCE_WRONG_TYPE" : "SOURCE_MISSING",
+        action: "none",
+        remediation: "The existing link no longer has a safe canonical source."
+      };
+    }
+    return {
+      ...base,
+      regime,
+      state: ignoreSafe ? "LINK_VALID_SAFE" : "LINK_VALID_GIT_VISIBLE",
+      action: "none",
+      remediation: ignoreSafe ? void 0 : ignoreRemediation(base.destination)
+    };
+  }
+  if (destinationState === "LINK_FOREIGN") {
+    return {
+      ...base,
+      regime,
+      state: "LINK_FOREIGN",
+      action: "none",
+      remediation: "Destination is a symlink to something else; /rn-dev-agent:setup can re-point it after explicit confirmation."
+    };
+  }
+  if (destinationState === "LINK_STALE") {
+    if (sourceState2 !== "AVAILABLE") {
+      return {
+        ...base,
+        regime,
+        state: "LINK_STALE_SOURCE_MISSING",
+        action: "none",
+        remediation: "Destination is a broken symlink and no canonical source is available; restore the source first."
+      };
+    }
+    return {
+      ...base,
+      regime,
+      state: "LINK_STALE_SOURCE_AVAILABLE",
+      action: "repair",
+      remediation: "Run /rn-dev-agent:setup to repair the broken link after confirmation."
+    };
+  }
+  if (sourceState2 === "MISSING") {
+    return {
+      ...base,
+      regime,
+      state: "SOURCE_MISSING",
+      action: "none",
+      remediation: "No canonical source in the primary worktree; nothing to inherit."
+    };
+  }
+  if (sourceState2 === "WRONG_TYPE") {
+    return {
+      ...base,
+      regime,
+      state: "SOURCE_WRONG_TYPE",
+      action: "none",
+      remediation: `Canonical source is not a ${resource.type}; refusing to link.`
+    };
+  }
+  if (!ignoreSafe) {
+    return {
+      ...base,
+      regime,
+      state: "IGNORE_UNSAFE",
+      action: "none",
+      remediation: ignoreRemediation(base.destination)
+    };
+  }
+  return { ...base, regime, state: "DEST_MISSING", action: "link" };
+}
+function ignoreRemediation(destination) {
+  return `Git would see this path. Add the file-form rule "/${destination}" (no trailing slash) to your own local ignore policy, then re-run.`;
+}
+function classifyLegacyParent(layout, localAnchor, parent) {
+  const localParent = join8(localAnchor, parent);
+  let stats;
+  try {
+    stats = lstatSync5(localParent);
+  } catch {
+    return null;
+  }
+  if (!stats.isSymbolicLink())
+    return null;
+  const resolved = canonical(localParent);
+  const expected = layout.primaryAppRoot ? canonical(join8(layout.primaryAppRoot, parent)) : null;
+  return resolved && expected && resolved === expected ? "expected" : "foreign";
+}
+var SHAREABLE_RESOURCES, GIT_ENV_OVERRIDES, LOCAL_CONTENT;
 var init_worktree_inheritance = __esm({
   "packages/rn-dev-agent-core/dist/session/worktree-inheritance.js"() {
     "use strict";
     init_worktree_repair_remedy();
+    SHAREABLE_RESOURCES = [
+      {
+        id: "rn-agent-actions",
+        label: "learned action corpus (.rn-agent/actions)",
+        type: "directory",
+        anchor: "app",
+        path: ".rn-agent/actions",
+        parent: ".rn-agent",
+        hosts: ["claude", "codex"]
+      }
+    ];
     GIT_ENV_OVERRIDES = [
       "GIT_DIR",
       "GIT_WORK_TREE",
@@ -10304,12 +10590,13 @@ var init_worktree_inheritance = __esm({
       "GIT_OBJECT_DIRECTORY",
       "GIT_NAMESPACE"
     ];
+    LOCAL_CONTENT = "Local real content is present; it is never overwritten and is not shared.";
   }
 });
 
 // packages/rn-dev-agent-core/dist/domain/action-store.js
 import { existsSync as existsSync8, lstatSync as lstatSync6, readFileSync as readFileSync8, statSync as statSync4, unlinkSync as unlinkSync5 } from "node:fs";
-import { basename as basename4, dirname as dirname9, join as join9 } from "node:path";
+import { basename as basename4, dirname as dirname9, isAbsolute as isAbsolute3, join as join9, relative as relative3, resolve as resolve5, sep as sep6 } from "node:path";
 function assertOwnedActionCorpus(projectRoot) {
   for (const path of [join9(projectRoot, ".rn-agent"), join9(projectRoot, ".rn-agent", "actions")]) {
     const stat = lstatIfPresent2(path);
@@ -10343,24 +10630,24 @@ function actionFileExists(path) {
   }
   return true;
 }
-function resolveActionPathFromCorpus(actionId, corpus) {
-  const readableDir = readableActionsDirectory(corpus);
-  if (!readableDir)
+function resolveActionFileNameFromCorpus(actionId, corpus) {
+  const snapshot = readableActionsSnapshot(corpus);
+  if (!snapshot)
     return null;
   const fileName = `${actionId}.yaml`;
   assertWithinDir(fileName, corpus.actionsDir);
-  assertWithinDir(fileName, readableDir);
-  const yamlPath = join9(readableDir, fileName);
-  const ymlPath = yamlPath.replace(/\.yaml$/, ".yml");
-  const yamlExists = actionFileExists(yamlPath);
-  const ymlExists = actionFileExists(ymlPath);
+  assertWithinDir(fileName, snapshot.directory);
+  const files = listUnfollowedDirectory(snapshot.directory, snapshot.identity);
+  const yamlExists = files.includes(fileName);
+  const ymlFileName = fileName.replace(/\.yaml$/, ".yml");
+  const ymlExists = files.includes(ymlFileName);
   if (yamlExists && ymlExists) {
     throw new Error(`Action ${actionId} is ambiguous because both ${actionId}.yaml and ${actionId}.yml exist; keep exactly one file before replay.`);
   }
   if (yamlExists)
-    return join9(corpus.actionsDir, fileName);
+    return fileName;
   if (ymlExists)
-    return join9(corpus.actionsDir, `${actionId}.yml`);
+    return ymlFileName;
   return null;
 }
 function resolveActionPath(projectRoot, actionId) {
@@ -10370,10 +10657,15 @@ function resolveActionPath(projectRoot, actionId) {
     throw new Error(corpus.reason);
   if (corpus.status !== "owned-directory" && corpus.status !== "approved-inherited")
     return null;
-  const filePath = resolveActionPathFromCorpus(actionId, corpus);
-  if (filePath)
-    assertStableReadableCorpus(projectRoot, corpus);
-  return filePath;
+  const fileName = resolveActionFileNameFromCorpus(actionId, corpus);
+  if (!fileName)
+    return null;
+  const snapshot = readableActionsSnapshot(corpus);
+  if (!snapshot)
+    return null;
+  readUnfollowedFile(snapshot.directory, snapshot.identity, fileName);
+  assertStableReadableCorpus(projectRoot, corpus);
+  return join9(corpus.actionsDir, fileName);
 }
 function splitYaml(text) {
   const allLines = text.split("\n");
@@ -10559,6 +10851,7 @@ var init_action_store = __esm({
     init_atomic_writer();
     init_path_safety();
     init_unfollowed_file();
+    init_maestro_validator();
     init_action_state_store();
     init_worktree_inheritance();
     migrationPathIdentities = /* @__PURE__ */ new WeakMap();
@@ -10567,7 +10860,7 @@ var init_action_store = __esm({
 
 // packages/rn-dev-agent-core/dist/domain/action-engine-compat.js
 import { existsSync as existsSync9, lstatSync as lstatSync7, readFileSync as readFileSync9, readdirSync as readdirSync4, realpathSync as realpathSync4 } from "node:fs";
-import { basename as basename5, dirname as dirname10, join as join10, resolve as resolve5 } from "node:path";
+import { basename as basename5, dirname as dirname10, join as join10, resolve as resolve6 } from "node:path";
 function actionEnginePinRefusal(enginePin) {
   if (!enginePin) {
     return `Action is not migrated to ${ACTION_ENGINE_PIN} or newer. Run node <plugin-root>/rn-dev-agent-core/dist/maestro-runner-pin.js migrate-actions --root <app> before replay. Incompatible actions are terminal \u2014 no manual fallback.`;
@@ -10605,7 +10898,7 @@ function isLearnedActionPath(path) {
   return classifyLearnedActionPath(path) === "action";
 }
 function classifyLearnedActionPath(path) {
-  const lexical = classifyResolvedLearnedActionPath(resolve5(path));
+  const lexical = classifyResolvedLearnedActionPath(resolve6(path));
   try {
     const canonical2 = classifyResolvedLearnedActionPath(canonicalizeExistingPath(path));
     if (lexical === canonical2)
@@ -10632,7 +10925,7 @@ function classifyResolvedLearnedActionPath(path) {
   }
 }
 function canonicalizeExistingPath(path) {
-  let cursor = resolve5(path);
+  let cursor = resolve6(path);
   const suffix = [];
   while (!existsSync9(cursor)) {
     const parent = dirname10(cursor);
@@ -10641,7 +10934,7 @@ function canonicalizeExistingPath(path) {
     suffix.unshift(basename5(cursor));
     cursor = parent;
   }
-  return resolve5(realpathSync4(cursor), ...suffix);
+  return resolve6(realpathSync4(cursor), ...suffix);
 }
 function standaloneLearnedActionPathRefusal(path) {
   const classification = classifyLearnedActionPath(path);
@@ -10651,10 +10944,10 @@ function standaloneLearnedActionPathRefusal(path) {
     return `Refusing to execute learned-action descendant ${path} as a standalone flow.`;
   }
   const actionId = basename5(path).replace(/\.ya?ml$/i, "");
-  const projectRoot = dirname10(dirname10(dirname10(resolve5(path))));
+  const projectRoot = dirname10(dirname10(dirname10(resolve6(path))));
   try {
     const resolvedAction = resolveActionPath(projectRoot, actionId);
-    if (resolvedAction === null || resolve5(resolvedAction) !== resolve5(path)) {
+    if (resolvedAction === null || resolve6(resolvedAction) !== resolve6(path)) {
       return `Action ${actionId} does not resolve uniquely to ${path}.`;
     }
     const metadata = parseM7Header(readFileSync9(path, "utf8"), actionId);
@@ -11257,7 +11550,7 @@ async function reapStaleFastRunner(deps = {}) {
     return;
   }
   const spawnedChild = runnerProcess?.pid === state.pid ? runnerProcess : null;
-  const spawnedExit = spawnedChild ? new Promise((resolve8) => spawnedChild.once("exit", () => resolve8())) : null;
+  const spawnedExit = spawnedChild ? new Promise((resolve9) => spawnedChild.once("exit", () => resolve9())) : null;
   try {
     sendSignal(state.pid, "SIGTERM");
   } catch {
@@ -13416,7 +13709,7 @@ function defaultDeps() {
     kill: (pid, sig) => process.kill(pid, sig),
     fileExists: (p) => existsSync15(p),
     removeFile: (p) => unlinkSync7(p),
-    delay: (ms) => new Promise((resolve8) => setTimeout(resolve8, ms)),
+    delay: (ms) => new Promise((resolve9) => setTimeout(resolve9, ms)),
     killLegacy: () => process.env.RN_DEVICE_KILL_LEGACY !== "0",
     now: () => Date.now()
   };
@@ -13868,8 +14161,8 @@ function createMaestroRunHandler(deps = {}) {
     if (learnedActionPathRefusal) {
       return failResult(learnedActionPathRefusal, "BAD_RECORDING");
     }
-    const learnedAction = args.flowPath ? isLearnedActionPath(args.flowPath) : false;
-    const actionMeta = args.flowPath ? parseM7Header(rawYaml, basename8(args.flowPath).replace(/\.ya?ml$/i, "")) : null;
+    const learnedAction = Boolean(args.actionMetadata) || (args.flowPath ? isLearnedActionPath(args.flowPath) : false);
+    const actionMeta = args.actionMetadata ?? (args.flowPath ? parseM7Header(rawYaml, basename8(args.flowPath).replace(/\.ya?ml$/i, "")) : null);
     const compatibilityRefusal = learnedAction || actionMeta !== null ? actionReplayPreflight({
       enginePin: actionMeta?.enginePin,
       commands: validatedCommands,
@@ -14207,7 +14500,7 @@ init_action_engine_compat();
 init_action_engine_compat();
 import { spawnSync as spawnSync2 } from "node:child_process";
 import { existsSync as existsSync17, readdirSync as readdirSync7 } from "node:fs";
-import { dirname as dirname15, join as join23, resolve as resolve7 } from "node:path";
+import { dirname as dirname15, join as join23, resolve as resolve8 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 
 // packages/rn-dev-agent-core/dist/domain/action-verification-suite.js
@@ -14216,7 +14509,7 @@ init_action_store();
 init_maestro_validator();
 init_reusable_action();
 import { readFileSync as readFileSync10 } from "node:fs";
-import { basename as basename6, dirname as dirname11, resolve as resolve6 } from "node:path";
+import { basename as basename6, dirname as dirname11, resolve as resolve7 } from "node:path";
 function prepareActionVerificationSuite(files, flowDir, engineStatus) {
   const prepared = [];
   const errors = [];
@@ -14233,7 +14526,7 @@ function prepareActionVerificationSuite(files, flowDir, engineStatus) {
       if (owned) {
         const projectRoot = dirname11(dirname11(dirname11(file)));
         const resolvedPath = resolveActionPath(projectRoot, id);
-        if (resolvedPath === null || resolve6(resolvedPath) !== resolve6(file)) {
+        if (resolvedPath === null || resolve7(resolvedPath) !== resolve7(file)) {
           throw new Error(`Action ${id} did not resolve to ${file}`);
         }
       }
@@ -14265,7 +14558,7 @@ try {
 }
 `;
 function filterWithBoundedRegex(candidates, pattern, timeoutMs = 500) {
-  return new Promise((resolve8) => {
+  return new Promise((resolve9) => {
     const worker = new Worker(workerSource, {
       eval: true,
       workerData: { candidates, pattern }
@@ -14278,7 +14571,7 @@ function filterWithBoundedRegex(candidates, pattern, timeoutMs = 500) {
       clearTimeout(timer);
       worker.removeAllListeners();
       void worker.terminate();
-      resolve8(result);
+      resolve9(result);
     };
     const timer = setTimeout(() => finish({
       ok: false,
@@ -14371,7 +14664,7 @@ async function verifyActions(argv) {
       return 2;
     }
   }
-  const flowDir = resolve7(flowDirArg);
+  const flowDir = resolve8(flowDirArg);
   const flowDirClassification = classifyLearnedActionPath(join23(flowDir, "__action__.yaml"));
   if (flowDirClassification !== "action") {
     console.error(`Refusing to execute flows outside an owned .rn-agent/actions corpus: ${flowDir}.`);

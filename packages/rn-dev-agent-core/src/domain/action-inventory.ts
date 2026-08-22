@@ -1,8 +1,8 @@
-import { readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { loadAction } from './action-store.js';
+import { listUnfollowedDirectory } from './unfollowed-file.js';
 import {
-  readableActionsDirectory,
+  readableActionsSnapshot,
   resolveReadableActionCorpus,
   sameReadableActionCorpus,
 } from '../session/worktree-inheritance.js';
@@ -16,11 +16,11 @@ export type { ActionSummary } from '../observability/wire-types.js';
 export async function listActions(projectRoot: string): Promise<ActionSummary[]> {
   const corpus = resolveReadableActionCorpus(projectRoot);
   if (corpus.status === 'refused') throw new Error(corpus.reason);
-  const readableDir = readableActionsDirectory(corpus);
-  if (!readableDir) return [];
+  const snapshot = readableActionsSnapshot(corpus);
+  if (!snapshot) return [];
   let files: string[];
   try {
-    files = readdirSync(readableDir);
+    files = listUnfollowedDirectory(snapshot.directory, snapshot.identity);
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
     throw err;

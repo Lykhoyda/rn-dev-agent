@@ -28,9 +28,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { readUnfollowedFile } from './domain/unfollowed-file.js';
+import { listUnfollowedDirectory, readUnfollowedFile } from './domain/unfollowed-file.js';
 import {
-  readableActionsDirectory,
+  readableActionsSnapshot,
   resolveReadableActionCorpus,
   sameReadableActionCorpus,
   type ReadableActionCorpus,
@@ -161,20 +161,11 @@ interface FlowsResult {
   roots: string[];
 }
 
-function isDirectNode(target: string, kind: 'directory' | 'file'): boolean {
-  try {
-    const stat = fs.lstatSync(target);
-    return !stat.isSymbolicLink() && (kind === 'directory' ? stat.isDirectory() : stat.isFile());
-  } catch {
-    return false;
-  }
-}
-
-function resolveFlowFile(actionsDir: string, id: string): string | null {
-  const yamlPath = path.join(actionsDir, `${id}.yaml`);
-  const ymlPath = path.join(actionsDir, `${id}.yml`);
-  const yamlExists = isDirectNode(yamlPath, 'file');
-  const ymlExists = isDirectNode(ymlPath, 'file');
+function resolveFlowFile(files: readonly string[], id: string): string | null {
+  const yamlPath = `${id}.yaml`;
+  const ymlPath = `${id}.yml`;
+  const yamlExists = files.includes(yamlPath);
+  const ymlExists = files.includes(ymlPath);
   if (yamlExists && ymlExists) return null;
   if (yamlExists) return yamlPath;
   if (ymlExists) return ymlPath;
@@ -199,11 +190,11 @@ function scanFlows(): FlowsResult {
   for (const root of roots) {
     const corpus = classifyFlowRoot(root);
     if (!corpus) continue;
-    const readable = readableActionsDirectory(corpus);
-    if (!readable) continue;
+    const snapshot = readableActionsSnapshot(corpus);
+    if (!snapshot) continue;
     let files: string[];
     try {
-      files = fs.readdirSync(readable);
+      files = listUnfollowedDirectory(snapshot.directory, snapshot.identity);
     } catch {
       continue;
     }
@@ -216,13 +207,12 @@ function scanFlows(): FlowsResult {
     ];
     const rootItems: FlowItem[] = [];
     for (const id of ids) {
-      const fp = resolveFlowFile(readable, id);
-      if (!fp) continue;
-      const f = path.basename(fp);
+      const f = resolveFlowFile(files, id);
+      if (!f) continue;
       const reportedPath = path.join(root, f);
       let text: string;
       try {
-        text = readUnfollowedFile(fp);
+        text = readUnfollowedFile(snapshot.directory, snapshot.identity, f);
       } catch {
         continue;
       }
