@@ -70031,9 +70031,7 @@ var init_injected_helpers = __esm({
             }
           } catch(e) {}
         }
-        // M10 / Phase 110: architecture detection. Fabric wins on "both present"
-        // (transient interop state); __fbBatchedBridge alone \u2192 classic bridge;
-        // neither \u2192 unknown.
+        // D667 architecture rationale: https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/DECISIONS.md?plain=1#L3371
         try {
           var fabric = typeof globalThis.nativeFabricUIManager === 'object'
             && globalThis.nativeFabricUIManager !== null;

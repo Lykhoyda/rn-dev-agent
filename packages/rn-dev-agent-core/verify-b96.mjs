@@ -6,10 +6,7 @@
 // directly, per the bench-issue-27.mjs pattern), reads the resulting field
 // contents via `uiautomator dump`, and reports a pass/fail table.
 //
-// This script was the source of the empirical evidence that disproved the
-// original B96 theory: the "outer single-quote wrapping" pattern is correct
-// on adb 1.0.41 + Android API 37, and removing it breaks shell metacharacter
-// handling. See the B96 GitHub Issue for the full investigation record.
+// D582 investigation record: https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/DECISIONS.md?plain=1#L1904
 //
 // Usage:
 //   cd packages/rn-dev-agent-core && npm run build && node verify-b96.mjs
