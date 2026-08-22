@@ -22,15 +22,50 @@ for (const [label, helper] of [
     const receipt = JSON.parse(stdout.trim()) as {
       status: string;
       helper: string;
-      cases: Array<{ case: string; expectedExit: number; actualExit: number }>;
+      cases: Array<{
+        case: string;
+        initiatingCondition: string;
+        pathMasking: string;
+        expectedExit: number;
+        actualExit: number;
+        skipGuidanceOnStderr: boolean;
+      }>;
     };
     assert.equal(receipt.status, 'passed');
     assert.equal(receipt.helper, label);
     assert.deepEqual(receipt.cases, [
-      { case: 'pre-installed', expectedExit: 0, actualExit: 0 },
-      { case: 'homebrew-install-success', expectedExit: 0, actualExit: 0 },
-      { case: 'homebrew-install-failure', expectedExit: 1, actualExit: 1 },
-      { case: 'homebrew-absent', expectedExit: 1, actualExit: 1 },
+      {
+        case: 'pre-installed',
+        initiatingCondition: 'ffmpeg already installed',
+        pathMasking: 'host ffmpeg and brew masked; ffmpeg stub exposed',
+        expectedExit: 0,
+        actualExit: 0,
+        skipGuidanceOnStderr: false,
+      },
+      {
+        case: 'homebrew-install-success',
+        initiatingCondition: 'ffmpeg absent; Homebrew install succeeds',
+        pathMasking: 'host ffmpeg and brew masked; brew stub exposed',
+        expectedExit: 0,
+        actualExit: 0,
+        skipGuidanceOnStderr: false,
+      },
+      {
+        case: 'homebrew-install-failure',
+        initiatingCondition: 'ffmpeg absent; Homebrew install fails',
+        pathMasking: 'host ffmpeg and brew masked; failing brew stub exposed',
+        expectedExit: 1,
+        actualExit: 1,
+        skipGuidanceOnStderr: true,
+      },
+      {
+        case: 'homebrew-absent',
+        initiatingCondition: 'ffmpeg and Homebrew absent',
+        pathMasking: 'host ffmpeg and brew masked; no command stubs exposed',
+        expectedExit: 1,
+        actualExit: 1,
+        skipGuidanceOnStderr: true,
+      },
     ]);
   });
 }
