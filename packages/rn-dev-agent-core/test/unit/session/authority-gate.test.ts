@@ -3021,12 +3021,19 @@ test('busy flow refusal leaves the login attempt blocked and releases its fence'
 
   const result = await gate.wrap('cdp_login_prologue', async () => {
     calls.push('arbiter-refusal');
-    return failResult('flow busy', 'BUSY_FLOW_ACTIVE');
+    return failResult(
+      'Refusing cdp_login_prologue: blocked by stale-flow; run rn_session({ action: "recover_arbiter", confirmed: true }).',
+      'BUSY_FLOW_ACTIVE',
+      { holder: { tool: 'stale-flow', plane: 'flow' } },
+    );
   })({});
   const envelope = JSON.parse(result.content[0].text);
 
   assert.equal(envelope.code, 'LOGIN_PROLOGUE_BLOCKED');
   assert.equal(status.bindings.loginPrologue.state, 'LOGIN_PROLOGUE_BLOCKED');
+  assert.equal(status.bindings.loginPrologue.failure.code, 'BUSY_FLOW_ACTIVE');
+  assert.match(status.bindings.loginPrologue.failure.detail, /recover_arbiter/);
+  assert.match(envelope.error, /recover_arbiter/);
   const firstPostflight = calls.findIndex((call) => call.startsWith('postflight:'));
   assert.ok(firstPostflight > calls.indexOf('arbiter-refusal'));
   assert.equal(calls.at(-1), 'end');

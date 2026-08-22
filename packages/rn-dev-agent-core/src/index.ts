@@ -193,7 +193,7 @@ import {
 import { parseAllAdbDevices } from './tools/device-record.js';
 import { createLockE2eTestHandler } from './tools/lock-e2e-test.js';
 import { createRunE2eSuiteHandler, type RunE2eSuiteArgs } from './tools/run-e2e-suite.js';
-import { resolveLockedTestIds } from './domain/e2e-test.js';
+import { resolveLockedTestIdentityIds } from './domain/e2e-test.js';
 import { recoverInterruptedRequests } from './domain/e2e-run-request.js';
 import { preflight, probeMetro } from './e2e/preflight.js';
 import { resolveIosUdid } from './tools/device-screenshot-raw.js';
@@ -641,7 +641,7 @@ const authorityGate = createAuthorityGate(authorityRuntime, {
       typeof args.projectRoot === 'string' ? args.projectRoot : status.source.appRoot;
     if (typeof projectRoot !== 'string') return [];
     args.projectRoot = projectRoot;
-    return resolveLockedTestIds(
+    return resolveLockedTestIdentityIds(
       projectRoot,
       typeof args.pattern === 'string' ? args.pattern : undefined,
     );

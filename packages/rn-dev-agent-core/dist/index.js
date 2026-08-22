@@ -99,7 +99,7 @@ import { createMirrorSource, IosSimctlLoopSource, idbDemotionHint, } from './obs
 import { parseAllAdbDevices } from './tools/device-record.js';
 import { createLockE2eTestHandler } from './tools/lock-e2e-test.js';
 import { createRunE2eSuiteHandler } from './tools/run-e2e-suite.js';
-import { resolveLockedTestIds } from './domain/e2e-test.js';
+import { resolveLockedTestIdentityIds } from './domain/e2e-test.js';
 import { recoverInterruptedRequests } from './domain/e2e-run-request.js';
 import { preflight, probeMetro } from './e2e/preflight.js';
 import { resolveIosUdid } from './tools/device-screenshot-raw.js';
@@ -469,7 +469,7 @@ const authorityGate = createAuthorityGate(authorityRuntime, {
         if (typeof projectRoot !== 'string')
             return [];
         args.projectRoot = projectRoot;
-        return resolveLockedTestIds(projectRoot, typeof args.pattern === 'string' ? args.pattern : undefined);
+        return resolveLockedTestIdentityIds(projectRoot, typeof args.pattern === 'string' ? args.pattern : undefined);
     },
     probe: async ({ axis, phase, status, tool, args }) => localAuthorityProbe({ axis, phase, status, tool, args }),
     recoverRuntimeConnection: async (status) => {

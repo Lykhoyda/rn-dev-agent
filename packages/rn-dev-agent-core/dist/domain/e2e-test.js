@@ -58,7 +58,8 @@ export function loadLockedTest(projectRoot, id) {
     const filePath = e2ePathFor(projectRoot, id);
     if (!existsSync(filePath))
         return null;
-    return parseLockedTest(readFileSync(filePath, 'utf8'), filePath);
+    const locked = parseLockedTest(readFileSync(filePath, 'utf8'), filePath);
+    return locked?.id === id ? locked : null;
 }
 export function discoverLockedTests(projectRoot) {
     const dir = e2eDirFor(projectRoot);
@@ -80,6 +81,12 @@ export function resolveLockedTestIds(projectRoot, pattern, discover = discoverLo
     catch {
         return ids;
     }
+}
+export function resolveLockedTestIdentityIds(projectRoot, pattern, discover = discoverLockedTests, load = loadLockedTest) {
+    return resolveLockedTestIds(projectRoot, pattern, discover).filter((id) => {
+        const locked = load(projectRoot, id);
+        return locked?.id === id && locked.sourceActionId === id;
+    });
 }
 const resolvedLockedTestIds = Symbol('resolvedLockedTestIds');
 export function setResolvedLockedTestIds(args, ids) {

@@ -8,6 +8,8 @@ import {
   loadLockedTest,
   discoverLockedTests,
   hashBody,
+  resolveLockedTestIdentityIds,
+  serializeLockedTest,
 } from '../../dist/domain/e2e-test.js';
 
 const FLOW = 'appId: com.x\n---\n# id: login\n- launchApp\n';
@@ -41,6 +43,38 @@ test('discoverLockedTests lists .yaml ids sorted, ignores .yml; load null for mi
     writeFileSync(join(root, '.rn-agent', 'e2e', 'ccc.yml'), '# e2e-locked-test: true\n', 'utf8');
     assert.deepEqual(discoverLockedTests(root), ['aaa', 'bbb']);
     assert.equal(loadLockedTest(root, 'missing'), null);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('locked identity resolution rejects mismatched declared and source action ids', () => {
+  const root = mkdtempSync(join(tmpdir(), 'e2e-io-'));
+  try {
+    freezeLockedTest(root, { ...SRC, id: 'user-login', sourceActionId: 'other-login' }, CTX);
+    assert.deepEqual(resolveLockedTestIdentityIds(root, '^user-login$'), []);
+
+    const filePath = join(root, '.rn-agent', 'e2e', 'user-login.yaml');
+    writeFileSync(
+      filePath,
+      serializeLockedTest({
+        id: 'other-login',
+        intent: SRC.intent,
+        sourceActionId: 'user-login',
+        lockedAt: CTX.now().toISOString(),
+        lockedGitSha: CTX.gitSha,
+        sourceContentHash: hashBody(FLOW),
+        status: 'locked',
+        appId: SRC.appId,
+        flow: FLOW,
+      }),
+      'utf8',
+    );
+    assert.equal(loadLockedTest(root, 'user-login'), null);
+    assert.deepEqual(resolveLockedTestIdentityIds(root, '^user-login$'), []);
+
+    freezeLockedTest(root, { ...SRC, id: 'user-login', sourceActionId: 'user-login' }, CTX);
+    assert.deepEqual(resolveLockedTestIdentityIds(root, '^user-login$'), ['user-login']);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

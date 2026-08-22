@@ -96,7 +96,8 @@ export function freezeLockedTest(
 export function loadLockedTest(projectRoot: string, id: string): LockedE2eTest | null {
   const filePath = e2ePathFor(projectRoot, id);
   if (!existsSync(filePath)) return null;
-  return parseLockedTest(readFileSync(filePath, 'utf8'), filePath);
+  const locked = parseLockedTest(readFileSync(filePath, 'utf8'), filePath);
+  return locked?.id === id ? locked : null;
 }
 
 export function discoverLockedTests(projectRoot: string): string[] {
@@ -121,6 +122,18 @@ export function resolveLockedTestIds(
   } catch {
     return ids;
   }
+}
+
+export function resolveLockedTestIdentityIds(
+  projectRoot: string,
+  pattern?: string,
+  discover: (root: string) => string[] = discoverLockedTests,
+  load: (root: string, id: string) => LockedE2eTest | null = loadLockedTest,
+): string[] {
+  return resolveLockedTestIds(projectRoot, pattern, discover).filter((id) => {
+    const locked = load(projectRoot, id);
+    return locked?.id === id && locked.sourceActionId === id;
+  });
 }
 
 const resolvedLockedTestIds = Symbol('resolvedLockedTestIds');

@@ -434,8 +434,19 @@ function parseLoginPrologueOutcome(result) {
         return null;
     }
 }
-function missingLoginPrologueOutcome() {
+function missingLoginPrologueOutcome(result) {
     const timestamp = new Date().toISOString();
+    let failure = {
+        code: 'LOGIN_PROLOGUE_RESULT_INVALID',
+        detail: 'The login prologue returned no valid terminal state.',
+    };
+    try {
+        const envelope = JSON.parse(result.content?.[0]?.text ?? '{}');
+        if (envelope.code === 'BUSY_FLOW_ACTIVE' && typeof envelope.error === 'string') {
+            failure = { code: envelope.code, detail: envelope.error };
+        }
+    }
+    catch { }
     return {
         schemaVersion: 1,
         state: LOGIN_PROLOGUE_BLOCKED,
@@ -445,10 +456,7 @@ function missingLoginPrologueOutcome() {
         elapsedMs: 0,
         steps: [],
         inventory: { count: 0, actionIds: [] },
-        failure: {
-            code: 'LOGIN_PROLOGUE_RESULT_INVALID',
-            detail: 'The login prologue returned no valid terminal state.',
-        },
+        failure,
     };
 }
 function pendingLoginPrologueOutcome(attemptId) {
@@ -1563,8 +1571,8 @@ export function createAuthorityGate(runtime, dependencies) {
                 if (tool === 'cdp_login_prologue') {
                     loginPrologueOutcome = parseLoginPrologueOutcome(result);
                     if (!loginPrologueOutcome) {
-                        loginPrologueOutcome = missingLoginPrologueOutcome();
-                        result = failResult('Login prologue returned no valid terminal state.', 'LOGIN_PROLOGUE_BLOCKED', { loginPrologue: loginPrologueOutcome });
+                        loginPrologueOutcome = missingLoginPrologueOutcome(result);
+                        result = failResult(`Login prologue blocked: ${loginPrologueOutcome.failure?.detail ?? 'The login prologue returned no valid terminal state.'}`, 'LOGIN_PROLOGUE_BLOCKED', { loginPrologue: loginPrologueOutcome });
                     }
                     if (loginPrologueOutcome.state === LOGIN_PROLOGUE_BLOCKED) {
                         const persisted = persistLoginPrologueOutcome(runtime, registry, operation, status, loginPrologueOutcome);

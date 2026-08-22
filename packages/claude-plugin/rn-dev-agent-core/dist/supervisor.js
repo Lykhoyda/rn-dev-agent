@@ -32182,7 +32182,8 @@ function loadLockedTest(projectRoot, id) {
   const filePath = e2ePathFor(projectRoot, id);
   if (!existsSync22(filePath))
     return null;
-  return parseLockedTest(readFileSync24(filePath, "utf8"), filePath);
+  const locked = parseLockedTest(readFileSync24(filePath, "utf8"), filePath);
+  return locked?.id === id ? locked : null;
 }
 function discoverLockedTests(projectRoot) {
   const dir = e2eDirFor(projectRoot);
@@ -32200,6 +32201,12 @@ function resolveLockedTestIds(projectRoot, pattern, discover2 = discoverLockedTe
   } catch {
     return ids;
   }
+}
+function resolveLockedTestIdentityIds(projectRoot, pattern, discover2 = discoverLockedTests, load = loadLockedTest) {
+  return resolveLockedTestIds(projectRoot, pattern, discover2).filter((id) => {
+    const locked = load(projectRoot, id);
+    return locked?.id === id && locked.sourceActionId === id;
+  });
 }
 function setResolvedLockedTestIds(args, ids) {
   Object.defineProperty(args, resolvedLockedTestIds, {
@@ -32929,8 +32936,19 @@ function parseLoginPrologueOutcome(result) {
     return null;
   }
 }
-function missingLoginPrologueOutcome() {
+function missingLoginPrologueOutcome(result) {
   const timestamp = (/* @__PURE__ */ new Date()).toISOString();
+  let failure = {
+    code: "LOGIN_PROLOGUE_RESULT_INVALID",
+    detail: "The login prologue returned no valid terminal state."
+  };
+  try {
+    const envelope = JSON.parse(result.content?.[0]?.text ?? "{}");
+    if (envelope.code === "BUSY_FLOW_ACTIVE" && typeof envelope.error === "string") {
+      failure = { code: envelope.code, detail: envelope.error };
+    }
+  } catch {
+  }
   return {
     schemaVersion: 1,
     state: LOGIN_PROLOGUE_BLOCKED,
@@ -32940,10 +32958,7 @@ function missingLoginPrologueOutcome() {
     elapsedMs: 0,
     steps: [],
     inventory: { count: 0, actionIds: [] },
-    failure: {
-      code: "LOGIN_PROLOGUE_RESULT_INVALID",
-      detail: "The login prologue returned no valid terminal state."
-    }
+    failure
   };
 }
 function pendingLoginPrologueOutcome(attemptId) {
@@ -33909,8 +33924,8 @@ function createAuthorityGate(runtime, dependencies) {
         if (tool === "cdp_login_prologue") {
           loginPrologueOutcome = parseLoginPrologueOutcome(result);
           if (!loginPrologueOutcome) {
-            loginPrologueOutcome = missingLoginPrologueOutcome();
-            result = failResult("Login prologue returned no valid terminal state.", "LOGIN_PROLOGUE_BLOCKED", { loginPrologue: loginPrologueOutcome });
+            loginPrologueOutcome = missingLoginPrologueOutcome(result);
+            result = failResult(`Login prologue blocked: ${loginPrologueOutcome.failure?.detail ?? "The login prologue returned no valid terminal state."}`, "LOGIN_PROLOGUE_BLOCKED", { loginPrologue: loginPrologueOutcome });
           }
           if (loginPrologueOutcome.state === LOGIN_PROLOGUE_BLOCKED) {
             const persisted = persistLoginPrologueOutcome(runtime, registry2, operation, status, loginPrologueOutcome);
@@ -93423,7 +93438,7 @@ var init_index = __esm({
         if (typeof projectRoot !== "string")
           return [];
         args.projectRoot = projectRoot;
-        return resolveLockedTestIds(projectRoot, typeof args.pattern === "string" ? args.pattern : void 0);
+        return resolveLockedTestIdentityIds(projectRoot, typeof args.pattern === "string" ? args.pattern : void 0);
       },
       probe: async ({ axis, phase, status, tool, args }) => localAuthorityProbe({ axis, phase, status, tool, args }),
       recoverRuntimeConnection: async (status) => {
