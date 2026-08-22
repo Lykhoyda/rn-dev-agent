@@ -833,7 +833,7 @@ Gemini + Codex both returned clean (no high-confidence issues). Six critical rac
 - **`handleClose` uses `void this._suspendProxy()`** (fire-and-forget). The synchronous preamble is sufficient to redirect the reconnect; awaiting `mux.stop()` would block the `handleClose` path unnecessarily.
 
 ### Refs
-- D662 in DECISIONS.md. Phase 105 in ROADMAP.md. B132 closed in BUGS.md. Parent: D661 / Phase 104 (M1b, 2026-04-21). Branch: `fix/b132-proxy-auto-resume`.
+- [D662](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/DECISIONS.md?plain=1#L3104). [Phase 105](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/ROADMAP.md?plain=1#L3511). [B132](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/BUGS.md?plain=1#L208) closed. Parent: [D661](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/DECISIONS.md?plain=1#L3040) / [Phase 104](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/ROADMAP.md?plain=1#L3556) (M1b, 2026-04-21). Branch: `fix/b132-proxy-auto-resume`.
 
 ---
 
@@ -867,7 +867,7 @@ M1b / Phase 104 — CDP proxy routing integration. Completes the M1 story split 
 Stale `hermesUrl` after target change or bundle reload — multiplexer captures the URL once at `startProxy` time. If Hermes regenerates the URL (reload, eviction, Metro restart), the proxy forwards to a dead upstream until `cdp_disconnect` + re-run `cdp_open_devtools`. Pre-existing M1a design limit, not introduced by M1b. Filed as B132 in BUGS.md for follow-up (requires multiplexer upstream-refresh API or client-level teardown-and-restart on target change).
 
 ### Refs
-- D661 in DECISIONS.md. Phase 104 in ROADMAP.md. Parent: M1a / D654 (Phase 100, 2026-04-20). Branch: `feat/m1b-cdp-proxy-routing`.
+- [D661](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/DECISIONS.md?plain=1#L3040). [Phase 104](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/ROADMAP.md?plain=1#L3556). Parent: M1a / D654 (Phase 100, 2026-04-20). Branch: `feat/m1b-cdp-proxy-routing`.
 
 ---
 
@@ -901,7 +901,7 @@ Phase 90 metro-mcp pattern adoption (Tier 1 + Tier 2) plus story-driven bug swee
 
 ### Performance
 - **Unit test suite: 24,246ms → 3,151ms (87% faster)** after adding `skipIncompatibilityProbe: true` to pre-B129 MetroEventsClient tests that use the WS-only mock server. The mock doesn't respond to HTTP GET; every test was paying a 1500ms probe timeout.
-- **Screenshot downscale via sips** (B120/D647 from 0.26.0 — first public release). `device_screenshot` auto-resizes to max 800px width via macOS `sips`, saving ~35–46% on iPhone captures with no readability loss.
+- **Screenshot downscale via sips** (B120/[D647](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/DECISIONS.md?plain=1#L2325) from 0.26.0 — first public release). `device_screenshot` auto-resizes to max 800px width via macOS `sips`, saving ~35–46% on iPhone captures with no readability loss.
 
 ### Tests
 272 → **448** (+176 across the series):
