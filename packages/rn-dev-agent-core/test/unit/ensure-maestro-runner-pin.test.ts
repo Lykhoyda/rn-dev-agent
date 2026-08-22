@@ -27,6 +27,7 @@ import {
   getMaestroRunnerPath,
   pinCacheRoot,
   pinnedRunnerBinPath,
+  payloadMatchesPinnedArchive,
   withBoundExecutable,
 } from '../../dist/domain/engine-pin.js';
 
@@ -273,6 +274,125 @@ test('installed fast path refuses a payload changed after verified installation'
   assert.notEqual(refused.status, 0);
   assert.match(`${refused.stdout}${refused.stderr}`, /attested pin-cache maestro-runner 1\.1\.24/);
   assert.equal(existsSync(executionMarker), false);
+});
+
+test('payload matching ignores AppleDouble and PaxHeader members macOS extract omits', () => {
+  const root = mkdtempSync(join(tmpdir(), 'mr-appledouble-payload-'));
+  const packed = join(root, 'packed', 'maestro-runner');
+  const live = join(root, 'live');
+  mkdirSync(join(packed, 'bin'), { recursive: true });
+  mkdirSync(join(packed, 'drivers'), { recursive: true });
+  mkdirSync(join(packed, 'PaxHeader'), { recursive: true });
+  mkdirSync(join(live, 'bin'), { recursive: true });
+  mkdirSync(join(live, 'drivers'), { recursive: true });
+  const runner = '#!/bin/sh\necho maestro-runner 1.1.24\n';
+  const driver = 'trusted-driver';
+  writeFileSync(join(packed, 'bin', 'maestro-runner'), runner);
+  chmodSync(join(packed, 'bin', 'maestro-runner'), 0o755);
+  writeFileSync(join(packed, 'drivers', 'server.apk'), driver);
+  writeFileSync(join(packed, '._bin'), 'appledouble-root');
+  writeFileSync(join(packed, 'bin', '._maestro-runner'), 'appledouble-bin');
+  writeFileSync(join(packed, 'drivers', '._server.apk'), 'appledouble-driver');
+  writeFileSync(join(packed, 'PaxHeader', 'uid'), 'pax-uid');
+  const archive = join(root, 'maestro-runner.tar.gz');
+  const packedTar = spawnSync('tar', [
+    '-czf',
+    archive,
+    '-C',
+    join(root, 'packed'),
+    'maestro-runner',
+  ]);
+  assert.equal(packedTar.status, 0, String(packedTar.stderr));
+  const archiveBytes = readFileSync(archive);
+  const archiveSha = createHash('sha256').update(archiveBytes).digest('hex');
+  writeFileSync(join(live, 'bin', 'maestro-runner'), runner);
+  chmodSync(join(live, 'bin', 'maestro-runner'), 0o755);
+  writeFileSync(join(live, 'drivers', 'server.apk'), driver);
+  copyFileSync(archive, join(live, '.payload.tar.gz'));
+
+  assert.equal(payloadMatchesPinnedArchive(live, archiveBytes, archiveSha), true);
+
+  writeFileSync(join(live, '._bin'), 'leftover-appledouble');
+  mkdirSync(join(live, 'PaxHeader'));
+  writeFileSync(join(live, 'PaxHeader', 'uid'), 'leftover-pax');
+  assert.equal(payloadMatchesPinnedArchive(live, archiveBytes, archiveSha), true);
+
+  writeFileSync(join(live, 'drivers', 'server.apk'), 'tampered-driver');
+  assert.equal(payloadMatchesPinnedArchive(live, archiveBytes, archiveSha), false);
+});
+
+test('installer print-bin accepts a pin-cache whose archive has AppleDouble members', () => {
+  const root = mkdtempSync(join(tmpdir(), 'mr-appledouble-install-'));
+  const scriptDir = join(root, 'scripts');
+  const payload = join(root, 'payload', 'maestro-runner');
+  const archive = join(root, 'maestro-runner.tar.gz');
+  const cache = join(root, 'cache');
+  mkdirSync(scriptDir, { recursive: true });
+  mkdirSync(join(payload, 'bin'), { recursive: true });
+  mkdirSync(join(payload, 'drivers'), { recursive: true });
+  mkdirSync(join(payload, 'PaxHeader'), { recursive: true });
+  const runner = join(payload, 'bin', 'maestro-runner');
+  writeFileSync(runner, '#!/bin/sh\necho maestro-runner 1.1.24\n', 'utf8');
+  chmodSync(runner, 0o755);
+  writeFileSync(join(payload, 'drivers', 'server.apk'), 'trusted-payload', 'utf8');
+  writeFileSync(join(payload, '._bin'), 'appledouble-root');
+  writeFileSync(join(payload, 'bin', '._maestro-runner'), 'appledouble-bin');
+  writeFileSync(join(payload, 'PaxHeader', 'uid'), 'pax-uid');
+  const packed = spawnSync('tar', ['-czf', archive, '-C', join(root, 'payload'), 'maestro-runner']);
+  assert.equal(packed.status, 0, String(packed.stderr));
+  const copiedScript = join(scriptDir, 'ensure-maestro-runner.sh');
+  writeFileSync(copiedScript, readFileSync(SCRIPT), 'utf8');
+  chmodSync(copiedScript, 0o755);
+  const packagedNativeDir = join(root, 'rn-dev-agent-core', 'dist', 'native');
+  const sourceNativeDir = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'native');
+  mkdirSync(packagedNativeDir, { recursive: true });
+  for (const name of [
+    'darwin-process-birth',
+    'darwin-process-birth.json',
+    'linux-conditional-publication-x64',
+    'linux-conditional-publication-x64.json',
+    'linux-conditional-publication-arm64',
+    'linux-conditional-publication-arm64.json',
+  ]) {
+    copyFileSync(join(sourceNativeDir, name), join(packagedNativeDir, name));
+  }
+  chmodSync(join(packagedNativeDir, 'darwin-process-birth'), 0o755);
+  chmodSync(join(packagedNativeDir, 'linux-conditional-publication-x64'), 0o755);
+  chmodSync(join(packagedNativeDir, 'linux-conditional-publication-arm64'), 0o755);
+  const runnerSha = createHash('sha256').update(readFileSync(runner)).digest('hex');
+  const archiveSha = createHash('sha256').update(readFileSync(archive)).digest('hex');
+  writeFileSync(
+    join(scriptDir, 'maestro-runner-pin.json'),
+    JSON.stringify({
+      version: '1.1.24',
+      sha256: {
+        'darwin-arm64': runnerSha,
+        'darwin-x64': runnerSha,
+        'linux-arm64': runnerSha,
+        'linux-x64': runnerSha,
+      },
+      archiveSha256: {
+        'darwin-arm64': archiveSha,
+        'darwin-x64': archiveSha,
+        'linux-arm64': archiveSha,
+        'linux-x64': archiveSha,
+      },
+      knownQuirks: [],
+    }),
+    'utf8',
+  );
+  const env = {
+    ...process.env,
+    RN_DEV_AGENT_RUNNER_CACHE: cache,
+    RN_DEV_AGENT_UNAME_S: process.platform === 'darwin' ? 'Darwin' : 'Linux',
+    RN_DEV_AGENT_UNAME_M: process.arch === 'arm64' ? 'arm64' : 'x86_64',
+    RN_DEV_AGENT_MAESTRO_DOWNLOAD_URL: pathToFileURL(archive).href,
+  };
+  const installed = spawnSync('bash', [copiedScript], { encoding: 'utf8', env });
+  assert.equal(installed.status, 0, `${installed.stdout}${installed.stderr}`);
+  const printed = spawnSync('bash', [copiedScript, '--print-bin'], { encoding: 'utf8', env });
+  assert.equal(printed.status, 0, `${printed.stdout}${printed.stderr}`);
+  assert.match(printed.stdout, /bin\/maestro-runner/);
 });
 
 test('installer keeps the live pin when atomic publication fails', () => {

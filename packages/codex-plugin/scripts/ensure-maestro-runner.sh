@@ -213,7 +213,7 @@ payload_matches_pin_at() {
     return 1
   fi
   verify_dir="$(mktemp -d "$RUNNER_CACHE_ROOT/.verify-payload.XXXXXX")"
-  if ! deadline_run tar -xzf "$archive" -C "$verify_dir"; then
+  if ! COPYFILE_DISABLE=1 deadline_run tar -xzf "$archive" -C "$verify_dir"; then
     rm -rf "$verify_dir"
     return 1
   fi
@@ -225,7 +225,7 @@ payload_matches_pin_at() {
     rm -rf "$verify_dir"
     return 1
   fi
-  if ! deadline_run diff -qr -x .payload.tar.gz "$expected_dir" "$dir" >/dev/null; then
+  if ! deadline_run diff -qr -x .payload.tar.gz -x '._*' -x PaxHeader -x 'PaxHeaders.*' "$expected_dir" "$dir" >/dev/null; then
     rm -rf "$verify_dir"
     return 1
   fi
@@ -598,7 +598,7 @@ if [ ! -s "$TEMP_DIR/$ARCHIVE" ]; then
 fi
 
 mkdir -p "$TEMP_DIR/extract"
-if ! deadline_run tar -xzf "$TEMP_DIR/$ARCHIVE" -C "$TEMP_DIR/extract"; then
+if ! COPYFILE_DISABLE=1 deadline_run tar -xzf "$TEMP_DIR/$ARCHIVE" -C "$TEMP_DIR/extract"; then
   echo "ERROR: failed to extract maestro-runner archive"
   correction
   exit 1
@@ -617,7 +617,7 @@ fi
 
 STAGED_PIN_DIR="$TEMP_DIR/pin"
 mkdir -p "$STAGED_PIN_DIR"
-if ! deadline_run cp -R "$SRC/." "$STAGED_PIN_DIR/"; then
+if ! COPYFILE_DISABLE=1 deadline_run cp -R "$SRC/." "$STAGED_PIN_DIR/"; then
   echo "ERROR: maestro-runner install deadline expired while staging the payload."
   correction
   exit 1

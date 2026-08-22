@@ -189,6 +189,14 @@ export function pinnedRunnerBinPath(home?: string): string {
 
 type PayloadEntry = { kind: 'file'; sha256: string } | { kind: 'symlink'; target: string };
 
+function isPinCacheMetadataPath(relPath: string): boolean {
+  return relPath
+    .split(/[/\\]/)
+    .some(
+      (part) => part.startsWith('._') || part === 'PaxHeader' || part.startsWith('PaxHeaders.'),
+    );
+}
+
 function tarText(buffer: Buffer, offset: number, length: number): string {
   const end = buffer.indexOf(0, offset);
   return buffer
@@ -232,6 +240,7 @@ function expectedPayloadEntries(archive: Buffer): Map<string, PayloadEntry> | nu
     if (!entry.path.startsWith(rootPrefix) || entry.type === '5') continue;
     const path = entry.path.slice(rootPrefix.length).replace(/^\.\//, '');
     if (!path || path.startsWith('/') || path.split('/').some((part) => part === '..')) return null;
+    if (isPinCacheMetadataPath(path)) continue;
     if (entry.type === '2') {
       expected.set(path, { kind: 'symlink', target: entry.link });
     } else {
@@ -244,39 +253,46 @@ function expectedPayloadEntries(archive: Buffer): Map<string, PayloadEntry> | nu
   return expected;
 }
 
+export function payloadMatchesPinnedArchive(
+  root: string,
+  archive: Buffer,
+  expectedArchiveSha256: string,
+): boolean {
+  if (createHash('sha256').update(archive).digest('hex') !== expectedArchiveSha256) return false;
+  const expected = expectedPayloadEntries(archive);
+  if (!expected) return false;
+  const seen = new Set<string>();
+  const visit = (directory: string): boolean => {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const path = join(directory, entry.name);
+      const rel = relative(root, path).split(sep).join('/');
+      if (rel === '.payload.tar.gz' || isPinCacheMetadataPath(rel)) continue;
+      if (entry.isDirectory()) {
+        if (!visit(path)) return false;
+        continue;
+      }
+      const wanted = expected.get(rel);
+      if (!wanted) return false;
+      seen.add(rel);
+      if (entry.isSymbolicLink()) {
+        if (wanted.kind !== 'symlink' || readlinkSync(path) !== wanted.target) return false;
+        continue;
+      }
+      if (!entry.isFile() || wanted.kind !== 'file') return false;
+      const sha256 = createHash('sha256').update(readFileSync(path)).digest('hex');
+      if (sha256 !== wanted.sha256) return false;
+    }
+    return true;
+  };
+  return visit(root) && seen.size === expected.size;
+}
+
 function installedPayloadMatchesPin(platformKey: string, root = pinCacheRoot()): boolean {
   try {
     const expectedArchiveSha = MAESTRO_RUNNER_PIN.archiveSha256[platformKey];
     if (!expectedArchiveSha) return false;
-    const archivePath = join(root, '.payload.tar.gz');
-    const archive = readFileSync(archivePath);
-    if (createHash('sha256').update(archive).digest('hex') !== expectedArchiveSha) return false;
-    const expected = expectedPayloadEntries(archive);
-    if (!expected) return false;
-    const seen = new Set<string>();
-    const visit = (directory: string): boolean => {
-      for (const entry of readdirSync(directory, { withFileTypes: true })) {
-        const path = join(directory, entry.name);
-        const rel = relative(root, path).split(sep).join('/');
-        if (rel === '.payload.tar.gz') continue;
-        if (entry.isDirectory()) {
-          if (!visit(path)) return false;
-          continue;
-        }
-        const wanted = expected.get(rel);
-        if (!wanted) return false;
-        seen.add(rel);
-        if (entry.isSymbolicLink()) {
-          if (wanted.kind !== 'symlink' || readlinkSync(path) !== wanted.target) return false;
-          continue;
-        }
-        if (!entry.isFile() || wanted.kind !== 'file') return false;
-        const sha256 = createHash('sha256').update(readFileSync(path)).digest('hex');
-        if (sha256 !== wanted.sha256) return false;
-      }
-      return true;
-    };
-    return visit(root) && seen.size === expected.size;
+    const archive = readFileSync(join(root, '.payload.tar.gz'));
+    return payloadMatchesPinnedArchive(root, archive, expectedArchiveSha);
   } catch {
     return false;
   }
