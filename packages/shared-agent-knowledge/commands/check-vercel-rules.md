@@ -57,7 +57,7 @@ fi
 
 ## Reference
 
-- Spec: `docs/superpowers/specs/2026-05-07-vercel-skills-integration-design.md`
+- Spec: https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/superpowers/specs/2026-05-07-vercel-skills-integration-design.md
 - v1.0 checker scope (3 grep rules): `skills/rn-best-practices/SKILL.md` §
   Verification surface
 - Full rule corpus: `skills/rn-best-practices/rules.index.json` (118 rules)

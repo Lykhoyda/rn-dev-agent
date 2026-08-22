@@ -124,6 +124,12 @@ jobs:
       - name: typescript-only gate
         run: bash scripts/check-typescript-only.sh
 
+      - name: Documentation ownership gate
+        run: node scripts/check-document-ownership.ts
+
+      - name: Documentation ownership gate unit test
+        run: node --test scripts/test/check-document-ownership.test.ts
+
   version-sync:
     name: Version sync check
     runs-on: ubuntu-latest
