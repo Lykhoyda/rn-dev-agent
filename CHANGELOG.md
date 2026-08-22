@@ -658,7 +658,7 @@ Ran on dev machine with no physical devices connected. First run misreported the
 - **Structural-only tests** — no `bats` dependency. Live smoke during `/setup` is the functional validation.
 
 ### Refs
-D668 in [Anton Factory architect-docs](https://github.com/Lykhoyda/anton-factory/tree/main/architect-docs/). Phase 111 in the [workspace roadmap](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/ROADMAP.md). metro-mcp reference: troubleshooting "Physical Device Setup".
+[D668](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/DECISIONS.md?plain=1#L3433) in workspace decisions. Phase 111 in the [workspace roadmap](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/ROADMAP.md). metro-mcp reference: troubleshooting "Physical Device Setup".
 
 ## [0.40.0] — 2026-04-22
 
@@ -689,7 +689,7 @@ Multi-LLM (Gemini + Codex). Both clean — zero high-confidence findings. Indepe
 - **Profiler hint is advisory, not blocking** — `cdp_cpu_profile` still runs on Old Arch; some profiles do succeed. Hint only fires on actual failures.
 
 ### Refs
-D667 in [Anton Factory architect-docs](https://github.com/Lykhoyda/anton-factory/tree/main/architect-docs/). Phase 110 in the [workspace roadmap](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/ROADMAP.md). Related: D502 (helper freshness check catches stale v14 caches), M8/D663 (prior `__HELPERS_VERSION__` bump pattern).
+[D667](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/DECISIONS.md?plain=1#L3371) in workspace decisions. Phase 110 in the [workspace roadmap](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/ROADMAP.md). Related: D502 (helper freshness check catches stale v14 caches), M8/D663 (prior `__HELPERS_VERSION__` bump pattern).
 
 ## [0.39.0] — 2026-04-22
 
@@ -720,7 +720,7 @@ Multi-LLM (Gemini + Codex) on original PR. Both clean. Gemini verified the B132 
 - **Stateless — fires every call past threshold** on genuinely idle apps. Accepted per design; LLM context usually absorbs repeated hints.
 
 ### Refs
-D665 in [Anton Factory architect-docs](https://github.com/Lykhoyda/anton-factory/tree/main/architect-docs/). Phase 108 in the [workspace roadmap](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/ROADMAP.md). metro-mcp reference: troubleshooting "Empty Results or Stale Data" (top-3 user issue).
+[D665](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/DECISIONS.md?plain=1#L3260) in workspace decisions. Phase 108 in the [workspace roadmap](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/ROADMAP.md). metro-mcp reference: troubleshooting "Empty Results or Stale Data" (top-3 user issue).
 
 ## [0.38.0] — 2026-04-22
 
@@ -758,7 +758,7 @@ Multi-LLM (Gemini + Codex). Two findings applied. Codex (confidence 90): the `fa
 Story R3 ("fast-runner restart") from Phase 85 was marked DONE during the Phase 92 stability sweep with the note that the implementation shape differed from the original spec (PID probe instead of `/ping`; restart integrated into session open). M7 ships the full spec: tri-state `/health` probe, explicit stale detection, graceful reap. The functional gap R3 left is closed.
 
 ### Refs
-D666 in [Anton Factory architect-docs](https://github.com/Lykhoyda/anton-factory/tree/main/architect-docs/). Phase 109 in the [workspace roadmap](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/ROADMAP.md). metro-mcp reference: `src/plugins/devtools.ts::tryFocusExisting`.
+[D666](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/DECISIONS.md?plain=1#L3303) in workspace decisions. Phase 109 in the [workspace roadmap](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/ROADMAP.md). metro-mcp reference: `src/plugins/devtools.ts::tryFocusExisting`.
 
 ## [0.36.1] — 2026-04-21
 
@@ -779,7 +779,7 @@ Running total: 485 → **488 passing**, zero failures.
 Multi-LLM (Gemini + Codex). Both clean. Gemini validated the fix matches what they flagged during M8 review. Codex noted the `allRoots` accumulator divergence from M8's pattern is intentionally correct for worklet-aware fiber walks.
 
 ### Refs
-D664 in [Anton Factory architect-docs](https://github.com/Lykhoyda/anton-factory/tree/main/architect-docs/). Phase 107 in the [workspace roadmap](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/ROADMAP.md). Parent: D663 / M8 / Phase 106.
+[D664](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/DECISIONS.md?plain=1#L3211) in workspace decisions. Phase 107 in the [workspace roadmap](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/ROADMAP.md). Parent: D663 / M8 / Phase 106.
 
 ## [0.36.0] — 2026-04-21
 
@@ -803,7 +803,7 @@ M8 / Phase 106 — renderer 1..5 probe for fiber root resolution. Closes the Tie
 Multi-LLM (Gemini + Codex). Codex clean. Gemini flagged `setup.ts`'s sibling readiness gate at confidence 85 — originally scoped out of M8, folded in on user direction to preserve end-to-end benefit. Would have shipped as half-a-fix otherwise.
 
 ### Refs
-D663 in [Anton Factory architect-docs](https://github.com/Lykhoyda/anton-factory/tree/main/architect-docs/). Phase 106 in the [workspace roadmap](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/ROADMAP.md). metro-mcp reference pattern: `src/utils/fiber.ts` FIBER_ROOT_JS.
+[D663](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/DECISIONS.md?plain=1#L3161) in workspace decisions. Phase 106 in the [workspace roadmap](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/ROADMAP.md). metro-mcp reference pattern: `src/utils/fiber.ts` FIBER_ROOT_JS.
 
 ## [0.35.0] — 2026-04-21
 
@@ -1018,7 +1018,7 @@ Cross-platform benchmark (Task Power User flow + Priority Filter Row feature):
 158 → **249** (+91 this release cycle).
 
 ### Decisions logged
-D630 through D642 in [Anton Factory architect-docs](https://github.com/Lykhoyda/anton-factory/tree/main/architect-docs/).
+[D630](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/DECISIONS.md?plain=1#L2166), [D631](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/DECISIONS.md?plain=1#L2169), [D632](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/DECISIONS.md?plain=1#L2172), [D633](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/DECISIONS.md?plain=1#L2175), [D634](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/DECISIONS.md?plain=1#L2178), [D635](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/DECISIONS.md?plain=1#L2181), [D636](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/DECISIONS.md?plain=1#L2194), [D637](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/DECISIONS.md?plain=1#L2201), [D638](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/DECISIONS.md?plain=1#L2204), [D639](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/DECISIONS.md?plain=1#L2207), [D640](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/DECISIONS.md?plain=1#L2210), [D641](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/DECISIONS.md?plain=1#L2215), and [D642](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/DECISIONS.md?plain=1#L2218) in workspace decisions.
 
 ## [0.22.0] — 2026-04-16
 

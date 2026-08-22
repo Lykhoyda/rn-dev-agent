@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -51,4 +51,31 @@ test('rejects documents in the repository top-level docs tree', () => {
       /https:\/\/github\.com\/Lykhoyda\/rn-dev-agent-workspace\/tree\/main\/docs\//,
     );
   });
+});
+
+test('rejects every existing top-level docs entry type', () => {
+  const entryCases: Array<[string, (repository: string) => void]> = [
+    ['empty directory', (repository) => mkdirSync(join(repository, 'docs'))],
+    ['file', (repository) => writeFileSync(join(repository, 'docs'), '# Docs\n')],
+    [
+      'live symlink',
+      (repository) => {
+        mkdirSync(join(repository, 'linked-docs'));
+        symlinkSync('linked-docs', join(repository, 'docs'));
+      },
+    ],
+    ['dangling symlink', (repository) => symlinkSync('missing-docs', join(repository, 'docs'))],
+  ];
+
+  for (const [entryType, createEntry] of entryCases) {
+    withRepository((repository) => {
+      createEntry(repository);
+
+      const result = check(repository);
+
+      assert.equal(result.status, 1, `${entryType}: ${result.stderr}`);
+      assert.match(result.stderr, /Top-level docs\/ is not an owned documentation surface/);
+      assert.match(result.stderr, /\sdocs\s/);
+    });
+  }
 });

@@ -1,4 +1,4 @@
-import { readdirSync, type Dirent } from 'node:fs';
+import { lstatSync, readdirSync, type Dirent } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 
 const repositoryRoot = process.env.REPO_ROOT
@@ -7,13 +7,7 @@ const repositoryRoot = process.env.REPO_ROOT
 const rootDocs = join(repositoryRoot, 'docs');
 
 function collectEntries(directory: string): string[] {
-  let entries: Dirent[];
-  try {
-    entries = readdirSync(directory, { withFileTypes: true });
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
-    throw error;
-  }
+  const entries: Dirent[] = readdirSync(directory, { withFileTypes: true });
 
   return entries.flatMap((entry) => {
     const path = join(directory, entry.name);
@@ -21,7 +15,20 @@ function collectEntries(directory: string): string[] {
   });
 }
 
-const misplacedDocuments = collectEntries(rootDocs).sort();
+function collectRootDocsEntry(): string[] {
+  try {
+    const rootStats = lstatSync(rootDocs);
+    if (!rootStats.isDirectory()) return ['docs'];
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    throw error;
+  }
+
+  const entries = collectEntries(rootDocs);
+  return entries.length > 0 ? entries : ['docs'];
+}
+
+const misplacedDocuments = collectRootDocsEntry().sort();
 
 if (misplacedDocuments.length > 0) {
   console.error('Top-level docs/ is not an owned documentation surface:');
