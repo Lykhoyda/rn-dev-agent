@@ -31939,7 +31939,7 @@ function cleanupAllowed(tool, args) {
   if (tool === "proof_capture" && (args.action === "discard" || args.action === "status")) {
     return true;
   }
-  return tool === "rn_session" && (args.action === "release" || args.action === "stop_metro" || args.action === "cancel_handoff" || args.action === "status");
+  return tool === "rn_session" && (args.action === "release" || args.action === "stop_metro" || args.action === "cancel_handoff" || args.action === "recover_arbiter" && args.confirmed === true || args.action === "status");
 }
 function tokenMatches(expected, supplied) {
   if (!expected || expected.length < 16 || !supplied || supplied.length < 16)

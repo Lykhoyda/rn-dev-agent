@@ -84,6 +84,7 @@ function cleanupAllowed(tool: string, args: Record<string, unknown>): boolean {
     (args.action === 'release' ||
       args.action === 'stop_metro' ||
       args.action === 'cancel_handoff' ||
+      (args.action === 'recover_arbiter' && args.confirmed === true) ||
       args.action === 'status')
   );
 }

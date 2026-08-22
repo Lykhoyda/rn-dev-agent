@@ -44,6 +44,7 @@ function cleanupAllowed(tool, args) {
         (args.action === 'release' ||
             args.action === 'stop_metro' ||
             args.action === 'cancel_handoff' ||
+            (args.action === 'recover_arbiter' && args.confirmed === true) ||
             args.action === 'status'));
 }
 function tokenMatches(expected, supplied) {

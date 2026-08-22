@@ -3089,6 +3089,31 @@ test('blocked transition overrides are rejected while cleanup exits remain avail
   }
 });
 
+test('confirmed arbiter recovery remains reachable after a busy login prologue', async () => {
+  const { runtime, status } = fixture();
+  status.bindings.loginPrologue = loginOutcome('LOGIN_PROLOGUE_BLOCKED', {
+    code: 'BUSY_FLOW_ACTIVE',
+    detail: 'a stale flow lease is active',
+  });
+  const gate = createAuthorityGate(runtime, {
+    probe: async ({ axis }) => ({ axis, identity: `${axis}-identity` }),
+  });
+  let recoveryDispatched = false;
+  const recover = gate.wrap('rn_session', async () => {
+    recoveryDispatched = true;
+    return okResult({ recovered: true });
+  });
+
+  const refused = await recover({ action: 'recover_arbiter' });
+  assert.equal(JSON.parse(refused.content[0].text).code, 'LOGIN_PROLOGUE_BLOCKED');
+  assert.equal(recoveryDispatched, false);
+
+  const recovered = await recover({ action: 'recover_arbiter', confirmed: true });
+  assert.notEqual(JSON.parse(recovered.content[0].text).code, 'LOGIN_PROLOGUE_BLOCKED');
+  assert.equal(recoveryDispatched, true);
+  assert.equal(status.bindings.loginPrologue.state, 'LOGIN_PROLOGUE_BLOCKED');
+});
+
 test('rerunning the exact login prologue discharges the terminal gate after a passing result', async () => {
   const { runtime, status } = fixture();
   status.bindings.loginPrologue = loginOutcome('LOGIN_PROLOGUE_BLOCKED', {
