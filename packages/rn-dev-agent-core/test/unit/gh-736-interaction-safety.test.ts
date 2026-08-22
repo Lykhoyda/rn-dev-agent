@@ -9,6 +9,7 @@ import {
   buildRunAndroidArgs,
   establishInteractionBaseline,
   IME_KEY_FLAG,
+  markSnapshotDirty,
   outsideAppWindowFailResult,
   rebuildHealedAndroidArgs,
   settleAfterMutationWithOutcome,
@@ -87,6 +88,28 @@ const systemOverview = {
   packageName: 'com.android.systemui',
   rect: { x: 340, y: 780, width: 80, height: 80 },
 };
+const appTasks = {
+  ref: '@e6',
+  type: 'android.widget.TextView',
+  label: 'Tasks',
+  identifier: 'tab-tasks',
+  packageName: appId,
+  rect: { x: 180, y: 700, width: 180, height: 80 },
+};
+const expoDeveloperMenuText = {
+  ref: '@e7',
+  type: 'android.widget.TextView',
+  label: 'This is the developer menu. It gives you access to useful tools.',
+  packageName: appId,
+  rect: { x: 40, y: 430, width: 360, height: 100 },
+};
+const expoDeveloperMenuContinue = {
+  ref: '@e8',
+  type: 'android.widget.Button',
+  label: 'Continue',
+  packageName: appId,
+  rect: { x: 40, y: 650, width: 360, height: 70 },
+};
 
 afterEach(() => {
   clearRefMap();
@@ -160,6 +183,57 @@ test('device_find excludes Android Home, Back, and Overview unless explicitly op
   }
 
   assert.equal(snapshots, 1, 'all matches must be scoped from one authoritative snapshot');
+});
+
+test('an app-owned Expo Developer Menu exposes only its visible supported path', async () => {
+  markSnapshotDirty('android');
+  _setActiveSessionForTest({
+    name: 'gh-736-expo-menu',
+    platform: 'android',
+    appId,
+    openedAt: '2026-08-23T00:00:00.000Z',
+  });
+  let foreground: 'menu' | 'app' = 'menu';
+  let presses = 0;
+  _setRunAgentDeviceForTest(async (cliArgs: string[]) => {
+    if (cliArgs[0] === 'snapshot') {
+      return okResult({
+        nodes:
+          foreground === 'menu'
+            ? [expoDeveloperMenuText, expoDeveloperMenuContinue, systemHome]
+            : [appHome, appTasks, systemHome],
+      });
+    }
+    assert.deepEqual(cliArgs, ['press', expoDeveloperMenuContinue.ref]);
+    presses++;
+    foreground = 'app';
+    return okResult({ tapped: true, method: 'accessibility-action' });
+  });
+  const find = createDeviceFindHandler();
+
+  const covered = JSON.parse(
+    (await find({ text: 'Tasks', exact: true, action: 'click' })).content[0].text,
+  ) as { ok: boolean; error: string; meta: { code: string; query: string } };
+  assert.equal(covered.ok, false);
+  assert.equal(covered.meta.code, 'NOT_FOUND');
+  assert.equal(covered.meta.query, 'Tasks');
+  assert.equal(presses, 0, 'a covered app control must not dispatch');
+
+  const dismissed = JSON.parse(
+    (await find({ text: 'Continue', exact: true, action: 'click' })).content[0].text,
+  ) as { ok: boolean; data: { tapped: boolean } };
+  assert.equal(dismissed.ok, true, JSON.stringify(dismissed));
+  assert.equal(dismissed.data.tapped, true);
+  assert.equal(presses, 1);
+
+  markSnapshotDirty('android');
+  const visible = JSON.parse((await find({ text: 'Tasks', exact: true })).content[0].text) as {
+    ok: boolean;
+    data: { ref: string; testID: string };
+  };
+  assert.equal(visible.ok, true);
+  assert.equal(visible.data.ref, appTasks.ref);
+  assert.equal(visible.data.testID, appTasks.identifier);
 });
 
 test('explicit system-UI find scope is preserved on the returned ref', async () => {
