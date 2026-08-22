@@ -1,5 +1,5 @@
 import { listActions } from '../domain/action-inventory.js';
-import { loadAction } from '../domain/action-store.js';
+import { ActionMetadataIdentityError, loadAction } from '../domain/action-store.js';
 import { ACTION_LOGIN_HELPER, LOGIN_PROLOGUE_ALIAS, LOGIN_PROLOGUE_BLOCKED, } from '../domain/login-prologue.js';
 import { failResult, okResult } from '../utils.js';
 import { sealStrictRunAction } from './run-action.js';
@@ -10,6 +10,10 @@ function parseEnvelope(result) {
     catch {
         return { ok: false, code: 'BAD_RESPONSE', error: 'Action replay returned invalid JSON.' };
     }
+}
+function isLoginActionIdentityMismatch(error) {
+    return (error instanceof ActionMetadataIdentityError &&
+        (error.fileId === LOGIN_PROLOGUE_ALIAS || error.metadataId === LOGIN_PROLOGUE_ALIAS));
 }
 export function createLoginPrologueHandler(deps) {
     const now = deps.now ?? (() => new Date());
@@ -58,8 +62,17 @@ export function createLoginPrologueHandler(deps) {
             });
         };
         try {
-            inventory = await measure('inventory', () => listActions(projectRoot));
-            const action = await measure('resolve', async () => loadAction(projectRoot, LOGIN_PROLOGUE_ALIAS));
+            let action;
+            try {
+                inventory = await measure('inventory', () => listActions(projectRoot));
+                action = await measure('resolve', async () => loadAction(projectRoot, LOGIN_PROLOGUE_ALIAS));
+            }
+            catch (error) {
+                if (isLoginActionIdentityMismatch(error)) {
+                    return blocked('LOGIN_ACTION_ID_MISMATCH', `The ${LOGIN_PROLOGUE_ALIAS} action file declares a different action id.`);
+                }
+                throw error;
+            }
             if (!action) {
                 return blocked('LOGIN_ACTION_MISSING', `No exact ${LOGIN_PROLOGUE_ALIAS} learned action was found. Auth-tag or intent inference is not permitted.`);
             }

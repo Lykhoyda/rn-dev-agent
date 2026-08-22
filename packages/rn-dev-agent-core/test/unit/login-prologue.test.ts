@@ -381,14 +381,35 @@ function blockedBinding() {
 
 test('blocked helper still allows locked e2e proof without a supervisor override', () => {
   const binding = blockedBinding();
-  for (const tool of ['cdp_lock_e2e_test', 'cdp_run_e2e_suite']) {
+  for (const [tool, args] of [
+    ['cdp_lock_e2e_test', { actionId: 'user-login' }],
+    ['cdp_run_e2e_suite', { pattern: '^user-login$' }],
+  ] as const) {
     const decision = evaluateLoginPrologueGuard({
       binding,
       tool,
-      args: { actionId: 'user-login' },
+      args,
       mutation: true,
     });
     assert.deepEqual(decision, { allowed: true, override: false }, tool);
+  }
+});
+
+test('blocked helper refuses locked e2e requests outside the exact login candidate', () => {
+  const binding = blockedBinding();
+  for (const [tool, args] of [
+    ['cdp_lock_e2e_test', { actionId: 'other-login' }],
+    ['cdp_run_e2e_suite', {}],
+    ['cdp_run_e2e_suite', { pattern: 'user-login' }],
+    ['cdp_run_e2e_suite', { pattern: '^user-login$|^other-login$' }],
+  ] as const) {
+    const decision = evaluateLoginPrologueGuard({
+      binding,
+      tool,
+      args,
+      mutation: true,
+    });
+    assert.deepEqual(decision, { allowed: false, suppliedOverride: false }, tool);
   }
 });
 

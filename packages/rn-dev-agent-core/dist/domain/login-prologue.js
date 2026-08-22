@@ -18,9 +18,13 @@ export function readLoginPrologueOutcome(value) {
     }
     return candidate;
 }
-function lockedE2eProofAllowed(tool) {
-    // Locked e2e is the formal PR-proof path and must coexist with the helper gate.
-    return LOCKED_E2E_LOGIN_TOOLS.includes(tool);
+function lockedE2eProofAllowed(tool, args) {
+    if (tool === 'cdp_lock_e2e_test')
+        return args.actionId === LOGIN_PROLOGUE_ALIAS;
+    if (tool === 'cdp_run_e2e_suite') {
+        return args.pattern === `^${LOGIN_PROLOGUE_ALIAS}$`;
+    }
+    return false;
 }
 function cleanupAllowed(tool, args) {
     if (tool === 'cdp_login_prologue')
@@ -54,7 +58,7 @@ export function inspectLoginPrologueGuard(input) {
     if (outcome?.state !== LOGIN_PROLOGUE_BLOCKED ||
         !input.mutation ||
         cleanupAllowed(input.tool, input.args) ||
-        lockedE2eProofAllowed(input.tool)) {
+        lockedE2eProofAllowed(input.tool, input.args)) {
         return { blocked: false };
     }
     return {

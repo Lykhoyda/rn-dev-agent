@@ -10902,10 +10902,10 @@ function assertWritableActionFile(filePath) {
 function assertActionMetadataIdentity(filePath, metadata) {
   const fileId = basename4(filePath).replace(/\.ya?ml$/i, "");
   if (metadata.id !== fileId) {
-    throw new Error(`Action metadata id ${metadata.id} does not match filename identity ${fileId}.`);
+    throw new ActionMetadataIdentityError(metadata.id, fileId);
   }
 }
-var migrationPathIdentities;
+var migrationPathIdentities, ActionMetadataIdentityError;
 var init_action_store = __esm({
   "packages/rn-dev-agent-core/dist/domain/action-store.js"() {
     "use strict";
@@ -10918,6 +10918,16 @@ var init_action_store = __esm({
     init_action_state_store();
     init_worktree_inheritance();
     migrationPathIdentities = /* @__PURE__ */ new WeakMap();
+    ActionMetadataIdentityError = class extends Error {
+      metadataId;
+      fileId;
+      constructor(metadataId, fileId) {
+        super(`Action metadata id ${metadataId} does not match filename identity ${fileId}.`);
+        this.metadataId = metadataId;
+        this.fileId = fileId;
+        this.name = "ActionMetadataIdentityError";
+      }
+    };
   }
 });
 

@@ -2688,7 +2688,11 @@ test('locked e2e proof coexists with a blocked login helper and does not rewrite
         locked: tool === 'cdp_lock_e2e_test',
         suite: tool === 'cdp_run_e2e_suite',
       });
-    })(tool === 'cdp_lock_e2e_test' ? { actionId: 'user-login' } : {});
+    })(
+      tool === 'cdp_lock_e2e_test'
+        ? { actionId: 'user-login' }
+        : { pattern: '^user-login$' },
+    );
     const envelope = JSON.parse(result.content[0].text);
     assert.equal(envelope.ok, true, `${tool}: ${envelope.code ?? envelope.error ?? 'ok'}`);
     assert.equal(dispatched, true, tool);
@@ -2707,6 +2711,37 @@ test('locked e2e proof coexists with a blocked login helper and does not rewrite
   })({ text: 'secret' });
   assert.equal(JSON.parse(fill.content[0].text).code, 'LOGIN_PROLOGUE_BLOCKED');
   assert.equal(fillDispatched, false);
+});
+
+test('blocked login helper refuses non-exact locked e2e selections', async () => {
+  const blocked = loginOutcome('LOGIN_PROLOGUE_BLOCKED', {
+    code: 'ENGINE_PIN_MISMATCH',
+    detail: 'runner drift',
+  });
+
+  for (const [tool, args] of [
+    ['cdp_lock_e2e_test', { actionId: 'other-login' }],
+    ['cdp_run_e2e_suite', {}],
+    ['cdp_run_e2e_suite', { pattern: 'user-login' }],
+    ['cdp_run_e2e_suite', { pattern: '^other-login$' }],
+  ] as const) {
+    const { runtime, status } = fixture();
+    status.bindings.loginPrologue = structuredClone(blocked);
+    let dispatched = false;
+    const gate = createAuthorityGate(runtime, {
+      probe: async ({ axis }) => ({ axis, identity: `${axis}-identity` }),
+    });
+
+    const result = await gate.wrap(tool, async () => {
+      dispatched = true;
+      return okResult({});
+    })(args);
+    const envelope = JSON.parse(result.content[0].text);
+
+    assert.equal(envelope.code, 'LOGIN_PROLOGUE_BLOCKED', tool);
+    assert.equal(dispatched, false, tool);
+    assert.deepEqual(status.bindings.loginPrologue, blocked, tool);
+  }
 });
 
 test('a failed login prologue persists before fallible postflight checks', async () => {

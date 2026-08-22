@@ -964,9 +964,17 @@ export function assertActionMetadataIdentity(
 ): void {
   const fileId = basename(filePath).replace(/\.ya?ml$/i, '');
   if (metadata.id !== fileId) {
-    throw new Error(
-      `Action metadata id ${metadata.id} does not match filename identity ${fileId}.`,
-    );
+    throw new ActionMetadataIdentityError(metadata.id, fileId);
+  }
+}
+
+export class ActionMetadataIdentityError extends Error {
+  constructor(
+    readonly metadataId: string,
+    readonly fileId: string,
+  ) {
+    super(`Action metadata id ${metadataId} does not match filename identity ${fileId}.`);
+    this.name = 'ActionMetadataIdentityError';
   }
 }
 

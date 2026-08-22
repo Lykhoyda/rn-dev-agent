@@ -30239,7 +30239,7 @@ function assertWritableActionFile(filePath) {
 function assertActionMetadataIdentity(filePath, metadata) {
   const fileId = basename7(filePath).replace(/\.ya?ml$/i, "");
   if (metadata.id !== fileId) {
-    throw new Error(`Action metadata id ${metadata.id} does not match filename identity ${fileId}.`);
+    throw new ActionMetadataIdentityError(metadata.id, fileId);
   }
 }
 function withMetadata(action, metadata) {
@@ -30248,7 +30248,7 @@ function withMetadata(action, metadata) {
 function withBody(action, body) {
   return { ...action, body };
 }
-var SaveActionPreconditionError;
+var SaveActionPreconditionError, ActionMetadataIdentityError;
 var init_action_store = __esm({
   "packages/rn-dev-agent-core/dist/domain/action-store.js"() {
     "use strict";
@@ -30264,6 +30264,16 @@ var init_action_store = __esm({
       constructor(filePath) {
         super(`saveAction precondition violated: yaml at ${filePath} has been edited externally since the in-memory action was loaded. The caller must invoke actionWasEditedExternally() first and abort on true (or use saveActionWithCAS for atomic detection). GH #113 contract enforcement.`);
         this.name = "SaveActionPreconditionError";
+      }
+    };
+    ActionMetadataIdentityError = class extends Error {
+      metadataId;
+      fileId;
+      constructor(metadataId, fileId) {
+        super(`Action metadata id ${metadataId} does not match filename identity ${fileId}.`);
+        this.metadataId = metadataId;
+        this.fileId = fileId;
+        this.name = "ActionMetadataIdentityError";
       }
     };
   }
@@ -32053,8 +32063,13 @@ function readLoginPrologueOutcome(value) {
   }
   return candidate;
 }
-function lockedE2eProofAllowed(tool) {
-  return LOCKED_E2E_LOGIN_TOOLS.includes(tool);
+function lockedE2eProofAllowed(tool, args) {
+  if (tool === "cdp_lock_e2e_test")
+    return args.actionId === LOGIN_PROLOGUE_ALIAS;
+  if (tool === "cdp_run_e2e_suite") {
+    return args.pattern === `^${LOGIN_PROLOGUE_ALIAS}$`;
+  }
+  return false;
 }
 function cleanupAllowed(tool, args) {
   if (tool === "cdp_login_prologue")
@@ -32081,7 +32096,7 @@ function tokenMatches(expected, supplied) {
 }
 function inspectLoginPrologueGuard(input) {
   const outcome = readLoginPrologueOutcome(input.binding);
-  if (outcome?.state !== LOGIN_PROLOGUE_BLOCKED || !input.mutation || cleanupAllowed(input.tool, input.args) || lockedE2eProofAllowed(input.tool)) {
+  if (outcome?.state !== LOGIN_PROLOGUE_BLOCKED || !input.mutation || cleanupAllowed(input.tool, input.args) || lockedE2eProofAllowed(input.tool, input.args)) {
     return { blocked: false };
   }
   return {
@@ -32097,14 +32112,13 @@ function authorizeLoginSupervisorOverride(input) {
 function appendLoginOverrideAudit(outcome, audit) {
   return { ...outcome, overrides: [...outcome.overrides ?? [], audit].slice(-20) };
 }
-var LOGIN_PROLOGUE_ALIAS, LOGIN_PROLOGUE_BLOCKED, ACTION_LOGIN_HELPER, LOCKED_E2E_LOGIN_TOOLS;
+var LOGIN_PROLOGUE_ALIAS, LOGIN_PROLOGUE_BLOCKED, ACTION_LOGIN_HELPER;
 var init_login_prologue = __esm({
   "packages/rn-dev-agent-core/dist/domain/login-prologue.js"() {
     "use strict";
     LOGIN_PROLOGUE_ALIAS = "user-login";
     LOGIN_PROLOGUE_BLOCKED = "LOGIN_PROLOGUE_BLOCKED";
     ACTION_LOGIN_HELPER = "ACTION_LOGIN_HELPER";
-    LOCKED_E2E_LOGIN_TOOLS = ["cdp_lock_e2e_test", "cdp_run_e2e_suite"];
   }
 });
 
@@ -80994,6 +81008,9 @@ function parseEnvelope2(result) {
     return { ok: false, code: "BAD_RESPONSE", error: "Action replay returned invalid JSON." };
   }
 }
+function isLoginActionIdentityMismatch(error2) {
+  return error2 instanceof ActionMetadataIdentityError && (error2.fileId === LOGIN_PROLOGUE_ALIAS || error2.metadataId === LOGIN_PROLOGUE_ALIAS);
+}
 function createLoginPrologueHandler(deps) {
   const now = deps.now ?? (() => /* @__PURE__ */ new Date());
   return async (args) => {
@@ -81040,8 +81057,16 @@ function createLoginPrologueHandler(deps) {
       });
     };
     try {
-      inventory = await measure("inventory", () => listActions(projectRoot));
-      const action = await measure("resolve", async () => loadAction(projectRoot, LOGIN_PROLOGUE_ALIAS));
+      let action;
+      try {
+        inventory = await measure("inventory", () => listActions(projectRoot));
+        action = await measure("resolve", async () => loadAction(projectRoot, LOGIN_PROLOGUE_ALIAS));
+      } catch (error2) {
+        if (isLoginActionIdentityMismatch(error2)) {
+          return blocked("LOGIN_ACTION_ID_MISMATCH", `The ${LOGIN_PROLOGUE_ALIAS} action file declares a different action id.`);
+        }
+        throw error2;
+      }
       if (!action) {
         return blocked("LOGIN_ACTION_MISSING", `No exact ${LOGIN_PROLOGUE_ALIAS} learned action was found. Auth-tag or intent inference is not permitted.`);
       }
