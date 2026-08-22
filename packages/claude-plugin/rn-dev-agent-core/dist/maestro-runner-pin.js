@@ -684,7 +684,7 @@ function payloadMatchesPinnedArchive(root2, archive, expectedArchiveSha256) {
 }
 function installedPayloadMatchesPin(platformKey, root2 = pinCacheRoot()) {
   try {
-    const expectedArchiveSha = MAESTRO_RUNNER_PIN.archiveSha256[platformKey];
+    const expectedArchiveSha = pinnedArchiveSha256(platformKey);
     if (!expectedArchiveSha)
       return false;
     const archive = readFileSync2(join2(root2, ".payload.tar.gz"));
@@ -916,7 +916,7 @@ async function withImmediatePinnedRunner(runnerPath, resolveStatus, execute) {
   const refusal = await immediateRunnerPinRefusal(runnerPath, resolveStatus);
   if (refusal)
     throw new Error(refusal);
-  const expectedSha256 = MAESTRO_RUNNER_PIN.sha256[nodePlatformKey()];
+  const expectedSha256 = pinnedSha256(nodePlatformKey());
   if (!expectedSha256) {
     throw new Error("RUNNER_PIN_CHANGED: runner checksum is unavailable for this platform.");
   }
@@ -939,8 +939,9 @@ async function withImmediatePinnedRunner(runnerPath, resolveStatus, execute) {
       const entryPath = join2(entry.parentPath, entry.name);
       if (entry.isDirectory())
         chmodSync2(entryPath, 320);
-      else if (entry.isFile())
-        chmodSync2(entryPath, entryPath === snapshotRunner ? 320 : 256);
+      else if (entry.isFile()) {
+        chmodSync2(entryPath, entryPath === snapshotRunner || entryPath === snapshotHelper ? 320 : 256);
+      }
     }
     chmodSync2(snapshotRoot, 320);
     const openedRunner = lstatSync2(snapshotRunner);
@@ -981,8 +982,15 @@ function doctorPinnedRunner(status, platformKey = nodePlatformKey()) {
     correction: ok ? null : pinCorrection(status, platformKey)
   };
 }
+function pinnedSha256(platformKey) {
+  return testAttestation?.sha256 ?? MAESTRO_RUNNER_PIN.sha256[platformKey];
+}
+function pinnedArchiveSha256(platformKey) {
+  return testAttestation?.archiveSha256 ?? MAESTRO_RUNNER_PIN.archiveSha256[platformKey];
+}
 function _resetEngineStatusForTest() {
   testStatus = void 0;
+  testAttestation = void 0;
 }
 function defaultHashFile(bin) {
   return createHash2("sha256").update(readFileSync2(bin)).digest("hex");
@@ -1065,7 +1073,7 @@ function getEngineStatus(resolvers) {
     return Promise.resolve(testStatus);
   return detect(resolvers ?? {}).catch(() => buildReplayEngineStatus("unknown-version", null, false));
 }
-var MAESTRO_RUNNER_PIN, TRUSTED_DRIFT_SHA256, ACTION_ENGINE_PIN, ACTION_ENGINE_PIN_RE, HOST_PLUGIN_ROOT, PINNED_RUNNER_INSTALL_HINT, PINNED_RUNNER_DIAGNOSE_HINT, MAESTRO_RUNNER_MIN_ANDROID_API, PRE_O_REMEDY, OLDER_SDK_TOKEN, INSTALL_REJECT_CONTEXT, REGEX_METACHARACTERS, TEXT_SELECTOR_KEYS, RELATIVE_SELECTOR_KEYS, testStatus;
+var MAESTRO_RUNNER_PIN, TRUSTED_DRIFT_SHA256, ACTION_ENGINE_PIN, ACTION_ENGINE_PIN_RE, HOST_PLUGIN_ROOT, PINNED_RUNNER_INSTALL_HINT, PINNED_RUNNER_DIAGNOSE_HINT, MAESTRO_RUNNER_MIN_ANDROID_API, PRE_O_REMEDY, OLDER_SDK_TOKEN, INSTALL_REJECT_CONTEXT, REGEX_METACHARACTERS, TEXT_SELECTOR_KEYS, RELATIVE_SELECTOR_KEYS, testStatus, testAttestation;
 var init_engine_pin = __esm({
   "packages/rn-dev-agent-core/dist/domain/engine-pin.js"() {
     "use strict";

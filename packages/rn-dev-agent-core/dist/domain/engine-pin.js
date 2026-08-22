@@ -211,7 +211,7 @@ export function payloadMatchesPinnedArchive(root, archive, expectedArchiveSha256
 }
 function installedPayloadMatchesPin(platformKey, root = pinCacheRoot()) {
     try {
-        const expectedArchiveSha = MAESTRO_RUNNER_PIN.archiveSha256[platformKey];
+        const expectedArchiveSha = pinnedArchiveSha256(platformKey);
         if (!expectedArchiveSha)
             return false;
         const archive = readFileSync(join(root, '.payload.tar.gz'));
@@ -543,7 +543,7 @@ export async function withImmediatePinnedRunner(runnerPath, resolveStatus, execu
     const refusal = await immediateRunnerPinRefusal(runnerPath, resolveStatus);
     if (refusal)
         throw new Error(refusal);
-    const expectedSha256 = MAESTRO_RUNNER_PIN.sha256[nodePlatformKey()];
+    const expectedSha256 = pinnedSha256(nodePlatformKey());
     if (!expectedSha256) {
         throw new Error('RUNNER_PIN_CHANGED: runner checksum is unavailable for this platform.');
     }
@@ -569,8 +569,9 @@ export async function withImmediatePinnedRunner(runnerPath, resolveStatus, execu
             const entryPath = join(entry.parentPath, entry.name);
             if (entry.isDirectory())
                 chmodSync(entryPath, 0o500);
-            else if (entry.isFile())
-                chmodSync(entryPath, entryPath === snapshotRunner ? 0o500 : 0o400);
+            else if (entry.isFile()) {
+                chmodSync(entryPath, entryPath === snapshotRunner || entryPath === snapshotHelper ? 0o500 : 0o400);
+            }
         }
         chmodSync(snapshotRoot, 0o500);
         const openedRunner = lstatSync(snapshotRunner);
@@ -613,11 +614,22 @@ export function doctorPinnedRunner(status, platformKey = nodePlatformKey()) {
     };
 }
 let testStatus;
+let testAttestation;
+function pinnedSha256(platformKey) {
+    return testAttestation?.sha256 ?? MAESTRO_RUNNER_PIN.sha256[platformKey];
+}
+function pinnedArchiveSha256(platformKey) {
+    return testAttestation?.archiveSha256 ?? MAESTRO_RUNNER_PIN.archiveSha256[platformKey];
+}
 export function _resetEngineStatusForTest() {
     testStatus = undefined;
+    testAttestation = undefined;
 }
 export function _setEngineStatusForTest(s) {
     testStatus = s;
+}
+export function _setPinnedRunnerAttestationForTest(attestation) {
+    testAttestation = attestation;
 }
 function defaultHashFile(bin) {
     return createHash('sha256').update(readFileSync(bin)).digest('hex');
