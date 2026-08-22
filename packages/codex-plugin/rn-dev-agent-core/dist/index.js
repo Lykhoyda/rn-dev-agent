@@ -32039,6 +32039,9 @@ function loadLockedTest(projectRoot, id) {
   const locked = parseLockedTest(readFileSync19(filePath, "utf8"), filePath);
   return locked?.id === id ? locked : null;
 }
+function lockedTestFileExists(projectRoot, id) {
+  return existsSync20(e2ePathFor(projectRoot, id));
+}
 function discoverLockedTests(projectRoot) {
   const dir = e2eDirFor(projectRoot);
   if (!existsSync20(dir))
@@ -32056,11 +32059,13 @@ function resolveLockedTestIds(projectRoot, pattern, discover2 = discoverLockedTe
     return ids;
   }
 }
-function resolveLockedTestIdentityIds(projectRoot, pattern, discover2 = discoverLockedTests, load = loadLockedTest) {
-  return resolveLockedTestIds(projectRoot, pattern, discover2).filter((id) => {
+function resolveLockedTestSelection(projectRoot, pattern, discover2 = discoverLockedTests, load = loadLockedTest) {
+  const ids = resolveLockedTestIds(projectRoot, pattern, discover2);
+  const identitiesValid = ids.every((id) => {
     const locked = load(projectRoot, id);
     return locked?.id === id && locked.sourceActionId === id;
   });
+  return { ids, identitiesValid };
 }
 function setResolvedLockedTestIds(args, ids) {
   Object.defineProperty(args, resolvedLockedTestIds, {
@@ -33382,17 +33387,17 @@ function createAuthorityGate(runtime, dependencies) {
           bindSessionArguments(status, profile, args, tool);
         }
         if (pendingLockedE2eAdmission) {
-          const resolvedLockedTestIds2 = dependencies.resolveLockedE2eTestIds?.(args, status);
-          if (!resolvedLockedTestIds2 || inspectLoginPrologueGuard({
+          const resolvedSelection = dependencies.resolveLockedE2eTestIds?.(args, status);
+          if (!resolvedSelection?.identitiesValid || inspectLoginPrologueGuard({
             binding: status.bindings.loginPrologue,
             tool,
             args,
             mutation: profile.mutation,
-            resolvedLockedTestIds: resolvedLockedTestIds2
+            resolvedLockedTestIds: resolvedSelection.ids
           }).blocked) {
             throw new SessionAuthorityError("LOGIN_PROLOGUE_BLOCKED", "the locked e2e suite did not resolve to the exact user-login candidate");
           }
-          setResolvedLockedTestIds(args, resolvedLockedTestIds2);
+          setResolvedLockedTestIds(args, resolvedSelection.ids);
         }
         operation = registry2.beginOperation(available.session, {
           operationId: randomUUID4(),
@@ -89154,7 +89159,7 @@ async function lockE2eTestCore(args, deps = {}) {
     }
     resolvedParams = resolved.params;
   }
-  if (!args.relock && loadLockedTest(projectRoot, args.actionId)) {
+  if (!args.relock && lockedTestFileExists(projectRoot, args.actionId)) {
     return failResult(`'${args.actionId}' is already locked \u2014 pass relock:true to re-lock`, "ALREADY_LOCKED");
   }
   const session2 = getSession();
@@ -90876,9 +90881,9 @@ var authorityGate = createAuthorityGate(authorityRuntime, {
   resolveLockedE2eTestIds: (args, status) => {
     const projectRoot = typeof args.projectRoot === "string" ? args.projectRoot : status.source.appRoot;
     if (typeof projectRoot !== "string")
-      return [];
+      return { ids: [], identitiesValid: false };
     args.projectRoot = projectRoot;
-    return resolveLockedTestIdentityIds(projectRoot, typeof args.pattern === "string" ? args.pattern : void 0);
+    return resolveLockedTestSelection(projectRoot, typeof args.pattern === "string" ? args.pattern : void 0);
   },
   probe: async ({ axis, phase, status, tool, args }) => localAuthorityProbe({ axis, phase, status, tool, args }),
   recoverRuntimeConnection: async (status) => {

@@ -76,7 +76,10 @@ interface AuthorityGateDependencies {
     install: Record<string, unknown> | undefined,
   ): Record<string, unknown> | null;
   loginSupervisorOverrideToken?(): string | undefined;
-  resolveLockedE2eTestIds?(args: Record<string, unknown>, status: SessionStatus): string[];
+  resolveLockedE2eTestIds?(
+    args: Record<string, unknown>,
+    status: SessionStatus,
+  ): { ids: string[]; identitiesValid: boolean };
 }
 
 const optionalBundleAdmission = Symbol('optionalBundleAdmission');
@@ -1663,15 +1666,15 @@ export function createAuthorityGate(
             bindSessionArguments(status, profile, args, tool);
           }
           if (pendingLockedE2eAdmission) {
-            const resolvedLockedTestIds = dependencies.resolveLockedE2eTestIds?.(args, status);
+            const resolvedSelection = dependencies.resolveLockedE2eTestIds?.(args, status);
             if (
-              !resolvedLockedTestIds ||
+              !resolvedSelection?.identitiesValid ||
               inspectLoginPrologueGuard({
                 binding: status.bindings.loginPrologue,
                 tool,
                 args,
                 mutation: profile.mutation,
-                resolvedLockedTestIds,
+                resolvedLockedTestIds: resolvedSelection.ids,
               }).blocked
             ) {
               throw new SessionAuthorityError(
@@ -1679,7 +1682,7 @@ export function createAuthorityGate(
                 'the locked e2e suite did not resolve to the exact user-login candidate',
               );
             }
-            setResolvedLockedTestIds(args, resolvedLockedTestIds);
+            setResolvedLockedTestIds(args, resolvedSelection.ids);
           }
           operation = registry.beginOperation(available.session, {
             operationId: randomUUID(),

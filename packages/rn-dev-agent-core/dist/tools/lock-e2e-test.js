@@ -1,5 +1,5 @@
 import { loadAction } from '../domain/action-store.js';
-import { freezeLockedTest, loadLockedTest } from '../domain/e2e-test.js';
+import { freezeLockedTest, lockedTestFileExists } from '../domain/e2e-test.js';
 import { loadE2eConfig, resolveParams, secretValuesFor, redactSecrets, } from '../domain/e2e-config.js';
 import { getGitInfo as realGetGitInfo } from '../e2e/git-info.js';
 import { getActiveSession } from '../agent-device-wrapper.js';
@@ -41,7 +41,7 @@ export async function lockE2eTestCore(args, deps = {}) {
         }
         resolvedParams = resolved.params;
     }
-    if (!args.relock && loadLockedTest(projectRoot, args.actionId)) {
+    if (!args.relock && lockedTestFileExists(projectRoot, args.actionId)) {
         return failResult(`'${args.actionId}' is already locked — pass relock:true to re-lock`, 'ALREADY_LOCKED');
     }
     const session = getSession();

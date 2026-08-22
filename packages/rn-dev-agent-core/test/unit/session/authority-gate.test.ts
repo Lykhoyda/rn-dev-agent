@@ -2680,7 +2680,7 @@ test('locked e2e proof coexists with a blocked login helper and does not rewrite
     const gate = createAuthorityGate(runtime, {
       probe: async ({ axis }) => ({ axis, identity: `${axis}-identity` }),
       refreshRuntimeBinding: async () => status.bindings.bundle,
-      resolveLockedE2eTestIds: () => ['user-login'],
+      resolveLockedE2eTestIds: () => ({ ids: ['user-login'], identitiesValid: true }),
     });
 
     const result = await gate.wrap(tool, async () => {
@@ -2719,7 +2719,31 @@ test('blocked login helper rejects a case-insensitive multi-match after suite re
   let dispatched = false;
   const gate = createAuthorityGate(runtime, {
     probe: async ({ axis }) => ({ axis, identity: `${axis}-identity` }),
-    resolveLockedE2eTestIds: () => ['user-login', 'USER-LOGIN'],
+    resolveLockedE2eTestIds: () => ({
+      ids: ['user-login', 'USER-LOGIN'],
+      identitiesValid: true,
+    }),
+  });
+
+  const result = await gate.wrap('cdp_run_e2e_suite', async () => {
+    dispatched = true;
+    return okResult({});
+  })({ pattern: '^user-login$' });
+
+  assert.equal(JSON.parse(result.content[0].text).code, 'LOGIN_PROLOGUE_BLOCKED');
+  assert.equal(dispatched, false);
+});
+
+test('blocked login helper rejects an identity-invalid exact suite selection', async () => {
+  const { runtime, status } = fixture();
+  status.bindings.loginPrologue = loginOutcome('LOGIN_PROLOGUE_BLOCKED', {
+    code: 'ENGINE_PIN_MISMATCH',
+    detail: 'runner drift',
+  });
+  let dispatched = false;
+  const gate = createAuthorityGate(runtime, {
+    probe: async ({ axis }) => ({ axis, identity: `${axis}-identity` }),
+    resolveLockedE2eTestIds: () => ({ ids: ['user-login'], identitiesValid: false }),
   });
 
   const result = await gate.wrap('cdp_run_e2e_suite', async () => {

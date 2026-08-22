@@ -1,5 +1,5 @@
 import { loadAction } from '../domain/action-store.js';
-import { freezeLockedTest, loadLockedTest } from '../domain/e2e-test.js';
+import { freezeLockedTest, lockedTestFileExists } from '../domain/e2e-test.js';
 import {
   loadE2eConfig,
   resolveParams,
@@ -87,7 +87,7 @@ export async function lockE2eTestCore(
     resolvedParams = resolved.params;
   }
 
-  if (!args.relock && loadLockedTest(projectRoot, args.actionId)) {
+  if (!args.relock && lockedTestFileExists(projectRoot, args.actionId)) {
     return failResult(
       `'${args.actionId}' is already locked — pass relock:true to re-lock`,
       'ALREADY_LOCKED',

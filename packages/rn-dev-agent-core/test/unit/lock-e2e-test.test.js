@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { lockE2eTestCore } from '../../dist/tools/lock-e2e-test.js';
+import { serializeLockedTest } from '../../dist/domain/e2e-test.js';
 
 function writeConfig(root, cfg) {
   const dir = join(root, '.rn-agent');
@@ -231,6 +232,50 @@ test('already locked → refused unless relock', async () => {
       ),
     );
     assert.equal(re.ok, true);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('malformed and mismatched locked files remain overwrite-protected', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'lock-'));
+  try {
+    seedAction(root, 'login');
+    const e2eDir = join(root, '.rn-agent', 'e2e');
+    const filePath = join(e2eDir, 'login.yaml');
+    mkdirSync(e2eDir, { recursive: true });
+    const existingFiles = [
+      'malformed locked test',
+      serializeLockedTest({
+        id: 'other-login',
+        intent: 'other login',
+        sourceActionId: 'other-login',
+        lockedAt: '2026-06-18T00:00:00.000Z',
+        lockedGitSha: 'sha1',
+        sourceContentHash: 'hash',
+        status: 'locked',
+        appId: 'com.x',
+        flow: 'appId: com.x\n---\n- launchApp\n',
+      }),
+    ];
+
+    for (const existing of existingFiles) {
+      writeFileSync(filePath, existing, 'utf8');
+      let maestroCalled = false;
+      const result = parse(
+        await lockE2eTestCore(
+          { actionId: 'login', projectRoot: root },
+          deps(async () => {
+            maestroCalled = true;
+            return okMaestro();
+          }),
+        ),
+      );
+
+      assert.equal(result.code, 'ALREADY_LOCKED');
+      assert.equal(maestroCalled, false);
+      assert.equal(readFileSync(filePath, 'utf8'), existing);
+    }
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

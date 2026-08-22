@@ -8,7 +8,7 @@ import {
   loadLockedTest,
   discoverLockedTests,
   hashBody,
-  resolveLockedTestIdentityIds,
+  resolveLockedTestSelection,
   serializeLockedTest,
 } from '../../dist/domain/e2e-test.js';
 
@@ -52,7 +52,10 @@ test('locked identity resolution rejects mismatched declared and source action i
   const root = mkdtempSync(join(tmpdir(), 'e2e-io-'));
   try {
     freezeLockedTest(root, { ...SRC, id: 'user-login', sourceActionId: 'other-login' }, CTX);
-    assert.deepEqual(resolveLockedTestIdentityIds(root, '^user-login$'), []);
+    assert.deepEqual(resolveLockedTestSelection(root, '^user-login$'), {
+      ids: ['user-login'],
+      identitiesValid: false,
+    });
 
     const filePath = join(root, '.rn-agent', 'e2e', 'user-login.yaml');
     writeFileSync(
@@ -71,10 +74,22 @@ test('locked identity resolution rejects mismatched declared and source action i
       'utf8',
     );
     assert.equal(loadLockedTest(root, 'user-login'), null);
-    assert.deepEqual(resolveLockedTestIdentityIds(root, '^user-login$'), []);
+    assert.deepEqual(resolveLockedTestSelection(root, '^user-login$'), {
+      ids: ['user-login'],
+      identitiesValid: false,
+    });
 
     freezeLockedTest(root, { ...SRC, id: 'user-login', sourceActionId: 'user-login' }, CTX);
-    assert.deepEqual(resolveLockedTestIdentityIds(root, '^user-login$'), ['user-login']);
+    assert.deepEqual(resolveLockedTestSelection(root, '^user-login$'), {
+      ids: ['user-login'],
+      identitiesValid: true,
+    });
+
+    freezeLockedTest(root, { ...SRC, id: 'other-login', sourceActionId: 'wrong-login' }, CTX);
+    assert.deepEqual(resolveLockedTestSelection(root), {
+      ids: ['other-login', 'user-login'],
+      identitiesValid: false,
+    });
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
