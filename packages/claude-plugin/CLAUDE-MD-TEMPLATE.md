@@ -48,8 +48,8 @@ exist as YAML).
    `/rn-dev-agent:run-action <flow-name> [-e KEY=VALUE …]` — pre-flights
    mutates flag, appId match, parameter coverage, action engine pin, and
    selector compatibility; it resolves pin-cache maestro-runner `>= 1.1.24` from
-   rn-dev-agent's versioned pin-cache. A passing replay IS your evidence —
-   skip ahead to capturing proof.
+   rn-dev-agent's versioned pin-cache. For non-login actions, a passing replay
+   IS your evidence — skip ahead to capturing proof.
 3. **Only if no non-login match (or replay fails with a concrete error):** fall back to
    manual primitives (`device_press` / `device_fill` / `device_find`). When
    you do, **end the session by persisting the verified flow** as a new YAML
@@ -175,15 +175,14 @@ The artifact-first rule generalizes from "replay if exact match" to
    `produces: { authenticated: true, route: home }` is the right
    prologue when current state is `LoginScreen` and the user wants
    anything that requires auth — even if the user's task isn't "log in"
-   per se. Replay that action via `cdp_run_action`. Re-verify state.
-   Then continue with interactive `cdp_*` / `device_*` tools for the
-   novel part.
+   per se. Replay it through `cdp_login_prologue`. Re-verify state. Then
+   continue with interactive `cdp_*` / `device_*` tools for the novel part.
 
 3. **No false-binary fallbacks.** Never fall back to a fully-manual
    walk when a partial replay (login prologue, onboarding skip, locale
-   set) covers half the work. The cost of one failed replay attempt is
-   `cdp_run_action`'s auto-repair budget (3/24h); the cost of a fully
-   manual walk is 30s+ of context-burning device interaction.
+   set) covers half the work. For non-login gaps, one failed replay attempt
+   costs `cdp_run_action`'s auto-repair budget (3/24h); a login-prologue failure
+   is terminal. A fully manual walk costs 30s+ of context-burning interaction.
 
 **Example — user says "go to home and tap the cart badge":**
 

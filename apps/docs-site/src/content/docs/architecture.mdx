@@ -40,7 +40,7 @@ The plugin is organized into three layers. Each one has a different job and gets
 
 On a known 3-step task-creation wizard, an interactive agent walk took **13 minutes 55 seconds**. The same wizard, replayed as a saved action, finished in **~4 seconds** — a ~210× speedup. That's the load-bearing data point behind the architecture: discovery tools are how the agent finds new ground; actions are how it replays known ground without paying that cost again.
 
-The agent doesn't choose all-or-nothing. If you're on the login screen and need to do something on home, the agent runs the saved login action as a prologue (4 seconds), then discovers the new work interactively. See [actions](actions/) for the full hybrid composition pattern.
+The agent doesn't choose all-or-nothing. If you're on the login screen and need to do something on home, the agent enters through `cdp_login_prologue`, which replays the exact saved `user-login` action, then discovers the new work interactively. See [actions](actions/) for the full hybrid composition pattern.
 
 ---
 

@@ -2461,7 +2461,7 @@ trackedTool('device_batch', 'Execute a sequence of exact-device UI interactions 
         .default('salient')
         .describe('Shape of the batch final_snapshot. salient (default): compact list of only actionable nodes (Button/TextField/Switch/etc) — far fewer tokens. full: complete node list (legacy). none: skip the implicit trailing snapshot entirely (~1,450 ms saved) for action-only batches you verify via expect_*/cdp_store_state.'),
 }, createDeviceBatchHandler(getClient));
-trackedTool('cdp_auto_login', 'Explicit legacy navigation helper that detects an auth screen and runs one project login subflow through maestro_run on the authority-bound device. It is per-call recovery only, never durable login authority or PR proof; prefer a compatible owned learned action.', {
+trackedTool('cdp_auto_login', 'Explicit legacy navigation helper that detects an auth screen and runs one project login subflow through maestro_run on the authority-bound device. It is never login authority or PR proof; use cdp_login_prologue for authenticated journeys.', {
     appId: z
         .string()
         .optional()
@@ -2925,25 +2925,13 @@ trackedTool('cdp_run_action', "Replay a learned action by id with end-to-end aut
         .optional()
         .describe("Parameter bindings for the action's ${VAR} placeholders, forwarded to maestro as -e KEY=VALUE on the first attempt AND the post-repair retry (GH #116). Keys must match /^[A-Z_][A-Z0-9_]*$/ (validated in maestro_run)."),
 }, runActionHandler);
-trackedTool('cdp_login_prologue', 'Fail-stop user-login helper: replay the exact action and require a fresh passing RunRecord; not PR proof.', {
+trackedTool('cdp_login_prologue', 'Fail-stop user-login helper: replay the exact action and require a fresh passing RunRecord; failure blocks exploratory fallback mutations, and a pass is not PR proof.', {
     projectRoot: z.string().optional().describe('Override project root (default: process.cwd()).'),
-    platform: z
-        .enum(['ios', 'android'])
-        .optional()
-        .describe('Force a platform; otherwise use the authority-bound device.'),
-    appFile: z
-        .string()
-        .optional()
-        .describe('iOS app artifact used only when the saved action contains clearState.'),
+    platform: z.enum(['ios', 'android']).optional().describe('Override the bound platform.'),
+    appFile: z.string().optional().describe('iOS app artifact for clearState actions.'),
     timeoutMs: z.number().optional().describe('Saved-action timeout in milliseconds.'),
-    trigger: z
-        .enum(['agent', 'ci', 'human'])
-        .optional()
-        .describe('RunRecord trigger annotation. Default agent.'),
-    params: z
-        .record(z.string(), z.string())
-        .optional()
-        .describe('Bindings for the exact user-login action placeholders.'),
+    trigger: z.enum(['agent', 'ci', 'human']).optional().describe('Run trigger; default agent.'),
+    params: z.record(z.string(), z.string()).optional().describe('String user-login bindings.'),
 }, createLoginPrologueHandler({ runAction: runActionHandler }));
 trackedTool('cdp_lock_e2e_test', 'Promote a verified action into a frozen, locked e2e regression test. Runs the action once strict (no repair); freezes it only if it passes. v1 supports param-free actions only.', {
     actionId: z.string().describe('The action id under .rn-agent/actions to lock'),

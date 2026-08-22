@@ -6,6 +6,7 @@ import {
   completeManagedNativeOriginAuthority,
   claimOptionalBundleAuthority,
   createAuthorityGate,
+  reissueManagedInstallAuthority,
   relaunchManagedNativeOriginApp,
   reproveManagedNativeOrigin,
 } from '../../../dist/session/authority-gate.js';
@@ -1682,6 +1683,54 @@ test('bind_device can replace iOS authority with an exact Android device', async
   assert.equal(envelope.ok, true);
   assert.equal(dispatched?.platform, 'android');
   assert.equal(dispatched?.deviceId, 'emulator-5554');
+});
+
+test('accepted residual risk preserves a passing login helper across device and install replacement', async () => {
+  const passingLogin = loginOutcome('passed');
+
+  {
+    const { runtime, status } = fixture();
+    status.bindings.loginPrologue = structuredClone(passingLogin);
+    const gate = createAuthorityGate(runtime, {
+      probe: async ({ axis }) => ({ axis, identity: `${axis}-identity` }),
+    });
+
+    const result = await gate.wrap('rn_session', async (args) => {
+      status.bindings.device = {
+        platform: args.platform,
+        deviceId: args.deviceId,
+        appId: args.appId,
+      };
+      status.authorityVersion += 1;
+      return okResult({ rebound: true });
+    })({
+      action: 'bind_device',
+      platform: 'android',
+      deviceId: 'emulator-5554',
+      appId: 'dev.example',
+    });
+
+    assert.equal(JSON.parse(result.content[0].text).ok, true);
+    assert.deepEqual(status.bindings.loginPrologue, passingLogin);
+  }
+
+  {
+    const { runtime, status } = fixture();
+    status.bindings.loginPrologue = structuredClone(passingLogin);
+    const gate = createAuthorityGate(runtime, {
+      probe: async ({ axis }) => ({ axis, identity: `${axis}-identity` }),
+      reissueInstallBinding: (install) => ({ ...install, digest: 'install-reissued' }),
+    });
+
+    const result = await gate.wrap('maestro_run', async (args) => {
+      await reissueManagedInstallAuthority(args);
+      return okResult({ passed: true });
+    })({ platform: 'ios', deviceId: 'device', appId: 'dev.example' });
+
+    assert.equal(JSON.parse(result.content[0].text).ok, true);
+    assert.equal(status.bindings.install.digest, 'install-reissued');
+    assert.deepEqual(status.bindings.loginPrologue, passingLogin);
+  }
 });
 
 test('raw native control isolates the exact session and refuses a foreign device before mutation', async () => {

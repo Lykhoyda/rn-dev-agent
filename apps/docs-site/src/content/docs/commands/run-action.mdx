@@ -5,7 +5,7 @@ description: Replay a saved action by name. Self-repairs small UI drift; doesn't
 
 import { Aside } from '@astrojs/starlight/components';
 
-Replay a saved action — login, navigate to a screen, complete a multi-step flow — in seconds. Counterpart to [`/list-learned-actions`](../list-learned-actions/), which discovers what's available without granting replay authority.
+Replay a saved non-login action — navigate to a screen or complete a multi-step flow — in seconds. Counterpart to [`/list-learned-actions`](../list-learned-actions/), which discovers what's available without granting replay authority. Authenticated journeys enter through [`cdp_login_prologue`](../../tools/cdp/cdp_login_prologue/).
 
 ## Usage
 
@@ -17,7 +17,7 @@ Replay a saved action — login, navigate to a screen, complete a multi-step flo
 
 ```
 /rn-dev-agent:run-action wizard-create-task -e TITLE="Buy milk" -e PRIORITY=high
-/rn-dev-agent:run-action user-login --platform android
+/rn-dev-agent:run-action open-settings --platform android
 ```
 
 ## How match works

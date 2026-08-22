@@ -41,7 +41,7 @@ Writes a test plan before executing: starting state, steps to exercise, expected
 
 ### Step 2.5: Auth Pre-flight
 
-Checks `cdp_navigation_state` for auth-gated screens. If logged out, selects a compatible owned learned action and replays it through `cdp_run_action` on the authority-bound device. Missing or incompatible owned automation is terminal; `cdp_auto_login` requires explicit authorization for legacy per-call recovery and never counts as durable authority or PR proof.
+Checks `cdp_navigation_state` for auth-gated screens. If logged out, calls `cdp_login_prologue`, which resolves only the exact `user-login` action and requires a fresh passing RunRecord. `LOGIN_PROLOGUE_BLOCKED` ends the journey without credential or ad-hoc replay fallbacks. The helper is not PR proof; formal login proof locks and runs the exact login e2e candidate.
 
 ### Step 2.6: Permission Pre-flight
 

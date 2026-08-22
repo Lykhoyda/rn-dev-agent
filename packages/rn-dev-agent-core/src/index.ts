@@ -3325,7 +3325,7 @@ trackedTool(
 
 trackedTool(
   'cdp_auto_login',
-  'Explicit legacy navigation helper that detects an auth screen and runs one project login subflow through maestro_run on the authority-bound device. It is per-call recovery only, never durable login authority or PR proof; prefer a compatible owned learned action.',
+  'Explicit legacy navigation helper that detects an auth screen and runs one project login subflow through maestro_run on the authority-bound device. It is never login authority or PR proof; use cdp_login_prologue for authenticated journeys.',
   {
     appId: z
       .string()
@@ -3996,26 +3996,14 @@ trackedTool(
 
 trackedTool(
   'cdp_login_prologue',
-  'Fail-stop user-login helper: replay the exact action and require a fresh passing RunRecord; not PR proof.',
+  'Fail-stop user-login helper: replay the exact action and require a fresh passing RunRecord; failure blocks exploratory fallback mutations, and a pass is not PR proof.',
   {
     projectRoot: z.string().optional().describe('Override project root (default: process.cwd()).'),
-    platform: z
-      .enum(['ios', 'android'])
-      .optional()
-      .describe('Force a platform; otherwise use the authority-bound device.'),
-    appFile: z
-      .string()
-      .optional()
-      .describe('iOS app artifact used only when the saved action contains clearState.'),
+    platform: z.enum(['ios', 'android']).optional().describe('Override the bound platform.'),
+    appFile: z.string().optional().describe('iOS app artifact for clearState actions.'),
     timeoutMs: z.number().optional().describe('Saved-action timeout in milliseconds.'),
-    trigger: z
-      .enum(['agent', 'ci', 'human'])
-      .optional()
-      .describe('RunRecord trigger annotation. Default agent.'),
-    params: z
-      .record(z.string(), z.string())
-      .optional()
-      .describe('Bindings for the exact user-login action placeholders.'),
+    trigger: z.enum(['agent', 'ci', 'human']).optional().describe('Run trigger; default agent.'),
+    params: z.record(z.string(), z.string()).optional().describe('String user-login bindings.'),
   },
   createLoginPrologueHandler({ runAction: runActionHandler }),
 );
