@@ -1,5 +1,32 @@
 # rn-dev-agent-plugin
 
+## 0.77.0
+
+### Minor Changes
+
+- b89ff50: Require pin-cache maestro-runner `>= 1.1.24`, keep SHA256 attestation for the 1.1.24 artifact this package installs as the default known-good, accept learned-action `enginePin` values at that floor or newer, and refuse PATH, ambient Maestro CLI, older runners, and unattested binaries without a Maestro CLI fallback.
+
+### Patch Changes
+
+- 2dd53a6: Preserve arbitrary Unicode text in Android runner commands by declaring the JSON request body as UTF-8 before NanoHTTPD decodes it.
+- 6889910: An incomplete renderer-root scan (missing or malformed DevTools `renderers` registry plus the empty-ID early-exit) is no longer treated as proof the app is still mounting, so a live root on a sparse renderer ID above 5 keeps the legacy no-navigation result instead of `mounting: true`.
+- ae0097e: An explicitly present but empty M7 `# mutates:` or `# produces:` field is now treated as invalid (`?` / `metaInvalid`) instead of omitted (`-`), so inventory rendering matches the GH #525 present-vs-absent legend.
+- 800252f: A recorded owner pid that the OS has recycled into a process this user cannot inspect now counts as proven dead instead of unprovable, so startup cleanup releases the stale ownership rather than wedging the source root forever; a proven-live owner and a genuinely unreadable identity still refuse with no force-steal, abandoned blocked contenders that never held a claim are discarded at startup, every affected refusal names a concrete remedy for interactive and headless clients, and the packaged `session-doctor` command reports and repairs a wedged root from a `claude -p` session that cannot run `/mcp`.
+- b89ff50: Close remaining Maestro 1.1.24 contract gaps: refuse complete regex selector syntax, migrate `.yml` without writing through inherited action symlinks, and route replay/recovery/helpers through pin-cache tools instead of ambient runner or manual login.
+- b89ff50: Ignore AppleDouble, `._*`, and PaxHeader archive members when attesting the pin-cache payload so a checksum-matching maestro-runner 1.1.24 can spawn on Darwin extract layouts.
+- b89ff50: Keep execute permission on the copied pin-cache `.runner-exec` helper so `cdp_run_action` can spawn the attested runner.
+- 25348eb: Keep reconnect detection-only for legacy linked-worktree root links and provide an explicit locked repair that restores per-worktree integration and local state while sharing only the learned-actions corpus.
+- Updated dependencies [2dd53a6]
+- Updated dependencies [6889910]
+- Updated dependencies [ae0097e]
+- Updated dependencies [800252f]
+- Updated dependencies [b89ff50]
+- Updated dependencies [b89ff50]
+- Updated dependencies [b89ff50]
+- Updated dependencies [b89ff50]
+- Updated dependencies [25348eb]
+  - rn-dev-agent-core@0.72.0
+
 ## 0.76.7
 
 ### Patch Changes
