@@ -67,7 +67,7 @@ NO-IMPACT**. Changelogs are SECONDARY — open the file and verify the claim bef
 | Hermes CDP domain support | `packages/rn-dev-agent-core/src/cdp/setup.ts` → `Runtime.enable`, `Debugger.enable`, `Network.enable` (+ hook-fallback probe, D626), `Log.enable`, `Profiler.enable`, `HeapProfiler.enable` |
 | Fiber-tree / React internals walk | `packages/rn-dev-agent-core/src/injected-helpers.ts`, `bridge-detector.ts` |
 | Profiling (heap / CPU) | `packages/rn-dev-agent-core/src/tools/profiling.ts` |
-| Maestro flow YAML / runner flags / protocol | `packages/rn-dev-agent-core/src/maestro-invoke.ts` (flow built via `buildMaestroFlow` + `domain/maestro-validator.ts`, `--app-file` per GH #201, exact pin-cache runner dispatch), `packages/rn-dev-agent-core/src/tools/maestro-run.ts` |
+| Maestro flow YAML / runner flags / protocol | `packages/rn-dev-agent-core/src/maestro-invoke.ts` (flow built via `buildMaestroFlow` + `domain/maestro-validator.ts`, `--app-file` per GH #201, pin-cache runner dispatch), `packages/rn-dev-agent-core/src/tools/maestro-run.ts` |
 | agent-device verbs / args / protocol (Android) | `packages/rn-dev-agent-core/src/agent-device-wrapper.ts` (verbs `tap/fill/swipe/scroll/longpress/pinch/snapshot/screenshot/back`; args `--hold-ms`, `interactiveOnly`, `bundleId`), `packages/rn-dev-agent-core/src/runners/rn-android-runner-client.ts` |
 | Node minimum version | `packages/rn-dev-agent-core/package.json` → `engines.node` (`>=22.5`) |
 

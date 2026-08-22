@@ -1,11 +1,12 @@
 #!/bin/bash
 # ensure-maestro-runner.sh — Install or converge the session pin-cache to
-# exactly the tested maestro-runner. Never uses PATH, ~/.maestro-runner, or
-# the Maestro CLI. SessionStart and /rn-dev-agent:setup invoke this.
+# the attested maestro-runner (floor >= the tested pin). Never uses PATH,
+# ~/.maestro-runner, or the Maestro CLI. SessionStart and /rn-dev-agent:setup
+# invoke this.
 #
 # Exit codes:
-#   0 — pin-cache binary is exactly the tested pin (already or just installed)
-#   1 — missing, drifted, checksum mismatch, or unsupported platform
+#   0 — pin-cache binary is the attested tested pin (already or just installed)
+#   1 — missing, older, checksum mismatch, or unsupported platform
 set -euo pipefail
 
 INSTALL_STARTED_SECONDS=$SECONDS
@@ -152,7 +153,7 @@ file_sha() {
 }
 
 correction() {
-  echo "Install exactly $MAESTRO_RUNNER_PIN_VERSION with: bash \"${BASH_SOURCE[0]}\""
+  echo "Install attested $MAESTRO_RUNNER_PIN_VERSION (floor >= $MAESTRO_RUNNER_PIN_VERSION) with: bash \"${BASH_SOURCE[0]}\""
   echo "Session runner is the pin-cache at $BIN — never PATH, ~/.maestro-runner, or brew maestro."
 }
 
@@ -253,7 +254,7 @@ if bin_matches_pin; then
 fi
 
 if [ "${1:-}" = "--print-bin" ]; then
-  echo "ERROR: pin-cache maestro-runner is not exactly $MAESTRO_RUNNER_PIN_VERSION (missing, version drift, or checksum mismatch)." >&2
+  echo "ERROR: attested pin-cache maestro-runner $MAESTRO_RUNNER_PIN_VERSION is missing (floor >= $MAESTRO_RUNNER_PIN_VERSION; missing, older, or checksum mismatch)." >&2
   correction >&2
   exit 1
 fi
@@ -549,7 +550,7 @@ fi
 
 if [ -x "$BIN" ]; then
   GOT_SHA="$(file_sha "$BIN")"
-  echo "NOTE: pin-cache maestro-runner is not exactly $MAESTRO_RUNNER_PIN_VERSION (got sha=${GOT_SHA:-unhashed}). Converging."
+  echo "NOTE: pin-cache maestro-runner is not the attested $MAESTRO_RUNNER_PIN_VERSION artifact (got sha=${GOT_SHA:-unhashed}). Converging."
 fi
 
 ARCHIVE="maestro-runner-${MAESTRO_RUNNER_PIN_VERSION}-${OS}-${ARCH}.tar.gz"
@@ -634,7 +635,7 @@ fi
 
 if ! pin_dir_matches_pin "$STAGED_PIN_DIR"; then
   GOT_SHA="$(file_sha "$STAGED_BIN")"
-  echo "ERROR: just-installed binary is not exactly $MAESTRO_RUNNER_PIN_VERSION."
+  echo "ERROR: just-installed binary is not the attested $MAESTRO_RUNNER_PIN_VERSION artifact."
   echo "  expected version: $MAESTRO_RUNNER_PIN_VERSION"
   echo "  expected sha256:  $EXPECTED_SHA"
   echo "  got sha256:       ${GOT_SHA:-unhashed}"

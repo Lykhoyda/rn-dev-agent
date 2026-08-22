@@ -88,7 +88,7 @@ if [ "$has_rn_config" = true ]; then
 
   # Ensure maestro-runner is installed (stderr visible for diagnostics)
   if ! bash "$SCRIPT_ROOT/ensure-maestro-runner.sh" 2>&1; then
-    INSTALL_WARNINGS+=("WARNING: maestro-runner pin-cache is not exactly 1.1.24. Re-run: bash ${SCRIPT_ROOT}/ensure-maestro-runner.sh")
+    INSTALL_WARNINGS+=("WARNING: attested maestro-runner 1.1.24 is missing from the pin-cache (floor >= 1.1.24). Re-run: bash ${SCRIPT_ROOT}/ensure-maestro-runner.sh")
   fi
 
   # GH #59 #3: surface (and optionally auto-install) idb-companion when a

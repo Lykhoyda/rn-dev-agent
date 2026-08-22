@@ -83,11 +83,22 @@ test('wrong enginePin is terminal and names both pins', () => {
   assert.ok(msg);
   assert.match(msg, /maestro-runner@1\.0\.9/);
   assert.match(msg, new RegExp(ACTION_ENGINE_PIN.replace('.', '\\.')));
+  assert.match(msg, /below the required floor/);
   assert.match(msg, /no manual fallback/i);
 });
 
 test('matching enginePin is accepted', () => {
   assert.equal(actionEnginePinRefusal(ACTION_ENGINE_PIN), null);
+});
+
+test('newer enginePin at or above the floor is accepted', () => {
+  assert.equal(actionEnginePinRefusal('maestro-runner@1.1.25'), null);
+  assert.equal(actionEnginePinRefusal('maestro-runner@1.2.0'), null);
+});
+
+test('malformed enginePin is terminal', () => {
+  assert.match(String(actionEnginePinRefusal('maestro-cli@1.1.24')), /incompatible/);
+  assert.match(String(actionEnginePinRefusal('garbage')), /incompatible/);
 });
 
 test('regex text selectors are refused before any runner spawn', () => {
@@ -146,6 +157,14 @@ test('upsertEnginePinHeader normalizes duplicate pin headers', () => {
   assert.equal(updated.changed, true);
   assert.equal(updated.text.match(/# enginePin:/g)?.length, 1);
   assert.match(updated.text, /# enginePin: maestro-runner@1\.1\.24/);
+});
+
+test('upsertEnginePinHeader keeps a newer compatible pin', () => {
+  const source =
+    '# id: x\n# intent: y\n# status: active\n# enginePin: maestro-runner@1.1.25\n- launchApp\n';
+  const updated = upsertEnginePinHeader(source);
+  assert.equal(updated.changed, false);
+  assert.match(updated.text, /# enginePin: maestro-runner@1\.1\.25/);
 });
 
 test('migrateLearnedActions stamps compatible YAML and leaves regex actions unmutated', () => {
@@ -1095,6 +1114,14 @@ test('actionReplayPreflight is session-pin then format then selector', () => {
   assert.equal(
     actionReplayPreflight({
       enginePin: ACTION_ENGINE_PIN,
+      commands: [{ tapOn: { id: 'x' } }],
+      engineStatus: PINNED(),
+    }),
+    null,
+  );
+  assert.equal(
+    actionReplayPreflight({
+      enginePin: 'maestro-runner@1.1.25',
       commands: [{ tapOn: { id: 'x' } }],
       engineStatus: PINNED(),
     }),

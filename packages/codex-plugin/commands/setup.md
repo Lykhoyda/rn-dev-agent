@@ -46,9 +46,9 @@ node <package-root>/rn-dev-agent-core/dist/maestro-runner-pin.js migrate-actions
 ```
 
 Do not enter project onboarding unless the second diagnosis reports
-`pinned-ok`, version `1.1.24`, provenance `pin-cache`, and a selected path in
+`pinned-ok`, version `>= 1.1.24`, provenance `pin-cache`, and a selected path in
 the versioned pin-cache. Migration must report every owned action as
-`migrated` or `already-pinned`. Treat unsupported platform, missing/older/newer
+`migrated` or `already-pinned`. Treat unsupported platform, missing/older/unattested
 drift, checksum mismatch, unknown/unverified version, unreadable action, and
 selector or engine-pin incompatibility as terminal. Never substitute PATH,
 `~/.maestro-runner`, brew Maestro, manual login, or an unowned UI flow.

@@ -150,15 +150,15 @@ Self-repair handles **small UI drift** (a renamed `testID`, a moved button), not
 
 ## Engine version pinning
 
-Action replay runs only on maestro-runner `1.1.24` from rn-dev-agent's versioned pin-cache.
+Action replay requires maestro-runner `>= 1.1.24` from rn-dev-agent's versioned pin-cache.
 The authoritative pin manifest lives at
 `packages/rn-dev-agent-core/src/domain/maestro-runner-pin.json`; setup installs and verifies
-that exact version and `/doctor` reports missing, older, newer, checksum-mismatched,
+attested 1.1.24 as the default known-good and `/doctor` reports missing, older, unattested, checksum-mismatched,
 unverified, unknown, or unsupported installations. Replay refuses every non-`pinned-ok`
 state before UI mutation and never substitutes PATH, `~/.maestro-runner`, or Maestro CLI.
 
-Owned actions must carry `# enginePin: maestro-runner@1.1.24`. Setup migrates compatible
-actions; missing or incompatible pins and unsupported regex text selectors are terminal.
+Owned actions must carry `# enginePin: maestro-runner@1.1.24` or newer. Setup migrates compatible
+actions; missing or older pins and unsupported regex text selectors are terminal.
 Bumping the pin follows the upgrade ritual documented beside the manifest: replay the
 committed action corpus on both platforms, reconcile known quirks, then update the manifest.
 

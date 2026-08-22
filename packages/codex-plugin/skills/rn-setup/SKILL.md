@@ -62,7 +62,7 @@ Read/report without mutation:
 | Core package | selected package runtime files | marketplace refresh/materialization |
 | iOS runner | packaged Xcode project/artifact presence | one-time build command |
 | Android runner | packaged Gradle/APK presence | one-time Gradle command |
-| Maestro runner | `maestro-runner-pin.js diagnose --json` must be `pinned-ok` / `1.1.24` / `pin-cache` | package `ensure-maestro-runner.sh` for exactly 1.1.24; never PATH, `~/.maestro-runner`, or brew maestro |
+| Maestro runner | `maestro-runner-pin.js diagnose --json` must be `pinned-ok` / `>= 1.1.24` / `pin-cache` | package `ensure-maestro-runner.sh` for attested 1.1.24 (floor >= 1.1.24); never PATH, `~/.maestro-runner`, or brew maestro |
 | iOS/Android devices | list-only platform commands | boot guidance |
 | Metro | `rn_session` and passive `cdp_status` reads | integrated package script |
 | CDP/app | prior supplied observation only | active `check-env` later |
@@ -93,10 +93,10 @@ node <package-root>/rn-dev-agent-core/dist/maestro-runner-pin.js diagnose --json
 node <package-root>/rn-dev-agent-core/dist/maestro-runner-pin.js migrate-actions --root "$APP_ROOT" --json
 ```
 
-Continue only when diagnosis reports `status: pinned-ok`, `installedVersion:
-1.1.24`, `pin: 1.1.24`, `provenance: pin-cache`, and every owned action is
+Continue only when diagnosis reports `status: pinned-ok`, `installedVersion`
+`>= 1.1.24`, `pin: 1.1.24`, `provenance: pin-cache`, and every owned action is
 migrated or already pinned. Missing,
-older, newer, checksum-mismatched, unknown, unverified, unsupported, unreadable,
+older, unattested, checksum-mismatched, unknown, unverified, unsupported, unreadable,
 or incompatible results are terminal setup failures. Setup uses Codex
 `AGENTS.md`, not Claude instruction files. Every AGENTS/scaffold/source/tsconfig
 write is previewed and confirmed separately; symlink-inherited corpora are never

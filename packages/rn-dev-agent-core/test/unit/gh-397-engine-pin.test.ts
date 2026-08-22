@@ -12,6 +12,8 @@ import {
   doctorPinnedRunner,
   enginePinCaveat,
   getEngineStatus,
+  meetsMaestroRunnerFloor,
+  parseActionEnginePinVersion,
   strictPinRefusal,
   _resetEngineStatusForTest,
   _setEngineStatusForTest,
@@ -46,6 +48,15 @@ test('gh-397: compareVersions is numeric per segment', () => {
   assert.equal(compareVersions('2.0.0', '1.9.9'), 1);
 });
 
+test('gh-397: runner floor accepts 1.1.24 and newer semver', () => {
+  assert.equal(parseActionEnginePinVersion('maestro-runner@1.1.24'), '1.1.24');
+  assert.equal(parseActionEnginePinVersion('maestro-runner@1.1.25'), '1.1.25');
+  assert.equal(parseActionEnginePinVersion('maestro-cli@1.1.24'), null);
+  assert.equal(meetsMaestroRunnerFloor('1.1.24'), true);
+  assert.equal(meetsMaestroRunnerFloor('1.1.25'), true);
+  assert.equal(meetsMaestroRunnerFloor('1.0.9'), false);
+});
+
 test('gh-397: classification truth table', () => {
   const d = (v: string | null, h: string | null, inst = true) => ({
     installed: inst,
@@ -54,7 +65,8 @@ test('gh-397: classification truth table', () => {
   });
   assert.equal(classifyEnginePin(d(null, null, false), KEY), 'not-installed');
   assert.equal(classifyEnginePin(d(null, PIN_HASH), KEY), 'unknown-version');
-  assert.equal(classifyEnginePin(d('1.2.0', 'f'.repeat(64)), KEY), 'drift-newer');
+  assert.equal(classifyEnginePin(d('1.2.0', 'f'.repeat(64)), KEY), 'checksum-mismatch');
+  assert.equal(classifyEnginePin(d('1.2.0', PIN_HASH), KEY), 'pinned-ok');
   assert.equal(classifyEnginePin(d('1.0.8', 'f'.repeat(64)), KEY), 'drift-older');
   assert.equal(classifyEnginePin(d('1.1.24', 'f'.repeat(64)), KEY), 'checksum-mismatch');
   assert.equal(classifyEnginePin(d('1.1.24', PIN_HASH), KEY), 'pinned-ok');

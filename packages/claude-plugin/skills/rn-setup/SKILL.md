@@ -110,7 +110,7 @@ ls ${CLAUDE_PLUGIN_ROOT}/scripts/rn-android-runner/build.gradle.kts 2>/dev/null 
 
 Skip this check on systems without `adb` / no Android target. If the user is iOS-only, mark this row N/A (Android-only) and continue. Since #202 the plugin terminates a stale legacy `AgentDeviceRunner` at session-open by default (scoped to the target simulator UDID) and clears orphaned `~/.agent-device/daemon.{json,lock}`; opt out with `RN_DEVICE_KILL_LEGACY=0`.
 
-### 4. maestro-runner (exact pin-cache 1.1.24)
+### 4. maestro-runner (pin-cache floor >= 1.1.24)
 Session replay never uses `PATH`, `~/.maestro-runner`, or `brew maestro`. Diagnose and
 install only the pin-cache binary:
 
@@ -120,11 +120,11 @@ bash ${CLAUDE_PLUGIN_ROOT}/scripts/ensure-maestro-runner.sh
 node ${CLAUDE_PLUGIN_ROOT}/rn-dev-agent-core/dist/maestro-runner-pin.js diagnose --json
 ```
 
-Success requires `status: pinned-ok`, `installedVersion: 1.1.24`, `pin: 1.1.24`,
+Success requires `status: pinned-ok`, `installedVersion` `>= 1.1.24`, `pin: 1.1.24`,
 `provenance: pin-cache`, and a `selectedPath` under `$RN_DEV_AGENT_RUNNER_CACHE`
 or `$HOME/.cache/rn-dev-agent/maestro-runner/1.1.24/bin/maestro-runner`.
 
-Doctor rows — never silently accept another version:
+Doctor rows — never silently accept a runner below 1.1.24 or an unattested binary:
 
 - `pinned-ok` → healthy, e.g. `maestro-runner 1.1.24 (pin-cache)`
 - `not-installed` / `drift-older` / `drift-newer` / `checksum-mismatch` / `unverified` / `unknown-version` → FAIL; run the ensure script and re-diagnose. Do not continue setup.
@@ -299,7 +299,7 @@ Present results as a table:
 | CDP bridge | OK | — |
 | rn-fast-runner (iOS) | OK (built) / NEEDS_BUILD / N/A (non-macOS) | NEEDS_BUILD self-builds on first use (slow); offer the one-time `xcodebuild build-for-testing` to skip the wait (see check 3 above) |
 | rn-android-runner (Android) | OK (APKs present) / NEEDS_BUILD / N/A (iOS-only setup) | NEEDS_BUILD: `cd ${CLAUDE_PLUGIN_ROOT}/scripts/rn-android-runner && ./gradlew assembleDebug assembleDebugAndroidTest` — only if targeting Android |
-| maestro-runner | pinned-ok (1.1.24 pin-cache) / FAIL (missing, older, newer, checksum, unsupported) | `bash ${CLAUDE_PLUGIN_ROOT}/scripts/ensure-maestro-runner.sh` then re-diagnose. Never PATH, ~/.maestro-runner, or brew maestro. |
+| maestro-runner | pinned-ok (>= 1.1.24 pin-cache) / FAIL (missing, older, unattested, checksum, unsupported) | `bash ${CLAUDE_PLUGIN_ROOT}/scripts/ensure-maestro-runner.sh` then re-diagnose. Never PATH, ~/.maestro-runner, or brew maestro. |
 | iOS Simulator | BOOTED (iPhone 16) | — |
 | Android Emulator | NOT RUNNING | Boot an emulator |
 | Metro | RUNNING (port 8081) | — |

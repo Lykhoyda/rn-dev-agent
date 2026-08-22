@@ -112,7 +112,7 @@ test('older stub in pin-cache tries to converge rather than accepting drift', ()
   });
   assert.notEqual(result.status, 0);
   const out = `${result.stdout}${result.stderr}`;
-  assert.match(out, /Converging|not exactly 1\.1\.24/);
+  assert.match(out, /Converging|attested 1\.1\.24/);
   assert.doesNotMatch(out, /pin ok/);
 });
 
@@ -131,7 +131,7 @@ test('newer stub in pin-cache is also refused', () => {
   });
   assert.notEqual(result.status, 0);
   const out = `${result.stdout}${result.stderr}`;
-  assert.match(out, /Converging|not exactly 1\.1\.24/);
+  assert.match(out, /Converging|attested 1\.1\.24/);
 });
 
 test('installer verifies the complete archive before replacing the live pin-cache', () => {
@@ -271,7 +271,7 @@ test('installed fast path refuses a payload changed after verified installation'
 
   const refused = spawnSync('bash', [copiedScript, '--print-bin'], { encoding: 'utf8', env });
   assert.notEqual(refused.status, 0);
-  assert.match(`${refused.stdout}${refused.stderr}`, /not exactly 1\.1\.24/);
+  assert.match(`${refused.stdout}${refused.stderr}`, /attested pin-cache maestro-runner 1\.1\.24/);
   assert.equal(existsSync(executionMarker), false);
 });
 
@@ -733,7 +733,7 @@ test('--print-bin ignores a PATH maestro-runner when the pin-cache is missing', 
   });
   assert.notEqual(result.status, 0);
   const out = `${result.stdout}${result.stderr}`;
-  assert.match(out, /ensure-maestro-runner|pin-cache|not exactly/);
+  assert.match(out, /ensure-maestro-runner|pin-cache|attested/);
   assert.doesNotMatch(out, /PATH_HIT/);
   assert.throws(() => readFileSync(marker));
 });
@@ -770,7 +770,7 @@ test('test manifest cannot redefine the production pin version', () => {
     },
   });
   assert.notEqual(result.status, 0);
-  assert.match(`${result.stdout}${result.stderr}`, /not exactly 1\.1\.24/);
+  assert.match(`${result.stdout}${result.stderr}`, /attested pin-cache maestro-runner 1\.1\.24/);
   assert.throws(() => readFileSync(marker));
 });
 

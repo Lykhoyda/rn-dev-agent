@@ -154,9 +154,10 @@ Then re-add marketplace and install.
 
 ## Device & flows
 
-### Maestro runner pin is missing or drifted
+### Maestro runner pin is missing or below the floor
 
-Run the host setup workflow. It installs and verifies exactly maestro-runner `1.1.24` in
+Run the host setup workflow. It installs and verifies attested maestro-runner `1.1.24`
+(floor `>= 1.1.24`) in
 rn-dev-agent's versioned pin-cache. Do not add an ambient runner to PATH or install brew
 Maestro as a substitute; replay accepts only a `pinned-ok` pin-cache diagnosis.
 
@@ -175,7 +176,7 @@ adb target is never selected.
 
 ### Maestro gRPC error on Android
 
-Run the flow through rn-dev-agent's replay tools. They use the exact pin-cache
+Run the flow through rn-dev-agent's replay tools. They use the pin-cache
 maestro-runner and never fall back to classic Maestro.
 
 ### `UiAutomation not connected` when a flow starts on Android
@@ -339,7 +340,7 @@ a last-resort identifier — a bare model name such as `iPhone-16-Pro`, or an
 `id` field naming the run rather than the device — so nothing was proven
 either way and the replay fails closed. Shutting down simulators will not
 clear it; run the current host setup workflow to converge the pin-cache to
-exactly `1.1.24` and retry. If that pinned build still emits only a weak
+attested `1.1.24` (floor `>= 1.1.24`) and retry. If that attested build still emits only a weak
 identity, the replay remains terminal rather than substituting another engine.
 
 ### ANDROID_API_UNSUPPORTED
@@ -473,11 +474,11 @@ mutation, or preparation was attempted, because nothing about the flow
 itself was proven wrong. Re-run the replay (bootstrap retries itself),
 check network access, and re-run setup to verify the pin-cache maestro-runner.
 
-### Replay refused by the exact engine preflight
+### Replay refused by the engine floor preflight
 
-Replay requires maestro-runner `1.1.24` from rn-dev-agent's pin-cache and an
-owned action carrying `enginePin: maestro-runner@1.1.24`. Missing, older,
-newer, checksum-mismatched, unverified, unknown, or unsupported runner states
+Replay requires maestro-runner `>= 1.1.24` from rn-dev-agent's pin-cache and an
+owned action carrying `enginePin: maestro-runner@1.1.24` or newer. Missing, older,
+checksum-mismatched, unverified, unknown, or unsupported runner states
 are terminal. Regex text selectors are also refused because the pinned runner
 does not have a validated implementation for them. Run setup to converge the
 runner and migrate compatible actions, or rewrite the selector as literal text

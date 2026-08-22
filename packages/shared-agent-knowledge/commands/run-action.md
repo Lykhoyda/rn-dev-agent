@@ -103,8 +103,8 @@ Example calls:
      trigger: "agent"                    // or "human" / "ci" based on context
    }
    ```
-   `cdp_run_action` resolves only the exact `1.1.24` pin-cache engine and
-   refuses an incompatible or missing action `enginePin` before UI mutation.
+   `cdp_run_action` resolves pin-cache maestro-runner `>= 1.1.24` and
+   refuses a missing or older action `enginePin` before UI mutation.
 
 6. **Execute via MCP**:
    ```

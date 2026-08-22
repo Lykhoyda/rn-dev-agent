@@ -27,6 +27,11 @@ const TRUSTED_DRIFT_SHA256 = Object.freeze({
     }),
 });
 export const ACTION_ENGINE_PIN = `maestro-runner@${MAESTRO_RUNNER_PIN.version}`;
+const ACTION_ENGINE_PIN_RE = /^maestro-runner@(\d+(?:\.\d+)*)$/;
+export function parseActionEnginePinVersion(enginePin) {
+    const match = ACTION_ENGINE_PIN_RE.exec(enginePin.trim());
+    return match?.[1] ?? null;
+}
 const HOST_PLUGIN_ROOT = '${CLAUDE_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}';
 export const PINNED_RUNNER_INSTALL_HINT = `bash ${HOST_PLUGIN_ROOT}/scripts/ensure-maestro-runner.sh`;
 export const PINNED_RUNNER_DIAGNOSE_HINT = `node ${HOST_PLUGIN_ROOT}/rn-dev-agent-core/dist/maestro-runner-pin.js diagnose`;
@@ -78,15 +83,15 @@ export function compareVersions(a, b) {
     }
     return 0;
 }
+export function meetsMaestroRunnerFloor(version) {
+    return (/^\d+(?:\.\d+)*$/.test(version) && compareVersions(version, MAESTRO_RUNNER_PIN.version) >= 0);
+}
 export function classifyEnginePin(detected, platformKey) {
     if (!detected.installed)
         return 'not-installed';
     if (!detected.version || !/^\d+(\.\d+)*$/.test(detected.version))
         return 'unknown-version';
-    const cmp = compareVersions(detected.version, MAESTRO_RUNNER_PIN.version);
-    if (cmp > 0)
-        return 'drift-newer';
-    if (cmp < 0)
+    if (compareVersions(detected.version, MAESTRO_RUNNER_PIN.version) < 0)
         return 'drift-older';
     const expected = MAESTRO_RUNNER_PIN.sha256[platformKey];
     if (!expected || !detected.sha256)
@@ -420,7 +425,7 @@ export function pinCorrection(status, platformKey = nodePlatformKey()) {
     const cls = status.pin.status;
     const pinned = status.pin.pinned;
     const installed = status.version ?? 'unknown';
-    const install = `Reinstall exactly ${pinned} via ${PINNED_RUNNER_INSTALL_HINT} (session pin-cache; do not use PATH or brew maestro).`;
+    const install = `Install attested ${pinned} (floor >= ${pinned}) via ${PINNED_RUNNER_INSTALL_HINT} (session pin-cache; do not use PATH or brew maestro).`;
     if (pinArchiveCoords(platformKey) === null) {
         return (`maestro-runner is unsupported on ${platformKey}. Supported platforms: darwin-arm64, darwin-x64, ` +
             `linux-x64, linux-arm64. ${install}`);
@@ -431,7 +436,7 @@ export function pinCorrection(status, platformKey = nodePlatformKey()) {
         case 'drift-older':
             return `Session maestro-runner ${installed} is older than the required pin ${pinned}. ${install}`;
         case 'drift-newer':
-            return `Session maestro-runner ${installed} is newer than the required pin ${pinned}. ${install}`;
+            return `Session maestro-runner ${installed} is newer than the attested default ${pinned} and is not executed without attestation. ${install}`;
         case 'checksum-mismatch':
             return `Session maestro-runner binary checksum does not match the ${pinned} pin manifest. ${install}`;
         case 'unknown-version':
@@ -447,6 +452,8 @@ export function pinCorrection(status, platformKey = nodePlatformKey()) {
     }
 }
 export function exactPinRefusal(status, platformKey = nodePlatformKey()) {
+    // Execution stays pin-cache + attested 1.1.24 bytes. The product contract is a
+    // floor (>= 1.1.24); unattested newer binaries remain non-executable.
     if (!status) {
         return `maestro_run refused: session runner ${MAESTRO_RUNNER_PIN.version} could not be detected. ${pinCorrection(buildReplayEngineStatus('not-installed', null, false), platformKey)}`;
     }

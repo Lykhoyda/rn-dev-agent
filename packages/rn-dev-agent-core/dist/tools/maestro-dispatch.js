@@ -31,8 +31,8 @@ export function chooseMaestroDispatch(inputs) {
     }
     return {
         error: `Session maestro-runner ${MAESTRO_RUNNER_PIN.version} is not installed in the pin-cache. ` +
-            `Install exactly ${MAESTRO_RUNNER_PIN.version} via ${PINNED_RUNNER_INSTALL_HINT}. ` +
+            `Install attested ${MAESTRO_RUNNER_PIN.version} (floor >= ${MAESTRO_RUNNER_PIN.version}) via ${PINNED_RUNNER_INSTALL_HINT}. ` +
             `Ambient PATH maestro-runner, ~/.maestro-runner, and brew maestro are never used.`,
-        hint: `run ensure-maestro-runner.sh for exactly ${MAESTRO_RUNNER_PIN.version}`,
+        hint: `run ensure-maestro-runner.sh for attested ${MAESTRO_RUNNER_PIN.version} (floor >= ${MAESTRO_RUNNER_PIN.version})`,
     };
 }

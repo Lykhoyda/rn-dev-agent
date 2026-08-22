@@ -48,12 +48,12 @@ elif [ "$device_count" -eq 1 ]; then
   echo "$device_id" > "$SERIAL_FILE"
 fi
 
-# 4. Require the exact pin-cache maestro-runner (version + checksum). Never PATH,
+# 4. Require the attested pin-cache maestro-runner (floor >= 1.1.24, SHA256). Never PATH,
 # ~/.maestro-runner, curl|bash ambient installer, or maestro-cli.
 if [ ! -f "$ENSURE" ]; then
   errors+=("ensure-maestro-runner.sh not found next to ensure-android-ready.sh. Supported correction: install the plugin scripts next to each other.")
 elif ! bash "$ENSURE" --print-bin >/dev/null; then
-  errors+=("exact maestro-runner pin required (version + checksum). Supported correction: bash $ENSURE")
+  errors+=("attested maestro-runner >= 1.1.24 required (version + checksum). Supported correction: bash $ENSURE")
 fi
 
 # 5. Warn about Play Protect (can silently block Maestro APK installation)

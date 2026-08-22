@@ -1,17 +1,22 @@
 import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
-import { ACTION_ENGINE_PIN, MAESTRO_RUNNER_PIN, exactPinRefusal, findRegexTextSelectors, } from './engine-pin.js';
+import { ACTION_ENGINE_PIN, MAESTRO_RUNNER_PIN, exactPinRefusal, findRegexTextSelectors, meetsMaestroRunnerFloor, parseActionEnginePinVersion, } from './engine-pin.js';
 import { parseAndValidateFlow, MaestroValidationError } from './maestro-validator.js';
 import { parseM7Header } from './reusable-action.js';
 import { commitMigratedActionText, loadActionMigrationBaseline, splitYaml, joinYaml, resolveActionPath, assertActionMetadataIdentity, } from './action-store.js';
 export function actionEnginePinRefusal(enginePin) {
     if (!enginePin) {
-        return (`Action is not migrated to ${ACTION_ENGINE_PIN}. Run ` +
+        return (`Action is not migrated to ${ACTION_ENGINE_PIN} or newer. Run ` +
             `node <plugin-root>/rn-dev-agent-core/dist/maestro-runner-pin.js migrate-actions --root <app> ` +
             `before replay. Incompatible actions are terminal — no manual fallback.`);
     }
-    if (enginePin !== ACTION_ENGINE_PIN) {
-        return (`Action enginePin ${enginePin} is incompatible with the session pin ${ACTION_ENGINE_PIN}. ` +
+    const version = parseActionEnginePinVersion(enginePin);
+    if (!version) {
+        return (`Action enginePin ${enginePin} is incompatible with the required floor ${ACTION_ENGINE_PIN}. ` +
+            `Migrate or re-record the action. Incompatible actions are terminal — no manual fallback.`);
+    }
+    if (!meetsMaestroRunnerFloor(version)) {
+        return (`Action enginePin ${enginePin} is below the required floor ${ACTION_ENGINE_PIN}. ` +
             `Migrate or re-record the action. Incompatible actions are terminal — no manual fallback.`);
     }
     return null;
@@ -107,8 +112,11 @@ export function standaloneLearnedActionPathRefusal(path) {
 const ENGINE_PIN_LINE = new RegExp(`^#\\s*enginePin\\s*:\\s*.+$`);
 export function upsertEnginePinHeader(text) {
     const parts = splitYaml(text);
-    const nextLine = `# enginePin: ${ACTION_ENGINE_PIN}`;
     const existing = parts.headerLines.filter((line) => ENGINE_PIN_LINE.test(line));
+    const compatible = existing
+        .map((line) => line.replace(/^#\s*enginePin\s*:\s*/, '').trim())
+        .find((pin) => actionEnginePinRefusal(pin) === null);
+    const nextLine = `# enginePin: ${compatible ?? ACTION_ENGINE_PIN}`;
     if (existing.length > 0) {
         const headerLines = [];
         let inserted = false;

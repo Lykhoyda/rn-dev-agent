@@ -2,8 +2,8 @@
 # rn-verify — Headless CI runner for Maestro flows in .rn-agent/actions/
 #
 # Discovers and runs all plugin-managed Maestro flows in .rn-agent/actions/
-# without requiring a Claude Code session. Uses only the exact pin-cache
-# maestro-runner (version + checksum). Never PATH, ~/.maestro-runner, or
+# without requiring a Claude Code session. Uses only the pin-cache
+# maestro-runner (floor >= 1.1.24, attested default). Never PATH, ~/.maestro-runner, or
 # maestro-cli. Pass --flow-dir only for an owned .rn-agent/actions directory.
 #
 # Usage:

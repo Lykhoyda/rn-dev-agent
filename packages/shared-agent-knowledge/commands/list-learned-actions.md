@@ -96,8 +96,8 @@ manual `device_*` walk. Per `feedback_execute_artifacts_before_manual.md`:
 manual primitives are a fallback, not a default.
 
 Treat the inventory's legacy `replay` string as display-only. Execute owned
-actions through `cdp_run_action` so replay resolves the exact `1.1.24`
-pin-cache engine and enforces `enginePin` and selector preflight.
+actions through `cdp_run_action` so replay resolves pin-cache maestro-runner
+`>= 1.1.24` and enforces `enginePin` and selector preflight.
 
 **This listing is read-only discovery and grants no replay authority.** A flow
 is listed whenever it exists on disk, including while the session is `blocked`

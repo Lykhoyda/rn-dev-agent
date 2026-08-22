@@ -546,6 +546,10 @@ import { accessSync, chmodSync as chmodSync2, constants as constants2, copyFileS
 import { homedir } from "node:os";
 import { basename, dirname as dirname2, join as join2, relative, resolve, sep } from "node:path";
 import { gunzipSync } from "node:zlib";
+function parseActionEnginePinVersion(enginePin) {
+  const match = ACTION_ENGINE_PIN_RE.exec(enginePin.trim());
+  return match?.[1] ?? null;
+}
 function engineLabel(_runner) {
   return `the pinned maestro-runner ${MAESTRO_RUNNER_PIN.version}`;
 }
@@ -572,6 +576,9 @@ function compareVersions(a, b) {
       return -1;
   }
   return 0;
+}
+function meetsMaestroRunnerFloor(version) {
+  return /^\d+(?:\.\d+)*$/.test(version) && compareVersions(version, MAESTRO_RUNNER_PIN.version) >= 0;
 }
 function pinCacheRoot(home = homedir()) {
   const override = process.env.RN_DEV_AGENT_RUNNER_CACHE;
@@ -829,7 +836,7 @@ function pinCorrection(status, platformKey = nodePlatformKey()) {
   const cls = status.pin.status;
   const pinned = status.pin.pinned;
   const installed = status.version ?? "unknown";
-  const install2 = `Reinstall exactly ${pinned} via ${PINNED_RUNNER_INSTALL_HINT} (session pin-cache; do not use PATH or brew maestro).`;
+  const install2 = `Install attested ${pinned} (floor >= ${pinned}) via ${PINNED_RUNNER_INSTALL_HINT} (session pin-cache; do not use PATH or brew maestro).`;
   if (pinArchiveCoords(platformKey) === null) {
     return `maestro-runner is unsupported on ${platformKey}. Supported platforms: darwin-arm64, darwin-x64, linux-x64, linux-arm64. ${install2}`;
   }
@@ -839,7 +846,7 @@ function pinCorrection(status, platformKey = nodePlatformKey()) {
     case "drift-older":
       return `Session maestro-runner ${installed} is older than the required pin ${pinned}. ${install2}`;
     case "drift-newer":
-      return `Session maestro-runner ${installed} is newer than the required pin ${pinned}. ${install2}`;
+      return `Session maestro-runner ${installed} is newer than the attested default ${pinned} and is not executed without attestation. ${install2}`;
     case "checksum-mismatch":
       return `Session maestro-runner binary checksum does not match the ${pinned} pin manifest. ${install2}`;
     case "unknown-version":
@@ -1051,7 +1058,7 @@ function getEngineStatus(resolvers) {
     return Promise.resolve(testStatus);
   return detect(resolvers ?? {}).catch(() => buildReplayEngineStatus("unknown-version", null, false));
 }
-var MAESTRO_RUNNER_PIN, TRUSTED_DRIFT_SHA256, ACTION_ENGINE_PIN, HOST_PLUGIN_ROOT, PINNED_RUNNER_INSTALL_HINT, PINNED_RUNNER_DIAGNOSE_HINT, MAESTRO_RUNNER_MIN_ANDROID_API, PRE_O_REMEDY, OLDER_SDK_TOKEN, INSTALL_REJECT_CONTEXT, REGEX_METACHARACTERS, TEXT_SELECTOR_KEYS, RELATIVE_SELECTOR_KEYS, testStatus;
+var MAESTRO_RUNNER_PIN, TRUSTED_DRIFT_SHA256, ACTION_ENGINE_PIN, ACTION_ENGINE_PIN_RE, HOST_PLUGIN_ROOT, PINNED_RUNNER_INSTALL_HINT, PINNED_RUNNER_DIAGNOSE_HINT, MAESTRO_RUNNER_MIN_ANDROID_API, PRE_O_REMEDY, OLDER_SDK_TOKEN, INSTALL_REJECT_CONTEXT, REGEX_METACHARACTERS, TEXT_SELECTOR_KEYS, RELATIVE_SELECTOR_KEYS, testStatus;
 var init_engine_pin = __esm({
   "packages/rn-dev-agent-core/dist/domain/engine-pin.js"() {
     "use strict";
@@ -1072,6 +1079,7 @@ var init_engine_pin = __esm({
       })
     });
     ACTION_ENGINE_PIN = `maestro-runner@${MAESTRO_RUNNER_PIN.version}`;
+    ACTION_ENGINE_PIN_RE = /^maestro-runner@(\d+(?:\.\d+)*)$/;
     HOST_PLUGIN_ROOT = "${CLAUDE_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}";
     PINNED_RUNNER_INSTALL_HINT = `bash ${HOST_PLUGIN_ROOT}/scripts/ensure-maestro-runner.sh`;
     PINNED_RUNNER_DIAGNOSE_HINT = `node ${HOST_PLUGIN_ROOT}/rn-dev-agent-core/dist/maestro-runner-pin.js diagnose`;
@@ -10324,10 +10332,14 @@ import { existsSync as existsSync9, lstatSync as lstatSync7, readFileSync as rea
 import { basename as basename5, dirname as dirname10, join as join10, resolve as resolve5 } from "node:path";
 function actionEnginePinRefusal(enginePin) {
   if (!enginePin) {
-    return `Action is not migrated to ${ACTION_ENGINE_PIN}. Run node <plugin-root>/rn-dev-agent-core/dist/maestro-runner-pin.js migrate-actions --root <app> before replay. Incompatible actions are terminal \u2014 no manual fallback.`;
+    return `Action is not migrated to ${ACTION_ENGINE_PIN} or newer. Run node <plugin-root>/rn-dev-agent-core/dist/maestro-runner-pin.js migrate-actions --root <app> before replay. Incompatible actions are terminal \u2014 no manual fallback.`;
   }
-  if (enginePin !== ACTION_ENGINE_PIN) {
-    return `Action enginePin ${enginePin} is incompatible with the session pin ${ACTION_ENGINE_PIN}. Migrate or re-record the action. Incompatible actions are terminal \u2014 no manual fallback.`;
+  const version = parseActionEnginePinVersion(enginePin);
+  if (!version) {
+    return `Action enginePin ${enginePin} is incompatible with the required floor ${ACTION_ENGINE_PIN}. Migrate or re-record the action. Incompatible actions are terminal \u2014 no manual fallback.`;
+  }
+  if (!meetsMaestroRunnerFloor(version)) {
+    return `Action enginePin ${enginePin} is below the required floor ${ACTION_ENGINE_PIN}. Migrate or re-record the action. Incompatible actions are terminal \u2014 no manual fallback.`;
   }
   return null;
 }
@@ -10417,8 +10429,9 @@ function standaloneLearnedActionPathRefusal(path) {
 }
 function upsertEnginePinHeader(text) {
   const parts = splitYaml(text);
-  const nextLine = `# enginePin: ${ACTION_ENGINE_PIN}`;
   const existing = parts.headerLines.filter((line) => ENGINE_PIN_LINE.test(line));
+  const compatible = existing.map((line) => line.replace(/^#\s*enginePin\s*:\s*/, "").trim()).find((pin) => actionEnginePinRefusal(pin) === null);
+  const nextLine = `# enginePin: ${compatible ?? ACTION_ENGINE_PIN}`;
   if (existing.length > 0) {
     const headerLines2 = [];
     let inserted = false;
@@ -11658,8 +11671,8 @@ function chooseMaestroDispatch(inputs) {
     };
   }
   return {
-    error: `Session maestro-runner ${MAESTRO_RUNNER_PIN.version} is not installed in the pin-cache. Install exactly ${MAESTRO_RUNNER_PIN.version} via ${PINNED_RUNNER_INSTALL_HINT}. Ambient PATH maestro-runner, ~/.maestro-runner, and brew maestro are never used.`,
-    hint: `run ensure-maestro-runner.sh for exactly ${MAESTRO_RUNNER_PIN.version}`
+    error: `Session maestro-runner ${MAESTRO_RUNNER_PIN.version} is not installed in the pin-cache. Install attested ${MAESTRO_RUNNER_PIN.version} (floor >= ${MAESTRO_RUNNER_PIN.version}) via ${PINNED_RUNNER_INSTALL_HINT}. Ambient PATH maestro-runner, ~/.maestro-runner, and brew maestro are never used.`,
+    hint: `run ensure-maestro-runner.sh for attested ${MAESTRO_RUNNER_PIN.version} (floor >= ${MAESTRO_RUNNER_PIN.version})`
   };
 }
 var warnedFallbackReasons;

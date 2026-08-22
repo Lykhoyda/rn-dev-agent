@@ -11,12 +11,13 @@ testing, network mocking, and store inspection setup.
 
 ---
 
-## Test Runner: exact maestro-runner pin
+## Test Runner: maestro-runner floor (>= 1.1.24)
 
 All YAML replay goes through rn-dev-agent's `maestro_run`,
-`cdp_run_action`, or `cdp_run_e2e_suite` tools. They resolve exactly
-maestro-runner 1.1.24 from the versioned pin-cache and refuse missing, drifted,
-unverified, or checksum-mismatched binaries before UI mutation.
+`cdp_run_action`, or `cdp_run_e2e_suite` tools. They require maestro-runner
+`>= 1.1.24` from the versioned pin-cache (attested 1.1.24 is the default
+known-good) and refuse missing, older, unverified, or checksum-mismatched
+binaries before UI mutation.
 
 ```text
 node <plugin-root>/rn-dev-agent-core/dist/maestro-runner-pin.js diagnose --json
@@ -24,7 +25,7 @@ bash <plugin-root>/scripts/ensure-maestro-runner.sh
 node <plugin-root>/rn-dev-agent-core/dist/maestro-runner-pin.js diagnose --json
 ```
 
-Success requires `pinned-ok`, version `1.1.24`, provenance `pin-cache`,
+Success requires `pinned-ok`, version `>= 1.1.24`, provenance `pin-cache`,
 and the versioned selected path. Never resolve replay from PATH,
 `~/.maestro-runner`, or another CLI.
 
@@ -244,7 +245,7 @@ replay-engine pin (summary — the
 | `tags` | `[a, b, c]` lower-case kebab | feature area (auth, tasks), operation (create, delete), markers (smoke, regression) |
 | `mutates` | `true`/`false` | persistent residue? drives the `/run-action` confirmation gate; missing parses as `null` and renders as `-` (`pre-M7` for legacy headers; `?` marks an unparseable value) |
 | `status` | `experimental` \| `active` \| `deprecated` | start `experimental`; first clean replay promotes; `deprecated` = never replay |
-| `enginePin` | `maestro-runner@1.1.24` | required for replay; missing or different pins are terminal before UI mutation |
+| `enginePin` | `maestro-runner@1.1.24` or newer | required for replay; missing or older pins are terminal before UI mutation |
 
 **Auto-generated flows** from `cdp_record_test_generate` populate these fields
 when supplied via `GenerateOpts.id|intent|tags|mutates|status` (see
@@ -305,8 +306,8 @@ maestro_run(platform="android", deviceId="<exact emulator serial>", flowPath="fl
 
 ## Android-Specific Testing Rules (GH #7)
 
-1. **ALWAYS use rn-dev-agent replay tools on Android** — they enforce the exact
-   maestro-runner pin and the authority-bound device.
+1. **ALWAYS use rn-dev-agent replay tools on Android** — they enforce the
+   maestro-runner floor and the authority-bound device.
 
 2. **Text input**: Use `device_fill` for text input on Android. It binds one
    exact input, types through the native runner, and succeeds only after stable
@@ -468,7 +469,7 @@ cdp_store_state(path="auth")           # reads full useAuthStore.getState()
 |------|----------|---------|---------|
 | rn-fast-runner (iOS) | iOS | Live device interaction | In-tree; builds on first use (or pre-build via `xcodebuild build-for-testing`) |
 | rn-android-runner (Android) | Android | Live device interaction | In-tree; build via `./gradlew assembleDebug assembleDebugAndroidTest` |
-| maestro-runner 1.1.24 | Required | YAML E2E test execution | Package pin-cache installer |
+| maestro-runner >= 1.1.24 | Required | YAML E2E test execution | Package pin-cache installer |
 | Xcode + Simulator | iOS | iOS testing | Mac App Store |
 | Android SDK + adb | Android | Android testing | developer.android.com |
 | Node.js >= 18 | Required | CDP MCP server | nodejs.org |

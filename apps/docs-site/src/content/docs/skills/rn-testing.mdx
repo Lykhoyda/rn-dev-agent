@@ -11,10 +11,10 @@ Activates when Claude encounters tasks involving Maestro tests, E2E flows, testI
 
 ## Key Knowledge Areas
 
-### Test Runner: exact maestro-runner pin
+### Test Runner: maestro-runner floor (>= 1.1.24)
 
-All YAML replay uses rn-dev-agent's tools and exactly maestro-runner `1.1.24`
-from the versioned pin-cache. Missing, drifted, unverified, checksum-mismatched,
+All YAML replay uses rn-dev-agent's tools and pin-cache maestro-runner `>= 1.1.24`
+(attested 1.1.24 is the default known-good). Missing, older, unverified, checksum-mismatched,
 or unsupported runners are terminal before UI mutation; PATH, brew Maestro,
 and `~/.maestro-runner` are never replay engines.
 

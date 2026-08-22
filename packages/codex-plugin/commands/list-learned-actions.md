@@ -37,8 +37,8 @@ After listing, summarize matching flows and their `produces`, `mutates`,
 `cdp_run_action` before a manual `device_*` walk.
 
 Treat the inventory's legacy `replay` string as display-only. Execute owned
-actions through `cdp_run_action` so replay resolves the exact `1.1.24`
-pin-cache engine and enforces `enginePin` and selector preflight.
+actions through `cdp_run_action` so replay resolves pin-cache maestro-runner
+`>= 1.1.24` and enforces `enginePin` and selector preflight.
 
 This listing is read-only discovery and grants no replay authority. A flow is
 listed whenever it exists on disk, including while the session is `blocked` and
