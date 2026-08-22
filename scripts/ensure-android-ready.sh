@@ -11,6 +11,9 @@
 
 set -uo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ENSURE="$SCRIPT_DIR/ensure-maestro-runner.sh"
+
 if ! command -v adb &>/dev/null; then
   exit 0
 fi
@@ -45,12 +48,12 @@ elif [ "$device_count" -eq 1 ]; then
   echo "$device_id" > "$SERIAL_FILE"
 fi
 
-# 4. Check maestro-runner availability (required for Android — classic Maestro gRPC is unreliable)
-if ! command -v maestro-runner &>/dev/null; then
-  mr_bin="$HOME/.maestro-runner/bin/maestro-runner"
-  if [ ! -x "$mr_bin" ]; then
-    errors+=("maestro-runner not found. Required for Android E2E testing (classic Maestro gRPC is unreliable on Android). Install: curl -fsSL https://open.devicelab.dev/install/maestro-runner | bash")
-  fi
+# 4. Require the attested pin-cache maestro-runner (floor >= 1.1.24, SHA256). Never PATH,
+# ~/.maestro-runner, curl|bash ambient installer, or maestro-cli.
+if [ ! -f "$ENSURE" ]; then
+  errors+=("ensure-maestro-runner.sh not found next to ensure-android-ready.sh. Supported correction: install the plugin scripts next to each other.")
+elif ! bash "$ENSURE" --print-bin >/dev/null; then
+  errors+=("attested maestro-runner >= 1.1.24 required (version + checksum). Supported correction: bash $ENSURE")
 fi
 
 # 5. Warn about Play Protect (can silently block Maestro APK installation)

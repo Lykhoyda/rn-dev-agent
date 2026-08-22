@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { after, test } from 'node:test';
+import { after, afterEach, beforeEach, test } from 'node:test';
 import {
   createAuthorityGate,
   hasManagedInstallReissueAuthority,
@@ -20,6 +20,17 @@ import { createMaestroTestAllHandler } from '../../dist/tools/maestro-test-all.j
 import { chooseMaestroDispatch } from '../../dist/tools/maestro-dispatch.js';
 import { flowUsesClearState } from '../../dist/tools/resolve-ios-app-file.js';
 import { okResult } from '../../dist/utils.js';
+import {
+  _resetEngineStatusForTest,
+  _setEngineStatusForTest,
+  buildReplayEngineStatus,
+  MAESTRO_RUNNER_PIN,
+} from '../../dist/domain/engine-pin.js';
+
+beforeEach(() =>
+  _setEngineStatusForTest(buildReplayEngineStatus('pinned-ok', MAESTRO_RUNNER_PIN.version, false)),
+);
+afterEach(() => _resetEngineStatusForTest());
 
 const EXACT = '5C10B45B-2065-458B-B885-0F83F49747C8';
 const APP_ID = 'com.rndevagent.testapp';

@@ -8,8 +8,10 @@
 
 import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { createRunActionHandler } from '../../dist/tools/run-action.js';
-import { createTmpProject } from '../helpers/tmp-project.js';
+import {
+  createPinnedRunActionHandler as createRunActionHandler,
+  createTmpProject,
+} from '../helpers/tmp-project.js';
 
 let project;
 

@@ -81,8 +81,7 @@ jq '.sections.flows.items[] | {flow, path, params, replay}' /tmp/learned-actions
 **Decide:**
 1. **Exact match** (filename or first-comment-block contains the feature
    keyword AND `appId` matches the test-app): replay it via
-   `/rn-dev-agent:run-action <flow-name>` or directly with
-   `maestro-runner --platform <ios|android> test [-e KEY=VALUE …] <path>`.
+   `/rn-dev-agent:run-action <flow-name>` or `cdp_run_action`.
    A passing replay IS evidence — proceed to Step 6 (Generate / Refresh)
    and Step 7 (Report). Skip the rest.
 2. **Partial match** (covers part of the flow, e.g. login is automated but
@@ -156,8 +155,8 @@ Write a brief test plan BEFORE executing:
 ### Step 2.5: Auth Pre-flight Check (GH #10)
 
 Before navigating, check if the app is on an auth-gated screen (login,
-welcome, registration, onboarding). If so, attempt auto-login via the
-project's own Maestro subflows instead of unreliable manual taps.
+welcome, registration, onboarding). Authentication recovery must use a
+compatible action from the owned learned-action corpus.
 
 1. Call `cdp_navigation_state`. Check the current route name.
 2. If the navigation state is **empty or minimal**, the app may still
@@ -169,49 +168,20 @@ project's own Maestro subflows instead of unreliable manual taps.
    `Login`, `Welcome`, `SignIn`, `Register`, `Onboarding`, `Auth`,
    `Landing`):
 
-   a. **Scan for Maestro subflows** in the project:
-      ```bash
-      ls .maestro/subflows/ .maestro/ 2>/dev/null
-      ```
-   b. **Identify login flows** by filename — prefer login/session flows
-      over registration (idempotent, no backend junk):
-      - First choice: `login.yaml`, `sign_in.yaml`, `auth.yaml`
-      - Second choice: `flow_start.yaml` (often includes login)
-      - Last resort: `register_user.yaml` (creates new accounts)
-      Read the file to confirm it performs authentication.
-   c. **Pre-execution check**: Read the subflow content. If it contains
-      `clearState: true` and this is a Dev Client build, copy it to
-      `/tmp/` and strip that line before running (GH #8).
-   d. **Check for env variables**: If the subflow uses `${EMAIL}`,
-      `${PASSWORD}`, etc., look for a `.env` or `.maestro/config.yaml`
-      file. If credentials are needed, ask the user.
-   e. **Wrap if needed**: Maestro subflows often lack `appId`. Create a
-      wrapper:
-      ```bash
-      cat > /tmp/auth-wrapper.yaml << EOF
-      appId: <bundle-id from app.json>
-      ---
-      - launchApp
-      - runFlow:
-          file: $(pwd)/.maestro/subflows/login.yaml
-      EOF
-      ```
-   f. **Use the exact platform** from the ready authority session.
-   g. **Run with maestro-runner** (required — classic Maestro is
-      unreliable on Android, GH #7):
-      ```bash
-      maestro-runner --platform <ios|android> test /tmp/auth-wrapper.yaml
-      ```
-      If maestro-runner is not installed, STOP and tell the user to
-      install it. Do NOT fall back to classic Maestro.
-   h. **Verify arrival** at the home/main screen:
+   a. Run `/rn-dev-agent:list-learned-actions login` and select one compatible
+      owned action whose metadata establishes authenticated state.
+   b. Replay it through `cdp_run_action` on the exact authority-bound device.
+      Any engine-pin, selector, or action-format incompatibility is terminal.
+   c. If no compatible owned action exists, stop and report authentication as
+      blocked. Do not use manual taps, `.maestro` flows, ambient runners, or
+      `cdp_auto_login` as an automatic fallback.
+   d. Only when the user explicitly authorizes legacy per-call navigation
+      recovery may `cdp_auto_login` run. It is never durable login authority or
+      PR proof; create or migrate an owned compatible action before proof.
+   e. **Verify arrival** at the home/main screen:
       ```
       cdp_navigation_state  → confirm route is NOT auth-related
       ```
-   i. If no Maestro subflows found, inform the user:
-      "App appears to be logged out but no Maestro login subflows
-      found in .maestro/. Please log in manually or create a
-      .maestro/subflows/login.yaml flow."
 
 4. If the route is a main app screen (home, dashboard, tabs, etc.),
    skip this step — the user is already authenticated.
@@ -355,10 +325,7 @@ For EACH step in the flow:
    - assertVisible:
        id: "cart-badge"
    EOF
-   # ALWAYS use maestro-runner (not classic maestro) — especially on Android
-   # where classic Maestro's gRPC driver is unreliable (GH #7)
-   # --platform is a GLOBAL flag (before the test subcommand)
-   maestro-runner --platform <ios|android> test /tmp/step.yaml
+   maestro_run(platform="<ios|android>", flowPath="/tmp/step.yaml")
    ```
 
    **Android text input**: Use `device_fill` for long strings, Unicode, and
@@ -394,14 +361,15 @@ Test at minimum:
 - Multiple rapid interactions
 
 ### Step 6: Generate Persistent Test
-After all steps pass, write a complete Maestro YAML flow file at
-`.maestro/<feature-name>.yaml` that can run in CI.
+After all steps pass, use the creating-actions workflow to persist a complete,
+compatible learned action at `.rn-agent/actions/<feature-name>.yaml`. Never
+write a persistent `.maestro/` flow or bypass the action creation boundary.
 
 ### Step 7: Report
 Summarize:
 - Steps that passed (with evidence)
 - Steps that failed (with screenshot + state dump)
-- Maestro test file generated at: .maestro/<name>.yaml
+- Learned action generated at: .rn-agent/actions/<name>.yaml
 
 ## Circuit Breaker — Retry Budget (GH #5)
 
@@ -567,6 +535,6 @@ If you notice yourself doing any of these, stop:
 - [ ] `cdp_status` returns `ok:true` with `cdp.connected: true`
 - [ ] Every check in the results table has a concrete Evidence value (not blank, not "seems fine")
 - [ ] At least one `device_screenshot` saved to `docs/proof/<feature>/`
-- [ ] A persistent Maestro flow saved to `.maestro/<feature>.yaml`
+- [ ] A compatible learned action saved to `.rn-agent/actions/<feature>.yaml`
 - [ ] `cdp_error_log` at end of flow returns 0 new errors
 - [ ] If the flow touches state: `cdp_store_state` confirms the expected shape

@@ -536,7 +536,7 @@ Each phase has shortcuts agents reach for. Don't.
 
 ### Always
 - Call `cdp_status` before Phase 5.5 starts
-- Replay the architect's proof flow on camera in Phase 8 — Maestro-driven (`maestro-runner` CLI for env-substituted flows or `maestro_run` MCP tool for env-free flows) when expressible, step-by-step `device_*` / `cdp_*` only when Maestro genuinely cannot capture it AND the inexpressibility is documented in PROOF.md Deviations
+- Replay the architect's proof flow on camera in Phase 8 through `maestro_run` (its `params` object covers env-substituted flows) when expressible, step-by-step `device_*` / `cdp_*` only when Maestro genuinely cannot capture it AND the inexpressibility is documented in PROOF.md Deviations
 - Use MCP tools (cdp_*, device_*) for app state reads
 - Present the Phase 5.5 verification table with concrete Evidence
 - Gate Phase 5 on user approval of the architecture

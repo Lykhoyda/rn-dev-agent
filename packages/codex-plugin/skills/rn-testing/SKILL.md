@@ -11,33 +11,23 @@ testing, network mocking, and store inspection setup.
 
 ---
 
-## Test Runner: maestro-runner (Preferred)
+## Test Runner: maestro-runner floor (>= 1.1.24)
 
-maestro-runner is a Go-based drop-in replacement for Maestro. Same YAML flow
-syntax, 3-4x faster, no JVM required.
+All YAML replay goes through rn-dev-agent's `maestro_run`,
+`cdp_run_action`, or `cdp_run_e2e_suite` tools. They require maestro-runner
+`>= 1.1.24` from the versioned pin-cache (attested 1.1.24 is the default
+known-good) and refuse missing, older, unverified, or checksum-mismatched
+binaries before UI mutation.
 
-| Metric | Maestro (Java) | maestro-runner (Go) |
-|--------|---------------|---------------------|
-| Binary size | ~300MB (with JVM) | 21MB single binary |
-| Startup time | 2-4s (JVM cold start) | <100ms |
-| Memory | ~400MB | ~30MB |
-| Flow execution | Baseline | 2-3x faster |
-| Install | `brew install maestro` + Java | Single binary download |
-
-```bash
-# Auto-detect runner (prefer maestro-runner)
-if command -v maestro-runner &>/dev/null; then
-  RUNNER="maestro-runner"
-elif command -v maestro &>/dev/null; then
-  RUNNER="maestro"
-else
-  echo "Install: brew install maestro OR download maestro-runner"
-  exit 1
-fi
-
-# Execute flow (identical YAML syntax either way)
-$RUNNER test .maestro/my-flow.yaml
+```text
+node <plugin-root>/rn-dev-agent-core/dist/maestro-runner-pin.js diagnose --json
+bash <plugin-root>/scripts/ensure-maestro-runner.sh
+node <plugin-root>/rn-dev-agent-core/dist/maestro-runner-pin.js diagnose --json
 ```
+
+Success requires `pinned-ok`, version `>= 1.1.24`, provenance `pin-cache`,
+and the versioned selected path. Never resolve replay from PATH,
+`~/.maestro-runner`, or another CLI.
 
 ---
 
@@ -70,7 +60,7 @@ Do not silently take the cheaper path. The user reviewing your output cannot tel
 
 ### When shortcuts are legitimate
 
-- **Auth pre-flight** (auto-login via deep-link) — bootstrap, not verification surface
+- **Auth pre-flight** (compatible owned action; explicitly authorized legacy helper only when needed) — bootstrap, not verification surface
 - **Permission pre-flight** (granting via `device_permission`) — platform setup, declared upfront
 - **Test data seeding** (via app's test-only fixtures) — declared in the test plan
 - **Explicit user instruction** ("just deep-link to the details screen and check the layout") — user-sanctioned scope
@@ -234,7 +224,7 @@ appId: com.example.app
 - assertVisible:
     id: "cart-badge"
 EOF
-maestro-runner --platform <ios|android> test /tmp/step.yaml
+maestro_run(platform="<ios|android>", flowPath="/tmp/step.yaml")
 ```
 
 ---
@@ -243,7 +233,8 @@ maestro-runner --platform <ios|android> test /tmp/step.yaml
 
 Every reusable Maestro flow MUST declare an M7 metadata header — `# key: value`
 comment lines above the body (Maestro ignores them; the inventory and the
-`/run-action` pre-flight parse them). The 5 inventory keys (summary — the
+`/run-action` pre-flight parse them). The five inventory keys plus the required
+replay-engine pin (summary — the
 **canonical definition** lives in the creating-actions skill's
 `references/m7-header-reference.md`; if they disagree, that reference wins):
 
@@ -254,14 +245,15 @@ comment lines above the body (Maestro ignores them; the inventory and the
 | `tags` | `[a, b, c]` lower-case kebab | feature area (auth, tasks), operation (create, delete), markers (smoke, regression) |
 | `mutates` | `true`/`false` | persistent residue? drives the `/run-action` confirmation gate; missing parses as `null` and renders as `-` (`pre-M7` for legacy headers; `?` marks an unparseable value) |
 | `status` | `experimental` \| `active` \| `deprecated` | start `experimental`; first clean replay promotes; `deprecated` = never replay |
+| `enginePin` | `maestro-runner@1.1.24` or newer | required for replay; missing or older pins are terminal before UI mutation |
 
 **Auto-generated flows** from `cdp_record_test_generate` populate these fields
 when supplied via `GenerateOpts.id|intent|tags|mutates|status` (see
 `tools/test-recorder-generators.ts`). `maestro_generate` and **hand-written
-flows** must add the header manually before the flow is considered reusable.
+flows** must add the header manually before the flow is considered replayable.
 
-**Verification rule:** before approving a new flow for the artifact-first
-inventory, confirm the header carries all 5 keys.
+**Verification rule:** before approving a new flow for replay, confirm the
+header carries all five inventory keys plus `enginePin`.
 
 For the full authoring workflow (inventory dedup, selector grounding, the
 ASCII flow diagram, optional fields — `params`, `appId`, `produces`,
@@ -305,27 +297,17 @@ grep -r 'testID=' src/ --include="*.tsx" --include="*.ts"
 
 ## Multi-Device Testing
 
-```bash
-# ALWAYS pass --platform explicitly (global flag, before the test subcommand)
-maestro-runner --platform ios test flow.yaml              # iOS
-maestro-runner --platform android test flow.yaml          # Android
-
-# With explicit device ID -- iOS takes the exact simulator UDID
-# (`booted` is ambiguous as soon as a second simulator is up; the exact
-#  UDID is what replay authority is checked against)
-maestro-runner --platform ios --device A1B2C3D4-E5F6-4A5B-8C9D-0E1F2A3B4C5D test flow.yaml
-maestro-runner --platform android --device emulator-5554 test flow.yaml
-
-# Sequential cross-platform
-maestro-runner --platform ios test .maestro/feature.yaml && \
-maestro-runner --platform android test .maestro/feature.yaml
+```text
+maestro_run(platform="ios", flowPath="flow.yaml")
+maestro_run(platform="android", flowPath="flow.yaml")
+maestro_run(platform="ios", deviceId="<exact simulator UDID>", flowPath="flow.yaml")
+maestro_run(platform="android", deviceId="<exact emulator serial>", flowPath="flow.yaml")
 ```
 
 ## Android-Specific Testing Rules (GH #7)
 
-1. **ALWAYS use maestro-runner on Android** — classic Maestro's gRPC driver
-   is unreliable (UNAVAILABLE: io exception). maestro-runner talks directly
-   to UIAutomator2 over HTTP, bypassing the fragile gRPC stack entirely.
+1. **ALWAYS use rn-dev-agent replay tools on Android** — they enforce the exact
+   maestro-runner pin and the authority-bound device.
 
 2. **Text input**: Use `device_fill` for text input on Android. It binds one
    exact input, types through the native runner, and succeeds only after stable
@@ -338,16 +320,13 @@ maestro-runner --platform android test .maestro/feature.yaml
 4. **Play Protect**: Google Play Protect on emulators can silently block test
    APK installations. Disable it: Settings > Security > Play Protect.
 
-5. **Port 7001 conflicts**: If you must use classic Maestro, clean stale
-   forwarding rules first: `adb forward --remove-all`
-
 ---
 
-## Auth Pre-flight: Auto-login via Maestro Subflows (GH #10)
+## Auth Pre-flight: Owned Learned Actions (GH #10)
 
 Before testing features that require authentication, check if the app is
-on a login/auth screen. If so, use the project's own Maestro subflows
-instead of unreliable manual coordinate taps.
+on a login/auth screen. If so, authentication recovery must use a compatible
+action from the owned learned-action corpus.
 
 ### Detection
 
@@ -359,63 +338,36 @@ typically match: `Login`, `Welcome`, `SignIn`, `Register`, `Onboarding`,
 the Dev Client picker (GH #9), not necessarily auth. Wait 3 seconds and
 retry before concluding the app is logged out.
 
-### Discovery
+### Discovery and execution
 
-Scan for Maestro subflows in the project:
-```bash
-ls .maestro/subflows/ .maestro/ 2>/dev/null
-```
+1. Run `$rn-dev-agent:list-learned-actions login`.
+2. Select one compatible owned action whose metadata establishes authenticated
+   state.
+3. Replay it through `cdp_run_action` on the exact authority-bound device.
+4. Treat any engine-pin, selector, or action-format incompatibility as terminal.
+5. If no compatible owned action exists, stop and report authentication as
+   blocked. Do not use manual taps, `.maestro` flows, ambient runners, or
+   `cdp_auto_login` as an automatic fallback.
 
-**Prefer login over registration** (idempotent, no backend junk):
-1. `login.yaml`, `sign_in.yaml`, `auth.yaml`
-2. `flow_start.yaml` (often includes login)
-3. `register_user.yaml` (last resort — creates accounts)
-
-Read the file to confirm it performs authentication.
-
-### Pre-execution checks
-
-1. **`clearState: true`**: If the subflow contains it and this is a Dev
-   Client build, copy to `/tmp/` and strip the line before running (GH #8).
-2. **Environment variables**: If the flow uses `${EMAIL}`, `${PASSWORD}`,
-   etc., check for `.env` or `.maestro/config.yaml`. Ask the user if needed.
-3. **`appId`**: Subflows often lack `appId`. Wrap them:
-   ```bash
-   cat > /tmp/auth-wrapper.yaml << EOF
-   appId: <bundle-id>
-   ---
-   - launchApp
-   - runFlow:
-       file: $(pwd)/.maestro/subflows/login.yaml
-   EOF
-   ```
-
-### Execution
-
-```bash
-# ALWAYS use maestro-runner (classic Maestro gRPC is unreliable on Android)
-maestro-runner --platform <ios|android> test /tmp/auth-wrapper.yaml
-```
-
-If maestro-runner is not installed, STOP and tell the user to install it.
-Do NOT fall back to classic Maestro.
+Only when the user explicitly authorizes legacy per-call navigation recovery may
+`cdp_auto_login` run. It is never durable login authority or PR proof; create or
+migrate an owned compatible action before proof.
 
 ### Verification
 
-After the subflow completes, verify arrival at the main app:
+After replay completes, verify arrival at the main app:
 ```
 cdp_navigation_state → route should be a main screen (Home, Dashboard, Tabs)
 ```
 
 ### Rules
 
-- **NEVER** fall back to classic Maestro for auth flows (GH #7)
-- **NEVER** use `clearState: true` with Dev Client builds (GH #8)
-- **ALWAYS** pass `--platform` to maestro-runner
+- **NEVER** fall back to manual login or an unowned replay flow
+- **ALWAYS** use `cdp_run_action` for the owned authentication action
 - **Skip** the notification `permissions` config if testing notification
   permission flows (preserve undetermined state)
-- If no Maestro subflows found, inform the user and ask them to log in
-  manually or create `.maestro/subflows/login.yaml`
+- If no compatible owned login action exists, stop and report that
+  authentication cannot proceed through an authorized reusable flow
 
 ---
 
@@ -517,8 +469,7 @@ cdp_store_state(path="auth")           # reads full useAuthStore.getState()
 |------|----------|---------|---------|
 | rn-fast-runner (iOS) | iOS | Live device interaction | In-tree; builds on first use (or pre-build via `xcodebuild build-for-testing`) |
 | rn-android-runner (Android) | Android | Live device interaction | In-tree; build via `./gradlew assembleDebug assembleDebugAndroidTest` |
-| maestro-runner | Recommended | YAML E2E test execution | Single binary download |
-| Maestro | Fallback | YAML E2E test execution | `brew install maestro` |
+| maestro-runner >= 1.1.24 | Required | YAML E2E test execution | Package pin-cache installer |
 | Xcode + Simulator | iOS | iOS testing | Mac App Store |
 | Android SDK + adb | Android | Android testing | developer.android.com |
 | Node.js >= 18 | Required | CDP MCP server | nodejs.org |

@@ -13,16 +13,13 @@
 // recorder. Keeping emission explicit means the agent has to make the
 // classification decision (which is the right place for it).
 
-import { existsSync } from 'node:fs';
 import { okResult, failResult } from '../utils.js';
 import type { ToolResult } from '../utils.js';
 import { getStoredEvents, getRecordingStartRoute } from './test-recorder.js';
 import { generateMaestro } from './test-recorder-generators.js';
 import { type ActionLifecycle, freshRuntimeState } from '../domain/reusable-action.js';
-import { actionPathFor } from '../domain/action-store.js';
+import { assertOwnedActionCorpus, writeRecordedActionTransaction } from '../domain/action-store.js';
 import { mirrorToDb } from '../domain/action-state-store.js';
-import { sidecarPathFor } from '../domain/sidecar-io.js';
-import { atomicWriter } from '../domain/atomic-writer.js';
 
 export interface SaveAsActionArgs {
   /**
@@ -114,50 +111,60 @@ export function createSaveAsActionHandler() {
     }
 
     const projectRoot = args.projectRoot ?? process.cwd();
-    const filePath = actionPathFor(projectRoot, args.id);
-    // Phase 130 (post-review): capture pre-existence ONCE before any
-    // write — `existsSync(filePath)` after `writeFileSync` is always
-    // true and inverted the `created`/`overwritten` flags in the
-    // success payload (multi-LLM review caught this).
-    const preexisted = existsSync(filePath);
-    if (preexisted && !args.overwrite) {
-      return failResult(
-        `cdp_record_test_save_as_action: action "${args.id}" already exists at ${filePath}. Pass overwrite=true to replace, or pick a different id.`,
-        'BAD_FILENAME',
-        {
-          actionId: args.id,
-          filePath,
-          hint: 'Existing actions should be repaired (cdp_repair_action) or extended in place, not silently overwritten.',
-        },
-      );
+    try {
+      assertOwnedActionCorpus(projectRoot);
+    } catch (err) {
+      return failResult(err instanceof Error ? err.message : String(err), 'BAD_FILENAME');
     }
-
     const status: ActionLifecycle = args.status ?? 'experimental';
     const startRoute = getRecordingStartRoute() ?? undefined;
 
     // generateMaestro emits the appId top section + M7 header + body
     // when bundleId + M7 fields are supplied. Mirrors what hand-authored
     // .rn-agent/actions/*.yaml files look like.
-    const yamlText = generateMaestro(events, {
-      testName: args.testName ?? args.intent,
-      bundleId: args.bundleId,
-      startRoute,
-      id: args.id,
-      intent: args.intent,
-      tags: args.tags,
-      mutates: args.mutates,
-      status,
-      produces: args.produces,
-    });
+    let yamlText: string;
+    try {
+      yamlText = generateMaestro(events, {
+        testName: args.testName ?? args.intent,
+        bundleId: args.bundleId,
+        startRoute,
+        id: args.id,
+        intent: args.intent,
+        tags: args.tags,
+        mutates: args.mutates,
+        status,
+        produces: args.produces,
+      });
+    } catch (err) {
+      return failResult(err instanceof Error ? err.message : String(err), 'BAD_RECORDING');
+    }
 
     // Issue #101: sidecar-first atomic pair-write. The atomicWriter
     // owns `lastSeenMtimeMs` correctness (overrides whatever we seed in
     // `freshRuntimeState`) so even partial-write failures can't leave
     // the next yamlEditedSinceLastSeen() check returning a false-
     // positive "human edited" alarm.
-    const sidecarPath = sidecarPathFor(filePath);
     const initialState = freshRuntimeState(() => new Date(), 0);
-    const writeResult = atomicWriter.pairWrite(filePath, yamlText, sidecarPath, initialState);
+    const writeResult = writeRecordedActionTransaction(
+      projectRoot,
+      args.id,
+      yamlText,
+      initialState,
+      args.overwrite === true,
+    );
+    if (!writeResult.ok) {
+      const location = writeResult.existingPath ? ` at ${writeResult.existingPath}` : '';
+      return failResult(
+        `cdp_record_test_save_as_action: action "${args.id}" already exists${location}. Pass overwrite=true to replace, or pick a different id.`,
+        'BAD_FILENAME',
+        {
+          actionId: args.id,
+          filePath: writeResult.existingPath,
+          hint: 'Existing actions should be repaired (cdp_repair_action) or extended in place, not silently overwritten.',
+        },
+      );
+    }
+    const { filePath, sidecarPath, preexisted } = writeResult;
 
     // Task 5 (A2/C): seed the DB index row for the brand-new action, STRICTLY
     // AFTER the authoritative #101 pair-write. Initial state has empty history

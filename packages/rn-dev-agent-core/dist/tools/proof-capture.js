@@ -4,7 +4,7 @@ import { chmodSync, closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, open
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
-import { actionPathFor, loadAction } from '../domain/action-store.js';
+import { loadAction, resolveActionPath } from '../domain/action-store.js';
 import { hashProofArgs, hashProofValue, validateTrace, } from '../domain/proof-capture.js';
 import { acceptanceMappingSchema, evidenceReviewSchema, finalProofReceiptSchema, mechanicallyAcceptedProofReceiptSchema, proofActionSchema, proofClassSchema, proofDeviceSchema, proofFixtureSchema, proofIssueSchema, proofPullRequestSchema, proofRuntimeSchema, proofCandidateRuntimeSchema, storyboardSchema, } from '../domain/proof-receipt.js';
 import { failResult, okResult } from '../utils.js';
@@ -435,7 +435,9 @@ function sameProofAction(left, right) {
 }
 export function readProofActionIdentity(appProjectRoot, actionId) {
     try {
-        const path = actionPathFor(appProjectRoot, actionId);
+        const path = resolveActionPath(appProjectRoot, actionId);
+        if (!path)
+            return null;
         const bytesBefore = readFileSync(path);
         const action = loadAction(appProjectRoot, actionId);
         const bytesAfter = readFileSync(path);
@@ -487,6 +489,12 @@ function validCaptureContext(args, expectedRoot) {
         return false;
     }
     if (!/^[a-z0-9][a-z0-9-]*$/.test(args.runId))
+        return false;
+    const proofTools = [
+        ...args.storyboard.allowedTools,
+        ...args.storyboard.steps.flatMap((step) => [step.expectedTool, step.assertionTool]),
+    ];
+    if (proofTools.some((tool) => normalizeTool(tool) === 'cdp_auto_login'))
         return false;
     const proofRoot = join(expectedRoot, 'docs', 'proof', args.runId);
     const screenshots = args.storyboard.steps.map((step) => step.screenshotPath);

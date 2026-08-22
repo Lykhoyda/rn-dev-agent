@@ -19,8 +19,10 @@ import {
 import { runCdpReplay, firstReplayTestId } from '../../dist/tools/cdp-replay-dispatch.js';
 import { attemptRepair, detectTransportBlind } from '../../dist/domain/repair-engine.js';
 import { loadAction } from '../../dist/domain/action-store.js';
-import { createRunActionHandler } from '../../dist/tools/run-action.js';
-import { createTmpProject } from '../helpers/tmp-project.js';
+import {
+  createPinnedRunActionHandler as createRunActionHandler,
+  createTmpProject,
+} from '../helpers/tmp-project.js';
 
 let project: ReturnType<typeof createTmpProject>;
 beforeEach(() => {
@@ -366,7 +368,7 @@ const OTP_SELECTOR = 'EmailOtpFormContent_email-pressable';
 const PUSH_PROMPT_CANDIDATES = ['PushPrimer_title', 'PushPrimer_allow-button', 'PushPrimer_skip'];
 
 test('gh-631: the repair engine refuses a reclassified wait whose selector is absent', () => {
-  project.seedAction('register', actionYaml(['- tapOn:', `    id: "${OTP_SELECTOR}"`]));
+  project.seedAction('register', actionYaml(['- tapOn:', `    id: "${OTP_SELECTOR}"`], 'register'));
   const action = loadAction(project.root, 'register');
 
   assert.equal(
@@ -431,7 +433,7 @@ function fakeRepair(envelope: Record<string, unknown>, seen: { failedSelector?: 
 }
 
 test('gh-631: absent selector → repair gets the exact selector, refuses, and writes no YAML', async () => {
-  project.seedAction('register', actionYaml(['- tapOn:', `    id: "${OTP_SELECTOR}"`]));
+  project.seedAction('register', actionYaml(['- tapOn:', `    id: "${OTP_SELECTOR}"`], 'register'));
   const before = project.readYaml('register');
   const seen: { failedSelector?: string } = {};
 
@@ -466,7 +468,7 @@ test('gh-631: absent selector → repair gets the exact selector, refuses, and w
 });
 
 test('gh-317: a TRANSPORT_BLIND repair refusal is preserved verbatim and writes no YAML', async () => {
-  project.seedAction('register', actionYaml(['- tapOn:', `    id: "${OTP_SELECTOR}"`]));
+  project.seedAction('register', actionYaml(['- tapOn:', `    id: "${OTP_SELECTOR}"`], 'register'));
   const before = project.readYaml('register');
   const seen: { failedSelector?: string } = {};
   let maestroCalls = 0;
@@ -496,17 +498,20 @@ test('gh-317: a TRANSPORT_BLIND repair refusal is preserved verbatim and writes 
 test('gh-580: the handler resumes reactive replay at the parsed selector', async () => {
   project.seedAction(
     'register',
-    actionYaml([
-      '- launchApp:',
-      '    stopApp: false',
-      '- tapOn:',
-      '    id: "direct_login_button"',
-      '- inputText: "user@example.com"',
-      '- assertVisible:',
-      '    id: "otp_sheet"',
-      '- tapOn:',
-      '    id: "otp_submit"',
-    ]),
+    actionYaml(
+      [
+        '- launchApp:',
+        '    stopApp: false',
+        '- tapOn:',
+        '    id: "direct_login_button"',
+        '- inputText: "user@example.com"',
+        '- assertVisible:',
+        '    id: "otp_sheet"',
+        '- tapOn:',
+        '    id: "otp_submit"',
+      ],
+      'register',
+    ),
   );
   const { calls, deps } = spyDeps();
 
@@ -528,7 +533,7 @@ test('gh-580: the handler resumes reactive replay at the parsed selector', async
 });
 
 test('gh-580: repair refusal surfaces the exact selector instead of a raw stdout dump', async () => {
-  project.seedAction('register', actionYaml(['- tapOn:', `    id: "${OTP_SELECTOR}"`]));
+  project.seedAction('register', actionYaml(['- tapOn:', `    id: "${OTP_SELECTOR}"`], 'register'));
   const before = project.readYaml('register');
   const handler = createRunActionHandler({
     maestroRun: async () => ({
@@ -585,7 +590,7 @@ test('gh-580: repair refusal surfaces the exact selector instead of a raw stdout
 });
 
 test('gh-580: the warn path (runner exit 0 with failures) reports kind + selector too', async () => {
-  project.seedAction('register', actionYaml(['- tapOn:', `    id: "${OTP_SELECTOR}"`]));
+  project.seedAction('register', actionYaml(['- tapOn:', `    id: "${OTP_SELECTOR}"`], 'register'));
   const handler = createRunActionHandler({
     // maestro_run's warnResult shape: ok:true, no `error`, step summary in DATA.
     maestroRun: async () => ({
@@ -636,7 +641,7 @@ test('gh-580: the warn path (runner exit 0 with failures) reports kind + selecto
 
 for (const retryShape of ['warn', 'throw'] as const) {
   test(`gh-580: a ${retryShape} post-repair failure keeps structural terminal evidence`, async () => {
-    project.seedAction('register', actionYaml(['- tapOn:', '    id: "otp"']));
+    project.seedAction('register', actionYaml(['- tapOn:', '    id: "otp"'], 'register'));
     let maestroCalls = 0;
     const handler = createRunActionHandler({
       maestroRun: async (...args: unknown[]) => {
@@ -673,7 +678,7 @@ for (const retryShape of ['warn', 'throw'] as const) {
 }
 
 test('gh-580: a killed post-repair retry persists and returns TIMEOUT', async () => {
-  project.seedAction('register', actionYaml(['- tapOn:', '    id: "otp"']));
+  project.seedAction('register', actionYaml(['- tapOn:', '    id: "otp"'], 'register'));
   let maestroCalls = 0;
   const handler = createRunActionHandler({
     maestroRun: async (...args: unknown[]) => {

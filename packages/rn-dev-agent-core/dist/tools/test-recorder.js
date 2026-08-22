@@ -188,9 +188,16 @@ export function createRecordTestGenerateHandler() {
             mutates: args.mutates,
             status: args.status,
         };
-        const text = args.format === 'maestro'
-            ? generateMaestro(storedEvents, opts)
-            : generateDetox(storedEvents, opts);
+        let text;
+        try {
+            text =
+                args.format === 'maestro'
+                    ? generateMaestro(storedEvents, opts)
+                    : generateDetox(storedEvents, opts);
+        }
+        catch (err) {
+            return failResult(err instanceof Error ? err.message : String(err), 'BAD_RECORDING');
+        }
         return okResult({
             format: args.format,
             eventCount: storedEvents.length,

@@ -98,16 +98,45 @@ function scanMemories() {
     items.sort((a, b) => a.name.localeCompare(b.name));
     return { exists: true, dir: memDir, items: items.slice(0, flags.max) };
 }
+function isDirectNode(target, kind) {
+    try {
+        const stat = fs.lstatSync(target);
+        return !stat.isSymbolicLink() && (kind === 'directory' ? stat.isDirectory() : stat.isFile());
+    }
+    catch {
+        return false;
+    }
+}
+function resolveFlowFile(actionsDir, id) {
+    const yamlPath = path.join(actionsDir, `${id}.yaml`);
+    const ymlPath = path.join(actionsDir, `${id}.yml`);
+    const yamlExists = isDirectNode(yamlPath, 'file');
+    const ymlExists = isDirectNode(ymlPath, 'file');
+    if (yamlExists && ymlExists)
+        return null;
+    if (yamlExists)
+        return yamlPath;
+    if (ymlExists)
+        return ymlPath;
+    return null;
+}
 function scanFlows() {
     const roots = collectFlowRoots(flags.workspaceRoot);
     const items = [];
     for (const root of roots) {
-        if (!fs.existsSync(root))
+        if (!isDirectNode(root, 'directory'))
             continue;
-        for (const f of fs.readdirSync(root)) {
-            if (!f.endsWith('.yaml') && !f.endsWith('.yml'))
+        const ids = [
+            ...new Set(fs
+                .readdirSync(root)
+                .filter((file) => /\.ya?ml$/.test(file))
+                .map((file) => file.replace(/\.ya?ml$/, ''))),
+        ];
+        for (const id of ids) {
+            const fp = resolveFlowFile(root, id);
+            if (!fp)
                 continue;
-            const fp = path.join(root, f);
+            const f = path.basename(fp);
             const text = fs.readFileSync(fp, 'utf8');
             const meta = parseFlowMeta(text);
             if (flags.appId && meta.appId !== flags.appId)
@@ -117,9 +146,7 @@ function scanFlows() {
                 continue;
             const params = (text.match(/\$\{([A-Z_][A-Z0-9_]*)\}/g) || []).map((s) => s.slice(2, -1));
             const uniqParams = Array.from(new Set(params));
-            const replay = uniqParams.length
-                ? `maestro-runner --platform ios test ${uniqParams.map((p) => `-e ${p}=...`).join(' ')} ${fp}`
-                : `maestro-runner --platform ios test ${fp}`;
+            const replay = replayHint(meta.id, fp, uniqParams);
             items.push({
                 flow: f.replace(/\.ya?ml$/, ''),
                 path: fp,
@@ -140,6 +167,19 @@ function scanFlows() {
     }
     items.sort((a, b) => a.flow.localeCompare(b.flow));
     return { items: items.slice(0, flags.max), roots };
+}
+function replayHint(id, flowPath, params) {
+    const paramObj = params.length > 0 ? `, params: { ${params.map((p) => `${p}: "..."`).join(', ')} }` : '';
+    const actionsDir = path.dirname(flowPath);
+    const canonicalYaml = id !== null &&
+        path.basename(flowPath).replace(/\.ya?ml$/, '') === id &&
+        path.basename(actionsDir) === 'actions' &&
+        path.basename(path.dirname(actionsDir)) === '.rn-agent';
+    if (canonicalYaml) {
+        const projectRoot = path.dirname(path.dirname(actionsDir));
+        return `cdp_run_action({ actionId: "${id}", projectRoot: "${projectRoot}", blindProbeMode: "forbid"${paramObj} })`;
+    }
+    return `maestro_run({ flowPath: "${flowPath}"${paramObj} })`;
 }
 function collectFlowRoots(start) {
     // D1208: .rn-agent/actions/ is the single source of plugin-managed flows.
@@ -494,7 +534,7 @@ if (want('d')) {
     parts.push('');
 }
 parts.push('---');
-parts.push('**Reminder:** For any UI flow, replay a matching flow from section B BEFORE composing `device_*` primitives. Manual walks are a fallback. (See `feedback_execute_artifacts_before_manual.md`.)');
+parts.push('**Reminder:** For any UI flow, replay a compatible owned action from section B through `cdp_run_action` before composing `device_*` primitives. Missing or incompatible owned automation is terminal; manual walks are not an authorized fallback.');
 process.stdout.write(parts.join('\n') + '\n');
 process.exit(total === 0 ? 3 : 0);
 // Markdown-table cell escaping. We deliberately only escape the column

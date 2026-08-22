@@ -97,13 +97,13 @@ failure_families:
       - maestro.drivers.AndroidDriver gRPC error
       - run_flow fails on Android but iOS works
     recovery:
-      - switch to maestro-runner (does not use gRPC)
-      - always pass --platform android to maestro-runner
-      - if classic Maestro required, uninstall dev.mobile.maestro APKs and cold-boot emulator
+      - replay Android YAML through maestro_run (exact pin-cache maestro-runner)
+      - "always pass platform=android to maestro_run"
+      - never classic Maestro gRPC, maestro-cli, PATH maestro-runner, or ~/.maestro-runner
     notes: >
       Classic Maestro Android driver uses gRPC over port 7001 to an Instrumentation
       APK on the device. This is fragile and fails frequently (GH #7, upstream #998).
-      maestro-runner uses direct HTTP to UIAutomator2 — no gRPC, no driver APK needed.
+      pin-cache maestro-runner uses direct HTTP to UIAutomator2 — no gRPC, no driver APK needed.
 
   - id: FF_ANDROID_TEXT_INPUT_CRASH
     name: Android text input crashes or backgrounds app
@@ -128,16 +128,15 @@ failure_families:
       - feature screen not reachable — app stuck on auth
       - "empty nav state is NOT auth — check FF_DEV_CLIENT_PICKER first"
     recovery:
-      - scan .maestro/subflows/ for login flows (prefer login.yaml over register_user.yaml)
-      - check subflow for clearState:true — strip it on Dev Client builds
-      - wrap subflow with appId via runFlow pattern (subflows often lack appId)
-      - run maestro-runner --platform <platform> test /tmp/auth-wrapper.yaml
-      - verify cdp_navigation_state shows main app screen after login
-      - if no subflows found, ask user to log in manually
+      - scan .rn-agent/actions/ for a compatible owned learned login action
+      - replay the learned login action through cdp_run_action on the authority-bound device
+      - verify cdp_navigation_state shows a main app screen after replay
+      - if no compatible owned login action exists, stop and report; do not substitute manual login, maestro-cli, or an unowned UI flow
+      - use cdp_auto_login only when the user explicitly authorizes legacy per-call recovery; never treat it as durable authority or PR proof
     notes: >
       On fresh/erased devices or after clearState, the app starts logged out.
       Manual coordinate-based login is unreliable (keyboard covers buttons).
-      Maestro subflows handle this in seconds. See GH #10.
+      Owned learned-action replay through the exact pin-cache engine handles this in seconds. See GH #10.
 
   - id: FF_PERMISSION_ALREADY_GRANTED
     name: Permission already granted — flow skips prompt

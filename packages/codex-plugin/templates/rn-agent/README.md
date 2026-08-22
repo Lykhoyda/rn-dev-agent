@@ -7,13 +7,10 @@ entire footprint is `.rn-agent/` and it does not read or write anywhere else in
 your project.
 
 If your project also has a `.maestro/` folder for hand-authored E2E
-tests, that's yours alone. The plugin doesn't read it.
-
-> **One small exception:** if the agent lands on a login screen and
-> finds a `.maestro/subflows/login.yaml` (or `sign_in.yaml`,
-> `auth.yaml`, `register_user.yaml`, `flow_start.yaml`), it can use
-> that subflow to log in. This is a read of *your* content, not plugin
-> territory.
+tests, that's yours alone. Those files are never learned-action authority or an
+automatic authentication fallback. The explicit legacy `cdp_auto_login` helper
+may inspect one only when the user authorizes that per-call navigation recovery;
+its result is never durable login authority or PR proof.
 
 ## Layout
 
@@ -63,7 +60,7 @@ shares **exactly one subpath**:
 
 | Path | Shared? | Why |
 |---|---|---|
-| `actions/` | **yes** | The canonical learned-action corpus — the flow inventory every consumer reads (`cdp_run_action`, `maestro_test_all`, the learned-action inventory). Sharing it is the point: one corpus, every worktree. |
+| `actions/` | **read-only inheritance** | A linked worktree may inventory and replay the canonical learned-action corpus. Migration, generation, repair, promotion, and every other YAML mutation refuse through the inherited link; make those changes in the owning worktree. |
 | `state/`, `recordings/`, `snapshots/`, `diag/`, `index.json`, `local/` | no | Per-worktree runtime state, including the action SQLite database and its WAL. The session runtime root must be a real directory. |
 | `integration/` | no | Session integration refuses any symlinked component under it and fails closed on one. |
 | `nav-graph.yaml`, `skeleton.yaml` | no | Derived from the app source on *this* branch; sharing them across branches serves stale data. |
@@ -72,8 +69,9 @@ shares **exactly one subpath**:
 
 Because `actions/` is linked *inside* a real local `.rn-agent/` directory, the
 common directory-form ignore rule (`.rn-agent/`) already hides it, so `git
-status` stays clean. No other private instructions or `.rn-agent` data are
-inherited.
+status` stays clean. The link is a read-only replay source: runtime state stays
+local and action YAML mutations fail closed. No other private instructions or
+`.rn-agent` data are inherited.
 
 Nothing is shared automatically without your consent. `/rn-dev-agent:doctor`
 reports the state read-only; `/rn-dev-agent:setup` previews and asks per

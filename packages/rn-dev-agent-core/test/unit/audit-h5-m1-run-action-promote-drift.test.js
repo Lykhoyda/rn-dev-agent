@@ -1,8 +1,11 @@
 import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { createRunActionHandler } from '../../dist/tools/run-action.js';
 import { loadAction } from '../../dist/domain/action-store.js';
-import { createTmpProject, fixtureYaml } from '../helpers/tmp-project.js';
+import {
+  createPinnedRunActionHandler as createRunActionHandler,
+  createTmpProject,
+  fixtureYaml,
+} from '../helpers/tmp-project.js';
 
 let project;
 beforeEach(() => {
@@ -81,8 +84,8 @@ test('M1: a wired getLiveRoute reclassifies an off-sequence selector failure as 
     '# expectedRouteSequence: [Home, Detail]',
     '',
     '- launchApp',
-    '  - tapOn:',
-    '      id: "fab-create-task"',
+    '- tapOn:',
+    '    id: "fab-create-task"',
     '',
   ].join('\n');
   project.seedAction('demo', yaml);

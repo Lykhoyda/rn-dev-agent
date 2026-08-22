@@ -2,19 +2,27 @@ import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, dirname } from 'node:path';
+import { basename, join, dirname } from 'node:path';
 import type { ToolResult } from '../utils.js';
 import { okResult, failResult, warnResult } from '../utils.js';
 import {
   getEngineStatus,
   enginePinCaveat,
-  strictPinRefusal,
+  exactPinRefusal,
+  withImmediatePinnedRunner,
   preOAndroidApiRefusal,
   isOlderSdkInstallFailure,
   olderSdkInstallDiagnosis,
   MAESTRO_RUNNER_MIN_ANDROID_API,
-  driftedRegexSelectorRefusal,
+  type ReplayEngineStatus,
 } from '../domain/engine-pin.js';
+import {
+  actionReplayPreflight,
+  isLearnedActionPath,
+  replayCompatibilityPreflight,
+  standaloneLearnedActionPathRefusal,
+} from '../domain/action-engine-compat.js';
+import { parseM7Header } from '../domain/reusable-action.js';
 import { getActiveSession } from '../agent-device-wrapper.js';
 import { resolveBundleId, readExpoSlug } from '../project-config.js';
 import {
@@ -351,6 +359,7 @@ export interface MaestroRunDeps {
   ) => Promise<{ stdout: string; stderr: string }>;
   /** GH #741: null = unknown (probe failure fails open, never refuses). */
   probeAndroidApiLevel?: (deviceId: string) => Promise<number | null>;
+  resolveEngineStatus?: () => Promise<ReplayEngineStatus | null>;
 }
 
 async function defaultProbeAndroidApiLevel(deviceId: string): Promise<number | null> {
@@ -434,6 +443,8 @@ export function createMaestroRunHandler(
   const execute = deps.execFile ?? defaultExecFile;
   const probeApiLevel = deps.probeAndroidApiLevel ?? defaultProbeAndroidApiLevel;
   const now = deps.now ?? Date.now;
+  const resolveEngineStatus =
+    deps.resolveEngineStatus ?? (() => getEngineStatus().catch(() => null));
   return async (args) => {
     // GH #116: validate params shape FIRST so a malformed payload is rejected
     // regardless of platform / dispatch-tier availability. CI envs without
@@ -557,9 +568,6 @@ export function createMaestroRunHandler(
       throw err;
     }
 
-    // B59 + GH #356/B223: tiered dispatch — maestro-runner when viable, Maestro
-    // CLI fallback when iOS-only and adb is missing, and (B223) the Maestro CLI
-    // for Android flows that use hideKeyboard (maestro-runner no-ops it there).
     const dispatch = selectDispatch({ platform, flowHasHideKeyboard } as MaestroDispatchInputs);
     if ('error' in dispatch) {
       return failResult(dispatch.error);
@@ -645,24 +653,45 @@ export function createMaestroRunHandler(
         ? `Android interaction-slot release warnings: ${androidSlotReleaseWarnings.join('; ')}`
         : undefined;
 
-    // GH #397: engine-pin visibility. Detection is process-cached and fail-open
-    // (null on error). The caveat rides the existing warn-once mechanism below;
-    // RN_ENGINE_PIN_STRICT=1 opts into refusing PROVEN divergence only.
-    const engineStatus =
-      dispatch.runner === 'maestro-runner' ? await getEngineStatus().catch(() => null) : null;
+    const engineStatus = dispatch.runner === 'maestro-runner' ? await resolveEngineStatus() : null;
     const pinCaveat = engineStatus ? enginePinCaveat(engineStatus) : null;
-    const strictRefusal = strictPinRefusal(engineStatus, process.env.RN_ENGINE_PIN_STRICT);
-    if (strictRefusal) {
-      return failResult(strictRefusal, 'ENGINE_PIN_MISMATCH');
-    }
-    // GH #750: unlike the env-gated strict refusal, this one is unconditional —
-    // the mistranslation is proven for regex selectors, so replay would only
-    // produce an impossible CONTAINS predicate (covers runFlow-nested steps).
-    const regexDriftRefusal = driftedRegexSelectorRefusal(engineStatus, validatedCommands);
-    if (regexDriftRefusal) {
-      return failResult(regexDriftRefusal, 'ENGINE_PIN_MISMATCH', {
+    const exactRefusal = exactPinRefusal(engineStatus);
+    if (exactRefusal) {
+      return failResult(exactRefusal, 'ENGINE_PIN_MISMATCH', {
         pin: engineStatus?.pin,
         installedVersion: engineStatus?.version ?? null,
+        selectedPath: engineStatus?.selectedPath ?? null,
+        provenance: engineStatus?.provenance ?? 'none',
+      });
+    }
+    const learnedActionPathRefusal = args.flowPath
+      ? standaloneLearnedActionPathRefusal(args.flowPath)
+      : null;
+    if (learnedActionPathRefusal) {
+      return failResult(learnedActionPathRefusal, 'BAD_RECORDING');
+    }
+    const learnedAction = args.flowPath ? isLearnedActionPath(args.flowPath) : false;
+    const actionMeta = args.flowPath
+      ? parseM7Header(rawYaml, basename(args.flowPath).replace(/\.ya?ml$/i, ''))
+      : null;
+    const compatibilityRefusal =
+      learnedAction || actionMeta !== null
+        ? actionReplayPreflight({
+            enginePin: actionMeta?.enginePin,
+            commands: validatedCommands,
+            engineStatus,
+          })
+        : replayCompatibilityPreflight({
+            commands: validatedCommands,
+            engineStatus,
+            requireEnginePin: false,
+          });
+    if (compatibilityRefusal) {
+      return failResult(compatibilityRefusal, 'ENGINE_PIN_MISMATCH', {
+        pin: engineStatus?.pin,
+        installedVersion: engineStatus?.version ?? null,
+        selectedPath: engineStatus?.selectedPath ?? null,
+        provenance: engineStatus?.provenance ?? 'none',
       });
     }
 
@@ -715,18 +744,39 @@ export function createMaestroRunHandler(
               const executeOnce = async (
                 beforeDispatch?: () => void,
               ): Promise<{ stdout: string; stderr: string }> => {
-                const remainingTimeout = flowDeadline - now();
-                if (remainingTimeout <= 0) {
+                if (flowDeadline - now() <= 0) {
                   const error = new Error('Maestro flow timeout exhausted before the next stage');
                   Object.assign(error, { code: 'ETIMEDOUT' });
                   throw error;
                 }
-                beforeDispatch?.();
-                return execute(dispatch.binPath, finalArgs, {
-                  timeout: remainingTimeout,
-                  encoding: 'utf8',
-                  maxBuffer: 10 * 1024 * 1024,
-                });
+                const executeRunner = (runnerPath: string, prefixArgs: readonly string[] = []) => {
+                  beforeDispatch?.();
+                  const remainingTimeout = flowDeadline - now();
+                  if (remainingTimeout <= 0) {
+                    const error = new Error(
+                      'Maestro flow timeout exhausted before runner execution',
+                    );
+                    Object.assign(error, { code: 'ETIMEDOUT' });
+                    throw error;
+                  }
+                  return execute(runnerPath, [...prefixArgs, ...finalArgs], {
+                    timeout: remainingTimeout,
+                    encoding: 'utf8',
+                    maxBuffer: 10 * 1024 * 1024,
+                  });
+                };
+                if (deps.execFile) {
+                  const immediateStatus = await resolveEngineStatus();
+                  const refusal = exactPinRefusal(immediateStatus);
+                  const immediateRefusal = refusal ? `RUNNER_PIN_CHANGED: ${refusal}` : null;
+                  if (immediateRefusal) throw new Error(immediateRefusal);
+                  return executeRunner(dispatch.binPath);
+                }
+                return withImmediatePinnedRunner(
+                  dispatch.binPath,
+                  resolveEngineStatus,
+                  executeRunner,
+                );
               };
               try {
                 return await executeOnce();

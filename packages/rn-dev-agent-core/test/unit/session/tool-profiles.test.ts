@@ -26,7 +26,14 @@ interface GoldenProfile {
 
 // Captured before regrouping; every tool and argument-shaped special case must remain exact.
 const GOLDEN: Record<string, GoldenProfile> = {
-  cdp_auto_login: { kind: 'authoritative', axes: 'CSIMBDR', mutation: true, liveBundleProbe: true },
+  cdp_auto_login: {
+    kind: 'authoritative',
+    axes: 'CSIMBDR',
+    managedOrigin: true,
+    managedRunnerPark: true,
+    mutation: true,
+    liveBundleProbe: true,
+  },
   cdp_component_state: {
     kind: 'authoritative',
     axes: 'CSIMBD',
@@ -705,6 +712,9 @@ test('hybrid execution separates required and optional bundle authority', () => 
   const suite = authorityProfileFor('cdp_run_e2e_suite');
   assert.equal(suite.managedOrigin, true);
   assert.equal(suite.managedRunnerPark, true);
+  const login = authorityProfileFor('cdp_auto_login');
+  assert.equal(login.managedOrigin, true);
+  assert.equal(login.managedRunnerPark, true);
   const action = authorityProfileFor('cdp_run_action');
   assert.equal(action.axes.includes('B'), false);
   assert.equal(action.axes.includes('A'), false);

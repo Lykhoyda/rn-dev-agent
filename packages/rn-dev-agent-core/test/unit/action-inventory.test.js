@@ -14,9 +14,9 @@ function makeProject() {
   return root;
 }
 
-function writeAction(root, id, extra = '') {
+function writeAction(root, id, extra = '', extension = 'yaml') {
   const yaml = `# id: ${id}\n# intent: Do ${id}\n# status: active\n${extra}- launchApp\n`;
-  writeFileSync(join(root, '.rn-agent', 'actions', `${id}.yaml`), yaml);
+  writeFileSync(join(root, '.rn-agent', 'actions', `${id}.${extension}`), yaml);
 }
 
 test('listActions returns empty array when dir is missing', async () => {
@@ -62,6 +62,22 @@ test('listActions skips unparseable files and continues', async () => {
     const result = await listActions(root);
     assert.equal(result.length, 1);
     assert.equal(result[0].id, 'good-action');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('listActions includes yml actions and omits ambiguous ids', async () => {
+  const root = makeProject();
+  try {
+    writeAction(root, 'legacy-action', '', 'yml');
+    writeAction(root, 'collision');
+    writeAction(root, 'collision', '', 'yml');
+    const result = await listActions(root);
+    assert.deepEqual(
+      result.map((action) => action.id),
+      ['legacy-action'],
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

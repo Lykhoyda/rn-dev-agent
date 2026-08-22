@@ -1,18 +1,22 @@
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { closeSync, constants, existsSync, fstatSync, lstatSync, openSync, readFileSync, readSync, realpathSync, } from 'node:fs';
+import { closeSync, chmodSync, constants, copyFileSync, existsSync, fstatSync, lstatSync, openSync, readFileSync, readSync, realpathSync, unlinkSync, } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveTrustedSystemExecutable, } from '../util/trusted-system-executable.js';
 const DARWIN_HELPER_MANIFEST = {
-    sourceSha256: '99a8025ab1c3cfbe32db184f6e030216d75c535143bd4684a2a89aac61c54c4a',
-    recipeSha256: '4f40539bce137f7bcae4731fd1494fae5704cba5327177d7f2a2a47aec95afb3',
-    stableBinarySha256: '6b5db7f7a6933f3d11d4c53ecafba9c3ef82c2533faf4bfe07a11b3cb4022dea',
-    binarySha256: 'fee005927e8d680b1589574211002d8809e3478446b97d3c9291157ea57b0dd5',
+    sourceSha256: '5cafc275ab929026203e64527f993cd77e2854f1697cdb419b7d901293e1bc48',
+    recipeSha256: 'a1293ae1f70a5da3a4ea9b1b79a095a5f182f7cb39e37521abe87cb1864f625b',
+    stableBinarySha256: 'e5dffbe66f7fa52f8e2554fb397b4b44000d8c092feff35e0c42f5f3e0150c3f',
+    binarySha256: 'dd8346dab2ccb6e3ce11840bbca5f8ea2f4cbd95efae34ddb130f98824a065aa',
     cdhashes: [
-        '1e67841d4d49a5e5088d283e26430130f017b989',
-        '7f25b0eca55913e522781923a16c6b0cd98bb4fc',
+        '0471a3583ce2363ee96afe3e85951dd5fd154dec',
+        '1998527647f4fef05eae6007fe7a1f945aa7c54d',
     ],
+};
+const LINUX_PUBLICATION_HELPER_SHA256 = {
+    x64: '3851cbf2d01caf77b282f477365613e6d903caf1aff88ea99e8d855eab9bacfb',
+    arm64: '76ba6597b964d6541ec2657195ee515728f9a1270636275b3a55d110267f34da',
 };
 function defaultRun(command, args) {
     try {
@@ -179,6 +183,182 @@ function verifyDarwinProcessBirthHelper(dependencies) {
 }
 export async function withVerifiedDarwinProcessBirthHelper(callback) {
     return callback(verifyDarwinProcessBirthHelper({}));
+}
+export function verifiedNativePublicationHelper() {
+    if (process.platform === 'darwin') {
+        const helper = verifyDarwinProcessBirthHelper({});
+        return { path: helper.path, sha256: DARWIN_HELPER_MANIFEST.binarySha256 };
+    }
+    if (process.platform === 'linux' && (process.arch === 'x64' || process.arch === 'arm64')) {
+        return {
+            path: verifiedLinuxPublicationHelper(process.arch),
+            sha256: LINUX_PUBLICATION_HELPER_SHA256[process.arch],
+        };
+    }
+    throw new Error('Native runner execution binding is unavailable on this platform.');
+}
+export function publishFileIfUnchangedDarwin(targetFd, targetPath, candidatePath, expectedPath) {
+    if (process.platform === 'linux') {
+        return publishFileIfUnchangedLinux(targetFd, targetPath, candidatePath, expectedPath);
+    }
+    if (process.platform !== 'darwin')
+        return false;
+    const target = fstatSync(targetFd);
+    if (!target.isFile())
+        return false;
+    const helper = verifyDarwinProcessBirthHelper({});
+    const boundPath = `${helper.path}.publish.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}`;
+    copyFileSync(helper.path, boundPath, constants.COPYFILE_EXCL | constants.COPYFILE_FICLONE);
+    chmodSync(boundPath, 0o700);
+    try {
+        const digest = createHash('sha256').update(readFileSync(boundPath)).digest('hex');
+        if (digest !== DARWIN_HELPER_MANIFEST.binarySha256) {
+            throw new Error('Conditional action publication helper changed before execution.');
+        }
+        execFileSync(boundPath, [
+            '--publish-if-unchanged',
+            targetPath,
+            candidatePath,
+            expectedPath,
+            String(target.dev),
+            String(target.ino),
+        ], { stdio: 'ignore', timeout: 2_000 });
+        return true;
+    }
+    catch (error) {
+        if (error.status === 10)
+            return false;
+        throw error;
+    }
+    finally {
+        unlinkSync(boundPath);
+    }
+}
+export function linkFileIntoVerifiedDirectory(directoryFd, candidatePath, targetPath) {
+    const directory = fstatSync(directoryFd);
+    if (!directory.isDirectory() || dirname(targetPath) === targetPath)
+        return false;
+    if (process.platform === 'darwin') {
+        const helper = verifyDarwinProcessBirthHelper({});
+        return runVerifiedPublicationHelper(helper.path, DARWIN_HELPER_MANIFEST.binarySha256, [
+            '--link-into-directory',
+            candidatePath,
+            dirname(targetPath),
+            targetPath.slice(dirname(targetPath).length + 1),
+            String(directory.dev),
+            String(directory.ino),
+        ]);
+    }
+    if (process.platform === 'linux' && (process.arch === 'x64' || process.arch === 'arm64')) {
+        const helperPath = verifiedLinuxPublicationHelper(process.arch);
+        return runVerifiedPublicationHelper(helperPath, LINUX_PUBLICATION_HELPER_SHA256[process.arch], [
+            '--link-into-directory',
+            candidatePath,
+            dirname(targetPath),
+            targetPath.slice(dirname(targetPath).length + 1),
+            String(directory.dev),
+            String(directory.ino),
+        ]);
+    }
+    return false;
+}
+function runVerifiedPublicationHelper(helperPath, expectedSha256, args) {
+    const boundPath = `${helperPath}.publish.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}`;
+    copyFileSync(helperPath, boundPath, constants.COPYFILE_EXCL | constants.COPYFILE_FICLONE);
+    chmodSync(boundPath, 0o700);
+    try {
+        if (createHash('sha256').update(readFileSync(boundPath)).digest('hex') !== expectedSha256) {
+            throw new Error('Conditional action publication helper changed before execution.');
+        }
+        execFileSync(boundPath, [...args], { stdio: 'ignore', timeout: 2_000 });
+        return true;
+    }
+    catch (error) {
+        if (error.status === 10)
+            return false;
+        throw error;
+    }
+    finally {
+        unlinkSync(boundPath);
+    }
+}
+function linuxConditionalPublicationHelperPath(architecture) {
+    const moduleDirectory = dirname(fileURLToPath(import.meta.url));
+    const name = `linux-conditional-publication-${architecture}`;
+    const candidates = [
+        join(moduleDirectory, 'native', name),
+        join(moduleDirectory, '..', 'native', name),
+    ];
+    for (const candidate of candidates) {
+        if (existsSync(candidate))
+            return candidate;
+    }
+    return candidates[0];
+}
+function verifiedLinuxPublicationHelper(architecture) {
+    const helperPath = linuxConditionalPublicationHelperPath(architecture);
+    if (realpathSync(helperPath) !== helperPath) {
+        throw new Error('Linux conditional publication helper path is not canonical.');
+    }
+    const before = lstatSync(helperPath);
+    const uid = process.getuid?.();
+    if (!before.isFile() ||
+        before.isSymbolicLink() ||
+        !new Set([0, ...(uid === undefined ? [] : [uid])]).has(before.uid) ||
+        (before.mode & 0o022) !== 0 ||
+        (before.mode & 0o111) === 0) {
+        throw new Error('Linux conditional publication helper metadata is untrusted.');
+    }
+    const helperFd = openSync(helperPath, constants.O_RDONLY | constants.O_NOFOLLOW);
+    try {
+        const opened = fstatSync(helperFd);
+        if (!opened.isFile() ||
+            !sameFile(before, opened) ||
+            createHash('sha256').update(readFileSync(helperFd)).digest('hex') !==
+                LINUX_PUBLICATION_HELPER_SHA256[architecture]) {
+            throw new Error('Linux conditional publication helper changed during verification.');
+        }
+    }
+    finally {
+        closeSync(helperFd);
+    }
+    return helperPath;
+}
+function publishFileIfUnchangedLinux(targetFd, targetPath, candidatePath, expectedPath) {
+    if (process.platform !== 'linux' || (process.arch !== 'x64' && process.arch !== 'arm64')) {
+        return false;
+    }
+    const architecture = process.arch;
+    const helperPath = verifiedLinuxPublicationHelper(architecture);
+    const target = fstatSync(targetFd);
+    if (!target.isFile())
+        return false;
+    const boundPath = `${helperPath}.publish.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}`;
+    copyFileSync(helperPath, boundPath, constants.COPYFILE_EXCL | constants.COPYFILE_FICLONE);
+    chmodSync(boundPath, 0o700);
+    try {
+        if (createHash('sha256').update(readFileSync(boundPath)).digest('hex') !==
+            LINUX_PUBLICATION_HELPER_SHA256[architecture]) {
+            throw new Error('Conditional action publication helper changed before execution.');
+        }
+        execFileSync(boundPath, [
+            '--publish-if-unchanged',
+            targetPath,
+            candidatePath,
+            expectedPath,
+            String(target.dev),
+            String(target.ino),
+        ], { stdio: 'ignore', timeout: 2_000 });
+        return true;
+    }
+    catch (error) {
+        if (error.status === 10)
+            return false;
+        throw error;
+    }
+    finally {
+        unlinkSync(boundPath);
+    }
 }
 export function readProcessBirth(pid, dependencies = {}) {
     const probe = probeProcessBirth(pid, dependencies);

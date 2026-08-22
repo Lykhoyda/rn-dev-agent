@@ -198,7 +198,7 @@ export interface StatusResult {
   actionStore?: string;
   /**
    * GH #397: which replay engine will run + version-vs-pin + known quirks.
-   * Computed lazily from getEngineStatus() (process-cached); omitted only if
+   * Computed lazily from getEngineStatus(); omitted only if
    * detection itself throws (fail-open).
    */
   replayEngine?: ReplayEngineStatus;

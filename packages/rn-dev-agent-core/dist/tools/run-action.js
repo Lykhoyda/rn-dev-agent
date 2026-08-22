@@ -7,7 +7,7 @@
 //   1. loadAction(projectRoot, actionId) — fail fast if missing.
 //   2. createMaestroRunHandler() — first attempt (delegates to the
 //      existing `maestro_run` tool, single source of truth for the
-//      maestro-runner / Maestro CLI dispatch tiering).
+//      exact maestro-runner dispatch).
 //   3. On failure: parseMaestroFailure → if SELECTOR_NOT_FOUND and
 //      autoRepair !== false, invoke createRepairActionHandler. On
 //      successful patch, replay maestro once more.
@@ -27,6 +27,7 @@
 //     intentionally NOT in scope for phase 1 (each repair attempt is a
 //     30s+ device snapshot; cascading retries would be slow and could
 //     mask underlying screen churn).
+import { dirname } from 'node:path';
 import { okResult, failResult } from '../utils.js';
 import { acknowledgeExternalEdit, loadAction, promoteActionRuntimeWithCAS, saveActionRuntimeWithCAS, } from '../domain/action-store.js';
 import { mirrorToDb } from '../domain/action-state-store.js';
@@ -43,6 +44,9 @@ import { evaluateBlindProbeGate } from '../domain/blind-probe-gate.js';
 import { claimManagedNativeOriginAuthority, completeManagedRunnerParkAuthority, completeManagedNativeOriginAuthority, reissueManagedInstallAuthority, relaunchManagedNativeOriginApp, reproveManagedNativeOrigin, } from '../session/authority-gate.js';
 import { getWorkerAuthorityRuntime } from '../session/runtime.js';
 import { flowUsesClearState, resolveIosAppFile } from './resolve-ios-app-file.js';
+import { parseAndValidateFlow } from '../domain/maestro-validator.js';
+import { actionReplayPreflight } from '../domain/action-engine-compat.js';
+import { getEngineStatus, PINNED_RUNNER_DIAGNOSE_HINT, PINNED_RUNNER_INSTALL_HINT, } from '../domain/engine-pin.js';
 /** GH #705: the session's attested install receipt, or null outside a session. */
 function boundInstallReceipt() {
     try {
@@ -260,6 +264,7 @@ export function createRunActionHandler(deps = {}) {
     const installReceipt = deps.installReceipt ?? boundInstallReceipt;
     const resolveAppFile = deps.resolveAppFile ??
         ((appId, deviceId) => resolveIosAppFile(appId, { deviceId }));
+    const resolveEngineStatus = deps.engineStatus ?? (() => getEngineStatus().catch(() => null));
     return async (args) => {
         if (!args.actionId || typeof args.actionId !== 'string') {
             return failResult('cdp_run_action requires actionId', 'BAD_FILENAME');
@@ -275,9 +280,18 @@ export function createRunActionHandler(deps = {}) {
         if (proofReplay && (args.autoRepair !== false || args.forceReload !== false)) {
             return failResult('cdp_run_action proofReplay requires autoRepair=false and forceReload=false', { proofReplay: true });
         }
-        const loaded = loadAction(projectRoot, args.actionId);
+        let loaded;
+        try {
+            loaded = loadAction(projectRoot, args.actionId);
+        }
+        catch (err) {
+            return failResult(err instanceof Error ? err.message : String(err), 'BAD_FILENAME', {
+                actionId: args.actionId,
+                fallback: 'none',
+            });
+        }
         if (!loaded) {
-            return failResult(`cdp_run_action: action "${args.actionId}" not found at ${projectRoot}/.rn-agent/actions/${args.actionId}.yaml`, 'NO_PROJECT_ROOT', {
+            return failResult(`cdp_run_action: action "${args.actionId}" not found at ${projectRoot}/.rn-agent/actions/${args.actionId}.yaml or ${args.actionId}.yml`, 'NO_PROJECT_ROOT', {
                 hint: 'Verify with /list-learned-actions, or pass projectRoot if cdp-bridge is invoked outside the project dir.',
             });
         }
@@ -287,6 +301,31 @@ export function createRunActionHandler(deps = {}) {
         // get the strict Phase 129 "respect external edits" behavior back.
         const forceReload = proofReplay ? false : args.forceReload !== false;
         const action = forceReload ? acknowledgeExternalEdit(loaded) : loaded;
+        const engineStatus = await resolveEngineStatus();
+        let preflightCommands;
+        try {
+            preflightCommands = parseAndValidateFlow(action.body, {
+                flowDir: dirname(action.filePath),
+                flowRoot: dirname(action.filePath),
+            }).commands;
+        }
+        catch (err) {
+            return failResult(`Action ${args.actionId} is not valid Maestro YAML: ${err instanceof Error ? err.message : String(err)}`, 'BAD_RECORDING', { actionId: args.actionId, fallback: 'none' });
+        }
+        const compatRefusal = actionReplayPreflight({
+            enginePin: action.metadata.enginePin,
+            commands: preflightCommands,
+            engineStatus,
+        });
+        if (compatRefusal) {
+            return failResult(compatRefusal, 'ENGINE_PIN_MISMATCH', {
+                actionId: args.actionId,
+                fallback: 'none',
+                pin: engineStatus?.pin,
+                selectedPath: engineStatus?.selectedPath ?? null,
+                provenance: engineStatus?.provenance ?? 'none',
+            });
+        }
         const autoRepairEnabled = args.autoRepair !== false;
         const blindProbeControl = args.blindProbeMode ? { blindProbeMode: args.blindProbeMode } : {};
         const trigger = args.trigger ?? 'agent';
@@ -707,7 +746,7 @@ export function createRunActionHandler(deps = {}) {
                     ...(cdpJsFallback ? { cdpJsFallback } : {}),
                 };
                 let message = failure.kind === 'WDA_BOOTSTRAP_FAILED'
-                    ? `cdp_run_action: ${args.actionId} failed (WDA_BOOTSTRAP_FAILED) before the first replay step: ${failure.detail}. Re-run the replay (bootstrap retries itself); check network access; inspect ~/.maestro-runner/bin/maestro-runner wda version. No preparation or cache mutation was attempted.`
+                    ? `cdp_run_action: ${args.actionId} failed (WDA_BOOTSTRAP_FAILED) before the first replay step: ${failure.detail}. Re-run the replay (bootstrap retries itself); check network access; diagnose the pin-cache runner with ${PINNED_RUNNER_DIAGNOSE_HINT}. Supported correction: ${PINNED_RUNNER_INSTALL_HINT}. Never invoke PATH, ~/.maestro-runner, maestro-cli, or manual login. No preparation or cache mutation was attempted.`
                     : `cdp_run_action: ${args.actionId} failed (${failure.kind})${autoRepairEnabled ? ' — failure not auto-repairable' : ' — auto-repair disabled'}: ${firstFailureDetail}`;
                 // GH #423: an UNKNOWN with the fallback skipped for CDP reasons was an
                 // opaque dead end in the field — say why and what to do next.

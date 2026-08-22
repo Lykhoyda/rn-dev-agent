@@ -1,17 +1,13 @@
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { ToolResult } from '../utils.js';
 import { okResult, failResult, warnResult } from '../utils.js';
 import { getActiveSession } from '../agent-device-wrapper.js';
 import { findProjectRoot } from '../nav-graph/storage.js';
-import {
-  chooseMaestroDispatch,
-  shouldWarnFallback,
-  flowContainsHideKeyboard,
-} from './maestro-dispatch.js';
+import { chooseMaestroDispatch, shouldWarnFallback } from './maestro-dispatch.js';
 import {
   buildMaestroFlow,
   parseAndValidateFlow,
@@ -27,7 +23,22 @@ import {
   runFlowParked,
 } from './maestro-run.js';
 import { outputIndicatesFlowFailure } from '../domain/maestro-error-parser.js';
-import { isOlderSdkInstallFailure, olderSdkInstallDiagnosis } from '../domain/engine-pin.js';
+import {
+  exactPinRefusal,
+  getEngineStatus,
+  withImmediatePinnedRunner,
+  isOlderSdkInstallFailure,
+  olderSdkInstallDiagnosis,
+  type ReplayEngineStatus,
+} from '../domain/engine-pin.js';
+import {
+  classifyLearnedActionPath,
+  isLearnedActionPath,
+  replayCompatibilityPreflight,
+  standaloneLearnedActionPathRefusal,
+} from '../domain/action-engine-compat.js';
+import { parseM7Header } from '../domain/reusable-action.js';
+import { resolveActionPath } from '../domain/action-store.js';
 import { flowUsesClearState, resolveAppFileForClearState } from './resolve-ios-app-file.js';
 import {
   maestroAuthorityRefusal,
@@ -73,6 +84,7 @@ export interface MaestroTestAllDeps {
     options: { timeout: number; encoding: 'utf8'; maxBuffer: number },
   ) => Promise<{ stdout: string; stderr: string }>;
   now?: () => number;
+  resolveEngineStatus?: () => Promise<ReplayEngineStatus | null>;
 }
 
 interface FlowResult {
@@ -83,9 +95,20 @@ interface FlowResult {
   deviceAuthority?: MaestroDeviceAuthority;
 }
 
-function discoverFlows(dir: string, pattern?: string): string[] {
+interface PreparedFlow {
+  name: string;
+  commands: unknown[];
+  appId: string | undefined;
+  canonical: string;
+  appFile: string | undefined;
+  reinstallsApp: boolean;
+}
+
+function discoverFlows(dir: string, pattern?: string, topLevelOnly = false): string[] {
   if (!existsSync(dir)) return [];
-  const files = readdirSync(dir, { recursive: true }) as string[];
+  const files = topLevelOnly
+    ? readdirSync(dir)
+    : (readdirSync(dir, { recursive: true }) as string[]);
   const yamls = files
     .filter((f) => f.endsWith('.yaml') || f.endsWith('.yml'))
     .map((f) => join(dir, f))
@@ -120,6 +143,8 @@ export function createMaestroTestAllHandler(
   const resolveAppFile = deps.resolveAppFile ?? resolveAppFileForClearState;
   const execute = deps.execFile ?? defaultExecFile;
   const now = deps.now ?? Date.now;
+  const resolveEngineStatus =
+    deps.resolveEngineStatus ?? (() => getEngineStatus().catch(() => null));
   return async (args) => {
     const platform = (args.platform ?? activeSession()?.platform) as 'ios' | 'android' | undefined;
     if (!platform) {
@@ -142,12 +167,13 @@ export function createMaestroTestAllHandler(
     }
     const requestedDeviceId = args.deviceId ?? matchingSessionDeviceId;
 
-    // B59: tiered dispatch (see maestro-dispatch.ts) — picks maestro-runner
-    // when viable, falls back to the Maestro CLI on iOS+no-adb machines.
     const dispatch = selectDispatch({ platform });
     if ('error' in dispatch) {
       return failResult(dispatch.error);
     }
+    const engineStatus = await resolveEngineStatus();
+    const pinRefusal = exactPinRefusal(engineStatus);
+    if (pinRefusal) return failResult(pinRefusal);
 
     const root = findProjectRoot();
     const flowDir = args.flowDir ?? (root ? join(root, '.rn-agent', 'actions') : null);
@@ -155,10 +181,101 @@ export function createMaestroTestAllHandler(
       return failResult('Cannot determine project root. Pass flowDir explicitly.');
     }
 
-    const flows = discoverFlows(flowDir, args.pattern);
+    const resolvedFlowDir = resolve(flowDir);
+    const flowDirClassification = classifyLearnedActionPath(
+      join(resolvedFlowDir, '__action__.yaml'),
+    );
+    if (flowDirClassification === 'descendant') {
+      return failResult(
+        `Refusing to execute learned-action descendants from ${resolvedFlowDir} as standalone flows.`,
+      );
+    }
+    const learnedCorpus = flowDirClassification === 'action';
+    const learnedProjectRoot = learnedCorpus ? dirname(dirname(resolvedFlowDir)) : null;
+    const flows = discoverFlows(flowDir, args.pattern, learnedCorpus);
     if (flows.length === 0) {
       return failResult(
         `No Maestro flows found in ${flowDir}. Generate flows with maestro_generate first.`,
+      );
+    }
+
+    const preflightResults: FlowResult[] = [];
+    const preparedFlows: PreparedFlow[] = [];
+    for (const flow of flows) {
+      const name = flow.replace(flowDir + '/', '');
+      const start = now();
+      try {
+        const actionPathRefusal = standaloneLearnedActionPathRefusal(flow);
+        if (actionPathRefusal) throw new Error(actionPathRefusal);
+        if (learnedProjectRoot) {
+          const actionId = basename(flow).replace(/\.ya?ml$/i, '');
+          const resolvedAction = resolveActionPath(learnedProjectRoot, actionId);
+          if (resolvedAction === null || resolve(resolvedAction) !== resolve(flow)) {
+            throw new Error(`Action ${actionId} does not resolve to ${flow}.`);
+          }
+        }
+        const yamlText = readFileSync(flow, 'utf-8');
+        const parsed = parseAndValidateFlow(yamlText, {
+          flowDir: dirname(flow),
+          flowRoot: flowDir,
+        });
+        const flowId = name.replace(/\.ya?ml$/i, '');
+        const meta = parseM7Header(yamlText, flowId);
+        const requireEnginePin = meta !== null || isLearnedActionPath(flow);
+        const preflight = replayCompatibilityPreflight({
+          enginePin: meta?.enginePin,
+          commands: parsed.commands,
+          engineStatus,
+          requireEnginePin,
+        });
+        if (preflight) throw new Error(preflight);
+        planMaestroAuthorityStages(parsed.commands);
+        const parsedAppId = resolveMaestroFlowAppId(boundAppId, parsed.appId);
+        const canonical = buildMaestroFlow(
+          parsedAppId !== undefined ? { appId: parsedAppId } : {},
+          parsed.commands,
+        );
+        const appFileResolution = resolveAppFile(platform, canonical, parsedAppId, undefined, {
+          deviceId: requestedDeviceId,
+        });
+        if (!appFileResolution.ok) throw new Error(appFileResolution.error);
+        preparedFlows.push({
+          name,
+          commands: parsed.commands,
+          appId: parsedAppId,
+          canonical,
+          appFile: appFileResolution.appFile,
+          reinstallsApp: Boolean(appFileResolution.appFile) && flowUsesClearState(canonical),
+        });
+      } catch (err) {
+        const reason =
+          err instanceof MaestroValidationError
+            ? `Refused by validator: ${err.message}`
+            : err instanceof Error
+              ? err.message
+              : String(err);
+        preflightResults.push({
+          name,
+          passed: false,
+          durationMs: now() - start,
+          error: reason.slice(0, 300),
+        });
+      }
+    }
+    if (preflightResults.length > 0) {
+      return failResult(
+        `Suite preflight refused ${preflightResults.length} of ${flows.length} flows before execution.`,
+        {
+          total: flows.length,
+          executed: 0,
+          passed: 0,
+          failed: preflightResults.length,
+          platform,
+          flowDir,
+          runner: dispatch.runner,
+          requestedDeviceId: requestedDeviceId ?? null,
+          results: preflightResults,
+        },
       );
     }
 
@@ -174,92 +291,21 @@ export function createMaestroTestAllHandler(
     const results: FlowResult[] = [];
     let passed = 0;
     let failed = 0;
-    // GH #356/B223: surfaced once if any Android flow needed hideKeyboard but
-    // the Maestro CLI was unavailable, so it ran on maestro-runner (no-op).
-    let keyboardCaveat: string | null = null;
 
-    for (const flow of flows) {
-      const name = flow.replace(flowDir + '/', '');
+    for (const prepared of preparedFlows) {
+      const { name } = prepared;
       const start = now();
+      const safeFlowFile = join(
+        tmpdir(),
+        `rn-maestro-validated-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.yaml`,
+      );
+      writeFileSync(safeFlowFile, prepared.canonical, 'utf-8');
+      const parsedCommands = prepared.commands;
+      const parsedAppId = prepared.appId;
+      const appFile = prepared.appFile;
+      const reinstallsApp = prepared.reinstallsApp;
 
-      // Phase 134.1 (deepsec CRITICAL #5): read + validate every
-      // discovered flow before execution. Auto-discovery is the highest-
-      // trust gap in the codebase: a malicious project file (or a
-      // prompt-injected save earlier in the session) lands here for
-      // replay otherwise. Write the canonical re-serialization to a temp
-      // file and execute that — never the on-disk YAML directly, so
-      // any inert metadata or duplicated headers can't sneak through.
-      let safeFlowFile: string;
-      let appFile: string | undefined;
-      let flowHasHideKeyboard = false;
-      let parsedCommands: unknown[] = [];
-      let parsedAppId: string | undefined;
-      let reinstallsApp = false;
-      try {
-        const yamlText = readFileSync(flow, 'utf-8');
-        const parsed = parseAndValidateFlow(yamlText);
-        planMaestroAuthorityStages(parsed.commands);
-        parsedCommands = parsed.commands;
-        parsedAppId = resolveMaestroFlowAppId(boundAppId, parsed.appId);
-        flowHasHideKeyboard = flowContainsHideKeyboard(parsed.commands);
-        const canonical = buildMaestroFlow(
-          parsedAppId !== undefined ? { appId: parsedAppId } : {},
-          parsed.commands,
-        );
-        safeFlowFile = join(
-          tmpdir(),
-          `rn-maestro-validated-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.yaml`,
-        );
-        writeFileSync(safeFlowFile, canonical, 'utf-8');
-        // GH#201 parity with maestro_run: an iOS clearState flow must reinstall
-        // the app, which maestro-runner can only do given --app-file. GH #705
-        // follow-up: the container must come from the authority-bound
-        // simulator, never generic `booted`.
-        const appFileResolution = resolveAppFile(platform, canonical, parsedAppId, undefined, {
-          deviceId: requestedDeviceId,
-        });
-        if (!appFileResolution.ok) {
-          results.push({
-            name,
-            passed: false,
-            durationMs: now() - start,
-            error: appFileResolution.error.slice(0, 300),
-          });
-          failed++;
-          if (args.stopOnFailure) break;
-          continue;
-        }
-        appFile = appFileResolution.appFile;
-        // GH #705 follow-up: only a clearState flow uninstalls and reinstalls;
-        // an --app-file carried by any other flow must not re-issue the receipt.
-        reinstallsApp = Boolean(appFile) && flowUsesClearState(canonical);
-      } catch (err) {
-        const reason =
-          err instanceof MaestroValidationError
-            ? `Refused by validator: ${err.message}`
-            : `Read/parse error: ${(err as Error).message}`;
-        results.push({
-          name,
-          passed: false,
-          durationMs: now() - start,
-          error: reason.slice(0, 300),
-        });
-        failed++;
-        if (args.stopOnFailure) break;
-        continue;
-      }
-
-      // GH #356/B223: Android flows that use hideKeyboard must run via the
-      // official Maestro CLI (maestro-runner no-ops hideKeyboard on Android).
-      // Re-route per flow; fall back to the base dispatch if re-selection errors.
       let flowDispatch = dispatch;
-      if (platform === 'android' && flowHasHideKeyboard) {
-        const rerouted = selectDispatch({ platform, flowHasHideKeyboard: true });
-        if (!('error' in rerouted)) {
-          flowDispatch = rerouted;
-          if (rerouted.degradedReason) keyboardCaveat ??= rerouted.degradedReason;
-        }
-      }
 
       const runnerReportDir = createRunnerReportDir(flowDispatch.runner, 'rn-maestro-suite-report');
       const baseArgs = flowDispatch.buildArgs(platform, safeFlowFile, appFile, requestedDeviceId);
@@ -281,8 +327,7 @@ export function createMaestroTestAllHandler(
             executeMaestroAuthorityStages(
               parsedCommands,
               async (commands) => {
-                const remainingTimeout = start + timeout - now();
-                if (remainingTimeout <= 0) {
+                if (start + timeout - now() <= 0) {
                   const error = new Error('Maestro flow timeout exhausted before the next stage');
                   Object.assign(error, { code: 'ETIMEDOUT' });
                   throw error;
@@ -294,11 +339,33 @@ export function createMaestroTestAllHandler(
                   ]),
                   'utf-8',
                 );
-                return execute(flowDispatch.binPath, finalArgs, {
-                  timeout: remainingTimeout,
-                  encoding: 'utf8',
-                  maxBuffer: 10 * 1024 * 1024,
-                });
+                const executeRunner = (runnerPath: string, prefixArgs: readonly string[] = []) => {
+                  const remainingTimeout = start + timeout - now();
+                  if (remainingTimeout <= 0) {
+                    const error = new Error(
+                      'Maestro flow timeout exhausted before runner execution',
+                    );
+                    Object.assign(error, { code: 'ETIMEDOUT' });
+                    throw error;
+                  }
+                  return execute(runnerPath, [...prefixArgs, ...finalArgs], {
+                    timeout: remainingTimeout,
+                    encoding: 'utf8',
+                    maxBuffer: 10 * 1024 * 1024,
+                  });
+                };
+                if (deps.execFile) {
+                  const immediateStatus = await resolveEngineStatus();
+                  const refusal = exactPinRefusal(immediateStatus);
+                  const immediateRefusal = refusal ? `RUNNER_PIN_CHANGED: ${refusal}` : null;
+                  if (immediateRefusal) throw new Error(immediateRefusal);
+                  return executeRunner(flowDispatch.binPath);
+                }
+                return withImmediatePinnedRunner(
+                  flowDispatch.binPath,
+                  resolveEngineStatus,
+                  executeRunner,
+                );
               },
               claimOrigin,
               completeOrigin,
@@ -410,7 +477,7 @@ export function createMaestroTestAllHandler(
 
     // GH #356/B223: surface the base dispatch's fallback reason, or (if any
     // Android hideKeyboard flow had to degrade to maestro-runner) the keyboard caveat.
-    const batchCaveat = dispatch.fallbackReason ?? keyboardCaveat;
+    const batchCaveat = dispatch.fallbackReason;
     const summary = {
       total: flows.length,
       executed: results.length,

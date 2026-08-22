@@ -5,6 +5,22 @@ description: "Release history for rn-dev-agent"
 
 ## Claude plugin
 
+### 0.76.7
+
+#### Patch Changes
+
+- 02b2713: Make `cdp_navigation_state` report truthful mid-mount retry guidance instead of questioning the router install right after a reload (bundled-framework evidence now comes from Metro's module registry and the dev-shell allowlist matches only exact LogBox names), add an opt-in bounded `walkUp` pressable-ancestor press to `cdp_interact` documented as a boolean in the generated tool docs, render learned-action metadata absence as `-`/`pre-M7` with `?` for any parse failure including partially malformed `produces` maps, and keep the packaged sending-feedback skill host-neutral with collector resolution owned by each host's workflow.
+- 2a36f7d: Add `rn_session` action `bind_source` so linked git worktrees can rebind the session source root explicitly: the successor session mints on the declared same-repo worktree instead of the harness startup cwd, source-consuming actions accept a `projectRoot` fence that refuses divergent roots with the new typed `SOURCE_ROOT_DIVERGENCE` naming both paths, the release hint now names the root the successor will actually bind, install-artifact content reads get a 180s budget (was 30s) so hashing a large APK over a tunneled remote-farm adb transport no longer times out, and an autostarted Observe binding yields the device axis on the first `bind_device` (GH #776).
+- f127182: Prove the platform of custom-named devices ("rn-qa"-style simulators) against the live device inventory — booted simctl simulator names plus, only for a session-bound Android serial, that one device's adb model (ambient adb devices are never queried) — so `cdp_connect` binds the sole healthy exact-device Metro target instead of failing with a false "found 0", and name the true failing stage in exact-connect refusals.
+- abcd72a: Fence `adb` reads for exact-connect device/platform inference whenever an authority session is present, so an available authority with no device binding, a registry lookup that throws, or an unavailable runtime whose code is not `SESSION_NOT_INITIALIZED` (`SESSION_OWNER_LOST`, `PROCESS_BIRTH_UNAVAILABLE`, `AUTHORITY_STORE_UNAVAILABLE`) no longer falls back to ambient `adb devices`; only a runtime that was never initialized keeps the legacy ambient read, and raw `device_*` tools are unaffected.
+- fb1eea9: Observe now renders an explicit blocked device state with a typed recovery hint when session authority is unbound, bounds frameless mirror pipelines with a first-frame watchdog instead of an indefinite blank stream, and shows device-mirror readiness as its own header pill so event-stream transport liveness can never masquerade as a live mirror.
+- Updated dependencies [02b2713]
+- Updated dependencies [2a36f7d]
+- Updated dependencies [f127182]
+- Updated dependencies [abcd72a]
+- Updated dependencies [fb1eea9]
+  - rn-dev-agent-core@0.71.7
+
 ### 0.76.6
 
 #### Patch Changes
@@ -1517,6 +1533,16 @@ identifier, hittable? }`, with a `fullNodeCount`. Far fewer tokens; `@ref`s for
   #188 shipped these to `main` with no version bump, leaving them undeliverable to marketplace installs; this patch publishes them.
 
 ## Core MCP server
+
+### 0.71.7
+
+#### Patch Changes
+
+- 02b2713: Make `cdp_navigation_state` report truthful mid-mount retry guidance instead of questioning the router install right after a reload (bundled-framework evidence now comes from Metro's module registry and the dev-shell allowlist matches only exact LogBox names), add an opt-in bounded `walkUp` pressable-ancestor press to `cdp_interact` documented as a boolean in the generated tool docs, render learned-action metadata absence as `-`/`pre-M7` with `?` for any parse failure including partially malformed `produces` maps, and keep the packaged sending-feedback skill host-neutral with collector resolution owned by each host's workflow.
+- 2a36f7d: Add `rn_session` action `bind_source` so linked git worktrees can rebind the session source root explicitly: the successor session mints on the declared same-repo worktree instead of the harness startup cwd, source-consuming actions accept a `projectRoot` fence that refuses divergent roots with the new typed `SOURCE_ROOT_DIVERGENCE` naming both paths, the release hint now names the root the successor will actually bind, install-artifact content reads get a 180s budget (was 30s) so hashing a large APK over a tunneled remote-farm adb transport no longer times out, and an autostarted Observe binding yields the device axis on the first `bind_device` (GH #776).
+- f127182: Prove the platform of custom-named devices ("rn-qa"-style simulators) against the live device inventory — booted simctl simulator names plus, only for a session-bound Android serial, that one device's adb model (ambient adb devices are never queried) — so `cdp_connect` binds the sole healthy exact-device Metro target instead of failing with a false "found 0", and name the true failing stage in exact-connect refusals.
+- abcd72a: Fence `adb` reads for exact-connect device/platform inference whenever an authority session is present, so an available authority with no device binding, a registry lookup that throws, or an unavailable runtime whose code is not `SESSION_NOT_INITIALIZED` (`SESSION_OWNER_LOST`, `PROCESS_BIRTH_UNAVAILABLE`, `AUTHORITY_STORE_UNAVAILABLE`) no longer falls back to ambient `adb devices`; only a runtime that was never initialized keeps the legacy ambient read, and raw `device_*` tools are unaffected.
+- fb1eea9: Observe now renders an explicit blocked device state with a typed recovery hint when session authority is unbound, bounds frameless mirror pipelines with a first-frame watchdog instead of an indefinite blank stream, and shows device-mirror readiness as its own header pill so event-stream transport liveness can never masquerade as a live mirror.
 
 ### 0.71.6
 

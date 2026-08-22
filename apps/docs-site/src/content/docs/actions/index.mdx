@@ -102,7 +102,7 @@ The plugin's entire footprint is `.rn-agent/`. It does not read or write anywher
 
 ## Creating an action
 
-Run `/rn-dev-agent:test-feature <feature description>`. The plugin walks the feature on the live simulator, verifies UI rendering and internal state, then saves the verified walk as `.rn-agent/actions/<feature-slug>.yaml`. Each action carries a small metadata header at the top — its intent, what it tags, whether it mutates data, its lifecycle status.
+Run `/rn-dev-agent:test-feature <feature description>`. The plugin walks the feature on the live simulator, verifies UI rendering and internal state, then saves the verified walk as `.rn-agent/actions/<feature-slug>.yaml`. Each action carries a small metadata header at the top — its intent, what it tags, whether it mutates data, its lifecycle status, and its required replay-engine pin.
 
 ```yaml
 # id: wizard-create-task
@@ -110,6 +110,7 @@ Run `/rn-dev-agent:test-feature <feature description>`. The plugin walks the fea
 # tags: [task, wizard, create]
 # mutates: true
 # status: active
+# enginePin: maestro-runner@1.1.24
 appId: com.rndevagent.testapp
 ---
 # Maestro YAML body...
@@ -131,7 +132,7 @@ You can hand-edit actions, but consider that self-repair refuses to touch hand-e
 /rn-dev-agent:run-action wizard-create-task -e TITLE="Buy milk" -e PRIORITY=high
 ```
 
-`-e KEY=VALUE` fills `${KEY}` placeholders inside the action. `--platform ios|android` validates the exact bound session platform and never selects among booted devices. `--dry-run` prints the resolved replay command without executing it.
+`-e KEY=VALUE` fills `${KEY}` placeholders inside the action. `--platform ios|android` validates the exact bound session platform and never selects among booted devices. Replay always goes through `cdp_run_action`; there is no direct-runner dry-run path.
 
 ## Running actions from the observe UI
 
@@ -149,15 +150,17 @@ Self-repair handles **small UI drift** (a renamed `testID`, a moved button), not
 
 ## Engine version pinning
 
-Action replay runs on a pinned maestro-runner version (currently `1.0.9`). The pin lives in
-`packages/rn-dev-agent-core/src/domain/engine-pin.ts` together with the engine's known quirks;
-Replay results and `/doctor` report drift, so every session log records which
-engine ran. A locally-newer or older install still works but warns once — untested upstream
-changes are how silent replay regressions arrive. Bumping the pin follows the upgrade ritual
-documented in that module: install the candidate with `--version`, replay the committed action
-corpus on both platforms, reconcile the quirks list, then update the manifest and installer
-together (a sync test keeps the two copies equal). Opt into hard enforcement with
-`RN_ENGINE_PIN_STRICT=1` (refuses proven drift/checksum mismatch at replay time).
+Action replay requires maestro-runner `>= 1.1.24` from rn-dev-agent's versioned pin-cache.
+The authoritative pin manifest lives at
+`packages/rn-dev-agent-core/src/domain/maestro-runner-pin.json`; setup installs and verifies
+attested 1.1.24 as the default known-good and `/doctor` reports missing, older, unattested, checksum-mismatched,
+unverified, unknown, or unsupported installations. Replay refuses every non-`pinned-ok`
+state before UI mutation and never substitutes PATH, `~/.maestro-runner`, or Maestro CLI.
+
+Owned actions must carry `# enginePin: maestro-runner@1.1.24` or newer. Setup migrates compatible
+actions; missing or older pins and unsupported regex text selectors are terminal.
+Bumping the pin follows the upgrade ritual documented beside the manifest: replay the
+committed action corpus on both platforms, reconcile known quirks, then update the manifest.
 
 The pinned engine drives **Android API 26+ only** — its bundled UiAutomator2 server APK
 declares `minSdk 26`. On an older emulator or phone, `maestro_run` refuses up front with

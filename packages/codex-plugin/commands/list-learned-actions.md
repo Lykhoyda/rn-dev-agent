@@ -27,7 +27,7 @@ The inventory includes:
 
 1. Legacy Claude feedback memories when they exist. Their presence is historical
    compatibility, not evidence that Codex owns a hidden memory surface.
-2. `.rn-agent/actions/*.yaml` discovered from the active workspace/test-app
+2. `.rn-agent/actions/*.yaml` and `*.yml` discovered from the active workspace/test-app
    locations, with action metadata and parameter requirements.
 3. `.rn-agent/skeleton.yaml` UI skeletons.
 4. Plugin workflow names when running in the plugin repository.
@@ -35,6 +35,10 @@ The inventory includes:
 After listing, summarize matching flows and their `produces`, `mutates`,
 `appId`, platform, and required params. Replay a full/partial match via
 `cdp_run_action` before a manual `device_*` walk.
+
+Treat the inventory's legacy `replay` string as display-only. Execute owned
+actions through `cdp_run_action` so replay resolves pin-cache maestro-runner
+`>= 1.1.24` and enforces `enginePin` and selector preflight.
 
 This listing is read-only discovery and grants no replay authority. A flow is
 listed whenever it exists on disk, including while the session is `blocked` and

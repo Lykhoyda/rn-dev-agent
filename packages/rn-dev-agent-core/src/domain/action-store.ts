@@ -6,8 +6,8 @@
 // they all read/write through this single chokepoint so schema
 // invariants stay enforced.
 
-import { existsSync, readFileSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, lstatSync, readFileSync, realpathSync, statSync, unlinkSync } from 'node:fs';
+import { basename, dirname, join } from 'node:path';
 import {
   type ReusableAction,
   type M7Metadata,
@@ -24,6 +24,7 @@ import {
 import { atomicWriter } from './atomic-writer.js';
 import { assertValidActionId, assertWithinDir } from './path-safety.js';
 import { mirrorToDb } from './action-state-store.js';
+import { resolveWorktreeLayout } from '../session/worktree-inheritance.js';
 
 /**
  * Resolve the canonical YAML path for an action id under a project root.
@@ -40,9 +41,215 @@ import { mirrorToDb } from './action-state-store.js';
 export function actionPathFor(projectRoot: string, actionId: string): string {
   assertValidActionId(actionId, 'actionPathFor');
   const actionsDir = join(projectRoot, '.rn-agent', 'actions');
+  assertOwnedActionCorpus(projectRoot);
   const fileName = `${actionId}.yaml`;
   assertWithinDir(fileName, actionsDir);
   return join(actionsDir, fileName);
+}
+
+export function assertOwnedActionCorpus(projectRoot: string): void {
+  for (const path of [join(projectRoot, '.rn-agent'), join(projectRoot, '.rn-agent', 'actions')]) {
+    const stat = lstatIfPresent(path);
+    if (stat?.isSymbolicLink()) {
+      throw new Error(`Refusing learned-action corpus symlink at ${path}.`);
+    }
+  }
+}
+
+export function assertReadableActionCorpus(projectRoot: string): void {
+  const rnAgentDir = join(projectRoot, '.rn-agent');
+  const actionsDir = join(rnAgentDir, 'actions');
+  const rnAgentStat = lstatIfPresent(rnAgentDir);
+  if (rnAgentStat?.isSymbolicLink()) {
+    throw new Error(`Refusing learned-action corpus symlink at ${rnAgentDir}.`);
+  }
+  const actionsStat = lstatIfPresent(actionsDir);
+  if (!actionsStat?.isSymbolicLink()) return;
+  const target = realpathSync(actionsDir);
+  const layout = resolveWorktreeLayout({ cwd: projectRoot, appRoot: projectRoot });
+  const primaryRnAgentDir =
+    'primaryAppRoot' in layout && layout.primaryAppRoot
+      ? join(layout.primaryAppRoot, '.rn-agent')
+      : null;
+  const primaryActionsDir = primaryRnAgentDir ? join(primaryRnAgentDir, 'actions') : null;
+  const expectedTarget =
+    primaryRnAgentDir &&
+    primaryActionsDir &&
+    'kind' in layout &&
+    layout.kind === 'linked' &&
+    !layout.refusal &&
+    isOwnedDirectory(primaryRnAgentDir) &&
+    isOwnedDirectory(primaryActionsDir)
+      ? canonicalPath(primaryActionsDir)
+      : null;
+  if (!expectedTarget || target !== expectedTarget || !statSync(target).isDirectory()) {
+    throw new Error(`Refusing foreign learned-action corpus symlink at ${actionsDir}.`);
+  }
+}
+
+function isOwnedDirectory(path: string): boolean {
+  const stat = lstatIfPresent(path);
+  return Boolean(stat?.isDirectory() && !stat.isSymbolicLink());
+}
+
+function canonicalPath(path: string): string | null {
+  try {
+    return realpathSync(path);
+  } catch {
+    return null;
+  }
+}
+
+function lstatIfPresent(path: string): ReturnType<typeof lstatSync> | null {
+  try {
+    return lstatSync(path);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw err;
+  }
+}
+
+function actionFileExists(path: string): boolean {
+  const stat = lstatIfPresent(path);
+  if (!stat) return false;
+  if (stat.isSymbolicLink()) {
+    throw new Error(`Refusing inherited action symlink at ${path}.`);
+  }
+  return true;
+}
+
+interface OwnedActionPathEntry {
+  path: string;
+  dev: number;
+  ino: number;
+  kind: 'directory' | 'file';
+}
+
+function captureOwnedActionPathIdentity(
+  projectRoot: string,
+  filePath?: string,
+): OwnedActionPathEntry[] {
+  const paths: Array<{ path: string; kind: OwnedActionPathEntry['kind'] }> = [
+    { path: join(projectRoot, '.rn-agent'), kind: 'directory' },
+    { path: join(projectRoot, '.rn-agent', 'actions'), kind: 'directory' },
+  ];
+  if (filePath) paths.push({ path: filePath, kind: 'file' });
+  return paths.map(({ path, kind }) => {
+    const stat = lstatSync(path);
+    const valid =
+      !stat.isSymbolicLink() && (kind === 'directory' ? stat.isDirectory() : stat.isFile());
+    if (!valid) throw new Error(`Refusing changed learned-action path at ${path}.`);
+    return { path, kind, dev: stat.dev, ino: stat.ino };
+  });
+}
+
+function ownedActionPathIdentityMatches(entries: readonly OwnedActionPathEntry[]): boolean {
+  try {
+    return entries.every((entry) => {
+      const stat = lstatSync(entry.path);
+      return (
+        !stat.isSymbolicLink() &&
+        stat.dev === entry.dev &&
+        stat.ino === entry.ino &&
+        (entry.kind === 'directory' ? stat.isDirectory() : stat.isFile())
+      );
+    });
+  } catch {
+    return false;
+  }
+}
+
+export function resolveActionPath(projectRoot: string, actionId: string): string | null {
+  assertValidActionId(actionId, 'resolveActionPath');
+  assertReadableActionCorpus(projectRoot);
+  const actionsDir = join(projectRoot, '.rn-agent', 'actions');
+  const fileName = `${actionId}.yaml`;
+  assertWithinDir(fileName, actionsDir);
+  const yamlPath = join(actionsDir, fileName);
+  const ymlPath = yamlPath.replace(/\.yaml$/, '.yml');
+  const yamlExists = actionFileExists(yamlPath);
+  const ymlExists = actionFileExists(ymlPath);
+  if (yamlExists && ymlExists) {
+    throw new Error(
+      `Action ${actionId} is ambiguous because both ${actionId}.yaml and ${actionId}.yml exist; keep exactly one file before replay.`,
+    );
+  }
+  if (yamlExists) return yamlPath;
+  if (ymlExists) return ymlPath;
+  return null;
+}
+
+export function createActionTextExclusive(
+  projectRoot: string,
+  actionId: string,
+  yamlText: string,
+): string {
+  const yamlPath = actionPathFor(projectRoot, actionId);
+  const ymlPath = yamlPath.replace(/\.yaml$/, '.yml');
+  return atomicWriter.withLock(yamlPath, () => {
+    const pathIdentity = captureOwnedActionPathIdentity(projectRoot);
+    const pathIsOwned = () => ownedActionPathIdentityMatches(pathIdentity);
+    const existing = resolveActionPath(projectRoot, actionId);
+    if (existing) throw new Error(`Action ${actionId} already exists at ${existing}.`);
+    if (!atomicWriter.writeTextCreateExclusive(yamlPath, yamlText, pathIsOwned)) {
+      throw new Error(`Action ${actionId} changed during creation.`);
+    }
+    try {
+      if (pathIsOwned() && !actionFileExists(ymlPath)) return yamlPath;
+      throw new Error(`Action ${actionId} changed during creation; keep exactly one extension.`);
+    } catch (err) {
+      if (pathIsOwned() && readFileSync(yamlPath, 'utf8') === yamlText) unlinkSync(yamlPath);
+      throw err;
+    }
+  });
+}
+
+export type WriteRecordedActionResult =
+  | {
+      ok: true;
+      filePath: string;
+      sidecarPath: string;
+      finalMtimeMs: number;
+      preexisted: boolean;
+    }
+  | { ok: false; existingPath: string | null };
+
+export function writeRecordedActionTransaction(
+  projectRoot: string,
+  actionId: string,
+  yamlText: string,
+  state: ReusableAction['state'],
+  overwrite: boolean,
+): WriteRecordedActionResult {
+  const yamlPath = actionPathFor(projectRoot, actionId);
+  return atomicWriter.withLock(yamlPath, () => {
+    const existingPath = resolveActionPath(projectRoot, actionId);
+    if (existingPath && !overwrite) return { ok: false, existingPath };
+    const filePath = existingPath ?? yamlPath;
+    const pathIdentity = captureOwnedActionPathIdentity(projectRoot, existingPath ?? undefined);
+    const pathIsOwned = () => ownedActionPathIdentityMatches(pathIdentity);
+    const sidecarPath = sidecarPathFor(filePath);
+    if (!existingPath && existsSync(sidecarPath)) return { ok: false, existingPath: null };
+    const written = existingPath
+      ? atomicWriter.pairWriteConditional(
+          filePath,
+          yamlText,
+          sidecarPath,
+          state,
+          pathIsOwned,
+          pathIsOwned,
+          readFileSync(filePath, 'utf8'),
+        )
+      : atomicWriter.pairWriteCreateExclusive(filePath, yamlText, sidecarPath, state, pathIsOwned);
+    if (!written) return { ok: false, existingPath: resolveActionPath(projectRoot, actionId) };
+    return {
+      ok: true,
+      filePath,
+      sidecarPath,
+      finalMtimeMs: written.finalMtimeMs,
+      preexisted: existingPath !== null,
+    };
+  });
 }
 
 /**
@@ -157,11 +364,12 @@ export function joinYaml(parts: {
  * (no id/intent — required fields).
  */
 export function loadAction(projectRoot: string, actionId: string): ReusableAction | null {
-  const filePath = actionPathFor(projectRoot, actionId);
-  if (!existsSync(filePath)) return null;
+  const filePath = resolveActionPath(projectRoot, actionId);
+  if (!filePath) return null;
   const text = readFileSync(filePath, 'utf8');
   const metadata = parseM7Header(text, actionId);
   if (!metadata) return null;
+  assertActionMetadataIdentity(filePath, metadata);
   const { bodyLines } = splitYaml(text);
   const state = loadOrInitSidecar(filePath);
   return {
@@ -215,7 +423,135 @@ export class SaveActionPreconditionError extends Error {
   }
 }
 
+export interface ActionMigrationBaseline {
+  yamlText: string;
+  state: ReusableAction['state'];
+  sidecarExisted: boolean;
+}
+
+interface MigrationPathEntry {
+  path: string;
+  dev: number;
+  ino: number;
+  kind: 'directory' | 'file';
+}
+
+const migrationPathIdentities = new WeakMap<ActionMigrationBaseline, MigrationPathEntry[]>();
+
+function migrationConflict(filePath: string): Error {
+  return new Error(`Action changed during migration: ${filePath}. Re-run migration.`);
+}
+
+function migrationBaselineMatches(filePath: string, baseline: ActionMigrationBaseline): boolean {
+  const pathIdentity = migrationPathIdentities.get(baseline);
+  if (!pathIdentity || !migrationPathIdentityMatches(pathIdentity)) return false;
+  if (!migrationYamlBaselineMatches(filePath, baseline)) return false;
+  const sidecarPath = sidecarPathFor(filePath);
+  const sidecarExists = existsSync(sidecarPath);
+  if (sidecarExists !== baseline.sidecarExisted) return false;
+  return !sidecarExists || runtimeSidecarMatches(sidecarPath, baseline.state);
+}
+
+function captureMigrationPathIdentity(filePath: string): MigrationPathEntry[] {
+  const actionsDir = dirname(filePath);
+  const rnAgentDir = dirname(actionsDir);
+  return [
+    { path: rnAgentDir, kind: 'directory' as const },
+    { path: actionsDir, kind: 'directory' as const },
+    { path: filePath, kind: 'file' as const },
+  ].map(({ path, kind }) => {
+    const stat = lstatSync(path);
+    const valid =
+      !stat.isSymbolicLink() && (kind === 'directory' ? stat.isDirectory() : stat.isFile());
+    if (!valid) throw new Error(`Refusing changed learned-action path at ${path}.`);
+    return { path, kind, dev: stat.dev, ino: stat.ino };
+  });
+}
+
+function migrationPathIdentityMatches(entries: readonly MigrationPathEntry[]): boolean {
+  try {
+    return entries.every((entry) => {
+      const stat = lstatSync(entry.path);
+      return (
+        !stat.isSymbolicLink() &&
+        stat.dev === entry.dev &&
+        stat.ino === entry.ino &&
+        (entry.kind === 'directory' ? stat.isDirectory() : stat.isFile())
+      );
+    });
+  } catch {
+    return false;
+  }
+}
+
+function migrationYamlBaselineMatches(
+  filePath: string,
+  baseline: ActionMigrationBaseline,
+): boolean {
+  try {
+    return readFileSync(filePath, 'utf8') === baseline.yamlText;
+  } catch {
+    return false;
+  }
+}
+
+function migrationYamlPublicationMatches(
+  filePath: string,
+  baseline: ActionMigrationBaseline,
+): boolean {
+  const pathIdentity = migrationPathIdentities.get(baseline);
+  return Boolean(
+    pathIdentity &&
+    migrationPathIdentityMatches(pathIdentity) &&
+    migrationYamlBaselineMatches(filePath, baseline),
+  );
+}
+
+export function loadActionMigrationBaseline(filePath: string): ActionMigrationBaseline {
+  assertWritableActionFile(filePath);
+  const pathIdentity = captureMigrationPathIdentity(filePath);
+  const yamlText = readFileSync(filePath, 'utf8');
+  const sidecarExisted = existsSync(sidecarPathFor(filePath));
+  const state = loadOrInitSidecar(filePath);
+  const baseline = { yamlText, state, sidecarExisted };
+  migrationPathIdentities.set(baseline, pathIdentity);
+  if (!migrationBaselineMatches(filePath, baseline)) throw migrationConflict(filePath);
+  return baseline;
+}
+
+export function commitMigratedActionText(
+  filePath: string,
+  baseline: ActionMigrationBaseline,
+  yamlText: string,
+): { filePath: string; sidecarPath: string } {
+  assertWritableActionFile(filePath);
+  const sidecarPath = sidecarPathFor(filePath);
+  const result = atomicWriter.pairWriteConditional(
+    filePath,
+    yamlText,
+    sidecarPath,
+    baseline.state,
+    () => migrationBaselineMatches(filePath, baseline),
+    () => migrationYamlPublicationMatches(filePath, baseline),
+    baseline.yamlText,
+  );
+  if (!result) throw migrationConflict(filePath);
+  const nextState = { ...baseline.state, lastSeenMtimeMs: result.finalMtimeMs };
+  const metadata = parseM7Header(yamlText, basename(filePath).replace(/\.ya?ml$/i, ''));
+  mirrorToDb({
+    yamlFilePath: filePath,
+    state: nextState,
+    meta: {
+      appId: metadata?.appId,
+      status: metadata?.status,
+      path: filePath,
+    },
+  });
+  return { filePath, sidecarPath };
+}
+
 export function saveAction(action: ReusableAction): { filePath: string; sidecarPath: string } {
+  assertWritableActionFile(action.filePath);
   // GH #113: soft-assertion contract enforcement. Both current callers
   // (cdp_repair_action, cdp_record_test_save_as_action) gate this check
   // correctly, but a future caller (e.g. the planned issue-#104
@@ -299,23 +635,30 @@ export function actionWasEditedExternally(action: ReusableAction): boolean {
  * common case where no external write happened).
  */
 export function acknowledgeExternalEdit(action: ReusableAction): ReusableAction {
-  let currentMtimeMs: number;
-  try {
-    currentMtimeMs = statSync(action.filePath).mtimeMs;
-  } catch {
-    return action;
-  }
-  if (currentMtimeMs <= action.state.lastSeenMtimeMs) return action;
-  const nextState = markSeen(action.state, currentMtimeMs);
-  saveSidecar(action.filePath, nextState);
+  const nextAction = atomicWriter.withLock(action.filePath, () => {
+    let currentMtimeMs: number;
+    try {
+      currentMtimeMs = statSync(action.filePath).mtimeMs;
+    } catch {
+      return action;
+    }
+    const currentState = loadOrInitSidecar(action.filePath);
+    if (currentMtimeMs <= currentState.lastSeenMtimeMs) {
+      return action;
+    }
+    const nextState = markSeen(currentState, currentMtimeMs);
+    saveSidecar(action.filePath, nextState);
+    return { ...action, state: nextState };
+  });
+  if (nextAction === action) return action;
   // Task 5 (A2): mirror the refreshed mtime baseline to the DB (best-effort,
   // never throws). No record append — this is a baseline-only update.
   mirrorToDb({
     yamlFilePath: action.filePath,
-    state: nextState,
+    state: nextAction.state,
     meta: { appId: action.metadata.appId, status: action.metadata.status, path: action.filePath },
   });
-  return { ...action, state: nextState };
+  return nextAction;
 }
 
 /**
@@ -418,6 +761,13 @@ function runtimeSidecarMatches(sidecarPath: string, expected: ReusableAction['st
   return canonicalRuntimeJson(normalized) === canonicalRuntimeJson(expected);
 }
 
+function runtimeBaselineMatches(filePath: string, expected: ReusableAction['state']): boolean {
+  const sidecarPath = sidecarPathFor(filePath);
+  return existsSync(sidecarPath)
+    ? runtimeSidecarMatches(sidecarPath, expected)
+    : expected.runHistory.length === 0 && expected.repairHistory.length === 0;
+}
+
 /**
  * Persist run telemetry without reserializing the tracked action YAML. The
  * synchronous compare+write is atomic with respect to this MCP process and
@@ -434,18 +784,16 @@ export function saveActionRuntimeWithCAS(
   expected: ReusableAction,
   nextState: ReusableAction['state'],
 ): SaveActionRuntimeCASResult {
-  const sidecarPath = sidecarPathFor(expected.filePath);
-  if (existsSync(sidecarPath)) {
-    if (!runtimeSidecarMatches(sidecarPath, expected.state)) {
+  return atomicWriter.withLock<SaveActionRuntimeCASResult>(expected.filePath, () => {
+    const sidecarPath = sidecarPathFor(expected.filePath);
+    if (!runtimeBaselineMatches(expected.filePath, expected.state)) {
       return { ok: false, conflict: 'EXTERNAL_WRITE' };
     }
-  } else if (expected.state.runHistory.length > 0 || expected.state.repairHistory.length > 0) {
-    return { ok: false, conflict: 'EXTERNAL_WRITE' };
-  }
 
-  saveSidecar(expected.filePath, nextState);
-  expected.state = nextState;
-  return { ok: true, sidecarPath };
+    saveSidecar(expected.filePath, nextState);
+    expected.state = nextState;
+    return { ok: true, sidecarPath };
+  });
 }
 
 /** Byte-preserving lifecycle promotion; comments/body remain exactly intact. */
@@ -453,6 +801,11 @@ export function promoteActionRuntimeWithCAS(
   expected: ReusableAction,
   nextState: ReusableAction['state'],
 ): SaveActionRuntimeCASResult {
+  try {
+    assertWritableActionFile(expected.filePath);
+  } catch {
+    return { ok: false, conflict: 'EXTERNAL_WRITE' };
+  }
   const sidecarPath = sidecarPathFor(expected.filePath);
   if (existsSync(sidecarPath)) {
     if (!runtimeSidecarMatches(sidecarPath, expected.state)) {
@@ -470,9 +823,52 @@ export function promoteActionRuntimeWithCAS(
   const marker = /^# status: experimental[ \t]*$/gm;
   if ((yaml.match(marker) ?? []).length !== 1) return { ok: false, conflict: 'EXTERNAL_WRITE' };
   const promoted = yaml.replace(marker, '# status: active');
-  const written = atomicWriter.pairWrite(expected.filePath, promoted, sidecarPath, nextState);
+  const written = atomicWriter.pairWriteConditional(
+    expected.filePath,
+    promoted,
+    sidecarPath,
+    nextState,
+    () => {
+      try {
+        return (
+          runtimeBaselineMatches(expected.filePath, expected.state) &&
+          !actionWasEditedExternally(expected) &&
+          readFileSync(expected.filePath, 'utf8') === yaml
+        );
+      } catch {
+        return false;
+      }
+    },
+    undefined,
+    yaml,
+  );
+  if (!written) return { ok: false, conflict: 'EXTERNAL_WRITE' };
   expected.state = { ...nextState, lastSeenMtimeMs: written.finalMtimeMs };
   return { ok: true, sidecarPath };
+}
+
+function assertWritableActionFile(filePath: string): void {
+  const actionsDir = dirname(filePath);
+  const rnAgentDir = dirname(actionsDir);
+  if (basename(actionsDir) !== 'actions' || basename(rnAgentDir) !== '.rn-agent') {
+    throw new Error(
+      `Refusing action mutation outside an owned learned-action corpus: ${filePath}.`,
+    );
+  }
+  assertOwnedActionCorpus(dirname(rnAgentDir));
+  actionFileExists(filePath);
+}
+
+export function assertActionMetadataIdentity(
+  filePath: string,
+  metadata: Pick<M7Metadata, 'id'>,
+): void {
+  const fileId = basename(filePath).replace(/\.ya?ml$/i, '');
+  if (metadata.id !== fileId) {
+    throw new Error(
+      `Action metadata id ${metadata.id} does not match filename identity ${fileId}.`,
+    );
+  }
 }
 
 /**

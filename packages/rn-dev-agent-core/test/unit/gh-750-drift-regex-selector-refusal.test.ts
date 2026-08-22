@@ -49,10 +49,17 @@ test('gh-750: plain literals and id selectors are not flagged', () => {
   const commands = [
     { tapOn: 'Continue' },
     { tapOn: { id: 'submit-button' } },
-    { assertVisible: '3.5 stars (12 ratings)' },
     { inputText: 'user.*name' },
   ];
   assert.deepEqual(findRegexTextSelectors(commands), []);
+});
+
+test('gh-750: complete regex syntax includes wildcard and grouping forms', () => {
+  assert.deepEqual(findRegexTextSelectors([{ tapOn: 'Log.n' }]), ['Log.n']);
+  assert.deepEqual(findRegexTextSelectors([{ tapOn: '^Login$' }]), ['^Login$']);
+  assert.deepEqual(findRegexTextSelectors([{ assertVisible: '3.5 stars (12 ratings)' }]), [
+    '3.5 stars (12 ratings)',
+  ]);
 });
 
 test('gh-750: drifted runner refuses regex-selector flows with a typed message', () => {
@@ -60,13 +67,13 @@ test('gh-750: drifted runner refuses regex-selector flows with a typed message',
   const refusal = driftedRegexSelectorRefusal(drifted, [{ tapOn: '.*Getsafe.*http://.*' }]);
   assert.ok(refusal);
   assert.match(refusal, /1\.1\.20/);
-  assert.match(refusal, /1\.0\.9/);
+  assert.match(refusal, /1\.1\.24/);
   assert.match(refusal, /CONTAINS/);
   assert.match(refusal, /\.\*Getsafe\.\*/);
 });
 
 test('gh-750: pinned runner and literal-only flows replay without refusal', () => {
-  const pinned = buildReplayEngineStatus('pinned-ok', '1.0.9', false);
+  const pinned = buildReplayEngineStatus('pinned-ok', '1.1.24', false);
   const drifted = buildReplayEngineStatus('drift-newer', '1.1.20', false);
   assert.equal(driftedRegexSelectorRefusal(pinned, [{ tapOn: '.*regex.*' }]), null);
   assert.equal(driftedRegexSelectorRefusal(drifted, [{ tapOn: 'Continue' }]), null);

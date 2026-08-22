@@ -1,13 +1,23 @@
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import type { ToolResult } from '../utils.js';
 import { okResult, failResult } from '../utils.js';
 import { findProjectRoot } from '../nav-graph/storage.js';
 import {
   buildMaestroFlow,
   isValidBundleId,
+  isSafeMaestroScalar,
   MaestroValidationError,
 } from '../domain/maestro-validator.js';
+import { ACTION_ENGINE_PIN } from '../domain/engine-pin.js';
+import { regexSelectorCapabilityRefusal } from '../domain/action-engine-compat.js';
+import {
+  assertOwnedActionCorpus,
+  createActionTextExclusive,
+  joinYaml,
+  splitYaml,
+} from '../domain/action-store.js';
+import { serializeM7Header } from '../domain/reusable-action.js';
+import { isValidActionId } from '../domain/path-safety.js';
 
 interface MaestroStep {
   action: 'tap' | 'fill' | 'assert' | 'scroll' | 'navigate' | 'back' | 'wait' | 'swipe' | 'launch';
@@ -83,7 +93,7 @@ function stepToMaestroCommands(step: MaestroStep): unknown[] {
 
     case 'wait':
       if (step.waitMs && step.waitMs > 0) {
-        return [{ extendedWaitUntil: { visible: '.*', timeout: step.waitMs } }];
+        return [{ waitForAnimationToEnd: { timeout: step.waitMs } }];
       }
       return [];
 
@@ -97,6 +107,9 @@ export function createMaestroGenerateHandler(): (args: MaestroGenerateArgs) => P
     if (!args.name || !args.steps?.length) {
       return failResult('Provide a flow name and at least one step.');
     }
+    if (!isSafeMaestroScalar(args.name)) {
+      return failResult('Flow name contains an unsafe control character or is too long.');
+    }
 
     const root = findProjectRoot();
     const outputDir = args.outputDir ?? (root ? join(root, '.rn-agent', 'actions') : null);
@@ -104,28 +117,55 @@ export function createMaestroGenerateHandler(): (args: MaestroGenerateArgs) => P
       return failResult('Cannot determine project root. Pass outputDir explicitly.');
     }
 
-    if (!existsSync(outputDir)) {
-      mkdirSync(outputDir, { recursive: true });
-    }
-
     const sanitizedName = args.name.replace(/[^a-zA-Z0-9_-]/g, '-').toLowerCase();
+    if (!isValidActionId(sanitizedName)) {
+      return failResult(
+        'Flow name must produce an action id that starts with a letter or number and is at most 64 characters.',
+      );
+    }
     const fileName = `${sanitizedName}.yaml`;
-    const filePath = join(outputDir, fileName);
+    const learnedProjectRoot =
+      basename(outputDir) === 'actions' && basename(dirname(outputDir)) === '.rn-agent'
+        ? dirname(dirname(outputDir))
+        : null;
+    if (!learnedProjectRoot) {
+      return failResult('Generated actions must be written to an owned .rn-agent/actions corpus.');
+    }
+    try {
+      assertOwnedActionCorpus(learnedProjectRoot);
+    } catch (err) {
+      return failResult(err instanceof Error ? err.message : String(err));
+    }
 
     if (args.appId !== undefined && !isValidBundleId(args.appId)) {
       return failResult(`Invalid appId '${String(args.appId).slice(0, 80)}' (Phase 134.1)`);
     }
 
     const commands: unknown[] = [];
-    for (const step of args.steps) {
-      for (const cmd of stepToMaestroCommands(step)) {
-        commands.push(cmd);
+    for (const [index, step] of args.steps.entries()) {
+      const stepCommands = stepToMaestroCommands(step);
+      if (stepCommands.length === 0) {
+        return failResult(`Step ${index + 1} (${step.action}) is missing required input.`);
       }
+      commands.push(...stepCommands);
     }
+
+    const compatibilityRefusal = regexSelectorCapabilityRefusal(commands);
+    if (compatibilityRefusal) return failResult(compatibilityRefusal, 'ENGINE_PIN_MISMATCH');
 
     let content: string;
     try {
-      content = buildMaestroFlow(args.appId ? { appId: args.appId } : {}, commands);
+      const generated = buildMaestroFlow(args.appId ? { appId: args.appId } : {}, commands);
+      const parts = splitYaml(generated);
+      content = joinYaml({
+        ...parts,
+        headerLines: serializeM7Header({
+          id: sanitizedName,
+          intent: args.name,
+          status: 'experimental',
+          enginePin: ACTION_ENGINE_PIN,
+        }).split('\n'),
+      });
     } catch (err) {
       if (err instanceof MaestroValidationError) {
         return failResult(`Refusing to write Maestro flow: ${err.message} (Phase 134.1)`);
@@ -133,7 +173,12 @@ export function createMaestroGenerateHandler(): (args: MaestroGenerateArgs) => P
       throw err;
     }
 
-    writeFileSync(filePath, content, 'utf-8');
+    let filePath: string;
+    try {
+      filePath = createActionTextExclusive(learnedProjectRoot, sanitizedName, content);
+    } catch (err) {
+      return failResult(err instanceof Error ? err.message : String(err));
+    }
 
     return okResult({
       generated: true,

@@ -480,13 +480,22 @@ test('repair-action: when YAML write fails after sidecar succeeds, no false-posi
   }));
 
   const realWriteFile = atomicWriter._writeFile.bind(atomicWriter);
-  const stub = mock.method(atomicWriter, '_writeFile', (path, content) => {
+  const realWriteFileWithMode = atomicWriter._writeFileWithMode.bind(atomicWriter);
+  const failYamlTmp = (path, content, mode) => {
     // GH #111: tmp suffix is now `.tmp.<stamp>` rather than fixed `.tmp`.
     if (/\.yaml\.tmp\./.test(path)) {
       throw new Error('SIMULATED_DISK_FULL: yaml write failed');
     }
-    return realWriteFile(path, content);
-  });
+    return mode === undefined
+      ? realWriteFile(path, content)
+      : realWriteFileWithMode(path, content, mode);
+  };
+  const stub = mock.method(atomicWriter, '_writeFile', (path, content) =>
+    failYamlTmp(path, content),
+  );
+  const modeStub = mock.method(atomicWriter, '_writeFileWithMode', (path, content, mode) =>
+    failYamlTmp(path, content, mode),
+  );
 
   const handler = createRepairActionHandler();
   // The handler currently doesn't try/catch around saveAction, so the
@@ -511,6 +520,7 @@ test('repair-action: when YAML write fails after sidecar succeeds, no false-posi
   }
 
   stub.mock.restore();
+  modeStub.mock.restore();
 
   // Critical invariant #1: the persisted sidecar's lastSeenMtimeMs must
   // be ≥ the on-disk YAML mtime, so yamlEditedSinceLastSeen returns

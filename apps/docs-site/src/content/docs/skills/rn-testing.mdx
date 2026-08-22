@@ -11,16 +11,12 @@ Activates when Claude encounters tasks involving Maestro tests, E2E flows, testI
 
 ## Key Knowledge Areas
 
-### Test Runner: maestro-runner (preferred)
+### Test Runner: maestro-runner floor (>= 1.1.24)
 
-A Go-based drop-in replacement for Maestro with the same YAML syntax:
-
-| Metric | Maestro (Java) | maestro-runner (Go) |
-|--------|---------------|---------------------|
-| Binary size | ~300MB (with JVM) | 21MB |
-| Startup time | 2-4s | &lt;100ms |
-| Memory | ~400MB | ~30MB |
-| Flow execution | Baseline | 2-3x faster |
+All YAML replay uses rn-dev-agent's tools and pin-cache maestro-runner `>= 1.1.24`
+(attested 1.1.24 is the default known-good). Missing, older, unverified, checksum-mismatched,
+or unsupported runners are terminal before UI mutation; PATH, brew Maestro,
+and `~/.maestro-runner` are never replay engines.
 
 ### Critical Timing Rule
 
@@ -57,11 +53,7 @@ Per-step timing with maestro-runner + JPEG: ~1.4s (2.2x faster than Maestro + PN
 
 ### Auth Pre-flight
 
-Before testing, checks `cdp_navigation_state` for auth screens. If logged out:
-1. Scans for Maestro subflows (prefer login over registration)
-2. Strips `clearState: true` for Dev Client builds
-3. Wraps subflows with `appId` if missing
-4. Runs via maestro-runner, verifies arrival at main screen
+Before testing, check `cdp_navigation_state` for auth screens. If logged out, select a compatible owned learned action and replay it through `cdp_run_action` on the authority-bound device. Missing or incompatible owned automation is terminal. Never fall back to manual login or an unowned `.maestro` flow; use `cdp_auto_login` only when the user explicitly authorizes legacy per-call recovery, never as durable authority or PR proof.
 
 ### Permission Pre-flight
 

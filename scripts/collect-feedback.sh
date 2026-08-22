@@ -187,8 +187,28 @@ elif [ -f "$HOME/.agent-device/bin/agent-device" ]; then
 fi
 
 maestro_runner_version="not installed"
-if [ -f "$HOME/.maestro-runner/bin/maestro-runner" ]; then
-  maestro_runner_version=$("$HOME/.maestro-runner/bin/maestro-runner" --version 2>/dev/null | head -1 || echo "installed, version unknown")
+pin_diagnose=""
+for candidate in \
+  "$PLUGIN_ROOT/rn-dev-agent-core/dist/maestro-runner-pin.js" \
+  "$PLUGIN_ROOT/packages/rn-dev-agent-core/dist/maestro-runner-pin.js"; do
+  if [ -f "$candidate" ]; then
+    pin_diagnose="$candidate"
+    break
+  fi
+done
+if [ -n "$pin_diagnose" ]; then
+  diagnose_json=$(node "$pin_diagnose" diagnose --json 2>/dev/null || true)
+  maestro_runner_version=$(printf '%s' "$diagnose_json" | python3 -c '
+import json, sys
+try:
+    data = json.load(sys.stdin)
+    status = data.get("status", "unknown")
+    version = data.get("installedVersion") or data.get("pinned") or "unknown"
+    provenance = data.get("provenance", "none")
+    print(f"{version} ({status}, {provenance})")
+except Exception:
+    print("diagnose unavailable")
+' 2>/dev/null || echo "diagnose unavailable")
 fi
 
 # --- Collect CDP bridge log tail (last 30 lines, redacted) ---

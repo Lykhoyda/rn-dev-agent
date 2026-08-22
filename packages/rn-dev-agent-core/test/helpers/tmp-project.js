@@ -24,6 +24,25 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { buildReplayEngineStatus, MAESTRO_RUNNER_PIN } from '../../dist/domain/engine-pin.js';
+import { createRunActionHandler } from '../../dist/tools/run-action.js';
+
+const PINNED_ENGINE_STATUS = buildReplayEngineStatus(
+  'pinned-ok',
+  MAESTRO_RUNNER_PIN.version,
+  false,
+  {
+    selectedPath: `/test/pin-cache/${MAESTRO_RUNNER_PIN.version}/bin/maestro-runner`,
+    provenance: 'pin-cache',
+  },
+);
+
+export function createPinnedRunActionHandler(deps = {}) {
+  return createRunActionHandler({
+    ...deps,
+    engineStatus: deps.engineStatus ?? (async () => PINNED_ENGINE_STATUS),
+  });
+}
 
 export function createTmpProject() {
   const root = mkdtempSync(join(tmpdir(), 'rn-agent-test-'));
@@ -54,6 +73,15 @@ export function createTmpProject() {
      * with the YAML's actual mtime AFTER write.
      */
     seedAction(id, yamlText, state) {
+      if (!/#\s*enginePin\s*:/.test(yamlText)) {
+        yamlText = yamlText.replace(
+          /(#\s*status\s*:\s*.+)$/m,
+          `$1\n# enginePin: maestro-runner@1.1.24`,
+        );
+        if (!/#\s*enginePin\s*:/.test(yamlText)) {
+          yamlText = `${yamlText.replace(/\s*$/, '')}\n# enginePin: maestro-runner@1.1.24\n`;
+        }
+      }
       const yamlPath = join(actionsDir, `${id}.yaml`);
       const statePath = join(stateDir, `${id}.state.json`);
       writeFileSync(yamlPath, yamlText, 'utf8');
@@ -125,7 +153,7 @@ export function fixtureYaml({
   selectors = ['fab-create-task'],
   tags = ['fixture'],
 } = {}) {
-  const tapLines = selectors.map((sel) => `  - tapOn:\n      id: "${sel}"`).join('\n');
+  const tapLines = selectors.map((sel) => `- tapOn:\n    id: "${sel}"`).join('\n');
   return [
     `appId: ${bundleId}`,
     '---',
@@ -134,6 +162,7 @@ export function fixtureYaml({
     `# tags: [${tags.join(', ')}]`,
     '# mutates: false',
     `# status: ${status}`,
+    '# enginePin: maestro-runner@1.1.24',
     '',
     '- launchApp',
     tapLines,

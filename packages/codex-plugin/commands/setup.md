@@ -29,9 +29,29 @@ Name the missing variable and point to the
 before any injection or build.
 
 Abort project onboarding for missing Node/runtime/package files. Device, Metro,
-CDP, ffmpeg/idb, and runner build readiness may be deferred with exact
-instructions. If recovery changes plugin state externally, require Codex
-relaunch before continuing.
+CDP, ffmpeg/idb, and native runner build readiness may be deferred with exact
+instructions. The Maestro runner pin cannot be deferred. If recovery changes
+plugin state externally, require Codex relaunch before continuing.
+
+## Phase 1.5 — exact replay-engine convergence
+
+The user's setup invocation authorizes package-local replay-engine convergence.
+Run these commands by resolved package path, in order:
+
+```text
+node <package-root>/rn-dev-agent-core/dist/maestro-runner-pin.js diagnose --json
+bash <package-root>/scripts/ensure-maestro-runner.sh
+node <package-root>/rn-dev-agent-core/dist/maestro-runner-pin.js diagnose --json
+node <package-root>/rn-dev-agent-core/dist/maestro-runner-pin.js migrate-actions --root "$APP_ROOT" --json
+```
+
+Do not enter project onboarding unless the second diagnosis reports
+`pinned-ok`, version `>= 1.1.24`, provenance `pin-cache`, and a selected path in
+the versioned pin-cache. Migration must report every owned action as
+`migrated` or `already-pinned`. Treat unsupported platform, missing/older/unattested
+drift, checksum mismatch, unknown/unverified version, unreadable action, and
+selector or engine-pin incompatibility as terminal. Never substitute PATH,
+`~/.maestro-runner`, brew Maestro, manual login, or an unowned UI flow.
 
 ## Phase 2 — previewed project onboarding
 
@@ -128,9 +148,10 @@ rolling back accepted project files.
 
 ## Summary
 
-Report a table for passive diagnostics, AGENTS instructions, nav ref, stores,
-scaffold, tsconfig, and optional active CDP verification. Include skipped/user-
-declined states. End with `$rn-dev-agent:rn-feature-dev <description>` only when
+Report a table for passive diagnostics, exact Maestro runner convergence,
+learned-action migration, AGENTS instructions, nav ref, stores, scaffold,
+tsconfig, and optional active CDP verification. Include skipped/user-declined
+states. End with `$rn-dev-agent:rn-feature-dev <description>` only when
 onboarding is ready.
 
 ## Safety

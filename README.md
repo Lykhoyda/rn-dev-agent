@@ -78,7 +78,7 @@ read-only and prints the exact commands for the user to confirm and run.
 | CDP bridge deps | Yes | Yes |
 | rn-fast-runner (iOS) | iOS targets only | Prebuilt artifact on releases; one-time `xcodebuild build-for-testing` fallback |
 | rn-android-runner (Android) | Android targets only | Prebuilt artifact on releases; Gradle build fallback on first use |
-| [maestro-runner](https://github.com/devicelab-dev/maestro-runner) | Yes | Yes (pinned engine, checksum-verified) |
+| [maestro-runner](https://github.com/devicelab-dev/maestro-runner) | Yes | Yes (pin-cache engine `>= 1.1.24`, attested 1.1.24 checksum-verified) |
 | iOS Simulator / Android Emulator | One platform | No |
 | Session-bound Metro | Yes | Project integration starts or validates it through literal `pnpm ios` / `pnpm android` |
 | CDP connection | Yes | `rn_session` owns the binding; `cdp_status` is passive and `cdp_connect` pins the exact target |
@@ -178,7 +178,7 @@ The plugin exposes MCP tools across six families ([full reference](https://lykho
 | **CDP** | React internals via Chrome DevTools Protocol | `cdp_status`, `cdp_component_tree`, `cdp_store_state`, `cdp_evaluate`, `cdp_native_errors`, `cdp_navigate`, `collect_logs` |
 | **Device** | Native interaction with the simulator/emulator | `device_find`, `device_press`, `device_fill`, `device_screenshot`, `device_pick_date`, `device_batch` |
 | **Actions** | Record / replay / self-repair persistent flows | `cdp_run_action`, `cdp_repair_action`, `cdp_record_test_save_as_action`, `cdp_lock_e2e_test`, `cdp_run_e2e_suite` |
-| **Testing** | E2E replay and PR-ready proof | `proof_step`, `cross_platform_verify`, `maestro_run`, `maestro_test_all`, `cdp_auto_login` |
+| **Testing** | E2E replay and PR-ready proof | `proof_step`, `cross_platform_verify`, `maestro_run`, `maestro_test_all` (`cdp_auto_login` is legacy per-call recovery only, never PR proof) |
 | **Macro-Asserts** | State-assertive replays — internal state, not pixels | `expect_redux`, `expect_route`, `expect_visible_by_testid`, `expect_text` |
 
 The committed tool surface is asserted in CI against a golden registry (`packages/rn-dev-agent-core/test/fixtures/tool-registry.json`), so tool additions and removals can't silently drift.
@@ -187,7 +187,7 @@ The committed tool surface is asserted in CI against a golden registry (`package
 
 - **Self-healing taps** — a stale `@ref` is re-bound by identity (testID/label/role, unique match only). Opt out with `RN_SELF_HEAL=0`. A dispatched tap is never replayed because its effect is uncertain: on iOS an unchanged tap stays a success carrying `meta.noUiChange`, and on Android a tap whose effect cannot be observed fails (`INTERACTION_EFFECT_UNVERIFIED`, `mutation: possible`) rather than reporting success.
 - **Quiescence bypass (iOS)** — XCTest's private idle-wait is disabled by default so apps with Reanimated/looping animations can't hang queries (the same WebDriverAgent-lineage technique Maestro uses). Opt out with `RN_QUIESCENCE_BYPASS=0`.
-- **Engine pinning** — maestro-runner installs a tested pin, checksum-verified fail-closed; replay results and `/doctor` report drift.
+- **Engine pinning** — setup installs attested maestro-runner `1.1.24` in the versioned pin-cache (floor `>= 1.1.24`) and verifies its checksum fail-closed; replay and `/doctor` refuse missing, older, or unattested engines.
 - **Degraded-runtime detection** — when taps succeed but the app doesn't respond, results carry a "simulator likely wedged, reboot it" hint instead of a misleading "element not found."
 
 ## Specialized agents
@@ -238,7 +238,7 @@ Claude Code / Codex
      iOS Simulator           Android Emulator
 
       Device lifecycle (boot / install / launch): xcrun simctl + adb
-      E2E test execution: maestro-runner (pinned) / Maestro (fallback)
+      E2E test execution: maestro-runner 1.1.24 (pin-cache only)
 ```
 
 [Architecture details](https://lykhoyda.github.io/rn-dev-agent/architecture/)

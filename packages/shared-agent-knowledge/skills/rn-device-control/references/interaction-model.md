@@ -36,7 +36,7 @@ Three levels of UI interaction, each with distinct trade-offs. Choose based on w
 
 ---
 
-## Tier 3: Maestro / maestro-runner — Cross-platform E2E
+## Tier 3: pinned maestro-runner — Cross-platform E2E
 
 **How it works:** YAML-based test flows. Uses XCTest on iOS and UIAutomator2 on Android. Persistent test files for CI regression.
 
@@ -47,9 +47,9 @@ Three levels of UI interaction, each with distinct trade-offs. Choose based on w
 - Complex multi-step flows that should be repeatable
 
 **Limitations:**
-- Slower than direct device_press (JVM startup for Maestro, though maestro-runner avoids this)
+- Slower than direct `device_press`
 - Same coordinate/accessibility limitations as Tier 2 on iOS
-- Requires maestro-runner or Maestro CLI installed
+- Requires pin-cache maestro-runner `>= 1.1.24`
 
 ---
 

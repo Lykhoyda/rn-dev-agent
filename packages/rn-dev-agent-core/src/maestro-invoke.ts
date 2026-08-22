@@ -1,6 +1,6 @@
-import { existsSync, writeFileSync } from 'node:fs';
+import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { homedir, tmpdir } from 'node:os';
+import { tmpdir } from 'node:os';
 import { resolveBundleId, readExpoSlug } from './project-config.js';
 import {
   buildMaestroFlow,
@@ -10,7 +10,16 @@ import {
 } from './domain/maestro-validator.js';
 import { chooseMaestroDispatch } from './tools/maestro-dispatch.js';
 import { outputIndicatesFlowFailure } from './domain/maestro-error-parser.js';
-import { isOlderSdkInstallFailure, olderSdkInstallDiagnosis } from './domain/engine-pin.js';
+import {
+  exactPinRefusal,
+  getEngineStatus,
+  getMaestroRunnerPath,
+  isOlderSdkInstallFailure,
+  olderSdkInstallDiagnosis,
+  withImmediatePinnedRunner,
+  type ReplayEngineStatus,
+} from './domain/engine-pin.js';
+import { replayCompatibilityPreflight } from './domain/action-engine-compat.js';
 import { resolveAppFileForClearState } from './tools/resolve-ios-app-file.js';
 import { assembleMaestroArgs, runFlowParked } from './tools/maestro-run.js';
 import { getActiveSession } from './agent-device-wrapper.js';
@@ -88,10 +97,7 @@ export function maestroRefusalResult(
   });
 }
 
-export function getMaestroRunnerPath(): string | null {
-  const path = join(homedir(), '.maestro-runner', 'bin', 'maestro-runner');
-  return existsSync(path) ? path : null;
-}
+export { getMaestroRunnerPath };
 
 export async function runMaestroInline(
   yaml: string,
@@ -99,6 +105,7 @@ export async function runMaestroInline(
   dependencies: {
     chooseDispatch?: typeof chooseMaestroDispatch;
     spawnManaged?: typeof spawnManagedProcessGroup;
+    resolveEngineStatus?: () => Promise<ReplayEngineStatus | null>;
   } = {},
 ): Promise<MaestroInvokeResult> {
   const dispatch = (dependencies.chooseDispatch ?? chooseMaestroDispatch)({
@@ -106,6 +113,13 @@ export async function runMaestroInline(
   });
   if ('error' in dispatch) {
     return { passed: false, output: '', flowFile: '', error: dispatch.error };
+  }
+  const resolveEngineStatus =
+    dependencies.resolveEngineStatus ?? (() => getEngineStatus().catch(() => null));
+  const engineStatus = await resolveEngineStatus();
+  const pinRefusal = exactPinRefusal(engineStatus);
+  if (pinRefusal) {
+    return { passed: false, output: '', flowFile: '', error: pinRefusal };
   }
 
   const rawAppId = opts.appId ?? resolveBundleId(opts.platform) ?? readExpoSlug() ?? '';
@@ -118,6 +132,14 @@ export async function runMaestroInline(
   let headerAppId: string | undefined;
   try {
     const parsed = parseAndValidateFlow(yaml, { rejectHeader: true });
+    const selectorRefusal = replayCompatibilityPreflight({
+      commands: parsed.commands,
+      engineStatus,
+      requireEnginePin: false,
+    });
+    if (selectorRefusal) {
+      return { passed: false, output: '', flowFile, error: selectorRefusal };
+    }
     const appIdOpts: { appId?: string } = {};
     if (rawAppId && isValidBundleId(rawAppId)) {
       appIdOpts.appId = rawAppId;
@@ -205,34 +227,63 @@ export async function runMaestroInline(
       requestedDeviceId,
     );
     const finalArgs = assembleMaestroArgs(baseArgs, runnerReportArgs(runnerReportDir));
-    const execute = () =>
-      (dependencies.spawnManaged ?? spawnManagedProcessGroup)(dispatch.binPath, finalArgs, {
-        timeoutMs: timeout,
-        platform: opts.platform,
-        deviceId: requestedDeviceId,
-        tool: opts.slug ?? 'inline-maestro',
-      });
+    const executionDeadline = Date.now() + timeout;
+    const execute = async () => {
+      const spawn = (runnerPath: string, prefixArgs: readonly string[] = []) => {
+        const remainingTimeout = executionDeadline - Date.now();
+        if (remainingTimeout <= 0) {
+          const error = new Error('Maestro flow timeout exhausted before runner execution');
+          Object.assign(error, { code: 'ETIMEDOUT' });
+          throw error;
+        }
+        return (dependencies.spawnManaged ?? spawnManagedProcessGroup)(
+          runnerPath,
+          [...prefixArgs, ...finalArgs],
+          {
+            timeoutMs: remainingTimeout,
+            platform: opts.platform,
+            deviceId: requestedDeviceId,
+            tool: opts.slug ?? 'inline-maestro',
+          },
+        );
+      };
+      if (dependencies.spawnManaged) {
+        const immediateStatus = await resolveEngineStatus();
+        const refusal = exactPinRefusal(immediateStatus);
+        if (refusal) throw new Error(`RUNNER_PIN_CHANGED: ${refusal}`);
+        return spawn(dispatch.binPath);
+      }
+      return withImmediatePinnedRunner(dispatch.binPath, resolveEngineStatus, spawn);
+    };
 
     let execution;
-    if (opts.authorityArgs && hasManagedRunnerParkAuthority(opts.authorityArgs)) {
-      const promoted = promoteCurrentOperationToManagedFlow();
-      if (!promoted.ok) {
-        return {
-          passed: false,
-          output: '',
-          flowFile,
-          error:
-            'Inline Maestro could not enter the exclusive flow plane because another operation is active.',
-          errorCode: 'BUSY_FLOW_ACTIVE',
-        };
+    try {
+      if (opts.authorityArgs && hasManagedRunnerParkAuthority(opts.authorityArgs)) {
+        const promoted = promoteCurrentOperationToManagedFlow();
+        if (!promoted.ok) {
+          return {
+            passed: false,
+            output: '',
+            flowFile,
+            error:
+              'Inline Maestro could not enter the exclusive flow plane because another operation is active.',
+            errorCode: 'BUSY_FLOW_ACTIVE',
+          };
+        }
+        execution = await runFlowParked(execute, {
+          platform: opts.platform,
+          deviceId: requestedDeviceId,
+          completeRunnerPark: () => completeManagedRunnerParkAuthority(opts.authorityArgs!),
+        });
+      } else {
+        execution = await execute();
       }
-      execution = await runFlowParked(execute, {
-        platform: opts.platform,
-        deviceId: requestedDeviceId,
-        completeRunnerPark: () => completeManagedRunnerParkAuthority(opts.authorityArgs!),
-      });
-    } else {
-      execution = await execute();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (message.startsWith('RUNNER_PIN_CHANGED:')) {
+        return { passed: false, output: '', flowFile, error: message };
+      }
+      throw err;
     }
 
     const output = (execution.stdout + '\n' + execution.stderr).trim();

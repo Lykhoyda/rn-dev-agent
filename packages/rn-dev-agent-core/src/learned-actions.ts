@@ -154,14 +154,43 @@ interface FlowsResult {
   roots: string[];
 }
 
+function isDirectNode(target: string, kind: 'directory' | 'file'): boolean {
+  try {
+    const stat = fs.lstatSync(target);
+    return !stat.isSymbolicLink() && (kind === 'directory' ? stat.isDirectory() : stat.isFile());
+  } catch {
+    return false;
+  }
+}
+
+function resolveFlowFile(actionsDir: string, id: string): string | null {
+  const yamlPath = path.join(actionsDir, `${id}.yaml`);
+  const ymlPath = path.join(actionsDir, `${id}.yml`);
+  const yamlExists = isDirectNode(yamlPath, 'file');
+  const ymlExists = isDirectNode(ymlPath, 'file');
+  if (yamlExists && ymlExists) return null;
+  if (yamlExists) return yamlPath;
+  if (ymlExists) return ymlPath;
+  return null;
+}
+
 function scanFlows(): FlowsResult {
   const roots = collectFlowRoots(flags.workspaceRoot);
   const items: FlowItem[] = [];
   for (const root of roots) {
-    if (!fs.existsSync(root)) continue;
-    for (const f of fs.readdirSync(root)) {
-      if (!f.endsWith('.yaml') && !f.endsWith('.yml')) continue;
-      const fp = path.join(root, f);
+    if (!isDirectNode(root, 'directory')) continue;
+    const ids = [
+      ...new Set(
+        fs
+          .readdirSync(root)
+          .filter((file) => /\.ya?ml$/.test(file))
+          .map((file) => file.replace(/\.ya?ml$/, '')),
+      ),
+    ];
+    for (const id of ids) {
+      const fp = resolveFlowFile(root, id);
+      if (!fp) continue;
+      const f = path.basename(fp);
       const text = fs.readFileSync(fp, 'utf8');
       const meta = parseFlowMeta(text);
       if (flags.appId && meta.appId !== flags.appId) continue;
@@ -169,9 +198,7 @@ function scanFlows(): FlowsResult {
       if (!matchKw(meta.purpose, meta.appId, meta.intent, tagsStr, f, fp)) continue;
       const params = (text.match(/\$\{([A-Z_][A-Z0-9_]*)\}/g) || []).map((s) => s.slice(2, -1));
       const uniqParams = Array.from(new Set(params));
-      const replay = uniqParams.length
-        ? `maestro-runner --platform ios test ${uniqParams.map((p) => `-e ${p}=...`).join(' ')} ${fp}`
-        : `maestro-runner --platform ios test ${fp}`;
+      const replay = replayHint(meta.id, fp, uniqParams);
       items.push({
         flow: f.replace(/\.ya?ml$/, ''),
         path: fp,
@@ -192,6 +219,22 @@ function scanFlows(): FlowsResult {
   }
   items.sort((a, b) => a.flow.localeCompare(b.flow));
   return { items: items.slice(0, flags.max), roots };
+}
+
+function replayHint(id: string | null, flowPath: string, params: string[]): string {
+  const paramObj =
+    params.length > 0 ? `, params: { ${params.map((p) => `${p}: "..."`).join(', ')} }` : '';
+  const actionsDir = path.dirname(flowPath);
+  const canonicalYaml =
+    id !== null &&
+    path.basename(flowPath).replace(/\.ya?ml$/, '') === id &&
+    path.basename(actionsDir) === 'actions' &&
+    path.basename(path.dirname(actionsDir)) === '.rn-agent';
+  if (canonicalYaml) {
+    const projectRoot = path.dirname(path.dirname(actionsDir));
+    return `cdp_run_action({ actionId: "${id}", projectRoot: "${projectRoot}", blindProbeMode: "forbid"${paramObj} })`;
+  }
+  return `maestro_run({ flowPath: "${flowPath}"${paramObj} })`;
 }
 
 function collectFlowRoots(start: string): string[] {
@@ -593,7 +636,7 @@ if (want('d')) {
 
 parts.push('---');
 parts.push(
-  '**Reminder:** For any UI flow, replay a matching flow from section B BEFORE composing `device_*` primitives. Manual walks are a fallback. (See `feedback_execute_artifacts_before_manual.md`.)',
+  '**Reminder:** For any UI flow, replay a compatible owned action from section B through `cdp_run_action` before composing `device_*` primitives. Missing or incompatible owned automation is terminal; manual walks are not an authorized fallback.',
 );
 process.stdout.write(parts.join('\n') + '\n');
 process.exit(total === 0 ? 3 : 0);

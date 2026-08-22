@@ -41,7 +41,7 @@ table / latest run-log comment in **#227**). The watched surfaces:
 | **@react-native/dev-middleware** | bundled by RN — resolve its version from the RN release; releases under `facebook/react-native` (`packages/dev-middleware`) |
 | **metro** | npm `metro` + GitHub releases `facebook/metro` |
 | **hermes** | shipped inside RN — track via the RN release notes' Hermes bump |
-| **maestro** | GitHub releases `mobile-dev-inc/maestro`; also note the installed `~/.maestro-runner/bin/maestro-runner --version` |
+| **maestro** | GitHub releases `mobile-dev-inc/maestro`; compare them with `packages/rn-dev-agent-core/src/domain/maestro-runner-pin.json` and the package-local pin diagnosis |
 | **agent-device** | npm `agent-device` |
 
 Quick commands:
@@ -49,7 +49,7 @@ Quick commands:
 ```bash
 for p in react-native expo @react-native/dev-middleware metro agent-device; do
   printf "%-32s " "$p"; npm view "$p" version; done
-~/.maestro-runner/bin/maestro-runner --version 2>/dev/null | head -1
+node packages/rn-dev-agent-core/dist/maestro-runner-pin.js diagnose --json
 gh release list --repo facebook/react-native --limit 5
 gh release list --repo expo/expo --limit 5
 gh release list --repo mobile-dev-inc/maestro --limit 5
@@ -67,7 +67,7 @@ NO-IMPACT**. Changelogs are SECONDARY — open the file and verify the claim bef
 | Hermes CDP domain support | `packages/rn-dev-agent-core/src/cdp/setup.ts` → `Runtime.enable`, `Debugger.enable`, `Network.enable` (+ hook-fallback probe, D626), `Log.enable`, `Profiler.enable`, `HeapProfiler.enable` |
 | Fiber-tree / React internals walk | `packages/rn-dev-agent-core/src/injected-helpers.ts`, `bridge-detector.ts` |
 | Profiling (heap / CPU) | `packages/rn-dev-agent-core/src/tools/profiling.ts` |
-| Maestro flow YAML / CLI flags / runner protocol | `packages/rn-dev-agent-core/src/maestro-invoke.ts` (flow built via `buildMaestroFlow` + `domain/maestro-validator.ts`, `--app-file` per GH #201, runner→CLI tiered dispatch), `packages/rn-dev-agent-core/src/tools/maestro-run.ts` |
+| Maestro flow YAML / runner flags / protocol | `packages/rn-dev-agent-core/src/maestro-invoke.ts` (flow built via `buildMaestroFlow` + `domain/maestro-validator.ts`, `--app-file` per GH #201, pin-cache runner dispatch), `packages/rn-dev-agent-core/src/tools/maestro-run.ts` |
 | agent-device verbs / args / protocol (Android) | `packages/rn-dev-agent-core/src/agent-device-wrapper.ts` (verbs `tap/fill/swipe/scroll/longpress/pinch/snapshot/screenshot/back`; args `--hold-ms`, `interactiveOnly`, `bundleId`), `packages/rn-dev-agent-core/src/runners/rn-android-runner-client.ts` |
 | Node minimum version | `packages/rn-dev-agent-core/package.json` → `engines.node` (`>=22.5`) |
 
@@ -95,7 +95,7 @@ NO-IMPACT**. Changelogs are SECONDARY — open the file and verify the claim bef
 - **Fusebox / Bridgeless inspector zero-frame quirks** — any fix to the post-handshake
   zero-CDP-frame class (B177/B178 lineage).
 - **maestro-runner iOS `clearState` / `--app-file` gaps** (GH #201) — if upstream closes
-  these, the raw-CLI escape path can be removed.
+  these, simplify the pinned runner path without introducing another engine.
 
 ## Step 5 — IMPROVEMENT (list separately from breaking)
 

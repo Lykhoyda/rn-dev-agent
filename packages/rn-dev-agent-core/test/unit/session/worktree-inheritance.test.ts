@@ -24,6 +24,7 @@ import {
   repairLegacyRoot,
   resourcesForHost,
 } from '../../../dist/session/worktree-inheritance.js';
+import { listActions } from '../../../dist/domain/action-inventory.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const CORE_ROOT = join(HERE, '..', '..', '..');
@@ -187,6 +188,43 @@ test('setup creates a real local root and inherits actions without foreign-root 
       foreignStateBefore,
     );
     assert.equal(git(worktree, ['status', '--porcelain']), '');
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('action inventory authenticates inherited corpus to real primary directories', async () => {
+  const fixture = makeFixture();
+  try {
+    const primaryApp = seedPrivateCorpus(fixture);
+    writeFileSync(
+      join(primaryApp, '.rn-agent', 'actions', 'login.yaml'),
+      [
+        'appId: fixture',
+        '---',
+        '# id: login',
+        '# intent: Log in.',
+        '# status: active',
+        '# enginePin: maestro-runner@1.1.24',
+        '- launchApp',
+        '',
+      ].join('\n'),
+    );
+    const worktree = addWorktree(fixture);
+    applyInheritance({ cwd: worktree, appRoot: worktree, host: 'claude' });
+
+    assert.deepEqual(
+      (await listActions(worktree)).map((action) => action.id),
+      ['login'],
+    );
+
+    const externalActions = join(fixture.root, 'foreign', 'actions');
+    mkdirSync(externalActions, { recursive: true });
+    writeFileSync(join(externalActions, 'login.yaml'), 'foreign');
+    rmSync(join(primaryApp, '.rn-agent', 'actions'), { recursive: true });
+    symlinkSync(externalActions, join(primaryApp, '.rn-agent', 'actions'), 'dir');
+
+    await assert.rejects(() => listActions(worktree), /foreign learned-action corpus symlink/);
   } finally {
     fixture.cleanup();
   }

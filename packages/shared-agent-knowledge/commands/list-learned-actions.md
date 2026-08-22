@@ -13,7 +13,7 @@ Past sessions accumulate two kinds of reusable knowledge that future sessions
 should look at BEFORE re-deriving anything from scratch:
 
 1. **Feedback memories** at `~/.claude/projects/<encoded-cwd>/memory/feedback_*.md`
-2. **Executable artifacts**: `.rn-agent/actions/*.yaml`, `.rn-agent/skeleton.yaml`
+2. **Executable artifacts**: `.rn-agent/actions/*.yaml` and `*.yml`, `.rn-agent/skeleton.yaml`
 
 This command surfaces both lists in one place — and the underlying
 `packages/rn-dev-agent-core/src/learned-actions.ts` (compiled to `packages/rn-dev-agent-core/dist/learned-actions.js`) is the **same script** invoked programmatically
@@ -32,7 +32,7 @@ node "${CLAUDE_PLUGIN_ROOT}/rn-dev-agent-core/dist/learned-actions.js" \
 
 The script auto-discovers:
 - The user's per-project auto-memory directory (Section A)
-- `.rn-agent/actions/*.yaml` in the cwd, in `<cwd>/test-app/`, and in any
+- `.rn-agent/actions/*.yaml` and `*.yml` in the cwd, in `<cwd>/test-app/`, and in any
   `<sibling>/test-app/` adjacent to the cwd (Section B)
 - `.rn-agent/skeleton.yaml` in the same locations (Section C)
 - Plugin commands (Section D — only populated when running inside the plugin repo)
@@ -69,7 +69,7 @@ JSON shape (abridged):
           "appId": "com.example.app",
           "purpose": "Add an item to the cart and verify the badge increments",
           "params": ["ITEM_ID", "QTY"],
-          "replay": "maestro-runner --platform ios test -e ITEM_ID=... -e QTY=... /.../cart-add-item.yaml"
+          "replay": "display-only legacy command; execute through cdp_run_action"
         }
       ]
     },
@@ -94,6 +94,10 @@ explicitly names any **flows** that match their current intent — those should
 be replayed via `cdp_run_action` (or `/rn-dev-agent:run-action`) before any
 manual `device_*` walk. Per `feedback_execute_artifacts_before_manual.md`:
 manual primitives are a fallback, not a default.
+
+Treat the inventory's legacy `replay` string as display-only. Execute owned
+actions through `cdp_run_action` so replay resolves pin-cache maestro-runner
+`>= 1.1.24` and enforces `enginePin` and selector preflight.
 
 **This listing is read-only discovery and grants no replay authority.** A flow
 is listed whenever it exists on disk, including while the session is `blocked`

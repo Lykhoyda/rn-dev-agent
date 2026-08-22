@@ -85,8 +85,7 @@ jq '.sections.flows.items[] | {flow, path, params, replay}' /tmp/learned-actions
 ```
 
 **Decide:**
-1. **Match found**: replay the flow first.
-   `maestro-runner --platform <ios|android> test [-e KEY=VAL …] <path>`.
+1. **Match found**: replay the flow first through `cdp_run_action`.
    - If it **fails** with the same symptom the user reported, you have a
      deterministic reproduction. Capture the failure output, then proceed
      to Step 1 with the failing screen as your starting state.
@@ -231,20 +230,14 @@ After the fix:
 2. Confirm the fixed state cheaply (`expect_*` / `cdp_store_state`); take a
    screenshot to compare with Step 1 when a visual record is needed
 3. `cdp_component_tree` and `cdp_error_log` -- confirm the RedBox and error are cleared
-4. Re-run the failing user action with Maestro to confirm it works.
+4. Re-run the failing user action through `cdp_run_action` (learned action) or
+   `maestro_run` (YAML flow) to confirm it works. Never invoke PATH
+   `maestro-runner`, maestro-cli, or manual login.
    Substitute placeholders with actual values from Step 0:
-   ```bash
-   cat > /tmp/verify.yaml << EOF
-   appId: <app-bundle-id>
-   ---
-   - tapOn:
-       id: "<element-id>"
-   - assertVisible: "<expected-text>"
-   EOF
-   # ALWAYS use maestro-runner (not classic maestro) — required on Android (GH #7)
-   # --platform is a GLOBAL flag (before the test subcommand)
-   maestro-runner --platform <ios|android> test /tmp/verify.yaml
+   ```text
+   maestro_run(platform="<ios|android>", flowPath="/tmp/verify.yaml")
    ```
+   Write `/tmp/verify.yaml` with id selectors only, then call `maestro_run`.
 
 ## Critical Rules
 

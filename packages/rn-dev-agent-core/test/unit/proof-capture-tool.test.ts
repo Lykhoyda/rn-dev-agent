@@ -142,6 +142,7 @@ const ACTION_YAML_BYTES = `appId: dev.rnproof.fixture
 # id: canonical-proof
 # intent: Create a task through the proof fixture
 # status: active
+# enginePin: maestro-runner@1.1.24
 - tapOn:
     id: open-task-form
 `;
@@ -871,6 +872,18 @@ test('registered MCP proof surface preserves a complete begin_rehearsal payload'
 
   assert.equal(parsed.ok, true, JSON.stringify(parsed));
   assert.deepEqual(parsed.data, { stage: 'rehearsing', runId: 'run-42' });
+});
+
+test('strict proof rejects auto-login as storyboard or allowed proof authority', async (t) => {
+  const harness = createHarness(t);
+  const args = beginArgs();
+  args.storyboard.allowedTools.push('cdp_auto_login');
+
+  const result = await harness.handler(args);
+  const parsed = envelope(result);
+
+  assert.equal(parsed.ok, false);
+  assert.deepEqual(reasons(result), ['INVALID_PROOF_CONTEXT']);
 });
 
 async function createGateComposedProofSurface(
@@ -2300,12 +2313,33 @@ test('production action identity reads exact app-root YAML bytes and runtime rev
     version: '7',
     sha256: HASH(ACTION_YAML_BYTES),
   });
+
+  const ymlBytes = ACTION_YAML_BYTES.replaceAll('canonical-proof', 'canonical-yml-proof');
+  await writeFile(join(root, '.rn-agent', 'actions', 'canonical-yml-proof.yml'), ymlBytes);
+  await writeFile(
+    join(root, '.rn-agent', 'state', 'canonical-yml-proof.state.json'),
+    `${JSON.stringify({
+      schemaVersion: 1,
+      revision: 3,
+      updatedAt: '2026-07-13T00:00:00.000Z',
+      lastSeenMtimeMs: 0,
+      runHistory: [],
+      repairHistory: [],
+      stats: { totalRuns: 0, successCount: 0, failureCount: 0, avgDurationMs: 0 },
+    })}\n`,
+  );
+  assert.deepEqual(module.readProofActionIdentity(root, 'canonical-yml-proof'), {
+    id: 'canonical-yml-proof',
+    version: '3',
+    sha256: HASH(ymlBytes),
+  });
   assert.equal(module.readProofActionIdentity(root, 'missing'), null);
 });
 
 test('real canonical action proof replay is read-only while normal replay persists', async (t) => {
   const proofModule = await import('../../dist/tools/proof-capture.js');
-  const { createRunActionHandler } = await import('../../dist/tools/run-action.js');
+  const { createPinnedRunActionHandler: createRunActionHandler } =
+    await import('../helpers/tmp-project.js');
   const { addToolObserver, instrumentTool } =
     await import('../../dist/observability/instrumentation.js');
   const { resetActionStore } = await import('../../dist/domain/action-state-store.js');
@@ -2340,7 +2374,7 @@ test('real canonical action proof replay is read-only while normal replay persis
       flowFile: 'canonical-proof.yaml',
       platform: 'ios',
       transport: 'maestro-runner',
-      transportVersion: '1.0.9',
+      transportVersion: '1.1.24',
       fallback: 'none',
       steps: [
         { index: 0, name: 'tapOn: proof-continue', verb: 'tapOn', status: 'pass', durationMs: 20 },

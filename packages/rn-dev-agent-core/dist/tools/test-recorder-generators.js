@@ -4,6 +4,9 @@
 // the handler layer with NOT_IMPLEMENTED). Both generators consume the same
 // RecordedEvent[] shape and emit replayable test code.
 import { stringify as yamlStringify } from 'yaml';
+import { ACTION_ENGINE_PIN } from '../domain/engine-pin.js';
+import { regexSelectorCapabilityRefusal } from '../domain/action-engine-compat.js';
+import { isSafeMaestroScalar, parseAndValidateFlow } from '../domain/maestro-validator.js';
 /**
  * CDP-013: serialise a user-controlled string as a single-line YAML scalar.
  * Quoting / escaping rules are delegated to the `yaml` package, which picks
@@ -16,6 +19,53 @@ function maestroScalar(value) {
     // place the scalar inline after `id: ` / `text: `.
     const safe = stripNewlines(value);
     return yamlStringify(safe).replace(/\n+$/, '');
+}
+function assertSafeGeneratedScalars(value, path) {
+    if (typeof value === 'string') {
+        if (!isSafeMaestroScalar(value))
+            throw new Error(`Unsafe generated scalar at ${path}.`);
+        return;
+    }
+    if (Array.isArray(value)) {
+        value.forEach((entry, index) => assertSafeGeneratedScalars(entry, `${path}[${index}]`));
+        return;
+    }
+    if (!value || typeof value !== 'object')
+        return;
+    for (const [key, nested] of Object.entries(value)) {
+        if (!isSafeMaestroScalar(key))
+            throw new Error(`Unsafe generated scalar key at ${path}.`);
+        assertSafeGeneratedScalars(nested, `${path}.${key}`);
+    }
+}
+const RECORDER_COMMANDS = new Set([
+    'launchApp',
+    'tapOn',
+    'longPressOn',
+    'assertVisible',
+    'inputText',
+    'pressKey',
+    'swipeUp',
+    'swipeDown',
+    'swipeLeft',
+    'swipeRight',
+    'hideKeyboard',
+]);
+function assertRecorderCommandShapes(commands) {
+    for (const command of commands) {
+        if (typeof command === 'string') {
+            if (!RECORDER_COMMANDS.has(command))
+                throw new Error(`Unsupported recorder command ${command}.`);
+            continue;
+        }
+        if (!command || typeof command !== 'object' || Array.isArray(command)) {
+            throw new Error('Unsupported recorder command shape.');
+        }
+        const keys = Object.keys(command);
+        if (keys.length !== 1 || !RECORDER_COMMANDS.has(keys[0])) {
+            throw new Error(`Unsupported recorder command ${keys[0] ?? 'unknown'}.`);
+        }
+    }
 }
 function metaPairs(opts) {
     const out = [];
@@ -32,6 +82,8 @@ function metaPairs(opts) {
         out.push(['mutates', String(opts.mutates)]);
     if (opts.status)
         out.push(['status', stripNewlines(opts.status)]);
+    if (opts.id && opts.intent)
+        out.push(['enginePin', ACTION_ENGINE_PIN]);
     if (opts.produces && Object.keys(opts.produces).length > 0) {
         // Phase 134.1 (deepsec CRITICAL #6): keys MUST also pass through
         // stripNewlines, or a crafted key like `user.id\n- runScript: ...`
@@ -129,9 +181,18 @@ export function nextSelector(events, fromIndex, selectorFn) {
 }
 // --- Maestro YAML ---
 export function generateMaestro(events, opts = {}) {
+    assertSafeGeneratedScalars({
+        ...opts,
+        testName: opts.testName != null ? stripNewlines(opts.testName) : undefined,
+        bundleId: opts.bundleId != null ? stripNewlines(opts.bundleId) : undefined,
+        id: opts.id != null ? stripNewlines(opts.id) : undefined,
+        intent: opts.intent != null ? stripNewlines(opts.intent) : undefined,
+        startRoute: opts.startRoute != null ? stripNewlines(opts.startRoute) : undefined,
+        tags: opts.tags?.map((tag) => stripNewlines(tag)),
+    }, 'metadata');
     const lines = [];
     if (opts.bundleId) {
-        lines.push(`appId: ${stripNewlines(opts.bundleId)}`);
+        lines.push(`appId: ${maestroScalar(opts.bundleId)}`);
         lines.push('---');
     }
     lines.push(`# ${stripNewlines(opts.testName ?? 'Recorded flow')}`);
@@ -242,7 +303,16 @@ export function generateMaestro(events, opts = {}) {
                 break;
         }
     }
-    return lines.join('\n') + '\n';
+    const yaml = lines.join('\n') + '\n';
+    const bodyYaml = yaml.replace(/^appId:[^\n]*\n---\n/, '');
+    const commands = parseAndValidateFlow(bodyYaml).commands;
+    assertRecorderCommandShapes(commands);
+    if (opts.id && opts.intent) {
+        const refusal = regexSelectorCapabilityRefusal(commands);
+        if (refusal)
+            throw new Error(refusal);
+    }
+    return yaml;
 }
 // --- Detox JS ---
 export function generateDetox(events, opts = {}) {

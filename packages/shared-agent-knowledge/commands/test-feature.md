@@ -32,11 +32,9 @@ Load the `rn-testing` skill and follow this 8-step protocol in this session:
    If a **full match** exists, **REPLAY IT FIRST** — but call `cdp_status`
    once before any replay (the environment gate applies to replays too, not
    just manual walks; if it fails, route to `/rn-dev-agent:setup` instead of
-   running a doomed flow). Then:
-   ```bash
-   maestro-runner --platform <ios|android> test -e KEY=VAL "<flow-path>"
-   ```
-   (Always quote the flow path — scanned paths can contain spaces.)
+   running a doomed flow). Replay with
+   `cdp_run_action({ actionId, params, blindProbeMode: "forbid" })`; the tool
+   preflights the exact runner and action pin before any UI mutation.
    If the replay passes, you have your evidence — proceed to step 7
    (verification + generate-or-refresh artifact). If the replay fails with a
    concrete error (`Element not found`, `assertion failed`), fix the flow
@@ -79,7 +77,8 @@ Load the `rn-testing` skill and follow this 8-step protocol in this session:
      authoring. Wrap the manual walk between `cdp_record_test_start` and
      `cdp_record_test_stop`, then `cdp_record_test_save_as_action` to write
      `<test-app>/.rn-agent/actions/<feature-slug>.yaml` with the metadata
-     header pre-populated (`id`, `intent`, `tags`, `mutates`, `status` —
+     header pre-populated (`id`, `intent`, `tags`, `mutates`, `status`,
+     `enginePin` —
      see `skills/rn-testing/SKILL.md` "Reusable Action Metadata Schema").
      Hand-edit the result to parameterise input strings via `${VAR}`
      placeholders and add a `when: visible: id: tab-X` self-bootstrap if
@@ -114,7 +113,8 @@ Load the `rn-testing` skill and follow this 8-step protocol in this session:
 
 - iOS Simulator or Android Emulator running with the app loaded
 - Ready fenced session with the integrated Metro and signed app target
-- Maestro or maestro-runner installed
+- Pin-cache maestro-runner `>= 1.1.24` available from rn-dev-agent
+- Replay YAML only through `cdp_run_action` or `maestro_run`. Never invoke PATH `maestro-runner`, `maestro` CLI, or manual login.
 - For Zustand apps: `if (__DEV__) global.__ZUSTAND_STORES__ = { ... }` in app entry
 
 ## Output

@@ -75,8 +75,9 @@ without the camera capturing the search.
    - `cdp_record_test_generate(format="maestro")` — converts the recorder
      buffer to YAML text; M7 fields are not forwarded by the MCP tool
      schema, so the header is not auto-populated.
-   In both paths, the agent MUST then PREPEND the 5-key M7 metadata header
-   by hand (`id`, `intent`, `tags`, `mutates`, `status`) — see the
+   In both paths, the agent MUST then PREPEND the replay metadata header
+   by hand (`id`, `intent`, `tags`, `mutates`, `status`,
+   `enginePin: maestro-runner@1.1.24`) — see the
    creating-actions skill for the full authoring contract (header
    validation, replay-to-promote).
 4. Reset the app state to the same starting screen the recording will use
@@ -86,8 +87,8 @@ without the camera capturing the search.
    records a RunRecord and a clean pass auto-promotes the action
    `experimental` → `active`. `params` covers `${VAR}` placeholders
    (forwarded as `-e KEY=VALUE`); plain `maestro_run(flowPath=...,
-   params={...})` or the `maestro-runner` CLI are equivalent replays
-   without the telemetry. The replay must pass end-to-end without a
+   params={...})` is the non-repair replay path without action telemetry.
+   The replay must pass end-to-end without a
    single failure.
 6. **Retry budget: max 3 fix-and-replay loops.** If the rehearsal still
    fails after 3 attempts, escalate to the user with the failing step,
@@ -136,8 +137,7 @@ maestro_run(flowPath="<test-app>/.rn-agent/actions/<slug>.yaml", params={KEY: "V
 ```
 
 `params` covers `${VAR}` placeholders (forwarded to maestro as `-e KEY=VALUE`;
-keys match `[A-Z_][A-Z0-9_]*`). Omit it for env-free flows. The
-`maestro-runner` CLI with `-e` flags is an equivalent Bash path. Use
+keys match `[A-Z_][A-Z0-9_]*`). Omit it for env-free flows. Use
 `maestro_run` (not `cdp_run_action`) ON camera — auto-repair mid-recording
 would mutate the flow on camera.
 

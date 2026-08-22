@@ -46,9 +46,9 @@ exist as YAML).
    current project.
 2. **If a flow matches your intent:** replay it first.
    `/rn-dev-agent:run-action <flow-name> [-e KEY=VALUE …]` — pre-flights
-   mutates flag, appId match, and parameter coverage; falls back to direct
-   `maestro-runner --platform <ios|android> test … <flow-path>` if you
-   need to inspect the run yourself. A passing replay IS your evidence —
+   mutates flag, appId match, parameter coverage, action engine pin, and
+   selector compatibility; it resolves pin-cache maestro-runner `>= 1.1.24` from
+   rn-dev-agent's versioned pin-cache. A passing replay IS your evidence —
    skip ahead to capturing proof.
 3. **Only if no match (or replay fails with a concrete error):** fall back to
    manual primitives (`device_press` / `device_fill` / `device_find`). When
@@ -114,7 +114,7 @@ afterward — discovery is a one-time cost, replay is the steady state.
 | Stage | Tool / command | What it does |
 |---|---|---|
 | **Discover** (record) | `cdp_record_test_start` → walk the app → `cdp_record_test_stop` | Buffers events to `.rn-agent/recordings/<id>.json` (pre-save) |
-| **Save** | `cdp_record_test_save_as_action` | Promotes a recording into a paired YAML + sidecar at `.rn-agent/actions/` + `.rn-agent/state/`. Auto-writes the M7 metadata header (`id`, `intent`, `tags`, `mutates`, `status`, optional `produces`) |
+| **Save** | `cdp_record_test_save_as_action` | Promotes a recording into a paired YAML + sidecar at `.rn-agent/actions/` + `.rn-agent/state/`. Auto-writes the M7 metadata header (`id`, `intent`, `tags`, `mutates`, `status`, required `enginePin`, optional `produces`) |
 | **List** | `/rn-dev-agent:list-learned-actions [keyword]` | Browse the corpus by intent / tags / appId. Section B of the output shows actions, Section C shows the UI skeleton, Section A surfaces feedback memories |
 | **Run** | `/rn-dev-agent:run-action <id> [-e KEY=VALUE …]` (calls `cdp_run_action`) | Replays with safety pre-flights (mutates flag, appId match, parameter coverage) and auto-repair on `SELECTOR_NOT_FOUND` |
 | **Self-heal** | `cdp_repair_action <id>` | Fuzzy-matches the stale testID against the live snapshot, patches the YAML in place, bumps `revision`, demotes `status` to `experimental` until next clean replay. Bounded: max 3 attempts/24h, refuses on human edits (mtime check) |
@@ -393,7 +393,7 @@ before proof recordings.
 - **Run all flows:** `maestro_test_all` — regression suite across all `.rn-agent/actions/` flows
 - **Freeze a proven action as a regression test:** `/rn-dev-agent:lock-e2e <action-id>` (calls `cdp_lock_e2e_test`) — runs the action once strict (no auto-repair) and freezes it to `.rn-agent/e2e/` only if it passes. Parameterized actions need their params covered by the project's e2e config, or they're refused.
 - **Run the locked suite:** `cdp_run_e2e_suite` — replays all locked tests strict, persists a suite-run report with verdict + per-test results (also runnable from the observe UI's e2e tab)
-- Prefer `maestro-runner` over classic Maestro (3x faster, no JVM)
+- Replay uses pin-cache maestro-runner `>= 1.1.24` (attested 1.1.24 is the default known-good); missing or older pins are terminal and never fall back to classic Maestro
 
 #### "I need to capture proof for a PR"
 - **Single proof step:** `proof_step` — navigate + verify + screenshot in one atomic call
@@ -568,8 +568,9 @@ the runner's settle engine.
 Before testing **auth-gated features:**
 1. `cdp_navigation_state` — check if on a login screen
 2. Scan `/rn-dev-agent:list-learned-actions login` — a saved login action with `produces: { authenticated: true }` is the preferred prologue (replay via `cdp_run_action`, ~4s; see Hybrid composition)
-3. Otherwise look for `.maestro/subflows/login.yaml`, or `cdp_auto_login` — auto-detects auth screen and runs the login subflow
-4. `cdp_navigation_state` — verify arrival at home/target screen
+3. If no compatible owned action exists, stop and report authentication as blocked. Do not use manual login, `.maestro` flows, ambient runners, or `cdp_auto_login` as an automatic fallback.
+4. Only when the user explicitly authorizes legacy per-call navigation recovery may `cdp_auto_login` run. It is never durable login authority or PR proof; create or migrate an owned compatible action before proof.
+5. `cdp_navigation_state` — verify arrival at home/target screen
 
 Before testing **permission-gated features:**
 1. `device_permission(action="query", permission="<name>")` — check current state

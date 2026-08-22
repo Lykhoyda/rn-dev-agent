@@ -119,7 +119,8 @@ test('M6 Maestro: testName / bundleId newlines are stripped', () => {
     bundleId: 'com.x\nstep: bad',
   });
   assert.match(out, /# flow rm -rf/);
-  assert.match(out, /appId: com\.x step: bad/);
+  assert.match(out, /appId: ["']com\.x step: bad["']/);
+  assert.doesNotMatch(out, /^step: bad/m);
 });
 
 test('M6 Detox: submit fallback is a manual-replay comment, not pressBack()', () => {
@@ -145,6 +146,7 @@ test('M7 Maestro: metadata header emits id/intent/tags/mutates/status', () => {
   assert.match(out, /# tags: \[tasks, wizard\]/);
   assert.match(out, /# mutates: true/);
   assert.match(out, /# status: active/);
+  assert.match(out, /# enginePin: maestro-runner@1\.1\.24/);
 });
 
 test('M7 Maestro: omitted metadata fields are not emitted', () => {

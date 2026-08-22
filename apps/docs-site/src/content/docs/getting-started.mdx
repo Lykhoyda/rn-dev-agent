@@ -15,7 +15,7 @@ import { Steps } from '@astrojs/starlight/components';
 | iOS Simulator or Android Emulator | At least one platform |
 | Session-bound Metro | Setup previews the project integration; literal `pnpm ios` or `pnpm android` starts or validates the allocated Metro |
 
-**maestro-runner** is auto-installed on first plugin load in Claude Code (via its SessionStart hook). In Codex, invoke `$rn-dev-agent:setup`; its diagnosis phase is strictly read-only and later project changes are previewed for consent. Device control ships in-tree through the iOS/Android runners. Use the matching host setup workflow for guided remediation.
+**maestro-runner `>= 1.1.24`** is installed into rn-dev-agent's versioned pin-cache as attested `1.1.24` on first plugin load in Claude Code (via its SessionStart hook). In Codex, invoke `$rn-dev-agent:setup`; after its read-only diagnosis, setup converges and verifies that attested runner before previewing project changes for consent. Replay never resolves from PATH, `~/.maestro-runner`, or brew Maestro. Device control ships in-tree through the iOS/Android runners. Use the matching host setup workflow for guided remediation.
 
 ## Installation
 

@@ -324,7 +324,7 @@ simctl/adb for interactive testing. There is no external `agent-device` CLI invo
 | Fill a text input | `device_fill ref=@e5 text="hello"` | Binds one exact input and requires stable exact read-back |
 | Scroll/swipe | `device_swipe direction=up` | Native gesture |
 | Navigate back | `device_back` | System back (Android) or gesture (iOS) |
-| Persistent E2E test file | maestro-runner (YAML) | CI-ready test artifacts |
+| Persistent E2E test file | `maestro_run` / `cdp_run_action` (YAML) | Pin-cache replay at maestro-runner `>= 1.1.24` with CI-ready artifacts |
 | Deep React state inspection | `cdp_store_state` | Redux/Zustand internals |
 
 `device_fill` hard-fails ambiguous, transformed, unreadable, lost, or uncertain fills, and never types into ambient focus or falls back to raw adb input. Corrective clear-first retypes (and a clear-first Maestro attempt) target only the same exact bound input, and success is emitted only after stable exact read-back. If failure metadata says `mutation: observed|possible`, inspect current state before deciding on any new fill.
@@ -371,7 +371,7 @@ not gain inferred keyboard-key semantics.
 The in-tree runner IS the device backend — there is nothing to "fall back from" for primitive interaction. When a `device_*` call can't serve a need, route to the right mechanism instead:
 - **Reliable testID** → `cdp_interact(testID=..., action="press")` (JS-level; deterministic, no native round-trip).
 - **Raw device lifecycle** (boot / install / launch / terminate) → `xcrun simctl` (iOS) / `adb` (Android). The runners drive interaction, not device state.
-- **Whole-flow E2E** → maestro-runner (`.yaml`).
+- **Whole-flow E2E** → rn-dev-agent replay tools with the pin-cache maestro-runner (`.yaml`).
 
 If the runner itself is down, the bridge returns an actionable `RN_FAST_RUNNER_DOWN` (iOS) / `RN_ANDROID_RUNNER_DOWN` (Android) — fix the runner build (see `/rn-dev-agent:doctor`), it does not silently fall back to a legacy CLI.
 

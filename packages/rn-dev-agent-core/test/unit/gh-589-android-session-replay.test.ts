@@ -8,7 +8,7 @@ import { setActiveSession, clearActiveSession } from '../../dist/agent-device-wr
 import { selectTarget } from '../../dist/cdp/discovery.js';
 import { shouldRecoverAndroidAccessibility } from '../../dist/runners/rn-android-runner-client.js';
 import { createDeviceBatchHandler } from '../../dist/tools/device-batch.js';
-import { createRunActionHandler } from '../../dist/tools/run-action.js';
+import { createPinnedRunActionHandler as createRunActionHandler } from '../helpers/tmp-project.js';
 import {
   createStatusHandler,
   sessionConnectFilters,
@@ -38,6 +38,7 @@ function seedAction(): string {
       '# tags: [regression]',
       '# mutates: false',
       '# status: experimental',
+      '# enginePin: maestro-runner@1.1.24',
       '',
       '- tapOn:',
       '    id: "offscreen-control"',

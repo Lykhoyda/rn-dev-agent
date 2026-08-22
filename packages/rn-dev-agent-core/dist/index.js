@@ -9,7 +9,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import { CDPClient, } from './cdp-client.js';
-import { okResult, failResult, warnResult, withConnection } from './utils.js';
+import { okResult, failResult, withConnection } from './utils.js';
 import { annotateMutationAbsence } from './verification/mutation-absence.js';
 import { loadVerificationConfig, getCachedProjectRoot } from './verification/config.js';
 import { logger } from './logger.js';
@@ -2438,7 +2438,7 @@ trackedTool('device_batch', 'Execute a sequence of exact-device UI interactions 
         .default('salient')
         .describe('Shape of the batch final_snapshot. salient (default): compact list of only actionable nodes (Button/TextField/Switch/etc) — far fewer tokens. full: complete node list (legacy). none: skip the implicit trailing snapshot entirely (~1,450 ms saved) for action-only batches you verify via expect_*/cdp_store_state.'),
 }, createDeviceBatchHandler(getClient));
-trackedTool('cdp_auto_login', 'Pre-flight check: detect if the app is on a login/auth screen and auto-login via Maestro subflows from the project. Scans .maestro/subflows/ for login.yaml, sign_in.yaml, auth.yaml, flow_start.yaml, register_user.yaml. Returns { loggedIn: true/false, reason, flow }. Call before proof capture or feature testing when app may be logged out.', {
+trackedTool('cdp_auto_login', 'Explicit legacy navigation helper that detects an auth screen and runs one project login subflow through maestro_run on the authority-bound device. It is per-call recovery only, never durable login authority or PR proof; prefer a compatible owned learned action.', {
     appId: z
         .string()
         .optional()
@@ -2455,7 +2455,15 @@ trackedTool('cdp_auto_login', 'Pre-flight check: detect if the app is on a login
         return okResult(result);
     if (result.reason.includes('not on an auth screen'))
         return okResult(result);
-    return warnResult(result, result.reason);
+    return {
+        content: [
+            {
+                type: 'text',
+                text: JSON.stringify({ ok: false, error: result.reason, data: result }),
+            },
+        ],
+        isError: true,
+    };
 }));
 trackedTool('proof_step', 'Atomic proof capture step: navigate to a screen (optional), wait for settlement, verify an element (optional), and take a screenshot. Combines 3-4 tool calls into one. Use in proof flows to reduce tool-call overhead.', {
     screen: z
@@ -2487,7 +2495,7 @@ trackedTool('proof_step', 'Atomic proof capture step: navigate to a screen (opti
         .optional()
         .describe('Label for this proof step (e.g. "After adding item to cart")'),
 }, createProofStepHandler(getClient));
-trackedTool('maestro_run', 'Execute a Maestro flow via maestro-runner. Pass flowPath for an existing .yaml file, or inlineYaml for ephemeral flows. Uses UIAutomator2 on Android and XCTest on iOS. A matching active device session, explicit deviceId, or Android ANDROID_SERIAL is forwarded as an exact --device/--udid target; maestro-runner success is rejected unless its direct device/WDA evidence matches. Does NOT require CDP — works even when app is crashed or on native screens.', {
+trackedTool('maestro_run', 'Execute a Maestro flow through the pin-cache runner. The session requires maestro-runner >= 1.1.24 from its versioned pin-cache and installs attested 1.1.24 as the default known-good. Pass flowPath for an existing .yaml file, or inlineYaml for ephemeral flows. Missing, older, unverified, checksum-mismatched, or unsupported engines are refused before UI mutation. Uses UIAutomator2 on Android and XCTest on iOS. A matching active device session, explicit deviceId, or Android ANDROID_SERIAL is forwarded as an exact --device/--udid target; success is rejected unless direct device/WDA evidence matches. Does NOT require CDP — works even when app is crashed or on native screens.', {
     flowPath: z.string().optional().describe('Path to a .yaml flow file to execute'),
     inlineYaml: z
         .string()
@@ -2582,7 +2590,7 @@ trackedTool('maestro_test_all', 'Discover and run all Maestro flows in .rn-agent
 // M6 / Phase 112 (D669): Object.freeze test recorder.
 trackedTool('cdp_record_test_start', 'Start recording UI interactions via Object.freeze interceptor. Captures taps, long-presses, text input, submits, and scroll-derived swipes from the running app — no app changes required. Requires __DEV__=true (release builds pre-freeze props at bundle time). Pair with cdp_record_test_stop and cdp_record_test_generate to produce Maestro YAML or Detox JS.', {}, createRecordTestStartHandler(getClient));
 trackedTool('cdp_record_test_stop', 'Stop recording, deduplicate consecutive type/tap bursts, freeze the buffer, and return event count + per-type breakdown. Sets `truncated: true` when the 500-event cap was hit. Recorded events stay in MCP memory for cdp_record_test_generate / cdp_record_test_save until the next start.', {}, createRecordTestStopHandler(getClient));
-trackedTool('cdp_record_test_generate', 'Render the stored recording as replayable test code. Formats: maestro (YAML, primary), detox (JS). Appium returns NOT_IMPLEMENTED — file an issue if you need it. Requires a recording in memory (call start/stop or load first). Pass id/intent/tags/mutates/status to emit the M7 metadata header (D1203) into the YAML so the result is a first-class reusable action.', {
+trackedTool('cdp_record_test_generate', 'Render the stored recording as replayable test code. Formats: maestro (YAML, primary), detox (JS). Appium returns NOT_IMPLEMENTED — file an issue if you need it. Requires a recording in memory (call start/stop or load first). Pass id/intent/tags/mutates/status to emit the M7 metadata header and required engine pin into the YAML so the result is a first-class reusable action.', {
     format: z.enum(['maestro', 'detox', 'appium']).describe('Output format'),
     testName: z.string().optional().describe('Name shown in describe()/comment header'),
     bundleId: z.string().optional().describe('App bundle ID for the Maestro appId header'),
@@ -2771,7 +2779,7 @@ trackedTool('expect_text', 'Assert that visible text is (or is not) currently re
 // first-class L3 reusable action: emits Maestro YAML with full M7
 // metadata header at <project>/.rn-agent/actions/<id>.yaml AND
 // initialises the sidecar runtime state. Closes the L2→L3 loop.
-trackedTool('cdp_record_test_save_as_action', 'Promote the in-memory recording (started via cdp_record_test_start) into a first-class L3 reusable action. Writes Maestro YAML with full M7 metadata header (id, intent, tags, mutates, status, produces) to <project>/.rn-agent/actions/<id>.yaml and initialises the sidecar runtime state. Status defaults to "experimental" — first clean /run-action replay auto-promotes to "active". Refuses if the id already exists unless overwrite=true. Distinct from cdp_record_test_save (which writes JSON to .rn-agent/recordings/) — that is for raw event archival; this is for shipping the recording as a replayable action. The optional `produces` field (D1209) records state postconditions — what state the action establishes when it runs cleanly — so downstream tasks can use it as a deterministic prologue.', {
+trackedTool('cdp_record_test_save_as_action', 'Promote the in-memory recording (started via cdp_record_test_start) into a first-class L3 reusable action. Writes Maestro YAML with full M7 metadata header (id, intent, tags, mutates, status, enginePin, produces) to <project>/.rn-agent/actions/<id>.yaml and initialises the sidecar runtime state. Status defaults to "experimental" — first clean /run-action replay auto-promotes to "active". Refuses if the id already exists unless overwrite=true. Distinct from cdp_record_test_save (which writes JSON to .rn-agent/recordings/) — that is for raw event archival; this is for shipping the recording as a replayable action. The optional `produces` field (D1209) records state postconditions — what state the action establishes when it runs cleanly — so downstream tasks can use it as a deterministic prologue.', {
     id: z
         .string()
         .describe('Stable slug; becomes the filename and the M7 id field. Lower-case kebab-case (a-z, 0-9, hyphen).'),
@@ -2813,9 +2821,7 @@ trackedTool('cdp_record_test_save_as_action', 'Promote the in-memory recording (
 // using fuzzy matching against the current device snapshot. Drives the
 // "self-recoverable on UI changes" L3 promise in D1206.
 trackedTool('cdp_repair_action', 'Repair a learned action using a fresh snapshot from the exact authority-bound device and capability-bound native runner.', {
-    actionId: z
-        .string()
-        .describe('Action id matching <projectRoot>/.rn-agent/actions/<actionId>.yaml.'),
+    actionId: z.string().describe('Owned action id; resolves one .yaml or .yml file.'),
     failedSelector: z
         .string()
         .describe('The testID that the prior maestro_run reported as missing. Parse it from stderr like "Element with id \'X\' not found" → X.'),
@@ -2849,10 +2855,8 @@ trackedTool('cdp_repair_action', 'Repair a learned action using a fresh snapshot
 }, createRepairActionHandler());
 // Issue #104 — auto-repair-aware action replay. Wraps maestro_run with
 // stderr classification + cdp_repair_action retry on SELECTOR_NOT_FOUND.
-trackedTool('cdp_run_action', "Replay a learned action by id with end-to-end auto-repair. Loads the action from .rn-agent/actions/<actionId>.yaml, forwards the matching active session's exact device ID to Maestro, rejects mismatched direct runner/WDA evidence, and on a SELECTOR_NOT_FOUND failure automatically invokes cdp_repair_action and retries once. Appends a RunRecord to the sidecar with full auto-repair telemetry (passed/failed/refused/skipped + diff); its Maestro deviceId comes from direct runner evidence, never requested metadata. The repair attempt counts toward cdp_repair_action's 24h budget. Pass autoRepair=false to opt out of auto-repair (returns the raw maestro_run failure verbatim). forceReload defaults true: any human edit to the YAML since the agent's last write is acknowledged as the new baseline so downstream repair does not abort with STALE_TARGET (the right default for active composition). Pass forceReload=false for the strict \"respect offline human edits\" behavior: a successful replay still appends its RunRecord to the sidecar when only the tracked YAML mtime baseline is stale, while YAML-mutating promotion and repair stay refused. proofReplay=true is reserved for proof_capture rehearsal and requires autoRepair=false plus forceReload=false; it executes without RunRecord, promotion, YAML, sidecar, or DB persistence. The orchestrated home for the L3 self-healing loop — prefer this over invoking maestro_run + cdp_repair_action manually for any flow you intend to re-run on schedule. blindProbeMode provides per-call control of the proactive CDP/JS compatibility path: inherit (default) honors RN_BLIND_PROBE, allow explicitly enables it for this call, and forbid forces maestro-first for this call.", {
-    actionId: z
-        .string()
-        .describe('Action id matching <projectRoot>/.rn-agent/actions/<actionId>.yaml.'),
+trackedTool('cdp_run_action', "Replay a learned action by id with end-to-end auto-repair. Loads the action from .rn-agent/actions/<actionId>.yaml or .yml, forwards the matching active session's exact device ID to Maestro, rejects mismatched direct runner/WDA evidence, and on a SELECTOR_NOT_FOUND failure automatically invokes cdp_repair_action and retries once. Appends a RunRecord to the sidecar with full auto-repair telemetry (passed/failed/refused/skipped + diff); its Maestro deviceId comes from direct runner evidence, never requested metadata. The repair attempt counts toward cdp_repair_action's 24h budget. Pass autoRepair=false to opt out of auto-repair (returns the raw maestro_run failure verbatim). forceReload defaults true: any human edit to the YAML since the agent's last write is acknowledged as the new baseline so downstream repair does not abort with STALE_TARGET (the right default for active composition). Pass forceReload=false for the strict \"respect offline human edits\" behavior: a successful replay still appends its RunRecord to the sidecar when only the tracked YAML mtime baseline is stale, while YAML-mutating promotion and repair stay refused. proofReplay=true is reserved for proof_capture rehearsal and requires autoRepair=false plus forceReload=false; it executes without RunRecord, promotion, YAML, sidecar, or DB persistence. The orchestrated home for the L3 self-healing loop — prefer this over invoking maestro_run + cdp_repair_action manually for any flow you intend to re-run on schedule. blindProbeMode provides per-call control of the proactive CDP/JS compatibility path: inherit (default) honors RN_BLIND_PROBE, allow explicitly enables it for this call, and forbid forces maestro-first for this call.", {
+    actionId: z.string().describe('Owned action id; resolves one .yaml or .yml file.'),
     projectRoot: z.string().optional().describe('Override project root (default: process.cwd()).'),
     platform: z
         .enum(['ios', 'android'])

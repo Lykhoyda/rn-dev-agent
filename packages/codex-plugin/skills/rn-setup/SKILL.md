@@ -62,7 +62,7 @@ Read/report without mutation:
 | Core package | selected package runtime files | marketplace refresh/materialization |
 | iOS runner | packaged Xcode project/artifact presence | one-time build command |
 | Android runner | packaged Gradle/APK presence | one-time Gradle command |
-| Maestro runner | version/help | package helper/install guidance |
+| Maestro runner | `maestro-runner-pin.js diagnose --json` must be `pinned-ok` / `>= 1.1.24` / `pin-cache` | package `ensure-maestro-runner.sh` for attested 1.1.24 (floor >= 1.1.24); never PATH, `~/.maestro-runner`, or brew maestro |
 | iOS/Android devices | list-only platform commands | boot guidance |
 | Metro | `rn_session` and passive `cdp_status` reads | integrated package script |
 | CDP/app | prior supplied observation only | active `check-env` later |
@@ -83,11 +83,25 @@ forwards truthfully and prints commands for later user confirmation.
 ## Setup routing
 
 When the user invoked `$rn-dev-agent:setup`, hand off to its package-local
-workflow after passive critical checks. Setup uses Codex `AGENTS.md`, not Claude
-instruction files. Every AGENTS/scaffold/source/tsconfig write is previewed and
-confirmed separately; symlink-inherited corpora are never modified. Optional
-active `cdp_status` verification occurs only after the passive phase and project
-changes, with the user's setup intent.
+workflow after passive critical checks. Before project onboarding can succeed,
+run the package-local pin workflow in this exact order:
+
+```text
+node <package-root>/rn-dev-agent-core/dist/maestro-runner-pin.js diagnose --json
+bash <package-root>/scripts/ensure-maestro-runner.sh
+node <package-root>/rn-dev-agent-core/dist/maestro-runner-pin.js diagnose --json
+node <package-root>/rn-dev-agent-core/dist/maestro-runner-pin.js migrate-actions --root "$APP_ROOT" --json
+```
+
+Continue only when diagnosis reports `status: pinned-ok`, `installedVersion`
+`>= 1.1.24`, `pin: 1.1.24`, `provenance: pin-cache`, and every owned action is
+migrated or already pinned. Missing,
+older, unattested, checksum-mismatched, unknown, unverified, unsupported, unreadable,
+or incompatible results are terminal setup failures. Setup uses Codex
+`AGENTS.md`, not Claude instruction files. Every AGENTS/scaffold/source/tsconfig
+write is previewed and confirmed separately; symlink-inherited corpora are never
+modified. Optional active `cdp_status` verification occurs only after the
+passive phase and project changes, with the user's setup intent.
 
 When the user invoked `$rn-dev-agent:check-env`, that is an active readiness
 workflow and may call `cdp_status`; do not mislabel it passive doctor behavior.

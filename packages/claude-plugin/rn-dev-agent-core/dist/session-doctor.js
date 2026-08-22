@@ -109,7 +109,7 @@ var init_trusted_system_executable = __esm({
 // packages/rn-dev-agent-core/dist/session/process-birth.js
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { closeSync, constants, existsSync as existsSync2, fstatSync, lstatSync, openSync, readFileSync, readSync, realpathSync } from "node:fs";
+import { closeSync, chmodSync, constants, copyFileSync, existsSync as existsSync2, fstatSync, lstatSync, openSync, readFileSync, readSync, realpathSync, unlinkSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 function defaultRun(command, args) {
@@ -314,13 +314,13 @@ var init_process_birth = __esm({
     "use strict";
     init_trusted_system_executable();
     DARWIN_HELPER_MANIFEST = {
-      sourceSha256: "99a8025ab1c3cfbe32db184f6e030216d75c535143bd4684a2a89aac61c54c4a",
-      recipeSha256: "4f40539bce137f7bcae4731fd1494fae5704cba5327177d7f2a2a47aec95afb3",
-      stableBinarySha256: "6b5db7f7a6933f3d11d4c53ecafba9c3ef82c2533faf4bfe07a11b3cb4022dea",
-      binarySha256: "fee005927e8d680b1589574211002d8809e3478446b97d3c9291157ea57b0dd5",
+      sourceSha256: "5cafc275ab929026203e64527f993cd77e2854f1697cdb419b7d901293e1bc48",
+      recipeSha256: "a1293ae1f70a5da3a4ea9b1b79a095a5f182f7cb39e37521abe87cb1864f625b",
+      stableBinarySha256: "e5dffbe66f7fa52f8e2554fb397b4b44000d8c092feff35e0c42f5f3e0150c3f",
+      binarySha256: "dd8346dab2ccb6e3ce11840bbca5f8ea2f4cbd95efae34ddb130f98824a065aa",
       cdhashes: [
-        "1e67841d4d49a5e5088d283e26430130f017b989",
-        "7f25b0eca55913e522781923a16c6b0cd98bb4fc"
+        "0471a3583ce2363ee96afe3e85951dd5fd154dec",
+        "1998527647f4fef05eae6007fe7a1f945aa7c54d"
       ]
     };
     VERIFIED_HELPER_SCRIPT = `
@@ -375,7 +375,7 @@ print -r -- "$result"
 });
 
 // packages/rn-dev-agent-core/dist/session/authority-store.js
-import { chmodSync, lstatSync as lstatSync2, mkdirSync, statSync } from "node:fs";
+import { chmodSync as chmodSync2, lstatSync as lstatSync2, mkdirSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname as dirname2 } from "node:path";
 function loadAuthoritySqlite() {
@@ -396,7 +396,7 @@ function assertPrivateDirectory(path) {
   if (typeof process.getuid === "function" && stat.uid !== process.getuid()) {
     throw new Error("authority state root is not owned by the current user");
   }
-  chmodSync(path, 448);
+  chmodSync2(path, 448);
 }
 function secureDatabaseFiles(path) {
   for (const candidate of [path, `${path}-wal`, `${path}-shm`]) {
@@ -409,7 +409,7 @@ function secureDatabaseFiles(path) {
       if (typeof process.getuid === "function" && stat.uid !== process.getuid()) {
         throw new Error("authority database is not owned by the current user");
       }
-      chmodSync(candidate, 384);
+      chmodSync2(candidate, 384);
     } catch (error) {
       const code = error.code;
       if (code !== "ENOENT")
@@ -11037,7 +11037,7 @@ var init_registry = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/util/secure-state-file.js
-import { readFileSync as readFileSync3, writeFileSync, unlinkSync, mkdirSync as mkdirSync2, renameSync, lstatSync as lstatSync4 } from "node:fs";
+import { readFileSync as readFileSync3, writeFileSync, unlinkSync as unlinkSync2, mkdirSync as mkdirSync2, renameSync, lstatSync as lstatSync4 } from "node:fs";
 import { join as join3, dirname as dirname4 } from "node:path";
 import { homedir } from "node:os";
 function getStateDir() {
@@ -11360,10 +11360,68 @@ var init_maestro_validator = __esm({
   }
 });
 
+// packages/rn-dev-agent-core/dist/domain/maestro-runner-pin.json
+var maestro_runner_pin_default;
+var init_maestro_runner_pin = __esm({
+  "packages/rn-dev-agent-core/dist/domain/maestro-runner-pin.json"() {
+    maestro_runner_pin_default = {
+      version: "1.1.24",
+      sha256: {
+        "darwin-arm64": "170f12521de83322823dd5fc0ce16e48abeba9952cdbb242670592566c2fd1f3",
+        "darwin-x64": "af7f5ea044afc72ea780c835f05b32203e443d2e26d310a864bfb2bc84959bf6",
+        "linux-x64": "e9bdef6f08f855ca1a884f99b54a519a1eae0a342917181a53eb414a5b00d6d8",
+        "linux-arm64": "8d8a6483ad04da2109636b7192398750657801b8a8d512688d1be3b033a105b8"
+      },
+      archiveSha256: {
+        "darwin-arm64": "0b5b0f087815c5ff348e74a6dd7df260ed50a5588d5ff3e224c66a60d948c936",
+        "darwin-x64": "2ecc5c55d9437ee820691faf43097b5ba8d1ff797db49da9c96ac2631aac03c5",
+        "linux-x64": "f1963b7e3f8bf598d3b14f998fef3dc690e579906f340636cfd9350dea1d67b0",
+        "linux-arm64": "605db5645b161b610e999bcf8235650d41aac8929bbd0f818a592d13b958f148"
+      },
+      knownQuirks: [
+        {
+          id: "android-pre-o-unsupported",
+          ref: "GH #741",
+          note: "bundled UiAutomator2 server APK declares minSdk 26; API 23-25 installs fail with INSTALL_FAILED_OLDER_SDK"
+        }
+      ]
+    };
+  }
+});
+
+// packages/rn-dev-agent-core/dist/domain/engine-pin.js
+var MAESTRO_RUNNER_PIN, TRUSTED_DRIFT_SHA256, ACTION_ENGINE_PIN, HOST_PLUGIN_ROOT, PINNED_RUNNER_INSTALL_HINT, PINNED_RUNNER_DIAGNOSE_HINT;
+var init_engine_pin = __esm({
+  "packages/rn-dev-agent-core/dist/domain/engine-pin.js"() {
+    "use strict";
+    init_process_birth();
+    init_maestro_runner_pin();
+    MAESTRO_RUNNER_PIN = Object.freeze({
+      version: maestro_runner_pin_default.version,
+      sha256: Object.freeze({ ...maestro_runner_pin_default.sha256 }),
+      archiveSha256: Object.freeze({ ...maestro_runner_pin_default.archiveSha256 }),
+      knownQuirks: Object.freeze(maestro_runner_pin_default.knownQuirks.map((quirk) => Object.freeze({ ...quirk })))
+    });
+    TRUSTED_DRIFT_SHA256 = Object.freeze({
+      "1.0.9": Object.freeze({
+        "darwin-arm64": "7d3777a67f8cc3d5e3927f498ddda8a56c424a10158f7cd4fa494ecc3ed97923",
+        "darwin-x64": "36f8a973c3231b6b8125db4a3e131b8c3193aec6774145584b18070be979fd5f",
+        "linux-arm64": "a8e8197c63502fba874ce69b908174d46a47c6539025184e3003e70576d9451e",
+        "linux-x64": "bf7e9ef297c35712e9fad0ad56a65b7fd94e1f30168733cf09459b4ea80c4c3e"
+      })
+    });
+    ACTION_ENGINE_PIN = `maestro-runner@${MAESTRO_RUNNER_PIN.version}`;
+    HOST_PLUGIN_ROOT = "${CLAUDE_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}";
+    PINNED_RUNNER_INSTALL_HINT = `bash ${HOST_PLUGIN_ROOT}/scripts/ensure-maestro-runner.sh`;
+    PINNED_RUNNER_DIAGNOSE_HINT = `node ${HOST_PLUGIN_ROOT}/rn-dev-agent-core/dist/maestro-runner-pin.js diagnose`;
+  }
+});
+
 // packages/rn-dev-agent-core/dist/tools/maestro-dispatch.js
 var init_maestro_dispatch = __esm({
   "packages/rn-dev-agent-core/dist/tools/maestro-dispatch.js"() {
     "use strict";
+    init_engine_pin();
   }
 });
 
@@ -11384,15 +11442,109 @@ var init_maestro_error_parser = __esm({
   }
 });
 
-// packages/rn-dev-agent-core/dist/domain/engine-pin.js
-import { execFile as execFileCb2, spawnSync } from "node:child_process";
-import { promisify as promisify3 } from "node:util";
-var execFile3;
-var init_engine_pin = __esm({
-  "packages/rn-dev-agent-core/dist/domain/engine-pin.js"() {
+// packages/rn-dev-agent-core/dist/domain/reusable-action.js
+var init_reusable_action = __esm({
+  "packages/rn-dev-agent-core/dist/domain/reusable-action.js"() {
     "use strict";
-    init_maestro_invoke();
-    execFile3 = promisify3(execFileCb2);
+  }
+});
+
+// packages/rn-dev-agent-core/dist/session/runtime-paths.js
+var init_runtime_paths2 = __esm({
+  "packages/rn-dev-agent-core/dist/session/runtime-paths.js"() {
+    "use strict";
+  }
+});
+
+// packages/rn-dev-agent-core/dist/domain/sidecar-io.js
+var init_sidecar_io = __esm({
+  "packages/rn-dev-agent-core/dist/domain/sidecar-io.js"() {
+    "use strict";
+    init_reusable_action();
+    init_runtime_paths2();
+  }
+});
+
+// packages/rn-dev-agent-core/dist/domain/atomic-writer.js
+var ORPHAN_MAX_AGE_MS, lockWaitBuffer;
+var init_atomic_writer = __esm({
+  "packages/rn-dev-agent-core/dist/domain/atomic-writer.js"() {
+    "use strict";
+    init_process_birth();
+    ORPHAN_MAX_AGE_MS = 5 * 60 * 1e3;
+    lockWaitBuffer = new Int32Array(new SharedArrayBuffer(4));
+  }
+});
+
+// packages/rn-dev-agent-core/dist/domain/path-safety.js
+var init_path_safety = __esm({
+  "packages/rn-dev-agent-core/dist/domain/path-safety.js"() {
+    "use strict";
+  }
+});
+
+// packages/rn-dev-agent-core/dist/domain/action-db.js
+import { createRequire as createRequire2 } from "node:module";
+var _require;
+var init_action_db = __esm({
+  "packages/rn-dev-agent-core/dist/domain/action-db.js"() {
+    "use strict";
+    init_runtime_paths2();
+    _require = createRequire2(import.meta.url);
+  }
+});
+
+// packages/rn-dev-agent-core/dist/domain/action-state-store.js
+var init_action_state_store = __esm({
+  "packages/rn-dev-agent-core/dist/domain/action-state-store.js"() {
+    "use strict";
+    init_logger();
+    init_action_db();
+    init_sidecar_io();
+  }
+});
+
+// packages/rn-dev-agent-core/dist/session/worktree-repair-remedy.js
+var WORKTREE_REPAIR_ENTRY, HEADLESS_WORKTREE_REPAIR_COMMAND;
+var init_worktree_repair_remedy = __esm({
+  "packages/rn-dev-agent-core/dist/session/worktree-repair-remedy.js"() {
+    "use strict";
+    WORKTREE_REPAIR_ENTRY = '"${CLAUDE_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}/rn-dev-agent-core/dist/worktree-inheritance.js"';
+    HEADLESS_WORKTREE_REPAIR_COMMAND = `node ${WORKTREE_REPAIR_ENTRY} repair --app-root "$PWD"`;
+  }
+});
+
+// packages/rn-dev-agent-core/dist/session/worktree-inheritance.js
+var init_worktree_inheritance = __esm({
+  "packages/rn-dev-agent-core/dist/session/worktree-inheritance.js"() {
+    "use strict";
+    init_worktree_repair_remedy();
+  }
+});
+
+// packages/rn-dev-agent-core/dist/domain/action-store.js
+var init_action_store = __esm({
+  "packages/rn-dev-agent-core/dist/domain/action-store.js"() {
+    "use strict";
+    init_reusable_action();
+    init_sidecar_io();
+    init_atomic_writer();
+    init_path_safety();
+    init_action_state_store();
+    init_worktree_inheritance();
+  }
+});
+
+// packages/rn-dev-agent-core/dist/domain/action-engine-compat.js
+var ENGINE_PIN_LINE;
+var init_action_engine_compat = __esm({
+  "packages/rn-dev-agent-core/dist/domain/action-engine-compat.js"() {
+    "use strict";
+    init_engine_pin();
+    init_maestro_validator();
+    init_reusable_action();
+    init_action_store();
+    ENGINE_PIN_LINE = new RegExp(`^#\\s*enginePin\\s*:\\s*.+$`);
   }
 });
 
@@ -11732,14 +11884,16 @@ var init_authority_gate = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/tools/maestro-run.js
-import { execFile as execFileCb3 } from "node:child_process";
-import { promisify as promisify4 } from "node:util";
+import { execFile as execFileCb2 } from "node:child_process";
+import { promisify as promisify3 } from "node:util";
 var defaultExecFile;
 var init_maestro_run = __esm({
   "packages/rn-dev-agent-core/dist/tools/maestro-run.js"() {
     "use strict";
     init_utils();
     init_engine_pin();
+    init_action_engine_compat();
+    init_reusable_action();
     init_agent_device_wrapper();
     init_project_config();
     init_maestro_dispatch();
@@ -11755,7 +11909,7 @@ var init_maestro_run = __esm({
     init_maestro_runner_report();
     init_authority_gate();
     init_registry();
-    defaultExecFile = promisify4(execFileCb3);
+    defaultExecFile = promisify3(execFileCb2);
   }
 });
 
@@ -11769,8 +11923,8 @@ var init_managed_automation = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/runners/external-runner-detect.js
-import { execFile as execFile4 } from "node:child_process";
-import { promisify as promisify5 } from "node:util";
+import { execFile as execFile3 } from "node:child_process";
+import { promisify as promisify4 } from "node:util";
 function executableBasename(command) {
   const executable = command.trimStart().split(/\s+/, 1)[0] ?? "";
   return executable.slice(executable.lastIndexOf("/") + 1);
@@ -11801,10 +11955,10 @@ function isIosExternalRunnerProcessLine(line) {
   }
   return false;
 }
-async function detectIosExternalRunner(execFileImpl = execFile4, udid) {
+async function detectIosExternalRunner(execFileImpl = execFile3, udid) {
   try {
     const opts = { timeout: 2e3, encoding: "utf8" };
-    const run = execFileImpl === execFile4 ? promisify5(execFileImpl) : execFileImpl;
+    const run = execFileImpl === execFile3 ? promisify4(execFileImpl) : execFileImpl;
     const { stdout } = await run("ps", ["axww", "-o", "pid=,command="], opts);
     const lines = stdout.split("\n").filter((line) => isIosExternalRunnerProcessLine(line)).filter((line) => !RN_FAST_RUNNER_RE.test(line)).filter((line) => udid ? line.includes(udid) : true).map((line) => line.trim()).filter((line) => line.length > 0);
     if (lines.length === 0)
@@ -12008,6 +12162,7 @@ var init_maestro_invoke = __esm({
     init_maestro_dispatch();
     init_maestro_error_parser();
     init_engine_pin();
+    init_action_engine_compat();
     init_resolve_ios_app_file();
     init_maestro_run();
     init_agent_device_wrapper();
@@ -12028,13 +12183,13 @@ var init_runner_leak_recovery = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/tools/app-lifecycle.js
-import { execFile as execFileCb4 } from "node:child_process";
-import { promisify as promisify6 } from "node:util";
-var execFile5;
+import { execFile as execFileCb3 } from "node:child_process";
+import { promisify as promisify5 } from "node:util";
+var execFile4;
 var init_app_lifecycle = __esm({
   "packages/rn-dev-agent-core/dist/tools/app-lifecycle.js"() {
     "use strict";
-    execFile5 = promisify6(execFileCb4);
+    execFile4 = promisify5(execFileCb3);
   }
 });
 
@@ -12052,20 +12207,20 @@ var init_ensure_single_runner = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/runners/suppress-ios-autocorrect.js
-import { execFile as execFileCb5 } from "node:child_process";
-import { promisify as promisify7 } from "node:util";
-var execFile6;
+import { execFile as execFileCb4 } from "node:child_process";
+import { promisify as promisify6 } from "node:util";
+var execFile5;
 var init_suppress_ios_autocorrect = __esm({
   "packages/rn-dev-agent-core/dist/runners/suppress-ios-autocorrect.js"() {
     "use strict";
-    execFile6 = promisify7(execFileCb5);
+    execFile5 = promisify6(execFileCb4);
   }
 });
 
 // packages/rn-dev-agent-core/dist/cdp/recover-wedge.js
-import { execFile as execFileCb6 } from "node:child_process";
-import { promisify as promisify8 } from "node:util";
-var execFile7;
+import { execFile as execFileCb5 } from "node:child_process";
+import { promisify as promisify7 } from "node:util";
+var execFile6;
 var init_recover_wedge = __esm({
   "packages/rn-dev-agent-core/dist/cdp/recover-wedge.js"() {
     "use strict";
@@ -12073,25 +12228,25 @@ var init_recover_wedge = __esm({
     init_rn_fast_runner_client();
     init_device_arbiter();
     init_recovery();
-    execFile7 = promisify8(execFileCb6);
+    execFile6 = promisify7(execFileCb5);
   }
 });
 
 // packages/rn-dev-agent-core/dist/cdp/app-installed-probe.js
-import { execFile as execFileCb7 } from "node:child_process";
-import { promisify as promisify9 } from "node:util";
-var execFile8;
+import { execFile as execFileCb6 } from "node:child_process";
+import { promisify as promisify8 } from "node:util";
+var execFile7;
 var init_app_installed_probe = __esm({
   "packages/rn-dev-agent-core/dist/cdp/app-installed-probe.js"() {
     "use strict";
-    execFile8 = promisify9(execFileCb7);
+    execFile7 = promisify8(execFileCb6);
   }
 });
 
 // packages/rn-dev-agent-core/dist/cdp/recover-detached.js
-import { execFile as execFileCb8 } from "node:child_process";
-import { promisify as promisify10 } from "node:util";
-var execFile9;
+import { execFile as execFileCb7 } from "node:child_process";
+import { promisify as promisify9 } from "node:util";
+var execFile8;
 var init_recover_detached = __esm({
   "packages/rn-dev-agent-core/dist/cdp/recover-detached.js"() {
     "use strict";
@@ -12101,7 +12256,7 @@ var init_recover_detached = __esm({
     init_recovery();
     init_app_installed_probe();
     init_maestro_validator();
-    execFile9 = promisify10(execFileCb8);
+    execFile8 = promisify9(execFileCb7);
   }
 });
 
@@ -12121,9 +12276,9 @@ var init_device_session_close = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/tools/device-session.js
-import { execFile as execFileCb9 } from "node:child_process";
-import { promisify as promisify11 } from "node:util";
-var execFile10;
+import { execFile as execFileCb8 } from "node:child_process";
+import { promisify as promisify10 } from "node:util";
+var execFile9;
 var init_device_session = __esm({
   "packages/rn-dev-agent-core/dist/tools/device-session.js"() {
     "use strict";
@@ -12145,7 +12300,7 @@ var init_device_session = __esm({
     init_device_lock();
     init_device_arbiter();
     init_device_session_close();
-    execFile10 = promisify11(execFileCb9);
+    execFile9 = promisify10(execFileCb8);
   }
 });
 
@@ -12157,9 +12312,9 @@ var init_fill_verify = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/tools/device-interact.js
-import { execFile as execFileCb10 } from "node:child_process";
-import { promisify as promisify12 } from "node:util";
-var execFile11;
+import { execFile as execFileCb9 } from "node:child_process";
+import { promisify as promisify11 } from "node:util";
+var execFile10;
 var init_device_interact = __esm({
   "packages/rn-dev-agent-core/dist/tools/device-interact.js"() {
     "use strict";
@@ -12176,7 +12331,7 @@ var init_device_interact = __esm({
     init_device_session();
     init_fast_runner_ref_map();
     init_fill_verify();
-    execFile11 = promisify12(execFileCb10);
+    execFile10 = promisify11(execFileCb9);
   }
 });
 
@@ -12210,8 +12365,8 @@ var init_free_port = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/runners/rn-android-runner-client.js
-import { spawn as spawn4, execFile as execFile12 } from "node:child_process";
-import { promisify as promisify13 } from "node:util";
+import { spawn as spawn4, execFile as execFile11 } from "node:child_process";
+import { promisify as promisify12 } from "node:util";
 import { join as join12 } from "node:path";
 var execFileAsync2, RN_ANDROID_RUNNER_DIR, GRADLEW, APK_APP, APK_TEST, ANDROID_REBUILD_ROOT, ANDROID_REBUILD_LOCK_DATABASE, ANDROID_REBUILD_LOCK_STALE_MS, fetchImpl2;
 var init_rn_android_runner_client = __esm({
@@ -12228,7 +12383,7 @@ var init_rn_android_runner_client = __esm({
     init_transport_recovery();
     init_process_birth();
     init_authority_store();
-    execFileAsync2 = promisify13(execFile12);
+    execFileAsync2 = promisify12(execFile11);
     RN_ANDROID_RUNNER_DIR = resolveNativeRunnerDir("rn-android-runner");
     GRADLEW = join12(RN_ANDROID_RUNNER_DIR, "gradlew");
     APK_APP = join12(RN_ANDROID_RUNNER_DIR, "app", "build", "outputs", "apk", "debug", "app-debug.apk");
@@ -12241,17 +12396,17 @@ var init_rn_android_runner_client = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/runners/release-android-slot.js
-import { execFile as execFileCb11 } from "node:child_process";
-import { promisify as promisify14 } from "node:util";
+import { execFile as execFileCb10 } from "node:child_process";
+import { promisify as promisify13 } from "node:util";
 import { homedir as homedir4 } from "node:os";
 import { join as join13 } from "node:path";
-var execFile13, DAEMON_JSON2, DAEMON_LOCK2, OWNED_PACKAGES;
+var execFile12, DAEMON_JSON2, DAEMON_LOCK2, OWNED_PACKAGES;
 var init_release_android_slot = __esm({
   "packages/rn-dev-agent-core/dist/runners/release-android-slot.js"() {
     "use strict";
     init_rn_android_runner_client();
     init_agent_device_wrapper();
-    execFile13 = promisify14(execFileCb11);
+    execFile12 = promisify13(execFileCb10);
     DAEMON_JSON2 = join13(homedir4(), ".agent-device", "daemon.json");
     DAEMON_LOCK2 = join13(homedir4(), ".agent-device", "daemon.lock");
     OWNED_PACKAGES = [
@@ -13906,7 +14061,7 @@ import { join as join5 } from "node:path";
 // packages/rn-dev-agent-core/dist/session/state-root.js
 init_secure_state_file();
 import { randomBytes as randomBytes3, randomUUID } from "node:crypto";
-import { chmodSync as chmodSync2, linkSync, lstatSync as lstatSync5, mkdirSync as mkdirSync4, readFileSync as readFileSync5, renameSync as renameSync2, rmSync as rmSync2, statSync as statSync2, writeFileSync as writeFileSync2 } from "node:fs";
+import { chmodSync as chmodSync3, linkSync, lstatSync as lstatSync5, mkdirSync as mkdirSync4, readFileSync as readFileSync5, renameSync as renameSync2, rmSync as rmSync2, statSync as statSync2, writeFileSync as writeFileSync2 } from "node:fs";
 import { join as join4, resolve as resolve2 } from "node:path";
 function fail(code, detail) {
   throw new Error(`${code}: ${detail}`);
@@ -13919,7 +14074,7 @@ function ensurePrivateDirectory(path) {
     if (link.isSymbolicLink() || !link.isDirectory() || typeof process.getuid === "function" && stat.uid !== process.getuid()) {
       fail("AUTHORITY_STATE_ROOT_UNSAFE", "state directory is not private and user-owned");
     }
-    chmodSync2(path, 448);
+    chmodSync3(path, 448);
   } catch (error) {
     if (error instanceof Error && error.message.startsWith("AUTHORITY_STATE_ROOT_UNSAFE")) {
       throw error;
@@ -13996,7 +14151,7 @@ function getBoundDirectoryJournalKey(layout = createAuthorityStateLayout()) {
     if (link.isSymbolicLink() || !link.isFile() || key.length !== 32 || typeof process.getuid === "function" && stat.uid !== process.getuid()) {
       fail("AUTHORITY_STATE_ROOT_UNSAFE", "bound-directory journal key is invalid");
     }
-    chmodSync2(path, 384);
+    chmodSync3(path, 384);
     return key.toString("base64url");
   } catch (error) {
     if (error instanceof Error && error.message.startsWith("AUTHORITY_STATE_ROOT_UNSAFE")) {
@@ -15977,11 +16132,11 @@ function restorePackageIntegrationFiles(input, dependencies = {}) {
 // packages/rn-dev-agent-core/dist/session/process-cleanup.js
 init_release_android_slot();
 init_cleanup_identity();
-import { execFile as execFileCb12, spawn as spawn5 } from "node:child_process";
-import { promisify as promisify15 } from "node:util";
+import { execFile as execFileCb11, spawn as spawn5 } from "node:child_process";
+import { promisify as promisify14 } from "node:util";
 init_process_birth();
 init_registry();
-var execFile14 = promisify15(execFileCb12);
+var execFile13 = promisify14(execFileCb11);
 var RECORDER_POST_KILL_CONFIRM_MS = 2e3;
 function executeRecorderScript(script, args, options) {
   return new Promise((resolve4, reject) => {
@@ -16194,7 +16349,7 @@ async function stopBoundObserve(binding, listenerProbe = probeManagedMetroListen
     return observed.status === "listening" && observed.pid === pid ? "running" : "stopped";
   }, deadlineMs, "OBSERVE_AUTHORITY_MISMATCH", "Observe listener did not stop before the cleanup deadline");
 }
-async function stopBoundRunner(binding, processProbe = probeProcessBirth, signalProcess = process.kill, timeoutMs = 2e3, runAdb = async (args) => execFile14("adb", args, { timeout: 5e3, encoding: "utf8" }), termGraceMs = 500) {
+async function stopBoundRunner(binding, processProbe = probeProcessBirth, signalProcess = process.kill, timeoutMs = 2e3, runAdb = async (args) => execFile13("adb", args, { timeout: 5e3, encoding: "utf8" }), termGraceMs = 500) {
   const deadlineMs = Date.now() + timeoutMs;
   if (!hasCompleteRunnerCleanupIdentity(binding)) {
     throw new SessionAuthorityError("RUNNER_ADOPTION_REQUIRED", "runner cleanup identity is incomplete");

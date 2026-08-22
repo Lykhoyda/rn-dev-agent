@@ -110,31 +110,33 @@ ls ${CLAUDE_PLUGIN_ROOT}/scripts/rn-android-runner/build.gradle.kts 2>/dev/null 
 
 Skip this check on systems without `adb` / no Android target. If the user is iOS-only, mark this row N/A (Android-only) and continue. Since #202 the plugin terminates a stale legacy `AgentDeviceRunner` at session-open by default (scoped to the target simulator UDID) and clears orphaned `~/.agent-device/daemon.{json,lock}`; opt out with `RN_DEVICE_KILL_LEGACY=0`.
 
-### 4. maestro-runner
+### 4. maestro-runner (pin-cache floor >= 1.1.24)
+Session replay never uses `PATH`, `~/.maestro-runner`, or `brew maestro`. Diagnose and
+install only the pin-cache binary:
+
 ```bash
-command -v maestro-runner && maestro-runner --version
-```
-If missing, check the default install location first:
-```bash
-ls -la ~/.maestro-runner/bin/maestro-runner 2>/dev/null
-```
-If not there, run the ensure script to attempt automatic installation:
-```bash
+node ${CLAUDE_PLUGIN_ROOT}/rn-dev-agent-core/dist/maestro-runner-pin.js diagnose --json
 bash ${CLAUDE_PLUGIN_ROOT}/scripts/ensure-maestro-runner.sh
+node ${CLAUDE_PLUGIN_ROOT}/rn-dev-agent-core/dist/maestro-runner-pin.js diagnose --json
 ```
-Then re-check: `command -v maestro-runner || ~/.maestro-runner/bin/maestro-runner --version`
 
-If it still fails, give the user these manual instructions:
-1. `curl -fsSL https://open.devicelab.dev/install/maestro-runner | bash -s -- --version 1.0.9` — downloads the ~24MB binary at the plugin's tested pin
-2. If curl fails: check internet, proxy settings, or firewall
-3. After install, add to PATH: `export PATH="$HOME/.maestro-runner/bin:$PATH"` (add to `~/.zshrc` or `~/.bashrc`)
-4. Fallback: install Maestro CLI instead: `brew install maestro` (slower but compatible)
-5. Verify: `maestro-runner --version` should print a version number
+Success requires `status: pinned-ok`, `installedVersion` `>= 1.1.24`, `pin: 1.1.24`,
+`provenance: pin-cache`, and a `selectedPath` under `$RN_DEV_AGENT_RUNNER_CACHE`
+or `$HOME/.cache/rn-dev-agent/maestro-runner/1.1.24/bin/maestro-runner`.
 
-The plugin pins the tested engine version (GH #397; the pin lives in `packages/rn-dev-agent-core/src/domain/engine-pin.ts`, currently `1.0.9`). Compare the installed `maestro-runner --version` with that pin; replay results carry the engine-pin verdict and known quirks. Report the row as:
-- `pinned-ok` → healthy, e.g. `maestro-runner 1.0.9 (pinned, quirks: <the pin's knownQuirks ids>)`
-- drift/checksum states → WARN with the installed vs pinned versions; a drifted install still works but is untested (B223-class behavior changes arrive silently). Reinstall the pin with the command in step 1 above.
-- `unverified` → informational only (no hash shipped for this platform, or hashing failed); not a failure.
+Doctor rows — never silently accept a runner below 1.1.24 or an unattested binary:
+
+- `pinned-ok` → healthy, e.g. `maestro-runner 1.1.24 (pin-cache)`
+- `not-installed` / `drift-older` / `drift-newer` / `checksum-mismatch` / `unverified` / `unknown-version` → FAIL; run the ensure script and re-diagnose. Do not continue setup.
+- unsupported platform (`win32`, etc.) → FAIL; no install fallback.
+
+After the runner is pinned-ok, migrate the app's learned-action corpus and refuse any
+incompatible action (regex text selectors, wrong `enginePin`) as terminal — no manual login
+or unowned UI fallback:
+
+```bash
+node ${CLAUDE_PLUGIN_ROOT}/rn-dev-agent-core/dist/maestro-runner-pin.js migrate-actions --root "$APP_ROOT" --json
+```
 
 ### 5. iOS Simulator (if macOS)
 ```bash
@@ -297,7 +299,7 @@ Present results as a table:
 | CDP bridge | OK | — |
 | rn-fast-runner (iOS) | OK (built) / NEEDS_BUILD / N/A (non-macOS) | NEEDS_BUILD self-builds on first use (slow); offer the one-time `xcodebuild build-for-testing` to skip the wait (see check 3 above) |
 | rn-android-runner (Android) | OK (APKs present) / NEEDS_BUILD / N/A (iOS-only setup) | NEEDS_BUILD: `cd ${CLAUDE_PLUGIN_ROOT}/scripts/rn-android-runner && ./gradlew assembleDebug assembleDebugAndroidTest` — only if targeting Android |
-| maestro-runner | MISSING | Run: npm install -g maestro-runner |
+| maestro-runner | pinned-ok (>= 1.1.24 pin-cache) / FAIL (missing, older, unattested, checksum, unsupported) | `bash ${CLAUDE_PLUGIN_ROOT}/scripts/ensure-maestro-runner.sh` then re-diagnose. Never PATH, ~/.maestro-runner, or brew maestro. |
 | iOS Simulator | BOOTED (iPhone 16) | — |
 | Android Emulator | NOT RUNNING | Boot an emulator |
 | Metro | RUNNING (port 8081) | — |
@@ -348,7 +350,7 @@ Setup is boring — agents skip it and pay for it later.
 - [ ] `corepack yarn workspace rn-dev-agent-core exec npm ls --depth=0` shows no WARN/ERR
 - [ ] **Android targets**: `packages/rn-android-runner/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk` exists (build once via `./gradlew assembleDebug assembleDebugAndroidTest`) — only required if targeting Android; iOS uses the in-tree `rn-fast-runner` (D1219)
 - [ ] **iOS targets**: `packages/rn-fast-runner/build/DerivedData/Build/Products/Debug-iphonesimulator/RnFastRunnerUITests-Runner.app` exists (pre-built once via `xcodebuild build-for-testing`)
-- [ ] `~/.maestro-runner/bin/maestro-runner --version` works (or `command -v maestro-runner`)
+- [ ] pin-cache `maestro-runner --version` is exactly `1.1.24` (`maestro-runner-pin.js diagnose` → `pinned-ok`, provenance `pin-cache`)
 - [ ] At least ONE of: iOS simulator booted OR Android emulator running
 - [ ] `rn_session(action="status")` and `cdp_status` report the bound Metro
 - [ ] Passive `cdp_status` reports `cdp.connected: true` and a narrow `cdp_component_tree` query succeeds

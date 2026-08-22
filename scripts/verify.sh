@@ -2,24 +2,45 @@
 # rn-verify — Headless CI runner for Maestro flows in .rn-agent/actions/
 #
 # Discovers and runs all plugin-managed Maestro flows in .rn-agent/actions/
-# without requiring a Claude Code session. Wraps maestro-runner directly.
-# Pass --flow-dir to point at any other directory (e.g. your own .maestro/flows/).
+# without requiring a Claude Code session. Uses only the pin-cache
+# maestro-runner (floor >= 1.1.24, attested default). Never PATH, ~/.maestro-runner, or
+# maestro-cli. Pass --flow-dir only for an owned .rn-agent/actions directory.
 #
 # Usage:
 #   rn-verify                              # Run all flows on auto-detected platform
 #   rn-verify --platform ios               # Run on iOS only
 #   rn-verify --platform android           # Run on Android only
 #   rn-verify --pattern "cart|checkout"     # Filter flows by regex
-#   rn-verify --flow-dir ./e2e/flows       # Custom flow directory
+#   rn-verify --flow-dir .rn-agent/actions # Explicit owned action corpus
 #   rn-verify --timeout 60000              # Per-flow timeout in ms (default: 120000)
 #   rn-verify --stop-on-failure            # Stop after first failure
 #
 # Exit codes:
 #   0 — all flows passed
 #   1 — one or more flows failed
-#   2 — setup error (no maestro-runner, no flows, no platform)
+#   2 — setup error (pin missing/drifted/checksum, no flows, no platform)
 
 set -euo pipefail
+
+resolve_script_dir() {
+  local source="$1"
+  while [ -L "$source" ]; do
+    local dir
+    dir="$(cd "$(dirname "$source")" && pwd)"
+    source="$(readlink "$source")"
+    case "$source" in
+      /*) ;;
+      *) source="$dir/$source" ;;
+    esac
+  done
+  cd "$(dirname "$source")" && pwd
+}
+
+SCRIPT_DIR="$(resolve_script_dir "${BASH_SOURCE[0]}")"
+VERIFY_CLI="$SCRIPT_DIR/../packages/rn-dev-agent-core/dist/maestro-runner-pin.js"
+if [ ! -f "$VERIFY_CLI" ]; then
+  VERIFY_CLI="$SCRIPT_DIR/../rn-dev-agent-core/dist/maestro-runner-pin.js"
+fi
 
 PLATFORM=""
 FLOW_DIR=""
@@ -42,15 +63,8 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# Find maestro-runner
-RUNNER=""
-if command -v maestro-runner &>/dev/null; then
-  RUNNER="maestro-runner"
-elif [ -x "$HOME/.maestro-runner/bin/maestro-runner" ]; then
-  RUNNER="$HOME/.maestro-runner/bin/maestro-runner"
-else
-  echo "ERROR: maestro-runner not found."
-  echo "Install: curl -fsSL https://open.devicelab.dev/install/maestro-runner | bash"
+if [ ! -f "$VERIFY_CLI" ]; then
+  echo "ERROR: packaged maestro-runner replay entry point was not found."
   exit 2
 fi
 
@@ -69,95 +83,21 @@ fi
 # Find flow directory
 if [ -z "$FLOW_DIR" ]; then
   # Walk up from CWD to find .rn-agent/actions/
-  LEGACY_FOUND=""
   DIR="$PWD"
   while [ "$DIR" != "/" ]; do
     if [ -d "$DIR/.rn-agent/actions" ]; then
       FLOW_DIR="$DIR/.rn-agent/actions"
       break
     fi
-    if [ -z "$LEGACY_FOUND" ] && [ -d "$DIR/.maestro/flows" ]; then
-      LEGACY_FOUND="$DIR/.maestro/flows"
-    fi
     DIR=$(dirname "$DIR")
   done
   if [ -z "$FLOW_DIR" ]; then
-    if [ -n "$LEGACY_FOUND" ]; then
-      echo "ERROR: No .rn-agent/actions/ directory found." >&2
-      echo "NOTE: D1208 changed the default flow directory from .maestro/flows/ to .rn-agent/actions/." >&2
-      echo "      Found .maestro/flows/ at $LEGACY_FOUND — run with --flow-dir $LEGACY_FOUND" >&2
-      echo "      to keep prior behavior, or run /rn-dev-agent:setup to scaffold the new layout." >&2
-    else
-      echo "ERROR: No .rn-agent/actions/ directory found. Run /rn-dev-agent:setup or pass --flow-dir explicitly." >&2
-    fi
+    echo "ERROR: No owned .rn-agent/actions/ directory found. Run /rn-dev-agent:setup and migrate or create compatible owned actions." >&2
     exit 2
   fi
 fi
 
-# Discover flows
-FLOWS=()
-while IFS= read -r -d '' f; do
-  if [ -n "$PATTERN" ]; then
-    if echo "$f" | grep -qiE "$PATTERN"; then
-      FLOWS+=("$f")
-    fi
-  else
-    FLOWS+=("$f")
-  fi
-done < <(find "$FLOW_DIR" -name '*.yaml' -o -name '*.yml' | sort | tr '\n' '\0')
-
-if [ ${#FLOWS[@]} -eq 0 ]; then
-  echo "ERROR: No Maestro flows found in $FLOW_DIR"
-  [ -n "$PATTERN" ] && echo "  (pattern: $PATTERN)"
-  exit 2
-fi
-
-# Run flows
-echo "rn-verify — Maestro E2E Regression Suite"
-echo "========================================="
-echo "Platform:  $PLATFORM"
-echo "Flow dir:  $FLOW_DIR"
-echo "Flows:     ${#FLOWS[@]}"
-echo "Timeout:   ${TIMEOUT}ms per flow"
-[ -n "$PATTERN" ] && echo "Pattern:   $PATTERN"
-echo ""
-
-PASSED=0
-FAILED=0
-ERRORS=()
-
-for FLOW in "${FLOWS[@]}"; do
-  NAME=$(basename "$FLOW")
-  START=$(python3 -c 'import time; print(int(time.time()*1000))')
-
-  if "$RUNNER" --platform "$PLATFORM" --timeout "$((TIMEOUT / 1000))" test "$FLOW" > /tmp/rn-verify-output.txt 2>&1; then
-    DURATION=$(( $(python3 -c 'import time; print(int(time.time()*1000))') - START ))
-    echo "  PASS  $NAME  (${DURATION}ms)"
-    PASSED=$((PASSED + 1))
-  else
-    DURATION=$(( $(python3 -c 'import time; print(int(time.time()*1000))') - START ))
-    echo "  FAIL  $NAME  (${DURATION}ms)"
-    FAILED=$((FAILED + 1))
-    ERRORS+=("$NAME")
-    if $STOP_ON_FAILURE; then
-      echo ""
-      echo "Stopped after first failure (--stop-on-failure)"
-      break
-    fi
-  fi
-done
-
-echo ""
-echo "-----------------------------------------"
-echo "Results: $PASSED passed, $FAILED failed (${#FLOWS[@]} total)"
-
-if [ $FAILED -gt 0 ]; then
-  echo ""
-  echo "Failed flows:"
-  for E in "${ERRORS[@]}"; do
-    echo "  - $E"
-  done
-  exit 1
-fi
-
-exit 0
+VERIFY_ARGS=(verify-actions --platform "$PLATFORM" --flow-dir "$FLOW_DIR" --timeout "$TIMEOUT")
+[ -n "$PATTERN" ] && VERIFY_ARGS+=(--pattern "$PATTERN")
+$STOP_ON_FAILURE && VERIFY_ARGS+=(--stop-on-failure)
+exec node "$VERIFY_CLI" "${VERIFY_ARGS[@]}"
