@@ -8,10 +8,13 @@ import {
   LOGIN_PROLOGUE_BLOCKED,
 } from '../../dist/domain/login-prologue.js';
 import { createLoginPrologueHandler } from '../../dist/tools/login-prologue.js';
-import { createRunActionHandler } from '../../dist/tools/run-action.js';
 import { failResult, okResult } from '../../dist/utils.js';
 import { appendRunRecordToSidecar } from '../helpers/action-state.ts';
-import { createTmpProject, fixtureYaml } from '../helpers/tmp-project.js';
+import {
+  createPinnedRunActionHandler,
+  createTmpProject,
+  fixtureYaml,
+} from '../helpers/tmp-project.js';
 
 function parse(result: { content: Array<{ text?: string }> }) {
   return JSON.parse(result.content[0]?.text ?? '{}');
@@ -145,7 +148,7 @@ test('login prologue seals selector replay against every CDP fallback', async (t
   t.after(() => project.cleanup());
   seedLoginAction(project);
   let replayDepsCalled = false;
-  const runAction = createRunActionHandler({
+  const runAction = createPinnedRunActionHandler({
     maestroRun: async () => ({
       content: [
         {
@@ -187,7 +190,7 @@ test('login prologue rejects a passing result from a divergent runner pin', asyn
   const project = createTmpProject();
   t.after(() => project.cleanup());
   seedLoginAction(project);
-  const runAction = createRunActionHandler({
+  const runAction = createPinnedRunActionHandler({
     maestroRun: async () =>
       okResult({
         passed: true,
@@ -236,7 +239,7 @@ test('strict replay refuses success when RunRecord persistence is not committed'
   const project = createTmpProject();
   t.after(() => project.cleanup());
   seedLoginAction(project);
-  const runAction = createRunActionHandler({
+  const runAction = createPinnedRunActionHandler({
     maestroRun: async () => {
       writeFileSync(project.sidecarPath('user-login'), '{invalid-sidecar', 'utf8');
       return okResult({ passed: true, transport: 'maestro-runner' });
