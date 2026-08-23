@@ -91,6 +91,7 @@ export function parseWorktreeRecords(porcelain) {
     return records;
 }
 function parseFirstWorktreeRecord(porcelain) {
+    // Git guarantees the main worktree is first; verify only that record and fail closed.
     const separator = porcelain.indexOf('\n\n');
     const block = separator === -1 ? porcelain : porcelain.slice(0, separator);
     const lines = block.split('\n');
