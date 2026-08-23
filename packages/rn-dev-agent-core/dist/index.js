@@ -58,7 +58,7 @@ import { acceptDeeplinkOpenConfirmation, createDeviceAcceptSystemDialogHandler, 
 import { createDevicePickValueHandler, createDevicePickDateHandler, } from './tools/device-picker.js';
 import { createNavGraphHandler } from './tools/nav-graph.js';
 import { createDeviceBatchHandler } from './tools/device-batch.js';
-import { handleAutoLogin } from './tools/auto-login.js';
+import { autoLoginToolResult, handleAutoLogin } from './tools/auto-login.js';
 import { createProofStepHandler } from './tools/proof-step.js';
 import { createDisconnectHandler, createTargetsHandler } from './tools/connection.js';
 import { createRestartHandler } from './tools/restart.js';
@@ -2471,22 +2471,7 @@ trackedTool('cdp_auto_login', 'Explicit legacy navigation helper that detects an
         .optional()
         .describe('Platform override (auto-detected from session if omitted)'),
 }, withConnection(getClient, async (args, client) => {
-    const result = await handleAutoLogin(client, args);
-    if (result === null)
-        return failResult('CDP not connected or helpers not injected');
-    if (result.loggedIn)
-        return okResult(result);
-    if (result.reason.includes('not on an auth screen'))
-        return okResult(result);
-    return {
-        content: [
-            {
-                type: 'text',
-                text: JSON.stringify({ ok: false, error: result.reason, data: result }),
-            },
-        ],
-        isError: true,
-    };
+    return autoLoginToolResult(await handleAutoLogin(client, args));
 }));
 trackedTool('proof_step', 'Atomic proof capture step: navigate to a screen (optional), wait for settlement, verify an element (optional), and take a screenshot. Combines 3-4 tool calls into one. Use in proof flows to reduce tool-call overhead.', {
     screen: z

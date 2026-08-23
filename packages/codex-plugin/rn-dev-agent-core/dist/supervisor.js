@@ -87570,17 +87570,21 @@ async function handleAutoLogin(client2, opts = {}, deps = {}) {
   if (!onAuth) {
     return { loggedIn: false, reason: "App is not on an auth screen" };
   }
-  const platform = opts.platform;
+  const session2 = (deps.getSession ?? getActiveSession)();
+  const platform = opts.platform ?? session2?.platform;
   if (platform !== "ios" && platform !== "android") {
     return {
       loggedIn: false,
       reason: 'Cannot determine platform. Pass platform="ios" or platform="android" explicitly, or open a device session first.'
     };
   }
-  if (!opts.deviceId) {
+  const deviceId = opts.deviceId ?? (session2?.platform === platform ? session2.deviceId : void 0);
+  if (!deviceId) {
     return {
       loggedIn: false,
-      reason: `Auto-login requires an owned ${platform} session bound to one exact device.`
+      reason: `Auto-login requires an owned ${platform} session bound to one exact device.`,
+      code: "DEVICE_AUTHORITY_MISMATCH",
+      nextAction: 'Run rn_session with action "status" and repair the device authority binding, then retry cdp_auto_login.'
     };
   }
   const boundProjectRoot = (deps.boundProjectRoot ?? boundSessionProjectRoot)();
@@ -87676,7 +87680,7 @@ async function handleAutoLogin(client2, opts = {}, deps = {}) {
   const replay = await maestroRun({
     inlineYaml: wrapperContent,
     platform,
-    deviceId: opts.deviceId,
+    deviceId,
     timeoutMs: 12e4,
     ...managedAuthority
   });
@@ -87707,10 +87711,22 @@ async function handleAutoLogin(client2, opts = {}, deps = {}) {
     flow: flowPath
   };
 }
+function autoLoginToolResult(result) {
+  if (result === null)
+    return failResult("CDP not connected or helpers not injected");
+  if (result.loggedIn || result.reason.includes("not on an auth screen"))
+    return okResult(result);
+  if (result.code) {
+    return failResult(result.reason, result.code, result.nextAction ? { nextAction: result.nextAction } : void 0);
+  }
+  return failResult(result.reason);
+}
 var AUTH_ROUTE_PATTERNS, LOGIN_FLOW_PRIORITY;
 var init_auto_login = __esm({
   "packages/rn-dev-agent-core/dist/tools/auto-login.js"() {
     "use strict";
+    init_utils();
+    init_agent_device_wrapper();
     init_storage();
     init_project_config();
     init_maestro_validator();
@@ -94297,22 +94313,7 @@ var init_index = __esm({
       appId: external_exports.string().optional().describe("App bundle ID override (auto-detected from app.json if omitted)"),
       platform: external_exports.enum(["ios", "android"]).optional().describe("Platform override (auto-detected from session if omitted)")
     }, withConnection(getClient, async (args, client2) => {
-      const result = await handleAutoLogin(client2, args);
-      if (result === null)
-        return failResult("CDP not connected or helpers not injected");
-      if (result.loggedIn)
-        return okResult(result);
-      if (result.reason.includes("not on an auth screen"))
-        return okResult(result);
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify({ ok: false, error: result.reason, data: result })
-          }
-        ],
-        isError: true
-      };
+      return autoLoginToolResult(await handleAutoLogin(client2, args));
     }));
     trackedTool("proof_step", "Atomic proof capture step: navigate to a screen (optional), wait for settlement, verify an element (optional), and take a screenshot. Combines 3-4 tool calls into one. Use in proof flows to reduce tool-call overhead.", {
       screen: external_exports.string().optional().describe("Screen to navigate to (omit to stay on current screen)"),

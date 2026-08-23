@@ -1,7 +1,9 @@
 import { lstatSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import type { CDPClient } from '../cdp-client.js';
-import type { ToolResult } from '../utils.js';
+import { failResult, okResult, type ToolResult } from '../utils.js';
+import type { SessionState, ToolErrorCode } from '../types.js';
+import { getActiveSession } from '../agent-device-wrapper.js';
 import { findProjectRoot } from '../nav-graph/storage.js';
 import { readAppId } from '../project-config.js';
 import {
@@ -54,6 +56,8 @@ export interface AutoLoginResult {
   loggedIn: boolean;
   reason: string;
   flow?: string;
+  code?: ToolErrorCode;
+  nextAction?: string;
 }
 
 function matchesAuthPattern(routeName: string): boolean {
@@ -154,6 +158,7 @@ function containsClearState(value: unknown): boolean {
 interface AutoLoginDeps {
   boundProjectRoot?: () => string | null;
   projectRoot?: () => string | null;
+  getSession?: () => Pick<SessionState, 'platform' | 'deviceId'> | null;
   maestroRun?: (args: MaestroRunArgs) => Promise<ToolResult>;
 }
 
@@ -198,7 +203,8 @@ export async function handleAutoLogin(
     return { loggedIn: false, reason: 'App is not on an auth screen' };
   }
 
-  const platform = opts.platform;
+  const session = (deps.getSession ?? getActiveSession)();
+  const platform = opts.platform ?? session?.platform;
   if (platform !== 'ios' && platform !== 'android') {
     return {
       loggedIn: false,
@@ -206,10 +212,14 @@ export async function handleAutoLogin(
         'Cannot determine platform. Pass platform="ios" or platform="android" explicitly, or open a device session first.',
     };
   }
-  if (!opts.deviceId) {
+  const deviceId = opts.deviceId ?? (session?.platform === platform ? session.deviceId : undefined);
+  if (!deviceId) {
     return {
       loggedIn: false,
       reason: `Auto-login requires an owned ${platform} session bound to one exact device.`,
+      code: 'DEVICE_AUTHORITY_MISMATCH',
+      nextAction:
+        'Run rn_session with action "status" and repair the device authority binding, then retry cdp_auto_login.',
     };
   }
 
@@ -325,7 +335,7 @@ export async function handleAutoLogin(
   const replay = await maestroRun({
     inlineYaml: wrapperContent,
     platform,
-    deviceId: opts.deviceId,
+    deviceId,
     timeoutMs: 120_000,
     ...managedAuthority,
   });
@@ -338,8 +348,6 @@ export async function handleAutoLogin(
     };
   }
 
-  // Poll for the auth screen to disappear instead of a blind 3s wait — returns
-  // as soon as login lands, and tolerates a slower transition.
   let stillOnAuth = true;
   const authDeadline = Date.now() + 5000;
   do {
@@ -360,4 +368,17 @@ export async function handleAutoLogin(
     reason: 'Auto-login via Maestro subflow succeeded',
     flow: flowPath,
   };
+}
+
+export function autoLoginToolResult(result: AutoLoginResult | null): ToolResult {
+  if (result === null) return failResult('CDP not connected or helpers not injected');
+  if (result.loggedIn || result.reason.includes('not on an auth screen')) return okResult(result);
+  if (result.code) {
+    return failResult(
+      result.reason,
+      result.code,
+      result.nextAction ? { nextAction: result.nextAction } : undefined,
+    );
+  }
+  return failResult(result.reason);
 }

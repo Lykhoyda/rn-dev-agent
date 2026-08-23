@@ -99,7 +99,7 @@ import {
 } from './tools/device-picker.js';
 import { createNavGraphHandler } from './tools/nav-graph.js';
 import { createDeviceBatchHandler } from './tools/device-batch.js';
-import { handleAutoLogin } from './tools/auto-login.js';
+import { autoLoginToolResult, handleAutoLogin } from './tools/auto-login.js';
 import { createProofStepHandler } from './tools/proof-step.js';
 import { createDisconnectHandler, createTargetsHandler } from './tools/connection.js';
 import { createRestartHandler } from './tools/restart.js';
@@ -3337,19 +3337,7 @@ trackedTool(
       .describe('Platform override (auto-detected from session if omitted)'),
   },
   withConnection(getClient, async (args: { appId?: string; platform?: string }, client) => {
-    const result = await handleAutoLogin(client, args);
-    if (result === null) return failResult('CDP not connected or helpers not injected');
-    if (result.loggedIn) return okResult(result);
-    if (result.reason.includes('not on an auth screen')) return okResult(result);
-    return {
-      content: [
-        {
-          type: 'text' as const,
-          text: JSON.stringify({ ok: false, error: result.reason, data: result }),
-        },
-      ],
-      isError: true as const,
-    };
+    return autoLoginToolResult(await handleAutoLogin(client, args));
   }),
 );
 
