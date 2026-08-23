@@ -67,7 +67,8 @@ test('a child that ignores SIGTERM is escalated to SIGKILL at the grace cap', as
   assert.equal(child.exitCode, null);
 });
 
-test('a handle surviving SIGKILL is refused at the backstop (retry must not stack)', async () => {
+test('a handle surviving SIGKILL is refused at the backstop (retry must not stack)', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
   // A real process cannot survive SIGKILL, so the unkillable-zombie shape is
   // modelled with a handle that reports itself live and never emits 'exit'.
   const signals: Array<string | undefined> = [];
@@ -80,13 +81,20 @@ test('a handle surviving SIGKILL is refused at the backstop (retry must not stac
     },
   }) as unknown as ChildProcess;
 
-  const t0 = Date.now();
-  const settled = await awaitChildExit(zombie, 100);
-  const elapsed = Date.now() - t0;
+  let settled: boolean | undefined;
+  const settling = awaitChildExit(zombie, 100).then((result) => {
+    settled = result;
+    return result;
+  });
 
-  assert.equal(settled, false, 'a surviving process must refuse the retry');
+  t.mock.timers.tick(100);
   assert.deepEqual(signals, ['SIGKILL'], 'escalation is attempted before giving up');
-  assert.ok(elapsed >= 2100, `backstop fired early: ${elapsed}ms`);
+  t.mock.timers.tick(1999);
+  await Promise.resolve();
+  assert.equal(settled, undefined, 'the process remains unsettled before the backstop');
+
+  t.mock.timers.tick(1);
+  assert.equal(await settling, false, 'a surviving process must refuse the retry');
   assert.equal(
     (zombie as unknown as EventEmitter).listenerCount('exit'),
     0,
