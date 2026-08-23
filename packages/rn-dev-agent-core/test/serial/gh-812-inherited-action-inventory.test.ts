@@ -1,34 +1,56 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
-import { applyInheritance, planInheritance } from '../../dist/session/worktree-inheritance.js';
 import { fixtureYaml } from '../helpers/tmp-project.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const CORE_ROOT = join(HERE, '..', '..');
+const INHERIT_CLI = join(CORE_ROOT, 'dist', 'worktree-inheritance.js');
 const LEARNED_CLI = join(CORE_ROOT, 'dist', 'learned-actions.js');
+const HANG_CEILING_MS = 30_000;
 
 function git(cwd: string, args: string[]): void {
   const result = spawnSync('git', args, { cwd, encoding: 'utf8' });
   assert.equal(result.status, 0, `git ${args.join(' ')} failed: ${result.stderr}`);
 }
 
-function inventory(root: string): {
+function nodeCli(entry: string, args: string[], cwd: string): {
   durationMs: number;
   status: number | null;
   stderr: string;
   stdout: string;
 } {
   const started = performance.now();
-  const result = spawnSync(
-    process.execPath,
+  const result = spawnSync(process.execPath, [entry, ...args], {
+    cwd,
+    encoding: 'utf8',
+    timeout: HANG_CEILING_MS,
+  });
+  if (result.error) throw result.error;
+  return {
+    durationMs: performance.now() - started,
+    status: result.status,
+    stderr: result.stderr ?? '',
+    stdout: result.stdout ?? '',
+  };
+}
+
+function inventory(root: string) {
+  return nodeCli(
+    LEARNED_CLI,
     [
-      LEARNED_CLI,
       '--json',
       '--section',
       'b',
@@ -41,15 +63,8 @@ function inventory(root: string): {
       '--max',
       '5',
     ],
-    { cwd: root, encoding: 'utf8', timeout: 30_000 },
+    root,
   );
-  if (result.error) throw result.error;
-  return {
-    durationMs: performance.now() - started,
-    status: result.status,
-    stderr: result.stderr ?? '',
-    stdout: result.stdout ?? '',
-  };
 }
 
 function actionIds(stdout: string): string[] {
@@ -94,9 +109,22 @@ test('32-worktree canonical and inherited inventory stay within the serial user-
       ]);
     }
 
-    const applied = applyInheritance({ cwd: linked, appRoot: linked, host: 'claude' });
-    assert.equal(applied.applied, 1, JSON.stringify(applied));
-    const plan = planInheritance({ cwd: linked, appRoot: linked, host: 'claude' });
+    mkdirSync(join(linked, '.rn-agent'), { recursive: true });
+    symlinkSync(
+      join(primary, '.rn-agent', 'actions'),
+      join(linked, '.rn-agent', 'actions'),
+      'dir',
+    );
+
+    const planned = nodeCli(
+      INHERIT_CLI,
+      ['plan', '--host', 'claude', '--app-root', linked, '--json'],
+      linked,
+    );
+    assert.equal(planned.status, 0, `${planned.stderr}\n${planned.stdout}`);
+    const plan = JSON.parse(planned.stdout) as {
+      resources: Array<{ state: string }>;
+    };
     assert.equal(plan.resources[0]?.state, 'LINK_VALID_SAFE');
 
     const canonical = inventory(primary);
