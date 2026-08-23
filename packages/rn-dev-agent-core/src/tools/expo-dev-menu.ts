@@ -199,7 +199,13 @@ export function classifyForegroundSurface(
   ) {
     return 'expo_dev_menu';
   }
-  if (has('open debugger') || has('configure bundler')) return 'react_native_dev_menu';
+  if (
+    has('open debugger') ||
+    has('configure bundler') ||
+    (has('react native dev menu') && has('open devtools') && has('change bundle location'))
+  ) {
+    return 'react_native_dev_menu';
+  }
   if (!boundAppId) return 'unknown';
   const hasBoundApp = nodes.some(
     (node) => node.packageName === boundAppId || node.type === 'Application',

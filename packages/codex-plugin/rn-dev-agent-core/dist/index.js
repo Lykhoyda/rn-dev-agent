@@ -78376,8 +78376,9 @@ function classifyForegroundSurface(nodes, boundAppId) {
   if (has("toggle performance monitor") && has("toggle element inspector") || has("copy system info") && has("open devtools")) {
     return "expo_dev_menu";
   }
-  if (has("open debugger") || has("configure bundler"))
+  if (has("open debugger") || has("configure bundler") || has("react native dev menu") && has("open devtools") && has("change bundle location")) {
     return "react_native_dev_menu";
+  }
   if (!boundAppId)
     return "unknown";
   const hasBoundApp = nodes.some((node) => node.packageName === boundAppId || node.type === "Application");

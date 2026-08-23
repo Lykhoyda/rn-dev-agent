@@ -117,6 +117,18 @@ test('foreground classifier keeps Expo sheet, picker, tutorial, RN core menu, an
   );
   assert.equal(classifyForegroundSurface([{ label: 'Open Debugger' }]), 'react_native_dev_menu');
   assert.equal(
+    classifyForegroundSurface(
+      [
+        { label: 'React Native Dev Menu', packageName: 'com.example.app' },
+        { label: 'Open DevTools', packageName: 'com.example.app' },
+        { label: 'Change Bundle Location', packageName: 'com.example.app' },
+        ...normalAndroidSystemChrome(),
+      ],
+      'com.example.app',
+    ),
+    'react_native_dev_menu',
+  );
+  assert.equal(
     classifyForegroundSurface([{ label: 'Home', type: 'Application' }], 'com.example.app'),
     'app',
   );
@@ -267,6 +279,28 @@ for (const platform of ['ios', 'android']) {
     assert.equal(calls.length, 0);
   });
 }
+
+test('Android React Native core dev menu stops without invoking a close action', async () => {
+  const appId = 'com.example.app';
+  const coreMenuSnapshot = snapshotEnvelope([
+    { label: 'React Native Dev Menu', packageName: appId },
+    { label: 'Open DevTools', packageName: appId },
+    { label: 'Change Bundle Location', packageName: appId },
+    ...normalAndroidSystemChrome(),
+  ]);
+  const probeForegroundSurface = async () => foregroundSurfaceFromSnapshot(coreMenuSnapshot, appId);
+  const { client, calls } = hideEval('android', { value: 'ok:hideMenu' });
+  const handler = createDevSettingsHandler(() => client, {
+    probeForegroundSurface,
+    settleAfterHide: async () => {},
+  });
+
+  const data = expectOk(await handler({ action: 'hideDevMenu' }));
+  assert.equal(data.outcome, 'no_menu_present');
+  assert.equal(data.surface, 'react_native_dev_menu');
+  assert.equal(data.executed, false);
+  assert.equal(calls.length, 0);
+});
 
 for (const sentinel of ['no_module', 'no_method_available']) {
   test(`dev_settings hideDevMenu: ${sentinel} -> DEV_MENU_HIDE_FAILED`, async () => {
