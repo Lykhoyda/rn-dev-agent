@@ -29,7 +29,6 @@
 //     mask underlying screen churn).
 
 import { randomUUID } from 'node:crypto';
-import { dirname } from 'node:path';
 import { okResult, failResult } from '../utils.js';
 import type { ToolResult } from '../utils.js';
 import type { ToolErrorCode } from '../types.js';
