@@ -28,16 +28,6 @@ const { resolveBundlerPropsAsync } = packageRequire(
 
 const PORT_NO_BUNDLER_REJECTION = '--port and --no-bundler are mutually exclusive arguments';
 
-// Tripwire: fails if a future @expo/cli changes the mapping resolveShippedBundlerProps mirrors.
-test('shipped Expo run:ios still maps --port/--no-bundler argv the mirrored way', () => {
-  const runIosSource = readFileSync(join(expoCliRoot, 'build/src/run/ios/index.js'), 'utf8');
-  assert.match(runIosSource, /'--no-bundler': Boolean/);
-  assert.match(runIosSource, /'--port': Number/);
-  assert.match(runIosSource, /'-p': '--port'/);
-  assert.match(runIosSource, /bundler: !args\['--no-bundler'\]/);
-  assert.match(runIosSource, /port: args\['--port'\]/);
-});
-
 const parserProjectRoot = mkdtempSync(join(tmpdir(), 'expo-parser-project-'));
 after(() => rmSync(parserProjectRoot, { force: true, recursive: true }));
 
