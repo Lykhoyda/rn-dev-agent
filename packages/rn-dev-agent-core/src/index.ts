@@ -47,7 +47,7 @@ import type { CdpReplayDeps } from './tools/cdp-replay-dispatch.js';
 import { createDispatchHandler } from './tools/dispatch.js';
 import { createMmkvHandler } from './tools/mmkv.js';
 import { createDevSettingsHandler } from './tools/dev-settings.js';
-import { foregroundSurfaceFromSnapshot, type ForegroundSurface } from './tools/expo-dev-menu.js';
+import { createForegroundSurfaceProbe } from './tools/expo-dev-menu.js';
 import { createInteractHandler } from './tools/interact.js';
 import { createCollectLogsHandler } from './tools/collect-logs.js';
 import { createDeviceListHandler, createDeviceScreenshotHandler } from './tools/device-list.js';
@@ -428,22 +428,11 @@ addToolObserver((o) => strictProofMonitor.record(o));
 addToolObserver((o) => experienceRecorder.observe(o));
 
 const authorityRuntime = getWorkerAuthorityRuntime();
-const probeForegroundSurface = async (): Promise<ForegroundSurface> => {
-  const status = authorityRuntime.status();
-  const session = getActiveSession();
-  if (!status.available || !status.bindings.runner || !session) return 'unknown';
-  const device = status.bindings.device as Record<string, unknown> | undefined;
-  const platform = device?.platform;
-  if (
-    (platform !== 'ios' && platform !== 'android') ||
-    session.platform !== platform ||
-    session.deviceId !== device?.deviceId ||
-    session.appId !== device?.appId
-  ) {
-    return 'unknown';
-  }
-  return foregroundSurfaceFromSnapshot(await runNative(['snapshot'], { platform }), session.appId);
-};
+const probeForegroundSurface = createForegroundSurfaceProbe({
+  getAuthorityStatus: () => authorityRuntime.status(),
+  getActiveSession,
+  runNative,
+});
 setRegistryDeviceBindingProvider(() =>
   mapRegistryDeviceBinding(authorityRuntime.status(), authorityRuntime.available),
 );

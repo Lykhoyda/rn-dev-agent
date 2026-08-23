@@ -26,22 +26,35 @@ function surfaceText(nodes) {
         .map((value) => value.trim().toLowerCase())
         .filter(Boolean));
 }
+function isNonBlockingNavigationChrome(node, packageName) {
+    if (packageName !== 'com.android.systemui')
+        return false;
+    const identifier = typeof node.identifier === 'string' ? node.identifier.trim().toLowerCase() : '';
+    if ([
+        'back',
+        'home',
+        'recent_apps',
+        'recents',
+        'overview',
+        'navigation_bar_frame',
+        'nav_bar_background',
+        'navbuttons_view',
+        'start_contextual_buttons',
+        'end_contextual_buttons',
+        'end_nav_buttons',
+        'home_handle',
+    ].includes(identifier)) {
+        return true;
+    }
+    const label = typeof node.label === 'string' ? node.label.trim().toLowerCase() : '';
+    const type = typeof node.type === 'string' ? node.type.toLowerCase() : '';
+    return ['back', 'home', 'recents', 'overview'].includes(label) && type.includes('imageview');
+}
 function isBlockingForeignSurface(node, boundAppId) {
     const packageName = typeof node.packageName === 'string' ? node.packageName.trim() : '';
     if (!packageName || packageName === boundAppId)
         return false;
-    const shellPackage = packageName === 'com.android.systemui' ||
-        packageName.includes('launcher') ||
-        packageName.includes('nexuslauncher');
-    if (!shellPackage)
-        return true;
-    const type = typeof node.type === 'string' ? node.type.toLowerCase() : '';
-    const identity = [node.label, node.identifier]
-        .filter((value) => typeof value === 'string')
-        .join(' ')
-        .toLowerCase();
-    return (['alert', 'dialog', 'popup', 'button', 'edittext'].some((value) => type.includes(value)) ||
-        ['alert', 'dialog', 'permission', 'chooser', 'resolver', 'modal', 'popup'].some((value) => identity.includes(value)));
+    return !isNonBlockingNavigationChrome(node, packageName);
 }
 export function classifyForegroundSurface(nodes, boundAppId) {
     const text = surfaceText(nodes);
@@ -79,6 +92,24 @@ export function foregroundSurfaceFromSnapshot(result, boundAppId) {
     catch {
         return 'unknown';
     }
+}
+export function createForegroundSurfaceProbe(dependencies) {
+    return async () => {
+        const status = dependencies.getAuthorityStatus();
+        const session = dependencies.getActiveSession();
+        const runner = status.bindings?.runner;
+        if (!status.available || !runner || !session)
+            return 'unknown';
+        const device = status.bindings?.device;
+        const platform = device?.platform;
+        if ((platform !== 'ios' && platform !== 'android') ||
+            session.platform !== platform ||
+            session.deviceId !== device?.deviceId ||
+            session.appId !== device?.appId) {
+            return 'unknown';
+        }
+        return foregroundSurfaceFromSnapshot(await dependencies.runNative(['snapshot'], { platform }), session.appId);
+    };
 }
 function parseSentinel(value, attempts) {
     const sentinel = typeof value === 'string' ? value : '';
@@ -188,21 +219,13 @@ export async function hideExpoDevMenu(client, options = {}) {
                 attempts,
             };
         }
-        if (outcome.reason.startsWith('No ExpoDevMenu'))
-            return outcome;
+        if (outcome.reason.startsWith('No ExpoDevMenu')) {
+            if (!successfulCall)
+                return outcome;
+            break;
+        }
         if (attempt < retries)
             await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
     }
     return successfulCall ? { ...successfulCall, attempts: outcome.attempts } : outcome;
-}
-export async function autoDismissDevMenuMeta(client) {
-    try {
-        if (client.connectedTarget?.platform !== 'ios')
-            return {};
-        await hideExpoDevMenu(client, { retries: 1 });
-        return {};
-    }
-    catch {
-        return {};
-    }
 }

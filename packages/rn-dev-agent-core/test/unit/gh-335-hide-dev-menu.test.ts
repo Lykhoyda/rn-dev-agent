@@ -2,23 +2,41 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { runInNewContext } from 'node:vm';
 import {
-  autoDismissDevMenuMeta,
   classifyForegroundSurface,
+  createForegroundSurfaceProbe,
   foregroundSurfaceFromSnapshot,
   hideExpoDevMenu,
   HIDE_EXPO_DEV_MENU_EXPRESSION,
   RESOLVE_EXPO_DEV_MENU,
 } from '../../dist/tools/expo-dev-menu.js';
+import {
+  _setActiveSessionForTest,
+  _setRunAgentDeviceForTest,
+  getActiveSession,
+  runNative,
+} from '../../dist/agent-device-wrapper.js';
 import { CDPClient } from '../../dist/cdp-client.js';
 import { planeForTool } from '../../dist/lifecycle/device-arbiter.js';
 import { authorityProfileFor } from '../../dist/session/tool-profiles.js';
 import { createDevSettingsHandler } from '../../dist/tools/dev-settings.js';
+import { createReloadHandler } from '../../dist/tools/reload.js';
 import { createMockClient } from '../helpers/mock-cdp-client.js';
 import { expectOk, parseEnvelope } from '../helpers/result-helpers.js';
 
 function surfaceProbe(...surfaces) {
   let index = 0;
   return async () => surfaces[Math.min(index++, surfaces.length - 1)];
+}
+
+function snapshotEnvelope(nodes) {
+  return {
+    content: [
+      {
+        type: 'text',
+        text: JSON.stringify({ ok: true, data: { nodes } }),
+      },
+    ],
+  };
 }
 
 function hideEval(platform, ...values) {
@@ -97,6 +115,7 @@ test('foreground classifier keeps Expo sheet, picker, tutorial, RN core menu, an
         {
           label: 'Back',
           type: 'android.widget.ImageView',
+          identifier: 'back',
           packageName: 'com.android.systemui',
         },
       ],
@@ -112,6 +131,34 @@ test('foreground classifier keeps Expo sheet, picker, tutorial, RN core menu, an
           label: 'While using the app',
           type: 'android.widget.Button',
           packageName: 'com.android.permissioncontroller',
+        },
+      ],
+      'com.example.app',
+    ),
+    'unknown',
+  );
+  assert.equal(
+    classifyForegroundSurface(
+      [
+        { label: 'Home', packageName: 'com.example.app' },
+        {
+          label: 'No notifications',
+          type: 'android.widget.TextView',
+          packageName: 'com.android.systemui',
+        },
+      ],
+      'com.example.app',
+    ),
+    'unknown',
+  );
+  assert.equal(
+    classifyForegroundSurface(
+      [
+        { label: 'Home', packageName: 'com.example.app' },
+        {
+          label: 'Home screen',
+          type: 'android.widget.FrameLayout',
+          packageName: 'com.google.android.apps.nexuslauncher',
         },
       ],
       'com.example.app',
@@ -193,6 +240,19 @@ test('hideExpoDevMenu preserves attempted-call truth for a rejected native promi
   assert.equal(outcome.callSent, true);
   assert.equal(outcome.method, 'hideMenu');
   assert.match(outcome.reason, /native rejection/);
+});
+
+test('a later resolution failure cannot erase an earlier close invocation', async () => {
+  const { handler, calls } = handlerFor(
+    'android',
+    ['expo_dev_menu', 'app'],
+    [{ value: 'ok:hideMenu' }, { value: 'no_module' }],
+  );
+  const data = expectOk(await handler({ action: 'hideDevMenu' }));
+  assert.equal(data.outcome, 'hidden');
+  assert.equal(data.method, 'hideMenu');
+  assert.equal(data.attempts, 2);
+  assert.equal(calls.length, 2);
 });
 
 test('mixed bound-app and permission-dialog evidence cannot yield hidden', async () => {
@@ -278,6 +338,51 @@ test('a never-settling native close remains sent and returns unverified after on
   assert.equal(closeCalls, 2);
 });
 
+test('a polling transport failure preserves sent invocation truth across the retry', async () => {
+  let closeCalls = 0;
+  const context = {
+    expo: {
+      modules: {
+        ExpoDevMenu: {
+          hideMenu: () => {
+            closeCalls++;
+            return new Promise(() => {});
+          },
+        },
+      },
+    },
+    setTimeout: () => 0,
+  };
+  const asyncClient = new CDPClient(8081);
+  Reflect.set(asyncClient, 'sendWithTimeout', async (_method, params) => {
+    if (params.expression.startsWith("globalThis['__rn_agent_async_")) {
+      throw new Error('WebSocket closed during async poll');
+    }
+    return { result: { value: runInNewContext(params.expression, context) } };
+  });
+  const client = createMockClient({
+    _connectedTarget: {
+      id: 'page1',
+      title: 'React Native (Hermes)',
+      vm: 'Hermes',
+      webSocketDebuggerUrl: 'ws://127.0.0.1:8081/debugger/page1',
+      platform: 'android',
+    },
+    evaluate: (expression, awaitPromise) => asyncClient.evaluate(expression, awaitPromise, 1_000),
+  });
+  const handler = createDevSettingsHandler(() => client, {
+    probeForegroundSurface: surfaceProbe('expo_dev_menu', 'expo_dev_menu'),
+    settleAfterHide: async () => {},
+  });
+
+  const envelope = parseEnvelope(await handler({ action: 'hideDevMenu' }));
+  assert.equal(envelope.code, 'DEV_MENU_HIDE_UNVERIFIED');
+  assert.equal(envelope.meta.callSent, true);
+  assert.equal(envelope.meta.method, 'hideMenu');
+  assert.equal(envelope.meta.attempts, 2);
+  assert.equal(closeCalls, 2);
+});
+
 test('dev_settings hideDevMenu: close sent but post-probe remains occluded -> unverified', async () => {
   const { handler } = handlerFor(
     'android',
@@ -348,6 +453,14 @@ test('hideDevMenu does not replay its bounded retry after stale-helper detection
 test('dev_settings hideDevMenu executes only ExpoDevMenu without touch or BACK capabilities', async () => {
   const invoked = [];
   const forbidden = [];
+  const nativeCommands = [];
+  const appId = 'com.example.app';
+  const deviceId = 'emulator-5554';
+  const snapshots = [
+    [{ label: 'Copy system info' }, { label: 'Open DevTools' }],
+    [{ label: 'Home', packageName: appId }],
+  ];
+  let snapshotIndex = 0;
   const recordForbidden = (name) => () => forbidden.push(name);
   const expoDevMenu = {
     hideMenu: () => {
@@ -391,15 +504,46 @@ test('dev_settings hideDevMenu executes only ExpoDevMenu without touch or BACK c
       return { value: await runInNewContext(expression, context) };
     },
   });
-  const handler = createDevSettingsHandler(() => client, {
-    probeForegroundSurface: surfaceProbe('expo_dev_menu', 'expo_dev_menu'),
-    settleAfterHide: async () => {},
+  _setActiveSessionForTest({
+    name: 'dev-menu-test',
+    platform: 'android',
+    deviceId,
+    appId,
+    openedAt: new Date(0).toISOString(),
   });
+  _setRunAgentDeviceForTest(async (args, options) => {
+    nativeCommands.push({ args, platform: options.platform });
+    return snapshotEnvelope(snapshots[Math.min(snapshotIndex++, snapshots.length - 1)]);
+  });
+  try {
+    const probeForegroundSurface = createForegroundSurfaceProbe({
+      getAuthorityStatus: () => ({
+        available: true,
+        bindings: {
+          runner: { instanceId: 'runner-1' },
+          device: { platform: 'android', deviceId, appId },
+        },
+      }),
+      getActiveSession,
+      runNative,
+    });
+    const handler = createDevSettingsHandler(() => client, {
+      probeForegroundSurface,
+      settleAfterHide: async () => {},
+    });
 
-  const envelope = parseEnvelope(await handler({ action: 'hideDevMenu' }));
-  assert.equal(envelope.code, 'DEV_MENU_HIDE_UNVERIFIED');
-  assert.deepEqual(invoked, ['ExpoDevMenu.hideMenu', 'ExpoDevMenu.hideMenu']);
-  assert.deepEqual(forbidden, []);
+    const data = expectOk(await handler({ action: 'hideDevMenu' }));
+    assert.equal(data.outcome, 'hidden');
+    assert.deepEqual(invoked, ['ExpoDevMenu.hideMenu', 'ExpoDevMenu.hideMenu']);
+    assert.deepEqual(forbidden, []);
+    assert.deepEqual(nativeCommands, [
+      { args: ['snapshot'], platform: 'android' },
+      { args: ['snapshot'], platform: 'android' },
+    ]);
+  } finally {
+    _setRunAgentDeviceForTest(null);
+    _setActiveSessionForTest(null);
+  }
 });
 
 test('ExpoDevMenu resolution never falls through to the React Native core DevMenu', async () => {
@@ -426,10 +570,56 @@ test('hideDevMenu requires runner authority and an interaction lease for its nat
   assert.equal(planeForTool('cdp_dev_settings', { action: 'disableDevMenu' }), null);
 });
 
-test('reload keeps best-effort iOS dismissal without reporting unverified success', async () => {
-  const { client, calls } = hideEval('ios', { value: 'ok:hideMenu' }, { value: 'ok:hideMenu' });
-  assert.deepEqual(await autoDismissDevMenuMeta(client), {});
-  assert.equal(calls.length, 2);
+test('reload does not invoke ExpoDevMenu implicitly', async () => {
+  let client;
+  let reloadCalls = 0;
+  let expoDevMenuCalls = 0;
+  const evaluations = [];
+  const context = {
+    __turboModuleProxy: (name) => {
+      if (name === 'DevSettings') {
+        return {
+          reload: () => {
+            reloadCalls++;
+            client._isConnected = false;
+          },
+        };
+      }
+      if (name === 'ExpoDevMenu') {
+        return {
+          hideMenu: () => {
+            expoDevMenuCalls++;
+          },
+        };
+      }
+      return null;
+    },
+  };
+  client = createMockClient({
+    evaluate: async (expression) => {
+      evaluations.push(expression);
+      return { value: runInNewContext(expression, context) };
+    },
+    softReconnect: async () => {
+      client._isConnected = true;
+      client._helpersInjected = true;
+    },
+    probeHelperFreshness: async () => ({ fresh: true, version: 40, probed: true }),
+  });
+  const handler = createReloadHandler(
+    () => client,
+    (next) => {
+      client = next;
+    },
+    () => client,
+    { sleep: async () => {} },
+  );
+
+  const data = expectOk(await handler({ full: true }));
+  assert.equal(data.reloaded, true);
+  assert.equal(reloadCalls, 1);
+  assert.equal(expoDevMenuCalls, 0);
+  assert.equal(evaluations.length, 1);
 });
 
 test('HIDE_EXPO_DEV_MENU_EXPRESSION is syntactically valid JS', () => {

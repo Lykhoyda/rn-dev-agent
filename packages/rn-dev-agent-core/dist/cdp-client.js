@@ -811,6 +811,12 @@ export class CDPClient {
         catch {
             asyncStartValue = undefined;
         }
+        const clearAsyncSlot = () => {
+            void this.sendWithTimeout('Runtime.evaluate', {
+                expression: `delete globalThis['${slot}']`,
+                returnByValue: true,
+            }, 1000).catch(() => { });
+        };
         // B45 fix: Use absolute deadline to guarantee total wall-clock stays within timeout.
         // Each poll gets only the remaining time (min 500ms) to avoid overshooting.
         while (Date.now() < deadline) {
@@ -818,16 +824,23 @@ export class CDPClient {
             if (remaining < 500)
                 break;
             const pollTimeout = Math.min(remaining - 100, 1500);
-            const check = (await this.sendWithTimeout('Runtime.evaluate', {
-                expression: `globalThis['${slot}']`,
-                returnByValue: true,
-            }, pollTimeout));
+            let check;
+            try {
+                check = (await this.sendWithTimeout('Runtime.evaluate', {
+                    expression: `globalThis['${slot}']`,
+                    returnByValue: true,
+                }, pollTimeout));
+            }
+            catch (error) {
+                clearAsyncSlot();
+                return {
+                    value: asyncStartValue,
+                    error: `Async evaluation polling failed: ${error instanceof Error ? error.message : String(error)}`,
+                };
+            }
             const val = check?.result?.value;
             if (val && typeof val === 'object') {
-                void this.sendWithTimeout('Runtime.evaluate', {
-                    expression: `delete globalThis['${slot}']`,
-                    returnByValue: true,
-                }, 1000).catch(() => { });
+                clearAsyncSlot();
                 if ('e' in val)
                     return { value: asyncStartValue, error: String(val.e) };
                 try {
@@ -839,10 +852,7 @@ export class CDPClient {
             }
             await sleep(100);
         }
-        void this.sendWithTimeout('Runtime.evaluate', {
-            expression: `delete globalThis['${slot}']`,
-            returnByValue: true,
-        }, 1000).catch(() => { });
+        clearAsyncSlot();
         return {
             value: asyncStartValue,
             error: 'Promise did not resolve within ' + timeout + 'ms',

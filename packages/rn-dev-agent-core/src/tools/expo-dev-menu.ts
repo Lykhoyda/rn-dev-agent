@@ -16,6 +16,23 @@ interface SurfaceNode {
   packageName?: unknown;
 }
 
+interface ForegroundSurfaceProbeSession {
+  platform?: string;
+  deviceId?: string;
+  appId?: string;
+}
+
+interface ForegroundSurfaceProbeAuthority {
+  available: boolean;
+  bindings?: Record<string, unknown>;
+}
+
+interface ForegroundSurfaceProbeDependencies {
+  getAuthorityStatus: () => ForegroundSurfaceProbeAuthority;
+  getActiveSession: () => ForegroundSurfaceProbeSession | null;
+  runNative: (args: string[], options: { platform: 'ios' | 'android' }) => Promise<ToolResult>;
+}
+
 export const RESOLVE_EXPO_DEV_MENU = `(function () {
   try { var e = globalThis.expo; if (e && e.modules && e.modules.ExpoDevMenu) return e.modules.ExpoDevMenu; } catch (e0) {}
   try { var nm = require("react-native").NativeModules; if (nm && nm.ExpoDevMenu) return nm.ExpoDevMenu; } catch (e1) {}
@@ -62,25 +79,37 @@ function surfaceText(nodes: SurfaceNode[]): string[] {
   );
 }
 
+function isNonBlockingNavigationChrome(node: SurfaceNode, packageName: string): boolean {
+  if (packageName !== 'com.android.systemui') return false;
+  const identifier =
+    typeof node.identifier === 'string' ? node.identifier.trim().toLowerCase() : '';
+  if (
+    [
+      'back',
+      'home',
+      'recent_apps',
+      'recents',
+      'overview',
+      'navigation_bar_frame',
+      'nav_bar_background',
+      'navbuttons_view',
+      'start_contextual_buttons',
+      'end_contextual_buttons',
+      'end_nav_buttons',
+      'home_handle',
+    ].includes(identifier)
+  ) {
+    return true;
+  }
+  const label = typeof node.label === 'string' ? node.label.trim().toLowerCase() : '';
+  const type = typeof node.type === 'string' ? node.type.toLowerCase() : '';
+  return ['back', 'home', 'recents', 'overview'].includes(label) && type.includes('imageview');
+}
+
 function isBlockingForeignSurface(node: SurfaceNode, boundAppId: string): boolean {
   const packageName = typeof node.packageName === 'string' ? node.packageName.trim() : '';
   if (!packageName || packageName === boundAppId) return false;
-  const shellPackage =
-    packageName === 'com.android.systemui' ||
-    packageName.includes('launcher') ||
-    packageName.includes('nexuslauncher');
-  if (!shellPackage) return true;
-  const type = typeof node.type === 'string' ? node.type.toLowerCase() : '';
-  const identity = [node.label, node.identifier]
-    .filter((value): value is string => typeof value === 'string')
-    .join(' ')
-    .toLowerCase();
-  return (
-    ['alert', 'dialog', 'popup', 'button', 'edittext'].some((value) => type.includes(value)) ||
-    ['alert', 'dialog', 'permission', 'chooser', 'resolver', 'modal', 'popup'].some((value) =>
-      identity.includes(value),
-    )
-  );
+  return !isNonBlockingNavigationChrome(node, packageName);
 }
 
 export function classifyForegroundSurface(
@@ -128,6 +157,31 @@ export function foregroundSurfaceFromSnapshot(
   } catch {
     return 'unknown';
   }
+}
+
+export function createForegroundSurfaceProbe(
+  dependencies: ForegroundSurfaceProbeDependencies,
+): () => Promise<ForegroundSurface> {
+  return async () => {
+    const status = dependencies.getAuthorityStatus();
+    const session = dependencies.getActiveSession();
+    const runner = status.bindings?.runner;
+    if (!status.available || !runner || !session) return 'unknown';
+    const device = status.bindings?.device as Record<string, unknown> | undefined;
+    const platform = device?.platform;
+    if (
+      (platform !== 'ios' && platform !== 'android') ||
+      session.platform !== platform ||
+      session.deviceId !== device?.deviceId ||
+      session.appId !== device?.appId
+    ) {
+      return 'unknown';
+    }
+    return foregroundSurfaceFromSnapshot(
+      await dependencies.runNative(['snapshot'], { platform }),
+      session.appId,
+    );
+  };
 }
 
 function parseSentinel(value: unknown, attempts: number): HideDevMenuCallOutcome {
@@ -246,19 +300,12 @@ export async function hideExpoDevMenu(
       };
     }
 
-    if (outcome.reason.startsWith('No ExpoDevMenu')) return outcome;
+    if (outcome.reason.startsWith('No ExpoDevMenu')) {
+      if (!successfulCall) return outcome;
+      break;
+    }
     if (attempt < retries) await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
   }
 
   return successfulCall ? { ...successfulCall, attempts: outcome.attempts } : outcome;
-}
-
-export async function autoDismissDevMenuMeta(client: CDPClient): Promise<Record<string, unknown>> {
-  try {
-    if (client.connectedTarget?.platform !== 'ios') return {};
-    await hideExpoDevMenu(client, { retries: 1 });
-    return {};
-  } catch {
-    return {};
-  }
 }
