@@ -22,6 +22,7 @@ import { test } from 'node:test';
 import { createHash } from 'node:crypto';
 import {
   applyInheritance,
+  assertReadableActionOperationUnchanged,
   captureReadableActionOperationSnapshot,
   planInheritance,
   readableActionsSnapshot,
@@ -397,8 +398,11 @@ test('inventory and replay Git calls are independent of action count', () => {
     assert.equal(Object.isFrozen(operation.directoryIdentity), true);
     assert.equal(Object.isFrozen(operation.linkIdentity), true);
     assert.equal(Object.isFrozen(operation.primaryIdentity), true);
-    assert.equal(operation.primaryIdentity?.topLevel, fixture.primary);
-    assert.equal(operation.primaryIdentity?.commonDir, realpathSync(join(fixture.primary, '.git')));
+    assert.equal(operation.primaryIdentity?.topLevel.path, fixture.primary);
+    assert.equal(
+      operation.primaryIdentity?.commonDir.path,
+      realpathSync(join(fixture.primary, '.git')),
+    );
   } finally {
     fixture.cleanup();
   }
@@ -687,6 +691,28 @@ test('inventory refuses every inherited corpus identity mutation between file lo
     } finally {
       fixture.cleanup();
     }
+  }
+});
+
+test('operation snapshot refuses a replaced Git common-directory identity', () => {
+  const fixture = makeFixture();
+  try {
+    seedLoginCorpus(fixture.primary);
+    const worktree = addWorktree(fixture);
+    inherit(worktree);
+    const corpus = resolveReadableActionCorpus(worktree);
+    assert.equal(corpus.status, 'approved-inherited');
+    const operation = captureReadableActionOperationSnapshot(corpus);
+    assert.ok(operation);
+    const commonDir = realpathSync(join(fixture.primary, '.git'));
+    renameSync(commonDir, join(fixture.root, 'original-git-common-dir'));
+    mkdirSync(commonDir);
+    assert.throws(
+      () => assertReadableActionOperationUnchanged(operation),
+      /Refusing replaced learned-action corpus symlink/,
+    );
+  } finally {
+    fixture.cleanup();
   }
 });
 

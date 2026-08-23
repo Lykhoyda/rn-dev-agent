@@ -10556,6 +10556,12 @@ function readableActionsSnapshot(corpus) {
 function freezeIdentity(identity) {
   return Object.freeze({ ...identity });
 }
+function captureDirectoryIdentity(path) {
+  const stat = lstatIfPresent(path);
+  if (!stat || stat.isSymbolicLink() || !stat.isDirectory())
+    return null;
+  return Object.freeze({ path, identity: freezeIdentity(identityOf(stat)) });
+}
 function captureReadableActionOperationSnapshot(corpus) {
   const operationId = `${process.pid}:${++readableActionOperationSequence}`;
   if (corpus.status === "owned-directory") {
@@ -10569,6 +10575,10 @@ function captureReadableActionOperationSnapshot(corpus) {
     });
   }
   if (corpus.status === "approved-inherited") {
+    const topLevel = captureDirectoryIdentity(corpus.primaryRoot);
+    const commonDir = captureDirectoryIdentity(corpus.commonDir);
+    if (!topLevel || !commonDir)
+      throw new Error(refuseReplacedActions(corpus.actionsDir).reason);
     return Object.freeze({
       operationId,
       kind: corpus.status,
@@ -10577,10 +10587,7 @@ function captureReadableActionOperationSnapshot(corpus) {
       directory: corpus.targetDir,
       directoryIdentity: freezeIdentity(corpus.targetIdentity),
       linkIdentity: freezeIdentity(corpus.linkIdentity),
-      primaryIdentity: Object.freeze({
-        topLevel: corpus.primaryRoot,
-        commonDir: corpus.commonDir
-      })
+      primaryIdentity: Object.freeze({ topLevel, commonDir })
     });
   }
   return null;
@@ -10597,7 +10604,7 @@ function assertReadableActionOperationUnchanged(snapshot) {
   if (snapshot.kind === "owned-directory") {
     unchanged = unchanged && currentIdentityMatches(snapshot.actionsDir, snapshot.directoryIdentity, "directory") && canonical(snapshot.actionsDir) === snapshot.directory;
   } else {
-    unchanged = unchanged && Boolean(snapshot.linkIdentity && snapshot.primaryIdentity) && currentIdentityMatches(snapshot.actionsDir, snapshot.linkIdentity, "symlink") && currentIdentityMatches(snapshot.directory, snapshot.directoryIdentity, "directory") && canonical(snapshot.actionsDir) === snapshot.directory && canonical(snapshot.directory) === snapshot.directory;
+    unchanged = unchanged && Boolean(snapshot.linkIdentity && snapshot.primaryIdentity) && currentIdentityMatches(snapshot.actionsDir, snapshot.linkIdentity, "symlink") && currentIdentityMatches(snapshot.directory, snapshot.directoryIdentity, "directory") && currentIdentityMatches(snapshot.primaryIdentity.topLevel.path, snapshot.primaryIdentity.topLevel.identity, "directory") && currentIdentityMatches(snapshot.primaryIdentity.commonDir.path, snapshot.primaryIdentity.commonDir.identity, "directory") && canonical(snapshot.actionsDir) === snapshot.directory && canonical(snapshot.directory) === snapshot.directory && canonical(snapshot.primaryIdentity.topLevel.path) === snapshot.primaryIdentity.topLevel.path && canonical(snapshot.primaryIdentity.commonDir.path) === snapshot.primaryIdentity.commonDir.path;
   }
   if (!unchanged)
     throw new Error(refuseReplacedActions(snapshot.actionsDir).reason);

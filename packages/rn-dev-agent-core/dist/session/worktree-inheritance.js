@@ -490,6 +490,12 @@ let readableActionOperationSequence = 0;
 function freezeIdentity(identity) {
     return Object.freeze({ ...identity });
 }
+function captureDirectoryIdentity(path) {
+    const stat = lstatIfPresent(path);
+    if (!stat || stat.isSymbolicLink() || !stat.isDirectory())
+        return null;
+    return Object.freeze({ path, identity: freezeIdentity(identityOf(stat)) });
+}
 export function captureReadableActionOperationSnapshot(corpus) {
     const operationId = `${process.pid}:${++readableActionOperationSequence}`;
     if (corpus.status === 'owned-directory') {
@@ -503,6 +509,10 @@ export function captureReadableActionOperationSnapshot(corpus) {
         });
     }
     if (corpus.status === 'approved-inherited') {
+        const topLevel = captureDirectoryIdentity(corpus.primaryRoot);
+        const commonDir = captureDirectoryIdentity(corpus.commonDir);
+        if (!topLevel || !commonDir)
+            throw new Error(refuseReplacedActions(corpus.actionsDir).reason);
         return Object.freeze({
             operationId,
             kind: corpus.status,
@@ -511,10 +521,7 @@ export function captureReadableActionOperationSnapshot(corpus) {
             directory: corpus.targetDir,
             directoryIdentity: freezeIdentity(corpus.targetIdentity),
             linkIdentity: freezeIdentity(corpus.linkIdentity),
-            primaryIdentity: Object.freeze({
-                topLevel: corpus.primaryRoot,
-                commonDir: corpus.commonDir,
-            }),
+            primaryIdentity: Object.freeze({ topLevel, commonDir }),
         });
     }
     return null;
@@ -540,8 +547,14 @@ export function assertReadableActionOperationUnchanged(snapshot) {
                 Boolean(snapshot.linkIdentity && snapshot.primaryIdentity) &&
                 currentIdentityMatches(snapshot.actionsDir, snapshot.linkIdentity, 'symlink') &&
                 currentIdentityMatches(snapshot.directory, snapshot.directoryIdentity, 'directory') &&
+                currentIdentityMatches(snapshot.primaryIdentity.topLevel.path, snapshot.primaryIdentity.topLevel.identity, 'directory') &&
+                currentIdentityMatches(snapshot.primaryIdentity.commonDir.path, snapshot.primaryIdentity.commonDir.identity, 'directory') &&
                 canonical(snapshot.actionsDir) === snapshot.directory &&
-                canonical(snapshot.directory) === snapshot.directory;
+                canonical(snapshot.directory) === snapshot.directory &&
+                canonical(snapshot.primaryIdentity.topLevel.path) ===
+                    snapshot.primaryIdentity.topLevel.path &&
+                canonical(snapshot.primaryIdentity.commonDir.path) ===
+                    snapshot.primaryIdentity.commonDir.path;
     }
     if (!unchanged)
         throw new Error(refuseReplacedActions(snapshot.actionsDir).reason);
