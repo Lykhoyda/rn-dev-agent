@@ -8,6 +8,7 @@ import {
   readFileSync,
   readdirSync,
   renameSync,
+  rmSync,
   statSync,
   symlinkSync,
   utimesSync,
@@ -45,6 +46,7 @@ import {
 } from '../../dist/domain/action-store.js';
 import { prepareActionVerificationSuite } from '../../dist/domain/action-verification-suite.js';
 import { runMaestroInline } from '../../dist/maestro-invoke.js';
+import { parseAndValidateFlow } from '../../dist/domain/maestro-validator.js';
 import { readProcessBirth } from '../../dist/session/process-birth.js';
 import { createTmpProject } from '../helpers/tmp-project.js';
 
@@ -715,10 +717,13 @@ test('cdp_run_action preflights relative subflows from the action directory', as
     ),
     'utf8',
   );
-  let replayedPath: string | undefined;
+  let replayedCommands: unknown[] = [];
   const handler = createRunActionHandler({
     maestroRun: async (args) => {
-      replayedPath = args.flowPath;
+      assert.equal(args.flowPath, undefined);
+      assert.equal(args.actionMetadata?.id, 'checkout');
+      assert.equal(args.actionMetadata?.enginePin, 'maestro-runner@1.1.24');
+      replayedCommands = parseAndValidateFlow(args.inlineYaml ?? '').commands;
       return { content: [{ type: 'text', text: '{"ok":true,"data":{"passed":true}}' }] };
     },
     engineStatus: async () => PINNED(),
@@ -728,7 +733,7 @@ test('cdp_run_action preflights relative subflows from the action directory', as
   const envelope = JSON.parse(result.content[0]!.text);
 
   assert.equal(envelope.ok, true);
-  assert.equal(replayedPath, join(dir, 'checkout.yaml'));
+  assert.deepEqual(replayedCommands.at(-1), { tapOn: { id: 'continue' } });
 });
 
 test('maestro_generate emits a pinned replayable action without regex waits', async () => {
@@ -899,6 +904,61 @@ test('maestro_run refuses a drifted learned action before spawn', async () => {
   assert.equal(body.ok, false);
   assert.match(String(body.error), /1\.0\.9/);
   assert.equal(spawned, false);
+});
+
+test('maestro_run executes the captured action after its path changes', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-action-direct-snapshot-'));
+  const dir = join(root, '.rn-agent', 'actions');
+  mkdirSync(dir, { recursive: true });
+  const flowPath = join(dir, 'login.yaml');
+  const foreignPath = join(root, 'foreign.yaml');
+  writeFileSync(
+    flowPath,
+    actionYaml(
+      'login',
+      '# enginePin: maestro-runner@1.1.24',
+      '- tapOn:\n    id: "captured-selector"\n',
+    ),
+  );
+  writeFileSync(
+    foreignPath,
+    actionYaml(
+      'login',
+      '# enginePin: maestro-runner@1.1.24',
+      '- tapOn:\n    id: "foreign-selector"\n',
+    ),
+  );
+  let safeFlowFile = '';
+  let executedYaml = '';
+  const handler = createMaestroRunHandler({
+    getActiveSession: () => ({ platform: 'ios', deviceId: 'SIM', appId: 'com.test.app' }) as never,
+    chooseDispatch: () => ({
+      runner: 'maestro-runner',
+      binPath: '/fake/maestro-runner',
+      buildArgs: (_platform, file) => {
+        safeFlowFile = file;
+        return ['test', file];
+      },
+    }),
+    resolveEngineStatus: async () => PINNED(),
+    parkFlow: async (run) => run(),
+    claimNativeOrigin: async () => {},
+    completeNativeOrigin: async () => {},
+    relaunchManagedApp: async () => {},
+    reproveManagedOrigin: async () => {},
+    completeRunnerPark: async () => {},
+    execFile: async () => {
+      rmSync(flowPath);
+      symlinkSync(foreignPath, flowPath);
+      executedYaml = readFileSync(safeFlowFile, 'utf8');
+      return { stdout: 'Flow PASSED', stderr: '' };
+    },
+  });
+
+  await handler({ platform: 'ios', flowPath });
+
+  assert.match(executedYaml, /captured-selector/);
+  assert.doesNotMatch(executedYaml, /foreign-selector/);
 });
 
 test('maestro_run enforces M7 engine metadata outside the learned-action directory', async () => {
@@ -1226,14 +1286,72 @@ test('action suite execution snapshots preserve the bytes accepted by preflight'
   const suite = prepareActionVerificationSuite([first, second], dir, PINNED());
   assert.deepEqual(suite.errors, []);
   assert.equal(suite.prepared.length, 2);
+  const foreign = join(root, 'foreign.yaml');
   writeFileSync(
-    second,
+    foreign,
     actionYaml('b', '# enginePin: maestro-runner@1.1.24', '- copyTextFrom: "Log.n"\n'),
     'utf8',
   );
+  rmSync(second);
+  symlinkSync(foreign, second);
 
   assert.doesNotMatch(suite.prepared[1]!.inlineYaml, /Log\.n/);
   assert.match(readFileSync(second, 'utf8'), /Log\.n/);
+});
+
+test('maestro_test_all executes captured actions after their paths change', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-owned-suite-snapshot-run-'));
+  const dir = join(root, '.rn-agent', 'actions');
+  mkdirSync(dir, { recursive: true });
+  const flowPath = join(dir, 'browse.yaml');
+  const foreignPath = join(root, 'foreign.yaml');
+  writeFileSync(
+    flowPath,
+    actionYaml(
+      'browse',
+      '# enginePin: maestro-runner@1.1.24',
+      '- tapOn:\n    id: "captured-suite-selector"\n',
+    ),
+  );
+  writeFileSync(
+    foreignPath,
+    actionYaml(
+      'browse',
+      '# enginePin: maestro-runner@1.1.24',
+      '- tapOn:\n    id: "foreign-suite-selector"\n',
+    ),
+  );
+  let safeFlowFile = '';
+  let executedYaml = '';
+  const handler = createMaestroTestAllHandler({
+    getActiveSession: () => ({ platform: 'ios', deviceId: 'SIM', appId: 'com.test.app' }) as never,
+    chooseDispatch: () => ({
+      runner: 'maestro-runner',
+      binPath: '/fake/maestro-runner',
+      buildArgs: (_platform, file) => {
+        safeFlowFile = file;
+        return ['test', file];
+      },
+    }),
+    resolveEngineStatus: async () => PINNED(),
+    parkFlow: async (run) => run(),
+    claimNativeOrigin: async () => {},
+    completeNativeOrigin: async () => {},
+    relaunchManagedApp: async () => {},
+    reproveManagedOrigin: async () => {},
+    completeRunnerPark: async () => {},
+    execFile: async () => {
+      rmSync(flowPath);
+      symlinkSync(foreignPath, flowPath);
+      executedYaml = readFileSync(safeFlowFile, 'utf8');
+      return { stdout: 'Flow PASSED', stderr: '' };
+    },
+  });
+
+  await handler({ platform: 'ios', flowDir: dir });
+
+  assert.match(executedYaml, /captured-suite-selector/);
+  assert.doesNotMatch(executedYaml, /foreign-suite-selector/);
 });
 
 test('maestro_test_all revalidates the exact pin before each subprocess', async () => {
@@ -1383,5 +1501,39 @@ test('maestro_test_all refuses a nested action subflow directory', async () => {
     assert.equal(envelope.ok, false);
     assert.match(String(envelope.error), /descendant/);
   }
+  assert.equal(spawned, false);
+});
+
+test('maestro_test_all refuses an unapproved alias to an action corpus', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-owned-suite-alias-'));
+  const dir = join(root, '.rn-agent', 'actions');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(
+    join(dir, 'browse.yaml'),
+    actionYaml('browse', '# enginePin: maestro-runner@1.1.24'),
+    'utf8',
+  );
+  const directoryAlias = join(root, 'action-link');
+  symlinkSync(dir, directoryAlias, 'dir');
+  let spawned = false;
+  const handler = createMaestroTestAllHandler({
+    getActiveSession: () => ({ platform: 'ios', deviceId: 'SIM', appId: 'com.test.app' }) as never,
+    chooseDispatch: () => ({
+      runner: 'maestro-runner',
+      binPath: '/fake/maestro-runner',
+      buildArgs: () => [],
+    }),
+    resolveEngineStatus: async () => PINNED(),
+    execFile: async () => {
+      spawned = true;
+      return { stdout: '', stderr: '' };
+    },
+  });
+
+  const result = await handler({ platform: 'ios', flowDir: directoryAlias });
+  const envelope = JSON.parse(result.content[0]!.text);
+
+  assert.equal(envelope.ok, false);
+  assert.match(String(envelope.error), /approved load context/);
   assert.equal(spawned, false);
 });

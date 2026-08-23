@@ -36,6 +36,7 @@ struct statx {
 #define O_RDONLY 0
 #define O_NOFOLLOW 0x20000
 #define O_CLOEXEC 0x80000
+#define O_DIRECTORY 0x10000
 #define RENAME_EXCHANGE 2
 #define RENAME_NOREPLACE 1
 #define STATX_BASIC_STATS 0x7ff
@@ -52,6 +53,8 @@ struct statx {
 #define SYS_RENAMEAT2 316
 #define SYS_STATX 332
 #define SYS_EXECVEAT 322
+#define SYS_WRITE 1
+#define SYS_GETDENTS64 217
 static long syscall6(long number, long a1, long a2, long a3, long a4, long a5, long a6) {
   register long r10 __asm__("r10") = a4;
   register long r8 __asm__("r8") = a5;
@@ -72,6 +75,8 @@ __asm__(".global _start\\n_start:\\nmov (%rsp), %rdi\\nlea 8(%rsp), %rsi\\n"
 #define SYS_RENAMEAT2 276
 #define SYS_STATX 291
 #define SYS_EXECVEAT 281
+#define SYS_WRITE 64
+#define SYS_GETDENTS64 61
 static long syscall6(long number, long a1, long a2, long a3, long a4, long a5, long a6) {
   register long x0 __asm__("x0") = a1;
   register long x1 __asm__("x1") = a2;
@@ -120,6 +125,11 @@ static int safe_name(const char *value) {
   for (; *value; value++) if (*value == '/') return 0;
   return 1;
 }
+static u64 text_length(const char *value) {
+  u64 length = 0;
+  while (value[length]) length++;
+  return length;
+}
 static u64 device_number(const struct statx *value) {
   u64 major = value->dev_major;
   u64 minor = value->dev_minor;
@@ -133,6 +143,118 @@ static int descriptor_stat(long fd, struct statx *value) {
   char empty = 0;
   return call5(SYS_STATX, fd, (long)&empty, AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW,
                STATX_BASIC_STATS, (long)value) == 0;
+}
+static int write_all(const void *bytes, u64 size) {
+  const u8 *cursor = bytes;
+  while (size > 0) {
+    long written = syscall6(SYS_WRITE, 1, (long)cursor, size, 0, 0, 0);
+    if (written <= 0) return 0;
+    cursor += written;
+    size -= (u64)written;
+  }
+  return 1;
+}
+static long open_verified_directory(const char *path, u64 expected_dev, u64 expected_ino) {
+  long directory_fd = call4(
+      SYS_OPENAT, AT_FDCWD, (long)path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_DIRECTORY, 0);
+  struct statx directory_stat;
+  if (directory_fd < 0 || !descriptor_stat(directory_fd, &directory_stat) ||
+      !directory(&directory_stat) || device_number(&directory_stat) != expected_dev ||
+      directory_stat.ino != expected_ino) {
+    if (directory_fd >= 0) syscall6(SYS_CLOSE, directory_fd, 0, 0, 0, 0, 0);
+    return -1;
+  }
+  return directory_fd;
+}
+static long open_relative_regular(long directory_fd, const char *relative_path) {
+  if (!*relative_path || *relative_path == '/') return -1;
+  long current = directory_fd;
+  const char *cursor = relative_path;
+  for (;;) {
+    char component[256];
+    u64 length = 0;
+    while (cursor[length] && cursor[length] != '/') {
+      if (length + 1 >= sizeof(component)) return -1;
+      component[length] = cursor[length];
+      length++;
+    }
+    component[length] = 0;
+    if (!safe_name(component)) return -1;
+    int last = cursor[length] == 0;
+    long next = call4(
+        SYS_OPENAT,
+        current,
+        (long)component,
+        O_RDONLY | O_NOFOLLOW | O_CLOEXEC | (last ? 0 : O_DIRECTORY),
+        0);
+    if (current != directory_fd) syscall6(SYS_CLOSE, current, 0, 0, 0, 0, 0);
+    if (next < 0) return -1;
+    current = next;
+    if (last) break;
+    cursor += length + 1;
+    if (!*cursor) {
+      syscall6(SYS_CLOSE, current, 0, 0, 0, 0, 0);
+      return -1;
+    }
+  }
+  struct statx opened;
+  if (!descriptor_stat(current, &opened) || !regular(&opened)) {
+    syscall6(SYS_CLOSE, current, 0, 0, 0, 0, 0);
+    return -1;
+  }
+  return current;
+}
+struct linux_dirent64 {
+  u64 ino;
+  i64 offset;
+  u16 record_length;
+  u8 type;
+  char name[];
+};
+static int read_directory_entry(
+    const char *directory_path,
+    const char *relative_path,
+    u64 expected_dev,
+    u64 expected_ino) {
+  long directory_fd = open_verified_directory(directory_path, expected_dev, expected_ino);
+  if (directory_fd < 0) return 10;
+  long entry_fd = open_relative_regular(directory_fd, relative_path);
+  syscall6(SYS_CLOSE, directory_fd, 0, 0, 0, 0, 0);
+  if (entry_fd < 0) return 10;
+  u8 buffer[16384];
+  u64 offset = 0;
+  for (;;) {
+    long count = call4(SYS_PREAD64, entry_fd, (long)buffer, sizeof(buffer), offset);
+    if (count < 0) return 11;
+    if (count == 0) break;
+    if (!write_all(buffer, (u64)count)) return 11;
+    offset += (u64)count;
+  }
+  syscall6(SYS_CLOSE, entry_fd, 0, 0, 0, 0, 0);
+  return 0;
+}
+static int list_directory(const char *directory_path, u64 expected_dev, u64 expected_ino) {
+  long directory_fd = open_verified_directory(directory_path, expected_dev, expected_ino);
+  if (directory_fd < 0) return 10;
+  u8 buffer[16384];
+  for (;;) {
+    long count = syscall6(SYS_GETDENTS64, directory_fd, (long)buffer, sizeof(buffer), 0, 0, 0);
+    if (count < 0) return 11;
+    if (count == 0) break;
+    long offset = 0;
+    while (offset < count) {
+      struct linux_dirent64 *entry = (struct linux_dirent64 *)(buffer + offset);
+      if (entry->record_length == 0 || offset + entry->record_length > count) return 11;
+      if (!(entry->name[0] == '.' && entry->name[1] == 0) &&
+          !(entry->name[0] == '.' && entry->name[1] == '.' && entry->name[2] == 0)) {
+        u64 length = text_length(entry->name) + 1;
+        if (!write_all(entry->name, length)) return 11;
+      }
+      offset += entry->record_length;
+    }
+  }
+  syscall6(SYS_CLOSE, directory_fd, 0, 0, 0, 0, 0);
+  return 0;
 }
 static int path_stat(const char *path, struct statx *value) {
   long fd = open_read(path);
@@ -254,6 +376,30 @@ __attribute__((visibility("hidden"))) int helper_main(long argc, char **argv) {
     if (published_fd < 0 || !descriptor_stat(published_fd, &published_stat) ||
         !same_file(&published_stat, &candidate_stat)) return 12;
     return 0;
+  }
+  if (argc == 6 && argv[1][0] == '-' && argv[1][1] == '-' && argv[1][2] == 'r' &&
+      argv[1][3] == 'e' && argv[1][4] == 'a' && argv[1][5] == 'd' &&
+      argv[1][6] == '-' && argv[1][7] == 'd' && argv[1][8] == 'i' &&
+      argv[1][9] == 'r' && argv[1][10] == 'e' && argv[1][11] == 'c' &&
+      argv[1][12] == 't' && argv[1][13] == 'o' && argv[1][14] == 'r' &&
+      argv[1][15] == 'y' && argv[1][16] == '-' && argv[1][17] == 'e' &&
+      argv[1][18] == 'n' && argv[1][19] == 't' && argv[1][20] == 'r' &&
+      argv[1][21] == 'y' && argv[1][22] == 0) {
+    u64 expected_dev;
+    u64 expected_ino;
+    if (!parse_u64(argv[4], &expected_dev) || !parse_u64(argv[5], &expected_ino)) return 2;
+    return read_directory_entry(argv[2], argv[3], expected_dev, expected_ino);
+  }
+  if (argc == 5 && argv[1][0] == '-' && argv[1][1] == '-' && argv[1][2] == 'l' &&
+      argv[1][3] == 'i' && argv[1][4] == 's' && argv[1][5] == 't' &&
+      argv[1][6] == '-' && argv[1][7] == 'd' && argv[1][8] == 'i' &&
+      argv[1][9] == 'r' && argv[1][10] == 'e' && argv[1][11] == 'c' &&
+      argv[1][12] == 't' && argv[1][13] == 'o' && argv[1][14] == 'r' &&
+      argv[1][15] == 'y' && argv[1][16] == 0) {
+    u64 expected_dev;
+    u64 expected_ino;
+    if (!parse_u64(argv[3], &expected_dev) || !parse_u64(argv[4], &expected_ino)) return 2;
+    return list_directory(argv[2], expected_dev, expected_ino);
   }
   if (argc != 7) return 2;
   const char *target_path = argv[2];

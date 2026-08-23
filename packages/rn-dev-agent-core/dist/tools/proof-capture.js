@@ -4,7 +4,7 @@ import { chmodSync, closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, open
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
-import { loadAction, resolveActionPath } from '../domain/action-store.js';
+import { loadAction } from '../domain/action-store.js';
 import { hashProofArgs, hashProofValue, validateTrace, } from '../domain/proof-capture.js';
 import { acceptanceMappingSchema, evidenceReviewSchema, finalProofReceiptSchema, mechanicallyAcceptedProofReceiptSchema, proofActionSchema, proofClassSchema, proofDeviceSchema, proofFixtureSchema, proofIssueSchema, proofPullRequestSchema, proofRuntimeSchema, proofCandidateRuntimeSchema, storyboardSchema, } from '../domain/proof-receipt.js';
 import { failResult, okResult } from '../utils.js';
@@ -433,17 +433,11 @@ export function candidateAuthorityReasons(expected, current, pullRequestHeadSha,
 function sameProofAction(left, right) {
     return left.id === right.id && left.version === right.version && left.sha256 === right.sha256;
 }
-export function readProofActionIdentity(appProjectRoot, actionId) {
+export function readProofActionIdentity(appProjectRoot, actionId, dependencies = {}) {
     try {
-        const path = resolveActionPath(appProjectRoot, actionId);
-        if (!path)
-            return null;
-        const bytesBefore = readFileSync(path);
-        const action = loadAction(appProjectRoot, actionId);
-        const bytesAfter = readFileSync(path);
+        const action = (dependencies.loadAction ?? loadAction)(appProjectRoot, actionId);
         if (!action ||
             action.metadata.id !== actionId ||
-            !bytesBefore.equals(bytesAfter) ||
             !Number.isInteger(action.state.revision) ||
             action.state.revision < 1) {
             return null;
@@ -451,7 +445,7 @@ export function readProofActionIdentity(appProjectRoot, actionId) {
         return {
             id: actionId,
             version: String(action.state.revision),
-            sha256: createHash('sha256').update(bytesAfter).digest('hex'),
+            sha256: createHash('sha256').update(action.yamlText).digest('hex'),
         };
     }
     catch {

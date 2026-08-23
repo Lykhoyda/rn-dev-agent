@@ -275,6 +275,60 @@ function runVerifiedPublicationHelper(helperPath, expectedSha256, args) {
     unlinkSync(boundPath);
   }
 }
+function verifiedFilesystemHelper() {
+  if (process.platform === "darwin") {
+    const helper = verifyDarwinProcessBirthHelper({});
+    return { path: helper.path, sha256: DARWIN_HELPER_MANIFEST.binarySha256 };
+  }
+  if (process.platform === "linux" && (process.arch === "x64" || process.arch === "arm64")) {
+    const architecture = process.arch;
+    return {
+      path: verifiedLinuxPublicationHelper(architecture),
+      sha256: LINUX_PUBLICATION_HELPER_SHA256[architecture]
+    };
+  }
+  throw new Error(`Verified directory reads are unavailable on ${process.platform}/${process.arch}.`);
+}
+function runVerifiedFilesystemHelper(args) {
+  const helper = verifiedFilesystemHelper();
+  const boundPath = `${helper.path}.read.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}`;
+  copyFileSync(helper.path, boundPath, constants.COPYFILE_EXCL | constants.COPYFILE_FICLONE);
+  chmodSync(boundPath, 448);
+  try {
+    if (createHash("sha256").update(readFileSync(boundPath)).digest("hex") !== helper.sha256) {
+      throw new Error("Verified directory helper changed before execution.");
+    }
+    return execFileSync(boundPath, [...args], {
+      maxBuffer: 32 * 1024 * 1024,
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 1e4
+    });
+  } finally {
+    unlinkSync(boundPath);
+  }
+}
+function readFileFromVerifiedDirectory(directoryPath, identity, relativePath) {
+  return runVerifiedFilesystemHelper([
+    "--read-directory-entry",
+    directoryPath,
+    relativePath,
+    identity.dev,
+    identity.ino
+  ]);
+}
+function listVerifiedDirectory(directoryPath, identity) {
+  const output = runVerifiedFilesystemHelper([
+    "--list-directory",
+    directoryPath,
+    identity.dev,
+    identity.ino
+  ]);
+  if (output.length === 0)
+    return [];
+  if (output[output.length - 1] !== 0)
+    throw new Error("Verified directory listing was malformed.");
+  return output.subarray(0, -1).toString("utf8").split("\0").filter((entry) => entry.length > 0 && entry !== "." && entry !== ".." && !entry.includes("/"));
+}
 function linuxConditionalPublicationHelperPath(architecture) {
   const moduleDirectory = dirname(fileURLToPath(import.meta.url));
   const name = `linux-conditional-publication-${architecture}`;
@@ -447,18 +501,18 @@ var init_process_birth = __esm({
     "use strict";
     init_trusted_system_executable();
     DARWIN_HELPER_MANIFEST = {
-      sourceSha256: "5cafc275ab929026203e64527f993cd77e2854f1697cdb419b7d901293e1bc48",
-      recipeSha256: "a1293ae1f70a5da3a4ea9b1b79a095a5f182f7cb39e37521abe87cb1864f625b",
-      stableBinarySha256: "e5dffbe66f7fa52f8e2554fb397b4b44000d8c092feff35e0c42f5f3e0150c3f",
-      binarySha256: "dd8346dab2ccb6e3ce11840bbca5f8ea2f4cbd95efae34ddb130f98824a065aa",
+      sourceSha256: "f97feaa1c0434cd2ee31c0dce56c9308eb17f893a6a771ac1333b62fcec8b702",
+      recipeSha256: "9617fe093885ac5c1043b39aa467754db8427080b52ebafea6f780535c2b3685",
+      stableBinarySha256: "9887a09246c4fc9c7765ef8fee2ae30027bcf0b9227ae408e48682107e4d88b8",
+      binarySha256: "49db19d9cd0ca2e7a78379c1e4b9551532d85447c043c51f06c6e03573c104ad",
       cdhashes: [
-        "0471a3583ce2363ee96afe3e85951dd5fd154dec",
-        "1998527647f4fef05eae6007fe7a1f945aa7c54d"
+        "cebd22e7adf08990d4ff69b3156de03962d44b74",
+        "e3de1b27f4da23957a3acf60ae8f01c6402bd424"
       ]
     };
     LINUX_PUBLICATION_HELPER_SHA256 = {
-      x64: "3851cbf2d01caf77b282f477365613e6d903caf1aff88ea99e8d855eab9bacfb",
-      arm64: "76ba6597b964d6541ec2657195ee515728f9a1270636275b3a55d110267f34da"
+      x64: "93bcb6e186470efd2a0944756d7b2de790182b59a5dcb3377334291076ad6032",
+      arm64: "1d0f2fc75e9eff675f8fd5ca329eca03950339796d2f339a4f59a85c2f97ba63"
     };
     VERIFIED_HELPER_SCRIPT = `
 set -euo pipefail
@@ -880,11 +934,11 @@ async function immediateRunnerPinRefusal(runnerPath, resolveStatus = () => getEn
   const refusal = exactPinRefusal(status);
   if (refusal)
     return `RUNNER_PIN_CHANGED: ${refusal}`;
-  const canonicalPath2 = getMaestroRunnerPath();
-  if (!canonicalPath2 || !status?.selectedPath) {
+  const canonicalPath = getMaestroRunnerPath();
+  if (!canonicalPath || !status?.selectedPath) {
     return "RUNNER_PIN_CHANGED: verified runner path disappeared before execution.";
   }
-  if (resolve(canonicalPath2) !== resolve(runnerPath) || resolve(status.selectedPath) !== resolve(runnerPath)) {
+  if (resolve(canonicalPath) !== resolve(runnerPath) || resolve(status.selectedPath) !== resolve(runnerPath)) {
     return "RUNNER_PIN_CHANGED: verified runner path changed before execution.";
   }
   return null;
@@ -5098,10 +5152,10 @@ var require_resolve_block_map = __commonJS({
       let offset = bm.offset;
       let commentEnd = null;
       for (const collItem of bm.items) {
-        const { start, key, sep: sep6, value } = collItem;
+        const { start, key, sep: sep7, value } = collItem;
         const keyProps = resolveProps.resolveProps(start, {
           indicator: "explicit-key-ind",
-          next: key ?? sep6?.[0],
+          next: key ?? sep7?.[0],
           offset,
           onError,
           parentIndent: bm.indent,
@@ -5115,7 +5169,7 @@ var require_resolve_block_map = __commonJS({
             else if ("indent" in key && key.indent !== bm.indent)
               onError(offset, "BAD_INDENT", startColMsg);
           }
-          if (!keyProps.anchor && !keyProps.tag && !sep6) {
+          if (!keyProps.anchor && !keyProps.tag && !sep7) {
             commentEnd = keyProps.end;
             if (keyProps.comment) {
               if (map.comment)
@@ -5139,7 +5193,7 @@ var require_resolve_block_map = __commonJS({
         ctx.atKey = false;
         if (utilMapIncludes.mapIncludes(ctx, map.items, keyNode))
           onError(keyStart, "DUPLICATE_KEY", "Map keys must be unique");
-        const valueProps = resolveProps.resolveProps(sep6 ?? [], {
+        const valueProps = resolveProps.resolveProps(sep7 ?? [], {
           indicator: "map-value-ind",
           next: value,
           offset: keyNode.range[2],
@@ -5155,7 +5209,7 @@ var require_resolve_block_map = __commonJS({
             if (ctx.options.strict && keyProps.start < valueProps.found.offset - 1024)
               onError(keyNode.range, "KEY_OVER_1024_CHARS", "The : indicator must be at most 1024 chars after the start of an implicit block mapping key");
           }
-          const valueNode = value ? composeNode(ctx, value, valueProps, onError) : composeEmptyNode(ctx, offset, sep6, null, valueProps, onError);
+          const valueNode = value ? composeNode(ctx, value, valueProps, onError) : composeEmptyNode(ctx, offset, sep7, null, valueProps, onError);
           if (ctx.schema.compat)
             utilFlowIndentCheck.flowIndentCheck(bm.indent, value, onError);
           offset = valueNode.range[2];
@@ -5246,7 +5300,7 @@ var require_resolve_end = __commonJS({
       let comment = "";
       if (end) {
         let hasSpace = false;
-        let sep6 = "";
+        let sep7 = "";
         for (const token2 of end) {
           const { source, type } = token2;
           switch (type) {
@@ -5260,13 +5314,13 @@ var require_resolve_end = __commonJS({
               if (!comment)
                 comment = cb;
               else
-                comment += sep6 + cb;
-              sep6 = "";
+                comment += sep7 + cb;
+              sep7 = "";
               break;
             }
             case "newline":
               if (comment)
-                sep6 += source;
+                sep7 += source;
               hasSpace = true;
               break;
             default:
@@ -5309,18 +5363,18 @@ var require_resolve_flow_collection = __commonJS({
       let offset = fc.offset + fc.start.source.length;
       for (let i = 0; i < fc.items.length; ++i) {
         const collItem = fc.items[i];
-        const { start, key, sep: sep6, value } = collItem;
+        const { start, key, sep: sep7, value } = collItem;
         const props = resolveProps.resolveProps(start, {
           flow: fcName,
           indicator: "explicit-key-ind",
-          next: key ?? sep6?.[0],
+          next: key ?? sep7?.[0],
           offset,
           onError,
           parentIndent: fc.indent,
           startOnNewline: false
         });
         if (!props.found) {
-          if (!props.anchor && !props.tag && !sep6 && !value) {
+          if (!props.anchor && !props.tag && !sep7 && !value) {
             if (i === 0 && props.comma)
               onError(props.comma, "UNEXPECTED_TOKEN", `Unexpected , in ${fcName}`);
             else if (i < fc.items.length - 1)
@@ -5374,8 +5428,8 @@ var require_resolve_flow_collection = __commonJS({
             }
           }
         }
-        if (!isMap && !sep6 && !props.found) {
-          const valueNode = value ? composeNode(ctx, value, props, onError) : composeEmptyNode(ctx, props.end, sep6, null, props, onError);
+        if (!isMap && !sep7 && !props.found) {
+          const valueNode = value ? composeNode(ctx, value, props, onError) : composeEmptyNode(ctx, props.end, sep7, null, props, onError);
           coll.items.push(valueNode);
           offset = valueNode.range[2];
           if (isBlock(value))
@@ -5387,7 +5441,7 @@ var require_resolve_flow_collection = __commonJS({
           if (isBlock(key))
             onError(keyNode.range, "BLOCK_IN_FLOW", blockMsg);
           ctx.atKey = false;
-          const valueProps = resolveProps.resolveProps(sep6 ?? [], {
+          const valueProps = resolveProps.resolveProps(sep7 ?? [], {
             flow: fcName,
             indicator: "map-value-ind",
             next: value,
@@ -5398,8 +5452,8 @@ var require_resolve_flow_collection = __commonJS({
           });
           if (valueProps.found) {
             if (!isMap && !props.found && ctx.options.strict) {
-              if (sep6)
-                for (const st of sep6) {
+              if (sep7)
+                for (const st of sep7) {
                   if (st === valueProps.found)
                     break;
                   if (st.type === "newline") {
@@ -5416,7 +5470,7 @@ var require_resolve_flow_collection = __commonJS({
             else
               onError(valueProps.start, "MISSING_CHAR", `Missing , or : between ${fcName} items`);
           }
-          const valueNode = value ? composeNode(ctx, value, valueProps, onError) : valueProps.found ? composeEmptyNode(ctx, valueProps.end, sep6, null, valueProps, onError) : null;
+          const valueNode = value ? composeNode(ctx, value, valueProps, onError) : valueProps.found ? composeEmptyNode(ctx, valueProps.end, sep7, null, valueProps, onError) : null;
           if (valueNode) {
             if (isBlock(value))
               onError(valueNode.range, "BLOCK_IN_FLOW", blockMsg);
@@ -5596,7 +5650,7 @@ var require_resolve_block_scalar = __commonJS({
           chompStart = i + 1;
       }
       let value = "";
-      let sep6 = "";
+      let sep7 = "";
       let prevMoreIndented = false;
       for (let i = 0; i < contentStart; ++i)
         value += lines[i][0].slice(trimIndent) + "\n";
@@ -5613,24 +5667,24 @@ var require_resolve_block_scalar = __commonJS({
           indent = "";
         }
         if (type === Scalar.Scalar.BLOCK_LITERAL) {
-          value += sep6 + indent.slice(trimIndent) + content;
-          sep6 = "\n";
+          value += sep7 + indent.slice(trimIndent) + content;
+          sep7 = "\n";
         } else if (indent.length > trimIndent || content[0] === "	") {
-          if (sep6 === " ")
-            sep6 = "\n";
-          else if (!prevMoreIndented && sep6 === "\n")
-            sep6 = "\n\n";
-          value += sep6 + indent.slice(trimIndent) + content;
-          sep6 = "\n";
+          if (sep7 === " ")
+            sep7 = "\n";
+          else if (!prevMoreIndented && sep7 === "\n")
+            sep7 = "\n\n";
+          value += sep7 + indent.slice(trimIndent) + content;
+          sep7 = "\n";
           prevMoreIndented = true;
         } else if (content === "") {
-          if (sep6 === "\n")
+          if (sep7 === "\n")
             value += "\n";
           else
-            sep6 = "\n";
+            sep7 = "\n";
         } else {
-          value += sep6 + content;
-          sep6 = " ";
+          value += sep7 + content;
+          sep7 = " ";
           prevMoreIndented = false;
         }
       }
@@ -5812,25 +5866,25 @@ var require_resolve_flow_scalar = __commonJS({
       if (!match)
         return source;
       let res = match[1];
-      let sep6 = " ";
+      let sep7 = " ";
       let pos = first.lastIndex;
       line.lastIndex = pos;
       while (match = line.exec(source)) {
         if (match[1] === "") {
-          if (sep6 === "\n")
-            res += sep6;
+          if (sep7 === "\n")
+            res += sep7;
           else
-            sep6 = "\n";
+            sep7 = "\n";
         } else {
-          res += sep6 + match[1];
-          sep6 = " ";
+          res += sep7 + match[1];
+          sep7 = " ";
         }
         pos = line.lastIndex;
       }
       const last = /[ \t]*(.*)/sy;
       last.lastIndex = pos;
       match = last.exec(source);
-      return res + sep6 + (match?.[1] ?? "");
+      return res + sep7 + (match?.[1] ?? "");
     }
     function doubleQuotedValue(source, onError) {
       let res = "";
@@ -6640,14 +6694,14 @@ var require_cst_stringify = __commonJS({
         }
       }
     }
-    function stringifyItem({ start, key, sep: sep6, value }) {
+    function stringifyItem({ start, key, sep: sep7, value }) {
       let res = "";
       for (const st of start)
         res += st.source;
       if (key)
         res += stringifyToken(key);
-      if (sep6)
-        for (const st of sep6)
+      if (sep7)
+        for (const st of sep7)
           res += st.source;
       if (value)
         res += stringifyToken(value);
@@ -7814,18 +7868,18 @@ var require_parser = __commonJS({
         if (this.type === "map-value-ind") {
           const prev = getPrevProps(this.peek(2));
           const start = getFirstKeyStartProps(prev);
-          let sep6;
+          let sep7;
           if (scalar.end) {
-            sep6 = scalar.end;
-            sep6.push(this.sourceToken);
+            sep7 = scalar.end;
+            sep7.push(this.sourceToken);
             delete scalar.end;
           } else
-            sep6 = [this.sourceToken];
+            sep7 = [this.sourceToken];
           const map = {
             type: "block-map",
             offset: scalar.offset,
             indent: scalar.indent,
-            items: [{ start, key: scalar, sep: sep6 }]
+            items: [{ start, key: scalar, sep: sep7 }]
           };
           this.onKeyLine = true;
           this.stack[this.stack.length - 1] = map;
@@ -7978,15 +8032,15 @@ var require_parser = __commonJS({
                 } else if (isFlowToken(it.key) && !includesToken(it.sep, "newline")) {
                   const start2 = getFirstKeyStartProps(it.start);
                   const key = it.key;
-                  const sep6 = it.sep;
-                  sep6.push(this.sourceToken);
+                  const sep7 = it.sep;
+                  sep7.push(this.sourceToken);
                   delete it.key;
                   delete it.sep;
                   this.stack.push({
                     type: "block-map",
                     offset: this.offset,
                     indent: this.indent,
-                    items: [{ start: start2, key, sep: sep6 }]
+                    items: [{ start: start2, key, sep: sep7 }]
                   });
                 } else if (start.length > 0) {
                   it.sep = it.sep.concat(start, this.sourceToken);
@@ -8180,13 +8234,13 @@ var require_parser = __commonJS({
             const prev = getPrevProps(parent);
             const start = getFirstKeyStartProps(prev);
             fixFlowSeqItems(fc);
-            const sep6 = fc.end.splice(1, fc.end.length);
-            sep6.push(this.sourceToken);
+            const sep7 = fc.end.splice(1, fc.end.length);
+            sep7.push(this.sourceToken);
             const map = {
               type: "block-map",
               offset: fc.offset,
               indent: fc.indent,
-              items: [{ start, key: fc, sep: sep6 }]
+              items: [{ start, key: fc, sep: sep7 }]
             };
             this.onKeyLine = true;
             this.stack[this.stack.length - 1] = map;
@@ -9466,6 +9520,28 @@ var init_path_safety = __esm({
   }
 });
 
+// packages/rn-dev-agent-core/dist/domain/unfollowed-file.js
+function readUnfollowedFile(directoryPath, identity, relativePath) {
+  try {
+    return readFileFromVerifiedDirectory(directoryPath, identity, relativePath).toString("utf8");
+  } catch (err) {
+    throw new Error(`Refusing inherited action symlink at ${directoryPath}/${relativePath}: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+function listUnfollowedDirectory(directoryPath, identity) {
+  try {
+    return listVerifiedDirectory(directoryPath, identity);
+  } catch (err) {
+    throw new Error(`Refusing replaced learned-action corpus at ${directoryPath}: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+var init_unfollowed_file = __esm({
+  "packages/rn-dev-agent-core/dist/domain/unfollowed-file.js"() {
+    "use strict";
+    init_process_birth();
+  }
+});
+
 // packages/rn-dev-agent-core/dist/logger.js
 import { createWriteStream, mkdirSync as mkdirSync5, existsSync as existsSync5 } from "node:fs";
 import { join as join6 } from "node:path";
@@ -9882,18 +9958,22 @@ var init_action_state_store = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/session/worktree-repair-remedy.js
-var WORKTREE_REPAIR_ENTRY, HEADLESS_WORKTREE_REPAIR_COMMAND;
+function legacyRootRepairRemedy(lead) {
+  return `${LEGACY_ROOT_REPAIR_REQUIRED}: ${lead} Run ${HEADLESS_WORKTREE_REPAIR_COMMAND}.`;
+}
+var WORKTREE_REPAIR_ENTRY, HEADLESS_WORKTREE_REPAIR_COMMAND, LEGACY_ROOT_REPAIR_REQUIRED;
 var init_worktree_repair_remedy = __esm({
   "packages/rn-dev-agent-core/dist/session/worktree-repair-remedy.js"() {
     "use strict";
     WORKTREE_REPAIR_ENTRY = '"${CLAUDE_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}/rn-dev-agent-core/dist/worktree-inheritance.js"';
     HEADLESS_WORKTREE_REPAIR_COMMAND = `node ${WORKTREE_REPAIR_ENTRY} repair --app-root "$PWD"`;
+    LEGACY_ROOT_REPAIR_REQUIRED = "RN_AGENT_LEGACY_ROOT_REPAIR_REQUIRED";
   }
 });
 
 // packages/rn-dev-agent-core/dist/session/worktree-inheritance.js
 import { spawnSync } from "node:child_process";
-import { closeSync as closeSync3, existsSync as existsSync7, fstatSync as fstatSync3, lstatSync as lstatSync5, mkdirSync as mkdirSync7, openSync as openSync3, readFileSync as readFileSync7, readlinkSync as readlinkSync2, realpathSync as realpathSync3, renameSync as renameSync2, statSync as statSync3, symlinkSync as symlinkSync2, unlinkSync as unlinkSync4 } from "node:fs";
+import { closeSync as closeSync3, constants as constants4, existsSync as existsSync7, fstatSync as fstatSync3, lstatSync as lstatSync5, mkdirSync as mkdirSync7, openSync as openSync3, readFileSync as readFileSync7, readlinkSync as readlinkSync2, realpathSync as realpathSync3, renameSync as renameSync2, statSync as statSync3, symlinkSync as symlinkSync2, unlinkSync as unlinkSync4 } from "node:fs";
 import { dirname as dirname8, isAbsolute as isAbsolute2, join as join8, relative as relative2, resolve as resolve4, sep as sep5 } from "node:path";
 function gitEnvironment() {
   const env = { ...process.env };
@@ -10059,11 +10139,455 @@ function resolveWorktreeLayout(input) {
   }
   return { ...base, primaryRoot, primaryAppRoot };
 }
-var GIT_ENV_OVERRIDES;
+function classifySource(path, type, boundary) {
+  const rel = relative2(boundary, path);
+  if (rel === ".." || rel.startsWith(`..${sep5}`) || isAbsolute2(rel)) {
+    return { state: "WRONG_TYPE" };
+  }
+  const paths = [boundary];
+  let cursor = boundary;
+  for (const component of rel.split(sep5).filter(Boolean)) {
+    cursor = join8(cursor, component);
+    paths.push(cursor);
+  }
+  const inspect = () => {
+    const evidence = [];
+    for (let index = 0; index < paths.length; index += 1) {
+      let node;
+      try {
+        node = lstatSync5(paths[index], { bigint: true });
+      } catch (error) {
+        const code = error.code;
+        if (code === "EACCES" || code === "EPERM")
+          return { state: "PERMISSION_DENIED" };
+        return { state: "MISSING" };
+      }
+      if (node.isSymbolicLink())
+        return { state: "WRONG_TYPE" };
+      const isLeaf = index === paths.length - 1;
+      const typeOk = isLeaf ? type === "directory" ? node.isDirectory() : node.isFile() : node.isDirectory();
+      if (!typeOk)
+        return { state: "WRONG_TYPE" };
+      evidence.push({ dev: String(node.dev), ino: String(node.ino) });
+    }
+    const resolved = canonical(path);
+    if (!resolved || !contained(boundary, resolved))
+      return { state: "WRONG_TYPE" };
+    return { state: "AVAILABLE", evidence };
+  };
+  const before = inspect();
+  if (before.state !== "AVAILABLE")
+    return before;
+  const after = inspect();
+  if (after.state !== "AVAILABLE" || !sameSourceEvidence(before.evidence, after.evidence)) {
+    return { state: "WRONG_TYPE" };
+  }
+  return after;
+}
+function sameSourceEvidence(left, right) {
+  if (!left || !right)
+    return left === right;
+  return left.length === right.length && left.every((identity, index) => {
+    const candidate = right[index];
+    return identity.dev === candidate.dev && identity.ino === candidate.ino;
+  });
+}
+function sourceLeafMatchesIdentity(evidence, identity) {
+  const leaf = evidence?.at(-1);
+  return leaf?.dev === identity.dev && leaf.ino === identity.ino;
+}
+function classifyDestination(path, sourcePath, type) {
+  let link;
+  try {
+    link = lstatSync5(path, { bigint: true });
+  } catch (error) {
+    const code = error.code;
+    if (code === "EACCES" || code === "EPERM")
+      return { state: "PERMISSION_DENIED" };
+    return { state: "MISSING" };
+  }
+  if (!link.isSymbolicLink()) {
+    if (link.isDirectory())
+      return { state: "DIRECTORY" };
+    return { state: "FILE" };
+  }
+  const evidence = { dev: String(link.dev), ino: String(link.ino) };
+  const resolved = canonical(path);
+  if (!resolved)
+    return { state: "LINK_STALE", evidence };
+  const expected = sourcePath ? canonical(sourcePath) : null;
+  if (!expected || resolved !== expected)
+    return { state: "LINK_FOREIGN", evidence };
+  try {
+    const stats = statSync3(resolved);
+    const typeOk = type === "directory" ? stats.isDirectory() : stats.isFile();
+    return { state: typeOk ? "LINK_VALID" : "LINK_FOREIGN", evidence };
+  } catch {
+    return { state: "LINK_STALE", evidence };
+  }
+}
+function identityOf(stat) {
+  return { dev: String(stat.dev), ino: String(stat.ino) };
+}
+function lstatIfPresent(path) {
+  try {
+    return lstatSync5(path, { bigint: true });
+  } catch (error) {
+    if (error.code === "ENOENT")
+      return null;
+    throw error;
+  }
+}
+function refuseCorpus(reason) {
+  return { status: "refused", reason };
+}
+function refuseForeignActions(actionsDir) {
+  return refuseCorpus(`Refusing foreign learned-action corpus symlink at ${actionsDir}.`);
+}
+function refuseReplacedActions(actionsDir) {
+  return refuseCorpus(`Refusing replaced learned-action corpus symlink at ${actionsDir}.`);
+}
+function refuseDanglingActions(actionsDir) {
+  return refuseCorpus(`Refusing dangling learned-action corpus symlink at ${actionsDir}.`);
+}
+function directoryIdentityUnchanged(path, expected) {
+  const current = lstatIfPresent(path);
+  return Boolean(current && !current.isSymbolicLink() && current.isDirectory() && String(current.dev) === expected.dev && String(current.ino) === expected.ino);
+}
+function openUnfollowedDirectory(path, expected) {
+  let fd;
+  try {
+    fd = openSync3(path, constants4.O_RDONLY | constants4.O_NOFOLLOW | constants4.O_DIRECTORY);
+  } catch {
+    return false;
+  }
+  try {
+    const opened = fstatSync3(fd, { bigint: true });
+    return opened.isDirectory() && String(opened.dev) === expected.dev && String(opened.ino) === expected.ino;
+  } finally {
+    closeSync3(fd);
+  }
+}
+function resolveReadableActionCorpus(projectRoot, dependencies = {}) {
+  const root2 = canonical(projectRoot) ?? resolve4(projectRoot);
+  const rnAgentDir = join8(root2, ".rn-agent");
+  const actionsDir = join8(rnAgentDir, "actions");
+  const rnAgentStat = lstatIfPresent(rnAgentDir);
+  if (!rnAgentStat)
+    return { status: "absent" };
+  if (rnAgentStat.isSymbolicLink() || !rnAgentStat.isDirectory()) {
+    return refuseCorpus(`Refusing learned-action corpus symlink at ${rnAgentDir}.`);
+  }
+  const rnAgentIdentity = identityOf(rnAgentStat);
+  if (!openUnfollowedDirectory(rnAgentDir, rnAgentIdentity)) {
+    return refuseCorpus(`Refusing learned-action corpus symlink at ${rnAgentDir}.`);
+  }
+  const actionsStat = lstatIfPresent(actionsDir);
+  if (!directoryIdentityUnchanged(rnAgentDir, rnAgentIdentity)) {
+    return refuseCorpus(`Refusing learned-action corpus symlink at ${rnAgentDir}.`);
+  }
+  if (!actionsStat)
+    return { status: "absent" };
+  if (!actionsStat.isSymbolicLink()) {
+    if (!actionsStat.isDirectory())
+      return { status: "absent" };
+    const identity = identityOf(actionsStat);
+    if (!openUnfollowedDirectory(actionsDir, identity)) {
+      return refuseReplacedActions(actionsDir);
+    }
+    if (!directoryIdentityUnchanged(rnAgentDir, rnAgentIdentity)) {
+      return refuseCorpus(`Refusing learned-action corpus symlink at ${rnAgentDir}.`);
+    }
+    if (!directoryIdentityUnchanged(actionsDir, identity)) {
+      return refuseReplacedActions(actionsDir);
+    }
+    return {
+      status: "owned-directory",
+      projectRoot: root2,
+      rnAgentDir,
+      actionsDir,
+      identity
+    };
+  }
+  const layout = resolveWorktreeLayout({ cwd: root2, appRoot: root2 });
+  if (!("kind" in layout) || layout.kind !== "linked" || layout.refusal || !layout.primaryRoot || !layout.primaryAppRoot) {
+    return refuseForeignActions(actionsDir);
+  }
+  const primaryRnAgentDir = join8(layout.primaryAppRoot, ".rn-agent");
+  const primaryActionsDir = join8(primaryRnAgentDir, "actions");
+  const planned = planResource(layout, SHAREABLE_RESOURCES[0]);
+  if (planned.destinationState === "LINK_STALE")
+    return refuseDanglingActions(actionsDir);
+  if (planned.state !== "LINK_VALID_SAFE" || !planned.evidence) {
+    return refuseCorpus(`Refusing learned-action corpus at ${actionsDir}; setup classified it as ${planned.state}.`);
+  }
+  if (planned.sourceState !== "AVAILABLE" || !planned.sourceEvidence) {
+    return refuseForeignActions(actionsDir);
+  }
+  dependencies.beforeTargetOpen?.();
+  const targetDir = canonical(primaryActionsDir);
+  if (!targetDir)
+    return refuseForeignActions(actionsDir);
+  const targetStat = lstatIfPresent(targetDir);
+  if (!targetStat || targetStat.isSymbolicLink() || !targetStat.isDirectory()) {
+    return refuseForeignActions(actionsDir);
+  }
+  const targetIdentity = identityOf(targetStat);
+  if (!openUnfollowedDirectory(targetDir, targetIdentity)) {
+    return refuseReplacedActions(actionsDir);
+  }
+  dependencies.afterTargetOpen?.();
+  const plannedAfter = planResource(layout, SHAREABLE_RESOURCES[0]);
+  if (plannedAfter.state !== "LINK_VALID_SAFE" || !plannedAfter.evidence || plannedAfter.evidence.dev !== planned.evidence.dev || plannedAfter.evidence.ino !== planned.evidence.ino || plannedAfter.sourceState !== "AVAILABLE" || !sameSourceEvidence(planned.sourceEvidence, plannedAfter.sourceEvidence) || !sourceLeafMatchesIdentity(planned.sourceEvidence, targetIdentity) || !sourceLeafMatchesIdentity(plannedAfter.sourceEvidence, targetIdentity) || !directoryIdentityUnchanged(rnAgentDir, rnAgentIdentity)) {
+    return refuseReplacedActions(actionsDir);
+  }
+  return {
+    status: "approved-inherited",
+    projectRoot: root2,
+    rnAgentDir,
+    actionsDir,
+    targetDir,
+    linkIdentity: planned.evidence,
+    targetIdentity
+  };
+}
+function sameReadableActionCorpus(left, right) {
+  if (left.status !== right.status)
+    return false;
+  if (left.status === "absent")
+    return true;
+  if (left.status === "refused") {
+    return right.status === "refused" && left.reason === right.reason;
+  }
+  if (left.status === "owned-directory" && right.status === "owned-directory") {
+    return left.actionsDir === right.actionsDir && left.identity.dev === right.identity.dev && left.identity.ino === right.identity.ino;
+  }
+  return left.status === "approved-inherited" && right.status === "approved-inherited" && left.actionsDir === right.actionsDir && left.targetDir === right.targetDir && left.linkIdentity.dev === right.linkIdentity.dev && left.linkIdentity.ino === right.linkIdentity.ino && left.targetIdentity.dev === right.targetIdentity.dev && left.targetIdentity.ino === right.targetIdentity.ino;
+}
+function readableActionsSnapshot(corpus) {
+  if (corpus.status === "owned-directory") {
+    return { directory: corpus.actionsDir, identity: corpus.identity };
+  }
+  if (corpus.status === "approved-inherited") {
+    return { directory: corpus.targetDir, identity: corpus.targetIdentity };
+  }
+  return null;
+}
+function isTracked(worktreeRoot, relativePath) {
+  const listed = git(worktreeRoot, ["ls-files", "--", relativePath]);
+  return listed.ok && listed.stdout.trim().length > 0;
+}
+function isIgnoreSafe(worktreeRoot, relativePath) {
+  const result = spawnSync("git", ["check-ignore", "--no-index", "-q", "--", relativePath], {
+    cwd: worktreeRoot,
+    encoding: "utf8",
+    env: gitEnvironment(),
+    stdio: "ignore"
+  });
+  return !result.error && result.status === 0;
+}
+function anchorFor(layout, resource) {
+  if (resource.anchor === "worktree-root") {
+    return { local: layout.worktreeRoot, source: layout.primaryRoot ?? "" };
+  }
+  return { local: layout.appRoot, source: layout.primaryAppRoot ?? "" };
+}
+function destinationRelative(layout, resource) {
+  if (resource.anchor === "worktree-root")
+    return resource.path;
+  return layout.appRelative === "." ? resource.path : `${layout.appRelative}/${resource.path}`;
+}
+function planResource(layout, resource) {
+  const anchor = anchorFor(layout, resource);
+  const destination = join8(anchor.local, resource.path);
+  const destinationRel = destinationRelative(layout, resource);
+  const source = anchor.source ? join8(anchor.source, resource.path) : void 0;
+  const sourceBoundary = layout.primaryRoot;
+  const sourceBefore = source && sourceBoundary ? classifySource(source, resource.type, sourceBoundary) : { state: "MISSING" };
+  const { state: destinationState, evidence } = classifyDestination(destination, sourceBefore.state === "AVAILABLE" ? source : void 0, resource.type);
+  const sourceAfter = source && sourceBoundary ? classifySource(source, resource.type, sourceBoundary) : { state: "MISSING" };
+  const sourceStable = sourceBefore.state === sourceAfter.state && sameSourceEvidence(sourceBefore.evidence, sourceAfter.evidence);
+  const sourceState2 = sourceStable ? sourceAfter.state : "WRONG_TYPE";
+  const sourceEvidence = sourceStable ? sourceAfter.evidence : void 0;
+  const linkedParent = resource.parent !== void 0 ? classifyLegacyParent(layout, anchor.local, resource.parent) : null;
+  const parentRelative = resource.parent === void 0 ? void 0 : toPosix(layout.appRelative === "." ? resource.parent : `${layout.appRelative}/${resource.parent}`);
+  const ignoreSafe = isIgnoreSafe(layout.worktreeRoot, destinationRel) || linkedParent !== null && parentRelative !== void 0 && (isIgnoreSafe(layout.worktreeRoot, parentRelative) || isIgnoreSafe(layout.worktreeRoot, `${parentRelative}/`));
+  const base = {
+    id: resource.id,
+    label: resource.label,
+    destination: toPosix(destinationRel),
+    sourceState: sourceState2,
+    destinationState,
+    ignoreSafe,
+    evidence,
+    sourceEvidence
+  };
+  const gitManaged = isTracked(layout.worktreeRoot, destinationRel) || resource.parent !== void 0 && isTracked(layout.worktreeRoot, toPosix(layout.appRelative === "." ? resource.parent : `${layout.appRelative}/${resource.parent}`));
+  if (gitManaged) {
+    return {
+      ...base,
+      regime: "GIT_MANAGED",
+      state: "TRACKED",
+      action: "none",
+      remediation: "Git owns this path; the tracked/team regime is never replaced or inherited."
+    };
+  }
+  const regime = sourceState2 === "AVAILABLE" ? "PRIVATE_SOURCE_AVAILABLE" : "NO_SOURCE";
+  if (linkedParent) {
+    if (linkedParent !== "expected") {
+      return {
+        ...base,
+        regime,
+        state: "LINK_FOREIGN",
+        action: "none",
+        remediation: `The whole "${resource.parent}" directory is a foreign symlink. Nothing is read from or written through it.`
+      };
+    }
+    if (sourceState2 !== "AVAILABLE") {
+      return {
+        ...base,
+        regime,
+        state: sourceState2 === "WRONG_TYPE" ? "SOURCE_WRONG_TYPE" : "SOURCE_MISSING",
+        action: "none",
+        remediation: "The legacy root link is recognized, but the canonical actions source is unavailable."
+      };
+    }
+    return {
+      ...base,
+      regime,
+      state: "LEGACY_ROOT_LINK",
+      action: "none",
+      remediation: legacyRootRepairRemedy("A legacy whole-root link was detected; startup and reconnect never mutate it.")
+    };
+  }
+  if (destinationState === "PERMISSION_DENIED" || sourceState2 === "PERMISSION_DENIED") {
+    return {
+      ...base,
+      regime,
+      state: "PERMISSION_DENIED",
+      action: "none",
+      remediation: "Permission denied while inspecting this path; fix permissions and re-run."
+    };
+  }
+  if (destinationState === "FILE") {
+    return { ...base, regime, state: "COLLISION_FILE", action: "none", remediation: LOCAL_CONTENT };
+  }
+  if (destinationState === "DIRECTORY") {
+    return {
+      ...base,
+      regime,
+      state: "COLLISION_DIRECTORY",
+      action: "none",
+      remediation: LOCAL_CONTENT
+    };
+  }
+  if (destinationState === "LINK_VALID") {
+    if (sourceState2 !== "AVAILABLE") {
+      return {
+        ...base,
+        regime,
+        state: sourceState2 === "WRONG_TYPE" ? "SOURCE_WRONG_TYPE" : "SOURCE_MISSING",
+        action: "none",
+        remediation: "The existing link no longer has a safe canonical source."
+      };
+    }
+    return {
+      ...base,
+      regime,
+      state: ignoreSafe ? "LINK_VALID_SAFE" : "LINK_VALID_GIT_VISIBLE",
+      action: "none",
+      remediation: ignoreSafe ? void 0 : ignoreRemediation(base.destination)
+    };
+  }
+  if (destinationState === "LINK_FOREIGN") {
+    return {
+      ...base,
+      regime,
+      state: "LINK_FOREIGN",
+      action: "none",
+      remediation: "Destination is a symlink to something else; /rn-dev-agent:setup can re-point it after explicit confirmation."
+    };
+  }
+  if (destinationState === "LINK_STALE") {
+    if (sourceState2 !== "AVAILABLE") {
+      return {
+        ...base,
+        regime,
+        state: "LINK_STALE_SOURCE_MISSING",
+        action: "none",
+        remediation: "Destination is a broken symlink and no canonical source is available; restore the source first."
+      };
+    }
+    return {
+      ...base,
+      regime,
+      state: "LINK_STALE_SOURCE_AVAILABLE",
+      action: "repair",
+      remediation: "Run /rn-dev-agent:setup to repair the broken link after confirmation."
+    };
+  }
+  if (sourceState2 === "MISSING") {
+    return {
+      ...base,
+      regime,
+      state: "SOURCE_MISSING",
+      action: "none",
+      remediation: "No canonical source in the primary worktree; nothing to inherit."
+    };
+  }
+  if (sourceState2 === "WRONG_TYPE") {
+    return {
+      ...base,
+      regime,
+      state: "SOURCE_WRONG_TYPE",
+      action: "none",
+      remediation: `Canonical source is not a ${resource.type}; refusing to link.`
+    };
+  }
+  if (!ignoreSafe) {
+    return {
+      ...base,
+      regime,
+      state: "IGNORE_UNSAFE",
+      action: "none",
+      remediation: ignoreRemediation(base.destination)
+    };
+  }
+  return { ...base, regime, state: "DEST_MISSING", action: "link" };
+}
+function ignoreRemediation(destination) {
+  return `Git would see this path. Add the file-form rule "/${destination}" (no trailing slash) to your own local ignore policy, then re-run.`;
+}
+function classifyLegacyParent(layout, localAnchor, parent) {
+  const localParent = join8(localAnchor, parent);
+  let stats;
+  try {
+    stats = lstatSync5(localParent);
+  } catch {
+    return null;
+  }
+  if (!stats.isSymbolicLink())
+    return null;
+  const resolved = canonical(localParent);
+  const expected = layout.primaryAppRoot ? canonical(join8(layout.primaryAppRoot, parent)) : null;
+  return resolved && expected && resolved === expected ? "expected" : "foreign";
+}
+var SHAREABLE_RESOURCES, GIT_ENV_OVERRIDES, LOCAL_CONTENT;
 var init_worktree_inheritance = __esm({
   "packages/rn-dev-agent-core/dist/session/worktree-inheritance.js"() {
     "use strict";
     init_worktree_repair_remedy();
+    SHAREABLE_RESOURCES = [
+      {
+        id: "rn-agent-actions",
+        label: "learned action corpus (.rn-agent/actions)",
+        type: "directory",
+        anchor: "app",
+        path: ".rn-agent/actions",
+        parent: ".rn-agent",
+        hosts: ["claude", "codex"]
+      }
+    ];
     GIT_ENV_OVERRIDES = [
       "GIT_DIR",
       "GIT_WORK_TREE",
@@ -10072,51 +10596,29 @@ var init_worktree_inheritance = __esm({
       "GIT_OBJECT_DIRECTORY",
       "GIT_NAMESPACE"
     ];
+    LOCAL_CONTENT = "Local real content is present; it is never overwritten and is not shared.";
   }
 });
 
 // packages/rn-dev-agent-core/dist/domain/action-store.js
-import { existsSync as existsSync8, lstatSync as lstatSync6, readFileSync as readFileSync8, realpathSync as realpathSync4, statSync as statSync4, unlinkSync as unlinkSync5 } from "node:fs";
-import { basename as basename4, dirname as dirname9, join as join9 } from "node:path";
+import { existsSync as existsSync8, lstatSync as lstatSync6, readFileSync as readFileSync8, statSync as statSync4, unlinkSync as unlinkSync5 } from "node:fs";
+import { basename as basename4, dirname as dirname9, isAbsolute as isAbsolute3, join as join9, relative as relative3, resolve as resolve5, sep as sep6 } from "node:path";
 function assertOwnedActionCorpus(projectRoot) {
   for (const path of [join9(projectRoot, ".rn-agent"), join9(projectRoot, ".rn-agent", "actions")]) {
-    const stat = lstatIfPresent(path);
+    const stat = lstatIfPresent2(path);
     if (stat?.isSymbolicLink()) {
       throw new Error(`Refusing learned-action corpus symlink at ${path}.`);
     }
   }
 }
-function assertReadableActionCorpus(projectRoot) {
-  const rnAgentDir = join9(projectRoot, ".rn-agent");
-  const actionsDir = join9(rnAgentDir, "actions");
-  const rnAgentStat = lstatIfPresent(rnAgentDir);
-  if (rnAgentStat?.isSymbolicLink()) {
-    throw new Error(`Refusing learned-action corpus symlink at ${rnAgentDir}.`);
-  }
-  const actionsStat = lstatIfPresent(actionsDir);
-  if (!actionsStat?.isSymbolicLink())
-    return;
-  const target = realpathSync4(actionsDir);
-  const layout = resolveWorktreeLayout({ cwd: projectRoot, appRoot: projectRoot });
-  const primaryRnAgentDir = "primaryAppRoot" in layout && layout.primaryAppRoot ? join9(layout.primaryAppRoot, ".rn-agent") : null;
-  const primaryActionsDir = primaryRnAgentDir ? join9(primaryRnAgentDir, "actions") : null;
-  const expectedTarget = primaryRnAgentDir && primaryActionsDir && "kind" in layout && layout.kind === "linked" && !layout.refusal && isOwnedDirectory(primaryRnAgentDir) && isOwnedDirectory(primaryActionsDir) ? canonicalPath(primaryActionsDir) : null;
-  if (!expectedTarget || target !== expectedTarget || !statSync4(target).isDirectory()) {
-    throw new Error(`Refusing foreign learned-action corpus symlink at ${actionsDir}.`);
+function assertStableReadableCorpus(projectRoot, expected) {
+  const after = resolveReadableActionCorpus(projectRoot);
+  if (!sameReadableActionCorpus(expected, after)) {
+    const actionsDir = join9(projectRoot, ".rn-agent", "actions");
+    throw new Error(`Refusing replaced learned-action corpus symlink at ${actionsDir}.`);
   }
 }
-function isOwnedDirectory(path) {
-  const stat = lstatIfPresent(path);
-  return Boolean(stat?.isDirectory() && !stat.isSymbolicLink());
-}
-function canonicalPath(path) {
-  try {
-    return realpathSync4(path);
-  } catch {
-    return null;
-  }
-}
-function lstatIfPresent(path) {
+function lstatIfPresent2(path) {
   try {
     return lstatSync6(path);
   } catch (err) {
@@ -10126,7 +10628,7 @@ function lstatIfPresent(path) {
   }
 }
 function actionFileExists(path) {
-  const stat = lstatIfPresent(path);
+  const stat = lstatIfPresent2(path);
   if (!stat)
     return false;
   if (stat.isSymbolicLink()) {
@@ -10134,24 +10636,46 @@ function actionFileExists(path) {
   }
   return true;
 }
-function resolveActionPath(projectRoot, actionId) {
-  assertValidActionId(actionId, "resolveActionPath");
-  assertReadableActionCorpus(projectRoot);
-  const actionsDir = join9(projectRoot, ".rn-agent", "actions");
+function openReadableActionLoadContext(projectRoot) {
+  const corpus = resolveReadableActionCorpus(projectRoot);
+  if (corpus.status === "refused")
+    throw new Error(corpus.reason);
+  if (corpus.status !== "owned-directory" && corpus.status !== "approved-inherited")
+    return null;
+  const snapshot = readableActionsSnapshot(corpus);
+  if (!snapshot)
+    return null;
+  const files = listUnfollowedDirectory(snapshot.directory, snapshot.identity);
+  assertStableReadableCorpus(projectRoot, corpus);
+  return { projectRoot, corpus, snapshot, files };
+}
+function resolveActionFileNameFromContext(actionId, context) {
   const fileName = `${actionId}.yaml`;
-  assertWithinDir(fileName, actionsDir);
-  const yamlPath = join9(actionsDir, fileName);
-  const ymlPath = yamlPath.replace(/\.yaml$/, ".yml");
-  const yamlExists = actionFileExists(yamlPath);
-  const ymlExists = actionFileExists(ymlPath);
+  assertWithinDir(fileName, context.corpus.actionsDir);
+  assertWithinDir(fileName, context.snapshot.directory);
+  const yamlExists = context.files.includes(fileName);
+  const ymlFileName = fileName.replace(/\.yaml$/, ".yml");
+  const ymlExists = context.files.includes(ymlFileName);
   if (yamlExists && ymlExists) {
     throw new Error(`Action ${actionId} is ambiguous because both ${actionId}.yaml and ${actionId}.yml exist; keep exactly one file before replay.`);
   }
   if (yamlExists)
-    return yamlPath;
+    return fileName;
   if (ymlExists)
-    return ymlPath;
+    return ymlFileName;
   return null;
+}
+function resolveActionPath(projectRoot, actionId) {
+  assertValidActionId(actionId, "resolveActionPath");
+  const context = openReadableActionLoadContext(projectRoot);
+  if (!context)
+    return null;
+  const fileName = resolveActionFileNameFromContext(actionId, context);
+  if (!fileName)
+    return null;
+  readUnfollowedFile(context.snapshot.directory, context.snapshot.identity, fileName);
+  assertStableReadableCorpus(projectRoot, context.corpus);
+  return join9(context.corpus.actionsDir, fileName);
 }
 function splitYaml(text) {
   const allLines = text.split("\n");
@@ -10211,6 +10735,59 @@ function joinYaml(parts) {
   for (const b of parts.bodyLines)
     out.push(b);
   return out.join("\n");
+}
+function captureActionFromContext(context, actionId) {
+  assertValidActionId(actionId, "loadAction");
+  const fileName = resolveActionFileNameFromContext(actionId, context);
+  if (!fileName)
+    return null;
+  const { corpus, projectRoot, snapshot } = context;
+  const filePath = join9(corpus.actionsDir, fileName);
+  const text = readUnfollowedFile(snapshot.directory, snapshot.identity, fileName);
+  const metadata = parseM7Header(text, actionId);
+  if (metadata)
+    assertActionMetadataIdentity(filePath, metadata);
+  let replay;
+  try {
+    const parsed = parseAndValidateFlow(text, {
+      flowDir: snapshot.directory,
+      flowRoot: snapshot.directory,
+      readFileFn: (path) => {
+        const child = relative3(snapshot.directory, path);
+        if (child === "" || child === ".." || child.startsWith(`..${sep6}`) || isAbsolute3(child)) {
+          throw new Error(`Refusing action flow outside ${snapshot.directory}.`);
+        }
+        return readUnfollowedFile(snapshot.directory, snapshot.identity, child);
+      },
+      realpathFn: (path) => resolve5(path)
+    });
+    replay = {
+      ok: true,
+      yamlText: buildMaestroFlow(parsed.appId ? { appId: parsed.appId } : {}, parsed.commands),
+      cdpYaml: buildMaestroFlow({}, parsed.commands),
+      commands: parsed.commands,
+      appId: parsed.appId
+    };
+  } catch (err) {
+    replay = { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+  assertStableReadableCorpus(projectRoot, corpus);
+  return { filePath, yamlText: text, metadata, replay };
+}
+function captureActionFromPath(path) {
+  const absolutePath = resolve5(path);
+  if (!/\.ya?ml$/i.test(absolutePath))
+    return null;
+  const actionsDir = dirname9(absolutePath);
+  if (basename4(actionsDir) !== "actions" || basename4(dirname9(actionsDir)) !== ".rn-agent") {
+    return null;
+  }
+  const actionId = basename4(absolutePath).replace(/\.ya?ml$/i, "");
+  const context = openReadableActionLoadContext(dirname9(dirname9(actionsDir)));
+  if (!context)
+    return null;
+  const action = captureActionFromContext(context, actionId);
+  return action && basename4(action.filePath) === basename4(absolutePath) ? action : null;
 }
 function migrationConflict(filePath) {
   return new Error(`Action changed during migration: ${filePath}. Re-run migration.`);
@@ -10336,6 +10913,8 @@ var init_action_store = __esm({
     init_sidecar_io();
     init_atomic_writer();
     init_path_safety();
+    init_unfollowed_file();
+    init_maestro_validator();
     init_action_state_store();
     init_worktree_inheritance();
     migrationPathIdentities = /* @__PURE__ */ new WeakMap();
@@ -10343,8 +10922,8 @@ var init_action_store = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/domain/action-engine-compat.js
-import { existsSync as existsSync9, lstatSync as lstatSync7, readFileSync as readFileSync9, readdirSync as readdirSync4, realpathSync as realpathSync5 } from "node:fs";
-import { basename as basename5, dirname as dirname10, join as join10, resolve as resolve5 } from "node:path";
+import { existsSync as existsSync9, lstatSync as lstatSync7, readdirSync as readdirSync4, realpathSync as realpathSync4 } from "node:fs";
+import { basename as basename5, dirname as dirname10, join as join10, resolve as resolve6 } from "node:path";
 function actionEnginePinRefusal(enginePin) {
   if (!enginePin) {
     return `Action is not migrated to ${ACTION_ENGINE_PIN} or newer. Run node <plugin-root>/rn-dev-agent-core/dist/maestro-runner-pin.js migrate-actions --root <app> before replay. Incompatible actions are terminal \u2014 no manual fallback.`;
@@ -10382,7 +10961,7 @@ function isLearnedActionPath(path) {
   return classifyLearnedActionPath(path) === "action";
 }
 function classifyLearnedActionPath(path) {
-  const lexical = classifyResolvedLearnedActionPath(resolve5(path));
+  const lexical = classifyResolvedLearnedActionPath(resolve6(path));
   try {
     const canonical2 = classifyResolvedLearnedActionPath(canonicalizeExistingPath(path));
     if (lexical === canonical2)
@@ -10409,7 +10988,7 @@ function classifyResolvedLearnedActionPath(path) {
   }
 }
 function canonicalizeExistingPath(path) {
-  let cursor = resolve5(path);
+  let cursor = resolve6(path);
   const suffix = [];
   while (!existsSync9(cursor)) {
     const parent = dirname10(cursor);
@@ -10418,7 +10997,7 @@ function canonicalizeExistingPath(path) {
     suffix.unshift(basename5(cursor));
     cursor = parent;
   }
-  return resolve5(realpathSync5(cursor), ...suffix);
+  return resolve6(realpathSync4(cursor), ...suffix);
 }
 function standaloneLearnedActionPathRefusal(path) {
   const classification = classifyLearnedActionPath(path);
@@ -10428,15 +11007,13 @@ function standaloneLearnedActionPathRefusal(path) {
     return `Refusing to execute learned-action descendant ${path} as a standalone flow.`;
   }
   const actionId = basename5(path).replace(/\.ya?ml$/i, "");
-  const projectRoot = dirname10(dirname10(dirname10(resolve5(path))));
   try {
-    const resolvedAction = resolveActionPath(projectRoot, actionId);
-    if (resolvedAction === null || resolve5(resolvedAction) !== resolve5(path)) {
+    const action = captureActionFromPath(path);
+    if (!action) {
       return `Action ${actionId} does not resolve uniquely to ${path}.`;
     }
-    const metadata = parseM7Header(readFileSync9(path, "utf8"), actionId);
-    if (metadata)
-      assertActionMetadataIdentity(path, metadata);
+    if (!action.replay.ok)
+      return action.replay.error;
   } catch (err) {
     return err instanceof Error ? err.message : String(err);
   }
@@ -10673,7 +11250,7 @@ var init_keyboard_guard = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/util/secure-state-file.js
-import { readFileSync as readFileSync11, writeFileSync as writeFileSync3, unlinkSync as unlinkSync6, mkdirSync as mkdirSync8, renameSync as renameSync3, lstatSync as lstatSync8 } from "node:fs";
+import { readFileSync as readFileSync10, writeFileSync as writeFileSync3, unlinkSync as unlinkSync6, mkdirSync as mkdirSync8, renameSync as renameSync3, lstatSync as lstatSync8 } from "node:fs";
 import { join as join11, dirname as dirname12 } from "node:path";
 import { homedir as homedir3 } from "node:os";
 function getStateDir() {
@@ -10694,7 +11271,7 @@ function readJsonStateFile(path) {
     const stat = lstatSync8(path);
     if (stat.isSymbolicLink())
       return null;
-    return JSON.parse(readFileSync11(path, "utf8"));
+    return JSON.parse(readFileSync10(path, "utf8"));
   } catch {
     return null;
   }
@@ -11034,7 +11611,7 @@ async function reapStaleFastRunner(deps = {}) {
     return;
   }
   const spawnedChild = runnerProcess?.pid === state.pid ? runnerProcess : null;
-  const spawnedExit = spawnedChild ? new Promise((resolve8) => spawnedChild.once("exit", () => resolve8())) : null;
+  const spawnedExit = spawnedChild ? new Promise((resolve9) => spawnedChild.once("exit", () => resolve9())) : null;
   try {
     sendSignal(state.pid, "SIGTERM");
   } catch {
@@ -11120,14 +11697,14 @@ var init_declared_source_contract = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/nav-graph/storage.js
-import { readFileSync as readFileSync12, writeFileSync as writeFileSync4, existsSync as existsSync11, renameSync as renameSync4, readdirSync as readdirSync5, lstatSync as lstatSync9, mkdirSync as mkdirSync9, realpathSync as realpathSync6 } from "node:fs";
+import { readFileSync as readFileSync11, writeFileSync as writeFileSync4, existsSync as existsSync11, renameSync as renameSync4, readdirSync as readdirSync5, lstatSync as lstatSync9, mkdirSync as mkdirSync9, realpathSync as realpathSync5 } from "node:fs";
 import { join as join14, dirname as dirname13 } from "node:path";
 function isRnProject(dir) {
   const pkgPath = join14(dir, "package.json");
   if (!existsSync11(pkgPath))
     return false;
   try {
-    const pkg = JSON.parse(readFileSync12(pkgPath, "utf-8"));
+    const pkg = JSON.parse(readFileSync11(pkgPath, "utf-8"));
     const deps = { ...pkg.dependencies, ...pkg.devDependencies };
     return !!(deps["react-native"] || deps["expo"]);
   } catch {
@@ -11207,7 +11784,7 @@ function readProjectBundleId(projectRoot) {
   if (!existsSync11(appJsonPath))
     return null;
   try {
-    const raw = JSON.parse(readFileSync12(appJsonPath, "utf-8"));
+    const raw = JSON.parse(readFileSync11(appJsonPath, "utf-8"));
     const iosId = raw.expo?.ios?.bundleIdentifier ?? raw.ios?.bundleIdentifier;
     const androidId = raw.expo?.android?.package ?? raw.android?.package;
     if (typeof iosId === "string" && iosId.length > 0)
@@ -11401,7 +11978,7 @@ var init_sources = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/project-config.js
-import { existsSync as existsSync12, readFileSync as readFileSync13 } from "node:fs";
+import { existsSync as existsSync12, readFileSync as readFileSync12 } from "node:fs";
 import { join as join15 } from "node:path";
 function readAppId(projectRoot, platform) {
   for (const filename of ["app.json", "app.config.json"]) {
@@ -11409,7 +11986,7 @@ function readAppId(projectRoot, platform) {
     if (!existsSync12(p))
       continue;
     try {
-      const raw = JSON.parse(readFileSync13(p, "utf-8"));
+      const raw = JSON.parse(readFileSync12(p, "utf-8"));
       const expo = raw.expo ?? raw;
       const iosBundleId = expo?.ios?.bundleIdentifier;
       const androidPkg = expo?.android?.package;
@@ -11437,7 +12014,7 @@ function readExpoSlug() {
     if (!existsSync12(p))
       continue;
     try {
-      const raw = JSON.parse(readFileSync13(p, "utf-8"));
+      const raw = JSON.parse(readFileSync12(p, "utf-8"));
       return raw.expo?.slug ?? null;
     } catch {
       continue;
@@ -12058,7 +12635,7 @@ var init_maestro_device_authority = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/domain/maestro-runner-report.js
-import { existsSync as existsSync14, readFileSync as readFileSync14, rmSync as rmSync3 } from "node:fs";
+import { existsSync as existsSync14, readFileSync as readFileSync13, rmSync as rmSync3 } from "node:fs";
 import { tmpdir as tmpdir3 } from "node:os";
 import { join as join19 } from "node:path";
 function idsFrom(value, keys) {
@@ -12088,7 +12665,7 @@ function reportDeviceIds(reportDir) {
   if (!existsSync14(reportPath))
     return { ids: [], strength: "none" };
   try {
-    const report = JSON.parse(readFileSync14(reportPath, "utf8"));
+    const report = JSON.parse(readFileSync13(reportPath, "utf8"));
     const flows = Array.isArray(report.flows) ? report.flows : [];
     const devices = [report.device, ...flows.map((flow) => flow?.device)];
     const strong = [
@@ -12130,7 +12707,7 @@ function collectDirectRunnerEvidence(reportDir, output) {
     return evidence;
   try {
     evidence.output = `${output}
-${readFileSync14(logPath, "utf8")}`;
+${readFileSync13(logPath, "utf8")}`;
   } catch {
   }
   return evidence;
@@ -13156,7 +13733,7 @@ var init_tap_latency = __esm({
 // packages/rn-dev-agent-core/dist/runners/release-android-slot.js
 import { execFile as execFileCb9 } from "node:child_process";
 import { promisify as promisify12 } from "node:util";
-import { existsSync as existsSync15, readFileSync as readFileSync15, unlinkSync as unlinkSync7 } from "node:fs";
+import { existsSync as existsSync15, readFileSync as readFileSync14, unlinkSync as unlinkSync7 } from "node:fs";
 import { homedir as homedir5 } from "node:os";
 import { join as join21 } from "node:path";
 function isProtectedPid(pid, selfPid, parentPid) {
@@ -13175,7 +13752,7 @@ function defaultDeps() {
     resolveSerial: (deviceId) => deviceId ? ["-s", deviceId] : getAdbSerial(),
     readDaemonPid: () => {
       try {
-        const parsed = JSON.parse(readFileSync15(DAEMON_JSON2, "utf8"));
+        const parsed = JSON.parse(readFileSync14(DAEMON_JSON2, "utf8"));
         return typeof parsed.pid === "number" ? parsed.pid : null;
       } catch {
         return null;
@@ -13193,7 +13770,7 @@ function defaultDeps() {
     kill: (pid, sig) => process.kill(pid, sig),
     fileExists: (p) => existsSync15(p),
     removeFile: (p) => unlinkSync7(p),
-    delay: (ms) => new Promise((resolve8) => setTimeout(resolve8, ms)),
+    delay: (ms) => new Promise((resolve9) => setTimeout(resolve9, ms)),
     killLegacy: () => process.env.RN_DEVICE_KILL_LEGACY !== "0",
     now: () => Date.now()
   };
@@ -13327,7 +13904,7 @@ var init_release_android_slot = __esm({
 // packages/rn-dev-agent-core/dist/tools/maestro-run.js
 import { execFile as execFileCb10 } from "node:child_process";
 import { promisify as promisify13 } from "node:util";
-import { existsSync as existsSync16, readFileSync as readFileSync16, writeFileSync as writeFileSync5 } from "node:fs";
+import { existsSync as existsSync16, readFileSync as readFileSync15, writeFileSync as writeFileSync5 } from "node:fs";
 import { tmpdir as tmpdir4 } from "node:os";
 import { basename as basename8, join as join22, dirname as dirname14 } from "node:path";
 async function runFlowParked(run, opts = {}) {
@@ -13546,14 +14123,35 @@ function createMaestroRunHandler(deps = {}) {
     let validatedContent;
     let validatedCommands;
     let headerAppId;
-    if (args.inlineYaml) {
+    let capturedAction = null;
+    const flowPathClassification = args.flowPath ? classifyLearnedActionPath(args.flowPath) : "outside";
+    if (flowPathClassification === "descendant") {
+      return failResult(`Refusing to execute learned-action descendant ${args.flowPath} as a standalone flow.`, "BAD_RECORDING");
+    }
+    if (flowPathClassification === "action") {
+      if (args.inlineYaml) {
+        return failResult("Refusing ambiguous learned-action replay with both flowPath and inlineYaml.", "BAD_RECORDING");
+      }
+      try {
+        capturedAction = captureActionFromPath(args.flowPath);
+      } catch (err) {
+        return failResult(err instanceof Error ? err.message : String(err), "BAD_RECORDING");
+      }
+      if (!capturedAction) {
+        return failResult(`Action does not resolve uniquely to ${args.flowPath}.`, "BAD_RECORDING");
+      }
+      if (!capturedAction.replay.ok) {
+        return failResult(capturedAction.replay.error, "BAD_RECORDING");
+      }
+      rawYaml = capturedAction.replay.yamlText;
+    } else if (args.inlineYaml) {
       rawYaml = args.inlineYaml;
     } else if (args.flowPath) {
       if (!existsSync16(args.flowPath)) {
         return failResult(`Flow file not found: ${args.flowPath}`);
       }
       try {
-        rawYaml = readFileSync16(args.flowPath, "utf-8");
+        rawYaml = readFileSync15(args.flowPath, "utf-8");
       } catch (err) {
         return failResult(`Failed to read flow file: ${err.message}`);
       }
@@ -13561,7 +14159,7 @@ function createMaestroRunHandler(deps = {}) {
       return failResult("Provide either flowPath or inlineYaml.");
     }
     try {
-      const runFlowOpts = args.flowPath ? { flowDir: dirname14(args.flowPath), flowRoot: dirname14(args.flowPath) } : {};
+      const runFlowOpts = args.flowPath && flowPathClassification === "outside" ? { flowDir: dirname14(args.flowPath), flowRoot: dirname14(args.flowPath) } : {};
       const parsed = parseAndValidateFlow(rawYaml, runFlowOpts);
       planMaestroAuthorityStages(parsed.commands);
       validatedCommands = parsed.commands;
@@ -13641,12 +14239,8 @@ function createMaestroRunHandler(deps = {}) {
         provenance: engineStatus?.provenance ?? "none"
       });
     }
-    const learnedActionPathRefusal = args.flowPath ? standaloneLearnedActionPathRefusal(args.flowPath) : null;
-    if (learnedActionPathRefusal) {
-      return failResult(learnedActionPathRefusal, "BAD_RECORDING");
-    }
-    const learnedAction = args.flowPath ? isLearnedActionPath(args.flowPath) : false;
-    const actionMeta = args.flowPath ? parseM7Header(rawYaml, basename8(args.flowPath).replace(/\.ya?ml$/i, "")) : null;
+    const learnedAction = Boolean(capturedAction || args.actionMetadata);
+    const actionMeta = capturedAction?.metadata ?? args.actionMetadata ?? (args.flowPath ? parseM7Header(rawYaml, basename8(args.flowPath).replace(/\.ya?ml$/i, "")) : null);
     const compatibilityRefusal = learnedAction || actionMeta !== null ? actionReplayPreflight({
       enginePin: actionMeta?.enginePin,
       commands: validatedCommands,
@@ -13944,6 +14538,7 @@ var init_maestro_run = __esm({
     init_engine_pin();
     init_action_engine_compat();
     init_reusable_action();
+    init_action_store();
     init_agent_device_wrapper();
     init_project_config();
     init_maestro_dispatch();
@@ -13983,8 +14578,8 @@ init_engine_pin();
 init_action_engine_compat();
 init_action_engine_compat();
 import { spawnSync as spawnSync2 } from "node:child_process";
-import { existsSync as existsSync17, readdirSync as readdirSync7 } from "node:fs";
-import { dirname as dirname15, join as join23, resolve as resolve7 } from "node:path";
+import { existsSync as existsSync17 } from "node:fs";
+import { dirname as dirname15, join as join23, resolve as resolve8 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 
 // packages/rn-dev-agent-core/dist/domain/action-verification-suite.js
@@ -13992,43 +14587,70 @@ init_action_engine_compat();
 init_action_store();
 init_maestro_validator();
 init_reusable_action();
-import { readFileSync as readFileSync10 } from "node:fs";
-import { basename as basename6, dirname as dirname11, resolve as resolve6 } from "node:path";
-function prepareActionVerificationSuite(files, flowDir, engineStatus) {
+import { readFileSync as readFileSync9 } from "node:fs";
+import { basename as basename6, dirname as dirname11, resolve as resolve7 } from "node:path";
+function prepareActionVerificationSuite(files, flowDir, engineStatus, context) {
   const prepared = [];
   const errors = [];
+  const learnedCorpus = classifyLearnedActionPath(resolve7(flowDir, "__action__.yaml")) === "action";
+  let learnedContext = context;
+  if (learnedCorpus && !learnedContext) {
+    try {
+      learnedContext = openReadableActionLoadContext(dirname11(dirname11(resolve7(flowDir)))) ?? void 0;
+    } catch (err) {
+      const error = err instanceof Error ? err.message : String(err);
+      return { prepared, errors: files.map((file) => ({ file, error })) };
+    }
+  }
   for (const file of files) {
     try {
-      const actionPathRefusal = standaloneLearnedActionPathRefusal(file);
-      if (actionPathRefusal)
-        throw new Error(actionPathRefusal);
-      const text = readFileSync10(file, "utf8");
-      const parsed = parseAndValidateFlow(text, { flowDir: dirname11(file), flowRoot: flowDir });
       const id = basename6(file).replace(/\.ya?ml$/i, "");
-      const meta = parseM7Header(text, id);
       const owned = isLearnedActionPath(file);
-      if (owned) {
-        const projectRoot = dirname11(dirname11(dirname11(file)));
-        const resolvedPath = resolveActionPath(projectRoot, id);
-        if (resolvedPath === null || resolve6(resolvedPath) !== resolve6(file)) {
+      let inlineYaml;
+      let commands;
+      let meta;
+      if (learnedContext) {
+        const action = captureActionFromContext(learnedContext, id);
+        if (!action || basename6(action.filePath) !== basename6(file)) {
           throw new Error(`Action ${id} did not resolve to ${file}`);
         }
+        if (!action.replay.ok)
+          throw new Error(action.replay.error);
+        inlineYaml = action.replay.yamlText;
+        commands = action.replay.commands;
+        meta = action.metadata;
+      } else {
+        const actionPathRefusal = standaloneLearnedActionPathRefusal(file);
+        if (actionPathRefusal)
+          throw new Error(actionPathRefusal);
+        const text = readFileSync9(file, "utf8");
+        const parsed = parseAndValidateFlow(text, { flowDir: dirname11(file), flowRoot: flowDir });
+        inlineYaml = parsed.raw;
+        commands = parsed.commands;
+        meta = parseM7Header(text, id);
       }
       const refusal = replayCompatibilityPreflight({
         enginePin: meta?.enginePin,
-        commands: parsed.commands,
+        commands,
         engineStatus,
         requireEnginePin: meta !== null || owned
       });
       if (refusal)
         throw new Error(refusal);
-      prepared.push({ file, inlineYaml: parsed.raw });
+      prepared.push({
+        file,
+        inlineYaml,
+        ...meta ? { actionMetadata: meta } : {}
+      });
     } catch (err) {
       errors.push({ file, error: err instanceof Error ? err.message : String(err) });
     }
   }
   return { prepared, errors };
 }
+
+// packages/rn-dev-agent-core/dist/maestro-runner-pin.js
+init_action_store();
 
 // packages/rn-dev-agent-core/dist/domain/bounded-regex.js
 import { Worker } from "node:worker_threads";
@@ -14042,7 +14664,7 @@ try {
 }
 `;
 function filterWithBoundedRegex(candidates, pattern, timeoutMs = 500) {
-  return new Promise((resolve8) => {
+  return new Promise((resolve9) => {
     const worker = new Worker(workerSource, {
       eval: true,
       workerData: { candidates, pattern }
@@ -14055,7 +14677,7 @@ function filterWithBoundedRegex(candidates, pattern, timeoutMs = 500) {
       clearTimeout(timer);
       worker.removeAllListeners();
       void worker.terminate();
-      resolve8(result);
+      resolve9(result);
     };
     const timer = setTimeout(() => finish({
       ok: false,
@@ -14148,7 +14770,7 @@ async function verifyActions(argv) {
       return 2;
     }
   }
-  const flowDir = resolve7(flowDirArg);
+  const flowDir = resolve8(flowDirArg);
   const flowDirClassification = classifyLearnedActionPath(join23(flowDir, "__action__.yaml"));
   if (flowDirClassification !== "action") {
     console.error(`Refusing to execute flows outside an owned .rn-agent/actions corpus: ${flowDir}.`);
@@ -14162,9 +14784,13 @@ async function verifyActions(argv) {
     return 2;
   }
   let files;
+  let actionContext;
   try {
-    const discovered = readdirSync7(flowDir);
-    const yamlFiles = discovered.filter((file) => /\.ya?ml$/i.test(file));
+    const openedContext = openReadableActionLoadContext(dirname15(dirname15(flowDir)));
+    if (!openedContext)
+      throw new Error(`No learned-action corpus found at ${flowDir}`);
+    actionContext = openedContext;
+    const yamlFiles = actionContext.files.filter((file) => /\.ya?ml$/i.test(file));
     const filtered = pattern ? await filterWithBoundedRegex(yamlFiles, pattern) : { ok: true, matches: yamlFiles };
     if (!filtered.ok) {
       console.error(`verify-actions pattern is ${filtered.reason}: ${filtered.message}`);
@@ -14179,7 +14805,7 @@ async function verifyActions(argv) {
     console.error(`No Maestro flows found in ${flowDir}`);
     return 2;
   }
-  const suite = prepareActionVerificationSuite(files, flowDir, engineStatus);
+  const suite = prepareActionVerificationSuite(files, flowDir, engineStatus, actionContext);
   if (suite.errors.length > 0) {
     console.error(`Suite preflight refused ${suite.errors.length} of ${files.length} flows before execution.`);
     for (const row of suite.errors)
@@ -14196,7 +14822,12 @@ async function verifyActions(argv) {
   let failed = 0;
   for (const flow of suite.prepared) {
     const startedAt = Date.now();
-    const result = await run({ platform, inlineYaml: flow.inlineYaml, timeoutMs: timeout });
+    const result = await run({
+      platform,
+      inlineYaml: flow.inlineYaml,
+      actionMetadata: flow.actionMetadata,
+      timeoutMs: timeout
+    });
     const envelope = JSON.parse(result.content[0].text);
     const ok = envelope.ok && envelope.data?.passed !== false;
     console.log(`  ${ok ? "PASS" : "FAIL"}  ${flow.file.split("/").pop()}  (${Date.now() - startedAt}ms)`);

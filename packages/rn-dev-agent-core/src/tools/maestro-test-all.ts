@@ -35,10 +35,13 @@ import {
   classifyLearnedActionPath,
   isLearnedActionPath,
   replayCompatibilityPreflight,
-  standaloneLearnedActionPathRefusal,
 } from '../domain/action-engine-compat.js';
 import { parseM7Header } from '../domain/reusable-action.js';
-import { resolveActionPath } from '../domain/action-store.js';
+import {
+  captureActionFromContext,
+  openReadableActionLoadContext,
+  type ReadableActionLoadContext,
+} from '../domain/action-store.js';
 import { flowUsesClearState, resolveAppFileForClearState } from './resolve-ios-app-file.js';
 import {
   maestroAuthorityRefusal,
@@ -104,25 +107,9 @@ interface PreparedFlow {
   reinstallsApp: boolean;
 }
 
-function discoverFlows(dir: string, pattern?: string, topLevelOnly = false): string[] {
-  if (!existsSync(dir)) return [];
-  const files = topLevelOnly
-    ? readdirSync(dir)
-    : (readdirSync(dir, { recursive: true }) as string[]);
-  const yamls = files
-    .filter((f) => f.endsWith('.yaml') || f.endsWith('.yml'))
-    .map((f) => join(dir, f))
-    .sort();
-
+function filterFlows(yamls: string[], pattern?: string): string[] {
   if (pattern) {
-    // Phase 134.5 (deepsec BUG: regex-dos): a malicious or malformed
-    // `pattern` arg could throw on invalid regex syntax or hang on
-    // catastrophic backtracking (e.g. `(a+)+$` against a long input).
-    // Cap the pattern length and wrap construction; on any error,
-    // skip filtering rather than crash discovery.
-    if (pattern.length > 256) {
-      return yamls;
-    }
+    if (pattern.length > 256) return yamls;
     let re: RegExp;
     try {
       re = new RegExp(pattern, 'i');
@@ -132,6 +119,15 @@ function discoverFlows(dir: string, pattern?: string, topLevelOnly = false): str
     return yamls.filter((f) => re.test(f));
   }
   return yamls;
+}
+
+function discoverFlows(dir: string, pattern?: string): string[] {
+  if (!existsSync(dir)) return [];
+  const yamls = (readdirSync(dir, { recursive: true }) as string[])
+    .filter((f) => f.endsWith('.yaml') || f.endsWith('.yml'))
+    .map((f) => join(dir, f))
+    .sort();
+  return filterFlows(yamls, pattern);
 }
 
 export function createMaestroTestAllHandler(
@@ -192,7 +188,28 @@ export function createMaestroTestAllHandler(
     }
     const learnedCorpus = flowDirClassification === 'action';
     const learnedProjectRoot = learnedCorpus ? dirname(dirname(resolvedFlowDir)) : null;
-    const flows = discoverFlows(flowDir, args.pattern, learnedCorpus);
+    let learnedContext: ReadableActionLoadContext | null = null;
+    if (learnedProjectRoot) {
+      try {
+        learnedContext = openReadableActionLoadContext(learnedProjectRoot);
+      } catch (err) {
+        return failResult(err instanceof Error ? err.message : String(err));
+      }
+    }
+    if (learnedCorpus && !learnedContext) {
+      return failResult(
+        `Refusing learned-action corpus without an approved load context: ${resolvedFlowDir}.`,
+      );
+    }
+    const flows = learnedContext
+      ? filterFlows(
+          learnedContext.files
+            .filter((file) => /\.ya?ml$/i.test(file))
+            .map((file) => join(flowDir, file))
+            .sort(),
+          args.pattern,
+        )
+      : discoverFlows(flowDir, args.pattern);
     if (flows.length === 0) {
       return failResult(
         `No Maestro flows found in ${flowDir}. Generate flows with maestro_generate first.`,
@@ -205,35 +222,45 @@ export function createMaestroTestAllHandler(
       const name = flow.replace(flowDir + '/', '');
       const start = now();
       try {
-        const actionPathRefusal = standaloneLearnedActionPathRefusal(flow);
-        if (actionPathRefusal) throw new Error(actionPathRefusal);
-        if (learnedProjectRoot) {
+        let parsedCommands: unknown[];
+        let parsedFlowAppId: string | undefined;
+        let meta: ReturnType<typeof parseM7Header>;
+        let requireEnginePin: boolean;
+        if (learnedContext) {
           const actionId = basename(flow).replace(/\.ya?ml$/i, '');
-          const resolvedAction = resolveActionPath(learnedProjectRoot, actionId);
-          if (resolvedAction === null || resolve(resolvedAction) !== resolve(flow)) {
+          const action = captureActionFromContext(learnedContext, actionId);
+          if (!action || basename(action.filePath) !== basename(flow)) {
             throw new Error(`Action ${actionId} does not resolve to ${flow}.`);
           }
+          if (!action.replay.ok) throw new MaestroValidationError(action.replay.error);
+          parsedCommands = action.replay.commands;
+          parsedFlowAppId = action.replay.appId;
+          meta = action.metadata;
+          requireEnginePin = true;
+        } else {
+          const yamlText = readFileSync(flow, 'utf-8');
+          const parsed = parseAndValidateFlow(yamlText, {
+            flowDir: dirname(flow),
+            flowRoot: flowDir,
+          });
+          const flowId = name.replace(/\.ya?ml$/i, '');
+          parsedCommands = parsed.commands;
+          parsedFlowAppId = parsed.appId;
+          meta = parseM7Header(yamlText, flowId);
+          requireEnginePin = meta !== null || isLearnedActionPath(flow);
         }
-        const yamlText = readFileSync(flow, 'utf-8');
-        const parsed = parseAndValidateFlow(yamlText, {
-          flowDir: dirname(flow),
-          flowRoot: flowDir,
-        });
-        const flowId = name.replace(/\.ya?ml$/i, '');
-        const meta = parseM7Header(yamlText, flowId);
-        const requireEnginePin = meta !== null || isLearnedActionPath(flow);
         const preflight = replayCompatibilityPreflight({
           enginePin: meta?.enginePin,
-          commands: parsed.commands,
+          commands: parsedCommands,
           engineStatus,
           requireEnginePin,
         });
         if (preflight) throw new Error(preflight);
-        planMaestroAuthorityStages(parsed.commands);
-        const parsedAppId = resolveMaestroFlowAppId(boundAppId, parsed.appId);
+        planMaestroAuthorityStages(parsedCommands);
+        const parsedAppId = resolveMaestroFlowAppId(boundAppId, parsedFlowAppId);
         const canonical = buildMaestroFlow(
           parsedAppId !== undefined ? { appId: parsedAppId } : {},
-          parsed.commands,
+          parsedCommands,
         );
         const appFileResolution = resolveAppFile(platform, canonical, parsedAppId, undefined, {
           deviceId: requestedDeviceId,
@@ -241,7 +268,7 @@ export function createMaestroTestAllHandler(
         if (!appFileResolution.ok) throw new Error(appFileResolution.error);
         preparedFlows.push({
           name,
-          commands: parsed.commands,
+          commands: parsedCommands,
           appId: parsedAppId,
           canonical,
           appFile: appFileResolution.appFile,

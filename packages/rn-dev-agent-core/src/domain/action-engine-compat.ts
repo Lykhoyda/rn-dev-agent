@@ -1,4 +1,4 @@
-import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
+import { existsSync, lstatSync, readdirSync, realpathSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import {
   ACTION_ENGINE_PIN,
@@ -14,10 +14,10 @@ import { parseM7Header } from './reusable-action.js';
 import {
   commitMigratedActionText,
   loadActionMigrationBaseline,
+  captureActionFromPath,
   splitYaml,
   joinYaml,
   resolveActionPath,
-  assertActionMetadataIdentity,
 } from './action-store.js';
 
 export function actionEnginePinRefusal(enginePin: string | undefined): string | null {
@@ -126,14 +126,12 @@ export function standaloneLearnedActionPathRefusal(path: string): string | null 
     return `Refusing to execute learned-action descendant ${path} as a standalone flow.`;
   }
   const actionId = basename(path).replace(/\.ya?ml$/i, '');
-  const projectRoot = dirname(dirname(dirname(resolve(path))));
   try {
-    const resolvedAction = resolveActionPath(projectRoot, actionId);
-    if (resolvedAction === null || resolve(resolvedAction) !== resolve(path)) {
+    const action = captureActionFromPath(path);
+    if (!action) {
       return `Action ${actionId} does not resolve uniquely to ${path}.`;
     }
-    const metadata = parseM7Header(readFileSync(path, 'utf8'), actionId);
-    if (metadata) assertActionMetadataIdentity(path, metadata);
+    if (!action.replay.ok) return action.replay.error;
   } catch (err) {
     return err instanceof Error ? err.message : String(err);
   }

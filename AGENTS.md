@@ -78,6 +78,12 @@ sibling workspace only when explicitly requested.
   but must not pass it as a gate argument, since `bindSourcePaths` fences
   a supplied `projectRoot` to `status.source.appRoot` and would refuse the
   sibling-workspace primary checkout.
+- Linked-worktree learned-action inheritance is classified by
+  `resolveReadableActionCorpus` (`src/session/worktree-inheritance.ts`).
+  Inventory, `loadAction`/`cdp_run_action`, and setup `plan`/`apply` share that
+  allowlist: a real actions directory, or the approved `.rn-agent/actions`
+  symlink to the same-repo primary corpus. `isDirectNode` still refuses
+  per-file action symlinks.
 - Claude-only host behavior: edit `packages/claude-plugin/`.
 - Codex-only host behavior: edit `packages/codex-plugin/`.
 - Host-neutral workflow knowledge: edit `packages/shared-agent-knowledge/`,

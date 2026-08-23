@@ -1,6 +1,8 @@
-import { readdirSync } from 'node:fs';
-import { join } from 'node:path';
-import { assertReadableActionCorpus, loadAction } from './action-store.js';
+import {
+  loadActionFromContext,
+  openReadableActionLoadContext,
+  type ReadableActionLoadContext,
+} from './action-store.js';
 
 import type { ActionSummary } from '../observability/wire-types.js';
 
@@ -8,22 +10,26 @@ import type { ActionSummary } from '../observability/wire-types.js';
 // the observe SPA).
 export type { ActionSummary } from '../observability/wire-types.js';
 
-export async function listActions(projectRoot: string): Promise<ActionSummary[]> {
-  const actionsDir = join(projectRoot, '.rn-agent', 'actions');
-  assertReadableActionCorpus(projectRoot);
-  let files: string[];
-  try {
-    files = readdirSync(actionsDir);
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
-    throw err;
-  }
-  const yamlFiles = files.filter((f) => /\.ya?ml$/.test(f)).sort();
+export interface ActionInventoryDependencies {
+  loadAction?: (
+    context: ReadableActionLoadContext,
+    actionId: string,
+  ) => ReturnType<typeof loadActionFromContext>;
+}
+
+export async function listActions(
+  projectRoot: string,
+  dependencies: ActionInventoryDependencies = {},
+): Promise<ActionSummary[]> {
+  const context = openReadableActionLoadContext(projectRoot);
+  if (!context) return [];
+  const load = dependencies.loadAction ?? loadActionFromContext;
+  const yamlFiles = context.files.filter((f) => /\.ya?ml$/.test(f)).sort();
   const results: ActionSummary[] = [];
   for (const id of new Set(yamlFiles.map((file) => file.replace(/\.ya?ml$/, '')))) {
     // Inventory omits yaml/yml twins; resolveActionPath still refuses replay.
     if (yamlFiles.includes(`${id}.yaml`) && yamlFiles.includes(`${id}.yml`)) continue;
-    const action = loadAction(projectRoot, id);
+    const action = load(context, id);
     if (!action) continue;
     const { metadata } = action;
     const summary: ActionSummary = {

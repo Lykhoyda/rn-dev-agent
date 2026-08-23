@@ -17,7 +17,7 @@ import {
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
-import { loadAction, resolveActionPath } from '../domain/action-store.js';
+import { loadAction } from '../domain/action-store.js';
 import {
   hashProofArgs,
   hashProofValue,
@@ -648,17 +648,13 @@ function sameProofAction(left: ProofAction, right: ProofAction): boolean {
 export function readProofActionIdentity(
   appProjectRoot: string,
   actionId: string,
+  dependencies: { loadAction?: typeof loadAction } = {},
 ): ProofAction | null {
   try {
-    const path = resolveActionPath(appProjectRoot, actionId);
-    if (!path) return null;
-    const bytesBefore = readFileSync(path);
-    const action = loadAction(appProjectRoot, actionId);
-    const bytesAfter = readFileSync(path);
+    const action = (dependencies.loadAction ?? loadAction)(appProjectRoot, actionId);
     if (
       !action ||
       action.metadata.id !== actionId ||
-      !bytesBefore.equals(bytesAfter) ||
       !Number.isInteger(action.state.revision) ||
       action.state.revision < 1
     ) {
@@ -667,7 +663,7 @@ export function readProofActionIdentity(
     return {
       id: actionId,
       version: String(action.state.revision),
-      sha256: createHash('sha256').update(bytesAfter).digest('hex'),
+      sha256: createHash('sha256').update(action.yamlText).digest('hex'),
     };
   } catch {
     return null;

@@ -36,7 +36,7 @@ After listing, summarize matching flows and their `produces`, `mutates`,
 `appId`, platform, and required params. Replay a full/partial match via
 `cdp_run_action` before a manual `device_*` walk.
 
-Treat the inventory's legacy `replay` string as display-only. Execute owned
+Treat the inventory's legacy `replay` string as display-only. Execute approved
 actions through `cdp_run_action` so replay resolves pin-cache maestro-runner
 `>= 1.1.24` and enforces `enginePin` and selector preflight.
 

@@ -224,7 +224,7 @@ test('action inventory authenticates inherited corpus to real primary directorie
     rmSync(join(primaryApp, '.rn-agent', 'actions'), { recursive: true });
     symlinkSync(externalActions, join(primaryApp, '.rn-agent', 'actions'), 'dir');
 
-    await assert.rejects(() => listActions(worktree), /foreign learned-action corpus symlink/);
+    await assert.rejects(() => listActions(worktree), /setup classified it as LINK_FOREIGN/);
   } finally {
     fixture.cleanup();
   }

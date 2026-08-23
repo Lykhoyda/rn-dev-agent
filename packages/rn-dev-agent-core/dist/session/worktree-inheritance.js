@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { closeSync, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readlinkSync, realpathSync, renameSync, statSync, symlinkSync, unlinkSync, } from 'node:fs';
+import { closeSync, constants, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readlinkSync, realpathSync, renameSync, statSync, symlinkSync, unlinkSync, } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { LEGACY_ROOT_REPAIR_REQUIRED, legacyRootRepairRemedy } from './worktree-repair-remedy.js';
 // The only `.rn-agent` subpath proven shareable across linked worktrees.
@@ -251,6 +251,10 @@ function sameSourceEvidence(left, right) {
             return identity.dev === candidate.dev && identity.ino === candidate.ino;
         }));
 }
+function sourceLeafMatchesIdentity(evidence, identity) {
+    const leaf = evidence?.at(-1);
+    return leaf?.dev === identity.dev && leaf.ino === identity.ino;
+}
 function classifyDestination(path, sourcePath, type) {
     let link;
     try {
@@ -282,6 +286,190 @@ function classifyDestination(path, sourcePath, type) {
     catch {
         return { state: 'LINK_STALE', evidence };
     }
+}
+function identityOf(stat) {
+    return { dev: String(stat.dev), ino: String(stat.ino) };
+}
+function lstatIfPresent(path) {
+    try {
+        return lstatSync(path, { bigint: true });
+    }
+    catch (error) {
+        if (error.code === 'ENOENT')
+            return null;
+        throw error;
+    }
+}
+function refuseCorpus(reason) {
+    return { status: 'refused', reason };
+}
+function refuseForeignActions(actionsDir) {
+    return refuseCorpus(`Refusing foreign learned-action corpus symlink at ${actionsDir}.`);
+}
+function refuseReplacedActions(actionsDir) {
+    return refuseCorpus(`Refusing replaced learned-action corpus symlink at ${actionsDir}.`);
+}
+function refuseDanglingActions(actionsDir) {
+    return refuseCorpus(`Refusing dangling learned-action corpus symlink at ${actionsDir}.`);
+}
+function directoryIdentityUnchanged(path, expected) {
+    const current = lstatIfPresent(path);
+    return Boolean(current &&
+        !current.isSymbolicLink() &&
+        current.isDirectory() &&
+        String(current.dev) === expected.dev &&
+        String(current.ino) === expected.ino);
+}
+function openUnfollowedDirectory(path, expected) {
+    let fd;
+    try {
+        fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_DIRECTORY);
+    }
+    catch {
+        return false;
+    }
+    try {
+        const opened = fstatSync(fd, { bigint: true });
+        return (opened.isDirectory() &&
+            String(opened.dev) === expected.dev &&
+            String(opened.ino) === expected.ino);
+    }
+    finally {
+        closeSync(fd);
+    }
+}
+export function resolveReadableActionCorpus(projectRoot, dependencies = {}) {
+    const root = canonical(projectRoot) ?? resolve(projectRoot);
+    const rnAgentDir = join(root, '.rn-agent');
+    const actionsDir = join(rnAgentDir, 'actions');
+    const rnAgentStat = lstatIfPresent(rnAgentDir);
+    if (!rnAgentStat)
+        return { status: 'absent' };
+    if (rnAgentStat.isSymbolicLink() || !rnAgentStat.isDirectory()) {
+        return refuseCorpus(`Refusing learned-action corpus symlink at ${rnAgentDir}.`);
+    }
+    const rnAgentIdentity = identityOf(rnAgentStat);
+    if (!openUnfollowedDirectory(rnAgentDir, rnAgentIdentity)) {
+        return refuseCorpus(`Refusing learned-action corpus symlink at ${rnAgentDir}.`);
+    }
+    const actionsStat = lstatIfPresent(actionsDir);
+    if (!directoryIdentityUnchanged(rnAgentDir, rnAgentIdentity)) {
+        return refuseCorpus(`Refusing learned-action corpus symlink at ${rnAgentDir}.`);
+    }
+    if (!actionsStat)
+        return { status: 'absent' };
+    if (!actionsStat.isSymbolicLink()) {
+        if (!actionsStat.isDirectory())
+            return { status: 'absent' };
+        const identity = identityOf(actionsStat);
+        if (!openUnfollowedDirectory(actionsDir, identity)) {
+            return refuseReplacedActions(actionsDir);
+        }
+        if (!directoryIdentityUnchanged(rnAgentDir, rnAgentIdentity)) {
+            return refuseCorpus(`Refusing learned-action corpus symlink at ${rnAgentDir}.`);
+        }
+        if (!directoryIdentityUnchanged(actionsDir, identity)) {
+            return refuseReplacedActions(actionsDir);
+        }
+        return {
+            status: 'owned-directory',
+            projectRoot: root,
+            rnAgentDir,
+            actionsDir,
+            identity,
+        };
+    }
+    const layout = resolveWorktreeLayout({ cwd: root, appRoot: root });
+    if (!('kind' in layout) ||
+        layout.kind !== 'linked' ||
+        layout.refusal ||
+        !layout.primaryRoot ||
+        !layout.primaryAppRoot) {
+        return refuseForeignActions(actionsDir);
+    }
+    const primaryRnAgentDir = join(layout.primaryAppRoot, '.rn-agent');
+    const primaryActionsDir = join(primaryRnAgentDir, 'actions');
+    const planned = planResource(layout, SHAREABLE_RESOURCES[0]);
+    if (planned.destinationState === 'LINK_STALE')
+        return refuseDanglingActions(actionsDir);
+    if (planned.state !== 'LINK_VALID_SAFE' || !planned.evidence) {
+        return refuseCorpus(`Refusing learned-action corpus at ${actionsDir}; setup classified it as ${planned.state}.`);
+    }
+    if (planned.sourceState !== 'AVAILABLE' || !planned.sourceEvidence) {
+        return refuseForeignActions(actionsDir);
+    }
+    dependencies.beforeTargetOpen?.();
+    const targetDir = canonical(primaryActionsDir);
+    if (!targetDir)
+        return refuseForeignActions(actionsDir);
+    const targetStat = lstatIfPresent(targetDir);
+    if (!targetStat || targetStat.isSymbolicLink() || !targetStat.isDirectory()) {
+        return refuseForeignActions(actionsDir);
+    }
+    const targetIdentity = identityOf(targetStat);
+    if (!openUnfollowedDirectory(targetDir, targetIdentity)) {
+        return refuseReplacedActions(actionsDir);
+    }
+    dependencies.afterTargetOpen?.();
+    const plannedAfter = planResource(layout, SHAREABLE_RESOURCES[0]);
+    if (plannedAfter.state !== 'LINK_VALID_SAFE' ||
+        !plannedAfter.evidence ||
+        plannedAfter.evidence.dev !== planned.evidence.dev ||
+        plannedAfter.evidence.ino !== planned.evidence.ino ||
+        plannedAfter.sourceState !== 'AVAILABLE' ||
+        !sameSourceEvidence(planned.sourceEvidence, plannedAfter.sourceEvidence) ||
+        !sourceLeafMatchesIdentity(planned.sourceEvidence, targetIdentity) ||
+        !sourceLeafMatchesIdentity(plannedAfter.sourceEvidence, targetIdentity) ||
+        !directoryIdentityUnchanged(rnAgentDir, rnAgentIdentity)) {
+        return refuseReplacedActions(actionsDir);
+    }
+    return {
+        status: 'approved-inherited',
+        projectRoot: root,
+        rnAgentDir,
+        actionsDir,
+        targetDir,
+        linkIdentity: planned.evidence,
+        targetIdentity,
+    };
+}
+export function sameReadableActionCorpus(left, right) {
+    if (left.status !== right.status)
+        return false;
+    if (left.status === 'absent')
+        return true;
+    if (left.status === 'refused') {
+        return right.status === 'refused' && left.reason === right.reason;
+    }
+    if (left.status === 'owned-directory' && right.status === 'owned-directory') {
+        return (left.actionsDir === right.actionsDir &&
+            left.identity.dev === right.identity.dev &&
+            left.identity.ino === right.identity.ino);
+    }
+    return (left.status === 'approved-inherited' &&
+        right.status === 'approved-inherited' &&
+        left.actionsDir === right.actionsDir &&
+        left.targetDir === right.targetDir &&
+        left.linkIdentity.dev === right.linkIdentity.dev &&
+        left.linkIdentity.ino === right.linkIdentity.ino &&
+        left.targetIdentity.dev === right.targetIdentity.dev &&
+        left.targetIdentity.ino === right.targetIdentity.ino);
+}
+export function readableActionsDirectory(corpus) {
+    if (corpus.status === 'owned-directory')
+        return corpus.actionsDir;
+    if (corpus.status === 'approved-inherited')
+        return corpus.targetDir;
+    return null;
+}
+export function readableActionsSnapshot(corpus) {
+    if (corpus.status === 'owned-directory') {
+        return { directory: corpus.actionsDir, identity: corpus.identity };
+    }
+    if (corpus.status === 'approved-inherited') {
+        return { directory: corpus.targetDir, identity: corpus.targetIdentity };
+    }
+    return null;
 }
 function isTracked(worktreeRoot, relativePath) {
     const listed = git(worktreeRoot, ['ls-files', '--', relativePath]);

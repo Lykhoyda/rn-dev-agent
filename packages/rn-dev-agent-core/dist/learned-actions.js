@@ -27,6 +27,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { listUnfollowedDirectory, readUnfollowedFile } from './domain/unfollowed-file.js';
+import { readableActionsSnapshot, resolveReadableActionCorpus, sameReadableActionCorpus, } from './session/worktree-inheritance.js';
 const argv = process.argv.slice(2);
 const flags = {
     json: false,
@@ -98,20 +100,11 @@ function scanMemories() {
     items.sort((a, b) => a.name.localeCompare(b.name));
     return { exists: true, dir: memDir, items: items.slice(0, flags.max) };
 }
-function isDirectNode(target, kind) {
-    try {
-        const stat = fs.lstatSync(target);
-        return !stat.isSymbolicLink() && (kind === 'directory' ? stat.isDirectory() : stat.isFile());
-    }
-    catch {
-        return false;
-    }
-}
-function resolveFlowFile(actionsDir, id) {
-    const yamlPath = path.join(actionsDir, `${id}.yaml`);
-    const ymlPath = path.join(actionsDir, `${id}.yml`);
-    const yamlExists = isDirectNode(yamlPath, 'file');
-    const ymlExists = isDirectNode(ymlPath, 'file');
+function resolveFlowFile(files, id) {
+    const yamlPath = `${id}.yaml`;
+    const ymlPath = `${id}.yml`;
+    const yamlExists = files.includes(yamlPath);
+    const ymlExists = files.includes(ymlPath);
     if (yamlExists && ymlExists)
         return null;
     if (yamlExists)
@@ -120,36 +113,69 @@ function resolveFlowFile(actionsDir, id) {
         return ymlPath;
     return null;
 }
+function classifyFlowRoot(actionsDir) {
+    if (path.basename(actionsDir) !== 'actions' ||
+        path.basename(path.dirname(actionsDir)) !== '.rn-agent') {
+        return null;
+    }
+    const corpus = resolveReadableActionCorpus(path.dirname(path.dirname(actionsDir)));
+    if (corpus.status !== 'owned-directory' && corpus.status !== 'approved-inherited')
+        return null;
+    return corpus;
+}
 function scanFlows() {
     const roots = collectFlowRoots(flags.workspaceRoot);
     const items = [];
     for (const root of roots) {
-        if (!isDirectNode(root, 'directory'))
+        const corpus = classifyFlowRoot(root);
+        if (!corpus)
+            continue;
+        const snapshot = readableActionsSnapshot(corpus);
+        if (!snapshot)
+            continue;
+        let files;
+        try {
+            files = listUnfollowedDirectory(snapshot.directory, snapshot.identity);
+        }
+        catch {
+            continue;
+        }
+        const afterRead = classifyFlowRoot(root);
+        if (!afterRead || !sameReadableActionCorpus(corpus, afterRead))
             continue;
         const ids = [
-            ...new Set(fs
-                .readdirSync(root)
-                .filter((file) => /\.ya?ml$/.test(file))
-                .map((file) => file.replace(/\.ya?ml$/, ''))),
+            ...new Set(files.filter((file) => /\.ya?ml$/.test(file)).map((file) => file.replace(/\.ya?ml$/, ''))),
         ];
+        const rootItems = [];
         for (const id of ids) {
-            const fp = resolveFlowFile(root, id);
-            if (!fp)
+            const f = resolveFlowFile(files, id);
+            if (!f)
                 continue;
-            const f = path.basename(fp);
-            const text = fs.readFileSync(fp, 'utf8');
+            const reportedPath = path.join(root, f);
+            let text;
+            try {
+                text = readUnfollowedFile(snapshot.directory, snapshot.identity, f);
+            }
+            catch {
+                continue;
+            }
+            const afterFile = classifyFlowRoot(root);
+            if (!afterFile || !sameReadableActionCorpus(corpus, afterFile)) {
+                rootItems.length = 0;
+                break;
+            }
             const meta = parseFlowMeta(text);
             if (flags.appId && meta.appId !== flags.appId)
                 continue;
             const tagsStr = (meta.tags || []).join(',');
-            if (!matchKw(meta.purpose, meta.appId, meta.intent, tagsStr, f, fp))
+            if (!matchKw(meta.purpose, meta.appId, meta.intent, tagsStr, f, reportedPath))
                 continue;
             const params = (text.match(/\$\{([A-Z_][A-Z0-9_]*)\}/g) || []).map((s) => s.slice(2, -1));
             const uniqParams = Array.from(new Set(params));
-            const replay = replayHint(meta.id, fp, uniqParams);
-            items.push({
+            const replay = replayHint(meta.id, reportedPath, uniqParams);
+            rootItems.push({
                 flow: f.replace(/\.ya?ml$/, ''),
-                path: fp,
+                path: reportedPath,
                 appId: meta.appId,
                 purpose: truncate(meta.purpose, 140),
                 id: meta.id,
@@ -164,6 +190,9 @@ function scanFlows() {
                 replay,
             });
         }
+        const finalCorpus = classifyFlowRoot(root);
+        if (finalCorpus && sameReadableActionCorpus(corpus, finalCorpus))
+            items.push(...rootItems);
     }
     items.sort((a, b) => a.flow.localeCompare(b.flow));
     return { items: items.slice(0, flags.max), roots };

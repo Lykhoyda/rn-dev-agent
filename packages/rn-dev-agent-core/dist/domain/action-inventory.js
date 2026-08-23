@@ -1,25 +1,16 @@
-import { readdirSync } from 'node:fs';
-import { join } from 'node:path';
-import { assertReadableActionCorpus, loadAction } from './action-store.js';
-export async function listActions(projectRoot) {
-    const actionsDir = join(projectRoot, '.rn-agent', 'actions');
-    assertReadableActionCorpus(projectRoot);
-    let files;
-    try {
-        files = readdirSync(actionsDir);
-    }
-    catch (err) {
-        if (err.code === 'ENOENT')
-            return [];
-        throw err;
-    }
-    const yamlFiles = files.filter((f) => /\.ya?ml$/.test(f)).sort();
+import { loadActionFromContext, openReadableActionLoadContext, } from './action-store.js';
+export async function listActions(projectRoot, dependencies = {}) {
+    const context = openReadableActionLoadContext(projectRoot);
+    if (!context)
+        return [];
+    const load = dependencies.loadAction ?? loadActionFromContext;
+    const yamlFiles = context.files.filter((f) => /\.ya?ml$/.test(f)).sort();
     const results = [];
     for (const id of new Set(yamlFiles.map((file) => file.replace(/\.ya?ml$/, '')))) {
         // Inventory omits yaml/yml twins; resolveActionPath still refuses replay.
         if (yamlFiles.includes(`${id}.yaml`) && yamlFiles.includes(`${id}.yml`))
             continue;
-        const action = loadAction(projectRoot, id);
+        const action = load(context, id);
         if (!action)
             continue;
         const { metadata } = action;

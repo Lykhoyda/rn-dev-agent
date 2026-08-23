@@ -9,6 +9,7 @@ import {
   saveActionRuntimeWithCAS,
 } from '../../dist/domain/action-store.js';
 import { appendRunRecord } from '../../dist/domain/reusable-action.js';
+import { parseAndValidateFlow } from '../../dist/domain/maestro-validator.js';
 import {
   createPinnedRunActionHandler as createRunActionHandler,
   createTmpProject,
@@ -131,7 +132,9 @@ test('GH-588 V2: stale YAML baseline does not reject sidecar-only RunRecord pers
   const handler = createRunActionHandler({
     maestroRun: async (args) => {
       maestroCalls += 1;
-      assert.equal(args.flowPath, yamlPath);
+      assert.equal(args.flowPath, undefined);
+      assert.equal(args.actionMetadata?.id, 'wizard-create-task');
+      assert.equal(parseAndValidateFlow(args.inlineYaml ?? '').appId, 'com.rndevagent.testapp');
       assert.equal(args.deviceId, DEVICE_ID);
       assert.deepEqual(args.params, {
         TITLE: 'V2Fresh',

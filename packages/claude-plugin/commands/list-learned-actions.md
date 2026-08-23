@@ -95,7 +95,7 @@ be replayed via `cdp_run_action` (or `/rn-dev-agent:run-action`) before any
 manual `device_*` walk. Per `feedback_execute_artifacts_before_manual.md`:
 manual primitives are a fallback, not a default.
 
-Treat the inventory's legacy `replay` string as display-only. Execute owned
+Treat the inventory's legacy `replay` string as display-only. Execute approved
 actions through `cdp_run_action` so replay resolves pin-cache maestro-runner
 `>= 1.1.24` and enforces `enginePin` and selector preflight.
 

@@ -191,7 +191,9 @@ test('cdp_run_action: when reaching maestro_run, the params are passed through',
     { TITLE: 'Buy milk', PRIORITY: 'high' },
     `params not forwarded; firstCall: ${JSON.stringify(firstCall)}`,
   );
-  assert.equal(firstCall.flowPath.endsWith('sample.yaml'), true);
+  assert.equal(firstCall.flowPath, undefined);
+  assert.equal(firstCall.actionMetadata.id, 'sample');
+  assert.match(firstCall.inlineYaml, /inputText: \$\{TITLE\}/);
 
   // Cleanup
   const { rmSync } = await import('node:fs');
