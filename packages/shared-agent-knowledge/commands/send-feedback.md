@@ -254,4 +254,4 @@ The following IS included (safe):
 - Tool call names, pass/fail results, and latency
 - CDP connection status (connected/disconnected)
 - Error count (not error contents)
-- Runner lifecycle events capped at 200/256 KB, a salted stable device-ID hash, and the owned test-app bundle ID only
+- The complete reviewed feedback-safe runner-diagnostics projection described in Step 2
