@@ -17,11 +17,12 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { test } from 'node:test';
 import { createHash } from 'node:crypto';
 import {
   applyInheritance,
+  captureReadableActionOperationSnapshot,
   planInheritance,
   readableActionsSnapshot,
   resolveReadableActionCorpus,
@@ -173,6 +174,10 @@ function countGitCalls(calls: GitProbeCall[], cwd: string, args: readonly string
     .length;
 }
 
+function normalizedGitCalls(calls: GitProbeCall[]): string[] {
+  return calls.map((call) => `${call.cwd}\0${call.args.join('\0')}`);
+}
+
 function snapshotTree(root: string): string {
   const hashes: string[] = [];
   const walk = (dir: string) => {
@@ -322,6 +327,78 @@ test('primary verification is constant and malformed main records never fall bac
         assert.equal(countGitCalls(refusedCalls, extra, args), 0);
       }
     }
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('inventory and replay Git calls are independent of action count', () => {
+  const fixture = makeFixture();
+  try {
+    seedLoginCorpus(fixture.primary);
+    const worktree = addWorktree(fixture);
+    inherit(worktree);
+    const probe = createGitProbe(fixture);
+    const inventoryArgs = [
+      '--json',
+      '--section',
+      'b',
+      '--workspace-root',
+      worktree,
+      '--memory-cwd',
+      worktree,
+      '--max',
+      '20',
+    ];
+
+    probe.reset();
+    const one = nodeCli(LEARNED_CLI, inventoryArgs, worktree, {
+      env: probe.env,
+      timeout: 30_000,
+    });
+    assert.equal(one.status, 0, one.stderr);
+    const oneCalls = normalizedGitCalls(probe.readCalls());
+
+    for (let index = 1; index < 10; index += 1) {
+      const id = `action-${String(index).padStart(2, '0')}`;
+      writeFileSync(
+        join(fixture.primary, '.rn-agent', 'actions', `${id}.yaml`),
+        fixtureYaml({ id }),
+      );
+    }
+    probe.reset();
+    const ten = nodeCli(LEARNED_CLI, inventoryArgs, worktree, {
+      env: probe.env,
+      timeout: 30_000,
+    });
+    assert.equal(ten.status, 0, ten.stderr);
+    const tenCalls = normalizedGitCalls(probe.readCalls());
+    assert.deepEqual(tenCalls, oneCalls);
+
+    const replayHelper = join(fixture.root, 'load-action.mjs');
+    const actionStoreUrl = pathToFileURL(join(CORE_ROOT, 'dist', 'domain', 'action-store.js')).href;
+    writeFileSync(
+      replayHelper,
+      `import { loadAction } from ${JSON.stringify(actionStoreUrl)};\nconst action = loadAction(process.argv[2], 'login');\nif (action?.metadata.id !== 'login') process.exit(2);\n`,
+    );
+    probe.reset();
+    const replay = nodeCli(replayHelper, [worktree], worktree, {
+      env: probe.env,
+      timeout: 30_000,
+    });
+    assert.equal(replay.status, 0, replay.stderr);
+    assert.deepEqual(normalizedGitCalls(probe.readCalls()), oneCalls);
+
+    const corpus = resolveReadableActionCorpus(worktree);
+    assert.equal(corpus.status, 'approved-inherited');
+    const operation = captureReadableActionOperationSnapshot(corpus);
+    assert.ok(operation);
+    assert.equal(Object.isFrozen(operation), true);
+    assert.equal(Object.isFrozen(operation.directoryIdentity), true);
+    assert.equal(Object.isFrozen(operation.linkIdentity), true);
+    assert.equal(Object.isFrozen(operation.primaryIdentity), true);
+    assert.equal(operation.primaryIdentity?.topLevel, fixture.primary);
+    assert.equal(operation.primaryIdentity?.commonDir, realpathSync(join(fixture.primary, '.git')));
   } finally {
     fixture.cleanup();
   }
@@ -562,6 +639,54 @@ test('inventory stays bound to its original corpus snapshot', async () => {
     );
   } finally {
     fixture.cleanup();
+  }
+});
+
+test('inventory refuses every inherited corpus identity mutation between file loads', async () => {
+  for (const scenario of ['retarget-link', 'replace-link', 'replace-target'] as const) {
+    const fixture = makeFixture();
+    try {
+      seedLoginCorpus(fixture.primary, 'alpha');
+      writeFileSync(
+        join(fixture.primary, '.rn-agent', 'actions', 'beta.yaml'),
+        fixtureYaml({ id: 'beta' }),
+      );
+      const worktree = addWorktree(fixture, scenario);
+      inherit(worktree);
+      const link = join(worktree, '.rn-agent', 'actions');
+      const target = join(fixture.primary, '.rn-agent', 'actions');
+      let loaded = 0;
+
+      await assert.rejects(
+        () =>
+          listActions(worktree, {
+            loadAction: (context, actionId) => {
+              const action = loadActionFromContext(context, actionId);
+              loaded += 1;
+              if (loaded !== 1) return action;
+              if (scenario === 'retarget-link') {
+                const foreign = join(fixture.root, 'foreign-actions');
+                mkdirSync(foreign);
+                rmSync(link);
+                symlinkSync(foreign, link, 'dir');
+              } else if (scenario === 'replace-link') {
+                rmSync(link);
+                mkdirSync(link);
+              } else {
+                renameSync(target, join(fixture.root, 'original-actions'));
+                mkdirSync(target);
+                writeFileSync(join(target, 'beta.yaml'), fixtureYaml({ id: 'beta' }));
+              }
+              return action;
+            },
+          }),
+        /Refusing replaced learned-action corpus symlink/,
+        scenario,
+      );
+      assert.equal(loaded, 1, `${scenario} must refuse before a second file is accepted`);
+    } finally {
+      fixture.cleanup();
+    }
   }
 });
 

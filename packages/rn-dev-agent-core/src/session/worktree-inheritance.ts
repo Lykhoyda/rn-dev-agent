@@ -126,8 +126,21 @@ export type ReadableActionCorpus =
       targetDir: string;
       linkIdentity: PathIdentity;
       targetIdentity: PathIdentity;
+      primaryRoot: string;
+      commonDir: string;
     }
   | { status: 'refused'; reason: string };
+
+export interface ReadableActionOperationSnapshot {
+  readonly operationId: string;
+  readonly kind: 'owned-directory' | 'approved-inherited';
+  readonly projectRoot: string;
+  readonly actionsDir: string;
+  readonly directory: string;
+  readonly directoryIdentity: Readonly<PathIdentity>;
+  readonly linkIdentity?: Readonly<PathIdentity>;
+  readonly primaryIdentity?: Readonly<{ topLevel: string; commonDir: string }>;
+}
 
 export interface ResourcePlan {
   id: ResourceId;
@@ -505,7 +518,9 @@ function refuseForeignActions(actionsDir: string): ReadableActionCorpus {
   return refuseCorpus(`Refusing foreign learned-action corpus symlink at ${actionsDir}.`);
 }
 
-function refuseReplacedActions(actionsDir: string): ReadableActionCorpus {
+function refuseReplacedActions(
+  actionsDir: string,
+): Extract<ReadableActionCorpus, { status: 'refused' }> {
   return refuseCorpus(`Refusing replaced learned-action corpus symlink at ${actionsDir}.`);
 }
 
@@ -649,6 +664,8 @@ export function resolveReadableActionCorpus(
     targetDir,
     linkIdentity: planned.evidence,
     targetIdentity,
+    primaryRoot: layout.primaryRoot,
+    commonDir: layout.commonDir,
   };
 }
 
@@ -676,7 +693,9 @@ export function sameReadableActionCorpus(
     left.linkIdentity.dev === right.linkIdentity.dev &&
     left.linkIdentity.ino === right.linkIdentity.ino &&
     left.targetIdentity.dev === right.targetIdentity.dev &&
-    left.targetIdentity.ino === right.targetIdentity.ino
+    left.targetIdentity.ino === right.targetIdentity.ino &&
+    left.primaryRoot === right.primaryRoot &&
+    left.commonDir === right.commonDir
   );
 }
 
@@ -696,6 +715,78 @@ export function readableActionsSnapshot(
     return { directory: corpus.targetDir, identity: corpus.targetIdentity };
   }
   return null;
+}
+
+let readableActionOperationSequence = 0;
+
+function freezeIdentity(identity: PathIdentity): Readonly<PathIdentity> {
+  return Object.freeze({ ...identity });
+}
+
+export function captureReadableActionOperationSnapshot(
+  corpus: ReadableActionCorpus,
+): ReadableActionOperationSnapshot | null {
+  const operationId = `${process.pid}:${++readableActionOperationSequence}`;
+  if (corpus.status === 'owned-directory') {
+    return Object.freeze({
+      operationId,
+      kind: corpus.status,
+      projectRoot: corpus.projectRoot,
+      actionsDir: corpus.actionsDir,
+      directory: corpus.actionsDir,
+      directoryIdentity: freezeIdentity(corpus.identity),
+    });
+  }
+  if (corpus.status === 'approved-inherited') {
+    return Object.freeze({
+      operationId,
+      kind: corpus.status,
+      projectRoot: corpus.projectRoot,
+      actionsDir: corpus.actionsDir,
+      directory: corpus.targetDir,
+      directoryIdentity: freezeIdentity(corpus.targetIdentity),
+      linkIdentity: freezeIdentity(corpus.linkIdentity),
+      primaryIdentity: Object.freeze({
+        topLevel: corpus.primaryRoot,
+        commonDir: corpus.commonDir,
+      }),
+    });
+  }
+  return null;
+}
+
+function currentIdentityMatches(
+  path: string,
+  expected: Readonly<PathIdentity>,
+  kind: 'directory' | 'symlink',
+): boolean {
+  const current = lstatIfPresent(path);
+  if (!current) return false;
+  const typeMatches = kind === 'directory' ? current.isDirectory() : current.isSymbolicLink();
+  return (
+    typeMatches && String(current.dev) === expected.dev && String(current.ino) === expected.ino
+  );
+}
+
+export function assertReadableActionOperationUnchanged(
+  snapshot: ReadableActionOperationSnapshot,
+): void {
+  let unchanged = canonical(snapshot.projectRoot) === snapshot.projectRoot;
+  if (snapshot.kind === 'owned-directory') {
+    unchanged =
+      unchanged &&
+      currentIdentityMatches(snapshot.actionsDir, snapshot.directoryIdentity, 'directory') &&
+      canonical(snapshot.actionsDir) === snapshot.directory;
+  } else {
+    unchanged =
+      unchanged &&
+      Boolean(snapshot.linkIdentity && snapshot.primaryIdentity) &&
+      currentIdentityMatches(snapshot.actionsDir, snapshot.linkIdentity!, 'symlink') &&
+      currentIdentityMatches(snapshot.directory, snapshot.directoryIdentity, 'directory') &&
+      canonical(snapshot.actionsDir) === snapshot.directory &&
+      canonical(snapshot.directory) === snapshot.directory;
+  }
+  if (!unchanged) throw new Error(refuseReplacedActions(snapshot.actionsDir).reason);
 }
 
 function isTracked(worktreeRoot: string, relativePath: string): boolean {

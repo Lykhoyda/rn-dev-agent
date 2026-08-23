@@ -594,30 +594,60 @@ function resolveReadableActionCorpus(projectRoot, dependencies = {}) {
     actionsDir,
     targetDir,
     linkIdentity: planned.evidence,
-    targetIdentity
+    targetIdentity,
+    primaryRoot: layout.primaryRoot,
+    commonDir: layout.commonDir
   };
 }
-function sameReadableActionCorpus(left, right) {
-  if (left.status !== right.status)
-    return false;
-  if (left.status === "absent")
-    return true;
-  if (left.status === "refused") {
-    return right.status === "refused" && left.reason === right.reason;
-  }
-  if (left.status === "owned-directory" && right.status === "owned-directory") {
-    return left.actionsDir === right.actionsDir && left.identity.dev === right.identity.dev && left.identity.ino === right.identity.ino;
-  }
-  return left.status === "approved-inherited" && right.status === "approved-inherited" && left.actionsDir === right.actionsDir && left.targetDir === right.targetDir && left.linkIdentity.dev === right.linkIdentity.dev && left.linkIdentity.ino === right.linkIdentity.ino && left.targetIdentity.dev === right.targetIdentity.dev && left.targetIdentity.ino === right.targetIdentity.ino;
+var readableActionOperationSequence = 0;
+function freezeIdentity(identity) {
+  return Object.freeze({ ...identity });
 }
-function readableActionsSnapshot(corpus) {
+function captureReadableActionOperationSnapshot(corpus) {
+  const operationId = `${process.pid}:${++readableActionOperationSequence}`;
   if (corpus.status === "owned-directory") {
-    return { directory: corpus.actionsDir, identity: corpus.identity };
+    return Object.freeze({
+      operationId,
+      kind: corpus.status,
+      projectRoot: corpus.projectRoot,
+      actionsDir: corpus.actionsDir,
+      directory: corpus.actionsDir,
+      directoryIdentity: freezeIdentity(corpus.identity)
+    });
   }
   if (corpus.status === "approved-inherited") {
-    return { directory: corpus.targetDir, identity: corpus.targetIdentity };
+    return Object.freeze({
+      operationId,
+      kind: corpus.status,
+      projectRoot: corpus.projectRoot,
+      actionsDir: corpus.actionsDir,
+      directory: corpus.targetDir,
+      directoryIdentity: freezeIdentity(corpus.targetIdentity),
+      linkIdentity: freezeIdentity(corpus.linkIdentity),
+      primaryIdentity: Object.freeze({
+        topLevel: corpus.primaryRoot,
+        commonDir: corpus.commonDir
+      })
+    });
   }
   return null;
+}
+function currentIdentityMatches(path2, expected, kind) {
+  const current = lstatIfPresent(path2);
+  if (!current)
+    return false;
+  const typeMatches = kind === "directory" ? current.isDirectory() : current.isSymbolicLink();
+  return typeMatches && String(current.dev) === expected.dev && String(current.ino) === expected.ino;
+}
+function assertReadableActionOperationUnchanged(snapshot) {
+  let unchanged = canonical(snapshot.projectRoot) === snapshot.projectRoot;
+  if (snapshot.kind === "owned-directory") {
+    unchanged = unchanged && currentIdentityMatches(snapshot.actionsDir, snapshot.directoryIdentity, "directory") && canonical(snapshot.actionsDir) === snapshot.directory;
+  } else {
+    unchanged = unchanged && Boolean(snapshot.linkIdentity && snapshot.primaryIdentity) && currentIdentityMatches(snapshot.actionsDir, snapshot.linkIdentity, "symlink") && currentIdentityMatches(snapshot.directory, snapshot.directoryIdentity, "directory") && canonical(snapshot.actionsDir) === snapshot.directory && canonical(snapshot.directory) === snapshot.directory;
+  }
+  if (!unchanged)
+    throw new Error(refuseReplacedActions(snapshot.actionsDir).reason);
 }
 function isTracked(worktreeRoot, relativePath) {
   const listed = git(worktreeRoot, ["ls-files", "--", relativePath]);
@@ -898,34 +928,30 @@ function resolveFlowFile(files, id) {
     return ymlPath;
   return null;
 }
-function classifyFlowRoot(actionsDir) {
+function openFlowRootOperation(actionsDir) {
   if (path.basename(actionsDir) !== "actions" || path.basename(path.dirname(actionsDir)) !== ".rn-agent") {
     return null;
   }
   const corpus = resolveReadableActionCorpus(path.dirname(path.dirname(actionsDir)));
   if (corpus.status !== "owned-directory" && corpus.status !== "approved-inherited")
     return null;
-  return corpus;
+  return captureReadableActionOperationSnapshot(corpus);
 }
 function scanFlows() {
   const roots = collectFlowRoots(flags.workspaceRoot);
   const items = [];
   for (const root of roots) {
-    const corpus = classifyFlowRoot(root);
-    if (!corpus)
-      continue;
-    const snapshot = readableActionsSnapshot(corpus);
-    if (!snapshot)
+    const operation = openFlowRootOperation(root);
+    if (!operation)
       continue;
     let files;
     try {
-      files = listUnfollowedDirectory(snapshot.directory, snapshot.identity);
+      files = listUnfollowedDirectory(operation.directory, operation.directoryIdentity);
     } catch {
+      assertReadableActionOperationUnchanged(operation);
       continue;
     }
-    const afterRead = classifyFlowRoot(root);
-    if (!afterRead || !sameReadableActionCorpus(corpus, afterRead))
-      continue;
+    assertReadableActionOperationUnchanged(operation);
     const ids = [
       ...new Set(files.filter((file) => /\.ya?ml$/.test(file)).map((file) => file.replace(/\.ya?ml$/, "")))
     ];
@@ -937,15 +963,12 @@ function scanFlows() {
       const reportedPath = path.join(root, f);
       let text;
       try {
-        text = readUnfollowedFile(snapshot.directory, snapshot.identity, f);
+        text = readUnfollowedFile(operation.directory, operation.directoryIdentity, f);
       } catch {
+        assertReadableActionOperationUnchanged(operation);
         continue;
       }
-      const afterFile = classifyFlowRoot(root);
-      if (!afterFile || !sameReadableActionCorpus(corpus, afterFile)) {
-        rootItems.length = 0;
-        break;
-      }
+      assertReadableActionOperationUnchanged(operation);
       const meta = parseFlowMeta(text);
       if (flags.appId && meta.appId !== flags.appId)
         continue;
@@ -972,9 +995,8 @@ function scanFlows() {
         replay
       });
     }
-    const finalCorpus = classifyFlowRoot(root);
-    if (finalCorpus && sameReadableActionCorpus(corpus, finalCorpus))
-      items.push(...rootItems);
+    assertReadableActionOperationUnchanged(operation);
+    items.push(...rootItems);
   }
   items.sort((a, b) => a.flow.localeCompare(b.flow));
   return { items: items.slice(0, flags.max), roots };

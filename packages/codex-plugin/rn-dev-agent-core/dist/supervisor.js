@@ -10892,21 +10892,10 @@ function resolveReadableActionCorpus(projectRoot, dependencies = {}) {
     actionsDir,
     targetDir,
     linkIdentity: planned.evidence,
-    targetIdentity
+    targetIdentity,
+    primaryRoot: layout.primaryRoot,
+    commonDir: layout.commonDir
   };
-}
-function sameReadableActionCorpus(left, right) {
-  if (left.status !== right.status)
-    return false;
-  if (left.status === "absent")
-    return true;
-  if (left.status === "refused") {
-    return right.status === "refused" && left.reason === right.reason;
-  }
-  if (left.status === "owned-directory" && right.status === "owned-directory") {
-    return left.actionsDir === right.actionsDir && left.identity.dev === right.identity.dev && left.identity.ino === right.identity.ino;
-  }
-  return left.status === "approved-inherited" && right.status === "approved-inherited" && left.actionsDir === right.actionsDir && left.targetDir === right.targetDir && left.linkIdentity.dev === right.linkIdentity.dev && left.linkIdentity.ino === right.linkIdentity.ino && left.targetIdentity.dev === right.targetIdentity.dev && left.targetIdentity.ino === right.targetIdentity.ino;
 }
 function readableActionsSnapshot(corpus) {
   if (corpus.status === "owned-directory") {
@@ -10916,6 +10905,55 @@ function readableActionsSnapshot(corpus) {
     return { directory: corpus.targetDir, identity: corpus.targetIdentity };
   }
   return null;
+}
+function freezeIdentity(identity2) {
+  return Object.freeze({ ...identity2 });
+}
+function captureReadableActionOperationSnapshot(corpus) {
+  const operationId = `${process.pid}:${++readableActionOperationSequence}`;
+  if (corpus.status === "owned-directory") {
+    return Object.freeze({
+      operationId,
+      kind: corpus.status,
+      projectRoot: corpus.projectRoot,
+      actionsDir: corpus.actionsDir,
+      directory: corpus.actionsDir,
+      directoryIdentity: freezeIdentity(corpus.identity)
+    });
+  }
+  if (corpus.status === "approved-inherited") {
+    return Object.freeze({
+      operationId,
+      kind: corpus.status,
+      projectRoot: corpus.projectRoot,
+      actionsDir: corpus.actionsDir,
+      directory: corpus.targetDir,
+      directoryIdentity: freezeIdentity(corpus.targetIdentity),
+      linkIdentity: freezeIdentity(corpus.linkIdentity),
+      primaryIdentity: Object.freeze({
+        topLevel: corpus.primaryRoot,
+        commonDir: corpus.commonDir
+      })
+    });
+  }
+  return null;
+}
+function currentIdentityMatches(path, expected, kind) {
+  const current = lstatIfPresent(path);
+  if (!current)
+    return false;
+  const typeMatches = kind === "directory" ? current.isDirectory() : current.isSymbolicLink();
+  return typeMatches && String(current.dev) === expected.dev && String(current.ino) === expected.ino;
+}
+function assertReadableActionOperationUnchanged(snapshot) {
+  let unchanged = canonical(snapshot.projectRoot) === snapshot.projectRoot;
+  if (snapshot.kind === "owned-directory") {
+    unchanged = unchanged && currentIdentityMatches(snapshot.actionsDir, snapshot.directoryIdentity, "directory") && canonical(snapshot.actionsDir) === snapshot.directory;
+  } else {
+    unchanged = unchanged && Boolean(snapshot.linkIdentity && snapshot.primaryIdentity) && currentIdentityMatches(snapshot.actionsDir, snapshot.linkIdentity, "symlink") && currentIdentityMatches(snapshot.directory, snapshot.directoryIdentity, "directory") && canonical(snapshot.actionsDir) === snapshot.directory && canonical(snapshot.directory) === snapshot.directory;
+  }
+  if (!unchanged)
+    throw new Error(refuseReplacedActions(snapshot.actionsDir).reason);
 }
 function isTracked(worktreeRoot, relativePath) {
   const listed = git(worktreeRoot, ["ls-files", "--", relativePath]);
@@ -11185,7 +11223,7 @@ function detectLegacyRootRepair(input) {
   }
   return repairReport("required", LEGACY_ROOT_REPAIR_REQUIRED, legacyRootRepairRemedy("The verified legacy root detached the real .rn-agent.bak integration and local state."), [".rn-agent", ".rn-agent.bak"]);
 }
-var SHAREABLE_RESOURCES, GIT_ENV_OVERRIDES, LOCAL_CONTENT;
+var SHAREABLE_RESOURCES, GIT_ENV_OVERRIDES, readableActionOperationSequence, LOCAL_CONTENT;
 var init_worktree_inheritance = __esm({
   "packages/rn-dev-agent-core/dist/session/worktree-inheritance.js"() {
     "use strict";
@@ -11209,6 +11247,7 @@ var init_worktree_inheritance = __esm({
       "GIT_OBJECT_DIRECTORY",
       "GIT_NAMESPACE"
     ];
+    readableActionOperationSequence = 0;
     LOCAL_CONTENT = "Local real content is present; it is never overwritten and is not shared.";
   }
 });
@@ -30059,15 +30098,8 @@ function assertOwnedActionCorpus(projectRoot) {
     }
   }
 }
-function assertStableReadableCorpus(projectRoot, expected) {
-  const after = resolveReadableActionCorpus(projectRoot);
-  if (!sameReadableActionCorpus(expected, after)) {
-    const actionsDir = join24(projectRoot, ".rn-agent", "actions");
-    throw new Error(`Refusing replaced learned-action corpus symlink at ${actionsDir}.`);
-  }
-}
 function assertReadableActionLoadContextStable(context) {
-  assertStableReadableCorpus(context.projectRoot, context.corpus);
+  assertReadableActionOperationUnchanged(context.operation);
 }
 function lstatIfPresent2(path) {
   try {
@@ -30119,11 +30151,12 @@ function openReadableActionLoadContext(projectRoot) {
   if (corpus.status !== "owned-directory" && corpus.status !== "approved-inherited")
     return null;
   const snapshot = readableActionsSnapshot(corpus);
-  if (!snapshot)
+  const operation = captureReadableActionOperationSnapshot(corpus);
+  if (!snapshot || !operation)
     return null;
   const files = listUnfollowedDirectory(snapshot.directory, snapshot.identity);
-  assertStableReadableCorpus(projectRoot, corpus);
-  return { projectRoot, corpus, snapshot, files };
+  assertReadableActionOperationUnchanged(operation);
+  return { projectRoot, corpus, snapshot, operation, files };
 }
 function resolveActionFileNameFromContext(actionId, context) {
   const fileName = `${actionId}.yaml`;
@@ -30150,7 +30183,7 @@ function resolveActionPath(projectRoot, actionId) {
   if (!fileName)
     return null;
   readUnfollowedFile(context.snapshot.directory, context.snapshot.identity, fileName);
-  assertStableReadableCorpus(projectRoot, context.corpus);
+  assertReadableActionOperationUnchanged(context.operation);
   return join24(context.corpus.actionsDir, fileName);
 }
 function createActionTextExclusive(projectRoot, actionId, yamlText) {
@@ -30261,10 +30294,11 @@ function joinYaml(parts) {
 }
 function captureActionFromContext(context, actionId) {
   assertValidActionId(actionId, "loadAction");
+  assertReadableActionOperationUnchanged(context.operation);
   const fileName = resolveActionFileNameFromContext(actionId, context);
   if (!fileName)
     return null;
-  const { corpus, projectRoot, snapshot } = context;
+  const { corpus, snapshot } = context;
   const filePath = join24(corpus.actionsDir, fileName);
   const text = readUnfollowedFile(snapshot.directory, snapshot.identity, fileName);
   const metadata = parseM7Header(text, actionId);
@@ -30294,7 +30328,7 @@ function captureActionFromContext(context, actionId) {
   } catch (err) {
     replay = { ok: false, error: err instanceof Error ? err.message : String(err) };
   }
-  assertStableReadableCorpus(projectRoot, corpus);
+  assertReadableActionOperationUnchanged(context.operation);
   return { filePath, yamlText: text, metadata, replay };
 }
 function loadActionFromContext(context, actionId) {
@@ -30303,6 +30337,7 @@ function loadActionFromContext(context, actionId) {
     return null;
   const { bodyLines } = splitYaml(captured.yamlText);
   const state = loadOrInitSidecar(captured.filePath);
+  assertReadableActionOperationUnchanged(context.operation);
   return {
     metadata: captured.metadata,
     body: bodyLines.join("\n"),

@@ -71,7 +71,7 @@ function actionIds(stdout: string): string[] {
   return body.sections.flows.items.map((item) => item.id);
 }
 
-test('32-worktree canonical and inherited inventory stay within the serial user-path bound', (t) => {
+test('24-action 32-worktree canonical and inherited inventory stay within the serial user-path bound', (t) => {
   const fixtureRoot = mkdtempSync(join(tmpdir(), 'rn-812-serial-'));
   const primary = join(fixtureRoot, 'primary');
   const linked = join(fixtureRoot, 'linked');
@@ -94,6 +94,10 @@ test('32-worktree canonical and inherited inventory stay within the serial user-
       join(primary, '.rn-agent', 'actions', 'login-en.yaml'),
       fixtureYaml({ id: 'login-en' }),
     );
+    for (let index = 1; index < 24; index += 1) {
+      const id = `action-${String(index).padStart(2, '0')}`;
+      writeFileSync(join(primary, '.rn-agent', 'actions', `${id}.yaml`), fixtureYaml({ id }));
+    }
     git(primary, ['worktree', 'add', '-q', linked, '-b', 'linked']);
     for (let index = 0; index < 30; index += 1) {
       git(primary, [

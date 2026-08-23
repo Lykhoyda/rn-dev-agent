@@ -27,10 +27,12 @@ import { listUnfollowedDirectory, readUnfollowedFile } from './unfollowed-file.j
 import { buildMaestroFlow, parseAndValidateFlow } from './maestro-validator.js';
 import { mirrorToDb } from './action-state-store.js';
 import {
+  assertReadableActionOperationUnchanged,
+  captureReadableActionOperationSnapshot,
   readableActionsSnapshot,
   resolveReadableActionCorpus,
-  sameReadableActionCorpus,
   type ReadableActionCorpus,
+  type ReadableActionOperationSnapshot,
 } from '../session/worktree-inheritance.js';
 
 /**
@@ -68,19 +70,8 @@ export function assertReadableActionCorpus(projectRoot: string): void {
   if (corpus.status === 'refused') throw new Error(corpus.reason);
 }
 
-function assertStableReadableCorpus(
-  projectRoot: string,
-  expected: ReturnType<typeof resolveReadableActionCorpus>,
-): void {
-  const after = resolveReadableActionCorpus(projectRoot);
-  if (!sameReadableActionCorpus(expected, after)) {
-    const actionsDir = join(projectRoot, '.rn-agent', 'actions');
-    throw new Error(`Refusing replaced learned-action corpus symlink at ${actionsDir}.`);
-  }
-}
-
 export function assertReadableActionLoadContextStable(context: ReadableActionLoadContext): void {
-  assertStableReadableCorpus(context.projectRoot, context.corpus);
+  assertReadableActionOperationUnchanged(context.operation);
 }
 
 function lstatIfPresent(path: string): ReturnType<typeof lstatSync> | null {
@@ -153,6 +144,7 @@ export interface ReadableActionLoadContext {
   projectRoot: string;
   corpus: AcceptedReadableActionCorpus;
   snapshot: ReadableActionSnapshot;
+  operation: ReadableActionOperationSnapshot;
   files: readonly string[];
 }
 
@@ -163,10 +155,11 @@ export function openReadableActionLoadContext(
   if (corpus.status === 'refused') throw new Error(corpus.reason);
   if (corpus.status !== 'owned-directory' && corpus.status !== 'approved-inherited') return null;
   const snapshot = readableActionsSnapshot(corpus);
-  if (!snapshot) return null;
+  const operation = captureReadableActionOperationSnapshot(corpus);
+  if (!snapshot || !operation) return null;
   const files = listUnfollowedDirectory(snapshot.directory, snapshot.identity);
-  assertStableReadableCorpus(projectRoot, corpus);
-  return { projectRoot, corpus, snapshot, files };
+  assertReadableActionOperationUnchanged(operation);
+  return { projectRoot, corpus, snapshot, operation, files };
 }
 
 function resolveActionFileNameFromContext(
@@ -196,7 +189,7 @@ export function resolveActionPath(projectRoot: string, actionId: string): string
   const fileName = resolveActionFileNameFromContext(actionId, context);
   if (!fileName) return null;
   readUnfollowedFile(context.snapshot.directory, context.snapshot.identity, fileName);
-  assertStableReadableCorpus(projectRoot, context.corpus);
+  assertReadableActionOperationUnchanged(context.operation);
   return join(context.corpus.actionsDir, fileName);
 }
 
@@ -411,9 +404,10 @@ export function captureActionFromContext(
   actionId: string,
 ): CapturedActionReplay | null {
   assertValidActionId(actionId, 'loadAction');
+  assertReadableActionOperationUnchanged(context.operation);
   const fileName = resolveActionFileNameFromContext(actionId, context);
   if (!fileName) return null;
-  const { corpus, projectRoot, snapshot } = context;
+  const { corpus, snapshot } = context;
   const filePath = join(corpus.actionsDir, fileName);
   const text = readUnfollowedFile(snapshot.directory, snapshot.identity, fileName);
   const metadata = parseM7Header(text, actionId);
@@ -442,7 +436,7 @@ export function captureActionFromContext(
   } catch (err) {
     replay = { ok: false, error: err instanceof Error ? err.message : String(err) };
   }
-  assertStableReadableCorpus(projectRoot, corpus);
+  assertReadableActionOperationUnchanged(context.operation);
   return { filePath, yamlText: text, metadata, replay };
 }
 
@@ -454,6 +448,7 @@ export function loadActionFromContext(
   if (!captured?.metadata) return null;
   const { bodyLines } = splitYaml(captured.yamlText);
   const state = loadOrInitSidecar(captured.filePath);
+  assertReadableActionOperationUnchanged(context.operation);
   return {
     metadata: captured.metadata,
     body: bodyLines.join('\n'),
