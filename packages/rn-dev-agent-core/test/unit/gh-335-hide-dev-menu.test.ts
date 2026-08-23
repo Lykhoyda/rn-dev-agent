@@ -16,6 +16,7 @@ import {
   runNative,
 } from '../../dist/agent-device-wrapper.js';
 import { CDPClient } from '../../dist/cdp-client.js';
+import { CDPProtocolError, handleMessage } from '../../dist/cdp/transport.js';
 import { planeForTool } from '../../dist/lifecycle/device-arbiter.js';
 import { authorityProfileFor } from '../../dist/session/tool-profiles.js';
 import { createDevSettingsHandler } from '../../dist/tools/dev-settings.js';
@@ -528,6 +529,83 @@ test('initialization distinguishes definite pre-send failure from post-dispatch 
     sentRequests.every((request) => request.method === 'Runtime.evaluate'),
     true,
   );
+});
+
+test('CDP protocol rejection remains typed and cannot imply a dev-menu invocation', async () => {
+  const pendingResponse = Promise.withResolvers();
+  const pending = new Map([
+    [
+      41,
+      {
+        resolve: pendingResponse.resolve,
+        reject: pendingResponse.reject,
+        timer: setTimeout(() => {}, 1_000),
+      },
+    ],
+  ]);
+  handleMessage(
+    Buffer.from(
+      JSON.stringify({
+        id: 41,
+        error: { code: -32000, message: 'Execution context was destroyed.' },
+      }),
+    ),
+    pending,
+    new Map(),
+  );
+  await assert.rejects(pendingResponse.promise, (error) => {
+    if (!(error instanceof CDPProtocolError)) return false;
+    assert.equal(error.code, -32000);
+    assert.equal(error.message, 'Execution context was destroyed.');
+    return true;
+  });
+
+  let requestIndex = 0;
+  let probeCalls = 0;
+  const protocolClient = new CDPClient(8081);
+  Reflect.set(protocolClient, 'ws', {
+    readyState: 1,
+    send: (payload) => {
+      const request = JSON.parse(payload);
+      const responses = [
+        { error: { code: -32000, message: 'Execution context was destroyed.' } },
+        { result: { result: { value: {} } } },
+        { result: { result: { value: { v: JSON.stringify('no_module') } } } },
+      ];
+      const response = responses[requestIndex++];
+      queueMicrotask(() => {
+        Reflect.get(protocolClient, 'handleMessage').call(
+          protocolClient,
+          Buffer.from(JSON.stringify({ id: request.id, ...response })),
+        );
+      });
+    },
+  });
+  const handlerClient = createMockClient({
+    _connectedTarget: {
+      id: 'page1',
+      title: 'React Native (Hermes)',
+      vm: 'Hermes',
+      webSocketDebuggerUrl: 'ws://127.0.0.1:8081/debugger/page1',
+      platform: 'android',
+    },
+    evaluate: (expression, awaitPromise, timeoutMs) =>
+      protocolClient.evaluate(expression, awaitPromise, timeoutMs),
+  });
+  const handler = createDevSettingsHandler(() => handlerClient, {
+    probeForegroundSurface: async () => {
+      probeCalls++;
+      return probeCalls === 1 ? 'expo_dev_menu' : 'app';
+    },
+    settleAfterHide: async () => {},
+  });
+
+  const envelope = parseEnvelope(await handler({ action: 'hideDevMenu' }));
+  assert.equal(envelope.code, 'DEV_MENU_HIDE_FAILED');
+  assert.equal(envelope.meta.callSent, false);
+  assert.equal(envelope.meta.attempts, 2);
+  assert.equal(probeCalls, 1);
+  assert.equal(requestIndex, 4);
 });
 
 test('dev_settings hideDevMenu: close sent but post-probe remains occluded -> unverified', async () => {

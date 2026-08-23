@@ -13,6 +13,7 @@ import type { ResettableState } from './cdp/state.js';
 import { defaultTimeout, timeoutForMethod } from './cdp/timeout-config.js';
 import type { Platform } from './cdp/timeout-config.js';
 import {
+  CDPProtocolError,
   sendWithTimeout as sendMsg,
   rejectAllPending as rejectPending,
   handleMessage as handleMsg,
@@ -1057,7 +1058,7 @@ export class CDPClient {
     } catch (error) {
       return {
         error: `Async evaluation initialization failed: ${error instanceof Error ? error.message : String(error)}`,
-        requestDispatched,
+        requestDispatched: requestDispatched && !(error instanceof CDPProtocolError),
       };
     }
 

@@ -9,7 +9,7 @@ import { performSetup, waitForReact } from './cdp/setup.js';
 import { HELPERS_VERSION, INJECTED_HELPERS } from './injected-helpers.js';
 import { resetState, setActiveFlag, clearActiveFlag, sleep } from './cdp/state.js';
 import { defaultTimeout, timeoutForMethod } from './cdp/timeout-config.js';
-import { sendWithTimeout as sendMsg, rejectAllPending as rejectPending, handleMessage as handleMsg, } from './cdp/transport.js';
+import { CDPProtocolError, sendWithTimeout as sendMsg, rejectAllPending as rejectPending, handleMessage as handleMsg, } from './cdp/transport.js';
 import { wireEventHandlers, parseNetworkHookMessage as parseNetHook, } from './cdp/event-handlers.js';
 import { discoverExactPort, discoverForList, listTargetsOnExactPort, } from './cdp/discovery.js';
 import { helperExpr as helperExprFn, bridgeWithFallback as bridgeWithFallbackFn, } from './cdp/helper-expr.js';
@@ -804,7 +804,7 @@ export class CDPClient {
         catch (error) {
             return {
                 error: `Async evaluation initialization failed: ${error instanceof Error ? error.message : String(error)}`,
-                requestDispatched,
+                requestDispatched: requestDispatched && !(error instanceof CDPProtocolError),
             };
         }
         if (initResult?.exceptionDetails) {

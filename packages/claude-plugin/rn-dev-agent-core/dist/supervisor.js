@@ -70420,7 +70420,7 @@ function handleMessage(data, pending2, eventHandlers, onConsoleHook) {
       clearTimeout(p.timer);
       pending2.delete(msg3.id);
       if (msg3.error) {
-        p.reject(new Error(msg3.error.message));
+        p.reject(new CDPProtocolError(msg3.error.code, msg3.error.message));
       } else {
         p.resolve(msg3.result);
       }
@@ -70436,10 +70436,19 @@ function handleMessage(data, pending2, eventHandlers, onConsoleHook) {
     console.error("CDP: malformed message:", err instanceof Error ? err.message : err);
   }
 }
+var CDPProtocolError;
 var init_transport = __esm({
   "packages/rn-dev-agent-core/dist/cdp/transport.js"() {
     "use strict";
     init_wrapper();
+    CDPProtocolError = class extends Error {
+      code;
+      constructor(code, message) {
+        super(message);
+        this.name = "CDPProtocolError";
+        this.code = code;
+      }
+    };
   }
 });
 
@@ -71667,7 +71676,7 @@ var init_cdp_client = __esm({
         } catch (error2) {
           return {
             error: `Async evaluation initialization failed: ${error2 instanceof Error ? error2.message : String(error2)}`,
-            requestDispatched
+            requestDispatched: requestDispatched && !(error2 instanceof CDPProtocolError)
           };
         }
         if (initResult?.exceptionDetails) {
