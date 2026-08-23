@@ -227,12 +227,12 @@ for path in paths:
             value=json.load(handle)
         context=value.get("context",{})
         if value.get("schema") == "rn-dev-agent/runner-diagnostics/1" and context.get("sessionId") == session_id:
+            salt=read_or_create_salt()
             value=dict(value)
             value["context"]=dict(context)
             value["context"]["sessionId"]="[SESSION_REDACTED]"
             action_id=value["context"].get("actionId")
             if isinstance(action_id,str) and action_id:
-                salt=read_or_create_salt()
                 digest=hashlib.sha256(salt+b"\0feedback-action-id\0"+action_id.encode("utf-8")).hexdigest()
                 value["context"]["actionId"]=digest
             serialized=json.dumps(value,separators=(",",":"))

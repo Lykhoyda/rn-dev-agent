@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
+  chmodSync,
   existsSync,
   mkdtempSync,
   readFileSync,
@@ -307,6 +308,43 @@ test('feedback upgrades legacy exact-session diagnostics with a private stable s
       JSON.parse(second.stdout).runner_diagnostics.context.actionId,
       firstFeedback.runner_diagnostics.context.actionId,
     );
+  } finally {
+    rmSync(fakeHome, { recursive: true, force: true });
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('feedback provisions and validates salt when exact-session diagnostics omit action ID', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'runner-diagnostics-null-action-'));
+  const fakeHome = mkdtempSync(join(tmpdir(), 'runner-diagnostics-null-action-home-'));
+  try {
+    recordFailure(directory, { platform: 'ios', actionId: null }, undefined, 'owned');
+    const saltPath = join(directory, '.runner-diagnostics-salt');
+    rmSync(saltPath);
+
+    const collect = () =>
+      spawnSync('bash', [join(repositoryRoot, 'scripts', 'collect-feedback.sh')], {
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          HOME: fakeHome,
+          RN_PROJECT_ROOT: repositoryRoot,
+          RN_DEV_AGENT_EXPERIENCE_DIR: directory,
+          RN_DEV_AGENT_SESSION_ID: 'owned',
+        },
+      });
+    const upgraded = collect();
+    assert.equal(upgraded.status, 0, upgraded.stderr);
+    assert.equal(JSON.parse(upgraded.stdout).runner_diagnostics.context.actionId, null);
+    assert.equal(readFileSync(saltPath).byteLength, 32);
+    assert.equal(statSync(saltPath).mode & 0o777, 0o600);
+
+    chmodSync(saltPath, 0o644);
+    const refused = collect();
+    assert.equal(refused.status, 0, refused.stderr);
+    const feedback = JSON.parse(refused.stdout);
+    assert.equal('runner_diagnostics' in feedback, false);
+    assert.equal(feedback.runner_diagnostics_status, 'none for exact session');
   } finally {
     rmSync(fakeHome, { recursive: true, force: true });
     rmSync(directory, { recursive: true, force: true });
