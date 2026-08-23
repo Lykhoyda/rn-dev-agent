@@ -665,10 +665,7 @@ function readOrCreateRunnerDiagnosticsSalt(directory) {
 export function writeRunnerDiagnosticsBundle(directory, bundle) {
     mkdirSync(directory, { recursive: true, mode: 0o700 });
     const files = runnerDiagnosticsFiles(directory);
-    const nextSequence = files.reduce((maximum, file) => {
-        const matched = /-(\d+)\.json$/.exec(file);
-        return Math.max(maximum, matched ? Number(matched[1]) : 0);
-    }, 0) + 1;
+    const nextSequence = files.reduce((maximum, file) => Math.max(maximum, runnerDiagnosticsSequence(file)), 0) + 1;
     const sessionKey = (bundle.context.sessionId ?? 'unknown')
         .slice(0, 64)
         .replace(/[^A-Za-z0-9_-]/g, '-');
@@ -693,8 +690,14 @@ export function writeRunnerDiagnosticsBundle(directory, bundle) {
     renameSync(temporary, outputPath);
     chmodSync(outputPath, 0o600);
     const retained = runnerDiagnosticsFiles(directory)
-        .map((file) => ({ file, mtimeMs: statSync(join(directory, file)).mtimeMs }))
-        .sort((left, right) => left.mtimeMs - right.mtimeMs || left.file.localeCompare(right.file));
+        .map((file) => ({
+        file,
+        mtimeMs: statSync(join(directory, file)).mtimeMs,
+        sequence: runnerDiagnosticsSequence(file),
+    }))
+        .sort((left, right) => left.mtimeMs - right.mtimeMs ||
+        left.sequence - right.sequence ||
+        left.file.localeCompare(right.file));
     for (const stale of retained.slice(0, Math.max(0, retained.length - RUNNER_DIAGNOSTICS_RETENTION))) {
         unlinkSync(join(directory, stale.file));
     }
@@ -757,12 +760,22 @@ function runnerDiagnosticsFiles(directory) {
         return [];
     }
 }
+function runnerDiagnosticsSequence(file) {
+    const matched = /-(\d+)\.json$/.exec(file);
+    return matched ? Number(matched[1]) : 0;
+}
 export function latestRunnerDiagnosticsPath(sessionId, directory = configuredExperienceDirectory()) {
     if (sessionId.length === 0)
         return null;
     const files = runnerDiagnosticsFiles(directory)
-        .map((file) => ({ file, mtimeMs: statSync(join(directory, file)).mtimeMs }))
-        .sort((left, right) => right.mtimeMs - left.mtimeMs || right.file.localeCompare(left.file));
+        .map((file) => ({
+        file,
+        mtimeMs: statSync(join(directory, file)).mtimeMs,
+        sequence: runnerDiagnosticsSequence(file),
+    }))
+        .sort((left, right) => right.mtimeMs - left.mtimeMs ||
+        right.sequence - left.sequence ||
+        right.file.localeCompare(left.file));
     for (const file of files) {
         const path = join(directory, file.file);
         try {

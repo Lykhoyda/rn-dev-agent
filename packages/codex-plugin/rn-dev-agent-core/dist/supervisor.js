@@ -34947,13 +34947,7 @@ function createMaestroRunHandler(deps = {}) {
       const warnAug = augmentFailureWithDegradation(output, resolveFloorMs(process.env.RN_RUNTIME_DEGRADED_FLOOR_MS), baseWarnMsg, meta);
       return warnResult(warnAug.meta, warnAug.message);
     } catch (err) {
-      await commitReinstalledInstall();
-      if (err instanceof SessionAuthorityError) {
-        err.attachMeta(androidReleaseMeta());
-        throw err;
-      }
       const stageError = err instanceof MaestroStageExecutionError ? err.stageError : err;
-      const msg3 = stageError instanceof Error ? stageError.message : String(stageError);
       if (stageError instanceof RunnerCacheUnavailableError) {
         recordRunnerDiagnostic("typed-failure", {
           code: stageError.code,
@@ -34974,6 +34968,12 @@ function createMaestroRunHandler(deps = {}) {
           ...androidReleaseMeta()
         });
       }
+      await commitReinstalledInstall();
+      if (err instanceof SessionAuthorityError) {
+        err.attachMeta(androidReleaseMeta());
+        throw err;
+      }
+      const msg3 = stageError instanceof Error ? stageError.message : String(stageError);
       if (stageError instanceof ExactAndroidDeviceRequiredError) {
         return failResult(stageError.message, stageError.code, {
           platform,
@@ -82502,10 +82502,7 @@ function readOrCreateRunnerDiagnosticsSalt(directory) {
 function writeRunnerDiagnosticsBundle(directory, bundle) {
   mkdirSync21(directory, { recursive: true, mode: 448 });
   const files = runnerDiagnosticsFiles(directory);
-  const nextSequence = files.reduce((maximum, file) => {
-    const matched = /-(\d+)\.json$/.exec(file);
-    return Math.max(maximum, matched ? Number(matched[1]) : 0);
-  }, 0) + 1;
+  const nextSequence = files.reduce((maximum, file) => Math.max(maximum, runnerDiagnosticsSequence(file)), 0) + 1;
   const sessionKey = (bundle.context.sessionId ?? "unknown").slice(0, 64).replace(/[^A-Za-z0-9_-]/g, "-");
   const outputPath = join45(directory, `runner-diagnostics-${sessionKey}-${nextSequence}.json`);
   const bounded = boundRunnerDiagnosticsBundle(bundle);
@@ -82529,7 +82526,11 @@ function writeRunnerDiagnosticsBundle(directory, bundle) {
   writeFileSync16(temporary, serialized, { encoding: "utf8", flag: "wx", mode: 384 });
   renameSync9(temporary, outputPath);
   chmodSync7(outputPath, 384);
-  const retained = runnerDiagnosticsFiles(directory).map((file) => ({ file, mtimeMs: statSync15(join45(directory, file)).mtimeMs })).sort((left, right) => left.mtimeMs - right.mtimeMs || left.file.localeCompare(right.file));
+  const retained = runnerDiagnosticsFiles(directory).map((file) => ({
+    file,
+    mtimeMs: statSync15(join45(directory, file)).mtimeMs,
+    sequence: runnerDiagnosticsSequence(file)
+  })).sort((left, right) => left.mtimeMs - right.mtimeMs || left.sequence - right.sequence || left.file.localeCompare(right.file));
   for (const stale of retained.slice(0, Math.max(0, retained.length - RUNNER_DIAGNOSTICS_RETENTION))) {
     unlinkSync15(join45(directory, stale.file));
   }
@@ -82587,10 +82588,18 @@ function runnerDiagnosticsFiles(directory) {
     return [];
   }
 }
+function runnerDiagnosticsSequence(file) {
+  const matched = /-(\d+)\.json$/.exec(file);
+  return matched ? Number(matched[1]) : 0;
+}
 function latestRunnerDiagnosticsPath(sessionId, directory = configuredExperienceDirectory()) {
   if (sessionId.length === 0)
     return null;
-  const files = runnerDiagnosticsFiles(directory).map((file) => ({ file, mtimeMs: statSync15(join45(directory, file)).mtimeMs })).sort((left, right) => right.mtimeMs - left.mtimeMs || right.file.localeCompare(left.file));
+  const files = runnerDiagnosticsFiles(directory).map((file) => ({
+    file,
+    mtimeMs: statSync15(join45(directory, file)).mtimeMs,
+    sequence: runnerDiagnosticsSequence(file)
+  })).sort((left, right) => right.mtimeMs - left.mtimeMs || right.sequence - left.sequence || right.file.localeCompare(left.file));
   for (const file of files) {
     const path = join45(directory, file.file);
     try {
@@ -89598,9 +89607,6 @@ function createMaestroTestAllHandler(deps = {}) {
         if (!ok && args.stopOnFailure)
           break;
       } catch (err) {
-        await commitReinstalledInstall();
-        if (err instanceof SessionAuthorityError)
-          throw err;
         const stageError = err instanceof MaestroStageExecutionError ? err.stageError : err;
         if (stageError instanceof RunnerCacheUnavailableError) {
           return failResult(runnerCacheBootstrapFailure(stageError), "WDA_BOOTSTRAP_FAILED", {
@@ -89623,6 +89629,9 @@ function createMaestroTestAllHandler(deps = {}) {
             ]
           });
         }
+        await commitReinstalledInstall();
+        if (err instanceof SessionAuthorityError)
+          throw err;
         const msg3 = stageError instanceof Error ? stageError.message : String(stageError);
         const errWithOutput = stageError;
         const completed = err instanceof MaestroStageExecutionError ? err.completedResults : [];

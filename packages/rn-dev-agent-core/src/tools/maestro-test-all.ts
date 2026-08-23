@@ -442,10 +442,6 @@ export function createMaestroTestAllHandler(
 
         if (!ok && args.stopOnFailure) break;
       } catch (err) {
-        // A flow that died mid-way may still have reinstalled: re-issue before
-        // reporting, so the failure is the flow's and not a broken axis I.
-        await commitReinstalledInstall();
-        if (err instanceof SessionAuthorityError) throw err;
         const stageError = err instanceof MaestroStageExecutionError ? err.stageError : err;
         if (stageError instanceof RunnerCacheUnavailableError) {
           return failResult(runnerCacheBootstrapFailure(stageError), 'WDA_BOOTSTRAP_FAILED', {
@@ -468,6 +464,10 @@ export function createMaestroTestAllHandler(
             ],
           });
         }
+        // A flow that died mid-way may still have reinstalled: re-issue before
+        // reporting, so the failure is the flow's and not a broken axis I.
+        await commitReinstalledInstall();
+        if (err instanceof SessionAuthorityError) throw err;
         const msg = stageError instanceof Error ? stageError.message : String(stageError);
         const errWithOutput = stageError as { stdout?: unknown; stderr?: unknown };
         const completed =

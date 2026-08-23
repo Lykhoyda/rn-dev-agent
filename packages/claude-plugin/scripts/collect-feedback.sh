@@ -179,16 +179,23 @@ if [ -z "${RN_DEV_AGENT_SESSION_ID:-}" ]; then
   runner_diagnostics_status="exact session unavailable"
 elif [ -d "$experience_dir" ]; then
   runner_diagnostics=$(python3 - "$experience_dir" "$RN_DEV_AGENT_SESSION_ID" <<'PY' 2>/dev/null || echo "null"
-import glob,json,os,sys
+import glob,json,os,re,sys
 directory,session_id=sys.argv[1:]
-paths=sorted(glob.glob(os.path.join(directory,"runner-diagnostics-*.json")),key=os.path.getmtime,reverse=True)
+def sequence(path):
+    match=re.search(r"-(\d+)\.json$",os.path.basename(path))
+    return int(match.group(1)) if match else 0
+paths=sorted(glob.glob(os.path.join(directory,"runner-diagnostics-*.json")),key=lambda path:(os.path.getmtime(path),sequence(path),os.path.basename(path)),reverse=True)
 for path in paths:
     try:
         if os.path.getsize(path) > 256 * 1024:
             continue
         with open(path,encoding="utf-8") as handle:
             value=json.load(handle)
-        if value.get("schema") == "rn-dev-agent/runner-diagnostics/1" and value.get("context",{}).get("sessionId") == session_id:
+        context=value.get("context",{})
+        if value.get("schema") == "rn-dev-agent/runner-diagnostics/1" and context.get("sessionId") == session_id:
+            value=dict(value)
+            value["context"]=dict(context)
+            value["context"]["sessionId"]="[SESSION_REDACTED]"
             print(json.dumps(value,separators=(",",":")))
             break
     except (OSError,ValueError,TypeError):

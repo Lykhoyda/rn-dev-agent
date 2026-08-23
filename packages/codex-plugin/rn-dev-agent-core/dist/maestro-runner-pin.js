@@ -14645,13 +14645,7 @@ function createMaestroRunHandler(deps = {}) {
       const warnAug = augmentFailureWithDegradation(output, resolveFloorMs(process.env.RN_RUNTIME_DEGRADED_FLOOR_MS), baseWarnMsg, meta);
       return warnResult(warnAug.meta, warnAug.message);
     } catch (err) {
-      await commitReinstalledInstall();
-      if (err instanceof SessionAuthorityError) {
-        err.attachMeta(androidReleaseMeta());
-        throw err;
-      }
       const stageError = err instanceof MaestroStageExecutionError ? err.stageError : err;
-      const msg2 = stageError instanceof Error ? stageError.message : String(stageError);
       if (stageError instanceof RunnerCacheUnavailableError) {
         recordRunnerDiagnostic("typed-failure", {
           code: stageError.code,
@@ -14672,6 +14666,12 @@ function createMaestroRunHandler(deps = {}) {
           ...androidReleaseMeta()
         });
       }
+      await commitReinstalledInstall();
+      if (err instanceof SessionAuthorityError) {
+        err.attachMeta(androidReleaseMeta());
+        throw err;
+      }
+      const msg2 = stageError instanceof Error ? stageError.message : String(stageError);
       if (stageError instanceof ExactAndroidDeviceRequiredError) {
         return failResult(stageError.message, stageError.code, {
           platform,

@@ -1,6 +1,14 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  utimesSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { test } from 'node:test';
@@ -9,6 +17,7 @@ import {
   ExperienceRecorder,
   OWNED_TEST_APP_BUNDLE_ID,
   exportLatestRunnerDiagnosticsBundle,
+  latestRunnerDiagnosticsPath,
   writeRunnerDiagnosticsBundle,
 } from '../../dist/experience/evidence.js';
 import {
@@ -188,6 +197,64 @@ test('runner diagnostics retain five bounded bundles and export newest without o
   );
 });
 
+test('runner diagnostics use numeric sequence order when mtimes tie', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'runner-diagnostics-sequence-'));
+  const fixedTime = new Date('2026-08-23T12:00:00.000Z');
+  for (let index = 1; index <= 9; index += 1) {
+    recordFailure(
+      directory,
+      { platform: 'ios', actionId: `action-${index}` },
+      undefined,
+      'retained-session',
+    );
+  }
+  const sequenceOf = (file: string): number => Number(/-(\d+)\.json$/.exec(file)?.[1] ?? 0);
+  const paths = bundles(directory);
+  const sequenceFive = paths.find((file) => sequenceOf(file) === 5);
+  const sequenceNine = paths.find((file) => sequenceOf(file) === 9);
+  assert.ok(sequenceFive);
+  assert.ok(sequenceNine);
+  rmSync(join(directory, sequenceFive));
+  for (const file of bundles(directory)) utimesSync(join(directory, file), fixedTime, fixedTime);
+  const sequenceTen = join(directory, 'runner-diagnostics-retained-session-10.json');
+  writeFileSync(sequenceTen, readFileSync(join(directory, sequenceNine)), { mode: 0o600 });
+  utimesSync(sequenceTen, fixedTime, fixedTime);
+
+  recordFailure(
+    directory,
+    { platform: 'ios', actionId: 'action-11' },
+    undefined,
+    'retained-session',
+  );
+  assert.deepEqual(
+    bundles(directory)
+      .map(sequenceOf)
+      .sort((left, right) => left - right),
+    [7, 8, 9, 10, 11],
+  );
+
+  for (const file of bundles(directory)) utimesSync(join(directory, file), fixedTime, fixedTime);
+  assert.match(latestRunnerDiagnosticsPath('retained-session', directory) ?? '', /-11\.json$/);
+
+  const fakeHome = mkdtempSync(join(tmpdir(), 'runner-diagnostics-sequence-home-'));
+  const collected = spawnSync('bash', [join(repositoryRoot, 'scripts', 'collect-feedback.sh')], {
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      HOME: fakeHome,
+      RN_PROJECT_ROOT: repositoryRoot,
+      RN_DEV_AGENT_EXPERIENCE_DIR: directory,
+      RN_DEV_AGENT_SESSION_ID: 'retained-session',
+    },
+  });
+  assert.equal(collected.status, 0, collected.stderr);
+  const feedback = JSON.parse(collected.stdout);
+  assert.equal(feedback.runner_diagnostics.context.actionId, 'action-11');
+  assert.equal(feedback.runner_diagnostics.context.sessionId, '[SESSION_REDACTED]');
+  rmSync(fakeHome, { recursive: true, force: true });
+  rmSync(directory, { recursive: true, force: true });
+});
+
 test('runner diagnostics bound metadata before enforcing the absolute byte cap', () => {
   const sourceDirectory = mkdtempSync(join(tmpdir(), 'runner-diagnostics-metadata-source-'));
   const targetDirectory = mkdtempSync(join(tmpdir(), 'runner-diagnostics-metadata-target-'));
@@ -219,7 +286,9 @@ test('diagnostics exports select only the exact authenticated session', async ()
 
     const directOutput = join(directory, 'direct-export.json');
     exportLatestRunnerDiagnosticsBundle(directOutput, 'owned', directory);
-    assert.equal(JSON.parse(readFileSync(directOutput, 'utf8')).context.actionId, 'owned-action');
+    const directBundle = JSON.parse(readFileSync(directOutput, 'utf8'));
+    assert.equal(directBundle.context.actionId, 'owned-action');
+    assert.equal(directBundle.context.sessionId, 'owned');
     assert.throws(
       () =>
         exportLatestRunnerDiagnosticsBundle(
@@ -250,7 +319,9 @@ test('diagnostics exports select only the exact authenticated session', async ()
     });
     const envelope = JSON.parse(result.content[0].text);
     assert.equal(envelope.ok, true);
-    assert.equal(JSON.parse(readFileSync(collectOutput, 'utf8')).context.actionId, 'owned-action');
+    const collectLogsBundle = JSON.parse(readFileSync(collectOutput, 'utf8'));
+    assert.equal(collectLogsBundle.context.actionId, 'owned-action');
+    assert.equal(collectLogsBundle.context.sessionId, 'owned');
 
     delete process.env.RN_DEV_AGENT_SESSION_ID;
     const refused = await collectLogs({
@@ -279,6 +350,7 @@ test('diagnostics exports select only the exact authenticated session', async ()
     assert.equal(collected.status, 0, collected.stderr);
     const feedback = JSON.parse(collected.stdout);
     assert.equal(feedback.runner_diagnostics.context.actionId, 'owned-action');
+    assert.equal(feedback.runner_diagnostics.context.sessionId, '[SESSION_REDACTED]');
     assert.equal(feedback.runner_diagnostics_status, 'attached for review');
     rmSync(fakeHome, { recursive: true, force: true });
   } finally {
