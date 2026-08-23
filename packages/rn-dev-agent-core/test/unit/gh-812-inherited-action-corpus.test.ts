@@ -314,7 +314,13 @@ test('primary verification is constant and malformed main records never fall bac
         countGitCalls(refusedCalls, fixture.primary, ['rev-parse', '--show-toplevel']),
         scenario.probesMain ? 1 : 0,
       );
-      assert.equal(countGitCalls(refusedCalls, extra, ['rev-parse', '--show-toplevel']), 0);
+      for (const args of [
+        ['rev-parse', '--show-toplevel'],
+        ['rev-parse', '--path-format=absolute', '--git-dir'],
+        ['rev-parse', '--path-format=absolute', '--git-common-dir'],
+      ]) {
+        assert.equal(countGitCalls(refusedCalls, extra, args), 0);
+      }
     }
   } finally {
     fixture.cleanup();

@@ -108,7 +108,7 @@ test('32-worktree canonical and inherited inventory stay within the serial user-
     assert.equal(inherited.status, 0, inherited.stderr);
     assert.equal(inherited.stderr, '');
     assert.deepEqual(actionIds(inherited.stdout), ['login-en']);
-    assert.ok(inherited.durationMs <= 8_000, `inherited inventory took ${inherited.durationMs}ms`);
+    assert.ok(inherited.durationMs < 8_000, `inherited inventory took ${inherited.durationMs}ms`);
     t.diagnostic(
       `inventory timings: canonical=${canonical.durationMs.toFixed(1)}ms inherited=${inherited.durationMs.toFixed(1)}ms`,
     );
