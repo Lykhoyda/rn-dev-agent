@@ -3,4 +3,4 @@
 "rn-dev-agent-plugin": patch
 ---
 
-Bind integrated Expo Android launch, wait, and connection behavior to the session-allocated Metro port.
+Carry the session-allocated Android Metro endpoint through Expo launch, wait, native configuration, and adapter connection.
