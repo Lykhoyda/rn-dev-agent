@@ -84,6 +84,7 @@ This collects (all redacted):
   present (healthy = "not installed" — the in-tree rn-fast-runner/rn-android-runner
   are the device backends; a leftover agent-device can interfere)
 - Last 20 telemetry events ONLY when fresh (<24h; tool name, result, latency — no params or paths), plus `telemetry_status` (`ok` / `stale (...)` / `none`). On current plugin versions `stale`/`none` is expected — per-tool-call telemetry capture was removed with the Experience Engine (GH #200); only legacy versions still write it.
+- The newest bounded `runner-diagnostics` bundle when present. The collector uses the exact session ID only to select it, then replaces `context.sessionId` with `[SESSION_REDACTED]`; show that complete feedback-safe projection in the review before submission. It contains typed lifecycle events only, never raw runner output.
 
 Reconcile the previously captured `rn_session` status with the collector's
 `authority` object. Compare exact values locally, but put only the sanitized
@@ -127,6 +128,9 @@ Present the data in a clear format:
 **Current CDP state:**
 - Connected: yes
 - Errors: 0
+
+**Runner diagnostics:**
+- <newest sanitized typed bundle, or "none">
 ```
 
 Ask: **"Does this look correct? Should I remove anything before submitting?"**
@@ -190,6 +194,10 @@ Body template:
 
 <if cdp_bridge_log_tail present in collected data, format as code block. Omit section if no log file exists.>
 
+## Runner Diagnostics
+
+<if runner_diagnostics is present, include the complete reviewed feedback-safe projection. Omit this section when none is available for the exact session.>
+
 ## Steps to Reproduce
 
 <numbered steps from user, or "Not provided">
@@ -226,7 +234,7 @@ The following data is NEVER included:
 - API keys, tokens, secrets (pattern-matched and redacted)
 - Email addresses, phone numbers, SSNs (PII patterns redacted)
 - IP addresses (except localhost)
-- Company names and bundle IDs (com.company.app → [BUNDLE_REDACTED])
+- Company names and external bundle IDs (external IDs → [BUNDLE_REDACTED]); only `com.rndevagent.testapp` is retained verbatim
 - App name and slug from app.json ([APP_NAME_REDACTED])
 - Tool call parameters (only tool name + result + latency)
 - Store state values
@@ -246,3 +254,4 @@ The following IS included (safe):
 - Tool call names, pass/fail results, and latency
 - CDP connection status (connected/disconnected)
 - Error count (not error contents)
+- Runner lifecycle events capped at 200/256 KB, a salted stable device-ID hash, and the owned test-app bundle ID only

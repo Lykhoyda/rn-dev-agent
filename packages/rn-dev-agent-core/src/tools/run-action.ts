@@ -1142,8 +1142,12 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
           ...(cdpJsFallback ? { cdpJsFallback } : {}),
           ...strictRunRecordMeta(persisted),
         };
-        let message =
-          failure.kind === 'WDA_BOOTSTRAP_FAILED'
+        const cacheProvisionRefusal =
+          failure.kind === 'WDA_BOOTSTRAP_FAILED' &&
+          firstFailureDetail.includes('RUNNER_CACHE_UNAVAILABLE');
+        let message = cacheProvisionRefusal
+          ? `cdp_run_action: ${args.actionId} failed (WDA_BOOTSTRAP_FAILED) before the first replay step: ${firstFailureDetail}`
+          : failure.kind === 'WDA_BOOTSTRAP_FAILED'
             ? `cdp_run_action: ${args.actionId} failed (WDA_BOOTSTRAP_FAILED) before the first replay step: ${failure.detail}. Re-run the replay (bootstrap retries itself); check network access; diagnose the pin-cache runner with ${PINNED_RUNNER_DIAGNOSE_HINT}. Supported correction: ${PINNED_RUNNER_INSTALL_HINT}. Never invoke PATH, ~/.maestro-runner, maestro-cli, or manual login. No preparation or cache mutation was attempted.`
             : `cdp_run_action: ${args.actionId} failed (${failure.kind})${autoRepairEnabled ? ' — failure not auto-repairable' : ' — auto-repair disabled'}: ${firstFailureDetail}`;
         // GH #423: an UNKNOWN with the fallback skipped for CDP reasons was an

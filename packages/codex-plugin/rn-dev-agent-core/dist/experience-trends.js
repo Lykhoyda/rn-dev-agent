@@ -5,11 +5,18 @@ import { createRequire as __rnCreateRequire } from "node:module"; const require 
 import { join as join2 } from "node:path";
 
 // packages/rn-dev-agent-core/dist/experience/evidence.js
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir, platform as hostPlatform, release } from "node:os";
 import { dirname, join } from "node:path";
+
+// packages/rn-dev-agent-core/dist/experience/runner-diagnostics.js
+import { AsyncLocalStorage } from "node:async_hooks";
+var storage = new AsyncLocalStorage();
+
+// packages/rn-dev-agent-core/dist/experience/evidence.js
 var EXPERIENCE_DIRECTORY = join(homedir(), ".claude", "rn-agent", "experience");
 var EXPERIENCE_STORE_NAME = "patterns.jsonl";
+var RUNNER_DIAGNOSTICS_MAX_BYTES = 256 * 1024;
 var DAY_MS = 24 * 60 * 60 * 1e3;
 function readExperienceStore(path) {
   if (!existsSync(path))

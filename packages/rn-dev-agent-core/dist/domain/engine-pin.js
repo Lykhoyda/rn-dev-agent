@@ -6,11 +6,12 @@
 //   3. Reconcile knownQuirks (retest each listed quirk; add/remove entries).
 //   4. Update version + sha256 here AND in ensure-maestro-runner.sh; add a changeset.
 import { createHash } from 'node:crypto';
-import { accessSync, chmodSync, constants, copyFileSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, rmSync, symlinkSync, unlinkSync, } from 'node:fs';
+import { accessSync, chmodSync, constants, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync, symlinkSync, unlinkSync, } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { gunzipSync } from 'node:zlib';
 import { verifiedNativePublicationHelper } from '../session/process-birth.js';
+import { currentRunnerDiagnosticsPlatform, recordRunnerDiagnostic, } from '../experience/runner-diagnostics.js';
 import pinManifest from './maestro-runner-pin.json' with { type: 'json' };
 export const MAESTRO_RUNNER_PIN = Object.freeze({
     version: pinManifest.version,
@@ -103,7 +104,7 @@ export function classifyEnginePin(detected, platformKey) {
 export function pinCacheRoot(home = homedir()) {
     const override = process.env.RN_DEV_AGENT_RUNNER_CACHE;
     const base = override && override.length > 0 ? override : join(home, '.cache', 'rn-dev-agent');
-    return join(base, 'maestro-runner', MAESTRO_RUNNER_PIN.version);
+    return resolve(base, 'maestro-runner', MAESTRO_RUNNER_PIN.version);
 }
 export function pinnedRunnerBinPath(home) {
     return join(pinCacheRoot(home), 'bin', 'maestro-runner');
@@ -539,7 +540,113 @@ function copyPayloadTree(source, destination) {
         }
     }
 }
-export async function withImmediatePinnedRunner(runnerPath, resolveStatus, execute) {
+export class RunnerCacheUnavailableError extends Error {
+    relativePath;
+    errno;
+    code = 'RUNNER_CACHE_UNAVAILABLE';
+    constructor(relativePath, errno) {
+        super(`RUNNER_CACHE_UNAVAILABLE: ${relativePath}: ${errno}`);
+        this.relativePath = relativePath;
+        this.errno = errno;
+        this.name = 'RunnerCacheUnavailableError';
+    }
+}
+export function runnerCacheBootstrapFailure(error) {
+    return `WDA bootstrap could not provision its authority-bound runner cache: ${error.message}. No foreign cache path was changed; any cache directory created by this spawn was removed. Verify the runner cache parent is writable, then retry the exact replay.`;
+}
+function cacheErrno(error) {
+    const code = error?.code;
+    return typeof code === 'string' && /^[A-Z0-9_]+$/.test(code) ? code : 'UNKNOWN';
+}
+function expectedRunnerCacheRoot(snapshotRoot) {
+    const snapshotName = basename(snapshotRoot);
+    const prefix = `.spawn-${MAESTRO_RUNNER_PIN.version}-`;
+    if (!snapshotName.startsWith(prefix) || dirname(snapshotRoot) !== runnerCacheVersionsRoot()) {
+        throw new RunnerCacheUnavailableError('cache', 'UNBOUND_SNAPSHOT');
+    }
+    return join(runnerCacheVersionsRoot(), `.wda-cache-${MAESTRO_RUNNER_PIN.version}-${snapshotName.slice(prefix.length)}`);
+}
+export function assertRunnerSnapshotCacheBinding(snapshotRoot, cacheRoot) {
+    try {
+        const expectedCacheRoot = expectedRunnerCacheRoot(snapshotRoot);
+        if (resolve(cacheRoot) !== resolve(expectedCacheRoot)) {
+            throw new RunnerCacheUnavailableError('cache', 'FOREIGN_PATH');
+        }
+        const cacheStat = lstatSync(cacheRoot);
+        if (!cacheStat.isDirectory() || cacheStat.isSymbolicLink()) {
+            throw new RunnerCacheUnavailableError('cache', 'INVALID_TARGET');
+        }
+        if ((cacheStat.mode & 0o777) !== 0o700) {
+            throw new RunnerCacheUnavailableError('cache', 'UNSAFE_MODE');
+        }
+        const cacheLink = join(snapshotRoot, 'cache');
+        if (!lstatSync(cacheLink).isSymbolicLink()) {
+            throw new RunnerCacheUnavailableError('cache', 'NOT_LINKED');
+        }
+        if (realpathSync(cacheLink) !== realpathSync(cacheRoot)) {
+            throw new RunnerCacheUnavailableError('cache', 'FOREIGN_PATH');
+        }
+    }
+    catch (error) {
+        if (error instanceof RunnerCacheUnavailableError)
+            throw error;
+        throw new RunnerCacheUnavailableError('cache', cacheErrno(error));
+    }
+}
+function provisionRunnerSnapshotCache(snapshotRoot, testHooks = {}, setOwnedCacheRoot = () => { }) {
+    const cacheRoot = expectedRunnerCacheRoot(snapshotRoot);
+    let ownsCacheRoot = false;
+    try {
+        testHooks.beforeCacheProvision?.(cacheRoot);
+        mkdirSync(cacheRoot, { mode: 0o700 });
+        ownsCacheRoot = true;
+        setOwnedCacheRoot(cacheRoot);
+        chmodSync(cacheRoot, 0o700);
+        testHooks.beforeCacheBinding?.(cacheRoot);
+        symlinkSync(cacheRoot, join(snapshotRoot, 'cache'), 'dir');
+        assertRunnerSnapshotCacheBinding(snapshotRoot, cacheRoot);
+        return cacheRoot;
+    }
+    catch (error) {
+        const failure = error instanceof RunnerCacheUnavailableError
+            ? error
+            : new RunnerCacheUnavailableError('cache', cacheErrno(error));
+        if (ownsCacheRoot) {
+            try {
+                rmSync(cacheRoot, { recursive: true, force: true });
+                setOwnedCacheRoot(null);
+            }
+            catch (cleanupError) {
+                throw new RunnerCacheUnavailableError('cache', `${failure.errno}_CLEANUP_${cacheErrno(cleanupError)}`);
+            }
+        }
+        throw failure;
+    }
+}
+function removeRunnerSnapshotAndCache(snapshotRoot, cacheRoot) {
+    let cleanupError;
+    try {
+        rmSync(snapshotRoot, { recursive: true, force: true });
+    }
+    catch (error) {
+        cleanupError = error;
+    }
+    if (cacheRoot) {
+        try {
+            rmSync(cacheRoot, { recursive: true, force: true });
+        }
+        catch (error) {
+            cleanupError ??= error;
+        }
+    }
+    recordRunnerDiagnostic('cleanup', {
+        snapshotRemoved: !existsSync(snapshotRoot),
+        cacheRemoved: cacheRoot === null || !existsSync(cacheRoot),
+    });
+    if (cleanupError)
+        throw cleanupError;
+}
+export async function withImmediatePinnedRunner(runnerPath, resolveStatus, execute, testHooks = {}) {
     const refusal = await immediateRunnerPinRefusal(runnerPath, resolveStatus);
     if (refusal)
         throw new Error(refusal);
@@ -548,6 +655,11 @@ export async function withImmediatePinnedRunner(runnerPath, resolveStatus, execu
         throw new Error('RUNNER_PIN_CHANGED: runner checksum is unavailable for this platform.');
     }
     const snapshotRoot = mkdtempSync(join(runnerCacheVersionsRoot(), `.spawn-${MAESTRO_RUNNER_PIN.version}-`));
+    let cacheRoot = null;
+    recordRunnerDiagnostic('spawn-begin', {
+        snapshotId: basename(snapshotRoot),
+        runnerPinVersion: MAESTRO_RUNNER_PIN.version,
+    });
     try {
         copyPayloadTree(pinCacheRoot(), snapshotRoot);
         const snapshotRunner = join(snapshotRoot, 'bin', 'maestro-runner');
@@ -556,8 +668,15 @@ export async function withImmediatePinnedRunner(runnerPath, resolveStatus, execu
             snapshotStat.isSymbolicLink() ||
             !installedPayloadMatchesPin(nodePlatformKey(), snapshotRoot) ||
             createHash('sha256').update(readFileSync(snapshotRunner)).digest('hex') !== expectedSha256) {
+            recordRunnerDiagnostic('payload-verify', { result: 'failed' });
             throw new Error('RUNNER_PIN_CHANGED: payload content changed before execution.');
         }
+        recordRunnerDiagnostic('payload-verify', {
+            result: 'passed',
+            runnerPinVersion: MAESTRO_RUNNER_PIN.version,
+            provenance: 'pin-cache',
+            payloadShaPrefix: expectedSha256.slice(0, 12),
+        });
         const helper = verifiedNativePublicationHelper();
         const snapshotHelper = join(snapshotRoot, '.runner-exec');
         copyFileSync(helper.path, snapshotHelper, constants.COPYFILE_EXCL | constants.COPYFILE_FICLONE);
@@ -565,8 +684,37 @@ export async function withImmediatePinnedRunner(runnerPath, resolveStatus, execu
         if (createHash('sha256').update(readFileSync(snapshotHelper)).digest('hex') !== helper.sha256) {
             throw new Error('RUNNER_PIN_CHANGED: execution binding changed before execution.');
         }
+        try {
+            cacheRoot = provisionRunnerSnapshotCache(snapshotRoot, testHooks, (ownedCacheRoot) => {
+                cacheRoot = ownedCacheRoot;
+            });
+            recordRunnerDiagnostic('cache-provision', {
+                result: 'passed',
+                variant: 'symlink',
+                resolvedPath: '../' + basename(cacheRoot),
+            });
+        }
+        catch (error) {
+            const failure = error instanceof RunnerCacheUnavailableError
+                ? error
+                : new RunnerCacheUnavailableError('cache', cacheErrno(error));
+            recordRunnerDiagnostic('cache-provision', {
+                result: 'failed',
+                variant: 'symlink',
+                resolvedPath: 'cache',
+                errno: failure.errno,
+            });
+            recordRunnerDiagnostic('typed-failure', {
+                code: failure.code,
+                errno: failure.errno,
+                path: failure.relativePath,
+            });
+            throw failure;
+        }
         for (const entry of readdirSync(snapshotRoot, { recursive: true, withFileTypes: true })) {
             const entryPath = join(entry.parentPath, entry.name);
+            if (entry.isSymbolicLink())
+                continue;
             if (entry.isDirectory())
                 chmodSync(entryPath, 0o500);
             else if (entry.isFile()) {
@@ -574,7 +722,12 @@ export async function withImmediatePinnedRunner(runnerPath, resolveStatus, execu
             }
         }
         chmodSync(snapshotRoot, 0o500);
+        assertRunnerSnapshotCacheBinding(snapshotRoot, cacheRoot);
         const openedRunner = lstatSync(snapshotRunner);
+        recordRunnerDiagnostic('runner-exec-begin', { runnerPinVersion: MAESTRO_RUNNER_PIN.version });
+        if (currentRunnerDiagnosticsPlatform() === 'ios') {
+            recordRunnerDiagnostic('wda-bootstrap-begin', { cachePath: 'cache' });
+        }
         return await execute(snapshotHelper, [
             '--exec-file',
             snapshotRunner,
@@ -588,6 +741,8 @@ export async function withImmediatePinnedRunner(runnerPath, resolveStatus, execu
             chmodSync(snapshotRoot, 0o700);
             for (const entry of readdirSync(snapshotRoot, { recursive: true, withFileTypes: true })) {
                 const entryPath = join(entry.parentPath, entry.name);
+                if (entry.isSymbolicLink())
+                    continue;
                 if (entry.isDirectory())
                     chmodSync(entryPath, 0o700);
                 else if (entry.isFile())
@@ -595,7 +750,7 @@ export async function withImmediatePinnedRunner(runnerPath, resolveStatus, execu
             }
         }
         catch { }
-        rmSync(snapshotRoot, { recursive: true, force: true });
+        removeRunnerSnapshotAndCache(snapshotRoot, cacheRoot);
     }
 }
 export function doctorPinnedRunner(status, platformKey = nodePlatformKey()) {

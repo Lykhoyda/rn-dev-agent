@@ -15,6 +15,7 @@ import {
   _setEngineStatusForTest,
   buildReplayEngineStatus,
   MAESTRO_RUNNER_PIN,
+  RunnerCacheUnavailableError,
 } from '../../dist/domain/engine-pin.js';
 
 beforeEach(() =>
@@ -53,7 +54,7 @@ function fakeRunnerDispatch() {
 
 function maestroHandler(
   reissues: string[],
-  outcome: 'pass' | 'fail' = 'pass',
+  outcome: 'pass' | 'fail' | 'cache-refusal' = 'pass',
   seenArgs: string[][] = [],
 ) {
   return createMaestroRunHandler({
@@ -71,9 +72,13 @@ function maestroHandler(
     relaunchManagedApp: async () => {},
     reissueInstallReceipt: async () => {
       reissues.push('reissued');
+      if (outcome === 'cache-refusal') throw new Error('receipt reissue masked cache refusal');
     },
     execFile: async (_file: string, args: string[]) => {
       seenArgs.push(args);
+      if (outcome === 'cache-refusal') {
+        throw new RunnerCacheUnavailableError('cache', 'EACCES');
+      }
       const index = args.indexOf('--output');
       const dir = args[index + 1];
       mkdirSync(dir, { recursive: true });
@@ -132,6 +137,25 @@ test('GH#705 a failed clearState flow still re-issues the receipt', async () => 
     deviceId: EXACT,
   });
   assert.deepEqual(reissues, ['reissued']);
+});
+
+test('a cache refusal before clearState execution does not re-issue the receipt', async () => {
+  const reissues: string[] = [];
+  const result = await maestroHandler(
+    reissues,
+    'cache-refusal',
+  )({
+    inlineYaml: CLEAR_STATE_FLOW,
+    platform: 'ios',
+    appId: APP_ID,
+    appFile: APP_FILE,
+    deviceId: EXACT,
+  });
+  const envelope = JSON.parse(result.content[0].text);
+  assert.equal(envelope.ok, false);
+  assert.equal(envelope.code, 'WDA_BOOTSTRAP_FAILED');
+  assert.match(envelope.error, /RUNNER_CACHE_UNAVAILABLE: cache: EACCES/);
+  assert.deepEqual(reissues, []);
 });
 
 test('GH#705 a flow that never reinstalls does not re-issue the receipt', async () => {

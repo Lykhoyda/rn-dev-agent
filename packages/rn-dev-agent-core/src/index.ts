@@ -2331,6 +2331,10 @@ trackedTool(
       .enum(['all', 'log', 'warn', 'error', 'info', 'debug'])
       .default('all')
       .describe('Filter by log level (default: all)'),
+    runnerDiagnosticsOutputPath: z
+      .string()
+      .optional()
+      .describe('New caller-named file for the newest sanitized runner diagnostics bundle'),
   },
   createCollectLogsHandler(getClient),
 );

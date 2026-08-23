@@ -4,7 +4,8 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join, dirname } from 'node:path';
 import { okResult, failResult, warnResult } from '../utils.js';
-import { getEngineStatus, enginePinCaveat, exactPinRefusal, withImmediatePinnedRunner, preOAndroidApiRefusal, isOlderSdkInstallFailure, olderSdkInstallDiagnosis, MAESTRO_RUNNER_MIN_ANDROID_API, } from '../domain/engine-pin.js';
+import { getEngineStatus, enginePinCaveat, exactPinRefusal, withImmediatePinnedRunner, preOAndroidApiRefusal, isOlderSdkInstallFailure, olderSdkInstallDiagnosis, MAESTRO_RUNNER_MIN_ANDROID_API, RunnerCacheUnavailableError, runnerCacheBootstrapFailure, } from '../domain/engine-pin.js';
+import { recordRunnerDiagnostic } from '../experience/runner-diagnostics.js';
 import { actionReplayPreflight, classifyLearnedActionPath, replayCompatibilityPreflight, } from '../domain/action-engine-compat.js';
 import { parseM7Header } from '../domain/reusable-action.js';
 import { captureActionFromPath } from '../domain/action-store.js';
@@ -696,6 +697,27 @@ export function createMaestroRunHandler(deps = {}) {
             return warnResult(warnAug.meta, warnAug.message);
         }
         catch (err) {
+            const stageError = err instanceof MaestroStageExecutionError ? err.stageError : err;
+            if (stageError instanceof RunnerCacheUnavailableError) {
+                recordRunnerDiagnostic('typed-failure', {
+                    code: stageError.code,
+                    errno: stageError.errno,
+                    path: stageError.relativePath,
+                });
+                return failResult(runnerCacheBootstrapFailure(stageError), 'WDA_BOOTSTRAP_FAILED', {
+                    flowFile,
+                    platform,
+                    runner: dispatch.runner,
+                    transport: dispatch.runner,
+                    passed: false,
+                    output: '',
+                    terminal: {
+                        exitClass: 'before-first-step',
+                        bootstrapEvidence: stageError.message,
+                    },
+                    ...androidReleaseMeta(),
+                });
+            }
             // A flow that died mid-way may still have reinstalled: re-issue before
             // reporting, so the failure is the flow's and not a broken axis I.
             await commitReinstalledInstall();
@@ -703,7 +725,6 @@ export function createMaestroRunHandler(deps = {}) {
                 err.attachMeta(androidReleaseMeta());
                 throw err;
             }
-            const stageError = err instanceof MaestroStageExecutionError ? err.stageError : err;
             const msg = stageError instanceof Error ? stageError.message : String(stageError);
             if (stageError instanceof ExactAndroidDeviceRequiredError) {
                 return failResult(stageError.message, stageError.code, {

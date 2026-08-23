@@ -170,6 +170,47 @@ if [ -d "$TELEMETRY_DIR" ]; then
   fi
 fi
 
+# --- Collect newest bounded runner diagnostics bundle ---
+
+runner_diagnostics="null"
+runner_diagnostics_status="none"
+experience_dir="${RN_DEV_AGENT_EXPERIENCE_DIR:-$AGENT_DIR/experience}"
+if [ -z "${RN_DEV_AGENT_SESSION_ID:-}" ]; then
+  runner_diagnostics_status="exact session unavailable"
+elif [ -d "$experience_dir" ]; then
+  runner_diagnostics=$(python3 - "$experience_dir" "$RN_DEV_AGENT_SESSION_ID" <<'PY' 2>/dev/null || echo "null"
+import glob,json,os,re,sys
+directory,session_id=sys.argv[1:]
+def sequence(path):
+    match=re.search(r"-(\d+)\.json$",os.path.basename(path))
+    return int(match.group(1)) if match else 0
+paths=sorted(glob.glob(os.path.join(directory,"runner-diagnostics-*.json")),key=lambda path:(os.path.getmtime(path),sequence(path),os.path.basename(path)),reverse=True)
+for path in paths:
+    try:
+        if os.path.getsize(path) > 256 * 1024:
+            continue
+        with open(path,encoding="utf-8") as handle:
+            value=json.load(handle)
+        context=value.get("context",{})
+        if value.get("schema") == "rn-dev-agent/runner-diagnostics/1" and context.get("sessionId") == session_id:
+            value=dict(value)
+            value["context"]=dict(context)
+            value["context"]["sessionId"]="[SESSION_REDACTED]"
+            print(json.dumps(value,separators=(",",":")))
+            break
+    except (OSError,ValueError,TypeError):
+        continue
+else:
+    print("null")
+PY
+)
+  if [ "$runner_diagnostics" = "null" ]; then
+    runner_diagnostics_status="none for exact session"
+  else
+    runner_diagnostics_status="attached for review"
+  fi
+fi
+
 # --- Collect MCP tool count ---
 
 tool_count="unknown"
@@ -266,7 +307,11 @@ data = {
     'recent_telemetry_lines': json.loads(sys.argv[12]),
     'telemetry_status': sys.argv[14],
     'authority': json.loads(sys.argv[15]),
+    'runner_diagnostics_status': sys.argv[17],
 }
+runner_diagnostics = json.loads(sys.argv[16])
+if runner_diagnostics is not None:
+    data['runner_diagnostics'] = runner_diagnostics
 log_tail = sys.argv[13].strip()
 if log_tail:
     data['cdp_bridge_log_tail'] = log_tail.split('\n')
@@ -286,4 +331,6 @@ print(json.dumps(data, indent=2))
   "$telemetry_json" \
   "$cdp_log_tail" \
   "$telemetry_status" \
-  "$authority_json"
+  "$authority_json" \
+  "$runner_diagnostics" \
+  "$runner_diagnostics_status"

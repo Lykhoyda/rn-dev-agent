@@ -10,7 +10,7 @@ import { chooseMaestroDispatch, shouldWarnFallback } from './maestro-dispatch.js
 import { buildMaestroFlow, parseAndValidateFlow, MaestroValidationError, } from '../domain/maestro-validator.js';
 import { assembleMaestroArgs, executeMaestroAuthorityStages, MaestroStageExecutionError, nestedMaestroAuthorityCallbacks, planMaestroAuthorityStages, resolveMaestroFlowAppId, runFlowParked, } from './maestro-run.js';
 import { outputIndicatesFlowFailure } from '../domain/maestro-error-parser.js';
-import { exactPinRefusal, getEngineStatus, withImmediatePinnedRunner, isOlderSdkInstallFailure, olderSdkInstallDiagnosis, } from '../domain/engine-pin.js';
+import { exactPinRefusal, getEngineStatus, withImmediatePinnedRunner, isOlderSdkInstallFailure, olderSdkInstallDiagnosis, RunnerCacheUnavailableError, runnerCacheBootstrapFailure, } from '../domain/engine-pin.js';
 import { classifyLearnedActionPath, isLearnedActionPath, replayCompatibilityPreflight, } from '../domain/action-engine-compat.js';
 import { parseM7Header } from '../domain/reusable-action.js';
 import { captureActionFromContext, openReadableActionLoadContext, } from '../domain/action-store.js';
@@ -300,12 +300,33 @@ export function createMaestroTestAllHandler(deps = {}) {
                     break;
             }
             catch (err) {
+                const stageError = err instanceof MaestroStageExecutionError ? err.stageError : err;
+                if (stageError instanceof RunnerCacheUnavailableError) {
+                    return failResult(runnerCacheBootstrapFailure(stageError), 'WDA_BOOTSTRAP_FAILED', {
+                        total: flows.length,
+                        executed: results.length,
+                        passed,
+                        failed: failed + 1,
+                        platform,
+                        flowDir,
+                        runner: dispatch.runner,
+                        requestedDeviceId: requestedDeviceId ?? null,
+                        results: [
+                            ...results,
+                            {
+                                name,
+                                passed: false,
+                                durationMs: now() - start,
+                                error: stageError.message,
+                            },
+                        ],
+                    });
+                }
                 // A flow that died mid-way may still have reinstalled: re-issue before
                 // reporting, so the failure is the flow's and not a broken axis I.
                 await commitReinstalledInstall();
                 if (err instanceof SessionAuthorityError)
                     throw err;
-                const stageError = err instanceof MaestroStageExecutionError ? err.stageError : err;
                 const msg = stageError instanceof Error ? stageError.message : String(stageError);
                 const errWithOutput = stageError;
                 const completed = err instanceof MaestroStageExecutionError

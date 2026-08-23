@@ -29,6 +29,8 @@ import {
   withImmediatePinnedRunner,
   isOlderSdkInstallFailure,
   olderSdkInstallDiagnosis,
+  RunnerCacheUnavailableError,
+  runnerCacheBootstrapFailure,
   type ReplayEngineStatus,
 } from '../domain/engine-pin.js';
 import {
@@ -440,11 +442,32 @@ export function createMaestroTestAllHandler(
 
         if (!ok && args.stopOnFailure) break;
       } catch (err) {
+        const stageError = err instanceof MaestroStageExecutionError ? err.stageError : err;
+        if (stageError instanceof RunnerCacheUnavailableError) {
+          return failResult(runnerCacheBootstrapFailure(stageError), 'WDA_BOOTSTRAP_FAILED', {
+            total: flows.length,
+            executed: results.length,
+            passed,
+            failed: failed + 1,
+            platform,
+            flowDir,
+            runner: dispatch.runner,
+            requestedDeviceId: requestedDeviceId ?? null,
+            results: [
+              ...results,
+              {
+                name,
+                passed: false,
+                durationMs: now() - start,
+                error: stageError.message,
+              },
+            ],
+          });
+        }
         // A flow that died mid-way may still have reinstalled: re-issue before
         // reporting, so the failure is the flow's and not a broken axis I.
         await commitReinstalledInstall();
         if (err instanceof SessionAuthorityError) throw err;
-        const stageError = err instanceof MaestroStageExecutionError ? err.stageError : err;
         const msg = stageError instanceof Error ? stageError.message : String(stageError);
         const errWithOutput = stageError as { stdout?: unknown; stderr?: unknown };
         const completed =

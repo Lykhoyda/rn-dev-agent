@@ -2,6 +2,7 @@ import { execFile as execFileCb, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { getActiveSession } from '../agent-device-wrapper.js';
 import { okResult, failResult, warnResult } from '../utils.js';
+import { exportLatestRunnerDiagnosticsBundle } from '../experience/evidence.js';
 const execFile = promisify(execFileCb);
 function normalizeTimestamp(ts) {
     if (!ts)
@@ -377,6 +378,20 @@ export function createCollectLogsHandler(getClient) {
     return async (args) => {
         const promises = [];
         const errors = {};
+        let runnerDiagnosticsExport = null;
+        let runnerDiagnosticsExportError = null;
+        if (args.runnerDiagnosticsOutputPath) {
+            try {
+                const sessionId = process.env.RN_DEV_AGENT_SESSION_ID;
+                if (!sessionId) {
+                    throw new Error('Exact authenticated session identity is unavailable.');
+                }
+                runnerDiagnosticsExport = exportLatestRunnerDiagnosticsBundle(args.runnerDiagnosticsOutputPath, sessionId);
+            }
+            catch (error) {
+                runnerDiagnosticsExportError = error instanceof Error ? error.message : String(error);
+            }
+        }
         const controller = new AbortController();
         // Only the iOS native collector spends up to PID_PROBE_TIMEOUT_MS resolving
         // the exact app pid BEFORE its log stream starts; a deadline measured from
@@ -479,16 +494,22 @@ export function createCollectLogsHandler(getClient) {
                 durationMs: args.durationMs,
                 sources: args.sources,
                 scopes,
+                ...(runnerDiagnosticsExport ? { runnerDiagnosticsExport } : {}),
+                ...(runnerDiagnosticsExportError ? { runnerDiagnosticsExportError } : {}),
             };
-            const hasErrors = Object.keys(errors).length > 0;
+            const allErrors = { ...errors };
+            if (runnerDiagnosticsExportError) {
+                allErrors.runner_diagnostics = runnerDiagnosticsExportError;
+            }
+            const hasErrors = Object.keys(allErrors).length > 0;
             if (hasErrors && allEntries.length === 0) {
-                const msg = Object.entries(errors)
+                const msg = Object.entries(allErrors)
                     .map(([s, e]) => `${s}: ${e}`)
                     .join('; ');
                 return failResult(`All collectors failed: ${msg}`);
             }
             if (hasErrors) {
-                return warnResult(data, 'Some sources failed', { errors });
+                return warnResult(data, 'Some sources failed', { errors: allErrors });
             }
             return okResult(data);
         }

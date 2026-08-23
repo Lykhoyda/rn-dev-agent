@@ -25,6 +25,7 @@ import {
   _setEngineStatusForTest,
   buildReplayEngineStatus,
   MAESTRO_RUNNER_PIN,
+  RunnerCacheUnavailableError,
 } from '../../dist/domain/engine-pin.js';
 
 beforeEach(() =>
@@ -99,7 +100,9 @@ interface SuiteFixture {
   handler: ReturnType<typeof createMaestroTestAllHandler>;
 }
 
-function suiteFixture(opts: { failTapStages?: boolean } = {}): SuiteFixture {
+function suiteFixture(
+  opts: { failTapStages?: boolean; cacheRefusal?: boolean } = {},
+): SuiteFixture {
   const events: string[] = [];
   const reissues: string[] = [];
   const resolvedDeviceIds: (string | undefined)[] = [];
@@ -125,6 +128,7 @@ function suiteFixture(opts: { failTapStages?: boolean } = {}): SuiteFixture {
     reissueInstallReceipt: async () => {
       events.push('reissue');
       reissues.push('reissued');
+      if (opts.cacheRefusal) throw new Error('receipt reissue masked cache refusal');
     },
     resolveAppFile: (platform, flowText, _headerAppId, explicitAppFile, deps) => {
       resolvedDeviceIds.push(deps?.deviceId);
@@ -135,6 +139,9 @@ function suiteFixture(opts: { failTapStages?: boolean } = {}): SuiteFixture {
     execFile: async (_file, args) => {
       const flowText = readFlow(args);
       events.push(flowUsesClearState(flowText) ? 'exec:clearState' : 'exec:plain');
+      if (opts.cacheRefusal) {
+        throw new RunnerCacheUnavailableError('cache', 'EACCES');
+      }
       const index = args.indexOf('--output');
       const dir = args[index + 1];
       mkdirSync(dir, { recursive: true });
@@ -197,6 +204,18 @@ test('GH#705-followup a failed clearState flow still re-issues the receipt', asy
   assert.equal(envelope.data?.failed, 1);
   assert.deepEqual(reissues, ['reissued']);
   assert.deepEqual(events, ['exec:clearState', 'exec:plain', 'reissue']);
+});
+
+test('a batch cache refusal before clearState execution does not re-issue the receipt', async () => {
+  const { events, reissues, handler } = suiteFixture({ cacheRefusal: true });
+  const flowDir = seedCorpus({ '10-login.yaml': CLEAR_STATE_FLOW });
+  const result = await handler({ platform: 'ios', flowDir });
+  const envelope = JSON.parse(result.content[0].text);
+  assert.equal(envelope.ok, false);
+  assert.equal(envelope.code, 'WDA_BOOTSTRAP_FAILED');
+  assert.match(envelope.error, /RUNNER_CACHE_UNAVAILABLE: cache: EACCES/);
+  assert.deepEqual(reissues, []);
+  assert.deepEqual(events, ['exec:clearState']);
 });
 
 test('GH#705-followup a corpus without clearState never re-issues', async () => {

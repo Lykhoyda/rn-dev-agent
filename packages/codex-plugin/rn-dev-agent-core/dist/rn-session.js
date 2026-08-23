@@ -11689,6 +11689,16 @@ var init_maestro_validator = __esm({
   }
 });
 
+// packages/rn-dev-agent-core/dist/experience/runner-diagnostics.js
+import { AsyncLocalStorage as AsyncLocalStorage2 } from "node:async_hooks";
+var storage;
+var init_runner_diagnostics = __esm({
+  "packages/rn-dev-agent-core/dist/experience/runner-diagnostics.js"() {
+    "use strict";
+    storage = new AsyncLocalStorage2();
+  }
+});
+
 // packages/rn-dev-agent-core/dist/domain/maestro-runner-pin.json
 var maestro_runner_pin_default;
 var init_maestro_runner_pin = __esm({
@@ -11724,6 +11734,7 @@ var init_engine_pin = __esm({
   "packages/rn-dev-agent-core/dist/domain/engine-pin.js"() {
     "use strict";
     init_process_birth();
+    init_runner_diagnostics();
     init_maestro_runner_pin();
     MAESTRO_RUNNER_PIN = Object.freeze({
       version: maestro_runner_pin_default.version,
@@ -12234,6 +12245,7 @@ var init_maestro_run = __esm({
     "use strict";
     init_utils();
     init_engine_pin();
+    init_runner_diagnostics();
     init_action_engine_compat();
     init_reusable_action();
     init_action_store();
@@ -12387,7 +12399,7 @@ var init_foreign_flow_gate = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/lifecycle/device-arbiter.js
-import { AsyncLocalStorage as AsyncLocalStorage2 } from "node:async_hooks";
+import { AsyncLocalStorage as AsyncLocalStorage3 } from "node:async_hooks";
 var DeviceSessionArbiter, arbiter, activeLease;
 var init_device_arbiter = __esm({
   "packages/rn-dev-agent-core/dist/lifecycle/device-arbiter.js"() {
@@ -12492,7 +12504,7 @@ var init_device_arbiter = __esm({
       }
     };
     arbiter = new DeviceSessionArbiter();
-    activeLease = new AsyncLocalStorage2();
+    activeLease = new AsyncLocalStorage3();
   }
 });
 
