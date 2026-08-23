@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { CDPClient } from '../../dist/cdp-client.js';
-import { handleAutoLogin } from '../../dist/tools/auto-login.js';
+import { autoLoginToolResult, handleAutoLogin } from '../../dist/tools/auto-login.js';
 
 function authClient(): CDPClient {
   let reads = 0;
@@ -18,17 +18,24 @@ function authClient(): CDPClient {
   } as unknown as CDPClient;
 }
 
-test('cdp_auto_login delegates to maestro_run on the authority-bound device', async () => {
+test('cdp_auto_login targets only the bound serial when a second device is ambient', async (t) => {
   const root = mkdtempSync(join(tmpdir(), 'rn-auto-login-authority-'));
   const flowDir = join(root, '.maestro', 'subflows');
   mkdirSync(flowDir, { recursive: true });
   writeFileSync(join(flowDir, 'login.yaml'), '- tapOn:\n    id: "login"\n', 'utf8');
   let replayArgs: Record<string, unknown> | null = null;
+  const previousAndroidSerial = process.env.ANDROID_SERIAL;
+  process.env.ANDROID_SERIAL = 'AMBIENT-DEVICE';
+  t.after(() => {
+    if (previousAndroidSerial === undefined) delete process.env.ANDROID_SERIAL;
+    else process.env.ANDROID_SERIAL = previousAndroidSerial;
+  });
 
   const result = await handleAutoLogin(
     authClient(),
-    { appId: 'com.test.app', platform: 'ios', deviceId: 'SIM-AUTHORITY' },
+    { appId: 'com.test.app', platform: 'android' },
     {
+      getSession: () => ({ platform: 'android', deviceId: 'BOUND-DEVICE' }),
       projectRoot: () => root,
       boundProjectRoot: () => root,
       maestroRun: async (args) => {
@@ -39,20 +46,28 @@ test('cdp_auto_login delegates to maestro_run on the authority-bound device', as
   );
 
   assert.equal(result?.loggedIn, true);
-  assert.equal(replayArgs?.platform, 'ios');
-  assert.equal(replayArgs?.deviceId, 'SIM-AUTHORITY');
+  assert.equal(replayArgs?.platform, 'android');
+  assert.equal(replayArgs?.deviceId, 'BOUND-DEVICE');
+  assert.notEqual(replayArgs?.deviceId, 'AMBIENT-DEVICE');
   assert.equal(typeof replayArgs?.claimNativeOrigin, 'function');
   assert.equal(typeof replayArgs?.completeNativeOrigin, 'function');
   assert.equal(typeof replayArgs?.completeRunnerPark, 'function');
   assert.match(String(replayArgs?.inlineYaml), /id: login/);
 });
 
-test('cdp_auto_login refuses a platform without matching owned device authority', async () => {
+test('cdp_auto_login refuses an unbound session without selecting an ambient device', async (t) => {
   let replayed = false;
+  const previousAndroidSerial = process.env.ANDROID_SERIAL;
+  process.env.ANDROID_SERIAL = 'AMBIENT-DEVICE';
+  t.after(() => {
+    if (previousAndroidSerial === undefined) delete process.env.ANDROID_SERIAL;
+    else process.env.ANDROID_SERIAL = previousAndroidSerial;
+  });
   const result = await handleAutoLogin(
     authClient(),
     { platform: 'android' },
     {
+      getSession: () => null,
       maestroRun: async () => {
         replayed = true;
         return { content: [{ type: 'text', text: '{"ok":true,"data":{"passed":true}}' }] };
@@ -62,7 +77,30 @@ test('cdp_auto_login refuses a platform without matching owned device authority'
 
   assert.equal(result?.loggedIn, false);
   assert.match(String(result?.reason), /owned android session/);
+  assert.equal(result?.code, 'DEVICE_AUTHORITY_MISMATCH');
+  assert.match(String(result?.nextAction), /rn_session/);
+  const refusal = JSON.parse(autoLoginToolResult(result).content[0].text);
+  assert.equal(refusal.code, 'DEVICE_AUTHORITY_MISMATCH');
+  assert.match(String(refusal.meta?.nextAction), /rn_session/);
   assert.equal(replayed, false);
+});
+
+test('cdp_auto_login preserves the legacy envelope for ordinary login failures', () => {
+  const result = {
+    loggedIn: false,
+    reason: 'Maestro login flow failed: replay failed',
+    flow: '/project/.maestro/subflows/login.yaml',
+  };
+
+  const toolResult = autoLoginToolResult(result);
+  const envelope = JSON.parse(toolResult.content[0].text);
+
+  assert.deepEqual(envelope, {
+    ok: false,
+    error: result.reason,
+    data: result,
+  });
+  assert.equal(toolResult.isError, true);
 });
 
 test('cdp_auto_login refuses symlinked legacy flow ownership', async () => {
