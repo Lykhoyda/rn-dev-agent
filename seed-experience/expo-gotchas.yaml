@@ -42,10 +42,10 @@ expo_gotchas:
     severity: medium
 
   - id: EG_DEV_MENU_INTERFERENCE
-    name: Dev Menu pops up during proof recordings
-    symptom: Dev menu overlay appears during video recording, blocking interactions
-    cause: Shake gesture or accidental trigger activates the dev menu
-    fix: Call cdp_dev_settings(action=disableDevMenu) before starting proof recordings
+    name: React Native core dev menu pops up during proof recordings
+    symptom: React Native core dev menu appears during recording and blocks interactions
+    cause: A shake gesture or accidental trigger activates the core dev menu
+    fix: Call cdp_dev_settings(action=disableDevMenu) before recording; it does not close a visible menu
     severity: medium
 
   - id: EG_NEW_ARCH_CDP_TARGET

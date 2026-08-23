@@ -9,9 +9,11 @@ environment readiness. Use `device_list` only as diagnostic inventory; never
 turn an ambient port or the first available device into authority.
 
 Before navigation, run the cross-platform foreground-surface preflight on the
-authority-bound device. Connect the exact signed target when CDP is not already
-connected, capture one fresh `device_snapshot`, classify the foreground, and
-invoke exactly one matching remedy:
+authority-bound device. This preflight belongs to the attaching rn-dev-agent
+session; launch or foreground helpers, including rn-qa, stop before native-UI
+dismissal. Connect the exact signed target when CDP is not already connected,
+capture one fresh `device_snapshot`, classify the foreground, and invoke exactly
+one matching remedy:
 
 | Foreground surface | Single remedy |
 |--------------------|---------------|

@@ -71,14 +71,14 @@ failure_families:
       - screenshot shows "DEVELOPMENT SERVERS"
       - cdp_navigation_state returns empty or DevClientLauncher
     recovery:
-      - cdp_status auto-detects and dismisses picker if device session is open
-      - if auto-dismiss fails, manually tap the Metro server entry
+      - run the check-env foreground-surface preflight on the authority-bound device
+      - use cdp_dismiss_dev_client_picker when the preflight classifies this picker
       - wait 15-25s for rebundle after dismissal
     notes: >
       The Dev Client picker appears after deep links, app restarts, permission
-      changes, or clearState. It is a native screen (not React) so CDP tools
-      cannot detect it. Auto-handling via device_find requires an active
-      agent-device session. cdp_status now checks for this automatically (GH #9).
+      changes, or clearState. It is a native screen (not React), so classification
+      requires a fresh native snapshot from the attaching session. Never use a
+      manual coordinate tap as fallback.
 
   - id: FF_KEYBOARD_OVERLAY
     name: Keyboard obscuring target element

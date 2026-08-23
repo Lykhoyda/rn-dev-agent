@@ -375,11 +375,9 @@ Use `cdp_reload` — triggers a full reload with automatic reconnect and target 
 2. Call `cdp_connect platform: "android"|"ios" force: true` to re-pin
 3. If multiple Hermes targets exist, use `cdp_targets` only to diagnose why the session-bound signed target is unavailable
 
-**Expo Developer Menu:** `cdp_reload` does not dismiss native UI. Classify the
-foreground surface after reconnect, then use `cdp_dev_settings(action="hideDevMenu")`
-only for a present Expo Developer Menu sheet. It dismisses over CDP with no touch,
-so Hermes stays attached and the in-memory store survives. `disableDevMenu` only
-suppresses future shake-to-show gestures.
+**Expo Developer Menu:** `cdp_reload` does not dismiss native UI. Before
+navigation, run the foreground-surface preflight in `/rn-dev-agent:check-env`;
+it owns classification, the single matching remedy, and fresh app-surface proof.
 
 #### "I need to manage device permissions"
 - **Query:** `device_permission(action="query", permission="notifications")`
