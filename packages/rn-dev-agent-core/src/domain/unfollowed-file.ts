@@ -1,4 +1,8 @@
-import { listVerifiedDirectory, readFileFromVerifiedDirectory } from '../session/process-birth.js';
+import {
+  listVerifiedDirectory,
+  readFileFromVerifiedDirectory,
+  readFilesFromVerifiedDirectory,
+} from '../session/process-birth.js';
 
 export interface VerifiedDirectoryIdentity {
   dev: string;
@@ -15,6 +19,22 @@ export function readUnfollowedFile(
   } catch (err) {
     throw new Error(
       `Refusing inherited action symlink at ${directoryPath}/${relativePath}: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+}
+
+export function readUnfollowedFiles(
+  directoryPath: string,
+  identity: VerifiedDirectoryIdentity,
+  relativePaths: readonly string[],
+): Array<string | null> {
+  try {
+    return readFilesFromVerifiedDirectory(directoryPath, identity, relativePaths).map((entry) =>
+      entry ? entry.toString('utf8') : null,
+    );
+  } catch (err) {
+    throw new Error(
+      `Refusing replaced learned-action corpus at ${directoryPath}: ${err instanceof Error ? err.message : String(err)}`,
     );
   }
 }

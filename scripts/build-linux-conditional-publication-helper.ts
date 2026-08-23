@@ -233,6 +233,47 @@ static int read_directory_entry(
   syscall6(SYS_CLOSE, entry_fd, 0, 0, 0, 0, 0);
   return 0;
 }
+static int write_u64(u64 value) {
+  u8 bytes[8];
+  for (int index = 7; index >= 0; index--) {
+    bytes[index] = (u8)(value & 0xff);
+    value >>= 8;
+  }
+  return write_all(bytes, sizeof(bytes));
+}
+static int read_directory_entries(
+    const char *directory_path,
+    u64 expected_dev,
+    u64 expected_ino,
+    long entry_count,
+    char **relative_paths) {
+  long directory_fd = open_verified_directory(directory_path, expected_dev, expected_ino);
+  if (directory_fd < 0) return 10;
+  for (long index = 0; index < entry_count; index++) {
+    long entry_fd = open_relative_regular(directory_fd, relative_paths[index]);
+    if (entry_fd < 0) {
+      u8 refused = 1;
+      if (!write_all(&refused, 1) || !write_u64(0)) return 11;
+      continue;
+    }
+    struct statx entry_stat;
+    if (!descriptor_stat(entry_fd, &entry_stat)) return 11;
+    u8 accepted = 0;
+    if (!write_all(&accepted, 1) || !write_u64(entry_stat.size)) return 11;
+    u8 buffer[16384];
+    u64 offset = 0;
+    while (offset < entry_stat.size) {
+      u64 wanted = entry_stat.size - offset;
+      if (wanted > sizeof(buffer)) wanted = sizeof(buffer);
+      long count = call4(SYS_PREAD64, entry_fd, (long)buffer, wanted, offset);
+      if (count <= 0 || !write_all(buffer, (u64)count)) return 11;
+      offset += (u64)count;
+    }
+    syscall6(SYS_CLOSE, entry_fd, 0, 0, 0, 0, 0);
+  }
+  syscall6(SYS_CLOSE, directory_fd, 0, 0, 0, 0, 0);
+  return 0;
+}
 static int list_directory(const char *directory_path, u64 expected_dev, u64 expected_ino) {
   long directory_fd = open_verified_directory(directory_path, expected_dev, expected_ino);
   if (directory_fd < 0) return 10;
@@ -390,6 +431,20 @@ __attribute__((visibility("hidden"))) int helper_main(long argc, char **argv) {
     if (!parse_u64(argv[4], &expected_dev) || !parse_u64(argv[5], &expected_ino)) return 2;
     return read_directory_entry(argv[2], argv[3], expected_dev, expected_ino);
   }
+  if (argc >= 6 && argv[1][0] == '-' && argv[1][1] == '-' && argv[1][2] == 'r' &&
+      argv[1][3] == 'e' && argv[1][4] == 'a' && argv[1][5] == 'd' &&
+      argv[1][6] == '-' && argv[1][7] == 'd' && argv[1][8] == 'i' &&
+      argv[1][9] == 'r' && argv[1][10] == 'e' && argv[1][11] == 'c' &&
+      argv[1][12] == 't' && argv[1][13] == 'o' && argv[1][14] == 'r' &&
+      argv[1][15] == 'y' && argv[1][16] == '-' && argv[1][17] == 'e' &&
+      argv[1][18] == 'n' && argv[1][19] == 't' && argv[1][20] == 'r' &&
+      argv[1][21] == 'i' && argv[1][22] == 'e' && argv[1][23] == 's' &&
+      argv[1][24] == 0) {
+    u64 expected_dev;
+    u64 expected_ino;
+    if (!parse_u64(argv[3], &expected_dev) || !parse_u64(argv[4], &expected_ino)) return 2;
+    return read_directory_entries(argv[2], expected_dev, expected_ino, argc - 5, &argv[5]);
+  }
   if (argc == 5 && argv[1][0] == '-' && argv[1][1] == '-' && argv[1][2] == 'l' &&
       argv[1][3] == 'i' && argv[1][4] == 's' && argv[1][5] == 't' &&
       argv[1][6] == '-' && argv[1][7] == 'd' && argv[1][8] == 'i' &&
@@ -457,6 +512,7 @@ const compilerArguments = [
   '-Werror',
   '-ffreestanding',
   '-fno-builtin',
+  '-fno-jump-tables',
   '-fno-stack-protector',
   '-fno-asynchronous-unwind-tables',
   '-fno-unwind-tables',

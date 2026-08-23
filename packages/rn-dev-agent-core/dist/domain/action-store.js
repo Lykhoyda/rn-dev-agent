@@ -11,7 +11,7 @@ import { parseM7Header, serializeM7Header, } from './reusable-action.js';
 import { loadOrInitSidecar, markSeen, saveSidecar, sidecarPathFor, yamlEditedSinceLastSeen, } from './sidecar-io.js';
 import { atomicWriter } from './atomic-writer.js';
 import { assertValidActionId, assertWithinDir } from './path-safety.js';
-import { listUnfollowedDirectory, readUnfollowedFile } from './unfollowed-file.js';
+import { listUnfollowedDirectory, readUnfollowedFile, readUnfollowedFiles, } from './unfollowed-file.js';
 import { buildMaestroFlow, parseAndValidateFlow } from './maestro-validator.js';
 import { mirrorToDb } from './action-state-store.js';
 import { assertReadableActionOperationUnchanged, captureReadableActionOperationSnapshot, readableActionsSnapshot, resolveReadableActionCorpus, } from '../session/worktree-inheritance.js';
@@ -110,8 +110,38 @@ export function openReadableActionLoadContext(projectRoot) {
     if (!snapshot || !operation)
         return null;
     const files = listUnfollowedDirectory(snapshot.directory, snapshot.identity);
+    const readableFiles = files.filter((file) => /\.ya?ml$/.test(file));
+    const contents = readUnfollowedFiles(snapshot.directory, snapshot.identity, readableFiles);
+    const fileContents = new Map();
+    readableFiles.forEach((file, index) => {
+        const text = contents[index];
+        if (text != null)
+            fileContents.set(file, text);
+    });
     assertReadableActionOperationUnchanged(operation);
-    return { projectRoot, corpus, snapshot, operation, files };
+    return { projectRoot, corpus, snapshot, operation, files, fileContents };
+}
+function actionTextFromContext(context, fileName) {
+    const text = context.fileContents.get(fileName);
+    if (text !== undefined)
+        return text;
+    throw new Error(`Refusing inherited action symlink at ${context.snapshot.directory}/${fileName}.`);
+}
+export function refreshActionLoadContext(context, actionId) {
+    assertReadableActionOperationUnchanged(context.operation);
+    const fileName = resolveActionFileNameFromContext(actionId, context);
+    if (!fileName)
+        return context;
+    const [text] = readUnfollowedFiles(context.snapshot.directory, context.snapshot.identity, [
+        fileName,
+    ]);
+    if (text == null) {
+        throw new Error(`Refusing inherited action symlink at ${context.snapshot.directory}/${fileName}.`);
+    }
+    assertReadableActionOperationUnchanged(context.operation);
+    const fileContents = new Map(context.fileContents);
+    fileContents.set(fileName, text);
+    return { ...context, fileContents };
 }
 function resolveActionFileNameFromContext(actionId, context) {
     const fileName = `${actionId}.yaml`;
@@ -137,7 +167,7 @@ export function resolveActionPath(projectRoot, actionId) {
     const fileName = resolveActionFileNameFromContext(actionId, context);
     if (!fileName)
         return null;
-    readUnfollowedFile(context.snapshot.directory, context.snapshot.identity, fileName);
+    actionTextFromContext(context, fileName);
     assertReadableActionOperationUnchanged(context.operation);
     return join(context.corpus.actionsDir, fileName);
 }
@@ -300,7 +330,7 @@ export function captureActionFromContext(context, actionId) {
         return null;
     const { corpus, snapshot } = context;
     const filePath = join(corpus.actionsDir, fileName);
-    const text = readUnfollowedFile(snapshot.directory, snapshot.identity, fileName);
+    const text = actionTextFromContext(context, fileName);
     const metadata = parseM7Header(text, actionId);
     if (metadata)
         assertActionMetadataIdentity(filePath, metadata);
@@ -314,7 +344,8 @@ export function captureActionFromContext(context, actionId) {
                 if (child === '' || child === '..' || child.startsWith(`..${sep}`) || isAbsolute(child)) {
                     throw new Error(`Refusing action flow outside ${snapshot.directory}.`);
                 }
-                return readUnfollowedFile(snapshot.directory, snapshot.identity, child);
+                return (context.fileContents.get(child) ??
+                    readUnfollowedFile(snapshot.directory, snapshot.identity, child));
             },
             realpathFn: (path) => resolve(path),
         });

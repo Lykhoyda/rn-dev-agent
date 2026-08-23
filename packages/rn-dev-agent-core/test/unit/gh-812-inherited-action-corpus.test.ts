@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import {
   chmodSync,
+  existsSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
@@ -31,7 +32,11 @@ import {
 } from '../../dist/session/worktree-inheritance.js';
 import { listActions } from '../../dist/domain/action-inventory.js';
 import { loadAction, loadActionFromContext } from '../../dist/domain/action-store.js';
-import { listUnfollowedDirectory, readUnfollowedFile } from '../../dist/domain/unfollowed-file.js';
+import {
+  listUnfollowedDirectory,
+  readUnfollowedFile,
+  readUnfollowedFiles,
+} from '../../dist/domain/unfollowed-file.js';
 import {
   createPinnedRunActionHandler as createRunActionHandler,
   fixtureYaml,
@@ -377,10 +382,10 @@ test('inventory and replay Git calls are independent of action count', () => {
     assert.deepEqual(tenCalls, oneCalls);
 
     const replayHelper = join(fixture.root, 'load-action.mjs');
-    const actionStoreUrl = pathToFileURL(join(CORE_ROOT, 'dist', 'domain', 'action-store.js')).href;
+    const helperUrl = pathToFileURL(join(HERE, '..', 'helpers', 'tmp-project.js')).href;
     writeFileSync(
       replayHelper,
-      `import { loadAction } from ${JSON.stringify(actionStoreUrl)};\nconst action = loadAction(process.argv[2], 'login');\nif (action?.metadata.id !== 'login') process.exit(2);\n`,
+      `import { createPinnedRunActionHandler } from ${JSON.stringify(helperUrl)};\nconst handler = createPinnedRunActionHandler({ maestroRun: async () => ({ content: [{ type: 'text', text: JSON.stringify({ ok: true, data: { passed: true, output: 'Flow passed' } }) }] }) });\nconst result = await handler({ actionId: 'login', projectRoot: process.argv[2], autoRepair: false, forceReload: false });\nif (JSON.parse(result.content[0].text).ok !== true) process.exit(2);\n`,
     );
     probe.reset();
     const replay = nodeCli(replayHelper, [worktree], worktree, {
@@ -614,6 +619,34 @@ test('verified directory operations refuse a replaced inherited target', () => {
   }
 });
 
+test('verified directory batch returns readable files and refuses a symlink entry', () => {
+  const fixture = makeFixture();
+  try {
+    seedLoginCorpus(fixture.primary);
+    const actionsDir = join(fixture.primary, '.rn-agent', 'actions');
+    writeFileSync(join(actionsDir, 'other.yaml'), fixtureYaml({ id: 'other' }));
+    const leaked = join(fixture.root, 'leaked.yaml');
+    writeFileSync(leaked, fixtureYaml({ id: 'leaked' }));
+    symlinkSync(leaked, join(actionsDir, 'linked.yaml'));
+    const worktree = addWorktree(fixture);
+    inherit(worktree);
+    const corpus = resolveReadableActionCorpus(worktree);
+    assert.equal(corpus.status, 'approved-inherited');
+    const snapshot = readableActionsSnapshot(corpus);
+    assert.ok(snapshot);
+    const entries = readUnfollowedFiles(snapshot.directory, snapshot.identity, [
+      'login.yaml',
+      'other.yaml',
+      'linked.yaml',
+    ]);
+    assert.match(entries[0]!, /# id: login/);
+    assert.match(entries[1]!, /# id: other/);
+    assert.equal(entries[2], null);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
 test('inventory stays bound to its original corpus snapshot', async () => {
   const fixture = makeFixture();
   try {
@@ -640,6 +673,31 @@ test('inventory stays bound to its original corpus snapshot', async () => {
           },
         }),
       /Refusing replaced learned-action corpus|Refusing inherited action symlink/,
+    );
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('single-action inventory refuses a corpus replaced after its final load', async () => {
+  const fixture = makeFixture();
+  try {
+    seedLoginCorpus(fixture.primary);
+    const worktree = addWorktree(fixture);
+    inherit(worktree);
+    const actionsDir = join(fixture.primary, '.rn-agent', 'actions');
+
+    await assert.rejects(
+      () =>
+        listActions(worktree, {
+          loadAction: (context, actionId) => {
+            const action = loadActionFromContext(context, actionId);
+            renameSync(actionsDir, join(fixture.root, 'original-final-actions'));
+            mkdirSync(actionsDir);
+            return action;
+          },
+        }),
+      /Refusing replaced learned-action corpus symlink/,
     );
   } finally {
     fixture.cleanup();
@@ -712,6 +770,31 @@ test('operation snapshot refuses a replaced Git common-directory identity', () =
       /Refusing replaced learned-action corpus symlink/,
     );
   } finally {
+    fixture.cleanup();
+  }
+});
+
+test('corpus resolution binds the Git common-directory identity it verified', () => {
+  const fixture = makeFixture();
+  const commonDir = realpathSync(join(fixture.primary, '.git'));
+  const displaced = join(fixture.root, 'verified-git-common-dir');
+  try {
+    seedLoginCorpus(fixture.primary);
+    const worktree = addWorktree(fixture);
+    inherit(worktree);
+    const corpus = resolveReadableActionCorpus(worktree, {
+      beforeTargetOpen: () => {
+        renameSync(commonDir, displaced);
+        mkdirSync(commonDir);
+      },
+    });
+    assert.equal(corpus.status, 'refused');
+    if (corpus.status === 'refused') assert.match(corpus.reason, /replaced learned-action corpus/);
+  } finally {
+    if (existsSync(displaced)) {
+      rmSync(commonDir, { recursive: true, force: true });
+      renameSync(displaced, commonDir);
+    }
     fixture.cleanup();
   }
 });

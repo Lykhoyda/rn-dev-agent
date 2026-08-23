@@ -27,7 +27,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { listUnfollowedDirectory, readUnfollowedFile } from './domain/unfollowed-file.js';
+import { listUnfollowedDirectory, readUnfollowedFiles } from './domain/unfollowed-file.js';
 import { assertReadableActionOperationUnchanged, captureReadableActionOperationSnapshot, resolveReadableActionCorpus, } from './session/worktree-inheritance.js';
 const argv = process.argv.slice(2);
 const flags = {
@@ -142,21 +142,27 @@ function scanFlows() {
         const ids = [
             ...new Set(files.filter((file) => /\.ya?ml$/.test(file)).map((file) => file.replace(/\.ya?ml$/, ''))),
         ];
+        const flowFiles = ids.map((id) => resolveFlowFile(files, id));
+        const readableFlowFiles = flowFiles.filter((file) => file !== null);
+        let flowTexts;
+        try {
+            flowTexts = readUnfollowedFiles(operation.directory, operation.directoryIdentity, readableFlowFiles);
+        }
+        catch {
+            assertReadableActionOperationUnchanged(operation);
+            continue;
+        }
+        assertReadableActionOperationUnchanged(operation);
+        const textByFile = new Map(readableFlowFiles.map((file, index) => [file, flowTexts[index]]));
         const rootItems = [];
         for (const id of ids) {
             const f = resolveFlowFile(files, id);
             if (!f)
                 continue;
             const reportedPath = path.join(root, f);
-            let text;
-            try {
-                text = readUnfollowedFile(operation.directory, operation.directoryIdentity, f);
-            }
-            catch {
-                assertReadableActionOperationUnchanged(operation);
+            const text = textByFile.get(f);
+            if (text == null)
                 continue;
-            }
-            assertReadableActionOperationUnchanged(operation);
             const meta = parseFlowMeta(text);
             if (flags.appId && meta.appId !== flags.appId)
                 continue;

@@ -33,6 +33,7 @@ var SHAREABLE_RESOURCES = [
     hosts: ["claude", "codex"]
   }
 ];
+var repositoryIdentityEvidence = /* @__PURE__ */ Symbol("repositoryIdentityEvidence");
 var GIT_ENV_OVERRIDES = [
   "GIT_DIR",
   "GIT_WORK_TREE",
@@ -110,12 +111,10 @@ function verifiedPrimary(worktreeRoot, commonDir) {
   const candidate = canonical(main2.path);
   if (!candidate)
     return null;
-  try {
-    if (!statSync(candidate).isDirectory())
-      return null;
-  } catch {
+  const topLevelBefore = captureDirectoryIdentity(candidate);
+  const commonDirBefore = captureDirectoryIdentity(commonDir);
+  if (!topLevelBefore || !commonDirBefore)
     return null;
-  }
   const top = git(candidate, ["rev-parse", "--show-toplevel"]);
   if (!top.ok || canonical(top.stdout) !== candidate)
     return null;
@@ -133,7 +132,15 @@ function verifiedPrimary(worktreeRoot, commonDir) {
     return null;
   if (resolvedCommon !== commonDir || resolvedGitDir !== resolvedCommon)
     return null;
-  return candidate;
+  const topLevelAfter = captureDirectoryIdentity(candidate);
+  const commonDirAfter = captureDirectoryIdentity(commonDir);
+  if (!topLevelAfter || !commonDirAfter || topLevelBefore.identity.dev !== topLevelAfter.identity.dev || topLevelBefore.identity.ino !== topLevelAfter.identity.ino || commonDirBefore.identity.dev !== commonDirAfter.identity.dev || commonDirBefore.identity.ino !== commonDirAfter.identity.ino) {
+    return null;
+  }
+  return {
+    root: candidate,
+    identity: { topLevel: topLevelAfter, commonDir: commonDirAfter }
+  };
 }
 function resolveWorktreeLayout(input) {
   const cwd = canonical(input.cwd);
@@ -176,9 +183,10 @@ function resolveWorktreeLayout(input) {
   };
   if (base.kind === "primary")
     return base;
-  const primaryRoot = verifiedPrimary(worktreeRoot, commonDir);
-  if (!primaryRoot)
+  const primary = verifiedPrimary(worktreeRoot, commonDir);
+  if (!primary)
     return { ...base, refusal: "NO_PRIMARY" };
+  const primaryRoot = primary.root;
   const primaryAppRoot = appRelative === "." ? primaryRoot : join(primaryRoot, appRelative);
   if (!contained(primaryRoot, primaryAppRoot))
     return { ...base, refusal: "PRIMARY_APP_MISSING" };
@@ -192,7 +200,9 @@ function resolveWorktreeLayout(input) {
   if (!primaryAppReal || !contained(primaryRoot, primaryAppReal)) {
     return { ...base, refusal: "PRIMARY_APP_MISSING" };
   }
-  return { ...base, primaryRoot, primaryAppRoot };
+  const linked = { ...base, primaryRoot, primaryAppRoot };
+  Object.defineProperty(linked, repositoryIdentityEvidence, { value: primary.identity });
+  return linked;
 }
 function classifySource(path, type, boundary) {
   const rel = relative(boundary, path);
@@ -276,6 +286,27 @@ function classifyDestination(path, sourcePath, type) {
   } catch {
     return { state: "LINK_STALE", evidence };
   }
+}
+function identityOf(stat) {
+  return { dev: String(stat.dev), ino: String(stat.ino) };
+}
+function lstatIfPresent(path) {
+  try {
+    return lstatSync(path, { bigint: true });
+  } catch (error) {
+    if (error.code === "ENOENT")
+      return null;
+    throw error;
+  }
+}
+function freezeIdentity(identity) {
+  return Object.freeze({ ...identity });
+}
+function captureDirectoryIdentity(path) {
+  const stat = lstatIfPresent(path);
+  if (!stat || stat.isSymbolicLink() || !stat.isDirectory())
+    return null;
+  return Object.freeze({ path, identity: freezeIdentity(identityOf(stat)) });
 }
 function isTracked(worktreeRoot, relativePath) {
   const listed = git(worktreeRoot, ["ls-files", "--", relativePath]);

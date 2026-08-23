@@ -34,9 +34,14 @@ import type { ToolResult } from '../utils.js';
 import type { ToolErrorCode } from '../types.js';
 import {
   acknowledgeExternalEdit,
+  assertReadableActionLoadContextStable,
   loadAction,
+  loadActionFromContext,
+  openReadableActionLoadContext,
   promoteActionRuntimeWithCAS,
+  refreshActionLoadContext,
   saveActionRuntimeWithCAS,
+  type ReadableActionLoadContext,
 } from '../domain/action-store.js';
 import { mirrorToDb } from '../domain/action-state-store.js';
 import {
@@ -53,7 +58,7 @@ import {
   type MaestroFailure,
 } from '../domain/maestro-error-parser.js';
 import { createMaestroRunHandler } from './maestro-run.js';
-import { createRepairActionHandler } from './repair-action.js';
+import { bindRepairActionLoadContext, createRepairActionHandler } from './repair-action.js';
 import { isValidActionId } from '../domain/path-safety.js';
 import { classifyRouteDriftAfterFailure } from '../nav-graph/route-sequence.js';
 import { SessionAuthorityError } from '../session/registry.js';
@@ -529,16 +534,18 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
         { proofReplay: true },
       );
     }
+    let openedContext: ReadableActionLoadContext | null;
     let loaded: ReturnType<typeof loadAction>;
     try {
-      loaded = loadAction(projectRoot, args.actionId);
+      openedContext = openReadableActionLoadContext(projectRoot);
+      loaded = openedContext ? loadActionFromContext(openedContext, args.actionId) : null;
     } catch (err) {
       return failResult(err instanceof Error ? err.message : String(err), 'BAD_FILENAME', {
         actionId: args.actionId,
         fallback: 'none',
       });
     }
-    if (!loaded) {
+    if (!loaded || !openedContext) {
       return failResult(
         `cdp_run_action: action "${args.actionId}" not found at ${projectRoot}/.rn-agent/actions/${args.actionId}.yaml or ${args.actionId}.yml`,
         'NO_PROJECT_ROOT',
@@ -547,6 +554,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
         },
       );
     }
+    let loadContext = openedContext;
     if (!loaded.replay.ok) {
       return failResult(
         `Action ${args.actionId} is not valid Maestro YAML: ${loaded.replay.error}`,
@@ -565,6 +573,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
     const action = forceReload ? acknowledgeExternalEdit(loaded) : loaded;
 
     const engineStatus = await resolveEngineStatus();
+    assertReadableActionLoadContextStable(loadContext);
     const compatRefusal = actionReplayPreflight({
       enginePin: action.metadata.enginePin,
       commands: preflightCommands,
@@ -637,7 +646,10 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
     // so a clean pass can still clear a device-matched blind-probe latch.
     let observedDeviceId: string | null = maestroDeviceId ?? null;
     const persistRunWithDevice = (record: RunRecord): Promise<PersistRunOutcome> => {
-      if (proofReplay) return Promise.resolve({ promoted: false, promotionRefused: false });
+      if (proofReplay) {
+        assertReadableActionLoadContextStable(loadContext);
+        return Promise.resolve({ promoted: false, promotionRefused: false });
+      }
       const endedMs = Date.now();
       const timedRecord: RunRecord = {
         ...record,
@@ -651,7 +663,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
       };
       return persistRun(
         args.actionId,
-        projectRoot,
+        loadContext,
         probeDeviceId ? { ...timedRecord, deviceId: probeDeviceId } : timedRecord,
       );
     };
@@ -1173,12 +1185,17 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
 
       const tBeforeRepair = Date.now();
       const repairResult = await measureStep('selector-repair', () =>
-        repairAction({
-          actionId: args.actionId,
-          failedSelector: failure.selector,
-          projectRoot,
-          agentReasoning: `auto-repair from cdp_run_action after maestro failure: ${failure.selector}`,
-        }),
+        repairAction(
+          bindRepairActionLoadContext(
+            {
+              actionId: args.actionId,
+              failedSelector: failure.selector,
+              projectRoot,
+              agentReasoning: `auto-repair from cdp_run_action after maestro failure: ${failure.selector}`,
+            },
+            loadContext,
+          ),
+        ),
       );
       const repairMs = Date.now() - tBeforeRepair;
       const repairEnv = parseEnvelope(repairResult, 'cdp_repair_action');
@@ -1232,7 +1249,8 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
       // The repair updated the action on disk. Re-load to pick up the
       // new body + bumped revision/state — saveAction's atomic pair-write
       // means we can read it back deterministically.
-      const reloadedAction = loadAction(projectRoot, args.actionId);
+      loadContext = refreshActionLoadContext(loadContext, args.actionId);
+      const reloadedAction = loadActionFromContext(loadContext, args.actionId);
       if (!reloadedAction) {
         // Shouldn't happen — repair just wrote it. Defensive surface.
         // Persist the failure RunRecord so MTTR sees the outcome.
@@ -1475,7 +1493,7 @@ function promotionDisclosure(outcome: PersistRunOutcome): WriteDisclosureKind {
 
 async function persistRun(
   actionId: string,
-  projectRoot: string,
+  context: ReadableActionLoadContext,
   record: RunRecord,
 ): Promise<PersistRunOutcome> {
   // Re-load to get the freshest state — repair-action may have just
@@ -1483,7 +1501,7 @@ async function persistRun(
   // but only the ignored runtime sidecar is written on ordinary replay.
   const MAX_ATTEMPTS = 5;
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-    const fresh = loadAction(projectRoot, actionId);
+    const fresh = loadActionFromContext(context, actionId);
     if (!fresh) {
       console.error(
         `cdp_run_action: persistRun could not reload action "${actionId}" — RunRecord dropped (status=${record.status}, autoRepair.outcome=${record.autoRepair?.outcome ?? 'n/a'})`,

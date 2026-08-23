@@ -28,7 +28,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { listUnfollowedDirectory, readUnfollowedFile } from './domain/unfollowed-file.js';
+import { listUnfollowedDirectory, readUnfollowedFiles } from './domain/unfollowed-file.js';
 import {
   assertReadableActionOperationUnchanged,
   captureReadableActionOperationSnapshot,
@@ -203,19 +203,28 @@ function scanFlows(): FlowsResult {
         files.filter((file) => /\.ya?ml$/.test(file)).map((file) => file.replace(/\.ya?ml$/, '')),
       ),
     ];
+    const flowFiles = ids.map((id) => resolveFlowFile(files, id));
+    const readableFlowFiles = flowFiles.filter((file): file is string => file !== null);
+    let flowTexts: Array<string | null>;
+    try {
+      flowTexts = readUnfollowedFiles(
+        operation.directory,
+        operation.directoryIdentity,
+        readableFlowFiles,
+      );
+    } catch {
+      assertReadableActionOperationUnchanged(operation);
+      continue;
+    }
+    assertReadableActionOperationUnchanged(operation);
+    const textByFile = new Map(readableFlowFiles.map((file, index) => [file, flowTexts[index]]));
     const rootItems: FlowItem[] = [];
     for (const id of ids) {
       const f = resolveFlowFile(files, id);
       if (!f) continue;
       const reportedPath = path.join(root, f);
-      let text: string;
-      try {
-        text = readUnfollowedFile(operation.directory, operation.directoryIdentity, f);
-      } catch {
-        assertReadableActionOperationUnchanged(operation);
-        continue;
-      }
-      assertReadableActionOperationUnchanged(operation);
+      const text = textByFile.get(f);
+      if (text == null) continue;
       const meta = parseFlowMeta(text);
       if (flags.appId && meta.appId !== flags.appId) continue;
       const tagsStr = (meta.tags || []).join(',');

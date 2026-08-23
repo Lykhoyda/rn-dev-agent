@@ -109,6 +109,17 @@ export interface PathIdentity {
   ino: string;
 }
 
+interface RepositoryIdentity {
+  topLevel: { path: string; identity: PathIdentity };
+  commonDir: { path: string; identity: PathIdentity };
+}
+
+const repositoryIdentityEvidence = Symbol('repositoryIdentityEvidence');
+
+type VerifiedWorktreeLayout = WorktreeLayout & {
+  [repositoryIdentityEvidence]?: RepositoryIdentity;
+};
+
 export type ReadableActionCorpus =
   | { status: 'absent' }
   | {
@@ -128,6 +139,7 @@ export type ReadableActionCorpus =
       targetIdentity: PathIdentity;
       primaryRoot: string;
       commonDir: string;
+      primaryIdentity: RepositoryIdentity;
     }
   | { status: 'refused'; reason: string };
 
@@ -298,18 +310,19 @@ function parseFirstWorktreeRecord(porcelain: string): WorktreeRecord | null {
   };
 }
 
-function verifiedPrimary(worktreeRoot: string, commonDir: string): string | null {
+function verifiedPrimary(
+  worktreeRoot: string,
+  commonDir: string,
+): { root: string; identity: RepositoryIdentity } | null {
   const listing = git(worktreeRoot, ['worktree', 'list', '--porcelain']);
   if (!listing.ok) return null;
   const main = parseFirstWorktreeRecord(listing.stdout);
   if (!main || main.bare || main.prunable) return null;
   const candidate = canonical(main.path);
   if (!candidate) return null;
-  try {
-    if (!statSync(candidate).isDirectory()) return null;
-  } catch {
-    return null;
-  }
+  const topLevelBefore = captureDirectoryIdentity(candidate);
+  const commonDirBefore = captureDirectoryIdentity(commonDir);
+  if (!topLevelBefore || !commonDirBefore) return null;
   const top = git(candidate, ['rev-parse', '--show-toplevel']);
   if (!top.ok || canonical(top.stdout) !== candidate) return null;
   const candidateGitDir = git(candidate, ['rev-parse', '--path-format=absolute', '--git-dir']);
@@ -323,7 +336,22 @@ function verifiedPrimary(worktreeRoot: string, commonDir: string): string | null
   const resolvedCommon = canonical(candidateCommon.stdout);
   if (!resolvedGitDir || !resolvedCommon) return null;
   if (resolvedCommon !== commonDir || resolvedGitDir !== resolvedCommon) return null;
-  return candidate;
+  const topLevelAfter = captureDirectoryIdentity(candidate);
+  const commonDirAfter = captureDirectoryIdentity(commonDir);
+  if (
+    !topLevelAfter ||
+    !commonDirAfter ||
+    topLevelBefore.identity.dev !== topLevelAfter.identity.dev ||
+    topLevelBefore.identity.ino !== topLevelAfter.identity.ino ||
+    commonDirBefore.identity.dev !== commonDirAfter.identity.dev ||
+    commonDirBefore.identity.ino !== commonDirAfter.identity.ino
+  ) {
+    return null;
+  }
+  return {
+    root: candidate,
+    identity: { topLevel: topLevelAfter, commonDir: commonDirAfter },
+  };
 }
 
 export function resolveWorktreeLayout(input: {
@@ -370,8 +398,9 @@ export function resolveWorktreeLayout(input: {
   };
   if (base.kind === 'primary') return base;
 
-  const primaryRoot = verifiedPrimary(worktreeRoot, commonDir);
-  if (!primaryRoot) return { ...base, refusal: 'NO_PRIMARY' };
+  const primary = verifiedPrimary(worktreeRoot, commonDir);
+  if (!primary) return { ...base, refusal: 'NO_PRIMARY' };
+  const primaryRoot = primary.root;
   const primaryAppRoot = appRelative === '.' ? primaryRoot : join(primaryRoot, appRelative);
   if (!contained(primaryRoot, primaryAppRoot)) return { ...base, refusal: 'PRIMARY_APP_MISSING' };
   let primaryAppReal: string | null = null;
@@ -383,7 +412,9 @@ export function resolveWorktreeLayout(input: {
   if (!primaryAppReal || !contained(primaryRoot, primaryAppReal)) {
     return { ...base, refusal: 'PRIMARY_APP_MISSING' };
   }
-  return { ...base, primaryRoot, primaryAppRoot };
+  const linked: VerifiedWorktreeLayout = { ...base, primaryRoot, primaryAppRoot };
+  Object.defineProperty(linked, repositoryIdentityEvidence, { value: primary.identity });
+  return linked;
 }
 
 interface SourceClassification {
@@ -462,6 +493,17 @@ function sourceLeafMatchesIdentity(
 ): boolean {
   const leaf = evidence?.at(-1);
   return leaf?.dev === identity.dev && leaf.ino === identity.ino;
+}
+
+function repositoryIdentityUnchanged(
+  identity: Extract<ReadableActionCorpus, { status: 'approved-inherited' }>['primaryIdentity'],
+): boolean {
+  return (
+    currentIdentityMatches(identity.topLevel.path, identity.topLevel.identity, 'directory') &&
+    currentIdentityMatches(identity.commonDir.path, identity.commonDir.identity, 'directory') &&
+    canonical(identity.topLevel.path) === identity.topLevel.path &&
+    canonical(identity.commonDir.path) === identity.commonDir.path
+  );
 }
 
 interface DestinationClassification {
@@ -621,6 +663,8 @@ export function resolveReadableActionCorpus(
   ) {
     return refuseForeignActions(actionsDir);
   }
+  const primaryIdentity = (layout as VerifiedWorktreeLayout)[repositoryIdentityEvidence];
+  if (!primaryIdentity) return refuseReplacedActions(actionsDir);
   const primaryRnAgentDir = join(layout.primaryAppRoot, '.rn-agent');
   const primaryActionsDir = join(primaryRnAgentDir, 'actions');
   const planned = planResource(layout, SHAREABLE_RESOURCES[0]);
@@ -655,7 +699,8 @@ export function resolveReadableActionCorpus(
     !sameSourceEvidence(planned.sourceEvidence, plannedAfter.sourceEvidence) ||
     !sourceLeafMatchesIdentity(planned.sourceEvidence, targetIdentity) ||
     !sourceLeafMatchesIdentity(plannedAfter.sourceEvidence, targetIdentity) ||
-    !directoryIdentityUnchanged(rnAgentDir, rnAgentIdentity)
+    !directoryIdentityUnchanged(rnAgentDir, rnAgentIdentity) ||
+    !repositoryIdentityUnchanged(primaryIdentity)
   ) {
     return refuseReplacedActions(actionsDir);
   }
@@ -669,6 +714,7 @@ export function resolveReadableActionCorpus(
     targetIdentity,
     primaryRoot: layout.primaryRoot,
     commonDir: layout.commonDir,
+    primaryIdentity,
   };
 }
 
@@ -698,7 +744,11 @@ export function sameReadableActionCorpus(
     left.targetIdentity.dev === right.targetIdentity.dev &&
     left.targetIdentity.ino === right.targetIdentity.ino &&
     left.primaryRoot === right.primaryRoot &&
-    left.commonDir === right.commonDir
+    left.commonDir === right.commonDir &&
+    left.primaryIdentity.topLevel.identity.dev === right.primaryIdentity.topLevel.identity.dev &&
+    left.primaryIdentity.topLevel.identity.ino === right.primaryIdentity.topLevel.identity.ino &&
+    left.primaryIdentity.commonDir.identity.dev === right.primaryIdentity.commonDir.identity.dev &&
+    left.primaryIdentity.commonDir.identity.ino === right.primaryIdentity.commonDir.identity.ino
   );
 }
 
@@ -750,9 +800,9 @@ export function captureReadableActionOperationSnapshot(
     });
   }
   if (corpus.status === 'approved-inherited') {
-    const topLevel = captureDirectoryIdentity(corpus.primaryRoot);
-    const commonDir = captureDirectoryIdentity(corpus.commonDir);
-    if (!topLevel || !commonDir) throw new Error(refuseReplacedActions(corpus.actionsDir).reason);
+    if (!repositoryIdentityUnchanged(corpus.primaryIdentity)) {
+      throw new Error(refuseReplacedActions(corpus.actionsDir).reason);
+    }
     return Object.freeze({
       operationId,
       kind: corpus.status,
@@ -761,7 +811,16 @@ export function captureReadableActionOperationSnapshot(
       directory: corpus.targetDir,
       directoryIdentity: freezeIdentity(corpus.targetIdentity),
       linkIdentity: freezeIdentity(corpus.linkIdentity),
-      primaryIdentity: Object.freeze({ topLevel, commonDir }),
+      primaryIdentity: Object.freeze({
+        topLevel: Object.freeze({
+          path: corpus.primaryIdentity.topLevel.path,
+          identity: freezeIdentity(corpus.primaryIdentity.topLevel.identity),
+        }),
+        commonDir: Object.freeze({
+          path: corpus.primaryIdentity.commonDir.path,
+          identity: freezeIdentity(corpus.primaryIdentity.commonDir.identity),
+        }),
+      }),
     });
   }
   return null;

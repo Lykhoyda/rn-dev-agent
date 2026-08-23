@@ -8,7 +8,7 @@
 import { ensureFastRunner, getActiveSession, runNative } from '../agent-device-wrapper.js';
 import { okResult, failResult, withSession } from '../utils.js';
 import { isValidActionId } from '../domain/path-safety.js';
-import { loadAction, saveAction, actionWasEditedExternally } from '../domain/action-store.js';
+import { actionWasEditedExternally, assertReadableActionLoadContextStable, loadAction, loadActionFromContext, saveAction, } from '../domain/action-store.js';
 import { mirrorToDb } from '../domain/action-state-store.js';
 import { extractAllTestIDs, extractIdSelectors, detectTransportBlind, attemptRepair, applyRepair, DEFAULT_REPAIR_THRESHOLD, } from '../domain/repair-engine.js';
 import { repairBudgetAvailable, recentRepairCount } from '../domain/reusable-action.js';
@@ -51,6 +51,11 @@ function parseSnapshotNodes(envelope) {
         return null;
     }
 }
+const repairActionLoadContext = Symbol('repairActionLoadContext');
+export function bindRepairActionLoadContext(args, context) {
+    Object.defineProperty(args, repairActionLoadContext, { value: context });
+    return args;
+}
 export function createRepairActionHandler() {
     return withSession(async (args) => {
         if (!args.actionId || typeof args.actionId !== 'string') {
@@ -71,7 +76,10 @@ export function createRepairActionHandler() {
             });
         }
         const projectRoot = args.projectRoot ?? process.cwd();
-        const action = loadAction(projectRoot, args.actionId);
+        const loadContext = args[repairActionLoadContext];
+        const action = loadContext
+            ? loadActionFromContext(loadContext, args.actionId)
+            : loadAction(projectRoot, args.actionId);
         if (!action) {
             return failResult(`cdp_repair_action: action "${args.actionId}" not found at ${projectRoot}/.rn-agent/actions/${args.actionId}.yaml`, 'NO_PROJECT_ROOT', {
                 hint: 'Verify the action exists with /list-learned-actions, or pass projectRoot if cdp-bridge is invoked outside the project directory.',
@@ -203,6 +211,8 @@ export function createRepairActionHandler() {
         }
         const repaired = applyRepair(action, result, () => new Date(), args.agentReasoning);
         const { filePath, sidecarPath } = saveAction(repaired);
+        if (loadContext)
+            assertReadableActionLoadContextStable(loadContext);
         // Task 5 (A2/C): append the RepairRecord ROW to the DB mirror, STRICTLY
         // AFTER the authoritative saveAction. applyRepair appended the record to
         // repaired.state.repairHistory, so the just-added record is the last

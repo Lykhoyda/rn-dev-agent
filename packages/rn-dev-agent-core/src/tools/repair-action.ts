@@ -10,7 +10,14 @@ import { ensureFastRunner, getActiveSession, runNative } from '../agent-device-w
 import { okResult, failResult, withSession } from '../utils.js';
 import type { ToolResult } from '../utils.js';
 import { isValidActionId } from '../domain/path-safety.js';
-import { loadAction, saveAction, actionWasEditedExternally } from '../domain/action-store.js';
+import {
+  actionWasEditedExternally,
+  assertReadableActionLoadContextStable,
+  loadAction,
+  loadActionFromContext,
+  saveAction,
+  type ReadableActionLoadContext,
+} from '../domain/action-store.js';
 import { mirrorToDb } from '../domain/action-state-store.js';
 import {
   extractAllTestIDs,
@@ -95,6 +102,20 @@ export interface RepairActionArgs {
   appId?: string;
 }
 
+const repairActionLoadContext = Symbol('repairActionLoadContext');
+
+type ContextualRepairActionArgs = RepairActionArgs & {
+  [repairActionLoadContext]?: ReadableActionLoadContext;
+};
+
+export function bindRepairActionLoadContext(
+  args: RepairActionArgs,
+  context: ReadableActionLoadContext,
+): RepairActionArgs {
+  Object.defineProperty(args, repairActionLoadContext, { value: context });
+  return args;
+}
+
 export function createRepairActionHandler() {
   return withSession(async (args: RepairActionArgs): Promise<ToolResult> => {
     if (!args.actionId || typeof args.actionId !== 'string') {
@@ -123,7 +144,10 @@ export function createRepairActionHandler() {
     }
 
     const projectRoot = args.projectRoot ?? process.cwd();
-    const action = loadAction(projectRoot, args.actionId);
+    const loadContext = (args as ContextualRepairActionArgs)[repairActionLoadContext];
+    const action = loadContext
+      ? loadActionFromContext(loadContext, args.actionId)
+      : loadAction(projectRoot, args.actionId);
     if (!action) {
       return failResult(
         `cdp_repair_action: action "${args.actionId}" not found at ${projectRoot}/.rn-agent/actions/${args.actionId}.yaml`,
@@ -309,6 +333,7 @@ export function createRepairActionHandler() {
 
     const repaired = applyRepair(action, result, () => new Date(), args.agentReasoning);
     const { filePath, sidecarPath } = saveAction(repaired);
+    if (loadContext) assertReadableActionLoadContextStable(loadContext);
     // Task 5 (A2/C): append the RepairRecord ROW to the DB mirror, STRICTLY
     // AFTER the authoritative saveAction. applyRepair appended the record to
     // repaired.state.repairHistory, so the just-added record is the last

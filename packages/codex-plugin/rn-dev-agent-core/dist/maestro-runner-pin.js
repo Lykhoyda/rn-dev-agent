@@ -316,6 +316,41 @@ function readFileFromVerifiedDirectory(directoryPath, identity, relativePath) {
     identity.ino
   ]);
 }
+function readFilesFromVerifiedDirectory(directoryPath, identity, relativePaths) {
+  if (relativePaths.length === 0)
+    return [];
+  const output = runVerifiedFilesystemHelper([
+    "--read-directory-entries",
+    directoryPath,
+    identity.dev,
+    identity.ino,
+    ...relativePaths
+  ]);
+  const entries = [];
+  let offset = 0;
+  for (const relativePath of relativePaths) {
+    if (offset + 9 > output.length) {
+      throw new Error(`Verified directory batch was truncated before ${relativePath}.`);
+    }
+    const status = output[offset];
+    const length = output.readBigUInt64BE(offset + 1);
+    offset += 9;
+    if (length > BigInt(Number.MAX_SAFE_INTEGER) || offset + Number(length) > output.length) {
+      throw new Error(`Verified directory batch was malformed at ${relativePath}.`);
+    }
+    const end = offset + Number(length);
+    if (status === 0)
+      entries.push(Buffer.from(output.subarray(offset, end)));
+    else if (status === 1 && length === 0n)
+      entries.push(null);
+    else
+      throw new Error(`Verified directory batch had an invalid status for ${relativePath}.`);
+    offset = end;
+  }
+  if (offset !== output.length)
+    throw new Error("Verified directory batch had trailing data.");
+  return entries;
+}
 function listVerifiedDirectory(directoryPath, identity) {
   const output = runVerifiedFilesystemHelper([
     "--list-directory",
@@ -501,18 +536,18 @@ var init_process_birth = __esm({
     "use strict";
     init_trusted_system_executable();
     DARWIN_HELPER_MANIFEST = {
-      sourceSha256: "f97feaa1c0434cd2ee31c0dce56c9308eb17f893a6a771ac1333b62fcec8b702",
-      recipeSha256: "9617fe093885ac5c1043b39aa467754db8427080b52ebafea6f780535c2b3685",
-      stableBinarySha256: "9887a09246c4fc9c7765ef8fee2ae30027bcf0b9227ae408e48682107e4d88b8",
-      binarySha256: "49db19d9cd0ca2e7a78379c1e4b9551532d85447c043c51f06c6e03573c104ad",
+      sourceSha256: "955b36f932d7124525003fc88e8596a148ae5404b49f8381ff59435e52b272c6",
+      recipeSha256: "ad5e7452795eee5ee8da4321f4260760e6e0e8536193978cd721748385e3f2f4",
+      stableBinarySha256: "6109d6017208b7ea091feeb40cae6640ff925c54e391d1ec0e7737057c30ded4",
+      binarySha256: "47b75f81c09ba5bf966acad48055a1c287708241a44c876fa4483c3189ce5f1e",
       cdhashes: [
-        "cebd22e7adf08990d4ff69b3156de03962d44b74",
-        "e3de1b27f4da23957a3acf60ae8f01c6402bd424"
+        "f5f6876043eadc558ca3d5d056c49b1d771aef6b",
+        "1c072373aff231d756e20fa008b0f9486b229888"
       ]
     };
     LINUX_PUBLICATION_HELPER_SHA256 = {
-      x64: "93bcb6e186470efd2a0944756d7b2de790182b59a5dcb3377334291076ad6032",
-      arm64: "1d0f2fc75e9eff675f8fd5ca329eca03950339796d2f339a4f59a85c2f97ba63"
+      x64: "17b1b6e0edbecefc013ccb1308a444532a72d5910f794de53195a758789bd6bb",
+      arm64: "f9cb783474cc93e6dbb28e81b5a2e46d74c38926a392d75ce9ed5188bafe3520"
     };
     VERIFIED_HELPER_SCRIPT = `
 set -euo pipefail
@@ -9730,6 +9765,13 @@ function readUnfollowedFile(directoryPath, identity, relativePath) {
     throw new Error(`Refusing inherited action symlink at ${directoryPath}/${relativePath}: ${err instanceof Error ? err.message : String(err)}`);
   }
 }
+function readUnfollowedFiles(directoryPath, identity, relativePaths) {
+  try {
+    return readFilesFromVerifiedDirectory(directoryPath, identity, relativePaths).map((entry) => entry ? entry.toString("utf8") : null);
+  } catch (err) {
+    throw new Error(`Refusing replaced learned-action corpus at ${directoryPath}: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
 function listUnfollowedDirectory(directoryPath, identity) {
   try {
     return listVerifiedDirectory(directoryPath, identity);
@@ -10246,12 +10288,10 @@ function verifiedPrimary(worktreeRoot, commonDir) {
   const candidate = canonical(main.path);
   if (!candidate)
     return null;
-  try {
-    if (!statSync3(candidate).isDirectory())
-      return null;
-  } catch {
+  const topLevelBefore = captureDirectoryIdentity(candidate);
+  const commonDirBefore = captureDirectoryIdentity(commonDir);
+  if (!topLevelBefore || !commonDirBefore)
     return null;
-  }
   const top = git(candidate, ["rev-parse", "--show-toplevel"]);
   if (!top.ok || canonical(top.stdout) !== candidate)
     return null;
@@ -10269,7 +10309,15 @@ function verifiedPrimary(worktreeRoot, commonDir) {
     return null;
   if (resolvedCommon !== commonDir || resolvedGitDir !== resolvedCommon)
     return null;
-  return candidate;
+  const topLevelAfter = captureDirectoryIdentity(candidate);
+  const commonDirAfter = captureDirectoryIdentity(commonDir);
+  if (!topLevelAfter || !commonDirAfter || topLevelBefore.identity.dev !== topLevelAfter.identity.dev || topLevelBefore.identity.ino !== topLevelAfter.identity.ino || commonDirBefore.identity.dev !== commonDirAfter.identity.dev || commonDirBefore.identity.ino !== commonDirAfter.identity.ino) {
+    return null;
+  }
+  return {
+    root: candidate,
+    identity: { topLevel: topLevelAfter, commonDir: commonDirAfter }
+  };
 }
 function resolveWorktreeLayout(input) {
   const cwd = canonical(input.cwd);
@@ -10312,9 +10360,10 @@ function resolveWorktreeLayout(input) {
   };
   if (base.kind === "primary")
     return base;
-  const primaryRoot = verifiedPrimary(worktreeRoot, commonDir);
-  if (!primaryRoot)
+  const primary = verifiedPrimary(worktreeRoot, commonDir);
+  if (!primary)
     return { ...base, refusal: "NO_PRIMARY" };
+  const primaryRoot = primary.root;
   const primaryAppRoot = appRelative === "." ? primaryRoot : join8(primaryRoot, appRelative);
   if (!contained(primaryRoot, primaryAppRoot))
     return { ...base, refusal: "PRIMARY_APP_MISSING" };
@@ -10328,7 +10377,9 @@ function resolveWorktreeLayout(input) {
   if (!primaryAppReal || !contained(primaryRoot, primaryAppReal)) {
     return { ...base, refusal: "PRIMARY_APP_MISSING" };
   }
-  return { ...base, primaryRoot, primaryAppRoot };
+  const linked = { ...base, primaryRoot, primaryAppRoot };
+  Object.defineProperty(linked, repositoryIdentityEvidence, { value: primary.identity });
+  return linked;
 }
 function classifySource(path, type, boundary) {
   const rel = relative2(boundary, path);
@@ -10386,6 +10437,9 @@ function sameSourceEvidence(left, right) {
 function sourceLeafMatchesIdentity(evidence, identity) {
   const leaf = evidence?.at(-1);
   return leaf?.dev === identity.dev && leaf.ino === identity.ino;
+}
+function repositoryIdentityUnchanged(identity) {
+  return currentIdentityMatches(identity.topLevel.path, identity.topLevel.identity, "directory") && currentIdentityMatches(identity.commonDir.path, identity.commonDir.identity, "directory") && canonical(identity.topLevel.path) === identity.topLevel.path && canonical(identity.commonDir.path) === identity.commonDir.path;
 }
 function classifyDestination(path, sourcePath, type) {
   let link;
@@ -10504,6 +10558,9 @@ function resolveReadableActionCorpus(projectRoot, dependencies = {}) {
   if (!("kind" in layout) || layout.kind !== "linked" || layout.refusal || !layout.primaryRoot || !layout.primaryAppRoot) {
     return refuseForeignActions(actionsDir);
   }
+  const primaryIdentity = layout[repositoryIdentityEvidence];
+  if (!primaryIdentity)
+    return refuseReplacedActions(actionsDir);
   const primaryRnAgentDir = join8(layout.primaryAppRoot, ".rn-agent");
   const primaryActionsDir = join8(primaryRnAgentDir, "actions");
   const planned = planResource(layout, SHAREABLE_RESOURCES[0]);
@@ -10529,7 +10586,7 @@ function resolveReadableActionCorpus(projectRoot, dependencies = {}) {
   }
   dependencies.afterTargetOpen?.();
   const plannedAfter = planResource(layout, SHAREABLE_RESOURCES[0]);
-  if (plannedAfter.state !== "LINK_VALID_SAFE" || !plannedAfter.evidence || plannedAfter.evidence.dev !== planned.evidence.dev || plannedAfter.evidence.ino !== planned.evidence.ino || plannedAfter.sourceState !== "AVAILABLE" || !sameSourceEvidence(planned.sourceEvidence, plannedAfter.sourceEvidence) || !sourceLeafMatchesIdentity(planned.sourceEvidence, targetIdentity) || !sourceLeafMatchesIdentity(plannedAfter.sourceEvidence, targetIdentity) || !directoryIdentityUnchanged(rnAgentDir, rnAgentIdentity)) {
+  if (plannedAfter.state !== "LINK_VALID_SAFE" || !plannedAfter.evidence || plannedAfter.evidence.dev !== planned.evidence.dev || plannedAfter.evidence.ino !== planned.evidence.ino || plannedAfter.sourceState !== "AVAILABLE" || !sameSourceEvidence(planned.sourceEvidence, plannedAfter.sourceEvidence) || !sourceLeafMatchesIdentity(planned.sourceEvidence, targetIdentity) || !sourceLeafMatchesIdentity(plannedAfter.sourceEvidence, targetIdentity) || !directoryIdentityUnchanged(rnAgentDir, rnAgentIdentity) || !repositoryIdentityUnchanged(primaryIdentity)) {
     return refuseReplacedActions(actionsDir);
   }
   return {
@@ -10541,7 +10598,8 @@ function resolveReadableActionCorpus(projectRoot, dependencies = {}) {
     linkIdentity: planned.evidence,
     targetIdentity,
     primaryRoot: layout.primaryRoot,
-    commonDir: layout.commonDir
+    commonDir: layout.commonDir,
+    primaryIdentity
   };
 }
 function readableActionsSnapshot(corpus) {
@@ -10575,10 +10633,9 @@ function captureReadableActionOperationSnapshot(corpus) {
     });
   }
   if (corpus.status === "approved-inherited") {
-    const topLevel = captureDirectoryIdentity(corpus.primaryRoot);
-    const commonDir = captureDirectoryIdentity(corpus.commonDir);
-    if (!topLevel || !commonDir)
+    if (!repositoryIdentityUnchanged(corpus.primaryIdentity)) {
       throw new Error(refuseReplacedActions(corpus.actionsDir).reason);
+    }
     return Object.freeze({
       operationId,
       kind: corpus.status,
@@ -10587,7 +10644,16 @@ function captureReadableActionOperationSnapshot(corpus) {
       directory: corpus.targetDir,
       directoryIdentity: freezeIdentity(corpus.targetIdentity),
       linkIdentity: freezeIdentity(corpus.linkIdentity),
-      primaryIdentity: Object.freeze({ topLevel, commonDir })
+      primaryIdentity: Object.freeze({
+        topLevel: Object.freeze({
+          path: corpus.primaryIdentity.topLevel.path,
+          identity: freezeIdentity(corpus.primaryIdentity.topLevel.identity)
+        }),
+        commonDir: Object.freeze({
+          path: corpus.primaryIdentity.commonDir.path,
+          identity: freezeIdentity(corpus.primaryIdentity.commonDir.identity)
+        })
+      })
     });
   }
   return null;
@@ -10808,7 +10874,7 @@ function classifyLegacyParent(layout, localAnchor, parent) {
   const expected = layout.primaryAppRoot ? canonical(join8(layout.primaryAppRoot, parent)) : null;
   return resolved && expected && resolved === expected ? "expected" : "foreign";
 }
-var SHAREABLE_RESOURCES, GIT_ENV_OVERRIDES, readableActionOperationSequence, LOCAL_CONTENT;
+var SHAREABLE_RESOURCES, repositoryIdentityEvidence, GIT_ENV_OVERRIDES, readableActionOperationSequence, LOCAL_CONTENT;
 var init_worktree_inheritance = __esm({
   "packages/rn-dev-agent-core/dist/session/worktree-inheritance.js"() {
     "use strict";
@@ -10824,6 +10890,7 @@ var init_worktree_inheritance = __esm({
         hosts: ["claude", "codex"]
       }
     ];
+    repositoryIdentityEvidence = /* @__PURE__ */ Symbol("repositoryIdentityEvidence");
     GIT_ENV_OVERRIDES = [
       "GIT_DIR",
       "GIT_WORK_TREE",
@@ -10877,8 +10944,22 @@ function openReadableActionLoadContext(projectRoot) {
   if (!snapshot || !operation)
     return null;
   const files = listUnfollowedDirectory(snapshot.directory, snapshot.identity);
+  const readableFiles = files.filter((file) => /\.ya?ml$/.test(file));
+  const contents = readUnfollowedFiles(snapshot.directory, snapshot.identity, readableFiles);
+  const fileContents = /* @__PURE__ */ new Map();
+  readableFiles.forEach((file, index) => {
+    const text = contents[index];
+    if (text != null)
+      fileContents.set(file, text);
+  });
   assertReadableActionOperationUnchanged(operation);
-  return { projectRoot, corpus, snapshot, operation, files };
+  return { projectRoot, corpus, snapshot, operation, files, fileContents };
+}
+function actionTextFromContext(context, fileName) {
+  const text = context.fileContents.get(fileName);
+  if (text !== void 0)
+    return text;
+  throw new Error(`Refusing inherited action symlink at ${context.snapshot.directory}/${fileName}.`);
 }
 function resolveActionFileNameFromContext(actionId, context) {
   const fileName = `${actionId}.yaml`;
@@ -10904,7 +10985,7 @@ function resolveActionPath(projectRoot, actionId) {
   const fileName = resolveActionFileNameFromContext(actionId, context);
   if (!fileName)
     return null;
-  readUnfollowedFile(context.snapshot.directory, context.snapshot.identity, fileName);
+  actionTextFromContext(context, fileName);
   assertReadableActionOperationUnchanged(context.operation);
   return join9(context.corpus.actionsDir, fileName);
 }
@@ -10975,7 +11056,7 @@ function captureActionFromContext(context, actionId) {
     return null;
   const { corpus, snapshot } = context;
   const filePath = join9(corpus.actionsDir, fileName);
-  const text = readUnfollowedFile(snapshot.directory, snapshot.identity, fileName);
+  const text = actionTextFromContext(context, fileName);
   const metadata = parseM7Header(text, actionId);
   if (metadata)
     assertActionMetadataIdentity(filePath, metadata);
@@ -10989,7 +11070,7 @@ function captureActionFromContext(context, actionId) {
         if (child === "" || child === ".." || child.startsWith(`..${sep6}`) || isAbsolute3(child)) {
           throw new Error(`Refusing action flow outside ${snapshot.directory}.`);
         }
-        return readUnfollowedFile(snapshot.directory, snapshot.identity, child);
+        return context.fileContents.get(child) ?? readUnfollowedFile(snapshot.directory, snapshot.identity, child);
       },
       realpathFn: (path) => resolve5(path)
     });

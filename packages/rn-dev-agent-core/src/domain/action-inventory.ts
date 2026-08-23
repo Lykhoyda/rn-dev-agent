@@ -77,5 +77,6 @@ export async function listActions(
     if (metadata.appId !== undefined) summary.appId = metadata.appId;
     results.push(summary);
   }
+  assertReadableActionLoadContextStable(context);
   return results;
 }

@@ -29,12 +29,12 @@
 //     mask underlying screen churn).
 import { randomUUID } from 'node:crypto';
 import { okResult, failResult } from '../utils.js';
-import { acknowledgeExternalEdit, loadAction, promoteActionRuntimeWithCAS, saveActionRuntimeWithCAS, } from '../domain/action-store.js';
+import { acknowledgeExternalEdit, assertReadableActionLoadContextStable, loadActionFromContext, openReadableActionLoadContext, promoteActionRuntimeWithCAS, refreshActionLoadContext, saveActionRuntimeWithCAS, } from '../domain/action-store.js';
 import { mirrorToDb } from '../domain/action-state-store.js';
 import { appendRunRecord, shouldAutoPromoteToActive, } from '../domain/reusable-action.js';
 import { parseMaestroFailure, isAutoRepairable, } from '../domain/maestro-error-parser.js';
 import { createMaestroRunHandler } from './maestro-run.js';
-import { createRepairActionHandler } from './repair-action.js';
+import { bindRepairActionLoadContext, createRepairActionHandler } from './repair-action.js';
 import { isValidActionId } from '../domain/path-safety.js';
 import { classifyRouteDriftAfterFailure } from '../nav-graph/route-sequence.js';
 import { SessionAuthorityError } from '../session/registry.js';
@@ -292,9 +292,11 @@ export function createRunActionHandler(deps = {}) {
         if (proofReplay && (args.autoRepair !== false || args.forceReload !== false)) {
             return failResult('cdp_run_action proofReplay requires autoRepair=false and forceReload=false', { proofReplay: true });
         }
+        let openedContext;
         let loaded;
         try {
-            loaded = loadAction(projectRoot, args.actionId);
+            openedContext = openReadableActionLoadContext(projectRoot);
+            loaded = openedContext ? loadActionFromContext(openedContext, args.actionId) : null;
         }
         catch (err) {
             return failResult(err instanceof Error ? err.message : String(err), 'BAD_FILENAME', {
@@ -302,11 +304,12 @@ export function createRunActionHandler(deps = {}) {
                 fallback: 'none',
             });
         }
-        if (!loaded) {
+        if (!loaded || !openedContext) {
             return failResult(`cdp_run_action: action "${args.actionId}" not found at ${projectRoot}/.rn-agent/actions/${args.actionId}.yaml or ${args.actionId}.yml`, 'NO_PROJECT_ROOT', {
                 hint: 'Verify with /list-learned-actions, or pass projectRoot if cdp-bridge is invoked outside the project dir.',
             });
         }
+        let loadContext = openedContext;
         if (!loaded.replay.ok) {
             return failResult(`Action ${args.actionId} is not valid Maestro YAML: ${loaded.replay.error}`, 'BAD_RECORDING', { actionId: args.actionId, fallback: 'none' });
         }
@@ -320,6 +323,7 @@ export function createRunActionHandler(deps = {}) {
         const forceReload = proofReplay ? false : args.forceReload !== false;
         const action = forceReload ? acknowledgeExternalEdit(loaded) : loaded;
         const engineStatus = await resolveEngineStatus();
+        assertReadableActionLoadContextStable(loadContext);
         const compatRefusal = actionReplayPreflight({
             enginePin: action.metadata.enginePin,
             commands: preflightCommands,
@@ -384,8 +388,10 @@ export function createRunActionHandler(deps = {}) {
         // so a clean pass can still clear a device-matched blind-probe latch.
         let observedDeviceId = maestroDeviceId ?? null;
         const persistRunWithDevice = (record) => {
-            if (proofReplay)
+            if (proofReplay) {
+                assertReadableActionLoadContextStable(loadContext);
                 return Promise.resolve({ promoted: false, promotionRefused: false });
+            }
             const endedMs = Date.now();
             const timedRecord = {
                 ...record,
@@ -397,7 +403,7 @@ export function createRunActionHandler(deps = {}) {
                     steps: [...timingSteps],
                 },
             };
-            return persistRun(args.actionId, projectRoot, probeDeviceId ? { ...timedRecord, deviceId: probeDeviceId } : timedRecord);
+            return persistRun(args.actionId, loadContext, probeDeviceId ? { ...timedRecord, deviceId: probeDeviceId } : timedRecord);
         };
         const writeDisclosure = (actionYaml = 'none', outcome) => ({
             actionYaml: actionYaml === 'none'
@@ -857,12 +863,12 @@ export function createRunActionHandler(deps = {}) {
                 throw new Error('Internal: isAutoRepairable returned true for non-SELECTOR_NOT_FOUND failure');
             }
             const tBeforeRepair = Date.now();
-            const repairResult = await measureStep('selector-repair', () => repairAction({
+            const repairResult = await measureStep('selector-repair', () => repairAction(bindRepairActionLoadContext({
                 actionId: args.actionId,
                 failedSelector: failure.selector,
                 projectRoot,
                 agentReasoning: `auto-repair from cdp_run_action after maestro failure: ${failure.selector}`,
-            }));
+            }, loadContext)));
             const repairMs = Date.now() - tBeforeRepair;
             const repairEnv = parseEnvelope(repairResult, 'cdp_repair_action');
             const repairPatched = repairEnv.ok === true && repairEnv.data?.patched === true;
@@ -901,7 +907,8 @@ export function createRunActionHandler(deps = {}) {
             // The repair updated the action on disk. Re-load to pick up the
             // new body + bumped revision/state — saveAction's atomic pair-write
             // means we can read it back deterministically.
-            const reloadedAction = loadAction(projectRoot, args.actionId);
+            loadContext = refreshActionLoadContext(loadContext, args.actionId);
+            const reloadedAction = loadActionFromContext(loadContext, args.actionId);
             if (!reloadedAction) {
                 // Shouldn't happen — repair just wrote it. Defensive surface.
                 // Persist the failure RunRecord so MTTR sees the outcome.
@@ -1091,13 +1098,13 @@ function promotionDisclosure(outcome) {
         return 'lifecycle-promotion';
     return outcome.promotionRefused ? 'lifecycle-promotion-refused' : 'none';
 }
-async function persistRun(actionId, projectRoot, record) {
+async function persistRun(actionId, context, record) {
     // Re-load to get the freshest state — repair-action may have just
     // bumped revision/repairHistory. Issue #117's bounded CAS retry remains,
     // but only the ignored runtime sidecar is written on ordinary replay.
     const MAX_ATTEMPTS = 5;
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-        const fresh = loadAction(projectRoot, actionId);
+        const fresh = loadActionFromContext(context, actionId);
         if (!fresh) {
             console.error(`cdp_run_action: persistRun could not reload action "${actionId}" — RunRecord dropped (status=${record.status}, autoRepair.outcome=${record.autoRepair?.outcome ?? 'n/a'})`);
             return { promoted: false, promotionRefused: false };
