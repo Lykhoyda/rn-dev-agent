@@ -1,5 +1,16 @@
 # rn-dev-agent-core
 
+## 0.72.2
+
+### Patch Changes
+
+- a5feed4: Make maestro-runner pin installation idempotent with independently verified temporary stages and atomic publication so concurrent or interrupted installers cannot block the cache.
+- 53ffc53: Keep valid action inventory entries available around corrupt files with typed warnings and avoid allocating Maestro report directories before preflight passes.
+- 663441e: Carry the session-allocated Android Metro endpoint through Expo launch, wait, native configuration, and adapter connection.
+- de5350f: Keep verified runner snapshots immutable while provisioning a lifecycle-bound writable WDA cache and attaching bounded sanitized runner diagnostics to feedback.
+- 067c6ff: Route auto-login through the exact bound device and refuse unbound ambient device selection with an executable authority remedy.
+- 6e69ea5: The login prologue remains a fail-stop navigation helper that requires a fresh user-login RunRecord, terminally blocks credential fallbacks, and coexists with exact locked e2e login proof without serving as PR proof.
+
 ## 0.72.1
 
 ### Patch Changes
