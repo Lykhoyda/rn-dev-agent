@@ -550,7 +550,7 @@ export function createMaestroRunHandler(deps = {}) {
                             throw new Error(immediateRefusal);
                         return executeRunner(dispatch.binPath);
                     }
-                    return withImmediatePinnedRunner(dispatch.binPath, resolveEngineStatus, executeRunner);
+                    return withImmediatePinnedRunner(dispatch.binPath, resolveEngineStatus, executeRunner, platform);
                 };
                 try {
                     return await executeOnce();

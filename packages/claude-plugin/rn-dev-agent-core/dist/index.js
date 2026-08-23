@@ -24332,10 +24332,6 @@ function recordRunnerDiagnostic(type, detail = {}) {
   }
   state.events = retained;
 }
-function currentRunnerDiagnosticsPlatform() {
-  const value = storage.getStore()?.rootParams.platform;
-  return typeof value === "string" ? value : null;
-}
 function snapshotRunnerDiagnostics() {
   const state = storage.getStore();
   if (!state || state.events.length === 0)
@@ -24851,7 +24847,7 @@ function removeRunnerSnapshotAndCache(snapshotRoot, cacheRoot) {
   if (cleanupError)
     throw cleanupError;
 }
-async function withImmediatePinnedRunner(runnerPath, resolveStatus, execute2, testHooks = {}) {
+async function withImmediatePinnedRunner(runnerPath, resolveStatus, execute2, platform, testHooks = {}) {
   const refusal = await immediateRunnerPinRefusal(runnerPath, resolveStatus);
   if (refusal)
     throw new Error(refusal);
@@ -24886,29 +24882,31 @@ async function withImmediatePinnedRunner(runnerPath, resolveStatus, execute2, te
     if (createHash4("sha256").update(readFileSync11(snapshotHelper)).digest("hex") !== helper.sha256) {
       throw new Error("RUNNER_PIN_CHANGED: execution binding changed before execution.");
     }
-    try {
-      cacheRoot = provisionRunnerSnapshotCache(snapshotRoot, testHooks, (ownedCacheRoot) => {
-        cacheRoot = ownedCacheRoot;
-      });
-      recordRunnerDiagnostic("cache-provision", {
-        result: "passed",
-        variant: "symlink",
-        resolvedPath: "../" + basename(cacheRoot)
-      });
-    } catch (error2) {
-      const failure = error2 instanceof RunnerCacheUnavailableError ? error2 : new RunnerCacheUnavailableError("cache", cacheErrno(error2));
-      recordRunnerDiagnostic("cache-provision", {
-        result: "failed",
-        variant: "symlink",
-        resolvedPath: "cache",
-        errno: failure.errno
-      });
-      recordRunnerDiagnostic("typed-failure", {
-        code: failure.code,
-        errno: failure.errno,
-        path: failure.relativePath
-      });
-      throw failure;
+    if (platform === "ios") {
+      try {
+        cacheRoot = provisionRunnerSnapshotCache(snapshotRoot, testHooks, (ownedCacheRoot) => {
+          cacheRoot = ownedCacheRoot;
+        });
+        recordRunnerDiagnostic("cache-provision", {
+          result: "passed",
+          variant: "symlink",
+          resolvedPath: "../" + basename(cacheRoot)
+        });
+      } catch (error2) {
+        const failure = error2 instanceof RunnerCacheUnavailableError ? error2 : new RunnerCacheUnavailableError("cache", cacheErrno(error2));
+        recordRunnerDiagnostic("cache-provision", {
+          result: "failed",
+          variant: "symlink",
+          resolvedPath: "cache",
+          errno: failure.errno
+        });
+        recordRunnerDiagnostic("typed-failure", {
+          code: failure.code,
+          errno: failure.errno,
+          path: failure.relativePath
+        });
+        throw failure;
+      }
     }
     for (const entry of readdirSync4(snapshotRoot, { recursive: true, withFileTypes: true })) {
       const entryPath = join15(entry.parentPath, entry.name);
@@ -24921,10 +24919,11 @@ async function withImmediatePinnedRunner(runnerPath, resolveStatus, execute2, te
       }
     }
     chmodSync3(snapshotRoot, 320);
-    assertRunnerSnapshotCacheBinding(snapshotRoot, cacheRoot);
+    if (cacheRoot)
+      assertRunnerSnapshotCacheBinding(snapshotRoot, cacheRoot);
     const openedRunner = lstatSync5(snapshotRunner);
     recordRunnerDiagnostic("runner-exec-begin", { runnerPinVersion: MAESTRO_RUNNER_PIN.version });
-    if (currentRunnerDiagnosticsPlatform() === "ios") {
+    if (platform === "ios") {
       recordRunnerDiagnostic("wda-bootstrap-begin", { cachePath: "cache" });
     }
     return await execute2(snapshotHelper, [
@@ -34679,7 +34678,7 @@ function createMaestroRunHandler(deps = {}) {
               throw new Error(immediateRefusal);
             return executeRunner(dispatch.binPath);
           }
-          return withImmediatePinnedRunner(dispatch.binPath, resolveEngineStatus, executeRunner);
+          return withImmediatePinnedRunner(dispatch.binPath, resolveEngineStatus, executeRunner, platform);
         };
         try {
           return await executeOnce();
@@ -35776,7 +35775,7 @@ async function runMaestroInline(yaml2, opts, dependencies = {}) {
           throw new Error(`RUNNER_PIN_CHANGED: ${refusal}`);
         return spawn10(dispatch.binPath);
       }
-      return withImmediatePinnedRunner(dispatch.binPath, resolveEngineStatus, spawn10);
+      return withImmediatePinnedRunner(dispatch.binPath, resolveEngineStatus, spawn10, opts.platform);
     };
     let execution;
     try {
@@ -80233,6 +80232,7 @@ import { execFile as execFileCb16, spawn as spawn9 } from "node:child_process";
 import { promisify as promisify20 } from "node:util";
 
 // packages/rn-dev-agent-core/dist/experience/evidence.js
+init_path_safety();
 init_runner_diagnostics();
 import { createHash as createHash16, randomBytes as randomBytes7, randomUUID as randomUUID9 } from "node:crypto";
 import { chmodSync as chmodSync7, existsSync as existsSync31, mkdirSync as mkdirSync20, readFileSync as readFileSync32, readdirSync as readdirSync13, renameSync as renameSync9, statSync as statSync14, unlinkSync as unlinkSync14, writeFileSync as writeFileSync15 } from "node:fs";
@@ -80256,6 +80256,7 @@ function configuredExperienceDirectory() {
 var DAY_MS = 24 * 60 * 60 * 1e3;
 var REDACTION_FAILED = "[REDACTION_FAILED]";
 var SYMPTOM_TRUNCATED = "[TRUNCATED]";
+var RUNNER_DIAGNOSTICS_SESSION_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 var REDACTION_RULES = [
   [/(sk|pk|api|key|token|secret|password|auth)[-_]?[A-Za-z0-9_-]{20,}/gi, "[REDACTED_SECRET]"],
   [/Bearer [A-Za-z0-9_./+=-]{20,}/g, "Bearer [REDACTED]"],
@@ -80840,6 +80841,7 @@ function readOrCreateRunnerDiagnosticsSalt(directory) {
 }
 function writeRunnerDiagnosticsBundle(directory, bundle) {
   mkdirSync20(directory, { recursive: true, mode: 448 });
+  readOrCreateRunnerDiagnosticsSalt(directory);
   const files = runnerDiagnosticsFiles(directory);
   const nextSequence = files.reduce((maximum, file) => Math.max(maximum, runnerDiagnosticsSequence(file)), 0) + 1;
   const sessionKey = (bundle.context.sessionId ?? "unknown").slice(0, 64).replace(/[^A-Za-z0-9_-]/g, "-");
@@ -80892,6 +80894,11 @@ function boundRunnerDiagnosticsBundle(bundle) {
     truncated = true;
     return `${sanitized.slice(0, RUNNER_DIAGNOSTICS_MAX_SCALAR_CHARS - suffix.length)}${suffix}`;
   };
+  const identity2 = (value, isValid2) => {
+    if (value === null)
+      return null;
+    return isValid2(value) ? value : bound(value);
+  };
   const events = sanitizeForEvidence(retainRunnerDiagnosticEvents(bundle.events, 200));
   return {
     schema: "rn-dev-agent/runner-diagnostics/1",
@@ -80909,8 +80916,8 @@ function boundRunnerDiagnosticsBundle(bundle) {
       platform: bound(bundle.context.platform),
       os: bound(bundle.context.os) ?? "unknown",
       runtime: bound(bundle.context.runtime),
-      sessionId: bound(bundle.context.sessionId),
-      actionId: bound(bundle.context.actionId),
+      sessionId: identity2(bundle.context.sessionId, (value) => typeof value === "string" && RUNNER_DIAGNOSTICS_SESSION_ID.test(value)),
+      actionId: identity2(bundle.context.actionId, isValidActionId),
       deviceIdHash: bound(bundle.context.deviceIdHash),
       bundleId: bundle.context.bundleId === null ? null : bundle.context.bundleId === OWNED_TEST_APP_BUNDLE_ID ? OWNED_TEST_APP_BUNDLE_ID : "[BUNDLE_REDACTED]",
       metroPort: bundle.context.metroPort
@@ -87824,7 +87831,7 @@ function createMaestroTestAllHandler(deps = {}) {
               throw new Error(immediateRefusal);
             return executeRunner(flowDispatch.binPath);
           }
-          return withImmediatePinnedRunner(flowDispatch.binPath, resolveEngineStatus, executeRunner);
+          return withImmediatePinnedRunner(flowDispatch.binPath, resolveEngineStatus, executeRunner, platform);
         }, claimOrigin, completeOrigin, relaunchManagedApp, reproveManagedOrigin), {
           platform,
           deviceId: requestedDeviceId,

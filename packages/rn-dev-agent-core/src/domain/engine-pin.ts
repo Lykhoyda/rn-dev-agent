@@ -28,10 +28,7 @@ import { homedir } from 'node:os';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { gunzipSync } from 'node:zlib';
 import { verifiedNativePublicationHelper } from '../session/process-birth.js';
-import {
-  currentRunnerDiagnosticsPlatform,
-  recordRunnerDiagnostic,
-} from '../experience/runner-diagnostics.js';
+import { recordRunnerDiagnostic } from '../experience/runner-diagnostics.js';
 import pinManifest from './maestro-runner-pin.json' with { type: 'json' };
 
 interface MaestroRunnerPinManifest {
@@ -783,6 +780,7 @@ export async function withImmediatePinnedRunner<T>(
   runnerPath: string,
   resolveStatus: () => Promise<ReplayEngineStatus | null>,
   execute: (boundPath: string, prefixArgs?: readonly string[]) => Promise<T>,
+  platform: 'ios' | 'android',
   testHooks: RunnerSnapshotTestHooks = {},
 ): Promise<T> {
   const refusal = await immediateRunnerPinRefusal(runnerPath, resolveStatus);
@@ -825,32 +823,34 @@ export async function withImmediatePinnedRunner<T>(
     if (createHash('sha256').update(readFileSync(snapshotHelper)).digest('hex') !== helper.sha256) {
       throw new Error('RUNNER_PIN_CHANGED: execution binding changed before execution.');
     }
-    try {
-      cacheRoot = provisionRunnerSnapshotCache(snapshotRoot, testHooks, (ownedCacheRoot) => {
-        cacheRoot = ownedCacheRoot;
-      });
-      recordRunnerDiagnostic('cache-provision', {
-        result: 'passed',
-        variant: 'symlink',
-        resolvedPath: '../' + basename(cacheRoot),
-      });
-    } catch (error) {
-      const failure =
-        error instanceof RunnerCacheUnavailableError
-          ? error
-          : new RunnerCacheUnavailableError('cache', cacheErrno(error));
-      recordRunnerDiagnostic('cache-provision', {
-        result: 'failed',
-        variant: 'symlink',
-        resolvedPath: 'cache',
-        errno: failure.errno,
-      });
-      recordRunnerDiagnostic('typed-failure', {
-        code: failure.code,
-        errno: failure.errno,
-        path: failure.relativePath,
-      });
-      throw failure;
+    if (platform === 'ios') {
+      try {
+        cacheRoot = provisionRunnerSnapshotCache(snapshotRoot, testHooks, (ownedCacheRoot) => {
+          cacheRoot = ownedCacheRoot;
+        });
+        recordRunnerDiagnostic('cache-provision', {
+          result: 'passed',
+          variant: 'symlink',
+          resolvedPath: '../' + basename(cacheRoot),
+        });
+      } catch (error) {
+        const failure =
+          error instanceof RunnerCacheUnavailableError
+            ? error
+            : new RunnerCacheUnavailableError('cache', cacheErrno(error));
+        recordRunnerDiagnostic('cache-provision', {
+          result: 'failed',
+          variant: 'symlink',
+          resolvedPath: 'cache',
+          errno: failure.errno,
+        });
+        recordRunnerDiagnostic('typed-failure', {
+          code: failure.code,
+          errno: failure.errno,
+          path: failure.relativePath,
+        });
+        throw failure;
+      }
     }
     for (const entry of readdirSync(snapshotRoot, { recursive: true, withFileTypes: true })) {
       const entryPath = join(entry.parentPath, entry.name);
@@ -864,10 +864,10 @@ export async function withImmediatePinnedRunner<T>(
       }
     }
     chmodSync(snapshotRoot, 0o500);
-    assertRunnerSnapshotCacheBinding(snapshotRoot, cacheRoot);
+    if (cacheRoot) assertRunnerSnapshotCacheBinding(snapshotRoot, cacheRoot);
     const openedRunner = lstatSync(snapshotRunner);
     recordRunnerDiagnostic('runner-exec-begin', { runnerPinVersion: MAESTRO_RUNNER_PIN.version });
-    if (currentRunnerDiagnosticsPlatform() === 'ios') {
+    if (platform === 'ios') {
       recordRunnerDiagnostic('wda-bootstrap-begin', { cachePath: 'cache' });
     }
     return await execute(snapshotHelper, [

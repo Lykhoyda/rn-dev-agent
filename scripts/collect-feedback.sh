@@ -179,8 +179,55 @@ if [ -z "${RN_DEV_AGENT_SESSION_ID:-}" ]; then
   runner_diagnostics_status="exact session unavailable"
 elif [ -d "$experience_dir" ]; then
   runner_diagnostics=$(python3 - "$experience_dir" "$RN_DEV_AGENT_SESSION_ID" <<'PY' 2>/dev/null || echo "null"
-import glob,json,os,re,sys
+import glob,hashlib,json,os,re,stat,sys
 directory,session_id=sys.argv[1:]
+salt_path=os.path.join(directory,".runner-diagnostics-salt")
+def read_salt():
+    descriptor=os.open(salt_path,os.O_RDONLY|getattr(os,"O_NOFOLLOW",0))
+    try:
+        metadata=os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != os.geteuid() or metadata.st_mode & 0o077:
+            raise ValueError("unsafe diagnostics salt")
+        value=os.read(descriptor,33)
+    finally:
+        os.close(descriptor)
+    if len(value) != 32:
+        raise ValueError("invalid diagnostics salt")
+    return value
+def read_or_create_salt():
+    try:
+        return read_salt()
+    except FileNotFoundError:
+        value=os.urandom(32)
+        temporary=salt_path+"."+str(os.getpid())+"."+os.urandom(16).hex()+".tmp"
+        flags=os.O_WRONLY|os.O_CREAT|os.O_EXCL|getattr(os,"O_NOFOLLOW",0)
+        descriptor=None
+        try:
+            descriptor=os.open(temporary,flags,0o600)
+            remaining=memoryview(value)
+            while remaining:
+                written=os.write(descriptor,remaining)
+                if written <= 0:
+                    raise OSError("could not write diagnostics salt")
+                remaining=remaining[written:]
+            os.fchmod(descriptor,0o600)
+            os.fsync(descriptor)
+            os.close(descriptor)
+            descriptor=None
+            try:
+                os.link(temporary,salt_path,follow_symlinks=False)
+            except FileExistsError:
+                return read_salt()
+            return read_salt()
+        finally:
+            if descriptor is not None:
+                os.close(descriptor)
+            try:
+                os.unlink(temporary)
+            except FileNotFoundError:
+                pass
+def valid_action_id(value):
+    return value is None or isinstance(value,str) and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}",value) is not None and ".." not in value
 def sequence(path):
     match=re.search(r"-(\d+)\.json$",os.path.basename(path))
     return int(match.group(1)) if match else 0
@@ -193,10 +240,20 @@ for path in paths:
             value=json.load(handle)
         context=value.get("context",{})
         if value.get("schema") == "rn-dev-agent/runner-diagnostics/1" and context.get("sessionId") == session_id:
+            action_id=context.get("actionId")
+            if not valid_action_id(action_id):
+                raise ValueError("invalid diagnostics action identity")
+            salt=read_or_create_salt()
             value=dict(value)
             value["context"]=dict(context)
             value["context"]["sessionId"]="[SESSION_REDACTED]"
-            print(json.dumps(value,separators=(",",":")))
+            if action_id is not None:
+                digest=hashlib.sha256(salt+b"\0feedback-action-id\0"+action_id.encode("utf-8")).hexdigest()
+                value["context"]["actionId"]=digest
+            serialized=json.dumps(value,separators=(",",":"))
+            if len(serialized.encode("utf-8")) > 256 * 1024:
+                continue
+            print(serialized)
             break
     except (OSError,ValueError,TypeError):
         continue

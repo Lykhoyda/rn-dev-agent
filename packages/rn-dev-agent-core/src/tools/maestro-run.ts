@@ -811,6 +811,7 @@ export function createMaestroRunHandler(
                   dispatch.binPath,
                   resolveEngineStatus,
                   executeRunner,
+                  platform,
                 );
               };
               try {

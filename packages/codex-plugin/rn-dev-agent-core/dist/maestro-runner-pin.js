@@ -604,10 +604,6 @@ function recordRunnerDiagnostic(type, detail = {}) {
   }
   state.events = retained;
 }
-function currentRunnerDiagnosticsPlatform() {
-  const value = storage.getStore()?.rootParams.platform;
-  return typeof value === "string" ? value : null;
-}
 var RUNNER_DIAGNOSTICS_MAX_EVENTS, storage, TERMINAL_EVENT_TYPES;
 var init_runner_diagnostics = __esm({
   "packages/rn-dev-agent-core/dist/experience/runner-diagnostics.js"() {
@@ -1112,7 +1108,7 @@ function removeRunnerSnapshotAndCache(snapshotRoot, cacheRoot) {
   if (cleanupError)
     throw cleanupError;
 }
-async function withImmediatePinnedRunner(runnerPath, resolveStatus, execute, testHooks = {}) {
+async function withImmediatePinnedRunner(runnerPath, resolveStatus, execute, platform, testHooks = {}) {
   const refusal = await immediateRunnerPinRefusal(runnerPath, resolveStatus);
   if (refusal)
     throw new Error(refusal);
@@ -1147,29 +1143,31 @@ async function withImmediatePinnedRunner(runnerPath, resolveStatus, execute, tes
     if (createHash2("sha256").update(readFileSync2(snapshotHelper)).digest("hex") !== helper.sha256) {
       throw new Error("RUNNER_PIN_CHANGED: execution binding changed before execution.");
     }
-    try {
-      cacheRoot = provisionRunnerSnapshotCache(snapshotRoot, testHooks, (ownedCacheRoot) => {
-        cacheRoot = ownedCacheRoot;
-      });
-      recordRunnerDiagnostic("cache-provision", {
-        result: "passed",
-        variant: "symlink",
-        resolvedPath: "../" + basename(cacheRoot)
-      });
-    } catch (error) {
-      const failure = error instanceof RunnerCacheUnavailableError ? error : new RunnerCacheUnavailableError("cache", cacheErrno(error));
-      recordRunnerDiagnostic("cache-provision", {
-        result: "failed",
-        variant: "symlink",
-        resolvedPath: "cache",
-        errno: failure.errno
-      });
-      recordRunnerDiagnostic("typed-failure", {
-        code: failure.code,
-        errno: failure.errno,
-        path: failure.relativePath
-      });
-      throw failure;
+    if (platform === "ios") {
+      try {
+        cacheRoot = provisionRunnerSnapshotCache(snapshotRoot, testHooks, (ownedCacheRoot) => {
+          cacheRoot = ownedCacheRoot;
+        });
+        recordRunnerDiagnostic("cache-provision", {
+          result: "passed",
+          variant: "symlink",
+          resolvedPath: "../" + basename(cacheRoot)
+        });
+      } catch (error) {
+        const failure = error instanceof RunnerCacheUnavailableError ? error : new RunnerCacheUnavailableError("cache", cacheErrno(error));
+        recordRunnerDiagnostic("cache-provision", {
+          result: "failed",
+          variant: "symlink",
+          resolvedPath: "cache",
+          errno: failure.errno
+        });
+        recordRunnerDiagnostic("typed-failure", {
+          code: failure.code,
+          errno: failure.errno,
+          path: failure.relativePath
+        });
+        throw failure;
+      }
     }
     for (const entry of readdirSync(snapshotRoot, { recursive: true, withFileTypes: true })) {
       const entryPath = join2(entry.parentPath, entry.name);
@@ -1182,10 +1180,11 @@ async function withImmediatePinnedRunner(runnerPath, resolveStatus, execute, tes
       }
     }
     chmodSync2(snapshotRoot, 320);
-    assertRunnerSnapshotCacheBinding(snapshotRoot, cacheRoot);
+    if (cacheRoot)
+      assertRunnerSnapshotCacheBinding(snapshotRoot, cacheRoot);
     const openedRunner = lstatSync2(snapshotRunner);
     recordRunnerDiagnostic("runner-exec-begin", { runnerPinVersion: MAESTRO_RUNNER_PIN.version });
-    if (currentRunnerDiagnosticsPlatform() === "ios") {
+    if (platform === "ios") {
       recordRunnerDiagnostic("wda-bootstrap-begin", { cachePath: "cache" });
     }
     return await execute(snapshotHelper, [
@@ -14529,7 +14528,7 @@ function createMaestroRunHandler(deps = {}) {
               throw new Error(immediateRefusal);
             return executeRunner(dispatch.binPath);
           }
-          return withImmediatePinnedRunner(dispatch.binPath, resolveEngineStatus, executeRunner);
+          return withImmediatePinnedRunner(dispatch.binPath, resolveEngineStatus, executeRunner, platform);
         };
         try {
           return await executeOnce();

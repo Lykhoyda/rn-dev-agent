@@ -84,7 +84,7 @@ This collects (all redacted):
   present (healthy = "not installed" — the in-tree rn-fast-runner/rn-android-runner
   are the device backends; a leftover agent-device can interfere)
 - Last 20 telemetry events ONLY when fresh (<24h; tool name, result, latency — no params or paths), plus `telemetry_status` (`ok` / `stale (...)` / `none`). On current plugin versions `stale`/`none` is expected — per-tool-call telemetry capture was removed with the Experience Engine (GH #200); only legacy versions still write it.
-- The newest bounded `runner-diagnostics` bundle when present. The collector uses the exact session ID only to select it, then replaces `context.sessionId` with `[SESSION_REDACTED]`; show that complete feedback-safe projection in the review before submission. It contains typed lifecycle events only, never raw runner output.
+- The newest bounded `runner-diagnostics` bundle when present. The collector uses the exact session ID only to select it, replaces `context.sessionId` with `[SESSION_REDACTED]`, and replaces `context.actionId` with a stable per-evidence-root salted, domain-separated hash; show that complete feedback-safe projection in the review before submission. It contains typed lifecycle events only, never raw runner output.
 
 Reconcile the previously captured `rn_session` status with the collector's
 `authority` object. Compare exact values locally, but put only the sanitized
@@ -254,4 +254,4 @@ The following IS included (safe):
 - Tool call names, pass/fail results, and latency
 - CDP connection status (connected/disconnected)
 - Error count (not error contents)
-- Runner lifecycle events capped at 200/256 KB, a salted stable device-ID hash, and the owned test-app bundle ID only
+- The complete reviewed feedback-safe runner-diagnostics projection described in Step 2

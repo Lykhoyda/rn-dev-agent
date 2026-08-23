@@ -43,9 +43,10 @@ multiple released sessions share one worktree.
 Parse the collector's structured output. It may report plugin/core versions,
 OS/Node versions, device counts, Metro status, runner versions, and recent
 legacy telemetry status. When a newest `runner_diagnostics` bundle is present,
-the collector uses the exact session ID only to select it, then replaces
-`context.sessionId` with `[SESSION_REDACTED]`. Show that complete feedback-safe
-projection during review before attaching it; do not substitute raw runner output.
+the collector uses the exact session ID only to select it, replaces
+`context.sessionId` with `[SESSION_REDACTED]`, and replaces `context.actionId`
+with a stable per-evidence-root salted, domain-separated hash. Show that complete
+feedback-safe projection during review before attaching it; do not substitute raw runner output.
 Reconcile its authority object with the previously captured `rn_session` status.
 Compare exact values only in memory. The preview
 may show the sanitized authority state, own Metro allocated/bound booleans, and

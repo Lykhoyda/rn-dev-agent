@@ -3,6 +3,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync
 import { homedir, platform as hostPlatform, release } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isValidActionId } from '../domain/path-safety.js';
 import { retainRunnerDiagnosticEvents, } from './runner-diagnostics.js';
 export const UNKNOWN_CLASSIFICATION = 'UNKNOWN';
 export const DEFAULT_MAX_RECORDS = 500;
@@ -21,6 +22,7 @@ export function configuredExperienceDirectory() {
 const DAY_MS = 24 * 60 * 60 * 1000;
 const REDACTION_FAILED = '[REDACTION_FAILED]';
 const SYMPTOM_TRUNCATED = '[TRUNCATED]';
+const RUNNER_DIAGNOSTICS_SESSION_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 // Keep this list aligned with scripts/collect-feedback.sh. That collector is the
 // public sanitization contract; this in-process form exists so private tool
 // payloads never have to cross a process boundary.
@@ -664,6 +666,7 @@ function readOrCreateRunnerDiagnosticsSalt(directory) {
 }
 export function writeRunnerDiagnosticsBundle(directory, bundle) {
     mkdirSync(directory, { recursive: true, mode: 0o700 });
+    readOrCreateRunnerDiagnosticsSalt(directory);
     const files = runnerDiagnosticsFiles(directory);
     const nextSequence = files.reduce((maximum, file) => Math.max(maximum, runnerDiagnosticsSequence(file)), 0) + 1;
     const sessionKey = (bundle.context.sessionId ?? 'unknown')
@@ -720,6 +723,11 @@ function boundRunnerDiagnosticsBundle(bundle) {
         truncated = true;
         return `${sanitized.slice(0, RUNNER_DIAGNOSTICS_MAX_SCALAR_CHARS - suffix.length)}${suffix}`;
     };
+    const identity = (value, isValid) => {
+        if (value === null)
+            return null;
+        return isValid(value) ? value : bound(value);
+    };
     const events = sanitizeForEvidence(retainRunnerDiagnosticEvents(bundle.events, 200));
     return {
         schema: 'rn-dev-agent/runner-diagnostics/1',
@@ -737,8 +745,8 @@ function boundRunnerDiagnosticsBundle(bundle) {
             platform: bound(bundle.context.platform),
             os: bound(bundle.context.os) ?? 'unknown',
             runtime: bound(bundle.context.runtime),
-            sessionId: bound(bundle.context.sessionId),
-            actionId: bound(bundle.context.actionId),
+            sessionId: identity(bundle.context.sessionId, (value) => typeof value === 'string' && RUNNER_DIAGNOSTICS_SESSION_ID.test(value)),
+            actionId: identity(bundle.context.actionId, isValidActionId),
             deviceIdHash: bound(bundle.context.deviceIdHash),
             bundleId: bundle.context.bundleId === null
                 ? null

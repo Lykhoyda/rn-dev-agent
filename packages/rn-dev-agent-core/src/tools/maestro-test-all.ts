@@ -394,6 +394,7 @@ export function createMaestroTestAllHandler(
                   flowDispatch.binPath,
                   resolveEngineStatus,
                   executeRunner,
+                  platform,
                 );
               },
               claimOrigin,
