@@ -1,5 +1,5 @@
 import { listActions } from '../domain/action-inventory.js';
-import { ActionMetadataIdentityError, loadAction } from '../domain/action-store.js';
+import { loadAction } from '../domain/action-store.js';
 import {
   ACTION_LOGIN_HELPER,
   LOGIN_PROLOGUE_ALIAS,
@@ -32,13 +32,6 @@ function parseEnvelope(result: ToolResult): ToolEnvelope {
   } catch {
     return { ok: false, code: 'BAD_RESPONSE', error: 'Action replay returned invalid JSON.' };
   }
-}
-
-function isLoginActionIdentityMismatch(error: unknown): error is ActionMetadataIdentityError {
-  return (
-    error instanceof ActionMetadataIdentityError &&
-    (error.fileId === LOGIN_PROLOGUE_ALIAS || error.metadataId === LOGIN_PROLOGUE_ALIAS)
-  );
 }
 
 export function createLoginPrologueHandler(deps: LoginPrologueDependencies) {
@@ -104,7 +97,11 @@ export function createLoginPrologueHandler(deps: LoginPrologueDependencies) {
           loadAction(projectRoot, LOGIN_PROLOGUE_ALIAS),
         );
       } catch (error) {
-        if (isLoginActionIdentityMismatch(error)) {
+        if (
+          error instanceof Error &&
+          error.message.includes('does not match filename identity') &&
+          error.message.includes(LOGIN_PROLOGUE_ALIAS)
+        ) {
           return blocked(
             'LOGIN_ACTION_ID_MISMATCH',
             `The ${LOGIN_PROLOGUE_ALIAS} action file declares a different action id.`,

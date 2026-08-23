@@ -27320,7 +27320,7 @@ function assertWritableActionFile(filePath) {
 function assertActionMetadataIdentity(filePath, metadata) {
   const fileId = basename4(filePath).replace(/\.ya?ml$/i, "");
   if (metadata.id !== fileId) {
-    throw new ActionMetadataIdentityError(metadata.id, fileId);
+    throw new Error(`Action metadata id ${metadata.id} does not match filename identity ${fileId}.`);
   }
 }
 function withMetadata(action, metadata) {
@@ -27329,7 +27329,7 @@ function withMetadata(action, metadata) {
 function withBody(action, body) {
   return { ...action, body };
 }
-var SaveActionPreconditionError, ActionMetadataIdentityError;
+var SaveActionPreconditionError;
 var init_action_store = __esm({
   "packages/rn-dev-agent-core/dist/domain/action-store.js"() {
     "use strict";
@@ -27345,16 +27345,6 @@ var init_action_store = __esm({
       constructor(filePath) {
         super(`saveAction precondition violated: yaml at ${filePath} has been edited externally since the in-memory action was loaded. The caller must invoke actionWasEditedExternally() first and abort on true (or use saveActionWithCAS for atomic detection). GH #113 contract enforcement.`);
         this.name = "SaveActionPreconditionError";
-      }
-    };
-    ActionMetadataIdentityError = class extends Error {
-      metadataId;
-      fileId;
-      constructor(metadataId, fileId) {
-        super(`Action metadata id ${metadataId} does not match filename identity ${fileId}.`);
-        this.metadataId = metadataId;
-        this.fileId = fileId;
-        this.name = "ActionMetadataIdentityError";
       }
     };
   }
@@ -79228,9 +79218,6 @@ function parseEnvelope2(result) {
     return { ok: false, code: "BAD_RESPONSE", error: "Action replay returned invalid JSON." };
   }
 }
-function isLoginActionIdentityMismatch(error2) {
-  return error2 instanceof ActionMetadataIdentityError && (error2.fileId === LOGIN_PROLOGUE_ALIAS || error2.metadataId === LOGIN_PROLOGUE_ALIAS);
-}
 function createLoginPrologueHandler(deps) {
   const now = deps.now ?? (() => /* @__PURE__ */ new Date());
   return async (args) => {
@@ -79282,7 +79269,7 @@ function createLoginPrologueHandler(deps) {
         inventory = await measure("inventory", () => listActions(projectRoot));
         action = await measure("resolve", async () => loadAction(projectRoot, LOGIN_PROLOGUE_ALIAS));
       } catch (error2) {
-        if (isLoginActionIdentityMismatch(error2)) {
+        if (error2 instanceof Error && error2.message.includes("does not match filename identity") && error2.message.includes(LOGIN_PROLOGUE_ALIAS)) {
           return blocked("LOGIN_ACTION_ID_MISMATCH", `The ${LOGIN_PROLOGUE_ALIAS} action file declares a different action id.`);
         }
         throw error2;
