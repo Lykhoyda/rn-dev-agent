@@ -26924,6 +26924,9 @@ function assertStableReadableCorpus(projectRoot, expected) {
     throw new Error(`Refusing replaced learned-action corpus symlink at ${actionsDir}.`);
   }
 }
+function assertReadableActionLoadContextStable(context) {
+  assertStableReadableCorpus(context.projectRoot, context.corpus);
+}
 function lstatIfPresent2(path) {
   try {
     return lstatSync9(path);
@@ -34342,12 +34345,6 @@ function createMaestroRunHandler(deps = {}) {
         paramArgs.push("-e", `${key}=${value}`);
       }
     }
-    const runnerReportDir = createRunnerReportDir(dispatch.runner, "rn-maestro-report");
-    const finalArgs = assembleMaestroArgs(baseArgs, [
-      ...runnerReportArgs(runnerReportDir),
-      ...paramArgs
-    ]);
-    const directRunnerEvidence = (output) => collectDirectRunnerEvidence(runnerReportDir, output);
     const releaseAndroidSlot = deps.releaseAndroidSlot ?? releaseAndroidInteractionSlot;
     const androidSlotReleaseWarnings = [];
     let releasedAndroidDeviceId;
@@ -34414,6 +34411,12 @@ function createMaestroRunHandler(deps = {}) {
         });
       }
     }
+    const runnerReportDir = (deps.createReportDir ?? createRunnerReportDir)(dispatch.runner, "rn-maestro-report");
+    const finalArgs = assembleMaestroArgs(baseArgs, [
+      ...runnerReportArgs(runnerReportDir),
+      ...paramArgs
+    ]);
+    const directRunnerEvidence = (output) => collectDirectRunnerEvidence(runnerReportDir, output);
     try {
       const managedAuthority = nestedMaestroAuthorityCallbacks(args);
       const claimOrigin = args.claimNativeOrigin ?? deps.claimNativeOrigin ?? managedAuthority.claimNativeOrigin;
@@ -79186,6 +79189,12 @@ async function persistRun(actionId, projectRoot, record2) {
 
 // packages/rn-dev-agent-core/dist/domain/action-inventory.js
 init_action_store();
+function emitInventoryWarning(warning) {
+  process.emitWarning(warning.message, {
+    type: "ActionInventoryWarning",
+    code: warning.code
+  });
+}
 async function listActions(projectRoot, dependencies = {}) {
   const context = openReadableActionLoadContext(projectRoot);
   if (!context)
@@ -79196,9 +79205,27 @@ async function listActions(projectRoot, dependencies = {}) {
   for (const id of new Set(yamlFiles.map((file) => file.replace(/\.ya?ml$/, "")))) {
     if (yamlFiles.includes(`${id}.yaml`) && yamlFiles.includes(`${id}.yml`))
       continue;
-    const action = load(context, id);
-    if (!action)
+    const file = yamlFiles.includes(`${id}.yaml`) ? `${id}.yaml` : `${id}.yml`;
+    let action;
+    let failure;
+    try {
+      action = load(context, id);
+      if (!action)
+        failure = new Error("missing or invalid action metadata");
+    } catch (error2) {
+      failure = error2;
+      action = null;
+    }
+    if (!action) {
+      assertReadableActionLoadContextStable(context);
+      const message = `Skipped corrupt action inventory entry ${file}: ${failure instanceof Error ? failure.message : String(failure)}`;
+      (dependencies.onWarning ?? emitInventoryWarning)({
+        code: "ACTION_INVENTORY_ENTRY_SKIPPED",
+        file,
+        message
+      });
       continue;
+    }
     const { metadata } = action;
     const summary = {
       id: metadata.id,

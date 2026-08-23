@@ -55,6 +55,9 @@ function assertStableReadableCorpus(projectRoot, expected) {
         throw new Error(`Refusing replaced learned-action corpus symlink at ${actionsDir}.`);
     }
 }
+export function assertReadableActionLoadContextStable(context) {
+    assertStableReadableCorpus(context.projectRoot, context.corpus);
+}
 function lstatIfPresent(path) {
     try {
         return lstatSync(path);

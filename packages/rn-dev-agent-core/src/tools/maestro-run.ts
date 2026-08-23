@@ -361,6 +361,7 @@ export interface MaestroRunDeps {
   /** GH #741: null = unknown (probe failure fails open, never refuses). */
   probeAndroidApiLevel?: (deviceId: string) => Promise<number | null>;
   resolveEngineStatus?: () => Promise<ReplayEngineStatus | null>;
+  createReportDir?: typeof createRunnerReportDir;
 }
 
 async function defaultProbeAndroidApiLevel(deviceId: string): Promise<number | null> {
@@ -648,15 +649,6 @@ export function createMaestroRunHandler(
         paramArgs.push('-e', `${key}=${value}`);
       }
     }
-    // A unique flattened report gives us maestro-runner's direct selected-device
-    // and WDA target log. Never infer execution identity from requested argv.
-    const runnerReportDir = createRunnerReportDir(dispatch.runner, 'rn-maestro-report');
-    const finalArgs = assembleMaestroArgs(baseArgs, [
-      ...runnerReportArgs(runnerReportDir),
-      ...paramArgs,
-    ]);
-    const directRunnerEvidence = (output: string) =>
-      collectDirectRunnerEvidence(runnerReportDir, output);
     const releaseAndroidSlot = deps.releaseAndroidSlot ?? defaultReleaseAndroidSlot;
     const androidSlotReleaseWarnings: string[] = [];
     let releasedAndroidDeviceId: string | undefined;
@@ -740,6 +732,18 @@ export function createMaestroRunHandler(
         });
       }
     }
+
+    // Allocate report evidence only after preflight so refusal leaves no scratch tree.
+    const runnerReportDir = (deps.createReportDir ?? createRunnerReportDir)(
+      dispatch.runner,
+      'rn-maestro-report',
+    );
+    const finalArgs = assembleMaestroArgs(baseArgs, [
+      ...runnerReportArgs(runnerReportDir),
+      ...paramArgs,
+    ]);
+    const directRunnerEvidence = (output: string) =>
+      collectDirectRunnerEvidence(runnerReportDir, output);
 
     try {
       // 10MB buffer: a multi-step flow with screenshots + app console/network

@@ -418,14 +418,6 @@ export function createMaestroRunHandler(deps = {}) {
                 paramArgs.push('-e', `${key}=${value}`);
             }
         }
-        // A unique flattened report gives us maestro-runner's direct selected-device
-        // and WDA target log. Never infer execution identity from requested argv.
-        const runnerReportDir = createRunnerReportDir(dispatch.runner, 'rn-maestro-report');
-        const finalArgs = assembleMaestroArgs(baseArgs, [
-            ...runnerReportArgs(runnerReportDir),
-            ...paramArgs,
-        ]);
-        const directRunnerEvidence = (output) => collectDirectRunnerEvidence(runnerReportDir, output);
         const releaseAndroidSlot = deps.releaseAndroidSlot ?? defaultReleaseAndroidSlot;
         const androidSlotReleaseWarnings = [];
         let releasedAndroidDeviceId;
@@ -506,6 +498,13 @@ export function createMaestroRunHandler(deps = {}) {
                 });
             }
         }
+        // Allocate report evidence only after preflight so refusal leaves no scratch tree.
+        const runnerReportDir = (deps.createReportDir ?? createRunnerReportDir)(dispatch.runner, 'rn-maestro-report');
+        const finalArgs = assembleMaestroArgs(baseArgs, [
+            ...runnerReportArgs(runnerReportDir),
+            ...paramArgs,
+        ]);
+        const directRunnerEvidence = (output) => collectDirectRunnerEvidence(runnerReportDir, output);
         try {
             // 10MB buffer: a multi-step flow with screenshots + app console/network
             // logs routinely exceeds Node's 1MB execFile default, which would kill

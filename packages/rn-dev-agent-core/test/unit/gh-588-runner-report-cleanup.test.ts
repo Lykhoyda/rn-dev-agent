@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createMaestroRunHandler } from '../../dist/tools/maestro-run.js';
@@ -140,6 +140,41 @@ test('a non-zero runner exit still deletes its temporary report tree', async () 
   assert.equal(body.meta.deviceAuthority.reportedDeviceId, EXACT);
   assert.equal(body.meta.runnerReportDir, undefined);
   assert.equal(existsSync(seen.dir!), false, 'report tree must be removed on the failure path');
+});
+
+test('runner preflight refusal leaves no report directory tree', async () => {
+  const fixtureRoot = mkdtempSync(join(tmpdir(), 'rn-maestro-report-refusal-fixture-'));
+  let execCalls = 0;
+  try {
+    const handler = createMaestroRunHandler({
+      getActiveSession: () => ({
+        name: 'exact',
+        platform: 'ios',
+        deviceId: EXACT,
+        appId: APP_ID,
+        openedAt: new Date(0).toISOString(),
+      }),
+      chooseDispatch: () => fakeRunnerDispatch(),
+      resolveEngineStatus: async () => buildReplayEngineStatus('drift-older', '1.1.23', false),
+      createReportDir: () => mkdtempSync(join(fixtureRoot, 'rn-maestro-report-')),
+      execFile: async () => {
+        execCalls += 1;
+        return { stdout: '', stderr: '' };
+      },
+    });
+
+    const result = await handler({
+      inlineYaml: '- launchApp',
+      platform: 'ios',
+      appId: APP_ID,
+    });
+    const body = JSON.parse(result.content[0].text);
+    assert.equal(body.code, 'ENGINE_PIN_MISMATCH');
+    assert.equal(execCalls, 0, 'preflight refusal must not execute the runner');
+    assert.deepEqual(readdirSync(fixtureRoot), [], 'report directory tree must remain clean');
+  } finally {
+    rmSync(fixtureRoot, { recursive: true, force: true });
+  }
 });
 
 test('structured report identity survives scalar and alternate device key spellings', () => {

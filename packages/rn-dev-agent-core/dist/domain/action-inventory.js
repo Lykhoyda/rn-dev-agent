@@ -1,4 +1,10 @@
-import { loadActionFromContext, openReadableActionLoadContext, } from './action-store.js';
+import { assertReadableActionLoadContextStable, loadActionFromContext, openReadableActionLoadContext, } from './action-store.js';
+function emitInventoryWarning(warning) {
+    process.emitWarning(warning.message, {
+        type: 'ActionInventoryWarning',
+        code: warning.code,
+    });
+}
 export async function listActions(projectRoot, dependencies = {}) {
     const context = openReadableActionLoadContext(projectRoot);
     if (!context)
@@ -10,9 +16,28 @@ export async function listActions(projectRoot, dependencies = {}) {
         // Inventory omits yaml/yml twins; resolveActionPath still refuses replay.
         if (yamlFiles.includes(`${id}.yaml`) && yamlFiles.includes(`${id}.yml`))
             continue;
-        const action = load(context, id);
-        if (!action)
+        const file = yamlFiles.includes(`${id}.yaml`) ? `${id}.yaml` : `${id}.yml`;
+        let action;
+        let failure;
+        try {
+            action = load(context, id);
+            if (!action)
+                failure = new Error('missing or invalid action metadata');
+        }
+        catch (error) {
+            failure = error;
+            action = null;
+        }
+        if (!action) {
+            assertReadableActionLoadContextStable(context);
+            const message = `Skipped corrupt action inventory entry ${file}: ${failure instanceof Error ? failure.message : String(failure)}`;
+            (dependencies.onWarning ?? emitInventoryWarning)({
+                code: 'ACTION_INVENTORY_ENTRY_SKIPPED',
+                file,
+                message,
+            });
             continue;
+        }
         const { metadata } = action;
         const summary = {
             id: metadata.id,
