@@ -14,8 +14,10 @@ import {
   isOlderSdkInstallFailure,
   olderSdkInstallDiagnosis,
   MAESTRO_RUNNER_MIN_ANDROID_API,
+  RunnerCacheUnavailableError,
   type ReplayEngineStatus,
 } from '../domain/engine-pin.js';
+import { recordRunnerDiagnostic } from '../experience/runner-diagnostics.js';
 import {
   actionReplayPreflight,
   classifyLearnedActionPath,
@@ -988,6 +990,30 @@ export function createMaestroRunHandler(
       }
       const stageError = err instanceof MaestroStageExecutionError ? err.stageError : err;
       const msg = stageError instanceof Error ? stageError.message : String(stageError);
+      if (stageError instanceof RunnerCacheUnavailableError) {
+        recordRunnerDiagnostic('typed-failure', {
+          code: stageError.code,
+          errno: stageError.errno,
+          path: stageError.relativePath,
+        });
+        return failResult(
+          `WDA bootstrap could not provision its authority-bound runner cache: ${stageError.message}`,
+          'WDA_BOOTSTRAP_FAILED',
+          {
+            flowFile,
+            platform,
+            runner: dispatch.runner,
+            transport: dispatch.runner,
+            passed: false,
+            output: '',
+            terminal: {
+              exitClass: 'before-first-step',
+              bootstrapEvidence: stageError.message,
+            },
+            ...androidReleaseMeta(),
+          },
+        );
+      }
       if (stageError instanceof ExactAndroidDeviceRequiredError) {
         return failResult(stageError.message, stageError.code, {
           platform,

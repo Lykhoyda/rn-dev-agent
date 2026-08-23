@@ -42,7 +42,9 @@ multiple released sessions share one worktree.
 
 Parse the collector's structured output. It may report plugin/core versions,
 OS/Node versions, device counts, Metro status, runner versions, and recent
-legacy telemetry status. Reconcile its authority object with the previously
+legacy telemetry status. When a newest `runner_diagnostics` bundle is present,
+show the complete sanitized typed bundle during review before attaching it; do
+not substitute raw runner output. Reconcile its authority object with the previously
 captured `rn_session` status. Compare exact values only in memory. The preview
 may show the sanitized authority state, own Metro allocated/bound booleans, and
 foreign-session count. If there is no exact session, omit
@@ -58,7 +60,7 @@ Never include:
 
 - absolute home/project paths;
 - secrets/tokens/credentials;
-- email, phone, IP, company/app/bundle identity;
+- email, phone, IP, company/app identity, or external bundle IDs; only the owned `com.rndevagent.testapp` bundle ID may remain verbatim;
 - tool arguments, store/component/network bodies, console contents, or stacks.
 - foreign session paths, PIDs, device IDs, app IDs, ports, or capabilities.
 
@@ -84,5 +86,5 @@ Wait for explicit confirmation and apply every requested removal.
 
 The body includes description, sanitized environment, current high-level
 authority, fresh telemetry status (if any), high-level CDP state, reproduction,
-workaround, suggested fix, and related issues. Omit empty optional sections and
+the reviewed newest runner-diagnostics bundle (if any), workaround, suggested fix, and related issues. Omit empty optional sections and
 never present stale telemetry as recent.

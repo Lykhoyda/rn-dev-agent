@@ -170,6 +170,29 @@ if [ -d "$TELEMETRY_DIR" ]; then
   fi
 fi
 
+# --- Collect newest bounded runner diagnostics bundle ---
+
+runner_diagnostics="null"
+runner_diagnostics_status="none"
+experience_dir="$AGENT_DIR/experience"
+if [ -d "$experience_dir" ]; then
+  latest_runner_bundle=$(ls -t "$experience_dir"/runner-diagnostics-*.json 2>/dev/null | head -1 || true)
+  if [ -n "$latest_runner_bundle" ]; then
+    runner_diagnostics=$(python3 -c '
+import json,sys
+with open(sys.argv[1], encoding="utf-8") as handle:
+    value=json.load(handle)
+assert value.get("schema") == "rn-dev-agent/runner-diagnostics/1"
+print(json.dumps(value,separators=(",",":")))
+' "$latest_runner_bundle" 2>/dev/null || echo "null")
+    if [ "$runner_diagnostics" = "null" ]; then
+      runner_diagnostics_status="invalid"
+    else
+      runner_diagnostics_status="attached for review"
+    fi
+  fi
+fi
+
 # --- Collect MCP tool count ---
 
 tool_count="unknown"
@@ -266,7 +289,11 @@ data = {
     'recent_telemetry_lines': json.loads(sys.argv[12]),
     'telemetry_status': sys.argv[14],
     'authority': json.loads(sys.argv[15]),
+    'runner_diagnostics_status': sys.argv[17],
 }
+runner_diagnostics = json.loads(sys.argv[16])
+if runner_diagnostics is not None:
+    data['runner_diagnostics'] = runner_diagnostics
 log_tail = sys.argv[13].strip()
 if log_tail:
     data['cdp_bridge_log_tail'] = log_tail.split('\n')
@@ -286,4 +313,6 @@ print(json.dumps(data, indent=2))
   "$telemetry_json" \
   "$cdp_log_tail" \
   "$telemetry_status" \
-  "$authority_json"
+  "$authority_json" \
+  "$runner_diagnostics" \
+  "$runner_diagnostics_status"

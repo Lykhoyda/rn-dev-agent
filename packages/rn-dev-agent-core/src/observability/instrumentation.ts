@@ -1,3 +1,10 @@
+import {
+  recordRunnerDiagnostic,
+  snapshotRunnerDiagnostics,
+  type RunnerDiagnosticsSnapshot,
+  withRunnerDiagnosticsContext,
+} from '../experience/runner-diagnostics.js';
+
 export type ToolHandler = (...args: unknown[]) => Promise<unknown>;
 
 export interface ToolObserverInput {
@@ -8,6 +15,7 @@ export interface ToolObserverInput {
   result?: unknown;
   error?: string;
   ghost?: { attempted: boolean; outcome: string };
+  runnerDiagnostics?: RunnerDiagnosticsSnapshot;
 }
 
 const toolObservers = new Set<(o: ToolObserverInput) => void>();
@@ -95,24 +103,41 @@ export function instrumentTool(toolName: string, handler: ToolHandler): ToolHand
     const start = Date.now();
     const params =
       fnArgs[0] && typeof fnArgs[0] === 'object' ? (fnArgs[0] as Record<string, unknown>) : {};
-    try {
-      const result = await handler(...fnArgs);
-      const latency = Date.now() - start;
-      const status = classifyResult(result);
-      notifyObserver({
-        tool: toolName,
-        params,
-        status,
-        latencyMs: latency,
-        result,
-        error: status === 'FAIL' ? (extractErrorFromResult(result) ?? undefined) : undefined,
-      });
-      return result;
-    } catch (err) {
-      const latency = Date.now() - start;
-      const msg = err instanceof Error ? err.message : String(err);
-      notifyObserver({ tool: toolName, params, status: 'ERROR', latencyMs: latency, error: msg });
-      throw err;
-    }
+    return withRunnerDiagnosticsContext(toolName, params, async () => {
+      try {
+        const result = await handler(...fnArgs);
+        const latency = Date.now() - start;
+        const status = classifyResult(result);
+        const code =
+          result && typeof result === 'object'
+            ? resultCode(result as Record<string, unknown>)
+            : null;
+        if (status === 'FAIL' && code) recordRunnerDiagnostic('typed-failure', { code });
+        recordRunnerDiagnostic('tool-outcome', { tool: toolName, status });
+        notifyObserver({
+          tool: toolName,
+          params,
+          status,
+          latencyMs: latency,
+          result,
+          error: status === 'FAIL' ? (extractErrorFromResult(result) ?? undefined) : undefined,
+          runnerDiagnostics: snapshotRunnerDiagnostics(),
+        });
+        return result;
+      } catch (err) {
+        const latency = Date.now() - start;
+        const msg = err instanceof Error ? err.message : String(err);
+        recordRunnerDiagnostic('tool-outcome', { tool: toolName, status: 'ERROR' });
+        notifyObserver({
+          tool: toolName,
+          params,
+          status: 'ERROR',
+          latencyMs: latency,
+          error: msg,
+          runnerDiagnostics: snapshotRunnerDiagnostics(),
+        });
+        throw err;
+      }
+    });
   };
 }

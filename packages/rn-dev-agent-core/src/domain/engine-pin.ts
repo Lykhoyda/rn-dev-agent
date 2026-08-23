@@ -12,12 +12,14 @@ import {
   chmodSync,
   constants,
   copyFileSync,
+  existsSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
   readlinkSync,
+  realpathSync,
   rmSync,
   symlinkSync,
   unlinkSync,
@@ -26,6 +28,10 @@ import { homedir } from 'node:os';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { gunzipSync } from 'node:zlib';
 import { verifiedNativePublicationHelper } from '../session/process-birth.js';
+import {
+  currentRunnerDiagnosticsPlatform,
+  recordRunnerDiagnostic,
+} from '../experience/runner-diagnostics.js';
 import pinManifest from './maestro-runner-pin.json' with { type: 'json' };
 
 interface MaestroRunnerPinManifest {
@@ -651,10 +657,109 @@ function copyPayloadTree(source: string, destination: string): void {
   }
 }
 
+export class RunnerCacheUnavailableError extends Error {
+  readonly code = 'RUNNER_CACHE_UNAVAILABLE';
+
+  constructor(
+    readonly relativePath: 'cache',
+    readonly errno: string,
+  ) {
+    super(`RUNNER_CACHE_UNAVAILABLE: ${relativePath}: ${errno}`);
+    this.name = 'RunnerCacheUnavailableError';
+  }
+}
+
+function cacheErrno(error: unknown): string {
+  const code = (error as { code?: unknown } | null)?.code;
+  return typeof code === 'string' && /^[A-Z0-9_]+$/.test(code) ? code : 'UNKNOWN';
+}
+
+function expectedRunnerCacheRoot(snapshotRoot: string): string {
+  const snapshotName = basename(snapshotRoot);
+  const prefix = `.spawn-${MAESTRO_RUNNER_PIN.version}-`;
+  if (!snapshotName.startsWith(prefix) || dirname(snapshotRoot) !== runnerCacheVersionsRoot()) {
+    throw new RunnerCacheUnavailableError('cache', 'UNBOUND_SNAPSHOT');
+  }
+  return join(
+    runnerCacheVersionsRoot(),
+    `.wda-cache-${MAESTRO_RUNNER_PIN.version}-${snapshotName.slice(prefix.length)}`,
+  );
+}
+
+export function assertRunnerSnapshotCacheBinding(snapshotRoot: string, cacheRoot: string): void {
+  try {
+    const expectedCacheRoot = expectedRunnerCacheRoot(snapshotRoot);
+    if (resolve(cacheRoot) !== resolve(expectedCacheRoot)) {
+      throw new RunnerCacheUnavailableError('cache', 'FOREIGN_PATH');
+    }
+    const cacheStat = lstatSync(cacheRoot);
+    if (!cacheStat.isDirectory() || cacheStat.isSymbolicLink()) {
+      throw new RunnerCacheUnavailableError('cache', 'INVALID_TARGET');
+    }
+    if ((cacheStat.mode & 0o777) !== 0o700) {
+      throw new RunnerCacheUnavailableError('cache', 'UNSAFE_MODE');
+    }
+    const cacheLink = join(snapshotRoot, 'cache');
+    if (!lstatSync(cacheLink).isSymbolicLink()) {
+      throw new RunnerCacheUnavailableError('cache', 'NOT_LINKED');
+    }
+    if (realpathSync(cacheLink) !== realpathSync(cacheRoot)) {
+      throw new RunnerCacheUnavailableError('cache', 'FOREIGN_PATH');
+    }
+  } catch (error) {
+    if (error instanceof RunnerCacheUnavailableError) throw error;
+    throw new RunnerCacheUnavailableError('cache', cacheErrno(error));
+  }
+}
+
+export interface RunnerSnapshotTestHooks {
+  beforeCacheProvision?: (expectedCacheRoot: string) => void;
+}
+
+function provisionRunnerSnapshotCache(
+  snapshotRoot: string,
+  testHooks: RunnerSnapshotTestHooks = {},
+): string {
+  const cacheRoot = expectedRunnerCacheRoot(snapshotRoot);
+  try {
+    testHooks.beforeCacheProvision?.(cacheRoot);
+    mkdirSync(cacheRoot, { mode: 0o700 });
+    chmodSync(cacheRoot, 0o700);
+    symlinkSync(cacheRoot, join(snapshotRoot, 'cache'), 'dir');
+    assertRunnerSnapshotCacheBinding(snapshotRoot, cacheRoot);
+    return cacheRoot;
+  } catch (error) {
+    if (error instanceof RunnerCacheUnavailableError) throw error;
+    throw new RunnerCacheUnavailableError('cache', cacheErrno(error));
+  }
+}
+
+function removeRunnerSnapshotAndCache(snapshotRoot: string, cacheRoot: string | null): void {
+  let cleanupError: unknown;
+  try {
+    rmSync(snapshotRoot, { recursive: true, force: true });
+  } catch (error) {
+    cleanupError = error;
+  }
+  if (cacheRoot) {
+    try {
+      rmSync(cacheRoot, { recursive: true, force: true });
+    } catch (error) {
+      cleanupError ??= error;
+    }
+  }
+  recordRunnerDiagnostic('cleanup', {
+    snapshotRemoved: !existsSync(snapshotRoot),
+    cacheRemoved: cacheRoot === null || !existsSync(cacheRoot),
+  });
+  if (cleanupError) throw cleanupError;
+}
+
 export async function withImmediatePinnedRunner<T>(
   runnerPath: string,
   resolveStatus: () => Promise<ReplayEngineStatus | null>,
   execute: (boundPath: string, prefixArgs?: readonly string[]) => Promise<T>,
+  testHooks: RunnerSnapshotTestHooks = {},
 ): Promise<T> {
   const refusal = await immediateRunnerPinRefusal(runnerPath, resolveStatus);
   if (refusal) throw new Error(refusal);
@@ -665,6 +770,11 @@ export async function withImmediatePinnedRunner<T>(
   const snapshotRoot = mkdtempSync(
     join(runnerCacheVersionsRoot(), `.spawn-${MAESTRO_RUNNER_PIN.version}-`),
   );
+  let cacheRoot: string | null = null;
+  recordRunnerDiagnostic('spawn-begin', {
+    snapshotId: basename(snapshotRoot),
+    runnerPinVersion: MAESTRO_RUNNER_PIN.version,
+  });
   try {
     copyPayloadTree(pinCacheRoot(), snapshotRoot);
     const snapshotRunner = join(snapshotRoot, 'bin', 'maestro-runner');
@@ -675,8 +785,15 @@ export async function withImmediatePinnedRunner<T>(
       !installedPayloadMatchesPin(nodePlatformKey(), snapshotRoot) ||
       createHash('sha256').update(readFileSync(snapshotRunner)).digest('hex') !== expectedSha256
     ) {
+      recordRunnerDiagnostic('payload-verify', { result: 'failed' });
       throw new Error('RUNNER_PIN_CHANGED: payload content changed before execution.');
     }
+    recordRunnerDiagnostic('payload-verify', {
+      result: 'passed',
+      runnerPinVersion: MAESTRO_RUNNER_PIN.version,
+      provenance: 'pin-cache',
+      payloadShaPrefix: expectedSha256.slice(0, 12),
+    });
     const helper = verifiedNativePublicationHelper();
     const snapshotHelper = join(snapshotRoot, '.runner-exec');
     copyFileSync(helper.path, snapshotHelper, constants.COPYFILE_EXCL | constants.COPYFILE_FICLONE);
@@ -684,8 +801,35 @@ export async function withImmediatePinnedRunner<T>(
     if (createHash('sha256').update(readFileSync(snapshotHelper)).digest('hex') !== helper.sha256) {
       throw new Error('RUNNER_PIN_CHANGED: execution binding changed before execution.');
     }
+    try {
+      cacheRoot = expectedRunnerCacheRoot(snapshotRoot);
+      provisionRunnerSnapshotCache(snapshotRoot, testHooks);
+      recordRunnerDiagnostic('cache-provision', {
+        result: 'passed',
+        variant: 'symlink',
+        resolvedPath: '../' + basename(cacheRoot),
+      });
+    } catch (error) {
+      const failure =
+        error instanceof RunnerCacheUnavailableError
+          ? error
+          : new RunnerCacheUnavailableError('cache', cacheErrno(error));
+      recordRunnerDiagnostic('cache-provision', {
+        result: 'failed',
+        variant: 'symlink',
+        resolvedPath: 'cache',
+        errno: failure.errno,
+      });
+      recordRunnerDiagnostic('typed-failure', {
+        code: failure.code,
+        errno: failure.errno,
+        path: failure.relativePath,
+      });
+      throw failure;
+    }
     for (const entry of readdirSync(snapshotRoot, { recursive: true, withFileTypes: true })) {
       const entryPath = join(entry.parentPath, entry.name);
+      if (entry.isSymbolicLink()) continue;
       if (entry.isDirectory()) chmodSync(entryPath, 0o500);
       else if (entry.isFile()) {
         chmodSync(
@@ -695,7 +839,12 @@ export async function withImmediatePinnedRunner<T>(
       }
     }
     chmodSync(snapshotRoot, 0o500);
+    assertRunnerSnapshotCacheBinding(snapshotRoot, cacheRoot);
     const openedRunner = lstatSync(snapshotRunner);
+    recordRunnerDiagnostic('runner-exec-begin', { runnerPinVersion: MAESTRO_RUNNER_PIN.version });
+    if (currentRunnerDiagnosticsPlatform() === 'ios') {
+      recordRunnerDiagnostic('wda-bootstrap-begin', { cachePath: 'cache' });
+    }
     return await execute(snapshotHelper, [
       '--exec-file',
       snapshotRunner,
@@ -708,11 +857,12 @@ export async function withImmediatePinnedRunner<T>(
       chmodSync(snapshotRoot, 0o700);
       for (const entry of readdirSync(snapshotRoot, { recursive: true, withFileTypes: true })) {
         const entryPath = join(entry.parentPath, entry.name);
+        if (entry.isSymbolicLink()) continue;
         if (entry.isDirectory()) chmodSync(entryPath, 0o700);
         else if (entry.isFile()) chmodSync(entryPath, 0o600);
       }
     } catch {}
-    rmSync(snapshotRoot, { recursive: true, force: true });
+    removeRunnerSnapshotAndCache(snapshotRoot, cacheRoot);
   }
 }
 

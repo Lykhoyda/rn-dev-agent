@@ -1712,6 +1712,10 @@ trackedTool('collect_logs', 'Collect logs from multiple sources in parallel: JS 
         .enum(['all', 'log', 'warn', 'error', 'info', 'debug'])
         .default('all')
         .describe('Filter by log level (default: all)'),
+    runnerDiagnosticsOutputPath: z
+        .string()
+        .optional()
+        .describe('New caller-named file for the newest sanitized runner diagnostics bundle'),
 }, createCollectLogsHandler(getClient));
 // --- device tools (native interaction via in-tree runners) ---
 trackedTool('device_list', 'List all available iOS simulators and Android emulators. Returns device name, UDID, platform, and status. Use before device_snapshot action=open to confirm the target device.', {}, createDeviceListHandler());

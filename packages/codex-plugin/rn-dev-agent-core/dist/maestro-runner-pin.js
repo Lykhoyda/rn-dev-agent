@@ -565,6 +565,38 @@ print -r -- "$result"
   }
 });
 
+// packages/rn-dev-agent-core/dist/experience/runner-diagnostics.js
+import { AsyncLocalStorage } from "node:async_hooks";
+import { performance as performance2 } from "node:perf_hooks";
+function recordRunnerDiagnostic(type, detail = {}) {
+  const state = storage.getStore();
+  if (!state)
+    return;
+  if (state.events.length >= RUNNER_DIAGNOSTICS_MAX_EVENTS) {
+    state.truncated = true;
+    return;
+  }
+  state.events.push({
+    sequence: state.events.length + 1,
+    monotonicMs: Math.max(0, Math.round((performance2.now() - state.startedAt) * 1e3) / 1e3),
+    timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+    type,
+    detail
+  });
+}
+function currentRunnerDiagnosticsPlatform() {
+  const value = storage.getStore()?.rootParams.platform;
+  return typeof value === "string" ? value : null;
+}
+var RUNNER_DIAGNOSTICS_MAX_EVENTS, storage;
+var init_runner_diagnostics = __esm({
+  "packages/rn-dev-agent-core/dist/experience/runner-diagnostics.js"() {
+    "use strict";
+    RUNNER_DIAGNOSTICS_MAX_EVENTS = 200;
+    storage = new AsyncLocalStorage();
+  }
+});
+
 // packages/rn-dev-agent-core/dist/domain/maestro-runner-pin.json
 var maestro_runner_pin_default;
 var init_maestro_runner_pin = __esm({
@@ -596,7 +628,7 @@ var init_maestro_runner_pin = __esm({
 
 // packages/rn-dev-agent-core/dist/domain/engine-pin.js
 import { createHash as createHash2 } from "node:crypto";
-import { accessSync, chmodSync as chmodSync2, constants as constants2, copyFileSync as copyFileSync2, lstatSync as lstatSync2, mkdirSync, mkdtempSync, readFileSync as readFileSync2, readdirSync, readlinkSync, rmSync, symlinkSync, unlinkSync as unlinkSync2 } from "node:fs";
+import { accessSync, chmodSync as chmodSync2, constants as constants2, copyFileSync as copyFileSync2, existsSync as existsSync3, lstatSync as lstatSync2, mkdirSync, mkdtempSync, readFileSync as readFileSync2, readdirSync, readlinkSync, realpathSync as realpathSync2, rmSync, symlinkSync, unlinkSync as unlinkSync2 } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname as dirname2, join as join2, relative, resolve, sep } from "node:path";
 import { gunzipSync } from "node:zlib";
@@ -966,7 +998,81 @@ function copyPayloadTree(source, destination) {
     }
   }
 }
-async function withImmediatePinnedRunner(runnerPath, resolveStatus, execute) {
+function cacheErrno(error) {
+  const code = error?.code;
+  return typeof code === "string" && /^[A-Z0-9_]+$/.test(code) ? code : "UNKNOWN";
+}
+function expectedRunnerCacheRoot(snapshotRoot) {
+  const snapshotName = basename(snapshotRoot);
+  const prefix = `.spawn-${MAESTRO_RUNNER_PIN.version}-`;
+  if (!snapshotName.startsWith(prefix) || dirname2(snapshotRoot) !== runnerCacheVersionsRoot()) {
+    throw new RunnerCacheUnavailableError("cache", "UNBOUND_SNAPSHOT");
+  }
+  return join2(runnerCacheVersionsRoot(), `.wda-cache-${MAESTRO_RUNNER_PIN.version}-${snapshotName.slice(prefix.length)}`);
+}
+function assertRunnerSnapshotCacheBinding(snapshotRoot, cacheRoot) {
+  try {
+    const expectedCacheRoot = expectedRunnerCacheRoot(snapshotRoot);
+    if (resolve(cacheRoot) !== resolve(expectedCacheRoot)) {
+      throw new RunnerCacheUnavailableError("cache", "FOREIGN_PATH");
+    }
+    const cacheStat = lstatSync2(cacheRoot);
+    if (!cacheStat.isDirectory() || cacheStat.isSymbolicLink()) {
+      throw new RunnerCacheUnavailableError("cache", "INVALID_TARGET");
+    }
+    if ((cacheStat.mode & 511) !== 448) {
+      throw new RunnerCacheUnavailableError("cache", "UNSAFE_MODE");
+    }
+    const cacheLink = join2(snapshotRoot, "cache");
+    if (!lstatSync2(cacheLink).isSymbolicLink()) {
+      throw new RunnerCacheUnavailableError("cache", "NOT_LINKED");
+    }
+    if (realpathSync2(cacheLink) !== realpathSync2(cacheRoot)) {
+      throw new RunnerCacheUnavailableError("cache", "FOREIGN_PATH");
+    }
+  } catch (error) {
+    if (error instanceof RunnerCacheUnavailableError)
+      throw error;
+    throw new RunnerCacheUnavailableError("cache", cacheErrno(error));
+  }
+}
+function provisionRunnerSnapshotCache(snapshotRoot, testHooks = {}) {
+  const cacheRoot = expectedRunnerCacheRoot(snapshotRoot);
+  try {
+    testHooks.beforeCacheProvision?.(cacheRoot);
+    mkdirSync(cacheRoot, { mode: 448 });
+    chmodSync2(cacheRoot, 448);
+    symlinkSync(cacheRoot, join2(snapshotRoot, "cache"), "dir");
+    assertRunnerSnapshotCacheBinding(snapshotRoot, cacheRoot);
+    return cacheRoot;
+  } catch (error) {
+    if (error instanceof RunnerCacheUnavailableError)
+      throw error;
+    throw new RunnerCacheUnavailableError("cache", cacheErrno(error));
+  }
+}
+function removeRunnerSnapshotAndCache(snapshotRoot, cacheRoot) {
+  let cleanupError;
+  try {
+    rmSync(snapshotRoot, { recursive: true, force: true });
+  } catch (error) {
+    cleanupError = error;
+  }
+  if (cacheRoot) {
+    try {
+      rmSync(cacheRoot, { recursive: true, force: true });
+    } catch (error) {
+      cleanupError ??= error;
+    }
+  }
+  recordRunnerDiagnostic("cleanup", {
+    snapshotRemoved: !existsSync3(snapshotRoot),
+    cacheRemoved: cacheRoot === null || !existsSync3(cacheRoot)
+  });
+  if (cleanupError)
+    throw cleanupError;
+}
+async function withImmediatePinnedRunner(runnerPath, resolveStatus, execute, testHooks = {}) {
   const refusal = await immediateRunnerPinRefusal(runnerPath, resolveStatus);
   if (refusal)
     throw new Error(refusal);
@@ -975,13 +1081,25 @@ async function withImmediatePinnedRunner(runnerPath, resolveStatus, execute) {
     throw new Error("RUNNER_PIN_CHANGED: runner checksum is unavailable for this platform.");
   }
   const snapshotRoot = mkdtempSync(join2(runnerCacheVersionsRoot(), `.spawn-${MAESTRO_RUNNER_PIN.version}-`));
+  let cacheRoot = null;
+  recordRunnerDiagnostic("spawn-begin", {
+    snapshotId: basename(snapshotRoot),
+    runnerPinVersion: MAESTRO_RUNNER_PIN.version
+  });
   try {
     copyPayloadTree(pinCacheRoot(), snapshotRoot);
     const snapshotRunner = join2(snapshotRoot, "bin", "maestro-runner");
     const snapshotStat = lstatSync2(snapshotRunner);
     if (!snapshotStat.isFile() || snapshotStat.isSymbolicLink() || !installedPayloadMatchesPin(nodePlatformKey(), snapshotRoot) || createHash2("sha256").update(readFileSync2(snapshotRunner)).digest("hex") !== expectedSha256) {
+      recordRunnerDiagnostic("payload-verify", { result: "failed" });
       throw new Error("RUNNER_PIN_CHANGED: payload content changed before execution.");
     }
+    recordRunnerDiagnostic("payload-verify", {
+      result: "passed",
+      runnerPinVersion: MAESTRO_RUNNER_PIN.version,
+      provenance: "pin-cache",
+      payloadShaPrefix: expectedSha256.slice(0, 12)
+    });
     const helper = verifiedNativePublicationHelper();
     const snapshotHelper = join2(snapshotRoot, ".runner-exec");
     copyFileSync2(helper.path, snapshotHelper, constants2.COPYFILE_EXCL | constants2.COPYFILE_FICLONE);
@@ -989,8 +1107,33 @@ async function withImmediatePinnedRunner(runnerPath, resolveStatus, execute) {
     if (createHash2("sha256").update(readFileSync2(snapshotHelper)).digest("hex") !== helper.sha256) {
       throw new Error("RUNNER_PIN_CHANGED: execution binding changed before execution.");
     }
+    try {
+      cacheRoot = expectedRunnerCacheRoot(snapshotRoot);
+      provisionRunnerSnapshotCache(snapshotRoot, testHooks);
+      recordRunnerDiagnostic("cache-provision", {
+        result: "passed",
+        variant: "symlink",
+        resolvedPath: "../" + basename(cacheRoot)
+      });
+    } catch (error) {
+      const failure = error instanceof RunnerCacheUnavailableError ? error : new RunnerCacheUnavailableError("cache", cacheErrno(error));
+      recordRunnerDiagnostic("cache-provision", {
+        result: "failed",
+        variant: "symlink",
+        resolvedPath: "cache",
+        errno: failure.errno
+      });
+      recordRunnerDiagnostic("typed-failure", {
+        code: failure.code,
+        errno: failure.errno,
+        path: failure.relativePath
+      });
+      throw failure;
+    }
     for (const entry of readdirSync(snapshotRoot, { recursive: true, withFileTypes: true })) {
       const entryPath = join2(entry.parentPath, entry.name);
+      if (entry.isSymbolicLink())
+        continue;
       if (entry.isDirectory())
         chmodSync2(entryPath, 320);
       else if (entry.isFile()) {
@@ -998,7 +1141,12 @@ async function withImmediatePinnedRunner(runnerPath, resolveStatus, execute) {
       }
     }
     chmodSync2(snapshotRoot, 320);
+    assertRunnerSnapshotCacheBinding(snapshotRoot, cacheRoot);
     const openedRunner = lstatSync2(snapshotRunner);
+    recordRunnerDiagnostic("runner-exec-begin", { runnerPinVersion: MAESTRO_RUNNER_PIN.version });
+    if (currentRunnerDiagnosticsPlatform() === "ios") {
+      recordRunnerDiagnostic("wda-bootstrap-begin", { cachePath: "cache" });
+    }
     return await execute(snapshotHelper, [
       "--exec-file",
       snapshotRunner,
@@ -1011,6 +1159,8 @@ async function withImmediatePinnedRunner(runnerPath, resolveStatus, execute) {
       chmodSync2(snapshotRoot, 448);
       for (const entry of readdirSync(snapshotRoot, { recursive: true, withFileTypes: true })) {
         const entryPath = join2(entry.parentPath, entry.name);
+        if (entry.isSymbolicLink())
+          continue;
         if (entry.isDirectory())
           chmodSync2(entryPath, 448);
         else if (entry.isFile())
@@ -1018,7 +1168,7 @@ async function withImmediatePinnedRunner(runnerPath, resolveStatus, execute) {
       }
     } catch {
     }
-    rmSync(snapshotRoot, { recursive: true, force: true });
+    removeRunnerSnapshotAndCache(snapshotRoot, cacheRoot);
   }
 }
 function doctorPinnedRunner(status, platformKey = nodePlatformKey()) {
@@ -1127,11 +1277,12 @@ function getEngineStatus(resolvers) {
     return Promise.resolve(testStatus);
   return detect(resolvers ?? {}).catch(() => buildReplayEngineStatus("unknown-version", null, false));
 }
-var MAESTRO_RUNNER_PIN, TRUSTED_DRIFT_SHA256, ACTION_ENGINE_PIN, ACTION_ENGINE_PIN_RE, HOST_PLUGIN_ROOT, PINNED_RUNNER_INSTALL_HINT, PINNED_RUNNER_DIAGNOSE_HINT, MAESTRO_RUNNER_MIN_ANDROID_API, PRE_O_REMEDY, OLDER_SDK_TOKEN, INSTALL_REJECT_CONTEXT, REGEX_METACHARACTERS, TEXT_SELECTOR_KEYS, RELATIVE_SELECTOR_KEYS, testStatus, testAttestation;
+var MAESTRO_RUNNER_PIN, TRUSTED_DRIFT_SHA256, ACTION_ENGINE_PIN, ACTION_ENGINE_PIN_RE, HOST_PLUGIN_ROOT, PINNED_RUNNER_INSTALL_HINT, PINNED_RUNNER_DIAGNOSE_HINT, MAESTRO_RUNNER_MIN_ANDROID_API, PRE_O_REMEDY, OLDER_SDK_TOKEN, INSTALL_REJECT_CONTEXT, REGEX_METACHARACTERS, TEXT_SELECTOR_KEYS, RELATIVE_SELECTOR_KEYS, RunnerCacheUnavailableError, testStatus, testAttestation;
 var init_engine_pin = __esm({
   "packages/rn-dev-agent-core/dist/domain/engine-pin.js"() {
     "use strict";
     init_process_birth();
+    init_runner_diagnostics();
     init_maestro_runner_pin();
     MAESTRO_RUNNER_PIN = Object.freeze({
       version: maestro_runner_pin_default.version,
@@ -1188,6 +1339,17 @@ var init_engine_pin = __esm({
       "containsChild",
       "containsDescendants"
     ]);
+    RunnerCacheUnavailableError = class extends Error {
+      relativePath;
+      errno;
+      code = "RUNNER_CACHE_UNAVAILABLE";
+      constructor(relativePath, errno) {
+        super(`RUNNER_CACHE_UNAVAILABLE: ${relativePath}: ${errno}`);
+        this.relativePath = relativePath;
+        this.errno = errno;
+        this.name = "RunnerCacheUnavailableError";
+      }
+    };
   }
 });
 
@@ -8520,7 +8682,7 @@ var require_dist = __commonJS({
 
 // packages/rn-dev-agent-core/dist/domain/maestro-validator.js
 import { join as join3, dirname as dirname3, isAbsolute, sep as sep2 } from "node:path";
-import { readFileSync as readFileSync3, realpathSync as realpathSync2 } from "node:fs";
+import { readFileSync as readFileSync3, realpathSync as realpathSync3 } from "node:fs";
 function isValidBundleId(s) {
   if (typeof s !== "string")
     return false;
@@ -8682,7 +8844,7 @@ function resolveRunFlowTarget(file, opts) {
   if (!/\.ya?ml$/i.test(file)) {
     throw new MaestroValidationError(`runFlow file ref must be a .yaml/.yml file: ${file}`);
   }
-  const realpath = opts.realpathFn ?? realpathSync2;
+  const realpath = opts.realpathFn ?? realpathSync3;
   let resolved;
   let rootReal;
   try {
@@ -8980,7 +9142,7 @@ var init_runtime_paths = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/domain/sidecar-io.js
-import { existsSync as existsSync3, readFileSync as readFileSync4, writeFileSync, mkdirSync as mkdirSync3, statSync } from "node:fs";
+import { existsSync as existsSync4, readFileSync as readFileSync4, writeFileSync, mkdirSync as mkdirSync3, statSync } from "node:fs";
 import { join as join5, dirname as dirname4 } from "node:path";
 function sidecarPathFor(yamlFilePath) {
   const dir = dirname4(yamlFilePath);
@@ -8992,7 +9154,7 @@ function sidecarPathFor(yamlFilePath) {
 }
 function loadOrInitSidecar(yamlFilePath, now = () => /* @__PURE__ */ new Date()) {
   const path = sidecarPathFor(yamlFilePath);
-  if (existsSync3(path)) {
+  if (existsSync4(path)) {
     try {
       const text = readFileSync4(path, "utf8");
       const parsed = JSON.parse(text);
@@ -9025,7 +9187,7 @@ var init_sidecar_io = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/domain/atomic-writer.js
-import { writeFileSync as writeFileSync2, renameSync, statSync as statSync2, mkdirSync as mkdirSync4, existsSync as existsSync4, unlinkSync as unlinkSync3, readdirSync as readdirSync2, openSync as openSync2, closeSync as closeSync2, chmodSync as chmodSync4, fstatSync as fstatSync2, lstatSync as lstatSync4, readFileSync as readFileSync5, linkSync, constants as constants3 } from "node:fs";
+import { writeFileSync as writeFileSync2, renameSync, statSync as statSync2, mkdirSync as mkdirSync4, existsSync as existsSync5, unlinkSync as unlinkSync3, readdirSync as readdirSync2, openSync as openSync2, closeSync as closeSync2, chmodSync as chmodSync4, fstatSync as fstatSync2, lstatSync as lstatSync4, readFileSync as readFileSync5, linkSync, constants as constants3 } from "node:fs";
 import { dirname as dirname5, basename as basename2 } from "node:path";
 function generateTmpStamp() {
   const rand = Math.random().toString(36).slice(2, 10);
@@ -9344,7 +9506,7 @@ var init_atomic_writer = __esm({
        *  cases for ensureDir / cleanupOrphans can simulate exotic failures
        *  (PR #109 review). */
       _exists(path) {
-        return existsSync4(path);
+        return existsSync5(path);
       },
       /** Underlying `fs.mkdirSync(path, { recursive: true })`. */
       _mkdir(path) {
@@ -9543,7 +9705,7 @@ var init_unfollowed_file = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/logger.js
-import { createWriteStream, mkdirSync as mkdirSync5, existsSync as existsSync5 } from "node:fs";
+import { createWriteStream, mkdirSync as mkdirSync5, existsSync as existsSync6 } from "node:fs";
 import { join as join6 } from "node:path";
 import { tmpdir, homedir as homedir2 } from "node:os";
 function resolveLogPath() {
@@ -9554,7 +9716,7 @@ function resolveLogPath() {
   const pluginData = process.env.CLAUDE_PLUGIN_DATA;
   if (pluginData) {
     try {
-      if (!existsSync5(pluginData))
+      if (!existsSync6(pluginData))
         mkdirSync5(pluginData, { recursive: true });
       return join6(pluginData, "cdp-bridge.log");
     } catch {
@@ -9562,7 +9724,7 @@ function resolveLogPath() {
   }
   const fallbackDir = join6(homedir2(), ".claude", "logs");
   try {
-    if (!existsSync5(fallbackDir))
+    if (!existsSync6(fallbackDir))
       mkdirSync5(fallbackDir, { recursive: true });
     return join6(fallbackDir, "rn-dev-agent-cdp-bridge.log");
   } catch {
@@ -9632,7 +9794,7 @@ var init_logger = __esm({
 
 // packages/rn-dev-agent-core/dist/domain/action-db.js
 import { createRequire } from "node:module";
-import { existsSync as existsSync6, mkdirSync as mkdirSync6, readdirSync as readdirSync3, readFileSync as readFileSync6 } from "node:fs";
+import { existsSync as existsSync7, mkdirSync as mkdirSync6, readdirSync as readdirSync3, readFileSync as readFileSync6 } from "node:fs";
 import { dirname as dirname6, join as join7 } from "node:path";
 function loadSqlite() {
   try {
@@ -9791,7 +9953,7 @@ function openActionDb(projectRoot, opts = {}) {
       },
       migrateSidecars() {
         const stateDir = join7(projectRoot, ".rn-agent", "state");
-        if (!existsSync6(stateDir))
+        if (!existsSync7(stateDir))
           return { migrated: 0 };
         let migrated = 0;
         for (const f of readdirSync3(stateDir)) {
@@ -9973,7 +10135,7 @@ var init_worktree_repair_remedy = __esm({
 
 // packages/rn-dev-agent-core/dist/session/worktree-inheritance.js
 import { spawnSync } from "node:child_process";
-import { closeSync as closeSync3, constants as constants4, existsSync as existsSync7, fstatSync as fstatSync3, lstatSync as lstatSync5, mkdirSync as mkdirSync7, openSync as openSync3, readFileSync as readFileSync7, readlinkSync as readlinkSync2, realpathSync as realpathSync3, renameSync as renameSync2, statSync as statSync3, symlinkSync as symlinkSync2, unlinkSync as unlinkSync4 } from "node:fs";
+import { closeSync as closeSync3, constants as constants4, existsSync as existsSync8, fstatSync as fstatSync3, lstatSync as lstatSync5, mkdirSync as mkdirSync7, openSync as openSync3, readFileSync as readFileSync7, readlinkSync as readlinkSync2, realpathSync as realpathSync4, renameSync as renameSync2, statSync as statSync3, symlinkSync as symlinkSync2, unlinkSync as unlinkSync4 } from "node:fs";
 import { dirname as dirname8, isAbsolute as isAbsolute2, join as join8, relative as relative2, resolve as resolve4, sep as sep5 } from "node:path";
 function gitEnvironment() {
   const env = { ...process.env };
@@ -9994,7 +10156,7 @@ function git(cwd, args) {
 }
 function canonical(path) {
   try {
-    return realpathSync3(path);
+    return realpathSync4(path);
   } catch {
     return null;
   }
@@ -10601,7 +10763,7 @@ var init_worktree_inheritance = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/domain/action-store.js
-import { existsSync as existsSync8, lstatSync as lstatSync6, readFileSync as readFileSync8, statSync as statSync4, unlinkSync as unlinkSync5 } from "node:fs";
+import { existsSync as existsSync9, lstatSync as lstatSync6, readFileSync as readFileSync8, statSync as statSync4, unlinkSync as unlinkSync5 } from "node:fs";
 import { basename as basename4, dirname as dirname9, isAbsolute as isAbsolute3, join as join9, relative as relative3, resolve as resolve5, sep as sep6 } from "node:path";
 function assertOwnedActionCorpus(projectRoot) {
   for (const path of [join9(projectRoot, ".rn-agent"), join9(projectRoot, ".rn-agent", "actions")]) {
@@ -10799,7 +10961,7 @@ function migrationBaselineMatches(filePath, baseline) {
   if (!migrationYamlBaselineMatches(filePath, baseline))
     return false;
   const sidecarPath = sidecarPathFor(filePath);
-  const sidecarExists = existsSync8(sidecarPath);
+  const sidecarExists = existsSync9(sidecarPath);
   if (sidecarExists !== baseline.sidecarExisted)
     return false;
   return !sidecarExists || runtimeSidecarMatches(sidecarPath, baseline.state);
@@ -10844,7 +11006,7 @@ function loadActionMigrationBaseline(filePath) {
   assertWritableActionFile(filePath);
   const pathIdentity = captureMigrationPathIdentity(filePath);
   const yamlText = readFileSync8(filePath, "utf8");
-  const sidecarExisted = existsSync8(sidecarPathFor(filePath));
+  const sidecarExisted = existsSync9(sidecarPathFor(filePath));
   const state = loadOrInitSidecar(filePath);
   const baseline = { yamlText, state, sidecarExisted };
   migrationPathIdentities.set(baseline, pathIdentity);
@@ -10922,7 +11084,7 @@ var init_action_store = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/domain/action-engine-compat.js
-import { existsSync as existsSync9, lstatSync as lstatSync7, readdirSync as readdirSync4, realpathSync as realpathSync4 } from "node:fs";
+import { existsSync as existsSync10, lstatSync as lstatSync7, readdirSync as readdirSync4, realpathSync as realpathSync5 } from "node:fs";
 import { basename as basename5, dirname as dirname10, join as join10, resolve as resolve6 } from "node:path";
 function actionEnginePinRefusal(enginePin) {
   if (!enginePin) {
@@ -10990,14 +11152,14 @@ function classifyResolvedLearnedActionPath(path) {
 function canonicalizeExistingPath(path) {
   let cursor = resolve6(path);
   const suffix = [];
-  while (!existsSync9(cursor)) {
+  while (!existsSync10(cursor)) {
     const parent = dirname10(cursor);
     if (parent === cursor)
       return cursor;
     suffix.unshift(basename5(cursor));
     cursor = parent;
   }
-  return resolve6(realpathSync4(cursor), ...suffix);
+  return resolve6(realpathSync5(cursor), ...suffix);
 }
 function standaloneLearnedActionPathRefusal(path) {
   const classification = classifyLearnedActionPath(path);
@@ -11307,7 +11469,7 @@ var init_secure_state_file = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/runners/runtime-paths.js
-import { existsSync as existsSync10, statSync as statSync5 } from "node:fs";
+import { existsSync as existsSync11, statSync as statSync5 } from "node:fs";
 import { join as join12 } from "node:path";
 function compactUnique(paths) {
   const out = [];
@@ -11697,11 +11859,11 @@ var init_declared_source_contract = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/nav-graph/storage.js
-import { readFileSync as readFileSync11, writeFileSync as writeFileSync4, existsSync as existsSync11, renameSync as renameSync4, readdirSync as readdirSync5, lstatSync as lstatSync9, mkdirSync as mkdirSync9, realpathSync as realpathSync5 } from "node:fs";
+import { readFileSync as readFileSync11, writeFileSync as writeFileSync4, existsSync as existsSync12, renameSync as renameSync4, readdirSync as readdirSync5, lstatSync as lstatSync9, mkdirSync as mkdirSync9, realpathSync as realpathSync6 } from "node:fs";
 import { join as join14, dirname as dirname13 } from "node:path";
 function isRnProject(dir) {
   const pkgPath = join14(dir, "package.json");
-  if (!existsSync11(pkgPath))
+  if (!existsSync12(pkgPath))
     return false;
   try {
     const pkg = JSON.parse(readFileSync11(pkgPath, "utf-8"));
@@ -11781,7 +11943,7 @@ function collectRnProjects(rootDir, maxDepth, out) {
 }
 function readProjectBundleId(projectRoot) {
   const appJsonPath = join14(projectRoot, "app.json");
-  if (!existsSync11(appJsonPath))
+  if (!existsSync12(appJsonPath))
     return null;
   try {
     const raw = JSON.parse(readFileSync11(appJsonPath, "utf-8"));
@@ -11978,12 +12140,12 @@ var init_sources = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/project-config.js
-import { existsSync as existsSync12, readFileSync as readFileSync12 } from "node:fs";
+import { existsSync as existsSync13, readFileSync as readFileSync12 } from "node:fs";
 import { join as join15 } from "node:path";
 function readAppId(projectRoot, platform) {
   for (const filename of ["app.json", "app.config.json"]) {
     const p = join15(projectRoot, filename);
-    if (!existsSync12(p))
+    if (!existsSync13(p))
       continue;
     try {
       const raw = JSON.parse(readFileSync12(p, "utf-8"));
@@ -12011,7 +12173,7 @@ function readExpoSlug() {
     return null;
   for (const filename of ["app.json", "app.config.json"]) {
     const p = join15(projectRoot, filename);
-    if (!existsSync12(p))
+    if (!existsSync13(p))
       continue;
     try {
       const raw = JSON.parse(readFileSync12(p, "utf-8"));
@@ -12459,7 +12621,7 @@ var init_maestro_error_parser = __esm({
 
 // packages/rn-dev-agent-core/dist/tools/resolve-ios-app-file.js
 import { execFileSync as execFileSync2 } from "node:child_process";
-import { existsSync as existsSync13, cpSync, rmSync as rmSync2, mkdirSync as mkdirSync10, readdirSync as readdirSync6, statSync as statSync6 } from "node:fs";
+import { existsSync as existsSync14, cpSync, rmSync as rmSync2, mkdirSync as mkdirSync10, readdirSync as readdirSync6, statSync as statSync6 } from "node:fs";
 import { tmpdir as tmpdir2 } from "node:os";
 import { join as join18, basename as basename7 } from "node:path";
 function flowUsesClearState(flowText) {
@@ -12482,7 +12644,7 @@ function defaultSnapshotApp(appPath) {
   }
 }
 function resolveIosAppFile(bundleId, deps = {}) {
-  const exists = deps.exists ?? existsSync13;
+  const exists = deps.exists ?? existsSync14;
   const getAppContainer = deps.getAppContainer ?? defaultGetAppContainer;
   const snapshotApp = deps.snapshotApp ?? defaultSnapshotApp;
   const fromContainer = getAppContainer(bundleId, deps.deviceId);
@@ -12635,7 +12797,7 @@ var init_maestro_device_authority = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/domain/maestro-runner-report.js
-import { existsSync as existsSync14, readFileSync as readFileSync13, rmSync as rmSync3 } from "node:fs";
+import { existsSync as existsSync15, readFileSync as readFileSync13, rmSync as rmSync3 } from "node:fs";
 import { tmpdir as tmpdir3 } from "node:os";
 import { join as join19 } from "node:path";
 function idsFrom(value, keys) {
@@ -12662,7 +12824,7 @@ function containerDeviceIdsFrom(value) {
 }
 function reportDeviceIds(reportDir) {
   const reportPath = join19(reportDir, "report.json");
-  if (!existsSync14(reportPath))
+  if (!existsSync15(reportPath))
     return { ids: [], strength: "none" };
   try {
     const report = JSON.parse(readFileSync13(reportPath, "utf8"));
@@ -12703,7 +12865,7 @@ function collectDirectRunnerEvidence(reportDir, output) {
     reportDeviceIdStrength: report.strength
   };
   const logPath = join19(reportDir, "maestro-runner.log");
-  if (!existsSync14(logPath))
+  if (!existsSync15(logPath))
     return evidence;
   try {
     evidence.output = `${output}
@@ -12862,7 +13024,7 @@ var init_foreign_flow_gate = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/lifecycle/device-arbiter.js
-import { AsyncLocalStorage } from "node:async_hooks";
+import { AsyncLocalStorage as AsyncLocalStorage2 } from "node:async_hooks";
 var DeviceSessionArbiter, arbiter, activeLease;
 var init_device_arbiter = __esm({
   "packages/rn-dev-agent-core/dist/lifecycle/device-arbiter.js"() {
@@ -12967,7 +13129,7 @@ var init_device_arbiter = __esm({
       }
     };
     arbiter = new DeviceSessionArbiter();
-    activeLease = new AsyncLocalStorage();
+    activeLease = new AsyncLocalStorage2();
   }
 });
 
@@ -13750,7 +13912,7 @@ var init_tap_latency = __esm({
 // packages/rn-dev-agent-core/dist/runners/release-android-slot.js
 import { execFile as execFileCb9 } from "node:child_process";
 import { promisify as promisify12 } from "node:util";
-import { existsSync as existsSync15, readFileSync as readFileSync14, unlinkSync as unlinkSync7 } from "node:fs";
+import { existsSync as existsSync16, readFileSync as readFileSync14, unlinkSync as unlinkSync7 } from "node:fs";
 import { homedir as homedir5 } from "node:os";
 import { join as join21 } from "node:path";
 function isProtectedPid(pid, selfPid, parentPid) {
@@ -13785,7 +13947,7 @@ function defaultDeps() {
     },
     protectedPids: () => ({ selfPid: process.pid, parentPid: process.ppid }),
     kill: (pid, sig) => process.kill(pid, sig),
-    fileExists: (p) => existsSync15(p),
+    fileExists: (p) => existsSync16(p),
     removeFile: (p) => unlinkSync7(p),
     delay: (ms) => new Promise((resolve9) => setTimeout(resolve9, ms)),
     killLegacy: () => process.env.RN_DEVICE_KILL_LEGACY !== "0",
@@ -13921,7 +14083,7 @@ var init_release_android_slot = __esm({
 // packages/rn-dev-agent-core/dist/tools/maestro-run.js
 import { execFile as execFileCb10 } from "node:child_process";
 import { promisify as promisify13 } from "node:util";
-import { existsSync as existsSync16, readFileSync as readFileSync15, writeFileSync as writeFileSync5 } from "node:fs";
+import { existsSync as existsSync17, readFileSync as readFileSync15, writeFileSync as writeFileSync5 } from "node:fs";
 import { tmpdir as tmpdir4 } from "node:os";
 import { basename as basename8, join as join22, dirname as dirname14 } from "node:path";
 async function runFlowParked(run, opts = {}) {
@@ -14164,7 +14326,7 @@ function createMaestroRunHandler(deps = {}) {
     } else if (args.inlineYaml) {
       rawYaml = args.inlineYaml;
     } else if (args.flowPath) {
-      if (!existsSync16(args.flowPath)) {
+      if (!existsSync17(args.flowPath)) {
         return failResult(`Flow file not found: ${args.flowPath}`);
       }
       try {
@@ -14449,6 +14611,26 @@ function createMaestroRunHandler(deps = {}) {
       }
       const stageError = err instanceof MaestroStageExecutionError ? err.stageError : err;
       const msg2 = stageError instanceof Error ? stageError.message : String(stageError);
+      if (stageError instanceof RunnerCacheUnavailableError) {
+        recordRunnerDiagnostic("typed-failure", {
+          code: stageError.code,
+          errno: stageError.errno,
+          path: stageError.relativePath
+        });
+        return failResult(`WDA bootstrap could not provision its authority-bound runner cache: ${stageError.message}`, "WDA_BOOTSTRAP_FAILED", {
+          flowFile,
+          platform,
+          runner: dispatch.runner,
+          transport: dispatch.runner,
+          passed: false,
+          output: "",
+          terminal: {
+            exitClass: "before-first-step",
+            bootstrapEvidence: stageError.message
+          },
+          ...androidReleaseMeta()
+        });
+      }
       if (stageError instanceof ExactAndroidDeviceRequiredError) {
         return failResult(stageError.message, stageError.code, {
           platform,
@@ -14553,6 +14735,7 @@ var init_maestro_run = __esm({
     "use strict";
     init_utils();
     init_engine_pin();
+    init_runner_diagnostics();
     init_action_engine_compat();
     init_reusable_action();
     init_action_store();
@@ -14595,7 +14778,7 @@ init_engine_pin();
 init_action_engine_compat();
 init_action_engine_compat();
 import { spawnSync as spawnSync2 } from "node:child_process";
-import { existsSync as existsSync17 } from "node:fs";
+import { existsSync as existsSync18 } from "node:fs";
 import { dirname as dirname15, join as join23, resolve as resolve8 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 
@@ -14733,7 +14916,7 @@ function ensureScriptPath() {
     join23(here, "..", "scripts", "ensure-maestro-runner.sh"),
     join23(here, "..", "..", "scripts", "ensure-maestro-runner.sh")
   ];
-  return candidates.find((path) => existsSync17(path)) ?? candidates[0];
+  return candidates.find((path) => existsSync18(path)) ?? candidates[0];
 }
 async function diagnose(json2) {
   _resetEngineStatusForTest();

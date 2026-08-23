@@ -1,5 +1,5 @@
-import { createHash, randomUUID } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync, } from 'node:fs';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync, } from 'node:fs';
 import { homedir, platform as hostPlatform, release } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -10,6 +10,9 @@ export const MAX_EVIDENCE_POINTERS = 3;
 export const EXPERIENCE_DIRECTORY = join(homedir(), '.claude', 'rn-agent', 'experience');
 export const EXPERIENCE_STORE_NAME = 'patterns.jsonl';
 export const MAX_SYMPTOM_LENGTH = 2048;
+export const RUNNER_DIAGNOSTICS_MAX_BYTES = 256 * 1024;
+export const RUNNER_DIAGNOSTICS_RETENTION = 5;
+export const OWNED_TEST_APP_BUNDLE_ID = 'com.rndevagent.testapp';
 const DAY_MS = 24 * 60 * 60 * 1000;
 const REDACTION_FAILED = '[REDACTION_FAILED]';
 const SYMPTOM_TRUNCATED = '[TRUNCATED]';
@@ -178,10 +181,28 @@ export class ExperienceRecorder {
             this.previousFailure = null;
             return;
         }
+        this.persistRunnerDiagnostics(event);
         const record = this.buildFailureRecord(event);
         this.persistFailure(record);
         this.previousFailure =
             event.status === 'FAIL' ? { tool: event.tool, signature: record.signature } : null;
+    }
+    persistRunnerDiagnostics(event) {
+        const trace = event.runnerDiagnostics;
+        if (!trace || trace.rootTool !== event.tool || trace.events.length === 0)
+            return;
+        const failure = runnerFailureEnvelope(event);
+        if (!failure)
+            return;
+        const bundle = buildRunnerDiagnosticsBundle({
+            event,
+            trace,
+            failureCode: failure.code,
+            candidate: this.candidate,
+            environment: this.environment,
+            directory: this.directory,
+        });
+        writeRunnerDiagnosticsBundle(this.directory, bundle);
     }
     buildFailureRecord(event) {
         const now = this.now().toISOString();
@@ -491,4 +512,210 @@ function adoptLateFact(existing, incoming, field) {
 }
 function boundedPointers(existing, incoming) {
     return [...new Set([...existing, ...incoming])].slice(-MAX_EVIDENCE_POINTERS);
+}
+const RUNNER_FAILURE_CODES = new Set([
+    'WDA_BOOTSTRAP_FAILED',
+    'RUNNER_CACHE_UNAVAILABLE',
+    'RUNNER_PIN_CHANGED',
+    'RUNNER_OWNERSHIP_MISMATCH',
+]);
+function runnerFailureEnvelope(event) {
+    const envelope = parseResultEnvelope(event.result);
+    const code = typeof envelope?.code === 'string' ? envelope.code : null;
+    if (code && RUNNER_FAILURE_CODES.has(code))
+        return { code };
+    const message = event.error ?? '';
+    const matched = [...RUNNER_FAILURE_CODES].find((candidate) => message.includes(candidate));
+    return matched ? { code: matched } : null;
+}
+function parseResultEnvelope(value) {
+    if (!value || typeof value !== 'object')
+        return null;
+    const object = value;
+    if (typeof object.code === 'string')
+        return object;
+    const content = object.content;
+    if (!Array.isArray(content))
+        return object;
+    const text = content[0]?.text;
+    if (typeof text !== 'string')
+        return object;
+    try {
+        const parsed = JSON.parse(text);
+        return parsed && typeof parsed === 'object' ? parsed : object;
+    }
+    catch {
+        return object;
+    }
+}
+function buildRunnerDiagnosticsBundle(input) {
+    const envelope = parseResultEnvelope(input.event.result);
+    const sources = [input.trace.rootParams, input.event.params, envelope];
+    const scalar = (keys) => {
+        for (const source of sources) {
+            const value = findScalar(source, keys, 0);
+            if (value !== null)
+                return value;
+        }
+        return null;
+    };
+    const deviceId = scalar(['deviceId', 'udid']);
+    const bundleId = scalar(['appId', 'bundleId']);
+    const payloadEvent = input.trace.events.find((event) => event.type === 'payload-verify');
+    const runnerVersion = stringDetail(payloadEvent, 'runnerPinVersion');
+    const provenance = stringDetail(payloadEvent, 'provenance');
+    const payloadShaPrefix = stringDetail(payloadEvent, 'payloadShaPrefix');
+    const metroPort = findNumberInSources(sources, ['metroPort']);
+    const sessionId = scalar(['sessionId']);
+    const actionId = scalar(['actionId']);
+    const runtime = scalar(['runtime', 'runtimeVersion', 'osVersion']);
+    const platform = scalar(['platform']);
+    const sanitizedEvents = sanitizeForEvidence(input.trace.events);
+    return {
+        schema: 'rn-dev-agent/runner-diagnostics/1',
+        candidate: {
+            ...input.candidate,
+            releaseCommit: sanitizeNullable(process.env.RN_DEV_AGENT_RELEASE_COMMIT ?? null),
+        },
+        runner: { version: runnerVersion, provenance, payloadShaPrefix },
+        context: {
+            platform: sanitizeNullable(platform),
+            os: sanitizeString(input.environment.os),
+            runtime: sanitizeNullable(runtime),
+            sessionId: sanitizeNullable(sessionId),
+            actionId: sanitizeNullable(actionId),
+            deviceIdHash: deviceId ? stableDeviceHash(input.directory, deviceId) : null,
+            bundleId: bundleId === null
+                ? null
+                : bundleId === OWNED_TEST_APP_BUNDLE_ID
+                    ? OWNED_TEST_APP_BUNDLE_ID
+                    : '[BUNDLE_REDACTED]',
+            metroPort,
+        },
+        failureCode: input.failureCode,
+        events: sanitizedEvents,
+        truncated: input.trace.truncated,
+    };
+}
+function stringDetail(event, key) {
+    const value = event?.detail[key];
+    return typeof value === 'string' ? sanitizeString(value) : null;
+}
+function findNumberInSources(sources, keys) {
+    for (const source of sources) {
+        const found = findNumber(source, keys, 0);
+        if (found !== null)
+            return found;
+    }
+    return null;
+}
+function findNumber(value, keys, depth) {
+    if (!value || typeof value !== 'object' || depth > 3)
+        return null;
+    const object = value;
+    for (const key of keys) {
+        const candidate = object[key];
+        if (typeof candidate === 'number' && Number.isSafeInteger(candidate))
+            return candidate;
+    }
+    for (const nested of Object.values(object)) {
+        const found = findNumber(nested, keys, depth + 1);
+        if (found !== null)
+            return found;
+    }
+    return null;
+}
+function stableDeviceHash(directory, deviceId) {
+    return createHash('sha256')
+        .update(readOrCreateRunnerDiagnosticsSalt(directory))
+        .update('\0')
+        .update(deviceId)
+        .digest('hex');
+}
+function readOrCreateRunnerDiagnosticsSalt(directory) {
+    const path = join(directory, '.runner-diagnostics-salt');
+    mkdirSync(directory, { recursive: true, mode: 0o700 });
+    try {
+        const existing = readFileSync(path);
+        if (existing.length === 32)
+            return existing;
+    }
+    catch { }
+    const salt = randomBytes(32);
+    try {
+        writeFileSync(path, salt, { flag: 'wx', mode: 0o600 });
+        return salt;
+    }
+    catch {
+        const raced = readFileSync(path);
+        if (raced.length !== 32)
+            throw new Error('runner diagnostics salt is invalid');
+        return raced;
+    }
+}
+export function writeRunnerDiagnosticsBundle(directory, bundle) {
+    mkdirSync(directory, { recursive: true, mode: 0o700 });
+    const files = runnerDiagnosticsFiles(directory);
+    const nextSequence = files.reduce((maximum, file) => {
+        const matched = /-(\d+)\.json$/.exec(file);
+        return Math.max(maximum, matched ? Number(matched[1]) : 0);
+    }, 0) + 1;
+    const sessionKey = (bundle.context.sessionId ?? 'unknown')
+        .replace(/[^A-Za-z0-9_-]/g, '-')
+        .slice(0, 64);
+    const outputPath = join(directory, `runner-diagnostics-${sessionKey}-${nextSequence}.json`);
+    const bounded = {
+        ...bundle,
+        events: bundle.events.slice(0, 200),
+        truncated: bundle.truncated || bundle.events.length > 200,
+    };
+    let serialized = `${JSON.stringify(bounded, null, 2)}\n`;
+    if (Buffer.byteLength(serialized) > RUNNER_DIAGNOSTICS_MAX_BYTES) {
+        let lower = 0;
+        let upper = bounded.events.length;
+        while (lower < upper) {
+            const middle = Math.ceil((lower + upper) / 2);
+            const candidate = `${JSON.stringify({ ...bounded, events: bounded.events.slice(0, middle), truncated: true }, null, 2)}\n`;
+            if (Buffer.byteLength(candidate) <= RUNNER_DIAGNOSTICS_MAX_BYTES)
+                lower = middle;
+            else
+                upper = middle - 1;
+        }
+        bounded.events = bounded.events.slice(0, lower);
+        bounded.truncated = true;
+        serialized = `${JSON.stringify(bounded, null, 2)}\n`;
+    }
+    const temporary = join(directory, `.runner-diagnostics.${process.pid}.${randomUUID()}`);
+    writeFileSync(temporary, serialized, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
+    renameSync(temporary, outputPath);
+    chmodSync(outputPath, 0o600);
+    const retained = runnerDiagnosticsFiles(directory)
+        .map((file) => ({ file, mtimeMs: statSync(join(directory, file)).mtimeMs }))
+        .sort((left, right) => left.mtimeMs - right.mtimeMs || left.file.localeCompare(right.file));
+    for (const stale of retained.slice(0, Math.max(0, retained.length - RUNNER_DIAGNOSTICS_RETENTION))) {
+        unlinkSync(join(directory, stale.file));
+    }
+    return outputPath;
+}
+function runnerDiagnosticsFiles(directory) {
+    try {
+        return readdirSync(directory).filter((file) => /^runner-diagnostics-.+-\d+\.json$/.test(file));
+    }
+    catch {
+        return [];
+    }
+}
+export function latestRunnerDiagnosticsPath(directory = EXPERIENCE_DIRECTORY) {
+    const files = runnerDiagnosticsFiles(directory)
+        .map((file) => ({ file, mtimeMs: statSync(join(directory, file)).mtimeMs }))
+        .sort((left, right) => right.mtimeMs - left.mtimeMs || right.file.localeCompare(left.file));
+    return files[0] ? join(directory, files[0].file) : null;
+}
+export function exportLatestRunnerDiagnosticsBundle(outputPath, directory = EXPERIENCE_DIRECTORY) {
+    const source = latestRunnerDiagnosticsPath(directory);
+    if (!source)
+        throw new Error('No runner diagnostics bundle is available.');
+    writeFileSync(outputPath, readFileSync(source), { flag: 'wx', mode: 0o600 });
+    chmodSync(outputPath, 0o600);
+    return outputPath;
 }

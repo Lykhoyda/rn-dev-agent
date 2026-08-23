@@ -7,7 +7,11 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readlinkSync,
   rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
 } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -16,6 +20,8 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   MAESTRO_RUNNER_PIN,
+  RunnerCacheUnavailableError,
+  assertRunnerSnapshotCacheBinding,
   buildReplayEngineStatus,
   withImmediatePinnedRunner,
   _resetEngineStatusForTest,
@@ -78,11 +84,37 @@ test(
       });
       _setEngineStatusForTest(status);
 
+      let successfulSnapshot = '';
+      let successfulCache = '';
+
       const launched = await withImmediatePinnedRunner(
         runnerPath,
         async () => status,
         async (boundPath, prefixArgs = []) => {
           assert.equal(boundPath.endsWith('.runner-exec'), true);
+          successfulSnapshot = dirname(boundPath);
+          const cacheLink = join(successfulSnapshot, 'cache');
+          successfulCache = readlinkSync(cacheLink);
+          assertRunnerSnapshotCacheBinding(successfulSnapshot, successfulCache);
+          assert.equal(statSync(successfulCache).mode & 0o777, 0o700);
+          assert.equal(statSync(successfulSnapshot).mode & 0o777, 0o500);
+          assert.equal(
+            statSync(join(successfulSnapshot, 'bin', 'maestro-runner')).mode & 0o777,
+            0o500,
+          );
+          assert.equal(statSync(join(successfulSnapshot, '.payload.tar.gz')).mode & 0o777, 0o400);
+          assert.equal(
+            createHash('sha256')
+              .update(readFileSync(join(successfulSnapshot, 'bin', 'maestro-runner')))
+              .digest('hex'),
+            createHash('sha256').update(readFileSync(runnerPath)).digest('hex'),
+          );
+          assert.throws(
+            () => writeFileSync(join(successfulSnapshot, '.payload.tar.gz'), 'mutation'),
+            /EACCES|EPERM/,
+          );
+          mkdirSync(join(cacheLink, 'wda-build'));
+          writeFileSync(join(cacheLink, 'wda-build', 'ready'), 'ok');
           return spawnSync(
             boundPath,
             [...prefixArgs, '--rename-no-replace', renameFrom, renameTo],
@@ -96,6 +128,79 @@ test(
       assert.equal(launched.status, 0, `${launched.stdout}${launched.stderr}`);
       assert.equal(existsSync(renameTo), true);
       assert.equal(existsSync(renameFrom), false);
+      assert.equal(existsSync(successfulSnapshot), false);
+      assert.equal(existsSync(successfulCache), false);
+
+      let failedSnapshot = '';
+      let failedCache = '';
+      const failedExecution = await withImmediatePinnedRunner(
+        runnerPath,
+        async () => status,
+        async (boundPath) => {
+          failedSnapshot = dirname(boundPath);
+          failedCache = readlinkSync(join(failedSnapshot, 'cache'));
+          return { status: 1 };
+        },
+      );
+      assert.equal(failedExecution.status, 1);
+      assert.equal(existsSync(failedSnapshot), false);
+      assert.equal(existsSync(failedCache), false);
+
+      let thrownSnapshot = '';
+      let thrownCache = '';
+      await assert.rejects(
+        withImmediatePinnedRunner(
+          runnerPath,
+          async () => status,
+          async (boundPath) => {
+            thrownSnapshot = dirname(boundPath);
+            thrownCache = readlinkSync(join(thrownSnapshot, 'cache'));
+            throw new Error('execute failed');
+          },
+        ),
+        /execute failed/,
+      );
+      assert.equal(existsSync(thrownSnapshot), false);
+      assert.equal(existsSync(thrownCache), false);
+
+      let executeCalled = false;
+      let refusedCache = '';
+      await assert.rejects(
+        withImmediatePinnedRunner(
+          runnerPath,
+          async () => status,
+          async () => {
+            executeCalled = true;
+          },
+          {
+            beforeCacheProvision: (expectedCacheRoot) => {
+              refusedCache = expectedCacheRoot;
+              mkdirSync(expectedCacheRoot, { mode: 0o700 });
+            },
+          },
+        ),
+        (error: unknown) =>
+          error instanceof RunnerCacheUnavailableError &&
+          error.code === 'RUNNER_CACHE_UNAVAILABLE' &&
+          error.relativePath === 'cache' &&
+          error.errno === 'EEXIST',
+      );
+      assert.equal(executeCalled, false);
+      assert.equal(existsSync(refusedCache), false);
+
+      const versionsRoot = join(cache, 'maestro-runner');
+      const foreignSnapshot = join(versionsRoot, `.spawn-${MAESTRO_RUNNER_PIN.version}-foreign`);
+      const expectedCache = join(versionsRoot, `.wda-cache-${MAESTRO_RUNNER_PIN.version}-foreign`);
+      const foreignCache = join(cache, 'foreign-cache');
+      mkdirSync(foreignSnapshot);
+      mkdirSync(expectedCache, { mode: 0o700 });
+      mkdirSync(foreignCache, { mode: 0o700 });
+      symlinkSync(foreignCache, join(foreignSnapshot, 'cache'), 'dir');
+      assert.throws(
+        () => assertRunnerSnapshotCacheBinding(foreignSnapshot, expectedCache),
+        (error: unknown) =>
+          error instanceof RunnerCacheUnavailableError && error.errno === 'FOREIGN_PATH',
+      );
     } finally {
       _resetEngineStatusForTest();
       if (previousCache === undefined) delete process.env.RN_DEV_AGENT_RUNNER_CACHE;
@@ -104,3 +209,14 @@ test(
     }
   },
 );
+
+test('the sealed pre-fix snapshot shape cannot create the WDA cache', () => {
+  const root = mkdtempSync(join(tmpdir(), 'mr-runner-prefixed-cache-'));
+  try {
+    chmodSync(root, 0o500);
+    assert.throws(() => mkdirSync(join(root, 'cache')), /EACCES|EPERM/);
+  } finally {
+    chmodSync(root, 0o700);
+    rmSync(root, { recursive: true, force: true });
+  }
+});
