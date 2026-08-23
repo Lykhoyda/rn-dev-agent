@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import {
+  chmodSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
@@ -45,11 +46,17 @@ function git(cwd: string, args: string[]): string {
   return (result.stdout ?? '').trim();
 }
 
-function nodeCli(entry: string, args: string[], cwd: string) {
+function nodeCli(
+  entry: string,
+  args: string[],
+  cwd: string,
+  options: { env?: NodeJS.ProcessEnv; timeout?: number } = {},
+) {
   const result = spawnSync(process.execPath, [entry, ...args], {
     cwd,
     encoding: 'utf8',
-    timeout: 60_000,
+    env: options.env ?? process.env,
+    timeout: options.timeout ?? 60_000,
   });
   if (result.error) throw result.error;
   return { status: result.status, stdout: result.stdout ?? '', stderr: result.stderr ?? '' };
@@ -79,10 +86,10 @@ function makeFixture(): Fixture {
   return { root, primary, cleanup: () => rmSync(root, { force: true, recursive: true }) };
 }
 
-function seedLoginCorpus(primary: string): void {
+function seedLoginCorpus(primary: string, id = 'login'): void {
   mkdirSync(join(primary, '.rn-agent', 'actions'), { recursive: true });
   mkdirSync(join(primary, '.rn-agent', 'state'), { recursive: true });
-  writeFileSync(join(primary, '.rn-agent', 'actions', 'login.yaml'), fixtureYaml({ id: 'login' }));
+  writeFileSync(join(primary, '.rn-agent', 'actions', `${id}.yaml`), fixtureYaml({ id }));
 }
 
 function addWorktree(fixture: Fixture, name = 'linked'): string {
@@ -94,6 +101,69 @@ function addWorktree(fixture: Fixture, name = 'linked'): string {
 function inherit(worktree: string): void {
   const report = applyInheritance({ cwd: worktree, appRoot: worktree, host: 'claude' });
   assert.equal(report.applied, 1, JSON.stringify(report));
+}
+
+interface GitProbeCall {
+  args: string[];
+  cwd: string;
+}
+
+function createGitProbe(fixture: Fixture): {
+  env: NodeJS.ProcessEnv;
+  readCalls: () => GitProbeCall[];
+  reset: () => void;
+} {
+  const directory = join(fixture.root, 'git-probe');
+  const executable = join(directory, 'git');
+  const log = join(directory, 'calls.jsonl');
+  mkdirSync(directory);
+  writeFileSync(
+    executable,
+    `#!/usr/bin/env node
+const { appendFileSync } = require('node:fs');
+const { spawnSync } = require('node:child_process');
+const { delimiter, dirname } = require('node:path');
+const args = process.argv.slice(2);
+appendFileSync(process.env.RN_GIT_PROBE_LOG, JSON.stringify({ args, cwd: process.cwd() }) + '\\n');
+const wrapperDirectory = dirname(process.argv[1]);
+const cleanPath = (process.env.PATH || '').split(delimiter).filter((entry) => entry !== wrapperDirectory).join(delimiter);
+const result = spawnSync('git', args, { encoding: 'utf8', env: { ...process.env, PATH: cleanPath }, stdio: ['ignore', 'pipe', 'pipe'] });
+if (result.error) throw result.error;
+let stdout = result.stdout || '';
+if (args.join(' ') === 'worktree list --porcelain') {
+  if (process.env.RN_GIT_PROBE_EMPTY_LIST) stdout = '';
+  if (process.env.RN_GIT_PROBE_MAIN_PATH) stdout = stdout.replace(/^worktree [^\\n]*/m, 'worktree ' + process.env.RN_GIT_PROBE_MAIN_PATH);
+  if (process.env.RN_GIT_PROBE_MAIN_MARKER) stdout = stdout.replace(/^(worktree [^\\n]*)/m, '$1\\n' + process.env.RN_GIT_PROBE_MAIN_MARKER);
+}
+if (process.cwd() === process.env.RN_GIT_PROBE_PRIMARY && args.join(' ') === 'rev-parse --path-format=absolute --git-common-dir' && process.env.RN_GIT_PROBE_PRIMARY_COMMON) {
+  stdout = process.env.RN_GIT_PROBE_PRIMARY_COMMON + '\\n';
+}
+process.stdout.write(stdout);
+process.stderr.write(result.stderr || '');
+process.exit(result.status ?? 1);
+`,
+  );
+  chmodSync(executable, 0o700);
+  writeFileSync(log, '');
+  return {
+    env: {
+      ...process.env,
+      PATH: `${directory}:${process.env.PATH ?? ''}`,
+      RN_GIT_PROBE_LOG: log,
+      RN_GIT_PROBE_PRIMARY: fixture.primary,
+    },
+    readCalls: () =>
+      readFileSync(log, 'utf8')
+        .split('\n')
+        .filter(Boolean)
+        .map((line) => JSON.parse(line) as GitProbeCall),
+    reset: () => writeFileSync(log, ''),
+  };
+}
+
+function countGitCalls(calls: GitProbeCall[], cwd: string, args: readonly string[]): number {
+  return calls.filter((call) => call.cwd === cwd && call.args.join('\0') === args.join('\0'))
+    .length;
 }
 
 function snapshotTree(root: string): string {
@@ -147,6 +217,80 @@ test('real actions directory stays readable for inventory and exact-ID load', as
     assert.equal(parsed.sections.flows.items[0]?.id, 'login');
   } finally {
     rmSync(root, { force: true, recursive: true });
+  }
+});
+
+test('primary verification is constant and malformed main records never fall back', () => {
+  const fixture = makeFixture();
+  try {
+    seedLoginCorpus(fixture.primary);
+    const worktree = addWorktree(fixture);
+    inherit(worktree);
+    const extra = addWorktree(fixture, 'extra');
+    const probe = createGitProbe(fixture);
+    const planArgs = ['plan', '--host', 'claude', '--app-root', worktree, '--json'];
+    const plan = nodeCli(INHERIT_CLI, planArgs, worktree, {
+      env: probe.env,
+      timeout: 30_000,
+    });
+    assert.equal(plan.status, 0, `${plan.stderr}\n${plan.stdout}`);
+    const body = JSON.parse(plan.stdout) as {
+      kind: string;
+      resources: Array<{ state: string }>;
+    };
+    assert.equal(body.kind, 'linked');
+    assert.equal(body.resources[0]?.state, 'LINK_VALID_SAFE');
+
+    const calls = probe.readCalls();
+    const listCalls = calls.filter((call) => call.args.join(' ') === 'worktree list --porcelain');
+    assert.equal(listCalls.length, 1);
+    for (const args of [
+      ['rev-parse', '--show-toplevel'],
+      ['rev-parse', '--path-format=absolute', '--git-dir'],
+      ['rev-parse', '--path-format=absolute', '--git-common-dir'],
+    ]) {
+      assert.equal(countGitCalls(calls, fixture.primary, args), 1);
+      assert.equal(countGitCalls(calls, worktree, args), 1);
+      assert.equal(countGitCalls(calls, extra, args), 0);
+    }
+
+    const wrongCommon = join(fixture.root, 'wrong-common');
+    mkdirSync(wrongCommon);
+    for (const scenario of [
+      { name: 'malformed', empty: true, probesMain: false },
+      { name: 'missing', path: join(fixture.root, 'missing-main'), probesMain: false },
+      { name: 'bare', marker: 'bare', probesMain: false },
+      { name: 'prunable', marker: 'prunable fixture', probesMain: false },
+      { name: 'wrong-common-dir', common: wrongCommon, probesMain: true },
+    ]) {
+      probe.reset();
+      const env = { ...probe.env };
+      if (scenario.empty) env.RN_GIT_PROBE_EMPTY_LIST = '1';
+      if (scenario.path) env.RN_GIT_PROBE_MAIN_PATH = scenario.path;
+      if (scenario.marker) env.RN_GIT_PROBE_MAIN_MARKER = scenario.marker;
+      if (scenario.common) env.RN_GIT_PROBE_PRIMARY_COMMON = scenario.common;
+      const refused = nodeCli(INHERIT_CLI, planArgs, worktree, {
+        env,
+        timeout: 30_000,
+      });
+      assert.equal(refused.status, 3, `${scenario.name}: ${refused.stderr}`);
+      const refusal = JSON.parse(refused.stdout) as {
+        kind: string;
+        refusal: string;
+        resources: unknown[];
+      };
+      assert.equal(refusal.kind, 'refused');
+      assert.equal(refusal.refusal, 'NO_PRIMARY');
+      assert.deepEqual(refusal.resources, []);
+      const refusedCalls = probe.readCalls();
+      assert.equal(
+        countGitCalls(refusedCalls, fixture.primary, ['rev-parse', '--show-toplevel']),
+        scenario.probesMain ? 1 : 0,
+      );
+      assert.equal(countGitCalls(refusedCalls, extra, ['rev-parse', '--show-toplevel']), 0);
+    }
+  } finally {
+    fixture.cleanup();
   }
 });
 

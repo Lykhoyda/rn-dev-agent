@@ -26562,43 +26562,40 @@ function parseWorktreeRecords(porcelain) {
     records.push(current);
   return records;
 }
-function verifiedPrimaries(worktreeRoot, commonDir) {
+function verifiedPrimary(worktreeRoot, commonDir) {
   const listing = git(worktreeRoot, ["worktree", "list", "--porcelain"]);
   if (!listing.ok)
-    return [];
-  const verified = /* @__PURE__ */ new Set();
-  for (const record2 of parseWorktreeRecords(listing.stdout)) {
-    if (record2.bare || record2.prunable)
-      continue;
-    const candidate = canonical(record2.path);
-    if (!candidate)
-      continue;
-    try {
-      if (!statSync6(candidate).isDirectory())
-        continue;
-    } catch {
-      continue;
-    }
-    const top = git(candidate, ["rev-parse", "--show-toplevel"]);
-    if (!top.ok || canonical(top.stdout) !== candidate)
-      continue;
-    const candidateGitDir = git(candidate, ["rev-parse", "--path-format=absolute", "--git-dir"]);
-    const candidateCommon = git(candidate, [
-      "rev-parse",
-      "--path-format=absolute",
-      "--git-common-dir"
-    ]);
-    if (!candidateGitDir.ok || !candidateCommon.ok)
-      continue;
-    const resolvedGitDir = canonical(candidateGitDir.stdout);
-    const resolvedCommon = canonical(candidateCommon.stdout);
-    if (!resolvedGitDir || !resolvedCommon)
-      continue;
-    if (resolvedCommon !== commonDir || resolvedGitDir !== resolvedCommon)
-      continue;
-    verified.add(candidate);
+    return null;
+  const main2 = parseWorktreeRecords(listing.stdout)[0];
+  if (!main2 || main2.bare || main2.prunable)
+    return null;
+  const candidate = canonical(main2.path);
+  if (!candidate)
+    return null;
+  try {
+    if (!statSync6(candidate).isDirectory())
+      return null;
+  } catch {
+    return null;
   }
-  return [...verified];
+  const top = git(candidate, ["rev-parse", "--show-toplevel"]);
+  if (!top.ok || canonical(top.stdout) !== candidate)
+    return null;
+  const candidateGitDir = git(candidate, ["rev-parse", "--path-format=absolute", "--git-dir"]);
+  const candidateCommon = git(candidate, [
+    "rev-parse",
+    "--path-format=absolute",
+    "--git-common-dir"
+  ]);
+  if (!candidateGitDir.ok || !candidateCommon.ok)
+    return null;
+  const resolvedGitDir = canonical(candidateGitDir.stdout);
+  const resolvedCommon = canonical(candidateCommon.stdout);
+  if (!resolvedGitDir || !resolvedCommon)
+    return null;
+  if (resolvedCommon !== commonDir || resolvedGitDir !== resolvedCommon)
+    return null;
+  return candidate;
 }
 function resolveWorktreeLayout(input) {
   const cwd = canonical(input.cwd);
@@ -26641,12 +26638,9 @@ function resolveWorktreeLayout(input) {
   };
   if (base.kind === "primary")
     return base;
-  const primaries = verifiedPrimaries(worktreeRoot, commonDir);
-  if (primaries.length === 0)
+  const primaryRoot = verifiedPrimary(worktreeRoot, commonDir);
+  if (!primaryRoot)
     return { ...base, refusal: "NO_PRIMARY" };
-  if (primaries.length > 1)
-    return { ...base, refusal: "AMBIGUOUS" };
-  const primaryRoot = primaries[0];
   const primaryAppRoot = appRelative === "." ? primaryRoot : join19(primaryRoot, appRelative);
   if (!contained(primaryRoot, primaryAppRoot))
     return { ...base, refusal: "PRIMARY_APP_MISSING" };
