@@ -44,7 +44,7 @@ function ensureFlag(command, flag) {
     if (!command.includes(flag))
         command.push(flag);
 }
-// Expo CLI rejects --port with --no-bundler; the managed port travels via env and --initialUrl.
+// Expo iOS rejects --port with --no-bundler, while Android needs --port for its launcher probe.
 function removeManagedPortFlag(command, value) {
     for (let index = 0; index < command.length;) {
         const part = command[index];
@@ -112,6 +112,8 @@ export function createBuildLaunchPlan(input) {
     }
     if (kind === 'expo') {
         if (input.platform === 'android') {
+            if (command.includes('--no-bundler'))
+                conflict('--no-bundler');
             const resolveDevice = input.resolveExpoAndroidDevice ?? resolveExpoAndroidDevice;
             const initial = resolveDevice(input.session.deviceId);
             const verified = assertStableExpoAndroidDevice(initial, resolveDevice(input.session.deviceId));
@@ -119,12 +121,14 @@ export function createBuildLaunchPlan(input) {
                 throw expoAndroidDeviceIdentityError('the resolved Expo device does not equal the authority-bound adb serial');
             }
             translateExpoAndroidDevice(command, input.session.deviceId, verified.displayName);
+            removeManagedPortFlag(command, String(input.session.metroPort));
+            ensureValue(command, '--port', String(input.session.metroPort));
         }
         else {
             ensureValue(command, '--device', input.session.deviceId);
+            removeManagedPortFlag(command, String(input.session.metroPort));
+            ensureFlag(command, '--no-bundler');
         }
-        removeManagedPortFlag(command, String(input.session.metroPort));
-        ensureFlag(command, '--no-bundler');
     }
     else if (kind === 'bare-ios') {
         ensureValue(command, '--udid', input.session.deviceId);

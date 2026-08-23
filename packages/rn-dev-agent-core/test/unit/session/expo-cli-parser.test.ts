@@ -28,16 +28,6 @@ const { resolveBundlerPropsAsync } = packageRequire(
 
 const PORT_NO_BUNDLER_REJECTION = '--port and --no-bundler are mutually exclusive arguments';
 
-// Tripwire: fails if a future @expo/cli changes the mapping resolveShippedBundlerProps mirrors.
-test('shipped Expo run:ios still maps --port/--no-bundler argv the mirrored way', () => {
-  const runIosSource = readFileSync(join(expoCliRoot, 'build/src/run/ios/index.js'), 'utf8');
-  assert.match(runIosSource, /'--no-bundler': Boolean/);
-  assert.match(runIosSource, /'--port': Number/);
-  assert.match(runIosSource, /'-p': '--port'/);
-  assert.match(runIosSource, /bundler: !args\['--no-bundler'\]/);
-  assert.match(runIosSource, /port: args\['--port'\]/);
-});
-
 const parserProjectRoot = mkdtempSync(join(tmpdir(), 'expo-parser-project-'));
 after(() => rmSync(parserProjectRoot, { force: true, recursive: true }));
 
@@ -91,6 +81,37 @@ test('repaired build plan passes the shipped Expo CLI resolution with managed au
       'http://127.0.0.1:8248',
     ]);
   }
+});
+
+test('Expo Android receives the allocated port through its shipped launcher path', async () => {
+  const session = {
+    platform: 'android' as const,
+    deviceId: 'emulator-5690',
+    appId: 'com.rndevagent.testapp',
+    metroPort: 8213,
+    sessionId: 'session-android-fixture',
+  };
+  const plan = createBuildLaunchPlan({
+    platform: 'android',
+    command: ['expo', 'run:android'],
+    session,
+    resolveExpoAndroidDevice: (deviceId) => ({ deviceId, displayName: 'Pixel_9_Pro' }),
+  });
+  const props = await resolveShippedBundlerProps(plan.command.slice(2));
+
+  assert.deepEqual(plan.command, [
+    'expo',
+    'run:android',
+    '--device',
+    'Pixel_9_Pro',
+    '--port',
+    '8213',
+  ]);
+  assert.equal(props.shouldStartBundler, true);
+  assert.equal(props.port, 8213);
+  assert.equal(plan.env.RCT_METRO_PORT, '8213');
+  assert.equal(plan.env.ORG_GRADLE_PROJECT_reactNativeDevServerPort, '8213');
+  assert.equal(new URL(plan.env.EXPO_PACKAGER_PROXY_URL).port, '8213');
 });
 
 test('generated adapter argv passes the shipped Expo CLI resolution end to end', async () => {

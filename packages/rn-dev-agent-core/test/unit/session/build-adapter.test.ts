@@ -15,7 +15,7 @@ const androidSession = {
   platform: 'android',
   deviceId: 'emulator-5582',
   appId: 'dev.example.android',
-  metroPort: 8342,
+  metroPort: 8213,
   sessionId: 'session-android',
 };
 
@@ -73,7 +73,7 @@ test('Expo iOS launches through its exact managed Metro proxy without starting a
   });
 });
 
-test('Expo Android emulator launches through its exact host Metro proxy', () => {
+test('recorded integrated Expo Android command pins launch, wait, and connect to the allocated port', () => {
   const plan = createBuildLaunchPlan({
     platform: 'android',
     command: ['expo', 'run:android'],
@@ -86,19 +86,24 @@ test('Expo Android emulator launches through its exact host Metro proxy', () => 
     'run:android',
     '--device',
     'Pixel_API_35',
-    '--no-bundler',
+    '--port',
+    '8213',
   ]);
   assert.deepEqual(plan.env, {
-    ORG_GRADLE_PROJECT_reactNativeDevServerPort: '8342',
-    RCT_METRO_PORT: '8342',
+    ORG_GRADLE_PROJECT_reactNativeDevServerPort: '8213',
+    RCT_METRO_PORT: '8213',
     RN_DEV_AGENT_SESSION_ID: 'session-android',
     ANDROID_SERIAL: 'emulator-5582',
-    EXPO_PACKAGER_PROXY_URL: 'http://10.0.2.2:8342',
+    EXPO_PACKAGER_PROXY_URL: 'http://10.0.2.2:8213',
   });
+  const launcherPort = Number(plan.command[plan.command.indexOf('--port') + 1]);
+  const connectPort = Number(new URL(plan.env.EXPO_PACKAGER_PROXY_URL).port);
+  assert.equal(launcherPort, androidSession.metroPort);
+  assert.equal(connectPort, androidSession.metroPort);
   assert.equal(plan.postInstall, undefined);
 });
 
-test('Expo never receives --port alongside --no-bundler and refuses a conflicting port', () => {
+test('Expo iOS never receives --port alongside --no-bundler and refuses a conflicting port', () => {
   for (const portArgs of [['--port', '8341'], ['--port=8341'], ['-p', '8341'], ['-p=8341']]) {
     const matching = createBuildLaunchPlan({
       platform: 'ios',
@@ -134,6 +139,43 @@ test('Expo never receives --port alongside --no-bundler and refuses a conflictin
       }),
     /SESSION_BUILD_IDENTITY_CONFLICT/,
   );
+});
+
+test('Expo Android refuses launcher inputs that cannot consume the allocated port', () => {
+  assert.throws(
+    () =>
+      createBuildLaunchPlan({
+        platform: 'android',
+        command: ['expo', 'run:android', '--no-bundler'],
+        session: androidSession,
+        resolveExpoAndroidDevice: resolveAndroid,
+      }),
+    /SESSION_BUILD_IDENTITY_CONFLICT: --no-bundler/,
+  );
+  assert.throws(
+    () =>
+      createBuildLaunchPlan({
+        platform: 'android',
+        command: ['expo', 'run:android', '--port', '8081'],
+        session: androidSession,
+        resolveExpoAndroidDevice: resolveAndroid,
+      }),
+    /SESSION_BUILD_IDENTITY_CONFLICT: --port/,
+  );
+});
+
+test('Expo Android preserves explicit default-port behavior', () => {
+  const plan = createBuildLaunchPlan({
+    platform: 'android',
+    command: ['expo', 'run:android'],
+    session: { ...androidSession, metroPort: 8081 },
+    resolveExpoAndroidDevice: resolveAndroid,
+  });
+
+  assert.deepEqual(plan.command.slice(-4), ['--device', 'Pixel_API_35', '--port', '8081']);
+  assert.equal(plan.env.RCT_METRO_PORT, '8081');
+  assert.equal(plan.env.ORG_GRADLE_PROJECT_reactNativeDevServerPort, '8081');
+  assert.equal(plan.env.EXPO_PACKAGER_PROXY_URL, 'http://10.0.2.2:8081');
 });
 
 test('Expo Android refuses foreign user device input and mapping drift before launch', () => {
@@ -182,14 +224,14 @@ test('Expo Android physical device requires an explicit exact Dev Client endpoin
     session: {
       ...androidSession,
       deviceId: 'physical-serial',
-      devClientUrl: 'example://expo-development-client/?url=http%3A%2F%2F192.0.2.10%3A8342',
+      devClientUrl: 'example://expo-development-client/?url=http%3A%2F%2F192.0.2.10%3A8213',
     },
     resolveExpoAndroidDevice: resolveAndroid,
   });
 
-  assert.deepEqual(plan.command.slice(-3), ['--device', 'Pixel_8', '--no-bundler']);
+  assert.deepEqual(plan.command.slice(-4), ['--device', 'Pixel_8', '--port', '8213']);
   assert.equal(plan.env.ANDROID_SERIAL, 'physical-serial');
-  assert.equal(plan.env.EXPO_PACKAGER_PROXY_URL, 'http://192.0.2.10:8342');
+  assert.equal(plan.env.EXPO_PACKAGER_PROXY_URL, 'http://192.0.2.10:8213');
 });
 
 test('Expo iOS physical device keeps the supported Expo launch path', () => {
@@ -234,7 +276,7 @@ test('bare React Native Android uses the exact adb serial', () => {
     '--deviceId',
     androidSession.deviceId,
     '--port',
-    '8342',
+    '8213',
     '--no-packager',
   ]);
 });

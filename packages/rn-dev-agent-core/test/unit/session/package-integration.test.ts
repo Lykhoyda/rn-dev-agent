@@ -4149,7 +4149,8 @@ test('copied adapter aborts pending build authority on every pre-completion fail
       'run:android',
       '--device',
       'Pixel_API_35',
-      '--no-bundler',
+      '--port',
+      '8342',
     ]);
     assert.deepEqual(JSON.parse(readFileSync(completionPath, 'utf8')), {
       args: ['complete-build', 'android', deliveredToken()],

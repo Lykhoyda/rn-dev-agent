@@ -3596,13 +3596,18 @@ function managedMetroProxyUrl(binding) {
     }
     if (buildKind === 'expo') {
       if (platform === 'android') {
+        if (command.includes('--no-bundler')) {
+          failBuild(2, 'SESSION_BUILD_IDENTITY_CONFLICT: --no-bundler contradicts the active session Metro port');
+        }
         expoAndroidDevice = resolveExpoAndroidDevice(session.deviceId);
         translateExpoAndroidDevice(session.deviceId, expoAndroidDevice.displayName);
+        removeManagedPortFlag(String(session.metroPort));
+        ensureValue('--port', String(session.metroPort));
       } else {
         ensureValue('--device', session.deviceId);
+        removeManagedPortFlag(String(session.metroPort));
+        ensureFlag('--no-bundler');
       }
-      removeManagedPortFlag(String(session.metroPort));
-      ensureFlag('--no-bundler');
       expoProxyUrl = managedMetroProxyUrl(session);
     } else if (platform === 'ios') {
       ensureValue('--udid', session.deviceId);
