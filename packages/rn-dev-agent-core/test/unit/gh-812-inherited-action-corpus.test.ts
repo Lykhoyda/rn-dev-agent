@@ -139,6 +139,12 @@ if (args.join(' ') === 'worktree list --porcelain') {
 if (process.cwd() === process.env.RN_GIT_PROBE_PRIMARY && args.join(' ') === 'rev-parse --path-format=absolute --git-common-dir' && process.env.RN_GIT_PROBE_PRIMARY_COMMON) {
   stdout = process.env.RN_GIT_PROBE_PRIMARY_COMMON + '\\n';
 }
+if (process.cwd() === process.env.RN_GIT_PROBE_PRIMARY && args.join(' ') === 'rev-parse --show-toplevel' && process.env.RN_GIT_PROBE_PRIMARY_TOP) {
+  stdout = process.env.RN_GIT_PROBE_PRIMARY_TOP + '\\n';
+}
+if (process.cwd() === process.env.RN_GIT_PROBE_PRIMARY && args.join(' ') === 'rev-parse --path-format=absolute --git-dir' && process.env.RN_GIT_PROBE_PRIMARY_GIT_DIR) {
+  stdout = process.env.RN_GIT_PROBE_PRIMARY_GIT_DIR + '\\n';
+}
 process.stdout.write(stdout);
 process.stderr.write(result.stderr || '');
 process.exit(result.status ?? 1);
@@ -255,14 +261,30 @@ test('primary verification is constant and malformed main records never fall bac
       assert.equal(countGitCalls(calls, extra, args), 0);
     }
 
+    const primaryAlias = join(fixture.root, 'primary-alias');
+    symlinkSync(fixture.primary, primaryAlias, 'dir');
+    probe.reset();
+    const canonical = nodeCli(INHERIT_CLI, planArgs, worktree, {
+      env: { ...probe.env, RN_GIT_PROBE_MAIN_PATH: primaryAlias },
+      timeout: 30_000,
+    });
+    assert.equal(canonical.status, 0, `${canonical.stderr}\n${canonical.stdout}`);
+    assert.equal(JSON.parse(canonical.stdout).resources[0]?.state, 'LINK_VALID_SAFE');
+
     const wrongCommon = join(fixture.root, 'wrong-common');
+    const wrongTop = join(fixture.root, 'wrong-top');
+    const wrongGitDir = join(fixture.root, 'wrong-git-dir');
     mkdirSync(wrongCommon);
+    mkdirSync(wrongTop);
+    mkdirSync(wrongGitDir);
     for (const scenario of [
       { name: 'empty', empty: true, probesMain: false },
       { name: 'malformed', malformed: true, probesMain: false },
       { name: 'missing', path: join(fixture.root, 'missing-main'), probesMain: false },
       { name: 'bare', marker: 'bare', probesMain: false },
       { name: 'prunable', marker: 'prunable fixture', probesMain: false },
+      { name: 'wrong-top-level', top: wrongTop, probesMain: true },
+      { name: 'wrong-git-dir', gitDir: wrongGitDir, probesMain: true },
       { name: 'wrong-common-dir', common: wrongCommon, probesMain: true },
     ]) {
       probe.reset();
@@ -271,6 +293,8 @@ test('primary verification is constant and malformed main records never fall bac
       if (scenario.malformed) env.RN_GIT_PROBE_MALFORMED_MAIN = '1';
       if (scenario.path) env.RN_GIT_PROBE_MAIN_PATH = scenario.path;
       if (scenario.marker) env.RN_GIT_PROBE_MAIN_MARKER = scenario.marker;
+      if (scenario.top) env.RN_GIT_PROBE_PRIMARY_TOP = scenario.top;
+      if (scenario.gitDir) env.RN_GIT_PROBE_PRIMARY_GIT_DIR = scenario.gitDir;
       if (scenario.common) env.RN_GIT_PROBE_PRIMARY_COMMON = scenario.common;
       const refused = nodeCli(INHERIT_CLI, planArgs, worktree, {
         env,
