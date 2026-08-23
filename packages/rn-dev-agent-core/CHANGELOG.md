@@ -1,5 +1,11 @@
 # rn-dev-agent-core
 
+## 0.72.3
+
+### Patch Changes
+
+- 744c313: Scope writable WDA cache provisioning to iOS, keep permission regressions portable under root, and hash action IDs in feedback-safe runner diagnostics.
+
 ## 0.72.2
 
 ### Patch Changes
