@@ -306,8 +306,8 @@ maestro_run(platform="android", deviceId="<exact emulator serial>", flowPath="fl
 
 ## Android-Specific Testing Rules (GH #7)
 
-1. **ALWAYS use rn-dev-agent replay tools on Android** — they enforce the exact
-   maestro-runner pin and the authority-bound device.
+1. **ALWAYS use rn-dev-agent replay tools on Android** — they enforce the
+   supported Maestro Runner floor `>= 1.1.24` and the authority-bound device.
 
 2. **Text input**: Use `device_fill` for text input on Android. It binds one
    exact input, types through the native runner, and succeeds only after stable

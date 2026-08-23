@@ -72,6 +72,30 @@ test('gh-750: drifted runner refuses regex-selector flows with a typed message',
   assert.match(refusal, /\.\*Getsafe\.\*/);
 });
 
+test('gh-812: drifted runner refuses regex text in scrollUntilVisible.element', () => {
+  const drifted = buildReplayEngineStatus('drift-newer', '1.1.25', false);
+  const refusal = driftedRegexSelectorRefusal(drifted, [
+    { scrollUntilVisible: { element: 'Log.n', direction: 'DOWN' } },
+  ]);
+
+  assert.ok(refusal);
+  assert.match(refusal, /1\.1\.25/);
+  assert.match(refusal, /1\.1\.24/);
+  assert.match(refusal, /CONTAINS/);
+  assert.match(refusal, /Log\.n/);
+});
+
+test('gh-812: drifted runner refuses regex text in copyTextFrom', () => {
+  const drifted = buildReplayEngineStatus('drift-newer', '1.1.25', false);
+  const refusal = driftedRegexSelectorRefusal(drifted, [{ copyTextFrom: 'Order.*' }]);
+
+  assert.ok(refusal);
+  assert.match(refusal, /1\.1\.25/);
+  assert.match(refusal, /1\.1\.24/);
+  assert.match(refusal, /CONTAINS/);
+  assert.match(refusal, /Order\.\*/);
+});
+
 test('gh-750: pinned runner and literal-only flows replay without refusal', () => {
   const pinned = buildReplayEngineStatus('pinned-ok', '1.1.24', false);
   const drifted = buildReplayEngineStatus('drift-newer', '1.1.20', false);
