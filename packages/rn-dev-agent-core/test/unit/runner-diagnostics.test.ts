@@ -7,6 +7,7 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  statSync,
   utimesSync,
   writeFileSync,
 } from 'node:fs';
@@ -266,6 +267,50 @@ test('runner diagnostics use numeric sequence order when mtimes tie', () => {
   assert.equal(feedback.runner_diagnostics.context.sessionId, '[SESSION_REDACTED]');
   rmSync(fakeHome, { recursive: true, force: true });
   rmSync(directory, { recursive: true, force: true });
+});
+
+test('feedback upgrades legacy exact-session diagnostics with a private stable salt', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'runner-diagnostics-legacy-'));
+  const fakeHome = mkdtempSync(join(tmpdir(), 'runner-diagnostics-legacy-home-'));
+  try {
+    recordFailure(directory, { platform: 'ios', actionId: 'legacy-action' }, undefined, 'owned');
+    const localPath = join(directory, bundles(directory)[0]);
+    rmSync(join(directory, '.runner-diagnostics-salt'));
+
+    const collect = () =>
+      spawnSync('bash', [join(repositoryRoot, 'scripts', 'collect-feedback.sh')], {
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          HOME: fakeHome,
+          RN_PROJECT_ROOT: repositoryRoot,
+          RN_DEV_AGENT_EXPERIENCE_DIR: directory,
+          RN_DEV_AGENT_SESSION_ID: 'owned',
+        },
+      });
+    const first = collect();
+    assert.equal(first.status, 0, first.stderr);
+    const firstFeedback = JSON.parse(first.stdout);
+    const saltPath = join(directory, '.runner-diagnostics-salt');
+    assert.equal(readFileSync(saltPath).byteLength, 32);
+    assert.equal(statSync(saltPath).mode & 0o777, 0o600);
+    assert.equal(
+      firstFeedback.runner_diagnostics.context.actionId,
+      feedbackActionHash(directory, 'legacy-action'),
+    );
+    assert.doesNotMatch(JSON.stringify(firstFeedback.runner_diagnostics), /legacy-action/);
+    assert.equal(JSON.parse(readFileSync(localPath, 'utf8')).context.actionId, 'legacy-action');
+
+    const second = collect();
+    assert.equal(second.status, 0, second.stderr);
+    assert.equal(
+      JSON.parse(second.stdout).runner_diagnostics.context.actionId,
+      firstFeedback.runner_diagnostics.context.actionId,
+    );
+  } finally {
+    rmSync(fakeHome, { recursive: true, force: true });
+    rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 test('runner diagnostics bound metadata before enforcing the absolute byte cap', () => {

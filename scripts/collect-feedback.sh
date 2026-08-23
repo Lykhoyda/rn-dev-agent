@@ -179,17 +179,42 @@ if [ -z "${RN_DEV_AGENT_SESSION_ID:-}" ]; then
   runner_diagnostics_status="exact session unavailable"
 elif [ -d "$experience_dir" ]; then
   runner_diagnostics=$(python3 - "$experience_dir" "$RN_DEV_AGENT_SESSION_ID" <<'PY' 2>/dev/null || echo "null"
-import glob,hashlib,json,os,re,sys
+import glob,hashlib,json,os,re,stat,sys
 directory,session_id=sys.argv[1:]
 salt_path=os.path.join(directory,".runner-diagnostics-salt")
-try:
-    with open(salt_path,"rb") as handle:
-        salt=handle.read()
-    if len(salt) != 32:
+def read_salt():
+    descriptor=os.open(salt_path,os.O_RDONLY|getattr(os,"O_NOFOLLOW",0))
+    try:
+        metadata=os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != os.geteuid() or metadata.st_mode & 0o077:
+            raise ValueError("unsafe diagnostics salt")
+        value=os.read(descriptor,33)
+    finally:
+        os.close(descriptor)
+    if len(value) != 32:
         raise ValueError("invalid diagnostics salt")
-except (OSError,ValueError):
-    print("null")
-    raise SystemExit(0)
+    return value
+def read_or_create_salt():
+    try:
+        return read_salt()
+    except FileNotFoundError:
+        value=os.urandom(32)
+        flags=os.O_WRONLY|os.O_CREAT|os.O_EXCL|getattr(os,"O_NOFOLLOW",0)
+        try:
+            descriptor=os.open(salt_path,flags,0o600)
+        except FileExistsError:
+            return read_salt()
+        try:
+            remaining=memoryview(value)
+            while remaining:
+                written=os.write(descriptor,remaining)
+                if written <= 0:
+                    raise OSError("could not write diagnostics salt")
+                remaining=remaining[written:]
+            os.fchmod(descriptor,0o600)
+        finally:
+            os.close(descriptor)
+        return value
 def sequence(path):
     match=re.search(r"-(\d+)\.json$",os.path.basename(path))
     return int(match.group(1)) if match else 0
@@ -207,9 +232,13 @@ for path in paths:
             value["context"]["sessionId"]="[SESSION_REDACTED]"
             action_id=value["context"].get("actionId")
             if isinstance(action_id,str) and action_id:
+                salt=read_or_create_salt()
                 digest=hashlib.sha256(salt+b"\0feedback-action-id\0"+action_id.encode("utf-8")).hexdigest()
                 value["context"]["actionId"]=digest
-            print(json.dumps(value,separators=(",",":")))
+            serialized=json.dumps(value,separators=(",",":"))
+            if len(serialized.encode("utf-8")) > 256 * 1024:
+                continue
+            print(serialized)
             break
     except (OSError,ValueError,TypeError):
         continue
