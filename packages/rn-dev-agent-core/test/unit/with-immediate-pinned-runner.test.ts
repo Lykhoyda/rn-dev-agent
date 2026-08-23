@@ -109,10 +109,12 @@ test(
               .digest('hex'),
             createHash('sha256').update(readFileSync(runnerPath)).digest('hex'),
           );
-          assert.throws(
-            () => writeFileSync(join(successfulSnapshot, '.payload.tar.gz'), 'mutation'),
-            /EACCES|EPERM/,
-          );
+          if (process.getuid?.() !== 0) {
+            assert.throws(
+              () => writeFileSync(join(successfulSnapshot, '.payload.tar.gz'), 'mutation'),
+              /EACCES|EPERM/,
+            );
+          }
           mkdirSync(join(cacheLink, 'wda-build'));
           writeFileSync(join(cacheLink, 'wda-build', 'ready'), 'ok');
           return spawnSync(
@@ -121,6 +123,7 @@ test(
             { encoding: 'utf8' },
           );
         },
+        'ios',
       );
 
       assert.equal(launched.error, undefined, launched.error?.stack ?? launched.error?.message);
@@ -130,6 +133,27 @@ test(
       assert.equal(existsSync(renameFrom), false);
       assert.equal(existsSync(successfulSnapshot), false);
       assert.equal(existsSync(successfulCache), false);
+
+      let androidSnapshot = '';
+      let androidCacheHookCalled = false;
+      const androidExecution = await withImmediatePinnedRunner(
+        runnerPath,
+        async () => status,
+        async (boundPath) => {
+          androidSnapshot = dirname(boundPath);
+          assert.equal(existsSync(join(androidSnapshot, 'cache')), false);
+          return { status: 0 };
+        },
+        'android',
+        {
+          beforeCacheProvision: () => {
+            androidCacheHookCalled = true;
+          },
+        },
+      );
+      assert.equal(androidExecution.status, 0);
+      assert.equal(androidCacheHookCalled, false);
+      assert.equal(existsSync(androidSnapshot), false);
 
       let failedSnapshot = '';
       let failedCache = '';
@@ -141,6 +165,7 @@ test(
           failedCache = readlinkSync(join(failedSnapshot, 'cache'));
           return { status: 1 };
         },
+        'ios',
       );
       assert.equal(failedExecution.status, 1);
       assert.equal(existsSync(failedSnapshot), false);
@@ -157,6 +182,7 @@ test(
             thrownCache = readlinkSync(join(thrownSnapshot, 'cache'));
             throw new Error('execute failed');
           },
+          'ios',
         ),
         /execute failed/,
       );
@@ -172,6 +198,7 @@ test(
           async () => {
             executeCalled = true;
           },
+          'ios',
           {
             beforeCacheProvision: (expectedCacheRoot) => {
               refusedCache = expectedCacheRoot;
@@ -196,6 +223,7 @@ test(
           async () => {
             executeCalled = true;
           },
+          'ios',
           {
             beforeCacheBinding: (ownedCacheRoot) => {
               partialCache = ownedCacheRoot;
@@ -236,13 +264,17 @@ test(
   },
 );
 
-test('the sealed pre-fix snapshot shape cannot create the WDA cache', () => {
-  const root = mkdtempSync(join(tmpdir(), 'mr-runner-prefixed-cache-'));
-  try {
-    chmodSync(root, 0o500);
-    assert.throws(() => mkdirSync(join(root, 'cache')), /EACCES|EPERM/);
-  } finally {
-    chmodSync(root, 0o700);
-    rmSync(root, { recursive: true, force: true });
-  }
-});
+test(
+  'the sealed pre-fix snapshot shape cannot create the WDA cache',
+  { skip: process.getuid?.() === 0 ? 'root bypasses mode-bit write restrictions' : false },
+  () => {
+    const root = mkdtempSync(join(tmpdir(), 'mr-runner-prefixed-cache-'));
+    try {
+      chmodSync(root, 0o500);
+      assert.throws(() => mkdirSync(join(root, 'cache')), /EACCES|EPERM/);
+    } finally {
+      chmodSync(root, 0o700);
+      rmSync(root, { recursive: true, force: true });
+    }
+  },
+);

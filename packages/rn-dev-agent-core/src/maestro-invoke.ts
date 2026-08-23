@@ -255,7 +255,7 @@ export async function runMaestroInline(
         if (refusal) throw new Error(`RUNNER_PIN_CHANGED: ${refusal}`);
         return spawn(dispatch.binPath);
       }
-      return withImmediatePinnedRunner(dispatch.binPath, resolveEngineStatus, spawn);
+      return withImmediatePinnedRunner(dispatch.binPath, resolveEngineStatus, spawn, opts.platform);
     };
 
     let execution;

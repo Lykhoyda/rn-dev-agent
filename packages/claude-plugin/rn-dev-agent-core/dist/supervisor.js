@@ -27903,10 +27903,6 @@ function recordRunnerDiagnostic(type, detail = {}) {
   }
   state.events = retained;
 }
-function currentRunnerDiagnosticsPlatform() {
-  const value = storage.getStore()?.rootParams.platform;
-  return typeof value === "string" ? value : null;
-}
 function snapshotRunnerDiagnostics() {
   const state = storage.getStore();
   if (!state || state.events.length === 0)
@@ -28422,7 +28418,7 @@ function removeRunnerSnapshotAndCache(snapshotRoot, cacheRoot) {
   if (cleanupError)
     throw cleanupError;
 }
-async function withImmediatePinnedRunner(runnerPath, resolveStatus, execute2, testHooks = {}) {
+async function withImmediatePinnedRunner(runnerPath, resolveStatus, execute2, platform, testHooks = {}) {
   const refusal = await immediateRunnerPinRefusal(runnerPath, resolveStatus);
   if (refusal)
     throw new Error(refusal);
@@ -28457,29 +28453,31 @@ async function withImmediatePinnedRunner(runnerPath, resolveStatus, execute2, te
     if (createHash10("sha256").update(readFileSync17(snapshotHelper)).digest("hex") !== helper.sha256) {
       throw new Error("RUNNER_PIN_CHANGED: execution binding changed before execution.");
     }
-    try {
-      cacheRoot = provisionRunnerSnapshotCache(snapshotRoot, testHooks, (ownedCacheRoot) => {
-        cacheRoot = ownedCacheRoot;
-      });
-      recordRunnerDiagnostic("cache-provision", {
-        result: "passed",
-        variant: "symlink",
-        resolvedPath: "../" + basename4(cacheRoot)
-      });
-    } catch (error2) {
-      const failure = error2 instanceof RunnerCacheUnavailableError ? error2 : new RunnerCacheUnavailableError("cache", cacheErrno(error2));
-      recordRunnerDiagnostic("cache-provision", {
-        result: "failed",
-        variant: "symlink",
-        resolvedPath: "cache",
-        errno: failure.errno
-      });
-      recordRunnerDiagnostic("typed-failure", {
-        code: failure.code,
-        errno: failure.errno,
-        path: failure.relativePath
-      });
-      throw failure;
+    if (platform === "ios") {
+      try {
+        cacheRoot = provisionRunnerSnapshotCache(snapshotRoot, testHooks, (ownedCacheRoot) => {
+          cacheRoot = ownedCacheRoot;
+        });
+        recordRunnerDiagnostic("cache-provision", {
+          result: "passed",
+          variant: "symlink",
+          resolvedPath: "../" + basename4(cacheRoot)
+        });
+      } catch (error2) {
+        const failure = error2 instanceof RunnerCacheUnavailableError ? error2 : new RunnerCacheUnavailableError("cache", cacheErrno(error2));
+        recordRunnerDiagnostic("cache-provision", {
+          result: "failed",
+          variant: "symlink",
+          resolvedPath: "cache",
+          errno: failure.errno
+        });
+        recordRunnerDiagnostic("typed-failure", {
+          code: failure.code,
+          errno: failure.errno,
+          path: failure.relativePath
+        });
+        throw failure;
+      }
     }
     for (const entry of readdirSync5(snapshotRoot, { recursive: true, withFileTypes: true })) {
       const entryPath = join20(entry.parentPath, entry.name);
@@ -28492,10 +28490,11 @@ async function withImmediatePinnedRunner(runnerPath, resolveStatus, execute2, te
       }
     }
     chmodSync4(snapshotRoot, 320);
-    assertRunnerSnapshotCacheBinding(snapshotRoot, cacheRoot);
+    if (cacheRoot)
+      assertRunnerSnapshotCacheBinding(snapshotRoot, cacheRoot);
     const openedRunner = lstatSync10(snapshotRunner);
     recordRunnerDiagnostic("runner-exec-begin", { runnerPinVersion: MAESTRO_RUNNER_PIN.version });
-    if (currentRunnerDiagnosticsPlatform() === "ios") {
+    if (platform === "ios") {
       recordRunnerDiagnostic("wda-bootstrap-begin", { cachePath: "cache" });
     }
     return await execute2(snapshotHelper, [
@@ -34834,7 +34833,7 @@ function createMaestroRunHandler(deps = {}) {
               throw new Error(immediateRefusal);
             return executeRunner(dispatch.binPath);
           }
-          return withImmediatePinnedRunner(dispatch.binPath, resolveEngineStatus, executeRunner);
+          return withImmediatePinnedRunner(dispatch.binPath, resolveEngineStatus, executeRunner, platform);
         };
         try {
           return await executeOnce();
@@ -35890,7 +35889,7 @@ async function runMaestroInline(yaml2, opts, dependencies = {}) {
           throw new Error(`RUNNER_PIN_CHANGED: ${refusal}`);
         return spawn11(dispatch.binPath);
       }
-      return withImmediatePinnedRunner(dispatch.binPath, resolveEngineStatus, spawn11);
+      return withImmediatePinnedRunner(dispatch.binPath, resolveEngineStatus, spawn11, opts.platform);
     };
     let execution;
     try {
@@ -89621,7 +89620,7 @@ function createMaestroTestAllHandler(deps = {}) {
               throw new Error(immediateRefusal);
             return executeRunner(flowDispatch.binPath);
           }
-          return withImmediatePinnedRunner(flowDispatch.binPath, resolveEngineStatus, executeRunner);
+          return withImmediatePinnedRunner(flowDispatch.binPath, resolveEngineStatus, executeRunner, platform);
         }, claimOrigin, completeOrigin, relaunchManagedApp, reproveManagedOrigin), {
           platform,
           deviceId: requestedDeviceId,

@@ -258,7 +258,7 @@ export function createMaestroTestAllHandler(deps = {}) {
                             throw new Error(immediateRefusal);
                         return executeRunner(flowDispatch.binPath);
                     }
-                    return withImmediatePinnedRunner(flowDispatch.binPath, resolveEngineStatus, executeRunner);
+                    return withImmediatePinnedRunner(flowDispatch.binPath, resolveEngineStatus, executeRunner, platform);
                 }, claimOrigin, completeOrigin, relaunchManagedApp, reproveManagedOrigin), {
                     platform,
                     deviceId: requestedDeviceId,
