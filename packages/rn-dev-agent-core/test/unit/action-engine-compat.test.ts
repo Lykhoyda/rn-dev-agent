@@ -46,6 +46,7 @@ import {
 } from '../../dist/domain/action-store.js';
 import { prepareActionVerificationSuite } from '../../dist/domain/action-verification-suite.js';
 import { runMaestroInline } from '../../dist/maestro-invoke.js';
+import { parseAndValidateFlow } from '../../dist/domain/maestro-validator.js';
 import { readProcessBirth } from '../../dist/session/process-birth.js';
 import { createTmpProject } from '../helpers/tmp-project.js';
 
@@ -716,10 +717,13 @@ test('cdp_run_action preflights relative subflows from the action directory', as
     ),
     'utf8',
   );
-  let replayedPath: string | undefined;
+  let replayedCommands: unknown[] = [];
   const handler = createRunActionHandler({
     maestroRun: async (args) => {
-      replayedPath = args.flowPath;
+      assert.equal(args.flowPath, undefined);
+      assert.equal(args.actionMetadata?.id, 'checkout');
+      assert.equal(args.actionMetadata?.enginePin, 'maestro-runner@1.1.24');
+      replayedCommands = parseAndValidateFlow(args.inlineYaml ?? '').commands;
       return { content: [{ type: 'text', text: '{"ok":true,"data":{"passed":true}}' }] };
     },
     engineStatus: async () => PINNED(),
@@ -729,7 +733,7 @@ test('cdp_run_action preflights relative subflows from the action directory', as
   const envelope = JSON.parse(result.content[0]!.text);
 
   assert.equal(envelope.ok, true);
-  assert.equal(replayedPath, join(dir, 'checkout.yaml'));
+  assert.deepEqual(replayedCommands.at(-1), { tapOn: { id: 'continue' } });
 });
 
 test('maestro_generate emits a pinned replayable action without regex waits', async () => {

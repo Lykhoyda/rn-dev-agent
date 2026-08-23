@@ -430,7 +430,7 @@ export function captureActionFromContext(
     });
     replay = {
       ok: true,
-      yamlText: parsed.raw,
+      yamlText: buildMaestroFlow(parsed.appId ? { appId: parsed.appId } : {}, parsed.commands),
       cdpYaml: buildMaestroFlow({}, parsed.commands),
       commands: parsed.commands,
       appId: parsed.appId,

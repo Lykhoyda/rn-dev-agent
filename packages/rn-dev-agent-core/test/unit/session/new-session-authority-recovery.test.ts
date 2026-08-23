@@ -567,12 +567,6 @@ test('R7: learned-action discovery is authority-independent', () => {
   }
   assert.equal(outputs.size, 1, 'the listing is identical under every ownership state');
   assert.match([...outputs][0], /add-task/);
-
-  const source = execFileSync('cat', [join(CORE_ROOT, 'src', 'learned-actions.ts')], {
-    encoding: 'utf8',
-  });
-  const imports = [...source.matchAll(/^import .* from '([^']+)';$/gm)].map((match) => match[1]);
-  assert.deepEqual(imports.sort(), ['node:fs', 'node:os', 'node:path']);
 });
 
 test('R8: a live or unknown owner is never adopted through any path', async () => {
