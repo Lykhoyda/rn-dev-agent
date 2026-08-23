@@ -664,6 +664,7 @@ function readOrCreateRunnerDiagnosticsSalt(directory) {
 }
 export function writeRunnerDiagnosticsBundle(directory, bundle) {
     mkdirSync(directory, { recursive: true, mode: 0o700 });
+    readOrCreateRunnerDiagnosticsSalt(directory);
     const files = runnerDiagnosticsFiles(directory);
     const nextSequence = files.reduce((maximum, file) => Math.max(maximum, runnerDiagnosticsSequence(file)), 0) + 1;
     const sessionKey = (bundle.context.sessionId ?? 'unknown')

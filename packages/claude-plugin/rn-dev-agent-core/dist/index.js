@@ -80839,6 +80839,7 @@ function readOrCreateRunnerDiagnosticsSalt(directory) {
 }
 function writeRunnerDiagnosticsBundle(directory, bundle) {
   mkdirSync20(directory, { recursive: true, mode: 448 });
+  readOrCreateRunnerDiagnosticsSalt(directory);
   const files = runnerDiagnosticsFiles(directory);
   const nextSequence = files.reduce((maximum, file) => Math.max(maximum, runnerDiagnosticsSequence(file)), 0) + 1;
   const sessionKey = (bundle.context.sessionId ?? "unknown").slice(0, 64).replace(/[^A-Za-z0-9_-]/g, "-");

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import {
   existsSync,
   mkdtempSync,
@@ -87,6 +88,14 @@ function bundles(directory: string): string[] {
   return readdirSync(directory)
     .filter((file) => file.startsWith('runner-diagnostics-'))
     .sort();
+}
+
+function feedbackActionHash(directory: string, actionId: string): string {
+  return createHash('sha256')
+    .update(readFileSync(join(directory, '.runner-diagnostics-salt')))
+    .update('\0feedback-action-id\0')
+    .update(actionId)
+    .digest('hex');
 }
 
 test('runner diagnostics use a stable salted device hash and redact external bundle IDs', () => {
@@ -249,7 +258,11 @@ test('runner diagnostics use numeric sequence order when mtimes tie', () => {
   });
   assert.equal(collected.status, 0, collected.stderr);
   const feedback = JSON.parse(collected.stdout);
-  assert.equal(feedback.runner_diagnostics.context.actionId, 'action-11');
+  assert.equal(
+    feedback.runner_diagnostics.context.actionId,
+    feedbackActionHash(directory, 'action-11'),
+  );
+  assert.doesNotMatch(JSON.stringify(feedback.runner_diagnostics), /action-11/);
   assert.equal(feedback.runner_diagnostics.context.sessionId, '[SESSION_REDACTED]');
   rmSync(fakeHome, { recursive: true, force: true });
   rmSync(directory, { recursive: true, force: true });
@@ -281,7 +294,12 @@ test('diagnostics exports select only the exact authenticated session', async ()
   const previousDirectory = process.env.RN_DEV_AGENT_EXPERIENCE_DIR;
   const previousSession = process.env.RN_DEV_AGENT_SESSION_ID;
   try {
-    recordFailure(directory, { platform: 'ios', actionId: 'owned-action' }, undefined, 'owned');
+    recordFailure(
+      directory,
+      { platform: 'ios', actionId: 'owned-action', deviceId: 'owned-action' },
+      undefined,
+      'owned',
+    );
     recordFailure(directory, { platform: 'ios', actionId: 'foreign-action' }, undefined, 'foreign');
 
     const directOutput = join(directory, 'direct-export.json');
@@ -349,7 +367,15 @@ test('diagnostics exports select only the exact authenticated session', async ()
     });
     assert.equal(collected.status, 0, collected.stderr);
     const feedback = JSON.parse(collected.stdout);
-    assert.equal(feedback.runner_diagnostics.context.actionId, 'owned-action');
+    assert.equal(
+      feedback.runner_diagnostics.context.actionId,
+      feedbackActionHash(directory, 'owned-action'),
+    );
+    assert.notEqual(
+      feedback.runner_diagnostics.context.actionId,
+      directBundle.context.deviceIdHash,
+    );
+    assert.doesNotMatch(JSON.stringify(feedback.runner_diagnostics), /owned-action|foreign-action/);
     assert.equal(feedback.runner_diagnostics.context.sessionId, '[SESSION_REDACTED]');
     assert.equal(feedback.runner_diagnostics_status, 'attached for review');
     rmSync(fakeHome, { recursive: true, force: true });

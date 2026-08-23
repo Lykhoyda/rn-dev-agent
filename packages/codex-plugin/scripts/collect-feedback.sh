@@ -179,8 +179,17 @@ if [ -z "${RN_DEV_AGENT_SESSION_ID:-}" ]; then
   runner_diagnostics_status="exact session unavailable"
 elif [ -d "$experience_dir" ]; then
   runner_diagnostics=$(python3 - "$experience_dir" "$RN_DEV_AGENT_SESSION_ID" <<'PY' 2>/dev/null || echo "null"
-import glob,json,os,re,sys
+import glob,hashlib,json,os,re,sys
 directory,session_id=sys.argv[1:]
+salt_path=os.path.join(directory,".runner-diagnostics-salt")
+try:
+    with open(salt_path,"rb") as handle:
+        salt=handle.read()
+    if len(salt) != 32:
+        raise ValueError("invalid diagnostics salt")
+except (OSError,ValueError):
+    print("null")
+    raise SystemExit(0)
 def sequence(path):
     match=re.search(r"-(\d+)\.json$",os.path.basename(path))
     return int(match.group(1)) if match else 0
@@ -196,6 +205,10 @@ for path in paths:
             value=dict(value)
             value["context"]=dict(context)
             value["context"]["sessionId"]="[SESSION_REDACTED]"
+            action_id=value["context"].get("actionId")
+            if isinstance(action_id,str) and action_id:
+                digest=hashlib.sha256(salt+b"\0feedback-action-id\0"+action_id.encode("utf-8")).hexdigest()
+                value["context"]["actionId"]=digest
             print(json.dumps(value,separators=(",",":")))
             break
     except (OSError,ValueError,TypeError):
