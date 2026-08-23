@@ -125,6 +125,51 @@ test('runner diagnostics use a stable salted device hash and redact external bun
   assert.doesNotMatch(JSON.stringify(values), /PRIVATE-DEVICE-ID|com\.external\.private/);
 });
 
+test('runner diagnostics preserve valid action identities before feedback hashing', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'runner-diagnostics-action-identity-'));
+  const fakeHome = mkdtempSync(join(tmpdir(), 'runner-diagnostics-action-identity-home-'));
+  const actionIds = [`token-${'A'.repeat(20)}`, `token-${'B'.repeat(20)}`];
+  try {
+    recordFailure(directory, { platform: 'ios', actionId: actionIds[0] }, undefined, 'session-a');
+    recordFailure(directory, { platform: 'ios', actionId: actionIds[1] }, undefined, 'session-b');
+
+    const localIdentities = new Map(
+      bundles(directory).map((file) => {
+        const bundle = JSON.parse(readFileSync(join(directory, file), 'utf8'));
+        return [bundle.context.sessionId, bundle.context.actionId];
+      }),
+    );
+    assert.equal(localIdentities.get('session-a'), actionIds[0]);
+    assert.equal(localIdentities.get('session-b'), actionIds[1]);
+
+    const collect = (sessionId: string) =>
+      spawnSync('bash', [join(repositoryRoot, 'scripts', 'collect-feedback.sh')], {
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          HOME: fakeHome,
+          RN_PROJECT_ROOT: repositoryRoot,
+          RN_DEV_AGENT_EXPERIENCE_DIR: directory,
+          RN_DEV_AGENT_SESSION_ID: sessionId,
+        },
+      });
+    const feedbackActionIds = ['session-a', 'session-b'].map((sessionId) => {
+      const collected = collect(sessionId);
+      assert.equal(collected.status, 0, collected.stderr);
+      return JSON.parse(collected.stdout).runner_diagnostics.context.actionId;
+    });
+    assert.deepEqual(
+      feedbackActionIds,
+      actionIds.map((actionId) => feedbackActionHash(directory, actionId)),
+    );
+    assert.notEqual(feedbackActionIds[0], feedbackActionIds[1]);
+    assert.doesNotMatch(JSON.stringify(feedbackActionIds), new RegExp(actionIds.join('|')));
+  } finally {
+    rmSync(fakeHome, { recursive: true, force: true });
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test('runner diagnostics retain terminal lifecycle events after the event cap', async () => {
   let snapshot: RunnerDiagnosticsSnapshot | undefined;
   await withRunnerDiagnosticsContext('maestro_test_all', { platform: 'ios' }, async () => {

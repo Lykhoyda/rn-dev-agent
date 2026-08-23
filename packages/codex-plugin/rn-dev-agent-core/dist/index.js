@@ -80232,6 +80232,7 @@ import { execFile as execFileCb16, spawn as spawn9 } from "node:child_process";
 import { promisify as promisify20 } from "node:util";
 
 // packages/rn-dev-agent-core/dist/experience/evidence.js
+init_path_safety();
 init_runner_diagnostics();
 import { createHash as createHash16, randomBytes as randomBytes7, randomUUID as randomUUID9 } from "node:crypto";
 import { chmodSync as chmodSync7, existsSync as existsSync31, mkdirSync as mkdirSync20, readFileSync as readFileSync32, readdirSync as readdirSync13, renameSync as renameSync9, statSync as statSync14, unlinkSync as unlinkSync14, writeFileSync as writeFileSync15 } from "node:fs";
@@ -80255,6 +80256,7 @@ function configuredExperienceDirectory() {
 var DAY_MS = 24 * 60 * 60 * 1e3;
 var REDACTION_FAILED = "[REDACTION_FAILED]";
 var SYMPTOM_TRUNCATED = "[TRUNCATED]";
+var RUNNER_DIAGNOSTICS_SESSION_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 var REDACTION_RULES = [
   [/(sk|pk|api|key|token|secret|password|auth)[-_]?[A-Za-z0-9_-]{20,}/gi, "[REDACTED_SECRET]"],
   [/Bearer [A-Za-z0-9_./+=-]{20,}/g, "Bearer [REDACTED]"],
@@ -80892,6 +80894,11 @@ function boundRunnerDiagnosticsBundle(bundle) {
     truncated = true;
     return `${sanitized.slice(0, RUNNER_DIAGNOSTICS_MAX_SCALAR_CHARS - suffix.length)}${suffix}`;
   };
+  const identity2 = (value, isValid2) => {
+    if (value === null)
+      return null;
+    return isValid2(value) ? value : bound(value);
+  };
   const events = sanitizeForEvidence(retainRunnerDiagnosticEvents(bundle.events, 200));
   return {
     schema: "rn-dev-agent/runner-diagnostics/1",
@@ -80909,8 +80916,8 @@ function boundRunnerDiagnosticsBundle(bundle) {
       platform: bound(bundle.context.platform),
       os: bound(bundle.context.os) ?? "unknown",
       runtime: bound(bundle.context.runtime),
-      sessionId: bound(bundle.context.sessionId),
-      actionId: bound(bundle.context.actionId),
+      sessionId: identity2(bundle.context.sessionId, (value) => typeof value === "string" && RUNNER_DIAGNOSTICS_SESSION_ID.test(value)),
+      actionId: identity2(bundle.context.actionId, isValidActionId),
       deviceIdHash: bound(bundle.context.deviceIdHash),
       bundleId: bundle.context.bundleId === null ? null : bundle.context.bundleId === OWNED_TEST_APP_BUNDLE_ID ? OWNED_TEST_APP_BUNDLE_ID : "[BUNDLE_REDACTED]",
       metroPort: bundle.context.metroPort
