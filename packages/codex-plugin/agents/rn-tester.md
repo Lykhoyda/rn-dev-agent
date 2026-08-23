@@ -165,7 +165,7 @@ Write a brief test plan BEFORE executing:
 
 Before navigating, check if the app is on an auth-gated screen (login,
 welcome, registration, onboarding). Authentication recovery must use a
-compatible action from the owned learned-action corpus.
+compatible action from the project's approved learned-action corpus.
 
 1. Call `cdp_navigation_state`. Check the current route name.
 2. If the navigation state is **empty or minimal**, the app may still

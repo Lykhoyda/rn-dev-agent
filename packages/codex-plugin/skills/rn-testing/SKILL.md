@@ -322,11 +322,11 @@ maestro_run(platform="android", deviceId="<exact emulator serial>", flowPath="fl
 
 ---
 
-## Auth Pre-flight: Owned Learned Actions (GH #10)
+## Auth Pre-flight: Approved Learned Actions (GH #10)
 
 Before testing features that require authentication, check if the app is
 on a login/auth screen. If so, authentication recovery must use a compatible
-action from the owned learned-action corpus.
+action from the project's approved learned-action corpus.
 
 ### Detection
 
