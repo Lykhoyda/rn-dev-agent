@@ -127,6 +127,8 @@ You can hand-edit actions, but consider that self-repair refuses to touch hand-e
 /rn-dev-agent:list-learned-actions task
 ```
 
+Programmatic action inventories keep valid actions available when one action file is corrupt and emit an `ACTION_INVENTORY_ENTRY_SKIPPED` warning naming that file. A corpus that changes or becomes refused during inventory remains a terminal integrity error.
+
 [`/rn-dev-agent:run-action`](../commands/run-action/) replays one by name:
 
 ```

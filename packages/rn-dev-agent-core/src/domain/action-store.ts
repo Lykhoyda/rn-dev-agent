@@ -79,6 +79,10 @@ function assertStableReadableCorpus(
   }
 }
 
+export function assertReadableActionLoadContextStable(context: ReadableActionLoadContext): void {
+  assertStableReadableCorpus(context.projectRoot, context.corpus);
+}
+
 function lstatIfPresent(path: string): ReturnType<typeof lstatSync> | null {
   try {
     return lstatSync(path);

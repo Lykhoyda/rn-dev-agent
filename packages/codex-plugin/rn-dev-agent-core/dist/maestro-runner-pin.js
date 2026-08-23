@@ -14218,12 +14218,6 @@ function createMaestroRunHandler(deps = {}) {
         paramArgs.push("-e", `${key}=${value}`);
       }
     }
-    const runnerReportDir = createRunnerReportDir(dispatch.runner, "rn-maestro-report");
-    const finalArgs = assembleMaestroArgs(baseArgs, [
-      ...runnerReportArgs(runnerReportDir),
-      ...paramArgs
-    ]);
-    const directRunnerEvidence = (output) => collectDirectRunnerEvidence(runnerReportDir, output);
     const releaseAndroidSlot = deps.releaseAndroidSlot ?? releaseAndroidInteractionSlot;
     const androidSlotReleaseWarnings = [];
     let releasedAndroidDeviceId;
@@ -14290,6 +14284,12 @@ function createMaestroRunHandler(deps = {}) {
         });
       }
     }
+    const runnerReportDir = (deps.createReportDir ?? createRunnerReportDir)(dispatch.runner, "rn-maestro-report");
+    const finalArgs = assembleMaestroArgs(baseArgs, [
+      ...runnerReportArgs(runnerReportDir),
+      ...paramArgs
+    ]);
+    const directRunnerEvidence = (output) => collectDirectRunnerEvidence(runnerReportDir, output);
     try {
       const managedAuthority = nestedMaestroAuthorityCallbacks(args);
       const claimOrigin = args.claimNativeOrigin ?? deps.claimNativeOrigin ?? managedAuthority.claimNativeOrigin;

@@ -4,6 +4,7 @@ import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { listActions } from '../../dist/domain/action-inventory.js';
+import { loadAction } from '../../dist/domain/action-store.js';
 
 function makeProject() {
   const root = join(
@@ -51,17 +52,27 @@ test('listActions returns correct summaries sorted by id', async () => {
   }
 });
 
-test('listActions skips unparseable files and continues', async () => {
+test('listActions skips one corrupt file with one typed warning and keeps valid actions usable', async () => {
   const root = makeProject();
   try {
     writeAction(root, 'good-action');
     writeFileSync(
       join(root, '.rn-agent', 'actions', 'bad-action.yaml'),
-      'not: yaml: with: no: m7: header\n',
+      '# id: renamed-action\n# intent: Broken identity\n# status: active\n- launchApp\n',
     );
-    const result = await listActions(root);
+    const warnings = [];
+    const result = await listActions(root, { onWarning: (warning) => warnings.push(warning) });
     assert.equal(result.length, 1);
     assert.equal(result[0].id, 'good-action');
+    assert.deepEqual(warnings, [
+      {
+        code: 'ACTION_INVENTORY_ENTRY_SKIPPED',
+        file: 'bad-action.yaml',
+        message:
+          'Skipped corrupt action inventory entry bad-action.yaml: Action metadata id renamed-action does not match filename identity bad-action.',
+      },
+    ]);
+    assert.equal(loadAction(root, 'good-action')?.metadata.id, 'good-action');
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
