@@ -1,7 +1,6 @@
 apps/docs-site/astro.config.mjs
 apps/docs-site/scripts/generate-bp-docs.mjs
 apps/docs-site/scripts/generate-tool-docs.mjs
-docs/diag/2026-05-07-gh136-pr-b-verification/verify-pr-b-logic.mjs
 packages/rn-dev-agent-core/bench-issue-27.mjs
 packages/rn-dev-agent-core/bench/wait-for-network.bench.mjs
 packages/rn-dev-agent-core/measure-tool-descriptions.mjs

@@ -117,7 +117,7 @@ and get explicit confirmation.
    - At least one edge case or secondary flow
    If the architect omitted or under-specified the proof flow, add it yourself
    before presenting to the user — you have the feature context now.
-4. **Verify Vercel rule consultation** (added v0.45+ per docs/superpowers/specs/2026-05-07-vercel-skills-integration-design.md):
+4. **Verify Vercel rule consultation** (added v0.45+ per https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/superpowers/specs/2026-05-07-vercel-skills-integration-design.md):
    - The architect output MUST include a `Rules consulted` block listing rule
      IDs from `skills/rn-best-practices/rules.index.json` derived from the
      feature's keyword set.
@@ -374,7 +374,7 @@ a PASS.
      exposure, selector memoization. Scope: [list of files changed]"
    - "Review the implementation for project conventions: file naming, folder
      structure, import patterns, CLAUDE.md rules. Scope: [list of files changed]"
-2. **Run Vercel rule audit** (added v0.45+ per docs/superpowers/specs/2026-05-07-vercel-skills-integration-design.md):
+2. **Run Vercel rule audit** (added v0.45+ per https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/superpowers/specs/2026-05-07-vercel-skills-integration-design.md):
    ```bash
    node scripts/check-vercel-rules.mjs --changed --format hook -- <changed file paths>
    ```
@@ -402,7 +402,7 @@ a PASS.
 1. Summarize:
    - **What was built** (one paragraph)
    - **Files created/modified** (table with file path + change type)
-   - **Key decisions made** (align with docs/DECISIONS.md format)
+   - **Key decisions made** (context, choice, rejected alternatives, and durable lesson)
    - **Verification results** (the Phase 5.5 table)
    - **Review findings** (count fixed / count deferred)
 

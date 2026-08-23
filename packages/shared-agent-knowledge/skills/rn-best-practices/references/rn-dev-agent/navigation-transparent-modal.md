@@ -153,5 +153,5 @@ is preferred because:
 Reference:
 
 - B109 (GitHub Issues) — original benchmark discovery
-- D613 (docs/DECISIONS.md) — workaround rationale
+- [D613 workaround rationale](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/DECISIONS.md?plain=1#L2105)
 - [react-native-screens presentation docs](https://reactnavigation.org/docs/native-stack-navigator#presentation)

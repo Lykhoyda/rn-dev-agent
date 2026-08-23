@@ -22,12 +22,16 @@ notes here.
 - `packages/rn-fast-runner/`: source iOS XCTest native runner.
 - `packages/rn-android-runner/`: source Android UiAutomator native runner.
 - `apps/docs-site/`: deliverable documentation site workspace.
-- `docs/ROADMAP.md`: repo-local plugin roadmap. Workspace-side planning stays
-  in the sibling workspace when explicitly requested.
+- Engineering processes, plans, stories/specifications, audits, diagnostics,
+  comparisons, competitor analyses, and general research live in the workspace
+  [`docs/`](https://github.com/Lykhoyda/rn-dev-agent-workspace/tree/main/docs/);
+  never add a top-level `docs/` tree here. Captain-approved architecture records
+  belong in [Anton Factory `architect-docs`](https://github.com/Lykhoyda/anton-factory/tree/main/architect-docs/);
+  link to either owner instead of copying.
 
 The plugin repo ships user-visible code and docs. Internal proof artifacts,
-bench reports, and project planning beyond the repo-local roadmap belong in
-GitHub Issues, PRs, or the sibling workspace only when explicitly requested.
+bench reports, and project planning belong in GitHub Issues, PRs, or the
+sibling workspace only when explicitly requested.
 
 ## Editing Rules
 
@@ -196,7 +200,7 @@ corepack yarn build:docs
   check registers. Release automation must arm auto-merge and wait, never
   assume the check appears on its own.
 - Keeping the runner trust root current after a release:
-  `docs/CONTRIBUTING-VERSIONS.md`.
+  [`CONTRIBUTING-VERSIONS.md`](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/CONTRIBUTING-VERSIONS.md).
 
 ## Maintaining this file
 

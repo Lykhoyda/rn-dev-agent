@@ -1,6 +1,6 @@
 {
   "$schema": "https://github.com/Lykhoyda/rn-dev-agent/blob/main/templates/rn-agent/vercel-rules.config.schema.json",
-  "_comment": "Vercel rule enforcement config for rn-dev-agent. See docs/superpowers/specs/2026-05-07-vercel-skills-integration-design.md and skills/rn-best-practices/SKILL.md.",
+  "_comment": "Vercel rule enforcement config for rn-dev-agent. See https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/superpowers/specs/2026-05-07-vercel-skills-integration-design.md and skills/rn-best-practices/SKILL.md.",
 
   "enabledCategories": "all",
   "_enabledCategories_doc": "Either \"all\" or an array of category prefixes from rules.index.json (e.g., [\"react-native-skills\", \"rn-dev-agent\"]). Web-only categories like \"react-best-practices\" are filtered automatically by platform field.",

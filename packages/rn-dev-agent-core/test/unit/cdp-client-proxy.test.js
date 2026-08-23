@@ -114,7 +114,7 @@ test('CDPClient.disconnect tolerates multiplexer.stop() rejecting (best-effort c
   assert.equal(client.isProxyActive, false, 'proxy state cleared despite stop() rejecting');
 });
 
-// ── D661 review-driven regression tests (concurrency guard + rollback path) ──
+// D661 regression rationale: https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/DECISIONS.md?plain=1#L3040
 
 function plantConnectedTarget(client, hermesUrl) {
   client._connectedTarget = {
@@ -126,7 +126,7 @@ function plantConnectedTarget(client, hermesUrl) {
   };
 }
 
-test('CDPClient.startProxy rolls back multiplexer when softReconnect throws (D661 rollback path)', async () => {
+test('CDPClient.startProxy rolls back multiplexer when softReconnect throws', async () => {
   const hermes = await makeMockHermes();
   const client = new CDPClient();
   plantConnectedTarget(client, hermes.url);
@@ -161,7 +161,7 @@ test('CDPClient.startProxy rolls back multiplexer when softReconnect throws (D66
   await hermes.stop();
 });
 
-test('CDPClient.startProxy is concurrency-safe — parallel callers share one multiplexer (D661 in-flight guard)', async () => {
+test('CDPClient.startProxy is concurrency-safe — parallel callers share one multiplexer', async () => {
   const hermes = await makeMockHermes();
   const client = new CDPClient();
   plantConnectedTarget(client, hermes.url);
@@ -192,7 +192,7 @@ test('CDPClient.startProxy is concurrency-safe — parallel callers share one mu
   await hermes.stop();
 });
 
-test('CDPClient.startProxy: after failed start, in-flight guard clears so next call retries cleanly (D661)', async () => {
+test('CDPClient.startProxy clears in-flight guard after failure so the next call retries', async () => {
   const hermes = await makeMockHermes();
   const client = new CDPClient();
   plantConnectedTarget(client, hermes.url);

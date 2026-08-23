@@ -6,7 +6,7 @@ import { createStatusHandler } from '../../dist/tools/status.js';
 import { narrowArchitecture } from '../../dist/tools/status.js';
 import { createCpuProfileHandler, OLD_ARCH_PROFILER_HINT } from '../../dist/tools/profiling.js';
 
-// M10 / D667 — integration tests for cdp_status.app.architecture wiring
+// D667: https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/DECISIONS.md?plain=1#L3371
 // plus the cdp_cpu_profile failure hint when architecture is 'old'.
 
 // ── narrowArchitecture helper ────────────────────────────────────────

@@ -101,6 +101,12 @@ jobs:
       - name: Agent package split guard unit test
         run: bash scripts/test/check-agent-package-sync.test.sh
 
+      - name: Documentation ownership gate
+        run: node scripts/check-document-ownership.ts
+
+      - name: Documentation ownership gate unit test
+        run: node --test scripts/test/check-document-ownership.test.ts
+
       # GH#498: docs-site is now a deliverable app workspace.
       - name: Docs app build
         run: corepack yarn workspace rn-dev-agent-docs build

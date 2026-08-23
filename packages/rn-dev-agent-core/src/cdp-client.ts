@@ -171,9 +171,7 @@ export class CDPClient {
   // Hermes. Lets React Native DevTools share the same Hermes target on RN < 0.85.
   private _proxyUrl: string | null = null;
   private _multiplexer: CDPMultiplexer | null = null;
-  // D661 review finding: concurrent startProxy() callers would each allocate a
-  // multiplexer, with the second overwriting _multiplexer and orphaning the first.
-  // In-flight promise cache serializes concurrent callers on the same startup.
+  // D661 concurrency rationale: https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/DECISIONS.md?plain=1#L3040
   private _startProxyInFlight: Promise<string> | null = null;
   // B132 (M1b follow-up): separate user intent from live proxy state. `_proxyUrl`
   // is the live state (null between suspend and resume). `_proxyDesired` is the

@@ -12,8 +12,8 @@
  *     prompt-injection threat model
  *
  * Closes 7 CRITICAL deepsec findings (RCE via raw YAML interpolation).
- * See workspace `docs/ROADMAP.md` Phase 134.1 + proposed D1212 for the
- * default-deny rationale.
+ * See https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/ROADMAP.md
+ * for the Phase 134.1 default-deny rationale.
  */
 import yaml from 'yaml';
 import { join, dirname, isAbsolute, sep } from 'node:path';

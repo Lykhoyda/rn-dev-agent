@@ -58764,9 +58764,7 @@ var INJECTED_HELPERS = `
             }
           } catch(e) {}
         }
-        // M10 / Phase 110: architecture detection. Fabric wins on "both present"
-        // (transient interop state); __fbBatchedBridge alone \u2192 classic bridge;
-        // neither \u2192 unknown. See docs/DECISIONS.md D667.
+        // D667 architecture rationale: https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/DECISIONS.md?plain=1#L3371
         try {
           var fabric = typeof globalThis.nativeFabricUIManager === 'object'
             && globalThis.nativeFabricUIManager !== null;
@@ -59699,9 +59697,7 @@ var CDPClient = class _CDPClient {
   // Hermes. Lets React Native DevTools share the same Hermes target on RN < 0.85.
   _proxyUrl = null;
   _multiplexer = null;
-  // D661 review finding: concurrent startProxy() callers would each allocate a
-  // multiplexer, with the second overwriting _multiplexer and orphaning the first.
-  // In-flight promise cache serializes concurrent callers on the same startup.
+  // D661 concurrency rationale: https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/DECISIONS.md?plain=1#L3040
   _startProxyInFlight = null;
   // B132 (M1b follow-up): separate user intent from live proxy state. `_proxyUrl`
   // is the live state (null between suspend and resume). `_proxyDesired` is the

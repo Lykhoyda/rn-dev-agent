@@ -658,7 +658,7 @@ Ran on dev machine with no physical devices connected. First run misreported the
 - **Structural-only tests** — no `bats` dependency. Live smoke during `/setup` is the functional validation.
 
 ### Refs
-D668 in `rn-dev-agent-workspace/docs/DECISIONS.md`. Phase 111 in `rn-dev-agent-workspace/docs/ROADMAP.md`. metro-mcp reference: troubleshooting "Physical Device Setup".
+[D668](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/DECISIONS.md?plain=1#L3433) in workspace decisions. Phase 111 in the [workspace roadmap](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/ROADMAP.md). metro-mcp reference: troubleshooting "Physical Device Setup".
 
 ## [0.40.0] — 2026-04-22
 
@@ -689,7 +689,7 @@ Multi-LLM (Gemini + Codex). Both clean — zero high-confidence findings. Indepe
 - **Profiler hint is advisory, not blocking** — `cdp_cpu_profile` still runs on Old Arch; some profiles do succeed. Hint only fires on actual failures.
 
 ### Refs
-D667 in `rn-dev-agent-workspace/docs/DECISIONS.md`. Phase 110 in `rn-dev-agent-workspace/docs/ROADMAP.md`. Related: D502 (helper freshness check catches stale v14 caches), M8/D663 (prior `__HELPERS_VERSION__` bump pattern).
+[D667](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/DECISIONS.md?plain=1#L3371) in workspace decisions. Phase 110 in the [workspace roadmap](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/ROADMAP.md). Related: D502 (helper freshness check catches stale v14 caches), M8/D663 (prior `__HELPERS_VERSION__` bump pattern).
 
 ## [0.39.0] — 2026-04-22
 
@@ -720,7 +720,7 @@ Multi-LLM (Gemini + Codex) on original PR. Both clean. Gemini verified the B132 
 - **Stateless — fires every call past threshold** on genuinely idle apps. Accepted per design; LLM context usually absorbs repeated hints.
 
 ### Refs
-D665 in `rn-dev-agent-workspace/docs/DECISIONS.md`. Phase 108 in `rn-dev-agent-workspace/docs/ROADMAP.md`. metro-mcp reference: troubleshooting "Empty Results or Stale Data" (top-3 user issue).
+[D665](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/DECISIONS.md?plain=1#L3260) in workspace decisions. Phase 108 in the [workspace roadmap](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/ROADMAP.md). metro-mcp reference: troubleshooting "Empty Results or Stale Data" (top-3 user issue).
 
 ## [0.38.0] — 2026-04-22
 
@@ -758,7 +758,7 @@ Multi-LLM (Gemini + Codex). Two findings applied. Codex (confidence 90): the `fa
 Story R3 ("fast-runner restart") from Phase 85 was marked DONE during the Phase 92 stability sweep with the note that the implementation shape differed from the original spec (PID probe instead of `/ping`; restart integrated into session open). M7 ships the full spec: tri-state `/health` probe, explicit stale detection, graceful reap. The functional gap R3 left is closed.
 
 ### Refs
-D666 in `rn-dev-agent-workspace/docs/DECISIONS.md`. Phase 109 in `rn-dev-agent-workspace/docs/ROADMAP.md`. metro-mcp reference: `src/plugins/devtools.ts::tryFocusExisting`.
+[D666](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/DECISIONS.md?plain=1#L3303) in workspace decisions. Phase 109 in the [workspace roadmap](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/ROADMAP.md). metro-mcp reference: `src/plugins/devtools.ts::tryFocusExisting`.
 
 ## [0.36.1] — 2026-04-21
 
@@ -779,7 +779,7 @@ Running total: 485 → **488 passing**, zero failures.
 Multi-LLM (Gemini + Codex). Both clean. Gemini validated the fix matches what they flagged during M8 review. Codex noted the `allRoots` accumulator divergence from M8's pattern is intentionally correct for worklet-aware fiber walks.
 
 ### Refs
-D664 in `rn-dev-agent-workspace/docs/DECISIONS.md`. Phase 107 in `rn-dev-agent-workspace/docs/ROADMAP.md`. Parent: D663 / M8 / Phase 106.
+[D664](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/DECISIONS.md?plain=1#L3211) in workspace decisions. Phase 107 in the [workspace roadmap](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/ROADMAP.md). Parent: D663 / M8 / Phase 106.
 
 ## [0.36.0] — 2026-04-21
 
@@ -803,7 +803,7 @@ M8 / Phase 106 — renderer 1..5 probe for fiber root resolution. Closes the Tie
 Multi-LLM (Gemini + Codex). Codex clean. Gemini flagged `setup.ts`'s sibling readiness gate at confidence 85 — originally scoped out of M8, folded in on user direction to preserve end-to-end benefit. Would have shipped as half-a-fix otherwise.
 
 ### Refs
-D663 in `rn-dev-agent-workspace/docs/DECISIONS.md`. Phase 106 in `rn-dev-agent-workspace/docs/ROADMAP.md`. metro-mcp reference pattern: `src/utils/fiber.ts` FIBER_ROOT_JS.
+[D663](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/DECISIONS.md?plain=1#L3161) in workspace decisions. Phase 106 in the [workspace roadmap](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/ROADMAP.md). metro-mcp reference pattern: `src/utils/fiber.ts` FIBER_ROOT_JS.
 
 ## [0.35.0] — 2026-04-21
 
@@ -833,7 +833,7 @@ Gemini + Codex both returned clean (no high-confidence issues). Six critical rac
 - **`handleClose` uses `void this._suspendProxy()`** (fire-and-forget). The synchronous preamble is sufficient to redirect the reconnect; awaiting `mux.stop()` would block the `handleClose` path unnecessarily.
 
 ### Refs
-- D662 in DECISIONS.md. Phase 105 in ROADMAP.md. B132 closed in BUGS.md. Parent: D661 / Phase 104 (M1b, 2026-04-21). Branch: `fix/b132-proxy-auto-resume`.
+- [D662](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/DECISIONS.md?plain=1#L3104). [Phase 105](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/ROADMAP.md?plain=1#L3511). [B132](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/BUGS.md?plain=1#L208) closed. Parent: [D661](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/DECISIONS.md?plain=1#L3040) / [Phase 104](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/ROADMAP.md?plain=1#L3556) (M1b, 2026-04-21). Branch: `fix/b132-proxy-auto-resume`.
 
 ---
 
@@ -864,10 +864,10 @@ M1b / Phase 104 — CDP proxy routing integration. Completes the M1 story split 
 - **Rollback-path test coverage** (flagged by both at 85-90% confidence). The catch block tearing the multiplexer back down when `softReconnect` throws post-allocation was unreachable by the existing mock-client tests (`softReconnect` never rejected). Added 3 tests using a real mock Hermes that exercise the rollback, the concurrency guard, and the in-flight-cache-clears-on-failure behavior.
 
 ### Known limitation logged (B132)
-Stale `hermesUrl` after target change or bundle reload — multiplexer captures the URL once at `startProxy` time. If Hermes regenerates the URL (reload, eviction, Metro restart), the proxy forwards to a dead upstream until `cdp_disconnect` + re-run `cdp_open_devtools`. Pre-existing M1a design limit, not introduced by M1b. Filed as B132 in BUGS.md for follow-up (requires multiplexer upstream-refresh API or client-level teardown-and-restart on target change).
+Stale `hermesUrl` after target change or bundle reload — multiplexer captures the URL once at `startProxy` time. If Hermes regenerates the URL (reload, eviction, Metro restart), the proxy forwards to a dead upstream until `cdp_disconnect` + re-run `cdp_open_devtools`. Pre-existing M1a design limit, not introduced by M1b. Filed as [B132](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/BUGS.md?plain=1#L208) for follow-up (requires multiplexer upstream-refresh API or client-level teardown-and-restart on target change).
 
 ### Refs
-- D661 in DECISIONS.md. Phase 104 in ROADMAP.md. Parent: M1a / D654 (Phase 100, 2026-04-20). Branch: `feat/m1b-cdp-proxy-routing`.
+- [D661](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/DECISIONS.md?plain=1#L3040). [Phase 104](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/ROADMAP.md?plain=1#L3556). Parent: M1a / D654 (Phase 100, 2026-04-20). Branch: `feat/m1b-cdp-proxy-routing`.
 
 ---
 
@@ -901,7 +901,7 @@ Phase 90 metro-mcp pattern adoption (Tier 1 + Tier 2) plus story-driven bug swee
 
 ### Performance
 - **Unit test suite: 24,246ms → 3,151ms (87% faster)** after adding `skipIncompatibilityProbe: true` to pre-B129 MetroEventsClient tests that use the WS-only mock server. The mock doesn't respond to HTTP GET; every test was paying a 1500ms probe timeout.
-- **Screenshot downscale via sips** (B120/D647 from 0.26.0 — first public release). `device_screenshot` auto-resizes to max 800px width via macOS `sips`, saving ~35–46% on iPhone captures with no readability loss.
+- **Screenshot downscale via sips** (B120/[D647](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/DECISIONS.md?plain=1#L2325) from 0.26.0 — first public release). `device_screenshot` auto-resizes to max 800px width via macOS `sips`, saving ~35–46% on iPhone captures with no readability loss.
 
 ### Tests
 272 → **448** (+176 across the series):
@@ -916,7 +916,7 @@ Phase 90 metro-mcp pattern adoption (Tier 1 + Tier 2) plus story-driven bug swee
 Every feature PR and the fix PR went through a 2-pass multi-review (Gemini + Codex in parallel). Pass 1 blockers caught and fixed pre-merge. Three of the M3/M2/M5 blockers would have silently degraded or broken production had they shipped without review. The pattern "hermetic injection for unit coverage + at least one integration test per feature exercising the real default against a real external thing" captured in D652 and reinforced by every subsequent fix.
 
 ### Live validation
-All three cross-platform validation stories (M4 network isolation, M5 Metro events, device interaction parity) and the B128-B131 fix validation story executed live against both iOS and Android simulators. 8/8 assertions pass in the B128-B131 validation. Artifacts in `docs/stories/*.md` and `docs/proof/*.jpg` in the workspace repo.
+All three cross-platform validation stories (M4 network isolation, M5 Metro events, device interaction parity) and the B128-B131 fix validation story executed live against both iOS and Android simulators. 8/8 assertions pass in the B128-B131 validation. Artifacts are in the workspace [stories](https://github.com/Lykhoyda/rn-dev-agent-workspace/tree/main/docs/stories/) and [proof](https://github.com/Lykhoyda/rn-dev-agent-workspace/tree/main/docs/proof/) directories.
 
 ### Upgrade notes
 - **Required action: restart Claude Code after `/plugin update rn-dev-agent`** to load the new MCP server. `/reload-plugins` alone does not respawn MCP subprocesses.
@@ -959,7 +959,7 @@ Three-PR stability sprint: zombie target disambiguation (B111), MCP process life
 
 ### Verified-stale (closed via empirical sweep, no code change in this release)
 - **B73 (HIGH): MCP dies on Metro restart** — verified empirically already fixed by historical reconnect loop + background poll pattern (D622). MCP survives Metro death and auto-reconnects when Metro returns.
-- **B84, B100, B110, B112** — fixes had already shipped through earlier hardening phases; BUGS.md was stale.
+- **[B84](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/BUGS.md?plain=1#L735), [B100](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/BUGS.md?plain=1#L844), [B110](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/BUGS.md?plain=1#L336), [B112](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/BUGS.md?plain=1#L329)** — fixes had already shipped through earlier hardening phases; the workspace bug ledger was stale.
 - **All Phase 85 R-stories (R1-R10 except R7)** — closed; R7 (transparentModal) noted as react-native-screens upstream.
 
 ### Tests
@@ -977,10 +977,10 @@ PRs #32 (B111) and #33 (B76) reviewed independently by Gemini + Codex. PR #32: 0
 ### Validation
 - 5-gate live smoke for B76 fix (CC restart → `cdp_restart` tool present → invocation → MCP PID unchanged) — all green.
 - 4-gate live smoke for B111 fix (kill Metro test → bad targetId reject → bad bundleId reject → auto-select picks live target) — all green.
-- B73 verification trace at `docs/proof/b73-b76-mcp-lifecycle/b73-verification.log` in the workspace repo.
+- B73 verification trace in the workspace [proof directory](https://github.com/Lykhoyda/rn-dev-agent-workspace/tree/main/docs/proof/b73-b76-mcp-lifecycle/).
 
 ### Backlog state
-Plugin code-side stability backlog effectively cleared after this release. All Phase 85 R-stories closed (R7 deferred as upstream). Remaining open items in BUGS.md are out-of-scope for plugin code (workspace test-app cosmetic, environmental Hermes/Android, accepted-tradeoff items).
+Plugin code-side stability backlog effectively cleared after this release. All Phase 85 R-stories closed (R7 deferred as upstream). Remaining items in the [workspace bug ledger's open section](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/BUGS.md?plain=1#L3) are out-of-scope for plugin code (workspace test-app cosmetic, environmental Hermes/Android, accepted-tradeoff items).
 
 ## [0.23.0] — 2026-04-16
 
@@ -1018,7 +1018,7 @@ Cross-platform benchmark (Task Power User flow + Priority Filter Row feature):
 158 → **249** (+91 this release cycle).
 
 ### Decisions logged
-D630 through D642 in `rn-dev-agent-workspace/docs/DECISIONS.md`.
+[D630](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/DECISIONS.md?plain=1#L2166), [D631](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/DECISIONS.md?plain=1#L2169), [D632](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/DECISIONS.md?plain=1#L2172), [D633](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/DECISIONS.md?plain=1#L2175), [D634](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/DECISIONS.md?plain=1#L2178), [D635](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/DECISIONS.md?plain=1#L2181), [D636](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/DECISIONS.md?plain=1#L2194), [D637](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/DECISIONS.md?plain=1#L2201), [D638](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/DECISIONS.md?plain=1#L2204), [D639](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/DECISIONS.md?plain=1#L2207), [D640](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/DECISIONS.md?plain=1#L2210), [D641](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/DECISIONS.md?plain=1#L2215), and [D642](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/DECISIONS.md?plain=1#L2218) in workspace decisions.
 
 ## [0.22.0] — 2026-04-16
 

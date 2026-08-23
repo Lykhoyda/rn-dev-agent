@@ -1,8 +1,5 @@
 import { okResult, failResult, withConnection } from '../utils.js';
-// M10 / Phase 110 / D667: advisory hint appended to cpuProfile failures when
-// the target is running on the classic bridge (Fabric absent). CPU profiling
-// via CDP Profiler domain is known to be flaky on Old Arch — this wording
-// points users at the most likely cause + actionable alternatives.
+// D667 profiler rationale: https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/DECISIONS.md?plain=1#L3371
 export const OLD_ARCH_PROFILER_HINT = 'Old architecture detected — CPU profile may be unreliable or incomplete on the classic bridge. ' +
     'Prefer cdp_heap_usage for memory, or enable New Architecture (newArchitecture: true in app.json) for profiling.';
 // Single-shot probe of app architecture. Used in the error path of cpuProfile
