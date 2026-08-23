@@ -145,7 +145,7 @@ test('literal pnpm android executes the generated adapter with ephemeral Expo na
     });
     assert.equal(result.status, 0, result.stderr);
     assert.deepEqual(JSON.parse(readFileSync(fixture.expoRecord, 'utf8')), {
-      args: ['run:android', '--device', DISPLAY_NAME, '--no-bundler'],
+      args: ['run:android', '--device', DISPLAY_NAME, '--port', '8397'],
       androidSerial: SERIAL,
       metroPort: '8397',
       gradlePort: '8397',
@@ -252,7 +252,7 @@ test('generated Android adapter aborts failure and SIGINT exactly once with no a
       });
       assert.notEqual(result.status, 0, `${mode}: ${result.stderr}`);
       const expo = JSON.parse(readFileSync(fixture.expoRecord, 'utf8')) as { args: string[] };
-      assert.deepEqual(expo.args, ['run:android', '--device', DISPLAY_NAME, '--no-bundler']);
+      assert.deepEqual(expo.args, ['run:android', '--device', DISPLAY_NAME, '--port', '8397']);
       const calls = readJsonLines(fixture.calls) as string[][];
       assert.equal(calls.filter(([command]) => command === 'abort-build').length, 1);
       assert.equal(calls.filter(([command]) => command === 'complete-build').length, 0);
@@ -280,6 +280,27 @@ test('generated Android adapter refuses mapping drift and foreign device input b
         false,
         'Expo must not run after identity refusal',
       );
+      const calls = readJsonLines(fixture.calls) as string[][];
+      assert.equal(calls.filter(([command]) => command === 'abort-build').length, 1);
+      assert.equal(calls.filter(([command]) => command === 'complete-build').length, 0);
+    } finally {
+      rmSync(fixture.root, { force: true, recursive: true });
+    }
+  }
+});
+
+test('generated Android adapter refuses launch flags that bypass the allocated port', () => {
+  for (const args of [['--no-bundler'], ['--port', '8081']]) {
+    const fixture = createFixture();
+    try {
+      const result = spawnSync('pnpm', ['android', '--', ...args], {
+        cwd: fixture.root,
+        encoding: 'utf8',
+        env: fixture.environment,
+      });
+      assert.notEqual(result.status, 0);
+      assert.match(result.stderr, /SESSION_BUILD_IDENTITY_CONFLICT/);
+      assert.equal(existsSync(fixture.expoRecord), false);
       const calls = readJsonLines(fixture.calls) as string[][];
       assert.equal(calls.filter(([command]) => command === 'abort-build').length, 1);
       assert.equal(calls.filter(([command]) => command === 'complete-build').length, 0);

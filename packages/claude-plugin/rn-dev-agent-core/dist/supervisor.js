@@ -12862,6 +12862,8 @@ function createBuildLaunchPlan(input) {
   }
   if (kind === "expo") {
     if (input.platform === "android") {
+      if (command.includes("--no-bundler"))
+        conflict("--no-bundler");
       const resolveDevice = input.resolveExpoAndroidDevice ?? resolveExpoAndroidDevice;
       const initial = resolveDevice(input.session.deviceId);
       const verified = assertStableExpoAndroidDevice(initial, resolveDevice(input.session.deviceId));
@@ -12869,11 +12871,13 @@ function createBuildLaunchPlan(input) {
         throw expoAndroidDeviceIdentityError("the resolved Expo device does not equal the authority-bound adb serial");
       }
       translateExpoAndroidDevice(command, input.session.deviceId, verified.displayName);
+      removeManagedPortFlag(command, String(input.session.metroPort));
+      ensureValue(command, "--port", String(input.session.metroPort));
     } else {
       ensureValue(command, "--device", input.session.deviceId);
+      removeManagedPortFlag(command, String(input.session.metroPort));
+      ensureFlag(command, "--no-bundler");
     }
-    removeManagedPortFlag(command, String(input.session.metroPort));
-    ensureFlag(command, "--no-bundler");
   } else if (kind === "bare-ios") {
     ensureValue(command, "--udid", input.session.deviceId);
     ensureValue(command, "--port", String(input.session.metroPort));
@@ -18284,13 +18288,18 @@ function managedMetroProxyUrl(binding) {
     }
     if (buildKind === 'expo') {
       if (platform === 'android') {
+        if (command.includes('--no-bundler')) {
+          failBuild(2, 'SESSION_BUILD_IDENTITY_CONFLICT: --no-bundler contradicts the active session Metro port');
+        }
         expoAndroidDevice = resolveExpoAndroidDevice(session.deviceId);
         translateExpoAndroidDevice(session.deviceId, expoAndroidDevice.displayName);
+        removeManagedPortFlag(String(session.metroPort));
+        ensureValue('--port', String(session.metroPort));
       } else {
         ensureValue('--device', session.deviceId);
+        removeManagedPortFlag(String(session.metroPort));
+        ensureFlag('--no-bundler');
       }
-      removeManagedPortFlag(String(session.metroPort));
-      ensureFlag('--no-bundler');
       expoProxyUrl = managedMetroProxyUrl(session);
     } else if (platform === 'ios') {
       ensureValue('--udid', session.deviceId);
