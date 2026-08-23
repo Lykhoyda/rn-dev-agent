@@ -1,5 +1,17 @@
 # rn-dev-agent-plugin
 
+## 0.77.1
+
+### Patch Changes
+
+- 6c12426: Update packaged engineering-document references to their canonical owners.
+- 48018f4: Honor the allowlisted linked-worktree `.rn-agent/actions` corpus in inventory and exact-ID replay, while still refusing dangling, foreign, whole-directory, and replaced links.
+- d847b3b: Add verified cross-platform Expo Developer Menu dismissal with Android parity, typed readiness outcomes, and default attaching-agent surface preflight guidance.
+- Updated dependencies [6c12426]
+- Updated dependencies [48018f4]
+- Updated dependencies [d847b3b]
+  - rn-dev-agent-core@0.72.1
+
 ## 0.77.0
 
 ### Minor Changes
