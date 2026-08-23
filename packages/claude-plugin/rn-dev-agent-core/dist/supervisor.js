@@ -80995,7 +80995,7 @@ async function hideExpoDevMenu(client2, options = {}) {
       break;
     }
     if (attempt < retries)
-      await new Promise((resolve20) => setTimeout(resolve20, retryDelayMs));
+      await new Promise((resolve21) => setTimeout(resolve21, retryDelayMs));
   }
   return successfulCall ? { ...successfulCall, attempts: outcome.attempts } : outcome;
 }
@@ -81109,7 +81109,7 @@ function createDevSettingsHandler(getClient2, dependencies = {}) {
       const call = await hideExpoDevMenu(client2, { retries: 1 });
       if (!call.callSent)
         return failedHideResult(call, before);
-      await (dependencies.settleAfterHide?.() ?? new Promise((resolve20) => setTimeout(resolve20, 300)));
+      await (dependencies.settleAfterHide?.() ?? new Promise((resolve21) => setTimeout(resolve21, 300)));
       const after = probe ? await probe().catch(() => "unknown") : "unknown";
       if (before === "expo_dev_menu" && after === "app") {
         return okResult({
