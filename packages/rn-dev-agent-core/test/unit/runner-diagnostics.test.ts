@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
   chmodSync,
@@ -355,6 +355,118 @@ test('feedback upgrades legacy exact-session diagnostics with a private stable s
     );
   } finally {
     rmSync(fakeHome, { recursive: true, force: true });
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('feedback rejects legacy diagnostics with a redacted action identity', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'runner-diagnostics-redacted-action-'));
+  const fakeHome = mkdtempSync(join(tmpdir(), 'runner-diagnostics-redacted-action-home-'));
+  try {
+    recordFailure(directory, { platform: 'ios', actionId: 'legacy-action' }, undefined, 'owned');
+    const localPath = join(directory, bundles(directory)[0]);
+    const bundle = JSON.parse(readFileSync(localPath, 'utf8'));
+    bundle.context.actionId = '[REDACTED_SECRET]';
+    writeFileSync(localPath, JSON.stringify(bundle), { mode: 0o600 });
+    const saltPath = join(directory, '.runner-diagnostics-salt');
+    rmSync(saltPath);
+
+    const collected = spawnSync('bash', [join(repositoryRoot, 'scripts', 'collect-feedback.sh')], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        HOME: fakeHome,
+        RN_PROJECT_ROOT: repositoryRoot,
+        RN_DEV_AGENT_EXPERIENCE_DIR: directory,
+        RN_DEV_AGENT_SESSION_ID: 'owned',
+      },
+    });
+    assert.equal(collected.status, 0, collected.stderr);
+    const feedback = JSON.parse(collected.stdout);
+    assert.equal('runner_diagnostics' in feedback, false);
+    assert.equal(feedback.runner_diagnostics_status, 'none for exact session');
+    assert.equal(existsSync(saltPath), false);
+  } finally {
+    rmSync(fakeHome, { recursive: true, force: true });
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('concurrent feedback atomically publishes one complete legacy salt', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'runner-diagnostics-atomic-salt-'));
+  const fakeHome = mkdtempSync(join(tmpdir(), 'runner-diagnostics-atomic-salt-home-'));
+  const hooks = mkdtempSync(join(tmpdir(), 'runner-diagnostics-atomic-salt-hooks-'));
+  try {
+    recordFailure(directory, { platform: 'ios', actionId: 'legacy-action' }, undefined, 'owned');
+    const saltPath = join(directory, '.runner-diagnostics-salt');
+    rmSync(saltPath);
+    const marker = join(hooks, 'salt-write-started');
+    writeFileSync(
+      join(hooks, 'sitecustomize.py'),
+      `import os,time
+original_write=os.write
+delayed=False
+def write(fd,data):
+    global delayed
+    if not delayed and len(data) == 32:
+        delayed=True
+        try:
+            os.mkdir(os.environ["RN_DEV_AGENT_SALT_WRITE_MARKER"])
+        except FileExistsError:
+            pass
+        time.sleep(5)
+    return original_write(fd,data)
+os.write=write
+`,
+      { mode: 0o600 },
+    );
+    const env = {
+      ...process.env,
+      HOME: fakeHome,
+      PYTHONPATH: hooks,
+      RN_PROJECT_ROOT: repositoryRoot,
+      RN_DEV_AGENT_EXPERIENCE_DIR: directory,
+      RN_DEV_AGENT_SESSION_ID: 'owned',
+      RN_DEV_AGENT_SALT_WRITE_MARKER: marker,
+    };
+    const first = spawn('bash', [join(repositoryRoot, 'scripts', 'collect-feedback.sh')], {
+      env,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let firstStdout = '';
+    let firstStderr = '';
+    first.stdout.setEncoding('utf8');
+    first.stderr.setEncoding('utf8');
+    first.stdout.on('data', (chunk) => {
+      firstStdout += chunk;
+    });
+    first.stderr.on('data', (chunk) => {
+      firstStderr += chunk;
+    });
+    const firstClosed = new Promise<number | null>((resolve) => {
+      first.on('close', resolve);
+    });
+    const deadline = Date.now() + 10_000;
+    while (!existsSync(marker) && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.equal(existsSync(marker), true);
+
+    const second = spawnSync('bash', [join(repositoryRoot, 'scripts', 'collect-feedback.sh')], {
+      encoding: 'utf8',
+      env,
+    });
+    const firstStatus = await firstClosed;
+    assert.equal(firstStatus, 0, firstStderr);
+    assert.equal(second.status, 0, second.stderr);
+    const expectedActionId = feedbackActionHash(directory, 'legacy-action');
+    assert.equal(JSON.parse(firstStdout).runner_diagnostics.context.actionId, expectedActionId);
+    assert.equal(JSON.parse(second.stdout).runner_diagnostics.context.actionId, expectedActionId);
+    assert.equal(readFileSync(saltPath).byteLength, 32);
+    assert.equal(statSync(saltPath).mode & 0o777, 0o600);
+  } finally {
+    rmSync(fakeHome, { recursive: true, force: true });
+    rmSync(hooks, { recursive: true, force: true });
     rmSync(directory, { recursive: true, force: true });
   }
 });

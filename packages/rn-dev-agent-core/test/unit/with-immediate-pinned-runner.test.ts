@@ -134,15 +134,22 @@ test(
       assert.equal(existsSync(successfulSnapshot), false);
       assert.equal(existsSync(successfulCache), false);
 
+      const androidRenameFrom = join(cache, 'android-rename-from');
+      const androidRenameTo = join(cache, 'android-rename-to');
+      mkdirSync(androidRenameFrom);
       let androidSnapshot = '';
       let androidCacheHookCalled = false;
       const androidExecution = await withImmediatePinnedRunner(
         runnerPath,
         async () => status,
-        async (boundPath) => {
+        async (boundPath, prefixArgs = []) => {
           androidSnapshot = dirname(boundPath);
           assert.equal(existsSync(join(androidSnapshot, 'cache')), false);
-          return { status: 0 };
+          return spawnSync(
+            boundPath,
+            [...prefixArgs, '--rename-no-replace', androidRenameFrom, androidRenameTo],
+            { encoding: 'utf8' },
+          );
         },
         'android',
         {
@@ -151,8 +158,19 @@ test(
           },
         },
       );
-      assert.equal(androidExecution.status, 0);
+      assert.equal(
+        androidExecution.error,
+        undefined,
+        androidExecution.error?.stack ?? androidExecution.error?.message,
+      );
+      assert.equal(
+        androidExecution.status,
+        0,
+        `${androidExecution.stdout}${androidExecution.stderr}`,
+      );
       assert.equal(androidCacheHookCalled, false);
+      assert.equal(existsSync(androidRenameTo), true);
+      assert.equal(existsSync(androidRenameFrom), false);
       assert.equal(existsSync(androidSnapshot), false);
 
       let failedSnapshot = '';

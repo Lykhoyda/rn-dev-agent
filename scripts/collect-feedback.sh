@@ -199,12 +199,11 @@ def read_or_create_salt():
         return read_salt()
     except FileNotFoundError:
         value=os.urandom(32)
+        temporary=salt_path+"."+str(os.getpid())+"."+os.urandom(16).hex()+".tmp"
         flags=os.O_WRONLY|os.O_CREAT|os.O_EXCL|getattr(os,"O_NOFOLLOW",0)
+        descriptor=None
         try:
-            descriptor=os.open(salt_path,flags,0o600)
-        except FileExistsError:
-            return read_salt()
-        try:
+            descriptor=os.open(temporary,flags,0o600)
             remaining=memoryview(value)
             while remaining:
                 written=os.write(descriptor,remaining)
@@ -212,9 +211,23 @@ def read_or_create_salt():
                     raise OSError("could not write diagnostics salt")
                 remaining=remaining[written:]
             os.fchmod(descriptor,0o600)
-        finally:
+            os.fsync(descriptor)
             os.close(descriptor)
-        return value
+            descriptor=None
+            try:
+                os.link(temporary,salt_path,follow_symlinks=False)
+            except FileExistsError:
+                return read_salt()
+            return read_salt()
+        finally:
+            if descriptor is not None:
+                os.close(descriptor)
+            try:
+                os.unlink(temporary)
+            except FileNotFoundError:
+                pass
+def valid_action_id(value):
+    return value is None or isinstance(value,str) and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}",value) is not None and ".." not in value
 def sequence(path):
     match=re.search(r"-(\d+)\.json$",os.path.basename(path))
     return int(match.group(1)) if match else 0
@@ -227,12 +240,14 @@ for path in paths:
             value=json.load(handle)
         context=value.get("context",{})
         if value.get("schema") == "rn-dev-agent/runner-diagnostics/1" and context.get("sessionId") == session_id:
+            action_id=context.get("actionId")
+            if not valid_action_id(action_id):
+                raise ValueError("invalid diagnostics action identity")
             salt=read_or_create_salt()
             value=dict(value)
             value["context"]=dict(context)
             value["context"]["sessionId"]="[SESSION_REDACTED]"
-            action_id=value["context"].get("actionId")
-            if isinstance(action_id,str) and action_id:
+            if action_id is not None:
                 digest=hashlib.sha256(salt+b"\0feedback-action-id\0"+action_id.encode("utf-8")).hexdigest()
                 value["context"]["actionId"]=digest
             serialized=json.dumps(value,separators=(",",":"))
