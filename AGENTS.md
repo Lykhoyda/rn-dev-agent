@@ -22,8 +22,9 @@ notes here.
 - `packages/rn-fast-runner/`: source iOS XCTest native runner.
 - `packages/rn-android-runner/`: source Android UiAutomator native runner.
 - `apps/docs-site/`: deliverable documentation site workspace.
-- Engineering processes, plans, stories/specifications, diagnostics, comparisons,
-  and research live in the workspace [`docs/`](https://github.com/Lykhoyda/rn-dev-agent-workspace/tree/main/docs/);
+- Engineering processes, plans, stories/specifications, audits, diagnostics,
+  comparisons, competitor analyses, and general research live in the workspace
+  [`docs/`](https://github.com/Lykhoyda/rn-dev-agent-workspace/tree/main/docs/);
   never add a top-level `docs/` tree here. Captain-approved architecture records
   belong in [Anton Factory `architect-docs`](https://github.com/Lykhoyda/anton-factory/tree/main/architect-docs/);
   link to either owner instead of copying.
