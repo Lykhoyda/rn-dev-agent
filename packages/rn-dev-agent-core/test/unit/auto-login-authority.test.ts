@@ -85,6 +85,24 @@ test('cdp_auto_login refuses an unbound session without selecting an ambient dev
   assert.equal(replayed, false);
 });
 
+test('cdp_auto_login preserves the legacy envelope for ordinary login failures', () => {
+  const result = {
+    loggedIn: false,
+    reason: 'Maestro login flow failed: replay failed',
+    flow: '/project/.maestro/subflows/login.yaml',
+  };
+
+  const toolResult = autoLoginToolResult(result);
+  const envelope = JSON.parse(toolResult.content[0].text);
+
+  assert.deepEqual(envelope, {
+    ok: false,
+    error: result.reason,
+    data: result,
+  });
+  assert.equal(toolResult.isError, true);
+});
+
 test('cdp_auto_login refuses symlinked legacy flow ownership', async () => {
   const root = mkdtempSync(join(tmpdir(), 'rn-auto-login-symlink-'));
   const external = mkdtempSync(join(tmpdir(), 'rn-auto-login-external-'));

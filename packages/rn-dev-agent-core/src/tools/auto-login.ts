@@ -380,5 +380,13 @@ export function autoLoginToolResult(result: AutoLoginResult | null): ToolResult 
       result.nextAction ? { nextAction: result.nextAction } : undefined,
     );
   }
-  return failResult(result.reason);
+  return {
+    content: [
+      {
+        type: 'text',
+        text: JSON.stringify({ ok: false, error: result.reason, data: result }),
+      },
+    ],
+    isError: true,
+  };
 }

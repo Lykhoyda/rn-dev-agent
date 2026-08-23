@@ -85670,7 +85670,15 @@ function autoLoginToolResult(result) {
   if (result.code) {
     return failResult(result.reason, result.code, result.nextAction ? { nextAction: result.nextAction } : void 0);
   }
-  return failResult(result.reason);
+  return {
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify({ ok: false, error: result.reason, data: result })
+      }
+    ],
+    isError: true
+  };
 }
 
 // packages/rn-dev-agent-core/dist/tools/proof-step.js
