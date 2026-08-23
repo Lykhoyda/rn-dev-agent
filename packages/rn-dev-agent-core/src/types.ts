@@ -219,6 +219,7 @@ export interface StatusResult {
 export interface EvaluateResult {
   value?: unknown;
   error?: string;
+  requestDispatched?: boolean;
 }
 
 export type ToolErrorCode =

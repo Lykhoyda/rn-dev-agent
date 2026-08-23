@@ -70377,7 +70377,7 @@ var init_setup = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/cdp/transport.js
-function sendWithTimeout(ws, pending2, nextId, method, params, ms) {
+function sendWithTimeout(ws, pending2, nextId, method, params, ms, onDispatched) {
   if (!ws || ws.readyState !== wrapper_default.OPEN) {
     return Promise.reject(new Error("WebSocket not connected"));
   }
@@ -70393,6 +70393,7 @@ function sendWithTimeout(ws, pending2, nextId, method, params, ms) {
         throw new Error("WebSocket closed between check and send");
       }
       ws.send(JSON.stringify({ id, method, params }));
+      onDispatched?.();
     } catch (err) {
       clearTimeout(timer);
       pending2.delete(id);
@@ -71654,10 +71655,21 @@ var init_cdp_client = __esm({
       setTimeout(function() { delete globalThis['${slot}']; }, ${ASYNC_CLEANUP_MS});
       return { s: safeVal(startValue) };
     })()`;
-        const initResult = await this.sendWithTimeout("Runtime.evaluate", {
-          expression: wrapper,
-          returnByValue: true
-        }, Math.max(1, deadline - Date.now()));
+        let requestDispatched = false;
+        let initResult;
+        try {
+          initResult = await this.sendWithTimeout("Runtime.evaluate", {
+            expression: wrapper,
+            returnByValue: true
+          }, Math.max(1, deadline - Date.now()), () => {
+            requestDispatched = true;
+          });
+        } catch (error2) {
+          return {
+            error: `Async evaluation initialization failed: ${error2 instanceof Error ? error2.message : String(error2)}`,
+            requestDispatched
+          };
+        }
         if (initResult?.exceptionDetails) {
           return {
             error: initResult.exceptionDetails.text ?? initResult.exceptionDetails.exception?.description ?? "Unknown evaluation error"
@@ -71965,8 +71977,8 @@ var init_cdp_client = __esm({
         if (this.lifecycleAuthority())
           clearActiveFlag();
       }
-      sendWithTimeout(method, params, ms) {
-        return sendWithTimeout(this.ws, this.pending, () => ++this.msgId, method, params, ms);
+      sendWithTimeout(method, params, ms, onDispatched) {
+        return sendWithTimeout(this.ws, this.pending, () => ++this.msgId, method, params, ms, onDispatched);
       }
     };
   }
@@ -80207,42 +80219,44 @@ var init_mmkv = __esm({
 function surfaceText(nodes) {
   return nodes.flatMap((node) => [node.label, node.identifier].filter((value) => typeof value === "string").map((value) => value.trim().toLowerCase()).filter(Boolean));
 }
-function isNonBlockingNavigationChrome(node, packageName) {
-  if (packageName !== "com.android.systemui")
-    return false;
-  const identifier = typeof node.identifier === "string" ? node.identifier.trim().toLowerCase() : "";
-  if ([
-    "back",
-    "home",
-    "recent_apps",
-    "recents",
-    "overview",
-    "navigation_bar_frame",
-    "nav_bar_background",
-    "navbuttons_view",
-    "start_contextual_buttons",
-    "end_contextual_buttons",
-    "end_nav_buttons",
-    "home_handle"
-  ].includes(identifier)) {
-    return true;
+function surfaceRect(node) {
+  if (!node.rect || typeof node.rect !== "object")
+    return null;
+  const rect = node.rect;
+  if (typeof rect.x !== "number" || typeof rect.y !== "number" || typeof rect.width !== "number" || typeof rect.height !== "number" || rect.width < 0 || rect.height < 0) {
+    return null;
   }
-  const label = typeof node.label === "string" ? node.label.trim().toLowerCase() : "";
-  const type = typeof node.type === "string" ? node.type.toLowerCase() : "";
-  return ["back", "home", "recents", "overview"].includes(label) && type.includes("imageview");
+  return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
 }
-function isBlockingForeignSurface(node, boundAppId) {
-  const packageName = typeof node.packageName === "string" ? node.packageName.trim() : "";
-  if (!packageName || packageName === boundAppId)
-    return false;
-  return !isNonBlockingNavigationChrome(node, packageName);
+function rectContains(container, candidate) {
+  return candidate.x >= container.x && candidate.y >= container.y && candidate.x + candidate.width <= container.x + container.width && candidate.y + candidate.height <= container.y + container.height;
+}
+function hasBlockingForeignSurface(nodes, boundAppId) {
+  const systemNodes = nodes.filter((node) => node.packageName === "com.android.systemui");
+  const chromeRegions = systemNodes.flatMap((node) => {
+    const identifier = typeof node.identifier === "string" ? node.identifier.trim().toLowerCase() : "";
+    const rect = SYSTEM_CHROME_REGION_IDENTIFIERS.has(identifier) ? surfaceRect(node) : null;
+    return rect ? [rect] : [];
+  });
+  return nodes.some((node) => {
+    const packageName = typeof node.packageName === "string" ? node.packageName.trim() : "";
+    if (!packageName || packageName === boundAppId)
+      return false;
+    if (packageName !== "com.android.systemui")
+      return true;
+    const identifier = typeof node.identifier === "string" ? node.identifier.trim().toLowerCase() : "";
+    if (SYSTEM_CHROME_IDENTIFIERS.has(identifier))
+      return false;
+    const rect = surfaceRect(node);
+    return !rect || !chromeRegions.some((region) => rectContains(region, rect));
+  });
 }
 function classifyForegroundSurface(nodes, boundAppId) {
   const text = surfaceText(nodes);
   if (text.length === 0)
     return "unknown";
   const has = (value) => text.some((candidate) => candidate.includes(value));
-  if (nodes.some((node) => node.type === "Alert") || boundAppId && nodes.some((node) => isBlockingForeignSurface(node, boundAppId))) {
+  if (nodes.some((node) => node.type === "Alert") || boundAppId && hasBlockingForeignSurface(nodes, boundAppId)) {
     return "unknown";
   }
   if (has("development servers"))
@@ -80374,9 +80388,13 @@ async function hideExpoDevMenu(client2, options = {}) {
       const attemptOutcome = result.error ? startOutcome.callSent ? {
         ...startOutcome,
         reason: `${startOutcome.reason} Async evaluation failed: ${result.error}`
+      } : result.requestDispatched ? {
+        callSent: true,
+        reason: `Dev menu hide evaluation was dispatched but its invocation could not be confirmed: ${result.error}`,
+        attempts: attempts3
       } : {
         callSent: false,
-        reason: `Dev menu hide evaluation failed: ${result.error}`,
+        reason: `Dev menu hide evaluation failed before dispatch: ${result.error}`,
         attempts: attempts3
       } : startOutcome;
       outcome = attemptOutcome;
@@ -80399,7 +80417,7 @@ async function hideExpoDevMenu(client2, options = {}) {
   }
   return successfulCall ? { ...successfulCall, attempts: outcome.attempts } : outcome;
 }
-var RESOLVE_EXPO_DEV_MENU, HIDE_EXPO_DEV_MENU_EXPRESSION;
+var RESOLVE_EXPO_DEV_MENU, HIDE_EXPO_DEV_MENU_EXPRESSION, SYSTEM_CHROME_REGION_IDENTIFIERS, SYSTEM_CHROME_IDENTIFIERS;
 var init_expo_dev_menu = __esm({
   "packages/rn-dev-agent-core/dist/tools/expo-dev-menu.js"() {
     "use strict";
@@ -80425,6 +80443,48 @@ var init_expo_dev_menu = __esm({
     return { __rnAgentStartValue: "sent:" + method, then: function (resolve, reject) { return pending.then(resolve, reject); } };
   } catch (e) { return "error:" + method + ":" + (e && e.message ? e.message : String(e)); }
 })()`;
+    SYSTEM_CHROME_REGION_IDENTIFIERS = /* @__PURE__ */ new Set([
+      "status_bar",
+      "status_bar_container",
+      "navigation_bar_frame",
+      "nav_bar_background",
+      "taskbar_container",
+      "navbuttons_view"
+    ]);
+    SYSTEM_CHROME_IDENTIFIERS = /* @__PURE__ */ new Set([
+      ...SYSTEM_CHROME_REGION_IDENTIFIERS,
+      "status_bar_launch_animation_container",
+      "status_bar_contents",
+      "status_bar_start_side_container",
+      "status_bar_start_side_content",
+      "status_bar_start_side_except_heads_up",
+      "status_bar_end_side_container",
+      "status_bar_end_side_content",
+      "clock",
+      "notification_icon_area",
+      "notificationicons",
+      "cutout_space_view",
+      "system_icons",
+      "statusicons",
+      "wifi_combo",
+      "wifi_group",
+      "wifi_signal",
+      "mobile_combo",
+      "mobile_group",
+      "mobile_signal",
+      "battery",
+      "taskbar_scrim",
+      "start_contextual_buttons",
+      "end_contextual_buttons",
+      "end_nav_buttons",
+      "taskbar_bubbles_container",
+      "back",
+      "home",
+      "recent_apps",
+      "recents",
+      "overview",
+      "home_handle"
+    ]);
   }
 });
 

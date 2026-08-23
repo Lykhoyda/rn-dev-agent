@@ -791,10 +791,22 @@ export class CDPClient {
       setTimeout(function() { delete globalThis['${slot}']; }, ${ASYNC_CLEANUP_MS});
       return { s: safeVal(startValue) };
     })()`;
-        const initResult = (await this.sendWithTimeout('Runtime.evaluate', {
-            expression: wrapper,
-            returnByValue: true,
-        }, Math.max(1, deadline - Date.now())));
+        let requestDispatched = false;
+        let initResult;
+        try {
+            initResult = (await this.sendWithTimeout('Runtime.evaluate', {
+                expression: wrapper,
+                returnByValue: true,
+            }, Math.max(1, deadline - Date.now()), () => {
+                requestDispatched = true;
+            }));
+        }
+        catch (error) {
+            return {
+                error: `Async evaluation initialization failed: ${error instanceof Error ? error.message : String(error)}`,
+                requestDispatched,
+            };
+        }
         if (initResult?.exceptionDetails) {
             return {
                 error: initResult.exceptionDetails.text ??
@@ -1126,7 +1138,7 @@ export class CDPClient {
         if (this.lifecycleAuthority())
             clearActiveFlag();
     }
-    sendWithTimeout(method, params, ms) {
-        return sendMsg(this.ws, this.pending, () => ++this.msgId, method, params, ms);
+    sendWithTimeout(method, params, ms, onDispatched) {
+        return sendMsg(this.ws, this.pending, () => ++this.msgId, method, params, ms, onDispatched);
     }
 }

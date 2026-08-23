@@ -1037,17 +1037,29 @@ export class CDPClient {
       return { s: safeVal(startValue) };
     })()`;
 
-    const initResult = (await this.sendWithTimeout(
-      'Runtime.evaluate',
-      {
-        expression: wrapper,
-        returnByValue: true,
-      },
-      Math.max(1, deadline - Date.now()),
-    )) as {
+    let requestDispatched = false;
+    let initResult: {
       result?: { value?: { s?: string } };
       exceptionDetails?: { text?: string; exception?: { description?: string } };
     };
+    try {
+      initResult = (await this.sendWithTimeout(
+        'Runtime.evaluate',
+        {
+          expression: wrapper,
+          returnByValue: true,
+        },
+        Math.max(1, deadline - Date.now()),
+        () => {
+          requestDispatched = true;
+        },
+      )) as typeof initResult;
+    } catch (error) {
+      return {
+        error: `Async evaluation initialization failed: ${error instanceof Error ? error.message : String(error)}`,
+        requestDispatched,
+      };
+    }
 
     if (initResult?.exceptionDetails) {
       return {
@@ -1427,7 +1439,12 @@ export class CDPClient {
     if (this.lifecycleAuthority()) clearActiveFlag();
   }
 
-  private sendWithTimeout(method: string, params: unknown, ms: number): Promise<unknown> {
-    return sendMsg(this.ws, this.pending, () => ++this.msgId, method, params, ms);
+  private sendWithTimeout(
+    method: string,
+    params: unknown,
+    ms: number,
+    onDispatched?: () => void,
+  ): Promise<unknown> {
+    return sendMsg(this.ws, this.pending, () => ++this.msgId, method, params, ms, onDispatched);
   }
 }

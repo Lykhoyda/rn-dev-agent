@@ -26,35 +26,87 @@ function surfaceText(nodes) {
         .map((value) => value.trim().toLowerCase())
         .filter(Boolean));
 }
-function isNonBlockingNavigationChrome(node, packageName) {
-    if (packageName !== 'com.android.systemui')
-        return false;
-    const identifier = typeof node.identifier === 'string' ? node.identifier.trim().toLowerCase() : '';
-    if ([
-        'back',
-        'home',
-        'recent_apps',
-        'recents',
-        'overview',
-        'navigation_bar_frame',
-        'nav_bar_background',
-        'navbuttons_view',
-        'start_contextual_buttons',
-        'end_contextual_buttons',
-        'end_nav_buttons',
-        'home_handle',
-    ].includes(identifier)) {
-        return true;
+const SYSTEM_CHROME_REGION_IDENTIFIERS = new Set([
+    'status_bar',
+    'status_bar_container',
+    'navigation_bar_frame',
+    'nav_bar_background',
+    'taskbar_container',
+    'navbuttons_view',
+]);
+const SYSTEM_CHROME_IDENTIFIERS = new Set([
+    ...SYSTEM_CHROME_REGION_IDENTIFIERS,
+    'status_bar_launch_animation_container',
+    'status_bar_contents',
+    'status_bar_start_side_container',
+    'status_bar_start_side_content',
+    'status_bar_start_side_except_heads_up',
+    'status_bar_end_side_container',
+    'status_bar_end_side_content',
+    'clock',
+    'notification_icon_area',
+    'notificationicons',
+    'cutout_space_view',
+    'system_icons',
+    'statusicons',
+    'wifi_combo',
+    'wifi_group',
+    'wifi_signal',
+    'mobile_combo',
+    'mobile_group',
+    'mobile_signal',
+    'battery',
+    'taskbar_scrim',
+    'start_contextual_buttons',
+    'end_contextual_buttons',
+    'end_nav_buttons',
+    'taskbar_bubbles_container',
+    'back',
+    'home',
+    'recent_apps',
+    'recents',
+    'overview',
+    'home_handle',
+]);
+function surfaceRect(node) {
+    if (!node.rect || typeof node.rect !== 'object')
+        return null;
+    const rect = node.rect;
+    if (typeof rect.x !== 'number' ||
+        typeof rect.y !== 'number' ||
+        typeof rect.width !== 'number' ||
+        typeof rect.height !== 'number' ||
+        rect.width < 0 ||
+        rect.height < 0) {
+        return null;
     }
-    const label = typeof node.label === 'string' ? node.label.trim().toLowerCase() : '';
-    const type = typeof node.type === 'string' ? node.type.toLowerCase() : '';
-    return ['back', 'home', 'recents', 'overview'].includes(label) && type.includes('imageview');
+    return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
 }
-function isBlockingForeignSurface(node, boundAppId) {
-    const packageName = typeof node.packageName === 'string' ? node.packageName.trim() : '';
-    if (!packageName || packageName === boundAppId)
-        return false;
-    return !isNonBlockingNavigationChrome(node, packageName);
+function rectContains(container, candidate) {
+    return (candidate.x >= container.x &&
+        candidate.y >= container.y &&
+        candidate.x + candidate.width <= container.x + container.width &&
+        candidate.y + candidate.height <= container.y + container.height);
+}
+function hasBlockingForeignSurface(nodes, boundAppId) {
+    const systemNodes = nodes.filter((node) => node.packageName === 'com.android.systemui');
+    const chromeRegions = systemNodes.flatMap((node) => {
+        const identifier = typeof node.identifier === 'string' ? node.identifier.trim().toLowerCase() : '';
+        const rect = SYSTEM_CHROME_REGION_IDENTIFIERS.has(identifier) ? surfaceRect(node) : null;
+        return rect ? [rect] : [];
+    });
+    return nodes.some((node) => {
+        const packageName = typeof node.packageName === 'string' ? node.packageName.trim() : '';
+        if (!packageName || packageName === boundAppId)
+            return false;
+        if (packageName !== 'com.android.systemui')
+            return true;
+        const identifier = typeof node.identifier === 'string' ? node.identifier.trim().toLowerCase() : '';
+        if (SYSTEM_CHROME_IDENTIFIERS.has(identifier))
+            return false;
+        const rect = surfaceRect(node);
+        return !rect || !chromeRegions.some((region) => rectContains(region, rect));
+    });
 }
 export function classifyForegroundSurface(nodes, boundAppId) {
     const text = surfaceText(nodes);
@@ -62,7 +114,7 @@ export function classifyForegroundSurface(nodes, boundAppId) {
         return 'unknown';
     const has = (value) => text.some((candidate) => candidate.includes(value));
     if (nodes.some((node) => node.type === 'Alert') ||
-        (boundAppId && nodes.some((node) => isBlockingForeignSurface(node, boundAppId)))) {
+        (boundAppId && hasBlockingForeignSurface(nodes, boundAppId))) {
         return 'unknown';
     }
     if (has('development servers'))
@@ -202,11 +254,17 @@ export async function hideExpoDevMenu(client, options = {}) {
                         ...startOutcome,
                         reason: `${startOutcome.reason} Async evaluation failed: ${result.error}`,
                     }
-                    : {
-                        callSent: false,
-                        reason: `Dev menu hide evaluation failed: ${result.error}`,
-                        attempts,
-                    }
+                    : result.requestDispatched
+                        ? {
+                            callSent: true,
+                            reason: `Dev menu hide evaluation was dispatched but its invocation could not be confirmed: ${result.error}`,
+                            attempts,
+                        }
+                        : {
+                            callSent: false,
+                            reason: `Dev menu hide evaluation failed before dispatch: ${result.error}`,
+                            attempts,
+                        }
                 : startOutcome;
             outcome = attemptOutcome;
             if (attemptOutcome.callSent)

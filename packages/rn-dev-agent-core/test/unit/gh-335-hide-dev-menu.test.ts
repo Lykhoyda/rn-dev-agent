@@ -39,6 +39,33 @@ function snapshotEnvelope(nodes) {
   };
 }
 
+function normalAndroidSystemChrome() {
+  return [
+    {
+      type: 'android.widget.FrameLayout',
+      identifier: 'status_bar',
+      packageName: 'com.android.systemui',
+    },
+    {
+      label: '12:31',
+      type: 'android.widget.TextView',
+      identifier: 'clock',
+      packageName: 'com.android.systemui',
+    },
+    {
+      label: 'Battery charging, 100 percent.',
+      type: 'android.widget.LinearLayout',
+      identifier: 'battery',
+      packageName: 'com.android.systemui',
+    },
+    {
+      type: 'android.widget.FrameLayout',
+      identifier: 'navigation_bar_frame',
+      packageName: 'com.android.systemui',
+    },
+  ];
+}
+
 function hideEval(platform, ...values) {
   let index = 0;
   const calls = [];
@@ -100,10 +127,33 @@ test('foreground classifier keeps Expo sheet, picker, tutorial, RN core menu, an
     ),
     'app',
   );
+  assert.equal(
+    classifyForegroundSurface(
+      [{ label: 'Home', packageName: 'com.example.app' }, ...normalAndroidSystemChrome()],
+      'com.example.app',
+    ),
+    'app',
+  );
   assert.equal(classifyForegroundSurface([{ label: 'Home' }], 'com.example.app'), 'unknown');
   assert.equal(
     classifyForegroundSurface(
       [{ label: 'Allow camera access', packageName: 'com.android.permissioncontroller' }],
+      'com.example.app',
+    ),
+    'unknown',
+  );
+  assert.equal(
+    classifyForegroundSurface(
+      [
+        { label: 'Home', packageName: 'com.example.app' },
+        ...normalAndroidSystemChrome(),
+        {
+          label: 'Internet',
+          type: 'android.widget.TextView',
+          identifier: 'quick_settings_panel',
+          packageName: 'com.android.systemui',
+        },
+      ],
       'com.example.app',
     ),
     'unknown',
@@ -255,6 +305,29 @@ test('a later resolution failure cannot erase an earlier close invocation', asyn
   assert.equal(calls.length, 2);
 });
 
+test('normal Android system chrome permits a clean hidden post-probe', async () => {
+  const appId = 'com.example.app';
+  const snapshots = [
+    [{ label: 'Copy system info' }, { label: 'Open DevTools' }, ...normalAndroidSystemChrome()],
+    [{ label: 'Home', packageName: appId }, ...normalAndroidSystemChrome()],
+  ];
+  let probeIndex = 0;
+  const probeForegroundSurface = async () =>
+    foregroundSurfaceFromSnapshot(
+      snapshotEnvelope(snapshots[Math.min(probeIndex++, snapshots.length - 1)]),
+      appId,
+    );
+  const { client } = hideEval('android', { value: 'ok:hideMenu' }, { value: 'ok:hideMenu' });
+  const handler = createDevSettingsHandler(() => client, {
+    probeForegroundSurface,
+    settleAfterHide: async () => {},
+  });
+
+  const data = expectOk(await handler({ action: 'hideDevMenu' }));
+  assert.equal(data.outcome, 'hidden');
+  assert.equal(data.surface, 'app');
+});
+
 test('mixed bound-app and permission-dialog evidence cannot yield hidden', async () => {
   const appId = 'com.example.app';
   const snapshots = [
@@ -381,6 +454,46 @@ test('a polling transport failure preserves sent invocation truth across the ret
   assert.equal(envelope.meta.method, 'hideMenu');
   assert.equal(envelope.meta.attempts, 2);
   assert.equal(closeCalls, 2);
+});
+
+test('initialization distinguishes definite pre-send failure from post-dispatch uncertainty', async () => {
+  const preSendClient = new CDPClient(8081);
+  const preSendHandlerClient = createMockClient({
+    evaluate: (expression, awaitPromise) => preSendClient.evaluate(expression, awaitPromise, 20),
+  });
+  const preSendHandler = createDevSettingsHandler(() => preSendHandlerClient, {
+    probeForegroundSurface: surfaceProbe('expo_dev_menu'),
+    settleAfterHide: async () => {},
+  });
+
+  const preSendEnvelope = parseEnvelope(await preSendHandler({ action: 'hideDevMenu' }));
+  assert.equal(preSendEnvelope.code, 'DEV_MENU_HIDE_FAILED');
+  assert.equal(preSendEnvelope.meta.callSent, false);
+
+  const sentRequests = [];
+  const postDispatchClient = new CDPClient(8081);
+  Reflect.set(postDispatchClient, 'ws', {
+    readyState: 1,
+    send: (payload) => sentRequests.push(JSON.parse(payload)),
+  });
+  const postDispatchHandlerClient = createMockClient({
+    evaluate: (expression, awaitPromise) =>
+      postDispatchClient.evaluate(expression, awaitPromise, 20),
+  });
+  const postDispatchHandler = createDevSettingsHandler(() => postDispatchHandlerClient, {
+    probeForegroundSurface: surfaceProbe('expo_dev_menu', 'expo_dev_menu'),
+    settleAfterHide: async () => {},
+  });
+
+  const postDispatchEnvelope = parseEnvelope(await postDispatchHandler({ action: 'hideDevMenu' }));
+  assert.equal(postDispatchEnvelope.code, 'DEV_MENU_HIDE_UNVERIFIED');
+  assert.equal(postDispatchEnvelope.meta.callSent, true);
+  assert.equal(postDispatchEnvelope.meta.attempts, 2);
+  assert.equal(sentRequests.length, 2);
+  assert.equal(
+    sentRequests.every((request) => request.method === 'Runtime.evaluate'),
+    true,
+  );
 });
 
 test('dev_settings hideDevMenu: close sent but post-probe remains occluded -> unverified', async () => {
