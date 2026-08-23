@@ -13,8 +13,8 @@ permissions:
   contents: read
 
 jobs:
-  test:
-    name: Build & Test
+  core-tests:
+    name: Core, integration & docs
     runs-on: ubuntu-latest
 
     steps:
@@ -36,21 +36,13 @@ jobs:
       - name: TypeScript build + dist freshness gate
         run: bash scripts/check-dist-fresh.sh
 
-      # GH#439: CI must invoke the same package.json scripts as local runs so
-      # the test-file globs live in exactly one place — #340 shipped because an
-      # inline CI glob silently skipped 22 nested unit-test files while
-      # `yarn test` ran them. The unit run also emits Node's built-in coverage
-      # report (report-only, no thresholds) so untested areas stay visible.
       # GH#437 (audit P0-B): wire-contract drift must fail a NAMED gate, not
       # hide in the unit blob — tri-file command-enum/protocol sync (#418/#383)
       # plus golden contract tests over payloads captured from live runners.
-      # Runs BEFORE the broad unit step so a contract regression fails here,
-      # under the gate's name (the unit globs also include these files).
+      # The broad unit shards also include these files, preserving the named
+      # contract gate while keeping the authoritative unit-test globs unchanged.
       - name: Runner wire-contract gate
         run: corepack yarn workspace rn-dev-agent-core test:contract
-
-      - name: Unit tests (with coverage report)
-        run: corepack yarn test:coverage
 
       - name: Install proof-media integration dependency
         run: sudo apt-get update && sudo apt-get install --yes ffmpeg
@@ -110,6 +102,60 @@ jobs:
       # GH#498: docs-site is now a deliverable app workspace.
       - name: Docs app build
         run: corepack yarn workspace rn-dev-agent-docs build
+
+  unit-tests:
+    name: Unit tests (batch ${{ matrix.batch }}/5)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        batch: [1, 2, 3, 4, 5]
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2 — Phase 134.5 SHA pin
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e  # v6.4.0 — Phase 134.5 SHA pin
+        with:
+          node-version: 22
+          cache: yarn
+          cache-dependency-path: yarn.lock
+
+      - run: corepack enable
+      - run: corepack yarn install --immutable
+
+      # GH#439: keep test discovery in the package script; Node's native shard
+      # option partitions that one authoritative file set deterministically.
+      - name: Run unit-test batch ${{ matrix.batch }}/5 (with coverage report)
+        env:
+          UNIT_TEST_BATCH: ${{ matrix.batch }}
+          UNIT_TEST_BATCHES: 5
+          UNIT_TEST_SHARD: ${{ matrix.batch }}/5
+        run: |
+          TOTAL_TEST_FILES=$(find packages/rn-dev-agent-core/test/unit -type f \( -name '*.test.js' -o -name '*.test.ts' \) | wc -l | tr -d ' ')
+          BASE_BATCH_SIZE=$((TOTAL_TEST_FILES / UNIT_TEST_BATCHES))
+          EXTRA_BATCHES=$((TOTAL_TEST_FILES % UNIT_TEST_BATCHES))
+          SELECTED_TEST_FILES=$BASE_BATCH_SIZE
+          if [ "$UNIT_TEST_BATCH" -le "$EXTRA_BATCHES" ]; then
+            SELECTED_TEST_FILES=$((SELECTED_TEST_FILES + 1))
+          fi
+          echo "Unit-test batch $UNIT_TEST_SHARD: discovered $TOTAL_TEST_FILES files; selected $SELECTED_TEST_FILES files"
+          corepack yarn test:coverage
+
+  test:
+    name: Build & Test
+    needs: [core-tests, unit-tests]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every test job to pass
+        env:
+          CORE_TESTS_RESULT: ${{ needs.core-tests.result }}
+          UNIT_TESTS_RESULT: ${{ needs.unit-tests.result }}
+        run: |
+          echo "Core/integration/docs: $CORE_TESTS_RESULT"
+          echo "Five unit-test batches: $UNIT_TESTS_RESULT"
+          test "$CORE_TESTS_RESULT" = success
+          test "$UNIT_TESTS_RESULT" = success
 
   lint-format:
     name: Lint & format

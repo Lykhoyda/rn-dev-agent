@@ -341,7 +341,7 @@ corepack yarn build:host-runtimes   # builds core + generates both host packages
 Run locally: `claude --plugin-dir /path/to/rn-dev-agent` (Claude Code) or register `packages/codex-plugin` (Codex).
 
 ```bash
-corepack yarn test          # 2,976 unit tests
+corepack yarn test          # complete unit-test suite
 corepack yarn lint          # oxlint
 corepack yarn format:check  # oxfmt
 ```
