@@ -82,11 +82,12 @@ Draft workspace handoffs for:
   durable lesson;
 - newly discovered or fixed defects with observed behavior, fix or proposed fix, and refs.
 
-Draft a Factory handoff only when captain approval or an existing settled-architecture
-status is evidenced. Include:
+Draft a Factory handoff only when explicit captain approval evidence and settled-architecture
+status are both present. Settled status without captain approval remains workspace planning
+material. Include:
 
 - proposed title and record type;
-- approval evidence and status;
+- captain approval evidence and settled status;
 - concise context, decision, rejected alternatives, and durable lesson;
 - source code, issue, PR, and commit links;
 - pointers to workspace process or research evidence, without copying that material.

@@ -864,7 +864,7 @@ M1b / Phase 104 — CDP proxy routing integration. Completes the M1 story split 
 - **Rollback-path test coverage** (flagged by both at 85-90% confidence). The catch block tearing the multiplexer back down when `softReconnect` throws post-allocation was unreachable by the existing mock-client tests (`softReconnect` never rejected). Added 3 tests using a real mock Hermes that exercise the rollback, the concurrency guard, and the in-flight-cache-clears-on-failure behavior.
 
 ### Known limitation logged (B132)
-Stale `hermesUrl` after target change or bundle reload — multiplexer captures the URL once at `startProxy` time. If Hermes regenerates the URL (reload, eviction, Metro restart), the proxy forwards to a dead upstream until `cdp_disconnect` + re-run `cdp_open_devtools`. Pre-existing M1a design limit, not introduced by M1b. Filed as B132 in BUGS.md for follow-up (requires multiplexer upstream-refresh API or client-level teardown-and-restart on target change).
+Stale `hermesUrl` after target change or bundle reload — multiplexer captures the URL once at `startProxy` time. If Hermes regenerates the URL (reload, eviction, Metro restart), the proxy forwards to a dead upstream until `cdp_disconnect` + re-run `cdp_open_devtools`. Pre-existing M1a design limit, not introduced by M1b. Filed as [B132](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/BUGS.md?plain=1#L208) for follow-up (requires multiplexer upstream-refresh API or client-level teardown-and-restart on target change).
 
 ### Refs
 - [D661](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/DECISIONS.md?plain=1#L3040). [Phase 104](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/ROADMAP.md?plain=1#L3556). Parent: M1a / D654 (Phase 100, 2026-04-20). Branch: `feat/m1b-cdp-proxy-routing`.
@@ -959,7 +959,7 @@ Three-PR stability sprint: zombie target disambiguation (B111), MCP process life
 
 ### Verified-stale (closed via empirical sweep, no code change in this release)
 - **B73 (HIGH): MCP dies on Metro restart** — verified empirically already fixed by historical reconnect loop + background poll pattern (D622). MCP survives Metro death and auto-reconnects when Metro returns.
-- **B84, B100, B110, B112** — fixes had already shipped through earlier hardening phases; BUGS.md was stale.
+- **[B84](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/BUGS.md?plain=1#L735), [B100](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/BUGS.md?plain=1#L844), [B110](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/BUGS.md?plain=1#L336), [B112](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/BUGS.md?plain=1#L329)** — fixes had already shipped through earlier hardening phases; the workspace bug ledger was stale.
 - **All Phase 85 R-stories (R1-R10 except R7)** — closed; R7 (transparentModal) noted as react-native-screens upstream.
 
 ### Tests
@@ -980,7 +980,7 @@ PRs #32 (B111) and #33 (B76) reviewed independently by Gemini + Codex. PR #32: 0
 - B73 verification trace in the workspace [proof directory](https://github.com/Lykhoyda/rn-dev-agent-workspace/tree/main/docs/proof/b73-b76-mcp-lifecycle/).
 
 ### Backlog state
-Plugin code-side stability backlog effectively cleared after this release. All Phase 85 R-stories closed (R7 deferred as upstream). Remaining open items in BUGS.md are out-of-scope for plugin code (workspace test-app cosmetic, environmental Hermes/Android, accepted-tradeoff items).
+Plugin code-side stability backlog effectively cleared after this release. All Phase 85 R-stories closed (R7 deferred as upstream). Remaining items in the [workspace bug ledger's open section](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/BUGS.md?plain=1#L3) are out-of-scope for plugin code (workspace test-app cosmetic, environmental Hermes/Android, accepted-tradeoff items).
 
 ## [0.23.0] — 2026-04-16
 
