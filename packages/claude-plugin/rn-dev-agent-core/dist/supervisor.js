@@ -71643,6 +71643,8 @@ var init_cdp_client = __esm({
         try { return JSON.stringify(v); } catch(e) { return JSON.stringify(String(v)); }
       }
       var p = ${expression};
+      var startValue;
+      try { startValue = p && p.__rnAgentStartValue; } catch(e) {}
       if (p && typeof p.then === 'function') {
         p.then(function(v) { globalThis['${slot}'] = { v: safeVal(v) }; })
          .catch(function(e) { globalThis['${slot}'] = { e: (e && e.message) || String(e) }; });
@@ -71650,6 +71652,7 @@ var init_cdp_client = __esm({
         globalThis['${slot}'] = { v: safeVal(p) };
       }
       setTimeout(function() { delete globalThis['${slot}']; }, ${ASYNC_CLEANUP_MS});
+      return { s: safeVal(startValue) };
     })()`;
         const initResult = await this.sendWithTimeout("Runtime.evaluate", {
           expression: wrapper,
@@ -71659,6 +71662,14 @@ var init_cdp_client = __esm({
           return {
             error: initResult.exceptionDetails.text ?? initResult.exceptionDetails.exception?.description ?? "Unknown evaluation error"
           };
+        }
+        let asyncStartValue;
+        try {
+          if (typeof initResult.result?.value?.s === "string") {
+            asyncStartValue = JSON.parse(initResult.result.value.s);
+          }
+        } catch {
+          asyncStartValue = void 0;
         }
         while (Date.now() < deadline) {
           const remaining = deadline - Date.now();
@@ -71677,7 +71688,7 @@ var init_cdp_client = __esm({
             }, 1e3).catch(() => {
             });
             if ("e" in val)
-              return { error: String(val.e) };
+              return { value: asyncStartValue, error: String(val.e) };
             try {
               return { value: JSON.parse(val.v) };
             } catch {
@@ -71691,7 +71702,10 @@ var init_cdp_client = __esm({
           returnByValue: true
         }, 1e3).catch(() => {
         });
-        return { error: "Promise did not resolve within " + timeout + "ms" };
+        return {
+          value: asyncStartValue,
+          error: "Promise did not resolve within " + timeout + "ms"
+        };
       }
       async send(method, params) {
         return this.sendWithTimeout(method, params, timeoutForMethod(method, this.effectivePlatform));
@@ -72160,11 +72174,25 @@ var init_config = __esm({
 function surfaceText(nodes) {
   return nodes.flatMap((node) => [node.label, node.identifier].filter((value) => typeof value === "string").map((value) => value.trim().toLowerCase()).filter(Boolean));
 }
+function isBlockingForeignSurface(node, boundAppId) {
+  const packageName = typeof node.packageName === "string" ? node.packageName.trim() : "";
+  if (!packageName || packageName === boundAppId)
+    return false;
+  const shellPackage = packageName === "com.android.systemui" || packageName.includes("launcher") || packageName.includes("nexuslauncher");
+  if (!shellPackage)
+    return true;
+  const type = typeof node.type === "string" ? node.type.toLowerCase() : "";
+  const identity2 = [node.label, node.identifier].filter((value) => typeof value === "string").join(" ").toLowerCase();
+  return ["alert", "dialog", "popup", "button", "edittext"].some((value) => type.includes(value)) || ["alert", "dialog", "permission", "chooser", "resolver", "modal", "popup"].some((value) => identity2.includes(value));
+}
 function classifyForegroundSurface(nodes, boundAppId) {
   const text = surfaceText(nodes);
   if (text.length === 0)
     return "unknown";
   const has = (value) => text.some((candidate) => candidate.includes(value));
+  if (nodes.some((node) => node.type === "Alert") || boundAppId && nodes.some((node) => isBlockingForeignSurface(node, boundAppId))) {
+    return "unknown";
+  }
   if (has("development servers"))
     return "dev_client_picker";
   if (has("this is the developer menu"))
@@ -72174,7 +72202,7 @@ function classifyForegroundSurface(nodes, boundAppId) {
   }
   if (has("open debugger") || has("configure bundler"))
     return "react_native_dev_menu";
-  if (!boundAppId || nodes.some((node) => node.type === "Alert"))
+  if (!boundAppId)
     return "unknown";
   const hasBoundApp = nodes.some((node) => node.packageName === boundAppId || node.type === "Application");
   return hasBoundApp ? "app" : "unknown";
@@ -72206,6 +72234,22 @@ function parseSentinel(value, attempts3) {
       callSent: true,
       method: "closeMenu",
       reason: "ExpoDevMenu.closeMenu() completed.",
+      attempts: attempts3
+    };
+  }
+  if (sentinel === "sent:hideMenu") {
+    return {
+      callSent: true,
+      method: "hideMenu",
+      reason: "ExpoDevMenu.hideMenu() was invoked but did not settle.",
+      attempts: attempts3
+    };
+  }
+  if (sentinel === "sent:closeMenu") {
+    return {
+      callSent: true,
+      method: "closeMenu",
+      reason: "ExpoDevMenu.closeMenu() was invoked but did not settle.",
       attempts: attempts3
     };
   }
@@ -72259,11 +72303,15 @@ async function hideExpoDevMenu(client2, options = {}) {
     const attempts3 = attempt + 1;
     try {
       const result = await client2.evaluate(HIDE_EXPO_DEV_MENU_EXPRESSION, true, evaluationTimeoutMs);
-      const attemptOutcome = result.error ? {
+      const startOutcome = parseSentinel(result.value, attempts3);
+      const attemptOutcome = result.error ? startOutcome.callSent ? {
+        ...startOutcome,
+        reason: `${startOutcome.reason} Async evaluation failed: ${result.error}`
+      } : {
         callSent: false,
         reason: `Dev menu hide evaluation failed: ${result.error}`,
         attempts: attempts3
-      } : parseSentinel(result.value, attempts3);
+      } : startOutcome;
       outcome = attemptOutcome;
       if (attemptOutcome.callSent)
         successfulCall = attemptOutcome;
@@ -72313,7 +72361,8 @@ var init_expo_dev_menu = __esm({
     if (!method) return "no_method_available";
   } catch (e) { return "resolution_error:" + (e && e.message ? e.message : String(e)); }
   try {
-    return Promise.resolve(close.call(m)).then(function () { return "ok:" + method; }, function (e) { return "error:" + method + ":" + (e && e.message ? e.message : String(e)); });
+    var pending = Promise.resolve(close.call(m)).then(function () { return "ok:" + method; }, function (e) { return "error:" + method + ":" + (e && e.message ? e.message : String(e)); });
+    return { __rnAgentStartValue: "sent:" + method, then: function (resolve, reject) { return pending.then(resolve, reject); } };
   } catch (e) { return "error:" + method + ":" + (e && e.message ? e.message : String(e)); }
 })()`;
   }

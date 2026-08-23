@@ -780,6 +780,8 @@ export class CDPClient {
         try { return JSON.stringify(v); } catch(e) { return JSON.stringify(String(v)); }
       }
       var p = ${expression};
+      var startValue;
+      try { startValue = p && p.__rnAgentStartValue; } catch(e) {}
       if (p && typeof p.then === 'function') {
         p.then(function(v) { globalThis['${slot}'] = { v: safeVal(v) }; })
          .catch(function(e) { globalThis['${slot}'] = { e: (e && e.message) || String(e) }; });
@@ -787,6 +789,7 @@ export class CDPClient {
         globalThis['${slot}'] = { v: safeVal(p) };
       }
       setTimeout(function() { delete globalThis['${slot}']; }, ${ASYNC_CLEANUP_MS});
+      return { s: safeVal(startValue) };
     })()`;
         const initResult = (await this.sendWithTimeout('Runtime.evaluate', {
             expression: wrapper,
@@ -798,6 +801,15 @@ export class CDPClient {
                     initResult.exceptionDetails.exception?.description ??
                     'Unknown evaluation error',
             };
+        }
+        let asyncStartValue;
+        try {
+            if (typeof initResult.result?.value?.s === 'string') {
+                asyncStartValue = JSON.parse(initResult.result.value.s);
+            }
+        }
+        catch {
+            asyncStartValue = undefined;
         }
         // B45 fix: Use absolute deadline to guarantee total wall-clock stays within timeout.
         // Each poll gets only the remaining time (min 500ms) to avoid overshooting.
@@ -817,7 +829,7 @@ export class CDPClient {
                     returnByValue: true,
                 }, 1000).catch(() => { });
                 if ('e' in val)
-                    return { error: String(val.e) };
+                    return { value: asyncStartValue, error: String(val.e) };
                 try {
                     return { value: JSON.parse(val.v) };
                 }
@@ -831,7 +843,10 @@ export class CDPClient {
             expression: `delete globalThis['${slot}']`,
             returnByValue: true,
         }, 1000).catch(() => { });
-        return { error: 'Promise did not resolve within ' + timeout + 'ms' };
+        return {
+            value: asyncStartValue,
+            error: 'Promise did not resolve within ' + timeout + 'ms',
+        };
     }
     async send(method, params) {
         return this.sendWithTimeout(method, params, timeoutForMethod(method, this.effectivePlatform));

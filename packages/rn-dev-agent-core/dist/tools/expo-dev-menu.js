@@ -16,7 +16,8 @@ export const HIDE_EXPO_DEV_MENU_EXPRESSION = `(function () {
     if (!method) return "no_method_available";
   } catch (e) { return "resolution_error:" + (e && e.message ? e.message : String(e)); }
   try {
-    return Promise.resolve(close.call(m)).then(function () { return "ok:" + method; }, function (e) { return "error:" + method + ":" + (e && e.message ? e.message : String(e)); });
+    var pending = Promise.resolve(close.call(m)).then(function () { return "ok:" + method; }, function (e) { return "error:" + method + ":" + (e && e.message ? e.message : String(e)); });
+    return { __rnAgentStartValue: "sent:" + method, then: function (resolve, reject) { return pending.then(resolve, reject); } };
   } catch (e) { return "error:" + method + ":" + (e && e.message ? e.message : String(e)); }
 })()`;
 function surfaceText(nodes) {
@@ -25,11 +26,32 @@ function surfaceText(nodes) {
         .map((value) => value.trim().toLowerCase())
         .filter(Boolean));
 }
+function isBlockingForeignSurface(node, boundAppId) {
+    const packageName = typeof node.packageName === 'string' ? node.packageName.trim() : '';
+    if (!packageName || packageName === boundAppId)
+        return false;
+    const shellPackage = packageName === 'com.android.systemui' ||
+        packageName.includes('launcher') ||
+        packageName.includes('nexuslauncher');
+    if (!shellPackage)
+        return true;
+    const type = typeof node.type === 'string' ? node.type.toLowerCase() : '';
+    const identity = [node.label, node.identifier]
+        .filter((value) => typeof value === 'string')
+        .join(' ')
+        .toLowerCase();
+    return (['alert', 'dialog', 'popup', 'button', 'edittext'].some((value) => type.includes(value)) ||
+        ['alert', 'dialog', 'permission', 'chooser', 'resolver', 'modal', 'popup'].some((value) => identity.includes(value)));
+}
 export function classifyForegroundSurface(nodes, boundAppId) {
     const text = surfaceText(nodes);
     if (text.length === 0)
         return 'unknown';
     const has = (value) => text.some((candidate) => candidate.includes(value));
+    if (nodes.some((node) => node.type === 'Alert') ||
+        (boundAppId && nodes.some((node) => isBlockingForeignSurface(node, boundAppId)))) {
+        return 'unknown';
+    }
     if (has('development servers'))
         return 'dev_client_picker';
     if (has('this is the developer menu'))
@@ -40,7 +62,7 @@ export function classifyForegroundSurface(nodes, boundAppId) {
     }
     if (has('open debugger') || has('configure bundler'))
         return 'react_native_dev_menu';
-    if (!boundAppId || nodes.some((node) => node.type === 'Alert'))
+    if (!boundAppId)
         return 'unknown';
     const hasBoundApp = nodes.some((node) => node.packageName === boundAppId || node.type === 'Application');
     return hasBoundApp ? 'app' : 'unknown';
@@ -73,6 +95,22 @@ function parseSentinel(value, attempts) {
             callSent: true,
             method: 'closeMenu',
             reason: 'ExpoDevMenu.closeMenu() completed.',
+            attempts,
+        };
+    }
+    if (sentinel === 'sent:hideMenu') {
+        return {
+            callSent: true,
+            method: 'hideMenu',
+            reason: 'ExpoDevMenu.hideMenu() was invoked but did not settle.',
+            attempts,
+        };
+    }
+    if (sentinel === 'sent:closeMenu') {
+        return {
+            callSent: true,
+            method: 'closeMenu',
+            reason: 'ExpoDevMenu.closeMenu() was invoked but did not settle.',
             attempts,
         };
     }
@@ -126,13 +164,19 @@ export async function hideExpoDevMenu(client, options = {}) {
         const attempts = attempt + 1;
         try {
             const result = await client.evaluate(HIDE_EXPO_DEV_MENU_EXPRESSION, true, evaluationTimeoutMs);
+            const startOutcome = parseSentinel(result.value, attempts);
             const attemptOutcome = result.error
-                ? {
-                    callSent: false,
-                    reason: `Dev menu hide evaluation failed: ${result.error}`,
-                    attempts,
-                }
-                : parseSentinel(result.value, attempts);
+                ? startOutcome.callSent
+                    ? {
+                        ...startOutcome,
+                        reason: `${startOutcome.reason} Async evaluation failed: ${result.error}`,
+                    }
+                    : {
+                        callSent: false,
+                        reason: `Dev menu hide evaluation failed: ${result.error}`,
+                        attempts,
+                    }
+                : startOutcome;
             outcome = attemptOutcome;
             if (attemptOutcome.callSent)
                 successfulCall = attemptOutcome;

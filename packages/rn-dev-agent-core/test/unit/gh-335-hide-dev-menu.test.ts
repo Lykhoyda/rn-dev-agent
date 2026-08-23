@@ -93,6 +93,34 @@ test('foreground classifier keeps Expo sheet, picker, tutorial, RN core menu, an
   assert.equal(
     classifyForegroundSurface(
       [
+        { label: 'Home', packageName: 'com.example.app' },
+        {
+          label: 'Back',
+          type: 'android.widget.ImageView',
+          packageName: 'com.android.systemui',
+        },
+      ],
+      'com.example.app',
+    ),
+    'app',
+  );
+  assert.equal(
+    classifyForegroundSurface(
+      [
+        { label: 'Home', packageName: 'com.example.app' },
+        {
+          label: 'While using the app',
+          type: 'android.widget.Button',
+          packageName: 'com.android.permissioncontroller',
+        },
+      ],
+      'com.example.app',
+    ),
+    'unknown',
+  );
+  assert.equal(
+    classifyForegroundSurface(
+      [
         { label: 'Fixture', type: 'Application' },
         { label: 'Allow', type: 'Alert' },
       ],
@@ -165,6 +193,89 @@ test('hideExpoDevMenu preserves attempted-call truth for a rejected native promi
   assert.equal(outcome.callSent, true);
   assert.equal(outcome.method, 'hideMenu');
   assert.match(outcome.reason, /native rejection/);
+});
+
+test('mixed bound-app and permission-dialog evidence cannot yield hidden', async () => {
+  const appId = 'com.example.app';
+  const snapshots = [
+    [{ label: 'Copy system info' }, { label: 'Open DevTools' }],
+    [
+      { label: 'Home', packageName: appId },
+      {
+        label: 'Allow',
+        type: 'android.widget.Button',
+        packageName: 'com.android.permissioncontroller',
+      },
+    ],
+  ];
+  let probeIndex = 0;
+  const probeForegroundSurface = async () =>
+    foregroundSurfaceFromSnapshot(
+      {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify({
+              ok: true,
+              data: { nodes: snapshots[Math.min(probeIndex++, snapshots.length - 1)] },
+            }),
+          },
+        ],
+      },
+      appId,
+    );
+  const { client } = hideEval('android', { value: 'ok:hideMenu' }, { value: 'ok:hideMenu' });
+  const handler = createDevSettingsHandler(() => client, {
+    probeForegroundSurface,
+    settleAfterHide: async () => {},
+  });
+
+  const envelope = parseEnvelope(await handler({ action: 'hideDevMenu' }));
+  assert.equal(envelope.code, 'DEV_MENU_HIDE_UNVERIFIED');
+  assert.equal(envelope.meta.callSent, true);
+  assert.equal(envelope.meta.surfaceAfter, 'unknown');
+});
+
+test('a never-settling native close remains sent and returns unverified after one retry', async () => {
+  let closeCalls = 0;
+  const context = {
+    expo: {
+      modules: {
+        ExpoDevMenu: {
+          hideMenu: () => {
+            closeCalls++;
+            return new Promise(() => {});
+          },
+        },
+      },
+    },
+    setTimeout: () => 0,
+  };
+  const asyncClient = new CDPClient(8081);
+  Reflect.set(asyncClient, 'sendWithTimeout', async (_method, params) => ({
+    result: { value: runInNewContext(params.expression, context) },
+  }));
+  const client = createMockClient({
+    _connectedTarget: {
+      id: 'page1',
+      title: 'React Native (Hermes)',
+      vm: 'Hermes',
+      webSocketDebuggerUrl: 'ws://127.0.0.1:8081/debugger/page1',
+      platform: 'android',
+    },
+    evaluate: (expression, awaitPromise) => asyncClient.evaluate(expression, awaitPromise, 20),
+  });
+  const handler = createDevSettingsHandler(() => client, {
+    probeForegroundSurface: surfaceProbe('expo_dev_menu', 'expo_dev_menu'),
+    settleAfterHide: async () => {},
+  });
+
+  const envelope = parseEnvelope(await handler({ action: 'hideDevMenu' }));
+  assert.equal(envelope.code, 'DEV_MENU_HIDE_UNVERIFIED');
+  assert.equal(envelope.meta.callSent, true);
+  assert.equal(envelope.meta.method, 'hideMenu');
+  assert.equal(envelope.meta.attempts, 2);
+  assert.equal(closeCalls, 2);
 });
 
 test('dev_settings hideDevMenu: close sent but post-probe remains occluded -> unverified', async () => {

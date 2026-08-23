@@ -1025,6 +1025,8 @@ export class CDPClient {
         try { return JSON.stringify(v); } catch(e) { return JSON.stringify(String(v)); }
       }
       var p = ${expression};
+      var startValue;
+      try { startValue = p && p.__rnAgentStartValue; } catch(e) {}
       if (p && typeof p.then === 'function') {
         p.then(function(v) { globalThis['${slot}'] = { v: safeVal(v) }; })
          .catch(function(e) { globalThis['${slot}'] = { e: (e && e.message) || String(e) }; });
@@ -1032,6 +1034,7 @@ export class CDPClient {
         globalThis['${slot}'] = { v: safeVal(p) };
       }
       setTimeout(function() { delete globalThis['${slot}']; }, ${ASYNC_CLEANUP_MS});
+      return { s: safeVal(startValue) };
     })()`;
 
     const initResult = (await this.sendWithTimeout(
@@ -1041,7 +1044,10 @@ export class CDPClient {
         returnByValue: true,
       },
       Math.max(1, deadline - Date.now()),
-    )) as { exceptionDetails?: { text?: string; exception?: { description?: string } } };
+    )) as {
+      result?: { value?: { s?: string } };
+      exceptionDetails?: { text?: string; exception?: { description?: string } };
+    };
 
     if (initResult?.exceptionDetails) {
       return {
@@ -1050,6 +1056,14 @@ export class CDPClient {
           initResult.exceptionDetails.exception?.description ??
           'Unknown evaluation error',
       };
+    }
+    let asyncStartValue: unknown;
+    try {
+      if (typeof initResult.result?.value?.s === 'string') {
+        asyncStartValue = JSON.parse(initResult.result.value.s);
+      }
+    } catch {
+      asyncStartValue = undefined;
     }
 
     // B45 fix: Use absolute deadline to guarantee total wall-clock stays within timeout.
@@ -1079,7 +1093,7 @@ export class CDPClient {
           1000,
         ).catch(() => {});
 
-        if ('e' in val) return { error: String(val.e) };
+        if ('e' in val) return { value: asyncStartValue, error: String(val.e) };
         try {
           return { value: JSON.parse(val.v as string) };
         } catch {
@@ -1097,7 +1111,10 @@ export class CDPClient {
       },
       1000,
     ).catch(() => {});
-    return { error: 'Promise did not resolve within ' + timeout + 'ms' };
+    return {
+      value: asyncStartValue,
+      error: 'Promise did not resolve within ' + timeout + 'ms',
+    };
   }
 
   async send(method: string, params?: unknown): Promise<unknown> {
