@@ -157,6 +157,10 @@ The authoritative pin manifest lives at
 attested 1.1.24 as the default known-good and `/doctor` reports missing, older, unattested, checksum-mismatched,
 unverified, unknown, or unsupported installations. Replay refuses every non-`pinned-ok`
 state before UI mutation and never substitutes PATH, `~/.maestro-runner`, or Maestro CLI.
+Installation stages each candidate in a collision-safe sibling temporary directory, verifies
+the archive and complete payload against that manifest, and atomically publishes the pin.
+Concurrent or restarted installers converge on the same verified cache; an abandoned staging
+directory is ignored and never requires manual recovery.
 
 Owned actions must carry `# enginePin: maestro-runner@1.1.24` or newer. Setup migrates compatible
 actions; missing or older pins and unsupported regex text selectors are terminal.
