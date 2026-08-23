@@ -134,6 +134,7 @@ if (args.join(' ') === 'worktree list --porcelain') {
   if (process.env.RN_GIT_PROBE_EMPTY_LIST) stdout = '';
   if (process.env.RN_GIT_PROBE_MAIN_PATH) stdout = stdout.replace(/^worktree [^\\n]*/m, 'worktree ' + process.env.RN_GIT_PROBE_MAIN_PATH);
   if (process.env.RN_GIT_PROBE_MAIN_MARKER) stdout = stdout.replace(/^(worktree [^\\n]*)/m, '$1\\n' + process.env.RN_GIT_PROBE_MAIN_MARKER);
+  if (process.env.RN_GIT_PROBE_MALFORMED_MAIN) stdout = stdout.replace(/^worktree [^\\n]*/m, 'HEAD malformed-main');
 }
 if (process.cwd() === process.env.RN_GIT_PROBE_PRIMARY && args.join(' ') === 'rev-parse --path-format=absolute --git-common-dir' && process.env.RN_GIT_PROBE_PRIMARY_COMMON) {
   stdout = process.env.RN_GIT_PROBE_PRIMARY_COMMON + '\\n';
@@ -257,7 +258,8 @@ test('primary verification is constant and malformed main records never fall bac
     const wrongCommon = join(fixture.root, 'wrong-common');
     mkdirSync(wrongCommon);
     for (const scenario of [
-      { name: 'malformed', empty: true, probesMain: false },
+      { name: 'empty', empty: true, probesMain: false },
+      { name: 'malformed', malformed: true, probesMain: false },
       { name: 'missing', path: join(fixture.root, 'missing-main'), probesMain: false },
       { name: 'bare', marker: 'bare', probesMain: false },
       { name: 'prunable', marker: 'prunable fixture', probesMain: false },
@@ -266,6 +268,7 @@ test('primary verification is constant and malformed main records never fall bac
       probe.reset();
       const env = { ...probe.env };
       if (scenario.empty) env.RN_GIT_PROBE_EMPTY_LIST = '1';
+      if (scenario.malformed) env.RN_GIT_PROBE_MALFORMED_MAIN = '1';
       if (scenario.path) env.RN_GIT_PROBE_MAIN_PATH = scenario.path;
       if (scenario.marker) env.RN_GIT_PROBE_MAIN_MARKER = scenario.marker;
       if (scenario.common) env.RN_GIT_PROBE_PRIMARY_COMMON = scenario.common;

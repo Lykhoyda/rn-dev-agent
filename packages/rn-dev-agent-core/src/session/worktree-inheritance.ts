@@ -266,10 +266,25 @@ export function parseWorktreeRecords(porcelain: string): WorktreeRecord[] {
   return records;
 }
 
+function parseFirstWorktreeRecord(porcelain: string): WorktreeRecord | null {
+  const separator = porcelain.indexOf('\n\n');
+  const block = separator === -1 ? porcelain : porcelain.slice(0, separator);
+  const lines = block.split('\n');
+  const header = lines[0];
+  if (!header?.startsWith('worktree ')) return null;
+  const path = header.slice('worktree '.length);
+  if (!path) return null;
+  return {
+    path,
+    bare: lines.slice(1).includes('bare'),
+    prunable: lines.slice(1).some((line) => line === 'prunable' || line.startsWith('prunable ')),
+  };
+}
+
 function verifiedPrimary(worktreeRoot: string, commonDir: string): string | null {
   const listing = git(worktreeRoot, ['worktree', 'list', '--porcelain']);
   if (!listing.ok) return null;
-  const main = parseWorktreeRecords(listing.stdout)[0];
+  const main = parseFirstWorktreeRecord(listing.stdout);
   if (!main || main.bare || main.prunable) return null;
   const candidate = canonical(main.path);
   if (!candidate) return null;
