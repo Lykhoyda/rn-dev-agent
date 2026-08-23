@@ -1,13 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  rmSync,
-  symlinkSync,
-  writeFileSync,
-} from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { performance } from 'node:perf_hooks';
@@ -26,7 +19,11 @@ function git(cwd: string, args: string[]): void {
   assert.equal(result.status, 0, `git ${args.join(' ')} failed: ${result.stderr}`);
 }
 
-function nodeCli(entry: string, args: string[], cwd: string): {
+function nodeCli(
+  entry: string,
+  args: string[],
+  cwd: string,
+): {
   durationMs: number;
   status: number | null;
   stderr: string;
@@ -110,11 +107,7 @@ test('32-worktree canonical and inherited inventory stay within the serial user-
     }
 
     mkdirSync(join(linked, '.rn-agent'), { recursive: true });
-    symlinkSync(
-      join(primary, '.rn-agent', 'actions'),
-      join(linked, '.rn-agent', 'actions'),
-      'dir',
-    );
+    symlinkSync(join(primary, '.rn-agent', 'actions'), join(linked, '.rn-agent', 'actions'), 'dir');
 
     const planned = nodeCli(
       INHERIT_CLI,
