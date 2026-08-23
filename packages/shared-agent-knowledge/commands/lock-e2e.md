@@ -12,3 +12,4 @@ Steps:
 2. If it returns `STRICT_RUN_FAILED`, tell the user the action must pass a strict (no-repair) run first — offer to run `cdp_run_action` to repair it, then retry the lock.
 3. If it returns `PARAMS_UNSUPPORTED`, explain that v1 supports param-free tests only.
 4. On success, report the frozen file path and that it will now be included in `cdp_run_e2e_suite`.
+5. For login, this locked test is the formal PR proof on the exact candidate. `cdp_login_prologue` is only a navigation helper and must not be treated as that proof.

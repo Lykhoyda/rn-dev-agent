@@ -37,8 +37,8 @@ The agent never replays an entire job from a script — that would defeat the po
 A worked example. You ask: "tap the cart badge."
 
 - The agent reads the navigation state. The app is on `LoginScreen`, but the cart badge lives on `HomeScreen`.
-- It scans saved actions and finds `user-login`, whose recorded outcome is "logged-in home."
-- It runs `user-login` (~4 seconds), arrives at `HomeScreen`.
+- It enters through `cdp_login_prologue`, which resolves the exact saved `user-login` action.
+- The prologue requires a fresh passing RunRecord before it arrives at `HomeScreen`.
 - Then it discovers the cart badge interactively and taps it.
 
 ### Measured impact
@@ -59,12 +59,13 @@ Said another way: actions are the **memory** of the LLM loop. Every successful v
 
 ## Tool surface
 
-The hybrid is implemented across **four MCP tools** (one conceptual family, "Actions") and **two slash commands**.
+The hybrid is implemented across **five MCP tool groups** (one conceptual family, "Actions") and **two slash commands**.
 
 | Tool | Role |
 |---|---|
 | `cdp_record_test_save_as_action` | Convert a recorded interactive walk into a first-class `.rn-agent/actions/<id>.yaml` with metadata header and sidecar state file. Auto-promotes to `status: active` after the first clean replay. |
 | `cdp_run_action` | Replay an action by id with `params`. Orchestrates exact-active-device `maestro_run` + optional `cdp_repair_action` retry. Persists a `RunRecord` with `autoRepair` telemetry (passed / failed / refused / skipped, phase timings) so MTTR analysis can see which flows are stable. Maestro `deviceId` authority comes from direct runner evidence, not requested metadata; a runner/WDA mismatch fails closed. |
+| `cdp_login_prologue` | Enter authenticated journeys through the exact `user-login` action. Requires a fresh passing RunRecord and terminally blocks mutating fallbacks after failure; it is a navigation helper, not formal PR proof. |
 | `cdp_repair_action` | When a run fails with `SELECTOR_NOT_FOUND`, fuzzy-match the stale selector against the live snapshot, patch the YAML, retry. Refuses on human-edited files (`mtime` check), >3 repairs/24h, or snapshot infrastructure failure. |
 | `cdp_record_test_*` (start / stop / generate / annotate / save / load / list) | The recorder upstream of actions — captures device taps + CDP state assertions during interactive walks, before they get promoted to actions. |
 
@@ -77,7 +78,7 @@ The hybrid is implemented across **four MCP tools** (one conceptual family, "Act
 
 Both the `rn-tester` and `rn-debugger` agents are instructed (via `feedback_execute_artifacts_before_manual.md`) to scan saved actions **before** composing any new `device_*` primitives. Manual primitives are the **fallback**, not the default — that's the lever that keeps the LLM from paying full-walk latency on flows it has already verified once.
 
-In practice this means a session opens with `/list-learned-actions` (or its programmatic equivalent), confirms through `rn_session status` that replay authority is not blocked, routes through `/run-action` when a match exists, and only drops to interactive `device_press` / `device_fill` / `cdp_interact` when no action covers the intent. Discovery alone grants no replay authority; blocked sessions follow [parallel session authority](../session-authority/).
+In practice this means a session opens with `/list-learned-actions` (or its programmatic equivalent), confirms through `rn_session status` that replay authority is not blocked, routes non-login matches through `/run-action`, and uses `cdp_login_prologue` for authentication. It only drops to interactive `device_press` / `device_fill` / `cdp_interact` when no non-login action covers the intent. Discovery alone grants no replay authority; blocked sessions follow [parallel session authority](../session-authority/).
 
 ## Where actions live
 

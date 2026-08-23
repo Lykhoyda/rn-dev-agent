@@ -49,6 +49,7 @@ const TESTING = new Set([
     'maestro_run',
     'maestro_generate',
     'maestro_test_all',
+    'cdp_login_prologue',
     'cdp_run_action',
     'cdp_repair_action',
     'proof_step',

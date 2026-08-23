@@ -96,7 +96,12 @@ export function freezeLockedTest(
 export function loadLockedTest(projectRoot: string, id: string): LockedE2eTest | null {
   const filePath = e2ePathFor(projectRoot, id);
   if (!existsSync(filePath)) return null;
-  return parseLockedTest(readFileSync(filePath, 'utf8'), filePath);
+  const locked = parseLockedTest(readFileSync(filePath, 'utf8'), filePath);
+  return locked?.id === id ? locked : null;
+}
+
+export function lockedTestFileExists(projectRoot: string, id: string): boolean {
+  return existsSync(e2ePathFor(projectRoot, id));
 }
 
 export function discoverLockedTests(projectRoot: string): string[] {
@@ -106,6 +111,57 @@ export function discoverLockedTests(projectRoot: string): string[] {
     .filter((f) => f.endsWith('.yaml'))
     .map((f) => f.replace(/\.yaml$/, ''))
     .sort();
+}
+
+export function resolveLockedTestIds(
+  projectRoot: string,
+  pattern?: string,
+  discover: (root: string) => string[] = discoverLockedTests,
+): string[] {
+  const ids = discover(projectRoot);
+  if (!pattern || pattern.length > 256) return ids;
+  try {
+    const matcher = new RegExp(pattern, 'i');
+    return ids.filter((id) => matcher.test(id));
+  } catch {
+    return ids;
+  }
+}
+
+export interface ResolvedLockedTestSelection {
+  ids: string[];
+  identitiesValid: boolean;
+}
+
+export function resolveLockedTestSelection(
+  projectRoot: string,
+  pattern?: string,
+  discover: (root: string) => string[] = discoverLockedTests,
+  load: (root: string, id: string) => LockedE2eTest | null = loadLockedTest,
+): ResolvedLockedTestSelection {
+  const ids = resolveLockedTestIds(projectRoot, pattern, discover);
+  const identitiesValid = ids.every((id) => {
+    const locked = load(projectRoot, id);
+    return locked?.id === id && locked.sourceActionId === id;
+  });
+  return { ids, identitiesValid };
+}
+
+const resolvedLockedTestIds = Symbol('resolvedLockedTestIds');
+
+type ResolvedLockedTestArgs = Record<string | symbol, unknown> & {
+  [resolvedLockedTestIds]?: readonly string[];
+};
+
+export function setResolvedLockedTestIds(args: object, ids: readonly string[]): void {
+  Object.defineProperty(args, resolvedLockedTestIds, {
+    value: Object.freeze([...ids]),
+    configurable: true,
+  });
+}
+
+export function getResolvedLockedTestIds(args: object): readonly string[] | undefined {
+  return (args as ResolvedLockedTestArgs)[resolvedLockedTestIds];
 }
 
 export function parseLockedTest(text: string, filePath: string): LockedE2eTest | null {

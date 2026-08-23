@@ -106,7 +106,7 @@ test(
           properties?: { action?: { enum?: string[] } };
         };
       }>;
-      assert.equal(tools.length, 80);
+      assert.equal(tools.length, 81);
       const proof = tools.find((tool) => tool.name === 'proof_capture');
       assert.ok(proof);
       assert.equal(proof.inputSchema.type, 'object');

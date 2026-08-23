@@ -40,3 +40,8 @@ test('H1: a long non-secret string is still truncated (ordering preserved)', () 
   assert.ok(out.blob.includes('[TRUNCATED:'), 'long benign strings still get a truncation marker');
   assert.ok(out.blob.length < 5000, 'output is clipped');
 });
+
+test('the supervisor override field is always redacted', () => {
+  const out = redact({ supervisorOverrideToken: 'supervisor-token-123456' });
+  assert.equal(out.supervisorOverrideToken, '[REDACTED:string]');
+});

@@ -27,6 +27,7 @@
 //     intentionally NOT in scope for phase 1 (each repair attempt is a
 //     30s+ device snapshot; cascading retries would be slow and could
 //     mask underlying screen churn).
+import { randomUUID } from 'node:crypto';
 import { okResult, failResult } from '../utils.js';
 import { acknowledgeExternalEdit, loadAction, promoteActionRuntimeWithCAS, saveActionRuntimeWithCAS, } from '../domain/action-store.js';
 import { mirrorToDb } from '../domain/action-state-store.js';
@@ -45,6 +46,14 @@ import { getWorkerAuthorityRuntime } from '../session/runtime.js';
 import { flowUsesClearState, resolveIosAppFile } from './resolve-ios-app-file.js';
 import { actionReplayPreflight } from '../domain/action-engine-compat.js';
 import { getEngineStatus, PINNED_RUNNER_DIAGNOSE_HINT, PINNED_RUNNER_INSTALL_HINT, } from '../domain/engine-pin.js';
+const strictRunActionPolicy = Symbol('strictRunActionPolicy');
+export function sealStrictRunAction(args) {
+    Object.defineProperty(args, strictRunActionPolicy, { value: true });
+    return args;
+}
+function usesStrictRunActionPolicy(args) {
+    return args[strictRunActionPolicy] === true;
+}
 /** GH #705: the session's attested install receipt, or null outside a session. */
 function boundInstallReceipt() {
     try {
@@ -79,6 +88,11 @@ function classifyFailure(failure) {
         default:
             return { actionCode: 'UNKNOWN', toolCode: undefined };
     }
+}
+const PROVEN_ENGINE_PIN_DIVERGENCE = new Set(['drift-newer', 'drift-older', 'checksum-mismatch']);
+function strictEnginePinDivergence(env) {
+    const status = env.data?.enginePin?.status;
+    return typeof status === 'string' && PROVEN_ENGINE_PIN_DIVERGENCE.has(status) ? status : null;
 }
 function parseEnvelope(toolResult, toolName) {
     try {
@@ -325,6 +339,24 @@ export function createRunActionHandler(deps = {}) {
         const trigger = args.trigger ?? 'agent';
         const timeoutMs = args.timeoutMs ?? 120_000;
         const t0 = Date.now();
+        const startedAt = new Date(t0).toISOString();
+        const runId = randomUUID();
+        const timingSteps = [];
+        const measureStep = async (name, run) => {
+            const stepStartedMs = Date.now();
+            try {
+                return await run();
+            }
+            finally {
+                const stepEndedMs = Date.now();
+                timingSteps.push({
+                    name,
+                    startedAt: new Date(stepStartedMs).toISOString(),
+                    endedAt: new Date(stepEndedMs).toISOString(),
+                    elapsedMs: Math.max(0, stepEndedMs - stepStartedMs),
+                });
+            }
+        };
         const activeTarget = targetContext();
         if (args.platform && activeTarget?.platform && activeTarget.platform !== args.platform) {
             return failResult(`cdp_run_action: requested ${args.platform}, but the active session is ${activeTarget.platform}; refusing cross-platform replay.`, 'TARGET_SESSION_MISMATCH', { requestedPlatform: args.platform, activeSession: activeTarget });
@@ -351,9 +383,22 @@ export function createRunActionHandler(deps = {}) {
         // Maestro was pinned to). Used only when the dispatch produced no receipt,
         // so a clean pass can still clear a device-matched blind-probe latch.
         let observedDeviceId = maestroDeviceId ?? null;
-        const persistRunWithDevice = (record) => proofReplay
-            ? Promise.resolve({ promoted: false, promotionRefused: false })
-            : persistRun(args.actionId, projectRoot, probeDeviceId ? { ...record, deviceId: probeDeviceId } : record);
+        const persistRunWithDevice = (record) => {
+            if (proofReplay)
+                return Promise.resolve({ promoted: false, promotionRefused: false });
+            const endedMs = Date.now();
+            const timedRecord = {
+                ...record,
+                runId,
+                timing: {
+                    startedAt,
+                    endedAt: new Date(endedMs).toISOString(),
+                    elapsedMs: Math.max(0, endedMs - t0),
+                    steps: [...timingSteps],
+                },
+            };
+            return persistRun(args.actionId, projectRoot, probeDeviceId ? { ...timedRecord, deviceId: probeDeviceId } : timedRecord);
+        };
         const writeDisclosure = (actionYaml = 'none', outcome) => ({
             actionYaml: actionYaml === 'none'
                 ? { written: false, reason: 'repair-not-applied' }
@@ -379,8 +424,13 @@ export function createRunActionHandler(deps = {}) {
             // directly. Every branch fails open to the maestro-first path below.
             // Opt out globally with RN_BLIND_PROBE=0.
             let atRisk = null;
+            const strictExecutor = usesStrictRunActionPolicy(args);
+            const strictRunRecordMeta = (outcome) => strictExecutor && outcome.persistedRunId
+                ? { strictRunRecordId: outcome.persistedRunId }
+                : {};
             const inheritedBlindProbeDisabled = process.env.RN_BLIND_PROBE === '0' || process.env.RN_BLIND_PROBE === 'false';
-            const blindProbeDisabled = args.blindProbeMode === 'forbid' ||
+            const blindProbeDisabled = strictExecutor ||
+                args.blindProbeMode === 'forbid' ||
                 (args.blindProbeMode !== 'allow' && inheritedBlindProbeDisabled);
             if (args.platform !== 'android') {
                 // Resolve the device context even when the gate is opted out: a clean
@@ -407,11 +457,11 @@ export function createRunActionHandler(deps = {}) {
                 const probe = replayDeps ? firstReplayTestId(cdpReplayYaml, args.params ?? {}) : null;
                 if (replayDeps && probe) {
                     const tProbe = Date.now();
-                    const probeOutcome = await probeTreeWithRetry(replayDeps, probe, probeRetry);
+                    const probeOutcome = await measureStep('proactive-probe', () => probeTreeWithRetry(replayDeps, probe, probeRetry));
                     if (probeOutcome.found) {
                         const tReplay = Date.now();
                         try {
-                            const replay = await runCdpReplay(cdpReplayYaml, args.params ?? {}, replayDeps);
+                            const replay = await measureStep('proactive-cdp-replay', () => runCdpReplay(cdpReplayYaml, args.params ?? {}, replayDeps));
                             const timings_ms = { probe: tReplay - tProbe, replay: Date.now() - tReplay };
                             const blindProbe = { atRisk, skippedMaestro: true };
                             const autoRepair = {
@@ -482,7 +532,7 @@ export function createRunActionHandler(deps = {}) {
             // Requested/session metadata is not RunRecord authority. Clear it before
             // dispatch; only direct maestro-runner evidence may repopulate it.
             probeDeviceId = null;
-            const firstResult = await maestroRun({
+            const firstResult = await measureStep('maestro-first-attempt', () => maestroRun({
                 inlineYaml: replayYaml,
                 actionMetadata: action.metadata,
                 platform: args.platform,
@@ -497,15 +547,42 @@ export function createRunActionHandler(deps = {}) {
                 reproveManagedOrigin: () => reproveManagedOrigin(args),
                 completeRunnerPark: () => completeManagedRunnerParkAuthority(args),
                 reissueInstallReceipt: () => reissueInstallReceipt(args),
-            });
+            }));
             const firstAttemptMs = Date.now() - tBeforeFirst;
             const firstEnv = parseEnvelope(firstResult, 'maestro_run');
-            const firstPassed = firstEnv.ok === true && firstEnv.data?.passed === true;
             const firstOutput = readMaestroOutput(firstEnv);
             const firstFailureDetail = readMaestroFailureDetail(firstEnv, firstOutput);
             const firstDeviceAuthority = readMaestroDeviceAuthority(firstEnv);
             probeDeviceId = firstDeviceAuthority?.reportedDeviceId ?? observedDeviceId;
-            if (firstEnv.code === 'DEVICE_AUTHORITY_MISMATCH') {
+            const enginePinDivergence = strictExecutor ? strictEnginePinDivergence(firstEnv) : null;
+            if (enginePinDivergence) {
+                const autoRepair = {
+                    attempted: false,
+                    outcome: 'refused',
+                    refusedReason: 'NOT_REPAIRABLE_KIND',
+                    phases: { firstAttemptMs },
+                };
+                const persisted = await persistRunWithDevice({
+                    timestamp: new Date().toISOString(),
+                    durationMs: Date.now() - t0,
+                    status: 'fail',
+                    failureCode: 'UNKNOWN',
+                    failureDetail: `Engine pin status ${enginePinDivergence}`,
+                    trigger,
+                    autoRepair,
+                });
+                return failResult(`cdp_run_action: ${args.actionId} refused strict replay because the engine pin status is ${enginePinDivergence}.`, 'ENGINE_PIN_MISMATCH', {
+                    actionId: args.actionId,
+                    failureKind: 'ENGINE_PIN_MISMATCH',
+                    enginePin: firstEnv.data?.enginePin,
+                    autoRepair,
+                    writes: writeDisclosure('none', persisted),
+                    ...strictRunRecordMeta(persisted),
+                });
+            }
+            const firstPassed = firstEnv.ok === true && firstEnv.data?.passed === true;
+            if (firstEnv.code) {
+                const typedCode = firstEnv.code;
                 const autoRepair = {
                     attempted: false,
                     outcome: args.autoRepair === false ? 'refused' : 'skipped',
@@ -516,17 +593,22 @@ export function createRunActionHandler(deps = {}) {
                     timestamp: new Date().toISOString(),
                     durationMs: Date.now() - t0,
                     status: 'fail',
-                    failureCode: 'DEVICE_AUTHORITY_MISMATCH',
+                    failureCode: typedCode === 'DEVICE_AUTHORITY_MISMATCH'
+                        ? 'DEVICE_AUTHORITY_MISMATCH'
+                        : typedCode === 'RECONNECT_TIMEOUT'
+                            ? 'TIMEOUT'
+                            : 'UNKNOWN',
                     failureDetail: firstFailureDetail.slice(0, 1000),
                     trigger,
                     autoRepair,
                 });
-                return failResult(`cdp_run_action: ${args.actionId} refused replay authority: ${firstFailureDetail}`, 'DEVICE_AUTHORITY_MISMATCH', {
+                return failResult(`cdp_run_action: ${args.actionId} refused replay: ${firstFailureDetail}`, typedCode, {
                     actionId: args.actionId,
-                    failureKind: 'DEVICE_AUTHORITY_MISMATCH',
+                    failureKind: typedCode,
                     deviceAuthority: firstDeviceAuthority,
                     autoRepair,
                     writes: writeDisclosure('none', persisted),
+                    ...strictRunRecordMeta(persisted),
                 });
             }
             if (firstPassed) {
@@ -543,9 +625,17 @@ export function createRunActionHandler(deps = {}) {
                     trigger,
                     autoRepair,
                 });
+                if (strictExecutor && persisted.persistedRunId !== runId) {
+                    return failResult(`cdp_run_action: ${args.actionId} passed, but its authoritative RunRecord was not committed.`, 'LOAD_FAILED', {
+                        actionId: args.actionId,
+                        failureKind: 'AUTHORITATIVE_RUN_RECORD_MISSING',
+                        writes: writeDisclosure('none', persisted),
+                    });
+                }
                 return okResult({
                     passed: true,
                     actionId: args.actionId,
+                    ...(strictExecutor ? { strictRunRecordId: persisted.persistedRunId } : {}),
                     ...(proofReplay ? { proofReplay: true } : {}),
                     ...replaySuccessEvidence(firstEnv),
                     repair: autoRepair,
@@ -605,7 +695,8 @@ export function createRunActionHandler(deps = {}) {
             // usually just relaunched the app), and every skip records its reason —
             // a silent skip surfaced in the field as an unexplained UNKNOWN.
             let cdpJsFallback;
-            if (failure.kind === 'SELECTOR_NOT_FOUND' || failure.kind === 'UNKNOWN') {
+            if (!strictExecutor &&
+                (failure.kind === 'SELECTOR_NOT_FOUND' || failure.kind === 'UNKNOWN')) {
                 const candidate = getReplayDeps(args);
                 const replayDeps = candidate && (await claimBundleAuthority(args)) ? candidate : null;
                 const probe = !replayDeps
@@ -620,7 +711,7 @@ export function createRunActionHandler(deps = {}) {
                     cdpJsFallback = { attempted: false, reason: 'no-probe-testid' };
                 }
                 else {
-                    const probeOutcome = await probeTreeWithRetry(replayDeps, probe, probeRetry);
+                    const probeOutcome = await measureStep('fallback-probe', () => probeTreeWithRetry(replayDeps, probe, probeRetry));
                     if (!probeOutcome.found) {
                         cdpJsFallback = {
                             attempted: false,
@@ -642,9 +733,9 @@ export function createRunActionHandler(deps = {}) {
                         try {
                             // GH #580: resume at the proven failed selector; UNKNOWN failed before
                             // any step, so it keeps start-at-zero.
-                            const replay = await runCdpReplay(cdpReplayYaml, args.params ?? {}, replayDeps, {
+                            const replay = await measureStep('fallback-cdp-replay', () => runCdpReplay(cdpReplayYaml, args.params ?? {}, replayDeps, {
                                 resumeAtSelector: failure.kind === 'SELECTOR_NOT_FOUND' ? failure.selector : null,
-                            });
+                            }));
                             const status = replay.passed ? 'pass' : 'fail';
                             const autoRepair = {
                                 attempted: false,
@@ -716,7 +807,7 @@ export function createRunActionHandler(deps = {}) {
                         phases: { firstAttemptMs },
                     };
                 const { actionCode, toolCode } = classifyFailure(failure);
-                await persistRunWithDevice({
+                const persisted = await persistRunWithDevice({
                     timestamp: new Date().toISOString(),
                     durationMs: Date.now() - t0,
                     status: 'fail',
@@ -739,6 +830,7 @@ export function createRunActionHandler(deps = {}) {
                     terminal: readMaestroTerminal(firstEnv),
                     runnerResume: firstEnv.meta?.runnerResume,
                     ...(cdpJsFallback ? { cdpJsFallback } : {}),
+                    ...strictRunRecordMeta(persisted),
                 };
                 let message = failure.kind === 'WDA_BOOTSTRAP_FAILED'
                     ? `cdp_run_action: ${args.actionId} failed (WDA_BOOTSTRAP_FAILED) before the first replay step: ${failure.detail}. Re-run the replay (bootstrap retries itself); check network access; diagnose the pin-cache runner with ${PINNED_RUNNER_DIAGNOSE_HINT}. Supported correction: ${PINNED_RUNNER_INSTALL_HINT}. Never invoke PATH, ~/.maestro-runner, maestro-cli, or manual login. No preparation or cache mutation was attempted.`
@@ -761,12 +853,12 @@ export function createRunActionHandler(deps = {}) {
                 throw new Error('Internal: isAutoRepairable returned true for non-SELECTOR_NOT_FOUND failure');
             }
             const tBeforeRepair = Date.now();
-            const repairResult = await repairAction({
+            const repairResult = await measureStep('selector-repair', () => repairAction({
                 actionId: args.actionId,
                 failedSelector: failure.selector,
                 projectRoot,
                 agentReasoning: `auto-repair from cdp_run_action after maestro failure: ${failure.selector}`,
-            });
+            }));
             const repairMs = Date.now() - tBeforeRepair;
             const repairEnv = parseEnvelope(repairResult, 'cdp_repair_action');
             const repairPatched = repairEnv.ok === true && repairEnv.data?.patched === true;
@@ -828,10 +920,11 @@ export function createRunActionHandler(deps = {}) {
             if (!reloadedAction.replay.ok) {
                 return failResult(`cdp_run_action: repaired action is not valid Maestro YAML: ${reloadedAction.replay.error}`, 'BAD_RECORDING', { actionId: args.actionId });
             }
+            const retryYaml = reloadedAction.replay.yamlText;
             const tBeforeRetry = Date.now();
             probeDeviceId = null;
-            const retryResult = await maestroRun({
-                inlineYaml: reloadedAction.replay.yamlText,
+            const retryResult = await measureStep('maestro-retry', () => maestroRun({
+                inlineYaml: retryYaml,
                 actionMetadata: reloadedAction.metadata,
                 platform: args.platform,
                 appId: args.appId,
@@ -845,7 +938,7 @@ export function createRunActionHandler(deps = {}) {
                 reproveManagedOrigin: () => reproveManagedOrigin(args),
                 completeRunnerPark: () => completeManagedRunnerParkAuthority(args),
                 reissueInstallReceipt: () => reissueInstallReceipt(args),
-            });
+            }));
             const retryMs = Date.now() - tBeforeRetry;
             const retryEnv = parseEnvelope(retryResult, 'maestro_run');
             const retryPassed = retryEnv.ok === true && retryEnv.data?.passed === true;
@@ -1020,7 +1113,7 @@ async function persistRun(actionId, projectRoot, record) {
                     path: fresh.filePath,
                 },
             });
-            return { promoted, promotionRefused };
+            return { promoted, promotionRefused, persistedRunId: record.runId };
         };
         // A promotion refusal is deterministic (externally edited YAML, or a missing
         // `# status: experimental` marker) — retrying cannot clear it, so degrade to

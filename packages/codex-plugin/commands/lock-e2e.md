@@ -20,6 +20,9 @@ read-only discovery diagnosis.
 3. On `PARAMS_UNSUPPORTED`, explain that this lock version supports param-free
    actions only.
 4. On success, report the frozen path and inclusion in `cdp_run_e2e_suite`.
+5. For login, this locked test is the formal PR proof on the exact candidate.
+   `cdp_login_prologue` is only a navigation helper and must not be treated as
+   that proof.
 
 Do not bypass strict replay, edit the frozen output directly, or substitute a
 raw Maestro result.

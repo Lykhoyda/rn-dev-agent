@@ -125,6 +125,7 @@ export function promoteCurrentOperationToManagedFlow() {
 const FLOW_TOOLS = new Set([
     'maestro_run',
     'maestro_test_all',
+    'cdp_login_prologue',
     'cdp_run_action',
     'cdp_auto_login',
     'cdp_reload',

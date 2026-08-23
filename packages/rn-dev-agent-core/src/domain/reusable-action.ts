@@ -257,6 +257,8 @@ export interface AutoRepairOutcome {
 
 /** A single replay attempt's outcome. Append-only; oldest dropped at limit. */
 export interface RunRecord {
+  /** Unique replay identity, used to prove that a prologue produced a fresh record. */
+  runId?: string;
   timestamp: string; // ISO
   durationMs: number;
   status: 'pass' | 'fail';
@@ -276,6 +278,18 @@ export interface RunRecord {
   deviceId?: string;
   /** GH #397 Phase 2: set when the proactive blind-probe routed this run. */
   blindProbe?: { atRisk: 'ios26' | 'prior-transport-blind'; skippedMaestro: boolean };
+  /** Wall-clock orchestration phases for separating agent overhead from replay time. */
+  timing?: {
+    startedAt: string;
+    endedAt: string;
+    elapsedMs: number;
+    steps: Array<{
+      name: string;
+      startedAt: string;
+      endedAt: string;
+      elapsedMs: number;
+    }>;
+  };
 }
 
 /** A single self-repair attempt (only emitted on successful repair). */

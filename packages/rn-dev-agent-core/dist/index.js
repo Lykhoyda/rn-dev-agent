@@ -33,6 +33,7 @@ import { createExpectReduxHandler, createExpectRouteHandler, createExpectVisible
 import { createRepairActionHandler } from './tools/repair-action.js';
 import { createSaveAsActionHandler } from './tools/save-as-action.js';
 import { createRunActionHandler } from './tools/run-action.js';
+import { createLoginPrologueHandler } from './tools/login-prologue.js';
 import { unwrapTree } from './tools/cdp-replay-dispatch.js';
 import { createDispatchHandler } from './tools/dispatch.js';
 import { createMmkvHandler } from './tools/mmkv.js';
@@ -98,6 +99,7 @@ import { createMirrorSource, IosSimctlLoopSource, idbDemotionHint, } from './obs
 import { parseAllAdbDevices } from './tools/device-record.js';
 import { createLockE2eTestHandler } from './tools/lock-e2e-test.js';
 import { createRunE2eSuiteHandler } from './tools/run-e2e-suite.js';
+import { resolveLockedTestSelection } from './domain/e2e-test.js';
 import { recoverInterruptedRequests } from './domain/e2e-run-request.js';
 import { preflight, probeMetro } from './e2e/preflight.js';
 import { resolveIosUdid } from './tools/device-screenshot-raw.js';
@@ -461,6 +463,14 @@ const createRuntimeAuthorityProbe = (resolveClient) => createLocalAuthorityProbe
 });
 const localAuthorityProbe = createRuntimeAuthorityProbe(getClient);
 const authorityGate = createAuthorityGate(authorityRuntime, {
+    loginSupervisorOverrideToken: () => process.env.RN_LOGIN_PROLOGUE_OVERRIDE_TOKEN,
+    resolveLockedE2eTestIds: (args, status) => {
+        const projectRoot = typeof args.projectRoot === 'string' ? args.projectRoot : status.source.appRoot;
+        if (typeof projectRoot !== 'string')
+            return { ids: [], identitiesValid: false };
+        args.projectRoot = projectRoot;
+        return resolveLockedTestSelection(projectRoot, typeof args.pattern === 'string' ? args.pattern : undefined);
+    },
     probe: async ({ axis, phase, status, tool, args }) => localAuthorityProbe({ axis, phase, status, tool, args }),
     recoverRuntimeConnection: async (status) => {
         const current = getClient();
@@ -721,7 +731,14 @@ function trackedTool(name, desc, schema, handler) {
         }
         return result;
     };
-    server.tool(name, desc, schema, wrapped);
+    server.tool(name, desc, {
+        ...schema,
+        supervisorOverrideToken: z
+            .string()
+            .min(16)
+            .optional()
+            .describe('Supervisor token for one audited mutation after a blocked login prologue.'),
+    }, wrapped);
 }
 async function pinSessionDevClient(status, options, commitBundle) {
     const device = status.bindings.device;
@@ -2444,7 +2461,7 @@ trackedTool('device_batch', 'Execute a sequence of exact-device UI interactions 
         .default('salient')
         .describe('Shape of the batch final_snapshot. salient (default): compact list of only actionable nodes (Button/TextField/Switch/etc) — far fewer tokens. full: complete node list (legacy). none: skip the implicit trailing snapshot entirely (~1,450 ms saved) for action-only batches you verify via expect_*/cdp_store_state.'),
 }, createDeviceBatchHandler(getClient));
-trackedTool('cdp_auto_login', 'Explicit legacy navigation helper that detects an auth screen and runs one project login subflow through maestro_run on the authority-bound device. It is per-call recovery only, never durable login authority or PR proof; prefer a compatible owned learned action.', {
+trackedTool('cdp_auto_login', 'Explicit legacy navigation helper that detects an auth screen and runs one project login subflow through maestro_run on the authority-bound device. It is never login authority or PR proof; use cdp_login_prologue for authenticated journeys.', {
     appId: z
         .string()
         .optional()
@@ -2861,6 +2878,13 @@ trackedTool('cdp_repair_action', 'Repair a learned action using a fresh snapshot
 }, createRepairActionHandler());
 // Issue #104 — auto-repair-aware action replay. Wraps maestro_run with
 // stderr classification + cdp_repair_action retry on SELECTOR_NOT_FOUND.
+const runActionHandler = createRunActionHandler({
+    getLiveRoute: () => readLiveRoute(getClient()),
+    replayDeps: makeReplayDeps,
+    blindProbeContext,
+    targetContext: getActiveSession,
+    claimBundleAuthority: claimOptionalBundleAuthority,
+});
 trackedTool('cdp_run_action', "Replay a learned action by id with end-to-end auto-repair. Loads the action from .rn-agent/actions/<actionId>.yaml or .yml, forwards the matching active session's exact device ID to Maestro, rejects mismatched direct runner/WDA evidence, and on a SELECTOR_NOT_FOUND failure automatically invokes cdp_repair_action and retries once. Appends a RunRecord to the sidecar with full auto-repair telemetry (passed/failed/refused/skipped + diff); its Maestro deviceId comes from direct runner evidence, never requested metadata. The repair attempt counts toward cdp_repair_action's 24h budget. Pass autoRepair=false to opt out of auto-repair (returns the raw maestro_run failure verbatim). forceReload defaults true: any human edit to the YAML since the agent's last write is acknowledged as the new baseline so downstream repair does not abort with STALE_TARGET (the right default for active composition). Pass forceReload=false for the strict \"respect offline human edits\" behavior: a successful replay still appends its RunRecord to the sidecar when only the tracked YAML mtime baseline is stale, while YAML-mutating promotion and repair stay refused. proofReplay=true is reserved for proof_capture rehearsal and requires autoRepair=false plus forceReload=false; it executes without RunRecord, promotion, YAML, sidecar, or DB persistence. The orchestrated home for the L3 self-healing loop — prefer this over invoking maestro_run + cdp_repair_action manually for any flow you intend to re-run on schedule. blindProbeMode provides per-call control of the proactive CDP/JS compatibility path: inherit (default) honors RN_BLIND_PROBE, allow explicitly enables it for this call, and forbid forces maestro-first for this call.", {
     actionId: z.string().describe('Owned action id; resolves one .yaml or .yml file.'),
     projectRoot: z.string().optional().describe('Override project root (default: process.cwd()).'),
@@ -2900,18 +2924,15 @@ trackedTool('cdp_run_action', "Replay a learned action by id with end-to-end aut
         .record(z.string(), z.string())
         .optional()
         .describe("Parameter bindings for the action's ${VAR} placeholders, forwarded to maestro as -e KEY=VALUE on the first attempt AND the post-repair retry (GH #116). Keys must match /^[A-Z_][A-Z0-9_]*$/ (validated in maestro_run)."),
-}, 
-// GH #186: supply a CDP-backed live-route reader so the route-drift guard is
-// actually active. Without this the handler defaulted getLiveRoute to a no-op
-// and the drift branch could never fire, silently routing screen-change
-// failures into fuzzy selector repair.
-createRunActionHandler({
-    getLiveRoute: () => readLiveRoute(getClient()),
-    replayDeps: makeReplayDeps,
-    blindProbeContext,
-    targetContext: getActiveSession,
-    claimBundleAuthority: claimOptionalBundleAuthority,
-}));
+}, runActionHandler);
+trackedTool('cdp_login_prologue', 'Fail-stop user-login helper: replay the exact action and require a fresh passing RunRecord; failure blocks exploratory fallback mutations, and a pass is not PR proof.', {
+    projectRoot: z.string().optional().describe('Override project root (default: process.cwd()).'),
+    platform: z.enum(['ios', 'android']).optional().describe('Override the bound platform.'),
+    appFile: z.string().optional().describe('iOS app artifact for clearState actions.'),
+    timeoutMs: z.number().optional().describe('Saved-action timeout in milliseconds.'),
+    trigger: z.enum(['agent', 'ci', 'human']).optional().describe('Run trigger; default agent.'),
+    params: z.record(z.string(), z.string()).optional().describe('String user-login bindings.'),
+}, createLoginPrologueHandler({ runAction: runActionHandler }));
 trackedTool('cdp_lock_e2e_test', 'Promote a verified action into a frozen, locked e2e regression test. Runs the action once strict (no repair); freezes it only if it passes. v1 supports param-free actions only.', {
     actionId: z.string().describe('The action id under .rn-agent/actions to lock'),
     relock: z.boolean().optional().describe('Overwrite an existing locked test'),
@@ -3018,13 +3039,6 @@ const triggerE2eRun = async (args) => {
         arbiter.release(L.lease);
     }
 };
-const runActionHandler = createRunActionHandler({
-    getLiveRoute: () => readLiveRoute(getClient()),
-    replayDeps: makeReplayDeps,
-    blindProbeContext,
-    targetContext: getActiveSession,
-    claimBundleAuthority: claimOptionalBundleAuthority,
-});
 const observeRunActionHandler = authorityGate.wrap('cdp_run_action', runActionHandler);
 const observeTriggerRun = authorityGate.wrap('cdp_run_e2e_suite', async (...raw) => {
     const args = (raw[0] ?? {});

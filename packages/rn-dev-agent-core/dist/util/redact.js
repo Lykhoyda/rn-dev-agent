@@ -29,7 +29,7 @@ const PII_PATTERNS = [
     /\b\d{3}[-.]\d{3}[-.]\d{4}\b/g,
     /\b\d{3}-\d{2}-\d{4}\b/g,
 ];
-const AUTH_PATHS = /\b(auth|authorization|session|token|accessToken|refreshToken|credentials?|password|passwd|pwd|pass|secret|apiKey|api_key|cookie|set-cookie|clientSecret|client_secret)\b/i;
+const AUTH_PATHS = /\b(auth|authorization|session|token|accessToken|refreshToken|supervisorOverrideToken|credentials?|password|passwd|pwd|pass|secret|apiKey|api_key|cookie|set-cookie|clientSecret|client_secret)\b/i;
 const MAX_STRING_LENGTH = 2000;
 function redactString(value) {
     // Redact BEFORE truncating. Truncation can sever a paired-delimiter secret —

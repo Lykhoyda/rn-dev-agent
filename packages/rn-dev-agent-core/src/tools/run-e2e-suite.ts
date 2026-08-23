@@ -1,4 +1,9 @@
-import { discoverLockedTests, loadLockedTest } from '../domain/e2e-test.js';
+import {
+  discoverLockedTests,
+  getResolvedLockedTestIds,
+  loadLockedTest,
+  resolveLockedTestIds,
+} from '../domain/e2e-test.js';
 import {
   classifyFlowResult,
   skippedResult,
@@ -76,16 +81,6 @@ function readMaestro(result: ToolResult): { passed: boolean; output: string } {
   }
 }
 
-function filterByPattern(ids: string[], pattern?: string): string[] {
-  if (!pattern || pattern.length > 256) return ids;
-  try {
-    const re = new RegExp(pattern, 'i');
-    return ids.filter((id) => re.test(id));
-  } catch {
-    return ids;
-  }
-}
-
 export async function runE2eSuiteCore(
   args: RunE2eSuiteArgs,
   deps: RunE2eSuiteDeps = {},
@@ -100,7 +95,10 @@ export async function runE2eSuiteCore(
   const mkRunId = deps.makeRunId ?? makeRunId;
   const rand = (): string => Math.random().toString(36).slice(2, 8);
 
-  const ids = filterByPattern(discover(projectRoot), args.pattern);
+  const ids = [
+    ...(getResolvedLockedTestIds(args) ??
+      resolveLockedTestIds(projectRoot, args.pattern, discover)),
+  ];
   if (ids.length === 0) {
     return warnResult(
       {

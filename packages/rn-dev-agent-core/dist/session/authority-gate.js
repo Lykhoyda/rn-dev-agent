@@ -5,6 +5,8 @@ import { failResult } from '../utils.js';
 import { authorityErrorMeta, SessionAuthorityError, shortAuthorityIdentity } from './registry.js';
 import { isProvenMetroOriginMismatch } from './metro-origin.js';
 import { reissueInstallBinding } from './install-reissue.js';
+import { LOGIN_PROLOGUE_ALIAS, LOGIN_PROLOGUE_BLOCKED, appendLoginOverrideAudit, authorizeLoginSupervisorOverride, inspectLoginPrologueGuard, readLoginPrologueOutcome, } from '../domain/login-prologue.js';
+import { setResolvedLockedTestIds } from '../domain/e2e-test.js';
 import { authorityProfileFor, requiresExactInstalledArtifact, } from './tool-profiles.js';
 const optionalBundleAdmission = Symbol('optionalBundleAdmission');
 const managedNativeOrigin = Symbol('managedNativeOrigin');
@@ -423,6 +425,78 @@ function authorityFailure(error) {
     const code = /^([A-Z][A-Z0-9_]+):/.exec(message)?.[1];
     return failResult(message, code ?? 'AUTHORITY_LOST_DURING_OPERATION');
 }
+function parseLoginPrologueOutcome(result) {
+    try {
+        const envelope = JSON.parse(result.content?.[0]?.text ?? '{}');
+        return readLoginPrologueOutcome(envelope.data ?? envelope.meta?.loginPrologue);
+    }
+    catch {
+        return null;
+    }
+}
+function missingLoginPrologueOutcome(result) {
+    const timestamp = new Date().toISOString();
+    let failure = {
+        code: 'LOGIN_PROLOGUE_RESULT_INVALID',
+        detail: 'The login prologue returned no valid terminal state.',
+    };
+    try {
+        const envelope = JSON.parse(result.content?.[0]?.text ?? '{}');
+        if (envelope.code === 'BUSY_FLOW_ACTIVE' && typeof envelope.error === 'string') {
+            failure = { code: envelope.code, detail: envelope.error };
+        }
+    }
+    catch { }
+    return {
+        schemaVersion: 1,
+        state: LOGIN_PROLOGUE_BLOCKED,
+        alias: LOGIN_PROLOGUE_ALIAS,
+        startedAt: timestamp,
+        endedAt: timestamp,
+        elapsedMs: 0,
+        steps: [],
+        inventory: { count: 0, actionIds: [] },
+        failure,
+    };
+}
+function pendingLoginPrologueOutcome(attemptId) {
+    const timestamp = new Date().toISOString();
+    return {
+        schemaVersion: 1,
+        state: LOGIN_PROLOGUE_BLOCKED,
+        alias: LOGIN_PROLOGUE_ALIAS,
+        attemptId,
+        startedAt: timestamp,
+        endedAt: timestamp,
+        elapsedMs: 0,
+        steps: [],
+        inventory: { count: 0, actionIds: [] },
+        failure: {
+            code: 'LOGIN_PROLOGUE_IN_PROGRESS',
+            detail: 'The login prologue has not completed authoritative validation.',
+        },
+    };
+}
+function persistLoginPrologueOutcome(runtime, registry, operation, status, outcome) {
+    const priorOutcome = readLoginPrologueOutcome(status.bindings.loginPrologue);
+    const overrides = outcome.overrides ?? priorOutcome?.overrides;
+    const nextOperation = registry.replaceBindingsDuringOperation(operation, {
+        bindings: {
+            loginPrologue: {
+                ...outcome,
+                ...(overrides ? { overrides } : {}),
+            },
+        },
+    });
+    const nextStatus = runtime.status();
+    if (!nextStatus.available) {
+        throw new SessionAuthorityError(nextStatus.code, nextStatus.reason);
+    }
+    return { operation: nextOperation, status: nextStatus };
+}
+function isActionReplayTool(tool) {
+    return tool === 'cdp_run_action' || tool === 'cdp_login_prologue';
+}
 function authorityErrorCode(error) {
     return error instanceof SessionAuthorityError
         ? error.code
@@ -688,6 +762,10 @@ export function createAuthorityGate(runtime, dependencies) {
             const args = handlerArgs[0] && typeof handlerArgs[0] === 'object'
                 ? handlerArgs[0]
                 : {};
+            const suppliedSupervisorOverrideToken = typeof args.supervisorOverrideToken === 'string'
+                ? args.supervisorOverrideToken
+                : undefined;
+            delete args.supervisorOverrideToken;
             const baseProfile = authorityProfileFor(tool, args);
             let profile = tool === 'rn_session' &&
                 (args.action === 'status' ||
@@ -735,10 +813,42 @@ export function createAuthorityGate(runtime, dependencies) {
                                 liveBundleProbe: tool === 'proof_capture',
                             }
                             : baseProfile;
+            const runtimeStatus = runtime.status();
+            const loginGuard = inspectLoginPrologueGuard({
+                binding: runtimeStatus.available ? runtimeStatus.bindings.loginPrologue : undefined,
+                tool,
+                args,
+                mutation: profile.mutation,
+            });
+            const pendingSupervisorOverrideToken = loginGuard.blocked
+                ? suppliedSupervisorOverrideToken
+                : undefined;
+            const pendingLockedE2eAdmission = loginGuard.blocked &&
+                tool === 'cdp_run_e2e_suite' &&
+                pendingSupervisorOverrideToken === undefined;
+            if (loginGuard.blocked &&
+                pendingSupervisorOverrideToken === undefined &&
+                !pendingLockedE2eAdmission) {
+                return failResult('LOGIN_PROLOGUE_BLOCKED: the deterministic login action did not produce an authoritative passing RunRecord; mutating tools are disabled for this session.', 'LOGIN_PROLOGUE_BLOCKED', {
+                    loginPrologue: runtimeStatus.available
+                        ? runtimeStatus.bindings.loginPrologue
+                        : undefined,
+                    overrideRejected: false,
+                    nextAction: 'Repair the exact user-login action and rerun cdp_login_prologue, or supply a supervisorOverrideToken configured by RN_LOGIN_PROLOGUE_OVERRIDE_TOKEN for this mutating call.',
+                });
+            }
+            if (loginGuard.blocked && profile.kind === 'transition') {
+                return failResult('LOGIN_PROLOGUE_BLOCKED: supervisor overrides cannot authorize transition mutations.', 'LOGIN_PROLOGUE_BLOCKED', {
+                    loginPrologue: runtimeStatus.available
+                        ? runtimeStatus.bindings.loginPrologue
+                        : undefined,
+                    transitionOverrideRejected: true,
+                    nextAction: 'Repair the exact user-login action and rerun cdp_login_prologue before this transition.',
+                });
+            }
             if (profile.kind === 'diagnostic') {
                 return addMeta(await handler(...handlerArgs), { authoritative: false });
             }
-            const runtimeStatus = runtime.status();
             if (runtimeStatus.available && runtimeStatus.state === 'blocked') {
                 return authorityFailure(runtime.blockedContenderError());
             }
@@ -1028,6 +1138,7 @@ export function createAuthorityGate(runtime, dependencies) {
             let retainProofCleanupFence = false;
             let publishedProofFinalize = false;
             let stagedRuntimeRelaunch;
+            let loginPrologueAttemptOperationId = null;
             try {
                 const available = runtime.requireAvailable();
                 registry = available.registry;
@@ -1036,13 +1147,57 @@ export function createAuthorityGate(runtime, dependencies) {
                     throw new SessionAuthorityError(initialStatus.code, initialStatus.reason);
                 }
                 let status = initialStatus;
-                requireCompleteAxes(status, profile);
-                bindSessionArguments(status, profile, args, tool);
+                const deferredAdmissionChecks = tool === 'cdp_login_prologue' || pendingSupervisorOverrideToken !== undefined;
+                if (!deferredAdmissionChecks) {
+                    requireCompleteAxes(status, profile);
+                    bindSessionArguments(status, profile, args, tool);
+                }
+                if (pendingLockedE2eAdmission) {
+                    const resolvedSelection = dependencies.resolveLockedE2eTestIds?.(args, status);
+                    if (!resolvedSelection?.identitiesValid ||
+                        inspectLoginPrologueGuard({
+                            binding: status.bindings.loginPrologue,
+                            tool,
+                            args,
+                            mutation: profile.mutation,
+                            resolvedLockedTestIds: resolvedSelection.ids,
+                        }).blocked) {
+                        throw new SessionAuthorityError('LOGIN_PROLOGUE_BLOCKED', 'the locked e2e suite did not resolve to the exact user-login candidate');
+                    }
+                    setResolvedLockedTestIds(args, resolvedSelection.ids);
+                }
                 operation = registry.beginOperation(available.session, {
                     operationId: randomUUID(),
                     tool,
                     profile: profile.axes.join(''),
                 });
+                if (tool === 'cdp_login_prologue') {
+                    const persisted = persistLoginPrologueOutcome(runtime, registry, operation, status, pendingLoginPrologueOutcome(operation.operationId));
+                    operation = persisted.operation;
+                    status = persisted.status;
+                    loginPrologueAttemptOperationId = operation.operationId;
+                    requireCompleteAxes(status, profile);
+                    bindSessionArguments(status, profile, args, tool);
+                }
+                if (pendingSupervisorOverrideToken !== undefined) {
+                    const outcome = readLoginPrologueOutcome(status.bindings.loginPrologue);
+                    if (outcome?.state !== LOGIN_PROLOGUE_BLOCKED) {
+                        throw new SessionAuthorityError('LOGIN_PROLOGUE_BLOCKED', 'the blocked login prologue state disappeared before override audit');
+                    }
+                    const audit = authorizeLoginSupervisorOverride({
+                        expectedOverrideToken: dependencies.loginSupervisorOverrideToken?.(),
+                        suppliedOverrideToken: pendingSupervisorOverrideToken,
+                        tool,
+                    });
+                    if (!audit) {
+                        throw new SessionAuthorityError('LOGIN_PROLOGUE_BLOCKED', 'the supervisor override token was rejected under the operation fence');
+                    }
+                    const persisted = persistLoginPrologueOutcome(runtime, registry, operation, status, appendLoginOverrideAudit(outcome, audit));
+                    operation = persisted.operation;
+                    status = persisted.status;
+                    requireCompleteAxes(status, profile);
+                    bindSessionArguments(status, profile, args, tool);
+                }
                 const preflightRecovery = await reconcileRecoverableRuntime(runtime, dependencies, registry, operation, status, profile, true);
                 operation = preflightRecovery.operation;
                 status = preflightRecovery.status;
@@ -1411,7 +1566,20 @@ export function createAuthorityGate(runtime, dependencies) {
                 }
                 registry.verifyOperation(operation);
                 const snapshotCheckpoint = dependencies.snapshotCaptureCheckpoint?.();
-                const result = await registry.runWithOperation(operation, () => handler(...handlerArgs));
+                let result = await registry.runWithOperation(operation, () => handler(...handlerArgs));
+                let loginPrologueOutcome = null;
+                if (tool === 'cdp_login_prologue') {
+                    loginPrologueOutcome = parseLoginPrologueOutcome(result);
+                    if (!loginPrologueOutcome) {
+                        loginPrologueOutcome = missingLoginPrologueOutcome(result);
+                        result = failResult(`Login prologue blocked: ${loginPrologueOutcome.failure?.detail ?? 'The login prologue returned no valid terminal state.'}`, 'LOGIN_PROLOGUE_BLOCKED', { loginPrologue: loginPrologueOutcome });
+                    }
+                    if (loginPrologueOutcome.state === LOGIN_PROLOGUE_BLOCKED) {
+                        const persisted = persistLoginPrologueOutcome(runtime, registry, operation, status, loginPrologueOutcome);
+                        operation = persisted.operation;
+                        status = persisted.status;
+                    }
+                }
                 let runtimeTargetChanged = false;
                 const postHandlerRecovery = await reconcileRecoverableRuntime(runtime, dependencies, registry, operation, status, profile, resultSucceeded(result));
                 operation = postHandlerRecovery.operation;
@@ -1440,7 +1608,7 @@ export function createAuthorityGate(runtime, dependencies) {
                 const nestedRuntimeReset = tool === 'cdp_run_e2e_suite' ||
                     tool === 'cdp_auto_login' ||
                     (tool === 'cdp_nav_graph' && args.action === 'go') ||
-                    (tool === 'cdp_run_action' && (optionalBundleClaimed || optionalBundleRecoveryFailed));
+                    (isActionReplayTool(tool) && (optionalBundleClaimed || optionalBundleRecoveryFailed));
                 const reconcilesRuntimeTarget = directRuntimeReset || nestedRuntimeReset;
                 let authorityInvalidated = false;
                 if (directRuntimeReset && !resultSucceeded(result)) {
@@ -1455,7 +1623,7 @@ export function createAuthorityGate(runtime, dependencies) {
                     const metro = status.bindings.metro;
                     let bundle = null;
                     try {
-                        if (tool === 'cdp_run_action' && optionalBundleRecoveryFailed) {
+                        if (isActionReplayTool(tool) && optionalBundleRecoveryFailed) {
                             throw new SessionAuthorityError('BUNDLE_HANDSHAKE_UNAVAILABLE', 'reactive bundle authority did not verify');
                         }
                         if (!dependencies.refreshRuntimeBinding) {
@@ -1476,7 +1644,7 @@ export function createAuthorityGate(runtime, dependencies) {
                                 nextAction: 'Run rn_session action "pin_dev_client" before another CDP operation.',
                             });
                         }
-                        if (tool === 'cdp_run_action' && !optionalBundleClaimed) {
+                        if (isActionReplayTool(tool) && !optionalBundleClaimed) {
                             authorityInvalidated = true;
                         }
                         else {
@@ -1622,6 +1790,18 @@ export function createAuthorityGate(runtime, dependencies) {
                 }
                 if (operation && receiptsCommittable) {
                     registry.commitPlatformAuthorityReceipts(operation);
+                }
+                if (operation && loginPrologueOutcome?.state === 'passed') {
+                    const pendingOutcome = readLoginPrologueOutcome(status.bindings.loginPrologue);
+                    if (operation.operationId !== loginPrologueAttemptOperationId ||
+                        pendingOutcome?.state !== LOGIN_PROLOGUE_BLOCKED ||
+                        pendingOutcome.attemptId !== loginPrologueAttemptOperationId ||
+                        pendingOutcome.failure?.code !== 'LOGIN_PROLOGUE_IN_PROGRESS') {
+                        throw new SessionAuthorityError('LOGIN_PROLOGUE_BLOCKED', 'the passing login result does not match the active blocked attempt');
+                    }
+                    const persisted = persistLoginPrologueOutcome(runtime, registry, operation, status, loginPrologueOutcome);
+                    operation = persisted.operation;
+                    status = persisted.status;
                 }
                 return addMeta(result, {
                     ...nativeOriginMeta(profile, nativeOriginProven),

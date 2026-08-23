@@ -59,7 +59,7 @@ Native interaction. iOS routes through the in-tree `rn-fast-runner` `/command` e
 
 Record / replay / self-repair persistent flows. See the [**Actions concept guide**](../actions/) for why the LLM/pragmatic hybrid matters.
 
-**Replay & repair:** `cdp_run_action` (orchestrates `maestro_run` + auto-repair + retry; persists `RunRecord` with phase timings) → `cdp_repair_action` (fuzzy-patches stale `testID` against live snapshot; refuses on human edits, >3 repairs/24h)
+**Replay & repair:** `cdp_login_prologue` (exact fail-stop `user-login` helper; fresh passing RunRecord required) / `cdp_run_action` (orchestrates `maestro_run` + auto-repair + retry; persists `RunRecord` with phase timings) → `cdp_repair_action` (fuzzy-patches stale `testID` against live snapshot; refuses on human edits, >3 repairs/24h)
 
 **Recording → action promotion:** `cdp_record_test_start` → `cdp_record_test_annotate` (mid-recording state checks) → `cdp_record_test_stop` → `cdp_record_test_generate` (raw Maestro YAML) → `cdp_record_test_save` / `cdp_record_test_save_as_action` (promote to first-class action) → `cdp_record_test_list` / `cdp_record_test_load`
 
@@ -67,7 +67,7 @@ Record / replay / self-repair persistent flows. See the [**Actions concept guide
 
 E2E testing and proof capture — work even when the app is crashed or on native screens.
 
-`maestro_run` / `maestro_generate` → `maestro_test_all` → `proof_step` → `cross_platform_verify`. `cdp_auto_login` is available only for explicitly authorized legacy per-call recovery; it is not a default test step or PR proof.
+`maestro_run` / `maestro_generate` → `maestro_test_all` → `proof_step` → `cross_platform_verify`. `cdp_auto_login` remains a legacy per-call helper outside the guarded journey; it is not a fallback from `LOGIN_PROLOGUE_BLOCKED` or PR proof.
 
 ## Macro-Asserts
 

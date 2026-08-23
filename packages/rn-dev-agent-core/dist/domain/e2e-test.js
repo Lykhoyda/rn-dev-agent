@@ -58,7 +58,11 @@ export function loadLockedTest(projectRoot, id) {
     const filePath = e2ePathFor(projectRoot, id);
     if (!existsSync(filePath))
         return null;
-    return parseLockedTest(readFileSync(filePath, 'utf8'), filePath);
+    const locked = parseLockedTest(readFileSync(filePath, 'utf8'), filePath);
+    return locked?.id === id ? locked : null;
+}
+export function lockedTestFileExists(projectRoot, id) {
+    return existsSync(e2ePathFor(projectRoot, id));
 }
 export function discoverLockedTests(projectRoot) {
     const dir = e2eDirFor(projectRoot);
@@ -68,6 +72,36 @@ export function discoverLockedTests(projectRoot) {
         .filter((f) => f.endsWith('.yaml'))
         .map((f) => f.replace(/\.yaml$/, ''))
         .sort();
+}
+export function resolveLockedTestIds(projectRoot, pattern, discover = discoverLockedTests) {
+    const ids = discover(projectRoot);
+    if (!pattern || pattern.length > 256)
+        return ids;
+    try {
+        const matcher = new RegExp(pattern, 'i');
+        return ids.filter((id) => matcher.test(id));
+    }
+    catch {
+        return ids;
+    }
+}
+export function resolveLockedTestSelection(projectRoot, pattern, discover = discoverLockedTests, load = loadLockedTest) {
+    const ids = resolveLockedTestIds(projectRoot, pattern, discover);
+    const identitiesValid = ids.every((id) => {
+        const locked = load(projectRoot, id);
+        return locked?.id === id && locked.sourceActionId === id;
+    });
+    return { ids, identitiesValid };
+}
+const resolvedLockedTestIds = Symbol('resolvedLockedTestIds');
+export function setResolvedLockedTestIds(args, ids) {
+    Object.defineProperty(args, resolvedLockedTestIds, {
+        value: Object.freeze([...ids]),
+        configurable: true,
+    });
+}
+export function getResolvedLockedTestIds(args) {
+    return args[resolvedLockedTestIds];
 }
 export function parseLockedTest(text, filePath) {
     if (!/^#\s*e2e-locked-test:\s*true\s*$/m.test(text))

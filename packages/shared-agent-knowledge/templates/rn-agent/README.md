@@ -6,11 +6,11 @@ plugin for Claude Code and Codex. One folder, one doctrine — the plugin's
 entire footprint is `.rn-agent/` and it does not read or write anywhere else in
 your project.
 
-If your project also has a `.maestro/` folder for hand-authored E2E
-tests, that's yours alone. Those files are never learned-action authority or an
-automatic authentication fallback. The explicit legacy `cdp_auto_login` helper
-may inspect one only when the user authorizes that per-call navigation recovery;
-its result is never durable login authority or PR proof.
+If your project also has a `.maestro/` folder for hand-authored E2E tests,
+that's yours alone. Authentication prologues resolve the exact
+`.rn-agent/actions/user-login.yaml` learned action and never infer a login flow
+from `.maestro/` filenames. `cdp_login_prologue` is a navigation helper, not PR
+proof; lock and run the login e2e on the exact candidate for formal proof.
 
 ## Layout
 

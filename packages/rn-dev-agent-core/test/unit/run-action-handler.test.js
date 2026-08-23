@@ -172,6 +172,19 @@ test('run-action: first-attempt pass appends RunRecord with no auto-repair', asy
   assert.equal(sidecar.runHistory[0].autoRepair?.attempted, false);
   assert.equal(sidecar.runHistory[0].autoRepair?.outcome, 'skipped');
   assert.equal(typeof sidecar.runHistory[0].autoRepair?.phases?.firstAttemptMs, 'number');
+  assert.equal(typeof sidecar.runHistory[0].runId, 'string');
+  assert.equal(sidecar.runHistory[0].timing.steps.length, 1);
+  assert.equal(sidecar.runHistory[0].timing.steps[0].name, 'maestro-first-attempt');
+  assert.equal(
+    sidecar.runHistory[0].timing.elapsedMs,
+    Date.parse(sidecar.runHistory[0].timing.endedAt) -
+      Date.parse(sidecar.runHistory[0].timing.startedAt),
+  );
+  assert.equal(
+    sidecar.runHistory[0].timing.steps[0].elapsedMs,
+    Date.parse(sidecar.runHistory[0].timing.steps[0].endedAt) -
+      Date.parse(sidecar.runHistory[0].timing.steps[0].startedAt),
+  );
 });
 
 test('run-action: proofReplay pass on an experimental action discloses no lifecycle-promotion write', async () => {
