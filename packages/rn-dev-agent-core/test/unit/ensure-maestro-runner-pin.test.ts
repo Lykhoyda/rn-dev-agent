@@ -7,9 +7,9 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   renameSync,
   symlinkSync,
-  utimesSync,
   writeFileSync,
 } from 'node:fs';
 import { spawn, spawnSync } from 'node:child_process';
@@ -48,26 +48,100 @@ function runEnsure(env: NodeJS.ProcessEnv) {
   });
 }
 
-function processBirthIdentity(pid: number): string {
-  if (process.platform === 'linux') {
-    const boot = readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim().toLowerCase();
-    const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
-    const fields = stat
-      .slice(stat.lastIndexOf(')') + 2)
-      .trim()
-      .split(/\s+/);
-    return `linux:${boot}:${fields[19]}`;
-  }
-  const helper = join(
-    dirname(fileURLToPath(import.meta.url)),
-    '..',
-    '..',
-    'native',
-    'darwin-process-birth',
+function createInstallerFixture(prefix: string) {
+  const root = mkdtempSync(join(tmpdir(), prefix));
+  const scriptDir = join(root, 'scripts');
+  const payload = join(root, 'payload', 'maestro-runner');
+  const archive = join(root, 'maestro-runner.tar.gz');
+  const cache = join(root, 'cache');
+  const runnerCacheRoot = join(cache, 'maestro-runner');
+  const pinDir = join(runnerCacheRoot, MAESTRO_RUNNER_PIN.version);
+  mkdirSync(scriptDir, { recursive: true });
+  mkdirSync(join(payload, 'bin'), { recursive: true });
+  mkdirSync(join(payload, 'drivers'), { recursive: true });
+  const runner = join(payload, 'bin', 'maestro-runner');
+  writeFileSync(runner, '#!/bin/sh\necho maestro-runner 1.1.24\n', 'utf8');
+  chmodSync(runner, 0o755);
+  writeFileSync(join(payload, 'drivers', 'server.apk'), 'trusted-payload', 'utf8');
+  const packed = spawnSync('tar', ['-czf', archive, '-C', join(root, 'payload'), 'maestro-runner']);
+  assert.equal(packed.status, 0, String(packed.stderr));
+
+  const copiedScript = join(scriptDir, 'ensure-maestro-runner.sh');
+  copyFileSync(SCRIPT, copiedScript);
+  chmodSync(copiedScript, 0o755);
+  const runnerSha = createHash('sha256').update(readFileSync(runner)).digest('hex');
+  const archiveSha = createHash('sha256').update(readFileSync(archive)).digest('hex');
+  const platformKeys = ['darwin-arm64', 'darwin-x64', 'linux-arm64', 'linux-x64'];
+  writeFileSync(
+    join(scriptDir, 'maestro-runner-pin.json'),
+    JSON.stringify({
+      version: MAESTRO_RUNNER_PIN.version,
+      sha256: Object.fromEntries(platformKeys.map((key) => [key, runnerSha])),
+      archiveSha256: Object.fromEntries(platformKeys.map((key) => [key, archiveSha])),
+      knownQuirks: [],
+    }),
+    'utf8',
   );
-  const result = spawnSync(helper, [String(pid)], { encoding: 'utf8' });
-  assert.equal(result.status, 0, result.stderr);
-  return `darwin:${result.stdout.trim()}`;
+
+  const nativeSource = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'native');
+  const nativeTarget = join(root, 'rn-dev-agent-core', 'dist', 'native');
+  mkdirSync(nativeTarget, { recursive: true });
+  for (const name of [
+    'darwin-process-birth',
+    'darwin-process-birth.json',
+    'linux-conditional-publication-x64',
+    'linux-conditional-publication-x64.json',
+    'linux-conditional-publication-arm64',
+    'linux-conditional-publication-arm64.json',
+  ]) {
+    copyFileSync(join(nativeSource, name), join(nativeTarget, name));
+  }
+  chmodSync(join(nativeTarget, 'darwin-process-birth'), 0o755);
+  chmodSync(join(nativeTarget, 'linux-conditional-publication-x64'), 0o755);
+  chmodSync(join(nativeTarget, 'linux-conditional-publication-arm64'), 0o755);
+
+  return {
+    archive,
+    archiveSha,
+    cache,
+    copiedScript,
+    pinDir,
+    runner,
+    runnerCacheRoot,
+    runnerSha,
+    env: {
+      ...process.env,
+      RN_DEV_AGENT_RUNNER_CACHE: cache,
+      RN_DEV_AGENT_UNAME_S: process.platform === 'darwin' ? 'Darwin' : 'Linux',
+      RN_DEV_AGENT_UNAME_M: process.arch === 'arm64' ? 'arm64' : 'x86_64',
+      RN_DEV_AGENT_MAESTRO_DOWNLOAD_URL: pathToFileURL(archive).href,
+    },
+  };
+}
+
+function waitForExit(child: ReturnType<typeof spawn>) {
+  let stdout = '';
+  let stderr = '';
+  child.stdout?.setEncoding('utf8');
+  child.stderr?.setEncoding('utf8');
+  child.stdout?.on('data', (chunk) => (stdout += chunk));
+  child.stderr?.on('data', (chunk) => (stderr += chunk));
+  return new Promise<{
+    code: number | null;
+    signal: NodeJS.Signals | null;
+    stdout: string;
+    stderr: string;
+  }>((resolve) => {
+    child.once('close', (code, signal) => resolve({ code, signal, stdout, stderr }));
+  });
+}
+
+async function waitUntil(predicate: () => boolean, timeoutMs = 5_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    assert.ok(Date.now() < deadline, 'timed out waiting for installer test precondition');
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
 }
 
 test('unsupported platform fails closed and does not download', () => {
@@ -506,153 +580,140 @@ test('installer keeps the live pin when atomic publication fails', () => {
   );
 });
 
-test('installer reclaims a stale ownerless legacy lock', () => {
-  const cache = mkdtempSync(join(tmpdir(), 'mr-ownerless-lock-'));
-  const lock = join(cache, 'maestro-runner', `.install-${MAESTRO_RUNNER_PIN.version}.lock`);
-  mkdirSync(lock, { recursive: true });
-  const stale = new Date(Date.now() - 10_000);
-  utimesSync(lock, stale, stale);
-
-  const result = runEnsure({
-    RN_DEV_AGENT_RUNNER_CACHE: cache,
-    RN_DEV_AGENT_UNAME_S: 'Darwin',
-    RN_DEV_AGENT_UNAME_M: 'arm64',
-    RN_DEV_AGENT_MAESTRO_DOWNLOAD_URL: 'http://127.0.0.1:1/missing.tar.gz',
-  });
-
-  assert.notEqual(result.status, 0);
-  assert.match(`${result.stdout}${result.stderr}`, /failed to download/);
-  assert.doesNotMatch(`${result.stdout}${result.stderr}`, /timed out waiting/);
-  assert.equal(existsSync(lock), false);
-});
-
-test('installer waits beyond ten seconds for a healthy lock owner', async () => {
-  const cache = mkdtempSync(join(tmpdir(), 'mr-lock-wait-'));
-  const lock = join(cache, 'maestro-runner', `.install-${MAESTRO_RUNNER_PIN.version}.lock`);
-  mkdirSync(dirname(lock), { recursive: true });
-  const holder = spawn(
-    process.execPath,
-    [
-      '-e',
-      'const fs=require("node:fs"); const p=process.argv[1]; fs.writeFileSync(p, String(process.pid)); setTimeout(() => { fs.unlinkSync(p); }, 11000);',
-      lock,
-    ],
-    { stdio: 'ignore' },
-  );
-  for (let attempt = 0; attempt < 100 && !existsSync(lock); attempt += 1) {
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-  assert.equal(existsSync(lock), true);
-
-  const startedAt = Date.now();
-  const result = runEnsure({
-    RN_DEV_AGENT_RUNNER_CACHE: cache,
-    RN_DEV_AGENT_UNAME_S: 'Darwin',
-    RN_DEV_AGENT_UNAME_M: 'arm64',
-    RN_DEV_AGENT_MAESTRO_DOWNLOAD_URL: 'http://127.0.0.1:1/missing.tar.gz',
-  });
-  const elapsedMs = Date.now() - startedAt;
-  if (holder.exitCode === null) {
-    await new Promise<void>((resolve) => holder.once('exit', () => resolve()));
-  }
-
-  assert.ok(elapsedMs >= 10_000);
-  assert.match(`${result.stdout}${result.stderr}`, /failed to download/);
-  assert.doesNotMatch(`${result.stdout}${result.stderr}`, /timed out waiting/);
-});
-
-test('installer does not age-reclaim a demonstrably live lock owner', () => {
-  const root = mkdtempSync(join(tmpdir(), 'mr-reused-pid-lock-'));
-  const cache = join(root, 'cache');
-  const lock = join(cache, 'maestro-runner', `.install-${MAESTRO_RUNNER_PIN.version}.lock`);
-  const toolDir = join(root, 'tools');
-  mkdirSync(dirname(lock), { recursive: true });
+test('concurrent installers publish one verified pin without lock artifacts', async () => {
+  const fixture = createInstallerFixture('mr-concurrent-install-');
+  const toolDir = join(dirname(fixture.cache), 'tools');
+  const barrierDir = join(dirname(fixture.cache), 'barrier');
   mkdirSync(toolDir);
-  writeFileSync(lock, `${process.pid}\n${processBirthIdentity(process.pid)}\n`);
-  const stale = new Date(Date.now() - 120_000);
-  utimesSync(lock, stale, stale);
-  writeFileSync(join(toolDir, 'sleep'), '#!/bin/sh\nexit 0\n');
-  chmodSync(join(toolDir, 'sleep'), 0o755);
-
-  const result = runEnsure({
-    RN_DEV_AGENT_RUNNER_CACHE: cache,
-    RN_DEV_AGENT_UNAME_S: 'Darwin',
-    RN_DEV_AGENT_UNAME_M: 'arm64',
-    RN_DEV_AGENT_MAESTRO_DOWNLOAD_URL: 'http://127.0.0.1:1/missing.tar.gz',
-    RN_DEV_AGENT_TEST_INSTALL_BUDGET_SECONDS: '12',
+  mkdirSync(barrierDir);
+  writeFileSync(
+    join(toolDir, 'curl'),
+    `#!/bin/sh
+exec "$TEST_NODE" - "$@" <<'NODE'
+const { copyFileSync, readdirSync, writeFileSync } = require('node:fs');
+const { dirname, join } = require('node:path');
+const args = process.argv.slice(2);
+const output = args[args.indexOf('-o') + 1];
+writeFileSync(join(process.env.BARRIER_DIR, String(process.pid)), dirname(output), { flag: 'wx' });
+const deadline = Date.now() + 10000;
+while (readdirSync(process.env.BARRIER_DIR).length < 2) {
+  if (Date.now() >= deadline) process.exit(98);
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+}
+copyFileSync(process.env.TEST_ARCHIVE, output);
+NODE
+`,
+  );
+  chmodSync(join(toolDir, 'curl'), 0o755);
+  const env = {
+    ...fixture.env,
+    BARRIER_DIR: barrierDir,
+    TEST_ARCHIVE: fixture.archive,
+    TEST_NODE: process.execPath,
     PATH: `${toolDir}:${process.env.PATH ?? ''}`,
-  });
+  };
+  const first = spawn('bash', [fixture.copiedScript], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+  const second = spawn('bash', [fixture.copiedScript], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+  const [firstResult, secondResult] = await Promise.all([waitForExit(first), waitForExit(second)]);
 
-  assert.notEqual(result.status, 0);
-  assert.match(`${result.stdout}${result.stderr}`, /timed out waiting/);
-  assert.equal(existsSync(lock), true);
+  assert.equal(firstResult.code, 0, `${firstResult.stdout}${firstResult.stderr}`);
+  assert.equal(secondResult.code, 0, `${secondResult.stdout}${secondResult.stderr}`);
+  assert.equal(
+    createHash('sha256')
+      .update(readFileSync(join(fixture.pinDir, 'bin', 'maestro-runner')))
+      .digest('hex'),
+    fixture.runnerSha,
+  );
+  assert.equal(
+    createHash('sha256')
+      .update(readFileSync(join(fixture.pinDir, '.payload.tar.gz')))
+      .digest('hex'),
+    fixture.archiveSha,
+  );
+  const stagePaths = readdirSync(barrierDir).map((name) =>
+    readFileSync(join(barrierDir, name), 'utf8'),
+  );
+  assert.equal(new Set(stagePaths).size, 2);
+  for (const stagePath of stagePaths) {
+    assert.match(basename(stagePath), /^\.install-stage\.[A-Za-z0-9]{6}$/);
+  }
+  assert.deepEqual(
+    readdirSync(fixture.runnerCacheRoot).filter((name) =>
+      /(?:\.lock|\.reclaim|\.install-owner|\.install-stage)/.test(name),
+    ),
+    [],
+  );
 });
 
-test('installer reclaims a stale lock after its pid is reused', () => {
-  const cache = mkdtempSync(join(tmpdir(), 'mr-reused-pid-lock-'));
-  const lock = join(cache, 'maestro-runner', `.install-${MAESTRO_RUNNER_PIN.version}.lock`);
-  mkdirSync(dirname(lock), { recursive: true });
-  writeFileSync(lock, `${process.pid}\nlinux:not-this-process\n`);
-  const stale = new Date(Date.now() - 120_000);
-  utimesSync(lock, stale, stale);
-
-  const result = runEnsure({
-    RN_DEV_AGENT_RUNNER_CACHE: cache,
-    RN_DEV_AGENT_UNAME_S: 'Darwin',
-    RN_DEV_AGENT_UNAME_M: 'arm64',
-    RN_DEV_AGENT_MAESTRO_DOWNLOAD_URL: 'http://127.0.0.1:1/missing.tar.gz',
-  });
-
-  assert.notEqual(result.status, 0);
-  assert.match(`${result.stdout}${result.stderr}`, /failed to download/);
-  assert.doesNotMatch(`${result.stdout}${result.stderr}`, /timed out waiting/);
-  assert.equal(existsSync(lock), false);
-});
-
-test('installer applies one deadline across lock wait and download', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'mr-total-deadline-'));
-  const cache = join(root, 'cache');
-  const lock = join(cache, 'maestro-runner', `.install-${MAESTRO_RUNNER_PIN.version}.lock`);
-  const toolDir = join(root, 'tools');
-  const marker = join(root, 'curl-max-time');
-  mkdirSync(dirname(lock), { recursive: true });
+test('a killed installer leaves only a harmless stage and the next installer succeeds', async () => {
+  const fixture = createInstallerFixture('mr-killed-install-');
+  const toolDir = join(dirname(fixture.cache), 'tools');
+  const ready = join(dirname(fixture.cache), 'download-started');
   mkdirSync(toolDir);
   writeFileSync(
     join(toolDir, 'curl'),
-    '#!/bin/sh\nwhile [ "$#" -gt 0 ]; do\n  if [ "$1" = "--max-time" ]; then\n    shift\n    printf "%s" "$1" > "$CURL_TIMEOUT_MARKER"\n  fi\n  shift\ndone\nexit 1\n',
+    '#!/bin/sh\nwhile [ "$#" -gt 0 ]; do\n  if [ "$1" = "-o" ]; then shift; output="$1"; fi\n  shift\ndone\nprintf partial > "$output"\nprintf ready > "$KILL_READY"\nwhile :; do sleep 1; done\n',
   );
   chmodSync(join(toolDir, 'curl'), 0o755);
-  const holder = spawn(
-    process.execPath,
-    [
-      '-e',
-      'const fs=require("node:fs"); const p=process.argv[1]; fs.writeFileSync(p,String(process.pid)); setTimeout(()=>fs.unlinkSync(p),2000);',
-      lock,
-    ],
-    { stdio: 'ignore' },
-  );
-  for (let attempt = 0; attempt < 100 && !existsSync(lock); attempt += 1) {
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-  assert.equal(existsSync(lock), true);
-
-  const result = runEnsure({
-    RN_DEV_AGENT_RUNNER_CACHE: cache,
-    RN_DEV_AGENT_UNAME_S: 'Darwin',
-    RN_DEV_AGENT_UNAME_M: 'arm64',
-    RN_DEV_AGENT_TEST_INSTALL_BUDGET_SECONDS: '15',
-    RN_DEV_AGENT_MAESTRO_DOWNLOAD_URL: 'https://example.invalid/runner.tar.gz',
-    CURL_TIMEOUT_MARKER: marker,
-    PATH: `${toolDir}:${process.env.PATH ?? ''}`,
+  const killed = spawn('bash', [fixture.copiedScript], {
+    detached: true,
+    env: {
+      ...fixture.env,
+      KILL_READY: ready,
+      PATH: `${toolDir}:${process.env.PATH ?? ''}`,
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
   });
-  if (holder.exitCode === null) {
-    await new Promise<void>((resolve) => holder.once('exit', () => resolve()));
-  }
+  const killedResult = waitForExit(killed);
+  await waitUntil(() => existsSync(ready));
+  process.kill(-killed.pid!, 'SIGKILL');
+  const stopped = await killedResult;
+  assert.equal(stopped.signal, 'SIGKILL');
+
+  const abandoned = readdirSync(fixture.runnerCacheRoot).filter((name) =>
+    name.startsWith('.install-stage.'),
+  );
+  assert.equal(abandoned.length, 1);
+  assert.match(abandoned[0]!, /^\.install-stage\.[A-Za-z0-9]{6}$/);
+  assert.deepEqual(readdirSync(fixture.runnerCacheRoot), abandoned);
+  assert.deepEqual(
+    readdirSync(fixture.runnerCacheRoot).filter((name) =>
+      /(?:\.lock|\.reclaim|\.install-owner)/.test(name),
+    ),
+    [],
+  );
+
+  const recovered = spawnSync('bash', [fixture.copiedScript], {
+    encoding: 'utf8',
+    env: fixture.env,
+  });
+  assert.equal(recovered.status, 0, `${recovered.stdout}${recovered.stderr}`);
+  assert.equal(
+    readFileSync(join(fixture.pinDir, 'bin', 'maestro-runner'), 'utf8'),
+    readFileSync(fixture.runner, 'utf8'),
+  );
+  assert.equal(existsSync(join(fixture.runnerCacheRoot, abandoned[0]!)), true);
+});
+
+test('partial staged bytes fail integrity verification and never become authoritative', () => {
+  const fixture = createInstallerFixture('mr-partial-install-');
+  const toolDir = join(dirname(fixture.cache), 'tools');
+  mkdirSync(toolDir);
+  writeFileSync(
+    join(toolDir, 'curl'),
+    '#!/bin/sh\nwhile [ "$#" -gt 0 ]; do\n  if [ "$1" = "-o" ]; then shift; output="$1"; fi\n  shift\ndone\nprintf partial > "$output"\n',
+  );
+  chmodSync(join(toolDir, 'curl'), 0o755);
+
+  const result = spawnSync('bash', [fixture.copiedScript], {
+    encoding: 'utf8',
+    env: { ...fixture.env, PATH: `${toolDir}:${process.env.PATH ?? ''}` },
+  });
 
   assert.notEqual(result.status, 0);
-  const maxTime = Number(readFileSync(marker, 'utf8'));
-  assert.ok(maxTime >= 1 && maxTime <= 5);
-  assert.match(`${result.stdout}${result.stderr}`, /failed to download/);
+  assert.match(`${result.stdout}${result.stderr}`, /downloaded archive checksum does not match/);
+  assert.equal(existsSync(fixture.pinDir), false);
+  assert.deepEqual(readdirSync(fixture.runnerCacheRoot), []);
 });
 
 test('pin manifest owns checksums for every supported release archive', () => {

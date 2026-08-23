@@ -15,7 +15,6 @@ if [[ "${RN_DEV_AGENT_TEST_INSTALL_BUDGET_SECONDS:-}" =~ ^[0-9]+$ ]] && [ "$RN_D
   INSTALL_BUDGET_SECONDS="$RN_DEV_AGENT_TEST_INSTALL_BUDGET_SECONDS"
 fi
 DOWNLOAD_RESERVE_SECONDS=10
-LOCK_MAX_AGE_SECONDS=115
 
 remaining_install_seconds() {
   local elapsed=$((SECONDS - INSTALL_STARTED_SECONDS))
@@ -259,82 +258,16 @@ if [ "${1:-}" = "--print-bin" ]; then
   exit 1
 fi
 
-LOCK_FILE="$RUNNER_CACHE_ROOT/.install-${MAESTRO_RUNNER_PIN_VERSION}.lock"
-RECLAIM_DIR="$RUNNER_CACHE_ROOT/.install-${MAESTRO_RUNNER_PIN_VERSION}.reclaim"
-LOCK_HELD=0
-LOCK_OWNER_FILE=""
-LOCK_OWNER_BIRTH=""
 TEMP_DIR=""
 
 cleanup() {
   if [ -n "$TEMP_DIR" ]; then
     rm -rf "$TEMP_DIR"
   fi
-  if [ -n "$LOCK_OWNER_FILE" ]; then
-    rm -f "$LOCK_OWNER_FILE"
-  fi
-  if [ "$LOCK_HELD" = "1" ] && [ -f "$LOCK_FILE" ] && [ ! -L "$LOCK_FILE" ]; then
-    local owner owner_birth
-    owner="$(sed -n '1p' "$LOCK_FILE" 2>/dev/null || true)"
-    owner_birth="$(sed -n '2p' "$LOCK_FILE" 2>/dev/null || true)"
-    if [ "$owner" = "$$" ] && [ "$owner_birth" = "$LOCK_OWNER_BIRTH" ]; then
-      rm -f "$LOCK_FILE"
-    fi
-  fi
 }
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
-
-lock_age_seconds() {
-  node -e 'const fs=require("node:fs"); try { const age=Math.max(0, Math.floor((Date.now()-fs.statSync(process.argv[1]).mtimeMs)/1000)); process.stdout.write(String(age)); } catch { process.stdout.write("0"); }' "$1"
-}
-
-process_birth_identity() {
-  node - "$1" "$SCRIPT_DIR" <<'NODE'
-const { createHash } = require('node:crypto');
-const { lstatSync, readFileSync } = require('node:fs');
-const { spawnSync } = require('node:child_process');
-const { resolve } = require('node:path');
-const pid = process.argv[2];
-const scriptDir = process.argv[3];
-if (!/^\d+$/.test(pid)) process.exit(1);
-if (process.platform === 'linux') {
-  try {
-    const boot = readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim();
-    const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
-    const fields = stat.slice(stat.lastIndexOf(')') + 2).trim().split(/\s+/);
-    if (/^[0-9a-f-]+$/i.test(boot) && fields[19]) {
-      process.stdout.write(`linux:${boot.toLowerCase()}:${fields[19]}`);
-      process.exit(0);
-    }
-  } catch {}
-}
-if (process.platform === 'darwin') {
-  const candidates = [
-    resolve(scriptDir, '..', 'rn-dev-agent-core', 'dist', 'native', 'darwin-process-birth'),
-    resolve(scriptDir, '..', 'packages', 'rn-dev-agent-core', 'native', 'darwin-process-birth'),
-  ];
-  for (const helper of candidates) {
-    const manifestPath = `${helper}.json`;
-    try {
-      const helperStat = lstatSync(helper);
-      const manifestStat = lstatSync(manifestPath);
-      if (!helperStat.isFile() || helperStat.isSymbolicLink() || !manifestStat.isFile() || manifestStat.isSymbolicLink()) continue;
-      const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
-      const digest = createHash('sha256').update(readFileSync(helper)).digest('hex');
-      if (digest !== manifest.binarySha256) continue;
-      const result = spawnSync(helper, [pid], { encoding: 'utf8', timeout: 2000 });
-      const identity = result.status === 0 ? result.stdout.trim() : '';
-      if (!new RegExp(`^${pid}:[0-9]+:[0-9]+$`).test(identity)) continue;
-      process.stdout.write(`darwin:${identity}`);
-      process.exit(0);
-    } catch {}
-  }
-}
-process.exit(1);
-NODE
-}
 
 atomic_publish_directories() {
   local mode="$1"
@@ -437,103 +370,7 @@ try {
 NODE
 }
 
-reclaim_stale_lock() {
-  if ! mkdir "$RECLAIM_DIR" 2>/dev/null; then
-    return
-  fi
-  local owner="" owner_birth="" current_birth="" age="0"
-  if [ -L "$LOCK_FILE" ]; then
-    rmdir "$RECLAIM_DIR"
-    return
-  fi
-  if [ -d "$LOCK_FILE" ]; then
-    owner="$(sed -n '1p' "$LOCK_FILE/pid" 2>/dev/null || true)"
-    owner_birth="$(sed -n '2p' "$LOCK_FILE/pid" 2>/dev/null || true)"
-  elif [ -f "$LOCK_FILE" ]; then
-    owner="$(sed -n '1p' "$LOCK_FILE" 2>/dev/null || true)"
-    owner_birth="$(sed -n '2p' "$LOCK_FILE" 2>/dev/null || true)"
-  fi
-  age="$(lock_age_seconds "$LOCK_FILE")"
-  if [[ "$owner" =~ ^[0-9]+$ ]]; then
-    current_birth="$(process_birth_identity "$owner" 2>/dev/null || true)"
-  fi
-  if [[ "$owner" =~ ^[0-9]+$ ]]; then
-    if kill -0 "$owner" 2>/dev/null; then
-      if [ -z "$current_birth" ] || [ -z "$owner_birth" ] || [ "$current_birth" = "$owner_birth" ]; then
-        :
-      elif [ -d "$LOCK_FILE" ]; then
-        rm -rf "$LOCK_FILE"
-      else
-        rm -f "$LOCK_FILE"
-      fi
-    elif [ -d "$LOCK_FILE" ]; then
-      rm -rf "$LOCK_FILE"
-    else
-      rm -f "$LOCK_FILE"
-    fi
-  elif [ -z "$owner" ]; then
-    if [ "$age" -ge 5 ] || [ "$age" -ge "$LOCK_MAX_AGE_SECONDS" ]; then
-      if [ -d "$LOCK_FILE" ]; then
-        rm -rf "$LOCK_FILE"
-      else
-        rm -f "$LOCK_FILE"
-      fi
-    fi
-  fi
-  rmdir "$RECLAIM_DIR"
-}
-
-try_claim_lock() {
-  if ! mkdir "$RECLAIM_DIR" 2>/dev/null; then
-    return 1
-  fi
-  local claimed=0
-  if node -e 'const fs=require("node:fs"); try { fs.linkSync(process.argv[1], process.argv[2]); } catch { process.exit(1); }' "$LOCK_OWNER_FILE" "$LOCK_FILE"; then
-    claimed=1
-  fi
-  rmdir "$RECLAIM_DIR"
-  [ "$claimed" = "1" ]
-}
-
-acquire_install_lock() {
-  mkdir -p "$RUNNER_CACHE_ROOT"
-  LOCK_OWNER_FILE="$(mktemp "$RUNNER_CACHE_ROOT/.install-owner.XXXXXX")"
-  LOCK_OWNER_BIRTH="$(process_birth_identity "$$" 2>/dev/null || true)"
-  if [ -z "$LOCK_OWNER_BIRTH" ] || ! printf '%s\n%s\n' "$$" "$LOCK_OWNER_BIRTH" > "$LOCK_OWNER_FILE"; then
-    echo "ERROR: failed to create maestro-runner install lock owner record."
-    correction
-    exit 1
-  fi
-  local attempts=0
-  while ! try_claim_lock; do
-    if [ -L "$LOCK_FILE" ]; then
-      echo "ERROR: refusing maestro-runner install lock symlink at $LOCK_FILE."
-      correction
-      exit 1
-    fi
-    reclaim_stale_lock
-    attempts=$((attempts + 1))
-    if [ $((attempts % 10)) -eq 0 ] && bin_matches_pin; then
-      report_success
-      exit 0
-    fi
-    if [ "$(remaining_install_seconds)" -le "$DOWNLOAD_RESERVE_SECONDS" ]; then
-      if bin_matches_pin; then
-        report_success
-        exit 0
-      fi
-      echo "ERROR: timed out waiting for maestro-runner pin-cache install lock."
-      correction
-      exit 1
-    fi
-    sleep 0.1
-  done
-  LOCK_HELD=1
-  rm -f "$LOCK_OWNER_FILE"
-  LOCK_OWNER_FILE=""
-}
-
-acquire_install_lock
+mkdir -p "$RUNNER_CACHE_ROOT"
 
 for guarded_path in "$RUNNER_CACHE_ROOT" "$PIN_DIR" "$PIN_DIR/bin" "$BIN"; do
   if [ -L "$guarded_path" ]; then
@@ -645,9 +482,11 @@ fi
 
 if [ -e "$PIN_DIR" ]; then
   if ! atomic_publish_directories --exchange "$PIN_DIR" "$STAGED_PIN_DIR"; then
-    echo "ERROR: failed to atomically publish the validated maestro-runner pin-cache."
-    correction
-    exit 1
+    if ! pin_dir_matches_pin "$PIN_DIR"; then
+      echo "ERROR: failed to atomically publish the validated maestro-runner pin-cache."
+      correction
+      exit 1
+    fi
   fi
 else
   require_install_time "payload publication"
