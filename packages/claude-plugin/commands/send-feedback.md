@@ -194,6 +194,10 @@ Body template:
 
 <if cdp_bridge_log_tail present in collected data, format as code block. Omit section if no log file exists.>
 
+## Runner Diagnostics
+
+<if runner_diagnostics is present, include the complete reviewed feedback-safe projection. Omit this section when none is available for the exact session.>
+
 ## Steps to Reproduce
 
 <numbered steps from user, or "Not provided">

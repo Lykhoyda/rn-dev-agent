@@ -469,10 +469,13 @@ See the [Actions guide](/rn-dev-agent/actions/) for full details.
 ### Action replay refused with WDA_BOOTSTRAP_FAILED
 
 The iOS Maestro driver (WebDriverAgent) failed to bootstrap before the
-first replay step ran, so the flow was refused — no self-repair, cache
-mutation, or preparation was attempted, because nothing about the flow
-itself was proven wrong. Re-run the replay (bootstrap retries itself),
-check network access, and re-run setup to verify the pin-cache maestro-runner.
+first replay step ran, so the flow was refused and no self-repair was attempted.
+The verified runner payload remains sealed; rn-dev-agent provisions a separate
+per-spawn WDA cache and removes it with the runner snapshot after the attempt.
+Re-run the replay (bootstrap retries itself), check network access, and re-run
+setup to verify the pin-cache maestro-runner. If the failure detail includes
+`RUNNER_CACHE_UNAVAILABLE`, verify that the runner cache parent is writable;
+the runner was not spawned and any owned snapshot or cache was removed.
 
 ### Replay refused by the engine floor preflight
 
