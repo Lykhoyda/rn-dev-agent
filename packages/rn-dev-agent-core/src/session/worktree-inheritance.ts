@@ -430,6 +430,14 @@ function sameSourceEvidence(
   );
 }
 
+function sourceLeafMatchesIdentity(
+  evidence: PathIdentity[] | undefined,
+  identity: PathIdentity,
+): boolean {
+  const leaf = evidence?.at(-1);
+  return leaf?.dev === identity.dev && leaf.ino === identity.ino;
+}
+
 interface DestinationClassification {
   state: DestinationState;
   evidence?: ResourcePlan['evidence'];
@@ -528,7 +536,15 @@ function openUnfollowedDirectory(path: string, expected: PathIdentity): boolean 
 /**
  * Allowlist for a real actions directory or the approved linked-worktree corpus link.
  */
-export function resolveReadableActionCorpus(projectRoot: string): ReadableActionCorpus {
+export interface ReadableActionCorpusDependencies {
+  beforeTargetOpen?: () => void;
+  afterTargetOpen?: () => void;
+}
+
+export function resolveReadableActionCorpus(
+  projectRoot: string,
+  dependencies: ReadableActionCorpusDependencies = {},
+): ReadableActionCorpus {
   const root = canonical(projectRoot) ?? resolve(projectRoot);
   const rnAgentDir = join(root, '.rn-agent');
   const actionsDir = join(rnAgentDir, 'actions');
@@ -589,6 +605,7 @@ export function resolveReadableActionCorpus(projectRoot: string): ReadableAction
   if (planned.sourceState !== 'AVAILABLE' || !planned.sourceEvidence) {
     return refuseForeignActions(actionsDir);
   }
+  dependencies.beforeTargetOpen?.();
   const targetDir = canonical(primaryActionsDir);
   if (!targetDir) return refuseForeignActions(actionsDir);
   const targetStat = lstatIfPresent(targetDir);
@@ -599,6 +616,7 @@ export function resolveReadableActionCorpus(projectRoot: string): ReadableAction
   if (!openUnfollowedDirectory(targetDir, targetIdentity)) {
     return refuseReplacedActions(actionsDir);
   }
+  dependencies.afterTargetOpen?.();
   const plannedAfter = planResource(layout, SHAREABLE_RESOURCES[0]);
   if (
     plannedAfter.state !== 'LINK_VALID_SAFE' ||
@@ -607,6 +625,8 @@ export function resolveReadableActionCorpus(projectRoot: string): ReadableAction
     plannedAfter.evidence.ino !== planned.evidence.ino ||
     plannedAfter.sourceState !== 'AVAILABLE' ||
     !sameSourceEvidence(planned.sourceEvidence, plannedAfter.sourceEvidence) ||
+    !sourceLeafMatchesIdentity(planned.sourceEvidence, targetIdentity) ||
+    !sourceLeafMatchesIdentity(plannedAfter.sourceEvidence, targetIdentity) ||
     !directoryIdentityUnchanged(rnAgentDir, rnAgentIdentity)
   ) {
     return refuseReplacedActions(actionsDir);

@@ -196,6 +196,11 @@ export function createMaestroTestAllHandler(
         return failResult(err instanceof Error ? err.message : String(err));
       }
     }
+    if (learnedCorpus && !learnedContext) {
+      return failResult(
+        `Refusing learned-action corpus without an approved load context: ${resolvedFlowDir}.`,
+      );
+    }
     const flows = learnedContext
       ? filterFlows(
           learnedContext.files

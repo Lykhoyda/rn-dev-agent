@@ -1499,3 +1499,37 @@ test('maestro_test_all refuses a nested action subflow directory', async () => {
   }
   assert.equal(spawned, false);
 });
+
+test('maestro_test_all refuses an unapproved alias to an action corpus', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-owned-suite-alias-'));
+  const dir = join(root, '.rn-agent', 'actions');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(
+    join(dir, 'browse.yaml'),
+    actionYaml('browse', '# enginePin: maestro-runner@1.1.24'),
+    'utf8',
+  );
+  const directoryAlias = join(root, 'action-link');
+  symlinkSync(dir, directoryAlias, 'dir');
+  let spawned = false;
+  const handler = createMaestroTestAllHandler({
+    getActiveSession: () => ({ platform: 'ios', deviceId: 'SIM', appId: 'com.test.app' }) as never,
+    chooseDispatch: () => ({
+      runner: 'maestro-runner',
+      binPath: '/fake/maestro-runner',
+      buildArgs: () => [],
+    }),
+    resolveEngineStatus: async () => PINNED(),
+    execFile: async () => {
+      spawned = true;
+      return { stdout: '', stderr: '' };
+    },
+  });
+
+  const result = await handler({ platform: 'ios', flowDir: directoryAlias });
+  const envelope = JSON.parse(result.content[0]!.text);
+
+  assert.equal(envelope.ok, false);
+  assert.match(String(envelope.error), /approved load context/);
+  assert.equal(spawned, false);
+});

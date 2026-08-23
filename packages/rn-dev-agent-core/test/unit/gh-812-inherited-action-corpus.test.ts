@@ -421,6 +421,36 @@ test('read approval requires setup LINK_VALID_SAFE classification', () => {
   }
 });
 
+test('read approval binds the opened target to both setup source snapshots', () => {
+  const fixture = makeFixture();
+  try {
+    seedLoginCorpus(fixture.primary);
+    const worktree = addWorktree(fixture);
+    inherit(worktree);
+    const actionsDir = join(fixture.primary, '.rn-agent', 'actions');
+    const approvedDir = join(fixture.root, 'approved-actions');
+    const foreignDir = join(fixture.root, 'foreign-actions');
+    mkdirSync(foreignDir);
+    writeFileSync(join(foreignDir, 'login.yaml'), fixtureYaml({ id: 'login', intent: 'foreign' }));
+
+    const corpus = resolveReadableActionCorpus(worktree, {
+      beforeTargetOpen: () => {
+        renameSync(actionsDir, approvedDir);
+        renameSync(foreignDir, actionsDir);
+      },
+      afterTargetOpen: () => {
+        renameSync(actionsDir, foreignDir);
+        renameSync(approvedDir, actionsDir);
+      },
+    });
+
+    assert.equal(corpus.status, 'refused');
+    if (corpus.status === 'refused') assert.match(corpus.reason, /replaced learned-action corpus/);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
 test('documented setup plan args classify the same corpus as replay and mutate nothing', () => {
   const fixture = makeFixture();
   try {

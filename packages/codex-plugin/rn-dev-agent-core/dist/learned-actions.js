@@ -449,6 +449,10 @@ function sameSourceEvidence(left, right) {
     return identity.dev === candidate.dev && identity.ino === candidate.ino;
   });
 }
+function sourceLeafMatchesIdentity(evidence, identity) {
+  const leaf = evidence?.at(-1);
+  return leaf?.dev === identity.dev && leaf.ino === identity.ino;
+}
 function classifyDestination(path2, sourcePath, type) {
   let link;
   try {
@@ -521,7 +525,7 @@ function openUnfollowedDirectory(path2, expected) {
     closeSync2(fd);
   }
 }
-function resolveReadableActionCorpus(projectRoot) {
+function resolveReadableActionCorpus(projectRoot, dependencies = {}) {
   const root = canonical(projectRoot) ?? resolve(projectRoot);
   const rnAgentDir = join2(root, ".rn-agent");
   const actionsDir = join2(rnAgentDir, "actions");
@@ -577,6 +581,7 @@ function resolveReadableActionCorpus(projectRoot) {
   if (planned.sourceState !== "AVAILABLE" || !planned.sourceEvidence) {
     return refuseForeignActions(actionsDir);
   }
+  dependencies.beforeTargetOpen?.();
   const targetDir = canonical(primaryActionsDir);
   if (!targetDir)
     return refuseForeignActions(actionsDir);
@@ -588,8 +593,9 @@ function resolveReadableActionCorpus(projectRoot) {
   if (!openUnfollowedDirectory(targetDir, targetIdentity)) {
     return refuseReplacedActions(actionsDir);
   }
+  dependencies.afterTargetOpen?.();
   const plannedAfter = planResource(layout, SHAREABLE_RESOURCES[0]);
-  if (plannedAfter.state !== "LINK_VALID_SAFE" || !plannedAfter.evidence || plannedAfter.evidence.dev !== planned.evidence.dev || plannedAfter.evidence.ino !== planned.evidence.ino || plannedAfter.sourceState !== "AVAILABLE" || !sameSourceEvidence(planned.sourceEvidence, plannedAfter.sourceEvidence) || !directoryIdentityUnchanged(rnAgentDir, rnAgentIdentity)) {
+  if (plannedAfter.state !== "LINK_VALID_SAFE" || !plannedAfter.evidence || plannedAfter.evidence.dev !== planned.evidence.dev || plannedAfter.evidence.ino !== planned.evidence.ino || plannedAfter.sourceState !== "AVAILABLE" || !sameSourceEvidence(planned.sourceEvidence, plannedAfter.sourceEvidence) || !sourceLeafMatchesIdentity(planned.sourceEvidence, targetIdentity) || !sourceLeafMatchesIdentity(plannedAfter.sourceEvidence, targetIdentity) || !directoryIdentityUnchanged(rnAgentDir, rnAgentIdentity)) {
     return refuseReplacedActions(actionsDir);
   }
   return {
