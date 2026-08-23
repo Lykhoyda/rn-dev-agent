@@ -27,7 +27,7 @@ import {
   sameReadableActionCorpus,
 } from '../../dist/session/worktree-inheritance.js';
 import { listActions } from '../../dist/domain/action-inventory.js';
-import { loadAction } from '../../dist/domain/action-store.js';
+import { loadAction, loadActionFromContext } from '../../dist/domain/action-store.js';
 import { listUnfollowedDirectory, readUnfollowedFile } from '../../dist/domain/unfollowed-file.js';
 import {
   createPinnedRunActionHandler as createRunActionHandler,
@@ -350,6 +350,38 @@ test('verified directory operations refuse a replaced inherited target', () => {
     assert.throws(
       () => listUnfollowedDirectory(snapshot.directory, snapshot.identity),
       /Refusing replaced learned-action corpus/,
+    );
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('inventory stays bound to its original corpus snapshot', async () => {
+  const fixture = makeFixture();
+  try {
+    seedLoginCorpus(fixture.primary);
+    const worktree = addWorktree(fixture);
+    inherit(worktree);
+    const actionsDir = join(fixture.primary, '.rn-agent', 'actions');
+    let replaced = false;
+
+    await assert.rejects(
+      () =>
+        listActions(worktree, {
+          loadAction: (context, actionId) => {
+            if (!replaced) {
+              replaced = true;
+              renameSync(actionsDir, join(fixture.root, 'original-inventory-actions'));
+              mkdirSync(actionsDir);
+              writeFileSync(
+                join(actionsDir, 'login.yaml'),
+                fixtureYaml({ id: 'login', intent: 'replacement' }),
+              );
+            }
+            return loadActionFromContext(context, actionId);
+          },
+        }),
+      /Refusing replaced learned-action corpus|Refusing inherited action symlink/,
     );
   } finally {
     fixture.cleanup();

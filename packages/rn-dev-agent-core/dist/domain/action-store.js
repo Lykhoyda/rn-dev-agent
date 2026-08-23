@@ -12,7 +12,7 @@ import { loadOrInitSidecar, markSeen, saveSidecar, sidecarPathFor, yamlEditedSin
 import { atomicWriter } from './atomic-writer.js';
 import { assertValidActionId, assertWithinDir } from './path-safety.js';
 import { listUnfollowedDirectory, readUnfollowedFile } from './unfollowed-file.js';
-import { parseAndValidateFlow } from './maestro-validator.js';
+import { buildMaestroFlow, parseAndValidateFlow } from './maestro-validator.js';
 import { mirrorToDb } from './action-state-store.js';
 import { readableActionsSnapshot, resolveReadableActionCorpus, sameReadableActionCorpus, } from '../session/worktree-inheritance.js';
 /**
@@ -103,17 +103,26 @@ function ownedActionPathIdentityMatches(entries) {
         return false;
     }
 }
-function resolveActionFileNameFromCorpus(actionId, corpus) {
+export function openReadableActionLoadContext(projectRoot) {
+    const corpus = resolveReadableActionCorpus(projectRoot);
+    if (corpus.status === 'refused')
+        throw new Error(corpus.reason);
+    if (corpus.status !== 'owned-directory' && corpus.status !== 'approved-inherited')
+        return null;
     const snapshot = readableActionsSnapshot(corpus);
     if (!snapshot)
         return null;
-    const fileName = `${actionId}.yaml`;
-    assertWithinDir(fileName, corpus.actionsDir);
-    assertWithinDir(fileName, snapshot.directory);
     const files = listUnfollowedDirectory(snapshot.directory, snapshot.identity);
-    const yamlExists = files.includes(fileName);
+    assertStableReadableCorpus(projectRoot, corpus);
+    return { projectRoot, corpus, snapshot, files };
+}
+function resolveActionFileNameFromContext(actionId, context) {
+    const fileName = `${actionId}.yaml`;
+    assertWithinDir(fileName, context.corpus.actionsDir);
+    assertWithinDir(fileName, context.snapshot.directory);
+    const yamlExists = context.files.includes(fileName);
     const ymlFileName = fileName.replace(/\.yaml$/, '.yml');
-    const ymlExists = files.includes(ymlFileName);
+    const ymlExists = context.files.includes(ymlFileName);
     if (yamlExists && ymlExists) {
         throw new Error(`Action ${actionId} is ambiguous because both ${actionId}.yaml and ${actionId}.yml exist; keep exactly one file before replay.`);
     }
@@ -125,20 +134,15 @@ function resolveActionFileNameFromCorpus(actionId, corpus) {
 }
 export function resolveActionPath(projectRoot, actionId) {
     assertValidActionId(actionId, 'resolveActionPath');
-    const corpus = resolveReadableActionCorpus(projectRoot);
-    if (corpus.status === 'refused')
-        throw new Error(corpus.reason);
-    if (corpus.status !== 'owned-directory' && corpus.status !== 'approved-inherited')
+    const context = openReadableActionLoadContext(projectRoot);
+    if (!context)
         return null;
-    const fileName = resolveActionFileNameFromCorpus(actionId, corpus);
+    const fileName = resolveActionFileNameFromContext(actionId, context);
     if (!fileName)
         return null;
-    const snapshot = readableActionsSnapshot(corpus);
-    if (!snapshot)
-        return null;
-    readUnfollowedFile(snapshot.directory, snapshot.identity, fileName);
-    assertStableReadableCorpus(projectRoot, corpus);
-    return join(corpus.actionsDir, fileName);
+    readUnfollowedFile(context.snapshot.directory, context.snapshot.identity, fileName);
+    assertStableReadableCorpus(projectRoot, context.corpus);
+    return join(context.corpus.actionsDir, fileName);
 }
 export function createActionTextExclusive(projectRoot, actionId, yamlText) {
     const yamlPath = actionPathFor(projectRoot, actionId);
@@ -291,26 +295,17 @@ export function joinYaml(parts) {
         out.push(b);
     return out.join('\n');
 }
-export function loadAction(projectRoot, actionId) {
+export function captureActionFromContext(context, actionId) {
     assertValidActionId(actionId, 'loadAction');
-    const corpus = resolveReadableActionCorpus(projectRoot);
-    if (corpus.status === 'refused')
-        throw new Error(corpus.reason);
-    if (corpus.status !== 'owned-directory' && corpus.status !== 'approved-inherited')
-        return null;
-    const fileName = resolveActionFileNameFromCorpus(actionId, corpus);
+    const fileName = resolveActionFileNameFromContext(actionId, context);
     if (!fileName)
         return null;
-    const snapshot = readableActionsSnapshot(corpus);
-    if (!snapshot)
-        return null;
+    const { corpus, projectRoot, snapshot } = context;
     const filePath = join(corpus.actionsDir, fileName);
     const text = readUnfollowedFile(snapshot.directory, snapshot.identity, fileName);
     const metadata = parseM7Header(text, actionId);
-    if (!metadata)
-        return null;
-    assertActionMetadataIdentity(filePath, metadata);
-    const { bodyLines } = splitYaml(text);
+    if (metadata)
+        assertActionMetadataIdentity(filePath, metadata);
     let replay;
     try {
         const parsed = parseAndValidateFlow(text, {
@@ -325,21 +320,53 @@ export function loadAction(projectRoot, actionId) {
             },
             realpathFn: (path) => resolve(path),
         });
-        replay = { ok: true, yamlText: parsed.raw, commands: parsed.commands };
+        replay = {
+            ok: true,
+            yamlText: parsed.raw,
+            cdpYaml: buildMaestroFlow({}, parsed.commands),
+            commands: parsed.commands,
+            appId: parsed.appId,
+        };
     }
     catch (err) {
         replay = { ok: false, error: err instanceof Error ? err.message : String(err) };
     }
     assertStableReadableCorpus(projectRoot, corpus);
-    const state = loadOrInitSidecar(filePath);
+    return { filePath, yamlText: text, metadata, replay };
+}
+export function loadActionFromContext(context, actionId) {
+    const captured = captureActionFromContext(context, actionId);
+    if (!captured?.metadata)
+        return null;
+    const { bodyLines } = splitYaml(captured.yamlText);
+    const state = loadOrInitSidecar(captured.filePath);
     return {
-        metadata,
+        metadata: captured.metadata,
         body: bodyLines.join('\n'),
-        filePath,
+        filePath: captured.filePath,
         state,
-        yamlText: text,
-        replay,
+        yamlText: captured.yamlText,
+        replay: captured.replay,
     };
+}
+export function loadAction(projectRoot, actionId) {
+    const context = openReadableActionLoadContext(projectRoot);
+    return context ? loadActionFromContext(context, actionId) : null;
+}
+export function captureActionFromPath(path) {
+    const absolutePath = resolve(path);
+    if (!/\.ya?ml$/i.test(absolutePath))
+        return null;
+    const actionsDir = dirname(absolutePath);
+    if (basename(actionsDir) !== 'actions' || basename(dirname(actionsDir)) !== '.rn-agent') {
+        return null;
+    }
+    const actionId = basename(absolutePath).replace(/\.ya?ml$/i, '');
+    const context = openReadableActionLoadContext(dirname(dirname(actionsDir)));
+    if (!context)
+        return null;
+    const action = captureActionFromContext(context, actionId);
+    return action && basename(action.filePath) === basename(absolutePath) ? action : null;
 }
 /**
  * Persist a ReusableAction back to disk. Updates the YAML file, the

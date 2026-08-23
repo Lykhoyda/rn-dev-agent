@@ -10630,17 +10630,26 @@ function actionFileExists(path) {
   }
   return true;
 }
-function resolveActionFileNameFromCorpus(actionId, corpus) {
+function openReadableActionLoadContext(projectRoot) {
+  const corpus = resolveReadableActionCorpus(projectRoot);
+  if (corpus.status === "refused")
+    throw new Error(corpus.reason);
+  if (corpus.status !== "owned-directory" && corpus.status !== "approved-inherited")
+    return null;
   const snapshot = readableActionsSnapshot(corpus);
   if (!snapshot)
     return null;
-  const fileName = `${actionId}.yaml`;
-  assertWithinDir(fileName, corpus.actionsDir);
-  assertWithinDir(fileName, snapshot.directory);
   const files = listUnfollowedDirectory(snapshot.directory, snapshot.identity);
-  const yamlExists = files.includes(fileName);
+  assertStableReadableCorpus(projectRoot, corpus);
+  return { projectRoot, corpus, snapshot, files };
+}
+function resolveActionFileNameFromContext(actionId, context) {
+  const fileName = `${actionId}.yaml`;
+  assertWithinDir(fileName, context.corpus.actionsDir);
+  assertWithinDir(fileName, context.snapshot.directory);
+  const yamlExists = context.files.includes(fileName);
   const ymlFileName = fileName.replace(/\.yaml$/, ".yml");
-  const ymlExists = files.includes(ymlFileName);
+  const ymlExists = context.files.includes(ymlFileName);
   if (yamlExists && ymlExists) {
     throw new Error(`Action ${actionId} is ambiguous because both ${actionId}.yaml and ${actionId}.yml exist; keep exactly one file before replay.`);
   }
@@ -10652,20 +10661,15 @@ function resolveActionFileNameFromCorpus(actionId, corpus) {
 }
 function resolveActionPath(projectRoot, actionId) {
   assertValidActionId(actionId, "resolveActionPath");
-  const corpus = resolveReadableActionCorpus(projectRoot);
-  if (corpus.status === "refused")
-    throw new Error(corpus.reason);
-  if (corpus.status !== "owned-directory" && corpus.status !== "approved-inherited")
+  const context = openReadableActionLoadContext(projectRoot);
+  if (!context)
     return null;
-  const fileName = resolveActionFileNameFromCorpus(actionId, corpus);
+  const fileName = resolveActionFileNameFromContext(actionId, context);
   if (!fileName)
     return null;
-  const snapshot = readableActionsSnapshot(corpus);
-  if (!snapshot)
-    return null;
-  readUnfollowedFile(snapshot.directory, snapshot.identity, fileName);
-  assertStableReadableCorpus(projectRoot, corpus);
-  return join9(corpus.actionsDir, fileName);
+  readUnfollowedFile(context.snapshot.directory, context.snapshot.identity, fileName);
+  assertStableReadableCorpus(projectRoot, context.corpus);
+  return join9(context.corpus.actionsDir, fileName);
 }
 function splitYaml(text) {
   const allLines = text.split("\n");
@@ -10725,6 +10729,59 @@ function joinYaml(parts) {
   for (const b of parts.bodyLines)
     out.push(b);
   return out.join("\n");
+}
+function captureActionFromContext(context, actionId) {
+  assertValidActionId(actionId, "loadAction");
+  const fileName = resolveActionFileNameFromContext(actionId, context);
+  if (!fileName)
+    return null;
+  const { corpus, projectRoot, snapshot } = context;
+  const filePath = join9(corpus.actionsDir, fileName);
+  const text = readUnfollowedFile(snapshot.directory, snapshot.identity, fileName);
+  const metadata = parseM7Header(text, actionId);
+  if (metadata)
+    assertActionMetadataIdentity(filePath, metadata);
+  let replay;
+  try {
+    const parsed = parseAndValidateFlow(text, {
+      flowDir: snapshot.directory,
+      flowRoot: snapshot.directory,
+      readFileFn: (path) => {
+        const child = relative3(snapshot.directory, path);
+        if (child === "" || child === ".." || child.startsWith(`..${sep6}`) || isAbsolute3(child)) {
+          throw new Error(`Refusing action flow outside ${snapshot.directory}.`);
+        }
+        return readUnfollowedFile(snapshot.directory, snapshot.identity, child);
+      },
+      realpathFn: (path) => resolve5(path)
+    });
+    replay = {
+      ok: true,
+      yamlText: parsed.raw,
+      cdpYaml: buildMaestroFlow({}, parsed.commands),
+      commands: parsed.commands,
+      appId: parsed.appId
+    };
+  } catch (err) {
+    replay = { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+  assertStableReadableCorpus(projectRoot, corpus);
+  return { filePath, yamlText: text, metadata, replay };
+}
+function captureActionFromPath(path) {
+  const absolutePath = resolve5(path);
+  if (!/\.ya?ml$/i.test(absolutePath))
+    return null;
+  const actionsDir = dirname9(absolutePath);
+  if (basename4(actionsDir) !== "actions" || basename4(dirname9(actionsDir)) !== ".rn-agent") {
+    return null;
+  }
+  const actionId = basename4(absolutePath).replace(/\.ya?ml$/i, "");
+  const context = openReadableActionLoadContext(dirname9(dirname9(actionsDir)));
+  if (!context)
+    return null;
+  const action = captureActionFromContext(context, actionId);
+  return action && basename4(action.filePath) === basename4(absolutePath) ? action : null;
 }
 function migrationConflict(filePath) {
   return new Error(`Action changed during migration: ${filePath}. Re-run migration.`);
@@ -10859,7 +10916,7 @@ var init_action_store = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/domain/action-engine-compat.js
-import { existsSync as existsSync9, lstatSync as lstatSync7, readFileSync as readFileSync9, readdirSync as readdirSync4, realpathSync as realpathSync4 } from "node:fs";
+import { existsSync as existsSync9, lstatSync as lstatSync7, readdirSync as readdirSync4, realpathSync as realpathSync4 } from "node:fs";
 import { basename as basename5, dirname as dirname10, join as join10, resolve as resolve6 } from "node:path";
 function actionEnginePinRefusal(enginePin) {
   if (!enginePin) {
@@ -10944,15 +11001,13 @@ function standaloneLearnedActionPathRefusal(path) {
     return `Refusing to execute learned-action descendant ${path} as a standalone flow.`;
   }
   const actionId = basename5(path).replace(/\.ya?ml$/i, "");
-  const projectRoot = dirname10(dirname10(dirname10(resolve6(path))));
   try {
-    const resolvedAction = resolveActionPath(projectRoot, actionId);
-    if (resolvedAction === null || resolve6(resolvedAction) !== resolve6(path)) {
+    const action = captureActionFromPath(path);
+    if (!action) {
       return `Action ${actionId} does not resolve uniquely to ${path}.`;
     }
-    const metadata = parseM7Header(readFileSync9(path, "utf8"), actionId);
-    if (metadata)
-      assertActionMetadataIdentity(path, metadata);
+    if (!action.replay.ok)
+      return action.replay.error;
   } catch (err) {
     return err instanceof Error ? err.message : String(err);
   }
@@ -11189,7 +11244,7 @@ var init_keyboard_guard = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/util/secure-state-file.js
-import { readFileSync as readFileSync11, writeFileSync as writeFileSync3, unlinkSync as unlinkSync6, mkdirSync as mkdirSync8, renameSync as renameSync3, lstatSync as lstatSync8 } from "node:fs";
+import { readFileSync as readFileSync10, writeFileSync as writeFileSync3, unlinkSync as unlinkSync6, mkdirSync as mkdirSync8, renameSync as renameSync3, lstatSync as lstatSync8 } from "node:fs";
 import { join as join11, dirname as dirname12 } from "node:path";
 import { homedir as homedir3 } from "node:os";
 function getStateDir() {
@@ -11210,7 +11265,7 @@ function readJsonStateFile(path) {
     const stat = lstatSync8(path);
     if (stat.isSymbolicLink())
       return null;
-    return JSON.parse(readFileSync11(path, "utf8"));
+    return JSON.parse(readFileSync10(path, "utf8"));
   } catch {
     return null;
   }
@@ -11636,14 +11691,14 @@ var init_declared_source_contract = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/nav-graph/storage.js
-import { readFileSync as readFileSync12, writeFileSync as writeFileSync4, existsSync as existsSync11, renameSync as renameSync4, readdirSync as readdirSync5, lstatSync as lstatSync9, mkdirSync as mkdirSync9, realpathSync as realpathSync5 } from "node:fs";
+import { readFileSync as readFileSync11, writeFileSync as writeFileSync4, existsSync as existsSync11, renameSync as renameSync4, readdirSync as readdirSync5, lstatSync as lstatSync9, mkdirSync as mkdirSync9, realpathSync as realpathSync5 } from "node:fs";
 import { join as join14, dirname as dirname13 } from "node:path";
 function isRnProject(dir) {
   const pkgPath = join14(dir, "package.json");
   if (!existsSync11(pkgPath))
     return false;
   try {
-    const pkg = JSON.parse(readFileSync12(pkgPath, "utf-8"));
+    const pkg = JSON.parse(readFileSync11(pkgPath, "utf-8"));
     const deps = { ...pkg.dependencies, ...pkg.devDependencies };
     return !!(deps["react-native"] || deps["expo"]);
   } catch {
@@ -11723,7 +11778,7 @@ function readProjectBundleId(projectRoot) {
   if (!existsSync11(appJsonPath))
     return null;
   try {
-    const raw = JSON.parse(readFileSync12(appJsonPath, "utf-8"));
+    const raw = JSON.parse(readFileSync11(appJsonPath, "utf-8"));
     const iosId = raw.expo?.ios?.bundleIdentifier ?? raw.ios?.bundleIdentifier;
     const androidId = raw.expo?.android?.package ?? raw.android?.package;
     if (typeof iosId === "string" && iosId.length > 0)
@@ -11917,7 +11972,7 @@ var init_sources = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/project-config.js
-import { existsSync as existsSync12, readFileSync as readFileSync13 } from "node:fs";
+import { existsSync as existsSync12, readFileSync as readFileSync12 } from "node:fs";
 import { join as join15 } from "node:path";
 function readAppId(projectRoot, platform) {
   for (const filename of ["app.json", "app.config.json"]) {
@@ -11925,7 +11980,7 @@ function readAppId(projectRoot, platform) {
     if (!existsSync12(p))
       continue;
     try {
-      const raw = JSON.parse(readFileSync13(p, "utf-8"));
+      const raw = JSON.parse(readFileSync12(p, "utf-8"));
       const expo = raw.expo ?? raw;
       const iosBundleId = expo?.ios?.bundleIdentifier;
       const androidPkg = expo?.android?.package;
@@ -11953,7 +12008,7 @@ function readExpoSlug() {
     if (!existsSync12(p))
       continue;
     try {
-      const raw = JSON.parse(readFileSync13(p, "utf-8"));
+      const raw = JSON.parse(readFileSync12(p, "utf-8"));
       return raw.expo?.slug ?? null;
     } catch {
       continue;
@@ -12574,7 +12629,7 @@ var init_maestro_device_authority = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/domain/maestro-runner-report.js
-import { existsSync as existsSync14, readFileSync as readFileSync14, rmSync as rmSync3 } from "node:fs";
+import { existsSync as existsSync14, readFileSync as readFileSync13, rmSync as rmSync3 } from "node:fs";
 import { tmpdir as tmpdir3 } from "node:os";
 import { join as join19 } from "node:path";
 function idsFrom(value, keys) {
@@ -12604,7 +12659,7 @@ function reportDeviceIds(reportDir) {
   if (!existsSync14(reportPath))
     return { ids: [], strength: "none" };
   try {
-    const report = JSON.parse(readFileSync14(reportPath, "utf8"));
+    const report = JSON.parse(readFileSync13(reportPath, "utf8"));
     const flows = Array.isArray(report.flows) ? report.flows : [];
     const devices = [report.device, ...flows.map((flow) => flow?.device)];
     const strong = [
@@ -12646,7 +12701,7 @@ function collectDirectRunnerEvidence(reportDir, output) {
     return evidence;
   try {
     evidence.output = `${output}
-${readFileSync14(logPath, "utf8")}`;
+${readFileSync13(logPath, "utf8")}`;
   } catch {
   }
   return evidence;
@@ -13672,7 +13727,7 @@ var init_tap_latency = __esm({
 // packages/rn-dev-agent-core/dist/runners/release-android-slot.js
 import { execFile as execFileCb9 } from "node:child_process";
 import { promisify as promisify12 } from "node:util";
-import { existsSync as existsSync15, readFileSync as readFileSync15, unlinkSync as unlinkSync7 } from "node:fs";
+import { existsSync as existsSync15, readFileSync as readFileSync14, unlinkSync as unlinkSync7 } from "node:fs";
 import { homedir as homedir5 } from "node:os";
 import { join as join21 } from "node:path";
 function isProtectedPid(pid, selfPid, parentPid) {
@@ -13691,7 +13746,7 @@ function defaultDeps() {
     resolveSerial: (deviceId) => deviceId ? ["-s", deviceId] : getAdbSerial(),
     readDaemonPid: () => {
       try {
-        const parsed = JSON.parse(readFileSync15(DAEMON_JSON2, "utf8"));
+        const parsed = JSON.parse(readFileSync14(DAEMON_JSON2, "utf8"));
         return typeof parsed.pid === "number" ? parsed.pid : null;
       } catch {
         return null;
@@ -13843,7 +13898,7 @@ var init_release_android_slot = __esm({
 // packages/rn-dev-agent-core/dist/tools/maestro-run.js
 import { execFile as execFileCb10 } from "node:child_process";
 import { promisify as promisify13 } from "node:util";
-import { existsSync as existsSync16, readFileSync as readFileSync16, writeFileSync as writeFileSync5 } from "node:fs";
+import { existsSync as existsSync16, readFileSync as readFileSync15, writeFileSync as writeFileSync5 } from "node:fs";
 import { tmpdir as tmpdir4 } from "node:os";
 import { basename as basename8, join as join22, dirname as dirname14 } from "node:path";
 async function runFlowParked(run, opts = {}) {
@@ -14062,14 +14117,35 @@ function createMaestroRunHandler(deps = {}) {
     let validatedContent;
     let validatedCommands;
     let headerAppId;
-    if (args.inlineYaml) {
+    let capturedAction = null;
+    const flowPathClassification = args.flowPath ? classifyLearnedActionPath(args.flowPath) : "outside";
+    if (flowPathClassification === "descendant") {
+      return failResult(`Refusing to execute learned-action descendant ${args.flowPath} as a standalone flow.`, "BAD_RECORDING");
+    }
+    if (flowPathClassification === "action") {
+      if (args.inlineYaml) {
+        return failResult("Refusing ambiguous learned-action replay with both flowPath and inlineYaml.", "BAD_RECORDING");
+      }
+      try {
+        capturedAction = captureActionFromPath(args.flowPath);
+      } catch (err) {
+        return failResult(err instanceof Error ? err.message : String(err), "BAD_RECORDING");
+      }
+      if (!capturedAction) {
+        return failResult(`Action does not resolve uniquely to ${args.flowPath}.`, "BAD_RECORDING");
+      }
+      if (!capturedAction.replay.ok) {
+        return failResult(capturedAction.replay.error, "BAD_RECORDING");
+      }
+      rawYaml = capturedAction.replay.yamlText;
+    } else if (args.inlineYaml) {
       rawYaml = args.inlineYaml;
     } else if (args.flowPath) {
       if (!existsSync16(args.flowPath)) {
         return failResult(`Flow file not found: ${args.flowPath}`);
       }
       try {
-        rawYaml = readFileSync16(args.flowPath, "utf-8");
+        rawYaml = readFileSync15(args.flowPath, "utf-8");
       } catch (err) {
         return failResult(`Failed to read flow file: ${err.message}`);
       }
@@ -14077,7 +14153,7 @@ function createMaestroRunHandler(deps = {}) {
       return failResult("Provide either flowPath or inlineYaml.");
     }
     try {
-      const runFlowOpts = args.flowPath ? { flowDir: dirname14(args.flowPath), flowRoot: dirname14(args.flowPath) } : {};
+      const runFlowOpts = args.flowPath && flowPathClassification === "outside" ? { flowDir: dirname14(args.flowPath), flowRoot: dirname14(args.flowPath) } : {};
       const parsed = parseAndValidateFlow(rawYaml, runFlowOpts);
       planMaestroAuthorityStages(parsed.commands);
       validatedCommands = parsed.commands;
@@ -14157,12 +14233,8 @@ function createMaestroRunHandler(deps = {}) {
         provenance: engineStatus?.provenance ?? "none"
       });
     }
-    const learnedActionPathRefusal = args.flowPath ? standaloneLearnedActionPathRefusal(args.flowPath) : null;
-    if (learnedActionPathRefusal) {
-      return failResult(learnedActionPathRefusal, "BAD_RECORDING");
-    }
-    const learnedAction = Boolean(args.actionMetadata) || (args.flowPath ? isLearnedActionPath(args.flowPath) : false);
-    const actionMeta = args.actionMetadata ?? (args.flowPath ? parseM7Header(rawYaml, basename8(args.flowPath).replace(/\.ya?ml$/i, "")) : null);
+    const learnedAction = Boolean(capturedAction || args.actionMetadata);
+    const actionMeta = capturedAction?.metadata ?? args.actionMetadata ?? (args.flowPath ? parseM7Header(rawYaml, basename8(args.flowPath).replace(/\.ya?ml$/i, "")) : null);
     const compatibilityRefusal = learnedAction || actionMeta !== null ? actionReplayPreflight({
       enginePin: actionMeta?.enginePin,
       commands: validatedCommands,
@@ -14460,6 +14532,7 @@ var init_maestro_run = __esm({
     init_engine_pin();
     init_action_engine_compat();
     init_reusable_action();
+    init_action_store();
     init_agent_device_wrapper();
     init_project_config();
     init_maestro_dispatch();
@@ -14499,7 +14572,7 @@ init_engine_pin();
 init_action_engine_compat();
 init_action_engine_compat();
 import { spawnSync as spawnSync2 } from "node:child_process";
-import { existsSync as existsSync17, readdirSync as readdirSync7 } from "node:fs";
+import { existsSync as existsSync17 } from "node:fs";
 import { dirname as dirname15, join as join23, resolve as resolve8 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 
@@ -14508,43 +14581,70 @@ init_action_engine_compat();
 init_action_store();
 init_maestro_validator();
 init_reusable_action();
-import { readFileSync as readFileSync10 } from "node:fs";
+import { readFileSync as readFileSync9 } from "node:fs";
 import { basename as basename6, dirname as dirname11, resolve as resolve7 } from "node:path";
-function prepareActionVerificationSuite(files, flowDir, engineStatus) {
+function prepareActionVerificationSuite(files, flowDir, engineStatus, context) {
   const prepared = [];
   const errors = [];
+  const learnedCorpus = classifyLearnedActionPath(resolve7(flowDir, "__action__.yaml")) === "action";
+  let learnedContext = context;
+  if (learnedCorpus && !learnedContext) {
+    try {
+      learnedContext = openReadableActionLoadContext(dirname11(dirname11(resolve7(flowDir)))) ?? void 0;
+    } catch (err) {
+      const error = err instanceof Error ? err.message : String(err);
+      return { prepared, errors: files.map((file) => ({ file, error })) };
+    }
+  }
   for (const file of files) {
     try {
-      const actionPathRefusal = standaloneLearnedActionPathRefusal(file);
-      if (actionPathRefusal)
-        throw new Error(actionPathRefusal);
-      const text = readFileSync10(file, "utf8");
-      const parsed = parseAndValidateFlow(text, { flowDir: dirname11(file), flowRoot: flowDir });
       const id = basename6(file).replace(/\.ya?ml$/i, "");
-      const meta = parseM7Header(text, id);
       const owned = isLearnedActionPath(file);
-      if (owned) {
-        const projectRoot = dirname11(dirname11(dirname11(file)));
-        const resolvedPath = resolveActionPath(projectRoot, id);
-        if (resolvedPath === null || resolve7(resolvedPath) !== resolve7(file)) {
+      let inlineYaml;
+      let commands;
+      let meta;
+      if (learnedContext) {
+        const action = captureActionFromContext(learnedContext, id);
+        if (!action || basename6(action.filePath) !== basename6(file)) {
           throw new Error(`Action ${id} did not resolve to ${file}`);
         }
+        if (!action.replay.ok)
+          throw new Error(action.replay.error);
+        inlineYaml = action.replay.yamlText;
+        commands = action.replay.commands;
+        meta = action.metadata;
+      } else {
+        const actionPathRefusal = standaloneLearnedActionPathRefusal(file);
+        if (actionPathRefusal)
+          throw new Error(actionPathRefusal);
+        const text = readFileSync9(file, "utf8");
+        const parsed = parseAndValidateFlow(text, { flowDir: dirname11(file), flowRoot: flowDir });
+        inlineYaml = parsed.raw;
+        commands = parsed.commands;
+        meta = parseM7Header(text, id);
       }
       const refusal = replayCompatibilityPreflight({
         enginePin: meta?.enginePin,
-        commands: parsed.commands,
+        commands,
         engineStatus,
         requireEnginePin: meta !== null || owned
       });
       if (refusal)
         throw new Error(refusal);
-      prepared.push({ file, inlineYaml: parsed.raw });
+      prepared.push({
+        file,
+        inlineYaml,
+        ...meta ? { actionMetadata: meta } : {}
+      });
     } catch (err) {
       errors.push({ file, error: err instanceof Error ? err.message : String(err) });
     }
   }
   return { prepared, errors };
 }
+
+// packages/rn-dev-agent-core/dist/maestro-runner-pin.js
+init_action_store();
 
 // packages/rn-dev-agent-core/dist/domain/bounded-regex.js
 import { Worker } from "node:worker_threads";
@@ -14678,9 +14778,13 @@ async function verifyActions(argv) {
     return 2;
   }
   let files;
+  let actionContext;
   try {
-    const discovered = readdirSync7(flowDir);
-    const yamlFiles = discovered.filter((file) => /\.ya?ml$/i.test(file));
+    const openedContext = openReadableActionLoadContext(dirname15(dirname15(flowDir)));
+    if (!openedContext)
+      throw new Error(`No learned-action corpus found at ${flowDir}`);
+    actionContext = openedContext;
+    const yamlFiles = actionContext.files.filter((file) => /\.ya?ml$/i.test(file));
     const filtered = pattern ? await filterWithBoundedRegex(yamlFiles, pattern) : { ok: true, matches: yamlFiles };
     if (!filtered.ok) {
       console.error(`verify-actions pattern is ${filtered.reason}: ${filtered.message}`);
@@ -14695,7 +14799,7 @@ async function verifyActions(argv) {
     console.error(`No Maestro flows found in ${flowDir}`);
     return 2;
   }
-  const suite = prepareActionVerificationSuite(files, flowDir, engineStatus);
+  const suite = prepareActionVerificationSuite(files, flowDir, engineStatus, actionContext);
   if (suite.errors.length > 0) {
     console.error(`Suite preflight refused ${suite.errors.length} of ${files.length} flows before execution.`);
     for (const row of suite.errors)
@@ -14712,7 +14816,12 @@ async function verifyActions(argv) {
   let failed = 0;
   for (const flow of suite.prepared) {
     const startedAt = Date.now();
-    const result = await run({ platform, inlineYaml: flow.inlineYaml, timeoutMs: timeout });
+    const result = await run({
+      platform,
+      inlineYaml: flow.inlineYaml,
+      actionMetadata: flow.actionMetadata,
+      timeoutMs: timeout
+    });
     const envelope = JSON.parse(result.content[0].text);
     const ok = envelope.ok && envelope.data?.passed !== false;
     console.log(`  ${ok ? "PASS" : "FAIL"}  ${flow.file.split("/").pop()}  (${Date.now() - startedAt}ms)`);

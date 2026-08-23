@@ -1,12 +1,13 @@
 #!/usr/bin/env node
 import { spawnSync } from 'node:child_process';
-import { existsSync, readdirSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { doctorPinnedRunner, exactPinRefusal, getEngineStatus, MAESTRO_RUNNER_PIN, nodePlatformKey, _resetEngineStatusForTest, } from './domain/engine-pin.js';
 import { migrateLearnedActions } from './domain/action-engine-compat.js';
 import { classifyLearnedActionPath } from './domain/action-engine-compat.js';
 import { prepareActionVerificationSuite } from './domain/action-verification-suite.js';
+import { openReadableActionLoadContext } from './domain/action-store.js';
 import { filterWithBoundedRegex } from './domain/bounded-regex.js';
 import { createMaestroRunHandler } from './tools/maestro-run.js';
 const USAGE = 'usage: maestro-runner-pin [diagnose|install|migrate-actions|verify-actions] [--json] [--root <app>]';
@@ -89,9 +90,13 @@ async function verifyActions(argv) {
         return 2;
     }
     let files;
+    let actionContext;
     try {
-        const discovered = readdirSync(flowDir);
-        const yamlFiles = discovered.filter((file) => /\.ya?ml$/i.test(file));
+        const openedContext = openReadableActionLoadContext(dirname(dirname(flowDir)));
+        if (!openedContext)
+            throw new Error(`No learned-action corpus found at ${flowDir}`);
+        actionContext = openedContext;
+        const yamlFiles = actionContext.files.filter((file) => /\.ya?ml$/i.test(file));
         const filtered = pattern
             ? await filterWithBoundedRegex(yamlFiles, pattern)
             : { ok: true, matches: yamlFiles };
@@ -109,7 +114,7 @@ async function verifyActions(argv) {
         console.error(`No Maestro flows found in ${flowDir}`);
         return 2;
     }
-    const suite = prepareActionVerificationSuite(files, flowDir, engineStatus);
+    const suite = prepareActionVerificationSuite(files, flowDir, engineStatus, actionContext);
     if (suite.errors.length > 0) {
         console.error(`Suite preflight refused ${suite.errors.length} of ${files.length} flows before execution.`);
         for (const row of suite.errors)
@@ -126,7 +131,12 @@ async function verifyActions(argv) {
     let failed = 0;
     for (const flow of suite.prepared) {
         const startedAt = Date.now();
-        const result = await run({ platform, inlineYaml: flow.inlineYaml, timeoutMs: timeout });
+        const result = await run({
+            platform,
+            inlineYaml: flow.inlineYaml,
+            actionMetadata: flow.actionMetadata,
+            timeoutMs: timeout,
+        });
         const envelope = JSON.parse(result.content[0].text);
         const ok = envelope.ok && envelope.data?.passed !== false;
         console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${flow.file.split('/').pop()}  (${Date.now() - startedAt}ms)`);

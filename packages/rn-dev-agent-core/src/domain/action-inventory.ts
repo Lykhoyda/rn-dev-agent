@@ -1,11 +1,8 @@
-import { join } from 'node:path';
-import { loadAction } from './action-store.js';
-import { listUnfollowedDirectory } from './unfollowed-file.js';
 import {
-  readableActionsSnapshot,
-  resolveReadableActionCorpus,
-  sameReadableActionCorpus,
-} from '../session/worktree-inheritance.js';
+  loadActionFromContext,
+  openReadableActionLoadContext,
+  type ReadableActionLoadContext,
+} from './action-store.js';
 
 import type { ActionSummary } from '../observability/wire-types.js';
 
@@ -13,30 +10,26 @@ import type { ActionSummary } from '../observability/wire-types.js';
 // the observe SPA).
 export type { ActionSummary } from '../observability/wire-types.js';
 
-export async function listActions(projectRoot: string): Promise<ActionSummary[]> {
-  const corpus = resolveReadableActionCorpus(projectRoot);
-  if (corpus.status === 'refused') throw new Error(corpus.reason);
-  const snapshot = readableActionsSnapshot(corpus);
-  if (!snapshot) return [];
-  let files: string[];
-  try {
-    files = listUnfollowedDirectory(snapshot.directory, snapshot.identity);
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
-    throw err;
-  }
-  const after = resolveReadableActionCorpus(projectRoot);
-  if (!sameReadableActionCorpus(corpus, after)) {
-    throw new Error(
-      `Refusing replaced learned-action corpus symlink at ${join(projectRoot, '.rn-agent', 'actions')}.`,
-    );
-  }
-  const yamlFiles = files.filter((f) => /\.ya?ml$/.test(f)).sort();
+export interface ActionInventoryDependencies {
+  loadAction?: (
+    context: ReadableActionLoadContext,
+    actionId: string,
+  ) => ReturnType<typeof loadActionFromContext>;
+}
+
+export async function listActions(
+  projectRoot: string,
+  dependencies: ActionInventoryDependencies = {},
+): Promise<ActionSummary[]> {
+  const context = openReadableActionLoadContext(projectRoot);
+  if (!context) return [];
+  const load = dependencies.loadAction ?? loadActionFromContext;
+  const yamlFiles = context.files.filter((f) => /\.ya?ml$/.test(f)).sort();
   const results: ActionSummary[] = [];
   for (const id of new Set(yamlFiles.map((file) => file.replace(/\.ya?ml$/, '')))) {
     // Inventory omits yaml/yml twins; resolveActionPath still refuses replay.
     if (yamlFiles.includes(`${id}.yaml`) && yamlFiles.includes(`${id}.yml`)) continue;
-    const action = loadAction(projectRoot, id);
+    const action = load(context, id);
     if (!action) continue;
     const { metadata } = action;
     const summary: ActionSummary = {

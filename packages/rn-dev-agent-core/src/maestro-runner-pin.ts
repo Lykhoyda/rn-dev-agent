@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { spawnSync } from 'node:child_process';
-import { existsSync, readdirSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -14,6 +14,7 @@ import {
 import { migrateLearnedActions } from './domain/action-engine-compat.js';
 import { classifyLearnedActionPath } from './domain/action-engine-compat.js';
 import { prepareActionVerificationSuite } from './domain/action-verification-suite.js';
+import { openReadableActionLoadContext } from './domain/action-store.js';
 import { filterWithBoundedRegex } from './domain/bounded-regex.js';
 import { createMaestroRunHandler } from './tools/maestro-run.js';
 
@@ -105,9 +106,12 @@ async function verifyActions(argv: string[]): Promise<number> {
     return 2;
   }
   let files: string[];
+  let actionContext: NonNullable<ReturnType<typeof openReadableActionLoadContext>>;
   try {
-    const discovered = readdirSync(flowDir);
-    const yamlFiles = discovered.filter((file) => /\.ya?ml$/i.test(file));
+    const openedContext = openReadableActionLoadContext(dirname(dirname(flowDir)));
+    if (!openedContext) throw new Error(`No learned-action corpus found at ${flowDir}`);
+    actionContext = openedContext;
+    const yamlFiles = actionContext.files.filter((file) => /\.ya?ml$/i.test(file));
     const filtered = pattern
       ? await filterWithBoundedRegex(yamlFiles, pattern)
       : { ok: true as const, matches: yamlFiles };
@@ -125,7 +129,7 @@ async function verifyActions(argv: string[]): Promise<number> {
     return 2;
   }
 
-  const suite = prepareActionVerificationSuite(files, flowDir, engineStatus);
+  const suite = prepareActionVerificationSuite(files, flowDir, engineStatus, actionContext);
   if (suite.errors.length > 0) {
     console.error(
       `Suite preflight refused ${suite.errors.length} of ${files.length} flows before execution.`,
@@ -144,7 +148,12 @@ async function verifyActions(argv: string[]): Promise<number> {
   let failed = 0;
   for (const flow of suite.prepared) {
     const startedAt = Date.now();
-    const result = await run({ platform, inlineYaml: flow.inlineYaml, timeoutMs: timeout });
+    const result = await run({
+      platform,
+      inlineYaml: flow.inlineYaml,
+      actionMetadata: flow.actionMetadata,
+      timeoutMs: timeout,
+    });
     const envelope = JSON.parse(result.content[0]!.text) as {
       ok: boolean;
       error?: string;

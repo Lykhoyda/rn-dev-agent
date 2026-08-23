@@ -12206,6 +12206,7 @@ var init_maestro_run = __esm({
     init_engine_pin();
     init_action_engine_compat();
     init_reusable_action();
+    init_action_store();
     init_agent_device_wrapper();
     init_project_config();
     init_maestro_dispatch();

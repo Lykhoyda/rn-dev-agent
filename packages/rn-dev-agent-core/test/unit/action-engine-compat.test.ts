@@ -8,6 +8,7 @@ import {
   readFileSync,
   readdirSync,
   renameSync,
+  rmSync,
   statSync,
   symlinkSync,
   utimesSync,
@@ -901,6 +902,61 @@ test('maestro_run refuses a drifted learned action before spawn', async () => {
   assert.equal(spawned, false);
 });
 
+test('maestro_run executes the captured action after its path changes', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-action-direct-snapshot-'));
+  const dir = join(root, '.rn-agent', 'actions');
+  mkdirSync(dir, { recursive: true });
+  const flowPath = join(dir, 'login.yaml');
+  const foreignPath = join(root, 'foreign.yaml');
+  writeFileSync(
+    flowPath,
+    actionYaml(
+      'login',
+      '# enginePin: maestro-runner@1.1.24',
+      '- tapOn:\n    id: "captured-selector"\n',
+    ),
+  );
+  writeFileSync(
+    foreignPath,
+    actionYaml(
+      'login',
+      '# enginePin: maestro-runner@1.1.24',
+      '- tapOn:\n    id: "foreign-selector"\n',
+    ),
+  );
+  let safeFlowFile = '';
+  let executedYaml = '';
+  const handler = createMaestroRunHandler({
+    getActiveSession: () => ({ platform: 'ios', deviceId: 'SIM', appId: 'com.test.app' }) as never,
+    chooseDispatch: () => ({
+      runner: 'maestro-runner',
+      binPath: '/fake/maestro-runner',
+      buildArgs: (_platform, file) => {
+        safeFlowFile = file;
+        return ['test', file];
+      },
+    }),
+    resolveEngineStatus: async () => PINNED(),
+    parkFlow: async (run) => run(),
+    claimNativeOrigin: async () => {},
+    completeNativeOrigin: async () => {},
+    relaunchManagedApp: async () => {},
+    reproveManagedOrigin: async () => {},
+    completeRunnerPark: async () => {},
+    execFile: async () => {
+      rmSync(flowPath);
+      symlinkSync(foreignPath, flowPath);
+      executedYaml = readFileSync(safeFlowFile, 'utf8');
+      return { stdout: 'Flow PASSED', stderr: '' };
+    },
+  });
+
+  await handler({ platform: 'ios', flowPath });
+
+  assert.match(executedYaml, /captured-selector/);
+  assert.doesNotMatch(executedYaml, /foreign-selector/);
+});
+
 test('maestro_run enforces M7 engine metadata outside the learned-action directory', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'rn-moved-action-'));
   const flowPath = join(dir, 'login.yaml');
@@ -1226,14 +1282,72 @@ test('action suite execution snapshots preserve the bytes accepted by preflight'
   const suite = prepareActionVerificationSuite([first, second], dir, PINNED());
   assert.deepEqual(suite.errors, []);
   assert.equal(suite.prepared.length, 2);
+  const foreign = join(root, 'foreign.yaml');
   writeFileSync(
-    second,
+    foreign,
     actionYaml('b', '# enginePin: maestro-runner@1.1.24', '- copyTextFrom: "Log.n"\n'),
     'utf8',
   );
+  rmSync(second);
+  symlinkSync(foreign, second);
 
   assert.doesNotMatch(suite.prepared[1]!.inlineYaml, /Log\.n/);
   assert.match(readFileSync(second, 'utf8'), /Log\.n/);
+});
+
+test('maestro_test_all executes captured actions after their paths change', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-owned-suite-snapshot-run-'));
+  const dir = join(root, '.rn-agent', 'actions');
+  mkdirSync(dir, { recursive: true });
+  const flowPath = join(dir, 'browse.yaml');
+  const foreignPath = join(root, 'foreign.yaml');
+  writeFileSync(
+    flowPath,
+    actionYaml(
+      'browse',
+      '# enginePin: maestro-runner@1.1.24',
+      '- tapOn:\n    id: "captured-suite-selector"\n',
+    ),
+  );
+  writeFileSync(
+    foreignPath,
+    actionYaml(
+      'browse',
+      '# enginePin: maestro-runner@1.1.24',
+      '- tapOn:\n    id: "foreign-suite-selector"\n',
+    ),
+  );
+  let safeFlowFile = '';
+  let executedYaml = '';
+  const handler = createMaestroTestAllHandler({
+    getActiveSession: () => ({ platform: 'ios', deviceId: 'SIM', appId: 'com.test.app' }) as never,
+    chooseDispatch: () => ({
+      runner: 'maestro-runner',
+      binPath: '/fake/maestro-runner',
+      buildArgs: (_platform, file) => {
+        safeFlowFile = file;
+        return ['test', file];
+      },
+    }),
+    resolveEngineStatus: async () => PINNED(),
+    parkFlow: async (run) => run(),
+    claimNativeOrigin: async () => {},
+    completeNativeOrigin: async () => {},
+    relaunchManagedApp: async () => {},
+    reproveManagedOrigin: async () => {},
+    completeRunnerPark: async () => {},
+    execFile: async () => {
+      rmSync(flowPath);
+      symlinkSync(foreignPath, flowPath);
+      executedYaml = readFileSync(safeFlowFile, 'utf8');
+      return { stdout: 'Flow PASSED', stderr: '' };
+    },
+  });
+
+  await handler({ platform: 'ios', flowDir: dir });
+
+  assert.match(executedYaml, /captured-suite-selector/);
+  assert.doesNotMatch(executedYaml, /foreign-suite-selector/);
 });
 
 test('maestro_test_all revalidates the exact pin before each subprocess', async () => {

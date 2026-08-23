@@ -5,8 +5,9 @@ import { tmpdir } from 'node:os';
 import { basename, join, dirname } from 'node:path';
 import { okResult, failResult, warnResult } from '../utils.js';
 import { getEngineStatus, enginePinCaveat, exactPinRefusal, withImmediatePinnedRunner, preOAndroidApiRefusal, isOlderSdkInstallFailure, olderSdkInstallDiagnosis, MAESTRO_RUNNER_MIN_ANDROID_API, } from '../domain/engine-pin.js';
-import { actionReplayPreflight, isLearnedActionPath, replayCompatibilityPreflight, standaloneLearnedActionPathRefusal, } from '../domain/action-engine-compat.js';
+import { actionReplayPreflight, classifyLearnedActionPath, replayCompatibilityPreflight, } from '../domain/action-engine-compat.js';
 import { parseM7Header } from '../domain/reusable-action.js';
+import { captureActionFromPath } from '../domain/action-store.js';
 import { getActiveSession } from '../agent-device-wrapper.js';
 import { resolveBundleId, readExpoSlug } from '../project-config.js';
 import { chooseMaestroDispatch, shouldWarnFallback, flowContainsHideKeyboard, } from './maestro-dispatch.js';
@@ -313,7 +314,32 @@ export function createMaestroRunHandler(deps = {}) {
         let validatedContent;
         let validatedCommands;
         let headerAppId;
-        if (args.inlineYaml) {
+        let capturedAction = null;
+        const flowPathClassification = args.flowPath
+            ? classifyLearnedActionPath(args.flowPath)
+            : 'outside';
+        if (flowPathClassification === 'descendant') {
+            return failResult(`Refusing to execute learned-action descendant ${args.flowPath} as a standalone flow.`, 'BAD_RECORDING');
+        }
+        if (flowPathClassification === 'action') {
+            if (args.inlineYaml) {
+                return failResult('Refusing ambiguous learned-action replay with both flowPath and inlineYaml.', 'BAD_RECORDING');
+            }
+            try {
+                capturedAction = captureActionFromPath(args.flowPath);
+            }
+            catch (err) {
+                return failResult(err instanceof Error ? err.message : String(err), 'BAD_RECORDING');
+            }
+            if (!capturedAction) {
+                return failResult(`Action does not resolve uniquely to ${args.flowPath}.`, 'BAD_RECORDING');
+            }
+            if (!capturedAction.replay.ok) {
+                return failResult(capturedAction.replay.error, 'BAD_RECORDING');
+            }
+            rawYaml = capturedAction.replay.yamlText;
+        }
+        else if (args.inlineYaml) {
             rawYaml = args.inlineYaml;
         }
         else if (args.flowPath) {
@@ -334,7 +360,7 @@ export function createMaestroRunHandler(deps = {}) {
             // GH #186: when running a saved flow FILE, resolve+inline any runFlow file
             // refs relative to that file's directory, contained within it. Inline YAML
             // has no on-disk root, so runFlow file refs stay rejected there.
-            const runFlowOpts = args.flowPath
+            const runFlowOpts = args.flowPath && flowPathClassification === 'outside'
                 ? { flowDir: dirname(args.flowPath), flowRoot: dirname(args.flowPath) }
                 : {};
             const parsed = parseAndValidateFlow(rawYaml, runFlowOpts);
@@ -438,14 +464,9 @@ export function createMaestroRunHandler(deps = {}) {
                 provenance: engineStatus?.provenance ?? 'none',
             });
         }
-        const learnedActionPathRefusal = args.flowPath
-            ? standaloneLearnedActionPathRefusal(args.flowPath)
-            : null;
-        if (learnedActionPathRefusal) {
-            return failResult(learnedActionPathRefusal, 'BAD_RECORDING');
-        }
-        const learnedAction = Boolean(args.actionMetadata) || (args.flowPath ? isLearnedActionPath(args.flowPath) : false);
-        const actionMeta = args.actionMetadata ??
+        const learnedAction = Boolean(capturedAction || args.actionMetadata);
+        const actionMeta = capturedAction?.metadata ??
+            args.actionMetadata ??
             (args.flowPath
                 ? parseM7Header(rawYaml, basename(args.flowPath).replace(/\.ya?ml$/i, ''))
                 : null);
