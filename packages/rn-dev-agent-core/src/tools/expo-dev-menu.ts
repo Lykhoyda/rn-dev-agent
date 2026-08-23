@@ -182,7 +182,6 @@ export function classifyForegroundSurface(
   boundAppId?: string,
 ): ForegroundSurface {
   const text = surfaceText(nodes);
-  if (text.length === 0) return 'unknown';
   const has = (value: string) => text.some((candidate) => candidate.includes(value));
   if (
     nodes.some((node) => node.type === 'Alert') ||
@@ -190,6 +189,11 @@ export function classifyForegroundSurface(
   ) {
     return 'unknown';
   }
+
+  const hasBoundApp =
+    Boolean(boundAppId) &&
+    nodes.some((node) => node.packageName === boundAppId || node.type === 'Application');
+  if (text.length === 0) return hasBoundApp ? 'app' : 'unknown';
 
   if (has('development servers')) return 'dev_client_picker';
   if (has('this is the developer menu')) return 'first_run_tutorial';
@@ -207,9 +211,6 @@ export function classifyForegroundSurface(
     return 'react_native_dev_menu';
   }
   if (!boundAppId) return 'unknown';
-  const hasBoundApp = nodes.some(
-    (node) => node.packageName === boundAppId || node.type === 'Application',
-  );
   return hasBoundApp ? 'app' : 'unknown';
 }
 

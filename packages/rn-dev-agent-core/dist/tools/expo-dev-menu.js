@@ -110,13 +110,15 @@ function hasBlockingForeignSurface(nodes, boundAppId) {
 }
 export function classifyForegroundSurface(nodes, boundAppId) {
     const text = surfaceText(nodes);
-    if (text.length === 0)
-        return 'unknown';
     const has = (value) => text.some((candidate) => candidate.includes(value));
     if (nodes.some((node) => node.type === 'Alert') ||
         (boundAppId && hasBlockingForeignSurface(nodes, boundAppId))) {
         return 'unknown';
     }
+    const hasBoundApp = Boolean(boundAppId) &&
+        nodes.some((node) => node.packageName === boundAppId || node.type === 'Application');
+    if (text.length === 0)
+        return hasBoundApp ? 'app' : 'unknown';
     if (has('development servers'))
         return 'dev_client_picker';
     if (has('this is the developer menu'))
@@ -132,7 +134,6 @@ export function classifyForegroundSurface(nodes, boundAppId) {
     }
     if (!boundAppId)
         return 'unknown';
-    const hasBoundApp = nodes.some((node) => node.packageName === boundAppId || node.type === 'Application');
     return hasBoundApp ? 'app' : 'unknown';
 }
 export function foregroundSurfaceFromSnapshot(result, boundAppId) {

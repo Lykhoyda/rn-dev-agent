@@ -142,6 +142,40 @@ test('foreground classifier keeps Expo sheet, picker, tutorial, RN core menu, an
   );
   assert.equal(
     classifyForegroundSurface(
+      [
+        {
+          label: '',
+          identifier: '',
+          type: 'android.widget.FrameLayout',
+          packageName: 'com.example.app',
+        },
+      ],
+      'com.example.app',
+    ),
+    'app',
+  );
+  assert.equal(
+    classifyForegroundSurface(
+      [
+        {
+          label: '',
+          identifier: '',
+          type: 'android.widget.FrameLayout',
+          packageName: 'com.example.app',
+        },
+        {
+          label: '',
+          identifier: '',
+          type: 'android.widget.FrameLayout',
+          packageName: 'com.android.permissioncontroller',
+        },
+      ],
+      'com.example.app',
+    ),
+    'unknown',
+  );
+  assert.equal(
+    classifyForegroundSurface(
       [{ label: 'Home', packageName: 'com.example.app' }, ...normalAndroidSystemChrome()],
       'com.example.app',
     ),
@@ -299,6 +333,30 @@ test('Android React Native core dev menu stops without invoking a close action',
   const data = expectOk(await handler({ action: 'hideDevMenu' }));
   assert.equal(data.outcome, 'no_menu_present');
   assert.equal(data.surface, 'react_native_dev_menu');
+  assert.equal(data.executed, false);
+  assert.equal(calls.length, 0);
+});
+
+test('blank Android bound-app snapshot returns no_menu_present without close evaluation', async () => {
+  const appId = 'com.example.app';
+  const blankAppSnapshot = snapshotEnvelope([
+    {
+      label: '',
+      identifier: '',
+      type: 'android.widget.FrameLayout',
+      packageName: appId,
+    },
+  ]);
+  const probeForegroundSurface = async () => foregroundSurfaceFromSnapshot(blankAppSnapshot, appId);
+  const { client, calls } = hideEval('android', { value: 'ok:hideMenu' });
+  const handler = createDevSettingsHandler(() => client, {
+    probeForegroundSurface,
+    settleAfterHide: async () => {},
+  });
+
+  const data = expectOk(await handler({ action: 'hideDevMenu' }));
+  assert.equal(data.outcome, 'no_menu_present');
+  assert.equal(data.surface, 'app');
   assert.equal(data.executed, false);
   assert.equal(calls.length, 0);
 });
