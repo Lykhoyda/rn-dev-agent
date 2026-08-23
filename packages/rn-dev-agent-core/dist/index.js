@@ -37,6 +37,7 @@ import { unwrapTree } from './tools/cdp-replay-dispatch.js';
 import { createDispatchHandler } from './tools/dispatch.js';
 import { createMmkvHandler } from './tools/mmkv.js';
 import { createDevSettingsHandler } from './tools/dev-settings.js';
+import { createForegroundSurfaceProbe } from './tools/expo-dev-menu.js';
 import { createInteractHandler } from './tools/interact.js';
 import { createCollectLogsHandler } from './tools/collect-logs.js';
 import { createDeviceListHandler, createDeviceScreenshotHandler } from './tools/device-list.js';
@@ -66,7 +67,7 @@ import { startParentDeathWatch } from './lifecycle/parent-watch.js';
 import { arbiterWrap, arbiter } from './lifecycle/device-arbiter.js';
 import { setForeignGateUdidProvider, foreignFlowGate, foreignGateUdid, } from './lifecycle/foreign-flow-gate.js';
 import { getIosRuntimeMajorForUdid } from './domain/blind-probe-gate.js';
-import { getActiveSession, getSnapshotCaptureCheckpoint, markSnapshotDirty, promoteSnapshotOriginSince, setSnapshotAuthorityProvider, validateCachedSnapshotEvidenceAuthority, } from './agent-device-wrapper.js';
+import { getActiveSession, getSnapshotCaptureCheckpoint, markSnapshotDirty, promoteSnapshotOriginSince, runNative, setSnapshotAuthorityProvider, validateCachedSnapshotEvidenceAuthority, } from './agent-device-wrapper.js';
 import { createMaestroRunHandler } from './tools/maestro-run.js';
 import { createMaestroGenerateHandler } from './tools/maestro-generate.js';
 import { createMaestroTestAllHandler } from './tools/maestro-test-all.js';
@@ -275,6 +276,11 @@ addToolObserver((o) => recorder.record(o));
 addToolObserver((o) => strictProofMonitor.record(o));
 addToolObserver((o) => experienceRecorder.observe(o));
 const authorityRuntime = getWorkerAuthorityRuntime();
+const probeForegroundSurface = createForegroundSurfaceProbe({
+    getAuthorityStatus: () => authorityRuntime.status(),
+    getActiveSession,
+    runNative,
+});
 setRegistryDeviceBindingProvider(() => mapRegistryDeviceBinding(authorityRuntime.status(), authorityRuntime.available));
 setSnapshotAuthorityProvider({
     current: () => {
@@ -1600,7 +1606,7 @@ trackedTool('cdp_mmkv', 'Read/write the app\'s MMKV storage from Hermes. Closes 
         .describe('Value type for get/set (default: string)'),
     instanceId: z.string().optional().describe('MMKV instance id (default: "mmkv.default")'),
 }, createMmkvHandler(getClient));
-trackedTool('cdp_dev_settings', 'Control React Native dev settings programmatically (no visual dev menu needed). dismissRedBox clears LogBox overlays and RedBox errors via a 4-tier fallback chain. disableDevMenu suppresses shake-to-show dev menu (use before proof recordings). hideDevMenu dismisses the iOS expo-dev-client dev menu bottom sheet over CDP (no touch, keeps Hermes attached and the JS store intact). For reload with auto-reconnect, use cdp_reload instead.', {
+trackedTool('cdp_dev_settings', 'Control React Native dev settings programmatically (no visual dev menu needed). dismissRedBox clears LogBox overlays and RedBox errors via a 4-tier fallback chain. disableDevMenu suppresses the React Native core dev menu gesture. hideDevMenu calls ExpoDevMenu hideMenu or closeMenu over CDP on iOS or Android, with at most one retry and a five-second bound per attempt; it verifies the foreground surface and returns hidden, no_menu_present, DEV_MENU_HIDE_FAILED when no close call was sent, or DEV_MENU_HIDE_UNVERIFIED when a sent call is not proven clean. For reload with auto-reconnect, use cdp_reload instead.', {
     action: z
         .enum([
         'reload',
@@ -1611,7 +1617,7 @@ trackedTool('cdp_dev_settings', 'Control React Native dev settings programmatica
         'hideDevMenu',
     ])
         .describe('Dev menu action to execute'),
-}, createDevSettingsHandler(getClient));
+}, createDevSettingsHandler(getClient, { probeForegroundSurface }));
 trackedTool('cdp_interact', 'Interact with React components by testID (preferred) or accessibilityLabel — press buttons, long-press, type text, scroll, or set a React Hook Form field value directly. Calls JS handlers directly (not native touch). testID matches strictly; accessibilityLabel matches in tiers (exact → trim/case-insensitive → substring) and returns an ambiguity error when >1 component matches. Prefer testID for unambiguous targeting. For native gestures (swipe, drag), use device_swipe/device_press instead. setFieldValue (GH #126 Gap A): explicit fallback when typeText fails because the field routes through a Controller — pass name + value, walks UP to the nearest FormProvider and calls its setValue. Use only when typeText returns "no handler". Portal-root coverage (GH #126 Gap B): if your app uses react-native-actions-sheet, @gorhom/bottom-sheet, or any Modal-based portal whose fiber root is not in React DevTools\' getFiberRoots() registry, set `globalThis.__RN_AGENT_EXTRA_ROOTS__ = () => [sheetRef.current, ...]` in your __DEV__ block — testID resolution will then reach inside those subtrees. See CLAUDE.md template for the canonical snippet. walkUp (GH #525, opt-in): for action:"press" with a testID/accessibilityLabel selector only — when the matched component has no onPress (testID on a non-pressable wrapper), walks up at most 8 fiber ancestors and presses the nearest pressable. Refuses when no pressable exists within the bound, when duplicate matches resolve to distinct pressable ancestors (ambiguous), or when combined with a non-press action or a role/name/text/placeholder selector; default behavior without the flag is unchanged.', {
     action: z
         .enum(['press', 'longPress', 'typeText', 'scroll', 'setFieldValue'])

@@ -2,7 +2,6 @@ import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import type { CDPClient } from '../cdp-client.js';
 import { okResult, failResult, warnResult, withConnection } from '../utils.js';
-import { autoDismissDevMenuMeta } from './expo-dev-menu.js';
 import { isValidBundleId } from '../domain/maestro-validator.js';
 import { targetMatchesSession } from './status.js';
 import { filterTargetsForExactDevice } from '../session/target-device-authority.js';
@@ -483,13 +482,10 @@ export function createReloadHandler(
         }
       }
 
-      const devMenuMeta = await autoDismissDevMenuMeta(client);
-      const mergedMeta = { ...forceMeta, ...devMenuMeta };
-
       sessionReloadCount++;
       return okResult(
         { reloaded: true, type: 'full', reconnected: true },
-        Object.keys(mergedMeta).length > 0 ? { meta: mergedMeta } : undefined,
+        Object.keys(forceMeta).length > 0 ? { meta: forceMeta } : undefined,
       );
     },
   );

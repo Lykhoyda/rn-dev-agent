@@ -244,6 +244,15 @@ export function requiresExactInstalledArtifact(tool, args = {}) {
     return (tool === 'proof_capture' && (args.action === 'begin_rehearsal' || args.action === 'finalize'));
 }
 export function authorityProfileFor(tool, args = {}) {
+    if (tool === 'cdp_dev_settings' && args.action === 'hideDevMenu') {
+        return {
+            kind: 'authoritative',
+            groups: allGroups,
+            axes: facetsOf(allGroups, { without: ['A'] }),
+            mutation: true,
+            liveBundleProbe: true,
+        };
+    }
     if (tool === 'device_find' && args.action === 'click') {
         return profiles.get('device_press');
     }

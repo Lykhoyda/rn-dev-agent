@@ -1,6 +1,10 @@
 import type { CDPClient } from '../cdp-client.js';
 import { okResult, failResult, warnResult, withConnection } from '../utils.js';
-import { hideExpoDevMenu } from './expo-dev-menu.js';
+import {
+  hideExpoDevMenu,
+  type ForegroundSurface,
+  type HideDevMenuCallOutcome,
+} from './expo-dev-menu.js';
 
 type DevAction =
   | 'reload'
@@ -42,14 +46,77 @@ const ACTION_EXPRESSIONS: Record<Exclude<DevAction, 'hideDevMenu'>, string> = {
   })()`,
 };
 
-export function createDevSettingsHandler(getClient: () => CDPClient) {
-  return withConnection(getClient, async (args: { action: DevAction }, client) => {
+interface DevSettingsHandlerDependencies {
+  probeForegroundSurface?: () => Promise<ForegroundSurface>;
+  settleAfterHide?: () => Promise<void>;
+}
+
+function unverifiedHideResult(
+  call: HideDevMenuCallOutcome,
+  before: ForegroundSurface,
+  after: ForegroundSurface,
+) {
+  return failResult(
+    `${call.reason} The Expo Developer Menu close could not be verified; classify the foreground surface again before choosing a remedy.`,
+    'DEV_MENU_HIDE_UNVERIFIED',
+    {
+      action: 'hideDevMenu',
+      outcome: 'DEV_MENU_HIDE_UNVERIFIED',
+      callSent: call.callSent,
+      attempts: call.attempts,
+      method: call.method,
+      surfaceBefore: before,
+      surfaceAfter: after,
+      remedy: 'Classify the foreground surface again and invoke only its matching remedy.',
+    },
+  );
+}
+
+function failedHideResult(call: HideDevMenuCallOutcome, before: ForegroundSurface) {
+  return failResult(call.reason, 'DEV_MENU_HIDE_FAILED', {
+    action: 'hideDevMenu',
+    outcome: 'DEV_MENU_HIDE_FAILED',
+    callSent: false,
+    attempts: call.attempts,
+    surfaceBefore: before,
+    remedy: 'Classify the foreground surface again before choosing a remedy.',
+  });
+}
+
+export function createDevSettingsHandler(
+  getClient: () => CDPClient,
+  dependencies: DevSettingsHandlerDependencies = {},
+) {
+  const handler = async (args: { action: DevAction }, client: CDPClient) => {
     if (args.action === 'hideDevMenu') {
-      const outcome = await hideExpoDevMenu(client);
-      if (outcome.dismissed) {
-        return okResult({ action: args.action, executed: true, method: outcome.method });
+      const probe = dependencies.probeForegroundSurface;
+      const before = probe ? await probe().catch(() => 'unknown' as const) : 'unknown';
+      if (before !== 'unknown' && before !== 'expo_dev_menu') {
+        return okResult({
+          action: args.action,
+          executed: false,
+          outcome: 'no_menu_present',
+          surface: before,
+        });
       }
-      return warnResult({ action: args.action, executed: false }, outcome.reason);
+
+      const call = await hideExpoDevMenu(client, { retries: 1 });
+      if (!call.callSent) return failedHideResult(call, before);
+
+      await (dependencies.settleAfterHide?.() ??
+        new Promise<void>((resolve) => setTimeout(resolve, 300)));
+      const after = probe ? await probe().catch(() => 'unknown' as const) : 'unknown';
+      if (before === 'expo_dev_menu' && after === 'app') {
+        return okResult({
+          action: args.action,
+          executed: true,
+          outcome: 'hidden',
+          method: call.method,
+          attempts: call.attempts,
+          surface: after,
+        });
+      }
+      return unverifiedHideResult(call, before, after);
     }
 
     const expression = ACTION_EXPRESSIONS[args.action];
@@ -79,5 +146,9 @@ export function createDevSettingsHandler(getClient: () => CDPClient) {
     }
 
     return okResult({ action: args.action, executed: true });
-  });
+  };
+  const helperIndependent = withConnection(getClient, handler, { requireHelpers: false });
+  const helperAware = withConnection(getClient, handler);
+  return (args: { action: DevAction }) =>
+    args.action === 'hideDevMenu' ? helperIndependent(args) : helperAware(args);
 }

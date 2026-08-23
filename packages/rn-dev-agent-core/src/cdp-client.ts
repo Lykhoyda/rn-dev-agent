@@ -13,6 +13,7 @@ import type { ResettableState } from './cdp/state.js';
 import { defaultTimeout, timeoutForMethod } from './cdp/timeout-config.js';
 import type { Platform } from './cdp/timeout-config.js';
 import {
+  CDPProtocolError,
   sendWithTimeout as sendMsg,
   rejectAllPending as rejectPending,
   handleMessage as handleMsg,
@@ -979,12 +980,16 @@ export class CDPClient {
     return this._connectedTarget?.platform ?? null;
   }
 
-  async evaluate(expression: string, awaitPromise = false): Promise<EvaluateResult> {
+  async evaluate(
+    expression: string,
+    awaitPromise = false,
+    timeoutMs?: number,
+  ): Promise<EvaluateResult> {
     if (awaitPromise) {
-      return this.evaluateAsync(expression);
+      return this.evaluateAsync(expression, timeoutMs);
     }
 
-    const timeout = defaultTimeout(this.effectivePlatform);
+    const timeout = timeoutMs ?? defaultTimeout(this.effectivePlatform);
     const result = (await this.sendWithTimeout(
       'Runtime.evaluate',
       {
@@ -1008,11 +1013,12 @@ export class CDPClient {
     return { value: result?.result?.value };
   }
 
-  private async evaluateAsync(expression: string): Promise<EvaluateResult> {
+  private async evaluateAsync(expression: string, timeoutMs?: number): Promise<EvaluateResult> {
     // Hermes CDP doesn't support awaitPromise — use global slot + polling
     // Values are JSON-serialized inside Hermes to handle non-serializable objects
     // A deferred cleanup timer ensures the slot is removed even if the caller times out
-    const timeout = defaultTimeout(this.effectivePlatform);
+    const timeout = timeoutMs ?? defaultTimeout(this.effectivePlatform);
+    const deadline = Date.now() + timeout;
     const slot = '__rn_agent_async_' + ++this.slotId + '_' + Date.now();
     const ASYNC_CLEANUP_MS = timeout * 2;
     const wrapper = `(function() {
@@ -1020,6 +1026,8 @@ export class CDPClient {
         try { return JSON.stringify(v); } catch(e) { return JSON.stringify(String(v)); }
       }
       var p = ${expression};
+      var startValue;
+      try { startValue = p && p.__rnAgentStartValue; } catch(e) {}
       if (p && typeof p.then === 'function') {
         p.then(function(v) { globalThis['${slot}'] = { v: safeVal(v) }; })
          .catch(function(e) { globalThis['${slot}'] = { e: (e && e.message) || String(e) }; });
@@ -1027,16 +1035,32 @@ export class CDPClient {
         globalThis['${slot}'] = { v: safeVal(p) };
       }
       setTimeout(function() { delete globalThis['${slot}']; }, ${ASYNC_CLEANUP_MS});
+      return { s: safeVal(startValue) };
     })()`;
 
-    const initResult = (await this.sendWithTimeout(
-      'Runtime.evaluate',
-      {
-        expression: wrapper,
-        returnByValue: true,
-      },
-      timeout,
-    )) as { exceptionDetails?: { text?: string; exception?: { description?: string } } };
+    let requestDispatched = false;
+    let initResult: {
+      result?: { value?: { s?: string } };
+      exceptionDetails?: { text?: string; exception?: { description?: string } };
+    };
+    try {
+      initResult = (await this.sendWithTimeout(
+        'Runtime.evaluate',
+        {
+          expression: wrapper,
+          returnByValue: true,
+        },
+        Math.max(1, deadline - Date.now()),
+        () => {
+          requestDispatched = true;
+        },
+      )) as typeof initResult;
+    } catch (error) {
+      return {
+        error: `Async evaluation initialization failed: ${error instanceof Error ? error.message : String(error)}`,
+        requestDispatched: requestDispatched && !(error instanceof CDPProtocolError),
+      };
+    }
 
     if (initResult?.exceptionDetails) {
       return {
@@ -1046,36 +1070,56 @@ export class CDPClient {
           'Unknown evaluation error',
       };
     }
+    let asyncStartValue: unknown;
+    try {
+      if (typeof initResult.result?.value?.s === 'string') {
+        asyncStartValue = JSON.parse(initResult.result.value.s);
+      }
+    } catch {
+      asyncStartValue = undefined;
+    }
+
+    const clearAsyncSlot = () => {
+      void this.sendWithTimeout(
+        'Runtime.evaluate',
+        {
+          expression: `delete globalThis['${slot}']`,
+          returnByValue: true,
+        },
+        1000,
+      ).catch(() => {});
+    };
 
     // B45 fix: Use absolute deadline to guarantee total wall-clock stays within timeout.
     // Each poll gets only the remaining time (min 500ms) to avoid overshooting.
-    const deadline = Date.now() + timeout;
     while (Date.now() < deadline) {
       const remaining = deadline - Date.now();
       if (remaining < 500) break;
       const pollTimeout = Math.min(remaining - 100, 1500);
 
-      const check = (await this.sendWithTimeout(
-        'Runtime.evaluate',
-        {
-          expression: `globalThis['${slot}']`,
-          returnByValue: true,
-        },
-        pollTimeout,
-      )) as { result?: { value?: unknown } };
+      let check: { result?: { value?: unknown } };
+      try {
+        check = (await this.sendWithTimeout(
+          'Runtime.evaluate',
+          {
+            expression: `globalThis['${slot}']`,
+            returnByValue: true,
+          },
+          pollTimeout,
+        )) as { result?: { value?: unknown } };
+      } catch (error) {
+        clearAsyncSlot();
+        return {
+          value: asyncStartValue,
+          error: `Async evaluation polling failed: ${error instanceof Error ? error.message : String(error)}`,
+        };
+      }
 
       const val = check?.result?.value as { v?: string; e?: string } | undefined;
       if (val && typeof val === 'object') {
-        void this.sendWithTimeout(
-          'Runtime.evaluate',
-          {
-            expression: `delete globalThis['${slot}']`,
-            returnByValue: true,
-          },
-          1000,
-        ).catch(() => {});
+        clearAsyncSlot();
 
-        if ('e' in val) return { error: String(val.e) };
+        if ('e' in val) return { value: asyncStartValue, error: String(val.e) };
         try {
           return { value: JSON.parse(val.v as string) };
         } catch {
@@ -1085,15 +1129,11 @@ export class CDPClient {
       await sleep(100);
     }
 
-    void this.sendWithTimeout(
-      'Runtime.evaluate',
-      {
-        expression: `delete globalThis['${slot}']`,
-        returnByValue: true,
-      },
-      1000,
-    ).catch(() => {});
-    return { error: 'Promise did not resolve within ' + timeout + 'ms' };
+    clearAsyncSlot();
+    return {
+      value: asyncStartValue,
+      error: 'Promise did not resolve within ' + timeout + 'ms',
+    };
   }
 
   async send(method: string, params?: unknown): Promise<unknown> {
@@ -1400,7 +1440,12 @@ export class CDPClient {
     if (this.lifecycleAuthority()) clearActiveFlag();
   }
 
-  private sendWithTimeout(method: string, params: unknown, ms: number): Promise<unknown> {
-    return sendMsg(this.ws, this.pending, () => ++this.msgId, method, params, ms);
+  private sendWithTimeout(
+    method: string,
+    params: unknown,
+    ms: number,
+    onDispatched?: () => void,
+  ): Promise<unknown> {
+    return sendMsg(this.ws, this.pending, () => ++this.msgId, method, params, ms, onDispatched);
   }
 }

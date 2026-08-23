@@ -47,6 +47,7 @@ import type { CdpReplayDeps } from './tools/cdp-replay-dispatch.js';
 import { createDispatchHandler } from './tools/dispatch.js';
 import { createMmkvHandler } from './tools/mmkv.js';
 import { createDevSettingsHandler } from './tools/dev-settings.js';
+import { createForegroundSurfaceProbe } from './tools/expo-dev-menu.js';
 import { createInteractHandler } from './tools/interact.js';
 import { createCollectLogsHandler } from './tools/collect-logs.js';
 import { createDeviceListHandler, createDeviceScreenshotHandler } from './tools/device-list.js';
@@ -116,6 +117,7 @@ import {
   getSnapshotCaptureCheckpoint,
   markSnapshotDirty,
   promoteSnapshotOriginSince,
+  runNative,
   setSnapshotAuthorityProvider,
   validateCachedSnapshotEvidenceAuthority,
 } from './agent-device-wrapper.js';
@@ -426,6 +428,11 @@ addToolObserver((o) => strictProofMonitor.record(o));
 addToolObserver((o) => experienceRecorder.observe(o));
 
 const authorityRuntime = getWorkerAuthorityRuntime();
+const probeForegroundSurface = createForegroundSurfaceProbe({
+  getAuthorityStatus: () => authorityRuntime.status(),
+  getActiveSession,
+  runNative,
+});
 setRegistryDeviceBindingProvider(() =>
   mapRegistryDeviceBinding(authorityRuntime.status(), authorityRuntime.available),
 );
@@ -2173,7 +2180,7 @@ trackedTool(
 
 trackedTool(
   'cdp_dev_settings',
-  'Control React Native dev settings programmatically (no visual dev menu needed). dismissRedBox clears LogBox overlays and RedBox errors via a 4-tier fallback chain. disableDevMenu suppresses shake-to-show dev menu (use before proof recordings). hideDevMenu dismisses the iOS expo-dev-client dev menu bottom sheet over CDP (no touch, keeps Hermes attached and the JS store intact). For reload with auto-reconnect, use cdp_reload instead.',
+  'Control React Native dev settings programmatically (no visual dev menu needed). dismissRedBox clears LogBox overlays and RedBox errors via a 4-tier fallback chain. disableDevMenu suppresses the React Native core dev menu gesture. hideDevMenu calls ExpoDevMenu hideMenu or closeMenu over CDP on iOS or Android, with at most one retry and a five-second bound per attempt; it verifies the foreground surface and returns hidden, no_menu_present, DEV_MENU_HIDE_FAILED when no close call was sent, or DEV_MENU_HIDE_UNVERIFIED when a sent call is not proven clean. For reload with auto-reconnect, use cdp_reload instead.',
   {
     action: z
       .enum([
@@ -2186,7 +2193,7 @@ trackedTool(
       ])
       .describe('Dev menu action to execute'),
   },
-  createDevSettingsHandler(getClient),
+  createDevSettingsHandler(getClient, { probeForegroundSurface }),
 );
 
 trackedTool(

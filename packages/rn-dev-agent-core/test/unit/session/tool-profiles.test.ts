@@ -65,6 +65,12 @@ const GOLDEN: Record<string, GoldenProfile> = {
     mutation: true,
     liveBundleProbe: true,
   },
+  'cdp_dev_settings {"action":"hideDevMenu"}': {
+    kind: 'authoritative',
+    axes: 'CSIMBDR',
+    mutation: true,
+    liveBundleProbe: true,
+  },
   cdp_diagnostic_renderers: {
     kind: 'authoritative',
     axes: 'CSIMBD',

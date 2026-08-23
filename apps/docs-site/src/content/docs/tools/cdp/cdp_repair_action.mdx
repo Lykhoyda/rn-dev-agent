@@ -9,7 +9,7 @@ Repair a learned action using a fresh snapshot from the exact authority-bound de
 
 | Name | Type | Required | Default | Constraints | Description |
 |------|------|----------|---------|-------------|-------------|
-| `actionId` | `unknown` | Yes |  |  | Owned action id; resolves one .yaml or .yml file. |
+| `actionId` | `string` | Yes |  |  | Owned action id; resolves one .yaml or .yml file. |
 | `failedSelector` | `unknown` | Yes |  |  |  |
 | `projectRoot` | `string` | No |  |  | Override project root (default: process.cwd()). |
 | `threshold` | `unknown` | No |  | min: 0, max: 1 |  |
@@ -22,5 +22,5 @@ Repair a learned action using a fresh snapshot from the exact authority-bound de
 ## Usage
 
 ```
-cdp_repair_action(actionId: <unknown>, failedSelector: <unknown>)
+cdp_repair_action(actionId: <string>, failedSelector: <unknown>)
 ```

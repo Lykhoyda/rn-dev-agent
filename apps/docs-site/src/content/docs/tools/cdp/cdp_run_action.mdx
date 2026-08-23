@@ -9,7 +9,7 @@ Replay a learned action by id with end-to-end auto-repair. Loads the action from
 
 | Name | Type | Required | Default | Constraints | Description |
 |------|------|----------|---------|-------------|-------------|
-| `actionId` | `unknown` | Yes |  |  | Owned action id; resolves one .yaml or .yml file. |
+| `actionId` | `string` | Yes |  |  | Owned action id; resolves one .yaml or .yml file. |
 | `projectRoot` | `string` | No |  |  | Override project root (default: process.cwd()). |
 | `platform` | `unknown` | No |  |  |  |
 | `appFile` | `unknown` | No |  |  |  |
@@ -24,5 +24,5 @@ Replay a learned action by id with end-to-end auto-repair. Loads the action from
 ## Usage
 
 ```
-cdp_run_action(actionId: <unknown>)
+cdp_run_action(actionId: <string>)
 ```

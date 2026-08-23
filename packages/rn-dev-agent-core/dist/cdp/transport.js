@@ -1,5 +1,13 @@
 import WebSocket from 'ws';
-export function sendWithTimeout(ws, pending, nextId, method, params, ms) {
+export class CDPProtocolError extends Error {
+    code;
+    constructor(code, message) {
+        super(message);
+        this.name = 'CDPProtocolError';
+        this.code = code;
+    }
+}
+export function sendWithTimeout(ws, pending, nextId, method, params, ms, onDispatched) {
     if (!ws || ws.readyState !== WebSocket.OPEN) {
         return Promise.reject(new Error('WebSocket not connected'));
     }
@@ -15,6 +23,7 @@ export function sendWithTimeout(ws, pending, nextId, method, params, ms) {
                 throw new Error('WebSocket closed between check and send');
             }
             ws.send(JSON.stringify({ id, method, params }));
+            onDispatched?.();
         }
         catch (err) {
             clearTimeout(timer);
@@ -42,7 +51,7 @@ export function handleMessage(data, pending, eventHandlers, onConsoleHook) {
             clearTimeout(p.timer);
             pending.delete(msg.id);
             if (msg.error) {
-                p.reject(new Error(msg.error.message));
+                p.reject(new CDPProtocolError(msg.error.code, msg.error.message));
             }
             else {
                 p.resolve(msg.result);

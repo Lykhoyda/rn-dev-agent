@@ -194,11 +194,13 @@ const INTROSPECTION_TOOLS = new Set([
 ]);
 // Everything else is UNARBITRATED (planeForTool → null): cdp_status (the health
 // check + the reset escape hatch), cdp_connect/disconnect/targets, device_list
-// (session-less), cdp_record_test_*, dev settings/devtools. These must work even
+// (session-less), cdp_record_test_*, other dev-settings actions, and devtools. These must work even
 // mid-flow — cdp_status especially is what you run WHEN a flow looks stuck. A new
 // tool not listed in any Set above defaults here (unarbitrated) — add it to a Set
 // if it touches the device.
-export function planeForTool(name) {
+export function planeForTool(name, args = {}) {
+    if (name === 'cdp_dev_settings' && args.action === 'hideDevMenu')
+        return 'interaction';
     if (FLOW_TOOLS.has(name))
         return 'flow';
     if (INTERACTION_TOOLS.has(name))
@@ -234,13 +236,16 @@ function foreignRefusal(name, warning, scanMs, udid) {
  * device/CDP work never re-enters this wrapper — one external call = one lease.
  */
 export function arbiterWrap(name, handler, inst = arbiter, foreign = {}) {
-    const plane = planeForTool(name);
-    if (plane === null)
+    const staticPlane = planeForTool(name);
+    if (staticPlane === null && name !== 'cdp_dev_settings')
         return handler;
     const gate = foreign.gate ?? foreignFlowGate;
     const getUdid = foreign.getUdid ?? foreignGateUdid;
     const enabled = foreign.enabled ?? foreignGateEnabled;
     return async (...args) => {
+        const plane = planeForTool(name, (args[0] ?? {}));
+        if (plane === null)
+            return handler(...args);
         // GH#186 Phase 6: a foreign Maestro session is an external flow-plane
         // holder. Checked for interaction/flow planes only (L1 reads never
         // conflict — the three-layer contract), only with an iOS session (an

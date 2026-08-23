@@ -180,7 +180,9 @@ A healthy live holder is never stolen or changed by this refusal.
 ### Step 5 — Bind remaining authority; run only the requested proof
 
 `pin_dev_client` (Expo dev-client) or the exact-app launch, then
-`device_snapshot action=open` to bind the runner. Only now is replay
+`device_snapshot action=open` to bind the runner. Before any navigation, run
+the cross-platform foreground-surface preflight owned by `check-env` and require
+its fresh app-surface verdict. Only now is replay
 authorized — and only via `cdp_run_action` (never raw `maestro_run` for a
 learned action): the core parks the runner and re-proves flow, device, and
 runner authority itself. Run ONLY what the journey asked for — a saved action,
