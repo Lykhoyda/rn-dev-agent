@@ -382,7 +382,11 @@ export function createCollectLogsHandler(getClient) {
         let runnerDiagnosticsExportError = null;
         if (args.runnerDiagnosticsOutputPath) {
             try {
-                runnerDiagnosticsExport = exportLatestRunnerDiagnosticsBundle(args.runnerDiagnosticsOutputPath);
+                const sessionId = process.env.RN_DEV_AGENT_SESSION_ID;
+                if (!sessionId) {
+                    throw new Error('Exact authenticated session identity is unavailable.');
+                }
+                runnerDiagnosticsExport = exportLatestRunnerDiagnosticsBundle(args.runnerDiagnosticsOutputPath, sessionId);
             }
             catch (error) {
                 runnerDiagnosticsExportError = error instanceof Error ? error.message : String(error);

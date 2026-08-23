@@ -694,7 +694,7 @@ function meetsMaestroRunnerFloor(version) {
 function pinCacheRoot(home = homedir()) {
   const override = process.env.RN_DEV_AGENT_RUNNER_CACHE;
   const base = override && override.length > 0 ? override : join2(home, ".cache", "rn-dev-agent");
-  return join2(base, "maestro-runner", MAESTRO_RUNNER_PIN.version);
+  return resolve(base, "maestro-runner", MAESTRO_RUNNER_PIN.version);
 }
 function pinnedRunnerBinPath(home) {
   return join2(pinCacheRoot(home), "bin", "maestro-runner");

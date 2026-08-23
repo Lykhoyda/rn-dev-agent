@@ -13,7 +13,11 @@ export const EXPERIENCE_STORE_NAME = 'patterns.jsonl';
 export const MAX_SYMPTOM_LENGTH = 2048;
 export const RUNNER_DIAGNOSTICS_MAX_BYTES = 256 * 1024;
 export const RUNNER_DIAGNOSTICS_RETENTION = 5;
+export const RUNNER_DIAGNOSTICS_MAX_SCALAR_CHARS = 1024;
 export const OWNED_TEST_APP_BUNDLE_ID = 'com.rndevagent.testapp';
+export function configuredExperienceDirectory() {
+    return process.env.RN_DEV_AGENT_EXPERIENCE_DIR ?? EXPERIENCE_DIRECTORY;
+}
 const DAY_MS = 24 * 60 * 60 * 1000;
 const REDACTION_FAILED = '[REDACTION_FAILED]';
 const SYMPTOM_TRUNCATED = '[TRUNCATED]';
@@ -126,20 +130,24 @@ export class ExperienceRecorder {
     path;
     candidate;
     environment;
+    sessionId;
     maxRecords;
     retentionMs;
     now;
     schedule;
     previousFailure = null;
     constructor(options) {
-        this.directory =
-            options.directory ?? process.env.RN_DEV_AGENT_EXPERIENCE_DIR ?? EXPERIENCE_DIRECTORY;
+        this.directory = options.directory ?? configuredExperienceDirectory();
         this.path = join(this.directory, EXPERIENCE_STORE_NAME);
         this.candidate = {
             pluginVersion: options.pluginVersion ?? null,
             coreVersion: options.coreVersion,
         };
         this.environment = { os: `${hostPlatform()} ${release()}`, node: process.version };
+        this.sessionId =
+            options.sessionId === undefined
+                ? (process.env.RN_DEV_AGENT_SESSION_ID ?? null)
+                : options.sessionId;
         this.maxRecords = options.maxRecords ?? DEFAULT_MAX_RECORDS;
         this.retentionMs = (options.retentionDays ?? DEFAULT_RETENTION_DAYS) * DAY_MS;
         this.now = options.now ?? (() => new Date());
@@ -202,6 +210,7 @@ export class ExperienceRecorder {
             candidate: this.candidate,
             environment: this.environment,
             directory: this.directory,
+            sessionId: this.sessionId,
         });
         writeRunnerDiagnosticsBundle(this.directory, bundle);
     }
@@ -567,7 +576,6 @@ function buildRunnerDiagnosticsBundle(input) {
     const provenance = stringDetail(payloadEvent, 'provenance');
     const payloadShaPrefix = stringDetail(payloadEvent, 'payloadShaPrefix');
     const metroPort = findNumberInSources(sources, ['metroPort']);
-    const sessionId = scalar(['sessionId']);
     const actionId = scalar(['actionId']);
     const runtime = scalar(['runtime', 'runtimeVersion', 'osVersion']) ?? input.environment.node;
     const platform = scalar(['platform']);
@@ -576,15 +584,15 @@ function buildRunnerDiagnosticsBundle(input) {
         schema: 'rn-dev-agent/runner-diagnostics/1',
         candidate: {
             ...input.candidate,
-            releaseCommit: sanitizeNullable(process.env.RN_DEV_AGENT_RELEASE_COMMIT ?? null),
+            releaseCommit: process.env.RN_DEV_AGENT_RELEASE_COMMIT ?? null,
         },
         runner: { version: runnerVersion, provenance, payloadShaPrefix },
         context: {
-            platform: sanitizeNullable(platform),
-            os: sanitizeString(input.environment.os),
-            runtime: sanitizeNullable(runtime),
-            sessionId: sanitizeNullable(sessionId),
-            actionId: sanitizeNullable(actionId),
+            platform,
+            os: input.environment.os,
+            runtime,
+            sessionId: input.sessionId,
+            actionId,
             deviceIdHash: deviceId ? stableDeviceHash(input.directory, deviceId) : null,
             bundleId: bundleId === null
                 ? null
@@ -600,7 +608,7 @@ function buildRunnerDiagnosticsBundle(input) {
 }
 function stringDetail(event, key) {
     const value = event?.detail[key];
-    return typeof value === 'string' ? sanitizeString(value) : null;
+    return typeof value === 'string' ? value : null;
 }
 function findNumberInSources(sources, keys) {
     for (const source of sources) {
@@ -662,14 +670,10 @@ export function writeRunnerDiagnosticsBundle(directory, bundle) {
         return Math.max(maximum, matched ? Number(matched[1]) : 0);
     }, 0) + 1;
     const sessionKey = (bundle.context.sessionId ?? 'unknown')
-        .replace(/[^A-Za-z0-9_-]/g, '-')
-        .slice(0, 64);
+        .slice(0, 64)
+        .replace(/[^A-Za-z0-9_-]/g, '-');
     const outputPath = join(directory, `runner-diagnostics-${sessionKey}-${nextSequence}.json`);
-    const bounded = {
-        ...bundle,
-        events: retainRunnerDiagnosticEvents(bundle.events, 200),
-        truncated: bundle.truncated || bundle.events.length > 200,
-    };
+    const bounded = boundRunnerDiagnosticsBundle(bundle);
     let serialized = `${JSON.stringify(bounded, null, 2)}\n`;
     if (Buffer.byteLength(serialized) > RUNNER_DIAGNOSTICS_MAX_BYTES) {
         const events = bounded.events;
@@ -680,6 +684,9 @@ export function writeRunnerDiagnosticsBundle(directory, bundle) {
             bounded.truncated = true;
             serialized = `${JSON.stringify(bounded, null, 2)}\n`;
         }
+    }
+    if (Buffer.byteLength(serialized) > RUNNER_DIAGNOSTICS_MAX_BYTES) {
+        throw new Error('Runner diagnostics bundle exceeds the 256 KB limit after truncation.');
     }
     const temporary = join(directory, `.runner-diagnostics.${process.pid}.${randomUUID()}`);
     writeFileSync(temporary, serialized, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
@@ -693,6 +700,55 @@ export function writeRunnerDiagnosticsBundle(directory, bundle) {
     }
     return outputPath;
 }
+function boundRunnerDiagnosticsBundle(bundle) {
+    let truncated = bundle.truncated || bundle.events.length > 200;
+    const bound = (value) => {
+        if (value === null)
+            return null;
+        const suffix = '[TRUNCATED]';
+        let candidate = value;
+        if (candidate.length > RUNNER_DIAGNOSTICS_MAX_SCALAR_CHARS) {
+            truncated = true;
+            candidate = `${candidate.slice(0, RUNNER_DIAGNOSTICS_MAX_SCALAR_CHARS - suffix.length)}${suffix}`;
+        }
+        const sanitized = sanitizeString(candidate);
+        if (sanitized.length <= RUNNER_DIAGNOSTICS_MAX_SCALAR_CHARS)
+            return sanitized;
+        truncated = true;
+        return `${sanitized.slice(0, RUNNER_DIAGNOSTICS_MAX_SCALAR_CHARS - suffix.length)}${suffix}`;
+    };
+    const events = sanitizeForEvidence(retainRunnerDiagnosticEvents(bundle.events, 200));
+    return {
+        schema: 'rn-dev-agent/runner-diagnostics/1',
+        candidate: {
+            pluginVersion: bound(bundle.candidate.pluginVersion),
+            coreVersion: bound(bundle.candidate.coreVersion) ?? 'unknown',
+            releaseCommit: bound(bundle.candidate.releaseCommit),
+        },
+        runner: {
+            version: bound(bundle.runner.version),
+            provenance: bound(bundle.runner.provenance),
+            payloadShaPrefix: bound(bundle.runner.payloadShaPrefix),
+        },
+        context: {
+            platform: bound(bundle.context.platform),
+            os: bound(bundle.context.os) ?? 'unknown',
+            runtime: bound(bundle.context.runtime),
+            sessionId: bound(bundle.context.sessionId),
+            actionId: bound(bundle.context.actionId),
+            deviceIdHash: bound(bundle.context.deviceIdHash),
+            bundleId: bundle.context.bundleId === null
+                ? null
+                : bundle.context.bundleId === OWNED_TEST_APP_BUNDLE_ID
+                    ? OWNED_TEST_APP_BUNDLE_ID
+                    : '[BUNDLE_REDACTED]',
+            metroPort: bundle.context.metroPort,
+        },
+        failureCode: bound(bundle.failureCode) ?? 'UNKNOWN',
+        events,
+        truncated,
+    };
+}
 function runnerDiagnosticsFiles(directory) {
     try {
         return readdirSync(directory).filter((file) => /^runner-diagnostics-.+-\d+\.json$/.test(file));
@@ -701,16 +757,32 @@ function runnerDiagnosticsFiles(directory) {
         return [];
     }
 }
-export function latestRunnerDiagnosticsPath(directory = EXPERIENCE_DIRECTORY) {
+export function latestRunnerDiagnosticsPath(sessionId, directory = configuredExperienceDirectory()) {
+    if (sessionId.length === 0)
+        return null;
     const files = runnerDiagnosticsFiles(directory)
         .map((file) => ({ file, mtimeMs: statSync(join(directory, file)).mtimeMs }))
         .sort((left, right) => right.mtimeMs - left.mtimeMs || right.file.localeCompare(left.file));
-    return files[0] ? join(directory, files[0].file) : null;
+    for (const file of files) {
+        const path = join(directory, file.file);
+        try {
+            const contents = readFileSync(path);
+            if (contents.byteLength > RUNNER_DIAGNOSTICS_MAX_BYTES)
+                continue;
+            const value = JSON.parse(contents.toString('utf8'));
+            if (value.schema === 'rn-dev-agent/runner-diagnostics/1' &&
+                value.context?.sessionId === sessionId) {
+                return path;
+            }
+        }
+        catch { }
+    }
+    return null;
 }
-export function exportLatestRunnerDiagnosticsBundle(outputPath, directory = EXPERIENCE_DIRECTORY) {
-    const source = latestRunnerDiagnosticsPath(directory);
+export function exportLatestRunnerDiagnosticsBundle(outputPath, sessionId, directory = configuredExperienceDirectory()) {
+    const source = latestRunnerDiagnosticsPath(sessionId, directory);
     if (!source)
-        throw new Error('No runner diagnostics bundle is available.');
+        throw new Error('No runner diagnostics bundle is available for the exact session.');
     writeFileSync(outputPath, readFileSync(source), { flag: 'wx', mode: 0o600 });
     chmodSync(outputPath, 0o600);
     return outputPath;

@@ -174,22 +174,33 @@ fi
 
 runner_diagnostics="null"
 runner_diagnostics_status="none"
-experience_dir="$AGENT_DIR/experience"
-if [ -d "$experience_dir" ]; then
-  latest_runner_bundle=$(ls -t "$experience_dir"/runner-diagnostics-*.json 2>/dev/null | head -1 || true)
-  if [ -n "$latest_runner_bundle" ]; then
-    runner_diagnostics=$(python3 -c '
-import json,sys
-with open(sys.argv[1], encoding="utf-8") as handle:
-    value=json.load(handle)
-assert value.get("schema") == "rn-dev-agent/runner-diagnostics/1"
-print(json.dumps(value,separators=(",",":")))
-' "$latest_runner_bundle" 2>/dev/null || echo "null")
-    if [ "$runner_diagnostics" = "null" ]; then
-      runner_diagnostics_status="invalid"
-    else
-      runner_diagnostics_status="attached for review"
-    fi
+experience_dir="${RN_DEV_AGENT_EXPERIENCE_DIR:-$AGENT_DIR/experience}"
+if [ -z "${RN_DEV_AGENT_SESSION_ID:-}" ]; then
+  runner_diagnostics_status="exact session unavailable"
+elif [ -d "$experience_dir" ]; then
+  runner_diagnostics=$(python3 - "$experience_dir" "$RN_DEV_AGENT_SESSION_ID" <<'PY' 2>/dev/null || echo "null"
+import glob,json,os,sys
+directory,session_id=sys.argv[1:]
+paths=sorted(glob.glob(os.path.join(directory,"runner-diagnostics-*.json")),key=os.path.getmtime,reverse=True)
+for path in paths:
+    try:
+        if os.path.getsize(path) > 256 * 1024:
+            continue
+        with open(path,encoding="utf-8") as handle:
+            value=json.load(handle)
+        if value.get("schema") == "rn-dev-agent/runner-diagnostics/1" and value.get("context",{}).get("sessionId") == session_id:
+            print(json.dumps(value,separators=(",",":")))
+            break
+    except (OSError,ValueError,TypeError):
+        continue
+else:
+    print("null")
+PY
+)
+  if [ "$runner_diagnostics" = "null" ]; then
+    runner_diagnostics_status="none for exact session"
+  else
+    runner_diagnostics_status="attached for review"
   fi
 fi
 

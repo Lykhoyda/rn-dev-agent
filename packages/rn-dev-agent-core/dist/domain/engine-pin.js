@@ -104,7 +104,7 @@ export function classifyEnginePin(detected, platformKey) {
 export function pinCacheRoot(home = homedir()) {
     const override = process.env.RN_DEV_AGENT_RUNNER_CACHE;
     const base = override && override.length > 0 ? override : join(home, '.cache', 'rn-dev-agent');
-    return join(base, 'maestro-runner', MAESTRO_RUNNER_PIN.version);
+    return resolve(base, 'maestro-runner', MAESTRO_RUNNER_PIN.version);
 }
 export function pinnedRunnerBinPath(home) {
     return join(pinCacheRoot(home), 'bin', 'maestro-runner');

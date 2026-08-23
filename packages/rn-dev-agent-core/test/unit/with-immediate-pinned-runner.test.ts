@@ -16,7 +16,7 @@ import {
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
-import { basename, dirname, join } from 'node:path';
+import { basename, dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   MAESTRO_RUNNER_PIN,
@@ -45,7 +45,7 @@ test(
   async () => {
     const cache = mkdtempSync(join(tmpdir(), 'mr-runner-exec-'));
     const previousCache = process.env.RN_DEV_AGENT_RUNNER_CACHE;
-    process.env.RN_DEV_AGENT_RUNNER_CACHE = cache;
+    process.env.RN_DEV_AGENT_RUNNER_CACHE = relative(process.cwd(), cache);
     try {
       const packed = join(cache, 'packed', 'maestro-runner');
       mkdirSync(join(packed, 'bin'), { recursive: true });

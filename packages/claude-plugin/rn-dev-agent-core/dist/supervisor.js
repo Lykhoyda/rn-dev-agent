@@ -28004,7 +28004,7 @@ function meetsMaestroRunnerFloor(version2) {
 function pinCacheRoot(home = homedir4()) {
   const override = process.env.RN_DEV_AGENT_RUNNER_CACHE;
   const base = override && override.length > 0 ? override : join20(home, ".cache", "rn-dev-agent");
-  return join20(base, "maestro-runner", MAESTRO_RUNNER_PIN.version);
+  return resolve9(base, "maestro-runner", MAESTRO_RUNNER_PIN.version);
 }
 function pinnedRunnerBinPath(home) {
   return join20(pinCacheRoot(home), "bin", "maestro-runner");
@@ -82188,6 +82188,9 @@ import { chmodSync as chmodSync7, existsSync as existsSync32, mkdirSync as mkdir
 import { homedir as homedir9, platform as hostPlatform, release } from "node:os";
 import { dirname as dirname24, join as join45 } from "node:path";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
+function configuredExperienceDirectory() {
+  return process.env.RN_DEV_AGENT_EXPERIENCE_DIR ?? EXPERIENCE_DIRECTORY;
+}
 function sanitizeString(value, redact2 = applyRedactionRules) {
   try {
     return redact2(value);
@@ -82419,7 +82422,6 @@ function buildRunnerDiagnosticsBundle(input) {
   const provenance = stringDetail(payloadEvent, "provenance");
   const payloadShaPrefix = stringDetail(payloadEvent, "payloadShaPrefix");
   const metroPort = findNumberInSources(sources, ["metroPort"]);
-  const sessionId = scalar(["sessionId"]);
   const actionId = scalar(["actionId"]);
   const runtime = scalar(["runtime", "runtimeVersion", "osVersion"]) ?? input.environment.node;
   const platform = scalar(["platform"]);
@@ -82428,15 +82430,15 @@ function buildRunnerDiagnosticsBundle(input) {
     schema: "rn-dev-agent/runner-diagnostics/1",
     candidate: {
       ...input.candidate,
-      releaseCommit: sanitizeNullable(process.env.RN_DEV_AGENT_RELEASE_COMMIT ?? null)
+      releaseCommit: process.env.RN_DEV_AGENT_RELEASE_COMMIT ?? null
     },
     runner: { version: runnerVersion, provenance, payloadShaPrefix },
     context: {
-      platform: sanitizeNullable(platform),
-      os: sanitizeString(input.environment.os),
-      runtime: sanitizeNullable(runtime),
-      sessionId: sanitizeNullable(sessionId),
-      actionId: sanitizeNullable(actionId),
+      platform,
+      os: input.environment.os,
+      runtime,
+      sessionId: input.sessionId,
+      actionId,
       deviceIdHash: deviceId ? stableDeviceHash(input.directory, deviceId) : null,
       bundleId: bundleId === null ? null : bundleId === OWNED_TEST_APP_BUNDLE_ID ? OWNED_TEST_APP_BUNDLE_ID : "[BUNDLE_REDACTED]",
       metroPort
@@ -82448,7 +82450,7 @@ function buildRunnerDiagnosticsBundle(input) {
 }
 function stringDetail(event, key) {
   const value = event?.detail[key];
-  return typeof value === "string" ? sanitizeString(value) : null;
+  return typeof value === "string" ? value : null;
 }
 function findNumberInSources(sources, keys) {
   for (const source of sources) {
@@ -82504,13 +82506,9 @@ function writeRunnerDiagnosticsBundle(directory, bundle) {
     const matched = /-(\d+)\.json$/.exec(file);
     return Math.max(maximum, matched ? Number(matched[1]) : 0);
   }, 0) + 1;
-  const sessionKey = (bundle.context.sessionId ?? "unknown").replace(/[^A-Za-z0-9_-]/g, "-").slice(0, 64);
+  const sessionKey = (bundle.context.sessionId ?? "unknown").slice(0, 64).replace(/[^A-Za-z0-9_-]/g, "-");
   const outputPath = join45(directory, `runner-diagnostics-${sessionKey}-${nextSequence}.json`);
-  const bounded = {
-    ...bundle,
-    events: retainRunnerDiagnosticEvents(bundle.events, 200),
-    truncated: bundle.truncated || bundle.events.length > 200
-  };
+  const bounded = boundRunnerDiagnosticsBundle(bundle);
   let serialized = `${JSON.stringify(bounded, null, 2)}
 `;
   if (Buffer.byteLength(serialized) > RUNNER_DIAGNOSTICS_MAX_BYTES) {
@@ -82524,6 +82522,9 @@ function writeRunnerDiagnosticsBundle(directory, bundle) {
 `;
     }
   }
+  if (Buffer.byteLength(serialized) > RUNNER_DIAGNOSTICS_MAX_BYTES) {
+    throw new Error("Runner diagnostics bundle exceeds the 256 KB limit after truncation.");
+  }
   const temporary = join45(directory, `.runner-diagnostics.${process.pid}.${randomUUID10()}`);
   writeFileSync16(temporary, serialized, { encoding: "utf8", flag: "wx", mode: 384 });
   renameSync9(temporary, outputPath);
@@ -82534,6 +82535,51 @@ function writeRunnerDiagnosticsBundle(directory, bundle) {
   }
   return outputPath;
 }
+function boundRunnerDiagnosticsBundle(bundle) {
+  let truncated = bundle.truncated || bundle.events.length > 200;
+  const bound = (value) => {
+    if (value === null)
+      return null;
+    const suffix = "[TRUNCATED]";
+    let candidate = value;
+    if (candidate.length > RUNNER_DIAGNOSTICS_MAX_SCALAR_CHARS) {
+      truncated = true;
+      candidate = `${candidate.slice(0, RUNNER_DIAGNOSTICS_MAX_SCALAR_CHARS - suffix.length)}${suffix}`;
+    }
+    const sanitized = sanitizeString(candidate);
+    if (sanitized.length <= RUNNER_DIAGNOSTICS_MAX_SCALAR_CHARS)
+      return sanitized;
+    truncated = true;
+    return `${sanitized.slice(0, RUNNER_DIAGNOSTICS_MAX_SCALAR_CHARS - suffix.length)}${suffix}`;
+  };
+  const events = sanitizeForEvidence(retainRunnerDiagnosticEvents(bundle.events, 200));
+  return {
+    schema: "rn-dev-agent/runner-diagnostics/1",
+    candidate: {
+      pluginVersion: bound(bundle.candidate.pluginVersion),
+      coreVersion: bound(bundle.candidate.coreVersion) ?? "unknown",
+      releaseCommit: bound(bundle.candidate.releaseCommit)
+    },
+    runner: {
+      version: bound(bundle.runner.version),
+      provenance: bound(bundle.runner.provenance),
+      payloadShaPrefix: bound(bundle.runner.payloadShaPrefix)
+    },
+    context: {
+      platform: bound(bundle.context.platform),
+      os: bound(bundle.context.os) ?? "unknown",
+      runtime: bound(bundle.context.runtime),
+      sessionId: bound(bundle.context.sessionId),
+      actionId: bound(bundle.context.actionId),
+      deviceIdHash: bound(bundle.context.deviceIdHash),
+      bundleId: bundle.context.bundleId === null ? null : bundle.context.bundleId === OWNED_TEST_APP_BUNDLE_ID ? OWNED_TEST_APP_BUNDLE_ID : "[BUNDLE_REDACTED]",
+      metroPort: bundle.context.metroPort
+    },
+    failureCode: bound(bundle.failureCode) ?? "UNKNOWN",
+    events,
+    truncated
+  };
+}
 function runnerDiagnosticsFiles(directory) {
   try {
     return readdirSync13(directory).filter((file) => /^runner-diagnostics-.+-\d+\.json$/.test(file));
@@ -82541,19 +82587,34 @@ function runnerDiagnosticsFiles(directory) {
     return [];
   }
 }
-function latestRunnerDiagnosticsPath(directory = EXPERIENCE_DIRECTORY) {
+function latestRunnerDiagnosticsPath(sessionId, directory = configuredExperienceDirectory()) {
+  if (sessionId.length === 0)
+    return null;
   const files = runnerDiagnosticsFiles(directory).map((file) => ({ file, mtimeMs: statSync15(join45(directory, file)).mtimeMs })).sort((left, right) => right.mtimeMs - left.mtimeMs || right.file.localeCompare(left.file));
-  return files[0] ? join45(directory, files[0].file) : null;
+  for (const file of files) {
+    const path = join45(directory, file.file);
+    try {
+      const contents = readFileSync33(path);
+      if (contents.byteLength > RUNNER_DIAGNOSTICS_MAX_BYTES)
+        continue;
+      const value = JSON.parse(contents.toString("utf8"));
+      if (value.schema === "rn-dev-agent/runner-diagnostics/1" && value.context?.sessionId === sessionId) {
+        return path;
+      }
+    } catch {
+    }
+  }
+  return null;
 }
-function exportLatestRunnerDiagnosticsBundle(outputPath, directory = EXPERIENCE_DIRECTORY) {
-  const source = latestRunnerDiagnosticsPath(directory);
+function exportLatestRunnerDiagnosticsBundle(outputPath, sessionId, directory = configuredExperienceDirectory()) {
+  const source = latestRunnerDiagnosticsPath(sessionId, directory);
   if (!source)
-    throw new Error("No runner diagnostics bundle is available.");
+    throw new Error("No runner diagnostics bundle is available for the exact session.");
   writeFileSync16(outputPath, readFileSync33(source), { flag: "wx", mode: 384 });
   chmodSync7(outputPath, 384);
   return outputPath;
 }
-var UNKNOWN_CLASSIFICATION, DEFAULT_MAX_RECORDS, DEFAULT_RETENTION_DAYS, MAX_EVIDENCE_POINTERS, EXPERIENCE_DIRECTORY, EXPERIENCE_STORE_NAME, MAX_SYMPTOM_LENGTH, RUNNER_DIAGNOSTICS_MAX_BYTES, RUNNER_DIAGNOSTICS_RETENTION, OWNED_TEST_APP_BUNDLE_ID, DAY_MS, REDACTION_FAILED, SYMPTOM_TRUNCATED, REDACTION_RULES, KEYED_SECRET, REDACTION_RULES_VERSION, appIdentityCache, ExperienceRecorder, CLASSIFICATION_RULES, EXPERIENCE_FAMILY_IDS, RUNNER_FAILURE_CODES;
+var UNKNOWN_CLASSIFICATION, DEFAULT_MAX_RECORDS, DEFAULT_RETENTION_DAYS, MAX_EVIDENCE_POINTERS, EXPERIENCE_DIRECTORY, EXPERIENCE_STORE_NAME, MAX_SYMPTOM_LENGTH, RUNNER_DIAGNOSTICS_MAX_BYTES, RUNNER_DIAGNOSTICS_RETENTION, RUNNER_DIAGNOSTICS_MAX_SCALAR_CHARS, OWNED_TEST_APP_BUNDLE_ID, DAY_MS, REDACTION_FAILED, SYMPTOM_TRUNCATED, REDACTION_RULES, KEYED_SECRET, REDACTION_RULES_VERSION, appIdentityCache, ExperienceRecorder, CLASSIFICATION_RULES, EXPERIENCE_FAMILY_IDS, RUNNER_FAILURE_CODES;
 var init_evidence = __esm({
   "packages/rn-dev-agent-core/dist/experience/evidence.js"() {
     "use strict";
@@ -82567,6 +82628,7 @@ var init_evidence = __esm({
     MAX_SYMPTOM_LENGTH = 2048;
     RUNNER_DIAGNOSTICS_MAX_BYTES = 256 * 1024;
     RUNNER_DIAGNOSTICS_RETENTION = 5;
+    RUNNER_DIAGNOSTICS_MAX_SCALAR_CHARS = 1024;
     OWNED_TEST_APP_BUNDLE_ID = "com.rndevagent.testapp";
     DAY_MS = 24 * 60 * 60 * 1e3;
     REDACTION_FAILED = "[REDACTION_FAILED]";
@@ -82603,19 +82665,21 @@ var init_evidence = __esm({
       path;
       candidate;
       environment;
+      sessionId;
       maxRecords;
       retentionMs;
       now;
       schedule;
       previousFailure = null;
       constructor(options) {
-        this.directory = options.directory ?? process.env.RN_DEV_AGENT_EXPERIENCE_DIR ?? EXPERIENCE_DIRECTORY;
+        this.directory = options.directory ?? configuredExperienceDirectory();
         this.path = join45(this.directory, EXPERIENCE_STORE_NAME);
         this.candidate = {
           pluginVersion: options.pluginVersion ?? null,
           coreVersion: options.coreVersion
         };
         this.environment = { os: `${hostPlatform()} ${release()}`, node: process.version };
+        this.sessionId = options.sessionId === void 0 ? process.env.RN_DEV_AGENT_SESSION_ID ?? null : options.sessionId;
         this.maxRecords = options.maxRecords ?? DEFAULT_MAX_RECORDS;
         this.retentionMs = (options.retentionDays ?? DEFAULT_RETENTION_DAYS) * DAY_MS;
         this.now = options.now ?? (() => /* @__PURE__ */ new Date());
@@ -82672,7 +82736,8 @@ var init_evidence = __esm({
           failureCode: failure.code,
           candidate: this.candidate,
           environment: this.environment,
-          directory: this.directory
+          directory: this.directory,
+          sessionId: this.sessionId
         });
         writeRunnerDiagnosticsBundle(this.directory, bundle);
       }
@@ -83185,7 +83250,11 @@ function createCollectLogsHandler(getClient2) {
     let runnerDiagnosticsExportError = null;
     if (args.runnerDiagnosticsOutputPath) {
       try {
-        runnerDiagnosticsExport = exportLatestRunnerDiagnosticsBundle(args.runnerDiagnosticsOutputPath);
+        const sessionId = process.env.RN_DEV_AGENT_SESSION_ID;
+        if (!sessionId) {
+          throw new Error("Exact authenticated session identity is unavailable.");
+        }
+        runnerDiagnosticsExport = exportLatestRunnerDiagnosticsBundle(args.runnerDiagnosticsOutputPath, sessionId);
       } catch (error2) {
         runnerDiagnosticsExportError = error2 instanceof Error ? error2.message : String(error2);
       }
