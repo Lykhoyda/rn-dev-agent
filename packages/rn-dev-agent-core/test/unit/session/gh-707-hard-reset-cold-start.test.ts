@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { existsSync } from 'node:fs';
 import { test } from 'node:test';
 import { probeProcessBirth } from '../../../dist/session/process-birth.js';
 import { stopBoundRunner } from '../../../dist/session/process-cleanup.js';
@@ -20,14 +19,24 @@ interface StubbornRunner {
 }
 
 async function spawnStubbornRunner(): Promise<StubbornRunner> {
-  // The outer shell never wait()s, so the runner stays a zombie after it dies —
-  // exactly the window stopBoundRunner polls into.
-  // zsh does not reap a background job while it sleeps, so where it exists the
-  // runner also stays a zombie — the unreaped window stopBoundRunner polls into.
-  // Elsewhere /bin/sh still covers the SIGTERM-resistant half; the zombie
-  // classification itself is pinned by process-birth.test.ts on every host.
-  const shell = existsSync('/bin/zsh') ? '/bin/zsh' : '/bin/sh';
-  const holder = spawn(shell, ['-c', '{ trap "" TERM; exec sleep 300; } & echo $!; sleep 60'], {
+  const runnerCode = `
+    process.on('SIGTERM', () => {});
+    process.stdout.write('ready');
+    setInterval(() => {}, 1_000);
+  `;
+  // Block the holder's event loop after the child is ready so it cannot reap the killed child.
+  const holderCode = `
+    const { spawn } = require('node:child_process');
+    const { writeSync } = require('node:fs');
+    const runner = spawn(process.execPath, ['-e', ${JSON.stringify(runnerCode)}], {
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    runner.stdout.once('data', () => {
+      writeSync(1, String(runner.pid));
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 60_000);
+    });
+  `;
+  const holder = spawn(process.execPath, ['-e', holderCode], {
     stdio: ['ignore', 'pipe', 'ignore'],
     detached: true,
   });
