@@ -27855,6 +27855,25 @@ var init_maestro_validator = __esm({
 // packages/rn-dev-agent-core/dist/experience/runner-diagnostics.js
 import { AsyncLocalStorage as AsyncLocalStorage2 } from "node:async_hooks";
 import { performance as performance2 } from "node:perf_hooks";
+function retainRunnerDiagnosticEvents(events, maximum) {
+  if (maximum <= 0)
+    return [];
+  const retained = [...events];
+  while (retained.length > maximum) {
+    const counts = /* @__PURE__ */ new Map();
+    for (const event of retained)
+      counts.set(event.type, (counts.get(event.type) ?? 0) + 1);
+    let removeAt = retained.findIndex((event) => !TERMINAL_EVENT_TYPES.has(event.type) && (counts.get(event.type) ?? 0) > 1);
+    if (removeAt < 0) {
+      removeAt = retained.findIndex((event) => !TERMINAL_EVENT_TYPES.has(event.type));
+    }
+    if (removeAt < 0) {
+      removeAt = retained.findIndex((event) => (counts.get(event.type) ?? 0) > 1);
+    }
+    retained.splice(removeAt < 0 ? 0 : removeAt, 1);
+  }
+  return retained;
+}
 function withRunnerDiagnosticsContext(tool, params, work) {
   if (storage.getStore())
     return work();
@@ -27863,24 +27882,26 @@ function withRunnerDiagnosticsContext(tool, params, work) {
     rootParams: params,
     events: [],
     truncated: false,
-    startedAt: performance2.now()
+    startedAt: performance2.now(),
+    nextSequence: 0
   }, work);
 }
 function recordRunnerDiagnostic(type, detail = {}) {
   const state = storage.getStore();
   if (!state)
     return;
-  if (state.events.length >= RUNNER_DIAGNOSTICS_MAX_EVENTS) {
-    state.truncated = true;
-    return;
-  }
-  state.events.push({
-    sequence: state.events.length + 1,
+  const event = {
+    sequence: ++state.nextSequence,
     monotonicMs: Math.max(0, Math.round((performance2.now() - state.startedAt) * 1e3) / 1e3),
     timestamp: (/* @__PURE__ */ new Date()).toISOString(),
     type,
     detail
-  });
+  };
+  const retained = retainRunnerDiagnosticEvents([...state.events, event], RUNNER_DIAGNOSTICS_MAX_EVENTS);
+  if (retained.length < state.events.length + 1) {
+    state.truncated = true;
+  }
+  state.events = retained;
 }
 function currentRunnerDiagnosticsPlatform() {
   const value = storage.getStore()?.rootParams.platform;
@@ -27897,12 +27918,17 @@ function snapshotRunnerDiagnostics() {
     truncated: state.truncated
   };
 }
-var RUNNER_DIAGNOSTICS_MAX_EVENTS, storage;
+var RUNNER_DIAGNOSTICS_MAX_EVENTS, storage, TERMINAL_EVENT_TYPES;
 var init_runner_diagnostics = __esm({
   "packages/rn-dev-agent-core/dist/experience/runner-diagnostics.js"() {
     "use strict";
     RUNNER_DIAGNOSTICS_MAX_EVENTS = 200;
     storage = new AsyncLocalStorage2();
+    TERMINAL_EVENT_TYPES = /* @__PURE__ */ new Set([
+      "typed-failure",
+      "cleanup",
+      "tool-outcome"
+    ]);
   }
 });
 
@@ -28307,6 +28333,9 @@ function copyPayloadTree(source, destination) {
     }
   }
 }
+function runnerCacheBootstrapFailure(error2) {
+  return `WDA bootstrap could not provision its authority-bound runner cache: ${error2.message}. No foreign cache path was changed; any cache directory created by this spawn was removed. Verify the runner cache parent is writable, then retry the exact replay.`;
+}
 function cacheErrno(error2) {
   const code = error2?.code;
   return typeof code === "string" && /^[A-Z0-9_]+$/.test(code) ? code : "UNKNOWN";
@@ -28345,19 +28374,31 @@ function assertRunnerSnapshotCacheBinding(snapshotRoot, cacheRoot) {
     throw new RunnerCacheUnavailableError("cache", cacheErrno(error2));
   }
 }
-function provisionRunnerSnapshotCache(snapshotRoot, testHooks = {}) {
+function provisionRunnerSnapshotCache(snapshotRoot, testHooks = {}, setOwnedCacheRoot = () => {
+}) {
   const cacheRoot = expectedRunnerCacheRoot(snapshotRoot);
+  let ownsCacheRoot = false;
   try {
     testHooks.beforeCacheProvision?.(cacheRoot);
     mkdirSync12(cacheRoot, { mode: 448 });
+    ownsCacheRoot = true;
+    setOwnedCacheRoot(cacheRoot);
     chmodSync4(cacheRoot, 448);
+    testHooks.beforeCacheBinding?.(cacheRoot);
     symlinkSync3(cacheRoot, join20(snapshotRoot, "cache"), "dir");
     assertRunnerSnapshotCacheBinding(snapshotRoot, cacheRoot);
     return cacheRoot;
   } catch (error2) {
-    if (error2 instanceof RunnerCacheUnavailableError)
-      throw error2;
-    throw new RunnerCacheUnavailableError("cache", cacheErrno(error2));
+    const failure = error2 instanceof RunnerCacheUnavailableError ? error2 : new RunnerCacheUnavailableError("cache", cacheErrno(error2));
+    if (ownsCacheRoot) {
+      try {
+        rmSync8(cacheRoot, { recursive: true, force: true });
+        setOwnedCacheRoot(null);
+      } catch (cleanupError) {
+        throw new RunnerCacheUnavailableError("cache", `${failure.errno}_CLEANUP_${cacheErrno(cleanupError)}`);
+      }
+    }
+    throw failure;
   }
 }
 function removeRunnerSnapshotAndCache(snapshotRoot, cacheRoot) {
@@ -28417,8 +28458,9 @@ async function withImmediatePinnedRunner(runnerPath, resolveStatus, execute2, te
       throw new Error("RUNNER_PIN_CHANGED: execution binding changed before execution.");
     }
     try {
-      cacheRoot = expectedRunnerCacheRoot(snapshotRoot);
-      provisionRunnerSnapshotCache(snapshotRoot, testHooks);
+      cacheRoot = provisionRunnerSnapshotCache(snapshotRoot, testHooks, (ownedCacheRoot) => {
+        cacheRoot = ownedCacheRoot;
+      });
       recordRunnerDiagnostic("cache-provision", {
         result: "passed",
         variant: "symlink",
@@ -34918,7 +34960,7 @@ function createMaestroRunHandler(deps = {}) {
           errno: stageError.errno,
           path: stageError.relativePath
         });
-        return failResult(`WDA bootstrap could not provision its authority-bound runner cache: ${stageError.message}`, "WDA_BOOTSTRAP_FAILED", {
+        return failResult(runnerCacheBootstrapFailure(stageError), "WDA_BOOTSTRAP_FAILED", {
           flowFile,
           platform,
           runner: dispatch.runner,
@@ -35870,6 +35912,15 @@ async function runMaestroInline(yaml2, opts, dependencies = {}) {
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
+      if (err instanceof RunnerCacheUnavailableError) {
+        return {
+          passed: false,
+          output: "",
+          flowFile,
+          error: runnerCacheBootstrapFailure(err),
+          errorCode: "WDA_BOOTSTRAP_FAILED"
+        };
+      }
       if (message.startsWith("RUNNER_PIN_CHANGED:")) {
         return { passed: false, output: "", flowFile, error: message };
       }
@@ -81066,7 +81117,8 @@ function createRunActionHandler(deps = {}) {
           ...cdpJsFallback ? { cdpJsFallback } : {},
           ...strictRunRecordMeta(persisted2)
         };
-        let message = failure.kind === "WDA_BOOTSTRAP_FAILED" ? `cdp_run_action: ${args.actionId} failed (WDA_BOOTSTRAP_FAILED) before the first replay step: ${failure.detail}. Re-run the replay (bootstrap retries itself); check network access; diagnose the pin-cache runner with ${PINNED_RUNNER_DIAGNOSE_HINT}. Supported correction: ${PINNED_RUNNER_INSTALL_HINT}. Never invoke PATH, ~/.maestro-runner, maestro-cli, or manual login. No preparation or cache mutation was attempted.` : `cdp_run_action: ${args.actionId} failed (${failure.kind})${autoRepairEnabled ? " \u2014 failure not auto-repairable" : " \u2014 auto-repair disabled"}: ${firstFailureDetail}`;
+        const cacheProvisionRefusal = failure.kind === "WDA_BOOTSTRAP_FAILED" && firstFailureDetail.includes("RUNNER_CACHE_UNAVAILABLE");
+        let message = cacheProvisionRefusal ? `cdp_run_action: ${args.actionId} failed (WDA_BOOTSTRAP_FAILED) before the first replay step: ${firstFailureDetail}` : failure.kind === "WDA_BOOTSTRAP_FAILED" ? `cdp_run_action: ${args.actionId} failed (WDA_BOOTSTRAP_FAILED) before the first replay step: ${failure.detail}. Re-run the replay (bootstrap retries itself); check network access; diagnose the pin-cache runner with ${PINNED_RUNNER_DIAGNOSE_HINT}. Supported correction: ${PINNED_RUNNER_INSTALL_HINT}. Never invoke PATH, ~/.maestro-runner, maestro-cli, or manual login. No preparation or cache mutation was attempted.` : `cdp_run_action: ${args.actionId} failed (${failure.kind})${autoRepairEnabled ? " \u2014 failure not auto-repairable" : " \u2014 auto-repair disabled"}: ${firstFailureDetail}`;
         if (cdpJsFallback?.reason === "cdp-unreachable") {
           message += ". Maestro failed before completing the flow (on iOS 26.x WDA often dies at startup) and the CDP/JS replay fallback was skipped: CDP was unreachable after the flow. Check cdp_status and reconnect, then retry; if another XCUITest automation is driving this simulator, stop it first.";
         }
@@ -82369,7 +82421,7 @@ function buildRunnerDiagnosticsBundle(input) {
   const metroPort = findNumberInSources(sources, ["metroPort"]);
   const sessionId = scalar(["sessionId"]);
   const actionId = scalar(["actionId"]);
-  const runtime = scalar(["runtime", "runtimeVersion", "osVersion"]);
+  const runtime = scalar(["runtime", "runtimeVersion", "osVersion"]) ?? input.environment.node;
   const platform = scalar(["platform"]);
   const sanitizedEvents = sanitizeForEvidence(input.trace.events);
   return {
@@ -82456,27 +82508,21 @@ function writeRunnerDiagnosticsBundle(directory, bundle) {
   const outputPath = join45(directory, `runner-diagnostics-${sessionKey}-${nextSequence}.json`);
   const bounded = {
     ...bundle,
-    events: bundle.events.slice(0, 200),
+    events: retainRunnerDiagnosticEvents(bundle.events, 200),
     truncated: bundle.truncated || bundle.events.length > 200
   };
   let serialized = `${JSON.stringify(bounded, null, 2)}
 `;
   if (Buffer.byteLength(serialized) > RUNNER_DIAGNOSTICS_MAX_BYTES) {
-    let lower = 0;
-    let upper = bounded.events.length;
-    while (lower < upper) {
-      const middle = Math.ceil((lower + upper) / 2);
-      const candidate = `${JSON.stringify({ ...bounded, events: bounded.events.slice(0, middle), truncated: true }, null, 2)}
+    const events = bounded.events;
+    let maximum = events.length;
+    while (Buffer.byteLength(serialized) > RUNNER_DIAGNOSTICS_MAX_BYTES && maximum > 0) {
+      maximum -= 1;
+      bounded.events = retainRunnerDiagnosticEvents(events, maximum);
+      bounded.truncated = true;
+      serialized = `${JSON.stringify(bounded, null, 2)}
 `;
-      if (Buffer.byteLength(candidate) <= RUNNER_DIAGNOSTICS_MAX_BYTES)
-        lower = middle;
-      else
-        upper = middle - 1;
     }
-    bounded.events = bounded.events.slice(0, lower);
-    bounded.truncated = true;
-    serialized = `${JSON.stringify(bounded, null, 2)}
-`;
   }
   const temporary = join45(directory, `.runner-diagnostics.${process.pid}.${randomUUID10()}`);
   writeFileSync16(temporary, serialized, { encoding: "utf8", flag: "wx", mode: 384 });
@@ -82511,6 +82557,7 @@ var UNKNOWN_CLASSIFICATION, DEFAULT_MAX_RECORDS, DEFAULT_RETENTION_DAYS, MAX_EVI
 var init_evidence = __esm({
   "packages/rn-dev-agent-core/dist/experience/evidence.js"() {
     "use strict";
+    init_runner_diagnostics();
     UNKNOWN_CLASSIFICATION = "UNKNOWN";
     DEFAULT_MAX_RECORDS = 500;
     DEFAULT_RETENTION_DAYS = 14;
@@ -89486,6 +89533,27 @@ function createMaestroTestAllHandler(deps = {}) {
         if (err instanceof SessionAuthorityError)
           throw err;
         const stageError = err instanceof MaestroStageExecutionError ? err.stageError : err;
+        if (stageError instanceof RunnerCacheUnavailableError) {
+          return failResult(runnerCacheBootstrapFailure(stageError), "WDA_BOOTSTRAP_FAILED", {
+            total: flows.length,
+            executed: results.length,
+            passed,
+            failed: failed + 1,
+            platform,
+            flowDir,
+            runner: dispatch.runner,
+            requestedDeviceId: requestedDeviceId ?? null,
+            results: [
+              ...results,
+              {
+                name,
+                passed: false,
+                durationMs: now() - start,
+                error: stageError.message
+              }
+            ]
+          });
+        }
         const msg3 = stageError instanceof Error ? stageError.message : String(stageError);
         const errWithOutput = stageError;
         const completed = err instanceof MaestroStageExecutionError ? err.completedResults : [];

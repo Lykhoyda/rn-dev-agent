@@ -4,7 +4,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join, dirname } from 'node:path';
 import { okResult, failResult, warnResult } from '../utils.js';
-import { getEngineStatus, enginePinCaveat, exactPinRefusal, withImmediatePinnedRunner, preOAndroidApiRefusal, isOlderSdkInstallFailure, olderSdkInstallDiagnosis, MAESTRO_RUNNER_MIN_ANDROID_API, RunnerCacheUnavailableError, } from '../domain/engine-pin.js';
+import { getEngineStatus, enginePinCaveat, exactPinRefusal, withImmediatePinnedRunner, preOAndroidApiRefusal, isOlderSdkInstallFailure, olderSdkInstallDiagnosis, MAESTRO_RUNNER_MIN_ANDROID_API, RunnerCacheUnavailableError, runnerCacheBootstrapFailure, } from '../domain/engine-pin.js';
 import { recordRunnerDiagnostic } from '../experience/runner-diagnostics.js';
 import { actionReplayPreflight, classifyLearnedActionPath, replayCompatibilityPreflight, } from '../domain/action-engine-compat.js';
 import { parseM7Header } from '../domain/reusable-action.js';
@@ -713,7 +713,7 @@ export function createMaestroRunHandler(deps = {}) {
                     errno: stageError.errno,
                     path: stageError.relativePath,
                 });
-                return failResult(`WDA bootstrap could not provision its authority-bound runner cache: ${stageError.message}`, 'WDA_BOOTSTRAP_FAILED', {
+                return failResult(runnerCacheBootstrapFailure(stageError), 'WDA_BOOTSTRAP_FAILED', {
                     flowFile,
                     platform,
                     runner: dispatch.runner,

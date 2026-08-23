@@ -8,7 +8,12 @@ import {
   OWNED_TEST_APP_BUNDLE_ID,
   exportLatestRunnerDiagnosticsBundle,
 } from '../../dist/experience/evidence.js';
-import type { RunnerDiagnosticsSnapshot } from '../../dist/experience/runner-diagnostics.js';
+import {
+  recordRunnerDiagnostic,
+  snapshotRunnerDiagnostics,
+  withRunnerDiagnosticsContext,
+  type RunnerDiagnosticsSnapshot,
+} from '../../dist/experience/runner-diagnostics.js';
 
 function trace(params: Record<string, unknown>): RunnerDiagnosticsSnapshot {
   return {
@@ -87,7 +92,39 @@ test('runner diagnostics use a stable salted device hash and redact external bun
   assert.equal(values[0].context.deviceIdHash, values[1].context.deviceIdHash);
   assert.match(values[0].context.deviceIdHash, /^[a-f0-9]{64}$/);
   assert.equal(values[0].context.bundleId, '[BUNDLE_REDACTED]');
+  assert.equal(values[0].context.runtime, process.version);
   assert.doesNotMatch(JSON.stringify(values), /PRIVATE-DEVICE-ID|com\.external\.private/);
+});
+
+test('runner diagnostics retain terminal lifecycle events after the event cap', async () => {
+  let snapshot: RunnerDiagnosticsSnapshot | undefined;
+  await withRunnerDiagnosticsContext('maestro_test_all', { platform: 'ios' }, async () => {
+    recordRunnerDiagnostic('spawn-begin');
+    recordRunnerDiagnostic('payload-verify');
+    recordRunnerDiagnostic('cache-provision');
+    for (let index = 0; index < 205; index += 1) {
+      recordRunnerDiagnostic('runner-exec-begin', { index });
+    }
+    recordRunnerDiagnostic('wda-bootstrap-begin');
+    recordRunnerDiagnostic('typed-failure', { code: 'WDA_BOOTSTRAP_FAILED' });
+    recordRunnerDiagnostic('cleanup', { snapshotRemoved: true, cacheRemoved: true });
+    recordRunnerDiagnostic('tool-outcome', { status: 'FAIL' });
+    snapshot = snapshotRunnerDiagnostics();
+  });
+
+  assert.equal(snapshot?.events.length, 200);
+  assert.equal(snapshot?.truncated, true);
+  assert.deepEqual(
+    snapshot?.events.slice(-3).map((event) => event.type),
+    ['typed-failure', 'cleanup', 'tool-outcome'],
+  );
+  assert.ok(snapshot?.events.some((event) => event.type === 'spawn-begin'));
+  assert.ok(snapshot?.events.some((event) => event.type === 'payload-verify'));
+  assert.ok(
+    snapshot?.events.every(
+      (event, index, events) => index === 0 || event.sequence > events[index - 1]!.sequence,
+    ),
+  );
 });
 
 test('runner diagnostics retain the owned workspace test-app bundle ID only', () => {
@@ -106,20 +143,31 @@ test('runner diagnostics retain five bounded bundles and export newest without o
   for (let index = 0; index < 7; index += 1) {
     const params = { platform: 'ios', sessionId: `session-${index}` };
     const snapshot = trace(params);
-    snapshot.events = Array.from({ length: 240 }, (_, eventIndex) => ({
-      sequence: eventIndex + 1,
-      monotonicMs: eventIndex,
-      timestamp: '2026-08-23T12:00:00.000Z',
-      type: 'typed-failure' as const,
-      detail: { code: 'WDA_BOOTSTRAP_FAILED', padding: 'x'.repeat(2048) },
-    }));
+    snapshot.events = Array.from({ length: 240 }, (_, eventIndex) => {
+      const type =
+        eventIndex === 238
+          ? ('cleanup' as const)
+          : eventIndex === 239
+            ? ('tool-outcome' as const)
+            : ('typed-failure' as const);
+      return {
+        sequence: eventIndex + 1,
+        monotonicMs: eventIndex,
+        timestamp: '2026-08-23T12:00:00.000Z',
+        type,
+        detail: { code: 'WDA_BOOTSTRAP_FAILED', padding: 'x'.repeat(2048) },
+      };
+    });
     recordFailure(directory, params, snapshot);
   }
   assert.equal(bundles(directory).length, 5);
   for (const file of bundles(directory)) {
     const contents = readFileSync(join(directory, file));
     assert.ok(contents.byteLength <= 256 * 1024);
-    assert.equal(JSON.parse(contents.toString()).truncated, true);
+    const parsed = JSON.parse(contents.toString());
+    assert.equal(parsed.truncated, true);
+    assert.ok(parsed.events.some((event: { type: string }) => event.type === 'cleanup'));
+    assert.ok(parsed.events.some((event: { type: string }) => event.type === 'tool-outcome'));
   }
 
   const output = join(directory, 'reviewed-runner-diagnostics.json');

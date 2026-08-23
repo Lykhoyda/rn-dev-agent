@@ -8,6 +8,12 @@ import { join as join2 } from "node:path";
 import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir, platform as hostPlatform, release } from "node:os";
 import { dirname, join } from "node:path";
+
+// packages/rn-dev-agent-core/dist/experience/runner-diagnostics.js
+import { AsyncLocalStorage } from "node:async_hooks";
+var storage = new AsyncLocalStorage();
+
+// packages/rn-dev-agent-core/dist/experience/evidence.js
 var EXPERIENCE_DIRECTORY = join(homedir(), ".claude", "rn-agent", "experience");
 var EXPERIENCE_STORE_NAME = "patterns.jsonl";
 var RUNNER_DIAGNOSTICS_MAX_BYTES = 256 * 1024;

@@ -16,7 +16,7 @@ import {
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   MAESTRO_RUNNER_PIN,
@@ -186,7 +186,33 @@ test(
           error.errno === 'EEXIST',
       );
       assert.equal(executeCalled, false);
-      assert.equal(existsSync(refusedCache), false);
+      assert.equal(existsSync(refusedCache), true);
+
+      let partialCache = '';
+      await assert.rejects(
+        withImmediatePinnedRunner(
+          runnerPath,
+          async () => status,
+          async () => {
+            executeCalled = true;
+          },
+          {
+            beforeCacheBinding: (ownedCacheRoot) => {
+              partialCache = ownedCacheRoot;
+              const cachePrefix = `.wda-cache-${MAESTRO_RUNNER_PIN.version}-`;
+              const suffix = basename(ownedCacheRoot).slice(cachePrefix.length);
+              const snapshotRoot = join(
+                dirname(ownedCacheRoot),
+                `.spawn-${MAESTRO_RUNNER_PIN.version}-${suffix}`,
+              );
+              writeFileSync(join(snapshotRoot, 'cache'), 'occupied');
+            },
+          },
+        ),
+        (error: unknown) =>
+          error instanceof RunnerCacheUnavailableError && error.errno === 'EEXIST',
+      );
+      assert.equal(existsSync(partialCache), false);
 
       const versionsRoot = join(cache, 'maestro-runner');
       const foreignSnapshot = join(versionsRoot, `.spawn-${MAESTRO_RUNNER_PIN.version}-foreign`);

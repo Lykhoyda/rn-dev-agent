@@ -669,6 +669,10 @@ export class RunnerCacheUnavailableError extends Error {
   }
 }
 
+export function runnerCacheBootstrapFailure(error: RunnerCacheUnavailableError): string {
+  return `WDA bootstrap could not provision its authority-bound runner cache: ${error.message}. No foreign cache path was changed; any cache directory created by this spawn was removed. Verify the runner cache parent is writable, then retry the exact replay.`;
+}
+
 function cacheErrno(error: unknown): string {
   const code = (error as { code?: unknown } | null)?.code;
   return typeof code === 'string' && /^[A-Z0-9_]+$/.test(code) ? code : 'UNKNOWN';
@@ -714,23 +718,43 @@ export function assertRunnerSnapshotCacheBinding(snapshotRoot: string, cacheRoot
 
 export interface RunnerSnapshotTestHooks {
   beforeCacheProvision?: (expectedCacheRoot: string) => void;
+  beforeCacheBinding?: (ownedCacheRoot: string) => void;
 }
 
 function provisionRunnerSnapshotCache(
   snapshotRoot: string,
   testHooks: RunnerSnapshotTestHooks = {},
+  setOwnedCacheRoot: (cacheRoot: string | null) => void = () => {},
 ): string {
   const cacheRoot = expectedRunnerCacheRoot(snapshotRoot);
+  let ownsCacheRoot = false;
   try {
     testHooks.beforeCacheProvision?.(cacheRoot);
     mkdirSync(cacheRoot, { mode: 0o700 });
+    ownsCacheRoot = true;
+    setOwnedCacheRoot(cacheRoot);
     chmodSync(cacheRoot, 0o700);
+    testHooks.beforeCacheBinding?.(cacheRoot);
     symlinkSync(cacheRoot, join(snapshotRoot, 'cache'), 'dir');
     assertRunnerSnapshotCacheBinding(snapshotRoot, cacheRoot);
     return cacheRoot;
   } catch (error) {
-    if (error instanceof RunnerCacheUnavailableError) throw error;
-    throw new RunnerCacheUnavailableError('cache', cacheErrno(error));
+    const failure =
+      error instanceof RunnerCacheUnavailableError
+        ? error
+        : new RunnerCacheUnavailableError('cache', cacheErrno(error));
+    if (ownsCacheRoot) {
+      try {
+        rmSync(cacheRoot, { recursive: true, force: true });
+        setOwnedCacheRoot(null);
+      } catch (cleanupError) {
+        throw new RunnerCacheUnavailableError(
+          'cache',
+          `${failure.errno}_CLEANUP_${cacheErrno(cleanupError)}`,
+        );
+      }
+    }
+    throw failure;
   }
 }
 
@@ -802,8 +826,9 @@ export async function withImmediatePinnedRunner<T>(
       throw new Error('RUNNER_PIN_CHANGED: execution binding changed before execution.');
     }
     try {
-      cacheRoot = expectedRunnerCacheRoot(snapshotRoot);
-      provisionRunnerSnapshotCache(snapshotRoot, testHooks);
+      cacheRoot = provisionRunnerSnapshotCache(snapshotRoot, testHooks, (ownedCacheRoot) => {
+        cacheRoot = ownedCacheRoot;
+      });
       recordRunnerDiagnostic('cache-provision', {
         result: 'passed',
         variant: 'symlink',

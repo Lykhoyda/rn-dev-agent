@@ -16,6 +16,8 @@ import {
   getMaestroRunnerPath,
   isOlderSdkInstallFailure,
   olderSdkInstallDiagnosis,
+  RunnerCacheUnavailableError,
+  runnerCacheBootstrapFailure,
   withImmediatePinnedRunner,
   type ReplayEngineStatus,
 } from './domain/engine-pin.js';
@@ -72,7 +74,7 @@ export interface MaestroInvokeResult {
   output: string;
   flowFile: string;
   error?: string;
-  errorCode?: 'AUTOMATION_CLEANUP_UNPROVEN' | 'BUSY_FLOW_ACTIVE';
+  errorCode?: 'AUTOMATION_CLEANUP_UNPROVEN' | 'BUSY_FLOW_ACTIVE' | 'WDA_BOOTSTRAP_FAILED';
   timedOut?: boolean;
   exitCode?: number | null;
   signal?: NodeJS.Signals | null;
@@ -280,6 +282,15 @@ export async function runMaestroInline(
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
+      if (err instanceof RunnerCacheUnavailableError) {
+        return {
+          passed: false,
+          output: '',
+          flowFile,
+          error: runnerCacheBootstrapFailure(err),
+          errorCode: 'WDA_BOOTSTRAP_FAILED',
+        };
+      }
       if (message.startsWith('RUNNER_PIN_CHANGED:')) {
         return { passed: false, output: '', flowFile, error: message };
       }

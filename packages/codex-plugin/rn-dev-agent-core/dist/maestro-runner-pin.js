@@ -568,32 +568,57 @@ print -r -- "$result"
 // packages/rn-dev-agent-core/dist/experience/runner-diagnostics.js
 import { AsyncLocalStorage } from "node:async_hooks";
 import { performance as performance2 } from "node:perf_hooks";
+function retainRunnerDiagnosticEvents(events, maximum) {
+  if (maximum <= 0)
+    return [];
+  const retained = [...events];
+  while (retained.length > maximum) {
+    const counts = /* @__PURE__ */ new Map();
+    for (const event of retained)
+      counts.set(event.type, (counts.get(event.type) ?? 0) + 1);
+    let removeAt = retained.findIndex((event) => !TERMINAL_EVENT_TYPES.has(event.type) && (counts.get(event.type) ?? 0) > 1);
+    if (removeAt < 0) {
+      removeAt = retained.findIndex((event) => !TERMINAL_EVENT_TYPES.has(event.type));
+    }
+    if (removeAt < 0) {
+      removeAt = retained.findIndex((event) => (counts.get(event.type) ?? 0) > 1);
+    }
+    retained.splice(removeAt < 0 ? 0 : removeAt, 1);
+  }
+  return retained;
+}
 function recordRunnerDiagnostic(type, detail = {}) {
   const state = storage.getStore();
   if (!state)
     return;
-  if (state.events.length >= RUNNER_DIAGNOSTICS_MAX_EVENTS) {
-    state.truncated = true;
-    return;
-  }
-  state.events.push({
-    sequence: state.events.length + 1,
+  const event = {
+    sequence: ++state.nextSequence,
     monotonicMs: Math.max(0, Math.round((performance2.now() - state.startedAt) * 1e3) / 1e3),
     timestamp: (/* @__PURE__ */ new Date()).toISOString(),
     type,
     detail
-  });
+  };
+  const retained = retainRunnerDiagnosticEvents([...state.events, event], RUNNER_DIAGNOSTICS_MAX_EVENTS);
+  if (retained.length < state.events.length + 1) {
+    state.truncated = true;
+  }
+  state.events = retained;
 }
 function currentRunnerDiagnosticsPlatform() {
   const value = storage.getStore()?.rootParams.platform;
   return typeof value === "string" ? value : null;
 }
-var RUNNER_DIAGNOSTICS_MAX_EVENTS, storage;
+var RUNNER_DIAGNOSTICS_MAX_EVENTS, storage, TERMINAL_EVENT_TYPES;
 var init_runner_diagnostics = __esm({
   "packages/rn-dev-agent-core/dist/experience/runner-diagnostics.js"() {
     "use strict";
     RUNNER_DIAGNOSTICS_MAX_EVENTS = 200;
     storage = new AsyncLocalStorage();
+    TERMINAL_EVENT_TYPES = /* @__PURE__ */ new Set([
+      "typed-failure",
+      "cleanup",
+      "tool-outcome"
+    ]);
   }
 });
 
@@ -998,6 +1023,9 @@ function copyPayloadTree(source, destination) {
     }
   }
 }
+function runnerCacheBootstrapFailure(error) {
+  return `WDA bootstrap could not provision its authority-bound runner cache: ${error.message}. No foreign cache path was changed; any cache directory created by this spawn was removed. Verify the runner cache parent is writable, then retry the exact replay.`;
+}
 function cacheErrno(error) {
   const code = error?.code;
   return typeof code === "string" && /^[A-Z0-9_]+$/.test(code) ? code : "UNKNOWN";
@@ -1036,19 +1064,31 @@ function assertRunnerSnapshotCacheBinding(snapshotRoot, cacheRoot) {
     throw new RunnerCacheUnavailableError("cache", cacheErrno(error));
   }
 }
-function provisionRunnerSnapshotCache(snapshotRoot, testHooks = {}) {
+function provisionRunnerSnapshotCache(snapshotRoot, testHooks = {}, setOwnedCacheRoot = () => {
+}) {
   const cacheRoot = expectedRunnerCacheRoot(snapshotRoot);
+  let ownsCacheRoot = false;
   try {
     testHooks.beforeCacheProvision?.(cacheRoot);
     mkdirSync(cacheRoot, { mode: 448 });
+    ownsCacheRoot = true;
+    setOwnedCacheRoot(cacheRoot);
     chmodSync2(cacheRoot, 448);
+    testHooks.beforeCacheBinding?.(cacheRoot);
     symlinkSync(cacheRoot, join2(snapshotRoot, "cache"), "dir");
     assertRunnerSnapshotCacheBinding(snapshotRoot, cacheRoot);
     return cacheRoot;
   } catch (error) {
-    if (error instanceof RunnerCacheUnavailableError)
-      throw error;
-    throw new RunnerCacheUnavailableError("cache", cacheErrno(error));
+    const failure = error instanceof RunnerCacheUnavailableError ? error : new RunnerCacheUnavailableError("cache", cacheErrno(error));
+    if (ownsCacheRoot) {
+      try {
+        rmSync(cacheRoot, { recursive: true, force: true });
+        setOwnedCacheRoot(null);
+      } catch (cleanupError) {
+        throw new RunnerCacheUnavailableError("cache", `${failure.errno}_CLEANUP_${cacheErrno(cleanupError)}`);
+      }
+    }
+    throw failure;
   }
 }
 function removeRunnerSnapshotAndCache(snapshotRoot, cacheRoot) {
@@ -1108,8 +1148,9 @@ async function withImmediatePinnedRunner(runnerPath, resolveStatus, execute, tes
       throw new Error("RUNNER_PIN_CHANGED: execution binding changed before execution.");
     }
     try {
-      cacheRoot = expectedRunnerCacheRoot(snapshotRoot);
-      provisionRunnerSnapshotCache(snapshotRoot, testHooks);
+      cacheRoot = provisionRunnerSnapshotCache(snapshotRoot, testHooks, (ownedCacheRoot) => {
+        cacheRoot = ownedCacheRoot;
+      });
       recordRunnerDiagnostic("cache-provision", {
         result: "passed",
         variant: "symlink",
@@ -14617,7 +14658,7 @@ function createMaestroRunHandler(deps = {}) {
           errno: stageError.errno,
           path: stageError.relativePath
         });
-        return failResult(`WDA bootstrap could not provision its authority-bound runner cache: ${stageError.message}`, "WDA_BOOTSTRAP_FAILED", {
+        return failResult(runnerCacheBootstrapFailure(stageError), "WDA_BOOTSTRAP_FAILED", {
           flowFile,
           platform,
           runner: dispatch.runner,

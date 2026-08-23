@@ -14,7 +14,11 @@ import { homedir, platform as hostPlatform, release } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { ToolObserverInput } from '../observability/instrumentation.js';
-import type { RunnerDiagnosticEvent, RunnerDiagnosticsSnapshot } from './runner-diagnostics.js';
+import {
+  retainRunnerDiagnosticEvents,
+  type RunnerDiagnosticEvent,
+  type RunnerDiagnosticsSnapshot,
+} from './runner-diagnostics.js';
 
 export const UNKNOWN_CLASSIFICATION = 'UNKNOWN';
 export const DEFAULT_MAX_RECORDS = 500;
@@ -698,7 +702,7 @@ function buildRunnerDiagnosticsBundle(input: {
   const metroPort = findNumberInSources(sources, ['metroPort']);
   const sessionId = scalar(['sessionId']);
   const actionId = scalar(['actionId']);
-  const runtime = scalar(['runtime', 'runtimeVersion', 'osVersion']);
+  const runtime = scalar(['runtime', 'runtimeVersion', 'osVersion']) ?? input.environment.node;
   const platform = scalar(['platform']);
   const sanitizedEvents = sanitizeForEvidence(input.trace.events) as RunnerDiagnosticEvent[];
   return {
@@ -799,22 +803,19 @@ export function writeRunnerDiagnosticsBundle(
   const outputPath = join(directory, `runner-diagnostics-${sessionKey}-${nextSequence}.json`);
   const bounded: RunnerDiagnosticsBundle = {
     ...bundle,
-    events: bundle.events.slice(0, 200),
+    events: retainRunnerDiagnosticEvents(bundle.events, 200),
     truncated: bundle.truncated || bundle.events.length > 200,
   };
   let serialized = `${JSON.stringify(bounded, null, 2)}\n`;
   if (Buffer.byteLength(serialized) > RUNNER_DIAGNOSTICS_MAX_BYTES) {
-    let lower = 0;
-    let upper = bounded.events.length;
-    while (lower < upper) {
-      const middle = Math.ceil((lower + upper) / 2);
-      const candidate = `${JSON.stringify({ ...bounded, events: bounded.events.slice(0, middle), truncated: true }, null, 2)}\n`;
-      if (Buffer.byteLength(candidate) <= RUNNER_DIAGNOSTICS_MAX_BYTES) lower = middle;
-      else upper = middle - 1;
+    const events = bounded.events;
+    let maximum = events.length;
+    while (Buffer.byteLength(serialized) > RUNNER_DIAGNOSTICS_MAX_BYTES && maximum > 0) {
+      maximum -= 1;
+      bounded.events = retainRunnerDiagnosticEvents(events, maximum);
+      bounded.truncated = true;
+      serialized = `${JSON.stringify(bounded, null, 2)}\n`;
     }
-    bounded.events = bounded.events.slice(0, lower);
-    bounded.truncated = true;
-    serialized = `${JSON.stringify(bounded, null, 2)}\n`;
   }
   const temporary = join(directory, `.runner-diagnostics.${process.pid}.${randomUUID()}`);
   writeFileSync(temporary, serialized, { encoding: 'utf8', flag: 'wx', mode: 0o600 });

@@ -5,7 +5,7 @@ import { resolveBundleId, readExpoSlug } from './project-config.js';
 import { buildMaestroFlow, parseAndValidateFlow, isValidBundleId, MaestroValidationError, } from './domain/maestro-validator.js';
 import { chooseMaestroDispatch } from './tools/maestro-dispatch.js';
 import { outputIndicatesFlowFailure } from './domain/maestro-error-parser.js';
-import { exactPinRefusal, getEngineStatus, getMaestroRunnerPath, isOlderSdkInstallFailure, olderSdkInstallDiagnosis, withImmediatePinnedRunner, } from './domain/engine-pin.js';
+import { exactPinRefusal, getEngineStatus, getMaestroRunnerPath, isOlderSdkInstallFailure, olderSdkInstallDiagnosis, RunnerCacheUnavailableError, runnerCacheBootstrapFailure, withImmediatePinnedRunner, } from './domain/engine-pin.js';
 import { replayCompatibilityPreflight } from './domain/action-engine-compat.js';
 import { resolveAppFileForClearState } from './tools/resolve-ios-app-file.js';
 import { assembleMaestroArgs, runFlowParked } from './tools/maestro-run.js';
@@ -185,6 +185,15 @@ export async function runMaestroInline(yaml, opts, dependencies = {}) {
         }
         catch (err) {
             const message = err instanceof Error ? err.message : String(err);
+            if (err instanceof RunnerCacheUnavailableError) {
+                return {
+                    passed: false,
+                    output: '',
+                    flowFile,
+                    error: runnerCacheBootstrapFailure(err),
+                    errorCode: 'WDA_BOOTSTRAP_FAILED',
+                };
+            }
             if (message.startsWith('RUNNER_PIN_CHANGED:')) {
                 return { passed: false, output: '', flowFile, error: message };
             }
