@@ -289,7 +289,7 @@ const probeForegroundSurface = async () => {
         session.appId !== device?.appId) {
         return 'unknown';
     }
-    return foregroundSurfaceFromSnapshot(await runNative(['snapshot'], { platform }));
+    return foregroundSurfaceFromSnapshot(await runNative(['snapshot'], { platform }), session.appId);
 };
 setRegistryDeviceBindingProvider(() => mapRegistryDeviceBinding(authorityRuntime.status(), authorityRuntime.available));
 setSnapshotAuthorityProvider({
@@ -1263,7 +1263,7 @@ trackedTool('cdp_reload', 'Reload the authority-bound app and atomically replace
         .boolean()
         .default(true)
         .describe('Always performs a full reload via DevSettings.reload()'),
-}, createReloadHandler(getClient, setClient, createClient, { probeForegroundSurface }));
+}, createReloadHandler(getClient, setClient, createClient));
 trackedTool('cdp_component_tree', 'Get React component tree. Returns components with props, state, testIDs. Use filter to scope to a specific subtree — NEVER request full tree unless necessary (saves tokens). Detects RedBox and warns. Pass interactiveOnly=true for a compact "what can I act on here?" digest (only tappable/editable elements + their text, no props/state) — the cheapest way to perceive a novel screen for live interaction.', {
     filter: z
         .string()
@@ -1616,7 +1616,7 @@ trackedTool('cdp_mmkv', 'Read/write the app\'s MMKV storage from Hermes. Closes 
         .describe('Value type for get/set (default: string)'),
     instanceId: z.string().optional().describe('MMKV instance id (default: "mmkv.default")'),
 }, createMmkvHandler(getClient));
-trackedTool('cdp_dev_settings', 'Control React Native dev settings programmatically (no visual dev menu needed). dismissRedBox clears LogBox overlays and RedBox errors via a 4-tier fallback chain. disableDevMenu suppresses the React Native core dev menu gesture. hideDevMenu dismisses the iOS or Android Expo Developer Menu sheet over CDP, verifies the foreground surface, and returns hidden, no_menu_present, or DEV_MENU_HIDE_UNVERIFIED. For reload with auto-reconnect, use cdp_reload instead.', {
+trackedTool('cdp_dev_settings', 'Control React Native dev settings programmatically (no visual dev menu needed). dismissRedBox clears LogBox overlays and RedBox errors via a 4-tier fallback chain. disableDevMenu suppresses the React Native core dev menu gesture. hideDevMenu dismisses the iOS or Android Expo Developer Menu sheet over CDP, verifies the foreground surface, and returns hidden, no_menu_present, DEV_MENU_HIDE_FAILED when no close call was sent, or DEV_MENU_HIDE_UNVERIFIED after a sent call remains occluded. For reload with auto-reconnect, use cdp_reload instead.', {
     action: z
         .enum([
         'reload',
@@ -2959,9 +2959,7 @@ const e2eReload = async () => {
     // downgraded recovery to device-blind platform+bundle filters.
     const sessionPlatform = session.platform === 'ios' || session.platform === 'android' ? session.platform : undefined;
     try {
-        const r = await createReloadHandler(getClient, setClient, createClient, {
-            probeForegroundSurface,
-        })({
+        const r = await createReloadHandler(getClient, setClient, createClient)({
             full: true,
             ...(sessionPlatform ? { platform: sessionPlatform } : {}),
             deviceId: session.deviceId,

@@ -290,6 +290,15 @@ export function authorityProfileFor(
   tool: string,
   args: Record<string, unknown> = {},
 ): AuthorityProfile {
+  if (tool === 'cdp_dev_settings' && args.action === 'hideDevMenu') {
+    return {
+      kind: 'authoritative',
+      groups: allGroups,
+      axes: facetsOf(allGroups, { without: ['A'] }),
+      mutation: true,
+      liveBundleProbe: true,
+    };
+  }
   if (tool === 'device_find' && args.action === 'click') {
     return profiles.get('device_press')!;
   }

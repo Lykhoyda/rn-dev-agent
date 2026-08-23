@@ -442,7 +442,7 @@ const probeForegroundSurface = async (): Promise<ForegroundSurface> => {
   ) {
     return 'unknown';
   }
-  return foregroundSurfaceFromSnapshot(await runNative(['snapshot'], { platform }));
+  return foregroundSurfaceFromSnapshot(await runNative(['snapshot'], { platform }), session.appId);
 };
 setRegistryDeviceBindingProvider(() =>
   mapRegistryDeviceBinding(authorityRuntime.status(), authorityRuntime.available),
@@ -1681,7 +1681,7 @@ trackedTool(
       .default(true)
       .describe('Always performs a full reload via DevSettings.reload()'),
   },
-  createReloadHandler(getClient, setClient, createClient, { probeForegroundSurface }),
+  createReloadHandler(getClient, setClient, createClient),
 );
 
 trackedTool(
@@ -2191,7 +2191,7 @@ trackedTool(
 
 trackedTool(
   'cdp_dev_settings',
-  'Control React Native dev settings programmatically (no visual dev menu needed). dismissRedBox clears LogBox overlays and RedBox errors via a 4-tier fallback chain. disableDevMenu suppresses the React Native core dev menu gesture. hideDevMenu dismisses the iOS or Android Expo Developer Menu sheet over CDP, verifies the foreground surface, and returns hidden, no_menu_present, or DEV_MENU_HIDE_UNVERIFIED. For reload with auto-reconnect, use cdp_reload instead.',
+  'Control React Native dev settings programmatically (no visual dev menu needed). dismissRedBox clears LogBox overlays and RedBox errors via a 4-tier fallback chain. disableDevMenu suppresses the React Native core dev menu gesture. hideDevMenu dismisses the iOS or Android Expo Developer Menu sheet over CDP, verifies the foreground surface, and returns hidden, no_menu_present, DEV_MENU_HIDE_FAILED when no close call was sent, or DEV_MENU_HIDE_UNVERIFIED after a sent call remains occluded. For reload with auto-reconnect, use cdp_reload instead.',
   {
     action: z
       .enum([
@@ -4024,9 +4024,11 @@ const e2eReload = async (): Promise<boolean> => {
   const sessionPlatform =
     session.platform === 'ios' || session.platform === 'android' ? session.platform : undefined;
   try {
-    const r = await createReloadHandler(getClient, setClient, createClient, {
-      probeForegroundSurface,
-    })({
+    const r = await createReloadHandler(
+      getClient,
+      setClient,
+      createClient,
+    )({
       full: true,
       ...(sessionPlatform ? { platform: sessionPlatform } : {}),
       deviceId: session.deviceId,

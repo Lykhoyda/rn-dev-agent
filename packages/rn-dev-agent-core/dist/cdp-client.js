@@ -772,6 +772,7 @@ export class CDPClient {
         // Values are JSON-serialized inside Hermes to handle non-serializable objects
         // A deferred cleanup timer ensures the slot is removed even if the caller times out
         const timeout = timeoutMs ?? defaultTimeout(this.effectivePlatform);
+        const deadline = Date.now() + timeout;
         const slot = '__rn_agent_async_' + ++this.slotId + '_' + Date.now();
         const ASYNC_CLEANUP_MS = timeout * 2;
         const wrapper = `(function() {
@@ -790,7 +791,7 @@ export class CDPClient {
         const initResult = (await this.sendWithTimeout('Runtime.evaluate', {
             expression: wrapper,
             returnByValue: true,
-        }, timeout));
+        }, Math.max(1, deadline - Date.now())));
         if (initResult?.exceptionDetails) {
             return {
                 error: initResult.exceptionDetails.text ??
@@ -800,7 +801,6 @@ export class CDPClient {
         }
         // B45 fix: Use absolute deadline to guarantee total wall-clock stays within timeout.
         // Each poll gets only the remaining time (min 500ms) to avoid overshooting.
-        const deadline = Date.now() + timeout;
         while (Date.now() < deadline) {
             const remaining = deadline - Date.now();
             if (remaining < 500)

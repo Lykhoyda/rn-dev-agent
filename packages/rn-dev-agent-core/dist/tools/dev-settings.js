@@ -42,8 +42,18 @@ function unverifiedHideResult(call, before, after) {
         remedy: 'Classify the foreground surface again and invoke only its matching remedy.',
     });
 }
+function failedHideResult(call, before) {
+    return failResult(call.reason, 'DEV_MENU_HIDE_FAILED', {
+        action: 'hideDevMenu',
+        outcome: 'DEV_MENU_HIDE_FAILED',
+        callSent: false,
+        attempts: call.attempts,
+        surfaceBefore: before,
+        remedy: 'Classify the foreground surface again before choosing a remedy.',
+    });
+}
 export function createDevSettingsHandler(getClient, dependencies = {}) {
-    return withConnection(getClient, async (args, client) => {
+    const handler = async (args, client) => {
         if (args.action === 'hideDevMenu') {
             const probe = dependencies.probeForegroundSurface;
             const before = probe ? await probe().catch(() => 'unknown') : 'unknown';
@@ -57,7 +67,7 @@ export function createDevSettingsHandler(getClient, dependencies = {}) {
             }
             const call = await hideExpoDevMenu(client, { retries: 1 });
             if (!call.callSent)
-                return unverifiedHideResult(call, before, before);
+                return failedHideResult(call, before);
             await (dependencies.settleAfterHide?.() ??
                 new Promise((resolve) => setTimeout(resolve, 300)));
             const after = probe ? await probe().catch(() => 'unknown') : 'unknown';
@@ -92,5 +102,8 @@ export function createDevSettingsHandler(getClient, dependencies = {}) {
             throw evalErr;
         }
         return okResult({ action: args.action, executed: true });
-    });
+    };
+    const helperIndependent = withConnection(getClient, handler, { requireHelpers: false });
+    const helperAware = withConnection(getClient, handler);
+    return (args) => args.action === 'hideDevMenu' ? helperIndependent(args) : helperAware(args);
 }

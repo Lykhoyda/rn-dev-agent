@@ -31358,6 +31358,15 @@ function requiresExactInstalledArtifact(tool, args = {}) {
   return tool === "proof_capture" && (args.action === "begin_rehearsal" || args.action === "finalize");
 }
 function authorityProfileFor(tool, args = {}) {
+  if (tool === "cdp_dev_settings" && args.action === "hideDevMenu") {
+    return {
+      kind: "authoritative",
+      groups: allGroups,
+      axes: facetsOf(allGroups, { without: ["A"] }),
+      mutation: true,
+      liveBundleProbe: true
+    };
+  }
   if (tool === "device_find" && args.action === "click") {
     return profiles.get("device_press");
   }
@@ -34200,7 +34209,9 @@ function promoteCurrentOperationToManagedFlow() {
   }
   return context.arbiter.promoteToFlow(context.lease);
 }
-function planeForTool(name) {
+function planeForTool(name, args = {}) {
+  if (name === "cdp_dev_settings" && args.action === "hideDevMenu")
+    return "interaction";
   if (FLOW_TOOLS.has(name))
     return "flow";
   if (INTERACTION_TOOLS.has(name))
@@ -34215,13 +34226,16 @@ function foreignRefusal(name, warning, scanMs, udid) {
   return failResult(`Refusing ${name}: a FOREIGN Maestro/XCUITest session is driving this simulator (${safeLines[0] ?? "detected by the exact-device automation guard"}). L1 introspection stays safe \u2014 use cdp_component_tree / cdp_store_state / cdp_navigation_state for reads, and device_screenshot for pixels (simctl fallback). Retry taps/flows after the foreign run completes. Opt out of this guard with RN_IOS_FOREIGN_GUARD=0.`, "BUSY_FOREIGN_FLOW", { foreignRunner: safeWarning, conflict: true, timings_ms: { foreignScan: scanMs } });
 }
 function arbiterWrap(name, handler, inst = arbiter, foreign = {}) {
-  const plane = planeForTool(name);
-  if (plane === null)
+  const staticPlane = planeForTool(name);
+  if (staticPlane === null && name !== "cdp_dev_settings")
     return handler;
   const gate = foreign.gate ?? foreignFlowGate;
   const getUdid = foreign.getUdid ?? foreignGateUdid;
   const enabled = foreign.enabled ?? foreignGateEnabled;
   return async (...args) => {
+    const plane = planeForTool(name, args[0] ?? {});
+    if (plane === null)
+      return handler(...args);
     if (plane !== "introspection" && !inst.flowActive) {
       const udid = getUdid();
       if (udid !== null) {
@@ -60293,6 +60307,7 @@ var CDPClient = class _CDPClient {
   }
   async evaluateAsync(expression, timeoutMs) {
     const timeout = timeoutMs ?? defaultTimeout(this.effectivePlatform);
+    const deadline = Date.now() + timeout;
     const slot = "__rn_agent_async_" + ++this.slotId + "_" + Date.now();
     const ASYNC_CLEANUP_MS = timeout * 2;
     const wrapper = `(function() {
@@ -60311,13 +60326,12 @@ var CDPClient = class _CDPClient {
     const initResult = await this.sendWithTimeout("Runtime.evaluate", {
       expression: wrapper,
       returnByValue: true
-    }, timeout);
+    }, Math.max(1, deadline - Date.now()));
     if (initResult?.exceptionDetails) {
       return {
         error: initResult.exceptionDetails.text ?? initResult.exceptionDetails.exception?.description ?? "Unknown evaluation error"
       };
     }
-    const deadline = Date.now() + timeout;
     while (Date.now() < deadline) {
       const remaining = deadline - Date.now();
       if (remaining < 500)
@@ -60813,7 +60827,7 @@ import { promisify as promisify14 } from "node:util";
 // packages/rn-dev-agent-core/dist/tools/expo-dev-menu.js
 var RESOLVE_EXPO_DEV_MENU = `(function () {
   try { var e = globalThis.expo; if (e && e.modules && e.modules.ExpoDevMenu) return e.modules.ExpoDevMenu; } catch (e0) {}
-  try { var nm = require("react-native").NativeModules; if (nm) { if (nm.ExpoDevMenu) return nm.ExpoDevMenu; if (nm.DevMenu) return nm.DevMenu; } } catch (e1) {}
+  try { var nm = require("react-native").NativeModules; if (nm && nm.ExpoDevMenu) return nm.ExpoDevMenu; } catch (e1) {}
   try { if (typeof __turboModuleProxy === "function") { var t = __turboModuleProxy("ExpoDevMenu"); if (t) return t; } } catch (e2) {}
   try { if (typeof globalThis.nativeModuleProxy !== "undefined") { var p = globalThis.nativeModuleProxy.ExpoDevMenu; if (p) return p; } } catch (e3) {}
   return null;
@@ -60821,16 +60835,21 @@ var RESOLVE_EXPO_DEV_MENU = `(function () {
 var HIDE_EXPO_DEV_MENU_EXPRESSION = `(function () {
   var m = ${RESOLVE_EXPO_DEV_MENU};
   if (!m) return "no_module";
+  var method = null;
+  var close = null;
   try {
-    var method = typeof m.hideMenu === "function" ? "hideMenu" : (typeof m.closeMenu === "function" ? "closeMenu" : null);
+    if (typeof m.hideMenu === "function") { method = "hideMenu"; close = m.hideMenu; }
+    else if (typeof m.closeMenu === "function") { method = "closeMenu"; close = m.closeMenu; }
     if (!method) return "no_method_available";
-    return Promise.resolve(m[method]()).then(function () { return "ok:" + method; }, function (e) { return "error:" + (e && e.message ? e.message : String(e)); });
-  } catch (e) { return "error:" + (e && e.message ? e.message : String(e)); }
+  } catch (e) { return "resolution_error:" + (e && e.message ? e.message : String(e)); }
+  try {
+    return Promise.resolve(close.call(m)).then(function () { return "ok:" + method; }, function (e) { return "error:" + method + ":" + (e && e.message ? e.message : String(e)); });
+  } catch (e) { return "error:" + method + ":" + (e && e.message ? e.message : String(e)); }
 })()`;
 function surfaceText(nodes) {
   return nodes.flatMap((node) => [node.label, node.identifier].filter((value) => typeof value === "string").map((value) => value.trim().toLowerCase()).filter(Boolean));
 }
-function classifyForegroundSurface(nodes) {
+function classifyForegroundSurface(nodes, boundAppId) {
   const text = surfaceText(nodes);
   if (text.length === 0)
     return "unknown";
@@ -60844,16 +60863,19 @@ function classifyForegroundSurface(nodes) {
   }
   if (has("open debugger") || has("configure bundler"))
     return "react_native_dev_menu";
-  return "app";
+  if (!boundAppId || nodes.some((node) => node.type === "Alert"))
+    return "unknown";
+  const hasBoundApp = nodes.some((node) => node.packageName === boundAppId || node.type === "Application");
+  return hasBoundApp ? "app" : "unknown";
 }
-function foregroundSurfaceFromSnapshot(result) {
+function foregroundSurfaceFromSnapshot(result, boundAppId) {
   if (result.isError)
     return "unknown";
   try {
     const envelope = JSON.parse(result.content[0]?.text ?? "");
     if (!envelope.ok || !Array.isArray(envelope.data?.nodes))
       return "unknown";
-    return classifyForegroundSurface(envelope.data.nodes);
+    return classifyForegroundSurface(envelope.data.nodes, boundAppId);
   } catch {
     return "unknown";
   }
@@ -60890,10 +60912,19 @@ function parseSentinel(value, attempts3) {
       attempts: attempts3
     };
   }
-  if (sentinel.startsWith("error:")) {
+  if (sentinel.startsWith("resolution_error:")) {
     return {
       callSent: false,
-      reason: `ExpoDevMenu hide failed: ${sentinel.slice(6)}`,
+      reason: `ExpoDevMenu resolution failed: ${sentinel.slice(17)}`,
+      attempts: attempts3
+    };
+  }
+  const invocationError = sentinel.match(/^error:(hideMenu|closeMenu):(.*)$/s);
+  if (invocationError) {
+    return {
+      callSent: true,
+      method: invocationError[1],
+      reason: `ExpoDevMenu ${invocationError[1]} invocation failed: ${invocationError[2]}`,
       attempts: attempts3
     };
   }
@@ -60939,14 +60970,12 @@ async function hideExpoDevMenu(client2, options = {}) {
   }
   return successfulCall ? { ...successfulCall, attempts: outcome.attempts } : outcome;
 }
-async function autoDismissDevMenuMeta(client2, probeSurface) {
+async function autoDismissDevMenuMeta(client2) {
   try {
     if (client2.connectedTarget?.platform !== "ios")
       return {};
-    const before = probeSurface ? await probeSurface() : "unknown";
-    const call = await hideExpoDevMenu(client2, { retries: 1 });
-    const after = probeSurface ? await probeSurface() : "unknown";
-    return before === "expo_dev_menu" && call.callSent && after === "app" ? { dev_menu_dismissed: true, dev_menu_method: call.method } : {};
+    await hideExpoDevMenu(client2, { retries: 1 });
+    return {};
   } catch {
     return {};
   }
@@ -61221,7 +61250,7 @@ function createReloadHandler(getClient2, setClient2, createClient2, deps = {}) {
         return warnResult({ reloaded: true, type: "full", reconnected: true }, "Reload succeeded but helper injection failed. App may still be loading \u2014 retry cdp_status.", forceMeta);
       }
     }
-    const devMenuMeta = await autoDismissDevMenuMeta(client2, deps.probeForegroundSurface);
+    const devMenuMeta = await autoDismissDevMenuMeta(client2);
     const mergedMeta = { ...forceMeta, ...devMenuMeta };
     sessionReloadCount++;
     return okResult({ reloaded: true, type: "full", reconnected: true }, Object.keys(mergedMeta).length > 0 ? { meta: mergedMeta } : void 0);
@@ -78400,8 +78429,18 @@ function unverifiedHideResult(call, before, after) {
     remedy: "Classify the foreground surface again and invoke only its matching remedy."
   });
 }
+function failedHideResult(call, before) {
+  return failResult(call.reason, "DEV_MENU_HIDE_FAILED", {
+    action: "hideDevMenu",
+    outcome: "DEV_MENU_HIDE_FAILED",
+    callSent: false,
+    attempts: call.attempts,
+    surfaceBefore: before,
+    remedy: "Classify the foreground surface again before choosing a remedy."
+  });
+}
 function createDevSettingsHandler(getClient2, dependencies = {}) {
-  return withConnection(getClient2, async (args, client2) => {
+  const handler = async (args, client2) => {
     if (args.action === "hideDevMenu") {
       const probe = dependencies.probeForegroundSurface;
       const before = probe ? await probe().catch(() => "unknown") : "unknown";
@@ -78415,7 +78454,7 @@ function createDevSettingsHandler(getClient2, dependencies = {}) {
       }
       const call = await hideExpoDevMenu(client2, { retries: 1 });
       if (!call.callSent)
-        return unverifiedHideResult(call, before, before);
+        return failedHideResult(call, before);
       await (dependencies.settleAfterHide?.() ?? new Promise((resolve19) => setTimeout(resolve19, 300)));
       const after = probe ? await probe().catch(() => "unknown") : "unknown";
       if (before === "expo_dev_menu" && after === "app") {
@@ -78448,7 +78487,10 @@ function createDevSettingsHandler(getClient2, dependencies = {}) {
       throw evalErr;
     }
     return okResult({ action: args.action, executed: true });
-  });
+  };
+  const helperIndependent = withConnection(getClient2, handler, { requireHelpers: false });
+  const helperAware = withConnection(getClient2, handler);
+  return (args) => args.action === "hideDevMenu" ? helperIndependent(args) : helperAware(args);
 }
 
 // packages/rn-dev-agent-core/dist/tools/interact.js
@@ -89435,7 +89477,7 @@ var probeForegroundSurface = async () => {
   if (platform !== "ios" && platform !== "android" || session2.platform !== platform || session2.deviceId !== device?.deviceId || session2.appId !== device?.appId) {
     return "unknown";
   }
-  return foregroundSurfaceFromSnapshot(await runNative(["snapshot"], { platform }));
+  return foregroundSurfaceFromSnapshot(await runNative(["snapshot"], { platform }), session2.appId);
 };
 setRegistryDeviceBindingProvider(() => mapRegistryDeviceBinding(authorityRuntime.status(), authorityRuntime.available));
 setSnapshotAuthorityProvider({
@@ -90243,7 +90285,7 @@ trackedTool("cdp_evaluate", "CAUTION: Executes arbitrary JavaScript directly in 
 }, createEvaluateHandler(getClient));
 trackedTool("cdp_reload", "Reload the authority-bound app and atomically replace its exact Hermes target claim. Recovery uses only the session device/app/Metro bindings and returns a failure unless the signed runtime marker is re-proven.", {
   full: external_exports.boolean().default(true).describe("Always performs a full reload via DevSettings.reload()")
-}, createReloadHandler(getClient, setClient, createClient, { probeForegroundSurface }));
+}, createReloadHandler(getClient, setClient, createClient));
 trackedTool("cdp_component_tree", 'Get React component tree. Returns components with props, state, testIDs. Use filter to scope to a specific subtree \u2014 NEVER request full tree unless necessary (saves tokens). Detects RedBox and warns. Pass interactiveOnly=true for a compact "what can I act on here?" digest (only tappable/editable elements + their text, no props/state) \u2014 the cheapest way to perceive a novel screen for live interaction.', {
   filter: external_exports.string().optional().describe('Case-insensitive substring match against component name, testID/nativeID, or accessibilityLabel (e.g. "CartBadge", "product-list", "Continue")'),
   depth: external_exports.number().int().min(1).max(12).default(4).describe("Max depth (default 4, max 12)"),
@@ -90440,7 +90482,7 @@ trackedTool("cdp_mmkv", `Read/write the app's MMKV storage from Hermes. Closes t
   type: external_exports.enum(["string", "number", "boolean"]).optional().describe("Value type for get/set (default: string)"),
   instanceId: external_exports.string().optional().describe('MMKV instance id (default: "mmkv.default")')
 }, createMmkvHandler(getClient));
-trackedTool("cdp_dev_settings", "Control React Native dev settings programmatically (no visual dev menu needed). dismissRedBox clears LogBox overlays and RedBox errors via a 4-tier fallback chain. disableDevMenu suppresses the React Native core dev menu gesture. hideDevMenu dismisses the iOS or Android Expo Developer Menu sheet over CDP, verifies the foreground surface, and returns hidden, no_menu_present, or DEV_MENU_HIDE_UNVERIFIED. For reload with auto-reconnect, use cdp_reload instead.", {
+trackedTool("cdp_dev_settings", "Control React Native dev settings programmatically (no visual dev menu needed). dismissRedBox clears LogBox overlays and RedBox errors via a 4-tier fallback chain. disableDevMenu suppresses the React Native core dev menu gesture. hideDevMenu dismisses the iOS or Android Expo Developer Menu sheet over CDP, verifies the foreground surface, and returns hidden, no_menu_present, DEV_MENU_HIDE_FAILED when no close call was sent, or DEV_MENU_HIDE_UNVERIFIED after a sent call remains occluded. For reload with auto-reconnect, use cdp_reload instead.", {
   action: external_exports.enum([
     "reload",
     "toggleInspector",
@@ -91118,9 +91160,7 @@ var e2eReload = async () => {
     return false;
   const sessionPlatform = session2.platform === "ios" || session2.platform === "android" ? session2.platform : void 0;
   try {
-    const r = await createReloadHandler(getClient, setClient, createClient, {
-      probeForegroundSurface
-    })({
+    const r = await createReloadHandler(getClient, setClient, createClient)({
       full: true,
       ...sessionPlatform ? { platform: sessionPlatform } : {},
       deviceId: session2.deviceId,

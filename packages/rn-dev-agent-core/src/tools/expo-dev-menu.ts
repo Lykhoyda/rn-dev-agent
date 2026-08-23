@@ -12,11 +12,13 @@ export type ForegroundSurface =
 interface SurfaceNode {
   label?: unknown;
   identifier?: unknown;
+  type?: unknown;
+  packageName?: unknown;
 }
 
 export const RESOLVE_EXPO_DEV_MENU = `(function () {
   try { var e = globalThis.expo; if (e && e.modules && e.modules.ExpoDevMenu) return e.modules.ExpoDevMenu; } catch (e0) {}
-  try { var nm = require("react-native").NativeModules; if (nm) { if (nm.ExpoDevMenu) return nm.ExpoDevMenu; if (nm.DevMenu) return nm.DevMenu; } } catch (e1) {}
+  try { var nm = require("react-native").NativeModules; if (nm && nm.ExpoDevMenu) return nm.ExpoDevMenu; } catch (e1) {}
   try { if (typeof __turboModuleProxy === "function") { var t = __turboModuleProxy("ExpoDevMenu"); if (t) return t; } } catch (e2) {}
   try { if (typeof globalThis.nativeModuleProxy !== "undefined") { var p = globalThis.nativeModuleProxy.ExpoDevMenu; if (p) return p; } } catch (e3) {}
   return null;
@@ -25,11 +27,16 @@ export const RESOLVE_EXPO_DEV_MENU = `(function () {
 export const HIDE_EXPO_DEV_MENU_EXPRESSION = `(function () {
   var m = ${RESOLVE_EXPO_DEV_MENU};
   if (!m) return "no_module";
+  var method = null;
+  var close = null;
   try {
-    var method = typeof m.hideMenu === "function" ? "hideMenu" : (typeof m.closeMenu === "function" ? "closeMenu" : null);
+    if (typeof m.hideMenu === "function") { method = "hideMenu"; close = m.hideMenu; }
+    else if (typeof m.closeMenu === "function") { method = "closeMenu"; close = m.closeMenu; }
     if (!method) return "no_method_available";
-    return Promise.resolve(m[method]()).then(function () { return "ok:" + method; }, function (e) { return "error:" + (e && e.message ? e.message : String(e)); });
-  } catch (e) { return "error:" + (e && e.message ? e.message : String(e)); }
+  } catch (e) { return "resolution_error:" + (e && e.message ? e.message : String(e)); }
+  try {
+    return Promise.resolve(close.call(m)).then(function () { return "ok:" + method; }, function (e) { return "error:" + method + ":" + (e && e.message ? e.message : String(e)); });
+  } catch (e) { return "error:" + method + ":" + (e && e.message ? e.message : String(e)); }
 })()`;
 
 export interface HideDevMenuCallOutcome {
@@ -54,7 +61,10 @@ function surfaceText(nodes: SurfaceNode[]): string[] {
   );
 }
 
-export function classifyForegroundSurface(nodes: SurfaceNode[]): ForegroundSurface {
+export function classifyForegroundSurface(
+  nodes: SurfaceNode[],
+  boundAppId?: string,
+): ForegroundSurface {
   const text = surfaceText(nodes);
   if (text.length === 0) return 'unknown';
   const has = (value: string) => text.some((candidate) => candidate.includes(value));
@@ -68,10 +78,17 @@ export function classifyForegroundSurface(nodes: SurfaceNode[]): ForegroundSurfa
     return 'expo_dev_menu';
   }
   if (has('open debugger') || has('configure bundler')) return 'react_native_dev_menu';
-  return 'app';
+  if (!boundAppId || nodes.some((node) => node.type === 'Alert')) return 'unknown';
+  const hasBoundApp = nodes.some(
+    (node) => node.packageName === boundAppId || node.type === 'Application',
+  );
+  return hasBoundApp ? 'app' : 'unknown';
 }
 
-export function foregroundSurfaceFromSnapshot(result: ToolResult): ForegroundSurface {
+export function foregroundSurfaceFromSnapshot(
+  result: ToolResult,
+  boundAppId?: string,
+): ForegroundSurface {
   if (result.isError) return 'unknown';
   try {
     const envelope = JSON.parse(result.content[0]?.text ?? '') as {
@@ -79,7 +96,7 @@ export function foregroundSurfaceFromSnapshot(result: ToolResult): ForegroundSur
       data?: { nodes?: SurfaceNode[] };
     };
     if (!envelope.ok || !Array.isArray(envelope.data?.nodes)) return 'unknown';
-    return classifyForegroundSurface(envelope.data.nodes);
+    return classifyForegroundSurface(envelope.data.nodes, boundAppId);
   } catch {
     return 'unknown';
   }
@@ -117,10 +134,19 @@ function parseSentinel(value: unknown, attempts: number): HideDevMenuCallOutcome
       attempts,
     };
   }
-  if (sentinel.startsWith('error:')) {
+  if (sentinel.startsWith('resolution_error:')) {
     return {
       callSent: false,
-      reason: `ExpoDevMenu hide failed: ${sentinel.slice(6)}`,
+      reason: `ExpoDevMenu resolution failed: ${sentinel.slice(17)}`,
+      attempts,
+    };
+  }
+  const invocationError = sentinel.match(/^error:(hideMenu|closeMenu):(.*)$/s);
+  if (invocationError) {
+    return {
+      callSent: true,
+      method: invocationError[1] as 'hideMenu' | 'closeMenu',
+      reason: `ExpoDevMenu ${invocationError[1]} invocation failed: ${invocationError[2]}`,
       attempts,
     };
   }
@@ -177,18 +203,11 @@ export async function hideExpoDevMenu(
   return successfulCall ? { ...successfulCall, attempts: outcome.attempts } : outcome;
 }
 
-export async function autoDismissDevMenuMeta(
-  client: CDPClient,
-  probeSurface?: () => Promise<ForegroundSurface>,
-): Promise<Record<string, unknown>> {
+export async function autoDismissDevMenuMeta(client: CDPClient): Promise<Record<string, unknown>> {
   try {
     if (client.connectedTarget?.platform !== 'ios') return {};
-    const before = probeSurface ? await probeSurface() : 'unknown';
-    const call = await hideExpoDevMenu(client, { retries: 1 });
-    const after = probeSurface ? await probeSurface() : 'unknown';
-    return before === 'expo_dev_menu' && call.callSent && after === 'app'
-      ? { dev_menu_dismissed: true, dev_menu_method: call.method }
-      : {};
+    await hideExpoDevMenu(client, { retries: 1 });
+    return {};
   } catch {
     return {};
   }

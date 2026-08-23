@@ -18,14 +18,17 @@ invoke exactly one matching remedy:
 | Expo Developer Menu sheet | `cdp_dev_settings(action="hideDevMenu")` |
 | Expo `Development servers` picker | `cdp_dismiss_dev_client_picker` |
 | Expo first-run tutorial | Replay the compatible owned locked/helper action through `cdp_run_action` |
-| React Native core dev menu | `cdp_dev_settings(action="disableDevMenu")` |
+| React Native core dev menu | Stop: no authority-approved close remedy exists |
 | App | None |
 
 Capture a second fresh snapshot after a remedy and require the app surface
-before navigation. `DEV_MENU_HIDE_UNVERIFIED` means the close call was sent but
+before navigation. An ordinary React Native core dev menu is a truthful stop;
+`disableDevMenu` only disables future shake opening and does not close a visible
+menu. `DEV_MENU_HIDE_UNVERIFIED` means the close call was sent but
 the surface is still occluded or could not be proven clean: classify again and
-do not fall back to coordinates or BACK. Keep USB transport as a separate
-readiness axis; never classify it as a menu state.
+do not fall back to coordinates or BACK. `DEV_MENU_HIDE_FAILED` means no close
+call was sent and also requires a fresh classification. Keep USB transport as
+a separate readiness axis; never classify it as a menu state.
 
 Check each subsystem and report status as a table:
 
