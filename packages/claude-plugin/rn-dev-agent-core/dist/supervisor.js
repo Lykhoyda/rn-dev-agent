@@ -95906,13 +95906,76 @@ var init_index = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/supervisor.js
-init_lockfile();
-init_parent_watch();
 import { randomUUID as randomUUID13 } from "node:crypto";
 import { spawn as spawn10 } from "node:child_process";
 import { lstatSync as lstatSync20, readFileSync as readFileSync43 } from "node:fs";
 import { dirname as dirname33, join as join61, resolve as resolve20 } from "node:path";
 import { fileURLToPath as fileURLToPath8 } from "node:url";
+
+// packages/rn-dev-agent-core/dist/lifecycle/child-error-or-exit.js
+var SQLITE_RELAUNCH_SIGNALS = ["SIGTERM", "SIGINT", "SIGHUP", "SIGUSR2"];
+function processSqliteRelaunchIo() {
+  return {
+    writeErrorLine: (line) => {
+      process.stderr.write(`${line}
+`);
+    },
+    exit: (code) => {
+      process.exit(code);
+    },
+    killSelf: (signal) => {
+      process.kill(process.pid, signal);
+    },
+    removeSignalListeners: (signal) => {
+      process.removeAllListeners(signal);
+    },
+    onSignal: (signal, handler) => {
+      process.on(signal, handler);
+    }
+  };
+}
+function awaitChildErrorOrExit(child) {
+  return new Promise((resolve21) => {
+    let settled = false;
+    const settle = (outcome) => {
+      if (settled)
+        return;
+      settled = true;
+      resolve21(outcome);
+    };
+    child.on("error", (err) => settle({
+      code: null,
+      signal: null,
+      error: err instanceof Error ? err : new Error(String(err))
+    }));
+    child.on("exit", (code, signal) => settle({ code, signal, error: null }));
+  });
+}
+async function completeSqliteRelaunch(child, io = processSqliteRelaunchIo()) {
+  for (const signal of SQLITE_RELAUNCH_SIGNALS) {
+    io.onSignal(signal, () => {
+      try {
+        child.kill?.(signal);
+      } catch {
+      }
+    });
+  }
+  const outcome = await awaitChildErrorOrExit(child);
+  if (outcome.error) {
+    io.writeErrorLine(`rn-bridge-supervisor: sqlite relaunch spawn failed: ${outcome.error.message}`);
+    io.exit(1);
+    return;
+  }
+  if (outcome.signal) {
+    io.removeSignalListeners(outcome.signal);
+    io.killSelf(outcome.signal);
+  }
+  io.exit(outcome.code ?? 1);
+}
+
+// packages/rn-dev-agent-core/dist/supervisor.js
+init_lockfile();
+init_parent_watch();
 
 // packages/rn-dev-agent-core/dist/lifecycle/stdio-frames.js
 var LineSplitter = class {
@@ -96249,15 +96312,7 @@ if (supervisorFlag.length > 0 && !process.execArgv.includes("--experimental-sqli
     stdio: "inherit",
     env: { ...process.env, RN_DEV_AGENT_SQLITE_RELAUNCHED: "1" }
   });
-  for (const signal of ["SIGTERM", "SIGINT", "SIGHUP", "SIGUSR2"]) {
-    process.on(signal, () => child.kill(signal));
-  }
-  const outcome = await new Promise((resolve21) => child.on("exit", (code, signal) => resolve21({ code, signal })));
-  if (outcome.signal) {
-    process.removeAllListeners(outcome.signal);
-    process.kill(process.pid, outcome.signal);
-  }
-  process.exit(outcome.code ?? 1);
+  await completeSqliteRelaunch(child);
 }
 function legacyRepairArtifactPresent(cwd) {
   try {
@@ -96355,7 +96410,7 @@ if (process.env.RN_BRIDGE_SUPERVISOR === "0") {
     };
     child.stdin?.on("error", () => {
     });
-    child.on("error", (err) => onDeath(null, null, `spawn failed: ${err.message}`));
+    void awaitChildErrorOrExit(child).then((outcome) => onDeath(outcome.code, outcome.signal, outcome.error ? `spawn failed: ${outcome.error.message}` : ""));
     if (child.stdout) {
       child.stdout.setEncoding("utf8");
       const childLines = new LineSplitter();
@@ -96366,7 +96421,6 @@ if (process.env.RN_BRIDGE_SUPERVISOR === "0") {
           apply2(core.onWorkerLine(line));
       });
     }
-    child.on("exit", (code, signal) => onDeath(code, signal, ""));
   }, closeAuthorityAndExit2 = function(exitCode = 0) {
     void authority?.close().then(() => process.exit(exitCode)).catch((error2) => {
       process.stderr.write(`rn-bridge-supervisor: authority cleanup failed: ${error2 instanceof Error ? error2.message : String(error2)}
