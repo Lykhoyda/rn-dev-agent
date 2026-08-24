@@ -131,10 +131,7 @@ function identityFromStat(path: string, stat: BigIntStats): UnfollowedFileIdenti
   };
 }
 
-function sameIdentity(
-  left: UnfollowedFileIdentity,
-  right: UnfollowedFileIdentity,
-): boolean {
+function sameIdentity(left: UnfollowedFileIdentity, right: UnfollowedFileIdentity): boolean {
   return (
     left.dev === right.dev &&
     left.ino === right.ino &&
@@ -284,11 +281,11 @@ export function readUnfollowedFiles(
         const stat = lstatSync(path, { bigint: true });
         return {
           relativePath,
-          identity:
-            stat.isSymbolicLink() || !stat.isFile() ? null : identityFromStat(path, stat),
+          identity: stat.isSymbolicLink() || !stat.isFile() ? null : identityFromStat(path, stat),
         };
       } catch (err) {
-        if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { relativePath, identity: null };
+        if ((err as NodeJS.ErrnoException).code === 'ENOENT')
+          return { relativePath, identity: null };
         throw err;
       }
     });
@@ -337,7 +334,9 @@ export function readUnfollowedFiles(
       const size = entry.identity ? Number(entry.identity.size) : 0;
       const framedBytes = UNFOLLOWED_READER_FRAME_BYTES + size;
       if (!Number.isSafeInteger(size) || framedBytes > UNFOLLOWED_READER_BATCH_BYTES) {
-        throw new Error(`Verified directory entry exceeds the safe batch size: ${entry.relativePath}.`);
+        throw new Error(
+          `Verified directory entry exceeds the safe batch size: ${entry.relativePath}.`,
+        );
       }
       if (
         batch.length > 0 &&

@@ -35,6 +35,7 @@ import {
   loadAction,
   loadActionFromContext,
   openReadableActionLoadContext,
+  resolveActionPath,
   writeRecordedActionTransaction,
 } from '../../dist/domain/action-store.js';
 import {
@@ -604,6 +605,28 @@ test('runFlow prefetch uses the validator native path semantics', () => {
   }
 });
 
+test('path-only action resolution does not require nested flow prefetch', () => {
+  const fixture = makeFixture();
+  try {
+    const actionsDir = join(fixture.primary, '.rn-agent', 'actions');
+    mkdirSync(actionsDir, { recursive: true });
+    writeFileSync(
+      join(actionsDir, 'login.yaml'),
+      fixtureYaml({ id: 'login', selectors: [] }).replace('- launchApp', '- runFlow: missing.yaml'),
+    );
+    const worktree = addWorktree(fixture, 'path-only-resolution');
+    inherit(worktree);
+
+    assert.equal(
+      resolveActionPath(worktree, 'login'),
+      join(worktree, '.rn-agent', 'actions', 'login.yaml'),
+    );
+    assert.equal(loadAction(worktree, 'login')?.replay.ok, false);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
 test('overwriting an action does not resolve its missing nested flow', () => {
   const fixture = makeFixture();
   try {
@@ -799,7 +822,7 @@ test('ordinary replay refuses success after its corpus changes during dispatch',
   }
 });
 
-test('replay expands a safely captured subflow before mutable paths can change', async () => {
+test('replay expands a safely captured subflow and refuses a later mutation', async () => {
   const fixture = makeFixture();
   try {
     mkdirSync(join(fixture.primary, '.rn-agent', 'actions'), { recursive: true });
@@ -822,13 +845,13 @@ test('replay expands a safely captured subflow before mutable paths can change',
         writeFileSync(childPath, '- tapOn:\n    id: "swapped-child"\n');
         assert.equal(args.flowPath, undefined);
         const replayYaml = args.inlineYaml ?? '';
-        const passed =
-          replayYaml.includes('captured-child') && !replayYaml.includes('swapped-child');
+        assert.equal(replayYaml.includes('captured-child'), true);
+        assert.equal(replayYaml.includes('swapped-child'), false);
         return {
           content: [
             {
               type: 'text',
-              text: JSON.stringify({ ok: passed, data: { passed, output: 'Flow result' } }),
+              text: JSON.stringify({ ok: true, data: { passed: true, output: 'Flow result' } }),
             },
           ],
         };
@@ -841,7 +864,9 @@ test('replay expands a safely captured subflow before mutable paths can change',
       forceReload: false,
       proofReplay: true,
     });
-    assert.equal((JSON.parse(result.content[0]!.text) as { ok?: boolean }).ok, true);
+    const envelope = JSON.parse(result.content[0]!.text) as { ok?: boolean; error?: string };
+    assert.equal(envelope.ok, false);
+    assert.match(envelope.error ?? '', /Refusing replaced learned-action corpus/);
   } finally {
     fixture.cleanup();
   }
