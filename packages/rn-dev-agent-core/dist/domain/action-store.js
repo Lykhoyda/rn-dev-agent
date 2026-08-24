@@ -11,8 +11,8 @@ import { parseM7Header, serializeM7Header, } from './reusable-action.js';
 import { loadOrInitSidecar, markSeen, saveSidecar, sidecarPathFor, yamlEditedSinceLastSeen, } from './sidecar-io.js';
 import { atomicWriter } from './atomic-writer.js';
 import { assertValidActionId, assertWithinDir } from './path-safety.js';
-import { listUnfollowedDirectory, readUnfollowedFiles } from './unfollowed-file.js';
-import { buildMaestroFlow, collectRunFlowFileReferences, parseAndValidateFlow, } from './maestro-validator.js';
+import { listUnfollowedDirectory, readUnfollowedFile, readUnfollowedFiles, } from './unfollowed-file.js';
+import { buildMaestroFlow, parseAndValidateFlow } from './maestro-validator.js';
 import { mirrorToDb } from './action-state-store.js';
 import { assertReadableActionOperationUnchanged, captureReadableActionOperationSnapshot, readableActionsSnapshot, resolveReadableActionCorpus, } from '../session/worktree-inheritance.js';
 /**
@@ -50,39 +50,6 @@ export function assertReadableActionCorpus(projectRoot) {
 }
 export function assertReadableActionLoadContextStable(context) {
     assertReadableActionOperationUnchanged(context.operation);
-}
-function publicationWitnesses(context) {
-    const { operation } = context;
-    const witnesses = [
-        {
-            path: operation.projectRoot,
-            kind: 'directory',
-            ...operation.projectRootIdentity,
-        },
-        {
-            path: operation.actionsDir,
-            kind: operation.kind === 'approved-inherited' ? 'symlink' : 'directory',
-            linkTarget: operation.linkTarget,
-            ...(operation.linkIdentity ?? operation.directoryIdentity),
-        },
-        {
-            path: operation.directory,
-            kind: 'directory',
-            ...operation.directoryIdentity,
-        },
-    ];
-    if (operation.primaryIdentity) {
-        witnesses.push({
-            path: operation.primaryIdentity.topLevel.path,
-            kind: 'directory',
-            ...operation.primaryIdentity.topLevel.identity,
-        }, {
-            path: operation.primaryIdentity.commonDir.path,
-            kind: 'directory',
-            ...operation.primaryIdentity.commonDir.identity,
-        });
-    }
-    return witnesses;
 }
 function lstatIfPresent(path) {
     try {
@@ -132,45 +99,7 @@ function ownedActionPathIdentityMatches(entries) {
         return false;
     }
 }
-function referencedActionPath(parentFile, reference) {
-    if (isAbsolute(reference) ||
-        reference.split(/[\\/]/).includes('..') ||
-        !/\.ya?ml$/i.test(reference)) {
-        return null;
-    }
-    const child = join(dirname(parentFile), reference);
-    if (child === '..' || child.startsWith(`..${sep}`) || isAbsolute(child))
-        return null;
-    return child;
-}
-function prefetchRunFlowFiles(snapshot, initial, readFiles) {
-    const fileContents = new Map(initial);
-    let frontier = [...fileContents.entries()];
-    for (let depth = 0; depth < 5 && frontier.length > 0; depth += 1) {
-        const pending = new Set();
-        for (const [parentFile, text] of frontier) {
-            for (const reference of collectRunFlowFileReferences(text)) {
-                const child = referencedActionPath(parentFile, reference);
-                if (child && !fileContents.has(child))
-                    pending.add(child);
-            }
-        }
-        const paths = [...pending].sort();
-        if (paths.length === 0)
-            break;
-        const contents = readFiles(snapshot.directory, snapshot.identity, paths);
-        frontier = [];
-        paths.forEach((path, index) => {
-            const text = contents[index];
-            if (text == null)
-                return;
-            fileContents.set(path, text);
-            frontier.push([path, text]);
-        });
-    }
-    return fileContents;
-}
-export function openReadableActionLoadContext(projectRoot, dependencies = {}) {
+export function openReadableActionLoadContext(projectRoot) {
     const corpus = resolveReadableActionCorpus(projectRoot);
     if (corpus.status === 'refused')
         throw new Error(corpus.reason);
@@ -181,28 +110,16 @@ export function openReadableActionLoadContext(projectRoot, dependencies = {}) {
     if (!snapshot || !operation)
         return null;
     const files = listUnfollowedDirectory(snapshot.directory, snapshot.identity);
-    const requestedFiles = dependencies.actionId
-        ? [`${dependencies.actionId}.yaml`, `${dependencies.actionId}.yml`]
-        : files;
-    const readableFiles = requestedFiles.filter((file) => /\.ya?ml$/.test(file) && files.includes(file));
-    const readFiles = dependencies.readFiles ?? readUnfollowedFiles;
-    const contents = readFiles(snapshot.directory, snapshot.identity, readableFiles);
+    const readableFiles = files.filter((file) => /\.ya?ml$/.test(file));
+    const contents = readUnfollowedFiles(snapshot.directory, snapshot.identity, readableFiles);
     const fileContents = new Map();
     readableFiles.forEach((file, index) => {
         const text = contents[index];
         if (text != null)
             fileContents.set(file, text);
     });
-    const completeFileContents = prefetchRunFlowFiles(snapshot, fileContents, readFiles);
     assertReadableActionOperationUnchanged(operation);
-    return {
-        projectRoot,
-        corpus,
-        snapshot,
-        operation,
-        files,
-        fileContents: completeFileContents,
-    };
+    return { projectRoot, corpus, snapshot, operation, files, fileContents };
 }
 function actionTextFromContext(context, fileName) {
     const text = context.fileContents.get(fileName);
@@ -244,7 +161,7 @@ function resolveActionFileNameFromContext(actionId, context) {
 }
 export function resolveActionPath(projectRoot, actionId) {
     assertValidActionId(actionId, 'resolveActionPath');
-    const context = openReadableActionLoadContext(projectRoot, { actionId });
+    const context = openReadableActionLoadContext(projectRoot);
     if (!context)
         return null;
     const fileName = resolveActionFileNameFromContext(actionId, context);
@@ -427,11 +344,8 @@ export function captureActionFromContext(context, actionId) {
                 if (child === '' || child === '..' || child.startsWith(`..${sep}`) || isAbsolute(child)) {
                     throw new Error(`Refusing action flow outside ${snapshot.directory}.`);
                 }
-                const text = context.fileContents.get(child);
-                if (text === undefined) {
-                    throw new Error(`Refusing inherited action symlink at ${snapshot.directory}/${child}.`);
-                }
-                return text;
+                return (context.fileContents.get(child) ??
+                    readUnfollowedFile(snapshot.directory, snapshot.identity, child));
             },
             realpathFn: (path) => resolve(path),
         });
@@ -466,7 +380,7 @@ export function loadActionFromContext(context, actionId) {
     };
 }
 export function loadAction(projectRoot, actionId) {
-    const context = openReadableActionLoadContext(projectRoot, { actionId });
+    const context = openReadableActionLoadContext(projectRoot);
     return context ? loadActionFromContext(context, actionId) : null;
 }
 export function captureActionFromPath(path) {
@@ -478,7 +392,7 @@ export function captureActionFromPath(path) {
         return null;
     }
     const actionId = basename(absolutePath).replace(/\.ya?ml$/i, '');
-    const context = openReadableActionLoadContext(dirname(dirname(actionsDir)), { actionId });
+    const context = openReadableActionLoadContext(dirname(dirname(actionsDir)));
     if (!context)
         return null;
     const action = captureActionFromContext(context, actionId);
@@ -601,42 +515,6 @@ export function commitMigratedActionText(filePath, baseline, yamlText) {
     });
     return { filePath, sidecarPath };
 }
-function serializeAction(action, existingYamlText) {
-    const existingTopSection = splitYaml(existingYamlText).topSection;
-    const topSection = existingTopSection || (action.metadata.appId ? `appId: ${action.metadata.appId}` : '');
-    return joinYaml({
-        topSection,
-        headerLines: serializeM7Header(action.metadata).split('\n'),
-        bodyLines: action.body.split('\n'),
-    });
-}
-export function saveActionFromContext(context, action) {
-    assertReadableActionLoadContextStable(context);
-    const fileName = basename(action.filePath);
-    const expectedFilePath = join(context.corpus.actionsDir, fileName);
-    if (action.filePath !== expectedFilePath || !/\.ya?ml$/i.test(fileName)) {
-        throw new Error(`Refusing action mutation outside the captured learned-action corpus.`);
-    }
-    const expectedYamlText = actionTextFromContext(context, fileName);
-    const targetFilePath = join(context.snapshot.directory, fileName);
-    const sidecarPath = sidecarPathFor(action.filePath);
-    const contextIsStable = () => {
-        try {
-            assertReadableActionLoadContextStable(context);
-            return true;
-        }
-        catch {
-            return false;
-        }
-    };
-    const written = atomicWriter.pairWriteConditional(targetFilePath, serializeAction(action, expectedYamlText), sidecarPath, action.state, contextIsStable, contextIsStable, expectedYamlText);
-    if (!written) {
-        assertReadableActionLoadContextStable(context);
-        throw new SaveActionPreconditionError(targetFilePath);
-    }
-    action.state = { ...action.state, lastSeenMtimeMs: written.finalMtimeMs };
-    return { filePath: action.filePath, sidecarPath };
-}
 export function saveAction(action) {
     assertWritableActionFile(action.filePath);
     // GH #113: soft-assertion contract enforcement. Both current callers
@@ -651,8 +529,21 @@ export function saveAction(action) {
     if (existsSync(action.filePath) && actionWasEditedExternally(action)) {
         throw new SaveActionPreconditionError(action.filePath);
     }
-    const existingYamlText = existsSync(action.filePath) ? readFileSync(action.filePath, 'utf8') : '';
-    const yamlText = serializeAction(action, existingYamlText);
+    // Read existing top section so we don't lose the `appId:` line.
+    let topSection = '';
+    if (existsSync(action.filePath)) {
+        const existing = readFileSync(action.filePath, 'utf8');
+        topSection = splitYaml(existing).topSection;
+    }
+    // If the action specifies an appId in metadata but the topSection
+    // doesn't have one, inject it. Otherwise preserve whatever the file
+    // had.
+    if (!topSection && action.metadata.appId) {
+        topSection = `appId: ${action.metadata.appId}`;
+    }
+    const headerLines = serializeM7Header(action.metadata).split('\n');
+    const bodyLines = action.body.split('\n');
+    const yamlText = joinYaml({ topSection, headerLines, bodyLines });
     // Issue #101: sidecar-first atomic pair-write. The atomicWriter owns
     // `lastSeenMtimeMs` correctness — even on partial failure, the
     // persisted sidecar will have lastSeenMtimeMs ≥ the YAML's actual
@@ -702,45 +593,7 @@ export function actionWasEditedExternally(action) {
  * No-op when the YAML mtime equals the sidecar's lastSeenMtimeMs (the
  * common case where no external write happened).
  */
-export function acknowledgeExternalEdit(action, context) {
-    if (context) {
-        const fileName = basename(action.filePath);
-        if (action.filePath !== join(context.corpus.actionsDir, fileName) ||
-            !/\.ya?ml$/i.test(fileName)) {
-            return action;
-        }
-        const targetFilePath = join(context.snapshot.directory, fileName);
-        let currentMtimeMs;
-        try {
-            assertReadableActionLoadContextStable(context);
-            currentMtimeMs = statSync(targetFilePath).mtimeMs;
-        }
-        catch {
-            return action;
-        }
-        if (currentMtimeMs <= action.state.lastSeenMtimeMs)
-            return action;
-        const nextState = markSeen(action.state, currentMtimeMs);
-        const publicationPrecondition = () => {
-            try {
-                assertReadableActionLoadContextStable(context);
-                return runtimeBaselineMatches(action.filePath, action.state);
-            }
-            catch {
-                return false;
-            }
-        };
-        if (!atomicWriter.writeSidecarConditional(targetFilePath, sidecarPathFor(action.filePath), nextState, publicationPrecondition, publicationWitnesses(context))) {
-            return action;
-        }
-        const nextAction = { ...action, state: nextState };
-        mirrorToDb({
-            yamlFilePath: action.filePath,
-            state: nextState,
-            meta: { appId: action.metadata.appId, status: action.metadata.status, path: action.filePath },
-        });
-        return nextAction;
-    }
+export function acknowledgeExternalEdit(action) {
     const nextAction = atomicWriter.withLock(action.filePath, () => {
         let currentMtimeMs;
         try {
@@ -874,40 +727,23 @@ function runtimeBaselineMatches(filePath, expected) {
  * actionWasEditedExternally guards. The sidecar equality check below remains
  * the CAS authority for telemetry lost-update protection.
  */
-export function saveActionRuntimeWithCAS(context, expected, nextState) {
-    const fileName = basename(expected.filePath);
-    const expectedFilePath = join(context.corpus.actionsDir, fileName);
-    if (expected.filePath !== expectedFilePath || !/\.ya?ml$/i.test(fileName)) {
-        return { ok: false, conflict: 'EXTERNAL_WRITE' };
-    }
-    const targetFilePath = join(context.snapshot.directory, fileName);
-    const sidecarPath = sidecarPathFor(expected.filePath);
-    const publicationPrecondition = () => {
-        try {
-            assertReadableActionLoadContextStable(context);
-            return runtimeBaselineMatches(expected.filePath, expected.state);
+export function saveActionRuntimeWithCAS(expected, nextState) {
+    return atomicWriter.withLock(expected.filePath, () => {
+        const sidecarPath = sidecarPathFor(expected.filePath);
+        if (!runtimeBaselineMatches(expected.filePath, expected.state)) {
+            return { ok: false, conflict: 'EXTERNAL_WRITE' };
         }
-        catch {
-            return false;
-        }
-    };
-    if (!atomicWriter.writeSidecarConditional(targetFilePath, sidecarPath, nextState, publicationPrecondition, publicationWitnesses(context))) {
-        return { ok: false, conflict: 'EXTERNAL_WRITE' };
-    }
-    expected.state = nextState;
-    return { ok: true, sidecarPath };
+        saveSidecar(expected.filePath, nextState);
+        expected.state = nextState;
+        return { ok: true, sidecarPath };
+    });
 }
 /** Byte-preserving lifecycle promotion; comments/body remain exactly intact. */
-export function promoteActionRuntimeWithCAS(context, expected, nextState) {
+export function promoteActionRuntimeWithCAS(expected, nextState) {
     try {
-        assertReadableActionLoadContextStable(context);
+        assertWritableActionFile(expected.filePath);
     }
     catch {
-        return { ok: false, conflict: 'EXTERNAL_WRITE' };
-    }
-    const fileName = basename(expected.filePath);
-    const expectedFilePath = join(context.corpus.actionsDir, fileName);
-    if (expected.filePath !== expectedFilePath || !/\.ya?ml$/i.test(fileName)) {
         return { ok: false, conflict: 'EXTERNAL_WRITE' };
     }
     const sidecarPath = sidecarPathFor(expected.filePath);
@@ -929,18 +765,16 @@ export function promoteActionRuntimeWithCAS(context, expected, nextState) {
     if ((yaml.match(marker) ?? []).length !== 1)
         return { ok: false, conflict: 'EXTERNAL_WRITE' };
     const promoted = yaml.replace(marker, '# status: active');
-    const targetFilePath = join(context.snapshot.directory, fileName);
-    const yamlPublicationPrecondition = () => {
+    const written = atomicWriter.pairWriteConditional(expected.filePath, promoted, sidecarPath, nextState, () => {
         try {
-            assertReadableActionLoadContextStable(context);
-            return (!actionWasEditedExternally(expected) && readFileSync(expected.filePath, 'utf8') === yaml);
+            return (runtimeBaselineMatches(expected.filePath, expected.state) &&
+                !actionWasEditedExternally(expected) &&
+                readFileSync(expected.filePath, 'utf8') === yaml);
         }
         catch {
             return false;
         }
-    };
-    const publicationPrecondition = () => yamlPublicationPrecondition() && runtimeBaselineMatches(expected.filePath, expected.state);
-    const written = atomicWriter.pairWriteConditional(targetFilePath, promoted, sidecarPath, nextState, publicationPrecondition, yamlPublicationPrecondition, yaml, publicationWitnesses(context));
+    }, undefined, yaml);
     if (!written)
         return { ok: false, conflict: 'EXTERNAL_WRITE' };
     expected.state = { ...nextState, lastSeenMtimeMs: written.finalMtimeMs };

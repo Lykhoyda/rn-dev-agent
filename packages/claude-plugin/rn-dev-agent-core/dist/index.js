@@ -12098,7 +12098,7 @@ function linkFileIntoVerifiedDirectory(directoryFd, candidatePath, targetPath) {
   }
   return false;
 }
-function runVerifiedPublicationHelper(helperPath, expectedSha256, args, directoryFd) {
+function runVerifiedPublicationHelper(helperPath, expectedSha256, args) {
   const boundPath = `${helperPath}.publish.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}`;
   copyFileSync(helperPath, boundPath, constants.COPYFILE_EXCL | constants.COPYFILE_FICLONE);
   chmodSync(boundPath, 448);
@@ -12106,10 +12106,7 @@ function runVerifiedPublicationHelper(helperPath, expectedSha256, args, director
     if (createHash3("sha256").update(readFileSync5(boundPath)).digest("hex") !== expectedSha256) {
       throw new Error("Conditional action publication helper changed before execution.");
     }
-    execFileSync2(boundPath, [...args], {
-      stdio: directoryFd === void 0 ? "ignore" : ["ignore", "ignore", "ignore", directoryFd],
-      timeout: 2e3
-    });
+    execFileSync2(boundPath, [...args], { stdio: "ignore", timeout: 2e3 });
     return true;
   } catch (error2) {
     if (error2.status === 10)
@@ -12118,38 +12115,6 @@ function runVerifiedPublicationHelper(helperPath, expectedSha256, args, director
   } finally {
     unlinkSync3(boundPath);
   }
-}
-function publicationWitnessArguments(witnesses) {
-  return witnesses.flatMap((witness) => [
-    witness.path,
-    witness.kind,
-    witness.dev,
-    witness.ino,
-    witness.linkTarget ?? ""
-  ]);
-}
-function publishFileIfUnchangedInVerifiedDirectory(directoryFd, targetName, candidateName, expectedName, witnesses) {
-  const helper = verifiedNativePublicationHelper();
-  return runVerifiedPublicationHelper(helper.path, helper.sha256, [
-    "--publish-relative-if-unchanged",
-    targetName,
-    candidateName,
-    expectedName,
-    ...publicationWitnessArguments(witnesses)
-  ], directoryFd);
-}
-function linkFileIntoVerifiedDirectoryFd(directoryFd, candidateName, targetName, witnesses) {
-  const helper = verifiedNativePublicationHelper();
-  return runVerifiedPublicationHelper(helper.path, helper.sha256, [
-    "--link-relative-if-unchanged",
-    candidateName,
-    targetName,
-    ...publicationWitnessArguments(witnesses)
-  ], directoryFd);
-}
-function unlinkFileFromVerifiedDirectoryFd(directoryFd, fileName) {
-  const helper = verifiedNativePublicationHelper();
-  return runVerifiedPublicationHelper(helper.path, helper.sha256, ["--unlink-relative-file", fileName], directoryFd);
 }
 function verifiedFilesystemHelper() {
   if (process.platform === "darwin") {
@@ -12175,7 +12140,7 @@ function runVerifiedFilesystemHelper(args) {
       throw new Error("Verified directory helper changed before execution.");
     }
     return execFileSync2(boundPath, [...args], {
-      maxBuffer: VERIFIED_FILESYSTEM_MAX_BUFFER_BYTES,
+      maxBuffer: 32 * 1024 * 1024,
       stdio: ["ignore", "pipe", "ignore"],
       timeout: 1e4
     });
@@ -12183,63 +12148,48 @@ function runVerifiedFilesystemHelper(args) {
     unlinkSync3(boundPath);
   }
 }
+function readFileFromVerifiedDirectory(directoryPath, identity2, relativePath) {
+  return runVerifiedFilesystemHelper([
+    "--read-directory-entry",
+    directoryPath,
+    relativePath,
+    identity2.dev,
+    identity2.ino
+  ]);
+}
 function readFilesFromVerifiedDirectory(directoryPath, identity2, relativePaths) {
   if (relativePaths.length === 0)
     return [];
+  const output = runVerifiedFilesystemHelper([
+    "--read-directory-entries",
+    directoryPath,
+    identity2.dev,
+    identity2.ino,
+    ...relativePaths
+  ]);
   const entries = [];
-  const batches = [];
-  let batch = [];
-  let batchBytes = 0;
+  let offset = 0;
   for (const relativePath of relativePaths) {
-    let framedBytes = VERIFIED_FILESYSTEM_ENTRY_FRAME_BYTES;
-    try {
-      const stat2 = lstatSync2(join7(directoryPath, relativePath));
-      if (stat2.isFile())
-        framedBytes += stat2.size;
-    } catch {
-      framedBytes = VERIFIED_FILESYSTEM_ENTRY_FRAME_BYTES;
+    if (offset + 9 > output.length) {
+      throw new Error(`Verified directory batch was truncated before ${relativePath}.`);
     }
-    if (batch.length > 0 && (batch.length >= VERIFIED_FILESYSTEM_BATCH_FILES || batchBytes + framedBytes > VERIFIED_FILESYSTEM_BATCH_BYTES)) {
-      batches.push(batch);
-      batch = [];
-      batchBytes = 0;
+    const status = output[offset];
+    const length = output.readBigUInt64BE(offset + 1);
+    offset += 9;
+    if (length > BigInt(Number.MAX_SAFE_INTEGER) || offset + Number(length) > output.length) {
+      throw new Error(`Verified directory batch was malformed at ${relativePath}.`);
     }
-    batch.push(relativePath);
-    batchBytes += framedBytes;
+    const end = offset + Number(length);
+    if (status === 0)
+      entries.push(Buffer.from(output.subarray(offset, end)));
+    else if (status === 1 && length === 0n)
+      entries.push(null);
+    else
+      throw new Error(`Verified directory batch had an invalid status for ${relativePath}.`);
+    offset = end;
   }
-  if (batch.length > 0)
-    batches.push(batch);
-  for (const currentBatch of batches) {
-    const output = runVerifiedFilesystemHelper([
-      "--read-directory-entries",
-      directoryPath,
-      identity2.dev,
-      identity2.ino,
-      ...currentBatch
-    ]);
-    let offset = 0;
-    for (const relativePath of currentBatch) {
-      if (offset + 9 > output.length) {
-        throw new Error(`Verified directory batch was truncated before ${relativePath}.`);
-      }
-      const status = output[offset];
-      const length = output.readBigUInt64BE(offset + 1);
-      offset += 9;
-      if (length > BigInt(Number.MAX_SAFE_INTEGER) || offset + Number(length) > output.length) {
-        throw new Error(`Verified directory batch was malformed at ${relativePath}.`);
-      }
-      const end = offset + Number(length);
-      if (status === 0)
-        entries.push(Buffer.from(output.subarray(offset, end)));
-      else if (status === 1 && length === 0n)
-        entries.push(null);
-      else
-        throw new Error(`Verified directory batch had an invalid status for ${relativePath}.`);
-      offset = end;
-    }
-    if (offset !== output.length)
-      throw new Error("Verified directory batch had trailing data.");
-  }
+  if (offset !== output.length)
+    throw new Error("Verified directory batch had trailing data.");
   return entries;
 }
 function listVerifiedDirectory(directoryPath, identity2) {
@@ -12425,29 +12375,25 @@ function probeRecordedProcessBirth(pid, dependencies) {
   }
   return { status: "unknown" };
 }
-var DARWIN_HELPER_MANIFEST, LINUX_PUBLICATION_HELPER_SHA256, VERIFIED_FILESYSTEM_MAX_BUFFER_BYTES, VERIFIED_FILESYSTEM_BATCH_BYTES, VERIFIED_FILESYSTEM_BATCH_FILES, VERIFIED_FILESYSTEM_ENTRY_FRAME_BYTES, VERIFIED_HELPER_SCRIPT;
+var DARWIN_HELPER_MANIFEST, LINUX_PUBLICATION_HELPER_SHA256, VERIFIED_HELPER_SCRIPT;
 var init_process_birth = __esm({
   "packages/rn-dev-agent-core/dist/session/process-birth.js"() {
     "use strict";
     init_trusted_system_executable();
     DARWIN_HELPER_MANIFEST = {
-      sourceSha256: "4f3ad25913f08e4518a8dec6918e73cc5e9bc80f7ec9e0cb9f64a363e1c8f147",
-      recipeSha256: "7e6b6b39a39ded2e3f748006264247e6d494fd5c9054cf8580ecb4396970b025",
-      stableBinarySha256: "1662cb03acb7f5cf3b879a851322602de522479a3e18dc0f4ec8ca5303592f23",
-      binarySha256: "3c0c6bd9b591feaf1246990f30d42d7ac8943d826e05ddcc0285f511d08da0d4",
+      sourceSha256: "955b36f932d7124525003fc88e8596a148ae5404b49f8381ff59435e52b272c6",
+      recipeSha256: "ad5e7452795eee5ee8da4321f4260760e6e0e8536193978cd721748385e3f2f4",
+      stableBinarySha256: "6109d6017208b7ea091feeb40cae6640ff925c54e391d1ec0e7737057c30ded4",
+      binarySha256: "47b75f81c09ba5bf966acad48055a1c287708241a44c876fa4483c3189ce5f1e",
       cdhashes: [
-        "d2af3d210165b1a915562e4ec1895a6286fd1d6f",
-        "26875724107a2489e9341d8d86ffa020b3b2d5a5"
+        "f5f6876043eadc558ca3d5d056c49b1d771aef6b",
+        "1c072373aff231d756e20fa008b0f9486b229888"
       ]
     };
     LINUX_PUBLICATION_HELPER_SHA256 = {
-      x64: "9a38afcecb28015c3016f509fb659db541d2f452bb48cfbcaa737b8b0f76df80",
-      arm64: "354dc1dfe1a80250a2b4a017eeff474f9ec77d5dbf70885b18b929afce9915be"
+      x64: "17b1b6e0edbecefc013ccb1308a444532a72d5910f794de53195a758789bd6bb",
+      arm64: "f9cb783474cc93e6dbb28e81b5a2e46d74c38926a392d75ce9ed5188bafe3520"
     };
-    VERIFIED_FILESYSTEM_MAX_BUFFER_BYTES = 32 * 1024 * 1024;
-    VERIFIED_FILESYSTEM_BATCH_BYTES = 24 * 1024 * 1024;
-    VERIFIED_FILESYSTEM_BATCH_FILES = 16;
-    VERIFIED_FILESYSTEM_ENTRY_FRAME_BYTES = 9;
     VERIFIED_HELPER_SCRIPT = `
 set -euo pipefail
 helper_pid=
@@ -24186,30 +24132,6 @@ function asRunFlow(cmd) {
   }
   return null;
 }
-function collectRunFlowFileReferences(yamlText) {
-  try {
-    const docs = import_yaml2.default.parseAllDocuments(yamlText, { strict: true });
-    const body = docs.at(-1)?.toJS();
-    if (!Array.isArray(body))
-      return [];
-    const references = /* @__PURE__ */ new Set();
-    const visit = (commands) => {
-      for (const command of commands) {
-        const runFlow = asRunFlow(command);
-        if (!runFlow)
-          continue;
-        if (runFlow.file !== void 0)
-          references.add(runFlow.file);
-        if (runFlow.commands)
-          visit(runFlow.commands);
-      }
-    };
-    visit(body);
-    return [...references];
-  } catch {
-    return [];
-  }
-}
 function resolveRunFlowTarget(file, opts) {
   if (!opts.flowDir || !opts.flowRoot) {
     throw new MaestroValidationError(`runFlow file ref "${file}" requires a flow root context (flowDir + flowRoot)`);
@@ -25856,35 +25778,11 @@ function withPairWriteLock(yamlPath, operation, acquisitionPrecondition) {
     }
   }
 }
-function pairWriteImpl(yamlPath, yamlContent, sidecarPath, state, publicationPrecondition, yamlPublicationPrecondition, expectedYamlContent, createExclusive = false, witnesses = []) {
+function pairWriteImpl(yamlPath, yamlContent, sidecarPath, state, publicationPrecondition, yamlPublicationPrecondition, expectedYamlContent, createExclusive = false) {
   if (publicationPrecondition && !publicationPrecondition())
     return null;
   ensureDir(yamlPath);
   ensureDir(sidecarPath);
-  let yamlDirectoryFd;
-  let sidecarDirectoryFd;
-  if (witnesses.length > 0) {
-    try {
-      yamlDirectoryFd = openSync2(dirname9(yamlPath), constants3.O_RDONLY | constants3.O_NOFOLLOW | constants3.O_DIRECTORY);
-      sidecarDirectoryFd = openSync2(dirname9(sidecarPath), constants3.O_RDONLY | constants3.O_NOFOLLOW | constants3.O_DIRECTORY);
-    } catch {
-      if (yamlDirectoryFd !== void 0)
-        closeSync2(yamlDirectoryFd);
-      return null;
-    }
-  }
-  try {
-    if (publicationPrecondition && !publicationPrecondition())
-      return null;
-    return pairWriteInDirectories(yamlPath, yamlContent, sidecarPath, state, publicationPrecondition, yamlPublicationPrecondition, expectedYamlContent, createExclusive, witnesses, yamlDirectoryFd, sidecarDirectoryFd);
-  } finally {
-    if (sidecarDirectoryFd !== void 0)
-      closeSync2(sidecarDirectoryFd);
-    if (yamlDirectoryFd !== void 0)
-      closeSync2(yamlDirectoryFd);
-  }
-}
-function pairWriteInDirectories(yamlPath, yamlContent, sidecarPath, state, publicationPrecondition, yamlPublicationPrecondition, expectedYamlContent, createExclusive, witnesses, yamlDirectoryFd, sidecarDirectoryFd) {
   let yamlMode;
   if (expectedYamlContent !== void 0) {
     let targetFd;
@@ -25927,48 +25825,21 @@ function pairWriteInDirectories(yamlPath, yamlContent, sidecarPath, state, publi
     ...state,
     lastSeenMtimeMs: projectedMtimeMs
   };
-  const projectedSidecar = JSON.stringify(projectedState, null, 2) + "\n";
   if (publicationPrecondition && !publicationPrecondition())
     return null;
-  atomicWriter._writeFileWithMode(sidecarTmp, projectedSidecar, sidecarMode);
+  atomicWriter._writeFileWithMode(sidecarTmp, JSON.stringify(projectedState, null, 2) + "\n", sidecarMode);
   if (publicationPrecondition && !publicationPrecondition()) {
-    removeCandidate(sidecarTmp, sidecarDirectoryFd);
+    atomicWriter._unlink(sidecarTmp);
     return null;
   }
   const priorSidecarExisted = publicationPrecondition ? atomicWriter._exists(sidecarPath) : false;
   const priorSidecar = priorSidecarExisted ? readFileSync13(sidecarPath, "utf8") : null;
   function restorePriorSidecar() {
     if (priorSidecar === null) {
-      if (sidecarDirectoryFd === void 0) {
-        atomicWriter._unlink(sidecarPath);
-      } else {
-        unlinkFileFromVerifiedDirectoryFd(sidecarDirectoryFd, basename2(sidecarPath));
-      }
+      atomicWriter._unlink(sidecarPath);
     } else {
-      const restoreStamp = generateTmpStamp();
-      const restorePath = `${sidecarPath}.tmp.${restoreStamp}`;
-      atomicWriter._writeFileWithMode(restorePath, priorSidecar, sidecarMode);
-      try {
-        if (sidecarDirectoryFd === void 0) {
-          atomicWriter._rename(restorePath, sidecarPath);
-        } else {
-          atomicWriter._publishIfUnchanged(restorePath, sidecarPath, projectedSidecar, restoreStamp, void 0, sidecarDirectoryFd);
-        }
-      } finally {
-        removeCandidate(restorePath, sidecarDirectoryFd);
-      }
-    }
-  }
-  function rollbackYaml() {
-    if (yamlDirectoryFd === void 0 || expectedYamlContent === void 0)
-      return;
-    const rollbackStamp = generateTmpStamp();
-    const rollbackPath = `${yamlPath}.tmp.${rollbackStamp}`;
-    atomicWriter._writeFileWithMode(rollbackPath, expectedYamlContent, yamlMode ?? 384);
-    try {
-      atomicWriter._publishIfUnchanged(rollbackPath, yamlPath, yamlContent, rollbackStamp, void 0, yamlDirectoryFd);
-    } finally {
-      removeCandidate(rollbackPath, yamlDirectoryFd);
+      atomicWriter._writeFileWithMode(sidecarTmp, priorSidecar, sidecarMode);
+      atomicWriter._rename(sidecarTmp, sidecarPath);
     }
   }
   function writeYamlTmp() {
@@ -25992,33 +25863,24 @@ function pairWriteInDirectories(yamlPath, yamlContent, sidecarPath, state, publi
       throw error2;
     }
     if (publicationPrecondition && !publicationPrecondition()) {
-      removeCandidate(sidecarTmp, sidecarDirectoryFd);
-      removeCandidate(yamlTmp, yamlDirectoryFd);
+      atomicWriter._unlink(sidecarTmp);
+      atomicWriter._unlink(yamlTmp);
       return null;
     }
-    const yamlPublished = (!publicationPrecondition || publicationPrecondition()) && atomicWriter._linkIfAbsent(yamlTmp, yamlPath, publicationPrecondition, yamlDirectoryFd, witnesses);
+    const yamlPublished = (!publicationPrecondition || publicationPrecondition()) && atomicWriter._linkIfAbsent(yamlTmp, yamlPath, publicationPrecondition);
     if (!yamlPublished) {
-      removeCandidate(sidecarTmp, sidecarDirectoryFd);
-      removeCandidate(yamlTmp, yamlDirectoryFd);
+      atomicWriter._unlink(sidecarTmp);
+      atomicWriter._unlink(yamlTmp);
       return null;
     }
-    if (sidecarDirectoryFd === void 0)
-      atomicWriter._rename(sidecarTmp, sidecarPath);
-    else if (!atomicWriter._linkIfAbsent(sidecarTmp, sidecarPath, publicationPrecondition, sidecarDirectoryFd, witnesses)) {
-      removeCandidate(yamlPath, yamlDirectoryFd);
-      removeCandidate(sidecarTmp, sidecarDirectoryFd);
-      return null;
-    }
-    removeCandidate(yamlTmp, yamlDirectoryFd);
+    atomicWriter._rename(sidecarTmp, sidecarPath);
+    atomicWriter._unlink(yamlTmp);
   } else {
     if (publicationPrecondition && !publicationPrecondition()) {
-      removeCandidate(sidecarTmp, sidecarDirectoryFd);
+      atomicWriter._unlink(sidecarTmp);
       return null;
     }
-    const sidecarPublished = sidecarDirectoryFd === void 0 ? (atomicWriter._rename(sidecarTmp, sidecarPath), true) : priorSidecar === null ? atomicWriter._linkIfAbsent(sidecarTmp, sidecarPath, publicationPrecondition, sidecarDirectoryFd, witnesses) : atomicWriter._publishIfUnchanged(sidecarTmp, sidecarPath, priorSidecar, stamp, publicationPrecondition, sidecarDirectoryFd, witnesses);
-    removeCandidate(sidecarTmp, sidecarDirectoryFd);
-    if (!sidecarPublished)
-      return null;
+    atomicWriter._rename(sidecarTmp, sidecarPath);
     try {
       writeYamlTmp();
     } catch (error2) {
@@ -26028,7 +25890,7 @@ function pairWriteInDirectories(yamlPath, yamlContent, sidecarPath, state, publi
       }
       throw error2;
     }
-    const yamlPublished = expectedYamlContent === void 0 ? !yamlPublicationPrecondition || yamlPublicationPrecondition() : atomicWriter._publishIfUnchanged(yamlTmp, yamlPath, expectedYamlContent, stamp, yamlPublicationPrecondition, yamlDirectoryFd, witnesses);
+    const yamlPublished = expectedYamlContent === void 0 ? !yamlPublicationPrecondition || yamlPublicationPrecondition() : atomicWriter._publishIfUnchanged(yamlTmp, yamlPath, expectedYamlContent, stamp, yamlPublicationPrecondition);
     if (!yamlPublished) {
       if (yamlPublicationPrecondition && !yamlPublicationPrecondition()) {
         try {
@@ -26040,13 +25902,11 @@ function pairWriteInDirectories(yamlPath, yamlContent, sidecarPath, state, publi
         }
       }
       restorePriorSidecar();
-      removeCandidate(yamlTmp, yamlDirectoryFd);
+      atomicWriter._unlink(yamlTmp);
       return null;
     }
     if (expectedYamlContent === void 0)
       atomicWriter._rename(yamlTmp, yamlPath);
-    else
-      removeCandidate(yamlTmp, yamlDirectoryFd);
   }
   const actualMtimeMs = atomicWriter._statMtimeMs(yamlPath);
   const finalMtimeMs = Math.max(actualMtimeMs, projectedMtimeMs);
@@ -26055,45 +25915,8 @@ function pairWriteInDirectories(yamlPath, yamlContent, sidecarPath, state, publi
     lastSeenMtimeMs: finalMtimeMs
   };
   atomicWriter._writeFileWithMode(sidecarTmp, JSON.stringify(finalState, null, 2) + "\n", sidecarMode);
-  const publishedYamlMatches = () => {
-    try {
-      const yamlFd = openSync2(yamlPath, constants3.O_RDONLY | constants3.O_NOFOLLOW);
-      try {
-        const yaml2 = fstatSync2(yamlFd);
-        return yaml2.isFile() && readFileSync13(yamlFd, "utf8") === yamlContent;
-      } finally {
-        closeSync2(yamlFd);
-      }
-    } catch {
-      return false;
-    }
-  };
-  if (!publishedYamlMatches()) {
-    removeCandidate(sidecarTmp, sidecarDirectoryFd);
-    rollbackYaml();
-    restorePriorSidecar();
-    return null;
-  }
-  const finalSidecarPublished = sidecarDirectoryFd === void 0 ? (atomicWriter._rename(sidecarTmp, sidecarPath), true) : atomicWriter._publishIfUnchanged(sidecarTmp, sidecarPath, projectedSidecar, `${stamp}.final`, witnesses.length === 0 ? publishedYamlMatches : void 0, sidecarDirectoryFd, witnesses);
-  removeCandidate(sidecarTmp, sidecarDirectoryFd);
-  if (!finalSidecarPublished) {
-    rollbackYaml();
-    restorePriorSidecar();
-    return null;
-  }
+  atomicWriter._rename(sidecarTmp, sidecarPath);
   return { yamlPath, sidecarPath, finalMtimeMs, refreshedSidecar: true };
-}
-function removeCandidate(path, directoryFd) {
-  try {
-    atomicWriter._unlink(path);
-  } catch {
-  }
-  if (directoryFd !== void 0) {
-    try {
-      unlinkFileFromVerifiedDirectoryFd(directoryFd, basename2(path));
-    } catch {
-    }
-  }
 }
 function ensureDir(filePath) {
   const dir = dirname9(filePath);
@@ -26176,32 +25999,29 @@ var init_atomic_writer = __esm({
       _readdir(path) {
         return readdirSync5(path);
       },
-      _linkIfAbsent(candidatePath, targetPath, publicationPrecondition, directoryFd, witnesses = []) {
+      _linkIfAbsent(candidatePath, targetPath, publicationPrecondition) {
         if (publicationPrecondition && !publicationPrecondition())
           return false;
-        if (directoryFd !== void 0) {
-          return linkFileIntoVerifiedDirectoryFd(directoryFd, basename2(candidatePath), basename2(targetPath), witnesses);
-        }
-        let openedDirectoryFd;
+        let directoryFd;
         try {
-          openedDirectoryFd = openSync2(dirname9(targetPath), constants3.O_RDONLY | constants3.O_NOFOLLOW | constants3.O_DIRECTORY);
+          directoryFd = openSync2(dirname9(targetPath), constants3.O_RDONLY | constants3.O_NOFOLLOW | constants3.O_DIRECTORY);
         } catch {
           return false;
         }
         try {
-          const directory = fstatSync2(openedDirectoryFd);
+          const directory = fstatSync2(directoryFd);
           if (!directory.isDirectory() || publicationPrecondition && !publicationPrecondition()) {
             return false;
           }
-          return atomicWriter._linkIntoVerifiedDirectory(openedDirectoryFd, candidatePath, targetPath);
+          return atomicWriter._linkIntoVerifiedDirectory(directoryFd, candidatePath, targetPath);
         } finally {
-          closeSync2(openedDirectoryFd);
+          closeSync2(directoryFd);
         }
       },
       _linkIntoVerifiedDirectory(directoryFd, candidatePath, targetPath) {
         return linkFileIntoVerifiedDirectory(directoryFd, candidatePath, targetPath);
       },
-      _publishIfUnchanged(candidatePath, targetPath, expectedContent, stamp, publicationPrecondition, directoryFd, witnesses = []) {
+      _publishIfUnchanged(candidatePath, targetPath, expectedContent, stamp, publicationPrecondition) {
         let targetFd;
         try {
           targetFd = openSync2(targetPath, constants3.O_RDONLY | constants3.O_NOFOLLOW);
@@ -26218,21 +26038,9 @@ var init_atomic_writer = __esm({
           chmodSync5(candidatePath, opened.mode & 4095);
           atomicWriter._writeFileWithMode(expectedPath, expectedContent, opened.mode & 4095);
           try {
-            if (directoryFd !== void 0) {
-              return publishFileIfUnchangedInVerifiedDirectory(directoryFd, basename2(targetPath), basename2(candidatePath), basename2(expectedPath), witnesses);
-            }
             return publishFileIfUnchangedDarwin(targetFd, targetPath, candidatePath, expectedPath);
           } finally {
-            try {
-              atomicWriter._unlink(expectedPath);
-            } catch {
-            }
-            if (directoryFd !== void 0) {
-              try {
-                unlinkFileFromVerifiedDirectoryFd(directoryFd, basename2(expectedPath));
-              } catch {
-              }
-            }
+            atomicWriter._unlink(expectedPath);
           }
         } catch {
           return false;
@@ -26257,63 +26065,6 @@ var init_atomic_writer = __esm({
                 atomicWriter._unlink(candidatePath);
               } catch {
               }
-            }
-          }, precondition);
-        } catch (error2) {
-          if (error2 === ACTION_WRITE_PRECONDITION)
-            return false;
-          throw error2;
-        }
-      },
-      writeSidecarConditional(yamlPath, sidecarPath, state, precondition, witnesses = []) {
-        try {
-          return withPairWriteLock(yamlPath, () => {
-            if (!precondition())
-              return false;
-            cleanupOrphans(yamlPath, sidecarPath);
-            ensureDir(sidecarPath);
-            const directoryFd = openSync2(dirname9(sidecarPath), constants3.O_RDONLY | constants3.O_NOFOLLOW | constants3.O_DIRECTORY);
-            try {
-              if (!precondition())
-                return false;
-              let expectedContent = null;
-              let mode = 384;
-              try {
-                const sidecarFd = openSync2(sidecarPath, constants3.O_RDONLY | constants3.O_NOFOLLOW);
-                try {
-                  const sidecar = fstatSync2(sidecarFd);
-                  if (!sidecar.isFile())
-                    return false;
-                  expectedContent = readFileSync13(sidecarFd, "utf8");
-                  mode = sidecar.mode & 4095;
-                } finally {
-                  closeSync2(sidecarFd);
-                }
-              } catch (error2) {
-                if (error2.code !== "ENOENT")
-                  return false;
-              }
-              if (!precondition())
-                return false;
-              const stamp = generateTmpStamp();
-              const candidatePath = `${sidecarPath}.tmp.${stamp}`;
-              atomicWriter._writeFileWithMode(candidatePath, JSON.stringify(state, null, 2) + "\n", mode);
-              try {
-                if (!precondition())
-                  return false;
-                return expectedContent === null ? atomicWriter._linkIfAbsent(candidatePath, sidecarPath, precondition, directoryFd, witnesses) : atomicWriter._publishIfUnchanged(candidatePath, sidecarPath, expectedContent, stamp, precondition, directoryFd, witnesses);
-              } finally {
-                try {
-                  atomicWriter._unlink(candidatePath);
-                } catch {
-                }
-                try {
-                  unlinkFileFromVerifiedDirectoryFd(directoryFd, basename2(candidatePath));
-                } catch {
-                }
-              }
-            } finally {
-              closeSync2(directoryFd);
             }
           }, precondition);
         } catch (error2) {
@@ -26350,13 +26101,13 @@ var init_atomic_writer = __esm({
           throw error2;
         }
       },
-      pairWriteConditional(yamlPath, yamlContent, sidecarPath, state, precondition, yamlPublicationPrecondition, expectedYamlContent, witnesses = []) {
+      pairWriteConditional(yamlPath, yamlContent, sidecarPath, state, precondition, yamlPublicationPrecondition, expectedYamlContent) {
         try {
           return withPairWriteLock(yamlPath, () => {
             if (!precondition())
               return null;
             cleanupOrphans(yamlPath, sidecarPath);
-            return pairWriteImpl(yamlPath, yamlContent, sidecarPath, state, precondition, yamlPublicationPrecondition, expectedYamlContent, false, witnesses);
+            return pairWriteImpl(yamlPath, yamlContent, sidecarPath, state, precondition, yamlPublicationPrecondition, expectedYamlContent);
           }, precondition);
         } catch (error2) {
           if (error2 === ACTION_WRITE_PRECONDITION)
@@ -26416,6 +26167,13 @@ var init_path_safety = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/domain/unfollowed-file.js
+function readUnfollowedFile(directoryPath, identity2, relativePath) {
+  try {
+    return readFileFromVerifiedDirectory(directoryPath, identity2, relativePath).toString("utf8");
+  } catch (err) {
+    throw new Error(`Refusing inherited action symlink at ${directoryPath}/${relativePath}: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
 function readUnfollowedFiles(directoryPath, identity2, relativePaths) {
   try {
     return readFilesFromVerifiedDirectory(directoryPath, identity2, relativePaths).map((entry) => entry ? entry.toString("utf8") : null);
@@ -27083,14 +26841,6 @@ function resolveReadableActionCorpus(projectRoot, dependencies = {}) {
   const rnAgentStat = lstatIfPresent(rnAgentDir);
   if (!rnAgentStat)
     return { status: "absent" };
-  const rootStat = lstatIfPresent(root);
-  if (!rootStat || rootStat.isSymbolicLink() || !rootStat.isDirectory()) {
-    return refuseCorpus(`Refusing learned-action corpus symlink at ${root}.`);
-  }
-  const projectIdentity = identityOf(rootStat);
-  if (!openUnfollowedDirectory(root, projectIdentity)) {
-    return refuseCorpus(`Refusing learned-action corpus symlink at ${root}.`);
-  }
   if (rnAgentStat.isSymbolicLink() || !rnAgentStat.isDirectory()) {
     return refuseCorpus(`Refusing learned-action corpus symlink at ${rnAgentDir}.`);
   }
@@ -27117,13 +26867,9 @@ function resolveReadableActionCorpus(projectRoot, dependencies = {}) {
     if (!directoryIdentityUnchanged(actionsDir, identity2)) {
       return refuseReplacedActions(actionsDir);
     }
-    if (!directoryIdentityUnchanged(root, projectIdentity)) {
-      return refuseReplacedActions(actionsDir);
-    }
     return {
       status: "owned-directory",
       projectRoot: root,
-      projectIdentity,
       rnAgentDir,
       actionsDir,
       identity: identity2
@@ -27161,27 +26907,15 @@ function resolveReadableActionCorpus(projectRoot, dependencies = {}) {
   }
   dependencies.afterTargetOpen?.();
   const plannedAfter = planResource(layout, SHAREABLE_RESOURCES[0]);
-  if (plannedAfter.state !== "LINK_VALID_SAFE" || !plannedAfter.evidence || plannedAfter.evidence.dev !== planned.evidence.dev || plannedAfter.evidence.ino !== planned.evidence.ino || plannedAfter.sourceState !== "AVAILABLE" || !sameSourceEvidence(planned.sourceEvidence, plannedAfter.sourceEvidence) || !sourceLeafMatchesIdentity(planned.sourceEvidence, targetIdentity) || !sourceLeafMatchesIdentity(plannedAfter.sourceEvidence, targetIdentity) || !directoryIdentityUnchanged(root, projectIdentity) || !directoryIdentityUnchanged(rnAgentDir, rnAgentIdentity) || !repositoryIdentityUnchanged(primaryIdentity)) {
-    return refuseReplacedActions(actionsDir);
-  }
-  let linkTarget;
-  try {
-    linkTarget = readlinkSync2(actionsDir);
-  } catch {
-    return refuseReplacedActions(actionsDir);
-  }
-  const finalLinkStat = lstatIfPresent(actionsDir);
-  if (!finalLinkStat?.isSymbolicLink() || !sameIdentity(identityOf(finalLinkStat), planned.evidence) || canonical(actionsDir) !== targetDir) {
+  if (plannedAfter.state !== "LINK_VALID_SAFE" || !plannedAfter.evidence || plannedAfter.evidence.dev !== planned.evidence.dev || plannedAfter.evidence.ino !== planned.evidence.ino || plannedAfter.sourceState !== "AVAILABLE" || !sameSourceEvidence(planned.sourceEvidence, plannedAfter.sourceEvidence) || !sourceLeafMatchesIdentity(planned.sourceEvidence, targetIdentity) || !sourceLeafMatchesIdentity(plannedAfter.sourceEvidence, targetIdentity) || !directoryIdentityUnchanged(rnAgentDir, rnAgentIdentity) || !repositoryIdentityUnchanged(primaryIdentity)) {
     return refuseReplacedActions(actionsDir);
   }
   return {
     status: "approved-inherited",
     projectRoot: root,
-    projectIdentity,
     rnAgentDir,
     actionsDir,
     targetDir,
-    linkTarget,
     linkIdentity: planned.evidence,
     targetIdentity,
     primaryRoot: layout.primaryRoot,
@@ -27209,17 +26943,11 @@ function captureDirectoryIdentity(path) {
 }
 function captureReadableActionOperationSnapshot(corpus) {
   const operationId = `${process.pid}:${++readableActionOperationSequence}`;
-  if (corpus.status !== "owned-directory" && corpus.status !== "approved-inherited")
-    return null;
-  if (!directoryIdentityUnchanged(corpus.projectRoot, corpus.projectIdentity)) {
-    throw new Error(refuseReplacedActions(corpus.actionsDir).reason);
-  }
   if (corpus.status === "owned-directory") {
     return Object.freeze({
       operationId,
       kind: corpus.status,
       projectRoot: corpus.projectRoot,
-      projectRootIdentity: freezeIdentity(corpus.projectIdentity),
       actionsDir: corpus.actionsDir,
       directory: corpus.actionsDir,
       directoryIdentity: freezeIdentity(corpus.identity)
@@ -27233,11 +26961,9 @@ function captureReadableActionOperationSnapshot(corpus) {
       operationId,
       kind: corpus.status,
       projectRoot: corpus.projectRoot,
-      projectRootIdentity: freezeIdentity(corpus.projectIdentity),
       actionsDir: corpus.actionsDir,
       directory: corpus.targetDir,
       directoryIdentity: freezeIdentity(corpus.targetIdentity),
-      linkTarget: corpus.linkTarget,
       linkIdentity: freezeIdentity(corpus.linkIdentity),
       primaryIdentity: Object.freeze({
         topLevel: Object.freeze({
@@ -27260,21 +26986,12 @@ function currentIdentityMatches(path, expected, kind) {
   const typeMatches = kind === "directory" ? current.isDirectory() : current.isSymbolicLink();
   return typeMatches && String(current.dev) === expected.dev && String(current.ino) === expected.ino;
 }
-function currentLinkTargetMatches(path, expected) {
-  if (expected === void 0)
-    return false;
-  try {
-    return readlinkSync2(path) === expected;
-  } catch {
-    return false;
-  }
-}
 function assertReadableActionOperationUnchanged(snapshot) {
-  let unchanged = currentIdentityMatches(snapshot.projectRoot, snapshot.projectRootIdentity, "directory") && canonical(snapshot.projectRoot) === snapshot.projectRoot;
+  let unchanged = canonical(snapshot.projectRoot) === snapshot.projectRoot;
   if (snapshot.kind === "owned-directory") {
     unchanged = unchanged && currentIdentityMatches(snapshot.actionsDir, snapshot.directoryIdentity, "directory") && canonical(snapshot.actionsDir) === snapshot.directory;
   } else {
-    unchanged = unchanged && Boolean(snapshot.linkIdentity && snapshot.primaryIdentity) && currentIdentityMatches(snapshot.actionsDir, snapshot.linkIdentity, "symlink") && currentLinkTargetMatches(snapshot.actionsDir, snapshot.linkTarget) && currentIdentityMatches(snapshot.directory, snapshot.directoryIdentity, "directory") && currentIdentityMatches(snapshot.primaryIdentity.topLevel.path, snapshot.primaryIdentity.topLevel.identity, "directory") && currentIdentityMatches(snapshot.primaryIdentity.commonDir.path, snapshot.primaryIdentity.commonDir.identity, "directory") && canonical(snapshot.actionsDir) === snapshot.directory && canonical(snapshot.directory) === snapshot.directory && canonical(snapshot.primaryIdentity.topLevel.path) === snapshot.primaryIdentity.topLevel.path && canonical(snapshot.primaryIdentity.commonDir.path) === snapshot.primaryIdentity.commonDir.path;
+    unchanged = unchanged && Boolean(snapshot.linkIdentity && snapshot.primaryIdentity) && currentIdentityMatches(snapshot.actionsDir, snapshot.linkIdentity, "symlink") && currentIdentityMatches(snapshot.directory, snapshot.directoryIdentity, "directory") && currentIdentityMatches(snapshot.primaryIdentity.topLevel.path, snapshot.primaryIdentity.topLevel.identity, "directory") && currentIdentityMatches(snapshot.primaryIdentity.commonDir.path, snapshot.primaryIdentity.commonDir.identity, "directory") && canonical(snapshot.actionsDir) === snapshot.directory && canonical(snapshot.directory) === snapshot.directory && canonical(snapshot.primaryIdentity.topLevel.path) === snapshot.primaryIdentity.topLevel.path && canonical(snapshot.primaryIdentity.commonDir.path) === snapshot.primaryIdentity.commonDir.path;
   }
   if (!unchanged)
     throw new Error(refuseReplacedActions(snapshot.actionsDir).reason);
@@ -27478,9 +27195,6 @@ function classifyLegacyParent(layout, localAnchor, parent) {
   const expected = layout.primaryAppRoot ? canonical(join19(layout.primaryAppRoot, parent)) : null;
   return resolved && expected && resolved === expected ? "expected" : "foreign";
 }
-function sameIdentity(left, right) {
-  return Boolean(left && right && left.dev === right.dev && left.ino === right.ino);
-}
 var SHAREABLE_RESOURCES, repositoryIdentityEvidence, GIT_ENV_OVERRIDES, readableActionOperationSequence, LOCAL_CONTENT;
 var init_worktree_inheritance = __esm({
   "packages/rn-dev-agent-core/dist/session/worktree-inheritance.js"() {
@@ -27533,39 +27247,6 @@ function assertOwnedActionCorpus(projectRoot) {
 function assertReadableActionLoadContextStable(context) {
   assertReadableActionOperationUnchanged(context.operation);
 }
-function publicationWitnesses(context) {
-  const { operation } = context;
-  const witnesses = [
-    {
-      path: operation.projectRoot,
-      kind: "directory",
-      ...operation.projectRootIdentity
-    },
-    {
-      path: operation.actionsDir,
-      kind: operation.kind === "approved-inherited" ? "symlink" : "directory",
-      linkTarget: operation.linkTarget,
-      ...operation.linkIdentity ?? operation.directoryIdentity
-    },
-    {
-      path: operation.directory,
-      kind: "directory",
-      ...operation.directoryIdentity
-    }
-  ];
-  if (operation.primaryIdentity) {
-    witnesses.push({
-      path: operation.primaryIdentity.topLevel.path,
-      kind: "directory",
-      ...operation.primaryIdentity.topLevel.identity
-    }, {
-      path: operation.primaryIdentity.commonDir.path,
-      kind: "directory",
-      ...operation.primaryIdentity.commonDir.identity
-    });
-  }
-  return witnesses;
-}
 function lstatIfPresent2(path) {
   try {
     return lstatSync9(path);
@@ -27609,43 +27290,7 @@ function ownedActionPathIdentityMatches(entries) {
     return false;
   }
 }
-function referencedActionPath(parentFile, reference) {
-  if (isAbsolute3(reference) || reference.split(/[\\/]/).includes("..") || !/\.ya?ml$/i.test(reference)) {
-    return null;
-  }
-  const child = join20(dirname13(parentFile), reference);
-  if (child === ".." || child.startsWith(`..${sep6}`) || isAbsolute3(child))
-    return null;
-  return child;
-}
-function prefetchRunFlowFiles(snapshot, initial, readFiles) {
-  const fileContents = new Map(initial);
-  let frontier = [...fileContents.entries()];
-  for (let depth = 0; depth < 5 && frontier.length > 0; depth += 1) {
-    const pending2 = /* @__PURE__ */ new Set();
-    for (const [parentFile, text] of frontier) {
-      for (const reference of collectRunFlowFileReferences(text)) {
-        const child = referencedActionPath(parentFile, reference);
-        if (child && !fileContents.has(child))
-          pending2.add(child);
-      }
-    }
-    const paths = [...pending2].sort();
-    if (paths.length === 0)
-      break;
-    const contents = readFiles(snapshot.directory, snapshot.identity, paths);
-    frontier = [];
-    paths.forEach((path, index) => {
-      const text = contents[index];
-      if (text == null)
-        return;
-      fileContents.set(path, text);
-      frontier.push([path, text]);
-    });
-  }
-  return fileContents;
-}
-function openReadableActionLoadContext(projectRoot, dependencies = {}) {
+function openReadableActionLoadContext(projectRoot) {
   const corpus = resolveReadableActionCorpus(projectRoot);
   if (corpus.status === "refused")
     throw new Error(corpus.reason);
@@ -27656,26 +27301,16 @@ function openReadableActionLoadContext(projectRoot, dependencies = {}) {
   if (!snapshot || !operation)
     return null;
   const files = listUnfollowedDirectory(snapshot.directory, snapshot.identity);
-  const requestedFiles = dependencies.actionId ? [`${dependencies.actionId}.yaml`, `${dependencies.actionId}.yml`] : files;
-  const readableFiles = requestedFiles.filter((file) => /\.ya?ml$/.test(file) && files.includes(file));
-  const readFiles = dependencies.readFiles ?? readUnfollowedFiles;
-  const contents = readFiles(snapshot.directory, snapshot.identity, readableFiles);
+  const readableFiles = files.filter((file) => /\.ya?ml$/.test(file));
+  const contents = readUnfollowedFiles(snapshot.directory, snapshot.identity, readableFiles);
   const fileContents = /* @__PURE__ */ new Map();
   readableFiles.forEach((file, index) => {
     const text = contents[index];
     if (text != null)
       fileContents.set(file, text);
   });
-  const completeFileContents = prefetchRunFlowFiles(snapshot, fileContents, readFiles);
   assertReadableActionOperationUnchanged(operation);
-  return {
-    projectRoot,
-    corpus,
-    snapshot,
-    operation,
-    files,
-    fileContents: completeFileContents
-  };
+  return { projectRoot, corpus, snapshot, operation, files, fileContents };
 }
 function actionTextFromContext(context, fileName) {
   const text = context.fileContents.get(fileName);
@@ -27717,7 +27352,7 @@ function resolveActionFileNameFromContext(actionId, context) {
 }
 function resolveActionPath(projectRoot, actionId) {
   assertValidActionId(actionId, "resolveActionPath");
-  const context = openReadableActionLoadContext(projectRoot, { actionId });
+  const context = openReadableActionLoadContext(projectRoot);
   if (!context)
     return null;
   const fileName = resolveActionFileNameFromContext(actionId, context);
@@ -27855,11 +27490,7 @@ function captureActionFromContext(context, actionId) {
         if (child === "" || child === ".." || child.startsWith(`..${sep6}`) || isAbsolute3(child)) {
           throw new Error(`Refusing action flow outside ${snapshot.directory}.`);
         }
-        const text2 = context.fileContents.get(child);
-        if (text2 === void 0) {
-          throw new Error(`Refusing inherited action symlink at ${snapshot.directory}/${child}.`);
-        }
-        return text2;
+        return context.fileContents.get(child) ?? readUnfollowedFile(snapshot.directory, snapshot.identity, child);
       },
       realpathFn: (path) => resolve5(path)
     });
@@ -27893,7 +27524,7 @@ function loadActionFromContext(context, actionId) {
   };
 }
 function loadAction(projectRoot, actionId) {
-  const context = openReadableActionLoadContext(projectRoot, { actionId });
+  const context = openReadableActionLoadContext(projectRoot);
   return context ? loadActionFromContext(context, actionId) : null;
 }
 function captureActionFromPath(path) {
@@ -27905,54 +27536,28 @@ function captureActionFromPath(path) {
     return null;
   }
   const actionId = basename4(absolutePath).replace(/\.ya?ml$/i, "");
-  const context = openReadableActionLoadContext(dirname13(dirname13(actionsDir)), { actionId });
+  const context = openReadableActionLoadContext(dirname13(dirname13(actionsDir)));
   if (!context)
     return null;
   const action = captureActionFromContext(context, actionId);
   return action && basename4(action.filePath) === basename4(absolutePath) ? action : null;
-}
-function serializeAction(action, existingYamlText) {
-  const existingTopSection = splitYaml(existingYamlText).topSection;
-  const topSection = existingTopSection || (action.metadata.appId ? `appId: ${action.metadata.appId}` : "");
-  return joinYaml({
-    topSection,
-    headerLines: serializeM7Header(action.metadata).split("\n"),
-    bodyLines: action.body.split("\n")
-  });
-}
-function saveActionFromContext(context, action) {
-  assertReadableActionLoadContextStable(context);
-  const fileName = basename4(action.filePath);
-  const expectedFilePath = join20(context.corpus.actionsDir, fileName);
-  if (action.filePath !== expectedFilePath || !/\.ya?ml$/i.test(fileName)) {
-    throw new Error(`Refusing action mutation outside the captured learned-action corpus.`);
-  }
-  const expectedYamlText = actionTextFromContext(context, fileName);
-  const targetFilePath = join20(context.snapshot.directory, fileName);
-  const sidecarPath = sidecarPathFor(action.filePath);
-  const contextIsStable = () => {
-    try {
-      assertReadableActionLoadContextStable(context);
-      return true;
-    } catch {
-      return false;
-    }
-  };
-  const written = atomicWriter.pairWriteConditional(targetFilePath, serializeAction(action, expectedYamlText), sidecarPath, action.state, contextIsStable, contextIsStable, expectedYamlText);
-  if (!written) {
-    assertReadableActionLoadContextStable(context);
-    throw new SaveActionPreconditionError(targetFilePath);
-  }
-  action.state = { ...action.state, lastSeenMtimeMs: written.finalMtimeMs };
-  return { filePath: action.filePath, sidecarPath };
 }
 function saveAction(action) {
   assertWritableActionFile(action.filePath);
   if (existsSync17(action.filePath) && actionWasEditedExternally(action)) {
     throw new SaveActionPreconditionError(action.filePath);
   }
-  const existingYamlText = existsSync17(action.filePath) ? readFileSync16(action.filePath, "utf8") : "";
-  const yamlText = serializeAction(action, existingYamlText);
+  let topSection = "";
+  if (existsSync17(action.filePath)) {
+    const existing = readFileSync16(action.filePath, "utf8");
+    topSection = splitYaml(existing).topSection;
+  }
+  if (!topSection && action.metadata.appId) {
+    topSection = `appId: ${action.metadata.appId}`;
+  }
+  const headerLines = serializeM7Header(action.metadata).split("\n");
+  const bodyLines = action.body.split("\n");
+  const yamlText = joinYaml({ topSection, headerLines, bodyLines });
   const sidecarPath = sidecarPathFor(action.filePath);
   const result = atomicWriter.pairWrite(action.filePath, yamlText, sidecarPath, action.state);
   const stateToWrite = { ...action.state, lastSeenMtimeMs: result.finalMtimeMs };
@@ -27967,42 +27572,7 @@ function saveAction(action) {
 function actionWasEditedExternally(action) {
   return yamlEditedSinceLastSeen(action.filePath, action.state);
 }
-function acknowledgeExternalEdit(action, context) {
-  if (context) {
-    const fileName = basename4(action.filePath);
-    if (action.filePath !== join20(context.corpus.actionsDir, fileName) || !/\.ya?ml$/i.test(fileName)) {
-      return action;
-    }
-    const targetFilePath = join20(context.snapshot.directory, fileName);
-    let currentMtimeMs;
-    try {
-      assertReadableActionLoadContextStable(context);
-      currentMtimeMs = statSync7(targetFilePath).mtimeMs;
-    } catch {
-      return action;
-    }
-    if (currentMtimeMs <= action.state.lastSeenMtimeMs)
-      return action;
-    const nextState = markSeen(action.state, currentMtimeMs);
-    const publicationPrecondition = () => {
-      try {
-        assertReadableActionLoadContextStable(context);
-        return runtimeBaselineMatches(action.filePath, action.state);
-      } catch {
-        return false;
-      }
-    };
-    if (!atomicWriter.writeSidecarConditional(targetFilePath, sidecarPathFor(action.filePath), nextState, publicationPrecondition, publicationWitnesses(context))) {
-      return action;
-    }
-    const nextAction2 = { ...action, state: nextState };
-    mirrorToDb({
-      yamlFilePath: action.filePath,
-      state: nextState,
-      meta: { appId: action.metadata.appId, status: action.metadata.status, path: action.filePath }
-    });
-    return nextAction2;
-  }
+function acknowledgeExternalEdit(action) {
   const nextAction = atomicWriter.withLock(action.filePath, () => {
     let currentMtimeMs;
     try {
@@ -28050,37 +27620,21 @@ function runtimeBaselineMatches(filePath, expected) {
   const sidecarPath = sidecarPathFor(filePath);
   return existsSync17(sidecarPath) ? runtimeSidecarMatches(sidecarPath, expected) : expected.runHistory.length === 0 && expected.repairHistory.length === 0;
 }
-function saveActionRuntimeWithCAS(context, expected, nextState) {
-  const fileName = basename4(expected.filePath);
-  const expectedFilePath = join20(context.corpus.actionsDir, fileName);
-  if (expected.filePath !== expectedFilePath || !/\.ya?ml$/i.test(fileName)) {
-    return { ok: false, conflict: "EXTERNAL_WRITE" };
-  }
-  const targetFilePath = join20(context.snapshot.directory, fileName);
-  const sidecarPath = sidecarPathFor(expected.filePath);
-  const publicationPrecondition = () => {
-    try {
-      assertReadableActionLoadContextStable(context);
-      return runtimeBaselineMatches(expected.filePath, expected.state);
-    } catch {
-      return false;
+function saveActionRuntimeWithCAS(expected, nextState) {
+  return atomicWriter.withLock(expected.filePath, () => {
+    const sidecarPath = sidecarPathFor(expected.filePath);
+    if (!runtimeBaselineMatches(expected.filePath, expected.state)) {
+      return { ok: false, conflict: "EXTERNAL_WRITE" };
     }
-  };
-  if (!atomicWriter.writeSidecarConditional(targetFilePath, sidecarPath, nextState, publicationPrecondition, publicationWitnesses(context))) {
-    return { ok: false, conflict: "EXTERNAL_WRITE" };
-  }
-  expected.state = nextState;
-  return { ok: true, sidecarPath };
+    saveSidecar(expected.filePath, nextState);
+    expected.state = nextState;
+    return { ok: true, sidecarPath };
+  });
 }
-function promoteActionRuntimeWithCAS(context, expected, nextState) {
+function promoteActionRuntimeWithCAS(expected, nextState) {
   try {
-    assertReadableActionLoadContextStable(context);
+    assertWritableActionFile(expected.filePath);
   } catch {
-    return { ok: false, conflict: "EXTERNAL_WRITE" };
-  }
-  const fileName = basename4(expected.filePath);
-  const expectedFilePath = join20(context.corpus.actionsDir, fileName);
-  if (expected.filePath !== expectedFilePath || !/\.ya?ml$/i.test(fileName)) {
     return { ok: false, conflict: "EXTERNAL_WRITE" };
   }
   const sidecarPath = sidecarPathFor(expected.filePath);
@@ -28098,17 +27652,13 @@ function promoteActionRuntimeWithCAS(context, expected, nextState) {
   if ((yaml2.match(marker) ?? []).length !== 1)
     return { ok: false, conflict: "EXTERNAL_WRITE" };
   const promoted = yaml2.replace(marker, "# status: active");
-  const targetFilePath = join20(context.snapshot.directory, fileName);
-  const yamlPublicationPrecondition = () => {
+  const written = atomicWriter.pairWriteConditional(expected.filePath, promoted, sidecarPath, nextState, () => {
     try {
-      assertReadableActionLoadContextStable(context);
-      return !actionWasEditedExternally(expected) && readFileSync16(expected.filePath, "utf8") === yaml2;
+      return runtimeBaselineMatches(expected.filePath, expected.state) && !actionWasEditedExternally(expected) && readFileSync16(expected.filePath, "utf8") === yaml2;
     } catch {
       return false;
     }
-  };
-  const publicationPrecondition = () => yamlPublicationPrecondition() && runtimeBaselineMatches(expected.filePath, expected.state);
-  const written = atomicWriter.pairWriteConditional(targetFilePath, promoted, sidecarPath, nextState, publicationPrecondition, yamlPublicationPrecondition, yaml2, publicationWitnesses(context));
+  }, void 0, yaml2);
   if (!written)
     return { ok: false, conflict: "EXTERNAL_WRITE" };
   expected.state = { ...nextState, lastSeenMtimeMs: written.finalMtimeMs };
@@ -64215,7 +63765,7 @@ run().catch((error) => {
   process.exitCode = 1;
 });
 `;
-function sameIdentity2(left, right) {
+function sameIdentity(left, right) {
   return left.dev === right.dev && left.ino === right.ino;
 }
 function waitForFile(path, timeoutMs) {
@@ -64444,7 +63994,7 @@ function runBoundOperation(directory, request2, dependencies = {}) {
   } catch {
     throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: bound directory path is unavailable");
   }
-  if (!current.isDirectory() || current.isSymbolicLink() || !sameIdentity2(current, directory.identity) || currentRealPath !== directory.realPath) {
+  if (!current.isDirectory() || current.isSymbolicLink() || !sameIdentity(current, directory.identity) || currentRealPath !== directory.realPath) {
     throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: bound directory path changed");
   }
   try {
@@ -64564,7 +64114,7 @@ function openValidatedDirectory(path, expected) {
     const opened = fstatSync4(descriptor, { bigint: true });
     const after = lstatSync13(path, { bigint: true });
     const realPath = realpathSync10(path);
-    if (!opened.isDirectory() || !sameIdentity2(before, opened) || !sameIdentity2(after, opened) || expected !== void 0 && (!sameIdentity2(expected.identity, opened) || expected.realPath !== realPath)) {
+    if (!opened.isDirectory() || !sameIdentity(before, opened) || !sameIdentity(after, opened) || expected !== void 0 && (!sameIdentity(expected.identity, opened) || expected.realPath !== realPath)) {
       throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: integration ancestor changed while opening");
     }
     const identity2 = { dev: opened.dev, ino: opened.ino };
@@ -77506,7 +77056,9 @@ function createRepairActionHandler() {
       });
     }
     const repaired = applyRepair(action, result, () => /* @__PURE__ */ new Date(), args.agentReasoning);
-    const { filePath, sidecarPath } = loadContext ? saveActionFromContext(loadContext, repaired) : saveAction(repaired);
+    const { filePath, sidecarPath } = saveAction(repaired);
+    if (loadContext)
+      assertReadableActionLoadContextStable(loadContext);
     const appendedRepair = repaired.state.repairHistory[repaired.state.repairHistory.length - 1];
     mirrorToDb({
       yamlFilePath: repaired.filePath,
@@ -79313,17 +78865,6 @@ function mapRefusedReason(repairCode, repairError) {
   }
   return "INTERNAL_ERROR";
 }
-function replayCorpusIdentityRefusal(context, actionId) {
-  try {
-    assertReadableActionLoadContextStable(context);
-    return null;
-  } catch (err) {
-    return failResult(err instanceof Error ? err.message : String(err), "BAD_FILENAME", {
-      actionId,
-      fallback: "none"
-    });
-  }
-}
 async function probeTreeWithRetry(replay, probe, retry) {
   let sawTree = false;
   for (let attempt = 0; attempt < retry.attempts; attempt++) {
@@ -79375,7 +78916,7 @@ function createRunActionHandler(deps = {}) {
     let openedContext;
     let loaded;
     try {
-      openedContext = openReadableActionLoadContext(projectRoot, { actionId: args.actionId });
+      openedContext = openReadableActionLoadContext(projectRoot);
       loaded = openedContext ? loadActionFromContext(openedContext, args.actionId) : null;
     } catch (err) {
       return failResult(err instanceof Error ? err.message : String(err), "BAD_FILENAME", {
@@ -79396,17 +78937,9 @@ function createRunActionHandler(deps = {}) {
     const cdpReplayYaml = loaded.replay.cdpYaml;
     const preflightCommands = loaded.replay.commands;
     const forceReload = proofReplay ? false : args.forceReload !== false;
-    const action = forceReload ? acknowledgeExternalEdit(loaded, loadContext) : loaded;
-    let engineStatus;
-    try {
-      engineStatus = await resolveEngineStatus();
-      assertReadableActionLoadContextStable(loadContext);
-    } catch (err) {
-      return failResult(err instanceof Error ? err.message : String(err), "BAD_FILENAME", {
-        actionId: args.actionId,
-        fallback: "none"
-      });
-    }
+    const action = forceReload ? acknowledgeExternalEdit(loaded) : loaded;
+    const engineStatus = await resolveEngineStatus();
+    assertReadableActionLoadContextStable(loadContext);
     const compatRefusal = actionReplayPreflight({
       enginePin: action.metadata.enginePin,
       commands: preflightCommands,
@@ -79506,9 +79039,6 @@ function createRunActionHandler(deps = {}) {
           if (probeOutcome.found) {
             const tReplay = Date.now();
             try {
-              const corpusRefusal = replayCorpusIdentityRefusal(loadContext, args.actionId);
-              if (corpusRefusal)
-                return corpusRefusal;
               const replay = await measureStep("proactive-cdp-replay", () => runCdpReplay(cdpReplayYaml, args.params ?? {}, replayDeps));
               const timings_ms = { probe: tReplay - tProbe, replay: Date.now() - tReplay };
               const blindProbe = { atRisk, skippedMaestro: true };
@@ -79564,9 +79094,6 @@ function createRunActionHandler(deps = {}) {
       }
       const tBeforeFirst = Date.now();
       probeDeviceId = null;
-      const firstCorpusRefusal = replayCorpusIdentityRefusal(loadContext, args.actionId);
-      if (firstCorpusRefusal)
-        return firstCorpusRefusal;
       const firstResult = await measureStep("maestro-first-attempt", () => maestroRun({
         inlineYaml: replayYaml,
         actionMetadata: action.metadata,
@@ -79731,9 +79258,6 @@ function createRunActionHandler(deps = {}) {
               firstAttemptOutput: boundedOutput(firstOutput)
             };
             try {
-              const corpusRefusal = replayCorpusIdentityRefusal(loadContext, args.actionId);
-              if (corpusRefusal)
-                return corpusRefusal;
               const replay = await measureStep("fallback-cdp-replay", () => runCdpReplay(cdpReplayYaml, args.params ?? {}, replayDeps, {
                 resumeAtSelector: failure.kind === "SELECTOR_NOT_FOUND" ? failure.selector : null
               }));
@@ -79897,9 +79421,6 @@ function createRunActionHandler(deps = {}) {
       const retryYaml = reloadedAction.replay.yamlText;
       const tBeforeRetry = Date.now();
       probeDeviceId = null;
-      const retryCorpusRefusal = replayCorpusIdentityRefusal(loadContext, args.actionId);
-      if (retryCorpusRefusal)
-        return retryCorpusRefusal;
       const retryResult = await measureStep("maestro-retry", () => maestroRun({
         inlineYaml: retryYaml,
         actionMetadata: reloadedAction.metadata,
@@ -80052,18 +79573,11 @@ async function persistRun(actionId, context, record2) {
       });
       return { promoted, promotionRefused: promotionRefused2, persistedRunId: record2.runId };
     };
-    const promotionRefused = promotes && !promoteActionRuntimeWithCAS(context, fresh, nextState).ok;
+    const promotionRefused = promotes && !promoteActionRuntimeWithCAS(fresh, nextState).ok;
     if (promotes && !promotionRefused)
       return commit(true, false);
-    if (saveActionRuntimeWithCAS(context, fresh, nextState).ok) {
+    if (saveActionRuntimeWithCAS(fresh, nextState).ok)
       return commit(false, promotionRefused);
-    }
-    try {
-      assertReadableActionLoadContextStable(context);
-    } catch (error2) {
-      console.error(`cdp_run_action: persistRun refused changed corpus for "${actionId}"; RunRecord dropped (${error2 instanceof Error ? error2.message : String(error2)}).`);
-      return { promoted: false, promotionRefused, runtimeStateRefused: true };
-    }
     if (attempt === MAX_ATTEMPTS) {
       console.error(`cdp_run_action: persistRun for "${actionId}" hit ${MAX_ATTEMPTS} sidecar CAS conflicts; runtime state was not written (status=${record2.status}).`);
       return { promoted: false, promotionRefused, runtimeStateRefused: true };

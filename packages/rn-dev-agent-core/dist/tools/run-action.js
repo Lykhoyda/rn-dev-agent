@@ -235,18 +235,6 @@ function mapRefusedReason(repairCode, repairError) {
     // legitimately doesn't have the testID".
     return 'INTERNAL_ERROR';
 }
-function replayCorpusIdentityRefusal(context, actionId) {
-    try {
-        assertReadableActionLoadContextStable(context);
-        return null;
-    }
-    catch (err) {
-        return failResult(err instanceof Error ? err.message : String(err), 'BAD_FILENAME', {
-            actionId,
-            fallback: 'none',
-        });
-    }
-}
 async function probeTreeWithRetry(replay, probe, retry) {
     // Retry until the probe testID is PRESENT, not merely until a tree is
     // readable — after a WDA-death relaunch the app may serve an early/loading
@@ -307,7 +295,7 @@ export function createRunActionHandler(deps = {}) {
         let openedContext;
         let loaded;
         try {
-            openedContext = openReadableActionLoadContext(projectRoot, { actionId: args.actionId });
+            openedContext = openReadableActionLoadContext(projectRoot);
             loaded = openedContext ? loadActionFromContext(openedContext, args.actionId) : null;
         }
         catch (err) {
@@ -333,18 +321,9 @@ export function createRunActionHandler(deps = {}) {
         // doesn't abort with STALE_TARGET. Opt out with forceReload: false to
         // get the strict Phase 129 "respect external edits" behavior back.
         const forceReload = proofReplay ? false : args.forceReload !== false;
-        const action = forceReload ? acknowledgeExternalEdit(loaded, loadContext) : loaded;
-        let engineStatus;
-        try {
-            engineStatus = await resolveEngineStatus();
-            assertReadableActionLoadContextStable(loadContext);
-        }
-        catch (err) {
-            return failResult(err instanceof Error ? err.message : String(err), 'BAD_FILENAME', {
-                actionId: args.actionId,
-                fallback: 'none',
-            });
-        }
+        const action = forceReload ? acknowledgeExternalEdit(loaded) : loaded;
+        const engineStatus = await resolveEngineStatus();
+        assertReadableActionLoadContextStable(loadContext);
         const compatRefusal = actionReplayPreflight({
             enginePin: action.metadata.enginePin,
             commands: preflightCommands,
@@ -488,9 +467,6 @@ export function createRunActionHandler(deps = {}) {
                     if (probeOutcome.found) {
                         const tReplay = Date.now();
                         try {
-                            const corpusRefusal = replayCorpusIdentityRefusal(loadContext, args.actionId);
-                            if (corpusRefusal)
-                                return corpusRefusal;
                             const replay = await measureStep('proactive-cdp-replay', () => runCdpReplay(cdpReplayYaml, args.params ?? {}, replayDeps));
                             const timings_ms = { probe: tReplay - tProbe, replay: Date.now() - tReplay };
                             const blindProbe = { atRisk, skippedMaestro: true };
@@ -562,9 +538,6 @@ export function createRunActionHandler(deps = {}) {
             // Requested/session metadata is not RunRecord authority. Clear it before
             // dispatch; only direct maestro-runner evidence may repopulate it.
             probeDeviceId = null;
-            const firstCorpusRefusal = replayCorpusIdentityRefusal(loadContext, args.actionId);
-            if (firstCorpusRefusal)
-                return firstCorpusRefusal;
             const firstResult = await measureStep('maestro-first-attempt', () => maestroRun({
                 inlineYaml: replayYaml,
                 actionMetadata: action.metadata,
@@ -766,9 +739,6 @@ export function createRunActionHandler(deps = {}) {
                         try {
                             // GH #580: resume at the proven failed selector; UNKNOWN failed before
                             // any step, so it keeps start-at-zero.
-                            const corpusRefusal = replayCorpusIdentityRefusal(loadContext, args.actionId);
-                            if (corpusRefusal)
-                                return corpusRefusal;
                             const replay = await measureStep('fallback-cdp-replay', () => runCdpReplay(cdpReplayYaml, args.params ?? {}, replayDeps, {
                                 resumeAtSelector: failure.kind === 'SELECTOR_NOT_FOUND' ? failure.selector : null,
                             }));
@@ -964,9 +934,6 @@ export function createRunActionHandler(deps = {}) {
             const retryYaml = reloadedAction.replay.yamlText;
             const tBeforeRetry = Date.now();
             probeDeviceId = null;
-            const retryCorpusRefusal = replayCorpusIdentityRefusal(loadContext, args.actionId);
-            if (retryCorpusRefusal)
-                return retryCorpusRefusal;
             const retryResult = await measureStep('maestro-retry', () => maestroRun({
                 inlineYaml: retryYaml,
                 actionMetadata: reloadedAction.metadata,
@@ -1162,19 +1129,11 @@ async function persistRun(actionId, context, record) {
         // A promotion refusal is deterministic (externally edited YAML, or a missing
         // `# status: experimental` marker) — retrying cannot clear it, so degrade to
         // the sidecar-only append instead of failing an otherwise successful replay.
-        const promotionRefused = promotes && !promoteActionRuntimeWithCAS(context, fresh, nextState).ok;
+        const promotionRefused = promotes && !promoteActionRuntimeWithCAS(fresh, nextState).ok;
         if (promotes && !promotionRefused)
             return commit(true, false);
-        if (saveActionRuntimeWithCAS(context, fresh, nextState).ok) {
+        if (saveActionRuntimeWithCAS(fresh, nextState).ok)
             return commit(false, promotionRefused);
-        }
-        try {
-            assertReadableActionLoadContextStable(context);
-        }
-        catch (error) {
-            console.error(`cdp_run_action: persistRun refused changed corpus for "${actionId}"; RunRecord dropped (${error instanceof Error ? error.message : String(error)}).`);
-            return { promoted: false, promotionRefused, runtimeStateRefused: true };
-        }
         // Sidecar CAS conflict — another writer raced us. Reload and retry.
         // Exhausting the retries is NOT necessarily a race: a truncated or foreign
         // sidecar is refused deterministically while loadOrInitSidecar keeps

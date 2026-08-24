@@ -307,97 +307,6 @@ static int list_directory(
   return result;
 }
 
-static int safe_name(const char *value) {
-  return *value && strcmp(value, ".") != 0 && strcmp(value, "..") != 0 &&
-      strchr(value, '/') == NULL;
-}
-
-static int witnesses_unchanged(int argc, char **argv, int start) {
-  if ((argc - start) % 5 != 0) return 0;
-  for (int index = start; index < argc; index += 5) {
-    uint64_t expected_dev = 0;
-    uint64_t expected_ino = 0;
-    struct stat observed = {0};
-    if (!parse_identity(argv[index + 2], argv[index + 3], &expected_dev, &expected_ino) ||
-        lstat(argv[index], &observed) != 0 ||
-        (uint64_t)observed.st_dev != expected_dev ||
-        (uint64_t)observed.st_ino != expected_ino) return 0;
-    if (strcmp(argv[index + 1], "directory") == 0) {
-      if (!S_ISDIR(observed.st_mode)) return 0;
-    } else if (strcmp(argv[index + 1], "symlink") == 0) {
-      if (!S_ISLNK(observed.st_mode)) return 0;
-      char target[PATH_MAX];
-      ssize_t length = readlink(argv[index], target, sizeof(target));
-      size_t expected_length = strlen(argv[index + 4]);
-      if (length < 0 || (size_t)length != expected_length ||
-          memcmp(target, argv[index + 4], expected_length) != 0) return 0;
-    } else {
-      return 0;
-    }
-  }
-  return 1;
-}
-
-static int publish_relative_if_unchanged(
-    const char *target_name,
-    const char *candidate_name,
-    const char *expected_name,
-    int argc,
-    char **argv,
-    int witness_start) {
-  if (!safe_name(target_name) || !safe_name(candidate_name) || !safe_name(expected_name)) return 2;
-  struct stat directory_stat = {0};
-  if (fstat(3, &directory_stat) != 0 || !S_ISDIR(directory_stat.st_mode)) return 10;
-  int target = openat(3, target_name, O_RDONLY | O_NOFOLLOW);
-  int candidate = openat(3, candidate_name, O_RDONLY | O_NOFOLLOW);
-  int expected = openat(3, expected_name, O_RDONLY | O_NOFOLLOW);
-  struct stat target_stat = {0};
-  struct stat candidate_stat = {0};
-  if (target < 0 || candidate < 0 || expected < 0 ||
-      fstat(target, &target_stat) != 0 || fstat(candidate, &candidate_stat) != 0 ||
-      !S_ISREG(target_stat.st_mode) || !S_ISREG(candidate_stat.st_mode) ||
-      target_stat.st_dev != candidate_stat.st_dev || !same_content(target, expected) ||
-      !witnesses_unchanged(argc, argv, witness_start)) return 10;
-  if (renameatx_np(3, target_name, 3, candidate_name, RENAME_SWAP) != 0) return 11;
-  struct stat published = {0};
-  struct stat displaced = {0};
-  int committed = fstatat(3, target_name, &published, AT_SYMLINK_NOFOLLOW) == 0 &&
-      fstatat(3, candidate_name, &displaced, AT_SYMLINK_NOFOLLOW) == 0 &&
-      published.st_dev == candidate_stat.st_dev && published.st_ino == candidate_stat.st_ino &&
-      displaced.st_dev == target_stat.st_dev && displaced.st_ino == target_stat.st_ino &&
-      witnesses_unchanged(argc, argv, witness_start);
-  if (!committed) {
-    if (renameatx_np(3, target_name, 3, candidate_name, RENAME_SWAP) != 0) return 12;
-    return 10;
-  }
-  if (unlinkat(3, candidate_name, 0) != 0) return 11;
-  return 0;
-}
-
-static int link_relative_if_unchanged(
-    const char *candidate_name,
-    const char *target_name,
-    int argc,
-    char **argv,
-    int witness_start) {
-  if (!safe_name(candidate_name) || !safe_name(target_name)) return 2;
-  struct stat directory_stat = {0};
-  struct stat candidate_stat = {0};
-  if (fstat(3, &directory_stat) != 0 || !S_ISDIR(directory_stat.st_mode) ||
-      fstatat(3, candidate_name, &candidate_stat, AT_SYMLINK_NOFOLLOW) != 0 ||
-      !S_ISREG(candidate_stat.st_mode) || !witnesses_unchanged(argc, argv, witness_start)) return 10;
-  if (linkat(3, candidate_name, 3, target_name, 0) != 0) return errno == EEXIST ? 10 : 11;
-  struct stat published = {0};
-  int committed = fstatat(3, target_name, &published, AT_SYMLINK_NOFOLLOW) == 0 &&
-      published.st_dev == candidate_stat.st_dev && published.st_ino == candidate_stat.st_ino &&
-      witnesses_unchanged(argc, argv, witness_start);
-  if (!committed) {
-    if (unlinkat(3, target_name, 0) != 0) return 12;
-    return 10;
-  }
-  return 0;
-}
-
 int main(int argc, char **argv) {
   if (argc >= 7 && strcmp(argv[1], "--exec-file") == 0) {
     char *dev_end = NULL;
@@ -480,19 +389,6 @@ int main(int argc, char **argv) {
     uint64_t expected_ino = 0;
     if (!parse_identity(argv[3], argv[4], &expected_dev, &expected_ino)) return 2;
     return list_directory(argv[2], expected_dev, expected_ino);
-  }
-  if (argc >= 5 && strcmp(argv[1], "--publish-relative-if-unchanged") == 0) {
-    return publish_relative_if_unchanged(argv[2], argv[3], argv[4], argc, argv, 5);
-  }
-  if (argc >= 4 && strcmp(argv[1], "--link-relative-if-unchanged") == 0) {
-    return link_relative_if_unchanged(argv[2], argv[3], argc, argv, 4);
-  }
-  if (argc == 3 && strcmp(argv[1], "--unlink-relative-file") == 0) {
-    if (!safe_name(argv[2])) return 2;
-    struct stat candidate = {0};
-    if (fstatat(3, argv[2], &candidate, AT_SYMLINK_NOFOLLOW) != 0 ||
-        !S_ISREG(candidate.st_mode)) return 10;
-    return unlinkat(3, argv[2], 0) == 0 ? 0 : 11;
   }
   if (argc == 8 && strcmp(argv[1], "--publish-if-unchanged") == 0 &&
       strcmp(argv[7], "--hold") == 0) {

@@ -376,14 +376,6 @@ export function resolveReadableActionCorpus(projectRoot, dependencies = {}) {
     const rnAgentStat = lstatIfPresent(rnAgentDir);
     if (!rnAgentStat)
         return { status: 'absent' };
-    const rootStat = lstatIfPresent(root);
-    if (!rootStat || rootStat.isSymbolicLink() || !rootStat.isDirectory()) {
-        return refuseCorpus(`Refusing learned-action corpus symlink at ${root}.`);
-    }
-    const projectIdentity = identityOf(rootStat);
-    if (!openUnfollowedDirectory(root, projectIdentity)) {
-        return refuseCorpus(`Refusing learned-action corpus symlink at ${root}.`);
-    }
     if (rnAgentStat.isSymbolicLink() || !rnAgentStat.isDirectory()) {
         return refuseCorpus(`Refusing learned-action corpus symlink at ${rnAgentDir}.`);
     }
@@ -410,13 +402,9 @@ export function resolveReadableActionCorpus(projectRoot, dependencies = {}) {
         if (!directoryIdentityUnchanged(actionsDir, identity)) {
             return refuseReplacedActions(actionsDir);
         }
-        if (!directoryIdentityUnchanged(root, projectIdentity)) {
-            return refuseReplacedActions(actionsDir);
-        }
         return {
             status: 'owned-directory',
             projectRoot: root,
-            projectIdentity,
             rnAgentDir,
             actionsDir,
             identity,
@@ -466,32 +454,16 @@ export function resolveReadableActionCorpus(projectRoot, dependencies = {}) {
         !sameSourceEvidence(planned.sourceEvidence, plannedAfter.sourceEvidence) ||
         !sourceLeafMatchesIdentity(planned.sourceEvidence, targetIdentity) ||
         !sourceLeafMatchesIdentity(plannedAfter.sourceEvidence, targetIdentity) ||
-        !directoryIdentityUnchanged(root, projectIdentity) ||
         !directoryIdentityUnchanged(rnAgentDir, rnAgentIdentity) ||
         !repositoryIdentityUnchanged(primaryIdentity)) {
-        return refuseReplacedActions(actionsDir);
-    }
-    let linkTarget;
-    try {
-        linkTarget = readlinkSync(actionsDir);
-    }
-    catch {
-        return refuseReplacedActions(actionsDir);
-    }
-    const finalLinkStat = lstatIfPresent(actionsDir);
-    if (!finalLinkStat?.isSymbolicLink() ||
-        !sameIdentity(identityOf(finalLinkStat), planned.evidence) ||
-        canonical(actionsDir) !== targetDir) {
         return refuseReplacedActions(actionsDir);
     }
     return {
         status: 'approved-inherited',
         projectRoot: root,
-        projectIdentity,
         rnAgentDir,
         actionsDir,
         targetDir,
-        linkTarget,
         linkIdentity: planned.evidence,
         targetIdentity,
         primaryRoot: layout.primaryRoot,
@@ -509,18 +481,13 @@ export function sameReadableActionCorpus(left, right) {
     }
     if (left.status === 'owned-directory' && right.status === 'owned-directory') {
         return (left.actionsDir === right.actionsDir &&
-            left.projectIdentity.dev === right.projectIdentity.dev &&
-            left.projectIdentity.ino === right.projectIdentity.ino &&
             left.identity.dev === right.identity.dev &&
             left.identity.ino === right.identity.ino);
     }
     return (left.status === 'approved-inherited' &&
         right.status === 'approved-inherited' &&
         left.actionsDir === right.actionsDir &&
-        left.projectIdentity.dev === right.projectIdentity.dev &&
-        left.projectIdentity.ino === right.projectIdentity.ino &&
         left.targetDir === right.targetDir &&
-        left.linkTarget === right.linkTarget &&
         left.linkIdentity.dev === right.linkIdentity.dev &&
         left.linkIdentity.ino === right.linkIdentity.ino &&
         left.targetIdentity.dev === right.targetIdentity.dev &&
@@ -560,17 +527,11 @@ function captureDirectoryIdentity(path) {
 }
 export function captureReadableActionOperationSnapshot(corpus) {
     const operationId = `${process.pid}:${++readableActionOperationSequence}`;
-    if (corpus.status !== 'owned-directory' && corpus.status !== 'approved-inherited')
-        return null;
-    if (!directoryIdentityUnchanged(corpus.projectRoot, corpus.projectIdentity)) {
-        throw new Error(refuseReplacedActions(corpus.actionsDir).reason);
-    }
     if (corpus.status === 'owned-directory') {
         return Object.freeze({
             operationId,
             kind: corpus.status,
             projectRoot: corpus.projectRoot,
-            projectRootIdentity: freezeIdentity(corpus.projectIdentity),
             actionsDir: corpus.actionsDir,
             directory: corpus.actionsDir,
             directoryIdentity: freezeIdentity(corpus.identity),
@@ -584,11 +545,9 @@ export function captureReadableActionOperationSnapshot(corpus) {
             operationId,
             kind: corpus.status,
             projectRoot: corpus.projectRoot,
-            projectRootIdentity: freezeIdentity(corpus.projectIdentity),
             actionsDir: corpus.actionsDir,
             directory: corpus.targetDir,
             directoryIdentity: freezeIdentity(corpus.targetIdentity),
-            linkTarget: corpus.linkTarget,
             linkIdentity: freezeIdentity(corpus.linkIdentity),
             primaryIdentity: Object.freeze({
                 topLevel: Object.freeze({
@@ -611,19 +570,8 @@ function currentIdentityMatches(path, expected, kind) {
     const typeMatches = kind === 'directory' ? current.isDirectory() : current.isSymbolicLink();
     return (typeMatches && String(current.dev) === expected.dev && String(current.ino) === expected.ino);
 }
-function currentLinkTargetMatches(path, expected) {
-    if (expected === undefined)
-        return false;
-    try {
-        return readlinkSync(path) === expected;
-    }
-    catch {
-        return false;
-    }
-}
 export function assertReadableActionOperationUnchanged(snapshot) {
-    let unchanged = currentIdentityMatches(snapshot.projectRoot, snapshot.projectRootIdentity, 'directory') &&
-        canonical(snapshot.projectRoot) === snapshot.projectRoot;
+    let unchanged = canonical(snapshot.projectRoot) === snapshot.projectRoot;
     if (snapshot.kind === 'owned-directory') {
         unchanged =
             unchanged &&
@@ -635,7 +583,6 @@ export function assertReadableActionOperationUnchanged(snapshot) {
             unchanged &&
                 Boolean(snapshot.linkIdentity && snapshot.primaryIdentity) &&
                 currentIdentityMatches(snapshot.actionsDir, snapshot.linkIdentity, 'symlink') &&
-                currentLinkTargetMatches(snapshot.actionsDir, snapshot.linkTarget) &&
                 currentIdentityMatches(snapshot.directory, snapshot.directoryIdentity, 'directory') &&
                 currentIdentityMatches(snapshot.primaryIdentity.topLevel.path, snapshot.primaryIdentity.topLevel.identity, 'directory') &&
                 currentIdentityMatches(snapshot.primaryIdentity.commonDir.path, snapshot.primaryIdentity.commonDir.identity, 'directory') &&

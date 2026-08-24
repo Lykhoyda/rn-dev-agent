@@ -7371,10 +7371,6 @@ import path from "node:path";
 var import_yaml = __toESM(require_dist(), 1);
 var STRIKE_COOLDOWN_MS = 5 * 60 * 1e3;
 
-// packages/rn-dev-agent-core/dist/session/process-birth.js
-var VERIFIED_FILESYSTEM_MAX_BUFFER_BYTES = 32 * 1024 * 1024;
-var VERIFIED_FILESYSTEM_BATCH_BYTES = 24 * 1024 * 1024;
-
 // packages/rn-dev-agent-core/dist/session/authority-json.js
 var intrinsicArraySort = Array.prototype.sort;
 var intrinsicNumberIsFinite = Number.isFinite;

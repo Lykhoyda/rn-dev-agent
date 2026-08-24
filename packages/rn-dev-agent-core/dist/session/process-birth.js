@@ -5,23 +5,19 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveTrustedSystemExecutable, } from '../util/trusted-system-executable.js';
 const DARWIN_HELPER_MANIFEST = {
-    sourceSha256: '4f3ad25913f08e4518a8dec6918e73cc5e9bc80f7ec9e0cb9f64a363e1c8f147',
-    recipeSha256: '7e6b6b39a39ded2e3f748006264247e6d494fd5c9054cf8580ecb4396970b025',
-    stableBinarySha256: '1662cb03acb7f5cf3b879a851322602de522479a3e18dc0f4ec8ca5303592f23',
-    binarySha256: '3c0c6bd9b591feaf1246990f30d42d7ac8943d826e05ddcc0285f511d08da0d4',
+    sourceSha256: '955b36f932d7124525003fc88e8596a148ae5404b49f8381ff59435e52b272c6',
+    recipeSha256: 'ad5e7452795eee5ee8da4321f4260760e6e0e8536193978cd721748385e3f2f4',
+    stableBinarySha256: '6109d6017208b7ea091feeb40cae6640ff925c54e391d1ec0e7737057c30ded4',
+    binarySha256: '47b75f81c09ba5bf966acad48055a1c287708241a44c876fa4483c3189ce5f1e',
     cdhashes: [
-        'd2af3d210165b1a915562e4ec1895a6286fd1d6f',
-        '26875724107a2489e9341d8d86ffa020b3b2d5a5',
+        'f5f6876043eadc558ca3d5d056c49b1d771aef6b',
+        '1c072373aff231d756e20fa008b0f9486b229888',
     ],
 };
 const LINUX_PUBLICATION_HELPER_SHA256 = {
-    x64: '9a38afcecb28015c3016f509fb659db541d2f452bb48cfbcaa737b8b0f76df80',
-    arm64: '354dc1dfe1a80250a2b4a017eeff474f9ec77d5dbf70885b18b929afce9915be',
+    x64: '17b1b6e0edbecefc013ccb1308a444532a72d5910f794de53195a758789bd6bb',
+    arm64: 'f9cb783474cc93e6dbb28e81b5a2e46d74c38926a392d75ce9ed5188bafe3520',
 };
-const VERIFIED_FILESYSTEM_MAX_BUFFER_BYTES = 32 * 1024 * 1024;
-const VERIFIED_FILESYSTEM_BATCH_BYTES = 24 * 1024 * 1024;
-const VERIFIED_FILESYSTEM_BATCH_FILES = 16;
-const VERIFIED_FILESYSTEM_ENTRY_FRAME_BYTES = 9;
 function defaultRun(command, args) {
     try {
         return execFileSync(command, [...args], {
@@ -266,7 +262,7 @@ export function linkFileIntoVerifiedDirectory(directoryFd, candidatePath, target
     }
     return false;
 }
-function runVerifiedPublicationHelper(helperPath, expectedSha256, args, directoryFd) {
+function runVerifiedPublicationHelper(helperPath, expectedSha256, args) {
     const boundPath = `${helperPath}.publish.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}`;
     copyFileSync(helperPath, boundPath, constants.COPYFILE_EXCL | constants.COPYFILE_FICLONE);
     chmodSync(boundPath, 0o700);
@@ -274,10 +270,7 @@ function runVerifiedPublicationHelper(helperPath, expectedSha256, args, director
         if (createHash('sha256').update(readFileSync(boundPath)).digest('hex') !== expectedSha256) {
             throw new Error('Conditional action publication helper changed before execution.');
         }
-        execFileSync(boundPath, [...args], {
-            stdio: directoryFd === undefined ? 'ignore' : ['ignore', 'ignore', 'ignore', directoryFd],
-            timeout: 2_000,
-        });
+        execFileSync(boundPath, [...args], { stdio: 'ignore', timeout: 2_000 });
         return true;
     }
     catch (error) {
@@ -288,38 +281,6 @@ function runVerifiedPublicationHelper(helperPath, expectedSha256, args, director
     finally {
         unlinkSync(boundPath);
     }
-}
-function publicationWitnessArguments(witnesses) {
-    return witnesses.flatMap((witness) => [
-        witness.path,
-        witness.kind,
-        witness.dev,
-        witness.ino,
-        witness.linkTarget ?? '',
-    ]);
-}
-export function publishFileIfUnchangedInVerifiedDirectory(directoryFd, targetName, candidateName, expectedName, witnesses) {
-    const helper = verifiedNativePublicationHelper();
-    return runVerifiedPublicationHelper(helper.path, helper.sha256, [
-        '--publish-relative-if-unchanged',
-        targetName,
-        candidateName,
-        expectedName,
-        ...publicationWitnessArguments(witnesses),
-    ], directoryFd);
-}
-export function linkFileIntoVerifiedDirectoryFd(directoryFd, candidateName, targetName, witnesses) {
-    const helper = verifiedNativePublicationHelper();
-    return runVerifiedPublicationHelper(helper.path, helper.sha256, [
-        '--link-relative-if-unchanged',
-        candidateName,
-        targetName,
-        ...publicationWitnessArguments(witnesses),
-    ], directoryFd);
-}
-export function unlinkFileFromVerifiedDirectoryFd(directoryFd, fileName) {
-    const helper = verifiedNativePublicationHelper();
-    return runVerifiedPublicationHelper(helper.path, helper.sha256, ['--unlink-relative-file', fileName], directoryFd);
 }
 function verifiedFilesystemHelper() {
     if (process.platform === 'darwin') {
@@ -345,7 +306,7 @@ function runVerifiedFilesystemHelper(args) {
             throw new Error('Verified directory helper changed before execution.');
         }
         return execFileSync(boundPath, [...args], {
-            maxBuffer: VERIFIED_FILESYSTEM_MAX_BUFFER_BYTES,
+            maxBuffer: 32 * 1024 * 1024,
             stdio: ['ignore', 'pipe', 'ignore'],
             timeout: 10_000,
         });
@@ -366,63 +327,36 @@ export function readFileFromVerifiedDirectory(directoryPath, identity, relativeP
 export function readFilesFromVerifiedDirectory(directoryPath, identity, relativePaths) {
     if (relativePaths.length === 0)
         return [];
+    const output = runVerifiedFilesystemHelper([
+        '--read-directory-entries',
+        directoryPath,
+        identity.dev,
+        identity.ino,
+        ...relativePaths,
+    ]);
     const entries = [];
-    const batches = [];
-    let batch = [];
-    let batchBytes = 0;
+    let offset = 0;
     for (const relativePath of relativePaths) {
-        let framedBytes = VERIFIED_FILESYSTEM_ENTRY_FRAME_BYTES;
-        try {
-            const stat = lstatSync(join(directoryPath, relativePath));
-            if (stat.isFile())
-                framedBytes += stat.size;
+        if (offset + 9 > output.length) {
+            throw new Error(`Verified directory batch was truncated before ${relativePath}.`);
         }
-        catch {
-            framedBytes = VERIFIED_FILESYSTEM_ENTRY_FRAME_BYTES;
+        const status = output[offset];
+        const length = output.readBigUInt64BE(offset + 1);
+        offset += 9;
+        if (length > BigInt(Number.MAX_SAFE_INTEGER) || offset + Number(length) > output.length) {
+            throw new Error(`Verified directory batch was malformed at ${relativePath}.`);
         }
-        if (batch.length > 0 &&
-            (batch.length >= VERIFIED_FILESYSTEM_BATCH_FILES ||
-                batchBytes + framedBytes > VERIFIED_FILESYSTEM_BATCH_BYTES)) {
-            batches.push(batch);
-            batch = [];
-            batchBytes = 0;
-        }
-        batch.push(relativePath);
-        batchBytes += framedBytes;
+        const end = offset + Number(length);
+        if (status === 0)
+            entries.push(Buffer.from(output.subarray(offset, end)));
+        else if (status === 1 && length === 0n)
+            entries.push(null);
+        else
+            throw new Error(`Verified directory batch had an invalid status for ${relativePath}.`);
+        offset = end;
     }
-    if (batch.length > 0)
-        batches.push(batch);
-    for (const currentBatch of batches) {
-        const output = runVerifiedFilesystemHelper([
-            '--read-directory-entries',
-            directoryPath,
-            identity.dev,
-            identity.ino,
-            ...currentBatch,
-        ]);
-        let offset = 0;
-        for (const relativePath of currentBatch) {
-            if (offset + 9 > output.length) {
-                throw new Error(`Verified directory batch was truncated before ${relativePath}.`);
-            }
-            const status = output[offset];
-            const length = output.readBigUInt64BE(offset + 1);
-            offset += 9;
-            if (length > BigInt(Number.MAX_SAFE_INTEGER) || offset + Number(length) > output.length) {
-                throw new Error(`Verified directory batch was malformed at ${relativePath}.`);
-            }
-            const end = offset + Number(length);
-            if (status === 0)
-                entries.push(Buffer.from(output.subarray(offset, end)));
-            else if (status === 1 && length === 0n)
-                entries.push(null);
-            else
-                throw new Error(`Verified directory batch had an invalid status for ${relativePath}.`);
-            offset = end;
-        }
-        if (offset !== output.length)
-            throw new Error('Verified directory batch had trailing data.');
-    }
+    if (offset !== output.length)
+        throw new Error('Verified directory batch had trailing data.');
     return entries;
 }
 export function listVerifiedDirectory(directoryPath, identity) {

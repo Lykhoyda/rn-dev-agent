@@ -5,8 +5,6 @@ import { readFileSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import {
   actionWasEditedExternally,
   loadAction,
-  loadActionFromContext,
-  openReadableActionLoadContext,
   promoteActionRuntimeWithCAS,
   saveActionRuntimeWithCAS,
 } from '../../dist/domain/action-store.js';
@@ -211,9 +209,7 @@ test('GH-588 V2: stale YAML baseline does not reject sidecar-only RunRecord pers
 
 test('GH-588 V2 disconfirmation: a real sidecar race still fails CAS without losing the winner', () => {
   project.seedAction('wizard-create-task', wizardYaml(), evidenceSidecar());
-  const context = openReadableActionLoadContext(project.root, { actionId: 'wizard-create-task' });
-  assert.ok(context);
-  const expected = loadActionFromContext(context, 'wizard-create-task');
+  const expected = loadAction(project.root, 'wizard-create-task');
   assert.ok(expected);
 
   const winner = oldRun('2026-07-21T10:01:00.000Z', 111);
@@ -224,11 +220,7 @@ test('GH-588 V2 disconfirmation: a real sidecar race still fails CAS without los
   );
 
   const loser = oldRun('2026-07-21T10:01:01.000Z', 222);
-  const result = saveActionRuntimeWithCAS(
-    context,
-    expected,
-    appendRunRecord(expected.state, loser),
-  );
+  const result = saveActionRuntimeWithCAS(expected, appendRunRecord(expected.state, loser));
   assert.deepEqual(result, { ok: false, conflict: 'EXTERNAL_WRITE' });
   const persisted = project.readSidecar('wizard-create-task');
   assert.equal(persisted.runHistory.at(-1).timestamp, winner.timestamp);
@@ -247,12 +239,9 @@ test('GH-588 V2 disconfirmation: stale forceReload=false baseline still blocks Y
   const yamlHashBefore = sha256(yamlPath);
   const sidecarBefore = readFileSync(project.sidecarPath('wizard-create-task'), 'utf8');
 
-  const context = openReadableActionLoadContext(project.root, { actionId: 'wizard-create-task' });
-  assert.ok(context);
-  const expected = loadActionFromContext(context, 'wizard-create-task');
+  const expected = loadAction(project.root, 'wizard-create-task');
   assert.ok(expected);
   const result = promoteActionRuntimeWithCAS(
-    context,
     expected,
     appendRunRecord(expected.state, oldRun('2026-07-21T10:02:00.000Z', 333)),
   );

@@ -308,23 +308,21 @@ function probeRecordedProcessBirth(pid, dependencies) {
   }
   return { status: "unknown" };
 }
-var DARWIN_HELPER_MANIFEST, VERIFIED_FILESYSTEM_MAX_BUFFER_BYTES, VERIFIED_FILESYSTEM_BATCH_BYTES, VERIFIED_HELPER_SCRIPT;
+var DARWIN_HELPER_MANIFEST, VERIFIED_HELPER_SCRIPT;
 var init_process_birth = __esm({
   "packages/rn-dev-agent-core/dist/session/process-birth.js"() {
     "use strict";
     init_trusted_system_executable();
     DARWIN_HELPER_MANIFEST = {
-      sourceSha256: "4f3ad25913f08e4518a8dec6918e73cc5e9bc80f7ec9e0cb9f64a363e1c8f147",
-      recipeSha256: "7e6b6b39a39ded2e3f748006264247e6d494fd5c9054cf8580ecb4396970b025",
-      stableBinarySha256: "1662cb03acb7f5cf3b879a851322602de522479a3e18dc0f4ec8ca5303592f23",
-      binarySha256: "3c0c6bd9b591feaf1246990f30d42d7ac8943d826e05ddcc0285f511d08da0d4",
+      sourceSha256: "955b36f932d7124525003fc88e8596a148ae5404b49f8381ff59435e52b272c6",
+      recipeSha256: "ad5e7452795eee5ee8da4321f4260760e6e0e8536193978cd721748385e3f2f4",
+      stableBinarySha256: "6109d6017208b7ea091feeb40cae6640ff925c54e391d1ec0e7737057c30ded4",
+      binarySha256: "47b75f81c09ba5bf966acad48055a1c287708241a44c876fa4483c3189ce5f1e",
       cdhashes: [
-        "d2af3d210165b1a915562e4ec1895a6286fd1d6f",
-        "26875724107a2489e9341d8d86ffa020b3b2d5a5"
+        "f5f6876043eadc558ca3d5d056c49b1d771aef6b",
+        "1c072373aff231d756e20fa008b0f9486b229888"
       ]
     };
-    VERIFIED_FILESYSTEM_MAX_BUFFER_BYTES = 32 * 1024 * 1024;
-    VERIFIED_FILESYSTEM_BATCH_BYTES = 24 * 1024 * 1024;
     VERIFIED_HELPER_SCRIPT = `
 set -euo pipefail
 helper_pid=
