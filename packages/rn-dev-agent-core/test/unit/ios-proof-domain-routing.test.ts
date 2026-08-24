@@ -176,6 +176,48 @@ test('inputText inherits the preceding selector proof domain', () => {
     );
 });
 
+test('inputText keeps the focused selector domain across an intervening proof segment', () => {
+  const nativeFocus = planIosProofDomains(
+    [
+      { tapOn: 'Email' },
+      { assertVisible: { id: 'react-status' } },
+      { inputText: 'person@example.com' },
+    ],
+    {},
+  );
+  assert.equal(nativeFocus.ok, true);
+  if (nativeFocus.ok)
+    assert.deepEqual(
+      nativeFocus.segments.map(({ domain, sourceIndices }) => ({ domain, sourceIndices })),
+      [
+        { domain: 'xctest-native', sourceIndices: [0] },
+        { domain: 'react-tree', sourceIndices: [1] },
+        { domain: 'xctest-native', sourceIndices: [2] },
+      ],
+    );
+
+  const reactFocus = planIosProofDomains(
+    [
+      { tapOn: { id: 'email' } },
+      { assertVisible: 'Native status' },
+      { inputText: 'person@example.com' },
+    ],
+    {},
+  );
+  assert.equal(reactFocus.ok, true);
+  if (reactFocus.ok) {
+    assert.deepEqual(
+      reactFocus.segments.map(({ domain, sourceIndices }) => ({ domain, sourceIndices })),
+      [
+        { domain: 'react-tree', sourceIndices: [0] },
+        { domain: 'xctest-native', sourceIndices: [1] },
+        { domain: 'react-tree', sourceIndices: [2] },
+      ],
+    );
+    assert.equal(reactFocus.segments[2]?.initialReactFocusId, 'email');
+  }
+});
+
 test('negative native assertions cannot prove blindness', () => {
   assert.deepEqual(
     nativeSelectorsForCommands([
@@ -382,9 +424,13 @@ function nativeRunnerOutput(extra = '') {
 }
 
 function nativeHandler(
-  visible: boolean,
+  visible: boolean | (() => boolean),
   runnerFails: boolean,
   failureOutput = "Element with text 'Open in' not found",
+  options: {
+    beforeFailure?: () => void;
+    stopFastRunner?: () => Promise<void>;
+  } = {},
 ) {
   return createMaestroRunHandler({
     getActiveSession: () => ({
@@ -397,16 +443,18 @@ function nativeHandler(
     replayDeps: () => null,
     chooseDispatch: () => nativeDispatch(),
     parkFlow: async (run) => run(),
+    stopFastRunner: options.stopFastRunner ?? (async () => {}),
     resolveEngineStatus: async () =>
       buildReplayEngineStatus('pinned-ok', MAESTRO_RUNNER_PIN.version, false),
     nativeVisionProbe: async ({ selectors }) => ({
       source: 'rn-fast-runner-snapshot',
       nodeCount: 42,
-      visibleSelectors: visible ? selectors : [],
+      visibleSelectors: (typeof visible === 'function' ? visible() : visible) ? selectors : [],
       runtimeMajor: 26,
     }),
     execFile: async () => {
       if (!runnerFails) return { stdout: nativeRunnerOutput(), stderr: '' };
+      options.beforeFailure?.();
       throw Object.assign(new Error('native selector failed'), {
         code: 1,
         stdout: nativeRunnerOutput(failureOutput),
@@ -417,11 +465,13 @@ function nativeHandler(
 }
 
 test('native-only blindness requires same-screen selector evidence', async () => {
+  let comparisonRunnerStopped = false;
   const env = envelope(
-    await nativeHandler(
-      true,
-      true,
-    )({
+    await nativeHandler(true, true, undefined, {
+      stopFastRunner: async () => {
+        comparisonRunnerStopped = true;
+      },
+    })({
       platform: 'ios',
       deviceId: IOS_UDID,
       inlineYaml: `appId: com.example.app\n---\n- assertVisible: Open in\n`,
@@ -433,10 +483,11 @@ test('native-only blindness requires same-screen selector evidence', async () =>
   assert.equal(env.meta?.nativeVision.runtimeVersionHeuristicIsProof, false);
   assert.equal(env.meta?.cleanup.cleanupProven, true);
   assert.equal(env.meta?.cleanup.wdaProcessSettled, true);
+  assert.equal(comparisonRunnerStopped, true);
   assert.equal(JSON.stringify(env).includes('Open in'), false, 'selector text stays sanitized');
 });
 
-test('one failed native assertion can use its sole preflight selector without echoing it', async () => {
+test('one failed native assertion can use its sole failure-screen selector without echoing it', async () => {
   const handler = nativeHandler(true, true, '    ✗ assertVisible (0.1s)');
   const env = envelope(
     await handler({
@@ -448,6 +499,40 @@ test('one failed native assertion can use its sole preflight selector without ec
   );
   assert.equal(env.code, 'NATIVE_SURFACE_BLIND');
   assert.equal(JSON.stringify(env).includes('Modal control'), false);
+});
+
+test('a selector visible only before navigation cannot prove native blindness', async () => {
+  let visible = true;
+  const env = envelope(
+    await nativeHandler(() => visible, true, "Element with text 'Initial control' not found", {
+      beforeFailure: () => {
+        visible = false;
+      },
+    })({
+      platform: 'ios',
+      deviceId: IOS_UDID,
+      inlineYaml: `appId: com.example.app\n---\n- tapOn: Next\n- assertVisible: Initial control\n`,
+      ...callbacks,
+    }),
+  );
+  assert.notEqual(env.code, 'NATIVE_SURFACE_BLIND');
+});
+
+test('failure-screen comparison cleanup uncertainty overrides native blindness', async () => {
+  const env = envelope(
+    await nativeHandler(true, true, undefined, {
+      stopFastRunner: async () => {
+        throw new Error('cleanup unavailable');
+      },
+    })({
+      platform: 'ios',
+      deviceId: IOS_UDID,
+      inlineYaml: `appId: com.example.app\n---\n- assertVisible: Open in\n`,
+      ...callbacks,
+    }),
+  );
+  assert.equal(env.code, 'AUTOMATION_CLEANUP_UNPROVEN');
+  assert.equal(env.meta?.cleanup.cleanupProven, false);
 });
 
 test('ordinary native selector miss is not called blind', async () => {
@@ -479,6 +564,47 @@ test('WDA-visible native smoke still passes in the XCTest domain', async () => {
   );
   assert.equal(env.ok, true);
   assert.equal(env.data?.proofDomain, 'xctest-native');
+});
+
+test('partitioned native trace indices map back to original commands', async () => {
+  const handler = createMaestroRunHandler({
+    getActiveSession: () => ({
+      name: 'partition-index',
+      platform: 'ios',
+      deviceId: IOS_UDID,
+      appId: 'com.example.app',
+      openedAt: new Date(0).toISOString(),
+    }),
+    replayDeps: () => ({
+      pressByTestId: async () => {},
+      typeByTestId: async () => {},
+      treeFor: async (id) => ({ testID: id }),
+      frontmostFor: async () => ({ visible: true }),
+      launchApp: async () => {},
+      settle: async () => {},
+    }),
+    chooseDispatch: () => nativeDispatch(),
+    parkFlow: async (run) => run(),
+    resolveEngineStatus: async () =>
+      buildReplayEngineStatus('pinned-ok', MAESTRO_RUNNER_PIN.version, false),
+    execFile: async () => ({
+      stdout: nativeRunnerOutput('    ✓ assertVisible (0.1s)'),
+      stderr: '',
+    }),
+  });
+  const env = envelope(
+    await handler({
+      platform: 'ios',
+      deviceId: IOS_UDID,
+      inlineYaml: `appId: com.example.app\n---\n- assertVisible:\n    id: react-status\n- assertVisible: Native status\n`,
+      ...callbacks,
+    }),
+  );
+  assert.equal(env.ok, true);
+  assert.deepEqual(
+    env.data?.steps.map((step: { index: number }) => step.index),
+    [0, 1],
+  );
 });
 
 test('native origin is claimed before runner parking and completed after resume', async () => {

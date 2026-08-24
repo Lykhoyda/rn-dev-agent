@@ -236,6 +236,25 @@ function parseEnvelope(toolResult: ToolResult, toolName: string): MaestroEnvelop
   }
 }
 
+function typedReactSelectorFailure(env: MaestroEnvelope, raw: string): MaestroFailure | null {
+  const proofDomain = env.meta?.proofDomain;
+  const failedSelector = env.meta?.failedSelector;
+  if (
+    env.code !== 'TESTID_NOT_FOUND' ||
+    proofDomain !== 'react-tree' ||
+    typeof failedSelector !== 'string' ||
+    failedSelector.length === 0
+  ) {
+    return null;
+  }
+  return {
+    kind: 'SELECTOR_NOT_FOUND',
+    selectorKind: 'id',
+    selector: failedSelector,
+    raw,
+  };
+}
+
 function replaySuccessEvidence(env: MaestroEnvelope): {
   transport: string;
   transportVersion: string | null;
@@ -647,6 +666,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
       const firstDeviceAuthority = readMaestroDeviceAuthority(firstEnv);
       probeDeviceId = firstDeviceAuthority?.reportedDeviceId ?? observedDeviceId;
       const enginePinDivergence = strictExecutor ? strictEnginePinDivergence(firstEnv) : null;
+      const firstTypedSelectorFailure = typedReactSelectorFailure(firstEnv, firstOutput);
 
       if (enginePinDivergence) {
         const autoRepair: AutoRepairOutcome = {
@@ -680,7 +700,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
 
       const firstPassed = firstEnv.ok === true && firstEnv.data?.passed === true;
 
-      if (firstEnv.code) {
+      if (firstEnv.code && !firstTypedSelectorFailure) {
         const typedCode = firstEnv.code as ToolErrorCode;
         const autoRepair: AutoRepairOutcome = {
           attempted: false,
@@ -771,7 +791,9 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
       }
 
       // ─── First attempt failed — classify ─────────────────────────────
-      const failure = parseMaestroFailure(firstOutput, readMaestroTerminal(firstEnv));
+      const failure =
+        firstTypedSelectorFailure ??
+        parseMaestroFailure(firstOutput, readMaestroTerminal(firstEnv));
 
       // GH #186: structural route-drift takes precedence over selector repair.
       // If the action recorded an expected route sequence and the LIVE route is
@@ -1002,7 +1024,8 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
       const retryFailureDetail = readMaestroFailureDetail(retryEnv, retryOutput);
       const retryTerminal = readMaestroTerminal(retryEnv);
       const retryFailure = !retryPassed
-        ? parseMaestroFailure(retryOutput, retryTerminal)
+        ? (typedReactSelectorFailure(retryEnv, retryOutput) ??
+          parseMaestroFailure(retryOutput, retryTerminal))
         : undefined;
       const retryClassification = retryFailure ? classifyFailure(retryFailure) : undefined;
       const retryDeviceAuthority = readMaestroDeviceAuthority(retryEnv);

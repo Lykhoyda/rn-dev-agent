@@ -90,10 +90,11 @@ export async function runCdpReplayCommands(
   commands: unknown[],
   params: Record<string, string>,
   deps: CdpReplayDeps,
-  opts: { signal?: AbortSignal } = {},
+  opts: { signal?: AbortSignal; initialFocusId?: string } = {},
 ): Promise<ReplayResult> {
   return replayFlow(normalizeSteps(commands, params), buildCdpDispatch(deps), {
     signal: opts.signal,
+    initialFocusId: opts.initialFocusId,
   });
 }
 
@@ -103,7 +104,9 @@ export function buildCdpDispatch(deps: CdpReplayDeps): ReplayDispatch {
       const tree = await deps.treeFor(id);
       const treeMatches = countExactMatches(tree, id);
       if (treeMatches === 0)
-        throw new ReplayDispatchError('TESTID_NOT_FOUND', `testID "${id}" not present`);
+        throw new ReplayDispatchError('TESTID_NOT_FOUND', `testID "${id}" not present`, {
+          failedSelector: id,
+        });
       const frontmost = await deps.frontmostFor?.(id);
       const matches = frontmost ? (frontmost.matchCount ?? 1) : treeMatches;
       if (matches > 1)
@@ -135,6 +138,7 @@ export function buildCdpDispatch(deps: CdpReplayDeps): ReplayDispatch {
           visible: false,
           code: 'TESTID_NOT_FOUND',
           reason: `testID "${id}" not present in the React tree`,
+          meta: { failedSelector: id },
         };
       const frontmost = await deps.frontmostFor?.(id);
       const matches = frontmost ? (frontmost.matchCount ?? 1) : treeMatches;

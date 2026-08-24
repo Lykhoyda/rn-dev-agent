@@ -26,6 +26,7 @@ export interface ReplayVisibility {
   visible: boolean;
   reason?: string;
   code?: string;
+  meta?: Record<string, unknown>;
 }
 
 export class ReplayDispatchError extends Error {
@@ -144,11 +145,16 @@ export function normalizeSteps(body: unknown[], params: Record<string, string>):
 export async function replayFlow(
   steps: ReplayStep[],
   dispatch: ReplayDispatch,
-  opts: { indexOffset?: number; sourceIndex?: number; signal?: AbortSignal } = {},
+  opts: {
+    indexOffset?: number;
+    sourceIndex?: number;
+    signal?: AbortSignal;
+    initialFocusId?: string;
+  } = {},
 ): Promise<ReplayResult> {
   const offset = opts.indexOffset ?? 0;
   const trace: ReplayResult['steps'] = [];
-  let lastTapped: string | null = null;
+  let lastTapped: string | null = opts.initialFocusId ?? null;
   const sourceIndex = (i: number): number => opts.sourceIndex ?? i + offset;
 
   const fail = (
@@ -226,6 +232,7 @@ export async function replayFlow(
               i,
               verdict.reason ?? `assertVisible: "${s.id}" is not frontmost`,
               verdict.code ?? 'ASSERTION_FAILED',
+              verdict.meta,
             );
           break;
         }
@@ -249,6 +256,7 @@ export async function replayFlow(
               i,
               verdict.reason ?? `extendedWaitUntil: "${s.id}" is not frontmost`,
               verdict.code ?? 'TESTID_NOT_FOUND',
+              verdict.meta,
             );
           break;
         }

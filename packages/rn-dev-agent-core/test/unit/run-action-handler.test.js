@@ -99,6 +99,16 @@ const REPAIR_TRANSPORT_BLIND_ENV = {
     'cdp_repair_action: Maestro/WDA reported "fab-create-task" not visible, but rn-fast-runner sees it (3 testIDs in the live snapshot). This is transport-blindness, not testID drift (GH #317).',
   code: 'TRANSPORT_BLIND',
 };
+const FAIL_TYPED_REACT_SELECTOR_ENV = {
+  ok: false,
+  error: 'React-tree replay failed at step 0: testID not present',
+  code: 'TESTID_NOT_FOUND',
+  meta: {
+    proofDomain: 'react-tree',
+    failedStepIndex: 0,
+    failedSelector: 'fab-create-task',
+  },
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Validation paths
@@ -357,6 +367,22 @@ test('run-action: repair patched but retry still fails → autoRepair.outcome = 
   assert.equal(sidecar.runHistory.length, 1);
   assert.equal(sidecar.runHistory[0].status, 'fail');
   assert.equal(sidecar.runHistory[0].autoRepair?.outcome, 'failed');
+});
+
+test('run-action: typed React-tree selector miss still reaches auto-repair', async () => {
+  project.seedAction('demo', fixtureYaml({ id: 'demo', selectors: ['fab-create-task'] }));
+
+  const handler = createRunActionHandler({
+    maestroRun: fakeMaestroRun([FAIL_TYPED_REACT_SELECTOR_ENV, PASS_ENV]),
+    repairAction: fakeRepairAction(REPAIR_PATCHED_ENV),
+  });
+  const result = await handler({ actionId: 'demo', projectRoot: project.root });
+
+  assert.equal(result.isError, undefined);
+  const env = JSON.parse(result.content[0].text);
+  assert.equal(env.ok, true);
+  assert.equal(env.data.autoRepair.attempted, true);
+  assert.equal(env.data.autoRepair.outcome, 'passed');
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

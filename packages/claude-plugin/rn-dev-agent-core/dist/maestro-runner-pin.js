@@ -14228,7 +14228,7 @@ function normalizeSteps(body, params) {
 async function replayFlow(steps, dispatch, opts = {}) {
   const offset = opts.indexOffset ?? 0;
   const trace = [];
-  let lastTapped = null;
+  let lastTapped = opts.initialFocusId ?? null;
   const sourceIndex = (i) => opts.sourceIndex ?? i + offset;
   const fail = (i, reason, failureCode, failureMeta) => ({
     passed: false,
@@ -14292,7 +14292,7 @@ async function replayFlow(steps, dispatch, opts = {}) {
             durationMs: Date.now() - startedAt
           });
           if (!verdict.visible)
-            return fail(i, verdict.reason ?? `assertVisible: "${s.id}" is not frontmost`, verdict.code ?? "ASSERTION_FAILED");
+            return fail(i, verdict.reason ?? `assertVisible: "${s.id}" is not frontmost`, verdict.code ?? "ASSERTION_FAILED", verdict.meta);
           break;
         }
         case "waitVisible": {
@@ -14311,7 +14311,7 @@ async function replayFlow(steps, dispatch, opts = {}) {
             durationMs: Date.now() - startedAt
           });
           if (!verdict.visible)
-            return fail(i, verdict.reason ?? `extendedWaitUntil: "${s.id}" is not frontmost`, verdict.code ?? "TESTID_NOT_FOUND");
+            return fail(i, verdict.reason ?? `extendedWaitUntil: "${s.id}" is not frontmost`, verdict.code ?? "TESTID_NOT_FOUND", verdict.meta);
           break;
         }
         case "wait":
@@ -14414,6 +14414,16 @@ function commandName(command) {
   const keys = Object.keys(command);
   return keys.length === 1 ? keys[0] : null;
 }
+function exactTapId(command, params) {
+  try {
+    const step = normalizeSteps([command], params)[0];
+    return step?.t === "tap" ? step.id : null;
+  } catch (error) {
+    if (error instanceof UnsupportedStepError)
+      return null;
+    throw error;
+  }
+}
 function commandDomain(command, params) {
   const name = commandName(command);
   if (name === "waitForAnimationToEnd" || name === "inputText")
@@ -14439,10 +14449,13 @@ function planIosProofDomains(commands, params) {
     }
   }
   const segments = [];
+  let focusedDomain = null;
+  let focusedReactId = null;
   for (let index = 0; index < commands.length; index++) {
+    const name = commandName(commands[index]);
     let domain = classified[index];
     if (domain === "neutral") {
-      domain = segments.at(-1)?.domain ?? classified.slice(index + 1).find((candidate) => candidate !== "neutral") ?? "react-tree";
+      domain = (name === "inputText" ? focusedDomain : null) ?? segments.at(-1)?.domain ?? classified.slice(index + 1).find((candidate) => candidate !== "neutral") ?? "react-tree";
     }
     if (domain === "mixed")
       continue;
@@ -14451,7 +14464,19 @@ function planIosProofDomains(commands, params) {
       prior.commands.push(commands[index]);
       prior.sourceIndices.push(index);
     } else {
-      segments.push({ domain, commands: [commands[index]], sourceIndices: [index] });
+      segments.push({
+        domain,
+        commands: [commands[index]],
+        sourceIndices: [index],
+        ...domain === "react-tree" && focusedReactId ? { initialReactFocusId: focusedReactId } : {}
+      });
+    }
+    if (name === "tapOn") {
+      focusedDomain = domain;
+      focusedReactId = domain === "react-tree" ? exactTapId(commands[index], params) : null;
+    } else if (name === "launchApp" || name === "clearState" || name === "killApp" || name === "stopApp") {
+      focusedDomain = null;
+      focusedReactId = null;
     }
   }
   return { ok: true, segments };
@@ -14551,7 +14576,8 @@ function isDisabled(props) {
 }
 async function runCdpReplayCommands(commands, params, deps, opts = {}) {
   return replayFlow(normalizeSteps(commands, params), buildCdpDispatch(deps), {
-    signal: opts.signal
+    signal: opts.signal,
+    initialFocusId: opts.initialFocusId
   });
 }
 function buildCdpDispatch(deps) {
@@ -14560,7 +14586,9 @@ function buildCdpDispatch(deps) {
       const tree = await deps.treeFor(id);
       const treeMatches = countExactMatches(tree, id);
       if (treeMatches === 0)
-        throw new ReplayDispatchError("TESTID_NOT_FOUND", `testID "${id}" not present`);
+        throw new ReplayDispatchError("TESTID_NOT_FOUND", `testID "${id}" not present`, {
+          failedSelector: id
+        });
       const frontmost = await deps.frontmostFor?.(id);
       const matches = frontmost ? frontmost.matchCount ?? 1 : treeMatches;
       if (matches > 1)
@@ -14581,7 +14609,8 @@ function buildCdpDispatch(deps) {
         return {
           visible: false,
           code: "TESTID_NOT_FOUND",
-          reason: `testID "${id}" not present in the React tree`
+          reason: `testID "${id}" not present in the React tree`,
+          meta: { failedSelector: id }
         };
       const frontmost = await deps.frontmostFor?.(id);
       const matches = frontmost ? frontmost.matchCount ?? 1 : treeMatches;
@@ -14820,6 +14849,7 @@ async function buildRunnerResume(platform, probe) {
 }
 function createMaestroRunHandler(deps = {}) {
   const fastHealthCheck2 = deps.fastHealthCheck ?? fastHealthCheck;
+  const stopFastRunner2 = deps.stopFastRunner ?? stopFastRunner;
   const activeSession2 = deps.getActiveSession ?? getActiveSession;
   const selectDispatch = deps.chooseDispatch ?? chooseMaestroDispatch;
   const parkFlow = deps.parkFlow ?? runFlowParked;
@@ -14959,12 +14989,14 @@ function createMaestroRunHandler(deps = {}) {
             if (typeof env.data.output === "string")
               nativeOutput += env.data.output;
             const steps = Array.isArray(env.data.steps) ? env.data.steps : [];
-            for (const step of steps) {
+            for (const [ordinal, step] of steps.entries()) {
               if (!step || typeof step !== "object")
                 continue;
               const record = step;
+              const reportedIndex = Number(record.index);
+              const localIndex = Number.isSafeInteger(reportedIndex) && reportedIndex >= 0 ? reportedIndex : ordinal;
               combinedSteps.push({
-                index: Number(record.index ?? combinedSteps.length),
+                index: segment.sourceIndices[localIndex] ?? localIndex,
                 name: String(record.name ?? record.verb ?? "native"),
                 verb: String(record.verb ?? record.name ?? "native"),
                 status: record.status === "fail" ? "fail" : "pass",
@@ -14978,20 +15010,30 @@ function createMaestroRunHandler(deps = {}) {
           if (!replayDependencies) {
             return failResult("React-tree replay requires the authority-bound bridgeless runtime. Reconnect the exact app bundle and retry.", "CDP_NOT_CONNECTED", { proofDomain: "react-tree" });
           }
+          let stageCursor = 0;
+          let reactFocusId = segment.initialReactFocusId;
           const stageResults = await executeMaestroAuthorityStages(segment.commands, async (commands) => {
+            const sourceIndices = segment.sourceIndices.slice(stageCursor, stageCursor + commands.length);
+            stageCursor += commands.length;
             const replay = await runCdpReplayCommands([...commands], args.params ?? {}, {
               ...replayDependencies,
               launchApp: async () => {
               }
-            }, { signal: controller.signal });
+            }, { signal: controller.signal, initialFocusId: reactFocusId });
             if (!replay.passed)
-              throw new ReactReplayFailure(replay);
-            return replay;
+              throw new ReactReplayFailure(replay, sourceIndices);
+            for (const step of replay.steps) {
+              if (step.t === "launch")
+                reactFocusId = void 0;
+              if (step.t === "tap" && step.target)
+                reactFocusId = step.target;
+            }
+            return { replay, sourceIndices };
           }, claimOrigin, completeOrigin, relaunchManagedApp, reproveManagedOrigin);
-          for (const replay of stageResults) {
+          for (const { replay, sourceIndices } of stageResults) {
             for (const step of replay.steps) {
               combinedSteps.push({
-                index: segment.sourceIndices[step.sourceIndex] ?? step.sourceIndex,
+                index: sourceIndices[step.sourceIndex] ?? step.sourceIndex,
                 name: step.t,
                 verb: step.t,
                 status: step.ok ? "pass" : "fail",
@@ -15032,9 +15074,10 @@ function createMaestroRunHandler(deps = {}) {
         const failure = error instanceof MaestroStageExecutionError ? error.stageError : error;
         if (failure instanceof ReactReplayFailure) {
           const replay = failure.replay;
-          return failResult(`React-tree replay failed at step ${String(replay.failedStepIndex)}: ${replay.reason ?? "unknown failure"}`, replay.failureCode ?? "ASSERTION_FAILED", {
+          const failedStepIndex = replay.failedStepIndex === void 0 ? void 0 : failure.sourceIndices[replay.failedStepIndex] ?? replay.failedStepIndex;
+          return failResult(`React-tree replay failed at step ${String(failedStepIndex)}: ${replay.reason ?? "unknown failure"}`, replay.failureCode ?? "ASSERTION_FAILED", {
             proofDomain: "react-tree",
-            failedStepIndex: replay.failedStepIndex,
+            failedStepIndex,
             ...replay.failureMeta
           });
         }
@@ -15141,14 +15184,6 @@ function createMaestroRunHandler(deps = {}) {
     const nativeSelectors = platform === "ios" ? nativeSelectorsForCommands(validatedCommands) : [];
     const flowAbort = new AbortController();
     const flowAbortTimer = setTimeout(() => flowAbort.abort(new Error("Maestro flow deadline exceeded")), Math.max(1, flowDeadline - now()));
-    let nativeVisionEvidence = null;
-    if (requestedDeviceId && nativeSelectors.length > 0 && deps.nativeVisionProbe) {
-      nativeVisionEvidence = await deps.nativeVisionProbe({
-        deviceId: requestedDeviceId,
-        selectors: nativeSelectors,
-        signal: flowAbort.signal
-      }).catch(() => null);
-    }
     let runnerReportDir;
     try {
       runnerReportDir = (deps.createReportDir ?? createRunnerReportDir)(dispatch.runner, "rn-maestro-report");
@@ -15448,10 +15483,38 @@ function createMaestroRunHandler(deps = {}) {
       const soleNativeSelector = nativeSelectors.length === 1 ? nativeSelectors[0].value : null;
       const selectorLessAssertionFailure = nativeFailure.kind === "UNKNOWN" && terminal.exitClass === "step-failure" && terminal.failedStep?.split(/\s+/, 1)[0] === "assertVisible";
       const failedNativeSelector = nativeFailure.kind === "SELECTOR_NOT_FOUND" ? nativeFailure.selector ?? soleNativeSelector : nativeFailure.kind === "ASSERTION_FAILED" ? nativeFailure.selector ?? soleNativeSelector : nativeFailure.kind === "TIMEOUT" ? nativeFailure.selector : selectorLessAssertionFailure ? soleNativeSelector : null;
+      let nativeVisionEvidence = null;
+      let nativeVisionAttempted = false;
+      if (requestedDeviceId && failedNativeSelector !== null && deps.nativeVisionProbe && !flowAbort.signal.aborted) {
+        nativeVisionAttempted = true;
+        nativeVisionEvidence = await deps.nativeVisionProbe({
+          deviceId: requestedDeviceId,
+          selectors: [{ kind: "text", value: failedNativeSelector }],
+          signal: flowAbort.signal
+        }).catch(() => null);
+      }
+      if (nativeVisionAttempted) {
+        try {
+          await stopFastRunner2(requestedDeviceId, flowAbort.signal);
+          await (args.completeRunnerPark ?? nestedMaestroAuthorityCallbacks(args).completeRunnerPark)(flowAbort.signal);
+        } catch {
+          return failResult("Native replay cleanup could not settle the failure-screen comparison runner.", "AUTOMATION_CLEANUP_UNPROVEN", {
+            platform,
+            proofDomain: "xctest-native",
+            runner: dispatch.runner,
+            cleanup: {
+              cleanupProven: false,
+              wdaProcessSettled: true,
+              runnerParkCommitted: false,
+              managedOriginSettled: !nativeOriginPreclaimed
+            }
+          });
+        }
+      }
       const fastRunnerSawFailedSelector = failedNativeSelector !== null && nativeVisionEvidence?.visibleSelectors.some((selector) => selector.value === failedNativeSelector) === true;
       if (fastRunnerSawFailedSelector) {
         const selectorKind = nativeVisionEvidence.visibleSelectors.find((selector) => selector.value === failedNativeSelector).kind;
-        return failResult("XCTest/WDA could not resolve a native-only selector that the bounded same-screen native snapshot saw before dispatch. This is a blind native surface, not an ordinary selector miss. Use a WDA-healthy simulator/runtime for the native step, then retry; exact React testID steps should remain on cdp_run_action.", "NATIVE_SURFACE_BLIND", {
+        return failResult("XCTest/WDA could not resolve a native-only selector that the bounded native snapshot saw on the failure screen. This is a blind native surface, not an ordinary selector miss. Use a WDA-healthy simulator/runtime for the native step, then retry; exact React testID steps should remain on cdp_run_action.", "NATIVE_SURFACE_BLIND", {
           platform,
           proofDomain: "xctest-native",
           runner: dispatch.runner,
@@ -15557,9 +15620,11 @@ var init_maestro_run = __esm({
     PARAM_KEY_RE = /^[A-Z_][A-Z0-9_]*$/;
     ReactReplayFailure = class extends Error {
       replay;
-      constructor(replay) {
+      sourceIndices;
+      constructor(replay, sourceIndices) {
         super(replay.reason ?? "React-tree replay failed");
         this.replay = replay;
+        this.sourceIndices = sourceIndices;
         this.name = "ReactReplayFailure";
       }
     };

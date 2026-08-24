@@ -110,6 +110,15 @@ test('replayFlow happy path: type routes to last tapped, all pass', async () => 
   ]);
 });
 
+test('replayFlow can resume a proven React focus across proof-domain segments', async () => {
+  const d = mockDispatch();
+  const r = await replayFlow([{ t: 'type', text: 'Hi' }], d, {
+    initialFocusId: 'title',
+  });
+  assert.equal(r.passed, true);
+  assert.deepEqual(d.calls, [['type', 'title', 'Hi']]);
+});
+
 test('replayFlow runFlow recurses only when whenVisible present', async () => {
   const d = mockDispatch({ visible: ['onboarding', 'tabs'] });
   const r = await replayFlow(

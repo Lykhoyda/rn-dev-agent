@@ -102,7 +102,7 @@ export function normalizeSteps(body, params) {
 export async function replayFlow(steps, dispatch, opts = {}) {
     const offset = opts.indexOffset ?? 0;
     const trace = [];
-    let lastTapped = null;
+    let lastTapped = opts.initialFocusId ?? null;
     const sourceIndex = (i) => opts.sourceIndex ?? i + offset;
     const fail = (i, reason, failureCode, failureMeta) => ({
         passed: false,
@@ -166,7 +166,7 @@ export async function replayFlow(steps, dispatch, opts = {}) {
                         durationMs: Date.now() - startedAt,
                     });
                     if (!verdict.visible)
-                        return fail(i, verdict.reason ?? `assertVisible: "${s.id}" is not frontmost`, verdict.code ?? 'ASSERTION_FAILED');
+                        return fail(i, verdict.reason ?? `assertVisible: "${s.id}" is not frontmost`, verdict.code ?? 'ASSERTION_FAILED', verdict.meta);
                     break;
                 }
                 case 'waitVisible': {
@@ -185,7 +185,7 @@ export async function replayFlow(steps, dispatch, opts = {}) {
                         durationMs: Date.now() - startedAt,
                     });
                     if (!verdict.visible)
-                        return fail(i, verdict.reason ?? `extendedWaitUntil: "${s.id}" is not frontmost`, verdict.code ?? 'TESTID_NOT_FOUND');
+                        return fail(i, verdict.reason ?? `extendedWaitUntil: "${s.id}" is not frontmost`, verdict.code ?? 'TESTID_NOT_FOUND', verdict.meta);
                     break;
                 }
                 case 'wait':

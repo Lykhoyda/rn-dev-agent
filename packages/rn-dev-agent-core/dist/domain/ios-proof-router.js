@@ -19,6 +19,17 @@ function commandName(command) {
     const keys = Object.keys(command);
     return keys.length === 1 ? keys[0] : null;
 }
+function exactTapId(command, params) {
+    try {
+        const step = normalizeSteps([command], params)[0];
+        return step?.t === 'tap' ? step.id : null;
+    }
+    catch (error) {
+        if (error instanceof UnsupportedStepError)
+            return null;
+        throw error;
+    }
+}
 function commandDomain(command, params) {
     const name = commandName(command);
     if (name === 'waitForAnimationToEnd' || name === 'inputText')
@@ -45,11 +56,15 @@ export function planIosProofDomains(commands, params) {
         }
     }
     const segments = [];
+    let focusedDomain = null;
+    let focusedReactId = null;
     for (let index = 0; index < commands.length; index++) {
+        const name = commandName(commands[index]);
         let domain = classified[index];
         if (domain === 'neutral') {
             domain =
-                segments.at(-1)?.domain ??
+                (name === 'inputText' ? focusedDomain : null) ??
+                    segments.at(-1)?.domain ??
                     classified.slice(index + 1).find((candidate) => candidate !== 'neutral') ??
                     'react-tree';
         }
@@ -61,7 +76,25 @@ export function planIosProofDomains(commands, params) {
             prior.sourceIndices.push(index);
         }
         else {
-            segments.push({ domain, commands: [commands[index]], sourceIndices: [index] });
+            segments.push({
+                domain,
+                commands: [commands[index]],
+                sourceIndices: [index],
+                ...(domain === 'react-tree' && focusedReactId
+                    ? { initialReactFocusId: focusedReactId }
+                    : {}),
+            });
+        }
+        if (name === 'tapOn') {
+            focusedDomain = domain;
+            focusedReactId = domain === 'react-tree' ? exactTapId(commands[index], params) : null;
+        }
+        else if (name === 'launchApp' ||
+            name === 'clearState' ||
+            name === 'killApp' ||
+            name === 'stopApp') {
+            focusedDomain = null;
+            focusedReactId = null;
         }
     }
     return { ok: true, segments };
