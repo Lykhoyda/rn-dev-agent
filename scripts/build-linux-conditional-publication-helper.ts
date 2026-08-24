@@ -328,6 +328,104 @@ static int same_content(long left, long right) {
   return 1;
 }
 
+static int directory_kind(const char *value) {
+  return value[0] == 'd' && value[1] == 'i' && value[2] == 'r' && value[3] == 'e' &&
+      value[4] == 'c' && value[5] == 't' && value[6] == 'o' && value[7] == 'r' &&
+      value[8] == 'y' && value[9] == 0;
+}
+static int symlink_kind(const char *value) {
+  return value[0] == 's' && value[1] == 'y' && value[2] == 'm' && value[3] == 'l' &&
+      value[4] == 'i' && value[5] == 'n' && value[6] == 'k' && value[7] == 0;
+}
+static int relative_stat(long directory_fd, const char *name, struct statx *value) {
+  return call5(SYS_STATX, directory_fd, (long)name, AT_SYMLINK_NOFOLLOW,
+               STATX_BASIC_STATS, (long)value) == 0;
+}
+static int lstat_path(const char *path, struct statx *value) {
+  return call5(SYS_STATX, AT_FDCWD, (long)path, AT_SYMLINK_NOFOLLOW,
+               STATX_BASIC_STATS, (long)value) == 0;
+}
+static int witnesses_unchanged(long argc, char **argv, long start) {
+  if ((argc - start) % 4 != 0) return 0;
+  for (long index = start; index < argc; index += 4) {
+    u64 expected_dev;
+    u64 expected_ino;
+    struct statx observed;
+    if (!parse_u64(argv[index + 2], &expected_dev) ||
+        !parse_u64(argv[index + 3], &expected_ino) ||
+        !lstat_path(argv[index], &observed) || device_number(&observed) != expected_dev ||
+        observed.ino != expected_ino) return 0;
+    if (directory_kind(argv[index + 1])) {
+      if (!directory(&observed)) return 0;
+    } else if (symlink_kind(argv[index + 1])) {
+      if ((observed.mode & S_IFMT) != 0120000) return 0;
+    } else {
+      return 0;
+    }
+  }
+  return 1;
+}
+static int publish_relative_if_unchanged(
+    const char *target_name,
+    const char *candidate_name,
+    const char *expected_name,
+    long argc,
+    char **argv,
+    long witness_start) {
+  if (!safe_name(target_name) || !safe_name(candidate_name) || !safe_name(expected_name)) return 2;
+  struct statx directory_stat;
+  if (!descriptor_stat(3, &directory_stat) || !directory(&directory_stat)) return 10;
+  long target = call4(SYS_OPENAT, 3, (long)target_name, O_RDONLY | O_NOFOLLOW | O_CLOEXEC, 0);
+  long candidate = call4(SYS_OPENAT, 3, (long)candidate_name, O_RDONLY | O_NOFOLLOW | O_CLOEXEC, 0);
+  long expected = call4(SYS_OPENAT, 3, (long)expected_name, O_RDONLY | O_NOFOLLOW | O_CLOEXEC, 0);
+  struct statx target_stat;
+  struct statx candidate_stat;
+  if (target < 0 || candidate < 0 || expected < 0 ||
+      !descriptor_stat(target, &target_stat) || !descriptor_stat(candidate, &candidate_stat) ||
+      !regular(&target_stat) || !regular(&candidate_stat) ||
+      target_stat.dev_major != candidate_stat.dev_major ||
+      target_stat.dev_minor != candidate_stat.dev_minor || !same_content(target, expected) ||
+      !witnesses_unchanged(argc, argv, witness_start)) return 10;
+  if (syscall6(SYS_RENAMEAT2, 3, (long)target_name, 3,
+               (long)candidate_name, RENAME_EXCHANGE, 0) != 0) return 11;
+  struct statx published;
+  struct statx displaced;
+  int committed = relative_stat(3, target_name, &published) &&
+      relative_stat(3, candidate_name, &displaced) &&
+      same_file(&published, &candidate_stat) && same_file(&displaced, &target_stat) &&
+      witnesses_unchanged(argc, argv, witness_start);
+  if (!committed) {
+    if (syscall6(SYS_RENAMEAT2, 3, (long)target_name, 3,
+                 (long)candidate_name, RENAME_EXCHANGE, 0) != 0) return 12;
+    return 10;
+  }
+  if (call4(SYS_UNLINKAT, 3, (long)candidate_name, 0, 0) != 0) return 11;
+  return 0;
+}
+static int link_relative_if_unchanged(
+    const char *candidate_name,
+    const char *target_name,
+    long argc,
+    char **argv,
+    long witness_start) {
+  if (!safe_name(candidate_name) || !safe_name(target_name)) return 2;
+  struct statx directory_stat;
+  struct statx candidate_stat;
+  if (!descriptor_stat(3, &directory_stat) || !directory(&directory_stat) ||
+      !relative_stat(3, candidate_name, &candidate_stat) || !regular(&candidate_stat) ||
+      !witnesses_unchanged(argc, argv, witness_start)) return 10;
+  long linked = call5(SYS_LINKAT, 3, (long)candidate_name, 3, (long)target_name, 0);
+  if (linked != 0) return linked == -17 ? 10 : 11;
+  struct statx published;
+  int committed = relative_stat(3, target_name, &published) &&
+      same_file(&published, &candidate_stat) && witnesses_unchanged(argc, argv, witness_start);
+  if (!committed) {
+    if (call4(SYS_UNLINKAT, 3, (long)target_name, 0, 0) != 0) return 12;
+    return 10;
+  }
+  return 0;
+}
+
 __attribute__((visibility("hidden"))) int helper_main(long argc, char **argv) {
   if (argc >= 7 && argv[1][0] == '-' && argv[1][1] == '-' && argv[1][2] == 'e' &&
       argv[1][3] == 'x' && argv[1][4] == 'e' && argv[1][5] == 'c' &&
@@ -455,6 +553,38 @@ __attribute__((visibility("hidden"))) int helper_main(long argc, char **argv) {
     u64 expected_ino;
     if (!parse_u64(argv[3], &expected_dev) || !parse_u64(argv[4], &expected_ino)) return 2;
     return list_directory(argv[2], expected_dev, expected_ino);
+  }
+  if (argc >= 5 && argv[1][0] == '-' && argv[1][1] == '-' && argv[1][2] == 'p' &&
+      argv[1][3] == 'u' && argv[1][4] == 'b' && argv[1][5] == 'l' && argv[1][6] == 'i' &&
+      argv[1][7] == 's' && argv[1][8] == 'h' && argv[1][9] == '-' && argv[1][10] == 'r' &&
+      argv[1][11] == 'e' && argv[1][12] == 'l' && argv[1][13] == 'a' && argv[1][14] == 't' &&
+      argv[1][15] == 'i' && argv[1][16] == 'v' && argv[1][17] == 'e' && argv[1][18] == '-' &&
+      argv[1][19] == 'i' && argv[1][20] == 'f' && argv[1][21] == '-' && argv[1][22] == 'u' &&
+      argv[1][23] == 'n' && argv[1][24] == 'c' && argv[1][25] == 'h' && argv[1][26] == 'a' &&
+      argv[1][27] == 'n' && argv[1][28] == 'g' && argv[1][29] == 'e' && argv[1][30] == 'd' &&
+      argv[1][31] == 0) {
+    return publish_relative_if_unchanged(argv[2], argv[3], argv[4], argc, argv, 5);
+  }
+  if (argc >= 4 && argv[1][0] == '-' && argv[1][1] == '-' && argv[1][2] == 'l' &&
+      argv[1][3] == 'i' && argv[1][4] == 'n' && argv[1][5] == 'k' && argv[1][6] == '-' &&
+      argv[1][7] == 'r' && argv[1][8] == 'e' && argv[1][9] == 'l' && argv[1][10] == 'a' &&
+      argv[1][11] == 't' && argv[1][12] == 'i' && argv[1][13] == 'v' && argv[1][14] == 'e' &&
+      argv[1][15] == '-' && argv[1][16] == 'i' && argv[1][17] == 'f' && argv[1][18] == '-' &&
+      argv[1][19] == 'u' && argv[1][20] == 'n' && argv[1][21] == 'c' && argv[1][22] == 'h' &&
+      argv[1][23] == 'a' && argv[1][24] == 'n' && argv[1][25] == 'g' && argv[1][26] == 'e' &&
+      argv[1][27] == 'd' && argv[1][28] == 0) {
+    return link_relative_if_unchanged(argv[2], argv[3], argc, argv, 4);
+  }
+  if (argc == 3 && argv[1][0] == '-' && argv[1][1] == '-' && argv[1][2] == 'u' &&
+      argv[1][3] == 'n' && argv[1][4] == 'l' && argv[1][5] == 'i' && argv[1][6] == 'n' &&
+      argv[1][7] == 'k' && argv[1][8] == '-' && argv[1][9] == 'r' && argv[1][10] == 'e' &&
+      argv[1][11] == 'l' && argv[1][12] == 'a' && argv[1][13] == 't' && argv[1][14] == 'i' &&
+      argv[1][15] == 'v' && argv[1][16] == 'e' && argv[1][17] == '-' && argv[1][18] == 'f' &&
+      argv[1][19] == 'i' && argv[1][20] == 'l' && argv[1][21] == 'e' && argv[1][22] == 0) {
+    struct statx candidate;
+    if (!safe_name(argv[2]) || !relative_stat(3, argv[2], &candidate) || !regular(&candidate))
+      return 10;
+    return call4(SYS_UNLINKAT, 3, (long)argv[2], 0, 0) == 0 ? 0 : 11;
   }
   if (argc != 7) return 2;
   const char *target_path = argv[2];

@@ -5,18 +5,18 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveTrustedSystemExecutable, } from '../util/trusted-system-executable.js';
 const DARWIN_HELPER_MANIFEST = {
-    sourceSha256: '955b36f932d7124525003fc88e8596a148ae5404b49f8381ff59435e52b272c6',
-    recipeSha256: 'ad5e7452795eee5ee8da4321f4260760e6e0e8536193978cd721748385e3f2f4',
-    stableBinarySha256: '6109d6017208b7ea091feeb40cae6640ff925c54e391d1ec0e7737057c30ded4',
-    binarySha256: '47b75f81c09ba5bf966acad48055a1c287708241a44c876fa4483c3189ce5f1e',
+    sourceSha256: '92301e735cd0ba6002ea24f5be5def60aafc76cd71665f817adea7aae8031431',
+    recipeSha256: '6e19324e3fb1b93938ce28db15813813b0b987d4afc8631d05e04674f7d41eb0',
+    stableBinarySha256: 'edbd95893a63ed8f24dd1eb2f4e2ff6f55586c2d4c8e70034b1daf93c16eddc0',
+    binarySha256: 'bab59c6c453f3d8bdaeef697f5a678f7ec57513dff74881d5f3fd4a66ad50dbf',
     cdhashes: [
-        'f5f6876043eadc558ca3d5d056c49b1d771aef6b',
-        '1c072373aff231d756e20fa008b0f9486b229888',
+        '9fc635786b94689d93e7c998e4d88592a3cc14f8',
+        '4b1d13c9dea252eff565f3a9bbcbd40939789bd7',
     ],
 };
 const LINUX_PUBLICATION_HELPER_SHA256 = {
-    x64: '17b1b6e0edbecefc013ccb1308a444532a72d5910f794de53195a758789bd6bb',
-    arm64: 'f9cb783474cc93e6dbb28e81b5a2e46d74c38926a392d75ce9ed5188bafe3520',
+    x64: '58087c4d70c90bff5587f2120e00f7c194e2054f83e4a4642f5fc55de562b41a',
+    arm64: 'e0db57dcf8b78bdc6aa326586fcf52fcb76184ea634fbf966d486a02bbb64ec5',
 };
 const VERIFIED_FILESYSTEM_MAX_BUFFER_BYTES = 32 * 1024 * 1024;
 const VERIFIED_FILESYSTEM_BATCH_BYTES = 24 * 1024 * 1024;
@@ -266,7 +266,7 @@ export function linkFileIntoVerifiedDirectory(directoryFd, candidatePath, target
     }
     return false;
 }
-function runVerifiedPublicationHelper(helperPath, expectedSha256, args) {
+function runVerifiedPublicationHelper(helperPath, expectedSha256, args, directoryFd) {
     const boundPath = `${helperPath}.publish.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}`;
     copyFileSync(helperPath, boundPath, constants.COPYFILE_EXCL | constants.COPYFILE_FICLONE);
     chmodSync(boundPath, 0o700);
@@ -274,7 +274,12 @@ function runVerifiedPublicationHelper(helperPath, expectedSha256, args) {
         if (createHash('sha256').update(readFileSync(boundPath)).digest('hex') !== expectedSha256) {
             throw new Error('Conditional action publication helper changed before execution.');
         }
-        execFileSync(boundPath, [...args], { stdio: 'ignore', timeout: 2_000 });
+        execFileSync(boundPath, [...args], {
+            stdio: directoryFd === undefined
+                ? 'ignore'
+                : ['ignore', 'ignore', 'ignore', directoryFd],
+            timeout: 2_000,
+        });
         return true;
     }
     catch (error) {
@@ -285,6 +290,37 @@ function runVerifiedPublicationHelper(helperPath, expectedSha256, args) {
     finally {
         unlinkSync(boundPath);
     }
+}
+function publicationWitnessArguments(witnesses) {
+    return witnesses.flatMap((witness) => [
+        witness.path,
+        witness.kind,
+        witness.dev,
+        witness.ino,
+    ]);
+}
+export function publishFileIfUnchangedInVerifiedDirectory(directoryFd, targetName, candidateName, expectedName, witnesses) {
+    const helper = verifiedNativePublicationHelper();
+    return runVerifiedPublicationHelper(helper.path, helper.sha256, [
+        '--publish-relative-if-unchanged',
+        targetName,
+        candidateName,
+        expectedName,
+        ...publicationWitnessArguments(witnesses),
+    ], directoryFd);
+}
+export function linkFileIntoVerifiedDirectoryFd(directoryFd, candidateName, targetName, witnesses) {
+    const helper = verifiedNativePublicationHelper();
+    return runVerifiedPublicationHelper(helper.path, helper.sha256, [
+        '--link-relative-if-unchanged',
+        candidateName,
+        targetName,
+        ...publicationWitnessArguments(witnesses),
+    ], directoryFd);
+}
+export function unlinkFileFromVerifiedDirectoryFd(directoryFd, fileName) {
+    const helper = verifiedNativePublicationHelper();
+    return runVerifiedPublicationHelper(helper.path, helper.sha256, ['--unlink-relative-file', fileName], directoryFd);
 }
 function verifiedFilesystemHelper() {
     if (process.platform === 'darwin') {

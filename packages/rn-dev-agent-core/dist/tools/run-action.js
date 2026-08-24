@@ -333,7 +333,7 @@ export function createRunActionHandler(deps = {}) {
         // doesn't abort with STALE_TARGET. Opt out with forceReload: false to
         // get the strict Phase 129 "respect external edits" behavior back.
         const forceReload = proofReplay ? false : args.forceReload !== false;
-        const action = forceReload ? acknowledgeExternalEdit(loaded) : loaded;
+        const action = forceReload ? acknowledgeExternalEdit(loaded, loadContext) : loaded;
         let engineStatus;
         try {
             engineStatus = await resolveEngineStatus();

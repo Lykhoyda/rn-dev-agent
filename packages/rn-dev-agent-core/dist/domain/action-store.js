@@ -51,6 +51,38 @@ export function assertReadableActionCorpus(projectRoot) {
 export function assertReadableActionLoadContextStable(context) {
     assertReadableActionOperationUnchanged(context.operation);
 }
+function publicationWitnesses(context) {
+    const { operation } = context;
+    const witnesses = [
+        {
+            path: operation.projectRoot,
+            kind: 'directory',
+            ...operation.projectRootIdentity,
+        },
+        {
+            path: operation.actionsDir,
+            kind: operation.kind === 'approved-inherited' ? 'symlink' : 'directory',
+            ...(operation.linkIdentity ?? operation.directoryIdentity),
+        },
+        {
+            path: operation.directory,
+            kind: 'directory',
+            ...operation.directoryIdentity,
+        },
+    ];
+    if (operation.primaryIdentity) {
+        witnesses.push({
+            path: operation.primaryIdentity.topLevel.path,
+            kind: 'directory',
+            ...operation.primaryIdentity.topLevel.identity,
+        }, {
+            path: operation.primaryIdentity.commonDir.path,
+            kind: 'directory',
+            ...operation.primaryIdentity.commonDir.identity,
+        });
+    }
+    return witnesses;
+}
 function lstatIfPresent(path) {
     try {
         return lstatSync(path);
@@ -669,7 +701,45 @@ export function actionWasEditedExternally(action) {
  * No-op when the YAML mtime equals the sidecar's lastSeenMtimeMs (the
  * common case where no external write happened).
  */
-export function acknowledgeExternalEdit(action) {
+export function acknowledgeExternalEdit(action, context) {
+    if (context) {
+        const fileName = basename(action.filePath);
+        if (action.filePath !== join(context.corpus.actionsDir, fileName) ||
+            !/\.ya?ml$/i.test(fileName)) {
+            return action;
+        }
+        const targetFilePath = join(context.snapshot.directory, fileName);
+        let currentMtimeMs;
+        try {
+            assertReadableActionLoadContextStable(context);
+            currentMtimeMs = statSync(targetFilePath).mtimeMs;
+        }
+        catch {
+            return action;
+        }
+        if (currentMtimeMs <= action.state.lastSeenMtimeMs)
+            return action;
+        const nextState = markSeen(action.state, currentMtimeMs);
+        const publicationPrecondition = () => {
+            try {
+                assertReadableActionLoadContextStable(context);
+                return runtimeBaselineMatches(action.filePath, action.state);
+            }
+            catch {
+                return false;
+            }
+        };
+        if (!atomicWriter.writeSidecarConditional(targetFilePath, sidecarPathFor(action.filePath), nextState, publicationPrecondition, publicationWitnesses(context))) {
+            return action;
+        }
+        const nextAction = { ...action, state: nextState };
+        mirrorToDb({
+            yamlFilePath: action.filePath,
+            state: nextState,
+            meta: { appId: action.metadata.appId, status: action.metadata.status, path: action.filePath },
+        });
+        return nextAction;
+    }
     const nextAction = atomicWriter.withLock(action.filePath, () => {
         let currentMtimeMs;
         try {
@@ -820,7 +890,7 @@ export function saveActionRuntimeWithCAS(context, expected, nextState) {
             return false;
         }
     };
-    if (!atomicWriter.writeSidecarConditional(targetFilePath, sidecarPath, nextState, publicationPrecondition)) {
+    if (!atomicWriter.writeSidecarConditional(targetFilePath, sidecarPath, nextState, publicationPrecondition, publicationWitnesses(context))) {
         return { ok: false, conflict: 'EXTERNAL_WRITE' };
     }
     expected.state = nextState;
@@ -869,7 +939,7 @@ export function promoteActionRuntimeWithCAS(context, expected, nextState) {
         }
     };
     const publicationPrecondition = () => yamlPublicationPrecondition() && runtimeBaselineMatches(expected.filePath, expected.state);
-    const written = atomicWriter.pairWriteConditional(targetFilePath, promoted, sidecarPath, nextState, publicationPrecondition, yamlPublicationPrecondition, yaml);
+    const written = atomicWriter.pairWriteConditional(targetFilePath, promoted, sidecarPath, nextState, publicationPrecondition, yamlPublicationPrecondition, yaml, publicationWitnesses(context));
     if (!written)
         return { ok: false, conflict: 'EXTERNAL_WRITE' };
     expected.state = { ...nextState, lastSeenMtimeMs: written.finalMtimeMs };

@@ -641,6 +641,128 @@ test('runtime persistence rechecks the corpus at the sidecar publication boundar
   }
 });
 
+test('force reload refuses a prepared project replacement without publication residue', async () => {
+  const fixture = makeFixture();
+  const originalWriteFileWithMode = atomicWriter._writeFileWithMode;
+  try {
+    seedLoginCorpus(fixture.primary);
+    const worktree = addWorktree(fixture);
+    inherit(worktree);
+    const initialContext = openReadableActionLoadContext(worktree, { actionId: 'login' });
+    assert.ok(initialContext);
+    const initialAction = loadActionFromContext(initialContext, 'login');
+    assert.ok(initialAction);
+    const stateDirectory = join(worktree, '.rn-agent', 'state');
+    mkdirSync(stateDirectory, { recursive: true });
+    writeFileSync(
+      join(stateDirectory, 'login.state.json'),
+      `${JSON.stringify({ ...initialAction.state, lastSeenMtimeMs: 0 }, null, 2)}\n`,
+    );
+
+    const displaced = join(fixture.root, 'displaced-force-reload');
+    const replacementState = { ...initialAction.state, lastSeenMtimeMs: 0 };
+    const replacementSidecar = join(worktree, '.rn-agent', 'state', 'login.state.json');
+    let replaced = false;
+    atomicWriter._writeFileWithMode = (path, content, mode) => {
+      originalWriteFileWithMode(path, content, mode);
+      if (!replaced && path.includes('login.state.json.tmp.')) {
+        renameSync(worktree, displaced);
+        mkdirSync(join(worktree, '.rn-agent', 'actions'), { recursive: true });
+        mkdirSync(join(worktree, '.rn-agent', 'state'), { recursive: true });
+        writeFileSync(
+          join(worktree, '.rn-agent', 'actions', 'login.yaml'),
+          fixtureYaml({ id: 'login', intent: 'replacement' }),
+        );
+        writeFileSync(replacementSidecar, `${JSON.stringify(replacementState, null, 2)}\n`);
+        replaced = true;
+      }
+    };
+    let maestroCalls = 0;
+    const handler = createRunActionHandler({
+      maestroRun: async () => {
+        maestroCalls += 1;
+        throw new Error('replay must not start');
+      },
+    });
+
+    const result = await handler({ actionId: 'login', projectRoot: worktree, autoRepair: false });
+    const envelope = JSON.parse(result.content[0]!.text) as { ok?: boolean; code?: string };
+
+    assert.equal(replaced, true);
+    assert.equal(envelope.ok, false);
+    assert.equal(envelope.code, 'BAD_FILENAME');
+    assert.equal(maestroCalls, 0);
+    assert.deepEqual(JSON.parse(readFileSync(replacementSidecar, 'utf8')), replacementState);
+    assert.deepEqual(
+      readdirSync(join(displaced, '.rn-agent', 'state')).filter((name) => name.includes('.tmp.')),
+      [],
+    );
+  } finally {
+    atomicWriter._writeFileWithMode = originalWriteFileWithMode;
+    fixture.cleanup();
+  }
+});
+
+test('promotion rolls back YAML and sidecar when the corpus changes at final resync', () => {
+  const fixture = makeFixture();
+  const originalWriteFileWithMode = atomicWriter._writeFileWithMode;
+  try {
+    seedLoginCorpus(fixture.primary);
+    const primaryAction = join(fixture.primary, '.rn-agent', 'actions', 'login.yaml');
+    writeFileSync(
+      primaryAction,
+      readFileSync(primaryAction, 'utf8').replace('# status: active', '# status: experimental'),
+    );
+    const worktree = addWorktree(fixture);
+    inherit(worktree);
+    const context = openReadableActionLoadContext(worktree, { actionId: 'login' });
+    assert.ok(context);
+    const action = loadActionFromContext(context, 'login');
+    assert.ok(action);
+    const foreign = join(fixture.root, 'final-resync-actions');
+    mkdirSync(foreign);
+    let sidecarCandidates = 0;
+    atomicWriter._writeFileWithMode = (path, content, mode) => {
+      originalWriteFileWithMode(path, content, mode);
+      if (path.includes('login.state.json.tmp.') && !path.includes('.expected.')) {
+        sidecarCandidates += 1;
+        if (sidecarCandidates === 2) {
+          const link = join(worktree, '.rn-agent', 'actions');
+          rmSync(link);
+          symlinkSync(foreign, link, 'dir');
+        }
+      }
+    };
+
+    const result = promoteActionRuntimeWithCAS(
+      context,
+      action,
+      appendRunRecord(action.state, {
+        timestamp: '2026-08-24T00:00:03.000Z',
+        durationMs: 1,
+        status: 'pass',
+        trigger: 'agent',
+        autoRepair: {
+          attempted: false,
+          outcome: 'skipped',
+          phases: { firstAttemptMs: 1 },
+        },
+      }),
+    );
+
+    assert.equal(sidecarCandidates, 2);
+    assert.deepEqual(result, { ok: false, conflict: 'EXTERNAL_WRITE' });
+    assert.match(readFileSync(primaryAction, 'utf8'), /# status: experimental/);
+    const stateDirectory = join(worktree, '.rn-agent', 'state');
+    assert.equal(existsSync(join(stateDirectory, 'login.state.json')), false);
+    assert.deepEqual(readdirSync(stateDirectory), []);
+    assert.deepEqual(readdirSync(dirname(primaryAction)).filter((name) => name.includes('.tmp.')), []);
+  } finally {
+    atomicWriter._writeFileWithMode = originalWriteFileWithMode;
+    fixture.cleanup();
+  }
+});
+
 test('captured inherited promotion publishes through the verified primary corpus', () => {
   const fixture = makeFixture();
   try {

@@ -13,18 +13,18 @@ import { closeSync, chmodSync, constants, copyFileSync, existsSync, fstatSync, l
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 var DARWIN_HELPER_MANIFEST = {
-  sourceSha256: "955b36f932d7124525003fc88e8596a148ae5404b49f8381ff59435e52b272c6",
-  recipeSha256: "ad5e7452795eee5ee8da4321f4260760e6e0e8536193978cd721748385e3f2f4",
-  stableBinarySha256: "6109d6017208b7ea091feeb40cae6640ff925c54e391d1ec0e7737057c30ded4",
-  binarySha256: "47b75f81c09ba5bf966acad48055a1c287708241a44c876fa4483c3189ce5f1e",
+  sourceSha256: "92301e735cd0ba6002ea24f5be5def60aafc76cd71665f817adea7aae8031431",
+  recipeSha256: "6e19324e3fb1b93938ce28db15813813b0b987d4afc8631d05e04674f7d41eb0",
+  stableBinarySha256: "edbd95893a63ed8f24dd1eb2f4e2ff6f55586c2d4c8e70034b1daf93c16eddc0",
+  binarySha256: "bab59c6c453f3d8bdaeef697f5a678f7ec57513dff74881d5f3fd4a66ad50dbf",
   cdhashes: [
-    "f5f6876043eadc558ca3d5d056c49b1d771aef6b",
-    "1c072373aff231d756e20fa008b0f9486b229888"
+    "9fc635786b94689d93e7c998e4d88592a3cc14f8",
+    "4b1d13c9dea252eff565f3a9bbcbd40939789bd7"
   ]
 };
 var LINUX_PUBLICATION_HELPER_SHA256 = {
-  x64: "17b1b6e0edbecefc013ccb1308a444532a72d5910f794de53195a758789bd6bb",
-  arm64: "f9cb783474cc93e6dbb28e81b5a2e46d74c38926a392d75ce9ed5188bafe3520"
+  x64: "58087c4d70c90bff5587f2120e00f7c194e2054f83e4a4642f5fc55de562b41a",
+  arm64: "e0db57dcf8b78bdc6aa326586fcf52fcb76184ea634fbf966d486a02bbb64ec5"
 };
 var VERIFIED_FILESYSTEM_MAX_BUFFER_BYTES = 32 * 1024 * 1024;
 var VERIFIED_FILESYSTEM_BATCH_BYTES = 24 * 1024 * 1024;

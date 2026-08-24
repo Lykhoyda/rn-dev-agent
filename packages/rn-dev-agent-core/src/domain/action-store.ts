@@ -22,6 +22,7 @@ import {
   yamlEditedSinceLastSeen,
 } from './sidecar-io.js';
 import { atomicWriter } from './atomic-writer.js';
+import type { NativePublicationWitness } from '../session/process-birth.js';
 import { assertValidActionId, assertWithinDir } from './path-safety.js';
 import { listUnfollowedDirectory, readUnfollowedFiles } from './unfollowed-file.js';
 import {
@@ -76,6 +77,42 @@ export function assertReadableActionCorpus(projectRoot: string): void {
 
 export function assertReadableActionLoadContextStable(context: ReadableActionLoadContext): void {
   assertReadableActionOperationUnchanged(context.operation);
+}
+
+function publicationWitnesses(context: ReadableActionLoadContext): NativePublicationWitness[] {
+  const { operation } = context;
+  const witnesses: NativePublicationWitness[] = [
+    {
+      path: operation.projectRoot,
+      kind: 'directory',
+      ...operation.projectRootIdentity,
+    },
+    {
+      path: operation.actionsDir,
+      kind: operation.kind === 'approved-inherited' ? 'symlink' : 'directory',
+      ...(operation.linkIdentity ?? operation.directoryIdentity),
+    },
+    {
+      path: operation.directory,
+      kind: 'directory',
+      ...operation.directoryIdentity,
+    },
+  ];
+  if (operation.primaryIdentity) {
+    witnesses.push(
+      {
+        path: operation.primaryIdentity.topLevel.path,
+        kind: 'directory',
+        ...operation.primaryIdentity.topLevel.identity,
+      },
+      {
+        path: operation.primaryIdentity.commonDir.path,
+        kind: 'directory',
+        ...operation.primaryIdentity.commonDir.identity,
+      },
+    );
+  }
+  return witnesses;
 }
 
 function lstatIfPresent(path: string): ReturnType<typeof lstatSync> | null {
@@ -875,7 +912,55 @@ export function actionWasEditedExternally(action: ReusableAction): boolean {
  * No-op when the YAML mtime equals the sidecar's lastSeenMtimeMs (the
  * common case where no external write happened).
  */
-export function acknowledgeExternalEdit(action: ReusableAction): ReusableAction {
+export function acknowledgeExternalEdit(
+  action: ReusableAction,
+  context?: ReadableActionLoadContext,
+): ReusableAction {
+  if (context) {
+    const fileName = basename(action.filePath);
+    if (
+      action.filePath !== join(context.corpus.actionsDir, fileName) ||
+      !/\.ya?ml$/i.test(fileName)
+    ) {
+      return action;
+    }
+    const targetFilePath = join(context.snapshot.directory, fileName);
+    let currentMtimeMs: number;
+    try {
+      assertReadableActionLoadContextStable(context);
+      currentMtimeMs = statSync(targetFilePath).mtimeMs;
+    } catch {
+      return action;
+    }
+    if (currentMtimeMs <= action.state.lastSeenMtimeMs) return action;
+    const nextState = markSeen(action.state, currentMtimeMs);
+    const publicationPrecondition = (): boolean => {
+      try {
+        assertReadableActionLoadContextStable(context);
+        return runtimeBaselineMatches(action.filePath, action.state);
+      } catch {
+        return false;
+      }
+    };
+    if (
+      !atomicWriter.writeSidecarConditional(
+        targetFilePath,
+        sidecarPathFor(action.filePath),
+        nextState,
+        publicationPrecondition,
+        publicationWitnesses(context),
+      )
+    ) {
+      return action;
+    }
+    const nextAction = { ...action, state: nextState };
+    mirrorToDb({
+      yamlFilePath: action.filePath,
+      state: nextState,
+      meta: { appId: action.metadata.appId, status: action.metadata.status, path: action.filePath },
+    });
+    return nextAction;
+  }
   const nextAction = atomicWriter.withLock(action.filePath, () => {
     let currentMtimeMs: number;
     try {
@@ -1047,6 +1132,7 @@ export function saveActionRuntimeWithCAS(
       sidecarPath,
       nextState,
       publicationPrecondition,
+      publicationWitnesses(context),
     )
   ) {
     return { ok: false, conflict: 'EXTERNAL_WRITE' };
@@ -1109,6 +1195,7 @@ export function promoteActionRuntimeWithCAS(
     publicationPrecondition,
     yamlPublicationPrecondition,
     yaml,
+    publicationWitnesses(context),
   );
   if (!written) return { ok: false, conflict: 'EXTERNAL_WRITE' };
   expected.state = { ...nextState, lastSeenMtimeMs: written.finalMtimeMs };

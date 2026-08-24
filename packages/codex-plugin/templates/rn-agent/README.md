@@ -60,7 +60,7 @@ shares **exactly one subpath**:
 
 | Path | Shared? | Why |
 |---|---|---|
-| `actions/` | **guarded replay inheritance** | A linked worktree may inventory and replay the canonical learned-action corpus. Auto-repair from that replay may publish only while the captured link, corpus, project root, and repository identity remain unchanged. Migration, generation, direct repair, promotion, and every other YAML mutation refuse through the inherited link; make those changes in the owning worktree. |
+| `actions/` | **guarded replay inheritance** | A linked worktree may inventory and replay the canonical learned-action corpus. Snapshot-bound auto-repair and replay lifecycle promotion may publish only while the captured link, corpus, project root, repository identity, and baseline remain unchanged. Migration, generation, direct repair, and every other direct YAML mutation refuse through the inherited link; make those changes in the owning worktree. |
 | `state/`, `recordings/`, `snapshots/`, `diag/`, `index.json`, `local/` | no | Per-worktree runtime state, including the action SQLite database and its WAL. The session runtime root must be a real directory. |
 | `integration/` | no | Session integration refuses any symlinked component under it and fails closed on one. |
 | `nav-graph.yaml`, `skeleton.yaml` | no | Derived from the app source on *this* branch; sharing them across branches serves stale data. |

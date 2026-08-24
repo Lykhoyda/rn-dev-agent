@@ -56,8 +56,12 @@ import { dirname, basename } from 'node:path';
 import type { ActionRuntimeState } from './reusable-action.js';
 import {
   linkFileIntoVerifiedDirectory,
+  linkFileIntoVerifiedDirectoryFd,
   probeProcessBirth,
   publishFileIfUnchangedDarwin,
+  publishFileIfUnchangedInVerifiedDirectory,
+  unlinkFileFromVerifiedDirectoryFd,
+  type NativePublicationWitness,
 } from '../session/process-birth.js';
 
 // Multi-LLM review of PR #109 findings 1+2: `finalMtimeMs = _stat(yaml)`
@@ -256,10 +260,63 @@ function pairWriteImpl(
   yamlPublicationPrecondition?: () => boolean,
   expectedYamlContent?: string,
   createExclusive = false,
+  witnesses: readonly NativePublicationWitness[] = [],
 ): PairWriteResult | null {
   if (publicationPrecondition && !publicationPrecondition()) return null;
   ensureDir(yamlPath);
   ensureDir(sidecarPath);
+
+  let yamlDirectoryFd: number | undefined;
+  let sidecarDirectoryFd: number | undefined;
+  if (witnesses.length > 0) {
+    try {
+      yamlDirectoryFd = openSync(
+        dirname(yamlPath),
+        constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_DIRECTORY,
+      );
+      sidecarDirectoryFd = openSync(
+        dirname(sidecarPath),
+        constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_DIRECTORY,
+      );
+    } catch {
+      if (yamlDirectoryFd !== undefined) closeSync(yamlDirectoryFd);
+      return null;
+    }
+  }
+  try {
+    if (publicationPrecondition && !publicationPrecondition()) return null;
+    return pairWriteInDirectories(
+      yamlPath,
+      yamlContent,
+      sidecarPath,
+      state,
+      publicationPrecondition,
+      yamlPublicationPrecondition,
+      expectedYamlContent,
+      createExclusive,
+      witnesses,
+      yamlDirectoryFd,
+      sidecarDirectoryFd,
+    );
+  } finally {
+    if (sidecarDirectoryFd !== undefined) closeSync(sidecarDirectoryFd);
+    if (yamlDirectoryFd !== undefined) closeSync(yamlDirectoryFd);
+  }
+}
+
+function pairWriteInDirectories(
+  yamlPath: string,
+  yamlContent: string,
+  sidecarPath: string,
+  state: ActionRuntimeState,
+  publicationPrecondition: (() => boolean) | undefined,
+  yamlPublicationPrecondition: (() => boolean) | undefined,
+  expectedYamlContent: string | undefined,
+  createExclusive: boolean,
+  witnesses: readonly NativePublicationWitness[],
+  yamlDirectoryFd: number | undefined,
+  sidecarDirectoryFd: number | undefined,
+): PairWriteResult | null {
 
   let yamlMode: number | undefined;
   if (expectedYamlContent !== undefined) {
@@ -308,14 +365,11 @@ function pairWriteImpl(
     ...state,
     lastSeenMtimeMs: projectedMtimeMs,
   };
+  const projectedSidecar = JSON.stringify(projectedState, null, 2) + '\n';
   if (publicationPrecondition && !publicationPrecondition()) return null;
-  atomicWriter._writeFileWithMode(
-    sidecarTmp,
-    JSON.stringify(projectedState, null, 2) + '\n',
-    sidecarMode,
-  );
+  atomicWriter._writeFileWithMode(sidecarTmp, projectedSidecar, sidecarMode);
   if (publicationPrecondition && !publicationPrecondition()) {
-    atomicWriter._unlink(sidecarTmp);
+    removeCandidate(sidecarTmp, sidecarDirectoryFd);
     return null;
   }
 
@@ -324,10 +378,50 @@ function pairWriteImpl(
 
   function restorePriorSidecar(): void {
     if (priorSidecar === null) {
-      atomicWriter._unlink(sidecarPath);
+      if (sidecarDirectoryFd === undefined) {
+        atomicWriter._unlink(sidecarPath);
+      } else {
+        unlinkFileFromVerifiedDirectoryFd(sidecarDirectoryFd, basename(sidecarPath));
+      }
     } else {
-      atomicWriter._writeFileWithMode(sidecarTmp, priorSidecar, sidecarMode);
-      atomicWriter._rename(sidecarTmp, sidecarPath);
+      const restoreStamp = generateTmpStamp();
+      const restorePath = `${sidecarPath}.tmp.${restoreStamp}`;
+      atomicWriter._writeFileWithMode(restorePath, priorSidecar, sidecarMode);
+      try {
+        if (sidecarDirectoryFd === undefined) {
+          atomicWriter._rename(restorePath, sidecarPath);
+        } else {
+          atomicWriter._publishIfUnchanged(
+            restorePath,
+            sidecarPath,
+            projectedSidecar,
+            restoreStamp,
+            undefined,
+            sidecarDirectoryFd,
+          );
+        }
+      } finally {
+        removeCandidate(restorePath, sidecarDirectoryFd);
+      }
+    }
+  }
+
+  function rollbackYaml(): void {
+    if (yamlDirectoryFd === undefined || expectedYamlContent === undefined) return;
+    const rollbackStamp = generateTmpStamp();
+    const rollbackPath = `${yamlPath}.tmp.${rollbackStamp}`;
+    atomicWriter._writeFileWithMode(rollbackPath, expectedYamlContent, yamlMode ?? 0o600);
+    try {
+      atomicWriter._publishIfUnchanged(
+        rollbackPath,
+        yamlPath,
+        yamlContent,
+        rollbackStamp,
+        undefined,
+        yamlDirectoryFd,
+      );
+    } finally {
+      removeCandidate(rollbackPath, yamlDirectoryFd);
     }
   }
 
@@ -354,27 +448,67 @@ function pairWriteImpl(
       throw error;
     }
     if (publicationPrecondition && !publicationPrecondition()) {
-      atomicWriter._unlink(sidecarTmp);
-      atomicWriter._unlink(yamlTmp);
+      removeCandidate(sidecarTmp, sidecarDirectoryFd);
+      removeCandidate(yamlTmp, yamlDirectoryFd);
       return null;
     }
     const yamlPublished =
       (!publicationPrecondition || publicationPrecondition()) &&
-      atomicWriter._linkIfAbsent(yamlTmp, yamlPath, publicationPrecondition);
+      atomicWriter._linkIfAbsent(
+        yamlTmp,
+        yamlPath,
+        publicationPrecondition,
+        yamlDirectoryFd,
+        witnesses,
+      );
     if (!yamlPublished) {
-      atomicWriter._unlink(sidecarTmp);
-      atomicWriter._unlink(yamlTmp);
+      removeCandidate(sidecarTmp, sidecarDirectoryFd);
+      removeCandidate(yamlTmp, yamlDirectoryFd);
       return null;
     }
-    atomicWriter._rename(sidecarTmp, sidecarPath);
-    atomicWriter._unlink(yamlTmp);
+    if (sidecarDirectoryFd === undefined) atomicWriter._rename(sidecarTmp, sidecarPath);
+    else if (
+      !atomicWriter._linkIfAbsent(
+        sidecarTmp,
+        sidecarPath,
+        publicationPrecondition,
+        sidecarDirectoryFd,
+        witnesses,
+      )
+    ) {
+      removeCandidate(yamlPath, yamlDirectoryFd);
+      removeCandidate(sidecarTmp, sidecarDirectoryFd);
+      return null;
+    }
+    removeCandidate(yamlTmp, yamlDirectoryFd);
   } else {
     // Existing files: sidecar-first so a YAML write failure cannot look like a human edit.
     if (publicationPrecondition && !publicationPrecondition()) {
-      atomicWriter._unlink(sidecarTmp);
+      removeCandidate(sidecarTmp, sidecarDirectoryFd);
       return null;
     }
-    atomicWriter._rename(sidecarTmp, sidecarPath);
+    const sidecarPublished =
+      sidecarDirectoryFd === undefined
+        ? (atomicWriter._rename(sidecarTmp, sidecarPath), true)
+        : priorSidecar === null
+          ? atomicWriter._linkIfAbsent(
+              sidecarTmp,
+              sidecarPath,
+              publicationPrecondition,
+              sidecarDirectoryFd,
+              witnesses,
+            )
+          : atomicWriter._publishIfUnchanged(
+              sidecarTmp,
+              sidecarPath,
+              priorSidecar,
+              stamp,
+              publicationPrecondition,
+              sidecarDirectoryFd,
+              witnesses,
+            );
+    removeCandidate(sidecarTmp, sidecarDirectoryFd);
+    if (!sidecarPublished) return null;
     try {
       writeYamlTmp();
     } catch (error) {
@@ -394,6 +528,8 @@ function pairWriteImpl(
             expectedYamlContent,
             stamp,
             yamlPublicationPrecondition,
+            yamlDirectoryFd,
+            witnesses,
           );
     if (!yamlPublished) {
       if (yamlPublicationPrecondition && !yamlPublicationPrecondition()) {
@@ -405,10 +541,11 @@ function pairWriteImpl(
         }
       }
       restorePriorSidecar();
-      atomicWriter._unlink(yamlTmp);
+      removeCandidate(yamlTmp, yamlDirectoryFd);
       return null;
     }
     if (expectedYamlContent === undefined) atomicWriter._rename(yamlTmp, yamlPath);
+    else removeCandidate(yamlTmp, yamlDirectoryFd);
   }
 
   // Step 5 (mandatory after PR #109 review): resync sidecar to the
@@ -440,9 +577,47 @@ function pairWriteImpl(
     JSON.stringify(finalState, null, 2) + '\n',
     sidecarMode,
   );
-  atomicWriter._rename(sidecarTmp, sidecarPath);
+  if (
+    witnesses.length === 0 &&
+    publicationPrecondition &&
+    !publicationPrecondition()
+  ) {
+    removeCandidate(sidecarTmp, sidecarDirectoryFd);
+    rollbackYaml();
+    restorePriorSidecar();
+    return null;
+  }
+  const finalSidecarPublished =
+    sidecarDirectoryFd === undefined
+      ? (atomicWriter._rename(sidecarTmp, sidecarPath), true)
+      : atomicWriter._publishIfUnchanged(
+          sidecarTmp,
+          sidecarPath,
+          projectedSidecar,
+          `${stamp}.final`,
+          witnesses.length === 0 ? publicationPrecondition : undefined,
+          sidecarDirectoryFd,
+          witnesses,
+        );
+  removeCandidate(sidecarTmp, sidecarDirectoryFd);
+  if (!finalSidecarPublished) {
+    rollbackYaml();
+    restorePriorSidecar();
+    return null;
+  }
 
   return { yamlPath, sidecarPath, finalMtimeMs, refreshedSidecar: true };
+}
+
+function removeCandidate(path: string, directoryFd?: number): void {
+  try {
+    atomicWriter._unlink(path);
+  } catch {}
+  if (directoryFd !== undefined) {
+    try {
+      unlinkFileFromVerifiedDirectoryFd(directoryFd, basename(path));
+    } catch {}
+  }
 }
 
 function ensureDir(filePath: string): void {
@@ -536,11 +711,21 @@ export const atomicWriter = {
     candidatePath: string,
     targetPath: string,
     publicationPrecondition?: () => boolean,
+    directoryFd?: number,
+    witnesses: readonly NativePublicationWitness[] = [],
   ): boolean {
     if (publicationPrecondition && !publicationPrecondition()) return false;
-    let directoryFd: number;
+    if (directoryFd !== undefined) {
+      return linkFileIntoVerifiedDirectoryFd(
+        directoryFd,
+        basename(candidatePath),
+        basename(targetPath),
+        witnesses,
+      );
+    }
+    let openedDirectoryFd: number;
     try {
-      directoryFd = openSync(
+      openedDirectoryFd = openSync(
         dirname(targetPath),
         constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_DIRECTORY,
       );
@@ -548,13 +733,13 @@ export const atomicWriter = {
       return false;
     }
     try {
-      const directory = fstatSync(directoryFd);
+      const directory = fstatSync(openedDirectoryFd);
       if (!directory.isDirectory() || (publicationPrecondition && !publicationPrecondition())) {
         return false;
       }
-      return atomicWriter._linkIntoVerifiedDirectory(directoryFd, candidatePath, targetPath);
+      return atomicWriter._linkIntoVerifiedDirectory(openedDirectoryFd, candidatePath, targetPath);
     } finally {
-      closeSync(directoryFd);
+      closeSync(openedDirectoryFd);
     }
   },
 
@@ -572,6 +757,8 @@ export const atomicWriter = {
     expectedContent: string,
     stamp: string,
     publicationPrecondition?: () => boolean,
+    directoryFd?: number,
+    witnesses: readonly NativePublicationWitness[] = [],
   ): boolean {
     let targetFd: number;
     try {
@@ -596,9 +783,25 @@ export const atomicWriter = {
       chmodSync(candidatePath, opened.mode & 0o7777);
       atomicWriter._writeFileWithMode(expectedPath, expectedContent, opened.mode & 0o7777);
       try {
+        if (directoryFd !== undefined) {
+          return publishFileIfUnchangedInVerifiedDirectory(
+            directoryFd,
+            basename(targetPath),
+            basename(candidatePath),
+            basename(expectedPath),
+            witnesses,
+          );
+        }
         return publishFileIfUnchangedDarwin(targetFd, targetPath, candidatePath, expectedPath);
       } finally {
-        atomicWriter._unlink(expectedPath);
+        try {
+          atomicWriter._unlink(expectedPath);
+        } catch {}
+        if (directoryFd !== undefined) {
+          try {
+            unlinkFileFromVerifiedDirectoryFd(directoryFd, basename(expectedPath));
+          } catch {}
+        }
       }
     } catch {
       return false;
@@ -646,6 +849,7 @@ export const atomicWriter = {
     sidecarPath: string,
     state: ActionRuntimeState,
     precondition: () => boolean,
+    witnesses: readonly NativePublicationWitness[] = [],
   ): boolean {
     try {
       return withPairWriteLock(
@@ -655,47 +859,66 @@ export const atomicWriter = {
           cleanupOrphans(yamlPath, sidecarPath);
           ensureDir(sidecarPath);
 
-          let expectedContent: string | null = null;
-          let mode = 0o600;
-          try {
-            const sidecarFd = openSync(sidecarPath, constants.O_RDONLY | constants.O_NOFOLLOW);
-            try {
-              const sidecar = fstatSync(sidecarFd);
-              if (!sidecar.isFile()) return false;
-              expectedContent = readFileSync(sidecarFd, 'utf8');
-              mode = sidecar.mode & 0o7777;
-            } finally {
-              closeSync(sidecarFd);
-            }
-          } catch (error) {
-            if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return false;
-          }
-          if (!precondition()) return false;
-
-          const stamp = generateTmpStamp();
-          const candidatePath = `${sidecarPath}.tmp.${stamp}`;
-          atomicWriter._writeFileWithMode(
-            candidatePath,
-            JSON.stringify(state, null, 2) + '\n',
-            mode,
+          const directoryFd = openSync(
+            dirname(sidecarPath),
+            constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_DIRECTORY,
           );
           try {
             if (!precondition()) return false;
-            return expectedContent === null
-              ? atomicWriter._linkIfAbsent(candidatePath, sidecarPath, precondition)
-              : atomicWriter._publishIfUnchanged(
-                  candidatePath,
-                  sidecarPath,
-                  expectedContent,
-                  stamp,
-                  precondition,
-                );
-          } finally {
+
+            let expectedContent: string | null = null;
+            let mode = 0o600;
             try {
-              atomicWriter._unlink(candidatePath);
-            } catch {
-              /* candidate may already be consumed or its directory may have changed */
+              const sidecarFd = openSync(sidecarPath, constants.O_RDONLY | constants.O_NOFOLLOW);
+              try {
+                const sidecar = fstatSync(sidecarFd);
+                if (!sidecar.isFile()) return false;
+                expectedContent = readFileSync(sidecarFd, 'utf8');
+                mode = sidecar.mode & 0o7777;
+              } finally {
+                closeSync(sidecarFd);
+              }
+            } catch (error) {
+              if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return false;
             }
+            if (!precondition()) return false;
+
+            const stamp = generateTmpStamp();
+            const candidatePath = `${sidecarPath}.tmp.${stamp}`;
+            atomicWriter._writeFileWithMode(
+              candidatePath,
+              JSON.stringify(state, null, 2) + '\n',
+              mode,
+            );
+            try {
+              if (!precondition()) return false;
+              return expectedContent === null
+                ? atomicWriter._linkIfAbsent(
+                    candidatePath,
+                    sidecarPath,
+                    precondition,
+                    directoryFd,
+                    witnesses,
+                  )
+                : atomicWriter._publishIfUnchanged(
+                    candidatePath,
+                    sidecarPath,
+                    expectedContent,
+                    stamp,
+                    precondition,
+                    directoryFd,
+                    witnesses,
+                  );
+            } finally {
+              try {
+                atomicWriter._unlink(candidatePath);
+              } catch {}
+              try {
+                unlinkFileFromVerifiedDirectoryFd(directoryFd, basename(candidatePath));
+              } catch {}
+            }
+          } finally {
+            closeSync(directoryFd);
           }
         },
         precondition,
@@ -765,6 +988,7 @@ export const atomicWriter = {
     precondition: () => boolean,
     yamlPublicationPrecondition?: () => boolean,
     expectedYamlContent?: string,
+    witnesses: readonly NativePublicationWitness[] = [],
   ): PairWriteResult | null {
     try {
       return withPairWriteLock(
@@ -780,6 +1004,8 @@ export const atomicWriter = {
             precondition,
             yamlPublicationPrecondition,
             expectedYamlContent,
+            false,
+            witnesses,
           );
         },
         precondition,
