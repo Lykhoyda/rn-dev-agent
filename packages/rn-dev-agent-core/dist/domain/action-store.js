@@ -11,7 +11,7 @@ import { parseM7Header, serializeM7Header, } from './reusable-action.js';
 import { loadOrInitSidecar, markSeen, saveSidecar, sidecarPathFor, yamlEditedSinceLastSeen, } from './sidecar-io.js';
 import { atomicWriter } from './atomic-writer.js';
 import { assertValidActionId, assertWithinDir } from './path-safety.js';
-import { assertUnfollowedFileSnapshotUnchanged, createUnfollowedFileSnapshot, listUnfollowedDirectory, readUnfollowedFiles, readUnfollowedSnapshotFiles, } from './unfollowed-file.js';
+import { assertUnfollowedFileSnapshotUnchanged, createUnfollowedFileSnapshot, listUnfollowedDirectory, readUnfollowedFiles, readUnfollowedSnapshotFiles, selectExistingUnfollowedSnapshotFiles, } from './unfollowed-file.js';
 import { buildMaestroFlow, collectRunFlowFileReferences, parseAndValidateFlow, } from './maestro-validator.js';
 import { mirrorToDb } from './action-state-store.js';
 import { assertReadableActionOperationUnchanged, captureReadableActionOperationSnapshot, readableActionsSnapshot, resolveReadableActionCorpus, } from '../session/worktree-inheritance.js';
@@ -123,7 +123,7 @@ function prefetchRunFlowFiles(initial, readFiles, fileSnapshot) {
                     pending.add(child);
             }
         }
-        const paths = [...pending].sort();
+        const paths = selectExistingUnfollowedSnapshotFiles(fileSnapshot, [...pending].sort());
         if (paths.length === 0)
             break;
         const contents = readUnfollowedSnapshotFiles(fileSnapshot, paths, readFiles);
@@ -158,7 +158,9 @@ export function openReadableActionLoadContext(projectRoot, dependencies = {}) {
     readableFiles.forEach((file, index) => {
         fileContents.set(file, contents[index]);
     });
-    const completeFileContents = prefetchRunFlowFiles(fileContents, readFiles, fileSnapshot);
+    const completeFileContents = dependencies.includeRunFlowFiles
+        ? prefetchRunFlowFiles(fileContents, readFiles, fileSnapshot)
+        : fileContents;
     assertReadableActionOperationUnchanged(operation);
     assertUnfollowedFileSnapshotUnchanged(fileSnapshot);
     return {
@@ -179,7 +181,10 @@ function actionTextFromContext(context, fileName) {
 }
 export function refreshActionLoadContext(context, actionId) {
     assertReadableActionOperationUnchanged(context.operation);
-    const refreshed = openReadableActionLoadContext(context.projectRoot, { actionId });
+    const refreshed = openReadableActionLoadContext(context.projectRoot, {
+        actionId,
+        includeRunFlowFiles: true,
+    });
     if (!refreshed) {
         throw new Error(`Action ${actionId} disappeared while refreshing its snapshot.`);
     }
@@ -203,7 +208,10 @@ function resolveActionFileNameFromContext(actionId, context) {
 }
 export function resolveActionPath(projectRoot, actionId) {
     assertValidActionId(actionId, 'resolveActionPath');
-    const context = openReadableActionLoadContext(projectRoot, { actionId });
+    const context = openReadableActionLoadContext(projectRoot, {
+        actionId,
+        includeRunFlowFiles: false,
+    });
     if (!context)
         return null;
     const fileName = resolveActionFileNameFromContext(actionId, context);
@@ -425,7 +433,10 @@ export function loadActionFromContext(context, actionId) {
     };
 }
 export function loadAction(projectRoot, actionId) {
-    const context = openReadableActionLoadContext(projectRoot, { actionId });
+    const context = openReadableActionLoadContext(projectRoot, {
+        actionId,
+        includeRunFlowFiles: true,
+    });
     return context ? loadActionFromContext(context, actionId) : null;
 }
 export function captureActionFromPath(path) {
@@ -437,7 +448,10 @@ export function captureActionFromPath(path) {
         return null;
     }
     const actionId = basename(absolutePath).replace(/\.ya?ml$/i, '');
-    const context = openReadableActionLoadContext(dirname(dirname(actionsDir)), { actionId });
+    const context = openReadableActionLoadContext(dirname(dirname(actionsDir)), {
+        actionId,
+        includeRunFlowFiles: true,
+    });
     if (!context)
         return null;
     const action = captureActionFromContext(context, actionId);

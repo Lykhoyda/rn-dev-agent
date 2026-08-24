@@ -9839,6 +9839,36 @@ function assertUnfollowedFileSnapshotUnchanged(snapshot) {
     throw new Error(`Refusing replaced learned-action corpus at ${snapshot.directoryPath}.`);
   }
 }
+function selectExistingUnfollowedSnapshotFiles(snapshot, relativePaths) {
+  assertUnfollowedFileSnapshotUnchanged(snapshot);
+  const existing = [];
+  try {
+    for (const relativePath of relativePaths) {
+      const path = join6(snapshot.directoryPath, relativePath);
+      let stat;
+      try {
+        stat = lstatSync5(path, { bigint: true });
+      } catch (err) {
+        if (err.code === "ENOENT")
+          continue;
+        throw err;
+      }
+      if (stat.isSymbolicLink() || !stat.isFile())
+        throw new Error("changed");
+      const captured = { path, dev: String(stat.dev), ino: String(stat.ino) };
+      const selected = snapshot.fileIdentities.get(relativePath);
+      if (selected && (selected.dev !== captured.dev || selected.ino !== captured.ino)) {
+        throw new Error("changed");
+      }
+      snapshot.fileIdentities.set(relativePath, selected ?? captured);
+      existing.push(relativePath);
+    }
+  } catch {
+    throw new Error(`Refusing replaced learned-action corpus at ${snapshot.directoryPath}.`);
+  }
+  assertUnfollowedFileSnapshotUnchanged(snapshot);
+  return existing;
+}
 function readUnfollowedSnapshotFiles(snapshot, relativePaths, readFiles = readUnfollowedFiles) {
   assertUnfollowedFileSnapshotUnchanged(snapshot);
   captureUnfollowedFileIdentities(snapshot, relativePaths);
@@ -11097,7 +11127,7 @@ function prefetchRunFlowFiles(initial, readFiles, fileSnapshot) {
           pending.add(child);
       }
     }
-    const paths = [...pending].sort();
+    const paths = selectExistingUnfollowedSnapshotFiles(fileSnapshot, [...pending].sort());
     if (paths.length === 0)
       break;
     const contents = readUnfollowedSnapshotFiles(fileSnapshot, paths, readFiles);
@@ -11130,7 +11160,7 @@ function openReadableActionLoadContext(projectRoot, dependencies = {}) {
   readableFiles.forEach((file, index) => {
     fileContents.set(file, contents[index]);
   });
-  const completeFileContents = prefetchRunFlowFiles(fileContents, readFiles, fileSnapshot);
+  const completeFileContents = dependencies.includeRunFlowFiles ? prefetchRunFlowFiles(fileContents, readFiles, fileSnapshot) : fileContents;
   assertReadableActionOperationUnchanged(operation);
   assertUnfollowedFileSnapshotUnchanged(fileSnapshot);
   return {
@@ -11167,7 +11197,10 @@ function resolveActionFileNameFromContext(actionId, context) {
 }
 function resolveActionPath(projectRoot, actionId) {
   assertValidActionId(actionId, "resolveActionPath");
-  const context = openReadableActionLoadContext(projectRoot, { actionId });
+  const context = openReadableActionLoadContext(projectRoot, {
+    actionId,
+    includeRunFlowFiles: false
+  });
   if (!context)
     return null;
   const fileName = resolveActionFileNameFromContext(actionId, context);
@@ -11288,7 +11321,10 @@ function captureActionFromPath(path) {
     return null;
   }
   const actionId = basename4(absolutePath).replace(/\.ya?ml$/i, "");
-  const context = openReadableActionLoadContext(dirname9(dirname9(actionsDir)), { actionId });
+  const context = openReadableActionLoadContext(dirname9(dirname9(actionsDir)), {
+    actionId,
+    includeRunFlowFiles: true
+  });
   if (!context)
     return null;
   const action = captureActionFromContext(context, actionId);

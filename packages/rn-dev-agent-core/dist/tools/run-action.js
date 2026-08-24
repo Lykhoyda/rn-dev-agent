@@ -307,7 +307,10 @@ export function createRunActionHandler(deps = {}) {
         let openedContext;
         let loaded;
         try {
-            openedContext = openReadableActionLoadContext(projectRoot, { actionId: args.actionId });
+            openedContext = openReadableActionLoadContext(projectRoot, {
+                actionId: args.actionId,
+                includeRunFlowFiles: true,
+            });
             loaded = openedContext ? loadActionFromContext(openedContext, args.actionId) : null;
         }
         catch (err) {
@@ -409,8 +412,8 @@ export function createRunActionHandler(deps = {}) {
         // so a clean pass can still clear a device-matched blind-probe latch.
         let observedDeviceId = maestroDeviceId ?? null;
         const persistRunWithDevice = (record) => {
+            assertReadableActionLoadContextStable(loadContext);
             if (proofReplay) {
-                assertReadableActionLoadContextStable(loadContext);
                 return Promise.resolve({ promoted: false, promotionRefused: false });
             }
             const endedMs = Date.now();

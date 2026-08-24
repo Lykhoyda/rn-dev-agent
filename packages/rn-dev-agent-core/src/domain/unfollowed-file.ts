@@ -69,6 +69,38 @@ export function assertUnfollowedFileSnapshotUnchanged(snapshot: UnfollowedFileSn
   }
 }
 
+export function selectExistingUnfollowedSnapshotFiles(
+  snapshot: UnfollowedFileSnapshot,
+  relativePaths: readonly string[],
+): string[] {
+  assertUnfollowedFileSnapshotUnchanged(snapshot);
+  const existing: string[] = [];
+  try {
+    for (const relativePath of relativePaths) {
+      const path = join(snapshot.directoryPath, relativePath);
+      let stat: ReturnType<typeof lstatSync>;
+      try {
+        stat = lstatSync(path, { bigint: true });
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === 'ENOENT') continue;
+        throw err;
+      }
+      if (stat.isSymbolicLink() || !stat.isFile()) throw new Error('changed');
+      const captured = { path, dev: String(stat.dev), ino: String(stat.ino) };
+      const selected = snapshot.fileIdentities.get(relativePath);
+      if (selected && (selected.dev !== captured.dev || selected.ino !== captured.ino)) {
+        throw new Error('changed');
+      }
+      snapshot.fileIdentities.set(relativePath, selected ?? captured);
+      existing.push(relativePath);
+    }
+  } catch {
+    throw new Error(`Refusing replaced learned-action corpus at ${snapshot.directoryPath}.`);
+  }
+  assertUnfollowedFileSnapshotUnchanged(snapshot);
+  return existing;
+}
+
 export function readUnfollowedSnapshotFiles(
   snapshot: UnfollowedFileSnapshot,
   relativePaths: readonly string[],

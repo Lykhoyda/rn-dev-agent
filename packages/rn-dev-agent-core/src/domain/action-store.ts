@@ -29,6 +29,7 @@ import {
   listUnfollowedDirectory,
   readUnfollowedFiles,
   readUnfollowedSnapshotFiles,
+  selectExistingUnfollowedSnapshotFiles,
   type UnfollowedFileSnapshot,
 } from './unfollowed-file.js';
 import {
@@ -164,6 +165,7 @@ export interface ReadableActionLoadContext {
 
 export interface ReadableActionLoadDependencies {
   actionId?: string;
+  includeRunFlowFiles?: boolean;
   readFiles?: typeof readUnfollowedFiles;
 }
 
@@ -195,7 +197,7 @@ function prefetchRunFlowFiles(
         if (child && !fileContents.has(child)) pending.add(child);
       }
     }
-    const paths = [...pending].sort();
+    const paths = selectExistingUnfollowedSnapshotFiles(fileSnapshot, [...pending].sort());
     if (paths.length === 0) break;
     const contents = readUnfollowedSnapshotFiles(fileSnapshot, paths, readFiles);
     frontier = [];
@@ -232,7 +234,9 @@ export function openReadableActionLoadContext(
   readableFiles.forEach((file, index) => {
     fileContents.set(file, contents[index]!);
   });
-  const completeFileContents = prefetchRunFlowFiles(fileContents, readFiles, fileSnapshot);
+  const completeFileContents = dependencies.includeRunFlowFiles
+    ? prefetchRunFlowFiles(fileContents, readFiles, fileSnapshot)
+    : fileContents;
   assertReadableActionOperationUnchanged(operation);
   assertUnfollowedFileSnapshotUnchanged(fileSnapshot);
   return {
@@ -259,7 +263,10 @@ export function refreshActionLoadContext(
   actionId: string,
 ): ReadableActionLoadContext {
   assertReadableActionOperationUnchanged(context.operation);
-  const refreshed = openReadableActionLoadContext(context.projectRoot, { actionId });
+  const refreshed = openReadableActionLoadContext(context.projectRoot, {
+    actionId,
+    includeRunFlowFiles: true,
+  });
   if (!refreshed) {
     throw new Error(`Action ${actionId} disappeared while refreshing its snapshot.`);
   }
@@ -288,7 +295,10 @@ function resolveActionFileNameFromContext(
 
 export function resolveActionPath(projectRoot: string, actionId: string): string | null {
   assertValidActionId(actionId, 'resolveActionPath');
-  const context = openReadableActionLoadContext(projectRoot, { actionId });
+  const context = openReadableActionLoadContext(projectRoot, {
+    actionId,
+    includeRunFlowFiles: false,
+  });
   if (!context) return null;
   const fileName = resolveActionFileNameFromContext(actionId, context);
   if (!fileName) return null;
@@ -568,7 +578,10 @@ export function loadActionFromContext(
 }
 
 export function loadAction(projectRoot: string, actionId: string): LoadedReusableAction | null {
-  const context = openReadableActionLoadContext(projectRoot, { actionId });
+  const context = openReadableActionLoadContext(projectRoot, {
+    actionId,
+    includeRunFlowFiles: true,
+  });
   return context ? loadActionFromContext(context, actionId) : null;
 }
 
@@ -580,7 +593,10 @@ export function captureActionFromPath(path: string): CapturedActionReplay | null
     return null;
   }
   const actionId = basename(absolutePath).replace(/\.ya?ml$/i, '');
-  const context = openReadableActionLoadContext(dirname(dirname(actionsDir)), { actionId });
+  const context = openReadableActionLoadContext(dirname(dirname(actionsDir)), {
+    actionId,
+    includeRunFlowFiles: true,
+  });
   if (!context) return null;
   const action = captureActionFromContext(context, actionId);
   return action && basename(action.filePath) === basename(absolutePath) ? action : null;

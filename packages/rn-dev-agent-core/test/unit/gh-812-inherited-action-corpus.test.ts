@@ -35,6 +35,7 @@ import {
   loadAction,
   loadActionFromContext,
   openReadableActionLoadContext,
+  writeRecordedActionTransaction,
 } from '../../dist/domain/action-store.js';
 import {
   listUnfollowedDirectory,
@@ -43,6 +44,7 @@ import {
 } from '../../dist/domain/unfollowed-file.js';
 import {
   createPinnedRunActionHandler as createRunActionHandler,
+  freshFixtureState,
   fixtureYaml,
 } from '../helpers/tmp-project.js';
 
@@ -518,6 +520,7 @@ test('nested runFlow files are captured in one batch per depth for exact loads',
     const batches: string[][] = [];
     const context = openReadableActionLoadContext(worktree, {
       actionId: 'login',
+      includeRunFlowFiles: true,
       readFiles: (directory, identity, paths) => {
         batches.push([...paths]);
         return readUnfollowedFiles(directory, identity, paths);
@@ -560,6 +563,7 @@ test('nested batch reads recheck every previously selected YAML identity', () =>
       () =>
         openReadableActionLoadContext(worktree, {
           actionId: 'login',
+          includeRunFlowFiles: true,
           readFiles: (directory, identity, paths) => {
             const contents = readUnfollowedFiles(directory, identity, paths);
             if (paths.includes('child.yaml')) {
@@ -595,6 +599,35 @@ test('runFlow prefetch uses the validator native path semantics', () => {
     const action = loadAction(worktree, 'login');
     assert.equal(action?.replay.ok, true);
     assert.match(action?.replay.ok ? action.replay.cdpYaml : '', /native-path-child/);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('overwriting an action does not resolve its missing nested flow', () => {
+  const fixture = makeFixture();
+  try {
+    const actionsDir = join(fixture.primary, '.rn-agent', 'actions');
+    mkdirSync(actionsDir, { recursive: true });
+    writeFileSync(
+      join(actionsDir, 'login.yaml'),
+      fixtureYaml({ id: 'login', selectors: [] }).replace('- launchApp', '- runFlow: missing.yaml'),
+    );
+    const replacement = fixtureYaml({ id: 'login', selectors: ['replacement-selector'] });
+    const broken = loadAction(fixture.primary, 'login');
+
+    assert.equal(broken?.replay.ok, false);
+
+    const result = writeRecordedActionTransaction(
+      fixture.primary,
+      'login',
+      replacement,
+      freshFixtureState(),
+      true,
+    );
+
+    assert.equal(result.ok, true);
+    assert.equal(readFileSync(join(actionsDir, 'login.yaml'), 'utf8'), replacement);
   } finally {
     fixture.cleanup();
   }
@@ -723,6 +756,44 @@ test('exact-ID replay refuses success after a selected file symlink swap', async
     assert.equal(env.ok, false);
     assert.match(env.error ?? '', /Refusing replaced learned-action corpus/);
     assert.throws(() => loadAction(worktree, 'login'), /symlink|replaced learned-action corpus/);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('ordinary replay refuses success after its corpus changes during dispatch', async () => {
+  const fixture = makeFixture();
+  try {
+    seedLoginCorpus(fixture.primary);
+    const worktree = addWorktree(fixture, 'post-dispatch-corpus');
+    inherit(worktree);
+    const actionsDir = join(fixture.primary, '.rn-agent', 'actions');
+
+    const handler = createRunActionHandler({
+      maestroRun: async () => {
+        renameSync(actionsDir, join(fixture.root, 'original-post-dispatch-actions'));
+        mkdirSync(actionsDir);
+        writeFileSync(join(actionsDir, 'login.yaml'), fixtureYaml({ id: 'login' }));
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({ ok: true, data: { passed: true, output: 'Flow passed' } }),
+            },
+          ],
+        };
+      },
+    });
+    const result = await handler({
+      actionId: 'login',
+      projectRoot: worktree,
+      autoRepair: false,
+      forceReload: false,
+    });
+    const envelope = JSON.parse(result.content[0]!.text) as { ok?: boolean; error?: string };
+
+    assert.equal(envelope.ok, false);
+    assert.match(envelope.error ?? '', /Refusing replaced learned-action corpus/);
   } finally {
     fixture.cleanup();
   }
