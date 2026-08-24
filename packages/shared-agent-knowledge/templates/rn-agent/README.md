@@ -70,9 +70,10 @@ shares **exactly one subpath**:
 Because `actions/` is linked *inside* a real local `.rn-agent/` directory, the
 common directory-form ignore rule (`.rn-agent/`) already hides it, so `git
 status` stays clean. The link is a guarded replay source: runtime state stays
-local, and any auto-repair refuses without fallback or partial publication if
-the captured corpus identity changes. Other action YAML mutations fail closed.
-No other private instructions or `.rn-agent` data are inherited.
+local, and snapshot-bound replay persistence refuses without fallback or
+partial publication if the captured corpus identity or baseline changes. Direct
+action YAML mutations outside guarded replay fail closed. No other private
+instructions or `.rn-agent` data are inherited.
 
 Nothing is shared automatically without your consent. `/rn-dev-agent:doctor`
 reports the state read-only; `/rn-dev-agent:setup` previews and asks per

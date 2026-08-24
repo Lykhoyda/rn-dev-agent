@@ -317,7 +317,6 @@ function pairWriteInDirectories(
   yamlDirectoryFd: number | undefined,
   sidecarDirectoryFd: number | undefined,
 ): PairWriteResult | null {
-
   let yamlMode: number | undefined;
   if (expectedYamlContent !== undefined) {
     let targetFd: number;
@@ -577,11 +576,7 @@ function pairWriteInDirectories(
     JSON.stringify(finalState, null, 2) + '\n',
     sidecarMode,
   );
-  if (
-    witnesses.length === 0 &&
-    publicationPrecondition &&
-    !publicationPrecondition()
-  ) {
+  if (witnesses.length === 0 && publicationPrecondition && !publicationPrecondition()) {
     removeCandidate(sidecarTmp, sidecarDirectoryFd);
     rollbackYaml();
     restorePriorSidecar();

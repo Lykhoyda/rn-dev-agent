@@ -394,10 +394,7 @@ function runVerifiedPublicationHelper(
       throw new Error('Conditional action publication helper changed before execution.');
     }
     execFileSync(boundPath, [...args], {
-      stdio:
-        directoryFd === undefined
-          ? 'ignore'
-          : ['ignore', 'ignore', 'ignore', directoryFd],
+      stdio: directoryFd === undefined ? 'ignore' : ['ignore', 'ignore', 'ignore', directoryFd],
       timeout: 2_000,
     });
     return true;
@@ -410,12 +407,7 @@ function runVerifiedPublicationHelper(
 }
 
 function publicationWitnessArguments(witnesses: readonly NativePublicationWitness[]): string[] {
-  return witnesses.flatMap((witness) => [
-    witness.path,
-    witness.kind,
-    witness.dev,
-    witness.ino,
-  ]);
+  return witnesses.flatMap((witness) => [witness.path, witness.kind, witness.dev, witness.ino]);
 }
 
 export function publishFileIfUnchangedInVerifiedDirectory(
@@ -460,10 +452,7 @@ export function linkFileIntoVerifiedDirectoryFd(
   );
 }
 
-export function unlinkFileFromVerifiedDirectoryFd(
-  directoryFd: number,
-  fileName: string,
-): boolean {
+export function unlinkFileFromVerifiedDirectoryFd(directoryFd: number, fileName: string): boolean {
   const helper = verifiedNativePublicationHelper();
   return runVerifiedPublicationHelper(
     helper.path,

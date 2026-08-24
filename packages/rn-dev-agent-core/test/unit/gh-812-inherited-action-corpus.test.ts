@@ -756,7 +756,10 @@ test('promotion rolls back YAML and sidecar when the corpus changes at final res
     const stateDirectory = join(worktree, '.rn-agent', 'state');
     assert.equal(existsSync(join(stateDirectory, 'login.state.json')), false);
     assert.deepEqual(readdirSync(stateDirectory), []);
-    assert.deepEqual(readdirSync(dirname(primaryAction)).filter((name) => name.includes('.tmp.')), []);
+    assert.deepEqual(
+      readdirSync(dirname(primaryAction)).filter((name) => name.includes('.tmp.')),
+      [],
+    );
   } finally {
     atomicWriter._writeFileWithMode = originalWriteFileWithMode;
     fixture.cleanup();
