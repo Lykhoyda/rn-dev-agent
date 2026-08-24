@@ -19,6 +19,12 @@ export class ReplayDispatchError extends Error {
 const interp = (s, p) => s.replace(/\$\{([A-Z_][A-Z0-9_]*)(?:\s*\?\?\s*(['"])(.*?)\2)?\}/g, (match, key, _quote, fallback) => p[key] ?? fallback ?? match);
 const asString = (x) => (typeof x === 'string' ? x : null);
 const isObj = (x) => typeof x === 'object' && x !== null && !Array.isArray(x);
+function refuseUnsupportedKeys(value, allowed, label) {
+    const unsupported = Object.keys(value).filter((key) => !allowed.includes(key));
+    if (unsupported.length > 0) {
+        throw new UnsupportedStepError(`${label} (unsupported keys: ${unsupported.sort().join(', ')})`);
+    }
+}
 export function normalizeSteps(body, params) {
     const out = [];
     for (const raw of body) {
@@ -50,6 +56,8 @@ export function normalizeSteps(body, params) {
                 break;
             }
             case 'tapOn': {
+                if (isObj(v))
+                    refuseUnsupportedKeys(v, ['id'], 'tapOn');
                 const id = isObj(v) ? asString(v.id) : null;
                 if (!id)
                     throw new UnsupportedStepError('tapOn (missing string id)');
@@ -64,6 +72,8 @@ export function normalizeSteps(body, params) {
                 break;
             }
             case 'assertVisible': {
+                if (isObj(v))
+                    refuseUnsupportedKeys(v, ['id'], 'assertVisible');
                 const id = isObj(v) ? asString(v.id) : null;
                 if (!id)
                     throw new UnsupportedStepError('assertVisible (missing string id)');
@@ -71,6 +81,11 @@ export function normalizeSteps(body, params) {
                 break;
             }
             case 'extendedWaitUntil': {
+                if (isObj(v))
+                    refuseUnsupportedKeys(v, ['visible', 'timeout'], 'extendedWaitUntil');
+                if (isObj(v) && isObj(v.visible)) {
+                    refuseUnsupportedKeys(v.visible, ['id'], 'extendedWaitUntil.visible');
+                }
                 const id = isObj(v) && isObj(v.visible) ? asString(v.visible.id) : null;
                 const timeoutMs = isObj(v) ? v.timeout : undefined;
                 if (!id || !Number.isSafeInteger(timeoutMs) || Number(timeoutMs) < 0)
@@ -82,6 +97,13 @@ export function normalizeSteps(body, params) {
                 out.push({ t: 'wait' });
                 break;
             case 'runFlow': {
+                if (isObj(v))
+                    refuseUnsupportedKeys(v, ['when', 'commands'], 'runFlow');
+                if (isObj(v) && isObj(v.when))
+                    refuseUnsupportedKeys(v.when, ['visible'], 'runFlow.when');
+                if (isObj(v) && isObj(v.when) && isObj(v.when.visible)) {
+                    refuseUnsupportedKeys(v.when.visible, ['id'], 'runFlow.when.visible');
+                }
                 const when = isObj(v) && isObj(v.when) && isObj(v.when.visible) ? asString(v.when.visible.id) : null;
                 const commands = isObj(v) ? v.commands : undefined;
                 if (!when || !Array.isArray(commands))
@@ -202,6 +224,7 @@ export async function replayFlow(steps, dispatch, opts = {}) {
                         const sub = await replayFlow(s.commands, dispatch, {
                             sourceIndex: sourceIndex(i),
                             signal: opts.signal,
+                            initialFocusId: lastTapped ?? undefined,
                         });
                         trace.push(...sub.steps);
                         if (!sub.passed) {
@@ -214,6 +237,7 @@ export async function replayFlow(steps, dispatch, opts = {}) {
                                 steps: trace,
                             };
                         }
+                        lastTapped = sub.finalFocusId ?? null;
                     }
                     else {
                         trace.push({
@@ -239,5 +263,5 @@ export async function replayFlow(steps, dispatch, opts = {}) {
             return fail(i, e instanceof Error ? e.message : String(e), e instanceof ReplayDispatchError ? e.code : undefined, e instanceof ReplayDispatchError ? e.meta : undefined);
         }
     }
-    return { passed: true, steps: trace };
+    return { passed: true, finalFocusId: lastTapped, steps: trace };
 }

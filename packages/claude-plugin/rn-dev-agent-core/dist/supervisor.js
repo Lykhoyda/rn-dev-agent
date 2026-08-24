@@ -34920,6 +34920,12 @@ var init_authority_gate = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/domain/cdp-flow-replay.js
+function refuseUnsupportedKeys(value, allowed, label) {
+  const unsupported = Object.keys(value).filter((key) => !allowed.includes(key));
+  if (unsupported.length > 0) {
+    throw new UnsupportedStepError(`${label} (unsupported keys: ${unsupported.sort().join(", ")})`);
+  }
+}
 function normalizeSteps(body, params) {
   const out = [];
   for (const raw of body) {
@@ -34947,6 +34953,8 @@ function normalizeSteps(body, params) {
         break;
       }
       case "tapOn": {
+        if (isObj(v))
+          refuseUnsupportedKeys(v, ["id"], "tapOn");
         const id = isObj(v) ? asString(v.id) : null;
         if (!id)
           throw new UnsupportedStepError("tapOn (missing string id)");
@@ -34961,6 +34969,8 @@ function normalizeSteps(body, params) {
         break;
       }
       case "assertVisible": {
+        if (isObj(v))
+          refuseUnsupportedKeys(v, ["id"], "assertVisible");
         const id = isObj(v) ? asString(v.id) : null;
         if (!id)
           throw new UnsupportedStepError("assertVisible (missing string id)");
@@ -34968,6 +34978,11 @@ function normalizeSteps(body, params) {
         break;
       }
       case "extendedWaitUntil": {
+        if (isObj(v))
+          refuseUnsupportedKeys(v, ["visible", "timeout"], "extendedWaitUntil");
+        if (isObj(v) && isObj(v.visible)) {
+          refuseUnsupportedKeys(v.visible, ["id"], "extendedWaitUntil.visible");
+        }
         const id = isObj(v) && isObj(v.visible) ? asString(v.visible.id) : null;
         const timeoutMs = isObj(v) ? v.timeout : void 0;
         if (!id || !Number.isSafeInteger(timeoutMs) || Number(timeoutMs) < 0)
@@ -34979,6 +34994,13 @@ function normalizeSteps(body, params) {
         out.push({ t: "wait" });
         break;
       case "runFlow": {
+        if (isObj(v))
+          refuseUnsupportedKeys(v, ["when", "commands"], "runFlow");
+        if (isObj(v) && isObj(v.when))
+          refuseUnsupportedKeys(v.when, ["visible"], "runFlow.when");
+        if (isObj(v) && isObj(v.when) && isObj(v.when.visible)) {
+          refuseUnsupportedKeys(v.when.visible, ["id"], "runFlow.when.visible");
+        }
         const when = isObj(v) && isObj(v.when) && isObj(v.when.visible) ? asString(v.when.visible.id) : null;
         const commands = isObj(v) ? v.commands : void 0;
         if (!when || !Array.isArray(commands))
@@ -35098,7 +35120,8 @@ async function replayFlow(steps, dispatch, opts = {}) {
           if ((await dispatch.visibility(s.whenVisible)).visible) {
             const sub = await replayFlow(s.commands, dispatch, {
               sourceIndex: sourceIndex(i),
-              signal: opts.signal
+              signal: opts.signal,
+              initialFocusId: lastTapped ?? void 0
             });
             trace.push(...sub.steps);
             if (!sub.passed) {
@@ -35111,6 +35134,7 @@ async function replayFlow(steps, dispatch, opts = {}) {
                 steps: trace
               };
             }
+            lastTapped = sub.finalFocusId ?? null;
           } else {
             trace.push({
               sourceIndex: sourceIndex(i),
@@ -35134,7 +35158,7 @@ async function replayFlow(steps, dispatch, opts = {}) {
       return fail3(i, e instanceof Error ? e.message : String(e), e instanceof ReplayDispatchError ? e.code : void 0, e instanceof ReplayDispatchError ? e.meta : void 0);
     }
   }
-  return { passed: true, steps: trace };
+  return { passed: true, finalFocusId: lastTapped, steps: trace };
 }
 var UnsupportedStepError, ReplayDispatchError, interp, asString, isObj;
 var init_cdp_flow_replay = __esm({
@@ -35577,6 +35601,30 @@ function resolveAppId(override, platform) {
     return resolveBundleId(platform) ?? readExpoSlug() ?? "";
   return readExpoSlug() ?? "";
 }
+function isRecord(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function remapNativeStep(step, ordinal, sourceIndices) {
+  if (!isRecord(step))
+    return null;
+  const reportedIndex = Number(step.index);
+  const localIndex = Number.isSafeInteger(reportedIndex) && reportedIndex >= 0 ? reportedIndex : ordinal;
+  return {
+    index: sourceIndices[localIndex] ?? sourceIndices[ordinal] ?? localIndex,
+    name: String(step.name ?? step.verb ?? "native"),
+    verb: String(step.verb ?? step.name ?? "native"),
+    status: step.status === "fail" ? "fail" : "pass",
+    durationMs: Number(step.durationMs ?? 0)
+  };
+}
+function remapNativeSteps(steps, sourceIndices) {
+  if (!Array.isArray(steps))
+    return [];
+  return steps.flatMap((step, ordinal) => {
+    const mapped = remapNativeStep(step, ordinal, sourceIndices);
+    return mapped ? [mapped] : [];
+  });
+}
 function readToolEnvelope(result) {
   try {
     return JSON.parse(result.content[0]?.text ?? "{}");
@@ -35763,26 +35811,29 @@ function createMaestroRunHandler(deps = {}) {
               timeoutMs: Math.max(1, deadline - now())
             });
             const env = readToolEnvelope(nested);
-            if (env.ok !== true || env.data?.passed !== true)
-              return nested;
+            if (env.ok !== true || env.data?.passed !== true) {
+              const nestedMeta = env.meta ?? env.data ?? {};
+              combinedSteps.push(...remapNativeSteps(nestedMeta.steps, segment.sourceIndices));
+              const uniqueProofDomains = [...new Set(proofDomains)];
+              const proofDomain = uniqueProofDomains.length === 1 ? uniqueProofDomains.at(0) ?? "partitioned" : "partitioned";
+              const failedStep = remapNativeStep(nestedMeta.failedStep, Math.max(0, segment.sourceIndices.length - 1), segment.sourceIndices);
+              const lastStep = remapNativeStep(nestedMeta.lastStep, Math.max(0, segment.sourceIndices.length - 1), segment.sourceIndices);
+              const meta = {
+                ...nestedMeta,
+                flowFile,
+                proofDomain,
+                proofDomains: uniqueProofDomains,
+                ...proofDomain === "partitioned" ? { runner: "partitioned", transport: "partitioned" } : {},
+                steps: combinedSteps,
+                ...failedStep ? { failedStep } : {},
+                ...lastStep ? { lastStep } : {}
+              };
+              return env.code ? failResult(env.error ?? "Native replay segment failed.", env.code, meta) : failResult(env.error ?? "Native replay segment failed.", meta);
+            }
             nativeTransportVersion = env.data.transportVersion ?? nativeTransportVersion;
             if (typeof env.data.output === "string")
               nativeOutput += env.data.output;
-            const steps = Array.isArray(env.data.steps) ? env.data.steps : [];
-            for (const [ordinal, step] of steps.entries()) {
-              if (!step || typeof step !== "object")
-                continue;
-              const record2 = step;
-              const reportedIndex = Number(record2.index);
-              const localIndex = Number.isSafeInteger(reportedIndex) && reportedIndex >= 0 ? reportedIndex : ordinal;
-              combinedSteps.push({
-                index: segment.sourceIndices[localIndex] ?? localIndex,
-                name: String(record2.name ?? record2.verb ?? "native"),
-                verb: String(record2.verb ?? record2.name ?? "native"),
-                status: record2.status === "fail" ? "fail" : "pass",
-                durationMs: Number(record2.durationMs ?? 0)
-              });
-            }
+            combinedSteps.push(...remapNativeSteps(env.data.steps, segment.sourceIndices));
             continue;
           }
           proofDomains.push("react-tree");

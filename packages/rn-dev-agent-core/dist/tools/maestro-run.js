@@ -221,6 +221,30 @@ function resolveAppId(override, platform) {
         return resolveBundleId(platform) ?? readExpoSlug() ?? '';
     return readExpoSlug() ?? '';
 }
+function isRecord(value) {
+    return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+function remapNativeStep(step, ordinal, sourceIndices) {
+    if (!isRecord(step))
+        return null;
+    const reportedIndex = Number(step.index);
+    const localIndex = Number.isSafeInteger(reportedIndex) && reportedIndex >= 0 ? reportedIndex : ordinal;
+    return {
+        index: sourceIndices[localIndex] ?? sourceIndices[ordinal] ?? localIndex,
+        name: String(step.name ?? step.verb ?? 'native'),
+        verb: String(step.verb ?? step.name ?? 'native'),
+        status: step.status === 'fail' ? 'fail' : 'pass',
+        durationMs: Number(step.durationMs ?? 0),
+    };
+}
+function remapNativeSteps(steps, sourceIndices) {
+    if (!Array.isArray(steps))
+        return [];
+    return steps.flatMap((step, ordinal) => {
+        const mapped = remapNativeStep(step, ordinal, sourceIndices);
+        return mapped ? [mapped] : [];
+    });
+}
 class ReactReplayFailure extends Error {
     replay;
     sourceIndices;
@@ -481,26 +505,35 @@ export function createMaestroRunHandler(deps = {}) {
                             timeoutMs: Math.max(1, deadline - now()),
                         });
                         const env = readToolEnvelope(nested);
-                        if (env.ok !== true || env.data?.passed !== true)
-                            return nested;
+                        if (env.ok !== true || env.data?.passed !== true) {
+                            const nestedMeta = env.meta ?? env.data ?? {};
+                            combinedSteps.push(...remapNativeSteps(nestedMeta.steps, segment.sourceIndices));
+                            const uniqueProofDomains = [...new Set(proofDomains)];
+                            const proofDomain = uniqueProofDomains.length === 1
+                                ? (uniqueProofDomains.at(0) ?? 'partitioned')
+                                : 'partitioned';
+                            const failedStep = remapNativeStep(nestedMeta.failedStep, Math.max(0, segment.sourceIndices.length - 1), segment.sourceIndices);
+                            const lastStep = remapNativeStep(nestedMeta.lastStep, Math.max(0, segment.sourceIndices.length - 1), segment.sourceIndices);
+                            const meta = {
+                                ...nestedMeta,
+                                flowFile,
+                                proofDomain,
+                                proofDomains: uniqueProofDomains,
+                                ...(proofDomain === 'partitioned'
+                                    ? { runner: 'partitioned', transport: 'partitioned' }
+                                    : {}),
+                                steps: combinedSteps,
+                                ...(failedStep ? { failedStep } : {}),
+                                ...(lastStep ? { lastStep } : {}),
+                            };
+                            return env.code
+                                ? failResult(env.error ?? 'Native replay segment failed.', env.code, meta)
+                                : failResult(env.error ?? 'Native replay segment failed.', meta);
+                        }
                         nativeTransportVersion = env.data.transportVersion ?? nativeTransportVersion;
                         if (typeof env.data.output === 'string')
                             nativeOutput += env.data.output;
-                        const steps = Array.isArray(env.data.steps) ? env.data.steps : [];
-                        for (const [ordinal, step] of steps.entries()) {
-                            if (!step || typeof step !== 'object')
-                                continue;
-                            const record = step;
-                            const reportedIndex = Number(record.index);
-                            const localIndex = Number.isSafeInteger(reportedIndex) && reportedIndex >= 0 ? reportedIndex : ordinal;
-                            combinedSteps.push({
-                                index: segment.sourceIndices[localIndex] ?? localIndex,
-                                name: String(record.name ?? record.verb ?? 'native'),
-                                verb: String(record.verb ?? record.name ?? 'native'),
-                                status: record.status === 'fail' ? 'fail' : 'pass',
-                                durationMs: Number(record.durationMs ?? 0),
-                            });
-                        }
+                        combinedSteps.push(...remapNativeSteps(env.data.steps, segment.sourceIndices));
                         continue;
                     }
                     proofDomains.push('react-tree');
