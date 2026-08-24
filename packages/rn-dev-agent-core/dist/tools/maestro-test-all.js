@@ -88,7 +88,9 @@ export function createMaestroTestAllHandler(deps = {}) {
         let learnedContext = null;
         if (learnedProjectRoot) {
             try {
-                learnedContext = openReadableActionLoadContext(learnedProjectRoot);
+                learnedContext = openReadableActionLoadContext(learnedProjectRoot, {
+                    includeRunFlowFiles: true,
+                });
             }
             catch (err) {
                 return failResult(err instanceof Error ? err.message : String(err));

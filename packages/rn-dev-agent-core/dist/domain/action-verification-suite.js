@@ -12,7 +12,9 @@ export function prepareActionVerificationSuite(files, flowDir, engineStatus, con
     if (learnedCorpus && !learnedContext) {
         try {
             learnedContext =
-                openReadableActionLoadContext(dirname(dirname(resolve(flowDir)))) ?? undefined;
+                openReadableActionLoadContext(dirname(dirname(resolve(flowDir))), {
+                    includeRunFlowFiles: true,
+                }) ?? undefined;
         }
         catch (err) {
             const error = err instanceof Error ? err.message : String(err);

@@ -15175,7 +15175,9 @@ function prepareActionVerificationSuite(files, flowDir, engineStatus, context) {
   let learnedContext = context;
   if (learnedCorpus && !learnedContext) {
     try {
-      learnedContext = openReadableActionLoadContext(dirname11(dirname11(resolve7(flowDir)))) ?? void 0;
+      learnedContext = openReadableActionLoadContext(dirname11(dirname11(resolve7(flowDir))), {
+        includeRunFlowFiles: true
+      }) ?? void 0;
     } catch (err) {
       const error = err instanceof Error ? err.message : String(err);
       return { prepared, errors: files.map((file) => ({ file, error })) };
@@ -15365,7 +15367,9 @@ async function verifyActions(argv) {
   let files;
   let actionContext;
   try {
-    const openedContext = openReadableActionLoadContext(dirname15(dirname15(flowDir)));
+    const openedContext = openReadableActionLoadContext(dirname15(dirname15(flowDir)), {
+      includeRunFlowFiles: true
+    });
     if (!openedContext)
       throw new Error(`No learned-action corpus found at ${flowDir}`);
     actionContext = openedContext;
