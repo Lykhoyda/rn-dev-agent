@@ -1189,8 +1189,9 @@ test('operation snapshot refuses a replaced linked Git entry', () => {
       const operation = captureReadableActionOperationSnapshot(corpus);
       assert.ok(operation);
       const gitEntry = join(worktree, '.git');
+      const displacedGitEntry = join(fixture.root, `original-git-entry-${scenario}`);
       const contents = readFileSync(gitEntry, 'utf8');
-      rmSync(gitEntry);
+      renameSync(gitEntry, displacedGitEntry);
       if (scenario === 'replace') writeFileSync(gitEntry, contents);
 
       assert.throws(

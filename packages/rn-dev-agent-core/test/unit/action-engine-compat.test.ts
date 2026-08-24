@@ -609,7 +609,7 @@ test('migrateLearnedActions refuses per-file action symlinks', () => {
   assert.equal(results.length, 1);
   assert.equal(results[0]?.status, 'incompatible');
   assert.equal(results[0]?.mutated, false);
-  assert.match(String(results[0]?.reason), /inherited action symlink/i);
+  assert.match(String(results[0]?.reason), /replaced learned-action corpus/i);
   assert.doesNotMatch(readFileSync(sharedPath, 'utf8'), /enginePin/);
 });
 
