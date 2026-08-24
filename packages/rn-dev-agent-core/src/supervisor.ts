@@ -4,6 +4,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { lstatSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { awaitChildErrorOrExit, completeSqliteRelaunch } from './lifecycle/child-error-or-exit.js';
 import { Lockfile, formatLockConflictMessage } from './lifecycle/lockfile.js';
 import { startParentDeathWatch } from './lifecycle/parent-watch.js';
 import { LineSplitter } from './lifecycle/stdio-frames.js';
@@ -68,17 +69,7 @@ if (
       env: { ...process.env, RN_DEV_AGENT_SQLITE_RELAUNCHED: '1' },
     },
   );
-  for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP', 'SIGUSR2'] as const) {
-    process.on(signal, () => child.kill(signal));
-  }
-  const outcome = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
-    (resolve) => child.on('exit', (code, signal) => resolve({ code, signal })),
-  );
-  if (outcome.signal) {
-    process.removeAllListeners(outcome.signal);
-    process.kill(process.pid, outcome.signal);
-  }
-  process.exit(outcome.code ?? 1);
+  await completeSqliteRelaunch(child);
 }
 
 function legacyRepairArtifactPresent(cwd: string): boolean {
@@ -298,7 +289,13 @@ if (process.env.RN_BRIDGE_SUPERVISOR === '0') {
     child.stdin?.on('error', () => {
       /* EPIPE on a dying worker — exit handler covers it */
     });
-    child.on('error', (err) => onDeath(null, null, `spawn failed: ${err.message}`));
+    void awaitChildErrorOrExit(child).then((outcome) =>
+      onDeath(
+        outcome.code,
+        outcome.signal,
+        outcome.error ? `spawn failed: ${outcome.error.message}` : '',
+      ),
+    );
     if (child.stdout) {
       // setEncoding makes Node's StringDecoder hold partial UTF-8 sequences —
       // a multi-byte codepoint split across 'data' events must not corrupt
@@ -318,7 +315,6 @@ if (process.env.RN_BRIDGE_SUPERVISOR === '0') {
         for (const line of childLines.push(chunk)) apply(core.onWorkerLine(line));
       });
     }
-    child.on('exit', (code, signal) => onDeath(code, signal, ''));
   }
 
   function closeAuthorityAndExit(exitCode = 0): void {
