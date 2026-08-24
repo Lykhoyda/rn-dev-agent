@@ -235,6 +235,18 @@ function mapRefusedReason(repairCode, repairError) {
     // legitimately doesn't have the testID".
     return 'INTERNAL_ERROR';
 }
+function replayCorpusIdentityRefusal(context, actionId) {
+    try {
+        assertReadableActionLoadContextStable(context);
+        return null;
+    }
+    catch (err) {
+        return failResult(err instanceof Error ? err.message : String(err), 'BAD_FILENAME', {
+            actionId,
+            fallback: 'none',
+        });
+    }
+}
 async function probeTreeWithRetry(replay, probe, retry) {
     // Retry until the probe testID is PRESENT, not merely until a tree is
     // readable — after a WDA-death relaunch the app may serve an early/loading
@@ -295,7 +307,7 @@ export function createRunActionHandler(deps = {}) {
         let openedContext;
         let loaded;
         try {
-            openedContext = openReadableActionLoadContext(projectRoot);
+            openedContext = openReadableActionLoadContext(projectRoot, { actionId: args.actionId });
             loaded = openedContext ? loadActionFromContext(openedContext, args.actionId) : null;
         }
         catch (err) {
@@ -322,8 +334,17 @@ export function createRunActionHandler(deps = {}) {
         // get the strict Phase 129 "respect external edits" behavior back.
         const forceReload = proofReplay ? false : args.forceReload !== false;
         const action = forceReload ? acknowledgeExternalEdit(loaded) : loaded;
-        const engineStatus = await resolveEngineStatus();
-        assertReadableActionLoadContextStable(loadContext);
+        let engineStatus;
+        try {
+            engineStatus = await resolveEngineStatus();
+            assertReadableActionLoadContextStable(loadContext);
+        }
+        catch (err) {
+            return failResult(err instanceof Error ? err.message : String(err), 'BAD_FILENAME', {
+                actionId: args.actionId,
+                fallback: 'none',
+            });
+        }
         const compatRefusal = actionReplayPreflight({
             enginePin: action.metadata.enginePin,
             commands: preflightCommands,
@@ -467,6 +488,9 @@ export function createRunActionHandler(deps = {}) {
                     if (probeOutcome.found) {
                         const tReplay = Date.now();
                         try {
+                            const corpusRefusal = replayCorpusIdentityRefusal(loadContext, args.actionId);
+                            if (corpusRefusal)
+                                return corpusRefusal;
                             const replay = await measureStep('proactive-cdp-replay', () => runCdpReplay(cdpReplayYaml, args.params ?? {}, replayDeps));
                             const timings_ms = { probe: tReplay - tProbe, replay: Date.now() - tReplay };
                             const blindProbe = { atRisk, skippedMaestro: true };
@@ -538,6 +562,9 @@ export function createRunActionHandler(deps = {}) {
             // Requested/session metadata is not RunRecord authority. Clear it before
             // dispatch; only direct maestro-runner evidence may repopulate it.
             probeDeviceId = null;
+            const firstCorpusRefusal = replayCorpusIdentityRefusal(loadContext, args.actionId);
+            if (firstCorpusRefusal)
+                return firstCorpusRefusal;
             const firstResult = await measureStep('maestro-first-attempt', () => maestroRun({
                 inlineYaml: replayYaml,
                 actionMetadata: action.metadata,
@@ -739,6 +766,9 @@ export function createRunActionHandler(deps = {}) {
                         try {
                             // GH #580: resume at the proven failed selector; UNKNOWN failed before
                             // any step, so it keeps start-at-zero.
+                            const corpusRefusal = replayCorpusIdentityRefusal(loadContext, args.actionId);
+                            if (corpusRefusal)
+                                return corpusRefusal;
                             const replay = await measureStep('fallback-cdp-replay', () => runCdpReplay(cdpReplayYaml, args.params ?? {}, replayDeps, {
                                 resumeAtSelector: failure.kind === 'SELECTOR_NOT_FOUND' ? failure.selector : null,
                             }));
@@ -934,6 +964,9 @@ export function createRunActionHandler(deps = {}) {
             const retryYaml = reloadedAction.replay.yamlText;
             const tBeforeRetry = Date.now();
             probeDeviceId = null;
+            const retryCorpusRefusal = replayCorpusIdentityRefusal(loadContext, args.actionId);
+            if (retryCorpusRefusal)
+                return retryCorpusRefusal;
             const retryResult = await measureStep('maestro-retry', () => maestroRun({
                 inlineYaml: retryYaml,
                 actionMetadata: reloadedAction.metadata,

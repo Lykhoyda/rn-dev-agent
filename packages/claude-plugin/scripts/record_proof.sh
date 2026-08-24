@@ -1982,23 +1982,13 @@ cmd_stop() {
             recorder_stopped="true"
             break
           fi
+          [[ "$LOCAL_PROCESS_MARKER_MATCH" == "true" ]] || {
+            echo "Error: recorder command identity changed after force stop" >&2
+            exit 1
+          }
           sleep 0.5
           force_waited=$((force_waited + 1))
         done
-        if [[ "$recorder_stopped" != "true" ]]; then
-          probe_local_process "$pid" "$process_marker"
-          if [[
-            "$LOCAL_PROCESS_STATE" == "absent" ||
-              "$LOCAL_PROCESS_BIRTH" != "$expected_birth"
-          ]]; then
-            recorder_stopped="true"
-          else
-            [[ "$LOCAL_PROCESS_MARKER_MATCH" == "true" ]] || {
-              echo "Error: recorder command identity changed after force stop" >&2
-              exit 1
-            }
-          fi
-        fi
       fi
     fi
     [[ "$recorder_stopped" == "true" ]] || {

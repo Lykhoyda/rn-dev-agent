@@ -7907,7 +7907,7 @@ function probeRecordedProcessBirth(pid, dependencies) {
   }
   return { status: "unknown" };
 }
-var DARWIN_HELPER_MANIFEST, VERIFIED_HELPER_SCRIPT;
+var DARWIN_HELPER_MANIFEST, VERIFIED_FILESYSTEM_MAX_BUFFER_BYTES, VERIFIED_FILESYSTEM_BATCH_BYTES, VERIFIED_HELPER_SCRIPT;
 var init_process_birth = __esm({
   "packages/rn-dev-agent-core/dist/session/process-birth.js"() {
     "use strict";
@@ -7922,6 +7922,8 @@ var init_process_birth = __esm({
         "1c072373aff231d756e20fa008b0f9486b229888"
       ]
     };
+    VERIFIED_FILESYSTEM_MAX_BUFFER_BYTES = 32 * 1024 * 1024;
+    VERIFIED_FILESYSTEM_BATCH_BYTES = 24 * 1024 * 1024;
     VERIFIED_HELPER_SCRIPT = `
 set -euo pipefail
 helper_pid=

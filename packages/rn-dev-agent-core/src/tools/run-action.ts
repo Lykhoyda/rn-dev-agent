@@ -465,6 +465,21 @@ interface CdpJsFallbackSkip {
   reason: 'no-replay-deps' | 'no-probe-testid' | 'cdp-unreachable' | 'testid-not-in-tree';
 }
 
+function replayCorpusIdentityRefusal(
+  context: ReadableActionLoadContext,
+  actionId: string,
+): ToolResult | null {
+  try {
+    assertReadableActionLoadContextStable(context);
+    return null;
+  } catch (err) {
+    return failResult(err instanceof Error ? err.message : String(err), 'BAD_FILENAME', {
+      actionId,
+      fallback: 'none',
+    });
+  }
+}
+
 async function probeTreeWithRetry(
   replay: CdpReplayDeps,
   probe: string,
@@ -537,7 +552,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
     let openedContext: ReadableActionLoadContext | null;
     let loaded: ReturnType<typeof loadAction>;
     try {
-      openedContext = openReadableActionLoadContext(projectRoot);
+      openedContext = openReadableActionLoadContext(projectRoot, { actionId: args.actionId });
       loaded = openedContext ? loadActionFromContext(openedContext, args.actionId) : null;
     } catch (err) {
       return failResult(err instanceof Error ? err.message : String(err), 'BAD_FILENAME', {
@@ -572,8 +587,16 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
     const forceReload = proofReplay ? false : args.forceReload !== false;
     const action = forceReload ? acknowledgeExternalEdit(loaded) : loaded;
 
-    const engineStatus = await resolveEngineStatus();
-    assertReadableActionLoadContextStable(loadContext);
+    let engineStatus: ReplayEngineStatus | null;
+    try {
+      engineStatus = await resolveEngineStatus();
+      assertReadableActionLoadContextStable(loadContext);
+    } catch (err) {
+      return failResult(err instanceof Error ? err.message : String(err), 'BAD_FILENAME', {
+        actionId: args.actionId,
+        fallback: 'none',
+      });
+    }
     const compatRefusal = actionReplayPreflight({
       enginePin: action.metadata.enginePin,
       commands: preflightCommands,
@@ -740,6 +763,8 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
           if (probeOutcome.found) {
             const tReplay = Date.now();
             try {
+              const corpusRefusal = replayCorpusIdentityRefusal(loadContext, args.actionId);
+              if (corpusRefusal) return corpusRefusal;
               const replay = await measureStep('proactive-cdp-replay', () =>
                 runCdpReplay(cdpReplayYaml, args.params ?? {}, replayDeps),
               );
@@ -816,6 +841,8 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
       // Requested/session metadata is not RunRecord authority. Clear it before
       // dispatch; only direct maestro-runner evidence may repopulate it.
       probeDeviceId = null;
+      const firstCorpusRefusal = replayCorpusIdentityRefusal(loadContext, args.actionId);
+      if (firstCorpusRefusal) return firstCorpusRefusal;
       const firstResult = await measureStep('maestro-first-attempt', () =>
         maestroRun({
           inlineYaml: replayYaml,
@@ -1044,6 +1071,8 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
             try {
               // GH #580: resume at the proven failed selector; UNKNOWN failed before
               // any step, so it keeps start-at-zero.
+              const corpusRefusal = replayCorpusIdentityRefusal(loadContext, args.actionId);
+              if (corpusRefusal) return corpusRefusal;
               const replay = await measureStep('fallback-cdp-replay', () =>
                 runCdpReplay(cdpReplayYaml, args.params ?? {}, replayDeps, {
                   resumeAtSelector: failure.kind === 'SELECTOR_NOT_FOUND' ? failure.selector : null,
@@ -1284,6 +1313,8 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
 
       const tBeforeRetry = Date.now();
       probeDeviceId = null;
+      const retryCorpusRefusal = replayCorpusIdentityRefusal(loadContext, args.actionId);
+      if (retryCorpusRefusal) return retryCorpusRefusal;
       const retryResult = await measureStep('maestro-retry', () =>
         maestroRun({
           inlineYaml: retryYaml,

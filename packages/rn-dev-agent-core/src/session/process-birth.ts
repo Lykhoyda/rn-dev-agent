@@ -83,6 +83,11 @@ const LINUX_PUBLICATION_HELPER_SHA256 = {
   arm64: 'f9cb783474cc93e6dbb28e81b5a2e46d74c38926a392d75ce9ed5188bafe3520',
 } as const;
 
+const VERIFIED_FILESYSTEM_MAX_BUFFER_BYTES = 32 * 1024 * 1024;
+const VERIFIED_FILESYSTEM_BATCH_BYTES = 24 * 1024 * 1024;
+const VERIFIED_FILESYSTEM_BATCH_FILES = 16;
+const VERIFIED_FILESYSTEM_ENTRY_FRAME_BYTES = 9;
+
 function defaultRun(command: string, args: readonly string[]): string {
   try {
     return execFileSync(command, [...args], {
@@ -417,7 +422,7 @@ function runVerifiedFilesystemHelper(args: readonly string[]): Buffer {
       throw new Error('Verified directory helper changed before execution.');
     }
     return execFileSync(boundPath, [...args], {
-      maxBuffer: 32 * 1024 * 1024,
+      maxBuffer: VERIFIED_FILESYSTEM_MAX_BUFFER_BYTES,
       stdio: ['ignore', 'pipe', 'ignore'],
       timeout: 10_000,
     });
@@ -446,32 +451,62 @@ export function readFilesFromVerifiedDirectory(
   relativePaths: readonly string[],
 ): Array<Buffer | null> {
   if (relativePaths.length === 0) return [];
-  const output = runVerifiedFilesystemHelper([
-    '--read-directory-entries',
-    directoryPath,
-    identity.dev,
-    identity.ino,
-    ...relativePaths,
-  ]);
   const entries: Array<Buffer | null> = [];
-  let offset = 0;
+  const batches: string[][] = [];
+  let batch: string[] = [];
+  let batchBytes = 0;
   for (const relativePath of relativePaths) {
-    if (offset + 9 > output.length) {
-      throw new Error(`Verified directory batch was truncated before ${relativePath}.`);
+    let framedBytes = VERIFIED_FILESYSTEM_ENTRY_FRAME_BYTES;
+    try {
+      const stat = lstatSync(join(directoryPath, relativePath));
+      if (stat.isFile()) framedBytes += stat.size;
+    } catch {
+      framedBytes = VERIFIED_FILESYSTEM_ENTRY_FRAME_BYTES;
     }
-    const status = output[offset];
-    const length = output.readBigUInt64BE(offset + 1);
-    offset += 9;
-    if (length > BigInt(Number.MAX_SAFE_INTEGER) || offset + Number(length) > output.length) {
-      throw new Error(`Verified directory batch was malformed at ${relativePath}.`);
+    if (framedBytes > VERIFIED_FILESYSTEM_BATCH_BYTES) {
+      throw new Error(`Verified directory entry exceeds the safe batch size: ${relativePath}.`);
     }
-    const end = offset + Number(length);
-    if (status === 0) entries.push(Buffer.from(output.subarray(offset, end)));
-    else if (status === 1 && length === 0n) entries.push(null);
-    else throw new Error(`Verified directory batch had an invalid status for ${relativePath}.`);
-    offset = end;
+    if (
+      batch.length > 0 &&
+      (batch.length >= VERIFIED_FILESYSTEM_BATCH_FILES ||
+        batchBytes + framedBytes > VERIFIED_FILESYSTEM_BATCH_BYTES)
+    ) {
+      batches.push(batch);
+      batch = [];
+      batchBytes = 0;
+    }
+    batch.push(relativePath);
+    batchBytes += framedBytes;
   }
-  if (offset !== output.length) throw new Error('Verified directory batch had trailing data.');
+  if (batch.length > 0) batches.push(batch);
+
+  for (const currentBatch of batches) {
+    const output = runVerifiedFilesystemHelper([
+      '--read-directory-entries',
+      directoryPath,
+      identity.dev,
+      identity.ino,
+      ...currentBatch,
+    ]);
+    let offset = 0;
+    for (const relativePath of currentBatch) {
+      if (offset + VERIFIED_FILESYSTEM_ENTRY_FRAME_BYTES > output.length) {
+        throw new Error(`Verified directory batch was truncated before ${relativePath}.`);
+      }
+      const status = output[offset];
+      const length = output.readBigUInt64BE(offset + 1);
+      offset += VERIFIED_FILESYSTEM_ENTRY_FRAME_BYTES;
+      if (length > BigInt(Number.MAX_SAFE_INTEGER) || offset + Number(length) > output.length) {
+        throw new Error(`Verified directory batch was malformed at ${relativePath}.`);
+      }
+      const end = offset + Number(length);
+      if (status === 0) entries.push(Buffer.from(output.subarray(offset, end)));
+      else if (status === 1 && length === 0n) entries.push(null);
+      else throw new Error(`Verified directory batch had an invalid status for ${relativePath}.`);
+      offset = end;
+    }
+    if (offset !== output.length) throw new Error('Verified directory batch had trailing data.');
+  }
   return entries;
 }
 

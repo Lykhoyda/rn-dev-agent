@@ -23,12 +23,12 @@ import {
 } from './sidecar-io.js';
 import { atomicWriter } from './atomic-writer.js';
 import { assertValidActionId, assertWithinDir } from './path-safety.js';
+import { listUnfollowedDirectory, readUnfollowedFiles } from './unfollowed-file.js';
 import {
-  listUnfollowedDirectory,
-  readUnfollowedFile,
-  readUnfollowedFiles,
-} from './unfollowed-file.js';
-import { buildMaestroFlow, parseAndValidateFlow } from './maestro-validator.js';
+  buildMaestroFlow,
+  collectRunFlowFileReferences,
+  parseAndValidateFlow,
+} from './maestro-validator.js';
 import { mirrorToDb } from './action-state-store.js';
 import {
   assertReadableActionOperationUnchanged,
@@ -153,8 +153,56 @@ export interface ReadableActionLoadContext {
   fileContents: ReadonlyMap<string, string>;
 }
 
+export interface ReadableActionLoadDependencies {
+  actionId?: string;
+  readFiles?: typeof readUnfollowedFiles;
+}
+
+function referencedActionPath(parentFile: string, reference: string): string | null {
+  if (
+    isAbsolute(reference) ||
+    reference.split(/[\\/]/).includes('..') ||
+    !/\.ya?ml$/i.test(reference)
+  ) {
+    return null;
+  }
+  const child = join(dirname(parentFile), ...reference.split(/[\\/]+/));
+  if (child === '..' || child.startsWith(`..${sep}`) || isAbsolute(child)) return null;
+  return child;
+}
+
+function prefetchRunFlowFiles(
+  snapshot: ReadableActionSnapshot,
+  initial: ReadonlyMap<string, string>,
+  readFiles: typeof readUnfollowedFiles,
+): ReadonlyMap<string, string> {
+  const fileContents = new Map(initial);
+  let frontier = [...fileContents.entries()];
+  for (let depth = 0; depth < 5 && frontier.length > 0; depth += 1) {
+    const pending = new Set<string>();
+    for (const [parentFile, text] of frontier) {
+      for (const reference of collectRunFlowFileReferences(text)) {
+        const child = referencedActionPath(parentFile, reference);
+        if (child && !fileContents.has(child)) pending.add(child);
+      }
+    }
+    const paths = [...pending].sort();
+    if (paths.length === 0) break;
+    const contents = readFiles(snapshot.directory, snapshot.identity, paths);
+    frontier = [];
+    paths.forEach((path, index) => {
+      const text = contents[index];
+      if (text == null) return;
+      fileContents.set(path, text);
+      frontier.push([path, text]);
+    });
+  }
+  return fileContents;
+}
+
 export function openReadableActionLoadContext(
   projectRoot: string,
+  dependencies: ReadableActionLoadDependencies = {},
 ): ReadableActionLoadContext | null {
   const corpus = resolveReadableActionCorpus(projectRoot);
   if (corpus.status === 'refused') throw new Error(corpus.reason);
@@ -163,15 +211,29 @@ export function openReadableActionLoadContext(
   const operation = captureReadableActionOperationSnapshot(corpus);
   if (!snapshot || !operation) return null;
   const files = listUnfollowedDirectory(snapshot.directory, snapshot.identity);
-  const readableFiles = files.filter((file) => /\.ya?ml$/.test(file));
-  const contents = readUnfollowedFiles(snapshot.directory, snapshot.identity, readableFiles);
+  const requestedFiles = dependencies.actionId
+    ? [`${dependencies.actionId}.yaml`, `${dependencies.actionId}.yml`]
+    : files;
+  const readableFiles = requestedFiles.filter(
+    (file) => /\.ya?ml$/.test(file) && files.includes(file),
+  );
+  const readFiles = dependencies.readFiles ?? readUnfollowedFiles;
+  const contents = readFiles(snapshot.directory, snapshot.identity, readableFiles);
   const fileContents = new Map<string, string>();
   readableFiles.forEach((file, index) => {
     const text = contents[index];
     if (text != null) fileContents.set(file, text);
   });
+  const completeFileContents = prefetchRunFlowFiles(snapshot, fileContents, readFiles);
   assertReadableActionOperationUnchanged(operation);
-  return { projectRoot, corpus, snapshot, operation, files, fileContents };
+  return {
+    projectRoot,
+    corpus,
+    snapshot,
+    operation,
+    files,
+    fileContents: completeFileContents,
+  };
 }
 
 function actionTextFromContext(context: ReadableActionLoadContext, fileName: string): string {
@@ -225,7 +287,7 @@ function resolveActionFileNameFromContext(
 
 export function resolveActionPath(projectRoot: string, actionId: string): string | null {
   assertValidActionId(actionId, 'resolveActionPath');
-  const context = openReadableActionLoadContext(projectRoot);
+  const context = openReadableActionLoadContext(projectRoot, { actionId });
   if (!context) return null;
   const fileName = resolveActionFileNameFromContext(actionId, context);
   if (!fileName) return null;
@@ -463,10 +525,11 @@ export function captureActionFromContext(
         if (child === '' || child === '..' || child.startsWith(`..${sep}`) || isAbsolute(child)) {
           throw new Error(`Refusing action flow outside ${snapshot.directory}.`);
         }
-        return (
-          context.fileContents.get(child) ??
-          readUnfollowedFile(snapshot.directory, snapshot.identity, child)
-        );
+        const text = context.fileContents.get(child);
+        if (text === undefined) {
+          throw new Error(`Refusing inherited action symlink at ${snapshot.directory}/${child}.`);
+        }
+        return text;
       },
       realpathFn: (path) => resolve(path),
     });
@@ -504,7 +567,7 @@ export function loadActionFromContext(
 }
 
 export function loadAction(projectRoot: string, actionId: string): LoadedReusableAction | null {
-  const context = openReadableActionLoadContext(projectRoot);
+  const context = openReadableActionLoadContext(projectRoot, { actionId });
   return context ? loadActionFromContext(context, actionId) : null;
 }
 
@@ -516,7 +579,7 @@ export function captureActionFromPath(path: string): CapturedActionReplay | null
     return null;
   }
   const actionId = basename(absolutePath).replace(/\.ya?ml$/i, '');
-  const context = openReadableActionLoadContext(dirname(dirname(actionsDir)));
+  const context = openReadableActionLoadContext(dirname(dirname(actionsDir)), { actionId });
   if (!context) return null;
   const action = captureActionFromContext(context, actionId);
   return action && basename(action.filePath) === basename(absolutePath) ? action : null;
