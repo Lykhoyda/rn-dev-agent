@@ -154,6 +154,7 @@ export interface ReadableActionLoadContext {
 }
 
 export interface ReadableActionLoadDependencies {
+  actionId?: string;
   readFiles?: typeof readUnfollowedFiles;
 }
 
@@ -210,7 +211,12 @@ export function openReadableActionLoadContext(
   const operation = captureReadableActionOperationSnapshot(corpus);
   if (!snapshot || !operation) return null;
   const files = listUnfollowedDirectory(snapshot.directory, snapshot.identity);
-  const readableFiles = files.filter((file) => /\.ya?ml$/.test(file));
+  const requestedFiles = dependencies.actionId
+    ? [`${dependencies.actionId}.yaml`, `${dependencies.actionId}.yml`]
+    : files;
+  const readableFiles = requestedFiles.filter(
+    (file) => /\.ya?ml$/.test(file) && files.includes(file),
+  );
   const readFiles = dependencies.readFiles ?? readUnfollowedFiles;
   const contents = readFiles(snapshot.directory, snapshot.identity, readableFiles);
   const fileContents = new Map<string, string>();
@@ -281,7 +287,7 @@ function resolveActionFileNameFromContext(
 
 export function resolveActionPath(projectRoot: string, actionId: string): string | null {
   assertValidActionId(actionId, 'resolveActionPath');
-  const context = openReadableActionLoadContext(projectRoot);
+  const context = openReadableActionLoadContext(projectRoot, { actionId });
   if (!context) return null;
   const fileName = resolveActionFileNameFromContext(actionId, context);
   if (!fileName) return null;
@@ -561,7 +567,7 @@ export function loadActionFromContext(
 }
 
 export function loadAction(projectRoot: string, actionId: string): LoadedReusableAction | null {
-  const context = openReadableActionLoadContext(projectRoot);
+  const context = openReadableActionLoadContext(projectRoot, { actionId });
   return context ? loadActionFromContext(context, actionId) : null;
 }
 
@@ -573,7 +579,7 @@ export function captureActionFromPath(path: string): CapturedActionReplay | null
     return null;
   }
   const actionId = basename(absolutePath).replace(/\.ya?ml$/i, '');
-  const context = openReadableActionLoadContext(dirname(dirname(actionsDir)));
+  const context = openReadableActionLoadContext(dirname(dirname(actionsDir)), { actionId });
   if (!context) return null;
   const action = captureActionFromContext(context, actionId);
   return action && basename(action.filePath) === basename(absolutePath) ? action : null;

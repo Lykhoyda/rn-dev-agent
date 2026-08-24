@@ -295,7 +295,7 @@ export function createRunActionHandler(deps = {}) {
         let openedContext;
         let loaded;
         try {
-            openedContext = openReadableActionLoadContext(projectRoot);
+            openedContext = openReadableActionLoadContext(projectRoot, { actionId: args.actionId });
             loaded = openedContext ? loadActionFromContext(openedContext, args.actionId) : null;
         }
         catch (err) {

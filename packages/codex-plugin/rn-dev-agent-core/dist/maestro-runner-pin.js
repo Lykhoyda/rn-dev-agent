@@ -11011,7 +11011,8 @@ function openReadableActionLoadContext(projectRoot, dependencies = {}) {
   if (!snapshot || !operation)
     return null;
   const files = listUnfollowedDirectory(snapshot.directory, snapshot.identity);
-  const readableFiles = files.filter((file) => /\.ya?ml$/.test(file));
+  const requestedFiles = dependencies.actionId ? [`${dependencies.actionId}.yaml`, `${dependencies.actionId}.yml`] : files;
+  const readableFiles = requestedFiles.filter((file) => /\.ya?ml$/.test(file) && files.includes(file));
   const readFiles = dependencies.readFiles ?? readUnfollowedFiles;
   const contents = readFiles(snapshot.directory, snapshot.identity, readableFiles);
   const fileContents = /* @__PURE__ */ new Map();
@@ -11055,7 +11056,7 @@ function resolveActionFileNameFromContext(actionId, context) {
 }
 function resolveActionPath(projectRoot, actionId) {
   assertValidActionId(actionId, "resolveActionPath");
-  const context = openReadableActionLoadContext(projectRoot);
+  const context = openReadableActionLoadContext(projectRoot, { actionId });
   if (!context)
     return null;
   const fileName = resolveActionFileNameFromContext(actionId, context);
@@ -11176,7 +11177,7 @@ function captureActionFromPath(path) {
     return null;
   }
   const actionId = basename4(absolutePath).replace(/\.ya?ml$/i, "");
-  const context = openReadableActionLoadContext(dirname9(dirname9(actionsDir)));
+  const context = openReadableActionLoadContext(dirname9(dirname9(actionsDir)), { actionId });
   if (!context)
     return null;
   const action = captureActionFromContext(context, actionId);

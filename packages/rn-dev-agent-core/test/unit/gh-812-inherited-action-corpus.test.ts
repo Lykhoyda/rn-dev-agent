@@ -461,11 +461,16 @@ test('nested runFlow files are read in one batch per depth with no per-file fall
     );
     for (let index = 0; index < 10; index += 1) {
       writeFileSync(join(flowsDir, `child-${index}.yaml`), `- tapOn:\n    id: "child-${index}"\n`);
+      writeFileSync(
+        join(actionsDir, `unrelated-${index}.yaml`),
+        fixtureYaml({ id: `unrelated-${index}` }),
+      );
     }
     const worktree = addWorktree(fixture);
     inherit(worktree);
     const batches: string[][] = [];
     const context = openReadableActionLoadContext(worktree, {
+      actionId: 'login',
       readFiles: (directory, identity, paths) => {
         batches.push([...paths]);
         return readUnfollowedFiles(directory, identity, paths);

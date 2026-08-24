@@ -537,7 +537,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
     let openedContext: ReadableActionLoadContext | null;
     let loaded: ReturnType<typeof loadAction>;
     try {
-      openedContext = openReadableActionLoadContext(projectRoot);
+      openedContext = openReadableActionLoadContext(projectRoot, { actionId: args.actionId });
       loaded = openedContext ? loadActionFromContext(openedContext, args.actionId) : null;
     } catch (err) {
       return failResult(err instanceof Error ? err.message : String(err), 'BAD_FILENAME', {
