@@ -30253,7 +30253,7 @@ function referencedActionPath(parentFile, reference) {
   if (isAbsolute6(reference) || reference.split(/[\\/]/).includes("..") || !/\.ya?ml$/i.test(reference)) {
     return null;
   }
-  const child = join24(dirname16(parentFile), ...reference.split(/[\\/]+/));
+  const child = join24(dirname16(parentFile), reference);
   if (child === ".." || child.startsWith(`..${sep8}`) || isAbsolute6(child))
     return null;
   return child;

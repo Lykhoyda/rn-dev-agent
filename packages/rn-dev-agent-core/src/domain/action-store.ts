@@ -166,7 +166,7 @@ function referencedActionPath(parentFile: string, reference: string): string | n
   ) {
     return null;
   }
-  const child = join(dirname(parentFile), ...reference.split(/[\\/]+/));
+  const child = join(dirname(parentFile), reference);
   if (child === '..' || child.startsWith(`..${sep}`) || isAbsolute(child)) return null;
   return child;
 }

@@ -105,7 +105,7 @@ function referencedActionPath(parentFile, reference) {
         !/\.ya?ml$/i.test(reference)) {
         return null;
     }
-    const child = join(dirname(parentFile), ...reference.split(/[\\/]+/));
+    const child = join(dirname(parentFile), reference);
     if (child === '..' || child.startsWith(`..${sep}`) || isAbsolute(child))
         return null;
     return child;

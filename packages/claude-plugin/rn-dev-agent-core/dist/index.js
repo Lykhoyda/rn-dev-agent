@@ -27325,7 +27325,7 @@ function referencedActionPath(parentFile, reference) {
   if (isAbsolute3(reference) || reference.split(/[\\/]/).includes("..") || !/\.ya?ml$/i.test(reference)) {
     return null;
   }
-  const child = join20(dirname13(parentFile), ...reference.split(/[\\/]+/));
+  const child = join20(dirname13(parentFile), reference);
   if (child === ".." || child.startsWith(`..${sep6}`) || isAbsolute3(child))
     return null;
   return child;

@@ -17,7 +17,7 @@ import {
   readdirSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { test } from 'node:test';
 import { createHash } from 'node:crypto';
@@ -486,6 +486,34 @@ test('nested runFlow files are read in one batch per depth with no per-file fall
     for (let index = 0; index < 10; index += 1) {
       assert.match(action.replay.cdpYaml, new RegExp(`child-${index}`));
     }
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('subflow prefetch preserves platform filename separator semantics', () => {
+  const fixture = makeFixture();
+  try {
+    const actionsDir = join(fixture.primary, '.rn-agent', 'actions');
+    mkdirSync(actionsDir, { recursive: true });
+    mkdirSync(join(fixture.primary, '.rn-agent', 'state'), { recursive: true });
+    writeFileSync(
+      join(actionsDir, 'login.yaml'),
+      fixtureYaml({ id: 'login', selectors: [] }).replace(
+        '- launchApp',
+        '- runFlow: sub\\flow.yaml',
+      ),
+    );
+    const childPath =
+      sep === '/' ? join(actionsDir, 'sub\\flow.yaml') : join(actionsDir, 'sub', 'flow.yaml');
+    mkdirSync(dirname(childPath), { recursive: true });
+    writeFileSync(childPath, '- tapOn:\n    id: "literal-backslash-child"\n');
+    const worktree = addWorktree(fixture);
+    inherit(worktree);
+
+    const action = loadAction(worktree, 'login');
+    assert.ok(action?.replay.ok);
+    assert.match(action.replay.cdpYaml, /literal-backslash-child/);
   } finally {
     fixture.cleanup();
   }
