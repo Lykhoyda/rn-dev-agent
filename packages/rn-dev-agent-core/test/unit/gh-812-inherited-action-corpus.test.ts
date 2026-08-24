@@ -31,7 +31,12 @@ import {
   sameReadableActionCorpus,
 } from '../../dist/session/worktree-inheritance.js';
 import { listActions } from '../../dist/domain/action-inventory.js';
-import { loadAction, loadActionFromContext } from '../../dist/domain/action-store.js';
+import {
+  loadAction,
+  loadActionFromContext,
+  openReadableActionLoadContext,
+  saveActionFromContext,
+} from '../../dist/domain/action-store.js';
 import {
   listUnfollowedDirectory,
   readUnfollowedFile,
@@ -400,6 +405,7 @@ test('inventory and replay Git calls are independent of action count', () => {
     const operation = captureReadableActionOperationSnapshot(corpus);
     assert.ok(operation);
     assert.equal(Object.isFrozen(operation), true);
+    assert.equal(Object.isFrozen(operation.projectRootIdentity), true);
     assert.equal(Object.isFrozen(operation.directoryIdentity), true);
     assert.equal(Object.isFrozen(operation.linkIdentity), true);
     assert.equal(Object.isFrozen(operation.primaryIdentity), true);
@@ -408,6 +414,141 @@ test('inventory and replay Git calls are independent of action count', () => {
       operation.primaryIdentity?.commonDir.path,
       realpathSync(join(fixture.primary, '.git')),
     );
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('operation snapshot refuses a replaced linked project root identity', () => {
+  const fixture = makeFixture();
+  try {
+    seedLoginCorpus(fixture.primary);
+    const worktree = addWorktree(fixture);
+    inherit(worktree);
+    const corpus = resolveReadableActionCorpus(worktree);
+    assert.equal(corpus.status, 'approved-inherited');
+    const operation = captureReadableActionOperationSnapshot(corpus);
+    assert.ok(operation);
+
+    const displaced = join(fixture.root, 'displaced-worktree');
+    renameSync(worktree, displaced);
+    mkdirSync(join(worktree, '.rn-agent'), { recursive: true });
+    renameSync(join(displaced, '.rn-agent', 'actions'), join(worktree, '.rn-agent', 'actions'));
+
+    assert.throws(
+      () => assertReadableActionOperationUnchanged(operation),
+      /Refusing replaced learned-action corpus symlink/,
+    );
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('nested runFlow files are read in one batch per depth with no per-file fallback', () => {
+  const fixture = makeFixture();
+  try {
+    const actionsDir = join(fixture.primary, '.rn-agent', 'actions');
+    const flowsDir = join(actionsDir, 'flows');
+    mkdirSync(flowsDir, { recursive: true });
+    mkdirSync(join(fixture.primary, '.rn-agent', 'state'), { recursive: true });
+    const references = Array.from(
+      { length: 10 },
+      (_, index) => `- runFlow: flows/child-${index}.yaml`,
+    ).join('\n');
+    writeFileSync(
+      join(actionsDir, 'login.yaml'),
+      fixtureYaml({ id: 'login', selectors: [] }).replace('- launchApp', references),
+    );
+    for (let index = 0; index < 10; index += 1) {
+      writeFileSync(join(flowsDir, `child-${index}.yaml`), `- tapOn:\n    id: "child-${index}"\n`);
+    }
+    const worktree = addWorktree(fixture);
+    inherit(worktree);
+    const batches: string[][] = [];
+    const context = openReadableActionLoadContext(worktree, {
+      readFiles: (directory, identity, paths) => {
+        batches.push([...paths]);
+        return readUnfollowedFiles(directory, identity, paths);
+      },
+    });
+    assert.ok(context);
+    const action = loadActionFromContext(context, 'login');
+    assert.ok(action?.replay.ok);
+    assert.deepEqual(
+      batches.map((batch) => batch.length),
+      [1, 10],
+    );
+    for (let index = 0; index < 10; index += 1) {
+      assert.match(action.replay.cdpYaml, new RegExp(`child-${index}`));
+    }
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('captured repair publication refuses a retargeted inherited link before writing', () => {
+  const fixture = makeFixture();
+  try {
+    seedLoginCorpus(fixture.primary);
+    const originalPath = join(fixture.primary, '.rn-agent', 'actions', 'login.yaml');
+    const original = readFileSync(originalPath, 'utf8');
+    const worktree = addWorktree(fixture);
+    inherit(worktree);
+    const context = openReadableActionLoadContext(worktree);
+    assert.ok(context);
+    const action = loadActionFromContext(context, 'login');
+    assert.ok(action);
+    const foreign = join(fixture.root, 'foreign-actions');
+    mkdirSync(foreign);
+    const link = join(worktree, '.rn-agent', 'actions');
+    rmSync(link);
+    symlinkSync(foreign, link, 'dir');
+
+    assert.throws(
+      () => saveActionFromContext(context, { ...action, body: `${action.body}\n- tapOn: foreign` }),
+      /Refusing replaced learned-action corpus symlink/,
+    );
+    assert.equal(readFileSync(originalPath, 'utf8'), original);
+    assert.equal(existsSync(join(foreign, 'login.yaml')), false);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('engine lookup corpus mutation returns a structured refusal without replay', async () => {
+  const fixture = makeFixture();
+  try {
+    seedLoginCorpus(fixture.primary);
+    const worktree = addWorktree(fixture);
+    inherit(worktree);
+    const actionsDir = join(fixture.primary, '.rn-agent', 'actions');
+    let maestroCalls = 0;
+    const handler = createRunActionHandler({
+      engineStatus: async () => {
+        renameSync(actionsDir, join(fixture.root, 'engine-lookup-actions'));
+        mkdirSync(actionsDir);
+        return null;
+      },
+      maestroRun: async () => {
+        maestroCalls += 1;
+        throw new Error('replay must not start');
+      },
+    });
+    const result = await handler({
+      actionId: 'login',
+      projectRoot: worktree,
+      autoRepair: false,
+      forceReload: false,
+    });
+    const envelope = JSON.parse(result.content[0]!.text) as {
+      ok?: boolean;
+      code?: string;
+      error?: string;
+    };
+    assert.equal(envelope.ok, false);
+    assert.equal(envelope.code, 'BAD_FILENAME');
+    assert.match(envelope.error ?? '', /Refusing replaced learned-action corpus symlink/);
+    assert.equal(maestroCalls, 0);
   } finally {
     fixture.cleanup();
   }
@@ -642,6 +783,31 @@ test('verified directory batch returns readable files and refuses a symlink entr
     assert.match(entries[0]!, /# id: login/);
     assert.match(entries[1]!, /# id: other/);
     assert.equal(entries[2], null);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('verified directory reads chunk a corpus larger than the helper output limit', () => {
+  const fixture = makeFixture();
+  try {
+    const actionsDir = join(fixture.primary, '.rn-agent', 'actions');
+    mkdirSync(actionsDir, { recursive: true });
+    const fileNames = Array.from({ length: 33 }, (_, index) => `large-${index}.yaml`);
+    const contents = `${'x'.repeat(1024 * 1024 - 1)}\n`;
+    for (const fileName of fileNames) writeFileSync(join(actionsDir, fileName), contents);
+    const worktree = addWorktree(fixture);
+    inherit(worktree);
+    const corpus = resolveReadableActionCorpus(worktree);
+    assert.equal(corpus.status, 'approved-inherited');
+    const snapshot = readableActionsSnapshot(corpus);
+    assert.ok(snapshot);
+    const entries = readUnfollowedFiles(snapshot.directory, snapshot.identity, fileNames);
+    assert.equal(entries.length, fileNames.length);
+    assert.equal(
+      entries.every((entry) => entry === contents),
+      true,
+    );
   } finally {
     fixture.cleanup();
   }

@@ -327,36 +327,39 @@ export function readFileFromVerifiedDirectory(directoryPath, identity, relativeP
 export function readFilesFromVerifiedDirectory(directoryPath, identity, relativePaths) {
     if (relativePaths.length === 0)
         return [];
-    const output = runVerifiedFilesystemHelper([
-        '--read-directory-entries',
-        directoryPath,
-        identity.dev,
-        identity.ino,
-        ...relativePaths,
-    ]);
     const entries = [];
-    let offset = 0;
-    for (const relativePath of relativePaths) {
-        if (offset + 9 > output.length) {
-            throw new Error(`Verified directory batch was truncated before ${relativePath}.`);
+    for (let start = 0; start < relativePaths.length; start += 16) {
+        const batch = relativePaths.slice(start, start + 16);
+        const output = runVerifiedFilesystemHelper([
+            '--read-directory-entries',
+            directoryPath,
+            identity.dev,
+            identity.ino,
+            ...batch,
+        ]);
+        let offset = 0;
+        for (const relativePath of batch) {
+            if (offset + 9 > output.length) {
+                throw new Error(`Verified directory batch was truncated before ${relativePath}.`);
+            }
+            const status = output[offset];
+            const length = output.readBigUInt64BE(offset + 1);
+            offset += 9;
+            if (length > BigInt(Number.MAX_SAFE_INTEGER) || offset + Number(length) > output.length) {
+                throw new Error(`Verified directory batch was malformed at ${relativePath}.`);
+            }
+            const end = offset + Number(length);
+            if (status === 0)
+                entries.push(Buffer.from(output.subarray(offset, end)));
+            else if (status === 1 && length === 0n)
+                entries.push(null);
+            else
+                throw new Error(`Verified directory batch had an invalid status for ${relativePath}.`);
+            offset = end;
         }
-        const status = output[offset];
-        const length = output.readBigUInt64BE(offset + 1);
-        offset += 9;
-        if (length > BigInt(Number.MAX_SAFE_INTEGER) || offset + Number(length) > output.length) {
-            throw new Error(`Verified directory batch was malformed at ${relativePath}.`);
-        }
-        const end = offset + Number(length);
-        if (status === 0)
-            entries.push(Buffer.from(output.subarray(offset, end)));
-        else if (status === 1 && length === 0n)
-            entries.push(null);
-        else
-            throw new Error(`Verified directory batch had an invalid status for ${relativePath}.`);
-        offset = end;
+        if (offset !== output.length)
+            throw new Error('Verified directory batch had trailing data.');
     }
-    if (offset !== output.length)
-        throw new Error('Verified directory batch had trailing data.');
     return entries;
 }
 export function listVerifiedDirectory(directoryPath, identity) {

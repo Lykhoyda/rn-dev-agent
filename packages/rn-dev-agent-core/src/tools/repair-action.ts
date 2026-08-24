@@ -12,10 +12,10 @@ import type { ToolResult } from '../utils.js';
 import { isValidActionId } from '../domain/path-safety.js';
 import {
   actionWasEditedExternally,
-  assertReadableActionLoadContextStable,
   loadAction,
   loadActionFromContext,
   saveAction,
+  saveActionFromContext,
   type ReadableActionLoadContext,
 } from '../domain/action-store.js';
 import { mirrorToDb } from '../domain/action-state-store.js';
@@ -332,8 +332,9 @@ export function createRepairActionHandler() {
     }
 
     const repaired = applyRepair(action, result, () => new Date(), args.agentReasoning);
-    const { filePath, sidecarPath } = saveAction(repaired);
-    if (loadContext) assertReadableActionLoadContextStable(loadContext);
+    const { filePath, sidecarPath } = loadContext
+      ? saveActionFromContext(loadContext, repaired)
+      : saveAction(repaired);
     // Task 5 (A2/C): append the RepairRecord ROW to the DB mirror, STRICTLY
     // AFTER the authoritative saveAction. applyRepair appended the record to
     // repaired.state.repairHistory, so the just-added record is the last

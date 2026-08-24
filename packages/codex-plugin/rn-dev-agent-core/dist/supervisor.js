@@ -955,48 +955,42 @@ function runVerifiedFilesystemHelper(args) {
     unlinkSync2(boundPath);
   }
 }
-function readFileFromVerifiedDirectory(directoryPath, identity2, relativePath) {
-  return runVerifiedFilesystemHelper([
-    "--read-directory-entry",
-    directoryPath,
-    relativePath,
-    identity2.dev,
-    identity2.ino
-  ]);
-}
 function readFilesFromVerifiedDirectory(directoryPath, identity2, relativePaths) {
   if (relativePaths.length === 0)
     return [];
-  const output = runVerifiedFilesystemHelper([
-    "--read-directory-entries",
-    directoryPath,
-    identity2.dev,
-    identity2.ino,
-    ...relativePaths
-  ]);
   const entries = [];
-  let offset = 0;
-  for (const relativePath of relativePaths) {
-    if (offset + 9 > output.length) {
-      throw new Error(`Verified directory batch was truncated before ${relativePath}.`);
+  for (let start = 0; start < relativePaths.length; start += 16) {
+    const batch = relativePaths.slice(start, start + 16);
+    const output = runVerifiedFilesystemHelper([
+      "--read-directory-entries",
+      directoryPath,
+      identity2.dev,
+      identity2.ino,
+      ...batch
+    ]);
+    let offset = 0;
+    for (const relativePath of batch) {
+      if (offset + 9 > output.length) {
+        throw new Error(`Verified directory batch was truncated before ${relativePath}.`);
+      }
+      const status = output[offset];
+      const length = output.readBigUInt64BE(offset + 1);
+      offset += 9;
+      if (length > BigInt(Number.MAX_SAFE_INTEGER) || offset + Number(length) > output.length) {
+        throw new Error(`Verified directory batch was malformed at ${relativePath}.`);
+      }
+      const end = offset + Number(length);
+      if (status === 0)
+        entries.push(Buffer.from(output.subarray(offset, end)));
+      else if (status === 1 && length === 0n)
+        entries.push(null);
+      else
+        throw new Error(`Verified directory batch had an invalid status for ${relativePath}.`);
+      offset = end;
     }
-    const status = output[offset];
-    const length = output.readBigUInt64BE(offset + 1);
-    offset += 9;
-    if (length > BigInt(Number.MAX_SAFE_INTEGER) || offset + Number(length) > output.length) {
-      throw new Error(`Verified directory batch was malformed at ${relativePath}.`);
-    }
-    const end = offset + Number(length);
-    if (status === 0)
-      entries.push(Buffer.from(output.subarray(offset, end)));
-    else if (status === 1 && length === 0n)
-      entries.push(null);
-    else
-      throw new Error(`Verified directory batch had an invalid status for ${relativePath}.`);
-    offset = end;
+    if (offset !== output.length)
+      throw new Error("Verified directory batch had trailing data.");
   }
-  if (offset !== output.length)
-    throw new Error("Verified directory batch had trailing data.");
   return entries;
 }
 function listVerifiedDirectory(directoryPath, identity2) {
@@ -10866,6 +10860,14 @@ function resolveReadableActionCorpus(projectRoot, dependencies = {}) {
   const rnAgentStat = lstatIfPresent(rnAgentDir);
   if (!rnAgentStat)
     return { status: "absent" };
+  const rootStat = lstatIfPresent(root);
+  if (!rootStat || rootStat.isSymbolicLink() || !rootStat.isDirectory()) {
+    return refuseCorpus(`Refusing learned-action corpus symlink at ${root}.`);
+  }
+  const projectIdentity = identityOf(rootStat);
+  if (!openUnfollowedDirectory(root, projectIdentity)) {
+    return refuseCorpus(`Refusing learned-action corpus symlink at ${root}.`);
+  }
   if (rnAgentStat.isSymbolicLink() || !rnAgentStat.isDirectory()) {
     return refuseCorpus(`Refusing learned-action corpus symlink at ${rnAgentDir}.`);
   }
@@ -10892,9 +10894,13 @@ function resolveReadableActionCorpus(projectRoot, dependencies = {}) {
     if (!directoryIdentityUnchanged(actionsDir, identity2)) {
       return refuseReplacedActions(actionsDir);
     }
+    if (!directoryIdentityUnchanged(root, projectIdentity)) {
+      return refuseReplacedActions(actionsDir);
+    }
     return {
       status: "owned-directory",
       projectRoot: root,
+      projectIdentity,
       rnAgentDir,
       actionsDir,
       identity: identity2
@@ -10932,12 +10938,13 @@ function resolveReadableActionCorpus(projectRoot, dependencies = {}) {
   }
   dependencies.afterTargetOpen?.();
   const plannedAfter = planResource(layout, SHAREABLE_RESOURCES[0]);
-  if (plannedAfter.state !== "LINK_VALID_SAFE" || !plannedAfter.evidence || plannedAfter.evidence.dev !== planned.evidence.dev || plannedAfter.evidence.ino !== planned.evidence.ino || plannedAfter.sourceState !== "AVAILABLE" || !sameSourceEvidence(planned.sourceEvidence, plannedAfter.sourceEvidence) || !sourceLeafMatchesIdentity(planned.sourceEvidence, targetIdentity) || !sourceLeafMatchesIdentity(plannedAfter.sourceEvidence, targetIdentity) || !directoryIdentityUnchanged(rnAgentDir, rnAgentIdentity) || !repositoryIdentityUnchanged(primaryIdentity)) {
+  if (plannedAfter.state !== "LINK_VALID_SAFE" || !plannedAfter.evidence || plannedAfter.evidence.dev !== planned.evidence.dev || plannedAfter.evidence.ino !== planned.evidence.ino || plannedAfter.sourceState !== "AVAILABLE" || !sameSourceEvidence(planned.sourceEvidence, plannedAfter.sourceEvidence) || !sourceLeafMatchesIdentity(planned.sourceEvidence, targetIdentity) || !sourceLeafMatchesIdentity(plannedAfter.sourceEvidence, targetIdentity) || !directoryIdentityUnchanged(root, projectIdentity) || !directoryIdentityUnchanged(rnAgentDir, rnAgentIdentity) || !repositoryIdentityUnchanged(primaryIdentity)) {
     return refuseReplacedActions(actionsDir);
   }
   return {
     status: "approved-inherited",
     projectRoot: root,
+    projectIdentity,
     rnAgentDir,
     actionsDir,
     targetDir,
@@ -10968,11 +10975,17 @@ function captureDirectoryIdentity(path) {
 }
 function captureReadableActionOperationSnapshot(corpus) {
   const operationId = `${process.pid}:${++readableActionOperationSequence}`;
+  if (corpus.status !== "owned-directory" && corpus.status !== "approved-inherited")
+    return null;
+  if (!directoryIdentityUnchanged(corpus.projectRoot, corpus.projectIdentity)) {
+    throw new Error(refuseReplacedActions(corpus.actionsDir).reason);
+  }
   if (corpus.status === "owned-directory") {
     return Object.freeze({
       operationId,
       kind: corpus.status,
       projectRoot: corpus.projectRoot,
+      projectRootIdentity: freezeIdentity(corpus.projectIdentity),
       actionsDir: corpus.actionsDir,
       directory: corpus.actionsDir,
       directoryIdentity: freezeIdentity(corpus.identity)
@@ -10986,6 +10999,7 @@ function captureReadableActionOperationSnapshot(corpus) {
       operationId,
       kind: corpus.status,
       projectRoot: corpus.projectRoot,
+      projectRootIdentity: freezeIdentity(corpus.projectIdentity),
       actionsDir: corpus.actionsDir,
       directory: corpus.targetDir,
       directoryIdentity: freezeIdentity(corpus.targetIdentity),
@@ -11012,7 +11026,7 @@ function currentIdentityMatches(path, expected, kind) {
   return typeMatches && String(current.dev) === expected.dev && String(current.ino) === expected.ino;
 }
 function assertReadableActionOperationUnchanged(snapshot) {
-  let unchanged = canonical(snapshot.projectRoot) === snapshot.projectRoot;
+  let unchanged = currentIdentityMatches(snapshot.projectRoot, snapshot.projectRootIdentity, "directory") && canonical(snapshot.projectRoot) === snapshot.projectRoot;
   if (snapshot.kind === "owned-directory") {
     unchanged = unchanged && currentIdentityMatches(snapshot.actionsDir, snapshot.directoryIdentity, "directory") && canonical(snapshot.actionsDir) === snapshot.directory;
   } else {
@@ -27763,6 +27777,30 @@ function asRunFlow(cmd) {
   }
   return null;
 }
+function collectRunFlowFileReferences(yamlText) {
+  try {
+    const docs = import_yaml2.default.parseAllDocuments(yamlText, { strict: true });
+    const body = docs.at(-1)?.toJS();
+    if (!Array.isArray(body))
+      return [];
+    const references = /* @__PURE__ */ new Set();
+    const visit = (commands) => {
+      for (const command of commands) {
+        const runFlow = asRunFlow(command);
+        if (!runFlow)
+          continue;
+        if (runFlow.file !== void 0)
+          references.add(runFlow.file);
+        if (runFlow.commands)
+          visit(runFlow.commands);
+      }
+    };
+    visit(body);
+    return [...references];
+  } catch {
+    return [];
+  }
+}
 function resolveRunFlowTarget(file, opts) {
   if (!opts.flowDir || !opts.flowRoot) {
     throw new MaestroValidationError(`runFlow file ref "${file}" requires a flow root context (flowDir + flowRoot)`);
@@ -29798,13 +29836,6 @@ var init_path_safety = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/domain/unfollowed-file.js
-function readUnfollowedFile(directoryPath, identity2, relativePath) {
-  try {
-    return readFileFromVerifiedDirectory(directoryPath, identity2, relativePath).toString("utf8");
-  } catch (err) {
-    throw new Error(`Refusing inherited action symlink at ${directoryPath}/${relativePath}: ${err instanceof Error ? err.message : String(err)}`);
-  }
-}
 function readUnfollowedFiles(directoryPath, identity2, relativePaths) {
   try {
     return readFilesFromVerifiedDirectory(directoryPath, identity2, relativePaths).map((entry) => entry ? entry.toString("utf8") : null);
@@ -30218,7 +30249,43 @@ function ownedActionPathIdentityMatches(entries) {
     return false;
   }
 }
-function openReadableActionLoadContext(projectRoot) {
+function referencedActionPath(parentFile, reference) {
+  if (isAbsolute6(reference) || reference.split(/[\\/]/).includes("..") || !/\.ya?ml$/i.test(reference)) {
+    return null;
+  }
+  const child = join24(dirname16(parentFile), ...reference.split(/[\\/]+/));
+  if (child === ".." || child.startsWith(`..${sep8}`) || isAbsolute6(child))
+    return null;
+  return child;
+}
+function prefetchRunFlowFiles(snapshot, initial, readFiles) {
+  const fileContents = new Map(initial);
+  let frontier = [...fileContents.entries()];
+  for (let depth = 0; depth < 5 && frontier.length > 0; depth += 1) {
+    const pending2 = /* @__PURE__ */ new Set();
+    for (const [parentFile, text] of frontier) {
+      for (const reference of collectRunFlowFileReferences(text)) {
+        const child = referencedActionPath(parentFile, reference);
+        if (child && !fileContents.has(child))
+          pending2.add(child);
+      }
+    }
+    const paths = [...pending2].sort();
+    if (paths.length === 0)
+      break;
+    const contents = readFiles(snapshot.directory, snapshot.identity, paths);
+    frontier = [];
+    paths.forEach((path, index) => {
+      const text = contents[index];
+      if (text == null)
+        return;
+      fileContents.set(path, text);
+      frontier.push([path, text]);
+    });
+  }
+  return fileContents;
+}
+function openReadableActionLoadContext(projectRoot, dependencies = {}) {
   const corpus = resolveReadableActionCorpus(projectRoot);
   if (corpus.status === "refused")
     throw new Error(corpus.reason);
@@ -30230,15 +30297,24 @@ function openReadableActionLoadContext(projectRoot) {
     return null;
   const files = listUnfollowedDirectory(snapshot.directory, snapshot.identity);
   const readableFiles = files.filter((file) => /\.ya?ml$/.test(file));
-  const contents = readUnfollowedFiles(snapshot.directory, snapshot.identity, readableFiles);
+  const readFiles = dependencies.readFiles ?? readUnfollowedFiles;
+  const contents = readFiles(snapshot.directory, snapshot.identity, readableFiles);
   const fileContents = /* @__PURE__ */ new Map();
   readableFiles.forEach((file, index) => {
     const text = contents[index];
     if (text != null)
       fileContents.set(file, text);
   });
+  const completeFileContents = prefetchRunFlowFiles(snapshot, fileContents, readFiles);
   assertReadableActionOperationUnchanged(operation);
-  return { projectRoot, corpus, snapshot, operation, files, fileContents };
+  return {
+    projectRoot,
+    corpus,
+    snapshot,
+    operation,
+    files,
+    fileContents: completeFileContents
+  };
 }
 function actionTextFromContext(context, fileName) {
   const text = context.fileContents.get(fileName);
@@ -30418,7 +30494,11 @@ function captureActionFromContext(context, actionId) {
         if (child === "" || child === ".." || child.startsWith(`..${sep8}`) || isAbsolute6(child)) {
           throw new Error(`Refusing action flow outside ${snapshot.directory}.`);
         }
-        return context.fileContents.get(child) ?? readUnfollowedFile(snapshot.directory, snapshot.identity, child);
+        const text2 = context.fileContents.get(child);
+        if (text2 === void 0) {
+          throw new Error(`Refusing inherited action symlink at ${snapshot.directory}/${child}.`);
+        }
+        return text2;
       },
       realpathFn: (path) => resolve12(path)
     });
@@ -30470,22 +30550,48 @@ function captureActionFromPath(path) {
   const action = captureActionFromContext(context, actionId);
   return action && basename7(action.filePath) === basename7(absolutePath) ? action : null;
 }
+function serializeAction(action, existingYamlText) {
+  const existingTopSection = splitYaml(existingYamlText).topSection;
+  const topSection = existingTopSection || (action.metadata.appId ? `appId: ${action.metadata.appId}` : "");
+  return joinYaml({
+    topSection,
+    headerLines: serializeM7Header(action.metadata).split("\n"),
+    bodyLines: action.body.split("\n")
+  });
+}
+function saveActionFromContext(context, action) {
+  assertReadableActionLoadContextStable(context);
+  const fileName = basename7(action.filePath);
+  const expectedFilePath = join24(context.corpus.actionsDir, fileName);
+  if (action.filePath !== expectedFilePath || !/\.ya?ml$/i.test(fileName)) {
+    throw new Error(`Refusing action mutation outside the captured learned-action corpus.`);
+  }
+  const expectedYamlText = actionTextFromContext(context, fileName);
+  const targetFilePath = join24(context.snapshot.directory, fileName);
+  const sidecarPath = sidecarPathFor(action.filePath);
+  const contextIsStable = () => {
+    try {
+      assertReadableActionLoadContextStable(context);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  const written = atomicWriter.pairWriteConditional(targetFilePath, serializeAction(action, expectedYamlText), sidecarPath, action.state, contextIsStable, contextIsStable, expectedYamlText);
+  if (!written) {
+    assertReadableActionLoadContextStable(context);
+    throw new SaveActionPreconditionError(targetFilePath);
+  }
+  action.state = { ...action.state, lastSeenMtimeMs: written.finalMtimeMs };
+  return { filePath: action.filePath, sidecarPath };
+}
 function saveAction(action) {
   assertWritableActionFile(action.filePath);
   if (existsSync19(action.filePath) && actionWasEditedExternally(action)) {
     throw new SaveActionPreconditionError(action.filePath);
   }
-  let topSection = "";
-  if (existsSync19(action.filePath)) {
-    const existing = readFileSync21(action.filePath, "utf8");
-    topSection = splitYaml(existing).topSection;
-  }
-  if (!topSection && action.metadata.appId) {
-    topSection = `appId: ${action.metadata.appId}`;
-  }
-  const headerLines = serializeM7Header(action.metadata).split("\n");
-  const bodyLines = action.body.split("\n");
-  const yamlText = joinYaml({ topSection, headerLines, bodyLines });
+  const existingYamlText = existsSync19(action.filePath) ? readFileSync21(action.filePath, "utf8") : "";
+  const yamlText = serializeAction(action, existingYamlText);
   const sidecarPath = sidecarPathFor(action.filePath);
   const result = atomicWriter.pairWrite(action.filePath, yamlText, sidecarPath, action.state);
   const stateToWrite = { ...action.state, lastSeenMtimeMs: result.finalMtimeMs };
@@ -78925,9 +79031,7 @@ function createRepairActionHandler() {
       });
     }
     const repaired = applyRepair(action, result, () => /* @__PURE__ */ new Date(), args.agentReasoning);
-    const { filePath, sidecarPath } = saveAction(repaired);
-    if (loadContext)
-      assertReadableActionLoadContextStable(loadContext);
+    const { filePath, sidecarPath } = loadContext ? saveActionFromContext(loadContext, repaired) : saveAction(repaired);
     const appendedRepair = repaired.state.repairHistory[repaired.state.repairHistory.length - 1];
     mirrorToDb({
       yamlFilePath: repaired.filePath,
@@ -80855,8 +80959,16 @@ function createRunActionHandler(deps = {}) {
     const preflightCommands = loaded.replay.commands;
     const forceReload = proofReplay ? false : args.forceReload !== false;
     const action = forceReload ? acknowledgeExternalEdit(loaded) : loaded;
-    const engineStatus = await resolveEngineStatus();
-    assertReadableActionLoadContextStable(loadContext);
+    let engineStatus;
+    try {
+      engineStatus = await resolveEngineStatus();
+      assertReadableActionLoadContextStable(loadContext);
+    } catch (err) {
+      return failResult(err instanceof Error ? err.message : String(err), "BAD_FILENAME", {
+        actionId: args.actionId,
+        fallback: "none"
+      });
+    }
     const compatRefusal = actionReplayPreflight({
       enginePin: action.metadata.enginePin,
       commands: preflightCommands,

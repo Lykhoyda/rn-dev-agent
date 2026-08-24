@@ -125,6 +125,7 @@ export type ReadableActionCorpus =
   | {
       status: 'owned-directory';
       projectRoot: string;
+      projectIdentity: PathIdentity;
       rnAgentDir: string;
       actionsDir: string;
       identity: PathIdentity;
@@ -132,6 +133,7 @@ export type ReadableActionCorpus =
   | {
       status: 'approved-inherited';
       projectRoot: string;
+      projectIdentity: PathIdentity;
       rnAgentDir: string;
       actionsDir: string;
       targetDir: string;
@@ -147,6 +149,7 @@ export interface ReadableActionOperationSnapshot {
   readonly operationId: string;
   readonly kind: 'owned-directory' | 'approved-inherited';
   readonly projectRoot: string;
+  readonly projectRootIdentity: Readonly<PathIdentity>;
   readonly actionsDir: string;
   readonly directory: string;
   readonly directoryIdentity: Readonly<PathIdentity>;
@@ -620,6 +623,14 @@ export function resolveReadableActionCorpus(
   const actionsDir = join(rnAgentDir, 'actions');
   const rnAgentStat = lstatIfPresent(rnAgentDir);
   if (!rnAgentStat) return { status: 'absent' };
+  const rootStat = lstatIfPresent(root);
+  if (!rootStat || rootStat.isSymbolicLink() || !rootStat.isDirectory()) {
+    return refuseCorpus(`Refusing learned-action corpus symlink at ${root}.`);
+  }
+  const projectIdentity = identityOf(rootStat);
+  if (!openUnfollowedDirectory(root, projectIdentity)) {
+    return refuseCorpus(`Refusing learned-action corpus symlink at ${root}.`);
+  }
   if (rnAgentStat.isSymbolicLink() || !rnAgentStat.isDirectory()) {
     return refuseCorpus(`Refusing learned-action corpus symlink at ${rnAgentDir}.`);
   }
@@ -644,9 +655,13 @@ export function resolveReadableActionCorpus(
     if (!directoryIdentityUnchanged(actionsDir, identity)) {
       return refuseReplacedActions(actionsDir);
     }
+    if (!directoryIdentityUnchanged(root, projectIdentity)) {
+      return refuseReplacedActions(actionsDir);
+    }
     return {
       status: 'owned-directory',
       projectRoot: root,
+      projectIdentity,
       rnAgentDir,
       actionsDir,
       identity,
@@ -699,6 +714,7 @@ export function resolveReadableActionCorpus(
     !sameSourceEvidence(planned.sourceEvidence, plannedAfter.sourceEvidence) ||
     !sourceLeafMatchesIdentity(planned.sourceEvidence, targetIdentity) ||
     !sourceLeafMatchesIdentity(plannedAfter.sourceEvidence, targetIdentity) ||
+    !directoryIdentityUnchanged(root, projectIdentity) ||
     !directoryIdentityUnchanged(rnAgentDir, rnAgentIdentity) ||
     !repositoryIdentityUnchanged(primaryIdentity)
   ) {
@@ -707,6 +723,7 @@ export function resolveReadableActionCorpus(
   return {
     status: 'approved-inherited',
     projectRoot: root,
+    projectIdentity,
     rnAgentDir,
     actionsDir,
     targetDir,
@@ -730,6 +747,8 @@ export function sameReadableActionCorpus(
   if (left.status === 'owned-directory' && right.status === 'owned-directory') {
     return (
       left.actionsDir === right.actionsDir &&
+      left.projectIdentity.dev === right.projectIdentity.dev &&
+      left.projectIdentity.ino === right.projectIdentity.ino &&
       left.identity.dev === right.identity.dev &&
       left.identity.ino === right.identity.ino
     );
@@ -738,6 +757,8 @@ export function sameReadableActionCorpus(
     left.status === 'approved-inherited' &&
     right.status === 'approved-inherited' &&
     left.actionsDir === right.actionsDir &&
+    left.projectIdentity.dev === right.projectIdentity.dev &&
+    left.projectIdentity.ino === right.projectIdentity.ino &&
     left.targetDir === right.targetDir &&
     left.linkIdentity.dev === right.linkIdentity.dev &&
     left.linkIdentity.ino === right.linkIdentity.ino &&
@@ -789,11 +810,16 @@ export function captureReadableActionOperationSnapshot(
   corpus: ReadableActionCorpus,
 ): ReadableActionOperationSnapshot | null {
   const operationId = `${process.pid}:${++readableActionOperationSequence}`;
+  if (corpus.status !== 'owned-directory' && corpus.status !== 'approved-inherited') return null;
+  if (!directoryIdentityUnchanged(corpus.projectRoot, corpus.projectIdentity)) {
+    throw new Error(refuseReplacedActions(corpus.actionsDir).reason);
+  }
   if (corpus.status === 'owned-directory') {
     return Object.freeze({
       operationId,
       kind: corpus.status,
       projectRoot: corpus.projectRoot,
+      projectRootIdentity: freezeIdentity(corpus.projectIdentity),
       actionsDir: corpus.actionsDir,
       directory: corpus.actionsDir,
       directoryIdentity: freezeIdentity(corpus.identity),
@@ -807,6 +833,7 @@ export function captureReadableActionOperationSnapshot(
       operationId,
       kind: corpus.status,
       projectRoot: corpus.projectRoot,
+      projectRootIdentity: freezeIdentity(corpus.projectIdentity),
       actionsDir: corpus.actionsDir,
       directory: corpus.targetDir,
       directoryIdentity: freezeIdentity(corpus.targetIdentity),
@@ -842,7 +869,9 @@ function currentIdentityMatches(
 export function assertReadableActionOperationUnchanged(
   snapshot: ReadableActionOperationSnapshot,
 ): void {
-  let unchanged = canonical(snapshot.projectRoot) === snapshot.projectRoot;
+  let unchanged =
+    currentIdentityMatches(snapshot.projectRoot, snapshot.projectRootIdentity, 'directory') &&
+    canonical(snapshot.projectRoot) === snapshot.projectRoot;
   if (snapshot.kind === 'owned-directory') {
     unchanged =
       unchanged &&

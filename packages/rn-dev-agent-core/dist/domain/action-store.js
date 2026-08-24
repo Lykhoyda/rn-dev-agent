@@ -11,8 +11,8 @@ import { parseM7Header, serializeM7Header, } from './reusable-action.js';
 import { loadOrInitSidecar, markSeen, saveSidecar, sidecarPathFor, yamlEditedSinceLastSeen, } from './sidecar-io.js';
 import { atomicWriter } from './atomic-writer.js';
 import { assertValidActionId, assertWithinDir } from './path-safety.js';
-import { listUnfollowedDirectory, readUnfollowedFile, readUnfollowedFiles, } from './unfollowed-file.js';
-import { buildMaestroFlow, parseAndValidateFlow } from './maestro-validator.js';
+import { listUnfollowedDirectory, readUnfollowedFiles } from './unfollowed-file.js';
+import { buildMaestroFlow, collectRunFlowFileReferences, parseAndValidateFlow, } from './maestro-validator.js';
 import { mirrorToDb } from './action-state-store.js';
 import { assertReadableActionOperationUnchanged, captureReadableActionOperationSnapshot, readableActionsSnapshot, resolveReadableActionCorpus, } from '../session/worktree-inheritance.js';
 /**
@@ -99,7 +99,45 @@ function ownedActionPathIdentityMatches(entries) {
         return false;
     }
 }
-export function openReadableActionLoadContext(projectRoot) {
+function referencedActionPath(parentFile, reference) {
+    if (isAbsolute(reference) ||
+        reference.split(/[\\/]/).includes('..') ||
+        !/\.ya?ml$/i.test(reference)) {
+        return null;
+    }
+    const child = join(dirname(parentFile), ...reference.split(/[\\/]+/));
+    if (child === '..' || child.startsWith(`..${sep}`) || isAbsolute(child))
+        return null;
+    return child;
+}
+function prefetchRunFlowFiles(snapshot, initial, readFiles) {
+    const fileContents = new Map(initial);
+    let frontier = [...fileContents.entries()];
+    for (let depth = 0; depth < 5 && frontier.length > 0; depth += 1) {
+        const pending = new Set();
+        for (const [parentFile, text] of frontier) {
+            for (const reference of collectRunFlowFileReferences(text)) {
+                const child = referencedActionPath(parentFile, reference);
+                if (child && !fileContents.has(child))
+                    pending.add(child);
+            }
+        }
+        const paths = [...pending].sort();
+        if (paths.length === 0)
+            break;
+        const contents = readFiles(snapshot.directory, snapshot.identity, paths);
+        frontier = [];
+        paths.forEach((path, index) => {
+            const text = contents[index];
+            if (text == null)
+                return;
+            fileContents.set(path, text);
+            frontier.push([path, text]);
+        });
+    }
+    return fileContents;
+}
+export function openReadableActionLoadContext(projectRoot, dependencies = {}) {
     const corpus = resolveReadableActionCorpus(projectRoot);
     if (corpus.status === 'refused')
         throw new Error(corpus.reason);
@@ -111,15 +149,24 @@ export function openReadableActionLoadContext(projectRoot) {
         return null;
     const files = listUnfollowedDirectory(snapshot.directory, snapshot.identity);
     const readableFiles = files.filter((file) => /\.ya?ml$/.test(file));
-    const contents = readUnfollowedFiles(snapshot.directory, snapshot.identity, readableFiles);
+    const readFiles = dependencies.readFiles ?? readUnfollowedFiles;
+    const contents = readFiles(snapshot.directory, snapshot.identity, readableFiles);
     const fileContents = new Map();
     readableFiles.forEach((file, index) => {
         const text = contents[index];
         if (text != null)
             fileContents.set(file, text);
     });
+    const completeFileContents = prefetchRunFlowFiles(snapshot, fileContents, readFiles);
     assertReadableActionOperationUnchanged(operation);
-    return { projectRoot, corpus, snapshot, operation, files, fileContents };
+    return {
+        projectRoot,
+        corpus,
+        snapshot,
+        operation,
+        files,
+        fileContents: completeFileContents,
+    };
 }
 function actionTextFromContext(context, fileName) {
     const text = context.fileContents.get(fileName);
@@ -344,8 +391,11 @@ export function captureActionFromContext(context, actionId) {
                 if (child === '' || child === '..' || child.startsWith(`..${sep}`) || isAbsolute(child)) {
                     throw new Error(`Refusing action flow outside ${snapshot.directory}.`);
                 }
-                return (context.fileContents.get(child) ??
-                    readUnfollowedFile(snapshot.directory, snapshot.identity, child));
+                const text = context.fileContents.get(child);
+                if (text === undefined) {
+                    throw new Error(`Refusing inherited action symlink at ${snapshot.directory}/${child}.`);
+                }
+                return text;
             },
             realpathFn: (path) => resolve(path),
         });
@@ -515,6 +565,42 @@ export function commitMigratedActionText(filePath, baseline, yamlText) {
     });
     return { filePath, sidecarPath };
 }
+function serializeAction(action, existingYamlText) {
+    const existingTopSection = splitYaml(existingYamlText).topSection;
+    const topSection = existingTopSection || (action.metadata.appId ? `appId: ${action.metadata.appId}` : '');
+    return joinYaml({
+        topSection,
+        headerLines: serializeM7Header(action.metadata).split('\n'),
+        bodyLines: action.body.split('\n'),
+    });
+}
+export function saveActionFromContext(context, action) {
+    assertReadableActionLoadContextStable(context);
+    const fileName = basename(action.filePath);
+    const expectedFilePath = join(context.corpus.actionsDir, fileName);
+    if (action.filePath !== expectedFilePath || !/\.ya?ml$/i.test(fileName)) {
+        throw new Error(`Refusing action mutation outside the captured learned-action corpus.`);
+    }
+    const expectedYamlText = actionTextFromContext(context, fileName);
+    const targetFilePath = join(context.snapshot.directory, fileName);
+    const sidecarPath = sidecarPathFor(action.filePath);
+    const contextIsStable = () => {
+        try {
+            assertReadableActionLoadContextStable(context);
+            return true;
+        }
+        catch {
+            return false;
+        }
+    };
+    const written = atomicWriter.pairWriteConditional(targetFilePath, serializeAction(action, expectedYamlText), sidecarPath, action.state, contextIsStable, contextIsStable, expectedYamlText);
+    if (!written) {
+        assertReadableActionLoadContextStable(context);
+        throw new SaveActionPreconditionError(targetFilePath);
+    }
+    action.state = { ...action.state, lastSeenMtimeMs: written.finalMtimeMs };
+    return { filePath: action.filePath, sidecarPath };
+}
 export function saveAction(action) {
     assertWritableActionFile(action.filePath);
     // GH #113: soft-assertion contract enforcement. Both current callers
@@ -529,21 +615,8 @@ export function saveAction(action) {
     if (existsSync(action.filePath) && actionWasEditedExternally(action)) {
         throw new SaveActionPreconditionError(action.filePath);
     }
-    // Read existing top section so we don't lose the `appId:` line.
-    let topSection = '';
-    if (existsSync(action.filePath)) {
-        const existing = readFileSync(action.filePath, 'utf8');
-        topSection = splitYaml(existing).topSection;
-    }
-    // If the action specifies an appId in metadata but the topSection
-    // doesn't have one, inject it. Otherwise preserve whatever the file
-    // had.
-    if (!topSection && action.metadata.appId) {
-        topSection = `appId: ${action.metadata.appId}`;
-    }
-    const headerLines = serializeM7Header(action.metadata).split('\n');
-    const bodyLines = action.body.split('\n');
-    const yamlText = joinYaml({ topSection, headerLines, bodyLines });
+    const existingYamlText = existsSync(action.filePath) ? readFileSync(action.filePath, 'utf8') : '';
+    const yamlText = serializeAction(action, existingYamlText);
     // Issue #101: sidecar-first atomic pair-write. The atomicWriter owns
     // `lastSeenMtimeMs` correctness — even on partial failure, the
     // persisted sidecar will have lastSeenMtimeMs ≥ the YAML's actual

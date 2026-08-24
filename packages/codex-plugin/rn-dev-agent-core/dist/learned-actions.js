@@ -129,36 +129,39 @@ function runVerifiedFilesystemHelper(args) {
 function readFilesFromVerifiedDirectory(directoryPath, identity, relativePaths) {
   if (relativePaths.length === 0)
     return [];
-  const output = runVerifiedFilesystemHelper([
-    "--read-directory-entries",
-    directoryPath,
-    identity.dev,
-    identity.ino,
-    ...relativePaths
-  ]);
   const entries = [];
-  let offset = 0;
-  for (const relativePath of relativePaths) {
-    if (offset + 9 > output.length) {
-      throw new Error(`Verified directory batch was truncated before ${relativePath}.`);
+  for (let start = 0; start < relativePaths.length; start += 16) {
+    const batch = relativePaths.slice(start, start + 16);
+    const output = runVerifiedFilesystemHelper([
+      "--read-directory-entries",
+      directoryPath,
+      identity.dev,
+      identity.ino,
+      ...batch
+    ]);
+    let offset = 0;
+    for (const relativePath of batch) {
+      if (offset + 9 > output.length) {
+        throw new Error(`Verified directory batch was truncated before ${relativePath}.`);
+      }
+      const status = output[offset];
+      const length = output.readBigUInt64BE(offset + 1);
+      offset += 9;
+      if (length > BigInt(Number.MAX_SAFE_INTEGER) || offset + Number(length) > output.length) {
+        throw new Error(`Verified directory batch was malformed at ${relativePath}.`);
+      }
+      const end = offset + Number(length);
+      if (status === 0)
+        entries.push(Buffer.from(output.subarray(offset, end)));
+      else if (status === 1 && length === 0n)
+        entries.push(null);
+      else
+        throw new Error(`Verified directory batch had an invalid status for ${relativePath}.`);
+      offset = end;
     }
-    const status = output[offset];
-    const length = output.readBigUInt64BE(offset + 1);
-    offset += 9;
-    if (length > BigInt(Number.MAX_SAFE_INTEGER) || offset + Number(length) > output.length) {
-      throw new Error(`Verified directory batch was malformed at ${relativePath}.`);
-    }
-    const end = offset + Number(length);
-    if (status === 0)
-      entries.push(Buffer.from(output.subarray(offset, end)));
-    else if (status === 1 && length === 0n)
-      entries.push(null);
-    else
-      throw new Error(`Verified directory batch had an invalid status for ${relativePath}.`);
-    offset = end;
+    if (offset !== output.length)
+      throw new Error("Verified directory batch had trailing data.");
   }
-  if (offset !== output.length)
-    throw new Error("Verified directory batch had trailing data.");
   return entries;
 }
 function listVerifiedDirectory(directoryPath, identity) {
@@ -560,6 +563,14 @@ function resolveReadableActionCorpus(projectRoot, dependencies = {}) {
   const rnAgentStat = lstatIfPresent(rnAgentDir);
   if (!rnAgentStat)
     return { status: "absent" };
+  const rootStat = lstatIfPresent(root);
+  if (!rootStat || rootStat.isSymbolicLink() || !rootStat.isDirectory()) {
+    return refuseCorpus(`Refusing learned-action corpus symlink at ${root}.`);
+  }
+  const projectIdentity = identityOf(rootStat);
+  if (!openUnfollowedDirectory(root, projectIdentity)) {
+    return refuseCorpus(`Refusing learned-action corpus symlink at ${root}.`);
+  }
   if (rnAgentStat.isSymbolicLink() || !rnAgentStat.isDirectory()) {
     return refuseCorpus(`Refusing learned-action corpus symlink at ${rnAgentDir}.`);
   }
@@ -586,9 +597,13 @@ function resolveReadableActionCorpus(projectRoot, dependencies = {}) {
     if (!directoryIdentityUnchanged(actionsDir, identity)) {
       return refuseReplacedActions(actionsDir);
     }
+    if (!directoryIdentityUnchanged(root, projectIdentity)) {
+      return refuseReplacedActions(actionsDir);
+    }
     return {
       status: "owned-directory",
       projectRoot: root,
+      projectIdentity,
       rnAgentDir,
       actionsDir,
       identity
@@ -626,12 +641,13 @@ function resolveReadableActionCorpus(projectRoot, dependencies = {}) {
   }
   dependencies.afterTargetOpen?.();
   const plannedAfter = planResource(layout, SHAREABLE_RESOURCES[0]);
-  if (plannedAfter.state !== "LINK_VALID_SAFE" || !plannedAfter.evidence || plannedAfter.evidence.dev !== planned.evidence.dev || plannedAfter.evidence.ino !== planned.evidence.ino || plannedAfter.sourceState !== "AVAILABLE" || !sameSourceEvidence(planned.sourceEvidence, plannedAfter.sourceEvidence) || !sourceLeafMatchesIdentity(planned.sourceEvidence, targetIdentity) || !sourceLeafMatchesIdentity(plannedAfter.sourceEvidence, targetIdentity) || !directoryIdentityUnchanged(rnAgentDir, rnAgentIdentity) || !repositoryIdentityUnchanged(primaryIdentity)) {
+  if (plannedAfter.state !== "LINK_VALID_SAFE" || !plannedAfter.evidence || plannedAfter.evidence.dev !== planned.evidence.dev || plannedAfter.evidence.ino !== planned.evidence.ino || plannedAfter.sourceState !== "AVAILABLE" || !sameSourceEvidence(planned.sourceEvidence, plannedAfter.sourceEvidence) || !sourceLeafMatchesIdentity(planned.sourceEvidence, targetIdentity) || !sourceLeafMatchesIdentity(plannedAfter.sourceEvidence, targetIdentity) || !directoryIdentityUnchanged(root, projectIdentity) || !directoryIdentityUnchanged(rnAgentDir, rnAgentIdentity) || !repositoryIdentityUnchanged(primaryIdentity)) {
     return refuseReplacedActions(actionsDir);
   }
   return {
     status: "approved-inherited",
     projectRoot: root,
+    projectIdentity,
     rnAgentDir,
     actionsDir,
     targetDir,
@@ -654,11 +670,17 @@ function captureDirectoryIdentity(path2) {
 }
 function captureReadableActionOperationSnapshot(corpus) {
   const operationId = `${process.pid}:${++readableActionOperationSequence}`;
+  if (corpus.status !== "owned-directory" && corpus.status !== "approved-inherited")
+    return null;
+  if (!directoryIdentityUnchanged(corpus.projectRoot, corpus.projectIdentity)) {
+    throw new Error(refuseReplacedActions(corpus.actionsDir).reason);
+  }
   if (corpus.status === "owned-directory") {
     return Object.freeze({
       operationId,
       kind: corpus.status,
       projectRoot: corpus.projectRoot,
+      projectRootIdentity: freezeIdentity(corpus.projectIdentity),
       actionsDir: corpus.actionsDir,
       directory: corpus.actionsDir,
       directoryIdentity: freezeIdentity(corpus.identity)
@@ -672,6 +694,7 @@ function captureReadableActionOperationSnapshot(corpus) {
       operationId,
       kind: corpus.status,
       projectRoot: corpus.projectRoot,
+      projectRootIdentity: freezeIdentity(corpus.projectIdentity),
       actionsDir: corpus.actionsDir,
       directory: corpus.targetDir,
       directoryIdentity: freezeIdentity(corpus.targetIdentity),
@@ -698,7 +721,7 @@ function currentIdentityMatches(path2, expected, kind) {
   return typeMatches && String(current.dev) === expected.dev && String(current.ino) === expected.ino;
 }
 function assertReadableActionOperationUnchanged(snapshot) {
-  let unchanged = canonical(snapshot.projectRoot) === snapshot.projectRoot;
+  let unchanged = currentIdentityMatches(snapshot.projectRoot, snapshot.projectRootIdentity, "directory") && canonical(snapshot.projectRoot) === snapshot.projectRoot;
   if (snapshot.kind === "owned-directory") {
     unchanged = unchanged && currentIdentityMatches(snapshot.actionsDir, snapshot.directoryIdentity, "directory") && canonical(snapshot.actionsDir) === snapshot.directory;
   } else {

@@ -307,48 +307,42 @@ function runVerifiedFilesystemHelper(args) {
     unlinkSync(boundPath);
   }
 }
-function readFileFromVerifiedDirectory(directoryPath, identity, relativePath) {
-  return runVerifiedFilesystemHelper([
-    "--read-directory-entry",
-    directoryPath,
-    relativePath,
-    identity.dev,
-    identity.ino
-  ]);
-}
 function readFilesFromVerifiedDirectory(directoryPath, identity, relativePaths) {
   if (relativePaths.length === 0)
     return [];
-  const output = runVerifiedFilesystemHelper([
-    "--read-directory-entries",
-    directoryPath,
-    identity.dev,
-    identity.ino,
-    ...relativePaths
-  ]);
   const entries = [];
-  let offset = 0;
-  for (const relativePath of relativePaths) {
-    if (offset + 9 > output.length) {
-      throw new Error(`Verified directory batch was truncated before ${relativePath}.`);
+  for (let start = 0; start < relativePaths.length; start += 16) {
+    const batch = relativePaths.slice(start, start + 16);
+    const output = runVerifiedFilesystemHelper([
+      "--read-directory-entries",
+      directoryPath,
+      identity.dev,
+      identity.ino,
+      ...batch
+    ]);
+    let offset = 0;
+    for (const relativePath of batch) {
+      if (offset + 9 > output.length) {
+        throw new Error(`Verified directory batch was truncated before ${relativePath}.`);
+      }
+      const status = output[offset];
+      const length = output.readBigUInt64BE(offset + 1);
+      offset += 9;
+      if (length > BigInt(Number.MAX_SAFE_INTEGER) || offset + Number(length) > output.length) {
+        throw new Error(`Verified directory batch was malformed at ${relativePath}.`);
+      }
+      const end = offset + Number(length);
+      if (status === 0)
+        entries.push(Buffer.from(output.subarray(offset, end)));
+      else if (status === 1 && length === 0n)
+        entries.push(null);
+      else
+        throw new Error(`Verified directory batch had an invalid status for ${relativePath}.`);
+      offset = end;
     }
-    const status = output[offset];
-    const length = output.readBigUInt64BE(offset + 1);
-    offset += 9;
-    if (length > BigInt(Number.MAX_SAFE_INTEGER) || offset + Number(length) > output.length) {
-      throw new Error(`Verified directory batch was malformed at ${relativePath}.`);
-    }
-    const end = offset + Number(length);
-    if (status === 0)
-      entries.push(Buffer.from(output.subarray(offset, end)));
-    else if (status === 1 && length === 0n)
-      entries.push(null);
-    else
-      throw new Error(`Verified directory batch had an invalid status for ${relativePath}.`);
-    offset = end;
+    if (offset !== output.length)
+      throw new Error("Verified directory batch had trailing data.");
   }
-  if (offset !== output.length)
-    throw new Error("Verified directory batch had trailing data.");
   return entries;
 }
 function listVerifiedDirectory(directoryPath, identity) {
@@ -8906,6 +8900,30 @@ function asRunFlow(cmd2) {
   }
   return null;
 }
+function collectRunFlowFileReferences(yamlText) {
+  try {
+    const docs = import_yaml.default.parseAllDocuments(yamlText, { strict: true });
+    const body = docs.at(-1)?.toJS();
+    if (!Array.isArray(body))
+      return [];
+    const references = /* @__PURE__ */ new Set();
+    const visit = (commands) => {
+      for (const command of commands) {
+        const runFlow = asRunFlow(command);
+        if (!runFlow)
+          continue;
+        if (runFlow.file !== void 0)
+          references.add(runFlow.file);
+        if (runFlow.commands)
+          visit(runFlow.commands);
+      }
+    };
+    visit(body);
+    return [...references];
+  } catch {
+    return [];
+  }
+}
 function resolveRunFlowTarget(file, opts) {
   if (!opts.flowDir || !opts.flowRoot) {
     throw new MaestroValidationError(`runFlow file ref "${file}" requires a flow root context (flowDir + flowRoot)`);
@@ -9758,13 +9776,6 @@ var init_path_safety = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/domain/unfollowed-file.js
-function readUnfollowedFile(directoryPath, identity, relativePath) {
-  try {
-    return readFileFromVerifiedDirectory(directoryPath, identity, relativePath).toString("utf8");
-  } catch (err) {
-    throw new Error(`Refusing inherited action symlink at ${directoryPath}/${relativePath}: ${err instanceof Error ? err.message : String(err)}`);
-  }
-}
 function readUnfollowedFiles(directoryPath, identity, relativePaths) {
   try {
     return readFilesFromVerifiedDirectory(directoryPath, identity, relativePaths).map((entry) => entry ? entry.toString("utf8") : null);
@@ -10520,6 +10531,14 @@ function resolveReadableActionCorpus(projectRoot, dependencies = {}) {
   const rnAgentStat = lstatIfPresent(rnAgentDir);
   if (!rnAgentStat)
     return { status: "absent" };
+  const rootStat = lstatIfPresent(root2);
+  if (!rootStat || rootStat.isSymbolicLink() || !rootStat.isDirectory()) {
+    return refuseCorpus(`Refusing learned-action corpus symlink at ${root2}.`);
+  }
+  const projectIdentity = identityOf(rootStat);
+  if (!openUnfollowedDirectory(root2, projectIdentity)) {
+    return refuseCorpus(`Refusing learned-action corpus symlink at ${root2}.`);
+  }
   if (rnAgentStat.isSymbolicLink() || !rnAgentStat.isDirectory()) {
     return refuseCorpus(`Refusing learned-action corpus symlink at ${rnAgentDir}.`);
   }
@@ -10546,9 +10565,13 @@ function resolveReadableActionCorpus(projectRoot, dependencies = {}) {
     if (!directoryIdentityUnchanged(actionsDir, identity)) {
       return refuseReplacedActions(actionsDir);
     }
+    if (!directoryIdentityUnchanged(root2, projectIdentity)) {
+      return refuseReplacedActions(actionsDir);
+    }
     return {
       status: "owned-directory",
       projectRoot: root2,
+      projectIdentity,
       rnAgentDir,
       actionsDir,
       identity
@@ -10586,12 +10609,13 @@ function resolveReadableActionCorpus(projectRoot, dependencies = {}) {
   }
   dependencies.afterTargetOpen?.();
   const plannedAfter = planResource(layout, SHAREABLE_RESOURCES[0]);
-  if (plannedAfter.state !== "LINK_VALID_SAFE" || !plannedAfter.evidence || plannedAfter.evidence.dev !== planned.evidence.dev || plannedAfter.evidence.ino !== planned.evidence.ino || plannedAfter.sourceState !== "AVAILABLE" || !sameSourceEvidence(planned.sourceEvidence, plannedAfter.sourceEvidence) || !sourceLeafMatchesIdentity(planned.sourceEvidence, targetIdentity) || !sourceLeafMatchesIdentity(plannedAfter.sourceEvidence, targetIdentity) || !directoryIdentityUnchanged(rnAgentDir, rnAgentIdentity) || !repositoryIdentityUnchanged(primaryIdentity)) {
+  if (plannedAfter.state !== "LINK_VALID_SAFE" || !plannedAfter.evidence || plannedAfter.evidence.dev !== planned.evidence.dev || plannedAfter.evidence.ino !== planned.evidence.ino || plannedAfter.sourceState !== "AVAILABLE" || !sameSourceEvidence(planned.sourceEvidence, plannedAfter.sourceEvidence) || !sourceLeafMatchesIdentity(planned.sourceEvidence, targetIdentity) || !sourceLeafMatchesIdentity(plannedAfter.sourceEvidence, targetIdentity) || !directoryIdentityUnchanged(root2, projectIdentity) || !directoryIdentityUnchanged(rnAgentDir, rnAgentIdentity) || !repositoryIdentityUnchanged(primaryIdentity)) {
     return refuseReplacedActions(actionsDir);
   }
   return {
     status: "approved-inherited",
     projectRoot: root2,
+    projectIdentity,
     rnAgentDir,
     actionsDir,
     targetDir,
@@ -10622,11 +10646,17 @@ function captureDirectoryIdentity(path) {
 }
 function captureReadableActionOperationSnapshot(corpus) {
   const operationId = `${process.pid}:${++readableActionOperationSequence}`;
+  if (corpus.status !== "owned-directory" && corpus.status !== "approved-inherited")
+    return null;
+  if (!directoryIdentityUnchanged(corpus.projectRoot, corpus.projectIdentity)) {
+    throw new Error(refuseReplacedActions(corpus.actionsDir).reason);
+  }
   if (corpus.status === "owned-directory") {
     return Object.freeze({
       operationId,
       kind: corpus.status,
       projectRoot: corpus.projectRoot,
+      projectRootIdentity: freezeIdentity(corpus.projectIdentity),
       actionsDir: corpus.actionsDir,
       directory: corpus.actionsDir,
       directoryIdentity: freezeIdentity(corpus.identity)
@@ -10640,6 +10670,7 @@ function captureReadableActionOperationSnapshot(corpus) {
       operationId,
       kind: corpus.status,
       projectRoot: corpus.projectRoot,
+      projectRootIdentity: freezeIdentity(corpus.projectIdentity),
       actionsDir: corpus.actionsDir,
       directory: corpus.targetDir,
       directoryIdentity: freezeIdentity(corpus.targetIdentity),
@@ -10666,7 +10697,7 @@ function currentIdentityMatches(path, expected, kind) {
   return typeMatches && String(current.dev) === expected.dev && String(current.ino) === expected.ino;
 }
 function assertReadableActionOperationUnchanged(snapshot) {
-  let unchanged = canonical(snapshot.projectRoot) === snapshot.projectRoot;
+  let unchanged = currentIdentityMatches(snapshot.projectRoot, snapshot.projectRootIdentity, "directory") && canonical(snapshot.projectRoot) === snapshot.projectRoot;
   if (snapshot.kind === "owned-directory") {
     unchanged = unchanged && currentIdentityMatches(snapshot.actionsDir, snapshot.directoryIdentity, "directory") && canonical(snapshot.actionsDir) === snapshot.directory;
   } else {
@@ -10933,7 +10964,43 @@ function actionFileExists(path) {
   }
   return true;
 }
-function openReadableActionLoadContext(projectRoot) {
+function referencedActionPath(parentFile, reference) {
+  if (isAbsolute3(reference) || reference.split(/[\\/]/).includes("..") || !/\.ya?ml$/i.test(reference)) {
+    return null;
+  }
+  const child = join9(dirname9(parentFile), ...reference.split(/[\\/]+/));
+  if (child === ".." || child.startsWith(`..${sep6}`) || isAbsolute3(child))
+    return null;
+  return child;
+}
+function prefetchRunFlowFiles(snapshot, initial, readFiles) {
+  const fileContents = new Map(initial);
+  let frontier = [...fileContents.entries()];
+  for (let depth = 0; depth < 5 && frontier.length > 0; depth += 1) {
+    const pending = /* @__PURE__ */ new Set();
+    for (const [parentFile, text] of frontier) {
+      for (const reference of collectRunFlowFileReferences(text)) {
+        const child = referencedActionPath(parentFile, reference);
+        if (child && !fileContents.has(child))
+          pending.add(child);
+      }
+    }
+    const paths = [...pending].sort();
+    if (paths.length === 0)
+      break;
+    const contents = readFiles(snapshot.directory, snapshot.identity, paths);
+    frontier = [];
+    paths.forEach((path, index) => {
+      const text = contents[index];
+      if (text == null)
+        return;
+      fileContents.set(path, text);
+      frontier.push([path, text]);
+    });
+  }
+  return fileContents;
+}
+function openReadableActionLoadContext(projectRoot, dependencies = {}) {
   const corpus = resolveReadableActionCorpus(projectRoot);
   if (corpus.status === "refused")
     throw new Error(corpus.reason);
@@ -10945,15 +11012,24 @@ function openReadableActionLoadContext(projectRoot) {
     return null;
   const files = listUnfollowedDirectory(snapshot.directory, snapshot.identity);
   const readableFiles = files.filter((file) => /\.ya?ml$/.test(file));
-  const contents = readUnfollowedFiles(snapshot.directory, snapshot.identity, readableFiles);
+  const readFiles = dependencies.readFiles ?? readUnfollowedFiles;
+  const contents = readFiles(snapshot.directory, snapshot.identity, readableFiles);
   const fileContents = /* @__PURE__ */ new Map();
   readableFiles.forEach((file, index) => {
     const text = contents[index];
     if (text != null)
       fileContents.set(file, text);
   });
+  const completeFileContents = prefetchRunFlowFiles(snapshot, fileContents, readFiles);
   assertReadableActionOperationUnchanged(operation);
-  return { projectRoot, corpus, snapshot, operation, files, fileContents };
+  return {
+    projectRoot,
+    corpus,
+    snapshot,
+    operation,
+    files,
+    fileContents: completeFileContents
+  };
 }
 function actionTextFromContext(context, fileName) {
   const text = context.fileContents.get(fileName);
@@ -11070,7 +11146,11 @@ function captureActionFromContext(context, actionId) {
         if (child === "" || child === ".." || child.startsWith(`..${sep6}`) || isAbsolute3(child)) {
           throw new Error(`Refusing action flow outside ${snapshot.directory}.`);
         }
-        return context.fileContents.get(child) ?? readUnfollowedFile(snapshot.directory, snapshot.identity, child);
+        const text2 = context.fileContents.get(child);
+        if (text2 === void 0) {
+          throw new Error(`Refusing inherited action symlink at ${snapshot.directory}/${child}.`);
+        }
+        return text2;
       },
       realpathFn: (path) => resolve5(path)
     });

@@ -572,8 +572,16 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
     const forceReload = proofReplay ? false : args.forceReload !== false;
     const action = forceReload ? acknowledgeExternalEdit(loaded) : loaded;
 
-    const engineStatus = await resolveEngineStatus();
-    assertReadableActionLoadContextStable(loadContext);
+    let engineStatus: ReplayEngineStatus | null;
+    try {
+      engineStatus = await resolveEngineStatus();
+      assertReadableActionLoadContextStable(loadContext);
+    } catch (err) {
+      return failResult(err instanceof Error ? err.message : String(err), 'BAD_FILENAME', {
+        actionId: args.actionId,
+        fallback: 'none',
+      });
+    }
     const compatRefusal = actionReplayPreflight({
       enginePin: action.metadata.enginePin,
       commands: preflightCommands,
