@@ -27,7 +27,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { listUnfollowedDirectory, readUnfollowedFiles } from './domain/unfollowed-file.js';
+import { assertUnfollowedFileSnapshotUnchanged, createUnfollowedFileSnapshot, listUnfollowedDirectory, readUnfollowedSnapshotFiles, } from './domain/unfollowed-file.js';
 import { assertReadableActionOperationUnchanged, captureReadableActionOperationSnapshot, resolveReadableActionCorpus, } from './session/worktree-inheritance.js';
 const argv = process.argv.slice(2);
 const flags = {
@@ -119,6 +119,8 @@ function openFlowRootOperation(actionsDir) {
         return null;
     }
     const corpus = resolveReadableActionCorpus(path.dirname(path.dirname(actionsDir)));
+    if (corpus.status === 'refused')
+        throw new Error(corpus.reason);
     if (corpus.status !== 'owned-directory' && corpus.status !== 'approved-inherited')
         return null;
     return captureReadableActionOperationSnapshot(corpus);
@@ -130,28 +132,15 @@ function scanFlows() {
         const operation = openFlowRootOperation(root);
         if (!operation)
             continue;
-        let files;
-        try {
-            files = listUnfollowedDirectory(operation.directory, operation.directoryIdentity);
-        }
-        catch {
-            assertReadableActionOperationUnchanged(operation);
-            continue;
-        }
+        const files = listUnfollowedDirectory(operation.directory, operation.directoryIdentity);
         assertReadableActionOperationUnchanged(operation);
         const ids = [
             ...new Set(files.filter((file) => /\.ya?ml$/.test(file)).map((file) => file.replace(/\.ya?ml$/, ''))),
         ];
         const flowFiles = ids.map((id) => resolveFlowFile(files, id));
         const readableFlowFiles = flowFiles.filter((file) => file !== null);
-        let flowTexts;
-        try {
-            flowTexts = readUnfollowedFiles(operation.directory, operation.directoryIdentity, readableFlowFiles);
-        }
-        catch {
-            assertReadableActionOperationUnchanged(operation);
-            continue;
-        }
+        const fileSnapshot = createUnfollowedFileSnapshot(operation.directory, operation.directoryIdentity);
+        const flowTexts = readUnfollowedSnapshotFiles(fileSnapshot, readableFlowFiles);
         assertReadableActionOperationUnchanged(operation);
         const textByFile = new Map(readableFlowFiles.map((file, index) => [file, flowTexts[index]]));
         const rootItems = [];
@@ -190,6 +179,7 @@ function scanFlows() {
             });
         }
         assertReadableActionOperationUnchanged(operation);
+        assertUnfollowedFileSnapshotUnchanged(fileSnapshot);
         items.push(...rootItems);
     }
     items.sort((a, b) => a.flow.localeCompare(b.flow));

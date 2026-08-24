@@ -8,8 +8,9 @@
 import { ensureFastRunner, getActiveSession, runNative } from '../agent-device-wrapper.js';
 import { okResult, failResult, withSession } from '../utils.js';
 import { isValidActionId } from '../domain/path-safety.js';
-import { actionWasEditedExternally, assertReadableActionLoadContextStable, loadAction, loadActionFromContext, saveAction, } from '../domain/action-store.js';
+import { actionWasEditedExternally, loadAction, loadActionFromContext, saveAction, } from '../domain/action-store.js';
 import { mirrorToDb } from '../domain/action-state-store.js';
+import { assertReadableActionOperationUnchanged } from '../session/worktree-inheritance.js';
 import { extractAllTestIDs, extractIdSelectors, detectTransportBlind, attemptRepair, applyRepair, DEFAULT_REPAIR_THRESHOLD, } from '../domain/repair-engine.js';
 import { repairBudgetAvailable, recentRepairCount } from '../domain/reusable-action.js';
 import { snapshotEnvelopeFailed } from './device-batch.js';
@@ -212,7 +213,7 @@ export function createRepairActionHandler() {
         const repaired = applyRepair(action, result, () => new Date(), args.agentReasoning);
         const { filePath, sidecarPath } = saveAction(repaired);
         if (loadContext)
-            assertReadableActionLoadContextStable(loadContext);
+            assertReadableActionOperationUnchanged(loadContext.operation);
         // Task 5 (A2/C): append the RepairRecord ROW to the DB mirror, STRICTLY
         // AFTER the authoritative saveAction. applyRepair appended the record to
         // repaired.state.repairHistory, so the just-added record is the last

@@ -542,6 +542,70 @@ test('nested runFlow files are captured in one batch per depth for exact loads',
   }
 });
 
+test('nested batch reads recheck every previously selected YAML identity', () => {
+  const fixture = makeFixture();
+  try {
+    const actionsDir = join(fixture.primary, '.rn-agent', 'actions');
+    mkdirSync(actionsDir, { recursive: true });
+    const actionPath = join(actionsDir, 'login.yaml');
+    writeFileSync(
+      actionPath,
+      fixtureYaml({ id: 'login', selectors: [] }).replace(
+        '- launchApp',
+        '- runFlow: child.yaml',
+      ),
+    );
+    writeFileSync(join(actionsDir, 'child.yaml'), '- tapOn:\n    id: "child"\n');
+    const worktree = addWorktree(fixture, 'accumulated-files');
+    inherit(worktree);
+
+    assert.throws(
+      () =>
+        openReadableActionLoadContext(worktree, {
+          actionId: 'login',
+          readFiles: (directory, identity, paths) => {
+            const contents = readUnfollowedFiles(directory, identity, paths);
+            if (paths.includes('child.yaml')) {
+              rmSync(actionPath);
+              writeFileSync(actionPath, fixtureYaml({ id: 'replacement' }));
+            }
+            return contents;
+          },
+        }),
+      /Refusing replaced learned-action corpus/,
+    );
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('runFlow prefetch uses the validator native path semantics', () => {
+  const fixture = makeFixture();
+  try {
+    const actionsDir = join(fixture.primary, '.rn-agent', 'actions');
+    mkdirSync(actionsDir, { recursive: true });
+    const reference = 'sub\\flow.yaml';
+    writeFileSync(
+      join(actionsDir, 'login.yaml'),
+      fixtureYaml({ id: 'login', selectors: [] }).replace(
+        '- launchApp',
+        `- runFlow: ${reference}`,
+      ),
+    );
+    const childPath = join(actionsDir, reference);
+    mkdirSync(dirname(childPath), { recursive: true });
+    writeFileSync(childPath, '- tapOn:\n    id: "native-path-child"\n');
+    const worktree = addWorktree(fixture, 'native-runflow-path');
+    inherit(worktree);
+
+    const action = loadAction(worktree, 'login');
+    assert.equal(action?.replay.ok, true);
+    assert.match(action?.replay.ok ? action.replay.cdpYaml : '', /native-path-child/);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
 test('engine lookup corpus mutation returns a structured refusal without replay', async () => {
   const fixture = makeFixture();
   try {
@@ -620,7 +684,7 @@ test('blind-probe corpus mutation refuses before replay dispatch', async () => {
   }
 });
 
-test('exact-ID replay executes the safely loaded YAML after a file symlink swap', async () => {
+test('exact-ID replay refuses success after a selected file symlink swap', async () => {
   const fixture = makeFixture();
   try {
     mkdirSync(join(fixture.primary, '.rn-agent', 'actions'), { recursive: true });
@@ -661,8 +725,9 @@ test('exact-ID replay executes the safely loaded YAML after a file symlink swap'
       forceReload: false,
       proofReplay: true,
     });
-    const env = JSON.parse(result.content[0]!.text) as { ok?: boolean };
-    assert.equal(env.ok, true);
+    const env = JSON.parse(result.content[0]!.text) as { ok?: boolean; error?: string };
+    assert.equal(env.ok, false);
+    assert.match(env.error ?? '', /Refusing replaced learned-action corpus/);
     assert.throws(() => loadAction(worktree, 'login'), /symlink|replaced learned-action corpus/);
   } finally {
     fixture.cleanup();
@@ -968,6 +1033,33 @@ test('operation snapshot refuses a replaced Git common-directory identity', () =
   }
 });
 
+test('operation snapshot refuses a replaced linked project root', () => {
+  const fixture = makeFixture();
+  try {
+    seedLoginCorpus(fixture.primary);
+    const worktree = addWorktree(fixture, 'replaced-project-root');
+    inherit(worktree);
+    const corpus = resolveReadableActionCorpus(worktree);
+    assert.equal(corpus.status, 'approved-inherited');
+    const operation = captureReadableActionOperationSnapshot(corpus);
+    assert.ok(operation);
+    const displaced = join(fixture.root, 'original-project-root');
+    renameSync(worktree, displaced);
+    mkdirSync(join(worktree, '.rn-agent'), { recursive: true });
+    renameSync(
+      join(displaced, '.rn-agent', 'actions'),
+      join(worktree, '.rn-agent', 'actions'),
+    );
+
+    assert.throws(
+      () => assertReadableActionOperationUnchanged(operation),
+      /Refusing replaced learned-action corpus symlink/,
+    );
+  } finally {
+    fixture.cleanup();
+  }
+});
+
 test('corpus resolution binds the Git common-directory identity it verified', () => {
   const fixture = makeFixture();
   const commonDir = realpathSync(join(fixture.primary, '.git'));
@@ -1111,8 +1203,9 @@ test('follow-all-symlinks would accept a foreign corpus that the allowlist refus
       ['--json', '--section', 'b', '--workspace-root', worktree, '--memory-cwd', worktree],
       worktree,
     );
-    assert.equal(inventory.status, 3);
-    assert.equal(JSON.parse(inventory.stdout).sections.flows.count, 0);
+    assert.equal(inventory.status, 1);
+    assert.equal(inventory.stdout, '');
+    assert.match(inventory.stderr, /LINK_FOREIGN/);
   } finally {
     fixture.cleanup();
   }
@@ -1161,7 +1254,7 @@ test('dangling, whole-directory, and replaced links are refused', async () => {
   }
 });
 
-test('discovery skips a file swapped for a symlink under an approved corpus', () => {
+test('built inventory refuses a file symlink without partial results', () => {
   const fixture = makeFixture();
   try {
     seedLoginCorpus(fixture.primary);
@@ -1185,11 +1278,9 @@ test('discovery skips a file swapped for a symlink under an approved corpus', ()
       ['--json', '--section', 'b', '--workspace-root', worktree, '--memory-cwd', worktree],
       worktree,
     );
-    assert.equal(inventory.status, 0, inventory.stderr);
-    const ids = (
-      JSON.parse(inventory.stdout) as { sections: { flows: { items: Array<{ id: string }> } } }
-    ).sections.flows.items.map((item) => item.id);
-    assert.deepEqual(ids, ['other']);
+    assert.equal(inventory.status, 1);
+    assert.equal(inventory.stdout, '');
+    assert.match(inventory.stderr, /Refusing replaced learned-action corpus/);
   } finally {
     fixture.cleanup();
   }
