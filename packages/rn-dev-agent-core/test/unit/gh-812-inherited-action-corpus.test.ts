@@ -35,6 +35,7 @@ import {
   loadAction,
   loadActionFromContext,
   openReadableActionLoadContext,
+  promoteActionRuntimeWithCAS,
   saveActionFromContext,
   saveActionRuntimeWithCAS,
 } from '../../dist/domain/action-store.js';
@@ -636,6 +637,46 @@ test('runtime persistence rechecks the corpus at the sidecar publication boundar
     assert.deepEqual(readdirSync(stateDirectory), []);
   } finally {
     atomicWriter._writeFileWithMode = originalWriteFileWithMode;
+    fixture.cleanup();
+  }
+});
+
+test('captured inherited promotion publishes through the verified primary corpus', () => {
+  const fixture = makeFixture();
+  try {
+    seedLoginCorpus(fixture.primary);
+    const primaryAction = join(fixture.primary, '.rn-agent', 'actions', 'login.yaml');
+    writeFileSync(
+      primaryAction,
+      readFileSync(primaryAction, 'utf8').replace('# status: active', '# status: experimental'),
+    );
+    const worktree = addWorktree(fixture);
+    inherit(worktree);
+    const context = openReadableActionLoadContext(worktree, { actionId: 'login' });
+    assert.ok(context);
+    const action = loadActionFromContext(context, 'login');
+    assert.ok(action);
+
+    const result = promoteActionRuntimeWithCAS(
+      context,
+      action,
+      appendRunRecord(action.state, {
+        timestamp: '2026-08-24T00:00:02.000Z',
+        durationMs: 1,
+        status: 'pass',
+        trigger: 'agent',
+        autoRepair: {
+          attempted: false,
+          outcome: 'skipped',
+          phases: { firstAttemptMs: 1 },
+        },
+      }),
+    );
+
+    assert.equal(result.ok, true);
+    assert.match(readFileSync(primaryAction, 'utf8'), /# status: active/);
+    assert.equal(existsSync(join(worktree, '.rn-agent', 'state', 'login.state.json')), true);
+  } finally {
     fixture.cleanup();
   }
 });

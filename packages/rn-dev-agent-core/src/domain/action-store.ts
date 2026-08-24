@@ -1071,11 +1071,6 @@ export function promoteActionRuntimeWithCAS(
   if (expected.filePath !== expectedFilePath || !/\.ya?ml$/i.test(fileName)) {
     return { ok: false, conflict: 'EXTERNAL_WRITE' };
   }
-  try {
-    assertWritableActionFile(expected.filePath);
-  } catch {
-    return { ok: false, conflict: 'EXTERNAL_WRITE' };
-  }
   const sidecarPath = sidecarPathFor(expected.filePath);
   if (existsSync(sidecarPath)) {
     if (!runtimeSidecarMatches(sidecarPath, expected.state)) {
@@ -1094,25 +1089,25 @@ export function promoteActionRuntimeWithCAS(
   if ((yaml.match(marker) ?? []).length !== 1) return { ok: false, conflict: 'EXTERNAL_WRITE' };
   const promoted = yaml.replace(marker, '# status: active');
   const targetFilePath = join(context.snapshot.directory, fileName);
-  const publicationPrecondition = (): boolean => {
+  const yamlPublicationPrecondition = (): boolean => {
     try {
       assertReadableActionLoadContextStable(context);
       return (
-        runtimeBaselineMatches(expected.filePath, expected.state) &&
-        !actionWasEditedExternally(expected) &&
-        readFileSync(expected.filePath, 'utf8') === yaml
+        !actionWasEditedExternally(expected) && readFileSync(expected.filePath, 'utf8') === yaml
       );
     } catch {
       return false;
     }
   };
+  const publicationPrecondition = (): boolean =>
+    yamlPublicationPrecondition() && runtimeBaselineMatches(expected.filePath, expected.state);
   const written = atomicWriter.pairWriteConditional(
     targetFilePath,
     promoted,
     sidecarPath,
     nextState,
     publicationPrecondition,
-    publicationPrecondition,
+    yamlPublicationPrecondition,
     yaml,
   );
   if (!written) return { ok: false, conflict: 'EXTERNAL_WRITE' };
