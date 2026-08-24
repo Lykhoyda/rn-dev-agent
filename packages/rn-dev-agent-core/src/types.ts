@@ -363,8 +363,7 @@ export type ToolErrorCode =
   | 'INTERACTION_EFFECT_UNVERIFIED'
   | 'RUNNER_TIMEOUT'
   | 'WDA_BOOTSTRAP_FAILED'
-  // XCTest/WDA missed a native-only selector that a bounded same-screen native
-  // snapshot saw before dispatch. Runtime/version metadata is diagnostic only.
+  // Same-screen native proof saw a selector that XCTest/WDA missed; versions remain diagnostic only.
   | 'NATIVE_SURFACE_BLIND'
   // Direct maestro-runner/WDA device evidence did not match the exact target.
   | 'DEVICE_AUTHORITY_MISMATCH'
