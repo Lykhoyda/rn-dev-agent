@@ -7,7 +7,7 @@
 # and tracked for migration; anything not in that baseline fails this check.
 #
 # Excluded from the rule (generated or vendored, never hand-written):
-#   packages/rn-dev-agent-core/dist/ — tsc output (git-tracked by design)
+#   packages/rn-dev-agent-core/dist/ — tsc output (gitignored; generated)
 #   packages/codex-plugin/rn-dev-agent-core/dist/ — bundled Codex plugin runtime
 #   packages/claude-plugin/rn-dev-agent-core/dist/ — bundled Claude plugin runtime
 #   packages/claude-plugin/scripts/ — generated copies of repo scripts

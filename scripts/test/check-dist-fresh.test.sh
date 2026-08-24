@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Regression test for check-dist-fresh.sh — the CI gate that fails when the
-# committed core dist or Codex bundled runtime is not a clean rebuild of src/.
-# Users run the COMMITTED artifacts; CI rebuilding before tests silently repairs
-# a stale artifact in CI only (GH #432, audit 2026-07-03).
+# Regression test for check-dist-fresh.sh — the CI gate that fails when a
+# committed host runtime is not a clean rebuild of src/. Core dist is generated
+# and gitignored; marketplace users run the committed HOST copies
+# (GH #432, GH #622).
 #
 # Run: bash scripts/test/check-dist-fresh.test.sh
 
@@ -22,9 +22,8 @@ check() { # description expected_exit actual_exit
 }
 
 # Fake repo: packages/rn-dev-agent-core/{src,dist}; the "compiler" copies
-# src/*.js into dist/, and the Codex runtime "bundler" concatenates dist/*.js.
-# That is enough to exercise stale/orphan/uncommitted porcelain states without
-# a real tsc/esbuild.
+# src/*.js into dist/supervisor.js, and the Codex runtime "bundler" copies
+# that into the host package. Enough to exercise host porcelain without tsc.
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 BRIDGE="$tmp/packages/rn-dev-agent-core"
@@ -37,13 +36,14 @@ mkdir -p "$BRIDGE/src" "$BRIDGE/dist" "$CODEX_RUNTIME" "$IOS_RUNNER" "$ANDROID_R
 git -C "$tmp" init -q
 git -C "$tmp" config commit.gpgsign false
 git -C "$tmp" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
-BUILD='cp src/*.js dist/'
-CODEX_BUILD='mkdir -p packages/codex-plugin/rn-dev-agent-core/dist packages/codex-plugin/scripts && printf "%s\n" "{\"version\":\"fixture\"}" > packages/codex-plugin/rn-dev-agent-core/package.json && cat packages/rn-dev-agent-core/dist/*.js > packages/codex-plugin/rn-dev-agent-core/dist/supervisor.js && cp packages/codex-plugin/rn-dev-agent-core/dist/supervisor.js packages/codex-plugin/rn-dev-agent-core/dist/index.js && cp packages/codex-plugin/rn-dev-agent-core/dist/supervisor.js packages/codex-plugin/rn-dev-agent-core/dist/learned-actions.js && cp runner-manifest.json packages/codex-plugin/runner-manifest.json && rm -rf packages/codex-plugin/scripts/rn-fast-runner packages/codex-plugin/scripts/rn-android-runner && cp -R packages/rn-fast-runner packages/codex-plugin/scripts/rn-fast-runner && cp -R packages/rn-android-runner packages/codex-plugin/scripts/rn-android-runner'
+printf '%s\n' 'packages/rn-dev-agent-core/dist/' > "$tmp/.gitignore"
+BUILD='mkdir -p dist && cp src/*.js dist/ && cp src/a.js dist/supervisor.js'
+CODEX_BUILD='mkdir -p packages/codex-plugin/rn-dev-agent-core/dist packages/codex-plugin/scripts && printf "%s\n" "{\"version\":\"fixture\"}" > packages/codex-plugin/rn-dev-agent-core/package.json && cp packages/rn-dev-agent-core/dist/supervisor.js packages/codex-plugin/rn-dev-agent-core/dist/supervisor.js && cp packages/codex-plugin/rn-dev-agent-core/dist/supervisor.js packages/codex-plugin/rn-dev-agent-core/dist/index.js && cp packages/codex-plugin/rn-dev-agent-core/dist/supervisor.js packages/codex-plugin/rn-dev-agent-core/dist/learned-actions.js && cp runner-manifest.json packages/codex-plugin/runner-manifest.json && rm -rf packages/codex-plugin/scripts/rn-fast-runner packages/codex-plugin/scripts/rn-android-runner && cp -R packages/rn-fast-runner packages/codex-plugin/scripts/rn-fast-runner && cp -R packages/rn-android-runner packages/codex-plugin/scripts/rn-android-runner'
 
 write_codex_outputs() {
   mkdir -p "$CODEX_PACKAGE" "$CODEX_RUNTIME" "$CODEX_PLUGIN/scripts"
   printf '%s\n' '{"version":"fixture"}' > "$CODEX_PACKAGE/package.json"
-  cat "$BRIDGE/dist/"*.js > "$CODEX_RUNTIME/supervisor.js"
+  cp "$BRIDGE/dist/supervisor.js" "$CODEX_RUNTIME/supervisor.js"
   cp "$CODEX_RUNTIME/supervisor.js" "$CODEX_RUNTIME/index.js"
   cp "$CODEX_RUNTIME/supervisor.js" "$CODEX_RUNTIME/learned-actions.js"
   cp "$tmp/runner-manifest.json" "$CODEX_PLUGIN/runner-manifest.json"
@@ -52,73 +52,110 @@ write_codex_outputs() {
   cp -R "$ANDROID_RUNNER" "$CODEX_PLUGIN/scripts/rn-android-runner"
 }
 
-# 1. committed dist == clean rebuild -> passes
+run_guard() {
+  REPO_ROOT="$tmp" DIST_BUILD_CMD="$BUILD" WEB_BUILD_CMD='true' \
+    CODEX_RUNTIME_BUILD_CMD="$CODEX_BUILD" SKIP_PACK_CHECK=1 \
+    bash "$GUARD"
+}
+
+# 1. gitignored core dist + host outputs == clean rebuild -> passes
 echo 'console.log(1);' > "$BRIDGE/src/a.js"
+mkdir -p "$BRIDGE/dist"
 cp "$BRIDGE/src/a.js" "$BRIDGE/dist/a.js"
+cp "$BRIDGE/src/a.js" "$BRIDGE/dist/supervisor.js"
 echo '{"version":"1"}' > "$tmp/runner-manifest.json"
 echo 'ios runner v1' > "$IOS_RUNNER/runner.txt"
 echo 'android runner v1' > "$ANDROID_RUNNER/runner.txt"
 write_codex_outputs
 git -C "$tmp" add -A && git -C "$tmp" -c user.email=t@t -c user.name=t commit -qm fresh
-REPO_ROOT="$tmp" DIST_BUILD_CMD="$BUILD" CODEX_RUNTIME_BUILD_CMD="$CODEX_BUILD" bash "$GUARD" >/dev/null 2>&1
-check "fresh dist passes" 0 $?
+run_guard >/dev/null 2>&1
+check "fresh host outputs pass without committed core dist" 0 $?
 
-# 2. src changed, committed dist stale (' M') -> fails
+# 2. tracked core dist fails even when rebuild matches
+mkdir -p "$BRIDGE/dist"
+cp "$BRIDGE/src/a.js" "$BRIDGE/dist/supervisor.js"
+git -C "$tmp" add -f "$BRIDGE/dist/supervisor.js"
+git -C "$tmp" -c user.email=t@t -c user.name=t commit -qm "tracked core dist"
+run_guard >/dev/null 2>&1
+check "tracked core dist fails" 1 $?
+git -C "$tmp" rm -q --cached -- "packages/rn-dev-agent-core/dist/supervisor.js"
+git -C "$tmp" -c user.email=t@t -c user.name=t commit -qm "untrack core dist"
+
+# 3. src changed, host runtime stale (' M') -> fails
 echo 'console.log(2);' > "$BRIDGE/src/a.js"
-git -C "$tmp" add -A && git -C "$tmp" -c user.email=t@t -c user.name=t commit -qm "src change, no rebuild"
-REPO_ROOT="$tmp" DIST_BUILD_CMD="$BUILD" CODEX_RUNTIME_BUILD_CMD="$CODEX_BUILD" bash "$GUARD" >/dev/null 2>&1
-check "stale committed dist fails" 1 $?
-git -C "$tmp" checkout -q -- . && cp "$BRIDGE/src/a.js" "$BRIDGE/dist/a.js" && write_codex_outputs
+git -C "$tmp" add -A && git -C "$tmp" -c user.email=t@t -c user.name=t commit -qm "src change, no host rebuild"
+run_guard >/dev/null 2>&1
+check "stale host runtime fails" 1 $?
+git -C "$tmp" checkout -q -- .
+cp "$BRIDGE/src/a.js" "$BRIDGE/dist/a.js"
+cp "$BRIDGE/src/a.js" "$BRIDGE/dist/supervisor.js"
+write_codex_outputs
 git -C "$tmp" add -A && git -C "$tmp" -c user.email=t@t -c user.name=t commit -qm rebuilt
 
-# 3. committed orphan the build no longer emits (' D') -> fails
-echo 'orphan' > "$BRIDGE/dist/gone.js"
+# 4. committed host orphan the build no longer emits (' D') -> fails
+echo 'orphan' > "$CODEX_RUNTIME/gone.js"
 git -C "$tmp" add -A && git -C "$tmp" -c user.email=t@t -c user.name=t commit -qm orphan
-REPO_ROOT="$tmp" DIST_BUILD_CMD="$BUILD" CODEX_RUNTIME_BUILD_CMD="$CODEX_BUILD" bash "$GUARD" >/dev/null 2>&1
-check "committed orphan fails" 1 $?
-git -C "$tmp" rm -q "packages/rn-dev-agent-core/dist/gone.js"
+run_guard >/dev/null 2>&1
+check "committed host orphan fails" 1 $?
+git -C "$tmp" rm -q "packages/codex-plugin/rn-dev-agent-core/dist/gone.js"
 git -C "$tmp" -c user.email=t@t -c user.name=t commit -qm "drop orphan"
 
-# 4. build emits a file never committed ('??') -> fails
+# 5. host build emits a file never committed ('??') -> fails
 echo 'console.log(3);' > "$BRIDGE/src/b.js"
 git -C "$tmp" add "$BRIDGE/src/b.js"
-git -C "$tmp" -c user.email=t@t -c user.name=t commit -qm "new src, dist not committed"
-REPO_ROOT="$tmp" DIST_BUILD_CMD="$BUILD" CODEX_RUNTIME_BUILD_CMD="$CODEX_BUILD" bash "$GUARD" >/dev/null 2>&1
-check "emitted-but-uncommitted file fails" 1 $?
+git -C "$tmp" -c user.email=t@t -c user.name=t commit -qm "new src, host extra not committed"
+# Force the fake bundler to also emit an uncommitted extra file.
+CODEX_BUILD_EXTRA="$CODEX_BUILD && echo extra > packages/codex-plugin/rn-dev-agent-core/dist/extra.js"
+REPO_ROOT="$tmp" DIST_BUILD_CMD="$BUILD" WEB_BUILD_CMD='true' \
+  CODEX_RUNTIME_BUILD_CMD="$CODEX_BUILD_EXTRA" SKIP_PACK_CHECK=1 \
+  bash "$GUARD" >/dev/null 2>&1
+check "emitted-but-uncommitted host file fails" 1 $?
 
-# 5. web-dist is preserved, not rebuilt, not flagged
-mkdir -p "$BRIDGE/dist/observability/web-dist"
-echo '<html>spa</html>' > "$BRIDGE/dist/observability/web-dist/index.html"
-cp "$BRIDGE/src/b.js" "$BRIDGE/dist/b.js"
+# 6. gitignored extra file in core dist does not fail
+rm -f "$CODEX_RUNTIME/extra.js"
+echo 'console.log(3);' > "$BRIDGE/src/b.js"
+cp "$BRIDGE/src/a.js" "$BRIDGE/dist/supervisor.js"
 write_codex_outputs
-git -C "$tmp" add -A && git -C "$tmp" -c user.email=t@t -c user.name=t commit -qm "web-dist + fresh dist"
-REPO_ROOT="$tmp" DIST_BUILD_CMD="$BUILD" CODEX_RUNTIME_BUILD_CMD="$CODEX_BUILD" bash "$GUARD" >/dev/null 2>&1
-check "web-dist preserved and ignored" 0 $?
-[ -f "$BRIDGE/dist/observability/web-dist/index.html" ]
-check "web-dist file survives the clean-slate delete" 0 $?
+git -C "$tmp" add -A && git -C "$tmp" -c user.email=t@t -c user.name=t commit -qm "host rebuilt with extra src"
+run_guard >/dev/null 2>&1
+check "gitignored extra core dist file does not fail" 0 $?
 
-# 6. core dist is fresh, but packaged Codex runtime is stale (' M') -> fails
+# 7. WEB_BUILD_CMD failure fails the gate
+REPO_ROOT="$tmp" DIST_BUILD_CMD="$BUILD" WEB_BUILD_CMD='exit 7' \
+  CODEX_RUNTIME_BUILD_CMD="$CODEX_BUILD" SKIP_PACK_CHECK=1 \
+  bash "$GUARD" >/dev/null 2>&1
+check "web build failure fails the gate" 7 $?
+
+# 8. missing supervisor.js after build fails
+REPO_ROOT="$tmp" DIST_BUILD_CMD='mkdir -p dist && echo hi > dist/only.js' WEB_BUILD_CMD='true' \
+  CODEX_RUNTIME_BUILD_CMD="$CODEX_BUILD" SKIP_PACK_CHECK=1 \
+  bash "$GUARD" >/dev/null 2>&1
+check "missing supervisor.js fails" 1 $?
+
+# 9. core dist is fresh/gitignored, but packaged Codex runtime is stale (' M') -> fails
 echo 'stale runtime' > "$CODEX_RUNTIME/supervisor.js"
 git -C "$tmp" add -A && git -C "$tmp" -c user.email=t@t -c user.name=t commit -qm "stale codex runtime"
-REPO_ROOT="$tmp" DIST_BUILD_CMD="$BUILD" CODEX_RUNTIME_BUILD_CMD="$CODEX_BUILD" bash "$GUARD" >/dev/null 2>&1
+run_guard >/dev/null 2>&1
 check "stale Codex runtime fails" 1 $?
 
-# 7. root runner manifest changed, packaged Codex copy stale (' M') -> fails
+# 10. root runner manifest changed, packaged Codex copy stale (' M') -> fails
 git -C "$tmp" checkout -q -- .
+cp "$BRIDGE/src/a.js" "$BRIDGE/dist/supervisor.js"
 write_codex_outputs
 git -C "$tmp" add -A && git -C "$tmp" -c user.email=t@t -c user.name=t commit -qm "fresh codex outputs before manifest drift"
 echo '{"version":"2"}' > "$tmp/runner-manifest.json"
 git -C "$tmp" add "$tmp/runner-manifest.json" && git -C "$tmp" -c user.email=t@t -c user.name=t commit -qm "manifest changed only"
-REPO_ROOT="$tmp" DIST_BUILD_CMD="$BUILD" CODEX_RUNTIME_BUILD_CMD="$CODEX_BUILD" bash "$GUARD" >/dev/null 2>&1
+run_guard >/dev/null 2>&1
 check "stale Codex runner manifest fails" 1 $?
 
-# 8. native runner source changed, packaged Codex copy stale (' M') -> fails
+# 11. native runner source changed, packaged Codex copy stale (' M') -> fails
 git -C "$tmp" checkout -q -- .
+cp "$BRIDGE/src/a.js" "$BRIDGE/dist/supervisor.js"
 write_codex_outputs
 git -C "$tmp" add -A && git -C "$tmp" -c user.email=t@t -c user.name=t commit -qm "fresh codex outputs before runner drift"
 echo 'ios runner v2' > "$IOS_RUNNER/runner.txt"
 git -C "$tmp" add "$IOS_RUNNER/runner.txt" && git -C "$tmp" -c user.email=t@t -c user.name=t commit -qm "ios runner changed only"
-REPO_ROOT="$tmp" DIST_BUILD_CMD="$BUILD" CODEX_RUNTIME_BUILD_CMD="$CODEX_BUILD" bash "$GUARD" >/dev/null 2>&1
+run_guard >/dev/null 2>&1
 check "stale Codex native runner copy fails" 1 $?
 
 exit $fail

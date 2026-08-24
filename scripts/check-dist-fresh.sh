@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
-# CI gate: the committed compiled MCP server and packaged host runtimes must
-# equal a CLEAN rebuild from src/. Users run the committed artifacts via host
-# plugin MCP registrations; CI's rebuild-before-test silently repairs a stale
-# artifact in CI while shipping it broken (GH #432, audit 2026-07-03).
-# Clean-slate so all three drift shapes surface in porcelain:
+# CI gate: packaged host runtimes must equal a CLEAN rebuild from src/.
+# packages/rn-dev-agent-core/dist/ is a local/CI/npm-pack build product and must
+# not be committed. Marketplace installs run the committed HOST copies under
+# packages/{claude,codex}-plugin/rn-dev-agent-core/dist/.
+# Clean-slate so host drift shapes surface in porcelain:
 #   ' M' stale committed file, '??' emitted-but-uncommitted, ' D' orphan.
-# observability/web-dist/ is preserved — Vite output owned by
-# check-web-bundle.sh (tsconfig excludes src/observability/web).
+# Core dist is wiped and regenerated (tsc + SPA + native copy) as the input to
+# scripts/build-host-runtimes.ts; it is gitignored, so it never appears in porcelain.
 # The porcelain scope covers EVERY path scripts/build-host-runtimes.ts writes
 # (both host packages) so no generator output can drift stale unnoticed.
-# Env overrides (guard test): REPO_ROOT, DIST_BUILD_CMD, CODEX_RUNTIME_BUILD_CMD.
+# Env overrides (guard test): REPO_ROOT, DIST_BUILD_CMD, WEB_BUILD_CMD,
+# CODEX_RUNTIME_BUILD_CMD, SKIP_PACK_CHECK.
 set -euo pipefail
 
 ROOT="${REPO_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
@@ -32,17 +33,31 @@ HOST_OUTPUT_RELS=(
   "packages/codex-plugin/scripts"
   "packages/claude-plugin/scripts"
 )
-# corepack yarn build (= tsc) fails closed; bare `npx tsc` would auto-install
-# typescript@latest in non-interactive CI if resolution ever broke.
+# corepack yarn build (= tsc + native copy) fails closed; bare `npx tsc` would
+# auto-install typescript@latest in non-interactive CI if resolution ever broke.
 BUILD_CMD="${DIST_BUILD_CMD:-corepack yarn build}"
+WEB_BUILD_CMD="${WEB_BUILD_CMD:-corepack yarn build:web}"
 CODEX_RUNTIME_BUILD_CMD="${CODEX_RUNTIME_BUILD_CMD:-node scripts/build-host-runtimes.ts}"
 
-find "$BRIDGE/dist" -mindepth 1 -maxdepth 1 ! -name observability -exec rm -rf {} +
-if [ -d "$BRIDGE/dist/observability" ]; then
-  find "$BRIDGE/dist/observability" -mindepth 1 -maxdepth 1 ! -name web-dist -exec rm -rf {} +
+tracked_core="$(git -C "$ROOT" ls-files -- "$DIST_REL")"
+if [ -n "$tracked_core" ]; then
+  echo "ERROR: $DIST_REL is generated and must not be committed."
+  echo "$tracked_core"
+  echo "  Fix: git rm -r --cached $DIST_REL"
+  exit 1
 fi
 
+rm -rf "$BRIDGE/dist"
+
 ( cd "$BRIDGE" && eval "$BUILD_CMD" )
+( cd "$BRIDGE" && eval "$WEB_BUILD_CMD" )
+
+if [ ! -f "$BRIDGE/dist/supervisor.js" ]; then
+  echo "ERROR: core build did not emit dist/supervisor.js"
+  echo "  Fix: $BUILD_CMD (cwd packages/rn-dev-agent-core)"
+  exit 1
+fi
+
 for runtime in "$CODEX_RUNTIME" "$CLAUDE_RUNTIME"; do
   mkdir -p "$runtime"
   find "$runtime" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
@@ -51,15 +66,31 @@ done
 
 STATUS="$(
   git -C "$ROOT" status --porcelain -- \
-    "$DIST_REL" \
     "${HOST_OUTPUT_RELS[@]}"
 )"
 if [ -n "$STATUS" ]; then
-  echo "ERROR: committed MCP artifacts and host package outputs are not a clean rebuild of src/."
+  echo "ERROR: committed host package outputs are not a clean rebuild of src/."
   echo "$STATUS"
   echo "  ' M' = stale committed file, '??' = emitted but uncommitted, ' D' = orphan no longer emitted"
-  echo "  Fix: corepack yarn workspace rn-dev-agent-core build && corepack yarn build:host-runtimes"
-  echo "       git add $DIST_REL ${HOST_OUTPUT_RELS[*]}"
+  echo "  Fix: corepack yarn build:host-runtimes"
+  echo "       git add ${HOST_OUTPUT_RELS[*]}"
   exit 1
 fi
+
+if [ "${SKIP_PACK_CHECK:-}" != 1 ] && [ -f "$BRIDGE/package.json" ] && command -v npm >/dev/null; then
+  pack_paths="$(
+    cd "$BRIDGE"
+    npm pack --dry-run --ignore-scripts --json 2>/dev/null \
+      | python3 -c 'import json,sys
+payload=json.load(sys.stdin)
+files=payload[0]["files"] if isinstance(payload, list) else payload["files"]
+print("\n".join(entry["path"] for entry in files))'
+  )"
+  if ! printf '%s\n' "$pack_paths" | grep -qx 'dist/supervisor.js'; then
+    echo "ERROR: npm pack does not include dist/supervisor.js (gitignore must not apply to the tarball)."
+    printf '%s\n' "$pack_paths" | head
+    exit 1
+  fi
+fi
+
 echo "dist fresh"

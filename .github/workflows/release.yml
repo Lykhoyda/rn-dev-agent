@@ -97,7 +97,7 @@ jobs:
       - run: corepack enable
       - run: corepack yarn install --immutable
 
-      - name: TypeScript build + dist freshness gate
+      - name: TypeScript build + host-runtime freshness gate
         run: bash scripts/check-dist-fresh.sh
 
       # GH#439: same single-entrypoint rule as ci.yml — globs live in

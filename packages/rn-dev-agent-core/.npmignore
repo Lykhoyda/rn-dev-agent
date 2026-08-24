@@ -1,0 +1,4 @@
+# npm pack uses this file instead of .gitignore. Keep generated dist/ in the
+# tarball so published consumers do not need TypeScript or a local compile.
+test-results/
+playwright-report/

@@ -1,3 +1,5 @@
+# Generated tsc / Vite / native-copy output. Host plugin copies stay committed.
+/dist/
 
 # GH #438: Playwright e2e-web artifacts
 test-results/

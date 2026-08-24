@@ -30,11 +30,15 @@ jobs:
       - run: corepack enable
       - run: corepack yarn install --immutable
 
-      # GH#432: build + freshness in one gate. Users run the COMMITTED dist;
-      # an unconditional rebuild here silently repairs a stale artifact in CI
-      # while shipping it broken to installs.
+      # GH#432/#622: build + host-runtime freshness. Marketplace users run the
+      # committed HOST bundles; core dist is generated in this gate and must
+      # not be committed. An unconditional rebuild without a porcelain check
+      # would repair a stale host artifact in CI while shipping it broken.
       - name: TypeScript build + dist freshness gate
         run: bash scripts/check-dist-fresh.sh
+
+      - name: Core dist packaging contract
+        run: bash scripts/check-core-dist-contract.sh
 
       # GH#437 (audit P0-B): wire-contract drift must fail a NAMED gate, not
       # hide in the unit blob — tri-file command-enum/protocol sync (#418/#383)
@@ -81,9 +85,15 @@ jobs:
       - name: ensure-idb client-state guard
         run: bash scripts/test/ensure-idb.test.sh
 
-      # GH#432: the freshness gate is itself tested (house rule for CI guards).
+      # GH#432/#622: the freshness gate is itself tested (house rule for CI guards).
       - name: Dist-freshness guard unit test
         run: bash scripts/test/check-dist-fresh.test.sh
+
+      - name: Web-bundle guard unit test
+        run: bash scripts/test/check-web-bundle.test.sh
+
+      - name: Core dist contract unit test
+        run: bash scripts/test/check-core-dist-contract.test.sh
 
       # GH#377: convert-gif must mkdir an explicit gifPath's parent before ffmpeg.
       - name: record_proof convert-gif output-dir guard
@@ -211,9 +221,9 @@ jobs:
   web-bundle:
     name: Web bundle freshness
     runs-on: ubuntu-latest
-    # PR-only: rebuilds the observability SPA and fails if the committed
-    # single-file bundle drifted from source. The observability SPA remains
-    # embedded inside the core package because it ships as part of the MCP dist.
+    # PR-only: rebuilds the observability SPA and fails if the committed HOST
+    # copies drifted from source. The SPA still ships inside each host package
+    # runtime; core dist is generated locally in this job.
     if: github.event_name == 'pull_request'
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2 — Phase 134.5 SHA pin
