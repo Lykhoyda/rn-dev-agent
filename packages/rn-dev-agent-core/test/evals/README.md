@@ -46,7 +46,8 @@ corepack yarn evals
 ```
 
 `corepack yarn evals` runs `packages/rn-dev-agent-core/test/evals/run-evals.ts`
-(Node 22 type stripping — no build step; the server is the committed `dist/`).
+(Node 22 type stripping — no extra compile of the eval runner; start the
+server from a local `yarn build` of `packages/rn-dev-agent-core/dist/supervisor.js`).
 It needs a **logged-in `claude` CLI** and **no booted simulator/emulator** — a
 preflight refuses when a device is connected (evals must be device-free;
 `EVAL_ALLOW_DEVICE=1` allows an informational, non-gating run). It runs each

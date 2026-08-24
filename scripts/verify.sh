@@ -37,10 +37,18 @@ resolve_script_dir() {
 }
 
 SCRIPT_DIR="$(resolve_script_dir "${BASH_SOURCE[0]}")"
-VERIFY_CLI="$SCRIPT_DIR/../packages/rn-dev-agent-core/dist/maestro-runner-pin.js"
-if [ ! -f "$VERIFY_CLI" ]; then
-  VERIFY_CLI="$SCRIPT_DIR/../rn-dev-agent-core/dist/maestro-runner-pin.js"
-fi
+VERIFY_CLI=""
+for candidate in \
+  "$SCRIPT_DIR/../rn-dev-agent-core/dist/maestro-runner-pin.js" \
+  "$SCRIPT_DIR/../packages/claude-plugin/rn-dev-agent-core/dist/maestro-runner-pin.js" \
+  "$SCRIPT_DIR/../packages/codex-plugin/rn-dev-agent-core/dist/maestro-runner-pin.js" \
+  "$SCRIPT_DIR/../packages/rn-dev-agent-core/dist/maestro-runner-pin.js"
+do
+  if [ -f "$candidate" ]; then
+    VERIFY_CLI="$candidate"
+    break
+  fi
+done
 
 PLATFORM=""
 FLOW_DIR=""

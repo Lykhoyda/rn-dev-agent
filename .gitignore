@@ -2,6 +2,10 @@ node_modules/
 .yarn/cache/
 .yarn/install-state.gz
 
+# Core tsc/Vite output. Marketplace runtimes live under
+# packages/{claude,codex}-plugin/rn-dev-agent-core/dist/ and stay committed.
+packages/rn-dev-agent-core/dist/
+
 .claude/*
 !.claude/commands/
 !.claude/skills/
