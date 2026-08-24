@@ -8,7 +8,7 @@
     "rn-experience-trends": "./dist/experience-trends.js"
   },
   "scripts": {
-    "build": "tsc && mkdir -p dist/native && cp -R native/. dist/native/",
+    "build": "rm -rf dist && tsc && mkdir -p dist/native && cp -R native/. dist/native/",
     "prepack": "yarn build && yarn build:web",
     "build:web": "cd src/observability/web && npm install && npm run build",
     "dev": "tsc --watch",
