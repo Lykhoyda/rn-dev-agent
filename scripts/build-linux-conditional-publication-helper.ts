@@ -55,6 +55,7 @@ struct statx {
 #define SYS_EXECVEAT 322
 #define SYS_WRITE 1
 #define SYS_GETDENTS64 217
+#define SYS_READLINKAT 267
 static long syscall6(long number, long a1, long a2, long a3, long a4, long a5, long a6) {
   register long r10 __asm__("r10") = a4;
   register long r8 __asm__("r8") = a5;
@@ -77,6 +78,7 @@ __asm__(".global _start\\n_start:\\nmov (%rsp), %rdi\\nlea 8(%rsp), %rsi\\n"
 #define SYS_EXECVEAT 281
 #define SYS_WRITE 64
 #define SYS_GETDENTS64 61
+#define SYS_READLINKAT 78
 static long syscall6(long number, long a1, long a2, long a3, long a4, long a5, long a6) {
   register long x0 __asm__("x0") = a1;
   register long x1 __asm__("x1") = a2;
@@ -337,6 +339,13 @@ static int symlink_kind(const char *value) {
   return value[0] == 's' && value[1] == 'y' && value[2] == 'm' && value[3] == 'l' &&
       value[4] == 'i' && value[5] == 'n' && value[6] == 'k' && value[7] == 0;
 }
+static int symlink_target_matches(const char *path, const char *expected) {
+  char target[4096];
+  long length = call4(SYS_READLINKAT, AT_FDCWD, (long)path, (long)target, sizeof(target));
+  u64 expected_length = text_length(expected);
+  return length >= 0 && (u64)length == expected_length &&
+      equal_bytes((const u8 *)target, (const u8 *)expected, expected_length);
+}
 static int relative_stat(long directory_fd, const char *name, struct statx *value) {
   return call5(SYS_STATX, directory_fd, (long)name, AT_SYMLINK_NOFOLLOW,
                STATX_BASIC_STATS, (long)value) == 0;
@@ -346,8 +355,8 @@ static int lstat_path(const char *path, struct statx *value) {
                STATX_BASIC_STATS, (long)value) == 0;
 }
 static int witnesses_unchanged(long argc, char **argv, long start) {
-  if ((argc - start) % 4 != 0) return 0;
-  for (long index = start; index < argc; index += 4) {
+  if ((argc - start) % 5 != 0) return 0;
+  for (long index = start; index < argc; index += 5) {
     u64 expected_dev;
     u64 expected_ino;
     struct statx observed;
@@ -358,7 +367,8 @@ static int witnesses_unchanged(long argc, char **argv, long start) {
     if (directory_kind(argv[index + 1])) {
       if (!directory(&observed)) return 0;
     } else if (symlink_kind(argv[index + 1])) {
-      if ((observed.mode & S_IFMT) != 0120000) return 0;
+      if ((observed.mode & S_IFMT) != 0120000 ||
+          !symlink_target_matches(argv[index], argv[index + 4])) return 0;
     } else {
       return 0;
     }

@@ -931,7 +931,8 @@ function publicationWitnessArguments(witnesses) {
     witness.path,
     witness.kind,
     witness.dev,
-    witness.ino
+    witness.ino,
+    witness.linkTarget ?? ""
   ]);
 }
 function publishFileIfUnchangedInVerifiedDirectory(directoryFd, targetName, candidateName, expectedName, witnesses) {
@@ -1237,18 +1238,18 @@ var init_process_birth = __esm({
     "use strict";
     init_trusted_system_executable();
     DARWIN_HELPER_MANIFEST = {
-      sourceSha256: "92301e735cd0ba6002ea24f5be5def60aafc76cd71665f817adea7aae8031431",
-      recipeSha256: "6e19324e3fb1b93938ce28db15813813b0b987d4afc8631d05e04674f7d41eb0",
-      stableBinarySha256: "edbd95893a63ed8f24dd1eb2f4e2ff6f55586c2d4c8e70034b1daf93c16eddc0",
-      binarySha256: "bab59c6c453f3d8bdaeef697f5a678f7ec57513dff74881d5f3fd4a66ad50dbf",
+      sourceSha256: "4f3ad25913f08e4518a8dec6918e73cc5e9bc80f7ec9e0cb9f64a363e1c8f147",
+      recipeSha256: "7e6b6b39a39ded2e3f748006264247e6d494fd5c9054cf8580ecb4396970b025",
+      stableBinarySha256: "1662cb03acb7f5cf3b879a851322602de522479a3e18dc0f4ec8ca5303592f23",
+      binarySha256: "3c0c6bd9b591feaf1246990f30d42d7ac8943d826e05ddcc0285f511d08da0d4",
       cdhashes: [
-        "9fc635786b94689d93e7c998e4d88592a3cc14f8",
-        "4b1d13c9dea252eff565f3a9bbcbd40939789bd7"
+        "d2af3d210165b1a915562e4ec1895a6286fd1d6f",
+        "26875724107a2489e9341d8d86ffa020b3b2d5a5"
       ]
     };
     LINUX_PUBLICATION_HELPER_SHA256 = {
-      x64: "58087c4d70c90bff5587f2120e00f7c194e2054f83e4a4642f5fc55de562b41a",
-      arm64: "e0db57dcf8b78bdc6aa326586fcf52fcb76184ea634fbf966d486a02bbb64ec5"
+      x64: "9a38afcecb28015c3016f509fb659db541d2f452bb48cfbcaa737b8b0f76df80",
+      arm64: "354dc1dfe1a80250a2b4a017eeff474f9ec77d5dbf70885b18b929afce9915be"
     };
     VERIFIED_FILESYSTEM_MAX_BUFFER_BYTES = 32 * 1024 * 1024;
     VERIFIED_FILESYSTEM_BATCH_BYTES = 24 * 1024 * 1024;
@@ -11000,6 +11001,16 @@ function resolveReadableActionCorpus(projectRoot, dependencies = {}) {
   if (plannedAfter.state !== "LINK_VALID_SAFE" || !plannedAfter.evidence || plannedAfter.evidence.dev !== planned.evidence.dev || plannedAfter.evidence.ino !== planned.evidence.ino || plannedAfter.sourceState !== "AVAILABLE" || !sameSourceEvidence(planned.sourceEvidence, plannedAfter.sourceEvidence) || !sourceLeafMatchesIdentity(planned.sourceEvidence, targetIdentity) || !sourceLeafMatchesIdentity(plannedAfter.sourceEvidence, targetIdentity) || !directoryIdentityUnchanged(root, projectIdentity) || !directoryIdentityUnchanged(rnAgentDir, rnAgentIdentity) || !repositoryIdentityUnchanged(primaryIdentity)) {
     return refuseReplacedActions(actionsDir);
   }
+  let linkTarget;
+  try {
+    linkTarget = readlinkSync3(actionsDir);
+  } catch {
+    return refuseReplacedActions(actionsDir);
+  }
+  const finalLinkStat = lstatIfPresent(actionsDir);
+  if (!finalLinkStat?.isSymbolicLink() || !sameIdentity(identityOf(finalLinkStat), planned.evidence) || canonical(actionsDir) !== targetDir) {
+    return refuseReplacedActions(actionsDir);
+  }
   return {
     status: "approved-inherited",
     projectRoot: root,
@@ -11007,6 +11018,7 @@ function resolveReadableActionCorpus(projectRoot, dependencies = {}) {
     rnAgentDir,
     actionsDir,
     targetDir,
+    linkTarget,
     linkIdentity: planned.evidence,
     targetIdentity,
     primaryRoot: layout.primaryRoot,
@@ -11062,6 +11074,7 @@ function captureReadableActionOperationSnapshot(corpus) {
       actionsDir: corpus.actionsDir,
       directory: corpus.targetDir,
       directoryIdentity: freezeIdentity(corpus.targetIdentity),
+      linkTarget: corpus.linkTarget,
       linkIdentity: freezeIdentity(corpus.linkIdentity),
       primaryIdentity: Object.freeze({
         topLevel: Object.freeze({
@@ -11084,12 +11097,21 @@ function currentIdentityMatches(path, expected, kind) {
   const typeMatches = kind === "directory" ? current.isDirectory() : current.isSymbolicLink();
   return typeMatches && String(current.dev) === expected.dev && String(current.ino) === expected.ino;
 }
+function currentLinkTargetMatches(path, expected) {
+  if (expected === void 0)
+    return false;
+  try {
+    return readlinkSync3(path) === expected;
+  } catch {
+    return false;
+  }
+}
 function assertReadableActionOperationUnchanged(snapshot) {
   let unchanged = currentIdentityMatches(snapshot.projectRoot, snapshot.projectRootIdentity, "directory") && canonical(snapshot.projectRoot) === snapshot.projectRoot;
   if (snapshot.kind === "owned-directory") {
     unchanged = unchanged && currentIdentityMatches(snapshot.actionsDir, snapshot.directoryIdentity, "directory") && canonical(snapshot.actionsDir) === snapshot.directory;
   } else {
-    unchanged = unchanged && Boolean(snapshot.linkIdentity && snapshot.primaryIdentity) && currentIdentityMatches(snapshot.actionsDir, snapshot.linkIdentity, "symlink") && currentIdentityMatches(snapshot.directory, snapshot.directoryIdentity, "directory") && currentIdentityMatches(snapshot.primaryIdentity.topLevel.path, snapshot.primaryIdentity.topLevel.identity, "directory") && currentIdentityMatches(snapshot.primaryIdentity.commonDir.path, snapshot.primaryIdentity.commonDir.identity, "directory") && canonical(snapshot.actionsDir) === snapshot.directory && canonical(snapshot.directory) === snapshot.directory && canonical(snapshot.primaryIdentity.topLevel.path) === snapshot.primaryIdentity.topLevel.path && canonical(snapshot.primaryIdentity.commonDir.path) === snapshot.primaryIdentity.commonDir.path;
+    unchanged = unchanged && Boolean(snapshot.linkIdentity && snapshot.primaryIdentity) && currentIdentityMatches(snapshot.actionsDir, snapshot.linkIdentity, "symlink") && currentLinkTargetMatches(snapshot.actionsDir, snapshot.linkTarget) && currentIdentityMatches(snapshot.directory, snapshot.directoryIdentity, "directory") && currentIdentityMatches(snapshot.primaryIdentity.topLevel.path, snapshot.primaryIdentity.topLevel.identity, "directory") && currentIdentityMatches(snapshot.primaryIdentity.commonDir.path, snapshot.primaryIdentity.commonDir.identity, "directory") && canonical(snapshot.actionsDir) === snapshot.directory && canonical(snapshot.directory) === snapshot.directory && canonical(snapshot.primaryIdentity.topLevel.path) === snapshot.primaryIdentity.topLevel.path && canonical(snapshot.primaryIdentity.commonDir.path) === snapshot.primaryIdentity.commonDir.path;
   }
   if (!unchanged)
     throw new Error(refuseReplacedActions(snapshot.actionsDir).reason);
@@ -11310,6 +11332,9 @@ function directoryIdentity(path) {
   } catch {
     return null;
   }
+}
+function sameIdentity(left, right) {
+  return Boolean(left && right && left.dev === right.dev && left.ino === right.ino);
 }
 function repairReport(status, code, reason, retainedPaths = []) {
   return { status, code, reason, retainedPaths };
@@ -13594,7 +13619,7 @@ import { randomUUID as randomUUID2 } from "node:crypto";
 import { closeSync as closeSync7, constants as constants5, existsSync as existsSync10, fstatSync as fstatSync5, lstatSync as lstatSync7, mkdtempSync, openSync as openSync7, readFileSync as readFileSync10, realpathSync as realpathSync9, renameSync as renameSync5, rmSync as rmSync4, writeFileSync as writeFileSync5 } from "node:fs";
 import { tmpdir as tmpdir3 } from "node:os";
 import { join as join10 } from "node:path";
-function sameIdentity(left, right) {
+function sameIdentity2(left, right) {
   return left.dev === right.dev && left.ino === right.ino;
 }
 function waitForFile(path, timeoutMs) {
@@ -13823,7 +13848,7 @@ function runBoundOperation(directory, request2, dependencies = {}) {
   } catch {
     throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: bound directory path is unavailable");
   }
-  if (!current.isDirectory() || current.isSymbolicLink() || !sameIdentity(current, directory.identity) || currentRealPath !== directory.realPath) {
+  if (!current.isDirectory() || current.isSymbolicLink() || !sameIdentity2(current, directory.identity) || currentRealPath !== directory.realPath) {
     throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: bound directory path changed");
   }
   try {
@@ -13943,7 +13968,7 @@ function openValidatedDirectory(path, expected) {
     const opened = fstatSync5(descriptor, { bigint: true });
     const after = lstatSync7(path, { bigint: true });
     const realPath = realpathSync9(path);
-    if (!opened.isDirectory() || !sameIdentity(before, opened) || !sameIdentity(after, opened) || expected !== void 0 && (!sameIdentity(expected.identity, opened) || expected.realPath !== realPath)) {
+    if (!opened.isDirectory() || !sameIdentity2(before, opened) || !sameIdentity2(after, opened) || expected !== void 0 && (!sameIdentity2(expected.identity, opened) || expected.realPath !== realPath)) {
       throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: integration ancestor changed while opening");
     }
     const identity2 = { dev: opened.dev, ino: opened.ino };
@@ -29705,13 +29730,26 @@ function pairWriteInDirectories(yamlPath, yamlContent, sidecarPath, state, publi
     lastSeenMtimeMs: finalMtimeMs
   };
   atomicWriter._writeFileWithMode(sidecarTmp, JSON.stringify(finalState, null, 2) + "\n", sidecarMode);
-  if (witnesses.length === 0 && publicationPrecondition && !publicationPrecondition()) {
+  const publishedYamlMatches = () => {
+    try {
+      const yamlFd = openSync9(yamlPath, constants8.O_RDONLY | constants8.O_NOFOLLOW);
+      try {
+        const yaml2 = fstatSync7(yamlFd);
+        return yaml2.isFile() && readFileSync19(yamlFd, "utf8") === yamlContent;
+      } finally {
+        closeSync9(yamlFd);
+      }
+    } catch {
+      return false;
+    }
+  };
+  if (!publishedYamlMatches()) {
     removeCandidate(sidecarTmp, sidecarDirectoryFd);
     rollbackYaml();
     restorePriorSidecar();
     return null;
   }
-  const finalSidecarPublished = sidecarDirectoryFd === void 0 ? (atomicWriter._rename(sidecarTmp, sidecarPath), true) : atomicWriter._publishIfUnchanged(sidecarTmp, sidecarPath, projectedSidecar, `${stamp}.final`, witnesses.length === 0 ? publicationPrecondition : void 0, sidecarDirectoryFd, witnesses);
+  const finalSidecarPublished = sidecarDirectoryFd === void 0 ? (atomicWriter._rename(sidecarTmp, sidecarPath), true) : atomicWriter._publishIfUnchanged(sidecarTmp, sidecarPath, projectedSidecar, `${stamp}.final`, witnesses.length === 0 ? publishedYamlMatches : void 0, sidecarDirectoryFd, witnesses);
   removeCandidate(sidecarTmp, sidecarDirectoryFd);
   if (!finalSidecarPublished) {
     rollbackYaml();
@@ -30434,6 +30472,7 @@ function publicationWitnesses(context) {
     {
       path: operation.actionsDir,
       kind: operation.kind === "approved-inherited" ? "symlink" : "directory",
+      linkTarget: operation.linkTarget,
       ...operation.linkIdentity ?? operation.directoryIdentity
     },
     {

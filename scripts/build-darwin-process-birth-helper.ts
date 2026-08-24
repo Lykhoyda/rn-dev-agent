@@ -313,8 +313,8 @@ static int safe_name(const char *value) {
 }
 
 static int witnesses_unchanged(int argc, char **argv, int start) {
-  if ((argc - start) % 4 != 0) return 0;
-  for (int index = start; index < argc; index += 4) {
+  if ((argc - start) % 5 != 0) return 0;
+  for (int index = start; index < argc; index += 5) {
     uint64_t expected_dev = 0;
     uint64_t expected_ino = 0;
     struct stat observed = {0};
@@ -326,6 +326,11 @@ static int witnesses_unchanged(int argc, char **argv, int start) {
       if (!S_ISDIR(observed.st_mode)) return 0;
     } else if (strcmp(argv[index + 1], "symlink") == 0) {
       if (!S_ISLNK(observed.st_mode)) return 0;
+      char target[PATH_MAX];
+      ssize_t length = readlink(argv[index], target, sizeof(target));
+      size_t expected_length = strlen(argv[index + 4]);
+      if (length < 0 || (size_t)length != expected_length ||
+          memcmp(target, argv[index + 4], expected_length) != 0) return 0;
     } else {
       return 0;
     }

@@ -463,9 +463,22 @@ function pairWriteInDirectories(yamlPath, yamlContent, sidecarPath, state, publi
         lastSeenMtimeMs: finalMtimeMs,
     };
     atomicWriter._writeFileWithMode(sidecarTmp, JSON.stringify(finalState, null, 2) + '\n', sidecarMode);
-    if (witnesses.length === 0 &&
-        publicationPrecondition &&
-        !publicationPrecondition()) {
+    const publishedYamlMatches = () => {
+        try {
+            const yamlFd = openSync(yamlPath, constants.O_RDONLY | constants.O_NOFOLLOW);
+            try {
+                const yaml = fstatSync(yamlFd);
+                return yaml.isFile() && readFileSync(yamlFd, 'utf8') === yamlContent;
+            }
+            finally {
+                closeSync(yamlFd);
+            }
+        }
+        catch {
+            return false;
+        }
+    };
+    if (!publishedYamlMatches()) {
         removeCandidate(sidecarTmp, sidecarDirectoryFd);
         rollbackYaml();
         restorePriorSidecar();
@@ -473,7 +486,7 @@ function pairWriteInDirectories(yamlPath, yamlContent, sidecarPath, state, publi
     }
     const finalSidecarPublished = sidecarDirectoryFd === undefined
         ? (atomicWriter._rename(sidecarTmp, sidecarPath), true)
-        : atomicWriter._publishIfUnchanged(sidecarTmp, sidecarPath, projectedSidecar, `${stamp}.final`, witnesses.length === 0 ? publicationPrecondition : undefined, sidecarDirectoryFd, witnesses);
+        : atomicWriter._publishIfUnchanged(sidecarTmp, sidecarPath, projectedSidecar, `${stamp}.final`, witnesses.length === 0 ? publishedYamlMatches : undefined, sidecarDirectoryFd, witnesses);
     removeCandidate(sidecarTmp, sidecarDirectoryFd);
     if (!finalSidecarPublished) {
         rollbackYaml();

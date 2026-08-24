@@ -137,6 +137,7 @@ export type ReadableActionCorpus =
       rnAgentDir: string;
       actionsDir: string;
       targetDir: string;
+      linkTarget: string;
       linkIdentity: PathIdentity;
       targetIdentity: PathIdentity;
       primaryRoot: string;
@@ -153,6 +154,7 @@ export interface ReadableActionOperationSnapshot {
   readonly actionsDir: string;
   readonly directory: string;
   readonly directoryIdentity: Readonly<PathIdentity>;
+  readonly linkTarget?: string;
   readonly linkIdentity?: Readonly<PathIdentity>;
   readonly primaryIdentity?: Readonly<{
     topLevel: Readonly<{ path: string; identity: Readonly<PathIdentity> }>;
@@ -720,6 +722,20 @@ export function resolveReadableActionCorpus(
   ) {
     return refuseReplacedActions(actionsDir);
   }
+  let linkTarget: string;
+  try {
+    linkTarget = readlinkSync(actionsDir);
+  } catch {
+    return refuseReplacedActions(actionsDir);
+  }
+  const finalLinkStat = lstatIfPresent(actionsDir);
+  if (
+    !finalLinkStat?.isSymbolicLink() ||
+    !sameIdentity(identityOf(finalLinkStat), planned.evidence) ||
+    canonical(actionsDir) !== targetDir
+  ) {
+    return refuseReplacedActions(actionsDir);
+  }
   return {
     status: 'approved-inherited',
     projectRoot: root,
@@ -727,6 +743,7 @@ export function resolveReadableActionCorpus(
     rnAgentDir,
     actionsDir,
     targetDir,
+    linkTarget,
     linkIdentity: planned.evidence,
     targetIdentity,
     primaryRoot: layout.primaryRoot,
@@ -760,6 +777,7 @@ export function sameReadableActionCorpus(
     left.projectIdentity.dev === right.projectIdentity.dev &&
     left.projectIdentity.ino === right.projectIdentity.ino &&
     left.targetDir === right.targetDir &&
+    left.linkTarget === right.linkTarget &&
     left.linkIdentity.dev === right.linkIdentity.dev &&
     left.linkIdentity.ino === right.linkIdentity.ino &&
     left.targetIdentity.dev === right.targetIdentity.dev &&
@@ -837,6 +855,7 @@ export function captureReadableActionOperationSnapshot(
       actionsDir: corpus.actionsDir,
       directory: corpus.targetDir,
       directoryIdentity: freezeIdentity(corpus.targetIdentity),
+      linkTarget: corpus.linkTarget,
       linkIdentity: freezeIdentity(corpus.linkIdentity),
       primaryIdentity: Object.freeze({
         topLevel: Object.freeze({
@@ -866,6 +885,15 @@ function currentIdentityMatches(
   );
 }
 
+function currentLinkTargetMatches(path: string, expected: string | undefined): boolean {
+  if (expected === undefined) return false;
+  try {
+    return readlinkSync(path) === expected;
+  } catch {
+    return false;
+  }
+}
+
 export function assertReadableActionOperationUnchanged(
   snapshot: ReadableActionOperationSnapshot,
 ): void {
@@ -882,6 +910,7 @@ export function assertReadableActionOperationUnchanged(
       unchanged &&
       Boolean(snapshot.linkIdentity && snapshot.primaryIdentity) &&
       currentIdentityMatches(snapshot.actionsDir, snapshot.linkIdentity!, 'symlink') &&
+      currentLinkTargetMatches(snapshot.actionsDir, snapshot.linkTarget) &&
       currentIdentityMatches(snapshot.directory, snapshot.directoryIdentity, 'directory') &&
       currentIdentityMatches(
         snapshot.primaryIdentity!.topLevel.path,

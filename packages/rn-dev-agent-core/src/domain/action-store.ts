@@ -90,6 +90,7 @@ function publicationWitnesses(context: ReadableActionLoadContext): NativePublica
     {
       path: operation.actionsDir,
       kind: operation.kind === 'approved-inherited' ? 'symlink' : 'directory',
+      linkTarget: operation.linkTarget,
       ...(operation.linkIdentity ?? operation.directoryIdentity),
     },
     {

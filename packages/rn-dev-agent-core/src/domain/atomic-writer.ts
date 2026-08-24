@@ -576,7 +576,20 @@ function pairWriteInDirectories(
     JSON.stringify(finalState, null, 2) + '\n',
     sidecarMode,
   );
-  if (witnesses.length === 0 && publicationPrecondition && !publicationPrecondition()) {
+  const publishedYamlMatches = (): boolean => {
+    try {
+      const yamlFd = openSync(yamlPath, constants.O_RDONLY | constants.O_NOFOLLOW);
+      try {
+        const yaml = fstatSync(yamlFd);
+        return yaml.isFile() && readFileSync(yamlFd, 'utf8') === yamlContent;
+      } finally {
+        closeSync(yamlFd);
+      }
+    } catch {
+      return false;
+    }
+  };
+  if (!publishedYamlMatches()) {
     removeCandidate(sidecarTmp, sidecarDirectoryFd);
     rollbackYaml();
     restorePriorSidecar();
@@ -590,7 +603,7 @@ function pairWriteInDirectories(
           sidecarPath,
           projectedSidecar,
           `${stamp}.final`,
-          witnesses.length === 0 ? publicationPrecondition : undefined,
+          witnesses.length === 0 ? publishedYamlMatches : undefined,
           sidecarDirectoryFd,
           witnesses,
         );
