@@ -928,9 +928,9 @@ export async function awaitChildExit(child: ChildProcess | null, graceMs = 5000)
 // GH #383 (review amendment): adoption-aware teardown. A post-respawn stop
 // (session close, restart, maestro park) would otherwise no-op against empty
 // in-memory state and leak the persisted runner — so adopt first, then reap.
-export async function stopFastRunner(deviceId?: string): Promise<void> {
+export async function stopFastRunner(deviceId?: string, signal?: AbortSignal): Promise<void> {
   adoptPersistedFastRunnerState(deviceId);
-  await reapStaleFastRunner();
+  await reapStaleFastRunner({ signal });
 }
 
 export function clearFastRunnerAfterVerifiedStop(binding: Record<string, unknown>): void {
@@ -1095,6 +1095,30 @@ export interface ReapDeps {
   clearState?: (expected: StateSnapshot) => void;
   /** Time to wait between SIGTERM and SIGKILL escalation. Default 500ms. */
   graceMs?: number;
+  signal?: AbortSignal;
+}
+
+async function reapDelay(
+  sleep: (ms: number) => Promise<void>,
+  ms: number,
+  signal?: AbortSignal,
+): Promise<void> {
+  if (!signal) {
+    await sleep(ms);
+    return;
+  }
+  if (signal.aborted) return;
+  await new Promise<void>((resolve, reject) => {
+    const finish = () => {
+      signal.removeEventListener('abort', finish);
+      resolve();
+    };
+    signal.addEventListener('abort', finish, { once: true });
+    sleep(ms).then(finish, (error: unknown) => {
+      signal.removeEventListener('abort', finish);
+      reject(error);
+    });
+  });
 }
 
 function defaultProcessAlive(pid: number): boolean {
@@ -1410,7 +1434,7 @@ export async function reapStaleFastRunner(deps: ReapDeps = {}): Promise<void> {
   } catch {
     /* already dead */
   }
-  await sleep(graceMs);
+  await reapDelay(sleep, graceMs, deps.signal);
   const afterTerm = probeExpected();
   if (afterTerm === 'unknown') {
     throw new Error('RUNNER_ADOPTION_REQUIRED: iOS runner termination is unproven');
@@ -1425,9 +1449,9 @@ export async function reapStaleFastRunner(deps: ReapDeps = {}): Promise<void> {
     /* race: died between checks */
   }
   if (spawnedExit) {
-    await Promise.race([spawnedExit, sleep(250)]);
+    await Promise.race([spawnedExit, reapDelay(sleep, 250, deps.signal)]);
   } else {
-    await sleep(50);
+    await reapDelay(sleep, 50, deps.signal);
   }
   const afterKill = probeExpected();
   if (afterKill !== 'gone') {

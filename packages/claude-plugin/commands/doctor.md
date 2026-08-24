@@ -14,6 +14,13 @@ Present results as a 17-row table. Follow the detailed probes and remediation
 rules in `rn-setup`; do not infer runner provenance, helper availability, or
 auto-reconnect configuration from passive `cdp_status`.
 
+For iOS replay compatibility, also run the packaged `maestro-runner-pin.js diagnose --json`
+report. State the proof-domain split: exact React testIDs use `react-tree`; native/system
+selectors use `xctest-native`. A runtime-version heuristic is diagnostic context only and
+never proof of blindness. Report `NATIVE_SURFACE_BLIND` only when the replay includes the
+bounded same-screen native-selector evidence; otherwise preserve the ordinary selector miss.
+The supported next action is the central native WDA smoke on a WDA-healthy runtime.
+
 For **linked-worktree action inheritance**, resolve the RN app root and run the packaged `worktree-inheritance.js plan --host claude --app-root <app> --json`. Report `.rn-agent/actions` as tracked, inherited, missing, explicit-legacy-repair-needed, unsafe, or refused. Also report `hook status`. Never apply, repair, install a hook, print a private source path, or inspect an action body from doctor.
 
 For **idb**, require both a healthy `idb --help` and `idb_companion`; an active

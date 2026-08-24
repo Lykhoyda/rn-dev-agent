@@ -751,9 +751,9 @@ export async function awaitChildExit(child, graceMs = 5000) {
 // GH #383 (review amendment): adoption-aware teardown. A post-respawn stop
 // (session close, restart, maestro park) would otherwise no-op against empty
 // in-memory state and leak the persisted runner — so adopt first, then reap.
-export async function stopFastRunner(deviceId) {
+export async function stopFastRunner(deviceId, signal) {
     adoptPersistedFastRunnerState(deviceId);
-    await reapStaleFastRunner();
+    await reapStaleFastRunner({ signal });
 }
 export function clearFastRunnerAfterVerifiedStop(binding) {
     const expected = {
@@ -813,6 +813,25 @@ export async function fastHealthCheck() {
         // (The probe helper throws on fetch errors; M7 review caught this regression.)
         return false;
     }
+}
+async function reapDelay(sleep, ms, signal) {
+    if (!signal) {
+        await sleep(ms);
+        return;
+    }
+    if (signal.aborted)
+        return;
+    await new Promise((resolve, reject) => {
+        const finish = () => {
+            signal.removeEventListener('abort', finish);
+            resolve();
+        };
+        signal.addEventListener('abort', finish, { once: true });
+        sleep(ms).then(finish, (error) => {
+            signal.removeEventListener('abort', finish);
+            reject(error);
+        });
+    });
 }
 function defaultProcessAlive(pid) {
     try {
@@ -1083,7 +1102,7 @@ export async function reapStaleFastRunner(deps = {}) {
     catch {
         /* already dead */
     }
-    await sleep(graceMs);
+    await reapDelay(sleep, graceMs, deps.signal);
     const afterTerm = probeExpected();
     if (afterTerm === 'unknown') {
         throw new Error('RUNNER_ADOPTION_REQUIRED: iOS runner termination is unproven');
@@ -1099,10 +1118,10 @@ export async function reapStaleFastRunner(deps = {}) {
         /* race: died between checks */
     }
     if (spawnedExit) {
-        await Promise.race([spawnedExit, sleep(250)]);
+        await Promise.race([spawnedExit, reapDelay(sleep, 250, deps.signal)]);
     }
     else {
-        await sleep(50);
+        await reapDelay(sleep, 50, deps.signal);
     }
     const afterKill = probeExpected();
     if (afterKill !== 'gone') {

@@ -35,6 +35,7 @@ import { createSaveAsActionHandler } from './tools/save-as-action.js';
 import { createRunActionHandler } from './tools/run-action.js';
 import { createLoginPrologueHandler } from './tools/login-prologue.js';
 import { unwrapTree } from './tools/cdp-replay-dispatch.js';
+import { ReplayDispatchError } from './domain/cdp-flow-replay.js';
 import { createDispatchHandler } from './tools/dispatch.js';
 import { createMmkvHandler } from './tools/mmkv.js';
 import { createDevSettingsHandler } from './tools/dev-settings.js';
@@ -45,7 +46,9 @@ import { createDeviceListHandler, createDeviceScreenshotHandler } from './tools/
 import { createDeviceSnapshotHandler } from './tools/device-session.js';
 import { releaseDeviceLockForSession } from './tools/device-session.js';
 import { createSessionRuntimeAbsenceProbe } from './session/session-runtime-absence.js';
-import { createDeviceFindHandler, createDevicePressHandler, createDeviceFillHandler, createDeviceSwipeHandler, createDeviceScrollHandler, createDeviceScrollIntoViewHandler, createDeviceLongPressHandler, createDevicePinchHandler, createDeviceBackHandler, createDeviceFocusNextHandler, } from './tools/device-interact.js';
+import { createDeviceFindHandler, fetchSnapshotNodes, createDevicePressHandler, createDeviceFillHandler, performReactTreeInput, createDeviceSwipeHandler, createDeviceScrollHandler, createDeviceScrollIntoViewHandler, createDeviceLongPressHandler, createDevicePinchHandler, createDeviceBackHandler, createDeviceFocusNextHandler, } from './tools/device-interact.js';
+import { getIosRuntimeMajorForUdid } from './domain/ios-runtime.js';
+import { selectorsVisibleInNativeSnapshot } from './domain/ios-proof-router.js';
 import { createDevicePermissionHandler } from './tools/device-permission.js';
 import { createDeviceResetStateHandler } from './tools/device-reset-state.js';
 import { androidDeeplinkCommandArgs, createDeviceDeeplinkHandler, } from './tools/device-deeplink.js';
@@ -66,8 +69,7 @@ import { buildGracefulShutdown } from './lifecycle/graceful-shutdown.js';
 import { Lockfile, formatLockConflictMessage } from './lifecycle/lockfile.js';
 import { startParentDeathWatch } from './lifecycle/parent-watch.js';
 import { arbiterWrap, arbiter } from './lifecycle/device-arbiter.js';
-import { setForeignGateUdidProvider, foreignFlowGate, foreignGateUdid, } from './lifecycle/foreign-flow-gate.js';
-import { getIosRuntimeMajorForUdid } from './domain/blind-probe-gate.js';
+import { setForeignGateUdidProvider, foreignFlowGate } from './lifecycle/foreign-flow-gate.js';
 import { getActiveSession, getSnapshotCaptureCheckpoint, markSnapshotDirty, promoteSnapshotOriginSince, runNative, setSnapshotAuthorityProvider, validateCachedSnapshotEvidenceAuthority, } from './agent-device-wrapper.js';
 import { createMaestroRunHandler } from './tools/maestro-run.js';
 import { createMaestroGenerateHandler } from './tools/maestro-generate.js';
@@ -202,11 +204,10 @@ const execFileP = promisify(execFile);
 const mustOk = (res, what) => {
     const env = JSON.parse(res.content[0].text);
     if (env.ok === false)
-        throw new Error(`${what} failed: ${env.error ?? 'ok:false'}`);
+        throw new ReplayDispatchError(env.code ?? 'INTERACTION_NOT_ACTUATED', `${what} failed: ${env.error ?? 'ok:false'}`, env.meta);
 };
-// GH #317 Phase 2: build real CDP/JS replay deps from existing handlers.
-// Returns null unless the active session is iOS with an appId (iOS-only fallback).
-const makeReplayDeps = () => {
+// Build exact-iOS React-tree replay dependencies from existing handlers.
+const makeReplayDeps = (_args, signal) => {
     const session = getActiveSession();
     if (!session || session.platform !== 'ios' || !session.appId)
         return null;
@@ -217,12 +218,7 @@ const makeReplayDeps = () => {
             mustOk(await interact({ action: 'press', testID: id, animated: false }), `press "${id}"`);
         },
         typeByTestId: async (id, text) => {
-            mustOk(await interact({
-                action: 'typeText',
-                testID: id,
-                text,
-                animated: false,
-            }), `type "${id}"`);
+            mustOk(await performReactTreeInput(id, text, getClient(), signal), `type "${id}"`);
         },
         treeFor: async (id) => {
             const fetchTree = async (interactiveOnly) => JSON.parse((await tree({
@@ -231,20 +227,32 @@ const makeReplayDeps = () => {
                 ...(interactiveOnly ? { interactiveOnly: true } : {}),
             })).content[0].text);
             let env = await fetchTree(false);
-            // The filtered tree can exceed the injected helper's 50KB safeStringify
-            // guard on heavy screens, which replaces the payload with
-            // {__agent_truncated} and silently blinds the oracle (device-found during
-            // #397 T11: 115KB → truncated → probe never routed). Retry with the
-            // salient digest (GH #321) — it carries interactive testIDs at ~1/10th
-            // the size. Full tree stays primary because the digest excludes
-            // pure-text labels that assertVisible steps may target.
+            // Retry with the salient digest when the full filtered payload exceeds the helper bound.
             const d = env.ok ? env.data : null;
             if (d && typeof d === 'object' && '__agent_truncated' in d) {
                 env = await fetchTree(true);
             }
-            // getTree wraps the node(s) under `.tree` — unwrap to the node/matches the
-            // oracle + dispatch walk, else isExactPresent sees zero testIDs.
             return env.ok ? unwrapTree(env.data) : null;
+        },
+        frontmostFor: async (id) => {
+            const result = await getClient().evaluate(getClient().bridgeWithFallback(`isTestIdFrontmost(${JSON.stringify(id)})`));
+            if (result.error || typeof result.value !== 'string') {
+                return { visible: false, reason: `frontmost route check failed for testID "${id}"` };
+            }
+            try {
+                const parsed = JSON.parse(result.value);
+                return {
+                    visible: parsed.visible === true,
+                    ...(parsed.reason ? { reason: parsed.reason } : {}),
+                    ...(typeof parsed.matchCount === 'number' ? { matchCount: parsed.matchCount } : {}),
+                };
+            }
+            catch {
+                return {
+                    visible: false,
+                    reason: `frontmost route check was unreadable for testID "${id}"`,
+                };
+            }
         },
         launchApp: async (stopApp) => {
             const udid = await resolveIosUdid(session.deviceId);
@@ -261,8 +269,30 @@ const makeReplayDeps = () => {
             await execFileP('xcrun', ['simctl', 'launch', udid, session.appId]);
         },
         settle: async () => {
-            await new Promise((r) => setTimeout(r, 400));
+            if (signal?.aborted)
+                throw new ReplayDispatchError('RUNNER_TIMEOUT', 'Replay cancelled');
+            await new Promise((resolve, reject) => {
+                const timer = setTimeout(resolve, 400);
+                signal?.addEventListener('abort', () => {
+                    clearTimeout(timer);
+                    reject(new ReplayDispatchError('RUNNER_TIMEOUT', 'Replay cancelled'));
+                }, { once: true });
+            });
         },
+    };
+};
+const probeNativeVision = async ({ deviceId, selectors, signal, }) => {
+    signal.throwIfAborted();
+    const snapshot = await fetchSnapshotNodes(false);
+    signal.throwIfAborted();
+    if (!snapshot.ok)
+        return null;
+    const visibleSelectors = selectorsVisibleInNativeSnapshot(selectors, snapshot.nodes);
+    return {
+        source: 'rn-fast-runner-snapshot',
+        nodeCount: snapshot.nodes.length,
+        visibleSelectors,
+        runtimeMajor: await getIosRuntimeMajorForUdid(deviceId),
     };
 };
 const server = new McpServer({
@@ -532,11 +562,11 @@ const authorityGate = createAuthorityGate(authorityRuntime, {
     snapshotCaptureCheckpoint: getSnapshotCaptureCheckpoint,
     promoteSnapshotOrigin: promoteSnapshotOriginSince,
     onRuntimeBundleInvalidated: () => getClient().clearAuthoritativeSessionPolicy(),
-    onRunnerReleased: async (runner) => {
+    onRunnerReleased: async (runner, signal) => {
         if (runner.platform !== 'ios')
             return;
         const deviceId = typeof runner.deviceId === 'string' ? runner.deviceId : undefined;
-        await stopFastRunner(deviceId);
+        await stopFastRunner(deviceId, signal);
         resetRunnerRebuildBudgetForCurrentPlugin();
     },
 });
@@ -597,18 +627,6 @@ setForeignGateUdidProvider(() => {
     const s = getActiveSession();
     return s?.platform === 'ios' && s.deviceId ? s.deviceId : null;
 });
-// GH #397 Phase 2: device context for cdp_run_action's proactive blind-probe.
-// Reuses the foreign-gate UDID provider (iOS session only ⇒ null otherwise, so
-// the gate stays inert without a session — fail-open by design).
-const blindProbeContext = async () => {
-    const udid = foreignGateUdid();
-    if (!udid)
-        return null;
-    return {
-        deviceId: udid,
-        iosRuntimeMajor: await getIosRuntimeMajorForUdid(udid),
-    };
-};
 // Mirror block declared BEFORE liveDeps: buildLiveDeps's isMirrorActive input
 // closes over `mirrorManager`, so this must exist first (TDZ safety) even
 // though the arrow body only runs later.
@@ -2507,7 +2525,12 @@ trackedTool('proof_step', 'Atomic proof capture step: navigate to a screen (opti
         .optional()
         .describe('Label for this proof step (e.g. "After adding item to cart")'),
 }, createProofStepHandler(getClient));
-trackedTool('maestro_run', 'Execute a Maestro flow through the pin-cache runner. The session requires maestro-runner >= 1.1.24 from its versioned pin-cache and installs attested 1.1.24 as the default known-good. Pass flowPath for an existing .yaml file, or inlineYaml for ephemeral flows. Missing, older, unverified, checksum-mismatched, or unsupported engines are refused before UI mutation. Uses UIAutomator2 on Android and XCTest on iOS. A matching active device session, explicit deviceId, or Android ANDROID_SERIAL is forwarded as an exact --device/--udid target; success is rejected unless direct device/WDA evidence matches. Does NOT require CDP — works even when app is crashed or on native screens.', {
+const maestroRunHandler = createMaestroRunHandler({
+    replayDeps: (args, signal) => makeReplayDeps(args, signal),
+    getLiveRoute: () => readLiveRoute(getClient()),
+    nativeVisionProbe: probeNativeVision,
+});
+trackedTool('maestro_run', 'Execute a validated flow using semantic proof-domain routing. On iOS, exact-testID React commands execute through the authority-bound React tree before WDA can claim selector truth; text/system/native-only commands remain XCTest, and mixed flows are partitioned before execution without React-to-XCTest correlation. Results label react-tree and xctest-native proof domains explicitly; a React-tree pass is never Maestro certification or proof of IME, AutoFill, keyboard occlusion, or native interaction fidelity. Android and native-only iOS flows use the pin-cache maestro-runner >= 1.1.24. Pass flowPath for an existing .yaml file or inlineYaml for an ephemeral flow.', {
     flowPath: z.string().optional().describe('Path to a .yaml flow file to execute'),
     inlineYaml: z
         .string()
@@ -2539,7 +2562,7 @@ trackedTool('maestro_run', 'Execute a Maestro flow through the pin-cache runner.
         .record(z.string(), z.string())
         .optional()
         .describe('GH #116: parameter bindings forwarded as -e KEY=VALUE for ${KEY} placeholders in the flow. Keys must match /^[A-Z_][A-Z0-9_]*$/ (validated in the handler).'),
-}, createMaestroRunHandler());
+}, maestroRunHandler);
 trackedTool('maestro_generate', 'Generate a persistent Maestro YAML flow file from structured steps. Writes to .rn-agent/actions/<name>.yaml in the project root. Use after live verification to create reusable actions.', {
     name: z.string().describe('Flow name (e.g. "add-to-cart", "profile-edit"). Becomes filename.'),
     steps: z
@@ -2868,13 +2891,12 @@ trackedTool('cdp_repair_action', 'Repair a learned action using a fresh snapshot
 // Issue #104 — auto-repair-aware action replay. Wraps maestro_run with
 // stderr classification + cdp_repair_action retry on SELECTOR_NOT_FOUND.
 const runActionHandler = createRunActionHandler({
+    maestroRun: maestroRunHandler,
     getLiveRoute: () => readLiveRoute(getClient()),
-    replayDeps: makeReplayDeps,
-    blindProbeContext,
     targetContext: getActiveSession,
     claimBundleAuthority: claimOptionalBundleAuthority,
 });
-trackedTool('cdp_run_action', "Replay a learned action by id with end-to-end auto-repair. Loads the action from .rn-agent/actions/<actionId>.yaml or .yml, forwards the matching active session's exact device ID to Maestro, rejects mismatched direct runner/WDA evidence, and on a SELECTOR_NOT_FOUND failure automatically invokes cdp_repair_action and retries once. Appends a RunRecord to the sidecar with full auto-repair telemetry (passed/failed/refused/skipped + diff); its Maestro deviceId comes from direct runner evidence, never requested metadata. The repair attempt counts toward cdp_repair_action's 24h budget. Pass autoRepair=false to opt out of auto-repair (returns the raw maestro_run failure verbatim). forceReload defaults true: any human edit to the YAML since the agent's last write is acknowledged as the new baseline so downstream repair does not abort with STALE_TARGET (the right default for active composition). Pass forceReload=false for the strict \"respect offline human edits\" behavior: a successful replay still appends its RunRecord to the sidecar when only the tracked YAML mtime baseline is stale, while YAML-mutating promotion and repair stay refused. proofReplay=true is reserved for proof_capture rehearsal and requires autoRepair=false plus forceReload=false; it executes without RunRecord, promotion, YAML, sidecar, or DB persistence. The orchestrated home for the L3 self-healing loop — prefer this over invoking maestro_run + cdp_repair_action manually for any flow you intend to re-run on schedule. blindProbeMode provides per-call control of the proactive CDP/JS compatibility path: inherit (default) honors RN_BLIND_PROBE, allow explicitly enables it for this call, and forbid forces maestro-first for this call.", {
+trackedTool('cdp_run_action', 'Replay a learned action by id with end-to-end auto-repair. On iOS, the validated flow is partitioned before execution: exact-testID commands use the authority-bound React-tree prover, while native-only commands use XCTest. The RunRecord and result preserve the reported proof domain, and a react-tree pass never promotes an experimental action to Maestro-certified active status. Ordinary missing React testIDs remain TESTID_NOT_FOUND; native selector misses remain ordinary Maestro failures unless direct bounded evidence proves a NATIVE_SURFACE_BLIND environment. Pass autoRepair=false to opt out of selector repair. proofReplay=true is reserved for proof-capture rehearsal and writes no runtime state.', {
     actionId: z.string().describe('Owned action id; resolves one .yaml or .yml file.'),
     projectRoot: z.string().optional().describe('Override project root (default: process.cwd()).'),
     platform: z
@@ -2905,10 +2927,6 @@ trackedTool('cdp_run_action', "Replay a learned action by id with end-to-end aut
         .boolean()
         .optional()
         .describe('Read-only proof rehearsal mode. Requires autoRepair=false and forceReload=false; never writes action YAML, runtime sidecar, or DB state.'),
-    blindProbeMode: z
-        .enum(['inherit', 'allow', 'forbid'])
-        .optional()
-        .describe('Per-call proactive CDP/JS compatibility control. inherit (default) honors RN_BLIND_PROBE; allow explicitly enables the at-risk probe even when the process default is disabled; forbid keeps this call maestro-first. Reactive fallback behavior is unchanged.'),
     params: z
         .record(z.string(), z.string())
         .optional()
@@ -2926,7 +2944,7 @@ trackedTool('cdp_lock_e2e_test', 'Promote a verified action into a frozen, locke
     actionId: z.string().describe('The action id under .rn-agent/actions to lock'),
     relock: z.boolean().optional().describe('Overwrite an existing locked test'),
     projectRoot: z.string().optional(),
-}, createLockE2eTestHandler());
+}, createLockE2eTestHandler({ maestroRun: maestroRunHandler }));
 const e2ePreflight = async () => {
     const session = getActiveSession();
     const platform = session?.platform ?? 'ios';
@@ -2972,6 +2990,7 @@ const e2eReload = async () => {
     }
 };
 const e2eSuiteHandler = createRunE2eSuiteHandler({
+    maestroRun: maestroRunHandler,
     preflightCheck: e2ePreflight,
     runReload: e2eReload,
     onProgress: (c, t, id) => recorder.push({

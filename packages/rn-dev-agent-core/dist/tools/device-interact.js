@@ -1082,6 +1082,45 @@ export async function performExactFill(args, client, tiers, deps = {}) {
     }
     return fillFailure('TEXT_ENTRY_UNVERIFIED', 'Text entry could not be verified after native and Maestro attempts.', { mutation: 'possible', pathsTried, verification: maestroVerification });
 }
+export async function performReactTreeInput(testID, text, client, signal) {
+    const pathsTried = ['react-tree'];
+    if (!client) {
+        return fillFailure('TEXT_ENTRY_UNVERIFIED', `React-tree input "${testID}" cannot be verified because the authoritative bundle is unavailable.`, { mutation: 'none', pathsTried });
+    }
+    if (signal?.aborted) {
+        return fillFailure('TEXT_ENTRY_UNVERIFIED', 'React-tree input was cancelled before mutation.', {
+            mutation: 'none',
+            pathsTried,
+        });
+    }
+    const seam = { evaluate: (expression) => client.evaluate(expression) };
+    const before = await probeInputState(seam, testID);
+    if (!before.readable || !before.controlled) {
+        return fillFailure('TEXT_ENTRY_UNVERIFIED', `React-tree input "${testID}" is uncontrolled or unreadable. Run this native text-entry check on a WDA-healthy runtime; secure masked native values are not plaintext proof.`, { mutation: 'none', pathsTried });
+    }
+    const expected = `${before.value ?? ''}${text}`;
+    const dispatch = await attemptJsFill(seam, testID, expected);
+    if (!dispatch.handled) {
+        return fillFailure('TEXT_ENTRY_UNVERIFIED', dispatch.dispatchUncertain
+            ? `React-tree input "${testID}" may have mutated but its onChangeText result is unknown.`
+            : `React-tree input "${testID}" has no verifiable controlled onChangeText path.`, { mutation: dispatch.dispatchUncertain ? 'possible' : 'none', pathsTried });
+    }
+    const verification = await finalFiberVerify(seam, testID, expected);
+    if (verification !== 'exact') {
+        return fillFailure('TEXT_ENTRY_UNVERIFIED', `React-tree input "${testID}" dispatched onChangeText but exact fiber read-back was ${verification}.`, {
+            mutation: 'possible',
+            pathsTried,
+            verification: combineVerificationOracles(verification, 'unavailable', false),
+        });
+    }
+    return verifiedFillResult('js-onChangeText', text.length, {
+        textEntryPath: 'react-tree',
+        verifiedOracle: 'fiber',
+        handler: dispatch.handler,
+        appendedLength: text.length,
+        resultingLength: expected.length,
+    });
+}
 export function createDeviceFillHandler(getClient) {
     return withSession(async (args) => performExactFill(args, cdpClientOrNull(getClient), { js: true, maestro: true }));
 }

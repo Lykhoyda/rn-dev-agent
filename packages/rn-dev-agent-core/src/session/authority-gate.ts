@@ -68,7 +68,7 @@ interface AuthorityGateDependencies {
     status: SessionStatus,
     options?: ManagedNativeOriginReproveOptions,
   ): Promise<StagedRuntimeRelaunch | void>;
-  onRunnerReleased?(runner: Record<string, unknown>): Promise<void> | void;
+  onRunnerReleased?(runner: Record<string, unknown>, signal?: AbortSignal): Promise<void> | void;
   onRuntimeBundleInvalidated?(): void;
   snapshotCaptureCheckpoint?(): number;
   promoteSnapshotOrigin?(checkpoint: number): void;
@@ -95,7 +95,7 @@ type AuthorityAwareArgs = Record<string, unknown> & {
     relaunch(): Promise<void>;
     reprove(options?: ManagedNativeOriginReproveOptions): Promise<void>;
   };
-  [managedRunnerPark]?: () => Promise<void>;
+  [managedRunnerPark]?: (signal?: AbortSignal) => Promise<void>;
   [managedInstallReissue]?: () => Promise<void>;
 };
 
@@ -186,7 +186,10 @@ export function hasManagedRunnerParkAuthority(args: object): boolean {
   return typeof (args as AuthorityAwareArgs)[managedRunnerPark] === 'function';
 }
 
-export async function completeManagedRunnerParkAuthority(args: object): Promise<void> {
+export async function completeManagedRunnerParkAuthority(
+  args: object,
+  signal?: AbortSignal,
+): Promise<void> {
   const complete = (args as AuthorityAwareArgs)[managedRunnerPark];
   if (!complete) {
     throw new SessionAuthorityError(
@@ -194,7 +197,7 @@ export async function completeManagedRunnerParkAuthority(args: object): Promise<
       'managed runner parking authority is unavailable',
     );
   }
-  await complete();
+  await complete(signal);
 }
 
 const axisBinding: Partial<Record<AuthorityAxis, string>> = {
@@ -2114,7 +2117,7 @@ export function createAuthorityGate(
           if (profile.managedRunnerPark) {
             Object.defineProperty(args, managedRunnerPark, {
               configurable: true,
-              value: async () => {
+              value: async (signal?: AbortSignal) => {
                 if (managedRunnerParked) return;
                 const currentStatus = runtime.status();
                 if (!currentStatus.available) {
@@ -2149,7 +2152,7 @@ export function createAuthorityGate(
                     },
                   ],
                 });
-                await dependencies.onRunnerReleased?.(runner);
+                await dependencies.onRunnerReleased?.(runner, signal);
                 const parkedStatus = runtime.status();
                 if (!parkedStatus.available) {
                   throw new SessionAuthorityError(parkedStatus.code, parkedStatus.reason);

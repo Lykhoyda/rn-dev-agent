@@ -5,6 +5,44 @@ description: "Release history for rn-dev-agent"
 
 ## Claude plugin
 
+### 0.77.3
+
+#### Patch Changes
+
+- 744c313: Scope writable WDA cache provisioning to iOS, keep permission regressions portable under root, and hash action IDs in feedback-safe runner diagnostics.
+- Updated dependencies [744c313]
+  - rn-dev-agent-core@0.72.3
+
+### 0.77.2
+
+#### Patch Changes
+
+- a5feed4: Make maestro-runner pin installation idempotent with independently verified temporary stages and atomic publication so concurrent or interrupted installers cannot block the cache.
+- 53ffc53: Keep valid action inventory entries available around corrupt files with typed warnings and avoid allocating Maestro report directories before preflight passes.
+- 663441e: Carry the session-allocated Android Metro endpoint through Expo launch, wait, native configuration, and adapter connection.
+- de5350f: Keep verified runner snapshots immutable while provisioning a lifecycle-bound writable WDA cache and attaching bounded sanitized runner diagnostics to feedback.
+- 067c6ff: Route auto-login through the exact bound device and refuse unbound ambient device selection with an executable authority remedy.
+- 6e69ea5: The login prologue remains a fail-stop navigation helper that requires a fresh user-login RunRecord, terminally blocks credential fallbacks, and coexists with exact locked e2e login proof without serving as PR proof.
+- Updated dependencies [a5feed4]
+- Updated dependencies [53ffc53]
+- Updated dependencies [663441e]
+- Updated dependencies [de5350f]
+- Updated dependencies [067c6ff]
+- Updated dependencies [6e69ea5]
+  - rn-dev-agent-core@0.72.2
+
+### 0.77.1
+
+#### Patch Changes
+
+- 6c12426: Update packaged engineering-document references to their canonical owners.
+- 48018f4: Honor the allowlisted linked-worktree `.rn-agent/actions` corpus in inventory and exact-ID replay, while still refusing dangling, foreign, whole-directory, and replaced links.
+- d847b3b: Add verified cross-platform Expo Developer Menu dismissal with Android parity, typed readiness outcomes, and default attaching-agent surface preflight guidance.
+- Updated dependencies [6c12426]
+- Updated dependencies [48018f4]
+- Updated dependencies [d847b3b]
+  - rn-dev-agent-core@0.72.1
+
 ### 0.77.0
 
 #### Minor Changes
@@ -1560,6 +1598,31 @@ identifier, hittable? }`, with a `fullNodeCount`. Far fewer tokens; `@ref`s for
   #188 shipped these to `main` with no version bump, leaving them undeliverable to marketplace installs; this patch publishes them.
 
 ## Core MCP server
+
+### 0.72.3
+
+#### Patch Changes
+
+- 744c313: Scope writable WDA cache provisioning to iOS, keep permission regressions portable under root, and hash action IDs in feedback-safe runner diagnostics.
+
+### 0.72.2
+
+#### Patch Changes
+
+- a5feed4: Make maestro-runner pin installation idempotent with independently verified temporary stages and atomic publication so concurrent or interrupted installers cannot block the cache.
+- 53ffc53: Keep valid action inventory entries available around corrupt files with typed warnings and avoid allocating Maestro report directories before preflight passes.
+- 663441e: Carry the session-allocated Android Metro endpoint through Expo launch, wait, native configuration, and adapter connection.
+- de5350f: Keep verified runner snapshots immutable while provisioning a lifecycle-bound writable WDA cache and attaching bounded sanitized runner diagnostics to feedback.
+- 067c6ff: Route auto-login through the exact bound device and refuse unbound ambient device selection with an executable authority remedy.
+- 6e69ea5: The login prologue remains a fail-stop navigation helper that requires a fresh user-login RunRecord, terminally blocks credential fallbacks, and coexists with exact locked e2e login proof without serving as PR proof.
+
+### 0.72.1
+
+#### Patch Changes
+
+- 6c12426: Update packaged engineering-document references to their canonical owners.
+- 48018f4: Honor the allowlisted linked-worktree `.rn-agent/actions` corpus in inventory and exact-ID replay, while still refusing dangling, foreign, whole-directory, and replaced links.
+- d847b3b: Add verified cross-platform Expo Developer Menu dismissal with Android parity, typed readiness outcomes, and default attaching-agent surface preflight guidance.
 
 ### 0.72.0
 

@@ -55,6 +55,13 @@ physical-device prerequisites, packaged Vercel rules, and CDP auto-connect
 configuration. Do not call `cdp_status`: it can attach. Device/app/CDP state is
 `UNKNOWN` unless supplied from a prior structured observation.
 
+Also run `<package-root>/rn-dev-agent-core/dist/maestro-runner-pin.js diagnose --json`
+read-only. Report that iOS exact React testIDs use `react-tree`, while native/system
+selectors use `xctest-native`. Runtime version is diagnostic context, never proof of WDA
+blindness. `NATIVE_SURFACE_BLIND` requires bounded same-screen native-selector evidence;
+without it, preserve the ordinary selector miss. Recommend the central native WDA smoke
+on a WDA-healthy runtime as the supported next action.
+
 For missing components, print exact commands but do not offer to execute them
 inside doctor. Plugin recovery order is user-confirmed marketplace upgrade,
 materialization with `codex plugin add rn-dev-agent@rn-dev-agent --json`, Codex

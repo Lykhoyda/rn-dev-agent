@@ -11921,6 +11921,29 @@ var init_authority_gate = __esm({
   }
 });
 
+// packages/rn-dev-agent-core/dist/domain/cdp-flow-replay.js
+var init_cdp_flow_replay = __esm({
+  "packages/rn-dev-agent-core/dist/domain/cdp-flow-replay.js"() {
+    "use strict";
+  }
+});
+
+// packages/rn-dev-agent-core/dist/domain/ios-proof-router.js
+var init_ios_proof_router = __esm({
+  "packages/rn-dev-agent-core/dist/domain/ios-proof-router.js"() {
+    "use strict";
+    init_cdp_flow_replay();
+  }
+});
+
+// packages/rn-dev-agent-core/dist/tools/cdp-replay-dispatch.js
+var init_cdp_replay_dispatch = __esm({
+  "packages/rn-dev-agent-core/dist/tools/cdp-replay-dispatch.js"() {
+    "use strict";
+    init_cdp_flow_replay();
+  }
+});
+
 // packages/rn-dev-agent-core/dist/tools/maestro-run.js
 import { execFile as execFileCb2 } from "node:child_process";
 import { promisify as promisify3 } from "node:util";
@@ -11940,6 +11963,7 @@ var init_maestro_run = __esm({
     init_resolve_ios_app_file();
     init_maestro_validator();
     init_maestro_error_parser();
+    init_maestro_error_parser();
     init_tap_latency();
     init_maestro_step_parser();
     init_rn_fast_runner_client();
@@ -11949,6 +11973,8 @@ var init_maestro_run = __esm({
     init_maestro_runner_report();
     init_authority_gate();
     init_registry();
+    init_ios_proof_router();
+    init_cdp_replay_dispatch();
     defaultExecFile = promisify3(execFileCb2);
   }
 });

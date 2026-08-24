@@ -6,7 +6,17 @@ export class UnsupportedStepError extends Error {
         this.name = 'UnsupportedStepError';
     }
 }
-const interp = (s, p) => s.replace(/\$\{([A-Z_][A-Z0-9_]*)\}/g, (_m, k) => p[k] ?? `\${${k}}`);
+export class ReplayDispatchError extends Error {
+    code;
+    meta;
+    constructor(code, message, meta) {
+        super(message);
+        this.code = code;
+        this.meta = meta;
+        this.name = 'ReplayDispatchError';
+    }
+}
+const interp = (s, p) => s.replace(/\$\{([A-Z_][A-Z0-9_]*)(?:\s*\?\?\s*(['"])(.*?)\2)?\}/g, (match, key, _quote, fallback) => p[key] ?? fallback ?? match);
 const asString = (x) => (typeof x === 'string' ? x : null);
 const isObj = (x) => typeof x === 'object' && x !== null && !Array.isArray(x);
 export function normalizeSteps(body, params) {
@@ -60,6 +70,14 @@ export function normalizeSteps(body, params) {
                 out.push({ t: 'assert', id: interp(id, params) });
                 break;
             }
+            case 'extendedWaitUntil': {
+                const id = isObj(v) && isObj(v.visible) ? asString(v.visible.id) : null;
+                const timeoutMs = isObj(v) ? v.timeout : undefined;
+                if (!id || !Number.isSafeInteger(timeoutMs) || Number(timeoutMs) < 0)
+                    throw new UnsupportedStepError('extendedWaitUntil (need visible.id + non-negative integer timeout)');
+                out.push({ t: 'waitVisible', id: interp(id, params), timeoutMs: Number(timeoutMs) });
+                break;
+            }
             case 'waitForAnimationToEnd':
                 out.push({ t: 'wait' });
                 break;
@@ -81,109 +99,117 @@ export function normalizeSteps(body, params) {
     }
     return out;
 }
-export function firstTestId(steps) {
-    for (const s of steps) {
-        if (s.t === 'tap' || s.t === 'assert')
-            return s.id;
-    }
-    return null;
-}
-// Bound the walk so a pathologically nested action body cannot stall the scan.
-const MAX_ANCHOR_DEPTH = 20;
-// Counted, not OR-ed: two matches inside one step must stay detectably ambiguous.
-function countIdHits(node, params, selector, index, depth, nested, scan) {
-    if (depth > MAX_ANCHOR_DEPTH) {
-        scan.truncated = true;
-        return;
-    }
-    if (Array.isArray(node)) {
-        for (const child of node)
-            countIdHits(child, params, selector, index, depth + 1, nested, scan);
-        return;
-    }
-    if (!isObj(node))
-        return;
-    for (const [key, value] of Object.entries(node)) {
-        if (key === 'id' && typeof value === 'string' && interp(value, params) === selector) {
-            scan.hits.push({ index, nested });
-            continue;
-        }
-        countIdHits(value, params, selector, index, depth + 1, nested || key === 'commands', scan);
-    }
-}
-/**
- * GH #580: locate the one source step targeting `selector` so a reactive fallback
- * resumes there instead of replaying already-executed mutations. Anything but a
- * single top-level occurrence refuses — resuming at an enclosing `runFlow` would
- * redispatch the siblings preceding a nested match, and a truncated walk cannot
- * prove a deeper duplicate does not exist.
- */
-export function findResumeAnchor(body, params, selector) {
-    if (!selector)
-        return { found: false, reason: 'no-match' };
-    const scan = { hits: [], truncated: false };
-    body.forEach((raw, index) => countIdHits(raw, params, selector, index, 0, false, scan));
-    if (scan.truncated)
-        return { found: false, reason: 'too-deep' };
-    if (scan.hits.length === 0)
-        return { found: false, reason: 'no-match' };
-    if (scan.hits.length > 1)
-        return { found: false, reason: 'ambiguous' };
-    return scan.hits[0].nested
-        ? { found: false, reason: 'nested-match' }
-        : { found: true, index: scan.hits[0].index };
-}
-// GH #580: resumed suffixes report source indices, not suffix-relative indices.
 export async function replayFlow(steps, dispatch, opts = {}) {
     const offset = opts.indexOffset ?? 0;
     const trace = [];
     let lastTapped = null;
     const sourceIndex = (i) => opts.sourceIndex ?? i + offset;
-    const fail = (i, reason) => ({
+    const fail = (i, reason, failureCode, failureMeta) => ({
         passed: false,
         failedStepIndex: sourceIndex(i),
+        ...(failureCode ? { failureCode } : {}),
+        ...(failureMeta ? { failureMeta } : {}),
         reason,
         steps: trace,
     });
+    const requireNotAborted = () => {
+        if (opts.signal?.aborted) {
+            throw new ReplayDispatchError('RUNNER_TIMEOUT', 'React-tree replay exceeded its execution deadline');
+        }
+    };
     for (let i = 0; i < steps.length; i++) {
         const s = steps[i];
+        const startedAt = Date.now();
         try {
+            requireNotAborted();
             switch (s.t) {
                 case 'launch':
                     await dispatch.launch(s.stopApp);
-                    trace.push({ sourceIndex: sourceIndex(i), t: s.t, ok: true });
+                    trace.push({
+                        sourceIndex: sourceIndex(i),
+                        t: s.t,
+                        ok: true,
+                        durationMs: Date.now() - startedAt,
+                    });
                     break;
                 case 'tap':
                     await dispatch.press(s.id);
                     lastTapped = s.id;
-                    trace.push({ sourceIndex: sourceIndex(i), t: s.t, target: s.id, ok: true });
+                    trace.push({
+                        sourceIndex: sourceIndex(i),
+                        t: s.t,
+                        target: s.id,
+                        ok: true,
+                        durationMs: Date.now() - startedAt,
+                    });
                     break;
                 case 'type': {
                     if (!lastTapped)
                         return fail(i, 'inputText before any tapOn — no focus target');
                     await dispatch.type(lastTapped, s.text);
-                    trace.push({ sourceIndex: sourceIndex(i), t: s.t, target: lastTapped, ok: true });
+                    trace.push({
+                        sourceIndex: sourceIndex(i),
+                        t: s.t,
+                        target: lastTapped,
+                        ok: true,
+                        durationMs: Date.now() - startedAt,
+                    });
                     break;
                 }
                 case 'assert': {
-                    const ok = await dispatch.isVisible(s.id);
-                    trace.push({ sourceIndex: sourceIndex(i), t: s.t, target: s.id, ok });
-                    if (!ok)
-                        return fail(i, `assertVisible: "${s.id}" not present in CDP tree`);
+                    const verdict = await dispatch.visibility(s.id);
+                    trace.push({
+                        sourceIndex: sourceIndex(i),
+                        t: s.t,
+                        target: s.id,
+                        ok: verdict.visible,
+                        durationMs: Date.now() - startedAt,
+                    });
+                    if (!verdict.visible)
+                        return fail(i, verdict.reason ?? `assertVisible: "${s.id}" is not frontmost`, verdict.code ?? 'ASSERTION_FAILED');
+                    break;
+                }
+                case 'waitVisible': {
+                    const deadline = Date.now() + s.timeoutMs;
+                    let verdict = await dispatch.visibility(s.id);
+                    while (!verdict.visible && Date.now() < deadline) {
+                        requireNotAborted();
+                        await new Promise((resolve) => setTimeout(resolve, 100));
+                        verdict = await dispatch.visibility(s.id);
+                    }
+                    trace.push({
+                        sourceIndex: sourceIndex(i),
+                        t: s.t,
+                        target: s.id,
+                        ok: verdict.visible,
+                        durationMs: Date.now() - startedAt,
+                    });
+                    if (!verdict.visible)
+                        return fail(i, verdict.reason ?? `extendedWaitUntil: "${s.id}" is not frontmost`, verdict.code ?? 'TESTID_NOT_FOUND');
                     break;
                 }
                 case 'wait':
                     await dispatch.settle();
-                    trace.push({ sourceIndex: sourceIndex(i), t: s.t, ok: true });
+                    trace.push({
+                        sourceIndex: sourceIndex(i),
+                        t: s.t,
+                        ok: true,
+                        durationMs: Date.now() - startedAt,
+                    });
                     break;
                 case 'runFlow': {
-                    if (await dispatch.isVisible(s.whenVisible)) {
-                        const sub = await replayFlow(s.commands, dispatch, { sourceIndex: sourceIndex(i) });
+                    if ((await dispatch.visibility(s.whenVisible)).visible) {
+                        const sub = await replayFlow(s.commands, dispatch, {
+                            sourceIndex: sourceIndex(i),
+                            signal: opts.signal,
+                        });
                         trace.push(...sub.steps);
                         if (!sub.passed) {
                             return {
                                 passed: false,
                                 failedStepIndex: sourceIndex(i),
+                                ...(sub.failureCode ? { failureCode: sub.failureCode } : {}),
+                                ...(sub.failureMeta ? { failureMeta: sub.failureMeta } : {}),
                                 reason: sub.reason,
                                 steps: trace,
                             };
@@ -195,6 +221,7 @@ export async function replayFlow(steps, dispatch, opts = {}) {
                             t: s.t,
                             target: s.whenVisible,
                             ok: true,
+                            durationMs: Date.now() - startedAt,
                         });
                     }
                     break;
@@ -207,8 +234,9 @@ export async function replayFlow(steps, dispatch, opts = {}) {
                 t: s.t,
                 target: 'id' in s ? s.id : undefined,
                 ok: false,
+                durationMs: Date.now() - startedAt,
             });
-            return fail(i, e instanceof Error ? e.message : String(e));
+            return fail(i, e instanceof Error ? e.message : String(e), e instanceof ReplayDispatchError ? e.code : undefined, e instanceof ReplayDispatchError ? e.meta : undefined);
         }
     }
     return { passed: true, steps: trace };

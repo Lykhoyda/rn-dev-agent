@@ -42,6 +42,51 @@ test('isExactPresent sees testIDs through the `{ tree: { matches: [...] } }` mul
   assert.equal(isExactPresent(GETTREE_MULTI, 'tab'), false); // substring, not verbatim
 });
 
+test('buildCdpDispatch counts the filtered tree once when the interactive digest repeats it', async () => {
+  const calls = [];
+  const dispatch = buildCdpDispatch({
+    pressByTestId: async (id) => calls.push(id),
+    typeByTestId: async () => {},
+    treeFor: async () => ({
+      tree: { testID: 'quick-add-fab', children: [] },
+      interactive: [{ testID: 'quick-add-fab' }],
+    }),
+    launchApp: async () => {},
+    settle: async () => {},
+  });
+  await dispatch.press('quick-add-fab');
+  assert.deepEqual(calls, ['quick-add-fab']);
+});
+
+test('buildCdpDispatch accepts propagated fiber matches collapsed by the frontmost oracle', async () => {
+  const calls = [];
+  const dispatch = buildCdpDispatch({
+    pressByTestId: async (id) => calls.push(id),
+    typeByTestId: async () => {},
+    treeFor: async () => ({
+      tree: { matches: [{ testID: 'welcome' }, { testID: 'welcome' }] },
+    }),
+    frontmostFor: async () => ({ visible: true, matchCount: 1 }),
+    launchApp: async () => {},
+    settle: async () => {},
+  });
+  await dispatch.press('welcome');
+  assert.deepEqual(calls, ['welcome']);
+});
+
+test('buildCdpDispatch refuses two distinct filtered tree matches as ambiguous', async () => {
+  const dispatch = buildCdpDispatch({
+    pressByTestId: async () => {},
+    typeByTestId: async () => {},
+    treeFor: async () => ({
+      tree: { matches: [{ testID: 'duplicate' }, { testID: 'duplicate' }] },
+    }),
+    launchApp: async () => {},
+    settle: async () => {},
+  });
+  await assert.rejects(dispatch.press('duplicate'), /resolves to 2 mounted elements/);
+});
+
 test('unwrapTree returns the bare node for a single match and the matches wrapper for many', () => {
   assert.deepEqual(unwrapTree(GETTREE_SINGLE), { testID: 'fab-create-task', children: [] });
   assert.deepEqual(unwrapTree(GETTREE_MULTI), {

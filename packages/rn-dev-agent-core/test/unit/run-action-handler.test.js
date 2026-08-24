@@ -187,6 +187,38 @@ test('run-action: first-attempt pass appends RunRecord with no auto-repair', asy
   );
 });
 
+test('cdp_run_action preserves a typed native-blind refusal', async () => {
+  project.seedAction('demo', fixtureYaml({ id: 'demo', selectors: ['fab-create-task'] }));
+  const handler = createRunActionHandler({
+    maestroRun: fakeMaestroRun([
+      {
+        ok: false,
+        code: 'NATIVE_SURFACE_BLIND',
+        error: 'bounded native comparison proved a blind surface',
+        meta: {
+          proofDomain: 'xctest-native',
+          runner: 'maestro-runner',
+          transportVersion: '1.1.24',
+          nativeVision: { source: 'rn-fast-runner-snapshot', runtimeMajor: 26 },
+          cleanup: { cleanupProven: true },
+          nextAction: 'run the native smoke on a healthy runtime',
+        },
+      },
+    ]),
+  });
+  const env = JSON.parse(
+    (await handler({ actionId: 'demo', projectRoot: project.root })).content[0].text,
+  );
+  assert.equal(env.code, 'NATIVE_SURFACE_BLIND');
+  assert.equal(env.meta.failureKind, 'NATIVE_SURFACE_BLIND');
+  assert.equal(env.meta.proofDomain, 'xctest-native');
+  assert.equal(env.meta.transportVersion, '1.1.24');
+  assert.equal(env.meta.nativeVision.runtimeMajor, 26);
+  assert.equal(env.meta.cleanup.cleanupProven, true);
+  assert.match(env.meta.nextAction, /native smoke/);
+  assert.equal(project.readSidecar('demo').runHistory[0].failureCode, 'NATIVE_SURFACE_BLIND');
+});
+
 test('run-action: proofReplay pass on an experimental action discloses no lifecycle-promotion write', async () => {
   const originalYaml = `${fixtureYaml({ id: 'demo', selectors: ['fab-create-task'] })}# retained operator note\n`;
   project.seedAction('demo', originalYaml);
@@ -367,7 +399,7 @@ test('run-action: repair refused (no fuzzy match) → autoRepair.refusedReason =
   assert.equal(env.meta.autoRepair.refusedReason, 'NO_MATCH');
 });
 
-test('GH #317: repair returns TRANSPORT_BLIND → refused, no retry, honest code', async () => {
+test('authority inversion: legacy repair code cannot create a transport-blind verdict', async () => {
   project.seedAction('demo', fixtureYaml({ id: 'demo', selectors: ['fab-create-task'] }));
 
   const handler = createRunActionHandler({
@@ -378,9 +410,9 @@ test('GH #317: repair returns TRANSPORT_BLIND → refused, no retry, honest code
 
   assert.equal(result.isError, true);
   const env = JSON.parse(result.content[0].text);
-  assert.equal(env.code, 'TRANSPORT_BLIND');
+  assert.equal(env.code, 'TESTID_NOT_FOUND');
   assert.equal(env.meta.autoRepair.outcome, 'refused');
-  assert.equal(env.meta.autoRepair.refusedReason, 'TRANSPORT_BLIND');
+  assert.equal(env.meta.autoRepair.refusedReason, 'INTERNAL_ERROR');
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

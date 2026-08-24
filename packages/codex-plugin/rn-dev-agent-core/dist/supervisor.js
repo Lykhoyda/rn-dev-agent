@@ -21001,9 +21001,9 @@ async function awaitChildExit(child, graceMs = 5e3) {
     child.once("exit", onExit);
   });
 }
-async function stopFastRunner(deviceId) {
+async function stopFastRunner(deviceId, signal) {
   adoptPersistedFastRunnerState(deviceId);
-  await reapStaleFastRunner();
+  await reapStaleFastRunner({ signal });
 }
 function clearFastRunnerAfterVerifiedStop(binding) {
   const expected = {
@@ -21048,6 +21048,25 @@ async function fastHealthCheck() {
   } catch {
     return false;
   }
+}
+async function reapDelay(sleep7, ms, signal) {
+  if (!signal) {
+    await sleep7(ms);
+    return;
+  }
+  if (signal.aborted)
+    return;
+  await new Promise((resolve21, reject) => {
+    const finish = () => {
+      signal.removeEventListener("abort", finish);
+      resolve21();
+    };
+    signal.addEventListener("abort", finish, { once: true });
+    sleep7(ms).then(finish, (error2) => {
+      signal.removeEventListener("abort", finish);
+      reject(error2);
+    });
+  });
 }
 function defaultProcessAlive2(pid) {
   try {
@@ -21268,7 +21287,7 @@ async function reapStaleFastRunner(deps = {}) {
     sendSignal(state.pid, "SIGTERM");
   } catch {
   }
-  await sleep7(graceMs);
+  await reapDelay(sleep7, graceMs, deps.signal);
   const afterTerm = probeExpected();
   if (afterTerm === "unknown") {
     throw new Error("RUNNER_ADOPTION_REQUIRED: iOS runner termination is unproven");
@@ -21282,9 +21301,9 @@ async function reapStaleFastRunner(deps = {}) {
   } catch {
   }
   if (spawnedExit) {
-    await Promise.race([spawnedExit, sleep7(250)]);
+    await Promise.race([spawnedExit, reapDelay(sleep7, 250, deps.signal)]);
   } else {
-    await sleep7(50);
+    await reapDelay(sleep7, 50, deps.signal);
   }
   const afterKill = probeExpected();
   if (afterKill !== "gone") {
@@ -28968,7 +28987,7 @@ function repairBudgetAvailable(state, now = () => /* @__PURE__ */ new Date()) {
   return recentRepairCount(state, now) < REPAIR_BUDGET.ATTEMPTS_PER_24H;
 }
 function shouldAutoPromoteToActive(metadata, lastRun) {
-  if (lastRun?.blindProbe?.skippedMaestro)
+  if (lastRun?.transport === "cdp-js" || lastRun?.proofDomain === "react-tree" || lastRun?.proofDomain === "partitioned")
     return false;
   return metadata.status === "experimental" && lastRun?.status === "pass";
 }
@@ -32901,12 +32920,12 @@ function hasManagedInstallReissueAuthority(args) {
 function hasManagedRunnerParkAuthority(args) {
   return typeof args[managedRunnerPark] === "function";
 }
-async function completeManagedRunnerParkAuthority(args) {
+async function completeManagedRunnerParkAuthority(args, signal) {
   const complete = args[managedRunnerPark];
   if (!complete) {
     throw new SessionAuthorityError("RUNNER_OWNERSHIP_MISMATCH", "managed runner parking authority is unavailable");
   }
-  await complete();
+  await complete(signal);
 }
 function requireCompleteAxes(status, profile) {
   for (const axis of profile.axes) {
@@ -34114,7 +34133,7 @@ function createAuthorityGate(runtime, dependencies) {
         if (profile.managedRunnerPark) {
           Object.defineProperty(args, managedRunnerPark, {
             configurable: true,
-            value: async () => {
+            value: async (signal) => {
               if (managedRunnerParked)
                 return;
               const currentStatus = runtime.status();
@@ -34139,7 +34158,7 @@ function createAuthorityGate(runtime, dependencies) {
                   }
                 ]
               });
-              await dependencies.onRunnerReleased?.(runner);
+              await dependencies.onRunnerReleased?.(runner, signal);
               const parkedStatus = runtime.status();
               if (!parkedStatus.available) {
                 throw new SessionAuthorityError(parkedStatus.code, parkedStatus.reason);
@@ -34425,6 +34444,481 @@ var init_authority_gate = __esm({
   }
 });
 
+// packages/rn-dev-agent-core/dist/domain/cdp-flow-replay.js
+function normalizeSteps(body, params) {
+  const out = [];
+  for (const raw of body) {
+    if (raw === "waitForAnimationToEnd") {
+      out.push({ t: "wait" });
+      continue;
+    }
+    if (!isObj(raw))
+      throw new UnsupportedStepError(typeof raw === "string" ? raw : `non-object(${typeof raw})`);
+    const keys = Object.keys(raw);
+    if (keys.length !== 1)
+      throw new UnsupportedStepError(keys.join("+") || "empty");
+    const key = keys[0];
+    const v = raw[key];
+    switch (key) {
+      case "launchApp": {
+        if (isObj(v)) {
+          const unsupported = Object.keys(v).filter((k) => k !== "stopApp");
+          if (unsupported.length > 0)
+            throw new UnsupportedStepError(`launchApp (unsupported keys: ${unsupported.sort().join(", ")})`);
+          if ("stopApp" in v && typeof v.stopApp !== "boolean")
+            throw new UnsupportedStepError("launchApp (stopApp must be a boolean)");
+        }
+        out.push({ t: "launch", stopApp: isObj(v) && v.stopApp === true });
+        break;
+      }
+      case "tapOn": {
+        const id = isObj(v) ? asString(v.id) : null;
+        if (!id)
+          throw new UnsupportedStepError("tapOn (missing string id)");
+        out.push({ t: "tap", id: interp(id, params) });
+        break;
+      }
+      case "inputText": {
+        const text = asString(v);
+        if (text === null)
+          throw new UnsupportedStepError("inputText (value not a string)");
+        out.push({ t: "type", text: interp(text, params) });
+        break;
+      }
+      case "assertVisible": {
+        const id = isObj(v) ? asString(v.id) : null;
+        if (!id)
+          throw new UnsupportedStepError("assertVisible (missing string id)");
+        out.push({ t: "assert", id: interp(id, params) });
+        break;
+      }
+      case "extendedWaitUntil": {
+        const id = isObj(v) && isObj(v.visible) ? asString(v.visible.id) : null;
+        const timeoutMs = isObj(v) ? v.timeout : void 0;
+        if (!id || !Number.isSafeInteger(timeoutMs) || Number(timeoutMs) < 0)
+          throw new UnsupportedStepError("extendedWaitUntil (need visible.id + non-negative integer timeout)");
+        out.push({ t: "waitVisible", id: interp(id, params), timeoutMs: Number(timeoutMs) });
+        break;
+      }
+      case "waitForAnimationToEnd":
+        out.push({ t: "wait" });
+        break;
+      case "runFlow": {
+        const when = isObj(v) && isObj(v.when) && isObj(v.when.visible) ? asString(v.when.visible.id) : null;
+        const commands = isObj(v) ? v.commands : void 0;
+        if (!when || !Array.isArray(commands))
+          throw new UnsupportedStepError("runFlow (need when.visible.id + commands[])");
+        out.push({
+          t: "runFlow",
+          whenVisible: interp(when, params),
+          commands: normalizeSteps(commands, params)
+        });
+        break;
+      }
+      default:
+        throw new UnsupportedStepError(key);
+    }
+  }
+  return out;
+}
+async function replayFlow(steps, dispatch, opts = {}) {
+  const offset = opts.indexOffset ?? 0;
+  const trace = [];
+  let lastTapped = null;
+  const sourceIndex = (i) => opts.sourceIndex ?? i + offset;
+  const fail3 = (i, reason, failureCode, failureMeta) => ({
+    passed: false,
+    failedStepIndex: sourceIndex(i),
+    ...failureCode ? { failureCode } : {},
+    ...failureMeta ? { failureMeta } : {},
+    reason,
+    steps: trace
+  });
+  const requireNotAborted = () => {
+    if (opts.signal?.aborted) {
+      throw new ReplayDispatchError("RUNNER_TIMEOUT", "React-tree replay exceeded its execution deadline");
+    }
+  };
+  for (let i = 0; i < steps.length; i++) {
+    const s = steps[i];
+    const startedAt = Date.now();
+    try {
+      requireNotAborted();
+      switch (s.t) {
+        case "launch":
+          await dispatch.launch(s.stopApp);
+          trace.push({
+            sourceIndex: sourceIndex(i),
+            t: s.t,
+            ok: true,
+            durationMs: Date.now() - startedAt
+          });
+          break;
+        case "tap":
+          await dispatch.press(s.id);
+          lastTapped = s.id;
+          trace.push({
+            sourceIndex: sourceIndex(i),
+            t: s.t,
+            target: s.id,
+            ok: true,
+            durationMs: Date.now() - startedAt
+          });
+          break;
+        case "type": {
+          if (!lastTapped)
+            return fail3(i, "inputText before any tapOn \u2014 no focus target");
+          await dispatch.type(lastTapped, s.text);
+          trace.push({
+            sourceIndex: sourceIndex(i),
+            t: s.t,
+            target: lastTapped,
+            ok: true,
+            durationMs: Date.now() - startedAt
+          });
+          break;
+        }
+        case "assert": {
+          const verdict = await dispatch.visibility(s.id);
+          trace.push({
+            sourceIndex: sourceIndex(i),
+            t: s.t,
+            target: s.id,
+            ok: verdict.visible,
+            durationMs: Date.now() - startedAt
+          });
+          if (!verdict.visible)
+            return fail3(i, verdict.reason ?? `assertVisible: "${s.id}" is not frontmost`, verdict.code ?? "ASSERTION_FAILED");
+          break;
+        }
+        case "waitVisible": {
+          const deadline = Date.now() + s.timeoutMs;
+          let verdict = await dispatch.visibility(s.id);
+          while (!verdict.visible && Date.now() < deadline) {
+            requireNotAborted();
+            await new Promise((resolve21) => setTimeout(resolve21, 100));
+            verdict = await dispatch.visibility(s.id);
+          }
+          trace.push({
+            sourceIndex: sourceIndex(i),
+            t: s.t,
+            target: s.id,
+            ok: verdict.visible,
+            durationMs: Date.now() - startedAt
+          });
+          if (!verdict.visible)
+            return fail3(i, verdict.reason ?? `extendedWaitUntil: "${s.id}" is not frontmost`, verdict.code ?? "TESTID_NOT_FOUND");
+          break;
+        }
+        case "wait":
+          await dispatch.settle();
+          trace.push({
+            sourceIndex: sourceIndex(i),
+            t: s.t,
+            ok: true,
+            durationMs: Date.now() - startedAt
+          });
+          break;
+        case "runFlow": {
+          if ((await dispatch.visibility(s.whenVisible)).visible) {
+            const sub = await replayFlow(s.commands, dispatch, {
+              sourceIndex: sourceIndex(i),
+              signal: opts.signal
+            });
+            trace.push(...sub.steps);
+            if (!sub.passed) {
+              return {
+                passed: false,
+                failedStepIndex: sourceIndex(i),
+                ...sub.failureCode ? { failureCode: sub.failureCode } : {},
+                ...sub.failureMeta ? { failureMeta: sub.failureMeta } : {},
+                reason: sub.reason,
+                steps: trace
+              };
+            }
+          } else {
+            trace.push({
+              sourceIndex: sourceIndex(i),
+              t: s.t,
+              target: s.whenVisible,
+              ok: true,
+              durationMs: Date.now() - startedAt
+            });
+          }
+          break;
+        }
+      }
+    } catch (e) {
+      trace.push({
+        sourceIndex: sourceIndex(i),
+        t: s.t,
+        target: "id" in s ? s.id : void 0,
+        ok: false,
+        durationMs: Date.now() - startedAt
+      });
+      return fail3(i, e instanceof Error ? e.message : String(e), e instanceof ReplayDispatchError ? e.code : void 0, e instanceof ReplayDispatchError ? e.meta : void 0);
+    }
+  }
+  return { passed: true, steps: trace };
+}
+var UnsupportedStepError, ReplayDispatchError, interp, asString, isObj;
+var init_cdp_flow_replay = __esm({
+  "packages/rn-dev-agent-core/dist/domain/cdp-flow-replay.js"() {
+    "use strict";
+    UnsupportedStepError = class extends Error {
+      stepKey;
+      constructor(stepKey) {
+        super(`cdp-flow-replay: unsupported Maestro step "${stepKey}" (no CDP/JS mapping)`);
+        this.stepKey = stepKey;
+        this.name = "UnsupportedStepError";
+      }
+    };
+    ReplayDispatchError = class extends Error {
+      code;
+      meta;
+      constructor(code, message, meta) {
+        super(message);
+        this.code = code;
+        this.meta = meta;
+        this.name = "ReplayDispatchError";
+      }
+    };
+    interp = (s, p) => s.replace(/\$\{([A-Z_][A-Z0-9_]*)(?:\s*\?\?\s*(['"])(.*?)\2)?\}/g, (match, key, _quote, fallback) => p[key] ?? fallback ?? match);
+    asString = (x) => typeof x === "string" ? x : null;
+    isObj = (x) => typeof x === "object" && x !== null && !Array.isArray(x);
+  }
+});
+
+// packages/rn-dev-agent-core/dist/domain/ios-proof-router.js
+function isObject(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function containsExactId(value, depth = 0) {
+  if (depth > 20)
+    return true;
+  if (Array.isArray(value))
+    return value.some((child) => containsExactId(child, depth + 1));
+  if (!isObject(value))
+    return false;
+  return Object.entries(value).some(([key, child]) => key === "id" && typeof child === "string" || containsExactId(child, depth + 1));
+}
+function commandName(command) {
+  if (typeof command === "string")
+    return command;
+  if (!isObject(command))
+    return null;
+  const keys = Object.keys(command);
+  return keys.length === 1 ? keys[0] : null;
+}
+function commandDomain(command, params) {
+  const name = commandName(command);
+  if (name === "waitForAnimationToEnd" || name === "inputText")
+    return "neutral";
+  try {
+    normalizeSteps([command], params);
+    return name === "launchApp" ? "neutral" : "react-tree";
+  } catch (error2) {
+    if (!(error2 instanceof UnsupportedStepError))
+      throw error2;
+    return containsExactId(command) ? "mixed" : "xctest-native";
+  }
+}
+function planIosProofDomains(commands, params) {
+  const classified = commands.map((command) => commandDomain(command, params));
+  for (let index = 0; index < classified.length; index++) {
+    if (classified[index] === "mixed") {
+      return {
+        ok: false,
+        sourceIndex: index,
+        reason: "one command mixes an exact testID with native-only semantics; split it into separate React-tree and XCTest commands"
+      };
+    }
+  }
+  const segments = [];
+  for (let index = 0; index < commands.length; index++) {
+    let domain = classified[index];
+    if (domain === "neutral") {
+      domain = segments.at(-1)?.domain ?? classified.slice(index + 1).find((candidate) => candidate !== "neutral") ?? "react-tree";
+    }
+    if (domain === "mixed")
+      continue;
+    const prior = segments.at(-1);
+    if (prior?.domain === domain) {
+      prior.commands.push(commands[index]);
+      prior.sourceIndices.push(index);
+    } else {
+      segments.push({ domain, commands: [commands[index]], sourceIndices: [index] });
+    }
+  }
+  return { ok: true, segments };
+}
+function selectorsVisibleInNativeSnapshot(selectors, nodes) {
+  return selectors.filter((selector) => nodes.some((node) => node.hittable === true && (node.label === selector.value || node.identifier === selector.value)));
+}
+function nativeSelectorsForCommands(commands) {
+  const selectors = /* @__PURE__ */ new Set();
+  const addSelector = (value) => {
+    if (typeof value === "string") {
+      selectors.add(value);
+      return;
+    }
+    if (isObject(value) && typeof value.text === "string")
+      selectors.add(value.text);
+  };
+  const visit = (value, depth = 0) => {
+    if (depth > 20)
+      return;
+    if (Array.isArray(value)) {
+      for (const child of value)
+        visit(child, depth + 1);
+      return;
+    }
+    if (!isObject(value))
+      return;
+    for (const [childKey, child] of Object.entries(value)) {
+      if (childKey === "tapOn" || childKey === "assertVisible")
+        addSelector(child);
+      if (childKey === "extendedWaitUntil" && isObject(child))
+        addSelector(child.visible);
+      if (childKey === "scrollUntilVisible" && isObject(child))
+        addSelector(child.element);
+      if (childKey === "when" && isObject(child))
+        addSelector(child.visible);
+      if (childKey !== "assertNotVisible" && childKey !== "notVisible")
+        visit(child, depth + 1);
+    }
+  };
+  visit(commands);
+  return [...selectors].slice(0, 20).map((value) => ({ kind: "text", value }));
+}
+function loginPostconditionId(commands) {
+  const last = commands.at(-1);
+  if (!isObject(last))
+    return null;
+  const command = last.assertVisible ?? last.extendedWaitUntil;
+  if (!isObject(command))
+    return null;
+  const visible = "visible" in command ? command.visible : command;
+  return isObject(visible) && typeof visible.id === "string" ? visible.id : null;
+}
+var init_ios_proof_router = __esm({
+  "packages/rn-dev-agent-core/dist/domain/ios-proof-router.js"() {
+    "use strict";
+    init_cdp_flow_replay();
+  }
+});
+
+// packages/rn-dev-agent-core/dist/tools/cdp-replay-dispatch.js
+function unwrapTree(data) {
+  if (!data || typeof data !== "object")
+    return null;
+  const d = data;
+  return "tree" in d ? d.tree : d;
+}
+function countExactMatches(treeJson, id) {
+  let matches = 0;
+  const root = treeJson && typeof treeJson === "object" && "tree" in treeJson ? treeJson.tree : treeJson;
+  const stack = [root];
+  while (stack.length > 0) {
+    const node = stack.pop();
+    if (!node || typeof node !== "object")
+      continue;
+    const record2 = node;
+    if (record2.testID === id || record2.nativeID === id)
+      matches++;
+    const children = record2.children ?? record2.nodes ?? record2.matches;
+    if (Array.isArray(children))
+      stack.push(...children);
+  }
+  return matches;
+}
+function nodeProps(treeJson, id) {
+  const stack = [treeJson];
+  while (stack.length) {
+    const n = stack.pop();
+    if (n && typeof n === "object") {
+      if (n.testID === id || n.nativeID === id)
+        return n.props ?? n;
+      if (n.tree)
+        stack.push(n.tree);
+      const kids = n.children ?? n.interactive ?? n.nodes ?? n.matches;
+      if (Array.isArray(kids))
+        stack.push(...kids);
+    }
+  }
+  return null;
+}
+function isDisabled(props) {
+  if (!props)
+    return false;
+  const a11y = props.accessibilityState;
+  return props.disabled === true || a11y?.disabled === true || props.pointerEvents === "none";
+}
+async function runCdpReplayCommands(commands, params, deps, opts = {}) {
+  return replayFlow(normalizeSteps(commands, params), buildCdpDispatch(deps), {
+    signal: opts.signal
+  });
+}
+function buildCdpDispatch(deps) {
+  return {
+    async press(id) {
+      const tree = await deps.treeFor(id);
+      const treeMatches = countExactMatches(tree, id);
+      if (treeMatches === 0)
+        throw new ReplayDispatchError("TESTID_NOT_FOUND", `testID "${id}" not present`);
+      const frontmost = await deps.frontmostFor?.(id);
+      const matches = frontmost ? frontmost.matchCount ?? 1 : treeMatches;
+      if (matches > 1)
+        throw new ReplayDispatchError("AMBIGUOUS_TESTID", `testID "${id}" resolves to ${matches} mounted elements`, { matchCount: matches });
+      if (frontmost && !frontmost.visible)
+        throw new ReplayDispatchError("ASSERTION_FAILED", frontmost.reason ?? `testID "${id}" is mounted but not frontmost`);
+      if (isDisabled(nodeProps(tree, id)))
+        throw new ReplayDispatchError("INTERACTION_NOT_ACTUATED", `testID "${id}" is disabled/non-interactable`);
+      await deps.pressByTestId(id);
+    },
+    async type(id, text) {
+      await deps.typeByTestId(id, text);
+    },
+    async visibility(id) {
+      const tree = await deps.treeFor(id);
+      const treeMatches = countExactMatches(tree, id);
+      if (treeMatches === 0)
+        return {
+          visible: false,
+          code: "TESTID_NOT_FOUND",
+          reason: `testID "${id}" not present in the React tree`
+        };
+      const frontmost = await deps.frontmostFor?.(id);
+      const matches = frontmost ? frontmost.matchCount ?? 1 : treeMatches;
+      if (matches > 1)
+        return {
+          visible: false,
+          code: "AMBIGUOUS_TESTID",
+          reason: `testID "${id}" resolves to ${matches} mounted elements`
+        };
+      if (frontmost && !frontmost.visible)
+        return {
+          visible: false,
+          code: "ASSERTION_FAILED",
+          reason: frontmost.reason ?? `testID "${id}" is mounted but not frontmost`
+        };
+      return { visible: true };
+    },
+    async launch(stopApp) {
+      await deps.launchApp(stopApp);
+    },
+    async settle() {
+      await deps.settle();
+    }
+  };
+}
+var init_cdp_replay_dispatch = __esm({
+  "packages/rn-dev-agent-core/dist/tools/cdp-replay-dispatch.js"() {
+    "use strict";
+    init_cdp_flow_replay();
+  }
+});
+
 // packages/rn-dev-agent-core/dist/tools/maestro-run.js
 import { execFile as execFileCb2 } from "node:child_process";
 import { promisify as promisify3 } from "node:util";
@@ -34436,12 +34930,21 @@ async function runFlowParked(run, opts = {}) {
   try {
     if (opts.platform === "android") {
       const release2 = opts.releaseAndroidSlot ?? releaseAndroidInteractionSlot;
-      const outcome = await release2({ deviceId: opts.deviceId });
+      const outcome = opts.signal ? await release2({ deviceId: opts.deviceId, signal: opts.signal }) : await release2({ deviceId: opts.deviceId });
       opts.onAndroidRelease?.(outcome);
     } else {
-      await (opts.stopFastRunner ?? stopFastRunner)(opts.deviceId);
+      if (opts.signal) {
+        await (opts.stopFastRunner ?? stopFastRunner)(opts.deviceId, opts.signal);
+      } else {
+        await (opts.stopFastRunner ?? stopFastRunner)(opts.deviceId);
+      }
     }
-    await opts.completeRunnerPark?.();
+    if (opts.completeRunnerPark) {
+      if (opts.signal)
+        await opts.completeRunnerPark(opts.signal);
+      else
+        await opts.completeRunnerPark();
+    }
     return await run();
   } finally {
     stale();
@@ -34458,11 +34961,11 @@ function nestedMaestroAuthorityCallbacks(args) {
     completeNativeOrigin: (targetExpected) => completeManagedNativeOriginAuthority(args, targetExpected),
     relaunchManagedApp: () => relaunchManagedNativeOriginApp(args),
     reproveManagedOrigin: () => reproveManagedNativeOrigin(args),
-    completeRunnerPark: () => completeManagedRunnerParkAuthority(args),
+    completeRunnerPark: (signal) => completeManagedRunnerParkAuthority(args, signal),
     reissueInstallReceipt: hasManagedInstallReissueAuthority(args) ? () => reissueManagedInstallAuthority(args) : null
   };
 }
-function commandName(command) {
+function commandName2(command) {
   if (typeof command === "string")
     return command;
   if (!command || typeof command !== "object" || Array.isArray(command))
@@ -34480,7 +34983,7 @@ function nestedLifecycleCommand(command) {
   return Array.isArray(commands) && commands.some(nestedLifecycleCommandOrSelf);
 }
 function nestedLifecycleCommandOrSelf(command) {
-  const name = commandName(command);
+  const name = commandName2(command);
   return name !== null && lifecycleCommands.has(name) || nestedLifecycleCommand(command);
 }
 function planMaestroAuthorityStages(commands) {
@@ -34494,7 +34997,7 @@ function planMaestroAuthorityStages(commands) {
     pending2 = [];
   };
   for (const command of commands) {
-    const name = commandName(command);
+    const name = commandName2(command);
     if (nestedLifecycleCommand(command)) {
       throw new MaestroValidationError("conditional runFlow commands cannot contain app lifecycle transitions");
     }
@@ -34509,16 +35012,20 @@ function planMaestroAuthorityStages(commands) {
   flushPending();
   return { stages, targetExpected };
 }
-async function executeMaestroAuthorityStages(commands, executeStage, claimOrigin, completeOrigin, relaunchManagedApp, reproveManagedOrigin) {
+async function executeMaestroAuthorityStages(commands, executeStage, claimOrigin, completeOrigin, relaunchManagedApp, reproveManagedOrigin, options = {}) {
   const plan = planMaestroAuthorityStages(commands);
   const results = [];
   let pendingOriginError;
+  let originClaimed = options.firstOriginClaimed === true;
   for (const stage of plan.stages) {
-    if (stage.requiresOrigin && pendingOriginError === void 0)
-      await claimOrigin();
+    if (stage.requiresOrigin && pendingOriginError === void 0) {
+      if (!originClaimed)
+        await claimOrigin();
+      originClaimed = false;
+    }
     try {
       results.push(await executeStage(stage.commands));
-      if (stage.commands.length === 1 && commandName(stage.commands[0]) === "launchApp") {
+      if (stage.commands.length === 1 && commandName2(stage.commands[0]) === "launchApp") {
         try {
           await relaunchManagedApp();
           pendingOriginError = void 0;
@@ -34565,6 +35072,18 @@ function resolveAppId(override, platform) {
   if (platform)
     return resolveBundleId(platform) ?? readExpoSlug() ?? "";
   return readExpoSlug() ?? "";
+}
+function readToolEnvelope(result) {
+  try {
+    return JSON.parse(result.content[0]?.text ?? "{}");
+  } catch {
+    return { ok: false, error: "Unparseable nested replay result" };
+  }
+}
+function isLoginMetadata(metadata) {
+  if (!metadata)
+    return false;
+  return /(^|[-_.])login($|[-_.])/.test(metadata.id) || metadata.tags?.some((tag) => tag === "login" || tag === "auth") === true;
 }
 async function defaultProbeAndroidApiLevel(deviceId) {
   try {
@@ -34613,6 +35132,8 @@ function createMaestroRunHandler(deps = {}) {
   const probeApiLevel = deps.probeAndroidApiLevel ?? defaultProbeAndroidApiLevel;
   const now = deps.now ?? Date.now;
   const resolveEngineStatus = deps.resolveEngineStatus ?? (() => getEngineStatus().catch(() => null));
+  const replayFactory = deps.replayDeps;
+  const nativeOnlyHandler = replayFactory ? createMaestroRunHandler({ ...deps, replayDeps: void 0 }) : null;
   return async (args) => {
     if (args.params) {
       for (const [key, value] of Object.entries(args.params)) {
@@ -34692,13 +35213,144 @@ function createMaestroRunHandler(deps = {}) {
       headerAppId = resolveMaestroFlowAppId(rawAppId || void 0, parsed.appId);
       validatedContent = buildMaestroFlow(headerAppId ? { appId: headerAppId } : {}, parsed.commands);
       flowFile = join30(tmpdir7(), `rn-maestro-run-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.yaml`);
-      writeFileSync11(flowFile, validatedContent, "utf-8");
     } catch (err) {
       if (err instanceof MaestroValidationError) {
         return failResult(`Refusing to run Maestro: ${err.message} (Phase 134.1)`);
       }
       throw err;
     }
+    const semanticActionMeta = capturedAction?.metadata ?? args.actionMetadata ?? (args.flowPath ? parseM7Header(rawYaml, basename10(args.flowPath).replace(/\.ya?ml$/i, "")) : null);
+    const iosProofPlan = platform === "ios" && replayFactory ? planIosProofDomains(validatedCommands, args.params ?? {}) : null;
+    if (iosProofPlan && !iosProofPlan.ok) {
+      return failResult(`Refusing iOS proof-domain ambiguity at step ${iosProofPlan.sourceIndex}: ${iosProofPlan.reason}.`, "UNSUPPORTED_STEP", { sourceIndex: iosProofPlan.sourceIndex, proofDomains: ["react-tree", "xctest-native"] });
+    }
+    if (iosProofPlan?.ok && iosProofPlan.segments.some((segment) => segment.domain === "react-tree")) {
+      writeFileSync11(flowFile, validatedContent, "utf-8");
+      if (isLoginMetadata(semanticActionMeta) && !loginPostconditionId(validatedCommands)) {
+        return failResult("Refusing login replay without a final positive post-submit testID assertion. End the flow with assertVisible.id or extendedWaitUntil.visible.id.", "ASSERTION_FAILED", { proofDomain: "react-tree", postcondition: "missing" });
+      }
+      const timeout2 = args.timeoutMs ?? 12e4;
+      const deadline = now() + timeout2;
+      const controller = new AbortController();
+      const deadlineTimer = setTimeout(() => controller.abort(new Error("iOS partitioned replay deadline exceeded")), timeout2);
+      const managedAuthority = nestedMaestroAuthorityCallbacks(args);
+      const claimOrigin = args.claimNativeOrigin ?? deps.claimNativeOrigin ?? managedAuthority.claimNativeOrigin;
+      const completeOrigin = args.completeNativeOrigin ?? deps.completeNativeOrigin ?? managedAuthority.completeNativeOrigin;
+      const relaunchManagedApp = args.relaunchManagedApp ?? deps.relaunchManagedApp ?? managedAuthority.relaunchManagedApp;
+      const reproveManagedOrigin = args.reproveManagedOrigin ?? deps.reproveManagedOrigin ?? managedAuthority.reproveManagedOrigin;
+      const combinedSteps = [];
+      const proofDomains = [];
+      let nativeTransportVersion = null;
+      let nativeOutput = "";
+      try {
+        for (const segment of iosProofPlan.segments) {
+          if (controller.signal.aborted || deadline - now() <= 0) {
+            return failResult("Partitioned iOS replay exceeded its deadline.", "RUNNER_TIMEOUT", {
+              proofDomains
+            });
+          }
+          if (segment.domain === "xctest-native") {
+            proofDomains.push("xctest-native");
+            const nested = await nativeOnlyHandler({
+              ...args,
+              flowPath: void 0,
+              inlineYaml: buildMaestroFlow(headerAppId ? { appId: headerAppId } : {}, segment.commands),
+              timeoutMs: Math.max(1, deadline - now())
+            });
+            const env = readToolEnvelope(nested);
+            if (env.ok !== true || env.data?.passed !== true)
+              return nested;
+            nativeTransportVersion = env.data.transportVersion ?? nativeTransportVersion;
+            if (typeof env.data.output === "string")
+              nativeOutput += env.data.output;
+            const steps = Array.isArray(env.data.steps) ? env.data.steps : [];
+            for (const step of steps) {
+              if (!step || typeof step !== "object")
+                continue;
+              const record2 = step;
+              combinedSteps.push({
+                index: Number(record2.index ?? combinedSteps.length),
+                name: String(record2.name ?? record2.verb ?? "native"),
+                verb: String(record2.verb ?? record2.name ?? "native"),
+                status: record2.status === "fail" ? "fail" : "pass",
+                durationMs: Number(record2.durationMs ?? 0)
+              });
+            }
+            continue;
+          }
+          proofDomains.push("react-tree");
+          const replayDependencies = replayFactory(args, controller.signal);
+          if (!replayDependencies) {
+            return failResult("React-tree replay requires the authority-bound bridgeless runtime. Reconnect the exact app bundle and retry.", "CDP_NOT_CONNECTED", { proofDomain: "react-tree" });
+          }
+          const stageResults = await executeMaestroAuthorityStages(segment.commands, async (commands) => {
+            const replay = await runCdpReplayCommands([...commands], args.params ?? {}, {
+              ...replayDependencies,
+              launchApp: async () => {
+              }
+            }, { signal: controller.signal });
+            if (!replay.passed)
+              throw new ReactReplayFailure(replay);
+            return replay;
+          }, claimOrigin, completeOrigin, relaunchManagedApp, reproveManagedOrigin);
+          for (const replay of stageResults) {
+            for (const step of replay.steps) {
+              combinedSteps.push({
+                index: segment.sourceIndices[step.sourceIndex] ?? step.sourceIndex,
+                name: step.t,
+                verb: step.t,
+                status: step.ok ? "pass" : "fail",
+                durationMs: step.durationMs
+              });
+            }
+          }
+        }
+        const expectedRoute = semanticActionMeta?.expectedRouteSequence?.at(-1);
+        if (expectedRoute && deps.getLiveRoute) {
+          const liveRoute = await deps.getLiveRoute().catch(() => null);
+          if (liveRoute !== expectedRoute) {
+            return failResult(`React-tree replay reached its final testID but route ${String(liveRoute)} does not match expected route ${expectedRoute}.`, "ASSERTION_FAILED", { proofDomain: "react-tree", expectedRoute, liveRoute });
+          }
+        }
+        const uniqueDomains = [...new Set(proofDomains)];
+        return okResult({
+          passed: true,
+          flowFile,
+          platform,
+          runner: uniqueDomains.length === 1 ? "cdp-js" : "partitioned",
+          transport: uniqueDomains.length === 1 ? "cdp-js" : "partitioned",
+          transportVersion: nativeTransportVersion,
+          proofDomain: uniqueDomains.length === 1 ? uniqueDomains[0] : "partitioned",
+          proofDomains: uniqueDomains,
+          maestroCertified: false,
+          reactTreeProof: {
+            nativeInteractionFidelity: false,
+            covers: ["exact-react-identity", "controlled-fiber-text-readback"],
+            excludes: ["ime-composition", "password-autofill", "keyboard-occlusion"]
+          },
+          steps: combinedSteps,
+          output: nativeOutput.slice(0, 2e3),
+          timedOut: false,
+          outputTruncated: nativeOutput.length > 2e3
+        });
+      } catch (error2) {
+        const failure = error2 instanceof MaestroStageExecutionError ? error2.stageError : error2;
+        if (failure instanceof ReactReplayFailure) {
+          const replay = failure.replay;
+          return failResult(`React-tree replay failed at step ${String(replay.failedStepIndex)}: ${replay.reason ?? "unknown failure"}`, replay.failureCode ?? "ASSERTION_FAILED", {
+            proofDomain: "react-tree",
+            failedStepIndex: replay.failedStepIndex,
+            ...replay.failureMeta
+          });
+        }
+        if (failure instanceof SessionAuthorityError)
+          throw failure;
+        return failResult(failure instanceof Error ? failure.message : String(failure), controller.signal.aborted ? "RUNNER_TIMEOUT" : void 0, { proofDomains });
+      } finally {
+        clearTimeout(deadlineTimer);
+      }
+    }
+    writeFileSync11(flowFile, validatedContent, "utf-8");
     const dispatch = selectDispatch({ platform, flowHasHideKeyboard });
     if ("error" in dispatch) {
       return failResult(dispatch.error);
@@ -34758,7 +35410,7 @@ function createMaestroRunHandler(deps = {}) {
       });
     }
     const learnedAction = Boolean(capturedAction || args.actionMetadata);
-    const actionMeta = capturedAction?.metadata ?? args.actionMetadata ?? (args.flowPath ? parseM7Header(rawYaml, basename10(args.flowPath).replace(/\.ya?ml$/i, "")) : null);
+    const actionMeta = semanticActionMeta;
     const compatibilityRefusal = learnedAction || actionMeta !== null ? actionReplayPreflight({
       enginePin: actionMeta?.enginePin,
       commands: validatedCommands,
@@ -34791,18 +35443,52 @@ function createMaestroRunHandler(deps = {}) {
         });
       }
     }
-    const runnerReportDir = (deps.createReportDir ?? createRunnerReportDir)(dispatch.runner, "rn-maestro-report");
+    const nativeSelectors = platform === "ios" ? nativeSelectorsForCommands(validatedCommands) : [];
+    const flowAbort = new AbortController();
+    const flowAbortTimer = setTimeout(() => flowAbort.abort(new Error("Maestro flow deadline exceeded")), Math.max(1, flowDeadline - now()));
+    let nativeVisionEvidence = null;
+    if (requestedDeviceId && nativeSelectors.length > 0 && deps.nativeVisionProbe) {
+      nativeVisionEvidence = await deps.nativeVisionProbe({
+        deviceId: requestedDeviceId,
+        selectors: nativeSelectors,
+        signal: flowAbort.signal
+      }).catch(() => null);
+    }
+    let runnerReportDir;
+    try {
+      runnerReportDir = (deps.createReportDir ?? createRunnerReportDir)(dispatch.runner, "rn-maestro-report");
+    } catch (error2) {
+      clearTimeout(flowAbortTimer);
+      throw error2;
+    }
     const finalArgs = assembleMaestroArgs(baseArgs, [
       ...runnerReportArgs(runnerReportDir),
       ...paramArgs
     ]);
     const directRunnerEvidence = (output) => collectDirectRunnerEvidence(runnerReportDir, output);
+    let nativeOriginPreclaimed = false;
+    let deferredNativeOriginTarget = false;
+    let completePreclaimedOrigin = null;
     try {
       const managedAuthority = nestedMaestroAuthorityCallbacks(args);
       const claimOrigin = args.claimNativeOrigin ?? deps.claimNativeOrigin ?? managedAuthority.claimNativeOrigin;
       const completeOrigin = args.completeNativeOrigin ?? deps.completeNativeOrigin ?? managedAuthority.completeNativeOrigin;
       const relaunchManagedApp = args.relaunchManagedApp ?? deps.relaunchManagedApp ?? managedAuthority.relaunchManagedApp;
       const reproveManagedOrigin = args.reproveManagedOrigin ?? deps.reproveManagedOrigin ?? managedAuthority.reproveManagedOrigin;
+      const authorityPlan = planMaestroAuthorityStages(validatedCommands);
+      if (platform === "ios" && authorityPlan.stages[0]?.requiresOrigin) {
+        await claimOrigin();
+        nativeOriginPreclaimed = true;
+      }
+      const completeTrackedOrigin = async (targetExpected) => {
+        if (platform === "ios" && targetExpected) {
+          deferredNativeOriginTarget = true;
+          return;
+        }
+        await completeOrigin(targetExpected);
+        nativeOriginPreclaimed = false;
+      };
+      completePreclaimedOrigin = completeTrackedOrigin;
       const stageResults = await parkFlow(() => executeMaestroAuthorityStages(validatedCommands, async (commands) => {
         writeFileSync11(flowFile, buildMaestroFlow(headerAppId ? { appId: headerAppId } : {}, [...commands]), "utf-8");
         const executeOnce = async (beforeDispatch) => {
@@ -34822,7 +35508,8 @@ function createMaestroRunHandler(deps = {}) {
             return execute2(runnerPath, [...prefixArgs, ...finalArgs], {
               timeout: remainingTimeout,
               encoding: "utf8",
-              maxBuffer: 10 * 1024 * 1024
+              maxBuffer: 10 * 1024 * 1024,
+              signal: flowAbort.signal
             });
           };
           if (deps.execFile) {
@@ -34877,13 +35564,22 @@ function createMaestroRunHandler(deps = {}) {
             throw attachCause(error2, retryError);
           }
         }
-      }, claimOrigin, completeOrigin, relaunchManagedApp, reproveManagedOrigin), {
+      }, claimOrigin, completeTrackedOrigin, relaunchManagedApp, reproveManagedOrigin, { firstOriginClaimed: nativeOriginPreclaimed }), {
         platform,
         deviceId: requestedDeviceId,
         releaseAndroidSlot,
         onAndroidRelease: recordAndroidRelease,
-        completeRunnerPark: args.completeRunnerPark ?? managedAuthority.completeRunnerPark
+        stopFastRunner: deps.stopFastRunner,
+        completeRunnerPark: args.completeRunnerPark ?? managedAuthority.completeRunnerPark,
+        signal: flowAbort.signal
       });
+      if (deferredNativeOriginTarget) {
+        if (nativeOriginPreclaimed && replayFactory && (args.reproveManagedOrigin || deps.reproveManagedOrigin || hasManagedNativeOriginAuthority(args))) {
+          await reproveManagedOrigin();
+        }
+        await completeOrigin(true);
+        nativeOriginPreclaimed = false;
+      }
       await commitReinstalledInstall();
       const stdout = stageResults.map((result) => result.stdout).join("\n");
       const stderr = stageResults.map((result) => result.stderr).join("\n");
@@ -34920,6 +35616,7 @@ function createMaestroRunHandler(deps = {}) {
         platform,
         runner: dispatch.runner,
         transport: dispatch.runner,
+        proofDomain: "xctest-native",
         transportVersion: engineStatus?.version ?? null,
         fallback: dispatch.fallbackReason ? dispatch.runner : "none",
         deviceAuthority,
@@ -34950,6 +35647,18 @@ function createMaestroRunHandler(deps = {}) {
       return warnResult(warnAug.meta, warnAug.message);
     } catch (err) {
       const stageError = err instanceof MaestroStageExecutionError ? err.stageError : err;
+      if (nativeOriginPreclaimed && completePreclaimedOrigin) {
+        try {
+          await completePreclaimedOrigin(false);
+        } catch (cleanupError) {
+          return failResult(`Native replay cleanup could not settle the managed runtime after ${stageError instanceof Error ? stageError.message : String(stageError)}.`, "AUTOMATION_CLEANUP_UNPROVEN", {
+            platform,
+            proofDomain: "xctest-native",
+            runner: dispatch.runner,
+            cleanupError: cleanupError instanceof Error ? cleanupError.message : String(cleanupError)
+          });
+        }
+      }
       if (stageError instanceof RunnerCacheUnavailableError) {
         recordRunnerDiagnostic("typed-failure", {
           code: stageError.code,
@@ -34961,6 +35670,7 @@ function createMaestroRunHandler(deps = {}) {
           platform,
           runner: dispatch.runner,
           transport: dispatch.runner,
+          proofDomain: "xctest-native",
           passed: false,
           output: "",
           terminal: {
@@ -35039,6 +35749,37 @@ function createMaestroRunHandler(deps = {}) {
           ...androidReleaseMeta()
         });
       }
+      const nativeFailure = parseMaestroFailure(combined, terminal);
+      const soleNativeSelector = nativeSelectors.length === 1 ? nativeSelectors[0].value : null;
+      const selectorLessAssertionFailure = nativeFailure.kind === "UNKNOWN" && terminal.exitClass === "step-failure" && terminal.failedStep?.split(/\s+/, 1)[0] === "assertVisible";
+      const failedNativeSelector = nativeFailure.kind === "SELECTOR_NOT_FOUND" ? nativeFailure.selector ?? soleNativeSelector : nativeFailure.kind === "ASSERTION_FAILED" ? nativeFailure.selector ?? soleNativeSelector : nativeFailure.kind === "TIMEOUT" ? nativeFailure.selector : selectorLessAssertionFailure ? soleNativeSelector : null;
+      const fastRunnerSawFailedSelector = failedNativeSelector !== null && nativeVisionEvidence?.visibleSelectors.some((selector) => selector.value === failedNativeSelector) === true;
+      if (fastRunnerSawFailedSelector) {
+        const selectorKind = nativeVisionEvidence.visibleSelectors.find((selector) => selector.value === failedNativeSelector).kind;
+        return failResult("XCTest/WDA could not resolve a native-only selector that the bounded same-screen native snapshot saw before dispatch. This is a blind native surface, not an ordinary selector miss. Use a WDA-healthy simulator/runtime for the native step, then retry; exact React testID steps should remain on cdp_run_action.", "NATIVE_SURFACE_BLIND", {
+          platform,
+          proofDomain: "xctest-native",
+          runner: dispatch.runner,
+          transportVersion: engineStatus?.version ?? null,
+          nativeVision: {
+            source: nativeVisionEvidence.source,
+            nodeCount: nativeVisionEvidence.nodeCount,
+            visibleSelectorCount: nativeVisionEvidence.visibleSelectors.length,
+            failedSelectorKind: selectorKind,
+            runtimeMajor: nativeVisionEvidence.runtimeMajor,
+            runtimeVersionHeuristicIsProof: false
+          },
+          deviceAuthority,
+          cleanup: {
+            cleanupProven: true,
+            wdaProcessSettled: true,
+            runnerParkCommitted: true,
+            managedOriginSettled: !nativeOriginPreclaimed,
+            fastRunnerHealthy: runnerResume?.healthy ?? null
+          },
+          nextAction: "Run the doctor compatibility report and the central native WDA smoke on a WDA-healthy runtime, then retry this native-only step."
+        });
+      }
       const rawHeadline = formatFailureHeadline(summary, { timedOut, outputTruncated }, msg3);
       const releaseCaveat = androidReleaseCaveat();
       const headline = releaseCaveat ? `${rawHeadline}; ${releaseCaveat}` : rawHeadline;
@@ -35047,6 +35788,7 @@ function createMaestroRunHandler(deps = {}) {
         platform,
         runner: dispatch.runner,
         transport: dispatch.runner,
+        proofDomain: "xctest-native",
         transportVersion: engineStatus?.version ?? null,
         fallback: dispatch.fallbackReason ? dispatch.runner : "none",
         deviceAuthority,
@@ -35066,6 +35808,7 @@ function createMaestroRunHandler(deps = {}) {
       });
       return failResult(failAug.message, failAug.meta);
     } finally {
+      clearTimeout(flowAbortTimer);
       try {
         writeFileSync11(flowFile, validatedContent, "utf-8");
       } finally {
@@ -35074,7 +35817,7 @@ function createMaestroRunHandler(deps = {}) {
     }
   };
 }
-var defaultExecFile, MaestroStageExecutionError, lifecycleCommands, PARAM_KEY_RE, UIAUTOMATION_SESSION_CREATION_FAILURE;
+var defaultExecFile, MaestroStageExecutionError, lifecycleCommands, PARAM_KEY_RE, ReactReplayFailure, UIAUTOMATION_SESSION_CREATION_FAILURE;
 var init_maestro_run = __esm({
   "packages/rn-dev-agent-core/dist/tools/maestro-run.js"() {
     "use strict";
@@ -35090,6 +35833,7 @@ var init_maestro_run = __esm({
     init_resolve_ios_app_file();
     init_maestro_validator();
     init_maestro_error_parser();
+    init_maestro_error_parser();
     init_tap_latency();
     init_maestro_step_parser();
     init_rn_fast_runner_client();
@@ -35099,6 +35843,8 @@ var init_maestro_run = __esm({
     init_maestro_runner_report();
     init_authority_gate();
     init_registry();
+    init_ios_proof_router();
+    init_cdp_replay_dispatch();
     defaultExecFile = promisify3(execFileCb2);
     MaestroStageExecutionError = class extends Error {
       completedResults;
@@ -35114,6 +35860,14 @@ var init_maestro_run = __esm({
     };
     lifecycleCommands = /* @__PURE__ */ new Set(["launchApp", "clearState", "killApp", "stopApp"]);
     PARAM_KEY_RE = /^[A-Z_][A-Z0-9_]*$/;
+    ReactReplayFailure = class extends Error {
+      replay;
+      constructor(replay) {
+        super(replay.reason ?? "React-tree replay failed");
+        this.replay = replay;
+        this.name = "ReactReplayFailure";
+      }
+    };
     UIAUTOMATION_SESSION_CREATION_FAILURE = /^Error: failed to create driver: create session: session not created: java\.lang\.IllegalStateException: UiAutomation not connected(?:, UiAutomation@[^\r\n]+)?$/;
   }
 });
@@ -38272,6 +39026,43 @@ async function performExactFill(args, client2, tiers, deps = {}) {
     });
   }
   return fillFailure("TEXT_ENTRY_UNVERIFIED", "Text entry could not be verified after native and Maestro attempts.", { mutation: "possible", pathsTried, verification: maestroVerification });
+}
+async function performReactTreeInput(testID, text, client2, signal) {
+  const pathsTried = ["react-tree"];
+  if (!client2) {
+    return fillFailure("TEXT_ENTRY_UNVERIFIED", `React-tree input "${testID}" cannot be verified because the authoritative bundle is unavailable.`, { mutation: "none", pathsTried });
+  }
+  if (signal?.aborted) {
+    return fillFailure("TEXT_ENTRY_UNVERIFIED", "React-tree input was cancelled before mutation.", {
+      mutation: "none",
+      pathsTried
+    });
+  }
+  const seam = { evaluate: (expression) => client2.evaluate(expression) };
+  const before = await probeInputState(seam, testID);
+  if (!before.readable || !before.controlled) {
+    return fillFailure("TEXT_ENTRY_UNVERIFIED", `React-tree input "${testID}" is uncontrolled or unreadable. Run this native text-entry check on a WDA-healthy runtime; secure masked native values are not plaintext proof.`, { mutation: "none", pathsTried });
+  }
+  const expected = `${before.value ?? ""}${text}`;
+  const dispatch = await attemptJsFill(seam, testID, expected);
+  if (!dispatch.handled) {
+    return fillFailure("TEXT_ENTRY_UNVERIFIED", dispatch.dispatchUncertain ? `React-tree input "${testID}" may have mutated but its onChangeText result is unknown.` : `React-tree input "${testID}" has no verifiable controlled onChangeText path.`, { mutation: dispatch.dispatchUncertain ? "possible" : "none", pathsTried });
+  }
+  const verification = await finalFiberVerify(seam, testID, expected);
+  if (verification !== "exact") {
+    return fillFailure("TEXT_ENTRY_UNVERIFIED", `React-tree input "${testID}" dispatched onChangeText but exact fiber read-back was ${verification}.`, {
+      mutation: "possible",
+      pathsTried,
+      verification: combineVerificationOracles(verification, "unavailable", false)
+    });
+  }
+  return verifiedFillResult("js-onChangeText", text.length, {
+    textEntryPath: "react-tree",
+    verifiedOracle: "fiber",
+    handler: dispatch.handler,
+    appendedLength: text.length,
+    resultingLength: expected.length
+  });
 }
 function createDeviceFillHandler(getClient2) {
   return withSession(async (args) => performExactFill(args, cdpClientOrNull(getClient2), { js: true, maestro: true }));
@@ -45581,7 +46372,7 @@ __export(util_exports, {
   getLengthableOrigin: () => getLengthableOrigin,
   getParsedType: () => getParsedType2,
   getSizableOrigin: () => getSizableOrigin,
-  isObject: () => isObject,
+  isObject: () => isObject2,
   isPlainObject: () => isPlainObject,
   issue: () => issue,
   joinValues: () => joinValues,
@@ -45713,17 +46504,17 @@ function randomString(length = 10) {
 function esc(str) {
   return JSON.stringify(str);
 }
-function isObject(data) {
+function isObject2(data) {
   return typeof data === "object" && data !== null && !Array.isArray(data);
 }
 function isPlainObject(o) {
-  if (isObject(o) === false)
+  if (isObject2(o) === false)
     return false;
   const ctor = o.constructor;
   if (ctor === void 0)
     return true;
   const prot = ctor.prototype;
-  if (isObject(prot) === false)
+  if (isObject2(prot) === false)
     return false;
   if (Object.prototype.hasOwnProperty.call(prot, "isPrototypeOf") === false) {
     return false;
@@ -47473,7 +48264,7 @@ var init_schemas = __esm({
         return (payload, ctx) => fn(shape, payload, ctx);
       };
       let fastpass;
-      const isObject2 = isObject;
+      const isObject3 = isObject2;
       const jit = !globalConfig.jitless;
       const allowsEval2 = allowsEval;
       const fastEnabled = jit && allowsEval2.value;
@@ -47482,7 +48273,7 @@ var init_schemas = __esm({
       inst._zod.parse = (payload, ctx) => {
         value ?? (value = _normalized.value);
         const input = payload.value;
-        if (!isObject2(input)) {
+        if (!isObject3(input)) {
           payload.issues.push({
             expected: "object",
             code: "invalid_type",
@@ -47626,7 +48417,7 @@ var init_schemas = __esm({
       });
       inst._zod.parse = (payload, ctx) => {
         const input = payload.value;
-        if (!isObject(input)) {
+        if (!isObject2(input)) {
           payload.issues.push({
             code: "invalid_type",
             expected: "object",
@@ -71097,6 +71888,196 @@ var init_injected_helpers = __esm({
     return false;
   }
 
+  function isTestIdFrontmost(testID) {
+    if (typeof testID !== 'string' || !testID) {
+      return JSON.stringify({ visible: false, reason: 'testID is required' });
+    }
+    var matches = [];
+    var modals = [];
+    var scanned = 0;
+    var truncated = false;
+    forEachRootFiber(function(rootFiber) {
+      var stack = [rootFiber];
+      while (stack.length) {
+        if (++scanned > 40000) { truncated = true; return true; }
+        var fiber = stack.pop();
+        if (!fiber) continue;
+        var props = fiber.memoizedProps || {};
+        if (props.testID === testID || props.nativeID === testID) matches.push(fiber);
+        if (
+          props.visible !== false &&
+          !__hidden(fiber) &&
+          (props['aria-modal'] || props.accessibilityViewIsModal || hostKind(fiber) === 'modal')
+        ) modals.push(fiber);
+        if (fiber.sibling) stack.push(fiber.sibling);
+        if (fiber.child) stack.push(fiber.child);
+      }
+      return null;
+    });
+    if (truncated) {
+      return JSON.stringify({
+        visible: false,
+        reason: 'frontmost testID scan exceeded its bounded React-tree budget',
+        truncated: true
+      });
+    }
+    function containsFiber(ancestor, candidate) {
+      var current = candidate;
+      var guard = 0;
+      while (current && guard++ < 1000) {
+        if (current === ancestor) return true;
+        current = current.return;
+      }
+      return false;
+    }
+    var logicalMatches = [];
+    for (var matchIndex = 0; matchIndex < matches.length; matchIndex++) {
+      var sameLineage = false;
+      for (var logicalIndex = 0; logicalIndex < logicalMatches.length; logicalIndex++) {
+        if (
+          containsFiber(matches[matchIndex], logicalMatches[logicalIndex]) ||
+          containsFiber(logicalMatches[logicalIndex], matches[matchIndex])
+        ) {
+          sameLineage = true;
+          break;
+        }
+      }
+      if (!sameLineage) logicalMatches.push(matches[matchIndex]);
+    }
+    if (logicalMatches.length !== 1) {
+      return JSON.stringify({
+        visible: false,
+        reason: logicalMatches.length === 0
+          ? 'testID is not mounted'
+          : 'testID is ambiguous across mounted React trees',
+        matchCount: logicalMatches.length
+      });
+    }
+    var target = logicalMatches[0];
+    if (__hidden(target)) {
+      return JSON.stringify({
+        visible: false,
+        reason: 'testID is mounted in a hidden subtree',
+        matchCount: 1
+      });
+    }
+
+    if (modals.length > 0) {
+      var insideModal = false;
+      for (var mi = 0; mi < modals.length; mi++) {
+        if (containsFiber(modals[mi], target)) { insideModal = true; break; }
+      }
+      if (!insideModal) {
+        return JSON.stringify({
+          visible: false,
+          reason: 'testID is mounted behind the active modal React subtree',
+          matchCount: 1
+        });
+      }
+    }
+
+    var navRaw = getNavState();
+    var nav;
+    try { nav = JSON.parse(navRaw); }
+    catch(e) {
+      return JSON.stringify({
+        visible: false,
+        reason: 'navigation state is unreadable',
+        matchCount: 1
+      });
+    }
+    if (!nav || nav.error) {
+      return JSON.stringify({
+        visible: false,
+        reason: 'frontmost route cannot be proven from navigation state',
+        matchCount: 1
+      });
+    }
+    function deepestNavigation(node) {
+      var current = node;
+      var routeName = null;
+      var guard = 0;
+      while (current && guard++ < 100) {
+        if (typeof current.routeName === 'string') routeName = current.routeName;
+        if (current.nested) { current = current.nested; continue; }
+        if (Array.isArray(current.routes) && current.routes.length > 0) {
+          var index = typeof current.index === 'number' ? current.index : current.routes.length - 1;
+          if (index < 0) index = 0;
+          if (index >= current.routes.length) index = current.routes.length - 1;
+          var activeEntry = current.routes[index];
+          if (activeEntry && typeof activeEntry.name === 'string') routeName = activeEntry.name;
+          if (activeEntry && activeEntry.state) { current = activeEntry.state; continue; }
+        }
+        break;
+      }
+      return routeName;
+    }
+    var activeRoute = deepestNavigation(nav);
+    if (typeof activeRoute !== 'string' || !activeRoute) {
+      return JSON.stringify({
+        visible: false,
+        reason: 'active route is unavailable',
+        matchCount: 1
+      });
+    }
+    var routeOwner = null;
+    var current = target;
+    var depth = 0;
+    while (current && depth++ < 1000) {
+      var currentProps = current.memoizedProps;
+      if (
+        currentProps &&
+        currentProps.route &&
+        typeof currentProps.route.name === 'string'
+      ) {
+        routeOwner = currentProps.route.name;
+        break;
+      }
+      current = current.return;
+    }
+    if (routeOwner && routeOwner !== activeRoute) {
+      return JSON.stringify({
+        visible: false,
+        reason: 'testID belongs to an inactive mounted route',
+        route: routeOwner,
+        activeRoute: activeRoute,
+        matchCount: 1
+      });
+    }
+    if (!routeOwner) {
+      var cursor = nav;
+      var stacked = false;
+      while (cursor) {
+        if (Array.isArray(cursor.stack) && cursor.stack.length > 1) stacked = true;
+        if (Array.isArray(cursor.routes) && cursor.routes.length > 1) stacked = true;
+        if (cursor.nested) {
+          cursor = cursor.nested;
+        } else if (Array.isArray(cursor.routes) && cursor.routes.length > 0) {
+          var cursorIndex = typeof cursor.index === 'number' ? cursor.index : cursor.routes.length - 1;
+          var cursorRoute = cursor.routes[Math.max(0, Math.min(cursorIndex, cursor.routes.length - 1))];
+          cursor = cursorRoute && cursorRoute.state;
+        } else {
+          cursor = null;
+        }
+      }
+      if (stacked && modals.length === 0) {
+        return JSON.stringify({
+          visible: false,
+          reason: 'testID has no route owner in a multi-route navigation tree',
+          activeRoute: activeRoute,
+          matchCount: 1
+        });
+      }
+    }
+    return JSON.stringify({
+      visible: true,
+      route: routeOwner,
+      activeRoute: activeRoute,
+      modalCount: modals.length,
+      matchCount: 1
+    });
+  }
+
   // #379: JS-first keyboard dismissal for the KEYBOARD_OCCLUDED auto-heal.
   // Deterministic (no gestures, no QuickPath corruption): prefer the RN
   // Keyboard module; fall back to blurring the focused TextInput host
@@ -71211,6 +72192,7 @@ var init_injected_helpers = __esm({
     __match: __match,
     __hostKind: hostKind,
     __role: __role,
+    isTestIdFrontmost: isTestIdFrontmost,
     isReady: function() {
       // B145: ready when ANY renderer has at least one root fiber. The
       // single-renderer short-circuit from findActiveRenderer would return
@@ -75616,6 +76598,12 @@ var init_component_tree = __esm({
 
 // packages/rn-dev-agent-core/dist/tools/navigation-state.js
 function extractActiveScreen(parsed) {
+  const nested = parsed.nested;
+  if (nested && typeof nested === "object" && !Array.isArray(nested)) {
+    const deepest = extractActiveScreen(nested);
+    if (deepest)
+      return deepest;
+  }
   const direct = parsed.routeName;
   if (typeof direct === "string" && direct.length > 0)
     return direct;
@@ -75623,6 +76611,11 @@ function extractActiveScreen(parsed) {
   if (Array.isArray(routes) && routes.length > 0) {
     const idx = typeof parsed.index === "number" ? parsed.index : routes.length - 1;
     const active = routes[Math.max(0, Math.min(idx, routes.length - 1))];
+    if (active?.state && typeof active.state === "object" && !Array.isArray(active.state)) {
+      const deepest = extractActiveScreen(active.state);
+      if (deepest)
+        return deepest;
+    }
     const name = active?.name;
     if (typeof name === "string")
       return name;
@@ -78542,11 +79535,6 @@ function walkTree(node, acc) {
       walkTree(child, acc);
   }
 }
-function detectTransportBlind(failedSelector, candidates) {
-  if (!failedSelector)
-    return false;
-  return candidates.includes(failedSelector);
-}
 function replaceIdSelector(body, oldId, newId) {
   if (!isSafeMaestroScalar(newId)) {
     return { body, replacements: 0 };
@@ -78749,15 +79737,6 @@ function createRepairActionHandler() {
         hint: "The screen may not have any rendered elements with testIDs (e.g. you are on a loading screen, splash, or dev-client picker). Navigate to the target screen first."
       });
     }
-    if (extractIdSelectors(action.body).includes(args.failedSelector) && detectTransportBlind(args.failedSelector, candidates)) {
-      return failResult(`cdp_repair_action: Maestro/WDA reported "${args.failedSelector}" not visible, but rn-fast-runner sees it (${candidates.length} testIDs in the live snapshot). This is transport-blindness, not testID drift \u2014 WDA reads an empty/partial accessibility tree on this runtime (e.g. iOS 26.2 + bridgeless, GH #317). Maestro-based replay is blocked here; drive the screen with device_* primitives (device_find/press/fill), which go through rn-fast-runner and work. rn-fast-runner-native action replay is tracked in #317 Phase 2.`, "TRANSPORT_BLIND", {
-        actionId: args.actionId,
-        failedSelector: args.failedSelector,
-        snapshotTestIdCount: candidates.length,
-        candidatesSample: candidates.slice(0, 50),
-        hint: "Verify with device_snapshot \u2014 it uses rn-fast-runner. If the element is present there, this is a WDA transport limitation, not your testID."
-      });
-    }
     const result = attemptRepair(action, args.failedSelector, candidates, args.threshold ?? DEFAULT_REPAIR_THRESHOLD);
     if (result.kind === "no-stale-selector") {
       return failResult(`cdp_repair_action: ${result.reason}`, "BAD_FILENAME", {
@@ -78768,7 +79747,7 @@ function createRepairActionHandler() {
       });
     }
     if (result.kind === "no-match") {
-      return failResult(`cdp_repair_action: no confident replacement for "${args.failedSelector}". ${result.reason} If "${args.failedSelector}" is in fact correct and the screen renders, WDA may be transport-blind on this runtime (empty a11y tree; see GH #317) \u2014 confirm with device_snapshot, which uses rn-fast-runner.`, "TESTID_NOT_FOUND", {
+      return failResult(`cdp_repair_action: no confident replacement for "${args.failedSelector}". ${result.reason}`, "TESTID_NOT_FOUND", {
         actionId: args.actionId,
         failedSelector: args.failedSelector,
         bestScore: result.bestScore,
@@ -79985,377 +80964,6 @@ var init_route_sequence = __esm({
   }
 });
 
-// packages/rn-dev-agent-core/dist/domain/cdp-flow-replay.js
-function normalizeSteps(body, params) {
-  const out = [];
-  for (const raw of body) {
-    if (raw === "waitForAnimationToEnd") {
-      out.push({ t: "wait" });
-      continue;
-    }
-    if (!isObj(raw))
-      throw new UnsupportedStepError(typeof raw === "string" ? raw : `non-object(${typeof raw})`);
-    const keys = Object.keys(raw);
-    if (keys.length !== 1)
-      throw new UnsupportedStepError(keys.join("+") || "empty");
-    const key = keys[0];
-    const v = raw[key];
-    switch (key) {
-      case "launchApp": {
-        if (isObj(v)) {
-          const unsupported = Object.keys(v).filter((k) => k !== "stopApp");
-          if (unsupported.length > 0)
-            throw new UnsupportedStepError(`launchApp (unsupported keys: ${unsupported.sort().join(", ")})`);
-          if ("stopApp" in v && typeof v.stopApp !== "boolean")
-            throw new UnsupportedStepError("launchApp (stopApp must be a boolean)");
-        }
-        out.push({ t: "launch", stopApp: isObj(v) && v.stopApp === true });
-        break;
-      }
-      case "tapOn": {
-        const id = isObj(v) ? asString(v.id) : null;
-        if (!id)
-          throw new UnsupportedStepError("tapOn (missing string id)");
-        out.push({ t: "tap", id: interp(id, params) });
-        break;
-      }
-      case "inputText": {
-        const text = asString(v);
-        if (text === null)
-          throw new UnsupportedStepError("inputText (value not a string)");
-        out.push({ t: "type", text: interp(text, params) });
-        break;
-      }
-      case "assertVisible": {
-        const id = isObj(v) ? asString(v.id) : null;
-        if (!id)
-          throw new UnsupportedStepError("assertVisible (missing string id)");
-        out.push({ t: "assert", id: interp(id, params) });
-        break;
-      }
-      case "waitForAnimationToEnd":
-        out.push({ t: "wait" });
-        break;
-      case "runFlow": {
-        const when = isObj(v) && isObj(v.when) && isObj(v.when.visible) ? asString(v.when.visible.id) : null;
-        const commands = isObj(v) ? v.commands : void 0;
-        if (!when || !Array.isArray(commands))
-          throw new UnsupportedStepError("runFlow (need when.visible.id + commands[])");
-        out.push({
-          t: "runFlow",
-          whenVisible: interp(when, params),
-          commands: normalizeSteps(commands, params)
-        });
-        break;
-      }
-      default:
-        throw new UnsupportedStepError(key);
-    }
-  }
-  return out;
-}
-function firstTestId(steps) {
-  for (const s of steps) {
-    if (s.t === "tap" || s.t === "assert")
-      return s.id;
-  }
-  return null;
-}
-function countIdHits(node, params, selector, index, depth, nested, scan) {
-  if (depth > MAX_ANCHOR_DEPTH) {
-    scan.truncated = true;
-    return;
-  }
-  if (Array.isArray(node)) {
-    for (const child of node)
-      countIdHits(child, params, selector, index, depth + 1, nested, scan);
-    return;
-  }
-  if (!isObj(node))
-    return;
-  for (const [key, value] of Object.entries(node)) {
-    if (key === "id" && typeof value === "string" && interp(value, params) === selector) {
-      scan.hits.push({ index, nested });
-      continue;
-    }
-    countIdHits(value, params, selector, index, depth + 1, nested || key === "commands", scan);
-  }
-}
-function findResumeAnchor(body, params, selector) {
-  if (!selector)
-    return { found: false, reason: "no-match" };
-  const scan = { hits: [], truncated: false };
-  body.forEach((raw, index) => countIdHits(raw, params, selector, index, 0, false, scan));
-  if (scan.truncated)
-    return { found: false, reason: "too-deep" };
-  if (scan.hits.length === 0)
-    return { found: false, reason: "no-match" };
-  if (scan.hits.length > 1)
-    return { found: false, reason: "ambiguous" };
-  return scan.hits[0].nested ? { found: false, reason: "nested-match" } : { found: true, index: scan.hits[0].index };
-}
-async function replayFlow(steps, dispatch, opts = {}) {
-  const offset = opts.indexOffset ?? 0;
-  const trace = [];
-  let lastTapped = null;
-  const sourceIndex = (i) => opts.sourceIndex ?? i + offset;
-  const fail3 = (i, reason) => ({
-    passed: false,
-    failedStepIndex: sourceIndex(i),
-    reason,
-    steps: trace
-  });
-  for (let i = 0; i < steps.length; i++) {
-    const s = steps[i];
-    try {
-      switch (s.t) {
-        case "launch":
-          await dispatch.launch(s.stopApp);
-          trace.push({ sourceIndex: sourceIndex(i), t: s.t, ok: true });
-          break;
-        case "tap":
-          await dispatch.press(s.id);
-          lastTapped = s.id;
-          trace.push({ sourceIndex: sourceIndex(i), t: s.t, target: s.id, ok: true });
-          break;
-        case "type": {
-          if (!lastTapped)
-            return fail3(i, "inputText before any tapOn \u2014 no focus target");
-          await dispatch.type(lastTapped, s.text);
-          trace.push({ sourceIndex: sourceIndex(i), t: s.t, target: lastTapped, ok: true });
-          break;
-        }
-        case "assert": {
-          const ok = await dispatch.isVisible(s.id);
-          trace.push({ sourceIndex: sourceIndex(i), t: s.t, target: s.id, ok });
-          if (!ok)
-            return fail3(i, `assertVisible: "${s.id}" not present in CDP tree`);
-          break;
-        }
-        case "wait":
-          await dispatch.settle();
-          trace.push({ sourceIndex: sourceIndex(i), t: s.t, ok: true });
-          break;
-        case "runFlow": {
-          if (await dispatch.isVisible(s.whenVisible)) {
-            const sub = await replayFlow(s.commands, dispatch, { sourceIndex: sourceIndex(i) });
-            trace.push(...sub.steps);
-            if (!sub.passed) {
-              return {
-                passed: false,
-                failedStepIndex: sourceIndex(i),
-                reason: sub.reason,
-                steps: trace
-              };
-            }
-          } else {
-            trace.push({
-              sourceIndex: sourceIndex(i),
-              t: s.t,
-              target: s.whenVisible,
-              ok: true
-            });
-          }
-          break;
-        }
-      }
-    } catch (e) {
-      trace.push({
-        sourceIndex: sourceIndex(i),
-        t: s.t,
-        target: "id" in s ? s.id : void 0,
-        ok: false
-      });
-      return fail3(i, e instanceof Error ? e.message : String(e));
-    }
-  }
-  return { passed: true, steps: trace };
-}
-var UnsupportedStepError, interp, asString, isObj, MAX_ANCHOR_DEPTH;
-var init_cdp_flow_replay = __esm({
-  "packages/rn-dev-agent-core/dist/domain/cdp-flow-replay.js"() {
-    "use strict";
-    UnsupportedStepError = class extends Error {
-      stepKey;
-      constructor(stepKey) {
-        super(`cdp-flow-replay: unsupported Maestro step "${stepKey}" (no CDP/JS mapping)`);
-        this.stepKey = stepKey;
-        this.name = "UnsupportedStepError";
-      }
-    };
-    interp = (s, p) => s.replace(/\$\{([A-Z_][A-Z0-9_]*)\}/g, (_m, k) => p[k] ?? `\${${k}}`);
-    asString = (x) => typeof x === "string" ? x : null;
-    isObj = (x) => typeof x === "object" && x !== null && !Array.isArray(x);
-    MAX_ANCHOR_DEPTH = 20;
-  }
-});
-
-// packages/rn-dev-agent-core/dist/tools/cdp-replay-dispatch.js
-function firstReplayTestId(bodyYaml, params) {
-  try {
-    const parsed = (0, import_yaml4.parse)(bodyYaml);
-    if (!Array.isArray(parsed))
-      return null;
-    return firstTestId(normalizeSteps(parsed, params));
-  } catch {
-    return null;
-  }
-}
-function collectTestIds(node, acc = /* @__PURE__ */ new Set()) {
-  if (!node || typeof node !== "object")
-    return acc;
-  const n = node;
-  if (typeof n.testID === "string")
-    acc.add(n.testID);
-  if (typeof n.nativeID === "string")
-    acc.add(n.nativeID);
-  if (n.tree)
-    collectTestIds(n.tree, acc);
-  const kids = n.children ?? n.interactive ?? n.nodes ?? n.matches;
-  if (Array.isArray(kids))
-    for (const c of kids)
-      collectTestIds(c, acc);
-  return acc;
-}
-function isExactPresent(treeJson, selector) {
-  return collectTestIds(treeJson).has(selector);
-}
-function unwrapTree(data) {
-  if (!data || typeof data !== "object")
-    return null;
-  const d = data;
-  return "tree" in d ? d.tree : d;
-}
-function nodeProps(treeJson, id) {
-  const stack = [treeJson];
-  while (stack.length) {
-    const n = stack.pop();
-    if (n && typeof n === "object") {
-      if (n.testID === id || n.nativeID === id)
-        return n.props ?? n;
-      if (n.tree)
-        stack.push(n.tree);
-      const kids = n.children ?? n.interactive ?? n.nodes ?? n.matches;
-      if (Array.isArray(kids))
-        stack.push(...kids);
-    }
-  }
-  return null;
-}
-function isDisabled(props) {
-  if (!props)
-    return false;
-  const a11y = props.accessibilityState;
-  return props.disabled === true || a11y?.disabled === true || props.pointerEvents === "none";
-}
-async function runCdpReplay(bodyYaml, params, deps, opts = {}) {
-  const parsed = (0, import_yaml4.parse)(bodyYaml);
-  const resume = resolveResume(parsed, params, opts.resumeAtSelector);
-  const startIndex = resume.applied ? resume.startIndex : 0;
-  const steps = normalizeSteps(startIndex === 0 ? parsed : parsed.slice(startIndex), params);
-  const result = await replayFlow(steps, buildCdpDispatch(deps), { indexOffset: startIndex });
-  return { ...result, resume };
-}
-function resolveResume(parsed, params, selector) {
-  if (!selector || !Array.isArray(parsed))
-    return { applied: false, reason: "not-requested" };
-  const anchor = findResumeAnchor(parsed, params, selector);
-  return anchor.found ? { applied: true, selector, startIndex: anchor.index } : { applied: false, reason: anchor.reason };
-}
-function buildCdpDispatch(deps) {
-  return {
-    async press(id) {
-      const tree = await deps.treeFor(id);
-      if (!isExactPresent(tree, id))
-        throw new Error(`testID "${id}" not present`);
-      if (isDisabled(nodeProps(tree, id)))
-        throw new Error(`testID "${id}" is disabled/non-interactable`);
-      await deps.pressByTestId(id);
-    },
-    async type(id, text) {
-      await deps.typeByTestId(id, text);
-    },
-    async isVisible(id) {
-      return isExactPresent(await deps.treeFor(id), id);
-    },
-    async launch(stopApp) {
-      await deps.launchApp(stopApp);
-    },
-    async settle() {
-      await deps.settle();
-    }
-  };
-}
-var import_yaml4;
-var init_cdp_replay_dispatch = __esm({
-  "packages/rn-dev-agent-core/dist/tools/cdp-replay-dispatch.js"() {
-    "use strict";
-    import_yaml4 = __toESM(require_dist(), 1);
-    init_cdp_flow_replay();
-  }
-});
-
-// packages/rn-dev-agent-core/dist/domain/blind-probe-gate.js
-import { execFile as execFileCb15 } from "node:child_process";
-import { promisify as promisify19 } from "node:util";
-function evaluateBlindProbeGate(input) {
-  if (input.platform === "android")
-    return { atRisk: null };
-  if (input.platform !== "ios" && input.iosRuntimeMajor === null)
-    return { atRisk: null };
-  if (input.iosRuntimeMajor !== null && input.iosRuntimeMajor >= WDA_BLIND_MIN_IOS_MAJOR) {
-    return { atRisk: "ios26" };
-  }
-  const matches = (r) => r.deviceId !== void 0 && input.deviceId !== null && r.deviceId === input.deviceId;
-  const recent = input.runHistory.filter(matches).slice(-RECENT_WINDOW).reverse();
-  for (const r of recent) {
-    if (r.status === "pass" && !r.transport)
-      return { atRisk: null };
-    if (r.failureCode === "TRANSPORT_BLIND")
-      return { atRisk: "prior-transport-blind" };
-  }
-  return { atRisk: null };
-}
-function parseIosRuntimeMajorForUdid(simctlJson, udid) {
-  if (!simctlJson || typeof simctlJson !== "object")
-    return null;
-  const devices = simctlJson.devices;
-  if (!devices || typeof devices !== "object")
-    return null;
-  for (const [runtimeKey, list] of Object.entries(devices)) {
-    if (!Array.isArray(list))
-      continue;
-    if (!list.some((d) => d && typeof d === "object" && d.udid === udid)) {
-      continue;
-    }
-    const m = runtimeKey.match(/SimRuntime\.iOS-(\d+)/);
-    return m ? Number(m[1]) : null;
-  }
-  return null;
-}
-async function getIosRuntimeMajorForUdid(udid, execFn2 = (cmd, args) => execFile18(cmd, args, { timeout: 5e3, encoding: "utf8" })) {
-  if (runtimeCache.has(udid))
-    return runtimeCache.get(udid) ?? null;
-  try {
-    const { stdout } = await execFn2("xcrun", ["simctl", "list", "devices", "--json"]);
-    const major = parseIosRuntimeMajorForUdid(JSON.parse(stdout), udid);
-    runtimeCache.set(udid, major);
-    return major;
-  } catch {
-    return null;
-  }
-}
-var execFile18, WDA_BLIND_MIN_IOS_MAJOR, RECENT_WINDOW, runtimeCache;
-var init_blind_probe_gate = __esm({
-  "packages/rn-dev-agent-core/dist/domain/blind-probe-gate.js"() {
-    "use strict";
-    execFile18 = promisify19(execFileCb15);
-    WDA_BLIND_MIN_IOS_MAJOR = 26;
-    RECENT_WINDOW = 5;
-    runtimeCache = /* @__PURE__ */ new Map();
-  }
-});
-
 // packages/rn-dev-agent-core/dist/session/runtime.js
 function unavailable(reason, fallbackCode) {
   const matched = /^([A-Z][A-Z0-9_]+):/.exec(reason);
@@ -80574,9 +81182,10 @@ function replaySuccessEvidence(env) {
     transport: env.data?.transport ?? env.data?.runner ?? "unproven",
     transportVersion: env.data?.transportVersion ?? null,
     fallback: env.data?.fallback ?? "unproven",
+    proofDomain: env.data?.proofDomain ?? "xctest-native",
     ...env.data?.deviceAuthority ? { deviceAuthority: env.data.deviceAuthority } : {},
     perStepReadback: {
-      source: "maestro-runner-step-report",
+      source: env.data?.proofDomain === "react-tree" ? "react-tree-step-trace" : env.data?.proofDomain === "partitioned" ? "partitioned-step-trace" : "maestro-runner-step-report",
       complete: steps.length > 0 && steps.every((step) => step.status === "pass"),
       steps
     }
@@ -80634,8 +81243,6 @@ function mapRefusedReason(repairCode, repairError) {
     return "SNAPSHOT_FAILED";
   if (repairCode === "RUNNER_LEAK")
     return "SNAPSHOT_FAILED";
-  if (repairCode === "TRANSPORT_BLIND")
-    return "TRANSPORT_BLIND";
   if (repairCode === "TESTID_NOT_FOUND")
     return "NO_MATCH";
   if (repairCode === "STALE_TARGET") {
@@ -80645,32 +81252,10 @@ function mapRefusedReason(repairCode, repairError) {
   }
   return "INTERNAL_ERROR";
 }
-async function probeTreeWithRetry(replay, probe, retry) {
-  let sawTree = false;
-  for (let attempt = 0; attempt < retry.attempts; attempt++) {
-    const tree = await replay.treeFor(probe).catch(() => null);
-    if (tree !== null) {
-      sawTree = true;
-      if (isExactPresent(tree, probe))
-        return { found: true, sawTree: true };
-    }
-    if (attempt < retry.attempts - 1) {
-      await new Promise((r) => setTimeout(r, retry.delayMs));
-    }
-  }
-  return { found: false, sawTree };
-}
 function createRunActionHandler(deps = {}) {
   const maestroRun = deps.maestroRun ?? createMaestroRunHandler();
   const repairAction = deps.repairAction ?? createRepairActionHandler();
   const getLiveRoute = deps.getLiveRoute ?? (async () => null);
-  const getReplayDeps = deps.replayDeps ?? (() => null);
-  const probeRetryRaw = deps.probeRetry ?? { attempts: 3, delayMs: 1500 };
-  const probeRetry = {
-    attempts: Math.min(Math.max(1, probeRetryRaw.attempts), 5),
-    delayMs: Math.min(Math.max(0, probeRetryRaw.delayMs), 5e3)
-  };
-  const blindProbeContext2 = deps.blindProbeContext ?? (async () => null);
   const targetContext = deps.targetContext ?? (() => null);
   const claimBundleAuthority = deps.claimBundleAuthority ?? (async () => true);
   const claimNativeOrigin = deps.claimNativeOrigin ?? claimManagedNativeOriginAuthority;
@@ -80711,7 +81296,6 @@ function createRunActionHandler(deps = {}) {
       return failResult(`Action ${args.actionId} is not valid Maestro YAML: ${loaded.replay.error}`, "BAD_RECORDING", { actionId: args.actionId, fallback: "none" });
     }
     const replayYaml = loaded.replay.yamlText;
-    const cdpReplayYaml = loaded.replay.cdpYaml;
     const preflightCommands = loaded.replay.commands;
     const forceReload = proofReplay ? false : args.forceReload !== false;
     const action = forceReload ? acknowledgeExternalEdit(loaded) : loaded;
@@ -80731,7 +81315,6 @@ function createRunActionHandler(deps = {}) {
       });
     }
     const autoRepairEnabled = args.autoRepair !== false;
-    const blindProbeControl = args.blindProbeMode ? { blindProbeMode: args.blindProbeMode } : {};
     const trigger = args.trigger ?? "agent";
     const timeoutMs = args.timeoutMs ?? 12e4;
     const t0 = Date.now();
@@ -80783,89 +81366,8 @@ function createRunActionHandler(deps = {}) {
       databaseMirror: proofReplay ? "none" : "best-effort"
     });
     try {
-      let atRisk = null;
       const strictExecutor = usesStrictRunActionPolicy(args);
       const strictRunRecordMeta = (outcome) => strictExecutor && outcome.persistedRunId ? { strictRunRecordId: outcome.persistedRunId } : {};
-      const inheritedBlindProbeDisabled = process.env.RN_BLIND_PROBE === "0" || process.env.RN_BLIND_PROBE === "false";
-      const blindProbeDisabled = strictExecutor || args.blindProbeMode === "forbid" || args.blindProbeMode !== "allow" && inheritedBlindProbeDisabled;
-      if (args.platform !== "android") {
-        const ctx = await blindProbeContext2().catch(() => null);
-        if (ctx) {
-          probeDeviceId = ctx.deviceId;
-          observedDeviceId = ctx.deviceId ?? observedDeviceId;
-          if (!blindProbeDisabled) {
-            atRisk = evaluateBlindProbeGate({
-              platform: args.platform,
-              iosRuntimeMajor: ctx.iosRuntimeMajor,
-              deviceId: ctx.deviceId,
-              runHistory: action.state.runHistory
-            }).atRisk;
-          }
-        }
-      }
-      if (atRisk) {
-        const candidate = getReplayDeps(args);
-        const replayDeps = candidate && await claimBundleAuthority(args) ? candidate : null;
-        const probe = replayDeps ? firstReplayTestId(cdpReplayYaml, args.params ?? {}) : null;
-        if (replayDeps && probe) {
-          const tProbe = Date.now();
-          const probeOutcome = await measureStep("proactive-probe", () => probeTreeWithRetry(replayDeps, probe, probeRetry));
-          if (probeOutcome.found) {
-            const tReplay = Date.now();
-            try {
-              const replay = await measureStep("proactive-cdp-replay", () => runCdpReplay(cdpReplayYaml, args.params ?? {}, replayDeps));
-              const timings_ms = { probe: tReplay - tProbe, replay: Date.now() - tReplay };
-              const blindProbe = { atRisk, skippedMaestro: true };
-              const autoRepair2 = {
-                attempted: false,
-                outcome: "skipped",
-                // The probe+replay IS this run's first (and only) attempt —
-                // maestro was skipped by design.
-                phases: { firstAttemptMs: Date.now() - tProbe }
-              };
-              const persisted2 = await persistRunWithDevice({
-                timestamp: (/* @__PURE__ */ new Date()).toISOString(),
-                durationMs: Date.now() - t0,
-                status: replay.passed ? "pass" : "fail",
-                failureCode: replay.passed ? void 0 : "FALLBACK_REPLAY_FAILED",
-                failureDetail: replay.reason,
-                trigger,
-                autoRepair: autoRepair2,
-                transport: "cdp-js",
-                blindProbe
-              });
-              if (replay.passed) {
-                return okResult({
-                  passed: true,
-                  actionId: args.actionId,
-                  transport: "cdp-js",
-                  transportVersion: null,
-                  fallback: "none",
-                  repair: autoRepair2,
-                  writes: writeDisclosure(promotionDisclosure(persisted2), persisted2),
-                  blindProbe,
-                  ...blindProbeControl,
-                  timings_ms,
-                  autoRepair: autoRepair2,
-                  durationMs: Date.now() - t0,
-                  flowFile: action.filePath
-                });
-              }
-              return failResult(`cdp_run_action: ${args.actionId} probe-routed to CDP/JS (at-risk: ${atRisk}) and failed at step ${replay.failedStepIndex}: ${replay.reason}. Maestro was not attempted; rerun with RN_BLIND_PROBE=0 to force the engine path.`, "FALLBACK_REPLAY_FAILED", {
-                actionId: args.actionId,
-                transport: "cdp-js",
-                blindProbe,
-                ...blindProbeControl,
-                timings_ms,
-                failedStepIndex: replay.failedStepIndex
-              });
-            } catch (e) {
-              if (!(e instanceof UnsupportedStepError))
-                throw e;
-            }
-          }
-        }
-      }
       const tBeforeFirst = Date.now();
       probeDeviceId = null;
       const firstResult = await measureStep("maestro-first-attempt", () => maestroRun({
@@ -80929,7 +81431,7 @@ function createRunActionHandler(deps = {}) {
           timestamp: (/* @__PURE__ */ new Date()).toISOString(),
           durationMs: Date.now() - t0,
           status: "fail",
-          failureCode: typedCode === "DEVICE_AUTHORITY_MISMATCH" ? "DEVICE_AUTHORITY_MISMATCH" : typedCode === "RECONNECT_TIMEOUT" ? "TIMEOUT" : "UNKNOWN",
+          failureCode: typedCode === "DEVICE_AUTHORITY_MISMATCH" ? "DEVICE_AUTHORITY_MISMATCH" : typedCode === "NATIVE_SURFACE_BLIND" ? "NATIVE_SURFACE_BLIND" : typedCode === "RECONNECT_TIMEOUT" ? "TIMEOUT" : "UNKNOWN",
           failureDetail: firstFailureDetail.slice(0, 1e3),
           trigger,
           autoRepair: autoRepair2
@@ -80938,6 +81440,14 @@ function createRunActionHandler(deps = {}) {
           actionId: args.actionId,
           failureKind: typedCode,
           deviceAuthority: firstDeviceAuthority,
+          ...typedCode === "NATIVE_SURFACE_BLIND" ? {
+            proofDomain: firstEnv.meta?.proofDomain,
+            runner: firstEnv.meta?.runner,
+            transportVersion: firstEnv.meta?.transportVersion,
+            nativeVision: firstEnv.meta?.nativeVision,
+            cleanup: firstEnv.meta?.cleanup,
+            nextAction: firstEnv.meta?.nextAction
+          } : {},
           autoRepair: autoRepair2,
           writes: writeDisclosure("none", persisted2),
           ...strictRunRecordMeta(persisted2)
@@ -80954,7 +81464,9 @@ function createRunActionHandler(deps = {}) {
           durationMs: Date.now() - t0,
           status: "pass",
           trigger,
-          autoRepair: autoRepair2
+          autoRepair: autoRepair2,
+          ...firstEnv.data?.transport === "cdp-js" ? { transport: "cdp-js" } : {},
+          ...firstEnv.data?.proofDomain ? { proofDomain: firstEnv.data.proofDomain } : {}
         });
         if (strictExecutor && persisted2.persistedRunId !== runId) {
           return failResult(`cdp_run_action: ${args.actionId} passed, but its authoritative RunRecord was not committed.`, "LOAD_FAILED", {
@@ -81007,82 +81519,6 @@ function createRunActionHandler(deps = {}) {
           });
         }
       }
-      let cdpJsFallback;
-      if (!strictExecutor && (failure.kind === "SELECTOR_NOT_FOUND" || failure.kind === "UNKNOWN")) {
-        const candidate = getReplayDeps(args);
-        const replayDeps = candidate && await claimBundleAuthority(args) ? candidate : null;
-        const probe = !replayDeps ? null : failure.kind === "SELECTOR_NOT_FOUND" ? failure.selector : firstReplayTestId(cdpReplayYaml, args.params ?? {});
-        if (!replayDeps) {
-          cdpJsFallback = { attempted: false, reason: "no-replay-deps" };
-        } else if (!probe) {
-          cdpJsFallback = { attempted: false, reason: "no-probe-testid" };
-        } else {
-          const probeOutcome = await measureStep("fallback-probe", () => probeTreeWithRetry(replayDeps, probe, probeRetry));
-          if (!probeOutcome.found) {
-            cdpJsFallback = {
-              attempted: false,
-              reason: probeOutcome.sawTree ? "testid-not-in-tree" : "cdp-unreachable"
-            };
-          } else {
-            const maestroEvidence = {
-              failureKind: failure.kind,
-              ...failure.kind === "SELECTOR_NOT_FOUND" ? { failureSelector: failure.selector } : {},
-              underlyingFailure: firstFailureDetail,
-              terminal: readMaestroTerminal(firstEnv),
-              firstAttemptOutput: boundedOutput(firstOutput)
-            };
-            try {
-              const replay = await measureStep("fallback-cdp-replay", () => runCdpReplay(cdpReplayYaml, args.params ?? {}, replayDeps, {
-                resumeAtSelector: failure.kind === "SELECTOR_NOT_FOUND" ? failure.selector : null
-              }));
-              const status = replay.passed ? "pass" : "fail";
-              const autoRepair2 = {
-                attempted: false,
-                outcome: "skipped",
-                phases: { firstAttemptMs }
-              };
-              probeDeviceId = maestroDeviceId ?? observedDeviceId;
-              const persisted2 = await persistRunWithDevice({
-                timestamp: (/* @__PURE__ */ new Date()).toISOString(),
-                durationMs: Date.now() - t0,
-                status,
-                failureCode: replay.passed ? void 0 : "TRANSPORT_BLIND",
-                failureDetail: replay.reason,
-                trigger,
-                autoRepair: autoRepair2,
-                transport: "cdp-js"
-              });
-              if (replay.passed) {
-                return okResult({
-                  passed: true,
-                  actionId: args.actionId,
-                  transport: "cdp-js",
-                  transportVersion: null,
-                  fallback: "cdp-js",
-                  repair: autoRepair2,
-                  autoRepair: autoRepair2,
-                  writes: writeDisclosure(promotionDisclosure(persisted2), persisted2),
-                  durationMs: Date.now() - t0,
-                  flowFile: action.filePath,
-                  resume: replay.resume
-                });
-              }
-              return failResult(`cdp_run_action: ${args.actionId} replayed via CDP/JS (WDA transport-blind) and failed at step ${replay.failedStepIndex}: ${replay.reason}`, "TRANSPORT_BLIND", {
-                actionId: args.actionId,
-                transport: "cdp-js",
-                failedStepIndex: replay.failedStepIndex,
-                resume: replay.resume,
-                ...maestroEvidence
-              });
-            } catch (e) {
-              if (e instanceof UnsupportedStepError) {
-                return failResult(`cdp_run_action: ${args.actionId} cannot replay via CDP/JS \u2014 ${e.message}. This action uses a step type the iOS 26.x fallback doesn't support; run on iOS 18 (WDA works there).`, "UNSUPPORTED_STEP", { actionId: args.actionId, stepKey: e.stepKey, ...maestroEvidence });
-              }
-              throw e;
-            }
-          }
-        }
-      }
       if (!autoRepairEnabled || !isAutoRepairable(failure)) {
         const autoRepair2 = autoRepairEnabled ? {
           attempted: false,
@@ -81116,14 +81552,10 @@ function createRunActionHandler(deps = {}) {
           firstAttemptOutput: boundedOutput(firstOutput),
           terminal: readMaestroTerminal(firstEnv),
           runnerResume: firstEnv.meta?.runnerResume,
-          ...cdpJsFallback ? { cdpJsFallback } : {},
           ...strictRunRecordMeta(persisted2)
         };
         const cacheProvisionRefusal = failure.kind === "WDA_BOOTSTRAP_FAILED" && firstFailureDetail.includes("RUNNER_CACHE_UNAVAILABLE");
         let message = cacheProvisionRefusal ? `cdp_run_action: ${args.actionId} failed (WDA_BOOTSTRAP_FAILED) before the first replay step: ${firstFailureDetail}` : failure.kind === "WDA_BOOTSTRAP_FAILED" ? `cdp_run_action: ${args.actionId} failed (WDA_BOOTSTRAP_FAILED) before the first replay step: ${failure.detail}. Re-run the replay (bootstrap retries itself); check network access; diagnose the pin-cache runner with ${PINNED_RUNNER_DIAGNOSE_HINT}. Supported correction: ${PINNED_RUNNER_INSTALL_HINT}. Never invoke PATH, ~/.maestro-runner, maestro-cli, or manual login. No preparation or cache mutation was attempted.` : `cdp_run_action: ${args.actionId} failed (${failure.kind})${autoRepairEnabled ? " \u2014 failure not auto-repairable" : " \u2014 auto-repair disabled"}: ${firstFailureDetail}`;
-        if (cdpJsFallback?.reason === "cdp-unreachable") {
-          message += ". Maestro failed before completing the flow (on iOS 26.x WDA often dies at startup) and the CDP/JS replay fallback was skipped: CDP was unreachable after the flow. Check cdp_status and reconnect, then retry; if another XCUITest automation is driving this simulator, stop it first.";
-        }
         return toolCode ? failResult(message, toolCode, meta) : failResult(message, meta);
       }
       if (failure.kind !== "SELECTOR_NOT_FOUND") {
@@ -81158,7 +81590,7 @@ function createRunActionHandler(deps = {}) {
           trigger,
           autoRepair: autoRepair2
         });
-        return failResult(`cdp_run_action: ${args.actionId} failed with SELECTOR_NOT_FOUND (${failure.selector}); auto-repair refused (${refusedReason}): ${repairEnv.error ?? "unknown"}`, refusedReason === "TRANSPORT_BLIND" ? "TRANSPORT_BLIND" : "TESTID_NOT_FOUND", {
+        return failResult(`cdp_run_action: ${args.actionId} failed with SELECTOR_NOT_FOUND (${failure.selector}); auto-repair refused (${refusedReason}): ${repairEnv.error ?? "unknown"}`, "TESTID_NOT_FOUND", {
           actionId: args.actionId,
           failureKind: failure.kind,
           failureSelector: failure.selector,
@@ -81264,7 +81696,9 @@ function createRunActionHandler(deps = {}) {
         failureCode: retryClassification?.actionCode,
         failureDetail: retryPassed ? void 0 : retryFailureDetail.slice(0, 1e3),
         trigger,
-        autoRepair
+        autoRepair,
+        ...retryPassed && retryEnv.data?.transport === "cdp-js" ? { transport: "cdp-js" } : {},
+        ...retryPassed && retryEnv.data?.proofDomain ? { proofDomain: retryEnv.data.proofDomain } : {}
       });
       if (retryPassed) {
         return okResult({
@@ -81372,9 +81806,6 @@ var init_run_action = __esm({
     init_path_safety();
     init_route_sequence();
     init_registry();
-    init_cdp_replay_dispatch();
-    init_cdp_flow_replay();
-    init_blind_probe_gate();
     init_authority_gate();
     init_runtime();
     init_resolve_ios_app_file();
@@ -82954,8 +83385,8 @@ var init_evidence = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/tools/collect-logs.js
-import { execFile as execFileCb16, spawn as spawn9 } from "node:child_process";
-import { promisify as promisify20 } from "node:util";
+import { execFile as execFileCb15, spawn as spawn9 } from "node:child_process";
+import { promisify as promisify19 } from "node:util";
 function normalizeTimestamp(ts) {
   if (!ts)
     return (/* @__PURE__ */ new Date()).toISOString();
@@ -83027,7 +83458,7 @@ function buildIosLogStreamArgs(deviceId, pid) {
 async function resolveIosAppPid(deviceId, bundleId, signal) {
   let stdout;
   try {
-    ({ stdout } = await execFile19("xcrun", ["simctl", "spawn", deviceId, "launchctl", "list"], {
+    ({ stdout } = await execFile18("xcrun", ["simctl", "spawn", deviceId, "launchctl", "list"], {
       timeout: PID_PROBE_TIMEOUT_MS,
       signal
     }));
@@ -83410,14 +83841,14 @@ function createCollectLogsHandler(getClient2) {
     }
   };
 }
-var execFile19, SIGKILL_GRACE_MS3, PID_PROBE_TIMEOUT_MS, LOGCAT_RE, ANDROID_LEVEL_MAP;
+var execFile18, SIGKILL_GRACE_MS3, PID_PROBE_TIMEOUT_MS, LOGCAT_RE, ANDROID_LEVEL_MAP;
 var init_collect_logs = __esm({
   "packages/rn-dev-agent-core/dist/tools/collect-logs.js"() {
     "use strict";
     init_agent_device_wrapper();
     init_utils();
     init_evidence();
-    execFile19 = promisify20(execFileCb16);
+    execFile18 = promisify19(execFileCb15);
     SIGKILL_GRACE_MS3 = 1500;
     PID_PROBE_TIMEOUT_MS = 5e3;
     LOGCAT_RE = /^(\d{2}-\d{2})\s+(\d{2}:\d{2}:\d{2}\.\d{3})\s+(\d+)\s+\d+\s+([VDIWEFS])\s+([\w./-]+)\s*:\s*(.*)$/;
@@ -83491,6 +83922,46 @@ var init_session_runtime_absence = __esm({
     ANDROID_APP_PROBE_TIMEOUT_MS = 3e3;
     InconclusiveRuntimeProbeError = class extends Error {
     };
+  }
+});
+
+// packages/rn-dev-agent-core/dist/domain/ios-runtime.js
+import { execFile as execFileCb16 } from "node:child_process";
+import { promisify as promisify20 } from "node:util";
+function parseIosRuntimeMajorForUdid(simctlJson, udid) {
+  if (!simctlJson || typeof simctlJson !== "object")
+    return null;
+  const devices = simctlJson.devices;
+  if (!devices || typeof devices !== "object")
+    return null;
+  for (const [runtimeKey, list] of Object.entries(devices)) {
+    if (!Array.isArray(list))
+      continue;
+    if (!list.some((device) => device?.udid === udid))
+      continue;
+    const match = runtimeKey.match(/SimRuntime\.iOS-(\d+)/);
+    return match ? Number(match[1]) : null;
+  }
+  return null;
+}
+async function getIosRuntimeMajorForUdid(udid, execFn2 = (cmd, args) => execFile19(cmd, args, { timeout: 5e3, encoding: "utf8" })) {
+  if (runtimeCache.has(udid))
+    return runtimeCache.get(udid) ?? null;
+  try {
+    const { stdout } = await execFn2("xcrun", ["simctl", "list", "devices", "--json"]);
+    const major = parseIosRuntimeMajorForUdid(JSON.parse(stdout), udid);
+    runtimeCache.set(udid, major);
+    return major;
+  } catch {
+    return null;
+  }
+}
+var execFile19, runtimeCache;
+var init_ios_runtime = __esm({
+  "packages/rn-dev-agent-core/dist/domain/ios-runtime.js"() {
+    "use strict";
+    execFile19 = promisify20(execFileCb16);
+    runtimeCache = /* @__PURE__ */ new Map();
   }
 });
 
@@ -93680,7 +94151,7 @@ async function main() {
     });
   }
 }
-var pkgPath, pkgVersion, lockfile, diagnosticContractProbe, noLock, client, getClient, configureClientLifecycle, setClient, publishClient, createClient, execFileP, mustOk, makeReplayDeps, server2, strictProofMonitor, experienceRecorder, authorityRuntime, probeForegroundSurface, foreignMetroOriginScanner, createRuntimeAuthorityProbe, localAuthorityProbe, authorityGate, blindProbeContext, mirrorCfg, mirrorManager2, liveEnabled, liveDeps, registeredToolNames, isSessionRuntimeAbsent, persistedAuthorityStatus, getSessionSignerCapability, spawningSupervisorPid, requestWorkerRecycle, sessionHandler, disconnectClientHandler, connectBoundSession, resolveNativeProofDevice, proofReadiness, proofCaptureHandler, runActionHandler, e2ePreflight, e2eReload, e2eSuiteHandler, e2eCsrfToken, observeRootResolver, projectRootFor, triggerE2eRun, observeRunActionHandler, observeTriggerRun, gatedObserveState, shutdown, stopParentWatch;
+var pkgPath, pkgVersion, lockfile, diagnosticContractProbe, noLock, client, getClient, configureClientLifecycle, setClient, publishClient, createClient, execFileP, mustOk, makeReplayDeps, probeNativeVision, server2, strictProofMonitor, experienceRecorder, authorityRuntime, probeForegroundSurface, foreignMetroOriginScanner, createRuntimeAuthorityProbe, localAuthorityProbe, authorityGate, mirrorCfg, mirrorManager2, liveEnabled, liveDeps, registeredToolNames, isSessionRuntimeAbsent, persistedAuthorityStatus, getSessionSignerCapability, spawningSupervisorPid, requestWorkerRecycle, sessionHandler, disconnectClientHandler, connectBoundSession, resolveNativeProofDevice, proofReadiness, proofCaptureHandler, maestroRunHandler, runActionHandler, e2ePreflight, e2eReload, e2eSuiteHandler, e2eCsrfToken, observeRootResolver, projectRootFor, triggerE2eRun, observeRunActionHandler, observeTriggerRun, gatedObserveState, shutdown, stopParentWatch;
 var init_index = __esm({
   "packages/rn-dev-agent-core/dist/index.js"() {
     "use strict";
@@ -93715,6 +94186,7 @@ var init_index = __esm({
     init_run_action();
     init_login_prologue2();
     init_cdp_replay_dispatch();
+    init_cdp_flow_replay();
     init_dispatch();
     init_mmkv();
     init_dev_settings();
@@ -93726,6 +94198,8 @@ var init_index = __esm({
     init_device_session();
     init_session_runtime_absence();
     init_device_interact();
+    init_ios_runtime();
+    init_ios_proof_router();
     init_device_permission();
     init_device_reset_state();
     init_device_deeplink();
@@ -93747,7 +94221,6 @@ var init_index = __esm({
     init_parent_watch();
     init_device_arbiter();
     init_foreign_flow_gate();
-    init_blind_probe_gate();
     init_agent_device_wrapper();
     init_maestro_run();
     init_maestro_generate();
@@ -93862,9 +94335,9 @@ var init_index = __esm({
     mustOk = (res, what) => {
       const env = JSON.parse(res.content[0].text);
       if (env.ok === false)
-        throw new Error(`${what} failed: ${env.error ?? "ok:false"}`);
+        throw new ReplayDispatchError(env.code ?? "INTERACTION_NOT_ACTUATED", `${what} failed: ${env.error ?? "ok:false"}`, env.meta);
     };
-    makeReplayDeps = () => {
+    makeReplayDeps = (_args, signal) => {
       const session2 = getActiveSession();
       if (!session2 || session2.platform !== "ios" || !session2.appId)
         return null;
@@ -93875,12 +94348,7 @@ var init_index = __esm({
           mustOk(await interact({ action: "press", testID: id, animated: false }), `press "${id}"`);
         },
         typeByTestId: async (id, text) => {
-          mustOk(await interact({
-            action: "typeText",
-            testID: id,
-            text,
-            animated: false
-          }), `type "${id}"`);
+          mustOk(await performReactTreeInput(id, text, getClient(), signal), `type "${id}"`);
         },
         treeFor: async (id) => {
           const fetchTree = async (interactiveOnly) => JSON.parse((await tree({
@@ -93895,6 +94363,25 @@ var init_index = __esm({
           }
           return env.ok ? unwrapTree(env.data) : null;
         },
+        frontmostFor: async (id) => {
+          const result = await getClient().evaluate(getClient().bridgeWithFallback(`isTestIdFrontmost(${JSON.stringify(id)})`));
+          if (result.error || typeof result.value !== "string") {
+            return { visible: false, reason: `frontmost route check failed for testID "${id}"` };
+          }
+          try {
+            const parsed = JSON.parse(result.value);
+            return {
+              visible: parsed.visible === true,
+              ...parsed.reason ? { reason: parsed.reason } : {},
+              ...typeof parsed.matchCount === "number" ? { matchCount: parsed.matchCount } : {}
+            };
+          } catch {
+            return {
+              visible: false,
+              reason: `frontmost route check was unreadable for testID "${id}"`
+            };
+          }
+        },
         launchApp: async (stopApp) => {
           const udid = await resolveIosUdid(session2.deviceId);
           if (!udid)
@@ -93908,8 +94395,30 @@ var init_index = __esm({
           await execFileP("xcrun", ["simctl", "launch", udid, session2.appId]);
         },
         settle: async () => {
-          await new Promise((r) => setTimeout(r, 400));
+          if (signal?.aborted)
+            throw new ReplayDispatchError("RUNNER_TIMEOUT", "Replay cancelled");
+          await new Promise((resolve21, reject) => {
+            const timer = setTimeout(resolve21, 400);
+            signal?.addEventListener("abort", () => {
+              clearTimeout(timer);
+              reject(new ReplayDispatchError("RUNNER_TIMEOUT", "Replay cancelled"));
+            }, { once: true });
+          });
         }
+      };
+    };
+    probeNativeVision = async ({ deviceId, selectors, signal }) => {
+      signal.throwIfAborted();
+      const snapshot = await fetchSnapshotNodes(false);
+      signal.throwIfAborted();
+      if (!snapshot.ok)
+        return null;
+      const visibleSelectors = selectorsVisibleInNativeSnapshot(selectors, snapshot.nodes);
+      return {
+        source: "rn-fast-runner-snapshot",
+        nodeCount: snapshot.nodes.length,
+        visibleSelectors,
+        runtimeMajor: await getIosRuntimeMajorForUdid(deviceId)
       };
     };
     server2 = new McpServer({
@@ -94145,11 +94654,11 @@ var init_index = __esm({
       snapshotCaptureCheckpoint: getSnapshotCaptureCheckpoint,
       promoteSnapshotOrigin: promoteSnapshotOriginSince,
       onRuntimeBundleInvalidated: () => getClient().clearAuthoritativeSessionPolicy(),
-      onRunnerReleased: async (runner) => {
+      onRunnerReleased: async (runner, signal) => {
         if (runner.platform !== "ios")
           return;
         const deviceId = typeof runner.deviceId === "string" ? runner.deviceId : void 0;
-        await stopFastRunner(deviceId);
+        await stopFastRunner(deviceId, signal);
         resetRunnerRebuildBudgetForCurrentPlugin();
       }
     });
@@ -94204,15 +94713,6 @@ var init_index = __esm({
       const s = getActiveSession();
       return s?.platform === "ios" && s.deviceId ? s.deviceId : null;
     });
-    blindProbeContext = async () => {
-      const udid = foreignGateUdid();
-      if (!udid)
-        return null;
-      return {
-        deviceId: udid,
-        iosRuntimeMajor: await getIosRuntimeMajorForUdid(udid)
-      };
-    };
     mirrorCfg = diagnosticContractProbe ? { enabled: false, fps: 0 } : resolveMirrorConfig();
     mirrorManager2 = mirrorCfg.enabled ? new MirrorManager({
       resolveTarget: buildMirrorTargetResolver({
@@ -94963,7 +95463,12 @@ var init_index = __esm({
       screenshotPath: external_exports.string().optional().describe("Output path for screenshot (default: auto-generated)"),
       label: external_exports.string().optional().describe('Label for this proof step (e.g. "After adding item to cart")')
     }, createProofStepHandler(getClient));
-    trackedTool("maestro_run", "Execute a Maestro flow through the pin-cache runner. The session requires maestro-runner >= 1.1.24 from its versioned pin-cache and installs attested 1.1.24 as the default known-good. Pass flowPath for an existing .yaml file, or inlineYaml for ephemeral flows. Missing, older, unverified, checksum-mismatched, or unsupported engines are refused before UI mutation. Uses UIAutomator2 on Android and XCTest on iOS. A matching active device session, explicit deviceId, or Android ANDROID_SERIAL is forwarded as an exact --device/--udid target; success is rejected unless direct device/WDA evidence matches. Does NOT require CDP \u2014 works even when app is crashed or on native screens.", {
+    maestroRunHandler = createMaestroRunHandler({
+      replayDeps: (args, signal) => makeReplayDeps(args, signal),
+      getLiveRoute: () => readLiveRoute(getClient()),
+      nativeVisionProbe: probeNativeVision
+    });
+    trackedTool("maestro_run", "Execute a validated flow using semantic proof-domain routing. On iOS, exact-testID React commands execute through the authority-bound React tree before WDA can claim selector truth; text/system/native-only commands remain XCTest, and mixed flows are partitioned before execution without React-to-XCTest correlation. Results label react-tree and xctest-native proof domains explicitly; a React-tree pass is never Maestro certification or proof of IME, AutoFill, keyboard occlusion, or native interaction fidelity. Android and native-only iOS flows use the pin-cache maestro-runner >= 1.1.24. Pass flowPath for an existing .yaml file or inlineYaml for an ephemeral flow.", {
       flowPath: external_exports.string().optional().describe("Path to a .yaml flow file to execute"),
       inlineYaml: external_exports.string().optional().describe("Inline YAML flow content (written to /tmp and executed)"),
       platform: external_exports.enum(["ios", "android"]).optional().describe("Target platform (auto-detected from session)"),
@@ -94972,7 +95477,7 @@ var init_index = __esm({
       deviceId: external_exports.string().min(1).max(256).optional().describe("Exact UDID or serial; defaults from session or Android ANDROID_SERIAL."),
       timeoutMs: external_exports.number().int().min(5e3).max(3e5).default(12e4).describe("Execution timeout in ms"),
       params: external_exports.record(external_exports.string(), external_exports.string()).optional().describe("GH #116: parameter bindings forwarded as -e KEY=VALUE for ${KEY} placeholders in the flow. Keys must match /^[A-Z_][A-Z0-9_]*$/ (validated in the handler).")
-    }, createMaestroRunHandler());
+    }, maestroRunHandler);
     trackedTool("maestro_generate", "Generate a persistent Maestro YAML flow file from structured steps. Writes to .rn-agent/actions/<name>.yaml in the project root. Use after live verification to create reusable actions.", {
       name: external_exports.string().describe('Flow name (e.g. "add-to-cart", "profile-edit"). Becomes filename.'),
       steps: external_exports.array(external_exports.object({
@@ -95114,13 +95619,12 @@ var init_index = __esm({
       appId: external_exports.string().optional().describe("Authority-bound app identifier; normally injected by the session")
     }, createRepairActionHandler());
     runActionHandler = createRunActionHandler({
+      maestroRun: maestroRunHandler,
       getLiveRoute: () => readLiveRoute(getClient()),
-      replayDeps: makeReplayDeps,
-      blindProbeContext,
       targetContext: getActiveSession,
       claimBundleAuthority: claimOptionalBundleAuthority
     });
-    trackedTool("cdp_run_action", `Replay a learned action by id with end-to-end auto-repair. Loads the action from .rn-agent/actions/<actionId>.yaml or .yml, forwards the matching active session's exact device ID to Maestro, rejects mismatched direct runner/WDA evidence, and on a SELECTOR_NOT_FOUND failure automatically invokes cdp_repair_action and retries once. Appends a RunRecord to the sidecar with full auto-repair telemetry (passed/failed/refused/skipped + diff); its Maestro deviceId comes from direct runner evidence, never requested metadata. The repair attempt counts toward cdp_repair_action's 24h budget. Pass autoRepair=false to opt out of auto-repair (returns the raw maestro_run failure verbatim). forceReload defaults true: any human edit to the YAML since the agent's last write is acknowledged as the new baseline so downstream repair does not abort with STALE_TARGET (the right default for active composition). Pass forceReload=false for the strict "respect offline human edits" behavior: a successful replay still appends its RunRecord to the sidecar when only the tracked YAML mtime baseline is stale, while YAML-mutating promotion and repair stay refused. proofReplay=true is reserved for proof_capture rehearsal and requires autoRepair=false plus forceReload=false; it executes without RunRecord, promotion, YAML, sidecar, or DB persistence. The orchestrated home for the L3 self-healing loop \u2014 prefer this over invoking maestro_run + cdp_repair_action manually for any flow you intend to re-run on schedule. blindProbeMode provides per-call control of the proactive CDP/JS compatibility path: inherit (default) honors RN_BLIND_PROBE, allow explicitly enables it for this call, and forbid forces maestro-first for this call.`, {
+    trackedTool("cdp_run_action", "Replay a learned action by id with end-to-end auto-repair. On iOS, the validated flow is partitioned before execution: exact-testID commands use the authority-bound React-tree prover, while native-only commands use XCTest. The RunRecord and result preserve the reported proof domain, and a react-tree pass never promotes an experimental action to Maestro-certified active status. Ordinary missing React testIDs remain TESTID_NOT_FOUND; native selector misses remain ordinary Maestro failures unless direct bounded evidence proves a NATIVE_SURFACE_BLIND environment. Pass autoRepair=false to opt out of selector repair. proofReplay=true is reserved for proof-capture rehearsal and writes no runtime state.", {
       actionId: external_exports.string().describe("Owned action id; resolves one .yaml or .yml file."),
       projectRoot: external_exports.string().optional().describe("Override project root (default: process.cwd())."),
       platform: external_exports.enum(["ios", "android"]).optional().describe("Force a specific platform; otherwise auto-detected from the active device session."),
@@ -95130,7 +95634,6 @@ var init_index = __esm({
       trigger: external_exports.enum(["agent", "ci", "human"]).optional().describe('RunRecord trigger annotation. Default "agent". CI calls should pass "ci".'),
       forceReload: external_exports.boolean().optional().describe('GH #173: when true (default), acknowledge any human edit to the YAML as the new baseline before running so downstream repair does not abort with STALE_TARGET. Pass false for the strict Phase 129 "respect external edits" behavior (useful for CI replays of fixed baselines).'),
       proofReplay: external_exports.boolean().optional().describe("Read-only proof rehearsal mode. Requires autoRepair=false and forceReload=false; never writes action YAML, runtime sidecar, or DB state."),
-      blindProbeMode: external_exports.enum(["inherit", "allow", "forbid"]).optional().describe("Per-call proactive CDP/JS compatibility control. inherit (default) honors RN_BLIND_PROBE; allow explicitly enables the at-risk probe even when the process default is disabled; forbid keeps this call maestro-first. Reactive fallback behavior is unchanged."),
       params: external_exports.record(external_exports.string(), external_exports.string()).optional().describe("Parameter bindings for the action's ${VAR} placeholders, forwarded to maestro as -e KEY=VALUE on the first attempt AND the post-repair retry (GH #116). Keys must match /^[A-Z_][A-Z0-9_]*$/ (validated in maestro_run).")
     }, runActionHandler);
     trackedTool("cdp_login_prologue", "Fail-stop user-login helper: replay the exact action and require a fresh passing RunRecord; failure blocks exploratory fallback mutations, and a pass is not PR proof.", {
@@ -95145,7 +95648,7 @@ var init_index = __esm({
       actionId: external_exports.string().describe("The action id under .rn-agent/actions to lock"),
       relock: external_exports.boolean().optional().describe("Overwrite an existing locked test"),
       projectRoot: external_exports.string().optional()
-    }, createLockE2eTestHandler());
+    }, createLockE2eTestHandler({ maestroRun: maestroRunHandler }));
     e2ePreflight = async () => {
       const session2 = getActiveSession();
       const platform = session2?.platform ?? "ios";
@@ -95186,6 +95689,7 @@ var init_index = __esm({
       }
     };
     e2eSuiteHandler = createRunE2eSuiteHandler({
+      maestroRun: maestroRunHandler,
       preflightCheck: e2ePreflight,
       runReload: e2eReload,
       onProgress: (c, t, id) => recorder.push({

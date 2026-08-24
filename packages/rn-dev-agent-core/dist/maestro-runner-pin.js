@@ -24,13 +24,42 @@ async function diagnose(json) {
     _resetEngineStatusForTest();
     const status = await getEngineStatus();
     const report = doctorPinnedRunner(status, nodePlatformKey());
+    const runtimeProbe = spawnSync('xcrun', ['simctl', 'list', 'devices', '--json'], {
+        encoding: 'utf8',
+        timeout: 5000,
+    });
+    let bootedIosRuntimeMajors = null;
+    if (runtimeProbe.status === 0) {
+        try {
+            const parsed = JSON.parse(runtimeProbe.stdout);
+            bootedIosRuntimeMajors = Object.entries(parsed.devices ?? {})
+                .filter(([, devices]) => Array.isArray(devices) && devices.some((device) => device?.state === 'Booted'))
+                .map(([runtime]) => Number(runtime.match(/SimRuntime\.iOS-(\d+)/)?.[1]))
+                .filter((major) => Number.isSafeInteger(major));
+        }
+        catch {
+            bootedIosRuntimeMajors = null;
+        }
+    }
+    const wdaNativeCompatibility = {
+        status: bootedIosRuntimeMajors === null
+            ? 'unknown'
+            : bootedIosRuntimeMajors.length === 0
+                ? 'not-applicable'
+                : 'native-smoke-required',
+        bootedRuntimeMajors: bootedIosRuntimeMajors,
+        runtimeVersionHeuristicIsProof: false,
+        detail: 'Runtime version alone never proves WDA blindness. A bounded native-selector comparison distinguishes NATIVE_SURFACE_BLIND from an ordinary selector miss.',
+        nextAction: 'Run the central native WDA smoke on the target runtime; exact React testIDs use the react-tree proof domain.',
+    };
     if (json) {
-        console.log(JSON.stringify({ ...report, pin: MAESTRO_RUNNER_PIN.version }, null, 2));
+        console.log(JSON.stringify({ ...report, pin: MAESTRO_RUNNER_PIN.version, wdaNativeCompatibility }, null, 2));
     }
     else {
         console.log(report.ok
             ? `maestro-runner ${report.installedVersion} pinned-ok (${report.provenance}: ${report.selectedPath})`
             : `maestro-runner pin ${report.status}: ${report.correction}`);
+        console.log(`iOS proof policy: exact testID=${report.iosProofPolicy.exactTestId}; native=${report.iosProofPolicy.nativeSurface}; WDA compatibility=${wdaNativeCompatibility.status} (runtime heuristic is not proof)`);
     }
     return report.ok ? 0 : 1;
 }

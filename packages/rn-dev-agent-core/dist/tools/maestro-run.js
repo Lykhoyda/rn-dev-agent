@@ -15,6 +15,7 @@ import { chooseMaestroDispatch, shouldWarnFallback, flowContainsHideKeyboard, } 
 import { flowUsesClearState, resolveAppFileForClearState } from './resolve-ios-app-file.js';
 import { buildMaestroFlow, parseAndValidateFlow, isValidBundleId, MaestroValidationError, } from '../domain/maestro-validator.js';
 import { outputIndicatesFlowFailure } from '../domain/maestro-error-parser.js';
+import { parseMaestroFailure } from '../domain/maestro-error-parser.js';
 import { augmentFailureWithDegradation, resolveFloorMs } from '../domain/tap-latency.js';
 import { buildStepSummary, buildTerminalEvidence, classifyExecError, combineRunnerOutput, formatFailureHeadline, } from '../domain/maestro-step-parser.js';
 import { fastHealthCheck as defaultFastHealthCheck, stopFastRunner as defaultStopFastRunner, } from '../runners/rn-fast-runner-client.js';
@@ -22,8 +23,10 @@ import { ExactAndroidDeviceRequiredError, releaseAndroidInteractionSlot as defau
 import { markCdpStale as defaultMarkCdpStale } from '../cdp/recovery.js';
 import { maestroAuthorityRefusal, sameDevice, verifyMaestroDeviceAuthority, } from '../domain/maestro-device-authority.js';
 import { collectDirectRunnerEvidence, createRunnerReportDir, disposeRunnerReportDir, runnerReportArgs, } from '../domain/maestro-runner-report.js';
-import { completeManagedRunnerParkAuthority, claimManagedNativeOriginAuthority, completeManagedNativeOriginAuthority, hasManagedInstallReissueAuthority, reissueManagedInstallAuthority, relaunchManagedNativeOriginApp, reproveManagedNativeOrigin, } from '../session/authority-gate.js';
+import { completeManagedRunnerParkAuthority, claimManagedNativeOriginAuthority, completeManagedNativeOriginAuthority, hasManagedNativeOriginAuthority, hasManagedInstallReissueAuthority, reissueManagedInstallAuthority, relaunchManagedNativeOriginApp, reproveManagedNativeOrigin, } from '../session/authority-gate.js';
 import { SessionAuthorityError } from '../session/registry.js';
+import { planIosProofDomains, loginPostconditionId, nativeSelectorsForCommands, } from '../domain/ios-proof-router.js';
+import { runCdpReplayCommands } from './cdp-replay-dispatch.js';
 const defaultExecFile = promisify(execFileCb);
 /**
  * GH#202 Phase 2a + GH#237: run a Maestro flow with L2 parked. iOS stops the
@@ -38,13 +41,25 @@ export async function runFlowParked(run, opts = {}) {
     try {
         if (opts.platform === 'android') {
             const release = opts.releaseAndroidSlot ?? defaultReleaseAndroidSlot;
-            const outcome = await release({ deviceId: opts.deviceId });
+            const outcome = opts.signal
+                ? await release({ deviceId: opts.deviceId, signal: opts.signal })
+                : await release({ deviceId: opts.deviceId });
             opts.onAndroidRelease?.(outcome);
         }
         else {
-            await (opts.stopFastRunner ?? defaultStopFastRunner)(opts.deviceId);
+            if (opts.signal) {
+                await (opts.stopFastRunner ?? defaultStopFastRunner)(opts.deviceId, opts.signal);
+            }
+            else {
+                await (opts.stopFastRunner ?? defaultStopFastRunner)(opts.deviceId);
+            }
         }
-        await opts.completeRunnerPark?.();
+        if (opts.completeRunnerPark) {
+            if (opts.signal)
+                await opts.completeRunnerPark(opts.signal);
+            else
+                await opts.completeRunnerPark();
+        }
         return await run();
     }
     finally {
@@ -68,7 +83,7 @@ export function nestedMaestroAuthorityCallbacks(args) {
         completeNativeOrigin: (targetExpected) => completeManagedNativeOriginAuthority(args, targetExpected),
         relaunchManagedApp: () => relaunchManagedNativeOriginApp(args),
         reproveManagedOrigin: () => reproveManagedNativeOrigin(args),
-        completeRunnerPark: () => completeManagedRunnerParkAuthority(args),
+        completeRunnerPark: (signal) => completeManagedRunnerParkAuthority(args, signal),
         reissueInstallReceipt: hasManagedInstallReissueAuthority(args)
             ? () => reissueManagedInstallAuthority(args)
             : null,
@@ -134,7 +149,7 @@ export function planMaestroAuthorityStages(commands) {
     flushPending();
     return { stages, targetExpected };
 }
-export async function executeMaestroAuthorityStages(commands, executeStage, claimOrigin, completeOrigin, relaunchManagedApp, reproveManagedOrigin) {
+export async function executeMaestroAuthorityStages(commands, executeStage, claimOrigin, completeOrigin, relaunchManagedApp, reproveManagedOrigin, options = {}) {
     const plan = planMaestroAuthorityStages(commands);
     const results = [];
     // GH #708: a relaunched dev-client can need the flow's own post-launch steps
@@ -142,9 +157,13 @@ export async function executeMaestroAuthorityStages(commands, executeStage, clai
     // instead of aborting between stages; the origin is still proven before this
     // run can report success.
     let pendingOriginError;
+    let originClaimed = options.firstOriginClaimed === true;
     for (const stage of plan.stages) {
-        if (stage.requiresOrigin && pendingOriginError === undefined)
-            await claimOrigin();
+        if (stage.requiresOrigin && pendingOriginError === undefined) {
+            if (!originClaimed)
+                await claimOrigin();
+            originClaimed = false;
+        }
         try {
             results.push(await executeStage(stage.commands));
             if (stage.commands.length === 1 && commandName(stage.commands[0]) === 'launchApp') {
@@ -201,6 +220,28 @@ function resolveAppId(override, platform) {
     if (platform)
         return resolveBundleId(platform) ?? readExpoSlug() ?? '';
     return readExpoSlug() ?? '';
+}
+class ReactReplayFailure extends Error {
+    replay;
+    constructor(replay) {
+        super(replay.reason ?? 'React-tree replay failed');
+        this.replay = replay;
+        this.name = 'ReactReplayFailure';
+    }
+}
+function readToolEnvelope(result) {
+    try {
+        return JSON.parse(result.content[0]?.text ?? '{}');
+    }
+    catch {
+        return { ok: false, error: 'Unparseable nested replay result' };
+    }
+}
+function isLoginMetadata(metadata) {
+    if (!metadata)
+        return false;
+    return (/(^|[-_.])login($|[-_.])/.test(metadata.id) ||
+        metadata.tags?.some((tag) => tag === 'login' || tag === 'auth') === true);
 }
 async function defaultProbeAndroidApiLevel(deviceId) {
     try {
@@ -263,6 +304,10 @@ export function createMaestroRunHandler(deps = {}) {
     const probeApiLevel = deps.probeAndroidApiLevel ?? defaultProbeAndroidApiLevel;
     const now = deps.now ?? Date.now;
     const resolveEngineStatus = deps.resolveEngineStatus ?? (() => getEngineStatus().catch(() => null));
+    const replayFactory = deps.replayDeps;
+    const nativeOnlyHandler = replayFactory
+        ? createMaestroRunHandler({ ...deps, replayDeps: undefined })
+        : null;
     return async (args) => {
         // GH #116: validate params shape FIRST so a malformed payload is rejected
         // regardless of platform / dispatch-tier availability. CI envs without
@@ -376,7 +421,6 @@ export function createMaestroRunHandler(deps = {}) {
             // calls (parallel test invocations could overwrite each other's
             // validated content between writeFileSync and execFile).
             flowFile = join(tmpdir(), `rn-maestro-run-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.yaml`);
-            writeFileSync(flowFile, validatedContent, 'utf-8');
         }
         catch (err) {
             if (err instanceof MaestroValidationError) {
@@ -384,6 +428,150 @@ export function createMaestroRunHandler(deps = {}) {
             }
             throw err;
         }
+        const semanticActionMeta = capturedAction?.metadata ??
+            args.actionMetadata ??
+            (args.flowPath
+                ? parseM7Header(rawYaml, basename(args.flowPath).replace(/\.ya?ml$/i, ''))
+                : null);
+        const iosProofPlan = platform === 'ios' && replayFactory
+            ? planIosProofDomains(validatedCommands, args.params ?? {})
+            : null;
+        if (iosProofPlan && !iosProofPlan.ok) {
+            return failResult(`Refusing iOS proof-domain ambiguity at step ${iosProofPlan.sourceIndex}: ${iosProofPlan.reason}.`, 'UNSUPPORTED_STEP', { sourceIndex: iosProofPlan.sourceIndex, proofDomains: ['react-tree', 'xctest-native'] });
+        }
+        if (iosProofPlan?.ok &&
+            iosProofPlan.segments.some((segment) => segment.domain === 'react-tree')) {
+            writeFileSync(flowFile, validatedContent, 'utf-8');
+            if (isLoginMetadata(semanticActionMeta) && !loginPostconditionId(validatedCommands)) {
+                return failResult('Refusing login replay without a final positive post-submit testID assertion. End the flow with assertVisible.id or extendedWaitUntil.visible.id.', 'ASSERTION_FAILED', { proofDomain: 'react-tree', postcondition: 'missing' });
+            }
+            const timeout = args.timeoutMs ?? 120_000;
+            const deadline = now() + timeout;
+            const controller = new AbortController();
+            const deadlineTimer = setTimeout(() => controller.abort(new Error('iOS partitioned replay deadline exceeded')), timeout);
+            const managedAuthority = nestedMaestroAuthorityCallbacks(args);
+            const claimOrigin = args.claimNativeOrigin ?? deps.claimNativeOrigin ?? managedAuthority.claimNativeOrigin;
+            const completeOrigin = args.completeNativeOrigin ??
+                deps.completeNativeOrigin ??
+                managedAuthority.completeNativeOrigin;
+            const relaunchManagedApp = args.relaunchManagedApp ?? deps.relaunchManagedApp ?? managedAuthority.relaunchManagedApp;
+            const reproveManagedOrigin = args.reproveManagedOrigin ??
+                deps.reproveManagedOrigin ??
+                managedAuthority.reproveManagedOrigin;
+            const combinedSteps = [];
+            const proofDomains = [];
+            let nativeTransportVersion = null;
+            let nativeOutput = '';
+            try {
+                for (const segment of iosProofPlan.segments) {
+                    if (controller.signal.aborted || deadline - now() <= 0) {
+                        return failResult('Partitioned iOS replay exceeded its deadline.', 'RUNNER_TIMEOUT', {
+                            proofDomains,
+                        });
+                    }
+                    if (segment.domain === 'xctest-native') {
+                        proofDomains.push('xctest-native');
+                        const nested = await nativeOnlyHandler({
+                            ...args,
+                            flowPath: undefined,
+                            inlineYaml: buildMaestroFlow(headerAppId ? { appId: headerAppId } : {}, segment.commands),
+                            timeoutMs: Math.max(1, deadline - now()),
+                        });
+                        const env = readToolEnvelope(nested);
+                        if (env.ok !== true || env.data?.passed !== true)
+                            return nested;
+                        nativeTransportVersion = env.data.transportVersion ?? nativeTransportVersion;
+                        if (typeof env.data.output === 'string')
+                            nativeOutput += env.data.output;
+                        const steps = Array.isArray(env.data.steps) ? env.data.steps : [];
+                        for (const step of steps) {
+                            if (!step || typeof step !== 'object')
+                                continue;
+                            const record = step;
+                            combinedSteps.push({
+                                index: Number(record.index ?? combinedSteps.length),
+                                name: String(record.name ?? record.verb ?? 'native'),
+                                verb: String(record.verb ?? record.name ?? 'native'),
+                                status: record.status === 'fail' ? 'fail' : 'pass',
+                                durationMs: Number(record.durationMs ?? 0),
+                            });
+                        }
+                        continue;
+                    }
+                    proofDomains.push('react-tree');
+                    const replayDependencies = replayFactory(args, controller.signal);
+                    if (!replayDependencies) {
+                        return failResult('React-tree replay requires the authority-bound bridgeless runtime. Reconnect the exact app bundle and retry.', 'CDP_NOT_CONNECTED', { proofDomain: 'react-tree' });
+                    }
+                    const stageResults = await executeMaestroAuthorityStages(segment.commands, async (commands) => {
+                        const replay = await runCdpReplayCommands([...commands], args.params ?? {}, {
+                            ...replayDependencies,
+                            launchApp: async () => { },
+                        }, { signal: controller.signal });
+                        if (!replay.passed)
+                            throw new ReactReplayFailure(replay);
+                        return replay;
+                    }, claimOrigin, completeOrigin, relaunchManagedApp, reproveManagedOrigin);
+                    for (const replay of stageResults) {
+                        for (const step of replay.steps) {
+                            combinedSteps.push({
+                                index: segment.sourceIndices[step.sourceIndex] ?? step.sourceIndex,
+                                name: step.t,
+                                verb: step.t,
+                                status: step.ok ? 'pass' : 'fail',
+                                durationMs: step.durationMs,
+                            });
+                        }
+                    }
+                }
+                const expectedRoute = semanticActionMeta?.expectedRouteSequence?.at(-1);
+                if (expectedRoute && deps.getLiveRoute) {
+                    const liveRoute = await deps.getLiveRoute().catch(() => null);
+                    if (liveRoute !== expectedRoute) {
+                        return failResult(`React-tree replay reached its final testID but route ${String(liveRoute)} does not match expected route ${expectedRoute}.`, 'ASSERTION_FAILED', { proofDomain: 'react-tree', expectedRoute, liveRoute });
+                    }
+                }
+                const uniqueDomains = [...new Set(proofDomains)];
+                return okResult({
+                    passed: true,
+                    flowFile,
+                    platform,
+                    runner: uniqueDomains.length === 1 ? 'cdp-js' : 'partitioned',
+                    transport: uniqueDomains.length === 1 ? 'cdp-js' : 'partitioned',
+                    transportVersion: nativeTransportVersion,
+                    proofDomain: uniqueDomains.length === 1 ? uniqueDomains[0] : 'partitioned',
+                    proofDomains: uniqueDomains,
+                    maestroCertified: false,
+                    reactTreeProof: {
+                        nativeInteractionFidelity: false,
+                        covers: ['exact-react-identity', 'controlled-fiber-text-readback'],
+                        excludes: ['ime-composition', 'password-autofill', 'keyboard-occlusion'],
+                    },
+                    steps: combinedSteps,
+                    output: nativeOutput.slice(0, 2000),
+                    timedOut: false,
+                    outputTruncated: nativeOutput.length > 2000,
+                });
+            }
+            catch (error) {
+                const failure = error instanceof MaestroStageExecutionError ? error.stageError : error;
+                if (failure instanceof ReactReplayFailure) {
+                    const replay = failure.replay;
+                    return failResult(`React-tree replay failed at step ${String(replay.failedStepIndex)}: ${replay.reason ?? 'unknown failure'}`, replay.failureCode ?? 'ASSERTION_FAILED', {
+                        proofDomain: 'react-tree',
+                        failedStepIndex: replay.failedStepIndex,
+                        ...replay.failureMeta,
+                    });
+                }
+                if (failure instanceof SessionAuthorityError)
+                    throw failure;
+                return failResult(failure instanceof Error ? failure.message : String(failure), controller.signal.aborted ? 'RUNNER_TIMEOUT' : undefined, { proofDomains });
+            }
+            finally {
+                clearTimeout(deadlineTimer);
+            }
+        }
+        writeFileSync(flowFile, validatedContent, 'utf-8');
         const dispatch = selectDispatch({ platform, flowHasHideKeyboard });
         if ('error' in dispatch) {
             return failResult(dispatch.error);
@@ -458,11 +646,7 @@ export function createMaestroRunHandler(deps = {}) {
             });
         }
         const learnedAction = Boolean(capturedAction || args.actionMetadata);
-        const actionMeta = capturedAction?.metadata ??
-            args.actionMetadata ??
-            (args.flowPath
-                ? parseM7Header(rawYaml, basename(args.flowPath).replace(/\.ya?ml$/i, ''))
-                : null);
+        const actionMeta = semanticActionMeta;
         const compatibilityRefusal = learnedAction || actionMeta !== null
             ? actionReplayPreflight({
                 enginePin: actionMeta?.enginePin,
@@ -499,13 +683,36 @@ export function createMaestroRunHandler(deps = {}) {
                 });
             }
         }
+        const nativeSelectors = platform === 'ios' ? nativeSelectorsForCommands(validatedCommands) : [];
+        const flowAbort = new AbortController();
+        const flowAbortTimer = setTimeout(() => flowAbort.abort(new Error('Maestro flow deadline exceeded')), Math.max(1, flowDeadline - now()));
+        let nativeVisionEvidence = null;
+        if (requestedDeviceId && nativeSelectors.length > 0 && deps.nativeVisionProbe) {
+            nativeVisionEvidence = await deps
+                .nativeVisionProbe({
+                deviceId: requestedDeviceId,
+                selectors: nativeSelectors,
+                signal: flowAbort.signal,
+            })
+                .catch(() => null);
+        }
         // Allocate report evidence only after preflight so refusal leaves no scratch tree.
-        const runnerReportDir = (deps.createReportDir ?? createRunnerReportDir)(dispatch.runner, 'rn-maestro-report');
+        let runnerReportDir;
+        try {
+            runnerReportDir = (deps.createReportDir ?? createRunnerReportDir)(dispatch.runner, 'rn-maestro-report');
+        }
+        catch (error) {
+            clearTimeout(flowAbortTimer);
+            throw error;
+        }
         const finalArgs = assembleMaestroArgs(baseArgs, [
             ...runnerReportArgs(runnerReportDir),
             ...paramArgs,
         ]);
         const directRunnerEvidence = (output) => collectDirectRunnerEvidence(runnerReportDir, output);
+        let nativeOriginPreclaimed = false;
+        let deferredNativeOriginTarget = false;
+        let completePreclaimedOrigin = null;
         try {
             // 10MB buffer: a multi-step flow with screenshots + app console/network
             // logs routinely exceeds Node's 1MB execFile default, which would kill
@@ -520,6 +727,20 @@ export function createMaestroRunHandler(deps = {}) {
             const reproveManagedOrigin = args.reproveManagedOrigin ??
                 deps.reproveManagedOrigin ??
                 managedAuthority.reproveManagedOrigin;
+            const authorityPlan = planMaestroAuthorityStages(validatedCommands);
+            if (platform === 'ios' && authorityPlan.stages[0]?.requiresOrigin) {
+                await claimOrigin();
+                nativeOriginPreclaimed = true;
+            }
+            const completeTrackedOrigin = async (targetExpected) => {
+                if (platform === 'ios' && targetExpected) {
+                    deferredNativeOriginTarget = true;
+                    return;
+                }
+                await completeOrigin(targetExpected);
+                nativeOriginPreclaimed = false;
+            };
+            completePreclaimedOrigin = completeTrackedOrigin;
             const stageResults = await parkFlow(() => executeMaestroAuthorityStages(validatedCommands, async (commands) => {
                 writeFileSync(flowFile, buildMaestroFlow(headerAppId ? { appId: headerAppId } : {}, [...commands]), 'utf-8');
                 const executeOnce = async (beforeDispatch) => {
@@ -540,6 +761,7 @@ export function createMaestroRunHandler(deps = {}) {
                             timeout: remainingTimeout,
                             encoding: 'utf8',
                             maxBuffer: 10 * 1024 * 1024,
+                            signal: flowAbort.signal,
                         });
                     };
                     if (deps.execFile) {
@@ -603,13 +825,26 @@ export function createMaestroRunHandler(deps = {}) {
                         throw attachCause(error, retryError);
                     }
                 }
-            }, claimOrigin, completeOrigin, relaunchManagedApp, reproveManagedOrigin), {
+            }, claimOrigin, completeTrackedOrigin, relaunchManagedApp, reproveManagedOrigin, { firstOriginClaimed: nativeOriginPreclaimed }), {
                 platform,
                 deviceId: requestedDeviceId,
                 releaseAndroidSlot,
                 onAndroidRelease: recordAndroidRelease,
+                stopFastRunner: deps.stopFastRunner,
                 completeRunnerPark: args.completeRunnerPark ?? managedAuthority.completeRunnerPark,
+                signal: flowAbort.signal,
             });
+            if (deferredNativeOriginTarget) {
+                if (nativeOriginPreclaimed &&
+                    replayFactory &&
+                    (args.reproveManagedOrigin ||
+                        deps.reproveManagedOrigin ||
+                        hasManagedNativeOriginAuthority(args))) {
+                    await reproveManagedOrigin();
+                }
+                await completeOrigin(true);
+                nativeOriginPreclaimed = false;
+            }
             await commitReinstalledInstall();
             const stdout = stageResults.map((result) => result.stdout).join('\n');
             const stderr = stageResults.map((result) => result.stderr).join('\n');
@@ -653,6 +888,7 @@ export function createMaestroRunHandler(deps = {}) {
                 platform,
                 runner: dispatch.runner,
                 transport: dispatch.runner,
+                proofDomain: 'xctest-native',
                 transportVersion: engineStatus?.version ?? null,
                 fallback: dispatch.fallbackReason ? dispatch.runner : 'none',
                 deviceAuthority,
@@ -698,6 +934,19 @@ export function createMaestroRunHandler(deps = {}) {
         }
         catch (err) {
             const stageError = err instanceof MaestroStageExecutionError ? err.stageError : err;
+            if (nativeOriginPreclaimed && completePreclaimedOrigin) {
+                try {
+                    await completePreclaimedOrigin(false);
+                }
+                catch (cleanupError) {
+                    return failResult(`Native replay cleanup could not settle the managed runtime after ${stageError instanceof Error ? stageError.message : String(stageError)}.`, 'AUTOMATION_CLEANUP_UNPROVEN', {
+                        platform,
+                        proofDomain: 'xctest-native',
+                        runner: dispatch.runner,
+                        cleanupError: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
+                    });
+                }
+            }
             if (stageError instanceof RunnerCacheUnavailableError) {
                 recordRunnerDiagnostic('typed-failure', {
                     code: stageError.code,
@@ -709,6 +958,7 @@ export function createMaestroRunHandler(deps = {}) {
                     platform,
                     runner: dispatch.runner,
                     transport: dispatch.runner,
+                    proofDomain: 'xctest-native',
                     passed: false,
                     output: '',
                     terminal: {
@@ -806,6 +1056,48 @@ export function createMaestroRunHandler(deps = {}) {
                     ...androidReleaseMeta(),
                 });
             }
+            const nativeFailure = parseMaestroFailure(combined, terminal);
+            const soleNativeSelector = nativeSelectors.length === 1 ? nativeSelectors[0].value : null;
+            const selectorLessAssertionFailure = nativeFailure.kind === 'UNKNOWN' &&
+                terminal.exitClass === 'step-failure' &&
+                terminal.failedStep?.split(/\s+/, 1)[0] === 'assertVisible';
+            const failedNativeSelector = nativeFailure.kind === 'SELECTOR_NOT_FOUND'
+                ? (nativeFailure.selector ?? soleNativeSelector)
+                : nativeFailure.kind === 'ASSERTION_FAILED'
+                    ? (nativeFailure.selector ?? soleNativeSelector)
+                    : nativeFailure.kind === 'TIMEOUT'
+                        ? nativeFailure.selector
+                        : selectorLessAssertionFailure
+                            ? soleNativeSelector
+                            : null;
+            const fastRunnerSawFailedSelector = failedNativeSelector !== null &&
+                nativeVisionEvidence?.visibleSelectors.some((selector) => selector.value === failedNativeSelector) === true;
+            if (fastRunnerSawFailedSelector) {
+                const selectorKind = nativeVisionEvidence.visibleSelectors.find((selector) => selector.value === failedNativeSelector).kind;
+                return failResult('XCTest/WDA could not resolve a native-only selector that the bounded same-screen native snapshot saw before dispatch. This is a blind native surface, not an ordinary selector miss. Use a WDA-healthy simulator/runtime for the native step, then retry; exact React testID steps should remain on cdp_run_action.', 'NATIVE_SURFACE_BLIND', {
+                    platform,
+                    proofDomain: 'xctest-native',
+                    runner: dispatch.runner,
+                    transportVersion: engineStatus?.version ?? null,
+                    nativeVision: {
+                        source: nativeVisionEvidence.source,
+                        nodeCount: nativeVisionEvidence.nodeCount,
+                        visibleSelectorCount: nativeVisionEvidence.visibleSelectors.length,
+                        failedSelectorKind: selectorKind,
+                        runtimeMajor: nativeVisionEvidence.runtimeMajor,
+                        runtimeVersionHeuristicIsProof: false,
+                    },
+                    deviceAuthority,
+                    cleanup: {
+                        cleanupProven: true,
+                        wdaProcessSettled: true,
+                        runnerParkCommitted: true,
+                        managedOriginSettled: !nativeOriginPreclaimed,
+                        fastRunnerHealthy: runnerResume?.healthy ?? null,
+                    },
+                    nextAction: 'Run the doctor compatibility report and the central native WDA smoke on a WDA-healthy runtime, then retry this native-only step.',
+                });
+            }
             // Headline from structured data (raw-free); the raw err.message is the
             // fallback only for system errors with no step output (e.g. spawn ENOENT).
             const rawHeadline = formatFailureHeadline(summary, { timedOut, outputTruncated }, msg);
@@ -818,6 +1110,7 @@ export function createMaestroRunHandler(deps = {}) {
                 platform,
                 runner: dispatch.runner,
                 transport: dispatch.runner,
+                proofDomain: 'xctest-native',
                 transportVersion: engineStatus?.version ?? null,
                 fallback: dispatch.fallbackReason ? dispatch.runner : 'none',
                 deviceAuthority,
@@ -840,6 +1133,7 @@ export function createMaestroRunHandler(deps = {}) {
             return failResult(failAug.message, failAug.meta);
         }
         finally {
+            clearTimeout(flowAbortTimer);
             try {
                 writeFileSync(flowFile, validatedContent, 'utf-8');
             }

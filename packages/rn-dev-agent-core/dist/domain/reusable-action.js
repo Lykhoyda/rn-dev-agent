@@ -115,9 +115,9 @@ export function repairBudgetAvailable(state, now = () => new Date()) {
  * a self-repair's verification replay succeeds.
  */
 export function shouldAutoPromoteToActive(metadata, lastRun) {
-    // GH #397: a probe-routed cdp-js pass validated only the narrower fallback
-    // grammar — never promote on it. "active" means validated on the full engine.
-    if (lastRun?.blindProbe?.skippedMaestro)
+    if (lastRun?.transport === 'cdp-js' ||
+        lastRun?.proofDomain === 'react-tree' ||
+        lastRun?.proofDomain === 'partitioned')
         return false;
     return metadata.status === 'experimental' && lastRun?.status === 'pass';
 }

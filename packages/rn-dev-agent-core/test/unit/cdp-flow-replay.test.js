@@ -4,38 +4,7 @@ import {
   normalizeSteps,
   UnsupportedStepError,
   replayFlow,
-  firstTestId,
 } from '../../dist/domain/cdp-flow-replay.js';
-
-test('firstTestId returns the first top-level tap/assert id, skipping launch/wait', () => {
-  const steps = [
-    { t: 'launch', stopApp: false },
-    { t: 'tap', id: 'tab-tasks' },
-    { t: 'assert', id: 'task-screen' },
-  ];
-  assert.equal(firstTestId(steps), 'tab-tasks');
-});
-
-test('firstTestId returns the first assert id when no tap precedes it', () => {
-  const steps = [
-    { t: 'launch', stopApp: false },
-    { t: 'wait' },
-    { t: 'assert', id: 'home-header' },
-  ];
-  assert.equal(firstTestId(steps), 'home-header');
-});
-
-test('firstTestId does NOT descend into conditional runFlow (returns null when ids are only nested)', () => {
-  const steps = [
-    { t: 'launch', stopApp: false },
-    { t: 'runFlow', whenVisible: 'onboarding', commands: [{ t: 'tap', id: 'onboarding-done' }] },
-  ];
-  assert.equal(firstTestId(steps), null);
-});
-
-test('firstTestId returns null for steps with no tap/assert', () => {
-  assert.equal(firstTestId([{ t: 'launch', stopApp: false }, { t: 'wait' }]), null);
-});
 
 test('normalizeSteps maps the supported subset with ${VAR} interpolation', () => {
   const body = [
@@ -68,6 +37,18 @@ test('normalizeSteps maps the supported subset with ${VAR} interpolation', () =>
   ]);
 });
 
+test('normalizeSteps resolves Maestro-style nullish string defaults', () => {
+  assert.deepEqual(normalizeSteps([{ inputText: "${LOGIN_EMAIL ?? 'safe@example.test'}" }], {}), [
+    { t: 'type', text: 'safe@example.test' },
+  ]);
+  assert.deepEqual(
+    normalizeSteps([{ inputText: "${LOGIN_EMAIL ?? 'safe@example.test'}" }], {
+      LOGIN_EMAIL: 'bound@example.test',
+    }),
+    [{ t: 'type', text: 'bound@example.test' }],
+  );
+});
+
 test('normalizeSteps throws UnsupportedStepError on an unknown step', () => {
   assert.throws(
     () => normalizeSteps([{ scroll: { direction: 'DOWN' } }], {}),
@@ -98,9 +79,9 @@ function mockDispatch(over = {}) {
     type: async (id, text) => {
       calls.push(['type', id, text]);
     },
-    isVisible: async (id) => {
-      calls.push(['isVisible', id]);
-      return over.visible ? over.visible.includes(id) : true;
+    visibility: async (id) => {
+      calls.push(['visibility', id]);
+      return { visible: over.visible ? over.visible.includes(id) : true };
     },
     launch: async (stopApp) => {
       calls.push(['launch', stopApp]);
@@ -125,7 +106,7 @@ test('replayFlow happy path: type routes to last tapped, all pass', async () => 
   assert.deepEqual(d.calls, [
     ['press', 'title'],
     ['type', 'title', 'Hi'],
-    ['isVisible', 'step-2'],
+    ['visibility', 'step-2'],
   ]);
 });
 

@@ -69,12 +69,12 @@ export function hasManagedInstallReissueAuthority(args) {
 export function hasManagedRunnerParkAuthority(args) {
     return typeof args[managedRunnerPark] === 'function';
 }
-export async function completeManagedRunnerParkAuthority(args) {
+export async function completeManagedRunnerParkAuthority(args, signal) {
     const complete = args[managedRunnerPark];
     if (!complete) {
         throw new SessionAuthorityError('RUNNER_OWNERSHIP_MISMATCH', 'managed runner parking authority is unavailable');
     }
-    await complete();
+    await complete(signal);
 }
 const axisBinding = {
     I: 'install',
@@ -1528,7 +1528,7 @@ export function createAuthorityGate(runtime, dependencies) {
                 if (profile.managedRunnerPark) {
                     Object.defineProperty(args, managedRunnerPark, {
                         configurable: true,
-                        value: async () => {
+                        value: async (signal) => {
                             if (managedRunnerParked)
                                 return;
                             const currentStatus = runtime.status();
@@ -1554,7 +1554,7 @@ export function createAuthorityGate(runtime, dependencies) {
                                     },
                                 ],
                             });
-                            await dependencies.onRunnerReleased?.(runner);
+                            await dependencies.onRunnerReleased?.(runner, signal);
                             const parkedStatus = runtime.status();
                             if (!parkedStatus.available) {
                                 throw new SessionAuthorityError(parkedStatus.code, parkedStatus.reason);
