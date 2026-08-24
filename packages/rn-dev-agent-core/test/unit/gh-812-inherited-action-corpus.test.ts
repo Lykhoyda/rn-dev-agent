@@ -36,7 +36,10 @@ import {
   loadActionFromContext,
   openReadableActionLoadContext,
   saveActionFromContext,
+  saveActionRuntimeWithCAS,
 } from '../../dist/domain/action-store.js';
+import { appendRunRecord } from '../../dist/domain/reusable-action.js';
+import { atomicWriter } from '../../dist/domain/atomic-writer.js';
 import {
   listUnfollowedDirectory,
   readUnfollowedFile,
@@ -544,6 +547,95 @@ test('captured repair publication refuses a retargeted inherited link before wri
     assert.equal(readFileSync(originalPath, 'utf8'), original);
     assert.equal(existsSync(join(foreign, 'login.yaml')), false);
   } finally {
+    fixture.cleanup();
+  }
+});
+
+test('captured runtime persistence refuses a replaced project before sidecar publication', () => {
+  const fixture = makeFixture();
+  try {
+    seedLoginCorpus(fixture.primary);
+    const worktree = addWorktree(fixture);
+    inherit(worktree);
+    const context = openReadableActionLoadContext(worktree, { actionId: 'login' });
+    assert.ok(context);
+    const action = loadActionFromContext(context, 'login');
+    assert.ok(action);
+    const nextState = appendRunRecord(action.state, {
+      timestamp: '2026-08-24T00:00:00.000Z',
+      durationMs: 1,
+      status: 'pass',
+      trigger: 'agent',
+      autoRepair: {
+        attempted: false,
+        outcome: 'skipped',
+        phases: { firstAttemptMs: 1 },
+      },
+    });
+
+    renameSync(worktree, join(fixture.root, 'displaced-linked'));
+    const replacementState = join(worktree, '.rn-agent', 'state');
+    mkdirSync(join(worktree, '.rn-agent', 'actions'), { recursive: true });
+    mkdirSync(replacementState, { recursive: true });
+    const replacementSidecar = join(replacementState, 'login.state.json');
+
+    assert.deepEqual(saveActionRuntimeWithCAS(context, action, nextState), {
+      ok: false,
+      conflict: 'EXTERNAL_WRITE',
+    });
+    assert.equal(existsSync(replacementSidecar), false);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('runtime persistence rechecks the corpus at the sidecar publication boundary', () => {
+  const fixture = makeFixture();
+  const originalWriteFileWithMode = atomicWriter._writeFileWithMode;
+  try {
+    seedLoginCorpus(fixture.primary);
+    const worktree = addWorktree(fixture);
+    inherit(worktree);
+    const context = openReadableActionLoadContext(worktree, { actionId: 'login' });
+    assert.ok(context);
+    const action = loadActionFromContext(context, 'login');
+    assert.ok(action);
+    const foreign = join(fixture.root, 'foreign-actions');
+    mkdirSync(foreign);
+    let retargeted = false;
+    atomicWriter._writeFileWithMode = (path, content, mode) => {
+      originalWriteFileWithMode(path, content, mode);
+      if (!retargeted && path.includes('login.state.json.tmp.')) {
+        const link = join(worktree, '.rn-agent', 'actions');
+        rmSync(link);
+        symlinkSync(foreign, link, 'dir');
+        retargeted = true;
+      }
+    };
+
+    const result = saveActionRuntimeWithCAS(
+      context,
+      action,
+      appendRunRecord(action.state, {
+        timestamp: '2026-08-24T00:00:01.000Z',
+        durationMs: 1,
+        status: 'pass',
+        trigger: 'agent',
+        autoRepair: {
+          attempted: false,
+          outcome: 'skipped',
+          phases: { firstAttemptMs: 1 },
+        },
+      }),
+    );
+
+    assert.equal(retargeted, true);
+    assert.deepEqual(result, { ok: false, conflict: 'EXTERNAL_WRITE' });
+    const stateDirectory = join(worktree, '.rn-agent', 'state');
+    assert.equal(existsSync(join(stateDirectory, 'login.state.json')), false);
+    assert.deepEqual(readdirSync(stateDirectory), []);
+  } finally {
+    atomicWriter._writeFileWithMode = originalWriteFileWithMode;
     fixture.cleanup();
   }
 });

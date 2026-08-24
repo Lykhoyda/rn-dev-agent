@@ -9712,6 +9712,52 @@ var init_atomic_writer = __esm({
           throw error;
         }
       },
+      writeSidecarConditional(yamlPath, sidecarPath, state, precondition) {
+        try {
+          return withPairWriteLock(yamlPath, () => {
+            if (!precondition())
+              return false;
+            cleanupOrphans(yamlPath, sidecarPath);
+            ensureDir(sidecarPath);
+            let expectedContent = null;
+            let mode = 384;
+            try {
+              const sidecarFd = openSync2(sidecarPath, constants3.O_RDONLY | constants3.O_NOFOLLOW);
+              try {
+                const sidecar = fstatSync2(sidecarFd);
+                if (!sidecar.isFile())
+                  return false;
+                expectedContent = readFileSync5(sidecarFd, "utf8");
+                mode = sidecar.mode & 4095;
+              } finally {
+                closeSync2(sidecarFd);
+              }
+            } catch (error) {
+              if (error.code !== "ENOENT")
+                return false;
+            }
+            if (!precondition())
+              return false;
+            const stamp = generateTmpStamp();
+            const candidatePath = `${sidecarPath}.tmp.${stamp}`;
+            atomicWriter._writeFileWithMode(candidatePath, JSON.stringify(state, null, 2) + "\n", mode);
+            try {
+              if (!precondition())
+                return false;
+              return expectedContent === null ? atomicWriter._linkIfAbsent(candidatePath, sidecarPath, precondition) : atomicWriter._publishIfUnchanged(candidatePath, sidecarPath, expectedContent, stamp, precondition);
+            } finally {
+              try {
+                atomicWriter._unlink(candidatePath);
+              } catch {
+              }
+            }
+          }, precondition);
+        } catch (error) {
+          if (error === ACTION_WRITE_PRECONDITION)
+            return false;
+          throw error;
+        }
+      },
       /**
        * Atomic pair-write. Cleans up any orphaned `.tmp` files before
        * starting. Throws on the first failed step — caller decides whether

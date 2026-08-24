@@ -1559,9 +1559,19 @@ async function persistRun(
     // A promotion refusal is deterministic (externally edited YAML, or a missing
     // `# status: experimental` marker) — retrying cannot clear it, so degrade to
     // the sidecar-only append instead of failing an otherwise successful replay.
-    const promotionRefused = promotes && !promoteActionRuntimeWithCAS(fresh, nextState).ok;
+    const promotionRefused = promotes && !promoteActionRuntimeWithCAS(context, fresh, nextState).ok;
     if (promotes && !promotionRefused) return commit(true, false);
-    if (saveActionRuntimeWithCAS(fresh, nextState).ok) return commit(false, promotionRefused);
+    if (saveActionRuntimeWithCAS(context, fresh, nextState).ok) {
+      return commit(false, promotionRefused);
+    }
+    try {
+      assertReadableActionLoadContextStable(context);
+    } catch (error) {
+      console.error(
+        `cdp_run_action: persistRun refused changed corpus for "${actionId}"; RunRecord dropped (${error instanceof Error ? error.message : String(error)}).`,
+      );
+      return { promoted: false, promotionRefused, runtimeStateRefused: true };
+    }
     // Sidecar CAS conflict — another writer raced us. Reload and retry.
     // Exhausting the retries is NOT necessarily a race: a truncated or foreign
     // sidecar is refused deterministically while loadOrInitSidecar keeps

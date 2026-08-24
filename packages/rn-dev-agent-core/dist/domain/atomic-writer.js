@@ -573,6 +573,60 @@ export const atomicWriter = {
             throw error;
         }
     },
+    writeSidecarConditional(yamlPath, sidecarPath, state, precondition) {
+        try {
+            return withPairWriteLock(yamlPath, () => {
+                if (!precondition())
+                    return false;
+                cleanupOrphans(yamlPath, sidecarPath);
+                ensureDir(sidecarPath);
+                let expectedContent = null;
+                let mode = 0o600;
+                try {
+                    const sidecarFd = openSync(sidecarPath, constants.O_RDONLY | constants.O_NOFOLLOW);
+                    try {
+                        const sidecar = fstatSync(sidecarFd);
+                        if (!sidecar.isFile())
+                            return false;
+                        expectedContent = readFileSync(sidecarFd, 'utf8');
+                        mode = sidecar.mode & 0o7777;
+                    }
+                    finally {
+                        closeSync(sidecarFd);
+                    }
+                }
+                catch (error) {
+                    if (error.code !== 'ENOENT')
+                        return false;
+                }
+                if (!precondition())
+                    return false;
+                const stamp = generateTmpStamp();
+                const candidatePath = `${sidecarPath}.tmp.${stamp}`;
+                atomicWriter._writeFileWithMode(candidatePath, JSON.stringify(state, null, 2) + '\n', mode);
+                try {
+                    if (!precondition())
+                        return false;
+                    return expectedContent === null
+                        ? atomicWriter._linkIfAbsent(candidatePath, sidecarPath, precondition)
+                        : atomicWriter._publishIfUnchanged(candidatePath, sidecarPath, expectedContent, stamp, precondition);
+                }
+                finally {
+                    try {
+                        atomicWriter._unlink(candidatePath);
+                    }
+                    catch {
+                        /* candidate may already be consumed or its directory may have changed */
+                    }
+                }
+            }, precondition);
+        }
+        catch (error) {
+            if (error === ACTION_WRITE_PRECONDITION)
+                return false;
+            throw error;
+        }
+    },
     /**
      * Atomic pair-write. Cleans up any orphaned `.tmp` files before
      * starting. Throws on the first failed step — caller decides whether

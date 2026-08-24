@@ -803,19 +803,42 @@ function runtimeBaselineMatches(filePath, expected) {
  * actionWasEditedExternally guards. The sidecar equality check below remains
  * the CAS authority for telemetry lost-update protection.
  */
-export function saveActionRuntimeWithCAS(expected, nextState) {
-    return atomicWriter.withLock(expected.filePath, () => {
-        const sidecarPath = sidecarPathFor(expected.filePath);
-        if (!runtimeBaselineMatches(expected.filePath, expected.state)) {
-            return { ok: false, conflict: 'EXTERNAL_WRITE' };
+export function saveActionRuntimeWithCAS(context, expected, nextState) {
+    const fileName = basename(expected.filePath);
+    const expectedFilePath = join(context.corpus.actionsDir, fileName);
+    if (expected.filePath !== expectedFilePath || !/\.ya?ml$/i.test(fileName)) {
+        return { ok: false, conflict: 'EXTERNAL_WRITE' };
+    }
+    const targetFilePath = join(context.snapshot.directory, fileName);
+    const sidecarPath = sidecarPathFor(expected.filePath);
+    const publicationPrecondition = () => {
+        try {
+            assertReadableActionLoadContextStable(context);
+            return runtimeBaselineMatches(expected.filePath, expected.state);
         }
-        saveSidecar(expected.filePath, nextState);
-        expected.state = nextState;
-        return { ok: true, sidecarPath };
-    });
+        catch {
+            return false;
+        }
+    };
+    if (!atomicWriter.writeSidecarConditional(targetFilePath, sidecarPath, nextState, publicationPrecondition)) {
+        return { ok: false, conflict: 'EXTERNAL_WRITE' };
+    }
+    expected.state = nextState;
+    return { ok: true, sidecarPath };
 }
 /** Byte-preserving lifecycle promotion; comments/body remain exactly intact. */
-export function promoteActionRuntimeWithCAS(expected, nextState) {
+export function promoteActionRuntimeWithCAS(context, expected, nextState) {
+    try {
+        assertReadableActionLoadContextStable(context);
+    }
+    catch {
+        return { ok: false, conflict: 'EXTERNAL_WRITE' };
+    }
+    const fileName = basename(expected.filePath);
+    const expectedFilePath = join(context.corpus.actionsDir, fileName);
+    if (expected.filePath !== expectedFilePath || !/\.ya?ml$/i.test(fileName)) {
+        return { ok: false, conflict: 'EXTERNAL_WRITE' };
+    }
     try {
         assertWritableActionFile(expected.filePath);
     }
@@ -841,8 +864,10 @@ export function promoteActionRuntimeWithCAS(expected, nextState) {
     if ((yaml.match(marker) ?? []).length !== 1)
         return { ok: false, conflict: 'EXTERNAL_WRITE' };
     const promoted = yaml.replace(marker, '# status: active');
-    const written = atomicWriter.pairWriteConditional(expected.filePath, promoted, sidecarPath, nextState, () => {
+    const targetFilePath = join(context.snapshot.directory, fileName);
+    const publicationPrecondition = () => {
         try {
+            assertReadableActionLoadContextStable(context);
             return (runtimeBaselineMatches(expected.filePath, expected.state) &&
                 !actionWasEditedExternally(expected) &&
                 readFileSync(expected.filePath, 'utf8') === yaml);
@@ -850,7 +875,8 @@ export function promoteActionRuntimeWithCAS(expected, nextState) {
         catch {
             return false;
         }
-    }, undefined, yaml);
+    };
+    const written = atomicWriter.pairWriteConditional(targetFilePath, promoted, sidecarPath, nextState, publicationPrecondition, publicationPrecondition, yaml);
     if (!written)
         return { ok: false, conflict: 'EXTERNAL_WRITE' };
     expected.state = { ...nextState, lastSeenMtimeMs: written.finalMtimeMs };

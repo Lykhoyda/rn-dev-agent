@@ -26116,6 +26116,52 @@ var init_atomic_writer = __esm({
           throw error2;
         }
       },
+      writeSidecarConditional(yamlPath, sidecarPath, state, precondition) {
+        try {
+          return withPairWriteLock(yamlPath, () => {
+            if (!precondition())
+              return false;
+            cleanupOrphans(yamlPath, sidecarPath);
+            ensureDir(sidecarPath);
+            let expectedContent = null;
+            let mode = 384;
+            try {
+              const sidecarFd = openSync2(sidecarPath, constants3.O_RDONLY | constants3.O_NOFOLLOW);
+              try {
+                const sidecar = fstatSync2(sidecarFd);
+                if (!sidecar.isFile())
+                  return false;
+                expectedContent = readFileSync13(sidecarFd, "utf8");
+                mode = sidecar.mode & 4095;
+              } finally {
+                closeSync2(sidecarFd);
+              }
+            } catch (error2) {
+              if (error2.code !== "ENOENT")
+                return false;
+            }
+            if (!precondition())
+              return false;
+            const stamp = generateTmpStamp();
+            const candidatePath = `${sidecarPath}.tmp.${stamp}`;
+            atomicWriter._writeFileWithMode(candidatePath, JSON.stringify(state, null, 2) + "\n", mode);
+            try {
+              if (!precondition())
+                return false;
+              return expectedContent === null ? atomicWriter._linkIfAbsent(candidatePath, sidecarPath, precondition) : atomicWriter._publishIfUnchanged(candidatePath, sidecarPath, expectedContent, stamp, precondition);
+            } finally {
+              try {
+                atomicWriter._unlink(candidatePath);
+              } catch {
+              }
+            }
+          }, precondition);
+        } catch (error2) {
+          if (error2 === ACTION_WRITE_PRECONDITION)
+            return false;
+          throw error2;
+        }
+      },
       /**
        * Atomic pair-write. Cleans up any orphaned `.tmp` files before
        * starting. Throws on the first failed step — caller decides whether
@@ -27752,18 +27798,39 @@ function runtimeBaselineMatches(filePath, expected) {
   const sidecarPath = sidecarPathFor(filePath);
   return existsSync17(sidecarPath) ? runtimeSidecarMatches(sidecarPath, expected) : expected.runHistory.length === 0 && expected.repairHistory.length === 0;
 }
-function saveActionRuntimeWithCAS(expected, nextState) {
-  return atomicWriter.withLock(expected.filePath, () => {
-    const sidecarPath = sidecarPathFor(expected.filePath);
-    if (!runtimeBaselineMatches(expected.filePath, expected.state)) {
-      return { ok: false, conflict: "EXTERNAL_WRITE" };
+function saveActionRuntimeWithCAS(context, expected, nextState) {
+  const fileName = basename4(expected.filePath);
+  const expectedFilePath = join20(context.corpus.actionsDir, fileName);
+  if (expected.filePath !== expectedFilePath || !/\.ya?ml$/i.test(fileName)) {
+    return { ok: false, conflict: "EXTERNAL_WRITE" };
+  }
+  const targetFilePath = join20(context.snapshot.directory, fileName);
+  const sidecarPath = sidecarPathFor(expected.filePath);
+  const publicationPrecondition = () => {
+    try {
+      assertReadableActionLoadContextStable(context);
+      return runtimeBaselineMatches(expected.filePath, expected.state);
+    } catch {
+      return false;
     }
-    saveSidecar(expected.filePath, nextState);
-    expected.state = nextState;
-    return { ok: true, sidecarPath };
-  });
+  };
+  if (!atomicWriter.writeSidecarConditional(targetFilePath, sidecarPath, nextState, publicationPrecondition)) {
+    return { ok: false, conflict: "EXTERNAL_WRITE" };
+  }
+  expected.state = nextState;
+  return { ok: true, sidecarPath };
 }
-function promoteActionRuntimeWithCAS(expected, nextState) {
+function promoteActionRuntimeWithCAS(context, expected, nextState) {
+  try {
+    assertReadableActionLoadContextStable(context);
+  } catch {
+    return { ok: false, conflict: "EXTERNAL_WRITE" };
+  }
+  const fileName = basename4(expected.filePath);
+  const expectedFilePath = join20(context.corpus.actionsDir, fileName);
+  if (expected.filePath !== expectedFilePath || !/\.ya?ml$/i.test(fileName)) {
+    return { ok: false, conflict: "EXTERNAL_WRITE" };
+  }
   try {
     assertWritableActionFile(expected.filePath);
   } catch {
@@ -27784,13 +27851,16 @@ function promoteActionRuntimeWithCAS(expected, nextState) {
   if ((yaml2.match(marker) ?? []).length !== 1)
     return { ok: false, conflict: "EXTERNAL_WRITE" };
   const promoted = yaml2.replace(marker, "# status: active");
-  const written = atomicWriter.pairWriteConditional(expected.filePath, promoted, sidecarPath, nextState, () => {
+  const targetFilePath = join20(context.snapshot.directory, fileName);
+  const publicationPrecondition = () => {
     try {
+      assertReadableActionLoadContextStable(context);
       return runtimeBaselineMatches(expected.filePath, expected.state) && !actionWasEditedExternally(expected) && readFileSync16(expected.filePath, "utf8") === yaml2;
     } catch {
       return false;
     }
-  }, void 0, yaml2);
+  };
+  const written = atomicWriter.pairWriteConditional(targetFilePath, promoted, sidecarPath, nextState, publicationPrecondition, publicationPrecondition, yaml2);
   if (!written)
     return { ok: false, conflict: "EXTERNAL_WRITE" };
   expected.state = { ...nextState, lastSeenMtimeMs: written.finalMtimeMs };
@@ -79734,11 +79804,18 @@ async function persistRun(actionId, context, record2) {
       });
       return { promoted, promotionRefused: promotionRefused2, persistedRunId: record2.runId };
     };
-    const promotionRefused = promotes && !promoteActionRuntimeWithCAS(fresh, nextState).ok;
+    const promotionRefused = promotes && !promoteActionRuntimeWithCAS(context, fresh, nextState).ok;
     if (promotes && !promotionRefused)
       return commit(true, false);
-    if (saveActionRuntimeWithCAS(fresh, nextState).ok)
+    if (saveActionRuntimeWithCAS(context, fresh, nextState).ok) {
       return commit(false, promotionRefused);
+    }
+    try {
+      assertReadableActionLoadContextStable(context);
+    } catch (error2) {
+      console.error(`cdp_run_action: persistRun refused changed corpus for "${actionId}"; RunRecord dropped (${error2 instanceof Error ? error2.message : String(error2)}).`);
+      return { promoted: false, promotionRefused, runtimeStateRefused: true };
+    }
     if (attempt === MAX_ATTEMPTS) {
       console.error(`cdp_run_action: persistRun for "${actionId}" hit ${MAX_ATTEMPTS} sidecar CAS conflicts; runtime state was not written (status=${record2.status}).`);
       return { promoted: false, promotionRefused, runtimeStateRefused: true };
