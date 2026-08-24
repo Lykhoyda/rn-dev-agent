@@ -530,7 +530,10 @@ test('nested runFlow files are captured in one batch per depth for exact loads',
       batches.map((batch) => batch.length),
       [1, 10],
     );
-    assert.equal(batches.flat().some((file) => file.startsWith('unrelated-')), false);
+    assert.equal(
+      batches.flat().some((file) => file.startsWith('unrelated-')),
+      false,
+    );
     for (let index = 0; index < 10; index += 1) {
       assert.match(action.replay.cdpYaml, new RegExp(`child-${index}`));
     }
