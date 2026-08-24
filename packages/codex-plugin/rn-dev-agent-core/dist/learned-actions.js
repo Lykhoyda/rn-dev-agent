@@ -7,8 +7,9 @@ import path from "node:path";
 import os from "node:os";
 
 // packages/rn-dev-agent-core/dist/domain/unfollowed-file.js
+import { execFileSync as execFileSync2 } from "node:child_process";
 import { lstatSync as lstatSync2 } from "node:fs";
-import { join as join2 } from "node:path";
+import { isAbsolute, join as join2 } from "node:path";
 
 // packages/rn-dev-agent-core/dist/session/process-birth.js
 import { execFileSync } from "node:child_process";
@@ -17,23 +18,19 @@ import { closeSync, chmodSync, constants, copyFileSync, existsSync, fstatSync, l
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 var DARWIN_HELPER_MANIFEST = {
-  sourceSha256: "955b36f932d7124525003fc88e8596a148ae5404b49f8381ff59435e52b272c6",
-  recipeSha256: "ad5e7452795eee5ee8da4321f4260760e6e0e8536193978cd721748385e3f2f4",
-  stableBinarySha256: "6109d6017208b7ea091feeb40cae6640ff925c54e391d1ec0e7737057c30ded4",
-  binarySha256: "47b75f81c09ba5bf966acad48055a1c287708241a44c876fa4483c3189ce5f1e",
+  sourceSha256: "f97feaa1c0434cd2ee31c0dce56c9308eb17f893a6a771ac1333b62fcec8b702",
+  recipeSha256: "9617fe093885ac5c1043b39aa467754db8427080b52ebafea6f780535c2b3685",
+  stableBinarySha256: "9887a09246c4fc9c7765ef8fee2ae30027bcf0b9227ae408e48682107e4d88b8",
+  binarySha256: "49db19d9cd0ca2e7a78379c1e4b9551532d85447c043c51f06c6e03573c104ad",
   cdhashes: [
-    "f5f6876043eadc558ca3d5d056c49b1d771aef6b",
-    "1c072373aff231d756e20fa008b0f9486b229888"
+    "cebd22e7adf08990d4ff69b3156de03962d44b74",
+    "e3de1b27f4da23957a3acf60ae8f01c6402bd424"
   ]
 };
 var LINUX_PUBLICATION_HELPER_SHA256 = {
-  x64: "17b1b6e0edbecefc013ccb1308a444532a72d5910f794de53195a758789bd6bb",
-  arm64: "f9cb783474cc93e6dbb28e81b5a2e46d74c38926a392d75ce9ed5188bafe3520"
+  x64: "93bcb6e186470efd2a0944756d7b2de790182b59a5dcb3377334291076ad6032",
+  arm64: "1d0f2fc75e9eff675f8fd5ca329eca03950339796d2f339a4f59a85c2f97ba63"
 };
-var VERIFIED_FILESYSTEM_MAX_BUFFER_BYTES = 32 * 1024 * 1024;
-var VERIFIED_FILESYSTEM_BATCH_BYTES = 24 * 1024 * 1024;
-var VERIFIED_FILESYSTEM_BATCH_FILES = 16;
-var VERIFIED_FILESYSTEM_ENTRY_FRAME_BYTES = 9;
 function darwinProcessBirthHelperPath() {
   const moduleDirectory = dirname(fileURLToPath(import.meta.url));
   const candidates = [
@@ -126,75 +123,13 @@ function runVerifiedFilesystemHelper(args) {
       throw new Error("Verified directory helper changed before execution.");
     }
     return execFileSync(boundPath, [...args], {
-      maxBuffer: VERIFIED_FILESYSTEM_MAX_BUFFER_BYTES,
+      maxBuffer: 32 * 1024 * 1024,
       stdio: ["ignore", "pipe", "ignore"],
       timeout: 1e4
     });
   } finally {
     unlinkSync(boundPath);
   }
-}
-function readFilesFromVerifiedDirectory(directoryPath, identity, relativePaths) {
-  if (relativePaths.length === 0)
-    return [];
-  const entries = [];
-  const batches = [];
-  let batch = [];
-  let batchBytes = 0;
-  for (const relativePath of relativePaths) {
-    let framedBytes = VERIFIED_FILESYSTEM_ENTRY_FRAME_BYTES;
-    try {
-      const stat = lstatSync(join(directoryPath, relativePath));
-      if (stat.isFile())
-        framedBytes += stat.size;
-    } catch {
-      framedBytes = VERIFIED_FILESYSTEM_ENTRY_FRAME_BYTES;
-    }
-    if (framedBytes > VERIFIED_FILESYSTEM_BATCH_BYTES) {
-      throw new Error(`Verified directory entry exceeds the safe batch size: ${relativePath}.`);
-    }
-    if (batch.length > 0 && (batch.length >= VERIFIED_FILESYSTEM_BATCH_FILES || batchBytes + framedBytes > VERIFIED_FILESYSTEM_BATCH_BYTES)) {
-      batches.push(batch);
-      batch = [];
-      batchBytes = 0;
-    }
-    batch.push(relativePath);
-    batchBytes += framedBytes;
-  }
-  if (batch.length > 0)
-    batches.push(batch);
-  for (const currentBatch of batches) {
-    const output = runVerifiedFilesystemHelper([
-      "--read-directory-entries",
-      directoryPath,
-      identity.dev,
-      identity.ino,
-      ...currentBatch
-    ]);
-    let offset = 0;
-    for (const relativePath of currentBatch) {
-      if (offset + VERIFIED_FILESYSTEM_ENTRY_FRAME_BYTES > output.length) {
-        throw new Error(`Verified directory batch was truncated before ${relativePath}.`);
-      }
-      const status = output[offset];
-      const length = output.readBigUInt64BE(offset + 1);
-      offset += VERIFIED_FILESYSTEM_ENTRY_FRAME_BYTES;
-      if (length > BigInt(Number.MAX_SAFE_INTEGER) || offset + Number(length) > output.length) {
-        throw new Error(`Verified directory batch was malformed at ${relativePath}.`);
-      }
-      const end = offset + Number(length);
-      if (status === 0)
-        entries.push(Buffer.from(output.subarray(offset, end)));
-      else if (status === 1 && length === 0n)
-        entries.push(null);
-      else
-        throw new Error(`Verified directory batch had an invalid status for ${relativePath}.`);
-      offset = end;
-    }
-    if (offset !== output.length)
-      throw new Error("Verified directory batch had trailing data.");
-  }
-  return entries;
 }
 function listVerifiedDirectory(directoryPath, identity) {
   const output = runVerifiedFilesystemHelper([
@@ -248,29 +183,133 @@ function verifiedLinuxPublicationHelper(architecture) {
 function createUnfollowedFileSnapshot(directoryPath, directoryIdentity) {
   return { directoryPath, directoryIdentity, fileIdentities: /* @__PURE__ */ new Map() };
 }
+var UNFOLLOWED_READER_MAX_BUFFER_BYTES = 32 * 1024 * 1024;
+var UNFOLLOWED_READER_BATCH_BYTES = 24 * 1024 * 1024;
+var UNFOLLOWED_READER_BATCH_FILES = 16;
+var UNFOLLOWED_READER_FRAME_BYTES = 9;
+var UNFOLLOWED_READER_SCRIPT = String.raw`
+const { closeSync, constants, fstatSync, openSync, readSync, realpathSync, writeSync } = require('node:fs');
+const { join } = require('node:path');
+const request = JSON.parse(process.argv[1]);
+const opened = [];
+let directory = -1;
+const closeAll = () => {
+  for (const entry of opened) if (entry.fd >= 0) closeSync(entry.fd);
+  if (directory >= 0) closeSync(directory);
+};
+const matches = (stat, identity) =>
+  stat.isFile() &&
+  String(stat.dev) === identity.dev &&
+  String(stat.ino) === identity.ino &&
+  String(stat.size) === identity.size &&
+  String(stat.mtimeNs) === identity.mtimeNs &&
+  String(stat.ctimeNs) === identity.ctimeNs;
+try {
+  directory = openSync(
+    request.directoryPath,
+    constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_DIRECTORY,
+  );
+  const directoryStat = fstatSync(directory, { bigint: true });
+  if (
+    !directoryStat.isDirectory() ||
+    String(directoryStat.dev) !== request.directoryIdentity.dev ||
+    String(directoryStat.ino) !== request.directoryIdentity.ino
+  ) {
+    throw new Error('directory changed');
+  }
+  let batchBytes = 0;
+  for (const entry of request.entries) {
+    if (!entry.identity) {
+      opened.push({ fd: -1, size: 0, identity: null });
+      batchBytes += 9;
+      continue;
+    }
+    const path = join(request.directoryPath, entry.relativePath);
+    if (realpathSync.native(path) !== path) throw new Error('path followed a link');
+    const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    const stat = fstatSync(fd, { bigint: true });
+    if (!matches(stat, entry.identity)) {
+      closeSync(fd);
+      throw new Error('file changed');
+    }
+    const size = Number(stat.size);
+    if (!Number.isSafeInteger(size) || size < 0) {
+      closeSync(fd);
+      throw new Error('invalid size');
+    }
+    batchBytes += 9 + size;
+    if (batchBytes > ${UNFOLLOWED_READER_BATCH_BYTES}) {
+      closeSync(fd);
+      throw new Error('batch too large');
+    }
+    opened.push({ fd, size, identity: entry.identity });
+  }
+  for (const entry of opened) {
+    const frame = Buffer.alloc(9);
+    if (entry.fd < 0) {
+      frame[0] = 1;
+      writeSync(1, frame);
+      continue;
+    }
+    frame.writeBigUInt64BE(BigInt(entry.size), 1);
+    writeSync(1, frame);
+    const buffer = Buffer.allocUnsafe(Math.min(16384, Math.max(entry.size, 1)));
+    let offset = 0;
+    while (offset < entry.size) {
+      const count = readSync(entry.fd, buffer, 0, Math.min(buffer.length, entry.size - offset), offset);
+      if (count <= 0) throw new Error('short read');
+      writeSync(1, buffer, 0, count);
+      offset += count;
+    }
+    if (!matches(fstatSync(entry.fd, { bigint: true }), entry.identity)) {
+      throw new Error('file changed during read');
+    }
+  }
+  closeAll();
+} catch {
+  closeAll();
+  process.exit(10);
+}
+`;
+function identityFromStat(path2, stat) {
+  return {
+    path: path2,
+    dev: String(stat.dev),
+    ino: String(stat.ino),
+    size: String(stat.size),
+    mtimeNs: String(stat.mtimeNs),
+    ctimeNs: String(stat.ctimeNs)
+  };
+}
+function sameIdentity(left, right) {
+  return left.dev === right.dev && left.ino === right.ino && left.size === right.size && left.mtimeNs === right.mtimeNs && left.ctimeNs === right.ctimeNs;
+}
 function captureUnfollowedFileIdentities(snapshot, relativePaths) {
+  const identities = [];
   try {
     for (const relativePath of relativePaths) {
       const path2 = join2(snapshot.directoryPath, relativePath);
       const stat = lstatSync2(path2, { bigint: true });
       if (stat.isSymbolicLink() || !stat.isFile())
         throw new Error("changed");
-      const captured = { path: path2, dev: String(stat.dev), ino: String(stat.ino) };
+      const captured = identityFromStat(path2, stat);
       const existing = snapshot.fileIdentities.get(relativePath);
-      if (existing && (existing.dev !== captured.dev || existing.ino !== captured.ino)) {
+      if (existing && !sameIdentity(existing, captured))
         throw new Error("changed");
-      }
-      snapshot.fileIdentities.set(relativePath, existing ?? captured);
+      const selected = existing ?? captured;
+      snapshot.fileIdentities.set(relativePath, selected);
+      identities.push(selected);
     }
   } catch {
     throw new Error(`Refusing replaced learned-action corpus at ${snapshot.directoryPath}.`);
   }
+  return identities;
 }
 function assertUnfollowedFileSnapshotUnchanged(snapshot) {
   try {
     for (const identity of snapshot.fileIdentities.values()) {
       const stat = lstatSync2(identity.path, { bigint: true });
-      if (stat.isSymbolicLink() || !stat.isFile() || String(stat.dev) !== identity.dev || String(stat.ino) !== identity.ino) {
+      if (stat.isSymbolicLink() || !stat.isFile() || !sameIdentity(identity, identityFromStat(identity.path, stat))) {
         throw new Error("changed");
       }
     }
@@ -280,17 +319,102 @@ function assertUnfollowedFileSnapshotUnchanged(snapshot) {
 }
 function readUnfollowedSnapshotFiles(snapshot, relativePaths, readFiles = readUnfollowedFiles) {
   assertUnfollowedFileSnapshotUnchanged(snapshot);
-  captureUnfollowedFileIdentities(snapshot, relativePaths);
-  const contents = readFiles(snapshot.directoryPath, snapshot.directoryIdentity, relativePaths);
+  const identities = captureUnfollowedFileIdentities(snapshot, relativePaths);
+  const contents = readFiles(snapshot.directoryPath, snapshot.directoryIdentity, relativePaths, identities);
   assertUnfollowedFileSnapshotUnchanged(snapshot);
   if (contents.length !== relativePaths.length || contents.some((entry) => entry == null)) {
     throw new Error(`Refusing replaced learned-action corpus at ${snapshot.directoryPath}.`);
   }
   return contents;
 }
-function readUnfollowedFiles(directoryPath, identity, relativePaths) {
+function readUnfollowedFiles(directoryPath, identity, relativePaths, expectedIdentities) {
   try {
-    return readFilesFromVerifiedDirectory(directoryPath, identity, relativePaths).map((entry) => entry ? entry.toString("utf8") : null);
+    if (process.platform !== "darwin" && process.platform !== "linux") {
+      throw new Error(`Verified directory reads are unavailable on ${process.platform}/${process.arch}.`);
+    }
+    if (expectedIdentities && expectedIdentities.length !== relativePaths.length) {
+      throw new Error("Selected file identities did not match the requested paths.");
+    }
+    const entries = relativePaths.map((relativePath, index) => {
+      if (isAbsolute(relativePath) || relativePath.split("/").some((component) => !component || component === "." || component === "..")) {
+        throw new Error(`Invalid relative path: ${relativePath}.`);
+      }
+      if (expectedIdentities) {
+        const selected = expectedIdentities[index];
+        if (!selected || selected.path !== join2(directoryPath, relativePath)) {
+          throw new Error(`Selected file identity did not match ${relativePath}.`);
+        }
+        return { relativePath, identity: selected };
+      }
+      const path2 = join2(directoryPath, relativePath);
+      try {
+        const stat = lstatSync2(path2, { bigint: true });
+        return {
+          relativePath,
+          identity: stat.isSymbolicLink() || !stat.isFile() ? null : identityFromStat(path2, stat)
+        };
+      } catch (err) {
+        if (err.code === "ENOENT")
+          return { relativePath, identity: null };
+        throw err;
+      }
+    });
+    const contents = [];
+    let batch = [];
+    let batchBytes = 0;
+    const flush = () => {
+      if (batch.length === 0)
+        return;
+      const output = execFileSync2(process.execPath, [
+        "--no-warnings",
+        "--input-type=commonjs",
+        "-e",
+        UNFOLLOWED_READER_SCRIPT,
+        JSON.stringify({ directoryPath, directoryIdentity: identity, entries: batch })
+      ], {
+        maxBuffer: UNFOLLOWED_READER_MAX_BUFFER_BYTES,
+        stdio: ["ignore", "pipe", "ignore"],
+        timeout: 1e4
+      });
+      let offset = 0;
+      for (const entry of batch) {
+        if (offset + UNFOLLOWED_READER_FRAME_BYTES > output.length) {
+          throw new Error(`Verified directory batch was truncated before ${entry.relativePath}.`);
+        }
+        const status = output[offset];
+        const length = output.readBigUInt64BE(offset + 1);
+        offset += UNFOLLOWED_READER_FRAME_BYTES;
+        if (length > BigInt(Number.MAX_SAFE_INTEGER) || offset + Number(length) > output.length) {
+          throw new Error(`Verified directory batch was malformed at ${entry.relativePath}.`);
+        }
+        const end = offset + Number(length);
+        if (status === 0)
+          contents.push(output.toString("utf8", offset, end));
+        else if (status === 1 && length === 0n)
+          contents.push(null);
+        else
+          throw new Error(`Verified directory batch refused ${entry.relativePath}.`);
+        offset = end;
+      }
+      if (offset !== output.length)
+        throw new Error("Verified directory batch had trailing data.");
+      batch = [];
+      batchBytes = 0;
+    };
+    for (const entry of entries) {
+      const size = entry.identity ? Number(entry.identity.size) : 0;
+      const framedBytes = UNFOLLOWED_READER_FRAME_BYTES + size;
+      if (!Number.isSafeInteger(size) || framedBytes > UNFOLLOWED_READER_BATCH_BYTES) {
+        throw new Error(`Verified directory entry exceeds the safe batch size: ${entry.relativePath}.`);
+      }
+      if (batch.length > 0 && (batch.length >= UNFOLLOWED_READER_BATCH_FILES || batchBytes + framedBytes > UNFOLLOWED_READER_BATCH_BYTES)) {
+        flush();
+      }
+      batch.push(entry);
+      batchBytes += framedBytes;
+    }
+    flush();
+    return contents;
   } catch (err) {
     throw new Error(`Refusing replaced learned-action corpus at ${directoryPath}: ${err instanceof Error ? err.message : String(err)}`);
   }
@@ -306,7 +430,7 @@ function listUnfollowedDirectory(directoryPath, identity) {
 // packages/rn-dev-agent-core/dist/session/worktree-inheritance.js
 import { spawnSync } from "node:child_process";
 import { closeSync as closeSync2, constants as constants2, existsSync as existsSync2, fstatSync as fstatSync2, lstatSync as lstatSync3, mkdirSync, openSync as openSync2, readFileSync as readFileSync2, readlinkSync, realpathSync as realpathSync2, renameSync, statSync, symlinkSync, unlinkSync as unlinkSync2 } from "node:fs";
-import { dirname as dirname2, isAbsolute, join as join3, relative, resolve, sep } from "node:path";
+import { dirname as dirname2, isAbsolute as isAbsolute2, join as join3, relative, resolve, sep } from "node:path";
 
 // packages/rn-dev-agent-core/dist/session/worktree-repair-remedy.js
 var WORKTREE_REPAIR_ENTRY = '"${CLAUDE_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}/rn-dev-agent-core/dist/worktree-inheritance.js"';
@@ -365,7 +489,7 @@ function contained(parent, child) {
   if (parent === child)
     return true;
   const rel = relative(parent, child);
-  return rel !== "" && !rel.startsWith(`..${sep}`) && rel !== ".." && !isAbsolute(rel);
+  return rel !== "" && !rel.startsWith(`..${sep}`) && rel !== ".." && !isAbsolute2(rel);
 }
 function toPosix(path2) {
   return sep === "/" ? path2 : path2.split(sep).join("/");
@@ -501,7 +625,7 @@ function resolveWorktreeLayout(input) {
 }
 function classifySource(path2, type, boundary) {
   const rel = relative(boundary, path2);
-  if (rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
+  if (rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute2(rel)) {
     return { state: "WRONG_TYPE" };
   }
   const paths = [boundary];

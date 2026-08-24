@@ -5,23 +5,19 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveTrustedSystemExecutable, } from '../util/trusted-system-executable.js';
 const DARWIN_HELPER_MANIFEST = {
-    sourceSha256: '955b36f932d7124525003fc88e8596a148ae5404b49f8381ff59435e52b272c6',
-    recipeSha256: 'ad5e7452795eee5ee8da4321f4260760e6e0e8536193978cd721748385e3f2f4',
-    stableBinarySha256: '6109d6017208b7ea091feeb40cae6640ff925c54e391d1ec0e7737057c30ded4',
-    binarySha256: '47b75f81c09ba5bf966acad48055a1c287708241a44c876fa4483c3189ce5f1e',
+    sourceSha256: 'f97feaa1c0434cd2ee31c0dce56c9308eb17f893a6a771ac1333b62fcec8b702',
+    recipeSha256: '9617fe093885ac5c1043b39aa467754db8427080b52ebafea6f780535c2b3685',
+    stableBinarySha256: '9887a09246c4fc9c7765ef8fee2ae30027bcf0b9227ae408e48682107e4d88b8',
+    binarySha256: '49db19d9cd0ca2e7a78379c1e4b9551532d85447c043c51f06c6e03573c104ad',
     cdhashes: [
-        'f5f6876043eadc558ca3d5d056c49b1d771aef6b',
-        '1c072373aff231d756e20fa008b0f9486b229888',
+        'cebd22e7adf08990d4ff69b3156de03962d44b74',
+        'e3de1b27f4da23957a3acf60ae8f01c6402bd424',
     ],
 };
 const LINUX_PUBLICATION_HELPER_SHA256 = {
-    x64: '17b1b6e0edbecefc013ccb1308a444532a72d5910f794de53195a758789bd6bb',
-    arm64: 'f9cb783474cc93e6dbb28e81b5a2e46d74c38926a392d75ce9ed5188bafe3520',
+    x64: '93bcb6e186470efd2a0944756d7b2de790182b59a5dcb3377334291076ad6032',
+    arm64: '1d0f2fc75e9eff675f8fd5ca329eca03950339796d2f339a4f59a85c2f97ba63',
 };
-const VERIFIED_FILESYSTEM_MAX_BUFFER_BYTES = 32 * 1024 * 1024;
-const VERIFIED_FILESYSTEM_BATCH_BYTES = 24 * 1024 * 1024;
-const VERIFIED_FILESYSTEM_BATCH_FILES = 16;
-const VERIFIED_FILESYSTEM_ENTRY_FRAME_BYTES = 9;
 function defaultRun(command, args) {
     try {
         return execFileSync(command, [...args], {
@@ -310,7 +306,7 @@ function runVerifiedFilesystemHelper(args) {
             throw new Error('Verified directory helper changed before execution.');
         }
         return execFileSync(boundPath, [...args], {
-            maxBuffer: VERIFIED_FILESYSTEM_MAX_BUFFER_BYTES,
+            maxBuffer: 32 * 1024 * 1024,
             stdio: ['ignore', 'pipe', 'ignore'],
             timeout: 10_000,
         });
@@ -327,71 +323,6 @@ export function readFileFromVerifiedDirectory(directoryPath, identity, relativeP
         identity.dev,
         identity.ino,
     ]);
-}
-export function readFilesFromVerifiedDirectory(directoryPath, identity, relativePaths) {
-    if (relativePaths.length === 0)
-        return [];
-    const entries = [];
-    const batches = [];
-    let batch = [];
-    let batchBytes = 0;
-    for (const relativePath of relativePaths) {
-        let framedBytes = VERIFIED_FILESYSTEM_ENTRY_FRAME_BYTES;
-        try {
-            const stat = lstatSync(join(directoryPath, relativePath));
-            if (stat.isFile())
-                framedBytes += stat.size;
-        }
-        catch {
-            framedBytes = VERIFIED_FILESYSTEM_ENTRY_FRAME_BYTES;
-        }
-        if (framedBytes > VERIFIED_FILESYSTEM_BATCH_BYTES) {
-            throw new Error(`Verified directory entry exceeds the safe batch size: ${relativePath}.`);
-        }
-        if (batch.length > 0 &&
-            (batch.length >= VERIFIED_FILESYSTEM_BATCH_FILES ||
-                batchBytes + framedBytes > VERIFIED_FILESYSTEM_BATCH_BYTES)) {
-            batches.push(batch);
-            batch = [];
-            batchBytes = 0;
-        }
-        batch.push(relativePath);
-        batchBytes += framedBytes;
-    }
-    if (batch.length > 0)
-        batches.push(batch);
-    for (const currentBatch of batches) {
-        const output = runVerifiedFilesystemHelper([
-            '--read-directory-entries',
-            directoryPath,
-            identity.dev,
-            identity.ino,
-            ...currentBatch,
-        ]);
-        let offset = 0;
-        for (const relativePath of currentBatch) {
-            if (offset + VERIFIED_FILESYSTEM_ENTRY_FRAME_BYTES > output.length) {
-                throw new Error(`Verified directory batch was truncated before ${relativePath}.`);
-            }
-            const status = output[offset];
-            const length = output.readBigUInt64BE(offset + 1);
-            offset += VERIFIED_FILESYSTEM_ENTRY_FRAME_BYTES;
-            if (length > BigInt(Number.MAX_SAFE_INTEGER) || offset + Number(length) > output.length) {
-                throw new Error(`Verified directory batch was malformed at ${relativePath}.`);
-            }
-            const end = offset + Number(length);
-            if (status === 0)
-                entries.push(Buffer.from(output.subarray(offset, end)));
-            else if (status === 1 && length === 0n)
-                entries.push(null);
-            else
-                throw new Error(`Verified directory batch had an invalid status for ${relativePath}.`);
-            offset = end;
-        }
-        if (offset !== output.length)
-            throw new Error('Verified directory batch had trailing data.');
-    }
-    return entries;
 }
 export function listVerifiedDirectory(directoryPath, identity) {
     const output = runVerifiedFilesystemHelper([

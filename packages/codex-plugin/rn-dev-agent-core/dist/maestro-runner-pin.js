@@ -299,75 +299,13 @@ function runVerifiedFilesystemHelper(args) {
       throw new Error("Verified directory helper changed before execution.");
     }
     return execFileSync(boundPath, [...args], {
-      maxBuffer: VERIFIED_FILESYSTEM_MAX_BUFFER_BYTES,
+      maxBuffer: 32 * 1024 * 1024,
       stdio: ["ignore", "pipe", "ignore"],
       timeout: 1e4
     });
   } finally {
     unlinkSync(boundPath);
   }
-}
-function readFilesFromVerifiedDirectory(directoryPath, identity, relativePaths) {
-  if (relativePaths.length === 0)
-    return [];
-  const entries = [];
-  const batches = [];
-  let batch = [];
-  let batchBytes = 0;
-  for (const relativePath of relativePaths) {
-    let framedBytes = VERIFIED_FILESYSTEM_ENTRY_FRAME_BYTES;
-    try {
-      const stat = lstatSync(join(directoryPath, relativePath));
-      if (stat.isFile())
-        framedBytes += stat.size;
-    } catch {
-      framedBytes = VERIFIED_FILESYSTEM_ENTRY_FRAME_BYTES;
-    }
-    if (framedBytes > VERIFIED_FILESYSTEM_BATCH_BYTES) {
-      throw new Error(`Verified directory entry exceeds the safe batch size: ${relativePath}.`);
-    }
-    if (batch.length > 0 && (batch.length >= VERIFIED_FILESYSTEM_BATCH_FILES || batchBytes + framedBytes > VERIFIED_FILESYSTEM_BATCH_BYTES)) {
-      batches.push(batch);
-      batch = [];
-      batchBytes = 0;
-    }
-    batch.push(relativePath);
-    batchBytes += framedBytes;
-  }
-  if (batch.length > 0)
-    batches.push(batch);
-  for (const currentBatch of batches) {
-    const output = runVerifiedFilesystemHelper([
-      "--read-directory-entries",
-      directoryPath,
-      identity.dev,
-      identity.ino,
-      ...currentBatch
-    ]);
-    let offset = 0;
-    for (const relativePath of currentBatch) {
-      if (offset + VERIFIED_FILESYSTEM_ENTRY_FRAME_BYTES > output.length) {
-        throw new Error(`Verified directory batch was truncated before ${relativePath}.`);
-      }
-      const status = output[offset];
-      const length = output.readBigUInt64BE(offset + 1);
-      offset += VERIFIED_FILESYSTEM_ENTRY_FRAME_BYTES;
-      if (length > BigInt(Number.MAX_SAFE_INTEGER) || offset + Number(length) > output.length) {
-        throw new Error(`Verified directory batch was malformed at ${relativePath}.`);
-      }
-      const end = offset + Number(length);
-      if (status === 0)
-        entries.push(Buffer.from(output.subarray(offset, end)));
-      else if (status === 1 && length === 0n)
-        entries.push(null);
-      else
-        throw new Error(`Verified directory batch had an invalid status for ${relativePath}.`);
-      offset = end;
-    }
-    if (offset !== output.length)
-      throw new Error("Verified directory batch had trailing data.");
-  }
-  return entries;
 }
 function listVerifiedDirectory(directoryPath, identity) {
   const output = runVerifiedFilesystemHelper([
@@ -548,29 +486,25 @@ function probeRecordedProcessBirth(pid, dependencies) {
   }
   return { status: "unknown" };
 }
-var DARWIN_HELPER_MANIFEST, LINUX_PUBLICATION_HELPER_SHA256, VERIFIED_FILESYSTEM_MAX_BUFFER_BYTES, VERIFIED_FILESYSTEM_BATCH_BYTES, VERIFIED_FILESYSTEM_BATCH_FILES, VERIFIED_FILESYSTEM_ENTRY_FRAME_BYTES, VERIFIED_HELPER_SCRIPT;
+var DARWIN_HELPER_MANIFEST, LINUX_PUBLICATION_HELPER_SHA256, VERIFIED_HELPER_SCRIPT;
 var init_process_birth = __esm({
   "packages/rn-dev-agent-core/dist/session/process-birth.js"() {
     "use strict";
     init_trusted_system_executable();
     DARWIN_HELPER_MANIFEST = {
-      sourceSha256: "955b36f932d7124525003fc88e8596a148ae5404b49f8381ff59435e52b272c6",
-      recipeSha256: "ad5e7452795eee5ee8da4321f4260760e6e0e8536193978cd721748385e3f2f4",
-      stableBinarySha256: "6109d6017208b7ea091feeb40cae6640ff925c54e391d1ec0e7737057c30ded4",
-      binarySha256: "47b75f81c09ba5bf966acad48055a1c287708241a44c876fa4483c3189ce5f1e",
+      sourceSha256: "f97feaa1c0434cd2ee31c0dce56c9308eb17f893a6a771ac1333b62fcec8b702",
+      recipeSha256: "9617fe093885ac5c1043b39aa467754db8427080b52ebafea6f780535c2b3685",
+      stableBinarySha256: "9887a09246c4fc9c7765ef8fee2ae30027bcf0b9227ae408e48682107e4d88b8",
+      binarySha256: "49db19d9cd0ca2e7a78379c1e4b9551532d85447c043c51f06c6e03573c104ad",
       cdhashes: [
-        "f5f6876043eadc558ca3d5d056c49b1d771aef6b",
-        "1c072373aff231d756e20fa008b0f9486b229888"
+        "cebd22e7adf08990d4ff69b3156de03962d44b74",
+        "e3de1b27f4da23957a3acf60ae8f01c6402bd424"
       ]
     };
     LINUX_PUBLICATION_HELPER_SHA256 = {
-      x64: "17b1b6e0edbecefc013ccb1308a444532a72d5910f794de53195a758789bd6bb",
-      arm64: "f9cb783474cc93e6dbb28e81b5a2e46d74c38926a392d75ce9ed5188bafe3520"
+      x64: "93bcb6e186470efd2a0944756d7b2de790182b59a5dcb3377334291076ad6032",
+      arm64: "1d0f2fc75e9eff675f8fd5ca329eca03950339796d2f339a4f59a85c2f97ba63"
     };
-    VERIFIED_FILESYSTEM_MAX_BUFFER_BYTES = 32 * 1024 * 1024;
-    VERIFIED_FILESYSTEM_BATCH_BYTES = 24 * 1024 * 1024;
-    VERIFIED_FILESYSTEM_BATCH_FILES = 16;
-    VERIFIED_FILESYSTEM_ENTRY_FRAME_BYTES = 9;
     VERIFIED_HELPER_SCRIPT = `
 set -euo pipefail
 helper_pid=
@@ -9804,34 +9738,51 @@ var init_path_safety = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/domain/unfollowed-file.js
+import { execFileSync as execFileSync2 } from "node:child_process";
 import { lstatSync as lstatSync5 } from "node:fs";
-import { join as join6 } from "node:path";
+import { isAbsolute as isAbsolute2, join as join6 } from "node:path";
 function createUnfollowedFileSnapshot(directoryPath, directoryIdentity) {
   return { directoryPath, directoryIdentity, fileIdentities: /* @__PURE__ */ new Map() };
 }
+function identityFromStat(path, stat) {
+  return {
+    path,
+    dev: String(stat.dev),
+    ino: String(stat.ino),
+    size: String(stat.size),
+    mtimeNs: String(stat.mtimeNs),
+    ctimeNs: String(stat.ctimeNs)
+  };
+}
+function sameIdentity(left, right) {
+  return left.dev === right.dev && left.ino === right.ino && left.size === right.size && left.mtimeNs === right.mtimeNs && left.ctimeNs === right.ctimeNs;
+}
 function captureUnfollowedFileIdentities(snapshot, relativePaths) {
+  const identities = [];
   try {
     for (const relativePath of relativePaths) {
       const path = join6(snapshot.directoryPath, relativePath);
       const stat = lstatSync5(path, { bigint: true });
       if (stat.isSymbolicLink() || !stat.isFile())
         throw new Error("changed");
-      const captured = { path, dev: String(stat.dev), ino: String(stat.ino) };
+      const captured = identityFromStat(path, stat);
       const existing = snapshot.fileIdentities.get(relativePath);
-      if (existing && (existing.dev !== captured.dev || existing.ino !== captured.ino)) {
+      if (existing && !sameIdentity(existing, captured))
         throw new Error("changed");
-      }
-      snapshot.fileIdentities.set(relativePath, existing ?? captured);
+      const selected = existing ?? captured;
+      snapshot.fileIdentities.set(relativePath, selected);
+      identities.push(selected);
     }
   } catch {
     throw new Error(`Refusing replaced learned-action corpus at ${snapshot.directoryPath}.`);
   }
+  return identities;
 }
 function assertUnfollowedFileSnapshotUnchanged(snapshot) {
   try {
     for (const identity of snapshot.fileIdentities.values()) {
       const stat = lstatSync5(identity.path, { bigint: true });
-      if (stat.isSymbolicLink() || !stat.isFile() || String(stat.dev) !== identity.dev || String(stat.ino) !== identity.ino) {
+      if (stat.isSymbolicLink() || !stat.isFile() || !sameIdentity(identity, identityFromStat(identity.path, stat))) {
         throw new Error("changed");
       }
     }
@@ -9855,11 +9806,10 @@ function selectExistingUnfollowedSnapshotFiles(snapshot, relativePaths) {
       }
       if (stat.isSymbolicLink() || !stat.isFile())
         throw new Error("changed");
-      const captured = { path, dev: String(stat.dev), ino: String(stat.ino) };
+      const captured = identityFromStat(path, stat);
       const selected = snapshot.fileIdentities.get(relativePath);
-      if (selected && (selected.dev !== captured.dev || selected.ino !== captured.ino)) {
+      if (selected && !sameIdentity(selected, captured))
         throw new Error("changed");
-      }
       snapshot.fileIdentities.set(relativePath, selected ?? captured);
       existing.push(relativePath);
     }
@@ -9871,17 +9821,102 @@ function selectExistingUnfollowedSnapshotFiles(snapshot, relativePaths) {
 }
 function readUnfollowedSnapshotFiles(snapshot, relativePaths, readFiles = readUnfollowedFiles) {
   assertUnfollowedFileSnapshotUnchanged(snapshot);
-  captureUnfollowedFileIdentities(snapshot, relativePaths);
-  const contents = readFiles(snapshot.directoryPath, snapshot.directoryIdentity, relativePaths);
+  const identities = captureUnfollowedFileIdentities(snapshot, relativePaths);
+  const contents = readFiles(snapshot.directoryPath, snapshot.directoryIdentity, relativePaths, identities);
   assertUnfollowedFileSnapshotUnchanged(snapshot);
   if (contents.length !== relativePaths.length || contents.some((entry) => entry == null)) {
     throw new Error(`Refusing replaced learned-action corpus at ${snapshot.directoryPath}.`);
   }
   return contents;
 }
-function readUnfollowedFiles(directoryPath, identity, relativePaths) {
+function readUnfollowedFiles(directoryPath, identity, relativePaths, expectedIdentities) {
   try {
-    return readFilesFromVerifiedDirectory(directoryPath, identity, relativePaths).map((entry) => entry ? entry.toString("utf8") : null);
+    if (process.platform !== "darwin" && process.platform !== "linux") {
+      throw new Error(`Verified directory reads are unavailable on ${process.platform}/${process.arch}.`);
+    }
+    if (expectedIdentities && expectedIdentities.length !== relativePaths.length) {
+      throw new Error("Selected file identities did not match the requested paths.");
+    }
+    const entries = relativePaths.map((relativePath, index) => {
+      if (isAbsolute2(relativePath) || relativePath.split("/").some((component) => !component || component === "." || component === "..")) {
+        throw new Error(`Invalid relative path: ${relativePath}.`);
+      }
+      if (expectedIdentities) {
+        const selected = expectedIdentities[index];
+        if (!selected || selected.path !== join6(directoryPath, relativePath)) {
+          throw new Error(`Selected file identity did not match ${relativePath}.`);
+        }
+        return { relativePath, identity: selected };
+      }
+      const path = join6(directoryPath, relativePath);
+      try {
+        const stat = lstatSync5(path, { bigint: true });
+        return {
+          relativePath,
+          identity: stat.isSymbolicLink() || !stat.isFile() ? null : identityFromStat(path, stat)
+        };
+      } catch (err) {
+        if (err.code === "ENOENT")
+          return { relativePath, identity: null };
+        throw err;
+      }
+    });
+    const contents = [];
+    let batch = [];
+    let batchBytes = 0;
+    const flush = () => {
+      if (batch.length === 0)
+        return;
+      const output = execFileSync2(process.execPath, [
+        "--no-warnings",
+        "--input-type=commonjs",
+        "-e",
+        UNFOLLOWED_READER_SCRIPT,
+        JSON.stringify({ directoryPath, directoryIdentity: identity, entries: batch })
+      ], {
+        maxBuffer: UNFOLLOWED_READER_MAX_BUFFER_BYTES,
+        stdio: ["ignore", "pipe", "ignore"],
+        timeout: 1e4
+      });
+      let offset = 0;
+      for (const entry of batch) {
+        if (offset + UNFOLLOWED_READER_FRAME_BYTES > output.length) {
+          throw new Error(`Verified directory batch was truncated before ${entry.relativePath}.`);
+        }
+        const status = output[offset];
+        const length = output.readBigUInt64BE(offset + 1);
+        offset += UNFOLLOWED_READER_FRAME_BYTES;
+        if (length > BigInt(Number.MAX_SAFE_INTEGER) || offset + Number(length) > output.length) {
+          throw new Error(`Verified directory batch was malformed at ${entry.relativePath}.`);
+        }
+        const end = offset + Number(length);
+        if (status === 0)
+          contents.push(output.toString("utf8", offset, end));
+        else if (status === 1 && length === 0n)
+          contents.push(null);
+        else
+          throw new Error(`Verified directory batch refused ${entry.relativePath}.`);
+        offset = end;
+      }
+      if (offset !== output.length)
+        throw new Error("Verified directory batch had trailing data.");
+      batch = [];
+      batchBytes = 0;
+    };
+    for (const entry of entries) {
+      const size = entry.identity ? Number(entry.identity.size) : 0;
+      const framedBytes = UNFOLLOWED_READER_FRAME_BYTES + size;
+      if (!Number.isSafeInteger(size) || framedBytes > UNFOLLOWED_READER_BATCH_BYTES) {
+        throw new Error(`Verified directory entry exceeds the safe batch size: ${entry.relativePath}.`);
+      }
+      if (batch.length > 0 && (batch.length >= UNFOLLOWED_READER_BATCH_FILES || batchBytes + framedBytes > UNFOLLOWED_READER_BATCH_BYTES)) {
+        flush();
+      }
+      batch.push(entry);
+      batchBytes += framedBytes;
+    }
+    flush();
+    return contents;
   } catch (err) {
     throw new Error(`Refusing replaced learned-action corpus at ${directoryPath}: ${err instanceof Error ? err.message : String(err)}`);
   }
@@ -9893,10 +9928,99 @@ function listUnfollowedDirectory(directoryPath, identity) {
     throw new Error(`Refusing replaced learned-action corpus at ${directoryPath}: ${err instanceof Error ? err.message : String(err)}`);
   }
 }
+var UNFOLLOWED_READER_MAX_BUFFER_BYTES, UNFOLLOWED_READER_BATCH_BYTES, UNFOLLOWED_READER_BATCH_FILES, UNFOLLOWED_READER_FRAME_BYTES, UNFOLLOWED_READER_SCRIPT;
 var init_unfollowed_file = __esm({
   "packages/rn-dev-agent-core/dist/domain/unfollowed-file.js"() {
     "use strict";
     init_process_birth();
+    UNFOLLOWED_READER_MAX_BUFFER_BYTES = 32 * 1024 * 1024;
+    UNFOLLOWED_READER_BATCH_BYTES = 24 * 1024 * 1024;
+    UNFOLLOWED_READER_BATCH_FILES = 16;
+    UNFOLLOWED_READER_FRAME_BYTES = 9;
+    UNFOLLOWED_READER_SCRIPT = String.raw`
+const { closeSync, constants, fstatSync, openSync, readSync, realpathSync, writeSync } = require('node:fs');
+const { join } = require('node:path');
+const request = JSON.parse(process.argv[1]);
+const opened = [];
+let directory = -1;
+const closeAll = () => {
+  for (const entry of opened) if (entry.fd >= 0) closeSync(entry.fd);
+  if (directory >= 0) closeSync(directory);
+};
+const matches = (stat, identity) =>
+  stat.isFile() &&
+  String(stat.dev) === identity.dev &&
+  String(stat.ino) === identity.ino &&
+  String(stat.size) === identity.size &&
+  String(stat.mtimeNs) === identity.mtimeNs &&
+  String(stat.ctimeNs) === identity.ctimeNs;
+try {
+  directory = openSync(
+    request.directoryPath,
+    constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_DIRECTORY,
+  );
+  const directoryStat = fstatSync(directory, { bigint: true });
+  if (
+    !directoryStat.isDirectory() ||
+    String(directoryStat.dev) !== request.directoryIdentity.dev ||
+    String(directoryStat.ino) !== request.directoryIdentity.ino
+  ) {
+    throw new Error('directory changed');
+  }
+  let batchBytes = 0;
+  for (const entry of request.entries) {
+    if (!entry.identity) {
+      opened.push({ fd: -1, size: 0, identity: null });
+      batchBytes += 9;
+      continue;
+    }
+    const path = join(request.directoryPath, entry.relativePath);
+    if (realpathSync.native(path) !== path) throw new Error('path followed a link');
+    const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    const stat = fstatSync(fd, { bigint: true });
+    if (!matches(stat, entry.identity)) {
+      closeSync(fd);
+      throw new Error('file changed');
+    }
+    const size = Number(stat.size);
+    if (!Number.isSafeInteger(size) || size < 0) {
+      closeSync(fd);
+      throw new Error('invalid size');
+    }
+    batchBytes += 9 + size;
+    if (batchBytes > ${UNFOLLOWED_READER_BATCH_BYTES}) {
+      closeSync(fd);
+      throw new Error('batch too large');
+    }
+    opened.push({ fd, size, identity: entry.identity });
+  }
+  for (const entry of opened) {
+    const frame = Buffer.alloc(9);
+    if (entry.fd < 0) {
+      frame[0] = 1;
+      writeSync(1, frame);
+      continue;
+    }
+    frame.writeBigUInt64BE(BigInt(entry.size), 1);
+    writeSync(1, frame);
+    const buffer = Buffer.allocUnsafe(Math.min(16384, Math.max(entry.size, 1)));
+    let offset = 0;
+    while (offset < entry.size) {
+      const count = readSync(entry.fd, buffer, 0, Math.min(buffer.length, entry.size - offset), offset);
+      if (count <= 0) throw new Error('short read');
+      writeSync(1, buffer, 0, count);
+      offset += count;
+    }
+    if (!matches(fstatSync(entry.fd, { bigint: true }), entry.identity)) {
+      throw new Error('file changed during read');
+    }
+  }
+  closeAll();
+} catch {
+  closeAll();
+  process.exit(10);
+}
+`;
   }
 });
 
@@ -10332,7 +10456,7 @@ var init_worktree_repair_remedy = __esm({
 // packages/rn-dev-agent-core/dist/session/worktree-inheritance.js
 import { spawnSync } from "node:child_process";
 import { closeSync as closeSync3, constants as constants4, existsSync as existsSync8, fstatSync as fstatSync3, lstatSync as lstatSync6, mkdirSync as mkdirSync7, openSync as openSync3, readFileSync as readFileSync7, readlinkSync as readlinkSync2, realpathSync as realpathSync4, renameSync as renameSync2, statSync as statSync3, symlinkSync as symlinkSync2, unlinkSync as unlinkSync4 } from "node:fs";
-import { dirname as dirname8, isAbsolute as isAbsolute2, join as join9, relative as relative2, resolve as resolve4, sep as sep5 } from "node:path";
+import { dirname as dirname8, isAbsolute as isAbsolute3, join as join9, relative as relative2, resolve as resolve4, sep as sep5 } from "node:path";
 function gitEnvironment() {
   const env = { ...process.env };
   for (const key of GIT_ENV_OVERRIDES)
@@ -10361,7 +10485,7 @@ function contained(parent, child) {
   if (parent === child)
     return true;
   const rel = relative2(parent, child);
-  return rel !== "" && !rel.startsWith(`..${sep5}`) && rel !== ".." && !isAbsolute2(rel);
+  return rel !== "" && !rel.startsWith(`..${sep5}`) && rel !== ".." && !isAbsolute3(rel);
 }
 function toPosix(path) {
   return sep5 === "/" ? path : path.split(sep5).join("/");
@@ -10497,7 +10621,7 @@ function resolveWorktreeLayout(input) {
 }
 function classifySource(path, type, boundary) {
   const rel = relative2(boundary, path);
-  if (rel === ".." || rel.startsWith(`..${sep5}`) || isAbsolute2(rel)) {
+  if (rel === ".." || rel.startsWith(`..${sep5}`) || isAbsolute3(rel)) {
     return { state: "WRONG_TYPE" };
   }
   const paths = [boundary];
@@ -11075,7 +11199,7 @@ var init_worktree_inheritance = __esm({
 
 // packages/rn-dev-agent-core/dist/domain/action-store.js
 import { existsSync as existsSync9, lstatSync as lstatSync7, readFileSync as readFileSync8, statSync as statSync4, unlinkSync as unlinkSync5 } from "node:fs";
-import { basename as basename4, dirname as dirname9, isAbsolute as isAbsolute3, join as join10, relative as relative3, resolve as resolve5, sep as sep6 } from "node:path";
+import { basename as basename4, dirname as dirname9, isAbsolute as isAbsolute4, join as join10, relative as relative3, resolve as resolve5, sep as sep6 } from "node:path";
 function assertOwnedActionCorpus(projectRoot) {
   for (const path of [join10(projectRoot, ".rn-agent"), join10(projectRoot, ".rn-agent", "actions")]) {
     const stat = lstatIfPresent2(path);
@@ -11107,11 +11231,11 @@ function actionFileExists(path) {
   return true;
 }
 function referencedActionPath(parentFile, reference) {
-  if (isAbsolute3(reference) || reference.split(/[\\/]/).includes("..") || !/\.ya?ml$/i.test(reference)) {
+  if (isAbsolute4(reference) || reference.split(/[\\/]/).includes("..") || !/\.ya?ml$/i.test(reference)) {
     return null;
   }
   const child = join10(dirname9(parentFile), reference);
-  if (child === ".." || child.startsWith(`..${sep6}`) || isAbsolute3(child))
+  if (child === ".." || child.startsWith(`..${sep6}`) || isAbsolute4(child))
     return null;
   return child;
 }
@@ -11288,7 +11412,7 @@ function captureActionFromContext(context, actionId) {
       flowRoot: snapshot.directory,
       readFileFn: (path) => {
         const child = relative3(snapshot.directory, path);
-        if (child === "" || child === ".." || child.startsWith(`..${sep6}`) || isAbsolute3(child)) {
+        if (child === "" || child === ".." || child.startsWith(`..${sep6}`) || isAbsolute4(child)) {
           throw new Error(`Refusing action flow outside ${snapshot.directory}.`);
         }
         const text2 = context.fileContents.get(child);
@@ -12999,7 +13123,7 @@ var init_maestro_error_parser = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/tools/resolve-ios-app-file.js
-import { execFileSync as execFileSync2 } from "node:child_process";
+import { execFileSync as execFileSync3 } from "node:child_process";
 import { existsSync as existsSync14, cpSync, rmSync as rmSync2, mkdirSync as mkdirSync10, readdirSync as readdirSync6, statSync as statSync6 } from "node:fs";
 import { tmpdir as tmpdir2 } from "node:os";
 import { join as join19, basename as basename7 } from "node:path";
@@ -13013,7 +13137,7 @@ function defaultSnapshotApp(appPath) {
     rmSync2(dest, { recursive: true, force: true });
     mkdirSync10(destDir, { recursive: true });
     try {
-      execFileSync2("cp", ["-Rc", appPath, dest], { timeout: 3e4, stdio: "ignore" });
+      execFileSync3("cp", ["-Rc", appPath, dest], { timeout: 3e4, stdio: "ignore" });
     } catch {
       cpSync(appPath, dest, { recursive: true });
     }
@@ -13060,7 +13184,7 @@ function resolveAppFileForClearState(platform, flowText, headerAppId, explicitAp
 function defaultGetAppContainer(bundleId, deviceId) {
   try {
     const target = deviceId && !/\s/.test(deviceId) ? deviceId : "booted";
-    const out = execFileSync2("xcrun", ["simctl", "get_app_container", target, bundleId, "app"], {
+    const out = execFileSync3("xcrun", ["simctl", "get_app_container", target, bundleId, "app"], {
       encoding: "utf8",
       timeout: 5e3
     }).trim();

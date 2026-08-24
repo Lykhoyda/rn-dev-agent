@@ -971,6 +971,36 @@ test('inventory refuses per-file mutation during its batched snapshot read', () 
   }
 });
 
+test('snapshot batch refuses a file swap restored before final identity checks', () => {
+  const fixture = makeFixture();
+  try {
+    seedLoginCorpus(fixture.primary);
+    const worktree = addWorktree(fixture, 'restored-file-swap');
+    inherit(worktree);
+    const actionPath = join(fixture.primary, '.rn-agent', 'actions', 'login.yaml');
+    const parkedPath = join(fixture.root, 'selected-login.yaml');
+
+    assert.throws(
+      () =>
+        openReadableActionLoadContext(worktree, {
+          readFiles: (directory, identity, paths, selectedIdentities) => {
+            renameSync(actionPath, parkedPath);
+            writeFileSync(actionPath, fixtureYaml({ id: 'replacement' }));
+            try {
+              return readUnfollowedFiles(directory, identity, paths, selectedIdentities);
+            } finally {
+              rmSync(actionPath);
+              renameSync(parkedPath, actionPath);
+            }
+          },
+        }),
+      /Refusing replaced learned-action corpus/,
+    );
+  } finally {
+    fixture.cleanup();
+  }
+});
+
 test('inventory stays bound to its original corpus snapshot', async () => {
   const fixture = makeFixture();
   try {

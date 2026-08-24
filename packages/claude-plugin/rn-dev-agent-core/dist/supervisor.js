@@ -947,75 +947,13 @@ function runVerifiedFilesystemHelper(args) {
       throw new Error("Verified directory helper changed before execution.");
     }
     return execFileSync2(boundPath, [...args], {
-      maxBuffer: VERIFIED_FILESYSTEM_MAX_BUFFER_BYTES,
+      maxBuffer: 32 * 1024 * 1024,
       stdio: ["ignore", "pipe", "ignore"],
       timeout: 1e4
     });
   } finally {
     unlinkSync2(boundPath);
   }
-}
-function readFilesFromVerifiedDirectory(directoryPath, identity2, relativePaths) {
-  if (relativePaths.length === 0)
-    return [];
-  const entries = [];
-  const batches = [];
-  let batch = [];
-  let batchBytes = 0;
-  for (const relativePath of relativePaths) {
-    let framedBytes = VERIFIED_FILESYSTEM_ENTRY_FRAME_BYTES;
-    try {
-      const stat2 = lstatSync(join3(directoryPath, relativePath));
-      if (stat2.isFile())
-        framedBytes += stat2.size;
-    } catch {
-      framedBytes = VERIFIED_FILESYSTEM_ENTRY_FRAME_BYTES;
-    }
-    if (framedBytes > VERIFIED_FILESYSTEM_BATCH_BYTES) {
-      throw new Error(`Verified directory entry exceeds the safe batch size: ${relativePath}.`);
-    }
-    if (batch.length > 0 && (batch.length >= VERIFIED_FILESYSTEM_BATCH_FILES || batchBytes + framedBytes > VERIFIED_FILESYSTEM_BATCH_BYTES)) {
-      batches.push(batch);
-      batch = [];
-      batchBytes = 0;
-    }
-    batch.push(relativePath);
-    batchBytes += framedBytes;
-  }
-  if (batch.length > 0)
-    batches.push(batch);
-  for (const currentBatch of batches) {
-    const output = runVerifiedFilesystemHelper([
-      "--read-directory-entries",
-      directoryPath,
-      identity2.dev,
-      identity2.ino,
-      ...currentBatch
-    ]);
-    let offset = 0;
-    for (const relativePath of currentBatch) {
-      if (offset + VERIFIED_FILESYSTEM_ENTRY_FRAME_BYTES > output.length) {
-        throw new Error(`Verified directory batch was truncated before ${relativePath}.`);
-      }
-      const status = output[offset];
-      const length = output.readBigUInt64BE(offset + 1);
-      offset += VERIFIED_FILESYSTEM_ENTRY_FRAME_BYTES;
-      if (length > BigInt(Number.MAX_SAFE_INTEGER) || offset + Number(length) > output.length) {
-        throw new Error(`Verified directory batch was malformed at ${relativePath}.`);
-      }
-      const end = offset + Number(length);
-      if (status === 0)
-        entries.push(Buffer.from(output.subarray(offset, end)));
-      else if (status === 1 && length === 0n)
-        entries.push(null);
-      else
-        throw new Error(`Verified directory batch had an invalid status for ${relativePath}.`);
-      offset = end;
-    }
-    if (offset !== output.length)
-      throw new Error("Verified directory batch had trailing data.");
-  }
-  return entries;
 }
 function listVerifiedDirectory(directoryPath, identity2) {
   const output = runVerifiedFilesystemHelper([
@@ -1200,29 +1138,25 @@ function probeRecordedProcessBirth(pid, dependencies) {
   }
   return { status: "unknown" };
 }
-var DARWIN_HELPER_MANIFEST, LINUX_PUBLICATION_HELPER_SHA256, VERIFIED_FILESYSTEM_MAX_BUFFER_BYTES, VERIFIED_FILESYSTEM_BATCH_BYTES, VERIFIED_FILESYSTEM_BATCH_FILES, VERIFIED_FILESYSTEM_ENTRY_FRAME_BYTES, VERIFIED_HELPER_SCRIPT;
+var DARWIN_HELPER_MANIFEST, LINUX_PUBLICATION_HELPER_SHA256, VERIFIED_HELPER_SCRIPT;
 var init_process_birth = __esm({
   "packages/rn-dev-agent-core/dist/session/process-birth.js"() {
     "use strict";
     init_trusted_system_executable();
     DARWIN_HELPER_MANIFEST = {
-      sourceSha256: "955b36f932d7124525003fc88e8596a148ae5404b49f8381ff59435e52b272c6",
-      recipeSha256: "ad5e7452795eee5ee8da4321f4260760e6e0e8536193978cd721748385e3f2f4",
-      stableBinarySha256: "6109d6017208b7ea091feeb40cae6640ff925c54e391d1ec0e7737057c30ded4",
-      binarySha256: "47b75f81c09ba5bf966acad48055a1c287708241a44c876fa4483c3189ce5f1e",
+      sourceSha256: "f97feaa1c0434cd2ee31c0dce56c9308eb17f893a6a771ac1333b62fcec8b702",
+      recipeSha256: "9617fe093885ac5c1043b39aa467754db8427080b52ebafea6f780535c2b3685",
+      stableBinarySha256: "9887a09246c4fc9c7765ef8fee2ae30027bcf0b9227ae408e48682107e4d88b8",
+      binarySha256: "49db19d9cd0ca2e7a78379c1e4b9551532d85447c043c51f06c6e03573c104ad",
       cdhashes: [
-        "f5f6876043eadc558ca3d5d056c49b1d771aef6b",
-        "1c072373aff231d756e20fa008b0f9486b229888"
+        "cebd22e7adf08990d4ff69b3156de03962d44b74",
+        "e3de1b27f4da23957a3acf60ae8f01c6402bd424"
       ]
     };
     LINUX_PUBLICATION_HELPER_SHA256 = {
-      x64: "17b1b6e0edbecefc013ccb1308a444532a72d5910f794de53195a758789bd6bb",
-      arm64: "f9cb783474cc93e6dbb28e81b5a2e46d74c38926a392d75ce9ed5188bafe3520"
+      x64: "93bcb6e186470efd2a0944756d7b2de790182b59a5dcb3377334291076ad6032",
+      arm64: "1d0f2fc75e9eff675f8fd5ca329eca03950339796d2f339a4f59a85c2f97ba63"
     };
-    VERIFIED_FILESYSTEM_MAX_BUFFER_BYTES = 32 * 1024 * 1024;
-    VERIFIED_FILESYSTEM_BATCH_BYTES = 24 * 1024 * 1024;
-    VERIFIED_FILESYSTEM_BATCH_FILES = 16;
-    VERIFIED_FILESYSTEM_ENTRY_FRAME_BYTES = 9;
     VERIFIED_HELPER_SCRIPT = `
 set -euo pipefail
 helper_pid=
@@ -29899,34 +29833,51 @@ var init_path_safety = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/domain/unfollowed-file.js
+import { execFileSync as execFileSync10 } from "node:child_process";
 import { lstatSync as lstatSync13 } from "node:fs";
-import { join as join23 } from "node:path";
+import { isAbsolute as isAbsolute6, join as join23 } from "node:path";
 function createUnfollowedFileSnapshot(directoryPath, directoryIdentity2) {
   return { directoryPath, directoryIdentity: directoryIdentity2, fileIdentities: /* @__PURE__ */ new Map() };
 }
+function identityFromStat(path, stat2) {
+  return {
+    path,
+    dev: String(stat2.dev),
+    ino: String(stat2.ino),
+    size: String(stat2.size),
+    mtimeNs: String(stat2.mtimeNs),
+    ctimeNs: String(stat2.ctimeNs)
+  };
+}
+function sameIdentity2(left, right) {
+  return left.dev === right.dev && left.ino === right.ino && left.size === right.size && left.mtimeNs === right.mtimeNs && left.ctimeNs === right.ctimeNs;
+}
 function captureUnfollowedFileIdentities(snapshot, relativePaths) {
+  const identities = [];
   try {
     for (const relativePath of relativePaths) {
       const path = join23(snapshot.directoryPath, relativePath);
       const stat2 = lstatSync13(path, { bigint: true });
       if (stat2.isSymbolicLink() || !stat2.isFile())
         throw new Error("changed");
-      const captured = { path, dev: String(stat2.dev), ino: String(stat2.ino) };
+      const captured = identityFromStat(path, stat2);
       const existing = snapshot.fileIdentities.get(relativePath);
-      if (existing && (existing.dev !== captured.dev || existing.ino !== captured.ino)) {
+      if (existing && !sameIdentity2(existing, captured))
         throw new Error("changed");
-      }
-      snapshot.fileIdentities.set(relativePath, existing ?? captured);
+      const selected = existing ?? captured;
+      snapshot.fileIdentities.set(relativePath, selected);
+      identities.push(selected);
     }
   } catch {
     throw new Error(`Refusing replaced learned-action corpus at ${snapshot.directoryPath}.`);
   }
+  return identities;
 }
 function assertUnfollowedFileSnapshotUnchanged(snapshot) {
   try {
     for (const identity2 of snapshot.fileIdentities.values()) {
       const stat2 = lstatSync13(identity2.path, { bigint: true });
-      if (stat2.isSymbolicLink() || !stat2.isFile() || String(stat2.dev) !== identity2.dev || String(stat2.ino) !== identity2.ino) {
+      if (stat2.isSymbolicLink() || !stat2.isFile() || !sameIdentity2(identity2, identityFromStat(identity2.path, stat2))) {
         throw new Error("changed");
       }
     }
@@ -29950,11 +29901,10 @@ function selectExistingUnfollowedSnapshotFiles(snapshot, relativePaths) {
       }
       if (stat2.isSymbolicLink() || !stat2.isFile())
         throw new Error("changed");
-      const captured = { path, dev: String(stat2.dev), ino: String(stat2.ino) };
+      const captured = identityFromStat(path, stat2);
       const selected = snapshot.fileIdentities.get(relativePath);
-      if (selected && (selected.dev !== captured.dev || selected.ino !== captured.ino)) {
+      if (selected && !sameIdentity2(selected, captured))
         throw new Error("changed");
-      }
       snapshot.fileIdentities.set(relativePath, selected ?? captured);
       existing.push(relativePath);
     }
@@ -29966,17 +29916,102 @@ function selectExistingUnfollowedSnapshotFiles(snapshot, relativePaths) {
 }
 function readUnfollowedSnapshotFiles(snapshot, relativePaths, readFiles = readUnfollowedFiles) {
   assertUnfollowedFileSnapshotUnchanged(snapshot);
-  captureUnfollowedFileIdentities(snapshot, relativePaths);
-  const contents = readFiles(snapshot.directoryPath, snapshot.directoryIdentity, relativePaths);
+  const identities = captureUnfollowedFileIdentities(snapshot, relativePaths);
+  const contents = readFiles(snapshot.directoryPath, snapshot.directoryIdentity, relativePaths, identities);
   assertUnfollowedFileSnapshotUnchanged(snapshot);
   if (contents.length !== relativePaths.length || contents.some((entry) => entry == null)) {
     throw new Error(`Refusing replaced learned-action corpus at ${snapshot.directoryPath}.`);
   }
   return contents;
 }
-function readUnfollowedFiles(directoryPath, identity2, relativePaths) {
+function readUnfollowedFiles(directoryPath, identity2, relativePaths, expectedIdentities) {
   try {
-    return readFilesFromVerifiedDirectory(directoryPath, identity2, relativePaths).map((entry) => entry ? entry.toString("utf8") : null);
+    if (process.platform !== "darwin" && process.platform !== "linux") {
+      throw new Error(`Verified directory reads are unavailable on ${process.platform}/${process.arch}.`);
+    }
+    if (expectedIdentities && expectedIdentities.length !== relativePaths.length) {
+      throw new Error("Selected file identities did not match the requested paths.");
+    }
+    const entries = relativePaths.map((relativePath, index) => {
+      if (isAbsolute6(relativePath) || relativePath.split("/").some((component) => !component || component === "." || component === "..")) {
+        throw new Error(`Invalid relative path: ${relativePath}.`);
+      }
+      if (expectedIdentities) {
+        const selected = expectedIdentities[index];
+        if (!selected || selected.path !== join23(directoryPath, relativePath)) {
+          throw new Error(`Selected file identity did not match ${relativePath}.`);
+        }
+        return { relativePath, identity: selected };
+      }
+      const path = join23(directoryPath, relativePath);
+      try {
+        const stat2 = lstatSync13(path, { bigint: true });
+        return {
+          relativePath,
+          identity: stat2.isSymbolicLink() || !stat2.isFile() ? null : identityFromStat(path, stat2)
+        };
+      } catch (err) {
+        if (err.code === "ENOENT")
+          return { relativePath, identity: null };
+        throw err;
+      }
+    });
+    const contents = [];
+    let batch = [];
+    let batchBytes = 0;
+    const flush = () => {
+      if (batch.length === 0)
+        return;
+      const output = execFileSync10(process.execPath, [
+        "--no-warnings",
+        "--input-type=commonjs",
+        "-e",
+        UNFOLLOWED_READER_SCRIPT,
+        JSON.stringify({ directoryPath, directoryIdentity: identity2, entries: batch })
+      ], {
+        maxBuffer: UNFOLLOWED_READER_MAX_BUFFER_BYTES,
+        stdio: ["ignore", "pipe", "ignore"],
+        timeout: 1e4
+      });
+      let offset = 0;
+      for (const entry of batch) {
+        if (offset + UNFOLLOWED_READER_FRAME_BYTES > output.length) {
+          throw new Error(`Verified directory batch was truncated before ${entry.relativePath}.`);
+        }
+        const status = output[offset];
+        const length = output.readBigUInt64BE(offset + 1);
+        offset += UNFOLLOWED_READER_FRAME_BYTES;
+        if (length > BigInt(Number.MAX_SAFE_INTEGER) || offset + Number(length) > output.length) {
+          throw new Error(`Verified directory batch was malformed at ${entry.relativePath}.`);
+        }
+        const end = offset + Number(length);
+        if (status === 0)
+          contents.push(output.toString("utf8", offset, end));
+        else if (status === 1 && length === 0n)
+          contents.push(null);
+        else
+          throw new Error(`Verified directory batch refused ${entry.relativePath}.`);
+        offset = end;
+      }
+      if (offset !== output.length)
+        throw new Error("Verified directory batch had trailing data.");
+      batch = [];
+      batchBytes = 0;
+    };
+    for (const entry of entries) {
+      const size = entry.identity ? Number(entry.identity.size) : 0;
+      const framedBytes = UNFOLLOWED_READER_FRAME_BYTES + size;
+      if (!Number.isSafeInteger(size) || framedBytes > UNFOLLOWED_READER_BATCH_BYTES) {
+        throw new Error(`Verified directory entry exceeds the safe batch size: ${entry.relativePath}.`);
+      }
+      if (batch.length > 0 && (batch.length >= UNFOLLOWED_READER_BATCH_FILES || batchBytes + framedBytes > UNFOLLOWED_READER_BATCH_BYTES)) {
+        flush();
+      }
+      batch.push(entry);
+      batchBytes += framedBytes;
+    }
+    flush();
+    return contents;
   } catch (err) {
     throw new Error(`Refusing replaced learned-action corpus at ${directoryPath}: ${err instanceof Error ? err.message : String(err)}`);
   }
@@ -29988,10 +30023,99 @@ function listUnfollowedDirectory(directoryPath, identity2) {
     throw new Error(`Refusing replaced learned-action corpus at ${directoryPath}: ${err instanceof Error ? err.message : String(err)}`);
   }
 }
+var UNFOLLOWED_READER_MAX_BUFFER_BYTES, UNFOLLOWED_READER_BATCH_BYTES, UNFOLLOWED_READER_BATCH_FILES, UNFOLLOWED_READER_FRAME_BYTES, UNFOLLOWED_READER_SCRIPT;
 var init_unfollowed_file = __esm({
   "packages/rn-dev-agent-core/dist/domain/unfollowed-file.js"() {
     "use strict";
     init_process_birth();
+    UNFOLLOWED_READER_MAX_BUFFER_BYTES = 32 * 1024 * 1024;
+    UNFOLLOWED_READER_BATCH_BYTES = 24 * 1024 * 1024;
+    UNFOLLOWED_READER_BATCH_FILES = 16;
+    UNFOLLOWED_READER_FRAME_BYTES = 9;
+    UNFOLLOWED_READER_SCRIPT = String.raw`
+const { closeSync, constants, fstatSync, openSync, readSync, realpathSync, writeSync } = require('node:fs');
+const { join } = require('node:path');
+const request = JSON.parse(process.argv[1]);
+const opened = [];
+let directory = -1;
+const closeAll = () => {
+  for (const entry of opened) if (entry.fd >= 0) closeSync(entry.fd);
+  if (directory >= 0) closeSync(directory);
+};
+const matches = (stat, identity) =>
+  stat.isFile() &&
+  String(stat.dev) === identity.dev &&
+  String(stat.ino) === identity.ino &&
+  String(stat.size) === identity.size &&
+  String(stat.mtimeNs) === identity.mtimeNs &&
+  String(stat.ctimeNs) === identity.ctimeNs;
+try {
+  directory = openSync(
+    request.directoryPath,
+    constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_DIRECTORY,
+  );
+  const directoryStat = fstatSync(directory, { bigint: true });
+  if (
+    !directoryStat.isDirectory() ||
+    String(directoryStat.dev) !== request.directoryIdentity.dev ||
+    String(directoryStat.ino) !== request.directoryIdentity.ino
+  ) {
+    throw new Error('directory changed');
+  }
+  let batchBytes = 0;
+  for (const entry of request.entries) {
+    if (!entry.identity) {
+      opened.push({ fd: -1, size: 0, identity: null });
+      batchBytes += 9;
+      continue;
+    }
+    const path = join(request.directoryPath, entry.relativePath);
+    if (realpathSync.native(path) !== path) throw new Error('path followed a link');
+    const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    const stat = fstatSync(fd, { bigint: true });
+    if (!matches(stat, entry.identity)) {
+      closeSync(fd);
+      throw new Error('file changed');
+    }
+    const size = Number(stat.size);
+    if (!Number.isSafeInteger(size) || size < 0) {
+      closeSync(fd);
+      throw new Error('invalid size');
+    }
+    batchBytes += 9 + size;
+    if (batchBytes > ${UNFOLLOWED_READER_BATCH_BYTES}) {
+      closeSync(fd);
+      throw new Error('batch too large');
+    }
+    opened.push({ fd, size, identity: entry.identity });
+  }
+  for (const entry of opened) {
+    const frame = Buffer.alloc(9);
+    if (entry.fd < 0) {
+      frame[0] = 1;
+      writeSync(1, frame);
+      continue;
+    }
+    frame.writeBigUInt64BE(BigInt(entry.size), 1);
+    writeSync(1, frame);
+    const buffer = Buffer.allocUnsafe(Math.min(16384, Math.max(entry.size, 1)));
+    let offset = 0;
+    while (offset < entry.size) {
+      const count = readSync(entry.fd, buffer, 0, Math.min(buffer.length, entry.size - offset), offset);
+      if (count <= 0) throw new Error('short read');
+      writeSync(1, buffer, 0, count);
+      offset += count;
+    }
+    if (!matches(fstatSync(entry.fd, { bigint: true }), entry.identity)) {
+      throw new Error('file changed during read');
+    }
+  }
+  closeAll();
+} catch {
+  closeAll();
+  process.exit(10);
+}
+`;
   }
 });
 
@@ -30324,7 +30448,7 @@ var init_action_state_store = __esm({
 
 // packages/rn-dev-agent-core/dist/domain/action-store.js
 import { existsSync as existsSync19, lstatSync as lstatSync14, readFileSync as readFileSync21, statSync as statSync11, unlinkSync as unlinkSync9 } from "node:fs";
-import { basename as basename7, dirname as dirname16, isAbsolute as isAbsolute6, join as join25, relative as relative5, resolve as resolve12, sep as sep8 } from "node:path";
+import { basename as basename7, dirname as dirname16, isAbsolute as isAbsolute7, join as join25, relative as relative5, resolve as resolve12, sep as sep8 } from "node:path";
 function actionPathFor(projectRoot, actionId) {
   assertValidActionId(actionId, "actionPathFor");
   const actionsDir = join25(projectRoot, ".rn-agent", "actions");
@@ -30389,11 +30513,11 @@ function ownedActionPathIdentityMatches(entries) {
   }
 }
 function referencedActionPath(parentFile, reference) {
-  if (isAbsolute6(reference) || reference.split(/[\\/]/).includes("..") || !/\.ya?ml$/i.test(reference)) {
+  if (isAbsolute7(reference) || reference.split(/[\\/]/).includes("..") || !/\.ya?ml$/i.test(reference)) {
     return null;
   }
   const child = join25(dirname16(parentFile), reference);
-  if (child === ".." || child.startsWith(`..${sep8}`) || isAbsolute6(child))
+  if (child === ".." || child.startsWith(`..${sep8}`) || isAbsolute7(child))
     return null;
   return child;
 }
@@ -30628,7 +30752,7 @@ function captureActionFromContext(context, actionId) {
       flowRoot: snapshot.directory,
       readFileFn: (path) => {
         const child = relative5(snapshot.directory, path);
-        if (child === "" || child === ".." || child.startsWith(`..${sep8}`) || isAbsolute6(child)) {
+        if (child === "" || child === ".." || child.startsWith(`..${sep8}`) || isAbsolute7(child)) {
           throw new Error(`Refusing action flow outside ${snapshot.directory}.`);
         }
         const text2 = context.fileContents.get(child);
@@ -30948,7 +31072,7 @@ var init_action_engine_compat = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/tools/resolve-ios-app-file.js
-import { execFileSync as execFileSync10 } from "node:child_process";
+import { execFileSync as execFileSync11 } from "node:child_process";
 import { existsSync as existsSync21, cpSync, rmSync as rmSync9, mkdirSync as mkdirSync17, readdirSync as readdirSync9, statSync as statSync12 } from "node:fs";
 import { tmpdir as tmpdir5 } from "node:os";
 import { join as join27, basename as basename9 } from "node:path";
@@ -30962,7 +31086,7 @@ function defaultSnapshotApp(appPath) {
     rmSync9(dest, { recursive: true, force: true });
     mkdirSync17(destDir, { recursive: true });
     try {
-      execFileSync10("cp", ["-Rc", appPath, dest], { timeout: 3e4, stdio: "ignore" });
+      execFileSync11("cp", ["-Rc", appPath, dest], { timeout: 3e4, stdio: "ignore" });
     } catch {
       cpSync(appPath, dest, { recursive: true });
     }
@@ -31009,7 +31133,7 @@ function resolveAppFileForClearState(platform, flowText, headerAppId, explicitAp
 function defaultGetAppContainer(bundleId, deviceId) {
   try {
     const target = deviceId && !/\s/.test(deviceId) ? deviceId : "booted";
-    const out = execFileSync10("xcrun", ["simctl", "get_app_container", target, bundleId, "app"], {
+    const out = execFileSync11("xcrun", ["simctl", "get_app_container", target, bundleId, "app"], {
       encoding: "utf8",
       timeout: 5e3
     }).trim();
@@ -31028,7 +31152,7 @@ function defaultListSnapshots() {
 }
 function defaultReadBundleId(appPath, timeoutMs) {
   try {
-    const out = execFileSync10("plutil", ["-extract", "CFBundleIdentifier", "raw", join27(appPath, "Info.plist")], { timeout: timeoutMs, encoding: "utf8" });
+    const out = execFileSync11("plutil", ["-extract", "CFBundleIdentifier", "raw", join27(appPath, "Info.plist")], { timeout: timeoutMs, encoding: "utf8" });
     return out.trim() || null;
   } catch {
     return null;
@@ -31535,7 +31659,7 @@ var init_maestro_runner_report = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/cdp/discovery.js
-import { execFileSync as execFileSync11 } from "node:child_process";
+import { execFileSync as execFileSync12 } from "node:child_process";
 function resolveDefaultPorts() {
   const override = process.env.RN_CDP_DISCOVERY_PORTS;
   if (override !== void 0) {
@@ -31657,7 +31781,7 @@ function registryDeviceBinding() {
   return registryDeviceBindingProvider() ?? null;
 }
 function runAdbSync(file, args) {
-  return execFileSync11(file, args, {
+  return execFileSync12(file, args, {
     timeout: 3e3,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "ignore"]
@@ -31692,7 +31816,7 @@ function probeAndroidPackagesInScope(scope, execute2 = runAdbSync) {
 }
 function probeBootedSimulatorInventory() {
   try {
-    const out = execFileSync11("xcrun", ["simctl", "list", "devices", "booted", "-j"], {
+    const out = execFileSync12("xcrun", ["simctl", "list", "devices", "booted", "-j"], {
       timeout: 5e3,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"]
@@ -31729,7 +31853,7 @@ function probeIOSPackages() {
   let probed = false;
   for (const udid of udids) {
     try {
-      const out = execFileSync11("xcrun", ["simctl", "listapps", udid], {
+      const out = execFileSync12("xcrun", ["simctl", "listapps", udid], {
         timeout: 5e3,
         encoding: "utf8",
         stdio: ["ignore", "pipe", "ignore"]
@@ -32411,12 +32535,12 @@ var init_metro_origin = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/session/install-authority.js
-import { execFileSync as execFileSync12 } from "node:child_process";
+import { execFileSync as execFileSync13 } from "node:child_process";
 import { createHash as createHash11 } from "node:crypto";
 import { lstatSync as lstatSync16, readFileSync as readFileSync23, readdirSync as readdirSync10, readlinkSync as readlinkSync5, realpathSync as realpathSync13, statSync as statSync13 } from "node:fs";
-import { isAbsolute as isAbsolute7, join as join29, relative as relative6 } from "node:path";
+import { isAbsolute as isAbsolute8, join as join29, relative as relative6 } from "node:path";
 function runText(command, args) {
-  return execFileSync12(command, [...args], {
+  return execFileSync13(command, [...args], {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "ignore"],
     timeout: 1e4,
@@ -32424,7 +32548,7 @@ function runText(command, args) {
   });
 }
 function runBuffer(command, args) {
-  return execFileSync12(command, [...args], {
+  return execFileSync13(command, [...args], {
     encoding: "buffer",
     stdio: ["ignore", "pipe", "ignore"],
     timeout: 18e4,
@@ -32465,7 +32589,7 @@ function iosAppFiles(appPath, dependencies) {
 function assertIosSymlinkContained(appPath, path, realpath) {
   const target = realpath(path);
   const child = relative6(realpath(appPath), target);
-  if (child === ".." || child.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) || isAbsolute7(child)) {
+  if (child === ".." || child.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) || isAbsolute8(child)) {
     throw new Error("APP_INSTALL_IDENTITY_CHANGED: iOS app symlink escapes the installed bundle");
   }
 }
@@ -33204,7 +33328,7 @@ var init_tool_profiles = __esm({
 // packages/rn-dev-agent-core/dist/session/authority-gate.js
 import { randomUUID as randomUUID5 } from "node:crypto";
 import { realpathSync as realpathSync14 } from "node:fs";
-import { isAbsolute as isAbsolute8, relative as relative7, resolve as resolve14 } from "node:path";
+import { isAbsolute as isAbsolute9, relative as relative7, resolve as resolve14 } from "node:path";
 async function claimOptionalBundleAuthority(args) {
   return await args[optionalBundleAdmission]?.() ?? false;
 }
@@ -33464,12 +33588,12 @@ function bindSourcePaths(status, args, tool) {
     }
     let candidate;
     try {
-      candidate = realpathSync14(isAbsolute8(supplied) ? supplied : resolve14(appRoot, supplied));
+      candidate = realpathSync14(isAbsolute9(supplied) ? supplied : resolve14(appRoot, supplied));
     } catch {
       throw new SessionAuthorityError("SOURCE_WORKTREE_MISMATCH", `${field2} cannot be resolved within the active app root`);
     }
     const child = relative7(appRoot, candidate);
-    if (child === ".." || child.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) || isAbsolute8(child)) {
+    if (child === ".." || child.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) || isAbsolute9(child)) {
       throw new SessionAuthorityError("SOURCE_WORKTREE_MISMATCH", `${field2} ${candidate} is outside the active session app root ${appRoot}`, void 0, field2 === "projectRoot" ? {
         nextAction: `Run rn_session action "bind_source" with projectRoot "${candidate}" to rebind the session to that worktree, then retry.`
       } : void 0);
@@ -36559,7 +36683,7 @@ var init_app_lifecycle = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/runners/ensure-single-runner.js
-import { execFileSync as execFileSync13 } from "node:child_process";
+import { execFileSync as execFileSync14 } from "node:child_process";
 import { existsSync as existsSync25, readFileSync as readFileSync27, unlinkSync as unlinkSync11 } from "node:fs";
 import { homedir as homedir5 } from "node:os";
 import { join as join33 } from "node:path";
@@ -36617,7 +36741,7 @@ function defaultDeps() {
     // caller's try/catch, which records a warning. Swallowing it here and
     // returning '' made single-runner enforcement degrade to a silent no-op
     // with no operator signal — exactly when the machine is busy.
-    listProcesses: () => execFileSync13("ps", ["-A", "-o", "pid=,args="], { encoding: "utf8", timeout: 3e3 }),
+    listProcesses: () => execFileSync14("ps", ["-A", "-o", "pid=,args="], { encoding: "utf8", timeout: 3e3 }),
     kill: (pid, signal) => process.kill(pid, signal),
     isAlive: (pid) => {
       try {
@@ -36638,13 +36762,13 @@ function defaultDeps() {
     fileExists: (path) => existsSync25(path),
     removeFile: (path) => unlinkSync11(path),
     delay: (ms) => new Promise((resolve21) => setTimeout(resolve21, ms)),
-    listApps: (udid) => execFileSync13("xcrun", ["simctl", "listapps", udid], {
+    listApps: (udid) => execFileSync14("xcrun", ["simctl", "listapps", udid], {
       encoding: "utf8",
       timeout: 5e3,
       stdio: ["ignore", "pipe", "ignore"]
     }),
     uninstallApp: (udid, bundleId) => {
-      execFileSync13("xcrun", ["simctl", "uninstall", udid, bundleId], {
+      execFileSync14("xcrun", ["simctl", "uninstall", udid, bundleId], {
         encoding: "utf8",
         timeout: 1e4,
         stdio: ["ignore", "pipe", "ignore"]
@@ -74442,10 +74566,10 @@ var init_build_receipt = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/session/device-existence.js
-import { execFileSync as execFileSync14 } from "node:child_process";
+import { execFileSync as execFileSync15 } from "node:child_process";
 function deviceExistsOnHost(platform, deviceId) {
   if (platform === "ios") {
-    const output2 = execFileSync14("xcrun", ["simctl", "list", "devices", "--json"], {
+    const output2 = execFileSync15("xcrun", ["simctl", "list", "devices", "--json"], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
       timeout: 5e3
@@ -74453,7 +74577,7 @@ function deviceExistsOnHost(platform, deviceId) {
     const parsed = JSON.parse(output2);
     return Object.values(parsed.devices ?? {}).flat().some((device) => device.udid === deviceId && device.isAvailable !== false);
   }
-  const output = execFileSync14("adb", ["devices"], {
+  const output = execFileSync15("adb", ["devices"], {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "ignore"],
     timeout: 5e3
@@ -74467,7 +74591,7 @@ var init_device_existence = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/tools/session.js
-import { dirname as dirname22, isAbsolute as isAbsolute9, join as join43, resolve as resolve15 } from "node:path";
+import { dirname as dirname22, isAbsolute as isAbsolute10, join as join43, resolve as resolve15 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 import { createHash as createHash17 } from "node:crypto";
 function sameAndroidMetroReverse(current, next) {
@@ -74553,7 +74677,7 @@ function sessionSourceResolver(status, dependencies) {
   return (root) => resolveSourceIdentity(root, stored?.kind === "declared-root" ? { declaredRoot: stored.contentRoot, declaredManifests: stored.declaredManifests } : {});
 }
 function anchorDeclaredProjectRoot(status, projectRoot) {
-  if (isAbsolute9(projectRoot))
+  if (isAbsolute10(projectRoot))
     return projectRoot;
   const boundAppRoot = status.source?.appRoot;
   return typeof boundAppRoot === "string" && boundAppRoot.length > 0 ? resolve15(boundAppRoot, projectRoot) : projectRoot;
@@ -77517,11 +77641,11 @@ var init_events = __esm({
 
 // packages/rn-dev-agent-core/dist/observability/recorder.js
 import { closeSync as closeSync11, constants as constants9, fstatSync as fstatSync8, openSync as openSync11, readSync as readSync4 } from "node:fs";
-import { isAbsolute as isAbsolute10 } from "node:path";
+import { isAbsolute as isAbsolute11 } from "node:path";
 function extractScreenshotPath(result) {
   const data = unwrapResult(result)?.data ?? result?.data;
   const p = data?.path ?? data?.message;
-  return typeof p === "string" && isAbsolute10(p) && (p.endsWith(".jpg") || p.endsWith(".jpeg") || p.endsWith(".png")) ? p : null;
+  return typeof p === "string" && isAbsolute11(p) && (p.endsWith(".jpg") || p.endsWith(".jpeg") || p.endsWith(".png")) ? p : null;
 }
 function readShotBounded(p) {
   let fd;
@@ -77614,7 +77738,7 @@ var init_recorder = __esm({
        * whatever path the pipeline actually captured to.
        */
       registerCapturedScreenshot(p) {
-        if (typeof p !== "string" || !isAbsolute10(p))
+        if (typeof p !== "string" || !isAbsolute11(p))
           return;
         this.trustedShotPaths.delete(p);
         this.trustedShotPaths.add(p);
@@ -86036,9 +86160,9 @@ var init_startup_integrity = __esm({
 
 // packages/rn-dev-agent-core/dist/tools/proof-capture.js
 import { createHash as createHash21, randomUUID as randomUUID11 } from "node:crypto";
-import { execFileSync as execFileSync15 } from "node:child_process";
+import { execFileSync as execFileSync16 } from "node:child_process";
 import { chmodSync as chmodSync8, closeSync as closeSync12, existsSync as existsSync34, fsyncSync, lstatSync as lstatSync17, mkdirSync as mkdirSync22, openSync as openSync12, readFileSync as readFileSync34, realpathSync as realpathSync15, renameSync as renameSync10, unlinkSync as unlinkSync16, writeFileSync as writeFileSync17 } from "node:fs";
-import { basename as basename11, dirname as dirname26, extname, isAbsolute as isAbsolute11, join as join48, relative as relative8, resolve as resolve17, sep as sep9 } from "node:path";
+import { basename as basename11, dirname as dirname26, extname, isAbsolute as isAbsolute12, join as join48, relative as relative8, resolve as resolve17, sep as sep9 } from "node:path";
 import { fileURLToPath as fileURLToPath5 } from "node:url";
 function proofActionPayload(unparsedArgs) {
   if (!unparsedArgs || typeof unparsedArgs !== "object" || Array.isArray(unparsedArgs)) {
@@ -86078,7 +86202,7 @@ function captureProofWorkerStartup(argv = process.argv, attestation = readStartu
   let loadedCoreBundlePath = null;
   let coreBundleSha256 = null;
   try {
-    if (typeof argv[1] === "string" && isAbsolute11(argv[1])) {
+    if (typeof argv[1] === "string" && isAbsolute12(argv[1])) {
       executedEntrypointPath = realpathSync15(argv[1]);
     }
   } catch {
@@ -86115,7 +86239,7 @@ function resolveProofCandidateEntrypoint(candidateRoot, argv) {
     return null;
   }
   const authorityArg = argv[1];
-  if (typeof authorityArg !== "string" || !isAbsolute11(authorityArg))
+  if (typeof authorityArg !== "string" || !isAbsolute12(authorityArg))
     return null;
   let arg;
   try {
@@ -86164,7 +86288,7 @@ function proofCandidateStartupMatches(entrypoint, startup, headCoreBundleSha256)
 }
 function proofCandidateEntrypointEnvironmentMatches(entrypoint, env) {
   const normalizedOverride = (value) => {
-    if (!value || !isAbsolute11(value))
+    if (!value || !isAbsolute12(value))
       return value ? null : "";
     try {
       return realpathSync15(value);
@@ -86198,7 +86322,7 @@ function readProofCandidateHeadArtifacts(candidateRoot, artifactPaths) {
       "--untracked-files=all",
       "--ignore-submodules=none"
     ];
-    if (execFileSync15("git", statusArgs, { encoding: "utf8" }).trim())
+    if (execFileSync16("git", statusArgs, { encoding: "utf8" }).trim())
       return null;
     const verifiedBytes = [];
     for (const artifactPath of artifactPaths) {
@@ -86207,8 +86331,8 @@ function readProofCandidateHeadArtifacts(candidateRoot, artifactPaths) {
       if (!artifactRelativePath || artifactRelativePath === ".." || artifactRelativePath.startsWith("../")) {
         return null;
       }
-      execFileSync15("git", ["-C", root, "ls-files", "--error-unmatch", artifactRelativePath]);
-      const headBytes = execFileSync15("git", ["-C", root, "show", `HEAD:${artifactRelativePath}`], {
+      execFileSync16("git", ["-C", root, "ls-files", "--error-unmatch", artifactRelativePath]);
+      const headBytes = execFileSync16("git", ["-C", root, "show", `HEAD:${artifactRelativePath}`], {
         maxBuffer: 128 * 1024 * 1024
       });
       const artifactBytes = readFileSync34(resolvedArtifactPath);
@@ -86216,17 +86340,17 @@ function readProofCandidateHeadArtifacts(candidateRoot, artifactPaths) {
         return null;
       verifiedBytes.push(artifactBytes);
     }
-    return execFileSync15("git", statusArgs, { encoding: "utf8" }).trim() ? null : verifiedBytes;
+    return execFileSync16("git", statusArgs, { encoding: "utf8" }).trim() ? null : verifiedBytes;
   } catch {
     return null;
   }
 }
 function readProofCandidateRuntime(candidateRoot, startup = proofWorkerStartup) {
   const root = realpathSync15(resolve17(candidateRoot));
-  const sha = execFileSync15("git", ["-C", root, "rev-parse", "HEAD"], {
+  const sha = execFileSync16("git", ["-C", root, "rev-parse", "HEAD"], {
     encoding: "utf8"
   }).trim();
-  const remote = execFileSync15("git", ["-C", root, "remote", "get-url", "origin"], {
+  const remote = execFileSync16("git", ["-C", root, "remote", "get-url", "origin"], {
     encoding: "utf8"
   }).trim();
   if (!isOfficialProofCandidateRemote(remote)) {
@@ -86247,7 +86371,7 @@ function readProofCandidateRuntime(candidateRoot, startup = proofWorkerStartup) 
   if (!proofCandidateStartupMatches(entrypoint, startup, headCoreBundleSha256)) {
     throw new Error("CANDIDATE_MCP_PROCESS_MISMATCH");
   }
-  const confirmedSha = execFileSync15("git", ["-C", root, "rev-parse", "HEAD"], {
+  const confirmedSha = execFileSync16("git", ["-C", root, "rev-parse", "HEAD"], {
     encoding: "utf8"
   }).trim();
   if (confirmedSha !== sha)
@@ -86303,11 +86427,11 @@ function readProofActionIdentity(appProjectRoot, actionId, dependencies = {}) {
   }
 }
 function isNormalizedDescendant(root, path) {
-  if (!isAbsolute11(root) || !isAbsolute11(path) || resolve17(root) !== root || resolve17(path) !== path) {
+  if (!isAbsolute12(root) || !isAbsolute12(path) || resolve17(root) !== root || resolve17(path) !== path) {
     return false;
   }
   const fromRoot = relative8(root, path);
-  return fromRoot.length > 0 && fromRoot !== ".." && !fromRoot.startsWith(`..${sep9}`) && !isAbsolute11(fromRoot);
+  return fromRoot.length > 0 && fromRoot !== ".." && !fromRoot.startsWith(`..${sep9}`) && !isAbsolute12(fromRoot);
 }
 function hasExistingSymlink(root, path) {
   const parts = relative8(root, path).split(sep9);
@@ -86356,15 +86480,15 @@ function proofRootExists(args) {
   }
 }
 function resolveProofWorktreeRoot(detectedProjectRoot) {
-  if (!detectedProjectRoot || !isAbsolute11(detectedProjectRoot) || resolve17(detectedProjectRoot) !== detectedProjectRoot) {
+  if (!detectedProjectRoot || !isAbsolute12(detectedProjectRoot) || resolve17(detectedProjectRoot) !== detectedProjectRoot) {
     return null;
   }
   try {
-    const root = execFileSync15("git", ["rev-parse", "--show-toplevel"], {
+    const root = execFileSync16("git", ["rev-parse", "--show-toplevel"], {
       cwd: detectedProjectRoot,
       encoding: "utf8"
     }).trim();
-    return root && isAbsolute11(root) && resolve17(root) === root ? root : null;
+    return root && isAbsolute12(root) && resolve17(root) === root ? root : null;
   } catch {
     return null;
   }
@@ -86392,8 +86516,8 @@ function parseProofGitChanges(porcelain) {
   return changes;
 }
 function readProofGitInfo(root) {
-  const sha = execFileSync15("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
-  const status = execFileSync15("git", ["status", "--porcelain=v1", "--untracked-files=all", "-z"], {
+  const sha = execFileSync16("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
+  const status = execFileSync16("git", ["status", "--porcelain=v1", "--untracked-files=all", "-z"], {
     cwd: root,
     encoding: "utf8"
   });
@@ -86404,7 +86528,7 @@ function proofRootHasTrackedEntries(root, proofRoot) {
   if (!isNormalizedDescendant(root, proofRoot))
     throw new Error("INVALID_PROOF_ROOT");
   const path = relative8(root, proofRoot).replaceAll(sep9, "/");
-  return execFileSync15("git", ["ls-files", "-z", "--", path], {
+  return execFileSync16("git", ["ls-files", "-z", "--", path], {
     cwd: root,
     encoding: "utf8"
   }).length > 0;
@@ -86691,7 +86815,7 @@ function createProofCaptureHandler(deps) {
     ].map((path) => repositoryPath(active, path));
     const requiredOutputs = new Set(phase === "finalized" ? [...proofOutputs, repositoryPath(active, active.context.receiptPath)] : proofOutputs);
     const allowedOutputs = phase === "setup" ? observedSetupScreenshots(active) : phase === "clean" ? /* @__PURE__ */ new Set() : requiredOutputs;
-    const invalidChange = git2.changes.some((change) => isAbsolute11(change.path) || change.path === ".." || change.path.startsWith("../") || change.indexStatus !== "?" || change.worktreeStatus !== "?" || change.sourcePath !== void 0);
+    const invalidChange = git2.changes.some((change) => isAbsolute12(change.path) || change.path === ".." || change.path.startsWith("../") || change.indexStatus !== "?" || change.worktreeStatus !== "?" || change.sourcePath !== void 0);
     const changedPaths = new Set(git2.changes.map((change) => change.path.replaceAll("\\", "/")));
     const unrelated = [...changedPaths].some((path) => !allowedOutputs.has(path));
     const missing = (phase === "validation" || phase === "finalized") && [...requiredOutputs].some((path) => !changedPaths.has(path));
@@ -87306,7 +87430,7 @@ var init_proof_capture2 = __esm({
     init_proof_receipt();
     init_utils();
     init_startup_integrity();
-    absolutePathSchema = external_exports.string().min(1).refine(isAbsolute11, "path must be absolute");
+    absolutePathSchema = external_exports.string().min(1).refine(isAbsolute12, "path must be absolute");
     beginRehearsalSchema = external_exports.object({
       action: external_exports.literal("begin_rehearsal"),
       projectRoot: absolutePathSchema,
@@ -88153,10 +88277,10 @@ var init_query = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/nav-graph/self-heal.js
-import { execFileSync as execFileSync16 } from "node:child_process";
+import { execFileSync as execFileSync17 } from "node:child_process";
 function gitExec(args, cwd) {
   try {
-    return execFileSync16("git", args, { cwd, timeout: 5e3, encoding: "utf-8" }).trim();
+    return execFileSync17("git", args, { cwd, timeout: 5e3, encoding: "utf-8" }).trim();
   } catch {
     return null;
   }
@@ -92034,7 +92158,7 @@ var init_e2e_config = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/e2e/git-info.js
-import { execFileSync as execFileSync17 } from "node:child_process";
+import { execFileSync as execFileSync18 } from "node:child_process";
 function getGitInfo(projectRoot, exec = (cmd, args) => defaultExec3(cmd, ["-C", projectRoot, ...args])) {
   try {
     const sha = exec("git", ["rev-parse", "--short", "HEAD"]).trim() || null;
@@ -92048,7 +92172,7 @@ var defaultExec3;
 var init_git_info = __esm({
   "packages/rn-dev-agent-core/dist/e2e/git-info.js"() {
     "use strict";
-    defaultExec3 = (cmd, args) => execFileSync17(cmd, args, { timeout: 5e3, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+    defaultExec3 = (cmd, args) => execFileSync18(cmd, args, { timeout: 5e3, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
   }
 });
 
@@ -92672,7 +92796,7 @@ var init_runner_binding = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/session/local-authority-probe.js
-import { execFileSync as execFileSync18 } from "node:child_process";
+import { execFileSync as execFileSync19 } from "node:child_process";
 import { createHash as createHash23 } from "node:crypto";
 function identity(value) {
   return createHash23("sha256").update(JSON.stringify(value)).digest("hex");
@@ -92715,7 +92839,7 @@ function createLocalAuthorityProbe(dependencies) {
   const fetchTargets2 = dependencies.fetchTargets ?? (async (port) => JSON.parse(await fetchText(`http://127.0.0.1:${port}/json/list`)));
   const proveTargetDevices = dependencies.proveTargetDevices ?? ((input) => proveTargetDeviceAssociations(input, {
     execute: async (file, args) => ({
-      stdout: execFileSync18(file, args, {
+      stdout: execFileSync19(file, args, {
         encoding: "utf8",
         stdio: ["ignore", "pipe", "ignore"],
         timeout: 5e3

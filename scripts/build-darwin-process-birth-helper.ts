@@ -221,66 +221,6 @@ static int read_directory_entry(
   return 0;
 }
 
-static int write_u64(uint64_t value) {
-  unsigned char bytes[8];
-  for (int index = 7; index >= 0; index--) {
-    bytes[index] = (unsigned char)(value & 0xff);
-    value >>= 8;
-  }
-  return write_all(STDOUT_FILENO, bytes, sizeof(bytes));
-}
-
-static int read_directory_entries(
-    const char *directory_path,
-    uint64_t expected_dev,
-    uint64_t expected_ino,
-    int entry_count,
-    char **relative_paths) {
-  int directory = open_verified_directory(directory_path, expected_dev, expected_ino);
-  if (directory < 0) return 10;
-  for (int index = 0; index < entry_count; index++) {
-    int entry = open_relative_regular(directory, relative_paths[index]);
-    if (entry < 0) {
-      unsigned char refused = 1;
-      if (!write_all(STDOUT_FILENO, &refused, 1) || !write_u64(0)) {
-        close(directory);
-        return 11;
-      }
-      continue;
-    }
-    struct stat entry_stat = {0};
-    if (fstat(entry, &entry_stat) != 0 || entry_stat.st_size < 0) {
-      close(entry);
-      close(directory);
-      return 11;
-    }
-    unsigned char accepted = 0;
-    if (!write_all(STDOUT_FILENO, &accepted, 1) ||
-        !write_u64((uint64_t)entry_stat.st_size)) {
-      close(entry);
-      close(directory);
-      return 11;
-    }
-    unsigned char buffer[16384];
-    off_t offset = 0;
-    while (offset < entry_stat.st_size) {
-      size_t wanted = sizeof(buffer);
-      if (entry_stat.st_size - offset < (off_t)wanted)
-        wanted = (size_t)(entry_stat.st_size - offset);
-      ssize_t count = pread(entry, buffer, wanted, offset);
-      if (count <= 0 || !write_all(STDOUT_FILENO, buffer, (size_t)count)) {
-        close(entry);
-        close(directory);
-        return 11;
-      }
-      offset += count;
-    }
-    close(entry);
-  }
-  close(directory);
-  return 0;
-}
-
 static int list_directory(
     const char *directory_path,
     uint64_t expected_dev,
@@ -376,13 +316,6 @@ int main(int argc, char **argv) {
     uint64_t expected_ino = 0;
     if (!parse_identity(argv[4], argv[5], &expected_dev, &expected_ino)) return 2;
     return read_directory_entry(argv[2], argv[3], expected_dev, expected_ino);
-  }
-  if (argc >= 6 && strcmp(argv[1], "--read-directory-entries") == 0) {
-    uint64_t expected_dev = 0;
-    uint64_t expected_ino = 0;
-    if (!parse_identity(argv[3], argv[4], &expected_dev, &expected_ino)) return 2;
-    return read_directory_entries(
-        argv[2], expected_dev, expected_ino, argc - 5, &argv[5]);
   }
   if (argc == 5 && strcmp(argv[1], "--list-directory") == 0) {
     uint64_t expected_dev = 0;
