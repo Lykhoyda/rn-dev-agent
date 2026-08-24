@@ -29,7 +29,7 @@
 //     mask underlying screen churn).
 import { randomUUID } from 'node:crypto';
 import { okResult, failResult } from '../utils.js';
-import { acknowledgeExternalEdit, loadAction, promoteActionRuntimeWithCAS, saveActionRuntimeWithCAS, } from '../domain/action-store.js';
+import { acknowledgeExternalEdit, assertReadableActionLoadContextStable, loadAction, loadActionFromContext, openReadableActionLoadContext, promoteActionRuntimeWithCAS, refreshActionLoadContext, saveActionRuntimeWithCAS, } from '../domain/action-store.js';
 import { mirrorToDb } from '../domain/action-state-store.js';
 import { appendRunRecord, shouldAutoPromoteToActive, } from '../domain/reusable-action.js';
 import { parseMaestroFailure, isAutoRepairable, } from '../domain/maestro-error-parser.js';
@@ -249,6 +249,18 @@ function mapRefusedReason(repairCode, repairError) {
     // legitimately doesn't have the testID".
     return 'INTERNAL_ERROR';
 }
+function replayCorpusIdentityRefusal(context, actionId) {
+    try {
+        assertReadableActionLoadContextStable(context);
+        return null;
+    }
+    catch (error) {
+        return failResult(error instanceof Error ? error.message : String(error), 'BAD_FILENAME', {
+            actionId,
+            fallback: 'none',
+        });
+    }
+}
 export function createRunActionHandler(deps = {}) {
     const maestroRun = deps.maestroRun ?? createMaestroRunHandler();
     const repairAction = deps.repairAction ?? createRepairActionHandler();
@@ -279,9 +291,14 @@ export function createRunActionHandler(deps = {}) {
         if (proofReplay && (args.autoRepair !== false || args.forceReload !== false)) {
             return failResult('cdp_run_action proofReplay requires autoRepair=false and forceReload=false', { proofReplay: true });
         }
+        let openedContext;
         let loaded;
         try {
-            loaded = loadAction(projectRoot, args.actionId);
+            openedContext = openReadableActionLoadContext(projectRoot, {
+                actionId: args.actionId,
+                includeRunFlowFiles: true,
+            });
+            loaded = openedContext ? loadActionFromContext(openedContext, args.actionId) : null;
         }
         catch (err) {
             return failResult(err instanceof Error ? err.message : String(err), 'BAD_FILENAME', {
@@ -289,11 +306,12 @@ export function createRunActionHandler(deps = {}) {
                 fallback: 'none',
             });
         }
-        if (!loaded) {
+        if (!loaded || !openedContext) {
             return failResult(`cdp_run_action: action "${args.actionId}" not found at ${projectRoot}/.rn-agent/actions/${args.actionId}.yaml or ${args.actionId}.yml`, 'NO_PROJECT_ROOT', {
                 hint: 'Verify with /list-learned-actions, or pass projectRoot if cdp-bridge is invoked outside the project dir.',
             });
         }
+        let loadContext = openedContext;
         if (!loaded.replay.ok) {
             return failResult(`Action ${args.actionId} is not valid Maestro YAML: ${loaded.replay.error}`, 'BAD_RECORDING', { actionId: args.actionId, fallback: 'none' });
         }
@@ -305,7 +323,17 @@ export function createRunActionHandler(deps = {}) {
         // get the strict Phase 129 "respect external edits" behavior back.
         const forceReload = proofReplay ? false : args.forceReload !== false;
         const action = forceReload ? acknowledgeExternalEdit(loaded) : loaded;
-        const engineStatus = await resolveEngineStatus();
+        let engineStatus;
+        try {
+            engineStatus = await resolveEngineStatus();
+            assertReadableActionLoadContextStable(loadContext);
+        }
+        catch (err) {
+            return failResult(err instanceof Error ? err.message : String(err), 'BAD_FILENAME', {
+                actionId: args.actionId,
+                fallback: 'none',
+            });
+        }
         const compatRefusal = actionReplayPreflight({
             enginePin: action.metadata.enginePin,
             commands: preflightCommands,
@@ -369,8 +397,10 @@ export function createRunActionHandler(deps = {}) {
         // so a clean pass can still clear a device-matched blind-probe latch.
         let observedDeviceId = maestroDeviceId ?? null;
         const persistRunWithDevice = (record) => {
-            if (proofReplay)
+            assertReadableActionLoadContextStable(loadContext);
+            if (proofReplay) {
                 return Promise.resolve({ promoted: false, promotionRefused: false });
+            }
             const endedMs = Date.now();
             const timedRecord = {
                 ...record,
@@ -416,6 +446,9 @@ export function createRunActionHandler(deps = {}) {
             // Requested/session metadata is not RunRecord authority. Clear it before
             // dispatch; only direct maestro-runner evidence may repopulate it.
             probeDeviceId = null;
+            const firstCorpusRefusal = replayCorpusIdentityRefusal(loadContext, args.actionId);
+            if (firstCorpusRefusal)
+                return firstCorpusRefusal;
             const firstResult = await measureStep('maestro-first-attempt', () => maestroRun({
                 inlineYaml: replayYaml,
                 actionMetadata: action.metadata,
@@ -556,9 +589,11 @@ export function createRunActionHandler(deps = {}) {
             // the default fetcher is a no-op until index.ts wires a CDP-backed one).
             const expectedSeq = action.metadata.expectedRouteSequence;
             if (failure.kind === 'SELECTOR_NOT_FOUND' && expectedSeq && expectedSeq.length > 0) {
-                const liveRoute = (await claimBundleAuthority(args))
-                    ? await getLiveRoute().catch(() => null)
-                    : null;
+                const bundleAuthorityClaimed = await claimBundleAuthority(args);
+                const routeCorpusRefusal = replayCorpusIdentityRefusal(loadContext, args.actionId);
+                if (routeCorpusRefusal)
+                    return routeCorpusRefusal;
+                const liveRoute = bundleAuthorityClaimed ? await getLiveRoute().catch(() => null) : null;
                 const drift = classifyRouteDriftAfterFailure({ expectedSequence: expectedSeq, liveRoute });
                 if (drift.isDrift) {
                     const autoRepair = {
@@ -691,7 +726,8 @@ export function createRunActionHandler(deps = {}) {
             // The repair updated the action on disk. Re-load to pick up the
             // new body + bumped revision/state — saveAction's atomic pair-write
             // means we can read it back deterministically.
-            const reloadedAction = loadAction(projectRoot, args.actionId);
+            loadContext = refreshActionLoadContext(loadContext, args.actionId);
+            const reloadedAction = loadActionFromContext(loadContext, args.actionId);
             if (!reloadedAction) {
                 // Shouldn't happen — repair just wrote it. Defensive surface.
                 // Persist the failure RunRecord so MTTR sees the outcome.
@@ -717,6 +753,9 @@ export function createRunActionHandler(deps = {}) {
             const retryYaml = reloadedAction.replay.yamlText;
             const tBeforeRetry = Date.now();
             probeDeviceId = null;
+            const retryCorpusRefusal = replayCorpusIdentityRefusal(loadContext, args.actionId);
+            if (retryCorpusRefusal)
+                return retryCorpusRefusal;
             const retryResult = await measureStep('maestro-retry', () => maestroRun({
                 inlineYaml: retryYaml,
                 actionMetadata: reloadedAction.metadata,

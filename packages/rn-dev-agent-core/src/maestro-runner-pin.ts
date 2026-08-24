@@ -150,7 +150,9 @@ async function verifyActions(argv: string[]): Promise<number> {
   let files: string[];
   let actionContext: NonNullable<ReturnType<typeof openReadableActionLoadContext>>;
   try {
-    const openedContext = openReadableActionLoadContext(dirname(dirname(flowDir)));
+    const openedContext = openReadableActionLoadContext(dirname(dirname(flowDir)), {
+      includeRunFlowFiles: true,
+    });
     if (!openedContext) throw new Error(`No learned-action corpus found at ${flowDir}`);
     actionContext = openedContext;
     const yamlFiles = actionContext.files.filter((file) => /\.ya?ml$/i.test(file));

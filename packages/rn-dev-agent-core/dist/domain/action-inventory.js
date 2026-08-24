@@ -52,5 +52,6 @@ export async function listActions(projectRoot, dependencies = {}) {
             summary.appId = metadata.appId;
         results.push(summary);
     }
+    assertReadableActionLoadContextStable(context);
     return results;
 }

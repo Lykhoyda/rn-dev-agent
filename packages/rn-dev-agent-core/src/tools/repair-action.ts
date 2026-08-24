@@ -10,7 +10,7 @@ import { ensureFastRunner, getActiveSession, runNative } from '../agent-device-w
 import { okResult, failResult, withSession } from '../utils.js';
 import type { ToolResult } from '../utils.js';
 import { isValidActionId } from '../domain/path-safety.js';
-import { loadAction, saveAction, actionWasEditedExternally } from '../domain/action-store.js';
+import { actionWasEditedExternally, loadAction, saveAction } from '../domain/action-store.js';
 import { mirrorToDb } from '../domain/action-state-store.js';
 import {
   extractAllTestIDs,

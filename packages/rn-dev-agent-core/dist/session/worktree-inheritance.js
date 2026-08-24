@@ -15,6 +15,7 @@ export const SHAREABLE_RESOURCES = [
         hosts: ['claude', 'codex'],
     },
 ];
+const repositoryIdentityEvidence = Symbol('repositoryIdentityEvidence');
 const GIT_ENV_OVERRIDES = [
     'GIT_DIR',
     'GIT_WORK_TREE',
@@ -90,44 +91,68 @@ export function parseWorktreeRecords(porcelain) {
         records.push(current);
     return records;
 }
-function verifiedPrimaries(worktreeRoot, commonDir) {
+function parseFirstWorktreeRecord(porcelain) {
+    // Git guarantees the main worktree is first; verify only that record and fail closed.
+    const separator = porcelain.indexOf('\n\n');
+    const block = separator === -1 ? porcelain : porcelain.slice(0, separator);
+    const lines = block.split('\n');
+    const header = lines[0];
+    if (!header?.startsWith('worktree '))
+        return null;
+    const path = header.slice('worktree '.length);
+    if (!path)
+        return null;
+    return {
+        path,
+        bare: lines.slice(1).includes('bare'),
+        prunable: lines.slice(1).some((line) => line === 'prunable' || line.startsWith('prunable ')),
+    };
+}
+function verifiedPrimary(worktreeRoot, commonDir) {
     const listing = git(worktreeRoot, ['worktree', 'list', '--porcelain']);
     if (!listing.ok)
-        return [];
-    const verified = new Set();
-    for (const record of parseWorktreeRecords(listing.stdout)) {
-        if (record.bare || record.prunable)
-            continue;
-        const candidate = canonical(record.path);
-        if (!candidate)
-            continue;
-        try {
-            if (!statSync(candidate).isDirectory())
-                continue;
-        }
-        catch {
-            continue;
-        }
-        const top = git(candidate, ['rev-parse', '--show-toplevel']);
-        if (!top.ok || canonical(top.stdout) !== candidate)
-            continue;
-        const candidateGitDir = git(candidate, ['rev-parse', '--path-format=absolute', '--git-dir']);
-        const candidateCommon = git(candidate, [
-            'rev-parse',
-            '--path-format=absolute',
-            '--git-common-dir',
-        ]);
-        if (!candidateGitDir.ok || !candidateCommon.ok)
-            continue;
-        const resolvedGitDir = canonical(candidateGitDir.stdout);
-        const resolvedCommon = canonical(candidateCommon.stdout);
-        if (!resolvedGitDir || !resolvedCommon)
-            continue;
-        if (resolvedCommon !== commonDir || resolvedGitDir !== resolvedCommon)
-            continue;
-        verified.add(candidate);
+        return null;
+    const main = parseFirstWorktreeRecord(listing.stdout);
+    if (!main || main.bare || main.prunable)
+        return null;
+    const candidate = canonical(main.path);
+    if (!candidate)
+        return null;
+    const topLevelBefore = captureDirectoryIdentity(candidate);
+    const commonDirBefore = captureDirectoryIdentity(commonDir);
+    if (!topLevelBefore || !commonDirBefore)
+        return null;
+    const top = git(candidate, ['rev-parse', '--show-toplevel']);
+    if (!top.ok || canonical(top.stdout) !== candidate)
+        return null;
+    const candidateGitDir = git(candidate, ['rev-parse', '--path-format=absolute', '--git-dir']);
+    const candidateCommon = git(candidate, [
+        'rev-parse',
+        '--path-format=absolute',
+        '--git-common-dir',
+    ]);
+    if (!candidateGitDir.ok || !candidateCommon.ok)
+        return null;
+    const resolvedGitDir = canonical(candidateGitDir.stdout);
+    const resolvedCommon = canonical(candidateCommon.stdout);
+    if (!resolvedGitDir || !resolvedCommon)
+        return null;
+    if (resolvedCommon !== commonDir || resolvedGitDir !== resolvedCommon)
+        return null;
+    const topLevelAfter = captureDirectoryIdentity(candidate);
+    const commonDirAfter = captureDirectoryIdentity(commonDir);
+    if (!topLevelAfter ||
+        !commonDirAfter ||
+        topLevelBefore.identity.dev !== topLevelAfter.identity.dev ||
+        topLevelBefore.identity.ino !== topLevelAfter.identity.ino ||
+        commonDirBefore.identity.dev !== commonDirAfter.identity.dev ||
+        commonDirBefore.identity.ino !== commonDirAfter.identity.ino) {
+        return null;
     }
-    return [...verified];
+    return {
+        root: candidate,
+        identity: { topLevel: topLevelAfter, commonDir: commonDirAfter },
+    };
 }
 export function resolveWorktreeLayout(input) {
     const cwd = canonical(input.cwd);
@@ -170,12 +195,10 @@ export function resolveWorktreeLayout(input) {
     };
     if (base.kind === 'primary')
         return base;
-    const primaries = verifiedPrimaries(worktreeRoot, commonDir);
-    if (primaries.length === 0)
+    const primary = verifiedPrimary(worktreeRoot, commonDir);
+    if (!primary)
         return { ...base, refusal: 'NO_PRIMARY' };
-    if (primaries.length > 1)
-        return { ...base, refusal: 'AMBIGUOUS' };
-    const primaryRoot = primaries[0];
+    const primaryRoot = primary.root;
     const primaryAppRoot = appRelative === '.' ? primaryRoot : join(primaryRoot, appRelative);
     if (!contained(primaryRoot, primaryAppRoot))
         return { ...base, refusal: 'PRIMARY_APP_MISSING' };
@@ -190,7 +213,9 @@ export function resolveWorktreeLayout(input) {
     if (!primaryAppReal || !contained(primaryRoot, primaryAppReal)) {
         return { ...base, refusal: 'PRIMARY_APP_MISSING' };
     }
-    return { ...base, primaryRoot, primaryAppRoot };
+    const linked = { ...base, primaryRoot, primaryAppRoot };
+    Object.defineProperty(linked, repositoryIdentityEvidence, { value: primary.identity });
+    return linked;
 }
 function classifySource(path, type, boundary) {
     const rel = relative(boundary, path);
@@ -254,6 +279,12 @@ function sameSourceEvidence(left, right) {
 function sourceLeafMatchesIdentity(evidence, identity) {
     const leaf = evidence?.at(-1);
     return leaf?.dev === identity.dev && leaf.ino === identity.ino;
+}
+function repositoryIdentityUnchanged(identity) {
+    return (currentIdentityMatches(identity.topLevel.path, identity.topLevel.identity, 'directory') &&
+        currentIdentityMatches(identity.commonDir.path, identity.commonDir.identity, 'directory') &&
+        canonical(identity.topLevel.path) === identity.topLevel.path &&
+        canonical(identity.commonDir.path) === identity.commonDir.path);
 }
 function classifyDestination(path, sourcePath, type) {
     let link;
@@ -340,6 +371,10 @@ function openUnfollowedDirectory(path, expected) {
 }
 export function resolveReadableActionCorpus(projectRoot, dependencies = {}) {
     const root = canonical(projectRoot) ?? resolve(projectRoot);
+    const projectRootEntry = captureDirectoryIdentity(root);
+    if (!projectRootEntry)
+        return { status: 'absent' };
+    const projectRootIdentity = projectRootEntry.identity;
     const rnAgentDir = join(root, '.rn-agent');
     const actionsDir = join(rnAgentDir, 'actions');
     const rnAgentStat = lstatIfPresent(rnAgentDir);
@@ -371,10 +406,15 @@ export function resolveReadableActionCorpus(projectRoot, dependencies = {}) {
         if (!directoryIdentityUnchanged(actionsDir, identity)) {
             return refuseReplacedActions(actionsDir);
         }
+        if (!directoryIdentityUnchanged(root, projectRootIdentity)) {
+            return refuseReplacedActions(actionsDir);
+        }
         return {
             status: 'owned-directory',
             projectRoot: root,
+            projectRootIdentity,
             rnAgentDir,
+            rnAgentIdentity,
             actionsDir,
             identity,
         };
@@ -387,6 +427,12 @@ export function resolveReadableActionCorpus(projectRoot, dependencies = {}) {
         !layout.primaryAppRoot) {
         return refuseForeignActions(actionsDir);
     }
+    const primaryIdentity = layout[repositoryIdentityEvidence];
+    if (!primaryIdentity)
+        return refuseReplacedActions(actionsDir);
+    const linkedIdentity = captureLinkedRepositoryIdentity(layout);
+    if (!linkedIdentity)
+        return refuseReplacedActions(actionsDir);
     const primaryRnAgentDir = join(layout.primaryAppRoot, '.rn-agent');
     const primaryActionsDir = join(primaryRnAgentDir, 'actions');
     const planned = planResource(layout, SHAREABLE_RESOURCES[0]);
@@ -420,17 +466,26 @@ export function resolveReadableActionCorpus(projectRoot, dependencies = {}) {
         !sameSourceEvidence(planned.sourceEvidence, plannedAfter.sourceEvidence) ||
         !sourceLeafMatchesIdentity(planned.sourceEvidence, targetIdentity) ||
         !sourceLeafMatchesIdentity(plannedAfter.sourceEvidence, targetIdentity) ||
-        !directoryIdentityUnchanged(rnAgentDir, rnAgentIdentity)) {
+        !directoryIdentityUnchanged(root, projectRootIdentity) ||
+        !directoryIdentityUnchanged(rnAgentDir, rnAgentIdentity) ||
+        !linkedRepositoryIdentityUnchanged(linkedIdentity) ||
+        !repositoryIdentityUnchanged(primaryIdentity)) {
         return refuseReplacedActions(actionsDir);
     }
     return {
         status: 'approved-inherited',
         projectRoot: root,
+        projectRootIdentity,
         rnAgentDir,
+        rnAgentIdentity,
         actionsDir,
         targetDir,
         linkIdentity: planned.evidence,
         targetIdentity,
+        primaryRoot: layout.primaryRoot,
+        commonDir: layout.commonDir,
+        primaryIdentity,
+        linkedIdentity,
     };
 }
 export function sameReadableActionCorpus(left, right) {
@@ -443,17 +498,39 @@ export function sameReadableActionCorpus(left, right) {
     }
     if (left.status === 'owned-directory' && right.status === 'owned-directory') {
         return (left.actionsDir === right.actionsDir &&
+            left.projectRootIdentity.dev === right.projectRootIdentity.dev &&
+            left.projectRootIdentity.ino === right.projectRootIdentity.ino &&
+            left.rnAgentIdentity.dev === right.rnAgentIdentity.dev &&
+            left.rnAgentIdentity.ino === right.rnAgentIdentity.ino &&
             left.identity.dev === right.identity.dev &&
             left.identity.ino === right.identity.ino);
     }
     return (left.status === 'approved-inherited' &&
         right.status === 'approved-inherited' &&
         left.actionsDir === right.actionsDir &&
+        left.projectRootIdentity.dev === right.projectRootIdentity.dev &&
+        left.projectRootIdentity.ino === right.projectRootIdentity.ino &&
+        left.rnAgentIdentity.dev === right.rnAgentIdentity.dev &&
+        left.rnAgentIdentity.ino === right.rnAgentIdentity.ino &&
         left.targetDir === right.targetDir &&
         left.linkIdentity.dev === right.linkIdentity.dev &&
         left.linkIdentity.ino === right.linkIdentity.ino &&
         left.targetIdentity.dev === right.targetIdentity.dev &&
-        left.targetIdentity.ino === right.targetIdentity.ino);
+        left.targetIdentity.ino === right.targetIdentity.ino &&
+        left.linkedIdentity.worktreeRoot.identity.dev ===
+            right.linkedIdentity.worktreeRoot.identity.dev &&
+        left.linkedIdentity.worktreeRoot.identity.ino ===
+            right.linkedIdentity.worktreeRoot.identity.ino &&
+        left.linkedIdentity.gitEntry.identity.dev === right.linkedIdentity.gitEntry.identity.dev &&
+        left.linkedIdentity.gitEntry.identity.ino === right.linkedIdentity.gitEntry.identity.ino &&
+        left.linkedIdentity.gitDir.identity.dev === right.linkedIdentity.gitDir.identity.dev &&
+        left.linkedIdentity.gitDir.identity.ino === right.linkedIdentity.gitDir.identity.ino &&
+        left.primaryRoot === right.primaryRoot &&
+        left.commonDir === right.commonDir &&
+        left.primaryIdentity.topLevel.identity.dev === right.primaryIdentity.topLevel.identity.dev &&
+        left.primaryIdentity.topLevel.identity.ino === right.primaryIdentity.topLevel.identity.ino &&
+        left.primaryIdentity.commonDir.identity.dev === right.primaryIdentity.commonDir.identity.dev &&
+        left.primaryIdentity.commonDir.identity.ino === right.primaryIdentity.commonDir.identity.ino);
 }
 export function readableActionsDirectory(corpus) {
     if (corpus.status === 'owned-directory')
@@ -470,6 +547,141 @@ export function readableActionsSnapshot(corpus) {
         return { directory: corpus.targetDir, identity: corpus.targetIdentity };
     }
     return null;
+}
+let readableActionOperationSequence = 0;
+function freezeIdentity(identity) {
+    return Object.freeze({ ...identity });
+}
+function captureDirectoryIdentity(path) {
+    const stat = lstatIfPresent(path);
+    if (!stat || stat.isSymbolicLink() || !stat.isDirectory())
+        return null;
+    return Object.freeze({ path, identity: freezeIdentity(identityOf(stat)) });
+}
+function captureFileIdentity(path) {
+    const stat = lstatIfPresent(path);
+    if (!stat || stat.isSymbolicLink() || !stat.isFile())
+        return null;
+    return Object.freeze({ path, identity: freezeIdentity(identityOf(stat)) });
+}
+function captureLinkedRepositoryIdentity(layout) {
+    const worktreeRoot = captureDirectoryIdentity(layout.worktreeRoot);
+    const gitEntry = captureFileIdentity(join(layout.worktreeRoot, '.git'));
+    const gitDir = captureDirectoryIdentity(layout.gitDir);
+    if (!worktreeRoot || !gitEntry || !gitDir)
+        return null;
+    return { worktreeRoot, gitEntry, gitDir };
+}
+function linkedRepositoryIdentityUnchanged(identity) {
+    return (currentIdentityMatches(identity.worktreeRoot.path, identity.worktreeRoot.identity, 'directory') &&
+        currentIdentityMatches(identity.gitEntry.path, identity.gitEntry.identity, 'file') &&
+        currentIdentityMatches(identity.gitDir.path, identity.gitDir.identity, 'directory'));
+}
+export function captureReadableActionOperationSnapshot(corpus) {
+    const operationId = `${process.pid}:${++readableActionOperationSequence}`;
+    if (corpus.status === 'owned-directory') {
+        if (!directoryIdentityUnchanged(corpus.projectRoot, corpus.projectRootIdentity) ||
+            !directoryIdentityUnchanged(corpus.rnAgentDir, corpus.rnAgentIdentity)) {
+            throw new Error(refuseReplacedActions(corpus.actionsDir).reason);
+        }
+        return Object.freeze({
+            operationId,
+            kind: corpus.status,
+            projectRoot: corpus.projectRoot,
+            projectRootIdentity: freezeIdentity(corpus.projectRootIdentity),
+            rnAgentDir: corpus.rnAgentDir,
+            rnAgentIdentity: freezeIdentity(corpus.rnAgentIdentity),
+            actionsDir: corpus.actionsDir,
+            directory: corpus.actionsDir,
+            directoryIdentity: freezeIdentity(corpus.identity),
+        });
+    }
+    if (corpus.status === 'approved-inherited') {
+        if (!directoryIdentityUnchanged(corpus.projectRoot, corpus.projectRootIdentity) ||
+            !directoryIdentityUnchanged(corpus.rnAgentDir, corpus.rnAgentIdentity) ||
+            !repositoryIdentityUnchanged(corpus.primaryIdentity)) {
+            throw new Error(refuseReplacedActions(corpus.actionsDir).reason);
+        }
+        return Object.freeze({
+            operationId,
+            kind: corpus.status,
+            projectRoot: corpus.projectRoot,
+            projectRootIdentity: freezeIdentity(corpus.projectRootIdentity),
+            rnAgentDir: corpus.rnAgentDir,
+            rnAgentIdentity: freezeIdentity(corpus.rnAgentIdentity),
+            actionsDir: corpus.actionsDir,
+            directory: corpus.targetDir,
+            directoryIdentity: freezeIdentity(corpus.targetIdentity),
+            linkIdentity: freezeIdentity(corpus.linkIdentity),
+            linkedIdentity: Object.freeze({
+                worktreeRoot: Object.freeze({
+                    path: corpus.linkedIdentity.worktreeRoot.path,
+                    identity: freezeIdentity(corpus.linkedIdentity.worktreeRoot.identity),
+                }),
+                gitEntry: Object.freeze({
+                    path: corpus.linkedIdentity.gitEntry.path,
+                    identity: freezeIdentity(corpus.linkedIdentity.gitEntry.identity),
+                }),
+                gitDir: Object.freeze({
+                    path: corpus.linkedIdentity.gitDir.path,
+                    identity: freezeIdentity(corpus.linkedIdentity.gitDir.identity),
+                }),
+            }),
+            primaryIdentity: Object.freeze({
+                topLevel: Object.freeze({
+                    path: corpus.primaryIdentity.topLevel.path,
+                    identity: freezeIdentity(corpus.primaryIdentity.topLevel.identity),
+                }),
+                commonDir: Object.freeze({
+                    path: corpus.primaryIdentity.commonDir.path,
+                    identity: freezeIdentity(corpus.primaryIdentity.commonDir.identity),
+                }),
+            }),
+        });
+    }
+    return null;
+}
+function currentIdentityMatches(path, expected, kind) {
+    const current = lstatIfPresent(path);
+    if (!current)
+        return false;
+    const typeMatches = kind === 'directory'
+        ? current.isDirectory()
+        : kind === 'file'
+            ? current.isFile() && !current.isSymbolicLink()
+            : current.isSymbolicLink();
+    return (typeMatches && String(current.dev) === expected.dev && String(current.ino) === expected.ino);
+}
+export function assertReadableActionOperationUnchanged(snapshot) {
+    let unchanged = canonical(snapshot.projectRoot) === snapshot.projectRoot &&
+        currentIdentityMatches(snapshot.projectRoot, snapshot.projectRootIdentity, 'directory') &&
+        currentIdentityMatches(snapshot.rnAgentDir, snapshot.rnAgentIdentity, 'directory');
+    if (snapshot.kind === 'owned-directory') {
+        unchanged =
+            unchanged &&
+                currentIdentityMatches(snapshot.actionsDir, snapshot.directoryIdentity, 'directory') &&
+                canonical(snapshot.actionsDir) === snapshot.directory;
+    }
+    else {
+        unchanged =
+            unchanged &&
+                Boolean(snapshot.linkIdentity && snapshot.linkedIdentity && snapshot.primaryIdentity) &&
+                currentIdentityMatches(snapshot.actionsDir, snapshot.linkIdentity, 'symlink') &&
+                currentIdentityMatches(snapshot.directory, snapshot.directoryIdentity, 'directory') &&
+                currentIdentityMatches(snapshot.linkedIdentity.worktreeRoot.path, snapshot.linkedIdentity.worktreeRoot.identity, 'directory') &&
+                currentIdentityMatches(snapshot.linkedIdentity.gitEntry.path, snapshot.linkedIdentity.gitEntry.identity, 'file') &&
+                currentIdentityMatches(snapshot.linkedIdentity.gitDir.path, snapshot.linkedIdentity.gitDir.identity, 'directory') &&
+                currentIdentityMatches(snapshot.primaryIdentity.topLevel.path, snapshot.primaryIdentity.topLevel.identity, 'directory') &&
+                currentIdentityMatches(snapshot.primaryIdentity.commonDir.path, snapshot.primaryIdentity.commonDir.identity, 'directory') &&
+                canonical(snapshot.actionsDir) === snapshot.directory &&
+                canonical(snapshot.directory) === snapshot.directory &&
+                canonical(snapshot.primaryIdentity.topLevel.path) ===
+                    snapshot.primaryIdentity.topLevel.path &&
+                canonical(snapshot.primaryIdentity.commonDir.path) ===
+                    snapshot.primaryIdentity.commonDir.path;
+    }
+    if (!unchanged)
+        throw new Error(refuseReplacedActions(snapshot.actionsDir).reason);
 }
 function isTracked(worktreeRoot, relativePath) {
     const listed = git(worktreeRoot, ['ls-files', '--', relativePath]);

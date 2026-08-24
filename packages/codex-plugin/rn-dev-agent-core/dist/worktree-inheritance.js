@@ -33,6 +33,7 @@ var SHAREABLE_RESOURCES = [
     hosts: ["claude", "codex"]
   }
 ];
+var repositoryIdentityEvidence = /* @__PURE__ */ Symbol("repositoryIdentityEvidence");
 var GIT_ENV_OVERRIDES = [
   "GIT_DIR",
   "GIT_WORK_TREE",
@@ -84,64 +85,62 @@ function isRnAppRoot(directory) {
     return false;
   }
 }
-function parseWorktreeRecords(porcelain) {
-  const records = [];
-  let current = null;
-  for (const line of porcelain.split("\n")) {
-    if (line.startsWith("worktree ")) {
-      if (current)
-        records.push(current);
-      current = { path: line.slice("worktree ".length), bare: false, prunable: false };
-      continue;
-    }
-    if (!current)
-      continue;
-    if (line === "bare")
-      current.bare = true;
-    if (line === "prunable" || line.startsWith("prunable "))
-      current.prunable = true;
-  }
-  if (current)
-    records.push(current);
-  return records;
+function parseFirstWorktreeRecord(porcelain) {
+  const separator = porcelain.indexOf("\n\n");
+  const block = separator === -1 ? porcelain : porcelain.slice(0, separator);
+  const lines = block.split("\n");
+  const header = lines[0];
+  if (!header?.startsWith("worktree "))
+    return null;
+  const path = header.slice("worktree ".length);
+  if (!path)
+    return null;
+  return {
+    path,
+    bare: lines.slice(1).includes("bare"),
+    prunable: lines.slice(1).some((line) => line === "prunable" || line.startsWith("prunable "))
+  };
 }
-function verifiedPrimaries(worktreeRoot, commonDir) {
+function verifiedPrimary(worktreeRoot, commonDir) {
   const listing = git(worktreeRoot, ["worktree", "list", "--porcelain"]);
   if (!listing.ok)
-    return [];
-  const verified = /* @__PURE__ */ new Set();
-  for (const record of parseWorktreeRecords(listing.stdout)) {
-    if (record.bare || record.prunable)
-      continue;
-    const candidate = canonical(record.path);
-    if (!candidate)
-      continue;
-    try {
-      if (!statSync(candidate).isDirectory())
-        continue;
-    } catch {
-      continue;
-    }
-    const top = git(candidate, ["rev-parse", "--show-toplevel"]);
-    if (!top.ok || canonical(top.stdout) !== candidate)
-      continue;
-    const candidateGitDir = git(candidate, ["rev-parse", "--path-format=absolute", "--git-dir"]);
-    const candidateCommon = git(candidate, [
-      "rev-parse",
-      "--path-format=absolute",
-      "--git-common-dir"
-    ]);
-    if (!candidateGitDir.ok || !candidateCommon.ok)
-      continue;
-    const resolvedGitDir = canonical(candidateGitDir.stdout);
-    const resolvedCommon = canonical(candidateCommon.stdout);
-    if (!resolvedGitDir || !resolvedCommon)
-      continue;
-    if (resolvedCommon !== commonDir || resolvedGitDir !== resolvedCommon)
-      continue;
-    verified.add(candidate);
+    return null;
+  const main2 = parseFirstWorktreeRecord(listing.stdout);
+  if (!main2 || main2.bare || main2.prunable)
+    return null;
+  const candidate = canonical(main2.path);
+  if (!candidate)
+    return null;
+  const topLevelBefore = captureDirectoryIdentity(candidate);
+  const commonDirBefore = captureDirectoryIdentity(commonDir);
+  if (!topLevelBefore || !commonDirBefore)
+    return null;
+  const top = git(candidate, ["rev-parse", "--show-toplevel"]);
+  if (!top.ok || canonical(top.stdout) !== candidate)
+    return null;
+  const candidateGitDir = git(candidate, ["rev-parse", "--path-format=absolute", "--git-dir"]);
+  const candidateCommon = git(candidate, [
+    "rev-parse",
+    "--path-format=absolute",
+    "--git-common-dir"
+  ]);
+  if (!candidateGitDir.ok || !candidateCommon.ok)
+    return null;
+  const resolvedGitDir = canonical(candidateGitDir.stdout);
+  const resolvedCommon = canonical(candidateCommon.stdout);
+  if (!resolvedGitDir || !resolvedCommon)
+    return null;
+  if (resolvedCommon !== commonDir || resolvedGitDir !== resolvedCommon)
+    return null;
+  const topLevelAfter = captureDirectoryIdentity(candidate);
+  const commonDirAfter = captureDirectoryIdentity(commonDir);
+  if (!topLevelAfter || !commonDirAfter || topLevelBefore.identity.dev !== topLevelAfter.identity.dev || topLevelBefore.identity.ino !== topLevelAfter.identity.ino || commonDirBefore.identity.dev !== commonDirAfter.identity.dev || commonDirBefore.identity.ino !== commonDirAfter.identity.ino) {
+    return null;
   }
-  return [...verified];
+  return {
+    root: candidate,
+    identity: { topLevel: topLevelAfter, commonDir: commonDirAfter }
+  };
 }
 function resolveWorktreeLayout(input) {
   const cwd = canonical(input.cwd);
@@ -184,12 +183,10 @@ function resolveWorktreeLayout(input) {
   };
   if (base.kind === "primary")
     return base;
-  const primaries = verifiedPrimaries(worktreeRoot, commonDir);
-  if (primaries.length === 0)
+  const primary = verifiedPrimary(worktreeRoot, commonDir);
+  if (!primary)
     return { ...base, refusal: "NO_PRIMARY" };
-  if (primaries.length > 1)
-    return { ...base, refusal: "AMBIGUOUS" };
-  const primaryRoot = primaries[0];
+  const primaryRoot = primary.root;
   const primaryAppRoot = appRelative === "." ? primaryRoot : join(primaryRoot, appRelative);
   if (!contained(primaryRoot, primaryAppRoot))
     return { ...base, refusal: "PRIMARY_APP_MISSING" };
@@ -203,7 +200,9 @@ function resolveWorktreeLayout(input) {
   if (!primaryAppReal || !contained(primaryRoot, primaryAppReal)) {
     return { ...base, refusal: "PRIMARY_APP_MISSING" };
   }
-  return { ...base, primaryRoot, primaryAppRoot };
+  const linked = { ...base, primaryRoot, primaryAppRoot };
+  Object.defineProperty(linked, repositoryIdentityEvidence, { value: primary.identity });
+  return linked;
 }
 function classifySource(path, type, boundary) {
   const rel = relative(boundary, path);
@@ -287,6 +286,27 @@ function classifyDestination(path, sourcePath, type) {
   } catch {
     return { state: "LINK_STALE", evidence };
   }
+}
+function identityOf(stat) {
+  return { dev: String(stat.dev), ino: String(stat.ino) };
+}
+function lstatIfPresent(path) {
+  try {
+    return lstatSync(path, { bigint: true });
+  } catch (error) {
+    if (error.code === "ENOENT")
+      return null;
+    throw error;
+  }
+}
+function freezeIdentity(identity) {
+  return Object.freeze({ ...identity });
+}
+function captureDirectoryIdentity(path) {
+  const stat = lstatIfPresent(path);
+  if (!stat || stat.isSymbolicLink() || !stat.isDirectory())
+    return null;
+  return Object.freeze({ path, identity: freezeIdentity(identityOf(stat)) });
 }
 function isTracked(worktreeRoot, relativePath) {
   const listed = git(worktreeRoot, ["ls-files", "--", relativePath]);

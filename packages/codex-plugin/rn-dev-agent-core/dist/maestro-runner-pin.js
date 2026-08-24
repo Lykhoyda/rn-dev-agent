@@ -307,15 +307,6 @@ function runVerifiedFilesystemHelper(args) {
     unlinkSync(boundPath);
   }
 }
-function readFileFromVerifiedDirectory(directoryPath, identity, relativePath) {
-  return runVerifiedFilesystemHelper([
-    "--read-directory-entry",
-    directoryPath,
-    relativePath,
-    identity.dev,
-    identity.ino
-  ]);
-}
 function listVerifiedDirectory(directoryPath, identity) {
   const output = runVerifiedFilesystemHelper([
     "--list-directory",
@@ -8877,6 +8868,30 @@ function asRunFlow(cmd2) {
   }
   return null;
 }
+function collectRunFlowFileReferences(yamlText) {
+  try {
+    const docs = import_yaml.default.parseAllDocuments(yamlText, { strict: true });
+    const body = docs.at(-1)?.toJS();
+    if (!Array.isArray(body))
+      return [];
+    const references = /* @__PURE__ */ new Set();
+    const visit = (commands) => {
+      for (const command of commands) {
+        const runFlow = asRunFlow(command);
+        if (!runFlow)
+          continue;
+        if (runFlow.file !== void 0)
+          references.add(runFlow.file);
+        if (runFlow.commands)
+          visit(runFlow.commands);
+      }
+    };
+    visit(body);
+    return [...references];
+  } catch {
+    return [];
+  }
+}
 function resolveRunFlowTarget(file, opts) {
   if (!opts.flowDir || !opts.flowRoot) {
     throw new MaestroValidationError(`runFlow file ref "${file}" requires a flow root context (flowDir + flowRoot)`);
@@ -9729,11 +9744,187 @@ var init_path_safety = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/domain/unfollowed-file.js
-function readUnfollowedFile(directoryPath, identity, relativePath) {
+import { execFileSync as execFileSync2 } from "node:child_process";
+import { lstatSync as lstatSync5 } from "node:fs";
+import { isAbsolute as isAbsolute2, join as join6 } from "node:path";
+function createUnfollowedFileSnapshot(directoryPath, directoryIdentity) {
+  return { directoryPath, directoryIdentity, fileIdentities: /* @__PURE__ */ new Map() };
+}
+function identityFromStat(path, stat) {
+  return {
+    path,
+    dev: String(stat.dev),
+    ino: String(stat.ino),
+    size: String(stat.size),
+    mtimeNs: String(stat.mtimeNs),
+    ctimeNs: String(stat.ctimeNs)
+  };
+}
+function sameIdentity(left, right) {
+  return left.dev === right.dev && left.ino === right.ino && left.size === right.size && left.mtimeNs === right.mtimeNs && left.ctimeNs === right.ctimeNs;
+}
+function captureUnfollowedFileIdentities(snapshot, relativePaths) {
+  const identities = [];
   try {
-    return readFileFromVerifiedDirectory(directoryPath, identity, relativePath).toString("utf8");
+    for (const relativePath of relativePaths) {
+      const path = join6(snapshot.directoryPath, relativePath);
+      const stat = lstatSync5(path, { bigint: true });
+      if (stat.isSymbolicLink() || !stat.isFile())
+        throw new Error("changed");
+      const captured = identityFromStat(path, stat);
+      const existing = snapshot.fileIdentities.get(relativePath);
+      if (existing && !sameIdentity(existing, captured))
+        throw new Error("changed");
+      const selected = existing ?? captured;
+      snapshot.fileIdentities.set(relativePath, selected);
+      identities.push(selected);
+    }
+  } catch {
+    throw new Error(`Refusing replaced learned-action corpus at ${snapshot.directoryPath}.`);
+  }
+  return identities;
+}
+function assertUnfollowedFileSnapshotUnchanged(snapshot) {
+  try {
+    for (const identity of snapshot.fileIdentities.values()) {
+      const stat = lstatSync5(identity.path, { bigint: true });
+      if (stat.isSymbolicLink() || !stat.isFile() || !sameIdentity(identity, identityFromStat(identity.path, stat))) {
+        throw new Error("changed");
+      }
+    }
+  } catch {
+    throw new Error(`Refusing replaced learned-action corpus at ${snapshot.directoryPath}.`);
+  }
+}
+function selectExistingUnfollowedSnapshotFiles(snapshot, relativePaths) {
+  assertUnfollowedFileSnapshotUnchanged(snapshot);
+  const existing = [];
+  try {
+    for (const relativePath of relativePaths) {
+      const path = join6(snapshot.directoryPath, relativePath);
+      let stat;
+      try {
+        stat = lstatSync5(path, { bigint: true });
+      } catch (err) {
+        if (err.code === "ENOENT")
+          continue;
+        throw err;
+      }
+      if (stat.isSymbolicLink() || !stat.isFile())
+        throw new Error("changed");
+      const captured = identityFromStat(path, stat);
+      const selected = snapshot.fileIdentities.get(relativePath);
+      if (selected && !sameIdentity(selected, captured))
+        throw new Error("changed");
+      snapshot.fileIdentities.set(relativePath, selected ?? captured);
+      existing.push(relativePath);
+    }
+  } catch {
+    throw new Error(`Refusing replaced learned-action corpus at ${snapshot.directoryPath}.`);
+  }
+  assertUnfollowedFileSnapshotUnchanged(snapshot);
+  return existing;
+}
+function readUnfollowedSnapshotFiles(snapshot, relativePaths, readFiles = readUnfollowedFiles) {
+  assertUnfollowedFileSnapshotUnchanged(snapshot);
+  const identities = captureUnfollowedFileIdentities(snapshot, relativePaths);
+  const contents = readFiles(snapshot.directoryPath, snapshot.directoryIdentity, relativePaths, identities);
+  assertUnfollowedFileSnapshotUnchanged(snapshot);
+  if (contents.length !== relativePaths.length || contents.some((entry) => entry == null)) {
+    throw new Error(`Refusing replaced learned-action corpus at ${snapshot.directoryPath}.`);
+  }
+  return contents;
+}
+function readUnfollowedFiles(directoryPath, identity, relativePaths, expectedIdentities) {
+  try {
+    if (process.platform !== "darwin" && process.platform !== "linux") {
+      throw new Error(`Verified directory reads are unavailable on ${process.platform}/${process.arch}.`);
+    }
+    if (expectedIdentities && expectedIdentities.length !== relativePaths.length) {
+      throw new Error("Selected file identities did not match the requested paths.");
+    }
+    const entries = relativePaths.map((relativePath, index) => {
+      if (isAbsolute2(relativePath) || relativePath.split("/").some((component) => !component || component === "." || component === "..")) {
+        throw new Error(`Invalid relative path: ${relativePath}.`);
+      }
+      if (expectedIdentities) {
+        const selected = expectedIdentities[index];
+        if (!selected || selected.path !== join6(directoryPath, relativePath)) {
+          throw new Error(`Selected file identity did not match ${relativePath}.`);
+        }
+        return { relativePath, identity: selected };
+      }
+      const path = join6(directoryPath, relativePath);
+      try {
+        const stat = lstatSync5(path, { bigint: true });
+        return {
+          relativePath,
+          identity: stat.isSymbolicLink() || !stat.isFile() ? null : identityFromStat(path, stat)
+        };
+      } catch (err) {
+        if (err.code === "ENOENT")
+          return { relativePath, identity: null };
+        throw err;
+      }
+    });
+    const contents = [];
+    let batch = [];
+    let batchBytes = 0;
+    const flush = () => {
+      if (batch.length === 0)
+        return;
+      const output = execFileSync2(process.execPath, [
+        "--no-warnings",
+        "--input-type=commonjs",
+        "-e",
+        UNFOLLOWED_READER_SCRIPT,
+        JSON.stringify({ directoryPath, directoryIdentity: identity, entries: batch })
+      ], {
+        maxBuffer: UNFOLLOWED_READER_MAX_BUFFER_BYTES,
+        stdio: ["ignore", "pipe", "ignore"],
+        timeout: 1e4
+      });
+      let offset = 0;
+      for (const entry of batch) {
+        if (offset + UNFOLLOWED_READER_FRAME_BYTES > output.length) {
+          throw new Error(`Verified directory batch was truncated before ${entry.relativePath}.`);
+        }
+        const status = output[offset];
+        const length = output.readBigUInt64BE(offset + 1);
+        offset += UNFOLLOWED_READER_FRAME_BYTES;
+        if (length > BigInt(Number.MAX_SAFE_INTEGER) || offset + Number(length) > output.length) {
+          throw new Error(`Verified directory batch was malformed at ${entry.relativePath}.`);
+        }
+        const end = offset + Number(length);
+        if (status === 0)
+          contents.push(output.toString("utf8", offset, end));
+        else if (status === 1 && length === 0n)
+          contents.push(null);
+        else
+          throw new Error(`Verified directory batch refused ${entry.relativePath}.`);
+        offset = end;
+      }
+      if (offset !== output.length)
+        throw new Error("Verified directory batch had trailing data.");
+      batch = [];
+      batchBytes = 0;
+    };
+    for (const entry of entries) {
+      const size = entry.identity ? Number(entry.identity.size) : 0;
+      const framedBytes = UNFOLLOWED_READER_FRAME_BYTES + size;
+      if (!Number.isSafeInteger(size) || framedBytes > UNFOLLOWED_READER_BATCH_BYTES) {
+        throw new Error(`Verified directory entry exceeds the safe batch size: ${entry.relativePath}.`);
+      }
+      if (batch.length > 0 && (batch.length >= UNFOLLOWED_READER_BATCH_FILES || batchBytes + framedBytes > UNFOLLOWED_READER_BATCH_BYTES)) {
+        flush();
+      }
+      batch.push(entry);
+      batchBytes += framedBytes;
+    }
+    flush();
+    return contents;
   } catch (err) {
-    throw new Error(`Refusing inherited action symlink at ${directoryPath}/${relativePath}: ${err instanceof Error ? err.message : String(err)}`);
+    throw new Error(`Refusing replaced learned-action corpus at ${directoryPath}: ${err instanceof Error ? err.message : String(err)}`);
   }
 }
 function listUnfollowedDirectory(directoryPath, identity) {
@@ -9743,16 +9934,105 @@ function listUnfollowedDirectory(directoryPath, identity) {
     throw new Error(`Refusing replaced learned-action corpus at ${directoryPath}: ${err instanceof Error ? err.message : String(err)}`);
   }
 }
+var UNFOLLOWED_READER_MAX_BUFFER_BYTES, UNFOLLOWED_READER_BATCH_BYTES, UNFOLLOWED_READER_BATCH_FILES, UNFOLLOWED_READER_FRAME_BYTES, UNFOLLOWED_READER_SCRIPT;
 var init_unfollowed_file = __esm({
   "packages/rn-dev-agent-core/dist/domain/unfollowed-file.js"() {
     "use strict";
     init_process_birth();
+    UNFOLLOWED_READER_MAX_BUFFER_BYTES = 32 * 1024 * 1024;
+    UNFOLLOWED_READER_BATCH_BYTES = 24 * 1024 * 1024;
+    UNFOLLOWED_READER_BATCH_FILES = 16;
+    UNFOLLOWED_READER_FRAME_BYTES = 9;
+    UNFOLLOWED_READER_SCRIPT = String.raw`
+const { closeSync, constants, fstatSync, openSync, readSync, realpathSync, writeSync } = require('node:fs');
+const { join } = require('node:path');
+const request = JSON.parse(process.argv[1]);
+const opened = [];
+let directory = -1;
+const closeAll = () => {
+  for (const entry of opened) if (entry.fd >= 0) closeSync(entry.fd);
+  if (directory >= 0) closeSync(directory);
+};
+const matches = (stat, identity) =>
+  stat.isFile() &&
+  String(stat.dev) === identity.dev &&
+  String(stat.ino) === identity.ino &&
+  String(stat.size) === identity.size &&
+  String(stat.mtimeNs) === identity.mtimeNs &&
+  String(stat.ctimeNs) === identity.ctimeNs;
+try {
+  directory = openSync(
+    request.directoryPath,
+    constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_DIRECTORY,
+  );
+  const directoryStat = fstatSync(directory, { bigint: true });
+  if (
+    !directoryStat.isDirectory() ||
+    String(directoryStat.dev) !== request.directoryIdentity.dev ||
+    String(directoryStat.ino) !== request.directoryIdentity.ino
+  ) {
+    throw new Error('directory changed');
+  }
+  let batchBytes = 0;
+  for (const entry of request.entries) {
+    if (!entry.identity) {
+      opened.push({ fd: -1, size: 0, identity: null });
+      batchBytes += 9;
+      continue;
+    }
+    const path = join(request.directoryPath, entry.relativePath);
+    if (realpathSync.native(path) !== path) throw new Error('path followed a link');
+    const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    const stat = fstatSync(fd, { bigint: true });
+    if (!matches(stat, entry.identity)) {
+      closeSync(fd);
+      throw new Error('file changed');
+    }
+    const size = Number(stat.size);
+    if (!Number.isSafeInteger(size) || size < 0) {
+      closeSync(fd);
+      throw new Error('invalid size');
+    }
+    batchBytes += 9 + size;
+    if (batchBytes > ${UNFOLLOWED_READER_BATCH_BYTES}) {
+      closeSync(fd);
+      throw new Error('batch too large');
+    }
+    opened.push({ fd, size, identity: entry.identity });
+  }
+  for (const entry of opened) {
+    const frame = Buffer.alloc(9);
+    if (entry.fd < 0) {
+      frame[0] = 1;
+      writeSync(1, frame);
+      continue;
+    }
+    frame.writeBigUInt64BE(BigInt(entry.size), 1);
+    writeSync(1, frame);
+    const buffer = Buffer.allocUnsafe(Math.min(16384, Math.max(entry.size, 1)));
+    let offset = 0;
+    while (offset < entry.size) {
+      const count = readSync(entry.fd, buffer, 0, Math.min(buffer.length, entry.size - offset), offset);
+      if (count <= 0) throw new Error('short read');
+      writeSync(1, buffer, 0, count);
+      offset += count;
+    }
+    if (!matches(fstatSync(entry.fd, { bigint: true }), entry.identity)) {
+      throw new Error('file changed during read');
+    }
+  }
+  closeAll();
+} catch {
+  closeAll();
+  process.exit(10);
+}
+`;
   }
 });
 
 // packages/rn-dev-agent-core/dist/logger.js
 import { createWriteStream, mkdirSync as mkdirSync5, existsSync as existsSync6 } from "node:fs";
-import { join as join6 } from "node:path";
+import { join as join7 } from "node:path";
 import { tmpdir, homedir as homedir2 } from "node:os";
 function resolveLogPath() {
   if (process.argv.includes("--diagnostic-contract-probe"))
@@ -9764,18 +10044,18 @@ function resolveLogPath() {
     try {
       if (!existsSync6(pluginData))
         mkdirSync5(pluginData, { recursive: true });
-      return join6(pluginData, "cdp-bridge.log");
+      return join7(pluginData, "cdp-bridge.log");
     } catch {
     }
   }
-  const fallbackDir = join6(homedir2(), ".claude", "logs");
+  const fallbackDir = join7(homedir2(), ".claude", "logs");
   try {
     if (!existsSync6(fallbackDir))
       mkdirSync5(fallbackDir, { recursive: true });
-    return join6(fallbackDir, "rn-dev-agent-cdp-bridge.log");
+    return join7(fallbackDir, "rn-dev-agent-cdp-bridge.log");
   } catch {
   }
-  return join6(tmpdir(), "rn-dev-agent-cdp-bridge.log");
+  return join7(tmpdir(), "rn-dev-agent-cdp-bridge.log");
 }
 function getLogStream() {
   if (!logFilePath)
@@ -9841,7 +10121,7 @@ var init_logger = __esm({
 // packages/rn-dev-agent-core/dist/domain/action-db.js
 import { createRequire } from "node:module";
 import { existsSync as existsSync7, mkdirSync as mkdirSync6, readdirSync as readdirSync3, readFileSync as readFileSync6 } from "node:fs";
-import { dirname as dirname6, join as join7 } from "node:path";
+import { dirname as dirname6, join as join8 } from "node:path";
 function loadSqlite() {
   try {
     const mod = _require("node:sqlite");
@@ -9855,7 +10135,7 @@ function openActionDb(projectRoot, opts = {}) {
   if (!Ctor)
     return null;
   try {
-    const dbPath = join7(sessionStateDirectory(projectRoot), "actions.db");
+    const dbPath = join8(sessionStateDirectory(projectRoot), "actions.db");
     mkdirSync6(dirname6(dbPath), { recursive: true });
     const db = new Ctor(dbPath);
     db.exec(SCHEMA);
@@ -9998,7 +10278,7 @@ function openActionDb(projectRoot, opts = {}) {
         return row.cnt;
       },
       migrateSidecars() {
-        const stateDir = join7(projectRoot, ".rn-agent", "state");
+        const stateDir = join8(projectRoot, ".rn-agent", "state");
         if (!existsSync7(stateDir))
           return { migrated: 0 };
         let migrated = 0;
@@ -10010,7 +10290,7 @@ function openActionDb(projectRoot, opts = {}) {
           if (exists)
             continue;
           try {
-            const parsed = JSON.parse(readFileSync6(join7(stateDir, f), "utf8"));
+            const parsed = JSON.parse(readFileSync6(join8(stateDir, f), "utf8"));
             if (parsed?.schemaVersion !== 1)
               continue;
             if (!Array.isArray(parsed.runHistory) || !Array.isArray(parsed.repairHistory)) {
@@ -10181,8 +10461,8 @@ var init_worktree_repair_remedy = __esm({
 
 // packages/rn-dev-agent-core/dist/session/worktree-inheritance.js
 import { spawnSync } from "node:child_process";
-import { closeSync as closeSync3, constants as constants4, existsSync as existsSync8, fstatSync as fstatSync3, lstatSync as lstatSync5, mkdirSync as mkdirSync7, openSync as openSync3, readFileSync as readFileSync7, readlinkSync as readlinkSync2, realpathSync as realpathSync4, renameSync as renameSync2, statSync as statSync3, symlinkSync as symlinkSync2, unlinkSync as unlinkSync4 } from "node:fs";
-import { dirname as dirname8, isAbsolute as isAbsolute2, join as join8, relative as relative2, resolve as resolve4, sep as sep5 } from "node:path";
+import { closeSync as closeSync3, constants as constants4, existsSync as existsSync8, fstatSync as fstatSync3, lstatSync as lstatSync6, mkdirSync as mkdirSync7, openSync as openSync3, readFileSync as readFileSync7, readlinkSync as readlinkSync2, realpathSync as realpathSync4, renameSync as renameSync2, statSync as statSync3, symlinkSync as symlinkSync2, unlinkSync as unlinkSync4 } from "node:fs";
+import { dirname as dirname8, isAbsolute as isAbsolute3, join as join9, relative as relative2, resolve as resolve4, sep as sep5 } from "node:path";
 function gitEnvironment() {
   const env = { ...process.env };
   for (const key of GIT_ENV_OVERRIDES)
@@ -10211,13 +10491,13 @@ function contained(parent, child) {
   if (parent === child)
     return true;
   const rel = relative2(parent, child);
-  return rel !== "" && !rel.startsWith(`..${sep5}`) && rel !== ".." && !isAbsolute2(rel);
+  return rel !== "" && !rel.startsWith(`..${sep5}`) && rel !== ".." && !isAbsolute3(rel);
 }
 function toPosix(path) {
   return sep5 === "/" ? path : path.split(sep5).join("/");
 }
 function isRnAppRoot(directory) {
-  const manifest = join8(directory, "package.json");
+  const manifest = join9(directory, "package.json");
   try {
     const parsed = JSON.parse(readFileSync7(manifest, "utf8"));
     const deps = { ...parsed.dependencies, ...parsed.devDependencies };
@@ -10226,64 +10506,62 @@ function isRnAppRoot(directory) {
     return false;
   }
 }
-function parseWorktreeRecords(porcelain) {
-  const records = [];
-  let current = null;
-  for (const line of porcelain.split("\n")) {
-    if (line.startsWith("worktree ")) {
-      if (current)
-        records.push(current);
-      current = { path: line.slice("worktree ".length), bare: false, prunable: false };
-      continue;
-    }
-    if (!current)
-      continue;
-    if (line === "bare")
-      current.bare = true;
-    if (line === "prunable" || line.startsWith("prunable "))
-      current.prunable = true;
-  }
-  if (current)
-    records.push(current);
-  return records;
+function parseFirstWorktreeRecord(porcelain) {
+  const separator = porcelain.indexOf("\n\n");
+  const block = separator === -1 ? porcelain : porcelain.slice(0, separator);
+  const lines = block.split("\n");
+  const header = lines[0];
+  if (!header?.startsWith("worktree "))
+    return null;
+  const path = header.slice("worktree ".length);
+  if (!path)
+    return null;
+  return {
+    path,
+    bare: lines.slice(1).includes("bare"),
+    prunable: lines.slice(1).some((line) => line === "prunable" || line.startsWith("prunable "))
+  };
 }
-function verifiedPrimaries(worktreeRoot, commonDir) {
+function verifiedPrimary(worktreeRoot, commonDir) {
   const listing = git(worktreeRoot, ["worktree", "list", "--porcelain"]);
   if (!listing.ok)
-    return [];
-  const verified = /* @__PURE__ */ new Set();
-  for (const record of parseWorktreeRecords(listing.stdout)) {
-    if (record.bare || record.prunable)
-      continue;
-    const candidate = canonical(record.path);
-    if (!candidate)
-      continue;
-    try {
-      if (!statSync3(candidate).isDirectory())
-        continue;
-    } catch {
-      continue;
-    }
-    const top = git(candidate, ["rev-parse", "--show-toplevel"]);
-    if (!top.ok || canonical(top.stdout) !== candidate)
-      continue;
-    const candidateGitDir = git(candidate, ["rev-parse", "--path-format=absolute", "--git-dir"]);
-    const candidateCommon = git(candidate, [
-      "rev-parse",
-      "--path-format=absolute",
-      "--git-common-dir"
-    ]);
-    if (!candidateGitDir.ok || !candidateCommon.ok)
-      continue;
-    const resolvedGitDir = canonical(candidateGitDir.stdout);
-    const resolvedCommon = canonical(candidateCommon.stdout);
-    if (!resolvedGitDir || !resolvedCommon)
-      continue;
-    if (resolvedCommon !== commonDir || resolvedGitDir !== resolvedCommon)
-      continue;
-    verified.add(candidate);
+    return null;
+  const main = parseFirstWorktreeRecord(listing.stdout);
+  if (!main || main.bare || main.prunable)
+    return null;
+  const candidate = canonical(main.path);
+  if (!candidate)
+    return null;
+  const topLevelBefore = captureDirectoryIdentity(candidate);
+  const commonDirBefore = captureDirectoryIdentity(commonDir);
+  if (!topLevelBefore || !commonDirBefore)
+    return null;
+  const top = git(candidate, ["rev-parse", "--show-toplevel"]);
+  if (!top.ok || canonical(top.stdout) !== candidate)
+    return null;
+  const candidateGitDir = git(candidate, ["rev-parse", "--path-format=absolute", "--git-dir"]);
+  const candidateCommon = git(candidate, [
+    "rev-parse",
+    "--path-format=absolute",
+    "--git-common-dir"
+  ]);
+  if (!candidateGitDir.ok || !candidateCommon.ok)
+    return null;
+  const resolvedGitDir = canonical(candidateGitDir.stdout);
+  const resolvedCommon = canonical(candidateCommon.stdout);
+  if (!resolvedGitDir || !resolvedCommon)
+    return null;
+  if (resolvedCommon !== commonDir || resolvedGitDir !== resolvedCommon)
+    return null;
+  const topLevelAfter = captureDirectoryIdentity(candidate);
+  const commonDirAfter = captureDirectoryIdentity(commonDir);
+  if (!topLevelAfter || !commonDirAfter || topLevelBefore.identity.dev !== topLevelAfter.identity.dev || topLevelBefore.identity.ino !== topLevelAfter.identity.ino || commonDirBefore.identity.dev !== commonDirAfter.identity.dev || commonDirBefore.identity.ino !== commonDirAfter.identity.ino) {
+    return null;
   }
-  return [...verified];
+  return {
+    root: candidate,
+    identity: { topLevel: topLevelAfter, commonDir: commonDirAfter }
+  };
 }
 function resolveWorktreeLayout(input) {
   const cwd = canonical(input.cwd);
@@ -10326,18 +10604,16 @@ function resolveWorktreeLayout(input) {
   };
   if (base.kind === "primary")
     return base;
-  const primaries = verifiedPrimaries(worktreeRoot, commonDir);
-  if (primaries.length === 0)
+  const primary = verifiedPrimary(worktreeRoot, commonDir);
+  if (!primary)
     return { ...base, refusal: "NO_PRIMARY" };
-  if (primaries.length > 1)
-    return { ...base, refusal: "AMBIGUOUS" };
-  const primaryRoot = primaries[0];
-  const primaryAppRoot = appRelative === "." ? primaryRoot : join8(primaryRoot, appRelative);
+  const primaryRoot = primary.root;
+  const primaryAppRoot = appRelative === "." ? primaryRoot : join9(primaryRoot, appRelative);
   if (!contained(primaryRoot, primaryAppRoot))
     return { ...base, refusal: "PRIMARY_APP_MISSING" };
   let primaryAppReal = null;
   try {
-    if (lstatSync5(primaryAppRoot).isDirectory())
+    if (lstatSync6(primaryAppRoot).isDirectory())
       primaryAppReal = canonical(primaryAppRoot);
   } catch {
     primaryAppReal = null;
@@ -10345,17 +10621,19 @@ function resolveWorktreeLayout(input) {
   if (!primaryAppReal || !contained(primaryRoot, primaryAppReal)) {
     return { ...base, refusal: "PRIMARY_APP_MISSING" };
   }
-  return { ...base, primaryRoot, primaryAppRoot };
+  const linked = { ...base, primaryRoot, primaryAppRoot };
+  Object.defineProperty(linked, repositoryIdentityEvidence, { value: primary.identity });
+  return linked;
 }
 function classifySource(path, type, boundary) {
   const rel = relative2(boundary, path);
-  if (rel === ".." || rel.startsWith(`..${sep5}`) || isAbsolute2(rel)) {
+  if (rel === ".." || rel.startsWith(`..${sep5}`) || isAbsolute3(rel)) {
     return { state: "WRONG_TYPE" };
   }
   const paths = [boundary];
   let cursor = boundary;
   for (const component of rel.split(sep5).filter(Boolean)) {
-    cursor = join8(cursor, component);
+    cursor = join9(cursor, component);
     paths.push(cursor);
   }
   const inspect = () => {
@@ -10363,7 +10641,7 @@ function classifySource(path, type, boundary) {
     for (let index = 0; index < paths.length; index += 1) {
       let node;
       try {
-        node = lstatSync5(paths[index], { bigint: true });
+        node = lstatSync6(paths[index], { bigint: true });
       } catch (error) {
         const code = error.code;
         if (code === "EACCES" || code === "EPERM")
@@ -10404,10 +10682,13 @@ function sourceLeafMatchesIdentity(evidence, identity) {
   const leaf = evidence?.at(-1);
   return leaf?.dev === identity.dev && leaf.ino === identity.ino;
 }
+function repositoryIdentityUnchanged(identity) {
+  return currentIdentityMatches(identity.topLevel.path, identity.topLevel.identity, "directory") && currentIdentityMatches(identity.commonDir.path, identity.commonDir.identity, "directory") && canonical(identity.topLevel.path) === identity.topLevel.path && canonical(identity.commonDir.path) === identity.commonDir.path;
+}
 function classifyDestination(path, sourcePath, type) {
   let link;
   try {
-    link = lstatSync5(path, { bigint: true });
+    link = lstatSync6(path, { bigint: true });
   } catch (error) {
     const code = error.code;
     if (code === "EACCES" || code === "EPERM")
@@ -10439,7 +10720,7 @@ function identityOf(stat) {
 }
 function lstatIfPresent(path) {
   try {
-    return lstatSync5(path, { bigint: true });
+    return lstatSync6(path, { bigint: true });
   } catch (error) {
     if (error.code === "ENOENT")
       return null;
@@ -10478,8 +10759,12 @@ function openUnfollowedDirectory(path, expected) {
 }
 function resolveReadableActionCorpus(projectRoot, dependencies = {}) {
   const root2 = canonical(projectRoot) ?? resolve4(projectRoot);
-  const rnAgentDir = join8(root2, ".rn-agent");
-  const actionsDir = join8(rnAgentDir, "actions");
+  const projectRootEntry = captureDirectoryIdentity(root2);
+  if (!projectRootEntry)
+    return { status: "absent" };
+  const projectRootIdentity = projectRootEntry.identity;
+  const rnAgentDir = join9(root2, ".rn-agent");
+  const actionsDir = join9(rnAgentDir, "actions");
   const rnAgentStat = lstatIfPresent(rnAgentDir);
   if (!rnAgentStat)
     return { status: "absent" };
@@ -10509,10 +10794,15 @@ function resolveReadableActionCorpus(projectRoot, dependencies = {}) {
     if (!directoryIdentityUnchanged(actionsDir, identity)) {
       return refuseReplacedActions(actionsDir);
     }
+    if (!directoryIdentityUnchanged(root2, projectRootIdentity)) {
+      return refuseReplacedActions(actionsDir);
+    }
     return {
       status: "owned-directory",
       projectRoot: root2,
+      projectRootIdentity,
       rnAgentDir,
+      rnAgentIdentity,
       actionsDir,
       identity
     };
@@ -10521,8 +10811,14 @@ function resolveReadableActionCorpus(projectRoot, dependencies = {}) {
   if (!("kind" in layout) || layout.kind !== "linked" || layout.refusal || !layout.primaryRoot || !layout.primaryAppRoot) {
     return refuseForeignActions(actionsDir);
   }
-  const primaryRnAgentDir = join8(layout.primaryAppRoot, ".rn-agent");
-  const primaryActionsDir = join8(primaryRnAgentDir, "actions");
+  const primaryIdentity = layout[repositoryIdentityEvidence];
+  if (!primaryIdentity)
+    return refuseReplacedActions(actionsDir);
+  const linkedIdentity = captureLinkedRepositoryIdentity(layout);
+  if (!linkedIdentity)
+    return refuseReplacedActions(actionsDir);
+  const primaryRnAgentDir = join9(layout.primaryAppRoot, ".rn-agent");
+  const primaryActionsDir = join9(primaryRnAgentDir, "actions");
   const planned = planResource(layout, SHAREABLE_RESOURCES[0]);
   if (planned.destinationState === "LINK_STALE")
     return refuseDanglingActions(actionsDir);
@@ -10546,31 +10842,24 @@ function resolveReadableActionCorpus(projectRoot, dependencies = {}) {
   }
   dependencies.afterTargetOpen?.();
   const plannedAfter = planResource(layout, SHAREABLE_RESOURCES[0]);
-  if (plannedAfter.state !== "LINK_VALID_SAFE" || !plannedAfter.evidence || plannedAfter.evidence.dev !== planned.evidence.dev || plannedAfter.evidence.ino !== planned.evidence.ino || plannedAfter.sourceState !== "AVAILABLE" || !sameSourceEvidence(planned.sourceEvidence, plannedAfter.sourceEvidence) || !sourceLeafMatchesIdentity(planned.sourceEvidence, targetIdentity) || !sourceLeafMatchesIdentity(plannedAfter.sourceEvidence, targetIdentity) || !directoryIdentityUnchanged(rnAgentDir, rnAgentIdentity)) {
+  if (plannedAfter.state !== "LINK_VALID_SAFE" || !plannedAfter.evidence || plannedAfter.evidence.dev !== planned.evidence.dev || plannedAfter.evidence.ino !== planned.evidence.ino || plannedAfter.sourceState !== "AVAILABLE" || !sameSourceEvidence(planned.sourceEvidence, plannedAfter.sourceEvidence) || !sourceLeafMatchesIdentity(planned.sourceEvidence, targetIdentity) || !sourceLeafMatchesIdentity(plannedAfter.sourceEvidence, targetIdentity) || !directoryIdentityUnchanged(root2, projectRootIdentity) || !directoryIdentityUnchanged(rnAgentDir, rnAgentIdentity) || !linkedRepositoryIdentityUnchanged(linkedIdentity) || !repositoryIdentityUnchanged(primaryIdentity)) {
     return refuseReplacedActions(actionsDir);
   }
   return {
     status: "approved-inherited",
     projectRoot: root2,
+    projectRootIdentity,
     rnAgentDir,
+    rnAgentIdentity,
     actionsDir,
     targetDir,
     linkIdentity: planned.evidence,
-    targetIdentity
+    targetIdentity,
+    primaryRoot: layout.primaryRoot,
+    commonDir: layout.commonDir,
+    primaryIdentity,
+    linkedIdentity
   };
-}
-function sameReadableActionCorpus(left, right) {
-  if (left.status !== right.status)
-    return false;
-  if (left.status === "absent")
-    return true;
-  if (left.status === "refused") {
-    return right.status === "refused" && left.reason === right.reason;
-  }
-  if (left.status === "owned-directory" && right.status === "owned-directory") {
-    return left.actionsDir === right.actionsDir && left.identity.dev === right.identity.dev && left.identity.ino === right.identity.ino;
-  }
-  return left.status === "approved-inherited" && right.status === "approved-inherited" && left.actionsDir === right.actionsDir && left.targetDir === right.targetDir && left.linkIdentity.dev === right.linkIdentity.dev && left.linkIdentity.ino === right.linkIdentity.ino && left.targetIdentity.dev === right.targetIdentity.dev && left.targetIdentity.ino === right.targetIdentity.ino;
 }
 function readableActionsSnapshot(corpus) {
   if (corpus.status === "owned-directory") {
@@ -10580,6 +10869,110 @@ function readableActionsSnapshot(corpus) {
     return { directory: corpus.targetDir, identity: corpus.targetIdentity };
   }
   return null;
+}
+function freezeIdentity(identity) {
+  return Object.freeze({ ...identity });
+}
+function captureDirectoryIdentity(path) {
+  const stat = lstatIfPresent(path);
+  if (!stat || stat.isSymbolicLink() || !stat.isDirectory())
+    return null;
+  return Object.freeze({ path, identity: freezeIdentity(identityOf(stat)) });
+}
+function captureFileIdentity(path) {
+  const stat = lstatIfPresent(path);
+  if (!stat || stat.isSymbolicLink() || !stat.isFile())
+    return null;
+  return Object.freeze({ path, identity: freezeIdentity(identityOf(stat)) });
+}
+function captureLinkedRepositoryIdentity(layout) {
+  const worktreeRoot = captureDirectoryIdentity(layout.worktreeRoot);
+  const gitEntry = captureFileIdentity(join9(layout.worktreeRoot, ".git"));
+  const gitDir = captureDirectoryIdentity(layout.gitDir);
+  if (!worktreeRoot || !gitEntry || !gitDir)
+    return null;
+  return { worktreeRoot, gitEntry, gitDir };
+}
+function linkedRepositoryIdentityUnchanged(identity) {
+  return currentIdentityMatches(identity.worktreeRoot.path, identity.worktreeRoot.identity, "directory") && currentIdentityMatches(identity.gitEntry.path, identity.gitEntry.identity, "file") && currentIdentityMatches(identity.gitDir.path, identity.gitDir.identity, "directory");
+}
+function captureReadableActionOperationSnapshot(corpus) {
+  const operationId = `${process.pid}:${++readableActionOperationSequence}`;
+  if (corpus.status === "owned-directory") {
+    if (!directoryIdentityUnchanged(corpus.projectRoot, corpus.projectRootIdentity) || !directoryIdentityUnchanged(corpus.rnAgentDir, corpus.rnAgentIdentity)) {
+      throw new Error(refuseReplacedActions(corpus.actionsDir).reason);
+    }
+    return Object.freeze({
+      operationId,
+      kind: corpus.status,
+      projectRoot: corpus.projectRoot,
+      projectRootIdentity: freezeIdentity(corpus.projectRootIdentity),
+      rnAgentDir: corpus.rnAgentDir,
+      rnAgentIdentity: freezeIdentity(corpus.rnAgentIdentity),
+      actionsDir: corpus.actionsDir,
+      directory: corpus.actionsDir,
+      directoryIdentity: freezeIdentity(corpus.identity)
+    });
+  }
+  if (corpus.status === "approved-inherited") {
+    if (!directoryIdentityUnchanged(corpus.projectRoot, corpus.projectRootIdentity) || !directoryIdentityUnchanged(corpus.rnAgentDir, corpus.rnAgentIdentity) || !repositoryIdentityUnchanged(corpus.primaryIdentity)) {
+      throw new Error(refuseReplacedActions(corpus.actionsDir).reason);
+    }
+    return Object.freeze({
+      operationId,
+      kind: corpus.status,
+      projectRoot: corpus.projectRoot,
+      projectRootIdentity: freezeIdentity(corpus.projectRootIdentity),
+      rnAgentDir: corpus.rnAgentDir,
+      rnAgentIdentity: freezeIdentity(corpus.rnAgentIdentity),
+      actionsDir: corpus.actionsDir,
+      directory: corpus.targetDir,
+      directoryIdentity: freezeIdentity(corpus.targetIdentity),
+      linkIdentity: freezeIdentity(corpus.linkIdentity),
+      linkedIdentity: Object.freeze({
+        worktreeRoot: Object.freeze({
+          path: corpus.linkedIdentity.worktreeRoot.path,
+          identity: freezeIdentity(corpus.linkedIdentity.worktreeRoot.identity)
+        }),
+        gitEntry: Object.freeze({
+          path: corpus.linkedIdentity.gitEntry.path,
+          identity: freezeIdentity(corpus.linkedIdentity.gitEntry.identity)
+        }),
+        gitDir: Object.freeze({
+          path: corpus.linkedIdentity.gitDir.path,
+          identity: freezeIdentity(corpus.linkedIdentity.gitDir.identity)
+        })
+      }),
+      primaryIdentity: Object.freeze({
+        topLevel: Object.freeze({
+          path: corpus.primaryIdentity.topLevel.path,
+          identity: freezeIdentity(corpus.primaryIdentity.topLevel.identity)
+        }),
+        commonDir: Object.freeze({
+          path: corpus.primaryIdentity.commonDir.path,
+          identity: freezeIdentity(corpus.primaryIdentity.commonDir.identity)
+        })
+      })
+    });
+  }
+  return null;
+}
+function currentIdentityMatches(path, expected, kind) {
+  const current = lstatIfPresent(path);
+  if (!current)
+    return false;
+  const typeMatches = kind === "directory" ? current.isDirectory() : kind === "file" ? current.isFile() && !current.isSymbolicLink() : current.isSymbolicLink();
+  return typeMatches && String(current.dev) === expected.dev && String(current.ino) === expected.ino;
+}
+function assertReadableActionOperationUnchanged(snapshot) {
+  let unchanged = canonical(snapshot.projectRoot) === snapshot.projectRoot && currentIdentityMatches(snapshot.projectRoot, snapshot.projectRootIdentity, "directory") && currentIdentityMatches(snapshot.rnAgentDir, snapshot.rnAgentIdentity, "directory");
+  if (snapshot.kind === "owned-directory") {
+    unchanged = unchanged && currentIdentityMatches(snapshot.actionsDir, snapshot.directoryIdentity, "directory") && canonical(snapshot.actionsDir) === snapshot.directory;
+  } else {
+    unchanged = unchanged && Boolean(snapshot.linkIdentity && snapshot.linkedIdentity && snapshot.primaryIdentity) && currentIdentityMatches(snapshot.actionsDir, snapshot.linkIdentity, "symlink") && currentIdentityMatches(snapshot.directory, snapshot.directoryIdentity, "directory") && currentIdentityMatches(snapshot.linkedIdentity.worktreeRoot.path, snapshot.linkedIdentity.worktreeRoot.identity, "directory") && currentIdentityMatches(snapshot.linkedIdentity.gitEntry.path, snapshot.linkedIdentity.gitEntry.identity, "file") && currentIdentityMatches(snapshot.linkedIdentity.gitDir.path, snapshot.linkedIdentity.gitDir.identity, "directory") && currentIdentityMatches(snapshot.primaryIdentity.topLevel.path, snapshot.primaryIdentity.topLevel.identity, "directory") && currentIdentityMatches(snapshot.primaryIdentity.commonDir.path, snapshot.primaryIdentity.commonDir.identity, "directory") && canonical(snapshot.actionsDir) === snapshot.directory && canonical(snapshot.directory) === snapshot.directory && canonical(snapshot.primaryIdentity.topLevel.path) === snapshot.primaryIdentity.topLevel.path && canonical(snapshot.primaryIdentity.commonDir.path) === snapshot.primaryIdentity.commonDir.path;
+  }
+  if (!unchanged)
+    throw new Error(refuseReplacedActions(snapshot.actionsDir).reason);
 }
 function isTracked(worktreeRoot, relativePath) {
   const listed = git(worktreeRoot, ["ls-files", "--", relativePath]);
@@ -10607,9 +11000,9 @@ function destinationRelative(layout, resource) {
 }
 function planResource(layout, resource) {
   const anchor = anchorFor(layout, resource);
-  const destination = join8(anchor.local, resource.path);
+  const destination = join9(anchor.local, resource.path);
   const destinationRel = destinationRelative(layout, resource);
-  const source = anchor.source ? join8(anchor.source, resource.path) : void 0;
+  const source = anchor.source ? join9(anchor.source, resource.path) : void 0;
   const sourceBoundary = layout.primaryRoot;
   const sourceBefore = source && sourceBoundary ? classifySource(source, resource.type, sourceBoundary) : { state: "MISSING" };
   const { state: destinationState, evidence } = classifyDestination(destination, sourceBefore.state === "AVAILABLE" ? source : void 0, resource.type);
@@ -10767,20 +11160,20 @@ function ignoreRemediation(destination) {
   return `Git would see this path. Add the file-form rule "/${destination}" (no trailing slash) to your own local ignore policy, then re-run.`;
 }
 function classifyLegacyParent(layout, localAnchor, parent) {
-  const localParent = join8(localAnchor, parent);
+  const localParent = join9(localAnchor, parent);
   let stats;
   try {
-    stats = lstatSync5(localParent);
+    stats = lstatSync6(localParent);
   } catch {
     return null;
   }
   if (!stats.isSymbolicLink())
     return null;
   const resolved = canonical(localParent);
-  const expected = layout.primaryAppRoot ? canonical(join8(layout.primaryAppRoot, parent)) : null;
+  const expected = layout.primaryAppRoot ? canonical(join9(layout.primaryAppRoot, parent)) : null;
   return resolved && expected && resolved === expected ? "expected" : "foreign";
 }
-var SHAREABLE_RESOURCES, GIT_ENV_OVERRIDES, LOCAL_CONTENT;
+var SHAREABLE_RESOURCES, repositoryIdentityEvidence, GIT_ENV_OVERRIDES, readableActionOperationSequence, LOCAL_CONTENT;
 var init_worktree_inheritance = __esm({
   "packages/rn-dev-agent-core/dist/session/worktree-inheritance.js"() {
     "use strict";
@@ -10796,6 +11189,7 @@ var init_worktree_inheritance = __esm({
         hosts: ["claude", "codex"]
       }
     ];
+    repositoryIdentityEvidence = /* @__PURE__ */ Symbol("repositoryIdentityEvidence");
     GIT_ENV_OVERRIDES = [
       "GIT_DIR",
       "GIT_WORK_TREE",
@@ -10804,31 +11198,29 @@ var init_worktree_inheritance = __esm({
       "GIT_OBJECT_DIRECTORY",
       "GIT_NAMESPACE"
     ];
+    readableActionOperationSequence = 0;
     LOCAL_CONTENT = "Local real content is present; it is never overwritten and is not shared.";
   }
 });
 
 // packages/rn-dev-agent-core/dist/domain/action-store.js
-import { existsSync as existsSync9, lstatSync as lstatSync6, readFileSync as readFileSync8, statSync as statSync4, unlinkSync as unlinkSync5 } from "node:fs";
-import { basename as basename4, dirname as dirname9, isAbsolute as isAbsolute3, join as join9, relative as relative3, resolve as resolve5, sep as sep6 } from "node:path";
+import { existsSync as existsSync9, lstatSync as lstatSync7, readFileSync as readFileSync8, statSync as statSync4, unlinkSync as unlinkSync5 } from "node:fs";
+import { basename as basename4, dirname as dirname9, isAbsolute as isAbsolute4, join as join10, relative as relative3, resolve as resolve5, sep as sep6 } from "node:path";
 function assertOwnedActionCorpus(projectRoot) {
-  for (const path of [join9(projectRoot, ".rn-agent"), join9(projectRoot, ".rn-agent", "actions")]) {
+  for (const path of [join10(projectRoot, ".rn-agent"), join10(projectRoot, ".rn-agent", "actions")]) {
     const stat = lstatIfPresent2(path);
     if (stat?.isSymbolicLink()) {
       throw new Error(`Refusing learned-action corpus symlink at ${path}.`);
     }
   }
 }
-function assertStableReadableCorpus(projectRoot, expected) {
-  const after = resolveReadableActionCorpus(projectRoot);
-  if (!sameReadableActionCorpus(expected, after)) {
-    const actionsDir = join9(projectRoot, ".rn-agent", "actions");
-    throw new Error(`Refusing replaced learned-action corpus symlink at ${actionsDir}.`);
-  }
+function assertReadableActionLoadContextStable(context) {
+  assertReadableActionOperationUnchanged(context.operation);
+  assertUnfollowedFileSnapshotUnchanged(context.fileSnapshot);
 }
 function lstatIfPresent2(path) {
   try {
-    return lstatSync6(path);
+    return lstatSync7(path);
   } catch (err) {
     if (err.code === "ENOENT")
       return null;
@@ -10844,18 +11236,78 @@ function actionFileExists(path) {
   }
   return true;
 }
-function openReadableActionLoadContext(projectRoot) {
+function referencedActionPath(parentFile, reference) {
+  if (isAbsolute4(reference) || reference.split(/[\\/]/).includes("..") || !/\.ya?ml$/i.test(reference)) {
+    return null;
+  }
+  const child = join10(dirname9(parentFile), reference);
+  if (child === ".." || child.startsWith(`..${sep6}`) || isAbsolute4(child))
+    return null;
+  return child;
+}
+function prefetchRunFlowFiles(initial, readFiles, fileSnapshot) {
+  const fileContents = new Map(initial);
+  let frontier = [...fileContents.entries()];
+  for (let depth = 0; depth < 5 && frontier.length > 0; depth += 1) {
+    const pending = /* @__PURE__ */ new Set();
+    for (const [parentFile, text] of frontier) {
+      for (const reference of collectRunFlowFileReferences(text)) {
+        const child = referencedActionPath(parentFile, reference);
+        if (child && !fileContents.has(child))
+          pending.add(child);
+      }
+    }
+    const paths = selectExistingUnfollowedSnapshotFiles(fileSnapshot, [...pending].sort());
+    if (paths.length === 0)
+      break;
+    const contents = readUnfollowedSnapshotFiles(fileSnapshot, paths, readFiles);
+    frontier = [];
+    paths.forEach((path, index) => {
+      const text = contents[index];
+      fileContents.set(path, text);
+      frontier.push([path, text]);
+    });
+  }
+  return fileContents;
+}
+function openReadableActionLoadContext(projectRoot, dependencies = {}) {
   const corpus = resolveReadableActionCorpus(projectRoot);
   if (corpus.status === "refused")
     throw new Error(corpus.reason);
   if (corpus.status !== "owned-directory" && corpus.status !== "approved-inherited")
     return null;
   const snapshot = readableActionsSnapshot(corpus);
-  if (!snapshot)
+  const operation = captureReadableActionOperationSnapshot(corpus);
+  if (!snapshot || !operation)
     return null;
   const files = listUnfollowedDirectory(snapshot.directory, snapshot.identity);
-  assertStableReadableCorpus(projectRoot, corpus);
-  return { projectRoot, corpus, snapshot, files };
+  const requestedFiles = dependencies.actionId ? [`${dependencies.actionId}.yaml`, `${dependencies.actionId}.yml`] : files;
+  const readableFiles = requestedFiles.filter((file) => /\.ya?ml$/.test(file) && files.includes(file));
+  const readFiles = dependencies.readFiles ?? readUnfollowedFiles;
+  const fileSnapshot = createUnfollowedFileSnapshot(snapshot.directory, snapshot.identity);
+  const contents = readUnfollowedSnapshotFiles(fileSnapshot, readableFiles, readFiles);
+  const fileContents = /* @__PURE__ */ new Map();
+  readableFiles.forEach((file, index) => {
+    fileContents.set(file, contents[index]);
+  });
+  const completeFileContents = dependencies.includeRunFlowFiles ? prefetchRunFlowFiles(fileContents, readFiles, fileSnapshot) : fileContents;
+  assertReadableActionOperationUnchanged(operation);
+  assertUnfollowedFileSnapshotUnchanged(fileSnapshot);
+  return {
+    projectRoot,
+    corpus,
+    snapshot,
+    operation,
+    files,
+    fileContents: completeFileContents,
+    fileSnapshot
+  };
+}
+function actionTextFromContext(context, fileName) {
+  const text = context.fileContents.get(fileName);
+  if (text !== void 0)
+    return text;
+  throw new Error(`Refusing inherited action symlink at ${context.snapshot.directory}/${fileName}.`);
 }
 function resolveActionFileNameFromContext(actionId, context) {
   const fileName = `${actionId}.yaml`;
@@ -10875,15 +11327,18 @@ function resolveActionFileNameFromContext(actionId, context) {
 }
 function resolveActionPath(projectRoot, actionId) {
   assertValidActionId(actionId, "resolveActionPath");
-  const context = openReadableActionLoadContext(projectRoot);
+  const context = openReadableActionLoadContext(projectRoot, {
+    actionId,
+    includeRunFlowFiles: false
+  });
   if (!context)
     return null;
   const fileName = resolveActionFileNameFromContext(actionId, context);
   if (!fileName)
     return null;
-  readUnfollowedFile(context.snapshot.directory, context.snapshot.identity, fileName);
-  assertStableReadableCorpus(projectRoot, context.corpus);
-  return join9(context.corpus.actionsDir, fileName);
+  actionTextFromContext(context, fileName);
+  assertReadableActionLoadContextStable(context);
+  return join10(context.corpus.actionsDir, fileName);
 }
 function splitYaml(text) {
   const allLines = text.split("\n");
@@ -10946,12 +11401,13 @@ function joinYaml(parts) {
 }
 function captureActionFromContext(context, actionId) {
   assertValidActionId(actionId, "loadAction");
+  assertReadableActionLoadContextStable(context);
   const fileName = resolveActionFileNameFromContext(actionId, context);
   if (!fileName)
     return null;
-  const { corpus, projectRoot, snapshot } = context;
-  const filePath = join9(corpus.actionsDir, fileName);
-  const text = readUnfollowedFile(snapshot.directory, snapshot.identity, fileName);
+  const { corpus, snapshot } = context;
+  const filePath = join10(corpus.actionsDir, fileName);
+  const text = actionTextFromContext(context, fileName);
   const metadata = parseM7Header(text, actionId);
   if (metadata)
     assertActionMetadataIdentity(filePath, metadata);
@@ -10962,10 +11418,14 @@ function captureActionFromContext(context, actionId) {
       flowRoot: snapshot.directory,
       readFileFn: (path) => {
         const child = relative3(snapshot.directory, path);
-        if (child === "" || child === ".." || child.startsWith(`..${sep6}`) || isAbsolute3(child)) {
+        if (child === "" || child === ".." || child.startsWith(`..${sep6}`) || isAbsolute4(child)) {
           throw new Error(`Refusing action flow outside ${snapshot.directory}.`);
         }
-        return readUnfollowedFile(snapshot.directory, snapshot.identity, child);
+        const text2 = context.fileContents.get(child);
+        if (text2 === void 0) {
+          throw new Error(`Refusing inherited action symlink at ${snapshot.directory}/${child}.`);
+        }
+        return text2;
       },
       realpathFn: (path) => resolve5(path)
     });
@@ -10979,7 +11439,7 @@ function captureActionFromContext(context, actionId) {
   } catch (err) {
     replay = { ok: false, error: err instanceof Error ? err.message : String(err) };
   }
-  assertStableReadableCorpus(projectRoot, corpus);
+  assertReadableActionLoadContextStable(context);
   return { filePath, yamlText: text, metadata, replay };
 }
 function captureActionFromPath(path) {
@@ -10991,7 +11451,10 @@ function captureActionFromPath(path) {
     return null;
   }
   const actionId = basename4(absolutePath).replace(/\.ya?ml$/i, "");
-  const context = openReadableActionLoadContext(dirname9(dirname9(actionsDir)));
+  const context = openReadableActionLoadContext(dirname9(dirname9(actionsDir)), {
+    actionId,
+    includeRunFlowFiles: true
+  });
   if (!context)
     return null;
   const action = captureActionFromContext(context, actionId);
@@ -11020,7 +11483,7 @@ function captureMigrationPathIdentity(filePath) {
     { path: actionsDir, kind: "directory" },
     { path: filePath, kind: "file" }
   ].map(({ path, kind }) => {
-    const stat = lstatSync6(path);
+    const stat = lstatSync7(path);
     const valid = !stat.isSymbolicLink() && (kind === "directory" ? stat.isDirectory() : stat.isFile());
     if (!valid)
       throw new Error(`Refusing changed learned-action path at ${path}.`);
@@ -11030,7 +11493,7 @@ function captureMigrationPathIdentity(filePath) {
 function migrationPathIdentityMatches(entries) {
   try {
     return entries.every((entry) => {
-      const stat = lstatSync6(entry.path);
+      const stat = lstatSync7(entry.path);
       return !stat.isSymbolicLink() && stat.dev === entry.dev && stat.ino === entry.ino && (entry.kind === "directory" ? stat.isDirectory() : stat.isFile());
     });
   } catch {
@@ -11130,8 +11593,8 @@ var init_action_store = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/domain/action-engine-compat.js
-import { existsSync as existsSync10, lstatSync as lstatSync7, readdirSync as readdirSync4, realpathSync as realpathSync5 } from "node:fs";
-import { basename as basename5, dirname as dirname10, join as join10, resolve as resolve6 } from "node:path";
+import { existsSync as existsSync10, lstatSync as lstatSync8, readdirSync as readdirSync4, realpathSync as realpathSync5 } from "node:fs";
+import { basename as basename5, dirname as dirname10, join as join11, resolve as resolve6 } from "node:path";
 function actionEnginePinRefusal(enginePin) {
   if (!enginePin) {
     return `Action is not migrated to ${ACTION_ENGINE_PIN} or newer. Run node <plugin-root>/rn-dev-agent-core/dist/maestro-runner-pin.js migrate-actions --root <app> before replay. Incompatible actions are terminal \u2014 no manual fallback.`;
@@ -11261,17 +11724,17 @@ function actionIdFromFile(name) {
   return name.replace(/\.ya?ml$/, "");
 }
 function inheritedActionsCorpusReason(projectRoot) {
-  const rnAgentDir = join10(projectRoot, ".rn-agent");
-  const actionsDir = join10(rnAgentDir, "actions");
+  const rnAgentDir = join11(projectRoot, ".rn-agent");
+  const actionsDir = join11(rnAgentDir, "actions");
   try {
-    if (lstatSync7(rnAgentDir).isSymbolicLink()) {
+    if (lstatSync8(rnAgentDir).isSymbolicLink()) {
       return `Refusing to migrate through inherited .rn-agent symlink at ${rnAgentDir}. Symlink-inherited corpora are never modified.`;
     }
   } catch {
     return null;
   }
   try {
-    if (lstatSync7(actionsDir).isSymbolicLink()) {
+    if (lstatSync8(actionsDir).isSymbolicLink()) {
       return `Refusing to migrate through inherited .rn-agent/actions symlink at ${actionsDir}. Symlink-inherited corpora are never modified.`;
     }
   } catch {
@@ -11280,7 +11743,7 @@ function inheritedActionsCorpusReason(projectRoot) {
   return null;
 }
 function migrateLearnedActions(projectRoot) {
-  const dir = join10(projectRoot, ".rn-agent", "actions");
+  const dir = join11(projectRoot, ".rn-agent", "actions");
   const inherited = inheritedActionsCorpusReason(projectRoot);
   if (inherited) {
     return [
@@ -11312,7 +11775,7 @@ function migrateLearnedActions(projectRoot) {
   }
   const results = [];
   for (const name of files) {
-    const path = join10(dir, name);
+    const path = join11(dir, name);
     const id = actionIdFromFile(name);
     try {
       const resolvedPath = resolveActionPath(projectRoot, id);
@@ -11330,7 +11793,7 @@ function migrateLearnedActions(projectRoot) {
       continue;
     }
     try {
-      if (lstatSync7(path).isSymbolicLink()) {
+      if (lstatSync8(path).isSymbolicLink()) {
         results.push({
           id,
           path,
@@ -11458,25 +11921,25 @@ var init_keyboard_guard = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/util/secure-state-file.js
-import { readFileSync as readFileSync10, writeFileSync as writeFileSync3, unlinkSync as unlinkSync6, mkdirSync as mkdirSync8, renameSync as renameSync3, lstatSync as lstatSync8 } from "node:fs";
-import { join as join11, dirname as dirname12 } from "node:path";
+import { readFileSync as readFileSync10, writeFileSync as writeFileSync3, unlinkSync as unlinkSync6, mkdirSync as mkdirSync8, renameSync as renameSync3, lstatSync as lstatSync9 } from "node:fs";
+import { join as join12, dirname as dirname12 } from "node:path";
 import { homedir as homedir3 } from "node:os";
 function getStateDir() {
   if (process.env.XDG_STATE_HOME) {
-    return join11(process.env.XDG_STATE_HOME, "rn-dev-agent");
+    return join12(process.env.XDG_STATE_HOME, "rn-dev-agent");
   }
   if (process.platform === "darwin") {
-    return join11(homedir3(), "Library", "Application Support", "rn-dev-agent");
+    return join12(homedir3(), "Library", "Application Support", "rn-dev-agent");
   }
-  return join11(homedir3(), ".rn-dev-agent");
+  return join12(homedir3(), ".rn-dev-agent");
 }
 function runnerStatePath(key) {
   const safe = key.replace(/[^A-Za-z0-9._:-]/g, "_");
-  return join11(getStateDir(), "runner-state", `${safe}.json`);
+  return join12(getStateDir(), "runner-state", `${safe}.json`);
 }
 function readJsonStateFile(path) {
   try {
-    const stat = lstatSync8(path);
+    const stat = lstatSync9(path);
     if (stat.isSymbolicLink())
       return null;
     return JSON.parse(readFileSync10(path, "utf8"));
@@ -11516,7 +11979,7 @@ var init_secure_state_file = __esm({
 
 // packages/rn-dev-agent-core/dist/runners/runtime-paths.js
 import { existsSync as existsSync11, statSync as statSync5 } from "node:fs";
-import { join as join12 } from "node:path";
+import { join as join13 } from "node:path";
 function compactUnique(paths) {
   const out = [];
   for (const path of paths) {
@@ -11539,21 +12002,21 @@ function candidateNativeRunnerDirs(runnerName, baseDir = import.meta.dirname) {
   const codexPluginRoot = process.env.RN_DEV_AGENT_CODEX_PLUGIN_ROOT;
   const claudePluginRoot = process.env.CLAUDE_PLUGIN_ROOT;
   return compactUnique([
-    runnerRoot ? join12(runnerRoot, runnerName) : void 0,
-    repoRoot ? join12(repoRoot, "packages", runnerName) : void 0,
-    repoRoot ? join12(repoRoot, "scripts", runnerName) : void 0,
-    codexPluginRoot ? join12(codexPluginRoot, "scripts", runnerName) : void 0,
-    claudePluginRoot ? join12(claudePluginRoot, "..", runnerName) : void 0,
-    claudePluginRoot ? join12(claudePluginRoot, "..", "..", "packages", runnerName) : void 0,
-    claudePluginRoot ? join12(claudePluginRoot, "..", "..", "scripts", runnerName) : void 0,
-    claudePluginRoot ? join12(claudePluginRoot, "scripts", runnerName) : void 0,
+    runnerRoot ? join13(runnerRoot, runnerName) : void 0,
+    repoRoot ? join13(repoRoot, "packages", runnerName) : void 0,
+    repoRoot ? join13(repoRoot, "scripts", runnerName) : void 0,
+    codexPluginRoot ? join13(codexPluginRoot, "scripts", runnerName) : void 0,
+    claudePluginRoot ? join13(claudePluginRoot, "..", runnerName) : void 0,
+    claudePluginRoot ? join13(claudePluginRoot, "..", "..", "packages", runnerName) : void 0,
+    claudePluginRoot ? join13(claudePluginRoot, "..", "..", "scripts", runnerName) : void 0,
+    claudePluginRoot ? join13(claudePluginRoot, "scripts", runnerName) : void 0,
     // Bundled Codex runtime: <plugin>/rn-dev-agent-core/dist.
-    join12(baseDir, "..", "..", "scripts", runnerName),
+    join13(baseDir, "..", "..", "scripts", runnerName),
     // Source checkout: packages/rn-dev-agent-core/dist/runners.
     // Also covers the legacy scripts/cdp-bridge/dist/runners layout.
-    join12(baseDir, "..", "..", "..", runnerName),
+    join13(baseDir, "..", "..", "..", runnerName),
     // Legacy source checkout: packages/rn-dev-agent-core/dist/runners before runner package split.
-    join12(baseDir, "..", "..", "..", "..", "scripts", runnerName)
+    join13(baseDir, "..", "..", "..", "..", "scripts", runnerName)
   ]);
 }
 function resolveNativeRunnerDir(runnerName, baseDir = import.meta.dirname) {
@@ -11597,7 +12060,7 @@ var init_transport_recovery = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/runners/rn-fast-runner-client.js
-import { join as join13 } from "node:path";
+import { join as join14 } from "node:path";
 function resolveReadyTimeoutMs() {
   const raw = Number(process.env.RN_FAST_RUNNER_READY_TIMEOUT_MS);
   return Number.isFinite(raw) && raw > 0 ? raw : 3e4;
@@ -11887,9 +12350,9 @@ var init_rn_fast_runner_client = __esm({
     runnerState = null;
     lastKnownCapabilities = [];
     quiescenceAnnouncementPending = false;
-    REBUILD_LOCK_DIR = join13(FAST_RUNNER_PROJECT, "build", ".rebuild-lock");
+    REBUILD_LOCK_DIR = join14(FAST_RUNNER_PROJECT, "build", ".rebuild-lock");
     REBUILD_LOCK_STALE_MS = 15 * 6e4;
-    REBUILD_BUDGET_FILE = join13(FAST_RUNNER_PROJECT, "build", "commands-rebuild.json");
+    REBUILD_BUDGET_FILE = join14(FAST_RUNNER_PROJECT, "build", "commands-rebuild.json");
     fetchImpl = globalThis.fetch;
   }
 });
@@ -11924,10 +12387,10 @@ var init_declared_source_contract = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/nav-graph/storage.js
-import { readFileSync as readFileSync11, writeFileSync as writeFileSync4, existsSync as existsSync12, renameSync as renameSync4, readdirSync as readdirSync5, lstatSync as lstatSync9, mkdirSync as mkdirSync9, realpathSync as realpathSync6 } from "node:fs";
-import { join as join14, dirname as dirname13 } from "node:path";
+import { readFileSync as readFileSync11, writeFileSync as writeFileSync4, existsSync as existsSync12, renameSync as renameSync4, readdirSync as readdirSync5, lstatSync as lstatSync10, mkdirSync as mkdirSync9, realpathSync as realpathSync6 } from "node:fs";
+import { join as join15, dirname as dirname13 } from "node:path";
 function isRnProject(dir) {
-  const pkgPath = join14(dir, "package.json");
+  const pkgPath = join15(dir, "package.json");
   if (!existsSync12(pkgPath))
     return false;
   try {
@@ -11952,9 +12415,9 @@ function scanForRnProject(rootDir, maxDepth) {
   for (const name of entries) {
     if (name.startsWith(".") || name === "node_modules")
       continue;
-    const full = join14(rootDir, name);
+    const full = join15(rootDir, name);
     try {
-      const stat = lstatSync9(full);
+      const stat = lstatSync10(full);
       if (!(stat.isDirectory() || stat.isSymbolicLink()))
         continue;
     } catch {
@@ -11987,9 +12450,9 @@ function collectRnProjects(rootDir, maxDepth, out) {
   for (const name of entries) {
     if (name.startsWith(".") || name === "node_modules")
       continue;
-    const full = join14(rootDir, name);
+    const full = join15(rootDir, name);
     try {
-      const stat = lstatSync9(full);
+      const stat = lstatSync10(full);
       if (!(stat.isDirectory() || stat.isSymbolicLink()))
         continue;
     } catch {
@@ -12007,7 +12470,7 @@ function collectRnProjects(rootDir, maxDepth, out) {
   }
 }
 function readProjectBundleId(projectRoot) {
-  const appJsonPath = join14(projectRoot, "app.json");
+  const appJsonPath = join15(projectRoot, "app.json");
   if (!existsSync12(appJsonPath))
     return null;
   try {
@@ -12045,7 +12508,7 @@ function findProjectRoot(opts = {}) {
         walkupHit = walkupHit ?? dir;
         break;
       }
-      const parent = join14(dir, "..");
+      const parent = join15(dir, "..");
       if (parent === dir)
         break;
       dir = parent;
@@ -12054,7 +12517,7 @@ function findProjectRoot(opts = {}) {
   if (!targetBundleId && walkupHit)
     return walkupHit;
   const cwd = process.cwd();
-  const parentOfCwd = join14(cwd, "..");
+  const parentOfCwd = join15(cwd, "..");
   if (targetBundleId) {
     const all = [];
     collectRnProjects(cwd, 0, all);
@@ -12206,10 +12669,10 @@ var init_sources = __esm({
 
 // packages/rn-dev-agent-core/dist/project-config.js
 import { existsSync as existsSync13, readFileSync as readFileSync12 } from "node:fs";
-import { join as join15 } from "node:path";
+import { join as join16 } from "node:path";
 function readAppId(projectRoot, platform) {
   for (const filename of ["app.json", "app.config.json"]) {
-    const p = join15(projectRoot, filename);
+    const p = join16(projectRoot, filename);
     if (!existsSync13(p))
       continue;
     try {
@@ -12237,7 +12700,7 @@ function readExpoSlug() {
   if (!projectRoot)
     return null;
   for (const filename of ["app.json", "app.config.json"]) {
-    const p = join15(projectRoot, filename);
+    const p = join16(projectRoot, filename);
     if (!existsSync13(p))
       continue;
     try {
@@ -12259,11 +12722,11 @@ var init_project_config = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/agent-device-wrapper.js
-import { join as join16 } from "node:path";
+import { join as join17 } from "node:path";
 import { createHash as createHash3 } from "node:crypto";
 function getSessionFilePath() {
   const projectId = createHash3("sha256").update(process.cwd()).digest("hex").slice(0, 12);
-  return join16(getStateDir(), `session-${projectId}.json`);
+  return join17(getStateDir(), `session-${projectId}.json`);
 }
 function getActiveSession() {
   return activeSession;
@@ -12327,7 +12790,7 @@ var init_free_port = __esm({
 // packages/rn-dev-agent-core/dist/runners/rn-android-runner-client.js
 import { spawn as spawn2, execFile as execFile3 } from "node:child_process";
 import { promisify as promisify3 } from "node:util";
-import { join as join17 } from "node:path";
+import { join as join18 } from "node:path";
 function androidStatePath(serial) {
   return runnerStatePath(`android-${serial}`);
 }
@@ -12450,11 +12913,11 @@ var init_rn_android_runner_client = __esm({
     init_authority_store();
     execFileAsync2 = promisify3(execFile3);
     RN_ANDROID_RUNNER_DIR = resolveNativeRunnerDir("rn-android-runner");
-    GRADLEW = join17(RN_ANDROID_RUNNER_DIR, "gradlew");
-    APK_APP = join17(RN_ANDROID_RUNNER_DIR, "app", "build", "outputs", "apk", "debug", "app-debug.apk");
-    APK_TEST = join17(RN_ANDROID_RUNNER_DIR, "app", "build", "outputs", "apk", "androidTest", "debug", "app-debug-androidTest.apk");
-    ANDROID_REBUILD_ROOT = join17(RN_ANDROID_RUNNER_DIR, "app", "build");
-    ANDROID_REBUILD_LOCK_DATABASE = join17(ANDROID_REBUILD_ROOT, ".authority-rebuild", "lock.sqlite");
+    GRADLEW = join18(RN_ANDROID_RUNNER_DIR, "gradlew");
+    APK_APP = join18(RN_ANDROID_RUNNER_DIR, "app", "build", "outputs", "apk", "debug", "app-debug.apk");
+    APK_TEST = join18(RN_ANDROID_RUNNER_DIR, "app", "build", "outputs", "apk", "androidTest", "debug", "app-debug-androidTest.apk");
+    ANDROID_REBUILD_ROOT = join18(RN_ANDROID_RUNNER_DIR, "app", "build");
+    ANDROID_REBUILD_LOCK_DATABASE = join18(ANDROID_REBUILD_ROOT, ".authority-rebuild", "lock.sqlite");
     ANDROID_REBUILD_LOCK_STALE_MS = 15 * 6e4;
     ADB_CLEANUP_TIMEOUT_MS = 5e3;
     runnerProcess2 = null;
@@ -12685,21 +13148,21 @@ var init_maestro_error_parser = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/tools/resolve-ios-app-file.js
-import { execFileSync as execFileSync2 } from "node:child_process";
+import { execFileSync as execFileSync3 } from "node:child_process";
 import { existsSync as existsSync14, cpSync, rmSync as rmSync2, mkdirSync as mkdirSync10, readdirSync as readdirSync6, statSync as statSync6 } from "node:fs";
 import { tmpdir as tmpdir2 } from "node:os";
-import { join as join18, basename as basename7 } from "node:path";
+import { join as join19, basename as basename7 } from "node:path";
 function flowUsesClearState(flowText) {
   return /clearState:\s*true\b/.test(flowText) || /^[ \t]*-[ \t]*clearState[ \t]*$/m.test(flowText);
 }
 function defaultSnapshotApp(appPath) {
   try {
-    const destDir = join18(tmpdir2(), "rn-appfile-snapshots");
-    const dest = join18(destDir, basename7(appPath));
+    const destDir = join19(tmpdir2(), "rn-appfile-snapshots");
+    const dest = join19(destDir, basename7(appPath));
     rmSync2(dest, { recursive: true, force: true });
     mkdirSync10(destDir, { recursive: true });
     try {
-      execFileSync2("cp", ["-Rc", appPath, dest], { timeout: 3e4, stdio: "ignore" });
+      execFileSync3("cp", ["-Rc", appPath, dest], { timeout: 3e4, stdio: "ignore" });
     } catch {
       cpSync(appPath, dest, { recursive: true });
     }
@@ -12746,7 +13209,7 @@ function resolveAppFileForClearState(platform, flowText, headerAppId, explicitAp
 function defaultGetAppContainer(bundleId, deviceId) {
   try {
     const target = deviceId && !/\s/.test(deviceId) ? deviceId : "booted";
-    const out = execFileSync2("xcrun", ["simctl", "get_app_container", target, bundleId, "app"], {
+    const out = execFileSync3("xcrun", ["simctl", "get_app_container", target, bundleId, "app"], {
       encoding: "utf8",
       timeout: 5e3
     }).trim();
@@ -12864,7 +13327,7 @@ var init_maestro_device_authority = __esm({
 // packages/rn-dev-agent-core/dist/domain/maestro-runner-report.js
 import { existsSync as existsSync15, readFileSync as readFileSync13, rmSync as rmSync3 } from "node:fs";
 import { tmpdir as tmpdir3 } from "node:os";
-import { join as join19 } from "node:path";
+import { join as join20 } from "node:path";
 function idsFrom(value, keys) {
   if (!value || typeof value !== "object")
     return [];
@@ -12888,7 +13351,7 @@ function containerDeviceIdsFrom(value) {
   return idsFrom(value, CONTAINER_DEVICE_ID_KEYS);
 }
 function reportDeviceIds(reportDir) {
-  const reportPath = join19(reportDir, "report.json");
+  const reportPath = join20(reportDir, "report.json");
   if (!existsSync15(reportPath))
     return { ids: [], strength: "none" };
   try {
@@ -12915,7 +13378,7 @@ function reportDeviceIds(reportDir) {
 function createRunnerReportDir(runner, prefix) {
   if (runner !== "maestro-runner")
     return null;
-  return join19(tmpdir3(), `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+  return join20(tmpdir3(), `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
 }
 function runnerReportArgs(reportDir) {
   return reportDir ? ["--output", reportDir, "--flatten"] : [];
@@ -12929,7 +13392,7 @@ function collectDirectRunnerEvidence(reportDir, output) {
     reportDeviceIds: report.ids,
     reportDeviceIdStrength: report.strength
   };
-  const logPath = join19(reportDir, "maestro-runner.log");
+  const logPath = join20(reportDir, "maestro-runner.log");
   if (!existsSync15(logPath))
     return evidence;
   try {
@@ -13610,14 +14073,14 @@ var init_recovery = __esm({
 
 // packages/rn-dev-agent-core/dist/runners/ensure-single-runner.js
 import { homedir as homedir4 } from "node:os";
-import { join as join20 } from "node:path";
+import { join as join21 } from "node:path";
 var DAEMON_JSON, DAEMON_LOCK;
 var init_ensure_single_runner = __esm({
   "packages/rn-dev-agent-core/dist/runners/ensure-single-runner.js"() {
     "use strict";
     init_discovery();
-    DAEMON_JSON = join20(homedir4(), ".agent-device", "daemon.json");
-    DAEMON_LOCK = join20(homedir4(), ".agent-device", "daemon.lock");
+    DAEMON_JSON = join21(homedir4(), ".agent-device", "daemon.json");
+    DAEMON_LOCK = join21(homedir4(), ".agent-device", "daemon.lock");
   }
 });
 
@@ -13982,7 +14445,7 @@ import { execFile as execFileCb9 } from "node:child_process";
 import { promisify as promisify12 } from "node:util";
 import { existsSync as existsSync16, readFileSync as readFileSync14, unlinkSync as unlinkSync7 } from "node:fs";
 import { homedir as homedir5 } from "node:os";
-import { join as join21 } from "node:path";
+import { join as join22 } from "node:path";
 function isProtectedPid(pid, selfPid, parentPid) {
   return pid === selfPid || pid === parentPid;
 }
@@ -14129,8 +14592,8 @@ var init_release_android_slot = __esm({
     init_rn_android_runner_client();
     init_agent_device_wrapper();
     execFile12 = promisify12(execFileCb9);
-    DAEMON_JSON2 = join21(homedir5(), ".agent-device", "daemon.json");
-    DAEMON_LOCK2 = join21(homedir5(), ".agent-device", "daemon.lock");
+    DAEMON_JSON2 = join22(homedir5(), ".agent-device", "daemon.json");
+    DAEMON_LOCK2 = join22(homedir5(), ".agent-device", "daemon.lock");
     DAEMON_FILES = [DAEMON_JSON2, DAEMON_LOCK2];
     SIGKILL_GRACE_MS = 500;
     ADB_TIMEOUT_MS = 5e3;
@@ -14648,7 +15111,7 @@ import { execFile as execFileCb10 } from "node:child_process";
 import { promisify as promisify13 } from "node:util";
 import { existsSync as existsSync17, readFileSync as readFileSync15, writeFileSync as writeFileSync5 } from "node:fs";
 import { tmpdir as tmpdir4 } from "node:os";
-import { basename as basename8, join as join22, dirname as dirname14 } from "node:path";
+import { basename as basename8, join as join23, dirname as dirname14 } from "node:path";
 async function runFlowParked(run, opts = {}) {
   const stale = opts.markCdpStale ?? markCdpStale;
   try {
@@ -14937,7 +15400,7 @@ function createMaestroRunHandler(deps = {}) {
       const rawAppId = resolveAppId(args.appId, platform);
       headerAppId = resolveMaestroFlowAppId(rawAppId || void 0, parsed.appId);
       validatedContent = buildMaestroFlow(headerAppId ? { appId: headerAppId } : {}, parsed.commands);
-      flowFile = join22(tmpdir4(), `rn-maestro-run-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.yaml`);
+      flowFile = join23(tmpdir4(), `rn-maestro-run-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.yaml`);
     } catch (err) {
       if (err instanceof MaestroValidationError) {
         return failResult(`Refusing to run Maestro: ${err.message} (Phase 134.1)`);
@@ -15638,7 +16101,7 @@ init_action_engine_compat();
 init_action_engine_compat();
 import { spawnSync as spawnSync2 } from "node:child_process";
 import { existsSync as existsSync18 } from "node:fs";
-import { dirname as dirname15, join as join23, resolve as resolve8 } from "node:path";
+import { dirname as dirname15, join as join24, resolve as resolve8 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 
 // packages/rn-dev-agent-core/dist/domain/action-verification-suite.js
@@ -15655,7 +16118,9 @@ function prepareActionVerificationSuite(files, flowDir, engineStatus, context) {
   let learnedContext = context;
   if (learnedCorpus && !learnedContext) {
     try {
-      learnedContext = openReadableActionLoadContext(dirname11(dirname11(resolve7(flowDir)))) ?? void 0;
+      learnedContext = openReadableActionLoadContext(dirname11(dirname11(resolve7(flowDir))), {
+        includeRunFlowFiles: true
+      }) ?? void 0;
     } catch (err) {
       const error = err instanceof Error ? err.message : String(err);
       return { prepared, errors: files.map((file) => ({ file, error })) };
@@ -15771,9 +16236,9 @@ var USAGE = "usage: maestro-runner-pin [diagnose|install|migrate-actions|verify-
 function ensureScriptPath() {
   const here = dirname15(fileURLToPath2(import.meta.url));
   const candidates = [
-    join23(here, "..", "..", "..", "scripts", "ensure-maestro-runner.sh"),
-    join23(here, "..", "scripts", "ensure-maestro-runner.sh"),
-    join23(here, "..", "..", "scripts", "ensure-maestro-runner.sh")
+    join24(here, "..", "..", "..", "scripts", "ensure-maestro-runner.sh"),
+    join24(here, "..", "scripts", "ensure-maestro-runner.sh"),
+    join24(here, "..", "..", "scripts", "ensure-maestro-runner.sh")
   ];
   return candidates.find((path) => existsSync18(path)) ?? candidates[0];
 }
@@ -15851,7 +16316,7 @@ async function verifyActions(argv) {
     }
   }
   const flowDir = resolve8(flowDirArg);
-  const flowDirClassification = classifyLearnedActionPath(join23(flowDir, "__action__.yaml"));
+  const flowDirClassification = classifyLearnedActionPath(join24(flowDir, "__action__.yaml"));
   if (flowDirClassification !== "action") {
     console.error(`Refusing to execute flows outside an owned .rn-agent/actions corpus: ${flowDir}.`);
     return 2;
@@ -15866,7 +16331,9 @@ async function verifyActions(argv) {
   let files;
   let actionContext;
   try {
-    const openedContext = openReadableActionLoadContext(dirname15(dirname15(flowDir)));
+    const openedContext = openReadableActionLoadContext(dirname15(dirname15(flowDir)), {
+      includeRunFlowFiles: true
+    });
     if (!openedContext)
       throw new Error(`No learned-action corpus found at ${flowDir}`);
     actionContext = openedContext;
@@ -15876,7 +16343,7 @@ async function verifyActions(argv) {
       console.error(`verify-actions pattern is ${filtered.reason}: ${filtered.message}`);
       return 2;
     }
-    files = filtered.matches.map((file) => join23(flowDir, file)).sort();
+    files = filtered.matches.map((file) => join24(flowDir, file)).sort();
   } catch (err) {
     console.error(`verify-actions could not read ${flowDir}: ${String(err)}`);
     return 2;

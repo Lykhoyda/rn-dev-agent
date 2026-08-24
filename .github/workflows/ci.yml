@@ -44,6 +44,9 @@ jobs:
       - name: Runner wire-contract gate
         run: corepack yarn workspace rn-dev-agent-core test:contract
 
+      - name: Inherited action inventory serial regression
+        run: corepack yarn workspace rn-dev-agent-core exec node --test --test-concurrency=1 test/serial/gh-812-inherited-action-inventory.test.ts
+
       - name: Install proof-media integration dependency
         run: sudo apt-get update && sudo apt-get install --yes ffmpeg
 

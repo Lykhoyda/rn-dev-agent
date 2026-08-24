@@ -34,9 +34,14 @@ import type { ToolResult } from '../utils.js';
 import type { ToolErrorCode } from '../types.js';
 import {
   acknowledgeExternalEdit,
+  assertReadableActionLoadContextStable,
   loadAction,
+  loadActionFromContext,
+  openReadableActionLoadContext,
   promoteActionRuntimeWithCAS,
+  refreshActionLoadContext,
   saveActionRuntimeWithCAS,
+  type ReadableActionLoadContext,
 } from '../domain/action-store.js';
 import { mirrorToDb } from '../domain/action-state-store.js';
 import {
@@ -440,6 +445,21 @@ export interface RunActionDeps {
   engineStatus?: () => Promise<ReplayEngineStatus | null>;
 }
 
+function replayCorpusIdentityRefusal(
+  context: ReadableActionLoadContext,
+  actionId: string,
+): ToolResult | null {
+  try {
+    assertReadableActionLoadContextStable(context);
+    return null;
+  } catch (error) {
+    return failResult(error instanceof Error ? error.message : String(error), 'BAD_FILENAME', {
+      actionId,
+      fallback: 'none',
+    });
+  }
+}
+
 export function createRunActionHandler(deps: RunActionDeps = {}) {
   const maestroRun = deps.maestroRun ?? createMaestroRunHandler();
   const repairAction = deps.repairAction ?? createRepairActionHandler();
@@ -478,16 +498,21 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
         { proofReplay: true },
       );
     }
+    let openedContext: ReadableActionLoadContext | null;
     let loaded: ReturnType<typeof loadAction>;
     try {
-      loaded = loadAction(projectRoot, args.actionId);
+      openedContext = openReadableActionLoadContext(projectRoot, {
+        actionId: args.actionId,
+        includeRunFlowFiles: true,
+      });
+      loaded = openedContext ? loadActionFromContext(openedContext, args.actionId) : null;
     } catch (err) {
       return failResult(err instanceof Error ? err.message : String(err), 'BAD_FILENAME', {
         actionId: args.actionId,
         fallback: 'none',
       });
     }
-    if (!loaded) {
+    if (!loaded || !openedContext) {
       return failResult(
         `cdp_run_action: action "${args.actionId}" not found at ${projectRoot}/.rn-agent/actions/${args.actionId}.yaml or ${args.actionId}.yml`,
         'NO_PROJECT_ROOT',
@@ -496,6 +521,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
         },
       );
     }
+    let loadContext = openedContext;
     if (!loaded.replay.ok) {
       return failResult(
         `Action ${args.actionId} is not valid Maestro YAML: ${loaded.replay.error}`,
@@ -512,7 +538,16 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
     const forceReload = proofReplay ? false : args.forceReload !== false;
     const action = forceReload ? acknowledgeExternalEdit(loaded) : loaded;
 
-    const engineStatus = await resolveEngineStatus();
+    let engineStatus: ReplayEngineStatus | null;
+    try {
+      engineStatus = await resolveEngineStatus();
+      assertReadableActionLoadContextStable(loadContext);
+    } catch (err) {
+      return failResult(err instanceof Error ? err.message : String(err), 'BAD_FILENAME', {
+        actionId: args.actionId,
+        fallback: 'none',
+      });
+    }
     const compatRefusal = actionReplayPreflight({
       enginePin: action.metadata.enginePin,
       commands: preflightCommands,
@@ -584,7 +619,10 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
     // so a clean pass can still clear a device-matched blind-probe latch.
     let observedDeviceId: string | null = maestroDeviceId ?? null;
     const persistRunWithDevice = (record: RunRecord): Promise<PersistRunOutcome> => {
-      if (proofReplay) return Promise.resolve({ promoted: false, promotionRefused: false });
+      assertReadableActionLoadContextStable(loadContext);
+      if (proofReplay) {
+        return Promise.resolve({ promoted: false, promotionRefused: false });
+      }
       const endedMs = Date.now();
       const timedRecord: RunRecord = {
         ...record,
@@ -641,6 +679,8 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
       // Requested/session metadata is not RunRecord authority. Clear it before
       // dispatch; only direct maestro-runner evidence may repopulate it.
       probeDeviceId = null;
+      const firstCorpusRefusal = replayCorpusIdentityRefusal(loadContext, args.actionId);
+      if (firstCorpusRefusal) return firstCorpusRefusal;
       const firstResult = await measureStep('maestro-first-attempt', () =>
         maestroRun({
           inlineYaml: replayYaml,
@@ -803,9 +843,10 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
       // the default fetcher is a no-op until index.ts wires a CDP-backed one).
       const expectedSeq = action.metadata.expectedRouteSequence;
       if (failure.kind === 'SELECTOR_NOT_FOUND' && expectedSeq && expectedSeq.length > 0) {
-        const liveRoute = (await claimBundleAuthority(args))
-          ? await getLiveRoute().catch(() => null)
-          : null;
+        const bundleAuthorityClaimed = await claimBundleAuthority(args);
+        const routeCorpusRefusal = replayCorpusIdentityRefusal(loadContext, args.actionId);
+        if (routeCorpusRefusal) return routeCorpusRefusal;
+        const liveRoute = bundleAuthorityClaimed ? await getLiveRoute().catch(() => null) : null;
         const drift = classifyRouteDriftAfterFailure({ expectedSequence: expectedSeq, liveRoute });
         if (drift.isDrift) {
           const autoRepair: AutoRepairOutcome = {
@@ -965,7 +1006,8 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
       // The repair updated the action on disk. Re-load to pick up the
       // new body + bumped revision/state — saveAction's atomic pair-write
       // means we can read it back deterministically.
-      const reloadedAction = loadAction(projectRoot, args.actionId);
+      loadContext = refreshActionLoadContext(loadContext, args.actionId);
+      const reloadedAction = loadActionFromContext(loadContext, args.actionId);
       if (!reloadedAction) {
         // Shouldn't happen — repair just wrote it. Defensive surface.
         // Persist the failure RunRecord so MTTR sees the outcome.
@@ -999,6 +1041,8 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
 
       const tBeforeRetry = Date.now();
       probeDeviceId = null;
+      const retryCorpusRefusal = replayCorpusIdentityRefusal(loadContext, args.actionId);
+      if (retryCorpusRefusal) return retryCorpusRefusal;
       const retryResult = await measureStep('maestro-retry', () =>
         maestroRun({
           inlineYaml: retryYaml,
