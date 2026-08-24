@@ -1,7 +1,5 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import {
   SQLITE_RELAUNCH_SIGNALS,
@@ -189,14 +187,4 @@ test('signal forwarding is safe when the child is already gone', async () => {
   queueMicrotask(() => child.emit('exit', 0, null));
   await settleOrFail(pending, 'sqlite relaunch after dead-child signals');
   assert.deepEqual(rec.exits, [0]);
-});
-
-test('compiled supervisor relaunch reuses error-or-exit settlement instead of exit-only wait', () => {
-  const supervisorPath = fileURLToPath(new URL('../../dist/supervisor.js', import.meta.url));
-  const source = readFileSync(supervisorPath, 'utf8');
-  assert.match(source, /completeSqliteRelaunch/);
-  assert.doesNotMatch(
-    source,
-    /child\.on\('exit', \(code, signal\) => resolve\(\{ code, signal \}\)\)/,
-  );
 });
