@@ -579,8 +579,108 @@ test('engine lookup corpus mutation returns a structured refusal without replay'
       error?: string;
     };
     assert.equal(envelope.ok, false);
-    assert.equal(envelope.code, 'BAD_FILENAME');
+    assert.equal(envelope.code, 'BAD_FILENAME', result.content[0]!.text);
     assert.match(envelope.error ?? '', /Refusing replaced learned-action corpus symlink/);
+    assert.equal(maestroCalls, 0);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('blind-probe context mutation refuses before Maestro replay', async () => {
+  const fixture = makeFixture();
+  try {
+    seedLoginCorpus(fixture.primary);
+    const worktree = addWorktree(fixture);
+    inherit(worktree);
+    const actionsDir = join(fixture.primary, '.rn-agent', 'actions');
+    let maestroCalls = 0;
+    const handler = createRunActionHandler({
+      blindProbeContext: async () => {
+        renameSync(actionsDir, join(fixture.root, 'blind-probe-actions'));
+        mkdirSync(actionsDir);
+        return null;
+      },
+      maestroRun: async () => {
+        maestroCalls += 1;
+        throw new Error('replay must not start');
+      },
+    });
+    const result = await handler({
+      actionId: 'login',
+      projectRoot: worktree,
+      autoRepair: false,
+      forceReload: false,
+    });
+    const envelope = JSON.parse(result.content[0]!.text) as {
+      ok?: boolean;
+      code?: string;
+      error?: string;
+    };
+    assert.equal(envelope.ok, false);
+    assert.equal(envelope.code, 'BAD_FILENAME', result.content[0]!.text);
+    assert.match(envelope.error ?? '', /Refusing replaced learned-action corpus symlink/);
+    assert.equal(maestroCalls, 0);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('probe tree mutation refuses before CDP replay', async () => {
+  const fixture = makeFixture();
+  try {
+    seedLoginCorpus(fixture.primary);
+    const worktree = addWorktree(fixture);
+    inherit(worktree);
+    const actionsDir = join(fixture.primary, '.rn-agent', 'actions');
+    writeFileSync(
+      join(actionsDir, 'login.yaml'),
+      fixtureYaml({ id: 'login' }).replace('- launchApp', '- launchApp: {}'),
+    );
+    let cdpDispatches = 0;
+    let maestroCalls = 0;
+    const handler = createRunActionHandler({
+      blindProbeContext: async () => ({ deviceId: 'device-1', iosRuntimeMajor: 26 }),
+      replayDeps: () => ({
+        treeFor: async () => {
+          renameSync(actionsDir, join(fixture.root, 'probe-tree-actions'));
+          mkdirSync(actionsDir);
+          return { testID: 'fab-create-task' };
+        },
+        pressByTestId: async () => {
+          cdpDispatches += 1;
+        },
+        typeByTestId: async () => {
+          cdpDispatches += 1;
+        },
+        launchApp: async () => {
+          cdpDispatches += 1;
+        },
+        settle: async () => {
+          cdpDispatches += 1;
+        },
+      }),
+      maestroRun: async () => {
+        maestroCalls += 1;
+        throw new Error('replay must not start');
+      },
+    });
+    const result = await handler({
+      actionId: 'login',
+      projectRoot: worktree,
+      autoRepair: false,
+      forceReload: false,
+      platform: 'ios',
+    });
+    const envelope = JSON.parse(result.content[0]!.text) as {
+      ok?: boolean;
+      code?: string;
+      error?: string;
+    };
+    assert.equal(envelope.ok, false);
+    assert.equal(envelope.code, 'BAD_FILENAME', result.content[0]!.text);
+    assert.match(envelope.error ?? '', /Refusing replaced learned-action corpus symlink/);
+    assert.equal(cdpDispatches, 0);
     assert.equal(maestroCalls, 0);
   } finally {
     fixture.cleanup();
@@ -821,13 +921,13 @@ test('verified directory batch returns readable files and refuses a symlink entr
   }
 });
 
-test('verified directory reads chunk a corpus larger than the helper output limit', () => {
+test('verified directory reads chunk by bytes below the helper output limit', () => {
   const fixture = makeFixture();
   try {
     const actionsDir = join(fixture.primary, '.rn-agent', 'actions');
     mkdirSync(actionsDir, { recursive: true });
-    const fileNames = Array.from({ length: 33 }, (_, index) => `large-${index}.yaml`);
-    const contents = `${'x'.repeat(1024 * 1024 - 1)}\n`;
+    const fileNames = Array.from({ length: 16 }, (_, index) => `large-${index}.yaml`);
+    const contents = `${'x'.repeat(2 * 1024 * 1024 - 1)}\n`;
     for (const fileName of fileNames) writeFileSync(join(actionsDir, fileName), contents);
     const worktree = addWorktree(fixture);
     inherit(worktree);

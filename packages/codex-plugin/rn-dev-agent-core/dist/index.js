@@ -12140,7 +12140,7 @@ function runVerifiedFilesystemHelper(args) {
       throw new Error("Verified directory helper changed before execution.");
     }
     return execFileSync2(boundPath, [...args], {
-      maxBuffer: 32 * 1024 * 1024,
+      maxBuffer: VERIFIED_FILESYSTEM_MAX_BUFFER_BYTES,
       stdio: ["ignore", "pipe", "ignore"],
       timeout: 1e4
     });
@@ -12152,17 +12152,38 @@ function readFilesFromVerifiedDirectory(directoryPath, identity2, relativePaths)
   if (relativePaths.length === 0)
     return [];
   const entries = [];
-  for (let start = 0; start < relativePaths.length; start += 16) {
-    const batch = relativePaths.slice(start, start + 16);
+  const batches = [];
+  let batch = [];
+  let batchBytes = 0;
+  for (const relativePath of relativePaths) {
+    let framedBytes = VERIFIED_FILESYSTEM_ENTRY_FRAME_BYTES;
+    try {
+      const stat2 = lstatSync2(join7(directoryPath, relativePath));
+      if (stat2.isFile())
+        framedBytes += stat2.size;
+    } catch {
+      framedBytes = VERIFIED_FILESYSTEM_ENTRY_FRAME_BYTES;
+    }
+    if (batch.length > 0 && (batch.length >= VERIFIED_FILESYSTEM_BATCH_FILES || batchBytes + framedBytes > VERIFIED_FILESYSTEM_BATCH_BYTES)) {
+      batches.push(batch);
+      batch = [];
+      batchBytes = 0;
+    }
+    batch.push(relativePath);
+    batchBytes += framedBytes;
+  }
+  if (batch.length > 0)
+    batches.push(batch);
+  for (const currentBatch of batches) {
     const output = runVerifiedFilesystemHelper([
       "--read-directory-entries",
       directoryPath,
       identity2.dev,
       identity2.ino,
-      ...batch
+      ...currentBatch
     ]);
     let offset = 0;
-    for (const relativePath of batch) {
+    for (const relativePath of currentBatch) {
       if (offset + 9 > output.length) {
         throw new Error(`Verified directory batch was truncated before ${relativePath}.`);
       }
@@ -12369,7 +12390,7 @@ function probeRecordedProcessBirth(pid, dependencies) {
   }
   return { status: "unknown" };
 }
-var DARWIN_HELPER_MANIFEST, LINUX_PUBLICATION_HELPER_SHA256, VERIFIED_HELPER_SCRIPT;
+var DARWIN_HELPER_MANIFEST, LINUX_PUBLICATION_HELPER_SHA256, VERIFIED_FILESYSTEM_MAX_BUFFER_BYTES, VERIFIED_FILESYSTEM_BATCH_BYTES, VERIFIED_FILESYSTEM_BATCH_FILES, VERIFIED_FILESYSTEM_ENTRY_FRAME_BYTES, VERIFIED_HELPER_SCRIPT;
 var init_process_birth = __esm({
   "packages/rn-dev-agent-core/dist/session/process-birth.js"() {
     "use strict";
@@ -12388,6 +12409,10 @@ var init_process_birth = __esm({
       x64: "17b1b6e0edbecefc013ccb1308a444532a72d5910f794de53195a758789bd6bb",
       arm64: "f9cb783474cc93e6dbb28e81b5a2e46d74c38926a392d75ce9ed5188bafe3520"
     };
+    VERIFIED_FILESYSTEM_MAX_BUFFER_BYTES = 32 * 1024 * 1024;
+    VERIFIED_FILESYSTEM_BATCH_BYTES = 24 * 1024 * 1024;
+    VERIFIED_FILESYSTEM_BATCH_FILES = 16;
+    VERIFIED_FILESYSTEM_ENTRY_FRAME_BYTES = 9;
     VERIFIED_HELPER_SCRIPT = `
 set -euo pipefail
 helper_pid=
@@ -78970,6 +78995,17 @@ function mapRefusedReason(repairCode, repairError) {
   }
   return "INTERNAL_ERROR";
 }
+function replayCorpusIdentityRefusal(context, actionId) {
+  try {
+    assertReadableActionLoadContextStable(context);
+    return null;
+  } catch (err) {
+    return failResult(err instanceof Error ? err.message : String(err), "BAD_FILENAME", {
+      actionId,
+      fallback: "none"
+    });
+  }
+}
 async function probeTreeWithRetry(replay, probe, retry) {
   let sawTree = false;
   for (let attempt = 0; attempt < retry.attempts; attempt++) {
@@ -79152,6 +79188,9 @@ function createRunActionHandler(deps = {}) {
           if (probeOutcome.found) {
             const tReplay = Date.now();
             try {
+              const corpusRefusal = replayCorpusIdentityRefusal(loadContext, args.actionId);
+              if (corpusRefusal)
+                return corpusRefusal;
               const replay = await measureStep("proactive-cdp-replay", () => runCdpReplay(cdpReplayYaml, args.params ?? {}, replayDeps));
               const timings_ms = { probe: tReplay - tProbe, replay: Date.now() - tReplay };
               const blindProbe = { atRisk, skippedMaestro: true };
@@ -79207,6 +79246,9 @@ function createRunActionHandler(deps = {}) {
       }
       const tBeforeFirst = Date.now();
       probeDeviceId = null;
+      const firstCorpusRefusal = replayCorpusIdentityRefusal(loadContext, args.actionId);
+      if (firstCorpusRefusal)
+        return firstCorpusRefusal;
       const firstResult = await measureStep("maestro-first-attempt", () => maestroRun({
         inlineYaml: replayYaml,
         actionMetadata: action.metadata,
@@ -79371,6 +79413,9 @@ function createRunActionHandler(deps = {}) {
               firstAttemptOutput: boundedOutput(firstOutput)
             };
             try {
+              const corpusRefusal = replayCorpusIdentityRefusal(loadContext, args.actionId);
+              if (corpusRefusal)
+                return corpusRefusal;
               const replay = await measureStep("fallback-cdp-replay", () => runCdpReplay(cdpReplayYaml, args.params ?? {}, replayDeps, {
                 resumeAtSelector: failure.kind === "SELECTOR_NOT_FOUND" ? failure.selector : null
               }));
@@ -79534,6 +79579,9 @@ function createRunActionHandler(deps = {}) {
       const retryYaml = reloadedAction.replay.yamlText;
       const tBeforeRetry = Date.now();
       probeDeviceId = null;
+      const retryCorpusRefusal = replayCorpusIdentityRefusal(loadContext, args.actionId);
+      if (retryCorpusRefusal)
+        return retryCorpusRefusal;
       const retryResult = await measureStep("maestro-retry", () => maestroRun({
         inlineYaml: retryYaml,
         actionMetadata: reloadedAction.metadata,

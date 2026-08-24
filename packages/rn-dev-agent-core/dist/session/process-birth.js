@@ -18,6 +18,10 @@ const LINUX_PUBLICATION_HELPER_SHA256 = {
     x64: '17b1b6e0edbecefc013ccb1308a444532a72d5910f794de53195a758789bd6bb',
     arm64: 'f9cb783474cc93e6dbb28e81b5a2e46d74c38926a392d75ce9ed5188bafe3520',
 };
+const VERIFIED_FILESYSTEM_MAX_BUFFER_BYTES = 32 * 1024 * 1024;
+const VERIFIED_FILESYSTEM_BATCH_BYTES = 24 * 1024 * 1024;
+const VERIFIED_FILESYSTEM_BATCH_FILES = 16;
+const VERIFIED_FILESYSTEM_ENTRY_FRAME_BYTES = 9;
 function defaultRun(command, args) {
     try {
         return execFileSync(command, [...args], {
@@ -306,7 +310,7 @@ function runVerifiedFilesystemHelper(args) {
             throw new Error('Verified directory helper changed before execution.');
         }
         return execFileSync(boundPath, [...args], {
-            maxBuffer: 32 * 1024 * 1024,
+            maxBuffer: VERIFIED_FILESYSTEM_MAX_BUFFER_BYTES,
             stdio: ['ignore', 'pipe', 'ignore'],
             timeout: 10_000,
         });
@@ -328,17 +332,41 @@ export function readFilesFromVerifiedDirectory(directoryPath, identity, relative
     if (relativePaths.length === 0)
         return [];
     const entries = [];
-    for (let start = 0; start < relativePaths.length; start += 16) {
-        const batch = relativePaths.slice(start, start + 16);
+    const batches = [];
+    let batch = [];
+    let batchBytes = 0;
+    for (const relativePath of relativePaths) {
+        let framedBytes = VERIFIED_FILESYSTEM_ENTRY_FRAME_BYTES;
+        try {
+            const stat = lstatSync(join(directoryPath, relativePath));
+            if (stat.isFile())
+                framedBytes += stat.size;
+        }
+        catch {
+            framedBytes = VERIFIED_FILESYSTEM_ENTRY_FRAME_BYTES;
+        }
+        if (batch.length > 0 &&
+            (batch.length >= VERIFIED_FILESYSTEM_BATCH_FILES ||
+                batchBytes + framedBytes > VERIFIED_FILESYSTEM_BATCH_BYTES)) {
+            batches.push(batch);
+            batch = [];
+            batchBytes = 0;
+        }
+        batch.push(relativePath);
+        batchBytes += framedBytes;
+    }
+    if (batch.length > 0)
+        batches.push(batch);
+    for (const currentBatch of batches) {
         const output = runVerifiedFilesystemHelper([
             '--read-directory-entries',
             directoryPath,
             identity.dev,
             identity.ino,
-            ...batch,
+            ...currentBatch,
         ]);
         let offset = 0;
-        for (const relativePath of batch) {
+        for (const relativePath of currentBatch) {
             if (offset + 9 > output.length) {
                 throw new Error(`Verified directory batch was truncated before ${relativePath}.`);
             }
