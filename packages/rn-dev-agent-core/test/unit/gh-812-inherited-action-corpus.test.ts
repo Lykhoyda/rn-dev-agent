@@ -663,7 +663,7 @@ test('exact-ID replay executes the safely loaded YAML after a file symlink swap'
     });
     const env = JSON.parse(result.content[0]!.text) as { ok?: boolean };
     assert.equal(env.ok, true);
-    assert.throws(() => loadAction(worktree, 'login'), /symlink/);
+    assert.throws(() => loadAction(worktree, 'login'), /symlink|replaced learned-action corpus/);
   } finally {
     fixture.cleanup();
   }
@@ -802,6 +802,42 @@ test('verified directory reads chunk a corpus larger than the helper output limi
     );
   } finally {
     fixture.cleanup();
+  }
+});
+
+test('inventory refuses per-file mutation during its batched snapshot read', () => {
+  for (const scenario of ['delete', 'replace', 'symlink'] as const) {
+    const fixture = makeFixture();
+    try {
+      seedLoginCorpus(fixture.primary);
+      const worktree = addWorktree(fixture, `file-${scenario}`);
+      inherit(worktree);
+      const actionPath = join(fixture.primary, '.rn-agent', 'actions', 'login.yaml');
+      const replacement = join(fixture.root, 'replacement.yaml');
+      writeFileSync(replacement, fixtureYaml({ id: 'replacement' }));
+
+      assert.throws(
+        () =>
+          openReadableActionLoadContext(worktree, {
+            readFiles: (directory, identity, paths) => {
+              if (scenario === 'delete') rmSync(actionPath);
+              if (scenario === 'replace') {
+                rmSync(actionPath);
+                writeFileSync(actionPath, fixtureYaml({ id: 'replacement' }));
+              }
+              if (scenario === 'symlink') {
+                rmSync(actionPath);
+                symlinkSync(replacement, actionPath);
+              }
+              return readUnfollowedFiles(directory, identity, paths);
+            },
+          }),
+        /Refusing replaced learned-action corpus/,
+        scenario,
+      );
+    } finally {
+      fixture.cleanup();
+    }
   }
 });
 
@@ -1140,7 +1176,10 @@ test('discovery skips a file swapped for a symlink under an approved corpus', ()
     const loginPath = join(fixture.primary, '.rn-agent', 'actions', 'login.yaml');
     rmSync(loginPath);
     symlinkSync(leaked, loginPath);
-    assert.throws(() => loadAction(worktree, 'login'), /symlink|inherited action/);
+    assert.throws(
+      () => loadAction(worktree, 'login'),
+      /symlink|inherited action|replaced learned-action corpus/,
+    );
     const inventory = nodeCli(
       LEARNED_CLI,
       ['--json', '--section', 'b', '--workspace-root', worktree, '--memory-cwd', worktree],

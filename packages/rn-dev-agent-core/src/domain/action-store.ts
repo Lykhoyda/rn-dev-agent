@@ -103,6 +103,12 @@ interface OwnedActionPathEntry {
   kind: 'directory' | 'file';
 }
 
+interface ReadableActionFileIdentity {
+  path: string;
+  dev: number;
+  ino: number;
+}
+
 function captureOwnedActionPathIdentity(
   projectRoot: string,
   filePath?: string,
@@ -135,6 +141,57 @@ function ownedActionPathIdentityMatches(entries: readonly OwnedActionPathEntry[]
   } catch {
     return false;
   }
+}
+
+function captureReadableActionFileIdentities(
+  directory: string,
+  files: readonly string[],
+): ReadableActionFileIdentity[] {
+  try {
+    return files.map((file) => {
+      const path = join(directory, file);
+      const stat = lstatSync(path);
+      if (stat.isSymbolicLink() || !stat.isFile()) throw new Error('changed');
+      return { path, dev: stat.dev, ino: stat.ino };
+    });
+  } catch {
+    throw new Error(`Refusing replaced learned-action corpus at ${directory}.`);
+  }
+}
+
+function assertReadableActionFileIdentitiesUnchanged(
+  directory: string,
+  identities: readonly ReadableActionFileIdentity[],
+): void {
+  try {
+    for (const identity of identities) {
+      const stat = lstatSync(identity.path);
+      if (
+        stat.isSymbolicLink() ||
+        !stat.isFile() ||
+        stat.dev !== identity.dev ||
+        stat.ino !== identity.ino
+      ) {
+        throw new Error('changed');
+      }
+    }
+  } catch {
+    throw new Error(`Refusing replaced learned-action corpus at ${directory}.`);
+  }
+}
+
+function readSnapshotFiles(
+  snapshot: ReadableActionSnapshot,
+  files: readonly string[],
+  readFiles: typeof readUnfollowedFiles,
+): string[] {
+  const identities = captureReadableActionFileIdentities(snapshot.directory, files);
+  const contents = readFiles(snapshot.directory, snapshot.identity, files);
+  assertReadableActionFileIdentitiesUnchanged(snapshot.directory, identities);
+  if (contents.length !== files.length || contents.some((entry) => entry == null)) {
+    throw new Error(`Refusing replaced learned-action corpus at ${snapshot.directory}.`);
+  }
+  return contents as string[];
 }
 
 type AcceptedReadableActionCorpus = Extract<
@@ -188,11 +245,10 @@ function prefetchRunFlowFiles(
     }
     const paths = [...pending].sort();
     if (paths.length === 0) break;
-    const contents = readFiles(snapshot.directory, snapshot.identity, paths);
+    const contents = readSnapshotFiles(snapshot, paths, readFiles);
     frontier = [];
     paths.forEach((path, index) => {
-      const text = contents[index];
-      if (text == null) return;
+      const text = contents[index]!;
       fileContents.set(path, text);
       frontier.push([path, text]);
     });
@@ -218,11 +274,10 @@ export function openReadableActionLoadContext(
     (file) => /\.ya?ml$/.test(file) && files.includes(file),
   );
   const readFiles = dependencies.readFiles ?? readUnfollowedFiles;
-  const contents = readFiles(snapshot.directory, snapshot.identity, readableFiles);
+  const contents = readSnapshotFiles(snapshot, readableFiles, readFiles);
   const fileContents = new Map<string, string>();
   readableFiles.forEach((file, index) => {
-    const text = contents[index];
-    if (text != null) fileContents.set(file, text);
+    fileContents.set(file, contents[index]!);
   });
   const completeFileContents = prefetchRunFlowFiles(snapshot, fileContents, readFiles);
   assertReadableActionOperationUnchanged(operation);
@@ -251,14 +306,7 @@ export function refreshActionLoadContext(
   assertReadableActionOperationUnchanged(context.operation);
   const fileName = resolveActionFileNameFromContext(actionId, context);
   if (!fileName) return context;
-  const [text] = readUnfollowedFiles(context.snapshot.directory, context.snapshot.identity, [
-    fileName,
-  ]);
-  if (text == null) {
-    throw new Error(
-      `Refusing inherited action symlink at ${context.snapshot.directory}/${fileName}.`,
-    );
-  }
+  const [text] = readSnapshotFiles(context.snapshot, [fileName], readUnfollowedFiles);
   assertReadableActionOperationUnchanged(context.operation);
   const fileContents = new Map(context.fileContents);
   fileContents.set(fileName, text);

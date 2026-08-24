@@ -27329,6 +27329,40 @@ function ownedActionPathIdentityMatches(entries) {
     return false;
   }
 }
+function captureReadableActionFileIdentities(directory, files) {
+  try {
+    return files.map((file) => {
+      const path = join20(directory, file);
+      const stat2 = lstatSync9(path);
+      if (stat2.isSymbolicLink() || !stat2.isFile())
+        throw new Error("changed");
+      return { path, dev: stat2.dev, ino: stat2.ino };
+    });
+  } catch {
+    throw new Error(`Refusing replaced learned-action corpus at ${directory}.`);
+  }
+}
+function assertReadableActionFileIdentitiesUnchanged(directory, identities) {
+  try {
+    for (const identity2 of identities) {
+      const stat2 = lstatSync9(identity2.path);
+      if (stat2.isSymbolicLink() || !stat2.isFile() || stat2.dev !== identity2.dev || stat2.ino !== identity2.ino) {
+        throw new Error("changed");
+      }
+    }
+  } catch {
+    throw new Error(`Refusing replaced learned-action corpus at ${directory}.`);
+  }
+}
+function readSnapshotFiles(snapshot, files, readFiles) {
+  const identities = captureReadableActionFileIdentities(snapshot.directory, files);
+  const contents = readFiles(snapshot.directory, snapshot.identity, files);
+  assertReadableActionFileIdentitiesUnchanged(snapshot.directory, identities);
+  if (contents.length !== files.length || contents.some((entry) => entry == null)) {
+    throw new Error(`Refusing replaced learned-action corpus at ${snapshot.directory}.`);
+  }
+  return contents;
+}
 function referencedActionPath(parentFile, reference) {
   if (isAbsolute3(reference) || reference.split(/[\\/]/).includes("..") || !/\.ya?ml$/i.test(reference)) {
     return null;
@@ -27353,12 +27387,10 @@ function prefetchRunFlowFiles(snapshot, initial, readFiles) {
     const paths = [...pending2].sort();
     if (paths.length === 0)
       break;
-    const contents = readFiles(snapshot.directory, snapshot.identity, paths);
+    const contents = readSnapshotFiles(snapshot, paths, readFiles);
     frontier = [];
     paths.forEach((path, index) => {
       const text = contents[index];
-      if (text == null)
-        return;
       fileContents.set(path, text);
       frontier.push([path, text]);
     });
@@ -27379,12 +27411,10 @@ function openReadableActionLoadContext(projectRoot, dependencies = {}) {
   const requestedFiles = dependencies.actionId ? [`${dependencies.actionId}.yaml`, `${dependencies.actionId}.yml`] : files;
   const readableFiles = requestedFiles.filter((file) => /\.ya?ml$/.test(file) && files.includes(file));
   const readFiles = dependencies.readFiles ?? readUnfollowedFiles;
-  const contents = readFiles(snapshot.directory, snapshot.identity, readableFiles);
+  const contents = readSnapshotFiles(snapshot, readableFiles, readFiles);
   const fileContents = /* @__PURE__ */ new Map();
   readableFiles.forEach((file, index) => {
-    const text = contents[index];
-    if (text != null)
-      fileContents.set(file, text);
+    fileContents.set(file, contents[index]);
   });
   const completeFileContents = prefetchRunFlowFiles(snapshot, fileContents, readFiles);
   assertReadableActionOperationUnchanged(operation);
@@ -27408,12 +27438,7 @@ function refreshActionLoadContext(context, actionId) {
   const fileName = resolveActionFileNameFromContext(actionId, context);
   if (!fileName)
     return context;
-  const [text] = readUnfollowedFiles(context.snapshot.directory, context.snapshot.identity, [
-    fileName
-  ]);
-  if (text == null) {
-    throw new Error(`Refusing inherited action symlink at ${context.snapshot.directory}/${fileName}.`);
-  }
+  const [text] = readSnapshotFiles(context.snapshot, [fileName], readUnfollowedFiles);
   assertReadableActionOperationUnchanged(context.operation);
   const fileContents = new Map(context.fileContents);
   fileContents.set(fileName, text);
