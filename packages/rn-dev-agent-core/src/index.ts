@@ -2223,13 +2223,11 @@ trackedTool(
 
 trackedTool(
   'cdp_interact',
-  'Interact with React components by testID (preferred) or accessibilityLabel — press buttons, long-press, type text, scroll, or set a React Hook Form field value directly. Calls JS handlers directly (not native touch). testID matches strictly; accessibilityLabel matches in tiers (exact → trim/case-insensitive → substring) and returns an ambiguity error when >1 component matches. Prefer testID for unambiguous targeting. For native gestures (swipe, drag), use device_swipe/device_press instead. setFieldValue (GH #126 Gap A): explicit fallback when typeText fails because the field routes through a Controller — pass name + value, walks UP to the nearest FormProvider and calls its setValue. Use only when typeText returns "no handler". Portal-root coverage (GH #126 Gap B): if your app uses react-native-actions-sheet, @gorhom/bottom-sheet, or any Modal-based portal whose fiber root is not in React DevTools\' getFiberRoots() registry, set `globalThis.__RN_AGENT_EXTRA_ROOTS__ = () => [sheetRef.current, ...]` in your __DEV__ block — testID resolution will then reach inside those subtrees. See CLAUDE.md template for the canonical snippet. walkUp (GH #525, opt-in): for action:"press" with a testID/accessibilityLabel selector only — when the matched component has no onPress (testID on a non-pressable wrapper), walks up at most 8 fiber ancestors and presses the nearest pressable. Refuses when no pressable exists within the bound, when duplicate matches resolve to distinct pressable ancestors (ambiguous), or when combined with a non-press action or a role/name/text/placeholder selector; default behavior without the flag is unchanged.',
+  'Interact with React components by testID, accessibilityLabel, or supported discovery facts. Calls JS handlers directly, not native touch. typeText scans every strict testID match and each self-or-descendant graph under a cycle-safe 2,000-work-unit limit, prefers genuine TextInput-family handlers, and refuses incomplete or ambiguous resolution; it also accepts placeholder or role+name. accessibilityLabel matching uses exact, normalized, then substring tiers. setFieldValue walks to the nearest FormProvider, or safely matches an explicit control prop to an ancestor useForm hook return by object identity before calling setValue. Portal roots can be registered through globalThis.__RN_AGENT_EXTRA_ROOTS__. walkUp (opt-in): for action:"press" with testID/accessibilityLabel selectors only, walks up at most 8 fiber ancestors to the nearest pressable and refuses absence or ambiguity. Use device_swipe/device_press for native gestures.',
   {
     action: z
       .enum(['press', 'longPress', 'typeText', 'scroll', 'setFieldValue'])
-      .describe(
-        'press: calls onPress (with `value` if provided, for radio/chip-style value-bearing controls). longPress: calls onLongPress. typeText: calls onChangeText. scroll: calls scrollTo or onScroll. setFieldValue: walks UP to nearest React Hook Form FormProvider and calls setValue(name, value, {shouldValidate, shouldDirty}).',
-      ),
+      .describe('Action: press, longPress, typeText, scroll, or React Hook Form setFieldValue.'),
     testID: z
       .string()
       .optional()
@@ -2242,22 +2240,15 @@ trackedTool(
       .describe(
         'accessibilityLabel prop (used if testID not provided). Tiered match: exact → normalized (trim+lowercase) → substring. Returns Ambiguous error if >1 component matches.',
       ),
-    text: z
-      .string()
-      .optional()
-      .describe(
-        'For typeText: the text to enter. For the discovery ladder (no testID/accessibilityLabel, action:"press"): byText — match a host Text by its visible text content.',
-      ),
+    text: z.string().optional().describe('Text to enter, or visible text selector for press.'),
     role: z
       .string()
       .optional()
-      .describe(
-        'Discovery ladder (press-only): match by accessibility role (e.g. button, tab, link). Combine with `name` for the accessible name. Needs an explicit accessibilityRole — Pressables without one resolve as role "none".',
-      ),
+      .describe('Accessibility role selector; for typeText combine with name.'),
     placeholder: z
       .string()
       .optional()
-      .describe('Discovery ladder (press-only): match a TextInput by its placeholder text.'),
+      .describe('Match a TextInput placeholder for press or typeText.'),
     exact: z
       .boolean()
       .optional()
@@ -2274,9 +2265,7 @@ trackedTool(
     name: z
       .string()
       .optional()
-      .describe(
-        'For setFieldValue: the React Hook Form field name (same string you passed to useController({name}) or <Controller name="...">). For the discovery ladder with `role`: the accessible name to match (e.g. role:"button" + name:"Save").',
-      ),
+      .describe('React Hook Form field name, or accessible name paired with role.'),
     value: z
       .union([z.string(), z.number(), z.boolean()])
       .optional()

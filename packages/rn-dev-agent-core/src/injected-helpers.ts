@@ -2,7 +2,7 @@
 // whenever the injected surface changes; it flows into the IIFE's freshness
 // check (__RN_AGENT.__v) AND the post-injection log line, so they can never
 // drift (the log previously hard-coded a stale "v11").
-export const HELPERS_VERSION = 45;
+export const HELPERS_VERSION = 46;
 
 export const INJECTED_HELPERS = `
 (function() {
@@ -1456,6 +1456,8 @@ export const INJECTED_HELPERS = `
     var selector = opts.testID || opts.accessibilityLabel;
     var matchField = opts.testID ? 'testID' : 'accessibilityLabel';
     var isLabelMatch = matchField === 'accessibilityLabel';
+    var ladderTarget = null;
+    var ladderBundle = null;
 
     if (!action) return JSON.stringify({ error: 'action is required' });
 
@@ -1468,19 +1470,21 @@ export const INJECTED_HELPERS = `
       });
     }
 
-    // Task 7 — ladder routing. When the caller passes a declarative selector
-    // (role/name/text/placeholder) and NO testID/accessibilityLabel, resolve
-    // via resolveLadder then press the found fiber or its nearest onPress
-    // ancestor (walking .return). testID/accessibilityLabel keep the legacy
-    // path below unchanged (including Task 6's fail-closed truncation).
+    // Task 7 — ladder routing. typeText reuses the established placeholder
+    // and role+name facts; its text argument remains the value to enter.
     if (!selector && (opts.role || opts.name || opts.text || opts.placeholder)) {
-      // Ladder selectors only support press in Phase 1 — fail closed for any
-      // other action instead of silently pressing (Codex review).
-      if (opts.action && opts.action !== 'press') {
+      var ladderTypeText = action === 'typeText';
+      if (ladderTypeText && !opts.placeholder && !(opts.role && opts.name)) {
         return JSON.stringify({
-          error: 'Ladder selectors (role/name/text/placeholder) support only action:"press"',
+          error: 'typeText requires testID, accessibilityLabel, placeholder, or role+name',
+          hint: 'The text parameter is the value to enter, not a byText selector.'
+        });
+      }
+      if (action !== 'press' && !ladderTypeText) {
+        return JSON.stringify({
+          error: 'Ladder selectors support press, plus placeholder or role+name for typeText',
           requestedAction: opts.action,
-          hint: 'Use a testID or accessibilityLabel for longPress / typeText / scroll / setFieldValue.'
+          hint: 'Use a testID or accessibilityLabel for longPress, scroll, or setFieldValue.'
         });
       }
       // GH #525 — walkUp's bounded search and ambiguity refusal belong to the
@@ -1492,38 +1496,52 @@ export const INJECTED_HELPERS = `
         });
       }
       var ladderResult = resolveLadder(JSON.stringify({
-        role: opts.role, name: opts.name, text: opts.text,
+        role: opts.role, name: opts.name, text: ladderTypeText ? undefined : opts.text,
         placeholder: opts.placeholder, exact: opts.exact, includeHidden: opts.includeHidden
       }));
       var parsed = JSON.parse(ladderResult);
       if (!parsed.found) return ladderResult;
 
-      var targetFiber = __resolveLadderFiber(opts);
+      var ladderSpec = ladderTypeText ? {
+        role: opts.role,
+        name: opts.name,
+        placeholder: opts.placeholder,
+        exact: opts.exact,
+        includeHidden: opts.includeHidden
+      } : opts;
+      var targetFiber = __resolveLadderFiber(ladderSpec);
       if (!targetFiber) return JSON.stringify({ error: 'Component not found' });
 
-      var pressFiber = targetFiber;
-      while (pressFiber) {
-        var pf = pressFiber.memoizedProps;
-        if (pf && typeof pf.onPress === 'function') break;
-        pressFiber = pressFiber.return;
-      }
-      if (!pressFiber) {
-        return JSON.stringify({ error: 'Component has no onPress handler', bundle: parsed.bundle });
-      }
-      var pName = (pressFiber.type && (typeof pressFiber.type === 'string'
-        ? pressFiber.type
-        : (pressFiber.type.displayName || pressFiber.type.name))) || 'Unknown';
-      try {
-        pressFiber.memoizedProps.onPress({ nativeEvent: {} });
-        return JSON.stringify({ success: true, action: 'press', component: pName, bundle: parsed.bundle });
-      } catch (e) {
-        return JSON.stringify({ error: 'onPress threw', message: e && e.message, component: pName });
+      if (ladderTypeText) {
+        ladderTarget = targetFiber;
+        ladderBundle = parsed.bundle;
+      } else {
+        var pressFiber = targetFiber;
+        while (pressFiber) {
+          var pf = pressFiber.memoizedProps;
+          if (pf && typeof pf.onPress === 'function') break;
+          pressFiber = pressFiber.return;
+        }
+        if (!pressFiber) {
+          return JSON.stringify({ error: 'Component has no onPress handler', bundle: parsed.bundle });
+        }
+        var pName = (pressFiber.type && (typeof pressFiber.type === 'string'
+          ? pressFiber.type
+          : (pressFiber.type.displayName || pressFiber.type.name))) || 'Unknown';
+        try {
+          pressFiber.memoizedProps.onPress({ nativeEvent: {} });
+          return JSON.stringify({ success: true, action: 'press', component: pName, bundle: parsed.bundle });
+        } catch (e) {
+          return JSON.stringify({ error: 'onPress threw', message: e && e.message, component: pName });
+        }
       }
     }
 
-    if (!selector) return JSON.stringify({ error: 'testID or accessibilityLabel is required' });
+    if (!selector && !ladderTarget) return JSON.stringify({ error: 'testID or accessibilityLabel is required' });
+    if (ladderTarget) isLabelMatch = false;
 
-    var found = null;
+    var found = ladderTarget;
+    var typeTextSources = ladderTarget ? [ladderTarget] : [];
     var findCount = 0;
     // Fail-closed truncation budget. Mirrors the salient-digest budget
     // (Math.min(cap, perRoot * roots)) and its wall-clock guard
@@ -1551,11 +1569,20 @@ export const INJECTED_HELPERS = `
     // GH #525 — walkUp collects every strict-testID match so duplicates can refuse.
     var walkUpCollect = opts.walkUp === true && !isLabelMatch;
     var walkUpMatches = [];
+    var collectTypeTextMatches = action === 'typeText' && !isLabelMatch && !ladderTarget;
+    var findSeen = null;
+    var findCycleDetected = false;
 
     function findFiber(fiber) {
-      var current = fiber;
-      while (current) {
+      var findStack = [fiber];
+      while (findStack.length > 0) {
+        var current = findStack.pop();
         if (findTruncated) return;
+        if (findSeen.has(current)) {
+          findCycleDetected = true;
+          continue;
+        }
+        findSeen.add(current);
         findCount++;
         if (findCount > findBudget || (Date.now() - findStart) > 3000) {
           findTruncated = true;
@@ -1567,6 +1594,8 @@ export const INJECTED_HELPERS = `
             if (props[matchField] === selector) {
               if (walkUpCollect) {
                 walkUpMatches.push(current);
+              } else if (collectTypeTextMatches) {
+                typeTextSources.push(current);
               } else {
                 found = current;
                 return;
@@ -1588,9 +1617,8 @@ export const INJECTED_HELPERS = `
             }
           }
         }
-        if (current.child) findFiber(current.child);
-        if (!isLabelMatch && found) return;
-        current = current.sibling;
+        if (current.sibling) findStack.push(current.sibling);
+        if (current.child) findStack.push(current.child);
       }
     }
 
@@ -1605,7 +1633,8 @@ export const INJECTED_HELPERS = `
     findBudget = Math.min(40000, 8000 * Math.max(1, rootsSeeded));
     forEachRootFiber(function(rootFiber) {
       if (findTruncated) return found;
-      if (!isLabelMatch && found) return found;
+      if (!isLabelMatch && found && !collectTypeTextMatches) return found;
+      findSeen = new WeakSet();
       findFiber(rootFiber);
       return isLabelMatch ? null : found;
     });
@@ -1619,6 +1648,16 @@ export const INJECTED_HELPERS = `
         truncated: true,
         scanned: findCount,
         hint: 'increase budget or scope with a container/anchor'
+      });
+    }
+
+    if (findCycleDetected && collectTypeTextMatches) {
+      return JSON.stringify({
+        error: 'typeText resolution truncated',
+        truncated: true,
+        reason: 'cycle',
+        scanned: findCount,
+        hint: 'The fiber child/sibling graph contained a cycle; no handler was called.'
       });
     }
 
@@ -1658,6 +1697,11 @@ export const INJECTED_HELPERS = `
     }
 
     if (walkUpCollect && walkUpMatches.length > 0) found = walkUpMatches[0];
+    if (collectTypeTextMatches && typeTextSources.length > 0) found = typeTextSources[0];
+    if (ladderTarget) {
+      found = ladderTarget;
+      typeTextSources = [ladderTarget];
+    }
 
     if (!found) {
       return JSON.stringify({
@@ -1758,119 +1802,124 @@ export const INJECTED_HELPERS = `
 
       if (action === 'typeText') {
         var text = opts.text !== undefined ? opts.text : '';
-
-        // Issue #126 Fix A — typeText handler resolution.
-        //
-        // Path 1: matched fiber itself has onChangeText / onChange. SINGLE-
-        // fire — pick onChangeText if present, else onChange. Avoids the
-        // double-fire bug: when an RHF Controller wraps a TextInput via
-        // <TextInput {...field} />, both onChangeText and onChange are bound
-        // to field.onChange. Firing both ran field.onChange twice with
-        // different argument shapes (string then {nativeEvent}), corrupting
-        // the form state and double-triggering validators.
-        //
-        // Path 2: when matched fiber has no typeable handler, walk
-        // descendants for a typeable child. Common case: design-system
-        // TextField wraps TextInput in an outer Pressable/View; the wrapper
-        // testID resolves to the wrapper fiber whose props don't carry
-        // onChangeText. Walking down finds the inner TextInput. Bounds:
-        // depth ≤ 16, visit cap 200 across both passes. Two-pass: pass 1
-        // considers only onChangeText; pass 2 falls back to onChange (the
-        // overloaded RN handler) only if no onChangeText descendant
-        // exists. Within each pass: prefer fibers whose type matches a
-        // TextInput-family fingerprint, then dedupe candidates that share
-        // the same handler function reference (react-native-paper wraps
-        // TextInputOutlined → TextInput → InternalTextInput each forwarding
-        // the same onChangeText — pick the deepest leaf), and return
-        // Ambiguous only when truly distinct typed handlers compete.
         var verify = opts.verify === true;
         var controlled = typeof props.value === 'string';
         var valueBefore = controlled ? props.value : null;
-
-        if (typeof props.onChangeText === 'function' || typeof props.onChange === 'function') {
-          var p1Handler;
-          if (typeof props.onChangeText === 'function') {
-            p1Handler = 'onChangeText';
-            props.onChangeText(text);
-          } else {
-            p1Handler = 'onChange';
-            props.onChange({ nativeEvent: { text: text } });
-          }
-          return JSON.stringify({
-            success: true, action: 'typeText', component: typeName, testID: selector, text: text,
-            handlerCalled: p1Handler, controlled: controlled, valueBefore: valueBefore,
-            resolvedFrom: 'matched-fiber'
-          });
-        }
-
-        // Anchored on TextInput-family names. Drops bare Input/Field
-        // substrings to avoid false-positives on RadioGroupField,
-        // InputAccessoryView, BottomSheetTextInput's wrapper, etc.
         var TYPEABLE_TYPE_RE = /(TextInput|TextField|EditText)/;
-        var visited = 0;
-        var DESCENDANT_DEPTH_CAP = 16;
-        var DESCENDANT_VISIT_CAP = 200;
+        var TYPE_TEXT_WORK_LIMIT = 2000;
+        var typeTextWork = 0;
+        var typeTextTruncated = false;
+        var typeTextTruncationReason = null;
+        var visitedFibers = 0;
+        var completed = new WeakSet();
+        var onChangeTextMatches = [];
+        var onChangeMatches = [];
 
-        function findHandlerDescendants(handlerName) {
-          var matches = [];
-          function walk(node, depth) {
-            if (!node || depth > DESCENDANT_DEPTH_CAP || visited > DESCENDANT_VISIT_CAP) return;
-            visited++;
-            var nProps = node.memoizedProps || {};
-            if (typeof nProps[handlerName] === 'function') {
-              var nName = (node.type && (node.type.displayName || node.type.name)) || '';
-              matches.push({
-                fiber: node,
-                props: nProps,
-                name: nName,
-                depth: depth,
-                typeFingerprint: TYPEABLE_TYPE_RE.test(nName)
-              });
-            }
-            if (node.child) walk(node.child, depth + 1);
-            if (node.sibling) walk(node.sibling, depth);
+        function consumeTypeTextWork() {
+          typeTextWork++;
+          if (typeTextWork > TYPE_TEXT_WORK_LIMIT) {
+            typeTextTruncated = true;
+            typeTextTruncationReason = 'work-limit';
+            return false;
           }
-          if (found.child) walk(found.child, 1);
-          return matches;
+          return true;
         }
 
-        // Dedupe candidates that share the same handler function reference.
-        // react-native-paper's TextInputOutlined → TextInput → InternalTextInput
-        // chain each forwards the SAME onChangeText down — they're the same
-        // logical handler, not three independent typeable fields. Keep the
-        // deepest leaf so the call lands on the host-component fiber that
-        // actually owns the input. (Codex M4 / multi-LLM review of issue #126.)
-        function dedupeByHandlerIdentity(matches, handlerName) {
-          var byFn = [];
-          for (var i = 0; i < matches.length; i++) {
-            var m = matches[i];
-            var fn = m.props[handlerName];
-            var existingIdx = -1;
-            for (var j = 0; j < byFn.length; j++) {
-              if (byFn[j].props[handlerName] === fn) { existingIdx = j; break; }
+        function typeTextFiberName(fiber) {
+          return (fiber && fiber.type && (typeof fiber.type === 'string'
+            ? fiber.type
+            : (fiber.type.displayName || fiber.type.name))) || 'Unknown';
+        }
+
+        function collectTypeable(root) {
+          var localSeen = new WeakSet();
+          var stack = [{ fiber: root, depth: 0, includeSibling: false }];
+          while (stack.length > 0 && !typeTextTruncated) {
+            var frame = stack.pop();
+            var node = frame.fiber;
+            if (!consumeTypeTextWork()) return;
+            if (localSeen.has(node)) {
+              typeTextTruncated = true;
+              typeTextTruncationReason = 'cycle';
+              return;
             }
-            if (existingIdx === -1) {
-              byFn.push(m);
-            } else if (m.depth > byFn[existingIdx].depth) {
-              // Same handler, deeper fiber — replace with the leaf.
-              byFn[existingIdx] = m;
+            localSeen.add(node);
+            if (completed.has(node)) continue;
+            completed.add(node);
+            visitedFibers++;
+            var nodeProps = node.memoizedProps || {};
+            var nodeName = typeTextFiberName(node);
+            var candidate = {
+              fiber: node,
+              props: nodeProps,
+              name: nodeName,
+              depth: frame.depth,
+              typeFingerprint: TYPEABLE_TYPE_RE.test(nodeName)
+            };
+            if (typeof nodeProps.onChangeText === 'function') onChangeTextMatches.push(candidate);
+            if (typeof nodeProps.onChange === 'function') onChangeMatches.push(candidate);
+            if (frame.includeSibling && node.sibling) {
+              stack.push({ fiber: node.sibling, depth: frame.depth, includeSibling: true });
+            }
+            if (node.child) {
+              stack.push({ fiber: node.child, depth: frame.depth + 1, includeSibling: true });
             }
           }
-          return byFn;
+        }
+
+        var typeTextRoots = typeTextSources.length > 0 ? typeTextSources : [found];
+        for (var tri = 0; tri < typeTextRoots.length && !typeTextTruncated; tri++) {
+          collectTypeable(typeTextRoots[tri]);
+        }
+
+        function isLogicalAncestor(ancestorMatch, descendantMatch, handlerName) {
+          var cursor = descendantMatch.fiber.return;
+          var returnSeen = new WeakSet();
+          while (cursor) {
+            if (!consumeTypeTextWork()) return false;
+            if (returnSeen.has(cursor)) {
+              typeTextTruncated = true;
+              typeTextTruncationReason = 'cycle';
+              return false;
+            }
+            returnSeen.add(cursor);
+            if (cursor === ancestorMatch.fiber) {
+              var ancestorID = ancestorMatch.props.testID || ancestorMatch.props.nativeID;
+              var descendantID = descendantMatch.props.testID || descendantMatch.props.nativeID;
+              return (typeof ancestorMatch.fiber.type !== 'string' && typeof descendantMatch.fiber.type === 'string')
+                || (!!ancestorID && ancestorID === descendantID)
+                || ancestorMatch.props[handlerName] === descendantMatch.props[handlerName];
+            }
+            cursor = cursor.return;
+          }
+          return false;
         }
 
         function pickFromMatches(matches, handlerName) {
           if (matches.length === 0) return { kind: 'none' };
-          var deduped = dedupeByHandlerIdentity(matches, handlerName);
           var typed = [];
-          for (var i = 0; i < deduped.length; i++) if (deduped[i].typeFingerprint) typed.push(deduped[i]);
-          if (typed.length === 1) return { kind: 'one', match: typed[0], handler: handlerName };
-          if (typed.length > 1) return { kind: 'ambiguous', matches: typed, handler: handlerName };
-          if (deduped.length === 1) return { kind: 'one', match: deduped[0], handler: handlerName };
-          return { kind: 'ambiguous', matches: deduped, handler: handlerName };
+          for (var i = 0; i < matches.length; i++) {
+            if (!consumeTypeTextWork()) return { kind: 'truncated' };
+            if (matches[i].typeFingerprint) typed.push(matches[i]);
+          }
+          var preferred = typed.length > 0 ? typed : matches;
+          var dropped = new WeakSet();
+          for (var ai = 0; ai < preferred.length; ai++) {
+            for (var bi = 0; bi < preferred.length; bi++) {
+              if (ai === bi || dropped.has(preferred[ai].fiber)) continue;
+              if (isLogicalAncestor(preferred[ai], preferred[bi], handlerName)) dropped.add(preferred[ai].fiber);
+              if (typeTextTruncated) return { kind: 'truncated' };
+            }
+          }
+          var finalists = [];
+          for (var fi = 0; fi < preferred.length; fi++) {
+            if (!dropped.has(preferred[fi].fiber)) finalists.push(preferred[fi]);
+          }
+          if (finalists.length === 1) return { kind: 'one', match: finalists[0], handler: handlerName };
+          return { kind: 'ambiguous', matches: finalists, handler: handlerName };
         }
 
-        var pass1 = pickFromMatches(findHandlerDescendants('onChangeText'), 'onChangeText');
+        var pass1 = pickFromMatches(onChangeTextMatches, 'onChangeText');
         var picked = null;
         if (pass1.kind === 'one') {
           picked = pass1;
@@ -1886,8 +1935,7 @@ export const INJECTED_HELPERS = `
             hint: 'Multiple onChangeText descendants under testID "' + selector + '". Pass a more specific testID — ideally the inner TextInput itself.'
           });
         } else {
-          // pass 2 — onChange fallback
-          var pass2 = pickFromMatches(findHandlerDescendants('onChange'), 'onChange');
+          var pass2 = pickFromMatches(onChangeMatches, 'onChange');
           if (pass2.kind === 'one') {
             picked = pass2;
           } else if (pass2.kind === 'ambiguous') {
@@ -1904,6 +1952,19 @@ export const INJECTED_HELPERS = `
           }
         }
 
+        if (typeTextTruncated) {
+          return JSON.stringify({
+            error: 'typeText resolution truncated',
+            truncated: true,
+            reason: typeTextTruncationReason,
+            scanned: visitedFibers,
+            work: typeTextWork,
+            workLimit: TYPE_TEXT_WORK_LIMIT,
+            handlerCalled: false,
+            hint: 'The bounded typeText resolver did not inspect the complete candidate graph; no handler was called.'
+          });
+        }
+
         if (!picked) {
           if (verify) {
             return JSON.stringify({ success: true, action: 'typeText', testID: selector, handlerCalled: false, controlled: controlled, valueBefore: valueBefore });
@@ -1912,14 +1973,12 @@ export const INJECTED_HELPERS = `
             error: 'Component has no onChangeText or onChange handler',
             component: typeName,
             testID: selector,
-            hint: 'Walked up to ' + DESCENDANT_DEPTH_CAP + ' levels (' + visited + ' fibers) — no descendant has a typeable handler. The matched fiber may not contain a TextInput. Use cdp_component_tree to inspect, or pass the inner field testID directly.'
+            handlerCalled: false,
+            visitedFibers: visitedFibers,
+            hint: 'Inspected every matching fiber and its bounded descendant graph — no typeable handler exists. Use cdp_component_tree to inspect the field, or pass the inner field testID directly.'
           });
         }
 
-        // Single-fire — call only the picked handler. Avoids the
-        // double-fire bug on RHF Controllers where field.onChange wired
-        // to onChangeText + RN HostComponent onChange would each run
-        // with different argument shapes.
         if (picked.handler === 'onChangeText') {
           picked.match.props.onChangeText(text);
         } else {
@@ -1928,29 +1987,16 @@ export const INJECTED_HELPERS = `
 
         var pickedControlled = typeof picked.match.props.value === 'string';
         return JSON.stringify({
-          success: true, action: 'typeText', component: typeName, testID: selector, text: text,
+          success: true, action: 'typeText', component: picked.match.name, testID: selector, text: text,
           handlerCalled: picked.handler, controlled: pickedControlled,
           valueBefore: pickedControlled ? picked.match.props.value : valueBefore,
           resolvedFrom: picked.match.name + (picked.match.props.testID ? ' [testID="' + picked.match.props.testID + '"]' : ''),
-          visitedFibers: visited
+          visitedFibers: visitedFibers,
+          selectorBundle: ladderBundle || undefined
         });
       }
 
       if (action === 'setFieldValue') {
-        // Issue #126 Gap A — explicit React Hook Form fallback. typeText's
-        // handler chain walks DOWN looking for a TextInput descendant with
-        // onChangeText/onChange. That works for wrapper-Pressable patterns
-        // where the inner TextInput is reachable, but fails when the field's
-        // value flows through field.onChange → FormProvider context →
-        // setValue. There's no inner TextInput-shaped fiber to find, because
-        // the design-system field calls field.onChange directly via a
-        // Controller render prop.
-        //
-        // Resolution: walk UP from the matched fiber (the testID anchor)
-        // looking for a Provider fiber whose memoizedProps.value duck-types
-        // as a React Hook Form UseFormReturn. Then call value.setValue(
-        // name, value, options). The closest ancestor wins (natural React
-        // context resolution), so nested forms behave intuitively.
         var fieldName = opts.name;
         var fieldValue = opts.value;
         if (typeof fieldName !== 'string' || fieldName.length === 0) {
@@ -1963,8 +2009,7 @@ export const INJECTED_HELPERS = `
         var shouldValidate = opts.shouldValidate !== false;
         var shouldDirty = opts.shouldDirty !== false;
 
-        var ANCESTOR_DEPTH_CAP = 32;
-        var ANCESTOR_VISIT_CAP = 100;
+        var FORM_RESOLUTION_WORK_LIMIT = 200;
         function looksLikeUseFormReturn(v) {
           return (
             v && typeof v === 'object'
@@ -1973,26 +2018,109 @@ export const INJECTED_HELPERS = `
             && v.control && typeof v.control === 'object'
           );
         }
-        var ancestor = found.return;
-        var ancestorDepth = 0;
+        var ancestor = found;
         var ancestorVisits = 0;
+        var formResolutionWork = 0;
+        var formResolutionReason = null;
         var formReturn = null;
-        while (ancestor && ancestorDepth < ANCESTOR_DEPTH_CAP && ancestorVisits < ANCESTOR_VISIT_CAP) {
-          ancestorVisits++;
-          var aProps = ancestor.memoizedProps;
-          if (aProps && looksLikeUseFormReturn(aProps.value)) {
-            formReturn = aProps.value;
+        var formResolution = null;
+        var ancestorSeen = new WeakSet();
+        var explicitControls = [];
+        var hookFormReturns = [];
+
+        function consumeFormWork() {
+          formResolutionWork++;
+          if (formResolutionWork > FORM_RESOLUTION_WORK_LIMIT) {
+            formResolutionReason = 'work-limit';
+            return false;
+          }
+          return true;
+        }
+
+        function pushIdentityUnique(list, value) {
+          for (var identityIndex = 0; identityIndex < list.length; identityIndex++) {
+            if (list[identityIndex] === value) return;
+          }
+          list.push(value);
+        }
+
+        while (ancestor && !formResolutionReason) {
+          if (!consumeFormWork()) break;
+          if (ancestorSeen.has(ancestor)) {
+            formResolutionReason = 'cycle';
             break;
           }
+          ancestorSeen.add(ancestor);
+          ancestorVisits++;
+          var aProps = ancestor.memoizedProps || {};
+          if (aProps && looksLikeUseFormReturn(aProps.value)) {
+            formReturn = aProps.value;
+            formResolution = 'form-provider';
+            break;
+          }
+          if (aProps.control && typeof aProps.control === 'object') {
+            pushIdentityUnique(explicitControls, aProps.control);
+          }
+
+          var hook = ancestor.memoizedState;
+          var hookSeen = new WeakSet();
+          while (hook && typeof hook === 'object' && !formResolutionReason) {
+            if (!consumeFormWork()) break;
+            if (hookSeen.has(hook)) {
+              formResolutionReason = 'cycle';
+              break;
+            }
+            hookSeen.add(hook);
+            var hookValue = hook.memoizedState;
+            if (looksLikeUseFormReturn(hookValue)) pushIdentityUnique(hookFormReturns, hookValue);
+            if (hookValue && typeof hookValue === 'object' && looksLikeUseFormReturn(hookValue.current)) {
+              pushIdentityUnique(hookFormReturns, hookValue.current);
+            }
+            hook = hook.next;
+          }
           ancestor = ancestor.return;
-          ancestorDepth++;
+        }
+
+        if (formResolutionReason) {
+          return JSON.stringify({
+            error: 'setFieldValue resolution truncated',
+            truncated: true,
+            reason: formResolutionReason,
+            work: formResolutionWork,
+            workLimit: FORM_RESOLUTION_WORK_LIMIT,
+            ancestorVisits: ancestorVisits,
+            hint: 'The bounded FormProvider/useForm owner scan was incomplete; setValue was not called.'
+          });
+        }
+
+        if (!formReturn) {
+          var matchingHookReturns = [];
+          for (var hfi = 0; hfi < hookFormReturns.length; hfi++) {
+            for (var eci = 0; eci < explicitControls.length; eci++) {
+              if (hookFormReturns[hfi].control === explicitControls[eci]) {
+                pushIdentityUnique(matchingHookReturns, hookFormReturns[hfi]);
+              }
+            }
+          }
+          if (matchingHookReturns.length === 1) {
+            formReturn = matchingHookReturns[0];
+            formResolution = 'control-prop-hook';
+          } else if (matchingHookReturns.length > 1) {
+            return JSON.stringify({
+              error: 'setFieldValue: ambiguous useForm control ownership',
+              testID: selector,
+              count: matchingHookReturns.length,
+              ancestorVisits: ancestorVisits,
+              hint: 'Multiple useForm hook returns own the explicit control prop. Add a more specific testID inside the intended Controller subtree.'
+            });
+          }
         }
         if (!formReturn) {
           return JSON.stringify({
-            error: 'setFieldValue: no FormProvider ancestor found',
+            error: 'setFieldValue: no FormProvider ancestor or matching useForm control found',
             testID: selector,
             ancestorVisits: ancestorVisits,
-            hint: 'No React Hook Form FormProvider ancestor with setValue+getValues+control was reachable within ' + ANCESTOR_DEPTH_CAP + ' levels. Either the form is not wrapped in <FormProvider {...methods}>, or the testID anchor sits outside the form subtree. If you only need to fire onChangeText/onChange, use action="typeText" instead.'
+            hint: 'The field is not wrapped in <FormProvider {...methods}>, and no ancestor useForm hook return matched an explicit control prop by identity. If you only need to fire onChangeText/onChange, use action="typeText" instead.'
           });
         }
         var coercedToString = false;
@@ -2023,7 +2151,8 @@ export const INJECTED_HELPERS = `
           coercedToString: coercedToString,
           shouldValidate: shouldValidate,
           shouldDirty: shouldDirty,
-          ancestorVisits: ancestorVisits
+          ancestorVisits: ancestorVisits,
+          resolvedFrom: formResolution
         });
       }
 

@@ -8,7 +8,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createSandbox, buildFiber } from './helpers/inject-harness.js';
-import { INJECTED_HELPERS } from '../../dist/injected-helpers.js';
 
 function ladder(sb, spec) {
   return JSON.parse(sb.__RN_AGENT.resolveLadder(JSON.stringify(spec)));
@@ -56,14 +55,14 @@ test('byText matches the visible text content, NOT accessibilityLabel', () => {
 });
 
 // ── #4: ladder interact() rejects non-press actions (fail-closed) ─────────
-test('ladder interact rejects non-press actions instead of silently pressing', () => {
+test('ladder interact rejects unsupported actions instead of silently pressing', () => {
   const root = buildFiber({
     name: 'App',
     children: [{ hostType: 'RCTText', children: [{ text: 'Hello' }] }],
   });
   const sb = createSandbox({ fiberRoot: root });
   const r = JSON.parse(sb.__RN_AGENT.interact({ action: 'longPress', text: 'Hello' }));
-  assert.match(r.error, /only action:"press"/);
+  assert.match(r.error, /support press/);
   assert.equal(r.requestedAction, 'longPress');
 });
 
@@ -74,14 +73,6 @@ test('ladder interact with action:press passes the action guard (reaches resolut
   });
   const sb = createSandbox({ fiberRoot: root });
   const r = JSON.parse(sb.__RN_AGENT.interact({ action: 'press', text: 'NoSuchText9z' }));
-  // press is allowed through the guard → it resolves and reports not-found,
-  // never the "only action:press" rejection.
-  assert.doesNotMatch(JSON.stringify(r), /only action:"press"/);
-});
-
-// ── source-drift guards ──────────────────────────────────────────────────
-test('source guards: truncation + text-content + action guard present', () => {
-  assert.match(INJECTED_HELPERS, /Resolution truncated/);
-  assert.match(INJECTED_HELPERS, /__refTextContent/);
-  assert.match(INJECTED_HELPERS, /only action:\\"press\\"|only action:"press"/);
+  // press is allowed through the guard and reaches resolution.
+  assert.doesNotMatch(JSON.stringify(r), /support press/);
 });

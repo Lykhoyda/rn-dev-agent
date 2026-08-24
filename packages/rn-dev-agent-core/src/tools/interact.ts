@@ -3,7 +3,19 @@ import { okResult, failResult, withConnection, pickDefined } from '../utils.js';
 
 // Diagnostics the injected interact attaches to a refusal — the caller needs
 // them to pick a different selector (GH #525 walkUp refusals included).
-const REFUSAL_FIELDS = ['hint', 'walkUpSearched', 'count', 'candidates', 'matches'] as const;
+const REFUSAL_FIELDS = [
+  'hint',
+  'walkUpSearched',
+  'count',
+  'candidates',
+  'matches',
+  'truncated',
+  'reason',
+  'scanned',
+  'work',
+  'workLimit',
+  'handlerCalled',
+] as const;
 
 type InteractAction = 'press' | 'longPress' | 'typeText' | 'scroll' | 'setFieldValue';
 
@@ -20,7 +32,7 @@ interface InteractArgs {
   value?: string | number | boolean;
   shouldValidate?: boolean;
   shouldDirty?: boolean;
-  // Discovery ladder (resolveLadder) — selector form; press-only.
+  // Discovery ladder (resolveLadder) selector facts.
   role?: string;
   placeholder?: string;
   exact?: boolean;
@@ -31,7 +43,10 @@ interface InteractArgs {
 
 export function createInteractHandler(getClient: () => CDPClient) {
   return withConnection(getClient, async (args: InteractArgs, client) => {
-    const hasLadderSelector = Boolean(args.role || args.text || args.placeholder);
+    const hasLadderSelector =
+      args.action === 'typeText'
+        ? Boolean(args.placeholder || (args.role && args.name))
+        : Boolean(args.role || args.text || args.placeholder);
     if (!args.testID && !args.accessibilityLabel && !hasLadderSelector) {
       return failResult(
         'A selector is required: testID / accessibilityLabel, or a discovery-ladder selector (role / text / placeholder).',
