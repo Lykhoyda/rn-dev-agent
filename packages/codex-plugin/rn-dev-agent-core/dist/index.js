@@ -58757,6 +58757,141 @@ var INJECTED_HELPERS = `
     var wantedRole = selectorKind === 'role+name' ? normalizeRole(opts.role) : null;
     var sourceSeen = new WeakSet();
 
+    function typeTextFindByNativeID(id) {
+      var match = null;
+      var completed = new WeakSet();
+      forEachRootFiber(function(rootFiber) {
+        if (match || state.truncated) return match;
+        var localSeen = new WeakSet();
+        var stack = [rootFiber];
+        while (stack.length > 0 && !state.truncated) {
+          var node = stack.pop();
+          if (!consumeWork()) break;
+          if (localSeen.has(node)) {
+            state.truncated = true;
+            state.reason = 'cycle';
+            break;
+          }
+          localSeen.add(node);
+          if (completed.has(node)) continue;
+          completed.add(node);
+          state.visitedFibers++;
+          var props = node.memoizedProps || {};
+          if (props.nativeID === id) {
+            match = node;
+            break;
+          }
+          if (node.sibling) stack.push(node.sibling);
+          if (node.child) stack.push(node.child);
+        }
+        return match;
+      });
+      return match;
+    }
+
+    function typeTextRefTextContent(fiber) {
+      var parts = [];
+      var seen = new WeakSet();
+      var stack = [{ fiber: fiber, includeSibling: false }];
+      while (stack.length > 0 && !state.truncated) {
+        var frame = stack.pop();
+        var node = frame.fiber;
+        if (!consumeWork()) break;
+        if (seen.has(node)) {
+          state.truncated = true;
+          state.reason = 'cycle';
+          break;
+        }
+        seen.add(node);
+        if (typeof node.memoizedProps === 'string') {
+          if (node.memoizedProps) parts.push(node.memoizedProps);
+          continue;
+        }
+        if (frame.includeSibling && node.sibling) {
+          stack.push({ fiber: node.sibling, includeSibling: true });
+        }
+        if (node.child) stack.push({ fiber: node.child, includeSibling: true });
+      }
+      return state.truncated ? undefined : __anNorm(parts.join(' '));
+    }
+
+    function typeTextAriaLabel(fiber) {
+      var ids = __ariaLabelledByIds(fiber);
+      if (ids.length > 0) {
+        var labelTexts = [];
+        for (var idIndex = 0; idIndex < ids.length; idIndex++) {
+          if (!consumeWork()) return undefined;
+          var ref = typeTextFindByNativeID(ids[idIndex]);
+          if (state.truncated) return undefined;
+          if (ref) {
+            var refText = typeTextRefTextContent(ref);
+            if (state.truncated) return undefined;
+            if (refText) labelTexts.push(refText);
+          }
+        }
+        if (labelTexts.length > 0) return __anNorm(labelTexts.join(' '));
+      }
+      var props = (fiber && fiber.memoizedProps) || {};
+      var explicit = props['aria-label'];
+      if (explicit === undefined || explicit === null) explicit = props.accessibilityLabel;
+      if (explicit) return explicit;
+      if (hostKind(fiber) === 'image' && props.alt) return props.alt;
+      return undefined;
+    }
+
+    function typeTextAccessibleName(fiber) {
+      var seen = new WeakSet();
+      var stack = [{ fiber: fiber, root: true, entered: false, child: null, parts: [], result: undefined }];
+      while (stack.length > 0 && !state.truncated) {
+        var frame = stack[stack.length - 1];
+        if (!frame.entered) {
+          if (!consumeWork()) break;
+          if (seen.has(frame.fiber)) {
+            state.truncated = true;
+            state.reason = 'cycle';
+            break;
+          }
+          seen.add(frame.fiber);
+          frame.entered = true;
+          if (typeof frame.fiber.memoizedProps === 'string') {
+            frame.result = frame.fiber.memoizedProps || undefined;
+          } else {
+            var label = typeTextAriaLabel(frame.fiber);
+            if (state.truncated) break;
+            if (label) {
+              frame.result = label;
+            } else {
+              var props = frame.fiber.memoizedProps || {};
+              if (frame.root && hostKind(frame.fiber) === 'textinput' && props.placeholder) {
+                frame.result = props.placeholder;
+              } else {
+                frame.child = frame.fiber.child;
+              }
+            }
+          }
+        } else if (frame.result === undefined && frame.child) {
+          var child = frame.child;
+          frame.child = child.sibling;
+          stack.push({ fiber: child, root: false, entered: false, child: null, parts: [], result: undefined });
+        } else {
+          if (frame.result === undefined) {
+            var joined = __joinNameParts(frame.parts, hostKind(frame.fiber) === 'text');
+            frame.result = joined || undefined;
+          }
+          stack.pop();
+          if (stack.length === 0) return frame.result;
+          if (frame.result) {
+            stack[stack.length - 1].parts.push({
+              text: frame.result,
+              isInlineText: typeof frame.fiber.memoizedProps === 'string'
+                || hostKind(frame.fiber) === 'text'
+            });
+          }
+        }
+      }
+      return undefined;
+    }
+
     function collectSource(fiber) {
       var props = fiber.memoizedProps || {};
       if (selectorKind === 'testID') {
@@ -58785,7 +58920,7 @@ var INJECTED_HELPERS = `
         return;
       }
       if (!__isA11yElement(fiber) || __role(fiber) !== wantedRole) return;
-      var accessibleName = __accessibleName(fiber);
+      var accessibleName = typeTextAccessibleName(fiber);
       if (accessibleName != null && __match(accessibleName, { value: opts.name, exact: opts.exact === true })) {
         sources.push(fiber);
       }
@@ -59406,9 +59541,11 @@ var INJECTED_HELPERS = `
           ancestorVisits++;
           var aProps = ancestor.memoizedProps || {};
           if (aProps && looksLikeUseFormReturn(aProps.value)) {
-            formReturn = aProps.value;
-            formResolution = 'form-provider';
-            break;
+            if (!nearestExplicitControl || aProps.value.control === nearestExplicitControl) {
+              formReturn = aProps.value;
+              formResolution = 'form-provider';
+              break;
+            }
           }
           if (!nearestExplicitControl && aProps.control && typeof aProps.control === 'object') {
             nearestExplicitControl = aProps.control;
@@ -59470,7 +59607,7 @@ var INJECTED_HELPERS = `
             error: 'setFieldValue: no FormProvider ancestor or matching useForm control found',
             testID: selector,
             ancestorVisits: ancestorVisits,
-            hint: 'The field is not wrapped in <FormProvider {...methods}>, and no ancestor useForm hook return matched an explicit control prop by identity. If you only need to fire onChangeText/onChange, use action="typeText" instead.'
+            hint: 'No FormProvider or ancestor useForm hook return matched the nearest explicit control prop by identity. If you only need to fire onChangeText/onChange, use action="typeText" instead.'
           });
         }
         var coercedToString = false;

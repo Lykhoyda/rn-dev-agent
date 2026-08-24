@@ -281,6 +281,68 @@ test('typeText supports placeholder and role+name selectors', () => {
   assert.deepEqual(calls, ['placeholder:home', 'role:1234']);
 });
 
+test('typeText refuses a cyclic accessible-name subtree within the shared budget', () => {
+  const calls: string[] = [];
+  const root = makeFiber('Root');
+  const input = appendChild(
+    root,
+    makeFiber('AndroidTextInput', {
+      accessibilityRole: 'textbox',
+      onChangeText(value: string) {
+        calls.push(value);
+      },
+    }),
+  );
+  const cyclicName = appendChild(input, makeFiber('View'));
+  cyclicName.child = cyclicName;
+
+  const result = runInteract(root, {
+    action: 'typeText',
+    role: 'textbox',
+    name: 'Never resolved',
+    text: 'unsafe',
+  });
+
+  assert.equal(result.truncated, true);
+  assert.equal(result.reason, 'cycle');
+  assert.deepEqual(calls, []);
+});
+
+test('typeText charges labelled-by accessible-name scans to the shared work limit', () => {
+  const calls: string[] = [];
+  const root = makeFiber('Root');
+  appendChild(
+    root,
+    makeFiber('AndroidTextInput', {
+      accessibilityRole: 'textbox',
+      accessibilityLabelledBy: 'bounded-label',
+      onChangeText(value: string) {
+        calls.push(value);
+      },
+    }),
+  );
+  let current = appendChild(root, makeFiber('View'));
+  for (let index = 0; index < 1100; index += 1) {
+    current = appendChild(current, makeFiber('View'));
+  }
+  const label = appendChild(current, makeFiber('View', { nativeID: 'bounded-label' }));
+  const labelText = appendChild(label, makeFiber('Text'));
+  labelText.memoizedProps = 'Bounded field' as unknown as Record<string, unknown>;
+
+  const result = runInteract(root, {
+    action: 'typeText',
+    role: 'textbox',
+    name: 'Bounded field',
+    text: 'unsafe',
+    exact: true,
+  });
+
+  assert.equal(result.truncated, true);
+  assert.equal(result.reason, 'work-limit');
+  assert.equal(result.workLimit, 2000);
+  assert.deepEqual(calls, []);
+});
+
 test('typeText refuses a role selector without an accessible name', () => {
   const calls: string[] = [];
   const root = makeFiber('Root');
@@ -632,6 +694,59 @@ test('setFieldValue does not skip the nearest explicit control for an outer form
 
   assert.match(String(result.error), /no FormProvider ancestor or matching useForm control/);
   assert.deepEqual(calls, []);
+});
+
+test('setFieldValue ignores a mismatched outer provider for the nearest controlled form', () => {
+  const calls: string[] = [];
+  const outerControl = {};
+  const nearestControl = {};
+  const outerFormReturn = {
+    control: outerControl,
+    getValues() {
+      return '';
+    },
+    setValue() {
+      calls.push('outer');
+    },
+  };
+  const nearestFormReturn = {
+    control: nearestControl,
+    getValues() {
+      return '';
+    },
+    setValue() {
+      calls.push('nearest');
+    },
+  };
+  const root = makeFiber('Root');
+  const provider = appendChild(
+    root,
+    makeFiber({ displayName: 'FormProvider' }, { value: outerFormReturn }),
+  );
+  const owner = appendChild(
+    provider,
+    makeFiber(
+      { displayName: 'InnerForm' },
+      {},
+      { memoizedState: { current: nearestFormReturn }, next: null },
+    ),
+  );
+  const controller = appendChild(
+    owner,
+    makeFiber({ displayName: 'Controller' }, { control: nearestControl, name: 'phone' }),
+  );
+  appendChild(controller, makeFiber('View', { testID: 'provider-nested-phone' }));
+
+  const result = runInteract(root, {
+    action: 'setFieldValue',
+    testID: 'provider-nested-phone',
+    name: 'phone',
+    value: '1234',
+  });
+
+  assert.equal(result.success, true, JSON.stringify(result));
+  assert.equal(result.resolvedFrom, 'control-prop-hook');
+  assert.deepEqual(calls, ['nearest']);
 });
 
 test('press keeps its existing first strict-testID match semantics', () => {
