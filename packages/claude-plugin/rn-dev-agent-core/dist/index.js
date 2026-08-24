@@ -58693,6 +58693,262 @@ var INJECTED_HELPERS = `
   function getErrors() { return JSON.stringify(errors); }
   function clearErrors() { errors.length = 0; return 'cleared'; }
 
+  var TYPE_TEXT_WORK_LIMIT = 2000;
+
+  function resolveTypeTextTarget(opts) {
+    var state = {
+      work: 0,
+      visitedFibers: 0,
+      truncated: false,
+      reason: null
+    };
+    var TYPEABLE_TYPE_RE = /(TextInput|TextField|EditText)/;
+
+    function consumeWork() {
+      state.work++;
+      if (state.work > TYPE_TEXT_WORK_LIMIT) {
+        state.truncated = true;
+        state.reason = 'work-limit';
+        return false;
+      }
+      return true;
+    }
+
+    function fiberName(fiber) {
+      return (fiber && fiber.type && (typeof fiber.type === 'string'
+        ? fiber.type
+        : (fiber.type.displayName || fiber.type.name))) || 'Unknown';
+    }
+
+    function truncation() {
+      return {
+        error: 'typeText resolution truncated',
+        truncated: true,
+        reason: state.reason,
+        scanned: state.visitedFibers,
+        work: state.work,
+        workLimit: TYPE_TEXT_WORK_LIMIT,
+        handlerCalled: false,
+        hint: 'The bounded typeText resolver did not inspect the complete selector and candidate graph; no handler was called.'
+      };
+    }
+
+    var selectorKind = null;
+    if (typeof opts.testID === 'string' && opts.testID.length > 0) selectorKind = 'testID';
+    else if (typeof opts.accessibilityLabel === 'string' && opts.accessibilityLabel.length > 0) selectorKind = 'accessibilityLabel';
+    else if (typeof opts.placeholder === 'string' && opts.placeholder.length > 0) selectorKind = 'placeholder';
+    else if (typeof opts.role === 'string' && typeof opts.name === 'string' && opts.name.length > 0) selectorKind = 'role+name';
+
+    if (!selectorKind) {
+      return {
+        error: 'typeText requires testID, accessibilityLabel, placeholder, or role+name',
+        hint: 'The text parameter is the value to enter, not a byText selector.'
+      };
+    }
+
+    var exactSources = [];
+    var normalizedSources = [];
+    var containsSources = [];
+    var sources = [];
+    var selector = opts.testID || opts.accessibilityLabel || opts.placeholder || opts.name;
+    var normalizedSelector = selectorKind === 'accessibilityLabel'
+      ? String(selector).replace(/\\s+/g, ' ').replace(/^\\s+|\\s+$/g, '').toLowerCase()
+      : null;
+    var wantedRole = selectorKind === 'role+name' ? normalizeRole(opts.role) : null;
+    var sourceSeen = new WeakSet();
+
+    function collectSource(fiber) {
+      var props = fiber.memoizedProps || {};
+      if (selectorKind === 'testID') {
+        if (props.testID === opts.testID || props.nativeID === opts.testID) sources.push(fiber);
+        return;
+      }
+      if (selectorKind === 'accessibilityLabel') {
+        var raw = props.accessibilityLabel;
+        if (raw === undefined || raw === null || raw === '') return;
+        if (raw === opts.accessibilityLabel) {
+          exactSources.push(fiber);
+          return;
+        }
+        var normalized = String(raw).replace(/\\s+/g, ' ').replace(/^\\s+|\\s+$/g, '').toLowerCase();
+        if (normalized === normalizedSelector) normalizedSources.push(fiber);
+        else if (normalized.indexOf(normalizedSelector) >= 0) containsSources.push(fiber);
+        return;
+      }
+      if (opts.includeHidden !== true && __hidden(fiber)) return;
+      if (selectorKind === 'placeholder') {
+        if (hostKind(fiber) !== 'textinput') return;
+        var placeholder = props && typeof props.placeholder === 'string' ? props.placeholder : null;
+        if (placeholder !== null && __match(placeholder, { value: opts.placeholder, exact: opts.exact === true })) {
+          sources.push(fiber);
+        }
+        return;
+      }
+      if (!__isA11yElement(fiber) || __role(fiber) !== wantedRole) return;
+      var accessibleName = __accessibleName(fiber);
+      if (accessibleName != null && __match(accessibleName, { value: opts.name, exact: opts.exact === true })) {
+        sources.push(fiber);
+      }
+    }
+
+    forEachRootFiber(function(rootFiber) {
+      if (state.truncated) return null;
+      var localSeen = new WeakSet();
+      var stack = [rootFiber];
+      while (stack.length > 0 && !state.truncated) {
+        var node = stack.pop();
+        if (!consumeWork()) break;
+        if (localSeen.has(node)) {
+          state.truncated = true;
+          state.reason = 'cycle';
+          break;
+        }
+        localSeen.add(node);
+        if (sourceSeen.has(node)) continue;
+        sourceSeen.add(node);
+        state.visitedFibers++;
+        collectSource(node);
+        if (node.sibling) stack.push(node.sibling);
+        if (node.child) stack.push(node.child);
+      }
+      return null;
+    });
+
+    if (state.truncated) return truncation();
+    if (selectorKind === 'accessibilityLabel') {
+      sources = exactSources.length > 0
+        ? exactSources
+        : (normalizedSources.length > 0 ? normalizedSources : containsSources);
+    }
+    if (sources.length === 0) {
+      return {
+        error: 'Component not found',
+        selector: selector,
+        hint: 'Use cdp_component_tree to verify the component is mounted, or pass a more specific selector.'
+      };
+    }
+
+    var completed = new WeakSet();
+    var onChangeTextMatches = [];
+    var onChangeMatches = [];
+
+    function collectTypeable(root) {
+      var localSeen = new WeakSet();
+      var stack = [{ fiber: root, includeSibling: false }];
+      while (stack.length > 0 && !state.truncated) {
+        var frame = stack.pop();
+        var node = frame.fiber;
+        if (!consumeWork()) return;
+        if (localSeen.has(node)) {
+          state.truncated = true;
+          state.reason = 'cycle';
+          return;
+        }
+        localSeen.add(node);
+        if (completed.has(node)) continue;
+        completed.add(node);
+        state.visitedFibers++;
+        var props = node.memoizedProps || {};
+        var name = fiberName(node);
+        var candidate = {
+          fiber: node,
+          props: props,
+          name: name,
+          typeFingerprint: TYPEABLE_TYPE_RE.test(name)
+        };
+        if (typeof props.onChangeText === 'function') onChangeTextMatches.push(candidate);
+        if (typeof props.onChange === 'function') onChangeMatches.push(candidate);
+        if (frame.includeSibling && node.sibling) {
+          stack.push({ fiber: node.sibling, includeSibling: true });
+        }
+        if (node.child) stack.push({ fiber: node.child, includeSibling: true });
+      }
+    }
+
+    for (var sourceIndex = 0; sourceIndex < sources.length && !state.truncated; sourceIndex++) {
+      collectTypeable(sources[sourceIndex]);
+    }
+    if (state.truncated) return truncation();
+
+    function isForwardedAncestor(ancestorMatch, descendantMatch, handlerName) {
+      if (ancestorMatch.props[handlerName] !== descendantMatch.props[handlerName]) return false;
+      var cursor = descendantMatch.fiber.return;
+      var returnSeen = new WeakSet();
+      while (cursor) {
+        if (!consumeWork()) return false;
+        if (returnSeen.has(cursor)) {
+          state.truncated = true;
+          state.reason = 'cycle';
+          return false;
+        }
+        returnSeen.add(cursor);
+        if (cursor === ancestorMatch.fiber) return true;
+        cursor = cursor.return;
+      }
+      return false;
+    }
+
+    function pick(matches, handlerName) {
+      if (matches.length === 0) return { kind: 'none' };
+      var typed = [];
+      for (var index = 0; index < matches.length; index++) {
+        if (!consumeWork()) return { kind: 'truncated' };
+        if (matches[index].typeFingerprint) typed.push(matches[index]);
+      }
+      var preferred = typed.length > 0 ? typed : matches;
+      var dropped = new WeakSet();
+      for (var ancestorIndex = 0; ancestorIndex < preferred.length; ancestorIndex++) {
+        for (var descendantIndex = 0; descendantIndex < preferred.length; descendantIndex++) {
+          if (ancestorIndex === descendantIndex || dropped.has(preferred[ancestorIndex].fiber)) continue;
+          if (!consumeWork()) return { kind: 'truncated' };
+          if (isForwardedAncestor(preferred[ancestorIndex], preferred[descendantIndex], handlerName)) {
+            dropped.add(preferred[ancestorIndex].fiber);
+          }
+          if (state.truncated) return { kind: 'truncated' };
+        }
+      }
+      var finalists = [];
+      for (var finalistIndex = 0; finalistIndex < preferred.length; finalistIndex++) {
+        if (!dropped.has(preferred[finalistIndex].fiber)) finalists.push(preferred[finalistIndex]);
+      }
+      if (finalists.length === 1) return { kind: 'one', match: finalists[0], handler: handlerName };
+      return { kind: 'ambiguous', matches: finalists, handler: handlerName };
+    }
+
+    var picked = pick(onChangeTextMatches, 'onChangeText');
+    if (picked.kind === 'none') picked = pick(onChangeMatches, 'onChange');
+    if (state.truncated || picked.kind === 'truncated') return truncation();
+    if (picked.kind === 'ambiguous') {
+      return {
+        error: 'Ambiguous typeText resolution',
+        testID: opts.testID,
+        handler: picked.handler,
+        count: picked.matches.length,
+        candidates: picked.matches.slice(0, 5).map(function(match) {
+          return { component: match.name, testID: match.props.testID, typeFingerprint: match.typeFingerprint };
+        }),
+        hint: 'Multiple distinct typeable handlers match this selector. Pass a more specific testID for the inner TextInput.'
+      };
+    }
+
+    var source = sources[0];
+    var sourceProps = source.memoizedProps || {};
+    return {
+      match: picked.kind === 'one' ? picked.match : null,
+      handler: picked.kind === 'one' ? picked.handler : null,
+      source: source,
+      state: state,
+      selectorBundle: selectorKind === 'placeholder' || selectorKind === 'role+name'
+        ? {
+            testID: sourceProps.testID,
+            accessibleName: selectorKind === 'role+name' ? opts.name : undefined,
+            role: selectorKind === 'role+name' ? wantedRole : __role(source),
+            placeholder: sourceProps.placeholder
+          }
+        : null
+    };
+  }
+
   // UI Interaction
   function interact(opts) {
     opts = opts || {};
@@ -58702,6 +58958,7 @@ var INJECTED_HELPERS = `
     var isLabelMatch = matchField === 'accessibilityLabel';
     var ladderTarget = null;
     var ladderBundle = null;
+    var typeTextResolution = null;
 
     if (!action) return JSON.stringify({ error: 'action is required' });
 
@@ -58714,9 +58971,16 @@ var INJECTED_HELPERS = `
       });
     }
 
+    if (action === 'typeText') {
+      typeTextResolution = resolveTypeTextTarget(opts);
+      if (typeTextResolution.error) return JSON.stringify(typeTextResolution);
+      ladderTarget = typeTextResolution.source;
+      ladderBundle = typeTextResolution.selectorBundle;
+    }
+
     // Task 7 \u2014 ladder routing. typeText reuses the established placeholder
     // and role+name facts; its text argument remains the value to enter.
-    if (!selector && (opts.role || opts.name || opts.text || opts.placeholder)) {
+    if (action !== 'typeText' && !selector && (opts.role || opts.name || opts.text || opts.placeholder)) {
       var ladderTypeText = action === 'typeText';
       if (ladderTypeText && !opts.placeholder && !(opts.role && opts.name)) {
         return JSON.stringify({
@@ -59047,167 +59311,12 @@ var INJECTED_HELPERS = `
       if (action === 'typeText') {
         var text = opts.text !== undefined ? opts.text : '';
         var verify = opts.verify === true;
-        var controlled = typeof props.value === 'string';
-        var valueBefore = controlled ? props.value : null;
-        var TYPEABLE_TYPE_RE = /(TextInput|TextField|EditText)/;
-        var TYPE_TEXT_WORK_LIMIT = 2000;
-        var typeTextWork = 0;
-        var typeTextTruncated = false;
-        var typeTextTruncationReason = null;
-        var visitedFibers = 0;
-        var completed = new WeakSet();
-        var onChangeTextMatches = [];
-        var onChangeMatches = [];
-
-        function consumeTypeTextWork() {
-          typeTextWork++;
-          if (typeTextWork > TYPE_TEXT_WORK_LIMIT) {
-            typeTextTruncated = true;
-            typeTextTruncationReason = 'work-limit';
-            return false;
-          }
-          return true;
-        }
-
-        function typeTextFiberName(fiber) {
-          return (fiber && fiber.type && (typeof fiber.type === 'string'
-            ? fiber.type
-            : (fiber.type.displayName || fiber.type.name))) || 'Unknown';
-        }
-
-        function collectTypeable(root) {
-          var localSeen = new WeakSet();
-          var stack = [{ fiber: root, depth: 0, includeSibling: false }];
-          while (stack.length > 0 && !typeTextTruncated) {
-            var frame = stack.pop();
-            var node = frame.fiber;
-            if (!consumeTypeTextWork()) return;
-            if (localSeen.has(node)) {
-              typeTextTruncated = true;
-              typeTextTruncationReason = 'cycle';
-              return;
-            }
-            localSeen.add(node);
-            if (completed.has(node)) continue;
-            completed.add(node);
-            visitedFibers++;
-            var nodeProps = node.memoizedProps || {};
-            var nodeName = typeTextFiberName(node);
-            var candidate = {
-              fiber: node,
-              props: nodeProps,
-              name: nodeName,
-              depth: frame.depth,
-              typeFingerprint: TYPEABLE_TYPE_RE.test(nodeName)
-            };
-            if (typeof nodeProps.onChangeText === 'function') onChangeTextMatches.push(candidate);
-            if (typeof nodeProps.onChange === 'function') onChangeMatches.push(candidate);
-            if (frame.includeSibling && node.sibling) {
-              stack.push({ fiber: node.sibling, depth: frame.depth, includeSibling: true });
-            }
-            if (node.child) {
-              stack.push({ fiber: node.child, depth: frame.depth + 1, includeSibling: true });
-            }
-          }
-        }
-
-        var typeTextRoots = typeTextSources.length > 0 ? typeTextSources : [found];
-        for (var tri = 0; tri < typeTextRoots.length && !typeTextTruncated; tri++) {
-          collectTypeable(typeTextRoots[tri]);
-        }
-
-        function isLogicalAncestor(ancestorMatch, descendantMatch, handlerName) {
-          var cursor = descendantMatch.fiber.return;
-          var returnSeen = new WeakSet();
-          while (cursor) {
-            if (!consumeTypeTextWork()) return false;
-            if (returnSeen.has(cursor)) {
-              typeTextTruncated = true;
-              typeTextTruncationReason = 'cycle';
-              return false;
-            }
-            returnSeen.add(cursor);
-            if (cursor === ancestorMatch.fiber) {
-              var ancestorID = ancestorMatch.props.testID || ancestorMatch.props.nativeID;
-              var descendantID = descendantMatch.props.testID || descendantMatch.props.nativeID;
-              return (typeof ancestorMatch.fiber.type !== 'string' && typeof descendantMatch.fiber.type === 'string')
-                || (!!ancestorID && ancestorID === descendantID)
-                || ancestorMatch.props[handlerName] === descendantMatch.props[handlerName];
-            }
-            cursor = cursor.return;
-          }
-          return false;
-        }
-
-        function pickFromMatches(matches, handlerName) {
-          if (matches.length === 0) return { kind: 'none' };
-          var typed = [];
-          for (var i = 0; i < matches.length; i++) {
-            if (!consumeTypeTextWork()) return { kind: 'truncated' };
-            if (matches[i].typeFingerprint) typed.push(matches[i]);
-          }
-          var preferred = typed.length > 0 ? typed : matches;
-          var dropped = new WeakSet();
-          for (var ai = 0; ai < preferred.length; ai++) {
-            for (var bi = 0; bi < preferred.length; bi++) {
-              if (ai === bi || dropped.has(preferred[ai].fiber)) continue;
-              if (isLogicalAncestor(preferred[ai], preferred[bi], handlerName)) dropped.add(preferred[ai].fiber);
-              if (typeTextTruncated) return { kind: 'truncated' };
-            }
-          }
-          var finalists = [];
-          for (var fi = 0; fi < preferred.length; fi++) {
-            if (!dropped.has(preferred[fi].fiber)) finalists.push(preferred[fi]);
-          }
-          if (finalists.length === 1) return { kind: 'one', match: finalists[0], handler: handlerName };
-          return { kind: 'ambiguous', matches: finalists, handler: handlerName };
-        }
-
-        var pass1 = pickFromMatches(onChangeTextMatches, 'onChangeText');
-        var picked = null;
-        if (pass1.kind === 'one') {
-          picked = pass1;
-        } else if (pass1.kind === 'ambiguous') {
-          return JSON.stringify({
-            error: 'Ambiguous typeText resolution',
-            testID: selector,
-            handler: 'onChangeText',
-            count: pass1.matches.length,
-            candidates: pass1.matches.slice(0, 5).map(function(m) {
-              return { component: m.name, testID: m.props.testID, typeFingerprint: m.typeFingerprint };
-            }),
-            hint: 'Multiple onChangeText descendants under testID "' + selector + '". Pass a more specific testID \u2014 ideally the inner TextInput itself.'
-          });
-        } else {
-          var pass2 = pickFromMatches(onChangeMatches, 'onChange');
-          if (pass2.kind === 'one') {
-            picked = pass2;
-          } else if (pass2.kind === 'ambiguous') {
-            return JSON.stringify({
-              error: 'Ambiguous typeText resolution',
-              testID: selector,
-              handler: 'onChange',
-              count: pass2.matches.length,
-              candidates: pass2.matches.slice(0, 5).map(function(m) {
-                return { component: m.name, testID: m.props.testID, typeFingerprint: m.typeFingerprint };
-              }),
-              hint: 'Multiple onChange descendants under testID "' + selector + '". Pass a more specific testID \u2014 ideally the inner TextInput itself.'
-            });
-          }
-        }
-
-        if (typeTextTruncated) {
-          return JSON.stringify({
-            error: 'typeText resolution truncated',
-            truncated: true,
-            reason: typeTextTruncationReason,
-            scanned: visitedFibers,
-            work: typeTextWork,
-            workLimit: TYPE_TEXT_WORK_LIMIT,
-            handlerCalled: false,
-            hint: 'The bounded typeText resolver did not inspect the complete candidate graph; no handler was called.'
-          });
-        }
+        var picked = typeTextResolution && typeTextResolution.match;
+        var controlled = !!picked && typeof picked.props.value === 'string';
+        var valueBefore = controlled ? picked.props.value : null;
+        var visitedFibers = typeTextResolution && typeTextResolution.state
+          ? typeTextResolution.state.visitedFibers
+          : 0;
 
         if (!picked) {
           if (verify) {
@@ -59223,18 +59332,17 @@ var INJECTED_HELPERS = `
           });
         }
 
-        if (picked.handler === 'onChangeText') {
-          picked.match.props.onChangeText(text);
+        if (typeTextResolution.handler === 'onChangeText') {
+          picked.props.onChangeText(text);
         } else {
-          picked.match.props.onChange({ nativeEvent: { text: text } });
+          picked.props.onChange({ nativeEvent: { text: text } });
         }
 
-        var pickedControlled = typeof picked.match.props.value === 'string';
         return JSON.stringify({
-          success: true, action: 'typeText', component: picked.match.name, testID: selector, text: text,
-          handlerCalled: picked.handler, controlled: pickedControlled,
-          valueBefore: pickedControlled ? picked.match.props.value : valueBefore,
-          resolvedFrom: picked.match.name + (picked.match.props.testID ? ' [testID="' + picked.match.props.testID + '"]' : ''),
+          success: true, action: 'typeText', component: picked.name, testID: selector, text: text,
+          handlerCalled: typeTextResolution.handler, controlled: controlled,
+          valueBefore: valueBefore,
+          resolvedFrom: picked.name + (picked.props.testID ? ' [testID="' + picked.props.testID + '"]' : ''),
           visitedFibers: visitedFibers,
           selectorBundle: ladderBundle || undefined
         });
@@ -59269,7 +59377,7 @@ var INJECTED_HELPERS = `
         var formReturn = null;
         var formResolution = null;
         var ancestorSeen = new WeakSet();
-        var explicitControls = [];
+        var nearestExplicitControl = null;
         var hookFormReturns = [];
 
         function consumeFormWork() {
@@ -59302,8 +59410,8 @@ var INJECTED_HELPERS = `
             formResolution = 'form-provider';
             break;
           }
-          if (aProps.control && typeof aProps.control === 'object') {
-            pushIdentityUnique(explicitControls, aProps.control);
+          if (!nearestExplicitControl && aProps.control && typeof aProps.control === 'object') {
+            nearestExplicitControl = aProps.control;
           }
 
           var hook = ancestor.memoizedState;
@@ -59340,10 +59448,8 @@ var INJECTED_HELPERS = `
         if (!formReturn) {
           var matchingHookReturns = [];
           for (var hfi = 0; hfi < hookFormReturns.length; hfi++) {
-            for (var eci = 0; eci < explicitControls.length; eci++) {
-              if (hookFormReturns[hfi].control === explicitControls[eci]) {
-                pushIdentityUnique(matchingHookReturns, hookFormReturns[hfi]);
-              }
+            if (nearestExplicitControl && hookFormReturns[hfi].control === nearestExplicitControl) {
+              pushIdentityUnique(matchingHookReturns, hookFormReturns[hfi]);
             }
           }
           if (matchingHookReturns.length === 1) {
@@ -59793,35 +59899,11 @@ var INJECTED_HELPERS = `
 
   function readInputValue(testID) {
     if (!testID) return JSON.stringify({ __agent_error: 'testID is required' });
-    var target = null;
-    function findByTestID(fiber) {
-      if (!fiber || target) return;
-      var p = fiber.memoizedProps;
-      if (p && (p.testID === testID || p.nativeID === testID)) { target = fiber; return; }
-      var child = fiber.child;
-      while (child) { findByTestID(child); child = child.sibling; }
-    }
-    forEachRootFiber(function(rootFiber) { findByTestID(rootFiber); return target; });
-    if (!target) return JSON.stringify({ __agent_error: 'Component not found: ' + testID });
-
-    function valueOf(fiber) {
-      var p = fiber && fiber.memoizedProps;
-      return p && typeof p.value === 'string' ? p.value : null;
-    }
-    var direct = valueOf(target);
-    if (direct !== null) return JSON.stringify({ value: direct, controlled: true });
-
-    var found = [], visited = 0;
-    (function walk(node, depth) {
-      if (!node || depth > 16 || visited > 200 || found.length > 1) return;
-      visited++;
-      var v = valueOf(node);
-      if (v !== null) found.push(v);
-      if (node.child) walk(node.child, depth + 1);
-      if (node.sibling) walk(node.sibling, depth);
-    })(target.child, 1);
-
-    if (found.length === 1) return JSON.stringify({ value: found[0], controlled: true });
+    var resolution = resolveTypeTextTarget({ testID: testID });
+    if (resolution.error) return JSON.stringify({ __agent_error: resolution.error });
+    if (!resolution.match) return JSON.stringify({ value: null, controlled: false });
+    var props = resolution.match.props || {};
+    if (typeof props.value === 'string') return JSON.stringify({ value: props.value, controlled: true });
     return JSON.stringify({ value: null, controlled: false });
   }
 

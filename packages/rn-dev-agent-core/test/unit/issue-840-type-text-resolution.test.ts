@@ -43,10 +43,9 @@ function wrap(parent: Fiber, count: number): Fiber {
   return current;
 }
 
-function runInteract(
+function createAgent(
   rootOrRoots: Fiber | Fiber[],
-  opts: Record<string, unknown>,
-): Record<string, unknown> {
+) {
   const roots = Array.isArray(rootOrRoots) ? rootOrRoots : [rootOrRoots];
   const sandbox: Record<string, unknown> = {
     Array,
@@ -79,9 +78,25 @@ function runInteract(
   };
   vm.createContext(sandbox);
   vm.runInContext(INJECTED_HELPERS, sandbox);
-  return JSON.parse(
-    vm.runInContext(`__RN_AGENT.interact(${JSON.stringify(opts)})`, sandbox) as string,
-  ) as Record<string, unknown>;
+  return {
+    interact(opts: Record<string, unknown>): Record<string, unknown> {
+      return JSON.parse(
+        vm.runInContext(`__RN_AGENT.interact(${JSON.stringify(opts)})`, sandbox) as string,
+      ) as Record<string, unknown>;
+    },
+    readInputValue(testID: string): Record<string, unknown> {
+      return JSON.parse(
+        vm.runInContext(`__RN_AGENT.readInputValue(${JSON.stringify(testID)})`, sandbox) as string,
+      ) as Record<string, unknown>;
+    },
+  };
+}
+
+function runInteract(
+  rootOrRoots: Fiber | Fiber[],
+  opts: Record<string, unknown>,
+): Record<string, unknown> {
+  return createAgent(rootOrRoots).interact(opts);
 }
 
 test('typeText keeps the proven shallow wrapped-field path typeable', () => {
@@ -124,6 +139,34 @@ test('typeText searches every same-testID match and selects the sole typeable ta
 
   assert.equal(result.success, true);
   assert.deepEqual(calls, ['chosen']);
+});
+
+test('typeText readback resolves the same deep controlled target as mutation', () => {
+  const root = makeFiber('Root');
+  appendChild(root, makeFiber('View', { testID: 'shared-readback' }));
+  const wrapper = appendChild(root, makeFiber('View', { testID: 'shared-readback' }));
+  const input = appendChild(
+    wrap(wrapper, 28),
+    makeFiber('AndroidTextInput', {
+      testID: 'shared-readback',
+      value: '',
+      onChangeText(value: string) {
+        input.memoizedProps.value = value;
+      },
+    }),
+  );
+  const agent = createAgent(root);
+
+  const mutation = agent.interact({
+    action: 'typeText',
+    testID: 'shared-readback',
+    text: 'verified',
+    verify: true,
+  });
+  const readback = agent.readInputValue('shared-readback');
+
+  assert.equal(mutation.success, true, JSON.stringify(mutation));
+  assert.deepEqual(readback, { value: 'verified', controlled: true });
 });
 
 test('typeText searches matching fibers across every registered renderer', () => {
@@ -334,6 +377,29 @@ test('typeText does not collapse distinct sibling fields that share one handler'
   assert.deepEqual(calls, []);
 });
 
+test('typeText preserves distinct wrapper and host handlers as ambiguous', () => {
+  const calls: string[] = [];
+  const root = makeFiber('Root');
+  const wrapper = appendChild(
+    root,
+    makeFiber(
+      { displayName: 'TextField' },
+      { testID: 'compound', onChangeText: (value: string) => calls.push(`outer:${value}`) },
+    ),
+  );
+  appendChild(
+    wrapper,
+    makeFiber('AndroidTextInput', {
+      onChangeText: (value: string) => calls.push(`inner:${value}`),
+    }),
+  );
+
+  const result = runInteract(root, { action: 'typeText', testID: 'compound', text: 'unsafe' });
+
+  assert.match(String(result.error), /Ambiguous typeText resolution/);
+  assert.deepEqual(calls, []);
+});
+
 test('typeText refuses on a cyclic subtree without firing a partial candidate', () => {
   const calls: string[] = [];
   const root = makeFiber('Root');
@@ -350,6 +416,31 @@ test('typeText refuses on a cyclic subtree without firing a partial candidate', 
   input.sibling = first;
 
   const result = runInteract(root, { action: 'typeText', testID: 'cyclic', text: 'unsafe' });
+
+  assert.equal(result.truncated, true);
+  assert.equal(result.reason, 'cycle');
+  assert.deepEqual(calls, []);
+});
+
+test('typeText reports cycle truncation before accessibility-label ambiguity', () => {
+  const calls: string[] = [];
+  const root = makeFiber('Root');
+  const wrapper = appendChild(root, makeFiber('View', { accessibilityLabel: 'Cyclic field' }));
+  const first = appendChild(
+    wrapper,
+    makeFiber('AndroidTextInput', { onChangeText: (value: string) => calls.push(`first:${value}`) }),
+  );
+  const second = appendChild(
+    wrapper,
+    makeFiber('AndroidTextInput', { onChangeText: (value: string) => calls.push(`second:${value}`) }),
+  );
+  second.sibling = first;
+
+  const result = runInteract(root, {
+    action: 'typeText',
+    accessibilityLabel: 'Cyclic field',
+    text: 'unsafe',
+  });
 
   assert.equal(result.truncated, true);
   assert.equal(result.reason, 'cycle');
@@ -373,6 +464,35 @@ test('typeText refuses when its documented total-work limit is exhausted', () =>
 
   assert.equal(result.truncated, true);
   assert.equal(result.reason, 'work-limit', JSON.stringify(result));
+  assert.equal(result.workLimit, 2000);
+  assert.deepEqual(calls, []);
+});
+
+test('typeText shares one work limit across selector and candidate discovery', () => {
+  const calls: string[] = [];
+  const root = makeFiber('Root');
+  let current = root;
+  for (let index = 0; index < 1500; index += 1) {
+    current = appendChild(current, makeFiber('View'));
+  }
+  const wrapper = appendChild(current, makeFiber('View', { testID: 'combined-budget' }));
+  appendChild(
+    wrap(wrapper, 700),
+    makeFiber('AndroidTextInput', {
+      onChangeText(value: string) {
+        calls.push(value);
+      },
+    }),
+  );
+
+  const result = runInteract(root, {
+    action: 'typeText',
+    testID: 'combined-budget',
+    text: 'unsafe',
+  });
+
+  assert.equal(result.truncated, true);
+  assert.equal(result.reason, 'work-limit');
   assert.equal(result.workLimit, 2000);
   assert.deepEqual(calls, []);
 });
@@ -463,6 +583,49 @@ test('setFieldValue refuses an unrelated useForm hook without calling setValue',
   const result = runInteract(root, {
     action: 'setFieldValue',
     testID: 'phone-field',
+    name: 'phone',
+    value: '1234',
+  });
+
+  assert.match(String(result.error), /no FormProvider ancestor or matching useForm control/);
+  assert.deepEqual(calls, []);
+});
+
+test('setFieldValue does not skip the nearest explicit control for an outer form', () => {
+  const calls: string[] = [];
+  const outerControl = {};
+  const nearestControl = {};
+  const outerFormReturn = {
+    control: outerControl,
+    getValues() {
+      return '';
+    },
+    setValue() {
+      calls.push('outer');
+    },
+  };
+  const root = makeFiber('Root');
+  const owner = appendChild(
+    root,
+    makeFiber(
+      { displayName: 'OuterForm' },
+      {},
+      { memoizedState: { current: outerFormReturn }, next: null },
+    ),
+  );
+  const outerController = appendChild(
+    owner,
+    makeFiber({ displayName: 'Controller' }, { control: outerControl, name: 'outer' }),
+  );
+  const nearestController = appendChild(
+    outerController,
+    makeFiber({ displayName: 'Controller' }, { control: nearestControl, name: 'phone' }),
+  );
+  appendChild(nearestController, makeFiber('View', { testID: 'nested-phone' }));
+
+  const result = runInteract(root, {
+    action: 'setFieldValue',
+    testID: 'nested-phone',
     name: 'phone',
     value: '1234',
   });
