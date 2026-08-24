@@ -389,6 +389,33 @@ test('stale Android runners without scoped exact-interaction semantics are rejec
   );
 });
 
+test('Android native health advertises every required exact-interaction feature', () => {
+  const source = readFileSync(
+    join(
+      process.cwd(),
+      '..',
+      'rn-android-runner',
+      'app',
+      'src',
+      'androidTest',
+      'java',
+      'dev',
+      'lykhoyda',
+      'rndevagent',
+      'androidrunner',
+      'CommandServer.kt',
+    ),
+    'utf8',
+  );
+  const start = source.indexOf('"capabilities"');
+  const end = source.indexOf('.put("commands"', start);
+  assert.ok(start >= 0 && end > start, 'CommandServer health capabilities block must exist');
+  const advertised = source.slice(start, end);
+  for (const feature of REQUIRED_ANDROID_FEATURES) {
+    assert.match(advertised, new RegExp(`"${feature}"`));
+  }
+});
+
 test('Android runner reports a rejected tap truthfully per dispatch mechanism', async () => {
   _setAndroidRunnerStateForTest({
     schemaVersion: 1,
