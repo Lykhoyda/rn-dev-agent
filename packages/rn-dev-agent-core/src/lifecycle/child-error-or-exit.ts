@@ -43,11 +43,7 @@ export function processSqliteRelaunchIo(): SqliteRelaunchIo {
   };
 }
 
-/**
- * Same once-only funnel the worker spawn path uses: `error` and `exit` can
- * both fire, or only `error` (ENOENT / EAGAIN / EMFILE), and a later event
- * must not settle twice.
- */
+/** Settles once when a child emits `error`, `exit`, or both. */
 export function awaitChildErrorOrExit(
   child: ChildErrorOrExitHandle,
 ): Promise<ChildErrorOrExitOutcome> {
