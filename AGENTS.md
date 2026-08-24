@@ -174,6 +174,12 @@ tree is tracked and if either host plugin runtime is missing from git.
 | Observe SPA (`check-web-bundle.sh`) | host `dist/observability/web-dist/` (and `web-dist/`) compared to a local Vite rebuild | committed host copies |
 | LLM evals | local core `dist/supervisor.js` | `yarn build` before `yarn evals` |
 
+The removed `packages/rn-dev-agent-core/run.sh` source-tree launcher was not
+referenced by package entrypoints, workspace scripts, host MCP registrations,
+CI or release jobs, or marketplace bundles. It is intentionally unsupported:
+source checkouts build before running generated output, npm consumers use the
+package `bin`, and marketplace consumers use the committed host supervisor.
+
 `scripts/check-dist-fresh.sh` rebuilds core + host runtimes and porcelain-checks **host** outputs only. It also refuses a tracked core `dist/` and checks that `npm pack` includes `dist/supervisor.js`.
 
 ## Changesets And Versions
