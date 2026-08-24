@@ -211,9 +211,7 @@ function scanFlows(): FlowsResult {
     );
     const flowTexts = readUnfollowedSnapshotFiles(fileSnapshot, readableFlowFiles);
     assertReadableActionOperationUnchanged(operation);
-    const textByFile = new Map(
-      readableFlowFiles.map((file, index) => [file, flowTexts[index]]),
-    );
+    const textByFile = new Map(readableFlowFiles.map((file, index) => [file, flowTexts[index]]));
     const rootItems: FlowItem[] = [];
     for (const id of ids) {
       const f = resolveFlowFile(files, id);

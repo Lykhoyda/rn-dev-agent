@@ -550,10 +550,7 @@ test('nested batch reads recheck every previously selected YAML identity', () =>
     const actionPath = join(actionsDir, 'login.yaml');
     writeFileSync(
       actionPath,
-      fixtureYaml({ id: 'login', selectors: [] }).replace(
-        '- launchApp',
-        '- runFlow: child.yaml',
-      ),
+      fixtureYaml({ id: 'login', selectors: [] }).replace('- launchApp', '- runFlow: child.yaml'),
     );
     writeFileSync(join(actionsDir, 'child.yaml'), '- tapOn:\n    id: "child"\n');
     const worktree = addWorktree(fixture, 'accumulated-files');
@@ -587,10 +584,7 @@ test('runFlow prefetch uses the validator native path semantics', () => {
     const reference = 'sub\\flow.yaml';
     writeFileSync(
       join(actionsDir, 'login.yaml'),
-      fixtureYaml({ id: 'login', selectors: [] }).replace(
-        '- launchApp',
-        `- runFlow: ${reference}`,
-      ),
+      fixtureYaml({ id: 'login', selectors: [] }).replace('- launchApp', `- runFlow: ${reference}`),
     );
     const childPath = join(actionsDir, reference);
     mkdirSync(dirname(childPath), { recursive: true });
@@ -1046,10 +1040,7 @@ test('operation snapshot refuses a replaced linked project root', () => {
     const displaced = join(fixture.root, 'original-project-root');
     renameSync(worktree, displaced);
     mkdirSync(join(worktree, '.rn-agent'), { recursive: true });
-    renameSync(
-      join(displaced, '.rn-agent', 'actions'),
-      join(worktree, '.rn-agent', 'actions'),
-    );
+    renameSync(join(displaced, '.rn-agent', 'actions'), join(worktree, '.rn-agent', 'actions'));
 
     assert.throws(
       () => assertReadableActionOperationUnchanged(operation),

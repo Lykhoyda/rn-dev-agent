@@ -232,11 +232,7 @@ export function openReadableActionLoadContext(
   readableFiles.forEach((file, index) => {
     fileContents.set(file, contents[index]!);
   });
-  const completeFileContents = prefetchRunFlowFiles(
-    fileContents,
-    readFiles,
-    fileSnapshot,
-  );
+  const completeFileContents = prefetchRunFlowFiles(fileContents, readFiles, fileSnapshot);
   assertReadableActionOperationUnchanged(operation);
   assertUnfollowedFileSnapshotUnchanged(fileSnapshot);
   return {

@@ -3,4 +3,4 @@
 "rn-dev-agent-plugin": patch
 ---
 
-Keep inherited learned-action inventory bounded as repository worktree and action counts grow.
+Keep inherited learned-action inventory bounded and refuse inventory or replay if its operation-scoped corpus snapshot changes.
