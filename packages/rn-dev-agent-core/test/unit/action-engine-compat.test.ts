@@ -609,7 +609,7 @@ test('migrateLearnedActions refuses per-file action symlinks', () => {
   assert.equal(results.length, 1);
   assert.equal(results[0]?.status, 'incompatible');
   assert.equal(results[0]?.mutated, false);
-  assert.match(String(results[0]?.reason), /inherited action symlink/i);
+  assert.match(String(results[0]?.reason), /replaced learned-action corpus/i);
   assert.doesNotMatch(readFileSync(sharedPath, 'utf8'), /enginePin/);
 });
 
@@ -1297,6 +1297,57 @@ test('action suite execution snapshots preserve the bytes accepted by preflight'
 
   assert.doesNotMatch(suite.prepared[1]!.inlineYaml, /Log\.n/);
   assert.match(readFileSync(second, 'utf8'), /Log\.n/);
+});
+
+test('action suite preflight resolves nested flows from its operation snapshot', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-owned-suite-runflow-'));
+  const dir = join(root, '.rn-agent', 'actions');
+  mkdirSync(join(dir, 'flows'), { recursive: true });
+  const actionPath = join(dir, 'browse.yaml');
+  writeFileSync(join(dir, 'flows', 'child.yaml'), '- tapOn:\n    id: "nested-selector"\n');
+  writeFileSync(
+    actionPath,
+    actionYaml('browse', '# enginePin: maestro-runner@1.1.24', '- runFlow: flows/child.yaml\n'),
+  );
+
+  const suite = prepareActionVerificationSuite([actionPath], dir, PINNED());
+
+  assert.deepEqual(suite.errors, []);
+  assert.equal(suite.prepared.length, 1);
+  assert.match(suite.prepared[0]!.inlineYaml, /nested-selector/);
+});
+
+test('maestro_test_all preflights nested flows from its operation snapshot', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-owned-suite-runflow-preflight-'));
+  const dir = join(root, '.rn-agent', 'actions');
+  mkdirSync(join(dir, 'flows'), { recursive: true });
+  writeFileSync(join(dir, 'flows', 'child.yaml'), '- copyTextFrom: "Log.n"\n');
+  writeFileSync(
+    join(dir, 'browse.yaml'),
+    actionYaml('browse', '# enginePin: maestro-runner@1.1.24', '- runFlow: flows/child.yaml\n'),
+  );
+  let spawned = false;
+  const handler = createMaestroTestAllHandler({
+    getActiveSession: () => ({ platform: 'ios', deviceId: 'SIM', appId: 'com.test.app' }) as never,
+    chooseDispatch: () => ({
+      runner: 'maestro-runner',
+      binPath: '/fake/maestro-runner',
+      buildArgs: () => [],
+    }),
+    resolveEngineStatus: async () => PINNED(),
+    execFile: async () => {
+      spawned = true;
+      return { stdout: '', stderr: '' };
+    },
+  });
+
+  const result = await handler({ platform: 'ios', flowDir: dir });
+  const body = JSON.parse(result.content[0]!.text);
+
+  assert.equal(body.ok, false);
+  assert.equal(body.meta.executed, 0);
+  assert.match(String(body.meta.results[0].error), /Log\.n|regex/);
+  assert.equal(spawned, false);
 });
 
 test('maestro_test_all executes captured actions after their paths change', async () => {

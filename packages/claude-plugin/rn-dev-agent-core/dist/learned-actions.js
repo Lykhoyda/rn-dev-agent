@@ -6,6 +6,11 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 
+// packages/rn-dev-agent-core/dist/domain/unfollowed-file.js
+import { execFileSync as execFileSync2 } from "node:child_process";
+import { lstatSync as lstatSync2 } from "node:fs";
+import { isAbsolute, join as join2 } from "node:path";
+
 // packages/rn-dev-agent-core/dist/session/process-birth.js
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -126,15 +131,6 @@ function runVerifiedFilesystemHelper(args) {
     unlinkSync(boundPath);
   }
 }
-function readFileFromVerifiedDirectory(directoryPath, identity, relativePath) {
-  return runVerifiedFilesystemHelper([
-    "--read-directory-entry",
-    directoryPath,
-    relativePath,
-    identity.dev,
-    identity.ino
-  ]);
-}
 function listVerifiedDirectory(directoryPath, identity) {
   const output = runVerifiedFilesystemHelper([
     "--list-directory",
@@ -184,11 +180,243 @@ function verifiedLinuxPublicationHelper(architecture) {
 }
 
 // packages/rn-dev-agent-core/dist/domain/unfollowed-file.js
-function readUnfollowedFile(directoryPath, identity, relativePath) {
+function createUnfollowedFileSnapshot(directoryPath, directoryIdentity) {
+  return { directoryPath, directoryIdentity, fileIdentities: /* @__PURE__ */ new Map() };
+}
+var UNFOLLOWED_READER_MAX_BUFFER_BYTES = 32 * 1024 * 1024;
+var UNFOLLOWED_READER_BATCH_BYTES = 24 * 1024 * 1024;
+var UNFOLLOWED_READER_BATCH_FILES = 16;
+var UNFOLLOWED_READER_FRAME_BYTES = 9;
+var UNFOLLOWED_READER_SCRIPT = String.raw`
+const { closeSync, constants, fstatSync, openSync, readSync, realpathSync, writeSync } = require('node:fs');
+const { join } = require('node:path');
+const request = JSON.parse(process.argv[1]);
+const opened = [];
+let directory = -1;
+const closeAll = () => {
+  for (const entry of opened) if (entry.fd >= 0) closeSync(entry.fd);
+  if (directory >= 0) closeSync(directory);
+};
+const matches = (stat, identity) =>
+  stat.isFile() &&
+  String(stat.dev) === identity.dev &&
+  String(stat.ino) === identity.ino &&
+  String(stat.size) === identity.size &&
+  String(stat.mtimeNs) === identity.mtimeNs &&
+  String(stat.ctimeNs) === identity.ctimeNs;
+try {
+  directory = openSync(
+    request.directoryPath,
+    constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_DIRECTORY,
+  );
+  const directoryStat = fstatSync(directory, { bigint: true });
+  if (
+    !directoryStat.isDirectory() ||
+    String(directoryStat.dev) !== request.directoryIdentity.dev ||
+    String(directoryStat.ino) !== request.directoryIdentity.ino
+  ) {
+    throw new Error('directory changed');
+  }
+  let batchBytes = 0;
+  for (const entry of request.entries) {
+    if (!entry.identity) {
+      opened.push({ fd: -1, size: 0, identity: null });
+      batchBytes += 9;
+      continue;
+    }
+    const path = join(request.directoryPath, entry.relativePath);
+    if (realpathSync.native(path) !== path) throw new Error('path followed a link');
+    const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    const stat = fstatSync(fd, { bigint: true });
+    if (!matches(stat, entry.identity)) {
+      closeSync(fd);
+      throw new Error('file changed');
+    }
+    const size = Number(stat.size);
+    if (!Number.isSafeInteger(size) || size < 0) {
+      closeSync(fd);
+      throw new Error('invalid size');
+    }
+    batchBytes += 9 + size;
+    if (batchBytes > ${UNFOLLOWED_READER_BATCH_BYTES}) {
+      closeSync(fd);
+      throw new Error('batch too large');
+    }
+    opened.push({ fd, size, identity: entry.identity });
+  }
+  for (const entry of opened) {
+    const frame = Buffer.alloc(9);
+    if (entry.fd < 0) {
+      frame[0] = 1;
+      writeSync(1, frame);
+      continue;
+    }
+    frame.writeBigUInt64BE(BigInt(entry.size), 1);
+    writeSync(1, frame);
+    const buffer = Buffer.allocUnsafe(Math.min(16384, Math.max(entry.size, 1)));
+    let offset = 0;
+    while (offset < entry.size) {
+      const count = readSync(entry.fd, buffer, 0, Math.min(buffer.length, entry.size - offset), offset);
+      if (count <= 0) throw new Error('short read');
+      writeSync(1, buffer, 0, count);
+      offset += count;
+    }
+    if (!matches(fstatSync(entry.fd, { bigint: true }), entry.identity)) {
+      throw new Error('file changed during read');
+    }
+  }
+  closeAll();
+} catch {
+  closeAll();
+  process.exit(10);
+}
+`;
+function identityFromStat(path2, stat) {
+  return {
+    path: path2,
+    dev: String(stat.dev),
+    ino: String(stat.ino),
+    size: String(stat.size),
+    mtimeNs: String(stat.mtimeNs),
+    ctimeNs: String(stat.ctimeNs)
+  };
+}
+function sameIdentity(left, right) {
+  return left.dev === right.dev && left.ino === right.ino && left.size === right.size && left.mtimeNs === right.mtimeNs && left.ctimeNs === right.ctimeNs;
+}
+function captureUnfollowedFileIdentities(snapshot, relativePaths) {
+  const identities = [];
   try {
-    return readFileFromVerifiedDirectory(directoryPath, identity, relativePath).toString("utf8");
+    for (const relativePath of relativePaths) {
+      const path2 = join2(snapshot.directoryPath, relativePath);
+      const stat = lstatSync2(path2, { bigint: true });
+      if (stat.isSymbolicLink() || !stat.isFile())
+        throw new Error("changed");
+      const captured = identityFromStat(path2, stat);
+      const existing = snapshot.fileIdentities.get(relativePath);
+      if (existing && !sameIdentity(existing, captured))
+        throw new Error("changed");
+      const selected = existing ?? captured;
+      snapshot.fileIdentities.set(relativePath, selected);
+      identities.push(selected);
+    }
+  } catch {
+    throw new Error(`Refusing replaced learned-action corpus at ${snapshot.directoryPath}.`);
+  }
+  return identities;
+}
+function assertUnfollowedFileSnapshotUnchanged(snapshot) {
+  try {
+    for (const identity of snapshot.fileIdentities.values()) {
+      const stat = lstatSync2(identity.path, { bigint: true });
+      if (stat.isSymbolicLink() || !stat.isFile() || !sameIdentity(identity, identityFromStat(identity.path, stat))) {
+        throw new Error("changed");
+      }
+    }
+  } catch {
+    throw new Error(`Refusing replaced learned-action corpus at ${snapshot.directoryPath}.`);
+  }
+}
+function readUnfollowedSnapshotFiles(snapshot, relativePaths, readFiles = readUnfollowedFiles) {
+  assertUnfollowedFileSnapshotUnchanged(snapshot);
+  const identities = captureUnfollowedFileIdentities(snapshot, relativePaths);
+  const contents = readFiles(snapshot.directoryPath, snapshot.directoryIdentity, relativePaths, identities);
+  assertUnfollowedFileSnapshotUnchanged(snapshot);
+  if (contents.length !== relativePaths.length || contents.some((entry) => entry == null)) {
+    throw new Error(`Refusing replaced learned-action corpus at ${snapshot.directoryPath}.`);
+  }
+  return contents;
+}
+function readUnfollowedFiles(directoryPath, identity, relativePaths, expectedIdentities) {
+  try {
+    if (process.platform !== "darwin" && process.platform !== "linux") {
+      throw new Error(`Verified directory reads are unavailable on ${process.platform}/${process.arch}.`);
+    }
+    if (expectedIdentities && expectedIdentities.length !== relativePaths.length) {
+      throw new Error("Selected file identities did not match the requested paths.");
+    }
+    const entries = relativePaths.map((relativePath, index) => {
+      if (isAbsolute(relativePath) || relativePath.split("/").some((component) => !component || component === "." || component === "..")) {
+        throw new Error(`Invalid relative path: ${relativePath}.`);
+      }
+      if (expectedIdentities) {
+        const selected = expectedIdentities[index];
+        if (!selected || selected.path !== join2(directoryPath, relativePath)) {
+          throw new Error(`Selected file identity did not match ${relativePath}.`);
+        }
+        return { relativePath, identity: selected };
+      }
+      const path2 = join2(directoryPath, relativePath);
+      try {
+        const stat = lstatSync2(path2, { bigint: true });
+        return {
+          relativePath,
+          identity: stat.isSymbolicLink() || !stat.isFile() ? null : identityFromStat(path2, stat)
+        };
+      } catch (err) {
+        if (err.code === "ENOENT")
+          return { relativePath, identity: null };
+        throw err;
+      }
+    });
+    const contents = [];
+    let batch = [];
+    let batchBytes = 0;
+    const flush = () => {
+      if (batch.length === 0)
+        return;
+      const output = execFileSync2(process.execPath, [
+        "--no-warnings",
+        "--input-type=commonjs",
+        "-e",
+        UNFOLLOWED_READER_SCRIPT,
+        JSON.stringify({ directoryPath, directoryIdentity: identity, entries: batch })
+      ], {
+        maxBuffer: UNFOLLOWED_READER_MAX_BUFFER_BYTES,
+        stdio: ["ignore", "pipe", "ignore"],
+        timeout: 1e4
+      });
+      let offset = 0;
+      for (const entry of batch) {
+        if (offset + UNFOLLOWED_READER_FRAME_BYTES > output.length) {
+          throw new Error(`Verified directory batch was truncated before ${entry.relativePath}.`);
+        }
+        const status = output[offset];
+        const length = output.readBigUInt64BE(offset + 1);
+        offset += UNFOLLOWED_READER_FRAME_BYTES;
+        if (length > BigInt(Number.MAX_SAFE_INTEGER) || offset + Number(length) > output.length) {
+          throw new Error(`Verified directory batch was malformed at ${entry.relativePath}.`);
+        }
+        const end = offset + Number(length);
+        if (status === 0)
+          contents.push(output.toString("utf8", offset, end));
+        else if (status === 1 && length === 0n)
+          contents.push(null);
+        else
+          throw new Error(`Verified directory batch refused ${entry.relativePath}.`);
+        offset = end;
+      }
+      if (offset !== output.length)
+        throw new Error("Verified directory batch had trailing data.");
+      batch = [];
+      batchBytes = 0;
+    };
+    for (const entry of entries) {
+      const size = entry.identity ? Number(entry.identity.size) : 0;
+      const framedBytes = UNFOLLOWED_READER_FRAME_BYTES + size;
+      if (!Number.isSafeInteger(size) || framedBytes > UNFOLLOWED_READER_BATCH_BYTES) {
+        throw new Error(`Verified directory entry exceeds the safe batch size: ${entry.relativePath}.`);
+      }
+      if (batch.length > 0 && (batch.length >= UNFOLLOWED_READER_BATCH_FILES || batchBytes + framedBytes > UNFOLLOWED_READER_BATCH_BYTES)) {
+        flush();
+      }
+      batch.push(entry);
+      batchBytes += framedBytes;
+    }
+    flush();
+    return contents;
   } catch (err) {
-    throw new Error(`Refusing inherited action symlink at ${directoryPath}/${relativePath}: ${err instanceof Error ? err.message : String(err)}`);
+    throw new Error(`Refusing replaced learned-action corpus at ${directoryPath}: ${err instanceof Error ? err.message : String(err)}`);
   }
 }
 function listUnfollowedDirectory(directoryPath, identity) {
@@ -201,8 +429,8 @@ function listUnfollowedDirectory(directoryPath, identity) {
 
 // packages/rn-dev-agent-core/dist/session/worktree-inheritance.js
 import { spawnSync } from "node:child_process";
-import { closeSync as closeSync2, constants as constants2, existsSync as existsSync2, fstatSync as fstatSync2, lstatSync as lstatSync2, mkdirSync, openSync as openSync2, readFileSync as readFileSync2, readlinkSync, realpathSync as realpathSync2, renameSync, statSync, symlinkSync, unlinkSync as unlinkSync2 } from "node:fs";
-import { dirname as dirname2, isAbsolute, join as join2, relative, resolve, sep } from "node:path";
+import { closeSync as closeSync2, constants as constants2, existsSync as existsSync2, fstatSync as fstatSync2, lstatSync as lstatSync3, mkdirSync, openSync as openSync2, readFileSync as readFileSync2, readlinkSync, realpathSync as realpathSync2, renameSync, statSync, symlinkSync, unlinkSync as unlinkSync2 } from "node:fs";
+import { dirname as dirname2, isAbsolute as isAbsolute2, join as join3, relative, resolve, sep } from "node:path";
 
 // packages/rn-dev-agent-core/dist/session/worktree-repair-remedy.js
 var WORKTREE_REPAIR_ENTRY = '"${CLAUDE_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}/rn-dev-agent-core/dist/worktree-inheritance.js"';
@@ -224,6 +452,7 @@ var SHAREABLE_RESOURCES = [
     hosts: ["claude", "codex"]
   }
 ];
+var repositoryIdentityEvidence = /* @__PURE__ */ Symbol("repositoryIdentityEvidence");
 var GIT_ENV_OVERRIDES = [
   "GIT_DIR",
   "GIT_WORK_TREE",
@@ -260,13 +489,13 @@ function contained(parent, child) {
   if (parent === child)
     return true;
   const rel = relative(parent, child);
-  return rel !== "" && !rel.startsWith(`..${sep}`) && rel !== ".." && !isAbsolute(rel);
+  return rel !== "" && !rel.startsWith(`..${sep}`) && rel !== ".." && !isAbsolute2(rel);
 }
 function toPosix(path2) {
   return sep === "/" ? path2 : path2.split(sep).join("/");
 }
 function isRnAppRoot(directory) {
-  const manifest = join2(directory, "package.json");
+  const manifest = join3(directory, "package.json");
   try {
     const parsed = JSON.parse(readFileSync2(manifest, "utf8"));
     const deps = { ...parsed.dependencies, ...parsed.devDependencies };
@@ -275,64 +504,62 @@ function isRnAppRoot(directory) {
     return false;
   }
 }
-function parseWorktreeRecords(porcelain) {
-  const records = [];
-  let current = null;
-  for (const line of porcelain.split("\n")) {
-    if (line.startsWith("worktree ")) {
-      if (current)
-        records.push(current);
-      current = { path: line.slice("worktree ".length), bare: false, prunable: false };
-      continue;
-    }
-    if (!current)
-      continue;
-    if (line === "bare")
-      current.bare = true;
-    if (line === "prunable" || line.startsWith("prunable "))
-      current.prunable = true;
-  }
-  if (current)
-    records.push(current);
-  return records;
+function parseFirstWorktreeRecord(porcelain) {
+  const separator = porcelain.indexOf("\n\n");
+  const block = separator === -1 ? porcelain : porcelain.slice(0, separator);
+  const lines = block.split("\n");
+  const header = lines[0];
+  if (!header?.startsWith("worktree "))
+    return null;
+  const path2 = header.slice("worktree ".length);
+  if (!path2)
+    return null;
+  return {
+    path: path2,
+    bare: lines.slice(1).includes("bare"),
+    prunable: lines.slice(1).some((line) => line === "prunable" || line.startsWith("prunable "))
+  };
 }
-function verifiedPrimaries(worktreeRoot, commonDir) {
+function verifiedPrimary(worktreeRoot, commonDir) {
   const listing = git(worktreeRoot, ["worktree", "list", "--porcelain"]);
   if (!listing.ok)
-    return [];
-  const verified = /* @__PURE__ */ new Set();
-  for (const record of parseWorktreeRecords(listing.stdout)) {
-    if (record.bare || record.prunable)
-      continue;
-    const candidate = canonical(record.path);
-    if (!candidate)
-      continue;
-    try {
-      if (!statSync(candidate).isDirectory())
-        continue;
-    } catch {
-      continue;
-    }
-    const top = git(candidate, ["rev-parse", "--show-toplevel"]);
-    if (!top.ok || canonical(top.stdout) !== candidate)
-      continue;
-    const candidateGitDir = git(candidate, ["rev-parse", "--path-format=absolute", "--git-dir"]);
-    const candidateCommon = git(candidate, [
-      "rev-parse",
-      "--path-format=absolute",
-      "--git-common-dir"
-    ]);
-    if (!candidateGitDir.ok || !candidateCommon.ok)
-      continue;
-    const resolvedGitDir = canonical(candidateGitDir.stdout);
-    const resolvedCommon = canonical(candidateCommon.stdout);
-    if (!resolvedGitDir || !resolvedCommon)
-      continue;
-    if (resolvedCommon !== commonDir || resolvedGitDir !== resolvedCommon)
-      continue;
-    verified.add(candidate);
+    return null;
+  const main = parseFirstWorktreeRecord(listing.stdout);
+  if (!main || main.bare || main.prunable)
+    return null;
+  const candidate = canonical(main.path);
+  if (!candidate)
+    return null;
+  const topLevelBefore = captureDirectoryIdentity(candidate);
+  const commonDirBefore = captureDirectoryIdentity(commonDir);
+  if (!topLevelBefore || !commonDirBefore)
+    return null;
+  const top = git(candidate, ["rev-parse", "--show-toplevel"]);
+  if (!top.ok || canonical(top.stdout) !== candidate)
+    return null;
+  const candidateGitDir = git(candidate, ["rev-parse", "--path-format=absolute", "--git-dir"]);
+  const candidateCommon = git(candidate, [
+    "rev-parse",
+    "--path-format=absolute",
+    "--git-common-dir"
+  ]);
+  if (!candidateGitDir.ok || !candidateCommon.ok)
+    return null;
+  const resolvedGitDir = canonical(candidateGitDir.stdout);
+  const resolvedCommon = canonical(candidateCommon.stdout);
+  if (!resolvedGitDir || !resolvedCommon)
+    return null;
+  if (resolvedCommon !== commonDir || resolvedGitDir !== resolvedCommon)
+    return null;
+  const topLevelAfter = captureDirectoryIdentity(candidate);
+  const commonDirAfter = captureDirectoryIdentity(commonDir);
+  if (!topLevelAfter || !commonDirAfter || topLevelBefore.identity.dev !== topLevelAfter.identity.dev || topLevelBefore.identity.ino !== topLevelAfter.identity.ino || commonDirBefore.identity.dev !== commonDirAfter.identity.dev || commonDirBefore.identity.ino !== commonDirAfter.identity.ino) {
+    return null;
   }
-  return [...verified];
+  return {
+    root: candidate,
+    identity: { topLevel: topLevelAfter, commonDir: commonDirAfter }
+  };
 }
 function resolveWorktreeLayout(input) {
   const cwd = canonical(input.cwd);
@@ -375,18 +602,16 @@ function resolveWorktreeLayout(input) {
   };
   if (base.kind === "primary")
     return base;
-  const primaries = verifiedPrimaries(worktreeRoot, commonDir);
-  if (primaries.length === 0)
+  const primary = verifiedPrimary(worktreeRoot, commonDir);
+  if (!primary)
     return { ...base, refusal: "NO_PRIMARY" };
-  if (primaries.length > 1)
-    return { ...base, refusal: "AMBIGUOUS" };
-  const primaryRoot = primaries[0];
-  const primaryAppRoot = appRelative === "." ? primaryRoot : join2(primaryRoot, appRelative);
+  const primaryRoot = primary.root;
+  const primaryAppRoot = appRelative === "." ? primaryRoot : join3(primaryRoot, appRelative);
   if (!contained(primaryRoot, primaryAppRoot))
     return { ...base, refusal: "PRIMARY_APP_MISSING" };
   let primaryAppReal = null;
   try {
-    if (lstatSync2(primaryAppRoot).isDirectory())
+    if (lstatSync3(primaryAppRoot).isDirectory())
       primaryAppReal = canonical(primaryAppRoot);
   } catch {
     primaryAppReal = null;
@@ -394,17 +619,19 @@ function resolveWorktreeLayout(input) {
   if (!primaryAppReal || !contained(primaryRoot, primaryAppReal)) {
     return { ...base, refusal: "PRIMARY_APP_MISSING" };
   }
-  return { ...base, primaryRoot, primaryAppRoot };
+  const linked = { ...base, primaryRoot, primaryAppRoot };
+  Object.defineProperty(linked, repositoryIdentityEvidence, { value: primary.identity });
+  return linked;
 }
 function classifySource(path2, type, boundary) {
   const rel = relative(boundary, path2);
-  if (rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
+  if (rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute2(rel)) {
     return { state: "WRONG_TYPE" };
   }
   const paths = [boundary];
   let cursor = boundary;
   for (const component of rel.split(sep).filter(Boolean)) {
-    cursor = join2(cursor, component);
+    cursor = join3(cursor, component);
     paths.push(cursor);
   }
   const inspect = () => {
@@ -412,7 +639,7 @@ function classifySource(path2, type, boundary) {
     for (let index = 0; index < paths.length; index += 1) {
       let node;
       try {
-        node = lstatSync2(paths[index], { bigint: true });
+        node = lstatSync3(paths[index], { bigint: true });
       } catch (error) {
         const code = error.code;
         if (code === "EACCES" || code === "EPERM")
@@ -453,10 +680,13 @@ function sourceLeafMatchesIdentity(evidence, identity) {
   const leaf = evidence?.at(-1);
   return leaf?.dev === identity.dev && leaf.ino === identity.ino;
 }
+function repositoryIdentityUnchanged(identity) {
+  return currentIdentityMatches(identity.topLevel.path, identity.topLevel.identity, "directory") && currentIdentityMatches(identity.commonDir.path, identity.commonDir.identity, "directory") && canonical(identity.topLevel.path) === identity.topLevel.path && canonical(identity.commonDir.path) === identity.commonDir.path;
+}
 function classifyDestination(path2, sourcePath, type) {
   let link;
   try {
-    link = lstatSync2(path2, { bigint: true });
+    link = lstatSync3(path2, { bigint: true });
   } catch (error) {
     const code = error.code;
     if (code === "EACCES" || code === "EPERM")
@@ -488,7 +718,7 @@ function identityOf(stat) {
 }
 function lstatIfPresent(path2) {
   try {
-    return lstatSync2(path2, { bigint: true });
+    return lstatSync3(path2, { bigint: true });
   } catch (error) {
     if (error.code === "ENOENT")
       return null;
@@ -527,8 +757,12 @@ function openUnfollowedDirectory(path2, expected) {
 }
 function resolveReadableActionCorpus(projectRoot, dependencies = {}) {
   const root = canonical(projectRoot) ?? resolve(projectRoot);
-  const rnAgentDir = join2(root, ".rn-agent");
-  const actionsDir = join2(rnAgentDir, "actions");
+  const projectRootEntry = captureDirectoryIdentity(root);
+  if (!projectRootEntry)
+    return { status: "absent" };
+  const projectRootIdentity = projectRootEntry.identity;
+  const rnAgentDir = join3(root, ".rn-agent");
+  const actionsDir = join3(rnAgentDir, "actions");
   const rnAgentStat = lstatIfPresent(rnAgentDir);
   if (!rnAgentStat)
     return { status: "absent" };
@@ -558,10 +792,15 @@ function resolveReadableActionCorpus(projectRoot, dependencies = {}) {
     if (!directoryIdentityUnchanged(actionsDir, identity)) {
       return refuseReplacedActions(actionsDir);
     }
+    if (!directoryIdentityUnchanged(root, projectRootIdentity)) {
+      return refuseReplacedActions(actionsDir);
+    }
     return {
       status: "owned-directory",
       projectRoot: root,
+      projectRootIdentity,
       rnAgentDir,
+      rnAgentIdentity,
       actionsDir,
       identity
     };
@@ -570,8 +809,14 @@ function resolveReadableActionCorpus(projectRoot, dependencies = {}) {
   if (!("kind" in layout) || layout.kind !== "linked" || layout.refusal || !layout.primaryRoot || !layout.primaryAppRoot) {
     return refuseForeignActions(actionsDir);
   }
-  const primaryRnAgentDir = join2(layout.primaryAppRoot, ".rn-agent");
-  const primaryActionsDir = join2(primaryRnAgentDir, "actions");
+  const primaryIdentity = layout[repositoryIdentityEvidence];
+  if (!primaryIdentity)
+    return refuseReplacedActions(actionsDir);
+  const linkedIdentity = captureLinkedRepositoryIdentity(layout);
+  if (!linkedIdentity)
+    return refuseReplacedActions(actionsDir);
+  const primaryRnAgentDir = join3(layout.primaryAppRoot, ".rn-agent");
+  const primaryActionsDir = join3(primaryRnAgentDir, "actions");
   const planned = planResource(layout, SHAREABLE_RESOURCES[0]);
   if (planned.destinationState === "LINK_STALE")
     return refuseDanglingActions(actionsDir);
@@ -595,40 +840,129 @@ function resolveReadableActionCorpus(projectRoot, dependencies = {}) {
   }
   dependencies.afterTargetOpen?.();
   const plannedAfter = planResource(layout, SHAREABLE_RESOURCES[0]);
-  if (plannedAfter.state !== "LINK_VALID_SAFE" || !plannedAfter.evidence || plannedAfter.evidence.dev !== planned.evidence.dev || plannedAfter.evidence.ino !== planned.evidence.ino || plannedAfter.sourceState !== "AVAILABLE" || !sameSourceEvidence(planned.sourceEvidence, plannedAfter.sourceEvidence) || !sourceLeafMatchesIdentity(planned.sourceEvidence, targetIdentity) || !sourceLeafMatchesIdentity(plannedAfter.sourceEvidence, targetIdentity) || !directoryIdentityUnchanged(rnAgentDir, rnAgentIdentity)) {
+  if (plannedAfter.state !== "LINK_VALID_SAFE" || !plannedAfter.evidence || plannedAfter.evidence.dev !== planned.evidence.dev || plannedAfter.evidence.ino !== planned.evidence.ino || plannedAfter.sourceState !== "AVAILABLE" || !sameSourceEvidence(planned.sourceEvidence, plannedAfter.sourceEvidence) || !sourceLeafMatchesIdentity(planned.sourceEvidence, targetIdentity) || !sourceLeafMatchesIdentity(plannedAfter.sourceEvidence, targetIdentity) || !directoryIdentityUnchanged(root, projectRootIdentity) || !directoryIdentityUnchanged(rnAgentDir, rnAgentIdentity) || !linkedRepositoryIdentityUnchanged(linkedIdentity) || !repositoryIdentityUnchanged(primaryIdentity)) {
     return refuseReplacedActions(actionsDir);
   }
   return {
     status: "approved-inherited",
     projectRoot: root,
+    projectRootIdentity,
     rnAgentDir,
+    rnAgentIdentity,
     actionsDir,
     targetDir,
     linkIdentity: planned.evidence,
-    targetIdentity
+    targetIdentity,
+    primaryRoot: layout.primaryRoot,
+    commonDir: layout.commonDir,
+    primaryIdentity,
+    linkedIdentity
   };
 }
-function sameReadableActionCorpus(left, right) {
-  if (left.status !== right.status)
-    return false;
-  if (left.status === "absent")
-    return true;
-  if (left.status === "refused") {
-    return right.status === "refused" && left.reason === right.reason;
-  }
-  if (left.status === "owned-directory" && right.status === "owned-directory") {
-    return left.actionsDir === right.actionsDir && left.identity.dev === right.identity.dev && left.identity.ino === right.identity.ino;
-  }
-  return left.status === "approved-inherited" && right.status === "approved-inherited" && left.actionsDir === right.actionsDir && left.targetDir === right.targetDir && left.linkIdentity.dev === right.linkIdentity.dev && left.linkIdentity.ino === right.linkIdentity.ino && left.targetIdentity.dev === right.targetIdentity.dev && left.targetIdentity.ino === right.targetIdentity.ino;
+var readableActionOperationSequence = 0;
+function freezeIdentity(identity) {
+  return Object.freeze({ ...identity });
 }
-function readableActionsSnapshot(corpus) {
+function captureDirectoryIdentity(path2) {
+  const stat = lstatIfPresent(path2);
+  if (!stat || stat.isSymbolicLink() || !stat.isDirectory())
+    return null;
+  return Object.freeze({ path: path2, identity: freezeIdentity(identityOf(stat)) });
+}
+function captureFileIdentity(path2) {
+  const stat = lstatIfPresent(path2);
+  if (!stat || stat.isSymbolicLink() || !stat.isFile())
+    return null;
+  return Object.freeze({ path: path2, identity: freezeIdentity(identityOf(stat)) });
+}
+function captureLinkedRepositoryIdentity(layout) {
+  const worktreeRoot = captureDirectoryIdentity(layout.worktreeRoot);
+  const gitEntry = captureFileIdentity(join3(layout.worktreeRoot, ".git"));
+  const gitDir = captureDirectoryIdentity(layout.gitDir);
+  if (!worktreeRoot || !gitEntry || !gitDir)
+    return null;
+  return { worktreeRoot, gitEntry, gitDir };
+}
+function linkedRepositoryIdentityUnchanged(identity) {
+  return currentIdentityMatches(identity.worktreeRoot.path, identity.worktreeRoot.identity, "directory") && currentIdentityMatches(identity.gitEntry.path, identity.gitEntry.identity, "file") && currentIdentityMatches(identity.gitDir.path, identity.gitDir.identity, "directory");
+}
+function captureReadableActionOperationSnapshot(corpus) {
+  const operationId = `${process.pid}:${++readableActionOperationSequence}`;
   if (corpus.status === "owned-directory") {
-    return { directory: corpus.actionsDir, identity: corpus.identity };
+    if (!directoryIdentityUnchanged(corpus.projectRoot, corpus.projectRootIdentity) || !directoryIdentityUnchanged(corpus.rnAgentDir, corpus.rnAgentIdentity)) {
+      throw new Error(refuseReplacedActions(corpus.actionsDir).reason);
+    }
+    return Object.freeze({
+      operationId,
+      kind: corpus.status,
+      projectRoot: corpus.projectRoot,
+      projectRootIdentity: freezeIdentity(corpus.projectRootIdentity),
+      rnAgentDir: corpus.rnAgentDir,
+      rnAgentIdentity: freezeIdentity(corpus.rnAgentIdentity),
+      actionsDir: corpus.actionsDir,
+      directory: corpus.actionsDir,
+      directoryIdentity: freezeIdentity(corpus.identity)
+    });
   }
   if (corpus.status === "approved-inherited") {
-    return { directory: corpus.targetDir, identity: corpus.targetIdentity };
+    if (!directoryIdentityUnchanged(corpus.projectRoot, corpus.projectRootIdentity) || !directoryIdentityUnchanged(corpus.rnAgentDir, corpus.rnAgentIdentity) || !repositoryIdentityUnchanged(corpus.primaryIdentity)) {
+      throw new Error(refuseReplacedActions(corpus.actionsDir).reason);
+    }
+    return Object.freeze({
+      operationId,
+      kind: corpus.status,
+      projectRoot: corpus.projectRoot,
+      projectRootIdentity: freezeIdentity(corpus.projectRootIdentity),
+      rnAgentDir: corpus.rnAgentDir,
+      rnAgentIdentity: freezeIdentity(corpus.rnAgentIdentity),
+      actionsDir: corpus.actionsDir,
+      directory: corpus.targetDir,
+      directoryIdentity: freezeIdentity(corpus.targetIdentity),
+      linkIdentity: freezeIdentity(corpus.linkIdentity),
+      linkedIdentity: Object.freeze({
+        worktreeRoot: Object.freeze({
+          path: corpus.linkedIdentity.worktreeRoot.path,
+          identity: freezeIdentity(corpus.linkedIdentity.worktreeRoot.identity)
+        }),
+        gitEntry: Object.freeze({
+          path: corpus.linkedIdentity.gitEntry.path,
+          identity: freezeIdentity(corpus.linkedIdentity.gitEntry.identity)
+        }),
+        gitDir: Object.freeze({
+          path: corpus.linkedIdentity.gitDir.path,
+          identity: freezeIdentity(corpus.linkedIdentity.gitDir.identity)
+        })
+      }),
+      primaryIdentity: Object.freeze({
+        topLevel: Object.freeze({
+          path: corpus.primaryIdentity.topLevel.path,
+          identity: freezeIdentity(corpus.primaryIdentity.topLevel.identity)
+        }),
+        commonDir: Object.freeze({
+          path: corpus.primaryIdentity.commonDir.path,
+          identity: freezeIdentity(corpus.primaryIdentity.commonDir.identity)
+        })
+      })
+    });
   }
   return null;
+}
+function currentIdentityMatches(path2, expected, kind) {
+  const current = lstatIfPresent(path2);
+  if (!current)
+    return false;
+  const typeMatches = kind === "directory" ? current.isDirectory() : kind === "file" ? current.isFile() && !current.isSymbolicLink() : current.isSymbolicLink();
+  return typeMatches && String(current.dev) === expected.dev && String(current.ino) === expected.ino;
+}
+function assertReadableActionOperationUnchanged(snapshot) {
+  let unchanged = canonical(snapshot.projectRoot) === snapshot.projectRoot && currentIdentityMatches(snapshot.projectRoot, snapshot.projectRootIdentity, "directory") && currentIdentityMatches(snapshot.rnAgentDir, snapshot.rnAgentIdentity, "directory");
+  if (snapshot.kind === "owned-directory") {
+    unchanged = unchanged && currentIdentityMatches(snapshot.actionsDir, snapshot.directoryIdentity, "directory") && canonical(snapshot.actionsDir) === snapshot.directory;
+  } else {
+    unchanged = unchanged && Boolean(snapshot.linkIdentity && snapshot.linkedIdentity && snapshot.primaryIdentity) && currentIdentityMatches(snapshot.actionsDir, snapshot.linkIdentity, "symlink") && currentIdentityMatches(snapshot.directory, snapshot.directoryIdentity, "directory") && currentIdentityMatches(snapshot.linkedIdentity.worktreeRoot.path, snapshot.linkedIdentity.worktreeRoot.identity, "directory") && currentIdentityMatches(snapshot.linkedIdentity.gitEntry.path, snapshot.linkedIdentity.gitEntry.identity, "file") && currentIdentityMatches(snapshot.linkedIdentity.gitDir.path, snapshot.linkedIdentity.gitDir.identity, "directory") && currentIdentityMatches(snapshot.primaryIdentity.topLevel.path, snapshot.primaryIdentity.topLevel.identity, "directory") && currentIdentityMatches(snapshot.primaryIdentity.commonDir.path, snapshot.primaryIdentity.commonDir.identity, "directory") && canonical(snapshot.actionsDir) === snapshot.directory && canonical(snapshot.directory) === snapshot.directory && canonical(snapshot.primaryIdentity.topLevel.path) === snapshot.primaryIdentity.topLevel.path && canonical(snapshot.primaryIdentity.commonDir.path) === snapshot.primaryIdentity.commonDir.path;
+  }
+  if (!unchanged)
+    throw new Error(refuseReplacedActions(snapshot.actionsDir).reason);
 }
 function isTracked(worktreeRoot, relativePath) {
   const listed = git(worktreeRoot, ["ls-files", "--", relativePath]);
@@ -656,9 +990,9 @@ function destinationRelative(layout, resource) {
 }
 function planResource(layout, resource) {
   const anchor = anchorFor(layout, resource);
-  const destination = join2(anchor.local, resource.path);
+  const destination = join3(anchor.local, resource.path);
   const destinationRel = destinationRelative(layout, resource);
-  const source = anchor.source ? join2(anchor.source, resource.path) : void 0;
+  const source = anchor.source ? join3(anchor.source, resource.path) : void 0;
   const sourceBoundary = layout.primaryRoot;
   const sourceBefore = source && sourceBoundary ? classifySource(source, resource.type, sourceBoundary) : { state: "MISSING" };
   const { state: destinationState, evidence } = classifyDestination(destination, sourceBefore.state === "AVAILABLE" ? source : void 0, resource.type);
@@ -817,17 +1151,17 @@ function ignoreRemediation(destination) {
   return `Git would see this path. Add the file-form rule "/${destination}" (no trailing slash) to your own local ignore policy, then re-run.`;
 }
 function classifyLegacyParent(layout, localAnchor, parent) {
-  const localParent = join2(localAnchor, parent);
+  const localParent = join3(localAnchor, parent);
   let stats;
   try {
-    stats = lstatSync2(localParent);
+    stats = lstatSync3(localParent);
   } catch {
     return null;
   }
   if (!stats.isSymbolicLink())
     return null;
   const resolved = canonical(localParent);
-  const expected = layout.primaryAppRoot ? canonical(join2(layout.primaryAppRoot, parent)) : null;
+  const expected = layout.primaryAppRoot ? canonical(join3(layout.primaryAppRoot, parent)) : null;
   return resolved && expected && resolved === expected ? "expected" : "foreign";
 }
 
@@ -909,54 +1243,44 @@ function resolveFlowFile(files, id) {
     return ymlPath;
   return null;
 }
-function classifyFlowRoot(actionsDir) {
+function openFlowRootOperation(actionsDir) {
   if (path.basename(actionsDir) !== "actions" || path.basename(path.dirname(actionsDir)) !== ".rn-agent") {
     return null;
   }
   const corpus = resolveReadableActionCorpus(path.dirname(path.dirname(actionsDir)));
+  if (corpus.status === "refused")
+    throw new Error(corpus.reason);
   if (corpus.status !== "owned-directory" && corpus.status !== "approved-inherited")
     return null;
-  return corpus;
+  return captureReadableActionOperationSnapshot(corpus);
 }
 function scanFlows() {
   const roots = collectFlowRoots(flags.workspaceRoot);
   const items = [];
   for (const root of roots) {
-    const corpus = classifyFlowRoot(root);
-    if (!corpus)
+    const operation = openFlowRootOperation(root);
+    if (!operation)
       continue;
-    const snapshot = readableActionsSnapshot(corpus);
-    if (!snapshot)
-      continue;
-    let files;
-    try {
-      files = listUnfollowedDirectory(snapshot.directory, snapshot.identity);
-    } catch {
-      continue;
-    }
-    const afterRead = classifyFlowRoot(root);
-    if (!afterRead || !sameReadableActionCorpus(corpus, afterRead))
-      continue;
+    const files = listUnfollowedDirectory(operation.directory, operation.directoryIdentity);
+    assertReadableActionOperationUnchanged(operation);
     const ids = [
       ...new Set(files.filter((file) => /\.ya?ml$/.test(file)).map((file) => file.replace(/\.ya?ml$/, "")))
     ];
+    const flowFiles = ids.map((id) => resolveFlowFile(files, id));
+    const readableFlowFiles = flowFiles.filter((file) => file !== null);
+    const fileSnapshot = createUnfollowedFileSnapshot(operation.directory, operation.directoryIdentity);
+    const flowTexts = readUnfollowedSnapshotFiles(fileSnapshot, readableFlowFiles);
+    assertReadableActionOperationUnchanged(operation);
+    const textByFile = new Map(readableFlowFiles.map((file, index) => [file, flowTexts[index]]));
     const rootItems = [];
     for (const id of ids) {
       const f = resolveFlowFile(files, id);
       if (!f)
         continue;
       const reportedPath = path.join(root, f);
-      let text;
-      try {
-        text = readUnfollowedFile(snapshot.directory, snapshot.identity, f);
-      } catch {
+      const text = textByFile.get(f);
+      if (text == null)
         continue;
-      }
-      const afterFile = classifyFlowRoot(root);
-      if (!afterFile || !sameReadableActionCorpus(corpus, afterFile)) {
-        rootItems.length = 0;
-        break;
-      }
       const meta = parseFlowMeta(text);
       if (flags.appId && meta.appId !== flags.appId)
         continue;
@@ -983,9 +1307,9 @@ function scanFlows() {
         replay
       });
     }
-    const finalCorpus = classifyFlowRoot(root);
-    if (finalCorpus && sameReadableActionCorpus(corpus, finalCorpus))
-      items.push(...rootItems);
+    assertReadableActionOperationUnchanged(operation);
+    assertUnfollowedFileSnapshotUnchanged(fileSnapshot);
+    items.push(...rootItems);
   }
   items.sort((a, b) => a.flow.localeCompare(b.flow));
   return { items: items.slice(0, flags.max), roots };

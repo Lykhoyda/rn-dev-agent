@@ -147,8 +147,17 @@ function captureCoverageArguments(shard?: string): string[] {
 
 test('CI exposes five non-cancelling unit-test batches behind Build & Test', () => {
   const jobs = loadCiJobs();
+  const coreTests = jobs['core-tests'];
   const unitTests = jobs['unit-tests'];
   const aggregate = jobs.test;
+
+  const serialStep = coreTests?.steps?.find(
+    (step) => step.name === 'Inherited action inventory serial regression',
+  );
+  assert.equal(
+    serialStep?.run,
+    'corepack yarn workspace rn-dev-agent-core exec node --test --test-concurrency=1 test/serial/gh-812-inherited-action-inventory.test.ts',
+  );
 
   assert.ok(unitTests);
   assert.equal(unitTests.name, 'Unit tests (batch ${{ matrix.batch }}/5)');

@@ -618,7 +618,10 @@ test('run-action #120: phase timings isolate slow repair from fast first-attempt
 // ─────────────────────────────────────────────────────────────────────────────
 
 test('Issue #117: concurrent cdp_run_action calls on the same actionId do not lose RunRecords', async () => {
-  project.seedAction('demo', fixtureYaml({ id: 'demo', selectors: ['fab-create-task'] }));
+  project.seedAction(
+    'demo',
+    fixtureYaml({ id: 'demo', status: 'active', selectors: ['fab-create-task'] }),
+  );
 
   // Both calls should succeed (first-attempt pass) and both should
   // append a RunRecord. Pre-#117 fix this test would intermittently

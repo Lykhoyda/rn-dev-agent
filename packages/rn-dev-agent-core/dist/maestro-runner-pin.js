@@ -92,7 +92,9 @@ async function verifyActions(argv) {
     let files;
     let actionContext;
     try {
-        const openedContext = openReadableActionLoadContext(dirname(dirname(flowDir)));
+        const openedContext = openReadableActionLoadContext(dirname(dirname(flowDir)), {
+            includeRunFlowFiles: true,
+        });
         if (!openedContext)
             throw new Error(`No learned-action corpus found at ${flowDir}`);
         actionContext = openedContext;

@@ -309,6 +309,27 @@ function asRunFlow(cmd: unknown): { file?: string; when?: unknown; commands?: un
   return null;
 }
 
+export function collectRunFlowFileReferences(yamlText: string): string[] {
+  try {
+    const docs = yaml.parseAllDocuments(yamlText, { strict: true });
+    const body = docs.at(-1)?.toJS();
+    if (!Array.isArray(body)) return [];
+    const references = new Set<string>();
+    const visit = (commands: unknown[]): void => {
+      for (const command of commands) {
+        const runFlow = asRunFlow(command);
+        if (!runFlow) continue;
+        if (runFlow.file !== undefined) references.add(runFlow.file);
+        if (runFlow.commands) visit(runFlow.commands);
+      }
+    };
+    visit(body);
+    return [...references];
+  } catch {
+    return [];
+  }
+}
+
 // GH #186: resolve a runFlow file ref to a canonical path, enforcing: relative
 // only, no `..`, .yaml/.yml only, and containment within flowRoot after realpath
 // (defeats symlink escape). Throws on any violation or missing root context.

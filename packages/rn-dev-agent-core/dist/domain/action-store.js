@@ -11,10 +11,10 @@ import { parseM7Header, serializeM7Header, } from './reusable-action.js';
 import { loadOrInitSidecar, markSeen, saveSidecar, sidecarPathFor, yamlEditedSinceLastSeen, } from './sidecar-io.js';
 import { atomicWriter } from './atomic-writer.js';
 import { assertValidActionId, assertWithinDir } from './path-safety.js';
-import { listUnfollowedDirectory, readUnfollowedFile } from './unfollowed-file.js';
-import { buildMaestroFlow, parseAndValidateFlow } from './maestro-validator.js';
+import { assertUnfollowedFileSnapshotUnchanged, createUnfollowedFileSnapshot, listUnfollowedDirectory, readUnfollowedFiles, readUnfollowedSnapshotFiles, selectExistingUnfollowedSnapshotFiles, } from './unfollowed-file.js';
+import { buildMaestroFlow, collectRunFlowFileReferences, parseAndValidateFlow, } from './maestro-validator.js';
 import { mirrorToDb } from './action-state-store.js';
-import { readableActionsSnapshot, resolveReadableActionCorpus, sameReadableActionCorpus, } from '../session/worktree-inheritance.js';
+import { assertReadableActionOperationUnchanged, captureReadableActionOperationSnapshot, readableActionsSnapshot, resolveReadableActionCorpus, } from '../session/worktree-inheritance.js';
 /**
  * Resolve the canonical YAML path for an action id under a project root.
  * Mirrors the .rn-agent/actions/ convention (D1208 single-folder doctrine,
@@ -48,15 +48,9 @@ export function assertReadableActionCorpus(projectRoot) {
     if (corpus.status === 'refused')
         throw new Error(corpus.reason);
 }
-function assertStableReadableCorpus(projectRoot, expected) {
-    const after = resolveReadableActionCorpus(projectRoot);
-    if (!sameReadableActionCorpus(expected, after)) {
-        const actionsDir = join(projectRoot, '.rn-agent', 'actions');
-        throw new Error(`Refusing replaced learned-action corpus symlink at ${actionsDir}.`);
-    }
-}
 export function assertReadableActionLoadContextStable(context) {
-    assertStableReadableCorpus(context.projectRoot, context.corpus);
+    assertReadableActionOperationUnchanged(context.operation);
+    assertUnfollowedFileSnapshotUnchanged(context.fileSnapshot);
 }
 function lstatIfPresent(path) {
     try {
@@ -106,18 +100,95 @@ function ownedActionPathIdentityMatches(entries) {
         return false;
     }
 }
-export function openReadableActionLoadContext(projectRoot) {
+function referencedActionPath(parentFile, reference) {
+    if (isAbsolute(reference) ||
+        reference.split(/[\\/]/).includes('..') ||
+        !/\.ya?ml$/i.test(reference)) {
+        return null;
+    }
+    const child = join(dirname(parentFile), reference);
+    if (child === '..' || child.startsWith(`..${sep}`) || isAbsolute(child))
+        return null;
+    return child;
+}
+function prefetchRunFlowFiles(initial, readFiles, fileSnapshot) {
+    const fileContents = new Map(initial);
+    let frontier = [...fileContents.entries()];
+    for (let depth = 0; depth < 5 && frontier.length > 0; depth += 1) {
+        const pending = new Set();
+        for (const [parentFile, text] of frontier) {
+            for (const reference of collectRunFlowFileReferences(text)) {
+                const child = referencedActionPath(parentFile, reference);
+                if (child && !fileContents.has(child))
+                    pending.add(child);
+            }
+        }
+        const paths = selectExistingUnfollowedSnapshotFiles(fileSnapshot, [...pending].sort());
+        if (paths.length === 0)
+            break;
+        const contents = readUnfollowedSnapshotFiles(fileSnapshot, paths, readFiles);
+        frontier = [];
+        paths.forEach((path, index) => {
+            const text = contents[index];
+            fileContents.set(path, text);
+            frontier.push([path, text]);
+        });
+    }
+    return fileContents;
+}
+export function openReadableActionLoadContext(projectRoot, dependencies = {}) {
     const corpus = resolveReadableActionCorpus(projectRoot);
     if (corpus.status === 'refused')
         throw new Error(corpus.reason);
     if (corpus.status !== 'owned-directory' && corpus.status !== 'approved-inherited')
         return null;
     const snapshot = readableActionsSnapshot(corpus);
-    if (!snapshot)
+    const operation = captureReadableActionOperationSnapshot(corpus);
+    if (!snapshot || !operation)
         return null;
     const files = listUnfollowedDirectory(snapshot.directory, snapshot.identity);
-    assertStableReadableCorpus(projectRoot, corpus);
-    return { projectRoot, corpus, snapshot, files };
+    const requestedFiles = dependencies.actionId
+        ? [`${dependencies.actionId}.yaml`, `${dependencies.actionId}.yml`]
+        : files;
+    const readableFiles = requestedFiles.filter((file) => /\.ya?ml$/.test(file) && files.includes(file));
+    const readFiles = dependencies.readFiles ?? readUnfollowedFiles;
+    const fileSnapshot = createUnfollowedFileSnapshot(snapshot.directory, snapshot.identity);
+    const contents = readUnfollowedSnapshotFiles(fileSnapshot, readableFiles, readFiles);
+    const fileContents = new Map();
+    readableFiles.forEach((file, index) => {
+        fileContents.set(file, contents[index]);
+    });
+    const completeFileContents = dependencies.includeRunFlowFiles
+        ? prefetchRunFlowFiles(fileContents, readFiles, fileSnapshot)
+        : fileContents;
+    assertReadableActionOperationUnchanged(operation);
+    assertUnfollowedFileSnapshotUnchanged(fileSnapshot);
+    return {
+        projectRoot,
+        corpus,
+        snapshot,
+        operation,
+        files,
+        fileContents: completeFileContents,
+        fileSnapshot,
+    };
+}
+function actionTextFromContext(context, fileName) {
+    const text = context.fileContents.get(fileName);
+    if (text !== undefined)
+        return text;
+    throw new Error(`Refusing inherited action symlink at ${context.snapshot.directory}/${fileName}.`);
+}
+export function refreshActionLoadContext(context, actionId) {
+    assertReadableActionOperationUnchanged(context.operation);
+    const refreshed = openReadableActionLoadContext(context.projectRoot, {
+        actionId,
+        includeRunFlowFiles: true,
+    });
+    if (!refreshed) {
+        throw new Error(`Action ${actionId} disappeared while refreshing its snapshot.`);
+    }
+    return refreshed;
 }
 function resolveActionFileNameFromContext(actionId, context) {
     const fileName = `${actionId}.yaml`;
@@ -137,14 +208,17 @@ function resolveActionFileNameFromContext(actionId, context) {
 }
 export function resolveActionPath(projectRoot, actionId) {
     assertValidActionId(actionId, 'resolveActionPath');
-    const context = openReadableActionLoadContext(projectRoot);
+    const context = openReadableActionLoadContext(projectRoot, {
+        actionId,
+        includeRunFlowFiles: false,
+    });
     if (!context)
         return null;
     const fileName = resolveActionFileNameFromContext(actionId, context);
     if (!fileName)
         return null;
-    readUnfollowedFile(context.snapshot.directory, context.snapshot.identity, fileName);
-    assertStableReadableCorpus(projectRoot, context.corpus);
+    actionTextFromContext(context, fileName);
+    assertReadableActionLoadContextStable(context);
     return join(context.corpus.actionsDir, fileName);
 }
 export function createActionTextExclusive(projectRoot, actionId, yamlText) {
@@ -300,12 +374,13 @@ export function joinYaml(parts) {
 }
 export function captureActionFromContext(context, actionId) {
     assertValidActionId(actionId, 'loadAction');
+    assertReadableActionLoadContextStable(context);
     const fileName = resolveActionFileNameFromContext(actionId, context);
     if (!fileName)
         return null;
-    const { corpus, projectRoot, snapshot } = context;
+    const { corpus, snapshot } = context;
     const filePath = join(corpus.actionsDir, fileName);
-    const text = readUnfollowedFile(snapshot.directory, snapshot.identity, fileName);
+    const text = actionTextFromContext(context, fileName);
     const metadata = parseM7Header(text, actionId);
     if (metadata)
         assertActionMetadataIdentity(filePath, metadata);
@@ -319,7 +394,11 @@ export function captureActionFromContext(context, actionId) {
                 if (child === '' || child === '..' || child.startsWith(`..${sep}`) || isAbsolute(child)) {
                     throw new Error(`Refusing action flow outside ${snapshot.directory}.`);
                 }
-                return readUnfollowedFile(snapshot.directory, snapshot.identity, child);
+                const text = context.fileContents.get(child);
+                if (text === undefined) {
+                    throw new Error(`Refusing inherited action symlink at ${snapshot.directory}/${child}.`);
+                }
+                return text;
             },
             realpathFn: (path) => resolve(path),
         });
@@ -334,7 +413,7 @@ export function captureActionFromContext(context, actionId) {
     catch (err) {
         replay = { ok: false, error: err instanceof Error ? err.message : String(err) };
     }
-    assertStableReadableCorpus(projectRoot, corpus);
+    assertReadableActionLoadContextStable(context);
     return { filePath, yamlText: text, metadata, replay };
 }
 export function loadActionFromContext(context, actionId) {
@@ -343,6 +422,7 @@ export function loadActionFromContext(context, actionId) {
         return null;
     const { bodyLines } = splitYaml(captured.yamlText);
     const state = loadOrInitSidecar(captured.filePath);
+    assertReadableActionLoadContextStable(context);
     return {
         metadata: captured.metadata,
         body: bodyLines.join('\n'),
@@ -353,7 +433,10 @@ export function loadActionFromContext(context, actionId) {
     };
 }
 export function loadAction(projectRoot, actionId) {
-    const context = openReadableActionLoadContext(projectRoot);
+    const context = openReadableActionLoadContext(projectRoot, {
+        actionId,
+        includeRunFlowFiles: true,
+    });
     return context ? loadActionFromContext(context, actionId) : null;
 }
 export function captureActionFromPath(path) {
@@ -365,7 +448,10 @@ export function captureActionFromPath(path) {
         return null;
     }
     const actionId = basename(absolutePath).replace(/\.ya?ml$/i, '');
-    const context = openReadableActionLoadContext(dirname(dirname(actionsDir)));
+    const context = openReadableActionLoadContext(dirname(dirname(actionsDir)), {
+        actionId,
+        includeRunFlowFiles: true,
+    });
     if (!context)
         return null;
     const action = captureActionFromContext(context, actionId);
