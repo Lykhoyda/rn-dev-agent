@@ -135,7 +135,13 @@ test('24-action 32-worktree canonical and inherited inventory stay within the se
     assert.deepEqual(actionIds(inherited.stdout), ['login-en']);
     assert.ok(inherited.durationMs < 8_000, `inherited inventory took ${inherited.durationMs}ms`);
     t.diagnostic(
-      `inventory timings: canonical=${canonical.durationMs.toFixed(1)}ms inherited=${inherited.durationMs.toFixed(1)}ms`,
+      [
+        `inventory result: plan=${plan.resources[0]?.state}`,
+        `canonicalIds=${actionIds(canonical.stdout).join(',')}`,
+        `inheritedIds=${actionIds(inherited.stdout).join(',')}`,
+        `canonical=${canonical.durationMs.toFixed(1)}ms`,
+        `inherited=${inherited.durationMs.toFixed(1)}ms`,
+      ].join(' '),
     );
   } finally {
     rmSync(fixtureRoot, { force: true, recursive: true });
