@@ -29,12 +29,12 @@
 //     mask underlying screen churn).
 import { randomUUID } from 'node:crypto';
 import { okResult, failResult } from '../utils.js';
-import { acknowledgeExternalEdit, assertReadableActionLoadContextStable, loadActionFromContext, openReadableActionLoadContext, promoteActionRuntimeWithCAS, refreshActionLoadContext, saveActionRuntimeWithCAS, } from '../domain/action-store.js';
+import { acknowledgeExternalEdit, assertReadableActionLoadContextStable, loadAction, loadActionFromContext, openReadableActionLoadContext, promoteActionRuntimeWithCAS, refreshActionLoadContext, saveActionRuntimeWithCAS, } from '../domain/action-store.js';
 import { mirrorToDb } from '../domain/action-state-store.js';
 import { appendRunRecord, shouldAutoPromoteToActive, } from '../domain/reusable-action.js';
 import { parseMaestroFailure, isAutoRepairable, } from '../domain/maestro-error-parser.js';
 import { createMaestroRunHandler } from './maestro-run.js';
-import { bindRepairActionLoadContext, createRepairActionHandler } from './repair-action.js';
+import { createRepairActionHandler } from './repair-action.js';
 import { isValidActionId } from '../domain/path-safety.js';
 import { classifyRouteDriftAfterFailure } from '../nav-graph/route-sequence.js';
 import { SessionAuthorityError } from '../session/registry.js';
@@ -424,7 +424,7 @@ export function createRunActionHandler(deps = {}) {
                     steps: [...timingSteps],
                 },
             };
-            return persistRun(args.actionId, loadContext, probeDeviceId ? { ...timedRecord, deviceId: probeDeviceId } : timedRecord);
+            return persistRun(args.actionId, projectRoot, probeDeviceId ? { ...timedRecord, deviceId: probeDeviceId } : timedRecord);
         };
         const writeDisclosure = (actionYaml = 'none', outcome) => ({
             actionYaml: actionYaml === 'none'
@@ -893,12 +893,12 @@ export function createRunActionHandler(deps = {}) {
                 throw new Error('Internal: isAutoRepairable returned true for non-SELECTOR_NOT_FOUND failure');
             }
             const tBeforeRepair = Date.now();
-            const repairResult = await measureStep('selector-repair', () => repairAction(bindRepairActionLoadContext({
+            const repairResult = await measureStep('selector-repair', () => repairAction({
                 actionId: args.actionId,
                 failedSelector: failure.selector,
                 projectRoot,
                 agentReasoning: `auto-repair from cdp_run_action after maestro failure: ${failure.selector}`,
-            }, loadContext)));
+            }));
             const repairMs = Date.now() - tBeforeRepair;
             const repairEnv = parseEnvelope(repairResult, 'cdp_repair_action');
             const repairPatched = repairEnv.ok === true && repairEnv.data?.patched === true;
@@ -1131,13 +1131,13 @@ function promotionDisclosure(outcome) {
         return 'lifecycle-promotion';
     return outcome.promotionRefused ? 'lifecycle-promotion-refused' : 'none';
 }
-async function persistRun(actionId, context, record) {
+async function persistRun(actionId, projectRoot, record) {
     // Re-load to get the freshest state — repair-action may have just
     // bumped revision/repairHistory. Issue #117's bounded CAS retry remains,
     // but only the ignored runtime sidecar is written on ordinary replay.
     const MAX_ATTEMPTS = 5;
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-        const fresh = loadActionFromContext(context, actionId);
+        const fresh = loadAction(projectRoot, actionId);
         if (!fresh) {
             console.error(`cdp_run_action: persistRun could not reload action "${actionId}" — RunRecord dropped (status=${record.status}, autoRepair.outcome=${record.autoRepair?.outcome ?? 'n/a'})`);
             return { promoted: false, promotionRefused: false };

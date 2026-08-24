@@ -397,7 +397,7 @@ test('inventory and replay Git calls are independent of action count', () => {
       timeout: 30_000,
     });
     assert.equal(replay.status, 0, replay.stderr);
-    assert.deepEqual(normalizedGitCalls(probe.readCalls()), oneCalls);
+    assert.deepEqual(normalizedGitCalls(probe.readCalls()), [...oneCalls, ...oneCalls]);
 
     const corpus = resolveReadableActionCorpus(worktree);
     assert.equal(corpus.status, 'approved-inherited');
@@ -1048,6 +1048,32 @@ test('operation snapshot refuses a replaced linked project root', () => {
     );
   } finally {
     fixture.cleanup();
+  }
+});
+
+test('operation snapshot refuses a replaced linked Git entry', () => {
+  for (const scenario of ['delete', 'replace'] as const) {
+    const fixture = makeFixture();
+    try {
+      seedLoginCorpus(fixture.primary);
+      const worktree = addWorktree(fixture, `git-entry-${scenario}`);
+      inherit(worktree);
+      const corpus = resolveReadableActionCorpus(worktree);
+      assert.equal(corpus.status, 'approved-inherited');
+      const operation = captureReadableActionOperationSnapshot(corpus);
+      assert.ok(operation);
+      const gitEntry = join(worktree, '.git');
+      const contents = readFileSync(gitEntry, 'utf8');
+      rmSync(gitEntry);
+      if (scenario === 'replace') writeFileSync(gitEntry, contents);
+
+      assert.throws(
+        () => assertReadableActionOperationUnchanged(operation),
+        /Refusing replaced learned-action corpus symlink/,
+      );
+    } finally {
+      fixture.cleanup();
+    }
   }
 });
 

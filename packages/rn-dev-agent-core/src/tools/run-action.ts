@@ -58,7 +58,7 @@ import {
   type MaestroFailure,
 } from '../domain/maestro-error-parser.js';
 import { createMaestroRunHandler } from './maestro-run.js';
-import { bindRepairActionLoadContext, createRepairActionHandler } from './repair-action.js';
+import { createRepairActionHandler } from './repair-action.js';
 import { isValidActionId } from '../domain/path-safety.js';
 import { classifyRouteDriftAfterFailure } from '../nav-graph/route-sequence.js';
 import { SessionAuthorityError } from '../session/registry.js';
@@ -686,7 +686,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
       };
       return persistRun(
         args.actionId,
-        loadContext,
+        projectRoot,
         probeDeviceId ? { ...timedRecord, deviceId: probeDeviceId } : timedRecord,
       );
     };
@@ -1214,17 +1214,12 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
 
       const tBeforeRepair = Date.now();
       const repairResult = await measureStep('selector-repair', () =>
-        repairAction(
-          bindRepairActionLoadContext(
-            {
-              actionId: args.actionId,
-              failedSelector: failure.selector,
-              projectRoot,
-              agentReasoning: `auto-repair from cdp_run_action after maestro failure: ${failure.selector}`,
-            },
-            loadContext,
-          ),
-        ),
+        repairAction({
+          actionId: args.actionId,
+          failedSelector: failure.selector,
+          projectRoot,
+          agentReasoning: `auto-repair from cdp_run_action after maestro failure: ${failure.selector}`,
+        }),
       );
       const repairMs = Date.now() - tBeforeRepair;
       const repairEnv = parseEnvelope(repairResult, 'cdp_repair_action');
@@ -1524,7 +1519,7 @@ function promotionDisclosure(outcome: PersistRunOutcome): WriteDisclosureKind {
 
 async function persistRun(
   actionId: string,
-  context: ReadableActionLoadContext,
+  projectRoot: string,
   record: RunRecord,
 ): Promise<PersistRunOutcome> {
   // Re-load to get the freshest state — repair-action may have just
@@ -1532,7 +1527,7 @@ async function persistRun(
   // but only the ignored runtime sidecar is written on ordinary replay.
   const MAX_ATTEMPTS = 5;
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-    const fresh = loadActionFromContext(context, actionId);
+    const fresh = loadAction(projectRoot, actionId);
     if (!fresh) {
       console.error(
         `cdp_run_action: persistRun could not reload action "${actionId}" — RunRecord dropped (status=${record.status}, autoRepair.outcome=${record.autoRepair?.outcome ?? 'n/a'})`,

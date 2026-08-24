@@ -10938,6 +10938,9 @@ function resolveReadableActionCorpus(projectRoot, dependencies = {}) {
   const primaryIdentity = layout[repositoryIdentityEvidence];
   if (!primaryIdentity)
     return refuseReplacedActions(actionsDir);
+  const linkedIdentity = captureLinkedRepositoryIdentity(layout);
+  if (!linkedIdentity)
+    return refuseReplacedActions(actionsDir);
   const primaryRnAgentDir = join6(layout.primaryAppRoot, ".rn-agent");
   const primaryActionsDir = join6(primaryRnAgentDir, "actions");
   const planned = planResource(layout, SHAREABLE_RESOURCES[0]);
@@ -10963,7 +10966,7 @@ function resolveReadableActionCorpus(projectRoot, dependencies = {}) {
   }
   dependencies.afterTargetOpen?.();
   const plannedAfter = planResource(layout, SHAREABLE_RESOURCES[0]);
-  if (plannedAfter.state !== "LINK_VALID_SAFE" || !plannedAfter.evidence || plannedAfter.evidence.dev !== planned.evidence.dev || plannedAfter.evidence.ino !== planned.evidence.ino || plannedAfter.sourceState !== "AVAILABLE" || !sameSourceEvidence(planned.sourceEvidence, plannedAfter.sourceEvidence) || !sourceLeafMatchesIdentity(planned.sourceEvidence, targetIdentity) || !sourceLeafMatchesIdentity(plannedAfter.sourceEvidence, targetIdentity) || !directoryIdentityUnchanged(root, projectRootIdentity) || !directoryIdentityUnchanged(rnAgentDir, rnAgentIdentity) || !repositoryIdentityUnchanged(primaryIdentity)) {
+  if (plannedAfter.state !== "LINK_VALID_SAFE" || !plannedAfter.evidence || plannedAfter.evidence.dev !== planned.evidence.dev || plannedAfter.evidence.ino !== planned.evidence.ino || plannedAfter.sourceState !== "AVAILABLE" || !sameSourceEvidence(planned.sourceEvidence, plannedAfter.sourceEvidence) || !sourceLeafMatchesIdentity(planned.sourceEvidence, targetIdentity) || !sourceLeafMatchesIdentity(plannedAfter.sourceEvidence, targetIdentity) || !directoryIdentityUnchanged(root, projectRootIdentity) || !directoryIdentityUnchanged(rnAgentDir, rnAgentIdentity) || !linkedRepositoryIdentityUnchanged(linkedIdentity) || !repositoryIdentityUnchanged(primaryIdentity)) {
     return refuseReplacedActions(actionsDir);
   }
   return {
@@ -10978,7 +10981,8 @@ function resolveReadableActionCorpus(projectRoot, dependencies = {}) {
     targetIdentity,
     primaryRoot: layout.primaryRoot,
     commonDir: layout.commonDir,
-    primaryIdentity
+    primaryIdentity,
+    linkedIdentity
   };
 }
 function readableActionsSnapshot(corpus) {
@@ -10998,6 +11002,23 @@ function captureDirectoryIdentity(path) {
   if (!stat2 || stat2.isSymbolicLink() || !stat2.isDirectory())
     return null;
   return Object.freeze({ path, identity: freezeIdentity(identityOf(stat2)) });
+}
+function captureFileIdentity(path) {
+  const stat2 = lstatIfPresent(path);
+  if (!stat2 || stat2.isSymbolicLink() || !stat2.isFile())
+    return null;
+  return Object.freeze({ path, identity: freezeIdentity(identityOf(stat2)) });
+}
+function captureLinkedRepositoryIdentity(layout) {
+  const worktreeRoot = captureDirectoryIdentity(layout.worktreeRoot);
+  const gitEntry = captureFileIdentity(join6(layout.worktreeRoot, ".git"));
+  const gitDir = captureDirectoryIdentity(layout.gitDir);
+  if (!worktreeRoot || !gitEntry || !gitDir)
+    return null;
+  return { worktreeRoot, gitEntry, gitDir };
+}
+function linkedRepositoryIdentityUnchanged(identity2) {
+  return currentIdentityMatches(identity2.worktreeRoot.path, identity2.worktreeRoot.identity, "directory") && currentIdentityMatches(identity2.gitEntry.path, identity2.gitEntry.identity, "file") && currentIdentityMatches(identity2.gitDir.path, identity2.gitDir.identity, "directory");
 }
 function captureReadableActionOperationSnapshot(corpus) {
   const operationId = `${process.pid}:${++readableActionOperationSequence}`;
@@ -11032,6 +11053,20 @@ function captureReadableActionOperationSnapshot(corpus) {
       directory: corpus.targetDir,
       directoryIdentity: freezeIdentity(corpus.targetIdentity),
       linkIdentity: freezeIdentity(corpus.linkIdentity),
+      linkedIdentity: Object.freeze({
+        worktreeRoot: Object.freeze({
+          path: corpus.linkedIdentity.worktreeRoot.path,
+          identity: freezeIdentity(corpus.linkedIdentity.worktreeRoot.identity)
+        }),
+        gitEntry: Object.freeze({
+          path: corpus.linkedIdentity.gitEntry.path,
+          identity: freezeIdentity(corpus.linkedIdentity.gitEntry.identity)
+        }),
+        gitDir: Object.freeze({
+          path: corpus.linkedIdentity.gitDir.path,
+          identity: freezeIdentity(corpus.linkedIdentity.gitDir.identity)
+        })
+      }),
       primaryIdentity: Object.freeze({
         topLevel: Object.freeze({
           path: corpus.primaryIdentity.topLevel.path,
@@ -11050,7 +11085,7 @@ function currentIdentityMatches(path, expected, kind) {
   const current = lstatIfPresent(path);
   if (!current)
     return false;
-  const typeMatches = kind === "directory" ? current.isDirectory() : current.isSymbolicLink();
+  const typeMatches = kind === "directory" ? current.isDirectory() : kind === "file" ? current.isFile() && !current.isSymbolicLink() : current.isSymbolicLink();
   return typeMatches && String(current.dev) === expected.dev && String(current.ino) === expected.ino;
 }
 function assertReadableActionOperationUnchanged(snapshot) {
@@ -11058,7 +11093,7 @@ function assertReadableActionOperationUnchanged(snapshot) {
   if (snapshot.kind === "owned-directory") {
     unchanged = unchanged && currentIdentityMatches(snapshot.actionsDir, snapshot.directoryIdentity, "directory") && canonical(snapshot.actionsDir) === snapshot.directory;
   } else {
-    unchanged = unchanged && Boolean(snapshot.linkIdentity && snapshot.primaryIdentity) && currentIdentityMatches(snapshot.actionsDir, snapshot.linkIdentity, "symlink") && currentIdentityMatches(snapshot.directory, snapshot.directoryIdentity, "directory") && currentIdentityMatches(snapshot.primaryIdentity.topLevel.path, snapshot.primaryIdentity.topLevel.identity, "directory") && currentIdentityMatches(snapshot.primaryIdentity.commonDir.path, snapshot.primaryIdentity.commonDir.identity, "directory") && canonical(snapshot.actionsDir) === snapshot.directory && canonical(snapshot.directory) === snapshot.directory && canonical(snapshot.primaryIdentity.topLevel.path) === snapshot.primaryIdentity.topLevel.path && canonical(snapshot.primaryIdentity.commonDir.path) === snapshot.primaryIdentity.commonDir.path;
+    unchanged = unchanged && Boolean(snapshot.linkIdentity && snapshot.linkedIdentity && snapshot.primaryIdentity) && currentIdentityMatches(snapshot.actionsDir, snapshot.linkIdentity, "symlink") && currentIdentityMatches(snapshot.directory, snapshot.directoryIdentity, "directory") && currentIdentityMatches(snapshot.linkedIdentity.worktreeRoot.path, snapshot.linkedIdentity.worktreeRoot.identity, "directory") && currentIdentityMatches(snapshot.linkedIdentity.gitEntry.path, snapshot.linkedIdentity.gitEntry.identity, "file") && currentIdentityMatches(snapshot.linkedIdentity.gitDir.path, snapshot.linkedIdentity.gitDir.identity, "directory") && currentIdentityMatches(snapshot.primaryIdentity.topLevel.path, snapshot.primaryIdentity.topLevel.identity, "directory") && currentIdentityMatches(snapshot.primaryIdentity.commonDir.path, snapshot.primaryIdentity.commonDir.identity, "directory") && canonical(snapshot.actionsDir) === snapshot.directory && canonical(snapshot.directory) === snapshot.directory && canonical(snapshot.primaryIdentity.topLevel.path) === snapshot.primaryIdentity.topLevel.path && canonical(snapshot.primaryIdentity.commonDir.path) === snapshot.primaryIdentity.commonDir.path;
   }
   if (!unchanged)
     throw new Error(refuseReplacedActions(snapshot.actionsDir).reason);
@@ -78953,10 +78988,6 @@ function parseSnapshotNodes2(envelope) {
     return null;
   }
 }
-function bindRepairActionLoadContext(args, context) {
-  Object.defineProperty(args, repairActionLoadContext, { value: context });
-  return args;
-}
 function createRepairActionHandler() {
   return withSession(async (args) => {
     if (!args.actionId || typeof args.actionId !== "string") {
@@ -78971,8 +79002,7 @@ function createRepairActionHandler() {
       });
     }
     const projectRoot = args.projectRoot ?? process.cwd();
-    const loadContext = args[repairActionLoadContext];
-    const action = loadContext ? loadActionFromContext(loadContext, args.actionId) : loadAction(projectRoot, args.actionId);
+    const action = loadAction(projectRoot, args.actionId);
     if (!action) {
       return failResult(`cdp_repair_action: action "${args.actionId}" not found at ${projectRoot}/.rn-agent/actions/${args.actionId}.yaml`, "NO_PROJECT_ROOT", {
         hint: "Verify the action exists with /list-learned-actions, or pass projectRoot if cdp-bridge is invoked outside the project directory."
@@ -79072,8 +79102,6 @@ function createRepairActionHandler() {
     }
     const repaired = applyRepair(action, result, () => /* @__PURE__ */ new Date(), args.agentReasoning);
     const { filePath, sidecarPath } = saveAction(repaired);
-    if (loadContext)
-      assertReadableActionOperationUnchanged(loadContext.operation);
     const appendedRepair = repaired.state.repairHistory[repaired.state.repairHistory.length - 1];
     mirrorToDb({
       yamlFilePath: repaired.filePath,
@@ -79100,7 +79128,6 @@ function createRepairActionHandler() {
     });
   });
 }
-var repairActionLoadContext;
 var init_repair_action = __esm({
   "packages/rn-dev-agent-core/dist/tools/repair-action.js"() {
     "use strict";
@@ -79109,14 +79136,12 @@ var init_repair_action = __esm({
     init_path_safety();
     init_action_store();
     init_action_state_store();
-    init_worktree_inheritance();
     init_repair_engine();
     init_reusable_action();
     init_device_batch();
     init_runner_leak_recovery();
     init_rn_fast_runner_client();
     init_app_lifecycle();
-    repairActionLoadContext = /* @__PURE__ */ Symbol("repairActionLoadContext");
   }
 });
 
@@ -81084,7 +81109,7 @@ function createRunActionHandler(deps = {}) {
           steps: [...timingSteps]
         }
       };
-      return persistRun(args.actionId, loadContext, probeDeviceId ? { ...timedRecord, deviceId: probeDeviceId } : timedRecord);
+      return persistRun(args.actionId, projectRoot, probeDeviceId ? { ...timedRecord, deviceId: probeDeviceId } : timedRecord);
     };
     const writeDisclosure = (actionYaml = "none", outcome) => ({
       actionYaml: actionYaml === "none" ? { written: false, reason: "repair-not-applied" } : actionYaml === "lifecycle-promotion-refused" ? { written: false, reason: "lifecycle-promotion-refused" } : { written: true, authorized: true, reason: actionYaml },
@@ -81448,12 +81473,12 @@ function createRunActionHandler(deps = {}) {
         throw new Error("Internal: isAutoRepairable returned true for non-SELECTOR_NOT_FOUND failure");
       }
       const tBeforeRepair = Date.now();
-      const repairResult = await measureStep("selector-repair", () => repairAction(bindRepairActionLoadContext({
+      const repairResult = await measureStep("selector-repair", () => repairAction({
         actionId: args.actionId,
         failedSelector: failure.selector,
         projectRoot,
         agentReasoning: `auto-repair from cdp_run_action after maestro failure: ${failure.selector}`
-      }, loadContext)));
+      }));
       const repairMs = Date.now() - tBeforeRepair;
       const repairEnv = parseEnvelope(repairResult, "cdp_repair_action");
       const repairPatched = repairEnv.ok === true && repairEnv.data?.patched === true;
@@ -81645,10 +81670,10 @@ function promotionDisclosure(outcome) {
     return "lifecycle-promotion";
   return outcome.promotionRefused ? "lifecycle-promotion-refused" : "none";
 }
-async function persistRun(actionId, context, record2) {
+async function persistRun(actionId, projectRoot, record2) {
   const MAX_ATTEMPTS = 5;
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-    const fresh = loadActionFromContext(context, actionId);
+    const fresh = loadAction(projectRoot, actionId);
     if (!fresh) {
       console.error(`cdp_run_action: persistRun could not reload action "${actionId}" \u2014 RunRecord dropped (status=${record2.status}, autoRepair.outcome=${record2.autoRepair?.outcome ?? "n/a"})`);
       return { promoted: false, promotionRefused: false };

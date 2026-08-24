@@ -430,6 +430,9 @@ export function resolveReadableActionCorpus(projectRoot, dependencies = {}) {
     const primaryIdentity = layout[repositoryIdentityEvidence];
     if (!primaryIdentity)
         return refuseReplacedActions(actionsDir);
+    const linkedIdentity = captureLinkedRepositoryIdentity(layout);
+    if (!linkedIdentity)
+        return refuseReplacedActions(actionsDir);
     const primaryRnAgentDir = join(layout.primaryAppRoot, '.rn-agent');
     const primaryActionsDir = join(primaryRnAgentDir, 'actions');
     const planned = planResource(layout, SHAREABLE_RESOURCES[0]);
@@ -465,6 +468,7 @@ export function resolveReadableActionCorpus(projectRoot, dependencies = {}) {
         !sourceLeafMatchesIdentity(plannedAfter.sourceEvidence, targetIdentity) ||
         !directoryIdentityUnchanged(root, projectRootIdentity) ||
         !directoryIdentityUnchanged(rnAgentDir, rnAgentIdentity) ||
+        !linkedRepositoryIdentityUnchanged(linkedIdentity) ||
         !repositoryIdentityUnchanged(primaryIdentity)) {
         return refuseReplacedActions(actionsDir);
     }
@@ -481,6 +485,7 @@ export function resolveReadableActionCorpus(projectRoot, dependencies = {}) {
         primaryRoot: layout.primaryRoot,
         commonDir: layout.commonDir,
         primaryIdentity,
+        linkedIdentity,
     };
 }
 export function sameReadableActionCorpus(left, right) {
@@ -512,6 +517,14 @@ export function sameReadableActionCorpus(left, right) {
         left.linkIdentity.ino === right.linkIdentity.ino &&
         left.targetIdentity.dev === right.targetIdentity.dev &&
         left.targetIdentity.ino === right.targetIdentity.ino &&
+        left.linkedIdentity.worktreeRoot.identity.dev ===
+            right.linkedIdentity.worktreeRoot.identity.dev &&
+        left.linkedIdentity.worktreeRoot.identity.ino ===
+            right.linkedIdentity.worktreeRoot.identity.ino &&
+        left.linkedIdentity.gitEntry.identity.dev === right.linkedIdentity.gitEntry.identity.dev &&
+        left.linkedIdentity.gitEntry.identity.ino === right.linkedIdentity.gitEntry.identity.ino &&
+        left.linkedIdentity.gitDir.identity.dev === right.linkedIdentity.gitDir.identity.dev &&
+        left.linkedIdentity.gitDir.identity.ino === right.linkedIdentity.gitDir.identity.ino &&
         left.primaryRoot === right.primaryRoot &&
         left.commonDir === right.commonDir &&
         left.primaryIdentity.topLevel.identity.dev === right.primaryIdentity.topLevel.identity.dev &&
@@ -544,6 +557,25 @@ function captureDirectoryIdentity(path) {
     if (!stat || stat.isSymbolicLink() || !stat.isDirectory())
         return null;
     return Object.freeze({ path, identity: freezeIdentity(identityOf(stat)) });
+}
+function captureFileIdentity(path) {
+    const stat = lstatIfPresent(path);
+    if (!stat || stat.isSymbolicLink() || !stat.isFile())
+        return null;
+    return Object.freeze({ path, identity: freezeIdentity(identityOf(stat)) });
+}
+function captureLinkedRepositoryIdentity(layout) {
+    const worktreeRoot = captureDirectoryIdentity(layout.worktreeRoot);
+    const gitEntry = captureFileIdentity(join(layout.worktreeRoot, '.git'));
+    const gitDir = captureDirectoryIdentity(layout.gitDir);
+    if (!worktreeRoot || !gitEntry || !gitDir)
+        return null;
+    return { worktreeRoot, gitEntry, gitDir };
+}
+function linkedRepositoryIdentityUnchanged(identity) {
+    return (currentIdentityMatches(identity.worktreeRoot.path, identity.worktreeRoot.identity, 'directory') &&
+        currentIdentityMatches(identity.gitEntry.path, identity.gitEntry.identity, 'file') &&
+        currentIdentityMatches(identity.gitDir.path, identity.gitDir.identity, 'directory'));
 }
 export function captureReadableActionOperationSnapshot(corpus) {
     const operationId = `${process.pid}:${++readableActionOperationSequence}`;
@@ -581,6 +613,20 @@ export function captureReadableActionOperationSnapshot(corpus) {
             directory: corpus.targetDir,
             directoryIdentity: freezeIdentity(corpus.targetIdentity),
             linkIdentity: freezeIdentity(corpus.linkIdentity),
+            linkedIdentity: Object.freeze({
+                worktreeRoot: Object.freeze({
+                    path: corpus.linkedIdentity.worktreeRoot.path,
+                    identity: freezeIdentity(corpus.linkedIdentity.worktreeRoot.identity),
+                }),
+                gitEntry: Object.freeze({
+                    path: corpus.linkedIdentity.gitEntry.path,
+                    identity: freezeIdentity(corpus.linkedIdentity.gitEntry.identity),
+                }),
+                gitDir: Object.freeze({
+                    path: corpus.linkedIdentity.gitDir.path,
+                    identity: freezeIdentity(corpus.linkedIdentity.gitDir.identity),
+                }),
+            }),
             primaryIdentity: Object.freeze({
                 topLevel: Object.freeze({
                     path: corpus.primaryIdentity.topLevel.path,
@@ -599,7 +645,11 @@ function currentIdentityMatches(path, expected, kind) {
     const current = lstatIfPresent(path);
     if (!current)
         return false;
-    const typeMatches = kind === 'directory' ? current.isDirectory() : current.isSymbolicLink();
+    const typeMatches = kind === 'directory'
+        ? current.isDirectory()
+        : kind === 'file'
+            ? current.isFile() && !current.isSymbolicLink()
+            : current.isSymbolicLink();
     return (typeMatches && String(current.dev) === expected.dev && String(current.ino) === expected.ino);
 }
 export function assertReadableActionOperationUnchanged(snapshot) {
@@ -615,9 +665,12 @@ export function assertReadableActionOperationUnchanged(snapshot) {
     else {
         unchanged =
             unchanged &&
-                Boolean(snapshot.linkIdentity && snapshot.primaryIdentity) &&
+                Boolean(snapshot.linkIdentity && snapshot.linkedIdentity && snapshot.primaryIdentity) &&
                 currentIdentityMatches(snapshot.actionsDir, snapshot.linkIdentity, 'symlink') &&
                 currentIdentityMatches(snapshot.directory, snapshot.directoryIdentity, 'directory') &&
+                currentIdentityMatches(snapshot.linkedIdentity.worktreeRoot.path, snapshot.linkedIdentity.worktreeRoot.identity, 'directory') &&
+                currentIdentityMatches(snapshot.linkedIdentity.gitEntry.path, snapshot.linkedIdentity.gitEntry.identity, 'file') &&
+                currentIdentityMatches(snapshot.linkedIdentity.gitDir.path, snapshot.linkedIdentity.gitDir.identity, 'directory') &&
                 currentIdentityMatches(snapshot.primaryIdentity.topLevel.path, snapshot.primaryIdentity.topLevel.identity, 'directory') &&
                 currentIdentityMatches(snapshot.primaryIdentity.commonDir.path, snapshot.primaryIdentity.commonDir.identity, 'directory') &&
                 canonical(snapshot.actionsDir) === snapshot.directory &&

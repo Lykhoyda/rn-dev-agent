@@ -114,6 +114,12 @@ interface RepositoryIdentity {
   commonDir: { path: string; identity: PathIdentity };
 }
 
+interface LinkedRepositoryIdentity {
+  worktreeRoot: { path: string; identity: PathIdentity };
+  gitEntry: { path: string; identity: PathIdentity };
+  gitDir: { path: string; identity: PathIdentity };
+}
+
 const repositoryIdentityEvidence = Symbol('repositoryIdentityEvidence');
 
 type VerifiedWorktreeLayout = WorktreeLayout & {
@@ -144,6 +150,7 @@ export type ReadableActionCorpus =
       primaryRoot: string;
       commonDir: string;
       primaryIdentity: RepositoryIdentity;
+      linkedIdentity: LinkedRepositoryIdentity;
     }
   | { status: 'refused'; reason: string };
 
@@ -158,6 +165,11 @@ export interface ReadableActionOperationSnapshot {
   readonly directory: string;
   readonly directoryIdentity: Readonly<PathIdentity>;
   readonly linkIdentity?: Readonly<PathIdentity>;
+  readonly linkedIdentity?: Readonly<{
+    worktreeRoot: Readonly<{ path: string; identity: Readonly<PathIdentity> }>;
+    gitEntry: Readonly<{ path: string; identity: Readonly<PathIdentity> }>;
+    gitDir: Readonly<{ path: string; identity: Readonly<PathIdentity> }>;
+  }>;
   readonly primaryIdentity?: Readonly<{
     topLevel: Readonly<{ path: string; identity: Readonly<PathIdentity> }>;
     commonDir: Readonly<{ path: string; identity: Readonly<PathIdentity> }>;
@@ -680,6 +692,8 @@ export function resolveReadableActionCorpus(
   }
   const primaryIdentity = (layout as VerifiedWorktreeLayout)[repositoryIdentityEvidence];
   if (!primaryIdentity) return refuseReplacedActions(actionsDir);
+  const linkedIdentity = captureLinkedRepositoryIdentity(layout);
+  if (!linkedIdentity) return refuseReplacedActions(actionsDir);
   const primaryRnAgentDir = join(layout.primaryAppRoot, '.rn-agent');
   const primaryActionsDir = join(primaryRnAgentDir, 'actions');
   const planned = planResource(layout, SHAREABLE_RESOURCES[0]);
@@ -716,6 +730,7 @@ export function resolveReadableActionCorpus(
     !sourceLeafMatchesIdentity(plannedAfter.sourceEvidence, targetIdentity) ||
     !directoryIdentityUnchanged(root, projectRootIdentity) ||
     !directoryIdentityUnchanged(rnAgentDir, rnAgentIdentity) ||
+    !linkedRepositoryIdentityUnchanged(linkedIdentity) ||
     !repositoryIdentityUnchanged(primaryIdentity)
   ) {
     return refuseReplacedActions(actionsDir);
@@ -733,6 +748,7 @@ export function resolveReadableActionCorpus(
     primaryRoot: layout.primaryRoot,
     commonDir: layout.commonDir,
     primaryIdentity,
+    linkedIdentity,
   };
 }
 
@@ -769,6 +785,14 @@ export function sameReadableActionCorpus(
     left.linkIdentity.ino === right.linkIdentity.ino &&
     left.targetIdentity.dev === right.targetIdentity.dev &&
     left.targetIdentity.ino === right.targetIdentity.ino &&
+    left.linkedIdentity.worktreeRoot.identity.dev ===
+      right.linkedIdentity.worktreeRoot.identity.dev &&
+    left.linkedIdentity.worktreeRoot.identity.ino ===
+      right.linkedIdentity.worktreeRoot.identity.ino &&
+    left.linkedIdentity.gitEntry.identity.dev === right.linkedIdentity.gitEntry.identity.dev &&
+    left.linkedIdentity.gitEntry.identity.ino === right.linkedIdentity.gitEntry.identity.ino &&
+    left.linkedIdentity.gitDir.identity.dev === right.linkedIdentity.gitDir.identity.dev &&
+    left.linkedIdentity.gitDir.identity.ino === right.linkedIdentity.gitDir.identity.ino &&
     left.primaryRoot === right.primaryRoot &&
     left.commonDir === right.commonDir &&
     left.primaryIdentity.topLevel.identity.dev === right.primaryIdentity.topLevel.identity.dev &&
@@ -809,6 +833,35 @@ function captureDirectoryIdentity(path: string): Readonly<{
   const stat = lstatIfPresent(path);
   if (!stat || stat.isSymbolicLink() || !stat.isDirectory()) return null;
   return Object.freeze({ path, identity: freezeIdentity(identityOf(stat)) });
+}
+
+function captureFileIdentity(path: string): Readonly<{
+  path: string;
+  identity: Readonly<PathIdentity>;
+}> | null {
+  const stat = lstatIfPresent(path);
+  if (!stat || stat.isSymbolicLink() || !stat.isFile()) return null;
+  return Object.freeze({ path, identity: freezeIdentity(identityOf(stat)) });
+}
+
+function captureLinkedRepositoryIdentity(layout: WorktreeLayout): LinkedRepositoryIdentity | null {
+  const worktreeRoot = captureDirectoryIdentity(layout.worktreeRoot);
+  const gitEntry = captureFileIdentity(join(layout.worktreeRoot, '.git'));
+  const gitDir = captureDirectoryIdentity(layout.gitDir);
+  if (!worktreeRoot || !gitEntry || !gitDir) return null;
+  return { worktreeRoot, gitEntry, gitDir };
+}
+
+function linkedRepositoryIdentityUnchanged(identity: LinkedRepositoryIdentity): boolean {
+  return (
+    currentIdentityMatches(
+      identity.worktreeRoot.path,
+      identity.worktreeRoot.identity,
+      'directory',
+    ) &&
+    currentIdentityMatches(identity.gitEntry.path, identity.gitEntry.identity, 'file') &&
+    currentIdentityMatches(identity.gitDir.path, identity.gitDir.identity, 'directory')
+  );
 }
 
 export function captureReadableActionOperationSnapshot(
@@ -853,6 +906,20 @@ export function captureReadableActionOperationSnapshot(
       directory: corpus.targetDir,
       directoryIdentity: freezeIdentity(corpus.targetIdentity),
       linkIdentity: freezeIdentity(corpus.linkIdentity),
+      linkedIdentity: Object.freeze({
+        worktreeRoot: Object.freeze({
+          path: corpus.linkedIdentity.worktreeRoot.path,
+          identity: freezeIdentity(corpus.linkedIdentity.worktreeRoot.identity),
+        }),
+        gitEntry: Object.freeze({
+          path: corpus.linkedIdentity.gitEntry.path,
+          identity: freezeIdentity(corpus.linkedIdentity.gitEntry.identity),
+        }),
+        gitDir: Object.freeze({
+          path: corpus.linkedIdentity.gitDir.path,
+          identity: freezeIdentity(corpus.linkedIdentity.gitDir.identity),
+        }),
+      }),
       primaryIdentity: Object.freeze({
         topLevel: Object.freeze({
           path: corpus.primaryIdentity.topLevel.path,
@@ -871,11 +938,16 @@ export function captureReadableActionOperationSnapshot(
 function currentIdentityMatches(
   path: string,
   expected: Readonly<PathIdentity>,
-  kind: 'directory' | 'symlink',
+  kind: 'directory' | 'file' | 'symlink',
 ): boolean {
   const current = lstatIfPresent(path);
   if (!current) return false;
-  const typeMatches = kind === 'directory' ? current.isDirectory() : current.isSymbolicLink();
+  const typeMatches =
+    kind === 'directory'
+      ? current.isDirectory()
+      : kind === 'file'
+        ? current.isFile() && !current.isSymbolicLink()
+        : current.isSymbolicLink();
   return (
     typeMatches && String(current.dev) === expected.dev && String(current.ino) === expected.ino
   );
@@ -896,9 +968,24 @@ export function assertReadableActionOperationUnchanged(
   } else {
     unchanged =
       unchanged &&
-      Boolean(snapshot.linkIdentity && snapshot.primaryIdentity) &&
+      Boolean(snapshot.linkIdentity && snapshot.linkedIdentity && snapshot.primaryIdentity) &&
       currentIdentityMatches(snapshot.actionsDir, snapshot.linkIdentity!, 'symlink') &&
       currentIdentityMatches(snapshot.directory, snapshot.directoryIdentity, 'directory') &&
+      currentIdentityMatches(
+        snapshot.linkedIdentity!.worktreeRoot.path,
+        snapshot.linkedIdentity!.worktreeRoot.identity,
+        'directory',
+      ) &&
+      currentIdentityMatches(
+        snapshot.linkedIdentity!.gitEntry.path,
+        snapshot.linkedIdentity!.gitEntry.identity,
+        'file',
+      ) &&
+      currentIdentityMatches(
+        snapshot.linkedIdentity!.gitDir.path,
+        snapshot.linkedIdentity!.gitDir.identity,
+        'directory',
+      ) &&
       currentIdentityMatches(
         snapshot.primaryIdentity!.topLevel.path,
         snapshot.primaryIdentity!.topLevel.identity,
