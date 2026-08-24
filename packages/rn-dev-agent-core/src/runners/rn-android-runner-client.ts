@@ -146,8 +146,9 @@ export interface RunAndroidArgs {
   x2?: number;
   y2?: number;
   text?: string;
-  /** Exact-fill descriptor resolved afresh by the runner within one command. */
+  /** Exact interaction descriptor resolved afresh by the runner within one command. */
   exactIdentifier?: string;
+  exactLabel?: string;
   exactType?: string;
   exact?: boolean;
   includeSystemUi?: boolean;
@@ -1926,6 +1927,7 @@ export async function runAndroid(args: RunAndroidArgs): Promise<ToolResult> {
   if (args.y2 !== undefined) body.y2 = args.y2;
   if (args.text !== undefined) body.text = args.text;
   if (args.exactIdentifier !== undefined) body.exactIdentifier = args.exactIdentifier;
+  if (args.exactLabel !== undefined) body.exactLabel = args.exactLabel;
   if (args.exactType !== undefined) body.exactType = args.exactType;
   if (args.exact !== undefined) body.exact = args.exact;
   if (args.includeSystemUi !== undefined) body.includeSystemUi = args.includeSystemUi;
@@ -2056,7 +2058,9 @@ export async function runAndroid(args: RunAndroidArgs): Promise<ToolResult> {
     if (data?.tapped !== true) {
       // NOTE: ACTION_CLICK is atomic, but a false coordinate click can mean the
       // touch-up failed after the app already received the touch-down.
-      const exactTarget = args.exactIdentifier !== undefined && args.exactType !== undefined;
+      const exactTarget =
+        (args.exactIdentifier !== undefined || args.exactLabel !== undefined) &&
+        args.exactType !== undefined;
       if (exactTarget) {
         return failResult(
           'Android runner could not prove that the requested interaction was actuated.',

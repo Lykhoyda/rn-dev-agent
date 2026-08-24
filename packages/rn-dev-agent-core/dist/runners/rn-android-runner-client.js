@@ -1398,6 +1398,8 @@ export async function runAndroid(args) {
         body.text = args.text;
     if (args.exactIdentifier !== undefined)
         body.exactIdentifier = args.exactIdentifier;
+    if (args.exactLabel !== undefined)
+        body.exactLabel = args.exactLabel;
     if (args.exactType !== undefined)
         body.exactType = args.exactType;
     if (args.exact !== undefined)
@@ -1529,7 +1531,8 @@ export async function runAndroid(args) {
         if (data?.tapped !== true) {
             // NOTE: ACTION_CLICK is atomic, but a false coordinate click can mean the
             // touch-up failed after the app already received the touch-down.
-            const exactTarget = args.exactIdentifier !== undefined && args.exactType !== undefined;
+            const exactTarget = (args.exactIdentifier !== undefined || args.exactLabel !== undefined) &&
+                args.exactType !== undefined;
             if (exactTarget) {
                 return failResult('Android runner could not prove that the requested interaction was actuated.', 'INTERACTION_NOT_ACTUATED', { mutation: 'none', reason: 'runner-rejected-tap', ...recoveryMeta });
             }

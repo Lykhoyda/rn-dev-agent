@@ -22,6 +22,22 @@ object ExactPressSafety {
         containsRequestedPoint: Boolean,
     ): Boolean = enabled && visibleToUser && containsRequestedPoint
 
+    fun matchesDescriptor(
+        nodeIdentifier: String,
+        nodeLabel: String,
+        nodeType: String,
+        exactIdentifier: String?,
+        exactLabel: String?,
+        exactType: String,
+    ): Boolean {
+        if (nodeType != exactType) return false
+        return if (exactIdentifier != null) {
+            nodeIdentifier == exactIdentifier
+        } else {
+            exactLabel != null && nodeLabel == exactLabel
+        }
+    }
+
     /**
      * Classifies whether a distinct same-window branch at the requested point
      * draws over the exact target. Ancestors and descendants are part of the

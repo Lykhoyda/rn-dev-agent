@@ -670,7 +670,9 @@ export function buildRunAndroidArgs(cliArgs, bundleId) {
                     y: center.y,
                     ...(metadata?.identifier
                         ? { exactIdentifier: metadata.identifier, exactType: metadata.type }
-                        : {}),
+                        : metadata?.label
+                            ? { exactLabel: metadata.label, exactType: metadata.type }
+                            : {}),
                     ...(includeSystemUi ? { includeSystemUi: true } : {}),
                     ...withBundle,
                 };

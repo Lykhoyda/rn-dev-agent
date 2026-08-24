@@ -301,6 +301,30 @@ test('fresh testID refs use exact accessibility ownership instead of snapshot co
   );
 });
 
+test('fresh visible-label refs use exact accessibility ownership instead of raw coordinates', () => {
+  updateRefMapFromFlat([
+    {
+      ref: '@e121',
+      type: 'android.widget.TextView',
+      label: 'Tasks',
+      identifier: '',
+      packageName: appId,
+      rect: { x: 426, y: 1480, width: 48, height: 24 },
+      enabled: true,
+      hittable: true,
+    },
+  ]);
+
+  assert.deepEqual(buildRunAndroidArgs(['press', '@e121'], appId), {
+    command: 'tap',
+    x: 450,
+    y: 1492,
+    exactLabel: 'Tasks',
+    exactType: 'android.widget.TextView',
+    bundleId: appId,
+  });
+});
+
 test('stale-ref healing rebuilds exact ownership and explicit system scope', () => {
   updateRefMapFromFlat([
     {
@@ -331,14 +355,27 @@ test('stale Android runners without scoped exact-interaction semantics are rejec
   assert.deepEqual(classifyAndroidHealth(common), {
     compatible: false,
     reason: 'missing-features',
-    missing: ['APP_SCOPED_EXACT_INTERACTION'],
+    missing: ['APP_SCOPED_EXACT_INTERACTION', 'APP_SCOPED_EXACT_LABEL_INTERACTION'],
   });
   assert.deepEqual(
     classifyRunnerCompatibility(common, null, REQUIRED_ANDROID_COMMANDS, REQUIRED_ANDROID_FEATURES),
     {
       compatible: false,
       reason: 'missing-features',
-      missing: ['APP_SCOPED_EXACT_INTERACTION'],
+      missing: ['APP_SCOPED_EXACT_INTERACTION', 'APP_SCOPED_EXACT_LABEL_INTERACTION'],
+    },
+  );
+  assert.deepEqual(
+    classifyRunnerCompatibility(
+      { ...common, capabilities: ['APP_SCOPED_EXACT_INTERACTION'] },
+      null,
+      REQUIRED_ANDROID_COMMANDS,
+      REQUIRED_ANDROID_FEATURES,
+    ),
+    {
+      compatible: false,
+      reason: 'missing-features',
+      missing: ['APP_SCOPED_EXACT_LABEL_INTERACTION'],
     },
   );
   assert.deepEqual(
@@ -363,7 +400,8 @@ test('Android runner reports a rejected tap truthfully per dispatch mechanism', 
     startedAt: '2026-08-10T00:00:00.000Z',
     protocolVersion: 1,
   });
-  _setFetchForTest(async (url) => {
+  const commandBodies: Array<Record<string, unknown>> = [];
+  _setFetchForTest(async (url, init) => {
     if (String(url).endsWith('/health')) {
       return new Response(
         JSON.stringify({
@@ -374,6 +412,7 @@ test('Android runner reports a rejected tap truthfully per dispatch mechanism', 
         }),
       );
     }
+    commandBodies.push(JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>);
     return new Response(JSON.stringify({ ok: true, data: { tapped: false }, v: 1 }));
   });
 
@@ -394,6 +433,24 @@ test('Android runner reports a rejected tap truthfully per dispatch mechanism', 
   assert.equal(envelope.ok, false);
   assert.equal(envelope.code, 'INTERACTION_NOT_ACTUATED');
   assert.equal(envelope.meta.mutation, 'none');
+
+  const visibleLabelResult = await runAndroid({
+    command: 'tap',
+    x: 450,
+    y: 1492,
+    exactLabel: 'Tasks',
+    exactType: 'android.widget.TextView',
+    bundleId: appId,
+  });
+  const visibleLabelEnvelope = JSON.parse(visibleLabelResult.content[0].text) as {
+    code: string;
+    meta: { mutation: string };
+  };
+  assert.equal(visibleLabelResult.isError, true);
+  assert.equal(visibleLabelEnvelope.code, 'INTERACTION_NOT_ACTUATED');
+  assert.equal(visibleLabelEnvelope.meta.mutation, 'none');
+  assert.equal(commandBodies[1]?.exactLabel, 'Tasks');
+  assert.equal(commandBodies[1]?.exactType, 'android.widget.TextView');
 
   const coordinateResult = await runAndroid({
     command: 'tap',

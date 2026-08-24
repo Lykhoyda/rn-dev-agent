@@ -28,6 +28,41 @@ class ExactPressSafetyTest {
     @Test fun targetThatMovedAwayFromThePointIsNotHittable() =
         assertFalse(ExactPressSafety.liveTargetIsHittable(true, true, false))
 
+    @Test fun identifierlessLabelRetainsExactTypeBoundIdentity() {
+        assertTrue(
+            ExactPressSafety.matchesDescriptor(
+                nodeIdentifier = "",
+                nodeLabel = "Tasks",
+                nodeType = "android.widget.TextView",
+                exactIdentifier = null,
+                exactLabel = "Tasks",
+                exactType = "android.widget.TextView",
+            ),
+        )
+        assertFalse(
+            ExactPressSafety.matchesDescriptor(
+                nodeIdentifier = "",
+                nodeLabel = "Tasks",
+                nodeType = "android.view.View",
+                exactIdentifier = null,
+                exactLabel = "Tasks",
+                exactType = "android.widget.TextView",
+            ),
+        )
+    }
+
+    @Test fun identifierDescriptorDoesNotWidenToAVisibleLabel() =
+        assertFalse(
+            ExactPressSafety.matchesDescriptor(
+                nodeIdentifier = "",
+                nodeLabel = "tab-tasks",
+                nodeType = "android.view.View",
+                exactIdentifier = "tab-tasks",
+                exactLabel = null,
+                exactType = "android.view.View",
+            ),
+        )
+
     @Test fun bottomSheetActionAboveCoveredControlIsAnOccluder() {
         val target = listOf(step(1, 0), step(2, 0), step(3, 0))
         val deleteTaskOnSheet = listOf(step(1, 0), step(4, 1), step(5, 0))

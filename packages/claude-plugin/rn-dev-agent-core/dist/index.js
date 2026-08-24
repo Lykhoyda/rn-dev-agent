@@ -11529,7 +11529,10 @@ var init_protocol = __esm({
       "status"
     ];
     REQUIRED_IOS_FEATURES = ["EXACT_KEYBOARD_TARGET_GUARD"];
-    REQUIRED_ANDROID_FEATURES = ["APP_SCOPED_EXACT_INTERACTION"];
+    REQUIRED_ANDROID_FEATURES = [
+      "APP_SCOPED_EXACT_INTERACTION",
+      "APP_SCOPED_EXACT_LABEL_INTERACTION"
+    ];
     REQUIRED_ANDROID_COMMANDS = [
       "tap",
       "type",
@@ -15316,6 +15319,8 @@ async function runAndroid(args) {
     body.text = args.text;
   if (args.exactIdentifier !== void 0)
     body.exactIdentifier = args.exactIdentifier;
+  if (args.exactLabel !== void 0)
+    body.exactLabel = args.exactLabel;
   if (args.exactType !== void 0)
     body.exactType = args.exactType;
   if (args.exact !== void 0)
@@ -15404,7 +15409,7 @@ async function runAndroid(args) {
   if (args.command === "tap") {
     const data = resp.data;
     if (data?.tapped !== true) {
-      const exactTarget = args.exactIdentifier !== void 0 && args.exactType !== void 0;
+      const exactTarget = (args.exactIdentifier !== void 0 || args.exactLabel !== void 0) && args.exactType !== void 0;
       if (exactTarget) {
         return failResult("Android runner could not prove that the requested interaction was actuated.", "INTERACTION_NOT_ACTUATED", { mutation: "none", reason: "runner-rejected-tap", ...recoveryMeta });
       }
@@ -38790,7 +38795,7 @@ function buildRunAndroidArgs(cliArgs, bundleId) {
           command: "tap",
           x: center.x,
           y: center.y,
-          ...metadata?.identifier ? { exactIdentifier: metadata.identifier, exactType: metadata.type } : {},
+          ...metadata?.identifier ? { exactIdentifier: metadata.identifier, exactType: metadata.type } : metadata?.label ? { exactLabel: metadata.label, exactType: metadata.type } : {},
           ...includeSystemUi ? { includeSystemUi: true } : {},
           ...withBundle
         };

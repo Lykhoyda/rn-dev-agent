@@ -275,12 +275,14 @@ class CommandDispatcher(
 
     private fun tap(cmd: JSONObject): JSONObject {
         val exactIdentifier = cmd.optString("exactIdentifier").ifBlank { null }
+        val exactLabel = cmd.optString("exactLabel").ifBlank { null }
         val exactType = cmd.optString("exactType").ifBlank { null }
-        if (exactIdentifier != null && exactType != null) {
+        if ((exactIdentifier != null || exactLabel != null) && exactType != null) {
             val appPackage = cmd.optString("appBundleId").ifBlank { null }
             val includeSystemUi = cmd.optBoolean("includeSystemUi", false)
             val target = resolveExactPressNode(
                 exactIdentifier,
+                exactLabel,
                 exactType,
                 appPackage,
                 includeSystemUi,
@@ -299,10 +301,12 @@ class CommandDispatcher(
                     "The exact accessibility target rejected ACTION_CLICK; no coordinate fallback was attempted.",
                 )
             }
-            return JSONObject()
+            val result = JSONObject()
                 .put("tapped", true)
                 .put("method", "accessibility-action")
-                .put("identifier", exactIdentifier)
+            if (exactIdentifier != null) result.put("identifier", exactIdentifier)
+            if (exactLabel != null) result.put("label", exactLabel)
+            return result
         }
 
         val x = cmd.getDouble("x").roundToInt()
@@ -330,7 +334,8 @@ class CommandDispatcher(
     }
 
     private fun resolveExactPressNode(
-        identifier: String,
+        identifier: String?,
+        label: String?,
         type: String,
         appPackage: String?,
         includeSystemUi: Boolean,
@@ -361,8 +366,23 @@ class CommandDispatcher(
             }
             val nodeIdentifier = normalizeIdentifier(node.viewIdResourceName.orEmpty())
                 .ifBlank { node.contentDescription?.toString().orEmpty() }
+            val nodeLabel = node.text?.toString().orEmpty()
+                .ifBlank { node.contentDescription?.toString().orEmpty() }
             val nodeType = node.className?.toString().orEmpty()
-            if (nodeIdentifier == identifier && nodeType == type) matches.add(node) else node.recycle()
+            if (
+                ExactPressSafety.matchesDescriptor(
+                    nodeIdentifier,
+                    nodeLabel,
+                    nodeType,
+                    identifier,
+                    label,
+                    type,
+                )
+            ) {
+                matches.add(node)
+            } else {
+                node.recycle()
+            }
         }
         val traversalComplete = ExactPressSafety.traversalComplete(stack.size)
         while (stack.isNotEmpty()) stack.removeLast().recycle()
@@ -421,9 +441,7 @@ class CommandDispatcher(
             .singleOrNull()
     }
 
-    // A labelled RN node (accessibilityLabel on a Text/Image inside a Pressable)
-    // is not itself clickable, so ACTION_CLICK would be rejected on a target a
-    // coordinate tap used to hit through its ancestor.
+    // RN labels can live on a non-clickable child; actuate its nearest clickable owner.
     private fun clickableAncestorOrSelf(
         node: AccessibilityNodeInfo,
         requested: Point,
