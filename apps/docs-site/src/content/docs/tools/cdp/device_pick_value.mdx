@@ -9,13 +9,13 @@ Select a value in a UIPickerView / Android picker wheel by tapping the target ro
 
 | Name | Type | Required | Default | Constraints | Description |
 |------|------|----------|---------|-------------|-------------|
-| `value` | `unknown` | Yes |  |  | The visible row label to select (e.g. "Claim damages", "Male", "USD") |
-| `pickerTestId` | `unknown` | No |  |  |  |
-| `platform` | `unknown` | No |  |  | Force platform. Auto-detected if omitted. |
-| `timeoutMs` | `unknown` | No |  | min: 1000, max: 120000, integer | Whole Maestro flow timeout (default 120000ms). |
+| `value` | `string` | Yes |  |  | The visible row label to select (e.g. "Claim damages", "Male", "USD") |
+| `pickerTestId` | `string` | No |  |  | Optional testID of the picker itself — tapped first to ensure the picker is open. |
+| `platform` | `enum: ios | android` | No |  |  | Force platform. Auto-detected if omitted. |
+| `timeoutMs` | `number` | No |  | min: 1000, max: 120000, integer | Whole Maestro flow timeout (default 120000ms). |
 
 ## Usage
 
 ```
-device_pick_value(value: <unknown>)
+device_pick_value(value: <string>)
 ```

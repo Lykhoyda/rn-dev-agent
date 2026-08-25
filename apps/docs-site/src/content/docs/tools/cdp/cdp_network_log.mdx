@@ -11,12 +11,12 @@ Get recent network requests. Shows method, URL, status, duration. On RN 0.83+ us
 
 | Name | Type | Required | Default | Constraints | Description |
 |------|------|----------|---------|-------------|-------------|
-| `limit` | `unknown` | No | `20` | min: 1, max: 100, integer | Max entries to return (default 20, max 100) |
+| `limit` | `number` | No | `20` | min: 1, max: 100, integer | Max entries to return (default 20, max 100) |
 | `filter` | `string` | No |  |  | Filter by URL substring (e.g. "/api/cart") |
-| `method` | `unknown` | No |  |  |  |
-| `since` | `unknown` | No |  |  |  |
+| `method` | `unknown` | No |  |  | Filter by HTTP method, case-insensitive (e.g. "POST" or ["POST","PUT"]). AND-combined with `filter`. Use to isolate mutations from follow-up GETs. |
+| `since` | `string` | No |  |  | ISO timestamp — drop entries with timestamp &lt; since before applying limit. Use to pin a checkpoint before an action and ask for everything since. |
 | `clear` | `boolean` | No | `false` |  | Clear network buffer instead of reading |
-| `device` | `unknown` | No |  |  |  |
+| `device` | `string` | No |  |  | Scope: a specific device key OR the literal "all" for a chronologically-merged view across every device. Defaults to the active device. |
 
 ## Usage
 

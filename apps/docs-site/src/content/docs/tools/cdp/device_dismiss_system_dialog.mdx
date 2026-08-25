@@ -9,9 +9,9 @@ Tap an OS-level dismiss button through the capability-bound runner on the exact 
 
 | Name | Type | Required | Default | Constraints | Description |
 |------|------|----------|---------|-------------|-------------|
-| `label` | `unknown` | No |  |  |  |
-| `platform` | `unknown` | No |  |  | Authority-bound platform; conflicting values are refused |
-| `timeoutMs` | `unknown` | No |  | min: 1000, max: 120000, integer |  |
+| `label` | `string` | No |  |  | Specific button label to tap. Omit to try common defaults (Cancel, Don\\u2019t Allow, Deny, No, Not Now). |
+| `platform` | `enum: ios | android` | No |  |  | Authority-bound platform; conflicting values are refused |
+| `timeoutMs` | `number` | No |  | min: 1000, max: 120000, integer | Whole fallback Maestro timeout (default 15000ms; explicit values up to 120000 accepted). |
 
 ## Usage
 

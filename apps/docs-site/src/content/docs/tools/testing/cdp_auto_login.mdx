@@ -11,8 +11,8 @@ Explicit legacy navigation helper that detects an auth screen and runs one proje
 
 | Name | Type | Required | Default | Constraints | Description |
 |------|------|----------|---------|-------------|-------------|
-| `appId` | `unknown` | No |  |  | App bundle ID override (auto-detected from app.json if omitted) |
-| `platform` | `unknown` | No |  |  | Platform override (auto-detected from session if omitted) |
+| `appId` | `string` | No |  |  | App bundle ID override (auto-detected from app.json if omitted) |
+| `platform` | `enum: ios | android` | No |  |  | Platform override (auto-detected from session if omitted) |
 
 ## Usage
 

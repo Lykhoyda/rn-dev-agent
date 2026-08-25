@@ -11,25 +11,25 @@ Interact with React components by testID (preferred) or accessibilityLabel — p
 
 | Name | Type | Required | Default | Constraints | Description |
 |------|------|----------|---------|-------------|-------------|
-| `action` | `unknown` | Yes |  |  |  |
-| `testID` | `unknown` | No |  |  |  |
-| `accessibilityLabel` | `unknown` | No |  |  |  |
-| `text` | `unknown` | No |  |  |  |
-| `role` | `unknown` | No |  |  |  |
-| `placeholder` | `unknown` | No |  |  | Discovery ladder (press-only): match a TextInput by its placeholder text. |
-| `exact` | `unknown` | No |  |  |  |
-| `includeHidden` | `unknown` | No |  |  | Discovery ladder: include accessibility-hidden elements (excluded by default). |
+| `action` | `enum: press | longPress | typeText | scroll | setFieldValue` | Yes |  |  | press: calls onPress (with `value` if provided, for radio/chip-style value-bearing controls). longPress: calls onLongPress. typeText: calls onChangeText. scroll: calls scrollTo or onScroll. setFieldValue: walks UP to nearest React Hook Form FormProvider and calls setValue(name, value, \{shouldValidate, shouldDirty\}). |
+| `testID` | `string` | No |  |  | testID prop of the target component (strict match — preferred). For setFieldValue, this is the testID anchor inside the form's subtree from which to walk up. |
+| `accessibilityLabel` | `string` | No |  |  | accessibilityLabel prop (used if testID not provided). Tiered match: exact → normalized (trim+lowercase) → substring. Returns Ambiguous error if &gt;1 component matches. |
+| `text` | `string` | No |  |  | For typeText: the text to enter. For the discovery ladder (no testID/accessibilityLabel, action:"press"): byText — match a host Text by its visible text content. |
+| `role` | `string` | No |  |  | Discovery ladder (press-only): match by accessibility role (e.g. button, tab, link). Combine with `name` for the accessible name. Needs an explicit accessibilityRole — Pressables without one resolve as role "none". |
+| `placeholder` | `string` | No |  |  | Discovery ladder (press-only): match a TextInput by its placeholder text. |
+| `exact` | `boolean` | No |  |  | Discovery ladder: require an exact (full-string) match for text/name/placeholder instead of case-insensitive substring. |
+| `includeHidden` | `boolean` | No |  |  | Discovery ladder: include accessibility-hidden elements (excluded by default). |
 | `scrollX` | `number` | No |  |  | For scroll: horizontal offset in pixels (default 0) |
 | `scrollY` | `number` | No |  |  | For scroll: vertical offset in pixels (default 300) |
 | `animated` | `boolean` | No | `true` |  | For scroll: whether to animate |
-| `name` | `unknown` | No |  |  |  |
-| `value` | `unknown` | No |  |  |  |
-| `shouldValidate` | `unknown` | No |  |  |  |
-| `shouldDirty` | `unknown` | No |  |  |  |
+| `name` | `string` | No |  |  | For setFieldValue: the React Hook Form field name (same string you passed to useController(\{name\}) or &lt;Controller name="..."&gt;). For the discovery ladder with `role`: the accessible name to match (e.g. role:"button" + name:"Save"). |
+| `value` | `unknown` | No |  |  | Value to set. For setFieldValue: passed to setValue (a digit-string is kept a string when the field currently holds a string — give string fields a "" default so this applies). For press: when provided, onPress receives this value instead of a synthetic event — use for radio/chip-style value-bearing controls. |
+| `shouldValidate` | `boolean` | No |  |  | For setFieldValue: pass-through to setValue's options.shouldValidate (default true). Set false to suppress synchronous validation. |
+| `shouldDirty` | `boolean` | No |  |  | For setFieldValue: pass-through to setValue's options.shouldDirty (default true). Set false to keep the field marked pristine. |
 | `walkUp` | `boolean` | No |  |  | Opt-in press-only nearest-pressable-ancestor walk |
 
 ## Usage
 
 ```
-cdp_interact(action: <unknown>)
+cdp_interact(action: <enum: press | longPress | typeText | scroll | setFieldValue>)
 ```

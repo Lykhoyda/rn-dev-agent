@@ -9,15 +9,15 @@ Block until a network request matching url_pattern (URL substring) and optional 
 
 | Name | Type | Required | Default | Constraints | Description |
 |------|------|----------|---------|-------------|-------------|
-| `url_pattern` | `unknown` | Yes |  |  |  |
-| `method` | `unknown` | No |  |  |  |
-| `timeout_ms` | `unknown` | No | `5000` | min: 100, max: 60000, integer | Max wait in ms (default 5000, range 100-60000) |
-| `poll_interval_ms` | `unknown` | No | `100` | min: 50, max: 500, integer | Buffer poll cadence in ms (default 100, range 50-500) |
-| `since` | `unknown` | No |  |  |  |
+| `url_pattern` | `string` | Yes |  |  | URL substring to match (e.g. "/api/cart/add", "checkout"). Same matching semantics as cdp_network_log filter. |
+| `method` | `unknown` | No |  |  | HTTP method filter, case-insensitive (e.g. "POST" or ["POST","PUT"]). Omit to match any method. |
+| `timeout_ms` | `number` | No | `5000` | min: 100, max: 60000, integer | Max wait in ms (default 5000, range 100-60000) |
+| `poll_interval_ms` | `number` | No | `100` | min: 50, max: 500, integer | Buffer poll cadence in ms (default 100, range 50-500) |
+| `since` | `string` | No |  |  | ISO timestamp checkpoint — ignore entries older than this. Defaults to the moment the tool is called. Capture `new Date().toISOString()` before the trigger action to avoid missing the mutation in the transport window. |
 | `device` | `string` | No |  |  | Device key OR "all". Defaults to the active device. |
 
 ## Usage
 
 ```
-cdp_wait_for_network(url_pattern: <unknown>)
+cdp_wait_for_network(url_pattern: <string>)
 ```

@@ -9,19 +9,19 @@ Promote the in-memory recording (started via cdp_record_test_start) into a first
 
 | Name | Type | Required | Default | Constraints | Description |
 |------|------|----------|---------|-------------|-------------|
-| `id` | `unknown` | Yes |  |  |  |
-| `intent` | `unknown` | Yes |  |  | One-line goal — surfaced verbatim by /list-learned-actions. Required. |
-| `tags` | `unknown` | No |  |  |  |
-| `mutates` | `unknown` | No |  |  |  |
-| `status` | `unknown` | No |  |  |  |
-| `bundleId` | `unknown` | No |  |  |  |
+| `id` | `string` | Yes |  |  | Stable slug; becomes the filename and the M7 id field. Lower-case kebab-case (a-z, 0-9, hyphen). |
+| `intent` | `string` | Yes |  |  | One-line goal — surfaced verbatim by /list-learned-actions. Required. |
+| `tags` | `array` | No |  |  | Lower-case kebab-case keywords for filtering (e.g. ["tasks", "create", "regression"]). |
+| `mutates` | `boolean` | No |  |  | Does this flow leave persistent residue (created rows, toggled settings)? Required for /run-action safety pre-flight to know whether to confirm before replay. |
+| `status` | `enum: experimental | active | deprecated` | No |  |  | M7 lifecycle status. Default: experimental (auto-promotes on first clean replay). |
+| `bundleId` | `string` | No |  |  | App bundle ID for the Maestro appId header. Strongly recommended — /run-action uses it to refuse cross-app replays. |
 | `projectRoot` | `string` | No |  |  | Override project root (default: process.cwd()). |
-| `overwrite` | `unknown` | No |  |  |  |
-| `testName` | `unknown` | No |  |  |  |
-| `produces` | `unknown` | No |  |  |  |
+| `overwrite` | `boolean` | No |  |  | If an action with this id already exists, replace it. Default false (refuse with hint). |
+| `testName` | `string` | No |  |  | Optional one-line description shown as a comment above the M7 header. Falls back to intent. |
+| `produces` | `Record<string, unknown>` | No |  |  | D1209 — state postconditions this action establishes when it runs cleanly. Flat map of primitive values for hybrid composition (e.g. \{ authenticated: true, route: "home" \}). Optional. Values containing commas or newlines are not supported; use multiple keys instead. |
 
 ## Usage
 
 ```
-cdp_record_test_save_as_action(id: <unknown>, intent: <unknown>)
+cdp_record_test_save_as_action(id: <string>, intent: <string>)
 ```

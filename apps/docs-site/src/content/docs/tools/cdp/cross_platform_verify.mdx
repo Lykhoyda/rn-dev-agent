@@ -9,9 +9,9 @@ Compare UI elements across iOS and Android. Reads cached accessibility snapshots
 
 | Name | Type | Required | Default | Constraints | Description |
 |------|------|----------|---------|-------------|-------------|
-| `elements` | `unknown` | No |  |  |  |
-| `scanDir` | `unknown` | No |  |  |  |
-| `matchBy` | `unknown` | No | `'any'` |  |  |
+| `elements` | `array` | No |  |  | List of testIDs or labels to check on both platforms. Optional if scanDir is provided. |
+| `scanDir` | `string` | No |  |  | Directory to scan for testID="..." props in .tsx/.jsx/.ts/.js files. Auto-discovers elements. Merges with elements[] if both provided. |
+| `matchBy` | `enum: testID | label | any` | No | `'any'` |  | Match strategy: testID (exact identifier match), label (substring in accessibility label), any (try both) |
 
 ## Usage
 

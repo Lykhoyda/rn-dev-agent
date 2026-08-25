@@ -180,6 +180,39 @@ function parseZodType(def) {
   return 'unknown';
 }
 
+// Prettier wraps long zod chains across lines, so a param definition can span
+// several lines with the quote of .describe() on its own line (GH #816). The
+// chain's meaning is unaffected by whitespace outside string literals, so
+// collapse it once; string-literal contents (descriptions) are preserved byte
+// for byte.
+function collapseOuterWhitespace(def) {
+  let result = '';
+  let inString = false;
+  let stringChar = '';
+  for (let i = 0; i < def.length; i++) {
+    const ch = def[i];
+    if (inString) {
+      result += ch;
+      if (ch === '\\') {
+        // keep escapes intact inside literals
+        result += def[i + 1] ?? '';
+        i++;
+      } else if (ch === stringChar) {
+        inString = false;
+      }
+      continue;
+    }
+    if (ch === '"' || ch === "'" || ch === '`') {
+      inString = true;
+      stringChar = ch;
+      result += ch;
+      continue;
+    }
+    if (!/\s/.test(ch)) result += ch;
+  }
+  return result;
+}
+
 function extractSchemaParams(schemaText) {
   const inner = schemaText.replace(/^\s*\{/, '').replace(/\}\s*$/, '');
   if (!inner.trim()) return [];
@@ -191,7 +224,7 @@ function extractSchemaParams(schemaText) {
     const colonIdx = line.indexOf(':');
     if (colonIdx === -1) continue;
     const name = line.slice(0, colonIdx).trim();
-    const def = line.slice(colonIdx + 1).trim();
+    const def = collapseOuterWhitespace(line.slice(colonIdx + 1).trim());
 
     const param = {
       name,
@@ -211,7 +244,10 @@ function extractSchemaParams(schemaText) {
       param.required = false;
     }
 
-    const descRe = /\.describe\((['"`])([\s\S]*?)\1\s*\)/g;
+    // Prettier may place the closing paren of a wrapped .describe() call after
+    // the argument (optionally with a trailing comma); accept both forms only —
+    // no widening beyond describe('…') / describe(\n '…',\n ).
+    const descRe = /\.describe\((['"`])([\s\S]*?)\1\s*,?\s*\)/g;
     let descMatch;
     let lastDesc = null;
     while ((descMatch = descRe.exec(def)) !== null) lastDesc = descMatch[2];

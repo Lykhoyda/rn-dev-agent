@@ -1,0 +1,143 @@
+// GH #816: generate-tool-docs.mjs assumed unwrapped .describe() calls and
+// single-line zod chains. Prettier-wrapped declarations published params as
+// `unknown` with empty descriptions — hiding device_accept_system_dialog's
+// timeoutMs contract (the 15s default behind GH #816), device_find.index,
+// and many others. Regression contract: running the real generator over the
+// current src/index.ts must emit described, correctly typed rows for the GH
+// #816 acceptance set, and the committed docs must stay byte-fresh.
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import { tmpdir } from 'node:os';
+import { execFileSync } from 'node:child_process';
+import { resolve, dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const REPO_ROOT = resolve(__dirname, '..', '..', '..', '..');
+const GENERATOR = join(REPO_ROOT, 'apps', 'docs-site', 'scripts', 'generate-tool-docs.mjs');
+const DOCS = join(REPO_ROOT, 'apps', 'docs-site', 'src', 'content', 'docs');
+
+function rowFor(mdx, param) {
+  const line = mdx.split('\n').find((l) => l.startsWith(`| \`${param}\``));
+  assert.ok(line, `params table must have a ${param} row`);
+  return line.split('|').map((c) => c.trim());
+}
+
+function runGenerator(outDir) {
+  execFileSync(process.execPath, [GENERATOR], {
+    cwd: REPO_ROOT,
+    encoding: 'utf8',
+    env: { ...process.env, RN_DEV_AGENT_DOCS_OUT: outDir },
+  });
+  return join(outDir, 'tools');
+}
+
+test('#816 generated docs describe device_accept_system_dialog.timeoutMs as a number with its default', () => {
+  const out = fs.mkdtempSync(join(tmpdir(), 'gh816-docs-'));
+  try {
+    const tools = runGenerator(out);
+    const mdx = fs.readFileSync(join(tools, 'cdp', 'device_accept_system_dialog.mdx'), 'utf8');
+    const cells = rowFor(mdx, 'timeoutMs');
+    assert.equal(cells[2], '`number`', `timeoutMs must type as number, got ${cells[2]}`);
+    assert.match(
+      cells[6],
+      /default 15000ms/i,
+      'the timeout description must state the new default',
+    );
+    assert.match(cells[6], /120000/, 'explicit values up to 120000 remain documented');
+    const dismissed = fs.readFileSync(
+      join(tools, 'cdp', 'device_dismiss_system_dialog.mdx'),
+      'utf8',
+    );
+    const dismissCells = rowFor(dismissed, 'timeoutMs');
+    assert.equal(dismissCells[2], '`number`');
+    assert.match(dismissCells[6], /default 15000ms/i);
+  } finally {
+    fs.rmSync(out, { recursive: true, force: true });
+  }
+});
+
+test('#816 generated docs give device_find.index a real type and non-empty description', () => {
+  const out = fs.mkdtempSync(join(tmpdir(), 'gh816-docs-'));
+  try {
+    const tools = runGenerator(out);
+    const mdx = fs.readFileSync(join(tools, 'device', 'device_find.mdx'), 'utf8');
+    const cells = rowFor(mdx, 'index');
+    assert.equal(cells[2], '`number`', `index must type as number, got ${cells[2]}`);
+    assert.ok(cells[6].length > 0, 'index description must not be empty');
+    assert.match(cells[6], /AMBIGUOUS_MATCH|candidate/i);
+  } finally {
+    fs.rmSync(out, { recursive: true, force: true });
+  }
+});
+
+test('#816 cdp_run_action.actionId keeps its correct string type through regeneration', () => {
+  const out = fs.mkdtempSync(join(tmpdir(), 'gh816-docs-'));
+  try {
+    const tools = runGenerator(out);
+    const mdx = fs.readFileSync(join(tools, 'cdp', 'cdp_run_action.mdx'), 'utf8');
+    const cells = rowFor(mdx, 'actionId');
+    assert.equal(cells[2], '`string`', `actionId must type as string, got ${cells[2]}`);
+    assert.equal(cells[3], 'Yes', 'actionId is required');
+    assert.ok(cells[6].length > 0, 'actionId description must not be empty');
+  } finally {
+    fs.rmSync(out, { recursive: true, force: true });
+  }
+});
+
+test('#816 no generated tool page leaves a wrapped-zod param typed unknown with an empty description', () => {
+  // The parser may only widen to `unknown` for proven z.unknown()/z.any()
+  // forms; every such row must still carry a description (z.unknown() chains
+  // in index.ts are always described). A regenerated `unknown` + empty
+  // description cell is the exact GH #816 failure signature.
+  const out = fs.mkdtempSync(join(tmpdir(), 'gh816-docs-'));
+  try {
+    const tools = runGenerator(out);
+    const failures = [];
+    for (const category of fs.readdirSync(tools)) {
+      const dir = join(tools, category);
+      if (!fs.statSync(dir).isDirectory()) continue;
+      for (const file of fs.readdirSync(dir)) {
+        const mdx = fs.readFileSync(join(dir, file), 'utf8');
+        if (!mdx.includes('## Parameters')) continue;
+        for (const line of mdx.split('\n')) {
+          if (!line.startsWith('| `') || line.includes('Name | Type')) continue;
+          const cells = line.split('|').map((c) => c.trim());
+          if (cells[2] === '`unknown`' && cells[6] === '') {
+            failures.push(`${file}: ${cells[1]}`);
+          }
+        }
+      }
+    }
+    assert.deepEqual(
+      failures,
+      [],
+      `params regressed to undocumented unknown (GH #816 signature): ${failures.join(', ')}`,
+    );
+  } finally {
+    fs.rmSync(out, { recursive: true, force: true });
+  }
+});
+
+test('#816 committed tool docs are fresh against src/index.ts', () => {
+  const out = fs.mkdtempSync(join(tmpdir(), 'gh816-docs-'));
+  try {
+    const tools = runGenerator(out);
+    for (const [category, name] of [
+      ['cdp', 'device_accept_system_dialog'],
+      ['cdp', 'device_dismiss_system_dialog'],
+      ['device', 'device_find'],
+      ['cdp', 'cdp_run_action'],
+    ]) {
+      const generated = fs.readFileSync(join(tools, category, `${name}.mdx`), 'utf8');
+      assert.equal(
+        generated,
+        fs.readFileSync(join(DOCS, 'tools', category, `${name}.mdx`), 'utf8'),
+        `committed docs for ${name} are stale — rerun corepack yarn docs:generate`,
+      );
+    }
+  } finally {
+    fs.rmSync(out, { recursive: true, force: true });
+  }
+});

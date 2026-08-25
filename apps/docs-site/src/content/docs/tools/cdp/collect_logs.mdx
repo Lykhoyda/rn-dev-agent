@@ -11,12 +11,12 @@ Collect logs from multiple sources in parallel: JS console (Hermes ring buffer s
 
 | Name | Type | Required | Default | Constraints | Description |
 |------|------|----------|---------|-------------|-------------|
-| `sources` | `unknown` | No | `['js_console']` |  | Log sources to collect from (default: js_console only) |
-| `durationMs` | `unknown` | No | `2000` | min: 0, max: 10000, integer |  |
-| `limit` | `unknown` | No | `100` | min: 1, max: 500, integer |  |
+| `sources` | `(js_console | native_ios | native_android)[]` | No | `['js_console']` |  | Log sources to collect from (default: js_console only) |
+| `durationMs` | `number` | No | `2000` | min: 0, max: 10000, integer | How long to stream native logs in ms (default 2000). JS console is a snapshot — durationMs only applies to native sources. |
+| `limit` | `number` | No | `100` | min: 1, max: 500, integer | Max entries to return (default 100, max 500). Returns most recent entries when truncated. |
 | `filter` | `string` | No |  |  | Substring filter applied to log text after collection |
-| `logLevel` | `unknown` | No | `'all'` |  | Filter by log level (default: all) |
-| `runnerDiagnosticsOutputPath` | `unknown` | No |  |  | New caller-named file for the newest sanitized runner diagnostics bundle |
+| `logLevel` | `enum: all | log | warn | error | info | debug` | No | `'all'` |  | Filter by log level (default: all) |
+| `runnerDiagnosticsOutputPath` | `string` | No |  |  | New caller-named file for the newest sanitized runner diagnostics bundle |
 
 ## Usage
 

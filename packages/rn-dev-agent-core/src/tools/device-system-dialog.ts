@@ -57,6 +57,7 @@ const realSleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r
 
 let fetchSnapshotNodesFn: typeof fetchSnapshotNodes = fetchSnapshotNodes;
 let pressCandidateFn: typeof pressCandidate = pressCandidate;
+let runMaestroInlineFn: typeof runMaestroInline = runMaestroInline;
 let sleepFn: (ms: number) => Promise<void> = realSleep;
 let iosSessionActiveFn: () => boolean = () =>
   hasActiveSession() && getActiveSession()?.platform === 'ios';
@@ -78,6 +79,12 @@ export function _setPressCandidateForTest(fn: typeof pressCandidate): void {
 }
 export function _resetPressCandidateForTest(): void {
   pressCandidateFn = pressCandidate;
+}
+export function _setRunMaestroInlineForTest(fn: typeof runMaestroInline): void {
+  runMaestroInlineFn = fn;
+}
+export function _resetRunMaestroInlineForTest(): void {
+  runMaestroInlineFn = runMaestroInline;
 }
 export function _setIosSessionActiveForTest(value: boolean): void {
   iosSessionActiveFn = () => value;
@@ -157,7 +164,12 @@ export async function acceptDeeplinkOpenConfirmation(): Promise<RunnerDialogOutc
   return tapSystemDialogViaRunner(OPEN_CONFIRMATION_LABELS);
 }
 
-const DEFAULT_DIALOG_TIMEOUT_MS = 120_000;
+// GH #816: the Maestro fallback is a presence probe — when no dialog exists
+// (Android, or session-less iOS), waiting out the old 120 s default made every
+// call look hung before DIALOG_NOT_FOUND came back. A short default keeps the
+// no-dialog path bounded while explicit caller values up to 120 000 ms remain
+// accepted for slow-to-animate dialogs.
+const DEFAULT_DIALOG_TIMEOUT_MS = 15_000;
 
 function regexEscape(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -174,7 +186,7 @@ async function tapSystemDialog(
   // without paying a fresh iOS WDA cold start for every candidate label.
   const selector = `^(?:${labels.map(regexEscape).join('|')})$`;
   const yaml = `- tapOn:\n    text: "${yamlEscape(selector)}"`;
-  const result = await runMaestroInline(yaml, {
+  const result = await runMaestroInlineFn(yaml, {
     platform,
     timeoutMs: totalTimeoutMs,
     slug,

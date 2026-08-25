@@ -9,14 +9,14 @@ Read/write the app's MMKV storage from Hermes. Closes the iteration-loop gap whe
 
 | Name | Type | Required | Default | Constraints | Description |
 |------|------|----------|---------|-------------|-------------|
-| `action` | `unknown` | Yes |  |  | MMKV action: get/set/delete/has by key, keys (list all), clear (wipe instance) |
+| `action` | `enum: get | set | delete | has | keys | clear` | Yes |  |  | MMKV action: get/set/delete/has by key, keys (list all), clear (wipe instance) |
 | `key` | `string` | No |  |  | Required for get/set/delete/has actions |
 | `value` | `unknown` | No |  |  | Required for set action. Combine with `type` to disambiguate (default: string) |
-| `type` | `unknown` | No |  |  | Value type for get/set (default: string) |
+| `type` | `enum: string | number | boolean` | No |  |  | Value type for get/set (default: string) |
 | `instanceId` | `string` | No |  |  | MMKV instance id (default: "mmkv.default") |
 
 ## Usage
 
 ```
-cdp_mmkv(action: <unknown>)
+cdp_mmkv(action: <enum: get | set | delete | has | keys | clear>)
 ```
