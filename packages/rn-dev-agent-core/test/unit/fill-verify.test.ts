@@ -249,6 +249,7 @@ test('attemptJsFill exact outcome flows from a settled read', async () => {
             controlled: true,
             handlerCalled: 'onChangeText',
             valueBefore: '',
+            bindingId: 'ttb:1:1',
           }),
         };
       }
@@ -270,7 +271,12 @@ test('attemptJsFill requires a stable wrong value before reporting mismatch', as
       return async (expr: string) => {
         if (expr.includes('typeText')) {
           return {
-            value: JSON.stringify({ controlled: true, handlerCalled: 'fn', valueBefore: 'old' }),
+            value: JSON.stringify({
+              controlled: true,
+              handlerCalled: 'fn',
+              valueBefore: 'old',
+              bindingId: 'ttb:1:1',
+            }),
           };
         }
         i += 1;

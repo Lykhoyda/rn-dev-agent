@@ -134,7 +134,14 @@ function fakeClient(handlers: {
         };
       }
       if (expr.includes('typeText')) {
-        return { value: JSON.stringify(handlers.typeText?.() ?? { error: 'no handler' }) };
+        const result = handlers.typeText?.() ?? { error: 'no handler' };
+        return {
+          value: JSON.stringify(
+            result.error || result.handlerCalled === false
+              ? result
+              : { bindingId: 'ttb:test:1', ...result },
+          ),
+        };
       }
       return { value: JSON.stringify({}) };
     },

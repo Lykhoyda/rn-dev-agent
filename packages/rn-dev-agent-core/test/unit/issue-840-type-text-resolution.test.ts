@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import vm from 'node:vm';
 import { INJECTED_HELPERS } from '../../dist/injected-helpers.js';
 import { createInteractHandler } from '../../dist/tools/interact.js';
+import { attemptJsFill, releaseJsFillBinding } from '../../dist/tools/fill-verify.js';
 import { createMockClient } from '../helpers/mock-cdp-client.js';
 import { expectOk } from '../helpers/result-helpers.js';
 
@@ -13,6 +14,7 @@ type Fiber = {
   child: Fiber | null;
   sibling: Fiber | null;
   return: Fiber | null;
+  alternate?: Fiber | null;
 };
 
 function makeFiber(
@@ -43,9 +45,7 @@ function wrap(parent: Fiber, count: number): Fiber {
   return current;
 }
 
-function createAgent(
-  rootOrRoots: Fiber | Fiber[],
-) {
+function createAgent(rootOrRoots: Fiber | Fiber[]) {
   const roots = Array.isArray(rootOrRoots) ? rootOrRoots : [rootOrRoots];
   const sandbox: Record<string, unknown> = {
     Array,
@@ -79,6 +79,13 @@ function createAgent(
   vm.createContext(sandbox);
   vm.runInContext(INJECTED_HELPERS, sandbox);
   return {
+    evaluate: async (expression: string): Promise<{ value?: unknown; error?: unknown }> => {
+      try {
+        return { value: vm.runInContext(expression, sandbox) };
+      } catch (error) {
+        return { error };
+      }
+    },
     interact(opts: Record<string, unknown>): Record<string, unknown> {
       return JSON.parse(
         vm.runInContext(`__RN_AGENT.interact(${JSON.stringify(opts)})`, sandbox) as string,
@@ -87,6 +94,14 @@ function createAgent(
     readInputValue(testID: string): Record<string, unknown> {
       return JSON.parse(
         vm.runInContext(`__RN_AGENT.readInputValue(${JSON.stringify(testID)})`, sandbox) as string,
+      ) as Record<string, unknown>;
+    },
+    readInputValueByBinding(bindingId: string): Record<string, unknown> {
+      return JSON.parse(
+        vm.runInContext(
+          `__RN_AGENT.readInputValueByBinding(${JSON.stringify(bindingId)})`,
+          sandbox,
+        ) as string,
       ) as Record<string, unknown>;
     },
   };
@@ -350,6 +365,189 @@ test('typeText refuses mixed onChangeText and onChange logical targets', () => {
   assert.deepEqual(calls, []);
 });
 
+test('typeText refuses mixed component-name candidates without preferring a host input', () => {
+  const calls: string[] = [];
+  const root = makeFiber('Root');
+  appendChild(
+    root,
+    makeFiber(
+      { displayName: 'FormControl' },
+      {
+        testID: 'mixed-components',
+        onChangeText(value: string) {
+          calls.push(`custom:${value}`);
+        },
+      },
+    ),
+  );
+  appendChild(
+    root,
+    makeFiber('AndroidTextInput', {
+      testID: 'mixed-components',
+      onChangeText(value: string) {
+        calls.push(`native:${value}`);
+      },
+    }),
+  );
+
+  const result = runInteract(root, {
+    action: 'typeText',
+    testID: 'mixed-components',
+    text: 'unsafe',
+  });
+
+  assert.equal(result.error, 'Ambiguous typeText resolution');
+  assert.equal(result.count, 2);
+  assert.deepEqual(calls, []);
+});
+
+test('typeText keeps shared functions with different handler contracts ambiguous', () => {
+  const calls: unknown[] = [];
+  const shared = (value: unknown) => calls.push(value);
+  const root = makeFiber('Root');
+  const wrapper = appendChild(
+    root,
+    makeFiber(
+      { displayName: 'TextField' },
+      {
+        testID: 'cross-contract',
+        onChangeText: shared,
+      },
+    ),
+  );
+  appendChild(wrapper, makeFiber('AndroidTextInput', { onChange: shared }));
+
+  const result = runInteract(root, {
+    action: 'typeText',
+    testID: 'cross-contract',
+    text: 'unsafe',
+  });
+
+  assert.equal(result.error, 'Ambiguous typeText resolution');
+  assert.equal(result.handler, 'mixed');
+  assert.deepEqual(
+    (result.candidates as Array<{ contract: string }>).map((candidate) => candidate.contract),
+    ['onChangeText:string', 'onChange:event'],
+  );
+  assert.deepEqual(calls, []);
+});
+
+test('typeText binds nested selector evidence to the nearest matching source', () => {
+  const calls: string[] = [];
+  const root = makeFiber('Root');
+  const outer = appendChild(
+    root,
+    makeFiber('AndroidTextInput', {
+      testID: 'outer-evidence',
+      placeholder: 'Shared placeholder',
+    }),
+  );
+  appendChild(
+    outer,
+    makeFiber('AndroidTextInput', {
+      testID: 'inner-exact',
+      placeholder: 'Shared placeholder',
+      value: '',
+      onChangeText(value: string) {
+        calls.push(value);
+      },
+    }),
+  );
+
+  const result = runInteract(root, {
+    action: 'typeText',
+    placeholder: 'Shared placeholder',
+    text: 'bound',
+    exact: true,
+  });
+
+  assert.equal(result.success, true, JSON.stringify(result));
+  assert.deepEqual(result.selectorBundle, {
+    testID: 'inner-exact',
+    role: 'none',
+    placeholder: 'Shared placeholder',
+  });
+  assert.deepEqual(calls, ['bound']);
+});
+
+test('typeText refuses nested matching sources when both exact fibers own handlers', () => {
+  const calls: string[] = [];
+  const root = makeFiber('Root');
+  const outer = appendChild(
+    root,
+    makeFiber('AndroidTextInput', {
+      placeholder: 'Shared placeholder',
+      onChangeText(value: string) {
+        calls.push(`outer:${value}`);
+      },
+    }),
+  );
+  appendChild(
+    outer,
+    makeFiber('AndroidTextInput', {
+      placeholder: 'Shared placeholder',
+      onChangeText(value: string) {
+        calls.push(`inner:${value}`);
+      },
+    }),
+  );
+
+  const result = runInteract(root, {
+    action: 'typeText',
+    placeholder: 'Shared placeholder',
+    text: 'unsafe',
+    exact: true,
+  });
+
+  assert.equal(result.error, 'Ambiguous typeText resolution');
+  assert.equal(result.count, 2);
+  assert.deepEqual(calls, []);
+});
+
+test('JS fill readback stays bound when the selector becomes ambiguous after mutation', async () => {
+  const root = makeFiber('Root');
+  const input = appendChild(
+    root,
+    makeFiber('AndroidTextInput', {
+      testID: 'changing-targets',
+      value: '',
+      onChangeText(value: string) {
+        input.memoizedProps.value = value;
+        appendChild(
+          root,
+          makeFiber('AndroidTextInput', {
+            testID: 'changing-targets',
+            value: 'replacement',
+            onChangeText() {},
+          }),
+        );
+      },
+    }),
+  );
+  const agent = createAgent(root);
+  const expressions: string[] = [];
+  const deps = {
+    evaluate: async (expression: string) => {
+      expressions.push(expression);
+      return agent.evaluate(expression);
+    },
+    sleep: async () => {},
+  };
+
+  const result = await attemptJsFill(deps, 'changing-targets', 'exact-target');
+
+  assert.equal(result.handled, true);
+  assert.equal(result.outcome, 'exact');
+  assert.equal(typeof result.bindingId, 'string');
+  assert.ok(expressions.some((expression) => expression.includes('readInputValueByBinding')));
+  assert.ok(!expressions.some((expression) => expression.startsWith('__RN_AGENT.readInputValue(')));
+  await releaseJsFillBinding(deps, result.bindingId);
+  assert.match(
+    String(agent.readInputValueByBinding(result.bindingId as string).__agent_error),
+    /binding target lost/,
+  );
+});
+
 test('typeText refuses cyclic hidden-state sibling traversal', () => {
   const calls: string[] = [];
   const root = makeFiber('Root');
@@ -611,17 +809,46 @@ test('typeText refuses on a cyclic subtree without firing a partial candidate', 
   assert.deepEqual(calls, []);
 });
 
+test('typeText charges ownership return cycles to the shared resolution context', () => {
+  const calls: string[] = [];
+  const root = makeFiber('Root');
+  const wrapper = appendChild(root, makeFiber('View', { testID: 'return-cycle' }));
+  const input = appendChild(
+    wrapper,
+    makeFiber('AndroidTextInput', {
+      onChangeText(value: string) {
+        calls.push(value);
+      },
+    }),
+  );
+  input.return = input;
+
+  const result = runInteract(root, {
+    action: 'typeText',
+    testID: 'return-cycle',
+    text: 'unsafe',
+  });
+
+  assert.equal(result.truncated, true);
+  assert.equal(result.reason, 'cycle');
+  assert.deepEqual(calls, []);
+});
+
 test('typeText reports cycle truncation before accessibility-label ambiguity', () => {
   const calls: string[] = [];
   const root = makeFiber('Root');
   const wrapper = appendChild(root, makeFiber('View', { accessibilityLabel: 'Cyclic field' }));
   const first = appendChild(
     wrapper,
-    makeFiber('AndroidTextInput', { onChangeText: (value: string) => calls.push(`first:${value}`) }),
+    makeFiber('AndroidTextInput', {
+      onChangeText: (value: string) => calls.push(`first:${value}`),
+    }),
   );
   const second = appendChild(
     wrapper,
-    makeFiber('AndroidTextInput', { onChangeText: (value: string) => calls.push(`second:${value}`) }),
+    makeFiber('AndroidTextInput', {
+      onChangeText: (value: string) => calls.push(`second:${value}`),
+    }),
   );
   second.sibling = first;
 

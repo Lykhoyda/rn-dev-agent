@@ -133,6 +133,7 @@ export interface JsFillResult {
   outcome?: FiberVerifyOutcome;
   controlled?: boolean;
   handler?: string;
+  bindingId?: string;
 }
 
 // 5 reads × 80ms between = ~320ms settle window, covering the common ~300ms RN
@@ -143,10 +144,12 @@ const READ_SETTLE_DELAY_MS = 80;
 
 async function readInputValueOnce(
   deps: EvaluateSeam,
-  testID: string,
+  target: string,
+  exactBinding = false,
 ): Promise<{ value: string | null; controlled: boolean } | null> {
   try {
-    const r = await deps.evaluate('__RN_AGENT.readInputValue(' + JSON.stringify(testID) + ')');
+    const method = exactBinding ? 'readInputValueByBinding' : 'readInputValue';
+    const r = await deps.evaluate(`__RN_AGENT.${method}(${JSON.stringify(target)})`);
     if (!r.error && typeof r.value === 'string') {
       const read = JSON.parse(r.value) as {
         value?: string | null;
@@ -183,13 +186,14 @@ export async function settleRead(
   testID: string,
   text: string,
   valueBefore: string | null,
+  bindingId?: string,
 ): Promise<{ value: string | null; controlled: boolean }> {
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   let value: string | null = valueBefore;
   let controlled = false;
   let everRead = false;
   for (let i = 0; i < READ_SETTLE_TRIES; i++) {
-    const rb = await readInputValueOnce(deps, testID);
+    const rb = await readInputValueOnce(deps, bindingId ?? testID, bindingId !== undefined);
     if (rb) {
       value = rb.value;
       controlled = rb.controlled;
@@ -220,16 +224,21 @@ export async function finalFiberVerify(
   deps: EvaluateSeam,
   testID: string,
   text: string,
+  bindingId?: string,
 ): Promise<FiberVerifyOutcome> {
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   let previous: { value: string | null; controlled: boolean } | null = null;
   let last: { value: string | null; controlled: boolean } | null = null;
   for (let i = 0; i < FINAL_VERIFY_TRIES; i++) {
-    const read = await readInputValueOnce(deps, testID);
+    const read = await readInputValueOnce(deps, bindingId ?? testID, bindingId !== undefined);
     if (read) {
       if (read.value === text && read.controlled) {
         await sleep(FIBER_CONFIRM_DELAY_MS);
-        const confirm = await readInputValueOnce(deps, testID);
+        const confirm = await readInputValueOnce(
+          deps,
+          bindingId ?? testID,
+          bindingId !== undefined,
+        );
         if (confirm && confirm.value === text && confirm.controlled) return 'exact';
         return 'unreadable';
       }
@@ -272,8 +281,8 @@ export async function attemptJsFill(
   // of typing again. A helper-reported error is a clean pre-mutation no-op.
   try {
     const expr =
-      '__RN_AGENT.interact(' +
-      JSON.stringify({ action: 'typeText', testID, text, verify: true }) +
+      '__RN_AGENT.typeTextWithBinding(' +
+      JSON.stringify({ action: 'typeText', testID, text }) +
       ')';
     const r = await deps.evaluate(expr);
     if (r.error || typeof r.value !== 'string') {
@@ -289,9 +298,11 @@ export async function attemptJsFill(
   if (probe.error) return { handled: false };
   if (probe.controlled === undefined) return { handled: false, dispatchUncertain: true };
   if (probe.handlerCalled === false || probe.handlerCalled === undefined) return { handled: false };
+  if (typeof probe.bindingId !== 'string') return { handled: false, dispatchUncertain: true };
 
   const valueBefore = typeof probe.valueBefore === 'string' ? probe.valueBefore : null;
-  const settled = await settleRead(deps, testID, text, valueBefore);
+  const bindingId = probe.bindingId;
+  const settled = await settleRead(deps, testID, text, valueBefore, bindingId);
   // A read that lost controlled-ness mid-flight is not authoritative.
   let outcome = settled.controlled
     ? classifyFiberVerification({ text, valueAfter: settled.value })
@@ -301,7 +312,7 @@ export async function attemptJsFill(
     // non-exact value to hold on a confirmation read before reporting it.
     const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
     await sleep(FIBER_CONFIRM_DELAY_MS);
-    const confirm = await readInputValueOnce(deps, testID);
+    const confirm = await readInputValueOnce(deps, bindingId, true);
     if (confirm && confirm.value === text && confirm.controlled) {
       outcome = 'exact';
     } else if (
@@ -318,5 +329,16 @@ export async function attemptJsFill(
     outcome,
     controlled: settled.controlled,
     handler: typeof probe.handlerCalled === 'string' ? probe.handlerCalled : undefined,
+    bindingId,
   };
+}
+
+export async function releaseJsFillBinding(
+  deps: EvaluateSeam,
+  bindingId: string | undefined,
+): Promise<void> {
+  if (!bindingId) return;
+  try {
+    await deps.evaluate(`__RN_AGENT.releaseInputBinding(${JSON.stringify(bindingId)})`);
+  } catch {}
 }

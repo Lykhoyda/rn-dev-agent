@@ -46,7 +46,7 @@ import {
 } from '../fast-runner-ref-map.js';
 import {
   attemptJsFill,
-  settleRead,
+  releaseJsFillBinding,
   probeInputState,
   finalFiberVerify,
   combineVerificationOracles,
@@ -1064,11 +1064,17 @@ async function finalVerification(
   jsTestId: string | null,
   text: string,
   operationToken?: string,
+  fiberBindingId?: string,
 ): Promise<FinalVerification> {
   const fiberId = binding.inputTestId ?? jsTestId;
   let fiber: FiberVerifyOutcome | 'unavailable' = 'unavailable';
   if (client && fiberId) {
-    fiber = await finalFiberVerify({ evaluate: (e) => client.evaluate(e) }, fiberId, text);
+    fiber = await finalFiberVerify(
+      { evaluate: (e) => client.evaluate(e) },
+      fiberId,
+      text,
+      fiberBindingId,
+    );
   }
   const nativeBinding = operationToken ? binding : await rebindExactFillTarget(binding);
   if (!nativeBinding) return combineVerificationOracles(fiber, 'target-lost', false);
@@ -1155,15 +1161,13 @@ function attachFillFailureDisposition(
 }
 
 async function clearControlledValue(client: CDPClient, testID: string): Promise<boolean> {
+  const deps = { evaluate: (expression: string) => client.evaluate(expression) };
+  const cleared = await attemptJsFill(deps, testID, '');
   try {
-    await client.evaluate(
-      '__RN_AGENT.interact(' + JSON.stringify({ action: 'typeText', testID, text: '' }) + ')',
-    );
-  } catch {
-    return false;
+    return cleared.handled && cleared.outcome === 'exact';
+  } finally {
+    await releaseJsFillBinding(deps, cleared.bindingId);
   }
-  const settled = await settleRead({ evaluate: (e) => client.evaluate(e) }, testID, '', null);
-  return settled.value === '';
 }
 
 function exactTypeReadback(
@@ -1289,50 +1293,61 @@ export async function performExactFill(
       pathsTried.push('js');
       const tJs = Date.now();
       const js = await attemptJsFill(evalSeam, fiberId, args.text);
-      if (!js.handled && js.dispatchUncertain) {
-        return fillFailure(
-          'TEXT_ENTRY_UNVERIFIED',
-          'The JS fill dispatch failed after it may have reached the app; not typing again.',
-          { mutation: 'possible', pathsTried },
-        );
-      }
-      if (js.handled) {
-        mutationSeen = 'observed';
-        if (js.outcome === 'exact') {
-          const verification = await finalVerification(client, binding, fiberId, args.text);
-          if (verification.verified) {
-            return verifiedFillResult('js-onChangeText', args.text.length, {
-              textEntryPath: 'js',
-              verifiedOracle: verification.oracle,
-              handler: js.handler,
-              timings_ms: { jsType: Date.now() - tJs },
-            });
+      try {
+        if (!js.handled && js.dispatchUncertain) {
+          return fillFailure(
+            'TEXT_ENTRY_UNVERIFIED',
+            'The JS fill dispatch failed after it may have reached the app; not typing again.',
+            { mutation: 'possible', pathsTried },
+          );
+        }
+        if (js.handled) {
+          mutationSeen = 'observed';
+          if (js.outcome === 'exact') {
+            const verification = await finalVerification(
+              client,
+              binding,
+              fiberId,
+              args.text,
+              undefined,
+              js.bindingId,
+            );
+            if (verification.verified) {
+              return verifiedFillResult('js-onChangeText', args.text.length, {
+                textEntryPath: 'js',
+                verifiedOracle: verification.oracle,
+                handler: js.handler,
+                timings_ms: { jsType: Date.now() - tJs },
+              });
+            }
+            if (!verification.observedMismatch) {
+              return fillFailure(
+                'TEXT_ENTRY_UNVERIFIED',
+                'The controlled fill could not be verified against the bound native input; not retrying.',
+                { mutation: 'possible', pathsTried, verification },
+              );
+            }
           }
-          if (!verification.observedMismatch) {
+          if (js.outcome === 'unreadable') {
             return fillFailure(
               'TEXT_ENTRY_UNVERIFIED',
-              'The controlled fill could not be verified against the bound native input; not retrying.',
-              { mutation: 'possible', pathsTried, verification },
+              'The onChangeText handler fired but the resulting value is unreadable — app state may have changed; not retrying.',
+              { mutation: 'possible', pathsTried },
+            );
+          }
+          // Readable but not (stably) exact: correct clear-first via the same
+          // handler, prove the clear, then descend to the native tier.
+          const cleared = await clearControlledValue(client, fiberId);
+          if (!cleared) {
+            return fillFailure(
+              'TEXT_ENTRY_UNVERIFIED',
+              'device_fill could not verify the JS fill and could not prove a clean clear; not retrying.',
+              { mutation: 'possible', pathsTried },
             );
           }
         }
-        if (js.outcome === 'unreadable') {
-          return fillFailure(
-            'TEXT_ENTRY_UNVERIFIED',
-            'The onChangeText handler fired but the resulting value is unreadable — app state may have changed; not retrying.',
-            { mutation: 'possible', pathsTried },
-          );
-        }
-        // Readable but not (stably) exact: correct clear-first via the same
-        // handler, prove the clear, then descend to the native tier.
-        const cleared = await clearControlledValue(client, fiberId);
-        if (!cleared) {
-          return fillFailure(
-            'TEXT_ENTRY_UNVERIFIED',
-            'device_fill could not verify the JS fill and could not prove a clean clear; not retrying.',
-            { mutation: 'possible', pathsTried },
-          );
-        }
+      } finally {
+        await releaseJsFillBinding(evalSeam, js.bindingId);
       }
     }
   }
