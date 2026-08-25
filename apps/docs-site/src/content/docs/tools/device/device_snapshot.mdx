@@ -11,12 +11,12 @@ Manage exact device sessions and capture UI snapshots even when a Dev Client rem
 
 | Name | Type | Required | Default | Constraints | Description |
 |------|------|----------|---------|-------------|-------------|
-| `action` | `unknown` | No | `'snapshot'` |  |  |
-| `appId` | `unknown` | No |  |  | App bundle ID — required for action=open (e.g. "com.example.app") |
-| `platform` | `unknown` | No |  |  | Target platform — used with action=open to select device |
-| `deviceId` | `unknown` | No |  |  | Exact iOS simulator UDID or Android adb serial to use for action=open |
+| `action` | `enum: open \| close \| snapshot` | No | `'snapshot'` |  | open: start session for an app. snapshot: capture UI tree with element refs. close: end session. |
+| `appId` | `string` | No |  |  | App bundle ID — required for action=open (e.g. "com.example.app") |
+| `platform` | `enum: ios \| android` | No |  |  | Target platform — used with action=open to select device |
+| `deviceId` | `string` | No |  |  | Exact iOS simulator UDID or Android adb serial to use for action=open |
 | `sessionName` | `string` | No |  |  | Session name override (default: auto-generated) |
-| `attachOnly` | `unknown` | No |  |  |  |
+| `attachOnly` | `boolean` | No |  |  | action=open only: skip launching the app. Requires the app to be already running. Use when connecting to an already-active dev session to avoid bundle-load races. |
 
 ## Usage
 

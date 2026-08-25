@@ -11,11 +11,11 @@ Navigate to any screen by name, including nested stack screens that __NAV_REF__.
 
 | Name | Type | Required | Default | Constraints | Description |
 |------|------|----------|---------|-------------|-------------|
-| `screen` | `unknown` | Yes |  |  | Screen name to navigate to (e.g. "AllTasks", "Dashboard", "ProfileEditModal") |
+| `screen` | `string` | Yes |  |  | Screen name to navigate to (e.g. "AllTasks", "Dashboard", "ProfileEditModal") |
 | `params` | `Record<string, unknown>` | No |  |  | Screen params (e.g. \{ id: "1" \}) |
 
 ## Usage
 
 ```
-cdp_navigate(screen: <unknown>)
+cdp_navigate(screen: <string>)
 ```

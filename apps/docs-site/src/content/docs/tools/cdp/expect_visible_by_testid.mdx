@@ -10,8 +10,8 @@ Assert that an element with a given testID is (or is not) currently rendered in 
 | Name | Type | Required | Default | Constraints | Description |
 |------|------|----------|---------|-------------|-------------|
 | `testID` | `string` | Yes |  |  | The testID to look for in the accessibility tree. |
-| `exists` | `unknown` | No |  |  | Default true (assert visible). Pass false to assert NOT visible. |
-| `timeoutMs` | `unknown` | No |  | min: 0, integer | Polling timeout in ms (default 0). Use 1000-3000 for late-mounted elements. |
+| `exists` | `boolean` | No |  |  | Default true (assert visible). Pass false to assert NOT visible. |
+| `timeoutMs` | `number` | No |  | min: 0, integer | Polling timeout in ms (default 0). Use 1000-3000 for late-mounted elements. |
 
 ## Usage
 

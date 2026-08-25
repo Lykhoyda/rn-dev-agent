@@ -11,8 +11,8 @@ Assert against the navigation state — current route name, current route params
 |------|------|----------|---------|-------------|-------------|
 | `name` | `string` | No |  |  | Asserts the current top-of-stack route name === this. |
 | `paramsEquals` | `unknown` | No |  |  | Asserts deep-equal against the current route params object. |
-| `inStack` | `unknown` | No |  |  |  |
-| `timeoutMs` | `unknown` | No |  | min: 0, integer |  |
+| `inStack` | `string` | No |  |  | Asserts a route with this name exists somewhere in the stack (not necessarily current). |
+| `timeoutMs` | `number` | No |  | min: 0, integer | Polling timeout in ms (default 0). Use 1000-2000 to wait through navigation animations. |
 
 ## Usage
 

@@ -84902,7 +84902,7 @@ async function tapSystemDialog(labels, platform, totalTimeoutMs, slug, authority
   const selector = `^(?:${labels.map(regexEscape).join("|")})$`;
   const yaml2 = `- tapOn:
     text: "${yamlEscape(selector)}"`;
-  const result = await runMaestroInline(yaml2, {
+  const result = await runMaestroInlineFn(yaml2, {
     platform,
     timeoutMs: totalTimeoutMs,
     slug,
@@ -84979,7 +84979,7 @@ function createDeviceAcceptSystemDialogHandler() {
 function createDeviceDismissSystemDialogHandler() {
   return async (args) => handleSystemDialog(args, DISMISS_LABELS_IOS, DISMISS_LABELS_ANDROID, "sys-dismiss");
 }
-var APOSTROPHE_ASCII, APOSTROPHE_CURLY, ACCEPT_LABELS_IOS, DISMISS_LABELS_IOS_BASE, DISMISS_LABELS_IOS, ACCEPT_LABELS_ANDROID, DISMISS_LABELS_ANDROID, realSleep2, fetchSnapshotNodesFn, pressCandidateFn2, sleepFn, iosSessionActiveFn, OPEN_CONFIRMATION_LABELS, OPEN_CONFIRMATION_RETRY_DELAY_MS, DEFAULT_DIALOG_TIMEOUT_MS;
+var APOSTROPHE_ASCII, APOSTROPHE_CURLY, ACCEPT_LABELS_IOS, DISMISS_LABELS_IOS_BASE, DISMISS_LABELS_IOS, ACCEPT_LABELS_ANDROID, DISMISS_LABELS_ANDROID, realSleep2, fetchSnapshotNodesFn, pressCandidateFn2, runMaestroInlineFn, sleepFn, iosSessionActiveFn, OPEN_CONFIRMATION_LABELS, OPEN_CONFIRMATION_RETRY_DELAY_MS, DEFAULT_DIALOG_TIMEOUT_MS;
 var init_device_system_dialog = __esm({
   "packages/rn-dev-agent-core/dist/tools/device-system-dialog.js"() {
     "use strict";
@@ -85021,11 +85021,12 @@ var init_device_system_dialog = __esm({
     realSleep2 = (ms) => new Promise((r) => setTimeout(r, ms));
     fetchSnapshotNodesFn = fetchSnapshotNodes;
     pressCandidateFn2 = pressCandidate;
+    runMaestroInlineFn = runMaestroInline;
     sleepFn = realSleep2;
     iosSessionActiveFn = () => hasActiveSession() && getActiveSession()?.platform === "ios";
     OPEN_CONFIRMATION_LABELS = ["Open"];
     OPEN_CONFIRMATION_RETRY_DELAY_MS = 750;
-    DEFAULT_DIALOG_TIMEOUT_MS = 12e4;
+    DEFAULT_DIALOG_TIMEOUT_MS = 15e3;
   }
 });
 
@@ -95291,12 +95292,12 @@ var init_index = __esm({
     trackedTool("device_accept_system_dialog", "Tap an OS-level accept button on the exact session device. iOS prefers the capability-bound native runner so SpringBoard-owned dialogs are reachable; DIALOG_BUTTON_NOT_FOUND returns availableButtons for an exact-label retry.", {
       label: external_exports.string().optional().describe("Specific button label to tap. Omit to try common defaults (Allow, OK, Open, Continue, Yes, Accept)."),
       platform: external_exports.enum(["ios", "android"]).optional().describe("Authority-bound platform; conflicting values are refused"),
-      timeoutMs: external_exports.number().int().min(1e3).max(12e4).optional().describe("Whole fallback Maestro timeout (default 120000ms; native iOS runner path is preferred).")
+      timeoutMs: external_exports.number().int().min(1e3).max(12e4).optional().describe("Whole fallback Maestro timeout (default 15000ms; explicit values up to 120000 accepted). Native iOS runner path is preferred.")
     }, createDeviceAcceptSystemDialogHandler());
     trackedTool("device_dismiss_system_dialog", "Tap an OS-level dismiss button through the capability-bound runner on the exact session device.", {
       label: external_exports.string().optional().describe("Specific button label to tap. Omit to try common defaults (Cancel, Don\u2019t Allow, Deny, No, Not Now)."),
       platform: external_exports.enum(["ios", "android"]).optional().describe("Authority-bound platform; conflicting values are refused"),
-      timeoutMs: external_exports.number().int().min(1e3).max(12e4).optional().describe("Whole fallback Maestro timeout (default 120000ms; native iOS runner path is preferred).")
+      timeoutMs: external_exports.number().int().min(1e3).max(12e4).optional().describe("Whole fallback Maestro timeout (default 15000ms; explicit values up to 120000 accepted).")
     }, createDeviceDismissSystemDialogHandler());
     resolveNativeProofDevice = async () => {
       const session2 = getActiveSession();

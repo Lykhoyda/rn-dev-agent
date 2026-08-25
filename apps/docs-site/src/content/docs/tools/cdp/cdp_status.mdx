@@ -11,8 +11,8 @@ Passively report the current authority session, Metro client, and CDP target wit
 
 | Name | Type | Required | Default | Constraints | Description |
 |------|------|----------|---------|-------------|-------------|
-| `metroPort` | `unknown` | No |  |  | Diagnostic comparison only; cdp_status never changes the active Metro port |
-| `platform` | `unknown` | No |  |  |  |
+| `metroPort` | `number` | No |  |  | Diagnostic comparison only; cdp_status never changes the active Metro port |
+| `platform` | `string` | No |  |  | Filter target by platform (e.g. "ios", "android") to avoid connecting to the wrong device in multi-simulator setups |
 
 ## Usage
 

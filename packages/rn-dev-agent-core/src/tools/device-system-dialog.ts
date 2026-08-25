@@ -57,6 +57,7 @@ const realSleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r
 
 let fetchSnapshotNodesFn: typeof fetchSnapshotNodes = fetchSnapshotNodes;
 let pressCandidateFn: typeof pressCandidate = pressCandidate;
+let runMaestroInlineFn: typeof runMaestroInline = runMaestroInline;
 let sleepFn: (ms: number) => Promise<void> = realSleep;
 let iosSessionActiveFn: () => boolean = () =>
   hasActiveSession() && getActiveSession()?.platform === 'ios';
@@ -78,6 +79,12 @@ export function _setPressCandidateForTest(fn: typeof pressCandidate): void {
 }
 export function _resetPressCandidateForTest(): void {
   pressCandidateFn = pressCandidate;
+}
+export function _setRunMaestroInlineForTest(fn: typeof runMaestroInline): void {
+  runMaestroInlineFn = fn;
+}
+export function _resetRunMaestroInlineForTest(): void {
+  runMaestroInlineFn = runMaestroInline;
 }
 export function _setIosSessionActiveForTest(value: boolean): void {
   iosSessionActiveFn = () => value;
@@ -157,7 +164,8 @@ export async function acceptDeeplinkOpenConfirmation(): Promise<RunnerDialogOutc
   return tapSystemDialogViaRunner(OPEN_CONFIRMATION_LABELS);
 }
 
-const DEFAULT_DIALOG_TIMEOUT_MS = 120_000;
+// Keep the no-dialog fallback bounded while allowing longer explicit waits.
+const DEFAULT_DIALOG_TIMEOUT_MS = 15_000;
 
 function regexEscape(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -174,7 +182,7 @@ async function tapSystemDialog(
   // without paying a fresh iOS WDA cold start for every candidate label.
   const selector = `^(?:${labels.map(regexEscape).join('|')})$`;
   const yaml = `- tapOn:\n    text: "${yamlEscape(selector)}"`;
-  const result = await runMaestroInline(yaml, {
+  const result = await runMaestroInlineFn(yaml, {
     platform,
     timeoutMs: totalTimeoutMs,
     slug,
