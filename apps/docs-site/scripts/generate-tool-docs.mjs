@@ -4,7 +4,9 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '../../..');
-const INDEX_TS = resolve(ROOT, 'packages/rn-dev-agent-core/src/index.ts');
+const INDEX_TS = process.env.RN_DEV_AGENT_DOCS_SOURCE
+  ? resolve(process.env.RN_DEV_AGENT_DOCS_SOURCE)
+  : resolve(ROOT, 'packages/rn-dev-agent-core/src/index.ts');
 // RN_DEV_AGENT_DOCS_OUT lets a regression run the real generator into a scratch
 // directory instead of overwriting the committed docs.
 const OUT_ROOT = process.env.RN_DEV_AGENT_DOCS_OUT
@@ -131,12 +133,17 @@ function splitTopLevel(text) {
   let stringChar = '';
   for (let i = 0; i < text.length; i++) {
     const ch = text[i];
-    if (!inString && (ch === '"' || ch === "'" || ch === '`')) {
+    if (inString) {
+      if (ch === '\\') {
+        current += ch;
+        if (i + 1 < text.length) current += text[++i];
+        continue;
+      }
+      if (ch === stringChar) inString = false;
+    } else if (ch === '"' || ch === "'" || ch === '`') {
       inString = true;
       stringChar = ch;
-    } else if (inString && ch === stringChar && text[i - 1] !== '\\') {
-      inString = false;
-    } else if (!inString) {
+    } else {
       if ('([{'.includes(ch)) depth++;
       else if (')]}'.includes(ch)) depth--;
       else if (ch === ',' && depth === 0) {
@@ -312,6 +319,10 @@ function escapeMdx(str) {
     .replace(/\}/g, '\\}');
 }
 
+function escapeMdxTableCell(str) {
+  return escapeMdx(str).replace(/\r\n?|\n/g, '<br />').replace(/\|/g, '&#124;');
+}
+
 function generateMdx(tool) {
   const isDeprecated = tool.description.toLowerCase().includes('deprecated');
   const sortIdx = SORT_ORDER.indexOf(tool.name);
@@ -322,7 +333,7 @@ function generateMdx(tool) {
       const constraints = p.constraints.length ? p.constraints.join(', ') : '';
       const def = p.defaultValue ?? '';
       const req = p.required ? 'Yes' : 'No';
-      return `| \`${p.name}\` | \`${p.type}\` | ${req} | ${def ? `\`${def}\`` : ''} | ${constraints} | ${escapeMdx(p.description)} |`;
+      return `| \`${p.name}\` | \`${p.type}\` | ${req} | ${def ? `\`${def}\`` : ''} | ${constraints} | ${escapeMdxTableCell(p.description)} |`;
     })
     .join('\n');
 

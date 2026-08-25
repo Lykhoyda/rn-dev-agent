@@ -14,7 +14,7 @@ Discover and run all Maestro flows in .rn-agent/actions/ as a regression suite. 
 | `platform` | `enum: ios | android` | No |  |  | Target platform (auto-detected from session) |
 | `deviceId` | `string` | No |  | min: 1, max: 256 | Exact simulator UDID / adb serial to run the suite on (defaults to the active session device). |
 | `flowDir` | `string` | No |  |  | Directory to scan for .yaml flows (default: &lt;project&gt;/.rn-agent/actions/) |
-| `pattern` | `string` | No |  |  | Regex pattern to filter flow files (e.g. "cart|checkout") |
+| `pattern` | `string` | No |  |  | Regex pattern to filter flow files (e.g. "cart&#124;checkout") |
 | `timeoutPerFlow` | `number` | No | `120000` | min: 5000, max: 300000, integer | Timeout per flow in ms |
 | `stopOnFailure` | `boolean` | No | `false` |  | Stop after first failure |
 

@@ -24,11 +24,14 @@ function rowFor(mdx, param) {
   return line.split('|').map((c) => c.trim());
 }
 
-function runGenerator(outDir) {
+function runGenerator(outDir, sourcePath) {
+  const env = { ...process.env, RN_DEV_AGENT_DOCS_OUT: outDir };
+  if (sourcePath) env.RN_DEV_AGENT_DOCS_SOURCE = sourcePath;
+  else delete env.RN_DEV_AGENT_DOCS_SOURCE;
   execFileSync(process.execPath, [GENERATOR], {
     cwd: REPO_ROOT,
     encoding: 'utf8',
-    env: { ...process.env, RN_DEV_AGENT_DOCS_OUT: outDir },
+    env,
   });
   return join(outDir, 'tools');
 }
@@ -89,8 +92,10 @@ test('#816 cdp_run_action.actionId keeps its correct string type through regener
 test('#816 generated descriptions decode supported TypeScript string escapes', async () => {
   const out = fs.mkdtempSync(join(tmpdir(), 'gh816-docs-'));
   const previousOut = process.env.RN_DEV_AGENT_DOCS_OUT;
+  const previousSource = process.env.RN_DEV_AGENT_DOCS_SOURCE;
   try {
     process.env.RN_DEV_AGENT_DOCS_OUT = out;
+    delete process.env.RN_DEV_AGENT_DOCS_SOURCE;
     const { decodeSupportedStringEscapes } = await import(
       `${pathToFileURL(GENERATOR).href}?escape-regression`
     );
@@ -117,6 +122,40 @@ test('#816 generated descriptions decode supported TypeScript string escapes', a
   } finally {
     if (previousOut === undefined) delete process.env.RN_DEV_AGENT_DOCS_OUT;
     else process.env.RN_DEV_AGENT_DOCS_OUT = previousOut;
+    if (previousSource === undefined) delete process.env.RN_DEV_AGENT_DOCS_SOURCE;
+    else process.env.RN_DEV_AGENT_DOCS_SOURCE = previousSource;
+    fs.rmSync(out, { recursive: true, force: true });
+  }
+});
+
+test('#816 generated description rows preserve backslashes, line breaks, and delimiters', () => {
+  const out = fs.mkdtempSync(join(tmpdir(), 'gh816-docs-'));
+  const sourcePath = join(out, 'fixture-index.ts');
+  const source = Array.from(
+    { length: 38 },
+    (_, index) => String.raw`
+trackedTool(
+  'escape_fixture_${index}',
+  'Fixture tool',
+  {
+    path: z.string().describe('Path ends in \\'),
+    structured: z.string().describe('First\nSecond\u007CTail'),
+  },
+  () => {},
+);`,
+  ).join('\n');
+  fs.writeFileSync(sourcePath, source);
+
+  try {
+    const tools = runGenerator(out, sourcePath);
+    const mdx = fs.readFileSync(join(tools, 'cdp', 'escape_fixture_0.mdx'), 'utf8');
+    const pathCells = rowFor(mdx, 'path');
+    const structuredCells = rowFor(mdx, 'structured');
+
+    assert.equal(pathCells[6], String.raw`Path ends in \\`);
+    assert.equal(structuredCells.length, 8);
+    assert.equal(structuredCells[6], 'First<br />Second&#124;Tail');
+  } finally {
     fs.rmSync(out, { recursive: true, force: true });
   }
 });
@@ -164,6 +203,9 @@ test('#816 committed tool docs are fresh against src/index.ts', () => {
       ['cdp', 'device_dismiss_system_dialog'],
       ['device', 'device_find'],
       ['cdp', 'cdp_run_action'],
+      ['testing', 'maestro_test_all'],
+      ['cdp', 'cdp_record_test_generate'],
+      ['cdp', 'expect_redux'],
     ]) {
       const generated = fs.readFileSync(join(tools, category, `${name}.mdx`), 'utf8');
       assert.equal(

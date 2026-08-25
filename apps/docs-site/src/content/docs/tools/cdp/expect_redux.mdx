@@ -10,11 +10,11 @@ Assert against Redux/Zustand store state at a path. Returns ok when the assertio
 | Name | Type | Required | Default | Constraints | Description |
 |------|------|----------|---------|-------------|-------------|
 | `path` | `string` | Yes |  |  | Dot-path into the store, e.g. "cart.items" or "auth.user.id". Required. |
-| `storeType` | `string` | No |  |  | Restrict to a specific store ("redux" | "zustand" | a Zustand store name). Default: auto-detect. |
+| `storeType` | `string` | No |  |  | Restrict to a specific store ("redux" &#124; "zustand" &#124; a Zustand store name). Default: auto-detect. |
 | `equals` | `unknown` | No |  |  | Deep-equal against this value. |
 | `exists` | `boolean` | No |  |  | When true, value must be defined and non-null. When false, value must be undefined or null. Implicit default if no other operator is supplied. |
 | `notExists` | `boolean` | No |  |  | Inverse of exists. |
-| `length` | `number` | No |  | integer | Asserts (Array | string).length === this number. |
+| `length` | `number` | No |  | integer | Asserts (Array &#124; string).length === this number. |
 | `contains` | `unknown` | No |  |  | Asserts an array contains this element (deep-equal). |
 | `gt` | `number` | No |  |  | Asserts actual &gt; this number. |
 | `lt` | `number` | No |  |  | Asserts actual &lt; this number. |
