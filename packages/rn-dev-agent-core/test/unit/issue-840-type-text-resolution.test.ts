@@ -281,6 +281,133 @@ test('typeText supports placeholder and role+name selectors', () => {
   assert.deepEqual(calls, ['placeholder:home', 'role:1234']);
 });
 
+test('typeText binds selector evidence to the source that owns the selected handler', () => {
+  const calls: string[] = [];
+  const root = makeFiber('Root');
+  appendChild(
+    root,
+    makeFiber('AndroidTextInput', {
+      testID: 'inert-search',
+      placeholder: 'Search policies',
+    }),
+  );
+  appendChild(
+    root,
+    makeFiber('AndroidTextInput', {
+      testID: 'active-search',
+      placeholder: 'Search policies',
+      onChangeText(value: string) {
+        calls.push(value);
+      },
+    }),
+  );
+
+  const result = runInteract(root, {
+    action: 'typeText',
+    placeholder: 'Search policies',
+    text: 'home',
+    exact: true,
+  });
+
+  assert.equal(result.success, true, JSON.stringify(result));
+  assert.deepEqual(calls, ['home']);
+  assert.deepEqual(result.selectorBundle, {
+    testID: 'active-search',
+    role: 'none',
+    placeholder: 'Search policies',
+  });
+});
+
+test('typeText refuses mixed onChangeText and onChange logical targets', () => {
+  const calls: string[] = [];
+  const root = makeFiber('Root');
+  appendChild(
+    root,
+    makeFiber('AndroidTextInput', {
+      testID: 'mixed-handlers',
+      onChangeText(value: string) {
+        calls.push(`text:${value}`);
+      },
+    }),
+  );
+  appendChild(
+    root,
+    makeFiber('AndroidTextInput', {
+      testID: 'mixed-handlers',
+      onChange(event: { nativeEvent: { text: string } }) {
+        calls.push(`event:${event.nativeEvent.text}`);
+      },
+    }),
+  );
+
+  const result = runInteract(root, {
+    action: 'typeText',
+    testID: 'mixed-handlers',
+    text: 'unsafe',
+  });
+
+  assert.match(String(result.error), /Ambiguous typeText resolution/);
+  assert.deepEqual(calls, []);
+});
+
+test('typeText refuses cyclic hidden-state sibling traversal', () => {
+  const calls: string[] = [];
+  const root = makeFiber('Root');
+  const input = appendChild(
+    root,
+    makeFiber('AndroidTextInput', {
+      placeholder: 'Cyclic search',
+      onChangeText(value: string) {
+        calls.push(value);
+      },
+    }),
+  );
+  const sibling = appendChild(root, makeFiber('View'));
+  sibling.sibling = sibling;
+
+  const result = runInteract(root, {
+    action: 'typeText',
+    placeholder: 'Cyclic search',
+    text: 'unsafe',
+    exact: true,
+  });
+
+  assert.equal(result.truncated, true);
+  assert.equal(result.reason, 'cycle');
+  assert.deepEqual(calls, []);
+  assert.equal(input.memoizedProps.placeholder, 'Cyclic search');
+});
+
+test('typeText charges hidden-state ancestor traversal to the shared work limit', () => {
+  const calls: string[] = [];
+  const root = makeFiber('Root');
+  let current = root;
+  for (let index = 0; index < 1100; index += 1) {
+    current = appendChild(current, makeFiber('View'));
+  }
+  appendChild(
+    current,
+    makeFiber('AndroidTextInput', {
+      placeholder: 'Bounded search',
+      onChangeText(value: string) {
+        calls.push(value);
+      },
+    }),
+  );
+
+  const result = runInteract(root, {
+    action: 'typeText',
+    placeholder: 'Bounded search',
+    text: 'unsafe',
+    exact: true,
+  });
+
+  assert.equal(result.truncated, true);
+  assert.equal(result.reason, 'work-limit');
+  assert.equal(result.workLimit, 2000);
+  assert.deepEqual(calls, []);
+});
+
 test('typeText refuses a cyclic accessible-name subtree within the shared budget', () => {
   const calls: string[] = [];
   const root = makeFiber('Root');

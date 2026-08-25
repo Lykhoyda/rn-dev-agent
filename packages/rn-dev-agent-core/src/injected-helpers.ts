@@ -1648,37 +1648,122 @@ export const INJECTED_HELPERS = `
       return undefined;
     }
 
+    function typeTextStyleIsHidden(style) {
+      if (style == null) return false;
+      var display = null;
+      var active = new WeakSet();
+      var stack = [{ value: style, exit: false }];
+      while (stack.length > 0 && !state.truncated) {
+        var frame = stack.pop();
+        var part = frame.value;
+        if (frame.exit) {
+          active.delete(part);
+          continue;
+        }
+        if (!consumeWork()) break;
+        if (!part || typeof part !== 'object') continue;
+        if (active.has(part)) {
+          state.truncated = true;
+          state.reason = 'cycle';
+          break;
+        }
+        active.add(part);
+        stack.push({ value: part, exit: true });
+        if (Array.isArray(part)) {
+          for (var styleIndex = part.length - 1; styleIndex >= 0; styleIndex--) {
+            stack.push({ value: part[styleIndex], exit: false });
+          }
+        } else if (Object.prototype.hasOwnProperty.call(part, 'display')) {
+          display = part.display;
+        }
+      }
+      return !state.truncated && display === 'none';
+    }
+
+    function typeTextSubtreeIsHidden(fiber) {
+      var props = (fiber && fiber.memoizedProps) || {};
+      if (props['aria-hidden']) return true;
+      if (props.accessibilityElementsHidden) return true;
+      if (props.importantForAccessibility === 'no-hide-descendants') return true;
+      if (typeTextStyleIsHidden(props.style)) return true;
+      if (state.truncated) return false;
+      var parent = fiber && fiber.return;
+      if (!parent || !parent.child) return false;
+      var seen = new WeakSet();
+      var sibling = parent.child;
+      while (sibling && !state.truncated) {
+        if (!consumeWork()) break;
+        if (seen.has(sibling)) {
+          state.truncated = true;
+          state.reason = 'cycle';
+          break;
+        }
+        seen.add(sibling);
+        if (sibling !== fiber) {
+          var siblingProps = sibling.memoizedProps || {};
+          if (siblingProps['aria-modal'] || siblingProps.accessibilityViewIsModal) return true;
+        }
+        sibling = sibling.sibling;
+      }
+      return false;
+    }
+
+    function typeTextIsHidden(fiber) {
+      var seen = new WeakSet();
+      var current = fiber;
+      while (current && !state.truncated) {
+        if (!consumeWork()) break;
+        if (seen.has(current)) {
+          state.truncated = true;
+          state.reason = 'cycle';
+          break;
+        }
+        seen.add(current);
+        if (typeTextSubtreeIsHidden(current)) return true;
+        current = current.return;
+      }
+      return false;
+    }
+
+    function addVisibleSource(source) {
+      if (opts.includeHidden === true) {
+        sources.push(source);
+        return;
+      }
+      var hidden = typeTextIsHidden(source.fiber);
+      if (!state.truncated && !hidden) sources.push(source);
+    }
+
     function collectSource(fiber) {
       var props = fiber.memoizedProps || {};
       if (selectorKind === 'testID') {
-        if (props.testID === opts.testID || props.nativeID === opts.testID) sources.push(fiber);
+        if (props.testID === opts.testID || props.nativeID === opts.testID) sources.push({ fiber: fiber });
         return;
       }
       if (selectorKind === 'accessibilityLabel') {
         var raw = props.accessibilityLabel;
         if (raw === undefined || raw === null || raw === '') return;
         if (raw === opts.accessibilityLabel) {
-          exactSources.push(fiber);
+          exactSources.push({ fiber: fiber });
           return;
         }
         var normalized = String(raw).replace(/\\s+/g, ' ').replace(/^\\s+|\\s+$/g, '').toLowerCase();
-        if (normalized === normalizedSelector) normalizedSources.push(fiber);
-        else if (normalized.indexOf(normalizedSelector) >= 0) containsSources.push(fiber);
+        if (normalized === normalizedSelector) normalizedSources.push({ fiber: fiber });
+        else if (normalized.indexOf(normalizedSelector) >= 0) containsSources.push({ fiber: fiber });
         return;
       }
-      if (opts.includeHidden !== true && __hidden(fiber)) return;
       if (selectorKind === 'placeholder') {
         if (hostKind(fiber) !== 'textinput') return;
         var placeholder = props && typeof props.placeholder === 'string' ? props.placeholder : null;
         if (placeholder !== null && __match(placeholder, { value: opts.placeholder, exact: opts.exact === true })) {
-          sources.push(fiber);
+          addVisibleSource({ fiber: fiber, placeholder: placeholder });
         }
         return;
       }
       if (!__isA11yElement(fiber) || __role(fiber) !== wantedRole) return;
       var accessibleName = typeTextAccessibleName(fiber);
       if (accessibleName != null && __match(accessibleName, { value: opts.name, exact: opts.exact === true })) {
-        sources.push(fiber);
+        addVisibleSource({ fiber: fiber, accessibleName: accessibleName });
       }
     }
 
@@ -1720,12 +1805,11 @@ export const INJECTED_HELPERS = `
     }
 
     var completed = new WeakSet();
-    var onChangeTextMatches = [];
-    var onChangeMatches = [];
+    var candidates = [];
 
-    function collectTypeable(root) {
+    function collectTypeable(source) {
       var localSeen = new WeakSet();
-      var stack = [{ fiber: root, includeSibling: false }];
+      var stack = [{ fiber: source.fiber, includeSibling: false }];
       while (stack.length > 0 && !state.truncated) {
         var frame = stack.pop();
         var node = frame.fiber;
@@ -1745,10 +1829,20 @@ export const INJECTED_HELPERS = `
           fiber: node,
           props: props,
           name: name,
-          typeFingerprint: TYPEABLE_TYPE_RE.test(name)
+          typeFingerprint: TYPEABLE_TYPE_RE.test(name),
+          source: source,
+          handler: null,
+          handlerFn: null
         };
-        if (typeof props.onChangeText === 'function') onChangeTextMatches.push(candidate);
-        if (typeof props.onChange === 'function') onChangeMatches.push(candidate);
+        if (typeof props.onChangeText === 'function') {
+          candidate.handler = 'onChangeText';
+          candidate.handlerFn = props.onChangeText;
+          candidates.push(candidate);
+        } else if (typeof props.onChange === 'function') {
+          candidate.handler = 'onChange';
+          candidate.handlerFn = props.onChange;
+          candidates.push(candidate);
+        }
         if (frame.includeSibling && node.sibling) {
           stack.push({ fiber: node.sibling, includeSibling: true });
         }
@@ -1761,8 +1855,8 @@ export const INJECTED_HELPERS = `
     }
     if (state.truncated) return truncation();
 
-    function isForwardedAncestor(ancestorMatch, descendantMatch, handlerName) {
-      if (ancestorMatch.props[handlerName] !== descendantMatch.props[handlerName]) return false;
+    function isForwardedAncestor(ancestorMatch, descendantMatch) {
+      if (ancestorMatch.handlerFn !== descendantMatch.handlerFn) return false;
       var cursor = descendantMatch.fiber.return;
       var returnSeen = new WeakSet();
       while (cursor) {
@@ -1779,7 +1873,7 @@ export const INJECTED_HELPERS = `
       return false;
     }
 
-    function pick(matches, handlerName) {
+    function pick(matches) {
       if (matches.length === 0) return { kind: 'none' };
       var typed = [];
       for (var index = 0; index < matches.length; index++) {
@@ -1792,7 +1886,7 @@ export const INJECTED_HELPERS = `
         for (var descendantIndex = 0; descendantIndex < preferred.length; descendantIndex++) {
           if (ancestorIndex === descendantIndex || dropped.has(preferred[ancestorIndex].fiber)) continue;
           if (!consumeWork()) return { kind: 'truncated' };
-          if (isForwardedAncestor(preferred[ancestorIndex], preferred[descendantIndex], handlerName)) {
+          if (isForwardedAncestor(preferred[ancestorIndex], preferred[descendantIndex])) {
             dropped.add(preferred[ancestorIndex].fiber);
           }
           if (state.truncated) return { kind: 'truncated' };
@@ -1802,39 +1896,45 @@ export const INJECTED_HELPERS = `
       for (var finalistIndex = 0; finalistIndex < preferred.length; finalistIndex++) {
         if (!dropped.has(preferred[finalistIndex].fiber)) finalists.push(preferred[finalistIndex]);
       }
-      if (finalists.length === 1) return { kind: 'one', match: finalists[0], handler: handlerName };
-      return { kind: 'ambiguous', matches: finalists, handler: handlerName };
+      if (finalists.length === 1) return { kind: 'one', match: finalists[0] };
+      return { kind: 'ambiguous', matches: finalists };
     }
 
-    var picked = pick(onChangeTextMatches, 'onChangeText');
-    if (picked.kind === 'none') picked = pick(onChangeMatches, 'onChange');
+    var picked = pick(candidates);
     if (state.truncated || picked.kind === 'truncated') return truncation();
     if (picked.kind === 'ambiguous') {
+      var ambiguousHandler = picked.matches[0].handler;
+      for (var handlerIndex = 1; handlerIndex < picked.matches.length; handlerIndex++) {
+        if (picked.matches[handlerIndex].handler !== ambiguousHandler) {
+          ambiguousHandler = 'mixed';
+          break;
+        }
+      }
       return {
         error: 'Ambiguous typeText resolution',
         testID: opts.testID,
-        handler: picked.handler,
+        handler: ambiguousHandler,
         count: picked.matches.length,
         candidates: picked.matches.slice(0, 5).map(function(match) {
-          return { component: match.name, testID: match.props.testID, typeFingerprint: match.typeFingerprint };
+          return { component: match.name, testID: match.props.testID, handler: match.handler, typeFingerprint: match.typeFingerprint };
         }),
         hint: 'Multiple distinct typeable handlers match this selector. Pass a more specific testID for the inner TextInput.'
       };
     }
 
-    var source = sources[0];
-    var sourceProps = source.memoizedProps || {};
+    var source = picked.kind === 'one' ? picked.match.source : sources[0];
+    var sourceProps = source.fiber.memoizedProps || {};
     return {
       match: picked.kind === 'one' ? picked.match : null,
-      handler: picked.kind === 'one' ? picked.handler : null,
-      source: source,
+      handler: picked.kind === 'one' ? picked.match.handler : null,
+      source: source.fiber,
       state: state,
       selectorBundle: selectorKind === 'placeholder' || selectorKind === 'role+name'
         ? {
             testID: sourceProps.testID,
-            accessibleName: selectorKind === 'role+name' ? opts.name : undefined,
-            role: selectorKind === 'role+name' ? wantedRole : __role(source),
-            placeholder: sourceProps.placeholder
+            accessibleName: selectorKind === 'role+name' ? source.accessibleName : undefined,
+            role: selectorKind === 'role+name' ? wantedRole : __role(source.fiber),
+            placeholder: source.placeholder || sourceProps.placeholder
           }
         : null
     };
