@@ -13,7 +13,7 @@ Execute a Maestro flow through the pin-cache runner. The session requires maestr
 |------|------|----------|---------|-------------|-------------|
 | `flowPath` | `string` | No |  |  | Path to a .yaml flow file to execute |
 | `inlineYaml` | `string` | No |  |  | Inline YAML flow content (written to /tmp and executed) |
-| `platform` | `enum: ios | android` | No |  |  | Target platform (auto-detected from session) |
+| `platform` | `enum: ios \| android` | No |  |  | Target platform (auto-detected from session) |
 | `appId` | `string` | No |  |  | App bundle ID (auto-detected from app.json) |
 | `appFile` | `string` | No |  |  | iOS only — path to a built .app/.ipa for maestro-runner to reinstall on clearState. Auto-resolved from the flow appId when omitted (GH#201). |
 | `deviceId` | `string` | No |  | min: 1, max: 256 | Exact UDID or serial; defaults from session or Android ANDROID_SERIAL. |

@@ -323,6 +323,10 @@ function escapeMdxTableCell(str) {
   return escapeMdx(str).replace(/\r\n?|\n/g, '<br />').replace(/\|/g, '&#124;');
 }
 
+function escapeMdxCodeTableCell(str) {
+  return str.replace(/\|/g, '\\|');
+}
+
 function generateMdx(tool) {
   const isDeprecated = tool.description.toLowerCase().includes('deprecated');
   const sortIdx = SORT_ORDER.indexOf(tool.name);
@@ -333,7 +337,7 @@ function generateMdx(tool) {
       const constraints = p.constraints.length ? p.constraints.join(', ') : '';
       const def = p.defaultValue ?? '';
       const req = p.required ? 'Yes' : 'No';
-      return `| \`${p.name}\` | \`${p.type}\` | ${req} | ${def ? `\`${def}\`` : ''} | ${constraints} | ${escapeMdxTableCell(p.description)} |`;
+      return `| \`${p.name}\` | \`${escapeMdxCodeTableCell(p.type)}\` | ${req} | ${def ? `\`${def}\`` : ''} | ${constraints} | ${escapeMdxTableCell(p.description)} |`;
     })
     .join('\n');
 

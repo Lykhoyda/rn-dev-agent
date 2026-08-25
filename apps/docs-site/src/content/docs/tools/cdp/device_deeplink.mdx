@@ -10,7 +10,7 @@ Open a deep link on the exact authority-bound iOS simulator or Android device. O
 | Name | Type | Required | Default | Constraints | Description |
 |------|------|----------|---------|-------------|-------------|
 | `url` | `string` | Yes |  |  | URL to open, e.g. "myapp://claims/new" or "https://example.com/page". |
-| `platform` | `enum: ios | android` | No |  |  | Authority-bound platform; conflicting values are refused |
+| `platform` | `enum: ios \| android` | No |  |  | Authority-bound platform; conflicting values are refused |
 | `deviceId` | `string` | No |  | min: 1, max: 256 | Authority-bound exact iOS simulator UDID or Android adb serial; normally injected by the session |
 | `metroPort` | `number` | No |  | min: 1, max: 65535, integer | Authority-bound Metro port used only for an exact picker row match |
 | `packageName` | `string` | No |  |  | (Android only) Explicit package/activity, e.g. "com.example/.MainActivity". Usually not needed — intent resolution picks the right app. |

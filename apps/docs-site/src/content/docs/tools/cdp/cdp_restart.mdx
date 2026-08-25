@@ -10,7 +10,7 @@ Reset and reconnect the authority-bound Hermes client. hardReset relaunches only
 | Name | Type | Required | Default | Constraints | Description |
 |------|------|----------|---------|-------------|-------------|
 | `metroPort` | `number` | No |  |  | Authority-bound Metro port; conflicting values are refused |
-| `platform` | `enum: ios | android` | No |  |  | Authority-bound platform; conflicting values are refused |
+| `platform` | `enum: ios \| android` | No |  |  | Authority-bound platform; conflicting values are refused |
 | `deviceId` | `string` | No |  |  | Authority-bound exact device identifier; normally injected by the session |
 | `appId` | `string` | No |  |  | Authority-bound exact app identifier; normally injected by the session |
 | `hardReset` | `boolean` | No |  |  | Relaunch the exact session app on its claimed iOS or Android device before reconnecting. |

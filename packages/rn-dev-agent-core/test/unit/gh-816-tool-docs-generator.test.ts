@@ -18,10 +18,28 @@ const REPO_ROOT = resolve(__dirname, '..', '..', '..', '..');
 const GENERATOR = join(REPO_ROOT, 'apps', 'docs-site', 'scripts', 'generate-tool-docs.mjs');
 const DOCS = join(REPO_ROOT, 'apps', 'docs-site', 'src', 'content', 'docs');
 
+function splitTableRow(line) {
+  const cells = [];
+  let current = '';
+  for (let index = 0; index < line.length; index++) {
+    if (line[index] === '\\' && line[index + 1] === '|') {
+      current += '\\|';
+      index++;
+    } else if (line[index] === '|') {
+      cells.push(current.trim());
+      current = '';
+    } else {
+      current += line[index];
+    }
+  }
+  cells.push(current.trim());
+  return cells;
+}
+
 function rowFor(mdx, param) {
   const line = mdx.split('\n').find((l) => l.startsWith(`| \`${param}\``));
   assert.ok(line, `params table must have a ${param} row`);
-  return line.split('|').map((c) => c.trim());
+  return splitTableRow(line);
 }
 
 function runGenerator(outDir, sourcePath) {
@@ -140,6 +158,12 @@ trackedTool(
   {
     path: z.string().describe('Path ends in \\'),
     structured: z.string().describe('First\nSecond\u007CTail'),
+    platform: z
+      .enum(['ios', 'android'])
+      .optional()
+      .describe(
+        'Wrapped enum type',
+      ),
   },
   () => {},
 );`,
@@ -151,10 +175,13 @@ trackedTool(
     const mdx = fs.readFileSync(join(tools, 'cdp', 'escape_fixture_0.mdx'), 'utf8');
     const pathCells = rowFor(mdx, 'path');
     const structuredCells = rowFor(mdx, 'structured');
+    const platformCells = rowFor(mdx, 'platform');
 
     assert.equal(pathCells[6], String.raw`Path ends in \\`);
     assert.equal(structuredCells.length, 8);
     assert.equal(structuredCells[6], 'First<br />Second&#124;Tail');
+    assert.equal(platformCells.length, 8);
+    assert.equal(platformCells[2], '`enum: ios \\| android`');
   } finally {
     fs.rmSync(out, { recursive: true, force: true });
   }
@@ -177,7 +204,7 @@ test('#816 no generated tool page leaves a wrapped-zod param typed unknown with 
         if (!mdx.includes('## Parameters')) continue;
         for (const line of mdx.split('\n')) {
           if (!line.startsWith('| `') || line.includes('Name | Type')) continue;
-          const cells = line.split('|').map((c) => c.trim());
+          const cells = splitTableRow(line);
           if (cells[2] === '`unknown`' && cells[6] === '') {
             failures.push(`${file}: ${cells[1]}`);
           }

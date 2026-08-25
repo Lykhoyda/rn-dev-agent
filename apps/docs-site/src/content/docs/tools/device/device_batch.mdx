@@ -13,9 +13,9 @@ Execute a sequence of exact-device UI interactions in ONE tool call with the sam
 |------|------|----------|---------|-------------|-------------|
 | `steps` | `object[]` | No |  |  | Ordered list of UI interaction steps |
 | `delayMs` | `number` | No |  |  | Delay between steps in ms. Default: 0 while settle is on (settle waits for actual UI stability between steps), 300 when RN_SETTLE=0. Pass an explicit value to override either way. |
-| `screenshotOn` | `enum: none | failure | end | each` | No | `'failure'` |  | When to capture screenshots |
+| `screenshotOn` | `enum: none \| failure \| end \| each` | No | `'failure'` |  | When to capture screenshots |
 | `continueOnError` | `boolean` | No | `false` |  | When true, ordinary failed steps are recorded and the batch continues. A failed fill with observed or possible mutation always stops later steps. |
-| `finalSnapshot` | `enum: salient | full | none` | No | `'salient'` |  | Shape of the batch final_snapshot. salient (default): compact list of only actionable nodes (Button/TextField/Switch/etc) — far fewer tokens. full: complete node list (legacy). none: skip the implicit trailing snapshot entirely (~1,450 ms saved) for action-only batches you verify via expect_*/cdp_store_state. |
+| `finalSnapshot` | `enum: salient \| full \| none` | No | `'salient'` |  | Shape of the batch final_snapshot. salient (default): compact list of only actionable nodes (Button/TextField/Switch/etc) — far fewer tokens. full: complete node list (legacy). none: skip the implicit trailing snapshot entirely (~1,450 ms saved) for action-only batches you verify via expect_*/cdp_store_state. |
 
 ## Usage
 

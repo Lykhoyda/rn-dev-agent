@@ -13,7 +13,7 @@ Promote the in-memory recording (started via cdp_record_test_start) into a first
 | `intent` | `string` | Yes |  |  | One-line goal — surfaced verbatim by /list-learned-actions. Required. |
 | `tags` | `array` | No |  |  | Lower-case kebab-case keywords for filtering (e.g. ["tasks", "create", "regression"]). |
 | `mutates` | `boolean` | No |  |  | Does this flow leave persistent residue (created rows, toggled settings)? Required for /run-action safety pre-flight to know whether to confirm before replay. |
-| `status` | `enum: experimental | active | deprecated` | No |  |  | M7 lifecycle status. Default: experimental (auto-promotes on first clean replay). |
+| `status` | `enum: experimental \| active \| deprecated` | No |  |  | M7 lifecycle status. Default: experimental (auto-promotes on first clean replay). |
 | `bundleId` | `string` | No |  |  | App bundle ID for the Maestro appId header. Strongly recommended — /run-action uses it to refuse cross-app replays. |
 | `projectRoot` | `string` | No |  |  | Override project root (default: process.cwd()). |
 | `overwrite` | `boolean` | No |  |  | If an action with this id already exists, replace it. Default false (refuse with hint). |

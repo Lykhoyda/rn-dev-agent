@@ -11,10 +11,10 @@ Grant, revoke, reset, or query permissions for the authority-bound app on the ex
 
 | Name | Type | Required | Default | Constraints | Description |
 |------|------|----------|---------|-------------|-------------|
-| `action` | `enum: grant | revoke | reset | query` | Yes |  |  | grant: allow. revoke: deny. reset: restore default. query: check current state (Android: granted/denied/not_declared, iOS: unknown). |
+| `action` | `enum: grant \| revoke \| reset \| query` | Yes |  |  | grant: allow. revoke: deny. reset: restore default. query: check current state (Android: granted/denied/not_declared, iOS: unknown). |
 | `permission` | `string` | Yes |  |  | Permission key: notifications, camera, microphone, location, location-always, photos, contacts, calendar, reminders, storage, all |
 | `appId` | `string` | No |  |  | Authority-bound app identifier; normally injected by the session |
-| `platform` | `enum: ios | android` | No |  |  | Authority-bound platform; conflicting values are refused |
+| `platform` | `enum: ios \| android` | No |  |  | Authority-bound platform; conflicting values are refused |
 | `deviceId` | `string` | No |  |  | Authority-bound exact device identifier; normally injected by the session |
 
 ## Usage

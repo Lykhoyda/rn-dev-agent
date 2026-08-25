@@ -12,8 +12,8 @@ Capture the exact authority-bound device screen with no cross-device retry. Raw 
 | Name | Type | Required | Default | Constraints | Description |
 |------|------|----------|---------|-------------|-------------|
 | `path` | `string` | No |  |  | Output file path (default: auto-generated in /tmp). Use .jpg extension for JPEG. |
-| `format` | `enum: jpeg | png` | No |  |  | Image format (default: auto-detect from path extension, or jpeg) |
-| `platform` | `enum: ios | android` | No |  |  | Authority-bound platform; conflicting values are refused |
+| `format` | `enum: jpeg \| png` | No |  |  | Image format (default: auto-detect from path extension, or jpeg) |
+| `platform` | `enum: ios \| android` | No |  |  | Authority-bound platform; conflicting values are refused |
 | `deviceId` | `string` | No |  |  | Authority-bound exact device identifier; normally injected by the session |
 | `maxWidth` | `number` | No |  | min: 0, integer | Downscale image so width does not exceed this many pixels. 0 disables resize. Default 800 (saves ~46% on iPhone 15/17 Pro screenshots without losing label readability). |
 | `quality` | `number` | No |  | min: 1, max: 100, integer | JPEG compression quality (1-100). Only applied to .jpg/.jpeg files. Default 85. |
