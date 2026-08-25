@@ -320,7 +320,9 @@ function escapeMdx(str) {
 }
 
 function escapeMdxTableCell(str) {
-  return escapeMdx(str).replace(/\r\n?|\n/g, '<br />').replace(/\|/g, '&#124;');
+  return escapeMdx(str)
+    .replace(/\r\n?|\n/g, '<br />')
+    .replace(/\|/g, '&#124;');
 }
 
 function escapeMdxCodeTableCell(str) {

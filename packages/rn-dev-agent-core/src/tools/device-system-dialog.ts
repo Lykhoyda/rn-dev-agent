@@ -164,11 +164,7 @@ export async function acceptDeeplinkOpenConfirmation(): Promise<RunnerDialogOutc
   return tapSystemDialogViaRunner(OPEN_CONFIRMATION_LABELS);
 }
 
-// GH #816: the Maestro fallback is a presence probe — when no dialog exists
-// (Android, or session-less iOS), waiting out the old 120 s default made every
-// call look hung before DIALOG_NOT_FOUND came back. A short default keeps the
-// no-dialog path bounded while explicit caller values up to 120 000 ms remain
-// accepted for slow-to-animate dialogs.
+// Keep the no-dialog fallback bounded while allowing longer explicit waits.
 const DEFAULT_DIALOG_TIMEOUT_MS = 15_000;
 
 function regexEscape(value: string): string {

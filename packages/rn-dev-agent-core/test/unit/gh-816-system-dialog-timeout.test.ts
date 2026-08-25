@@ -1,11 +1,3 @@
-// GH #816: the Maestro fallback behind device_accept_system_dialog /
-// device_dismiss_system_dialog defaulted to a required 120 s wait whenever
-// the native runner path does not apply (Android, session-less iOS). With no
-// dialog present, every call looked hung for two minutes before returning
-// DIALOG_NOT_FOUND. Regression contract: the default presence timeout stays
-// at most 15 s, explicit caller values up to 120 000 ms still pass through,
-// and a no-dialog Android call returns the existing typed DIALOG_NOT_FOUND
-// result within that default bound.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
@@ -44,8 +36,7 @@ test('#816 accept dialog on Android with no dialog returns typed DIALOG_NOT_FOUN
   const handler = createDeviceAcceptSystemDialogHandler();
   try {
     const result = await handler({ platform: 'android' });
-    // The wait is bounded by the default, not by wall clock here — the seam
-    // records what the real Maestro flow would have waited out.
+    // The seam records the real Maestro timeout without a wall-clock wait.
     assert.ok(
       waitedMs > 0 && waitedMs <= 15_000,
       `default wait must be <= 15000ms, got ${waitedMs}`,

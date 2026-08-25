@@ -1,10 +1,3 @@
-// GH #816: generate-tool-docs.mjs assumed unwrapped .describe() calls and
-// single-line zod chains. Prettier-wrapped declarations published params as
-// `unknown` with empty descriptions — hiding device_accept_system_dialog's
-// timeoutMs contract (the 15s default behind GH #816), device_find.index,
-// and many others. Regression contract: running the real generator over the
-// current src/index.ts must emit described, correctly typed rows for the GH
-// #816 acceptance set, and the committed docs must stay byte-fresh.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -119,7 +112,7 @@ test('#816 generated descriptions decode supported TypeScript string escapes', a
     );
     assert.equal(
       decodeSupportedStringEscapes(String.raw`line\ncolumn\tpath\\quote\'double\"tick\`\u2019`),
-      "line\ncolumn\tpath\\quote'double\"tick`’",
+      'line\ncolumn\tpath\\quote\'double"tick`’',
     );
     assert.equal(
       decodeSupportedStringEscapes(String.raw`keep\r\x41\u{2019}\q`),
@@ -188,10 +181,6 @@ trackedTool(
 });
 
 test('#816 no generated tool page leaves a wrapped-zod param typed unknown with an empty description', () => {
-  // The parser may only widen to `unknown` for proven z.unknown()/z.any()
-  // forms; every such row must still carry a description (z.unknown() chains
-  // in index.ts are always described). A regenerated `unknown` + empty
-  // description cell is the exact GH #816 failure signature.
   const out = fs.mkdtempSync(join(tmpdir(), 'gh816-docs-'));
   try {
     const tools = runGenerator(out);
