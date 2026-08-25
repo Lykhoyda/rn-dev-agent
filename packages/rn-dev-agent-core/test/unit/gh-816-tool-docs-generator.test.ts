@@ -11,7 +11,7 @@ import fs from 'node:fs';
 import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { resolve, dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(__dirname, '..', '..', '..', '..');
@@ -82,6 +82,41 @@ test('#816 cdp_run_action.actionId keeps its correct string type through regener
     assert.equal(cells[3], 'Yes', 'actionId is required');
     assert.ok(cells[6].length > 0, 'actionId description must not be empty');
   } finally {
+    fs.rmSync(out, { recursive: true, force: true });
+  }
+});
+
+test('#816 generated descriptions decode supported TypeScript string escapes', async () => {
+  const out = fs.mkdtempSync(join(tmpdir(), 'gh816-docs-'));
+  const previousOut = process.env.RN_DEV_AGENT_DOCS_OUT;
+  try {
+    process.env.RN_DEV_AGENT_DOCS_OUT = out;
+    const { decodeSupportedStringEscapes } = await import(
+      `${pathToFileURL(GENERATOR).href}?escape-regression`
+    );
+    assert.equal(
+      decodeSupportedStringEscapes(String.raw`line\ncolumn\tpath\\quote\'double\"tick\`\u2019`),
+      "line\ncolumn\tpath\\quote'double\"tick`’",
+    );
+    assert.equal(
+      decodeSupportedStringEscapes(String.raw`keep\r\x41\u{2019}\q`),
+      String.raw`keep\r\x41\u{2019}\q`,
+    );
+
+    const tools = join(out, 'tools');
+    const dismissed = fs.readFileSync(
+      join(tools, 'cdp', 'device_dismiss_system_dialog.mdx'),
+      'utf8',
+    );
+    assert.match(dismissed, /Cancel, Don’t Allow, Deny/);
+    assert.doesNotMatch(dismissed, /Don\\\\u2019t Allow/);
+
+    const dispatch = fs.readFileSync(join(tools, 'cdp', 'cdp_dispatch.mdx'), 'utf8');
+    assert.match(dispatch, /the LLM's JSON encoder/);
+    assert.doesNotMatch(dispatch, /LLM\\\\'s JSON encoder/);
+  } finally {
+    if (previousOut === undefined) delete process.env.RN_DEV_AGENT_DOCS_OUT;
+    else process.env.RN_DEV_AGENT_DOCS_OUT = previousOut;
     fs.rmSync(out, { recursive: true, force: true });
   }
 });

@@ -10,7 +10,7 @@ Repair a learned action using a fresh snapshot from the exact authority-bound de
 | Name | Type | Required | Default | Constraints | Description |
 |------|------|----------|---------|-------------|-------------|
 | `actionId` | `string` | Yes |  |  | Owned action id; resolves one .yaml or .yml file. |
-| `failedSelector` | `string` | Yes |  |  | The testID that the prior maestro_run reported as missing. Parse it from stderr like "Element with id \\'X\\' not found" → X. |
+| `failedSelector` | `string` | Yes |  |  | The testID that the prior maestro_run reported as missing. Parse it from stderr like "Element with id 'X' not found" → X. |
 | `projectRoot` | `string` | No |  |  | Override project root (default: process.cwd()). |
 | `threshold` | `number` | No |  | min: 0, max: 1 | Fuzzy-match similarity threshold (0..1). Default 0.6. Lower if the screen has many similar testIDs and Levenshtein on the original is too strict. |
 | `dryRun` | `boolean` | No |  |  | Don't write changes — return the diff that WOULD be applied. Useful for previewing repairs before committing. |

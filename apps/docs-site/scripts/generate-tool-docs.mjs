@@ -89,19 +89,26 @@ function parseStringLiteral(text, startPos) {
   let result = '';
   while (i < text.length) {
     if (text[i] === '\\') {
-      if (quote === "'" && text[i + 1] === "'") {
-        result += "'";
-        i += 2;
-        continue;
-      }
-      result += text[i + 1] ?? '';
+      if (i + 1 >= text.length) return null;
+      result += text.slice(i, i + 2);
       i += 2;
       continue;
     }
-    if (text[i] === quote) return { value: result, end: i + 1 };
+    if (text[i] === quote) {
+      return { value: decodeSupportedStringEscapes(result), end: i + 1 };
+    }
     result += text[i++];
   }
   return null;
+}
+
+export function decodeSupportedStringEscapes(value) {
+  return value.replace(/\\(?:u([\da-fA-F]{4})|([nt\\'"`]))/g, (_escape, unicode, simple) => {
+    if (unicode) return String.fromCharCode(Number.parseInt(unicode, 16));
+    if (simple === 'n') return '\n';
+    if (simple === 't') return '\t';
+    return simple;
+  });
 }
 
 function extractBalancedBraces(text, startIdx) {
@@ -180,11 +187,6 @@ function parseZodType(def) {
   return 'unknown';
 }
 
-// Prettier wraps long zod chains across lines, so a param definition can span
-// several lines with the quote of .describe() on its own line (GH #816). The
-// chain's meaning is unaffected by whitespace outside string literals, so
-// collapse it once; string-literal contents (descriptions) are preserved byte
-// for byte.
 function collapseOuterWhitespace(def) {
   let result = '';
   let inString = false;
@@ -194,7 +196,6 @@ function collapseOuterWhitespace(def) {
     if (inString) {
       result += ch;
       if (ch === '\\') {
-        // keep escapes intact inside literals
         result += def[i + 1] ?? '';
         i++;
       } else if (ch === stringChar) {
@@ -244,13 +245,16 @@ function extractSchemaParams(schemaText) {
       param.required = false;
     }
 
-    // Prettier may place the closing paren of a wrapped .describe() call after
-    // the argument (optionally with a trailing comma); accept both forms only —
-    // no widening beyond describe('…') / describe(\n '…',\n ).
-    const descRe = /\.describe\((['"`])([\s\S]*?)\1\s*,?\s*\)/g;
-    let descMatch;
     let lastDesc = null;
-    while ((descMatch = descRe.exec(def)) !== null) lastDesc = descMatch[2];
+    let describePos = 0;
+    while ((describePos = def.indexOf('.describe(', describePos)) !== -1) {
+      const argumentStart = describePos + '.describe('.length;
+      const parsed = parseStringLiteral(def, argumentStart);
+      if (parsed && (def[parsed.end] === ')' || def.slice(parsed.end, parsed.end + 2) === ',)')) {
+        lastDesc = parsed.value;
+      }
+      describePos = argumentStart;
+    }
     if (lastDesc) param.description = lastDesc;
 
     const minMatch = def.match(/\.min\(([^)]+)\)/);
@@ -355,7 +359,6 @@ ${usage}
 `;
 }
 
-// --- Main ---
 const source = readFileSync(INDEX_TS, 'utf8');
 const blocks = extractTrackedToolBlocks(source);
 const tools = blocks.map(blockToTool).filter(Boolean);
@@ -384,7 +387,6 @@ for (const tool of tools) {
   console.log(`  generated: tools/${category}/${tool.name}.mdx`);
 }
 
-// Copy package changelogs with frontmatter injection
 const CHANGELOG_SOURCES = [
   ['Claude plugin', resolve(ROOT, 'packages/claude-plugin/CHANGELOG.md')],
   ['Core MCP server', resolve(ROOT, 'packages/rn-dev-agent-core/CHANGELOG.md')],
