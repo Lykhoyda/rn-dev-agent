@@ -183,6 +183,7 @@ test('login prologue seals selector replay against every CDP fallback', async (t
 
   assert.equal(envelope.code, 'LOGIN_PROLOGUE_BLOCKED');
   assert.equal(envelope.meta.loginPrologue.failure.code, 'TESTID_NOT_FOUND');
+  assert.match(envelope.meta.nextAction, /attachOnly true/);
   assert.equal(replayDepsCalled, false);
 });
 
@@ -285,6 +286,7 @@ test('login prologue blocks when the exact user-login action is missing', async 
   assert.equal(envelope.ok, false);
   assert.equal(envelope.code, 'LOGIN_PROLOGUE_BLOCKED');
   assert.equal(envelope.meta.loginPrologue.failure.code, 'LOGIN_ACTION_MISSING');
+  assert.match(envelope.meta.nextAction, /Restore the exact user-login action/);
   assert.equal(dispatched, false);
 });
 
@@ -451,6 +453,35 @@ test('blocked helper still refuses credential and ad-hoc login mutations', () =>
       mutation: true,
     });
     assert.deepEqual(decision, { allowed: false, suppliedOverride: false }, tool);
+  }
+});
+
+test('blocked helper admits only the non-destructive attach-only runner recovery', () => {
+  const binding = blockedBinding();
+  assert.deepEqual(
+    evaluateLoginPrologueGuard({
+      binding,
+      tool: 'device_snapshot',
+      args: { action: 'open', attachOnly: true },
+      mutation: true,
+    }),
+    { allowed: true, override: false },
+  );
+
+  for (const args of [
+    { action: 'open' },
+    { action: 'open', attachOnly: false },
+    { action: 'snapshot', attachOnly: true },
+  ]) {
+    assert.deepEqual(
+      evaluateLoginPrologueGuard({
+        binding,
+        tool: 'device_snapshot',
+        args,
+        mutation: true,
+      }),
+      { allowed: false, suppliedOverride: false },
+    );
   }
 });
 

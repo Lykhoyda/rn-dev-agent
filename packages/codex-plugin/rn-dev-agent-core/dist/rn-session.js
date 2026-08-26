@@ -11390,13 +11390,14 @@ function readLoginPrologueOutcome(value) {
   }
   return candidate;
 }
-var LOGIN_PROLOGUE_ALIAS, LOGIN_PROLOGUE_BLOCKED, ACTION_LOGIN_HELPER;
+var LOGIN_PROLOGUE_ALIAS, LOGIN_PROLOGUE_BLOCKED, ACTION_LOGIN_HELPER, LOGIN_PROLOGUE_RECOVERY_SEQUENCE;
 var init_login_prologue = __esm({
   "packages/rn-dev-agent-core/dist/domain/login-prologue.js"() {
     "use strict";
     LOGIN_PROLOGUE_ALIAS = "user-login";
     LOGIN_PROLOGUE_BLOCKED = "LOGIN_PROLOGUE_BLOCKED";
     ACTION_LOGIN_HELPER = "ACTION_LOGIN_HELPER";
+    LOGIN_PROLOGUE_RECOVERY_SEQUENCE = 'Run device_snapshot with action "open" and attachOnly true on the already-bound app, rerun cdp_login_prologue, then repeat the same attach-only open before device_press or device_fill.';
   }
 });
 
@@ -17857,6 +17858,14 @@ function projectPublicAuthorityStatus(status, options = {}) {
       runnerBound: Boolean(status.bindings.runner),
       recorderBound: Boolean(status.bindings.recorder)
     },
+    uiControl: loginPrologue?.state === LOGIN_PROLOGUE_BLOCKED ? {
+      mutationReadiness: "blocked",
+      reason: "The failed deterministic login replay still gates mutating UI tools.",
+      nextAction: LOGIN_PROLOGUE_RECOVERY_SEQUENCE
+    } : {
+      mutationReadiness: "not-proven",
+      evidenceRequired: "Authority, device, Metro, Observe, runner, and bundle health do not prove UI control; require the requested MCP mutation result to show that it started and completed."
+    },
     proof: Boolean(status.bindings.proof),
     // ADR §5.2 (L3): strict proof is an opt-in overlay outside the four groups, never a group.
     proofOverlay: { active: Boolean(status.bindings.proof) },
@@ -17871,6 +17880,7 @@ function projectPublicAuthorityStatus(status, options = {}) {
         elapsedMs: loginPrologue.elapsedMs,
         failureCode: loginPrologue.failure?.code,
         runId: loginPrologue.runRecord?.runId,
+        ...loginPrologue.state === LOGIN_PROLOGUE_BLOCKED ? { nextAction: LOGIN_PROLOGUE_RECOVERY_SEQUENCE } : {},
         overrideCount: loginPrologue.overrides?.length ?? 0,
         lastOverride: loginPrologue.overrides?.at(-1)
       }

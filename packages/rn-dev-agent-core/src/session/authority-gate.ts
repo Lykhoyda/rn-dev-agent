@@ -11,9 +11,11 @@ import type { WorkerAuthorityStatus } from './runtime.js';
 import {
   LOGIN_PROLOGUE_ALIAS,
   LOGIN_PROLOGUE_BLOCKED,
+  LOGIN_PROLOGUE_RECOVERY_SEQUENCE,
   appendLoginOverrideAudit,
   authorizeLoginSupervisorOverride,
   inspectLoginPrologueGuard,
+  isLoginRunnerRecoveryOperation,
   readLoginPrologueOutcome,
   type LoginPrologueOutcome,
 } from '../domain/login-prologue.js';
@@ -1239,6 +1241,12 @@ export function createAuthorityGate(
                   : baseProfile;
 
         const runtimeStatus = runtime.status();
+        const loginRunnerRecovery = isLoginRunnerRecoveryOperation({
+          binding: runtimeStatus.available ? runtimeStatus.bindings.loginPrologue : undefined,
+          tool,
+          args,
+          mutation: profile.mutation,
+        });
         const loginGuard = inspectLoginPrologueGuard({
           binding: runtimeStatus.available ? runtimeStatus.bindings.loginPrologue : undefined,
           tool,
@@ -1265,8 +1273,7 @@ export function createAuthorityGate(
                 ? runtimeStatus.bindings.loginPrologue
                 : undefined,
               overrideRejected: false,
-              nextAction:
-                'Repair the exact user-login action and rerun cdp_login_prologue, or supply a supervisorOverrideToken configured by RN_LOGIN_PROLOGUE_OVERRIDE_TOKEN for this mutating call.',
+              nextAction: LOGIN_PROLOGUE_RECOVERY_SEQUENCE,
             },
           );
         }
@@ -1583,6 +1590,16 @@ export function createAuthorityGate(
               : { ...profile, axes: transitionAxes.after };
             return addMeta(result, {
               authorityTransition: true,
+              ...(loginRunnerRecovery
+                ? {
+                    loginPrologueRecovery: {
+                      runnerRebound: true,
+                      latchCleared: false,
+                      nextAction:
+                        'Rerun cdp_login_prologue; after it passes, repeat this attach-only open before device_press or device_fill.',
+                    },
+                  }
+                : {}),
               ...nativeOriginMeta(
                 profile,
                 profile.nativeOrigin === 'required' || optionalOriginProven,
@@ -2513,7 +2530,13 @@ export function createAuthorityGate(
               );
             }
           }
-          return addMeta(authorityFailure(error), nativeOriginMeta(profile, false));
+          return addMeta(authorityFailure(error), {
+            ...nativeOriginMeta(profile, false),
+            ...(tool === 'cdp_login_prologue' &&
+            authorityErrorCode(error) === 'RUNNER_OWNERSHIP_MISMATCH'
+              ? { nextAction: LOGIN_PROLOGUE_RECOVERY_SEQUENCE }
+              : {}),
+          });
         } finally {
           stagedRuntimeRelaunch?.cancel();
           if (registry && operation && !retainProofCleanupFence) {
