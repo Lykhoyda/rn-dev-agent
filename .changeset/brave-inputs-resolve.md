@@ -3,4 +3,4 @@
 'rn-dev-agent-plugin': patch
 ---
 
-Resolve interactive text input across duplicate or deeply wrapped fibers, selector facts, and explicitly controlled React Hook Form fields.
+Resolve wrapped React text handlers exactly while keeping device fills native-authoritative.

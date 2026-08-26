@@ -1450,12 +1450,6 @@ export const INJECTED_HELPERS = `
   function clearErrors() { errors.length = 0; return 'cleared'; }
 
   var TYPE_TEXT_WORK_LIMIT = 2000;
-  var typeTextBindings = Object.create(null);
-  var typeTextBindingOrder = [];
-  var typeTextBindingCounter = 0;
-  globalThis.__RN_AGENT_TYPE_TEXT_GENERATION__ =
-    (globalThis.__RN_AGENT_TYPE_TEXT_GENERATION__ || 0) + 1;
-  var typeTextBindingGeneration = globalThis.__RN_AGENT_TYPE_TEXT_GENERATION__;
 
   function createTypeTextState() {
     return {
@@ -1467,12 +1461,12 @@ export const INJECTED_HELPERS = `
   }
 
   function consumeTypeTextWork(state) {
-    state.work++;
-    if (state.work > TYPE_TEXT_WORK_LIMIT) {
+    if (state.work >= TYPE_TEXT_WORK_LIMIT) {
       state.truncated = true;
       state.reason = 'work-limit';
       return false;
     }
+    state.work++;
     return true;
   }
 
@@ -1499,33 +1493,103 @@ export const INJECTED_HELPERS = `
     };
   }
 
-  function releaseInputBinding(bindingId) {
-    if (typeof bindingId !== 'string' || !typeTextBindings[bindingId]) return false;
-    delete typeTextBindings[bindingId];
-    for (var index = 0; index < typeTextBindingOrder.length; index++) {
-      if (typeTextBindingOrder[index] === bindingId) {
-        typeTextBindingOrder.splice(index, 1);
-        break;
-      }
-    }
-    return true;
-  }
-
-  function retainInputBinding(binding) {
-    typeTextBindingCounter++;
-    var bindingId = 'ttb:' + typeTextBindingGeneration + ':' + typeTextBindingCounter;
-    binding.bindingId = bindingId;
-    typeTextBindings[bindingId] = binding;
-    typeTextBindingOrder.push(bindingId);
-    while (typeTextBindingOrder.length > 32) releaseInputBinding(typeTextBindingOrder[0]);
-    return bindingId;
-  }
-
   function resolveTypeTextTarget(opts) {
     var state = createTypeTextState();
 
     function consumeWork() {
       return consumeTypeTextWork(state);
+    }
+
+    var TYPE_TEXT_ABORT = {};
+
+    function forEachTypeTextRoot(callback) {
+      if (!consumeWork()) return TYPE_TEXT_ABORT;
+      var hook = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
+      if (hook && typeof hook.getFiberRoots === 'function') {
+        var rendererIds = [];
+        var rendererIdSeen = Object.create(null);
+        var usingRegisteredIds = false;
+        try {
+          if (hook.renderers && typeof hook.renderers.keys === 'function') {
+            if (!consumeWork()) return TYPE_TEXT_ABORT;
+            var rendererIterator = hook.renderers.keys();
+            var rendererStep;
+            while (rendererIterator && typeof rendererIterator.next === 'function') {
+              if (!consumeWork()) return TYPE_TEXT_ABORT;
+              rendererStep = rendererIterator.next();
+              if (rendererStep.done) break;
+              if (!consumeWork()) return TYPE_TEXT_ABORT;
+              var registeredId = rendererStep.value;
+              var registeredKey = typeof registeredId + ':' + String(registeredId);
+              if (typeof registeredId === 'number' && !rendererIdSeen[registeredKey]) {
+                rendererIdSeen[registeredKey] = true;
+                rendererIds.push(registeredId);
+                usingRegisteredIds = true;
+              }
+            }
+          }
+        } catch (_) {}
+        for (var fallbackId = 1; fallbackId <= MAX_RENDERER_IDS; fallbackId++) {
+          if (!consumeWork()) return TYPE_TEXT_ABORT;
+          var fallbackKey = 'number:' + String(fallbackId);
+          if (!rendererIdSeen[fallbackKey]) {
+            rendererIdSeen[fallbackKey] = true;
+            rendererIds.push(fallbackId);
+          }
+        }
+        var emptyStreak = 0;
+        for (var rendererIndex = 0; rendererIndex < rendererIds.length; rendererIndex++) {
+          if (!consumeWork()) return TYPE_TEXT_ABORT;
+          var rendererId = rendererIds[rendererIndex];
+          try {
+            if (!consumeWork()) return TYPE_TEXT_ABORT;
+            var roots = hook.getFiberRoots(rendererId);
+            if (roots && roots.size) {
+              emptyStreak = 0;
+              if (!consumeWork()) return TYPE_TEXT_ABORT;
+              var rootIterator = roots.values();
+              while (rootIterator && typeof rootIterator.next === 'function') {
+                if (!consumeWork()) return TYPE_TEXT_ABORT;
+                var rootStep = rootIterator.next();
+                if (rootStep.done) break;
+                if (!consumeWork()) return TYPE_TEXT_ABORT;
+                var rootFiber = rootStep.value && rootStep.value.current;
+                if (rootFiber) {
+                  if (!consumeWork()) return TYPE_TEXT_ABORT;
+                  var rootResult = callback(rootFiber);
+                  if (rootResult) return rootResult;
+                  if (state.truncated) return TYPE_TEXT_ABORT;
+                }
+              }
+            } else if (!usingRegisteredIds) {
+              emptyStreak++;
+              if (emptyStreak >= EARLY_EXIT_EMPTY_STREAK && rendererId >= 5) break;
+            }
+          } catch (_) {}
+        }
+      }
+      if (state.truncated) return TYPE_TEXT_ABORT;
+      try {
+        if (!consumeWork()) return TYPE_TEXT_ABORT;
+        var extraResolver = globalThis.__RN_AGENT_EXTRA_ROOTS__;
+        if (typeof extraResolver === 'function') {
+          if (!consumeWork()) return TYPE_TEXT_ABORT;
+          var instances = extraResolver();
+          if (Array.isArray(instances)) {
+            for (var instanceIndex = 0; instanceIndex < instances.length; instanceIndex++) {
+              if (!consumeWork()) return TYPE_TEXT_ABORT;
+              var extraFiber = extractFiberFromInstance(instances[instanceIndex]);
+              if (extraFiber) {
+                if (!consumeWork()) return TYPE_TEXT_ABORT;
+                var extraResult = callback(extraFiber);
+                if (extraResult) return extraResult;
+                if (state.truncated) return TYPE_TEXT_ABORT;
+              }
+            }
+          }
+        }
+      } catch (_) {}
+      return null;
     }
 
     var selectorKind = null;
@@ -1554,6 +1618,10 @@ export const INJECTED_HELPERS = `
     var candidateIdentitySeen = new WeakSet();
     var candidates = [];
 
+    function isNativeTextInputHost(fiber) {
+      return fiber && fiber.tag === 5 && typeof fiber.type === 'string' && hostKind(fiber) === 'textinput';
+    }
+
     function addSource(target, source) {
       if (!consumeWork()) return;
       var fiber = source.fiber;
@@ -1572,7 +1640,7 @@ export const INJECTED_HELPERS = `
       if (typeof props.onChangeText === 'function') {
         contract = 'onChangeText:string';
         handler = props.onChangeText;
-      } else if (typeof props.onChange === 'function') {
+      } else if (typeof props.onChange === 'function' && isNativeTextInputHost(fiber)) {
         contract = 'onChange:event';
         handler = props.onChange;
       }
@@ -1592,12 +1660,14 @@ export const INJECTED_HELPERS = `
     function typeTextFindByNativeID(id) {
       var match = null;
       var completed = new WeakSet();
-      forEachRootFiber(function(rootFiber) {
-        if (match || state.truncated) return match;
+      forEachTypeTextRoot(function(rootFiber) {
+        if (match || state.truncated) return match || TYPE_TEXT_ABORT;
         var localSeen = new WeakSet();
+        if (!consumeWork()) return TYPE_TEXT_ABORT;
         var stack = [rootFiber];
         while (stack.length > 0 && !state.truncated) {
           var node = stack.pop();
+          if (!consumeWork()) break;
           if (!consumeWork()) break;
           if (localSeen.has(node)) {
             state.truncated = true;
@@ -1622,7 +1692,7 @@ export const INJECTED_HELPERS = `
             stack.push(node.child);
           }
         }
-        return match;
+        return match || (state.truncated ? TYPE_TEXT_ABORT : null);
       });
       return match;
     }
@@ -1630,10 +1700,12 @@ export const INJECTED_HELPERS = `
     function typeTextRefTextContent(fiber) {
       var parts = [];
       var seen = new WeakSet();
+      if (!consumeWork()) return undefined;
       var stack = [{ fiber: fiber, includeSibling: false }];
       while (stack.length > 0 && !state.truncated) {
         var frame = stack.pop();
         var node = frame.fiber;
+        if (!consumeWork()) break;
         if (!consumeWork()) break;
         if (seen.has(node)) {
           state.truncated = true;
@@ -1641,13 +1713,13 @@ export const INJECTED_HELPERS = `
           break;
         }
         seen.add(node);
-        if (typeof node.memoizedProps === 'string') {
-          if (node.memoizedProps) parts.push(node.memoizedProps);
-          continue;
-        }
         if (frame.includeSibling && node.sibling) {
           if (!consumeWork()) break;
           stack.push({ fiber: node.sibling, includeSibling: true });
+        }
+        if (typeof node.memoizedProps === 'string') {
+          if (node.memoizedProps) parts.push(node.memoizedProps);
+          continue;
         }
         if (node.child) {
           if (!consumeWork()) break;
@@ -1657,8 +1729,26 @@ export const INJECTED_HELPERS = `
       return state.truncated ? undefined : __anNorm(parts.join(' '));
     }
 
+    function typeTextLabelledByIds(fiber) {
+      if (!consumeWork()) return [];
+      var props = (fiber && fiber.memoizedProps) || {};
+      var ariaLabelledBy = props['aria-labelledby'];
+      if (typeof ariaLabelledBy === 'string') return [ariaLabelledBy];
+      var accessibilityLabelledBy = props.accessibilityLabelledBy;
+      if (typeof accessibilityLabelledBy === 'string') return [accessibilityLabelledBy];
+      var ids = [];
+      if (Array.isArray(accessibilityLabelledBy)) {
+        for (var labelledByIndex = 0; labelledByIndex < accessibilityLabelledBy.length; labelledByIndex++) {
+          if (!consumeWork()) break;
+          ids.push(accessibilityLabelledBy[labelledByIndex]);
+        }
+      }
+      return ids;
+    }
+
     function typeTextAriaLabel(fiber) {
-      var ids = __ariaLabelledByIds(fiber);
+      var ids = typeTextLabelledByIds(fiber);
+      if (state.truncated) return undefined;
       if (ids.length > 0) {
         var labelTexts = [];
         for (var idIndex = 0; idIndex < ids.length; idIndex++) {
@@ -1681,12 +1771,28 @@ export const INJECTED_HELPERS = `
       return undefined;
     }
 
+    function typeTextJoinNameParts(parts, inline) {
+      var output = '';
+      for (var partIndex = 0; partIndex < parts.length; partIndex++) {
+        if (!consumeWork()) return undefined;
+        if (partIndex === 0) output = parts[partIndex].text;
+        else {
+          var previous = parts[partIndex - 1];
+          var separator = inline && previous.isInlineText && parts[partIndex].isInlineText ? '' : ' ';
+          output = output + separator + parts[partIndex].text;
+        }
+      }
+      return output;
+    }
+
     function typeTextAccessibleName(fiber) {
       var seen = new WeakSet();
+      if (!consumeWork()) return undefined;
       var stack = [{ fiber: fiber, root: true, entered: false, child: null, parts: [], result: undefined }];
       while (stack.length > 0 && !state.truncated) {
         var frame = stack[stack.length - 1];
         if (!frame.entered) {
+          if (!consumeWork()) break;
           if (!consumeWork()) break;
           if (seen.has(frame.fiber)) {
             state.truncated = true;
@@ -1718,12 +1824,15 @@ export const INJECTED_HELPERS = `
           stack.push({ fiber: child, root: false, entered: false, child: null, parts: [], result: undefined });
         } else {
           if (frame.result === undefined) {
-            var joined = __joinNameParts(frame.parts, hostKind(frame.fiber) === 'text');
+            var joined = typeTextJoinNameParts(frame.parts, hostKind(frame.fiber) === 'text');
+            if (state.truncated) break;
             frame.result = joined || undefined;
           }
+          if (!consumeWork()) break;
           stack.pop();
           if (stack.length === 0) return frame.result;
           if (frame.result) {
+            if (!consumeWork()) break;
             stack[stack.length - 1].parts.push({
               text: frame.result,
               isInlineText: typeof frame.fiber.memoizedProps === 'string'
@@ -1739,25 +1848,29 @@ export const INJECTED_HELPERS = `
       if (style == null) return false;
       var display = null;
       var active = new WeakSet();
+      if (!consumeWork()) return false;
       var stack = [{ value: style, exit: false }];
       while (stack.length > 0 && !state.truncated) {
+        if (!consumeWork()) break;
         var frame = stack.pop();
         var part = frame.value;
         if (frame.exit) {
           active.delete(part);
           continue;
         }
-        if (!consumeWork()) break;
         if (!part || typeof part !== 'object') continue;
+        if (!consumeWork()) break;
         if (active.has(part)) {
           state.truncated = true;
           state.reason = 'cycle';
           break;
         }
         active.add(part);
+        if (!consumeWork()) break;
         stack.push({ value: part, exit: true });
         if (Array.isArray(part)) {
           for (var styleIndex = part.length - 1; styleIndex >= 0; styleIndex--) {
+            if (!consumeWork()) break;
             stack.push({ value: part[styleIndex], exit: false });
           }
         } else if (Object.prototype.hasOwnProperty.call(part, 'display')) {
@@ -1780,6 +1893,7 @@ export const INJECTED_HELPERS = `
       var sibling = parent.child;
       while (sibling && !state.truncated) {
         if (!consumeWork()) break;
+        if (!consumeWork()) break;
         if (seen.has(sibling)) {
           state.truncated = true;
           state.reason = 'cycle';
@@ -1790,6 +1904,7 @@ export const INJECTED_HELPERS = `
           var siblingProps = sibling.memoizedProps || {};
           if (siblingProps['aria-modal'] || siblingProps.accessibilityViewIsModal) return true;
         }
+        if (!consumeWork()) break;
         sibling = sibling.sibling;
       }
       return false;
@@ -1800,6 +1915,7 @@ export const INJECTED_HELPERS = `
       var current = fiber;
       while (current && !state.truncated) {
         if (!consumeWork()) break;
+        if (!consumeWork()) break;
         if (seen.has(current)) {
           state.truncated = true;
           state.reason = 'cycle';
@@ -1807,6 +1923,7 @@ export const INJECTED_HELPERS = `
         }
         seen.add(current);
         if (typeTextSubtreeIsHidden(current)) return true;
+        if (!consumeWork()) break;
         current = current.return;
       }
       return false;
@@ -1893,12 +2010,14 @@ export const INJECTED_HELPERS = `
     }
 
     var completed = new WeakSet();
-    forEachRootFiber(function(rootFiber) {
-      if (state.truncated) return null;
+    forEachTypeTextRoot(function(rootFiber) {
+      if (state.truncated) return TYPE_TEXT_ABORT;
       var localSeen = new WeakSet();
+      if (!consumeWork()) return TYPE_TEXT_ABORT;
       var stack = [rootFiber];
       while (stack.length > 0 && !state.truncated) {
         var node = stack.pop();
+        if (!consumeWork()) break;
         if (!consumeWork()) break;
         if (localSeen.has(node)) {
           state.truncated = true;
@@ -1922,7 +2041,7 @@ export const INJECTED_HELPERS = `
           stack.push(node.child);
         }
       }
-      return null;
+      return state.truncated ? TYPE_TEXT_ABORT : null;
     });
 
     if (state.truncated) return typeTextTruncation(state);
@@ -1944,6 +2063,7 @@ export const INJECTED_HELPERS = `
       var returnSeen = new WeakSet();
       while (cursor) {
         if (!consumeWork()) return null;
+        if (!consumeWork()) return null;
         if (returnSeen.has(cursor)) {
           state.truncated = true;
           state.reason = 'cycle';
@@ -1954,6 +2074,7 @@ export const INJECTED_HELPERS = `
           if (!consumeWork()) return null;
           if (sameTypeTextFiber(cursor, sources[sourceIndex].fiber)) return sources[sourceIndex];
         }
+        if (!consumeWork()) return null;
         cursor = cursor.return;
       }
       return null;
@@ -2014,7 +2135,7 @@ export const INJECTED_HELPERS = `
     };
   }
 
-  function executeTypeTextTransaction(opts, retainBinding) {
+  function executeTypeTextTransaction(opts) {
     var resolution = resolveTypeTextTarget(opts);
     if (resolution.error) return resolution;
     var binding = resolution.binding;
@@ -2029,23 +2150,11 @@ export const INJECTED_HELPERS = `
         hint: 'Inspected every matching fiber and its bounded ownership graph — no typeable handler exists. Use cdp_component_tree to inspect the field, or pass the inner field testID directly.'
       };
     }
-    if (opts.controlledOnly === true && !binding.controlled) {
-      return {
-        success: true,
-        action: 'typeText',
-        testID: selector,
-        handlerCalled: false,
-        controlled: false,
-        valueBefore: null
-      };
-    }
-    var bindingId = retainBinding ? retainInputBinding(binding) : null;
     var text = opts.text !== undefined ? opts.text : '';
     try {
       if (binding.contract === 'onChangeText:string') binding.handler(text);
       else binding.handler({ nativeEvent: { text: text } });
     } catch (e) {
-      if (bindingId) releaseInputBinding(bindingId);
       return {
         success: false,
         action_executed: true,
@@ -2064,71 +2173,10 @@ export const INJECTED_HELPERS = `
       handlerCalled: binding.contract === 'onChangeText:string' ? 'onChangeText' : 'onChange',
       controlled: binding.controlled,
       valueBefore: binding.valueBefore,
-      bindingId: bindingId || undefined,
       resolvedFrom: binding.component + (binding.candidateTestID ? ' [testID="' + binding.candidateTestID + '"]' : ''),
       visitedFibers: resolution.state.visitedFibers,
       selectorBundle: binding.sourceEvidence.selectorBundle || undefined
     };
-  }
-
-  function typeTextWithBinding(opts) {
-    opts = opts || {};
-    opts.controlledOnly = true;
-    return JSON.stringify(executeTypeTextTransaction(opts, true));
-  }
-
-  function currentInputBindingFiber(binding) {
-    var state = createTypeTextState();
-    var alternate = binding.candidateAlternate || binding.candidateFiber.alternate || null;
-    var found = [];
-    var foundSeen = new WeakSet();
-    var completed = new WeakSet();
-    forEachRootFiber(function(rootFiber) {
-      if (state.truncated) return rootFiber;
-      var localSeen = new WeakSet();
-      var stack = [rootFiber];
-      while (stack.length > 0 && !state.truncated) {
-        var node = stack.pop();
-        if (!consumeTypeTextWork(state)) break;
-        if (localSeen.has(node)) {
-          state.truncated = true;
-          state.reason = 'cycle';
-          break;
-        }
-        localSeen.add(node);
-        if (completed.has(node)) continue;
-        completed.add(node);
-        if (node === binding.candidateFiber || node === alternate) {
-          if (!foundSeen.has(node)) {
-            foundSeen.add(node);
-            found.push(node);
-          }
-        }
-        if (node.sibling) {
-          if (!consumeTypeTextWork(state)) break;
-          stack.push(node.sibling);
-        }
-        if (node.child) {
-          if (!consumeTypeTextWork(state)) break;
-          stack.push(node.child);
-        }
-      }
-      return null;
-    });
-    if (state.truncated) return { error: state.reason };
-    if (found.length !== 1) return { error: found.length > 1 ? 'ambiguous' : 'target-lost' };
-    return { fiber: found[0] };
-  }
-
-  function readInputValueByBinding(bindingId) {
-    if (!bindingId || !typeTextBindings[bindingId]) {
-      return JSON.stringify({ __agent_error: 'binding target lost' });
-    }
-    var current = currentInputBindingFiber(typeTextBindings[bindingId]);
-    if (current.error) return JSON.stringify({ __agent_error: 'binding ' + current.error });
-    var props = current.fiber.memoizedProps || {};
-    if (typeof props.value === 'string') return JSON.stringify({ value: props.value, controlled: true });
-    return JSON.stringify({ value: null, controlled: false });
   }
 
   // UI Interaction
@@ -2152,7 +2200,7 @@ export const INJECTED_HELPERS = `
     }
 
     if (action === 'typeText') {
-      return JSON.stringify(executeTypeTextTransaction(opts, false));
+      return JSON.stringify(executeTypeTextTransaction(opts));
     }
 
     // Task 7 — ladder routing. typeText reuses the established placeholder
@@ -2505,15 +2553,15 @@ export const INJECTED_HELPERS = `
           ancestorSeen.add(ancestor);
           ancestorVisits++;
           var aProps = ancestor.memoizedProps || {};
+          if (!nearestExplicitControl && aProps.control && typeof aProps.control === 'object') {
+            nearestExplicitControl = aProps.control;
+          }
           if (aProps && looksLikeUseFormReturn(aProps.value)) {
             if (!nearestExplicitControl || aProps.value.control === nearestExplicitControl) {
               formReturn = aProps.value;
               formResolution = 'form-provider';
               break;
             }
-          }
-          if (!nearestExplicitControl && aProps.control && typeof aProps.control === 'object') {
-            nearestExplicitControl = aProps.control;
           }
 
           var hook = ancestor.memoizedState;
@@ -3711,9 +3759,6 @@ export const INJECTED_HELPERS = `
     getStoreState: getStoreState,
     getComponentState: getComponentState,
     readInputValue: readInputValue,
-    readInputValueByBinding: readInputValueByBinding,
-    releaseInputBinding: releaseInputBinding,
-    typeTextWithBinding: typeTextWithBinding,
     dispatchAction: dispatchAction,
     getErrors: getErrors,
     clearErrors: clearErrors,

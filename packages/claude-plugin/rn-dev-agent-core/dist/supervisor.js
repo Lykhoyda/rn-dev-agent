@@ -37705,37 +37705,12 @@ var init_device_session = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/tools/fill-verify.js
-function classifyFiberVerification(input) {
-  if (input.valueAfter === null)
-    return "unreadable";
-  return input.valueAfter === input.text ? "exact" : "mismatch";
-}
-function combineVerificationOracles(fiber, native, nativeStable) {
-  const targetCompromised = native === "ambiguous" || native === "target-lost";
-  const fiberReadable = fiber === "exact" || fiber === "mismatch";
-  let verified = false;
-  let oracle = "none";
-  if (!targetCompromised) {
-    if (fiber === "exact" && native === "exact" && nativeStable) {
-      verified = true;
-      oracle = "fiber+native";
-    } else if (fiber === "exact" && native !== "mismatch") {
-      verified = true;
-      oracle = "fiber";
-    } else if (!fiberReadable && native === "exact" && nativeStable) {
-      verified = true;
-      oracle = "native";
-    }
-  }
-  const anyExact = fiber === "exact" || native === "exact";
-  const observedMismatch = !verified && !targetCompromised && !anyExact && (fiber === "mismatch" || native === "mismatch" && nativeStable);
+function classifyNativeVerification(native, nativeStable) {
   return {
-    verified,
-    oracle,
-    fiber,
+    verified: native === "exact" && nativeStable,
     native,
     nativeStable,
-    observedMismatch
+    observedMismatch: native === "mismatch" && nativeStable
   };
 }
 function decideNativeRetype(verification, attemptsSoFar, maxAttempts) {
@@ -37744,136 +37719,11 @@ function decideNativeRetype(verification, attemptsSoFar, maxAttempts) {
   }
   return { action: "retype", delayMs: RETYPE_DELAY_MS };
 }
-async function readInputValueOnce(deps, target, exactBinding = false) {
-  try {
-    const method = exactBinding ? "readInputValueByBinding" : "readInputValue";
-    const r = await deps.evaluate(`__RN_AGENT.${method}(${JSON.stringify(target)})`);
-    if (!r.error && typeof r.value === "string") {
-      const read = JSON.parse(r.value);
-      if (!read.__agent_error)
-        return { value: read.value ?? null, controlled: read.controlled ?? false };
-    }
-  } catch {
-  }
-  return null;
-}
-async function probeInputState(deps, testID) {
-  const read = await readInputValueOnce(deps, testID);
-  if (!read)
-    return { readable: false, controlled: false, value: null };
-  return { readable: true, controlled: read.controlled, value: read.value };
-}
-async function settleRead(deps, testID, text, valueBefore, bindingId) {
-  const sleep7 = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
-  let value = valueBefore;
-  let controlled = false;
-  let everRead = false;
-  for (let i = 0; i < READ_SETTLE_TRIES; i++) {
-    const rb = await readInputValueOnce(deps, bindingId ?? testID, bindingId !== void 0);
-    if (rb) {
-      value = rb.value;
-      controlled = rb.controlled;
-      everRead = true;
-    }
-    if (value === text)
-      break;
-    if (value !== valueBefore)
-      break;
-    if (i < READ_SETTLE_TRIES - 1)
-      await sleep7(READ_SETTLE_DELAY_MS);
-  }
-  if (!everRead)
-    return { value: null, controlled: false };
-  return { value, controlled };
-}
-async function finalFiberVerify(deps, testID, text, bindingId) {
-  const sleep7 = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
-  let previous = null;
-  let last = null;
-  for (let i = 0; i < FINAL_VERIFY_TRIES; i++) {
-    const read = await readInputValueOnce(deps, bindingId ?? testID, bindingId !== void 0);
-    if (read) {
-      if (read.value === text && read.controlled) {
-        await sleep7(FIBER_CONFIRM_DELAY_MS);
-        const confirm = await readInputValueOnce(deps, bindingId ?? testID, bindingId !== void 0);
-        if (confirm && confirm.value === text && confirm.controlled)
-          return "exact";
-        return "unreadable";
-      }
-      previous = last;
-      last = read;
-    } else {
-      previous = null;
-      last = null;
-    }
-    if (i < FINAL_VERIFY_TRIES - 1)
-      await sleep7(FINAL_VERIFY_DELAY_MS);
-  }
-  if (last !== null && previous !== null && last.value !== null && last.controlled && previous.controlled && last.value === previous.value) {
-    return "mismatch";
-  }
-  return "unreadable";
-}
-async function attemptJsFill(deps, testID, text) {
-  let probe;
-  try {
-    const expr = "__RN_AGENT.typeTextWithBinding(" + JSON.stringify({ action: "typeText", testID, text }) + ")";
-    const r = await deps.evaluate(expr);
-    if (r.error || typeof r.value !== "string") {
-      return { handled: false, dispatchUncertain: true };
-    }
-    probe = JSON.parse(r.value);
-  } catch {
-    return { handled: false, dispatchUncertain: true };
-  }
-  if (probe.error)
-    return { handled: false };
-  if (probe.controlled === void 0)
-    return { handled: false, dispatchUncertain: true };
-  if (probe.handlerCalled === false || probe.handlerCalled === void 0)
-    return { handled: false };
-  if (typeof probe.bindingId !== "string")
-    return { handled: false, dispatchUncertain: true };
-  const valueBefore = typeof probe.valueBefore === "string" ? probe.valueBefore : null;
-  const bindingId = probe.bindingId;
-  const settled = await settleRead(deps, testID, text, valueBefore, bindingId);
-  let outcome = settled.controlled ? classifyFiberVerification({ text, valueAfter: settled.value }) : "unreadable";
-  if (outcome === "mismatch") {
-    const sleep7 = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
-    await sleep7(FIBER_CONFIRM_DELAY_MS);
-    const confirm = await readInputValueOnce(deps, bindingId, true);
-    if (confirm && confirm.value === text && confirm.controlled) {
-      outcome = "exact";
-    } else if (!confirm || !confirm.controlled || confirm.value === null || confirm.value !== settled.value) {
-      outcome = "unreadable";
-    }
-  }
-  return {
-    handled: true,
-    outcome,
-    controlled: settled.controlled,
-    handler: typeof probe.handlerCalled === "string" ? probe.handlerCalled : void 0,
-    bindingId
-  };
-}
-async function releaseJsFillBinding(deps, bindingId) {
-  if (!bindingId)
-    return;
-  try {
-    await deps.evaluate(`__RN_AGENT.releaseInputBinding(${JSON.stringify(bindingId)})`);
-  } catch {
-  }
-}
-var RETYPE_DELAY_MS, READ_SETTLE_TRIES, READ_SETTLE_DELAY_MS, FIBER_CONFIRM_DELAY_MS, FINAL_VERIFY_TRIES, FINAL_VERIFY_DELAY_MS;
+var RETYPE_DELAY_MS;
 var init_fill_verify = __esm({
   "packages/rn-dev-agent-core/dist/tools/fill-verify.js"() {
     "use strict";
     RETYPE_DELAY_MS = 40;
-    READ_SETTLE_TRIES = 5;
-    READ_SETTLE_DELAY_MS = 80;
-    FIBER_CONFIRM_DELAY_MS = 150;
-    FINAL_VERIFY_TRIES = 6;
-    FINAL_VERIFY_DELAY_MS = 100;
   }
 });
 
@@ -38472,17 +38322,12 @@ async function rebindExactFillTarget(binding) {
   const rebound = bindExactFillTarget(snap.nodes, binding.inputTestId ?? binding.inputRef, binding.inputSignature);
   return rebound.ok ? rebound.binding : null;
 }
-async function finalVerification(client2, binding, jsTestId, text, operationToken, fiberBindingId) {
-  const fiberId = binding.inputTestId ?? jsTestId;
-  let fiber = "unavailable";
-  if (client2 && fiberId) {
-    fiber = await finalFiberVerify({ evaluate: (e) => client2.evaluate(e) }, fiberId, text, fiberBindingId);
-  }
+async function finalVerification(binding, text, operationToken) {
   const nativeBinding = operationToken ? binding : await rebindExactFillTarget(binding);
   if (!nativeBinding)
-    return combineVerificationOracles(fiber, "target-lost", false);
+    return classifyNativeVerification("target-lost", false);
   const native = await runNativeVerifyInput(nativeBinding, text, operationToken);
-  return combineVerificationOracles(fiber, native.verdict, native.stable);
+  return classifyNativeVerification(native.verdict, native.stable);
 }
 function verifiedFillResult(method, textLength, meta) {
   return okResult({ filled: true, method, length: textLength }, { meta: { ...meta, verify: "exact" } });
@@ -38493,12 +38338,11 @@ function fillFailure(code, message, opts) {
     pathsTried: opts.pathsTried,
     ...opts.verification ? {
       verification: {
-        fiber: opts.verification.fiber,
         native: opts.verification.native,
         nativeStable: opts.verification.nativeStable
       }
     } : {},
-    hint: opts.hint ?? (opts.mutation === "none" ? "No text was entered. Refresh the snapshot (device_snapshot action=snapshot) and rebind the input before retrying." : "The field may have been mutated. Read the field state (device_snapshot or the fiber) before any manual retry \u2014 do not blindly re-run device_fill.")
+    hint: opts.hint ?? (opts.mutation === "none" ? "No text was entered. Refresh the snapshot (device_snapshot action=snapshot) and rebind the input before retrying." : "The field may have been mutated. Read the field state with device_snapshot before any manual retry \u2014 do not blindly re-run device_fill.")
   });
 }
 function attachFillFailureDisposition(result, mutation, pathsTried) {
@@ -38509,7 +38353,7 @@ function attachFillFailureDisposition(result, mutation, pathsTried) {
       ...envelope.meta,
       mutation,
       pathsTried,
-      hint: mutation === "none" ? "No text was entered. Refresh the snapshot (device_snapshot action=snapshot) and rebind the input before retrying." : "The field may have been mutated. Read the field state (device_snapshot or the fiber) before any manual retry \u2014 do not blindly re-run device_fill."
+      hint: mutation === "none" ? "No text was entered. Refresh the snapshot (device_snapshot action=snapshot) and rebind the input before retrying." : "The field may have been mutated. Read the field state with device_snapshot before any manual retry \u2014 do not blindly re-run device_fill."
     };
     return typeof envelope.code === "string" ? failResult(error2, envelope.code, meta) : failResult(error2, meta);
   } catch {
@@ -38518,31 +38362,6 @@ function attachFillFailureDisposition(result, mutation, pathsTried) {
       pathsTried
     });
   }
-}
-async function clearControlledValue(client2, testID) {
-  const deps = { evaluate: (expression) => client2.evaluate(expression) };
-  const cleared = await attemptJsFill(deps, testID, "");
-  try {
-    return cleared.handled && cleared.outcome === "exact";
-  } finally {
-    await releaseJsFillBinding(deps, cleared.bindingId);
-  }
-}
-function exactTypeReadback(client2, testID) {
-  if (!client2 || !testID)
-    return void 0;
-  return async (expected) => {
-    const result = await client2.evaluate(`__RN_AGENT.readInputValue(${JSON.stringify(testID)})`);
-    if (typeof result.value !== "string")
-      return { matches: false };
-    try {
-      const parsed = JSON.parse(result.value);
-      const actual = typeof parsed.value === "string" ? parsed.value : null;
-      return { matches: actual === expected, actual };
-    } catch {
-      return { matches: false };
-    }
-  };
 }
 async function maestroFillAttempt(targetId, text, platform, authorityArgs) {
   const escapedRef = yamlEscape(targetId.replace(/^@/, ""));
@@ -38560,13 +38379,13 @@ async function maestroFillAttempt(targetId, text, platform, authorityArgs) {
   if (result.passed)
     return { attempted: true };
   const refusal = maestroRefusalResult(result, "Maestro fill fallback was refused.", {
-    tried: ["js", "native", "maestro"]
+    tried: ["native", "maestro"]
   });
   if (refusal)
     return { attempted: false, refusal };
   return { attempted: false };
 }
-async function performExactFill(args, client2, tiers, deps = {}) {
+async function performExactFill(args, _client, tiers, deps = {}) {
   const platform = isAndroidSession() ? "android" : "ios";
   const pathsTried = [];
   let mutationSeen = "none";
@@ -38589,47 +38408,6 @@ async function performExactFill(args, client2, tiers, deps = {}) {
   if (args.testID && args.testID !== binding.inputTestId) {
     return fillFailure("NO_TEXT_INPUT_TARGET", `device_fill could not prove that testID "${args.testID}" identifies the bound input. No text was entered.`, { mutation: "none", pathsTried });
   }
-  const fiberId = binding.inputTestId;
-  const evalSeam = client2 ? { evaluate: (e) => client2.evaluate(e) } : null;
-  if (tiers.js && client2 && evalSeam && fiberId) {
-    const probe = await probeInputState(evalSeam, fiberId);
-    if (probe.readable && probe.controlled) {
-      pathsTried.push("js");
-      const tJs = Date.now();
-      const js = await attemptJsFill(evalSeam, fiberId, args.text);
-      try {
-        if (!js.handled && js.dispatchUncertain) {
-          return fillFailure("TEXT_ENTRY_UNVERIFIED", "The JS fill dispatch failed after it may have reached the app; not typing again.", { mutation: "possible", pathsTried });
-        }
-        if (js.handled) {
-          mutationSeen = "observed";
-          if (js.outcome === "exact") {
-            const verification = await finalVerification(client2, binding, fiberId, args.text, void 0, js.bindingId);
-            if (verification.verified) {
-              return verifiedFillResult("js-onChangeText", args.text.length, {
-                textEntryPath: "js",
-                verifiedOracle: verification.oracle,
-                handler: js.handler,
-                timings_ms: { jsType: Date.now() - tJs }
-              });
-            }
-            if (!verification.observedMismatch) {
-              return fillFailure("TEXT_ENTRY_UNVERIFIED", "The controlled fill could not be verified against the bound native input; not retrying.", { mutation: "possible", pathsTried, verification });
-            }
-          }
-          if (js.outcome === "unreadable") {
-            return fillFailure("TEXT_ENTRY_UNVERIFIED", "The onChangeText handler fired but the resulting value is unreadable \u2014 app state may have changed; not retrying.", { mutation: "possible", pathsTried });
-          }
-          const cleared = await clearControlledValue(client2, fiberId);
-          if (!cleared) {
-            return fillFailure("TEXT_ENTRY_UNVERIFIED", "device_fill could not verify the JS fill and could not prove a clean clear; not retrying.", { mutation: "possible", pathsTried });
-          }
-        }
-      } finally {
-        await releaseJsFillBinding(evalSeam, js.bindingId);
-      }
-    }
-  }
   pathsTried.push("native");
   if (tiers.abortSignal?.aborted) {
     return fillFailure("TEXT_ENTRY_UNVERIFIED", "device_fill was cancelled before native typing.", {
@@ -38650,8 +38428,7 @@ async function performExactFill(args, client2, tiers, deps = {}) {
     const clearFirst = attempt > 0 || args.text.length === 0;
     const primary = await runNative(["fill", binding.inputRef, args.text, ...clearFirst ? ["--clear-first"] : []], {
       ...attempt === 0 ? settleOpts(args) : { settle: { enabled: false } },
-      exactTarget: { ...exactTarget, operationToken },
-      verifyTypeReadback: exactTypeReadback(client2, fiberId)
+      exactTarget: { ...exactTarget, operationToken }
     });
     if (primary.isError) {
       const mutation = extractMutationDisposition(primary);
@@ -38661,12 +38438,12 @@ async function performExactFill(args, client2, tiers, deps = {}) {
         }
         if (mutation === "observed") {
           mutationSeen = "observed";
-          const verification3 = await finalVerification(client2, binding, fiberId, args.text, operationToken);
+          const verification3 = await finalVerification(binding, args.text, operationToken);
           lastVerification = verification3;
           if (verification3.verified) {
             return verifiedFillResult("native", args.text.length, {
               textEntryPath: attempt === 0 ? "native" : "native-retype",
-              verifiedOracle: verification3.oracle,
+              verifiedOracle: "native",
               recovered: "post-error-exact-readback",
               retypes: attempt,
               timings_ms: { nativeType: Date.now() - tNative }
@@ -38685,11 +38462,11 @@ async function performExactFill(args, client2, tiers, deps = {}) {
         const code = extractErrorCode(primary);
         return fillFailure(code === "FOCUS_TARGET_OCCLUDED" ? "FOCUS_TARGET_OCCLUDED" : "NO_TEXT_INPUT_TARGET", `device_fill's native attempt was refused before mutation: ${extractErrorText(primary)}`, { mutation: "none", pathsTried });
       }
-      const verification2 = await finalVerification(client2, binding, fiberId, args.text, operationToken);
+      const verification2 = await finalVerification(binding, args.text, operationToken);
       if (verification2.verified) {
         return verifiedFillResult("native", args.text.length, {
           textEntryPath: attempt === 0 ? "native" : "native-retype",
-          verifiedOracle: verification2.oracle,
+          verifiedOracle: "native",
           recovered: "post-error-exact-readback",
           retypes: attempt,
           timings_ms: { nativeType: Date.now() - tNative }
@@ -38704,12 +38481,12 @@ async function performExactFill(args, client2, tiers, deps = {}) {
     mutationSeen = "observed";
     const primarySettle = extractSettleMeta(primary);
     const primaryTyping = extractTypingMeta(primary);
-    const verification = await finalVerification(client2, binding, fiberId, args.text, operationToken);
+    const verification = await finalVerification(binding, args.text, operationToken);
     lastVerification = verification;
     if (verification.verified) {
       return verifiedFillResult("native", args.text.length, {
         textEntryPath: attempt === 0 ? "native" : "native-retype",
-        verifiedOracle: verification.oracle,
+        verifiedOracle: "native",
         retypes: attempt,
         ...primaryTyping ? { typing: primaryTyping } : {},
         ...primarySettle.settle !== void 0 ? { settle: primarySettle.settle } : {},
@@ -38755,18 +38532,18 @@ async function performExactFill(args, client2, tiers, deps = {}) {
       return attachFillFailureDisposition(maestro.refusal, "possible", pathsTried);
     return fillFailure("TEXT_ENTRY_UNVERIFIED", "device_fill fell through all tiers; the Maestro attempt did not run cleanly.", { mutation: "possible", pathsTried, verification: lastVerification ?? void 0 });
   }
-  const maestroVerification = await finalVerification(client2, binding, fiberId, args.text);
+  const maestroVerification = await finalVerification(binding, args.text);
   if (maestroVerification.verified) {
     return verifiedFillResult("maestro", args.text.length, {
       textEntryPath: "maestro",
-      verifiedOracle: maestroVerification.oracle,
+      verifiedOracle: "native",
       timings_ms: { nativeType: Date.now() - tNative }
     });
   }
   return fillFailure("TEXT_ENTRY_UNVERIFIED", "Text entry could not be verified after native and Maestro attempts.", { mutation: "possible", pathsTried, verification: maestroVerification });
 }
-function createDeviceFillHandler(getClient2) {
-  return withSession(async (args) => performExactFill(args, cdpClientOrNull(getClient2), { js: true, maestro: true }));
+function createDeviceFillHandler(_getClient) {
+  return withSession(async (args) => performExactFill(args, null, { maestro: true }));
 }
 function computeSwipeFromDirection(direction, screen) {
   const cx = Math.round(screen.width / 2);
@@ -69983,12 +69760,6 @@ var init_injected_helpers = __esm({
   function clearErrors() { errors.length = 0; return 'cleared'; }
 
   var TYPE_TEXT_WORK_LIMIT = 2000;
-  var typeTextBindings = Object.create(null);
-  var typeTextBindingOrder = [];
-  var typeTextBindingCounter = 0;
-  globalThis.__RN_AGENT_TYPE_TEXT_GENERATION__ =
-    (globalThis.__RN_AGENT_TYPE_TEXT_GENERATION__ || 0) + 1;
-  var typeTextBindingGeneration = globalThis.__RN_AGENT_TYPE_TEXT_GENERATION__;
 
   function createTypeTextState() {
     return {
@@ -70000,12 +69771,12 @@ var init_injected_helpers = __esm({
   }
 
   function consumeTypeTextWork(state) {
-    state.work++;
-    if (state.work > TYPE_TEXT_WORK_LIMIT) {
+    if (state.work >= TYPE_TEXT_WORK_LIMIT) {
       state.truncated = true;
       state.reason = 'work-limit';
       return false;
     }
+    state.work++;
     return true;
   }
 
@@ -70032,33 +69803,103 @@ var init_injected_helpers = __esm({
     };
   }
 
-  function releaseInputBinding(bindingId) {
-    if (typeof bindingId !== 'string' || !typeTextBindings[bindingId]) return false;
-    delete typeTextBindings[bindingId];
-    for (var index = 0; index < typeTextBindingOrder.length; index++) {
-      if (typeTextBindingOrder[index] === bindingId) {
-        typeTextBindingOrder.splice(index, 1);
-        break;
-      }
-    }
-    return true;
-  }
-
-  function retainInputBinding(binding) {
-    typeTextBindingCounter++;
-    var bindingId = 'ttb:' + typeTextBindingGeneration + ':' + typeTextBindingCounter;
-    binding.bindingId = bindingId;
-    typeTextBindings[bindingId] = binding;
-    typeTextBindingOrder.push(bindingId);
-    while (typeTextBindingOrder.length > 32) releaseInputBinding(typeTextBindingOrder[0]);
-    return bindingId;
-  }
-
   function resolveTypeTextTarget(opts) {
     var state = createTypeTextState();
 
     function consumeWork() {
       return consumeTypeTextWork(state);
+    }
+
+    var TYPE_TEXT_ABORT = {};
+
+    function forEachTypeTextRoot(callback) {
+      if (!consumeWork()) return TYPE_TEXT_ABORT;
+      var hook = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
+      if (hook && typeof hook.getFiberRoots === 'function') {
+        var rendererIds = [];
+        var rendererIdSeen = Object.create(null);
+        var usingRegisteredIds = false;
+        try {
+          if (hook.renderers && typeof hook.renderers.keys === 'function') {
+            if (!consumeWork()) return TYPE_TEXT_ABORT;
+            var rendererIterator = hook.renderers.keys();
+            var rendererStep;
+            while (rendererIterator && typeof rendererIterator.next === 'function') {
+              if (!consumeWork()) return TYPE_TEXT_ABORT;
+              rendererStep = rendererIterator.next();
+              if (rendererStep.done) break;
+              if (!consumeWork()) return TYPE_TEXT_ABORT;
+              var registeredId = rendererStep.value;
+              var registeredKey = typeof registeredId + ':' + String(registeredId);
+              if (typeof registeredId === 'number' && !rendererIdSeen[registeredKey]) {
+                rendererIdSeen[registeredKey] = true;
+                rendererIds.push(registeredId);
+                usingRegisteredIds = true;
+              }
+            }
+          }
+        } catch (_) {}
+        for (var fallbackId = 1; fallbackId <= MAX_RENDERER_IDS; fallbackId++) {
+          if (!consumeWork()) return TYPE_TEXT_ABORT;
+          var fallbackKey = 'number:' + String(fallbackId);
+          if (!rendererIdSeen[fallbackKey]) {
+            rendererIdSeen[fallbackKey] = true;
+            rendererIds.push(fallbackId);
+          }
+        }
+        var emptyStreak = 0;
+        for (var rendererIndex = 0; rendererIndex < rendererIds.length; rendererIndex++) {
+          if (!consumeWork()) return TYPE_TEXT_ABORT;
+          var rendererId = rendererIds[rendererIndex];
+          try {
+            if (!consumeWork()) return TYPE_TEXT_ABORT;
+            var roots = hook.getFiberRoots(rendererId);
+            if (roots && roots.size) {
+              emptyStreak = 0;
+              if (!consumeWork()) return TYPE_TEXT_ABORT;
+              var rootIterator = roots.values();
+              while (rootIterator && typeof rootIterator.next === 'function') {
+                if (!consumeWork()) return TYPE_TEXT_ABORT;
+                var rootStep = rootIterator.next();
+                if (rootStep.done) break;
+                if (!consumeWork()) return TYPE_TEXT_ABORT;
+                var rootFiber = rootStep.value && rootStep.value.current;
+                if (rootFiber) {
+                  if (!consumeWork()) return TYPE_TEXT_ABORT;
+                  var rootResult = callback(rootFiber);
+                  if (rootResult) return rootResult;
+                  if (state.truncated) return TYPE_TEXT_ABORT;
+                }
+              }
+            } else if (!usingRegisteredIds) {
+              emptyStreak++;
+              if (emptyStreak >= EARLY_EXIT_EMPTY_STREAK && rendererId >= 5) break;
+            }
+          } catch (_) {}
+        }
+      }
+      if (state.truncated) return TYPE_TEXT_ABORT;
+      try {
+        if (!consumeWork()) return TYPE_TEXT_ABORT;
+        var extraResolver = globalThis.__RN_AGENT_EXTRA_ROOTS__;
+        if (typeof extraResolver === 'function') {
+          if (!consumeWork()) return TYPE_TEXT_ABORT;
+          var instances = extraResolver();
+          if (Array.isArray(instances)) {
+            for (var instanceIndex = 0; instanceIndex < instances.length; instanceIndex++) {
+              if (!consumeWork()) return TYPE_TEXT_ABORT;
+              var extraFiber = extractFiberFromInstance(instances[instanceIndex]);
+              if (extraFiber) {
+                if (!consumeWork()) return TYPE_TEXT_ABORT;
+                var extraResult = callback(extraFiber);
+                if (extraResult) return extraResult;
+                if (state.truncated) return TYPE_TEXT_ABORT;
+              }
+            }
+          }
+        }
+      } catch (_) {}
+      return null;
     }
 
     var selectorKind = null;
@@ -70087,6 +69928,10 @@ var init_injected_helpers = __esm({
     var candidateIdentitySeen = new WeakSet();
     var candidates = [];
 
+    function isNativeTextInputHost(fiber) {
+      return fiber && fiber.tag === 5 && typeof fiber.type === 'string' && hostKind(fiber) === 'textinput';
+    }
+
     function addSource(target, source) {
       if (!consumeWork()) return;
       var fiber = source.fiber;
@@ -70105,7 +69950,7 @@ var init_injected_helpers = __esm({
       if (typeof props.onChangeText === 'function') {
         contract = 'onChangeText:string';
         handler = props.onChangeText;
-      } else if (typeof props.onChange === 'function') {
+      } else if (typeof props.onChange === 'function' && isNativeTextInputHost(fiber)) {
         contract = 'onChange:event';
         handler = props.onChange;
       }
@@ -70125,12 +69970,14 @@ var init_injected_helpers = __esm({
     function typeTextFindByNativeID(id) {
       var match = null;
       var completed = new WeakSet();
-      forEachRootFiber(function(rootFiber) {
-        if (match || state.truncated) return match;
+      forEachTypeTextRoot(function(rootFiber) {
+        if (match || state.truncated) return match || TYPE_TEXT_ABORT;
         var localSeen = new WeakSet();
+        if (!consumeWork()) return TYPE_TEXT_ABORT;
         var stack = [rootFiber];
         while (stack.length > 0 && !state.truncated) {
           var node = stack.pop();
+          if (!consumeWork()) break;
           if (!consumeWork()) break;
           if (localSeen.has(node)) {
             state.truncated = true;
@@ -70155,7 +70002,7 @@ var init_injected_helpers = __esm({
             stack.push(node.child);
           }
         }
-        return match;
+        return match || (state.truncated ? TYPE_TEXT_ABORT : null);
       });
       return match;
     }
@@ -70163,10 +70010,12 @@ var init_injected_helpers = __esm({
     function typeTextRefTextContent(fiber) {
       var parts = [];
       var seen = new WeakSet();
+      if (!consumeWork()) return undefined;
       var stack = [{ fiber: fiber, includeSibling: false }];
       while (stack.length > 0 && !state.truncated) {
         var frame = stack.pop();
         var node = frame.fiber;
+        if (!consumeWork()) break;
         if (!consumeWork()) break;
         if (seen.has(node)) {
           state.truncated = true;
@@ -70174,13 +70023,13 @@ var init_injected_helpers = __esm({
           break;
         }
         seen.add(node);
-        if (typeof node.memoizedProps === 'string') {
-          if (node.memoizedProps) parts.push(node.memoizedProps);
-          continue;
-        }
         if (frame.includeSibling && node.sibling) {
           if (!consumeWork()) break;
           stack.push({ fiber: node.sibling, includeSibling: true });
+        }
+        if (typeof node.memoizedProps === 'string') {
+          if (node.memoizedProps) parts.push(node.memoizedProps);
+          continue;
         }
         if (node.child) {
           if (!consumeWork()) break;
@@ -70190,8 +70039,26 @@ var init_injected_helpers = __esm({
       return state.truncated ? undefined : __anNorm(parts.join(' '));
     }
 
+    function typeTextLabelledByIds(fiber) {
+      if (!consumeWork()) return [];
+      var props = (fiber && fiber.memoizedProps) || {};
+      var ariaLabelledBy = props['aria-labelledby'];
+      if (typeof ariaLabelledBy === 'string') return [ariaLabelledBy];
+      var accessibilityLabelledBy = props.accessibilityLabelledBy;
+      if (typeof accessibilityLabelledBy === 'string') return [accessibilityLabelledBy];
+      var ids = [];
+      if (Array.isArray(accessibilityLabelledBy)) {
+        for (var labelledByIndex = 0; labelledByIndex < accessibilityLabelledBy.length; labelledByIndex++) {
+          if (!consumeWork()) break;
+          ids.push(accessibilityLabelledBy[labelledByIndex]);
+        }
+      }
+      return ids;
+    }
+
     function typeTextAriaLabel(fiber) {
-      var ids = __ariaLabelledByIds(fiber);
+      var ids = typeTextLabelledByIds(fiber);
+      if (state.truncated) return undefined;
       if (ids.length > 0) {
         var labelTexts = [];
         for (var idIndex = 0; idIndex < ids.length; idIndex++) {
@@ -70214,12 +70081,28 @@ var init_injected_helpers = __esm({
       return undefined;
     }
 
+    function typeTextJoinNameParts(parts, inline) {
+      var output = '';
+      for (var partIndex = 0; partIndex < parts.length; partIndex++) {
+        if (!consumeWork()) return undefined;
+        if (partIndex === 0) output = parts[partIndex].text;
+        else {
+          var previous = parts[partIndex - 1];
+          var separator = inline && previous.isInlineText && parts[partIndex].isInlineText ? '' : ' ';
+          output = output + separator + parts[partIndex].text;
+        }
+      }
+      return output;
+    }
+
     function typeTextAccessibleName(fiber) {
       var seen = new WeakSet();
+      if (!consumeWork()) return undefined;
       var stack = [{ fiber: fiber, root: true, entered: false, child: null, parts: [], result: undefined }];
       while (stack.length > 0 && !state.truncated) {
         var frame = stack[stack.length - 1];
         if (!frame.entered) {
+          if (!consumeWork()) break;
           if (!consumeWork()) break;
           if (seen.has(frame.fiber)) {
             state.truncated = true;
@@ -70251,12 +70134,15 @@ var init_injected_helpers = __esm({
           stack.push({ fiber: child, root: false, entered: false, child: null, parts: [], result: undefined });
         } else {
           if (frame.result === undefined) {
-            var joined = __joinNameParts(frame.parts, hostKind(frame.fiber) === 'text');
+            var joined = typeTextJoinNameParts(frame.parts, hostKind(frame.fiber) === 'text');
+            if (state.truncated) break;
             frame.result = joined || undefined;
           }
+          if (!consumeWork()) break;
           stack.pop();
           if (stack.length === 0) return frame.result;
           if (frame.result) {
+            if (!consumeWork()) break;
             stack[stack.length - 1].parts.push({
               text: frame.result,
               isInlineText: typeof frame.fiber.memoizedProps === 'string'
@@ -70272,25 +70158,29 @@ var init_injected_helpers = __esm({
       if (style == null) return false;
       var display = null;
       var active = new WeakSet();
+      if (!consumeWork()) return false;
       var stack = [{ value: style, exit: false }];
       while (stack.length > 0 && !state.truncated) {
+        if (!consumeWork()) break;
         var frame = stack.pop();
         var part = frame.value;
         if (frame.exit) {
           active.delete(part);
           continue;
         }
-        if (!consumeWork()) break;
         if (!part || typeof part !== 'object') continue;
+        if (!consumeWork()) break;
         if (active.has(part)) {
           state.truncated = true;
           state.reason = 'cycle';
           break;
         }
         active.add(part);
+        if (!consumeWork()) break;
         stack.push({ value: part, exit: true });
         if (Array.isArray(part)) {
           for (var styleIndex = part.length - 1; styleIndex >= 0; styleIndex--) {
+            if (!consumeWork()) break;
             stack.push({ value: part[styleIndex], exit: false });
           }
         } else if (Object.prototype.hasOwnProperty.call(part, 'display')) {
@@ -70313,6 +70203,7 @@ var init_injected_helpers = __esm({
       var sibling = parent.child;
       while (sibling && !state.truncated) {
         if (!consumeWork()) break;
+        if (!consumeWork()) break;
         if (seen.has(sibling)) {
           state.truncated = true;
           state.reason = 'cycle';
@@ -70323,6 +70214,7 @@ var init_injected_helpers = __esm({
           var siblingProps = sibling.memoizedProps || {};
           if (siblingProps['aria-modal'] || siblingProps.accessibilityViewIsModal) return true;
         }
+        if (!consumeWork()) break;
         sibling = sibling.sibling;
       }
       return false;
@@ -70333,6 +70225,7 @@ var init_injected_helpers = __esm({
       var current = fiber;
       while (current && !state.truncated) {
         if (!consumeWork()) break;
+        if (!consumeWork()) break;
         if (seen.has(current)) {
           state.truncated = true;
           state.reason = 'cycle';
@@ -70340,6 +70233,7 @@ var init_injected_helpers = __esm({
         }
         seen.add(current);
         if (typeTextSubtreeIsHidden(current)) return true;
+        if (!consumeWork()) break;
         current = current.return;
       }
       return false;
@@ -70426,12 +70320,14 @@ var init_injected_helpers = __esm({
     }
 
     var completed = new WeakSet();
-    forEachRootFiber(function(rootFiber) {
-      if (state.truncated) return null;
+    forEachTypeTextRoot(function(rootFiber) {
+      if (state.truncated) return TYPE_TEXT_ABORT;
       var localSeen = new WeakSet();
+      if (!consumeWork()) return TYPE_TEXT_ABORT;
       var stack = [rootFiber];
       while (stack.length > 0 && !state.truncated) {
         var node = stack.pop();
+        if (!consumeWork()) break;
         if (!consumeWork()) break;
         if (localSeen.has(node)) {
           state.truncated = true;
@@ -70455,7 +70351,7 @@ var init_injected_helpers = __esm({
           stack.push(node.child);
         }
       }
-      return null;
+      return state.truncated ? TYPE_TEXT_ABORT : null;
     });
 
     if (state.truncated) return typeTextTruncation(state);
@@ -70477,6 +70373,7 @@ var init_injected_helpers = __esm({
       var returnSeen = new WeakSet();
       while (cursor) {
         if (!consumeWork()) return null;
+        if (!consumeWork()) return null;
         if (returnSeen.has(cursor)) {
           state.truncated = true;
           state.reason = 'cycle';
@@ -70487,6 +70384,7 @@ var init_injected_helpers = __esm({
           if (!consumeWork()) return null;
           if (sameTypeTextFiber(cursor, sources[sourceIndex].fiber)) return sources[sourceIndex];
         }
+        if (!consumeWork()) return null;
         cursor = cursor.return;
       }
       return null;
@@ -70547,7 +70445,7 @@ var init_injected_helpers = __esm({
     };
   }
 
-  function executeTypeTextTransaction(opts, retainBinding) {
+  function executeTypeTextTransaction(opts) {
     var resolution = resolveTypeTextTarget(opts);
     if (resolution.error) return resolution;
     var binding = resolution.binding;
@@ -70562,23 +70460,11 @@ var init_injected_helpers = __esm({
         hint: 'Inspected every matching fiber and its bounded ownership graph \u2014 no typeable handler exists. Use cdp_component_tree to inspect the field, or pass the inner field testID directly.'
       };
     }
-    if (opts.controlledOnly === true && !binding.controlled) {
-      return {
-        success: true,
-        action: 'typeText',
-        testID: selector,
-        handlerCalled: false,
-        controlled: false,
-        valueBefore: null
-      };
-    }
-    var bindingId = retainBinding ? retainInputBinding(binding) : null;
     var text = opts.text !== undefined ? opts.text : '';
     try {
       if (binding.contract === 'onChangeText:string') binding.handler(text);
       else binding.handler({ nativeEvent: { text: text } });
     } catch (e) {
-      if (bindingId) releaseInputBinding(bindingId);
       return {
         success: false,
         action_executed: true,
@@ -70597,71 +70483,10 @@ var init_injected_helpers = __esm({
       handlerCalled: binding.contract === 'onChangeText:string' ? 'onChangeText' : 'onChange',
       controlled: binding.controlled,
       valueBefore: binding.valueBefore,
-      bindingId: bindingId || undefined,
       resolvedFrom: binding.component + (binding.candidateTestID ? ' [testID="' + binding.candidateTestID + '"]' : ''),
       visitedFibers: resolution.state.visitedFibers,
       selectorBundle: binding.sourceEvidence.selectorBundle || undefined
     };
-  }
-
-  function typeTextWithBinding(opts) {
-    opts = opts || {};
-    opts.controlledOnly = true;
-    return JSON.stringify(executeTypeTextTransaction(opts, true));
-  }
-
-  function currentInputBindingFiber(binding) {
-    var state = createTypeTextState();
-    var alternate = binding.candidateAlternate || binding.candidateFiber.alternate || null;
-    var found = [];
-    var foundSeen = new WeakSet();
-    var completed = new WeakSet();
-    forEachRootFiber(function(rootFiber) {
-      if (state.truncated) return rootFiber;
-      var localSeen = new WeakSet();
-      var stack = [rootFiber];
-      while (stack.length > 0 && !state.truncated) {
-        var node = stack.pop();
-        if (!consumeTypeTextWork(state)) break;
-        if (localSeen.has(node)) {
-          state.truncated = true;
-          state.reason = 'cycle';
-          break;
-        }
-        localSeen.add(node);
-        if (completed.has(node)) continue;
-        completed.add(node);
-        if (node === binding.candidateFiber || node === alternate) {
-          if (!foundSeen.has(node)) {
-            foundSeen.add(node);
-            found.push(node);
-          }
-        }
-        if (node.sibling) {
-          if (!consumeTypeTextWork(state)) break;
-          stack.push(node.sibling);
-        }
-        if (node.child) {
-          if (!consumeTypeTextWork(state)) break;
-          stack.push(node.child);
-        }
-      }
-      return null;
-    });
-    if (state.truncated) return { error: state.reason };
-    if (found.length !== 1) return { error: found.length > 1 ? 'ambiguous' : 'target-lost' };
-    return { fiber: found[0] };
-  }
-
-  function readInputValueByBinding(bindingId) {
-    if (!bindingId || !typeTextBindings[bindingId]) {
-      return JSON.stringify({ __agent_error: 'binding target lost' });
-    }
-    var current = currentInputBindingFiber(typeTextBindings[bindingId]);
-    if (current.error) return JSON.stringify({ __agent_error: 'binding ' + current.error });
-    var props = current.fiber.memoizedProps || {};
-    if (typeof props.value === 'string') return JSON.stringify({ value: props.value, controlled: true });
-    return JSON.stringify({ value: null, controlled: false });
   }
 
   // UI Interaction
@@ -70685,7 +70510,7 @@ var init_injected_helpers = __esm({
     }
 
     if (action === 'typeText') {
-      return JSON.stringify(executeTypeTextTransaction(opts, false));
+      return JSON.stringify(executeTypeTextTransaction(opts));
     }
 
     // Task 7 \u2014 ladder routing. typeText reuses the established placeholder
@@ -71038,15 +70863,15 @@ var init_injected_helpers = __esm({
           ancestorSeen.add(ancestor);
           ancestorVisits++;
           var aProps = ancestor.memoizedProps || {};
+          if (!nearestExplicitControl && aProps.control && typeof aProps.control === 'object') {
+            nearestExplicitControl = aProps.control;
+          }
           if (aProps && looksLikeUseFormReturn(aProps.value)) {
             if (!nearestExplicitControl || aProps.value.control === nearestExplicitControl) {
               formReturn = aProps.value;
               formResolution = 'form-provider';
               break;
             }
-          }
-          if (!nearestExplicitControl && aProps.control && typeof aProps.control === 'object') {
-            nearestExplicitControl = aProps.control;
           }
 
           var hook = ancestor.memoizedState;
@@ -72244,9 +72069,6 @@ var init_injected_helpers = __esm({
     getStoreState: getStoreState,
     getComponentState: getComponentState,
     readInputValue: readInputValue,
-    readInputValueByBinding: readInputValueByBinding,
-    releaseInputBinding: releaseInputBinding,
-    typeTextWithBinding: typeTextWithBinding,
     dispatchAction: dispatchAction,
     getErrors: getErrors,
     clearErrors: clearErrors,
@@ -78871,13 +78693,11 @@ async function executeStep(step, getClient2, abortSignal) {
       if (!targetRef) {
         return failResult("fill requires ref or testID. Use a find+tap step first to focus the field, or pass testID for fresh resolution.", { mutation: "none" });
       }
-      const client2 = getClient2 ? cdpClientOrNull(getClient2) : null;
       return performExactFill({
         ref: targetRef,
         text: step.text,
         settleTimeoutMs: step.settle === false ? 0 : BATCH_STEP_SETTLE_BUDGET_MS
-      }, client2, {
-        js: false,
+      }, null, {
         maestro: false,
         ...abortSignal ? { abortSignal } : {}
       });
@@ -95716,7 +95536,7 @@ var init_index = __esm({
         "hideDevMenu"
       ]).describe("Dev menu action to execute")
     }, createDevSettingsHandler(getClient, { probeForegroundSurface }));
-    trackedTool("cdp_interact", 'Interact with React components by testID, accessibilityLabel, or supported discovery facts. Calls JS handlers directly, not native touch. typeText joins every matching source to exact handler-owning fibers under one cycle-safe 2,000-work-unit limit and refuses incomplete or ambiguous resolution; it also accepts placeholder or role+name. accessibilityLabel matching uses exact, normalized, then substring tiers. setFieldValue walks to the nearest FormProvider, or safely matches an explicit control prop to an ancestor useForm hook return by object identity before calling setValue. Portal roots can be registered through globalThis.__RN_AGENT_EXTRA_ROOTS__. walkUp (opt-in): for action:"press" with testID/accessibilityLabel selectors only, walks up at most 8 fiber ancestors to the nearest pressable and refuses absence or ambiguity. Use device_swipe/device_press for native gestures.', {
+    trackedTool("cdp_interact", 'Interact with React components by testID, accessibilityLabel, or supported discovery facts. Calls JS handlers directly, not native touch. typeText joins every matching source to exact eligible handler-owning fibers under one cycle-safe 2,000-work-unit limit and refuses incomplete or ambiguous resolution; success proves one exact React handler dispatch, not native keyboard or input fidelity. It accepts placeholder or role+name, and generic onChange is eligible only on a proven native text-input host Fiber. accessibilityLabel matching uses exact, normalized, then substring tiers. setFieldValue walks to the nearest FormProvider, or safely matches an explicit control prop to an ancestor useForm hook return by object identity before calling setValue. Portal roots can be registered through globalThis.__RN_AGENT_EXTRA_ROOTS__. walkUp (opt-in): for action:"press" with testID/accessibilityLabel selectors only, walks up at most 8 fiber ancestors to the nearest pressable and refuses absence or ambiguity. Use device_swipe/device_press for native gestures.', {
       action: external_exports.enum(["press", "longPress", "typeText", "scroll", "setFieldValue"]).describe("Action: press, longPress, typeText, scroll, or React Hook Form setFieldValue."),
       testID: external_exports.string().optional().describe("testID prop of the target component (strict match \u2014 preferred). For setFieldValue, this is the testID anchor inside the form's subtree from which to walk up."),
       accessibilityLabel: external_exports.string().optional().describe("accessibilityLabel prop (used if testID not provided). Tiered match: exact \u2192 normalized (trim+lowercase) \u2192 substring. Returns Ambiguous error if >1 component matches."),
@@ -95802,7 +95622,7 @@ var init_index = __esm({
       settleTimeoutMs: external_exports.number().int().min(500).max(3e4).optional().describe("Override the post-action settle budget in ms (default 6000). Settle waits for the UI to stabilize after the action; see meta.settle in the result. Budget knob only \u2014 RN_SETTLE=0 disables settle."),
       retryIfNoChange: external_exports.boolean().optional().describe("Deprecated compatibility option. Interactions are never automatically replayed after a possible dispatch; uncertainty is reported from the first attempt.")
     }, createDevicePressHandler(getClient));
-    trackedTool("device_fill", 'Type text into an input field by its @ref or testID from device_snapshot, binding exactly one direct TextInput or one `${name}-pressable` wrapper uniquely mapped to its inner `${name}` input before mutation. Exact raw control can operate without a managed Metro target and always labels meta.originAuthority as proven or not-proven; a native-to-Maestro fallback still requires proven managed origin. The tool skips the focus tap only when that exact input is already focused and returns filled:true ONLY after a stable exact post-settle read-back (fiber value for controlled inputs, native read for uncontrolled; meta.verify is always "exact" on success). Tiers: controlled inputs fill via onChangeText, others via the native runner, with a clear-first retype and a clear-first Maestro attempt for observed wrong values. Unverifiable outcomes hard-fail: NO_TEXT_INPUT_TARGET means nothing was typed (rebind after a fresh snapshot); TEXT_ENTRY_UNVERIFIED means an attempt ran but the exact value could not be proven \u2014 check meta.mutation: "none" = safe to retry after a fresh snapshot; "observed" = the field holds a wrong value, take a fresh snapshot and re-read before a corrective fill; "possible" = do NOT retry the same ref \u2014 take a fresh device_snapshot, rebind the input by identity, and read its state first (a blind retry can double-type). Secure fields verify only when controlled (masked native values are never proof); empty text is a verified clear. Requires an open session.', {
+    trackedTool("device_fill", 'Type text into an input field by its @ref or testID from device_snapshot, binding exactly one direct native TextInput or one `${name}-pressable` wrapper uniquely mapped to its inner `${name}` input before mutation. Exact raw control can operate without a managed Metro target and always labels meta.originAuthority as proven or not-proven; a native-to-Maestro fallback still requires proven managed origin. The tool skips the focus tap only when that exact input is already focused and returns filled:true ONLY after a stable exact native post-settle read-back (meta.verify is always "exact" on success). Native fill uses a bounded clear-first retype, with a clear-first Maestro attempt only for observed wrong values. React Fiber state never certifies device_fill success. Unverifiable outcomes hard-fail: NO_TEXT_INPUT_TARGET means nothing was typed (rebind after a fresh snapshot); TEXT_ENTRY_UNVERIFIED means an attempt ran but the exact value could not be proven \u2014 check meta.mutation: "none" = safe to retry after a fresh snapshot; "observed" = the field holds a wrong value, take a fresh snapshot and re-read before a corrective fill; "possible" = do NOT retry the same ref \u2014 take a fresh device_snapshot, rebind the input by identity, and read its state first (a blind retry can double-type). Secure masked native values are never proof; empty text is a verified clear. Requires an open session.', {
       ref: external_exports.string().describe('Input ref from device_snapshot (for example "@e5"), or a testID'),
       text: external_exports.string().describe("Text to type into the field (empty string = verified clear)"),
       waitForKeyboardMs: external_exports.number().int().min(0).max(5e3).optional().describe("Bounded wait for the exact input to gain focus after the in-operation focus tap (default 1500). Bump to 3000-5000ms for slow keyboard animations on Pressable-wrapped TextInputs."),

@@ -3,11 +3,11 @@ import { test } from 'node:test';
 import vm from 'node:vm';
 import { INJECTED_HELPERS } from '../../dist/injected-helpers.js';
 import { createInteractHandler } from '../../dist/tools/interact.js';
-import { attemptJsFill, releaseJsFillBinding } from '../../dist/tools/fill-verify.js';
 import { createMockClient } from '../helpers/mock-cdp-client.js';
 import { expectOk } from '../helpers/result-helpers.js';
 
 type Fiber = {
+  tag: number;
   type: string | { displayName?: string; name?: string };
   memoizedProps: Record<string, unknown>;
   memoizedState?: unknown;
@@ -22,7 +22,15 @@ function makeFiber(
   memoizedProps: Record<string, unknown> = {},
   memoizedState?: unknown,
 ): Fiber {
-  return { type, memoizedProps, memoizedState, child: null, sibling: null, return: null };
+  return {
+    tag: typeof type === 'string' ? 5 : 0,
+    type,
+    memoizedProps,
+    memoizedState,
+    child: null,
+    sibling: null,
+    return: null,
+  };
 }
 
 function appendChild(parent: Fiber, child: Fiber): Fiber {
@@ -45,7 +53,10 @@ function wrap(parent: Fiber, count: number): Fiber {
   return current;
 }
 
-function createAgent(rootOrRoots: Fiber | Fiber[]) {
+function createAgent(
+  rootOrRoots: Fiber | Fiber[],
+  options: { onGetFiberRoots?: (rendererId: number) => void } = {},
+) {
   const roots = Array.isArray(rootOrRoots) ? rootOrRoots : [rootOrRoots];
   const sandbox: Record<string, unknown> = {
     Array,
@@ -72,6 +83,7 @@ function createAgent(rootOrRoots: Fiber | Fiber[]) {
   sandbox.__REACT_DEVTOOLS_GLOBAL_HOOK__ = {
     renderers: new Map(roots.map((_, index) => [index + 1, {}])),
     getFiberRoots: (rendererId: number) => {
+      options.onGetFiberRoots?.(rendererId);
       const root = roots[rendererId - 1];
       return root ? new Set([{ current: root }]) : new Set();
     },
@@ -94,14 +106,6 @@ function createAgent(rootOrRoots: Fiber | Fiber[]) {
     readInputValue(testID: string): Record<string, unknown> {
       return JSON.parse(
         vm.runInContext(`__RN_AGENT.readInputValue(${JSON.stringify(testID)})`, sandbox) as string,
-      ) as Record<string, unknown>;
-    },
-    readInputValueByBinding(bindingId: string): Record<string, unknown> {
-      return JSON.parse(
-        vm.runInContext(
-          `__RN_AGENT.readInputValueByBinding(${JSON.stringify(bindingId)})`,
-          sandbox,
-        ) as string,
       ) as Record<string, unknown>;
     },
   };
@@ -365,6 +369,52 @@ test('typeText refuses mixed onChangeText and onChange logical targets', () => {
   assert.deepEqual(calls, []);
 });
 
+test('typeText refuses generic onChange on a non-text host', () => {
+  const calls: unknown[] = [];
+  const root = makeFiber('Root');
+  const wrapper = appendChild(root, makeFiber('View', { testID: 'switch-field' }));
+  appendChild(
+    wrapper,
+    makeFiber('Switch', {
+      onChange(event: unknown) {
+        calls.push(event);
+      },
+    }),
+  );
+
+  const result = runInteract(root, {
+    action: 'typeText',
+    testID: 'switch-field',
+    text: 'unsafe',
+  });
+
+  assert.match(String(result.error), /no onChangeText or onChange handler/);
+  assert.deepEqual(calls, []);
+});
+
+test('typeText admits generic onChange on a native text-input host', () => {
+  const calls: string[] = [];
+  const root = makeFiber('Root');
+  appendChild(
+    root,
+    makeFiber('AndroidTextInput', {
+      testID: 'event-input',
+      onChange(event: { nativeEvent: { text: string } }) {
+        calls.push(event.nativeEvent.text);
+      },
+    }),
+  );
+
+  const result = runInteract(root, {
+    action: 'typeText',
+    testID: 'event-input',
+    text: 'safe',
+  });
+
+  assert.equal(result.success, true, JSON.stringify(result));
+  assert.deepEqual(calls, ['safe']);
+});
+
 test('typeText refuses mixed component-name candidates without preferring a host input', () => {
   const calls: string[] = [];
   const root = makeFiber('Root');
@@ -504,50 +554,6 @@ test('typeText refuses nested matching sources when both exact fibers own handle
   assert.deepEqual(calls, []);
 });
 
-test('JS fill readback stays bound when the selector becomes ambiguous after mutation', async () => {
-  const root = makeFiber('Root');
-  const input = appendChild(
-    root,
-    makeFiber('AndroidTextInput', {
-      testID: 'changing-targets',
-      value: '',
-      onChangeText(value: string) {
-        input.memoizedProps.value = value;
-        appendChild(
-          root,
-          makeFiber('AndroidTextInput', {
-            testID: 'changing-targets',
-            value: 'replacement',
-            onChangeText() {},
-          }),
-        );
-      },
-    }),
-  );
-  const agent = createAgent(root);
-  const expressions: string[] = [];
-  const deps = {
-    evaluate: async (expression: string) => {
-      expressions.push(expression);
-      return agent.evaluate(expression);
-    },
-    sleep: async () => {},
-  };
-
-  const result = await attemptJsFill(deps, 'changing-targets', 'exact-target');
-
-  assert.equal(result.handled, true);
-  assert.equal(result.outcome, 'exact');
-  assert.equal(typeof result.bindingId, 'string');
-  assert.ok(expressions.some((expression) => expression.includes('readInputValueByBinding')));
-  assert.ok(!expressions.some((expression) => expression.startsWith('__RN_AGENT.readInputValue(')));
-  await releaseJsFillBinding(deps, result.bindingId);
-  assert.match(
-    String(agent.readInputValueByBinding(result.bindingId as string).__agent_error),
-    /binding target lost/,
-  );
-});
-
 test('typeText refuses cyclic hidden-state sibling traversal', () => {
   const calls: string[] = [];
   const root = makeFiber('Root');
@@ -666,6 +672,39 @@ test('typeText charges labelled-by accessible-name scans to the shared work limi
   assert.equal(result.reason, 'work-limit');
   assert.equal(result.workLimit, 2000);
   assert.deepEqual(calls, []);
+});
+
+test('typeText preserves sibling text in labelled-by accessible names', () => {
+  const calls: string[] = [];
+  const root = makeFiber('Root');
+  const label = appendChild(root, makeFiber('View', { nativeID: 'full-label' }));
+  const first = appendChild(label, makeFiber('RawText'));
+  first.tag = 6;
+  first.memoizedProps = 'First' as unknown as Record<string, unknown>;
+  const last = appendChild(label, makeFiber('RawText'));
+  last.tag = 6;
+  last.memoizedProps = 'Last' as unknown as Record<string, unknown>;
+  appendChild(
+    root,
+    makeFiber('AndroidTextInput', {
+      accessibilityRole: 'textbox',
+      accessibilityLabelledBy: 'full-label',
+      onChangeText(value: string) {
+        calls.push(value);
+      },
+    }),
+  );
+
+  const result = runInteract(root, {
+    action: 'typeText',
+    role: 'textbox',
+    name: 'First Last',
+    text: 'resolved',
+    exact: true,
+  });
+
+  assert.equal(result.success, true, JSON.stringify(result));
+  assert.deepEqual(calls, ['resolved']);
 });
 
 test('typeText refuses a role selector without an accessible name', () => {
@@ -881,6 +920,39 @@ test('typeText refuses when its documented total-work limit is exhausted', () =>
   assert.equal(result.truncated, true);
   assert.equal(result.reason, 'work-limit', JSON.stringify(result));
   assert.equal(result.workLimit, 2000);
+  assert.deepEqual(calls, []);
+});
+
+test('typeText stops root enumeration when style fan-out exhausts the shared limit', () => {
+  const calls: string[] = [];
+  const roots: Fiber[] = [];
+  const firstRoot = makeFiber('Root');
+  appendChild(
+    firstRoot,
+    makeFiber('AndroidTextInput', {
+      placeholder: 'Huge style field',
+      style: new Array(100_000).fill(null),
+      onChangeText(value: string) {
+        calls.push(value);
+      },
+    }),
+  );
+  roots.push(firstRoot);
+  for (let index = 1; index < 25; index += 1) roots.push(makeFiber('Root'));
+  const rootCalls: number[] = [];
+  const agent = createAgent(roots, { onGetFiberRoots: (rendererId) => rootCalls.push(rendererId) });
+
+  const result = agent.interact({
+    action: 'typeText',
+    placeholder: 'Huge style field',
+    text: 'unsafe',
+    exact: true,
+  });
+
+  assert.equal(result.truncated, true);
+  assert.equal(result.reason, 'work-limit');
+  assert.equal(result.work, 2000);
+  assert.deepEqual(rootCalls, [1]);
   assert.deepEqual(calls, []);
 });
 
@@ -1101,6 +1173,51 @@ test('setFieldValue ignores a mismatched outer provider for the nearest controll
   assert.equal(result.success, true, JSON.stringify(result));
   assert.equal(result.resolvedFrom, 'control-prop-hook');
   assert.deepEqual(calls, ['nearest']);
+});
+
+test('setFieldValue observes same-node control before provider value', () => {
+  const calls: string[] = [];
+  const controlA = {};
+  const controlB = {};
+  const methodsA = {
+    control: controlA,
+    getValues() {
+      return '';
+    },
+    setValue() {
+      calls.push('A');
+    },
+  };
+  const methodsB = {
+    control: controlB,
+    getValues() {
+      return '';
+    },
+    setValue() {
+      calls.push('B');
+    },
+  };
+  const root = makeFiber('Root');
+  const owner = appendChild(
+    root,
+    makeFiber(
+      { displayName: 'ControlledProvider' },
+      { control: controlB, value: methodsA },
+      { memoizedState: { current: methodsB }, next: null },
+    ),
+  );
+  appendChild(owner, makeFiber('View', { testID: 'same-node-control' }));
+
+  const result = runInteract(root, {
+    action: 'setFieldValue',
+    testID: 'same-node-control',
+    name: 'phone',
+    value: '1234',
+  });
+
+  assert.equal(result.success, true, JSON.stringify(result));
+  assert.equal(result.resolvedFrom, 'control-prop-hook');
+  assert.deepEqual(calls, ['B']);
 });
 
 test('press keeps its existing first strict-testID match semantics', () => {

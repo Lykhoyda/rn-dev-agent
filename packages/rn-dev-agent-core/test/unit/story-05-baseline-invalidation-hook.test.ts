@@ -22,10 +22,6 @@ test('toolInvalidatesRetryBaseline: TRUE for screen-mutating tools that bypass r
     'cdp_evaluate',
     'cdp_mmkv',
     'cdp_run_action',
-    // device_fill's JS-first path (attemptJsFill) returns before any runNative
-    // settle, so it never manages the baseline — the hook must invalidate after
-    // it. The native fill path already invalidates on its own, so this is a
-    // no-op there and correct on the JS path.
     'device_fill',
     // PR #459 review (Codex P2): swipe/scroll take the iOS fastSwipe path that
     // returns BEFORE any settle → stale baseline. pinch/back/scrollintoview do
