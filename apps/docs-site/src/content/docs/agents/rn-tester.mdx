@@ -41,7 +41,7 @@ Writes a test plan before executing: starting state, steps to exercise, expected
 
 ### Step 2.5: Auth Pre-flight
 
-Checks `cdp_navigation_state` for auth-gated screens. If logged out, calls `cdp_login_prologue`, which resolves only the exact `user-login` action and requires a fresh passing RunRecord. `LOGIN_PROLOGUE_BLOCKED` ends the journey without credential or ad-hoc replay fallbacks. The helper is not PR proof; formal login proof locks and runs the exact login e2e candidate.
+Checks `cdp_navigation_state` for auth-gated screens. If logged out, calls `cdp_login_prologue`, which resolves only the exact `user-login` action and requires a fresh passing RunRecord. `LOGIN_PROLOGUE_BLOCKED` forbids unrelated mutations and credential or ad-hoc replay fallbacks; the tester follows the returned bounded attach-only recovery only when it is offered. Session health never proves UI-control readiness. See [tool authority](../../session-authority/#tool-authority) for the recovery contract. The helper is not PR proof; formal login proof locks and runs the exact login e2e candidate.
 
 ### Step 2.6: Permission Pre-flight
 

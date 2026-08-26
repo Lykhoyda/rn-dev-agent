@@ -53,7 +53,7 @@ Per-step timing with maestro-runner + JPEG: ~1.4s (2.2x faster than Maestro + PN
 
 ### Auth Pre-flight
 
-Before testing, check `cdp_navigation_state` for auth screens. If logged out, call `cdp_login_prologue`, which inventories and replays only the exact `user-login` action and requires a fresh passing RunRecord. `LOGIN_PROLOGUE_BLOCKED` is terminal: do not fall back to credentials, `cdp_auto_login`, ad-hoc Maestro, navigation shortcuts, or store mutation. The passing helper is not PR proof; lock and run the exact login e2e candidate for formal proof.
+Before testing, check `cdp_navigation_state` for auth screens. If logged out, call `cdp_login_prologue`, which inventories and replays only the exact `user-login` action and requires a fresh passing RunRecord. `LOGIN_PROLOGUE_BLOCKED` forbids unrelated mutations and every credential, `cdp_auto_login`, ad-hoc Maestro, navigation, or store fallback. If its `nextAction` offers the bounded attach-only recovery, follow that exact sequence; otherwise repair the reported failure and rerun the prologue. See [tool authority](../../session-authority/#tool-authority) for the recovery contract. The passing helper is not PR proof; lock and run the exact login e2e candidate for formal proof.
 
 ### Permission Pre-flight
 
