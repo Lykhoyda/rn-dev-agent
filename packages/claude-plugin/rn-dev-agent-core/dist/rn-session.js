@@ -12038,6 +12038,85 @@ var init_device_session_close = __esm({
   }
 });
 
+// packages/rn-dev-agent-core/dist/domain/foreground-surface-remedy.js
+var init_foreground_surface_remedy = __esm({
+  "packages/rn-dev-agent-core/dist/domain/foreground-surface-remedy.js"() {
+    "use strict";
+  }
+});
+
+// packages/rn-dev-agent-core/dist/tools/expo-dev-menu.js
+var RESOLVE_EXPO_DEV_MENU, HIDE_EXPO_DEV_MENU_EXPRESSION, SYSTEM_CHROME_REGION_IDENTIFIERS, SYSTEM_CHROME_IDENTIFIERS;
+var init_expo_dev_menu = __esm({
+  "packages/rn-dev-agent-core/dist/tools/expo-dev-menu.js"() {
+    "use strict";
+    RESOLVE_EXPO_DEV_MENU = `(function () {
+  try { var e = globalThis.expo; if (e && e.modules && e.modules.ExpoDevMenu) return e.modules.ExpoDevMenu; } catch (e0) {}
+  try { var nm = require("react-native").NativeModules; if (nm && nm.ExpoDevMenu) return nm.ExpoDevMenu; } catch (e1) {}
+  try { if (typeof __turboModuleProxy === "function") { var t = __turboModuleProxy("ExpoDevMenu"); if (t) return t; } } catch (e2) {}
+  try { if (typeof globalThis.nativeModuleProxy !== "undefined") { var p = globalThis.nativeModuleProxy.ExpoDevMenu; if (p) return p; } } catch (e3) {}
+  return null;
+})()`;
+    HIDE_EXPO_DEV_MENU_EXPRESSION = `(function () {
+  var m = ${RESOLVE_EXPO_DEV_MENU};
+  if (!m) return "no_module";
+  var method = null;
+  var close = null;
+  try {
+    if (typeof m.hideMenu === "function") { method = "hideMenu"; close = m.hideMenu; }
+    else if (typeof m.closeMenu === "function") { method = "closeMenu"; close = m.closeMenu; }
+    if (!method) return "no_method_available";
+  } catch (e) { return "resolution_error:" + (e && e.message ? e.message : String(e)); }
+  try {
+    var pending = Promise.resolve(close.call(m)).then(function () { return "ok:" + method; }, function (e) { return "error:" + method + ":" + (e && e.message ? e.message : String(e)); });
+    return { __rnAgentStartValue: "sent:" + method, then: function (resolve, reject) { return pending.then(resolve, reject); } };
+  } catch (e) { return "error:" + method + ":" + (e && e.message ? e.message : String(e)); }
+})()`;
+    SYSTEM_CHROME_REGION_IDENTIFIERS = /* @__PURE__ */ new Set([
+      "status_bar",
+      "status_bar_container",
+      "navigation_bar_frame",
+      "nav_bar_background",
+      "taskbar_container",
+      "navbuttons_view"
+    ]);
+    SYSTEM_CHROME_IDENTIFIERS = /* @__PURE__ */ new Set([
+      ...SYSTEM_CHROME_REGION_IDENTIFIERS,
+      "status_bar_launch_animation_container",
+      "status_bar_contents",
+      "status_bar_start_side_container",
+      "status_bar_start_side_content",
+      "status_bar_start_side_except_heads_up",
+      "status_bar_end_side_container",
+      "status_bar_end_side_content",
+      "clock",
+      "notification_icon_area",
+      "notificationicons",
+      "cutout_space_view",
+      "system_icons",
+      "statusicons",
+      "wifi_combo",
+      "wifi_group",
+      "wifi_signal",
+      "mobile_combo",
+      "mobile_group",
+      "mobile_signal",
+      "battery",
+      "taskbar_scrim",
+      "start_contextual_buttons",
+      "end_contextual_buttons",
+      "end_nav_buttons",
+      "taskbar_bubbles_container",
+      "back",
+      "home",
+      "recent_apps",
+      "recents",
+      "overview",
+      "home_handle"
+    ]);
+  }
+});
+
 // packages/rn-dev-agent-core/dist/tools/device-session.js
 import { execFile as execFileCb7 } from "node:child_process";
 import { promisify as promisify9 } from "node:util";
@@ -12063,6 +12142,8 @@ var init_device_session = __esm({
     init_device_lock();
     init_device_arbiter();
     init_device_session_close();
+    init_foreground_surface_remedy();
+    init_expo_dev_menu();
     execFile9 = promisify9(execFileCb7);
   }
 });
