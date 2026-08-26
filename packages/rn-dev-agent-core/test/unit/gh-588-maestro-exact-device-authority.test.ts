@@ -531,7 +531,6 @@ test('cdp_run_action persists a verified direct report identity on success', asy
     projectRoot: project.root,
     platform: 'ios',
     autoRepair: false,
-    blindProbeMode: 'forbid',
   });
   const body = envelope(result);
   assert.equal(body.ok, true, result.content[0].text);
@@ -607,7 +606,6 @@ test('cdp_run_action restores managed Metro attachment after launchApp before re
     projectRoot: project.root,
     platform: 'ios',
     autoRepair: false,
-    blindProbeMode: 'forbid',
   });
 
   assert.equal(envelope(result).ok, true, result.content[0]!.text);
@@ -661,7 +659,6 @@ test('cdp_run_action persists the direct wrong device and never requested metada
     projectRoot: project.root,
     platform: 'ios',
     autoRepair: false,
-    blindProbeMode: 'forbid',
   });
   const body = envelope(result);
   assert.equal(body.code, 'DEVICE_AUTHORITY_MISMATCH');

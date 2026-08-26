@@ -35,7 +35,7 @@ Load the `rn-testing` skill and follow this 8-step protocol in this session:
    once before any replay (the environment gate applies to replays too, not
    just manual walks; if it fails, route to `$rn-dev-agent:setup` instead of
    running a doomed flow). Replay with
-   `cdp_run_action({ actionId, params, blindProbeMode: "forbid" })`; the tool
+   `cdp_run_action({ actionId, params })`; the tool
    preflights the exact runner and action pin before any UI mutation.
    If the replay passes, you have your evidence — proceed to step 7
    (verification + generate-or-refresh artifact). If the replay fails with a

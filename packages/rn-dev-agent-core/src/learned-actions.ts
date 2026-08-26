@@ -262,7 +262,7 @@ function replayHint(id: string | null, flowPath: string, params: string[]): stri
     path.basename(path.dirname(actionsDir)) === '.rn-agent';
   if (canonicalYaml) {
     const projectRoot = path.dirname(path.dirname(actionsDir));
-    return `cdp_run_action({ actionId: "${id}", projectRoot: "${projectRoot}", blindProbeMode: "forbid"${paramObj} })`;
+    return `cdp_run_action({ actionId: "${id}", projectRoot: "${projectRoot}"${paramObj} })`;
   }
   return `maestro_run({ flowPath: "${flowPath}"${paramObj} })`;
 }

@@ -759,6 +759,56 @@ test('partitioned native failures map evidence back to original commands', async
   assert.equal(env.meta?.lastStep.index, 1);
 });
 
+test('partitioned React failures retain prior native proof evidence', async () => {
+  const handler = createMaestroRunHandler({
+    getActiveSession: () => ({
+      name: 'partition-react-failure',
+      platform: 'ios',
+      deviceId: IOS_UDID,
+      appId: 'com.example.app',
+      openedAt: new Date(0).toISOString(),
+    }),
+    replayDeps: () => ({
+      pressByTestId: async () => {},
+      typeByTestId: async () => {},
+      treeFor: async () => null,
+      frontmostFor: async () => ({ visible: false }),
+      launchApp: async () => {},
+      settle: async () => {},
+    }),
+    chooseDispatch: () => nativeDispatch(),
+    parkFlow: async (run) => run(),
+    resolveEngineStatus: async () =>
+      buildReplayEngineStatus('pinned-ok', MAESTRO_RUNNER_PIN.version, false),
+    execFile: async () => ({
+      stdout: nativeRunnerOutput('    ✓ assertVisible (0.1s)'),
+      stderr: '',
+    }),
+  });
+  const env = envelope(
+    await handler({
+      platform: 'ios',
+      deviceId: IOS_UDID,
+      inlineYaml: `appId: com.example.app\n---\n- assertVisible: Native status\n- assertVisible:\n    id: missing-react-status\n`,
+      ...callbacks,
+    }),
+  );
+  assert.equal(env.ok, false);
+  assert.equal(env.code, 'TESTID_NOT_FOUND');
+  assert.equal(env.meta?.proofDomain, 'partitioned');
+  assert.deepEqual(env.meta?.proofDomains, ['xctest-native', 'react-tree']);
+  assert.equal(env.meta?.runner, 'partitioned');
+  assert.equal(env.meta?.transport, 'partitioned');
+  assert.equal(env.meta?.failedStepIndex, 1);
+  assert.deepEqual(
+    env.meta?.steps.map((step: { index: number; status: string }) => [step.index, step.status]),
+    [
+      [0, 'pass'],
+      [1, 'fail'],
+    ],
+  );
+});
+
 test('native origin is claimed before runner parking and completed after resume', async () => {
   const events: string[] = [];
   const handler = createMaestroRunHandler({

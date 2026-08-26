@@ -15610,10 +15610,24 @@ function createMaestroRunHandler(deps = {}) {
         if (failure instanceof ReactReplayFailure) {
           const replay = failure.replay;
           const failedStepIndex = replay.failedStepIndex === void 0 ? void 0 : failure.sourceIndices[replay.failedStepIndex] ?? replay.failedStepIndex;
+          for (const step of replay.steps) {
+            combinedSteps.push({
+              index: failure.sourceIndices[step.sourceIndex] ?? step.sourceIndex,
+              name: step.t,
+              verb: step.t,
+              status: step.ok ? "pass" : "fail",
+              durationMs: step.durationMs
+            });
+          }
+          const uniqueProofDomains = [...new Set(proofDomains)];
+          const proofDomain = uniqueProofDomains.length === 1 ? uniqueProofDomains.at(0) ?? "partitioned" : "partitioned";
           return failResult(`React-tree replay failed at step ${String(failedStepIndex)}: ${replay.reason ?? "unknown failure"}`, replay.failureCode ?? "ASSERTION_FAILED", {
-            proofDomain: "react-tree",
-            failedStepIndex,
-            ...replay.failureMeta
+            ...replay.failureMeta,
+            proofDomain,
+            proofDomains: uniqueProofDomains,
+            ...proofDomain === "partitioned" ? { runner: "partitioned", transport: "partitioned" } : {},
+            steps: combinedSteps,
+            failedStepIndex
           });
         }
         if (failure instanceof SessionAuthorityError)
