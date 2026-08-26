@@ -20,6 +20,10 @@ import { CDPProtocolError, handleMessage } from '../../dist/cdp/transport.js';
 import { planeForTool } from '../../dist/lifecycle/device-arbiter.js';
 import { authorityProfileFor } from '../../dist/session/tool-profiles.js';
 import { createDevSettingsHandler } from '../../dist/tools/dev-settings.js';
+import {
+  attachForegroundSurfaceDiscovery,
+  createDeviceSnapshotHandler,
+} from '../../dist/tools/device-session.js';
 import { createReloadHandler } from '../../dist/tools/reload.js';
 import { createMockClient } from '../helpers/mock-cdp-client.js';
 import { expectOk, parseEnvelope } from '../helpers/result-helpers.js';
@@ -288,6 +292,104 @@ test('foregroundSurfaceFromSnapshot classifies a typed native snapshot envelope'
     ],
   };
   assert.equal(foregroundSurfaceFromSnapshot(result), 'expo_dev_menu');
+});
+
+test('device_snapshot exposes the exact safe remedy when it detects the Expo Developer Menu', async () => {
+  _setActiveSessionForTest({
+    name: 'remedy-discovery',
+    platform: 'ios',
+    deviceId: 'TEST-UDID',
+    appId: 'com.example.app',
+    openedAt: 'now',
+  });
+  _setRunAgentDeviceForTest(async () =>
+    snapshotEnvelope([{ label: 'Copy system info' }, { label: 'Open DevTools' }]),
+  );
+
+  try {
+    const handler = createDeviceSnapshotHandler({
+      remedyAuthorityAvailable: () => true,
+    });
+    const envelope = parseEnvelope(await handler({ action: 'snapshot' }));
+
+    assert.equal(envelope.meta.foregroundSurface, 'expo_dev_menu');
+    assert.deepEqual(envelope.meta.recommendation, {
+      condition: 'expo_dev_menu',
+      tool: 'cdp_dev_settings',
+      arguments: { action: 'hideDevMenu' },
+      guidance:
+        'Expo Developer Menu detected. Call cdp_dev_settings({ action: "hideDevMenu" }), then take a fresh device_snapshot and require the app surface before navigation.',
+    });
+  } finally {
+    _setRunAgentDeviceForTest(null);
+    _setActiveSessionForTest(null);
+  }
+});
+
+test('foreground discovery does not recommend the Expo remedy for distinct or uncertain surfaces', () => {
+  const appId = 'com.example.app';
+  const cases = [
+    {
+      name: 'React Native core menu',
+      expectedSurface: 'react_native_dev_menu',
+      nodes: [
+        { label: 'React Native Dev Menu', packageName: appId },
+        { label: 'Open DevTools', packageName: appId },
+        { label: 'Change Bundle Location', packageName: appId },
+        ...normalAndroidSystemChrome(),
+      ],
+    },
+    {
+      name: 'unknown surface',
+      expectedSurface: 'unknown',
+      nodes: [{ label: 'Unrecognized surface' }],
+    },
+    {
+      name: 'native alert above Expo signatures',
+      expectedSurface: 'unknown',
+      nodes: [
+        { label: 'Copy system info', packageName: appId },
+        { label: 'Open DevTools', packageName: appId },
+        { label: 'Allow Camera', type: 'Alert', packageName: appId },
+      ],
+    },
+    {
+      name: 'Dev Client picker',
+      expectedSurface: 'dev_client_picker',
+      nodes: [{ label: 'Development servers', packageName: appId }],
+    },
+    {
+      name: 'Expo first-run tutorial',
+      expectedSurface: 'first_run_tutorial',
+      nodes: [
+        {
+          label: 'This is the developer menu. It gives you access.',
+          packageName: appId,
+        },
+      ],
+    },
+  ];
+
+  for (const fixture of cases) {
+    const envelope = parseEnvelope(
+      attachForegroundSurfaceDiscovery(snapshotEnvelope(fixture.nodes), appId, true),
+    );
+    assert.equal(envelope.meta.foregroundSurface, fixture.expectedSurface, fixture.name);
+    assert.equal(envelope.meta.recommendation, undefined, fixture.name);
+  }
+});
+
+test('foreground discovery withholds the Expo remedy when its authority is unavailable', () => {
+  const envelope = parseEnvelope(
+    attachForegroundSurfaceDiscovery(
+      snapshotEnvelope([{ label: 'Copy system info' }, { label: 'Open DevTools' }]),
+      'com.example.app',
+      false,
+    ),
+  );
+
+  assert.equal(envelope.meta.foregroundSurface, 'expo_dev_menu');
+  assert.equal(envelope.meta.recommendation, undefined);
 });
 
 for (const platform of ['ios', 'android']) {

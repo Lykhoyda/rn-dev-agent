@@ -1,13 +1,8 @@
 import type { CDPClient } from '../cdp-client.js';
+import type { ForegroundSurface } from '../domain/foreground-surface-remedy.js';
 import type { ToolResult } from '../utils.js';
 
-export type ForegroundSurface =
-  | 'app'
-  | 'expo_dev_menu'
-  | 'dev_client_picker'
-  | 'first_run_tutorial'
-  | 'react_native_dev_menu'
-  | 'unknown';
+export type { ForegroundSurface } from '../domain/foreground-surface-remedy.js';
 
 interface SurfaceNode {
   label?: unknown;
