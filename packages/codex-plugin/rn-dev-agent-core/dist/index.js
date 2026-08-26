@@ -89364,15 +89364,7 @@ var ObservabilityServer = class {
       res.end("SPA bundle not built \u2014 run npm run build:web");
     }
   }
-  // Bounded body read that can never become an unhandled rejection —
-  // handle() fire-and-forgets the async routes, so a rejecting await here
-  // would crash the process on an oversized/aborted request (GH #438 review).
-  // GH #818: decode with a streaming StringDecoder so a multi-byte UTF-8
-  // code point split across TCP chunks survives intact (per-chunk
-  // toString() corrupts split points), and never destroy() the request —
-  // an oversized body is drained to its 'end' so the JSON 413 response can
-  // still be delivered over a usable connection. The 64 KiB limit stays
-  // byte-based; accumulation stops there, so memory remains bounded.
+  // Bounded body read that settles safely while handle() fire-and-forgets async routes.
   readBody(req) {
     return new Promise((resolve20) => {
       const decoder = new StringDecoder("utf8");
@@ -89385,6 +89377,7 @@ var ObservabilityServer = class {
         bytes += chunk.length;
         if (bytes > 65536) {
           oversized = true;
+          resolve20(null);
           return;
         }
         body += decoder.write(chunk);

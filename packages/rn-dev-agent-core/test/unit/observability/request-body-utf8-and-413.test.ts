@@ -4,27 +4,6 @@ import { test } from 'node:test';
 import { ObservabilityServer, type E2eServerDeps } from '../../../dist/observability/server.js';
 import { recorder } from '../../../dist/observability/recorder.js';
 
-// GH #818 regressions, driven through the real HTTP server over a raw TCP
-// socket so the test controls chunk boundaries exactly:
-//
-//   Defect 1 (initiating trigger): readBody() decoded each Buffer with
-//   per-chunk toString(); the emoji split across writes became U+FFFD
-//   replacement characters. (Masking condition: ASCII-only payloads and
-//   chunk-aligned multi-byte sequences decode fine, so small bodies in a
-//   single TCP segment hid it. Visible symptom: multilingual learned-action
-//   parameters arrive mangled.) Smallest counterfactual — decode with a
-//   streaming StringDecoder and the emoji survives.
-//
-//   Defect 2 (initiating trigger): readBody() called req.destroy() on the
-//   64 KiB overflow before its callers emitted JSON 413, so clients saw a
-//   connection reset instead of the structured error. (Masking condition:
-//   fetch reports a generic network error that looks like any other
-//   transport failure. Visible symptom: no parseable 413 reaches callers.)
-//   Disconfirming evidence checked before committing to this cause: CSRF
-//   (403), malformed-JSON (400), and ASCII paths all behaved correctly on
-//   the same build, and the server itself stayed alive after an oversized
-//   request — only the request socket was destroyed.
-
 const EMOJI = '\u{1F600}'; // U+1F600 = F0 9F 98 80
 
 function e2eDeps(): { deps: E2eServerDeps; calls: { run: number; action: number } } {
@@ -58,7 +37,6 @@ function socketTarget(url: string): SocketTarget {
   return { host: u.hostname, port: Number(u.port) };
 }
 
-/** Raw-socket POST whose body arrives as two TCP segments. */
 function rawPost(
   target: SocketTarget,
   firstSegment: Buffer,
@@ -66,8 +44,6 @@ function rawPost(
 ): Promise<Buffer | null> {
   return new Promise((resolve) => {
     const sock = net.connect(target.port, target.host);
-    // Disable Nagle so the first segment goes out immediately and cannot
-    // coalesce with the second — the split must survive server-side.
     sock.setNoDelay(true);
     const chunks: Buffer[] = [];
     let settled = false;
@@ -91,12 +67,6 @@ function rawPost(
   });
 }
 
-/**
- * Two sequential HTTP/1.1 keep-alive requests on ONE raw socket. Request 1's
- * body arrives as two TCP segments (with Nagle disabled); once its response
- * completes, request 2 (a full raw request buffer) is sent on the same
- * connection. Resolves with each response's raw bytes.
- */
 function rawTwoRequests(
   target: SocketTarget,
   firstSegment: Buffer,
@@ -118,7 +88,6 @@ function rawTwoRequests(
     const all = (): Buffer => Buffer.concat(chunks);
     const responses = (): [Buffer, Buffer] | [Buffer] => {
       const buf = all();
-      // Split at the start of the second response's status line.
       const marker = buf.indexOf('\r\nHTTP/1.1');
       if (marker < 0) return [buf];
       return [buf.subarray(0, marker), buf.subarray(marker + 2)];
@@ -135,8 +104,6 @@ function rawTwoRequests(
         firstDone = true;
         sock.write(secondRawRequest);
       } else if (firstDone && text.endsWith('\r\n0\r\n\r\n')) {
-        // Both keep-alive responses are in; finish without waiting out the
-        // server's idle keep-alive window.
         if (!responsesComplete) {
           responsesComplete = true;
           sock.end();
@@ -158,7 +125,29 @@ function rawTwoRequests(
   });
 }
 
-/** Split an HTTP/1.1 response into status line + de-chunked JSON body. */
+function rawStalledPost(target: SocketTarget, request: Buffer): Promise<Buffer | null> {
+  return new Promise((resolve) => {
+    const sock = net.connect(target.port, target.host);
+    const chunks: Buffer[] = [];
+    let settled = false;
+    const done = (value: Buffer | null) => {
+      if (settled) return;
+      settled = true;
+      sock.destroy();
+      resolve(value);
+    };
+    sock.on('connect', () => sock.write(request));
+    sock.on('data', (chunk) => {
+      chunks.push(chunk);
+      const response = Buffer.concat(chunks);
+      if (response.includes('\r\n0\r\n\r\n')) done(response);
+    });
+    sock.on('close', () => done(chunks.length ? Buffer.concat(chunks) : null));
+    sock.on('error', () => done(chunks.length ? Buffer.concat(chunks) : null));
+    setTimeout(() => done(chunks.length ? Buffer.concat(chunks) : null), 1_000);
+  });
+}
+
 function parseResponse(buf: Buffer | null): { statusLine: string; json: unknown } {
   if (!buf) return { statusLine: '<no response: socket reset>', json: null };
   const text = buf.toString('utf8');
@@ -338,6 +327,30 @@ test('65537-byte body to POST /api/e2e/run returns JSON 413 without triggering a
   });
 });
 
+test('over-limit POST returns JSON 413 before a stalled request ends', async () => {
+  const { deps, calls } = e2eDeps();
+  await withServer(deps, async (_url, target) => {
+    const body = Buffer.alloc(65_537, 0x61);
+    const response = await rawStalledPost(
+      target,
+      Buffer.concat([
+        Buffer.from(
+          `POST /api/e2e/run HTTP/1.1\r\nHost: 127.0.0.1:${target.port}\r\n` +
+            `Content-Type: application/json\r\nx-csrf-token: tok1\r\n` +
+            `Content-Length: ${body.length + 1}\r\n\r\n`,
+          'utf8',
+        ),
+        body,
+      ]),
+    );
+
+    const parsed = parseResponse(response);
+    assert.match(parsed.statusLine, /413/);
+    assert.deepEqual(parsed.json, { error: 'body too large' });
+    assert.equal(calls.run, 0);
+  });
+});
+
 test('ASCII bodies still work end-to-end after the GH #818 change', async () => {
   const { deps, calls } = e2eDeps();
   await withServer(deps, async (url) => {
@@ -355,7 +368,6 @@ test('ASCII bodies still work end-to-end after the GH #818 change', async () => 
 test('oversized-but-valid requests keep CSRF and malformed-JSON behavior unchanged', async () => {
   const { deps } = e2eDeps();
   await withServer(deps, async (url) => {
-    // No CSRF token → 403 regardless of body size.
     const csrf = await fetch(`${url}/api/e2e/run`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -363,7 +375,6 @@ test('oversized-but-valid requests keep CSRF and malformed-JSON behavior unchang
     });
     assert.equal(csrf.status, 403);
 
-    // Valid-size malformed JSON → 400.
     const bad = await fetch(`${url}/api/e2e/run`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-csrf-token': 'tok1' },
