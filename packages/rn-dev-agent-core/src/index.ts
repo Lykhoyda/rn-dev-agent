@@ -158,6 +158,7 @@ import { addToolObserver, instrumentTool } from './observability/instrumentation
 import { discoverPluginVersion, ExperienceRecorder } from './experience/evidence.js';
 import { recorder } from './observability/recorder.js';
 import { hashProofValue, StrictProofMonitor } from './domain/proof-capture.js';
+import { inspectLoginPrologueGuard } from './domain/login-prologue.js';
 import type { ProofAuthority } from './domain/proof-receipt.js';
 import {
   maybeCaptureLiveFrame,
@@ -2378,7 +2379,7 @@ trackedTool(
 
 trackedTool(
   'device_snapshot',
-  'Manage exact device sessions and capture UI snapshots even when a Dev Client remains at its native picker. Raw control requires exact install/device/runner authority but not a managed Metro target; meta.originAuthority explicitly reports proven or not-proven, and not-proven snapshots are never strict source evidence. action=open starts a session (required before other device_ tools), waits for Android app accessibility, and reports readiness.reactNativeUi=ready only when a matching live CDP helper confirms the RN fiber boundary; otherwise it warns that RN readiness is unverified. Pass deviceId to select an exact iOS simulator UDID or Android adb serial when devices run in parallel. action=snapshot returns the accessibility tree with @ref identifiers for device_press/device_fill. action=close ends the session. Use attachOnly=true on action=open to skip launching the app when it is already running (avoids relaunch-induced bundle races); liveness is checked only on the resolved exact device and refuses when that identity is unavailable.',
+  'Manage exact device sessions and capture UI snapshots even when a Dev Client remains at its native picker. Raw control requires exact install/device/runner authority but not a managed Metro target; meta.originAuthority explicitly reports proven or not-proven, and not-proven snapshots are never strict source evidence. A fresh Expo Developer Menu snapshot includes meta.foregroundSurface plus the exact authority-available meta.recommendation for cdp_dev_settings hideDevMenu; other or uncertain surfaces never receive that recommendation. action=open starts a session (required before other device_ tools), waits for Android app accessibility, and reports readiness.reactNativeUi=ready only when a matching live CDP helper confirms the RN fiber boundary; otherwise it warns that RN readiness is unverified. Pass deviceId to select an exact iOS simulator UDID or Android adb serial when devices run in parallel. action=snapshot returns the accessibility tree with @ref identifiers for device_press/device_fill. action=close ends the session. Use attachOnly=true on action=open to skip launching the app when it is already running (avoids relaunch-induced bundle races); liveness is checked only on the resolved exact device and refuses when that identity is unavailable.',
   {
     action: z
       .enum(['open', 'close', 'snapshot'])
@@ -2410,6 +2411,19 @@ trackedTool(
     bindRunner: (platform, deviceId, appId) =>
       bindNativeRunner(authorityRuntime, { platform, deviceId, appId }),
     unbindRunner: (beforeRelease) => unbindNativeRunner(authorityRuntime, beforeRelease),
+    remedyAuthorityAvailable: () => {
+      const status = authorityRuntime.status();
+      if (!status.available || status.state === 'blocked' || status.state === 'handoff_cleanup') {
+        return false;
+      }
+      if (!status.bindings.metro || !status.bindings.bundle) return false;
+      return !inspectLoginPrologueGuard({
+        binding: status.bindings.loginPrologue,
+        tool: 'cdp_dev_settings',
+        args: { action: 'hideDevMenu' },
+        mutation: true,
+      }).blocked;
+    },
     probeReactNativeUi: async (platform, deviceId, appId) => {
       const client = getClient();
       const filters = {
