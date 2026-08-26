@@ -89015,6 +89015,7 @@ init_utils();
 
 // packages/rn-dev-agent-core/dist/observability/server.js
 import { createServer as createServer3 } from "node:http";
+import { StringDecoder } from "node:string_decoder";
 import { readFileSync as readFileSync38 } from "node:fs";
 import { fileURLToPath as fileURLToPath6 } from "node:url";
 import { dirname as dirname29, join as join54 } from "node:path";
@@ -89363,23 +89364,25 @@ var ObservabilityServer = class {
       res.end("SPA bundle not built \u2014 run npm run build:web");
     }
   }
-  // Bounded body read that can never become an unhandled rejection —
-  // handle() fire-and-forgets the async routes, so a rejecting await here
-  // would crash the process on an oversized/aborted request (GH #438 review).
+  // Bounded body read that settles safely while handle() fire-and-forgets async routes.
   readBody(req) {
     return new Promise((resolve20) => {
+      const decoder = new StringDecoder("utf8");
       let body = "";
       let bytes = 0;
+      let oversized = false;
       req.on("data", (chunk) => {
+        if (oversized)
+          return;
         bytes += chunk.length;
         if (bytes > 65536) {
-          req.destroy();
+          oversized = true;
           resolve20(null);
           return;
         }
-        body += chunk.toString();
+        body += decoder.write(chunk);
       });
-      req.on("end", () => resolve20(body));
+      req.on("end", () => resolve20(oversized ? null : body + decoder.end()));
       req.on("error", () => resolve20(null));
     });
   }
