@@ -199,8 +199,7 @@ export function classifyForegroundSurface(
     return 'react_native_dev_menu';
   }
   const hasTutorialCopy = has('this is the developer menu');
-  const hasGenericTogglePair =
-    has('toggle performance monitor') && has('toggle element inspector');
+  const hasGenericTogglePair = has('toggle performance monitor') && has('toggle element inspector');
   const hasExpoControlPair = has('copy system info') && has('open devtools');
   if (
     hasExpoControlPair ||

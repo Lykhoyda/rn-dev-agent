@@ -916,13 +916,10 @@ function trackedTool(
       handler as (...args: unknown[]) => Promise<import('./utils.js').ToolResult>,
     ) as (...args: unknown[]) => Promise<unknown>,
   );
-  const base = instrumentTool(
-    name,
-    async (...args: unknown[]) => {
-      const result = await gated(...args);
-      return afterAuthority ? afterAuthority(result, args) : result;
-    },
-  );
+  const base = instrumentTool(name, async (...args: unknown[]) => {
+    const result = await gated(...args);
+    return afterAuthority ? afterAuthority(result, args) : result;
+  });
   // GH #321: the device_find snapshot-cache must be invalidated after ANY tool
   // that could change the screen — including JS-level mutations that bypass the
   // runNative choke point (cdp_interact, cdp_navigate, device_deeplink, the
@@ -2391,7 +2388,7 @@ trackedTool(
 
 trackedTool(
   'device_snapshot',
-  'Manage exact device sessions and capture UI snapshots even when a Dev Client remains at its native picker. Raw control requires exact install/device/runner authority but not a managed Metro target; meta.originAuthority explicitly reports proven or not-proven, and not-proven snapshots are never strict source evidence. A fresh Expo Developer Menu snapshot includes meta.foregroundSurface plus the exact authority-available meta.recommendation for cdp_dev_settings hideDevMenu; other or uncertain surfaces never receive that recommendation. action=open starts a session (required before other device_ tools), waits for Android app accessibility, and reports readiness.reactNativeUi=ready only when a matching live CDP helper confirms the RN fiber boundary; otherwise it warns that RN readiness is unverified. Pass deviceId to select an exact iOS simulator UDID or Android adb serial when devices run in parallel. action=snapshot returns the accessibility tree with @ref identifiers for device_press/device_fill. action=close ends the session. Use attachOnly=true on action=open to skip launching the app when it is already running (avoids relaunch-induced bundle races); liveness is checked only on the resolved exact device and refuses when that identity is unavailable.',
+  'Manage exact device sessions and capture UI snapshots even when a Dev Client remains at its native picker. Raw control requires exact install/device/runner authority but not a managed Metro target; meta.originAuthority explicitly reports proven or not-proven, and not-proven snapshots are never strict source evidence. A fresh Expo Developer Menu snapshot includes meta.foregroundSurface plus the exact authority-available meta.recommendation for cdp_dev_settings({ action: "hideDevMenu" }); other or uncertain surfaces never receive that recommendation. action=open starts a session (required before other device_ tools), waits for Android app accessibility, and reports readiness.reactNativeUi=ready only when a matching live CDP helper confirms the RN fiber boundary; otherwise it warns that RN readiness is unverified. Pass deviceId to select an exact iOS simulator UDID or Android adb serial when devices run in parallel. action=snapshot returns the accessibility tree with @ref identifiers for device_press/device_fill. action=close ends the session. Use attachOnly=true on action=open to skip launching the app when it is already running (avoids relaunch-induced bundle races); liveness is checked only on the resolved exact device and refuses when that identity is unavailable.',
   {
     action: z
       .enum(['open', 'close', 'snapshot'])

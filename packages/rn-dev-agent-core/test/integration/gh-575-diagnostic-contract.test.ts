@@ -79,6 +79,7 @@ test(
         supervisorPath: supervisor,
         cwd: project,
         args: ['--diagnostic-contract-probe'],
+        lineTimeoutMs: 25_000,
         env: {
           HOME: home,
           LOG_LEVEL: 'debug',

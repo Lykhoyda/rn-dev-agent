@@ -773,8 +773,7 @@ export async function attachForegroundSurfaceDiscovery(
   if (result.isError) return result;
   const foregroundSurface = foregroundSurfaceFromSnapshot(result, boundAppId);
   const authorityAvailable =
-    foregroundSurface === 'expo_dev_menu' &&
-    (await remedyAuthorityAvailable?.()) === true;
+    foregroundSurface === 'expo_dev_menu' && (await remedyAuthorityAvailable?.()) === true;
   const recommendation = recommendForegroundSurfaceRemedy({
     condition: foregroundSurface,
     authority: authorityAvailable ? 'available' : 'unavailable',
