@@ -563,7 +563,7 @@ function nativeHandler(
 ) {
   return createMaestroRunHandler({
     getActiveSession: () => ({
-      name: 'issue-627',
+      name: 'native-blind-environment',
       platform: 'ios',
       deviceId: IOS_UDID,
       appId: 'com.example.app',
