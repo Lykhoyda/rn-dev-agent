@@ -4,7 +4,9 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '../../..');
-const INDEX_TS = resolve(ROOT, 'packages/rn-dev-agent-core/src/index.ts');
+const INDEX_TS = process.env.RN_DEV_AGENT_DOCS_SOURCE
+  ? resolve(process.env.RN_DEV_AGENT_DOCS_SOURCE)
+  : resolve(ROOT, 'packages/rn-dev-agent-core/src/index.ts');
 // RN_DEV_AGENT_DOCS_OUT lets a regression run the real generator into a scratch
 // directory instead of overwriting the committed docs.
 const OUT_ROOT = process.env.RN_DEV_AGENT_DOCS_OUT
@@ -89,19 +91,26 @@ function parseStringLiteral(text, startPos) {
   let result = '';
   while (i < text.length) {
     if (text[i] === '\\') {
-      if (quote === "'" && text[i + 1] === "'") {
-        result += "'";
-        i += 2;
-        continue;
-      }
-      result += text[i + 1] ?? '';
+      if (i + 1 >= text.length) return null;
+      result += text.slice(i, i + 2);
       i += 2;
       continue;
     }
-    if (text[i] === quote) return { value: result, end: i + 1 };
+    if (text[i] === quote) {
+      return { value: decodeSupportedStringEscapes(result), end: i + 1 };
+    }
     result += text[i++];
   }
   return null;
+}
+
+export function decodeSupportedStringEscapes(value) {
+  return value.replace(/\\(?:u([\da-fA-F]{4})|([nt\\'"`]))/g, (_escape, unicode, simple) => {
+    if (unicode) return String.fromCharCode(Number.parseInt(unicode, 16));
+    if (simple === 'n') return '\n';
+    if (simple === 't') return '\t';
+    return simple;
+  });
 }
 
 function extractBalancedBraces(text, startIdx) {
@@ -124,12 +133,17 @@ function splitTopLevel(text) {
   let stringChar = '';
   for (let i = 0; i < text.length; i++) {
     const ch = text[i];
-    if (!inString && (ch === '"' || ch === "'" || ch === '`')) {
+    if (inString) {
+      if (ch === '\\') {
+        current += ch;
+        if (i + 1 < text.length) current += text[++i];
+        continue;
+      }
+      if (ch === stringChar) inString = false;
+    } else if (ch === '"' || ch === "'" || ch === '`') {
       inString = true;
       stringChar = ch;
-    } else if (inString && ch === stringChar && text[i - 1] !== '\\') {
-      inString = false;
-    } else if (!inString) {
+    } else {
       if ('([{'.includes(ch)) depth++;
       else if (')]}'.includes(ch)) depth--;
       else if (ch === ',' && depth === 0) {
@@ -180,6 +194,33 @@ function parseZodType(def) {
   return 'unknown';
 }
 
+function collapseOuterWhitespace(def) {
+  let result = '';
+  let inString = false;
+  let stringChar = '';
+  for (let i = 0; i < def.length; i++) {
+    const ch = def[i];
+    if (inString) {
+      result += ch;
+      if (ch === '\\') {
+        result += def[i + 1] ?? '';
+        i++;
+      } else if (ch === stringChar) {
+        inString = false;
+      }
+      continue;
+    }
+    if (ch === '"' || ch === "'" || ch === '`') {
+      inString = true;
+      stringChar = ch;
+      result += ch;
+      continue;
+    }
+    if (!/\s/.test(ch)) result += ch;
+  }
+  return result;
+}
+
 function extractSchemaParams(schemaText) {
   const inner = schemaText.replace(/^\s*\{/, '').replace(/\}\s*$/, '');
   if (!inner.trim()) return [];
@@ -191,7 +232,7 @@ function extractSchemaParams(schemaText) {
     const colonIdx = line.indexOf(':');
     if (colonIdx === -1) continue;
     const name = line.slice(0, colonIdx).trim();
-    const def = line.slice(colonIdx + 1).trim();
+    const def = collapseOuterWhitespace(line.slice(colonIdx + 1).trim());
 
     const param = {
       name,
@@ -211,10 +252,16 @@ function extractSchemaParams(schemaText) {
       param.required = false;
     }
 
-    const descRe = /\.describe\((['"`])([\s\S]*?)\1\s*\)/g;
-    let descMatch;
     let lastDesc = null;
-    while ((descMatch = descRe.exec(def)) !== null) lastDesc = descMatch[2];
+    let describePos = 0;
+    while ((describePos = def.indexOf('.describe(', describePos)) !== -1) {
+      const argumentStart = describePos + '.describe('.length;
+      const parsed = parseStringLiteral(def, argumentStart);
+      if (parsed && (def[parsed.end] === ')' || def.slice(parsed.end, parsed.end + 2) === ',)')) {
+        lastDesc = parsed.value;
+      }
+      describePos = argumentStart;
+    }
     if (lastDesc) param.description = lastDesc;
 
     const minMatch = def.match(/\.min\(([^)]+)\)/);
@@ -272,6 +319,16 @@ function escapeMdx(str) {
     .replace(/\}/g, '\\}');
 }
 
+function escapeMdxTableCell(str) {
+  return escapeMdx(str)
+    .replace(/\r\n?|\n/g, '<br />')
+    .replace(/\|/g, '&#124;');
+}
+
+function escapeMdxCodeTableCell(str) {
+  return str.replace(/\|/g, '\\|');
+}
+
 function generateMdx(tool) {
   const isDeprecated = tool.description.toLowerCase().includes('deprecated');
   const sortIdx = SORT_ORDER.indexOf(tool.name);
@@ -282,7 +339,7 @@ function generateMdx(tool) {
       const constraints = p.constraints.length ? p.constraints.join(', ') : '';
       const def = p.defaultValue ?? '';
       const req = p.required ? 'Yes' : 'No';
-      return `| \`${p.name}\` | \`${p.type}\` | ${req} | ${def ? `\`${def}\`` : ''} | ${constraints} | ${escapeMdx(p.description)} |`;
+      return `| \`${p.name}\` | \`${escapeMdxCodeTableCell(p.type)}\` | ${req} | ${def ? `\`${def}\`` : ''} | ${constraints} | ${escapeMdxTableCell(p.description)} |`;
     })
     .join('\n');
 
@@ -319,7 +376,6 @@ ${usage}
 `;
 }
 
-// --- Main ---
 const source = readFileSync(INDEX_TS, 'utf8');
 const blocks = extractTrackedToolBlocks(source);
 const tools = blocks.map(blockToTool).filter(Boolean);
@@ -348,7 +404,6 @@ for (const tool of tools) {
   console.log(`  generated: tools/${category}/${tool.name}.mdx`);
 }
 
-// Copy package changelogs with frontmatter injection
 const CHANGELOG_SOURCES = [
   ['Claude plugin', resolve(ROOT, 'packages/claude-plugin/CHANGELOG.md')],
   ['Core MCP server', resolve(ROOT, 'packages/rn-dev-agent-core/CHANGELOG.md')],

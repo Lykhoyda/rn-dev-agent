@@ -1,4 +1,5 @@
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from 'node:http';
+import { StringDecoder } from 'node:string_decoder';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -321,23 +322,24 @@ export class ObservabilityServer {
     }
   }
 
-  // Bounded body read that can never become an unhandled rejection —
-  // handle() fire-and-forgets the async routes, so a rejecting await here
-  // would crash the process on an oversized/aborted request (GH #438 review).
+  // Bounded body read that settles safely while handle() fire-and-forgets async routes.
   private readBody(req: IncomingMessage): Promise<string | null> {
     return new Promise((resolve) => {
+      const decoder = new StringDecoder('utf8');
       let body = '';
       let bytes = 0;
+      let oversized = false;
       req.on('data', (chunk: Buffer) => {
+        if (oversized) return; // drain without accumulating
         bytes += chunk.length;
         if (bytes > 65536) {
-          req.destroy();
+          oversized = true;
           resolve(null);
           return;
         }
-        body += chunk.toString();
+        body += decoder.write(chunk);
       });
-      req.on('end', () => resolve(body));
+      req.on('end', () => resolve(oversized ? null : body + decoder.end()));
       req.on('error', () => resolve(null));
     });
   }

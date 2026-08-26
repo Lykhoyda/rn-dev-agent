@@ -85501,7 +85501,7 @@ async function tapSystemDialog(labels, platform, totalTimeoutMs, slug, authority
   const selector = `^(?:${labels.map(regexEscape).join("|")})$`;
   const yaml2 = `- tapOn:
     text: "${yamlEscape(selector)}"`;
-  const result = await runMaestroInline(yaml2, {
+  const result = await runMaestroInlineFn(yaml2, {
     platform,
     timeoutMs: totalTimeoutMs,
     slug,
@@ -85578,7 +85578,7 @@ function createDeviceAcceptSystemDialogHandler() {
 function createDeviceDismissSystemDialogHandler() {
   return async (args) => handleSystemDialog(args, DISMISS_LABELS_IOS, DISMISS_LABELS_ANDROID, "sys-dismiss");
 }
-var APOSTROPHE_ASCII, APOSTROPHE_CURLY, ACCEPT_LABELS_IOS, DISMISS_LABELS_IOS_BASE, DISMISS_LABELS_IOS, ACCEPT_LABELS_ANDROID, DISMISS_LABELS_ANDROID, realSleep2, fetchSnapshotNodesFn, pressCandidateFn2, sleepFn, iosSessionActiveFn, OPEN_CONFIRMATION_LABELS, OPEN_CONFIRMATION_RETRY_DELAY_MS, DEFAULT_DIALOG_TIMEOUT_MS;
+var APOSTROPHE_ASCII, APOSTROPHE_CURLY, ACCEPT_LABELS_IOS, DISMISS_LABELS_IOS_BASE, DISMISS_LABELS_IOS, ACCEPT_LABELS_ANDROID, DISMISS_LABELS_ANDROID, realSleep2, fetchSnapshotNodesFn, pressCandidateFn2, runMaestroInlineFn, sleepFn, iosSessionActiveFn, OPEN_CONFIRMATION_LABELS, OPEN_CONFIRMATION_RETRY_DELAY_MS, DEFAULT_DIALOG_TIMEOUT_MS;
 var init_device_system_dialog = __esm({
   "packages/rn-dev-agent-core/dist/tools/device-system-dialog.js"() {
     "use strict";
@@ -85620,11 +85620,12 @@ var init_device_system_dialog = __esm({
     realSleep2 = (ms) => new Promise((r) => setTimeout(r, ms));
     fetchSnapshotNodesFn = fetchSnapshotNodes;
     pressCandidateFn2 = pressCandidate;
+    runMaestroInlineFn = runMaestroInline;
     sleepFn = realSleep2;
     iosSessionActiveFn = () => hasActiveSession() && getActiveSession()?.platform === "ios";
     OPEN_CONFIRMATION_LABELS = ["Open"];
     OPEN_CONFIRMATION_RETRY_DELAY_MS = 750;
-    DEFAULT_DIALOG_TIMEOUT_MS = 12e4;
+    DEFAULT_DIALOG_TIMEOUT_MS = 15e3;
   }
 });
 
@@ -91542,6 +91543,7 @@ var init_observe_project_root = __esm({
 
 // packages/rn-dev-agent-core/dist/observability/server.js
 import { createServer as createServer3 } from "node:http";
+import { StringDecoder } from "node:string_decoder";
 import { readFileSync as readFileSync38 } from "node:fs";
 import { fileURLToPath as fileURLToPath6 } from "node:url";
 import { dirname as dirname31, join as join55 } from "node:path";
@@ -91826,23 +91828,25 @@ var init_server3 = __esm({
           res.end("SPA bundle not built \u2014 run npm run build:web");
         }
       }
-      // Bounded body read that can never become an unhandled rejection —
-      // handle() fire-and-forgets the async routes, so a rejecting await here
-      // would crash the process on an oversized/aborted request (GH #438 review).
+      // Bounded body read that settles safely while handle() fire-and-forgets async routes.
       readBody(req) {
         return new Promise((resolve21) => {
+          const decoder = new StringDecoder("utf8");
           let body = "";
           let bytes = 0;
+          let oversized = false;
           req.on("data", (chunk) => {
+            if (oversized)
+              return;
             bytes += chunk.length;
             if (bytes > 65536) {
-              req.destroy();
+              oversized = true;
               resolve21(null);
               return;
             }
-            body += chunk.toString();
+            body += decoder.write(chunk);
           });
-          req.on("end", () => resolve21(body));
+          req.on("end", () => resolve21(oversized ? null : body + decoder.end()));
           req.on("error", () => resolve21(null));
         });
       }
@@ -95919,12 +95923,12 @@ var init_index = __esm({
     trackedTool("device_accept_system_dialog", "Tap an OS-level accept button on the exact session device. iOS prefers the capability-bound native runner so SpringBoard-owned dialogs are reachable; DIALOG_BUTTON_NOT_FOUND returns availableButtons for an exact-label retry.", {
       label: external_exports.string().optional().describe("Specific button label to tap. Omit to try common defaults (Allow, OK, Open, Continue, Yes, Accept)."),
       platform: external_exports.enum(["ios", "android"]).optional().describe("Authority-bound platform; conflicting values are refused"),
-      timeoutMs: external_exports.number().int().min(1e3).max(12e4).optional().describe("Whole fallback Maestro timeout (default 120000ms; native iOS runner path is preferred).")
+      timeoutMs: external_exports.number().int().min(1e3).max(12e4).optional().describe("Whole fallback Maestro timeout (default 15000ms; explicit values up to 120000 accepted). Native iOS runner path is preferred.")
     }, createDeviceAcceptSystemDialogHandler());
     trackedTool("device_dismiss_system_dialog", "Tap an OS-level dismiss button through the capability-bound runner on the exact session device.", {
       label: external_exports.string().optional().describe("Specific button label to tap. Omit to try common defaults (Cancel, Don\u2019t Allow, Deny, No, Not Now)."),
       platform: external_exports.enum(["ios", "android"]).optional().describe("Authority-bound platform; conflicting values are refused"),
-      timeoutMs: external_exports.number().int().min(1e3).max(12e4).optional().describe("Whole fallback Maestro timeout (default 120000ms; native iOS runner path is preferred).")
+      timeoutMs: external_exports.number().int().min(1e3).max(12e4).optional().describe("Whole fallback Maestro timeout (default 15000ms; explicit values up to 120000 accepted).")
     }, createDeviceDismissSystemDialogHandler());
     resolveNativeProofDevice = async () => {
       const session2 = getActiveSession();
@@ -96538,13 +96542,76 @@ var init_index = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/supervisor.js
-init_lockfile();
-init_parent_watch();
 import { randomUUID as randomUUID13 } from "node:crypto";
 import { spawn as spawn10 } from "node:child_process";
 import { lstatSync as lstatSync20, readFileSync as readFileSync43 } from "node:fs";
 import { dirname as dirname33, join as join61, resolve as resolve20 } from "node:path";
 import { fileURLToPath as fileURLToPath8 } from "node:url";
+
+// packages/rn-dev-agent-core/dist/lifecycle/child-error-or-exit.js
+var SQLITE_RELAUNCH_SIGNALS = ["SIGTERM", "SIGINT", "SIGHUP", "SIGUSR2"];
+function processSqliteRelaunchIo() {
+  return {
+    writeErrorLine: (line) => {
+      process.stderr.write(`${line}
+`);
+    },
+    exit: (code) => {
+      process.exit(code);
+    },
+    killSelf: (signal) => {
+      process.kill(process.pid, signal);
+    },
+    removeSignalListeners: (signal) => {
+      process.removeAllListeners(signal);
+    },
+    onSignal: (signal, handler) => {
+      process.on(signal, handler);
+    }
+  };
+}
+function awaitChildErrorOrExit(child) {
+  return new Promise((resolve21) => {
+    let settled = false;
+    const settle = (outcome) => {
+      if (settled)
+        return;
+      settled = true;
+      resolve21(outcome);
+    };
+    child.on("error", (err) => settle({
+      code: null,
+      signal: null,
+      error: err instanceof Error ? err : new Error(String(err))
+    }));
+    child.on("exit", (code, signal) => settle({ code, signal, error: null }));
+  });
+}
+async function completeSqliteRelaunch(child, io = processSqliteRelaunchIo()) {
+  for (const signal of SQLITE_RELAUNCH_SIGNALS) {
+    io.onSignal(signal, () => {
+      try {
+        child.kill?.(signal);
+      } catch {
+      }
+    });
+  }
+  const outcome = await awaitChildErrorOrExit(child);
+  if (outcome.error) {
+    io.writeErrorLine(`rn-bridge-supervisor: sqlite relaunch spawn failed: ${outcome.error.message}`);
+    io.exit(1);
+    return;
+  }
+  if (outcome.signal) {
+    io.removeSignalListeners(outcome.signal);
+    io.killSelf(outcome.signal);
+  }
+  io.exit(outcome.code ?? 1);
+}
+
+// packages/rn-dev-agent-core/dist/supervisor.js
+init_lockfile();
+init_parent_watch();
 
 // packages/rn-dev-agent-core/dist/lifecycle/stdio-frames.js
 var LineSplitter = class {
@@ -96881,15 +96948,7 @@ if (supervisorFlag.length > 0 && !process.execArgv.includes("--experimental-sqli
     stdio: "inherit",
     env: { ...process.env, RN_DEV_AGENT_SQLITE_RELAUNCHED: "1" }
   });
-  for (const signal of ["SIGTERM", "SIGINT", "SIGHUP", "SIGUSR2"]) {
-    process.on(signal, () => child.kill(signal));
-  }
-  const outcome = await new Promise((resolve21) => child.on("exit", (code, signal) => resolve21({ code, signal })));
-  if (outcome.signal) {
-    process.removeAllListeners(outcome.signal);
-    process.kill(process.pid, outcome.signal);
-  }
-  process.exit(outcome.code ?? 1);
+  await completeSqliteRelaunch(child);
 }
 function legacyRepairArtifactPresent(cwd) {
   try {
@@ -96987,7 +97046,7 @@ if (process.env.RN_BRIDGE_SUPERVISOR === "0") {
     };
     child.stdin?.on("error", () => {
     });
-    child.on("error", (err) => onDeath(null, null, `spawn failed: ${err.message}`));
+    void awaitChildErrorOrExit(child).then((outcome) => onDeath(outcome.code, outcome.signal, outcome.error ? `spawn failed: ${outcome.error.message}` : ""));
     if (child.stdout) {
       child.stdout.setEncoding("utf8");
       const childLines = new LineSplitter();
@@ -96998,7 +97057,6 @@ if (process.env.RN_BRIDGE_SUPERVISOR === "0") {
           apply2(core.onWorkerLine(line));
       });
     }
-    child.on("exit", (code, signal) => onDeath(code, signal, ""));
   }, closeAuthorityAndExit2 = function(exitCode = 0) {
     void authority?.close().then(() => process.exit(exitCode)).catch((error2) => {
       process.stderr.write(`rn-bridge-supervisor: authority cleanup failed: ${error2 instanceof Error ? error2.message : String(error2)}

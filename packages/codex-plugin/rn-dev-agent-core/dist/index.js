@@ -83502,6 +83502,7 @@ var DISMISS_LABELS_ANDROID = ["Deny", "DENY", "Cancel", "CANCEL", "No", "Not now
 var realSleep2 = (ms) => new Promise((r) => setTimeout(r, ms));
 var fetchSnapshotNodesFn = fetchSnapshotNodes;
 var pressCandidateFn2 = pressCandidate;
+var runMaestroInlineFn = runMaestroInline;
 var sleepFn = realSleep2;
 var iosSessionActiveFn = () => hasActiveSession() && getActiveSession()?.platform === "ios";
 async function tapSystemDialogViaRunner(labels) {
@@ -83545,7 +83546,7 @@ async function acceptDeeplinkOpenConfirmation() {
   await sleepFn(OPEN_CONFIRMATION_RETRY_DELAY_MS);
   return tapSystemDialogViaRunner(OPEN_CONFIRMATION_LABELS);
 }
-var DEFAULT_DIALOG_TIMEOUT_MS = 12e4;
+var DEFAULT_DIALOG_TIMEOUT_MS = 15e3;
 function regexEscape(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -83553,7 +83554,7 @@ async function tapSystemDialog(labels, platform, totalTimeoutMs, slug, authority
   const selector = `^(?:${labels.map(regexEscape).join("|")})$`;
   const yaml2 = `- tapOn:
     text: "${yamlEscape(selector)}"`;
-  const result = await runMaestroInline(yaml2, {
+  const result = await runMaestroInlineFn(yaml2, {
     platform,
     timeoutMs: totalTimeoutMs,
     slug,
@@ -89632,6 +89633,7 @@ init_utils();
 
 // packages/rn-dev-agent-core/dist/observability/server.js
 import { createServer as createServer3 } from "node:http";
+import { StringDecoder } from "node:string_decoder";
 import { readFileSync as readFileSync38 } from "node:fs";
 import { fileURLToPath as fileURLToPath6 } from "node:url";
 import { dirname as dirname29, join as join54 } from "node:path";
@@ -89980,23 +89982,25 @@ var ObservabilityServer = class {
       res.end("SPA bundle not built \u2014 run npm run build:web");
     }
   }
-  // Bounded body read that can never become an unhandled rejection —
-  // handle() fire-and-forgets the async routes, so a rejecting await here
-  // would crash the process on an oversized/aborted request (GH #438 review).
+  // Bounded body read that settles safely while handle() fire-and-forgets async routes.
   readBody(req) {
     return new Promise((resolve20) => {
+      const decoder = new StringDecoder("utf8");
       let body = "";
       let bytes = 0;
+      let oversized = false;
       req.on("data", (chunk) => {
+        if (oversized)
+          return;
         bytes += chunk.length;
         if (bytes > 65536) {
-          req.destroy();
+          oversized = true;
           resolve20(null);
           return;
         }
-        body += chunk.toString();
+        body += decoder.write(chunk);
       });
-      req.on("end", () => resolve20(body));
+      req.on("end", () => resolve20(oversized ? null : body + decoder.end()));
       req.on("error", () => resolve20(null));
     });
   }
@@ -93727,12 +93731,12 @@ trackedTool("cdp_dismiss_dev_client_picker", 'Dismiss the Expo Dev Client "Devel
 trackedTool("device_accept_system_dialog", "Tap an OS-level accept button on the exact session device. iOS prefers the capability-bound native runner so SpringBoard-owned dialogs are reachable; DIALOG_BUTTON_NOT_FOUND returns availableButtons for an exact-label retry.", {
   label: external_exports.string().optional().describe("Specific button label to tap. Omit to try common defaults (Allow, OK, Open, Continue, Yes, Accept)."),
   platform: external_exports.enum(["ios", "android"]).optional().describe("Authority-bound platform; conflicting values are refused"),
-  timeoutMs: external_exports.number().int().min(1e3).max(12e4).optional().describe("Whole fallback Maestro timeout (default 120000ms; native iOS runner path is preferred).")
+  timeoutMs: external_exports.number().int().min(1e3).max(12e4).optional().describe("Whole fallback Maestro timeout (default 15000ms; explicit values up to 120000 accepted). Native iOS runner path is preferred.")
 }, createDeviceAcceptSystemDialogHandler());
 trackedTool("device_dismiss_system_dialog", "Tap an OS-level dismiss button through the capability-bound runner on the exact session device.", {
   label: external_exports.string().optional().describe("Specific button label to tap. Omit to try common defaults (Cancel, Don\u2019t Allow, Deny, No, Not Now)."),
   platform: external_exports.enum(["ios", "android"]).optional().describe("Authority-bound platform; conflicting values are refused"),
-  timeoutMs: external_exports.number().int().min(1e3).max(12e4).optional().describe("Whole fallback Maestro timeout (default 120000ms; native iOS runner path is preferred).")
+  timeoutMs: external_exports.number().int().min(1e3).max(12e4).optional().describe("Whole fallback Maestro timeout (default 15000ms; explicit values up to 120000 accepted).")
 }, createDeviceDismissSystemDialogHandler());
 var resolveNativeProofDevice = async () => {
   const session2 = getActiveSession();

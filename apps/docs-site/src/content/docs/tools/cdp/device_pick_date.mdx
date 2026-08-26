@@ -9,15 +9,15 @@ Select a visible date in a UIDatePicker (wheels mode) / Android DatePicker with 
 
 | Name | Type | Required | Default | Constraints | Description |
 |------|------|----------|---------|-------------|-------------|
-| `date` | `unknown` | Yes |  |  | Target date — YYYY-MM-DD or full ISO 8601. Time component is ignored. |
-| `openerTestId` | `unknown` | No |  |  | Optional testID of the control that opens the date picker. |
-| `pickerTestId` | `unknown` | No |  |  |  |
-| `pickerScopeTestId` | `unknown` | No |  |  | Optional picker-container testID used as childOf scope for month/day/year rows. |
-| `platform` | `unknown` | No |  |  | Force platform. Auto-detected if omitted. |
-| `timeoutMs` | `unknown` | No |  | min: 1000, max: 120000, integer | Whole Maestro flow timeout (default 120000ms; never divided by component count). |
+| `date` | `string` | Yes |  |  | Target date — YYYY-MM-DD or full ISO 8601. Time component is ignored. |
+| `openerTestId` | `string` | No |  |  | Optional testID of the control that opens the date picker. |
+| `pickerTestId` | `string` | No |  |  | Deprecated openerTestId alias retained for compatibility; it does not scope row taps. |
+| `pickerScopeTestId` | `string` | No |  |  | Optional picker-container testID used as childOf scope for month/day/year rows. |
+| `platform` | `enum: ios \| android` | No |  |  | Force platform. Auto-detected if omitted. |
+| `timeoutMs` | `number` | No |  | min: 1000, max: 120000, integer | Whole Maestro flow timeout (default 120000ms; never divided by component count). |
 
 ## Usage
 
 ```
-device_pick_date(date: <unknown>)
+device_pick_date(date: <string>)
 ```

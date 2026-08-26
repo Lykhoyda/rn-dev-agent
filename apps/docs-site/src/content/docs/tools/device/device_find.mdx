@@ -12,10 +12,10 @@ Find a UI element by visible text and optionally interact with it. Android match
 | Name | Type | Required | Default | Constraints | Description |
 |------|------|----------|---------|-------------|-------------|
 | `text` | `string` | Yes |  |  | Visible text, accessibility label, or identifier to find |
-| `action` | `unknown` | No |  |  | Action to perform: "click" to tap, omit for search-only |
-| `exact` | `unknown` | No |  |  | Require exact label match (case-sensitive). Skips fuzzy matching entirely. |
-| `index` | `unknown` | No |  | min: 0, integer |  |
-| `includeSystemUi` | `unknown` | No |  |  | Include Android system UI in matching (default false; may leave the app). |
+| `action` | `string` | No |  |  | Action to perform: "click" to tap, omit for search-only |
+| `exact` | `boolean` | No |  |  | Require exact label match (case-sensitive). Skips fuzzy matching entirely. |
+| `index` | `number` | No |  | min: 0, integer | Pick the Nth candidate (0-based) when multiple elements match. Short-circuits AMBIGUOUS_MATCH. |
+| `includeSystemUi` | `boolean` | No |  |  | Include Android system UI in matching (default false; may leave the app). |
 
 ## Usage
 

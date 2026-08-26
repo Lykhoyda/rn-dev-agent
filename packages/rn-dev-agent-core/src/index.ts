@@ -2879,7 +2879,7 @@ trackedTool(
       .max(120000)
       .optional()
       .describe(
-        'Whole fallback Maestro timeout (default 120000ms; native iOS runner path is preferred).',
+        'Whole fallback Maestro timeout (default 15000ms; explicit values up to 120000 accepted). Native iOS runner path is preferred.',
       ),
   },
   createDeviceAcceptSystemDialogHandler(),
@@ -2906,7 +2906,7 @@ trackedTool(
       .max(120000)
       .optional()
       .describe(
-        'Whole fallback Maestro timeout (default 120000ms; native iOS runner path is preferred).',
+        'Whole fallback Maestro timeout (default 15000ms; explicit values up to 120000 accepted).',
       ),
   },
   createDeviceDismissSystemDialogHandler(),

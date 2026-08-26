@@ -9,15 +9,15 @@ Reset permissions/storage and relaunch the authority-bound app on its exact clai
 
 | Name | Type | Required | Default | Constraints | Description |
 |------|------|----------|---------|-------------|-------------|
-| `appId` | `unknown` | No |  |  | Authority-bound app identifier; normally injected by the session |
-| `platform` | `unknown` | No |  |  | Authority-bound platform; conflicting values are refused |
-| `deviceId` | `unknown` | No |  |  | Authority-bound exact device identifier; normally injected by the session |
-| `permissions` | `unknown` | No |  |  |  |
-| `storageKeys` | `unknown` | No |  |  |  |
-| `mmkvInstanceId` | `unknown` | No |  |  | Forwarded to cdp_mmkv. Defaults to mmkv.default. |
+| `appId` | `string` | No |  |  | Authority-bound app identifier; normally injected by the session |
+| `platform` | `enum: ios \| android` | No |  |  | Authority-bound platform; conflicting values are refused |
+| `deviceId` | `string` | No |  |  | Authority-bound exact device identifier; normally injected by the session |
+| `permissions` | `array` | No |  |  | Permissions to revoke/reset before relaunch. String shorthand defaults to revoke. Each entry is processed via device_permission. |
+| `storageKeys` | `array` | No |  |  | MMKV keys to delete before terminate (so the app reads cleared values on next launch). Skipped if CDP is not connected. |
+| `mmkvInstanceId` | `string` | No |  |  | Forwarded to cdp_mmkv. Defaults to mmkv.default. |
 | `relaunch` | `boolean` | No |  |  | Launch the app after terminate. Default true. |
-| `waitForReady` | `unknown` | No |  |  |  |
-| `waitForNavReady` | `unknown` | No |  |  |  |
+| `waitForReady` | `boolean` | No |  |  | After relaunch, wait for CDP reconnect + helpers injection. Default true. Set false to return immediately and let the caller poll. |
+| `waitForNavReady` | `boolean` | No |  |  | After helpers, also wait for globalThis.__NAV_REF__ to expose a non-empty navigation state. Default false. |
 
 ## Usage
 

@@ -97,6 +97,8 @@ authority_json='{"sessionAvailable":false,"authorityState":"unavailable","ownMet
 for session_cli in \
   "${RN_DEV_AGENT_SESSION_CLI:-}" \
   "$PLUGIN_ROOT/rn-dev-agent-core/dist/rn-session.js" \
+  "$PLUGIN_ROOT/packages/claude-plugin/rn-dev-agent-core/dist/rn-session.js" \
+  "$PLUGIN_ROOT/packages/codex-plugin/rn-dev-agent-core/dist/rn-session.js" \
   "$PLUGIN_ROOT/packages/rn-dev-agent-core/dist/rn-session.js"; do
   if [ -n "$session_cli" ] && [ -f "$session_cli" ]; then
     node_major=$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)
@@ -288,6 +290,8 @@ maestro_runner_version="not installed"
 pin_diagnose=""
 for candidate in \
   "$PLUGIN_ROOT/rn-dev-agent-core/dist/maestro-runner-pin.js" \
+  "$PLUGIN_ROOT/packages/claude-plugin/rn-dev-agent-core/dist/maestro-runner-pin.js" \
+  "$PLUGIN_ROOT/packages/codex-plugin/rn-dev-agent-core/dist/maestro-runner-pin.js" \
   "$PLUGIN_ROOT/packages/rn-dev-agent-core/dist/maestro-runner-pin.js"; do
   if [ -f "$candidate" ]; then
     pin_diagnose="$candidate"

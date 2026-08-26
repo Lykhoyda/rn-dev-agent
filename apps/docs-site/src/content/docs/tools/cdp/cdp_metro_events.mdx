@@ -9,9 +9,9 @@ Read Metro reporter events (bundle_build_started, bundle_build_done, bundle_buil
 
 | Name | Type | Required | Default | Constraints | Description |
 |------|------|----------|---------|-------------|-------------|
-| `limit` | `unknown` | No | `20` | min: 1, max: 100, integer | Max entries to return (default 20, max 100) |
+| `limit` | `number` | No | `20` | min: 1, max: 100, integer | Max entries to return (default 20, max 100) |
 | `type` | `string` | No |  |  | Filter by event type (e.g. "bundle_build_failed") |
-| `clearErrors` | `unknown` | No | `false` |  | Reset the build-error counter without reading events |
+| `clearErrors` | `boolean` | No | `false` |  | Reset the build-error counter without reading events |
 
 ## Usage
 

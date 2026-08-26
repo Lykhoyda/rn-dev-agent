@@ -11,10 +11,10 @@ Control React Native dev settings programmatically (no visual dev menu needed). 
 
 | Name | Type | Required | Default | Constraints | Description |
 |------|------|----------|---------|-------------|-------------|
-| `action` | `unknown` | Yes |  |  | Dev menu action to execute |
+| `action` | `enum: reload \| toggleInspector \| togglePerfMonitor \| dismissRedBox \| disableDevMenu \| hideDevMenu` | Yes |  |  | Dev menu action to execute |
 
 ## Usage
 
 ```
-cdp_dev_settings(action: <unknown>)
+cdp_dev_settings(action: <enum: reload | toggleInspector | togglePerfMonitor | dismissRedBox | disableDevMenu | hideDevMenu>)
 ```
