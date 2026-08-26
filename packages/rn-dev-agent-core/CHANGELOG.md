@@ -1,5 +1,11 @@
 # rn-dev-agent-core
 
+## 0.72.5
+
+### Patch Changes
+
+- c3a202e: Resolve wrapped React text handlers exactly while keeping native fills single-shot and verified.
+
 ## 0.72.4
 
 ### Patch Changes
