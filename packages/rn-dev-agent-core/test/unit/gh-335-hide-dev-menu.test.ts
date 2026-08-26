@@ -113,7 +113,7 @@ test('foreground classifier keeps Expo sheet, picker, tutorial, RN core menu, an
       { label: 'Toggle performance monitor' },
       { label: 'Toggle element inspector' },
     ]),
-    'expo_dev_menu',
+    'unknown',
   );
   assert.equal(classifyForegroundSurface([{ label: 'Development servers' }]), 'dev_client_picker');
   assert.equal(
@@ -307,6 +307,22 @@ test('React Native core menu markers win when generic Expo toggle labels overlap
   );
 });
 
+test('generic toggle overlap never exposes the Expo remedy without Expo-specific evidence', () => {
+  const envelope = parseEnvelope(
+    attachForegroundSurfaceDiscovery(
+      snapshotEnvelope([
+        { label: 'Toggle performance monitor' },
+        { label: 'Toggle element inspector' },
+      ]),
+      'com.example.app',
+      true,
+    ),
+  );
+
+  assert.equal(envelope.meta.foregroundSurface, 'unknown');
+  assert.equal(envelope.meta.recommendation, undefined);
+});
+
 test('foregroundSurfaceFromSnapshot classifies a typed native snapshot envelope', () => {
   const result = {
     content: [
@@ -431,6 +447,11 @@ test('foreground discovery does not recommend the Expo remedy for distinct or un
           packageName: appId,
         },
       ],
+    },
+    {
+      name: 'app-owned native overlay',
+      expectedSurface: 'app',
+      nodes: [{ label: 'Choose a profile', packageName: appId }],
     },
   ];
 

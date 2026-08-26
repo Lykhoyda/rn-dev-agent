@@ -29839,10 +29839,13 @@ function classifyForegroundSurface(nodes, boundAppId) {
   if (has("open debugger") || has("configure bundler") || has("react native dev menu") && has("open devtools") && has("change bundle location")) {
     return "react_native_dev_menu";
   }
-  if (has("toggle performance monitor") && has("toggle element inspector") || has("copy system info") && has("open devtools")) {
+  const hasTutorialCopy = has("this is the developer menu");
+  const hasGenericTogglePair = has("toggle performance monitor") && has("toggle element inspector");
+  const hasExpoControlPair = has("copy system info") && has("open devtools");
+  if (hasExpoControlPair || hasGenericTogglePair && (hasTutorialCopy || has("copy system info"))) {
     return "expo_dev_menu";
   }
-  if (has("this is the developer menu"))
+  if (hasTutorialCopy)
     return "first_run_tutorial";
   if (!boundAppId)
     return "unknown";
@@ -30473,7 +30476,7 @@ function createDeviceSnapshotHandler(deps = {}) {
         return attachForegroundSurfaceDiscovery(wrapWithMeta(recovery.result, {
           recovered: "agent-device-runner-leak",
           recoveryTier: recovery.tier
-        }), getActiveSession()?.appId, deps.remedyAuthorityAvailable?.() === true);
+        }), getActiveSession()?.appId, await deps.remedyAuthorityAvailable?.() === true);
       }
       return failResult(runnerLeakFailureMessage(recovery.reason, session2), {
         code: "RUNNER_LEAK",
@@ -30482,7 +30485,7 @@ function createDeviceSnapshotHandler(deps = {}) {
       });
     }
     cacheSnapshotIfPossible(result);
-    return attachForegroundSurfaceDiscovery(result, getActiveSession()?.appId, deps.remedyAuthorityAvailable?.() === true);
+    return attachForegroundSurfaceDiscovery(result, getActiveSession()?.appId, await deps.remedyAuthorityAvailable?.() === true);
   };
 }
 function attachForegroundSurfaceDiscovery(result, boundAppId, authorityAvailable) {
@@ -33042,7 +33045,7 @@ function reissueInstallAfterPreflightRefusal(registry2, runtime, operation, stat
 }
 async function preflightWithInstallReissue(registry2, runtime, dependencies, context, operation, status) {
   const { tool, profile, args, axes } = context;
-  const probeAll = (probed) => Promise.all(axes.map((axis) => dependencies.probe({ axis, phase: "preflight", tool, profile, status: probed, args })));
+  const probeAll = (probed) => probeAuthorityAxes(dependencies, { tool, profile, args, axes }, probed);
   try {
     return { before: await probeAll(status), operation, status };
   } catch (preflightError) {
@@ -33055,6 +33058,10 @@ async function preflightWithInstallReissue(registry2, runtime, dependencies, con
       status: reissued.status
     };
   }
+}
+function probeAuthorityAxes(dependencies, context, status) {
+  const { tool, profile, args, axes } = context;
+  return Promise.all(axes.map((axis) => dependencies.probe({ axis, phase: "preflight", tool, profile, status, args })));
 }
 function requireDeviceTransition(status, args) {
   const action = args.action ?? "snapshot";
@@ -33447,6 +33454,31 @@ async function reconcileRecoverableRuntime(runtime, dependencies, registry2, ope
 }
 function createAuthorityGate(runtime, dependencies) {
   return {
+    canRecommendHideDevMenu: async () => {
+      try {
+        const tool = "cdp_dev_settings";
+        const args = { action: "hideDevMenu" };
+        const profile = authorityProfileFor(tool, args);
+        const status = runtime.status();
+        if (!status.available || status.state === "blocked" || status.state === "handoff_cleanup" || profile.kind !== "authoritative") {
+          return false;
+        }
+        if (inspectLoginPrologueGuard({
+          binding: status.bindings.loginPrologue,
+          tool,
+          args,
+          mutation: profile.mutation
+        }).blocked) {
+          return false;
+        }
+        requireCompleteAxes(status, profile);
+        bindSessionArguments(status, profile, args, tool);
+        await probeAuthorityAxes(dependencies, { tool, profile, args, axes: profile.axes }, status);
+        return true;
+      } catch {
+        return false;
+      }
+    },
     wrap: (tool, handler) => async (...handlerArgs) => {
       const args = handlerArgs[0] && typeof handlerArgs[0] === "object" ? handlerArgs[0] : {};
       const suppliedSupervisorOverrideToken = typeof args.supervisorOverrideToken === "string" ? args.supervisorOverrideToken : void 0;
@@ -94627,7 +94659,6 @@ var init_index = __esm({
     init_evidence();
     init_recorder();
     init_proof_capture();
-    init_login_prologue();
     init_live_device();
     init_fast_runner_ref_map();
     init_device_screenshot_raw();
@@ -95512,20 +95543,7 @@ var init_index = __esm({
     }, createDeviceSnapshotHandler({
       bindRunner: (platform, deviceId, appId) => bindNativeRunner(authorityRuntime, { platform, deviceId, appId }),
       unbindRunner: (beforeRelease) => unbindNativeRunner(authorityRuntime, beforeRelease),
-      remedyAuthorityAvailable: () => {
-        const status = authorityRuntime.status();
-        if (!status.available || status.state === "blocked" || status.state === "handoff_cleanup") {
-          return false;
-        }
-        if (!status.bindings.metro || !status.bindings.bundle)
-          return false;
-        return !inspectLoginPrologueGuard({
-          binding: status.bindings.loginPrologue,
-          tool: "cdp_dev_settings",
-          args: { action: "hideDevMenu" },
-          mutation: true
-        }).blocked;
-      },
+      remedyAuthorityAvailable: () => authorityGate.canRecommendHideDevMenu(),
       probeReactNativeUi: async (platform, deviceId, appId) => {
         const client2 = getClient();
         const filters = {

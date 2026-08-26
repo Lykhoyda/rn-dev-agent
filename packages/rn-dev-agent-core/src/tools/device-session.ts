@@ -262,7 +262,7 @@ interface DeviceSnapshotDependencies {
   ensureIosRunner?: typeof ensureRunnerForCommand;
   stopIosRunner?: typeof stopFastRunner;
   reapAndroidRunner?: typeof reapActiveAndroidRunner;
-  remedyAuthorityAvailable?: () => boolean;
+  remedyAuthorityAvailable?: () => boolean | Promise<boolean>;
 }
 
 export function createDeviceSnapshotHandler(
@@ -745,7 +745,7 @@ export function createDeviceSnapshotHandler(
             recoveryTier: recovery.tier,
           }),
           getActiveSession()?.appId,
-          deps.remedyAuthorityAvailable?.() === true,
+          (await deps.remedyAuthorityAvailable?.()) === true,
         );
       }
 
@@ -760,7 +760,7 @@ export function createDeviceSnapshotHandler(
     return attachForegroundSurfaceDiscovery(
       result,
       getActiveSession()?.appId,
-      deps.remedyAuthorityAvailable?.() === true,
+      (await deps.remedyAuthorityAvailable?.()) === true,
     );
   };
 }
