@@ -137,6 +137,9 @@ test('typeText keeps the proven shallow wrapped-field path typeable', () => {
 
   assert.equal(result.success, true);
   assert.deepEqual(calls, ['hello']);
+  assert.equal(result.handlerCalled, 'onChangeText');
+  assert.equal(result.controlled, true);
+  assert.equal(result.valueBefore, '');
   assert.equal(leaf.memoizedProps.value, '');
 });
 
@@ -185,6 +188,9 @@ test('typeText readback resolves the same deep controlled target as mutation', (
   const readback = agent.readInputValue('shared-readback');
 
   assert.equal(mutation.success, true, JSON.stringify(mutation));
+  assert.equal(mutation.handlerCalled, 'onChangeText');
+  assert.equal(mutation.controlled, true);
+  assert.equal(mutation.valueBefore, '');
   assert.deepEqual(readback, { value: 'verified', controlled: true });
 });
 
@@ -985,15 +991,22 @@ test('typeText shares one work limit across selector and candidate discovery', (
   assert.deepEqual(calls, []);
 });
 
-test('typeText refuses truthfully when no matching self or descendant owns a handler', () => {
+test('typeText refuses truthfully with or without verify when no handler exists', () => {
   const root = makeFiber('Root');
   const wrapper = appendChild(root, makeFiber('View', { testID: 'inert' }));
   wrap(wrapper, 25);
 
-  const result = runInteract(root, { action: 'typeText', testID: 'inert', text: 'unused' });
+  for (const verify of [undefined, true]) {
+    const result = runInteract(root, {
+      action: 'typeText',
+      testID: 'inert',
+      text: 'unused',
+      verify,
+    });
 
-  assert.match(String(result.error), /no onChangeText or onChange handler/);
-  assert.equal(result.handlerCalled, false);
+    assert.match(String(result.error), /no onChangeText or onChange handler/);
+    assert.equal(result.handlerCalled, false);
+  }
 });
 
 test('setFieldValue uses the useForm return whose control matches an explicit control prop', () => {

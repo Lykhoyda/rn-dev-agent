@@ -54048,7 +54048,7 @@ var INJECTED_HELPERS = `
             error: 'setFieldValue: no FormProvider ancestor or matching useForm control found',
             testID: selector,
             ancestorVisits: ancestorVisits,
-            hint: 'No FormProvider or ancestor useForm hook return matched the nearest explicit control prop by identity. If you only need to fire onChangeText/onChange, use action="typeText" instead.'
+            hint: 'The target is not wrapped in <FormProvider>, and no ancestor useForm hook return matched the nearest explicit control prop by identity. If you only need to fire onChangeText/onChange, use action="typeText" instead.'
           });
         }
         var coercedToString = false;
@@ -72796,9 +72796,7 @@ async function executeStep(step, getClient2, abortSignal) {
         ref: targetRef,
         text: step.text,
         settleTimeoutMs: step.settle === false ? 0 : BATCH_STEP_SETTLE_BUDGET_MS
-      }, null, {
-        ...abortSignal ? { abortSignal } : {}
-      });
+      }, null, abortSignal ? { abortSignal } : {});
     }
     case "swipe": {
       if (!step.direction)
