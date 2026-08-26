@@ -28964,14 +28964,14 @@ function classifyForegroundSurface(nodes, boundAppId) {
     return hasBoundApp ? "app" : "unknown";
   if (has("development servers"))
     return "dev_client_picker";
-  if (has("this is the developer menu"))
-    return "first_run_tutorial";
-  if (has("toggle performance monitor") && has("toggle element inspector") || has("copy system info") && has("open devtools")) {
-    return "expo_dev_menu";
-  }
   if (has("open debugger") || has("configure bundler") || has("react native dev menu") && has("open devtools") && has("change bundle location")) {
     return "react_native_dev_menu";
   }
+  if (has("toggle performance monitor") && has("toggle element inspector") || has("copy system info") && has("open devtools")) {
+    return "expo_dev_menu";
+  }
+  if (has("this is the developer menu"))
+    return "first_run_tutorial";
   if (!boundAppId)
     return "unknown";
   return hasBoundApp ? "app" : "unknown";
