@@ -627,7 +627,7 @@ function nativeHandler(
   });
 }
 
-test('native-only blindness requires same-screen selector evidence', async () => {
+test('native-only blindness requires a WDA miss and same-screen native visibility', async () => {
   let comparisonRunnerStopped = false;
   const env = envelope(
     await nativeHandler(true, true, undefined, {
@@ -642,6 +642,8 @@ test('native-only blindness requires same-screen selector evidence', async () =>
     }),
   );
   assert.equal(env.code, 'NATIVE_SURFACE_BLIND');
+  assert.equal(env.meta?.nativeVision.source, 'rn-fast-runner-snapshot');
+  assert.equal(env.meta?.nativeVision.visibleSelectorCount, 1);
   assert.equal(env.meta?.nativeVision.failedSelectorKind, 'text');
   assert.equal(env.meta?.nativeVision.runtimeVersionHeuristicIsProof, false);
   assert.equal(env.meta?.cleanup.cleanupProven, true);

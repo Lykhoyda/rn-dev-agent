@@ -263,6 +263,10 @@ import type { SessionStatus } from './session/registry.js';
 import { strictProofSourceIdentity, type SourceIdentity } from './session/source-identity.js';
 import { verifyManagedMetroManagementProof } from './session/managed-metro.js';
 import { stopBoundRunner } from './session/process-cleanup.js';
+import {
+  recoverAuthoritativeRuntimeConnection,
+  withRecoveredAuthoritativeRuntime,
+} from './session/runtime-connection-recovery.js';
 
 const pkgPath = join(dirname(fileURLToPath(import.meta.url)), '..', 'package.json');
 const pkgVersion = (JSON.parse(readFileSync(pkgPath, 'utf8')) as { version: string }).version;
@@ -699,39 +703,13 @@ const authorityGate = createAuthorityGate(authorityRuntime, {
     localAuthorityProbe({ axis, phase, status, tool, args }),
   recoverRuntimeConnection: async (status) => {
     const current = getClient();
-    const metro = status.bindings.metro as { port?: unknown } | undefined;
-    const device = status.bindings.device as { platform?: unknown; appId?: unknown } | undefined;
-    const metroPort = metro?.port;
-    const platform = device?.platform;
-    const appId = device?.appId;
-    if (
-      !Number.isSafeInteger(metroPort) ||
-      (platform !== 'ios' && platform !== 'android') ||
-      typeof appId !== 'string' ||
-      !current.matchesAuthoritativeSessionPolicy(Number(metroPort), {
-        platform,
-        bundleId: appId,
-      })
-    ) {
-      return false;
-    }
-    if (current.reconnectState.active) {
-      const deadline = Date.now() + 30_000;
-      while (current.reconnectState.active && Date.now() < deadline) {
-        await new Promise((resolveWait) => setTimeout(resolveWait, 500));
-      }
-      if (current.reconnectState.active || !current.isConnected) {
-        throw new Error('RECONNECT_TIMEOUT: authoritative background reconnect did not complete');
-      }
-    } else if (!current.isConnected) {
-      await current.autoConnect();
-    }
+    const recovered = await recoverAuthoritativeRuntimeConnection(status, current, { getClient });
     const bundle = status.bindings.bundle as
       | { targetId?: unknown; connectionGeneration?: unknown }
       | undefined;
     return (
-      current.connectedTarget?.id !== bundle?.targetId ||
-      current.connectionGeneration !== bundle?.connectionGeneration
+      recovered.connectedTarget?.id !== bundle?.targetId ||
+      recovered.connectionGeneration !== bundle?.connectionGeneration
     );
   },
   runtimeConnectionChanged: (status) => {
@@ -1408,69 +1386,75 @@ async function rebindSessionRuntime(
   const prior = status.bindings.bundle as Record<string, unknown> | null;
   const install = status.bindings.install as { devClientUrl?: string };
   const declaredDevice = status.bindings.device as { devClientUrl?: string };
-  const client = connectedClient;
-  const target = client.connectedTarget;
-  if (
-    !client.isConnected ||
-    !target ||
-    client.metroPort !== metro.port ||
-    !targetMatchesSession(target, {
-      platform: device.platform,
-      bundleId: device.appId,
-    })
-  ) {
-    throw new Error(
-      'CDP_TARGET_AUTHORITY_MISMATCH: runtime reset did not reconnect the exact session target',
-    );
-  }
-  await proveTargetDeviceAssociation(
-    {
-      platform: device.platform,
-      deviceId: device.deviceId,
-      targetDeviceName: target.deviceName,
-    },
-    { execute: execFileP, awaitWithinBoundary },
-  );
   const secret = process.env.RN_DEV_AGENT_SESSION_SECRET_PATH
     ? readJsonStateFile<{ signerCapability?: string }>(process.env.RN_DEV_AGENT_SESSION_SECRET_PATH)
     : null;
-  const evaluateMarker = () =>
-    client.evaluate('JSON.stringify(globalThis.__RN_DEV_AGENT_AUTHORITY__ ?? null)');
-  const evaluated = await (awaitWithinBoundary
-    ? awaitWithinBoundary(evaluateMarker)
-    : evaluateMarker());
-  const outer =
-    typeof evaluated.value === 'string'
-      ? (JSON.parse(evaluated.value) as {
-          status?: string;
-          marker?: MetroAuthorityMarker;
-        } | null)
-      : null;
-  if (outer?.status !== 'signed' || !outer.marker || !secret?.signerCapability) {
-    throw new Error(
-      'BUNDLE_HANDSHAKE_UNAVAILABLE: runtime reset did not expose the signed session marker',
-    );
-  }
-  const verified = verifyMetroAuthorityMarker(outer.marker, secret.signerCapability, {
-    sessionId: status.sessionId,
-    metroInstanceId: metro.instanceId,
-    worktreeKey: status.worktreeKey,
-    appId: device.appId,
-    platform: device.platform,
-    buildGeneration: metro.buildGeneration,
-  });
-  const devClientUrl =
-    (typeof prior?.devClientUrl === 'string' ? prior.devClientUrl : undefined) ??
-    install.devClientUrl ??
-    declaredDevice.devClientUrl;
-  return buildBundleAuthorityBinding({
-    ...verified,
-    deviceId: device.deviceId,
-    metroPort: metro.port,
-    ...(devClientUrl ? { devClientUrl } : {}),
-    targetId: target.id,
-    connectionGeneration: client.connectionGeneration,
-  });
+  return withRecoveredAuthoritativeRuntime(
+    status,
+    connectedClient,
+    async (client) => {
+      const target = client.connectedTarget;
+      if (
+        !client.isConnected ||
+        !target ||
+        client.metroPort !== metro.port ||
+        !targetMatchesSession(target, {
+          platform: device.platform,
+          bundleId: device.appId,
+        })
+      ) {
+        throw new Error(
+          'CDP_TARGET_AUTHORITY_MISMATCH: runtime reset did not reconnect the exact session target',
+        );
+      }
+      await proveTargetDeviceAssociation(
+        {
+          platform: device.platform,
+          deviceId: device.deviceId,
+          targetDeviceName: target.deviceName,
+        },
+        { execute: execFileP, awaitWithinBoundary },
+      );
+      const evaluateMarker = () =>
+        client.evaluate('JSON.stringify(globalThis.__RN_DEV_AGENT_AUTHORITY__ ?? null)');
+      const evaluated = await (awaitWithinBoundary
+        ? awaitWithinBoundary(evaluateMarker)
+        : evaluateMarker());
+      const outer =
+        typeof evaluated.value === 'string'
+          ? (JSON.parse(evaluated.value) as {
+              status?: string;
+              marker?: MetroAuthorityMarker;
+            } | null)
+          : null;
+      if (outer?.status !== 'signed' || !outer.marker || !secret?.signerCapability) {
+        throw new Error(
+          'BUNDLE_HANDSHAKE_UNAVAILABLE: runtime reset did not expose the signed session marker',
+        );
+      }
+      const verified = verifyMetroAuthorityMarker(outer.marker, secret.signerCapability, {
+        sessionId: status.sessionId,
+        metroInstanceId: metro.instanceId,
+        worktreeKey: status.worktreeKey,
+        appId: device.appId,
+        platform: device.platform,
+        buildGeneration: metro.buildGeneration,
+      });
+      const devClientUrl =
+        (typeof prior?.devClientUrl === 'string' ? prior.devClientUrl : undefined) ??
+        install.devClientUrl ??
+        declaredDevice.devClientUrl;
+      return buildBundleAuthorityBinding({
+        ...verified,
+        deviceId: device.deviceId,
+        metroPort: metro.port,
+        ...(devClientUrl ? { devClientUrl } : {}),
+        targetId: target.id,
+        connectionGeneration: client.connectionGeneration,
+      });
+    },
+    { getClient },
+  );
 }
 
 async function reconcileAuthoritativeConnection(
