@@ -10,6 +10,7 @@ import {
   relaunchManagedNativeOriginApp,
   reproveManagedNativeOrigin,
 } from '../../../dist/session/authority-gate.js';
+import { isLoginRunnerRecoveryState } from '../../../dist/domain/login-prologue.js';
 import { SessionAuthorityError } from '../../../dist/session/registry.js';
 import { createLoginPrologueHandler } from '../../../dist/tools/login-prologue.js';
 import { failResult, okResult } from '../../../dist/utils.js';
@@ -2712,6 +2713,16 @@ test('a failed login prologue becomes a durable terminal mutation gate', async (
     assert.equal(dispatched, false, `${tool} must not dispatch`);
   }
 
+  let recoveryDispatched = false;
+  const unsupportedRecovery = await gate.wrap('device_snapshot', async () => {
+    recoveryDispatched = true;
+    return okResult({ opened: true });
+  })({ action: 'open', attachOnly: true });
+  const unsupportedRecoveryEnvelope = JSON.parse(unsupportedRecovery.content[0].text);
+  assert.equal(unsupportedRecoveryEnvelope.code, 'LOGIN_PROLOGUE_BLOCKED');
+  assert.match(unsupportedRecoveryEnvelope.meta.nextAction, /not authorized/);
+  assert.equal(recoveryDispatched, false);
+
   let readDispatched = false;
   const readResult = await gate.wrap('cdp_component_tree', async () => {
     readDispatched = true;
@@ -2750,8 +2761,18 @@ test('a real failed login replay can rebind the same runner and discharge the la
     },
   });
   const loginHandler = createLoginPrologueHandler({ runAction });
+  let metroHealthy = true;
+  const recoveryMetroProbes = [];
   const gate = createAuthorityGate(runtime, {
-    probe: async ({ axis }) => ({ axis, identity: `${axis}-identity` }),
+    probe: async ({ axis, phase, tool }) => {
+      if (tool === 'device_snapshot' && axis === 'M') {
+        recoveryMetroProbes.push(`${phase}:${axis}`);
+        if (!metroHealthy) {
+          throw new SessionAuthorityError('METRO_AUTHORITY_MISMATCH', 'stale Metro authority');
+        }
+      }
+      return { axis, identity: `${axis}-identity` };
+    },
     refreshRuntimeBinding: async () => ({
       targetId: 'recovered-target',
       connectionGeneration: 2,
@@ -2763,10 +2784,29 @@ test('a real failed login replay can rebind the same runner and discharge the la
 
   const failed = JSON.parse((await login({ projectRoot: project.root })).content[0].text);
   assert.equal(failed.code, 'LOGIN_PROLOGUE_BLOCKED');
+  assert.equal(
+    failed.meta.loginPrologue.runRecord?.status,
+    'fail',
+    JSON.stringify(failed.meta.loginPrologue),
+  );
   assert.equal(project.readSidecar('user-login').runHistory.at(-1).status, 'fail');
   assert.equal(status.bindings.loginPrologue.failure.code, 'TESTID_NOT_FOUND');
   assert.equal(status.bindings.runner, null);
   assert.equal(status.bindings.bundle, null);
+  assert.equal(
+    isLoginRunnerRecoveryState({
+      binding: status.bindings.loginPrologue,
+      authority: {
+        install: status.bindings.install,
+        metro: status.bindings.metro,
+        bundle: status.bindings.bundle,
+        device: status.bindings.device,
+        runner: status.bindings.runner,
+      },
+    }),
+    true,
+  );
+  assert.match(failed.meta.nextAction, /attachOnly true/);
 
   const statusRead = await gate.wrap('rn_session', async () =>
     okResult({ state: status.state, loginPrologue: status.bindings.loginPrologue }),
@@ -2782,6 +2822,7 @@ test('a real failed login replay can rebind the same runner and discharge the la
   assert.equal(circularRetryEnvelope.code, 'RUNNER_OWNERSHIP_MISMATCH');
   assert.match(circularRetryEnvelope.meta.nextAction, /attachOnly true/);
   assert.equal(retryDispatched, false);
+  assert.equal(status.bindings.loginPrologue.failure.code, 'TESTID_NOT_FOUND');
   assert.equal(project.readSidecar('user-login').runHistory.length, 1);
 
   let unrelatedDispatched = false;
@@ -2791,6 +2832,17 @@ test('a real failed login replay can rebind the same runner and discharge the la
   })({ ref: '@e1' });
   assert.equal(JSON.parse(unrelated.content[0].text).code, 'LOGIN_PROLOGUE_BLOCKED');
   assert.equal(unrelatedDispatched, false);
+
+  metroHealthy = false;
+  let staleMetroDispatched = false;
+  const staleMetro = await gate.wrap('device_snapshot', async () => {
+    staleMetroDispatched = true;
+    return okResult({ opened: true });
+  })({ action: 'open', attachOnly: true });
+  assert.equal(JSON.parse(staleMetro.content[0].text).code, 'METRO_AUTHORITY_MISMATCH');
+  assert.equal(staleMetroDispatched, false);
+  metroHealthy = true;
+  recoveryMetroProbes.length = 0;
 
   for (const [args, expectedCode] of [
     [{ action: 'open', attachOnly: false }, 'LOGIN_PROLOGUE_BLOCKED'],
@@ -2854,6 +2906,8 @@ test('a real failed login replay can rebind the same runner and discharge the la
 
   const recoveryOpen = JSON.parse((await openRunner()).content[0].text);
   assert.equal(recoveryOpen.ok, true);
+  assert.ok(recoveryMetroProbes.includes('preflight:M'));
+  assert.ok(recoveryMetroProbes.includes('postflight:M'));
   assert.deepEqual(recoveryOpen.meta.loginPrologueRecovery, {
     runnerRebound: true,
     latchCleared: false,

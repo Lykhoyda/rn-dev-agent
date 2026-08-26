@@ -31074,11 +31074,22 @@ function lockedE2eProofAllowed(tool, args, resolvedLockedTestIds2) {
   }
   return false;
 }
-function isLoginRunnerRecoveryOperation(input) {
-  return readLoginPrologueOutcome(input.binding)?.state === LOGIN_PROLOGUE_BLOCKED && input.mutation && input.tool === "device_snapshot" && input.args.action === "open" && input.args.attachOnly === true;
+function isLoginRunnerRecoveryState(input) {
+  const outcome = readLoginPrologueOutcome(input.binding);
+  return Boolean(input.authority && outcome?.state === LOGIN_PROLOGUE_BLOCKED && outcome.role === ACTION_LOGIN_HELPER && outcome.actionId === LOGIN_PROLOGUE_ALIAS && outcome.runRecord?.status === "fail" && input.authority.runner == null && input.authority.bundle == null);
 }
-function latchedOperationAllowed(binding, tool, args, mutation) {
-  if (isLoginRunnerRecoveryOperation({ binding, tool, args, mutation }))
+function loginPrologueNextAction(input) {
+  if (isLoginRunnerRecoveryState(input) && input.authority?.install != null && input.authority.metro != null && input.authority.device != null) {
+    return LOGIN_PROLOGUE_RECOVERY_SEQUENCE;
+  }
+  const outcome = readLoginPrologueOutcome(input.binding);
+  return outcome?.failure?.code === "LOGIN_ACTION_MISSING" || outcome?.failure?.code === "LOGIN_ACTION_ID_MISMATCH" ? `Restore the exact ${LOGIN_PROLOGUE_ALIAS} action, then run cdp_login_prologue.` : LOGIN_PROLOGUE_RETRY_ACTION;
+}
+function isLoginRunnerRecoveryOperation(input) {
+  return isLoginRunnerRecoveryState(input) && input.mutation && input.tool === "device_snapshot" && input.args.action === "open" && input.args.attachOnly === true;
+}
+function latchedOperationAllowed(binding, authority, tool, args, mutation) {
+  if (isLoginRunnerRecoveryOperation({ binding, authority, tool, args, mutation }))
     return true;
   if (tool === "cdp_login_prologue")
     return true;
@@ -31104,7 +31115,7 @@ function tokenMatches(expected, supplied) {
 }
 function inspectLoginPrologueGuard(input) {
   const outcome = readLoginPrologueOutcome(input.binding);
-  if (outcome?.state !== LOGIN_PROLOGUE_BLOCKED || !input.mutation || latchedOperationAllowed(input.binding, input.tool, input.args, input.mutation) || lockedE2eProofAllowed(input.tool, input.args, input.resolvedLockedTestIds)) {
+  if (outcome?.state !== LOGIN_PROLOGUE_BLOCKED || !input.mutation || latchedOperationAllowed(input.binding, input.authority, input.tool, input.args, input.mutation) || lockedE2eProofAllowed(input.tool, input.args, input.resolvedLockedTestIds)) {
     return { blocked: false };
   }
   return {
@@ -31120,7 +31131,7 @@ function authorizeLoginSupervisorOverride(input) {
 function appendLoginOverrideAudit(outcome, audit) {
   return { ...outcome, overrides: [...outcome.overrides ?? [], audit].slice(-20) };
 }
-var LOGIN_PROLOGUE_ALIAS, LOGIN_PROLOGUE_BLOCKED, ACTION_LOGIN_HELPER, LOGIN_PROLOGUE_RECOVERY_SEQUENCE;
+var LOGIN_PROLOGUE_ALIAS, LOGIN_PROLOGUE_BLOCKED, ACTION_LOGIN_HELPER, LOGIN_PROLOGUE_RECOVERY_SEQUENCE, LOGIN_PROLOGUE_RETRY_ACTION;
 var init_login_prologue = __esm({
   "packages/rn-dev-agent-core/dist/domain/login-prologue.js"() {
     "use strict";
@@ -31128,6 +31139,7 @@ var init_login_prologue = __esm({
     LOGIN_PROLOGUE_BLOCKED = "LOGIN_PROLOGUE_BLOCKED";
     ACTION_LOGIN_HELPER = "ACTION_LOGIN_HELPER";
     LOGIN_PROLOGUE_RECOVERY_SEQUENCE = 'Run device_snapshot with action "open" and attachOnly true on the already-bound app, rerun cdp_login_prologue, then repeat the same attach-only open before device_press or device_fill.';
+    LOGIN_PROLOGUE_RETRY_ACTION = "Resolve the reported user-login failure, then rerun cdp_login_prologue; attach-only runner recovery is not authorized for this blocked state.";
   }
 });
 
@@ -31997,6 +32009,15 @@ function parseLoginPrologueOutcome(result) {
     return null;
   }
 }
+function loginRunnerRecoveryAuthority(status) {
+  return {
+    install: status.bindings.install,
+    metro: status.bindings.metro,
+    bundle: status.bindings.bundle,
+    device: status.bindings.device,
+    runner: status.bindings.runner
+  };
+}
 function missingLoginPrologueOutcome(result) {
   const timestamp = (/* @__PURE__ */ new Date()).toISOString();
   let failure = {
@@ -32298,14 +32319,22 @@ function createAuthorityGate(runtime, dependencies) {
         liveBundleProbe: tool === "proof_capture"
       } : baseProfile;
       const runtimeStatus = runtime.status();
+      const loginAuthority = runtimeStatus.available ? loginRunnerRecoveryAuthority(runtimeStatus) : void 0;
+      const priorLoginPrologueOutcome = readLoginPrologueOutcome(runtimeStatus.available ? runtimeStatus.bindings.loginPrologue : void 0);
+      const priorLoginRecoveryAvailable = isLoginRunnerRecoveryState({
+        binding: priorLoginPrologueOutcome,
+        authority: loginAuthority
+      });
       const loginRunnerRecovery = isLoginRunnerRecoveryOperation({
         binding: runtimeStatus.available ? runtimeStatus.bindings.loginPrologue : void 0,
+        authority: loginAuthority,
         tool,
         args,
         mutation: profile.mutation
       });
       const loginGuard = inspectLoginPrologueGuard({
         binding: runtimeStatus.available ? runtimeStatus.bindings.loginPrologue : void 0,
+        authority: loginAuthority,
         tool,
         args,
         mutation: profile.mutation
@@ -32316,7 +32345,10 @@ function createAuthorityGate(runtime, dependencies) {
         return failResult("LOGIN_PROLOGUE_BLOCKED: the deterministic login action did not produce an authoritative passing RunRecord; mutating tools are disabled for this session.", "LOGIN_PROLOGUE_BLOCKED", {
           loginPrologue: runtimeStatus.available ? runtimeStatus.bindings.loginPrologue : void 0,
           overrideRejected: false,
-          nextAction: LOGIN_PROLOGUE_RECOVERY_SEQUENCE
+          nextAction: loginPrologueNextAction({
+            binding: runtimeStatus.available ? runtimeStatus.bindings.loginPrologue : void 0,
+            authority: loginAuthority
+          })
         });
       }
       if (loginGuard.blocked && profile.kind === "transition") {
@@ -32376,7 +32408,10 @@ function createAuthorityGate(runtime, dependencies) {
           if (gateCommitsProof && status.bindings.proof) {
             throw new SessionAuthorityError("PROOF_AUTHORITY_MISMATCH", "an active proof run must be finalized or discarded before beginning another");
           }
-          const transitionAxes = tool === "device_snapshot" ? args.action === "open" ? {
+          const transitionAxes = tool === "device_snapshot" ? args.action === "open" ? loginRunnerRecovery ? {
+            before: ["C", "S", "I", "M", "D"],
+            after: ["C", "S", "I", "M", "D", "R"]
+          } : {
             before: ["C", "S", "I", "D"],
             after: ["C", "S", "I", "D", "R"]
           } : {
@@ -32588,6 +32623,7 @@ function createAuthorityGate(runtime, dependencies) {
       let publishedProofFinalize = false;
       let stagedRuntimeRelaunch;
       let loginPrologueAttemptOperationId = null;
+      let loginPrologueHandlerStarted = false;
       try {
         const available = runtime.requireAvailable();
         registry2 = available.registry;
@@ -32993,6 +33029,7 @@ function createAuthorityGate(runtime, dependencies) {
         }
         registry2.verifyOperation(operation);
         const snapshotCheckpoint = dependencies.snapshotCaptureCheckpoint?.();
+        loginPrologueHandlerStarted = tool === "cdp_login_prologue";
         let result = await registry2.runWithOperation(operation, () => handler(...handlerArgs));
         let loginPrologueOutcome = null;
         if (tool === "cdp_login_prologue") {
@@ -33154,12 +33191,19 @@ function createAuthorityGate(runtime, dependencies) {
         }
         const nativeOriginProven = resultOriginProvenanceAllowsProof && (profile.axes.includes("A") || Boolean(effectiveFinalOrigin) || effectiveOptionalNativeOriginProven);
         if (!resultIsCanonicalSuccess(result)) {
+          const failedLoginStatus = runtime.status();
           return addMeta2(result, {
             authoritative: false,
             ...nativeOriginMeta(profile, nativeOriginProven),
             ...authorityInvalidated ? {
               authorityInvalidated: true,
               nextAction: 'Run rn_session action "pin_dev_client" before another CDP operation.'
+            } : {},
+            ...loginPrologueOutcome?.state === LOGIN_PROLOGUE_BLOCKED ? {
+              nextAction: loginPrologueNextAction({
+                binding: failedLoginStatus.available ? failedLoginStatus.bindings.loginPrologue : status.bindings.loginPrologue,
+                authority: loginRunnerRecoveryAuthority(failedLoginStatus.available ? failedLoginStatus : status)
+              })
             } : {}
           });
         }
@@ -33210,9 +33254,22 @@ function createAuthorityGate(runtime, dependencies) {
             return authorityFailure(new AggregateError([error2, rollbackError], "PROOF_AUTHORITY_MISMATCH: finalized proof cleanup is unconfirmed"));
           }
         }
+        if (tool === "cdp_login_prologue" && authorityErrorCode(error2) === "RUNNER_OWNERSHIP_MISMATCH" && !loginPrologueHandlerStarted && priorLoginRecoveryAvailable && priorLoginPrologueOutcome && registry2 && operation) {
+          const pendingStatus = runtime.status();
+          if (pendingStatus.available) {
+            registry2.verifyOperation(operation);
+            operation = persistLoginPrologueOutcome(runtime, registry2, operation, pendingStatus, priorLoginPrologueOutcome).operation;
+          }
+        }
+        const failedStatus = runtime.status();
         return addMeta2(authorityFailure(error2), {
           ...nativeOriginMeta(profile, false),
-          ...tool === "cdp_login_prologue" && authorityErrorCode(error2) === "RUNNER_OWNERSHIP_MISMATCH" ? { nextAction: LOGIN_PROLOGUE_RECOVERY_SEQUENCE } : {}
+          ...tool === "cdp_login_prologue" && authorityErrorCode(error2) === "RUNNER_OWNERSHIP_MISMATCH" ? {
+            nextAction: loginPrologueNextAction({
+              binding: failedStatus.available ? failedStatus.bindings.loginPrologue : void 0,
+              authority: failedStatus.available ? loginRunnerRecoveryAuthority(failedStatus) : void 0
+            })
+          } : {}
         });
       } finally {
         stagedRuntimeRelaunch?.cancel();
@@ -61253,6 +61310,16 @@ function projectPublicAuthorityStatus(status, options = {}) {
   } : void 0;
   const sandbox = metro?.runtimeEvidenceAuthority === "managed-sandbox-v1" ? "managed-sandbox-v1" : "unavailable";
   const loginPrologue = readLoginPrologueOutcome(status.bindings.loginPrologue);
+  const nextLoginPrologueAction = loginPrologueNextAction({
+    binding: loginPrologue,
+    authority: {
+      install: status.bindings.install,
+      metro: status.bindings.metro,
+      bundle: status.bindings.bundle,
+      device: status.bindings.device,
+      runner: status.bindings.runner
+    }
+  });
   const phase = derivePublicPhase(status.state, Boolean(status.bindings.pendingBuild));
   return {
     available: true,
@@ -61295,8 +61362,8 @@ function projectPublicAuthorityStatus(status, options = {}) {
     },
     uiControl: loginPrologue?.state === LOGIN_PROLOGUE_BLOCKED ? {
       mutationReadiness: "blocked",
-      reason: "The failed deterministic login replay still gates mutating UI tools.",
-      nextAction: LOGIN_PROLOGUE_RECOVERY_SEQUENCE
+      reason: "The login prologue latch still gates mutating UI tools.",
+      nextAction: nextLoginPrologueAction
     } : {
       mutationReadiness: "not-proven",
       evidenceRequired: "Authority, device, Metro, Observe, runner, and bundle health do not prove UI control; require the requested MCP mutation result to show that it started and completed."
@@ -61315,7 +61382,7 @@ function projectPublicAuthorityStatus(status, options = {}) {
         elapsedMs: loginPrologue.elapsedMs,
         failureCode: loginPrologue.failure?.code,
         runId: loginPrologue.runRecord?.runId,
-        ...loginPrologue.state === LOGIN_PROLOGUE_BLOCKED ? { nextAction: LOGIN_PROLOGUE_RECOVERY_SEQUENCE } : {},
+        ...loginPrologue.state === LOGIN_PROLOGUE_BLOCKED ? { nextAction: nextLoginPrologueAction } : {},
         overrideCount: loginPrologue.overrides?.length ?? 0,
         lastOverride: loginPrologue.overrides?.at(-1)
       }
@@ -79733,7 +79800,7 @@ function createLoginPrologueHandler(deps) {
       });
       return failResult(`Login prologue blocked: ${detail}`, "LOGIN_PROLOGUE_BLOCKED", {
         loginPrologue: outcome,
-        nextAction: extra.runRecord ? LOGIN_PROLOGUE_RECOVERY_SEQUENCE : `Restore the exact ${LOGIN_PROLOGUE_ALIAS} action, then run cdp_login_prologue.`
+        nextAction: loginPrologueNextAction({ binding: outcome })
       });
     };
     try {
@@ -93080,7 +93147,7 @@ trackedTool("device_screenshot", "Capture the exact authority-bound device scree
   maxWidth: external_exports.number().int().min(0).optional().describe("Downscale image so width does not exceed this many pixels. 0 disables resize. Default 800 (saves ~46% on iPhone 15/17 Pro screenshots without losing label readability)."),
   quality: external_exports.number().int().min(1).max(100).optional().describe("JPEG compression quality (1-100). Only applied to .jpg/.jpeg files. Default 85.")
 }, createDeviceScreenshotHandler(getClient));
-trackedTool("device_snapshot", "Manage exact device sessions and capture UI snapshots even when a Dev Client remains at its native picker. Raw control requires exact install/device/runner authority but not a managed Metro target; meta.originAuthority explicitly reports proven or not-proven, and not-proven snapshots are never strict source evidence. action=open starts a session (required before other device_ tools), waits for Android app accessibility, and reports readiness.reactNativeUi=ready only when a matching live CDP helper confirms the RN fiber boundary; that field proves fiber visibility, never mutating UI control. Pass deviceId to select an exact iOS simulator UDID or Android adb serial when devices run in parallel. action=snapshot returns the accessibility tree with @ref identifiers for device_press/device_fill. action=close ends the session. Use attachOnly=true on action=open to skip launching the app when it is already running (avoids relaunch-induced bundle races); liveness is checked only on the resolved exact device and refuses when that identity is unavailable. After a failed login replay, only an exact attach-only open may cross the latch to restore runner authority; it does not clear the latch.", {
+trackedTool("device_snapshot", "Manage exact device sessions and capture UI snapshots even when a Dev Client remains at its native picker. Raw control requires exact install/device/runner authority but not a managed Metro target; meta.originAuthority explicitly reports proven or not-proven, and not-proven snapshots are never strict source evidence. action=open starts a session (required before other device_ tools), waits for Android app accessibility, and reports readiness.reactNativeUi=ready only when a matching live CDP helper confirms the RN fiber boundary; that field proves fiber visibility, never mutating UI control. Pass deviceId to select an exact iOS simulator UDID or Android adb serial when devices run in parallel. action=snapshot returns the accessibility tree with @ref identifiers for device_press/device_fill. action=close ends the session. Use attachOnly=true on action=open to skip launching the app when it is already running (avoids relaunch-induced bundle races); liveness is checked only on the resolved exact device and refuses when that identity is unavailable. Only a fresh failed user-login RunRecord with runner and bundle authority absent may cross the latch through an exact attach-only open, and stable Metro authority is required before and after; the open does not clear the latch.", {
   action: external_exports.enum(["open", "close", "snapshot"]).default("snapshot").describe("open: start session for an app. snapshot: capture UI tree with element refs. close: end session."),
   appId: external_exports.string().optional().describe("App bundle ID for open; omitted values come only from the exact active session."),
   platform: external_exports.enum(["ios", "android"]).optional().describe("Target platform \u2014 used with action=open to select device"),

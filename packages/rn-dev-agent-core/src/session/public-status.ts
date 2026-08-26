@@ -5,7 +5,7 @@ import type { WorkerAuthorityStatus } from './runtime.js';
 import {
   ACTION_LOGIN_HELPER,
   LOGIN_PROLOGUE_BLOCKED,
-  LOGIN_PROLOGUE_RECOVERY_SEQUENCE,
+  loginPrologueNextAction,
   readLoginPrologueOutcome,
 } from '../domain/login-prologue.js';
 
@@ -155,6 +155,16 @@ export function projectPublicAuthorityStatus(
   const sandbox =
     metro?.runtimeEvidenceAuthority === 'managed-sandbox-v1' ? 'managed-sandbox-v1' : 'unavailable';
   const loginPrologue = readLoginPrologueOutcome(status.bindings.loginPrologue);
+  const nextLoginPrologueAction = loginPrologueNextAction({
+    binding: loginPrologue,
+    authority: {
+      install: status.bindings.install,
+      metro: status.bindings.metro,
+      bundle: status.bindings.bundle,
+      device: status.bindings.device,
+      runner: status.bindings.runner,
+    },
+  });
   const phase = derivePublicPhase(status.state, Boolean(status.bindings.pendingBuild));
   return {
     available: true,
@@ -199,8 +209,8 @@ export function projectPublicAuthorityStatus(
       loginPrologue?.state === LOGIN_PROLOGUE_BLOCKED
         ? {
             mutationReadiness: 'blocked',
-            reason: 'The failed deterministic login replay still gates mutating UI tools.',
-            nextAction: LOGIN_PROLOGUE_RECOVERY_SEQUENCE,
+            reason: 'The login prologue latch still gates mutating UI tools.',
+            nextAction: nextLoginPrologueAction,
           }
         : {
             mutationReadiness: 'not-proven',
@@ -223,7 +233,7 @@ export function projectPublicAuthorityStatus(
             failureCode: loginPrologue.failure?.code,
             runId: loginPrologue.runRecord?.runId,
             ...(loginPrologue.state === LOGIN_PROLOGUE_BLOCKED
-              ? { nextAction: LOGIN_PROLOGUE_RECOVERY_SEQUENCE }
+              ? { nextAction: nextLoginPrologueAction }
               : {}),
             overrideCount: loginPrologue.overrides?.length ?? 0,
             lastOverride: loginPrologue.overrides?.at(-1),

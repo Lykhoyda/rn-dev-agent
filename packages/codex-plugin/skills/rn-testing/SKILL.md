@@ -347,8 +347,9 @@ mutation. Read-only diagnostics and cleanup remain available. When the result
 names the runner recovery, run `device_snapshot(action="open",
 attachOnly=true)` on the already-bound app, rerun `cdp_login_prologue`, then
 repeat the attach-only open before `device_press` or `device_fill`. The first
-open only restores exact runner authority; it does not clear the latch. Any
-source, session, install, or device mismatch refuses before dispatch.
+open only restores exact runner authority; it does not clear the latch. It is
+offered only for a fresh failed RunRecord with runner and bundle authority
+absent, and stable Metro authority is required before and after dispatch.
 
 Health surfaces are not UI-control proof. Require the requested MCP mutation's
 own result to show that it started and completed.

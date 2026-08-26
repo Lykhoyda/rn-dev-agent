@@ -62,8 +62,9 @@ Authentication is fail-stop: when login is required, call
 navigation helper, not PR proof. Any missing action, runner drift, selector
 failure, or timeout returns `LOGIN_PROLOGUE_BLOCKED`. Do not continue with
 credentials, ad-hoc Maestro, navigation shortcuts, or store mutation after
-that result. If the failed replay left runner authority unavailable, use the
-returned recovery sequence: `device_snapshot(action="open", attachOnly=true)`
+that result. Only when a fresh failed RunRecord left both runner and bundle
+authority unavailable while exact device, install, and Metro authority remain
+bound, use the returned recovery sequence: `device_snapshot(action="open", attachOnly=true)`
 on the already-bound app, rerun `cdp_login_prologue`, then repeat the same
 attach-only open before `device_press` or `device_fill`. The latch remains set
 until the exact replay produces a fresh passing RunRecord; every unrelated

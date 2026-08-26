@@ -6,6 +6,7 @@ import {
   ACTION_LOGIN_HELPER,
   evaluateLoginPrologueGuard,
   LOGIN_PROLOGUE_BLOCKED,
+  loginPrologueNextAction,
 } from '../../dist/domain/login-prologue.js';
 import { createLoginPrologueHandler } from '../../dist/tools/login-prologue.js';
 import { failResult, okResult } from '../../dist/utils.js';
@@ -183,7 +184,7 @@ test('login prologue seals selector replay against every CDP fallback', async (t
 
   assert.equal(envelope.code, 'LOGIN_PROLOGUE_BLOCKED');
   assert.equal(envelope.meta.loginPrologue.failure.code, 'TESTID_NOT_FOUND');
-  assert.match(envelope.meta.nextAction, /attachOnly true/);
+  assert.match(envelope.meta.nextAction, /not authorized/);
   assert.equal(replayDepsCalled, false);
 });
 
@@ -384,6 +385,28 @@ function blockedBinding() {
   };
 }
 
+function failedReplayBinding() {
+  return {
+    ...blockedBinding(),
+    actionId: 'user-login',
+    runRecord: {
+      runId: 'failed-login-run',
+      timestamp: '2026-08-21T10:00:00.100Z',
+      durationMs: 100,
+      status: 'fail',
+      trigger: 'agent',
+    },
+  };
+}
+
+const unavailableReplayAuthority = {
+  install: { digest: 'install' },
+  metro: { instanceId: 'metro' },
+  bundle: null,
+  device: { deviceId: 'device' },
+  runner: null,
+};
+
 test('blocked helper still allows locked e2e proof without a supervisor override', () => {
   const binding = blockedBinding();
   for (const [tool, args] of [
@@ -457,10 +480,11 @@ test('blocked helper still refuses credential and ad-hoc login mutations', () =>
 });
 
 test('blocked helper admits only the non-destructive attach-only runner recovery', () => {
-  const binding = blockedBinding();
+  const binding = failedReplayBinding();
   assert.deepEqual(
     evaluateLoginPrologueGuard({
       binding,
+      authority: unavailableReplayAuthority,
       tool: 'device_snapshot',
       args: { action: 'open', attachOnly: true },
       mutation: true,
@@ -476,6 +500,7 @@ test('blocked helper admits only the non-destructive attach-only runner recovery
     assert.deepEqual(
       evaluateLoginPrologueGuard({
         binding,
+        authority: unavailableReplayAuthority,
         tool: 'device_snapshot',
         args,
         mutation: true,
@@ -483,6 +508,27 @@ test('blocked helper admits only the non-destructive attach-only runner recovery
       { allowed: false, suppliedOverride: false },
     );
   }
+});
+
+test('blocked helper does not offer runner recovery without a failed replay record', () => {
+  const binding = {
+    ...blockedBinding(),
+    actionId: 'user-login',
+    failure: { code: 'LOGIN_ACTION_MISSING', detail: 'missing exact action' },
+  };
+  const decision = evaluateLoginPrologueGuard({
+    binding,
+    authority: unavailableReplayAuthority,
+    tool: 'device_snapshot',
+    args: { action: 'open', attachOnly: true },
+    mutation: true,
+  });
+
+  assert.deepEqual(decision, { allowed: false, suppliedOverride: false });
+  assert.match(
+    loginPrologueNextAction({ binding, authority: unavailableReplayAuthority }),
+    /Restore/,
+  );
 });
 
 test('login prologue does not freeze or rewrite locked e2e artifacts', async (t) => {

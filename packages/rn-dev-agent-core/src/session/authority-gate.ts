@@ -11,12 +11,14 @@ import type { WorkerAuthorityStatus } from './runtime.js';
 import {
   LOGIN_PROLOGUE_ALIAS,
   LOGIN_PROLOGUE_BLOCKED,
-  LOGIN_PROLOGUE_RECOVERY_SEQUENCE,
   appendLoginOverrideAudit,
   authorizeLoginSupervisorOverride,
   inspectLoginPrologueGuard,
   isLoginRunnerRecoveryOperation,
+  isLoginRunnerRecoveryState,
+  loginPrologueNextAction,
   readLoginPrologueOutcome,
+  type LoginRunnerRecoveryAuthority,
   type LoginPrologueOutcome,
 } from '../domain/login-prologue.js';
 import { setResolvedLockedTestIds } from '../domain/e2e-test.js';
@@ -731,6 +733,16 @@ function parseLoginPrologueOutcome(result: unknown): LoginPrologueOutcome | null
   }
 }
 
+function loginRunnerRecoveryAuthority(status: SessionStatus): LoginRunnerRecoveryAuthority {
+  return {
+    install: status.bindings.install,
+    metro: status.bindings.metro,
+    bundle: status.bindings.bundle,
+    device: status.bindings.device,
+    runner: status.bindings.runner,
+  };
+}
+
 function missingLoginPrologueOutcome(result: unknown): LoginPrologueOutcome {
   const timestamp = new Date().toISOString();
   let failure = {
@@ -1241,14 +1253,26 @@ export function createAuthorityGate(
                   : baseProfile;
 
         const runtimeStatus = runtime.status();
+        const loginAuthority = runtimeStatus.available
+          ? loginRunnerRecoveryAuthority(runtimeStatus)
+          : undefined;
+        const priorLoginPrologueOutcome = readLoginPrologueOutcome(
+          runtimeStatus.available ? runtimeStatus.bindings.loginPrologue : undefined,
+        );
+        const priorLoginRecoveryAvailable = isLoginRunnerRecoveryState({
+          binding: priorLoginPrologueOutcome,
+          authority: loginAuthority,
+        });
         const loginRunnerRecovery = isLoginRunnerRecoveryOperation({
           binding: runtimeStatus.available ? runtimeStatus.bindings.loginPrologue : undefined,
+          authority: loginAuthority,
           tool,
           args,
           mutation: profile.mutation,
         });
         const loginGuard = inspectLoginPrologueGuard({
           binding: runtimeStatus.available ? runtimeStatus.bindings.loginPrologue : undefined,
+          authority: loginAuthority,
           tool,
           args,
           mutation: profile.mutation,
@@ -1273,7 +1297,10 @@ export function createAuthorityGate(
                 ? runtimeStatus.bindings.loginPrologue
                 : undefined,
               overrideRejected: false,
-              nextAction: LOGIN_PROLOGUE_RECOVERY_SEQUENCE,
+              nextAction: loginPrologueNextAction({
+                binding: runtimeStatus.available ? runtimeStatus.bindings.loginPrologue : undefined,
+                authority: loginAuthority,
+              }),
             },
           );
         }
@@ -1362,10 +1389,15 @@ export function createAuthorityGate(
             const transitionAxes =
               tool === 'device_snapshot'
                 ? args.action === 'open'
-                  ? {
-                      before: ['C', 'S', 'I', 'D'] as AuthorityAxis[],
-                      after: ['C', 'S', 'I', 'D', 'R'] as AuthorityAxis[],
-                    }
+                  ? loginRunnerRecovery
+                    ? {
+                        before: ['C', 'S', 'I', 'M', 'D'] as AuthorityAxis[],
+                        after: ['C', 'S', 'I', 'M', 'D', 'R'] as AuthorityAxis[],
+                      }
+                    : {
+                        before: ['C', 'S', 'I', 'D'] as AuthorityAxis[],
+                        after: ['C', 'S', 'I', 'D', 'R'] as AuthorityAxis[],
+                      }
                   : {
                       before: ['C', 'S', 'D'] as AuthorityAxis[],
                       after: ['C', 'S', 'D'] as AuthorityAxis[],
@@ -1668,6 +1700,7 @@ export function createAuthorityGate(
         let publishedProofFinalize = false;
         let stagedRuntimeRelaunch: StagedRuntimeRelaunch | undefined;
         let loginPrologueAttemptOperationId: string | null = null;
+        let loginPrologueHandlerStarted = false;
         try {
           const available = runtime.requireAvailable();
           registry = available.registry;
@@ -2178,6 +2211,7 @@ export function createAuthorityGate(
           }
           registry.verifyOperation(operation);
           const snapshotCheckpoint = dependencies.snapshotCaptureCheckpoint?.();
+          loginPrologueHandlerStarted = tool === 'cdp_login_prologue';
           let result = await registry.runWithOperation(operation, () => handler(...handlerArgs));
           let loginPrologueOutcome: LoginPrologueOutcome | null = null;
           if (tool === 'cdp_login_prologue') {
@@ -2439,6 +2473,7 @@ export function createAuthorityGate(
               Boolean(effectiveFinalOrigin) ||
               effectiveOptionalNativeOriginProven);
           if (!resultIsCanonicalSuccess(result)) {
+            const failedLoginStatus = runtime.status();
             return addMeta(result, {
               authoritative: false,
               ...nativeOriginMeta(profile, nativeOriginProven),
@@ -2447,6 +2482,18 @@ export function createAuthorityGate(
                     authorityInvalidated: true,
                     nextAction:
                       'Run rn_session action "pin_dev_client" before another CDP operation.',
+                  }
+                : {}),
+              ...(loginPrologueOutcome?.state === LOGIN_PROLOGUE_BLOCKED
+                ? {
+                    nextAction: loginPrologueNextAction({
+                      binding: failedLoginStatus.available
+                        ? failedLoginStatus.bindings.loginPrologue
+                        : status.bindings.loginPrologue,
+                      authority: loginRunnerRecoveryAuthority(
+                        failedLoginStatus.available ? failedLoginStatus : status,
+                      ),
+                    }),
                   }
                 : {}),
             });
@@ -2530,11 +2577,42 @@ export function createAuthorityGate(
               );
             }
           }
+          if (
+            tool === 'cdp_login_prologue' &&
+            authorityErrorCode(error) === 'RUNNER_OWNERSHIP_MISMATCH' &&
+            !loginPrologueHandlerStarted &&
+            priorLoginRecoveryAvailable &&
+            priorLoginPrologueOutcome &&
+            registry &&
+            operation
+          ) {
+            const pendingStatus = runtime.status();
+            if (pendingStatus.available) {
+              registry.verifyOperation(operation);
+              operation = persistLoginPrologueOutcome(
+                runtime,
+                registry,
+                operation,
+                pendingStatus,
+                priorLoginPrologueOutcome,
+              ).operation;
+            }
+          }
+          const failedStatus = runtime.status();
           return addMeta(authorityFailure(error), {
             ...nativeOriginMeta(profile, false),
             ...(tool === 'cdp_login_prologue' &&
             authorityErrorCode(error) === 'RUNNER_OWNERSHIP_MISMATCH'
-              ? { nextAction: LOGIN_PROLOGUE_RECOVERY_SEQUENCE }
+              ? {
+                  nextAction: loginPrologueNextAction({
+                    binding: failedStatus.available
+                      ? failedStatus.bindings.loginPrologue
+                      : undefined,
+                    authority: failedStatus.available
+                      ? loginRunnerRecoveryAuthority(failedStatus)
+                      : undefined,
+                  }),
+                }
               : {}),
           });
         } finally {
