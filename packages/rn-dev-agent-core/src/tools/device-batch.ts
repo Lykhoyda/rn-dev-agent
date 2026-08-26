@@ -440,7 +440,6 @@ async function executeStep(
         },
         null,
         {
-          maestro: false,
           ...(abortSignal ? { abortSignal } : {}),
         },
       );

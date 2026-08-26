@@ -3,4 +3,4 @@
 'rn-dev-agent-plugin': patch
 ---
 
-Resolve wrapped React text handlers exactly while keeping device fills native-authoritative.
+Resolve wrapped React text handlers exactly while retaining native fill identity through verification.

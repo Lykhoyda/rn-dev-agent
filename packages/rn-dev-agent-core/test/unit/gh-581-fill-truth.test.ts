@@ -1,12 +1,13 @@
 // GH #581: device_fill truth matrix — exact binding, single-operation native
-// dispatch, final-verification arbitration, mutation-safe descent, and secret
+// dispatch, exact verification, mutation-safe correction, and secret
 // scrubbing, driven through the runNative seam.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 const { _setActiveSessionForTest, _setRunAgentDeviceForTest, markSnapshotDirty } =
   await import('../../dist/agent-device-wrapper.js');
-const { performExactFill, extractTypingMeta } = await import('../../dist/tools/device-interact.js');
+const { createDeviceFillHandler, performExactFill, extractTypingMeta } =
+  await import('../../dist/tools/device-interact.js');
 const { updateRefMapFromFlat, clearRefMap } = await import('../../dist/fast-runner-ref-map.js');
 const { okResult, failResult } = await import('../../dist/utils.js');
 
@@ -117,7 +118,7 @@ function envelope(result: { content: Array<{ text: string }> }): Record<string, 
   return JSON.parse(result.content[0].text);
 }
 
-const NATIVE_ONLY = { maestro: false };
+const NATIVE_ONLY = {};
 
 function fakeClient(handlers: {
   read?: () => { value?: string | null; controlled?: boolean } | null;
@@ -410,77 +411,41 @@ test('gh-581: empty text is a verified clear (clear-first dispatch + exact empty
   assert.equal(verify.cliArgs[2], '');
 });
 
-test('gh-581: SET_TEXT_REJECTED without a Maestro tier fails truthfully', async () => {
-  const { result } = await withFillSeam(
-    { fill: () => failResult('rejected', 'SET_TEXT_REJECTED', { mutation: 'none' }) },
-    () => performExactFill({ ref: '@e3', text: 'value' }, null, NATIVE_ONLY),
+test('gh-581: rejected native A never rebinds to replacement B with the same testID', async () => {
+  const replacement = NODES.map((node) =>
+    node.identifier === 'last-name' ? { ...node, ref: '@e8' } : node,
   );
-  assert.equal(envelope(result as never).code, 'TEXT_ENTRY_UNVERIFIED');
-});
-
-test('gh-581: Maestro verification rebinds by testID after runner parking', async () => {
+  let replacementMutations = 0;
   const { result, calls } = await withFillSeam(
     {
-      fill: () => failResult('rejected', 'SET_TEXT_REJECTED', { mutation: 'none' }),
-      verify: () => okResult({ verifyVerdict: 'exact', verifyStable: true }),
-    },
-    () =>
-      performExactFill(
-        { ref: '@e3', text: 'value' },
-        null,
-        { maestro: true },
-        { maestroFillAttempt: async () => ({ attempted: true }) },
-      ),
-  );
-  assert.equal(envelope(result as never).data.method, 'maestro');
-  const fill = calls.find((call) => call.cliArgs[0] === 'fill')!;
-  const verify = calls.find((call) => call.cliArgs[0] === 'verify-input')!;
-  assert.ok((fill.opts.exactTarget as { operationToken?: string }).operationToken);
-  assert.equal((verify.opts.exactTarget as { operationToken?: string }).operationToken, undefined);
-});
-
-test('gh-581: Maestro refuses an identifierless binding after ref recycling', async () => {
-  const original = [
-    {
-      ref: '@e1',
-      identifier: '',
-      label: 'Search',
-      type: 'android.widget.EditText',
-      rect: { x: 40, y: 110, width: 320, height: 40 },
-    },
-  ];
-  const replacement = [{ ...original[0], identifier: 'replacement-input' }];
-  let maestroAttempts = 0;
-  const { result, calls } = await withFillSeam(
-    {
-      platform: 'android',
-      nodes: original as never,
-      fill: () => {
+      fill: (call) => {
+        if (call.cliArgs[1] === '@e8') replacementMutations += 1;
         updateRefMapFromFlat(replacement as never, {
           snapshotGeneration: 9,
           keyboardVisible: false,
         });
         return failResult('rejected', 'SET_TEXT_REJECTED', { mutation: 'none' });
       },
+      snapshot: (count) => (count === 1 ? NODES : replacement),
     },
-    () =>
-      performExactFill(
-        { ref: '@e1', text: 'value' },
-        null,
-        { maestro: true },
-        {
-          maestroFillAttempt: async () => {
-            maestroAttempts += 1;
-            return { attempted: true };
-          },
-        },
-      ),
+    () => createDeviceFillHandler(() => null as never)({ ref: '@e3', text: 'value' }),
   );
   const env = envelope(result as never);
+  const fills = calls.filter((call) => call.cliArgs[0] === 'fill');
+  const verifies = calls.filter((call) => call.cliArgs[0] === 'verify-input');
   assert.equal(env.code, 'TEXT_ENTRY_UNVERIFIED');
-  assert.match(env.error, /no testID/);
-  assert.equal(maestroAttempts, 0);
-  assert.equal(calls.filter((call) => call.cliArgs[0] === 'verify-input').length, 0);
+  assert.equal(env.meta.mutation, 'none');
+  assert.deepEqual(env.meta.pathsTried, ['native']);
+  assert.equal(fills.length, 1);
+  assert.equal(fills[0].cliArgs[1], '@e3');
+  assert.equal(replacementMutations, 0);
+  assert.equal(calls.filter((call) => call.cliArgs[0] === 'snapshot').length, 1);
+  assert.equal(
+    verifies.filter(
+      (call) => !(call.opts.exactTarget as { operationToken?: string }).operationToken,
+    ).length,
+    0,
+  );
 });
 
 test('gh-581: possible SET_TEXT_REJECTED hard-fails without verification', async () => {

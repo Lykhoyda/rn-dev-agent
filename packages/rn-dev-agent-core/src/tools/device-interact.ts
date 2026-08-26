@@ -30,7 +30,6 @@ import { isValidBundleId } from '../domain/maestro-validator.js';
 import { withSession } from '../utils.js';
 import type { ToolResult } from '../utils.js';
 import { okResult, failResult, createStepTimer } from '../utils.js';
-import { maestroRefusalResult, runMaestroInline, yamlEscape } from '../maestro-invoke.js';
 import { isAgentDeviceRunnerSentinel, recoverFromRunnerLeak } from './runner-leak-recovery.js';
 import type { RecoveryTier } from './runner-leak-recovery.js';
 import { reopenSessionForRecovery } from './device-session.js';
@@ -880,15 +879,6 @@ export interface FillArgs {
   settleTimeoutMs?: number;
 }
 
-function isAndroidSession(): boolean {
-  const session = getActiveSession();
-  if (session?.platform === 'android') return true;
-  if (session?.platform) return false;
-  return !!process.env.ANDROID_SERIAL;
-}
-
-// Story 10 (#391): the Android runner proved setText AND keyevents don't land —
-// descend to the clear-first Maestro tier instead of re-tapping healthy focus.
 function isSetTextRejectedError(result: ToolResult): boolean {
   if (!result.isError) return false;
   const text = result.content?.[0]?.text ?? '';
@@ -1021,29 +1011,16 @@ async function runNativeVerifyInput(
   return { verdict: 'unavailable', stable: false };
 }
 
-async function rebindExactFillTarget(binding: ExactFillBinding): Promise<ExactFillBinding | null> {
-  const snap = await fetchSnapshotNodes();
-  if (!snap.ok) return null;
-  const rebound = bindExactFillTarget(
-    snap.nodes,
-    binding.inputTestId ?? binding.inputRef,
-    binding.inputSignature,
-  );
-  return rebound.ok ? rebound.binding : null;
-}
-
 async function finalVerification(
   binding: ExactFillBinding,
   text: string,
-  operationToken?: string,
+  operationToken: string,
 ): Promise<NativeVerification> {
-  const nativeBinding = operationToken ? binding : await rebindExactFillTarget(binding);
-  if (!nativeBinding) return classifyNativeVerification('target-lost', false);
-  const native = await runNativeVerifyInput(nativeBinding, text, operationToken);
+  const native = await runNativeVerifyInput(binding, text, operationToken);
   return classifyNativeVerification(native.verdict, native.stable);
 }
 
-type FillMethod = 'native' | 'maestro';
+type FillMethod = 'native';
 
 // The ONLY producer of public fill success (single-success-rule invariant).
 function verifiedFillResult(
@@ -1120,42 +1097,10 @@ function attachFillFailureDisposition(
   }
 }
 
-// Post-mutation corrective tier: always clear-first (eraseText) so a
-// corrective attempt never appends; Maestro exit status is attempt evidence
-// only and never public success. Failure output is not echoed (it can embed
-// the flow's inputText).
-async function maestroFillAttempt(
-  targetId: string,
-  text: string,
-  platform: 'ios' | 'android',
-  authorityArgs?: object,
-): Promise<{ attempted: boolean; refusal?: ToolResult }> {
-  const escapedRef = yamlEscape(targetId.replace(/^@/, ''));
-  const escapedText = yamlEscape(text);
-  const yaml = `- tapOn:\n    id: "${escapedRef}"\n- eraseText\n- inputText: "${escapedText}"`;
-  const result = await runMaestroInline(yaml, {
-    platform,
-    slug: 'fill-fallback',
-    timeoutMs: 120_000,
-    authorityArgs,
-  });
-  if (result.passed) return { attempted: true };
-  const refusal = maestroRefusalResult(result, 'Maestro fill fallback was refused.', {
-    tried: ['native', 'maestro'],
-  });
-  if (refusal) return { attempted: false, refusal };
-  return { attempted: false };
-}
-
 const MAX_NATIVE_RETYPE = 2;
 
 export interface ExactFillTiers {
-  maestro: boolean;
   abortSignal?: AbortSignal;
-}
-
-interface ExactFillDeps {
-  maestroFillAttempt?: typeof maestroFillAttempt;
 }
 
 // GH #581 exact fill orchestrator (device_fill and device_batch's fill step):
@@ -1164,9 +1109,7 @@ export async function performExactFill(
   args: FillArgs,
   _client: CDPClient | null,
   tiers: ExactFillTiers,
-  deps: ExactFillDeps = {},
 ): Promise<ToolResult> {
-  const platform: 'ios' | 'android' = isAndroidSession() ? 'android' : 'ios';
   const pathsTried: string[] = [];
   let mutationSeen: FillMutationDisposition = 'none';
 
@@ -1353,69 +1296,21 @@ export async function performExactFill(
     }
   }
 
-  // Corrective Maestro tier: reachable only after an observed stable mismatch
-  // or a runner-proven SET_TEXT_REJECTED — both safe for clear-first entry.
-  if (!tiers.maestro) {
-    return fillFailure(
-      'TEXT_ENTRY_UNVERIFIED',
-      'device_fill could not verify the fill and this caller does not use the Maestro tier.',
-      {
-        mutation: mutationSeen,
-        pathsTried,
-        verification: lastVerification ?? undefined,
-      },
-    );
-  }
-  pathsTried.push('maestro');
-  if (tiers.abortSignal?.aborted) {
-    return fillFailure(
-      'TEXT_ENTRY_UNVERIFIED',
-      'device_fill was cancelled before the Maestro correction was dispatched.',
-      { mutation: 'possible', pathsTried, verification: lastVerification ?? undefined },
-    );
-  }
-  const maestroId = binding.inputTestId;
-  if (!maestroId) {
-    return fillFailure(
-      'TEXT_ENTRY_UNVERIFIED',
-      'device_fill could not verify the fill and the input has no testID for the Maestro tier.',
-      { mutation: mutationSeen, pathsTried, verification: lastVerification ?? undefined },
-    );
-  }
-  const maestro = await (deps.maestroFillAttempt ?? maestroFillAttempt)(
-    maestroId,
-    args.text,
-    platform,
-    args,
-  );
-  if (!maestro.attempted) {
-    if (maestro.refusal)
-      return attachFillFailureDisposition(maestro.refusal, 'possible', pathsTried);
-    return fillFailure(
-      'TEXT_ENTRY_UNVERIFIED',
-      'device_fill fell through all tiers; the Maestro attempt did not run cleanly.',
-      { mutation: 'possible', pathsTried, verification: lastVerification ?? undefined },
-    );
-  }
-  const maestroVerification = await finalVerification(binding, args.text);
-  if (maestroVerification.verified) {
-    return verifiedFillResult('maestro', args.text.length, {
-      textEntryPath: 'maestro',
-      verifiedOracle: 'native',
-      timings_ms: { nativeType: Date.now() - tNative },
-    });
-  }
   return fillFailure(
     'TEXT_ENTRY_UNVERIFIED',
-    'Text entry could not be verified after native and Maestro attempts.',
-    { mutation: 'possible', pathsTried, verification: maestroVerification },
+    'device_fill could not verify the fill through the retained native target.',
+    {
+      mutation: mutationSeen,
+      pathsTried,
+      verification: lastVerification ?? undefined,
+    },
   );
 }
 
 export function createDeviceFillHandler(
   _getClient: () => CDPClient,
 ): (args: FillArgs) => Promise<ToolResult> {
-  return withSession(async (args) => performExactFill(args, null, { maestro: true }));
+  return withSession(async (args) => performExactFill(args, null, {}));
 }
 
 // --- Swipe (coordinate-based with direction shortcut) ---
