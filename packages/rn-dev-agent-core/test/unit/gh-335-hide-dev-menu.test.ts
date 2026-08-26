@@ -279,6 +279,34 @@ test('foreground classifier keeps Expo sheet, picker, tutorial, RN core menu, an
   assert.equal(classifyForegroundSurface([]), 'unknown');
 });
 
+test('foreground classifier treats tutorial copy inside the Expo Developer Menu as menu content', () => {
+  assert.equal(
+    classifyForegroundSurface([
+      { label: 'This is the developer menu. It gives you access.' },
+      { label: 'Reload' },
+      { label: 'Go home' },
+      { label: 'Toggle performance monitor' },
+      { label: 'Toggle element inspector' },
+      { label: 'Open DevTools' },
+      { label: 'Copy system info' },
+      { label: 'Open React Native dev menu' },
+    ]),
+    'expo_dev_menu',
+  );
+});
+
+test('React Native core menu markers win when generic Expo toggle labels overlap', () => {
+  assert.equal(
+    classifyForegroundSurface([
+      { label: 'React Native Dev Menu' },
+      { label: 'Open Debugger' },
+      { label: 'Toggle performance monitor' },
+      { label: 'Toggle element inspector' },
+    ]),
+    'react_native_dev_menu',
+  );
+});
+
 test('foregroundSurfaceFromSnapshot classifies a typed native snapshot envelope', () => {
   const result = {
     content: [
@@ -303,7 +331,13 @@ test('device_snapshot exposes the exact safe remedy when it detects the Expo Dev
     openedAt: 'now',
   });
   _setRunAgentDeviceForTest(async () =>
-    snapshotEnvelope([{ label: 'Copy system info' }, { label: 'Open DevTools' }]),
+    snapshotEnvelope([
+      { label: 'This is the developer menu. It gives you access.' },
+      { label: 'Toggle performance monitor' },
+      { label: 'Toggle element inspector' },
+      { label: 'Copy system info' },
+      { label: 'Open DevTools' },
+    ]),
   );
 
   try {
@@ -324,6 +358,36 @@ test('device_snapshot exposes the exact safe remedy when it detects the Expo Dev
     _setRunAgentDeviceForTest(null);
     _setActiveSessionForTest(null);
   }
+});
+
+test('hideDevMenu executes for the real Expo menu shape that includes tutorial copy', async () => {
+  const appId = 'com.example.app';
+  const snapshots = [
+    [
+      { label: 'This is the developer menu. It gives you access.', packageName: appId },
+      { label: 'Toggle performance monitor', packageName: appId },
+      { label: 'Toggle element inspector', packageName: appId },
+      { label: 'Copy system info', packageName: appId },
+      { label: 'Open DevTools', packageName: appId },
+    ],
+    [{ label: 'Home', packageName: appId }],
+  ];
+  let probeIndex = 0;
+  const probeForegroundSurface = async () =>
+    foregroundSurfaceFromSnapshot(
+      snapshotEnvelope(snapshots[Math.min(probeIndex++, snapshots.length - 1)]),
+      appId,
+    );
+  const { client, calls } = hideEval('ios', { value: 'ok:hideMenu' }, { value: 'ok:hideMenu' });
+  const handler = createDevSettingsHandler(() => client, {
+    probeForegroundSurface,
+    settleAfterHide: async () => {},
+  });
+
+  const data = expectOk(await handler({ action: 'hideDevMenu' }));
+  assert.equal(data.outcome, 'hidden');
+  assert.equal(data.surface, 'app');
+  assert.equal(calls.length, 2);
 });
 
 test('foreground discovery does not recommend the Expo remedy for distinct or uncertain surfaces', () => {
