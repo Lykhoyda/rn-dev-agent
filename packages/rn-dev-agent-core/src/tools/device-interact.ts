@@ -1285,11 +1285,11 @@ export async function performReactTreeInput(
         '__RN_AGENT.readInputValue(' + JSON.stringify(testID) + ')',
       );
       if (result.error || typeof result.value !== 'string') return null;
-      const parsed = JSON.parse(result.value) as {
+      const parsed: {
         value?: string | null;
         controlled?: boolean;
         __agent_error?: string;
-      };
+      } = JSON.parse(result.value);
       if (parsed.__agent_error) return null;
       return { value: parsed.value ?? null, controlled: parsed.controlled === true };
     } catch {
@@ -1321,11 +1321,11 @@ export async function performReactTreeInput(
     if (result.error || typeof result.value !== 'string') {
       dispatch = { error: 'dispatch result is unavailable', mutation: 'possible' };
     } else {
-      const parsed = JSON.parse(result.value) as {
+      const parsed: {
         error?: string;
         handlerCalled?: string | false;
         controlled?: boolean;
-      };
+      } = JSON.parse(result.value);
       if (parsed.error) dispatch = { error: parsed.error, mutation: 'none' };
       else if (typeof parsed.handlerCalled === 'string' && parsed.controlled !== undefined) {
         dispatch = { handler: parsed.handlerCalled };
