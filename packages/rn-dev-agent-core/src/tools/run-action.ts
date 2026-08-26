@@ -696,7 +696,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
           completeNativeOrigin: (targetExpected) => completeNativeOrigin(args, targetExpected),
           relaunchManagedApp: () => relaunchManagedApp(args),
           reproveManagedOrigin: () => reproveManagedOrigin(args),
-          completeRunnerPark: () => completeManagedRunnerParkAuthority(args),
+          completeRunnerPark: (signal) => completeManagedRunnerParkAuthority(args, signal),
           reissueInstallReceipt: () => reissueInstallReceipt(args),
         }),
       );
@@ -1058,7 +1058,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
           completeNativeOrigin: (targetExpected) => completeNativeOrigin(args, targetExpected),
           relaunchManagedApp: () => relaunchManagedApp(args),
           reproveManagedOrigin: () => reproveManagedOrigin(args),
-          completeRunnerPark: () => completeManagedRunnerParkAuthority(args),
+          completeRunnerPark: (signal) => completeManagedRunnerParkAuthority(args, signal),
           reissueInstallReceipt: () => reissueInstallReceipt(args),
         }),
       );

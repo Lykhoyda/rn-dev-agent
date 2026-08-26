@@ -8795,9 +8795,9 @@ async function reapStaleFastRunner(deps = {}) {
   } catch {
   }
   if (spawnedExit) {
-    await Promise.race([spawnedExit, reapDelay(sleep, 250, deps.signal)]);
+    await Promise.race([spawnedExit, sleep(250)]);
   } else {
-    await reapDelay(sleep, 50, deps.signal);
+    await sleep(50);
   }
   const afterKill = probeExpected();
   if (afterKill !== "gone") {
@@ -14981,7 +14981,7 @@ function planIosProofDomains(commands, params) {
     const name = commandName(commands[index]);
     let domain = classified[index];
     if (domain === "neutral") {
-      domain = (name === "inputText" ? focusedDomain : null) ?? segments.at(-1)?.domain ?? classified.slice(index + 1).find((candidate) => candidate !== "neutral") ?? "react-tree";
+      domain = name === "inputText" ? focusedDomain ?? "xctest-native" : segments.at(-1)?.domain ?? classified.slice(index + 1).find((candidate) => candidate !== "neutral") ?? "react-tree";
     }
     if (domain === "mixed")
       continue;
@@ -15056,6 +15056,45 @@ function nativeSelectorsForCommands(commands) {
   };
   visit(commands);
   return [...selectors].slice(0, 20).map((value) => ({ kind: "text", value }));
+}
+function soleComparableNativeSelectorForCommands(commands) {
+  const candidates = [];
+  const addCandidate = (value) => {
+    if (typeof value === "string") {
+      candidates.push({ kind: "text", value });
+      return;
+    }
+    if (isObject(value) && typeof value.text === "string") {
+      candidates.push(Object.keys(value).length === 1 ? { kind: "text", value: value.text } : null);
+      return;
+    }
+    candidates.push(null);
+  };
+  const visit = (value, depth = 0) => {
+    if (depth > 20)
+      return;
+    if (Array.isArray(value)) {
+      for (const child of value)
+        visit(child, depth + 1);
+      return;
+    }
+    if (!isObject(value))
+      return;
+    for (const [childKey, child] of Object.entries(value)) {
+      if (childKey === "tapOn" || childKey === "assertVisible")
+        addCandidate(child);
+      if (childKey === "extendedWaitUntil" && isObject(child))
+        addCandidate(child.visible);
+      if (childKey === "scrollUntilVisible" && isObject(child))
+        addCandidate(child.element);
+      if (childKey === "when" && isObject(child))
+        addCandidate(child.visible);
+      if (childKey !== "assertNotVisible" && childKey !== "notVisible")
+        visit(child, depth + 1);
+    }
+  };
+  visit(commands);
+  return candidates.length === 1 ? candidates[0] : null;
 }
 function loginPostconditionId(commands) {
   const last = commands.at(-1);
@@ -16101,13 +16140,13 @@ function createMaestroRunHandler(deps = {}) {
         });
       }
       const nativeFailure = parseMaestroFailure(combined, terminal);
-      const soleNativeSelector = nativeSelectors.length === 1 ? nativeSelectors[0].value : null;
+      const soleNativeSelector = soleComparableNativeSelectorForCommands(validatedCommands)?.value;
       const selectorLessAssertionFailure = nativeFailure.kind === "UNKNOWN" && terminal.exitClass === "step-failure" && terminal.failedStep?.split(/\s+/, 1)[0] === "assertVisible";
       const failedNativeSelector = nativeFailure.kind === "SELECTOR_NOT_FOUND" ? nativeFailure.selector ?? soleNativeSelector : nativeFailure.kind === "ASSERTION_FAILED" ? nativeFailure.selector ?? soleNativeSelector : nativeFailure.kind === "TIMEOUT" ? nativeFailure.selector : selectorLessAssertionFailure ? soleNativeSelector : null;
       const comparableNativeSelector = nativeSelectors.find((selector) => selector.value === failedNativeSelector);
       let nativeVisionEvidence = null;
       let nativeVisionAttempted = false;
-      if (requestedDeviceId && comparableNativeSelector && deps.nativeVisionProbe && !flowAbort.signal.aborted) {
+      if (requestedDeviceId && comparableNativeSelector && deps.nativeVisionProbe && !timedOut && !flowAbort.signal.aborted) {
         nativeVisionAttempted = true;
         nativeVisionEvidence = await deps.nativeVisionProbe({
           deviceId: requestedDeviceId,

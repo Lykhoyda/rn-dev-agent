@@ -1449,9 +1449,9 @@ export async function reapStaleFastRunner(deps: ReapDeps = {}): Promise<void> {
     /* race: died between checks */
   }
   if (spawnedExit) {
-    await Promise.race([spawnedExit, reapDelay(sleep, 250, deps.signal)]);
+    await Promise.race([spawnedExit, sleep(250)]);
   } else {
-    await reapDelay(sleep, 50, deps.signal);
+    await sleep(50);
   }
   const afterKill = probeExpected();
   if (afterKill !== 'gone') {

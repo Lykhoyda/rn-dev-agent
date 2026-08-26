@@ -114,10 +114,11 @@ export function planIosProofDomains(
     let domain = classified[index];
     if (domain === 'neutral') {
       domain =
-        (name === 'inputText' ? focusedDomain : null) ??
-        segments.at(-1)?.domain ??
-        classified.slice(index + 1).find((candidate) => candidate !== 'neutral') ??
-        'react-tree';
+        name === 'inputText'
+          ? (focusedDomain ?? 'xctest-native')
+          : (segments.at(-1)?.domain ??
+            classified.slice(index + 1).find((candidate) => candidate !== 'neutral') ??
+            'react-tree');
     }
     if (domain === 'mixed') continue;
     const prior = segments.at(-1);
@@ -204,6 +205,40 @@ export function nativeSelectorsForCommands(commands: unknown[]): NativeProofSele
   };
   visit(commands);
   return [...selectors].slice(0, 20).map((value) => ({ kind: 'text', value }));
+}
+
+export function soleComparableNativeSelectorForCommands(
+  commands: unknown[],
+): NativeProofSelector | null {
+  const candidates: Array<NativeProofSelector | null> = [];
+  const addCandidate = (value: unknown): void => {
+    if (typeof value === 'string') {
+      candidates.push({ kind: 'text', value });
+      return;
+    }
+    if (isObject(value) && typeof value.text === 'string') {
+      candidates.push(Object.keys(value).length === 1 ? { kind: 'text', value: value.text } : null);
+      return;
+    }
+    candidates.push(null);
+  };
+  const visit = (value: unknown, depth = 0): void => {
+    if (depth > 20) return;
+    if (Array.isArray(value)) {
+      for (const child of value) visit(child, depth + 1);
+      return;
+    }
+    if (!isObject(value)) return;
+    for (const [childKey, child] of Object.entries(value)) {
+      if (childKey === 'tapOn' || childKey === 'assertVisible') addCandidate(child);
+      if (childKey === 'extendedWaitUntil' && isObject(child)) addCandidate(child.visible);
+      if (childKey === 'scrollUntilVisible' && isObject(child)) addCandidate(child.element);
+      if (childKey === 'when' && isObject(child)) addCandidate(child.visible);
+      if (childKey !== 'assertNotVisible' && childKey !== 'notVisible') visit(child, depth + 1);
+    }
+  };
+  visit(commands);
+  return candidates.length === 1 ? candidates[0] : null;
 }
 
 export function loginPostconditionId(commands: unknown[]): string | null {

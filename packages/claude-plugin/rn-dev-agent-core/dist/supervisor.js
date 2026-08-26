@@ -21407,9 +21407,9 @@ async function reapStaleFastRunner(deps = {}) {
   } catch {
   }
   if (spawnedExit) {
-    await Promise.race([spawnedExit, reapDelay(sleep6, 250, deps.signal)]);
+    await Promise.race([spawnedExit, sleep6(250)]);
   } else {
-    await reapDelay(sleep6, 50, deps.signal);
+    await sleep6(50);
   }
   const afterKill = probeExpected();
   if (afterKill !== "gone") {
@@ -80237,7 +80237,7 @@ function planIosProofDomains(commands, params) {
     const name = commandName(commands[index]);
     let domain = classified[index];
     if (domain === "neutral") {
-      domain = (name === "inputText" ? focusedDomain : null) ?? segments.at(-1)?.domain ?? classified.slice(index + 1).find((candidate) => candidate !== "neutral") ?? "react-tree";
+      domain = name === "inputText" ? focusedDomain ?? "xctest-native" : segments.at(-1)?.domain ?? classified.slice(index + 1).find((candidate) => candidate !== "neutral") ?? "react-tree";
     }
     if (domain === "mixed")
       continue;
@@ -80315,6 +80315,45 @@ function nativeSelectorsForCommands(commands) {
   };
   visit(commands);
   return [...selectors].slice(0, 20).map((value) => ({ kind: "text", value }));
+}
+function soleComparableNativeSelectorForCommands(commands) {
+  const candidates = [];
+  const addCandidate = (value) => {
+    if (typeof value === "string") {
+      candidates.push({ kind: "text", value });
+      return;
+    }
+    if (isObject2(value) && typeof value.text === "string") {
+      candidates.push(Object.keys(value).length === 1 ? { kind: "text", value: value.text } : null);
+      return;
+    }
+    candidates.push(null);
+  };
+  const visit = (value, depth = 0) => {
+    if (depth > 20)
+      return;
+    if (Array.isArray(value)) {
+      for (const child of value)
+        visit(child, depth + 1);
+      return;
+    }
+    if (!isObject2(value))
+      return;
+    for (const [childKey, child] of Object.entries(value)) {
+      if (childKey === "tapOn" || childKey === "assertVisible")
+        addCandidate(child);
+      if (childKey === "extendedWaitUntil" && isObject2(child))
+        addCandidate(child.visible);
+      if (childKey === "scrollUntilVisible" && isObject2(child))
+        addCandidate(child.element);
+      if (childKey === "when" && isObject2(child))
+        addCandidate(child.visible);
+      if (childKey !== "assertNotVisible" && childKey !== "notVisible")
+        visit(child, depth + 1);
+    }
+  };
+  visit(commands);
+  return candidates.length === 1 ? candidates[0] : null;
 }
 function loginPostconditionId(commands) {
   const last = commands.at(-1);
@@ -81365,13 +81404,13 @@ function createMaestroRunHandler(deps = {}) {
         });
       }
       const nativeFailure = parseMaestroFailure(combined, terminal);
-      const soleNativeSelector = nativeSelectors.length === 1 ? nativeSelectors[0].value : null;
+      const soleNativeSelector = soleComparableNativeSelectorForCommands(validatedCommands)?.value;
       const selectorLessAssertionFailure = nativeFailure.kind === "UNKNOWN" && terminal.exitClass === "step-failure" && terminal.failedStep?.split(/\s+/, 1)[0] === "assertVisible";
       const failedNativeSelector = nativeFailure.kind === "SELECTOR_NOT_FOUND" ? nativeFailure.selector ?? soleNativeSelector : nativeFailure.kind === "ASSERTION_FAILED" ? nativeFailure.selector ?? soleNativeSelector : nativeFailure.kind === "TIMEOUT" ? nativeFailure.selector : selectorLessAssertionFailure ? soleNativeSelector : null;
       const comparableNativeSelector = nativeSelectors.find((selector) => selector.value === failedNativeSelector);
       let nativeVisionEvidence = null;
       let nativeVisionAttempted = false;
-      if (requestedDeviceId && comparableNativeSelector && deps.nativeVisionProbe && !flowAbort.signal.aborted) {
+      if (requestedDeviceId && comparableNativeSelector && deps.nativeVisionProbe && !timedOut && !flowAbort.signal.aborted) {
         nativeVisionAttempted = true;
         nativeVisionEvidence = await deps.nativeVisionProbe({
           deviceId: requestedDeviceId,
@@ -82004,7 +82043,7 @@ function createRunActionHandler(deps = {}) {
         completeNativeOrigin: (targetExpected) => completeNativeOrigin(args, targetExpected),
         relaunchManagedApp: () => relaunchManagedApp(args),
         reproveManagedOrigin: () => reproveManagedOrigin(args),
-        completeRunnerPark: () => completeManagedRunnerParkAuthority(args),
+        completeRunnerPark: (signal) => completeManagedRunnerParkAuthority(args, signal),
         reissueInstallReceipt: () => reissueInstallReceipt(args)
       }));
       const firstAttemptMs = Date.now() - tBeforeFirst;
@@ -82269,7 +82308,7 @@ function createRunActionHandler(deps = {}) {
         completeNativeOrigin: (targetExpected) => completeNativeOrigin(args, targetExpected),
         relaunchManagedApp: () => relaunchManagedApp(args),
         reproveManagedOrigin: () => reproveManagedOrigin(args),
-        completeRunnerPark: () => completeManagedRunnerParkAuthority(args),
+        completeRunnerPark: (signal) => completeManagedRunnerParkAuthority(args, signal),
         reissueInstallReceipt: () => reissueInstallReceipt(args)
       }));
       const retryMs = Date.now() - tBeforeRetry;
@@ -85790,6 +85829,11 @@ async function runMaestroInline(yaml2, opts, dependencies = {}) {
     const baseArgs = dispatch.buildArgs(opts.platform, flowFile, appFileResolution.appFile, requestedDeviceId);
     const finalArgs = assembleMaestroArgs(baseArgs, runnerReportArgs(runnerReportDir));
     const executionDeadline = Date.now() + timeout;
+    const flowAbort = new AbortController();
+    const abortTimer = setTimeout(() => {
+      flowAbort.abort(new Error(`Maestro timed out after ${timeout}ms`));
+    }, Math.max(0, executionDeadline - Date.now()));
+    abortTimer.unref?.();
     const execute2 = async () => {
       const spawn11 = (runnerPath, prefixArgs = []) => {
         const remainingTimeout = executionDeadline - Date.now();
@@ -85830,7 +85874,8 @@ async function runMaestroInline(yaml2, opts, dependencies = {}) {
         execution = await runFlowParked(execute2, {
           platform: opts.platform,
           deviceId: requestedDeviceId,
-          completeRunnerPark: () => completeManagedRunnerParkAuthority(opts.authorityArgs)
+          signal: flowAbort.signal,
+          completeRunnerPark: (signal) => completeManagedRunnerParkAuthority(opts.authorityArgs, signal)
         });
       } else {
         execution = await execute2();
@@ -85850,6 +85895,8 @@ async function runMaestroInline(yaml2, opts, dependencies = {}) {
         return { passed: false, output: "", flowFile, error: message };
       }
       throw err;
+    } finally {
+      clearTimeout(abortTimer);
     }
     const output = (execution.stdout + "\n" + execution.stderr).trim();
     if (!execution.cleanupProven) {

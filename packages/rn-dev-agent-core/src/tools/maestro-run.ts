@@ -88,6 +88,7 @@ import {
   loginPostconditionId,
   nativeCommandMayChangeFocus,
   nativeSelectorsForCommands,
+  soleComparableNativeSelectorForCommands,
   type NativeProofSelector,
 } from '../domain/ios-proof-router.js';
 import { runCdpReplayCommands, type CdpReplayDeps } from './cdp-replay-dispatch.js';
@@ -1555,7 +1556,7 @@ export function createMaestroRunHandler(
         });
       }
       const nativeFailure = parseMaestroFailure(combined, terminal);
-      const soleNativeSelector = nativeSelectors.length === 1 ? nativeSelectors[0]!.value : null;
+      const soleNativeSelector = soleComparableNativeSelectorForCommands(validatedCommands)?.value;
       const selectorLessAssertionFailure =
         nativeFailure.kind === 'UNKNOWN' &&
         terminal.exitClass === 'step-failure' &&
@@ -1579,6 +1580,7 @@ export function createMaestroRunHandler(
         requestedDeviceId &&
         comparableNativeSelector &&
         deps.nativeVisionProbe &&
+        !timedOut &&
         !flowAbort.signal.aborted
       ) {
         nativeVisionAttempted = true;

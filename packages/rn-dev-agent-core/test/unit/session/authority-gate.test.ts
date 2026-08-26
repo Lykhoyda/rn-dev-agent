@@ -12,6 +12,14 @@ import {
 } from '../../../dist/session/authority-gate.js';
 import { SessionAuthorityError } from '../../../dist/session/registry.js';
 import { failResult, okResult } from '../../../dist/utils.js';
+import { arbiterWrap, DeviceSessionArbiter } from '../../../dist/lifecycle/device-arbiter.js';
+import { runMaestroInline } from '../../../dist/maestro-invoke.js';
+import { buildReplayEngineStatus, MAESTRO_RUNNER_PIN } from '../../../dist/domain/engine-pin.js';
+import {
+  createPinnedRunActionHandler,
+  createTmpProject,
+  fixtureYaml,
+} from '../../helpers/tmp-project.js';
 
 function fixture() {
   const calls = [];
@@ -832,6 +840,71 @@ test('inline Maestro parking tolerates its own authenticated controller generati
   assert.equal(status.bindings.runner, null);
 });
 
+test('inline Maestro forwards its bounded deadline signal into managed runner cleanup', async () => {
+  const { runtime, registry, status } = fixture();
+  status.bindings.runner = {
+    platform: 'ios',
+    deviceId: 'device',
+    port: 9100,
+    instanceId: 'runner',
+  };
+  registry.replaceBindingsDuringOperation = (operation, input) => {
+    status.bindings = { ...status.bindings, ...input.bindings };
+    status.authorityVersion += 1;
+    return { ...operation, authorityVersion: status.authorityVersion };
+  };
+  let cleanupSignal: AbortSignal | undefined;
+  const gate = createAuthorityGate(runtime, {
+    probe: async ({ axis }) => ({ axis, identity: `${axis}-identity` }),
+    onRunnerReleased: async (_runner, signal) => {
+      cleanupSignal = signal;
+    },
+  });
+  const gated = gate.wrap('device_pick_date', async (args) => {
+    const result = await runMaestroInline(
+      '- tapOn: Continue',
+      {
+        platform: 'ios',
+        appId: 'dev.example',
+        deviceId: 'device',
+        timeoutMs: 5_000,
+        authorityArgs: args,
+      },
+      {
+        chooseDispatch: (() => ({
+          runner: 'maestro-runner',
+          binPath: '/fake/maestro-runner',
+          buildArgs: () => [],
+        })) as never,
+        resolveEngineStatus: async () =>
+          buildReplayEngineStatus('pinned-ok', MAESTRO_RUNNER_PIN.version, false),
+        spawnManaged: async () => ({
+          stdout: '',
+          stderr: 'fixture failure',
+          code: 1,
+          signal: null,
+          timedOut: false,
+          cleanupProven: true,
+          cleanupEscalated: false,
+        }),
+      },
+    );
+    return okResult({ inlinePassed: result.passed });
+  });
+  const wrapped = arbiterWrap('device_pick_date', gated, new DeviceSessionArbiter(), {
+    gate: { check: async () => ({ active: false, warning: null, scanMs: 0 }) },
+    getUdid: () => 'device',
+  });
+
+  const result = await wrapped({ date: '1990-06-15', platform: 'ios' });
+  const envelope = JSON.parse(result.content[0].text);
+
+  assert.equal(envelope.ok, true);
+  assert.ok(cleanupSignal instanceof AbortSignal);
+  assert.equal(cleanupSignal.aborted, false);
+  assert.equal(status.bindings.runner, null);
+});
+
 test('inline Maestro parking still rejects an external controller generation advance', async () => {
   const { runtime, registry, status } = fixture();
   status.bindings.runner = {
@@ -915,6 +988,75 @@ test('nested action replay can park runner authority without stranding a stale R
       instanceId: 'runner',
     },
   ]);
+});
+
+test('cdp_run_action forwards its replay signal into managed runner cleanup', async () => {
+  const project = createTmpProject();
+  try {
+    project.seedAction(
+      'signal-forwarding',
+      fixtureYaml({
+        id: 'signal-forwarding',
+        bundleId: 'dev.example',
+        status: 'active',
+      }),
+      null,
+    );
+    const { runtime, registry, status } = fixture();
+    status.source.appRoot = project.root;
+    status.bindings.runner = {
+      platform: 'ios',
+      deviceId: 'device',
+      port: 9100,
+      instanceId: 'runner',
+    };
+    registry.replaceBindingsDuringOperation = (operation, input) => {
+      status.bindings = { ...status.bindings, ...input.bindings };
+      status.authorityVersion += 1;
+      return { ...operation, authorityVersion: status.authorityVersion };
+    };
+    const controller = new AbortController();
+    let cleanupSignal: AbortSignal | undefined;
+    const gate = createAuthorityGate(runtime, {
+      probe: async ({ axis }) => ({ axis, identity: `${axis}-identity` }),
+      onRunnerReleased: async (_runner, signal) => {
+        cleanupSignal = signal;
+      },
+    });
+    const handler = createPinnedRunActionHandler({
+      maestroRun: async (args: {
+        completeRunnerPark?: (signal?: AbortSignal) => Promise<void>;
+      }) => {
+        await args.completeRunnerPark?.(controller.signal);
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: JSON.stringify({ ok: true, data: { passed: true, output: '' } }),
+            },
+          ],
+        };
+      },
+    });
+
+    const result = await gate.wrap(
+      'cdp_run_action',
+      handler,
+    )({
+      actionId: 'signal-forwarding',
+      projectRoot: project.root,
+      platform: 'ios',
+      appId: 'dev.example',
+      autoRepair: false,
+    });
+    const envelope = JSON.parse(result.content[0].text);
+
+    assert.equal(envelope.ok, true);
+    assert.equal(cleanupSignal, controller.signal);
+    assert.equal(status.bindings.runner, null);
+  } finally {
+    project.cleanup();
+  }
 });
 
 test('contained runner timeout atomically releases authority and preserves its typed result', async () => {

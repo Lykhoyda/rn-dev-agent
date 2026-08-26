@@ -7,6 +7,7 @@ import {
   nativeSelectorsForCommands,
   planIosProofDomains,
   selectorsVisibleInNativeSnapshot,
+  soleComparableNativeSelectorForCommands,
 } from '../../dist/domain/ios-proof-router.js';
 import { createMaestroRunHandler, runFlowParked } from '../../dist/tools/maestro-run.js';
 import { performReactTreeInput } from '../../dist/tools/device-interact.js';
@@ -235,6 +236,22 @@ test('inputText keeps the focused selector domain across an intervening proof se
   }
 });
 
+test('inputText without a proven React focus remains in the native domain', () => {
+  const plan = planIosProofDomains(
+    [{ inputText: 'autofocused value' }, { assertVisible: { id: 'react-status' } }],
+    {},
+  );
+  assert.equal(plan.ok, true);
+  if (!plan.ok) return;
+  assert.deepEqual(
+    plan.segments.map(({ domain, sourceIndices }) => ({ domain, sourceIndices })),
+    [
+      { domain: 'xctest-native', sourceIndices: [0] },
+      { domain: 'react-tree', sourceIndices: [1] },
+    ],
+  );
+});
+
 test('conditional React subflows preserve focus in both directions', async () => {
   const calls: string[] = [];
   const result = await replayFlow(
@@ -391,6 +408,24 @@ test('negative native assertions cannot prove blindness', () => {
       { assertVisible: { text: 'Present', index: 1 } },
     ]),
     [],
+  );
+  assert.deepEqual(soleComparableNativeSelectorForCommands([{ assertVisible: 'Present' }]), {
+    kind: 'text',
+    value: 'Present',
+  });
+  assert.equal(
+    soleComparableNativeSelectorForCommands([
+      { assertVisible: 'Present' },
+      { assertVisible: { text: 'Hidden', index: 1 } },
+    ]),
+    null,
+  );
+  assert.equal(
+    soleComparableNativeSelectorForCommands([
+      { assertVisible: 'Present' },
+      { assertVisible: { label: 'Hidden' } },
+    ]),
+    null,
   );
 });
 
@@ -592,6 +627,7 @@ function nativeHandler(
   failureOutput = "Element with text 'Open in' not found",
   options: {
     beforeFailure?: () => void;
+    failureCode?: string | number;
     stopFastRunner?: () => Promise<void>;
   } = {},
 ) {
@@ -619,7 +655,7 @@ function nativeHandler(
       if (!runnerFails) return { stdout: nativeRunnerOutput(), stderr: '' };
       options.beforeFailure?.();
       throw Object.assign(new Error('native selector failed'), {
-        code: 1,
+        code: options.failureCode ?? 1,
         stdout: nativeRunnerOutput(failureOutput),
         stderr: '',
       });
@@ -734,6 +770,51 @@ test('a constrained native selector miss is not reduced to a blind text comparis
     }),
   );
   assert.notEqual(env.code, 'NATIVE_SURFACE_BLIND');
+});
+
+test('a selector-less constrained failure cannot borrow another visible selector', async () => {
+  const env = envelope(
+    await nativeHandler(
+      true,
+      true,
+      '    ✗ assertVisible (0.1s)',
+    )({
+      platform: 'ios',
+      deviceId: IOS_UDID,
+      inlineYaml: `appId: com.example.app
+---
+- assertVisible: Visible
+- assertVisible:
+    text: Hidden
+    index: 1
+`,
+      ...callbacks,
+    }),
+  );
+  assert.notEqual(env.code, 'NATIVE_SURFACE_BLIND');
+});
+
+test('a timed-out selector failure cannot become native blindness', async () => {
+  let comparisonProbes = 0;
+  const env = envelope(
+    await nativeHandler(
+      () => {
+        comparisonProbes += 1;
+        return true;
+      },
+      true,
+      "Element with text 'Visible' not found",
+      { failureCode: 'ETIMEDOUT' },
+    )({
+      platform: 'ios',
+      deviceId: IOS_UDID,
+      inlineYaml: `appId: com.example.app\n---\n- assertVisible: Visible\n`,
+      ...callbacks,
+    }),
+  );
+  assert.notEqual(env.code, 'NATIVE_SURFACE_BLIND');
+  assert.equal(env.meta?.timedOut, true);
+  assert.equal(comparisonProbes, 0);
 });
 
 test('WDA-visible native smoke still passes in the XCTest domain', async () => {
@@ -1092,6 +1173,7 @@ test('an expired deadline skips grace and still settles runner cleanup', async (
   controller.abort(new Error('deadline'));
   const signals: string[] = [];
   let probes = 0;
+  let killSettled = false;
   let cleared = false;
   await reapStaleFastRunner({
     signal: controller.signal,
@@ -1104,12 +1186,15 @@ test('an expired deadline skips grace and still settles runner cleanup', async (
     }),
     probeProcessBirth: () => {
       probes += 1;
-      return probes < 3
+      return probes < 3 || !killSettled
         ? { status: 'present', birth: { pid: 123, token: 'birth' } }
         : { status: 'absent' };
     },
     sendSignal: (_pid, signal) => signals.push(signal),
-    sleep: async () => new Promise<void>(() => {}),
+    sleep: async (ms) => {
+      if (ms === 50) killSettled = true;
+      else await new Promise<void>(() => {});
+    },
     clearState: () => {
       cleared = true;
     },
