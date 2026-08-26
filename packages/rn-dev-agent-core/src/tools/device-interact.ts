@@ -44,7 +44,6 @@ import {
 } from '../fast-runner-ref-map.js';
 import {
   classifyNativeVerification,
-  decideNativeRetype,
   type NativeVerifyVerdict,
   type NativeVerification,
 } from './fill-verify.js';
@@ -911,10 +910,6 @@ export function extractTypingMeta(
   }
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((r) => setTimeout(r, ms));
-}
-
 function extractSettleMeta(result: ToolResult): { settle?: unknown; settleMs?: number } {
   try {
     const envelope = JSON.parse(result.content[0].text) as {
@@ -1097,8 +1092,6 @@ function attachFillFailureDisposition(
   }
 }
 
-const MAX_NATIVE_RETYPE = 2;
-
 export interface ExactFillTiers {
   abortSignal?: AbortSignal;
 }
@@ -1169,140 +1162,99 @@ export async function performExactFill(
     ...(args.waitForKeyboardMs !== undefined ? { focusWaitMs: args.waitForKeyboardMs } : {}),
   };
   const tNative = Date.now();
-  let lastVerification: NativeVerification | null = null;
-  for (let attempt = 0; attempt <= MAX_NATIVE_RETYPE; attempt++) {
-    const operationToken = randomUUID();
-    const clearFirst = attempt > 0 || args.text.length === 0;
-    const primary = await runNative(
-      ['fill', binding.inputRef, args.text, ...(clearFirst ? ['--clear-first'] : [])],
-      {
-        ...(attempt === 0 ? settleOpts(args) : { settle: { enabled: false } }),
-        exactTarget: { ...exactTarget, operationToken },
-      },
-    );
-    if (primary.isError) {
-      const mutation = extractMutationDisposition(primary);
-      if (isSetTextRejectedError(primary)) {
-        if (mutation === 'possible') {
-          return fillFailure(
-            'TEXT_ENTRY_UNVERIFIED',
-            `device_fill's native attempt may have mutated the field before rejecting text entry: ${extractErrorText(primary)}`,
-            { mutation: 'possible', pathsTried },
-          );
-        }
-        if (mutation === 'observed') {
-          mutationSeen = 'observed';
-          const verification = await finalVerification(binding, args.text, operationToken);
-          lastVerification = verification;
-          if (verification.verified) {
-            return verifiedFillResult('native', args.text.length, {
-              textEntryPath: attempt === 0 ? 'native' : 'native-retype',
-              verifiedOracle: 'native',
-              recovered: 'post-error-exact-readback',
-              retypes: attempt,
-              timings_ms: { nativeType: Date.now() - tNative },
-            });
-          }
-          if (!verification.observedMismatch) {
-            return fillFailure(
-              'TEXT_ENTRY_UNVERIFIED',
-              'device_fill observed a rejected native mutation but could not prove a stable mismatch; not retrying.',
-              { mutation: 'possible', pathsTried, verification },
-            );
-          }
-        }
-        break;
-      }
-      if (mutation === 'none') {
-        if (mutationSeen !== 'none') {
-          return fillFailure(
-            'TEXT_ENTRY_UNVERIFIED',
-            `device_fill's corrective native attempt was refused after an earlier mutation: ${extractErrorText(primary)}`,
-            { mutation: 'possible', pathsTried },
-          );
-        }
-        const code = extractErrorCode(primary);
-        return fillFailure(
-          code === 'FOCUS_TARGET_OCCLUDED' ? 'FOCUS_TARGET_OCCLUDED' : 'NO_TEXT_INPUT_TARGET',
-          `device_fill's native attempt was refused before mutation: ${extractErrorText(primary)}`,
-          { mutation: 'none', pathsTried },
-        );
-      }
-      // Runner-timeout discipline: never resend; only an exact independent
-      // read-back may promote a possibly-mutating failure to success.
-      const verification = await finalVerification(binding, args.text, operationToken);
-      if (verification.verified) {
-        return verifiedFillResult('native', args.text.length, {
-          textEntryPath: attempt === 0 ? 'native' : 'native-retype',
-          verifiedOracle: 'native',
-          recovered: 'post-error-exact-readback',
-          retypes: attempt,
-          timings_ms: { nativeType: Date.now() - tNative },
-        });
-      }
-      return fillFailure(
-        'TEXT_ENTRY_UNVERIFIED',
-        `device_fill's native attempt failed and the field could not be verified: ${extractErrorText(primary)}`,
-        {
-          mutation: mutationSeen === 'none' ? mutation : 'possible',
-          pathsTried,
-          verification,
-        },
-      );
-    }
-    mutationSeen = 'observed';
-    const primarySettle = extractSettleMeta(primary);
-    const primaryTyping = extractTypingMeta(primary);
-    const verification = await finalVerification(binding, args.text, operationToken);
-    lastVerification = verification;
-    if (verification.verified) {
-      return verifiedFillResult('native', args.text.length, {
-        textEntryPath: attempt === 0 ? 'native' : 'native-retype',
-        verifiedOracle: 'native',
-        retypes: attempt,
-        ...(primaryTyping ? { typing: primaryTyping } : {}),
-        ...(primarySettle.settle !== undefined ? { settle: primarySettle.settle } : {}),
-        timings_ms: {
-          nativeType: Date.now() - tNative,
-          ...(primarySettle.settleMs !== undefined ? { settle: primarySettle.settleMs } : {}),
-        },
-      });
-    }
-    const decision = decideNativeRetype(verification, attempt, MAX_NATIVE_RETYPE);
-    if (decision.action === 'escalate') {
-      if (!verification.observedMismatch) {
+  const operationToken = randomUUID();
+  const primary = await runNative(
+    ['fill', binding.inputRef, args.text, ...(args.text.length === 0 ? ['--clear-first'] : [])],
+    {
+      ...settleOpts(args),
+      exactTarget: { ...exactTarget, operationToken },
+    },
+  );
+  if (primary.isError) {
+    const mutation = extractMutationDisposition(primary);
+    if (isSetTextRejectedError(primary)) {
+      if (mutation === 'possible') {
         return fillFailure(
           'TEXT_ENTRY_UNVERIFIED',
-          'device_fill typed but the final read-back is inconclusive; not retrying.',
-          { mutation: 'possible', pathsTried, verification },
+          `device_fill's native attempt may have mutated the field before rejecting text entry: ${extractErrorText(primary)}`,
+          { mutation: 'possible', pathsTried },
         );
       }
-      break;
-    }
-    if (tiers.abortSignal?.aborted) {
+      if (mutation === 'observed') {
+        mutationSeen = 'observed';
+        const verification = await finalVerification(binding, args.text, operationToken);
+        if (verification.verified) {
+          return verifiedFillResult('native', args.text.length, {
+            textEntryPath: 'native',
+            verifiedOracle: 'native',
+            recovered: 'post-error-exact-readback',
+            timings_ms: { nativeType: Date.now() - tNative },
+          });
+        }
+        return fillFailure(
+          'TEXT_ENTRY_UNVERIFIED',
+          'device_fill observed a rejected native mutation but could not verify the retained target; not retrying.',
+          {
+            mutation: verification.observedMismatch ? 'observed' : 'possible',
+            pathsTried,
+            verification,
+          },
+        );
+      }
       return fillFailure(
         'TEXT_ENTRY_UNVERIFIED',
-        'device_fill was cancelled after a native attempt; no corrective retype was dispatched.',
-        { mutation: 'possible', pathsTried, verification },
+        'device_fill could not verify the fill through the retained native target.',
+        { mutation: 'none', pathsTried },
       );
     }
-    await sleep(decision.delayMs);
-    if (tiers.abortSignal?.aborted) {
+    if (mutation === 'none') {
+      const code = extractErrorCode(primary);
       return fillFailure(
-        'TEXT_ENTRY_UNVERIFIED',
-        'device_fill was cancelled before a corrective retype was dispatched.',
-        { mutation: 'possible', pathsTried, verification },
+        code === 'FOCUS_TARGET_OCCLUDED' ? 'FOCUS_TARGET_OCCLUDED' : 'NO_TEXT_INPUT_TARGET',
+        `device_fill's native attempt was refused before mutation: ${extractErrorText(primary)}`,
+        { mutation: 'none', pathsTried },
       );
     }
+    const verification = await finalVerification(binding, args.text, operationToken);
+    if (verification.verified) {
+      return verifiedFillResult('native', args.text.length, {
+        textEntryPath: 'native',
+        verifiedOracle: 'native',
+        recovered: 'post-error-exact-readback',
+        timings_ms: { nativeType: Date.now() - tNative },
+      });
+    }
+    return fillFailure(
+      'TEXT_ENTRY_UNVERIFIED',
+      `device_fill's native attempt failed and the field could not be verified: ${extractErrorText(primary)}`,
+      { mutation, pathsTried, verification },
+    );
   }
-
+  mutationSeen = 'observed';
+  const primarySettle = extractSettleMeta(primary);
+  const primaryTyping = extractTypingMeta(primary);
+  const verification = await finalVerification(binding, args.text, operationToken);
+  if (verification.verified) {
+    return verifiedFillResult('native', args.text.length, {
+      textEntryPath: 'native',
+      verifiedOracle: 'native',
+      ...(primaryTyping ? { typing: primaryTyping } : {}),
+      ...(primarySettle.settle !== undefined ? { settle: primarySettle.settle } : {}),
+      timings_ms: {
+        nativeType: Date.now() - tNative,
+        ...(primarySettle.settleMs !== undefined ? { settle: primarySettle.settleMs } : {}),
+      },
+    });
+  }
   return fillFailure(
     'TEXT_ENTRY_UNVERIFIED',
-    'device_fill could not verify the fill through the retained native target.',
+    verification.observedMismatch
+      ? 'device_fill typed a different value on the retained native target; not retrying.'
+      : 'device_fill typed but the retained native target could not be verified; not retrying.',
     {
-      mutation: mutationSeen,
+      mutation: verification.observedMismatch ? mutationSeen : 'possible',
       pathsTried,
-      verification: lastVerification ?? undefined,
+      verification,
     },
   );
 }

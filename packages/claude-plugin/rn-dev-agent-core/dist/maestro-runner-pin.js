@@ -10468,7 +10468,7 @@ var HOST_PLUGIN_ROOT = "${CLAUDE_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-
 var PINNED_RUNNER_INSTALL_HINT = `bash ${HOST_PLUGIN_ROOT}/scripts/ensure-maestro-runner.sh`;
 var PINNED_RUNNER_DIAGNOSE_HINT = `node ${HOST_PLUGIN_ROOT}/rn-dev-agent-core/dist/maestro-runner-pin.js diagnose`;
 var MAESTRO_RUNNER_MIN_ANDROID_API = 26;
-var PRE_O_REMEDY = "Action replay / E2E via the maestro engine is unsupported on this device; the direct device_* interaction tier still works (rn-android-runner supports API 23+), except for the few device_* paths that fall back to maestro (dev-client picker, system dialogs, device_fill correction), which hit this same limit.";
+var PRE_O_REMEDY = "Action replay / E2E via the maestro engine is unsupported on this device; the direct device_* interaction tier still works (rn-android-runner supports API 23+), except for the few device_* paths that fall back to maestro (dev-client picker and system dialogs), which hit this same limit.";
 function engineLabel(_runner) {
   return `the pinned maestro-runner ${MAESTRO_RUNNER_PIN.version}`;
 }

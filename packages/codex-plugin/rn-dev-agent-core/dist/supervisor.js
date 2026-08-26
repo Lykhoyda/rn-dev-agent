@@ -19887,7 +19887,7 @@ function keyboardVisibility(result) {
     return null;
   }
 }
-async function waitForKeyboardHidden(refreshSnapshot, sleep7 = (ms) => new Promise((resolve21) => setTimeout(resolve21, ms))) {
+async function waitForKeyboardHidden(refreshSnapshot, sleep6 = (ms) => new Promise((resolve21) => setTimeout(resolve21, ms))) {
   let last = "unknown";
   for (let attempt = 0; attempt < KEYBOARD_POSTCHECK_ATTEMPTS; attempt += 1) {
     const visible = keyboardVisibility(await refreshSnapshot());
@@ -19897,7 +19897,7 @@ async function waitForKeyboardHidden(refreshSnapshot, sleep7 = (ms) => new Promi
       return "unknown";
     last = "visible";
     if (attempt < KEYBOARD_POSTCHECK_ATTEMPTS - 1)
-      await sleep7(KEYBOARD_POSTCHECK_DELAY_MS);
+      await sleep6(KEYBOARD_POSTCHECK_DELAY_MS);
   }
   return last;
 }
@@ -21326,7 +21326,7 @@ async function probeFastRunnerLiveness(deps = {}) {
 async function reapStaleFastRunner(deps = {}) {
   const getState = deps.getState ?? (() => runnerState);
   const sendSignal = deps.sendSignal ?? ((pid, sig) => process.kill(pid, sig));
-  const sleep7 = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
+  const sleep6 = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
   const clearState = deps.clearState ?? clearStateFileIfMatches;
   const graceMs = deps.graceMs ?? 500;
   const state = getState();
@@ -21374,7 +21374,7 @@ async function reapStaleFastRunner(deps = {}) {
     sendSignal(state.pid, "SIGTERM");
   } catch {
   }
-  await sleep7(graceMs);
+  await sleep6(graceMs);
   const afterTerm = probeExpected();
   if (afterTerm === "unknown") {
     throw new Error("RUNNER_ADOPTION_REQUIRED: iOS runner termination is unproven");
@@ -21388,9 +21388,9 @@ async function reapStaleFastRunner(deps = {}) {
   } catch {
   }
   if (spawnedExit) {
-    await Promise.race([spawnedExit, sleep7(250)]);
+    await Promise.race([spawnedExit, sleep6(250)]);
   } else {
-    await sleep7(50);
+    await sleep6(50);
   }
   const afterKill = probeExpected();
   if (afterKill !== "gone") {
@@ -28005,18 +28005,18 @@ async function recoverFromRunnerLeak(ctx, deps) {
   if (!ctx.appId) {
     return { recovered: false, result: emptyResult(), reason: "no-session-context" };
   }
-  const sleep7 = deps.sleep ?? defaultSleep;
+  const sleep6 = deps.sleep ?? defaultSleep;
   if (deps.reacquire) {
-    const tier0 = await attemptReacquireCycle(deps, sleep7);
+    const tier0 = await attemptReacquireCycle(deps, sleep6);
     if (tier0.phase === "success") {
       return { recovered: true, result: tier0.result, tier: "reacquire" };
     }
   }
-  const tier1 = await attemptRecoveryCycle(ctx, deps, true, sleep7);
+  const tier1 = await attemptRecoveryCycle(ctx, deps, true, sleep6);
   if (tier1.phase === "success") {
     return { recovered: true, result: tier1.result, tier: "attach-only" };
   }
-  const tier2 = await attemptRecoveryCycle(ctx, deps, false, sleep7);
+  const tier2 = await attemptRecoveryCycle(ctx, deps, false, sleep6);
   if (tier2.phase === "success") {
     return { recovered: true, result: tier2.result, tier: "full-relaunch" };
   }
@@ -28025,12 +28025,12 @@ async function recoverFromRunnerLeak(ctx, deps) {
   }
   return { recovered: false, result: tier2.result, reason: "reopen-failed" };
 }
-async function attemptReacquireCycle(deps, sleep7) {
+async function attemptReacquireCycle(deps, sleep6) {
   const reacqResult = await deps.reacquire();
   if (reacqResult.isError) {
     return { phase: "reopen-failed", result: reacqResult };
   }
-  await sleep7(DAEMON_SETTLE_MS);
+  await sleep6(DAEMON_SETTLE_MS);
   const retryResult = await deps.resnapshot();
   if (retryResult.isError) {
     return { phase: "snapshot-failed", result: retryResult };
@@ -28040,9 +28040,9 @@ async function attemptReacquireCycle(deps, sleep7) {
   }
   return { phase: "success", result: retryResult };
 }
-async function attemptRecoveryCycle(ctx, deps, attachOnly, sleep7) {
+async function attemptRecoveryCycle(ctx, deps, attachOnly, sleep6) {
   await deps.closeSession();
-  await sleep7(DAEMON_SETTLE_MS);
+  await sleep6(DAEMON_SETTLE_MS);
   const reopenResult = await deps.openSession({
     appId: ctx.appId,
     platform: "ios",
@@ -30310,17 +30310,9 @@ function classifyNativeVerification(native, nativeStable) {
     observedMismatch: native === "mismatch" && nativeStable
   };
 }
-function decideNativeRetype(verification, attemptsSoFar, maxAttempts) {
-  if (!verification.observedMismatch || attemptsSoFar >= maxAttempts) {
-    return { action: "escalate" };
-  }
-  return { action: "retype", delayMs: RETYPE_DELAY_MS };
-}
-var RETYPE_DELAY_MS;
 var init_fill_verify = __esm({
   "packages/rn-dev-agent-core/dist/tools/fill-verify.js"() {
     "use strict";
-    RETYPE_DELAY_MS = 40;
   }
 });
 
@@ -30832,9 +30824,6 @@ function extractTypingMeta(result) {
     return null;
   }
 }
-function sleep3(ms) {
-  return new Promise((r) => setTimeout(r, ms));
-}
 function extractSettleMeta(result) {
   try {
     const envelope = JSON.parse(result.content[0].text);
@@ -30978,99 +30967,71 @@ async function performExactFill(args, _client, tiers) {
     ...args.waitForKeyboardMs !== void 0 ? { focusWaitMs: args.waitForKeyboardMs } : {}
   };
   const tNative = Date.now();
-  let lastVerification = null;
-  for (let attempt = 0; attempt <= MAX_NATIVE_RETYPE; attempt++) {
-    const operationToken = randomUUID5();
-    const clearFirst = attempt > 0 || args.text.length === 0;
-    const primary = await runNative(["fill", binding.inputRef, args.text, ...clearFirst ? ["--clear-first"] : []], {
-      ...attempt === 0 ? settleOpts(args) : { settle: { enabled: false } },
-      exactTarget: { ...exactTarget, operationToken }
-    });
-    if (primary.isError) {
-      const mutation = extractMutationDisposition(primary);
-      if (isSetTextRejectedError(primary)) {
-        if (mutation === "possible") {
-          return fillFailure("TEXT_ENTRY_UNVERIFIED", `device_fill's native attempt may have mutated the field before rejecting text entry: ${extractErrorText(primary)}`, { mutation: "possible", pathsTried });
-        }
-        if (mutation === "observed") {
-          mutationSeen = "observed";
-          const verification3 = await finalVerification(binding, args.text, operationToken);
-          lastVerification = verification3;
-          if (verification3.verified) {
-            return verifiedFillResult("native", args.text.length, {
-              textEntryPath: attempt === 0 ? "native" : "native-retype",
-              verifiedOracle: "native",
-              recovered: "post-error-exact-readback",
-              retypes: attempt,
-              timings_ms: { nativeType: Date.now() - tNative }
-            });
-          }
-          if (!verification3.observedMismatch) {
-            return fillFailure("TEXT_ENTRY_UNVERIFIED", "device_fill observed a rejected native mutation but could not prove a stable mismatch; not retrying.", { mutation: "possible", pathsTried, verification: verification3 });
-          }
-        }
-        break;
+  const operationToken = randomUUID5();
+  const primary = await runNative(["fill", binding.inputRef, args.text, ...args.text.length === 0 ? ["--clear-first"] : []], {
+    ...settleOpts(args),
+    exactTarget: { ...exactTarget, operationToken }
+  });
+  if (primary.isError) {
+    const mutation = extractMutationDisposition(primary);
+    if (isSetTextRejectedError(primary)) {
+      if (mutation === "possible") {
+        return fillFailure("TEXT_ENTRY_UNVERIFIED", `device_fill's native attempt may have mutated the field before rejecting text entry: ${extractErrorText(primary)}`, { mutation: "possible", pathsTried });
       }
-      if (mutation === "none") {
-        if (mutationSeen !== "none") {
-          return fillFailure("TEXT_ENTRY_UNVERIFIED", `device_fill's corrective native attempt was refused after an earlier mutation: ${extractErrorText(primary)}`, { mutation: "possible", pathsTried });
+      if (mutation === "observed") {
+        mutationSeen = "observed";
+        const verification3 = await finalVerification(binding, args.text, operationToken);
+        if (verification3.verified) {
+          return verifiedFillResult("native", args.text.length, {
+            textEntryPath: "native",
+            verifiedOracle: "native",
+            recovered: "post-error-exact-readback",
+            timings_ms: { nativeType: Date.now() - tNative }
+          });
         }
-        const code = extractErrorCode(primary);
-        return fillFailure(code === "FOCUS_TARGET_OCCLUDED" ? "FOCUS_TARGET_OCCLUDED" : "NO_TEXT_INPUT_TARGET", `device_fill's native attempt was refused before mutation: ${extractErrorText(primary)}`, { mutation: "none", pathsTried });
-      }
-      const verification2 = await finalVerification(binding, args.text, operationToken);
-      if (verification2.verified) {
-        return verifiedFillResult("native", args.text.length, {
-          textEntryPath: attempt === 0 ? "native" : "native-retype",
-          verifiedOracle: "native",
-          recovered: "post-error-exact-readback",
-          retypes: attempt,
-          timings_ms: { nativeType: Date.now() - tNative }
+        return fillFailure("TEXT_ENTRY_UNVERIFIED", "device_fill observed a rejected native mutation but could not verify the retained target; not retrying.", {
+          mutation: verification3.observedMismatch ? "observed" : "possible",
+          pathsTried,
+          verification: verification3
         });
       }
-      return fillFailure("TEXT_ENTRY_UNVERIFIED", `device_fill's native attempt failed and the field could not be verified: ${extractErrorText(primary)}`, {
-        mutation: mutationSeen === "none" ? mutation : "possible",
-        pathsTried,
-        verification: verification2
-      });
+      return fillFailure("TEXT_ENTRY_UNVERIFIED", "device_fill could not verify the fill through the retained native target.", { mutation: "none", pathsTried });
     }
-    mutationSeen = "observed";
-    const primarySettle = extractSettleMeta(primary);
-    const primaryTyping = extractTypingMeta(primary);
-    const verification = await finalVerification(binding, args.text, operationToken);
-    lastVerification = verification;
-    if (verification.verified) {
+    if (mutation === "none") {
+      const code = extractErrorCode(primary);
+      return fillFailure(code === "FOCUS_TARGET_OCCLUDED" ? "FOCUS_TARGET_OCCLUDED" : "NO_TEXT_INPUT_TARGET", `device_fill's native attempt was refused before mutation: ${extractErrorText(primary)}`, { mutation: "none", pathsTried });
+    }
+    const verification2 = await finalVerification(binding, args.text, operationToken);
+    if (verification2.verified) {
       return verifiedFillResult("native", args.text.length, {
-        textEntryPath: attempt === 0 ? "native" : "native-retype",
+        textEntryPath: "native",
         verifiedOracle: "native",
-        retypes: attempt,
-        ...primaryTyping ? { typing: primaryTyping } : {},
-        ...primarySettle.settle !== void 0 ? { settle: primarySettle.settle } : {},
-        timings_ms: {
-          nativeType: Date.now() - tNative,
-          ...primarySettle.settleMs !== void 0 ? { settle: primarySettle.settleMs } : {}
-        }
+        recovered: "post-error-exact-readback",
+        timings_ms: { nativeType: Date.now() - tNative }
       });
     }
-    const decision = decideNativeRetype(verification, attempt, MAX_NATIVE_RETYPE);
-    if (decision.action === "escalate") {
-      if (!verification.observedMismatch) {
-        return fillFailure("TEXT_ENTRY_UNVERIFIED", "device_fill typed but the final read-back is inconclusive; not retrying.", { mutation: "possible", pathsTried, verification });
-      }
-      break;
-    }
-    if (tiers.abortSignal?.aborted) {
-      return fillFailure("TEXT_ENTRY_UNVERIFIED", "device_fill was cancelled after a native attempt; no corrective retype was dispatched.", { mutation: "possible", pathsTried, verification });
-    }
-    await sleep3(decision.delayMs);
-    if (tiers.abortSignal?.aborted) {
-      return fillFailure("TEXT_ENTRY_UNVERIFIED", "device_fill was cancelled before a corrective retype was dispatched.", { mutation: "possible", pathsTried, verification });
-    }
+    return fillFailure("TEXT_ENTRY_UNVERIFIED", `device_fill's native attempt failed and the field could not be verified: ${extractErrorText(primary)}`, { mutation, pathsTried, verification: verification2 });
   }
-  return fillFailure("TEXT_ENTRY_UNVERIFIED", "device_fill could not verify the fill through the retained native target.", {
-    mutation: mutationSeen,
+  mutationSeen = "observed";
+  const primarySettle = extractSettleMeta(primary);
+  const primaryTyping = extractTypingMeta(primary);
+  const verification = await finalVerification(binding, args.text, operationToken);
+  if (verification.verified) {
+    return verifiedFillResult("native", args.text.length, {
+      textEntryPath: "native",
+      verifiedOracle: "native",
+      ...primaryTyping ? { typing: primaryTyping } : {},
+      ...primarySettle.settle !== void 0 ? { settle: primarySettle.settle } : {},
+      timings_ms: {
+        nativeType: Date.now() - tNative,
+        ...primarySettle.settleMs !== void 0 ? { settle: primarySettle.settleMs } : {}
+      }
+    });
+  }
+  return fillFailure("TEXT_ENTRY_UNVERIFIED", verification.observedMismatch ? "device_fill typed a different value on the retained native target; not retrying." : "device_fill typed but the retained native target could not be verified; not retrying.", {
+    mutation: verification.observedMismatch ? mutationSeen : "possible",
     pathsTried,
-    verification: lastVerification ?? void 0
+    verification
   });
 }
 function createDeviceFillHandler(_getClient) {
@@ -31454,7 +31415,7 @@ function decideScrollDirection(element, screen) {
     return "right";
   return null;
 }
-var execFile11, IME_PROBE_TIMEOUT_MS, TYPE_PRIORITY_FOR_TAP, IOS_INPUT_TYPES, ANDROID_INPUT_TYPE_RE, PRESSABLE_SUFFIX, NATIVE_VERIFY_VERDICTS, MAX_NATIVE_RETYPE, DEFAULT_SCREEN, SWIPE_FRACTION, DEFAULT_SWIPE_DURATION_MS, NEXT_KEY_LABELS, _imePackageResolverForTest;
+var execFile11, IME_PROBE_TIMEOUT_MS, TYPE_PRIORITY_FOR_TAP, IOS_INPUT_TYPES, ANDROID_INPUT_TYPE_RE, PRESSABLE_SUFFIX, NATIVE_VERIFY_VERDICTS, DEFAULT_SCREEN, SWIPE_FRACTION, DEFAULT_SWIPE_DURATION_MS, NEXT_KEY_LABELS, _imePackageResolverForTest;
 var init_device_interact = __esm({
   "packages/rn-dev-agent-core/dist/tools/device-interact.js"() {
     "use strict";
@@ -31493,7 +31454,6 @@ var init_device_interact = __esm({
       "target-lost",
       "ambiguous"
     ]);
-    MAX_NATIVE_RETYPE = 2;
     DEFAULT_SCREEN = { width: 402, height: 874 };
     SWIPE_FRACTION = 0.4;
     DEFAULT_SWIPE_DURATION_MS = 300;
@@ -62706,7 +62666,7 @@ function clearActiveFlag() {
   } catch {
   }
 }
-function sleep4(ms) {
+function sleep3(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 var CDP_ACTIVE_FLAG, CDP_SESSION_FILE;
@@ -62771,7 +62731,7 @@ async function interruptibleSleep(delayMs, ctx, sliceMs = 500) {
     if (ctx.isDisposed() || ctx.isSoftReconnectRequested())
       return false;
     const remaining = deadline - Date.now();
-    await sleep4(Math.min(sliceMs, remaining));
+    await sleep3(Math.min(sliceMs, remaining));
   }
   return true;
 }
@@ -62820,7 +62780,7 @@ async function softReconnect(ctx) {
     ctx.setSoftReconnectRequested(true);
     const bailDeadline = Date.now() + 3e3;
     while (ctx.isReconnecting() && Date.now() < bailDeadline) {
-      await sleep4(200);
+      await sleep3(200);
     }
     ctx.setSoftReconnectRequested(false);
   }
@@ -67622,7 +67582,7 @@ async function probeReactReachable(evaluate, budgetMs, pollMs = REACT_READY_POLL
         return true;
     } catch {
     }
-    await sleep4(pollMs);
+    await sleep3(pollMs);
   }
   return false;
 }
@@ -67637,7 +67597,7 @@ async function waitForReact(evaluate, timeout, pollInterval) {
         return;
     } catch {
     }
-    await sleep4(effectivePoll);
+    await sleep3(effectivePoll);
   }
   console.error(`CDP: React not ready after ${effectiveTimeout}ms \u2014 helpers will be injected anyway`);
 }
@@ -68093,7 +68053,7 @@ async function connectToTarget(ctx, target, retries = 5, intent = "default") {
         throw new Error("CDP connection refused. Is Metro running and the app loaded?");
       }
       if (i < retries - 1)
-        await sleep4(2e3);
+        await sleep3(2e3);
     }
   }
   ctx.setState("disconnected");
@@ -69006,7 +68966,7 @@ var init_cdp_client = __esm({
               return { value: val.v };
             }
           }
-          await sleep4(100);
+          await sleep3(100);
         }
         clearAsyncSlot();
         return {
@@ -69555,7 +69515,7 @@ async function resolveExactReloadTargetId(client2, captured, authorityTarget, ex
 }
 async function recoverAfterFailedReconnect(getClient2, setClient2, createClient2, captured, deps = {}, authorityTarget) {
   const execFile24 = deps.execFile ?? defaultExecFile;
-  const sleep7 = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
+  const sleep6 = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
   const resolveExactTargetId = deps.resolveExactTargetId ?? ((client2, state, target) => resolveExactReloadTargetId(client2, state, target, execFile24));
   const first = await forceReconnect(getClient2(), setClient2, createClient2, captured, authorityTarget, authorityTarget ? resolveExactTargetId : void 0);
   if (first.ok) {
@@ -69622,7 +69582,7 @@ async function recoverAfterFailedReconnect(getClient2, setClient2, createClient2
       relaunchSteps: steps
     };
   }
-  await sleep7(3e3);
+  await sleep6(3e3);
   const second = await forceReconnect(getClient2(), setClient2, createClient2, captured, authorityTarget, resolveExactTargetId);
   if (second.ok) {
     return {
@@ -69641,7 +69601,7 @@ async function recoverAfterFailedReconnect(getClient2, setClient2, createClient2
   };
 }
 function createReloadHandler(getClient2, setClient2, createClient2, deps = {}) {
-  const sleep7 = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
+  const sleep6 = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
   return withConnection(getClient2, async (args, client2) => {
     try {
       const result = await client2.evaluate('(function() {  var ds = null;  if (typeof __turboModuleProxy === "function") try { ds = __turboModuleProxy("DevSettings"); } catch(e) {}  if (!ds && typeof globalThis.nativeModuleProxy !== "undefined") try { ds = globalThis.nativeModuleProxy.DevSettings; } catch(e) {}  if (!ds && typeof globalThis.__fbBatchedBridge !== "undefined") try { ds = globalThis.__fbBatchedBridge.getCallableModule("DevSettings"); } catch(e) {}  if (ds && typeof ds.reload === "function") { ds.reload(); return "devSettings"; }  if (typeof globalThis.location !== "undefined" && typeof globalThis.location.reload === "function") { globalThis.location.reload(); return "location"; }  throw new Error("DevSettings not available \u2014 use Maestro or simctl to restart the app");})()');
@@ -69657,7 +69617,7 @@ function createReloadHandler(getClient2, setClient2, createClient2, deps = {}) {
     }
     const wsDownDeadline = Date.now() + 3e3;
     while (client2.isConnected && Date.now() < wsDownDeadline) {
-      await sleep7(200);
+      await sleep6(200);
     }
     let reconnected = false;
     let lastReconnErr = "";
@@ -69682,7 +69642,7 @@ function createReloadHandler(getClient2, setClient2, createClient2, deps = {}) {
       } catch (reconnErr) {
         lastReconnErr = reconnErr instanceof Error ? reconnErr.message : String(reconnErr);
         if (attempt < SOFT_RECONNECT_ATTEMPTS - 1) {
-          await sleep7(2e3 + attempt * 1e3);
+          await sleep6(2e3 + attempt * 1e3);
         }
       } finally {
         if (reconnTimer)
@@ -69725,7 +69685,7 @@ function createReloadHandler(getClient2, setClient2, createClient2, deps = {}) {
     }
     const helperDeadline = Date.now() + 12e3;
     while (!client2.helpersInjected && Date.now() < helperDeadline) {
-      await sleep7(400);
+      await sleep6(400);
     }
     if (!client2.isConnected) {
       return failResult("Reload triggered but the exact-target connection dropped after re-discovery.", "RECONNECT_TIMEOUT", {
@@ -71313,7 +71273,7 @@ var init_engine_pin = __esm({
     PINNED_RUNNER_INSTALL_HINT = `bash ${HOST_PLUGIN_ROOT}/scripts/ensure-maestro-runner.sh`;
     PINNED_RUNNER_DIAGNOSE_HINT = `node ${HOST_PLUGIN_ROOT}/rn-dev-agent-core/dist/maestro-runner-pin.js diagnose`;
     MAESTRO_RUNNER_MIN_ANDROID_API = 26;
-    PRE_O_REMEDY = "Action replay / E2E via the maestro engine is unsupported on this device; the direct device_* interaction tier still works (rn-android-runner supports API 23+), except for the few device_* paths that fall back to maestro (dev-client picker, system dialogs, device_fill correction), which hit this same limit.";
+    PRE_O_REMEDY = "Action replay / E2E via the maestro engine is unsupported on this device; the direct device_* interaction tier still works (rn-android-runner supports API 23+), except for the few device_* paths that fall back to maestro (dev-client picker and system dialogs), which hit this same limit.";
     OLDER_SDK_TOKEN = /INSTALL_FAILED_OLDER_SDK/g;
     INSTALL_REJECT_CONTEXT = /\b(?:adb|install|installing|failure|uiautomator2)\b|\.apk\b/i;
     REGEX_METACHARACTERS = /* @__PURE__ */ new Set([
@@ -75360,7 +75320,7 @@ function resolveBatchDelayMs(explicit, env) {
     return explicit;
   return settleEnabled(env) ? 0 : 300;
 }
-function sleep5(ms) {
+function sleep4(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 async function guardedBatchPress(cliArgs, opts, getClient2) {
@@ -75522,7 +75482,7 @@ async function executeStep(step, getClient2, abortSignal) {
       return captureAndResizeScreenshot({});
     }
     case "wait": {
-      await sleep5(step.ms ?? 500);
+      await sleep4(step.ms ?? 500);
       return okResult({ waited: step.ms ?? 500 });
     }
     default:
@@ -75640,7 +75600,7 @@ function createDeviceBatchHandler(getClient2) {
         }
       }
       if (i < steps.length - 1 && step.action !== "wait" && delayMs > 0) {
-        await sleep5(delayMs);
+        await sleep4(delayMs);
       }
     }
     if (!failedStep && screenshotOn === "end") {
@@ -84704,7 +84664,7 @@ var init_deep_link_depth = __esm({
 // packages/rn-dev-agent-core/dist/session/managed-automation.js
 import { spawn as spawn9 } from "node:child_process";
 import { readdirSync as readdirSync13, readFileSync as readFileSync33, unlinkSync as unlinkSync15 } from "node:fs";
-function sleep6(ms) {
+function sleep5(ms) {
   return new Promise((resolve21) => setTimeout(resolve21, ms));
 }
 function cleanupKey(platform, deviceId) {
@@ -84799,7 +84759,7 @@ function activeRefusal(platform, deviceId, signalGroup, groupLiveness) {
 }
 async function spawnManagedProcessGroup(bin, args, options, dependencies = {}) {
   const spawnProcess = dependencies.spawn ?? spawn9;
-  const delay = dependencies.sleep ?? sleep6;
+  const delay = dependencies.sleep ?? sleep5;
   const signalGroup = dependencies.signalGroup ?? ((pgid, signal) => {
     if (process.platform === "win32")
       process.kill(pgid, signal);
@@ -84949,6 +84909,7 @@ function maestroRefusalResult(result, fallbackMessage, meta) {
   });
 }
 async function runMaestroInline(yaml2, opts, dependencies = {}) {
+  maestroInlineObserverForTest?.();
   const dispatch = (dependencies.chooseDispatch ?? chooseMaestroDispatch)({
     platform: opts.platform
   });
@@ -85175,6 +85136,7 @@ async function runMaestroInline(yaml2, opts, dependencies = {}) {
     removeTemporaryInlineFlow(flowFile);
   }
 }
+var maestroInlineObserverForTest;
 var init_maestro_invoke = __esm({
   "packages/rn-dev-agent-core/dist/maestro-invoke.js"() {
     "use strict";
@@ -85193,6 +85155,7 @@ var init_maestro_invoke = __esm({
     init_device_arbiter();
     init_authority_gate();
     init_utils();
+    maestroInlineObserverForTest = null;
   }
 });
 
@@ -89902,7 +89865,7 @@ function createRestartHandler(getClient2, setClient2, createClient2, deps = {}) 
   const stopFastRunner2 = deps.stopFastRunner ?? stopFastRunner;
   const unbindRunner = deps.unbindRunner ?? (() => {
   });
-  const sleep7 = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
+  const sleep6 = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
   const probeAppInstalledFn = deps.probeAppInstalled ?? probeAppInstalled;
   const snapshotHintFn = deps.snapshotHint ?? snapshotHintForBundleId;
   const resetDetachedBudgetFn = deps.resetDetachedBudget ?? resetDetachedRecoveryCounter;
@@ -89964,7 +89927,7 @@ function createRestartHandler(getClient2, setClient2, createClient2, deps = {}) 
               hardResetSteps.push(`simctl launch:err(${msg3})`);
             }
           }
-          await sleep7(3e3);
+          await sleep6(3e3);
         } else if (bundleId && targetPlatform === "android") {
           try {
             await execFile24("adb", ["-s", args.deviceId, "shell", "am", "force-stop", bundleId], {
@@ -89988,7 +89951,7 @@ function createRestartHandler(getClient2, setClient2, createClient2, deps = {}) 
           } catch (err) {
             return failResult(`cdp_restart exact Android relaunch failed: ${err instanceof Error ? err.message : String(err)}`, "RECONNECT_TIMEOUT", { hardResetSteps });
           }
-          await sleep7(3e3);
+          await sleep6(3e3);
         } else {
           return failResult(`cdp_restart refused unsupported authority platform "${targetPlatform}"`, "PLATFORM_AUTHORITY_MISMATCH");
         }
@@ -95554,7 +95517,7 @@ var init_index = __esm({
       settleTimeoutMs: external_exports.number().int().min(500).max(3e4).optional().describe("Override the post-action settle budget in ms (default 6000). Settle waits for the UI to stabilize after the action; see meta.settle in the result. Budget knob only \u2014 RN_SETTLE=0 disables settle."),
       retryIfNoChange: external_exports.boolean().optional().describe("Deprecated compatibility option. Interactions are never automatically replayed after a possible dispatch; uncertainty is reported from the first attempt.")
     }, createDevicePressHandler(getClient));
-    trackedTool("device_fill", 'Type text into an input field by its @ref or testID from device_snapshot, binding exactly one direct native TextInput or one `${name}-pressable` wrapper uniquely mapped to its inner `${name}` input before mutation. Exact raw control can operate without a managed Metro target and always labels meta.originAuthority as proven or not-proven. The tool skips the focus tap only when that exact input is already focused and returns filled:true ONLY after a stable exact native post-settle read-back (meta.verify is always "exact" on success). Every native mutation and read-back retains one operation token; bounded clear-first retypes stay on that exact input, and device_fill never escalates to Maestro. React Fiber state never certifies device_fill success. Unverifiable outcomes hard-fail: NO_TEXT_INPUT_TARGET means nothing was typed (rebind after a fresh snapshot); TEXT_ENTRY_UNVERIFIED means an attempt ran but the exact value could not be proven \u2014 check meta.mutation: "none" = safe to retry after a fresh snapshot; "observed" = the field holds a wrong value, take a fresh snapshot and re-read before a corrective fill; "possible" = do NOT retry the same ref \u2014 take a fresh device_snapshot, rebind the input by identity, and read its state first (a blind retry can double-type). Secure masked native values are never proof; empty text is a verified clear. Requires an open session.', {
+    trackedTool("device_fill", 'Type text into an input field by its @ref or testID from device_snapshot, binding exactly one direct native TextInput or one `${name}-pressable` wrapper uniquely mapped to its inner `${name}` input before mutation. Exact raw control can operate without a managed Metro target and always labels meta.originAuthority as proven or not-proven. The tool skips the focus tap only when that exact input is already focused and returns filled:true ONLY after a stable exact native post-settle read-back (meta.verify is always "exact" on success). One operation token owns one native mutation and its read-back; mismatch or uncertainty refuses without resend, rebinding, React Fiber evidence, or Maestro. Unverifiable outcomes hard-fail: NO_TEXT_INPUT_TARGET means nothing was typed (rebind after a fresh snapshot); TEXT_ENTRY_UNVERIFIED means an attempt ran but the exact value could not be proven \u2014 check meta.mutation: "none" = safe to retry after a fresh snapshot; "observed" = the field holds a wrong value, take a fresh snapshot and re-read before a corrective fill; "possible" = do NOT retry the same ref \u2014 take a fresh device_snapshot, rebind the input by identity, and read its state first (a blind retry can double-type). Secure masked native values are never proof; empty text is a verified clear. Requires an open session.', {
       ref: external_exports.string().describe('Input ref from device_snapshot (for example "@e5"), or a testID'),
       text: external_exports.string().describe("Text to type into the field (empty string = verified clear)"),
       waitForKeyboardMs: external_exports.number().int().min(0).max(5e3).optional().describe("Bounded wait for the exact input to gain focus after the in-operation focus tap (default 1500). Bump to 3000-5000ms for slow keyboard animations on Pressable-wrapped TextInputs."),

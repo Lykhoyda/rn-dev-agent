@@ -25,18 +25,3 @@ export function classifyNativeVerification(
     observedMismatch: native === 'mismatch' && nativeStable,
   };
 }
-
-export type NativeRetypeDecision = { action: 'retype'; delayMs: number } | { action: 'escalate' };
-
-const RETYPE_DELAY_MS = 40;
-
-export function decideNativeRetype(
-  verification: NativeVerification,
-  attemptsSoFar: number,
-  maxAttempts: number,
-): NativeRetypeDecision {
-  if (!verification.observedMismatch || attemptsSoFar >= maxAttempts) {
-    return { action: 'escalate' };
-  }
-  return { action: 'retype', delayMs: RETYPE_DELAY_MS };
-}

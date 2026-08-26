@@ -8,6 +8,8 @@ const { _setActiveSessionForTest, _setRunAgentDeviceForTest, markSnapshotDirty }
   await import('../../dist/agent-device-wrapper.js');
 const { createDeviceFillHandler, performExactFill, extractTypingMeta } =
   await import('../../dist/tools/device-interact.js');
+const { _setMaestroInlineObserverForTest, runMaestroInline } =
+  await import('../../dist/maestro-invoke.js');
 const { updateRefMapFromFlat, clearRefMap } = await import('../../dist/fast-runner-ref-map.js');
 const { okResult, failResult } = await import('../../dist/utils.js');
 
@@ -273,28 +275,82 @@ test('gh-581: unstable native exact never promotes to success', async () => {
   assert.equal(envelope(result as never).code, 'TEXT_ENTRY_UNVERIFIED');
 });
 
-test('gh-581: stable mismatch retypes clear-first against the same target, then succeeds', async () => {
+test('gh-581: stable mismatch refuses after one native mutation on iOS and Android', async () => {
+  const fixtures = [
+    { platform: 'ios' as const, nodes: NODES, ref: '@e3' },
+    {
+      platform: 'android' as const,
+      nodes: [
+        {
+          ref: '@e3',
+          identifier: 'last-name',
+          type: 'android.widget.EditText',
+          rect: { x: 40, y: 180, width: 320, height: 40 },
+        },
+      ] as typeof NODES,
+      ref: '@e3',
+    },
+  ];
+  for (const fixture of fixtures) {
+    const { result, calls } = await withFillSeam(
+      {
+        platform: fixture.platform,
+        nodes: fixture.nodes,
+        verify: () => okResult({ verifyVerdict: 'mismatch', verifyStable: true }),
+      },
+      () => performExactFill({ ref: fixture.ref, text: 'value' }, null, NATIVE_ONLY),
+    );
+    const env = envelope(result as never);
+    const fills = calls.filter((call) => call.cliArgs[0] === 'fill');
+    const verifies = calls.filter((call) => call.cliArgs[0] === 'verify-input');
+    assert.equal(env.code, 'TEXT_ENTRY_UNVERIFIED', fixture.platform);
+    assert.equal(env.meta.mutation, 'observed', fixture.platform);
+    assert.deepEqual(env.meta.pathsTried, ['native'], fixture.platform);
+    assert.equal(fills.length, 1, fixture.platform);
+    assert.equal(verifies.length, 1, fixture.platform);
+    assert.equal(
+      (verifies[0].opts.exactTarget as { operationToken: string }).operationToken,
+      (fills[0].opts.exactTarget as { operationToken: string }).operationToken,
+      fixture.platform,
+    );
+  }
+});
+
+test('gh-581: stable mismatch on A cannot mutate replacement B with the same identity fields', async () => {
+  const replacement = NODES.map((node) =>
+    node.identifier === 'last-name' ? { ...node, ref: '@e8' } : node,
+  );
+  let replacementMutations = 0;
   const { result, calls } = await withFillSeam(
     {
-      verify: (_call, verifyCount) =>
-        verifyCount === 1
-          ? okResult({ verifyVerdict: 'mismatch', verifyStable: true })
-          : okResult({ verifyVerdict: 'exact', verifyStable: true }),
+      fill: (_call, fillCount) => {
+        if (fillCount > 1) replacementMutations += 1;
+        updateRefMapFromFlat(replacement as never, {
+          snapshotGeneration: 9,
+          keyboardVisible: false,
+        });
+        return okResult({ typed: true });
+      },
+      verify: () => okResult({ verifyVerdict: 'mismatch', verifyStable: true }),
+      snapshot: (count) => (count === 1 ? NODES : replacement),
     },
     () => performExactFill({ ref: '@e3', text: 'value' }, null, NATIVE_ONLY),
   );
-  assert.ok(!(result as { isError?: boolean }).isError);
-  const fills = calls.filter((c) => c.cliArgs[0] === 'fill');
-  assert.equal(fills.length, 2);
-  assert.ok(!fills[0].cliArgs.includes('--clear-first'));
-  assert.ok(fills[1].cliArgs.includes('--clear-first'), 'correction is clear-first');
-  assert.equal(fills[1].cliArgs[1], '@e3', 'correction stays on the same target');
   const env = envelope(result as never);
-  assert.equal(env.meta.textEntryPath, 'native-retype');
-  assert.equal(env.meta.verify, 'exact');
+  const fills = calls.filter((call) => call.cliArgs[0] === 'fill');
+  const verifies = calls.filter((call) => call.cliArgs[0] === 'verify-input');
+  assert.equal(env.code, 'TEXT_ENTRY_UNVERIFIED');
+  assert.equal(env.meta.mutation, 'observed');
+  assert.equal(fills.length, 1);
+  assert.equal(replacementMutations, 0);
+  assert.equal(calls.filter((call) => call.cliArgs[0] === 'snapshot').length, 1);
+  assert.equal(
+    (verifies[0].opts.exactTarget as { operationToken: string }).operationToken,
+    (fills[0].opts.exactTarget as { operationToken: string }).operationToken,
+  );
 });
 
-test('gh-581: corrective refusal cannot erase an earlier mutation', async () => {
+test('gh-581: a stable mismatch cannot dispatch a second native mutation', async () => {
   const { result, calls } = await withFillSeam(
     {
       fill: (_call, fillCount) =>
@@ -307,8 +363,8 @@ test('gh-581: corrective refusal cannot erase an earlier mutation', async () => 
   );
   const env = envelope(result as never);
   assert.equal(env.code, 'TEXT_ENTRY_UNVERIFIED');
-  assert.equal(env.meta.mutation, 'possible');
-  assert.equal(calls.filter((call) => call.cliArgs[0] === 'fill').length, 2);
+  assert.equal(env.meta.mutation, 'observed');
+  assert.equal(calls.filter((call) => call.cliArgs[0] === 'fill').length, 1);
 });
 
 test('gh-581: secure uncontrolled masked value hard-fails and is not retried', async () => {
@@ -416,36 +472,53 @@ test('gh-581: rejected native A never rebinds to replacement B with the same tes
     node.identifier === 'last-name' ? { ...node, ref: '@e8' } : node,
   );
   let replacementMutations = 0;
-  const { result, calls } = await withFillSeam(
-    {
-      fill: (call) => {
-        if (call.cliArgs[1] === '@e8') replacementMutations += 1;
-        updateRefMapFromFlat(replacement as never, {
-          snapshotGeneration: 9,
-          keyboardVisible: false,
-        });
-        return failResult('rejected', 'SET_TEXT_REJECTED', { mutation: 'none' });
+  let maestroInvocations = 0;
+  _setMaestroInlineObserverForTest(() => {
+    maestroInvocations += 1;
+  });
+  try {
+    const { result, calls } = await withFillSeam(
+      {
+        fill: (call) => {
+          if (call.cliArgs[1] === '@e8') replacementMutations += 1;
+          updateRefMapFromFlat(replacement as never, {
+            snapshotGeneration: 9,
+            keyboardVisible: false,
+          });
+          return failResult('rejected', 'SET_TEXT_REJECTED', { mutation: 'none' });
+        },
+        snapshot: (count) => (count === 1 ? NODES : replacement),
       },
-      snapshot: (count) => (count === 1 ? NODES : replacement),
-    },
-    () => createDeviceFillHandler(() => null as never)({ ref: '@e3', text: 'value' }),
-  );
-  const env = envelope(result as never);
-  const fills = calls.filter((call) => call.cliArgs[0] === 'fill');
-  const verifies = calls.filter((call) => call.cliArgs[0] === 'verify-input');
-  assert.equal(env.code, 'TEXT_ENTRY_UNVERIFIED');
-  assert.equal(env.meta.mutation, 'none');
-  assert.deepEqual(env.meta.pathsTried, ['native']);
-  assert.equal(fills.length, 1);
-  assert.equal(fills[0].cliArgs[1], '@e3');
-  assert.equal(replacementMutations, 0);
-  assert.equal(calls.filter((call) => call.cliArgs[0] === 'snapshot').length, 1);
-  assert.equal(
-    verifies.filter(
-      (call) => !(call.opts.exactTarget as { operationToken?: string }).operationToken,
-    ).length,
-    0,
-  );
+      () => createDeviceFillHandler(() => null as never)({ ref: '@e3', text: 'value' }),
+    );
+    const env = envelope(result as never);
+    const fills = calls.filter((call) => call.cliArgs[0] === 'fill');
+    const verifies = calls.filter((call) => call.cliArgs[0] === 'verify-input');
+    assert.equal(env.code, 'TEXT_ENTRY_UNVERIFIED');
+    assert.equal(env.meta.mutation, 'none');
+    assert.deepEqual(env.meta.pathsTried, ['native']);
+    assert.equal(fills.length, 1);
+    assert.equal(fills[0].cliArgs[1], '@e3');
+    assert.equal(replacementMutations, 0);
+    assert.equal(maestroInvocations, 0);
+    assert.equal(calls.filter((call) => call.cliArgs[0] === 'snapshot').length, 1);
+    assert.equal(
+      verifies.filter(
+        (call) => !(call.opts.exactTarget as { operationToken?: string }).operationToken,
+      ).length,
+      0,
+    );
+    await runMaestroInline(
+      '- tapOn: "probe"',
+      { platform: 'ios' },
+      {
+        chooseDispatch: () => ({ error: 'probe refusal' }) as never,
+      },
+    );
+    assert.equal(maestroInvocations, 1);
+  } finally {
+    _setMaestroInlineObserverForTest(null);
+  }
 });
 
 test('gh-581: possible SET_TEXT_REJECTED hard-fails without verification', async () => {
@@ -544,7 +617,7 @@ test('gh-581: React evidence cannot promote a native mismatch', async () => {
   assert.equal(env.code, 'TEXT_ENTRY_UNVERIFIED');
   assert.equal(evaluations, 0);
   assert.ok(!JSON.stringify(env).includes('"filled":true'));
-  assert.equal(calls.filter((c) => c.cliArgs[0] === 'fill').length, 3);
+  assert.equal(calls.filter((c) => c.cliArgs[0] === 'fill').length, 1);
 });
 
 test('gh-581: device_batch fill uses the same arbiter and cannot soft-accept', async () => {
@@ -644,7 +717,7 @@ test('gh-581: conflicting explicit testID rejects before any mutation', async ()
   assert.ok(!calls.some((c) => c.cliArgs[0] === 'fill'));
 });
 
-test('gh-581: cancellation after mismatch prevents corrective retype', async () => {
+test('gh-581: cancellation after mismatch cannot trigger another mutation', async () => {
   const abortController = new AbortController();
   const { result, calls } = await withFillSeam(
     {
@@ -660,7 +733,7 @@ test('gh-581: cancellation after mismatch prevents corrective retype', async () 
       }),
   );
   const env = envelope(result as never);
-  assert.equal(env.meta.mutation, 'possible');
+  assert.equal(env.meta.mutation, 'observed');
   assert.equal(calls.filter((c) => c.cliArgs[0] === 'fill').length, 1);
 });
 
