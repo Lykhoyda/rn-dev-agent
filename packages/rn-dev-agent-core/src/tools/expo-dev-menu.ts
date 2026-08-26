@@ -191,13 +191,6 @@ export function classifyForegroundSurface(
   if (text.length === 0) return hasBoundApp ? 'app' : 'unknown';
 
   if (has('development servers')) return 'dev_client_picker';
-  if (has('this is the developer menu')) return 'first_run_tutorial';
-  if (
-    (has('toggle performance monitor') && has('toggle element inspector')) ||
-    (has('copy system info') && has('open devtools'))
-  ) {
-    return 'expo_dev_menu';
-  }
   if (
     has('open debugger') ||
     has('configure bundler') ||
@@ -205,6 +198,13 @@ export function classifyForegroundSurface(
   ) {
     return 'react_native_dev_menu';
   }
+  if (
+    (has('toggle performance monitor') && has('toggle element inspector')) ||
+    (has('copy system info') && has('open devtools'))
+  ) {
+    return 'expo_dev_menu';
+  }
+  if (has('this is the developer menu')) return 'first_run_tutorial';
   if (!boundAppId) return 'unknown';
   return hasBoundApp ? 'app' : 'unknown';
 }
