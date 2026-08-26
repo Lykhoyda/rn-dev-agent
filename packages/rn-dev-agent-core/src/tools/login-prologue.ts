@@ -4,7 +4,7 @@ import {
   ACTION_LOGIN_HELPER,
   LOGIN_PROLOGUE_ALIAS,
   LOGIN_PROLOGUE_BLOCKED,
-  LOGIN_PROLOGUE_RECOVERY_SEQUENCE,
+  loginPrologueNextAction,
   type LoginPrologueOutcome,
   type LoginPrologueStepTiming,
 } from '../domain/login-prologue.js';
@@ -87,9 +87,7 @@ export function createLoginPrologueHandler(deps: LoginPrologueDependencies) {
       });
       return failResult(`Login prologue blocked: ${detail}`, 'LOGIN_PROLOGUE_BLOCKED', {
         loginPrologue: outcome,
-        nextAction: extra.runRecord
-          ? LOGIN_PROLOGUE_RECOVERY_SEQUENCE
-          : `Restore the exact ${LOGIN_PROLOGUE_ALIAS} action, then run cdp_login_prologue.`,
+        nextAction: loginPrologueNextAction({ binding: outcome }),
       });
     };
 

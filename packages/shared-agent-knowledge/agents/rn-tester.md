@@ -166,7 +166,9 @@ Write a brief test plan BEFORE executing:
    navigate to the story. If the result names the attach-only recovery, open
    the already-bound app with `device_snapshot(action="open", attachOnly=true)`,
    rerun the prologue, then repeat the attach-only open before native UI
-   interaction. The first open does not clear the latch. Locked e2e login proof
+   interaction. This recovery is offered only for a fresh failed RunRecord with
+   runner and bundle authority absent, and it requires stable Metro authority
+   before and after. The first open does not clear the latch. Locked e2e login proof
    (`cdp_lock_e2e_test` / `cdp_run_e2e_suite` on the exact candidate) remains
    available and does not lift or replace the helper gate.
 5. Do not report UI readiness from session, device, Metro, Observe, runner, or

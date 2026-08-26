@@ -6,6 +6,8 @@ export const LOGIN_PROLOGUE_BLOCKED = 'LOGIN_PROLOGUE_BLOCKED';
 export const ACTION_LOGIN_HELPER = 'ACTION_LOGIN_HELPER';
 export const LOGIN_PROLOGUE_RECOVERY_SEQUENCE =
   'Run device_snapshot with action "open" and attachOnly true on the already-bound app, rerun cdp_login_prologue, then repeat the same attach-only open before device_press or device_fill.';
+export const LOGIN_PROLOGUE_RETRY_ACTION =
+  'Resolve the reported user-login failure, then rerun cdp_login_prologue; attach-only runner recovery is not authorized for this blocked state.';
 export const LOCKED_E2E_LOGIN_TOOLS = ['cdp_lock_e2e_test', 'cdp_run_e2e_suite'] as const;
 
 export interface LoginPrologueStepTiming {
@@ -72,14 +74,58 @@ function lockedE2eProofAllowed(
   return false;
 }
 
+export interface LoginRunnerRecoveryAuthority {
+  install: unknown;
+  metro: unknown;
+  bundle: unknown;
+  device: unknown;
+  runner: unknown;
+}
+
+export function isLoginRunnerRecoveryState(input: {
+  binding: unknown;
+  authority?: LoginRunnerRecoveryAuthority;
+}): boolean {
+  const outcome = readLoginPrologueOutcome(input.binding);
+  return Boolean(
+    input.authority &&
+    outcome?.state === LOGIN_PROLOGUE_BLOCKED &&
+    outcome.role === ACTION_LOGIN_HELPER &&
+    outcome.actionId === LOGIN_PROLOGUE_ALIAS &&
+    outcome.runRecord?.status === 'fail' &&
+    input.authority.runner == null &&
+    input.authority.bundle == null,
+  );
+}
+
+export function loginPrologueNextAction(input: {
+  binding: unknown;
+  authority?: LoginRunnerRecoveryAuthority;
+}): string {
+  if (
+    isLoginRunnerRecoveryState(input) &&
+    input.authority?.install != null &&
+    input.authority.metro != null &&
+    input.authority.device != null
+  ) {
+    return LOGIN_PROLOGUE_RECOVERY_SEQUENCE;
+  }
+  const outcome = readLoginPrologueOutcome(input.binding);
+  return outcome?.failure?.code === 'LOGIN_ACTION_MISSING' ||
+    outcome?.failure?.code === 'LOGIN_ACTION_ID_MISMATCH'
+    ? `Restore the exact ${LOGIN_PROLOGUE_ALIAS} action, then run cdp_login_prologue.`
+    : LOGIN_PROLOGUE_RETRY_ACTION;
+}
+
 export function isLoginRunnerRecoveryOperation(input: {
   binding: unknown;
+  authority?: LoginRunnerRecoveryAuthority;
   tool: string;
   args: Record<string, unknown>;
   mutation: boolean;
 }): boolean {
   return (
-    readLoginPrologueOutcome(input.binding)?.state === LOGIN_PROLOGUE_BLOCKED &&
+    isLoginRunnerRecoveryState(input) &&
     input.mutation &&
     input.tool === 'device_snapshot' &&
     input.args.action === 'open' &&
@@ -89,11 +135,12 @@ export function isLoginRunnerRecoveryOperation(input: {
 
 function latchedOperationAllowed(
   binding: unknown,
+  authority: LoginRunnerRecoveryAuthority | undefined,
   tool: string,
   args: Record<string, unknown>,
   mutation: boolean,
 ): boolean {
-  if (isLoginRunnerRecoveryOperation({ binding, tool, args, mutation })) return true;
+  if (isLoginRunnerRecoveryOperation({ binding, authority, tool, args, mutation })) return true;
   if (tool === 'cdp_login_prologue') return true;
   if (tool === 'cdp_disconnect') return true;
   if (tool === 'device_snapshot' && args.action === 'close') return true;
@@ -130,6 +177,7 @@ export type LoginPrologueGuardInspection =
 
 export function inspectLoginPrologueGuard(input: {
   binding: unknown;
+  authority?: LoginRunnerRecoveryAuthority;
   tool: string;
   args: Record<string, unknown>;
   mutation: boolean;
@@ -139,7 +187,13 @@ export function inspectLoginPrologueGuard(input: {
   if (
     outcome?.state !== LOGIN_PROLOGUE_BLOCKED ||
     !input.mutation ||
-    latchedOperationAllowed(input.binding, input.tool, input.args, input.mutation) ||
+    latchedOperationAllowed(
+      input.binding,
+      input.authority,
+      input.tool,
+      input.args,
+      input.mutation,
+    ) ||
     lockedE2eProofAllowed(input.tool, input.args, input.resolvedLockedTestIds)
   ) {
     return { blocked: false };
@@ -165,6 +219,7 @@ export function authorizeLoginSupervisorOverride(input: {
 
 export function evaluateLoginPrologueGuard(input: {
   binding: unknown;
+  authority?: LoginRunnerRecoveryAuthority;
   tool: string;
   args: Record<string, unknown>;
   mutation: boolean;

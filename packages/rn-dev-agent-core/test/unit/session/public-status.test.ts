@@ -101,6 +101,7 @@ test('session status exposes bounded login-prologue evidence without action para
       loginPrologue: {
         schemaVersion: 1,
         state: 'LOGIN_PROLOGUE_BLOCKED',
+        role: 'ACTION_LOGIN_HELPER',
         alias: 'user-login',
         actionId: 'user-login',
         startedAt: '2026-08-21T10:00:00.000Z',
@@ -140,7 +141,7 @@ test('session status exposes bounded login-prologue evidence without action para
   });
   assert.deepEqual(projected.uiControl, {
     mutationReadiness: 'blocked',
-    reason: 'The failed deterministic login replay still gates mutating UI tools.',
+    reason: 'The login prologue latch still gates mutating UI tools.',
     nextAction:
       'Run device_snapshot with action "open" and attachOnly true on the already-bound app, rerun cdp_login_prologue, then repeat the same attach-only open before device_press or device_fill.',
   });
@@ -152,6 +153,33 @@ test('session status exposes bounded login-prologue evidence without action para
   assert.equal(projected.runnerBound, false);
   assert.equal(JSON.stringify(projected).includes('secret'), false);
   assert.equal(JSON.stringify(projected).includes('private'), false);
+});
+
+test('session status does not offer attach-only recovery for a non-replay latch', () => {
+  const projected = projectPublicAuthorityStatus({
+    ...operationalStatus('ready'),
+    bindings: {
+      device: { platform: 'ios', deviceId: 'device', appId: 'dev.example' },
+      install: { digest: 'install' },
+      metro: { instanceId: 'metro', port: 8193 },
+      runner: { instanceId: 'runner' },
+      loginPrologue: {
+        schemaVersion: 1,
+        state: 'LOGIN_PROLOGUE_BLOCKED',
+        alias: 'user-login',
+        actionId: 'user-login',
+        startedAt: '2026-08-21T10:00:00.000Z',
+        endedAt: '2026-08-21T10:00:00.100Z',
+        elapsedMs: 100,
+        steps: [],
+        inventory: { count: 0, actionIds: [] },
+        failure: { code: 'LOGIN_ACTION_MISSING', detail: 'missing exact action' },
+      },
+    },
+  });
+
+  assert.match(projected.loginPrologue.nextAction, /Restore/);
+  assert.match(projected.uiControl.nextAction, /Restore/);
 });
 
 test('session health never claims that mutating UI control is ready', () => {

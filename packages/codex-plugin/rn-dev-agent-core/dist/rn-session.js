@@ -11390,7 +11390,18 @@ function readLoginPrologueOutcome(value) {
   }
   return candidate;
 }
-var LOGIN_PROLOGUE_ALIAS, LOGIN_PROLOGUE_BLOCKED, ACTION_LOGIN_HELPER, LOGIN_PROLOGUE_RECOVERY_SEQUENCE;
+function isLoginRunnerRecoveryState(input) {
+  const outcome = readLoginPrologueOutcome(input.binding);
+  return Boolean(input.authority && outcome?.state === LOGIN_PROLOGUE_BLOCKED && outcome.role === ACTION_LOGIN_HELPER && outcome.actionId === LOGIN_PROLOGUE_ALIAS && outcome.runRecord?.status === "fail" && input.authority.runner == null && input.authority.bundle == null);
+}
+function loginPrologueNextAction(input) {
+  if (isLoginRunnerRecoveryState(input) && input.authority?.install != null && input.authority.metro != null && input.authority.device != null) {
+    return LOGIN_PROLOGUE_RECOVERY_SEQUENCE;
+  }
+  const outcome = readLoginPrologueOutcome(input.binding);
+  return outcome?.failure?.code === "LOGIN_ACTION_MISSING" || outcome?.failure?.code === "LOGIN_ACTION_ID_MISMATCH" ? `Restore the exact ${LOGIN_PROLOGUE_ALIAS} action, then run cdp_login_prologue.` : LOGIN_PROLOGUE_RETRY_ACTION;
+}
+var LOGIN_PROLOGUE_ALIAS, LOGIN_PROLOGUE_BLOCKED, ACTION_LOGIN_HELPER, LOGIN_PROLOGUE_RECOVERY_SEQUENCE, LOGIN_PROLOGUE_RETRY_ACTION;
 var init_login_prologue = __esm({
   "packages/rn-dev-agent-core/dist/domain/login-prologue.js"() {
     "use strict";
@@ -11398,6 +11409,7 @@ var init_login_prologue = __esm({
     LOGIN_PROLOGUE_BLOCKED = "LOGIN_PROLOGUE_BLOCKED";
     ACTION_LOGIN_HELPER = "ACTION_LOGIN_HELPER";
     LOGIN_PROLOGUE_RECOVERY_SEQUENCE = 'Run device_snapshot with action "open" and attachOnly true on the already-bound app, rerun cdp_login_prologue, then repeat the same attach-only open before device_press or device_fill.';
+    LOGIN_PROLOGUE_RETRY_ACTION = "Resolve the reported user-login failure, then rerun cdp_login_prologue; attach-only runner recovery is not authorized for this blocked state.";
   }
 });
 
@@ -17818,6 +17830,16 @@ function projectPublicAuthorityStatus(status, options = {}) {
   } : void 0;
   const sandbox = metro?.runtimeEvidenceAuthority === "managed-sandbox-v1" ? "managed-sandbox-v1" : "unavailable";
   const loginPrologue = readLoginPrologueOutcome(status.bindings.loginPrologue);
+  const nextLoginPrologueAction = loginPrologueNextAction({
+    binding: loginPrologue,
+    authority: {
+      install: status.bindings.install,
+      metro: status.bindings.metro,
+      bundle: status.bindings.bundle,
+      device: status.bindings.device,
+      runner: status.bindings.runner
+    }
+  });
   const phase = derivePublicPhase(status.state, Boolean(status.bindings.pendingBuild));
   return {
     available: true,
@@ -17860,8 +17882,8 @@ function projectPublicAuthorityStatus(status, options = {}) {
     },
     uiControl: loginPrologue?.state === LOGIN_PROLOGUE_BLOCKED ? {
       mutationReadiness: "blocked",
-      reason: "The failed deterministic login replay still gates mutating UI tools.",
-      nextAction: LOGIN_PROLOGUE_RECOVERY_SEQUENCE
+      reason: "The login prologue latch still gates mutating UI tools.",
+      nextAction: nextLoginPrologueAction
     } : {
       mutationReadiness: "not-proven",
       evidenceRequired: "Authority, device, Metro, Observe, runner, and bundle health do not prove UI control; require the requested MCP mutation result to show that it started and completed."
@@ -17880,7 +17902,7 @@ function projectPublicAuthorityStatus(status, options = {}) {
         elapsedMs: loginPrologue.elapsedMs,
         failureCode: loginPrologue.failure?.code,
         runId: loginPrologue.runRecord?.runId,
-        ...loginPrologue.state === LOGIN_PROLOGUE_BLOCKED ? { nextAction: LOGIN_PROLOGUE_RECOVERY_SEQUENCE } : {},
+        ...loginPrologue.state === LOGIN_PROLOGUE_BLOCKED ? { nextAction: nextLoginPrologueAction } : {},
         overrideCount: loginPrologue.overrides?.length ?? 0,
         lastOverride: loginPrologue.overrides?.at(-1)
       }
