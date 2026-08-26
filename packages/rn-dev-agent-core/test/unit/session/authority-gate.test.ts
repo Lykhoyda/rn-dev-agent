@@ -11,7 +11,13 @@ import {
   reproveManagedNativeOrigin,
 } from '../../../dist/session/authority-gate.js';
 import { SessionAuthorityError } from '../../../dist/session/registry.js';
+import { createLoginPrologueHandler } from '../../../dist/tools/login-prologue.js';
 import { failResult, okResult } from '../../../dist/utils.js';
+import {
+  createPinnedRunActionHandler,
+  createTmpProject,
+  fixtureYaml,
+} from '../../helpers/tmp-project.js';
 
 function fixture() {
   const calls = [];
@@ -2713,6 +2719,168 @@ test('a failed login prologue becomes a durable terminal mutation gate', async (
   })({});
   assert.equal(JSON.parse(readResult.content[0].text).ok, true);
   assert.equal(readDispatched, true);
+});
+
+test('a real failed login replay can rebind the same runner and discharge the latch', async (t) => {
+  const project = createTmpProject();
+  t.after(() => project.cleanup());
+  project.seedAction(
+    'user-login',
+    fixtureYaml({ id: 'user-login', intent: 'restore the authenticated fixture' }),
+    null,
+  );
+
+  const { registry, runtime, status } = fixture();
+  status.source.appRoot = project.root;
+  let replayAttempts = 0;
+  const runAction = createPinnedRunActionHandler({
+    maestroRun: async (args) => {
+      await args.completeRunnerPark();
+      replayAttempts += 1;
+      if (replayAttempts === 1) {
+        await args.completeNativeOrigin(false);
+        return failResult("Element with id 'fab-create-task' not found", 'TESTID_NOT_FOUND');
+      }
+      await args.completeNativeOrigin(true);
+      return okResult({
+        passed: true,
+        transport: 'maestro-runner',
+        transportVersion: '1.1.24',
+      });
+    },
+  });
+  const loginHandler = createLoginPrologueHandler({ runAction });
+  const gate = createAuthorityGate(runtime, {
+    probe: async ({ axis }) => ({ axis, identity: `${axis}-identity` }),
+    refreshRuntimeBinding: async () => ({
+      targetId: 'recovered-target',
+      connectionGeneration: 2,
+      authorityScope: 'recovered-bundle',
+      sourceFidelity: 'not-proven',
+    }),
+  });
+  const login = gate.wrap('cdp_login_prologue', loginHandler);
+
+  const failed = JSON.parse((await login({ projectRoot: project.root })).content[0].text);
+  assert.equal(failed.code, 'LOGIN_PROLOGUE_BLOCKED');
+  assert.equal(project.readSidecar('user-login').runHistory.at(-1).status, 'fail');
+  assert.equal(status.bindings.loginPrologue.failure.code, 'TESTID_NOT_FOUND');
+  assert.equal(status.bindings.runner, null);
+  assert.equal(status.bindings.bundle, null);
+
+  const statusRead = await gate.wrap('rn_session', async () =>
+    okResult({ state: status.state, loginPrologue: status.bindings.loginPrologue }),
+  )({ action: 'status' });
+  assert.equal(JSON.parse(statusRead.content[0].text).ok, true);
+
+  let retryDispatched = false;
+  const circularRetry = await gate.wrap('cdp_login_prologue', async () => {
+    retryDispatched = true;
+    return okResult({});
+  })({ projectRoot: project.root });
+  const circularRetryEnvelope = JSON.parse(circularRetry.content[0].text);
+  assert.equal(circularRetryEnvelope.code, 'RUNNER_OWNERSHIP_MISMATCH');
+  assert.match(circularRetryEnvelope.meta.nextAction, /attachOnly true/);
+  assert.equal(retryDispatched, false);
+  assert.equal(project.readSidecar('user-login').runHistory.length, 1);
+
+  let unrelatedDispatched = false;
+  const unrelated = await gate.wrap('device_press', async () => {
+    unrelatedDispatched = true;
+    return okResult({ pressed: true });
+  })({ ref: '@e1' });
+  assert.equal(JSON.parse(unrelated.content[0].text).code, 'LOGIN_PROLOGUE_BLOCKED');
+  assert.equal(unrelatedDispatched, false);
+
+  for (const [args, expectedCode] of [
+    [{ action: 'open', attachOnly: false }, 'LOGIN_PROLOGUE_BLOCKED'],
+    [{ action: 'open', attachOnly: true, deviceId: 'foreign-device' }, 'DEVICE_AUTHORITY_MISMATCH'],
+    [{ action: 'open', attachOnly: true, projectRoot: process.cwd() }, 'SOURCE_WORKTREE_MISMATCH'],
+  ]) {
+    let mismatchDispatched = false;
+    const mismatch = await gate.wrap('device_snapshot', async () => {
+      mismatchDispatched = true;
+      return okResult({ opened: true });
+    })(args);
+    const mismatchEnvelope = JSON.parse(mismatch.content[0].text);
+    assert.equal(mismatchEnvelope.code, expectedCode);
+    assert.equal(mismatchDispatched, false);
+  }
+
+  const installBinding = status.bindings.install;
+  status.bindings.install = null;
+  let uncertainOwnershipDispatched = false;
+  const uncertainOwnership = await gate.wrap('device_snapshot', async () => {
+    uncertainOwnershipDispatched = true;
+    return okResult({ opened: true });
+  })({ action: 'open', attachOnly: true });
+  assert.equal(JSON.parse(uncertainOwnership.content[0].text).code, 'APP_INSTALL_IDENTITY_CHANGED');
+  assert.equal(uncertainOwnershipDispatched, false);
+  status.bindings.install = installBinding;
+
+  const sessionId = status.sessionId;
+  const verifyOperation = registry.verifyOperation;
+  status.sessionId = 'foreign-session';
+  registry.verifyOperation = (operation) => {
+    if (operation.sessionId !== status.sessionId) {
+      throw new SessionAuthorityError(
+        'AUTHORITY_LOST_DURING_OPERATION',
+        'the recovery operation belongs to another session',
+      );
+    }
+    return verifyOperation(operation);
+  };
+  const foreignSession = await gate.wrap('device_snapshot', async () => okResult({ opened: true }))(
+    { action: 'open', attachOnly: true },
+  );
+  assert.equal(JSON.parse(foreignSession.content[0].text).code, 'AUTHORITY_LOST_DURING_OPERATION');
+  registry.verifyOperation = verifyOperation;
+  status.sessionId = sessionId;
+
+  const openRunner = () =>
+    gate.wrap('device_snapshot', async () => {
+      status.bindings.runner = {
+        platform: 'ios',
+        deviceId: 'device',
+        appId: 'dev.example',
+        port: 9100,
+        sessionId: status.sessionId,
+        claimEpoch: status.claimEpoch,
+        instanceId: `runner-${status.authorityVersion}`,
+      };
+      status.authorityVersion += 1;
+      return okResult({ opened: true, attachOnly: true });
+    })({ action: 'open', attachOnly: true });
+
+  const recoveryOpen = JSON.parse((await openRunner()).content[0].text);
+  assert.equal(recoveryOpen.ok, true);
+  assert.deepEqual(recoveryOpen.meta.loginPrologueRecovery, {
+    runnerRebound: true,
+    latchCleared: false,
+    nextAction:
+      'Rerun cdp_login_prologue; after it passes, repeat this attach-only open before device_press or device_fill.',
+  });
+  assert.equal(status.bindings.loginPrologue.state, 'LOGIN_PROLOGUE_BLOCKED');
+
+  const passed = JSON.parse((await login({ projectRoot: project.root })).content[0].text);
+  assert.equal(passed.ok, true);
+  assert.equal(status.bindings.loginPrologue.state, 'passed');
+  assert.equal(project.readSidecar('user-login').runHistory.at(-1).status, 'pass');
+  assert.equal(status.bindings.bundle.targetId, 'recovered-target');
+
+  assert.equal(JSON.parse((await openRunner()).content[0].text).ok, true);
+  for (const [tool, args] of [
+    ['device_press', { ref: '@e1' }],
+    ['device_fill', { ref: '@e2', text: 'hello' }],
+  ]) {
+    let dispatched = false;
+    const result = await gate.wrap(tool, async () => {
+      dispatched = true;
+      return okResult({ completed: true });
+    })(args);
+    assert.equal(JSON.parse(result.content[0].text).ok, true, tool);
+    assert.equal(dispatched, true, tool);
+  }
 });
 
 test('locked e2e proof coexists with a blocked login helper and does not rewrite it', async () => {

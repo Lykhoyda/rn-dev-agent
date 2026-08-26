@@ -31074,7 +31074,12 @@ function lockedE2eProofAllowed(tool, args, resolvedLockedTestIds2) {
   }
   return false;
 }
-function cleanupAllowed(tool, args) {
+function isLoginRunnerRecoveryOperation(input) {
+  return readLoginPrologueOutcome(input.binding)?.state === LOGIN_PROLOGUE_BLOCKED && input.mutation && input.tool === "device_snapshot" && input.args.action === "open" && input.args.attachOnly === true;
+}
+function latchedOperationAllowed(binding, tool, args, mutation) {
+  if (isLoginRunnerRecoveryOperation({ binding, tool, args, mutation }))
+    return true;
   if (tool === "cdp_login_prologue")
     return true;
   if (tool === "cdp_disconnect")
@@ -31099,7 +31104,7 @@ function tokenMatches(expected, supplied) {
 }
 function inspectLoginPrologueGuard(input) {
   const outcome = readLoginPrologueOutcome(input.binding);
-  if (outcome?.state !== LOGIN_PROLOGUE_BLOCKED || !input.mutation || cleanupAllowed(input.tool, input.args) || lockedE2eProofAllowed(input.tool, input.args, input.resolvedLockedTestIds)) {
+  if (outcome?.state !== LOGIN_PROLOGUE_BLOCKED || !input.mutation || latchedOperationAllowed(input.binding, input.tool, input.args, input.mutation) || lockedE2eProofAllowed(input.tool, input.args, input.resolvedLockedTestIds)) {
     return { blocked: false };
   }
   return {
@@ -31115,13 +31120,14 @@ function authorizeLoginSupervisorOverride(input) {
 function appendLoginOverrideAudit(outcome, audit) {
   return { ...outcome, overrides: [...outcome.overrides ?? [], audit].slice(-20) };
 }
-var LOGIN_PROLOGUE_ALIAS, LOGIN_PROLOGUE_BLOCKED, ACTION_LOGIN_HELPER;
+var LOGIN_PROLOGUE_ALIAS, LOGIN_PROLOGUE_BLOCKED, ACTION_LOGIN_HELPER, LOGIN_PROLOGUE_RECOVERY_SEQUENCE;
 var init_login_prologue = __esm({
   "packages/rn-dev-agent-core/dist/domain/login-prologue.js"() {
     "use strict";
     LOGIN_PROLOGUE_ALIAS = "user-login";
     LOGIN_PROLOGUE_BLOCKED = "LOGIN_PROLOGUE_BLOCKED";
     ACTION_LOGIN_HELPER = "ACTION_LOGIN_HELPER";
+    LOGIN_PROLOGUE_RECOVERY_SEQUENCE = 'Run device_snapshot with action "open" and attachOnly true on the already-bound app, rerun cdp_login_prologue, then repeat the same attach-only open before device_press or device_fill.';
   }
 });
 
@@ -32292,6 +32298,12 @@ function createAuthorityGate(runtime, dependencies) {
         liveBundleProbe: tool === "proof_capture"
       } : baseProfile;
       const runtimeStatus = runtime.status();
+      const loginRunnerRecovery = isLoginRunnerRecoveryOperation({
+        binding: runtimeStatus.available ? runtimeStatus.bindings.loginPrologue : void 0,
+        tool,
+        args,
+        mutation: profile.mutation
+      });
       const loginGuard = inspectLoginPrologueGuard({
         binding: runtimeStatus.available ? runtimeStatus.bindings.loginPrologue : void 0,
         tool,
@@ -32304,7 +32316,7 @@ function createAuthorityGate(runtime, dependencies) {
         return failResult("LOGIN_PROLOGUE_BLOCKED: the deterministic login action did not produce an authoritative passing RunRecord; mutating tools are disabled for this session.", "LOGIN_PROLOGUE_BLOCKED", {
           loginPrologue: runtimeStatus.available ? runtimeStatus.bindings.loginPrologue : void 0,
           overrideRejected: false,
-          nextAction: "Repair the exact user-login action and rerun cdp_login_prologue, or supply a supervisorOverrideToken configured by RN_LOGIN_PROLOGUE_OVERRIDE_TOKEN for this mutating call."
+          nextAction: LOGIN_PROLOGUE_RECOVERY_SEQUENCE
         });
       }
       if (loginGuard.blocked && profile.kind === "transition") {
@@ -32518,6 +32530,13 @@ function createAuthorityGate(runtime, dependencies) {
           } : { ...profile, axes: transitionAxes.after };
           return addMeta2(result, {
             authorityTransition: true,
+            ...loginRunnerRecovery ? {
+              loginPrologueRecovery: {
+                runnerRebound: true,
+                latchCleared: false,
+                nextAction: "Rerun cdp_login_prologue; after it passes, repeat this attach-only open before device_press or device_fill."
+              }
+            } : {},
             ...nativeOriginMeta(profile, profile.nativeOrigin === "required" || optionalOriginProven),
             authorityReceipt: receipt(status, transitionReceiptProfile, [
               ...after,
@@ -33191,7 +33210,10 @@ function createAuthorityGate(runtime, dependencies) {
             return authorityFailure(new AggregateError([error2, rollbackError], "PROOF_AUTHORITY_MISMATCH: finalized proof cleanup is unconfirmed"));
           }
         }
-        return addMeta2(authorityFailure(error2), nativeOriginMeta(profile, false));
+        return addMeta2(authorityFailure(error2), {
+          ...nativeOriginMeta(profile, false),
+          ...tool === "cdp_login_prologue" && authorityErrorCode(error2) === "RUNNER_OWNERSHIP_MISMATCH" ? { nextAction: LOGIN_PROLOGUE_RECOVERY_SEQUENCE } : {}
+        });
       } finally {
         stagedRuntimeRelaunch?.cancel();
         if (registry2 && operation && !retainProofCleanupFence) {
@@ -61271,6 +61293,14 @@ function projectPublicAuthorityStatus(status, options = {}) {
       runnerBound: Boolean(status.bindings.runner),
       recorderBound: Boolean(status.bindings.recorder)
     },
+    uiControl: loginPrologue?.state === LOGIN_PROLOGUE_BLOCKED ? {
+      mutationReadiness: "blocked",
+      reason: "The failed deterministic login replay still gates mutating UI tools.",
+      nextAction: LOGIN_PROLOGUE_RECOVERY_SEQUENCE
+    } : {
+      mutationReadiness: "not-proven",
+      evidenceRequired: "Authority, device, Metro, Observe, runner, and bundle health do not prove UI control; require the requested MCP mutation result to show that it started and completed."
+    },
     proof: Boolean(status.bindings.proof),
     // ADR §5.2 (L3): strict proof is an opt-in overlay outside the four groups, never a group.
     proofOverlay: { active: Boolean(status.bindings.proof) },
@@ -61285,6 +61315,7 @@ function projectPublicAuthorityStatus(status, options = {}) {
         elapsedMs: loginPrologue.elapsedMs,
         failureCode: loginPrologue.failure?.code,
         runId: loginPrologue.runRecord?.runId,
+        ...loginPrologue.state === LOGIN_PROLOGUE_BLOCKED ? { nextAction: LOGIN_PROLOGUE_RECOVERY_SEQUENCE } : {},
         overrideCount: loginPrologue.overrides?.length ?? 0,
         lastOverride: loginPrologue.overrides?.at(-1)
       }
@@ -79701,7 +79732,8 @@ function createLoginPrologueHandler(deps) {
         ...extra
       });
       return failResult(`Login prologue blocked: ${detail}`, "LOGIN_PROLOGUE_BLOCKED", {
-        loginPrologue: outcome
+        loginPrologue: outcome,
+        nextAction: extra.runRecord ? LOGIN_PROLOGUE_RECOVERY_SEQUENCE : `Restore the exact ${LOGIN_PROLOGUE_ALIAS} action, then run cdp_login_prologue.`
       });
     };
     try {
@@ -93048,9 +93080,9 @@ trackedTool("device_screenshot", "Capture the exact authority-bound device scree
   maxWidth: external_exports.number().int().min(0).optional().describe("Downscale image so width does not exceed this many pixels. 0 disables resize. Default 800 (saves ~46% on iPhone 15/17 Pro screenshots without losing label readability)."),
   quality: external_exports.number().int().min(1).max(100).optional().describe("JPEG compression quality (1-100). Only applied to .jpg/.jpeg files. Default 85.")
 }, createDeviceScreenshotHandler(getClient));
-trackedTool("device_snapshot", "Manage exact device sessions and capture UI snapshots even when a Dev Client remains at its native picker. Raw control requires exact install/device/runner authority but not a managed Metro target; meta.originAuthority explicitly reports proven or not-proven, and not-proven snapshots are never strict source evidence. action=open starts a session (required before other device_ tools), waits for Android app accessibility, and reports readiness.reactNativeUi=ready only when a matching live CDP helper confirms the RN fiber boundary; otherwise it warns that RN readiness is unverified. Pass deviceId to select an exact iOS simulator UDID or Android adb serial when devices run in parallel. action=snapshot returns the accessibility tree with @ref identifiers for device_press/device_fill. action=close ends the session. Use attachOnly=true on action=open to skip launching the app when it is already running (avoids relaunch-induced bundle races); liveness is checked only on the resolved exact device and refuses when that identity is unavailable.", {
+trackedTool("device_snapshot", "Manage exact device sessions and capture UI snapshots even when a Dev Client remains at its native picker. Raw control requires exact install/device/runner authority but not a managed Metro target; meta.originAuthority explicitly reports proven or not-proven, and not-proven snapshots are never strict source evidence. action=open starts a session (required before other device_ tools), waits for Android app accessibility, and reports readiness.reactNativeUi=ready only when a matching live CDP helper confirms the RN fiber boundary; that field proves fiber visibility, never mutating UI control. Pass deviceId to select an exact iOS simulator UDID or Android adb serial when devices run in parallel. action=snapshot returns the accessibility tree with @ref identifiers for device_press/device_fill. action=close ends the session. Use attachOnly=true on action=open to skip launching the app when it is already running (avoids relaunch-induced bundle races); liveness is checked only on the resolved exact device and refuses when that identity is unavailable. After a failed login replay, only an exact attach-only open may cross the latch to restore runner authority; it does not clear the latch.", {
   action: external_exports.enum(["open", "close", "snapshot"]).default("snapshot").describe("open: start session for an app. snapshot: capture UI tree with element refs. close: end session."),
-  appId: external_exports.string().optional().describe('App bundle ID \u2014 required for action=open (e.g. "com.example.app")'),
+  appId: external_exports.string().optional().describe("App bundle ID for open; omitted values come only from the exact active session."),
   platform: external_exports.enum(["ios", "android"]).optional().describe("Target platform \u2014 used with action=open to select device"),
   deviceId: external_exports.string().optional().describe("Exact iOS simulator UDID or Android adb serial to use for action=open"),
   sessionName: external_exports.string().optional().describe("Session name override (default: auto-generated)"),
@@ -93626,7 +93658,7 @@ trackedTool("cdp_run_action", `Replay a learned action by id with end-to-end aut
   blindProbeMode: external_exports.enum(["inherit", "allow", "forbid"]).optional().describe("Per-call proactive CDP/JS compatibility control. inherit (default) honors RN_BLIND_PROBE; allow explicitly enables the at-risk probe even when the process default is disabled; forbid keeps this call maestro-first. Reactive fallback behavior is unchanged."),
   params: external_exports.record(external_exports.string(), external_exports.string()).optional().describe("Parameter bindings for the action's ${VAR} placeholders, forwarded to maestro as -e KEY=VALUE on the first attempt AND the post-repair retry (GH #116). Keys must match /^[A-Z_][A-Z0-9_]*$/ (validated in maestro_run).")
 }, runActionHandler);
-trackedTool("cdp_login_prologue", "Fail-stop user-login helper: replay the exact action and require a fresh passing RunRecord; failure blocks exploratory fallback mutations, and a pass is not PR proof.", {
+trackedTool("cdp_login_prologue", "Fail-stop user-login helper: replay the exact action and require a fresh passing RunRecord; failure blocks unrelated mutations, and a pass is not PR proof. If replay lost runner authority, follow its exact attach-only open, prologue retry, and attach-only reopen sequence; health surfaces alone never prove UI control.", {
   projectRoot: external_exports.string().optional().describe("Override project root (default: process.cwd())."),
   platform: external_exports.enum(["ios", "android"]).optional().describe("Override the bound platform."),
   appFile: external_exports.string().optional().describe("iOS app artifact for clearState actions."),

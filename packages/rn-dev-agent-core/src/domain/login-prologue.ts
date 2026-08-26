@@ -4,6 +4,8 @@ import type { RunRecord } from './reusable-action.js';
 export const LOGIN_PROLOGUE_ALIAS = 'user-login';
 export const LOGIN_PROLOGUE_BLOCKED = 'LOGIN_PROLOGUE_BLOCKED';
 export const ACTION_LOGIN_HELPER = 'ACTION_LOGIN_HELPER';
+export const LOGIN_PROLOGUE_RECOVERY_SEQUENCE =
+  'Run device_snapshot with action "open" and attachOnly true on the already-bound app, rerun cdp_login_prologue, then repeat the same attach-only open before device_press or device_fill.';
 export const LOCKED_E2E_LOGIN_TOOLS = ['cdp_lock_e2e_test', 'cdp_run_e2e_suite'] as const;
 
 export interface LoginPrologueStepTiming {
@@ -70,7 +72,28 @@ function lockedE2eProofAllowed(
   return false;
 }
 
-function cleanupAllowed(tool: string, args: Record<string, unknown>): boolean {
+export function isLoginRunnerRecoveryOperation(input: {
+  binding: unknown;
+  tool: string;
+  args: Record<string, unknown>;
+  mutation: boolean;
+}): boolean {
+  return (
+    readLoginPrologueOutcome(input.binding)?.state === LOGIN_PROLOGUE_BLOCKED &&
+    input.mutation &&
+    input.tool === 'device_snapshot' &&
+    input.args.action === 'open' &&
+    input.args.attachOnly === true
+  );
+}
+
+function latchedOperationAllowed(
+  binding: unknown,
+  tool: string,
+  args: Record<string, unknown>,
+  mutation: boolean,
+): boolean {
+  if (isLoginRunnerRecoveryOperation({ binding, tool, args, mutation })) return true;
   if (tool === 'cdp_login_prologue') return true;
   if (tool === 'cdp_disconnect') return true;
   if (tool === 'device_snapshot' && args.action === 'close') return true;
@@ -116,7 +139,7 @@ export function inspectLoginPrologueGuard(input: {
   if (
     outcome?.state !== LOGIN_PROLOGUE_BLOCKED ||
     !input.mutation ||
-    cleanupAllowed(input.tool, input.args) ||
+    latchedOperationAllowed(input.binding, input.tool, input.args, input.mutation) ||
     lockedE2eProofAllowed(input.tool, input.args, input.resolvedLockedTestIds)
   ) {
     return { blocked: false };

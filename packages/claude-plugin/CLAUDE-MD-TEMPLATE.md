@@ -62,8 +62,18 @@ Authentication is fail-stop: when login is required, call
 navigation helper, not PR proof. Any missing action, runner drift, selector
 failure, or timeout returns `LOGIN_PROLOGUE_BLOCKED`. Do not continue with
 credentials, ad-hoc Maestro, navigation shortcuts, or store mutation after
-that result. Formal login proof is `cdp_lock_e2e_test` / `cdp_run_e2e_suite` on
-the exact candidate; helper and locked tests coexist without sharing that proof.
+that result. If the failed replay left runner authority unavailable, use the
+returned recovery sequence: `device_snapshot(action="open", attachOnly=true)`
+on the already-bound app, rerun `cdp_login_prologue`, then repeat the same
+attach-only open before `device_press` or `device_fill`. The latch remains set
+until the exact replay produces a fresh passing RunRecord; every unrelated
+mutation and every authority mismatch still refuses. Formal login proof is
+`cdp_lock_e2e_test` / `cdp_run_e2e_suite` on the exact candidate; helper and
+locked tests coexist without sharing that proof.
+
+Session, app, device, Metro, Observe, runner, and bundle health never prove UI
+control. Treat the requested MCP mutation as started and completed only when
+its own result says so.
 
 Manual walks are a fallback, not a default. Codified in
 `feedback_execute_artifacts_before_manual.md`. Enforced as Step 0 of
@@ -574,8 +584,9 @@ Before testing **auth-gated features:**
 1. `cdp_navigation_state` — check if on a login screen
 2. Call `cdp_login_prologue` — it inventories and resolves the exact `user-login` action itself
 3. Require `state: "passed"` plus a fresh passing `runRecord`; only then continue. Treat that pass as a navigation helper, not PR proof
-4. On `LOGIN_PROLOGUE_BLOCKED`, stop the journey; never fall through to manual credentials, `cdp_auto_login`, or ad-hoc Maestro
-5. Formal login proof is locking and running the login e2e on the exact candidate (`cdp_lock_e2e_test` / `cdp_run_e2e_suite`)
+4. On `LOGIN_PROLOGUE_BLOCKED`, stop unrelated mutations; never fall through to manual credentials, `cdp_auto_login`, or ad-hoc Maestro
+5. If the result names the attach-only recovery, run `device_snapshot(action="open", attachOnly=true)` on the already-bound app, rerun `cdp_login_prologue`, then repeat the attach-only open before native UI interaction
+6. Formal login proof is locking and running the login e2e on the exact candidate (`cdp_lock_e2e_test` / `cdp_run_e2e_suite`)
 
 Before testing **permission-gated features:**
 1. `device_permission(action="query", permission="<name>")` — check current state

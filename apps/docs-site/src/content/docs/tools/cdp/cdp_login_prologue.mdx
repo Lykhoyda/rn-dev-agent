@@ -1,9 +1,9 @@
 ---
 title: "cdp_login_prologue"
-description: "Fail-stop user-login helper: replay the exact action and require a fresh passing RunRecord; failure blocks exploratory fallback mutations, and a pass is not PR proof"
+description: "Fail-stop user-login helper: replay the exact action and require a fresh passing RunRecord; failure blocks unrelated mutations, and a pass is not PR proof"
 ---
 
-Fail-stop user-login helper: replay the exact action and require a fresh passing RunRecord; failure blocks exploratory fallback mutations, and a pass is not PR proof.
+Fail-stop user-login helper: replay the exact action and require a fresh passing RunRecord; failure blocks unrelated mutations, and a pass is not PR proof. If replay lost runner authority, follow its exact attach-only open, prologue retry, and attach-only reopen sequence; health surfaces alone never prove UI control.
 
 ## Parameters
 

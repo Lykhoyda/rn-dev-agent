@@ -2378,7 +2378,7 @@ trackedTool(
 
 trackedTool(
   'device_snapshot',
-  'Manage exact device sessions and capture UI snapshots even when a Dev Client remains at its native picker. Raw control requires exact install/device/runner authority but not a managed Metro target; meta.originAuthority explicitly reports proven or not-proven, and not-proven snapshots are never strict source evidence. action=open starts a session (required before other device_ tools), waits for Android app accessibility, and reports readiness.reactNativeUi=ready only when a matching live CDP helper confirms the RN fiber boundary; otherwise it warns that RN readiness is unverified. Pass deviceId to select an exact iOS simulator UDID or Android adb serial when devices run in parallel. action=snapshot returns the accessibility tree with @ref identifiers for device_press/device_fill. action=close ends the session. Use attachOnly=true on action=open to skip launching the app when it is already running (avoids relaunch-induced bundle races); liveness is checked only on the resolved exact device and refuses when that identity is unavailable.',
+  'Manage exact device sessions and capture UI snapshots even when a Dev Client remains at its native picker. Raw control requires exact install/device/runner authority but not a managed Metro target; meta.originAuthority explicitly reports proven or not-proven, and not-proven snapshots are never strict source evidence. action=open starts a session (required before other device_ tools), waits for Android app accessibility, and reports readiness.reactNativeUi=ready only when a matching live CDP helper confirms the RN fiber boundary; that field proves fiber visibility, never mutating UI control. Pass deviceId to select an exact iOS simulator UDID or Android adb serial when devices run in parallel. action=snapshot returns the accessibility tree with @ref identifiers for device_press/device_fill. action=close ends the session. Use attachOnly=true on action=open to skip launching the app when it is already running (avoids relaunch-induced bundle races); liveness is checked only on the resolved exact device and refuses when that identity is unavailable. After a failed login replay, only an exact attach-only open may cross the latch to restore runner authority; it does not clear the latch.',
   {
     action: z
       .enum(['open', 'close', 'snapshot'])
@@ -2389,7 +2389,7 @@ trackedTool(
     appId: z
       .string()
       .optional()
-      .describe('App bundle ID — required for action=open (e.g. "com.example.app")'),
+      .describe('App bundle ID for open; omitted values come only from the exact active session.'),
     platform: z
       .enum(['ios', 'android'])
       .optional()
@@ -3977,7 +3977,7 @@ trackedTool(
 
 trackedTool(
   'cdp_login_prologue',
-  'Fail-stop user-login helper: replay the exact action and require a fresh passing RunRecord; failure blocks exploratory fallback mutations, and a pass is not PR proof.',
+  'Fail-stop user-login helper: replay the exact action and require a fresh passing RunRecord; failure blocks unrelated mutations, and a pass is not PR proof. If replay lost runner authority, follow its exact attach-only open, prologue retry, and attach-only reopen sequence; health surfaces alone never prove UI control.',
   {
     projectRoot: z.string().optional().describe('Override project root (default: process.cwd()).'),
     platform: z.enum(['ios', 'android']).optional().describe('Override the bound platform.'),

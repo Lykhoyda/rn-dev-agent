@@ -161,13 +161,18 @@ Write a brief test plan BEFORE executing:
     explore login controls first.
 3. Continue only with `state: "passed"` and a fresh passing `runRecord`.
    That result is a navigation helper, not PR proof.
-4. Treat `LOGIN_PROLOGUE_BLOCKED` as terminal. Do not enter credentials, run
-   ad-hoc Maestro, inject routes, mutate stores, or navigate to the story. Use
-   read-only diagnostics to repair the exact `user-login` action, then rerun
-   the prologue. Locked e2e login proof (`cdp_lock_e2e_test` /
-   `cdp_run_e2e_suite` on the exact candidate) remains available and does not
-   lift or replace the helper gate.
-5. A supervisor override is valid only when supplied out of band for one call;
+4. Treat `LOGIN_PROLOGUE_BLOCKED` as terminal for unrelated mutations. Do not
+   enter credentials, run ad-hoc Maestro, inject routes, mutate stores, or
+   navigate to the story. If the result names the attach-only recovery, open
+   the already-bound app with `device_snapshot(action="open", attachOnly=true)`,
+   rerun the prologue, then repeat the attach-only open before native UI
+   interaction. The first open does not clear the latch. Locked e2e login proof
+   (`cdp_lock_e2e_test` / `cdp_run_e2e_suite` on the exact candidate) remains
+   available and does not lift or replace the helper gate.
+5. Do not report UI readiness from session, device, Metro, Observe, runner, or
+   bundle health; require the requested MCP mutation's result to prove start
+   and completion.
+6. A supervisor override is valid only when supplied out of band for one call;
     never search for, infer, log, or persist its token.
 
 ### Step 2.6: Permission Pre-flight Check (GH #11)

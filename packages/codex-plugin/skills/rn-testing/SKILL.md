@@ -339,12 +339,19 @@ the login e2e on the exact candidate (`cdp_lock_e2e_test` /
 `cdp_run_e2e_suite`). Helper replay and locked e2e coexist without sharing
 that proof or rewriting each other's artifacts.
 
-`LOGIN_PROLOGUE_BLOCKED` is a terminal journey boundary. A missing action,
-runner drift, selector failure, timeout, or missing fresh RunRecord must not
-fall through to manual credential entry, `cdp_auto_login`, raw or ad-hoc
-Maestro, route injection, navigation shortcuts, or store mutation. Read-only
-diagnostics and cleanup remain available; repair the exact saved action and
-rerun the prologue.
+`LOGIN_PROLOGUE_BLOCKED` is a terminal boundary for unrelated mutations. A
+missing action, runner drift, selector failure, timeout, or missing fresh
+RunRecord must not fall through to manual credential entry, `cdp_auto_login`,
+raw or ad-hoc Maestro, route injection, navigation shortcuts, or store
+mutation. Read-only diagnostics and cleanup remain available. When the result
+names the runner recovery, run `device_snapshot(action="open",
+attachOnly=true)` on the already-bound app, rerun `cdp_login_prologue`, then
+repeat the attach-only open before `device_press` or `device_fill`. The first
+open only restores exact runner authority; it does not clear the latch. Any
+source, session, install, or device mismatch refuses before dispatch.
+
+Health surfaces are not UI-control proof. Require the requested MCP mutation's
+own result to show that it started and completed.
 
 An empty navigation state may be a splash screen or Dev Client picker, not
 necessarily auth. Wait 3 seconds and retry before concluding the app is logged

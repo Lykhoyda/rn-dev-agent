@@ -94,6 +94,10 @@ test('session status exposes bounded login-prologue evidence without action para
   const projected = projectPublicAuthorityStatus({
     ...operationalStatus('ready'),
     bindings: {
+      device: { platform: 'ios', deviceId: 'device-secret', appId: 'dev.example' },
+      install: { digest: 'install-secret' },
+      metro: { instanceId: 'metro-secret', port: 8193 },
+      observe: { instanceId: 'observe-secret' },
       loginPrologue: {
         schemaVersion: 1,
         state: 'LOGIN_PROLOGUE_BLOCKED',
@@ -129,11 +133,35 @@ test('session status exposes bounded login-prologue evidence without action para
     elapsedMs: 100,
     failureCode: 'ENGINE_PIN_MISMATCH',
     runId: 'login-run-1',
+    nextAction:
+      'Run device_snapshot with action "open" and attachOnly true on the already-bound app, rerun cdp_login_prologue, then repeat the same attach-only open before device_press or device_fill.',
     overrideCount: 1,
     lastOverride: { tool: 'cdp_evaluate', usedAt: '2026-08-21T10:01:00.000Z' },
   });
+  assert.deepEqual(projected.uiControl, {
+    mutationReadiness: 'blocked',
+    reason: 'The failed deterministic login replay still gates mutating UI tools.',
+    nextAction:
+      'Run device_snapshot with action "open" and attachOnly true on the already-bound app, rerun cdp_login_prologue, then repeat the same attach-only open before device_press or device_fill.',
+  });
+  assert.equal(projected.state, 'ready');
+  assert.equal(projected.deviceBound, true);
+  assert.equal(projected.installBound, true);
+  assert.equal(projected.metroBound, true);
+  assert.equal(projected.bundleBound, false);
+  assert.equal(projected.runnerBound, false);
   assert.equal(JSON.stringify(projected).includes('secret'), false);
   assert.equal(JSON.stringify(projected).includes('private'), false);
+});
+
+test('session health never claims that mutating UI control is ready', () => {
+  const projected = projectPublicAuthorityStatus(operationalStatus('ready'));
+
+  assert.deepEqual(projected.uiControl, {
+    mutationReadiness: 'not-proven',
+    evidenceRequired:
+      'Authority, device, Metro, Observe, runner, and bundle health do not prove UI control; require the requested MCP mutation result to show that it started and completed.',
+  });
 });
 
 function blockedStatus(expiresMs: number) {
