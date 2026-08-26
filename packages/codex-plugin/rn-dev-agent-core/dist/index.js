@@ -28895,6 +28895,302 @@ var init_device_session_close = __esm({
   }
 });
 
+// packages/rn-dev-agent-core/dist/domain/foreground-surface-remedy.js
+function recommendForegroundSurfaceRemedy(input) {
+  if (input.authority !== "available" || input.condition !== "expo_dev_menu")
+    return null;
+  return {
+    ...EXPO_DEVELOPER_MENU_REMEDY,
+    arguments: { ...EXPO_DEVELOPER_MENU_REMEDY.arguments }
+  };
+}
+var EXPO_DEVELOPER_MENU_REMEDY;
+var init_foreground_surface_remedy = __esm({
+  "packages/rn-dev-agent-core/dist/domain/foreground-surface-remedy.js"() {
+    "use strict";
+    EXPO_DEVELOPER_MENU_REMEDY = {
+      condition: "expo_dev_menu",
+      tool: "cdp_dev_settings",
+      arguments: { action: "hideDevMenu" },
+      guidance: 'Expo Developer Menu detected. Call cdp_dev_settings({ action: "hideDevMenu" }), then take a fresh device_snapshot and require the app surface before navigation.'
+    };
+  }
+});
+
+// packages/rn-dev-agent-core/dist/tools/expo-dev-menu.js
+function surfaceText(nodes) {
+  return nodes.flatMap((node) => [node.label, node.identifier].filter((value) => typeof value === "string").map((value) => value.trim().toLowerCase()).filter(Boolean));
+}
+function surfaceRect(node) {
+  if (!node.rect || typeof node.rect !== "object")
+    return null;
+  const rect = node.rect;
+  if (typeof rect.x !== "number" || typeof rect.y !== "number" || typeof rect.width !== "number" || typeof rect.height !== "number" || rect.width < 0 || rect.height < 0) {
+    return null;
+  }
+  return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+}
+function rectContains(container, candidate) {
+  return candidate.x >= container.x && candidate.y >= container.y && candidate.x + candidate.width <= container.x + container.width && candidate.y + candidate.height <= container.y + container.height;
+}
+function hasBlockingForeignSurface(nodes, boundAppId) {
+  const systemNodes = nodes.filter((node) => node.packageName === "com.android.systemui");
+  const chromeRegions = systemNodes.flatMap((node) => {
+    const identifier = typeof node.identifier === "string" ? node.identifier.trim().toLowerCase() : "";
+    const rect = SYSTEM_CHROME_REGION_IDENTIFIERS.has(identifier) ? surfaceRect(node) : null;
+    return rect ? [rect] : [];
+  });
+  return nodes.some((node) => {
+    const packageName = typeof node.packageName === "string" ? node.packageName.trim() : "";
+    if (!packageName || packageName === boundAppId)
+      return false;
+    if (packageName !== "com.android.systemui")
+      return true;
+    const identifier = typeof node.identifier === "string" ? node.identifier.trim().toLowerCase() : "";
+    if (SYSTEM_CHROME_IDENTIFIERS.has(identifier))
+      return false;
+    const rect = surfaceRect(node);
+    return !rect || !chromeRegions.some((region) => rectContains(region, rect));
+  });
+}
+function classifyForegroundSurface(nodes, boundAppId) {
+  const text = surfaceText(nodes);
+  const has = (value) => text.some((candidate) => candidate.includes(value));
+  if (nodes.some((node) => node.type === "Alert") || boundAppId && hasBlockingForeignSurface(nodes, boundAppId)) {
+    return "unknown";
+  }
+  const hasBoundApp = Boolean(boundAppId) && nodes.some((node) => node.packageName === boundAppId || node.type === "Application");
+  if (text.length === 0)
+    return hasBoundApp ? "app" : "unknown";
+  if (has("development servers"))
+    return "dev_client_picker";
+  if (has("this is the developer menu"))
+    return "first_run_tutorial";
+  if (has("toggle performance monitor") && has("toggle element inspector") || has("copy system info") && has("open devtools")) {
+    return "expo_dev_menu";
+  }
+  if (has("open debugger") || has("configure bundler") || has("react native dev menu") && has("open devtools") && has("change bundle location")) {
+    return "react_native_dev_menu";
+  }
+  if (!boundAppId)
+    return "unknown";
+  return hasBoundApp ? "app" : "unknown";
+}
+function foregroundSurfaceFromSnapshot(result, boundAppId) {
+  if (result.isError)
+    return "unknown";
+  try {
+    const envelope = JSON.parse(result.content[0]?.text ?? "");
+    if (!envelope.ok || !Array.isArray(envelope.data?.nodes))
+      return "unknown";
+    return classifyForegroundSurface(envelope.data.nodes, boundAppId);
+  } catch {
+    return "unknown";
+  }
+}
+function createForegroundSurfaceProbe(dependencies) {
+  return async () => {
+    const status = dependencies.getAuthorityStatus();
+    const session2 = dependencies.getActiveSession();
+    const runner = status.bindings?.runner;
+    if (!status.available || !runner || !session2)
+      return "unknown";
+    const device = status.bindings?.device;
+    const platform = device?.platform;
+    if (platform !== "ios" && platform !== "android" || session2.platform !== platform || session2.deviceId !== device?.deviceId || session2.appId !== device?.appId) {
+      return "unknown";
+    }
+    return foregroundSurfaceFromSnapshot(await dependencies.runNative(["snapshot"], { platform }), session2.appId);
+  };
+}
+function parseSentinel(value, attempts3) {
+  const sentinel = typeof value === "string" ? value : "";
+  if (sentinel === "ok:hideMenu") {
+    return {
+      callSent: true,
+      method: "hideMenu",
+      reason: "ExpoDevMenu.hideMenu() completed.",
+      attempts: attempts3
+    };
+  }
+  if (sentinel === "ok:closeMenu") {
+    return {
+      callSent: true,
+      method: "closeMenu",
+      reason: "ExpoDevMenu.closeMenu() completed.",
+      attempts: attempts3
+    };
+  }
+  if (sentinel === "sent:hideMenu") {
+    return {
+      callSent: true,
+      method: "hideMenu",
+      reason: "ExpoDevMenu.hideMenu() was invoked but did not settle.",
+      attempts: attempts3
+    };
+  }
+  if (sentinel === "sent:closeMenu") {
+    return {
+      callSent: true,
+      method: "closeMenu",
+      reason: "ExpoDevMenu.closeMenu() was invoked but did not settle.",
+      attempts: attempts3
+    };
+  }
+  if (sentinel === "no_module") {
+    return {
+      callSent: false,
+      reason: "No ExpoDevMenu native module resolved.",
+      attempts: attempts3
+    };
+  }
+  if (sentinel === "no_method_available") {
+    return {
+      callSent: false,
+      reason: "ExpoDevMenu resolved but exposes no hideMenu/closeMenu method.",
+      attempts: attempts3
+    };
+  }
+  if (sentinel.startsWith("resolution_error:")) {
+    return {
+      callSent: false,
+      reason: `ExpoDevMenu resolution failed: ${sentinel.slice(17)}`,
+      attempts: attempts3
+    };
+  }
+  const invocationError = sentinel.match(/^error:(hideMenu|closeMenu):(.*)$/s);
+  if (invocationError) {
+    return {
+      callSent: true,
+      method: invocationError[1],
+      reason: `ExpoDevMenu ${invocationError[1]} invocation failed: ${invocationError[2]}`,
+      attempts: attempts3
+    };
+  }
+  return {
+    callSent: false,
+    reason: `Unexpected dev-menu hide result: ${sentinel || "(empty)"}`,
+    attempts: attempts3
+  };
+}
+async function hideExpoDevMenu(client2, options = {}) {
+  const retries = Math.min(1, Math.max(0, options.retries ?? 0));
+  const retryDelayMs = Math.max(0, options.retryDelayMs ?? 300);
+  const evaluationTimeoutMs = Math.min(5e3, Math.max(1, options.evaluationTimeoutMs ?? 5e3));
+  let outcome = {
+    callSent: false,
+    reason: "Dev menu hide not attempted.",
+    attempts: 0
+  };
+  let successfulCall;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    const attempts3 = attempt + 1;
+    try {
+      const result = await client2.evaluate(HIDE_EXPO_DEV_MENU_EXPRESSION, true, evaluationTimeoutMs);
+      const startOutcome = parseSentinel(result.value, attempts3);
+      const attemptOutcome = result.error ? startOutcome.callSent ? {
+        ...startOutcome,
+        reason: `${startOutcome.reason} Async evaluation failed: ${result.error}`
+      } : result.requestDispatched ? {
+        callSent: true,
+        reason: `Dev menu hide evaluation was dispatched but its invocation could not be confirmed: ${result.error}`,
+        attempts: attempts3
+      } : {
+        callSent: false,
+        reason: `Dev menu hide evaluation failed before dispatch: ${result.error}`,
+        attempts: attempts3
+      } : startOutcome;
+      outcome = attemptOutcome;
+      if (attemptOutcome.callSent)
+        successfulCall = attemptOutcome;
+    } catch (error2) {
+      outcome = {
+        callSent: false,
+        reason: `Dev menu hide evaluation threw: ${error2 instanceof Error ? error2.message : String(error2)}`,
+        attempts: attempts3
+      };
+    }
+    if (outcome.reason.startsWith("No ExpoDevMenu")) {
+      if (!successfulCall)
+        return outcome;
+      break;
+    }
+    if (attempt < retries)
+      await new Promise((resolve20) => setTimeout(resolve20, retryDelayMs));
+  }
+  return successfulCall ? { ...successfulCall, attempts: outcome.attempts } : outcome;
+}
+var RESOLVE_EXPO_DEV_MENU, HIDE_EXPO_DEV_MENU_EXPRESSION, SYSTEM_CHROME_REGION_IDENTIFIERS, SYSTEM_CHROME_IDENTIFIERS;
+var init_expo_dev_menu = __esm({
+  "packages/rn-dev-agent-core/dist/tools/expo-dev-menu.js"() {
+    "use strict";
+    RESOLVE_EXPO_DEV_MENU = `(function () {
+  try { var e = globalThis.expo; if (e && e.modules && e.modules.ExpoDevMenu) return e.modules.ExpoDevMenu; } catch (e0) {}
+  try { var nm = require("react-native").NativeModules; if (nm && nm.ExpoDevMenu) return nm.ExpoDevMenu; } catch (e1) {}
+  try { if (typeof __turboModuleProxy === "function") { var t = __turboModuleProxy("ExpoDevMenu"); if (t) return t; } } catch (e2) {}
+  try { if (typeof globalThis.nativeModuleProxy !== "undefined") { var p = globalThis.nativeModuleProxy.ExpoDevMenu; if (p) return p; } } catch (e3) {}
+  return null;
+})()`;
+    HIDE_EXPO_DEV_MENU_EXPRESSION = `(function () {
+  var m = ${RESOLVE_EXPO_DEV_MENU};
+  if (!m) return "no_module";
+  var method = null;
+  var close = null;
+  try {
+    if (typeof m.hideMenu === "function") { method = "hideMenu"; close = m.hideMenu; }
+    else if (typeof m.closeMenu === "function") { method = "closeMenu"; close = m.closeMenu; }
+    if (!method) return "no_method_available";
+  } catch (e) { return "resolution_error:" + (e && e.message ? e.message : String(e)); }
+  try {
+    var pending = Promise.resolve(close.call(m)).then(function () { return "ok:" + method; }, function (e) { return "error:" + method + ":" + (e && e.message ? e.message : String(e)); });
+    return { __rnAgentStartValue: "sent:" + method, then: function (resolve, reject) { return pending.then(resolve, reject); } };
+  } catch (e) { return "error:" + method + ":" + (e && e.message ? e.message : String(e)); }
+})()`;
+    SYSTEM_CHROME_REGION_IDENTIFIERS = /* @__PURE__ */ new Set([
+      "status_bar",
+      "status_bar_container",
+      "navigation_bar_frame",
+      "nav_bar_background",
+      "taskbar_container",
+      "navbuttons_view"
+    ]);
+    SYSTEM_CHROME_IDENTIFIERS = /* @__PURE__ */ new Set([
+      ...SYSTEM_CHROME_REGION_IDENTIFIERS,
+      "status_bar_launch_animation_container",
+      "status_bar_contents",
+      "status_bar_start_side_container",
+      "status_bar_start_side_content",
+      "status_bar_start_side_except_heads_up",
+      "status_bar_end_side_container",
+      "status_bar_end_side_content",
+      "clock",
+      "notification_icon_area",
+      "notificationicons",
+      "cutout_space_view",
+      "system_icons",
+      "statusicons",
+      "wifi_combo",
+      "wifi_group",
+      "wifi_signal",
+      "mobile_combo",
+      "mobile_group",
+      "mobile_signal",
+      "battery",
+      "taskbar_scrim",
+      "start_contextual_buttons",
+      "end_contextual_buttons",
+      "end_nav_buttons",
+      "taskbar_bubbles_container",
+      "back",
+      "home",
+      "recent_apps",
+      "recents",
+      "overview",
+      "home_handle"
+    ]);
+  }
+});
+
 // packages/rn-dev-agent-core/dist/tools/device-session.js
 import { execFile as execFileCb8 } from "node:child_process";
 import { promisify as promisify10 } from "node:util";
@@ -29302,10 +29598,10 @@ function createDeviceSnapshotHandler(deps = {}) {
       if (recovery.recovered) {
         cacheSnapshotIfPossible(recovery.result);
         markCdpStale();
-        return wrapWithMeta(recovery.result, {
+        return attachForegroundSurfaceDiscovery(wrapWithMeta(recovery.result, {
           recovered: "agent-device-runner-leak",
           recoveryTier: recovery.tier
-        });
+        }), getActiveSession()?.appId, deps.remedyAuthorityAvailable?.() === true);
       }
       return failResult(runnerLeakFailureMessage(recovery.reason, session2), {
         code: "RUNNER_LEAK",
@@ -29314,8 +29610,21 @@ function createDeviceSnapshotHandler(deps = {}) {
       });
     }
     cacheSnapshotIfPossible(result);
-    return result;
+    return attachForegroundSurfaceDiscovery(result, getActiveSession()?.appId, deps.remedyAuthorityAvailable?.() === true);
   };
+}
+function attachForegroundSurfaceDiscovery(result, boundAppId, authorityAvailable) {
+  if (result.isError)
+    return result;
+  const foregroundSurface = foregroundSurfaceFromSnapshot(result, boundAppId);
+  const recommendation = recommendForegroundSurfaceRemedy({
+    condition: foregroundSurface,
+    authority: authorityAvailable ? "available" : "unavailable"
+  });
+  return wrapWithMeta(result, {
+    foregroundSurface,
+    recommendation: recommendation ?? void 0
+  });
 }
 function runnerLeakFailureMessage(reason, session2) {
   if (reason === "no-session-context" && session2 && !session2.appId) {
@@ -29412,6 +29721,8 @@ var init_device_session = __esm({
     init_device_lock();
     init_device_arbiter();
     init_device_session_close();
+    init_foreground_surface_remedy();
+    init_expo_dev_menu();
     execFile11 = promisify10(execFileCb8);
     HEARTBEAT_MS = 3e4;
     activeDeviceLock = null;
@@ -79921,276 +80232,7 @@ function createMmkvHandler(getClient2) {
 
 // packages/rn-dev-agent-core/dist/tools/dev-settings.js
 init_utils();
-
-// packages/rn-dev-agent-core/dist/tools/expo-dev-menu.js
-var RESOLVE_EXPO_DEV_MENU = `(function () {
-  try { var e = globalThis.expo; if (e && e.modules && e.modules.ExpoDevMenu) return e.modules.ExpoDevMenu; } catch (e0) {}
-  try { var nm = require("react-native").NativeModules; if (nm && nm.ExpoDevMenu) return nm.ExpoDevMenu; } catch (e1) {}
-  try { if (typeof __turboModuleProxy === "function") { var t = __turboModuleProxy("ExpoDevMenu"); if (t) return t; } } catch (e2) {}
-  try { if (typeof globalThis.nativeModuleProxy !== "undefined") { var p = globalThis.nativeModuleProxy.ExpoDevMenu; if (p) return p; } } catch (e3) {}
-  return null;
-})()`;
-var HIDE_EXPO_DEV_MENU_EXPRESSION = `(function () {
-  var m = ${RESOLVE_EXPO_DEV_MENU};
-  if (!m) return "no_module";
-  var method = null;
-  var close = null;
-  try {
-    if (typeof m.hideMenu === "function") { method = "hideMenu"; close = m.hideMenu; }
-    else if (typeof m.closeMenu === "function") { method = "closeMenu"; close = m.closeMenu; }
-    if (!method) return "no_method_available";
-  } catch (e) { return "resolution_error:" + (e && e.message ? e.message : String(e)); }
-  try {
-    var pending = Promise.resolve(close.call(m)).then(function () { return "ok:" + method; }, function (e) { return "error:" + method + ":" + (e && e.message ? e.message : String(e)); });
-    return { __rnAgentStartValue: "sent:" + method, then: function (resolve, reject) { return pending.then(resolve, reject); } };
-  } catch (e) { return "error:" + method + ":" + (e && e.message ? e.message : String(e)); }
-})()`;
-function surfaceText(nodes) {
-  return nodes.flatMap((node) => [node.label, node.identifier].filter((value) => typeof value === "string").map((value) => value.trim().toLowerCase()).filter(Boolean));
-}
-var SYSTEM_CHROME_REGION_IDENTIFIERS = /* @__PURE__ */ new Set([
-  "status_bar",
-  "status_bar_container",
-  "navigation_bar_frame",
-  "nav_bar_background",
-  "taskbar_container",
-  "navbuttons_view"
-]);
-var SYSTEM_CHROME_IDENTIFIERS = /* @__PURE__ */ new Set([
-  ...SYSTEM_CHROME_REGION_IDENTIFIERS,
-  "status_bar_launch_animation_container",
-  "status_bar_contents",
-  "status_bar_start_side_container",
-  "status_bar_start_side_content",
-  "status_bar_start_side_except_heads_up",
-  "status_bar_end_side_container",
-  "status_bar_end_side_content",
-  "clock",
-  "notification_icon_area",
-  "notificationicons",
-  "cutout_space_view",
-  "system_icons",
-  "statusicons",
-  "wifi_combo",
-  "wifi_group",
-  "wifi_signal",
-  "mobile_combo",
-  "mobile_group",
-  "mobile_signal",
-  "battery",
-  "taskbar_scrim",
-  "start_contextual_buttons",
-  "end_contextual_buttons",
-  "end_nav_buttons",
-  "taskbar_bubbles_container",
-  "back",
-  "home",
-  "recent_apps",
-  "recents",
-  "overview",
-  "home_handle"
-]);
-function surfaceRect(node) {
-  if (!node.rect || typeof node.rect !== "object")
-    return null;
-  const rect = node.rect;
-  if (typeof rect.x !== "number" || typeof rect.y !== "number" || typeof rect.width !== "number" || typeof rect.height !== "number" || rect.width < 0 || rect.height < 0) {
-    return null;
-  }
-  return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
-}
-function rectContains(container, candidate) {
-  return candidate.x >= container.x && candidate.y >= container.y && candidate.x + candidate.width <= container.x + container.width && candidate.y + candidate.height <= container.y + container.height;
-}
-function hasBlockingForeignSurface(nodes, boundAppId) {
-  const systemNodes = nodes.filter((node) => node.packageName === "com.android.systemui");
-  const chromeRegions = systemNodes.flatMap((node) => {
-    const identifier = typeof node.identifier === "string" ? node.identifier.trim().toLowerCase() : "";
-    const rect = SYSTEM_CHROME_REGION_IDENTIFIERS.has(identifier) ? surfaceRect(node) : null;
-    return rect ? [rect] : [];
-  });
-  return nodes.some((node) => {
-    const packageName = typeof node.packageName === "string" ? node.packageName.trim() : "";
-    if (!packageName || packageName === boundAppId)
-      return false;
-    if (packageName !== "com.android.systemui")
-      return true;
-    const identifier = typeof node.identifier === "string" ? node.identifier.trim().toLowerCase() : "";
-    if (SYSTEM_CHROME_IDENTIFIERS.has(identifier))
-      return false;
-    const rect = surfaceRect(node);
-    return !rect || !chromeRegions.some((region) => rectContains(region, rect));
-  });
-}
-function classifyForegroundSurface(nodes, boundAppId) {
-  const text = surfaceText(nodes);
-  const has = (value) => text.some((candidate) => candidate.includes(value));
-  if (nodes.some((node) => node.type === "Alert") || boundAppId && hasBlockingForeignSurface(nodes, boundAppId)) {
-    return "unknown";
-  }
-  const hasBoundApp = Boolean(boundAppId) && nodes.some((node) => node.packageName === boundAppId || node.type === "Application");
-  if (text.length === 0)
-    return hasBoundApp ? "app" : "unknown";
-  if (has("development servers"))
-    return "dev_client_picker";
-  if (has("this is the developer menu"))
-    return "first_run_tutorial";
-  if (has("toggle performance monitor") && has("toggle element inspector") || has("copy system info") && has("open devtools")) {
-    return "expo_dev_menu";
-  }
-  if (has("open debugger") || has("configure bundler") || has("react native dev menu") && has("open devtools") && has("change bundle location")) {
-    return "react_native_dev_menu";
-  }
-  if (!boundAppId)
-    return "unknown";
-  return hasBoundApp ? "app" : "unknown";
-}
-function foregroundSurfaceFromSnapshot(result, boundAppId) {
-  if (result.isError)
-    return "unknown";
-  try {
-    const envelope = JSON.parse(result.content[0]?.text ?? "");
-    if (!envelope.ok || !Array.isArray(envelope.data?.nodes))
-      return "unknown";
-    return classifyForegroundSurface(envelope.data.nodes, boundAppId);
-  } catch {
-    return "unknown";
-  }
-}
-function createForegroundSurfaceProbe(dependencies) {
-  return async () => {
-    const status = dependencies.getAuthorityStatus();
-    const session2 = dependencies.getActiveSession();
-    const runner = status.bindings?.runner;
-    if (!status.available || !runner || !session2)
-      return "unknown";
-    const device = status.bindings?.device;
-    const platform = device?.platform;
-    if (platform !== "ios" && platform !== "android" || session2.platform !== platform || session2.deviceId !== device?.deviceId || session2.appId !== device?.appId) {
-      return "unknown";
-    }
-    return foregroundSurfaceFromSnapshot(await dependencies.runNative(["snapshot"], { platform }), session2.appId);
-  };
-}
-function parseSentinel(value, attempts3) {
-  const sentinel = typeof value === "string" ? value : "";
-  if (sentinel === "ok:hideMenu") {
-    return {
-      callSent: true,
-      method: "hideMenu",
-      reason: "ExpoDevMenu.hideMenu() completed.",
-      attempts: attempts3
-    };
-  }
-  if (sentinel === "ok:closeMenu") {
-    return {
-      callSent: true,
-      method: "closeMenu",
-      reason: "ExpoDevMenu.closeMenu() completed.",
-      attempts: attempts3
-    };
-  }
-  if (sentinel === "sent:hideMenu") {
-    return {
-      callSent: true,
-      method: "hideMenu",
-      reason: "ExpoDevMenu.hideMenu() was invoked but did not settle.",
-      attempts: attempts3
-    };
-  }
-  if (sentinel === "sent:closeMenu") {
-    return {
-      callSent: true,
-      method: "closeMenu",
-      reason: "ExpoDevMenu.closeMenu() was invoked but did not settle.",
-      attempts: attempts3
-    };
-  }
-  if (sentinel === "no_module") {
-    return {
-      callSent: false,
-      reason: "No ExpoDevMenu native module resolved.",
-      attempts: attempts3
-    };
-  }
-  if (sentinel === "no_method_available") {
-    return {
-      callSent: false,
-      reason: "ExpoDevMenu resolved but exposes no hideMenu/closeMenu method.",
-      attempts: attempts3
-    };
-  }
-  if (sentinel.startsWith("resolution_error:")) {
-    return {
-      callSent: false,
-      reason: `ExpoDevMenu resolution failed: ${sentinel.slice(17)}`,
-      attempts: attempts3
-    };
-  }
-  const invocationError = sentinel.match(/^error:(hideMenu|closeMenu):(.*)$/s);
-  if (invocationError) {
-    return {
-      callSent: true,
-      method: invocationError[1],
-      reason: `ExpoDevMenu ${invocationError[1]} invocation failed: ${invocationError[2]}`,
-      attempts: attempts3
-    };
-  }
-  return {
-    callSent: false,
-    reason: `Unexpected dev-menu hide result: ${sentinel || "(empty)"}`,
-    attempts: attempts3
-  };
-}
-async function hideExpoDevMenu(client2, options = {}) {
-  const retries = Math.min(1, Math.max(0, options.retries ?? 0));
-  const retryDelayMs = Math.max(0, options.retryDelayMs ?? 300);
-  const evaluationTimeoutMs = Math.min(5e3, Math.max(1, options.evaluationTimeoutMs ?? 5e3));
-  let outcome = {
-    callSent: false,
-    reason: "Dev menu hide not attempted.",
-    attempts: 0
-  };
-  let successfulCall;
-  for (let attempt = 0; attempt <= retries; attempt++) {
-    const attempts3 = attempt + 1;
-    try {
-      const result = await client2.evaluate(HIDE_EXPO_DEV_MENU_EXPRESSION, true, evaluationTimeoutMs);
-      const startOutcome = parseSentinel(result.value, attempts3);
-      const attemptOutcome = result.error ? startOutcome.callSent ? {
-        ...startOutcome,
-        reason: `${startOutcome.reason} Async evaluation failed: ${result.error}`
-      } : result.requestDispatched ? {
-        callSent: true,
-        reason: `Dev menu hide evaluation was dispatched but its invocation could not be confirmed: ${result.error}`,
-        attempts: attempts3
-      } : {
-        callSent: false,
-        reason: `Dev menu hide evaluation failed before dispatch: ${result.error}`,
-        attempts: attempts3
-      } : startOutcome;
-      outcome = attemptOutcome;
-      if (attemptOutcome.callSent)
-        successfulCall = attemptOutcome;
-    } catch (error2) {
-      outcome = {
-        callSent: false,
-        reason: `Dev menu hide evaluation threw: ${error2 instanceof Error ? error2.message : String(error2)}`,
-        attempts: attempts3
-      };
-    }
-    if (outcome.reason.startsWith("No ExpoDevMenu")) {
-      if (!successfulCall)
-        return outcome;
-      break;
-    }
-    if (attempt < retries)
-      await new Promise((resolve20) => setTimeout(resolve20, retryDelayMs));
-  }
-  return successfulCall ? { ...successfulCall, attempts: outcome.attempts } : outcome;
-}
-
-// packages/rn-dev-agent-core/dist/tools/dev-settings.js
+init_expo_dev_menu();
 var RESOLVE_DEV_SETTINGS = `(function() {
   if (typeof __turboModuleProxy === 'function') try { var ds = __turboModuleProxy("DevSettings"); if (ds) return ds; } catch(e) {}
   if (typeof globalThis.nativeModuleProxy !== 'undefined') try { var ds2 = globalThis.nativeModuleProxy.DevSettings; if (ds2) return ds2; } catch(e) {}
@@ -80296,6 +80338,9 @@ function createDevSettingsHandler(getClient2, dependencies = {}) {
   const helperAware = withConnection(getClient2, handler);
   return (args) => args.action === "hideDevMenu" ? helperIndependent(args) : helperAware(args);
 }
+
+// packages/rn-dev-agent-core/dist/index.js
+init_expo_dev_menu();
 
 // packages/rn-dev-agent-core/dist/tools/interact.js
 init_utils();
@@ -88949,6 +88994,9 @@ function instrumentTool(toolName, handler) {
   };
 }
 
+// packages/rn-dev-agent-core/dist/index.js
+init_login_prologue();
+
 // packages/rn-dev-agent-core/dist/observability/live-device.js
 import { join as join53 } from "node:path";
 import { tmpdir as tmpdir14 } from "node:os";
@@ -93048,7 +93096,7 @@ trackedTool("device_screenshot", "Capture the exact authority-bound device scree
   maxWidth: external_exports.number().int().min(0).optional().describe("Downscale image so width does not exceed this many pixels. 0 disables resize. Default 800 (saves ~46% on iPhone 15/17 Pro screenshots without losing label readability)."),
   quality: external_exports.number().int().min(1).max(100).optional().describe("JPEG compression quality (1-100). Only applied to .jpg/.jpeg files. Default 85.")
 }, createDeviceScreenshotHandler(getClient));
-trackedTool("device_snapshot", "Manage exact device sessions and capture UI snapshots even when a Dev Client remains at its native picker. Raw control requires exact install/device/runner authority but not a managed Metro target; meta.originAuthority explicitly reports proven or not-proven, and not-proven snapshots are never strict source evidence. action=open starts a session (required before other device_ tools), waits for Android app accessibility, and reports readiness.reactNativeUi=ready only when a matching live CDP helper confirms the RN fiber boundary; otherwise it warns that RN readiness is unverified. Pass deviceId to select an exact iOS simulator UDID or Android adb serial when devices run in parallel. action=snapshot returns the accessibility tree with @ref identifiers for device_press/device_fill. action=close ends the session. Use attachOnly=true on action=open to skip launching the app when it is already running (avoids relaunch-induced bundle races); liveness is checked only on the resolved exact device and refuses when that identity is unavailable.", {
+trackedTool("device_snapshot", "Manage exact device sessions and capture UI snapshots even when a Dev Client remains at its native picker. Raw control requires exact install/device/runner authority but not a managed Metro target; meta.originAuthority explicitly reports proven or not-proven, and not-proven snapshots are never strict source evidence. A fresh Expo Developer Menu snapshot includes meta.foregroundSurface plus the exact authority-available meta.recommendation for cdp_dev_settings hideDevMenu; other or uncertain surfaces never receive that recommendation. action=open starts a session (required before other device_ tools), waits for Android app accessibility, and reports readiness.reactNativeUi=ready only when a matching live CDP helper confirms the RN fiber boundary; otherwise it warns that RN readiness is unverified. Pass deviceId to select an exact iOS simulator UDID or Android adb serial when devices run in parallel. action=snapshot returns the accessibility tree with @ref identifiers for device_press/device_fill. action=close ends the session. Use attachOnly=true on action=open to skip launching the app when it is already running (avoids relaunch-induced bundle races); liveness is checked only on the resolved exact device and refuses when that identity is unavailable.", {
   action: external_exports.enum(["open", "close", "snapshot"]).default("snapshot").describe("open: start session for an app. snapshot: capture UI tree with element refs. close: end session."),
   appId: external_exports.string().optional().describe('App bundle ID \u2014 required for action=open (e.g. "com.example.app")'),
   platform: external_exports.enum(["ios", "android"]).optional().describe("Target platform \u2014 used with action=open to select device"),
@@ -93058,6 +93106,20 @@ trackedTool("device_snapshot", "Manage exact device sessions and capture UI snap
 }, createDeviceSnapshotHandler({
   bindRunner: (platform, deviceId, appId) => bindNativeRunner(authorityRuntime, { platform, deviceId, appId }),
   unbindRunner: (beforeRelease) => unbindNativeRunner(authorityRuntime, beforeRelease),
+  remedyAuthorityAvailable: () => {
+    const status = authorityRuntime.status();
+    if (!status.available || status.state === "blocked" || status.state === "handoff_cleanup") {
+      return false;
+    }
+    if (!status.bindings.metro || !status.bindings.bundle)
+      return false;
+    return !inspectLoginPrologueGuard({
+      binding: status.bindings.loginPrologue,
+      tool: "cdp_dev_settings",
+      args: { action: "hideDevMenu" },
+      mutation: true
+    }).blocked;
+  },
   probeReactNativeUi: async (platform, deviceId, appId) => {
     const client2 = getClient();
     const filters = {
