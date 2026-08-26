@@ -810,7 +810,7 @@ export function createMaestroRunHandler(
             });
             const env = readToolEnvelope(nested);
             if (env.ok !== true || env.data?.passed !== true) {
-              const nestedMeta = env.meta ?? env.data ?? {};
+              const nestedMeta = { ...env.meta, ...env.data };
               combinedSteps.push(...remapNativeSteps(nestedMeta.steps, segment.sourceIndices));
               const uniqueProofDomains = [...new Set(proofDomains)];
               const proofDomain =

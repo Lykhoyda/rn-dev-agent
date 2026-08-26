@@ -28,7 +28,7 @@ test('normalizeSteps maps the supported subset with ${VAR} interpolation', () =>
     { t: 'type', text: 'Ship it' },
     { t: 'assert', id: 'wizard-step-1' },
     { t: 'tap', id: 'wizard-priority-high' },
-    { t: 'wait' },
+    { t: 'wait', timeoutMs: 400 },
     {
       t: 'runFlow',
       whenVisible: 'onboarding-screen',
@@ -86,11 +86,20 @@ function mockDispatch(over = {}) {
     launch: async (stopApp) => {
       calls.push(['launch', stopApp]);
     },
-    settle: async () => {
-      calls.push(['settle']);
+    settle: async (timeoutMs) => {
+      calls.push(['settle', timeoutMs]);
     },
   };
 }
+
+test('waitForAnimationToEnd preserves its configured timeout', async () => {
+  const steps = normalizeSteps([{ waitForAnimationToEnd: { timeout: 2_500 } }], {});
+  assert.deepEqual(steps, [{ t: 'wait', timeoutMs: 2_500 }]);
+  const dispatch = mockDispatch();
+  const result = await replayFlow(steps, dispatch);
+  assert.equal(result.passed, true);
+  assert.deepEqual(dispatch.calls, [['settle', 2_500]]);
+});
 
 test('replayFlow happy path: type routes to last tapped, all pass', async () => {
   const d = mockDispatch();

@@ -34775,7 +34775,7 @@ function normalizeSteps(body, params) {
   const out = [];
   for (const raw of body) {
     if (raw === "waitForAnimationToEnd") {
-      out.push({ t: "wait" });
+      out.push({ t: "wait", timeoutMs: 400 });
       continue;
     }
     if (!isObj(raw))
@@ -34835,9 +34835,21 @@ function normalizeSteps(body, params) {
         out.push({ t: "waitVisible", id: interp(id, params), timeoutMs: Number(timeoutMs) });
         break;
       }
-      case "waitForAnimationToEnd":
-        out.push({ t: "wait" });
+      case "waitForAnimationToEnd": {
+        if (v === null || v === void 0) {
+          out.push({ t: "wait", timeoutMs: 400 });
+          break;
+        }
+        if (!isObj(v)) {
+          throw new UnsupportedStepError("waitForAnimationToEnd (value must be an object)");
+        }
+        refuseUnsupportedKeys(v, ["timeout"], "waitForAnimationToEnd");
+        if (!Number.isSafeInteger(v.timeout) || Number(v.timeout) < 0) {
+          throw new UnsupportedStepError("waitForAnimationToEnd (need non-negative integer timeout)");
+        }
+        out.push({ t: "wait", timeoutMs: Number(v.timeout) });
         break;
+      }
       case "runFlow": {
         if (isObj(v))
           refuseUnsupportedKeys(v, ["when", "commands"], "runFlow");
@@ -34953,7 +34965,7 @@ async function replayFlow(steps, dispatch, opts = {}) {
           break;
         }
         case "wait":
-          await dispatch.settle();
+          await dispatch.settle(s.timeoutMs);
           trace.push({
             sourceIndex: sourceIndex(i),
             t: s.t,
@@ -35054,6 +35066,16 @@ function commandName(command) {
   const keys = Object.keys(command);
   return keys.length === 1 ? keys[0] : null;
 }
+function commandTreeContains(value, names, depth = 0) {
+  if (depth > 20)
+    return false;
+  if (Array.isArray(value)) {
+    return value.some((child) => commandTreeContains(child, names, depth + 1));
+  }
+  if (!isObject2(value))
+    return false;
+  return Object.entries(value).some(([key, child]) => names.has(key) || commandTreeContains(child, names, depth + 1));
+}
 function exactTapId(command, params) {
   try {
     const step = normalizeSteps([command], params)[0];
@@ -35091,6 +35113,8 @@ function planIosProofDomains(commands, params) {
   const segments = [];
   let focusedDomain = null;
   let focusedReactId = null;
+  const tapCommands = /* @__PURE__ */ new Set(["tapOn"]);
+  const lifecycleCommands2 = /* @__PURE__ */ new Set(["launchApp", "clearState", "killApp", "stopApp"]);
   for (let index = 0; index < commands.length; index++) {
     const name = commandName(commands[index]);
     let domain = classified[index];
@@ -35114,7 +35138,10 @@ function planIosProofDomains(commands, params) {
     if (name === "tapOn") {
       focusedDomain = domain;
       focusedReactId = domain === "react-tree" ? exactTapId(commands[index], params) : null;
-    } else if (name === "launchApp" || name === "clearState" || name === "killApp" || name === "stopApp") {
+    } else if (commandTreeContains(commands[index], tapCommands)) {
+      focusedDomain = domain;
+      focusedReactId = null;
+    } else if (commandTreeContains(commands[index], lifecycleCommands2)) {
       focusedDomain = null;
       focusedReactId = null;
     }
@@ -35280,8 +35307,8 @@ function buildCdpDispatch(deps) {
     async launch(stopApp) {
       await deps.launchApp(stopApp);
     },
-    async settle() {
-      await deps.settle();
+    async settle(timeoutMs) {
+      await deps.settle(timeoutMs);
     }
   };
 }
@@ -35346,7 +35373,7 @@ function commandName2(command) {
   const keys = Object.keys(command);
   return keys.length === 1 ? keys[0] : null;
 }
-function commandTreeContains(command, names, depth = 0) {
+function commandTreeContains2(command, names, depth = 0) {
   if (depth > 20)
     return true;
   const name = commandName2(command);
@@ -35359,7 +35386,7 @@ function commandTreeContains(command, names, depth = 0) {
   if (!runFlow || typeof runFlow !== "object" || Array.isArray(runFlow))
     return false;
   const commands = runFlow.commands;
-  return Array.isArray(commands) && commands.some((child) => commandTreeContains(child, names, depth + 1));
+  return Array.isArray(commands) && commands.some((child) => commandTreeContains2(child, names, depth + 1));
 }
 function nestedLifecycleCommand(command) {
   if (!command || typeof command !== "object" || Array.isArray(command))
@@ -35674,7 +35701,7 @@ function createMaestroRunHandler(deps = {}) {
             });
             const env = readToolEnvelope(nested);
             if (env.ok !== true || env.data?.passed !== true) {
-              const nestedMeta = env.meta ?? env.data ?? {};
+              const nestedMeta = { ...env.meta, ...env.data };
               combinedSteps.push(...remapNativeSteps(nestedMeta.steps, segment.sourceIndices));
               const uniqueProofDomains = [...new Set(proofDomains)];
               const proofDomain = uniqueProofDomains.length === 1 ? uniqueProofDomains.at(0) ?? "partitioned" : "partitioned";
@@ -35696,7 +35723,7 @@ function createMaestroRunHandler(deps = {}) {
             if (typeof env.data.output === "string")
               nativeOutput += env.data.output;
             combinedSteps.push(...remapNativeSteps(env.data.steps, segment.sourceIndices));
-            if (segment.commands.some((command) => commandTreeContains(command, nativeFocusInvalidators))) {
+            if (segment.commands.some((command) => commandTreeContains2(command, nativeFocusInvalidators))) {
               retainedReactFocusId = void 0;
             }
             continue;
@@ -92537,11 +92564,11 @@ var makeReplayDeps = (_args, signal) => {
       }
       await execFileP("xcrun", ["simctl", "launch", udid, session2.appId]);
     },
-    settle: async () => {
+    settle: async (timeoutMs) => {
       if (signal?.aborted)
         throw new ReplayDispatchError("RUNNER_TIMEOUT", "Replay cancelled");
       await new Promise((resolve20, reject) => {
-        const timer = setTimeout(resolve20, 400);
+        const timer = setTimeout(resolve20, timeoutMs);
         signal?.addEventListener("abort", () => {
           clearTimeout(timer);
           reject(new ReplayDispatchError("RUNNER_TIMEOUT", "Replay cancelled"));

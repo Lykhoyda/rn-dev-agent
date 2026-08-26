@@ -44,7 +44,7 @@ export interface CdpReplayDeps {
   treeFor(id: string): Promise<unknown | null>;
   frontmostFor?(id: string): Promise<{ visible: boolean; reason?: string; matchCount?: number }>;
   launchApp(stopApp: boolean): Promise<void>;
-  settle(): Promise<void>;
+  settle(timeoutMs: number): Promise<void>;
 }
 
 function countExactMatches(treeJson: unknown, id: string): number {
@@ -159,8 +159,8 @@ export function buildCdpDispatch(deps: CdpReplayDeps): ReplayDispatch {
     async launch(stopApp) {
       await deps.launchApp(stopApp);
     },
-    async settle() {
-      await deps.settle();
+    async settle(timeoutMs) {
+      await deps.settle(timeoutMs);
     },
   };
 }

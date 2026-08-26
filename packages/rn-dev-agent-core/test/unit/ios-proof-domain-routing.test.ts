@@ -322,6 +322,31 @@ test('partitioned replay carries nested React focus across a native segment', as
   assert.deepEqual(calls, ['press:outer-field', 'press:inner-field', 'type:inner-field']);
 });
 
+test('inputText follows a nested native tap instead of reviving stale React focus', () => {
+  const plan = planIosProofDomains(
+    [
+      { tapOn: { id: 'react-field' } },
+      {
+        runFlow: {
+          when: { visible: 'Native form' },
+          commands: [{ tapOn: 'Native field' }],
+        },
+      },
+      { inputText: 'value' },
+    ],
+    {},
+  );
+  assert.equal(plan.ok, true);
+  if (!plan.ok) return;
+  assert.deepEqual(
+    plan.segments.map(({ domain, sourceIndices }) => ({ domain, sourceIndices })),
+    [
+      { domain: 'react-tree', sourceIndices: [0] },
+      { domain: 'xctest-native', sourceIndices: [1, 2] },
+    ],
+  );
+});
+
 test('negative native assertions cannot prove blindness', () => {
   assert.deepEqual(
     nativeSelectorsForCommands([
@@ -807,6 +832,53 @@ test('partitioned React failures retain prior native proof evidence', async () =
       [1, 'fail'],
     ],
   );
+});
+
+test('partitioned warning failures retain native data evidence', async () => {
+  const handler = createMaestroRunHandler({
+    getActiveSession: () => ({
+      name: 'partition-native-warning',
+      platform: 'ios',
+      deviceId: IOS_UDID,
+      appId: 'com.example.app',
+      openedAt: new Date(0).toISOString(),
+    }),
+    replayDeps: () => ({
+      pressByTestId: async () => {},
+      typeByTestId: async () => {},
+      treeFor: async (id) => ({ testID: id }),
+      frontmostFor: async () => ({ visible: true }),
+      launchApp: async () => {},
+      settle: async () => {},
+    }),
+    chooseDispatch: () => nativeDispatch(),
+    parkFlow: async (run) => run(),
+    resolveEngineStatus: async () =>
+      buildReplayEngineStatus('pinned-ok', MAESTRO_RUNNER_PIN.version, false),
+    execFile: async () => ({
+      stdout: nativeRunnerOutput('    ✗ assertVisible (0.1s)\nTest FAILED'),
+      stderr: '',
+    }),
+  });
+  const env = envelope(
+    await handler({
+      platform: 'ios',
+      deviceId: IOS_UDID,
+      inlineYaml: `appId: com.example.app\n---\n- assertVisible:\n    id: react-status\n- assertVisible: Native status\n`,
+      ...callbacks,
+    }),
+  );
+  assert.equal(env.ok, false);
+  assert.equal(env.meta?.proofDomain, 'partitioned');
+  assert.deepEqual(
+    env.meta?.steps.map((step: { index: number; status: string }) => [step.index, step.status]),
+    [
+      [0, 'pass'],
+      [1, 'fail'],
+    ],
+  );
+  assert.equal(env.meta?.failedStep.index, 1);
+  assert.equal(env.meta?.lastStep.index, 1);
 });
 
 test('native origin is claimed before runner parking and completed after resume', async () => {

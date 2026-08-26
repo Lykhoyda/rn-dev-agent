@@ -4,7 +4,7 @@ export type ReplayStep =
   | { t: 'type'; text: string }
   | { t: 'assert'; id: string }
   | { t: 'waitVisible'; id: string; timeoutMs: number }
-  | { t: 'wait' }
+  | { t: 'wait'; timeoutMs: number }
   | { t: 'runFlow'; whenVisible: string; commands: ReplayStep[] };
 
 export class UnsupportedStepError extends Error {
@@ -19,7 +19,7 @@ export interface ReplayDispatch {
   type(id: string, text: string): Promise<void>;
   visibility(id: string): Promise<ReplayVisibility>;
   launch(stopApp: boolean): Promise<void>;
-  settle(): Promise<void>;
+  settle(timeoutMs: number): Promise<void>;
 }
 
 export interface ReplayVisibility {
@@ -76,7 +76,7 @@ export function normalizeSteps(body: unknown[], params: Record<string, string>):
   const out: ReplayStep[] = [];
   for (const raw of body) {
     if (raw === 'waitForAnimationToEnd') {
-      out.push({ t: 'wait' });
+      out.push({ t: 'wait', timeoutMs: 400 });
       continue;
     }
     if (!isObj(raw))
@@ -137,9 +137,23 @@ export function normalizeSteps(body: unknown[], params: Record<string, string>):
         out.push({ t: 'waitVisible', id: interp(id, params), timeoutMs: Number(timeoutMs) });
         break;
       }
-      case 'waitForAnimationToEnd':
-        out.push({ t: 'wait' });
+      case 'waitForAnimationToEnd': {
+        if (v === null || v === undefined) {
+          out.push({ t: 'wait', timeoutMs: 400 });
+          break;
+        }
+        if (!isObj(v)) {
+          throw new UnsupportedStepError('waitForAnimationToEnd (value must be an object)');
+        }
+        refuseUnsupportedKeys(v, ['timeout'], 'waitForAnimationToEnd');
+        if (!Number.isSafeInteger(v.timeout) || Number(v.timeout) < 0) {
+          throw new UnsupportedStepError(
+            'waitForAnimationToEnd (need non-negative integer timeout)',
+          );
+        }
+        out.push({ t: 'wait', timeoutMs: Number(v.timeout) });
         break;
+      }
       case 'runFlow': {
         if (isObj(v)) refuseUnsupportedKeys(v, ['when', 'commands'], 'runFlow');
         if (isObj(v) && isObj(v.when)) refuseUnsupportedKeys(v.when, ['visible'], 'runFlow.when');
@@ -284,7 +298,7 @@ export async function replayFlow(
           break;
         }
         case 'wait':
-          await dispatch.settle();
+          await dispatch.settle(s.timeoutMs);
           trace.push({
             sourceIndex: sourceIndex(i),
             t: s.t,

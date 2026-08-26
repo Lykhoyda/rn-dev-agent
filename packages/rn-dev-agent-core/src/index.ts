@@ -424,10 +424,10 @@ const makeReplayDeps = (_args?: unknown, signal?: AbortSignal): CdpReplayDeps | 
       }
       await execFileP('xcrun', ['simctl', 'launch', udid, session.appId!]);
     },
-    settle: async () => {
+    settle: async (timeoutMs: number) => {
       if (signal?.aborted) throw new ReplayDispatchError('RUNNER_TIMEOUT', 'Replay cancelled');
       await new Promise<void>((resolve, reject) => {
-        const timer = setTimeout(resolve, 400);
+        const timer = setTimeout(resolve, timeoutMs);
         signal?.addEventListener(
           'abort',
           () => {

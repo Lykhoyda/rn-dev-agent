@@ -34,6 +34,17 @@ function commandName(command: unknown): string | null {
   return keys.length === 1 ? keys[0]! : null;
 }
 
+function commandTreeContains(value: unknown, names: ReadonlySet<string>, depth = 0): boolean {
+  if (depth > 20) return false;
+  if (Array.isArray(value)) {
+    return value.some((child) => commandTreeContains(child, names, depth + 1));
+  }
+  if (!isObject(value)) return false;
+  return Object.entries(value).some(
+    ([key, child]) => names.has(key) || commandTreeContains(child, names, depth + 1),
+  );
+}
+
 function exactTapId(command: unknown, params: Record<string, string>): string | null {
   try {
     const step = normalizeSteps([command], params)[0];
@@ -78,6 +89,8 @@ export function planIosProofDomains(
   const segments: IosProofSegment[] = [];
   let focusedDomain: IosProofDomain | null = null;
   let focusedReactId: string | null = null;
+  const tapCommands = new Set(['tapOn']);
+  const lifecycleCommands = new Set(['launchApp', 'clearState', 'killApp', 'stopApp']);
   for (let index = 0; index < commands.length; index++) {
     const name = commandName(commands[index]);
     let domain = classified[index];
@@ -106,12 +119,10 @@ export function planIosProofDomains(
     if (name === 'tapOn') {
       focusedDomain = domain;
       focusedReactId = domain === 'react-tree' ? exactTapId(commands[index], params) : null;
-    } else if (
-      name === 'launchApp' ||
-      name === 'clearState' ||
-      name === 'killApp' ||
-      name === 'stopApp'
-    ) {
+    } else if (commandTreeContains(commands[index], tapCommands)) {
+      focusedDomain = domain;
+      focusedReactId = null;
+    } else if (commandTreeContains(commands[index], lifecycleCommands)) {
       focusedDomain = null;
       focusedReactId = null;
     }
