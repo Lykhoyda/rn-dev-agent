@@ -58,6 +58,20 @@ sibling workspace only when explicitly requested.
   with Metro's dev registry (`globalThis.__r.getModules()`, per-module
   `verboseName`) or fiber/render evidence, bounded and fail-closed.
 
+## Architecture Rules
+
+- All nontrivial code architecture, including session, reconnect, ownership,
+  and authority behavior, must follow Domain-Driven Design (DDD). Define
+  explicit domain language and bounded contexts before implementation.
+- Domain models own domain invariants and lifecycle transitions. Application
+  layers orchestrate use cases; infrastructure, tools, runners, transports,
+  UI, and platform modules implement adapters, with dependencies directed
+  inward toward the domain.
+- Adapters, tools, runners, transports, and UI or platform modules must not
+  become competing owners of domain policy or authority. Trivial mechanical
+  code does not need new layers or types, but it must reuse established domain
+  boundaries and must not bypass or duplicate them.
+
 ## Where To Make Changes
 
 - Core MCP behavior: edit `packages/rn-dev-agent-core/src/`, then run
