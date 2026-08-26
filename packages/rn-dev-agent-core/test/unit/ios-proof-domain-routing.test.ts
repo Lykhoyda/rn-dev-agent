@@ -270,6 +270,58 @@ test('conditional React subflows preserve focus in both directions', async () =>
   ]);
 });
 
+test('partitioned replay carries nested React focus across a native segment', async () => {
+  const calls: string[] = [];
+  const handler = createMaestroRunHandler({
+    getActiveSession: () => ({
+      name: 'nested-focus-across-native',
+      platform: 'ios',
+      deviceId: IOS_UDID,
+      appId: 'com.example.app',
+      openedAt: new Date(0).toISOString(),
+    }),
+    replayDeps: () => ({
+      pressByTestId: async (id) => calls.push(`press:${id}`),
+      typeByTestId: async (id) => calls.push(`type:${id}`),
+      treeFor: async (id) => ({ testID: id }),
+      frontmostFor: async () => ({ visible: true }),
+      launchApp: async () => {},
+      settle: async () => {},
+    }),
+    chooseDispatch: () => nativeDispatch(),
+    parkFlow: async (run) => run(),
+    resolveEngineStatus: async () =>
+      buildReplayEngineStatus('pinned-ok', MAESTRO_RUNNER_PIN.version, false),
+    execFile: async () => ({ stdout: nativeRunnerOutput(), stderr: '' }),
+  });
+  const env = envelope(
+    await handler({
+      platform: 'ios',
+      deviceId: IOS_UDID,
+      inlineYaml: `appId: com.example.app
+---
+- tapOn:
+    id: outer-field
+- runFlow:
+    when:
+      visible:
+        id: nested-form
+    commands:
+      - tapOn:
+          id: inner-field
+- assertVisible: Native status
+- inputText: value
+- assertVisible:
+    id: finished
+`,
+      ...callbacks,
+    }),
+  );
+  assert.equal(env.ok, true);
+  assert.equal(env.data?.proofDomain, 'partitioned');
+  assert.deepEqual(calls, ['press:outer-field', 'press:inner-field', 'type:inner-field']);
+});
+
 test('negative native assertions cannot prove blindness', () => {
   assert.deepEqual(
     nativeSelectorsForCommands([

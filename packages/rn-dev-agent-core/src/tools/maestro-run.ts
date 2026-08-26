@@ -240,6 +240,22 @@ function commandName(command: unknown): string | null {
   return keys.length === 1 ? keys[0]! : null;
 }
 
+function commandTreeContains(command: unknown, names: ReadonlySet<string>, depth = 0): boolean {
+  if (depth > 20) return true;
+  const name = commandName(command);
+  if (name !== null && names.has(name)) return true;
+  if (name !== 'runFlow' || !command || typeof command !== 'object' || Array.isArray(command)) {
+    return false;
+  }
+  const runFlow = (command as Record<string, unknown>).runFlow;
+  if (!runFlow || typeof runFlow !== 'object' || Array.isArray(runFlow)) return false;
+  const commands = (runFlow as Record<string, unknown>).commands;
+  return (
+    Array.isArray(commands) &&
+    commands.some((child) => commandTreeContains(child, names, depth + 1))
+  );
+}
+
 function nestedLifecycleCommand(command: unknown): boolean {
   if (!command || typeof command !== 'object' || Array.isArray(command)) return false;
   const runFlow = (command as Record<string, unknown>).runFlow;
@@ -772,6 +788,8 @@ export function createMaestroRunHandler(
       const proofDomains: Array<'react-tree' | 'xctest-native'> = [];
       let nativeTransportVersion: unknown = null;
       let nativeOutput = '';
+      let retainedReactFocusId: string | undefined;
+      const nativeFocusInvalidators = new Set([...lifecycleCommands, 'tapOn']);
       try {
         for (const segment of iosProofPlan.segments) {
           if (controller.signal.aborted || deadline - now() <= 0) {
@@ -828,6 +846,13 @@ export function createMaestroRunHandler(
             nativeTransportVersion = env.data.transportVersion ?? nativeTransportVersion;
             if (typeof env.data.output === 'string') nativeOutput += env.data.output;
             combinedSteps.push(...remapNativeSteps(env.data.steps, segment.sourceIndices));
+            if (
+              segment.commands.some((command) =>
+                commandTreeContains(command, nativeFocusInvalidators),
+              )
+            ) {
+              retainedReactFocusId = undefined;
+            }
             continue;
           }
 
@@ -841,7 +866,7 @@ export function createMaestroRunHandler(
             );
           }
           let stageCursor = 0;
-          let reactFocusId = segment.initialReactFocusId;
+          let reactFocusId = retainedReactFocusId ?? segment.initialReactFocusId;
           const stageResults = await executeMaestroAuthorityStages(
             segment.commands,
             async (commands) => {
@@ -871,6 +896,7 @@ export function createMaestroRunHandler(
             relaunchManagedApp,
             reproveManagedOrigin,
           );
+          retainedReactFocusId = reactFocusId;
           for (const { replay, sourceIndices } of stageResults) {
             for (const step of replay.steps) {
               combinedSteps.push({

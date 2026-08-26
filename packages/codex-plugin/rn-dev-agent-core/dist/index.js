@@ -35346,6 +35346,21 @@ function commandName2(command) {
   const keys = Object.keys(command);
   return keys.length === 1 ? keys[0] : null;
 }
+function commandTreeContains(command, names, depth = 0) {
+  if (depth > 20)
+    return true;
+  const name = commandName2(command);
+  if (name !== null && names.has(name))
+    return true;
+  if (name !== "runFlow" || !command || typeof command !== "object" || Array.isArray(command)) {
+    return false;
+  }
+  const runFlow = command.runFlow;
+  if (!runFlow || typeof runFlow !== "object" || Array.isArray(runFlow))
+    return false;
+  const commands = runFlow.commands;
+  return Array.isArray(commands) && commands.some((child) => commandTreeContains(child, names, depth + 1));
+}
 function nestedLifecycleCommand(command) {
   if (!command || typeof command !== "object" || Array.isArray(command))
     return false;
@@ -35640,6 +35655,8 @@ function createMaestroRunHandler(deps = {}) {
       const proofDomains = [];
       let nativeTransportVersion = null;
       let nativeOutput = "";
+      let retainedReactFocusId;
+      const nativeFocusInvalidators = /* @__PURE__ */ new Set([...lifecycleCommands, "tapOn"]);
       try {
         for (const segment of iosProofPlan.segments) {
           if (controller.signal.aborted || deadline - now() <= 0) {
@@ -35679,6 +35696,9 @@ function createMaestroRunHandler(deps = {}) {
             if (typeof env.data.output === "string")
               nativeOutput += env.data.output;
             combinedSteps.push(...remapNativeSteps(env.data.steps, segment.sourceIndices));
+            if (segment.commands.some((command) => commandTreeContains(command, nativeFocusInvalidators))) {
+              retainedReactFocusId = void 0;
+            }
             continue;
           }
           proofDomains.push("react-tree");
@@ -35687,7 +35707,7 @@ function createMaestroRunHandler(deps = {}) {
             return failResult("React-tree replay requires the authority-bound bridgeless runtime. Reconnect the exact app bundle and retry.", "CDP_NOT_CONNECTED", { proofDomain: "react-tree" });
           }
           let stageCursor = 0;
-          let reactFocusId = segment.initialReactFocusId;
+          let reactFocusId = retainedReactFocusId ?? segment.initialReactFocusId;
           const stageResults = await executeMaestroAuthorityStages(segment.commands, async (commands) => {
             const sourceIndices = segment.sourceIndices.slice(stageCursor, stageCursor + commands.length);
             stageCursor += commands.length;
@@ -35706,6 +35726,7 @@ function createMaestroRunHandler(deps = {}) {
             }
             return { replay, sourceIndices };
           }, claimOrigin, completeOrigin, relaunchManagedApp, reproveManagedOrigin);
+          retainedReactFocusId = reactFocusId;
           for (const { replay, sourceIndices } of stageResults) {
             for (const step of replay.steps) {
               combinedSteps.push({
