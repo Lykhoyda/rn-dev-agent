@@ -15,7 +15,6 @@ import {
   authorizeLoginSupervisorOverride,
   inspectLoginPrologueGuard,
   isLoginRunnerRecoveryOperation,
-  isLoginRunnerRecoveryState,
   loginPrologueNextAction,
   readLoginPrologueOutcome,
   type LoginRunnerRecoveryAuthority,
@@ -1259,10 +1258,6 @@ export function createAuthorityGate(
         const priorLoginPrologueOutcome = readLoginPrologueOutcome(
           runtimeStatus.available ? runtimeStatus.bindings.loginPrologue : undefined,
         );
-        const priorLoginRecoveryAvailable = isLoginRunnerRecoveryState({
-          binding: priorLoginPrologueOutcome,
-          authority: loginAuthority,
-        });
         const loginRunnerRecovery = isLoginRunnerRecoveryOperation({
           binding: runtimeStatus.available ? runtimeStatus.bindings.loginPrologue : undefined,
           authority: loginAuthority,
@@ -2579,10 +2574,9 @@ export function createAuthorityGate(
           }
           if (
             tool === 'cdp_login_prologue' &&
-            authorityErrorCode(error) === 'RUNNER_OWNERSHIP_MISMATCH' &&
             !loginPrologueHandlerStarted &&
-            priorLoginRecoveryAvailable &&
-            priorLoginPrologueOutcome &&
+            priorLoginPrologueOutcome?.state === LOGIN_PROLOGUE_BLOCKED &&
+            priorLoginPrologueOutcome.failure?.code !== 'LOGIN_PROLOGUE_IN_PROGRESS' &&
             registry &&
             operation
           ) {

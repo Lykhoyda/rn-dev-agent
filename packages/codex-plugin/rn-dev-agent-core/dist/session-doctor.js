@@ -568,6 +568,39 @@ var init_cleanup_identity = __esm({
   }
 });
 
+// packages/rn-dev-agent-core/dist/domain/login-prologue.js
+function readLoginPrologueOutcome(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    return null;
+  const candidate = value;
+  if (candidate.schemaVersion !== 1 || candidate.alias !== LOGIN_PROLOGUE_ALIAS || candidate.state !== "passed" && candidate.state !== LOGIN_PROLOGUE_BLOCKED || typeof candidate.startedAt !== "string" || typeof candidate.endedAt !== "string" || typeof candidate.elapsedMs !== "number" || !Array.isArray(candidate.steps)) {
+    return null;
+  }
+  return candidate;
+}
+function isLoginRunnerRecoveryState(input) {
+  const outcome = readLoginPrologueOutcome(input.binding);
+  return Boolean(input.authority && outcome?.state === LOGIN_PROLOGUE_BLOCKED && outcome.role === ACTION_LOGIN_HELPER && outcome.actionId === LOGIN_PROLOGUE_ALIAS && outcome.runRecord?.status === "fail" && input.authority.runner == null && input.authority.bundle == null);
+}
+function loginPrologueNextAction(input) {
+  if (isLoginRunnerRecoveryState(input) && input.authority?.install != null && input.authority.metro != null && input.authority.device != null) {
+    return LOGIN_PROLOGUE_RECOVERY_SEQUENCE;
+  }
+  const outcome = readLoginPrologueOutcome(input.binding);
+  return outcome?.failure?.code === "LOGIN_ACTION_MISSING" || outcome?.failure?.code === "LOGIN_ACTION_ID_MISMATCH" ? `Restore the exact ${LOGIN_PROLOGUE_ALIAS} action, then run cdp_login_prologue.` : LOGIN_PROLOGUE_RETRY_ACTION;
+}
+var LOGIN_PROLOGUE_ALIAS, LOGIN_PROLOGUE_BLOCKED, ACTION_LOGIN_HELPER, LOGIN_PROLOGUE_RECOVERY_SEQUENCE, LOGIN_PROLOGUE_RETRY_ACTION;
+var init_login_prologue = __esm({
+  "packages/rn-dev-agent-core/dist/domain/login-prologue.js"() {
+    "use strict";
+    LOGIN_PROLOGUE_ALIAS = "user-login";
+    LOGIN_PROLOGUE_BLOCKED = "LOGIN_PROLOGUE_BLOCKED";
+    ACTION_LOGIN_HELPER = "ACTION_LOGIN_HELPER";
+    LOGIN_PROLOGUE_RECOVERY_SEQUENCE = 'Run device_snapshot with action "open" and attachOnly true on the already-bound app, rerun cdp_login_prologue, then repeat the same attach-only open before device_press or device_fill.';
+    LOGIN_PROLOGUE_RETRY_ACTION = "Resolve the reported user-login failure, then rerun cdp_login_prologue; attach-only runner recovery is not authorized for this blocked state.";
+  }
+});
+
 // node_modules/yaml/dist/nodes/identity.js
 var require_identity = __commonJS({
   "node_modules/yaml/dist/nodes/identity.js"(exports) {
@@ -8082,6 +8115,30 @@ function readStartupCleanupBlocker(bindingsJson) {
     ...typeof record.nextAction === "string" ? { nextAction: record.nextAction } : {}
   };
 }
+function readBlockedLoginPrologue(bindingsJson) {
+  try {
+    const bindings = JSON.parse(bindingsJson);
+    const outcome = readLoginPrologueOutcome(bindings.loginPrologue);
+    if (outcome?.state !== LOGIN_PROLOGUE_BLOCKED)
+      return void 0;
+    return {
+      state: LOGIN_PROLOGUE_BLOCKED,
+      ...outcome.failure?.code ? { failureCode: outcome.failure.code } : {},
+      nextAction: loginPrologueNextAction({
+        binding: outcome,
+        authority: {
+          install: bindings.install,
+          metro: bindings.metro,
+          bundle: bindings.bundle,
+          device: bindings.device,
+          runner: bindings.runner
+        }
+      })
+    };
+  } catch {
+    return void 0;
+  }
+}
 function bindingsRunnerPresent(bindingsJson) {
   const bindings = JSON.parse(bindingsJson);
   return Boolean(bindings.runner && typeof bindings.runner === "object");
@@ -8110,6 +8167,7 @@ var init_registry = __esm({
     "use strict";
     init_authority_store();
     init_cleanup_identity();
+    init_login_prologue();
     init_declared_source_contract();
     init_metro_binding();
     init_recovery_remedy();
@@ -9628,6 +9686,7 @@ var init_registry = __esm({
         const blocked = readStartupCleanupBlocker(row.bindings_json);
         const sameAppRoot = row.worktree_key === input.worktreeKey && row.app_root_key === input.appRootKey;
         const sameSource = row.source_key === input.sourceKey;
+        const loginPrologue = sameAppRoot && sameSource ? readBlockedLoginPrologue(row.bindings_json) : void 0;
         return {
           owner: status === "match" ? "live" : status === "mismatch" ? "stale" : "unprovable",
           sameRoot: sameAppRoot && sameSource,
@@ -9637,7 +9696,8 @@ var init_registry = __esm({
             session: row.session_id.slice(0, 12),
             ...ownerAppRoot === void 0 ? {} : { appRoot: ownerAppRoot }
           },
-          ...blocked ? { startupCleanupBlocked: blocked } : {}
+          ...blocked ? { startupCleanupBlocked: blocked } : {},
+          ...loginPrologue ? { loginPrologue } : {}
         };
       }
       #countAbandonedBlockedContenders(worktreeKey) {
@@ -11798,13 +11858,6 @@ var init_install_reissue = __esm({
     "use strict";
     init_install_authority();
     init_registry();
-  }
-});
-
-// packages/rn-dev-agent-core/dist/domain/login-prologue.js
-var init_login_prologue = __esm({
-  "packages/rn-dev-agent-core/dist/domain/login-prologue.js"() {
-    "use strict";
   }
 });
 
@@ -16408,6 +16461,8 @@ function remedyFor(ownership) {
     return sessionOtherRootRecoveryRemedy("The proven-dead owner belongs to a different app root or declared source in this worktree, so this root cannot release it.");
   }
   if (ownership.owner === "live") {
+    if (ownership.loginPrologue)
+      return ownership.loginPrologue.nextAction;
     return sessionOwnerInspectionRemedy("A live same-root owner holds this worktree.");
   }
   if (ownership.owner === "unprovable") {
@@ -16463,6 +16518,7 @@ function report() {
       wedged: isWedged(ownership),
       repairable: isRepairable(ownership),
       ...ownership.startupCleanupBlocked ? { startupCleanupBlocked: ownership.startupCleanupBlocked } : {},
+      ...ownership.loginPrologue ? { loginPrologue: ownership.loginPrologue } : {},
       remedy: remedyFor(ownership)
     }
   };
@@ -16487,6 +16543,7 @@ async function repair() {
       discardedContenders: outcome.discardedContenders,
       ...holderOf(ownership),
       wedged,
+      ...ownership.loginPrologue ? { loginPrologue: ownership.loginPrologue } : {},
       ...outcome.refusal ? { refusal: outcome.refusal } : {},
       remedy: wedged || ownership.owner === "live" ? remedyFor(ownership) : outcome.status === "clean" ? "This source root is recoverable now; start rn-dev-agent here again." : outcome.refusal?.nextAction ?? sessionRecoveryRemedy("Startup cleanup preserved the prior owner.")
     }

@@ -22165,6 +22165,94 @@ var init_cleanup_identity = __esm({
   }
 });
 
+// packages/rn-dev-agent-core/dist/domain/login-prologue.js
+import { createHash as createHash8, timingSafeEqual as timingSafeEqual4 } from "node:crypto";
+function readLoginPrologueOutcome(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    return null;
+  const candidate = value;
+  if (candidate.schemaVersion !== 1 || candidate.alias !== LOGIN_PROLOGUE_ALIAS || candidate.state !== "passed" && candidate.state !== LOGIN_PROLOGUE_BLOCKED || typeof candidate.startedAt !== "string" || typeof candidate.endedAt !== "string" || typeof candidate.elapsedMs !== "number" || !Array.isArray(candidate.steps)) {
+    return null;
+  }
+  return candidate;
+}
+function lockedE2eProofAllowed(tool, args, resolvedLockedTestIds2) {
+  if (tool === "cdp_lock_e2e_test")
+    return args.actionId === LOGIN_PROLOGUE_ALIAS;
+  if (tool === "cdp_run_e2e_suite") {
+    return resolvedLockedTestIds2?.length === 1 && resolvedLockedTestIds2[0] === LOGIN_PROLOGUE_ALIAS;
+  }
+  return false;
+}
+function isLoginRunnerRecoveryState(input) {
+  const outcome = readLoginPrologueOutcome(input.binding);
+  return Boolean(input.authority && outcome?.state === LOGIN_PROLOGUE_BLOCKED && outcome.role === ACTION_LOGIN_HELPER && outcome.actionId === LOGIN_PROLOGUE_ALIAS && outcome.runRecord?.status === "fail" && input.authority.runner == null && input.authority.bundle == null);
+}
+function loginPrologueNextAction(input) {
+  if (isLoginRunnerRecoveryState(input) && input.authority?.install != null && input.authority.metro != null && input.authority.device != null) {
+    return LOGIN_PROLOGUE_RECOVERY_SEQUENCE;
+  }
+  const outcome = readLoginPrologueOutcome(input.binding);
+  return outcome?.failure?.code === "LOGIN_ACTION_MISSING" || outcome?.failure?.code === "LOGIN_ACTION_ID_MISMATCH" ? `Restore the exact ${LOGIN_PROLOGUE_ALIAS} action, then run cdp_login_prologue.` : LOGIN_PROLOGUE_RETRY_ACTION;
+}
+function isLoginRunnerRecoveryOperation(input) {
+  return isLoginRunnerRecoveryState(input) && input.mutation && input.tool === "device_snapshot" && input.args.action === "open" && input.args.attachOnly === true;
+}
+function latchedOperationAllowed(binding, authority, tool, args, mutation) {
+  if (isLoginRunnerRecoveryOperation({ binding, authority, tool, args, mutation }))
+    return true;
+  if (tool === "cdp_login_prologue")
+    return true;
+  if (tool === "cdp_disconnect")
+    return true;
+  if (tool === "device_snapshot" && args.action === "close")
+    return true;
+  if (tool === "device_record" && (args.action === "stop" || args.action === "status"))
+    return true;
+  if (tool === "observe" && (args.action === "stop" || args.action === "status"))
+    return true;
+  if (tool === "proof_capture" && (args.action === "discard" || args.action === "status")) {
+    return true;
+  }
+  return tool === "rn_session" && (args.action === "release" || args.action === "stop_metro" || args.action === "cancel_handoff" || args.action === "recover_arbiter" && args.confirmed === true || args.action === "status");
+}
+function tokenMatches(expected, supplied) {
+  if (!expected || expected.length < 16 || !supplied || supplied.length < 16)
+    return false;
+  const expectedHash = createHash8("sha256").update(expected).digest();
+  const suppliedHash = createHash8("sha256").update(supplied).digest();
+  return timingSafeEqual4(expectedHash, suppliedHash);
+}
+function inspectLoginPrologueGuard(input) {
+  const outcome = readLoginPrologueOutcome(input.binding);
+  if (outcome?.state !== LOGIN_PROLOGUE_BLOCKED || !input.mutation || latchedOperationAllowed(input.binding, input.authority, input.tool, input.args, input.mutation) || lockedE2eProofAllowed(input.tool, input.args, input.resolvedLockedTestIds)) {
+    return { blocked: false };
+  }
+  return {
+    blocked: true,
+    suppliedOverride: typeof input.args.supervisorOverrideToken === "string" ? input.args.supervisorOverrideToken : void 0
+  };
+}
+function authorizeLoginSupervisorOverride(input) {
+  if (!tokenMatches(input.expectedOverrideToken, input.suppliedOverrideToken))
+    return null;
+  return { tool: input.tool, usedAt: (input.now ?? (() => /* @__PURE__ */ new Date()))().toISOString() };
+}
+function appendLoginOverrideAudit(outcome, audit) {
+  return { ...outcome, overrides: [...outcome.overrides ?? [], audit].slice(-20) };
+}
+var LOGIN_PROLOGUE_ALIAS, LOGIN_PROLOGUE_BLOCKED, ACTION_LOGIN_HELPER, LOGIN_PROLOGUE_RECOVERY_SEQUENCE, LOGIN_PROLOGUE_RETRY_ACTION;
+var init_login_prologue = __esm({
+  "packages/rn-dev-agent-core/dist/domain/login-prologue.js"() {
+    "use strict";
+    LOGIN_PROLOGUE_ALIAS = "user-login";
+    LOGIN_PROLOGUE_BLOCKED = "LOGIN_PROLOGUE_BLOCKED";
+    ACTION_LOGIN_HELPER = "ACTION_LOGIN_HELPER";
+    LOGIN_PROLOGUE_RECOVERY_SEQUENCE = 'Run device_snapshot with action "open" and attachOnly true on the already-bound app, rerun cdp_login_prologue, then repeat the same attach-only open before device_press or device_fill.';
+    LOGIN_PROLOGUE_RETRY_ACTION = "Resolve the reported user-login failure, then rerun cdp_login_prologue; attach-only runner recovery is not authorized for this blocked state.";
+  }
+});
+
 // packages/rn-dev-agent-core/dist/session/recovery-remedy.js
 function sessionRecoveryRemedy(lead) {
   return `${lead} Interactive: reconnect the transport with /mcp. Headless: run ${HEADLESS_SESSION_RECOVERY_COMMAND} from the app root. Both run the same proven-dead startup cleanup and neither releases a live or unprovable owner. ${SESSION_RECOVERY_DOCS}.`;
@@ -22193,7 +22281,7 @@ var init_recovery_remedy = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/session/registry.js
-import { createHash as createHash8, randomBytes as randomBytes4, timingSafeEqual as timingSafeEqual4 } from "node:crypto";
+import { createHash as createHash9, randomBytes as randomBytes4, timingSafeEqual as timingSafeEqual5 } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
 function referencesMetroEvidenceSocket(value, path) {
   if (Array.isArray(value)) {
@@ -22210,7 +22298,7 @@ function authorityRemedyNextAction(code) {
   return errorNextActions[code];
 }
 function shortAuthorityIdentity(value) {
-  return createHash8("sha256").update(JSON.stringify(value)).digest("hex").slice(0, 16);
+  return createHash9("sha256").update(JSON.stringify(value)).digest("hex").slice(0, 16);
 }
 function authorityErrorMeta(error2) {
   return {
@@ -22283,6 +22371,30 @@ function readStartupCleanupBlocker(bindingsJson) {
     ...typeof record2.nextAction === "string" ? { nextAction: record2.nextAction } : {}
   };
 }
+function readBlockedLoginPrologue(bindingsJson) {
+  try {
+    const bindings = JSON.parse(bindingsJson);
+    const outcome = readLoginPrologueOutcome(bindings.loginPrologue);
+    if (outcome?.state !== LOGIN_PROLOGUE_BLOCKED)
+      return void 0;
+    return {
+      state: LOGIN_PROLOGUE_BLOCKED,
+      ...outcome.failure?.code ? { failureCode: outcome.failure.code } : {},
+      nextAction: loginPrologueNextAction({
+        binding: outcome,
+        authority: {
+          install: bindings.install,
+          metro: bindings.metro,
+          bundle: bindings.bundle,
+          device: bindings.device,
+          runner: bindings.runner
+        }
+      })
+    };
+  } catch {
+    return void 0;
+  }
+}
 function bindingsRunnerPresent(bindingsJson) {
   const bindings = JSON.parse(bindingsJson);
   return Boolean(bindings.runner && typeof bindings.runner === "object");
@@ -22311,6 +22423,7 @@ var init_registry = __esm({
     "use strict";
     init_authority_store();
     init_cleanup_identity();
+    init_login_prologue();
     init_declared_source_contract();
     init_metro_binding();
     init_recovery_remedy();
@@ -22568,8 +22681,8 @@ var init_registry = __esm({
           const row = this.#requireRecoverableSession(session2);
           const bindings = JSON.parse(row.bindings_json);
           const expected = Buffer.from(String(bindings.recoveryCapabilityHash ?? ""), "hex");
-          const actual = createHash8("sha256").update(capability).digest();
-          if (expected.length !== actual.length || !timingSafeEqual4(expected, actual)) {
+          const actual = createHash9("sha256").update(capability).digest();
+          if (expected.length !== actual.length || !timingSafeEqual5(expected, actual)) {
             throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "blocked recovery capability is invalid");
           }
           const pendingHandoffs = this.#database.prepare(`SELECT handoff.handoff_id, handoff.claim_epoch, handoff.target_instance,
@@ -22673,8 +22786,8 @@ var init_registry = __esm({
           const row = this.#requireRecoverableSession(session2);
           const bindings = JSON.parse(row.bindings_json);
           const expected = Buffer.from(String(bindings.recoveryCapabilityHash ?? ""), "hex");
-          const actual = createHash8("sha256").update(capability).digest();
-          if (expected.length !== actual.length || !timingSafeEqual4(expected, actual)) {
+          const actual = createHash9("sha256").update(capability).digest();
+          if (expected.length !== actual.length || !timingSafeEqual5(expected, actual)) {
             throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "blocked recovery capability is invalid");
           }
           if (row.worker_instance !== worker.instanceId) {
@@ -23865,6 +23978,7 @@ var init_registry = __esm({
         const blocked = readStartupCleanupBlocker(row.bindings_json);
         const sameAppRoot = row.worktree_key === input.worktreeKey && row.app_root_key === input.appRootKey;
         const sameSource2 = row.source_key === input.sourceKey;
+        const loginPrologue = sameAppRoot && sameSource2 ? readBlockedLoginPrologue(row.bindings_json) : void 0;
         return {
           owner: status === "match" ? "live" : status === "mismatch" ? "stale" : "unprovable",
           sameRoot: sameAppRoot && sameSource2,
@@ -23874,7 +23988,8 @@ var init_registry = __esm({
             session: row.session_id.slice(0, 12),
             ...ownerAppRoot === void 0 ? {} : { appRoot: ownerAppRoot }
           },
-          ...blocked ? { startupCleanupBlocked: blocked } : {}
+          ...blocked ? { startupCleanupBlocked: blocked } : {},
+          ...loginPrologue ? { loginPrologue } : {}
         };
       }
       #countAbandonedBlockedContenders(worktreeKey) {
@@ -23918,7 +24033,7 @@ var init_registry = __esm({
         const now = this.#now();
         const handoffId = randomBytes4(16).toString("hex");
         const token2 = randomBytes4(32).toString("base64url");
-        const tokenHash = createHash8("sha256").update(token2).digest("hex");
+        const tokenHash = createHash9("sha256").update(token2).digest("hex");
         this.#transaction(() => {
           const current = this.#requireSession(session2);
           let targetInstance = input.targetInstance;
@@ -24102,8 +24217,8 @@ var init_registry = __esm({
           const cleanup = bindings.handoffCleanup && typeof bindings.handoffCleanup === "object" ? bindings.handoffCleanup : null;
           const handoff = this.#database.prepare("SELECT token_hash, consumed_ms FROM handoffs WHERE handoff_id = ?").get(input.handoffId);
           const expected = Buffer.from(typeof handoff?.token_hash === "string" ? handoff.token_hash : "", "hex");
-          const actual = createHash8("sha256").update(input.token).digest();
-          const tokenMatches2 = expected.length === actual.length && timingSafeEqual4(expected, actual);
+          const actual = createHash9("sha256").update(input.token).digest();
+          const tokenMatches2 = expected.length === actual.length && timingSafeEqual5(expected, actual);
           if (!row || row.state !== "handoff_cleanup" || row.claim_epoch !== target.claimEpoch || row.worker_instance !== input.targetInstance || cleanup?.handoffId !== input.handoffId || cleanup?.targetSessionId !== target.sessionId || cleanup?.targetClaimEpoch !== target.claimEpoch || typeof handoff?.consumed_ms !== "number" || !tokenMatches2) {
             throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "handoff cleanup resumption requires the original handoff capability");
           }
@@ -24128,8 +24243,8 @@ var init_registry = __esm({
             throw new SessionAuthorityError("HANDOFF_TARGET_MISMATCH", "handoff target instance does not match");
           }
           const expected = Buffer.from(handoff.token_hash, "hex");
-          const actual = Buffer.from(createHash8("sha256").update(input.token).digest("hex"), "hex");
-          if (expected.length !== actual.length || !timingSafeEqual4(expected, actual)) {
+          const actual = Buffer.from(createHash9("sha256").update(input.token).digest("hex"), "hex");
+          if (expected.length !== actual.length || !timingSafeEqual5(expected, actual)) {
             throw new SessionAuthorityError("HANDOFF_TOKEN_INVALID", "handoff capability is invalid");
           }
           const session2 = asSession(this.#database.prepare(`SELECT session_id, state, claim_epoch, authority_version,
@@ -24425,7 +24540,7 @@ var init_registry = __esm({
           return null;
         const persisted = JSON.parse(row.receipt_json);
         const probe = persisted.probe;
-        if (!probe || createHash8("sha256").update(probe.capability).digest("hex") !== receipt2.runnerCapabilityHash) {
+        if (!probe || createHash9("sha256").update(probe.capability).digest("hex") !== receipt2.runnerCapabilityHash) {
           return null;
         }
         return probe;
@@ -24741,7 +24856,7 @@ var init_registry = __esm({
             }
             this.#database.prepare("DELETE FROM allocations WHERE service = ? AND worktree_key = ?").run(input.service, input.worktreeKey);
           }
-          const digest3 = createHash8("sha256").update(`${input.uid}\0${input.worktreeKey}\0${input.service}`).digest();
+          const digest3 = createHash9("sha256").update(`${input.uid}\0${input.worktreeKey}\0${input.service}`).digest();
           const preferred = digest3.readUInt32BE(0) % input.span;
           for (let offset = 0; offset < input.span; offset += 1) {
             const port = input.base + (preferred + offset) % input.span;
@@ -25015,8 +25130,8 @@ var init_registry = __esm({
           throw new SessionAuthorityError("HANDOFF_NOT_FOUND", "handoff does not exist");
         }
         const expected = Buffer.from(handoff.token_hash, "hex");
-        const actual = createHash8("sha256").update(input.token).digest();
-        if (expected.length !== actual.length || !timingSafeEqual4(expected, actual)) {
+        const actual = createHash9("sha256").update(input.token).digest();
+        if (expected.length !== actual.length || !timingSafeEqual5(expected, actual)) {
           throw new SessionAuthorityError("HANDOFF_TOKEN_INVALID", "handoff capability is invalid");
         }
         if (handoff.consumed_ms !== null) {
@@ -25138,7 +25253,7 @@ var init_registry = __esm({
          WHERE session_id = ? AND claim_epoch = ? AND resource_type = 'runner'`).get(session2.sessionId, session2.claimEpoch);
         const deviceClaim = this.#database.prepare(`SELECT resource_key FROM claims
          WHERE session_id = ? AND claim_epoch = ? AND resource_type = 'device'`).get(session2.sessionId, session2.claimEpoch);
-        const runnerCapabilityHash = typeof runner?.capability === "string" ? createHash8("sha256").update(runner.capability).digest("hex") : null;
+        const runnerCapabilityHash = typeof runner?.capability === "string" ? createHash9("sha256").update(runner.capability).digest("hex") : null;
         if (device?.platform !== platform || receipt2.sessionId !== session2.sessionId || receipt2.claimEpoch !== session2.claimEpoch || receipt2.sourceKey !== row.source_key || receipt2.worktreeKey !== row.worktree_key || receipt2.appRootKey !== row.app_root_key || receipt2.deviceId !== device.deviceId || receipt2.appId !== device.appId || receipt2.installGeneration !== install?.installGeneration || receipt2.artifactDigest !== install?.artifactDigest || receipt2.runnerInstanceId !== runner?.instanceId || receipt2.runnerPid !== runner?.pid || receipt2.runnerProcessBirth !== runner?.processBirth || receipt2.runnerPort !== runner?.port || receipt2.runnerClaim !== runnerClaim?.resource_key || receipt2.deviceClaim !== deviceClaim?.resource_key || receipt2.runnerCapabilityHash !== runnerCapabilityHash || typeof runner?.port !== "number" || typeof runner.capability !== "string" || typeof runner.instanceId !== "string" || typeof runner.pid !== "number" || typeof runner.processBirth !== "string" || typeof device?.deviceId !== "string" || typeof device.appId !== "string" || typeof install?.installGeneration !== "string") {
           throw new SessionAuthorityError("RUNNER_OWNERSHIP_MISMATCH", "snapshot receipt does not match exact persistent platform authority");
         }
@@ -25182,9 +25297,9 @@ var init_registry = __esm({
          WHERE session_id = ? AND claim_epoch = ? AND platform = ?`).run(session2.sessionId, session2.claimEpoch, platform);
       }
       #capabilityMatches(expected, actual) {
-        const expectedDigest = createHash8("sha256").update(expected).digest();
-        const actualDigest = createHash8("sha256").update(actual).digest();
-        return timingSafeEqual4(expectedDigest, actualDigest);
+        const expectedDigest = createHash9("sha256").update(expected).digest();
+        const actualDigest = createHash9("sha256").update(actual).digest();
+        return timingSafeEqual5(expectedDigest, actualDigest);
       }
       #recoveryHandleMatches(handle, actual, now) {
         if (typeof handle.token === "string" && typeof handle.expiresMs === "number" && handle.expiresMs >= now && this.#capabilityMatches(handle.token, actual)) {
@@ -26350,9 +26465,9 @@ var init_settle = __esm({
 // packages/rn-dev-agent-core/dist/agent-device-wrapper.js
 import { unlinkSync as unlinkSync6, rmSync as rmSync7 } from "node:fs";
 import { join as join18 } from "node:path";
-import { createHash as createHash9 } from "node:crypto";
+import { createHash as createHash10 } from "node:crypto";
 function getSessionFilePath() {
-  const projectId = createHash9("sha256").update(process.cwd()).digest("hex").slice(0, 12);
+  const projectId = createHash10("sha256").update(process.cwd()).digest("hex").slice(0, 12);
   return join18(getStateDir(), `session-${projectId}.json`);
 }
 function getActiveSession() {
@@ -29884,7 +29999,7 @@ function createDeviceSnapshotHandler(deps = {}) {
     if (action === "open") {
       let appId = args.appId;
       let autoDetected = false;
-      let reactNativeUiReady = null;
+      let reactNativeFiberVisible = null;
       if (!appId) {
         const platform2 = args.platform ?? "ios";
         appId = resolveBundleId(platform2) ?? void 0;
@@ -29963,7 +30078,7 @@ function createDeviceSnapshotHandler(deps = {}) {
             const envelope = JSON.parse(readiness.content[0]?.text ?? "{}");
             throw new Error(`${envelope.code ?? "ANDROID_UI_NOT_READY"}: ${envelope.error ?? "the app did not expose its UI through accessibility after launch"}`);
           }
-          reactNativeUiReady = deps.probeReactNativeUi ? await deps.probeReactNativeUi("android", deviceId, appId).catch(() => false) : null;
+          reactNativeFiberVisible = deps.probeReactNativeUi ? await deps.probeReactNativeUi("android", deviceId, appId).catch(() => false) : null;
         }
       } catch (err) {
         let cleanupFailure;
@@ -30083,19 +30198,19 @@ function createDeviceSnapshotHandler(deps = {}) {
         platform,
         deviceId,
         appId,
-        readiness: platform === "android" ? {
+        visibility: platform === "android" ? {
           appForeground: true,
-          accessibilityUi: true,
-          reactNativeUi: reactNativeUiReady === true ? "ready" : "unverified"
+          accessibilityUi: "visible",
+          reactNativeFiber: reactNativeFiberVisible === true ? "visible" : "unverified"
         } : { appForeground: true }
       };
-      const readinessWarning = platform === "android" && reactNativeUiReady !== true ? "Android app accessibility is ready, but the React Native helper boundary is unverified; run cdp_status and require capabilities.fiberTree=true before treating launch as RN-ready" : null;
+      const visibilityWarning = platform === "android" && reactNativeFiberVisible !== true ? "Android app accessibility is visible, but React Native fiber visibility is unverified; capabilities.fiberTree=true confirms fiber visibility only and does not prove UI-control readiness" : null;
       let result2;
-      if (autoDetected || foreign || readinessWarning) {
+      if (autoDetected || foreign || visibilityWarning) {
         const warning = [
           autoDetected ? `appId auto-detected from app.json: ${appId}` : null,
           foreign ? foreign.warning : null,
-          readinessWarning
+          visibilityWarning
         ].filter(Boolean).join("; ");
         const meta = { ...foreign ? foreign.meta : {} };
         if (foreignDetectMs !== void 0)
@@ -31709,7 +31824,7 @@ var init_metro_origin = __esm({
 
 // packages/rn-dev-agent-core/dist/session/install-authority.js
 import { execFileSync as execFileSync12 } from "node:child_process";
-import { createHash as createHash10 } from "node:crypto";
+import { createHash as createHash11 } from "node:crypto";
 import { lstatSync as lstatSync10, readFileSync as readFileSync19, readdirSync as readdirSync5, readlinkSync as readlinkSync4, realpathSync as realpathSync11, statSync as statSync9 } from "node:fs";
 import { isAbsolute as isAbsolute6, join as join22, relative as relative4 } from "node:path";
 function runText(command, args) {
@@ -31729,7 +31844,7 @@ function runBuffer(command, args) {
   });
 }
 function digest2(parts) {
-  const hash = createHash10("sha256");
+  const hash = createHash11("sha256");
   for (const part of parts) {
     hash.update(`${part.byteLength}:`);
     hash.update(part);
@@ -31924,94 +32039,6 @@ var init_install_reissue = __esm({
     "use strict";
     init_install_authority();
     init_registry();
-  }
-});
-
-// packages/rn-dev-agent-core/dist/domain/login-prologue.js
-import { createHash as createHash11, timingSafeEqual as timingSafeEqual5 } from "node:crypto";
-function readLoginPrologueOutcome(value) {
-  if (!value || typeof value !== "object" || Array.isArray(value))
-    return null;
-  const candidate = value;
-  if (candidate.schemaVersion !== 1 || candidate.alias !== LOGIN_PROLOGUE_ALIAS || candidate.state !== "passed" && candidate.state !== LOGIN_PROLOGUE_BLOCKED || typeof candidate.startedAt !== "string" || typeof candidate.endedAt !== "string" || typeof candidate.elapsedMs !== "number" || !Array.isArray(candidate.steps)) {
-    return null;
-  }
-  return candidate;
-}
-function lockedE2eProofAllowed(tool, args, resolvedLockedTestIds2) {
-  if (tool === "cdp_lock_e2e_test")
-    return args.actionId === LOGIN_PROLOGUE_ALIAS;
-  if (tool === "cdp_run_e2e_suite") {
-    return resolvedLockedTestIds2?.length === 1 && resolvedLockedTestIds2[0] === LOGIN_PROLOGUE_ALIAS;
-  }
-  return false;
-}
-function isLoginRunnerRecoveryState(input) {
-  const outcome = readLoginPrologueOutcome(input.binding);
-  return Boolean(input.authority && outcome?.state === LOGIN_PROLOGUE_BLOCKED && outcome.role === ACTION_LOGIN_HELPER && outcome.actionId === LOGIN_PROLOGUE_ALIAS && outcome.runRecord?.status === "fail" && input.authority.runner == null && input.authority.bundle == null);
-}
-function loginPrologueNextAction(input) {
-  if (isLoginRunnerRecoveryState(input) && input.authority?.install != null && input.authority.metro != null && input.authority.device != null) {
-    return LOGIN_PROLOGUE_RECOVERY_SEQUENCE;
-  }
-  const outcome = readLoginPrologueOutcome(input.binding);
-  return outcome?.failure?.code === "LOGIN_ACTION_MISSING" || outcome?.failure?.code === "LOGIN_ACTION_ID_MISMATCH" ? `Restore the exact ${LOGIN_PROLOGUE_ALIAS} action, then run cdp_login_prologue.` : LOGIN_PROLOGUE_RETRY_ACTION;
-}
-function isLoginRunnerRecoveryOperation(input) {
-  return isLoginRunnerRecoveryState(input) && input.mutation && input.tool === "device_snapshot" && input.args.action === "open" && input.args.attachOnly === true;
-}
-function latchedOperationAllowed(binding, authority, tool, args, mutation) {
-  if (isLoginRunnerRecoveryOperation({ binding, authority, tool, args, mutation }))
-    return true;
-  if (tool === "cdp_login_prologue")
-    return true;
-  if (tool === "cdp_disconnect")
-    return true;
-  if (tool === "device_snapshot" && args.action === "close")
-    return true;
-  if (tool === "device_record" && (args.action === "stop" || args.action === "status"))
-    return true;
-  if (tool === "observe" && (args.action === "stop" || args.action === "status"))
-    return true;
-  if (tool === "proof_capture" && (args.action === "discard" || args.action === "status")) {
-    return true;
-  }
-  return tool === "rn_session" && (args.action === "release" || args.action === "stop_metro" || args.action === "cancel_handoff" || args.action === "recover_arbiter" && args.confirmed === true || args.action === "status");
-}
-function tokenMatches(expected, supplied) {
-  if (!expected || expected.length < 16 || !supplied || supplied.length < 16)
-    return false;
-  const expectedHash = createHash11("sha256").update(expected).digest();
-  const suppliedHash = createHash11("sha256").update(supplied).digest();
-  return timingSafeEqual5(expectedHash, suppliedHash);
-}
-function inspectLoginPrologueGuard(input) {
-  const outcome = readLoginPrologueOutcome(input.binding);
-  if (outcome?.state !== LOGIN_PROLOGUE_BLOCKED || !input.mutation || latchedOperationAllowed(input.binding, input.authority, input.tool, input.args, input.mutation) || lockedE2eProofAllowed(input.tool, input.args, input.resolvedLockedTestIds)) {
-    return { blocked: false };
-  }
-  return {
-    blocked: true,
-    suppliedOverride: typeof input.args.supervisorOverrideToken === "string" ? input.args.supervisorOverrideToken : void 0
-  };
-}
-function authorizeLoginSupervisorOverride(input) {
-  if (!tokenMatches(input.expectedOverrideToken, input.suppliedOverrideToken))
-    return null;
-  return { tool: input.tool, usedAt: (input.now ?? (() => /* @__PURE__ */ new Date()))().toISOString() };
-}
-function appendLoginOverrideAudit(outcome, audit) {
-  return { ...outcome, overrides: [...outcome.overrides ?? [], audit].slice(-20) };
-}
-var LOGIN_PROLOGUE_ALIAS, LOGIN_PROLOGUE_BLOCKED, ACTION_LOGIN_HELPER, LOGIN_PROLOGUE_RECOVERY_SEQUENCE, LOGIN_PROLOGUE_RETRY_ACTION;
-var init_login_prologue = __esm({
-  "packages/rn-dev-agent-core/dist/domain/login-prologue.js"() {
-    "use strict";
-    LOGIN_PROLOGUE_ALIAS = "user-login";
-    LOGIN_PROLOGUE_BLOCKED = "LOGIN_PROLOGUE_BLOCKED";
-    ACTION_LOGIN_HELPER = "ACTION_LOGIN_HELPER";
-    LOGIN_PROLOGUE_RECOVERY_SEQUENCE = 'Run device_snapshot with action "open" and attachOnly true on the already-bound app, rerun cdp_login_prologue, then repeat the same attach-only open before device_press or device_fill.';
-    LOGIN_PROLOGUE_RETRY_ACTION = "Resolve the reported user-login failure, then rerun cdp_login_prologue; attach-only runner recovery is not authorized for this blocked state.";
   }
 });
 
@@ -33193,10 +33220,6 @@ function createAuthorityGate(runtime, dependencies) {
       const runtimeStatus = runtime.status();
       const loginAuthority = runtimeStatus.available ? loginRunnerRecoveryAuthority(runtimeStatus) : void 0;
       const priorLoginPrologueOutcome = readLoginPrologueOutcome(runtimeStatus.available ? runtimeStatus.bindings.loginPrologue : void 0);
-      const priorLoginRecoveryAvailable = isLoginRunnerRecoveryState({
-        binding: priorLoginPrologueOutcome,
-        authority: loginAuthority
-      });
       const loginRunnerRecovery = isLoginRunnerRecoveryOperation({
         binding: runtimeStatus.available ? runtimeStatus.bindings.loginPrologue : void 0,
         authority: loginAuthority,
@@ -34126,7 +34149,7 @@ function createAuthorityGate(runtime, dependencies) {
             return authorityFailure(new AggregateError([error2, rollbackError], "PROOF_AUTHORITY_MISMATCH: finalized proof cleanup is unconfirmed"));
           }
         }
-        if (tool === "cdp_login_prologue" && authorityErrorCode(error2) === "RUNNER_OWNERSHIP_MISMATCH" && !loginPrologueHandlerStarted && priorLoginRecoveryAvailable && priorLoginPrologueOutcome && registry2 && operation) {
+        if (tool === "cdp_login_prologue" && !loginPrologueHandlerStarted && priorLoginPrologueOutcome?.state === LOGIN_PROLOGUE_BLOCKED && priorLoginPrologueOutcome.failure?.code !== "LOGIN_PROLOGUE_IN_PROGRESS" && registry2 && operation) {
           const pendingStatus = runtime.status();
           if (pendingStatus.available) {
             registry2.verifyOperation(operation);
@@ -95563,7 +95586,7 @@ var init_index = __esm({
       maxWidth: external_exports.number().int().min(0).optional().describe("Downscale image so width does not exceed this many pixels. 0 disables resize. Default 800 (saves ~46% on iPhone 15/17 Pro screenshots without losing label readability)."),
       quality: external_exports.number().int().min(1).max(100).optional().describe("JPEG compression quality (1-100). Only applied to .jpg/.jpeg files. Default 85.")
     }, createDeviceScreenshotHandler(getClient));
-    trackedTool("device_snapshot", "Manage exact device sessions and capture UI snapshots even when a Dev Client remains at its native picker. Raw control requires exact install/device/runner authority but not a managed Metro target; meta.originAuthority explicitly reports proven or not-proven, and not-proven snapshots are never strict source evidence. action=open starts a session (required before other device_ tools), waits for Android app accessibility, and reports readiness.reactNativeUi=ready only when a matching live CDP helper confirms the RN fiber boundary; that field proves fiber visibility, never mutating UI control. Pass deviceId to select an exact iOS simulator UDID or Android adb serial when devices run in parallel. action=snapshot returns the accessibility tree with @ref identifiers for device_press/device_fill. action=close ends the session. Use attachOnly=true on action=open to skip launching the app when it is already running (avoids relaunch-induced bundle races); liveness is checked only on the resolved exact device and refuses when that identity is unavailable. Only a fresh failed user-login RunRecord with runner and bundle authority absent may cross the latch through an exact attach-only open, and stable Metro authority is required before and after; the open does not clear the latch.", {
+    trackedTool("device_snapshot", "Manage exact device sessions and capture UI snapshots even when a Dev Client remains at its native picker. Raw control requires exact install/device/runner authority but not a managed Metro target; meta.originAuthority explicitly reports proven or not-proven, and not-proven snapshots are never strict source evidence. action=open starts a session (required before other device_ tools), waits for Android app accessibility, and reports visibility.reactNativeFiber=visible only when a matching live CDP helper confirms the RN fiber boundary; visibility is health evidence, never UI-control readiness. Pass deviceId to select an exact iOS simulator UDID or Android adb serial when devices run in parallel. action=snapshot returns the accessibility tree with @ref identifiers for device_press/device_fill. action=close ends the session. Use attachOnly=true on action=open to skip launching the app when it is already running (avoids relaunch-induced bundle races); liveness is checked only on the resolved exact device and refuses when that identity is unavailable. Only a fresh failed user-login RunRecord with runner and bundle authority absent may cross the latch through an exact attach-only open, and stable Metro authority is required before and after; the open does not clear the latch.", {
       action: external_exports.enum(["open", "close", "snapshot"]).default("snapshot").describe("open: start session for an app. snapshot: capture UI tree with element refs. close: end session."),
       appId: external_exports.string().optional().describe("App bundle ID for open; omitted values come only from the exact active session."),
       platform: external_exports.enum(["ios", "android"]).optional().describe("Target platform \u2014 used with action=open to select device"),

@@ -507,6 +507,76 @@ test('GH #792: the headless recovery path releases a wedged root from a real com
   assert.equal(run('report').sameRootOwner, 'absent');
 });
 
+test('session-doctor reports the live login latch and its executable remedy', () => {
+  const stateHome = temporaryStateHome();
+  const appRoot = join(stateHome, 'app');
+  mkdirSync(appRoot);
+  writeFileSync(join(appRoot, 'package.json'), '{"name":"login-latch-fixture"}');
+  const environment = {
+    ...process.env,
+    XDG_STATE_HOME: stateHome,
+    RN_DEV_AGENT_DECLARED_ROOT: appRoot,
+    RN_DEV_AGENT_DECLARED_MANIFESTS: 'package.json',
+  };
+  const source = resolveSourceIdentity(appRoot, {
+    declaredRoot: appRoot,
+    declaredManifests: ['package.json'],
+  });
+  const layout = createAuthorityStateLayout(join(stateHome, 'rn-dev-agent'));
+  const registry = openSessionRegistry(layout.registry, { ownerStatus: inspectSessionOwner });
+  const self = probeProcessBirth(process.pid);
+  assert.equal(self.status, 'present');
+  const bindings = {
+    install: { generation: 'install-1' },
+    metro: { instanceId: 'metro-1' },
+    device: { deviceId: 'device-1' },
+    runner: null,
+    bundle: null,
+    loginPrologue: {
+      schemaVersion: 1,
+      state: 'LOGIN_PROLOGUE_BLOCKED',
+      role: 'ACTION_LOGIN_HELPER',
+      alias: 'user-login',
+      actionId: 'user-login',
+      startedAt: '2026-08-26T10:00:00.000Z',
+      endedAt: '2026-08-26T10:00:01.000Z',
+      elapsedMs: 1_000,
+      steps: [],
+      inventory: { count: 1, actionIds: ['user-login'] },
+      runRecord: { status: 'fail' },
+      failure: { code: 'TESTID_NOT_FOUND', detail: 'login control missing' },
+    },
+  };
+  const owner = registry.createSession({
+    sessionId: 'login-latch-owner',
+    sourceKey: source.sourceKey,
+    worktreeKey: source.worktreeKey,
+    appRootKey: source.appRootKey,
+    supervisor: { pid: process.pid, token: self.birth.token },
+    source: { ...source, model: 'grouped-v1' },
+    bindings,
+  });
+  registry.claimResources(owner, [{ type: 'source', key: source.worktreeKey }]);
+  registry.updateBindings(owner, { state: 'source_bound', bindings });
+  registry.close();
+
+  const payload = JSON.parse(
+    execFileSync(process.execPath, [join(distRoot, 'session-doctor.js'), 'report', '--json'], {
+      cwd: appRoot,
+      encoding: 'utf8',
+      env: environment,
+    }),
+  ) as Record<string, unknown>;
+  assert.equal(payload.sameRootOwner, 'live');
+  assert.deepEqual(payload.loginPrologue, {
+    state: 'LOGIN_PROLOGUE_BLOCKED',
+    failureCode: 'TESTID_NOT_FOUND',
+    nextAction:
+      'Run device_snapshot with action "open" and attachOnly true on the already-bound app, rerun cdp_login_prologue, then repeat the same attach-only open before device_press or device_fill.',
+  });
+  assert.equal(payload.remedy, (payload.loginPrologue as { nextAction: string }).nextAction);
+});
+
 test('GH #792: every recovery remedy names an executable path for interactive and headless clients', () => {
   const owners = new Map<string, string>();
   const root = temporaryStateHome();

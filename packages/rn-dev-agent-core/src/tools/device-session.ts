@@ -294,7 +294,7 @@ export function createDeviceSnapshotHandler(
     if (action === 'open') {
       let appId = args.appId;
       let autoDetected = false;
-      let reactNativeUiReady: boolean | null = null;
+      let reactNativeFiberVisible: boolean | null = null;
 
       if (!appId) {
         const platform = args.platform ?? 'ios';
@@ -444,7 +444,7 @@ export function createDeviceSnapshotHandler(
               `${envelope.code ?? 'ANDROID_UI_NOT_READY'}: ${envelope.error ?? 'the app did not expose its UI through accessibility after launch'}`,
             );
           }
-          reactNativeUiReady = deps.probeReactNativeUi
+          reactNativeFiberVisible = deps.probeReactNativeUi
             ? await deps.probeReactNativeUi('android', deviceId, appId).catch(() => false)
             : null;
         }
@@ -616,25 +616,26 @@ export function createDeviceSnapshotHandler(
         platform,
         deviceId,
         appId,
-        readiness:
+        visibility:
           platform === 'android'
             ? {
                 appForeground: true,
-                accessibilityUi: true,
-                reactNativeUi: reactNativeUiReady === true ? 'ready' : ('unverified' as const),
+                accessibilityUi: 'visible' as const,
+                reactNativeFiber:
+                  reactNativeFiberVisible === true ? 'visible' : ('unverified' as const),
               }
             : { appForeground: true },
       };
-      const readinessWarning =
-        platform === 'android' && reactNativeUiReady !== true
-          ? 'Android app accessibility is ready, but the React Native helper boundary is unverified; run cdp_status and require capabilities.fiberTree=true before treating launch as RN-ready'
+      const visibilityWarning =
+        platform === 'android' && reactNativeFiberVisible !== true
+          ? 'Android app accessibility is visible, but React Native fiber visibility is unverified; capabilities.fiberTree=true confirms fiber visibility only and does not prove UI-control readiness'
           : null;
       let result: ToolResult;
-      if (autoDetected || foreign || readinessWarning) {
+      if (autoDetected || foreign || visibilityWarning) {
         const warning = [
           autoDetected ? `appId auto-detected from app.json: ${appId}` : null,
           foreign ? foreign.warning : null,
-          readinessWarning,
+          visibilityWarning,
         ]
           .filter(Boolean)
           .join('; ');

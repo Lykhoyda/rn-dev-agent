@@ -2765,8 +2765,8 @@ test('a real failed login replay can rebind the same runner and discharge the la
   const recoveryMetroProbes = [];
   const gate = createAuthorityGate(runtime, {
     probe: async ({ axis, phase, tool }) => {
-      if (tool === 'device_snapshot' && axis === 'M') {
-        recoveryMetroProbes.push(`${phase}:${axis}`);
+      if (axis === 'M' && (tool === 'device_snapshot' || tool === 'cdp_login_prologue')) {
+        if (tool === 'device_snapshot') recoveryMetroProbes.push(`${phase}:${axis}`);
         if (!metroHealthy) {
           throw new SessionAuthorityError('METRO_AUTHORITY_MISMATCH', 'stale Metro authority');
         }
@@ -2915,6 +2915,13 @@ test('a real failed login replay can rebind the same runner and discharge the la
       'Rerun cdp_login_prologue; after it passes, repeat this attach-only open before device_press or device_fill.',
   });
   assert.equal(status.bindings.loginPrologue.state, 'LOGIN_PROLOGUE_BLOCKED');
+
+  metroHealthy = false;
+  const refusedRetry = JSON.parse((await login({ projectRoot: project.root })).content[0].text);
+  assert.equal(refusedRetry.code, 'METRO_AUTHORITY_MISMATCH');
+  assert.equal(status.bindings.loginPrologue.failure.code, 'TESTID_NOT_FOUND');
+  assert.equal(project.readSidecar('user-login').runHistory.length, 1);
+  metroHealthy = true;
 
   const passed = JSON.parse((await login({ projectRoot: project.root })).content[0].text);
   assert.equal(passed.ok, true);

@@ -9,6 +9,11 @@ import {
   hasCompleteRecorderCleanupIdentity,
   hasCompleteRunnerCleanupIdentity,
 } from './cleanup-identity.js';
+import {
+  LOGIN_PROLOGUE_BLOCKED,
+  loginPrologueNextAction,
+  readLoginPrologueOutcome,
+} from '../domain/login-prologue.js';
 import { NON_GIT_DECLARATION_NEXT_ACTION } from './declared-source-contract.js';
 import { probeMetroListener } from './metro-binding.js';
 import {
@@ -264,6 +269,11 @@ export interface SourceOwnershipInspection {
    */
   holder?: { session: string; appRoot?: string };
   startupCleanupBlocked?: StartupCleanupBlocker;
+  loginPrologue?: {
+    state: typeof LOGIN_PROLOGUE_BLOCKED;
+    failureCode?: string;
+    nextAction: string;
+  };
 }
 
 export interface RecoveryRequirementInspection {
@@ -444,6 +454,32 @@ function readStartupCleanupBlocker(bindingsJson: string): StartupCleanupBlocker 
     reason: record.reason,
     ...(typeof record.nextAction === 'string' ? { nextAction: record.nextAction } : {}),
   };
+}
+
+function readBlockedLoginPrologue(
+  bindingsJson: string,
+): NonNullable<SourceOwnershipInspection['loginPrologue']> | undefined {
+  try {
+    const bindings = JSON.parse(bindingsJson) as Record<string, unknown>;
+    const outcome = readLoginPrologueOutcome(bindings.loginPrologue);
+    if (outcome?.state !== LOGIN_PROLOGUE_BLOCKED) return undefined;
+    return {
+      state: LOGIN_PROLOGUE_BLOCKED,
+      ...(outcome.failure?.code ? { failureCode: outcome.failure.code } : {}),
+      nextAction: loginPrologueNextAction({
+        binding: outcome,
+        authority: {
+          install: bindings.install,
+          metro: bindings.metro,
+          bundle: bindings.bundle,
+          device: bindings.device,
+          runner: bindings.runner,
+        },
+      }),
+    };
+  } catch {
+    return undefined;
+  }
 }
 
 function bindingsRunnerPresent(bindingsJson: string): boolean {
@@ -3281,6 +3317,8 @@ export class SessionRegistry {
     const sameAppRoot =
       row.worktree_key === input.worktreeKey && row.app_root_key === input.appRootKey;
     const sameSource = row.source_key === input.sourceKey;
+    const loginPrologue =
+      sameAppRoot && sameSource ? readBlockedLoginPrologue(row.bindings_json) : undefined;
     return {
       owner: status === 'match' ? 'live' : status === 'mismatch' ? 'stale' : 'unprovable',
       sameRoot: sameAppRoot && sameSource,
@@ -3295,6 +3333,7 @@ export class SessionRegistry {
         ...(ownerAppRoot === undefined ? {} : { appRoot: ownerAppRoot }),
       },
       ...(blocked ? { startupCleanupBlocked: blocked } : {}),
+      ...(loginPrologue ? { loginPrologue } : {}),
     };
   }
 

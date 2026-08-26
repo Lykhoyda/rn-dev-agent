@@ -8831,6 +8831,13 @@ var init_cleanup_identity = __esm({
   }
 });
 
+// packages/rn-dev-agent-core/dist/domain/login-prologue.js
+var init_login_prologue = __esm({
+  "packages/rn-dev-agent-core/dist/domain/login-prologue.js"() {
+    "use strict";
+  }
+});
+
 // packages/rn-dev-agent-core/dist/session/declared-source-contract.js
 var DECLARED_ROOT_ENV, DECLARED_MANIFESTS_ENV, NON_GIT_DECLARATION_NEXT_ACTION;
 var init_declared_source_contract = __esm({
@@ -9044,6 +9051,7 @@ var init_registry = __esm({
     "use strict";
     init_authority_store();
     init_cleanup_identity();
+    init_login_prologue();
     init_declared_source_contract();
     init_metro_binding();
     init_recovery_remedy();
@@ -9825,13 +9833,6 @@ var init_install_reissue = __esm({
     "use strict";
     init_install_authority();
     init_registry();
-  }
-});
-
-// packages/rn-dev-agent-core/dist/domain/login-prologue.js
-var init_login_prologue = __esm({
-  "packages/rn-dev-agent-core/dist/domain/login-prologue.js"() {
-    "use strict";
   }
 });
 
