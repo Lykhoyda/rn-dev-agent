@@ -43,7 +43,7 @@ import { createRepairActionHandler } from './tools/repair-action.js';
 import { createSaveAsActionHandler } from './tools/save-as-action.js';
 import { createRunActionHandler } from './tools/run-action.js';
 import { createLoginPrologueHandler } from './tools/login-prologue.js';
-import { unwrapTree } from './tools/cdp-replay-dispatch.js';
+import { replayTreeData, unwrapTree } from './tools/cdp-replay-dispatch.js';
 import type { CdpReplayDeps } from './tools/cdp-replay-dispatch.js';
 import { ReplayDispatchError } from './domain/cdp-flow-replay.js';
 import { createDispatchHandler } from './tools/dispatch.js';
@@ -382,14 +382,22 @@ const makeReplayDeps = (_args?: unknown, signal?: AbortSignal): CdpReplayDeps | 
               ...(interactiveOnly ? { interactiveOnly: true } : {}),
             })
           ).content[0].text,
-        ) as { ok?: boolean; data?: unknown };
+        ) as {
+          ok?: boolean;
+          code?: string;
+          error?: string;
+          data?: unknown;
+          meta?: Record<string, unknown>;
+        };
       let env = await fetchTree(false);
+      let data = replayTreeData(env);
       // Retry with the salient digest when the full filtered payload exceeds the helper bound.
-      const d = env.ok ? (env.data as Record<string, unknown> | null) : null;
+      const d = data as Record<string, unknown> | null;
       if (d && typeof d === 'object' && '__agent_truncated' in d) {
         env = await fetchTree(true);
+        data = replayTreeData(env);
       }
-      return env.ok ? unwrapTree(env.data) : null;
+      return unwrapTree(data);
     },
     frontmostFor: async (id: string) => {
       const result = await getClient().evaluate(
@@ -3483,7 +3491,7 @@ trackedTool(
 
 trackedTool(
   'maestro_test_all',
-  'Discover and run all Maestro flows in .rn-agent/actions/ as a regression suite. Returns per-flow pass/fail with durations. Use for CI or after refactoring to verify no regressions. Pass flowDir to override the default directory.',
+  'Discover and run all Maestro flows in .rn-agent/actions/ as a regression suite. Owned iOS learned actions use the same React-tree/XCTest proof planner as maestro_run; other suites keep their native runner path. Returns per-flow pass/fail with durations. Use for CI or after refactoring to verify no regressions. Pass flowDir to override the default directory.',
   {
     platform: z
       .enum(['ios', 'android'])
@@ -3514,7 +3522,7 @@ trackedTool(
       .describe('Timeout per flow in ms'),
     stopOnFailure: z.boolean().default(false).describe('Stop after first failure'),
   },
-  createMaestroTestAllHandler(),
+  createMaestroTestAllHandler({ runFlow: maestroRunHandler }),
 );
 
 // M6 / Phase 112 (D669): Object.freeze test recorder.

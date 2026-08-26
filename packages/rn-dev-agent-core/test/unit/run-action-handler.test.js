@@ -680,6 +680,38 @@ test('run-action: TIMEOUT failure does NOT invoke repair (phase 1 scope)', async
   assert.equal(sidecar.runHistory[0].failureCode, 'TIMEOUT');
 });
 
+test('run-action: APP_HAS_REDBOX tree failure never enters selector repair', async () => {
+  project.seedAction('demo', fixtureYaml({ id: 'demo', selectors: ['submit'] }));
+
+  let repairCalled = false;
+  const handler = createRunActionHandler({
+    maestroRun: fakeMaestroRun([
+      {
+        ok: false,
+        code: 'APP_HAS_REDBOX',
+        error: 'App is showing an error screen.',
+        meta: {
+          proofDomain: 'react-tree',
+          treeEnvelope: { ok: true, warning: 'APP_HAS_REDBOX' },
+        },
+      },
+    ]),
+    repairAction: async () => {
+      repairCalled = true;
+      return { content: [{ type: 'text', text: JSON.stringify(REPAIR_PATCHED_ENV) }] };
+    },
+  });
+  const result = await handler({ actionId: 'demo', projectRoot: project.root });
+
+  assert.equal(result.isError, true);
+  assert.equal(repairCalled, false);
+  const env = JSON.parse(result.content[0].text);
+  assert.equal(env.code, 'APP_HAS_REDBOX');
+  assert.deepEqual(env.meta.treeEnvelope, { ok: true, warning: 'APP_HAS_REDBOX' });
+  assert.equal(env.meta.autoRepair.attempted, false);
+  assert.equal(env.meta.autoRepair.refusedReason, 'NOT_REPAIRABLE_KIND');
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // trigger annotation
 // ─────────────────────────────────────────────────────────────────────────────

@@ -769,6 +769,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
           `cdp_run_action: ${args.actionId} refused replay: ${firstFailureDetail}`,
           typedCode,
           {
+            ...firstEnv.meta,
             actionId: args.actionId,
             failureKind: typedCode,
             deviceAuthority: firstDeviceAuthority,

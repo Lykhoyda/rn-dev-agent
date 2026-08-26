@@ -4,6 +4,8 @@ import {
   collectTestIds,
   isExactPresent,
   buildCdpDispatch,
+  replayTreeData,
+  runCdpReplayCommands,
   unwrapTree,
 } from '../../dist/tools/cdp-replay-dispatch.js';
 
@@ -114,6 +116,63 @@ test('unwrapTree returns the bare node for a single match and the matches wrappe
   assert.equal(unwrapTree(null), null);
   // already a bare node (no `.tree`) → returned unchanged
   assert.deepEqual(unwrapTree({ testID: 'x', children: [] }), { testID: 'x', children: [] });
+});
+
+test('React replay propagates a component-tree transport envelope without selector repair evidence', async () => {
+  const replay = await runCdpReplayCommands(
+    [{ assertVisible: { id: 'ready' } }],
+    {},
+    {
+      pressByTestId: async () => {},
+      typeByTestId: async () => {},
+      treeFor: async () =>
+        replayTreeData({
+          ok: false,
+          code: 'RECONNECT_TIMEOUT',
+          error: 'Component tree connection timed out',
+          meta: { reconnectAttempted: true },
+        }),
+      launchApp: async () => {},
+      settle: async () => {},
+    },
+  );
+  assert.equal(replay.passed, false);
+  assert.equal(replay.failureCode, 'RECONNECT_TIMEOUT');
+  assert.equal(replay.failureMeta?.failedSelector, undefined);
+  assert.deepEqual(replay.failureMeta?.treeEnvelope, {
+    ok: false,
+    code: 'RECONNECT_TIMEOUT',
+    error: 'Component tree connection timed out',
+    meta: { reconnectAttempted: true },
+  });
+});
+
+test('React replay propagates APP_HAS_REDBOX instead of reporting a missing testID', async () => {
+  const replay = await runCdpReplayCommands(
+    [{ tapOn: { id: 'submit' } }],
+    {},
+    {
+      pressByTestId: async () => assert.fail('redbox must refuse before mutation'),
+      typeByTestId: async () => {},
+      treeFor: async () =>
+        replayTreeData({
+          ok: true,
+          data: { message: 'App is showing an error screen.' },
+          meta: { warning: 'APP_HAS_REDBOX', treeVerdict: { quality: 'unavailable' } },
+        }),
+      launchApp: async () => {},
+      settle: async () => {},
+    },
+  );
+  assert.equal(replay.passed, false);
+  assert.equal(replay.failureCode, 'APP_HAS_REDBOX');
+  assert.equal(replay.failureMeta?.failedSelector, undefined);
+  assert.deepEqual(replay.failureMeta?.treeEnvelope, {
+    ok: true,
+    warning: 'APP_HAS_REDBOX',
+    message: 'App is showing an error screen.',
+    meta: { warning: 'APP_HAS_REDBOX', treeVerdict: { quality: 'unavailable' } },
+  });
 });
 
 test('disabled-guard fires on a node found through the getTree `.tree` wrapper', async () => {

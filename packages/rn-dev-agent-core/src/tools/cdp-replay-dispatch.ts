@@ -37,11 +37,45 @@ export function unwrapTree(data: unknown): unknown {
   return 'tree' in d ? d.tree : d;
 }
 
+export interface ReplayTreeEnvelope {
+  ok?: boolean;
+  code?: string;
+  error?: string;
+  data?: unknown;
+  meta?: Record<string, unknown>;
+}
+
+export function replayTreeData(envelope: ReplayTreeEnvelope): unknown {
+  const warning = typeof envelope.meta?.warning === 'string' ? envelope.meta.warning : undefined;
+  const redbox = warning === 'APP_HAS_REDBOX';
+  if (envelope.ok === true && !redbox) return envelope.data;
+
+  const data =
+    envelope.data && typeof envelope.data === 'object' && !Array.isArray(envelope.data)
+      ? (envelope.data as Record<string, unknown>)
+      : null;
+  const message =
+    redbox && typeof data?.message === 'string'
+      ? data.message.slice(0, 1000)
+      : (envelope.error?.slice(0, 1000) ?? 'Component tree proof is unavailable');
+  const code = redbox ? warning : (envelope.code ?? 'EVAL_FAILED');
+  throw new ReplayDispatchError(code, message, {
+    treeEnvelope: {
+      ok: envelope.ok === true,
+      ...(envelope.code ? { code: envelope.code } : {}),
+      ...(envelope.error ? { error: envelope.error.slice(0, 1000) } : {}),
+      ...(warning ? { warning } : {}),
+      ...(typeof data?.message === 'string' ? { message: data.message.slice(0, 1000) } : {}),
+      ...(envelope.meta ? { meta: envelope.meta } : {}),
+    },
+  });
+}
+
 export interface CdpReplayDeps {
   pressByTestId(id: string): Promise<void>;
   typeByTestId(id: string, text: string): Promise<void>;
-  // returns the parsed getTree JSON filtered to `id`, or null on failure
-  treeFor(id: string): Promise<unknown | null>;
+  // returns parsed successful getTree data filtered to `id`; failures reject with their envelope
+  treeFor(id: string): Promise<unknown>;
   frontmostFor?(id: string): Promise<{
     visible: boolean;
     reason?: string;

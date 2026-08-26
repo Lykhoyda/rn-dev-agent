@@ -78351,6 +78351,25 @@ function unwrapTree(data) {
   const d = data;
   return "tree" in d ? d.tree : d;
 }
+function replayTreeData(envelope) {
+  const warning = typeof envelope.meta?.warning === "string" ? envelope.meta.warning : void 0;
+  const redbox = warning === "APP_HAS_REDBOX";
+  if (envelope.ok === true && !redbox)
+    return envelope.data;
+  const data = envelope.data && typeof envelope.data === "object" && !Array.isArray(envelope.data) ? envelope.data : null;
+  const message = redbox && typeof data?.message === "string" ? data.message.slice(0, 1e3) : envelope.error?.slice(0, 1e3) ?? "Component tree proof is unavailable";
+  const code = redbox ? warning : envelope.code ?? "EVAL_FAILED";
+  throw new ReplayDispatchError(code, message, {
+    treeEnvelope: {
+      ok: envelope.ok === true,
+      ...envelope.code ? { code: envelope.code } : {},
+      ...envelope.error ? { error: envelope.error.slice(0, 1e3) } : {},
+      ...warning ? { warning } : {},
+      ...typeof data?.message === "string" ? { message: data.message.slice(0, 1e3) } : {},
+      ...envelope.meta ? { meta: envelope.meta } : {}
+    }
+  });
+}
 function countExactMatches(treeJson, id) {
   let matches = 0;
   const root = treeJson && typeof treeJson === "object" && "tree" in treeJson ? treeJson.tree : treeJson;
@@ -80019,6 +80038,7 @@ function createRunActionHandler(deps = {}) {
           autoRepair: autoRepair2
         });
         return failResult(`cdp_run_action: ${args.actionId} refused replay: ${firstFailureDetail}`, typedCode, {
+          ...firstEnv.meta,
           actionId: args.actionId,
           failureKind: typedCode,
           deviceAuthority: firstDeviceAuthority,
@@ -89064,6 +89084,13 @@ import { tmpdir as tmpdir13 } from "node:os";
 init_maestro_validator();
 init_registry();
 var defaultExecFile4 = promisify25(execFileCb19);
+function readNestedFlowEnvelope(result) {
+  try {
+    return JSON.parse(result.content[0]?.text ?? "{}");
+  } catch {
+    return { ok: false, error: "Shared iOS proof planner returned an unreadable result." };
+  }
+}
 function filterFlows(yamls, pattern) {
   if (pattern) {
     if (pattern.length > 256)
@@ -89104,10 +89131,6 @@ function createMaestroTestAllHandler(deps = {}) {
       return failResult(`Refusing Maestro suite target ${args.deviceId}: active ${platform} session is bound to ${matchingSessionDeviceId}.`, "TARGET_SESSION_MISMATCH", { requestedDeviceId: args.deviceId, activeSessionDeviceId: matchingSessionDeviceId });
     }
     const requestedDeviceId = args.deviceId ?? matchingSessionDeviceId;
-    const dispatch = selectDispatch({ platform });
-    if ("error" in dispatch) {
-      return failResult(dispatch.error);
-    }
     const engineStatus = await resolveEngineStatus();
     const pinRefusal = exactPinRefusal(engineStatus);
     if (pinRefusal)
@@ -89136,6 +89159,15 @@ function createMaestroTestAllHandler(deps = {}) {
     }
     if (learnedCorpus && !learnedContext) {
       return failResult(`Refusing learned-action corpus without an approved load context: ${resolvedFlowDir}.`);
+    }
+    const useSharedIosPlanner = learnedCorpus && platform === "ios" && deps.runFlow !== void 0;
+    const dispatch = useSharedIosPlanner ? {
+      runner: "maestro-runner",
+      binPath: "",
+      buildArgs: () => []
+    } : selectDispatch({ platform });
+    if ("error" in dispatch) {
+      return failResult(dispatch.error);
     }
     const flows = learnedContext ? filterFlows(learnedContext.files.filter((file) => /\.ya?ml$/i.test(file)).map((file) => join51(flowDir, file)).sort(), args.pattern) : discoverFlows(flowDir, args.pattern);
     if (flows.length === 0) {
@@ -89197,7 +89229,8 @@ function createMaestroTestAllHandler(deps = {}) {
           appId: parsedAppId,
           canonical: canonical2,
           appFile: appFileResolution.appFile,
-          reinstallsApp: Boolean(appFileResolution.appFile) && flowUsesClearState(canonical2)
+          reinstallsApp: Boolean(appFileResolution.appFile) && flowUsesClearState(canonical2),
+          actionMetadata: meta ?? void 0
         });
       } catch (err) {
         const reason = err instanceof MaestroValidationError ? `Refused by validator: ${err.message}` : err instanceof Error ? err.message : String(err);
@@ -89217,7 +89250,7 @@ function createMaestroTestAllHandler(deps = {}) {
         failed: preflightResults.length,
         platform,
         flowDir,
-        runner: dispatch.runner,
+        runner: useSharedIosPlanner ? "semantic-proof-planner" : dispatch.runner,
         requestedDeviceId: requestedDeviceId ?? null,
         results: preflightResults
       });
@@ -89236,6 +89269,59 @@ function createMaestroTestAllHandler(deps = {}) {
     for (const prepared of preparedFlows) {
       const { name } = prepared;
       const start = now();
+      if (useSharedIosPlanner && deps.runFlow) {
+        try {
+          const nested = readNestedFlowEnvelope(await deps.runFlow({
+            inlineYaml: prepared.canonical,
+            actionMetadata: prepared.actionMetadata,
+            platform,
+            appId: prepared.appId,
+            deviceId: requestedDeviceId,
+            timeoutMs: timeout,
+            claimNativeOrigin: claimOrigin,
+            completeNativeOrigin: completeOrigin,
+            relaunchManagedApp,
+            reproveManagedOrigin,
+            completeRunnerPark,
+            reissueInstallReceipt
+          }));
+          const evidence = { ...nested.meta, ...nested.data };
+          const flowPassed = nested.ok === true && nested.data?.passed === true;
+          results.push({
+            name,
+            passed: flowPassed,
+            durationMs: now() - start,
+            ...flowPassed ? {} : {
+              error: nested.error ?? (typeof nested.meta?.warning === "string" ? nested.meta.warning : "Shared iOS proof replay failed.")
+            },
+            ...nested.code ? { code: nested.code } : {},
+            ...typeof evidence.proofDomain === "string" ? { proofDomain: evidence.proofDomain } : {},
+            ...Array.isArray(evidence.proofDomains) ? {
+              proofDomains: evidence.proofDomains.filter((value) => typeof value === "string")
+            } : {},
+            ...typeof evidence.runner === "string" ? { runner: evidence.runner } : {},
+            ...typeof evidence.transport === "string" ? { transport: evidence.transport } : {},
+            ...evidence.treeEnvelope && typeof evidence.treeEnvelope === "object" && !Array.isArray(evidence.treeEnvelope) ? { treeEnvelope: evidence.treeEnvelope } : {}
+          });
+          if (flowPassed)
+            passed++;
+          else
+            failed++;
+        } catch (error2) {
+          if (error2 instanceof SessionAuthorityError)
+            throw error2;
+          results.push({
+            name,
+            passed: false,
+            durationMs: now() - start,
+            error: error2 instanceof Error ? error2.message.slice(0, 300) : String(error2).slice(0, 300)
+          });
+          failed++;
+        }
+        if (failed > 0 && args.stopOnFailure)
+          break;
+        continue;
+      }
       const safeFlowFile = join51(tmpdir13(), `rn-maestro-validated-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.yaml`);
       writeFileSync18(safeFlowFile, prepared.canonical, "utf-8");
       const parsedCommands = prepared.commands;
@@ -89387,7 +89473,8 @@ function createMaestroTestAllHandler(deps = {}) {
       failed,
       platform,
       flowDir,
-      runner: dispatch.runner,
+      runner: useSharedIosPlanner ? "semantic-proof-planner" : dispatch.runner,
+      ...useSharedIosPlanner ? { proofPlanner: "shared-maestro-run" } : {},
       requestedDeviceId: requestedDeviceId ?? null,
       ...batchCaveat ? { fallbackReason: batchCaveat } : {},
       results
@@ -92817,11 +92904,13 @@ var makeReplayDeps = (_args, signal) => {
         ...interactiveOnly ? { interactiveOnly: true } : {}
       })).content[0].text);
       let env = await fetchTree(false);
-      const d = env.ok ? env.data : null;
+      let data = replayTreeData(env);
+      const d = data;
       if (d && typeof d === "object" && "__agent_truncated" in d) {
         env = await fetchTree(true);
+        data = replayTreeData(env);
       }
-      return env.ok ? unwrapTree(env.data) : null;
+      return unwrapTree(data);
     },
     frontmostFor: async (id) => {
       const result = await getClient().evaluate(getClient().bridgeWithFallback(`isTestIdFrontmost(${JSON.stringify(id)})`));
@@ -94381,14 +94470,14 @@ trackedTool("maestro_generate", "Generate a persistent Maestro YAML flow file fr
   appId: external_exports.string().optional().describe("App bundle ID to include in YAML header"),
   outputDir: external_exports.string().optional().describe("Output directory (default: <project>/.rn-agent/actions/). Pass an explicit path for non-default targets.")
 }, createMaestroGenerateHandler());
-trackedTool("maestro_test_all", "Discover and run all Maestro flows in .rn-agent/actions/ as a regression suite. Returns per-flow pass/fail with durations. Use for CI or after refactoring to verify no regressions. Pass flowDir to override the default directory.", {
+trackedTool("maestro_test_all", "Discover and run all Maestro flows in .rn-agent/actions/ as a regression suite. Owned iOS learned actions use the same React-tree/XCTest proof planner as maestro_run; other suites keep their native runner path. Returns per-flow pass/fail with durations. Use for CI or after refactoring to verify no regressions. Pass flowDir to override the default directory.", {
   platform: external_exports.enum(["ios", "android"]).optional().describe("Target platform (auto-detected from session)"),
   deviceId: external_exports.string().min(1).max(256).optional().describe("Exact simulator UDID / adb serial to run the suite on (defaults to the active session device)."),
   flowDir: external_exports.string().optional().describe("Directory to scan for .yaml flows (default: <project>/.rn-agent/actions/)"),
   pattern: external_exports.string().optional().describe('Regex pattern to filter flow files (e.g. "cart|checkout")'),
   timeoutPerFlow: external_exports.number().int().min(5e3).max(3e5).default(12e4).describe("Timeout per flow in ms"),
   stopOnFailure: external_exports.boolean().default(false).describe("Stop after first failure")
-}, createMaestroTestAllHandler());
+}, createMaestroTestAllHandler({ runFlow: maestroRunHandler }));
 trackedTool("cdp_record_test_start", "Start recording UI interactions via Object.freeze interceptor. Captures taps, long-presses, text input, submits, and scroll-derived swipes from the running app \u2014 no app changes required. Requires __DEV__=true (release builds pre-freeze props at bundle time). Pair with cdp_record_test_stop and cdp_record_test_generate to produce Maestro YAML or Detox JS.", {}, createRecordTestStartHandler(getClient));
 trackedTool("cdp_record_test_stop", "Stop recording, deduplicate consecutive type/tap bursts, freeze the buffer, and return event count + per-type breakdown. Sets `truncated: true` when the 500-event cap was hit. Recorded events stay in MCP memory for cdp_record_test_generate / cdp_record_test_save until the next start.", {}, createRecordTestStopHandler(getClient));
 trackedTool("cdp_record_test_generate", "Render the stored recording as replayable test code. Formats: maestro (YAML, primary), detox (JS). Appium returns NOT_IMPLEMENTED \u2014 file an issue if you need it. Requires a recording in memory (call start/stop or load first). Pass id/intent/tags/mutates/status to emit the M7 metadata header and required engine pin into the YAML so the result is a first-class reusable action.", {
