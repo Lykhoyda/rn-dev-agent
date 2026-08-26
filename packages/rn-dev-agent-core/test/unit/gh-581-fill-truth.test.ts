@@ -1,12 +1,15 @@
 // GH #581: device_fill truth matrix — exact binding, single-operation native
-// dispatch, final-verification arbitration, mutation-safe descent, and secret
+// dispatch, exact verification, mutation-safe correction, and secret
 // scrubbing, driven through the runNative seam.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 const { _setActiveSessionForTest, _setRunAgentDeviceForTest, markSnapshotDirty } =
   await import('../../dist/agent-device-wrapper.js');
-const { performExactFill, extractTypingMeta } = await import('../../dist/tools/device-interact.js');
+const { createDeviceFillHandler, performExactFill, extractTypingMeta } =
+  await import('../../dist/tools/device-interact.js');
+const { _setMaestroInlineObserverForTest, runMaestroInline } =
+  await import('../../dist/maestro-invoke.js');
 const { updateRefMapFromFlat, clearRefMap } = await import('../../dist/fast-runner-ref-map.js');
 const { okResult, failResult } = await import('../../dist/utils.js');
 
@@ -117,7 +120,7 @@ function envelope(result: { content: Array<{ text: string }> }): Record<string, 
   return JSON.parse(result.content[0].text);
 }
 
-const NATIVE_ONLY = { js: false, maestro: false };
+const NATIVE_ONLY = {};
 
 function fakeClient(handlers: {
   read?: () => { value?: string | null; controlled?: boolean } | null;
@@ -134,7 +137,14 @@ function fakeClient(handlers: {
         };
       }
       if (expr.includes('typeText')) {
-        return { value: JSON.stringify(handlers.typeText?.() ?? { error: 'no handler' }) };
+        const result = handlers.typeText?.() ?? { error: 'no handler' };
+        return {
+          value: JSON.stringify(
+            result.error || result.handlerCalled === false
+              ? result
+              : { bindingId: 'ttb:test:1', ...result },
+          ),
+        };
       }
       return { value: JSON.stringify({}) };
     },
@@ -265,28 +275,82 @@ test('gh-581: unstable native exact never promotes to success', async () => {
   assert.equal(envelope(result as never).code, 'TEXT_ENTRY_UNVERIFIED');
 });
 
-test('gh-581: stable mismatch retypes clear-first against the same target, then succeeds', async () => {
+test('gh-581: stable mismatch refuses after one native mutation on iOS and Android', async () => {
+  const fixtures = [
+    { platform: 'ios' as const, nodes: NODES, ref: '@e3' },
+    {
+      platform: 'android' as const,
+      nodes: [
+        {
+          ref: '@e3',
+          identifier: 'last-name',
+          type: 'android.widget.EditText',
+          rect: { x: 40, y: 180, width: 320, height: 40 },
+        },
+      ] as typeof NODES,
+      ref: '@e3',
+    },
+  ];
+  for (const fixture of fixtures) {
+    const { result, calls } = await withFillSeam(
+      {
+        platform: fixture.platform,
+        nodes: fixture.nodes,
+        verify: () => okResult({ verifyVerdict: 'mismatch', verifyStable: true }),
+      },
+      () => performExactFill({ ref: fixture.ref, text: 'value' }, null, NATIVE_ONLY),
+    );
+    const env = envelope(result as never);
+    const fills = calls.filter((call) => call.cliArgs[0] === 'fill');
+    const verifies = calls.filter((call) => call.cliArgs[0] === 'verify-input');
+    assert.equal(env.code, 'TEXT_ENTRY_UNVERIFIED', fixture.platform);
+    assert.equal(env.meta.mutation, 'observed', fixture.platform);
+    assert.deepEqual(env.meta.pathsTried, ['native'], fixture.platform);
+    assert.equal(fills.length, 1, fixture.platform);
+    assert.equal(verifies.length, 1, fixture.platform);
+    assert.equal(
+      (verifies[0].opts.exactTarget as { operationToken: string }).operationToken,
+      (fills[0].opts.exactTarget as { operationToken: string }).operationToken,
+      fixture.platform,
+    );
+  }
+});
+
+test('gh-581: stable mismatch on A cannot mutate replacement B with the same identity fields', async () => {
+  const replacement = NODES.map((node) =>
+    node.identifier === 'last-name' ? { ...node, ref: '@e8' } : node,
+  );
+  let replacementMutations = 0;
   const { result, calls } = await withFillSeam(
     {
-      verify: (_call, verifyCount) =>
-        verifyCount === 1
-          ? okResult({ verifyVerdict: 'mismatch', verifyStable: true })
-          : okResult({ verifyVerdict: 'exact', verifyStable: true }),
+      fill: (_call, fillCount) => {
+        if (fillCount > 1) replacementMutations += 1;
+        updateRefMapFromFlat(replacement as never, {
+          snapshotGeneration: 9,
+          keyboardVisible: false,
+        });
+        return okResult({ typed: true });
+      },
+      verify: () => okResult({ verifyVerdict: 'mismatch', verifyStable: true }),
+      snapshot: (count) => (count === 1 ? NODES : replacement),
     },
     () => performExactFill({ ref: '@e3', text: 'value' }, null, NATIVE_ONLY),
   );
-  assert.ok(!(result as { isError?: boolean }).isError);
-  const fills = calls.filter((c) => c.cliArgs[0] === 'fill');
-  assert.equal(fills.length, 2);
-  assert.ok(!fills[0].cliArgs.includes('--clear-first'));
-  assert.ok(fills[1].cliArgs.includes('--clear-first'), 'correction is clear-first');
-  assert.equal(fills[1].cliArgs[1], '@e3', 'correction stays on the same target');
   const env = envelope(result as never);
-  assert.equal(env.meta.textEntryPath, 'native-retype');
-  assert.equal(env.meta.verify, 'exact');
+  const fills = calls.filter((call) => call.cliArgs[0] === 'fill');
+  const verifies = calls.filter((call) => call.cliArgs[0] === 'verify-input');
+  assert.equal(env.code, 'TEXT_ENTRY_UNVERIFIED');
+  assert.equal(env.meta.mutation, 'observed');
+  assert.equal(fills.length, 1);
+  assert.equal(replacementMutations, 0);
+  assert.equal(calls.filter((call) => call.cliArgs[0] === 'snapshot').length, 1);
+  assert.equal(
+    (verifies[0].opts.exactTarget as { operationToken: string }).operationToken,
+    (fills[0].opts.exactTarget as { operationToken: string }).operationToken,
+  );
 });
 
-test('gh-581: corrective refusal cannot erase an earlier mutation', async () => {
+test('gh-581: a stable mismatch cannot dispatch a second native mutation', async () => {
   const { result, calls } = await withFillSeam(
     {
       fill: (_call, fillCount) =>
@@ -299,8 +363,8 @@ test('gh-581: corrective refusal cannot erase an earlier mutation', async () => 
   );
   const env = envelope(result as never);
   assert.equal(env.code, 'TEXT_ENTRY_UNVERIFIED');
-  assert.equal(env.meta.mutation, 'possible');
-  assert.equal(calls.filter((call) => call.cliArgs[0] === 'fill').length, 2);
+  assert.equal(env.meta.mutation, 'observed');
+  assert.equal(calls.filter((call) => call.cliArgs[0] === 'fill').length, 1);
 });
 
 test('gh-581: secure uncontrolled masked value hard-fails and is not retried', async () => {
@@ -403,77 +467,58 @@ test('gh-581: empty text is a verified clear (clear-first dispatch + exact empty
   assert.equal(verify.cliArgs[2], '');
 });
 
-test('gh-581: SET_TEXT_REJECTED without a Maestro tier fails truthfully', async () => {
-  const { result } = await withFillSeam(
-    { fill: () => failResult('rejected', 'SET_TEXT_REJECTED', { mutation: 'none' }) },
-    () => performExactFill({ ref: '@e3', text: 'value' }, null, NATIVE_ONLY),
+test('gh-581: rejected native A never rebinds to replacement B with the same testID', async () => {
+  const replacement = NODES.map((node) =>
+    node.identifier === 'last-name' ? { ...node, ref: '@e8' } : node,
   );
-  assert.equal(envelope(result as never).code, 'TEXT_ENTRY_UNVERIFIED');
-});
-
-test('gh-581: Maestro verification rebinds by testID after runner parking', async () => {
-  const { result, calls } = await withFillSeam(
-    {
-      fill: () => failResult('rejected', 'SET_TEXT_REJECTED', { mutation: 'none' }),
-      verify: () => okResult({ verifyVerdict: 'exact', verifyStable: true }),
-    },
-    () =>
-      performExactFill(
-        { ref: '@e3', text: 'value' },
-        null,
-        { js: false, maestro: true },
-        { maestroFillAttempt: async () => ({ attempted: true }) },
-      ),
-  );
-  assert.equal(envelope(result as never).data.method, 'maestro');
-  const fill = calls.find((call) => call.cliArgs[0] === 'fill')!;
-  const verify = calls.find((call) => call.cliArgs[0] === 'verify-input')!;
-  assert.ok((fill.opts.exactTarget as { operationToken?: string }).operationToken);
-  assert.equal((verify.opts.exactTarget as { operationToken?: string }).operationToken, undefined);
-});
-
-test('gh-581: Maestro refuses an identifierless binding after ref recycling', async () => {
-  const original = [
-    {
-      ref: '@e1',
-      identifier: '',
-      label: 'Search',
-      type: 'android.widget.EditText',
-      rect: { x: 40, y: 110, width: 320, height: 40 },
-    },
-  ];
-  const replacement = [{ ...original[0], identifier: 'replacement-input' }];
-  let maestroAttempts = 0;
-  const { result, calls } = await withFillSeam(
-    {
-      platform: 'android',
-      nodes: original as never,
-      fill: () => {
-        updateRefMapFromFlat(replacement as never, {
-          snapshotGeneration: 9,
-          keyboardVisible: false,
-        });
-        return failResult('rejected', 'SET_TEXT_REJECTED', { mutation: 'none' });
-      },
-    },
-    () =>
-      performExactFill(
-        { ref: '@e1', text: 'value' },
-        null,
-        { js: false, maestro: true },
-        {
-          maestroFillAttempt: async () => {
-            maestroAttempts += 1;
-            return { attempted: true };
-          },
+  let replacementMutations = 0;
+  let maestroInvocations = 0;
+  _setMaestroInlineObserverForTest(() => {
+    maestroInvocations += 1;
+  });
+  try {
+    const { result, calls } = await withFillSeam(
+      {
+        fill: (call) => {
+          if (call.cliArgs[1] === '@e8') replacementMutations += 1;
+          updateRefMapFromFlat(replacement as never, {
+            snapshotGeneration: 9,
+            keyboardVisible: false,
+          });
+          return failResult('rejected', 'SET_TEXT_REJECTED', { mutation: 'none' });
         },
-      ),
-  );
-  const env = envelope(result as never);
-  assert.equal(env.code, 'TEXT_ENTRY_UNVERIFIED');
-  assert.match(env.error, /no testID/);
-  assert.equal(maestroAttempts, 0);
-  assert.equal(calls.filter((call) => call.cliArgs[0] === 'verify-input').length, 0);
+        snapshot: (count) => (count === 1 ? NODES : replacement),
+      },
+      () => createDeviceFillHandler(() => null as never)({ ref: '@e3', text: 'value' }),
+    );
+    const env = envelope(result as never);
+    const fills = calls.filter((call) => call.cliArgs[0] === 'fill');
+    const verifies = calls.filter((call) => call.cliArgs[0] === 'verify-input');
+    assert.equal(env.code, 'TEXT_ENTRY_UNVERIFIED');
+    assert.equal(env.meta.mutation, 'none');
+    assert.deepEqual(env.meta.pathsTried, ['native']);
+    assert.equal(fills.length, 1);
+    assert.equal(fills[0].cliArgs[1], '@e3');
+    assert.equal(replacementMutations, 0);
+    assert.equal(maestroInvocations, 0);
+    assert.equal(calls.filter((call) => call.cliArgs[0] === 'snapshot').length, 1);
+    assert.equal(
+      verifies.filter(
+        (call) => !(call.opts.exactTarget as { operationToken?: string }).operationToken,
+      ).length,
+      0,
+    );
+    await runMaestroInline(
+      '- tapOn: "probe"',
+      { platform: 'ios' },
+      {
+        chooseDispatch: () => ({ error: 'probe refusal' }) as never,
+      },
+    );
+    assert.equal(maestroInvocations, 1);
+  } finally {
+    _setMaestroInlineObserverForTest(null);
+  }
 });
 
 test('gh-581: possible SET_TEXT_REJECTED hard-fails without verification', async () => {
@@ -555,19 +600,24 @@ test('gh-581: bare "EditText" snapshot type never binds on Android', async () =>
   assert.equal(envelope(result as never).code, 'NO_TEXT_INPUT_TARGET');
 });
 
-test('gh-581: readable fiber/native disagreement hard-fails without retype', async () => {
-  const client = fakeClient({ read: () => ({ value: 'value', controlled: true }) });
+test('gh-581: React evidence cannot promote a native mismatch', async () => {
+  let evaluations = 0;
+  const client = {
+    isConnected: true,
+    evaluate: async () => {
+      evaluations += 1;
+      return { value: JSON.stringify({ value: 'value', controlled: true }) };
+    },
+  } as never;
   const { result, calls } = await withFillSeam(
     { verify: () => okResult({ verifyVerdict: 'mismatch', verifyStable: true }) },
     () => performExactFill({ ref: '@e3', text: 'value' }, client, NATIVE_ONLY),
   );
   const env = envelope(result as never);
   assert.equal(env.code, 'TEXT_ENTRY_UNVERIFIED');
-  assert.equal(
-    calls.filter((c) => c.cliArgs[0] === 'fill').length,
-    1,
-    'disagreement never retypes',
-  );
+  assert.equal(evaluations, 0);
+  assert.ok(!JSON.stringify(env).includes('"filled":true'));
+  assert.equal(calls.filter((c) => c.cliArgs[0] === 'fill').length, 1);
 });
 
 test('gh-581: device_batch fill uses the same arbiter and cannot soft-accept', async () => {
@@ -599,44 +649,58 @@ test('gh-581: device_batch fill uses the same arbiter and cannot soft-accept', a
   assert.equal(calls.filter((c) => c.cliArgs[0] === 'fill').length, 1);
 });
 
-test('gh-581: controlled input fills via the fiber and verifies exact without native typing', async () => {
-  let value = '';
-  const client = fakeClient({
-    read: () => ({ value, controlled: true }),
-    typeText: () => {
-      value = 'Anna';
-      return { controlled: true, handlerCalled: 'onChangeText', valueBefore: '' };
+test('gh-581: controlled inputs use native authority without React dispatch', async () => {
+  let evaluations = 0;
+  const client = {
+    isConnected: true,
+    evaluate: async () => {
+      evaluations += 1;
+      return { value: JSON.stringify({ value: 'Anna', controlled: true }) };
     },
-  });
+  } as never;
   const { result, calls } = await withFillSeam(
     { verify: () => okResult({ verifyVerdict: 'exact', verifyStable: true }) },
-    () => performExactFill({ ref: '@e2', text: 'Anna' }, client, { js: true, maestro: false }),
+    () => performExactFill({ ref: '@e2', text: 'Anna' }, client, NATIVE_ONLY),
   );
   assert.ok(!(result as { isError?: boolean }).isError);
   const env = envelope(result as never);
-  assert.deepEqual(env.data, { filled: true, method: 'js-onChangeText', length: 4 });
+  assert.deepEqual(env.data, { filled: true, method: 'native', length: 4 });
   assert.equal(env.meta.verify, 'exact');
-  assert.ok(!calls.some((c) => c.cliArgs[0] === 'fill'), 'no native typing after fiber success');
+  assert.equal(evaluations, 0);
+  assert.ok(calls.some((c) => c.cliArgs[0] === 'fill'));
 });
 
-test('gh-581: native target loss vetoes controlled fiber success', async () => {
-  let value = '';
-  const client = fakeClient({
-    read: () => ({ value, controlled: true }),
-    typeText: () => {
-      value = 'Anna';
-      return { controlled: true, handlerCalled: 'onChangeText', valueBefore: '' };
+test('gh-581: React state never promotes unavailable native verification', async () => {
+  let evaluations = 0;
+  const client = {
+    isConnected: true,
+    evaluate: async () => {
+      evaluations += 1;
+      return { value: JSON.stringify({ value: 'Anna', controlled: true }) };
     },
-  });
-  const { result, calls } = await withFillSeam(
-    { verify: () => okResult({ verifyVerdict: 'target-lost', verifyStable: false }) },
-    () => performExactFill({ ref: '@e2', text: 'Anna' }, client, { js: true, maestro: false }),
-  );
-  const env = envelope(result as never);
-  assert.equal(env.code, 'TEXT_ENTRY_UNVERIFIED');
-  assert.equal(env.meta.mutation, 'possible');
-  assert.ok(calls.some((c) => c.cliArgs[0] === 'verify-input'));
-  assert.ok(!calls.some((c) => c.cliArgs[0] === 'fill'));
+  } as never;
+  for (const [verifyVerdict, verifyStable] of [
+    ['unavailable', false],
+    ['secure-masked', true],
+    ['target-lost', false],
+  ] as const) {
+    const { result, calls } = await withFillSeam(
+      { verify: () => okResult({ verifyVerdict, verifyStable }) },
+      () => performExactFill({ ref: '@e2', text: 'Anna' }, client, NATIVE_ONLY),
+    );
+    const env = envelope(result as never);
+    assert.equal(env.code, 'TEXT_ENTRY_UNVERIFIED', verifyVerdict);
+    assert.equal(env.meta.mutation, 'possible', verifyVerdict);
+    assert.ok(
+      calls.some((c) => c.cliArgs[0] === 'verify-input'),
+      verifyVerdict,
+    );
+    assert.ok(
+      calls.some((c) => c.cliArgs[0] === 'fill'),
+      verifyVerdict,
+    );
+  }
+  assert.equal(evaluations, 0);
 });
 
 test('gh-581: conflicting explicit testID rejects before any mutation', async () => {
@@ -644,7 +708,7 @@ test('gh-581: conflicting explicit testID rejects before any mutation', async ()
     performExactFill(
       { ref: '@e2', testID: 'last-name', text: 'Anna' },
       fakeClient({ read: () => ({ value: '', controlled: true }) }),
-      { js: true, maestro: false },
+      NATIVE_ONLY,
     ),
   );
   const env = envelope(result as never);
@@ -653,7 +717,7 @@ test('gh-581: conflicting explicit testID rejects before any mutation', async ()
   assert.ok(!calls.some((c) => c.cliArgs[0] === 'fill'));
 });
 
-test('gh-581: cancellation after mismatch prevents corrective retype', async () => {
+test('gh-581: cancellation after mismatch cannot trigger another mutation', async () => {
   const abortController = new AbortController();
   const { result, calls } = await withFillSeam(
     {
@@ -669,11 +733,11 @@ test('gh-581: cancellation after mismatch prevents corrective retype', async () 
       }),
   );
   const env = envelope(result as never);
-  assert.equal(env.meta.mutation, 'possible');
+  assert.equal(env.meta.mutation, 'observed');
   assert.equal(calls.filter((c) => c.cliArgs[0] === 'fill').length, 1);
 });
 
-test('gh-581: uncontrolled probe skips the JS tier entirely (no handler double-fire)', async () => {
+test('gh-581: device fill never dispatches a React handler', async () => {
   let typeTextCalls = 0;
   const client = fakeClient({
     read: () => ({ value: null, controlled: false }),
@@ -683,7 +747,7 @@ test('gh-581: uncontrolled probe skips the JS tier entirely (no handler double-f
     },
   });
   const { result, calls } = await withFillSeam({}, () =>
-    performExactFill({ ref: '@e2', text: 'Anna' }, client, { js: true, maestro: false }),
+    performExactFill({ ref: '@e2', text: 'Anna' }, client, NATIVE_ONLY),
   );
   assert.ok(!(result as { isError?: boolean }).isError);
   assert.equal(typeTextCalls, 0, 'fiber typeText never fired for an uncontrolled input');
@@ -693,7 +757,7 @@ test('gh-581: uncontrolled probe skips the JS tier entirely (no handler double-f
   );
 });
 
-test('gh-581: an uncertain JS dispatch hard-fails as possible mutation without native descent', async () => {
+test('gh-581: a failing React client cannot affect native fill', async () => {
   const client = {
     isConnected: true,
     evaluate: async (expr: string) => {
@@ -704,15 +768,12 @@ test('gh-581: an uncertain JS dispatch hard-fails as possible mutation without n
     },
   } as never;
   const { result, calls } = await withFillSeam({}, () =>
-    performExactFill({ ref: '@e2', text: 'Anna' }, client, { js: true, maestro: false }),
+    performExactFill({ ref: '@e2', text: 'Anna' }, client, NATIVE_ONLY),
   );
   const env = envelope(result as never);
-  assert.equal(env.code, 'TEXT_ENTRY_UNVERIFIED');
-  assert.equal(env.meta.mutation, 'possible');
-  assert.ok(
-    !calls.some((c) => c.cliArgs[0] === 'fill'),
-    'no native typing after uncertain dispatch',
-  );
+  assert.equal(env.data.filled, true);
+  assert.equal(env.data.method, 'native');
+  assert.ok(calls.some((c) => c.cliArgs[0] === 'fill'));
 });
 
 test('gh-581: no envelope ever echoes the requested text', async () => {
@@ -739,7 +800,7 @@ test('gh-581: no envelope ever echoes the requested text', async () => {
         },
       });
       return withFillSeam({}, () =>
-        performExactFill({ ref: '@e2', text: secret }, client, { js: true, maestro: false }),
+        performExactFill({ ref: '@e2', text: secret }, client, NATIVE_ONLY),
       );
     },
   ];

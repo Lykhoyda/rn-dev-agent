@@ -19887,7 +19887,7 @@ function keyboardVisibility(result) {
     return null;
   }
 }
-async function waitForKeyboardHidden(refreshSnapshot, sleep7 = (ms) => new Promise((resolve21) => setTimeout(resolve21, ms))) {
+async function waitForKeyboardHidden(refreshSnapshot, sleep6 = (ms) => new Promise((resolve21) => setTimeout(resolve21, ms))) {
   let last = "unknown";
   for (let attempt = 0; attempt < KEYBOARD_POSTCHECK_ATTEMPTS; attempt += 1) {
     const visible = keyboardVisibility(await refreshSnapshot());
@@ -19897,7 +19897,7 @@ async function waitForKeyboardHidden(refreshSnapshot, sleep7 = (ms) => new Promi
       return "unknown";
     last = "visible";
     if (attempt < KEYBOARD_POSTCHECK_ATTEMPTS - 1)
-      await sleep7(KEYBOARD_POSTCHECK_DELAY_MS);
+      await sleep6(KEYBOARD_POSTCHECK_DELAY_MS);
   }
   return last;
 }
@@ -21326,7 +21326,7 @@ async function probeFastRunnerLiveness(deps = {}) {
 async function reapStaleFastRunner(deps = {}) {
   const getState = deps.getState ?? (() => runnerState);
   const sendSignal = deps.sendSignal ?? ((pid, sig) => process.kill(pid, sig));
-  const sleep7 = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
+  const sleep6 = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
   const clearState = deps.clearState ?? clearStateFileIfMatches;
   const graceMs = deps.graceMs ?? 500;
   const state = getState();
@@ -21374,7 +21374,7 @@ async function reapStaleFastRunner(deps = {}) {
     sendSignal(state.pid, "SIGTERM");
   } catch {
   }
-  await sleep7(graceMs);
+  await sleep6(graceMs);
   const afterTerm = probeExpected();
   if (afterTerm === "unknown") {
     throw new Error("RUNNER_ADOPTION_REQUIRED: iOS runner termination is unproven");
@@ -21388,9 +21388,9 @@ async function reapStaleFastRunner(deps = {}) {
   } catch {
   }
   if (spawnedExit) {
-    await Promise.race([spawnedExit, sleep7(250)]);
+    await Promise.race([spawnedExit, sleep6(250)]);
   } else {
-    await sleep7(50);
+    await sleep6(50);
   }
   const afterKill = probeExpected();
   if (afterKill !== "gone") {
@@ -27982,3410 +27982,186 @@ var init_maestro_validator = __esm({
   }
 });
 
-// packages/rn-dev-agent-core/dist/experience/runner-diagnostics.js
-import { AsyncLocalStorage as AsyncLocalStorage2 } from "node:async_hooks";
-import { performance as performance2 } from "node:perf_hooks";
-function retainRunnerDiagnosticEvents(events, maximum) {
-  if (maximum <= 0)
-    return [];
-  const retained = [...events];
-  while (retained.length > maximum) {
-    const counts = /* @__PURE__ */ new Map();
-    for (const event of retained)
-      counts.set(event.type, (counts.get(event.type) ?? 0) + 1);
-    let removeAt = retained.findIndex((event) => !TERMINAL_EVENT_TYPES.has(event.type) && (counts.get(event.type) ?? 0) > 1);
-    if (removeAt < 0) {
-      removeAt = retained.findIndex((event) => !TERMINAL_EVENT_TYPES.has(event.type));
-    }
-    if (removeAt < 0) {
-      removeAt = retained.findIndex((event) => (counts.get(event.type) ?? 0) > 1);
-    }
-    retained.splice(removeAt < 0 ? 0 : removeAt, 1);
-  }
-  return retained;
-}
-function withRunnerDiagnosticsContext(tool, params, work) {
-  if (storage.getStore())
-    return work();
-  return storage.run({
-    rootTool: tool,
-    rootParams: params,
-    events: [],
-    truncated: false,
-    startedAt: performance2.now(),
-    nextSequence: 0
-  }, work);
-}
-function recordRunnerDiagnostic(type, detail = {}) {
-  const state = storage.getStore();
-  if (!state)
-    return;
-  const event = {
-    sequence: ++state.nextSequence,
-    monotonicMs: Math.max(0, Math.round((performance2.now() - state.startedAt) * 1e3) / 1e3),
-    timestamp: (/* @__PURE__ */ new Date()).toISOString(),
-    type,
-    detail
-  };
-  const retained = retainRunnerDiagnosticEvents([...state.events, event], RUNNER_DIAGNOSTICS_MAX_EVENTS);
-  if (retained.length < state.events.length + 1) {
-    state.truncated = true;
-  }
-  state.events = retained;
-}
-function snapshotRunnerDiagnostics() {
-  const state = storage.getStore();
-  if (!state || state.events.length === 0)
-    return void 0;
-  return {
-    rootTool: state.rootTool,
-    rootParams: { ...state.rootParams },
-    events: state.events.map((event) => ({ ...event, detail: { ...event.detail } })),
-    truncated: state.truncated
-  };
-}
-var RUNNER_DIAGNOSTICS_MAX_EVENTS, storage, TERMINAL_EVENT_TYPES;
-var init_runner_diagnostics = __esm({
-  "packages/rn-dev-agent-core/dist/experience/runner-diagnostics.js"() {
-    "use strict";
-    RUNNER_DIAGNOSTICS_MAX_EVENTS = 200;
-    storage = new AsyncLocalStorage2();
-    TERMINAL_EVENT_TYPES = /* @__PURE__ */ new Set([
-      "typed-failure",
-      "cleanup",
-      "tool-outcome"
-    ]);
-  }
-});
-
-// packages/rn-dev-agent-core/dist/domain/maestro-runner-pin.json
-var maestro_runner_pin_default;
-var init_maestro_runner_pin = __esm({
-  "packages/rn-dev-agent-core/dist/domain/maestro-runner-pin.json"() {
-    maestro_runner_pin_default = {
-      version: "1.1.24",
-      sha256: {
-        "darwin-arm64": "170f12521de83322823dd5fc0ce16e48abeba9952cdbb242670592566c2fd1f3",
-        "darwin-x64": "af7f5ea044afc72ea780c835f05b32203e443d2e26d310a864bfb2bc84959bf6",
-        "linux-x64": "e9bdef6f08f855ca1a884f99b54a519a1eae0a342917181a53eb414a5b00d6d8",
-        "linux-arm64": "8d8a6483ad04da2109636b7192398750657801b8a8d512688d1be3b033a105b8"
-      },
-      archiveSha256: {
-        "darwin-arm64": "0b5b0f087815c5ff348e74a6dd7df260ed50a5588d5ff3e224c66a60d948c936",
-        "darwin-x64": "2ecc5c55d9437ee820691faf43097b5ba8d1ff797db49da9c96ac2631aac03c5",
-        "linux-x64": "f1963b7e3f8bf598d3b14f998fef3dc690e579906f340636cfd9350dea1d67b0",
-        "linux-arm64": "605db5645b161b610e999bcf8235650d41aac8929bbd0f818a592d13b958f148"
-      },
-      knownQuirks: [
-        {
-          id: "android-pre-o-unsupported",
-          ref: "GH #741",
-          note: "bundled UiAutomator2 server APK declares minSdk 26; API 23-25 installs fail with INSTALL_FAILED_OLDER_SDK"
-        }
-      ]
-    };
-  }
-});
-
-// packages/rn-dev-agent-core/dist/domain/engine-pin.js
-import { createHash as createHash10 } from "node:crypto";
-import { accessSync, chmodSync as chmodSync4, constants as constants7, copyFileSync as copyFileSync2, existsSync as existsSync15, lstatSync as lstatSync10, mkdirSync as mkdirSync12, mkdtempSync as mkdtempSync2, readFileSync as readFileSync17, readdirSync as readdirSync5, readlinkSync as readlinkSync4, realpathSync as realpathSync11, rmSync as rmSync8, symlinkSync as symlinkSync3, unlinkSync as unlinkSync7 } from "node:fs";
-import { homedir as homedir4 } from "node:os";
-import { basename as basename4, dirname as dirname11, join as join20, relative as relative4, resolve as resolve9, sep as sep5 } from "node:path";
-import { gunzipSync } from "node:zlib";
-function parseActionEnginePinVersion(enginePin) {
-  const match = ACTION_ENGINE_PIN_RE.exec(enginePin.trim());
-  return match?.[1] ?? null;
-}
-function engineLabel(_runner) {
-  return `the pinned maestro-runner ${MAESTRO_RUNNER_PIN.version}`;
-}
-function preOAndroidApiRefusal(apiLevel) {
-  if (apiLevel >= MAESTRO_RUNNER_MIN_ANDROID_API)
-    return null;
-  return `maestro_run refused: Android API ${apiLevel} is below API ${MAESTRO_RUNNER_MIN_ANDROID_API}, the minimum the pinned maestro-runner ${MAESTRO_RUNNER_PIN.version} can drive \u2014 its bundled UiAutomator2 server APK declares minSdk ${MAESTRO_RUNNER_MIN_ANDROID_API}, so the install fails with INSTALL_FAILED_OLDER_SDK. ${PRE_O_REMEDY}`;
-}
-function isOlderSdkInstallFailure(output) {
-  return output.split(/\r?\n/).some((line) => line.includes("INSTALL_FAILED_OLDER_SDK") && INSTALL_REJECT_CONTEXT.test(line.replace(OLDER_SDK_TOKEN, " ")));
-}
-function olderSdkInstallDiagnosis(runner = "maestro-runner") {
-  return `The device rejected the bundled UiAutomator2 server APK with INSTALL_FAILED_OLDER_SDK: ${engineLabel(runner)} requires Android API ${MAESTRO_RUNNER_MIN_ANDROID_API}+ and this device is below it. ${PRE_O_REMEDY}`;
-}
-function compareVersions(a, b) {
-  const pa = a.split(".").map(Number);
-  const pb = b.split(".").map(Number);
-  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
-    const x = pa[i] ?? 0;
-    const y = pb[i] ?? 0;
-    if (x > y)
-      return 1;
-    if (x < y)
-      return -1;
-  }
-  return 0;
-}
-function meetsMaestroRunnerFloor(version2) {
-  return /^\d+(?:\.\d+)*$/.test(version2) && compareVersions(version2, MAESTRO_RUNNER_PIN.version) >= 0;
-}
-function pinCacheRoot(home = homedir4()) {
-  const override = process.env.RN_DEV_AGENT_RUNNER_CACHE;
-  const base = override && override.length > 0 ? override : join20(home, ".cache", "rn-dev-agent");
-  return resolve9(base, "maestro-runner", MAESTRO_RUNNER_PIN.version);
-}
-function pinnedRunnerBinPath(home) {
-  return join20(pinCacheRoot(home), "bin", "maestro-runner");
-}
-function isPinCacheMetadataPath(relPath) {
-  return relPath.split(/[/\\]/).some((part) => part.startsWith("._") || part === "PaxHeader" || part.startsWith("PaxHeaders."));
-}
-function tarText(buffer, offset, length) {
-  const end = buffer.indexOf(0, offset);
-  return buffer.subarray(offset, end >= offset && end < offset + length ? end : offset + length).toString();
-}
-function expectedPayloadEntries(archive) {
-  const tar = gunzipSync(archive, { maxOutputLength: 1024 * 1024 * 1024 });
-  const raw = [];
-  let offset = 0;
-  let longPath = null;
-  while (offset + 512 <= tar.length) {
-    const header = tar.subarray(offset, offset + 512);
-    if (header.every((byte) => byte === 0))
-      break;
-    const prefix = tarText(header, 345, 155);
-    const name = tarText(header, 0, 100);
-    const sizeText = tarText(header, 124, 12).trim();
-    const size = Number.parseInt(sizeText || "0", 8);
-    if (!Number.isSafeInteger(size) || size < 0 || offset + 512 + size > tar.length)
-      return null;
-    const type = String.fromCharCode(header[156] || 48);
-    const data = tar.subarray(offset + 512, offset + 512 + size);
-    const archivePath = longPath ?? [prefix, name].filter(Boolean).join("/");
-    longPath = null;
-    if (type === "L") {
-      longPath = data.toString().split("\0")[0].trim();
-    } else if (type === "0" || type === "\0" || type === "2" || type === "5") {
-      raw.push({ path: archivePath, type, data, link: tarText(header, 157, 100) });
-    }
-    offset += 512 + Math.ceil(size / 512) * 512;
-  }
-  const runner = raw.find((entry) => (entry.type === "0" || entry.type === "\0") && (entry.path === "bin/maestro-runner" || entry.path.endsWith("/bin/maestro-runner")));
-  if (!runner)
-    return null;
-  const rootPrefix = runner.path.slice(0, -"bin/maestro-runner".length);
-  const expected = /* @__PURE__ */ new Map();
-  for (const entry of raw) {
-    if (!entry.path.startsWith(rootPrefix) || entry.type === "5")
-      continue;
-    const path = entry.path.slice(rootPrefix.length).replace(/^\.\//, "");
-    if (!path || path.startsWith("/") || path.split("/").some((part) => part === ".."))
-      return null;
-    if (isPinCacheMetadataPath(path))
-      continue;
-    if (entry.type === "2") {
-      expected.set(path, { kind: "symlink", target: entry.link });
-    } else {
-      expected.set(path, {
-        kind: "file",
-        sha256: createHash10("sha256").update(entry.data).digest("hex")
-      });
-    }
-  }
-  return expected;
-}
-function payloadMatchesPinnedArchive(root, archive, expectedArchiveSha256) {
-  if (createHash10("sha256").update(archive).digest("hex") !== expectedArchiveSha256)
+// packages/rn-dev-agent-core/dist/tools/runner-leak-recovery.js
+function isAgentDeviceRunnerSentinel(nodes) {
+  if (!nodes || nodes.length === 0)
     return false;
-  const expected = expectedPayloadEntries(archive);
-  if (!expected)
+  if (nodes.length > SMALL_TREE_THRESHOLD)
     return false;
-  const seen = /* @__PURE__ */ new Set();
-  const visit = (directory) => {
-    for (const entry of readdirSync5(directory, { withFileTypes: true })) {
-      const path = join20(directory, entry.name);
-      const rel = relative4(root, path).split(sep5).join("/");
-      if (rel === ".payload.tar.gz" || isPinCacheMetadataPath(rel))
-        continue;
-      if (entry.isDirectory()) {
-        if (!visit(path))
-          return false;
-        continue;
-      }
-      const wanted = expected.get(rel);
-      if (!wanted)
-        return false;
-      seen.add(rel);
-      if (entry.isSymbolicLink()) {
-        if (wanted.kind !== "symlink" || readlinkSync4(path) !== wanted.target)
-          return false;
-        continue;
-      }
-      if (!entry.isFile() || wanted.kind !== "file")
-        return false;
-      const sha2562 = createHash10("sha256").update(readFileSync17(path)).digest("hex");
-      if (sha2562 !== wanted.sha256)
-        return false;
-    }
+  const hasRunnerAppLabel = nodes.some((n) => n.label === RUNNER_APP_LABEL);
+  if (hasRunnerAppLabel)
     return true;
-  };
-  return visit(root) && seen.size === expected.size;
+  const hasVisibleText = nodes.some((n) => n.label === RUNNER_VISIBLE_TEXT);
+  const hasFingerprintId = nodes.some((n) => n.identifier !== void 0 && RUNNER_FINGERPRINT_IDENTIFIERS.has(n.identifier));
+  return hasVisibleText && hasFingerprintId;
 }
-function installedPayloadMatchesPin(platformKey, root = pinCacheRoot()) {
-  try {
-    const expectedArchiveSha = pinnedArchiveSha256(platformKey);
-    if (!expectedArchiveSha)
-      return false;
-    const archive = readFileSync17(join20(root, ".payload.tar.gz"));
-    return payloadMatchesPinnedArchive(root, archive, expectedArchiveSha);
-  } catch {
-    return false;
+async function recoverFromRunnerLeak(ctx, deps) {
+  if (ctx.alreadyRecovered) {
+    return { recovered: false, result: emptyResult(), reason: "already-attempted" };
   }
-}
-function isRegularPinCacheBinary(path) {
-  try {
-    const stat2 = lstatSync10(path);
-    const ancestors = [dirname11(path), dirname11(dirname11(path)), dirname11(dirname11(dirname11(path)))];
-    const contained2 = ancestors.every((ancestor) => {
-      const ancestorStat = lstatSync10(ancestor);
-      return ancestorStat.isDirectory() && !ancestorStat.isSymbolicLink();
-    });
-    accessSync(path, constants7.X_OK);
-    return contained2 && stat2.isFile() && !stat2.isSymbolicLink();
-  } catch {
-    return false;
+  if ((ctx.platform ?? "ios").toLowerCase() !== "ios") {
+    return { recovered: false, result: emptyResult(), reason: "wrong-platform" };
   }
-}
-function getMaestroRunnerPath() {
-  const path = pinnedRunnerBinPath();
-  return isRegularPinCacheBinary(path) ? path : null;
-}
-function runnerCacheVersionsRoot() {
-  return dirname11(pinCacheRoot());
-}
-function pinCacheVersionForPath(path) {
-  if (!isRegularPinCacheBinary(path) || basename4(path) !== "maestro-runner")
-    return null;
-  const versionDir = dirname11(dirname11(resolve9(path)));
-  if (dirname11(versionDir) !== resolve9(runnerCacheVersionsRoot()))
-    return null;
-  const version2 = basename4(versionDir);
-  return /^\d+(?:\.\d+)*$/.test(version2) ? version2 : null;
-}
-function getMaestroRunnerDetectionPath() {
-  const exact = getMaestroRunnerPath();
-  if (exact)
-    return exact;
-  const root = runnerCacheVersionsRoot();
-  try {
-    const candidates = readdirSync5(root, { withFileTypes: true }).filter((entry) => entry.isDirectory() && /^\d+(?:\.\d+)*$/.test(entry.name)).map((entry) => ({
-      version: entry.name,
-      path: join20(root, entry.name, "bin", "maestro-runner")
-    })).filter((candidate) => isRegularPinCacheBinary(candidate.path)).sort((left, right) => compareVersions(right.version, left.version));
-    return candidates[0]?.path ?? null;
-  } catch {
-    return null;
+  if (!ctx.appId) {
+    return { recovered: false, result: emptyResult(), reason: "no-session-context" };
   }
-}
-function nodePlatformKey(platform = process.platform, arch = process.arch) {
-  return `${platform}-${arch}`;
-}
-function pinArchiveCoords(platformKey) {
-  switch (platformKey) {
-    case "darwin-arm64":
-      return { os: "darwin", arch: "arm64" };
-    case "darwin-x64":
-      return { os: "darwin", arch: "amd64" };
-    case "linux-x64":
-      return { os: "linux", arch: "amd64" };
-    case "linux-arm64":
-      return { os: "linux", arch: "arm64" };
-    default:
-      return null;
-  }
-}
-function buildReplayEngineStatus(cls, version2, _cliPresent, extras = {}) {
-  const engine = cls === "pinned-ok" ? "maestro-runner" : "none";
-  return {
-    engine,
-    version: version2,
-    pin: { pinned: MAESTRO_RUNNER_PIN.version, status: cls },
-    quirks: MAESTRO_RUNNER_PIN.knownQuirks.map((q) => q.id),
-    selectedPath: extras.selectedPath ?? null,
-    provenance: extras.provenance ?? (cls === "not-installed" ? "none" : "pin-cache")
-  };
-}
-function enginePinCaveat(status) {
-  const cls = status.pin.status;
-  if (cls === "drift-newer" || cls === "drift-older") {
-    return `maestro-runner ${status.version} differs from the tested pin ${status.pin.pinned} (untested drift \u2014 B223-class behavior changes arrive silently; see the upgrade ritual in engine-pin.ts)`;
-  }
-  if (cls === "checksum-mismatch") {
-    return `maestro-runner pin-cache binary checksum does not match the ${status.pin.pinned} manifest \u2014 possible corruption or tampering; reinstall via ensure-maestro-runner.sh`;
-  }
-  return null;
-}
-function isRegexShapedSelector(value) {
-  for (let i = 0; i < value.length; i += 1) {
-    const ch = value[i];
-    if (ch === "\\")
-      return true;
-    if (REGEX_METACHARACTERS.has(ch))
-      return true;
-  }
-  return false;
-}
-function selectorTextValues(value, found) {
-  if (typeof value === "string") {
-    if (isRegexShapedSelector(value))
-      found.push(value);
-    return;
-  }
-  if (Array.isArray(value)) {
-    for (const entry of value)
-      selectorTextValues(entry, found);
-    return;
-  }
-  if (!value || typeof value !== "object")
-    return;
-  for (const [key, nested] of Object.entries(value)) {
-    if (key === "text" || RELATIVE_SELECTOR_KEYS.has(key)) {
-      selectorTextValues(nested, found);
+  const sleep6 = deps.sleep ?? defaultSleep;
+  if (deps.reacquire) {
+    const tier0 = await attemptReacquireCycle(deps, sleep6);
+    if (tier0.phase === "success") {
+      return { recovered: true, result: tier0.result, tier: "reacquire" };
     }
   }
+  const tier1 = await attemptRecoveryCycle(ctx, deps, true, sleep6);
+  if (tier1.phase === "success") {
+    return { recovered: true, result: tier1.result, tier: "attach-only" };
+  }
+  const tier2 = await attemptRecoveryCycle(ctx, deps, false, sleep6);
+  if (tier2.phase === "success") {
+    return { recovered: true, result: tier2.result, tier: "full-relaunch" };
+  }
+  if (tier2.phase === "sentinel") {
+    return { recovered: false, result: tier2.result, reason: "still-sentinel" };
+  }
+  return { recovered: false, result: tier2.result, reason: "reopen-failed" };
 }
-function conditionTextValues(value, found) {
-  if (!value || typeof value !== "object" || Array.isArray(value))
-    return;
-  for (const [key, nested] of Object.entries(value)) {
-    if (key === "visible" || key === "notVisible")
-      selectorTextValues(nested, found);
+async function attemptReacquireCycle(deps, sleep6) {
+  const reacqResult = await deps.reacquire();
+  if (reacqResult.isError) {
+    return { phase: "reopen-failed", result: reacqResult };
   }
+  await sleep6(DAEMON_SETTLE_MS);
+  const retryResult = await deps.resnapshot();
+  if (retryResult.isError) {
+    return { phase: "snapshot-failed", result: retryResult };
+  }
+  if (isAgentDeviceRunnerSentinel(deps.parseNodes(retryResult))) {
+    return { phase: "sentinel", result: retryResult };
+  }
+  return { phase: "success", result: retryResult };
 }
-function findRegexTextSelectors(commands) {
-  const found = [];
-  const visit = (value) => {
-    if (Array.isArray(value)) {
-      for (const entry of value)
-        visit(entry);
-      return;
-    }
-    if (value && typeof value === "object") {
-      for (const [key, nested] of Object.entries(value)) {
-        if (TEXT_SELECTOR_KEYS.has(key))
-          selectorTextValues(nested, found);
-        if (key === "scrollUntilVisible" && nested && typeof nested === "object") {
-          selectorTextValues(nested.element, found);
-        }
-        if (key === "extendedWaitUntil")
-          conditionTextValues(nested, found);
-        if (key === "when")
-          conditionTextValues(nested, found);
-        visit(nested);
-      }
-    }
-  };
-  visit(commands);
-  return found;
-}
-function pinCorrection(status, platformKey = nodePlatformKey()) {
-  const cls = status.pin.status;
-  const pinned = status.pin.pinned;
-  const installed = status.version ?? "unknown";
-  const install = `Install attested ${pinned} (floor >= ${pinned}) via ${PINNED_RUNNER_INSTALL_HINT} (session pin-cache; do not use PATH or brew maestro).`;
-  if (pinArchiveCoords(platformKey) === null) {
-    return `maestro-runner is unsupported on ${platformKey}. Supported platforms: darwin-arm64, darwin-x64, linux-x64, linux-arm64. ${install}`;
-  }
-  switch (cls) {
-    case "not-installed":
-      return `Session maestro-runner ${pinned} is not installed. ${install}`;
-    case "drift-older":
-      return `Session maestro-runner ${installed} is older than the required pin ${pinned}. ${install}`;
-    case "drift-newer":
-      return `Session maestro-runner ${installed} is newer than the attested default ${pinned} and is not executed without attestation. ${install}`;
-    case "checksum-mismatch":
-      return `Session maestro-runner binary checksum does not match the ${pinned} pin manifest. ${install}`;
-    case "unknown-version":
-      return `Session maestro-runner version could not be read. ${install}`;
-    case "unverified":
-      if (status.version && compareVersions(status.version, pinned) > 0) {
-        return `UNVERIFIED_NEWER_DRIFT: Session pin-cache contains an unverified newer maestro-runner entry ${installed}; its directory name is not trusted binary evidence and it will not be executed. ${install}`;
-      }
-      return `Session maestro-runner ${installed} could not be checksum-verified on ${platformKey}. ${install}`;
-    case "pinned-ok":
-      return `Session maestro-runner ${pinned} is selected from the pin-cache.`;
-  }
-}
-function exactPinRefusal(status, platformKey = nodePlatformKey()) {
-  if (!status) {
-    return `maestro_run refused: session runner ${MAESTRO_RUNNER_PIN.version} could not be detected. ${pinCorrection(buildReplayEngineStatus("not-installed", null, false), platformKey)}`;
-  }
-  if (status.pin.status === "pinned-ok")
-    return null;
-  return `maestro_run refused: ${pinCorrection(status, platformKey)}`;
-}
-async function immediateRunnerPinRefusal(runnerPath, resolveStatus = () => getEngineStatus().catch(() => null)) {
-  const status = await resolveStatus();
-  const refusal = exactPinRefusal(status);
-  if (refusal)
-    return `RUNNER_PIN_CHANGED: ${refusal}`;
-  const canonicalPath2 = getMaestroRunnerPath();
-  if (!canonicalPath2 || !status?.selectedPath) {
-    return "RUNNER_PIN_CHANGED: verified runner path disappeared before execution.";
-  }
-  if (resolve9(canonicalPath2) !== resolve9(runnerPath) || resolve9(status.selectedPath) !== resolve9(runnerPath)) {
-    return "RUNNER_PIN_CHANGED: verified runner path changed before execution.";
-  }
-  return null;
-}
-function copyPayloadTree(source, destination) {
-  const sourceStat = lstatSync10(source);
-  if (!sourceStat.isDirectory() || sourceStat.isSymbolicLink()) {
-    throw new Error(`RUNNER_PIN_CHANGED: payload directory changed before execution.`);
-  }
-  mkdirSync12(destination, { recursive: true });
-  for (const entry of readdirSync5(source, { withFileTypes: true })) {
-    const sourcePath = join20(source, entry.name);
-    const destinationPath = join20(destination, entry.name);
-    const stat2 = lstatSync10(sourcePath);
-    if (stat2.isDirectory() && !stat2.isSymbolicLink()) {
-      copyPayloadTree(sourcePath, destinationPath);
-      chmodSync4(destinationPath, stat2.mode & 511);
-    } else if (stat2.isFile() && !stat2.isSymbolicLink()) {
-      copyFileSync2(sourcePath, destinationPath, constants7.COPYFILE_EXCL | constants7.COPYFILE_FICLONE);
-      chmodSync4(destinationPath, stat2.mode & 511);
-    } else if (stat2.isSymbolicLink()) {
-      symlinkSync3(readlinkSync4(sourcePath), destinationPath);
-    } else {
-      throw new Error(`RUNNER_PIN_CHANGED: unsupported payload entry ${sourcePath}.`);
-    }
-  }
-}
-function runnerCacheBootstrapFailure(error2) {
-  return `WDA bootstrap could not provision its authority-bound runner cache: ${error2.message}. No foreign cache path was changed; any cache directory created by this spawn was removed. Verify the runner cache parent is writable, then retry the exact replay.`;
-}
-function cacheErrno(error2) {
-  const code = error2?.code;
-  return typeof code === "string" && /^[A-Z0-9_]+$/.test(code) ? code : "UNKNOWN";
-}
-function expectedRunnerCacheRoot(snapshotRoot) {
-  const snapshotName = basename4(snapshotRoot);
-  const prefix = `.spawn-${MAESTRO_RUNNER_PIN.version}-`;
-  if (!snapshotName.startsWith(prefix) || dirname11(snapshotRoot) !== runnerCacheVersionsRoot()) {
-    throw new RunnerCacheUnavailableError("cache", "UNBOUND_SNAPSHOT");
-  }
-  return join20(runnerCacheVersionsRoot(), `.wda-cache-${MAESTRO_RUNNER_PIN.version}-${snapshotName.slice(prefix.length)}`);
-}
-function assertRunnerSnapshotCacheBinding(snapshotRoot, cacheRoot) {
-  try {
-    const expectedCacheRoot = expectedRunnerCacheRoot(snapshotRoot);
-    if (resolve9(cacheRoot) !== resolve9(expectedCacheRoot)) {
-      throw new RunnerCacheUnavailableError("cache", "FOREIGN_PATH");
-    }
-    const cacheStat = lstatSync10(cacheRoot);
-    if (!cacheStat.isDirectory() || cacheStat.isSymbolicLink()) {
-      throw new RunnerCacheUnavailableError("cache", "INVALID_TARGET");
-    }
-    if ((cacheStat.mode & 511) !== 448) {
-      throw new RunnerCacheUnavailableError("cache", "UNSAFE_MODE");
-    }
-    const cacheLink = join20(snapshotRoot, "cache");
-    if (!lstatSync10(cacheLink).isSymbolicLink()) {
-      throw new RunnerCacheUnavailableError("cache", "NOT_LINKED");
-    }
-    if (realpathSync11(cacheLink) !== realpathSync11(cacheRoot)) {
-      throw new RunnerCacheUnavailableError("cache", "FOREIGN_PATH");
-    }
-  } catch (error2) {
-    if (error2 instanceof RunnerCacheUnavailableError)
-      throw error2;
-    throw new RunnerCacheUnavailableError("cache", cacheErrno(error2));
-  }
-}
-function provisionRunnerSnapshotCache(snapshotRoot, testHooks = {}, setOwnedCacheRoot = () => {
-}) {
-  const cacheRoot = expectedRunnerCacheRoot(snapshotRoot);
-  let ownsCacheRoot = false;
-  try {
-    testHooks.beforeCacheProvision?.(cacheRoot);
-    mkdirSync12(cacheRoot, { mode: 448 });
-    ownsCacheRoot = true;
-    setOwnedCacheRoot(cacheRoot);
-    chmodSync4(cacheRoot, 448);
-    testHooks.beforeCacheBinding?.(cacheRoot);
-    symlinkSync3(cacheRoot, join20(snapshotRoot, "cache"), "dir");
-    assertRunnerSnapshotCacheBinding(snapshotRoot, cacheRoot);
-    return cacheRoot;
-  } catch (error2) {
-    const failure = error2 instanceof RunnerCacheUnavailableError ? error2 : new RunnerCacheUnavailableError("cache", cacheErrno(error2));
-    if (ownsCacheRoot) {
-      try {
-        rmSync8(cacheRoot, { recursive: true, force: true });
-        setOwnedCacheRoot(null);
-      } catch (cleanupError) {
-        throw new RunnerCacheUnavailableError("cache", `${failure.errno}_CLEANUP_${cacheErrno(cleanupError)}`);
-      }
-    }
-    throw failure;
-  }
-}
-function removeRunnerSnapshotAndCache(snapshotRoot, cacheRoot) {
-  let cleanupError;
-  try {
-    rmSync8(snapshotRoot, { recursive: true, force: true });
-  } catch (error2) {
-    cleanupError = error2;
-  }
-  if (cacheRoot) {
-    try {
-      rmSync8(cacheRoot, { recursive: true, force: true });
-    } catch (error2) {
-      cleanupError ??= error2;
-    }
-  }
-  recordRunnerDiagnostic("cleanup", {
-    snapshotRemoved: !existsSync15(snapshotRoot),
-    cacheRemoved: cacheRoot === null || !existsSync15(cacheRoot)
+async function attemptRecoveryCycle(ctx, deps, attachOnly, sleep6) {
+  await deps.closeSession();
+  await sleep6(DAEMON_SETTLE_MS);
+  const reopenResult = await deps.openSession({
+    appId: ctx.appId,
+    platform: "ios",
+    ...ctx.deviceId ? { deviceId: ctx.deviceId } : {},
+    sessionName: ctx.sessionName,
+    attachOnly
   });
-  if (cleanupError)
-    throw cleanupError;
+  if (reopenResult.isError) {
+    return { phase: "reopen-failed", result: reopenResult };
+  }
+  const retryResult = await deps.resnapshot();
+  if (retryResult.isError) {
+    return { phase: "snapshot-failed", result: retryResult };
+  }
+  if (isAgentDeviceRunnerSentinel(deps.parseNodes(retryResult))) {
+    return { phase: "sentinel", result: retryResult };
+  }
+  return { phase: "success", result: retryResult };
 }
-async function withImmediatePinnedRunner(runnerPath, resolveStatus, execute2, platform, testHooks = {}) {
-  const refusal = await immediateRunnerPinRefusal(runnerPath, resolveStatus);
-  if (refusal)
-    throw new Error(refusal);
-  const expectedSha256 = pinnedSha256(nodePlatformKey());
-  if (!expectedSha256) {
-    throw new Error("RUNNER_PIN_CHANGED: runner checksum is unavailable for this platform.");
-  }
-  const snapshotRoot = mkdtempSync2(join20(runnerCacheVersionsRoot(), `.spawn-${MAESTRO_RUNNER_PIN.version}-`));
-  let cacheRoot = null;
-  recordRunnerDiagnostic("spawn-begin", {
-    snapshotId: basename4(snapshotRoot),
-    runnerPinVersion: MAESTRO_RUNNER_PIN.version
-  });
-  try {
-    copyPayloadTree(pinCacheRoot(), snapshotRoot);
-    const snapshotRunner = join20(snapshotRoot, "bin", "maestro-runner");
-    const snapshotStat = lstatSync10(snapshotRunner);
-    if (!snapshotStat.isFile() || snapshotStat.isSymbolicLink() || !installedPayloadMatchesPin(nodePlatformKey(), snapshotRoot) || createHash10("sha256").update(readFileSync17(snapshotRunner)).digest("hex") !== expectedSha256) {
-      recordRunnerDiagnostic("payload-verify", { result: "failed" });
-      throw new Error("RUNNER_PIN_CHANGED: payload content changed before execution.");
-    }
-    recordRunnerDiagnostic("payload-verify", {
-      result: "passed",
-      runnerPinVersion: MAESTRO_RUNNER_PIN.version,
-      provenance: "pin-cache",
-      payloadShaPrefix: expectedSha256.slice(0, 12)
-    });
-    const helper = verifiedNativePublicationHelper();
-    const snapshotHelper = join20(snapshotRoot, ".runner-exec");
-    copyFileSync2(helper.path, snapshotHelper, constants7.COPYFILE_EXCL | constants7.COPYFILE_FICLONE);
-    chmodSync4(snapshotHelper, 320);
-    if (createHash10("sha256").update(readFileSync17(snapshotHelper)).digest("hex") !== helper.sha256) {
-      throw new Error("RUNNER_PIN_CHANGED: execution binding changed before execution.");
-    }
-    if (platform === "ios") {
-      try {
-        cacheRoot = provisionRunnerSnapshotCache(snapshotRoot, testHooks, (ownedCacheRoot) => {
-          cacheRoot = ownedCacheRoot;
-        });
-        recordRunnerDiagnostic("cache-provision", {
-          result: "passed",
-          variant: "symlink",
-          resolvedPath: "../" + basename4(cacheRoot)
-        });
-      } catch (error2) {
-        const failure = error2 instanceof RunnerCacheUnavailableError ? error2 : new RunnerCacheUnavailableError("cache", cacheErrno(error2));
-        recordRunnerDiagnostic("cache-provision", {
-          result: "failed",
-          variant: "symlink",
-          resolvedPath: "cache",
-          errno: failure.errno
-        });
-        recordRunnerDiagnostic("typed-failure", {
-          code: failure.code,
-          errno: failure.errno,
-          path: failure.relativePath
-        });
-        throw failure;
-      }
-    }
-    for (const entry of readdirSync5(snapshotRoot, { recursive: true, withFileTypes: true })) {
-      const entryPath = join20(entry.parentPath, entry.name);
-      if (entry.isSymbolicLink())
-        continue;
-      if (entry.isDirectory())
-        chmodSync4(entryPath, 320);
-      else if (entry.isFile()) {
-        chmodSync4(entryPath, entryPath === snapshotRunner || entryPath === snapshotHelper ? 320 : 256);
-      }
-    }
-    chmodSync4(snapshotRoot, 320);
-    if (cacheRoot)
-      assertRunnerSnapshotCacheBinding(snapshotRoot, cacheRoot);
-    const openedRunner = lstatSync10(snapshotRunner);
-    recordRunnerDiagnostic("runner-exec-begin", { runnerPinVersion: MAESTRO_RUNNER_PIN.version });
-    if (platform === "ios") {
-      recordRunnerDiagnostic("wda-bootstrap-begin", { cachePath: "cache" });
-    }
-    return await execute2(snapshotHelper, [
-      "--exec-file",
-      snapshotRunner,
-      String(openedRunner.dev),
-      String(openedRunner.ino),
-      "--"
-    ]);
-  } finally {
-    try {
-      chmodSync4(snapshotRoot, 448);
-      for (const entry of readdirSync5(snapshotRoot, { recursive: true, withFileTypes: true })) {
-        const entryPath = join20(entry.parentPath, entry.name);
-        if (entry.isSymbolicLink())
-          continue;
-        if (entry.isDirectory())
-          chmodSync4(entryPath, 448);
-        else if (entry.isFile())
-          chmodSync4(entryPath, 384);
-      }
-    } catch {
-    }
-    removeRunnerSnapshotAndCache(snapshotRoot, cacheRoot);
-  }
+function emptyResult() {
+  return { content: [{ type: "text", text: "" }] };
 }
-function pinnedSha256(platformKey) {
-  return testAttestation?.sha256 ?? MAESTRO_RUNNER_PIN.sha256[platformKey];
-}
-function pinnedArchiveSha256(platformKey) {
-  return testAttestation?.archiveSha256 ?? MAESTRO_RUNNER_PIN.archiveSha256[platformKey];
-}
-function defaultHashFile(bin) {
-  return createHash10("sha256").update(readFileSync17(bin)).digest("hex");
-}
-async function detect(resolvers) {
-  const binPath = (resolvers.binPath ?? getMaestroRunnerDetectionPath)();
-  const platformKey = resolvers.platformKey ?? nodePlatformKey();
-  if (!binPath) {
-    return buildReplayEngineStatus("not-installed", null, false, {
-      selectedPath: null,
-      provenance: "none"
-    });
-  }
-  const cacheVersion = pinCacheVersionForPath(binPath);
-  if (cacheVersion && cacheVersion !== MAESTRO_RUNNER_PIN.version) {
-    let sha2563 = null;
-    try {
-      sha2563 = (resolvers.hashFile ?? defaultHashFile)(binPath);
-    } catch {
-      sha2563 = null;
-    }
-    const expectedSha2562 = TRUSTED_DRIFT_SHA256[cacheVersion]?.[platformKey];
-    if (!sha2563) {
-      return buildReplayEngineStatus("unverified", null, false, {
-        selectedPath: binPath,
-        provenance: "pin-cache"
-      });
-    }
-    const comparison = compareVersions(cacheVersion, MAESTRO_RUNNER_PIN.version);
-    if (!expectedSha2562) {
-      return buildReplayEngineStatus("unverified", cacheVersion, false, {
-        selectedPath: binPath,
-        provenance: "pin-cache"
-      });
-    }
-    if (sha2563 !== expectedSha2562) {
-      return buildReplayEngineStatus("checksum-mismatch", null, false, {
-        selectedPath: binPath,
-        provenance: "pin-cache"
-      });
-    }
-    const cls = comparison < 0 ? "drift-older" : comparison > 0 ? "drift-newer" : "unknown-version";
-    return buildReplayEngineStatus(cls, cacheVersion, false, {
-      selectedPath: binPath,
-      provenance: "pin-cache"
-    });
-  }
-  let sha2562 = null;
-  try {
-    sha2562 = (resolvers.hashFile ?? defaultHashFile)(binPath);
-  } catch {
-    sha2562 = null;
-  }
-  const expectedSha256 = MAESTRO_RUNNER_PIN.sha256[platformKey];
-  if (!expectedSha256 || !sha2562) {
-    return buildReplayEngineStatus("unverified", null, false, {
-      selectedPath: binPath,
-      provenance: "pin-cache"
-    });
-  }
-  if (sha2562 !== expectedSha256) {
-    return buildReplayEngineStatus("checksum-mismatch", null, false, {
-      selectedPath: binPath,
-      provenance: "pin-cache"
-    });
-  }
-  if (!resolvers.binPath && !resolvers.hashFile && !installedPayloadMatchesPin(platformKey)) {
-    return buildReplayEngineStatus("checksum-mismatch", null, false, {
-      selectedPath: binPath,
-      provenance: "pin-cache"
-    });
-  }
-  return buildReplayEngineStatus("pinned-ok", MAESTRO_RUNNER_PIN.version, false, {
-    selectedPath: binPath,
-    provenance: "pin-cache"
-  });
-}
-function getEngineStatus(resolvers) {
-  if (testStatus)
-    return Promise.resolve(testStatus);
-  return detect(resolvers ?? {}).catch(() => buildReplayEngineStatus("unknown-version", null, false));
-}
-var MAESTRO_RUNNER_PIN, TRUSTED_DRIFT_SHA256, ACTION_ENGINE_PIN, ACTION_ENGINE_PIN_RE, HOST_PLUGIN_ROOT, PINNED_RUNNER_INSTALL_HINT, PINNED_RUNNER_DIAGNOSE_HINT, MAESTRO_RUNNER_MIN_ANDROID_API, PRE_O_REMEDY, OLDER_SDK_TOKEN, INSTALL_REJECT_CONTEXT, REGEX_METACHARACTERS, TEXT_SELECTOR_KEYS, RELATIVE_SELECTOR_KEYS, RunnerCacheUnavailableError, testStatus, testAttestation;
-var init_engine_pin = __esm({
-  "packages/rn-dev-agent-core/dist/domain/engine-pin.js"() {
+var RUNNER_APP_LABEL, RUNNER_VISIBLE_TEXT, RUNNER_FINGERPRINT_IDENTIFIERS, SMALL_TREE_THRESHOLD, DAEMON_SETTLE_MS, defaultSleep;
+var init_runner_leak_recovery = __esm({
+  "packages/rn-dev-agent-core/dist/tools/runner-leak-recovery.js"() {
     "use strict";
-    init_process_birth();
-    init_runner_diagnostics();
-    init_maestro_runner_pin();
-    MAESTRO_RUNNER_PIN = Object.freeze({
-      version: maestro_runner_pin_default.version,
-      sha256: Object.freeze({ ...maestro_runner_pin_default.sha256 }),
-      archiveSha256: Object.freeze({ ...maestro_runner_pin_default.archiveSha256 }),
-      knownQuirks: Object.freeze(maestro_runner_pin_default.knownQuirks.map((quirk) => Object.freeze({ ...quirk })))
-    });
-    TRUSTED_DRIFT_SHA256 = Object.freeze({
-      "1.0.9": Object.freeze({
-        "darwin-arm64": "7d3777a67f8cc3d5e3927f498ddda8a56c424a10158f7cd4fa494ecc3ed97923",
-        "darwin-x64": "36f8a973c3231b6b8125db4a3e131b8c3193aec6774145584b18070be979fd5f",
-        "linux-arm64": "a8e8197c63502fba874ce69b908174d46a47c6539025184e3003e70576d9451e",
-        "linux-x64": "bf7e9ef297c35712e9fad0ad56a65b7fd94e1f30168733cf09459b4ea80c4c3e"
-      })
-    });
-    ACTION_ENGINE_PIN = `maestro-runner@${MAESTRO_RUNNER_PIN.version}`;
-    ACTION_ENGINE_PIN_RE = /^maestro-runner@(\d+(?:\.\d+)*)$/;
-    HOST_PLUGIN_ROOT = "${CLAUDE_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}";
-    PINNED_RUNNER_INSTALL_HINT = `bash ${HOST_PLUGIN_ROOT}/scripts/ensure-maestro-runner.sh`;
-    PINNED_RUNNER_DIAGNOSE_HINT = `node ${HOST_PLUGIN_ROOT}/rn-dev-agent-core/dist/maestro-runner-pin.js diagnose`;
-    MAESTRO_RUNNER_MIN_ANDROID_API = 26;
-    PRE_O_REMEDY = "Action replay / E2E via the maestro engine is unsupported on this device; the direct device_* interaction tier still works (rn-android-runner supports API 23+), except for the few device_* paths that fall back to maestro (dev-client picker, system dialogs, device_fill correction), which hit this same limit.";
-    OLDER_SDK_TOKEN = /INSTALL_FAILED_OLDER_SDK/g;
-    INSTALL_REJECT_CONTEXT = /\b(?:adb|install|installing|failure|uiautomator2)\b|\.apk\b/i;
-    REGEX_METACHARACTERS = /* @__PURE__ */ new Set([
-      ".",
-      "^",
-      "$",
-      "*",
-      "+",
-      "?",
-      "(",
-      ")",
-      "[",
-      "]",
-      "{",
-      "}",
-      "|"
-    ]);
-    TEXT_SELECTOR_KEYS = /* @__PURE__ */ new Set([
-      "tapOn",
-      "doubleTapOn",
-      "longPressOn",
-      "assertVisible",
-      "assertNotVisible",
-      "copyTextFrom"
-    ]);
-    RELATIVE_SELECTOR_KEYS = /* @__PURE__ */ new Set([
-      "above",
-      "below",
-      "leftOf",
-      "rightOf",
-      "childOf",
-      "containsChild",
-      "containsDescendants"
-    ]);
-    RunnerCacheUnavailableError = class extends Error {
-      relativePath;
-      errno;
-      code = "RUNNER_CACHE_UNAVAILABLE";
-      constructor(relativePath, errno) {
-        super(`RUNNER_CACHE_UNAVAILABLE: ${relativePath}: ${errno}`);
-        this.relativePath = relativePath;
-        this.errno = errno;
-        this.name = "RunnerCacheUnavailableError";
-      }
-    };
+    RUNNER_APP_LABEL = "AgentDeviceRunner";
+    RUNNER_VISIBLE_TEXT = "Agent Device Runner";
+    RUNNER_FINGERPRINT_IDENTIFIERS = /* @__PURE__ */ new Set(["Logo", "PoweredBy"]);
+    SMALL_TREE_THRESHOLD = 12;
+    DAEMON_SETTLE_MS = 600;
+    defaultSleep = (ms) => new Promise((r) => setTimeout(r, ms));
   }
 });
 
-// packages/rn-dev-agent-core/dist/tools/maestro-dispatch.js
-function shouldWarnFallback(reason) {
-  if (warnedFallbackReasons.has(reason))
-    return false;
-  warnedFallbackReasons.add(reason);
-  return true;
+// packages/rn-dev-agent-core/dist/tools/app-lifecycle.js
+import { execFile as execFileCb2 } from "node:child_process";
+import { promisify as promisify3 } from "node:util";
+function resolveIosLifecycleTarget(deviceId) {
+  if (deviceId === void 0)
+    return "booted";
+  if (!IOS_UDID_RE.test(deviceId)) {
+    throw new Error("iOS lifecycle deviceId must be an exact simulator UDID");
+  }
+  return deviceId;
 }
-function flowContainsHideKeyboard(commands) {
-  return commands.some((c) => c === "hideKeyboard" || typeof c === "object" && c !== null && "hideKeyboard" in c);
+function buildIosLaunchArgv(bundleId, deviceId) {
+  if (typeof bundleId !== "string" || bundleId.length === 0) {
+    throw new Error("buildIosLaunchArgv: bundleId is required");
+  }
+  return ["simctl", "launch", resolveIosLifecycleTarget(deviceId), bundleId];
 }
-function chooseMaestroDispatch(inputs) {
-  const runnerPath = (inputs.maestroRunnerPath ?? getMaestroRunnerPath)();
-  if (runnerPath) {
-    return {
-      runner: "maestro-runner",
-      binPath: runnerPath,
-      buildArgs: (platform, flowFile, appFile, deviceId) => [
-        ...appFile ? ["--app-file", appFile] : [],
-        "--platform",
-        platform,
-        ...deviceId ? ["--device", deviceId] : [],
-        "test",
-        flowFile
-      ]
-    };
+function buildIosTerminateArgv(bundleId, deviceId) {
+  if (typeof bundleId !== "string" || bundleId.length === 0) {
+    throw new Error("buildIosTerminateArgv: bundleId is required");
   }
-  return {
-    error: `Session maestro-runner ${MAESTRO_RUNNER_PIN.version} is not installed in the pin-cache. Install attested ${MAESTRO_RUNNER_PIN.version} (floor >= ${MAESTRO_RUNNER_PIN.version}) via ${PINNED_RUNNER_INSTALL_HINT}. Ambient PATH maestro-runner, ~/.maestro-runner, and brew maestro are never used.`,
-    hint: `run ensure-maestro-runner.sh for attested ${MAESTRO_RUNNER_PIN.version} (floor >= ${MAESTRO_RUNNER_PIN.version})`
-  };
+  return ["simctl", "terminate", resolveIosLifecycleTarget(deviceId), bundleId];
 }
-var warnedFallbackReasons;
-var init_maestro_dispatch = __esm({
-  "packages/rn-dev-agent-core/dist/tools/maestro-dispatch.js"() {
-    "use strict";
-    init_engine_pin();
-    warnedFallbackReasons = /* @__PURE__ */ new Set();
+function resolveAndroidLifecycleTarget(deviceId) {
+  if (deviceId === void 0)
+    return [];
+  if (!ANDROID_SERIAL_RE2.test(deviceId)) {
+    throw new Error("Android lifecycle deviceId must be an exact adb serial");
   }
-});
-
-// packages/rn-dev-agent-core/dist/domain/ansi.js
-function stripAnsi(value) {
-  return value.replace(ANSI_RE, "");
+  return ["-s", deviceId];
 }
-var ANSI_RE;
-var init_ansi = __esm({
-  "packages/rn-dev-agent-core/dist/domain/ansi.js"() {
-    "use strict";
-    ANSI_RE = new RegExp(String.fromCharCode(27) + "\\[[0-9;]*m", "g");
-  }
-});
-
-// packages/rn-dev-agent-core/dist/domain/maestro-error-parser.js
-function blockReasons(lines, stepIndex) {
-  const reasons = [];
-  for (let i = stepIndex + 1; i < lines.length; i++) {
-    if (RUNNER_STEP_RE.test(lines[i]))
-      break;
-    if (REASON_LINE_RE.test(lines[i]))
-      reasons.push(lines[i]);
-  }
-  return reasons;
-}
-function idWaitStepAmongDuplicates(lines, terminalIndex, terminalReason2) {
-  for (let i = terminalIndex - 1; i >= 0; i--) {
-    const step = RUNNER_STEP_RE.exec(lines[i]);
-    if (!step)
-      continue;
-    if (step[1] !== "\u2717")
-      return null;
-    if (!blockReasons(lines, i).includes(terminalReason2))
-      return null;
-    const stepMatch = ID_WAIT_STEP_RE.exec(step[2]);
-    if (stepMatch)
-      return stepMatch;
-  }
-  return null;
-}
-function parseTerminalIdWait(output, suppliedFailedStep) {
-  const lines = stripAnsi(output).split("\n");
-  let terminalStep;
-  for (let index = 0; index < lines.length; index++) {
-    const match = RUNNER_STEP_RE.exec(lines[index]);
-    if (match)
-      terminalStep = { index, status: match[1], name: match[2] };
-  }
-  if (terminalStep?.status === "\u2713")
-    return null;
-  if (suppliedFailedStep && terminalStep && terminalStep.name !== suppliedFailedStep)
-    return null;
-  const failedStep = suppliedFailedStep ?? terminalStep?.name;
-  if (!failedStep || terminalStep && terminalStep.status !== "\u2717")
-    return null;
-  const reasonLine = lines.slice(terminalStep ? terminalStep.index + 1 : 0).filter((line) => REASON_LINE_RE.test(line)).at(-1);
-  if (!reasonLine)
-    return null;
-  const reasonMatch = ID_WAIT_REASON_RE.exec(reasonLine);
-  if (!reasonMatch)
-    return null;
-  const stepMatch = ID_WAIT_STEP_RE.exec(failedStep) ?? (terminalStep && SELECTOR_LESS_ID_WAIT_SUMMARY_RE.test(failedStep) ? idWaitStepAmongDuplicates(lines, terminalStep.index, reasonLine) : null);
-  if (!stepMatch || reasonMatch[2] !== stepMatch[2])
-    return null;
-  return {
-    kind: "SELECTOR_NOT_FOUND",
-    selectorKind: "id",
-    selector: stepMatch[2],
-    raw: output
-  };
-}
-function parseMaestroFailure(output, terminal) {
-  const raw = typeof output === "string" ? output : "";
-  if (terminal?.exitClass === "timed-out") {
-    return { kind: "TIMEOUT", selector: terminal.failureSelector ?? null, raw };
-  }
-  if (terminal?.failureKind === "SELECTOR_NOT_FOUND") {
-    return {
-      kind: "SELECTOR_NOT_FOUND",
-      selectorKind: "unknown",
-      selector: terminal.failureSelector ?? "",
-      raw
-    };
-  }
-  if (terminal?.failureKind === "TIMEOUT") {
-    return { kind: "TIMEOUT", selector: terminal.failureSelector ?? null, raw };
-  }
-  if (terminal?.failureKind === "ASSERTION_FAILED") {
-    return { kind: "ASSERTION_FAILED", selector: terminal.failureSelector ?? null, raw };
-  }
-  if (terminal?.exitClass === "before-first-step" && terminal.bootstrapEvidence) {
-    return {
-      kind: "WDA_BOOTSTRAP_FAILED",
-      detail: terminal.bootstrapEvidence.slice(0, 500),
-      raw
-    };
-  }
-  if (!raw) {
-    return { kind: "UNKNOWN", raw: "" };
-  }
-  output = raw;
-  const terminalIdWait = parseTerminalIdWait(output, terminal?.failedStep);
-  if (terminalIdWait)
-    return terminalIdWait;
-  const lines = output.split("\n");
-  for (const { re, build } of PATTERNS) {
-    for (let i = lines.length - 1; i >= 0; i--) {
-      const line = lines[i];
-      if (!line)
-        continue;
-      const m = line.match(re);
-      if (m)
-        return build(m, output);
-    }
-  }
-  for (const { re, build } of PATTERNS) {
-    const m = output.match(re);
-    if (m)
-      return build(m, output);
-  }
-  return { kind: "UNKNOWN", raw: output };
-}
-function isAutoRepairable(failure) {
-  return failure.kind === "SELECTOR_NOT_FOUND";
-}
-function outputIndicatesFlowFailure(output) {
-  return /^\s*(?:\[FAILED\]|(?:Test|Flow) FAILED\b|FAILED\s*$)/m.test(output);
-}
-var PATTERNS, RUNNER_STEP_RE, REASON_LINE_RE, ID_WAIT_STEP_RE, SELECTOR_LESS_ID_WAIT_SUMMARY_RE, ID_WAIT_REASON_RE;
-var init_maestro_error_parser = __esm({
-  "packages/rn-dev-agent-core/dist/domain/maestro-error-parser.js"() {
-    "use strict";
-    init_ansi();
-    PATTERNS = [
-      {
-        re: /Element with id (['"])((?:(?!\1).)+)\1 (?:was )?not found/i,
-        build: (m, raw) => ({ kind: "SELECTOR_NOT_FOUND", selectorKind: "id", selector: m[2], raw })
-      },
-      {
-        re: /Element with text (['"])((?:(?!\1).)+)\1 (?:was )?not found/i,
-        build: (m, raw) => ({ kind: "SELECTOR_NOT_FOUND", selectorKind: "text", selector: m[2], raw })
-      },
-      // maestro-runner 1.0.x shape — issue #105.
-      // "Element not found: id='X'" or "Element not found: text='X'".
-      {
-        re: /Element not found:\s*id=(['"])((?:(?!\1).)+)\1/i,
-        build: (m, raw) => ({ kind: "SELECTOR_NOT_FOUND", selectorKind: "id", selector: m[2], raw })
-      },
-      {
-        re: /Element not found:\s*text=(['"])((?:(?!\1).)+)\1/i,
-        build: (m, raw) => ({ kind: "SELECTOR_NOT_FOUND", selectorKind: "text", selector: m[2], raw })
-      },
-      {
-        re: /Element (['"])((?:(?!\1).)+)\1 (?:was )?not found/i,
-        build: (m, raw) => ({
-          kind: "SELECTOR_NOT_FOUND",
-          selectorKind: "unknown",
-          selector: m[2],
-          raw
-        })
-      },
-      {
-        re: /Timed out waiting for element with id (['"])((?:(?!\1).)+)\1/i,
-        build: (m, raw) => ({ kind: "TIMEOUT", selector: m[2], raw })
-      },
-      {
-        re: /Timed out waiting for element (['"])((?:(?!\1).)+)\1/i,
-        build: (m, raw) => ({ kind: "TIMEOUT", selector: m[2], raw })
-      },
-      {
-        re: /Assertion failed: (['"])((?:(?!\1).)+)\1 (?:is )?not visible/i,
-        build: (m, raw) => ({ kind: "ASSERTION_FAILED", selector: m[2], raw })
-      },
-      {
-        re: /Element (['"])((?:(?!\1).)+)\1 is not visible/i,
-        build: (m, raw) => ({ kind: "ASSERTION_FAILED", selector: m[2], raw })
-      }
-    ];
-    RUNNER_STEP_RE = /^[ \t]+([✓✗])\s+(\S.*\S|\S)\s*\(([\d.]+)s\)\s*$/;
-    REASON_LINE_RE = /^[ \t]+╰─\s+/;
-    ID_WAIT_STEP_RE = /^extendedWaitUntil:\s+visible\s+id=(['"])((?:(?!\1).)+)\1$/i;
-    SELECTOR_LESS_ID_WAIT_SUMMARY_RE = /^extendedWaitUntil$/;
-    ID_WAIT_REASON_RE = /^[ \t]+╰─\s+Element (['"])#((?:(?!\1).)+)\1 not visible within\b/i;
-  }
-});
-
-// packages/rn-dev-agent-core/dist/domain/reusable-action.js
-function freshRuntimeState(now = () => /* @__PURE__ */ new Date(), mtimeMs = 0) {
-  const ts = now().toISOString();
-  return {
-    schemaVersion: 1,
-    revision: 1,
-    updatedAt: ts,
-    lastSeenMtimeMs: mtimeMs,
-    runHistory: [],
-    repairHistory: [],
-    stats: {
-      totalRuns: 0,
-      successCount: 0,
-      failureCount: 0,
-      avgDurationMs: 0
-    }
-  };
-}
-function appendRunRecord(state, record2) {
-  const newHistory = [...state.runHistory, record2];
-  while (newHistory.length > HISTORY_LIMITS.RUN_HISTORY_MAX)
-    newHistory.shift();
-  const totalRuns = state.stats.totalRuns + 1;
-  const successCount = state.stats.successCount + (record2.status === "pass" ? 1 : 0);
-  const failureCount = state.stats.failureCount + (record2.status === "fail" ? 1 : 0);
-  const successDurations = newHistory.filter((r) => r.status === "pass").map((r) => r.durationMs);
-  const avgDurationMs = successDurations.length ? Math.round(successDurations.reduce((s, n) => s + n, 0) / successDurations.length) : state.stats.avgDurationMs;
-  return {
-    ...state,
-    updatedAt: record2.timestamp,
-    runHistory: newHistory,
-    stats: {
-      totalRuns,
-      successCount,
-      failureCount,
-      avgDurationMs,
-      lastSuccessAt: record2.status === "pass" ? record2.timestamp : state.stats.lastSuccessAt,
-      lastFailureAt: record2.status === "fail" ? record2.timestamp : state.stats.lastFailureAt
-    }
-  };
-}
-function appendRepairRecord(state, record2) {
-  const newHistory = [...state.repairHistory, record2];
-  while (newHistory.length > HISTORY_LIMITS.REPAIR_HISTORY_MAX)
-    newHistory.shift();
-  return {
-    ...state,
-    updatedAt: record2.timestamp,
-    revision: state.revision + 1,
-    repairHistory: newHistory
-  };
-}
-function recentRepairCount(state, now = () => /* @__PURE__ */ new Date()) {
-  const cutoff = now().getTime() - 24 * 60 * 60 * 1e3;
-  return state.repairHistory.filter((r) => new Date(r.timestamp).getTime() >= cutoff).length;
-}
-function repairBudgetAvailable(state, now = () => /* @__PURE__ */ new Date()) {
-  return recentRepairCount(state, now) < REPAIR_BUDGET.ATTEMPTS_PER_24H;
-}
-function shouldAutoPromoteToActive(metadata, lastRun) {
-  if (lastRun?.blindProbe?.skippedMaestro)
-    return false;
-  return metadata.status === "experimental" && lastRun?.status === "pass";
-}
-function shouldDemoteAfterRepair(metadata) {
-  return metadata.status === "active";
-}
-function parseM7Header(yamlText, fallbackId) {
-  const lines = yamlText.split("\n");
-  const meta = {};
-  let inComment = false;
-  for (const line of lines) {
-    if (line.startsWith("#")) {
-      inComment = true;
-      const stripped = line.replace(/^#\s?/, "").trim();
-      if (!stripped)
-        continue;
-      const kv = stripped.match(/^([a-zA-Z][\w-]*)\s*:\s*(.+)$/);
-      if (!kv)
-        continue;
-      const key = kv[1];
-      const raw = kv[2].trim();
-      if (key === "tags") {
-        meta.tags = raw.replace(/^\[|\]$/g, "").split(",").map((t) => t.trim()).filter(Boolean);
-      } else if (key === "mutates") {
-        meta.mutates = /^true$/i.test(raw);
-      } else if (key === "params") {
-        meta.params = raw.replace(/^\[|\]$/g, "").split(",").map((t) => t.trim()).filter(Boolean);
-      } else if (key === "produces") {
-        meta.produces = parseProducesMap(raw);
-      } else if (key === "expectedRouteSequence") {
-        meta.expectedRouteSequence = raw.replace(/^\[|\]$/g, "").split(",").map((t) => t.trim()).filter(Boolean);
-      } else if (key === "id" || key === "intent" || key === "status" || key === "appId" || key === "createdAt" || key === "author" || key === "enginePin") {
-        meta[key] = raw;
-      }
-    } else if (inComment && line.trim() === "") {
-      if (Object.keys(meta).length > 0)
-        break;
-    } else if (inComment) {
-      break;
-    }
-  }
-  const id = meta.id ?? fallbackId;
-  const intent = meta.intent;
-  if (!id || !intent)
-    return null;
-  const status = meta.status ?? "experimental";
-  return {
-    id,
-    intent,
-    tags: meta.tags,
-    mutates: meta.mutates,
-    status,
-    params: meta.params,
-    appId: meta.appId,
-    createdAt: meta.createdAt,
-    author: meta.author,
-    produces: meta.produces,
-    expectedRouteSequence: meta.expectedRouteSequence,
-    enginePin: meta.enginePin
-  };
-}
-function parseProducesMap(raw) {
-  const inner = raw.trim().replace(/^\{|\}$/g, "").trim();
-  if (!inner)
-    return void 0;
-  const result = {};
-  for (const part of inner.split(",")) {
-    const kv = part.match(/^\s*([a-zA-Z_][\w.-]*)\s*:\s*(.+?)\s*$/);
-    if (!kv)
-      return void 0;
-    const key = kv[1];
-    const valueRaw = kv[2].trim();
-    if (/^(true|false)$/i.test(valueRaw)) {
-      result[key] = /^true$/i.test(valueRaw);
-    } else if (/^-?\d+(\.\d+)?$/.test(valueRaw)) {
-      result[key] = Number(valueRaw);
-    } else {
-      result[key] = valueRaw.replace(/^['"]|['"]$/g, "");
-    }
-  }
-  return Object.keys(result).length ? result : void 0;
-}
-function serializeM7Header(metadata) {
-  const lines = [];
-  const stripNewlines2 = (s) => String(s).replace(/[\r\n]+/g, " ");
-  lines.push(`# id: ${stripNewlines2(metadata.id)}`);
-  lines.push(`# intent: ${stripNewlines2(metadata.intent)}`);
-  if (metadata.tags && metadata.tags.length) {
-    lines.push(`# tags: [${metadata.tags.map(stripNewlines2).join(", ")}]`);
-  }
-  if (typeof metadata.mutates === "boolean") {
-    lines.push(`# mutates: ${metadata.mutates}`);
-  }
-  if (metadata.status)
-    lines.push(`# status: ${stripNewlines2(metadata.status)}`);
-  if (metadata.enginePin)
-    lines.push(`# enginePin: ${stripNewlines2(metadata.enginePin)}`);
-  if (metadata.params && metadata.params.length) {
-    lines.push(`# params: [${metadata.params.map(stripNewlines2).join(", ")}]`);
-  }
-  if (metadata.appId)
-    lines.push(`# appId: ${stripNewlines2(metadata.appId)}`);
-  if (metadata.createdAt)
-    lines.push(`# createdAt: ${stripNewlines2(metadata.createdAt)}`);
-  if (metadata.author)
-    lines.push(`# author: ${stripNewlines2(metadata.author)}`);
-  if (metadata.produces && Object.keys(metadata.produces).length > 0) {
-    const pairs = Object.keys(metadata.produces).sort().map((k) => {
-      const v = metadata.produces[k];
-      const formatted = typeof v === "string" ? stripNewlines2(v) : String(v);
-      return `${k}: ${formatted}`;
+async function terminateApp(bundleId, platform, deviceId) {
+  if (platform === "ios") {
+    await execFile4("xcrun", buildIosTerminateArgv(bundleId, deviceId), {
+      timeout: TERMINATE_TIMEOUT_MS,
+      encoding: "utf8"
     });
-    lines.push(`# produces: { ${pairs.join(", ")} }`);
-  }
-  if (metadata.expectedRouteSequence && metadata.expectedRouteSequence.length) {
-    lines.push(`# expectedRouteSequence: [${metadata.expectedRouteSequence.map(stripNewlines2).join(", ")}]`);
-  }
-  return lines.join("\n");
-}
-var REPAIR_BUDGET, HISTORY_LIMITS;
-var init_reusable_action = __esm({
-  "packages/rn-dev-agent-core/dist/domain/reusable-action.js"() {
-    "use strict";
-    REPAIR_BUDGET = {
-      /** Max successful self-repairs allowed in a rolling 24h window. */
-      ATTEMPTS_PER_24H: 3,
-      /** Max repair attempts per run before escalating to user. */
-      ATTEMPTS_PER_RUN: 1
-    };
-    HISTORY_LIMITS = {
-      /** Cap runHistory at this many records; oldest dropped on append. */
-      RUN_HISTORY_MAX: 50,
-      /** Cap repairHistory at this many records; oldest dropped on append. */
-      REPAIR_HISTORY_MAX: 25
-    };
-  }
-});
-
-// packages/rn-dev-agent-core/dist/session/runtime-paths.js
-import { chmodSync as chmodSync5, lstatSync as lstatSync11, mkdirSync as mkdirSync13 } from "node:fs";
-import { join as join21, resolve as resolve10 } from "node:path";
-function privateDirectory(path) {
-  mkdirSync13(path, { recursive: true, mode: 448 });
-  const stat2 = lstatSync11(path);
-  if (stat2.isSymbolicLink() || !stat2.isDirectory()) {
-    throw new Error("SESSION_RUNTIME_ROOT_UNSAFE: runtime root must be a real directory");
-  }
-  chmodSync5(path, 448);
-  return path;
-}
-function sessionRuntimeRoot(projectRoot) {
-  const configured = process.env.RN_DEV_AGENT_SESSION_RUNTIME_ROOT;
-  return configured ? privateDirectory(resolve10(configured)) : join21(resolve10(projectRoot), ".rn-agent");
-}
-function sessionStateDirectory(projectRoot) {
-  const path = join21(sessionRuntimeRoot(projectRoot), "state");
-  return process.env.RN_DEV_AGENT_SESSION_RUNTIME_ROOT ? privateDirectory(path) : path;
-}
-function sessionRecordingsDirectory(projectRoot) {
-  const path = join21(sessionRuntimeRoot(projectRoot), "recordings");
-  return process.env.RN_DEV_AGENT_SESSION_RUNTIME_ROOT ? privateDirectory(path) : path;
-}
-var init_runtime_paths2 = __esm({
-  "packages/rn-dev-agent-core/dist/session/runtime-paths.js"() {
-    "use strict";
-  }
-});
-
-// packages/rn-dev-agent-core/dist/domain/sidecar-io.js
-import { existsSync as existsSync16, readFileSync as readFileSync18, writeFileSync as writeFileSync8, mkdirSync as mkdirSync14, statSync as statSync9 } from "node:fs";
-import { join as join22, dirname as dirname12 } from "node:path";
-function sidecarPathFor(yamlFilePath) {
-  const dir = dirname12(yamlFilePath);
-  const parent = dirname12(dir);
-  const filename = yamlFilePath.replace(/\.ya?ml$/i, ".state.json");
-  const base = filename.split(/[\\/]/).pop();
-  const stateDirectory = process.env.RN_DEV_AGENT_SESSION_RUNTIME_ROOT ? sessionStateDirectory(dirname12(parent)) : join22(parent, "state");
-  return join22(stateDirectory, base);
-}
-function loadOrInitSidecar(yamlFilePath, now = () => /* @__PURE__ */ new Date()) {
-  const path = sidecarPathFor(yamlFilePath);
-  if (existsSync16(path)) {
-    try {
-      const text = readFileSync18(path, "utf8");
-      const parsed = JSON.parse(text);
-      if (parsed && parsed.schemaVersion === 1 && typeof parsed.revision === "number" && typeof parsed.updatedAt === "string" && Array.isArray(parsed.runHistory) && Array.isArray(parsed.repairHistory) && typeof parsed.stats === "object") {
-        if (typeof parsed.lastSeenMtimeMs !== "number") {
-          try {
-            parsed.lastSeenMtimeMs = statSync9(yamlFilePath).mtimeMs;
-          } catch {
-            parsed.lastSeenMtimeMs = 0;
-          }
-        }
-        return parsed;
-      }
-    } catch {
-    }
-  }
-  let mtimeMs = 0;
-  try {
-    mtimeMs = statSync9(yamlFilePath).mtimeMs;
-  } catch {
-  }
-  return freshRuntimeState(now, mtimeMs);
-}
-function saveSidecar(yamlFilePath, state) {
-  const path = sidecarPathFor(yamlFilePath);
-  const parentDir = dirname12(path);
-  if (!existsSync16(parentDir))
-    mkdirSync14(parentDir, { recursive: true });
-  writeFileSync8(path, JSON.stringify(state, null, 2) + "\n", "utf8");
-  return { path };
-}
-function yamlEditedSinceLastSeen(yamlFilePath, state) {
-  try {
-    const current = statSync9(yamlFilePath).mtimeMs;
-    return current > state.lastSeenMtimeMs;
-  } catch {
-    return false;
-  }
-}
-function markSeen(state, mtimeMs) {
-  return { ...state, lastSeenMtimeMs: mtimeMs };
-}
-var init_sidecar_io = __esm({
-  "packages/rn-dev-agent-core/dist/domain/sidecar-io.js"() {
-    "use strict";
-    init_reusable_action();
-    init_runtime_paths2();
-  }
-});
-
-// packages/rn-dev-agent-core/dist/domain/atomic-writer.js
-import { writeFileSync as writeFileSync9, renameSync as renameSync7, statSync as statSync10, mkdirSync as mkdirSync15, existsSync as existsSync17, unlinkSync as unlinkSync8, readdirSync as readdirSync6, openSync as openSync9, closeSync as closeSync9, chmodSync as chmodSync6, fstatSync as fstatSync7, lstatSync as lstatSync12, readFileSync as readFileSync19, linkSync as linkSync2, constants as constants8 } from "node:fs";
-import { dirname as dirname13, basename as basename5 } from "node:path";
-function generateTmpStamp() {
-  const rand = Math.random().toString(36).slice(2, 10);
-  return `${process.pid}.${Date.now().toString(36)}.${rand}`;
-}
-function actionWriteLockPath(yamlPath) {
-  return `${yamlPath.replace(/\.yml$/i, ".yaml")}.write.lock`;
-}
-function currentLockOwner() {
-  if (localLockOwner)
-    return localLockOwner;
-  const observed = probeProcessBirth(process.pid);
-  if (observed.status !== "present") {
-    throw new Error("Could not establish action writer process identity.");
-  }
-  localLockOwner = { pid: process.pid, birth: observed.birth.token };
-  return localLockOwner;
-}
-function readLockOwner(lockPath) {
-  try {
-    const parsed = JSON.parse(readFileSync19(lockPath, "utf8"));
-    if (!Number.isSafeInteger(parsed.pid) || Number(parsed.pid) <= 0 || !parsed.birth)
-      return null;
-    return { pid: Number(parsed.pid), birth: parsed.birth };
-  } catch {
-    return null;
-  }
-}
-function lockOwnerIsGone(owner) {
-  const observed = probeProcessBirth(owner.pid);
-  return observed.status === "absent" || observed.status === "present" && observed.birth.token !== owner.birth;
-}
-function withPairWriteLock(yamlPath, operation, acquisitionPrecondition) {
-  if (acquisitionPrecondition && !acquisitionPrecondition())
-    throw ACTION_WRITE_PRECONDITION;
-  ensureDir(yamlPath);
-  const lockPath = actionWriteLockPath(yamlPath);
-  if (heldWriteLocks.has(lockPath))
-    return operation();
-  const ownerPath = `${dirname13(yamlPath)}/.rn-action-write-owner.${generateTmpStamp()}`;
-  const owner = currentLockOwner();
-  const lockFd = openSync9(ownerPath, "wx", 384);
-  writeFileSync9(lockFd, `${JSON.stringify(owner)}
-`, "utf8");
-  const deadline = Date.now() + ACTION_WRITE_LOCK_TIMEOUT_MS;
-  let acquired = false;
-  let identity2 = null;
-  try {
-    while (!acquired) {
-      try {
-        if (acquisitionPrecondition && !acquisitionPrecondition()) {
-          throw ACTION_WRITE_PRECONDITION;
-        }
-        linkSync2(ownerPath, lockPath);
-        acquired = true;
-      } catch (err) {
-        if (err.code !== "EEXIST")
-          throw err;
-        let lockStat;
-        try {
-          lockStat = lstatSync12(lockPath);
-        } catch (statError) {
-          if (statError.code === "ENOENT")
-            continue;
-          throw statError;
-        }
-        if (!lockStat.isFile() || lockStat.isSymbolicLink()) {
-          throw new Error(`Refusing invalid action write lock at ${lockPath}.`);
-        }
-        const existingOwner = readLockOwner(lockPath);
-        if (existingOwner && lockOwnerIsGone(existingOwner)) {
-          try {
-            const current = lstatSync12(lockPath);
-            if (current.dev === lockStat.dev && current.ino === lockStat.ino)
-              unlinkSync8(lockPath);
-          } catch (unlinkError) {
-            if (unlinkError.code !== "ENOENT")
-              throw unlinkError;
-          }
-          continue;
-        }
-        if (Date.now() >= deadline) {
-          throw new Error(`Timed out waiting for action write lock at ${lockPath}.`);
-        }
-        Atomics.wait(lockWaitBuffer, 0, 0, 10);
-      }
-    }
-    unlinkSync8(ownerPath);
-    identity2 = fstatSync7(lockFd);
-    heldWriteLocks.add(lockPath);
-    try {
-      return operation();
-    } finally {
-      heldWriteLocks.delete(lockPath);
-    }
-  } finally {
-    if (identity2) {
-      try {
-        const current = lstatSync12(lockPath);
-        if (current.dev === identity2.dev && current.ino === identity2.ino)
-          unlinkSync8(lockPath);
-      } catch {
-      }
-    }
-    closeSync9(lockFd);
-    try {
-      unlinkSync8(ownerPath);
-    } catch {
-    }
-  }
-}
-function pairWriteImpl(yamlPath, yamlContent, sidecarPath, state, publicationPrecondition, yamlPublicationPrecondition, expectedYamlContent, createExclusive = false) {
-  if (publicationPrecondition && !publicationPrecondition())
-    return null;
-  ensureDir(yamlPath);
-  ensureDir(sidecarPath);
-  let yamlMode;
-  if (expectedYamlContent !== void 0) {
-    let targetFd;
-    try {
-      targetFd = openSync9(yamlPath, constants8.O_RDONLY | constants8.O_NOFOLLOW);
-    } catch {
-      return null;
-    }
-    try {
-      const target = fstatSync7(targetFd);
-      if (!target.isFile() || readFileSync19(targetFd, "utf8") !== expectedYamlContent)
-        return null;
-      yamlMode = target.mode & 4095;
-    } finally {
-      closeSync9(targetFd);
-    }
-  } else if (createExclusive) {
-    yamlMode = 384;
-  }
-  let sidecarMode = 384;
-  try {
-    const sidecarFd = openSync9(sidecarPath, constants8.O_RDONLY | constants8.O_NOFOLLOW);
-    try {
-      const sidecar = fstatSync7(sidecarFd);
-      if (!sidecar.isFile())
-        return null;
-      sidecarMode = sidecar.mode & 4095;
-    } finally {
-      closeSync9(sidecarFd);
-    }
-  } catch (error2) {
-    if (error2.code !== "ENOENT")
-      return null;
-  }
-  const stamp = generateTmpStamp();
-  const yamlTmp = `${yamlPath}.tmp.${stamp}`;
-  const sidecarTmp = `${sidecarPath}.tmp.${stamp}`;
-  const projectedMtimeMs = Date.now() + FUTURE_MTIME_BUFFER_MS;
-  const projectedState = {
-    ...state,
-    lastSeenMtimeMs: projectedMtimeMs
-  };
-  if (publicationPrecondition && !publicationPrecondition())
-    return null;
-  atomicWriter._writeFileWithMode(sidecarTmp, JSON.stringify(projectedState, null, 2) + "\n", sidecarMode);
-  if (publicationPrecondition && !publicationPrecondition()) {
-    atomicWriter._unlink(sidecarTmp);
-    return null;
-  }
-  const priorSidecarExisted = publicationPrecondition ? atomicWriter._exists(sidecarPath) : false;
-  const priorSidecar = priorSidecarExisted ? readFileSync19(sidecarPath, "utf8") : null;
-  function restorePriorSidecar() {
-    if (priorSidecar === null) {
-      atomicWriter._unlink(sidecarPath);
-    } else {
-      atomicWriter._writeFileWithMode(sidecarTmp, priorSidecar, sidecarMode);
-      atomicWriter._rename(sidecarTmp, sidecarPath);
-    }
-  }
-  function writeYamlTmp() {
-    if (yamlMode === void 0)
-      atomicWriter._writeFile(yamlTmp, yamlContent);
-    else
-      atomicWriter._writeFileWithMode(yamlTmp, yamlContent, yamlMode);
-  }
-  if (createExclusive) {
-    try {
-      writeYamlTmp();
-    } catch (error2) {
-      try {
-        atomicWriter._unlink(sidecarTmp);
-      } catch {
-      }
-      try {
-        atomicWriter._unlink(yamlTmp);
-      } catch {
-      }
-      throw error2;
-    }
-    if (publicationPrecondition && !publicationPrecondition()) {
-      atomicWriter._unlink(sidecarTmp);
-      atomicWriter._unlink(yamlTmp);
-      return null;
-    }
-    const yamlPublished = (!publicationPrecondition || publicationPrecondition()) && atomicWriter._linkIfAbsent(yamlTmp, yamlPath, publicationPrecondition);
-    if (!yamlPublished) {
-      atomicWriter._unlink(sidecarTmp);
-      atomicWriter._unlink(yamlTmp);
-      return null;
-    }
-    atomicWriter._rename(sidecarTmp, sidecarPath);
-    atomicWriter._unlink(yamlTmp);
   } else {
-    if (publicationPrecondition && !publicationPrecondition()) {
-      atomicWriter._unlink(sidecarTmp);
-      return null;
-    }
-    atomicWriter._rename(sidecarTmp, sidecarPath);
-    try {
-      writeYamlTmp();
-    } catch (error2) {
-      try {
-        atomicWriter._unlink(yamlTmp);
-      } catch {
-      }
-      throw error2;
-    }
-    const yamlPublished = expectedYamlContent === void 0 ? !yamlPublicationPrecondition || yamlPublicationPrecondition() : atomicWriter._publishIfUnchanged(yamlTmp, yamlPath, expectedYamlContent, stamp, yamlPublicationPrecondition);
-    if (!yamlPublished) {
-      if (yamlPublicationPrecondition && !yamlPublicationPrecondition()) {
-        try {
-          const candidate = lstatSync12(yamlTmp);
-          if (!candidate.isFile() || candidate.isSymbolicLink())
-            return null;
-        } catch {
-          return null;
-        }
-      }
-      restorePriorSidecar();
-      atomicWriter._unlink(yamlTmp);
-      return null;
-    }
-    if (expectedYamlContent === void 0)
-      atomicWriter._rename(yamlTmp, yamlPath);
-  }
-  const actualMtimeMs = atomicWriter._statMtimeMs(yamlPath);
-  const finalMtimeMs = Math.max(actualMtimeMs, projectedMtimeMs);
-  const finalState = {
-    ...state,
-    lastSeenMtimeMs: finalMtimeMs
-  };
-  atomicWriter._writeFileWithMode(sidecarTmp, JSON.stringify(finalState, null, 2) + "\n", sidecarMode);
-  atomicWriter._rename(sidecarTmp, sidecarPath);
-  return { yamlPath, sidecarPath, finalMtimeMs, refreshedSidecar: true };
-}
-function ensureDir(filePath) {
-  const dir = dirname13(filePath);
-  if (!atomicWriter._exists(dir))
-    atomicWriter._mkdir(dir);
-}
-function cleanupOrphans(yamlPath, sidecarPath) {
-  const now = Date.now();
-  for (const targetPath of [yamlPath, sidecarPath]) {
-    const dir = dirname13(targetPath);
-    const prefix = `${basename5(targetPath)}.tmp.`;
-    let entries;
-    try {
-      entries = atomicWriter._readdir(dir);
-    } catch {
-      continue;
-    }
-    for (const entry of entries) {
-      if (!entry.startsWith(prefix))
-        continue;
-      const orphanPath = `${dir}/${entry}`;
-      try {
-        const mtimeMs = atomicWriter._statMtimeMs(orphanPath);
-        if (now - mtimeMs < ORPHAN_MAX_AGE_MS)
-          continue;
-        atomicWriter._unlink(orphanPath);
-      } catch {
-      }
-    }
-  }
-}
-var FUTURE_MTIME_BUFFER_MS, ORPHAN_MAX_AGE_MS, ACTION_WRITE_LOCK_TIMEOUT_MS, lockWaitBuffer, ACTION_WRITE_PRECONDITION, localLockOwner, heldWriteLocks, atomicWriter;
-var init_atomic_writer = __esm({
-  "packages/rn-dev-agent-core/dist/domain/atomic-writer.js"() {
-    "use strict";
-    init_process_birth();
-    FUTURE_MTIME_BUFFER_MS = 1e3;
-    ORPHAN_MAX_AGE_MS = 5 * 60 * 1e3;
-    ACTION_WRITE_LOCK_TIMEOUT_MS = 5e3;
-    lockWaitBuffer = new Int32Array(new SharedArrayBuffer(4));
-    ACTION_WRITE_PRECONDITION = /* @__PURE__ */ Symbol("action-write-precondition");
-    localLockOwner = null;
-    heldWriteLocks = /* @__PURE__ */ new Set();
-    atomicWriter = {
-      /** Underlying `fs.writeFileSync(path, content, 'utf8')`. */
-      _writeFile(path, content) {
-        writeFileSync9(path, content, "utf8");
-      },
-      _writeFileWithMode(path, content, mode) {
-        const fd = openSync9(path, "wx", mode);
-        try {
-          writeFileSync9(fd, content, "utf8");
-        } finally {
-          closeSync9(fd);
-        }
-      },
-      /** Underlying `fs.renameSync(from, to)`. */
-      _rename(from, to) {
-        renameSync7(from, to);
-      },
-      /** Underlying `fs.statSync(path).mtimeMs`. */
-      _statMtimeMs(path) {
-        return statSync10(path).mtimeMs;
-      },
-      /** Underlying `fs.existsSync(path)`. Routed through the seam so test
-       *  cases for ensureDir / cleanupOrphans can simulate exotic failures
-       *  (PR #109 review). */
-      _exists(path) {
-        return existsSync17(path);
-      },
-      /** Underlying `fs.mkdirSync(path, { recursive: true })`. */
-      _mkdir(path) {
-        mkdirSync15(path, { recursive: true });
-      },
-      /** Underlying `fs.unlinkSync(path)`. Used by orphan-cleanup. */
-      _unlink(path) {
-        unlinkSync8(path);
-      },
-      /** Underlying `fs.readdirSync(path)`. Used by GH #111 prefix-scan cleanup. */
-      _readdir(path) {
-        return readdirSync6(path);
-      },
-      _linkIfAbsent(candidatePath, targetPath, publicationPrecondition) {
-        if (publicationPrecondition && !publicationPrecondition())
-          return false;
-        let directoryFd;
-        try {
-          directoryFd = openSync9(dirname13(targetPath), constants8.O_RDONLY | constants8.O_NOFOLLOW | constants8.O_DIRECTORY);
-        } catch {
-          return false;
-        }
-        try {
-          const directory = fstatSync7(directoryFd);
-          if (!directory.isDirectory() || publicationPrecondition && !publicationPrecondition()) {
-            return false;
-          }
-          return atomicWriter._linkIntoVerifiedDirectory(directoryFd, candidatePath, targetPath);
-        } finally {
-          closeSync9(directoryFd);
-        }
-      },
-      _linkIntoVerifiedDirectory(directoryFd, candidatePath, targetPath) {
-        return linkFileIntoVerifiedDirectory(directoryFd, candidatePath, targetPath);
-      },
-      _publishIfUnchanged(candidatePath, targetPath, expectedContent, stamp, publicationPrecondition) {
-        let targetFd;
-        try {
-          targetFd = openSync9(targetPath, constants8.O_RDONLY | constants8.O_NOFOLLOW);
-        } catch {
-          return false;
-        }
-        try {
-          const opened = fstatSync7(targetFd);
-          const current = lstatSync12(targetPath);
-          if (!opened.isFile() || current.isSymbolicLink() || current.dev !== opened.dev || current.ino !== opened.ino || readFileSync19(targetFd, "utf8") !== expectedContent || publicationPrecondition && !publicationPrecondition()) {
-            return false;
-          }
-          const expectedPath = `${candidatePath}.expected.${stamp}`;
-          chmodSync6(candidatePath, opened.mode & 4095);
-          atomicWriter._writeFileWithMode(expectedPath, expectedContent, opened.mode & 4095);
-          try {
-            return publishFileIfUnchangedDarwin(targetFd, targetPath, candidatePath, expectedPath);
-          } finally {
-            atomicWriter._unlink(expectedPath);
-          }
-        } catch {
-          return false;
-        } finally {
-          closeSync9(targetFd);
-        }
-      },
-      withLock(yamlPath, operation) {
-        return withPairWriteLock(yamlPath, operation);
-      },
-      writeTextCreateExclusive(yamlPath, content, precondition) {
-        try {
-          return withPairWriteLock(yamlPath, () => {
-            if (!precondition())
-              return false;
-            const candidatePath = `${dirname13(yamlPath)}/.rn-action-create.${generateTmpStamp()}`;
-            atomicWriter._writeFileWithMode(candidatePath, content, 384);
-            try {
-              return atomicWriter._linkIfAbsent(candidatePath, yamlPath, precondition);
-            } finally {
-              try {
-                atomicWriter._unlink(candidatePath);
-              } catch {
-              }
-            }
-          }, precondition);
-        } catch (error2) {
-          if (error2 === ACTION_WRITE_PRECONDITION)
-            return false;
-          throw error2;
-        }
-      },
-      /**
-       * Atomic pair-write. Cleans up any orphaned `.tmp` files before
-       * starting. Throws on the first failed step — caller decides whether
-       * to surface or recover.
-       */
-      pairWrite(yamlPath, yamlContent, sidecarPath, state) {
-        return withPairWriteLock(yamlPath, () => {
-          cleanupOrphans(yamlPath, sidecarPath);
-          const result = pairWriteImpl(yamlPath, yamlContent, sidecarPath, state);
-          if (!result)
-            throw new Error(`Unconditional pair write refused for ${yamlPath}.`);
-          return result;
-        });
-      },
-      pairWriteCreateExclusive(yamlPath, yamlContent, sidecarPath, state, precondition) {
-        try {
-          return withPairWriteLock(yamlPath, () => {
-            if (precondition && !precondition())
-              return null;
-            cleanupOrphans(yamlPath, sidecarPath);
-            return pairWriteImpl(yamlPath, yamlContent, sidecarPath, state, precondition, precondition, void 0, true);
-          }, precondition);
-        } catch (error2) {
-          if (error2 === ACTION_WRITE_PRECONDITION)
-            return null;
-          throw error2;
-        }
-      },
-      pairWriteConditional(yamlPath, yamlContent, sidecarPath, state, precondition, yamlPublicationPrecondition, expectedYamlContent) {
-        try {
-          return withPairWriteLock(yamlPath, () => {
-            if (!precondition())
-              return null;
-            cleanupOrphans(yamlPath, sidecarPath);
-            return pairWriteImpl(yamlPath, yamlContent, sidecarPath, state, precondition, yamlPublicationPrecondition, expectedYamlContent);
-          }, precondition);
-        } catch (error2) {
-          if (error2 === ACTION_WRITE_PRECONDITION)
-            return null;
-          throw error2;
-        }
-      }
-    };
-  }
-});
-
-// packages/rn-dev-agent-core/dist/domain/path-safety.js
-import { resolve as resolve11, sep as sep6 } from "node:path";
-function isValidActionId(s) {
-  if (typeof s !== "string")
-    return false;
-  if (s.length === 0 || s.length > ACTION_ID_MAX_LEN)
-    return false;
-  if (s.includes(".."))
-    return false;
-  return ACTION_ID_RE.test(s);
-}
-function assertValidActionId(s, context) {
-  if (!isValidActionId(s)) {
-    const preview = JSON.stringify(s).slice(0, 80);
-    throw new PathTraversalError(`Invalid action ID for ${context}: ${preview}`);
-  }
-}
-function assertWithinDir(child, baseDir) {
-  const resolvedBase = resolve11(baseDir);
-  const resolvedChild = resolve11(baseDir, child);
-  if (resolvedChild === resolvedBase)
-    return;
-  const baseWithSep = resolvedBase.endsWith(sep6) ? resolvedBase : resolvedBase + sep6;
-  if (!resolvedChild.startsWith(baseWithSep)) {
-    throw new PathTraversalError(`Path "${child}" escapes containment dir "${baseDir}" (resolved to ${resolvedChild})`);
-  }
-}
-function pathHasTraversal(p) {
-  if (typeof p !== "string")
-    return false;
-  return /(^|[\\/])\.\.([\\/]|$)/.test(p) || /%2e%2e/i.test(p);
-}
-var PathTraversalError, ACTION_ID_RE, ACTION_ID_MAX_LEN;
-var init_path_safety = __esm({
-  "packages/rn-dev-agent-core/dist/domain/path-safety.js"() {
-    "use strict";
-    PathTraversalError = class extends Error {
-      constructor(message) {
-        super(message);
-        this.name = "PathTraversalError";
-      }
-    };
-    ACTION_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]*$/;
-    ACTION_ID_MAX_LEN = 64;
-  }
-});
-
-// packages/rn-dev-agent-core/dist/domain/unfollowed-file.js
-import { execFileSync as execFileSync10 } from "node:child_process";
-import { lstatSync as lstatSync13 } from "node:fs";
-import { isAbsolute as isAbsolute6, join as join23 } from "node:path";
-function createUnfollowedFileSnapshot(directoryPath, directoryIdentity2) {
-  return { directoryPath, directoryIdentity: directoryIdentity2, fileIdentities: /* @__PURE__ */ new Map() };
-}
-function identityFromStat(path, stat2) {
-  return {
-    path,
-    dev: String(stat2.dev),
-    ino: String(stat2.ino),
-    size: String(stat2.size),
-    mtimeNs: String(stat2.mtimeNs),
-    ctimeNs: String(stat2.ctimeNs)
-  };
-}
-function sameIdentity2(left, right) {
-  return left.dev === right.dev && left.ino === right.ino && left.size === right.size && left.mtimeNs === right.mtimeNs && left.ctimeNs === right.ctimeNs;
-}
-function captureUnfollowedFileIdentities(snapshot, relativePaths) {
-  const identities = [];
-  try {
-    for (const relativePath of relativePaths) {
-      const path = join23(snapshot.directoryPath, relativePath);
-      const stat2 = lstatSync13(path, { bigint: true });
-      if (stat2.isSymbolicLink() || !stat2.isFile())
-        throw new Error("changed");
-      const captured = identityFromStat(path, stat2);
-      const existing = snapshot.fileIdentities.get(relativePath);
-      if (existing && !sameIdentity2(existing, captured))
-        throw new Error("changed");
-      const selected = existing ?? captured;
-      snapshot.fileIdentities.set(relativePath, selected);
-      identities.push(selected);
-    }
-  } catch {
-    throw new Error(`Refusing replaced learned-action corpus at ${snapshot.directoryPath}.`);
-  }
-  return identities;
-}
-function assertUnfollowedFileSnapshotUnchanged(snapshot) {
-  try {
-    for (const identity2 of snapshot.fileIdentities.values()) {
-      const stat2 = lstatSync13(identity2.path, { bigint: true });
-      if (stat2.isSymbolicLink() || !stat2.isFile() || !sameIdentity2(identity2, identityFromStat(identity2.path, stat2))) {
-        throw new Error("changed");
-      }
-    }
-  } catch {
-    throw new Error(`Refusing replaced learned-action corpus at ${snapshot.directoryPath}.`);
-  }
-}
-function selectExistingUnfollowedSnapshotFiles(snapshot, relativePaths) {
-  assertUnfollowedFileSnapshotUnchanged(snapshot);
-  const existing = [];
-  try {
-    for (const relativePath of relativePaths) {
-      const path = join23(snapshot.directoryPath, relativePath);
-      let stat2;
-      try {
-        stat2 = lstatSync13(path, { bigint: true });
-      } catch (err) {
-        if (err.code === "ENOENT")
-          continue;
-        throw err;
-      }
-      if (stat2.isSymbolicLink() || !stat2.isFile())
-        throw new Error("changed");
-      const captured = identityFromStat(path, stat2);
-      const selected = snapshot.fileIdentities.get(relativePath);
-      if (selected && !sameIdentity2(selected, captured))
-        throw new Error("changed");
-      snapshot.fileIdentities.set(relativePath, selected ?? captured);
-      existing.push(relativePath);
-    }
-  } catch {
-    throw new Error(`Refusing replaced learned-action corpus at ${snapshot.directoryPath}.`);
-  }
-  assertUnfollowedFileSnapshotUnchanged(snapshot);
-  return existing;
-}
-function readUnfollowedSnapshotFiles(snapshot, relativePaths, readFiles = readUnfollowedFiles) {
-  assertUnfollowedFileSnapshotUnchanged(snapshot);
-  const identities = captureUnfollowedFileIdentities(snapshot, relativePaths);
-  const contents = readFiles(snapshot.directoryPath, snapshot.directoryIdentity, relativePaths, identities);
-  assertUnfollowedFileSnapshotUnchanged(snapshot);
-  if (contents.length !== relativePaths.length || contents.some((entry) => entry == null)) {
-    throw new Error(`Refusing replaced learned-action corpus at ${snapshot.directoryPath}.`);
-  }
-  return contents;
-}
-function readUnfollowedFiles(directoryPath, identity2, relativePaths, expectedIdentities) {
-  try {
-    if (process.platform !== "darwin" && process.platform !== "linux") {
-      throw new Error(`Verified directory reads are unavailable on ${process.platform}/${process.arch}.`);
-    }
-    if (expectedIdentities && expectedIdentities.length !== relativePaths.length) {
-      throw new Error("Selected file identities did not match the requested paths.");
-    }
-    const entries = relativePaths.map((relativePath, index) => {
-      if (isAbsolute6(relativePath) || relativePath.split("/").some((component) => !component || component === "." || component === "..")) {
-        throw new Error(`Invalid relative path: ${relativePath}.`);
-      }
-      if (expectedIdentities) {
-        const selected = expectedIdentities[index];
-        if (!selected || selected.path !== join23(directoryPath, relativePath)) {
-          throw new Error(`Selected file identity did not match ${relativePath}.`);
-        }
-        return { relativePath, identity: selected };
-      }
-      const path = join23(directoryPath, relativePath);
-      try {
-        const stat2 = lstatSync13(path, { bigint: true });
-        return {
-          relativePath,
-          identity: stat2.isSymbolicLink() || !stat2.isFile() ? null : identityFromStat(path, stat2)
-        };
-      } catch (err) {
-        if (err.code === "ENOENT")
-          return { relativePath, identity: null };
-        throw err;
-      }
+    await execFile4("adb", [...resolveAndroidLifecycleTarget(deviceId), "shell", "am", "force-stop", bundleId], {
+      timeout: TERMINATE_TIMEOUT_MS,
+      encoding: "utf8"
     });
-    const contents = [];
-    let batch = [];
-    let batchBytes = 0;
-    const flush = () => {
-      if (batch.length === 0)
-        return;
-      const output = execFileSync10(process.execPath, [
-        "--no-warnings",
-        "--input-type=commonjs",
-        "-e",
-        UNFOLLOWED_READER_SCRIPT,
-        JSON.stringify({ directoryPath, directoryIdentity: identity2, entries: batch })
-      ], {
-        maxBuffer: UNFOLLOWED_READER_MAX_BUFFER_BYTES,
-        stdio: ["ignore", "pipe", "ignore"],
-        timeout: 1e4
-      });
-      let offset = 0;
-      for (const entry of batch) {
-        if (offset + UNFOLLOWED_READER_FRAME_BYTES > output.length) {
-          throw new Error(`Verified directory batch was truncated before ${entry.relativePath}.`);
-        }
-        const status = output[offset];
-        const length = output.readBigUInt64BE(offset + 1);
-        offset += UNFOLLOWED_READER_FRAME_BYTES;
-        if (length > BigInt(Number.MAX_SAFE_INTEGER) || offset + Number(length) > output.length) {
-          throw new Error(`Verified directory batch was malformed at ${entry.relativePath}.`);
-        }
-        const end = offset + Number(length);
-        if (status === 0)
-          contents.push(output.toString("utf8", offset, end));
-        else if (status === 1 && length === 0n)
-          contents.push(null);
-        else
-          throw new Error(`Verified directory batch refused ${entry.relativePath}.`);
-        offset = end;
-      }
-      if (offset !== output.length)
-        throw new Error("Verified directory batch had trailing data.");
-      batch = [];
-      batchBytes = 0;
-    };
-    for (const entry of entries) {
-      const size = entry.identity ? Number(entry.identity.size) : 0;
-      const framedBytes = UNFOLLOWED_READER_FRAME_BYTES + size;
-      if (!Number.isSafeInteger(size) || framedBytes > UNFOLLOWED_READER_BATCH_BYTES) {
-        throw new Error(`Verified directory entry exceeds the safe batch size: ${entry.relativePath}.`);
-      }
-      if (batch.length > 0 && (batch.length >= UNFOLLOWED_READER_BATCH_FILES || batchBytes + framedBytes > UNFOLLOWED_READER_BATCH_BYTES)) {
-        flush();
-      }
-      batch.push(entry);
-      batchBytes += framedBytes;
-    }
-    flush();
-    return contents;
-  } catch (err) {
-    throw new Error(`Refusing replaced learned-action corpus at ${directoryPath}: ${err instanceof Error ? err.message : String(err)}`);
   }
 }
-function listUnfollowedDirectory(directoryPath, identity2) {
-  try {
-    return listVerifiedDirectory(directoryPath, identity2);
-  } catch (err) {
-    throw new Error(`Refusing replaced learned-action corpus at ${directoryPath}: ${err instanceof Error ? err.message : String(err)}`);
+function buildAndroidLaunchArgv(bundleId, deviceId) {
+  if (typeof bundleId !== "string" || bundleId.length === 0) {
+    throw new Error("buildAndroidLaunchArgv: bundleId is required");
   }
-}
-var UNFOLLOWED_READER_MAX_BUFFER_BYTES, UNFOLLOWED_READER_BATCH_BYTES, UNFOLLOWED_READER_BATCH_FILES, UNFOLLOWED_READER_FRAME_BYTES, UNFOLLOWED_READER_SCRIPT;
-var init_unfollowed_file = __esm({
-  "packages/rn-dev-agent-core/dist/domain/unfollowed-file.js"() {
-    "use strict";
-    init_process_birth();
-    UNFOLLOWED_READER_MAX_BUFFER_BYTES = 32 * 1024 * 1024;
-    UNFOLLOWED_READER_BATCH_BYTES = 24 * 1024 * 1024;
-    UNFOLLOWED_READER_BATCH_FILES = 16;
-    UNFOLLOWED_READER_FRAME_BYTES = 9;
-    UNFOLLOWED_READER_SCRIPT = String.raw`
-const { closeSync, constants, fstatSync, openSync, readSync, realpathSync, writeSync } = require('node:fs');
-const { join } = require('node:path');
-const request = JSON.parse(process.argv[1]);
-const opened = [];
-let directory = -1;
-const closeAll = () => {
-  for (const entry of opened) if (entry.fd >= 0) closeSync(entry.fd);
-  if (directory >= 0) closeSync(directory);
-};
-const matches = (stat, identity) =>
-  stat.isFile() &&
-  String(stat.dev) === identity.dev &&
-  String(stat.ino) === identity.ino &&
-  String(stat.size) === identity.size &&
-  String(stat.mtimeNs) === identity.mtimeNs &&
-  String(stat.ctimeNs) === identity.ctimeNs;
-try {
-  directory = openSync(
-    request.directoryPath,
-    constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_DIRECTORY,
-  );
-  const directoryStat = fstatSync(directory, { bigint: true });
-  if (
-    !directoryStat.isDirectory() ||
-    String(directoryStat.dev) !== request.directoryIdentity.dev ||
-    String(directoryStat.ino) !== request.directoryIdentity.ino
-  ) {
-    throw new Error('directory changed');
-  }
-  let batchBytes = 0;
-  for (const entry of request.entries) {
-    if (!entry.identity) {
-      opened.push({ fd: -1, size: 0, identity: null });
-      batchBytes += 9;
-      continue;
-    }
-    const path = join(request.directoryPath, entry.relativePath);
-    if (realpathSync.native(path) !== path) throw new Error('path followed a link');
-    const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
-    const stat = fstatSync(fd, { bigint: true });
-    if (!matches(stat, entry.identity)) {
-      closeSync(fd);
-      throw new Error('file changed');
-    }
-    const size = Number(stat.size);
-    if (!Number.isSafeInteger(size) || size < 0) {
-      closeSync(fd);
-      throw new Error('invalid size');
-    }
-    batchBytes += 9 + size;
-    if (batchBytes > ${UNFOLLOWED_READER_BATCH_BYTES}) {
-      closeSync(fd);
-      throw new Error('batch too large');
-    }
-    opened.push({ fd, size, identity: entry.identity });
-  }
-  for (const entry of opened) {
-    const frame = Buffer.alloc(9);
-    if (entry.fd < 0) {
-      frame[0] = 1;
-      writeSync(1, frame);
-      continue;
-    }
-    frame.writeBigUInt64BE(BigInt(entry.size), 1);
-    writeSync(1, frame);
-    const buffer = Buffer.allocUnsafe(Math.min(16384, Math.max(entry.size, 1)));
-    let offset = 0;
-    while (offset < entry.size) {
-      const count = readSync(entry.fd, buffer, 0, Math.min(buffer.length, entry.size - offset), offset);
-      if (count <= 0) throw new Error('short read');
-      writeSync(1, buffer, 0, count);
-      offset += count;
-    }
-    if (!matches(fstatSync(entry.fd, { bigint: true }), entry.identity)) {
-      throw new Error('file changed during read');
-    }
-  }
-  closeAll();
-} catch {
-  closeAll();
-  process.exit(10);
-}
-`;
-  }
-});
-
-// packages/rn-dev-agent-core/dist/domain/action-db.js
-import { createRequire as createRequire2 } from "node:module";
-import { existsSync as existsSync18, mkdirSync as mkdirSync16, readdirSync as readdirSync7, readFileSync as readFileSync20 } from "node:fs";
-import { dirname as dirname14, join as join24 } from "node:path";
-function loadSqlite() {
-  try {
-    const mod = _require("node:sqlite");
-    return mod.DatabaseSync ?? null;
-  } catch {
-    return null;
-  }
-}
-function openActionDb(projectRoot, opts = {}) {
-  const Ctor = opts.sqliteCtor === void 0 ? loadSqlite() : opts.sqliteCtor;
-  if (!Ctor)
-    return null;
-  try {
-    const dbPath = join24(sessionStateDirectory(projectRoot), "actions.db");
-    mkdirSync16(dirname14(dbPath), { recursive: true });
-    const db = new Ctor(dbPath);
-    db.exec(SCHEMA);
-    for (const alter of [
-      "ALTER TABLE run_records ADD COLUMN device_id TEXT",
-      "ALTER TABLE run_records ADD COLUMN blind_probe_json TEXT"
-    ]) {
-      try {
-        db.exec(alter);
-      } catch (e) {
-        if (!String(e).includes("duplicate column name"))
-          throw e;
-      }
-    }
-    const handle = {
-      db,
-      close: () => db.close(),
-      insertRunRecord(actionId, record2) {
-        db.exec("BEGIN IMMEDIATE");
-        try {
-          const dup = db.prepare("SELECT 1 FROM run_records WHERE action_id = ? AND ts = ? LIMIT 1").get(actionId, record2.timestamp);
-          if (dup) {
-            db.exec("COMMIT");
-            return;
-          }
-          db.prepare(`INSERT INTO run_records
-               (action_id, ts, trigger, status, failure_code, failure_detail,
-                transport, auto_repair_json, duration_ms, device_id, blind_probe_json)
-             VALUES (?,?,?,?,?,?,?,?,?,?,?)`).run(actionId, record2.timestamp, record2.trigger, record2.status, record2.failureCode ?? null, record2.failureDetail ?? null, record2.transport ?? null, record2.autoRepair ? JSON.stringify(record2.autoRepair) : null, record2.durationMs, record2.deviceId ?? null, record2.blindProbe ? JSON.stringify(record2.blindProbe) : null);
-          db.prepare(`DELETE FROM run_records
-             WHERE action_id = ?
-               AND id NOT IN (
-                 SELECT id FROM run_records
-                 WHERE action_id = ?
-                 ORDER BY id DESC
-                 LIMIT ${RUN_HISTORY_MAX}
-               )`).run(actionId, actionId);
-          db.exec("COMMIT");
-        } catch (e) {
-          db.exec("ROLLBACK");
-          throw e;
-        }
-      },
-      insertRepairRecord(actionId, record2) {
-        db.exec("BEGIN IMMEDIATE");
-        try {
-          const dup = db.prepare("SELECT 1 FROM repair_records WHERE action_id = ? AND ts = ? LIMIT 1").get(actionId, record2.timestamp);
-          if (dup) {
-            db.exec("COMMIT");
-            return;
-          }
-          db.prepare(`INSERT INTO repair_records
-               (action_id, ts, failure_code, diff_json, duration_ms, agent_reasoning)
-             VALUES (?,?,?,?,?,?)`).run(actionId, record2.timestamp, record2.failureCode, JSON.stringify(record2.diff ?? {}), record2.durationMs, record2.agentReasoning ?? null);
-          db.prepare(`DELETE FROM repair_records
-             WHERE action_id = ?
-               AND id NOT IN (
-                 SELECT id FROM repair_records
-                 WHERE action_id = ?
-                 ORDER BY id DESC
-                 LIMIT ${REPAIR_HISTORY_MAX}
-               )`).run(actionId, actionId);
-          db.exec("COMMIT");
-        } catch (e) {
-          db.exec("ROLLBACK");
-          throw e;
-        }
-      },
-      upsertIndex(actionId, fields) {
-        db.prepare(`INSERT INTO actions_index
-             (id, app_id, path, content_hash, status, revision,
-              created_at, updated_at, mtime_baseline, stats_json)
-           VALUES (?,?,?,?,?,?,?,?,?,?)
-           ON CONFLICT(id) DO UPDATE SET
-             app_id         = COALESCE(excluded.app_id,         actions_index.app_id),
-             path           = COALESCE(excluded.path,           actions_index.path),
-             content_hash   = COALESCE(excluded.content_hash,   actions_index.content_hash),
-             status         = COALESCE(excluded.status,         actions_index.status),
-             revision       = COALESCE(excluded.revision,       actions_index.revision),
-             updated_at     = COALESCE(excluded.updated_at,     actions_index.updated_at),
-             mtime_baseline = COALESCE(excluded.mtime_baseline, actions_index.mtime_baseline),
-             stats_json     = COALESCE(excluded.stats_json,     actions_index.stats_json)`).run(actionId, fields.appId ?? null, fields.path ?? null, fields.contentHash ?? null, fields.status ?? null, fields.revision ?? null, fields.updatedAt ?? null, fields.updatedAt ?? null, fields.mtimeBaseline ?? null, fields.statsJson ?? null);
-      },
-      loadState(actionId) {
-        const idx = db.prepare("SELECT * FROM actions_index WHERE id = ?").get(actionId);
-        if (!idx)
-          return null;
-        const runRows = db.prepare("SELECT * FROM run_records WHERE action_id = ? ORDER BY id ASC").all(actionId);
-        const repairRows = db.prepare("SELECT * FROM repair_records WHERE action_id = ? ORDER BY id ASC").all(actionId);
-        const runHistory = runRows.map((r) => {
-          const rec = {
-            timestamp: String(r.ts),
-            durationMs: Number(r.duration_ms),
-            status: r.status,
-            trigger: r.trigger
-          };
-          if (r.failure_code)
-            rec.failureCode = r.failure_code;
-          if (r.failure_detail)
-            rec.failureDetail = String(r.failure_detail);
-          if (r.transport === "cdp-js")
-            rec.transport = "cdp-js";
-          if (r.auto_repair_json)
-            rec.autoRepair = JSON.parse(String(r.auto_repair_json));
-          if (r.device_id)
-            rec.deviceId = String(r.device_id);
-          if (r.blind_probe_json) {
-            try {
-              rec.blindProbe = JSON.parse(String(r.blind_probe_json));
-            } catch {
-            }
-          }
-          return rec;
-        });
-        const repairHistory = repairRows.map((r) => {
-          const rec = {
-            timestamp: String(r.ts),
-            failureCode: r.failure_code,
-            diff: r.diff_json ? JSON.parse(String(r.diff_json)) : {},
-            durationMs: Number(r.duration_ms)
-          };
-          if (r.agent_reasoning)
-            rec.agentReasoning = String(r.agent_reasoning);
-          return rec;
-        });
-        const stats = idx.stats_json ? JSON.parse(String(idx.stats_json)) : { totalRuns: 0, successCount: 0, failureCount: 0, avgDurationMs: 0 };
-        return {
-          schemaVersion: 1,
-          revision: Number(idx.revision) || 1,
-          updatedAt: String(idx.updated_at ?? (/* @__PURE__ */ new Date(0)).toISOString()),
-          lastSeenMtimeMs: Number(idx.mtime_baseline) || 0,
-          runHistory,
-          repairHistory,
-          stats
-        };
-      },
-      recentRepairCount(actionId, sinceIso) {
-        const row = db.prepare(`SELECT COUNT(*) as cnt FROM repair_records
-           WHERE action_id = ? AND ts >= ?`).get(actionId, sinceIso);
-        return row.cnt;
-      },
-      migrateSidecars() {
-        const stateDir = join24(projectRoot, ".rn-agent", "state");
-        if (!existsSync18(stateDir))
-          return { migrated: 0 };
-        let migrated = 0;
-        for (const f of readdirSync7(stateDir)) {
-          if (!f.endsWith(".state.json"))
-            continue;
-          const id = f.replace(/\.state\.json$/, "");
-          const exists = db.prepare("SELECT 1 FROM actions_index WHERE id = ?").get(id);
-          if (exists)
-            continue;
-          try {
-            const parsed = JSON.parse(readFileSync20(join24(stateDir, f), "utf8"));
-            if (parsed?.schemaVersion !== 1)
-              continue;
-            if (!Array.isArray(parsed.runHistory) || !Array.isArray(parsed.repairHistory)) {
-              continue;
-            }
-            for (const r of parsed.runHistory) {
-              handle.insertRunRecord(id, r);
-            }
-            for (const r of parsed.repairHistory) {
-              handle.insertRepairRecord(id, r);
-            }
-            handle.upsertIndex(id, {
-              revision: parsed.revision,
-              statsJson: JSON.stringify(parsed.stats),
-              mtimeBaseline: parsed.lastSeenMtimeMs,
-              updatedAt: parsed.updatedAt
-            });
-            migrated++;
-          } catch {
-          }
-        }
-        return { migrated };
-      }
-    };
-    return handle;
-  } catch {
-    return null;
-  }
-}
-var _require, SCHEMA, RUN_HISTORY_MAX, REPAIR_HISTORY_MAX;
-var init_action_db = __esm({
-  "packages/rn-dev-agent-core/dist/domain/action-db.js"() {
-    "use strict";
-    init_runtime_paths2();
-    _require = createRequire2(import.meta.url);
-    SCHEMA = `
-PRAGMA busy_timeout=5000;
-PRAGMA journal_mode=WAL;
-
-CREATE TABLE IF NOT EXISTS actions_index (
-  id             TEXT PRIMARY KEY,
-  app_id         TEXT,
-  path           TEXT,
-  content_hash   TEXT,
-  status         TEXT,
-  revision       INTEGER,
-  created_at     INTEGER,
-  updated_at     INTEGER,
-  mtime_baseline INTEGER,
-  stats_json     TEXT
-);
-
-CREATE TABLE IF NOT EXISTS run_records (
-  id              INTEGER PRIMARY KEY AUTOINCREMENT,
-  action_id       TEXT,
-  ts              TEXT,
-  trigger         TEXT,
-  status          TEXT,
-  failure_code    TEXT,
-  failure_detail  TEXT,
-  transport       TEXT,
-  auto_repair_json TEXT,
-  duration_ms     INTEGER,
-  device_id       TEXT,
-  blind_probe_json TEXT
-);
-
-CREATE TABLE IF NOT EXISTS repair_records (
-  id               INTEGER PRIMARY KEY AUTOINCREMENT,
-  action_id        TEXT,
-  ts               TEXT,
-  failure_code     TEXT,
-  diff_json        TEXT,
-  duration_ms      INTEGER,
-  agent_reasoning  TEXT
-);
-
-CREATE INDEX IF NOT EXISTS idx_run_action    ON run_records(action_id);
-CREATE INDEX IF NOT EXISTS idx_repair_action ON repair_records(action_id);
-CREATE INDEX IF NOT EXISTS idx_index_app     ON actions_index(app_id);
-`;
-    RUN_HISTORY_MAX = 50;
-    REPAIR_HISTORY_MAX = 25;
-  }
-});
-
-// packages/rn-dev-agent-core/dist/domain/action-state-store.js
-import { basename as basename6, dirname as dirname15, sep as sep7 } from "node:path";
-function dbFor(projectRoot) {
-  if (dbCache.has(projectRoot))
-    return dbCache.get(projectRoot) ?? null;
-  const handle = sqliteCtorOverride === void 0 ? openActionDb(projectRoot) : openActionDb(projectRoot, { sqliteCtor: sqliteCtorOverride });
-  if (handle) {
-    try {
-      handle.migrateSidecars();
-    } catch (err) {
-      logger.debug(TAG, `migrateSidecars failed for ${projectRoot}: ${String(err)}`);
-    }
-  }
-  dbCache.set(projectRoot, handle);
-  return handle;
-}
-function mirrorToDb(opts) {
-  const { yamlFilePath, state, newRunRecord, newRepairRecord, meta } = opts;
-  try {
-    const projectRoot = opts.projectRoot ?? projectRootFromYaml(yamlFilePath);
-    if (!projectRoot)
-      return;
-    const handle = dbFor(projectRoot);
-    if (!handle)
-      return;
-    const actionId = idOf(yamlFilePath);
-    handle.upsertIndex(actionId, {
-      appId: meta?.appId,
-      path: meta?.path,
-      contentHash: meta?.contentHash,
-      status: meta?.status,
-      revision: state.revision,
-      statsJson: JSON.stringify(state.stats),
-      mtimeBaseline: state.lastSeenMtimeMs,
-      updatedAt: state.updatedAt
-    });
-    if (newRunRecord)
-      handle.insertRunRecord(actionId, newRunRecord);
-    if (newRepairRecord)
-      handle.insertRepairRecord(actionId, newRepairRecord);
-  } catch (err) {
-    logger.debug(TAG, `DB mirror failed for ${idOf(yamlFilePath)} (authoritative write succeeded): ${String(err)}`);
-  }
-}
-function projectRootFromYaml(yamlFilePath) {
-  const actionsDir = dirname15(yamlFilePath);
-  const rnAgentDir = dirname15(actionsDir);
-  const root = dirname15(rnAgentDir);
-  if (basename6(actionsDir) !== "actions" || basename6(rnAgentDir) !== ".rn-agent") {
-    return null;
-  }
-  if (!root || root === sep7)
-    return null;
-  return root;
-}
-var TAG, sqliteCtorOverride, dbCache, idOf;
-var init_action_state_store = __esm({
-  "packages/rn-dev-agent-core/dist/domain/action-state-store.js"() {
-    "use strict";
-    init_logger();
-    init_action_db();
-    init_sidecar_io();
-    TAG = "action-state-store";
-    dbCache = /* @__PURE__ */ new Map();
-    idOf = (yamlFilePath) => basename6(yamlFilePath).replace(/\.ya?ml$/i, "");
-  }
-});
-
-// packages/rn-dev-agent-core/dist/domain/action-store.js
-import { existsSync as existsSync19, lstatSync as lstatSync14, readFileSync as readFileSync21, statSync as statSync11, unlinkSync as unlinkSync9 } from "node:fs";
-import { basename as basename7, dirname as dirname16, isAbsolute as isAbsolute7, join as join25, relative as relative5, resolve as resolve12, sep as sep8 } from "node:path";
-function actionPathFor(projectRoot, actionId) {
-  assertValidActionId(actionId, "actionPathFor");
-  const actionsDir = join25(projectRoot, ".rn-agent", "actions");
-  assertOwnedActionCorpus(projectRoot);
-  const fileName = `${actionId}.yaml`;
-  assertWithinDir(fileName, actionsDir);
-  return join25(actionsDir, fileName);
-}
-function assertOwnedActionCorpus(projectRoot) {
-  for (const path of [join25(projectRoot, ".rn-agent"), join25(projectRoot, ".rn-agent", "actions")]) {
-    const stat2 = lstatIfPresent2(path);
-    if (stat2?.isSymbolicLink()) {
-      throw new Error(`Refusing learned-action corpus symlink at ${path}.`);
-    }
-  }
-}
-function assertReadableActionLoadContextStable(context) {
-  assertReadableActionOperationUnchanged(context.operation);
-  assertUnfollowedFileSnapshotUnchanged(context.fileSnapshot);
-}
-function lstatIfPresent2(path) {
-  try {
-    return lstatSync14(path);
-  } catch (err) {
-    if (err.code === "ENOENT")
-      return null;
-    throw err;
-  }
-}
-function actionFileExists(path) {
-  const stat2 = lstatIfPresent2(path);
-  if (!stat2)
-    return false;
-  if (stat2.isSymbolicLink()) {
-    throw new Error(`Refusing inherited action symlink at ${path}.`);
-  }
-  return true;
-}
-function captureOwnedActionPathIdentity(projectRoot, filePath) {
-  const paths = [
-    { path: join25(projectRoot, ".rn-agent"), kind: "directory" },
-    { path: join25(projectRoot, ".rn-agent", "actions"), kind: "directory" }
+  return [
+    ...resolveAndroidLifecycleTarget(deviceId),
+    "shell",
+    "am",
+    "start",
+    "-W",
+    "-a",
+    "android.intent.action.MAIN",
+    "-c",
+    "android.intent.category.LAUNCHER",
+    "-p",
+    bundleId
   ];
-  if (filePath)
-    paths.push({ path: filePath, kind: "file" });
-  return paths.map(({ path, kind }) => {
-    const stat2 = lstatSync14(path);
-    const valid = !stat2.isSymbolicLink() && (kind === "directory" ? stat2.isDirectory() : stat2.isFile());
-    if (!valid)
-      throw new Error(`Refusing changed learned-action path at ${path}.`);
-    return { path, kind, dev: stat2.dev, ino: stat2.ino };
-  });
 }
-function ownedActionPathIdentityMatches(entries) {
-  try {
-    return entries.every((entry) => {
-      const stat2 = lstatSync14(entry.path);
-      return !stat2.isSymbolicLink() && stat2.dev === entry.dev && stat2.ino === entry.ino && (entry.kind === "directory" ? stat2.isDirectory() : stat2.isFile());
+async function launchApp(bundleId, platform, deviceId) {
+  if (platform === "ios") {
+    await execFile4("xcrun", buildIosLaunchArgv(bundleId, deviceId), {
+      timeout: LAUNCH_TIMEOUT_MS,
+      encoding: "utf8"
     });
-  } catch {
-    return false;
-  }
-}
-function referencedActionPath(parentFile, reference) {
-  if (isAbsolute7(reference) || reference.split(/[\\/]/).includes("..") || !/\.ya?ml$/i.test(reference)) {
-    return null;
-  }
-  const child = join25(dirname16(parentFile), reference);
-  if (child === ".." || child.startsWith(`..${sep8}`) || isAbsolute7(child))
-    return null;
-  return child;
-}
-function prefetchRunFlowFiles(initial, readFiles, fileSnapshot) {
-  const fileContents = new Map(initial);
-  let frontier = [...fileContents.entries()];
-  for (let depth = 0; depth < 5 && frontier.length > 0; depth += 1) {
-    const pending2 = /* @__PURE__ */ new Set();
-    for (const [parentFile, text] of frontier) {
-      for (const reference of collectRunFlowFileReferences(text)) {
-        const child = referencedActionPath(parentFile, reference);
-        if (child && !fileContents.has(child))
-          pending2.add(child);
-      }
-    }
-    const paths = selectExistingUnfollowedSnapshotFiles(fileSnapshot, [...pending2].sort());
-    if (paths.length === 0)
-      break;
-    const contents = readUnfollowedSnapshotFiles(fileSnapshot, paths, readFiles);
-    frontier = [];
-    paths.forEach((path, index) => {
-      const text = contents[index];
-      fileContents.set(path, text);
-      frontier.push([path, text]);
+  } else {
+    await execFile4("adb", buildAndroidLaunchArgv(bundleId, deviceId), {
+      timeout: LAUNCH_TIMEOUT_MS,
+      encoding: "utf8"
     });
   }
-  return fileContents;
 }
-function openReadableActionLoadContext(projectRoot, dependencies = {}) {
-  const corpus = resolveReadableActionCorpus(projectRoot);
-  if (corpus.status === "refused")
-    throw new Error(corpus.reason);
-  if (corpus.status !== "owned-directory" && corpus.status !== "approved-inherited")
-    return null;
-  const snapshot = readableActionsSnapshot(corpus);
-  const operation = captureReadableActionOperationSnapshot(corpus);
-  if (!snapshot || !operation)
-    return null;
-  const files = listUnfollowedDirectory(snapshot.directory, snapshot.identity);
-  const requestedFiles = dependencies.actionId ? [`${dependencies.actionId}.yaml`, `${dependencies.actionId}.yml`] : files;
-  const readableFiles = requestedFiles.filter((file) => /\.ya?ml$/.test(file) && files.includes(file));
-  const readFiles = dependencies.readFiles ?? readUnfollowedFiles;
-  const fileSnapshot = createUnfollowedFileSnapshot(snapshot.directory, snapshot.identity);
-  const contents = readUnfollowedSnapshotFiles(fileSnapshot, readableFiles, readFiles);
-  const fileContents = /* @__PURE__ */ new Map();
-  readableFiles.forEach((file, index) => {
-    fileContents.set(file, contents[index]);
-  });
-  const completeFileContents = dependencies.includeRunFlowFiles ? prefetchRunFlowFiles(fileContents, readFiles, fileSnapshot) : fileContents;
-  assertReadableActionOperationUnchanged(operation);
-  assertUnfollowedFileSnapshotUnchanged(fileSnapshot);
-  return {
-    projectRoot,
-    corpus,
-    snapshot,
-    operation,
-    files,
-    fileContents: completeFileContents,
-    fileSnapshot
-  };
-}
-function actionTextFromContext(context, fileName) {
-  const text = context.fileContents.get(fileName);
-  if (text !== void 0)
-    return text;
-  throw new Error(`Refusing inherited action symlink at ${context.snapshot.directory}/${fileName}.`);
-}
-function refreshActionLoadContext(context, actionId) {
-  assertReadableActionOperationUnchanged(context.operation);
-  const refreshed = openReadableActionLoadContext(context.projectRoot, {
-    actionId,
-    includeRunFlowFiles: true
-  });
-  if (!refreshed) {
-    throw new Error(`Action ${actionId} disappeared while refreshing its snapshot.`);
-  }
-  return refreshed;
-}
-function resolveActionFileNameFromContext(actionId, context) {
-  const fileName = `${actionId}.yaml`;
-  assertWithinDir(fileName, context.corpus.actionsDir);
-  assertWithinDir(fileName, context.snapshot.directory);
-  const yamlExists = context.files.includes(fileName);
-  const ymlFileName = fileName.replace(/\.yaml$/, ".yml");
-  const ymlExists = context.files.includes(ymlFileName);
-  if (yamlExists && ymlExists) {
-    throw new Error(`Action ${actionId} is ambiguous because both ${actionId}.yaml and ${actionId}.yml exist; keep exactly one file before replay.`);
-  }
-  if (yamlExists)
-    return fileName;
-  if (ymlExists)
-    return ymlFileName;
-  return null;
-}
-function resolveActionPath(projectRoot, actionId) {
-  assertValidActionId(actionId, "resolveActionPath");
-  const context = openReadableActionLoadContext(projectRoot, {
-    actionId,
-    includeRunFlowFiles: false
-  });
-  if (!context)
-    return null;
-  const fileName = resolveActionFileNameFromContext(actionId, context);
-  if (!fileName)
-    return null;
-  actionTextFromContext(context, fileName);
-  assertReadableActionLoadContextStable(context);
-  return join25(context.corpus.actionsDir, fileName);
-}
-function createActionTextExclusive(projectRoot, actionId, yamlText) {
-  const yamlPath = actionPathFor(projectRoot, actionId);
-  const ymlPath = yamlPath.replace(/\.yaml$/, ".yml");
-  return atomicWriter.withLock(yamlPath, () => {
-    const pathIdentity = captureOwnedActionPathIdentity(projectRoot);
-    const pathIsOwned = () => ownedActionPathIdentityMatches(pathIdentity);
-    const existing = resolveActionPath(projectRoot, actionId);
-    if (existing)
-      throw new Error(`Action ${actionId} already exists at ${existing}.`);
-    if (!atomicWriter.writeTextCreateExclusive(yamlPath, yamlText, pathIsOwned)) {
-      throw new Error(`Action ${actionId} changed during creation.`);
-    }
-    try {
-      if (pathIsOwned() && !actionFileExists(ymlPath))
-        return yamlPath;
-      throw new Error(`Action ${actionId} changed during creation; keep exactly one extension.`);
-    } catch (err) {
-      if (pathIsOwned() && readFileSync21(yamlPath, "utf8") === yamlText)
-        unlinkSync9(yamlPath);
-      throw err;
-    }
-  });
-}
-function writeRecordedActionTransaction(projectRoot, actionId, yamlText, state, overwrite) {
-  const yamlPath = actionPathFor(projectRoot, actionId);
-  return atomicWriter.withLock(yamlPath, () => {
-    const existingPath = resolveActionPath(projectRoot, actionId);
-    if (existingPath && !overwrite)
-      return { ok: false, existingPath };
-    const filePath = existingPath ?? yamlPath;
-    const pathIdentity = captureOwnedActionPathIdentity(projectRoot, existingPath ?? void 0);
-    const pathIsOwned = () => ownedActionPathIdentityMatches(pathIdentity);
-    const sidecarPath = sidecarPathFor(filePath);
-    if (!existingPath && existsSync19(sidecarPath))
-      return { ok: false, existingPath: null };
-    const written = existingPath ? atomicWriter.pairWriteConditional(filePath, yamlText, sidecarPath, state, pathIsOwned, pathIsOwned, readFileSync21(filePath, "utf8")) : atomicWriter.pairWriteCreateExclusive(filePath, yamlText, sidecarPath, state, pathIsOwned);
-    if (!written)
-      return { ok: false, existingPath: resolveActionPath(projectRoot, actionId) };
-    return {
-      ok: true,
-      filePath,
-      sidecarPath,
-      finalMtimeMs: written.finalMtimeMs,
-      preexisted: existingPath !== null
-    };
-  });
-}
-function splitYaml(text) {
-  const allLines = text.split("\n");
-  let separatorIdx = -1;
-  for (let i = 0; i < allLines.length; i++) {
-    if (allLines[i].trim() === "---") {
-      separatorIdx = i;
-      break;
-    }
-  }
-  if (separatorIdx === -1) {
-    const headerLines2 = [];
-    const bodyLines2 = [];
-    let inBody = false;
-    let seenAnyContent = false;
-    for (const line of allLines) {
-      if (!inBody && !seenAnyContent && line.trim() === "") {
-        continue;
-      }
-      if (!inBody && line.startsWith("#")) {
-        seenAnyContent = true;
-        headerLines2.push(line);
-      } else if (!inBody && line.trim() === "" && headerLines2.length > 0) {
-        inBody = true;
-        bodyLines2.push(line);
-      } else {
-        seenAnyContent = true;
-        inBody = true;
-        bodyLines2.push(line);
-      }
-    }
-    return { topSection: "", headerLines: headerLines2, bodyLines: bodyLines2 };
-  }
-  const topSection = allLines.slice(0, separatorIdx).join("\n");
-  const afterSep = allLines.slice(separatorIdx + 1);
-  const headerLines = [];
-  const bodyLines = [];
-  let stillHeader = true;
-  for (const line of afterSep) {
-    if (stillHeader && (line.startsWith("#") || line.trim() === "")) {
-      headerLines.push(line);
-    } else {
-      stillHeader = false;
-      bodyLines.push(line);
-    }
-  }
-  return { topSection, headerLines, bodyLines };
-}
-function joinYaml(parts) {
-  const out = [];
-  if (parts.topSection) {
-    out.push(parts.topSection);
-    out.push("---");
-  }
-  for (const h of parts.headerLines)
-    out.push(h);
-  for (const b of parts.bodyLines)
-    out.push(b);
-  return out.join("\n");
-}
-function captureActionFromContext(context, actionId) {
-  assertValidActionId(actionId, "loadAction");
-  assertReadableActionLoadContextStable(context);
-  const fileName = resolveActionFileNameFromContext(actionId, context);
-  if (!fileName)
-    return null;
-  const { corpus, snapshot } = context;
-  const filePath = join25(corpus.actionsDir, fileName);
-  const text = actionTextFromContext(context, fileName);
-  const metadata = parseM7Header(text, actionId);
-  if (metadata)
-    assertActionMetadataIdentity(filePath, metadata);
-  let replay;
-  try {
-    const parsed = parseAndValidateFlow(text, {
-      flowDir: snapshot.directory,
-      flowRoot: snapshot.directory,
-      readFileFn: (path) => {
-        const child = relative5(snapshot.directory, path);
-        if (child === "" || child === ".." || child.startsWith(`..${sep8}`) || isAbsolute7(child)) {
-          throw new Error(`Refusing action flow outside ${snapshot.directory}.`);
-        }
-        const text2 = context.fileContents.get(child);
-        if (text2 === void 0) {
-          throw new Error(`Refusing inherited action symlink at ${snapshot.directory}/${child}.`);
-        }
-        return text2;
-      },
-      realpathFn: (path) => resolve12(path)
-    });
-    replay = {
-      ok: true,
-      yamlText: buildMaestroFlow(parsed.appId ? { appId: parsed.appId } : {}, parsed.commands),
-      cdpYaml: buildMaestroFlow({}, parsed.commands),
-      commands: parsed.commands,
-      appId: parsed.appId
-    };
-  } catch (err) {
-    replay = { ok: false, error: err instanceof Error ? err.message : String(err) };
-  }
-  assertReadableActionLoadContextStable(context);
-  return { filePath, yamlText: text, metadata, replay };
-}
-function loadActionFromContext(context, actionId) {
-  const captured = captureActionFromContext(context, actionId);
-  if (!captured?.metadata)
-    return null;
-  const { bodyLines } = splitYaml(captured.yamlText);
-  const state = loadOrInitSidecar(captured.filePath);
-  assertReadableActionLoadContextStable(context);
-  return {
-    metadata: captured.metadata,
-    body: bodyLines.join("\n"),
-    filePath: captured.filePath,
-    state,
-    yamlText: captured.yamlText,
-    replay: captured.replay
-  };
-}
-function loadAction(projectRoot, actionId) {
-  const context = openReadableActionLoadContext(projectRoot, {
-    actionId,
-    includeRunFlowFiles: true
-  });
-  return context ? loadActionFromContext(context, actionId) : null;
-}
-function captureActionFromPath(path) {
-  const absolutePath = resolve12(path);
-  if (!/\.ya?ml$/i.test(absolutePath))
-    return null;
-  const actionsDir = dirname16(absolutePath);
-  if (basename7(actionsDir) !== "actions" || basename7(dirname16(actionsDir)) !== ".rn-agent") {
-    return null;
-  }
-  const actionId = basename7(absolutePath).replace(/\.ya?ml$/i, "");
-  const context = openReadableActionLoadContext(dirname16(dirname16(actionsDir)), {
-    actionId,
-    includeRunFlowFiles: true
-  });
-  if (!context)
-    return null;
-  const action = captureActionFromContext(context, actionId);
-  return action && basename7(action.filePath) === basename7(absolutePath) ? action : null;
-}
-function saveAction(action) {
-  assertWritableActionFile(action.filePath);
-  if (existsSync19(action.filePath) && actionWasEditedExternally(action)) {
-    throw new SaveActionPreconditionError(action.filePath);
-  }
-  let topSection = "";
-  if (existsSync19(action.filePath)) {
-    const existing = readFileSync21(action.filePath, "utf8");
-    topSection = splitYaml(existing).topSection;
-  }
-  if (!topSection && action.metadata.appId) {
-    topSection = `appId: ${action.metadata.appId}`;
-  }
-  const headerLines = serializeM7Header(action.metadata).split("\n");
-  const bodyLines = action.body.split("\n");
-  const yamlText = joinYaml({ topSection, headerLines, bodyLines });
-  const sidecarPath = sidecarPathFor(action.filePath);
-  const result = atomicWriter.pairWrite(action.filePath, yamlText, sidecarPath, action.state);
-  const stateToWrite = { ...action.state, lastSeenMtimeMs: result.finalMtimeMs };
-  action.state = stateToWrite;
-  mirrorToDb({
-    yamlFilePath: action.filePath,
-    state: stateToWrite,
-    meta: { appId: action.metadata.appId, status: action.metadata.status, path: action.filePath }
-  });
-  return { filePath: action.filePath, sidecarPath };
-}
-function actionWasEditedExternally(action) {
-  return yamlEditedSinceLastSeen(action.filePath, action.state);
-}
-function acknowledgeExternalEdit(action) {
-  const nextAction = atomicWriter.withLock(action.filePath, () => {
-    let currentMtimeMs;
-    try {
-      currentMtimeMs = statSync11(action.filePath).mtimeMs;
-    } catch {
-      return action;
-    }
-    const currentState = loadOrInitSidecar(action.filePath);
-    if (currentMtimeMs <= currentState.lastSeenMtimeMs) {
-      return action;
-    }
-    const nextState = markSeen(currentState, currentMtimeMs);
-    saveSidecar(action.filePath, nextState);
-    return { ...action, state: nextState };
-  });
-  if (nextAction === action)
-    return action;
-  mirrorToDb({
-    yamlFilePath: action.filePath,
-    state: nextAction.state,
-    meta: { appId: action.metadata.appId, status: action.metadata.status, path: action.filePath }
-  });
-  return nextAction;
-}
-function canonicalRuntimeJson(state) {
-  return JSON.stringify(state, (_key, value) => {
-    if (value && typeof value === "object" && !Array.isArray(value)) {
-      const record2 = value;
-      return Object.fromEntries(Object.keys(record2).sort().map((k) => [k, record2[k]]));
-    }
-    return value;
-  });
-}
-function runtimeSidecarMatches(sidecarPath, expected) {
-  let onDisk;
-  try {
-    onDisk = JSON.parse(readFileSync21(sidecarPath, "utf8"));
-  } catch {
-    return false;
-  }
-  const normalized = typeof onDisk?.lastSeenMtimeMs === "number" ? onDisk : { ...onDisk, lastSeenMtimeMs: expected.lastSeenMtimeMs };
-  return canonicalRuntimeJson(normalized) === canonicalRuntimeJson(expected);
-}
-function runtimeBaselineMatches(filePath, expected) {
-  const sidecarPath = sidecarPathFor(filePath);
-  return existsSync19(sidecarPath) ? runtimeSidecarMatches(sidecarPath, expected) : expected.runHistory.length === 0 && expected.repairHistory.length === 0;
-}
-function saveActionRuntimeWithCAS(expected, nextState) {
-  return atomicWriter.withLock(expected.filePath, () => {
-    const sidecarPath = sidecarPathFor(expected.filePath);
-    if (!runtimeBaselineMatches(expected.filePath, expected.state)) {
-      return { ok: false, conflict: "EXTERNAL_WRITE" };
-    }
-    saveSidecar(expected.filePath, nextState);
-    expected.state = nextState;
-    return { ok: true, sidecarPath };
-  });
-}
-function promoteActionRuntimeWithCAS(expected, nextState) {
-  try {
-    assertWritableActionFile(expected.filePath);
-  } catch {
-    return { ok: false, conflict: "EXTERNAL_WRITE" };
-  }
-  const sidecarPath = sidecarPathFor(expected.filePath);
-  if (existsSync19(sidecarPath)) {
-    if (!runtimeSidecarMatches(sidecarPath, expected.state)) {
-      return { ok: false, conflict: "EXTERNAL_WRITE" };
-    }
-  } else if (expected.state.runHistory.length > 0 || expected.state.repairHistory.length > 0) {
-    return { ok: false, conflict: "EXTERNAL_WRITE" };
-  }
-  if (actionWasEditedExternally(expected))
-    return { ok: false, conflict: "EXTERNAL_WRITE" };
-  const yaml2 = readFileSync21(expected.filePath, "utf8");
-  const marker = /^# status: experimental[ \t]*$/gm;
-  if ((yaml2.match(marker) ?? []).length !== 1)
-    return { ok: false, conflict: "EXTERNAL_WRITE" };
-  const promoted = yaml2.replace(marker, "# status: active");
-  const written = atomicWriter.pairWriteConditional(expected.filePath, promoted, sidecarPath, nextState, () => {
-    try {
-      return runtimeBaselineMatches(expected.filePath, expected.state) && !actionWasEditedExternally(expected) && readFileSync21(expected.filePath, "utf8") === yaml2;
-    } catch {
-      return false;
-    }
-  }, void 0, yaml2);
-  if (!written)
-    return { ok: false, conflict: "EXTERNAL_WRITE" };
-  expected.state = { ...nextState, lastSeenMtimeMs: written.finalMtimeMs };
-  return { ok: true, sidecarPath };
-}
-function assertWritableActionFile(filePath) {
-  const actionsDir = dirname16(filePath);
-  const rnAgentDir = dirname16(actionsDir);
-  if (basename7(actionsDir) !== "actions" || basename7(rnAgentDir) !== ".rn-agent") {
-    throw new Error(`Refusing action mutation outside an owned learned-action corpus: ${filePath}.`);
-  }
-  assertOwnedActionCorpus(dirname16(rnAgentDir));
-  actionFileExists(filePath);
-}
-function assertActionMetadataIdentity(filePath, metadata) {
-  const fileId = basename7(filePath).replace(/\.ya?ml$/i, "");
-  if (metadata.id !== fileId) {
-    throw new Error(`Action metadata id ${metadata.id} does not match filename identity ${fileId}.`);
-  }
-}
-function withMetadata(action, metadata) {
-  return { ...action, metadata };
-}
-function withBody(action, body) {
-  return { ...action, body };
-}
-var SaveActionPreconditionError;
-var init_action_store = __esm({
-  "packages/rn-dev-agent-core/dist/domain/action-store.js"() {
+var execFile4, TERMINATE_TIMEOUT_MS, LAUNCH_TIMEOUT_MS, IOS_UDID_RE, ANDROID_SERIAL_RE2;
+var init_app_lifecycle = __esm({
+  "packages/rn-dev-agent-core/dist/tools/app-lifecycle.js"() {
     "use strict";
-    init_reusable_action();
-    init_sidecar_io();
-    init_atomic_writer();
-    init_path_safety();
-    init_unfollowed_file();
-    init_maestro_validator();
-    init_action_state_store();
-    init_worktree_inheritance();
-    SaveActionPreconditionError = class extends Error {
-      constructor(filePath) {
-        super(`saveAction precondition violated: yaml at ${filePath} has been edited externally since the in-memory action was loaded. The caller must invoke actionWasEditedExternally() first and abort on true (or use saveActionWithCAS for atomic detection). GH #113 contract enforcement.`);
-        this.name = "SaveActionPreconditionError";
-      }
-    };
-  }
-});
-
-// packages/rn-dev-agent-core/dist/domain/action-engine-compat.js
-import { existsSync as existsSync20, lstatSync as lstatSync15, readdirSync as readdirSync8, realpathSync as realpathSync12 } from "node:fs";
-import { basename as basename8, dirname as dirname17, join as join26, resolve as resolve13 } from "node:path";
-function actionEnginePinRefusal(enginePin) {
-  if (!enginePin) {
-    return `Action is not migrated to ${ACTION_ENGINE_PIN} or newer. Run node <plugin-root>/rn-dev-agent-core/dist/maestro-runner-pin.js migrate-actions --root <app> before replay. Incompatible actions are terminal \u2014 no manual fallback.`;
-  }
-  const version2 = parseActionEnginePinVersion(enginePin);
-  if (!version2) {
-    return `Action enginePin ${enginePin} is incompatible with the required floor ${ACTION_ENGINE_PIN}. Migrate or re-record the action. Incompatible actions are terminal \u2014 no manual fallback.`;
-  }
-  if (!meetsMaestroRunnerFloor(version2)) {
-    return `Action enginePin ${enginePin} is below the required floor ${ACTION_ENGINE_PIN}. Migrate or re-record the action. Incompatible actions are terminal \u2014 no manual fallback.`;
-  }
-  return null;
-}
-function regexSelectorCapabilityRefusal(commands) {
-  const selectors = findRegexTextSelectors(commands);
-  if (selectors.length === 0)
-    return null;
-  return `Action uses regex text selectors (${selectors[0]}) which are not a validated maestro-runner ${MAESTRO_RUNNER_PIN.version} capability (GH #750 CONTAINS mistranslation). Rewrite as id or literal text selectors before replay. No UI mutation will run.`;
-}
-function actionReplayPreflight(opts) {
-  return replayCompatibilityPreflight({ ...opts, requireEnginePin: true });
-}
-function replayCompatibilityPreflight(opts) {
-  const pin = exactPinRefusal(opts.engineStatus);
-  if (pin)
-    return pin;
-  if (opts.requireEnginePin) {
-    const format = actionEnginePinRefusal(opts.enginePin);
-    if (format)
-      return format;
-  }
-  return regexSelectorCapabilityRefusal(opts.commands);
-}
-function isLearnedActionPath(path) {
-  return classifyLearnedActionPath(path) === "action";
-}
-function classifyLearnedActionPath(path) {
-  const lexical = classifyResolvedLearnedActionPath(resolve13(path));
-  try {
-    const canonical2 = classifyResolvedLearnedActionPath(canonicalizeExistingPath(path));
-    if (lexical === canonical2)
-      return lexical;
-    if (lexical === "outside")
-      return canonical2;
-    return "descendant";
-  } catch {
-    return lexical;
-  }
-}
-function classifyResolvedLearnedActionPath(path) {
-  let parent = dirname17(path);
-  let direct = true;
-  while (true) {
-    if (basename8(parent) === "actions" && basename8(dirname17(parent)) === ".rn-agent") {
-      return direct ? "action" : "descendant";
-    }
-    const next = dirname17(parent);
-    if (next === parent)
-      return "outside";
-    parent = next;
-    direct = false;
-  }
-}
-function canonicalizeExistingPath(path) {
-  let cursor = resolve13(path);
-  const suffix = [];
-  while (!existsSync20(cursor)) {
-    const parent = dirname17(cursor);
-    if (parent === cursor)
-      return cursor;
-    suffix.unshift(basename8(cursor));
-    cursor = parent;
-  }
-  return resolve13(realpathSync12(cursor), ...suffix);
-}
-var ENGINE_PIN_LINE;
-var init_action_engine_compat = __esm({
-  "packages/rn-dev-agent-core/dist/domain/action-engine-compat.js"() {
-    "use strict";
-    init_engine_pin();
-    init_maestro_validator();
-    init_reusable_action();
-    init_action_store();
-    ENGINE_PIN_LINE = new RegExp(`^#\\s*enginePin\\s*:\\s*.+$`);
-  }
-});
-
-// packages/rn-dev-agent-core/dist/tools/resolve-ios-app-file.js
-import { execFileSync as execFileSync11 } from "node:child_process";
-import { existsSync as existsSync21, cpSync, rmSync as rmSync9, mkdirSync as mkdirSync17, readdirSync as readdirSync9, statSync as statSync12 } from "node:fs";
-import { tmpdir as tmpdir5 } from "node:os";
-import { join as join27, basename as basename9 } from "node:path";
-function flowUsesClearState(flowText) {
-  return /clearState:\s*true\b/.test(flowText) || /^[ \t]*-[ \t]*clearState[ \t]*$/m.test(flowText);
-}
-function defaultSnapshotApp(appPath) {
-  try {
-    const destDir = join27(tmpdir5(), "rn-appfile-snapshots");
-    const dest = join27(destDir, basename9(appPath));
-    rmSync9(dest, { recursive: true, force: true });
-    mkdirSync17(destDir, { recursive: true });
-    try {
-      execFileSync11("cp", ["-Rc", appPath, dest], { timeout: 3e4, stdio: "ignore" });
-    } catch {
-      cpSync(appPath, dest, { recursive: true });
-    }
-    return dest;
-  } catch {
-    return null;
-  }
-}
-function resolveIosAppFile(bundleId, deps = {}) {
-  const exists = deps.exists ?? existsSync21;
-  const getAppContainer = deps.getAppContainer ?? defaultGetAppContainer;
-  const snapshotApp = deps.snapshotApp ?? defaultSnapshotApp;
-  const fromContainer = getAppContainer(bundleId, deps.deviceId);
-  if (fromContainer && exists(fromContainer)) {
-    const snapshot = snapshotApp(fromContainer);
-    if (snapshot)
-      return snapshot;
-  }
-  const fromDerived = (deps.newestDerivedDataApp ?? (() => null))();
-  if (fromDerived && exists(fromDerived))
-    return fromDerived;
-  return null;
-}
-function resolveAppFileForClearState(platform, flowText, headerAppId, explicitAppFile, deps) {
-  if (explicitAppFile)
-    return { ok: true, appFile: explicitAppFile };
-  if (platform !== "ios" || !flowUsesClearState(flowText))
-    return { ok: true };
-  if (!headerAppId) {
-    return {
-      ok: false,
-      error: "Flow uses clearState on iOS but no appId is known to locate the .app. Add `appId:` to the flow header or pass appFile=<path-to-.app>."
-    };
-  }
-  const appFile = resolveIosAppFile(headerAppId, deps) ?? void 0;
-  if (!appFile) {
-    return {
-      ok: false,
-      error: `Flow uses clearState on iOS but no built .app could be located for ${headerAppId}. Pass appFile=<path-to-.app> (e.g. <DerivedData>/Build/Products/Debug-iphonesimulator/<App>.app).`
-    };
-  }
-  return { ok: true, appFile };
-}
-function defaultGetAppContainer(bundleId, deviceId) {
-  try {
-    const target = deviceId && !/\s/.test(deviceId) ? deviceId : "booted";
-    const out = execFileSync11("xcrun", ["simctl", "get_app_container", target, bundleId, "app"], {
-      encoding: "utf8",
-      timeout: 5e3
-    }).trim();
-    return out || null;
-  } catch {
-    return null;
-  }
-}
-function defaultListSnapshots() {
-  const dir = join27(tmpdir5(), "rn-appfile-snapshots");
-  try {
-    return readdirSync9(dir).filter((name) => name.endsWith(".app")).map((name) => join27(dir, name));
-  } catch {
-    return [];
-  }
-}
-function defaultReadBundleId(appPath, timeoutMs) {
-  try {
-    const out = execFileSync11("plutil", ["-extract", "CFBundleIdentifier", "raw", join27(appPath, "Info.plist")], { timeout: timeoutMs, encoding: "utf8" });
-    return out.trim() || null;
-  } catch {
-    return null;
-  }
-}
-function defaultMtimeMs(appPath) {
-  try {
-    return statSync12(appPath).mtimeMs;
-  } catch {
-    return null;
-  }
-}
-function findSnapshotForBundleId(bundleId, deps = {}) {
-  const listSnapshots = deps.listSnapshots ?? defaultListSnapshots;
-  const readBundleId = deps.readBundleId ?? defaultReadBundleId;
-  const mtimeMs = deps.mtimeMs ?? defaultMtimeMs;
-  const now = deps.now ?? Date.now;
-  try {
-    const deadline = now() + SNAPSHOT_SCAN_BUDGET_MS;
-    const candidates = listSnapshots().map((path) => ({ path, m: mtimeMs(path) })).filter((c) => c.m !== null).sort((a, b) => b.m - a.m).slice(0, SNAPSHOT_SCAN_CAP);
-    for (const { path, m } of candidates) {
-      const remaining = deadline - now();
-      if (remaining <= 0)
-        return null;
-      if (readBundleId(path, Math.min(PLUTIL_TIMEOUT_MS, remaining)) === bundleId) {
-        return { path, mtimeMs: m };
-      }
-    }
-    return null;
-  } catch {
-    return null;
-  }
-}
-function snapshotHintForBundleId(bundleId, deps = {}) {
-  try {
-    const now = deps.now ?? Date.now;
-    const snap = findSnapshotForBundleId(bundleId, deps);
-    if (!snap)
-      return null;
-    return {
-      path: snap.path,
-      ageMinutes: Math.max(0, Math.round((now() - snap.mtimeMs) / 6e4))
-    };
-  } catch {
-    return null;
-  }
-}
-var SNAPSHOT_SCAN_CAP, SNAPSHOT_SCAN_BUDGET_MS, PLUTIL_TIMEOUT_MS;
-var init_resolve_ios_app_file = __esm({
-  "packages/rn-dev-agent-core/dist/tools/resolve-ios-app-file.js"() {
-    "use strict";
-    SNAPSHOT_SCAN_CAP = 10;
-    SNAPSHOT_SCAN_BUDGET_MS = 3e3;
-    PLUTIL_TIMEOUT_MS = 2e3;
-  }
-});
-
-// packages/rn-dev-agent-core/dist/domain/maestro-step-parser.js
-function cap(s) {
-  return s.length > MAX_FIELD ? s.slice(0, MAX_FIELD) + "\u2026" : s;
-}
-function combineRunnerOutput(stdout, stderr) {
-  return (stdout + "\n" + stderr).replace(/^[\r\n]+/, "").trimEnd();
-}
-function parseExactSteps(output) {
-  if (!output || typeof output !== "string")
-    return [];
-  const steps = [];
-  let index = 0;
-  for (const raw of stripAnsi(output).split("\n")) {
-    const m = STEP_RE.exec(raw);
-    if (!m)
-      continue;
-    const name = m[2];
-    const verb = cap(name.split(/\s+/)[0].replace(/:$/, ""));
-    if (verb === "rn-maestro-run")
-      continue;
-    const seconds = Number(m[3]);
-    if (!Number.isFinite(seconds))
-      continue;
-    steps.push({
-      index: index++,
-      name,
-      verb,
-      status: m[1] === "\u2713" ? "pass" : "fail",
-      durationMs: Math.round(seconds * 1e3)
-    });
-  }
-  return steps.length > MAX_STEPS ? steps.slice(-MAX_STEPS) : steps;
-}
-function boundStep(step) {
-  return { ...step, name: cap(step.name) };
-}
-function parseSteps(output) {
-  return parseExactSteps(output).map(boundStep);
-}
-function findFailedStep(steps) {
-  const last = steps.length ? steps[steps.length - 1] : null;
-  return last && last.status === "fail" ? last : null;
-}
-function lastObservedStep(steps) {
-  return steps.length ? steps[steps.length - 1] : null;
-}
-function summarizeExactReason(output, failedStep) {
-  const f = parseMaestroFailure(output, failedStep ? { failedStep } : void 0);
-  if (f.kind === "UNKNOWN" || f.kind === "WDA_BOOTSTRAP_FAILED")
-    return null;
-  const selector = "selector" in f ? f.selector ?? null : null;
-  return { kind: f.kind, selector };
-}
-function buildStepSummary(output, opts) {
-  const exactSteps = parseExactSteps(output);
-  const exactFailedStep = opts.failed ? findFailedStep(exactSteps) : null;
-  const exactReason = opts.failed ? summarizeExactReason(output, exactFailedStep?.name) : null;
-  const steps = exactSteps.map(boundStep);
-  return {
-    steps,
-    failedStep: exactFailedStep ? boundStep(exactFailedStep) : null,
-    reason: exactReason ? {
-      ...exactReason,
-      selector: exactReason.selector === null ? null : cap(exactReason.selector)
-    } : null,
-    lastStep: lastObservedStep(steps)
-  };
-}
-function isWdaFailureLine(line) {
-  return WDA_TOKEN_RE.test(line) && WDA_FAILURE_RE.test(line);
-}
-function buildTerminalEvidence(output, opts = {}) {
-  const exactSteps = parseExactSteps(output);
-  const failedStep = findFailedStep(exactSteps);
-  const reason = summarizeExactReason(output, failedStep?.name);
-  const bootstrapEvidence = stripAnsi(output).split("\n").filter((line) => isWdaFailureLine(line)).join("\n").slice(0, 500);
-  const exitClass = opts.timedOut ? "timed-out" : opts.spawnError ? "spawn-error" : exactSteps.length === 0 ? "before-first-step" : "step-failure";
-  return {
-    completedSteps: exactSteps.filter((step) => step.status === "pass").length,
-    ...failedStep ? { failedStep: failedStep.name } : {},
-    exitClass,
-    ...bootstrapEvidence ? { bootstrapEvidence } : {},
-    ...reason ? {
-      failureKind: reason.kind,
-      failureSelector: reason.selector
-    } : {}
-  };
-}
-function classifyExecError(err) {
-  const e = err;
-  const killed = e?.killed === true;
-  const overflow = e?.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER";
-  return { timedOut: (killed || e?.code === "ETIMEDOUT") && !overflow, outputTruncated: overflow };
-}
-function formatFailureHeadline(summary, cls, fallbackMsg) {
-  if (cls.timedOut) {
-    return `Maestro flow timed out${summary.lastStep ? ` after step "${summary.lastStep.name}"` : ""}`;
-  }
-  if (cls.outputTruncated) {
-    return "Maestro flow output exceeded the 10MB buffer";
-  }
-  if (summary.failedStep) {
-    const r = summary.reason;
-    const reasonStr = r ? ` (${r.kind}${r.selector ? `: ${r.selector}` : ""})` : "";
-    return `Maestro flow failed at step "${summary.failedStep.name}"${reasonStr}`;
-  }
-  if (summary.reason) {
-    const r = summary.reason;
-    return `Maestro flow failed (${r.kind}${r.selector ? `: ${r.selector}` : ""})`;
-  }
-  return `Maestro flow failed: ${fallbackMsg.slice(0, 500)}`;
-}
-var STEP_RE, MAX_FIELD, MAX_STEPS, WDA_TOKEN_RE, WDA_FAILURE_RE;
-var init_maestro_step_parser = __esm({
-  "packages/rn-dev-agent-core/dist/domain/maestro-step-parser.js"() {
-    "use strict";
-    init_maestro_error_parser();
-    init_ansi();
-    init_ansi();
-    STEP_RE = /^[ \t]+([✓✗])\s+(\S.*\S|\S)\s*\(([\d.]+)s\)\s*$/;
-    MAX_FIELD = 200;
-    MAX_STEPS = 1e3;
-    WDA_TOKEN_RE = /\bWDA\b|WebDriverAgent/i;
-    WDA_FAILURE_RE = /\b(?:fail(?:ed|ure|s)?|error|unable|cannot|can't|could not|timed out|timeout|refused|denied|crash(?:ed)?|panic|aborted)\b/i;
-  }
-});
-
-// packages/rn-dev-agent-core/dist/domain/tap-latency.js
-function parseTapLatencies(output) {
-  return parseSteps(output).filter((s) => s.verb === "tapOn" && s.status === "pass").map((s) => s.durationMs);
-}
-function median(samples) {
-  if (samples.length === 0)
-    return null;
-  const s = [...samples].sort((a, b) => a - b);
-  const mid = Math.floor(s.length / 2);
-  return s.length % 2 === 0 ? Math.round((s[mid - 1] + s[mid]) / 2) : s[mid];
-}
-function resolveFloorMs(envVal) {
-  if (envVal === void 0)
-    return DEFAULT_FLOOR_MS;
-  const n = Number(envVal);
-  return Number.isFinite(n) && n > 0 ? n : DEFAULT_FLOOR_MS;
-}
-function classifyRuntimeDegradation(output, floorMs) {
-  const samples = parseTapLatencies(output);
-  const medianMs = median(samples);
-  return {
-    degraded: medianMs != null && samples.length >= MIN_SAMPLES_FOR_DEGRADED && medianMs >= floorMs,
-    medianMs,
-    floorMs,
-    sampleCount: samples.length
-  };
-}
-function formatRuntimeDegradedHint(d) {
-  return `RUNTIME_DEGRADED: median tapOn latency ${d.medianMs}ms (>= ${d.floorMs}ms) \u2014 the simulator test runtime is likely wedged; reboot it (xcrun simctl shutdown <udid> && xcrun simctl boot <udid>), relaunch the app, and retry.`;
-}
-function augmentFailureWithDegradation(output, floorMs, baseMessage, baseMeta) {
-  const d = classifyRuntimeDegradation(output, floorMs);
-  if (!d.degraded)
-    return { message: baseMessage, meta: baseMeta };
-  return {
-    message: `${baseMessage} \u2014 ${formatRuntimeDegradedHint(d)}`,
-    meta: {
-      ...baseMeta,
-      runtimeDegraded: { medianTapMs: d.medianMs, floorMs: d.floorMs, sampleCount: d.sampleCount }
-    }
-  };
-}
-var DEFAULT_FLOOR_MS, MIN_SAMPLES_FOR_DEGRADED;
-var init_tap_latency = __esm({
-  "packages/rn-dev-agent-core/dist/domain/tap-latency.js"() {
-    "use strict";
-    init_maestro_step_parser();
-    DEFAULT_FLOOR_MS = 1500;
-    MIN_SAMPLES_FOR_DEGRADED = 2;
+    execFile4 = promisify3(execFileCb2);
+    TERMINATE_TIMEOUT_MS = 1e4;
+    LAUNCH_TIMEOUT_MS = 15e3;
+    IOS_UDID_RE = /^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$/i;
+    ANDROID_SERIAL_RE2 = /^[A-Za-z0-9._:-]{1,128}$/;
   }
 });
 
@@ -31461,205 +28237,104 @@ var init_recovery = __esm({
   }
 });
 
-// packages/rn-dev-agent-core/dist/domain/maestro-device-authority.js
-function canonicalDeviceId(value) {
-  return value.toLowerCase();
-}
-function sameDevice(left, right) {
-  return canonicalDeviceId(left) === canonicalDeviceId(right);
-}
-function uniqueValues(values) {
-  const seen = /* @__PURE__ */ new Map();
-  for (const value of values) {
-    if (!value)
-      continue;
-    const key = canonicalDeviceId(value);
-    if (!seen.has(key))
-      seen.set(key, value);
-  }
-  return [...seen.values()];
-}
-function uniqueMatches(output, pattern) {
-  return uniqueValues([...output.matchAll(pattern)].map((match) => match[1]));
-}
-function verifyMaestroDeviceAuthority(input) {
-  const requestedDeviceId = input.requestedDeviceId?.trim() || null;
-  const reportedIds = uniqueValues([
-    ...input.directReportDeviceIds ?? [],
-    ...uniqueMatches(input.output, /\b(?:Found|Using specified|Connecting to) (?:(?:iOS|Android) )?device:\s*([A-Za-z0-9._:-]+)/gi)
-  ]);
-  const wdaDeviceIds = uniqueMatches(input.output, /\b(?:Building|Starting|Launching|Installing)\s+(?:WDA|WebDriverAgent(?:Runner)?)\s+(?:for|on|to)\s+device\s+([A-Za-z0-9._:-]+)/gi);
-  const observedDeviceIds = uniqueValues([...reportedIds, ...wdaDeviceIds]);
-  const reportedDeviceId = reportedIds.length === 1 ? reportedIds[0] : null;
-  if (!requestedDeviceId) {
+// packages/rn-dev-agent-core/dist/runners/external-runner-detect.js
+import { execFile as execFile5 } from "node:child_process";
+import { promisify as promisify4 } from "node:util";
+async function detectAndroidExternalRunner(execFileImpl = execFile5, serialArgs = []) {
+  try {
+    const bin = "adb";
+    const argv = [...serialArgs, "shell", "ps", "-A"];
+    const opts = { timeout: 2e3, encoding: "utf8" };
+    const run = execFileImpl === execFile5 ? promisify4(execFileImpl) : execFileImpl;
+    const { stdout } = await run(bin, argv, opts);
+    const lines = stdout.split("\n").filter((line) => /uiautomator|agent-device|AgentDevice/i.test(line)).filter((line) => !/dev\.lykhoyda\.rndevagent\.androidrunner/.test(line));
+    if (lines.length === 0)
+      return null;
     return {
-      requestedDeviceId,
-      reportedDeviceId,
-      observedDeviceIds,
-      wdaDeviceIds,
-      verified: false,
-      source: reportedIds.length > 0 ? "maestro-runner-log" : "none",
-      reason: "no-exact-device-request"
+      platform: "android",
+      code: "ANDROID_UIAUTOMATOR_COMPETITOR",
+      message: "A competing Android UIAutomator or agent-device process is running. Stop it (or opt out of the in-tree runner with RN_ANDROID_RUNNER=0) to avoid focus and input contention.",
+      processLines: lines
     };
+  } catch {
+    return null;
   }
-  if (input.runner !== "maestro-runner") {
+}
+function executableBasename(command) {
+  const executable = command.trimStart().split(/\s+/, 1)[0] ?? "";
+  return executable.slice(executable.lastIndexOf("/") + 1);
+}
+function shellWrappedMaestro(command) {
+  const tokens = command.trimStart().split(/\s+/);
+  if (!SHELL_WRAPPERS.test(executableBasename(tokens[0] ?? "")))
+    return false;
+  return tokens.slice(1).some((token2) => token2.startsWith("/") && /^maestro(?:\.\w+)?$/i.test(executableBasename(token2)));
+}
+function isIosExternalRunnerProcessLine(line) {
+  const match = line.match(/^\s*\d+\s+(.+)$/);
+  if (!match)
+    return false;
+  const command = match[1];
+  const executable = executableBasename(command);
+  if (/^maestro(?:-driver-iosUITests-Runner)?$/i.test(executable))
+    return true;
+  if (shellWrappedMaestro(command))
+    return true;
+  if (/^WebDriverAgent(?:Runner)?(?:-Runner)?$/i.test(executable))
+    return true;
+  if (/^java$/i.test(executable) && /(?:^|\s)maestro\.cli\.[\w.$]+(?:\s|$)/i.test(command)) {
+    return true;
+  }
+  if (/^xcodebuild$/i.test(executable) && /(?:maestro[^\s]*|WebDriverAgent[^\s]*)\.xctestrun(?:\s|$)/i.test(command)) {
+    return true;
+  }
+  return false;
+}
+async function detectIosExternalRunner(execFileImpl = execFile5, udid) {
+  try {
+    const opts = { timeout: 2e3, encoding: "utf8" };
+    const run = execFileImpl === execFile5 ? promisify4(execFileImpl) : execFileImpl;
+    const { stdout } = await run("ps", ["axww", "-o", "pid=,command="], opts);
+    const lines = stdout.split("\n").filter((line) => isIosExternalRunnerProcessLine(line)).filter((line) => !RN_FAST_RUNNER_RE.test(line)).filter((line) => udid ? line.includes(udid) : true).map((line) => line.trim()).filter((line) => line.length > 0);
+    if (lines.length === 0)
+      return null;
     return {
-      requestedDeviceId,
-      reportedDeviceId,
-      observedDeviceIds,
-      wdaDeviceIds,
-      verified: false,
-      source: "maestro-cli-explicit-udid",
-      reason: "direct-runner-evidence-unavailable"
+      platform: "ios",
+      code: "IOS_XCUITEST_COMPETITOR",
+      message: "A foreign maestro/WebDriverAgent automation session is driving this simulator. Interleaving device_* with it may trigger a re-foreground of your app; CDP reads are unaffected. (If this is your own maestro flow, it is expected.)",
+      processLines: lines
     };
+  } catch {
+    return null;
   }
-  const base = {
-    requestedDeviceId,
-    reportedDeviceId,
-    observedDeviceIds,
-    wdaDeviceIds,
-    source: "maestro-runner-log"
-  };
-  if (reportedIds.length === 0) {
-    return { ...base, verified: false, reason: "reported-device-missing" };
-  }
-  if (reportedIds.length !== 1) {
-    return { ...base, verified: false, reason: "reported-device-ambiguous" };
-  }
-  if (!reportedDeviceId || !sameDevice(reportedDeviceId, requestedDeviceId)) {
-    const weakOnly = input.directReportIdentityStrength === "weak" && (input.directReportDeviceIds ?? []).some((id) => sameDevice(id, reportedDeviceId ?? ""));
-    return {
-      ...base,
-      verified: false,
-      reason: weakOnly ? "reported-device-weak-identity" : "reported-device-mismatch"
-    };
-  }
-  if (observedDeviceIds.some((id) => !sameDevice(id, requestedDeviceId))) {
-    return { ...base, verified: false, reason: "wda-device-mismatch" };
-  }
+}
+function foreignRunnerNotice(detection, flowLeaseHeld) {
+  if (flowLeaseHeld)
+    return null;
+  if (!detection)
+    return null;
   return {
-    ...base,
-    verified: true,
-    ...input.platform === "ios" && input.requireWdaProvenance === true ? {
-      wdaProvenance: wdaDeviceIds.length > 0 ? "exact-match" : "unavailable"
-    } : {},
-    reason: input.platform === "ios" && wdaDeviceIds.length > 0 ? "exact-runner-and-wda-match" : "exact-runner-match"
+    meta: {
+      foreignRunner: {
+        code: detection.code,
+        message: detection.message,
+        processLines: detection.processLines
+      }
+    },
+    warning: `FOREIGN_RUNNER_ACTIVE: ${detection.message}`
   };
 }
-function shouldRejectMaestroDeviceAuthority(authority) {
-  return authority.requestedDeviceId !== null && authority.source === "maestro-runner-log" && !authority.verified;
-}
-function maestroAuthorityRefusal(authority, underlyingError) {
-  if (!shouldRejectMaestroDeviceAuthority(authority))
-    return null;
-  const headline = `Maestro device authority refused: requested ${authority.requestedDeviceId}, direct runner/WDA evidence was ${authority.reportedDeviceId ?? "missing"} (${authority.reason}).`;
-  return underlyingError ? `${headline} Underlying failure: ${underlyingError}` : headline;
-}
-var init_maestro_device_authority = __esm({
-  "packages/rn-dev-agent-core/dist/domain/maestro-device-authority.js"() {
+var SHELL_WRAPPERS, RN_FAST_RUNNER_RE;
+var init_external_runner_detect = __esm({
+  "packages/rn-dev-agent-core/dist/runners/external-runner-detect.js"() {
     "use strict";
-  }
-});
-
-// packages/rn-dev-agent-core/dist/domain/maestro-runner-report.js
-import { existsSync as existsSync22, readFileSync as readFileSync22, rmSync as rmSync10 } from "node:fs";
-import { tmpdir as tmpdir6 } from "node:os";
-import { join as join28 } from "node:path";
-function idsFrom(value, keys) {
-  if (!value || typeof value !== "object")
-    return [];
-  const record2 = value;
-  for (const key of keys) {
-    const id = record2[key];
-    if (typeof id === "string")
-      return [id];
-  }
-  return [];
-}
-function deviceIdsFrom(value) {
-  return idsFrom(value, DEVICE_ID_KEYS);
-}
-function weakDeviceIdsFrom(value) {
-  if (typeof value === "string")
-    return [value];
-  return idsFrom(value, WEAK_DEVICE_ID_KEYS);
-}
-function containerDeviceIdsFrom(value) {
-  return idsFrom(value, CONTAINER_DEVICE_ID_KEYS);
-}
-function reportDeviceIds(reportDir) {
-  const reportPath = join28(reportDir, "report.json");
-  if (!existsSync22(reportPath))
-    return { ids: [], strength: "none" };
-  try {
-    const report = JSON.parse(readFileSync22(reportPath, "utf8"));
-    const flows = Array.isArray(report.flows) ? report.flows : [];
-    const devices = [report.device, ...flows.map((flow) => flow?.device)];
-    const strong = [
-      ...devices.flatMap((device) => deviceIdsFrom(device)),
-      ...[report, ...flows].flatMap((container) => containerDeviceIdsFrom(container))
-    ];
-    const usingStrong = strong.length > 0;
-    const ids = usingStrong ? strong : devices.flatMap((device) => weakDeviceIdsFrom(device));
-    const accepted = [
-      ...new Set(ids.map((id) => id.trim()).filter((id) => DIRECT_DEVICE_ID_RE.test(id)))
-    ];
-    return {
-      ids: accepted,
-      strength: accepted.length === 0 ? "none" : usingStrong ? "strong" : "weak"
-    };
-  } catch {
-    return { ids: [], strength: "none" };
-  }
-}
-function createRunnerReportDir(runner, prefix) {
-  if (runner !== "maestro-runner")
-    return null;
-  return join28(tmpdir6(), `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
-}
-function runnerReportArgs(reportDir) {
-  return reportDir ? ["--output", reportDir, "--flatten"] : [];
-}
-function collectDirectRunnerEvidence(reportDir, output) {
-  if (!reportDir)
-    return { output, reportDeviceIds: [], reportDeviceIdStrength: "none" };
-  const report = reportDeviceIds(reportDir);
-  const evidence = {
-    output,
-    reportDeviceIds: report.ids,
-    reportDeviceIdStrength: report.strength
-  };
-  const logPath = join28(reportDir, "maestro-runner.log");
-  if (!existsSync22(logPath))
-    return evidence;
-  try {
-    evidence.output = `${output}
-${readFileSync22(logPath, "utf8")}`;
-  } catch {
-  }
-  return evidence;
-}
-function disposeRunnerReportDir(reportDir) {
-  if (!reportDir)
-    return;
-  try {
-    rmSync10(reportDir, { recursive: true, force: true });
-  } catch {
-  }
-}
-var DIRECT_DEVICE_ID_RE, DEVICE_ID_KEYS, WEAK_DEVICE_ID_KEYS, CONTAINER_DEVICE_ID_KEYS;
-var init_maestro_runner_report = __esm({
-  "packages/rn-dev-agent-core/dist/domain/maestro-runner-report.js"() {
-    "use strict";
-    DIRECT_DEVICE_ID_RE = /^[A-Za-z0-9._:-]{1,256}$/;
-    DEVICE_ID_KEYS = ["udid", "deviceId", "serial"];
-    WEAK_DEVICE_ID_KEYS = ["id"];
-    CONTAINER_DEVICE_ID_KEYS = ["udid", "deviceId", "deviceSerial"];
+    SHELL_WRAPPERS = /^(?:sh|bash|zsh|dash|ksh|env)$/i;
+    RN_FAST_RUNNER_RE = /RnFastRunner/i;
   }
 });
 
 // packages/rn-dev-agent-core/dist/cdp/discovery.js
-import { execFileSync as execFileSync12 } from "node:child_process";
+import { execFileSync as execFileSync10 } from "node:child_process";
 function resolveDefaultPorts() {
   const override = process.env.RN_CDP_DISCOVERY_PORTS;
   if (override !== void 0) {
@@ -31781,7 +28456,7 @@ function registryDeviceBinding() {
   return registryDeviceBindingProvider() ?? null;
 }
 function runAdbSync(file, args) {
-  return execFileSync12(file, args, {
+  return execFileSync10(file, args, {
     timeout: 3e3,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "ignore"]
@@ -31816,7 +28491,7 @@ function probeAndroidPackagesInScope(scope, execute2 = runAdbSync) {
 }
 function probeBootedSimulatorInventory() {
   try {
-    const out = execFileSync12("xcrun", ["simctl", "list", "devices", "booted", "-j"], {
+    const out = execFileSync10("xcrun", ["simctl", "list", "devices", "booted", "-j"], {
       timeout: 5e3,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"]
@@ -31853,7 +28528,7 @@ function probeIOSPackages() {
   let probed = false;
   for (const udid of udids) {
     try {
-      const out = execFileSync12("xcrun", ["simctl", "listapps", udid], {
+      const out = execFileSync10("xcrun", ["simctl", "listapps", udid], {
         timeout: 5e3,
         encoding: "utf8",
         stdio: ["ignore", "pipe", "ignore"]
@@ -32289,6 +28964,2504 @@ var init_discovery = __esm({
   }
 });
 
+// packages/rn-dev-agent-core/dist/runners/ensure-single-runner.js
+import { execFileSync as execFileSync11 } from "node:child_process";
+import { existsSync as existsSync15, readFileSync as readFileSync17, unlinkSync as unlinkSync7 } from "node:fs";
+import { homedir as homedir4 } from "node:os";
+import { join as join20 } from "node:path";
+function selectInstalledLegacyApps(installed) {
+  return LEGACY_BUNDLE_IDS.filter((id) => installed.has(id));
+}
+async function eradicateLegacyRunnerApps(udid, deps) {
+  const removedApps = [];
+  const warnings = [];
+  let installed;
+  try {
+    installed = parseSimctlListapps(deps.listApps(udid));
+  } catch (err) {
+    return { removedApps, warnings: [`listapps failed: ${msg(err)}`] };
+  }
+  if (installed.size === 0) {
+    return {
+      removedApps,
+      warnings: [`listapps parsed 0 apps \u2014 treating as parse failure, not a clean device`]
+    };
+  }
+  for (const id of selectInstalledLegacyApps(installed)) {
+    try {
+      deps.uninstallApp(udid, id);
+      removedApps.push(id);
+    } catch (err) {
+      warnings.push(`uninstall ${id} failed: ${msg(err)} \u2014 remove manually: xcrun simctl uninstall ${udid} ${id}`);
+    }
+  }
+  return { removedApps, warnings };
+}
+function selectLegacyRunnerPids(psOutput, udid) {
+  const pids = [];
+  for (const line of psOutput.split("\n")) {
+    if (!line.includes("AgentDeviceRunner"))
+      continue;
+    if (line.includes("RnFastRunner"))
+      continue;
+    if (!udid || !line.includes(udid))
+      continue;
+    const m = line.trim().match(/^(\d+)\b/);
+    if (m)
+      pids.push(Number(m[1]));
+  }
+  return pids;
+}
+function shouldRemoveDaemonFiles(daemonPid, isAlive) {
+  if (daemonPid === null)
+    return true;
+  return !isAlive(daemonPid);
+}
+function defaultDeps() {
+  return {
+    // Let a `ps` failure (timeout / EAGAIN under load) PROPAGATE to the
+    // caller's try/catch, which records a warning. Swallowing it here and
+    // returning '' made single-runner enforcement degrade to a silent no-op
+    // with no operator signal — exactly when the machine is busy.
+    listProcesses: () => execFileSync11("ps", ["-A", "-o", "pid=,args="], { encoding: "utf8", timeout: 3e3 }),
+    kill: (pid, signal) => process.kill(pid, signal),
+    isAlive: (pid) => {
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    readDaemonPid: () => {
+      try {
+        const parsed = JSON.parse(readFileSync17(DAEMON_JSON, "utf8"));
+        return typeof parsed.pid === "number" ? parsed.pid : null;
+      } catch {
+        return null;
+      }
+    },
+    fileExists: (path) => existsSync15(path),
+    removeFile: (path) => unlinkSync7(path),
+    delay: (ms) => new Promise((resolve21) => setTimeout(resolve21, ms)),
+    listApps: (udid) => execFileSync11("xcrun", ["simctl", "listapps", udid], {
+      encoding: "utf8",
+      timeout: 5e3,
+      stdio: ["ignore", "pipe", "ignore"]
+    }),
+    uninstallApp: (udid, bundleId) => {
+      execFileSync11("xcrun", ["simctl", "uninstall", udid, bundleId], {
+        encoding: "utf8",
+        timeout: 1e4,
+        stdio: ["ignore", "pipe", "ignore"]
+      });
+    }
+  };
+}
+async function ensureSingleRunner(opts = {}, deps = defaultDeps()) {
+  const timings = {};
+  const killedPids = [];
+  const removedFiles = [];
+  const removedApps = [];
+  const warnings = [];
+  if (opts.udid) {
+    const t = Date.now();
+    let psOut = "";
+    try {
+      psOut = deps.listProcesses();
+    } catch (err) {
+      warnings.push(`ps failed: ${msg(err)}`);
+    }
+    for (const pid of selectLegacyRunnerPids(psOut, opts.udid)) {
+      try {
+        deps.kill(pid, "SIGTERM");
+        await deps.delay(SIGKILL_GRACE_MS);
+        if (deps.isAlive(pid))
+          deps.kill(pid, "SIGKILL");
+        killedPids.push(pid);
+      } catch (err) {
+        warnings.push(`kill ${pid} failed: ${msg(err)}`);
+      }
+    }
+    timings.scopedKill = Date.now() - t;
+    const tApps = Date.now();
+    const apps = await eradicateLegacyRunnerApps(opts.udid, deps);
+    removedApps.push(...apps.removedApps);
+    warnings.push(...apps.warnings);
+    timings.appEradication = Date.now() - tApps;
+  }
+  const tFiles = Date.now();
+  if (DAEMON_FILES.some((f) => deps.fileExists(f))) {
+    let daemonPid = null;
+    try {
+      daemonPid = deps.readDaemonPid();
+    } catch {
+      daemonPid = null;
+    }
+    if (shouldRemoveDaemonFiles(daemonPid, deps.isAlive)) {
+      for (const f of DAEMON_FILES) {
+        if (!deps.fileExists(f))
+          continue;
+        try {
+          deps.removeFile(f);
+          removedFiles.push(f);
+        } catch (err) {
+          warnings.push(`rm ${f} failed: ${msg(err)}`);
+        }
+      }
+    } else {
+      warnings.push(`Left ${DAEMON_JSON} in place \u2014 daemon PID ${daemonPid} is alive (may belong to another project).`);
+    }
+  }
+  timings.fileCleanup = Date.now() - tFiles;
+  return { killedPids, removedFiles, removedApps, warnings, meta: { timings_ms: timings } };
+}
+function msg(err) {
+  return err instanceof Error ? err.message : String(err);
+}
+var DAEMON_JSON, DAEMON_LOCK, DAEMON_FILES, SIGKILL_GRACE_MS, LEGACY_BUNDLE_IDS;
+var init_ensure_single_runner = __esm({
+  "packages/rn-dev-agent-core/dist/runners/ensure-single-runner.js"() {
+    "use strict";
+    init_discovery();
+    DAEMON_JSON = join20(homedir4(), ".agent-device", "daemon.json");
+    DAEMON_LOCK = join20(homedir4(), ".agent-device", "daemon.lock");
+    DAEMON_FILES = [DAEMON_JSON, DAEMON_LOCK];
+    SIGKILL_GRACE_MS = 500;
+    LEGACY_BUNDLE_IDS = [
+      "com.callstack.agentdevice.runner",
+      "com.callstack.agentdevice.runner.uitests.xctrunner"
+    ];
+  }
+});
+
+// packages/rn-dev-agent-core/dist/runners/suppress-ios-autocorrect.js
+import { execFile as execFileCb3 } from "node:child_process";
+import { promisify as promisify5 } from "node:util";
+function defaultDeps2() {
+  return { run: (args) => execFile6("xcrun", args, { timeout: 5e3 }) };
+}
+async function suppressIOSAutocorrect(udid, deps = defaultDeps2()) {
+  const warnings = [];
+  const timings = {};
+  if (!udid)
+    return { warnings, skipped: true, meta: { timings_ms: timings } };
+  const t = Date.now();
+  for (const [key, type, value] of IOS_KEYBOARD_PREF_KEYS) {
+    try {
+      await deps.run(["simctl", "spawn", udid, "defaults", "write", "-g", key, type, value]);
+    } catch (err) {
+      warnings.push(`defaults write -g ${key}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+  timings.suppress = Date.now() - t;
+  return { warnings, skipped: false, meta: { timings_ms: timings } };
+}
+var execFile6, IOS_KEYBOARD_PREF_KEYS;
+var init_suppress_ios_autocorrect = __esm({
+  "packages/rn-dev-agent-core/dist/runners/suppress-ios-autocorrect.js"() {
+    "use strict";
+    execFile6 = promisify5(execFileCb3);
+    IOS_KEYBOARD_PREF_KEYS = [
+      ["KeyboardAutocorrection", "-bool", "false"],
+      ["KeyboardPrediction", "-bool", "false"],
+      ["KeyboardShowPredictionBar", "-bool", "false"]
+    ];
+  }
+});
+
+// packages/rn-dev-agent-core/dist/lifecycle/foreign-flow-gate.js
+function setForeignGateUdidProvider(fn) {
+  udidProvider = fn;
+}
+function foreignGateUdid() {
+  return udidProvider();
+}
+function foreignGateEnabled(env = process.env) {
+  if (env.RN_IOS_FOREIGN_GUARD !== void 0)
+    return env.RN_IOS_FOREIGN_GUARD !== "0";
+  return env.RN_IOS_FOREIGN_WARN !== "0";
+}
+var ForeignFlowGate, foreignFlowGate, udidProvider;
+var init_foreign_flow_gate = __esm({
+  "packages/rn-dev-agent-core/dist/lifecycle/foreign-flow-gate.js"() {
+    "use strict";
+    init_external_runner_detect();
+    ForeignFlowGate = class {
+      detect;
+      ttlMs;
+      now;
+      cachedAt = -Infinity;
+      cachedUdid = null;
+      cached = null;
+      inFlight = null;
+      inFlightUdid = null;
+      _lastActive = false;
+      constructor(deps = {}) {
+        this.detect = deps.detect ?? ((udid) => detectIosExternalRunner(void 0, udid));
+        this.ttlMs = deps.ttlMs ?? 5e3;
+        this.now = deps.now ?? Date.now;
+      }
+      get lastActive() {
+        return this._lastActive;
+      }
+      async check(udid) {
+        const t = this.now();
+        if (this.cachedUdid === udid && t - this.cachedAt < this.ttlMs) {
+          return { active: this.cached !== null, warning: this.cached, fromCache: true, scanMs: 0 };
+        }
+        if (this.inFlight && this.inFlightUdid === udid)
+          return this.inFlight;
+        this.inFlightUdid = udid;
+        const scan = (async () => {
+          const started = this.now();
+          let warning = null;
+          try {
+            warning = await this.detect(udid);
+          } catch {
+            warning = null;
+          }
+          this.cached = warning;
+          this.cachedUdid = udid;
+          this.cachedAt = this.now();
+          this._lastActive = warning !== null;
+          return { active: warning !== null, warning, fromCache: false, scanMs: this.now() - started };
+        })();
+        this.inFlight = scan;
+        try {
+          return await scan;
+        } finally {
+          if (this.inFlight === scan) {
+            this.inFlight = null;
+            this.inFlightUdid = null;
+          }
+        }
+      }
+    };
+    foreignFlowGate = new ForeignFlowGate();
+    udidProvider = () => null;
+  }
+});
+
+// packages/rn-dev-agent-core/dist/lifecycle/device-arbiter.js
+import { AsyncLocalStorage as AsyncLocalStorage2 } from "node:async_hooks";
+function promoteCurrentOperationToManagedFlow() {
+  const context = activeLease.getStore();
+  if (!context) {
+    return { ok: false, code: "BUSY_FLOW_ACTIVE", holder: null };
+  }
+  return context.arbiter.promoteToFlow(context.lease);
+}
+function planeForTool(name, args = {}) {
+  if (name === "cdp_dev_settings" && args.action === "hideDevMenu")
+    return "interaction";
+  if (FLOW_TOOLS.has(name))
+    return "flow";
+  if (INTERACTION_TOOLS.has(name))
+    return "interaction";
+  if (INTROSPECTION_TOOLS.has(name))
+    return "introspection";
+  return null;
+}
+function foreignRefusal(name, warning, scanMs, udid) {
+  const safeLines = sanitizeAutomationProcessLines(warning.processLines, udid);
+  const safeWarning = { ...warning, processLines: safeLines };
+  return failResult(`Refusing ${name}: a FOREIGN Maestro/XCUITest session is driving this simulator (${safeLines[0] ?? "detected by the exact-device automation guard"}). L1 introspection stays safe \u2014 use cdp_component_tree / cdp_store_state / cdp_navigation_state for reads, and device_screenshot for pixels (simctl fallback). Retry taps/flows after the foreign run completes. Opt out of this guard with RN_IOS_FOREIGN_GUARD=0.`, "BUSY_FOREIGN_FLOW", { foreignRunner: safeWarning, conflict: true, timings_ms: { foreignScan: scanMs } });
+}
+function arbiterWrap(name, handler, inst = arbiter, foreign = {}) {
+  const staticPlane = planeForTool(name);
+  if (staticPlane === null && name !== "cdp_dev_settings")
+    return handler;
+  const gate = foreign.gate ?? foreignFlowGate;
+  const getUdid = foreign.getUdid ?? foreignGateUdid;
+  const enabled = foreign.enabled ?? foreignGateEnabled;
+  return async (...args) => {
+    const plane = planeForTool(name, args[0] ?? {});
+    if (plane === null)
+      return handler(...args);
+    if (plane !== "introspection" && !inst.flowActive) {
+      const udid = getUdid();
+      if (udid !== null) {
+        if (inst.msSinceFlowReleased >= FOREIGN_GRACE_MS && enabled()) {
+          const check2 = await gate.check(udid);
+          if (check2.active && check2.warning) {
+            if (FLOW_FALLBACK_TOOLS.has(name)) {
+              return await handler(...args);
+            }
+            return foreignRefusal(name, check2.warning, check2.scanMs, udid);
+          }
+        }
+      }
+    }
+    const res = inst.tryAcquire(plane, name);
+    if (!res.ok) {
+      if (FLOW_FALLBACK_TOOLS.has(name) && inst.flowActive) {
+        return await handler(...args);
+      }
+      const who = res.holder ? `${res.holder.tool} (${res.holder.plane})` : "a Maestro flow";
+      return failResult(`Refusing ${name}: blocked by ${who} on this device \u2014 reads and taps can't interleave with a running Maestro flow. Retry after it completes; if it appears stuck, run rn_session({ action: "recover_arbiter", confirmed: true }).`, res.code, { holder: res.holder, conflict: true });
+    }
+    try {
+      return await activeLease.run({ arbiter: inst, lease: res.lease, tool: name }, () => handler(...args));
+    } finally {
+      inst.release(res.lease);
+    }
+  };
+}
+var DeviceSessionArbiter, arbiter, activeLease, FLOW_TOOLS, INTERACTION_TOOLS, INTROSPECTION_TOOLS, FLOW_FALLBACK_TOOLS, FOREIGN_GRACE_MS;
+var init_device_arbiter = __esm({
+  "packages/rn-dev-agent-core/dist/lifecycle/device-arbiter.js"() {
+    "use strict";
+    init_utils();
+    init_foreign_flow_gate();
+    init_public_diagnostics();
+    DeviceSessionArbiter = class {
+      flowLeaseHeldBy = null;
+      ops = /* @__PURE__ */ new Map();
+      nextOpId = 1;
+      now;
+      constructor(now = Date.now) {
+        this.now = now;
+      }
+      tryAcquire(plane, tool) {
+        if (plane === "flow") {
+          if (this.flowLeaseHeldBy !== null || this.ops.size > 0) {
+            return { ok: false, code: "BUSY_FLOW_ACTIVE", holder: this.describeBlocker() };
+          }
+          return this.grant(plane, tool, true);
+        }
+        if (this.flowLeaseHeldBy !== null) {
+          return { ok: false, code: "BUSY_FLOW_ACTIVE", holder: this.describeBlocker() };
+        }
+        return this.grant(plane, tool, false);
+      }
+      /** Promote only the currently held interaction lease when it is the sole op.
+       * Ordinary interactions remain interactions and therefore do not start the
+       * pinned post-flow grace window. Inline Maestro escalates lazily at dispatch. */
+      promoteToFlow(lease) {
+        const info = this.ops.get(lease.opId);
+        if (!info || info.plane === "introspection") {
+          return { ok: false, code: "BUSY_FLOW_ACTIVE", holder: this.describeBlocker() };
+        }
+        if (this.flowLeaseHeldBy === lease.opId) {
+          return { ok: true, lease: { plane: "flow", opId: lease.opId } };
+        }
+        if (this.flowLeaseHeldBy !== null || this.ops.size !== 1) {
+          return { ok: false, code: "BUSY_FLOW_ACTIVE", holder: this.describeBlocker() };
+        }
+        info.plane = "flow";
+        this.flowLeaseHeldBy = lease.opId;
+        return { ok: true, lease: { plane: "flow", opId: lease.opId } };
+      }
+      grant(plane, tool, isFlow) {
+        const opId = this.nextOpId++;
+        this.ops.set(opId, { plane, tool, startedAtMs: this.now() });
+        if (isFlow)
+          this.flowLeaseHeldBy = opId;
+        return { ok: true, lease: { plane, opId } };
+      }
+      describeBlocker() {
+        const id = this.flowLeaseHeldBy ?? this.oldestOpId();
+        if (id === null)
+          return null;
+        const info = this.ops.get(id);
+        return info ? { plane: info.plane, tool: info.tool, opId: id } : null;
+      }
+      oldestOpId() {
+        let oldest = null;
+        let oldestAt = Infinity;
+        for (const [id, info] of this.ops) {
+          if (info.startedAtMs < oldestAt) {
+            oldestAt = info.startedAtMs;
+            oldest = id;
+          }
+        }
+        return oldest;
+      }
+      /** GH#186: set when a FLOW lease releases. Our own maestro driver (argv
+       * carries the udid) keeps tearing down WDA for seconds after release and
+       * matches the foreign detector — taps inside this window must not scan. */
+      lastFlowReleasedAt = -Infinity;
+      get msSinceFlowReleased() {
+        return this.now() - this.lastFlowReleasedAt;
+      }
+      release(lease) {
+        this.ops.delete(lease.opId);
+        if (this.flowLeaseHeldBy === lease.opId) {
+          this.flowLeaseHeldBy = null;
+          this.lastFlowReleasedAt = this.now();
+        }
+      }
+      reset(reason) {
+        const clearedOps = this.ops.size;
+        const hadFlow = this.flowLeaseHeldBy !== null;
+        this.ops.clear();
+        this.flowLeaseHeldBy = null;
+        return { clearedOps, hadFlow, reason };
+      }
+      get snapshot() {
+        return {
+          flowLeaseHeldBy: this.flowLeaseHeldBy,
+          activeOps: this.ops.size,
+          ops: [...this.ops.entries()].map(([opId, i]) => ({ opId, plane: i.plane, tool: i.tool }))
+        };
+      }
+      /** #210: true while a flow (Maestro) owns the device. Flow-fallback tools consult this to take an OS-level path. */
+      get flowActive() {
+        return this.flowLeaseHeldBy !== null;
+      }
+    };
+    arbiter = new DeviceSessionArbiter();
+    activeLease = new AsyncLocalStorage2();
+    FLOW_TOOLS = /* @__PURE__ */ new Set([
+      "maestro_run",
+      "maestro_test_all",
+      "cdp_login_prologue",
+      "cdp_run_action",
+      "cdp_auto_login",
+      "cdp_reload",
+      "cdp_restart",
+      "cdp_lock_e2e_test",
+      "cdp_run_e2e_suite"
+    ]);
+    INTERACTION_TOOLS = /* @__PURE__ */ new Set([
+      "device_screenshot",
+      "device_snapshot",
+      "device_find",
+      "device_press",
+      "device_fill",
+      "device_swipe",
+      "device_back",
+      "device_longpress",
+      "device_scroll",
+      "device_scrollintoview",
+      "device_pinch",
+      "device_permission",
+      "device_reset_state",
+      "device_deeplink",
+      "device_accept_system_dialog",
+      "device_dismiss_system_dialog",
+      "device_record",
+      "device_pick_value",
+      "device_pick_date",
+      "device_focus_next",
+      "device_batch",
+      "cdp_interact",
+      "cdp_repair_action",
+      "cross_platform_verify",
+      "proof_step",
+      "cdp_navigate",
+      "cdp_dispatch",
+      "cdp_set_shared_value",
+      "cdp_mmkv"
+    ]);
+    INTROSPECTION_TOOLS = /* @__PURE__ */ new Set([
+      "cdp_evaluate",
+      "cdp_component_tree",
+      "cdp_component_state",
+      "cdp_diagnostic_renderers",
+      "cdp_navigation_state",
+      "cdp_nav_graph",
+      "cdp_store_state",
+      "cdp_network_log",
+      "cdp_network_body",
+      "cdp_wait_for_network",
+      "cdp_console_log",
+      "cdp_error_log",
+      "cdp_native_errors",
+      "cdp_metro_events",
+      "cdp_heap_usage",
+      "cdp_cpu_profile",
+      "cdp_object_inspect",
+      "cdp_exception_breakpoint",
+      "collect_logs",
+      "expect_redux",
+      "expect_route",
+      "expect_visible_by_testid",
+      "expect_text"
+    ]);
+    FLOW_FALLBACK_TOOLS = /* @__PURE__ */ new Set(["device_screenshot"]);
+    FOREIGN_GRACE_MS = 1e4;
+  }
+});
+
+// packages/rn-dev-agent-core/dist/cdp/recover-wedge.js
+import { execFile as execFileCb4 } from "node:child_process";
+import { promisify as promisify6 } from "node:util";
+function resetWedgeRecoveryCounter() {
+  attempts = 0;
+}
+var execFile7, attempts;
+var init_recover_wedge = __esm({
+  "packages/rn-dev-agent-core/dist/cdp/recover-wedge.js"() {
+    "use strict";
+    init_agent_device_wrapper();
+    init_rn_fast_runner_client();
+    init_device_arbiter();
+    init_recovery();
+    execFile7 = promisify6(execFileCb4);
+    attempts = 0;
+  }
+});
+
+// packages/rn-dev-agent-core/dist/cdp/app-installed-probe.js
+import { execFile as execFileCb5 } from "node:child_process";
+import { promisify as promisify7 } from "node:util";
+function isAppMissingSignal(stderr) {
+  return /nsposixerrordomain/i.test(stderr) && /\bcode\s*[=:]?\s*2\b/i.test(stderr);
+}
+async function probeAppInstalled(udid, appId, exec = execFile8) {
+  try {
+    await exec("xcrun", ["simctl", "get_app_container", udid, appId, "app"], { timeout: 5e3 });
+    return true;
+  } catch (e) {
+    const stderr = e.stderr ?? "";
+    if (!stderr)
+      return null;
+    if (DEVICE_ERROR.test(stderr))
+      return null;
+    if (isAppMissingSignal(stderr))
+      return false;
+    return null;
+  }
+}
+function posixSingleQuote(s) {
+  return `'${s.replace(/'/g, "'\\''")}'`;
+}
+function buildNotInstalledAdvice(udid, appId, hint) {
+  const base = `App ${appId} is not installed on simulator ${udid} \u2014 rebuild and install (npx expo run:ios / pnpm ios).`;
+  if (!hint)
+    return base;
+  return `${base} Or reinstall the snapshot taken at the last clearState, ${hint.ageMinutes} min ago (may be stale): xcrun simctl install ${posixSingleQuote(udid)} ${posixSingleQuote(hint.path)}`;
+}
+var execFile8, DEVICE_ERROR;
+var init_app_installed_probe = __esm({
+  "packages/rn-dev-agent-core/dist/cdp/app-installed-probe.js"() {
+    "use strict";
+    execFile8 = promisify7(execFileCb5);
+    DEVICE_ERROR = /Invalid device|No devices/i;
+  }
+});
+
+// packages/rn-dev-agent-core/dist/cdp/recover-detached.js
+import { execFile as execFileCb6 } from "node:child_process";
+import { promisify as promisify8 } from "node:util";
+function resetDetachedRecoveryCounter() {
+  attempts2 = 0;
+  confirmedNotInstalled = null;
+}
+var execFile9, attempts2, confirmedNotInstalled;
+var init_recover_detached = __esm({
+  "packages/rn-dev-agent-core/dist/cdp/recover-detached.js"() {
+    "use strict";
+    init_agent_device_wrapper();
+    init_rn_fast_runner_client();
+    init_device_arbiter();
+    init_recovery();
+    init_app_installed_probe();
+    init_maestro_validator();
+    execFile9 = promisify8(execFileCb6);
+    attempts2 = 0;
+    confirmedNotInstalled = null;
+  }
+});
+
+// packages/rn-dev-agent-core/dist/lifecycle/device-lock.js
+import { existsSync as existsSync16, mkdirSync as mkdirSync12, openSync as openSync9, writeSync as writeSync3, closeSync as closeSync9, readFileSync as readFileSync18, unlinkSync as unlinkSync8, writeFileSync as writeFileSync8 } from "node:fs";
+import { tmpdir as tmpdir5, userInfo as userInfo2 } from "node:os";
+import { join as join21 } from "node:path";
+function defaultProcessAlive3(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+function isDeviceLockStale(body, now, processAlive, staleMs) {
+  if (!processAlive(body.pid))
+    return true;
+  return now - body.lastHeartbeat > staleMs;
+}
+function isEexist2(err) {
+  return typeof err === "object" && err !== null && err.code === "EEXIST";
+}
+function isValidBody(o) {
+  if (typeof o !== "object" || o === null)
+    return false;
+  const b = o;
+  return typeof b.pid === "number" && Number.isFinite(b.pid) && (b.platform === "ios" || b.platform === "android") && typeof b.deviceId === "string" && b.deviceId.length > 0 && typeof b.projectRoot === "string" && typeof b.startedAt === "number" && Number.isFinite(b.startedAt) && typeof b.lastHeartbeat === "number" && Number.isFinite(b.lastHeartbeat);
+}
+var DEVICE_LOCK_STALE_MS, DeviceLock;
+var init_device_lock = __esm({
+  "packages/rn-dev-agent-core/dist/lifecycle/device-lock.js"() {
+    "use strict";
+    DEVICE_LOCK_STALE_MS = 9e4;
+    DeviceLock = class {
+      lockPath;
+      acquired = false;
+      pid;
+      platform;
+      deviceId;
+      projectRoot;
+      appId;
+      version;
+      clock;
+      processAlive;
+      staleMs;
+      tmpDir;
+      constructor(opts) {
+        this.platform = opts.platform;
+        this.deviceId = opts.deviceId;
+        this.projectRoot = opts.projectRoot ?? process.env.CLAUDE_USER_CWD ?? process.cwd();
+        const uid = opts.uid ?? userInfo2().uid;
+        this.tmpDir = opts.tmpDir ?? tmpdir5();
+        this.pid = opts.pid ?? process.pid;
+        this.appId = opts.appId;
+        this.version = opts.version;
+        this.clock = opts.clock ?? Date.now;
+        this.processAlive = opts.processAlive ?? defaultProcessAlive3;
+        this.staleMs = opts.staleMs ?? DEVICE_LOCK_STALE_MS;
+        this.lockPath = join21(this.tmpDir, `rn-dev-agent-device-${uid}-${this.platform}-${this.deviceId}.lock`);
+      }
+      acquire() {
+        try {
+          this.create();
+          return { status: "acquired", lockPath: this.lockPath };
+        } catch (err) {
+          if (!isEexist2(err)) {
+            return { status: "acquired", lockPath: this.lockPath, degraded: true };
+          }
+        }
+        const holder = this.readExisting();
+        if (holder && !isDeviceLockStale(holder, this.clock(), this.processAlive, this.staleMs)) {
+          return { status: "conflict", lockPath: this.lockPath, holder };
+        }
+        const before = this.readExisting();
+        if (before && (holder === null || before.pid !== holder.pid || before.startedAt !== holder.startedAt) && !isDeviceLockStale(before, this.clock(), this.processAlive, this.staleMs)) {
+          return { status: "conflict", lockPath: this.lockPath, holder: before };
+        }
+        try {
+          unlinkSync8(this.lockPath);
+        } catch {
+        }
+        try {
+          this.create();
+          return { status: "acquired", lockPath: this.lockPath };
+        } catch (err) {
+          if (!isEexist2(err)) {
+            return { status: "acquired", lockPath: this.lockPath, degraded: true };
+          }
+          const raced = this.readExisting();
+          return raced ? { status: "conflict", lockPath: this.lockPath, holder: raced } : { status: "acquired", lockPath: this.lockPath, degraded: true };
+        }
+      }
+      touch() {
+        if (!this.acquired)
+          return;
+        const holder = this.readExisting();
+        if (!holder || holder.pid !== this.pid)
+          return;
+        holder.lastHeartbeat = this.clock();
+        try {
+          writeFileSync8(this.lockPath, JSON.stringify(holder, null, 2), "utf8");
+        } catch {
+        }
+      }
+      release() {
+        if (!this.acquired)
+          return;
+        try {
+          const holder = this.readExisting();
+          if (holder?.pid === this.pid)
+            unlinkSync8(this.lockPath);
+        } catch {
+        }
+        this.acquired = false;
+      }
+      create() {
+        if (!existsSync16(this.tmpDir))
+          mkdirSync12(this.tmpDir, { recursive: true });
+        const fd = openSync9(this.lockPath, "wx");
+        try {
+          const now = this.clock();
+          const body = {
+            pid: this.pid,
+            projectRoot: this.projectRoot,
+            platform: this.platform,
+            deviceId: this.deviceId,
+            appId: this.appId,
+            startedAt: now,
+            lastHeartbeat: now,
+            version: this.version
+          };
+          writeSync3(fd, JSON.stringify(body, null, 2));
+        } finally {
+          closeSync9(fd);
+        }
+        this.acquired = true;
+      }
+      readExisting() {
+        try {
+          const parsed = JSON.parse(readFileSync18(this.lockPath, "utf8"));
+          if (!isValidBody(parsed))
+            return null;
+          if (parsed.deviceId !== this.deviceId || parsed.platform !== this.platform)
+            return null;
+          return parsed;
+        } catch {
+          return null;
+        }
+      }
+    };
+  }
+});
+
+// packages/rn-dev-agent-core/dist/tools/device-session-close.js
+function isBenignSessionGoneError(result) {
+  if (!result.isError)
+    return false;
+  const text = result.content?.[0]?.text ?? "";
+  let envelope;
+  try {
+    envelope = JSON.parse(text);
+  } catch {
+    return false;
+  }
+  if ((envelope.meta?.code ?? envelope.code) === "SESSION_NOT_FOUND")
+    return true;
+  return /no active session|session not found/i.test(envelope.error ?? "");
+}
+async function closeDeviceSession(deps) {
+  if (!deps.hasActiveSession()) {
+    await deps.finalizeSuccessfulClose();
+    return okResult({ closed: true, message: "No active session to close" });
+  }
+  const deviceId = deps.getDeviceId?.();
+  const finalizeClose = async () => {
+    await deps.stopFastRunner(deviceId);
+    await deps.stopAndroidRunner(deviceId);
+    await deps.finalizeSuccessfulClose();
+    deps.clearActiveSession();
+    deps.releaseDeviceLock();
+  };
+  const result = await deps.closeUnderlyingSession();
+  if (!result.isError) {
+    await finalizeClose();
+    return result;
+  }
+  if (isBenignSessionGoneError(result)) {
+    await finalizeClose();
+    return okResult({
+      closed: true,
+      sessionAlreadyGone: true,
+      message: "Underlying device session was already gone (likely torn down by a Maestro flow); cleared local session state."
+    });
+  }
+  return result;
+}
+var init_device_session_close = __esm({
+  "packages/rn-dev-agent-core/dist/tools/device-session-close.js"() {
+    "use strict";
+    init_utils();
+  }
+});
+
+// packages/rn-dev-agent-core/dist/tools/device-session.js
+import { execFile as execFileCb7 } from "node:child_process";
+import { promisify as promisify9 } from "node:util";
+function acquireDeviceLockForSession(platform, deviceId, appId) {
+  releaseDeviceLockForSession();
+  const lock = new DeviceLock({ platform, deviceId, appId });
+  const result = lock.acquire();
+  if (result.status === "acquired" && !result.degraded) {
+    activeDeviceLock = lock;
+    heartbeatTimer = setInterval(() => lock.touch(), HEARTBEAT_MS);
+    heartbeatTimer.unref();
+  }
+  return result;
+}
+function releaseDeviceLockForSession() {
+  if (heartbeatTimer) {
+    clearInterval(heartbeatTimer);
+    heartbeatTimer = null;
+  }
+  if (activeDeviceLock) {
+    activeDeviceLock.release();
+    activeDeviceLock = null;
+  }
+}
+function defaultHolderProcessAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error2) {
+    return error2.code === "EPERM";
+  }
+}
+function deviceBusyHolderSummary(holder, options = {}) {
+  const rawHeartbeatAgeMs = Math.max(0, (options.now ?? Date.now()) - holder.lastHeartbeat);
+  return {
+    alive: (options.processAlive ?? defaultHolderProcessAlive)(holder.pid),
+    heartbeatAgeMs: Math.min(rawHeartbeatAgeMs, DEVICE_LOCK_STALE_MS),
+    heartbeatAgeCapped: rawHeartbeatAgeMs > DEVICE_LOCK_STALE_MS
+  };
+}
+function deviceBusyMessage(deviceId, holder, summary = deviceBusyHolderSummary(holder)) {
+  const label = holder.platform === "android" ? "Emulator/device" : "Simulator";
+  const heartbeatAgeSeconds = Math.ceil(summary.heartbeatAgeMs / 1e3);
+  const heartbeatAge = `${heartbeatAgeSeconds}s${summary.heartbeatAgeCapped ? "+" : ""}`;
+  return `${label} ${deviceId} is already owned by another rn-dev-agent bridge. Holder is ${summary.alive ? "alive" : "not alive"}; heartbeat age is ${heartbeatAge} (bounded to 0\u201390s). ${DEVICE_BUSY_CLOSE_GUIDANCE} ${DEVICE_BUSY_ALTERNATE_GUIDANCE} ${DEVICE_BUSY_STALE_GUIDANCE} ${DEVICE_BUSY_OWNERSHIP_GUIDANCE}`;
+}
+async function isAppRunning(platform, bundleId, probes, deviceId) {
+  const p = (platform ?? "ios").toLowerCase();
+  if (p === "android") {
+    return (probes?.android ?? defaultAndroidProbe)(bundleId, deviceId);
+  }
+  const exactDeviceId = deviceId?.trim();
+  if (!exactDeviceId)
+    return false;
+  return (probes?.ios ?? defaultIOSProbe)(bundleId, exactDeviceId);
+}
+function buildIosAppRunningArgs(deviceId) {
+  return ["simctl", "spawn", deviceId, "launchctl", "list"];
+}
+async function defaultIOSProbe(bundleId, deviceId) {
+  try {
+    const { stdout } = await execFile10("xcrun", buildIosAppRunningArgs(deviceId), {
+      timeout: 5e3,
+      encoding: "utf8"
+    });
+    return stdout.includes(`UIKitApplication:${bundleId}`);
+  } catch {
+    return false;
+  }
+}
+function buildAndroidPidofArgs(bundleId, deviceId) {
+  return [...deviceId ? ["-s", deviceId] : [], "shell", "pidof", bundleId];
+}
+async function defaultAndroidProbe(bundleId, deviceId) {
+  try {
+    const { stdout } = await execFile10("adb", buildAndroidPidofArgs(bundleId, deviceId), {
+      timeout: 3e3,
+      encoding: "utf8"
+    });
+    return stdout.trim().length > 0;
+  } catch {
+    return false;
+  }
+}
+function buildAndroidAppLaunchArgs(deviceId, appId) {
+  return [
+    "-s",
+    deviceId,
+    "shell",
+    "monkey",
+    "--pct-syskeys",
+    "0",
+    "-p",
+    appId,
+    "-c",
+    "android.intent.category.LAUNCHER",
+    "1"
+  ];
+}
+function createDeviceSnapshotHandler(deps = {}) {
+  const probeAndroidUi = deps.probeAndroidUi ?? ((deviceId, appId) => runAndroid({ command: "snapshot", deviceId, bundleId: appId, interactiveOnly: false }));
+  const isAppRunningFn = deps.isAppRunning ?? ((platform, appId, deviceId) => isAppRunning(platform, appId, void 0, deviceId));
+  const startAndroidRunnerFn = deps.startAndroidRunner ?? ((deviceId, appId) => startAndroidRunner(deviceId, appId, void 0, { allowArtifactRebuild: true }));
+  const launchAndroidApp = deps.launchAndroidApp ?? (async (deviceId, appId) => {
+    await execFile10("adb", buildAndroidAppLaunchArgs(deviceId, appId), {
+      timeout: 1e4,
+      encoding: "utf8"
+    });
+  });
+  const ensureIosRunner = deps.ensureIosRunner ?? ensureRunnerForCommand;
+  const stopIosRunner = deps.stopIosRunner ?? stopFastRunner;
+  const reapAndroidRunner = deps.reapAndroidRunner ?? reapActiveAndroidRunner;
+  return async (args) => {
+    const action = args.action ?? "snapshot";
+    if (action === "open") {
+      let appId = args.appId;
+      let autoDetected = false;
+      let reactNativeUiReady = null;
+      if (!appId) {
+        const platform2 = args.platform ?? "ios";
+        appId = resolveBundleId(platform2) ?? void 0;
+        if (!appId) {
+          return failResult('appId is required for action=open (e.g. "com.example.app"). Could not auto-detect from app.json \u2014 provide appId explicitly.');
+        }
+        autoDetected = true;
+      }
+      if (!isValidBundleId(appId)) {
+        return failResult(`Invalid appId "${String(appId).slice(0, 80)}" \u2014 must be reverse-DNS bundle identifier (e.g. com.example.app)`, "INVALID_APPID");
+      }
+      const EXPO_GO_BUNDLES = ["host.exp.Exponent", "host.exp.exponent"];
+      if (EXPO_GO_BUNDLES.includes(appId)) {
+        return failResult("Expo Go is not supported \u2014 the in-tree device runner needs a Dev Client or standalone build. Use CDP tools (cdp_component_tree, cdp_store_state, cdp_evaluate) + device_screenshot instead.", {
+          hint: "Use cdp_evaluate for JS-level interactions. device_screenshot works without a session."
+        });
+      }
+      const sessionName = args.sessionName ?? `rn-agent-${Date.now()}`;
+      const platform = (args.platform ?? "ios").toLowerCase();
+      const lockPlatform = platform === "android" ? "android" : "ios";
+      const deviceId = args.deviceId?.trim();
+      if (!deviceId) {
+        return failResult(`Exact ${platform} deviceId is required; ambient booted/first-device selection is diagnostic only.`, "DEVICE_AUTHORITY_MISMATCH");
+      }
+      const lockResult = acquireDeviceLockForSession(lockPlatform, deviceId, appId);
+      if (lockResult.status === "conflict") {
+        const holder = deviceBusyHolderSummary(lockResult.holder);
+        return failResult(deviceBusyMessage(deviceId, lockResult.holder, holder), {
+          code: "DEVICE_BUSY",
+          holder
+        });
+      }
+      if (lockResult.degraded) {
+        logger.warn("rn-device", `Device-ownership lock unavailable (fs error) for ${deviceId} \u2014 cross-bridge contention protection is off this session.`);
+      }
+      if (args.attachOnly) {
+        const running = await isAppRunningFn(platform, appId, deviceId);
+        if (!running) {
+          releaseDeviceLockForSession();
+          return failResult(`attachOnly=true but ${appId} is not running on ${platform}. Launch it manually or drop attachOnly.`, "NOT_CONNECTED");
+        }
+      }
+      let upgradeNote;
+      try {
+        if (lockPlatform === "ios") {
+          const ready = await ensureIosRunner(deviceId, appId, {
+            allowArtifactRebuild: true,
+            attachOnly: args.attachOnly === true
+          });
+          if (!ready.ok) {
+            await stopIosRunner(deviceId);
+            consumePendingFastRunnerArtifactNote();
+            releaseDeviceLockForSession();
+            return failResult(ready.message, ready.code ?? "RN_FAST_RUNNER_DOWN");
+          }
+          upgradeNote = ready.note ?? consumePendingFastRunnerArtifactNote();
+          if (!args.attachOnly) {
+            await execFile10("xcrun", ["simctl", "launch", deviceId, appId], {
+              timeout: 1e4,
+              encoding: "utf8"
+            }).catch(() => {
+            });
+          }
+        } else {
+          await startAndroidRunnerFn(deviceId, appId);
+          upgradeNote = consumePendingAndroidUpgradeNote();
+          if (!args.attachOnly) {
+            try {
+              await launchAndroidApp(deviceId, appId);
+            } catch (err) {
+              throw new AndroidAppLaunchError(`Failed to launch ${appId} on ${deviceId}: ${err instanceof Error ? err.message : String(err)}`);
+            }
+          }
+          const readiness = await probeAndroidUi(deviceId, appId);
+          if (readiness.isError) {
+            const envelope = JSON.parse(readiness.content[0]?.text ?? "{}");
+            throw new Error(`${envelope.code ?? "ANDROID_UI_NOT_READY"}: ${envelope.error ?? "the app did not expose its UI through accessibility after launch"}`);
+          }
+          reactNativeUiReady = deps.probeReactNativeUi ? await deps.probeReactNativeUi("android", deviceId, appId).catch(() => false) : null;
+        }
+      } catch (err) {
+        let cleanupFailure;
+        try {
+          if (lockPlatform === "ios")
+            await stopIosRunner(deviceId);
+          else
+            await reapAndroidRunner(deviceId);
+        } catch (cleanupErr) {
+          cleanupFailure = cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr);
+        } finally {
+          releaseDeviceLockForSession();
+        }
+        consumePendingAndroidUpgradeNote();
+        const rawMsg = err instanceof Error ? err.message : String(err);
+        const msg3 = cleanupFailure ? `${rawMsg}; runner cleanup also failed: ${cleanupFailure}` : rawMsg;
+        if (err instanceof AndroidAppLaunchError) {
+          return failResult(msg3, "APP_LAUNCH_FAILED");
+        }
+        if (msg3.startsWith("RUNNER_COMMANDS_STALE")) {
+          return failResult(msg3, "RUNNER_COMMANDS_STALE");
+        }
+        if (msg3.startsWith("RUNNER_PROTOCOL_MISMATCH")) {
+          return failResult(msg3, "RUNNER_PROTOCOL_MISMATCH");
+        }
+        if (msg3.startsWith("RUNNER_OWNERSHIP_MISMATCH")) {
+          return failResult(msg3, "RUNNER_OWNERSHIP_MISMATCH");
+        }
+        const code = lockPlatform === "ios" ? "RN_FAST_RUNNER_DOWN" : "RN_ANDROID_RUNNER_DOWN";
+        return failResult(`Failed to start device runner: ${msg3}`, code);
+      }
+      setActiveSession({
+        name: sessionName,
+        platform,
+        deviceId,
+        openedAt: (/* @__PURE__ */ new Date()).toISOString(),
+        appId
+      });
+      try {
+        await deps.bindRunner?.(lockPlatform, deviceId, appId);
+      } catch (error2) {
+        let cleanupFailure;
+        try {
+          if (lockPlatform === "ios")
+            await stopIosRunner(deviceId);
+          else
+            await reapAndroidRunner(deviceId);
+        } catch (cleanupErr) {
+          cleanupFailure = cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr);
+        } finally {
+          clearActiveSession();
+          releaseDeviceLockForSession();
+        }
+        const rawMessage = error2 instanceof Error ? error2.message : String(error2);
+        const code = /^([A-Z][A-Z0-9_]+):/.exec(rawMessage)?.[1] ?? "RUNNER_OWNERSHIP_MISMATCH";
+        const message = cleanupFailure ? `${rawMessage}; runner cleanup also failed: ${cleanupFailure}` : rawMessage;
+        return failResult(message, code);
+      }
+      resetWedgeRecoveryCounter();
+      resetDetachedRecoveryCounter();
+      if (process.env.RN_DEVICE_KILL_LEGACY !== "0" && platform === "ios" && deviceId) {
+        try {
+          const r = await ensureSingleRunner({ udid: deviceId });
+          if (r.killedPids.length) {
+            logger.info("rn-device", `ensureSingleRunner: killed stale runner PID(s) ${r.killedPids.join(", ")} on ${deviceId}`);
+          }
+          if (r.removedFiles.length) {
+            logger.info("rn-device", `ensureSingleRunner: removed ${r.removedFiles.join(", ")}`);
+          }
+          if (r.removedApps.length) {
+            logger.info("rn-device", `ensureSingleRunner: uninstalled legacy runner app(s) ${r.removedApps.join(", ")} from ${deviceId}`);
+          }
+          for (const w of r.warnings)
+            logger.warn("rn-device", w);
+        } catch (err) {
+          logger.warn("rn-device", `ensureSingleRunner failed: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+      if (platform === "android" && process.env.RN_ANDROID_RUNNER !== "0") {
+        detectAndroidExternalRunner(void 0, getAdbSerial()).then((warning) => {
+          if (!warning)
+            return;
+          logger.warn("rn-device", warning.message);
+          for (const line of warning.processLines) {
+            logger.warn("rn-device", `  ${line.trim()}`);
+          }
+        }).catch(() => {
+        });
+      }
+      if (platform === "ios") {
+        suppressIOSAutocorrect(deviceId).then((sup) => {
+          if (sup.warnings.length)
+            logger.info("rn-device", `suppressIOSAutocorrect: ${sup.warnings.join("; ")}`);
+        }).catch(() => {
+        });
+      }
+      let foreign = null;
+      let foreignDetectMs;
+      if (platform === "ios" && process.env.RN_IOS_FOREIGN_WARN !== "0") {
+        const flowHeld = arbiter.snapshot.flowLeaseHeldBy !== null;
+        if (!flowHeld) {
+          const t0 = Date.now();
+          const detection = await detectIosExternalRunner(void 0, deviceId);
+          foreignDetectMs = Date.now() - t0;
+          foreign = foreignRunnerNotice(detection, false);
+        }
+        if (foreign) {
+          logger.warn("rn-device", foreign.warning);
+          for (const line of foreign.meta.foreignRunner.processLines) {
+            logger.warn("rn-device", `  ${line}`);
+          }
+        }
+      }
+      const data = {
+        ok: true,
+        sessionName,
+        platform,
+        deviceId,
+        appId,
+        readiness: platform === "android" ? {
+          appForeground: true,
+          accessibilityUi: true,
+          reactNativeUi: reactNativeUiReady === true ? "ready" : "unverified"
+        } : { appForeground: true }
+      };
+      const readinessWarning = platform === "android" && reactNativeUiReady !== true ? "Android app accessibility is ready, but the React Native helper boundary is unverified; run cdp_status and require capabilities.fiberTree=true before treating launch as RN-ready" : null;
+      let result2;
+      if (autoDetected || foreign || readinessWarning) {
+        const warning = [
+          autoDetected ? `appId auto-detected from app.json: ${appId}` : null,
+          foreign ? foreign.warning : null,
+          readinessWarning
+        ].filter(Boolean).join("; ");
+        const meta = { ...foreign ? foreign.meta : {} };
+        if (foreignDetectMs !== void 0)
+          meta.timings_ms = { foreignDetect: foreignDetectMs };
+        result2 = warnResult(data, warning, meta);
+      } else {
+        result2 = okResult(data);
+      }
+      return upgradeNote ? attachMetaNote(result2, upgradeNote) : result2;
+    }
+    if (action === "close") {
+      const closingPlatform = getActiveSession()?.platform ?? args.platform;
+      const result2 = await closeDeviceSession({
+        hasActiveSession: () => getActiveSession() !== null,
+        closeUnderlyingSession: async () => okResult({ closed: true }),
+        clearActiveSession,
+        stopFastRunner,
+        stopAndroidRunner: async (deviceId) => {
+          if (getActiveSession()?.platform === "android") {
+            await reapActiveAndroidRunner(deviceId);
+          }
+        },
+        finalizeSuccessfulClose: async () => {
+          await deps.unbindRunner?.();
+          if (closingPlatform === "ios") {
+            (deps.resetIosRunnerRebuildBudget ?? resetRunnerRebuildBudgetForCurrentPlugin)();
+          }
+        },
+        releaseDeviceLock: releaseDeviceLockForSession,
+        getDeviceId: () => getActiveSession()?.deviceId
+      });
+      return result2;
+    }
+    if (!getActiveSession()) {
+      return failResult('No device session open. Call device_snapshot with action="open" first.', {
+        hint: "Provide appId and platform to start a session."
+      });
+    }
+    const result = await rawSnapshot();
+    const nodes = parseSnapshotNodes(result);
+    if (!result.isError && nodes && isAgentDeviceRunnerSentinel(nodes)) {
+      const session2 = getActiveSession();
+      markSnapshotDirty(session2?.platform);
+      const recovery = await recoverFromRunnerLeak({
+        platform: session2?.platform,
+        appId: session2?.appId,
+        deviceId: session2?.deviceId,
+        sessionName: session2?.name
+      }, {
+        // B130 (D659): the recovery close must also clear the local session
+        // state (activeSession → null, ref-map → empty, fast-runner stopped)
+        // so the post-recovery re-snapshot goes through the daemon/CLI path
+        // that populates ref refs, NOT the fast-runner path which returns
+        // a tree-shaped result lacking @eN refs. Without this, `device_fill`
+        // after recovery fails with "No snapshot in session" because the
+        // ref-map is stale (from pre-recovery) OR non-existent (after fresh
+        // session open), and fast-runner serves the (ref-less) snapshot.
+        closeSession: async () => {
+          await stopFastRunner(session2?.deviceId);
+          await stopAndroidRunner(session2?.deviceId);
+          await deps.unbindRunner?.();
+          clearActiveSession();
+          return okResult({ closed: true });
+        },
+        openSession: ({ appId, platform, deviceId, attachOnly }) => reopenSessionForRecovery(appId, platform, attachOnly, deviceId, deps),
+        resnapshot: () => rawSnapshot(),
+        parseNodes: parseSnapshotNodes,
+        reacquire: session2?.platform === "ios" && session2?.appId && session2?.deviceId && deps.bindRunner && deps.unbindRunner ? () => reacquireIosTargetApp(session2.appId, session2.deviceId, {
+          bindRunner: deps.bindRunner,
+          ensureFastRunner,
+          launchApp,
+          stopFastRunner,
+          unbindRunner: deps.unbindRunner
+        }) : void 0
+      });
+      if (recovery.recovered) {
+        cacheSnapshotIfPossible(recovery.result);
+        markCdpStale();
+        return wrapWithMeta(recovery.result, {
+          recovered: "agent-device-runner-leak",
+          recoveryTier: recovery.tier
+        });
+      }
+      return failResult(runnerLeakFailureMessage(recovery.reason, session2), {
+        code: "RUNNER_LEAK",
+        recoveryReason: recovery.reason,
+        hint: runnerLeakFailureHint(recovery.reason, session2)
+      });
+    }
+    cacheSnapshotIfPossible(result);
+    return result;
+  };
+}
+function runnerLeakFailureMessage(reason, session2) {
+  if (reason === "no-session-context" && session2 && !session2.appId) {
+    return "device_snapshot returned AgentDeviceRunner's own UI tree, but auto-recovery cannot run because the active session has no stored appId. This usually means the session was opened by a plugin version from before B119 / GH #35 landed.";
+  }
+  return "device_snapshot returned AgentDeviceRunner's own UI tree instead of the target app (B119 / GH #35 \u2014 agent-device daemon dropped appBundleId on dispatch). Auto-recovery did not restore the target.";
+}
+function runnerLeakFailureHint(reason, session2) {
+  if (reason === "no-session-context" && session2 && !session2.appId) {
+    return "Run device_snapshot action=close, then action=open appId=<your.bundle.id> platform=ios to start a session that supports auto-recovery.";
+  }
+  return "Manually close + reopen the session with action=open appId=<your.bundle.id> platform=ios (full launch, not attachOnly). Upstream: Callstack/agent-device, see B119/GH#35.";
+}
+async function reacquireIosTargetApp(appId, deviceId, dependencies) {
+  try {
+    await dependencies.stopFastRunner(deviceId);
+    await dependencies.unbindRunner();
+    await dependencies.launchApp(appId, "ios", deviceId);
+    await dependencies.ensureFastRunner(deviceId, appId);
+    await dependencies.bindRunner("ios", deviceId, appId);
+    return okResult({ reacquired: true, appId });
+  } catch (error2) {
+    return failResult(`Runner authority reacquire failed: ${error2 instanceof Error ? error2.message : String(error2)}`, "RUNNER_OWNERSHIP_MISMATCH");
+  }
+}
+async function rawSnapshot() {
+  return runNative(["snapshot", "-i"]);
+}
+function parseSnapshotNodes(result) {
+  if (result.isError)
+    return null;
+  try {
+    const envelope = JSON.parse(result.content[0].text);
+    if (!envelope.ok || !envelope.data?.nodes)
+      return null;
+    return envelope.data.nodes;
+  } catch {
+    return null;
+  }
+}
+function cacheSnapshotIfPossible(result) {
+  if (result.isError)
+    return;
+  try {
+    const envelope = JSON.parse(result.content[0].text);
+    const platform = getActiveSession()?.platform;
+    if (platform && envelope.ok && envelope.data?.nodes) {
+      cacheSnapshot(platform, envelope.data.nodes);
+    }
+  } catch {
+  }
+}
+function wrapWithMeta(result, meta) {
+  if (result.isError)
+    return result;
+  try {
+    const envelope = JSON.parse(result.content[0].text);
+    envelope.meta = { ...envelope.meta, ...meta };
+    return { content: [{ type: "text", text: JSON.stringify(envelope) }] };
+  } catch {
+    return result;
+  }
+}
+async function reopenSessionForRecovery(appId, platform, attachOnly, deviceId, dependencies = {}) {
+  const recoveryName = `rn-agent-recovery-${Date.now()}`;
+  return createDeviceSnapshotHandler(dependencies)({
+    action: "open",
+    appId,
+    deviceId,
+    platform,
+    attachOnly,
+    sessionName: recoveryName
+  });
+}
+var execFile10, HEARTBEAT_MS, activeDeviceLock, heartbeatTimer, DEVICE_BUSY_CLOSE_GUIDANCE, DEVICE_BUSY_ALTERNATE_GUIDANCE, DEVICE_BUSY_STALE_GUIDANCE, DEVICE_BUSY_OWNERSHIP_GUIDANCE, AndroidAppLaunchError;
+var init_device_session = __esm({
+  "packages/rn-dev-agent-core/dist/tools/device-session.js"() {
+    "use strict";
+    init_agent_device_wrapper();
+    init_rn_fast_runner_client();
+    init_rn_android_runner_client();
+    init_app_lifecycle();
+    init_recovery();
+    init_external_runner_detect();
+    init_ensure_single_runner();
+    init_suppress_ios_autocorrect();
+    init_recover_wedge();
+    init_recover_detached();
+    init_utils();
+    init_project_config();
+    init_maestro_validator();
+    init_logger();
+    init_runner_leak_recovery();
+    init_device_lock();
+    init_device_arbiter();
+    init_device_session_close();
+    execFile10 = promisify9(execFileCb7);
+    HEARTBEAT_MS = 3e4;
+    activeDeviceLock = null;
+    heartbeatTimer = null;
+    DEVICE_BUSY_CLOSE_GUIDANCE = "From the holder worktree, run `device_snapshot action=close` to release it safely.";
+    DEVICE_BUSY_ALTERNATE_GUIDANCE = "Alternatively, boot a dedicated simulator (or emulator), bind its exact ID with `rn_session action=bind_device`, run the normal managed build/install there, then select that exact ID with `device_snapshot action=open ... attachOnly=true` when the app is already running.";
+    DEVICE_BUSY_STALE_GUIDANCE = "Dead holders self-heal on the next open attempt; live holders self-heal once their heartbeat is stale beyond the existing 90s recovery window.";
+    DEVICE_BUSY_OWNERSHIP_GUIDANCE = "A healthy live holder is never stolen or changed by this refusal.";
+    AndroidAppLaunchError = class extends Error {
+      constructor(message) {
+        super(message);
+        this.name = "AndroidAppLaunchError";
+      }
+    };
+  }
+});
+
+// packages/rn-dev-agent-core/dist/tools/fill-verify.js
+function classifyNativeVerification(native, nativeStable) {
+  return {
+    verified: native === "exact" && nativeStable,
+    native,
+    nativeStable,
+    observedMismatch: native === "mismatch" && nativeStable
+  };
+}
+var init_fill_verify = __esm({
+  "packages/rn-dev-agent-core/dist/tools/fill-verify.js"() {
+    "use strict";
+  }
+});
+
+// packages/rn-dev-agent-core/dist/tools/device-interact.js
+import { randomUUID as randomUUID5 } from "node:crypto";
+import { execFile as execFileCb8 } from "node:child_process";
+import { promisify as promisify10 } from "node:util";
+function candidateFromNode(n) {
+  return {
+    ref: n.ref,
+    label: n.label,
+    testID: n.identifier,
+    type: n.type,
+    hittable: n.hittable,
+    position: n.rect ? { x: n.rect.x, y: n.rect.y } : void 0
+  };
+}
+function typePriority(type) {
+  if (!type)
+    return 50;
+  return TYPE_PRIORITY_FOR_TAP[type] ?? 50;
+}
+function rectKey(rect) {
+  if (!rect)
+    return null;
+  return `${Math.round(rect.x)},${Math.round(rect.y)},${Math.round(rect.width)},${Math.round(rect.height)}`;
+}
+function rankSnapshotNodes(nodes) {
+  const withScore = nodes.map((node, originalIndex) => ({
+    node,
+    originalIndex,
+    score: typePriority(node.type) * 10 + (node.hittable === true ? 1 : 0)
+  }));
+  withScore.sort((a, b) => {
+    if (b.score !== a.score)
+      return b.score - a.score;
+    return a.originalIndex - b.originalIndex;
+  });
+  const seenRects = /* @__PURE__ */ new Set();
+  const ranked = [];
+  for (const s of withScore) {
+    const key = rectKey(s.node.rect);
+    if (key !== null) {
+      if (seenRects.has(key))
+        continue;
+      seenRects.add(key);
+    }
+    ranked.push(s.node);
+  }
+  return ranked;
+}
+function parseSnapshotEnvelope(result) {
+  if (result.isError)
+    return null;
+  try {
+    const envelope = JSON.parse(result.content[0].text);
+    if (!envelope.ok || !envelope.data?.nodes)
+      return null;
+    return envelope.data.nodes;
+  } catch {
+    return null;
+  }
+}
+async function fetchSnapshotNodes(allowCache = false) {
+  if (allowCache) {
+    const platform2 = getActiveSession()?.platform;
+    if (platform2 && isSnapshotCacheValid(platform2)) {
+      const cached2 = getCachedSnapshot(platform2);
+      if (cached2) {
+        return {
+          ok: true,
+          nodes: cached2.nodes,
+          provenance: {
+            source: "cache",
+            originAuthority: cached2.authorityReceipt.originAuthority
+          }
+        };
+      }
+    }
+  }
+  const first = await runNative(["snapshot", "-i"]);
+  const initialNodes = parseSnapshotEnvelope(first);
+  if (initialNodes === null)
+    return { ok: false, reason: "fetch-failed" };
+  if (initialNodes.length === 0)
+    return { ok: false, reason: "empty-capture" };
+  if (!isAgentDeviceRunnerSentinel(initialNodes)) {
+    const platform2 = getActiveSession()?.platform;
+    if (platform2)
+      cacheSnapshot(platform2, initialNodes);
+    return {
+      ok: true,
+      nodes: initialNodes,
+      provenance: { source: "fresh", originAuthority: "not-proven" }
+    };
+  }
+  const session2 = getActiveSession();
+  markSnapshotDirty(session2?.platform);
+  const recovery = await recoverFromRunnerLeak({
+    platform: session2?.platform,
+    appId: session2?.appId,
+    deviceId: session2?.deviceId,
+    sessionName: session2?.name
+  }, {
+    closeSession: async () => {
+      await stopFastRunner(session2?.deviceId);
+      await stopAndroidRunner(session2?.deviceId);
+      clearActiveSession();
+      return okResult({ closed: true });
+    },
+    openSession: ({ appId, platform: platform2, deviceId, attachOnly }) => reopenSessionForRecovery(appId, platform2, attachOnly, deviceId),
+    resnapshot: () => runNative(["snapshot", "-i"]),
+    parseNodes: parseSnapshotEnvelope
+  });
+  if (!recovery.recovered) {
+    return { ok: false, reason: "runner-leak-unrecovered", recoveryReason: recovery.reason };
+  }
+  const recoveredNodes = parseSnapshotEnvelope(recovery.result);
+  if (recoveredNodes === null)
+    return { ok: false, reason: "fetch-failed" };
+  if (recoveredNodes.length === 0)
+    return { ok: false, reason: "empty-capture" };
+  const platform = getActiveSession()?.platform;
+  if (platform)
+    cacheSnapshot(platform, recoveredNodes);
+  return {
+    ok: true,
+    nodes: recoveredNodes,
+    provenance: { source: "fresh", originAuthority: "not-proven" },
+    recoveredTier: recovery.tier
+  };
+}
+function emptyCaptureFailResult(query) {
+  return failResult(`Snapshot returned zero nodes \u2014 cannot distinguish an empty screen from a degraded capture` + (query !== void 0 ? `; not asserting "${query}" is absent` : "") + `. Confirm the screen with device_screenshot or cdp_component_tree, then retry.`, { code: "SNAPSHOT_DEGRADED", ...query !== void 0 ? { query } : {} });
+}
+function scopeSnapshotNodesForFind(nodes, platform, appId, includeSystemUi) {
+  if (platform !== "android" || includeSystemUi)
+    return nodes;
+  if (!appId)
+    return [];
+  return nodes.filter((node) => node.packageName === appId);
+}
+async function fetchFindCandidates(query, exact = false, allowCache = false, includeSystemUi = false) {
+  const snap = await fetchSnapshotNodes(allowCache);
+  if (!snap.ok)
+    return snap;
+  const session2 = getActiveSession();
+  const scopedNodes = scopeSnapshotNodesForFind(snap.nodes, session2?.platform, session2?.appId, includeSystemUi);
+  const needle = query.toLowerCase();
+  const matched = scopedNodes.filter((n) => {
+    const label = n.label ?? "";
+    const id = n.identifier ?? "";
+    if (exact)
+      return label === query || id === query;
+    return label.toLowerCase().includes(needle) || id.toLowerCase().includes(needle);
+  });
+  const ranked = rankSnapshotNodes(matched);
+  const candidates = ranked.slice(0, 10).map(candidateFromNode);
+  return {
+    ok: true,
+    candidates,
+    provenance: snap.provenance,
+    recoveredTier: snap.recoveredTier
+  };
+}
+function runnerLeakFailResult(query, recoveryReason) {
+  const queryHint = query ? ` (while resolving "${query}")` : "";
+  return failResult(`device_find/snapshot returned AgentDeviceRunner's own UI tree instead of the target app${queryHint} (B119 / GH #35 \u2014 agent-device daemon dropped appBundleId on dispatch). Auto-recovery did not restore the target.`, {
+    code: "RUNNER_LEAK",
+    recoveryReason,
+    hint: "Manually close + reopen the session with device_snapshot action=open appId=<your.bundle.id> platform=ios (full launch, not attachOnly). The recovery may have killed the JS context \u2014 re-establish CDP via cdp_connect before reading state. Upstream: Callstack/agent-device, see B119/GH#35."
+  });
+}
+async function pressCandidate(candidate, action, getClient2, includeSystemUi = false) {
+  const ref = candidate.ref.startsWith("@") ? candidate.ref : `@${candidate.ref}`;
+  if (action === "click") {
+    const tapArgs = ["press", ref, ...includeSystemUi ? ["--include-system-ui"] : []];
+    const tap = async () => surfaceKeyboardGuard(await runNative(tapArgs));
+    const first = await tap();
+    return first.isError && getClient2 ? healKeyboardOccludedTap(first, keyboardHealDeps(getClient2, tap)) : first;
+  }
+  return okResult({
+    ref: candidate.ref,
+    label: candidate.label,
+    testID: candidate.testID,
+    ...includeSystemUi ? { scope: "system-ui-explicit" } : {}
+  });
+}
+function tagFindSnapshot(result, provenance, tier) {
+  try {
+    const envelope = JSON.parse(result.content[0].text);
+    envelope.meta = {
+      ...envelope.meta,
+      snapshotProvenance: provenance,
+      ...tier ? { recovered: "agent-device-runner-leak", recoveryTier: tier } : {}
+    };
+    return {
+      ...result,
+      content: [
+        { type: "text", text: JSON.stringify(envelope) },
+        ...result.content.slice(1)
+      ]
+    };
+  } catch {
+    return result;
+  }
+}
+function createDeviceFindHandler(getClient2) {
+  return withSession(async (args) => {
+    if (args.exact === true || args.index !== void 0) {
+      const find = await fetchFindCandidates(args.text, args.exact === true, true, args.includeSystemUi === true);
+      if (!find.ok) {
+        if (find.reason === "runner-leak-unrecovered") {
+          return runnerLeakFailResult(args.text, find.recoveryReason);
+        }
+        if (find.reason === "empty-capture") {
+          return emptyCaptureFailResult(args.text);
+        }
+        return failResult(`Snapshot unavailable \u2014 cannot resolve ${args.exact ? "exact" : "index-based"} match for "${args.text}". Retry after device_snapshot action=open/snapshot.`, { code: "SNAPSHOT_UNAVAILABLE", query: args.text });
+      }
+      const { candidates, provenance, recoveredTier } = find;
+      const tagResult = (result) => tagFindSnapshot(result, provenance, recoveredTier);
+      if (candidates.length === 0) {
+        return tagResult(failResult(`No element matches "${args.text}" (exact=${args.exact === true})`, {
+          code: "NOT_FOUND",
+          query: args.text
+        }));
+      }
+      if (args.index !== void 0) {
+        if (args.index < 0 || args.index >= candidates.length) {
+          return tagResult(failResult(`index ${args.index} out of range (got ${candidates.length} candidates)`, {
+            code: "INDEX_OUT_OF_RANGE",
+            count: candidates.length,
+            candidates
+          }));
+        }
+        return tagResult(await pressCandidate(candidates[args.index], args.action, getClient2, args.includeSystemUi === true));
+      }
+      if (candidates.length === 1) {
+        return tagResult(await pressCandidate(candidates[0], args.action, getClient2, args.includeSystemUi === true));
+      }
+      return tagResult(failResult(`AMBIGUOUS_MATCH: exact "${args.text}" matched ${candidates.length} elements`, {
+        code: "AMBIGUOUS_MATCH",
+        query: args.text,
+        candidates,
+        hint: "Add index: N to pick one."
+      }));
+    }
+    const activeSession2 = getActiveSession();
+    const usesInTreeRunner = activeSession2?.platform === "ios" || activeSession2?.platform === "android" && process.env.RN_ANDROID_RUNNER !== "0";
+    if (usesInTreeRunner) {
+      const find = await fetchFindCandidates(args.text, false, true, args.includeSystemUi === true);
+      if (!find.ok) {
+        if (find.reason === "runner-leak-unrecovered") {
+          return runnerLeakFailResult(args.text, find.recoveryReason);
+        }
+        if (find.reason === "empty-capture") {
+          return emptyCaptureFailResult(args.text);
+        }
+        return failResult(`Snapshot unavailable \u2014 cannot resolve "${args.text}"`, {
+          code: "SNAPSHOT_UNAVAILABLE",
+          query: args.text
+        });
+      }
+      const { candidates, provenance, recoveredTier } = find;
+      const tagResult = (result) => tagFindSnapshot(result, provenance, recoveredTier);
+      const recoveredMeta = recoveredTier ? { recoveredTier } : {};
+      if (candidates.length === 0) {
+        return tagResult(failResult(`No element matches "${args.text}"`, {
+          code: "NOT_FOUND",
+          query: args.text,
+          ...recoveredMeta
+        }));
+      }
+      if (candidates.length === 1) {
+        return tagResult(await pressCandidate(candidates[0], args.action, getClient2, args.includeSystemUi === true));
+      }
+      return tagResult(failResult(`AMBIGUOUS_MATCH: "${args.text}" matched ${candidates.length} elements. Use device_press with one of these refs, or retry with index: N.`, {
+        code: "AMBIGUOUS_MATCH",
+        query: args.text,
+        candidates,
+        ...recoveredMeta,
+        hint: 'Pick the correct ref (prefer one with hittable=true) and call device_press(ref="...") directly, or call device_find again with index: N.'
+      }));
+    }
+    return failResult(`device_find requires an in-tree runner \u2014 iOS (rn-fast-runner) or Android with RN_ANDROID_RUNNER unset/non-zero (rn-android-runner). Active session: ${activeSession2?.platform ?? "none"}.`, {
+      code: "IN_TREE_RUNNER_REQUIRED",
+      platform: activeSession2?.platform ?? null
+    });
+  });
+}
+function isRecognizedInputType(type) {
+  if (!type)
+    return false;
+  return IOS_INPUT_TYPES.has(type) || ANDROID_INPUT_TYPE_RE.test(type);
+}
+function isSecureInputNode(node) {
+  return node.type === "SecureTextField" || node.secure === true;
+}
+function cleanNodeRef(node) {
+  return node.ref.startsWith("@") ? node.ref.slice(1) : node.ref;
+}
+function inputTestId(identifier) {
+  return identifier && identifier.trim().length > 0 ? identifier : null;
+}
+function signatureForNode(nodes, node) {
+  return {
+    type: node.type ?? "",
+    label: node.label,
+    identifier: node.identifier,
+    rect: node.rect,
+    flatIndex: nodes.indexOf(node),
+    nodeCount: nodes.length
+  };
+}
+function rectsMatch(a, b, tolerance = 8) {
+  return Math.abs(a.x + a.width / 2 - (b.x + b.width / 2)) <= tolerance && Math.abs(a.y + a.height / 2 - (b.y + b.height / 2)) <= tolerance && Math.abs(a.width - b.width) <= tolerance && Math.abs(a.height - b.height) <= tolerance;
+}
+function bindExactFillTarget(nodes, rawRef, priorSignature) {
+  const clean = rawRef.replace(/^@/, "");
+  const positional = /^e\d+$/.test(clean);
+  let node;
+  if (positional) {
+    const hasRobustIdentity = priorSignature !== null && priorSignature !== void 0 && ((priorSignature.identifier?.trim().length ?? 0) > 0 || (priorSignature.label?.trim().length ?? 0) > 0 || priorSignature.rect !== void 0);
+    if (!hasRobustIdentity) {
+      return {
+        ok: false,
+        detail: `ref @${clean} has no robust pre-refresh identity for unique rebinding`
+      };
+    }
+    const signature = priorSignature;
+    const signatureIdentifier = inputTestId(signature.identifier);
+    const matches = nodes.filter((n) => {
+      if ((n.type ?? "") !== signature.type)
+        return false;
+      if (signatureIdentifier !== null)
+        return n.identifier === signatureIdentifier;
+      if (signature.rect !== void 0 && n.rect !== void 0) {
+        return rectsMatch(n.rect, signature.rect);
+      }
+      return n.label === signature.label && inputTestId(n.identifier) === null;
+    });
+    if (matches.length !== 1) {
+      return {
+        ok: false,
+        detail: `ref @${clean} identity ${matches.length > 1 ? "matches multiple elements" : "is absent"} in the current snapshot`
+      };
+    }
+    node = matches[0];
+  } else {
+    const matches = nodes.filter((n) => n.identifier === clean);
+    if (matches.length === 0) {
+      return { ok: false, detail: `no element with testID "${clean}" in the current snapshot` };
+    }
+    if (matches.length > 1) {
+      return {
+        ok: false,
+        detail: `testID "${clean}" matches ${matches.length} elements \u2014 duplicate identifiers cannot bind an exact input`
+      };
+    }
+    node = matches[0];
+  }
+  if (isRecognizedInputType(node.type)) {
+    return {
+      ok: true,
+      binding: {
+        inputRef: `@${cleanNodeRef(node)}`,
+        inputTestId: inputTestId(node.identifier),
+        inputSignature: signatureForNode(nodes, node),
+        focusRef: `@${cleanNodeRef(node)}`,
+        wrapper: false,
+        secure: isSecureInputNode(node)
+      }
+    };
+  }
+  const id = node.identifier;
+  if (id?.endsWith(PRESSABLE_SUFFIX)) {
+    const base = id.slice(0, -PRESSABLE_SUFFIX.length);
+    if (base) {
+      const inputs = nodes.filter((n) => n.identifier === base && isRecognizedInputType(n.type));
+      if (inputs.length === 1) {
+        return {
+          ok: true,
+          binding: {
+            inputRef: `@${cleanNodeRef(inputs[0])}`,
+            inputTestId: base,
+            inputSignature: signatureForNode(nodes, inputs[0]),
+            focusRef: `@${cleanNodeRef(node)}`,
+            wrapper: true,
+            secure: isSecureInputNode(inputs[0])
+          }
+        };
+      }
+      if (inputs.length > 1) {
+        return {
+          ok: false,
+          detail: `wrapper "${id}" maps to ${inputs.length} inputs with testID "${base}" \u2014 ambiguous`
+        };
+      }
+      return {
+        ok: false,
+        detail: `wrapper "${id}" has no recognized input with testID "${base}" in the current snapshot`
+      };
+    }
+  }
+  return {
+    ok: false,
+    detail: `element @${cleanNodeRef(node)} (${node.type ?? "unknown type"}) is not a recognized text input \u2014 pass the inner input's ref or testID`
+  };
+}
+function settleOpts(args) {
+  return args.settleTimeoutMs !== void 0 ? { settle: { timeoutMs: args.settleTimeoutMs } } : {};
+}
+function interactOpts(args) {
+  return {
+    ...settleOpts(args),
+    ...args.retryIfNoChange !== void 0 ? { retryIfNoChange: args.retryIfNoChange } : {}
+  };
+}
+function keyboardHealDeps(getClient2, retryTap) {
+  const client2 = cdpClientOrNull(getClient2);
+  if (!client2)
+    return null;
+  return {
+    dismissViaJs: async () => {
+      const r = await client2.evaluate("__RN_AGENT.dismissKeyboard()");
+      if (typeof r.value !== "string")
+        return false;
+      try {
+        const parsed = JSON.parse(r.value);
+        return parsed?.dismissed === true;
+      } catch {
+        return false;
+      }
+    },
+    refreshSnapshot: () => runNative(["snapshot"]),
+    retryTap
+  };
+}
+function createDevicePressHandler(getClient2) {
+  return withSession(async (args) => {
+    const hasRef = typeof args.ref === "string" && args.ref.length > 0;
+    const hasCoordinates = args.x !== void 0 && args.y !== void 0;
+    if (hasRef === hasCoordinates) {
+      return failResult("Provide exactly one press target: ref, or both x and y coordinates", "INVALID_ARGUMENT");
+    }
+    const target = hasRef ? args.ref.startsWith("@") ? args.ref : `@${args.ref}` : void 0;
+    const cliArgs = hasRef ? ["press", target] : ["press", String(args.x), String(args.y)];
+    if (args.doubleTap)
+      cliArgs.push("--double-tap");
+    if (args.count && args.count > 1)
+      cliArgs.push("--count", String(args.count));
+    if (args.holdMs && args.holdMs > 0)
+      cliArgs.push("--hold-ms", String(args.holdMs));
+    const tap = async () => surfaceKeyboardGuard(await runNative(cliArgs, interactOpts(args)));
+    let result = await tap();
+    if (result.isError) {
+      result = await healKeyboardOccludedTap(result, keyboardHealDeps(getClient2, tap));
+    }
+    if (!result.isError && args.waitForFocusMs && args.waitForFocusMs > 0) {
+      await new Promise((r) => setTimeout(r, args.waitForFocusMs));
+    }
+    return result;
+  });
+}
+function createDeviceLongPressHandler(getClient2) {
+  return withSession(async (args) => {
+    let cliArgs;
+    if (args.ref) {
+      const ref = args.ref.startsWith("@") ? args.ref : `@${args.ref}`;
+      cliArgs = ["press", ref, "--hold-ms", String(args.durationMs ?? 1e3)];
+    } else if (args.x != null && args.y != null) {
+      cliArgs = ["longpress", String(args.x), String(args.y)];
+      if (args.durationMs)
+        cliArgs.push(String(args.durationMs));
+    } else {
+      return failResult("Provide either ref or x+y coordinates");
+    }
+    const tap = async () => surfaceKeyboardGuard(await runNative(cliArgs, interactOpts(args)));
+    const result = await tap();
+    if (result.isError) {
+      return healKeyboardOccludedTap(result, keyboardHealDeps(getClient2, tap));
+    }
+    return result;
+  });
+}
+function isSetTextRejectedError(result) {
+  if (!result.isError)
+    return false;
+  const text = result.content?.[0]?.text ?? "";
+  try {
+    const envelope = JSON.parse(text);
+    return envelope.code === "SET_TEXT_REJECTED";
+  } catch {
+    return false;
+  }
+}
+function extractTypingMeta(result) {
+  try {
+    const envelope = JSON.parse(result.content[0].text);
+    const data = envelope.data;
+    if (!data || data.typingBurst === void 0 && data.keyboardWaitMs === void 0)
+      return null;
+    return {
+      ...data.typingBurst !== void 0 ? { burst: data.typingBurst } : {},
+      ...data.keyboardWaitMs !== void 0 ? { keyboardWaitMs: data.keyboardWaitMs } : {}
+    };
+  } catch {
+    return null;
+  }
+}
+function extractSettleMeta(result) {
+  try {
+    const envelope = JSON.parse(result.content[0].text);
+    const out = {};
+    if (envelope.meta?.settle !== void 0)
+      out.settle = envelope.meta.settle;
+    if (typeof envelope.meta?.timings_ms?.settle === "number") {
+      out.settleMs = envelope.meta.timings_ms.settle;
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+function cdpClientOrNull(getClient2) {
+  try {
+    const client2 = getClient2();
+    return client2?.isConnected ? client2 : null;
+  } catch {
+    return null;
+  }
+}
+function extractMutationDisposition(result) {
+  try {
+    const envelope = JSON.parse(result.content[0]?.text ?? "{}");
+    const m = envelope.meta?.mutation;
+    if (m === "none" || m === "observed" || m === "possible")
+      return m;
+  } catch {
+  }
+  return "possible";
+}
+function extractErrorText(result) {
+  try {
+    const envelope = JSON.parse(result.content[0]?.text ?? "{}");
+    return typeof envelope.error === "string" ? envelope.error : "unknown runner error";
+  } catch {
+    return "unknown runner error";
+  }
+}
+function extractErrorCode(result) {
+  try {
+    const envelope = JSON.parse(result.content[0]?.text ?? "{}");
+    return typeof envelope.code === "string" ? envelope.code : void 0;
+  } catch {
+    return void 0;
+  }
+}
+async function runNativeVerifyInput(binding, text, operationToken) {
+  const result = await runNative(["verify-input", binding.inputRef, text], {
+    settle: { enabled: false },
+    exactTarget: {
+      inputRef: binding.inputRef,
+      secure: binding.secure,
+      ...operationToken ? { operationToken } : {}
+    }
+  });
+  if (result.isError)
+    return { verdict: "unavailable", stable: false };
+  try {
+    const envelope = JSON.parse(result.content[0].text);
+    const v = envelope.data?.verifyVerdict;
+    if (typeof v === "string" && NATIVE_VERIFY_VERDICTS.has(v)) {
+      return { verdict: v, stable: envelope.data?.verifyStable === true };
+    }
+  } catch {
+  }
+  return { verdict: "unavailable", stable: false };
+}
+async function finalVerification(binding, text, operationToken) {
+  const native = await runNativeVerifyInput(binding, text, operationToken);
+  return classifyNativeVerification(native.verdict, native.stable);
+}
+function verifiedFillResult(method, textLength, meta) {
+  return okResult({ filled: true, method, length: textLength }, { meta: { ...meta, verify: "exact" } });
+}
+function fillFailure(code, message, opts) {
+  return failResult(message, code, {
+    mutation: opts.mutation,
+    pathsTried: opts.pathsTried,
+    ...opts.verification ? {
+      verification: {
+        native: opts.verification.native,
+        nativeStable: opts.verification.nativeStable
+      }
+    } : {},
+    hint: opts.hint ?? (opts.mutation === "none" ? "No text was entered. Refresh the snapshot (device_snapshot action=snapshot) and rebind the input before retrying." : "The field may have been mutated. Read the field state with device_snapshot before any manual retry \u2014 do not blindly re-run device_fill.")
+  });
+}
+function attachFillFailureDisposition(result, mutation, pathsTried) {
+  try {
+    const envelope = JSON.parse(result.content[0]?.text ?? "{}");
+    const error2 = typeof envelope.error === "string" ? envelope.error : "Text entry was refused.";
+    const meta = {
+      ...envelope.meta,
+      mutation,
+      pathsTried,
+      hint: mutation === "none" ? "No text was entered. Refresh the snapshot (device_snapshot action=snapshot) and rebind the input before retrying." : "The field may have been mutated. Read the field state with device_snapshot before any manual retry \u2014 do not blindly re-run device_fill."
+    };
+    return typeof envelope.code === "string" ? failResult(error2, envelope.code, meta) : failResult(error2, meta);
+  } catch {
+    return fillFailure("TEXT_ENTRY_UNVERIFIED", "Text entry was refused.", {
+      mutation,
+      pathsTried
+    });
+  }
+}
+async function performExactFill(args, _client, tiers) {
+  const pathsTried = [];
+  let mutationSeen = "none";
+  const cleanRefForSignature = args.ref.replace(/^@/, "");
+  const cachedSignature = /^e\d+$/.test(cleanRefForSignature) ? getCachedSignature(cleanRefForSignature) : null;
+  const cachedRect = cachedSignature ? lookupRef(cleanRefForSignature) : null;
+  const priorSignature = cachedSignature && cachedRect ? { ...cachedSignature, rect: cachedRect } : cachedSignature;
+  const snap = await fetchSnapshotNodes(true);
+  if (!snap.ok) {
+    if (snap.reason === "runner-leak-unrecovered") {
+      return attachFillFailureDisposition(runnerLeakFailResult(args.ref, snap.recoveryReason), "none", pathsTried);
+    }
+    return fillFailure("NO_TEXT_INPUT_TARGET", `device_fill could not snapshot the screen to bind "${args.ref}" (${snap.reason}); no text was entered.`, { mutation: "none", pathsTried });
+  }
+  const bind = bindExactFillTarget(snap.nodes, args.ref, priorSignature);
+  if (!bind.ok) {
+    return fillFailure("NO_TEXT_INPUT_TARGET", `device_fill could not bind an exact input: ${bind.detail}. No text was entered.`, { mutation: "none", pathsTried });
+  }
+  const binding = bind.binding;
+  if (args.testID && args.testID !== binding.inputTestId) {
+    return fillFailure("NO_TEXT_INPUT_TARGET", `device_fill could not prove that testID "${args.testID}" identifies the bound input. No text was entered.`, { mutation: "none", pathsTried });
+  }
+  pathsTried.push("native");
+  if (tiers.abortSignal?.aborted) {
+    return fillFailure("TEXT_ENTRY_UNVERIFIED", "device_fill was cancelled before native typing.", {
+      mutation: mutationSeen === "none" ? "none" : "possible",
+      pathsTried
+    });
+  }
+  const focusCenter = isRefMapFresh() ? refCenter(binding.focusRef) : null;
+  const exactTarget = {
+    inputRef: binding.inputRef,
+    ...focusCenter ? { focusX: focusCenter.x, focusY: focusCenter.y } : {},
+    ...args.waitForKeyboardMs !== void 0 ? { focusWaitMs: args.waitForKeyboardMs } : {}
+  };
+  const tNative = Date.now();
+  const operationToken = randomUUID5();
+  const primary = await runNative(["fill", binding.inputRef, args.text, ...args.text.length === 0 ? ["--clear-first"] : []], {
+    ...settleOpts(args),
+    exactTarget: { ...exactTarget, operationToken }
+  });
+  if (primary.isError) {
+    const mutation = extractMutationDisposition(primary);
+    if (isSetTextRejectedError(primary)) {
+      if (mutation === "possible") {
+        return fillFailure("TEXT_ENTRY_UNVERIFIED", `device_fill's native attempt may have mutated the field before rejecting text entry: ${extractErrorText(primary)}`, { mutation: "possible", pathsTried });
+      }
+      if (mutation === "observed") {
+        mutationSeen = "observed";
+        const verification3 = await finalVerification(binding, args.text, operationToken);
+        if (verification3.verified) {
+          return verifiedFillResult("native", args.text.length, {
+            textEntryPath: "native",
+            verifiedOracle: "native",
+            recovered: "post-error-exact-readback",
+            timings_ms: { nativeType: Date.now() - tNative }
+          });
+        }
+        return fillFailure("TEXT_ENTRY_UNVERIFIED", "device_fill observed a rejected native mutation but could not verify the retained target; not retrying.", {
+          mutation: verification3.observedMismatch ? "observed" : "possible",
+          pathsTried,
+          verification: verification3
+        });
+      }
+      return fillFailure("TEXT_ENTRY_UNVERIFIED", "device_fill could not verify the fill through the retained native target.", { mutation: "none", pathsTried });
+    }
+    if (mutation === "none") {
+      const code = extractErrorCode(primary);
+      return fillFailure(code === "FOCUS_TARGET_OCCLUDED" ? "FOCUS_TARGET_OCCLUDED" : "NO_TEXT_INPUT_TARGET", `device_fill's native attempt was refused before mutation: ${extractErrorText(primary)}`, { mutation: "none", pathsTried });
+    }
+    const verification2 = await finalVerification(binding, args.text, operationToken);
+    if (verification2.verified) {
+      return verifiedFillResult("native", args.text.length, {
+        textEntryPath: "native",
+        verifiedOracle: "native",
+        recovered: "post-error-exact-readback",
+        timings_ms: { nativeType: Date.now() - tNative }
+      });
+    }
+    return fillFailure("TEXT_ENTRY_UNVERIFIED", `device_fill's native attempt failed and the field could not be verified: ${extractErrorText(primary)}`, { mutation, pathsTried, verification: verification2 });
+  }
+  mutationSeen = "observed";
+  const primarySettle = extractSettleMeta(primary);
+  const primaryTyping = extractTypingMeta(primary);
+  const verification = await finalVerification(binding, args.text, operationToken);
+  if (verification.verified) {
+    return verifiedFillResult("native", args.text.length, {
+      textEntryPath: "native",
+      verifiedOracle: "native",
+      ...primaryTyping ? { typing: primaryTyping } : {},
+      ...primarySettle.settle !== void 0 ? { settle: primarySettle.settle } : {},
+      timings_ms: {
+        nativeType: Date.now() - tNative,
+        ...primarySettle.settleMs !== void 0 ? { settle: primarySettle.settleMs } : {}
+      }
+    });
+  }
+  return fillFailure("TEXT_ENTRY_UNVERIFIED", verification.observedMismatch ? "device_fill typed a different value on the retained native target; not retrying." : "device_fill typed but the retained native target could not be verified; not retrying.", {
+    mutation: verification.observedMismatch ? mutationSeen : "possible",
+    pathsTried,
+    verification
+  });
+}
+function createDeviceFillHandler(_getClient) {
+  return withSession(async (args) => performExactFill(args, null, {}));
+}
+function computeSwipeFromDirection(direction, screen) {
+  const cx = Math.round(screen.width / 2);
+  const cy = Math.round(screen.height / 2);
+  const dy = Math.round(screen.height * SWIPE_FRACTION);
+  const dx = Math.round(screen.width * SWIPE_FRACTION);
+  switch (direction) {
+    // "swipe down" means finger moves from top to bottom (pull-to-refresh gesture)
+    case "down":
+      return { x1: cx, y1: cy - dy, x2: cx, y2: cy + dy };
+    // "swipe up" means finger moves from bottom to top
+    case "up":
+      return { x1: cx, y1: cy + dy, x2: cx, y2: cy - dy };
+    case "left":
+      return { x1: cx + dx, y1: cy, x2: cx - dx, y2: cy };
+    case "right":
+      return { x1: cx - dx, y1: cy, x2: cx + dx, y2: cy };
+  }
+}
+function buildDirectionalSwipeCliArgs(direction, durationMs) {
+  const screen = getCachedScreenRect() ?? DEFAULT_SCREEN;
+  const coords = computeSwipeFromDirection(direction, screen);
+  const duration3 = durationMs ?? DEFAULT_SWIPE_DURATION_MS;
+  return [
+    "swipe",
+    String(coords.x1),
+    String(coords.y1),
+    String(coords.x2),
+    String(coords.y2),
+    String(duration3)
+  ];
+}
+function computeScrollFromDirection(direction, amount, screen) {
+  const cx = Math.round(screen.width / 2);
+  const cy = Math.round(screen.height / 2);
+  const dy = Math.round(screen.height * SWIPE_FRACTION * amount);
+  const dx = Math.round(screen.width * SWIPE_FRACTION * amount);
+  switch (direction) {
+    case "down":
+      return { x1: cx, y1: cy + Math.round(dy / 2), x2: cx, y2: cy - Math.round(dy / 2) };
+    case "up":
+      return { x1: cx, y1: cy - Math.round(dy / 2), x2: cx, y2: cy + Math.round(dy / 2) };
+    case "left":
+      return { x1: cx + Math.round(dx / 2), y1: cy, x2: cx - Math.round(dx / 2), y2: cy };
+    case "right":
+      return { x1: cx - Math.round(dx / 2), y1: cy, x2: cx + Math.round(dx / 2), y2: cy };
+  }
+}
+function buildDirectionalScrollCliArgs(direction, amount, durationMs) {
+  const screen = getCachedScreenRect() ?? DEFAULT_SCREEN;
+  const clamped = Math.min(Math.max(amount ?? 0.5, 0), 1);
+  const coords = computeScrollFromDirection(direction, clamped, screen);
+  const duration3 = durationMs ?? DEFAULT_SWIPE_DURATION_MS;
+  return [
+    "scroll",
+    String(coords.x1),
+    String(coords.y1),
+    String(coords.x2),
+    String(coords.y2),
+    String(duration3)
+  ];
+}
+function exactModeRejectionMessage(reason) {
+  if (reason === "count-pattern-incompatible") {
+    return "exact: true is incompatible with count/pattern (those route through agent-device daemon which enforces safe-normalized timing). Drop count/pattern or drop exact.";
+  }
+  return "exact: true requires fast-runner (iOS only, session must be open). Fast-runner unavailable \u2014 open a device session via device_snapshot action=open, then retry.";
+}
+function createDeviceSwipeHandler() {
+  return withSession(async (args) => {
+    adoptPersistedFastRunnerState(getActiveSession()?.deviceId);
+    const canUseFastRunner = isFastRunnerAvailable() && !args.count && !args.pattern;
+    if (args.exact === true) {
+      if (args.count || args.pattern) {
+        return failResult(exactModeRejectionMessage("count-pattern-incompatible"), {
+          code: "EXACT_INCOMPATIBLE",
+          hint: "count and pattern only work via agent-device daemon, which enforces safe-normalized timing. Drop one to proceed."
+        });
+      }
+      if (!isFastRunnerAvailable()) {
+        return failResult(exactModeRejectionMessage("fast-runner-unavailable"), {
+          code: "EXACT_REQUIRES_FAST_RUNNER",
+          hint: "fast-runner is the only path that respects user-supplied durationMs verbatim. Open a device session first."
+        });
+      }
+    }
+    if (args.x1 != null && args.y1 != null && args.x2 != null && args.y2 != null) {
+      if (canUseFastRunner) {
+        try {
+          const resp = await fastSwipe(args.x1, args.y1, args.x2, args.y2, args.durationMs, getActiveSession()?.appId ?? resolveBundleId("ios") ?? void 0);
+          if (resp.ok) {
+            return okResult({
+              x1: args.x1,
+              y1: args.y1,
+              x2: args.x2,
+              y2: args.y2,
+              durationMs: args.durationMs,
+              method: "fast-runner"
+            });
+          }
+          if (args.exact === true) {
+            return failResult("fast-runner swipe call failed and exact: true forbids daemon fallback", { code: "EXACT_FAST_RUNNER_FAILED" });
+          }
+        } catch (err) {
+          if (args.exact === true) {
+            return failResult(`fast-runner swipe call threw and exact: true forbids daemon fallback: ${err instanceof Error ? err.message : String(err)}`, { code: "EXACT_FAST_RUNNER_FAILED" });
+          }
+        }
+      }
+      const cliArgs = ["swipe", String(args.x1), String(args.y1), String(args.x2), String(args.y2)];
+      if (args.durationMs)
+        cliArgs.push(String(args.durationMs));
+      if (args.count && args.count > 1)
+        cliArgs.push("--count", String(args.count));
+      if (args.pattern)
+        cliArgs.push("--pattern", args.pattern);
+      return runNative(cliArgs);
+    }
+    if (args.direction) {
+      const screen = getCachedScreenRect() ?? DEFAULT_SCREEN;
+      const coords = computeSwipeFromDirection(args.direction, screen);
+      const duration3 = args.durationMs ?? DEFAULT_SWIPE_DURATION_MS;
+      if (canUseFastRunner) {
+        try {
+          const resp = await fastSwipe(coords.x1, coords.y1, coords.x2, coords.y2, duration3, getActiveSession()?.appId ?? resolveBundleId("ios") ?? void 0);
+          if (resp.ok) {
+            return okResult({
+              direction: args.direction,
+              durationMs: duration3,
+              method: "fast-runner",
+              ...coords
+            });
+          }
+          if (args.exact === true) {
+            return failResult("fast-runner swipe call failed and exact: true forbids daemon fallback", { code: "EXACT_FAST_RUNNER_FAILED" });
+          }
+        } catch (err) {
+          if (args.exact === true) {
+            return failResult(`fast-runner swipe call threw and exact: true forbids daemon fallback: ${err instanceof Error ? err.message : String(err)}`, { code: "EXACT_FAST_RUNNER_FAILED" });
+          }
+        }
+      }
+      const cliArgs = [
+        "swipe",
+        String(coords.x1),
+        String(coords.y1),
+        String(coords.x2),
+        String(coords.y2),
+        String(duration3)
+      ];
+      if (args.count && args.count > 1)
+        cliArgs.push("--count", String(args.count));
+      if (args.pattern)
+        cliArgs.push("--pattern", args.pattern);
+      return runNative(cliArgs);
+    }
+    return failResult("Provide either direction or x1,y1,x2,y2 coordinates");
+  });
+}
+function createDeviceScrollHandler() {
+  return withSession(async (args) => {
+    const screen = getCachedScreenRect() ?? DEFAULT_SCREEN;
+    const amount = Math.min(Math.max(args.amount ?? 0.5, 0), 1);
+    const { x1, y1, x2, y2 } = computeScrollFromDirection(args.direction, amount, screen);
+    adoptPersistedFastRunnerState(getActiveSession()?.deviceId);
+    if (isFastRunnerAvailable()) {
+      try {
+        const resp = await fastSwipe(x1, y1, x2, y2, DEFAULT_SWIPE_DURATION_MS, getActiveSession()?.appId ?? resolveBundleId("ios") ?? void 0);
+        if (resp.ok) {
+          return okResult({
+            direction: args.direction,
+            amount: args.amount ?? 0.5,
+            method: "fast-runner",
+            x1,
+            y1,
+            x2,
+            y2
+          });
+        }
+      } catch {
+      }
+    }
+    return runNative(buildDirectionalScrollCliArgs(args.direction, args.amount));
+  });
+}
+function createDeviceScrollIntoViewHandler() {
+  return withSession(async (args) => {
+    if (!args.ref && !args.text) {
+      return failResult("Provide either text or ref to scroll into view");
+    }
+    const session2 = getActiveSession();
+    const usesInTreeRunner = session2?.platform === "ios" || session2?.platform === "android" && process.env.RN_ANDROID_RUNNER !== "0";
+    if (usesInTreeRunner) {
+      return scrollIntoViewWithRunner(args);
+    }
+    return failResult(`device_scrollintoview requires an in-tree runner \u2014 iOS (rn-fast-runner) or Android with RN_ANDROID_RUNNER unset/non-zero (rn-android-runner). Active session: ${session2?.platform ?? "none"}.`, { code: "IN_TREE_RUNNER_REQUIRED", platform: session2?.platform ?? null });
+  });
+}
+async function scrollIntoViewWithRunner(args) {
+  const MAX_ITERATIONS = 12;
+  const timer = createStepTimer();
+  const screen = getCachedScreenRect() ?? DEFAULT_SCREEN;
+  const screenRect2 = { x: 0, y: 0, width: screen.width, height: screen.height };
+  for (let i = 0; i < MAX_ITERATIONS; i++) {
+    const snapRes = await runNative(["snapshot", "-i"]);
+    timer.mark("snapshot");
+    if (snapRes.isError) {
+      return failResult(`scrollintoview: snapshot failed at iteration ${i}: ${snapRes.content?.[0]?.text ?? "unknown"}`, { code: "SNAPSHOT_UNAVAILABLE" });
+    }
+    let nodes = [];
+    try {
+      const envelope = JSON.parse(snapRes.content?.[0]?.text ?? "{}");
+      nodes = envelope.data?.nodes ?? [];
+    } catch {
+      return failResult(`scrollintoview: failed to parse snapshot envelope at iteration ${i}`);
+    }
+    const target = args.ref ? nodes.find((n) => n.ref === (args.ref.startsWith("@") ? args.ref : `@${args.ref}`)) ?? null : findInLatestSnapshot(nodes, args.text);
+    if (!target) {
+      if (i === 0) {
+        const fallbackDir = decideScrollDirection({ x: 0, y: screen.height * 2, width: 1, height: 1 }, screenRect2);
+        const coords2 = computeSwipeFromDirection(fallbackDir ?? "down", screen);
+        await runNative([
+          "swipe",
+          String(coords2.x1),
+          String(coords2.y1),
+          String(coords2.x2),
+          String(coords2.y2),
+          String(DEFAULT_SWIPE_DURATION_MS)
+        ]);
+        continue;
+      }
+      return failResult(`scrollintoview: element "${args.ref ?? args.text}" not found after ${i} swipe iteration(s)`, { code: "NOT_FOUND", iterations: i });
+    }
+    if (!target.rect) {
+      return failResult(`scrollintoview: target has no rect \u2014 cannot decide direction`);
+    }
+    const direction = decideScrollDirection(target.rect, screenRect2);
+    if (direction === null) {
+      return okResult({
+        ref: target.ref,
+        rect: target.rect,
+        iterations: i,
+        method: "runner-orchestrator"
+      }, { meta: { timings_ms: timer.timings() } });
+    }
+    const coords = computeSwipeFromDirection(direction, screen);
+    const swipeResp = await runNative([
+      "swipe",
+      String(coords.x1),
+      String(coords.y1),
+      String(coords.x2),
+      String(coords.y2),
+      String(DEFAULT_SWIPE_DURATION_MS)
+    ]);
+    timer.mark("swipe");
+    if (swipeResp.isError) {
+      return failResult(`scrollintoview: swipe failed at iteration ${i}: ${swipeResp.content?.[0]?.text ?? "unknown"}`);
+    }
+  }
+  return failResult(`scrollintoview: target "${args.ref ?? args.text}" did not enter viewport after ${MAX_ITERATIONS} swipe iterations`, { code: "SCROLL_EXHAUSTED", iterations: MAX_ITERATIONS });
+}
+function createDevicePinchHandler() {
+  return withSession((args) => {
+    const cliArgs = ["pinch", String(args.scale)];
+    if (args.x != null && args.y != null) {
+      cliArgs.push(String(args.x), String(args.y));
+    }
+    return runNative(cliArgs);
+  });
+}
+function createDeviceBackHandler() {
+  return withSession(() => runNative(["back"]));
+}
+function parseDefaultInputMethodPackage(raw) {
+  const value = raw.trim().split(/\r?\n/)[0]?.trim() ?? "";
+  if (!value || value === "null")
+    return null;
+  const pkg = value.split("/")[0]?.trim() ?? "";
+  return isValidBundleId(pkg) ? pkg : null;
+}
+async function resolveAndroidImePackage(deviceId) {
+  try {
+    const { stdout } = await execFile11("adb", [
+      ...deviceId ? ["-s", deviceId] : [],
+      "shell",
+      "settings",
+      "get",
+      "secure",
+      "default_input_method"
+    ], { timeout: IME_PROBE_TIMEOUT_MS });
+    return parseDefaultInputMethodPackage(stdout);
+  } catch {
+    return null;
+  }
+}
+function focusNextPressArgs(ref, nodePackageName, platform, appId, imePackage) {
+  const target = ref.startsWith("@") ? ref : `@${ref}`;
+  const imeOwnedKey = platform === "android" && appId !== void 0 && imePackage !== null && imePackage !== appId && nodePackageName === imePackage;
+  return imeOwnedKey ? ["press", target, "--include-system-ui", IME_KEY_FLAG] : ["press", target];
+}
+function createDeviceFocusNextHandler() {
+  return withSession(async () => {
+    const snap = await fetchSnapshotNodes();
+    if (!snap.ok) {
+      if (snap.reason === "runner-leak-unrecovered") {
+        return runnerLeakFailResult(void 0, snap.recoveryReason);
+      }
+      if (snap.reason === "empty-capture") {
+        return emptyCaptureFailResult();
+      }
+      return failResult("Snapshot unavailable \u2014 cannot look for keyboard key. Retry after device_snapshot action=open/snapshot.", { code: "SNAPSHOT_UNAVAILABLE" });
+    }
+    const { nodes, recoveredTier } = snap;
+    const session2 = getActiveSession();
+    const imePackage = session2?.platform === "android" ? await (_imePackageResolverForTest ?? resolveAndroidImePackage)(session2.deviceId) : null;
+    let lastPressFailure = null;
+    for (const label of NEXT_KEY_LABELS) {
+      const match = nodes.find((n) => n.label === label);
+      if (!match)
+        continue;
+      const pressResult = await runNative(focusNextPressArgs(match.ref, match.packageName, session2?.platform, session2?.appId, imePackage));
+      if (pressResult.isError) {
+        lastPressFailure = pressResult;
+        continue;
+      }
+      try {
+        const envelope = JSON.parse(pressResult.content[0].text);
+        const meta = { keyUsed: label, ref: match.ref };
+        if (recoveredTier) {
+          meta.recovered = "agent-device-runner-leak";
+          meta.recoveryTier = recoveredTier;
+        }
+        return okResult(envelope.data, { meta });
+      } catch {
+        return pressResult;
+      }
+    }
+    if (lastPressFailure)
+      return lastPressFailure;
+    return failResult(`No keyboard ${NEXT_KEY_LABELS.join("/")} key visible in the accessibility tree. Tried: ${NEXT_KEY_LABELS.join(", ")}`, {
+      code: "KEYBOARD_NEXT_NOT_FOUND",
+      hint: 'Keyboard may be dismissed, or the field may be the last in the form. If an in-app "Next" button is visible, prefer device_press on the next input @ref directly.'
+    });
+  });
+}
+function findInLatestSnapshot(nodes, query, opts = {}) {
+  const exact = opts.exact ?? false;
+  for (const n of nodes) {
+    if (n.label === query || n.identifier === query)
+      return n;
+  }
+  if (exact)
+    return null;
+  for (const n of nodes) {
+    if (n.label?.includes(query) || n.identifier?.includes(query))
+      return n;
+  }
+  return null;
+}
+function isInViewport(element, screen) {
+  const elRight = element.x + element.width;
+  const elBottom = element.y + element.height;
+  const screenRight = screen.x + screen.width;
+  const screenBottom = screen.y + screen.height;
+  return element.x < screenRight && elRight > screen.x && element.y < screenBottom && elBottom > screen.y;
+}
+function decideScrollDirection(element, screen) {
+  if (isInViewport(element, screen))
+    return null;
+  if (element.y >= screen.y + screen.height)
+    return "up";
+  if (element.y + element.height <= screen.y)
+    return "down";
+  if (element.x >= screen.x + screen.width)
+    return "left";
+  if (element.x + element.width <= screen.x)
+    return "right";
+  return null;
+}
+var execFile11, IME_PROBE_TIMEOUT_MS, TYPE_PRIORITY_FOR_TAP, IOS_INPUT_TYPES, ANDROID_INPUT_TYPE_RE, PRESSABLE_SUFFIX, NATIVE_VERIFY_VERDICTS, DEFAULT_SCREEN, SWIPE_FRACTION, DEFAULT_SWIPE_DURATION_MS, NEXT_KEY_LABELS, _imePackageResolverForTest;
+var init_device_interact = __esm({
+  "packages/rn-dev-agent-core/dist/tools/device-interact.js"() {
+    "use strict";
+    init_agent_device_wrapper();
+    init_rn_fast_runner_client();
+    init_rn_android_runner_client();
+    init_keyboard_guard();
+    init_project_config();
+    init_maestro_validator();
+    init_utils();
+    init_utils();
+    init_runner_leak_recovery();
+    init_device_session();
+    init_fast_runner_ref_map();
+    init_fill_verify();
+    execFile11 = promisify10(execFileCb8);
+    IME_PROBE_TIMEOUT_MS = 5e3;
+    TYPE_PRIORITY_FOR_TAP = {
+      Button: 100,
+      Cell: 95,
+      Switch: 90,
+      Link: 80,
+      Other: 60,
+      StaticText: 30,
+      Image: 25,
+      ScrollView: 10
+    };
+    IOS_INPUT_TYPES = /* @__PURE__ */ new Set(["TextField", "SecureTextField", "SearchField", "TextView"]);
+    ANDROID_INPUT_TYPE_RE = /.+\.(\w*EditText|\w*AutoCompleteTextView)$/;
+    PRESSABLE_SUFFIX = "-pressable";
+    NATIVE_VERIFY_VERDICTS = /* @__PURE__ */ new Set([
+      "exact",
+      "mismatch",
+      "unreadable",
+      "secure-masked",
+      "target-lost",
+      "ambiguous"
+    ]);
+    DEFAULT_SCREEN = { width: 402, height: 874 };
+    SWIPE_FRACTION = 0.4;
+    DEFAULT_SWIPE_DURATION_MS = 300;
+    NEXT_KEY_LABELS = ["Go", "Done", "Return", "Next"];
+    _imePackageResolverForTest = null;
+  }
+});
+
 // packages/rn-dev-agent-core/dist/session/target-device-authority.js
 function executeWithinBoundary(dependencies, file, args) {
   const operation = () => dependencies.execute(file, args);
@@ -32535,12 +31708,12 @@ var init_metro_origin = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/session/install-authority.js
-import { execFileSync as execFileSync13 } from "node:child_process";
-import { createHash as createHash11 } from "node:crypto";
-import { lstatSync as lstatSync16, readFileSync as readFileSync23, readdirSync as readdirSync10, readlinkSync as readlinkSync5, realpathSync as realpathSync13, statSync as statSync13 } from "node:fs";
-import { isAbsolute as isAbsolute8, join as join29, relative as relative6 } from "node:path";
+import { execFileSync as execFileSync12 } from "node:child_process";
+import { createHash as createHash10 } from "node:crypto";
+import { lstatSync as lstatSync10, readFileSync as readFileSync19, readdirSync as readdirSync5, readlinkSync as readlinkSync4, realpathSync as realpathSync11, statSync as statSync9 } from "node:fs";
+import { isAbsolute as isAbsolute6, join as join22, relative as relative4 } from "node:path";
 function runText(command, args) {
-  return execFileSync13(command, [...args], {
+  return execFileSync12(command, [...args], {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "ignore"],
     timeout: 1e4,
@@ -32548,7 +31721,7 @@ function runText(command, args) {
   });
 }
 function runBuffer(command, args) {
-  return execFileSync13(command, [...args], {
+  return execFileSync12(command, [...args], {
     encoding: "buffer",
     stdio: ["ignore", "pipe", "ignore"],
     timeout: 18e4,
@@ -32556,7 +31729,7 @@ function runBuffer(command, args) {
   });
 }
 function digest2(parts) {
-  const hash = createHash11("sha256");
+  const hash = createHash10("sha256");
   for (const part of parts) {
     hash.update(`${part.byteLength}:`);
     hash.update(part);
@@ -32569,12 +31742,12 @@ function generation(parts) {
 function listAppFiles(appPath) {
   const files = [];
   const visit = (directory) => {
-    for (const entry of readdirSync10(directory, { withFileTypes: true })) {
-      const path = join29(directory, entry.name);
+    for (const entry of readdirSync5(directory, { withFileTypes: true })) {
+      const path = join22(directory, entry.name);
       if (entry.isDirectory()) {
         visit(path);
       } else if (entry.isFile() || entry.isSymbolicLink()) {
-        files.push(relative6(appPath, path));
+        files.push(relative4(appPath, path));
       } else {
         throw new Error("APP_INSTALL_IDENTITY_CHANGED: iOS app contains an unsupported filesystem entry");
       }
@@ -32588,8 +31761,8 @@ function iosAppFiles(appPath, dependencies) {
 }
 function assertIosSymlinkContained(appPath, path, realpath) {
   const target = realpath(path);
-  const child = relative6(realpath(appPath), target);
-  if (child === ".." || child.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) || isAbsolute8(child)) {
+  const child = relative4(realpath(appPath), target);
+  if (child === ".." || child.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) || isAbsolute6(child)) {
     throw new Error("APP_INSTALL_IDENTITY_CHANGED: iOS app symlink escapes the installed bundle");
   }
 }
@@ -32609,7 +31782,7 @@ function captureInstallGeneration(target, dependencies = {}) {
     if (!appPath) {
       throw new Error("APP_INSTALL_IDENTITY_CHANGED: exact iOS app container was not found");
     }
-    const infoPath = join29(appPath, "Info.plist");
+    const infoPath = join22(appPath, "Info.plist");
     const executable = text("plutil", [
       "-extract",
       "CFBundleExecutable",
@@ -32621,9 +31794,9 @@ function captureInstallGeneration(target, dependencies = {}) {
     if (!executable) {
       throw new Error("APP_INSTALL_IDENTITY_CHANGED: iOS executable identity is unavailable");
     }
-    const stat2 = dependencies.stat ?? statSync13;
+    const stat2 = dependencies.stat ?? statSync9;
     const metadata2 = iosAppFiles(appPath, dependencies).map((entry) => {
-      const path = join29(appPath, entry);
+      const path = join22(appPath, entry);
       const value = stat2(path);
       return `${entry}:${String(value.ino)}:${value.size}:${value.mtimeMs}`;
     });
@@ -32650,7 +31823,7 @@ function captureInstallGeneration(target, dependencies = {}) {
 function captureInstalledArtifact(target, dependencies = {}) {
   const text = dependencies.runText ?? runText;
   const buffer = dependencies.runBuffer ?? runBuffer;
-  const read = dependencies.read ?? readFileSync23;
+  const read = dependencies.read ?? readFileSync19;
   if (target.platform === "ios") {
     const appPath = text("xcrun", [
       "simctl",
@@ -32662,7 +31835,7 @@ function captureInstalledArtifact(target, dependencies = {}) {
     if (!appPath) {
       throw new Error("APP_INSTALL_IDENTITY_CHANGED: exact iOS app container was not found");
     }
-    const infoPath = join29(appPath, "Info.plist");
+    const infoPath = join22(appPath, "Info.plist");
     const executable = text("plutil", [
       "-extract",
       "CFBundleExecutable",
@@ -32675,12 +31848,12 @@ function captureInstalledArtifact(target, dependencies = {}) {
       throw new Error("APP_INSTALL_IDENTITY_CHANGED: iOS executable identity is unavailable");
     }
     const files = iosAppFiles(appPath, dependencies);
-    const lstat = dependencies.lstat ?? lstatSync16;
-    const readLink = dependencies.readLink ?? readlinkSync5;
-    const realpath = dependencies.realpath ?? realpathSync13;
+    const lstat = dependencies.lstat ?? lstatSync10;
+    const readLink = dependencies.readLink ?? readlinkSync4;
+    const realpath = dependencies.realpath ?? realpathSync11;
     const artifactParts = [];
     for (const entry of files) {
-      const path = join29(appPath, entry);
+      const path = join22(appPath, entry);
       const stat2 = lstat(path);
       artifactParts.push(Buffer.from(entry));
       if (stat2.isFile()) {
@@ -32755,7 +31928,7 @@ var init_install_reissue = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/domain/login-prologue.js
-import { createHash as createHash12, timingSafeEqual as timingSafeEqual5 } from "node:crypto";
+import { createHash as createHash11, timingSafeEqual as timingSafeEqual5 } from "node:crypto";
 function readLoginPrologueOutcome(value) {
   if (!value || typeof value !== "object" || Array.isArray(value))
     return null;
@@ -32792,8 +31965,8 @@ function cleanupAllowed(tool, args) {
 function tokenMatches(expected, supplied) {
   if (!expected || expected.length < 16 || !supplied || supplied.length < 16)
     return false;
-  const expectedHash = createHash12("sha256").update(expected).digest();
-  const suppliedHash = createHash12("sha256").update(supplied).digest();
+  const expectedHash = createHash11("sha256").update(expected).digest();
+  const suppliedHash = createHash11("sha256").update(supplied).digest();
   return timingSafeEqual5(expectedHash, suppliedHash);
 }
 function inspectLoginPrologueGuard(input) {
@@ -32824,17 +31997,64 @@ var init_login_prologue = __esm({
   }
 });
 
+// packages/rn-dev-agent-core/dist/domain/path-safety.js
+import { resolve as resolve9, sep as sep5 } from "node:path";
+function isValidActionId(s) {
+  if (typeof s !== "string")
+    return false;
+  if (s.length === 0 || s.length > ACTION_ID_MAX_LEN)
+    return false;
+  if (s.includes(".."))
+    return false;
+  return ACTION_ID_RE.test(s);
+}
+function assertValidActionId(s, context) {
+  if (!isValidActionId(s)) {
+    const preview = JSON.stringify(s).slice(0, 80);
+    throw new PathTraversalError(`Invalid action ID for ${context}: ${preview}`);
+  }
+}
+function assertWithinDir(child, baseDir) {
+  const resolvedBase = resolve9(baseDir);
+  const resolvedChild = resolve9(baseDir, child);
+  if (resolvedChild === resolvedBase)
+    return;
+  const baseWithSep = resolvedBase.endsWith(sep5) ? resolvedBase : resolvedBase + sep5;
+  if (!resolvedChild.startsWith(baseWithSep)) {
+    throw new PathTraversalError(`Path "${child}" escapes containment dir "${baseDir}" (resolved to ${resolvedChild})`);
+  }
+}
+function pathHasTraversal(p) {
+  if (typeof p !== "string")
+    return false;
+  return /(^|[\\/])\.\.([\\/]|$)/.test(p) || /%2e%2e/i.test(p);
+}
+var PathTraversalError, ACTION_ID_RE, ACTION_ID_MAX_LEN;
+var init_path_safety = __esm({
+  "packages/rn-dev-agent-core/dist/domain/path-safety.js"() {
+    "use strict";
+    PathTraversalError = class extends Error {
+      constructor(message) {
+        super(message);
+        this.name = "PathTraversalError";
+      }
+    };
+    ACTION_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]*$/;
+    ACTION_ID_MAX_LEN = 64;
+  }
+});
+
 // packages/rn-dev-agent-core/dist/domain/e2e-test.js
-import { dirname as dirname18, join as join30 } from "node:path";
-import { mkdirSync as mkdirSync18, writeFileSync as writeFileSync10, renameSync as renameSync8, readFileSync as readFileSync24, readdirSync as readdirSync11, existsSync as existsSync23 } from "node:fs";
-import { createHash as createHash13 } from "node:crypto";
+import { dirname as dirname11, join as join23 } from "node:path";
+import { mkdirSync as mkdirSync13, writeFileSync as writeFileSync9, renameSync as renameSync7, readFileSync as readFileSync20, readdirSync as readdirSync6, existsSync as existsSync17 } from "node:fs";
+import { createHash as createHash12 } from "node:crypto";
 function e2eDirFor(projectRoot) {
-  return join30(projectRoot, ".rn-agent", "e2e");
+  return join23(projectRoot, ".rn-agent", "e2e");
 }
 function e2ePathFor(projectRoot, id) {
   assertValidActionId(id, "e2ePathFor");
   const dir = e2eDirFor(projectRoot);
-  const file = join30(dir, `${id}.yaml`);
+  const file = join23(dir, `${id}.yaml`);
   assertWithinDir(file, dir);
   return file;
 }
@@ -32858,11 +32078,11 @@ function serializeLockedTest(meta) {
 ${meta.flow}`;
 }
 function hashBody(s) {
-  return createHash13("sha256").update(s).digest("hex");
+  return createHash12("sha256").update(s).digest("hex");
 }
 function freezeLockedTest(projectRoot, source, ctx) {
   const filePath = e2ePathFor(projectRoot, source.id);
-  mkdirSync18(dirname18(filePath), { recursive: true });
+  mkdirSync13(dirname11(filePath), { recursive: true });
   const meta = {
     id: source.id,
     intent: source.intent,
@@ -32876,25 +32096,25 @@ function freezeLockedTest(projectRoot, source, ctx) {
     flow: source.flow
   };
   const tmp = `${filePath}.tmp`;
-  writeFileSync10(tmp, serializeLockedTest(meta), "utf8");
-  renameSync8(tmp, filePath);
+  writeFileSync9(tmp, serializeLockedTest(meta), "utf8");
+  renameSync7(tmp, filePath);
   return { ...meta, filePath };
 }
 function loadLockedTest(projectRoot, id) {
   const filePath = e2ePathFor(projectRoot, id);
-  if (!existsSync23(filePath))
+  if (!existsSync17(filePath))
     return null;
-  const locked = parseLockedTest(readFileSync24(filePath, "utf8"), filePath);
+  const locked = parseLockedTest(readFileSync20(filePath, "utf8"), filePath);
   return locked?.id === id ? locked : null;
 }
 function lockedTestFileExists(projectRoot, id) {
-  return existsSync23(e2ePathFor(projectRoot, id));
+  return existsSync17(e2ePathFor(projectRoot, id));
 }
 function discoverLockedTests(projectRoot) {
   const dir = e2eDirFor(projectRoot);
-  if (!existsSync23(dir))
+  if (!existsSync17(dir))
     return [];
-  return readdirSync11(dir).filter((f) => f.endsWith(".yaml")).map((f) => f.replace(/\.yaml$/, "")).sort();
+  return readdirSync6(dir).filter((f) => f.endsWith(".yaml")).map((f) => f.replace(/\.yaml$/, "")).sort();
 }
 function resolveLockedTestIds(projectRoot, pattern, discover2 = discoverLockedTests) {
   const ids = discover2(projectRoot);
@@ -33326,9 +32546,9 @@ var init_tool_profiles = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/session/authority-gate.js
-import { randomUUID as randomUUID5 } from "node:crypto";
-import { realpathSync as realpathSync14 } from "node:fs";
-import { isAbsolute as isAbsolute9, relative as relative7, resolve as resolve14 } from "node:path";
+import { randomUUID as randomUUID6 } from "node:crypto";
+import { realpathSync as realpathSync12 } from "node:fs";
+import { isAbsolute as isAbsolute7, relative as relative5, resolve as resolve10 } from "node:path";
 async function claimOptionalBundleAuthority(args) {
   return await args[optionalBundleAdmission]?.() ?? false;
 }
@@ -33572,7 +32792,7 @@ function bindSourcePaths(status, args, tool) {
   try {
     if (typeof status.source.appRoot !== "string")
       throw new Error("missing app root");
-    appRoot = realpathSync14(status.source.appRoot);
+    appRoot = realpathSync12(status.source.appRoot);
   } catch {
     throw new SessionAuthorityError("SOURCE_WORKTREE_MISMATCH", "active session app root is unavailable");
   }
@@ -33588,12 +32808,12 @@ function bindSourcePaths(status, args, tool) {
     }
     let candidate;
     try {
-      candidate = realpathSync14(isAbsolute9(supplied) ? supplied : resolve14(appRoot, supplied));
+      candidate = realpathSync12(isAbsolute7(supplied) ? supplied : resolve10(appRoot, supplied));
     } catch {
       throw new SessionAuthorityError("SOURCE_WORKTREE_MISMATCH", `${field2} cannot be resolved within the active app root`);
     }
-    const child = relative7(appRoot, candidate);
-    if (child === ".." || child.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) || isAbsolute9(child)) {
+    const child = relative5(appRoot, candidate);
+    if (child === ".." || child.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) || isAbsolute7(child)) {
       throw new SessionAuthorityError("SOURCE_WORKTREE_MISMATCH", `${field2} ${candidate} is outside the active session app root ${appRoot}`, void 0, field2 === "projectRoot" ? {
         nextAction: `Run rn_session action "bind_source" with projectRoot "${candidate}" to rebind the session to that worktree, then retry.`
       } : void 0);
@@ -34028,7 +33248,7 @@ function createAuthorityGate(runtime, dependencies) {
           } : { before: [...profile.axes], after: [...profile.axes] };
           requireCompleteAxes(status, { ...profile, axes: transitionAxes.before });
           const operationInput = {
-            operationId: randomUUID5(),
+            operationId: randomUUID6(),
             tool,
             profile: `transition:${transitionAxes.before.join("")}>${transitionAxes.after.join("")}`
           };
@@ -34248,7 +33468,7 @@ function createAuthorityGate(runtime, dependencies) {
           setResolvedLockedTestIds(args, resolvedSelection.ids);
         }
         operation = registry2.beginOperation(available.session, {
-          operationId: randomUUID5(),
+          operationId: randomUUID6(),
           tool,
           profile: profile.axes.join("")
         });
@@ -34900,4284 +34120,6 @@ var init_authority_gate = __esm({
   }
 });
 
-// packages/rn-dev-agent-core/dist/tools/maestro-run.js
-import { execFile as execFileCb2 } from "node:child_process";
-import { promisify as promisify3 } from "node:util";
-import { existsSync as existsSync24, readFileSync as readFileSync25, writeFileSync as writeFileSync11 } from "node:fs";
-import { tmpdir as tmpdir7 } from "node:os";
-import { basename as basename10, join as join31, dirname as dirname19 } from "node:path";
-async function runFlowParked(run, opts = {}) {
-  const stale = opts.markCdpStale ?? markCdpStale;
-  try {
-    if (opts.platform === "android") {
-      const release2 = opts.releaseAndroidSlot ?? releaseAndroidInteractionSlot;
-      const outcome = await release2({ deviceId: opts.deviceId });
-      opts.onAndroidRelease?.(outcome);
-    } else {
-      await (opts.stopFastRunner ?? stopFastRunner)(opts.deviceId);
-    }
-    await opts.completeRunnerPark?.();
-    return await run();
-  } finally {
-    stale();
-  }
-}
-function assembleMaestroArgs(baseArgs, paramArgs) {
-  if (paramArgs.length === 0)
-    return baseArgs;
-  return [...baseArgs.slice(0, -1), ...paramArgs, baseArgs[baseArgs.length - 1]];
-}
-function nestedMaestroAuthorityCallbacks(args) {
-  return {
-    claimNativeOrigin: () => claimManagedNativeOriginAuthority(args),
-    completeNativeOrigin: (targetExpected) => completeManagedNativeOriginAuthority(args, targetExpected),
-    relaunchManagedApp: () => relaunchManagedNativeOriginApp(args),
-    reproveManagedOrigin: () => reproveManagedNativeOrigin(args),
-    completeRunnerPark: () => completeManagedRunnerParkAuthority(args),
-    reissueInstallReceipt: hasManagedInstallReissueAuthority(args) ? () => reissueManagedInstallAuthority(args) : null
-  };
-}
-function commandName(command) {
-  if (typeof command === "string")
-    return command;
-  if (!command || typeof command !== "object" || Array.isArray(command))
-    return null;
-  const keys = Object.keys(command);
-  return keys.length === 1 ? keys[0] : null;
-}
-function nestedLifecycleCommand(command) {
-  if (!command || typeof command !== "object" || Array.isArray(command))
-    return false;
-  const runFlow = command.runFlow;
-  if (!runFlow || typeof runFlow !== "object" || Array.isArray(runFlow))
-    return false;
-  const commands = runFlow.commands;
-  return Array.isArray(commands) && commands.some(nestedLifecycleCommandOrSelf);
-}
-function nestedLifecycleCommandOrSelf(command) {
-  const name = commandName(command);
-  return name !== null && lifecycleCommands.has(name) || nestedLifecycleCommand(command);
-}
-function planMaestroAuthorityStages(commands) {
-  const stages = [];
-  let pending2 = [];
-  let targetExpected = true;
-  const flushPending = () => {
-    if (pending2.length === 0)
-      return;
-    stages.push({ commands: pending2, requiresOrigin: true });
-    pending2 = [];
-  };
-  for (const command of commands) {
-    const name = commandName(command);
-    if (nestedLifecycleCommand(command)) {
-      throw new MaestroValidationError("conditional runFlow commands cannot contain app lifecycle transitions");
-    }
-    if (name !== null && lifecycleCommands.has(name)) {
-      flushPending();
-      stages.push({ commands: [command], requiresOrigin: false });
-      targetExpected = name === "launchApp";
-      continue;
-    }
-    pending2.push(command);
-  }
-  flushPending();
-  return { stages, targetExpected };
-}
-async function executeMaestroAuthorityStages(commands, executeStage, claimOrigin, completeOrigin, relaunchManagedApp, reproveManagedOrigin) {
-  const plan = planMaestroAuthorityStages(commands);
-  const results = [];
-  let pendingOriginError;
-  for (const stage of plan.stages) {
-    if (stage.requiresOrigin && pendingOriginError === void 0)
-      await claimOrigin();
-    try {
-      results.push(await executeStage(stage.commands));
-      if (stage.commands.length === 1 && commandName(stage.commands[0]) === "launchApp") {
-        try {
-          await relaunchManagedApp();
-          pendingOriginError = void 0;
-        } catch (error2) {
-          if (!reproveManagedOrigin || error2 instanceof SessionAuthorityError)
-            throw error2;
-          pendingOriginError = error2;
-        }
-      }
-    } catch (error2) {
-      await completeOrigin(false);
-      throw new MaestroStageExecutionError(results, error2);
-    }
-  }
-  if (pendingOriginError !== void 0) {
-    try {
-      await reproveManagedOrigin();
-    } catch {
-      await completeOrigin(false);
-      throw new MaestroStageExecutionError(results, pendingOriginError);
-    }
-  }
-  await completeOrigin(plan.targetExpected);
-  return results;
-}
-function resolveMaestroFlowAppId(boundAppId, parsedAppId) {
-  if (boundAppId !== void 0 && !isValidBundleId(boundAppId)) {
-    throw new MaestroValidationError(`Invalid bundle ID for authority-bound app: ${JSON.stringify(boundAppId).slice(0, 80)}`);
-  }
-  if (boundAppId && parsedAppId && parsedAppId !== boundAppId) {
-    throw new MaestroValidationError(`Flow appId ${parsedAppId} does not match authority-bound appId ${boundAppId}`);
-  }
-  return boundAppId ?? parsedAppId;
-}
-function resolvePlatform(override) {
-  if (override === "ios" || override === "android")
-    return override;
-  const session2 = getActiveSession();
-  return session2?.platform ?? null;
-}
-function resolveAppId(override, platform) {
-  if (override)
-    return override;
-  if (platform)
-    return resolveBundleId(platform) ?? readExpoSlug() ?? "";
-  return readExpoSlug() ?? "";
-}
-async function defaultProbeAndroidApiLevel(deviceId) {
-  try {
-    const { stdout } = await defaultExecFile("adb", ["-s", deviceId, "shell", "getprop", "ro.build.version.sdk"], { timeout: 5e3, encoding: "utf8", maxBuffer: 1024 * 1024 });
-    const parsed = Number.parseInt(String(stdout).trim(), 10);
-    return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
-  } catch {
-    return null;
-  }
-}
-function attachCause(error2, cause) {
-  if (error2 instanceof Error && error2.cause === void 0) {
-    try {
-      Object.defineProperty(error2, "cause", { value: cause, configurable: true, writable: true });
-    } catch {
-    }
-  }
-  return error2;
-}
-function isExactDeviceIdShape(value) {
-  return value.length > 0 && value.length <= 256 && !/\s/.test(value);
-}
-function isPreSpawnMaestroError(error2) {
-  const candidate = error2;
-  return typeof candidate?.code === "string" && !candidate.stdout && !candidate.stderr;
-}
-function isUiAutomationNotConnectedSessionCreationFailure(error2) {
-  const candidate = error2;
-  if (typeof candidate?.code !== "number" || candidate.code === 0 || typeof candidate.stderr !== "string") {
-    return false;
-  }
-  const records = candidate.stderr.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-  return records.length === 1 && UIAUTOMATION_SESSION_CREATION_FAILURE.test(records[0]);
-}
-async function buildRunnerResume(platform, probe) {
-  if (platform !== "ios")
-    return void 0;
-  return { attempted: true, healthy: await probe().catch(() => false) };
-}
-function createMaestroRunHandler(deps = {}) {
-  const fastHealthCheck2 = deps.fastHealthCheck ?? fastHealthCheck;
-  const activeSession2 = deps.getActiveSession ?? getActiveSession;
-  const selectDispatch = deps.chooseDispatch ?? chooseMaestroDispatch;
-  const parkFlow = deps.parkFlow ?? runFlowParked;
-  const execute2 = deps.execFile ?? defaultExecFile;
-  const probeApiLevel = deps.probeAndroidApiLevel ?? defaultProbeAndroidApiLevel;
-  const now = deps.now ?? Date.now;
-  const resolveEngineStatus = deps.resolveEngineStatus ?? (() => getEngineStatus().catch(() => null));
-  return async (args) => {
-    if (args.params) {
-      for (const [key, value] of Object.entries(args.params)) {
-        if (!PARAM_KEY_RE.test(key)) {
-          return failResult(`Refusing to run Maestro: invalid param key '${String(key).slice(0, 60)}' \u2014 must match ${PARAM_KEY_RE.source} (GH #116).`);
-        }
-        if (typeof value !== "string") {
-          return failResult(`Refusing to run Maestro: param '${key}' has non-string value (GH #116).`);
-        }
-      }
-    }
-    const platform = resolvePlatform(args.platform);
-    if (!platform) {
-      return failResult("Cannot determine platform. Pass platform or open a device session first.");
-    }
-    const session2 = activeSession2();
-    const matchingSessionDeviceId = session2?.platform === platform && session2.deviceId ? session2.deviceId : void 0;
-    if (args.deviceId && matchingSessionDeviceId && !sameDevice(args.deviceId, matchingSessionDeviceId)) {
-      return failResult(`Refusing Maestro target ${args.deviceId}: active ${platform} session is bound to ${matchingSessionDeviceId}.`, "TARGET_SESSION_MISMATCH", { requestedDeviceId: args.deviceId, activeSessionDeviceId: matchingSessionDeviceId });
-    }
-    const envAndroidSerial = platform === "android" && process.env.ANDROID_SERIAL ? process.env.ANDROID_SERIAL : void 0;
-    if (envAndroidSerial !== void 0 && !isExactDeviceIdShape(envAndroidSerial)) {
-      return failResult("Refusing Maestro: ANDROID_SERIAL must be 1-256 non-whitespace characters. Unset it or set an exact serial, then retry. No device was mutated.", "INVALID_ARGUMENT");
-    }
-    const requestedDeviceId = args.deviceId ?? matchingSessionDeviceId ?? envAndroidSerial;
-    if (requestedDeviceId !== void 0 && !isExactDeviceIdShape(requestedDeviceId)) {
-      return failResult("Refusing Maestro: deviceId must be 1-256 non-whitespace characters.", "INVALID_ARGUMENT");
-    }
-    let flowHasHideKeyboard = false;
-    let flowFile;
-    let rawYaml;
-    let validatedContent;
-    let validatedCommands;
-    let headerAppId;
-    let capturedAction = null;
-    const flowPathClassification = args.flowPath ? classifyLearnedActionPath(args.flowPath) : "outside";
-    if (flowPathClassification === "descendant") {
-      return failResult(`Refusing to execute learned-action descendant ${args.flowPath} as a standalone flow.`, "BAD_RECORDING");
-    }
-    if (flowPathClassification === "action") {
-      if (args.inlineYaml) {
-        return failResult("Refusing ambiguous learned-action replay with both flowPath and inlineYaml.", "BAD_RECORDING");
-      }
-      try {
-        capturedAction = captureActionFromPath(args.flowPath);
-      } catch (err) {
-        return failResult(err instanceof Error ? err.message : String(err), "BAD_RECORDING");
-      }
-      if (!capturedAction) {
-        return failResult(`Action does not resolve uniquely to ${args.flowPath}.`, "BAD_RECORDING");
-      }
-      if (!capturedAction.replay.ok) {
-        return failResult(capturedAction.replay.error, "BAD_RECORDING");
-      }
-      rawYaml = capturedAction.replay.yamlText;
-    } else if (args.inlineYaml) {
-      rawYaml = args.inlineYaml;
-    } else if (args.flowPath) {
-      if (!existsSync24(args.flowPath)) {
-        return failResult(`Flow file not found: ${args.flowPath}`);
-      }
-      try {
-        rawYaml = readFileSync25(args.flowPath, "utf-8");
-      } catch (err) {
-        return failResult(`Failed to read flow file: ${err.message}`);
-      }
-    } else {
-      return failResult("Provide either flowPath or inlineYaml.");
-    }
-    try {
-      const runFlowOpts = args.flowPath && flowPathClassification === "outside" ? { flowDir: dirname19(args.flowPath), flowRoot: dirname19(args.flowPath) } : {};
-      const parsed = parseAndValidateFlow(rawYaml, runFlowOpts);
-      planMaestroAuthorityStages(parsed.commands);
-      validatedCommands = parsed.commands;
-      flowHasHideKeyboard = flowContainsHideKeyboard(parsed.commands);
-      const rawAppId = resolveAppId(args.appId, platform);
-      headerAppId = resolveMaestroFlowAppId(rawAppId || void 0, parsed.appId);
-      validatedContent = buildMaestroFlow(headerAppId ? { appId: headerAppId } : {}, parsed.commands);
-      flowFile = join31(tmpdir7(), `rn-maestro-run-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.yaml`);
-      writeFileSync11(flowFile, validatedContent, "utf-8");
-    } catch (err) {
-      if (err instanceof MaestroValidationError) {
-        return failResult(`Refusing to run Maestro: ${err.message} (Phase 134.1)`);
-      }
-      throw err;
-    }
-    const dispatch = selectDispatch({ platform, flowHasHideKeyboard });
-    if ("error" in dispatch) {
-      return failResult(dispatch.error);
-    }
-    const timeout = args.timeoutMs ?? 12e4;
-    const flowDeadline = now() + timeout;
-    const appFileResolution = resolveAppFileForClearState(platform, validatedContent, headerAppId, args.appFile, { deviceId: requestedDeviceId });
-    if (!appFileResolution.ok) {
-      return failResult(appFileResolution.error);
-    }
-    const reinstallsApp = Boolean(appFileResolution.appFile) && flowUsesClearState(validatedContent);
-    const reissueInstallReceipt = args.reissueInstallReceipt ?? deps.reissueInstallReceipt ?? nestedMaestroAuthorityCallbacks(args).reissueInstallReceipt;
-    let installReceiptCommitted = false;
-    const commitReinstalledInstall = async () => {
-      if (!reinstallsApp || installReceiptCommitted || !reissueInstallReceipt)
-        return;
-      installReceiptCommitted = true;
-      await reissueInstallReceipt();
-    };
-    const baseArgs = dispatch.buildArgs(platform, flowFile, appFileResolution.appFile, requestedDeviceId);
-    const paramArgs = [];
-    if (args.params) {
-      for (const [key, value] of Object.entries(args.params)) {
-        paramArgs.push("-e", `${key}=${value}`);
-      }
-    }
-    const releaseAndroidSlot = deps.releaseAndroidSlot ?? releaseAndroidInteractionSlot;
-    const androidSlotReleaseWarnings = [];
-    let releasedAndroidDeviceId;
-    let uiAutomationRecoveryAttempted = false;
-    let uiAutomationRecoveryRetried = false;
-    const recordAndroidRelease = (outcome) => {
-      if (outcome?.deviceId)
-        releasedAndroidDeviceId = outcome.deviceId;
-      if (outcome?.warnings?.length)
-        androidSlotReleaseWarnings.push(...outcome.warnings);
-    };
-    const androidReleaseMeta = () => ({
-      ...androidSlotReleaseWarnings.length > 0 ? { androidSlotReleaseWarnings: [...androidSlotReleaseWarnings] } : {},
-      ...uiAutomationRecoveryAttempted ? {
-        androidUiAutomationRecovery: {
-          retried: uiAutomationRecoveryRetried,
-          retryCount: uiAutomationRecoveryRetried ? 1 : 0
-        }
-      } : {}
-    });
-    const androidReleaseCaveat = () => androidSlotReleaseWarnings.length > 0 ? `Android interaction-slot release warnings: ${androidSlotReleaseWarnings.join("; ")}` : void 0;
-    const engineStatus = dispatch.runner === "maestro-runner" ? await resolveEngineStatus() : null;
-    const pinCaveat = engineStatus ? enginePinCaveat(engineStatus) : null;
-    const exactRefusal = exactPinRefusal(engineStatus);
-    if (exactRefusal) {
-      return failResult(exactRefusal, "ENGINE_PIN_MISMATCH", {
-        pin: engineStatus?.pin,
-        installedVersion: engineStatus?.version ?? null,
-        selectedPath: engineStatus?.selectedPath ?? null,
-        provenance: engineStatus?.provenance ?? "none"
-      });
-    }
-    const learnedAction = Boolean(capturedAction || args.actionMetadata);
-    const actionMeta = capturedAction?.metadata ?? args.actionMetadata ?? (args.flowPath ? parseM7Header(rawYaml, basename10(args.flowPath).replace(/\.ya?ml$/i, "")) : null);
-    const compatibilityRefusal = learnedAction || actionMeta !== null ? actionReplayPreflight({
-      enginePin: actionMeta?.enginePin,
-      commands: validatedCommands,
-      engineStatus
-    }) : replayCompatibilityPreflight({
-      commands: validatedCommands,
-      engineStatus,
-      requireEnginePin: false
-    });
-    if (compatibilityRefusal) {
-      return failResult(compatibilityRefusal, "ENGINE_PIN_MISMATCH", {
-        pin: engineStatus?.pin,
-        installedVersion: engineStatus?.version ?? null,
-        selectedPath: engineStatus?.selectedPath ?? null,
-        provenance: engineStatus?.provenance ?? "none"
-      });
-    }
-    let probedAndroidApiLevel = null;
-    if (platform === "android" && dispatch.runner === "maestro-runner" && requestedDeviceId) {
-      const apiLevel = await probeApiLevel(requestedDeviceId).catch(() => null);
-      probedAndroidApiLevel = apiLevel;
-      const apiRefusal = apiLevel === null ? null : preOAndroidApiRefusal(apiLevel);
-      if (apiRefusal) {
-        return failResult(apiRefusal, "ANDROID_API_UNSUPPORTED", {
-          platform,
-          runner: dispatch.runner,
-          transport: dispatch.runner,
-          passed: false,
-          androidApiLevel: apiLevel
-        });
-      }
-    }
-    const runnerReportDir = (deps.createReportDir ?? createRunnerReportDir)(dispatch.runner, "rn-maestro-report");
-    const finalArgs = assembleMaestroArgs(baseArgs, [
-      ...runnerReportArgs(runnerReportDir),
-      ...paramArgs
-    ]);
-    const directRunnerEvidence = (output) => collectDirectRunnerEvidence(runnerReportDir, output);
-    try {
-      const managedAuthority = nestedMaestroAuthorityCallbacks(args);
-      const claimOrigin = args.claimNativeOrigin ?? deps.claimNativeOrigin ?? managedAuthority.claimNativeOrigin;
-      const completeOrigin = args.completeNativeOrigin ?? deps.completeNativeOrigin ?? managedAuthority.completeNativeOrigin;
-      const relaunchManagedApp = args.relaunchManagedApp ?? deps.relaunchManagedApp ?? managedAuthority.relaunchManagedApp;
-      const reproveManagedOrigin = args.reproveManagedOrigin ?? deps.reproveManagedOrigin ?? managedAuthority.reproveManagedOrigin;
-      const stageResults = await parkFlow(() => executeMaestroAuthorityStages(validatedCommands, async (commands) => {
-        writeFileSync11(flowFile, buildMaestroFlow(headerAppId ? { appId: headerAppId } : {}, [...commands]), "utf-8");
-        const executeOnce = async (beforeDispatch) => {
-          if (flowDeadline - now() <= 0) {
-            const error2 = new Error("Maestro flow timeout exhausted before the next stage");
-            Object.assign(error2, { code: "ETIMEDOUT" });
-            throw error2;
-          }
-          const executeRunner = (runnerPath, prefixArgs = []) => {
-            beforeDispatch?.();
-            const remainingTimeout = flowDeadline - now();
-            if (remainingTimeout <= 0) {
-              const error2 = new Error("Maestro flow timeout exhausted before runner execution");
-              Object.assign(error2, { code: "ETIMEDOUT" });
-              throw error2;
-            }
-            return execute2(runnerPath, [...prefixArgs, ...finalArgs], {
-              timeout: remainingTimeout,
-              encoding: "utf8",
-              maxBuffer: 10 * 1024 * 1024
-            });
-          };
-          if (deps.execFile) {
-            const immediateStatus = await resolveEngineStatus();
-            const refusal = exactPinRefusal(immediateStatus);
-            const immediateRefusal = refusal ? `RUNNER_PIN_CHANGED: ${refusal}` : null;
-            if (immediateRefusal)
-              throw new Error(immediateRefusal);
-            return executeRunner(dispatch.binPath);
-          }
-          return withImmediatePinnedRunner(dispatch.binPath, resolveEngineStatus, executeRunner, platform);
-        };
-        try {
-          return await executeOnce();
-        } catch (error2) {
-          const recoveryDeviceId = requestedDeviceId ?? releasedAndroidDeviceId;
-          if (platform !== "android" || uiAutomationRecoveryAttempted || !recoveryDeviceId || !isUiAutomationNotConnectedSessionCreationFailure(error2)) {
-            throw error2;
-          }
-          uiAutomationRecoveryAttempted = true;
-          const recoveryTimeout = flowDeadline - now();
-          if (recoveryTimeout <= 0) {
-            androidSlotReleaseWarnings.push("UiAutomation recovery skipped: Maestro flow timeout was exhausted");
-            throw error2;
-          }
-          const recoveryAbort = new AbortController();
-          const recoveryDeadlineTimer = setTimeout(() => {
-            recoveryAbort.abort(new Error("UiAutomation recovery cleanup exceeded the remaining Maestro flow timeout"));
-          }, recoveryTimeout);
-          try {
-            recordAndroidRelease(await releaseAndroidSlot({
-              deviceId: recoveryDeviceId,
-              includeLegacy: false,
-              signal: recoveryAbort.signal
-            }));
-          } catch (releaseError) {
-            androidSlotReleaseWarnings.push(`UiAutomation recovery release failed: ${releaseError instanceof Error ? releaseError.message : String(releaseError)}`);
-            throw attachCause(error2, releaseError);
-          } finally {
-            clearTimeout(recoveryDeadlineTimer);
-          }
-          try {
-            return await executeOnce(() => {
-              uiAutomationRecoveryRetried = true;
-            });
-          } catch (retryError) {
-            if (uiAutomationRecoveryRetried && !isPreSpawnMaestroError(retryError)) {
-              throw retryError;
-            }
-            uiAutomationRecoveryRetried = false;
-            androidSlotReleaseWarnings.push(`UiAutomation recovery retry did not start: ${retryError instanceof Error ? retryError.message : String(retryError)}`);
-            throw attachCause(error2, retryError);
-          }
-        }
-      }, claimOrigin, completeOrigin, relaunchManagedApp, reproveManagedOrigin), {
-        platform,
-        deviceId: requestedDeviceId,
-        releaseAndroidSlot,
-        onAndroidRelease: recordAndroidRelease,
-        completeRunnerPark: args.completeRunnerPark ?? managedAuthority.completeRunnerPark
-      });
-      await commitReinstalledInstall();
-      const stdout = stageResults.map((result) => result.stdout).join("\n");
-      const stderr = stageResults.map((result) => result.stderr).join("\n");
-      const output = combineRunnerOutput(stdout, stderr);
-      const passed = !outputIndicatesFlowFailure(output);
-      const directEvidence = directRunnerEvidence(output);
-      const deviceAuthority = verifyMaestroDeviceAuthority({
-        runner: dispatch.runner,
-        platform,
-        requestedDeviceId,
-        output: directEvidence.output,
-        directReportDeviceIds: directEvidence.reportDeviceIds,
-        directReportIdentityStrength: directEvidence.reportDeviceIdStrength,
-        requireWdaProvenance: passed
-      });
-      const authorityRefusal = maestroAuthorityRefusal(deviceAuthority);
-      if (authorityRefusal) {
-        return failResult(authorityRefusal, "DEVICE_AUTHORITY_MISMATCH", {
-          flowFile,
-          platform,
-          runner: dispatch.runner,
-          transport: dispatch.runner,
-          passed: false,
-          deviceAuthority,
-          output: output.slice(0, 4e3),
-          ...androidReleaseMeta()
-        });
-      }
-      const summary = buildStepSummary(output, { failed: !passed });
-      const runnerResume = !passed ? await buildRunnerResume(platform, fastHealthCheck2) : void 0;
-      const meta = {
-        passed,
-        flowFile,
-        platform,
-        runner: dispatch.runner,
-        transport: dispatch.runner,
-        transportVersion: engineStatus?.version ?? null,
-        fallback: dispatch.fallbackReason ? dispatch.runner : "none",
-        deviceAuthority,
-        output: output.slice(0, 2e3),
-        ...summary,
-        ...!passed ? { terminal: buildTerminalEvidence(output), ...runnerResume ? { runnerResume } : {} } : {},
-        timedOut: false,
-        outputTruncated: false,
-        ...dispatch.fallbackReason ? { fallbackReason: dispatch.fallbackReason } : {},
-        ...dispatch.degradedReason ? { degradedReason: dispatch.degradedReason } : {},
-        ...engineStatus && engineStatus.pin.status !== "pinned-ok" ? { enginePin: engineStatus.pin } : {},
-        ...androidReleaseMeta()
-      };
-      const caveat = dispatch.fallbackReason ?? dispatch.degradedReason ?? pinCaveat ?? void 0;
-      const releaseCaveat = androidReleaseCaveat();
-      if (passed) {
-        const warnCaveat = caveat && shouldWarnFallback(caveat) ? caveat : void 0;
-        if (releaseCaveat) {
-          return warnResult(meta, warnCaveat ? `${warnCaveat}; ${releaseCaveat}` : releaseCaveat);
-        }
-        if (warnCaveat) {
-          return warnResult(meta, warnCaveat);
-        }
-        return okResult(meta);
-      }
-      const baseWarnMsg = [caveat, releaseCaveat, "Flow completed with warnings or failures"].filter((part) => Boolean(part)).join("; ");
-      const warnAug = augmentFailureWithDegradation(output, resolveFloorMs(process.env.RN_RUNTIME_DEGRADED_FLOOR_MS), baseWarnMsg, meta);
-      return warnResult(warnAug.meta, warnAug.message);
-    } catch (err) {
-      const stageError = err instanceof MaestroStageExecutionError ? err.stageError : err;
-      if (stageError instanceof RunnerCacheUnavailableError) {
-        recordRunnerDiagnostic("typed-failure", {
-          code: stageError.code,
-          errno: stageError.errno,
-          path: stageError.relativePath
-        });
-        return failResult(runnerCacheBootstrapFailure(stageError), "WDA_BOOTSTRAP_FAILED", {
-          flowFile,
-          platform,
-          runner: dispatch.runner,
-          transport: dispatch.runner,
-          passed: false,
-          output: "",
-          terminal: {
-            exitClass: "before-first-step",
-            bootstrapEvidence: stageError.message
-          },
-          ...androidReleaseMeta()
-        });
-      }
-      await commitReinstalledInstall();
-      if (err instanceof SessionAuthorityError) {
-        err.attachMeta(androidReleaseMeta());
-        throw err;
-      }
-      const msg3 = stageError instanceof Error ? stageError.message : String(stageError);
-      if (stageError instanceof ExactAndroidDeviceRequiredError) {
-        return failResult(stageError.message, stageError.code, {
-          platform,
-          runner: dispatch.runner,
-          transport: dispatch.runner,
-          passed: false,
-          ...androidReleaseMeta()
-        });
-      }
-      const errAny = stageError;
-      const completed = err instanceof MaestroStageExecutionError ? err.completedResults : [];
-      const stdout = [
-        ...completed.map((result) => typeof result.stdout === "string" ? result.stdout : ""),
-        typeof errAny?.stdout === "string" ? errAny.stdout : ""
-      ].join("\n");
-      const stderr = [
-        ...completed.map((result) => typeof result.stderr === "string" ? result.stderr : ""),
-        typeof errAny?.stderr === "string" ? errAny.stderr : ""
-      ].join("\n");
-      const combined = combineRunnerOutput(stdout, stderr);
-      const apiLevelAllowsPreO = probedAndroidApiLevel === null || probedAndroidApiLevel < MAESTRO_RUNNER_MIN_ANDROID_API;
-      if (platform === "android" && apiLevelAllowsPreO && isOlderSdkInstallFailure(combined)) {
-        return failResult(olderSdkInstallDiagnosis(dispatch.runner), "ANDROID_API_UNSUPPORTED", {
-          platform,
-          runner: dispatch.runner,
-          transport: dispatch.runner,
-          passed: false,
-          output: combined.slice(0, 4e3),
-          ...androidReleaseMeta()
-        });
-      }
-      const { timedOut, outputTruncated } = classifyExecError(stageError);
-      const directEvidence = directRunnerEvidence(combined);
-      const deviceAuthority = verifyMaestroDeviceAuthority({
-        runner: dispatch.runner,
-        platform,
-        requestedDeviceId,
-        output: directEvidence.output,
-        directReportDeviceIds: directEvidence.reportDeviceIds,
-        directReportIdentityStrength: directEvidence.reportDeviceIdStrength
-      });
-      const summary = buildStepSummary(combined, { failed: true });
-      const spawnError = combined.length === 0 && isPreSpawnMaestroError(stageError);
-      const terminal = buildTerminalEvidence(combined, { timedOut, spawnError });
-      const runnerResume = await buildRunnerResume(platform, fastHealthCheck2);
-      const catchRefusal = combined.length > 0 ? maestroAuthorityRefusal(deviceAuthority, msg3) : null;
-      if (catchRefusal) {
-        return failResult(catchRefusal, "DEVICE_AUTHORITY_MISMATCH", {
-          flowFile,
-          platform,
-          runner: dispatch.runner,
-          transport: dispatch.runner,
-          passed: false,
-          deviceAuthority,
-          output: combined.slice(0, 4e3),
-          ...summary,
-          terminal,
-          ...runnerResume ? { runnerResume } : {},
-          timedOut,
-          outputTruncated,
-          ...androidReleaseMeta()
-        });
-      }
-      const rawHeadline = formatFailureHeadline(summary, { timedOut, outputTruncated }, msg3);
-      const releaseCaveat = androidReleaseCaveat();
-      const headline = releaseCaveat ? `${rawHeadline}; ${releaseCaveat}` : rawHeadline;
-      const failAug = augmentFailureWithDegradation(combined, resolveFloorMs(process.env.RN_RUNTIME_DEGRADED_FLOOR_MS), headline, {
-        flowFile,
-        platform,
-        runner: dispatch.runner,
-        transport: dispatch.runner,
-        transportVersion: engineStatus?.version ?? null,
-        fallback: dispatch.fallbackReason ? dispatch.runner : "none",
-        deviceAuthority,
-        passed: false,
-        // `output` mirrors the success/warn shape so callers can read
-        // it the same way regardless of which path they hit.
-        output: combined.slice(0, 4e3),
-        ...summary,
-        terminal,
-        ...runnerResume ? { runnerResume } : {},
-        timedOut,
-        outputTruncated,
-        // GH #397: a drifted/mismatched engine causing a real failure is
-        // exactly when the pin state matters — carry it on this path too.
-        ...engineStatus && engineStatus.pin.status !== "pinned-ok" ? { enginePin: engineStatus.pin } : {},
-        ...androidReleaseMeta()
-      });
-      return failResult(failAug.message, failAug.meta);
-    } finally {
-      try {
-        writeFileSync11(flowFile, validatedContent, "utf-8");
-      } finally {
-        disposeRunnerReportDir(runnerReportDir);
-      }
-    }
-  };
-}
-var defaultExecFile, MaestroStageExecutionError, lifecycleCommands, PARAM_KEY_RE, UIAUTOMATION_SESSION_CREATION_FAILURE;
-var init_maestro_run = __esm({
-  "packages/rn-dev-agent-core/dist/tools/maestro-run.js"() {
-    "use strict";
-    init_utils();
-    init_engine_pin();
-    init_runner_diagnostics();
-    init_action_engine_compat();
-    init_reusable_action();
-    init_action_store();
-    init_agent_device_wrapper();
-    init_project_config();
-    init_maestro_dispatch();
-    init_resolve_ios_app_file();
-    init_maestro_validator();
-    init_maestro_error_parser();
-    init_tap_latency();
-    init_maestro_step_parser();
-    init_rn_fast_runner_client();
-    init_release_android_slot();
-    init_recovery();
-    init_maestro_device_authority();
-    init_maestro_runner_report();
-    init_authority_gate();
-    init_registry();
-    defaultExecFile = promisify3(execFileCb2);
-    MaestroStageExecutionError = class extends Error {
-      completedResults;
-      stageError;
-      constructor(completedResults, stageError) {
-        super(stageError instanceof Error ? stageError.message : String(stageError), {
-          cause: stageError
-        });
-        this.name = "MaestroStageExecutionError";
-        this.completedResults = [...completedResults];
-        this.stageError = stageError;
-      }
-    };
-    lifecycleCommands = /* @__PURE__ */ new Set(["launchApp", "clearState", "killApp", "stopApp"]);
-    PARAM_KEY_RE = /^[A-Z_][A-Z0-9_]*$/;
-    UIAUTOMATION_SESSION_CREATION_FAILURE = /^Error: failed to create driver: create session: session not created: java\.lang\.IllegalStateException: UiAutomation not connected(?:, UiAutomation@[^\r\n]+)?$/;
-  }
-});
-
-// packages/rn-dev-agent-core/dist/session/managed-automation.js
-import { spawn as spawn6 } from "node:child_process";
-import { readdirSync as readdirSync12, readFileSync as readFileSync26, unlinkSync as unlinkSync10 } from "node:fs";
-function sleep3(ms) {
-  return new Promise((resolve21) => setTimeout(resolve21, ms));
-}
-function cleanupKey(platform, deviceId) {
-  return `${platform}:${deviceId}`;
-}
-function cleanupRefusal(pgid) {
-  return {
-    processGroup: "owned-process-group",
-    manualCommand: `kill -TERM -${pgid}`
-  };
-}
-function processGroupLiveness(pgid) {
-  if (process.platform !== "linux")
-    return "unknown";
-  try {
-    for (const entry of readdirSync12("/proc", { withFileTypes: true })) {
-      if (!entry.isDirectory() || !/^\d+$/.test(entry.name))
-        continue;
-      let stat2;
-      try {
-        stat2 = readFileSync26(`/proc/${entry.name}/stat`, "utf8");
-      } catch (error2) {
-        if (error2.code === "ENOENT")
-          continue;
-        return "unknown";
-      }
-      const commandEnd = stat2.lastIndexOf(")");
-      if (commandEnd < 0)
-        return "unknown";
-      const fields = stat2.slice(commandEnd + 1).trim().split(/\s+/);
-      if (Number(fields[2]) === pgid && fields[0] !== "Z")
-        return "live";
-    }
-    return "no-live-members";
-  } catch {
-    return "unknown";
-  }
-}
-function groupPresence(pgid, signalGroup, groupLiveness) {
-  try {
-    signalGroup(pgid, 0);
-    return groupLiveness(pgid) === "no-live-members" ? "absent" : "present";
-  } catch (error2) {
-    return error2.code === "ESRCH" ? "absent" : "unknown";
-  }
-}
-async function waitForGroupAbsence(pgid, signalGroup, groupLiveness, delay, timeoutMs = ABSENCE_CONFIRM_MS) {
-  const deadline = Date.now() + timeoutMs;
-  while (true) {
-    const presence = groupPresence(pgid, signalGroup, groupLiveness);
-    if (presence !== "present")
-      return presence;
-    if (Date.now() >= deadline)
-      return "present";
-    await delay(POLL_MS);
-  }
-}
-function observeChildTerminal(child, timeoutMs) {
-  let closeResult = null;
-  const result = new Promise((resolve21) => {
-    let settled = false;
-    let timer;
-    const done = (value) => {
-      if (settled)
-        return;
-      settled = true;
-      if (timer)
-        clearTimeout(timer);
-      resolve21(value);
-    };
-    child.once("error", (error2) => done({ code: null, signal: null, timedOut: false, error: error2.message }));
-    child.once("close", (code, signal) => {
-      closeResult = { code, signal, timedOut: false };
-      done(closeResult);
-    });
-    timer = setTimeout(() => done({ code: null, signal: null, timedOut: true }), timeoutMs);
-  });
-  return { result, observedClose: () => closeResult };
-}
-function activeRefusal(platform, deviceId, signalGroup, groupLiveness) {
-  if (!deviceId)
-    return null;
-  const key = cleanupKey(platform, deviceId);
-  const refusal = activeCleanupRefusals.get(key);
-  if (!refusal)
-    return null;
-  if (groupPresence(refusal.pgid, signalGroup, groupLiveness) === "absent") {
-    activeCleanupRefusals.delete(key);
-    return null;
-  }
-  return refusal.public;
-}
-async function spawnManagedProcessGroup(bin, args, options, dependencies = {}) {
-  const spawnProcess = dependencies.spawn ?? spawn6;
-  const delay = dependencies.sleep ?? sleep3;
-  const signalGroup = dependencies.signalGroup ?? ((pgid, signal) => {
-    if (process.platform === "win32")
-      process.kill(pgid, signal);
-    else
-      process.kill(-pgid, signal);
-  });
-  const groupLiveness = dependencies.groupLiveness ?? processGroupLiveness;
-  const refusal = activeRefusal(options.platform, options.deviceId, signalGroup, groupLiveness);
-  if (refusal) {
-    return {
-      stdout: "",
-      stderr: "",
-      code: null,
-      signal: null,
-      timedOut: false,
-      cleanupProven: false,
-      cleanupEscalated: false,
-      cleanupRefusal: refusal,
-      error: "AUTOMATION_CLEANUP_UNPROVEN: a prior owned process group remains unproven"
-    };
-  }
-  let child;
-  try {
-    child = spawnProcess(bin, args, {
-      detached: process.platform !== "win32",
-      env: options.env ?? process.env,
-      stdio: ["ignore", "pipe", "pipe"]
-    });
-  } catch (error2) {
-    return {
-      stdout: "",
-      stderr: "",
-      code: null,
-      signal: null,
-      timedOut: false,
-      cleanupProven: true,
-      cleanupEscalated: false,
-      error: error2 instanceof Error ? error2.message : String(error2)
-    };
-  }
-  const terminalObserver = observeChildTerminal(child, options.timeoutMs);
-  const pid = child.pid;
-  if (!pid) {
-    const terminal2 = await terminalObserver.result;
-    return {
-      stdout: "",
-      stderr: "",
-      code: null,
-      signal: null,
-      timedOut: false,
-      cleanupProven: true,
-      cleanupEscalated: false,
-      error: terminal2.error ?? "Managed automation process did not expose a PID"
-    };
-  }
-  const stdout = [];
-  const stderr = [];
-  let outputBytes = 0;
-  let overflow = false;
-  const collect = (target) => (chunk) => {
-    if (outputBytes >= OUTPUT_LIMIT) {
-      overflow = true;
-      return;
-    }
-    const remaining = OUTPUT_LIMIT - outputBytes;
-    target.push(chunk.subarray(0, remaining));
-    outputBytes += Math.min(chunk.length, remaining);
-    if (chunk.length > remaining)
-      overflow = true;
-  };
-  child.stdout.on("data", collect(stdout));
-  child.stderr.on("data", collect(stderr));
-  const terminal = await terminalObserver.result;
-  let cleanupEscalated = false;
-  let presence = await waitForGroupAbsence(pid, signalGroup, groupLiveness, delay, terminal.timedOut ? 0 : 250);
-  if (terminal.timedOut || overflow || presence === "present") {
-    try {
-      signalGroup(pid, "SIGTERM");
-    } catch {
-    }
-    presence = await waitForGroupAbsence(pid, signalGroup, groupLiveness, delay, TERM_GRACE_MS);
-    if (presence === "present") {
-      cleanupEscalated = true;
-      try {
-        signalGroup(pid, "SIGKILL");
-      } catch {
-      }
-      presence = await waitForGroupAbsence(pid, signalGroup, groupLiveness, delay);
-    }
-  }
-  const cleanupProven = presence === "absent";
-  const unproven = cleanupProven ? void 0 : cleanupRefusal(pid);
-  if (unproven && options.deviceId) {
-    activeCleanupRefusals.set(cleanupKey(options.platform, options.deviceId), {
-      pgid: pid,
-      public: unproven
-    });
-  }
-  const observedTerminal = terminal.timedOut ? terminalObserver.observedClose() ?? terminal : terminal;
-  return {
-    stdout: Buffer.concat(stdout).toString("utf8"),
-    stderr: Buffer.concat(stderr).toString("utf8"),
-    code: observedTerminal.code,
-    signal: observedTerminal.signal,
-    timedOut: terminal.timedOut,
-    cleanupProven,
-    cleanupEscalated,
-    ...unproven ? { cleanupRefusal: unproven } : {},
-    ...overflow ? { error: "Maestro output exceeded 10 MiB" } : terminal.error ? { error: terminal.error } : {}
-  };
-}
-function removeTemporaryInlineFlow(path) {
-  try {
-    unlinkSync10(path);
-  } catch {
-  }
-}
-var OUTPUT_LIMIT, TERM_GRACE_MS, ABSENCE_CONFIRM_MS, POLL_MS, activeCleanupRefusals;
-var init_managed_automation = __esm({
-  "packages/rn-dev-agent-core/dist/session/managed-automation.js"() {
-    "use strict";
-    OUTPUT_LIMIT = 10 * 1024 * 1024;
-    TERM_GRACE_MS = 500;
-    ABSENCE_CONFIRM_MS = 2e3;
-    POLL_MS = 25;
-    activeCleanupRefusals = /* @__PURE__ */ new Map();
-  }
-});
-
-// packages/rn-dev-agent-core/dist/runners/external-runner-detect.js
-import { execFile as execFile4 } from "node:child_process";
-import { promisify as promisify4 } from "node:util";
-async function detectAndroidExternalRunner(execFileImpl = execFile4, serialArgs = []) {
-  try {
-    const bin = "adb";
-    const argv = [...serialArgs, "shell", "ps", "-A"];
-    const opts = { timeout: 2e3, encoding: "utf8" };
-    const run = execFileImpl === execFile4 ? promisify4(execFileImpl) : execFileImpl;
-    const { stdout } = await run(bin, argv, opts);
-    const lines = stdout.split("\n").filter((line) => /uiautomator|agent-device|AgentDevice/i.test(line)).filter((line) => !/dev\.lykhoyda\.rndevagent\.androidrunner/.test(line));
-    if (lines.length === 0)
-      return null;
-    return {
-      platform: "android",
-      code: "ANDROID_UIAUTOMATOR_COMPETITOR",
-      message: "A competing Android UIAutomator or agent-device process is running. Stop it (or opt out of the in-tree runner with RN_ANDROID_RUNNER=0) to avoid focus and input contention.",
-      processLines: lines
-    };
-  } catch {
-    return null;
-  }
-}
-function executableBasename(command) {
-  const executable = command.trimStart().split(/\s+/, 1)[0] ?? "";
-  return executable.slice(executable.lastIndexOf("/") + 1);
-}
-function shellWrappedMaestro(command) {
-  const tokens = command.trimStart().split(/\s+/);
-  if (!SHELL_WRAPPERS.test(executableBasename(tokens[0] ?? "")))
-    return false;
-  return tokens.slice(1).some((token2) => token2.startsWith("/") && /^maestro(?:\.\w+)?$/i.test(executableBasename(token2)));
-}
-function isIosExternalRunnerProcessLine(line) {
-  const match = line.match(/^\s*\d+\s+(.+)$/);
-  if (!match)
-    return false;
-  const command = match[1];
-  const executable = executableBasename(command);
-  if (/^maestro(?:-driver-iosUITests-Runner)?$/i.test(executable))
-    return true;
-  if (shellWrappedMaestro(command))
-    return true;
-  if (/^WebDriverAgent(?:Runner)?(?:-Runner)?$/i.test(executable))
-    return true;
-  if (/^java$/i.test(executable) && /(?:^|\s)maestro\.cli\.[\w.$]+(?:\s|$)/i.test(command)) {
-    return true;
-  }
-  if (/^xcodebuild$/i.test(executable) && /(?:maestro[^\s]*|WebDriverAgent[^\s]*)\.xctestrun(?:\s|$)/i.test(command)) {
-    return true;
-  }
-  return false;
-}
-async function detectIosExternalRunner(execFileImpl = execFile4, udid) {
-  try {
-    const opts = { timeout: 2e3, encoding: "utf8" };
-    const run = execFileImpl === execFile4 ? promisify4(execFileImpl) : execFileImpl;
-    const { stdout } = await run("ps", ["axww", "-o", "pid=,command="], opts);
-    const lines = stdout.split("\n").filter((line) => isIosExternalRunnerProcessLine(line)).filter((line) => !RN_FAST_RUNNER_RE.test(line)).filter((line) => udid ? line.includes(udid) : true).map((line) => line.trim()).filter((line) => line.length > 0);
-    if (lines.length === 0)
-      return null;
-    return {
-      platform: "ios",
-      code: "IOS_XCUITEST_COMPETITOR",
-      message: "A foreign maestro/WebDriverAgent automation session is driving this simulator. Interleaving device_* with it may trigger a re-foreground of your app; CDP reads are unaffected. (If this is your own maestro flow, it is expected.)",
-      processLines: lines
-    };
-  } catch {
-    return null;
-  }
-}
-function foreignRunnerNotice(detection, flowLeaseHeld) {
-  if (flowLeaseHeld)
-    return null;
-  if (!detection)
-    return null;
-  return {
-    meta: {
-      foreignRunner: {
-        code: detection.code,
-        message: detection.message,
-        processLines: detection.processLines
-      }
-    },
-    warning: `FOREIGN_RUNNER_ACTIVE: ${detection.message}`
-  };
-}
-var SHELL_WRAPPERS, RN_FAST_RUNNER_RE;
-var init_external_runner_detect = __esm({
-  "packages/rn-dev-agent-core/dist/runners/external-runner-detect.js"() {
-    "use strict";
-    SHELL_WRAPPERS = /^(?:sh|bash|zsh|dash|ksh|env)$/i;
-    RN_FAST_RUNNER_RE = /RnFastRunner/i;
-  }
-});
-
-// packages/rn-dev-agent-core/dist/lifecycle/foreign-flow-gate.js
-function setForeignGateUdidProvider(fn) {
-  udidProvider = fn;
-}
-function foreignGateUdid() {
-  return udidProvider();
-}
-function foreignGateEnabled(env = process.env) {
-  if (env.RN_IOS_FOREIGN_GUARD !== void 0)
-    return env.RN_IOS_FOREIGN_GUARD !== "0";
-  return env.RN_IOS_FOREIGN_WARN !== "0";
-}
-var ForeignFlowGate, foreignFlowGate, udidProvider;
-var init_foreign_flow_gate = __esm({
-  "packages/rn-dev-agent-core/dist/lifecycle/foreign-flow-gate.js"() {
-    "use strict";
-    init_external_runner_detect();
-    ForeignFlowGate = class {
-      detect;
-      ttlMs;
-      now;
-      cachedAt = -Infinity;
-      cachedUdid = null;
-      cached = null;
-      inFlight = null;
-      inFlightUdid = null;
-      _lastActive = false;
-      constructor(deps = {}) {
-        this.detect = deps.detect ?? ((udid) => detectIosExternalRunner(void 0, udid));
-        this.ttlMs = deps.ttlMs ?? 5e3;
-        this.now = deps.now ?? Date.now;
-      }
-      get lastActive() {
-        return this._lastActive;
-      }
-      async check(udid) {
-        const t = this.now();
-        if (this.cachedUdid === udid && t - this.cachedAt < this.ttlMs) {
-          return { active: this.cached !== null, warning: this.cached, fromCache: true, scanMs: 0 };
-        }
-        if (this.inFlight && this.inFlightUdid === udid)
-          return this.inFlight;
-        this.inFlightUdid = udid;
-        const scan = (async () => {
-          const started = this.now();
-          let warning = null;
-          try {
-            warning = await this.detect(udid);
-          } catch {
-            warning = null;
-          }
-          this.cached = warning;
-          this.cachedUdid = udid;
-          this.cachedAt = this.now();
-          this._lastActive = warning !== null;
-          return { active: warning !== null, warning, fromCache: false, scanMs: this.now() - started };
-        })();
-        this.inFlight = scan;
-        try {
-          return await scan;
-        } finally {
-          if (this.inFlight === scan) {
-            this.inFlight = null;
-            this.inFlightUdid = null;
-          }
-        }
-      }
-    };
-    foreignFlowGate = new ForeignFlowGate();
-    udidProvider = () => null;
-  }
-});
-
-// packages/rn-dev-agent-core/dist/lifecycle/device-arbiter.js
-import { AsyncLocalStorage as AsyncLocalStorage3 } from "node:async_hooks";
-function promoteCurrentOperationToManagedFlow() {
-  const context = activeLease.getStore();
-  if (!context) {
-    return { ok: false, code: "BUSY_FLOW_ACTIVE", holder: null };
-  }
-  return context.arbiter.promoteToFlow(context.lease);
-}
-function planeForTool(name, args = {}) {
-  if (name === "cdp_dev_settings" && args.action === "hideDevMenu")
-    return "interaction";
-  if (FLOW_TOOLS.has(name))
-    return "flow";
-  if (INTERACTION_TOOLS.has(name))
-    return "interaction";
-  if (INTROSPECTION_TOOLS.has(name))
-    return "introspection";
-  return null;
-}
-function foreignRefusal(name, warning, scanMs, udid) {
-  const safeLines = sanitizeAutomationProcessLines(warning.processLines, udid);
-  const safeWarning = { ...warning, processLines: safeLines };
-  return failResult(`Refusing ${name}: a FOREIGN Maestro/XCUITest session is driving this simulator (${safeLines[0] ?? "detected by the exact-device automation guard"}). L1 introspection stays safe \u2014 use cdp_component_tree / cdp_store_state / cdp_navigation_state for reads, and device_screenshot for pixels (simctl fallback). Retry taps/flows after the foreign run completes. Opt out of this guard with RN_IOS_FOREIGN_GUARD=0.`, "BUSY_FOREIGN_FLOW", { foreignRunner: safeWarning, conflict: true, timings_ms: { foreignScan: scanMs } });
-}
-function arbiterWrap(name, handler, inst = arbiter, foreign = {}) {
-  const staticPlane = planeForTool(name);
-  if (staticPlane === null && name !== "cdp_dev_settings")
-    return handler;
-  const gate = foreign.gate ?? foreignFlowGate;
-  const getUdid = foreign.getUdid ?? foreignGateUdid;
-  const enabled = foreign.enabled ?? foreignGateEnabled;
-  return async (...args) => {
-    const plane = planeForTool(name, args[0] ?? {});
-    if (plane === null)
-      return handler(...args);
-    if (plane !== "introspection" && !inst.flowActive) {
-      const udid = getUdid();
-      if (udid !== null) {
-        if (inst.msSinceFlowReleased >= FOREIGN_GRACE_MS && enabled()) {
-          const check2 = await gate.check(udid);
-          if (check2.active && check2.warning) {
-            if (FLOW_FALLBACK_TOOLS.has(name)) {
-              return await handler(...args);
-            }
-            return foreignRefusal(name, check2.warning, check2.scanMs, udid);
-          }
-        }
-      }
-    }
-    const res = inst.tryAcquire(plane, name);
-    if (!res.ok) {
-      if (FLOW_FALLBACK_TOOLS.has(name) && inst.flowActive) {
-        return await handler(...args);
-      }
-      const who = res.holder ? `${res.holder.tool} (${res.holder.plane})` : "a Maestro flow";
-      return failResult(`Refusing ${name}: blocked by ${who} on this device \u2014 reads and taps can't interleave with a running Maestro flow. Retry after it completes; if it appears stuck, run rn_session({ action: "recover_arbiter", confirmed: true }).`, res.code, { holder: res.holder, conflict: true });
-    }
-    try {
-      return await activeLease.run({ arbiter: inst, lease: res.lease, tool: name }, () => handler(...args));
-    } finally {
-      inst.release(res.lease);
-    }
-  };
-}
-var DeviceSessionArbiter, arbiter, activeLease, FLOW_TOOLS, INTERACTION_TOOLS, INTROSPECTION_TOOLS, FLOW_FALLBACK_TOOLS, FOREIGN_GRACE_MS;
-var init_device_arbiter = __esm({
-  "packages/rn-dev-agent-core/dist/lifecycle/device-arbiter.js"() {
-    "use strict";
-    init_utils();
-    init_foreign_flow_gate();
-    init_public_diagnostics();
-    DeviceSessionArbiter = class {
-      flowLeaseHeldBy = null;
-      ops = /* @__PURE__ */ new Map();
-      nextOpId = 1;
-      now;
-      constructor(now = Date.now) {
-        this.now = now;
-      }
-      tryAcquire(plane, tool) {
-        if (plane === "flow") {
-          if (this.flowLeaseHeldBy !== null || this.ops.size > 0) {
-            return { ok: false, code: "BUSY_FLOW_ACTIVE", holder: this.describeBlocker() };
-          }
-          return this.grant(plane, tool, true);
-        }
-        if (this.flowLeaseHeldBy !== null) {
-          return { ok: false, code: "BUSY_FLOW_ACTIVE", holder: this.describeBlocker() };
-        }
-        return this.grant(plane, tool, false);
-      }
-      /** Promote only the currently held interaction lease when it is the sole op.
-       * Ordinary interactions remain interactions and therefore do not start the
-       * pinned post-flow grace window. Inline Maestro escalates lazily at dispatch. */
-      promoteToFlow(lease) {
-        const info = this.ops.get(lease.opId);
-        if (!info || info.plane === "introspection") {
-          return { ok: false, code: "BUSY_FLOW_ACTIVE", holder: this.describeBlocker() };
-        }
-        if (this.flowLeaseHeldBy === lease.opId) {
-          return { ok: true, lease: { plane: "flow", opId: lease.opId } };
-        }
-        if (this.flowLeaseHeldBy !== null || this.ops.size !== 1) {
-          return { ok: false, code: "BUSY_FLOW_ACTIVE", holder: this.describeBlocker() };
-        }
-        info.plane = "flow";
-        this.flowLeaseHeldBy = lease.opId;
-        return { ok: true, lease: { plane: "flow", opId: lease.opId } };
-      }
-      grant(plane, tool, isFlow) {
-        const opId = this.nextOpId++;
-        this.ops.set(opId, { plane, tool, startedAtMs: this.now() });
-        if (isFlow)
-          this.flowLeaseHeldBy = opId;
-        return { ok: true, lease: { plane, opId } };
-      }
-      describeBlocker() {
-        const id = this.flowLeaseHeldBy ?? this.oldestOpId();
-        if (id === null)
-          return null;
-        const info = this.ops.get(id);
-        return info ? { plane: info.plane, tool: info.tool, opId: id } : null;
-      }
-      oldestOpId() {
-        let oldest = null;
-        let oldestAt = Infinity;
-        for (const [id, info] of this.ops) {
-          if (info.startedAtMs < oldestAt) {
-            oldestAt = info.startedAtMs;
-            oldest = id;
-          }
-        }
-        return oldest;
-      }
-      /** GH#186: set when a FLOW lease releases. Our own maestro driver (argv
-       * carries the udid) keeps tearing down WDA for seconds after release and
-       * matches the foreign detector — taps inside this window must not scan. */
-      lastFlowReleasedAt = -Infinity;
-      get msSinceFlowReleased() {
-        return this.now() - this.lastFlowReleasedAt;
-      }
-      release(lease) {
-        this.ops.delete(lease.opId);
-        if (this.flowLeaseHeldBy === lease.opId) {
-          this.flowLeaseHeldBy = null;
-          this.lastFlowReleasedAt = this.now();
-        }
-      }
-      reset(reason) {
-        const clearedOps = this.ops.size;
-        const hadFlow = this.flowLeaseHeldBy !== null;
-        this.ops.clear();
-        this.flowLeaseHeldBy = null;
-        return { clearedOps, hadFlow, reason };
-      }
-      get snapshot() {
-        return {
-          flowLeaseHeldBy: this.flowLeaseHeldBy,
-          activeOps: this.ops.size,
-          ops: [...this.ops.entries()].map(([opId, i]) => ({ opId, plane: i.plane, tool: i.tool }))
-        };
-      }
-      /** #210: true while a flow (Maestro) owns the device. Flow-fallback tools consult this to take an OS-level path. */
-      get flowActive() {
-        return this.flowLeaseHeldBy !== null;
-      }
-    };
-    arbiter = new DeviceSessionArbiter();
-    activeLease = new AsyncLocalStorage3();
-    FLOW_TOOLS = /* @__PURE__ */ new Set([
-      "maestro_run",
-      "maestro_test_all",
-      "cdp_login_prologue",
-      "cdp_run_action",
-      "cdp_auto_login",
-      "cdp_reload",
-      "cdp_restart",
-      "cdp_lock_e2e_test",
-      "cdp_run_e2e_suite"
-    ]);
-    INTERACTION_TOOLS = /* @__PURE__ */ new Set([
-      "device_screenshot",
-      "device_snapshot",
-      "device_find",
-      "device_press",
-      "device_fill",
-      "device_swipe",
-      "device_back",
-      "device_longpress",
-      "device_scroll",
-      "device_scrollintoview",
-      "device_pinch",
-      "device_permission",
-      "device_reset_state",
-      "device_deeplink",
-      "device_accept_system_dialog",
-      "device_dismiss_system_dialog",
-      "device_record",
-      "device_pick_value",
-      "device_pick_date",
-      "device_focus_next",
-      "device_batch",
-      "cdp_interact",
-      "cdp_repair_action",
-      "cross_platform_verify",
-      "proof_step",
-      "cdp_navigate",
-      "cdp_dispatch",
-      "cdp_set_shared_value",
-      "cdp_mmkv"
-    ]);
-    INTROSPECTION_TOOLS = /* @__PURE__ */ new Set([
-      "cdp_evaluate",
-      "cdp_component_tree",
-      "cdp_component_state",
-      "cdp_diagnostic_renderers",
-      "cdp_navigation_state",
-      "cdp_nav_graph",
-      "cdp_store_state",
-      "cdp_network_log",
-      "cdp_network_body",
-      "cdp_wait_for_network",
-      "cdp_console_log",
-      "cdp_error_log",
-      "cdp_native_errors",
-      "cdp_metro_events",
-      "cdp_heap_usage",
-      "cdp_cpu_profile",
-      "cdp_object_inspect",
-      "cdp_exception_breakpoint",
-      "collect_logs",
-      "expect_redux",
-      "expect_route",
-      "expect_visible_by_testid",
-      "expect_text"
-    ]);
-    FLOW_FALLBACK_TOOLS = /* @__PURE__ */ new Set(["device_screenshot"]);
-    FOREIGN_GRACE_MS = 1e4;
-  }
-});
-
-// packages/rn-dev-agent-core/dist/maestro-invoke.js
-import { writeFileSync as writeFileSync12 } from "node:fs";
-import { join as join32 } from "node:path";
-import { tmpdir as tmpdir8 } from "node:os";
-function yamlEscape(s) {
-  return s.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n").replace(/\r/g, "\\r").replace(/\t/g, "\\t");
-}
-function maestroRefusalResult(result, fallbackMessage, meta) {
-  if (!result.errorCode)
-    return null;
-  return failResult(result.error ?? fallbackMessage, result.errorCode, {
-    ...meta,
-    timedOut: result.timedOut,
-    exitCode: result.exitCode,
-    signal: result.signal,
-    cleanupEscalated: result.cleanupEscalated,
-    ...result.cleanupRefusal ? { cleanupRefusal: result.cleanupRefusal } : {}
-  });
-}
-async function runMaestroInline(yaml2, opts, dependencies = {}) {
-  const dispatch = (dependencies.chooseDispatch ?? chooseMaestroDispatch)({
-    platform: opts.platform
-  });
-  if ("error" in dispatch) {
-    return { passed: false, output: "", flowFile: "", error: dispatch.error };
-  }
-  const resolveEngineStatus = dependencies.resolveEngineStatus ?? (() => getEngineStatus().catch(() => null));
-  const engineStatus = await resolveEngineStatus();
-  const pinRefusal = exactPinRefusal(engineStatus);
-  if (pinRefusal) {
-    return { passed: false, output: "", flowFile: "", error: pinRefusal };
-  }
-  const rawAppId = opts.appId ?? resolveBundleId(opts.platform) ?? readExpoSlug() ?? "";
-  const flowFile = join32(tmpdir8(), `rn-maestro-invoke-${opts.slug ?? "flow"}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.yaml`);
-  let content;
-  let headerAppId;
-  try {
-    const parsed = parseAndValidateFlow(yaml2, { rejectHeader: true });
-    const selectorRefusal = replayCompatibilityPreflight({
-      commands: parsed.commands,
-      engineStatus,
-      requireEnginePin: false
-    });
-    if (selectorRefusal) {
-      return { passed: false, output: "", flowFile, error: selectorRefusal };
-    }
-    const appIdOpts = {};
-    if (rawAppId && isValidBundleId(rawAppId)) {
-      appIdOpts.appId = rawAppId;
-      headerAppId = rawAppId;
-    } else if (rawAppId) {
-      return {
-        passed: false,
-        output: "",
-        flowFile,
-        error: `Refusing to run Maestro: invalid bundle ID '${rawAppId.slice(0, 80)}' from project config (Phase 134.1)`
-      };
-    }
-    content = buildMaestroFlow(appIdOpts, parsed.commands);
-  } catch (err) {
-    if (err instanceof MaestroValidationError) {
-      return {
-        passed: false,
-        output: "",
-        flowFile,
-        error: `Refusing to run Maestro: ${err.message} (Phase 134.1)`
-      };
-    }
-    throw err;
-  }
-  try {
-    writeFileSync12(flowFile, content, "utf-8");
-  } catch (err) {
-    return {
-      passed: false,
-      output: "",
-      flowFile,
-      error: `Failed to write flow file: ${err instanceof Error ? err.message : String(err)}`
-    };
-  }
-  let runnerReportDir = null;
-  try {
-    const timeout = opts.timeoutMs ?? 12e4;
-    const session2 = getActiveSession();
-    const matchingSessionDeviceId = session2?.platform === opts.platform && session2.deviceId ? session2.deviceId : void 0;
-    if (opts.deviceId && matchingSessionDeviceId && !sameDevice(opts.deviceId, matchingSessionDeviceId)) {
-      return {
-        passed: false,
-        output: "",
-        flowFile,
-        error: `Refusing Maestro target ${opts.deviceId}: active ${opts.platform} session is bound to ${matchingSessionDeviceId}.`
-      };
-    }
-    const requestedDeviceId = opts.deviceId ?? matchingSessionDeviceId;
-    if (requestedDeviceId !== void 0 && (requestedDeviceId.length === 0 || requestedDeviceId.length > 256 || /\s/.test(requestedDeviceId))) {
-      return {
-        passed: false,
-        output: "",
-        flowFile,
-        error: "Refusing Maestro: deviceId must be 1-256 non-whitespace characters."
-      };
-    }
-    const appFileResolution = resolveAppFileForClearState(opts.platform, content, headerAppId, void 0);
-    if (!appFileResolution.ok) {
-      return { passed: false, output: "", flowFile, error: appFileResolution.error };
-    }
-    runnerReportDir = createRunnerReportDir(dispatch.runner, "rn-maestro-inline-report");
-    const baseArgs = dispatch.buildArgs(opts.platform, flowFile, appFileResolution.appFile, requestedDeviceId);
-    const finalArgs = assembleMaestroArgs(baseArgs, runnerReportArgs(runnerReportDir));
-    const executionDeadline = Date.now() + timeout;
-    const execute2 = async () => {
-      const spawn11 = (runnerPath, prefixArgs = []) => {
-        const remainingTimeout = executionDeadline - Date.now();
-        if (remainingTimeout <= 0) {
-          const error2 = new Error("Maestro flow timeout exhausted before runner execution");
-          Object.assign(error2, { code: "ETIMEDOUT" });
-          throw error2;
-        }
-        return (dependencies.spawnManaged ?? spawnManagedProcessGroup)(runnerPath, [...prefixArgs, ...finalArgs], {
-          timeoutMs: remainingTimeout,
-          platform: opts.platform,
-          deviceId: requestedDeviceId,
-          tool: opts.slug ?? "inline-maestro"
-        });
-      };
-      if (dependencies.spawnManaged) {
-        const immediateStatus = await resolveEngineStatus();
-        const refusal = exactPinRefusal(immediateStatus);
-        if (refusal)
-          throw new Error(`RUNNER_PIN_CHANGED: ${refusal}`);
-        return spawn11(dispatch.binPath);
-      }
-      return withImmediatePinnedRunner(dispatch.binPath, resolveEngineStatus, spawn11, opts.platform);
-    };
-    let execution;
-    try {
-      if (opts.authorityArgs && hasManagedRunnerParkAuthority(opts.authorityArgs)) {
-        const promoted = promoteCurrentOperationToManagedFlow();
-        if (!promoted.ok) {
-          return {
-            passed: false,
-            output: "",
-            flowFile,
-            error: "Inline Maestro could not enter the exclusive flow plane because another operation is active.",
-            errorCode: "BUSY_FLOW_ACTIVE"
-          };
-        }
-        execution = await runFlowParked(execute2, {
-          platform: opts.platform,
-          deviceId: requestedDeviceId,
-          completeRunnerPark: () => completeManagedRunnerParkAuthority(opts.authorityArgs)
-        });
-      } else {
-        execution = await execute2();
-      }
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      if (err instanceof RunnerCacheUnavailableError) {
-        return {
-          passed: false,
-          output: "",
-          flowFile,
-          error: runnerCacheBootstrapFailure(err),
-          errorCode: "WDA_BOOTSTRAP_FAILED"
-        };
-      }
-      if (message.startsWith("RUNNER_PIN_CHANGED:")) {
-        return { passed: false, output: "", flowFile, error: message };
-      }
-      throw err;
-    }
-    const output = (execution.stdout + "\n" + execution.stderr).trim();
-    if (!execution.cleanupProven) {
-      const guidance = execution.cleanupRefusal ? ` Process group: ${execution.cleanupRefusal.processGroup}. Run ${execution.cleanupRefusal.manualCommand}, then retry in this bridge process.` : "";
-      return {
-        passed: false,
-        output,
-        flowFile,
-        error: `AUTOMATION_CLEANUP_UNPROVEN: Maestro ended, but owned process-group absence could not be confirmed.${guidance}`,
-        errorCode: "AUTOMATION_CLEANUP_UNPROVEN",
-        timedOut: execution.timedOut,
-        exitCode: execution.code,
-        signal: execution.signal,
-        cleanupEscalated: execution.cleanupEscalated,
-        ...execution.cleanupRefusal ? { cleanupRefusal: execution.cleanupRefusal } : {}
-      };
-    }
-    if (opts.platform === "android" && isOlderSdkInstallFailure(output)) {
-      return {
-        passed: false,
-        output,
-        flowFile,
-        error: olderSdkInstallDiagnosis(dispatch.runner),
-        exitCode: execution.code,
-        signal: execution.signal
-      };
-    }
-    if (execution.timedOut) {
-      return {
-        passed: false,
-        output,
-        flowFile,
-        error: `Maestro timed out after ${timeout}ms`,
-        timedOut: true,
-        exitCode: execution.code,
-        signal: execution.signal,
-        cleanupEscalated: execution.cleanupEscalated
-      };
-    }
-    if (execution.error) {
-      return {
-        passed: false,
-        output,
-        flowFile,
-        error: execution.error.slice(0, 500),
-        exitCode: execution.code,
-        signal: execution.signal
-      };
-    }
-    const passed = execution.code === 0 && !outputIndicatesFlowFailure(output);
-    const directEvidence = collectDirectRunnerEvidence(runnerReportDir, output);
-    const deviceAuthority = verifyMaestroDeviceAuthority({
-      runner: dispatch.runner,
-      platform: opts.platform,
-      requestedDeviceId,
-      output: directEvidence.output,
-      directReportDeviceIds: directEvidence.reportDeviceIds,
-      directReportIdentityStrength: directEvidence.reportDeviceIdStrength,
-      requireWdaProvenance: passed
-    });
-    const authorityRefusal = maestroAuthorityRefusal(deviceAuthority, execution.error);
-    return {
-      passed: authorityRefusal ? false : passed,
-      output,
-      flowFile,
-      ...authorityRefusal ? { error: authorityRefusal } : {},
-      exitCode: execution.code,
-      signal: execution.signal,
-      cleanupEscalated: execution.cleanupEscalated,
-      deviceAuthority
-    };
-  } finally {
-    disposeRunnerReportDir(runnerReportDir);
-    removeTemporaryInlineFlow(flowFile);
-  }
-}
-var init_maestro_invoke = __esm({
-  "packages/rn-dev-agent-core/dist/maestro-invoke.js"() {
-    "use strict";
-    init_project_config();
-    init_maestro_validator();
-    init_maestro_dispatch();
-    init_maestro_error_parser();
-    init_engine_pin();
-    init_action_engine_compat();
-    init_resolve_ios_app_file();
-    init_maestro_run();
-    init_agent_device_wrapper();
-    init_maestro_device_authority();
-    init_maestro_runner_report();
-    init_managed_automation();
-    init_device_arbiter();
-    init_authority_gate();
-    init_utils();
-  }
-});
-
-// packages/rn-dev-agent-core/dist/tools/runner-leak-recovery.js
-function isAgentDeviceRunnerSentinel(nodes) {
-  if (!nodes || nodes.length === 0)
-    return false;
-  if (nodes.length > SMALL_TREE_THRESHOLD)
-    return false;
-  const hasRunnerAppLabel = nodes.some((n) => n.label === RUNNER_APP_LABEL);
-  if (hasRunnerAppLabel)
-    return true;
-  const hasVisibleText = nodes.some((n) => n.label === RUNNER_VISIBLE_TEXT);
-  const hasFingerprintId = nodes.some((n) => n.identifier !== void 0 && RUNNER_FINGERPRINT_IDENTIFIERS.has(n.identifier));
-  return hasVisibleText && hasFingerprintId;
-}
-async function recoverFromRunnerLeak(ctx, deps) {
-  if (ctx.alreadyRecovered) {
-    return { recovered: false, result: emptyResult(), reason: "already-attempted" };
-  }
-  if ((ctx.platform ?? "ios").toLowerCase() !== "ios") {
-    return { recovered: false, result: emptyResult(), reason: "wrong-platform" };
-  }
-  if (!ctx.appId) {
-    return { recovered: false, result: emptyResult(), reason: "no-session-context" };
-  }
-  const sleep7 = deps.sleep ?? defaultSleep;
-  if (deps.reacquire) {
-    const tier0 = await attemptReacquireCycle(deps, sleep7);
-    if (tier0.phase === "success") {
-      return { recovered: true, result: tier0.result, tier: "reacquire" };
-    }
-  }
-  const tier1 = await attemptRecoveryCycle(ctx, deps, true, sleep7);
-  if (tier1.phase === "success") {
-    return { recovered: true, result: tier1.result, tier: "attach-only" };
-  }
-  const tier2 = await attemptRecoveryCycle(ctx, deps, false, sleep7);
-  if (tier2.phase === "success") {
-    return { recovered: true, result: tier2.result, tier: "full-relaunch" };
-  }
-  if (tier2.phase === "sentinel") {
-    return { recovered: false, result: tier2.result, reason: "still-sentinel" };
-  }
-  return { recovered: false, result: tier2.result, reason: "reopen-failed" };
-}
-async function attemptReacquireCycle(deps, sleep7) {
-  const reacqResult = await deps.reacquire();
-  if (reacqResult.isError) {
-    return { phase: "reopen-failed", result: reacqResult };
-  }
-  await sleep7(DAEMON_SETTLE_MS);
-  const retryResult = await deps.resnapshot();
-  if (retryResult.isError) {
-    return { phase: "snapshot-failed", result: retryResult };
-  }
-  if (isAgentDeviceRunnerSentinel(deps.parseNodes(retryResult))) {
-    return { phase: "sentinel", result: retryResult };
-  }
-  return { phase: "success", result: retryResult };
-}
-async function attemptRecoveryCycle(ctx, deps, attachOnly, sleep7) {
-  await deps.closeSession();
-  await sleep7(DAEMON_SETTLE_MS);
-  const reopenResult = await deps.openSession({
-    appId: ctx.appId,
-    platform: "ios",
-    ...ctx.deviceId ? { deviceId: ctx.deviceId } : {},
-    sessionName: ctx.sessionName,
-    attachOnly
-  });
-  if (reopenResult.isError) {
-    return { phase: "reopen-failed", result: reopenResult };
-  }
-  const retryResult = await deps.resnapshot();
-  if (retryResult.isError) {
-    return { phase: "snapshot-failed", result: retryResult };
-  }
-  if (isAgentDeviceRunnerSentinel(deps.parseNodes(retryResult))) {
-    return { phase: "sentinel", result: retryResult };
-  }
-  return { phase: "success", result: retryResult };
-}
-function emptyResult() {
-  return { content: [{ type: "text", text: "" }] };
-}
-var RUNNER_APP_LABEL, RUNNER_VISIBLE_TEXT, RUNNER_FINGERPRINT_IDENTIFIERS, SMALL_TREE_THRESHOLD, DAEMON_SETTLE_MS, defaultSleep;
-var init_runner_leak_recovery = __esm({
-  "packages/rn-dev-agent-core/dist/tools/runner-leak-recovery.js"() {
-    "use strict";
-    RUNNER_APP_LABEL = "AgentDeviceRunner";
-    RUNNER_VISIBLE_TEXT = "Agent Device Runner";
-    RUNNER_FINGERPRINT_IDENTIFIERS = /* @__PURE__ */ new Set(["Logo", "PoweredBy"]);
-    SMALL_TREE_THRESHOLD = 12;
-    DAEMON_SETTLE_MS = 600;
-    defaultSleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  }
-});
-
-// packages/rn-dev-agent-core/dist/tools/app-lifecycle.js
-import { execFile as execFileCb3 } from "node:child_process";
-import { promisify as promisify5 } from "node:util";
-function resolveIosLifecycleTarget(deviceId) {
-  if (deviceId === void 0)
-    return "booted";
-  if (!IOS_UDID_RE.test(deviceId)) {
-    throw new Error("iOS lifecycle deviceId must be an exact simulator UDID");
-  }
-  return deviceId;
-}
-function buildIosLaunchArgv(bundleId, deviceId) {
-  if (typeof bundleId !== "string" || bundleId.length === 0) {
-    throw new Error("buildIosLaunchArgv: bundleId is required");
-  }
-  return ["simctl", "launch", resolveIosLifecycleTarget(deviceId), bundleId];
-}
-function buildIosTerminateArgv(bundleId, deviceId) {
-  if (typeof bundleId !== "string" || bundleId.length === 0) {
-    throw new Error("buildIosTerminateArgv: bundleId is required");
-  }
-  return ["simctl", "terminate", resolveIosLifecycleTarget(deviceId), bundleId];
-}
-function resolveAndroidLifecycleTarget(deviceId) {
-  if (deviceId === void 0)
-    return [];
-  if (!ANDROID_SERIAL_RE2.test(deviceId)) {
-    throw new Error("Android lifecycle deviceId must be an exact adb serial");
-  }
-  return ["-s", deviceId];
-}
-async function terminateApp(bundleId, platform, deviceId) {
-  if (platform === "ios") {
-    await execFile5("xcrun", buildIosTerminateArgv(bundleId, deviceId), {
-      timeout: TERMINATE_TIMEOUT_MS,
-      encoding: "utf8"
-    });
-  } else {
-    await execFile5("adb", [...resolveAndroidLifecycleTarget(deviceId), "shell", "am", "force-stop", bundleId], {
-      timeout: TERMINATE_TIMEOUT_MS,
-      encoding: "utf8"
-    });
-  }
-}
-function buildAndroidLaunchArgv(bundleId, deviceId) {
-  if (typeof bundleId !== "string" || bundleId.length === 0) {
-    throw new Error("buildAndroidLaunchArgv: bundleId is required");
-  }
-  return [
-    ...resolveAndroidLifecycleTarget(deviceId),
-    "shell",
-    "am",
-    "start",
-    "-W",
-    "-a",
-    "android.intent.action.MAIN",
-    "-c",
-    "android.intent.category.LAUNCHER",
-    "-p",
-    bundleId
-  ];
-}
-async function launchApp(bundleId, platform, deviceId) {
-  if (platform === "ios") {
-    await execFile5("xcrun", buildIosLaunchArgv(bundleId, deviceId), {
-      timeout: LAUNCH_TIMEOUT_MS,
-      encoding: "utf8"
-    });
-  } else {
-    await execFile5("adb", buildAndroidLaunchArgv(bundleId, deviceId), {
-      timeout: LAUNCH_TIMEOUT_MS,
-      encoding: "utf8"
-    });
-  }
-}
-var execFile5, TERMINATE_TIMEOUT_MS, LAUNCH_TIMEOUT_MS, IOS_UDID_RE, ANDROID_SERIAL_RE2;
-var init_app_lifecycle = __esm({
-  "packages/rn-dev-agent-core/dist/tools/app-lifecycle.js"() {
-    "use strict";
-    execFile5 = promisify5(execFileCb3);
-    TERMINATE_TIMEOUT_MS = 1e4;
-    LAUNCH_TIMEOUT_MS = 15e3;
-    IOS_UDID_RE = /^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$/i;
-    ANDROID_SERIAL_RE2 = /^[A-Za-z0-9._:-]{1,128}$/;
-  }
-});
-
-// packages/rn-dev-agent-core/dist/runners/ensure-single-runner.js
-import { execFileSync as execFileSync14 } from "node:child_process";
-import { existsSync as existsSync25, readFileSync as readFileSync27, unlinkSync as unlinkSync11 } from "node:fs";
-import { homedir as homedir5 } from "node:os";
-import { join as join33 } from "node:path";
-function selectInstalledLegacyApps(installed) {
-  return LEGACY_BUNDLE_IDS.filter((id) => installed.has(id));
-}
-async function eradicateLegacyRunnerApps(udid, deps) {
-  const removedApps = [];
-  const warnings = [];
-  let installed;
-  try {
-    installed = parseSimctlListapps(deps.listApps(udid));
-  } catch (err) {
-    return { removedApps, warnings: [`listapps failed: ${msg(err)}`] };
-  }
-  if (installed.size === 0) {
-    return {
-      removedApps,
-      warnings: [`listapps parsed 0 apps \u2014 treating as parse failure, not a clean device`]
-    };
-  }
-  for (const id of selectInstalledLegacyApps(installed)) {
-    try {
-      deps.uninstallApp(udid, id);
-      removedApps.push(id);
-    } catch (err) {
-      warnings.push(`uninstall ${id} failed: ${msg(err)} \u2014 remove manually: xcrun simctl uninstall ${udid} ${id}`);
-    }
-  }
-  return { removedApps, warnings };
-}
-function selectLegacyRunnerPids(psOutput, udid) {
-  const pids = [];
-  for (const line of psOutput.split("\n")) {
-    if (!line.includes("AgentDeviceRunner"))
-      continue;
-    if (line.includes("RnFastRunner"))
-      continue;
-    if (!udid || !line.includes(udid))
-      continue;
-    const m = line.trim().match(/^(\d+)\b/);
-    if (m)
-      pids.push(Number(m[1]));
-  }
-  return pids;
-}
-function shouldRemoveDaemonFiles(daemonPid, isAlive) {
-  if (daemonPid === null)
-    return true;
-  return !isAlive(daemonPid);
-}
-function defaultDeps() {
-  return {
-    // Let a `ps` failure (timeout / EAGAIN under load) PROPAGATE to the
-    // caller's try/catch, which records a warning. Swallowing it here and
-    // returning '' made single-runner enforcement degrade to a silent no-op
-    // with no operator signal — exactly when the machine is busy.
-    listProcesses: () => execFileSync14("ps", ["-A", "-o", "pid=,args="], { encoding: "utf8", timeout: 3e3 }),
-    kill: (pid, signal) => process.kill(pid, signal),
-    isAlive: (pid) => {
-      try {
-        process.kill(pid, 0);
-        return true;
-      } catch {
-        return false;
-      }
-    },
-    readDaemonPid: () => {
-      try {
-        const parsed = JSON.parse(readFileSync27(DAEMON_JSON, "utf8"));
-        return typeof parsed.pid === "number" ? parsed.pid : null;
-      } catch {
-        return null;
-      }
-    },
-    fileExists: (path) => existsSync25(path),
-    removeFile: (path) => unlinkSync11(path),
-    delay: (ms) => new Promise((resolve21) => setTimeout(resolve21, ms)),
-    listApps: (udid) => execFileSync14("xcrun", ["simctl", "listapps", udid], {
-      encoding: "utf8",
-      timeout: 5e3,
-      stdio: ["ignore", "pipe", "ignore"]
-    }),
-    uninstallApp: (udid, bundleId) => {
-      execFileSync14("xcrun", ["simctl", "uninstall", udid, bundleId], {
-        encoding: "utf8",
-        timeout: 1e4,
-        stdio: ["ignore", "pipe", "ignore"]
-      });
-    }
-  };
-}
-async function ensureSingleRunner(opts = {}, deps = defaultDeps()) {
-  const timings = {};
-  const killedPids = [];
-  const removedFiles = [];
-  const removedApps = [];
-  const warnings = [];
-  if (opts.udid) {
-    const t = Date.now();
-    let psOut = "";
-    try {
-      psOut = deps.listProcesses();
-    } catch (err) {
-      warnings.push(`ps failed: ${msg(err)}`);
-    }
-    for (const pid of selectLegacyRunnerPids(psOut, opts.udid)) {
-      try {
-        deps.kill(pid, "SIGTERM");
-        await deps.delay(SIGKILL_GRACE_MS);
-        if (deps.isAlive(pid))
-          deps.kill(pid, "SIGKILL");
-        killedPids.push(pid);
-      } catch (err) {
-        warnings.push(`kill ${pid} failed: ${msg(err)}`);
-      }
-    }
-    timings.scopedKill = Date.now() - t;
-    const tApps = Date.now();
-    const apps = await eradicateLegacyRunnerApps(opts.udid, deps);
-    removedApps.push(...apps.removedApps);
-    warnings.push(...apps.warnings);
-    timings.appEradication = Date.now() - tApps;
-  }
-  const tFiles = Date.now();
-  if (DAEMON_FILES.some((f) => deps.fileExists(f))) {
-    let daemonPid = null;
-    try {
-      daemonPid = deps.readDaemonPid();
-    } catch {
-      daemonPid = null;
-    }
-    if (shouldRemoveDaemonFiles(daemonPid, deps.isAlive)) {
-      for (const f of DAEMON_FILES) {
-        if (!deps.fileExists(f))
-          continue;
-        try {
-          deps.removeFile(f);
-          removedFiles.push(f);
-        } catch (err) {
-          warnings.push(`rm ${f} failed: ${msg(err)}`);
-        }
-      }
-    } else {
-      warnings.push(`Left ${DAEMON_JSON} in place \u2014 daemon PID ${daemonPid} is alive (may belong to another project).`);
-    }
-  }
-  timings.fileCleanup = Date.now() - tFiles;
-  return { killedPids, removedFiles, removedApps, warnings, meta: { timings_ms: timings } };
-}
-function msg(err) {
-  return err instanceof Error ? err.message : String(err);
-}
-var DAEMON_JSON, DAEMON_LOCK, DAEMON_FILES, SIGKILL_GRACE_MS, LEGACY_BUNDLE_IDS;
-var init_ensure_single_runner = __esm({
-  "packages/rn-dev-agent-core/dist/runners/ensure-single-runner.js"() {
-    "use strict";
-    init_discovery();
-    DAEMON_JSON = join33(homedir5(), ".agent-device", "daemon.json");
-    DAEMON_LOCK = join33(homedir5(), ".agent-device", "daemon.lock");
-    DAEMON_FILES = [DAEMON_JSON, DAEMON_LOCK];
-    SIGKILL_GRACE_MS = 500;
-    LEGACY_BUNDLE_IDS = [
-      "com.callstack.agentdevice.runner",
-      "com.callstack.agentdevice.runner.uitests.xctrunner"
-    ];
-  }
-});
-
-// packages/rn-dev-agent-core/dist/runners/suppress-ios-autocorrect.js
-import { execFile as execFileCb4 } from "node:child_process";
-import { promisify as promisify6 } from "node:util";
-function defaultDeps2() {
-  return { run: (args) => execFile6("xcrun", args, { timeout: 5e3 }) };
-}
-async function suppressIOSAutocorrect(udid, deps = defaultDeps2()) {
-  const warnings = [];
-  const timings = {};
-  if (!udid)
-    return { warnings, skipped: true, meta: { timings_ms: timings } };
-  const t = Date.now();
-  for (const [key, type, value] of IOS_KEYBOARD_PREF_KEYS) {
-    try {
-      await deps.run(["simctl", "spawn", udid, "defaults", "write", "-g", key, type, value]);
-    } catch (err) {
-      warnings.push(`defaults write -g ${key}: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  }
-  timings.suppress = Date.now() - t;
-  return { warnings, skipped: false, meta: { timings_ms: timings } };
-}
-var execFile6, IOS_KEYBOARD_PREF_KEYS;
-var init_suppress_ios_autocorrect = __esm({
-  "packages/rn-dev-agent-core/dist/runners/suppress-ios-autocorrect.js"() {
-    "use strict";
-    execFile6 = promisify6(execFileCb4);
-    IOS_KEYBOARD_PREF_KEYS = [
-      ["KeyboardAutocorrection", "-bool", "false"],
-      ["KeyboardPrediction", "-bool", "false"],
-      ["KeyboardShowPredictionBar", "-bool", "false"]
-    ];
-  }
-});
-
-// packages/rn-dev-agent-core/dist/cdp/recover-wedge.js
-import { execFile as execFileCb5 } from "node:child_process";
-import { promisify as promisify7 } from "node:util";
-function resetWedgeRecoveryCounter() {
-  attempts = 0;
-}
-var execFile7, attempts;
-var init_recover_wedge = __esm({
-  "packages/rn-dev-agent-core/dist/cdp/recover-wedge.js"() {
-    "use strict";
-    init_agent_device_wrapper();
-    init_rn_fast_runner_client();
-    init_device_arbiter();
-    init_recovery();
-    execFile7 = promisify7(execFileCb5);
-    attempts = 0;
-  }
-});
-
-// packages/rn-dev-agent-core/dist/cdp/app-installed-probe.js
-import { execFile as execFileCb6 } from "node:child_process";
-import { promisify as promisify8 } from "node:util";
-function isAppMissingSignal(stderr) {
-  return /nsposixerrordomain/i.test(stderr) && /\bcode\s*[=:]?\s*2\b/i.test(stderr);
-}
-async function probeAppInstalled(udid, appId, exec = execFile8) {
-  try {
-    await exec("xcrun", ["simctl", "get_app_container", udid, appId, "app"], { timeout: 5e3 });
-    return true;
-  } catch (e) {
-    const stderr = e.stderr ?? "";
-    if (!stderr)
-      return null;
-    if (DEVICE_ERROR.test(stderr))
-      return null;
-    if (isAppMissingSignal(stderr))
-      return false;
-    return null;
-  }
-}
-function posixSingleQuote(s) {
-  return `'${s.replace(/'/g, "'\\''")}'`;
-}
-function buildNotInstalledAdvice(udid, appId, hint) {
-  const base = `App ${appId} is not installed on simulator ${udid} \u2014 rebuild and install (npx expo run:ios / pnpm ios).`;
-  if (!hint)
-    return base;
-  return `${base} Or reinstall the snapshot taken at the last clearState, ${hint.ageMinutes} min ago (may be stale): xcrun simctl install ${posixSingleQuote(udid)} ${posixSingleQuote(hint.path)}`;
-}
-var execFile8, DEVICE_ERROR;
-var init_app_installed_probe = __esm({
-  "packages/rn-dev-agent-core/dist/cdp/app-installed-probe.js"() {
-    "use strict";
-    execFile8 = promisify8(execFileCb6);
-    DEVICE_ERROR = /Invalid device|No devices/i;
-  }
-});
-
-// packages/rn-dev-agent-core/dist/cdp/recover-detached.js
-import { execFile as execFileCb7 } from "node:child_process";
-import { promisify as promisify9 } from "node:util";
-function resetDetachedRecoveryCounter() {
-  attempts2 = 0;
-  confirmedNotInstalled = null;
-}
-var execFile9, attempts2, confirmedNotInstalled;
-var init_recover_detached = __esm({
-  "packages/rn-dev-agent-core/dist/cdp/recover-detached.js"() {
-    "use strict";
-    init_agent_device_wrapper();
-    init_rn_fast_runner_client();
-    init_device_arbiter();
-    init_recovery();
-    init_app_installed_probe();
-    init_maestro_validator();
-    execFile9 = promisify9(execFileCb7);
-    attempts2 = 0;
-    confirmedNotInstalled = null;
-  }
-});
-
-// packages/rn-dev-agent-core/dist/lifecycle/device-lock.js
-import { existsSync as existsSync26, mkdirSync as mkdirSync19, openSync as openSync10, writeSync as writeSync3, closeSync as closeSync10, readFileSync as readFileSync28, unlinkSync as unlinkSync12, writeFileSync as writeFileSync13 } from "node:fs";
-import { tmpdir as tmpdir9, userInfo as userInfo2 } from "node:os";
-import { join as join34 } from "node:path";
-function defaultProcessAlive3(pid) {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-function isDeviceLockStale(body, now, processAlive, staleMs) {
-  if (!processAlive(body.pid))
-    return true;
-  return now - body.lastHeartbeat > staleMs;
-}
-function isEexist2(err) {
-  return typeof err === "object" && err !== null && err.code === "EEXIST";
-}
-function isValidBody(o) {
-  if (typeof o !== "object" || o === null)
-    return false;
-  const b = o;
-  return typeof b.pid === "number" && Number.isFinite(b.pid) && (b.platform === "ios" || b.platform === "android") && typeof b.deviceId === "string" && b.deviceId.length > 0 && typeof b.projectRoot === "string" && typeof b.startedAt === "number" && Number.isFinite(b.startedAt) && typeof b.lastHeartbeat === "number" && Number.isFinite(b.lastHeartbeat);
-}
-var DEVICE_LOCK_STALE_MS, DeviceLock;
-var init_device_lock = __esm({
-  "packages/rn-dev-agent-core/dist/lifecycle/device-lock.js"() {
-    "use strict";
-    DEVICE_LOCK_STALE_MS = 9e4;
-    DeviceLock = class {
-      lockPath;
-      acquired = false;
-      pid;
-      platform;
-      deviceId;
-      projectRoot;
-      appId;
-      version;
-      clock;
-      processAlive;
-      staleMs;
-      tmpDir;
-      constructor(opts) {
-        this.platform = opts.platform;
-        this.deviceId = opts.deviceId;
-        this.projectRoot = opts.projectRoot ?? process.env.CLAUDE_USER_CWD ?? process.cwd();
-        const uid = opts.uid ?? userInfo2().uid;
-        this.tmpDir = opts.tmpDir ?? tmpdir9();
-        this.pid = opts.pid ?? process.pid;
-        this.appId = opts.appId;
-        this.version = opts.version;
-        this.clock = opts.clock ?? Date.now;
-        this.processAlive = opts.processAlive ?? defaultProcessAlive3;
-        this.staleMs = opts.staleMs ?? DEVICE_LOCK_STALE_MS;
-        this.lockPath = join34(this.tmpDir, `rn-dev-agent-device-${uid}-${this.platform}-${this.deviceId}.lock`);
-      }
-      acquire() {
-        try {
-          this.create();
-          return { status: "acquired", lockPath: this.lockPath };
-        } catch (err) {
-          if (!isEexist2(err)) {
-            return { status: "acquired", lockPath: this.lockPath, degraded: true };
-          }
-        }
-        const holder = this.readExisting();
-        if (holder && !isDeviceLockStale(holder, this.clock(), this.processAlive, this.staleMs)) {
-          return { status: "conflict", lockPath: this.lockPath, holder };
-        }
-        const before = this.readExisting();
-        if (before && (holder === null || before.pid !== holder.pid || before.startedAt !== holder.startedAt) && !isDeviceLockStale(before, this.clock(), this.processAlive, this.staleMs)) {
-          return { status: "conflict", lockPath: this.lockPath, holder: before };
-        }
-        try {
-          unlinkSync12(this.lockPath);
-        } catch {
-        }
-        try {
-          this.create();
-          return { status: "acquired", lockPath: this.lockPath };
-        } catch (err) {
-          if (!isEexist2(err)) {
-            return { status: "acquired", lockPath: this.lockPath, degraded: true };
-          }
-          const raced = this.readExisting();
-          return raced ? { status: "conflict", lockPath: this.lockPath, holder: raced } : { status: "acquired", lockPath: this.lockPath, degraded: true };
-        }
-      }
-      touch() {
-        if (!this.acquired)
-          return;
-        const holder = this.readExisting();
-        if (!holder || holder.pid !== this.pid)
-          return;
-        holder.lastHeartbeat = this.clock();
-        try {
-          writeFileSync13(this.lockPath, JSON.stringify(holder, null, 2), "utf8");
-        } catch {
-        }
-      }
-      release() {
-        if (!this.acquired)
-          return;
-        try {
-          const holder = this.readExisting();
-          if (holder?.pid === this.pid)
-            unlinkSync12(this.lockPath);
-        } catch {
-        }
-        this.acquired = false;
-      }
-      create() {
-        if (!existsSync26(this.tmpDir))
-          mkdirSync19(this.tmpDir, { recursive: true });
-        const fd = openSync10(this.lockPath, "wx");
-        try {
-          const now = this.clock();
-          const body = {
-            pid: this.pid,
-            projectRoot: this.projectRoot,
-            platform: this.platform,
-            deviceId: this.deviceId,
-            appId: this.appId,
-            startedAt: now,
-            lastHeartbeat: now,
-            version: this.version
-          };
-          writeSync3(fd, JSON.stringify(body, null, 2));
-        } finally {
-          closeSync10(fd);
-        }
-        this.acquired = true;
-      }
-      readExisting() {
-        try {
-          const parsed = JSON.parse(readFileSync28(this.lockPath, "utf8"));
-          if (!isValidBody(parsed))
-            return null;
-          if (parsed.deviceId !== this.deviceId || parsed.platform !== this.platform)
-            return null;
-          return parsed;
-        } catch {
-          return null;
-        }
-      }
-    };
-  }
-});
-
-// packages/rn-dev-agent-core/dist/tools/device-session-close.js
-function isBenignSessionGoneError(result) {
-  if (!result.isError)
-    return false;
-  const text = result.content?.[0]?.text ?? "";
-  let envelope;
-  try {
-    envelope = JSON.parse(text);
-  } catch {
-    return false;
-  }
-  if ((envelope.meta?.code ?? envelope.code) === "SESSION_NOT_FOUND")
-    return true;
-  return /no active session|session not found/i.test(envelope.error ?? "");
-}
-async function closeDeviceSession(deps) {
-  if (!deps.hasActiveSession()) {
-    await deps.finalizeSuccessfulClose();
-    return okResult({ closed: true, message: "No active session to close" });
-  }
-  const deviceId = deps.getDeviceId?.();
-  const finalizeClose = async () => {
-    await deps.stopFastRunner(deviceId);
-    await deps.stopAndroidRunner(deviceId);
-    await deps.finalizeSuccessfulClose();
-    deps.clearActiveSession();
-    deps.releaseDeviceLock();
-  };
-  const result = await deps.closeUnderlyingSession();
-  if (!result.isError) {
-    await finalizeClose();
-    return result;
-  }
-  if (isBenignSessionGoneError(result)) {
-    await finalizeClose();
-    return okResult({
-      closed: true,
-      sessionAlreadyGone: true,
-      message: "Underlying device session was already gone (likely torn down by a Maestro flow); cleared local session state."
-    });
-  }
-  return result;
-}
-var init_device_session_close = __esm({
-  "packages/rn-dev-agent-core/dist/tools/device-session-close.js"() {
-    "use strict";
-    init_utils();
-  }
-});
-
-// packages/rn-dev-agent-core/dist/tools/device-session.js
-import { execFile as execFileCb8 } from "node:child_process";
-import { promisify as promisify10 } from "node:util";
-function acquireDeviceLockForSession(platform, deviceId, appId) {
-  releaseDeviceLockForSession();
-  const lock = new DeviceLock({ platform, deviceId, appId });
-  const result = lock.acquire();
-  if (result.status === "acquired" && !result.degraded) {
-    activeDeviceLock = lock;
-    heartbeatTimer = setInterval(() => lock.touch(), HEARTBEAT_MS);
-    heartbeatTimer.unref();
-  }
-  return result;
-}
-function releaseDeviceLockForSession() {
-  if (heartbeatTimer) {
-    clearInterval(heartbeatTimer);
-    heartbeatTimer = null;
-  }
-  if (activeDeviceLock) {
-    activeDeviceLock.release();
-    activeDeviceLock = null;
-  }
-}
-function defaultHolderProcessAlive(pid) {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error2) {
-    return error2.code === "EPERM";
-  }
-}
-function deviceBusyHolderSummary(holder, options = {}) {
-  const rawHeartbeatAgeMs = Math.max(0, (options.now ?? Date.now()) - holder.lastHeartbeat);
-  return {
-    alive: (options.processAlive ?? defaultHolderProcessAlive)(holder.pid),
-    heartbeatAgeMs: Math.min(rawHeartbeatAgeMs, DEVICE_LOCK_STALE_MS),
-    heartbeatAgeCapped: rawHeartbeatAgeMs > DEVICE_LOCK_STALE_MS
-  };
-}
-function deviceBusyMessage(deviceId, holder, summary = deviceBusyHolderSummary(holder)) {
-  const label = holder.platform === "android" ? "Emulator/device" : "Simulator";
-  const heartbeatAgeSeconds = Math.ceil(summary.heartbeatAgeMs / 1e3);
-  const heartbeatAge = `${heartbeatAgeSeconds}s${summary.heartbeatAgeCapped ? "+" : ""}`;
-  return `${label} ${deviceId} is already owned by another rn-dev-agent bridge. Holder is ${summary.alive ? "alive" : "not alive"}; heartbeat age is ${heartbeatAge} (bounded to 0\u201390s). ${DEVICE_BUSY_CLOSE_GUIDANCE} ${DEVICE_BUSY_ALTERNATE_GUIDANCE} ${DEVICE_BUSY_STALE_GUIDANCE} ${DEVICE_BUSY_OWNERSHIP_GUIDANCE}`;
-}
-async function isAppRunning(platform, bundleId, probes, deviceId) {
-  const p = (platform ?? "ios").toLowerCase();
-  if (p === "android") {
-    return (probes?.android ?? defaultAndroidProbe)(bundleId, deviceId);
-  }
-  const exactDeviceId = deviceId?.trim();
-  if (!exactDeviceId)
-    return false;
-  return (probes?.ios ?? defaultIOSProbe)(bundleId, exactDeviceId);
-}
-function buildIosAppRunningArgs(deviceId) {
-  return ["simctl", "spawn", deviceId, "launchctl", "list"];
-}
-async function defaultIOSProbe(bundleId, deviceId) {
-  try {
-    const { stdout } = await execFile10("xcrun", buildIosAppRunningArgs(deviceId), {
-      timeout: 5e3,
-      encoding: "utf8"
-    });
-    return stdout.includes(`UIKitApplication:${bundleId}`);
-  } catch {
-    return false;
-  }
-}
-function buildAndroidPidofArgs(bundleId, deviceId) {
-  return [...deviceId ? ["-s", deviceId] : [], "shell", "pidof", bundleId];
-}
-async function defaultAndroidProbe(bundleId, deviceId) {
-  try {
-    const { stdout } = await execFile10("adb", buildAndroidPidofArgs(bundleId, deviceId), {
-      timeout: 3e3,
-      encoding: "utf8"
-    });
-    return stdout.trim().length > 0;
-  } catch {
-    return false;
-  }
-}
-function buildAndroidAppLaunchArgs(deviceId, appId) {
-  return [
-    "-s",
-    deviceId,
-    "shell",
-    "monkey",
-    "--pct-syskeys",
-    "0",
-    "-p",
-    appId,
-    "-c",
-    "android.intent.category.LAUNCHER",
-    "1"
-  ];
-}
-function createDeviceSnapshotHandler(deps = {}) {
-  const probeAndroidUi = deps.probeAndroidUi ?? ((deviceId, appId) => runAndroid({ command: "snapshot", deviceId, bundleId: appId, interactiveOnly: false }));
-  const isAppRunningFn = deps.isAppRunning ?? ((platform, appId, deviceId) => isAppRunning(platform, appId, void 0, deviceId));
-  const startAndroidRunnerFn = deps.startAndroidRunner ?? ((deviceId, appId) => startAndroidRunner(deviceId, appId, void 0, { allowArtifactRebuild: true }));
-  const launchAndroidApp = deps.launchAndroidApp ?? (async (deviceId, appId) => {
-    await execFile10("adb", buildAndroidAppLaunchArgs(deviceId, appId), {
-      timeout: 1e4,
-      encoding: "utf8"
-    });
-  });
-  const ensureIosRunner = deps.ensureIosRunner ?? ensureRunnerForCommand;
-  const stopIosRunner = deps.stopIosRunner ?? stopFastRunner;
-  const reapAndroidRunner = deps.reapAndroidRunner ?? reapActiveAndroidRunner;
-  return async (args) => {
-    const action = args.action ?? "snapshot";
-    if (action === "open") {
-      let appId = args.appId;
-      let autoDetected = false;
-      let reactNativeUiReady = null;
-      if (!appId) {
-        const platform2 = args.platform ?? "ios";
-        appId = resolveBundleId(platform2) ?? void 0;
-        if (!appId) {
-          return failResult('appId is required for action=open (e.g. "com.example.app"). Could not auto-detect from app.json \u2014 provide appId explicitly.');
-        }
-        autoDetected = true;
-      }
-      if (!isValidBundleId(appId)) {
-        return failResult(`Invalid appId "${String(appId).slice(0, 80)}" \u2014 must be reverse-DNS bundle identifier (e.g. com.example.app)`, "INVALID_APPID");
-      }
-      const EXPO_GO_BUNDLES = ["host.exp.Exponent", "host.exp.exponent"];
-      if (EXPO_GO_BUNDLES.includes(appId)) {
-        return failResult("Expo Go is not supported \u2014 the in-tree device runner needs a Dev Client or standalone build. Use CDP tools (cdp_component_tree, cdp_store_state, cdp_evaluate) + device_screenshot instead.", {
-          hint: "Use cdp_evaluate for JS-level interactions. device_screenshot works without a session."
-        });
-      }
-      const sessionName = args.sessionName ?? `rn-agent-${Date.now()}`;
-      const platform = (args.platform ?? "ios").toLowerCase();
-      const lockPlatform = platform === "android" ? "android" : "ios";
-      const deviceId = args.deviceId?.trim();
-      if (!deviceId) {
-        return failResult(`Exact ${platform} deviceId is required; ambient booted/first-device selection is diagnostic only.`, "DEVICE_AUTHORITY_MISMATCH");
-      }
-      const lockResult = acquireDeviceLockForSession(lockPlatform, deviceId, appId);
-      if (lockResult.status === "conflict") {
-        const holder = deviceBusyHolderSummary(lockResult.holder);
-        return failResult(deviceBusyMessage(deviceId, lockResult.holder, holder), {
-          code: "DEVICE_BUSY",
-          holder
-        });
-      }
-      if (lockResult.degraded) {
-        logger.warn("rn-device", `Device-ownership lock unavailable (fs error) for ${deviceId} \u2014 cross-bridge contention protection is off this session.`);
-      }
-      if (args.attachOnly) {
-        const running = await isAppRunningFn(platform, appId, deviceId);
-        if (!running) {
-          releaseDeviceLockForSession();
-          return failResult(`attachOnly=true but ${appId} is not running on ${platform}. Launch it manually or drop attachOnly.`, "NOT_CONNECTED");
-        }
-      }
-      let upgradeNote;
-      try {
-        if (lockPlatform === "ios") {
-          const ready = await ensureIosRunner(deviceId, appId, {
-            allowArtifactRebuild: true,
-            attachOnly: args.attachOnly === true
-          });
-          if (!ready.ok) {
-            await stopIosRunner(deviceId);
-            consumePendingFastRunnerArtifactNote();
-            releaseDeviceLockForSession();
-            return failResult(ready.message, ready.code ?? "RN_FAST_RUNNER_DOWN");
-          }
-          upgradeNote = ready.note ?? consumePendingFastRunnerArtifactNote();
-          if (!args.attachOnly) {
-            await execFile10("xcrun", ["simctl", "launch", deviceId, appId], {
-              timeout: 1e4,
-              encoding: "utf8"
-            }).catch(() => {
-            });
-          }
-        } else {
-          await startAndroidRunnerFn(deviceId, appId);
-          upgradeNote = consumePendingAndroidUpgradeNote();
-          if (!args.attachOnly) {
-            try {
-              await launchAndroidApp(deviceId, appId);
-            } catch (err) {
-              throw new AndroidAppLaunchError(`Failed to launch ${appId} on ${deviceId}: ${err instanceof Error ? err.message : String(err)}`);
-            }
-          }
-          const readiness = await probeAndroidUi(deviceId, appId);
-          if (readiness.isError) {
-            const envelope = JSON.parse(readiness.content[0]?.text ?? "{}");
-            throw new Error(`${envelope.code ?? "ANDROID_UI_NOT_READY"}: ${envelope.error ?? "the app did not expose its UI through accessibility after launch"}`);
-          }
-          reactNativeUiReady = deps.probeReactNativeUi ? await deps.probeReactNativeUi("android", deviceId, appId).catch(() => false) : null;
-        }
-      } catch (err) {
-        let cleanupFailure;
-        try {
-          if (lockPlatform === "ios")
-            await stopIosRunner(deviceId);
-          else
-            await reapAndroidRunner(deviceId);
-        } catch (cleanupErr) {
-          cleanupFailure = cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr);
-        } finally {
-          releaseDeviceLockForSession();
-        }
-        consumePendingAndroidUpgradeNote();
-        const rawMsg = err instanceof Error ? err.message : String(err);
-        const msg3 = cleanupFailure ? `${rawMsg}; runner cleanup also failed: ${cleanupFailure}` : rawMsg;
-        if (err instanceof AndroidAppLaunchError) {
-          return failResult(msg3, "APP_LAUNCH_FAILED");
-        }
-        if (msg3.startsWith("RUNNER_COMMANDS_STALE")) {
-          return failResult(msg3, "RUNNER_COMMANDS_STALE");
-        }
-        if (msg3.startsWith("RUNNER_PROTOCOL_MISMATCH")) {
-          return failResult(msg3, "RUNNER_PROTOCOL_MISMATCH");
-        }
-        if (msg3.startsWith("RUNNER_OWNERSHIP_MISMATCH")) {
-          return failResult(msg3, "RUNNER_OWNERSHIP_MISMATCH");
-        }
-        const code = lockPlatform === "ios" ? "RN_FAST_RUNNER_DOWN" : "RN_ANDROID_RUNNER_DOWN";
-        return failResult(`Failed to start device runner: ${msg3}`, code);
-      }
-      setActiveSession({
-        name: sessionName,
-        platform,
-        deviceId,
-        openedAt: (/* @__PURE__ */ new Date()).toISOString(),
-        appId
-      });
-      try {
-        await deps.bindRunner?.(lockPlatform, deviceId, appId);
-      } catch (error2) {
-        let cleanupFailure;
-        try {
-          if (lockPlatform === "ios")
-            await stopIosRunner(deviceId);
-          else
-            await reapAndroidRunner(deviceId);
-        } catch (cleanupErr) {
-          cleanupFailure = cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr);
-        } finally {
-          clearActiveSession();
-          releaseDeviceLockForSession();
-        }
-        const rawMessage = error2 instanceof Error ? error2.message : String(error2);
-        const code = /^([A-Z][A-Z0-9_]+):/.exec(rawMessage)?.[1] ?? "RUNNER_OWNERSHIP_MISMATCH";
-        const message = cleanupFailure ? `${rawMessage}; runner cleanup also failed: ${cleanupFailure}` : rawMessage;
-        return failResult(message, code);
-      }
-      resetWedgeRecoveryCounter();
-      resetDetachedRecoveryCounter();
-      if (process.env.RN_DEVICE_KILL_LEGACY !== "0" && platform === "ios" && deviceId) {
-        try {
-          const r = await ensureSingleRunner({ udid: deviceId });
-          if (r.killedPids.length) {
-            logger.info("rn-device", `ensureSingleRunner: killed stale runner PID(s) ${r.killedPids.join(", ")} on ${deviceId}`);
-          }
-          if (r.removedFiles.length) {
-            logger.info("rn-device", `ensureSingleRunner: removed ${r.removedFiles.join(", ")}`);
-          }
-          if (r.removedApps.length) {
-            logger.info("rn-device", `ensureSingleRunner: uninstalled legacy runner app(s) ${r.removedApps.join(", ")} from ${deviceId}`);
-          }
-          for (const w of r.warnings)
-            logger.warn("rn-device", w);
-        } catch (err) {
-          logger.warn("rn-device", `ensureSingleRunner failed: ${err instanceof Error ? err.message : String(err)}`);
-        }
-      }
-      if (platform === "android" && process.env.RN_ANDROID_RUNNER !== "0") {
-        detectAndroidExternalRunner(void 0, getAdbSerial()).then((warning) => {
-          if (!warning)
-            return;
-          logger.warn("rn-device", warning.message);
-          for (const line of warning.processLines) {
-            logger.warn("rn-device", `  ${line.trim()}`);
-          }
-        }).catch(() => {
-        });
-      }
-      if (platform === "ios") {
-        suppressIOSAutocorrect(deviceId).then((sup) => {
-          if (sup.warnings.length)
-            logger.info("rn-device", `suppressIOSAutocorrect: ${sup.warnings.join("; ")}`);
-        }).catch(() => {
-        });
-      }
-      let foreign = null;
-      let foreignDetectMs;
-      if (platform === "ios" && process.env.RN_IOS_FOREIGN_WARN !== "0") {
-        const flowHeld = arbiter.snapshot.flowLeaseHeldBy !== null;
-        if (!flowHeld) {
-          const t0 = Date.now();
-          const detection = await detectIosExternalRunner(void 0, deviceId);
-          foreignDetectMs = Date.now() - t0;
-          foreign = foreignRunnerNotice(detection, false);
-        }
-        if (foreign) {
-          logger.warn("rn-device", foreign.warning);
-          for (const line of foreign.meta.foreignRunner.processLines) {
-            logger.warn("rn-device", `  ${line}`);
-          }
-        }
-      }
-      const data = {
-        ok: true,
-        sessionName,
-        platform,
-        deviceId,
-        appId,
-        readiness: platform === "android" ? {
-          appForeground: true,
-          accessibilityUi: true,
-          reactNativeUi: reactNativeUiReady === true ? "ready" : "unverified"
-        } : { appForeground: true }
-      };
-      const readinessWarning = platform === "android" && reactNativeUiReady !== true ? "Android app accessibility is ready, but the React Native helper boundary is unverified; run cdp_status and require capabilities.fiberTree=true before treating launch as RN-ready" : null;
-      let result2;
-      if (autoDetected || foreign || readinessWarning) {
-        const warning = [
-          autoDetected ? `appId auto-detected from app.json: ${appId}` : null,
-          foreign ? foreign.warning : null,
-          readinessWarning
-        ].filter(Boolean).join("; ");
-        const meta = { ...foreign ? foreign.meta : {} };
-        if (foreignDetectMs !== void 0)
-          meta.timings_ms = { foreignDetect: foreignDetectMs };
-        result2 = warnResult(data, warning, meta);
-      } else {
-        result2 = okResult(data);
-      }
-      return upgradeNote ? attachMetaNote(result2, upgradeNote) : result2;
-    }
-    if (action === "close") {
-      const closingPlatform = getActiveSession()?.platform ?? args.platform;
-      const result2 = await closeDeviceSession({
-        hasActiveSession: () => getActiveSession() !== null,
-        closeUnderlyingSession: async () => okResult({ closed: true }),
-        clearActiveSession,
-        stopFastRunner,
-        stopAndroidRunner: async (deviceId) => {
-          if (getActiveSession()?.platform === "android") {
-            await reapActiveAndroidRunner(deviceId);
-          }
-        },
-        finalizeSuccessfulClose: async () => {
-          await deps.unbindRunner?.();
-          if (closingPlatform === "ios") {
-            (deps.resetIosRunnerRebuildBudget ?? resetRunnerRebuildBudgetForCurrentPlugin)();
-          }
-        },
-        releaseDeviceLock: releaseDeviceLockForSession,
-        getDeviceId: () => getActiveSession()?.deviceId
-      });
-      return result2;
-    }
-    if (!getActiveSession()) {
-      return failResult('No device session open. Call device_snapshot with action="open" first.', {
-        hint: "Provide appId and platform to start a session."
-      });
-    }
-    const result = await rawSnapshot();
-    const nodes = parseSnapshotNodes(result);
-    if (!result.isError && nodes && isAgentDeviceRunnerSentinel(nodes)) {
-      const session2 = getActiveSession();
-      markSnapshotDirty(session2?.platform);
-      const recovery = await recoverFromRunnerLeak({
-        platform: session2?.platform,
-        appId: session2?.appId,
-        deviceId: session2?.deviceId,
-        sessionName: session2?.name
-      }, {
-        // B130 (D659): the recovery close must also clear the local session
-        // state (activeSession → null, ref-map → empty, fast-runner stopped)
-        // so the post-recovery re-snapshot goes through the daemon/CLI path
-        // that populates ref refs, NOT the fast-runner path which returns
-        // a tree-shaped result lacking @eN refs. Without this, `device_fill`
-        // after recovery fails with "No snapshot in session" because the
-        // ref-map is stale (from pre-recovery) OR non-existent (after fresh
-        // session open), and fast-runner serves the (ref-less) snapshot.
-        closeSession: async () => {
-          await stopFastRunner(session2?.deviceId);
-          await stopAndroidRunner(session2?.deviceId);
-          await deps.unbindRunner?.();
-          clearActiveSession();
-          return okResult({ closed: true });
-        },
-        openSession: ({ appId, platform, deviceId, attachOnly }) => reopenSessionForRecovery(appId, platform, attachOnly, deviceId, deps),
-        resnapshot: () => rawSnapshot(),
-        parseNodes: parseSnapshotNodes,
-        reacquire: session2?.platform === "ios" && session2?.appId && session2?.deviceId && deps.bindRunner && deps.unbindRunner ? () => reacquireIosTargetApp(session2.appId, session2.deviceId, {
-          bindRunner: deps.bindRunner,
-          ensureFastRunner,
-          launchApp,
-          stopFastRunner,
-          unbindRunner: deps.unbindRunner
-        }) : void 0
-      });
-      if (recovery.recovered) {
-        cacheSnapshotIfPossible(recovery.result);
-        markCdpStale();
-        return wrapWithMeta(recovery.result, {
-          recovered: "agent-device-runner-leak",
-          recoveryTier: recovery.tier
-        });
-      }
-      return failResult(runnerLeakFailureMessage(recovery.reason, session2), {
-        code: "RUNNER_LEAK",
-        recoveryReason: recovery.reason,
-        hint: runnerLeakFailureHint(recovery.reason, session2)
-      });
-    }
-    cacheSnapshotIfPossible(result);
-    return result;
-  };
-}
-function runnerLeakFailureMessage(reason, session2) {
-  if (reason === "no-session-context" && session2 && !session2.appId) {
-    return "device_snapshot returned AgentDeviceRunner's own UI tree, but auto-recovery cannot run because the active session has no stored appId. This usually means the session was opened by a plugin version from before B119 / GH #35 landed.";
-  }
-  return "device_snapshot returned AgentDeviceRunner's own UI tree instead of the target app (B119 / GH #35 \u2014 agent-device daemon dropped appBundleId on dispatch). Auto-recovery did not restore the target.";
-}
-function runnerLeakFailureHint(reason, session2) {
-  if (reason === "no-session-context" && session2 && !session2.appId) {
-    return "Run device_snapshot action=close, then action=open appId=<your.bundle.id> platform=ios to start a session that supports auto-recovery.";
-  }
-  return "Manually close + reopen the session with action=open appId=<your.bundle.id> platform=ios (full launch, not attachOnly). Upstream: Callstack/agent-device, see B119/GH#35.";
-}
-async function reacquireIosTargetApp(appId, deviceId, dependencies) {
-  try {
-    await dependencies.stopFastRunner(deviceId);
-    await dependencies.unbindRunner();
-    await dependencies.launchApp(appId, "ios", deviceId);
-    await dependencies.ensureFastRunner(deviceId, appId);
-    await dependencies.bindRunner("ios", deviceId, appId);
-    return okResult({ reacquired: true, appId });
-  } catch (error2) {
-    return failResult(`Runner authority reacquire failed: ${error2 instanceof Error ? error2.message : String(error2)}`, "RUNNER_OWNERSHIP_MISMATCH");
-  }
-}
-async function rawSnapshot() {
-  return runNative(["snapshot", "-i"]);
-}
-function parseSnapshotNodes(result) {
-  if (result.isError)
-    return null;
-  try {
-    const envelope = JSON.parse(result.content[0].text);
-    if (!envelope.ok || !envelope.data?.nodes)
-      return null;
-    return envelope.data.nodes;
-  } catch {
-    return null;
-  }
-}
-function cacheSnapshotIfPossible(result) {
-  if (result.isError)
-    return;
-  try {
-    const envelope = JSON.parse(result.content[0].text);
-    const platform = getActiveSession()?.platform;
-    if (platform && envelope.ok && envelope.data?.nodes) {
-      cacheSnapshot(platform, envelope.data.nodes);
-    }
-  } catch {
-  }
-}
-function wrapWithMeta(result, meta) {
-  if (result.isError)
-    return result;
-  try {
-    const envelope = JSON.parse(result.content[0].text);
-    envelope.meta = { ...envelope.meta, ...meta };
-    return { content: [{ type: "text", text: JSON.stringify(envelope) }] };
-  } catch {
-    return result;
-  }
-}
-async function reopenSessionForRecovery(appId, platform, attachOnly, deviceId, dependencies = {}) {
-  const recoveryName = `rn-agent-recovery-${Date.now()}`;
-  return createDeviceSnapshotHandler(dependencies)({
-    action: "open",
-    appId,
-    deviceId,
-    platform,
-    attachOnly,
-    sessionName: recoveryName
-  });
-}
-var execFile10, HEARTBEAT_MS, activeDeviceLock, heartbeatTimer, DEVICE_BUSY_CLOSE_GUIDANCE, DEVICE_BUSY_ALTERNATE_GUIDANCE, DEVICE_BUSY_STALE_GUIDANCE, DEVICE_BUSY_OWNERSHIP_GUIDANCE, AndroidAppLaunchError;
-var init_device_session = __esm({
-  "packages/rn-dev-agent-core/dist/tools/device-session.js"() {
-    "use strict";
-    init_agent_device_wrapper();
-    init_rn_fast_runner_client();
-    init_rn_android_runner_client();
-    init_app_lifecycle();
-    init_recovery();
-    init_external_runner_detect();
-    init_ensure_single_runner();
-    init_suppress_ios_autocorrect();
-    init_recover_wedge();
-    init_recover_detached();
-    init_utils();
-    init_project_config();
-    init_maestro_validator();
-    init_logger();
-    init_runner_leak_recovery();
-    init_device_lock();
-    init_device_arbiter();
-    init_device_session_close();
-    execFile10 = promisify10(execFileCb8);
-    HEARTBEAT_MS = 3e4;
-    activeDeviceLock = null;
-    heartbeatTimer = null;
-    DEVICE_BUSY_CLOSE_GUIDANCE = "From the holder worktree, run `device_snapshot action=close` to release it safely.";
-    DEVICE_BUSY_ALTERNATE_GUIDANCE = "Alternatively, boot a dedicated simulator (or emulator), bind its exact ID with `rn_session action=bind_device`, run the normal managed build/install there, then select that exact ID with `device_snapshot action=open ... attachOnly=true` when the app is already running.";
-    DEVICE_BUSY_STALE_GUIDANCE = "Dead holders self-heal on the next open attempt; live holders self-heal once their heartbeat is stale beyond the existing 90s recovery window.";
-    DEVICE_BUSY_OWNERSHIP_GUIDANCE = "A healthy live holder is never stolen or changed by this refusal.";
-    AndroidAppLaunchError = class extends Error {
-      constructor(message) {
-        super(message);
-        this.name = "AndroidAppLaunchError";
-      }
-    };
-  }
-});
-
-// packages/rn-dev-agent-core/dist/tools/fill-verify.js
-function classifyFiberVerification(input) {
-  if (input.valueAfter === null)
-    return "unreadable";
-  return input.valueAfter === input.text ? "exact" : "mismatch";
-}
-function combineVerificationOracles(fiber, native, nativeStable) {
-  const targetCompromised = native === "ambiguous" || native === "target-lost";
-  const fiberReadable = fiber === "exact" || fiber === "mismatch";
-  let verified = false;
-  let oracle = "none";
-  if (!targetCompromised) {
-    if (fiber === "exact" && native === "exact" && nativeStable) {
-      verified = true;
-      oracle = "fiber+native";
-    } else if (fiber === "exact" && native !== "mismatch") {
-      verified = true;
-      oracle = "fiber";
-    } else if (!fiberReadable && native === "exact" && nativeStable) {
-      verified = true;
-      oracle = "native";
-    }
-  }
-  const anyExact = fiber === "exact" || native === "exact";
-  const observedMismatch = !verified && !targetCompromised && !anyExact && (fiber === "mismatch" || native === "mismatch" && nativeStable);
-  return {
-    verified,
-    oracle,
-    fiber,
-    native,
-    nativeStable,
-    observedMismatch
-  };
-}
-function decideNativeRetype(verification, attemptsSoFar, maxAttempts) {
-  if (!verification.observedMismatch || attemptsSoFar >= maxAttempts) {
-    return { action: "escalate" };
-  }
-  return { action: "retype", delayMs: RETYPE_DELAY_MS };
-}
-async function readInputValueOnce(deps, testID) {
-  try {
-    const r = await deps.evaluate("__RN_AGENT.readInputValue(" + JSON.stringify(testID) + ")");
-    if (!r.error && typeof r.value === "string") {
-      const read = JSON.parse(r.value);
-      if (!read.__agent_error)
-        return { value: read.value ?? null, controlled: read.controlled ?? false };
-    }
-  } catch {
-  }
-  return null;
-}
-async function probeInputState(deps, testID) {
-  const read = await readInputValueOnce(deps, testID);
-  if (!read)
-    return { readable: false, controlled: false, value: null };
-  return { readable: true, controlled: read.controlled, value: read.value };
-}
-async function settleRead(deps, testID, text, valueBefore) {
-  const sleep7 = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
-  let value = valueBefore;
-  let controlled = false;
-  let everRead = false;
-  for (let i = 0; i < READ_SETTLE_TRIES; i++) {
-    const rb = await readInputValueOnce(deps, testID);
-    if (rb) {
-      value = rb.value;
-      controlled = rb.controlled;
-      everRead = true;
-    }
-    if (value === text)
-      break;
-    if (value !== valueBefore)
-      break;
-    if (i < READ_SETTLE_TRIES - 1)
-      await sleep7(READ_SETTLE_DELAY_MS);
-  }
-  if (!everRead)
-    return { value: null, controlled: false };
-  return { value, controlled };
-}
-async function finalFiberVerify(deps, testID, text) {
-  const sleep7 = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
-  let previous = null;
-  let last = null;
-  for (let i = 0; i < FINAL_VERIFY_TRIES; i++) {
-    const read = await readInputValueOnce(deps, testID);
-    if (read) {
-      if (read.value === text && read.controlled) {
-        await sleep7(FIBER_CONFIRM_DELAY_MS);
-        const confirm = await readInputValueOnce(deps, testID);
-        if (confirm && confirm.value === text && confirm.controlled)
-          return "exact";
-        return "unreadable";
-      }
-      previous = last;
-      last = read;
-    } else {
-      previous = null;
-      last = null;
-    }
-    if (i < FINAL_VERIFY_TRIES - 1)
-      await sleep7(FINAL_VERIFY_DELAY_MS);
-  }
-  if (last !== null && previous !== null && last.value !== null && last.controlled && previous.controlled && last.value === previous.value) {
-    return "mismatch";
-  }
-  return "unreadable";
-}
-async function attemptJsFill(deps, testID, text) {
-  let probe;
-  try {
-    const expr = "__RN_AGENT.interact(" + JSON.stringify({ action: "typeText", testID, text, verify: true }) + ")";
-    const r = await deps.evaluate(expr);
-    if (r.error || typeof r.value !== "string") {
-      return { handled: false, dispatchUncertain: true };
-    }
-    probe = JSON.parse(r.value);
-  } catch {
-    return { handled: false, dispatchUncertain: true };
-  }
-  if (probe.error)
-    return { handled: false };
-  if (probe.controlled === void 0)
-    return { handled: false, dispatchUncertain: true };
-  if (probe.handlerCalled === false || probe.handlerCalled === void 0)
-    return { handled: false };
-  const valueBefore = typeof probe.valueBefore === "string" ? probe.valueBefore : null;
-  const settled = await settleRead(deps, testID, text, valueBefore);
-  let outcome = settled.controlled ? classifyFiberVerification({ text, valueAfter: settled.value }) : "unreadable";
-  if (outcome === "mismatch") {
-    const sleep7 = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
-    await sleep7(FIBER_CONFIRM_DELAY_MS);
-    const confirm = await readInputValueOnce(deps, testID);
-    if (confirm && confirm.value === text && confirm.controlled) {
-      outcome = "exact";
-    } else if (!confirm || !confirm.controlled || confirm.value === null || confirm.value !== settled.value) {
-      outcome = "unreadable";
-    }
-  }
-  return {
-    handled: true,
-    outcome,
-    controlled: settled.controlled,
-    handler: typeof probe.handlerCalled === "string" ? probe.handlerCalled : void 0
-  };
-}
-var RETYPE_DELAY_MS, READ_SETTLE_TRIES, READ_SETTLE_DELAY_MS, FIBER_CONFIRM_DELAY_MS, FINAL_VERIFY_TRIES, FINAL_VERIFY_DELAY_MS;
-var init_fill_verify = __esm({
-  "packages/rn-dev-agent-core/dist/tools/fill-verify.js"() {
-    "use strict";
-    RETYPE_DELAY_MS = 40;
-    READ_SETTLE_TRIES = 5;
-    READ_SETTLE_DELAY_MS = 80;
-    FIBER_CONFIRM_DELAY_MS = 150;
-    FINAL_VERIFY_TRIES = 6;
-    FINAL_VERIFY_DELAY_MS = 100;
-  }
-});
-
-// packages/rn-dev-agent-core/dist/tools/device-interact.js
-import { randomUUID as randomUUID6 } from "node:crypto";
-import { execFile as execFileCb9 } from "node:child_process";
-import { promisify as promisify11 } from "node:util";
-function candidateFromNode(n) {
-  return {
-    ref: n.ref,
-    label: n.label,
-    testID: n.identifier,
-    type: n.type,
-    hittable: n.hittable,
-    position: n.rect ? { x: n.rect.x, y: n.rect.y } : void 0
-  };
-}
-function typePriority(type) {
-  if (!type)
-    return 50;
-  return TYPE_PRIORITY_FOR_TAP[type] ?? 50;
-}
-function rectKey(rect) {
-  if (!rect)
-    return null;
-  return `${Math.round(rect.x)},${Math.round(rect.y)},${Math.round(rect.width)},${Math.round(rect.height)}`;
-}
-function rankSnapshotNodes(nodes) {
-  const withScore = nodes.map((node, originalIndex) => ({
-    node,
-    originalIndex,
-    score: typePriority(node.type) * 10 + (node.hittable === true ? 1 : 0)
-  }));
-  withScore.sort((a, b) => {
-    if (b.score !== a.score)
-      return b.score - a.score;
-    return a.originalIndex - b.originalIndex;
-  });
-  const seenRects = /* @__PURE__ */ new Set();
-  const ranked = [];
-  for (const s of withScore) {
-    const key = rectKey(s.node.rect);
-    if (key !== null) {
-      if (seenRects.has(key))
-        continue;
-      seenRects.add(key);
-    }
-    ranked.push(s.node);
-  }
-  return ranked;
-}
-function parseSnapshotEnvelope(result) {
-  if (result.isError)
-    return null;
-  try {
-    const envelope = JSON.parse(result.content[0].text);
-    if (!envelope.ok || !envelope.data?.nodes)
-      return null;
-    return envelope.data.nodes;
-  } catch {
-    return null;
-  }
-}
-async function fetchSnapshotNodes(allowCache = false) {
-  if (allowCache) {
-    const platform2 = getActiveSession()?.platform;
-    if (platform2 && isSnapshotCacheValid(platform2)) {
-      const cached2 = getCachedSnapshot(platform2);
-      if (cached2) {
-        return {
-          ok: true,
-          nodes: cached2.nodes,
-          provenance: {
-            source: "cache",
-            originAuthority: cached2.authorityReceipt.originAuthority
-          }
-        };
-      }
-    }
-  }
-  const first = await runNative(["snapshot", "-i"]);
-  const initialNodes = parseSnapshotEnvelope(first);
-  if (initialNodes === null)
-    return { ok: false, reason: "fetch-failed" };
-  if (initialNodes.length === 0)
-    return { ok: false, reason: "empty-capture" };
-  if (!isAgentDeviceRunnerSentinel(initialNodes)) {
-    const platform2 = getActiveSession()?.platform;
-    if (platform2)
-      cacheSnapshot(platform2, initialNodes);
-    return {
-      ok: true,
-      nodes: initialNodes,
-      provenance: { source: "fresh", originAuthority: "not-proven" }
-    };
-  }
-  const session2 = getActiveSession();
-  markSnapshotDirty(session2?.platform);
-  const recovery = await recoverFromRunnerLeak({
-    platform: session2?.platform,
-    appId: session2?.appId,
-    deviceId: session2?.deviceId,
-    sessionName: session2?.name
-  }, {
-    closeSession: async () => {
-      await stopFastRunner(session2?.deviceId);
-      await stopAndroidRunner(session2?.deviceId);
-      clearActiveSession();
-      return okResult({ closed: true });
-    },
-    openSession: ({ appId, platform: platform2, deviceId, attachOnly }) => reopenSessionForRecovery(appId, platform2, attachOnly, deviceId),
-    resnapshot: () => runNative(["snapshot", "-i"]),
-    parseNodes: parseSnapshotEnvelope
-  });
-  if (!recovery.recovered) {
-    return { ok: false, reason: "runner-leak-unrecovered", recoveryReason: recovery.reason };
-  }
-  const recoveredNodes = parseSnapshotEnvelope(recovery.result);
-  if (recoveredNodes === null)
-    return { ok: false, reason: "fetch-failed" };
-  if (recoveredNodes.length === 0)
-    return { ok: false, reason: "empty-capture" };
-  const platform = getActiveSession()?.platform;
-  if (platform)
-    cacheSnapshot(platform, recoveredNodes);
-  return {
-    ok: true,
-    nodes: recoveredNodes,
-    provenance: { source: "fresh", originAuthority: "not-proven" },
-    recoveredTier: recovery.tier
-  };
-}
-function emptyCaptureFailResult(query) {
-  return failResult(`Snapshot returned zero nodes \u2014 cannot distinguish an empty screen from a degraded capture` + (query !== void 0 ? `; not asserting "${query}" is absent` : "") + `. Confirm the screen with device_screenshot or cdp_component_tree, then retry.`, { code: "SNAPSHOT_DEGRADED", ...query !== void 0 ? { query } : {} });
-}
-function scopeSnapshotNodesForFind(nodes, platform, appId, includeSystemUi) {
-  if (platform !== "android" || includeSystemUi)
-    return nodes;
-  if (!appId)
-    return [];
-  return nodes.filter((node) => node.packageName === appId);
-}
-async function fetchFindCandidates(query, exact = false, allowCache = false, includeSystemUi = false) {
-  const snap = await fetchSnapshotNodes(allowCache);
-  if (!snap.ok)
-    return snap;
-  const session2 = getActiveSession();
-  const scopedNodes = scopeSnapshotNodesForFind(snap.nodes, session2?.platform, session2?.appId, includeSystemUi);
-  const needle = query.toLowerCase();
-  const matched = scopedNodes.filter((n) => {
-    const label = n.label ?? "";
-    const id = n.identifier ?? "";
-    if (exact)
-      return label === query || id === query;
-    return label.toLowerCase().includes(needle) || id.toLowerCase().includes(needle);
-  });
-  const ranked = rankSnapshotNodes(matched);
-  const candidates = ranked.slice(0, 10).map(candidateFromNode);
-  return {
-    ok: true,
-    candidates,
-    provenance: snap.provenance,
-    recoveredTier: snap.recoveredTier
-  };
-}
-function runnerLeakFailResult(query, recoveryReason) {
-  const queryHint = query ? ` (while resolving "${query}")` : "";
-  return failResult(`device_find/snapshot returned AgentDeviceRunner's own UI tree instead of the target app${queryHint} (B119 / GH #35 \u2014 agent-device daemon dropped appBundleId on dispatch). Auto-recovery did not restore the target.`, {
-    code: "RUNNER_LEAK",
-    recoveryReason,
-    hint: "Manually close + reopen the session with device_snapshot action=open appId=<your.bundle.id> platform=ios (full launch, not attachOnly). The recovery may have killed the JS context \u2014 re-establish CDP via cdp_connect before reading state. Upstream: Callstack/agent-device, see B119/GH#35."
-  });
-}
-async function pressCandidate(candidate, action, getClient2, includeSystemUi = false) {
-  const ref = candidate.ref.startsWith("@") ? candidate.ref : `@${candidate.ref}`;
-  if (action === "click") {
-    const tapArgs = ["press", ref, ...includeSystemUi ? ["--include-system-ui"] : []];
-    const tap = async () => surfaceKeyboardGuard(await runNative(tapArgs));
-    const first = await tap();
-    return first.isError && getClient2 ? healKeyboardOccludedTap(first, keyboardHealDeps(getClient2, tap)) : first;
-  }
-  return okResult({
-    ref: candidate.ref,
-    label: candidate.label,
-    testID: candidate.testID,
-    ...includeSystemUi ? { scope: "system-ui-explicit" } : {}
-  });
-}
-function tagFindSnapshot(result, provenance, tier) {
-  try {
-    const envelope = JSON.parse(result.content[0].text);
-    envelope.meta = {
-      ...envelope.meta,
-      snapshotProvenance: provenance,
-      ...tier ? { recovered: "agent-device-runner-leak", recoveryTier: tier } : {}
-    };
-    return {
-      ...result,
-      content: [
-        { type: "text", text: JSON.stringify(envelope) },
-        ...result.content.slice(1)
-      ]
-    };
-  } catch {
-    return result;
-  }
-}
-function createDeviceFindHandler(getClient2) {
-  return withSession(async (args) => {
-    if (args.exact === true || args.index !== void 0) {
-      const find = await fetchFindCandidates(args.text, args.exact === true, true, args.includeSystemUi === true);
-      if (!find.ok) {
-        if (find.reason === "runner-leak-unrecovered") {
-          return runnerLeakFailResult(args.text, find.recoveryReason);
-        }
-        if (find.reason === "empty-capture") {
-          return emptyCaptureFailResult(args.text);
-        }
-        return failResult(`Snapshot unavailable \u2014 cannot resolve ${args.exact ? "exact" : "index-based"} match for "${args.text}". Retry after device_snapshot action=open/snapshot.`, { code: "SNAPSHOT_UNAVAILABLE", query: args.text });
-      }
-      const { candidates, provenance, recoveredTier } = find;
-      const tagResult = (result) => tagFindSnapshot(result, provenance, recoveredTier);
-      if (candidates.length === 0) {
-        return tagResult(failResult(`No element matches "${args.text}" (exact=${args.exact === true})`, {
-          code: "NOT_FOUND",
-          query: args.text
-        }));
-      }
-      if (args.index !== void 0) {
-        if (args.index < 0 || args.index >= candidates.length) {
-          return tagResult(failResult(`index ${args.index} out of range (got ${candidates.length} candidates)`, {
-            code: "INDEX_OUT_OF_RANGE",
-            count: candidates.length,
-            candidates
-          }));
-        }
-        return tagResult(await pressCandidate(candidates[args.index], args.action, getClient2, args.includeSystemUi === true));
-      }
-      if (candidates.length === 1) {
-        return tagResult(await pressCandidate(candidates[0], args.action, getClient2, args.includeSystemUi === true));
-      }
-      return tagResult(failResult(`AMBIGUOUS_MATCH: exact "${args.text}" matched ${candidates.length} elements`, {
-        code: "AMBIGUOUS_MATCH",
-        query: args.text,
-        candidates,
-        hint: "Add index: N to pick one."
-      }));
-    }
-    const activeSession2 = getActiveSession();
-    const usesInTreeRunner = activeSession2?.platform === "ios" || activeSession2?.platform === "android" && process.env.RN_ANDROID_RUNNER !== "0";
-    if (usesInTreeRunner) {
-      const find = await fetchFindCandidates(args.text, false, true, args.includeSystemUi === true);
-      if (!find.ok) {
-        if (find.reason === "runner-leak-unrecovered") {
-          return runnerLeakFailResult(args.text, find.recoveryReason);
-        }
-        if (find.reason === "empty-capture") {
-          return emptyCaptureFailResult(args.text);
-        }
-        return failResult(`Snapshot unavailable \u2014 cannot resolve "${args.text}"`, {
-          code: "SNAPSHOT_UNAVAILABLE",
-          query: args.text
-        });
-      }
-      const { candidates, provenance, recoveredTier } = find;
-      const tagResult = (result) => tagFindSnapshot(result, provenance, recoveredTier);
-      const recoveredMeta = recoveredTier ? { recoveredTier } : {};
-      if (candidates.length === 0) {
-        return tagResult(failResult(`No element matches "${args.text}"`, {
-          code: "NOT_FOUND",
-          query: args.text,
-          ...recoveredMeta
-        }));
-      }
-      if (candidates.length === 1) {
-        return tagResult(await pressCandidate(candidates[0], args.action, getClient2, args.includeSystemUi === true));
-      }
-      return tagResult(failResult(`AMBIGUOUS_MATCH: "${args.text}" matched ${candidates.length} elements. Use device_press with one of these refs, or retry with index: N.`, {
-        code: "AMBIGUOUS_MATCH",
-        query: args.text,
-        candidates,
-        ...recoveredMeta,
-        hint: 'Pick the correct ref (prefer one with hittable=true) and call device_press(ref="...") directly, or call device_find again with index: N.'
-      }));
-    }
-    return failResult(`device_find requires an in-tree runner \u2014 iOS (rn-fast-runner) or Android with RN_ANDROID_RUNNER unset/non-zero (rn-android-runner). Active session: ${activeSession2?.platform ?? "none"}.`, {
-      code: "IN_TREE_RUNNER_REQUIRED",
-      platform: activeSession2?.platform ?? null
-    });
-  });
-}
-function isRecognizedInputType(type) {
-  if (!type)
-    return false;
-  return IOS_INPUT_TYPES.has(type) || ANDROID_INPUT_TYPE_RE.test(type);
-}
-function isSecureInputNode(node) {
-  return node.type === "SecureTextField" || node.secure === true;
-}
-function cleanNodeRef(node) {
-  return node.ref.startsWith("@") ? node.ref.slice(1) : node.ref;
-}
-function inputTestId(identifier) {
-  return identifier && identifier.trim().length > 0 ? identifier : null;
-}
-function signatureForNode(nodes, node) {
-  return {
-    type: node.type ?? "",
-    label: node.label,
-    identifier: node.identifier,
-    rect: node.rect,
-    flatIndex: nodes.indexOf(node),
-    nodeCount: nodes.length
-  };
-}
-function rectsMatch(a, b, tolerance = 8) {
-  return Math.abs(a.x + a.width / 2 - (b.x + b.width / 2)) <= tolerance && Math.abs(a.y + a.height / 2 - (b.y + b.height / 2)) <= tolerance && Math.abs(a.width - b.width) <= tolerance && Math.abs(a.height - b.height) <= tolerance;
-}
-function bindExactFillTarget(nodes, rawRef, priorSignature) {
-  const clean = rawRef.replace(/^@/, "");
-  const positional = /^e\d+$/.test(clean);
-  let node;
-  if (positional) {
-    const hasRobustIdentity = priorSignature !== null && priorSignature !== void 0 && ((priorSignature.identifier?.trim().length ?? 0) > 0 || (priorSignature.label?.trim().length ?? 0) > 0 || priorSignature.rect !== void 0);
-    if (!hasRobustIdentity) {
-      return {
-        ok: false,
-        detail: `ref @${clean} has no robust pre-refresh identity for unique rebinding`
-      };
-    }
-    const signature = priorSignature;
-    const signatureIdentifier = inputTestId(signature.identifier);
-    const matches = nodes.filter((n) => {
-      if ((n.type ?? "") !== signature.type)
-        return false;
-      if (signatureIdentifier !== null)
-        return n.identifier === signatureIdentifier;
-      if (signature.rect !== void 0 && n.rect !== void 0) {
-        return rectsMatch(n.rect, signature.rect);
-      }
-      return n.label === signature.label && inputTestId(n.identifier) === null;
-    });
-    if (matches.length !== 1) {
-      return {
-        ok: false,
-        detail: `ref @${clean} identity ${matches.length > 1 ? "matches multiple elements" : "is absent"} in the current snapshot`
-      };
-    }
-    node = matches[0];
-  } else {
-    const matches = nodes.filter((n) => n.identifier === clean);
-    if (matches.length === 0) {
-      return { ok: false, detail: `no element with testID "${clean}" in the current snapshot` };
-    }
-    if (matches.length > 1) {
-      return {
-        ok: false,
-        detail: `testID "${clean}" matches ${matches.length} elements \u2014 duplicate identifiers cannot bind an exact input`
-      };
-    }
-    node = matches[0];
-  }
-  if (isRecognizedInputType(node.type)) {
-    return {
-      ok: true,
-      binding: {
-        inputRef: `@${cleanNodeRef(node)}`,
-        inputTestId: inputTestId(node.identifier),
-        inputSignature: signatureForNode(nodes, node),
-        focusRef: `@${cleanNodeRef(node)}`,
-        wrapper: false,
-        secure: isSecureInputNode(node)
-      }
-    };
-  }
-  const id = node.identifier;
-  if (id?.endsWith(PRESSABLE_SUFFIX)) {
-    const base = id.slice(0, -PRESSABLE_SUFFIX.length);
-    if (base) {
-      const inputs = nodes.filter((n) => n.identifier === base && isRecognizedInputType(n.type));
-      if (inputs.length === 1) {
-        return {
-          ok: true,
-          binding: {
-            inputRef: `@${cleanNodeRef(inputs[0])}`,
-            inputTestId: base,
-            inputSignature: signatureForNode(nodes, inputs[0]),
-            focusRef: `@${cleanNodeRef(node)}`,
-            wrapper: true,
-            secure: isSecureInputNode(inputs[0])
-          }
-        };
-      }
-      if (inputs.length > 1) {
-        return {
-          ok: false,
-          detail: `wrapper "${id}" maps to ${inputs.length} inputs with testID "${base}" \u2014 ambiguous`
-        };
-      }
-      return {
-        ok: false,
-        detail: `wrapper "${id}" has no recognized input with testID "${base}" in the current snapshot`
-      };
-    }
-  }
-  return {
-    ok: false,
-    detail: `element @${cleanNodeRef(node)} (${node.type ?? "unknown type"}) is not a recognized text input \u2014 pass the inner input's ref or testID`
-  };
-}
-function settleOpts(args) {
-  return args.settleTimeoutMs !== void 0 ? { settle: { timeoutMs: args.settleTimeoutMs } } : {};
-}
-function interactOpts(args) {
-  return {
-    ...settleOpts(args),
-    ...args.retryIfNoChange !== void 0 ? { retryIfNoChange: args.retryIfNoChange } : {}
-  };
-}
-function keyboardHealDeps(getClient2, retryTap) {
-  const client2 = cdpClientOrNull(getClient2);
-  if (!client2)
-    return null;
-  return {
-    dismissViaJs: async () => {
-      const r = await client2.evaluate("__RN_AGENT.dismissKeyboard()");
-      if (typeof r.value !== "string")
-        return false;
-      try {
-        const parsed = JSON.parse(r.value);
-        return parsed?.dismissed === true;
-      } catch {
-        return false;
-      }
-    },
-    refreshSnapshot: () => runNative(["snapshot"]),
-    retryTap
-  };
-}
-function createDevicePressHandler(getClient2) {
-  return withSession(async (args) => {
-    const hasRef = typeof args.ref === "string" && args.ref.length > 0;
-    const hasCoordinates = args.x !== void 0 && args.y !== void 0;
-    if (hasRef === hasCoordinates) {
-      return failResult("Provide exactly one press target: ref, or both x and y coordinates", "INVALID_ARGUMENT");
-    }
-    const target = hasRef ? args.ref.startsWith("@") ? args.ref : `@${args.ref}` : void 0;
-    const cliArgs = hasRef ? ["press", target] : ["press", String(args.x), String(args.y)];
-    if (args.doubleTap)
-      cliArgs.push("--double-tap");
-    if (args.count && args.count > 1)
-      cliArgs.push("--count", String(args.count));
-    if (args.holdMs && args.holdMs > 0)
-      cliArgs.push("--hold-ms", String(args.holdMs));
-    const tap = async () => surfaceKeyboardGuard(await runNative(cliArgs, interactOpts(args)));
-    let result = await tap();
-    if (result.isError) {
-      result = await healKeyboardOccludedTap(result, keyboardHealDeps(getClient2, tap));
-    }
-    if (!result.isError && args.waitForFocusMs && args.waitForFocusMs > 0) {
-      await new Promise((r) => setTimeout(r, args.waitForFocusMs));
-    }
-    return result;
-  });
-}
-function createDeviceLongPressHandler(getClient2) {
-  return withSession(async (args) => {
-    let cliArgs;
-    if (args.ref) {
-      const ref = args.ref.startsWith("@") ? args.ref : `@${args.ref}`;
-      cliArgs = ["press", ref, "--hold-ms", String(args.durationMs ?? 1e3)];
-    } else if (args.x != null && args.y != null) {
-      cliArgs = ["longpress", String(args.x), String(args.y)];
-      if (args.durationMs)
-        cliArgs.push(String(args.durationMs));
-    } else {
-      return failResult("Provide either ref or x+y coordinates");
-    }
-    const tap = async () => surfaceKeyboardGuard(await runNative(cliArgs, interactOpts(args)));
-    const result = await tap();
-    if (result.isError) {
-      return healKeyboardOccludedTap(result, keyboardHealDeps(getClient2, tap));
-    }
-    return result;
-  });
-}
-function isAndroidSession() {
-  const session2 = getActiveSession();
-  if (session2?.platform === "android")
-    return true;
-  if (session2?.platform)
-    return false;
-  return !!process.env.ANDROID_SERIAL;
-}
-function isSetTextRejectedError(result) {
-  if (!result.isError)
-    return false;
-  const text = result.content?.[0]?.text ?? "";
-  try {
-    const envelope = JSON.parse(text);
-    return envelope.code === "SET_TEXT_REJECTED";
-  } catch {
-    return false;
-  }
-}
-function extractTypingMeta(result) {
-  try {
-    const envelope = JSON.parse(result.content[0].text);
-    const data = envelope.data;
-    if (!data || data.typingBurst === void 0 && data.keyboardWaitMs === void 0)
-      return null;
-    return {
-      ...data.typingBurst !== void 0 ? { burst: data.typingBurst } : {},
-      ...data.keyboardWaitMs !== void 0 ? { keyboardWaitMs: data.keyboardWaitMs } : {}
-    };
-  } catch {
-    return null;
-  }
-}
-function sleep4(ms) {
-  return new Promise((r) => setTimeout(r, ms));
-}
-function extractSettleMeta(result) {
-  try {
-    const envelope = JSON.parse(result.content[0].text);
-    const out = {};
-    if (envelope.meta?.settle !== void 0)
-      out.settle = envelope.meta.settle;
-    if (typeof envelope.meta?.timings_ms?.settle === "number") {
-      out.settleMs = envelope.meta.timings_ms.settle;
-    }
-    return out;
-  } catch {
-    return {};
-  }
-}
-function cdpClientOrNull(getClient2) {
-  try {
-    const client2 = getClient2();
-    return client2?.isConnected ? client2 : null;
-  } catch {
-    return null;
-  }
-}
-function extractMutationDisposition(result) {
-  try {
-    const envelope = JSON.parse(result.content[0]?.text ?? "{}");
-    const m = envelope.meta?.mutation;
-    if (m === "none" || m === "observed" || m === "possible")
-      return m;
-  } catch {
-  }
-  return "possible";
-}
-function extractErrorText(result) {
-  try {
-    const envelope = JSON.parse(result.content[0]?.text ?? "{}");
-    return typeof envelope.error === "string" ? envelope.error : "unknown runner error";
-  } catch {
-    return "unknown runner error";
-  }
-}
-function extractErrorCode(result) {
-  try {
-    const envelope = JSON.parse(result.content[0]?.text ?? "{}");
-    return typeof envelope.code === "string" ? envelope.code : void 0;
-  } catch {
-    return void 0;
-  }
-}
-async function runNativeVerifyInput(binding, text, operationToken) {
-  const result = await runNative(["verify-input", binding.inputRef, text], {
-    settle: { enabled: false },
-    exactTarget: {
-      inputRef: binding.inputRef,
-      secure: binding.secure,
-      ...operationToken ? { operationToken } : {}
-    }
-  });
-  if (result.isError)
-    return { verdict: "unavailable", stable: false };
-  try {
-    const envelope = JSON.parse(result.content[0].text);
-    const v = envelope.data?.verifyVerdict;
-    if (typeof v === "string" && NATIVE_VERIFY_VERDICTS.has(v)) {
-      return { verdict: v, stable: envelope.data?.verifyStable === true };
-    }
-  } catch {
-  }
-  return { verdict: "unavailable", stable: false };
-}
-async function rebindExactFillTarget(binding) {
-  const snap = await fetchSnapshotNodes();
-  if (!snap.ok)
-    return null;
-  const rebound = bindExactFillTarget(snap.nodes, binding.inputTestId ?? binding.inputRef, binding.inputSignature);
-  return rebound.ok ? rebound.binding : null;
-}
-async function finalVerification(client2, binding, jsTestId, text, operationToken) {
-  const fiberId = binding.inputTestId ?? jsTestId;
-  let fiber = "unavailable";
-  if (client2 && fiberId) {
-    fiber = await finalFiberVerify({ evaluate: (e) => client2.evaluate(e) }, fiberId, text);
-  }
-  const nativeBinding = operationToken ? binding : await rebindExactFillTarget(binding);
-  if (!nativeBinding)
-    return combineVerificationOracles(fiber, "target-lost", false);
-  const native = await runNativeVerifyInput(nativeBinding, text, operationToken);
-  return combineVerificationOracles(fiber, native.verdict, native.stable);
-}
-function verifiedFillResult(method, textLength, meta) {
-  return okResult({ filled: true, method, length: textLength }, { meta: { ...meta, verify: "exact" } });
-}
-function fillFailure(code, message, opts) {
-  return failResult(message, code, {
-    mutation: opts.mutation,
-    pathsTried: opts.pathsTried,
-    ...opts.verification ? {
-      verification: {
-        fiber: opts.verification.fiber,
-        native: opts.verification.native,
-        nativeStable: opts.verification.nativeStable
-      }
-    } : {},
-    hint: opts.hint ?? (opts.mutation === "none" ? "No text was entered. Refresh the snapshot (device_snapshot action=snapshot) and rebind the input before retrying." : "The field may have been mutated. Read the field state (device_snapshot or the fiber) before any manual retry \u2014 do not blindly re-run device_fill.")
-  });
-}
-function attachFillFailureDisposition(result, mutation, pathsTried) {
-  try {
-    const envelope = JSON.parse(result.content[0]?.text ?? "{}");
-    const error2 = typeof envelope.error === "string" ? envelope.error : "Text entry was refused.";
-    const meta = {
-      ...envelope.meta,
-      mutation,
-      pathsTried,
-      hint: mutation === "none" ? "No text was entered. Refresh the snapshot (device_snapshot action=snapshot) and rebind the input before retrying." : "The field may have been mutated. Read the field state (device_snapshot or the fiber) before any manual retry \u2014 do not blindly re-run device_fill."
-    };
-    return typeof envelope.code === "string" ? failResult(error2, envelope.code, meta) : failResult(error2, meta);
-  } catch {
-    return fillFailure("TEXT_ENTRY_UNVERIFIED", "Text entry was refused.", {
-      mutation,
-      pathsTried
-    });
-  }
-}
-async function clearControlledValue(client2, testID) {
-  try {
-    await client2.evaluate("__RN_AGENT.interact(" + JSON.stringify({ action: "typeText", testID, text: "" }) + ")");
-  } catch {
-    return false;
-  }
-  const settled = await settleRead({ evaluate: (e) => client2.evaluate(e) }, testID, "", null);
-  return settled.value === "";
-}
-function exactTypeReadback(client2, testID) {
-  if (!client2 || !testID)
-    return void 0;
-  return async (expected) => {
-    const result = await client2.evaluate(`__RN_AGENT.readInputValue(${JSON.stringify(testID)})`);
-    if (typeof result.value !== "string")
-      return { matches: false };
-    try {
-      const parsed = JSON.parse(result.value);
-      const actual = typeof parsed.value === "string" ? parsed.value : null;
-      return { matches: actual === expected, actual };
-    } catch {
-      return { matches: false };
-    }
-  };
-}
-async function maestroFillAttempt(targetId, text, platform, authorityArgs) {
-  const escapedRef = yamlEscape(targetId.replace(/^@/, ""));
-  const escapedText = yamlEscape(text);
-  const yaml2 = `- tapOn:
-    id: "${escapedRef}"
-- eraseText
-- inputText: "${escapedText}"`;
-  const result = await runMaestroInline(yaml2, {
-    platform,
-    slug: "fill-fallback",
-    timeoutMs: 12e4,
-    authorityArgs
-  });
-  if (result.passed)
-    return { attempted: true };
-  const refusal = maestroRefusalResult(result, "Maestro fill fallback was refused.", {
-    tried: ["js", "native", "maestro"]
-  });
-  if (refusal)
-    return { attempted: false, refusal };
-  return { attempted: false };
-}
-async function performExactFill(args, client2, tiers, deps = {}) {
-  const platform = isAndroidSession() ? "android" : "ios";
-  const pathsTried = [];
-  let mutationSeen = "none";
-  const cleanRefForSignature = args.ref.replace(/^@/, "");
-  const cachedSignature = /^e\d+$/.test(cleanRefForSignature) ? getCachedSignature(cleanRefForSignature) : null;
-  const cachedRect = cachedSignature ? lookupRef(cleanRefForSignature) : null;
-  const priorSignature = cachedSignature && cachedRect ? { ...cachedSignature, rect: cachedRect } : cachedSignature;
-  const snap = await fetchSnapshotNodes(true);
-  if (!snap.ok) {
-    if (snap.reason === "runner-leak-unrecovered") {
-      return attachFillFailureDisposition(runnerLeakFailResult(args.ref, snap.recoveryReason), "none", pathsTried);
-    }
-    return fillFailure("NO_TEXT_INPUT_TARGET", `device_fill could not snapshot the screen to bind "${args.ref}" (${snap.reason}); no text was entered.`, { mutation: "none", pathsTried });
-  }
-  const bind = bindExactFillTarget(snap.nodes, args.ref, priorSignature);
-  if (!bind.ok) {
-    return fillFailure("NO_TEXT_INPUT_TARGET", `device_fill could not bind an exact input: ${bind.detail}. No text was entered.`, { mutation: "none", pathsTried });
-  }
-  const binding = bind.binding;
-  if (args.testID && args.testID !== binding.inputTestId) {
-    return fillFailure("NO_TEXT_INPUT_TARGET", `device_fill could not prove that testID "${args.testID}" identifies the bound input. No text was entered.`, { mutation: "none", pathsTried });
-  }
-  const fiberId = binding.inputTestId;
-  const evalSeam = client2 ? { evaluate: (e) => client2.evaluate(e) } : null;
-  if (tiers.js && client2 && evalSeam && fiberId) {
-    const probe = await probeInputState(evalSeam, fiberId);
-    if (probe.readable && probe.controlled) {
-      pathsTried.push("js");
-      const tJs = Date.now();
-      const js = await attemptJsFill(evalSeam, fiberId, args.text);
-      if (!js.handled && js.dispatchUncertain) {
-        return fillFailure("TEXT_ENTRY_UNVERIFIED", "The JS fill dispatch failed after it may have reached the app; not typing again.", { mutation: "possible", pathsTried });
-      }
-      if (js.handled) {
-        mutationSeen = "observed";
-        if (js.outcome === "exact") {
-          const verification = await finalVerification(client2, binding, fiberId, args.text);
-          if (verification.verified) {
-            return verifiedFillResult("js-onChangeText", args.text.length, {
-              textEntryPath: "js",
-              verifiedOracle: verification.oracle,
-              handler: js.handler,
-              timings_ms: { jsType: Date.now() - tJs }
-            });
-          }
-          if (!verification.observedMismatch) {
-            return fillFailure("TEXT_ENTRY_UNVERIFIED", "The controlled fill could not be verified against the bound native input; not retrying.", { mutation: "possible", pathsTried, verification });
-          }
-        }
-        if (js.outcome === "unreadable") {
-          return fillFailure("TEXT_ENTRY_UNVERIFIED", "The onChangeText handler fired but the resulting value is unreadable \u2014 app state may have changed; not retrying.", { mutation: "possible", pathsTried });
-        }
-        const cleared = await clearControlledValue(client2, fiberId);
-        if (!cleared) {
-          return fillFailure("TEXT_ENTRY_UNVERIFIED", "device_fill could not verify the JS fill and could not prove a clean clear; not retrying.", { mutation: "possible", pathsTried });
-        }
-      }
-    }
-  }
-  pathsTried.push("native");
-  if (tiers.abortSignal?.aborted) {
-    return fillFailure("TEXT_ENTRY_UNVERIFIED", "device_fill was cancelled before native typing.", {
-      mutation: mutationSeen === "none" ? "none" : "possible",
-      pathsTried
-    });
-  }
-  const focusCenter = isRefMapFresh() ? refCenter(binding.focusRef) : null;
-  const exactTarget = {
-    inputRef: binding.inputRef,
-    ...focusCenter ? { focusX: focusCenter.x, focusY: focusCenter.y } : {},
-    ...args.waitForKeyboardMs !== void 0 ? { focusWaitMs: args.waitForKeyboardMs } : {}
-  };
-  const tNative = Date.now();
-  let lastVerification = null;
-  for (let attempt = 0; attempt <= MAX_NATIVE_RETYPE; attempt++) {
-    const operationToken = randomUUID6();
-    const clearFirst = attempt > 0 || args.text.length === 0;
-    const primary = await runNative(["fill", binding.inputRef, args.text, ...clearFirst ? ["--clear-first"] : []], {
-      ...attempt === 0 ? settleOpts(args) : { settle: { enabled: false } },
-      exactTarget: { ...exactTarget, operationToken },
-      verifyTypeReadback: exactTypeReadback(client2, fiberId)
-    });
-    if (primary.isError) {
-      const mutation = extractMutationDisposition(primary);
-      if (isSetTextRejectedError(primary)) {
-        if (mutation === "possible") {
-          return fillFailure("TEXT_ENTRY_UNVERIFIED", `device_fill's native attempt may have mutated the field before rejecting text entry: ${extractErrorText(primary)}`, { mutation: "possible", pathsTried });
-        }
-        if (mutation === "observed") {
-          mutationSeen = "observed";
-          const verification3 = await finalVerification(client2, binding, fiberId, args.text, operationToken);
-          lastVerification = verification3;
-          if (verification3.verified) {
-            return verifiedFillResult("native", args.text.length, {
-              textEntryPath: attempt === 0 ? "native" : "native-retype",
-              verifiedOracle: verification3.oracle,
-              recovered: "post-error-exact-readback",
-              retypes: attempt,
-              timings_ms: { nativeType: Date.now() - tNative }
-            });
-          }
-          if (!verification3.observedMismatch) {
-            return fillFailure("TEXT_ENTRY_UNVERIFIED", "device_fill observed a rejected native mutation but could not prove a stable mismatch; not retrying.", { mutation: "possible", pathsTried, verification: verification3 });
-          }
-        }
-        break;
-      }
-      if (mutation === "none") {
-        if (mutationSeen !== "none") {
-          return fillFailure("TEXT_ENTRY_UNVERIFIED", `device_fill's corrective native attempt was refused after an earlier mutation: ${extractErrorText(primary)}`, { mutation: "possible", pathsTried });
-        }
-        const code = extractErrorCode(primary);
-        return fillFailure(code === "FOCUS_TARGET_OCCLUDED" ? "FOCUS_TARGET_OCCLUDED" : "NO_TEXT_INPUT_TARGET", `device_fill's native attempt was refused before mutation: ${extractErrorText(primary)}`, { mutation: "none", pathsTried });
-      }
-      const verification2 = await finalVerification(client2, binding, fiberId, args.text, operationToken);
-      if (verification2.verified) {
-        return verifiedFillResult("native", args.text.length, {
-          textEntryPath: attempt === 0 ? "native" : "native-retype",
-          verifiedOracle: verification2.oracle,
-          recovered: "post-error-exact-readback",
-          retypes: attempt,
-          timings_ms: { nativeType: Date.now() - tNative }
-        });
-      }
-      return fillFailure("TEXT_ENTRY_UNVERIFIED", `device_fill's native attempt failed and the field could not be verified: ${extractErrorText(primary)}`, {
-        mutation: mutationSeen === "none" ? mutation : "possible",
-        pathsTried,
-        verification: verification2
-      });
-    }
-    mutationSeen = "observed";
-    const primarySettle = extractSettleMeta(primary);
-    const primaryTyping = extractTypingMeta(primary);
-    const verification = await finalVerification(client2, binding, fiberId, args.text, operationToken);
-    lastVerification = verification;
-    if (verification.verified) {
-      return verifiedFillResult("native", args.text.length, {
-        textEntryPath: attempt === 0 ? "native" : "native-retype",
-        verifiedOracle: verification.oracle,
-        retypes: attempt,
-        ...primaryTyping ? { typing: primaryTyping } : {},
-        ...primarySettle.settle !== void 0 ? { settle: primarySettle.settle } : {},
-        timings_ms: {
-          nativeType: Date.now() - tNative,
-          ...primarySettle.settleMs !== void 0 ? { settle: primarySettle.settleMs } : {}
-        }
-      });
-    }
-    const decision = decideNativeRetype(verification, attempt, MAX_NATIVE_RETYPE);
-    if (decision.action === "escalate") {
-      if (!verification.observedMismatch) {
-        return fillFailure("TEXT_ENTRY_UNVERIFIED", "device_fill typed but the final read-back is inconclusive; not retrying.", { mutation: "possible", pathsTried, verification });
-      }
-      break;
-    }
-    if (tiers.abortSignal?.aborted) {
-      return fillFailure("TEXT_ENTRY_UNVERIFIED", "device_fill was cancelled after a native attempt; no corrective retype was dispatched.", { mutation: "possible", pathsTried, verification });
-    }
-    await sleep4(decision.delayMs);
-    if (tiers.abortSignal?.aborted) {
-      return fillFailure("TEXT_ENTRY_UNVERIFIED", "device_fill was cancelled before a corrective retype was dispatched.", { mutation: "possible", pathsTried, verification });
-    }
-  }
-  if (!tiers.maestro) {
-    return fillFailure("TEXT_ENTRY_UNVERIFIED", "device_fill could not verify the fill and this caller does not use the Maestro tier.", {
-      mutation: mutationSeen,
-      pathsTried,
-      verification: lastVerification ?? void 0
-    });
-  }
-  pathsTried.push("maestro");
-  if (tiers.abortSignal?.aborted) {
-    return fillFailure("TEXT_ENTRY_UNVERIFIED", "device_fill was cancelled before the Maestro correction was dispatched.", { mutation: "possible", pathsTried, verification: lastVerification ?? void 0 });
-  }
-  const maestroId = binding.inputTestId;
-  if (!maestroId) {
-    return fillFailure("TEXT_ENTRY_UNVERIFIED", "device_fill could not verify the fill and the input has no testID for the Maestro tier.", { mutation: mutationSeen, pathsTried, verification: lastVerification ?? void 0 });
-  }
-  const maestro = await (deps.maestroFillAttempt ?? maestroFillAttempt)(maestroId, args.text, platform, args);
-  if (!maestro.attempted) {
-    if (maestro.refusal)
-      return attachFillFailureDisposition(maestro.refusal, "possible", pathsTried);
-    return fillFailure("TEXT_ENTRY_UNVERIFIED", "device_fill fell through all tiers; the Maestro attempt did not run cleanly.", { mutation: "possible", pathsTried, verification: lastVerification ?? void 0 });
-  }
-  const maestroVerification = await finalVerification(client2, binding, fiberId, args.text);
-  if (maestroVerification.verified) {
-    return verifiedFillResult("maestro", args.text.length, {
-      textEntryPath: "maestro",
-      verifiedOracle: maestroVerification.oracle,
-      timings_ms: { nativeType: Date.now() - tNative }
-    });
-  }
-  return fillFailure("TEXT_ENTRY_UNVERIFIED", "Text entry could not be verified after native and Maestro attempts.", { mutation: "possible", pathsTried, verification: maestroVerification });
-}
-function createDeviceFillHandler(getClient2) {
-  return withSession(async (args) => performExactFill(args, cdpClientOrNull(getClient2), { js: true, maestro: true }));
-}
-function computeSwipeFromDirection(direction, screen) {
-  const cx = Math.round(screen.width / 2);
-  const cy = Math.round(screen.height / 2);
-  const dy = Math.round(screen.height * SWIPE_FRACTION);
-  const dx = Math.round(screen.width * SWIPE_FRACTION);
-  switch (direction) {
-    // "swipe down" means finger moves from top to bottom (pull-to-refresh gesture)
-    case "down":
-      return { x1: cx, y1: cy - dy, x2: cx, y2: cy + dy };
-    // "swipe up" means finger moves from bottom to top
-    case "up":
-      return { x1: cx, y1: cy + dy, x2: cx, y2: cy - dy };
-    case "left":
-      return { x1: cx + dx, y1: cy, x2: cx - dx, y2: cy };
-    case "right":
-      return { x1: cx - dx, y1: cy, x2: cx + dx, y2: cy };
-  }
-}
-function buildDirectionalSwipeCliArgs(direction, durationMs) {
-  const screen = getCachedScreenRect() ?? DEFAULT_SCREEN;
-  const coords = computeSwipeFromDirection(direction, screen);
-  const duration3 = durationMs ?? DEFAULT_SWIPE_DURATION_MS;
-  return [
-    "swipe",
-    String(coords.x1),
-    String(coords.y1),
-    String(coords.x2),
-    String(coords.y2),
-    String(duration3)
-  ];
-}
-function computeScrollFromDirection(direction, amount, screen) {
-  const cx = Math.round(screen.width / 2);
-  const cy = Math.round(screen.height / 2);
-  const dy = Math.round(screen.height * SWIPE_FRACTION * amount);
-  const dx = Math.round(screen.width * SWIPE_FRACTION * amount);
-  switch (direction) {
-    case "down":
-      return { x1: cx, y1: cy + Math.round(dy / 2), x2: cx, y2: cy - Math.round(dy / 2) };
-    case "up":
-      return { x1: cx, y1: cy - Math.round(dy / 2), x2: cx, y2: cy + Math.round(dy / 2) };
-    case "left":
-      return { x1: cx + Math.round(dx / 2), y1: cy, x2: cx - Math.round(dx / 2), y2: cy };
-    case "right":
-      return { x1: cx - Math.round(dx / 2), y1: cy, x2: cx + Math.round(dx / 2), y2: cy };
-  }
-}
-function buildDirectionalScrollCliArgs(direction, amount, durationMs) {
-  const screen = getCachedScreenRect() ?? DEFAULT_SCREEN;
-  const clamped = Math.min(Math.max(amount ?? 0.5, 0), 1);
-  const coords = computeScrollFromDirection(direction, clamped, screen);
-  const duration3 = durationMs ?? DEFAULT_SWIPE_DURATION_MS;
-  return [
-    "scroll",
-    String(coords.x1),
-    String(coords.y1),
-    String(coords.x2),
-    String(coords.y2),
-    String(duration3)
-  ];
-}
-function exactModeRejectionMessage(reason) {
-  if (reason === "count-pattern-incompatible") {
-    return "exact: true is incompatible with count/pattern (those route through agent-device daemon which enforces safe-normalized timing). Drop count/pattern or drop exact.";
-  }
-  return "exact: true requires fast-runner (iOS only, session must be open). Fast-runner unavailable \u2014 open a device session via device_snapshot action=open, then retry.";
-}
-function createDeviceSwipeHandler() {
-  return withSession(async (args) => {
-    adoptPersistedFastRunnerState(getActiveSession()?.deviceId);
-    const canUseFastRunner = isFastRunnerAvailable() && !args.count && !args.pattern;
-    if (args.exact === true) {
-      if (args.count || args.pattern) {
-        return failResult(exactModeRejectionMessage("count-pattern-incompatible"), {
-          code: "EXACT_INCOMPATIBLE",
-          hint: "count and pattern only work via agent-device daemon, which enforces safe-normalized timing. Drop one to proceed."
-        });
-      }
-      if (!isFastRunnerAvailable()) {
-        return failResult(exactModeRejectionMessage("fast-runner-unavailable"), {
-          code: "EXACT_REQUIRES_FAST_RUNNER",
-          hint: "fast-runner is the only path that respects user-supplied durationMs verbatim. Open a device session first."
-        });
-      }
-    }
-    if (args.x1 != null && args.y1 != null && args.x2 != null && args.y2 != null) {
-      if (canUseFastRunner) {
-        try {
-          const resp = await fastSwipe(args.x1, args.y1, args.x2, args.y2, args.durationMs, getActiveSession()?.appId ?? resolveBundleId("ios") ?? void 0);
-          if (resp.ok) {
-            return okResult({
-              x1: args.x1,
-              y1: args.y1,
-              x2: args.x2,
-              y2: args.y2,
-              durationMs: args.durationMs,
-              method: "fast-runner"
-            });
-          }
-          if (args.exact === true) {
-            return failResult("fast-runner swipe call failed and exact: true forbids daemon fallback", { code: "EXACT_FAST_RUNNER_FAILED" });
-          }
-        } catch (err) {
-          if (args.exact === true) {
-            return failResult(`fast-runner swipe call threw and exact: true forbids daemon fallback: ${err instanceof Error ? err.message : String(err)}`, { code: "EXACT_FAST_RUNNER_FAILED" });
-          }
-        }
-      }
-      const cliArgs = ["swipe", String(args.x1), String(args.y1), String(args.x2), String(args.y2)];
-      if (args.durationMs)
-        cliArgs.push(String(args.durationMs));
-      if (args.count && args.count > 1)
-        cliArgs.push("--count", String(args.count));
-      if (args.pattern)
-        cliArgs.push("--pattern", args.pattern);
-      return runNative(cliArgs);
-    }
-    if (args.direction) {
-      const screen = getCachedScreenRect() ?? DEFAULT_SCREEN;
-      const coords = computeSwipeFromDirection(args.direction, screen);
-      const duration3 = args.durationMs ?? DEFAULT_SWIPE_DURATION_MS;
-      if (canUseFastRunner) {
-        try {
-          const resp = await fastSwipe(coords.x1, coords.y1, coords.x2, coords.y2, duration3, getActiveSession()?.appId ?? resolveBundleId("ios") ?? void 0);
-          if (resp.ok) {
-            return okResult({
-              direction: args.direction,
-              durationMs: duration3,
-              method: "fast-runner",
-              ...coords
-            });
-          }
-          if (args.exact === true) {
-            return failResult("fast-runner swipe call failed and exact: true forbids daemon fallback", { code: "EXACT_FAST_RUNNER_FAILED" });
-          }
-        } catch (err) {
-          if (args.exact === true) {
-            return failResult(`fast-runner swipe call threw and exact: true forbids daemon fallback: ${err instanceof Error ? err.message : String(err)}`, { code: "EXACT_FAST_RUNNER_FAILED" });
-          }
-        }
-      }
-      const cliArgs = [
-        "swipe",
-        String(coords.x1),
-        String(coords.y1),
-        String(coords.x2),
-        String(coords.y2),
-        String(duration3)
-      ];
-      if (args.count && args.count > 1)
-        cliArgs.push("--count", String(args.count));
-      if (args.pattern)
-        cliArgs.push("--pattern", args.pattern);
-      return runNative(cliArgs);
-    }
-    return failResult("Provide either direction or x1,y1,x2,y2 coordinates");
-  });
-}
-function createDeviceScrollHandler() {
-  return withSession(async (args) => {
-    const screen = getCachedScreenRect() ?? DEFAULT_SCREEN;
-    const amount = Math.min(Math.max(args.amount ?? 0.5, 0), 1);
-    const { x1, y1, x2, y2 } = computeScrollFromDirection(args.direction, amount, screen);
-    adoptPersistedFastRunnerState(getActiveSession()?.deviceId);
-    if (isFastRunnerAvailable()) {
-      try {
-        const resp = await fastSwipe(x1, y1, x2, y2, DEFAULT_SWIPE_DURATION_MS, getActiveSession()?.appId ?? resolveBundleId("ios") ?? void 0);
-        if (resp.ok) {
-          return okResult({
-            direction: args.direction,
-            amount: args.amount ?? 0.5,
-            method: "fast-runner",
-            x1,
-            y1,
-            x2,
-            y2
-          });
-        }
-      } catch {
-      }
-    }
-    return runNative(buildDirectionalScrollCliArgs(args.direction, args.amount));
-  });
-}
-function createDeviceScrollIntoViewHandler() {
-  return withSession(async (args) => {
-    if (!args.ref && !args.text) {
-      return failResult("Provide either text or ref to scroll into view");
-    }
-    const session2 = getActiveSession();
-    const usesInTreeRunner = session2?.platform === "ios" || session2?.platform === "android" && process.env.RN_ANDROID_RUNNER !== "0";
-    if (usesInTreeRunner) {
-      return scrollIntoViewWithRunner(args);
-    }
-    return failResult(`device_scrollintoview requires an in-tree runner \u2014 iOS (rn-fast-runner) or Android with RN_ANDROID_RUNNER unset/non-zero (rn-android-runner). Active session: ${session2?.platform ?? "none"}.`, { code: "IN_TREE_RUNNER_REQUIRED", platform: session2?.platform ?? null });
-  });
-}
-async function scrollIntoViewWithRunner(args) {
-  const MAX_ITERATIONS = 12;
-  const timer = createStepTimer();
-  const screen = getCachedScreenRect() ?? DEFAULT_SCREEN;
-  const screenRect2 = { x: 0, y: 0, width: screen.width, height: screen.height };
-  for (let i = 0; i < MAX_ITERATIONS; i++) {
-    const snapRes = await runNative(["snapshot", "-i"]);
-    timer.mark("snapshot");
-    if (snapRes.isError) {
-      return failResult(`scrollintoview: snapshot failed at iteration ${i}: ${snapRes.content?.[0]?.text ?? "unknown"}`, { code: "SNAPSHOT_UNAVAILABLE" });
-    }
-    let nodes = [];
-    try {
-      const envelope = JSON.parse(snapRes.content?.[0]?.text ?? "{}");
-      nodes = envelope.data?.nodes ?? [];
-    } catch {
-      return failResult(`scrollintoview: failed to parse snapshot envelope at iteration ${i}`);
-    }
-    const target = args.ref ? nodes.find((n) => n.ref === (args.ref.startsWith("@") ? args.ref : `@${args.ref}`)) ?? null : findInLatestSnapshot(nodes, args.text);
-    if (!target) {
-      if (i === 0) {
-        const fallbackDir = decideScrollDirection({ x: 0, y: screen.height * 2, width: 1, height: 1 }, screenRect2);
-        const coords2 = computeSwipeFromDirection(fallbackDir ?? "down", screen);
-        await runNative([
-          "swipe",
-          String(coords2.x1),
-          String(coords2.y1),
-          String(coords2.x2),
-          String(coords2.y2),
-          String(DEFAULT_SWIPE_DURATION_MS)
-        ]);
-        continue;
-      }
-      return failResult(`scrollintoview: element "${args.ref ?? args.text}" not found after ${i} swipe iteration(s)`, { code: "NOT_FOUND", iterations: i });
-    }
-    if (!target.rect) {
-      return failResult(`scrollintoview: target has no rect \u2014 cannot decide direction`);
-    }
-    const direction = decideScrollDirection(target.rect, screenRect2);
-    if (direction === null) {
-      return okResult({
-        ref: target.ref,
-        rect: target.rect,
-        iterations: i,
-        method: "runner-orchestrator"
-      }, { meta: { timings_ms: timer.timings() } });
-    }
-    const coords = computeSwipeFromDirection(direction, screen);
-    const swipeResp = await runNative([
-      "swipe",
-      String(coords.x1),
-      String(coords.y1),
-      String(coords.x2),
-      String(coords.y2),
-      String(DEFAULT_SWIPE_DURATION_MS)
-    ]);
-    timer.mark("swipe");
-    if (swipeResp.isError) {
-      return failResult(`scrollintoview: swipe failed at iteration ${i}: ${swipeResp.content?.[0]?.text ?? "unknown"}`);
-    }
-  }
-  return failResult(`scrollintoview: target "${args.ref ?? args.text}" did not enter viewport after ${MAX_ITERATIONS} swipe iterations`, { code: "SCROLL_EXHAUSTED", iterations: MAX_ITERATIONS });
-}
-function createDevicePinchHandler() {
-  return withSession((args) => {
-    const cliArgs = ["pinch", String(args.scale)];
-    if (args.x != null && args.y != null) {
-      cliArgs.push(String(args.x), String(args.y));
-    }
-    return runNative(cliArgs);
-  });
-}
-function createDeviceBackHandler() {
-  return withSession(() => runNative(["back"]));
-}
-function parseDefaultInputMethodPackage(raw) {
-  const value = raw.trim().split(/\r?\n/)[0]?.trim() ?? "";
-  if (!value || value === "null")
-    return null;
-  const pkg = value.split("/")[0]?.trim() ?? "";
-  return isValidBundleId(pkg) ? pkg : null;
-}
-async function resolveAndroidImePackage(deviceId) {
-  try {
-    const { stdout } = await execFile11("adb", [
-      ...deviceId ? ["-s", deviceId] : [],
-      "shell",
-      "settings",
-      "get",
-      "secure",
-      "default_input_method"
-    ], { timeout: IME_PROBE_TIMEOUT_MS });
-    return parseDefaultInputMethodPackage(stdout);
-  } catch {
-    return null;
-  }
-}
-function focusNextPressArgs(ref, nodePackageName, platform, appId, imePackage) {
-  const target = ref.startsWith("@") ? ref : `@${ref}`;
-  const imeOwnedKey = platform === "android" && appId !== void 0 && imePackage !== null && imePackage !== appId && nodePackageName === imePackage;
-  return imeOwnedKey ? ["press", target, "--include-system-ui", IME_KEY_FLAG] : ["press", target];
-}
-function createDeviceFocusNextHandler() {
-  return withSession(async () => {
-    const snap = await fetchSnapshotNodes();
-    if (!snap.ok) {
-      if (snap.reason === "runner-leak-unrecovered") {
-        return runnerLeakFailResult(void 0, snap.recoveryReason);
-      }
-      if (snap.reason === "empty-capture") {
-        return emptyCaptureFailResult();
-      }
-      return failResult("Snapshot unavailable \u2014 cannot look for keyboard key. Retry after device_snapshot action=open/snapshot.", { code: "SNAPSHOT_UNAVAILABLE" });
-    }
-    const { nodes, recoveredTier } = snap;
-    const session2 = getActiveSession();
-    const imePackage = session2?.platform === "android" ? await (_imePackageResolverForTest ?? resolveAndroidImePackage)(session2.deviceId) : null;
-    let lastPressFailure = null;
-    for (const label of NEXT_KEY_LABELS) {
-      const match = nodes.find((n) => n.label === label);
-      if (!match)
-        continue;
-      const pressResult = await runNative(focusNextPressArgs(match.ref, match.packageName, session2?.platform, session2?.appId, imePackage));
-      if (pressResult.isError) {
-        lastPressFailure = pressResult;
-        continue;
-      }
-      try {
-        const envelope = JSON.parse(pressResult.content[0].text);
-        const meta = { keyUsed: label, ref: match.ref };
-        if (recoveredTier) {
-          meta.recovered = "agent-device-runner-leak";
-          meta.recoveryTier = recoveredTier;
-        }
-        return okResult(envelope.data, { meta });
-      } catch {
-        return pressResult;
-      }
-    }
-    if (lastPressFailure)
-      return lastPressFailure;
-    return failResult(`No keyboard ${NEXT_KEY_LABELS.join("/")} key visible in the accessibility tree. Tried: ${NEXT_KEY_LABELS.join(", ")}`, {
-      code: "KEYBOARD_NEXT_NOT_FOUND",
-      hint: 'Keyboard may be dismissed, or the field may be the last in the form. If an in-app "Next" button is visible, prefer device_press on the next input @ref directly.'
-    });
-  });
-}
-function findInLatestSnapshot(nodes, query, opts = {}) {
-  const exact = opts.exact ?? false;
-  for (const n of nodes) {
-    if (n.label === query || n.identifier === query)
-      return n;
-  }
-  if (exact)
-    return null;
-  for (const n of nodes) {
-    if (n.label?.includes(query) || n.identifier?.includes(query))
-      return n;
-  }
-  return null;
-}
-function isInViewport(element, screen) {
-  const elRight = element.x + element.width;
-  const elBottom = element.y + element.height;
-  const screenRight = screen.x + screen.width;
-  const screenBottom = screen.y + screen.height;
-  return element.x < screenRight && elRight > screen.x && element.y < screenBottom && elBottom > screen.y;
-}
-function decideScrollDirection(element, screen) {
-  if (isInViewport(element, screen))
-    return null;
-  if (element.y >= screen.y + screen.height)
-    return "up";
-  if (element.y + element.height <= screen.y)
-    return "down";
-  if (element.x >= screen.x + screen.width)
-    return "left";
-  if (element.x + element.width <= screen.x)
-    return "right";
-  return null;
-}
-var execFile11, IME_PROBE_TIMEOUT_MS, TYPE_PRIORITY_FOR_TAP, IOS_INPUT_TYPES, ANDROID_INPUT_TYPE_RE, PRESSABLE_SUFFIX, NATIVE_VERIFY_VERDICTS, MAX_NATIVE_RETYPE, DEFAULT_SCREEN, SWIPE_FRACTION, DEFAULT_SWIPE_DURATION_MS, NEXT_KEY_LABELS, _imePackageResolverForTest;
-var init_device_interact = __esm({
-  "packages/rn-dev-agent-core/dist/tools/device-interact.js"() {
-    "use strict";
-    init_agent_device_wrapper();
-    init_rn_fast_runner_client();
-    init_rn_android_runner_client();
-    init_keyboard_guard();
-    init_project_config();
-    init_maestro_validator();
-    init_utils();
-    init_utils();
-    init_maestro_invoke();
-    init_runner_leak_recovery();
-    init_device_session();
-    init_fast_runner_ref_map();
-    init_fill_verify();
-    execFile11 = promisify11(execFileCb9);
-    IME_PROBE_TIMEOUT_MS = 5e3;
-    TYPE_PRIORITY_FOR_TAP = {
-      Button: 100,
-      Cell: 95,
-      Switch: 90,
-      Link: 80,
-      Other: 60,
-      StaticText: 30,
-      Image: 25,
-      ScrollView: 10
-    };
-    IOS_INPUT_TYPES = /* @__PURE__ */ new Set(["TextField", "SecureTextField", "SearchField", "TextView"]);
-    ANDROID_INPUT_TYPE_RE = /.+\.(\w*EditText|\w*AutoCompleteTextView)$/;
-    PRESSABLE_SUFFIX = "-pressable";
-    NATIVE_VERIFY_VERDICTS = /* @__PURE__ */ new Set([
-      "exact",
-      "mismatch",
-      "unreadable",
-      "secure-masked",
-      "target-lost",
-      "ambiguous"
-    ]);
-    MAX_NATIVE_RETYPE = 2;
-    DEFAULT_SCREEN = { width: 402, height: 874 };
-    SWIPE_FRACTION = 0.4;
-    DEFAULT_SWIPE_DURATION_MS = 300;
-    NEXT_KEY_LABELS = ["Go", "Done", "Return", "Next"];
-    _imePackageResolverForTest = null;
-  }
-});
-
 // packages/rn-dev-agent-core/dist/tools/dev-client-picker.js
 function looksLikeNetworkHost(host) {
   if (IPV4_QUAD_RE.test(host))
@@ -39788,12 +34730,12 @@ __export(rn_android_runner_client_exports, {
   stopAndroidRunner: () => stopAndroidRunner,
   waitForAndroidRunnerHealth: () => waitForAndroidRunnerHealth
 });
-import { spawn as spawn7, execFile as execFile12 } from "node:child_process";
-import { promisify as promisify12 } from "node:util";
-import { existsSync as existsSync27, rmSync as rmSync11, writeFileSync as writeFileSync14 } from "node:fs";
-import { tmpdir as tmpdir10 } from "node:os";
+import { spawn as spawn6, execFile as execFile12 } from "node:child_process";
+import { promisify as promisify11 } from "node:util";
+import { existsSync as existsSync18, rmSync as rmSync8, writeFileSync as writeFileSync10 } from "node:fs";
+import { tmpdir as tmpdir6 } from "node:os";
 import { randomBytes as randomBytes5, randomUUID as randomUUID7 } from "node:crypto";
-import { join as join35 } from "node:path";
+import { join as join24 } from "node:path";
 function getAndroidRunnerState() {
   return runnerState2;
 }
@@ -39996,7 +34938,7 @@ async function ensureAndroidRunnerInstalled(deviceId, opts = {}) {
     pendingUpgradeNote = artifacts.note;
   const action = resolveAndroidInstallAction({
     instrumentationRegistered: !opts.forceReinstall && isInstrumentationRegistered(pmOut, INSTRUMENTATION),
-    apksExist: existsSync27(artifacts.appApk) && existsSync27(artifacts.testApk)
+    apksExist: existsSync18(artifacts.appApk) && existsSync18(artifacts.testApk)
   });
   if (action === "reuse")
     return provenance;
@@ -40453,12 +35395,12 @@ function androidRetryCleanupContext(state, error2) {
   return state ?? (error2.deviceId ? { deviceId: error2.deviceId } : null);
 }
 function androidRunnerApksExist() {
-  return RUNNER_APK_PATHS.every((p) => existsSync27(p));
+  return RUNNER_APK_PATHS.every((p) => existsSync18(p));
 }
 function _androidRunnerApkPathsForTest() {
   return RUNNER_APK_PATHS;
 }
-function invalidateAndroidRunnerApks(rm2 = (p) => rmSync11(p, { force: true })) {
+function invalidateAndroidRunnerApks(rm2 = (p) => rmSync8(p, { force: true })) {
   for (const apk of RUNNER_APK_PATHS) {
     try {
       rm2(apk);
@@ -40576,7 +35518,7 @@ async function startAndroidRunnerAttempt(deviceId, bundleId, devicePort = DEFAUL
       void execFileAsync2("adb", buildAdbForwardRemoveArgs(serial, hostPort)).catch(() => {
       });
     };
-    const child = spawn7("adb", [
+    const child = spawn6("adb", [
       ...adbSerialArgs(deviceId),
       "shell",
       "am",
@@ -40997,8 +35939,8 @@ async function runAndroid(args) {
     const data = resp.data;
     if (!data?.pngBase64)
       return failResult("Android runner screenshot response did not include pngBase64", "SCREENSHOT_FAILED", recovery ? { transportRecovery: recovery } : void 0);
-    const outPath = args.outPath ?? join35(tmpdir10(), `rn-android-screenshot-${Date.now()}.png`);
-    writeFileSync14(outPath, Buffer.from(data.pngBase64, "base64"));
+    const outPath = args.outPath ?? join24(tmpdir6(), `rn-android-screenshot-${Date.now()}.png`);
+    writeFileSync10(outPath, Buffer.from(data.pngBase64, "base64"));
     return okResult({ path: outPath }, Object.keys(recoveryMeta).length ? { meta: recoveryMeta } : void 0);
   }
   return okResult(resp.data ?? {}, Object.keys(recoveryMeta).length ? { meta: recoveryMeta } : void 0);
@@ -41024,7 +35966,7 @@ var init_rn_android_runner_client = __esm({
     init_transport_recovery();
     init_process_birth();
     init_authority_store();
-    execFileAsync2 = promisify12(execFile12);
+    execFileAsync2 = promisify11(execFile12);
     DEFAULT_PORT = 22089;
     READY_TIMEOUT_MS2 = 3e4;
     INSTRUMENTATION = "dev.lykhoyda.rndevagent.androidrunner.test/androidx.test.runner.AndroidJUnitRunner";
@@ -41032,11 +35974,11 @@ var init_rn_android_runner_client = __esm({
     HEALTH_POLL_INTERVAL_MS = 150;
     HEALTH_PROBE_TIMEOUT_MS = 1e3;
     RN_ANDROID_RUNNER_DIR = resolveNativeRunnerDir("rn-android-runner");
-    GRADLEW = join35(RN_ANDROID_RUNNER_DIR, "gradlew");
-    APK_APP = join35(RN_ANDROID_RUNNER_DIR, "app", "build", "outputs", "apk", "debug", "app-debug.apk");
-    APK_TEST = join35(RN_ANDROID_RUNNER_DIR, "app", "build", "outputs", "apk", "androidTest", "debug", "app-debug-androidTest.apk");
-    ANDROID_REBUILD_ROOT = join35(RN_ANDROID_RUNNER_DIR, "app", "build");
-    ANDROID_REBUILD_LOCK_DATABASE = join35(ANDROID_REBUILD_ROOT, ".authority-rebuild", "lock.sqlite");
+    GRADLEW = join24(RN_ANDROID_RUNNER_DIR, "gradlew");
+    APK_APP = join24(RN_ANDROID_RUNNER_DIR, "app", "build", "outputs", "apk", "debug", "app-debug.apk");
+    APK_TEST = join24(RN_ANDROID_RUNNER_DIR, "app", "build", "outputs", "apk", "androidTest", "debug", "app-debug-androidTest.apk");
+    ANDROID_REBUILD_ROOT = join24(RN_ANDROID_RUNNER_DIR, "app", "build");
+    ANDROID_REBUILD_LOCK_DATABASE = join24(ANDROID_REBUILD_ROOT, ".authority-rebuild", "lock.sqlite");
     ANDROID_REBUILD_LOCK_STALE_MS = 15 * 6e4;
     ANDROID_REBUILD_HEARTBEAT_MS = 6e4;
     ANDROID_REBUILD_COMPLETION_RETRY_MS = 1e3;
@@ -41081,11 +36023,11 @@ __export(release_android_slot_exports, {
   isProtectedPid: () => isProtectedPid,
   releaseAndroidInteractionSlot: () => releaseAndroidInteractionSlot
 });
-import { execFile as execFileCb10 } from "node:child_process";
-import { promisify as promisify13 } from "node:util";
-import { existsSync as existsSync28, readFileSync as readFileSync29, unlinkSync as unlinkSync13 } from "node:fs";
-import { homedir as homedir6 } from "node:os";
-import { join as join36 } from "node:path";
+import { execFile as execFileCb9 } from "node:child_process";
+import { promisify as promisify12 } from "node:util";
+import { existsSync as existsSync19, readFileSync as readFileSync21, unlinkSync as unlinkSync9 } from "node:fs";
+import { homedir as homedir5 } from "node:os";
+import { join as join25 } from "node:path";
 function isProtectedPid(pid, selfPid, parentPid) {
   return pid === selfPid || pid === parentPid;
 }
@@ -41102,7 +36044,7 @@ function defaultDeps3() {
     resolveSerial: (deviceId) => deviceId ? ["-s", deviceId] : getAdbSerial(),
     readDaemonPid: () => {
       try {
-        const parsed = JSON.parse(readFileSync29(DAEMON_JSON2, "utf8"));
+        const parsed = JSON.parse(readFileSync21(DAEMON_JSON2, "utf8"));
         return typeof parsed.pid === "number" ? parsed.pid : null;
       } catch {
         return null;
@@ -41118,8 +36060,8 @@ function defaultDeps3() {
     },
     protectedPids: () => ({ selfPid: process.pid, parentPid: process.ppid }),
     kill: (pid, sig) => process.kill(pid, sig),
-    fileExists: (p) => existsSync28(p),
-    removeFile: (p) => unlinkSync13(p),
+    fileExists: (p) => existsSync19(p),
+    removeFile: (p) => unlinkSync9(p),
     delay: (ms) => new Promise((resolve21) => setTimeout(resolve21, ms)),
     killLegacy: () => process.env.RN_DEVICE_KILL_LEGACY !== "0",
     now: () => Date.now()
@@ -41231,9 +36173,9 @@ var init_release_android_slot = __esm({
     "use strict";
     init_rn_android_runner_client();
     init_agent_device_wrapper();
-    execFile13 = promisify13(execFileCb10);
-    DAEMON_JSON2 = join36(homedir6(), ".agent-device", "daemon.json");
-    DAEMON_LOCK2 = join36(homedir6(), ".agent-device", "daemon.lock");
+    execFile13 = promisify12(execFileCb9);
+    DAEMON_JSON2 = join25(homedir5(), ".agent-device", "daemon.json");
+    DAEMON_LOCK2 = join25(homedir5(), ".agent-device", "daemon.lock");
     DAEMON_FILES2 = [DAEMON_JSON2, DAEMON_LOCK2];
     SIGKILL_GRACE_MS2 = 500;
     ADB_TIMEOUT_MS = 5e3;
@@ -41252,11 +36194,11 @@ var init_release_android_slot = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/session/process-cleanup.js
-import { execFile as execFileCb11, spawn as spawn8 } from "node:child_process";
-import { promisify as promisify14 } from "node:util";
+import { execFile as execFileCb10, spawn as spawn7 } from "node:child_process";
+import { promisify as promisify13 } from "node:util";
 function executeRecorderScript(script, args, options) {
   return new Promise((resolve21, reject) => {
-    const child = spawn8(script, args, {
+    const child = spawn7(script, args, {
       detached: process.platform !== "win32",
       env: options.env,
       stdio: ["ignore", "pipe", "pipe"]
@@ -41585,14 +36527,14 @@ var init_process_cleanup = __esm({
     init_managed_metro();
     init_process_birth();
     init_registry();
-    execFile14 = promisify14(execFileCb11);
+    execFile14 = promisify13(execFileCb10);
     RECORDER_POST_KILL_CONFIRM_MS = 2e3;
   }
 });
 
 // packages/rn-dev-agent-core/dist/session/startup-cleanup.js
-import { createHash as createHash14 } from "node:crypto";
-import { join as join37 } from "node:path";
+import { createHash as createHash13 } from "node:crypto";
+import { join as join26 } from "node:path";
 function startupCleanupFailureMessage() {
   return "rn-dev-agent startup cleanup failed: STARTUP_CLEANUP_FAILED\n";
 }
@@ -41643,7 +36585,7 @@ async function runStartupCleanupForSource(input) {
       appRootKey: input.source.appRootKey,
       appRoot: input.source.appRoot
     }, {
-      readSessionSecret: (sessionId) => readJsonStateFile(join37(layout.sessions, sessionId, "secret.json"))
+      readSessionSecret: (sessionId) => readJsonStateFile(join26(layout.sessions, sessionId, "secret.json"))
     });
   } finally {
     registry2.close();
@@ -41702,7 +36644,7 @@ function restoreDeadOwnerIntegration(input, prior, plan, dependencies) {
 function verifiedDeadOwnerManifestSource(appRoot, binding, manifestSha256) {
   if (!/^[0-9a-f]{64}$/.test(manifestSha256))
     return void 0;
-  const verified = (candidate) => typeof candidate === "string" && createHash14("sha256").update(candidate).digest("hex") === manifestSha256 ? candidate : void 0;
+  const verified = (candidate) => typeof candidate === "string" && createHash13("sha256").update(candidate).digest("hex") === manifestSha256 ? candidate : void 0;
   let liveManifest;
   try {
     liveManifest = readPackageIntegrationInputs(appRoot).manifest ?? void 0;
@@ -41792,8 +36734,8 @@ var init_startup_cleanup = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/env-setup.js
-import { existsSync as existsSync29, readFileSync as readFileSync30 } from "node:fs";
-import { join as join39 } from "node:path";
+import { existsSync as existsSync20, readFileSync as readFileSync22 } from "node:fs";
+import { join as join28 } from "node:path";
 function ensureAndroidEnv() {
   if (!process.env.ANDROID_HOME) {
     if (process.env.ANDROID_SDK_ROOT) {
@@ -41801,12 +36743,12 @@ function ensureAndroidEnv() {
     } else {
       const home = process.env.HOME ?? "";
       const candidates = [
-        join39(home, "Library/Android/sdk"),
-        join39(home, "Android/Sdk"),
+        join28(home, "Library/Android/sdk"),
+        join28(home, "Android/Sdk"),
         "/opt/android-sdk"
       ];
       for (const c of candidates) {
-        if (existsSync29(c)) {
+        if (existsSync20(c)) {
           process.env.ANDROID_HOME = c;
           break;
         }
@@ -41814,8 +36756,8 @@ function ensureAndroidEnv() {
     }
   }
   if (process.env.ANDROID_HOME) {
-    const pt = join39(process.env.ANDROID_HOME, "platform-tools");
-    const emu = join39(process.env.ANDROID_HOME, "emulator");
+    const pt = join28(process.env.ANDROID_HOME, "platform-tools");
+    const emu = join28(process.env.ANDROID_HOME, "emulator");
     const path = process.env.PATH ?? "";
     if (!path.includes(pt))
       process.env.PATH = `${pt}:${path}`;
@@ -41823,19 +36765,19 @@ function ensureAndroidEnv() {
       process.env.PATH = `${emu}:${process.env.PATH}`;
   }
   if (!process.env.ANDROID_SERIAL) {
-    const serialFile = join39(process.env.TMPDIR ?? "/tmp", "rn-dev-agent-android-serial");
-    if (existsSync29(serialFile)) {
-      process.env.ANDROID_SERIAL = readFileSync30(serialFile, "utf8").trim();
+    const serialFile = join28(process.env.TMPDIR ?? "/tmp", "rn-dev-agent-android-serial");
+    if (existsSync20(serialFile)) {
+      process.env.ANDROID_SERIAL = readFileSync22(serialFile, "utf8").trim();
     }
   }
 }
 function ensureJavaEnv() {
   const path = process.env.PATH ?? "";
-  if (path.split(":").some((p) => existsSync29(join39(p, "java"))))
+  if (path.split(":").some((p) => existsSync20(join28(p, "java"))))
     return;
   const candidates = ["/opt/homebrew/opt/openjdk@17", "/opt/homebrew/opt/openjdk"];
   for (const jdk of candidates) {
-    if (existsSync29(join39(jdk, "bin/java"))) {
+    if (existsSync20(join28(jdk, "bin/java"))) {
       process.env.JAVA_HOME = jdk;
       process.env.PATH = `${jdk}/bin:${process.env.PATH}`;
       break;
@@ -67683,9 +62625,9 @@ var init_ws_origin = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/cdp/state.js
-import { writeFileSync as writeFileSync15, unlinkSync as unlinkSync14 } from "node:fs";
-import { tmpdir as tmpdir11 } from "node:os";
-import { join as join40 } from "node:path";
+import { writeFileSync as writeFileSync11, unlinkSync as unlinkSync10 } from "node:fs";
+import { tmpdir as tmpdir7 } from "node:os";
+import { join as join29 } from "node:path";
 function resetState(s) {
   s.setState("disconnected");
   s.setHelpersInjected(false);
@@ -67700,11 +62642,11 @@ function resetState(s) {
 }
 function setActiveFlag(port, target) {
   try {
-    writeFileSync15(CDP_ACTIVE_FLAG, String(process.pid));
+    writeFileSync11(CDP_ACTIVE_FLAG, String(process.pid));
   } catch {
   }
   try {
-    writeFileSync15(CDP_SESSION_FILE, JSON.stringify({
+    writeFileSync11(CDP_SESSION_FILE, JSON.stringify({
       port,
       platform: target?.platform ?? null,
       target: target?.title ?? null,
@@ -67716,23 +62658,23 @@ function setActiveFlag(port, target) {
 }
 function clearActiveFlag() {
   try {
-    unlinkSync14(CDP_ACTIVE_FLAG);
+    unlinkSync10(CDP_ACTIVE_FLAG);
   } catch {
   }
   try {
-    unlinkSync14(CDP_SESSION_FILE);
+    unlinkSync10(CDP_SESSION_FILE);
   } catch {
   }
 }
-function sleep5(ms) {
+function sleep3(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 var CDP_ACTIVE_FLAG, CDP_SESSION_FILE;
 var init_state = __esm({
   "packages/rn-dev-agent-core/dist/cdp/state.js"() {
     "use strict";
-    CDP_ACTIVE_FLAG = join40(tmpdir11(), "rn-dev-agent-cdp-active");
-    CDP_SESSION_FILE = join40(tmpdir11(), "rn-dev-agent-cdp-session.json");
+    CDP_ACTIVE_FLAG = join29(tmpdir7(), "rn-dev-agent-cdp-active");
+    CDP_SESSION_FILE = join29(tmpdir7(), "rn-dev-agent-cdp-session.json");
   }
 });
 
@@ -67789,7 +62731,7 @@ async function interruptibleSleep(delayMs, ctx, sliceMs = 500) {
     if (ctx.isDisposed() || ctx.isSoftReconnectRequested())
       return false;
     const remaining = deadline - Date.now();
-    await sleep5(Math.min(sliceMs, remaining));
+    await sleep3(Math.min(sliceMs, remaining));
   }
   return true;
 }
@@ -67838,7 +62780,7 @@ async function softReconnect(ctx) {
     ctx.setSoftReconnectRequested(true);
     const bailDeadline = Date.now() + 3e3;
     while (ctx.isReconnecting() && Date.now() < bailDeadline) {
-      await sleep5(200);
+      await sleep3(200);
     }
     ctx.setSoftReconnectRequested(false);
   }
@@ -68519,7 +63461,7 @@ var HELPERS_VERSION, INJECTED_HELPERS, NETWORK_HOOK_SCRIPT, NETWORK_CB_BUFFERED_
 var init_injected_helpers = __esm({
   "packages/rn-dev-agent-core/dist/injected-helpers.js"() {
     "use strict";
-    HELPERS_VERSION = 45;
+    HELPERS_VERSION = 46;
     INJECTED_HELPERS = `
 (function() {
   var __HELPERS_VERSION__ = ${HELPERS_VERSION};
@@ -69965,6 +64907,736 @@ var init_injected_helpers = __esm({
   function getErrors() { return JSON.stringify(errors); }
   function clearErrors() { errors.length = 0; return 'cleared'; }
 
+  var TYPE_TEXT_WORK_LIMIT = 2000;
+
+  function createTypeTextState() {
+    return {
+      work: 0,
+      visitedFibers: 0,
+      truncated: false,
+      reason: null
+    };
+  }
+
+  function consumeTypeTextWork(state) {
+    if (state.work >= TYPE_TEXT_WORK_LIMIT) {
+      state.truncated = true;
+      state.reason = 'work-limit';
+      return false;
+    }
+    state.work++;
+    return true;
+  }
+
+  function sameTypeTextFiber(a, b) {
+    return !!a && !!b && (a === b || a.alternate === b || b.alternate === a);
+  }
+
+  function typeTextFiberName(fiber) {
+    return (fiber && fiber.type && (typeof fiber.type === 'string'
+      ? fiber.type
+      : (fiber.type.displayName || fiber.type.name))) || 'Unknown';
+  }
+
+  function typeTextTruncation(state) {
+    return {
+      error: 'typeText resolution truncated',
+      truncated: true,
+      reason: state.reason,
+      scanned: state.visitedFibers,
+      work: state.work,
+      workLimit: TYPE_TEXT_WORK_LIMIT,
+      handlerCalled: false,
+      hint: 'The bounded typeText resolver did not inspect the complete selector and candidate graph; no handler was called.'
+    };
+  }
+
+  function resolveTypeTextTarget(opts) {
+    var state = createTypeTextState();
+
+    function consumeWork() {
+      return consumeTypeTextWork(state);
+    }
+
+    var TYPE_TEXT_ABORT = {};
+
+    function forEachTypeTextRoot(callback) {
+      if (!consumeWork()) return TYPE_TEXT_ABORT;
+      var hook = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
+      if (hook && typeof hook.getFiberRoots === 'function') {
+        var rendererIds = [];
+        var rendererIdSeen = Object.create(null);
+        var usingRegisteredIds = false;
+        try {
+          if (hook.renderers && typeof hook.renderers.keys === 'function') {
+            if (!consumeWork()) return TYPE_TEXT_ABORT;
+            var rendererIterator = hook.renderers.keys();
+            var rendererStep;
+            while (rendererIterator && typeof rendererIterator.next === 'function') {
+              if (!consumeWork()) return TYPE_TEXT_ABORT;
+              rendererStep = rendererIterator.next();
+              if (rendererStep.done) break;
+              if (!consumeWork()) return TYPE_TEXT_ABORT;
+              var registeredId = rendererStep.value;
+              var registeredKey = typeof registeredId + ':' + String(registeredId);
+              if (typeof registeredId === 'number' && !rendererIdSeen[registeredKey]) {
+                rendererIdSeen[registeredKey] = true;
+                rendererIds.push(registeredId);
+                usingRegisteredIds = true;
+              }
+            }
+          }
+        } catch (_) {}
+        for (var fallbackId = 1; fallbackId <= MAX_RENDERER_IDS; fallbackId++) {
+          if (!consumeWork()) return TYPE_TEXT_ABORT;
+          var fallbackKey = 'number:' + String(fallbackId);
+          if (!rendererIdSeen[fallbackKey]) {
+            rendererIdSeen[fallbackKey] = true;
+            rendererIds.push(fallbackId);
+          }
+        }
+        var emptyStreak = 0;
+        for (var rendererIndex = 0; rendererIndex < rendererIds.length; rendererIndex++) {
+          if (!consumeWork()) return TYPE_TEXT_ABORT;
+          var rendererId = rendererIds[rendererIndex];
+          try {
+            if (!consumeWork()) return TYPE_TEXT_ABORT;
+            var roots = hook.getFiberRoots(rendererId);
+            if (roots && roots.size) {
+              emptyStreak = 0;
+              if (!consumeWork()) return TYPE_TEXT_ABORT;
+              var rootIterator = roots.values();
+              while (rootIterator && typeof rootIterator.next === 'function') {
+                if (!consumeWork()) return TYPE_TEXT_ABORT;
+                var rootStep = rootIterator.next();
+                if (rootStep.done) break;
+                if (!consumeWork()) return TYPE_TEXT_ABORT;
+                var rootFiber = rootStep.value && rootStep.value.current;
+                if (rootFiber) {
+                  if (!consumeWork()) return TYPE_TEXT_ABORT;
+                  var rootResult = callback(rootFiber);
+                  if (rootResult) return rootResult;
+                  if (state.truncated) return TYPE_TEXT_ABORT;
+                }
+              }
+            } else if (!usingRegisteredIds) {
+              emptyStreak++;
+              if (emptyStreak >= EARLY_EXIT_EMPTY_STREAK && rendererId >= 5) break;
+            }
+          } catch (_) {}
+        }
+      }
+      if (state.truncated) return TYPE_TEXT_ABORT;
+      try {
+        if (!consumeWork()) return TYPE_TEXT_ABORT;
+        var extraResolver = globalThis.__RN_AGENT_EXTRA_ROOTS__;
+        if (typeof extraResolver === 'function') {
+          if (!consumeWork()) return TYPE_TEXT_ABORT;
+          var instances = extraResolver();
+          if (Array.isArray(instances)) {
+            for (var instanceIndex = 0; instanceIndex < instances.length; instanceIndex++) {
+              if (!consumeWork()) return TYPE_TEXT_ABORT;
+              var extraFiber = extractFiberFromInstance(instances[instanceIndex]);
+              if (extraFiber) {
+                if (!consumeWork()) return TYPE_TEXT_ABORT;
+                var extraResult = callback(extraFiber);
+                if (extraResult) return extraResult;
+                if (state.truncated) return TYPE_TEXT_ABORT;
+              }
+            }
+          }
+        }
+      } catch (_) {}
+      return null;
+    }
+
+    var selectorKind = null;
+    if (typeof opts.testID === 'string' && opts.testID.length > 0) selectorKind = 'testID';
+    else if (typeof opts.accessibilityLabel === 'string' && opts.accessibilityLabel.length > 0) selectorKind = 'accessibilityLabel';
+    else if (typeof opts.placeholder === 'string' && opts.placeholder.length > 0) selectorKind = 'placeholder';
+    else if (typeof opts.role === 'string' && typeof opts.name === 'string' && opts.name.length > 0) selectorKind = 'role+name';
+
+    if (!selectorKind) {
+      return {
+        error: 'typeText requires testID, accessibilityLabel, placeholder, or role+name',
+        hint: 'The text parameter is the value to enter, not a byText selector.'
+      };
+    }
+
+    var exactSources = [];
+    var normalizedSources = [];
+    var containsSources = [];
+    var sources = [];
+    var selector = opts.testID || opts.accessibilityLabel || opts.placeholder || opts.name;
+    var normalizedSelector = selectorKind === 'accessibilityLabel'
+      ? String(selector).replace(/\\s+/g, ' ').replace(/^\\s+|\\s+$/g, '').toLowerCase()
+      : null;
+    var wantedRole = selectorKind === 'role+name' ? normalizeRole(opts.role) : null;
+    var sourceIdentitySeen = new WeakSet();
+    var candidateIdentitySeen = new WeakSet();
+    var candidates = [];
+
+    function isNativeTextInputHost(fiber) {
+      return fiber && fiber.tag === 5 && typeof fiber.type === 'string' && hostKind(fiber) === 'textinput';
+    }
+
+    function addSource(target, source) {
+      if (!consumeWork()) return;
+      var fiber = source.fiber;
+      if (sourceIdentitySeen.has(fiber) || (fiber.alternate && sourceIdentitySeen.has(fiber.alternate))) return;
+      sourceIdentitySeen.add(fiber);
+      if (fiber.alternate) sourceIdentitySeen.add(fiber.alternate);
+      target.push(source);
+    }
+
+    function addCandidate(fiber) {
+      if (!consumeWork()) return;
+      if (candidateIdentitySeen.has(fiber) || (fiber.alternate && candidateIdentitySeen.has(fiber.alternate))) return;
+      var props = fiber.memoizedProps || {};
+      var contract = null;
+      var handler = null;
+      if (typeof props.onChangeText === 'function') {
+        contract = 'onChangeText:string';
+        handler = props.onChangeText;
+      } else if (typeof props.onChange === 'function' && isNativeTextInputHost(fiber)) {
+        contract = 'onChange:event';
+        handler = props.onChange;
+      }
+      if (!contract) return;
+      candidateIdentitySeen.add(fiber);
+      if (fiber.alternate) candidateIdentitySeen.add(fiber.alternate);
+      candidates.push({
+        fiber: fiber,
+        alternate: fiber.alternate || null,
+        props: props,
+        name: typeTextFiberName(fiber),
+        contract: contract,
+        handler: handler
+      });
+    }
+
+    function typeTextFindByNativeID(id) {
+      var match = null;
+      var completed = new WeakSet();
+      forEachTypeTextRoot(function(rootFiber) {
+        if (match || state.truncated) return match || TYPE_TEXT_ABORT;
+        var localSeen = new WeakSet();
+        if (!consumeWork()) return TYPE_TEXT_ABORT;
+        var stack = [rootFiber];
+        while (stack.length > 0 && !state.truncated) {
+          var node = stack.pop();
+          if (!consumeWork()) break;
+          if (!consumeWork()) break;
+          if (localSeen.has(node)) {
+            state.truncated = true;
+            state.reason = 'cycle';
+            break;
+          }
+          localSeen.add(node);
+          if (completed.has(node)) continue;
+          completed.add(node);
+          state.visitedFibers++;
+          var props = node.memoizedProps || {};
+          if (props.nativeID === id) {
+            match = node;
+            break;
+          }
+          if (node.sibling) {
+            if (!consumeWork()) break;
+            stack.push(node.sibling);
+          }
+          if (node.child) {
+            if (!consumeWork()) break;
+            stack.push(node.child);
+          }
+        }
+        return match || (state.truncated ? TYPE_TEXT_ABORT : null);
+      });
+      return match;
+    }
+
+    function typeTextRefTextContent(fiber) {
+      var parts = [];
+      var seen = new WeakSet();
+      if (!consumeWork()) return undefined;
+      var stack = [{ fiber: fiber, includeSibling: false }];
+      while (stack.length > 0 && !state.truncated) {
+        var frame = stack.pop();
+        var node = frame.fiber;
+        if (!consumeWork()) break;
+        if (!consumeWork()) break;
+        if (seen.has(node)) {
+          state.truncated = true;
+          state.reason = 'cycle';
+          break;
+        }
+        seen.add(node);
+        if (frame.includeSibling && node.sibling) {
+          if (!consumeWork()) break;
+          stack.push({ fiber: node.sibling, includeSibling: true });
+        }
+        if (typeof node.memoizedProps === 'string') {
+          if (node.memoizedProps) parts.push(node.memoizedProps);
+          continue;
+        }
+        if (node.child) {
+          if (!consumeWork()) break;
+          stack.push({ fiber: node.child, includeSibling: true });
+        }
+      }
+      return state.truncated ? undefined : __anNorm(parts.join(' '));
+    }
+
+    function typeTextLabelledByIds(fiber) {
+      if (!consumeWork()) return [];
+      var props = (fiber && fiber.memoizedProps) || {};
+      var ariaLabelledBy = props['aria-labelledby'];
+      if (typeof ariaLabelledBy === 'string') return [ariaLabelledBy];
+      var accessibilityLabelledBy = props.accessibilityLabelledBy;
+      if (typeof accessibilityLabelledBy === 'string') return [accessibilityLabelledBy];
+      var ids = [];
+      if (Array.isArray(accessibilityLabelledBy)) {
+        for (var labelledByIndex = 0; labelledByIndex < accessibilityLabelledBy.length; labelledByIndex++) {
+          if (!consumeWork()) break;
+          ids.push(accessibilityLabelledBy[labelledByIndex]);
+        }
+      }
+      return ids;
+    }
+
+    function typeTextAriaLabel(fiber) {
+      var ids = typeTextLabelledByIds(fiber);
+      if (state.truncated) return undefined;
+      if (ids.length > 0) {
+        var labelTexts = [];
+        for (var idIndex = 0; idIndex < ids.length; idIndex++) {
+          if (!consumeWork()) return undefined;
+          var ref = typeTextFindByNativeID(ids[idIndex]);
+          if (state.truncated) return undefined;
+          if (ref) {
+            var refText = typeTextRefTextContent(ref);
+            if (state.truncated) return undefined;
+            if (refText) labelTexts.push(refText);
+          }
+        }
+        if (labelTexts.length > 0) return __anNorm(labelTexts.join(' '));
+      }
+      var props = (fiber && fiber.memoizedProps) || {};
+      var explicit = props['aria-label'];
+      if (explicit === undefined || explicit === null) explicit = props.accessibilityLabel;
+      if (explicit) return explicit;
+      if (hostKind(fiber) === 'image' && props.alt) return props.alt;
+      return undefined;
+    }
+
+    function typeTextJoinNameParts(parts, inline) {
+      var output = '';
+      for (var partIndex = 0; partIndex < parts.length; partIndex++) {
+        if (!consumeWork()) return undefined;
+        if (partIndex === 0) output = parts[partIndex].text;
+        else {
+          var previous = parts[partIndex - 1];
+          var separator = inline && previous.isInlineText && parts[partIndex].isInlineText ? '' : ' ';
+          output = output + separator + parts[partIndex].text;
+        }
+      }
+      return output;
+    }
+
+    function typeTextAccessibleName(fiber) {
+      var seen = new WeakSet();
+      if (!consumeWork()) return undefined;
+      var stack = [{ fiber: fiber, root: true, entered: false, child: null, parts: [], result: undefined }];
+      while (stack.length > 0 && !state.truncated) {
+        var frame = stack[stack.length - 1];
+        if (!frame.entered) {
+          if (!consumeWork()) break;
+          if (!consumeWork()) break;
+          if (seen.has(frame.fiber)) {
+            state.truncated = true;
+            state.reason = 'cycle';
+            break;
+          }
+          seen.add(frame.fiber);
+          frame.entered = true;
+          if (typeof frame.fiber.memoizedProps === 'string') {
+            frame.result = frame.fiber.memoizedProps || undefined;
+          } else {
+            var label = typeTextAriaLabel(frame.fiber);
+            if (state.truncated) break;
+            if (label) {
+              frame.result = label;
+            } else {
+              var props = frame.fiber.memoizedProps || {};
+              if (frame.root && hostKind(frame.fiber) === 'textinput' && props.placeholder) {
+                frame.result = props.placeholder;
+              } else {
+                frame.child = frame.fiber.child;
+              }
+            }
+          }
+        } else if (frame.result === undefined && frame.child) {
+          if (!consumeWork()) break;
+          var child = frame.child;
+          frame.child = child.sibling;
+          stack.push({ fiber: child, root: false, entered: false, child: null, parts: [], result: undefined });
+        } else {
+          if (frame.result === undefined) {
+            var joined = typeTextJoinNameParts(frame.parts, hostKind(frame.fiber) === 'text');
+            if (state.truncated) break;
+            frame.result = joined || undefined;
+          }
+          if (!consumeWork()) break;
+          stack.pop();
+          if (stack.length === 0) return frame.result;
+          if (frame.result) {
+            if (!consumeWork()) break;
+            stack[stack.length - 1].parts.push({
+              text: frame.result,
+              isInlineText: typeof frame.fiber.memoizedProps === 'string'
+                || hostKind(frame.fiber) === 'text'
+            });
+          }
+        }
+      }
+      return undefined;
+    }
+
+    function typeTextStyleIsHidden(style) {
+      if (style == null) return false;
+      var display = null;
+      var active = new WeakSet();
+      if (!consumeWork()) return false;
+      var stack = [{ value: style, exit: false }];
+      while (stack.length > 0 && !state.truncated) {
+        if (!consumeWork()) break;
+        var frame = stack.pop();
+        var part = frame.value;
+        if (frame.exit) {
+          active.delete(part);
+          continue;
+        }
+        if (!part || typeof part !== 'object') continue;
+        if (!consumeWork()) break;
+        if (active.has(part)) {
+          state.truncated = true;
+          state.reason = 'cycle';
+          break;
+        }
+        active.add(part);
+        if (!consumeWork()) break;
+        stack.push({ value: part, exit: true });
+        if (Array.isArray(part)) {
+          for (var styleIndex = part.length - 1; styleIndex >= 0; styleIndex--) {
+            if (!consumeWork()) break;
+            stack.push({ value: part[styleIndex], exit: false });
+          }
+        } else if (Object.prototype.hasOwnProperty.call(part, 'display')) {
+          display = part.display;
+        }
+      }
+      return !state.truncated && display === 'none';
+    }
+
+    function typeTextSubtreeIsHidden(fiber) {
+      var props = (fiber && fiber.memoizedProps) || {};
+      if (props['aria-hidden']) return true;
+      if (props.accessibilityElementsHidden) return true;
+      if (props.importantForAccessibility === 'no-hide-descendants') return true;
+      if (typeTextStyleIsHidden(props.style)) return true;
+      if (state.truncated) return false;
+      var parent = fiber && fiber.return;
+      if (!parent || !parent.child) return false;
+      var seen = new WeakSet();
+      var sibling = parent.child;
+      while (sibling && !state.truncated) {
+        if (!consumeWork()) break;
+        if (!consumeWork()) break;
+        if (seen.has(sibling)) {
+          state.truncated = true;
+          state.reason = 'cycle';
+          break;
+        }
+        seen.add(sibling);
+        if (sibling !== fiber) {
+          var siblingProps = sibling.memoizedProps || {};
+          if (siblingProps['aria-modal'] || siblingProps.accessibilityViewIsModal) return true;
+        }
+        if (!consumeWork()) break;
+        sibling = sibling.sibling;
+      }
+      return false;
+    }
+
+    function typeTextIsHidden(fiber) {
+      var seen = new WeakSet();
+      var current = fiber;
+      while (current && !state.truncated) {
+        if (!consumeWork()) break;
+        if (!consumeWork()) break;
+        if (seen.has(current)) {
+          state.truncated = true;
+          state.reason = 'cycle';
+          break;
+        }
+        seen.add(current);
+        if (typeTextSubtreeIsHidden(current)) return true;
+        if (!consumeWork()) break;
+        current = current.return;
+      }
+      return false;
+    }
+
+    function addVisibleSource(source) {
+      if (opts.includeHidden === true) {
+        addSource(sources, source);
+        return;
+      }
+      var hidden = typeTextIsHidden(source.fiber);
+      if (!state.truncated && !hidden) addSource(sources, source);
+    }
+
+    function collectSource(fiber) {
+      if (!consumeWork()) return;
+      var props = fiber.memoizedProps || {};
+      if (selectorKind === 'testID') {
+        if (props.testID === opts.testID || props.nativeID === opts.testID) {
+          addSource(sources, {
+            fiber: fiber,
+            evidence: { testID: props.testID, nativeID: props.nativeID, selectorBundle: null }
+          });
+        }
+        return;
+      }
+      if (selectorKind === 'accessibilityLabel') {
+        var raw = props.accessibilityLabel;
+        if (raw === undefined || raw === null || raw === '') return;
+        if (raw === opts.accessibilityLabel) {
+          addSource(exactSources, {
+            fiber: fiber,
+            evidence: { testID: props.testID, accessibilityLabel: raw, selectorBundle: null }
+          });
+          return;
+        }
+        var normalized = String(raw).replace(/\\s+/g, ' ').replace(/^\\s+|\\s+$/g, '').toLowerCase();
+        var labelSource = {
+          fiber: fiber,
+          evidence: { testID: props.testID, accessibilityLabel: raw, selectorBundle: null }
+        };
+        if (normalized === normalizedSelector) addSource(normalizedSources, labelSource);
+        else if (normalized.indexOf(normalizedSelector) >= 0) addSource(containsSources, labelSource);
+        return;
+      }
+      if (selectorKind === 'placeholder') {
+        if (hostKind(fiber) !== 'textinput') return;
+        var placeholder = props && typeof props.placeholder === 'string' ? props.placeholder : null;
+        if (placeholder !== null && __match(placeholder, { value: opts.placeholder, exact: opts.exact === true })) {
+          addVisibleSource({
+            fiber: fiber,
+            evidence: {
+              testID: props.testID,
+              placeholder: placeholder,
+              selectorBundle: {
+                testID: props.testID,
+                role: __role(fiber),
+                placeholder: placeholder
+              }
+            }
+          });
+        }
+        return;
+      }
+      if (!__isA11yElement(fiber) || __role(fiber) !== wantedRole) return;
+      var accessibleName = typeTextAccessibleName(fiber);
+      if (accessibleName != null && __match(accessibleName, { value: opts.name, exact: opts.exact === true })) {
+        addVisibleSource({
+          fiber: fiber,
+          evidence: {
+            testID: props.testID,
+            accessibleName: accessibleName,
+            role: wantedRole,
+            placeholder: props.placeholder,
+            selectorBundle: {
+              testID: props.testID,
+              accessibleName: accessibleName,
+              role: wantedRole,
+              placeholder: props.placeholder
+            }
+          }
+        });
+      }
+    }
+
+    var completed = new WeakSet();
+    forEachTypeTextRoot(function(rootFiber) {
+      if (state.truncated) return TYPE_TEXT_ABORT;
+      var localSeen = new WeakSet();
+      if (!consumeWork()) return TYPE_TEXT_ABORT;
+      var stack = [rootFiber];
+      while (stack.length > 0 && !state.truncated) {
+        var node = stack.pop();
+        if (!consumeWork()) break;
+        if (!consumeWork()) break;
+        if (localSeen.has(node)) {
+          state.truncated = true;
+          state.reason = 'cycle';
+          break;
+        }
+        localSeen.add(node);
+        if (completed.has(node)) continue;
+        completed.add(node);
+        state.visitedFibers++;
+        collectSource(node);
+        if (state.truncated) break;
+        addCandidate(node);
+        if (state.truncated) break;
+        if (node.sibling) {
+          if (!consumeWork()) break;
+          stack.push(node.sibling);
+        }
+        if (node.child) {
+          if (!consumeWork()) break;
+          stack.push(node.child);
+        }
+      }
+      return state.truncated ? TYPE_TEXT_ABORT : null;
+    });
+
+    if (state.truncated) return typeTextTruncation(state);
+    if (selectorKind === 'accessibilityLabel') {
+      sources = exactSources.length > 0
+        ? exactSources
+        : (normalizedSources.length > 0 ? normalizedSources : containsSources);
+    }
+    if (sources.length === 0) {
+      return {
+        error: 'Component not found',
+        selector: selector,
+        hint: 'Use cdp_component_tree to verify the component is mounted, or pass a more specific selector.'
+      };
+    }
+
+    function nearestSource(candidate) {
+      var cursor = candidate.fiber;
+      var returnSeen = new WeakSet();
+      while (cursor) {
+        if (!consumeWork()) return null;
+        if (!consumeWork()) return null;
+        if (returnSeen.has(cursor)) {
+          state.truncated = true;
+          state.reason = 'cycle';
+          return null;
+        }
+        returnSeen.add(cursor);
+        for (var sourceIndex = 0; sourceIndex < sources.length; sourceIndex++) {
+          if (!consumeWork()) return null;
+          if (sameTypeTextFiber(cursor, sources[sourceIndex].fiber)) return sources[sourceIndex];
+        }
+        if (!consumeWork()) return null;
+        cursor = cursor.return;
+      }
+      return null;
+    }
+
+    var bindings = [];
+    for (var candidateIndex = 0; candidateIndex < candidates.length && !state.truncated; candidateIndex++) {
+      var candidate = candidates[candidateIndex];
+      var source = nearestSource(candidate);
+      if (source) {
+        bindings.push({
+          candidateFiber: candidate.fiber,
+          candidateAlternate: candidate.alternate,
+          sourceFiber: source.fiber,
+          contract: candidate.contract,
+          handler: candidate.handler,
+          component: candidate.name,
+          candidateTestID: candidate.props.testID,
+          sourceEvidence: source.evidence,
+          controlled: typeof candidate.props.value === 'string',
+          valueBefore: typeof candidate.props.value === 'string' ? candidate.props.value : null
+        });
+      }
+    }
+
+    if (state.truncated) return typeTextTruncation(state);
+    if (bindings.length > 1) {
+      var ambiguousHandler = bindings[0].contract === 'onChangeText:string' ? 'onChangeText' : 'onChange';
+      for (var handlerIndex = 1; handlerIndex < bindings.length; handlerIndex++) {
+        var nextHandler = bindings[handlerIndex].contract === 'onChangeText:string' ? 'onChangeText' : 'onChange';
+        if (nextHandler !== ambiguousHandler) {
+          ambiguousHandler = 'mixed';
+          break;
+        }
+      }
+      return {
+        error: 'Ambiguous typeText resolution',
+        testID: opts.testID,
+        handler: ambiguousHandler,
+        count: bindings.length,
+        candidates: bindings.slice(0, 5).map(function(binding) {
+          return {
+            component: binding.component,
+            testID: binding.candidateTestID,
+            handler: binding.contract === 'onChangeText:string' ? 'onChangeText' : 'onChange',
+            contract: binding.contract
+          };
+        }),
+        hint: 'Multiple distinct typeable handlers match this selector. Pass a more specific testID for the inner TextInput.'
+      };
+    }
+
+    return {
+      binding: bindings.length === 1 ? bindings[0] : null,
+      sourceCount: sources.length,
+      firstSource: sources[0].fiber,
+      state: state
+    };
+  }
+
+  function executeTypeTextTransaction(opts) {
+    var resolution = resolveTypeTextTarget(opts);
+    if (resolution.error) return resolution;
+    var binding = resolution.binding;
+    var selector = opts.testID || opts.accessibilityLabel;
+    if (!binding) {
+      return {
+        error: 'Component has no onChangeText or onChange handler',
+        component: typeTextFiberName(resolution.firstSource),
+        testID: selector,
+        handlerCalled: false,
+        visitedFibers: resolution.state.visitedFibers,
+        hint: 'Inspected every matching fiber and its bounded ownership graph \u2014 no typeable handler exists. Use cdp_component_tree to inspect the field, or pass the inner field testID directly.'
+      };
+    }
+    var text = opts.text !== undefined ? opts.text : '';
+    try {
+      if (binding.contract === 'onChangeText:string') binding.handler(text);
+      else binding.handler({ nativeEvent: { text: text } });
+    } catch (e) {
+      return {
+        success: false,
+        action_executed: true,
+        handler_error: (e && e.message || String(e)),
+        component: binding.component,
+        testID: selector,
+        hint: 'The action was dispatched but the app handler threw \u2014 the screen may now be in an error state. Check cdp_error_log before continuing.'
+      };
+    }
+    return {
+      success: true,
+      action: 'typeText',
+      component: binding.component,
+      testID: selector,
+      text: text,
+      handlerCalled: binding.contract === 'onChangeText:string' ? 'onChangeText' : 'onChange',
+      controlled: binding.controlled,
+      valueBefore: binding.valueBefore,
+      resolvedFrom: binding.component + (binding.candidateTestID ? ' [testID="' + binding.candidateTestID + '"]' : ''),
+      visitedFibers: resolution.state.visitedFibers,
+      selectorBundle: binding.sourceEvidence.selectorBundle || undefined
+    };
+  }
+
   // UI Interaction
   function interact(opts) {
     opts = opts || {};
@@ -69972,6 +65644,7 @@ var init_injected_helpers = __esm({
     var selector = opts.testID || opts.accessibilityLabel;
     var matchField = opts.testID ? 'testID' : 'accessibilityLabel';
     var isLabelMatch = matchField === 'accessibilityLabel';
+    var ladderTarget = null;
 
     if (!action) return JSON.stringify({ error: 'action is required' });
 
@@ -69984,19 +65657,18 @@ var init_injected_helpers = __esm({
       });
     }
 
-    // Task 7 \u2014 ladder routing. When the caller passes a declarative selector
-    // (role/name/text/placeholder) and NO testID/accessibilityLabel, resolve
-    // via resolveLadder then press the found fiber or its nearest onPress
-    // ancestor (walking .return). testID/accessibilityLabel keep the legacy
-    // path below unchanged (including Task 6's fail-closed truncation).
+    if (action === 'typeText') {
+      return JSON.stringify(executeTypeTextTransaction(opts));
+    }
+
+    // Task 7 \u2014 ladder routing. typeText reuses the established placeholder
+    // and role+name facts; its text argument remains the value to enter.
     if (!selector && (opts.role || opts.name || opts.text || opts.placeholder)) {
-      // Ladder selectors only support press in Phase 1 \u2014 fail closed for any
-      // other action instead of silently pressing (Codex review).
-      if (opts.action && opts.action !== 'press') {
+      if (action !== 'press') {
         return JSON.stringify({
-          error: 'Ladder selectors (role/name/text/placeholder) support only action:"press"',
+          error: 'Ladder selectors support press, plus placeholder or role+name for typeText',
           requestedAction: opts.action,
-          hint: 'Use a testID or accessibilityLabel for longPress / typeText / scroll / setFieldValue.'
+          hint: 'Use a testID or accessibilityLabel for longPress, scroll, or setFieldValue.'
         });
       }
       // GH #525 \u2014 walkUp's bounded search and ambiguity refusal belong to the
@@ -70037,9 +65709,10 @@ var init_injected_helpers = __esm({
       }
     }
 
-    if (!selector) return JSON.stringify({ error: 'testID or accessibilityLabel is required' });
+    if (!selector && !ladderTarget) return JSON.stringify({ error: 'testID or accessibilityLabel is required' });
+    if (ladderTarget) isLabelMatch = false;
 
-    var found = null;
+    var found = ladderTarget;
     var findCount = 0;
     // Fail-closed truncation budget. Mirrors the salient-digest budget
     // (Math.min(cap, perRoot * roots)) and its wall-clock guard
@@ -70067,11 +65740,19 @@ var init_injected_helpers = __esm({
     // GH #525 \u2014 walkUp collects every strict-testID match so duplicates can refuse.
     var walkUpCollect = opts.walkUp === true && !isLabelMatch;
     var walkUpMatches = [];
+    var findSeen = null;
+    var findCycleDetected = false;
 
     function findFiber(fiber) {
-      var current = fiber;
-      while (current) {
+      var findStack = [fiber];
+      while (findStack.length > 0) {
+        var current = findStack.pop();
         if (findTruncated) return;
+        if (findSeen.has(current)) {
+          findCycleDetected = true;
+          continue;
+        }
+        findSeen.add(current);
         findCount++;
         if (findCount > findBudget || (Date.now() - findStart) > 3000) {
           findTruncated = true;
@@ -70104,9 +65785,8 @@ var init_injected_helpers = __esm({
             }
           }
         }
-        if (current.child) findFiber(current.child);
-        if (!isLabelMatch && found) return;
-        current = current.sibling;
+        if (current.sibling) findStack.push(current.sibling);
+        if (current.child) findStack.push(current.child);
       }
     }
 
@@ -70122,6 +65802,7 @@ var init_injected_helpers = __esm({
     forEachRootFiber(function(rootFiber) {
       if (findTruncated) return found;
       if (!isLabelMatch && found) return found;
+      findSeen = new WeakSet();
       findFiber(rootFiber);
       return isLabelMatch ? null : found;
     });
@@ -70174,6 +65855,7 @@ var init_injected_helpers = __esm({
     }
 
     if (walkUpCollect && walkUpMatches.length > 0) found = walkUpMatches[0];
+    if (ladderTarget) found = ladderTarget;
 
     if (!found) {
       return JSON.stringify({
@@ -70272,201 +65954,7 @@ var init_injected_helpers = __esm({
         return JSON.stringify(pressResult);
       }
 
-      if (action === 'typeText') {
-        var text = opts.text !== undefined ? opts.text : '';
-
-        // Issue #126 Fix A \u2014 typeText handler resolution.
-        //
-        // Path 1: matched fiber itself has onChangeText / onChange. SINGLE-
-        // fire \u2014 pick onChangeText if present, else onChange. Avoids the
-        // double-fire bug: when an RHF Controller wraps a TextInput via
-        // <TextInput {...field} />, both onChangeText and onChange are bound
-        // to field.onChange. Firing both ran field.onChange twice with
-        // different argument shapes (string then {nativeEvent}), corrupting
-        // the form state and double-triggering validators.
-        //
-        // Path 2: when matched fiber has no typeable handler, walk
-        // descendants for a typeable child. Common case: design-system
-        // TextField wraps TextInput in an outer Pressable/View; the wrapper
-        // testID resolves to the wrapper fiber whose props don't carry
-        // onChangeText. Walking down finds the inner TextInput. Bounds:
-        // depth \u2264 16, visit cap 200 across both passes. Two-pass: pass 1
-        // considers only onChangeText; pass 2 falls back to onChange (the
-        // overloaded RN handler) only if no onChangeText descendant
-        // exists. Within each pass: prefer fibers whose type matches a
-        // TextInput-family fingerprint, then dedupe candidates that share
-        // the same handler function reference (react-native-paper wraps
-        // TextInputOutlined \u2192 TextInput \u2192 InternalTextInput each forwarding
-        // the same onChangeText \u2014 pick the deepest leaf), and return
-        // Ambiguous only when truly distinct typed handlers compete.
-        var verify = opts.verify === true;
-        var controlled = typeof props.value === 'string';
-        var valueBefore = controlled ? props.value : null;
-
-        if (typeof props.onChangeText === 'function' || typeof props.onChange === 'function') {
-          var p1Handler;
-          if (typeof props.onChangeText === 'function') {
-            p1Handler = 'onChangeText';
-            props.onChangeText(text);
-          } else {
-            p1Handler = 'onChange';
-            props.onChange({ nativeEvent: { text: text } });
-          }
-          return JSON.stringify({
-            success: true, action: 'typeText', component: typeName, testID: selector, text: text,
-            handlerCalled: p1Handler, controlled: controlled, valueBefore: valueBefore,
-            resolvedFrom: 'matched-fiber'
-          });
-        }
-
-        // Anchored on TextInput-family names. Drops bare Input/Field
-        // substrings to avoid false-positives on RadioGroupField,
-        // InputAccessoryView, BottomSheetTextInput's wrapper, etc.
-        var TYPEABLE_TYPE_RE = /(TextInput|TextField|EditText)/;
-        var visited = 0;
-        var DESCENDANT_DEPTH_CAP = 16;
-        var DESCENDANT_VISIT_CAP = 200;
-
-        function findHandlerDescendants(handlerName) {
-          var matches = [];
-          function walk(node, depth) {
-            if (!node || depth > DESCENDANT_DEPTH_CAP || visited > DESCENDANT_VISIT_CAP) return;
-            visited++;
-            var nProps = node.memoizedProps || {};
-            if (typeof nProps[handlerName] === 'function') {
-              var nName = (node.type && (node.type.displayName || node.type.name)) || '';
-              matches.push({
-                fiber: node,
-                props: nProps,
-                name: nName,
-                depth: depth,
-                typeFingerprint: TYPEABLE_TYPE_RE.test(nName)
-              });
-            }
-            if (node.child) walk(node.child, depth + 1);
-            if (node.sibling) walk(node.sibling, depth);
-          }
-          if (found.child) walk(found.child, 1);
-          return matches;
-        }
-
-        // Dedupe candidates that share the same handler function reference.
-        // react-native-paper's TextInputOutlined \u2192 TextInput \u2192 InternalTextInput
-        // chain each forwards the SAME onChangeText down \u2014 they're the same
-        // logical handler, not three independent typeable fields. Keep the
-        // deepest leaf so the call lands on the host-component fiber that
-        // actually owns the input. (Codex M4 / multi-LLM review of issue #126.)
-        function dedupeByHandlerIdentity(matches, handlerName) {
-          var byFn = [];
-          for (var i = 0; i < matches.length; i++) {
-            var m = matches[i];
-            var fn = m.props[handlerName];
-            var existingIdx = -1;
-            for (var j = 0; j < byFn.length; j++) {
-              if (byFn[j].props[handlerName] === fn) { existingIdx = j; break; }
-            }
-            if (existingIdx === -1) {
-              byFn.push(m);
-            } else if (m.depth > byFn[existingIdx].depth) {
-              // Same handler, deeper fiber \u2014 replace with the leaf.
-              byFn[existingIdx] = m;
-            }
-          }
-          return byFn;
-        }
-
-        function pickFromMatches(matches, handlerName) {
-          if (matches.length === 0) return { kind: 'none' };
-          var deduped = dedupeByHandlerIdentity(matches, handlerName);
-          var typed = [];
-          for (var i = 0; i < deduped.length; i++) if (deduped[i].typeFingerprint) typed.push(deduped[i]);
-          if (typed.length === 1) return { kind: 'one', match: typed[0], handler: handlerName };
-          if (typed.length > 1) return { kind: 'ambiguous', matches: typed, handler: handlerName };
-          if (deduped.length === 1) return { kind: 'one', match: deduped[0], handler: handlerName };
-          return { kind: 'ambiguous', matches: deduped, handler: handlerName };
-        }
-
-        var pass1 = pickFromMatches(findHandlerDescendants('onChangeText'), 'onChangeText');
-        var picked = null;
-        if (pass1.kind === 'one') {
-          picked = pass1;
-        } else if (pass1.kind === 'ambiguous') {
-          return JSON.stringify({
-            error: 'Ambiguous typeText resolution',
-            testID: selector,
-            handler: 'onChangeText',
-            count: pass1.matches.length,
-            candidates: pass1.matches.slice(0, 5).map(function(m) {
-              return { component: m.name, testID: m.props.testID, typeFingerprint: m.typeFingerprint };
-            }),
-            hint: 'Multiple onChangeText descendants under testID "' + selector + '". Pass a more specific testID \u2014 ideally the inner TextInput itself.'
-          });
-        } else {
-          // pass 2 \u2014 onChange fallback
-          var pass2 = pickFromMatches(findHandlerDescendants('onChange'), 'onChange');
-          if (pass2.kind === 'one') {
-            picked = pass2;
-          } else if (pass2.kind === 'ambiguous') {
-            return JSON.stringify({
-              error: 'Ambiguous typeText resolution',
-              testID: selector,
-              handler: 'onChange',
-              count: pass2.matches.length,
-              candidates: pass2.matches.slice(0, 5).map(function(m) {
-                return { component: m.name, testID: m.props.testID, typeFingerprint: m.typeFingerprint };
-              }),
-              hint: 'Multiple onChange descendants under testID "' + selector + '". Pass a more specific testID \u2014 ideally the inner TextInput itself.'
-            });
-          }
-        }
-
-        if (!picked) {
-          if (verify) {
-            return JSON.stringify({ success: true, action: 'typeText', testID: selector, handlerCalled: false, controlled: controlled, valueBefore: valueBefore });
-          }
-          return JSON.stringify({
-            error: 'Component has no onChangeText or onChange handler',
-            component: typeName,
-            testID: selector,
-            hint: 'Walked up to ' + DESCENDANT_DEPTH_CAP + ' levels (' + visited + ' fibers) \u2014 no descendant has a typeable handler. The matched fiber may not contain a TextInput. Use cdp_component_tree to inspect, or pass the inner field testID directly.'
-          });
-        }
-
-        // Single-fire \u2014 call only the picked handler. Avoids the
-        // double-fire bug on RHF Controllers where field.onChange wired
-        // to onChangeText + RN HostComponent onChange would each run
-        // with different argument shapes.
-        if (picked.handler === 'onChangeText') {
-          picked.match.props.onChangeText(text);
-        } else {
-          picked.match.props.onChange({ nativeEvent: { text: text } });
-        }
-
-        var pickedControlled = typeof picked.match.props.value === 'string';
-        return JSON.stringify({
-          success: true, action: 'typeText', component: typeName, testID: selector, text: text,
-          handlerCalled: picked.handler, controlled: pickedControlled,
-          valueBefore: pickedControlled ? picked.match.props.value : valueBefore,
-          resolvedFrom: picked.match.name + (picked.match.props.testID ? ' [testID="' + picked.match.props.testID + '"]' : ''),
-          visitedFibers: visited
-        });
-      }
-
       if (action === 'setFieldValue') {
-        // Issue #126 Gap A \u2014 explicit React Hook Form fallback. typeText's
-        // handler chain walks DOWN looking for a TextInput descendant with
-        // onChangeText/onChange. That works for wrapper-Pressable patterns
-        // where the inner TextInput is reachable, but fails when the field's
-        // value flows through field.onChange \u2192 FormProvider context \u2192
-        // setValue. There's no inner TextInput-shaped fiber to find, because
-        // the design-system field calls field.onChange directly via a
-        // Controller render prop.
-        //
-        // Resolution: walk UP from the matched fiber (the testID anchor)
-        // looking for a Provider fiber whose memoizedProps.value duck-types
-        // as a React Hook Form UseFormReturn. Then call value.setValue(
-        // name, value, options). The closest ancestor wins (natural React
-        // context resolution), so nested forms behave intuitively.
         var fieldName = opts.name;
         var fieldValue = opts.value;
         if (typeof fieldName !== 'string' || fieldName.length === 0) {
@@ -70479,8 +65967,7 @@ var init_injected_helpers = __esm({
         var shouldValidate = opts.shouldValidate !== false;
         var shouldDirty = opts.shouldDirty !== false;
 
-        var ANCESTOR_DEPTH_CAP = 32;
-        var ANCESTOR_VISIT_CAP = 100;
+        var FORM_RESOLUTION_WORK_LIMIT = 200;
         function looksLikeUseFormReturn(v) {
           return (
             v && typeof v === 'object'
@@ -70489,26 +65976,109 @@ var init_injected_helpers = __esm({
             && v.control && typeof v.control === 'object'
           );
         }
-        var ancestor = found.return;
-        var ancestorDepth = 0;
+        var ancestor = found;
         var ancestorVisits = 0;
+        var formResolutionWork = 0;
+        var formResolutionReason = null;
         var formReturn = null;
-        while (ancestor && ancestorDepth < ANCESTOR_DEPTH_CAP && ancestorVisits < ANCESTOR_VISIT_CAP) {
-          ancestorVisits++;
-          var aProps = ancestor.memoizedProps;
-          if (aProps && looksLikeUseFormReturn(aProps.value)) {
-            formReturn = aProps.value;
+        var formResolution = null;
+        var ancestorSeen = new WeakSet();
+        var nearestExplicitControl = null;
+        var hookFormReturns = [];
+
+        function consumeFormWork() {
+          formResolutionWork++;
+          if (formResolutionWork > FORM_RESOLUTION_WORK_LIMIT) {
+            formResolutionReason = 'work-limit';
+            return false;
+          }
+          return true;
+        }
+
+        function pushIdentityUnique(list, value) {
+          for (var identityIndex = 0; identityIndex < list.length; identityIndex++) {
+            if (list[identityIndex] === value) return;
+          }
+          list.push(value);
+        }
+
+        while (ancestor && !formResolutionReason) {
+          if (!consumeFormWork()) break;
+          if (ancestorSeen.has(ancestor)) {
+            formResolutionReason = 'cycle';
             break;
           }
+          ancestorSeen.add(ancestor);
+          ancestorVisits++;
+          var aProps = ancestor.memoizedProps || {};
+          if (!nearestExplicitControl && aProps.control && typeof aProps.control === 'object') {
+            nearestExplicitControl = aProps.control;
+          }
+          if (aProps && looksLikeUseFormReturn(aProps.value)) {
+            if (!nearestExplicitControl || aProps.value.control === nearestExplicitControl) {
+              formReturn = aProps.value;
+              formResolution = 'form-provider';
+              break;
+            }
+          }
+
+          var hook = ancestor.memoizedState;
+          var hookSeen = new WeakSet();
+          while (hook && typeof hook === 'object' && !formResolutionReason) {
+            if (!consumeFormWork()) break;
+            if (hookSeen.has(hook)) {
+              formResolutionReason = 'cycle';
+              break;
+            }
+            hookSeen.add(hook);
+            var hookValue = hook.memoizedState;
+            if (looksLikeUseFormReturn(hookValue)) pushIdentityUnique(hookFormReturns, hookValue);
+            if (hookValue && typeof hookValue === 'object' && looksLikeUseFormReturn(hookValue.current)) {
+              pushIdentityUnique(hookFormReturns, hookValue.current);
+            }
+            hook = hook.next;
+          }
           ancestor = ancestor.return;
-          ancestorDepth++;
+        }
+
+        if (formResolutionReason) {
+          return JSON.stringify({
+            error: 'setFieldValue resolution truncated',
+            truncated: true,
+            reason: formResolutionReason,
+            work: formResolutionWork,
+            workLimit: FORM_RESOLUTION_WORK_LIMIT,
+            ancestorVisits: ancestorVisits,
+            hint: 'The bounded FormProvider/useForm owner scan was incomplete; setValue was not called.'
+          });
+        }
+
+        if (!formReturn) {
+          var matchingHookReturns = [];
+          for (var hfi = 0; hfi < hookFormReturns.length; hfi++) {
+            if (nearestExplicitControl && hookFormReturns[hfi].control === nearestExplicitControl) {
+              pushIdentityUnique(matchingHookReturns, hookFormReturns[hfi]);
+            }
+          }
+          if (matchingHookReturns.length === 1) {
+            formReturn = matchingHookReturns[0];
+            formResolution = 'control-prop-hook';
+          } else if (matchingHookReturns.length > 1) {
+            return JSON.stringify({
+              error: 'setFieldValue: ambiguous useForm control ownership',
+              testID: selector,
+              count: matchingHookReturns.length,
+              ancestorVisits: ancestorVisits,
+              hint: 'Multiple useForm hook returns own the explicit control prop. Add a more specific testID inside the intended Controller subtree.'
+            });
+          }
         }
         if (!formReturn) {
           return JSON.stringify({
-            error: 'setFieldValue: no FormProvider ancestor found',
+            error: 'setFieldValue: no FormProvider ancestor or matching useForm control found',
             testID: selector,
             ancestorVisits: ancestorVisits,
-            hint: 'No React Hook Form FormProvider ancestor with setValue+getValues+control was reachable within ' + ANCESTOR_DEPTH_CAP + ' levels. Either the form is not wrapped in <FormProvider {...methods}>, or the testID anchor sits outside the form subtree. If you only need to fire onChangeText/onChange, use action="typeText" instead.'
+            hint: 'The target is not wrapped in <FormProvider>, and no ancestor useForm hook return matched the nearest explicit control prop by identity. If you only need to fire onChangeText/onChange, use action="typeText" instead.'
           });
         }
         var coercedToString = false;
@@ -70539,7 +66109,8 @@ var init_injected_helpers = __esm({
           coercedToString: coercedToString,
           shouldValidate: shouldValidate,
           shouldDirty: shouldDirty,
-          ancestorVisits: ancestorVisits
+          ancestorVisits: ancestorVisits,
+          resolvedFrom: formResolution
         });
       }
 
@@ -70936,35 +66507,11 @@ var init_injected_helpers = __esm({
 
   function readInputValue(testID) {
     if (!testID) return JSON.stringify({ __agent_error: 'testID is required' });
-    var target = null;
-    function findByTestID(fiber) {
-      if (!fiber || target) return;
-      var p = fiber.memoizedProps;
-      if (p && (p.testID === testID || p.nativeID === testID)) { target = fiber; return; }
-      var child = fiber.child;
-      while (child) { findByTestID(child); child = child.sibling; }
-    }
-    forEachRootFiber(function(rootFiber) { findByTestID(rootFiber); return target; });
-    if (!target) return JSON.stringify({ __agent_error: 'Component not found: ' + testID });
-
-    function valueOf(fiber) {
-      var p = fiber && fiber.memoizedProps;
-      return p && typeof p.value === 'string' ? p.value : null;
-    }
-    var direct = valueOf(target);
-    if (direct !== null) return JSON.stringify({ value: direct, controlled: true });
-
-    var found = [], visited = 0;
-    (function walk(node, depth) {
-      if (!node || depth > 16 || visited > 200 || found.length > 1) return;
-      visited++;
-      var v = valueOf(node);
-      if (v !== null) found.push(v);
-      if (node.child) walk(node.child, depth + 1);
-      if (node.sibling) walk(node.sibling, depth);
-    })(target.child, 1);
-
-    if (found.length === 1) return JSON.stringify({ value: found[0], controlled: true });
+    var resolution = resolveTypeTextTarget({ testID: testID });
+    if (resolution.error) return JSON.stringify({ __agent_error: resolution.error });
+    if (!resolution.binding) return JSON.stringify({ value: null, controlled: false });
+    var props = resolution.binding.candidateFiber.memoizedProps || {};
+    if (typeof props.value === 'string') return JSON.stringify({ value: props.value, controlled: true });
     return JSON.stringify({ value: null, controlled: false });
   }
 
@@ -72035,7 +67582,7 @@ async function probeReactReachable(evaluate, budgetMs, pollMs = REACT_READY_POLL
         return true;
     } catch {
     }
-    await sleep5(pollMs);
+    await sleep3(pollMs);
   }
   return false;
 }
@@ -72050,7 +67597,7 @@ async function waitForReact(evaluate, timeout, pollInterval) {
         return;
     } catch {
     }
-    await sleep5(effectivePoll);
+    await sleep3(effectivePoll);
   }
   console.error(`CDP: React not ready after ${effectiveTimeout}ms \u2014 helpers will be injected anyway`);
 }
@@ -72506,7 +68053,7 @@ async function connectToTarget(ctx, target, retries = 5, intent = "default") {
         throw new Error("CDP connection refused. Is Metro running and the app loaded?");
       }
       if (i < retries - 1)
-        await sleep5(2e3);
+        await sleep3(2e3);
     }
   }
   ctx.setState("disconnected");
@@ -73419,7 +68966,7 @@ var init_cdp_client = __esm({
               return { value: val.v };
             }
           }
-          await sleep5(100);
+          await sleep3(100);
         }
         clearAsyncSlot();
         return {
@@ -73797,8 +69344,8 @@ var init_mutation_absence = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/verification/config.js
-import { existsSync as existsSync30, readFileSync as readFileSync31 } from "node:fs";
-import { join as join41 } from "node:path";
+import { existsSync as existsSync21, readFileSync as readFileSync23 } from "node:fs";
+import { join as join30 } from "node:path";
 function getCachedProjectRoot() {
   if (_cachedProjectRoot === void 0) {
     _cachedProjectRoot = findProjectRoot();
@@ -73850,14 +69397,14 @@ function loadVerificationConfig(projectRoot) {
   const cached2 = cache.get(projectRoot);
   if (cached2)
     return cached2;
-  const path = join41(projectRoot, ".rn-agent", "config.json");
-  if (!existsSync30(path)) {
+  const path = join30(projectRoot, ".rn-agent", "config.json");
+  if (!existsSync21(path)) {
     cache.set(projectRoot, DEFAULTS);
     return DEFAULTS;
   }
   let raw;
   try {
-    raw = JSON.parse(readFileSync31(path, "utf-8"));
+    raw = JSON.parse(readFileSync23(path, "utf-8"));
   } catch {
     cache.set(projectRoot, DEFAULTS);
     return DEFAULTS;
@@ -73891,8 +69438,8 @@ var init_config = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/tools/reload.js
-import { execFile as execFileCb12 } from "node:child_process";
-import { promisify as promisify15 } from "node:util";
+import { execFile as execFileCb11 } from "node:child_process";
+import { promisify as promisify14 } from "node:util";
 function captureClientState(client2) {
   const target = client2.connectedTarget;
   return {
@@ -73967,8 +69514,8 @@ async function resolveExactReloadTargetId(client2, captured, authorityTarget, ex
   return exactCandidates[0].id;
 }
 async function recoverAfterFailedReconnect(getClient2, setClient2, createClient2, captured, deps = {}, authorityTarget) {
-  const execFile24 = deps.execFile ?? defaultExecFile2;
-  const sleep7 = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
+  const execFile24 = deps.execFile ?? defaultExecFile;
+  const sleep6 = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
   const resolveExactTargetId = deps.resolveExactTargetId ?? ((client2, state, target) => resolveExactReloadTargetId(client2, state, target, execFile24));
   const first = await forceReconnect(getClient2(), setClient2, createClient2, captured, authorityTarget, authorityTarget ? resolveExactTargetId : void 0);
   if (first.ok) {
@@ -74035,7 +69582,7 @@ async function recoverAfterFailedReconnect(getClient2, setClient2, createClient2
       relaunchSteps: steps
     };
   }
-  await sleep7(3e3);
+  await sleep6(3e3);
   const second = await forceReconnect(getClient2(), setClient2, createClient2, captured, authorityTarget, resolveExactTargetId);
   if (second.ok) {
     return {
@@ -74054,7 +69601,7 @@ async function recoverAfterFailedReconnect(getClient2, setClient2, createClient2
   };
 }
 function createReloadHandler(getClient2, setClient2, createClient2, deps = {}) {
-  const sleep7 = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
+  const sleep6 = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
   return withConnection(getClient2, async (args, client2) => {
     try {
       const result = await client2.evaluate('(function() {  var ds = null;  if (typeof __turboModuleProxy === "function") try { ds = __turboModuleProxy("DevSettings"); } catch(e) {}  if (!ds && typeof globalThis.nativeModuleProxy !== "undefined") try { ds = globalThis.nativeModuleProxy.DevSettings; } catch(e) {}  if (!ds && typeof globalThis.__fbBatchedBridge !== "undefined") try { ds = globalThis.__fbBatchedBridge.getCallableModule("DevSettings"); } catch(e) {}  if (ds && typeof ds.reload === "function") { ds.reload(); return "devSettings"; }  if (typeof globalThis.location !== "undefined" && typeof globalThis.location.reload === "function") { globalThis.location.reload(); return "location"; }  throw new Error("DevSettings not available \u2014 use Maestro or simctl to restart the app");})()');
@@ -74070,7 +69617,7 @@ function createReloadHandler(getClient2, setClient2, createClient2, deps = {}) {
     }
     const wsDownDeadline = Date.now() + 3e3;
     while (client2.isConnected && Date.now() < wsDownDeadline) {
-      await sleep7(200);
+      await sleep6(200);
     }
     let reconnected = false;
     let lastReconnErr = "";
@@ -74095,7 +69642,7 @@ function createReloadHandler(getClient2, setClient2, createClient2, deps = {}) {
       } catch (reconnErr) {
         lastReconnErr = reconnErr instanceof Error ? reconnErr.message : String(reconnErr);
         if (attempt < SOFT_RECONNECT_ATTEMPTS - 1) {
-          await sleep7(2e3 + attempt * 1e3);
+          await sleep6(2e3 + attempt * 1e3);
         }
       } finally {
         if (reconnTimer)
@@ -74138,7 +69685,7 @@ function createReloadHandler(getClient2, setClient2, createClient2, deps = {}) {
     }
     const helperDeadline = Date.now() + 12e3;
     while (!client2.helpersInjected && Date.now() < helperDeadline) {
-      await sleep7(400);
+      await sleep6(400);
     }
     if (!client2.isConnected) {
       return failResult("Reload triggered but the exact-target connection dropped after re-discovery.", "RECONNECT_TIMEOUT", {
@@ -74157,7 +69704,7 @@ function createReloadHandler(getClient2, setClient2, createClient2, deps = {}) {
     return okResult({ reloaded: true, type: "full", reconnected: true }, Object.keys(forceMeta).length > 0 ? { meta: forceMeta } : void 0);
   });
 }
-var defaultExecFile2, sessionReloadCount, SOFT_RECONNECT_DEADLINE_MS, SOFT_RECONNECT_ATTEMPTS, FORCE_FALLBACK_TIMEOUT_MS, DISCONNECT_TIMEOUT_MS;
+var defaultExecFile, sessionReloadCount, SOFT_RECONNECT_DEADLINE_MS, SOFT_RECONNECT_ATTEMPTS, FORCE_FALLBACK_TIMEOUT_MS, DISCONNECT_TIMEOUT_MS;
 var init_reload = __esm({
   "packages/rn-dev-agent-core/dist/tools/reload.js"() {
     "use strict";
@@ -74165,12 +69712,151 @@ var init_reload = __esm({
     init_maestro_validator();
     init_status();
     init_target_device_authority();
-    defaultExecFile2 = promisify15(execFileCb12);
+    defaultExecFile = promisify14(execFileCb11);
     sessionReloadCount = 0;
     SOFT_RECONNECT_DEADLINE_MS = 3e4;
     SOFT_RECONNECT_ATTEMPTS = 5;
     FORCE_FALLBACK_TIMEOUT_MS = 1e4;
     DISCONNECT_TIMEOUT_MS = 2e3;
+  }
+});
+
+// packages/rn-dev-agent-core/dist/tools/resolve-ios-app-file.js
+import { execFileSync as execFileSync13 } from "node:child_process";
+import { existsSync as existsSync22, cpSync, rmSync as rmSync9, mkdirSync as mkdirSync14, readdirSync as readdirSync7, statSync as statSync10 } from "node:fs";
+import { tmpdir as tmpdir8 } from "node:os";
+import { join as join31, basename as basename4 } from "node:path";
+function flowUsesClearState(flowText) {
+  return /clearState:\s*true\b/.test(flowText) || /^[ \t]*-[ \t]*clearState[ \t]*$/m.test(flowText);
+}
+function defaultSnapshotApp(appPath) {
+  try {
+    const destDir = join31(tmpdir8(), "rn-appfile-snapshots");
+    const dest = join31(destDir, basename4(appPath));
+    rmSync9(dest, { recursive: true, force: true });
+    mkdirSync14(destDir, { recursive: true });
+    try {
+      execFileSync13("cp", ["-Rc", appPath, dest], { timeout: 3e4, stdio: "ignore" });
+    } catch {
+      cpSync(appPath, dest, { recursive: true });
+    }
+    return dest;
+  } catch {
+    return null;
+  }
+}
+function resolveIosAppFile(bundleId, deps = {}) {
+  const exists = deps.exists ?? existsSync22;
+  const getAppContainer = deps.getAppContainer ?? defaultGetAppContainer;
+  const snapshotApp = deps.snapshotApp ?? defaultSnapshotApp;
+  const fromContainer = getAppContainer(bundleId, deps.deviceId);
+  if (fromContainer && exists(fromContainer)) {
+    const snapshot = snapshotApp(fromContainer);
+    if (snapshot)
+      return snapshot;
+  }
+  const fromDerived = (deps.newestDerivedDataApp ?? (() => null))();
+  if (fromDerived && exists(fromDerived))
+    return fromDerived;
+  return null;
+}
+function resolveAppFileForClearState(platform, flowText, headerAppId, explicitAppFile, deps) {
+  if (explicitAppFile)
+    return { ok: true, appFile: explicitAppFile };
+  if (platform !== "ios" || !flowUsesClearState(flowText))
+    return { ok: true };
+  if (!headerAppId) {
+    return {
+      ok: false,
+      error: "Flow uses clearState on iOS but no appId is known to locate the .app. Add `appId:` to the flow header or pass appFile=<path-to-.app>."
+    };
+  }
+  const appFile = resolveIosAppFile(headerAppId, deps) ?? void 0;
+  if (!appFile) {
+    return {
+      ok: false,
+      error: `Flow uses clearState on iOS but no built .app could be located for ${headerAppId}. Pass appFile=<path-to-.app> (e.g. <DerivedData>/Build/Products/Debug-iphonesimulator/<App>.app).`
+    };
+  }
+  return { ok: true, appFile };
+}
+function defaultGetAppContainer(bundleId, deviceId) {
+  try {
+    const target = deviceId && !/\s/.test(deviceId) ? deviceId : "booted";
+    const out = execFileSync13("xcrun", ["simctl", "get_app_container", target, bundleId, "app"], {
+      encoding: "utf8",
+      timeout: 5e3
+    }).trim();
+    return out || null;
+  } catch {
+    return null;
+  }
+}
+function defaultListSnapshots() {
+  const dir = join31(tmpdir8(), "rn-appfile-snapshots");
+  try {
+    return readdirSync7(dir).filter((name) => name.endsWith(".app")).map((name) => join31(dir, name));
+  } catch {
+    return [];
+  }
+}
+function defaultReadBundleId(appPath, timeoutMs) {
+  try {
+    const out = execFileSync13("plutil", ["-extract", "CFBundleIdentifier", "raw", join31(appPath, "Info.plist")], { timeout: timeoutMs, encoding: "utf8" });
+    return out.trim() || null;
+  } catch {
+    return null;
+  }
+}
+function defaultMtimeMs(appPath) {
+  try {
+    return statSync10(appPath).mtimeMs;
+  } catch {
+    return null;
+  }
+}
+function findSnapshotForBundleId(bundleId, deps = {}) {
+  const listSnapshots = deps.listSnapshots ?? defaultListSnapshots;
+  const readBundleId = deps.readBundleId ?? defaultReadBundleId;
+  const mtimeMs = deps.mtimeMs ?? defaultMtimeMs;
+  const now = deps.now ?? Date.now;
+  try {
+    const deadline = now() + SNAPSHOT_SCAN_BUDGET_MS;
+    const candidates = listSnapshots().map((path) => ({ path, m: mtimeMs(path) })).filter((c) => c.m !== null).sort((a, b) => b.m - a.m).slice(0, SNAPSHOT_SCAN_CAP);
+    for (const { path, m } of candidates) {
+      const remaining = deadline - now();
+      if (remaining <= 0)
+        return null;
+      if (readBundleId(path, Math.min(PLUTIL_TIMEOUT_MS, remaining)) === bundleId) {
+        return { path, mtimeMs: m };
+      }
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+function snapshotHintForBundleId(bundleId, deps = {}) {
+  try {
+    const now = deps.now ?? Date.now;
+    const snap = findSnapshotForBundleId(bundleId, deps);
+    if (!snap)
+      return null;
+    return {
+      path: snap.path,
+      ageMinutes: Math.max(0, Math.round((now() - snap.mtimeMs) / 6e4))
+    };
+  } catch {
+    return null;
+  }
+}
+var SNAPSHOT_SCAN_CAP, SNAPSHOT_SCAN_BUDGET_MS, PLUTIL_TIMEOUT_MS;
+var init_resolve_ios_app_file = __esm({
+  "packages/rn-dev-agent-core/dist/tools/resolve-ios-app-file.js"() {
+    "use strict";
+    SNAPSHOT_SCAN_CAP = 10;
+    SNAPSHOT_SCAN_BUDGET_MS = 3e3;
+    PLUTIL_TIMEOUT_MS = 2e3;
   }
 });
 
@@ -74181,6 +69867,1458 @@ var init_device_session_health = __esm({
     init_agent_device_wrapper();
     init_rn_fast_runner_client();
     init_protocol();
+  }
+});
+
+// packages/rn-dev-agent-core/dist/session/runtime-paths.js
+import { chmodSync as chmodSync4, lstatSync as lstatSync11, mkdirSync as mkdirSync15 } from "node:fs";
+import { join as join32, resolve as resolve11 } from "node:path";
+function privateDirectory(path) {
+  mkdirSync15(path, { recursive: true, mode: 448 });
+  const stat2 = lstatSync11(path);
+  if (stat2.isSymbolicLink() || !stat2.isDirectory()) {
+    throw new Error("SESSION_RUNTIME_ROOT_UNSAFE: runtime root must be a real directory");
+  }
+  chmodSync4(path, 448);
+  return path;
+}
+function sessionRuntimeRoot(projectRoot) {
+  const configured = process.env.RN_DEV_AGENT_SESSION_RUNTIME_ROOT;
+  return configured ? privateDirectory(resolve11(configured)) : join32(resolve11(projectRoot), ".rn-agent");
+}
+function sessionStateDirectory(projectRoot) {
+  const path = join32(sessionRuntimeRoot(projectRoot), "state");
+  return process.env.RN_DEV_AGENT_SESSION_RUNTIME_ROOT ? privateDirectory(path) : path;
+}
+function sessionRecordingsDirectory(projectRoot) {
+  const path = join32(sessionRuntimeRoot(projectRoot), "recordings");
+  return process.env.RN_DEV_AGENT_SESSION_RUNTIME_ROOT ? privateDirectory(path) : path;
+}
+var init_runtime_paths2 = __esm({
+  "packages/rn-dev-agent-core/dist/session/runtime-paths.js"() {
+    "use strict";
+  }
+});
+
+// packages/rn-dev-agent-core/dist/domain/action-db.js
+import { createRequire as createRequire2 } from "node:module";
+import { existsSync as existsSync23, mkdirSync as mkdirSync16, readdirSync as readdirSync8, readFileSync as readFileSync24 } from "node:fs";
+import { dirname as dirname14, join as join33 } from "node:path";
+function loadSqlite() {
+  try {
+    const mod = _require("node:sqlite");
+    return mod.DatabaseSync ?? null;
+  } catch {
+    return null;
+  }
+}
+function openActionDb(projectRoot, opts = {}) {
+  const Ctor = opts.sqliteCtor === void 0 ? loadSqlite() : opts.sqliteCtor;
+  if (!Ctor)
+    return null;
+  try {
+    const dbPath = join33(sessionStateDirectory(projectRoot), "actions.db");
+    mkdirSync16(dirname14(dbPath), { recursive: true });
+    const db = new Ctor(dbPath);
+    db.exec(SCHEMA);
+    for (const alter of [
+      "ALTER TABLE run_records ADD COLUMN device_id TEXT",
+      "ALTER TABLE run_records ADD COLUMN blind_probe_json TEXT"
+    ]) {
+      try {
+        db.exec(alter);
+      } catch (e) {
+        if (!String(e).includes("duplicate column name"))
+          throw e;
+      }
+    }
+    const handle = {
+      db,
+      close: () => db.close(),
+      insertRunRecord(actionId, record2) {
+        db.exec("BEGIN IMMEDIATE");
+        try {
+          const dup = db.prepare("SELECT 1 FROM run_records WHERE action_id = ? AND ts = ? LIMIT 1").get(actionId, record2.timestamp);
+          if (dup) {
+            db.exec("COMMIT");
+            return;
+          }
+          db.prepare(`INSERT INTO run_records
+               (action_id, ts, trigger, status, failure_code, failure_detail,
+                transport, auto_repair_json, duration_ms, device_id, blind_probe_json)
+             VALUES (?,?,?,?,?,?,?,?,?,?,?)`).run(actionId, record2.timestamp, record2.trigger, record2.status, record2.failureCode ?? null, record2.failureDetail ?? null, record2.transport ?? null, record2.autoRepair ? JSON.stringify(record2.autoRepair) : null, record2.durationMs, record2.deviceId ?? null, record2.blindProbe ? JSON.stringify(record2.blindProbe) : null);
+          db.prepare(`DELETE FROM run_records
+             WHERE action_id = ?
+               AND id NOT IN (
+                 SELECT id FROM run_records
+                 WHERE action_id = ?
+                 ORDER BY id DESC
+                 LIMIT ${RUN_HISTORY_MAX}
+               )`).run(actionId, actionId);
+          db.exec("COMMIT");
+        } catch (e) {
+          db.exec("ROLLBACK");
+          throw e;
+        }
+      },
+      insertRepairRecord(actionId, record2) {
+        db.exec("BEGIN IMMEDIATE");
+        try {
+          const dup = db.prepare("SELECT 1 FROM repair_records WHERE action_id = ? AND ts = ? LIMIT 1").get(actionId, record2.timestamp);
+          if (dup) {
+            db.exec("COMMIT");
+            return;
+          }
+          db.prepare(`INSERT INTO repair_records
+               (action_id, ts, failure_code, diff_json, duration_ms, agent_reasoning)
+             VALUES (?,?,?,?,?,?)`).run(actionId, record2.timestamp, record2.failureCode, JSON.stringify(record2.diff ?? {}), record2.durationMs, record2.agentReasoning ?? null);
+          db.prepare(`DELETE FROM repair_records
+             WHERE action_id = ?
+               AND id NOT IN (
+                 SELECT id FROM repair_records
+                 WHERE action_id = ?
+                 ORDER BY id DESC
+                 LIMIT ${REPAIR_HISTORY_MAX}
+               )`).run(actionId, actionId);
+          db.exec("COMMIT");
+        } catch (e) {
+          db.exec("ROLLBACK");
+          throw e;
+        }
+      },
+      upsertIndex(actionId, fields) {
+        db.prepare(`INSERT INTO actions_index
+             (id, app_id, path, content_hash, status, revision,
+              created_at, updated_at, mtime_baseline, stats_json)
+           VALUES (?,?,?,?,?,?,?,?,?,?)
+           ON CONFLICT(id) DO UPDATE SET
+             app_id         = COALESCE(excluded.app_id,         actions_index.app_id),
+             path           = COALESCE(excluded.path,           actions_index.path),
+             content_hash   = COALESCE(excluded.content_hash,   actions_index.content_hash),
+             status         = COALESCE(excluded.status,         actions_index.status),
+             revision       = COALESCE(excluded.revision,       actions_index.revision),
+             updated_at     = COALESCE(excluded.updated_at,     actions_index.updated_at),
+             mtime_baseline = COALESCE(excluded.mtime_baseline, actions_index.mtime_baseline),
+             stats_json     = COALESCE(excluded.stats_json,     actions_index.stats_json)`).run(actionId, fields.appId ?? null, fields.path ?? null, fields.contentHash ?? null, fields.status ?? null, fields.revision ?? null, fields.updatedAt ?? null, fields.updatedAt ?? null, fields.mtimeBaseline ?? null, fields.statsJson ?? null);
+      },
+      loadState(actionId) {
+        const idx = db.prepare("SELECT * FROM actions_index WHERE id = ?").get(actionId);
+        if (!idx)
+          return null;
+        const runRows = db.prepare("SELECT * FROM run_records WHERE action_id = ? ORDER BY id ASC").all(actionId);
+        const repairRows = db.prepare("SELECT * FROM repair_records WHERE action_id = ? ORDER BY id ASC").all(actionId);
+        const runHistory = runRows.map((r) => {
+          const rec = {
+            timestamp: String(r.ts),
+            durationMs: Number(r.duration_ms),
+            status: r.status,
+            trigger: r.trigger
+          };
+          if (r.failure_code)
+            rec.failureCode = r.failure_code;
+          if (r.failure_detail)
+            rec.failureDetail = String(r.failure_detail);
+          if (r.transport === "cdp-js")
+            rec.transport = "cdp-js";
+          if (r.auto_repair_json)
+            rec.autoRepair = JSON.parse(String(r.auto_repair_json));
+          if (r.device_id)
+            rec.deviceId = String(r.device_id);
+          if (r.blind_probe_json) {
+            try {
+              rec.blindProbe = JSON.parse(String(r.blind_probe_json));
+            } catch {
+            }
+          }
+          return rec;
+        });
+        const repairHistory = repairRows.map((r) => {
+          const rec = {
+            timestamp: String(r.ts),
+            failureCode: r.failure_code,
+            diff: r.diff_json ? JSON.parse(String(r.diff_json)) : {},
+            durationMs: Number(r.duration_ms)
+          };
+          if (r.agent_reasoning)
+            rec.agentReasoning = String(r.agent_reasoning);
+          return rec;
+        });
+        const stats = idx.stats_json ? JSON.parse(String(idx.stats_json)) : { totalRuns: 0, successCount: 0, failureCount: 0, avgDurationMs: 0 };
+        return {
+          schemaVersion: 1,
+          revision: Number(idx.revision) || 1,
+          updatedAt: String(idx.updated_at ?? (/* @__PURE__ */ new Date(0)).toISOString()),
+          lastSeenMtimeMs: Number(idx.mtime_baseline) || 0,
+          runHistory,
+          repairHistory,
+          stats
+        };
+      },
+      recentRepairCount(actionId, sinceIso) {
+        const row = db.prepare(`SELECT COUNT(*) as cnt FROM repair_records
+           WHERE action_id = ? AND ts >= ?`).get(actionId, sinceIso);
+        return row.cnt;
+      },
+      migrateSidecars() {
+        const stateDir = join33(projectRoot, ".rn-agent", "state");
+        if (!existsSync23(stateDir))
+          return { migrated: 0 };
+        let migrated = 0;
+        for (const f of readdirSync8(stateDir)) {
+          if (!f.endsWith(".state.json"))
+            continue;
+          const id = f.replace(/\.state\.json$/, "");
+          const exists = db.prepare("SELECT 1 FROM actions_index WHERE id = ?").get(id);
+          if (exists)
+            continue;
+          try {
+            const parsed = JSON.parse(readFileSync24(join33(stateDir, f), "utf8"));
+            if (parsed?.schemaVersion !== 1)
+              continue;
+            if (!Array.isArray(parsed.runHistory) || !Array.isArray(parsed.repairHistory)) {
+              continue;
+            }
+            for (const r of parsed.runHistory) {
+              handle.insertRunRecord(id, r);
+            }
+            for (const r of parsed.repairHistory) {
+              handle.insertRepairRecord(id, r);
+            }
+            handle.upsertIndex(id, {
+              revision: parsed.revision,
+              statsJson: JSON.stringify(parsed.stats),
+              mtimeBaseline: parsed.lastSeenMtimeMs,
+              updatedAt: parsed.updatedAt
+            });
+            migrated++;
+          } catch {
+          }
+        }
+        return { migrated };
+      }
+    };
+    return handle;
+  } catch {
+    return null;
+  }
+}
+var _require, SCHEMA, RUN_HISTORY_MAX, REPAIR_HISTORY_MAX;
+var init_action_db = __esm({
+  "packages/rn-dev-agent-core/dist/domain/action-db.js"() {
+    "use strict";
+    init_runtime_paths2();
+    _require = createRequire2(import.meta.url);
+    SCHEMA = `
+PRAGMA busy_timeout=5000;
+PRAGMA journal_mode=WAL;
+
+CREATE TABLE IF NOT EXISTS actions_index (
+  id             TEXT PRIMARY KEY,
+  app_id         TEXT,
+  path           TEXT,
+  content_hash   TEXT,
+  status         TEXT,
+  revision       INTEGER,
+  created_at     INTEGER,
+  updated_at     INTEGER,
+  mtime_baseline INTEGER,
+  stats_json     TEXT
+);
+
+CREATE TABLE IF NOT EXISTS run_records (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  action_id       TEXT,
+  ts              TEXT,
+  trigger         TEXT,
+  status          TEXT,
+  failure_code    TEXT,
+  failure_detail  TEXT,
+  transport       TEXT,
+  auto_repair_json TEXT,
+  duration_ms     INTEGER,
+  device_id       TEXT,
+  blind_probe_json TEXT
+);
+
+CREATE TABLE IF NOT EXISTS repair_records (
+  id               INTEGER PRIMARY KEY AUTOINCREMENT,
+  action_id        TEXT,
+  ts               TEXT,
+  failure_code     TEXT,
+  diff_json        TEXT,
+  duration_ms      INTEGER,
+  agent_reasoning  TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_run_action    ON run_records(action_id);
+CREATE INDEX IF NOT EXISTS idx_repair_action ON repair_records(action_id);
+CREATE INDEX IF NOT EXISTS idx_index_app     ON actions_index(app_id);
+`;
+    RUN_HISTORY_MAX = 50;
+    REPAIR_HISTORY_MAX = 25;
+  }
+});
+
+// packages/rn-dev-agent-core/dist/domain/reusable-action.js
+function freshRuntimeState(now = () => /* @__PURE__ */ new Date(), mtimeMs = 0) {
+  const ts = now().toISOString();
+  return {
+    schemaVersion: 1,
+    revision: 1,
+    updatedAt: ts,
+    lastSeenMtimeMs: mtimeMs,
+    runHistory: [],
+    repairHistory: [],
+    stats: {
+      totalRuns: 0,
+      successCount: 0,
+      failureCount: 0,
+      avgDurationMs: 0
+    }
+  };
+}
+function appendRunRecord(state, record2) {
+  const newHistory = [...state.runHistory, record2];
+  while (newHistory.length > HISTORY_LIMITS.RUN_HISTORY_MAX)
+    newHistory.shift();
+  const totalRuns = state.stats.totalRuns + 1;
+  const successCount = state.stats.successCount + (record2.status === "pass" ? 1 : 0);
+  const failureCount = state.stats.failureCount + (record2.status === "fail" ? 1 : 0);
+  const successDurations = newHistory.filter((r) => r.status === "pass").map((r) => r.durationMs);
+  const avgDurationMs = successDurations.length ? Math.round(successDurations.reduce((s, n) => s + n, 0) / successDurations.length) : state.stats.avgDurationMs;
+  return {
+    ...state,
+    updatedAt: record2.timestamp,
+    runHistory: newHistory,
+    stats: {
+      totalRuns,
+      successCount,
+      failureCount,
+      avgDurationMs,
+      lastSuccessAt: record2.status === "pass" ? record2.timestamp : state.stats.lastSuccessAt,
+      lastFailureAt: record2.status === "fail" ? record2.timestamp : state.stats.lastFailureAt
+    }
+  };
+}
+function appendRepairRecord(state, record2) {
+  const newHistory = [...state.repairHistory, record2];
+  while (newHistory.length > HISTORY_LIMITS.REPAIR_HISTORY_MAX)
+    newHistory.shift();
+  return {
+    ...state,
+    updatedAt: record2.timestamp,
+    revision: state.revision + 1,
+    repairHistory: newHistory
+  };
+}
+function recentRepairCount(state, now = () => /* @__PURE__ */ new Date()) {
+  const cutoff = now().getTime() - 24 * 60 * 60 * 1e3;
+  return state.repairHistory.filter((r) => new Date(r.timestamp).getTime() >= cutoff).length;
+}
+function repairBudgetAvailable(state, now = () => /* @__PURE__ */ new Date()) {
+  return recentRepairCount(state, now) < REPAIR_BUDGET.ATTEMPTS_PER_24H;
+}
+function shouldAutoPromoteToActive(metadata, lastRun) {
+  if (lastRun?.blindProbe?.skippedMaestro)
+    return false;
+  return metadata.status === "experimental" && lastRun?.status === "pass";
+}
+function shouldDemoteAfterRepair(metadata) {
+  return metadata.status === "active";
+}
+function parseM7Header(yamlText, fallbackId) {
+  const lines = yamlText.split("\n");
+  const meta = {};
+  let inComment = false;
+  for (const line of lines) {
+    if (line.startsWith("#")) {
+      inComment = true;
+      const stripped = line.replace(/^#\s?/, "").trim();
+      if (!stripped)
+        continue;
+      const kv = stripped.match(/^([a-zA-Z][\w-]*)\s*:\s*(.+)$/);
+      if (!kv)
+        continue;
+      const key = kv[1];
+      const raw = kv[2].trim();
+      if (key === "tags") {
+        meta.tags = raw.replace(/^\[|\]$/g, "").split(",").map((t) => t.trim()).filter(Boolean);
+      } else if (key === "mutates") {
+        meta.mutates = /^true$/i.test(raw);
+      } else if (key === "params") {
+        meta.params = raw.replace(/^\[|\]$/g, "").split(",").map((t) => t.trim()).filter(Boolean);
+      } else if (key === "produces") {
+        meta.produces = parseProducesMap(raw);
+      } else if (key === "expectedRouteSequence") {
+        meta.expectedRouteSequence = raw.replace(/^\[|\]$/g, "").split(",").map((t) => t.trim()).filter(Boolean);
+      } else if (key === "id" || key === "intent" || key === "status" || key === "appId" || key === "createdAt" || key === "author" || key === "enginePin") {
+        meta[key] = raw;
+      }
+    } else if (inComment && line.trim() === "") {
+      if (Object.keys(meta).length > 0)
+        break;
+    } else if (inComment) {
+      break;
+    }
+  }
+  const id = meta.id ?? fallbackId;
+  const intent = meta.intent;
+  if (!id || !intent)
+    return null;
+  const status = meta.status ?? "experimental";
+  return {
+    id,
+    intent,
+    tags: meta.tags,
+    mutates: meta.mutates,
+    status,
+    params: meta.params,
+    appId: meta.appId,
+    createdAt: meta.createdAt,
+    author: meta.author,
+    produces: meta.produces,
+    expectedRouteSequence: meta.expectedRouteSequence,
+    enginePin: meta.enginePin
+  };
+}
+function parseProducesMap(raw) {
+  const inner = raw.trim().replace(/^\{|\}$/g, "").trim();
+  if (!inner)
+    return void 0;
+  const result = {};
+  for (const part of inner.split(",")) {
+    const kv = part.match(/^\s*([a-zA-Z_][\w.-]*)\s*:\s*(.+?)\s*$/);
+    if (!kv)
+      return void 0;
+    const key = kv[1];
+    const valueRaw = kv[2].trim();
+    if (/^(true|false)$/i.test(valueRaw)) {
+      result[key] = /^true$/i.test(valueRaw);
+    } else if (/^-?\d+(\.\d+)?$/.test(valueRaw)) {
+      result[key] = Number(valueRaw);
+    } else {
+      result[key] = valueRaw.replace(/^['"]|['"]$/g, "");
+    }
+  }
+  return Object.keys(result).length ? result : void 0;
+}
+function serializeM7Header(metadata) {
+  const lines = [];
+  const stripNewlines2 = (s) => String(s).replace(/[\r\n]+/g, " ");
+  lines.push(`# id: ${stripNewlines2(metadata.id)}`);
+  lines.push(`# intent: ${stripNewlines2(metadata.intent)}`);
+  if (metadata.tags && metadata.tags.length) {
+    lines.push(`# tags: [${metadata.tags.map(stripNewlines2).join(", ")}]`);
+  }
+  if (typeof metadata.mutates === "boolean") {
+    lines.push(`# mutates: ${metadata.mutates}`);
+  }
+  if (metadata.status)
+    lines.push(`# status: ${stripNewlines2(metadata.status)}`);
+  if (metadata.enginePin)
+    lines.push(`# enginePin: ${stripNewlines2(metadata.enginePin)}`);
+  if (metadata.params && metadata.params.length) {
+    lines.push(`# params: [${metadata.params.map(stripNewlines2).join(", ")}]`);
+  }
+  if (metadata.appId)
+    lines.push(`# appId: ${stripNewlines2(metadata.appId)}`);
+  if (metadata.createdAt)
+    lines.push(`# createdAt: ${stripNewlines2(metadata.createdAt)}`);
+  if (metadata.author)
+    lines.push(`# author: ${stripNewlines2(metadata.author)}`);
+  if (metadata.produces && Object.keys(metadata.produces).length > 0) {
+    const pairs = Object.keys(metadata.produces).sort().map((k) => {
+      const v = metadata.produces[k];
+      const formatted = typeof v === "string" ? stripNewlines2(v) : String(v);
+      return `${k}: ${formatted}`;
+    });
+    lines.push(`# produces: { ${pairs.join(", ")} }`);
+  }
+  if (metadata.expectedRouteSequence && metadata.expectedRouteSequence.length) {
+    lines.push(`# expectedRouteSequence: [${metadata.expectedRouteSequence.map(stripNewlines2).join(", ")}]`);
+  }
+  return lines.join("\n");
+}
+var REPAIR_BUDGET, HISTORY_LIMITS;
+var init_reusable_action = __esm({
+  "packages/rn-dev-agent-core/dist/domain/reusable-action.js"() {
+    "use strict";
+    REPAIR_BUDGET = {
+      /** Max successful self-repairs allowed in a rolling 24h window. */
+      ATTEMPTS_PER_24H: 3,
+      /** Max repair attempts per run before escalating to user. */
+      ATTEMPTS_PER_RUN: 1
+    };
+    HISTORY_LIMITS = {
+      /** Cap runHistory at this many records; oldest dropped on append. */
+      RUN_HISTORY_MAX: 50,
+      /** Cap repairHistory at this many records; oldest dropped on append. */
+      REPAIR_HISTORY_MAX: 25
+    };
+  }
+});
+
+// packages/rn-dev-agent-core/dist/domain/sidecar-io.js
+import { existsSync as existsSync24, readFileSync as readFileSync25, writeFileSync as writeFileSync12, mkdirSync as mkdirSync17, statSync as statSync11 } from "node:fs";
+import { join as join34, dirname as dirname15 } from "node:path";
+function sidecarPathFor(yamlFilePath) {
+  const dir = dirname15(yamlFilePath);
+  const parent = dirname15(dir);
+  const filename = yamlFilePath.replace(/\.ya?ml$/i, ".state.json");
+  const base = filename.split(/[\\/]/).pop();
+  const stateDirectory = process.env.RN_DEV_AGENT_SESSION_RUNTIME_ROOT ? sessionStateDirectory(dirname15(parent)) : join34(parent, "state");
+  return join34(stateDirectory, base);
+}
+function loadOrInitSidecar(yamlFilePath, now = () => /* @__PURE__ */ new Date()) {
+  const path = sidecarPathFor(yamlFilePath);
+  if (existsSync24(path)) {
+    try {
+      const text = readFileSync25(path, "utf8");
+      const parsed = JSON.parse(text);
+      if (parsed && parsed.schemaVersion === 1 && typeof parsed.revision === "number" && typeof parsed.updatedAt === "string" && Array.isArray(parsed.runHistory) && Array.isArray(parsed.repairHistory) && typeof parsed.stats === "object") {
+        if (typeof parsed.lastSeenMtimeMs !== "number") {
+          try {
+            parsed.lastSeenMtimeMs = statSync11(yamlFilePath).mtimeMs;
+          } catch {
+            parsed.lastSeenMtimeMs = 0;
+          }
+        }
+        return parsed;
+      }
+    } catch {
+    }
+  }
+  let mtimeMs = 0;
+  try {
+    mtimeMs = statSync11(yamlFilePath).mtimeMs;
+  } catch {
+  }
+  return freshRuntimeState(now, mtimeMs);
+}
+function saveSidecar(yamlFilePath, state) {
+  const path = sidecarPathFor(yamlFilePath);
+  const parentDir = dirname15(path);
+  if (!existsSync24(parentDir))
+    mkdirSync17(parentDir, { recursive: true });
+  writeFileSync12(path, JSON.stringify(state, null, 2) + "\n", "utf8");
+  return { path };
+}
+function yamlEditedSinceLastSeen(yamlFilePath, state) {
+  try {
+    const current = statSync11(yamlFilePath).mtimeMs;
+    return current > state.lastSeenMtimeMs;
+  } catch {
+    return false;
+  }
+}
+function markSeen(state, mtimeMs) {
+  return { ...state, lastSeenMtimeMs: mtimeMs };
+}
+var init_sidecar_io = __esm({
+  "packages/rn-dev-agent-core/dist/domain/sidecar-io.js"() {
+    "use strict";
+    init_reusable_action();
+    init_runtime_paths2();
+  }
+});
+
+// packages/rn-dev-agent-core/dist/domain/action-state-store.js
+import { basename as basename5, dirname as dirname16, sep as sep6 } from "node:path";
+function dbFor(projectRoot) {
+  if (dbCache.has(projectRoot))
+    return dbCache.get(projectRoot) ?? null;
+  const handle = sqliteCtorOverride === void 0 ? openActionDb(projectRoot) : openActionDb(projectRoot, { sqliteCtor: sqliteCtorOverride });
+  if (handle) {
+    try {
+      handle.migrateSidecars();
+    } catch (err) {
+      logger.debug(TAG, `migrateSidecars failed for ${projectRoot}: ${String(err)}`);
+    }
+  }
+  dbCache.set(projectRoot, handle);
+  return handle;
+}
+function mirrorToDb(opts) {
+  const { yamlFilePath, state, newRunRecord, newRepairRecord, meta } = opts;
+  try {
+    const projectRoot = opts.projectRoot ?? projectRootFromYaml(yamlFilePath);
+    if (!projectRoot)
+      return;
+    const handle = dbFor(projectRoot);
+    if (!handle)
+      return;
+    const actionId = idOf(yamlFilePath);
+    handle.upsertIndex(actionId, {
+      appId: meta?.appId,
+      path: meta?.path,
+      contentHash: meta?.contentHash,
+      status: meta?.status,
+      revision: state.revision,
+      statsJson: JSON.stringify(state.stats),
+      mtimeBaseline: state.lastSeenMtimeMs,
+      updatedAt: state.updatedAt
+    });
+    if (newRunRecord)
+      handle.insertRunRecord(actionId, newRunRecord);
+    if (newRepairRecord)
+      handle.insertRepairRecord(actionId, newRepairRecord);
+  } catch (err) {
+    logger.debug(TAG, `DB mirror failed for ${idOf(yamlFilePath)} (authoritative write succeeded): ${String(err)}`);
+  }
+}
+function projectRootFromYaml(yamlFilePath) {
+  const actionsDir = dirname16(yamlFilePath);
+  const rnAgentDir = dirname16(actionsDir);
+  const root = dirname16(rnAgentDir);
+  if (basename5(actionsDir) !== "actions" || basename5(rnAgentDir) !== ".rn-agent") {
+    return null;
+  }
+  if (!root || root === sep6)
+    return null;
+  return root;
+}
+var TAG, sqliteCtorOverride, dbCache, idOf;
+var init_action_state_store = __esm({
+  "packages/rn-dev-agent-core/dist/domain/action-state-store.js"() {
+    "use strict";
+    init_logger();
+    init_action_db();
+    init_sidecar_io();
+    TAG = "action-state-store";
+    dbCache = /* @__PURE__ */ new Map();
+    idOf = (yamlFilePath) => basename5(yamlFilePath).replace(/\.ya?ml$/i, "");
+  }
+});
+
+// packages/rn-dev-agent-core/dist/experience/runner-diagnostics.js
+import { AsyncLocalStorage as AsyncLocalStorage3 } from "node:async_hooks";
+import { performance as performance2 } from "node:perf_hooks";
+function retainRunnerDiagnosticEvents(events, maximum) {
+  if (maximum <= 0)
+    return [];
+  const retained = [...events];
+  while (retained.length > maximum) {
+    const counts = /* @__PURE__ */ new Map();
+    for (const event of retained)
+      counts.set(event.type, (counts.get(event.type) ?? 0) + 1);
+    let removeAt = retained.findIndex((event) => !TERMINAL_EVENT_TYPES.has(event.type) && (counts.get(event.type) ?? 0) > 1);
+    if (removeAt < 0) {
+      removeAt = retained.findIndex((event) => !TERMINAL_EVENT_TYPES.has(event.type));
+    }
+    if (removeAt < 0) {
+      removeAt = retained.findIndex((event) => (counts.get(event.type) ?? 0) > 1);
+    }
+    retained.splice(removeAt < 0 ? 0 : removeAt, 1);
+  }
+  return retained;
+}
+function withRunnerDiagnosticsContext(tool, params, work) {
+  if (storage.getStore())
+    return work();
+  return storage.run({
+    rootTool: tool,
+    rootParams: params,
+    events: [],
+    truncated: false,
+    startedAt: performance2.now(),
+    nextSequence: 0
+  }, work);
+}
+function recordRunnerDiagnostic(type, detail = {}) {
+  const state = storage.getStore();
+  if (!state)
+    return;
+  const event = {
+    sequence: ++state.nextSequence,
+    monotonicMs: Math.max(0, Math.round((performance2.now() - state.startedAt) * 1e3) / 1e3),
+    timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+    type,
+    detail
+  };
+  const retained = retainRunnerDiagnosticEvents([...state.events, event], RUNNER_DIAGNOSTICS_MAX_EVENTS);
+  if (retained.length < state.events.length + 1) {
+    state.truncated = true;
+  }
+  state.events = retained;
+}
+function snapshotRunnerDiagnostics() {
+  const state = storage.getStore();
+  if (!state || state.events.length === 0)
+    return void 0;
+  return {
+    rootTool: state.rootTool,
+    rootParams: { ...state.rootParams },
+    events: state.events.map((event) => ({ ...event, detail: { ...event.detail } })),
+    truncated: state.truncated
+  };
+}
+var RUNNER_DIAGNOSTICS_MAX_EVENTS, storage, TERMINAL_EVENT_TYPES;
+var init_runner_diagnostics = __esm({
+  "packages/rn-dev-agent-core/dist/experience/runner-diagnostics.js"() {
+    "use strict";
+    RUNNER_DIAGNOSTICS_MAX_EVENTS = 200;
+    storage = new AsyncLocalStorage3();
+    TERMINAL_EVENT_TYPES = /* @__PURE__ */ new Set([
+      "typed-failure",
+      "cleanup",
+      "tool-outcome"
+    ]);
+  }
+});
+
+// packages/rn-dev-agent-core/dist/domain/maestro-runner-pin.json
+var maestro_runner_pin_default;
+var init_maestro_runner_pin = __esm({
+  "packages/rn-dev-agent-core/dist/domain/maestro-runner-pin.json"() {
+    maestro_runner_pin_default = {
+      version: "1.1.24",
+      sha256: {
+        "darwin-arm64": "170f12521de83322823dd5fc0ce16e48abeba9952cdbb242670592566c2fd1f3",
+        "darwin-x64": "af7f5ea044afc72ea780c835f05b32203e443d2e26d310a864bfb2bc84959bf6",
+        "linux-x64": "e9bdef6f08f855ca1a884f99b54a519a1eae0a342917181a53eb414a5b00d6d8",
+        "linux-arm64": "8d8a6483ad04da2109636b7192398750657801b8a8d512688d1be3b033a105b8"
+      },
+      archiveSha256: {
+        "darwin-arm64": "0b5b0f087815c5ff348e74a6dd7df260ed50a5588d5ff3e224c66a60d948c936",
+        "darwin-x64": "2ecc5c55d9437ee820691faf43097b5ba8d1ff797db49da9c96ac2631aac03c5",
+        "linux-x64": "f1963b7e3f8bf598d3b14f998fef3dc690e579906f340636cfd9350dea1d67b0",
+        "linux-arm64": "605db5645b161b610e999bcf8235650d41aac8929bbd0f818a592d13b958f148"
+      },
+      knownQuirks: [
+        {
+          id: "android-pre-o-unsupported",
+          ref: "GH #741",
+          note: "bundled UiAutomator2 server APK declares minSdk 26; API 23-25 installs fail with INSTALL_FAILED_OLDER_SDK"
+        }
+      ]
+    };
+  }
+});
+
+// packages/rn-dev-agent-core/dist/domain/engine-pin.js
+import { createHash as createHash15 } from "node:crypto";
+import { accessSync, chmodSync as chmodSync5, constants as constants7, copyFileSync as copyFileSync2, existsSync as existsSync25, lstatSync as lstatSync12, mkdirSync as mkdirSync18, mkdtempSync as mkdtempSync2, readFileSync as readFileSync26, readdirSync as readdirSync9, readlinkSync as readlinkSync5, realpathSync as realpathSync13, rmSync as rmSync10, symlinkSync as symlinkSync3, unlinkSync as unlinkSync11 } from "node:fs";
+import { homedir as homedir6 } from "node:os";
+import { basename as basename6, dirname as dirname17, join as join35, relative as relative6, resolve as resolve12, sep as sep7 } from "node:path";
+import { gunzipSync } from "node:zlib";
+function parseActionEnginePinVersion(enginePin) {
+  const match = ACTION_ENGINE_PIN_RE.exec(enginePin.trim());
+  return match?.[1] ?? null;
+}
+function engineLabel(_runner) {
+  return `the pinned maestro-runner ${MAESTRO_RUNNER_PIN.version}`;
+}
+function preOAndroidApiRefusal(apiLevel) {
+  if (apiLevel >= MAESTRO_RUNNER_MIN_ANDROID_API)
+    return null;
+  return `maestro_run refused: Android API ${apiLevel} is below API ${MAESTRO_RUNNER_MIN_ANDROID_API}, the minimum the pinned maestro-runner ${MAESTRO_RUNNER_PIN.version} can drive \u2014 its bundled UiAutomator2 server APK declares minSdk ${MAESTRO_RUNNER_MIN_ANDROID_API}, so the install fails with INSTALL_FAILED_OLDER_SDK. ${PRE_O_REMEDY}`;
+}
+function isOlderSdkInstallFailure(output) {
+  return output.split(/\r?\n/).some((line) => line.includes("INSTALL_FAILED_OLDER_SDK") && INSTALL_REJECT_CONTEXT.test(line.replace(OLDER_SDK_TOKEN, " ")));
+}
+function olderSdkInstallDiagnosis(runner = "maestro-runner") {
+  return `The device rejected the bundled UiAutomator2 server APK with INSTALL_FAILED_OLDER_SDK: ${engineLabel(runner)} requires Android API ${MAESTRO_RUNNER_MIN_ANDROID_API}+ and this device is below it. ${PRE_O_REMEDY}`;
+}
+function compareVersions(a, b) {
+  const pa = a.split(".").map(Number);
+  const pb = b.split(".").map(Number);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const x = pa[i] ?? 0;
+    const y = pb[i] ?? 0;
+    if (x > y)
+      return 1;
+    if (x < y)
+      return -1;
+  }
+  return 0;
+}
+function meetsMaestroRunnerFloor(version2) {
+  return /^\d+(?:\.\d+)*$/.test(version2) && compareVersions(version2, MAESTRO_RUNNER_PIN.version) >= 0;
+}
+function pinCacheRoot(home = homedir6()) {
+  const override = process.env.RN_DEV_AGENT_RUNNER_CACHE;
+  const base = override && override.length > 0 ? override : join35(home, ".cache", "rn-dev-agent");
+  return resolve12(base, "maestro-runner", MAESTRO_RUNNER_PIN.version);
+}
+function pinnedRunnerBinPath(home) {
+  return join35(pinCacheRoot(home), "bin", "maestro-runner");
+}
+function isPinCacheMetadataPath(relPath) {
+  return relPath.split(/[/\\]/).some((part) => part.startsWith("._") || part === "PaxHeader" || part.startsWith("PaxHeaders."));
+}
+function tarText(buffer, offset, length) {
+  const end = buffer.indexOf(0, offset);
+  return buffer.subarray(offset, end >= offset && end < offset + length ? end : offset + length).toString();
+}
+function expectedPayloadEntries(archive) {
+  const tar = gunzipSync(archive, { maxOutputLength: 1024 * 1024 * 1024 });
+  const raw = [];
+  let offset = 0;
+  let longPath = null;
+  while (offset + 512 <= tar.length) {
+    const header = tar.subarray(offset, offset + 512);
+    if (header.every((byte) => byte === 0))
+      break;
+    const prefix = tarText(header, 345, 155);
+    const name = tarText(header, 0, 100);
+    const sizeText = tarText(header, 124, 12).trim();
+    const size = Number.parseInt(sizeText || "0", 8);
+    if (!Number.isSafeInteger(size) || size < 0 || offset + 512 + size > tar.length)
+      return null;
+    const type = String.fromCharCode(header[156] || 48);
+    const data = tar.subarray(offset + 512, offset + 512 + size);
+    const archivePath = longPath ?? [prefix, name].filter(Boolean).join("/");
+    longPath = null;
+    if (type === "L") {
+      longPath = data.toString().split("\0")[0].trim();
+    } else if (type === "0" || type === "\0" || type === "2" || type === "5") {
+      raw.push({ path: archivePath, type, data, link: tarText(header, 157, 100) });
+    }
+    offset += 512 + Math.ceil(size / 512) * 512;
+  }
+  const runner = raw.find((entry) => (entry.type === "0" || entry.type === "\0") && (entry.path === "bin/maestro-runner" || entry.path.endsWith("/bin/maestro-runner")));
+  if (!runner)
+    return null;
+  const rootPrefix = runner.path.slice(0, -"bin/maestro-runner".length);
+  const expected = /* @__PURE__ */ new Map();
+  for (const entry of raw) {
+    if (!entry.path.startsWith(rootPrefix) || entry.type === "5")
+      continue;
+    const path = entry.path.slice(rootPrefix.length).replace(/^\.\//, "");
+    if (!path || path.startsWith("/") || path.split("/").some((part) => part === ".."))
+      return null;
+    if (isPinCacheMetadataPath(path))
+      continue;
+    if (entry.type === "2") {
+      expected.set(path, { kind: "symlink", target: entry.link });
+    } else {
+      expected.set(path, {
+        kind: "file",
+        sha256: createHash15("sha256").update(entry.data).digest("hex")
+      });
+    }
+  }
+  return expected;
+}
+function payloadMatchesPinnedArchive(root, archive, expectedArchiveSha256) {
+  if (createHash15("sha256").update(archive).digest("hex") !== expectedArchiveSha256)
+    return false;
+  const expected = expectedPayloadEntries(archive);
+  if (!expected)
+    return false;
+  const seen = /* @__PURE__ */ new Set();
+  const visit = (directory) => {
+    for (const entry of readdirSync9(directory, { withFileTypes: true })) {
+      const path = join35(directory, entry.name);
+      const rel = relative6(root, path).split(sep7).join("/");
+      if (rel === ".payload.tar.gz" || isPinCacheMetadataPath(rel))
+        continue;
+      if (entry.isDirectory()) {
+        if (!visit(path))
+          return false;
+        continue;
+      }
+      const wanted = expected.get(rel);
+      if (!wanted)
+        return false;
+      seen.add(rel);
+      if (entry.isSymbolicLink()) {
+        if (wanted.kind !== "symlink" || readlinkSync5(path) !== wanted.target)
+          return false;
+        continue;
+      }
+      if (!entry.isFile() || wanted.kind !== "file")
+        return false;
+      const sha2562 = createHash15("sha256").update(readFileSync26(path)).digest("hex");
+      if (sha2562 !== wanted.sha256)
+        return false;
+    }
+    return true;
+  };
+  return visit(root) && seen.size === expected.size;
+}
+function installedPayloadMatchesPin(platformKey, root = pinCacheRoot()) {
+  try {
+    const expectedArchiveSha = pinnedArchiveSha256(platformKey);
+    if (!expectedArchiveSha)
+      return false;
+    const archive = readFileSync26(join35(root, ".payload.tar.gz"));
+    return payloadMatchesPinnedArchive(root, archive, expectedArchiveSha);
+  } catch {
+    return false;
+  }
+}
+function isRegularPinCacheBinary(path) {
+  try {
+    const stat2 = lstatSync12(path);
+    const ancestors = [dirname17(path), dirname17(dirname17(path)), dirname17(dirname17(dirname17(path)))];
+    const contained2 = ancestors.every((ancestor) => {
+      const ancestorStat = lstatSync12(ancestor);
+      return ancestorStat.isDirectory() && !ancestorStat.isSymbolicLink();
+    });
+    accessSync(path, constants7.X_OK);
+    return contained2 && stat2.isFile() && !stat2.isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
+function getMaestroRunnerPath() {
+  const path = pinnedRunnerBinPath();
+  return isRegularPinCacheBinary(path) ? path : null;
+}
+function runnerCacheVersionsRoot() {
+  return dirname17(pinCacheRoot());
+}
+function pinCacheVersionForPath(path) {
+  if (!isRegularPinCacheBinary(path) || basename6(path) !== "maestro-runner")
+    return null;
+  const versionDir = dirname17(dirname17(resolve12(path)));
+  if (dirname17(versionDir) !== resolve12(runnerCacheVersionsRoot()))
+    return null;
+  const version2 = basename6(versionDir);
+  return /^\d+(?:\.\d+)*$/.test(version2) ? version2 : null;
+}
+function getMaestroRunnerDetectionPath() {
+  const exact = getMaestroRunnerPath();
+  if (exact)
+    return exact;
+  const root = runnerCacheVersionsRoot();
+  try {
+    const candidates = readdirSync9(root, { withFileTypes: true }).filter((entry) => entry.isDirectory() && /^\d+(?:\.\d+)*$/.test(entry.name)).map((entry) => ({
+      version: entry.name,
+      path: join35(root, entry.name, "bin", "maestro-runner")
+    })).filter((candidate) => isRegularPinCacheBinary(candidate.path)).sort((left, right) => compareVersions(right.version, left.version));
+    return candidates[0]?.path ?? null;
+  } catch {
+    return null;
+  }
+}
+function nodePlatformKey(platform = process.platform, arch = process.arch) {
+  return `${platform}-${arch}`;
+}
+function pinArchiveCoords(platformKey) {
+  switch (platformKey) {
+    case "darwin-arm64":
+      return { os: "darwin", arch: "arm64" };
+    case "darwin-x64":
+      return { os: "darwin", arch: "amd64" };
+    case "linux-x64":
+      return { os: "linux", arch: "amd64" };
+    case "linux-arm64":
+      return { os: "linux", arch: "arm64" };
+    default:
+      return null;
+  }
+}
+function buildReplayEngineStatus(cls, version2, _cliPresent, extras = {}) {
+  const engine = cls === "pinned-ok" ? "maestro-runner" : "none";
+  return {
+    engine,
+    version: version2,
+    pin: { pinned: MAESTRO_RUNNER_PIN.version, status: cls },
+    quirks: MAESTRO_RUNNER_PIN.knownQuirks.map((q) => q.id),
+    selectedPath: extras.selectedPath ?? null,
+    provenance: extras.provenance ?? (cls === "not-installed" ? "none" : "pin-cache")
+  };
+}
+function enginePinCaveat(status) {
+  const cls = status.pin.status;
+  if (cls === "drift-newer" || cls === "drift-older") {
+    return `maestro-runner ${status.version} differs from the tested pin ${status.pin.pinned} (untested drift \u2014 B223-class behavior changes arrive silently; see the upgrade ritual in engine-pin.ts)`;
+  }
+  if (cls === "checksum-mismatch") {
+    return `maestro-runner pin-cache binary checksum does not match the ${status.pin.pinned} manifest \u2014 possible corruption or tampering; reinstall via ensure-maestro-runner.sh`;
+  }
+  return null;
+}
+function isRegexShapedSelector(value) {
+  for (let i = 0; i < value.length; i += 1) {
+    const ch = value[i];
+    if (ch === "\\")
+      return true;
+    if (REGEX_METACHARACTERS.has(ch))
+      return true;
+  }
+  return false;
+}
+function selectorTextValues(value, found) {
+  if (typeof value === "string") {
+    if (isRegexShapedSelector(value))
+      found.push(value);
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const entry of value)
+      selectorTextValues(entry, found);
+    return;
+  }
+  if (!value || typeof value !== "object")
+    return;
+  for (const [key, nested] of Object.entries(value)) {
+    if (key === "text" || RELATIVE_SELECTOR_KEYS.has(key)) {
+      selectorTextValues(nested, found);
+    }
+  }
+}
+function conditionTextValues(value, found) {
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    return;
+  for (const [key, nested] of Object.entries(value)) {
+    if (key === "visible" || key === "notVisible")
+      selectorTextValues(nested, found);
+  }
+}
+function findRegexTextSelectors(commands) {
+  const found = [];
+  const visit = (value) => {
+    if (Array.isArray(value)) {
+      for (const entry of value)
+        visit(entry);
+      return;
+    }
+    if (value && typeof value === "object") {
+      for (const [key, nested] of Object.entries(value)) {
+        if (TEXT_SELECTOR_KEYS.has(key))
+          selectorTextValues(nested, found);
+        if (key === "scrollUntilVisible" && nested && typeof nested === "object") {
+          selectorTextValues(nested.element, found);
+        }
+        if (key === "extendedWaitUntil")
+          conditionTextValues(nested, found);
+        if (key === "when")
+          conditionTextValues(nested, found);
+        visit(nested);
+      }
+    }
+  };
+  visit(commands);
+  return found;
+}
+function pinCorrection(status, platformKey = nodePlatformKey()) {
+  const cls = status.pin.status;
+  const pinned = status.pin.pinned;
+  const installed = status.version ?? "unknown";
+  const install = `Install attested ${pinned} (floor >= ${pinned}) via ${PINNED_RUNNER_INSTALL_HINT} (session pin-cache; do not use PATH or brew maestro).`;
+  if (pinArchiveCoords(platformKey) === null) {
+    return `maestro-runner is unsupported on ${platformKey}. Supported platforms: darwin-arm64, darwin-x64, linux-x64, linux-arm64. ${install}`;
+  }
+  switch (cls) {
+    case "not-installed":
+      return `Session maestro-runner ${pinned} is not installed. ${install}`;
+    case "drift-older":
+      return `Session maestro-runner ${installed} is older than the required pin ${pinned}. ${install}`;
+    case "drift-newer":
+      return `Session maestro-runner ${installed} is newer than the attested default ${pinned} and is not executed without attestation. ${install}`;
+    case "checksum-mismatch":
+      return `Session maestro-runner binary checksum does not match the ${pinned} pin manifest. ${install}`;
+    case "unknown-version":
+      return `Session maestro-runner version could not be read. ${install}`;
+    case "unverified":
+      if (status.version && compareVersions(status.version, pinned) > 0) {
+        return `UNVERIFIED_NEWER_DRIFT: Session pin-cache contains an unverified newer maestro-runner entry ${installed}; its directory name is not trusted binary evidence and it will not be executed. ${install}`;
+      }
+      return `Session maestro-runner ${installed} could not be checksum-verified on ${platformKey}. ${install}`;
+    case "pinned-ok":
+      return `Session maestro-runner ${pinned} is selected from the pin-cache.`;
+  }
+}
+function exactPinRefusal(status, platformKey = nodePlatformKey()) {
+  if (!status) {
+    return `maestro_run refused: session runner ${MAESTRO_RUNNER_PIN.version} could not be detected. ${pinCorrection(buildReplayEngineStatus("not-installed", null, false), platformKey)}`;
+  }
+  if (status.pin.status === "pinned-ok")
+    return null;
+  return `maestro_run refused: ${pinCorrection(status, platformKey)}`;
+}
+async function immediateRunnerPinRefusal(runnerPath, resolveStatus = () => getEngineStatus().catch(() => null)) {
+  const status = await resolveStatus();
+  const refusal = exactPinRefusal(status);
+  if (refusal)
+    return `RUNNER_PIN_CHANGED: ${refusal}`;
+  const canonicalPath2 = getMaestroRunnerPath();
+  if (!canonicalPath2 || !status?.selectedPath) {
+    return "RUNNER_PIN_CHANGED: verified runner path disappeared before execution.";
+  }
+  if (resolve12(canonicalPath2) !== resolve12(runnerPath) || resolve12(status.selectedPath) !== resolve12(runnerPath)) {
+    return "RUNNER_PIN_CHANGED: verified runner path changed before execution.";
+  }
+  return null;
+}
+function copyPayloadTree(source, destination) {
+  const sourceStat = lstatSync12(source);
+  if (!sourceStat.isDirectory() || sourceStat.isSymbolicLink()) {
+    throw new Error(`RUNNER_PIN_CHANGED: payload directory changed before execution.`);
+  }
+  mkdirSync18(destination, { recursive: true });
+  for (const entry of readdirSync9(source, { withFileTypes: true })) {
+    const sourcePath = join35(source, entry.name);
+    const destinationPath = join35(destination, entry.name);
+    const stat2 = lstatSync12(sourcePath);
+    if (stat2.isDirectory() && !stat2.isSymbolicLink()) {
+      copyPayloadTree(sourcePath, destinationPath);
+      chmodSync5(destinationPath, stat2.mode & 511);
+    } else if (stat2.isFile() && !stat2.isSymbolicLink()) {
+      copyFileSync2(sourcePath, destinationPath, constants7.COPYFILE_EXCL | constants7.COPYFILE_FICLONE);
+      chmodSync5(destinationPath, stat2.mode & 511);
+    } else if (stat2.isSymbolicLink()) {
+      symlinkSync3(readlinkSync5(sourcePath), destinationPath);
+    } else {
+      throw new Error(`RUNNER_PIN_CHANGED: unsupported payload entry ${sourcePath}.`);
+    }
+  }
+}
+function runnerCacheBootstrapFailure(error2) {
+  return `WDA bootstrap could not provision its authority-bound runner cache: ${error2.message}. No foreign cache path was changed; any cache directory created by this spawn was removed. Verify the runner cache parent is writable, then retry the exact replay.`;
+}
+function cacheErrno(error2) {
+  const code = error2?.code;
+  return typeof code === "string" && /^[A-Z0-9_]+$/.test(code) ? code : "UNKNOWN";
+}
+function expectedRunnerCacheRoot(snapshotRoot) {
+  const snapshotName = basename6(snapshotRoot);
+  const prefix = `.spawn-${MAESTRO_RUNNER_PIN.version}-`;
+  if (!snapshotName.startsWith(prefix) || dirname17(snapshotRoot) !== runnerCacheVersionsRoot()) {
+    throw new RunnerCacheUnavailableError("cache", "UNBOUND_SNAPSHOT");
+  }
+  return join35(runnerCacheVersionsRoot(), `.wda-cache-${MAESTRO_RUNNER_PIN.version}-${snapshotName.slice(prefix.length)}`);
+}
+function assertRunnerSnapshotCacheBinding(snapshotRoot, cacheRoot) {
+  try {
+    const expectedCacheRoot = expectedRunnerCacheRoot(snapshotRoot);
+    if (resolve12(cacheRoot) !== resolve12(expectedCacheRoot)) {
+      throw new RunnerCacheUnavailableError("cache", "FOREIGN_PATH");
+    }
+    const cacheStat = lstatSync12(cacheRoot);
+    if (!cacheStat.isDirectory() || cacheStat.isSymbolicLink()) {
+      throw new RunnerCacheUnavailableError("cache", "INVALID_TARGET");
+    }
+    if ((cacheStat.mode & 511) !== 448) {
+      throw new RunnerCacheUnavailableError("cache", "UNSAFE_MODE");
+    }
+    const cacheLink = join35(snapshotRoot, "cache");
+    if (!lstatSync12(cacheLink).isSymbolicLink()) {
+      throw new RunnerCacheUnavailableError("cache", "NOT_LINKED");
+    }
+    if (realpathSync13(cacheLink) !== realpathSync13(cacheRoot)) {
+      throw new RunnerCacheUnavailableError("cache", "FOREIGN_PATH");
+    }
+  } catch (error2) {
+    if (error2 instanceof RunnerCacheUnavailableError)
+      throw error2;
+    throw new RunnerCacheUnavailableError("cache", cacheErrno(error2));
+  }
+}
+function provisionRunnerSnapshotCache(snapshotRoot, testHooks = {}, setOwnedCacheRoot = () => {
+}) {
+  const cacheRoot = expectedRunnerCacheRoot(snapshotRoot);
+  let ownsCacheRoot = false;
+  try {
+    testHooks.beforeCacheProvision?.(cacheRoot);
+    mkdirSync18(cacheRoot, { mode: 448 });
+    ownsCacheRoot = true;
+    setOwnedCacheRoot(cacheRoot);
+    chmodSync5(cacheRoot, 448);
+    testHooks.beforeCacheBinding?.(cacheRoot);
+    symlinkSync3(cacheRoot, join35(snapshotRoot, "cache"), "dir");
+    assertRunnerSnapshotCacheBinding(snapshotRoot, cacheRoot);
+    return cacheRoot;
+  } catch (error2) {
+    const failure = error2 instanceof RunnerCacheUnavailableError ? error2 : new RunnerCacheUnavailableError("cache", cacheErrno(error2));
+    if (ownsCacheRoot) {
+      try {
+        rmSync10(cacheRoot, { recursive: true, force: true });
+        setOwnedCacheRoot(null);
+      } catch (cleanupError) {
+        throw new RunnerCacheUnavailableError("cache", `${failure.errno}_CLEANUP_${cacheErrno(cleanupError)}`);
+      }
+    }
+    throw failure;
+  }
+}
+function removeRunnerSnapshotAndCache(snapshotRoot, cacheRoot) {
+  let cleanupError;
+  try {
+    rmSync10(snapshotRoot, { recursive: true, force: true });
+  } catch (error2) {
+    cleanupError = error2;
+  }
+  if (cacheRoot) {
+    try {
+      rmSync10(cacheRoot, { recursive: true, force: true });
+    } catch (error2) {
+      cleanupError ??= error2;
+    }
+  }
+  recordRunnerDiagnostic("cleanup", {
+    snapshotRemoved: !existsSync25(snapshotRoot),
+    cacheRemoved: cacheRoot === null || !existsSync25(cacheRoot)
+  });
+  if (cleanupError)
+    throw cleanupError;
+}
+async function withImmediatePinnedRunner(runnerPath, resolveStatus, execute2, platform, testHooks = {}) {
+  const refusal = await immediateRunnerPinRefusal(runnerPath, resolveStatus);
+  if (refusal)
+    throw new Error(refusal);
+  const expectedSha256 = pinnedSha256(nodePlatformKey());
+  if (!expectedSha256) {
+    throw new Error("RUNNER_PIN_CHANGED: runner checksum is unavailable for this platform.");
+  }
+  const snapshotRoot = mkdtempSync2(join35(runnerCacheVersionsRoot(), `.spawn-${MAESTRO_RUNNER_PIN.version}-`));
+  let cacheRoot = null;
+  recordRunnerDiagnostic("spawn-begin", {
+    snapshotId: basename6(snapshotRoot),
+    runnerPinVersion: MAESTRO_RUNNER_PIN.version
+  });
+  try {
+    copyPayloadTree(pinCacheRoot(), snapshotRoot);
+    const snapshotRunner = join35(snapshotRoot, "bin", "maestro-runner");
+    const snapshotStat = lstatSync12(snapshotRunner);
+    if (!snapshotStat.isFile() || snapshotStat.isSymbolicLink() || !installedPayloadMatchesPin(nodePlatformKey(), snapshotRoot) || createHash15("sha256").update(readFileSync26(snapshotRunner)).digest("hex") !== expectedSha256) {
+      recordRunnerDiagnostic("payload-verify", { result: "failed" });
+      throw new Error("RUNNER_PIN_CHANGED: payload content changed before execution.");
+    }
+    recordRunnerDiagnostic("payload-verify", {
+      result: "passed",
+      runnerPinVersion: MAESTRO_RUNNER_PIN.version,
+      provenance: "pin-cache",
+      payloadShaPrefix: expectedSha256.slice(0, 12)
+    });
+    const helper = verifiedNativePublicationHelper();
+    const snapshotHelper = join35(snapshotRoot, ".runner-exec");
+    copyFileSync2(helper.path, snapshotHelper, constants7.COPYFILE_EXCL | constants7.COPYFILE_FICLONE);
+    chmodSync5(snapshotHelper, 320);
+    if (createHash15("sha256").update(readFileSync26(snapshotHelper)).digest("hex") !== helper.sha256) {
+      throw new Error("RUNNER_PIN_CHANGED: execution binding changed before execution.");
+    }
+    if (platform === "ios") {
+      try {
+        cacheRoot = provisionRunnerSnapshotCache(snapshotRoot, testHooks, (ownedCacheRoot) => {
+          cacheRoot = ownedCacheRoot;
+        });
+        recordRunnerDiagnostic("cache-provision", {
+          result: "passed",
+          variant: "symlink",
+          resolvedPath: "../" + basename6(cacheRoot)
+        });
+      } catch (error2) {
+        const failure = error2 instanceof RunnerCacheUnavailableError ? error2 : new RunnerCacheUnavailableError("cache", cacheErrno(error2));
+        recordRunnerDiagnostic("cache-provision", {
+          result: "failed",
+          variant: "symlink",
+          resolvedPath: "cache",
+          errno: failure.errno
+        });
+        recordRunnerDiagnostic("typed-failure", {
+          code: failure.code,
+          errno: failure.errno,
+          path: failure.relativePath
+        });
+        throw failure;
+      }
+    }
+    for (const entry of readdirSync9(snapshotRoot, { recursive: true, withFileTypes: true })) {
+      const entryPath = join35(entry.parentPath, entry.name);
+      if (entry.isSymbolicLink())
+        continue;
+      if (entry.isDirectory())
+        chmodSync5(entryPath, 320);
+      else if (entry.isFile()) {
+        chmodSync5(entryPath, entryPath === snapshotRunner || entryPath === snapshotHelper ? 320 : 256);
+      }
+    }
+    chmodSync5(snapshotRoot, 320);
+    if (cacheRoot)
+      assertRunnerSnapshotCacheBinding(snapshotRoot, cacheRoot);
+    const openedRunner = lstatSync12(snapshotRunner);
+    recordRunnerDiagnostic("runner-exec-begin", { runnerPinVersion: MAESTRO_RUNNER_PIN.version });
+    if (platform === "ios") {
+      recordRunnerDiagnostic("wda-bootstrap-begin", { cachePath: "cache" });
+    }
+    return await execute2(snapshotHelper, [
+      "--exec-file",
+      snapshotRunner,
+      String(openedRunner.dev),
+      String(openedRunner.ino),
+      "--"
+    ]);
+  } finally {
+    try {
+      chmodSync5(snapshotRoot, 448);
+      for (const entry of readdirSync9(snapshotRoot, { recursive: true, withFileTypes: true })) {
+        const entryPath = join35(entry.parentPath, entry.name);
+        if (entry.isSymbolicLink())
+          continue;
+        if (entry.isDirectory())
+          chmodSync5(entryPath, 448);
+        else if (entry.isFile())
+          chmodSync5(entryPath, 384);
+      }
+    } catch {
+    }
+    removeRunnerSnapshotAndCache(snapshotRoot, cacheRoot);
+  }
+}
+function pinnedSha256(platformKey) {
+  return testAttestation?.sha256 ?? MAESTRO_RUNNER_PIN.sha256[platformKey];
+}
+function pinnedArchiveSha256(platformKey) {
+  return testAttestation?.archiveSha256 ?? MAESTRO_RUNNER_PIN.archiveSha256[platformKey];
+}
+function defaultHashFile(bin) {
+  return createHash15("sha256").update(readFileSync26(bin)).digest("hex");
+}
+async function detect(resolvers) {
+  const binPath = (resolvers.binPath ?? getMaestroRunnerDetectionPath)();
+  const platformKey = resolvers.platformKey ?? nodePlatformKey();
+  if (!binPath) {
+    return buildReplayEngineStatus("not-installed", null, false, {
+      selectedPath: null,
+      provenance: "none"
+    });
+  }
+  const cacheVersion = pinCacheVersionForPath(binPath);
+  if (cacheVersion && cacheVersion !== MAESTRO_RUNNER_PIN.version) {
+    let sha2563 = null;
+    try {
+      sha2563 = (resolvers.hashFile ?? defaultHashFile)(binPath);
+    } catch {
+      sha2563 = null;
+    }
+    const expectedSha2562 = TRUSTED_DRIFT_SHA256[cacheVersion]?.[platformKey];
+    if (!sha2563) {
+      return buildReplayEngineStatus("unverified", null, false, {
+        selectedPath: binPath,
+        provenance: "pin-cache"
+      });
+    }
+    const comparison = compareVersions(cacheVersion, MAESTRO_RUNNER_PIN.version);
+    if (!expectedSha2562) {
+      return buildReplayEngineStatus("unverified", cacheVersion, false, {
+        selectedPath: binPath,
+        provenance: "pin-cache"
+      });
+    }
+    if (sha2563 !== expectedSha2562) {
+      return buildReplayEngineStatus("checksum-mismatch", null, false, {
+        selectedPath: binPath,
+        provenance: "pin-cache"
+      });
+    }
+    const cls = comparison < 0 ? "drift-older" : comparison > 0 ? "drift-newer" : "unknown-version";
+    return buildReplayEngineStatus(cls, cacheVersion, false, {
+      selectedPath: binPath,
+      provenance: "pin-cache"
+    });
+  }
+  let sha2562 = null;
+  try {
+    sha2562 = (resolvers.hashFile ?? defaultHashFile)(binPath);
+  } catch {
+    sha2562 = null;
+  }
+  const expectedSha256 = MAESTRO_RUNNER_PIN.sha256[platformKey];
+  if (!expectedSha256 || !sha2562) {
+    return buildReplayEngineStatus("unverified", null, false, {
+      selectedPath: binPath,
+      provenance: "pin-cache"
+    });
+  }
+  if (sha2562 !== expectedSha256) {
+    return buildReplayEngineStatus("checksum-mismatch", null, false, {
+      selectedPath: binPath,
+      provenance: "pin-cache"
+    });
+  }
+  if (!resolvers.binPath && !resolvers.hashFile && !installedPayloadMatchesPin(platformKey)) {
+    return buildReplayEngineStatus("checksum-mismatch", null, false, {
+      selectedPath: binPath,
+      provenance: "pin-cache"
+    });
+  }
+  return buildReplayEngineStatus("pinned-ok", MAESTRO_RUNNER_PIN.version, false, {
+    selectedPath: binPath,
+    provenance: "pin-cache"
+  });
+}
+function getEngineStatus(resolvers) {
+  if (testStatus)
+    return Promise.resolve(testStatus);
+  return detect(resolvers ?? {}).catch(() => buildReplayEngineStatus("unknown-version", null, false));
+}
+var MAESTRO_RUNNER_PIN, TRUSTED_DRIFT_SHA256, ACTION_ENGINE_PIN, ACTION_ENGINE_PIN_RE, HOST_PLUGIN_ROOT, PINNED_RUNNER_INSTALL_HINT, PINNED_RUNNER_DIAGNOSE_HINT, MAESTRO_RUNNER_MIN_ANDROID_API, PRE_O_REMEDY, OLDER_SDK_TOKEN, INSTALL_REJECT_CONTEXT, REGEX_METACHARACTERS, TEXT_SELECTOR_KEYS, RELATIVE_SELECTOR_KEYS, RunnerCacheUnavailableError, testStatus, testAttestation;
+var init_engine_pin = __esm({
+  "packages/rn-dev-agent-core/dist/domain/engine-pin.js"() {
+    "use strict";
+    init_process_birth();
+    init_runner_diagnostics();
+    init_maestro_runner_pin();
+    MAESTRO_RUNNER_PIN = Object.freeze({
+      version: maestro_runner_pin_default.version,
+      sha256: Object.freeze({ ...maestro_runner_pin_default.sha256 }),
+      archiveSha256: Object.freeze({ ...maestro_runner_pin_default.archiveSha256 }),
+      knownQuirks: Object.freeze(maestro_runner_pin_default.knownQuirks.map((quirk) => Object.freeze({ ...quirk })))
+    });
+    TRUSTED_DRIFT_SHA256 = Object.freeze({
+      "1.0.9": Object.freeze({
+        "darwin-arm64": "7d3777a67f8cc3d5e3927f498ddda8a56c424a10158f7cd4fa494ecc3ed97923",
+        "darwin-x64": "36f8a973c3231b6b8125db4a3e131b8c3193aec6774145584b18070be979fd5f",
+        "linux-arm64": "a8e8197c63502fba874ce69b908174d46a47c6539025184e3003e70576d9451e",
+        "linux-x64": "bf7e9ef297c35712e9fad0ad56a65b7fd94e1f30168733cf09459b4ea80c4c3e"
+      })
+    });
+    ACTION_ENGINE_PIN = `maestro-runner@${MAESTRO_RUNNER_PIN.version}`;
+    ACTION_ENGINE_PIN_RE = /^maestro-runner@(\d+(?:\.\d+)*)$/;
+    HOST_PLUGIN_ROOT = "${CLAUDE_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}";
+    PINNED_RUNNER_INSTALL_HINT = `bash ${HOST_PLUGIN_ROOT}/scripts/ensure-maestro-runner.sh`;
+    PINNED_RUNNER_DIAGNOSE_HINT = `node ${HOST_PLUGIN_ROOT}/rn-dev-agent-core/dist/maestro-runner-pin.js diagnose`;
+    MAESTRO_RUNNER_MIN_ANDROID_API = 26;
+    PRE_O_REMEDY = "Action replay / E2E via the maestro engine is unsupported on this device; the direct device_* interaction tier still works (rn-android-runner supports API 23+), except for the few device_* paths that fall back to maestro (dev-client picker and system dialogs), which hit this same limit.";
+    OLDER_SDK_TOKEN = /INSTALL_FAILED_OLDER_SDK/g;
+    INSTALL_REJECT_CONTEXT = /\b(?:adb|install|installing|failure|uiautomator2)\b|\.apk\b/i;
+    REGEX_METACHARACTERS = /* @__PURE__ */ new Set([
+      ".",
+      "^",
+      "$",
+      "*",
+      "+",
+      "?",
+      "(",
+      ")",
+      "[",
+      "]",
+      "{",
+      "}",
+      "|"
+    ]);
+    TEXT_SELECTOR_KEYS = /* @__PURE__ */ new Set([
+      "tapOn",
+      "doubleTapOn",
+      "longPressOn",
+      "assertVisible",
+      "assertNotVisible",
+      "copyTextFrom"
+    ]);
+    RELATIVE_SELECTOR_KEYS = /* @__PURE__ */ new Set([
+      "above",
+      "below",
+      "leftOf",
+      "rightOf",
+      "childOf",
+      "containsChild",
+      "containsDescendants"
+    ]);
+    RunnerCacheUnavailableError = class extends Error {
+      relativePath;
+      errno;
+      code = "RUNNER_CACHE_UNAVAILABLE";
+      constructor(relativePath, errno) {
+        super(`RUNNER_CACHE_UNAVAILABLE: ${relativePath}: ${errno}`);
+        this.relativePath = relativePath;
+        this.errno = errno;
+        this.name = "RunnerCacheUnavailableError";
+      }
+    };
   }
 });
 
@@ -74250,18 +71388,18 @@ var init_install_identity_inspection = __esm({
 
 // packages/rn-dev-agent-core/dist/session/migration-diagnostic.js
 import { createHash as createHash16 } from "node:crypto";
-import { existsSync as existsSync31, readFileSync as readFileSync32 } from "node:fs";
-import { join as join42 } from "node:path";
+import { existsSync as existsSync26, readFileSync as readFileSync27 } from "node:fs";
+import { join as join36 } from "node:path";
 function readPackageIntegrationManifest(appRoot, dependencies) {
-  const manifestPath = join42(appRoot, ".rn-agent", "integration", "rn-session-integration.json");
+  const manifestPath = join36(appRoot, ".rn-agent", "integration", "rn-session-integration.json");
   if (dependencies.exists || dependencies.readText) {
-    const exists = dependencies.exists ?? existsSync31;
+    const exists = dependencies.exists ?? existsSync26;
     if (!exists(manifestPath))
       return void 0;
-    const readText = dependencies.readText ?? ((path) => readFileSync32(path, "utf8"));
+    const readText = dependencies.readText ?? ((path) => readFileSync27(path, "utf8"));
     return readText(manifestPath);
   }
-  const agent = openBoundDirectory(join42(appRoot, ".rn-agent"));
+  const agent = openBoundDirectory(join36(appRoot, ".rn-agent"));
   let integration;
   let primaryError;
   try {
@@ -74279,7 +71417,7 @@ function readPackageIntegrationManifest(appRoot, dependencies) {
   }
 }
 function inspectAuthorityMigration(status, dependencies = {}) {
-  const exists = dependencies.exists ?? existsSync31;
+  const exists = dependencies.exists ?? existsSync26;
   const appRoot = typeof status.source.appRoot === "string" ? status.source.appRoot : "";
   let packageIntegrationInstalled = false;
   let onDiskManifestText;
@@ -74566,10 +71704,10 @@ var init_build_receipt = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/session/device-existence.js
-import { execFileSync as execFileSync15 } from "node:child_process";
+import { execFileSync as execFileSync14 } from "node:child_process";
 function deviceExistsOnHost(platform, deviceId) {
   if (platform === "ios") {
-    const output2 = execFileSync15("xcrun", ["simctl", "list", "devices", "--json"], {
+    const output2 = execFileSync14("xcrun", ["simctl", "list", "devices", "--json"], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
       timeout: 5e3
@@ -74577,7 +71715,7 @@ function deviceExistsOnHost(platform, deviceId) {
     const parsed = JSON.parse(output2);
     return Object.values(parsed.devices ?? {}).flat().some((device) => device.udid === deviceId && device.isAvailable !== false);
   }
-  const output = execFileSync15("adb", ["devices"], {
+  const output = execFileSync14("adb", ["devices"], {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "ignore"],
     timeout: 5e3
@@ -74591,7 +71729,7 @@ var init_device_existence = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/tools/session.js
-import { dirname as dirname22, isAbsolute as isAbsolute10, join as join43, resolve as resolve15 } from "node:path";
+import { dirname as dirname18, isAbsolute as isAbsolute8, join as join37, resolve as resolve13 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 import { createHash as createHash17 } from "node:crypto";
 function sameAndroidMetroReverse(current, next) {
@@ -74677,10 +71815,10 @@ function sessionSourceResolver(status, dependencies) {
   return (root) => resolveSourceIdentity(root, stored?.kind === "declared-root" ? { declaredRoot: stored.contentRoot, declaredManifests: stored.declaredManifests } : {});
 }
 function anchorDeclaredProjectRoot(status, projectRoot) {
-  if (isAbsolute10(projectRoot))
+  if (isAbsolute8(projectRoot))
     return projectRoot;
   const boundAppRoot = status.source?.appRoot;
-  return typeof boundAppRoot === "string" && boundAppRoot.length > 0 ? resolve15(boundAppRoot, projectRoot) : projectRoot;
+  return typeof boundAppRoot === "string" && boundAppRoot.length > 0 ? resolve13(boundAppRoot, projectRoot) : projectRoot;
 }
 function assertDeclaredProjectRootMatches(status, projectRoot, resolveIdentity) {
   if (projectRoot === void 0)
@@ -75517,9 +72655,9 @@ function createSessionHandler(runtime, dependencies = {}) {
         if (input.action !== "restore_integration") {
           assertDeclaredProjectRootMatches(status, input.projectRoot, sessionSourceResolver(status, dependencies));
         }
-        const packagePath = join43(appRoot, "package.json");
+        const packagePath = join37(appRoot, "package.json");
         const integrationInputs = readPackageIntegrationInputs(appRoot);
-        const manifestPath = join43(appRoot, ".rn-agent", "integration", "rn-session-integration.json");
+        const manifestPath = join37(appRoot, ".rn-agent", "integration", "rn-session-integration.json");
         const packageJson = JSON.parse(integrationInputs.packageJson);
         const integrationBinding = status.bindings.packageIntegration;
         const installationManifestSource = integrationBinding?.installation?.phase === "started" && typeof integrationBinding.installation.manifestSource === "string" ? integrationBinding.installation.manifestSource : void 0;
@@ -75532,7 +72670,7 @@ function createSessionHandler(runtime, dependencies = {}) {
           if (!(error2 instanceof SyntaxError))
             throw error2;
         }
-        const sessionCli = process.env.RN_DEV_AGENT_SESSION_CLI ?? join43(dirname22(fileURLToPath2(import.meta.url)), "..", "rn-session.js");
+        const sessionCli = process.env.RN_DEV_AGENT_SESSION_CLI ?? join37(dirname18(fileURLToPath2(import.meta.url)), "..", "rn-session.js");
         const stateDir = process.env.RN_DEV_AGENT_STATE_DIR;
         if (input.action === "restore_integration") {
           if (input.confirmed !== true) {
@@ -76297,8 +73435,8 @@ var init_error_log = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/tools/native-errors.js
-import { execFile as execFileCb13 } from "node:child_process";
-import { promisify as promisify16 } from "node:util";
+import { execFile as execFileCb12 } from "node:child_process";
+import { promisify as promisify15 } from "node:util";
 function parseIOSLog(stdout) {
   const entries = [];
   for (const line of stdout.split("\n")) {
@@ -76435,7 +73573,7 @@ var init_native_errors = __esm({
   "packages/rn-dev-agent-core/dist/tools/native-errors.js"() {
     "use strict";
     init_utils();
-    execFile15 = promisify16(execFileCb13);
+    execFile15 = promisify15(execFileCb12);
     IOS_NOISE_PATTERNS = [
       /Cannot find native module/i,
       /Module \w+ is not a registered callable module/i,
@@ -77248,9 +74386,9 @@ var init_diagnostic_renderers = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/tools/device-screenshot-resize.js
-import { execFile as execFileCb14 } from "node:child_process";
-import { promisify as promisify17 } from "node:util";
-import { statSync as statSync14 } from "node:fs";
+import { execFile as execFileCb13 } from "node:child_process";
+import { promisify as promisify16 } from "node:util";
+import { statSync as statSync12 } from "node:fs";
 async function checkSipsAvailable(deps) {
   if (sipsAvailable !== null)
     return sipsAvailable;
@@ -77332,13 +74470,13 @@ var execFile16, DEFAULT_MAX_WIDTH, DEFAULT_QUALITY, sipsAvailable, defaultFileSi
 var init_device_screenshot_resize = __esm({
   "packages/rn-dev-agent-core/dist/tools/device-screenshot-resize.js"() {
     "use strict";
-    execFile16 = promisify17(execFileCb14);
+    execFile16 = promisify16(execFileCb13);
     DEFAULT_MAX_WIDTH = 800;
     DEFAULT_QUALITY = 85;
     sipsAvailable = null;
     defaultFileSize = (path) => {
       try {
-        return statSync14(path).size;
+        return statSync12(path).size;
       } catch {
         return void 0;
       }
@@ -77640,18 +74778,18 @@ var init_events = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/observability/recorder.js
-import { closeSync as closeSync11, constants as constants9, fstatSync as fstatSync8, openSync as openSync11, readSync as readSync4 } from "node:fs";
-import { isAbsolute as isAbsolute11 } from "node:path";
+import { closeSync as closeSync10, constants as constants8, fstatSync as fstatSync7, openSync as openSync10, readSync as readSync4 } from "node:fs";
+import { isAbsolute as isAbsolute9 } from "node:path";
 function extractScreenshotPath(result) {
   const data = unwrapResult(result)?.data ?? result?.data;
   const p = data?.path ?? data?.message;
-  return typeof p === "string" && isAbsolute11(p) && (p.endsWith(".jpg") || p.endsWith(".jpeg") || p.endsWith(".png")) ? p : null;
+  return typeof p === "string" && isAbsolute9(p) && (p.endsWith(".jpg") || p.endsWith(".jpeg") || p.endsWith(".png")) ? p : null;
 }
 function readShotBounded(p) {
   let fd;
   try {
-    fd = openSync11(p, constants9.O_RDONLY | constants9.O_NOFOLLOW | constants9.O_NONBLOCK);
-    const st = fstatSync8(fd);
+    fd = openSync10(p, constants8.O_RDONLY | constants8.O_NOFOLLOW | constants8.O_NONBLOCK);
+    const st = fstatSync7(fd);
     if (!st.isFile() || st.size > MAX_SHOT_BYTES)
       return null;
     const size = Number(st.size);
@@ -77665,7 +74803,7 @@ function readShotBounded(p) {
   } finally {
     if (fd !== void 0) {
       try {
-        closeSync11(fd);
+        closeSync10(fd);
       } catch {
       }
     }
@@ -77738,7 +74876,7 @@ var init_recorder = __esm({
        * whatever path the pipeline actually captured to.
        */
       registerCapturedScreenshot(p) {
-        if (typeof p !== "string" || !isAbsolute11(p))
+        if (typeof p !== "string" || !isAbsolute9(p))
           return;
         this.trustedShotPaths.delete(p);
         this.trustedShotPaths.add(p);
@@ -77823,10 +74961,10 @@ var init_recorder = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/tools/device-list.js
-import { mkdirSync as mkdirSync20 } from "node:fs";
+import { mkdirSync as mkdirSync19 } from "node:fs";
 import { execFile as execFile17 } from "node:child_process";
-import { promisify as promisify18 } from "node:util";
-import { dirname as dirname23, join as join44, resolve as resolve16 } from "node:path";
+import { promisify as promisify17 } from "node:util";
+import { dirname as dirname19, join as join38, resolve as resolve14 } from "node:path";
 import { homedir as homedir8 } from "node:os";
 function parseSimctlDevicesAll(jsonText) {
   try {
@@ -77870,18 +75008,18 @@ function deriveScreenshotPath(args, now = Date.now, rand = Math.random) {
   }
   if (args.path?.startsWith("~")) {
     if (args.path.startsWith("~/"))
-      return join44(homedir8(), args.path.slice(2));
+      return join38(homedir8(), args.path.slice(2));
     throw new TildeScreenshotPathError(`Screenshot path "${args.path}" starts with '~' which the bridge cannot expand (only a leading '~/' is expanded to the home directory). Pass an absolute path instead.`);
   }
   if (args.path)
-    return resolve16(args.path);
+    return resolve14(args.path);
   const ext = args.format === "jpeg" ? "jpg" : args.format === "png" ? "png" : "jpg";
   const suffix = rand().toString(36).slice(2, 8);
   return `/tmp/rn-screenshot-${now()}-${suffix}.${ext}`;
 }
 function ensureScreenshotDir(path) {
   try {
-    mkdirSync20(dirname23(path), { recursive: true });
+    mkdirSync19(dirname19(path), { recursive: true });
     return { ok: true };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
@@ -78068,7 +75206,7 @@ var init_device_list = __esm({
     init_recorder();
     init_public_diagnostics();
     runAgentDeviceFn2 = runNative;
-    execFileAsync3 = promisify18(execFile17);
+    execFileAsync3 = promisify17(execFile17);
     defaultExec2 = (cmd, args) => execFileAsync3(cmd, args);
     execFn = defaultExec2;
     PathTraversalScreenshotError = class extends Error {
@@ -78182,7 +75320,7 @@ function resolveBatchDelayMs(explicit, env) {
     return explicit;
   return settleEnabled(env) ? 0 : 300;
 }
-function sleep6(ms) {
+function sleep4(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 async function guardedBatchPress(cliArgs, opts, getClient2) {
@@ -78294,16 +75432,11 @@ async function executeStep(step, getClient2, abortSignal) {
       if (!targetRef) {
         return failResult("fill requires ref or testID. Use a find+tap step first to focus the field, or pass testID for fresh resolution.", { mutation: "none" });
       }
-      const client2 = getClient2 ? cdpClientOrNull(getClient2) : null;
       return performExactFill({
         ref: targetRef,
         text: step.text,
         settleTimeoutMs: step.settle === false ? 0 : BATCH_STEP_SETTLE_BUDGET_MS
-      }, client2, {
-        js: false,
-        maestro: false,
-        ...abortSignal ? { abortSignal } : {}
-      });
+      }, null, abortSignal ? { abortSignal } : {});
     }
     case "swipe": {
       if (!step.direction)
@@ -78347,7 +75480,7 @@ async function executeStep(step, getClient2, abortSignal) {
       return captureAndResizeScreenshot({});
     }
     case "wait": {
-      await sleep6(step.ms ?? 500);
+      await sleep4(step.ms ?? 500);
       return okResult({ waited: step.ms ?? 500 });
     }
     default:
@@ -78465,7 +75598,7 @@ function createDeviceBatchHandler(getClient2) {
         }
       }
       if (i < steps.length - 1 && step.action !== "wait" && delayMs > 0) {
-        await sleep6(delayMs);
+        await sleep4(delayMs);
       }
     }
     if (!failedStep && screenshotOn === "end") {
@@ -78943,6 +76076,1282 @@ var init_macro_asserts = __esm({
     init_utils();
     init_agent_device_wrapper();
     init_device_batch();
+  }
+});
+
+// packages/rn-dev-agent-core/dist/domain/atomic-writer.js
+import { writeFileSync as writeFileSync13, renameSync as renameSync8, statSync as statSync13, mkdirSync as mkdirSync20, existsSync as existsSync27, unlinkSync as unlinkSync12, readdirSync as readdirSync10, openSync as openSync11, closeSync as closeSync11, chmodSync as chmodSync6, fstatSync as fstatSync8, lstatSync as lstatSync13, readFileSync as readFileSync28, linkSync as linkSync2, constants as constants9 } from "node:fs";
+import { dirname as dirname20, basename as basename7 } from "node:path";
+function generateTmpStamp() {
+  const rand = Math.random().toString(36).slice(2, 10);
+  return `${process.pid}.${Date.now().toString(36)}.${rand}`;
+}
+function actionWriteLockPath(yamlPath) {
+  return `${yamlPath.replace(/\.yml$/i, ".yaml")}.write.lock`;
+}
+function currentLockOwner() {
+  if (localLockOwner)
+    return localLockOwner;
+  const observed = probeProcessBirth(process.pid);
+  if (observed.status !== "present") {
+    throw new Error("Could not establish action writer process identity.");
+  }
+  localLockOwner = { pid: process.pid, birth: observed.birth.token };
+  return localLockOwner;
+}
+function readLockOwner(lockPath) {
+  try {
+    const parsed = JSON.parse(readFileSync28(lockPath, "utf8"));
+    if (!Number.isSafeInteger(parsed.pid) || Number(parsed.pid) <= 0 || !parsed.birth)
+      return null;
+    return { pid: Number(parsed.pid), birth: parsed.birth };
+  } catch {
+    return null;
+  }
+}
+function lockOwnerIsGone(owner) {
+  const observed = probeProcessBirth(owner.pid);
+  return observed.status === "absent" || observed.status === "present" && observed.birth.token !== owner.birth;
+}
+function withPairWriteLock(yamlPath, operation, acquisitionPrecondition) {
+  if (acquisitionPrecondition && !acquisitionPrecondition())
+    throw ACTION_WRITE_PRECONDITION;
+  ensureDir(yamlPath);
+  const lockPath = actionWriteLockPath(yamlPath);
+  if (heldWriteLocks.has(lockPath))
+    return operation();
+  const ownerPath = `${dirname20(yamlPath)}/.rn-action-write-owner.${generateTmpStamp()}`;
+  const owner = currentLockOwner();
+  const lockFd = openSync11(ownerPath, "wx", 384);
+  writeFileSync13(lockFd, `${JSON.stringify(owner)}
+`, "utf8");
+  const deadline = Date.now() + ACTION_WRITE_LOCK_TIMEOUT_MS;
+  let acquired = false;
+  let identity2 = null;
+  try {
+    while (!acquired) {
+      try {
+        if (acquisitionPrecondition && !acquisitionPrecondition()) {
+          throw ACTION_WRITE_PRECONDITION;
+        }
+        linkSync2(ownerPath, lockPath);
+        acquired = true;
+      } catch (err) {
+        if (err.code !== "EEXIST")
+          throw err;
+        let lockStat;
+        try {
+          lockStat = lstatSync13(lockPath);
+        } catch (statError) {
+          if (statError.code === "ENOENT")
+            continue;
+          throw statError;
+        }
+        if (!lockStat.isFile() || lockStat.isSymbolicLink()) {
+          throw new Error(`Refusing invalid action write lock at ${lockPath}.`);
+        }
+        const existingOwner = readLockOwner(lockPath);
+        if (existingOwner && lockOwnerIsGone(existingOwner)) {
+          try {
+            const current = lstatSync13(lockPath);
+            if (current.dev === lockStat.dev && current.ino === lockStat.ino)
+              unlinkSync12(lockPath);
+          } catch (unlinkError) {
+            if (unlinkError.code !== "ENOENT")
+              throw unlinkError;
+          }
+          continue;
+        }
+        if (Date.now() >= deadline) {
+          throw new Error(`Timed out waiting for action write lock at ${lockPath}.`);
+        }
+        Atomics.wait(lockWaitBuffer, 0, 0, 10);
+      }
+    }
+    unlinkSync12(ownerPath);
+    identity2 = fstatSync8(lockFd);
+    heldWriteLocks.add(lockPath);
+    try {
+      return operation();
+    } finally {
+      heldWriteLocks.delete(lockPath);
+    }
+  } finally {
+    if (identity2) {
+      try {
+        const current = lstatSync13(lockPath);
+        if (current.dev === identity2.dev && current.ino === identity2.ino)
+          unlinkSync12(lockPath);
+      } catch {
+      }
+    }
+    closeSync11(lockFd);
+    try {
+      unlinkSync12(ownerPath);
+    } catch {
+    }
+  }
+}
+function pairWriteImpl(yamlPath, yamlContent, sidecarPath, state, publicationPrecondition, yamlPublicationPrecondition, expectedYamlContent, createExclusive = false) {
+  if (publicationPrecondition && !publicationPrecondition())
+    return null;
+  ensureDir(yamlPath);
+  ensureDir(sidecarPath);
+  let yamlMode;
+  if (expectedYamlContent !== void 0) {
+    let targetFd;
+    try {
+      targetFd = openSync11(yamlPath, constants9.O_RDONLY | constants9.O_NOFOLLOW);
+    } catch {
+      return null;
+    }
+    try {
+      const target = fstatSync8(targetFd);
+      if (!target.isFile() || readFileSync28(targetFd, "utf8") !== expectedYamlContent)
+        return null;
+      yamlMode = target.mode & 4095;
+    } finally {
+      closeSync11(targetFd);
+    }
+  } else if (createExclusive) {
+    yamlMode = 384;
+  }
+  let sidecarMode = 384;
+  try {
+    const sidecarFd = openSync11(sidecarPath, constants9.O_RDONLY | constants9.O_NOFOLLOW);
+    try {
+      const sidecar = fstatSync8(sidecarFd);
+      if (!sidecar.isFile())
+        return null;
+      sidecarMode = sidecar.mode & 4095;
+    } finally {
+      closeSync11(sidecarFd);
+    }
+  } catch (error2) {
+    if (error2.code !== "ENOENT")
+      return null;
+  }
+  const stamp = generateTmpStamp();
+  const yamlTmp = `${yamlPath}.tmp.${stamp}`;
+  const sidecarTmp = `${sidecarPath}.tmp.${stamp}`;
+  const projectedMtimeMs = Date.now() + FUTURE_MTIME_BUFFER_MS;
+  const projectedState = {
+    ...state,
+    lastSeenMtimeMs: projectedMtimeMs
+  };
+  if (publicationPrecondition && !publicationPrecondition())
+    return null;
+  atomicWriter._writeFileWithMode(sidecarTmp, JSON.stringify(projectedState, null, 2) + "\n", sidecarMode);
+  if (publicationPrecondition && !publicationPrecondition()) {
+    atomicWriter._unlink(sidecarTmp);
+    return null;
+  }
+  const priorSidecarExisted = publicationPrecondition ? atomicWriter._exists(sidecarPath) : false;
+  const priorSidecar = priorSidecarExisted ? readFileSync28(sidecarPath, "utf8") : null;
+  function restorePriorSidecar() {
+    if (priorSidecar === null) {
+      atomicWriter._unlink(sidecarPath);
+    } else {
+      atomicWriter._writeFileWithMode(sidecarTmp, priorSidecar, sidecarMode);
+      atomicWriter._rename(sidecarTmp, sidecarPath);
+    }
+  }
+  function writeYamlTmp() {
+    if (yamlMode === void 0)
+      atomicWriter._writeFile(yamlTmp, yamlContent);
+    else
+      atomicWriter._writeFileWithMode(yamlTmp, yamlContent, yamlMode);
+  }
+  if (createExclusive) {
+    try {
+      writeYamlTmp();
+    } catch (error2) {
+      try {
+        atomicWriter._unlink(sidecarTmp);
+      } catch {
+      }
+      try {
+        atomicWriter._unlink(yamlTmp);
+      } catch {
+      }
+      throw error2;
+    }
+    if (publicationPrecondition && !publicationPrecondition()) {
+      atomicWriter._unlink(sidecarTmp);
+      atomicWriter._unlink(yamlTmp);
+      return null;
+    }
+    const yamlPublished = (!publicationPrecondition || publicationPrecondition()) && atomicWriter._linkIfAbsent(yamlTmp, yamlPath, publicationPrecondition);
+    if (!yamlPublished) {
+      atomicWriter._unlink(sidecarTmp);
+      atomicWriter._unlink(yamlTmp);
+      return null;
+    }
+    atomicWriter._rename(sidecarTmp, sidecarPath);
+    atomicWriter._unlink(yamlTmp);
+  } else {
+    if (publicationPrecondition && !publicationPrecondition()) {
+      atomicWriter._unlink(sidecarTmp);
+      return null;
+    }
+    atomicWriter._rename(sidecarTmp, sidecarPath);
+    try {
+      writeYamlTmp();
+    } catch (error2) {
+      try {
+        atomicWriter._unlink(yamlTmp);
+      } catch {
+      }
+      throw error2;
+    }
+    const yamlPublished = expectedYamlContent === void 0 ? !yamlPublicationPrecondition || yamlPublicationPrecondition() : atomicWriter._publishIfUnchanged(yamlTmp, yamlPath, expectedYamlContent, stamp, yamlPublicationPrecondition);
+    if (!yamlPublished) {
+      if (yamlPublicationPrecondition && !yamlPublicationPrecondition()) {
+        try {
+          const candidate = lstatSync13(yamlTmp);
+          if (!candidate.isFile() || candidate.isSymbolicLink())
+            return null;
+        } catch {
+          return null;
+        }
+      }
+      restorePriorSidecar();
+      atomicWriter._unlink(yamlTmp);
+      return null;
+    }
+    if (expectedYamlContent === void 0)
+      atomicWriter._rename(yamlTmp, yamlPath);
+  }
+  const actualMtimeMs = atomicWriter._statMtimeMs(yamlPath);
+  const finalMtimeMs = Math.max(actualMtimeMs, projectedMtimeMs);
+  const finalState = {
+    ...state,
+    lastSeenMtimeMs: finalMtimeMs
+  };
+  atomicWriter._writeFileWithMode(sidecarTmp, JSON.stringify(finalState, null, 2) + "\n", sidecarMode);
+  atomicWriter._rename(sidecarTmp, sidecarPath);
+  return { yamlPath, sidecarPath, finalMtimeMs, refreshedSidecar: true };
+}
+function ensureDir(filePath) {
+  const dir = dirname20(filePath);
+  if (!atomicWriter._exists(dir))
+    atomicWriter._mkdir(dir);
+}
+function cleanupOrphans(yamlPath, sidecarPath) {
+  const now = Date.now();
+  for (const targetPath of [yamlPath, sidecarPath]) {
+    const dir = dirname20(targetPath);
+    const prefix = `${basename7(targetPath)}.tmp.`;
+    let entries;
+    try {
+      entries = atomicWriter._readdir(dir);
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      if (!entry.startsWith(prefix))
+        continue;
+      const orphanPath = `${dir}/${entry}`;
+      try {
+        const mtimeMs = atomicWriter._statMtimeMs(orphanPath);
+        if (now - mtimeMs < ORPHAN_MAX_AGE_MS)
+          continue;
+        atomicWriter._unlink(orphanPath);
+      } catch {
+      }
+    }
+  }
+}
+var FUTURE_MTIME_BUFFER_MS, ORPHAN_MAX_AGE_MS, ACTION_WRITE_LOCK_TIMEOUT_MS, lockWaitBuffer, ACTION_WRITE_PRECONDITION, localLockOwner, heldWriteLocks, atomicWriter;
+var init_atomic_writer = __esm({
+  "packages/rn-dev-agent-core/dist/domain/atomic-writer.js"() {
+    "use strict";
+    init_process_birth();
+    FUTURE_MTIME_BUFFER_MS = 1e3;
+    ORPHAN_MAX_AGE_MS = 5 * 60 * 1e3;
+    ACTION_WRITE_LOCK_TIMEOUT_MS = 5e3;
+    lockWaitBuffer = new Int32Array(new SharedArrayBuffer(4));
+    ACTION_WRITE_PRECONDITION = /* @__PURE__ */ Symbol("action-write-precondition");
+    localLockOwner = null;
+    heldWriteLocks = /* @__PURE__ */ new Set();
+    atomicWriter = {
+      /** Underlying `fs.writeFileSync(path, content, 'utf8')`. */
+      _writeFile(path, content) {
+        writeFileSync13(path, content, "utf8");
+      },
+      _writeFileWithMode(path, content, mode) {
+        const fd = openSync11(path, "wx", mode);
+        try {
+          writeFileSync13(fd, content, "utf8");
+        } finally {
+          closeSync11(fd);
+        }
+      },
+      /** Underlying `fs.renameSync(from, to)`. */
+      _rename(from, to) {
+        renameSync8(from, to);
+      },
+      /** Underlying `fs.statSync(path).mtimeMs`. */
+      _statMtimeMs(path) {
+        return statSync13(path).mtimeMs;
+      },
+      /** Underlying `fs.existsSync(path)`. Routed through the seam so test
+       *  cases for ensureDir / cleanupOrphans can simulate exotic failures
+       *  (PR #109 review). */
+      _exists(path) {
+        return existsSync27(path);
+      },
+      /** Underlying `fs.mkdirSync(path, { recursive: true })`. */
+      _mkdir(path) {
+        mkdirSync20(path, { recursive: true });
+      },
+      /** Underlying `fs.unlinkSync(path)`. Used by orphan-cleanup. */
+      _unlink(path) {
+        unlinkSync12(path);
+      },
+      /** Underlying `fs.readdirSync(path)`. Used by GH #111 prefix-scan cleanup. */
+      _readdir(path) {
+        return readdirSync10(path);
+      },
+      _linkIfAbsent(candidatePath, targetPath, publicationPrecondition) {
+        if (publicationPrecondition && !publicationPrecondition())
+          return false;
+        let directoryFd;
+        try {
+          directoryFd = openSync11(dirname20(targetPath), constants9.O_RDONLY | constants9.O_NOFOLLOW | constants9.O_DIRECTORY);
+        } catch {
+          return false;
+        }
+        try {
+          const directory = fstatSync8(directoryFd);
+          if (!directory.isDirectory() || publicationPrecondition && !publicationPrecondition()) {
+            return false;
+          }
+          return atomicWriter._linkIntoVerifiedDirectory(directoryFd, candidatePath, targetPath);
+        } finally {
+          closeSync11(directoryFd);
+        }
+      },
+      _linkIntoVerifiedDirectory(directoryFd, candidatePath, targetPath) {
+        return linkFileIntoVerifiedDirectory(directoryFd, candidatePath, targetPath);
+      },
+      _publishIfUnchanged(candidatePath, targetPath, expectedContent, stamp, publicationPrecondition) {
+        let targetFd;
+        try {
+          targetFd = openSync11(targetPath, constants9.O_RDONLY | constants9.O_NOFOLLOW);
+        } catch {
+          return false;
+        }
+        try {
+          const opened = fstatSync8(targetFd);
+          const current = lstatSync13(targetPath);
+          if (!opened.isFile() || current.isSymbolicLink() || current.dev !== opened.dev || current.ino !== opened.ino || readFileSync28(targetFd, "utf8") !== expectedContent || publicationPrecondition && !publicationPrecondition()) {
+            return false;
+          }
+          const expectedPath = `${candidatePath}.expected.${stamp}`;
+          chmodSync6(candidatePath, opened.mode & 4095);
+          atomicWriter._writeFileWithMode(expectedPath, expectedContent, opened.mode & 4095);
+          try {
+            return publishFileIfUnchangedDarwin(targetFd, targetPath, candidatePath, expectedPath);
+          } finally {
+            atomicWriter._unlink(expectedPath);
+          }
+        } catch {
+          return false;
+        } finally {
+          closeSync11(targetFd);
+        }
+      },
+      withLock(yamlPath, operation) {
+        return withPairWriteLock(yamlPath, operation);
+      },
+      writeTextCreateExclusive(yamlPath, content, precondition) {
+        try {
+          return withPairWriteLock(yamlPath, () => {
+            if (!precondition())
+              return false;
+            const candidatePath = `${dirname20(yamlPath)}/.rn-action-create.${generateTmpStamp()}`;
+            atomicWriter._writeFileWithMode(candidatePath, content, 384);
+            try {
+              return atomicWriter._linkIfAbsent(candidatePath, yamlPath, precondition);
+            } finally {
+              try {
+                atomicWriter._unlink(candidatePath);
+              } catch {
+              }
+            }
+          }, precondition);
+        } catch (error2) {
+          if (error2 === ACTION_WRITE_PRECONDITION)
+            return false;
+          throw error2;
+        }
+      },
+      /**
+       * Atomic pair-write. Cleans up any orphaned `.tmp` files before
+       * starting. Throws on the first failed step — caller decides whether
+       * to surface or recover.
+       */
+      pairWrite(yamlPath, yamlContent, sidecarPath, state) {
+        return withPairWriteLock(yamlPath, () => {
+          cleanupOrphans(yamlPath, sidecarPath);
+          const result = pairWriteImpl(yamlPath, yamlContent, sidecarPath, state);
+          if (!result)
+            throw new Error(`Unconditional pair write refused for ${yamlPath}.`);
+          return result;
+        });
+      },
+      pairWriteCreateExclusive(yamlPath, yamlContent, sidecarPath, state, precondition) {
+        try {
+          return withPairWriteLock(yamlPath, () => {
+            if (precondition && !precondition())
+              return null;
+            cleanupOrphans(yamlPath, sidecarPath);
+            return pairWriteImpl(yamlPath, yamlContent, sidecarPath, state, precondition, precondition, void 0, true);
+          }, precondition);
+        } catch (error2) {
+          if (error2 === ACTION_WRITE_PRECONDITION)
+            return null;
+          throw error2;
+        }
+      },
+      pairWriteConditional(yamlPath, yamlContent, sidecarPath, state, precondition, yamlPublicationPrecondition, expectedYamlContent) {
+        try {
+          return withPairWriteLock(yamlPath, () => {
+            if (!precondition())
+              return null;
+            cleanupOrphans(yamlPath, sidecarPath);
+            return pairWriteImpl(yamlPath, yamlContent, sidecarPath, state, precondition, yamlPublicationPrecondition, expectedYamlContent);
+          }, precondition);
+        } catch (error2) {
+          if (error2 === ACTION_WRITE_PRECONDITION)
+            return null;
+          throw error2;
+        }
+      }
+    };
+  }
+});
+
+// packages/rn-dev-agent-core/dist/domain/unfollowed-file.js
+import { execFileSync as execFileSync15 } from "node:child_process";
+import { lstatSync as lstatSync14 } from "node:fs";
+import { isAbsolute as isAbsolute10, join as join39 } from "node:path";
+function createUnfollowedFileSnapshot(directoryPath, directoryIdentity2) {
+  return { directoryPath, directoryIdentity: directoryIdentity2, fileIdentities: /* @__PURE__ */ new Map() };
+}
+function identityFromStat(path, stat2) {
+  return {
+    path,
+    dev: String(stat2.dev),
+    ino: String(stat2.ino),
+    size: String(stat2.size),
+    mtimeNs: String(stat2.mtimeNs),
+    ctimeNs: String(stat2.ctimeNs)
+  };
+}
+function sameIdentity2(left, right) {
+  return left.dev === right.dev && left.ino === right.ino && left.size === right.size && left.mtimeNs === right.mtimeNs && left.ctimeNs === right.ctimeNs;
+}
+function captureUnfollowedFileIdentities(snapshot, relativePaths) {
+  const identities = [];
+  try {
+    for (const relativePath of relativePaths) {
+      const path = join39(snapshot.directoryPath, relativePath);
+      const stat2 = lstatSync14(path, { bigint: true });
+      if (stat2.isSymbolicLink() || !stat2.isFile())
+        throw new Error("changed");
+      const captured = identityFromStat(path, stat2);
+      const existing = snapshot.fileIdentities.get(relativePath);
+      if (existing && !sameIdentity2(existing, captured))
+        throw new Error("changed");
+      const selected = existing ?? captured;
+      snapshot.fileIdentities.set(relativePath, selected);
+      identities.push(selected);
+    }
+  } catch {
+    throw new Error(`Refusing replaced learned-action corpus at ${snapshot.directoryPath}.`);
+  }
+  return identities;
+}
+function assertUnfollowedFileSnapshotUnchanged(snapshot) {
+  try {
+    for (const identity2 of snapshot.fileIdentities.values()) {
+      const stat2 = lstatSync14(identity2.path, { bigint: true });
+      if (stat2.isSymbolicLink() || !stat2.isFile() || !sameIdentity2(identity2, identityFromStat(identity2.path, stat2))) {
+        throw new Error("changed");
+      }
+    }
+  } catch {
+    throw new Error(`Refusing replaced learned-action corpus at ${snapshot.directoryPath}.`);
+  }
+}
+function selectExistingUnfollowedSnapshotFiles(snapshot, relativePaths) {
+  assertUnfollowedFileSnapshotUnchanged(snapshot);
+  const existing = [];
+  try {
+    for (const relativePath of relativePaths) {
+      const path = join39(snapshot.directoryPath, relativePath);
+      let stat2;
+      try {
+        stat2 = lstatSync14(path, { bigint: true });
+      } catch (err) {
+        if (err.code === "ENOENT")
+          continue;
+        throw err;
+      }
+      if (stat2.isSymbolicLink() || !stat2.isFile())
+        throw new Error("changed");
+      const captured = identityFromStat(path, stat2);
+      const selected = snapshot.fileIdentities.get(relativePath);
+      if (selected && !sameIdentity2(selected, captured))
+        throw new Error("changed");
+      snapshot.fileIdentities.set(relativePath, selected ?? captured);
+      existing.push(relativePath);
+    }
+  } catch {
+    throw new Error(`Refusing replaced learned-action corpus at ${snapshot.directoryPath}.`);
+  }
+  assertUnfollowedFileSnapshotUnchanged(snapshot);
+  return existing;
+}
+function readUnfollowedSnapshotFiles(snapshot, relativePaths, readFiles = readUnfollowedFiles) {
+  assertUnfollowedFileSnapshotUnchanged(snapshot);
+  const identities = captureUnfollowedFileIdentities(snapshot, relativePaths);
+  const contents = readFiles(snapshot.directoryPath, snapshot.directoryIdentity, relativePaths, identities);
+  assertUnfollowedFileSnapshotUnchanged(snapshot);
+  if (contents.length !== relativePaths.length || contents.some((entry) => entry == null)) {
+    throw new Error(`Refusing replaced learned-action corpus at ${snapshot.directoryPath}.`);
+  }
+  return contents;
+}
+function readUnfollowedFiles(directoryPath, identity2, relativePaths, expectedIdentities) {
+  try {
+    if (process.platform !== "darwin" && process.platform !== "linux") {
+      throw new Error(`Verified directory reads are unavailable on ${process.platform}/${process.arch}.`);
+    }
+    if (expectedIdentities && expectedIdentities.length !== relativePaths.length) {
+      throw new Error("Selected file identities did not match the requested paths.");
+    }
+    const entries = relativePaths.map((relativePath, index) => {
+      if (isAbsolute10(relativePath) || relativePath.split("/").some((component) => !component || component === "." || component === "..")) {
+        throw new Error(`Invalid relative path: ${relativePath}.`);
+      }
+      if (expectedIdentities) {
+        const selected = expectedIdentities[index];
+        if (!selected || selected.path !== join39(directoryPath, relativePath)) {
+          throw new Error(`Selected file identity did not match ${relativePath}.`);
+        }
+        return { relativePath, identity: selected };
+      }
+      const path = join39(directoryPath, relativePath);
+      try {
+        const stat2 = lstatSync14(path, { bigint: true });
+        return {
+          relativePath,
+          identity: stat2.isSymbolicLink() || !stat2.isFile() ? null : identityFromStat(path, stat2)
+        };
+      } catch (err) {
+        if (err.code === "ENOENT")
+          return { relativePath, identity: null };
+        throw err;
+      }
+    });
+    const contents = [];
+    let batch = [];
+    let batchBytes = 0;
+    const flush = () => {
+      if (batch.length === 0)
+        return;
+      const output = execFileSync15(process.execPath, [
+        "--no-warnings",
+        "--input-type=commonjs",
+        "-e",
+        UNFOLLOWED_READER_SCRIPT,
+        JSON.stringify({ directoryPath, directoryIdentity: identity2, entries: batch })
+      ], {
+        maxBuffer: UNFOLLOWED_READER_MAX_BUFFER_BYTES,
+        stdio: ["ignore", "pipe", "ignore"],
+        timeout: 1e4
+      });
+      let offset = 0;
+      for (const entry of batch) {
+        if (offset + UNFOLLOWED_READER_FRAME_BYTES > output.length) {
+          throw new Error(`Verified directory batch was truncated before ${entry.relativePath}.`);
+        }
+        const status = output[offset];
+        const length = output.readBigUInt64BE(offset + 1);
+        offset += UNFOLLOWED_READER_FRAME_BYTES;
+        if (length > BigInt(Number.MAX_SAFE_INTEGER) || offset + Number(length) > output.length) {
+          throw new Error(`Verified directory batch was malformed at ${entry.relativePath}.`);
+        }
+        const end = offset + Number(length);
+        if (status === 0)
+          contents.push(output.toString("utf8", offset, end));
+        else if (status === 1 && length === 0n)
+          contents.push(null);
+        else
+          throw new Error(`Verified directory batch refused ${entry.relativePath}.`);
+        offset = end;
+      }
+      if (offset !== output.length)
+        throw new Error("Verified directory batch had trailing data.");
+      batch = [];
+      batchBytes = 0;
+    };
+    for (const entry of entries) {
+      const size = entry.identity ? Number(entry.identity.size) : 0;
+      const framedBytes = UNFOLLOWED_READER_FRAME_BYTES + size;
+      if (!Number.isSafeInteger(size) || framedBytes > UNFOLLOWED_READER_BATCH_BYTES) {
+        throw new Error(`Verified directory entry exceeds the safe batch size: ${entry.relativePath}.`);
+      }
+      if (batch.length > 0 && (batch.length >= UNFOLLOWED_READER_BATCH_FILES || batchBytes + framedBytes > UNFOLLOWED_READER_BATCH_BYTES)) {
+        flush();
+      }
+      batch.push(entry);
+      batchBytes += framedBytes;
+    }
+    flush();
+    return contents;
+  } catch (err) {
+    throw new Error(`Refusing replaced learned-action corpus at ${directoryPath}: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+function listUnfollowedDirectory(directoryPath, identity2) {
+  try {
+    return listVerifiedDirectory(directoryPath, identity2);
+  } catch (err) {
+    throw new Error(`Refusing replaced learned-action corpus at ${directoryPath}: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+var UNFOLLOWED_READER_MAX_BUFFER_BYTES, UNFOLLOWED_READER_BATCH_BYTES, UNFOLLOWED_READER_BATCH_FILES, UNFOLLOWED_READER_FRAME_BYTES, UNFOLLOWED_READER_SCRIPT;
+var init_unfollowed_file = __esm({
+  "packages/rn-dev-agent-core/dist/domain/unfollowed-file.js"() {
+    "use strict";
+    init_process_birth();
+    UNFOLLOWED_READER_MAX_BUFFER_BYTES = 32 * 1024 * 1024;
+    UNFOLLOWED_READER_BATCH_BYTES = 24 * 1024 * 1024;
+    UNFOLLOWED_READER_BATCH_FILES = 16;
+    UNFOLLOWED_READER_FRAME_BYTES = 9;
+    UNFOLLOWED_READER_SCRIPT = String.raw`
+const { closeSync, constants, fstatSync, openSync, readSync, realpathSync, writeSync } = require('node:fs');
+const { join } = require('node:path');
+const request = JSON.parse(process.argv[1]);
+const opened = [];
+let directory = -1;
+const closeAll = () => {
+  for (const entry of opened) if (entry.fd >= 0) closeSync(entry.fd);
+  if (directory >= 0) closeSync(directory);
+};
+const matches = (stat, identity) =>
+  stat.isFile() &&
+  String(stat.dev) === identity.dev &&
+  String(stat.ino) === identity.ino &&
+  String(stat.size) === identity.size &&
+  String(stat.mtimeNs) === identity.mtimeNs &&
+  String(stat.ctimeNs) === identity.ctimeNs;
+try {
+  directory = openSync(
+    request.directoryPath,
+    constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_DIRECTORY,
+  );
+  const directoryStat = fstatSync(directory, { bigint: true });
+  if (
+    !directoryStat.isDirectory() ||
+    String(directoryStat.dev) !== request.directoryIdentity.dev ||
+    String(directoryStat.ino) !== request.directoryIdentity.ino
+  ) {
+    throw new Error('directory changed');
+  }
+  let batchBytes = 0;
+  for (const entry of request.entries) {
+    if (!entry.identity) {
+      opened.push({ fd: -1, size: 0, identity: null });
+      batchBytes += 9;
+      continue;
+    }
+    const path = join(request.directoryPath, entry.relativePath);
+    if (realpathSync.native(path) !== path) throw new Error('path followed a link');
+    const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    const stat = fstatSync(fd, { bigint: true });
+    if (!matches(stat, entry.identity)) {
+      closeSync(fd);
+      throw new Error('file changed');
+    }
+    const size = Number(stat.size);
+    if (!Number.isSafeInteger(size) || size < 0) {
+      closeSync(fd);
+      throw new Error('invalid size');
+    }
+    batchBytes += 9 + size;
+    if (batchBytes > ${UNFOLLOWED_READER_BATCH_BYTES}) {
+      closeSync(fd);
+      throw new Error('batch too large');
+    }
+    opened.push({ fd, size, identity: entry.identity });
+  }
+  for (const entry of opened) {
+    const frame = Buffer.alloc(9);
+    if (entry.fd < 0) {
+      frame[0] = 1;
+      writeSync(1, frame);
+      continue;
+    }
+    frame.writeBigUInt64BE(BigInt(entry.size), 1);
+    writeSync(1, frame);
+    const buffer = Buffer.allocUnsafe(Math.min(16384, Math.max(entry.size, 1)));
+    let offset = 0;
+    while (offset < entry.size) {
+      const count = readSync(entry.fd, buffer, 0, Math.min(buffer.length, entry.size - offset), offset);
+      if (count <= 0) throw new Error('short read');
+      writeSync(1, buffer, 0, count);
+      offset += count;
+    }
+    if (!matches(fstatSync(entry.fd, { bigint: true }), entry.identity)) {
+      throw new Error('file changed during read');
+    }
+  }
+  closeAll();
+} catch {
+  closeAll();
+  process.exit(10);
+}
+`;
+  }
+});
+
+// packages/rn-dev-agent-core/dist/domain/action-store.js
+import { existsSync as existsSync28, lstatSync as lstatSync15, readFileSync as readFileSync29, statSync as statSync14, unlinkSync as unlinkSync13 } from "node:fs";
+import { basename as basename8, dirname as dirname21, isAbsolute as isAbsolute11, join as join40, relative as relative7, resolve as resolve15, sep as sep8 } from "node:path";
+function actionPathFor(projectRoot, actionId) {
+  assertValidActionId(actionId, "actionPathFor");
+  const actionsDir = join40(projectRoot, ".rn-agent", "actions");
+  assertOwnedActionCorpus(projectRoot);
+  const fileName = `${actionId}.yaml`;
+  assertWithinDir(fileName, actionsDir);
+  return join40(actionsDir, fileName);
+}
+function assertOwnedActionCorpus(projectRoot) {
+  for (const path of [join40(projectRoot, ".rn-agent"), join40(projectRoot, ".rn-agent", "actions")]) {
+    const stat2 = lstatIfPresent2(path);
+    if (stat2?.isSymbolicLink()) {
+      throw new Error(`Refusing learned-action corpus symlink at ${path}.`);
+    }
+  }
+}
+function assertReadableActionLoadContextStable(context) {
+  assertReadableActionOperationUnchanged(context.operation);
+  assertUnfollowedFileSnapshotUnchanged(context.fileSnapshot);
+}
+function lstatIfPresent2(path) {
+  try {
+    return lstatSync15(path);
+  } catch (err) {
+    if (err.code === "ENOENT")
+      return null;
+    throw err;
+  }
+}
+function actionFileExists(path) {
+  const stat2 = lstatIfPresent2(path);
+  if (!stat2)
+    return false;
+  if (stat2.isSymbolicLink()) {
+    throw new Error(`Refusing inherited action symlink at ${path}.`);
+  }
+  return true;
+}
+function captureOwnedActionPathIdentity(projectRoot, filePath) {
+  const paths = [
+    { path: join40(projectRoot, ".rn-agent"), kind: "directory" },
+    { path: join40(projectRoot, ".rn-agent", "actions"), kind: "directory" }
+  ];
+  if (filePath)
+    paths.push({ path: filePath, kind: "file" });
+  return paths.map(({ path, kind }) => {
+    const stat2 = lstatSync15(path);
+    const valid = !stat2.isSymbolicLink() && (kind === "directory" ? stat2.isDirectory() : stat2.isFile());
+    if (!valid)
+      throw new Error(`Refusing changed learned-action path at ${path}.`);
+    return { path, kind, dev: stat2.dev, ino: stat2.ino };
+  });
+}
+function ownedActionPathIdentityMatches(entries) {
+  try {
+    return entries.every((entry) => {
+      const stat2 = lstatSync15(entry.path);
+      return !stat2.isSymbolicLink() && stat2.dev === entry.dev && stat2.ino === entry.ino && (entry.kind === "directory" ? stat2.isDirectory() : stat2.isFile());
+    });
+  } catch {
+    return false;
+  }
+}
+function referencedActionPath(parentFile, reference) {
+  if (isAbsolute11(reference) || reference.split(/[\\/]/).includes("..") || !/\.ya?ml$/i.test(reference)) {
+    return null;
+  }
+  const child = join40(dirname21(parentFile), reference);
+  if (child === ".." || child.startsWith(`..${sep8}`) || isAbsolute11(child))
+    return null;
+  return child;
+}
+function prefetchRunFlowFiles(initial, readFiles, fileSnapshot) {
+  const fileContents = new Map(initial);
+  let frontier = [...fileContents.entries()];
+  for (let depth = 0; depth < 5 && frontier.length > 0; depth += 1) {
+    const pending2 = /* @__PURE__ */ new Set();
+    for (const [parentFile, text] of frontier) {
+      for (const reference of collectRunFlowFileReferences(text)) {
+        const child = referencedActionPath(parentFile, reference);
+        if (child && !fileContents.has(child))
+          pending2.add(child);
+      }
+    }
+    const paths = selectExistingUnfollowedSnapshotFiles(fileSnapshot, [...pending2].sort());
+    if (paths.length === 0)
+      break;
+    const contents = readUnfollowedSnapshotFiles(fileSnapshot, paths, readFiles);
+    frontier = [];
+    paths.forEach((path, index) => {
+      const text = contents[index];
+      fileContents.set(path, text);
+      frontier.push([path, text]);
+    });
+  }
+  return fileContents;
+}
+function openReadableActionLoadContext(projectRoot, dependencies = {}) {
+  const corpus = resolveReadableActionCorpus(projectRoot);
+  if (corpus.status === "refused")
+    throw new Error(corpus.reason);
+  if (corpus.status !== "owned-directory" && corpus.status !== "approved-inherited")
+    return null;
+  const snapshot = readableActionsSnapshot(corpus);
+  const operation = captureReadableActionOperationSnapshot(corpus);
+  if (!snapshot || !operation)
+    return null;
+  const files = listUnfollowedDirectory(snapshot.directory, snapshot.identity);
+  const requestedFiles = dependencies.actionId ? [`${dependencies.actionId}.yaml`, `${dependencies.actionId}.yml`] : files;
+  const readableFiles = requestedFiles.filter((file) => /\.ya?ml$/.test(file) && files.includes(file));
+  const readFiles = dependencies.readFiles ?? readUnfollowedFiles;
+  const fileSnapshot = createUnfollowedFileSnapshot(snapshot.directory, snapshot.identity);
+  const contents = readUnfollowedSnapshotFiles(fileSnapshot, readableFiles, readFiles);
+  const fileContents = /* @__PURE__ */ new Map();
+  readableFiles.forEach((file, index) => {
+    fileContents.set(file, contents[index]);
+  });
+  const completeFileContents = dependencies.includeRunFlowFiles ? prefetchRunFlowFiles(fileContents, readFiles, fileSnapshot) : fileContents;
+  assertReadableActionOperationUnchanged(operation);
+  assertUnfollowedFileSnapshotUnchanged(fileSnapshot);
+  return {
+    projectRoot,
+    corpus,
+    snapshot,
+    operation,
+    files,
+    fileContents: completeFileContents,
+    fileSnapshot
+  };
+}
+function actionTextFromContext(context, fileName) {
+  const text = context.fileContents.get(fileName);
+  if (text !== void 0)
+    return text;
+  throw new Error(`Refusing inherited action symlink at ${context.snapshot.directory}/${fileName}.`);
+}
+function refreshActionLoadContext(context, actionId) {
+  assertReadableActionOperationUnchanged(context.operation);
+  const refreshed = openReadableActionLoadContext(context.projectRoot, {
+    actionId,
+    includeRunFlowFiles: true
+  });
+  if (!refreshed) {
+    throw new Error(`Action ${actionId} disappeared while refreshing its snapshot.`);
+  }
+  return refreshed;
+}
+function resolveActionFileNameFromContext(actionId, context) {
+  const fileName = `${actionId}.yaml`;
+  assertWithinDir(fileName, context.corpus.actionsDir);
+  assertWithinDir(fileName, context.snapshot.directory);
+  const yamlExists = context.files.includes(fileName);
+  const ymlFileName = fileName.replace(/\.yaml$/, ".yml");
+  const ymlExists = context.files.includes(ymlFileName);
+  if (yamlExists && ymlExists) {
+    throw new Error(`Action ${actionId} is ambiguous because both ${actionId}.yaml and ${actionId}.yml exist; keep exactly one file before replay.`);
+  }
+  if (yamlExists)
+    return fileName;
+  if (ymlExists)
+    return ymlFileName;
+  return null;
+}
+function resolveActionPath(projectRoot, actionId) {
+  assertValidActionId(actionId, "resolveActionPath");
+  const context = openReadableActionLoadContext(projectRoot, {
+    actionId,
+    includeRunFlowFiles: false
+  });
+  if (!context)
+    return null;
+  const fileName = resolveActionFileNameFromContext(actionId, context);
+  if (!fileName)
+    return null;
+  actionTextFromContext(context, fileName);
+  assertReadableActionLoadContextStable(context);
+  return join40(context.corpus.actionsDir, fileName);
+}
+function createActionTextExclusive(projectRoot, actionId, yamlText) {
+  const yamlPath = actionPathFor(projectRoot, actionId);
+  const ymlPath = yamlPath.replace(/\.yaml$/, ".yml");
+  return atomicWriter.withLock(yamlPath, () => {
+    const pathIdentity = captureOwnedActionPathIdentity(projectRoot);
+    const pathIsOwned = () => ownedActionPathIdentityMatches(pathIdentity);
+    const existing = resolveActionPath(projectRoot, actionId);
+    if (existing)
+      throw new Error(`Action ${actionId} already exists at ${existing}.`);
+    if (!atomicWriter.writeTextCreateExclusive(yamlPath, yamlText, pathIsOwned)) {
+      throw new Error(`Action ${actionId} changed during creation.`);
+    }
+    try {
+      if (pathIsOwned() && !actionFileExists(ymlPath))
+        return yamlPath;
+      throw new Error(`Action ${actionId} changed during creation; keep exactly one extension.`);
+    } catch (err) {
+      if (pathIsOwned() && readFileSync29(yamlPath, "utf8") === yamlText)
+        unlinkSync13(yamlPath);
+      throw err;
+    }
+  });
+}
+function writeRecordedActionTransaction(projectRoot, actionId, yamlText, state, overwrite) {
+  const yamlPath = actionPathFor(projectRoot, actionId);
+  return atomicWriter.withLock(yamlPath, () => {
+    const existingPath = resolveActionPath(projectRoot, actionId);
+    if (existingPath && !overwrite)
+      return { ok: false, existingPath };
+    const filePath = existingPath ?? yamlPath;
+    const pathIdentity = captureOwnedActionPathIdentity(projectRoot, existingPath ?? void 0);
+    const pathIsOwned = () => ownedActionPathIdentityMatches(pathIdentity);
+    const sidecarPath = sidecarPathFor(filePath);
+    if (!existingPath && existsSync28(sidecarPath))
+      return { ok: false, existingPath: null };
+    const written = existingPath ? atomicWriter.pairWriteConditional(filePath, yamlText, sidecarPath, state, pathIsOwned, pathIsOwned, readFileSync29(filePath, "utf8")) : atomicWriter.pairWriteCreateExclusive(filePath, yamlText, sidecarPath, state, pathIsOwned);
+    if (!written)
+      return { ok: false, existingPath: resolveActionPath(projectRoot, actionId) };
+    return {
+      ok: true,
+      filePath,
+      sidecarPath,
+      finalMtimeMs: written.finalMtimeMs,
+      preexisted: existingPath !== null
+    };
+  });
+}
+function splitYaml(text) {
+  const allLines = text.split("\n");
+  let separatorIdx = -1;
+  for (let i = 0; i < allLines.length; i++) {
+    if (allLines[i].trim() === "---") {
+      separatorIdx = i;
+      break;
+    }
+  }
+  if (separatorIdx === -1) {
+    const headerLines2 = [];
+    const bodyLines2 = [];
+    let inBody = false;
+    let seenAnyContent = false;
+    for (const line of allLines) {
+      if (!inBody && !seenAnyContent && line.trim() === "") {
+        continue;
+      }
+      if (!inBody && line.startsWith("#")) {
+        seenAnyContent = true;
+        headerLines2.push(line);
+      } else if (!inBody && line.trim() === "" && headerLines2.length > 0) {
+        inBody = true;
+        bodyLines2.push(line);
+      } else {
+        seenAnyContent = true;
+        inBody = true;
+        bodyLines2.push(line);
+      }
+    }
+    return { topSection: "", headerLines: headerLines2, bodyLines: bodyLines2 };
+  }
+  const topSection = allLines.slice(0, separatorIdx).join("\n");
+  const afterSep = allLines.slice(separatorIdx + 1);
+  const headerLines = [];
+  const bodyLines = [];
+  let stillHeader = true;
+  for (const line of afterSep) {
+    if (stillHeader && (line.startsWith("#") || line.trim() === "")) {
+      headerLines.push(line);
+    } else {
+      stillHeader = false;
+      bodyLines.push(line);
+    }
+  }
+  return { topSection, headerLines, bodyLines };
+}
+function joinYaml(parts) {
+  const out = [];
+  if (parts.topSection) {
+    out.push(parts.topSection);
+    out.push("---");
+  }
+  for (const h of parts.headerLines)
+    out.push(h);
+  for (const b of parts.bodyLines)
+    out.push(b);
+  return out.join("\n");
+}
+function captureActionFromContext(context, actionId) {
+  assertValidActionId(actionId, "loadAction");
+  assertReadableActionLoadContextStable(context);
+  const fileName = resolveActionFileNameFromContext(actionId, context);
+  if (!fileName)
+    return null;
+  const { corpus, snapshot } = context;
+  const filePath = join40(corpus.actionsDir, fileName);
+  const text = actionTextFromContext(context, fileName);
+  const metadata = parseM7Header(text, actionId);
+  if (metadata)
+    assertActionMetadataIdentity(filePath, metadata);
+  let replay;
+  try {
+    const parsed = parseAndValidateFlow(text, {
+      flowDir: snapshot.directory,
+      flowRoot: snapshot.directory,
+      readFileFn: (path) => {
+        const child = relative7(snapshot.directory, path);
+        if (child === "" || child === ".." || child.startsWith(`..${sep8}`) || isAbsolute11(child)) {
+          throw new Error(`Refusing action flow outside ${snapshot.directory}.`);
+        }
+        const text2 = context.fileContents.get(child);
+        if (text2 === void 0) {
+          throw new Error(`Refusing inherited action symlink at ${snapshot.directory}/${child}.`);
+        }
+        return text2;
+      },
+      realpathFn: (path) => resolve15(path)
+    });
+    replay = {
+      ok: true,
+      yamlText: buildMaestroFlow(parsed.appId ? { appId: parsed.appId } : {}, parsed.commands),
+      cdpYaml: buildMaestroFlow({}, parsed.commands),
+      commands: parsed.commands,
+      appId: parsed.appId
+    };
+  } catch (err) {
+    replay = { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+  assertReadableActionLoadContextStable(context);
+  return { filePath, yamlText: text, metadata, replay };
+}
+function loadActionFromContext(context, actionId) {
+  const captured = captureActionFromContext(context, actionId);
+  if (!captured?.metadata)
+    return null;
+  const { bodyLines } = splitYaml(captured.yamlText);
+  const state = loadOrInitSidecar(captured.filePath);
+  assertReadableActionLoadContextStable(context);
+  return {
+    metadata: captured.metadata,
+    body: bodyLines.join("\n"),
+    filePath: captured.filePath,
+    state,
+    yamlText: captured.yamlText,
+    replay: captured.replay
+  };
+}
+function loadAction(projectRoot, actionId) {
+  const context = openReadableActionLoadContext(projectRoot, {
+    actionId,
+    includeRunFlowFiles: true
+  });
+  return context ? loadActionFromContext(context, actionId) : null;
+}
+function captureActionFromPath(path) {
+  const absolutePath = resolve15(path);
+  if (!/\.ya?ml$/i.test(absolutePath))
+    return null;
+  const actionsDir = dirname21(absolutePath);
+  if (basename8(actionsDir) !== "actions" || basename8(dirname21(actionsDir)) !== ".rn-agent") {
+    return null;
+  }
+  const actionId = basename8(absolutePath).replace(/\.ya?ml$/i, "");
+  const context = openReadableActionLoadContext(dirname21(dirname21(actionsDir)), {
+    actionId,
+    includeRunFlowFiles: true
+  });
+  if (!context)
+    return null;
+  const action = captureActionFromContext(context, actionId);
+  return action && basename8(action.filePath) === basename8(absolutePath) ? action : null;
+}
+function saveAction(action) {
+  assertWritableActionFile(action.filePath);
+  if (existsSync28(action.filePath) && actionWasEditedExternally(action)) {
+    throw new SaveActionPreconditionError(action.filePath);
+  }
+  let topSection = "";
+  if (existsSync28(action.filePath)) {
+    const existing = readFileSync29(action.filePath, "utf8");
+    topSection = splitYaml(existing).topSection;
+  }
+  if (!topSection && action.metadata.appId) {
+    topSection = `appId: ${action.metadata.appId}`;
+  }
+  const headerLines = serializeM7Header(action.metadata).split("\n");
+  const bodyLines = action.body.split("\n");
+  const yamlText = joinYaml({ topSection, headerLines, bodyLines });
+  const sidecarPath = sidecarPathFor(action.filePath);
+  const result = atomicWriter.pairWrite(action.filePath, yamlText, sidecarPath, action.state);
+  const stateToWrite = { ...action.state, lastSeenMtimeMs: result.finalMtimeMs };
+  action.state = stateToWrite;
+  mirrorToDb({
+    yamlFilePath: action.filePath,
+    state: stateToWrite,
+    meta: { appId: action.metadata.appId, status: action.metadata.status, path: action.filePath }
+  });
+  return { filePath: action.filePath, sidecarPath };
+}
+function actionWasEditedExternally(action) {
+  return yamlEditedSinceLastSeen(action.filePath, action.state);
+}
+function acknowledgeExternalEdit(action) {
+  const nextAction = atomicWriter.withLock(action.filePath, () => {
+    let currentMtimeMs;
+    try {
+      currentMtimeMs = statSync14(action.filePath).mtimeMs;
+    } catch {
+      return action;
+    }
+    const currentState = loadOrInitSidecar(action.filePath);
+    if (currentMtimeMs <= currentState.lastSeenMtimeMs) {
+      return action;
+    }
+    const nextState = markSeen(currentState, currentMtimeMs);
+    saveSidecar(action.filePath, nextState);
+    return { ...action, state: nextState };
+  });
+  if (nextAction === action)
+    return action;
+  mirrorToDb({
+    yamlFilePath: action.filePath,
+    state: nextAction.state,
+    meta: { appId: action.metadata.appId, status: action.metadata.status, path: action.filePath }
+  });
+  return nextAction;
+}
+function canonicalRuntimeJson(state) {
+  return JSON.stringify(state, (_key, value) => {
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      const record2 = value;
+      return Object.fromEntries(Object.keys(record2).sort().map((k) => [k, record2[k]]));
+    }
+    return value;
+  });
+}
+function runtimeSidecarMatches(sidecarPath, expected) {
+  let onDisk;
+  try {
+    onDisk = JSON.parse(readFileSync29(sidecarPath, "utf8"));
+  } catch {
+    return false;
+  }
+  const normalized = typeof onDisk?.lastSeenMtimeMs === "number" ? onDisk : { ...onDisk, lastSeenMtimeMs: expected.lastSeenMtimeMs };
+  return canonicalRuntimeJson(normalized) === canonicalRuntimeJson(expected);
+}
+function runtimeBaselineMatches(filePath, expected) {
+  const sidecarPath = sidecarPathFor(filePath);
+  return existsSync28(sidecarPath) ? runtimeSidecarMatches(sidecarPath, expected) : expected.runHistory.length === 0 && expected.repairHistory.length === 0;
+}
+function saveActionRuntimeWithCAS(expected, nextState) {
+  return atomicWriter.withLock(expected.filePath, () => {
+    const sidecarPath = sidecarPathFor(expected.filePath);
+    if (!runtimeBaselineMatches(expected.filePath, expected.state)) {
+      return { ok: false, conflict: "EXTERNAL_WRITE" };
+    }
+    saveSidecar(expected.filePath, nextState);
+    expected.state = nextState;
+    return { ok: true, sidecarPath };
+  });
+}
+function promoteActionRuntimeWithCAS(expected, nextState) {
+  try {
+    assertWritableActionFile(expected.filePath);
+  } catch {
+    return { ok: false, conflict: "EXTERNAL_WRITE" };
+  }
+  const sidecarPath = sidecarPathFor(expected.filePath);
+  if (existsSync28(sidecarPath)) {
+    if (!runtimeSidecarMatches(sidecarPath, expected.state)) {
+      return { ok: false, conflict: "EXTERNAL_WRITE" };
+    }
+  } else if (expected.state.runHistory.length > 0 || expected.state.repairHistory.length > 0) {
+    return { ok: false, conflict: "EXTERNAL_WRITE" };
+  }
+  if (actionWasEditedExternally(expected))
+    return { ok: false, conflict: "EXTERNAL_WRITE" };
+  const yaml2 = readFileSync29(expected.filePath, "utf8");
+  const marker = /^# status: experimental[ \t]*$/gm;
+  if ((yaml2.match(marker) ?? []).length !== 1)
+    return { ok: false, conflict: "EXTERNAL_WRITE" };
+  const promoted = yaml2.replace(marker, "# status: active");
+  const written = atomicWriter.pairWriteConditional(expected.filePath, promoted, sidecarPath, nextState, () => {
+    try {
+      return runtimeBaselineMatches(expected.filePath, expected.state) && !actionWasEditedExternally(expected) && readFileSync29(expected.filePath, "utf8") === yaml2;
+    } catch {
+      return false;
+    }
+  }, void 0, yaml2);
+  if (!written)
+    return { ok: false, conflict: "EXTERNAL_WRITE" };
+  expected.state = { ...nextState, lastSeenMtimeMs: written.finalMtimeMs };
+  return { ok: true, sidecarPath };
+}
+function assertWritableActionFile(filePath) {
+  const actionsDir = dirname21(filePath);
+  const rnAgentDir = dirname21(actionsDir);
+  if (basename8(actionsDir) !== "actions" || basename8(rnAgentDir) !== ".rn-agent") {
+    throw new Error(`Refusing action mutation outside an owned learned-action corpus: ${filePath}.`);
+  }
+  assertOwnedActionCorpus(dirname21(rnAgentDir));
+  actionFileExists(filePath);
+}
+function assertActionMetadataIdentity(filePath, metadata) {
+  const fileId = basename8(filePath).replace(/\.ya?ml$/i, "");
+  if (metadata.id !== fileId) {
+    throw new Error(`Action metadata id ${metadata.id} does not match filename identity ${fileId}.`);
+  }
+}
+function withMetadata(action, metadata) {
+  return { ...action, metadata };
+}
+function withBody(action, body) {
+  return { ...action, body };
+}
+var SaveActionPreconditionError;
+var init_action_store = __esm({
+  "packages/rn-dev-agent-core/dist/domain/action-store.js"() {
+    "use strict";
+    init_reusable_action();
+    init_sidecar_io();
+    init_atomic_writer();
+    init_path_safety();
+    init_unfollowed_file();
+    init_maestro_validator();
+    init_action_state_store();
+    init_worktree_inheritance();
+    SaveActionPreconditionError = class extends Error {
+      constructor(filePath) {
+        super(`saveAction precondition violated: yaml at ${filePath} has been edited externally since the in-memory action was loaded. The caller must invoke actionWasEditedExternally() first and abort on true (or use saveActionWithCAS for atomic detection). GH #113 contract enforcement.`);
+        this.name = "SaveActionPreconditionError";
+      }
+    };
   }
 });
 
@@ -79721,6 +78130,96 @@ var init_test_recorder_helpers = __esm({
   }
 });
 
+// packages/rn-dev-agent-core/dist/domain/action-engine-compat.js
+import { existsSync as existsSync29, lstatSync as lstatSync16, readdirSync as readdirSync11, realpathSync as realpathSync14 } from "node:fs";
+import { basename as basename9, dirname as dirname22, join as join41, resolve as resolve16 } from "node:path";
+function actionEnginePinRefusal(enginePin) {
+  if (!enginePin) {
+    return `Action is not migrated to ${ACTION_ENGINE_PIN} or newer. Run node <plugin-root>/rn-dev-agent-core/dist/maestro-runner-pin.js migrate-actions --root <app> before replay. Incompatible actions are terminal \u2014 no manual fallback.`;
+  }
+  const version2 = parseActionEnginePinVersion(enginePin);
+  if (!version2) {
+    return `Action enginePin ${enginePin} is incompatible with the required floor ${ACTION_ENGINE_PIN}. Migrate or re-record the action. Incompatible actions are terminal \u2014 no manual fallback.`;
+  }
+  if (!meetsMaestroRunnerFloor(version2)) {
+    return `Action enginePin ${enginePin} is below the required floor ${ACTION_ENGINE_PIN}. Migrate or re-record the action. Incompatible actions are terminal \u2014 no manual fallback.`;
+  }
+  return null;
+}
+function regexSelectorCapabilityRefusal(commands) {
+  const selectors = findRegexTextSelectors(commands);
+  if (selectors.length === 0)
+    return null;
+  return `Action uses regex text selectors (${selectors[0]}) which are not a validated maestro-runner ${MAESTRO_RUNNER_PIN.version} capability (GH #750 CONTAINS mistranslation). Rewrite as id or literal text selectors before replay. No UI mutation will run.`;
+}
+function actionReplayPreflight(opts) {
+  return replayCompatibilityPreflight({ ...opts, requireEnginePin: true });
+}
+function replayCompatibilityPreflight(opts) {
+  const pin = exactPinRefusal(opts.engineStatus);
+  if (pin)
+    return pin;
+  if (opts.requireEnginePin) {
+    const format = actionEnginePinRefusal(opts.enginePin);
+    if (format)
+      return format;
+  }
+  return regexSelectorCapabilityRefusal(opts.commands);
+}
+function isLearnedActionPath(path) {
+  return classifyLearnedActionPath(path) === "action";
+}
+function classifyLearnedActionPath(path) {
+  const lexical = classifyResolvedLearnedActionPath(resolve16(path));
+  try {
+    const canonical2 = classifyResolvedLearnedActionPath(canonicalizeExistingPath(path));
+    if (lexical === canonical2)
+      return lexical;
+    if (lexical === "outside")
+      return canonical2;
+    return "descendant";
+  } catch {
+    return lexical;
+  }
+}
+function classifyResolvedLearnedActionPath(path) {
+  let parent = dirname22(path);
+  let direct = true;
+  while (true) {
+    if (basename9(parent) === "actions" && basename9(dirname22(parent)) === ".rn-agent") {
+      return direct ? "action" : "descendant";
+    }
+    const next = dirname22(parent);
+    if (next === parent)
+      return "outside";
+    parent = next;
+    direct = false;
+  }
+}
+function canonicalizeExistingPath(path) {
+  let cursor = resolve16(path);
+  const suffix = [];
+  while (!existsSync29(cursor)) {
+    const parent = dirname22(cursor);
+    if (parent === cursor)
+      return cursor;
+    suffix.unshift(basename9(cursor));
+    cursor = parent;
+  }
+  return resolve16(realpathSync14(cursor), ...suffix);
+}
+var ENGINE_PIN_LINE;
+var init_action_engine_compat = __esm({
+  "packages/rn-dev-agent-core/dist/domain/action-engine-compat.js"() {
+    "use strict";
+    init_engine_pin();
+    init_maestro_validator();
+    init_reusable_action();
+    init_action_store();
+    ENGINE_PIN_LINE = new RegExp(`^#\\s*enginePin\\s*:\\s*.+$`);
+  }
+});
+
 // packages/rn-dev-agent-core/dist/tools/test-recorder-generators.js
 function maestroScalar(value) {
   const safe = stripNewlines(value);
@@ -80084,7 +78583,7 @@ var init_test_recorder_generators = __esm({
 
 // packages/rn-dev-agent-core/dist/tools/test-recorder.js
 import { mkdir, readdir, readFile as readFile2, writeFile } from "node:fs/promises";
-import { join as join45 } from "node:path";
+import { join as join42 } from "node:path";
 function deduplicateEvents(events) {
   const out = [];
   for (let i = 0; i < events.length; i++) {
@@ -80267,7 +78766,7 @@ function createRecordTestSaveHandler(getClient2) {
     if (!safe) {
       return failResult("Filename is empty after sanitization", "BAD_FILENAME");
     }
-    const filePath = join45(dir, `${safe}.json`);
+    const filePath = join42(dir, `${safe}.json`);
     const payload = { savedAt: (/* @__PURE__ */ new Date()).toISOString(), events: storedEvents };
     await writeFile(filePath, JSON.stringify(payload, null, 2), "utf8");
     return okResult({
@@ -80288,7 +78787,7 @@ function createRecordTestLoadHandler(getClient2) {
     if (!safe) {
       return failResult("Filename is empty after sanitization", "BAD_FILENAME");
     }
-    const filePath = join45(dir, `${safe}.json`);
+    const filePath = join42(dir, `${safe}.json`);
     let raw;
     try {
       raw = await readFile2(filePath, "utf8");
@@ -80435,6 +78934,1299 @@ var init_save_as_action = __esm({
     init_reusable_action();
     init_action_store();
     init_action_state_store();
+  }
+});
+
+// packages/rn-dev-agent-core/dist/domain/ansi.js
+function stripAnsi(value) {
+  return value.replace(ANSI_RE, "");
+}
+var ANSI_RE;
+var init_ansi = __esm({
+  "packages/rn-dev-agent-core/dist/domain/ansi.js"() {
+    "use strict";
+    ANSI_RE = new RegExp(String.fromCharCode(27) + "\\[[0-9;]*m", "g");
+  }
+});
+
+// packages/rn-dev-agent-core/dist/domain/maestro-error-parser.js
+function blockReasons(lines, stepIndex) {
+  const reasons = [];
+  for (let i = stepIndex + 1; i < lines.length; i++) {
+    if (RUNNER_STEP_RE.test(lines[i]))
+      break;
+    if (REASON_LINE_RE.test(lines[i]))
+      reasons.push(lines[i]);
+  }
+  return reasons;
+}
+function idWaitStepAmongDuplicates(lines, terminalIndex, terminalReason2) {
+  for (let i = terminalIndex - 1; i >= 0; i--) {
+    const step = RUNNER_STEP_RE.exec(lines[i]);
+    if (!step)
+      continue;
+    if (step[1] !== "\u2717")
+      return null;
+    if (!blockReasons(lines, i).includes(terminalReason2))
+      return null;
+    const stepMatch = ID_WAIT_STEP_RE.exec(step[2]);
+    if (stepMatch)
+      return stepMatch;
+  }
+  return null;
+}
+function parseTerminalIdWait(output, suppliedFailedStep) {
+  const lines = stripAnsi(output).split("\n");
+  let terminalStep;
+  for (let index = 0; index < lines.length; index++) {
+    const match = RUNNER_STEP_RE.exec(lines[index]);
+    if (match)
+      terminalStep = { index, status: match[1], name: match[2] };
+  }
+  if (terminalStep?.status === "\u2713")
+    return null;
+  if (suppliedFailedStep && terminalStep && terminalStep.name !== suppliedFailedStep)
+    return null;
+  const failedStep = suppliedFailedStep ?? terminalStep?.name;
+  if (!failedStep || terminalStep && terminalStep.status !== "\u2717")
+    return null;
+  const reasonLine = lines.slice(terminalStep ? terminalStep.index + 1 : 0).filter((line) => REASON_LINE_RE.test(line)).at(-1);
+  if (!reasonLine)
+    return null;
+  const reasonMatch = ID_WAIT_REASON_RE.exec(reasonLine);
+  if (!reasonMatch)
+    return null;
+  const stepMatch = ID_WAIT_STEP_RE.exec(failedStep) ?? (terminalStep && SELECTOR_LESS_ID_WAIT_SUMMARY_RE.test(failedStep) ? idWaitStepAmongDuplicates(lines, terminalStep.index, reasonLine) : null);
+  if (!stepMatch || reasonMatch[2] !== stepMatch[2])
+    return null;
+  return {
+    kind: "SELECTOR_NOT_FOUND",
+    selectorKind: "id",
+    selector: stepMatch[2],
+    raw: output
+  };
+}
+function parseMaestroFailure(output, terminal) {
+  const raw = typeof output === "string" ? output : "";
+  if (terminal?.exitClass === "timed-out") {
+    return { kind: "TIMEOUT", selector: terminal.failureSelector ?? null, raw };
+  }
+  if (terminal?.failureKind === "SELECTOR_NOT_FOUND") {
+    return {
+      kind: "SELECTOR_NOT_FOUND",
+      selectorKind: "unknown",
+      selector: terminal.failureSelector ?? "",
+      raw
+    };
+  }
+  if (terminal?.failureKind === "TIMEOUT") {
+    return { kind: "TIMEOUT", selector: terminal.failureSelector ?? null, raw };
+  }
+  if (terminal?.failureKind === "ASSERTION_FAILED") {
+    return { kind: "ASSERTION_FAILED", selector: terminal.failureSelector ?? null, raw };
+  }
+  if (terminal?.exitClass === "before-first-step" && terminal.bootstrapEvidence) {
+    return {
+      kind: "WDA_BOOTSTRAP_FAILED",
+      detail: terminal.bootstrapEvidence.slice(0, 500),
+      raw
+    };
+  }
+  if (!raw) {
+    return { kind: "UNKNOWN", raw: "" };
+  }
+  output = raw;
+  const terminalIdWait = parseTerminalIdWait(output, terminal?.failedStep);
+  if (terminalIdWait)
+    return terminalIdWait;
+  const lines = output.split("\n");
+  for (const { re, build } of PATTERNS) {
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const line = lines[i];
+      if (!line)
+        continue;
+      const m = line.match(re);
+      if (m)
+        return build(m, output);
+    }
+  }
+  for (const { re, build } of PATTERNS) {
+    const m = output.match(re);
+    if (m)
+      return build(m, output);
+  }
+  return { kind: "UNKNOWN", raw: output };
+}
+function isAutoRepairable(failure) {
+  return failure.kind === "SELECTOR_NOT_FOUND";
+}
+function outputIndicatesFlowFailure(output) {
+  return /^\s*(?:\[FAILED\]|(?:Test|Flow) FAILED\b|FAILED\s*$)/m.test(output);
+}
+var PATTERNS, RUNNER_STEP_RE, REASON_LINE_RE, ID_WAIT_STEP_RE, SELECTOR_LESS_ID_WAIT_SUMMARY_RE, ID_WAIT_REASON_RE;
+var init_maestro_error_parser = __esm({
+  "packages/rn-dev-agent-core/dist/domain/maestro-error-parser.js"() {
+    "use strict";
+    init_ansi();
+    PATTERNS = [
+      {
+        re: /Element with id (['"])((?:(?!\1).)+)\1 (?:was )?not found/i,
+        build: (m, raw) => ({ kind: "SELECTOR_NOT_FOUND", selectorKind: "id", selector: m[2], raw })
+      },
+      {
+        re: /Element with text (['"])((?:(?!\1).)+)\1 (?:was )?not found/i,
+        build: (m, raw) => ({ kind: "SELECTOR_NOT_FOUND", selectorKind: "text", selector: m[2], raw })
+      },
+      // maestro-runner 1.0.x shape — issue #105.
+      // "Element not found: id='X'" or "Element not found: text='X'".
+      {
+        re: /Element not found:\s*id=(['"])((?:(?!\1).)+)\1/i,
+        build: (m, raw) => ({ kind: "SELECTOR_NOT_FOUND", selectorKind: "id", selector: m[2], raw })
+      },
+      {
+        re: /Element not found:\s*text=(['"])((?:(?!\1).)+)\1/i,
+        build: (m, raw) => ({ kind: "SELECTOR_NOT_FOUND", selectorKind: "text", selector: m[2], raw })
+      },
+      {
+        re: /Element (['"])((?:(?!\1).)+)\1 (?:was )?not found/i,
+        build: (m, raw) => ({
+          kind: "SELECTOR_NOT_FOUND",
+          selectorKind: "unknown",
+          selector: m[2],
+          raw
+        })
+      },
+      {
+        re: /Timed out waiting for element with id (['"])((?:(?!\1).)+)\1/i,
+        build: (m, raw) => ({ kind: "TIMEOUT", selector: m[2], raw })
+      },
+      {
+        re: /Timed out waiting for element (['"])((?:(?!\1).)+)\1/i,
+        build: (m, raw) => ({ kind: "TIMEOUT", selector: m[2], raw })
+      },
+      {
+        re: /Assertion failed: (['"])((?:(?!\1).)+)\1 (?:is )?not visible/i,
+        build: (m, raw) => ({ kind: "ASSERTION_FAILED", selector: m[2], raw })
+      },
+      {
+        re: /Element (['"])((?:(?!\1).)+)\1 is not visible/i,
+        build: (m, raw) => ({ kind: "ASSERTION_FAILED", selector: m[2], raw })
+      }
+    ];
+    RUNNER_STEP_RE = /^[ \t]+([✓✗])\s+(\S.*\S|\S)\s*\(([\d.]+)s\)\s*$/;
+    REASON_LINE_RE = /^[ \t]+╰─\s+/;
+    ID_WAIT_STEP_RE = /^extendedWaitUntil:\s+visible\s+id=(['"])((?:(?!\1).)+)\1$/i;
+    SELECTOR_LESS_ID_WAIT_SUMMARY_RE = /^extendedWaitUntil$/;
+    ID_WAIT_REASON_RE = /^[ \t]+╰─\s+Element (['"])#((?:(?!\1).)+)\1 not visible within\b/i;
+  }
+});
+
+// packages/rn-dev-agent-core/dist/tools/maestro-dispatch.js
+function shouldWarnFallback(reason) {
+  if (warnedFallbackReasons.has(reason))
+    return false;
+  warnedFallbackReasons.add(reason);
+  return true;
+}
+function flowContainsHideKeyboard(commands) {
+  return commands.some((c) => c === "hideKeyboard" || typeof c === "object" && c !== null && "hideKeyboard" in c);
+}
+function chooseMaestroDispatch(inputs) {
+  const runnerPath = (inputs.maestroRunnerPath ?? getMaestroRunnerPath)();
+  if (runnerPath) {
+    return {
+      runner: "maestro-runner",
+      binPath: runnerPath,
+      buildArgs: (platform, flowFile, appFile, deviceId) => [
+        ...appFile ? ["--app-file", appFile] : [],
+        "--platform",
+        platform,
+        ...deviceId ? ["--device", deviceId] : [],
+        "test",
+        flowFile
+      ]
+    };
+  }
+  return {
+    error: `Session maestro-runner ${MAESTRO_RUNNER_PIN.version} is not installed in the pin-cache. Install attested ${MAESTRO_RUNNER_PIN.version} (floor >= ${MAESTRO_RUNNER_PIN.version}) via ${PINNED_RUNNER_INSTALL_HINT}. Ambient PATH maestro-runner, ~/.maestro-runner, and brew maestro are never used.`,
+    hint: `run ensure-maestro-runner.sh for attested ${MAESTRO_RUNNER_PIN.version} (floor >= ${MAESTRO_RUNNER_PIN.version})`
+  };
+}
+var warnedFallbackReasons;
+var init_maestro_dispatch = __esm({
+  "packages/rn-dev-agent-core/dist/tools/maestro-dispatch.js"() {
+    "use strict";
+    init_engine_pin();
+    warnedFallbackReasons = /* @__PURE__ */ new Set();
+  }
+});
+
+// packages/rn-dev-agent-core/dist/domain/maestro-step-parser.js
+function cap(s) {
+  return s.length > MAX_FIELD ? s.slice(0, MAX_FIELD) + "\u2026" : s;
+}
+function combineRunnerOutput(stdout, stderr) {
+  return (stdout + "\n" + stderr).replace(/^[\r\n]+/, "").trimEnd();
+}
+function parseExactSteps(output) {
+  if (!output || typeof output !== "string")
+    return [];
+  const steps = [];
+  let index = 0;
+  for (const raw of stripAnsi(output).split("\n")) {
+    const m = STEP_RE.exec(raw);
+    if (!m)
+      continue;
+    const name = m[2];
+    const verb = cap(name.split(/\s+/)[0].replace(/:$/, ""));
+    if (verb === "rn-maestro-run")
+      continue;
+    const seconds = Number(m[3]);
+    if (!Number.isFinite(seconds))
+      continue;
+    steps.push({
+      index: index++,
+      name,
+      verb,
+      status: m[1] === "\u2713" ? "pass" : "fail",
+      durationMs: Math.round(seconds * 1e3)
+    });
+  }
+  return steps.length > MAX_STEPS ? steps.slice(-MAX_STEPS) : steps;
+}
+function boundStep(step) {
+  return { ...step, name: cap(step.name) };
+}
+function parseSteps(output) {
+  return parseExactSteps(output).map(boundStep);
+}
+function findFailedStep(steps) {
+  const last = steps.length ? steps[steps.length - 1] : null;
+  return last && last.status === "fail" ? last : null;
+}
+function lastObservedStep(steps) {
+  return steps.length ? steps[steps.length - 1] : null;
+}
+function summarizeExactReason(output, failedStep) {
+  const f = parseMaestroFailure(output, failedStep ? { failedStep } : void 0);
+  if (f.kind === "UNKNOWN" || f.kind === "WDA_BOOTSTRAP_FAILED")
+    return null;
+  const selector = "selector" in f ? f.selector ?? null : null;
+  return { kind: f.kind, selector };
+}
+function buildStepSummary(output, opts) {
+  const exactSteps = parseExactSteps(output);
+  const exactFailedStep = opts.failed ? findFailedStep(exactSteps) : null;
+  const exactReason = opts.failed ? summarizeExactReason(output, exactFailedStep?.name) : null;
+  const steps = exactSteps.map(boundStep);
+  return {
+    steps,
+    failedStep: exactFailedStep ? boundStep(exactFailedStep) : null,
+    reason: exactReason ? {
+      ...exactReason,
+      selector: exactReason.selector === null ? null : cap(exactReason.selector)
+    } : null,
+    lastStep: lastObservedStep(steps)
+  };
+}
+function isWdaFailureLine(line) {
+  return WDA_TOKEN_RE.test(line) && WDA_FAILURE_RE.test(line);
+}
+function buildTerminalEvidence(output, opts = {}) {
+  const exactSteps = parseExactSteps(output);
+  const failedStep = findFailedStep(exactSteps);
+  const reason = summarizeExactReason(output, failedStep?.name);
+  const bootstrapEvidence = stripAnsi(output).split("\n").filter((line) => isWdaFailureLine(line)).join("\n").slice(0, 500);
+  const exitClass = opts.timedOut ? "timed-out" : opts.spawnError ? "spawn-error" : exactSteps.length === 0 ? "before-first-step" : "step-failure";
+  return {
+    completedSteps: exactSteps.filter((step) => step.status === "pass").length,
+    ...failedStep ? { failedStep: failedStep.name } : {},
+    exitClass,
+    ...bootstrapEvidence ? { bootstrapEvidence } : {},
+    ...reason ? {
+      failureKind: reason.kind,
+      failureSelector: reason.selector
+    } : {}
+  };
+}
+function classifyExecError(err) {
+  const e = err;
+  const killed = e?.killed === true;
+  const overflow = e?.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER";
+  return { timedOut: (killed || e?.code === "ETIMEDOUT") && !overflow, outputTruncated: overflow };
+}
+function formatFailureHeadline(summary, cls, fallbackMsg) {
+  if (cls.timedOut) {
+    return `Maestro flow timed out${summary.lastStep ? ` after step "${summary.lastStep.name}"` : ""}`;
+  }
+  if (cls.outputTruncated) {
+    return "Maestro flow output exceeded the 10MB buffer";
+  }
+  if (summary.failedStep) {
+    const r = summary.reason;
+    const reasonStr = r ? ` (${r.kind}${r.selector ? `: ${r.selector}` : ""})` : "";
+    return `Maestro flow failed at step "${summary.failedStep.name}"${reasonStr}`;
+  }
+  if (summary.reason) {
+    const r = summary.reason;
+    return `Maestro flow failed (${r.kind}${r.selector ? `: ${r.selector}` : ""})`;
+  }
+  return `Maestro flow failed: ${fallbackMsg.slice(0, 500)}`;
+}
+var STEP_RE, MAX_FIELD, MAX_STEPS, WDA_TOKEN_RE, WDA_FAILURE_RE;
+var init_maestro_step_parser = __esm({
+  "packages/rn-dev-agent-core/dist/domain/maestro-step-parser.js"() {
+    "use strict";
+    init_maestro_error_parser();
+    init_ansi();
+    init_ansi();
+    STEP_RE = /^[ \t]+([✓✗])\s+(\S.*\S|\S)\s*\(([\d.]+)s\)\s*$/;
+    MAX_FIELD = 200;
+    MAX_STEPS = 1e3;
+    WDA_TOKEN_RE = /\bWDA\b|WebDriverAgent/i;
+    WDA_FAILURE_RE = /\b(?:fail(?:ed|ure|s)?|error|unable|cannot|can't|could not|timed out|timeout|refused|denied|crash(?:ed)?|panic|aborted)\b/i;
+  }
+});
+
+// packages/rn-dev-agent-core/dist/domain/tap-latency.js
+function parseTapLatencies(output) {
+  return parseSteps(output).filter((s) => s.verb === "tapOn" && s.status === "pass").map((s) => s.durationMs);
+}
+function median(samples) {
+  if (samples.length === 0)
+    return null;
+  const s = [...samples].sort((a, b) => a - b);
+  const mid = Math.floor(s.length / 2);
+  return s.length % 2 === 0 ? Math.round((s[mid - 1] + s[mid]) / 2) : s[mid];
+}
+function resolveFloorMs(envVal) {
+  if (envVal === void 0)
+    return DEFAULT_FLOOR_MS;
+  const n = Number(envVal);
+  return Number.isFinite(n) && n > 0 ? n : DEFAULT_FLOOR_MS;
+}
+function classifyRuntimeDegradation(output, floorMs) {
+  const samples = parseTapLatencies(output);
+  const medianMs = median(samples);
+  return {
+    degraded: medianMs != null && samples.length >= MIN_SAMPLES_FOR_DEGRADED && medianMs >= floorMs,
+    medianMs,
+    floorMs,
+    sampleCount: samples.length
+  };
+}
+function formatRuntimeDegradedHint(d) {
+  return `RUNTIME_DEGRADED: median tapOn latency ${d.medianMs}ms (>= ${d.floorMs}ms) \u2014 the simulator test runtime is likely wedged; reboot it (xcrun simctl shutdown <udid> && xcrun simctl boot <udid>), relaunch the app, and retry.`;
+}
+function augmentFailureWithDegradation(output, floorMs, baseMessage, baseMeta) {
+  const d = classifyRuntimeDegradation(output, floorMs);
+  if (!d.degraded)
+    return { message: baseMessage, meta: baseMeta };
+  return {
+    message: `${baseMessage} \u2014 ${formatRuntimeDegradedHint(d)}`,
+    meta: {
+      ...baseMeta,
+      runtimeDegraded: { medianTapMs: d.medianMs, floorMs: d.floorMs, sampleCount: d.sampleCount }
+    }
+  };
+}
+var DEFAULT_FLOOR_MS, MIN_SAMPLES_FOR_DEGRADED;
+var init_tap_latency = __esm({
+  "packages/rn-dev-agent-core/dist/domain/tap-latency.js"() {
+    "use strict";
+    init_maestro_step_parser();
+    DEFAULT_FLOOR_MS = 1500;
+    MIN_SAMPLES_FOR_DEGRADED = 2;
+  }
+});
+
+// packages/rn-dev-agent-core/dist/domain/maestro-device-authority.js
+function canonicalDeviceId(value) {
+  return value.toLowerCase();
+}
+function sameDevice(left, right) {
+  return canonicalDeviceId(left) === canonicalDeviceId(right);
+}
+function uniqueValues(values) {
+  const seen = /* @__PURE__ */ new Map();
+  for (const value of values) {
+    if (!value)
+      continue;
+    const key = canonicalDeviceId(value);
+    if (!seen.has(key))
+      seen.set(key, value);
+  }
+  return [...seen.values()];
+}
+function uniqueMatches(output, pattern) {
+  return uniqueValues([...output.matchAll(pattern)].map((match) => match[1]));
+}
+function verifyMaestroDeviceAuthority(input) {
+  const requestedDeviceId = input.requestedDeviceId?.trim() || null;
+  const reportedIds = uniqueValues([
+    ...input.directReportDeviceIds ?? [],
+    ...uniqueMatches(input.output, /\b(?:Found|Using specified|Connecting to) (?:(?:iOS|Android) )?device:\s*([A-Za-z0-9._:-]+)/gi)
+  ]);
+  const wdaDeviceIds = uniqueMatches(input.output, /\b(?:Building|Starting|Launching|Installing)\s+(?:WDA|WebDriverAgent(?:Runner)?)\s+(?:for|on|to)\s+device\s+([A-Za-z0-9._:-]+)/gi);
+  const observedDeviceIds = uniqueValues([...reportedIds, ...wdaDeviceIds]);
+  const reportedDeviceId = reportedIds.length === 1 ? reportedIds[0] : null;
+  if (!requestedDeviceId) {
+    return {
+      requestedDeviceId,
+      reportedDeviceId,
+      observedDeviceIds,
+      wdaDeviceIds,
+      verified: false,
+      source: reportedIds.length > 0 ? "maestro-runner-log" : "none",
+      reason: "no-exact-device-request"
+    };
+  }
+  if (input.runner !== "maestro-runner") {
+    return {
+      requestedDeviceId,
+      reportedDeviceId,
+      observedDeviceIds,
+      wdaDeviceIds,
+      verified: false,
+      source: "maestro-cli-explicit-udid",
+      reason: "direct-runner-evidence-unavailable"
+    };
+  }
+  const base = {
+    requestedDeviceId,
+    reportedDeviceId,
+    observedDeviceIds,
+    wdaDeviceIds,
+    source: "maestro-runner-log"
+  };
+  if (reportedIds.length === 0) {
+    return { ...base, verified: false, reason: "reported-device-missing" };
+  }
+  if (reportedIds.length !== 1) {
+    return { ...base, verified: false, reason: "reported-device-ambiguous" };
+  }
+  if (!reportedDeviceId || !sameDevice(reportedDeviceId, requestedDeviceId)) {
+    const weakOnly = input.directReportIdentityStrength === "weak" && (input.directReportDeviceIds ?? []).some((id) => sameDevice(id, reportedDeviceId ?? ""));
+    return {
+      ...base,
+      verified: false,
+      reason: weakOnly ? "reported-device-weak-identity" : "reported-device-mismatch"
+    };
+  }
+  if (observedDeviceIds.some((id) => !sameDevice(id, requestedDeviceId))) {
+    return { ...base, verified: false, reason: "wda-device-mismatch" };
+  }
+  return {
+    ...base,
+    verified: true,
+    ...input.platform === "ios" && input.requireWdaProvenance === true ? {
+      wdaProvenance: wdaDeviceIds.length > 0 ? "exact-match" : "unavailable"
+    } : {},
+    reason: input.platform === "ios" && wdaDeviceIds.length > 0 ? "exact-runner-and-wda-match" : "exact-runner-match"
+  };
+}
+function shouldRejectMaestroDeviceAuthority(authority) {
+  return authority.requestedDeviceId !== null && authority.source === "maestro-runner-log" && !authority.verified;
+}
+function maestroAuthorityRefusal(authority, underlyingError) {
+  if (!shouldRejectMaestroDeviceAuthority(authority))
+    return null;
+  const headline = `Maestro device authority refused: requested ${authority.requestedDeviceId}, direct runner/WDA evidence was ${authority.reportedDeviceId ?? "missing"} (${authority.reason}).`;
+  return underlyingError ? `${headline} Underlying failure: ${underlyingError}` : headline;
+}
+var init_maestro_device_authority = __esm({
+  "packages/rn-dev-agent-core/dist/domain/maestro-device-authority.js"() {
+    "use strict";
+  }
+});
+
+// packages/rn-dev-agent-core/dist/domain/maestro-runner-report.js
+import { existsSync as existsSync30, readFileSync as readFileSync30, rmSync as rmSync11 } from "node:fs";
+import { tmpdir as tmpdir9 } from "node:os";
+import { join as join43 } from "node:path";
+function idsFrom(value, keys) {
+  if (!value || typeof value !== "object")
+    return [];
+  const record2 = value;
+  for (const key of keys) {
+    const id = record2[key];
+    if (typeof id === "string")
+      return [id];
+  }
+  return [];
+}
+function deviceIdsFrom(value) {
+  return idsFrom(value, DEVICE_ID_KEYS);
+}
+function weakDeviceIdsFrom(value) {
+  if (typeof value === "string")
+    return [value];
+  return idsFrom(value, WEAK_DEVICE_ID_KEYS);
+}
+function containerDeviceIdsFrom(value) {
+  return idsFrom(value, CONTAINER_DEVICE_ID_KEYS);
+}
+function reportDeviceIds(reportDir) {
+  const reportPath = join43(reportDir, "report.json");
+  if (!existsSync30(reportPath))
+    return { ids: [], strength: "none" };
+  try {
+    const report = JSON.parse(readFileSync30(reportPath, "utf8"));
+    const flows = Array.isArray(report.flows) ? report.flows : [];
+    const devices = [report.device, ...flows.map((flow) => flow?.device)];
+    const strong = [
+      ...devices.flatMap((device) => deviceIdsFrom(device)),
+      ...[report, ...flows].flatMap((container) => containerDeviceIdsFrom(container))
+    ];
+    const usingStrong = strong.length > 0;
+    const ids = usingStrong ? strong : devices.flatMap((device) => weakDeviceIdsFrom(device));
+    const accepted = [
+      ...new Set(ids.map((id) => id.trim()).filter((id) => DIRECT_DEVICE_ID_RE.test(id)))
+    ];
+    return {
+      ids: accepted,
+      strength: accepted.length === 0 ? "none" : usingStrong ? "strong" : "weak"
+    };
+  } catch {
+    return { ids: [], strength: "none" };
+  }
+}
+function createRunnerReportDir(runner, prefix) {
+  if (runner !== "maestro-runner")
+    return null;
+  return join43(tmpdir9(), `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+}
+function runnerReportArgs(reportDir) {
+  return reportDir ? ["--output", reportDir, "--flatten"] : [];
+}
+function collectDirectRunnerEvidence(reportDir, output) {
+  if (!reportDir)
+    return { output, reportDeviceIds: [], reportDeviceIdStrength: "none" };
+  const report = reportDeviceIds(reportDir);
+  const evidence = {
+    output,
+    reportDeviceIds: report.ids,
+    reportDeviceIdStrength: report.strength
+  };
+  const logPath = join43(reportDir, "maestro-runner.log");
+  if (!existsSync30(logPath))
+    return evidence;
+  try {
+    evidence.output = `${output}
+${readFileSync30(logPath, "utf8")}`;
+  } catch {
+  }
+  return evidence;
+}
+function disposeRunnerReportDir(reportDir) {
+  if (!reportDir)
+    return;
+  try {
+    rmSync11(reportDir, { recursive: true, force: true });
+  } catch {
+  }
+}
+var DIRECT_DEVICE_ID_RE, DEVICE_ID_KEYS, WEAK_DEVICE_ID_KEYS, CONTAINER_DEVICE_ID_KEYS;
+var init_maestro_runner_report = __esm({
+  "packages/rn-dev-agent-core/dist/domain/maestro-runner-report.js"() {
+    "use strict";
+    DIRECT_DEVICE_ID_RE = /^[A-Za-z0-9._:-]{1,256}$/;
+    DEVICE_ID_KEYS = ["udid", "deviceId", "serial"];
+    WEAK_DEVICE_ID_KEYS = ["id"];
+    CONTAINER_DEVICE_ID_KEYS = ["udid", "deviceId", "deviceSerial"];
+  }
+});
+
+// packages/rn-dev-agent-core/dist/tools/maestro-run.js
+import { execFile as execFileCb14 } from "node:child_process";
+import { promisify as promisify18 } from "node:util";
+import { existsSync as existsSync31, readFileSync as readFileSync31, writeFileSync as writeFileSync14 } from "node:fs";
+import { tmpdir as tmpdir10 } from "node:os";
+import { basename as basename10, join as join44, dirname as dirname23 } from "node:path";
+async function runFlowParked(run, opts = {}) {
+  const stale = opts.markCdpStale ?? markCdpStale;
+  try {
+    if (opts.platform === "android") {
+      const release2 = opts.releaseAndroidSlot ?? releaseAndroidInteractionSlot;
+      const outcome = await release2({ deviceId: opts.deviceId });
+      opts.onAndroidRelease?.(outcome);
+    } else {
+      await (opts.stopFastRunner ?? stopFastRunner)(opts.deviceId);
+    }
+    await opts.completeRunnerPark?.();
+    return await run();
+  } finally {
+    stale();
+  }
+}
+function assembleMaestroArgs(baseArgs, paramArgs) {
+  if (paramArgs.length === 0)
+    return baseArgs;
+  return [...baseArgs.slice(0, -1), ...paramArgs, baseArgs[baseArgs.length - 1]];
+}
+function nestedMaestroAuthorityCallbacks(args) {
+  return {
+    claimNativeOrigin: () => claimManagedNativeOriginAuthority(args),
+    completeNativeOrigin: (targetExpected) => completeManagedNativeOriginAuthority(args, targetExpected),
+    relaunchManagedApp: () => relaunchManagedNativeOriginApp(args),
+    reproveManagedOrigin: () => reproveManagedNativeOrigin(args),
+    completeRunnerPark: () => completeManagedRunnerParkAuthority(args),
+    reissueInstallReceipt: hasManagedInstallReissueAuthority(args) ? () => reissueManagedInstallAuthority(args) : null
+  };
+}
+function commandName(command) {
+  if (typeof command === "string")
+    return command;
+  if (!command || typeof command !== "object" || Array.isArray(command))
+    return null;
+  const keys = Object.keys(command);
+  return keys.length === 1 ? keys[0] : null;
+}
+function nestedLifecycleCommand(command) {
+  if (!command || typeof command !== "object" || Array.isArray(command))
+    return false;
+  const runFlow = command.runFlow;
+  if (!runFlow || typeof runFlow !== "object" || Array.isArray(runFlow))
+    return false;
+  const commands = runFlow.commands;
+  return Array.isArray(commands) && commands.some(nestedLifecycleCommandOrSelf);
+}
+function nestedLifecycleCommandOrSelf(command) {
+  const name = commandName(command);
+  return name !== null && lifecycleCommands.has(name) || nestedLifecycleCommand(command);
+}
+function planMaestroAuthorityStages(commands) {
+  const stages = [];
+  let pending2 = [];
+  let targetExpected = true;
+  const flushPending = () => {
+    if (pending2.length === 0)
+      return;
+    stages.push({ commands: pending2, requiresOrigin: true });
+    pending2 = [];
+  };
+  for (const command of commands) {
+    const name = commandName(command);
+    if (nestedLifecycleCommand(command)) {
+      throw new MaestroValidationError("conditional runFlow commands cannot contain app lifecycle transitions");
+    }
+    if (name !== null && lifecycleCommands.has(name)) {
+      flushPending();
+      stages.push({ commands: [command], requiresOrigin: false });
+      targetExpected = name === "launchApp";
+      continue;
+    }
+    pending2.push(command);
+  }
+  flushPending();
+  return { stages, targetExpected };
+}
+async function executeMaestroAuthorityStages(commands, executeStage, claimOrigin, completeOrigin, relaunchManagedApp, reproveManagedOrigin) {
+  const plan = planMaestroAuthorityStages(commands);
+  const results = [];
+  let pendingOriginError;
+  for (const stage of plan.stages) {
+    if (stage.requiresOrigin && pendingOriginError === void 0)
+      await claimOrigin();
+    try {
+      results.push(await executeStage(stage.commands));
+      if (stage.commands.length === 1 && commandName(stage.commands[0]) === "launchApp") {
+        try {
+          await relaunchManagedApp();
+          pendingOriginError = void 0;
+        } catch (error2) {
+          if (!reproveManagedOrigin || error2 instanceof SessionAuthorityError)
+            throw error2;
+          pendingOriginError = error2;
+        }
+      }
+    } catch (error2) {
+      await completeOrigin(false);
+      throw new MaestroStageExecutionError(results, error2);
+    }
+  }
+  if (pendingOriginError !== void 0) {
+    try {
+      await reproveManagedOrigin();
+    } catch {
+      await completeOrigin(false);
+      throw new MaestroStageExecutionError(results, pendingOriginError);
+    }
+  }
+  await completeOrigin(plan.targetExpected);
+  return results;
+}
+function resolveMaestroFlowAppId(boundAppId, parsedAppId) {
+  if (boundAppId !== void 0 && !isValidBundleId(boundAppId)) {
+    throw new MaestroValidationError(`Invalid bundle ID for authority-bound app: ${JSON.stringify(boundAppId).slice(0, 80)}`);
+  }
+  if (boundAppId && parsedAppId && parsedAppId !== boundAppId) {
+    throw new MaestroValidationError(`Flow appId ${parsedAppId} does not match authority-bound appId ${boundAppId}`);
+  }
+  return boundAppId ?? parsedAppId;
+}
+function resolvePlatform(override) {
+  if (override === "ios" || override === "android")
+    return override;
+  const session2 = getActiveSession();
+  return session2?.platform ?? null;
+}
+function resolveAppId(override, platform) {
+  if (override)
+    return override;
+  if (platform)
+    return resolveBundleId(platform) ?? readExpoSlug() ?? "";
+  return readExpoSlug() ?? "";
+}
+async function defaultProbeAndroidApiLevel(deviceId) {
+  try {
+    const { stdout } = await defaultExecFile2("adb", ["-s", deviceId, "shell", "getprop", "ro.build.version.sdk"], { timeout: 5e3, encoding: "utf8", maxBuffer: 1024 * 1024 });
+    const parsed = Number.parseInt(String(stdout).trim(), 10);
+    return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+function attachCause(error2, cause) {
+  if (error2 instanceof Error && error2.cause === void 0) {
+    try {
+      Object.defineProperty(error2, "cause", { value: cause, configurable: true, writable: true });
+    } catch {
+    }
+  }
+  return error2;
+}
+function isExactDeviceIdShape(value) {
+  return value.length > 0 && value.length <= 256 && !/\s/.test(value);
+}
+function isPreSpawnMaestroError(error2) {
+  const candidate = error2;
+  return typeof candidate?.code === "string" && !candidate.stdout && !candidate.stderr;
+}
+function isUiAutomationNotConnectedSessionCreationFailure(error2) {
+  const candidate = error2;
+  if (typeof candidate?.code !== "number" || candidate.code === 0 || typeof candidate.stderr !== "string") {
+    return false;
+  }
+  const records = candidate.stderr.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  return records.length === 1 && UIAUTOMATION_SESSION_CREATION_FAILURE.test(records[0]);
+}
+async function buildRunnerResume(platform, probe) {
+  if (platform !== "ios")
+    return void 0;
+  return { attempted: true, healthy: await probe().catch(() => false) };
+}
+function createMaestroRunHandler(deps = {}) {
+  const fastHealthCheck2 = deps.fastHealthCheck ?? fastHealthCheck;
+  const activeSession2 = deps.getActiveSession ?? getActiveSession;
+  const selectDispatch = deps.chooseDispatch ?? chooseMaestroDispatch;
+  const parkFlow = deps.parkFlow ?? runFlowParked;
+  const execute2 = deps.execFile ?? defaultExecFile2;
+  const probeApiLevel = deps.probeAndroidApiLevel ?? defaultProbeAndroidApiLevel;
+  const now = deps.now ?? Date.now;
+  const resolveEngineStatus = deps.resolveEngineStatus ?? (() => getEngineStatus().catch(() => null));
+  return async (args) => {
+    if (args.params) {
+      for (const [key, value] of Object.entries(args.params)) {
+        if (!PARAM_KEY_RE.test(key)) {
+          return failResult(`Refusing to run Maestro: invalid param key '${String(key).slice(0, 60)}' \u2014 must match ${PARAM_KEY_RE.source} (GH #116).`);
+        }
+        if (typeof value !== "string") {
+          return failResult(`Refusing to run Maestro: param '${key}' has non-string value (GH #116).`);
+        }
+      }
+    }
+    const platform = resolvePlatform(args.platform);
+    if (!platform) {
+      return failResult("Cannot determine platform. Pass platform or open a device session first.");
+    }
+    const session2 = activeSession2();
+    const matchingSessionDeviceId = session2?.platform === platform && session2.deviceId ? session2.deviceId : void 0;
+    if (args.deviceId && matchingSessionDeviceId && !sameDevice(args.deviceId, matchingSessionDeviceId)) {
+      return failResult(`Refusing Maestro target ${args.deviceId}: active ${platform} session is bound to ${matchingSessionDeviceId}.`, "TARGET_SESSION_MISMATCH", { requestedDeviceId: args.deviceId, activeSessionDeviceId: matchingSessionDeviceId });
+    }
+    const envAndroidSerial = platform === "android" && process.env.ANDROID_SERIAL ? process.env.ANDROID_SERIAL : void 0;
+    if (envAndroidSerial !== void 0 && !isExactDeviceIdShape(envAndroidSerial)) {
+      return failResult("Refusing Maestro: ANDROID_SERIAL must be 1-256 non-whitespace characters. Unset it or set an exact serial, then retry. No device was mutated.", "INVALID_ARGUMENT");
+    }
+    const requestedDeviceId = args.deviceId ?? matchingSessionDeviceId ?? envAndroidSerial;
+    if (requestedDeviceId !== void 0 && !isExactDeviceIdShape(requestedDeviceId)) {
+      return failResult("Refusing Maestro: deviceId must be 1-256 non-whitespace characters.", "INVALID_ARGUMENT");
+    }
+    let flowHasHideKeyboard = false;
+    let flowFile;
+    let rawYaml;
+    let validatedContent;
+    let validatedCommands;
+    let headerAppId;
+    let capturedAction = null;
+    const flowPathClassification = args.flowPath ? classifyLearnedActionPath(args.flowPath) : "outside";
+    if (flowPathClassification === "descendant") {
+      return failResult(`Refusing to execute learned-action descendant ${args.flowPath} as a standalone flow.`, "BAD_RECORDING");
+    }
+    if (flowPathClassification === "action") {
+      if (args.inlineYaml) {
+        return failResult("Refusing ambiguous learned-action replay with both flowPath and inlineYaml.", "BAD_RECORDING");
+      }
+      try {
+        capturedAction = captureActionFromPath(args.flowPath);
+      } catch (err) {
+        return failResult(err instanceof Error ? err.message : String(err), "BAD_RECORDING");
+      }
+      if (!capturedAction) {
+        return failResult(`Action does not resolve uniquely to ${args.flowPath}.`, "BAD_RECORDING");
+      }
+      if (!capturedAction.replay.ok) {
+        return failResult(capturedAction.replay.error, "BAD_RECORDING");
+      }
+      rawYaml = capturedAction.replay.yamlText;
+    } else if (args.inlineYaml) {
+      rawYaml = args.inlineYaml;
+    } else if (args.flowPath) {
+      if (!existsSync31(args.flowPath)) {
+        return failResult(`Flow file not found: ${args.flowPath}`);
+      }
+      try {
+        rawYaml = readFileSync31(args.flowPath, "utf-8");
+      } catch (err) {
+        return failResult(`Failed to read flow file: ${err.message}`);
+      }
+    } else {
+      return failResult("Provide either flowPath or inlineYaml.");
+    }
+    try {
+      const runFlowOpts = args.flowPath && flowPathClassification === "outside" ? { flowDir: dirname23(args.flowPath), flowRoot: dirname23(args.flowPath) } : {};
+      const parsed = parseAndValidateFlow(rawYaml, runFlowOpts);
+      planMaestroAuthorityStages(parsed.commands);
+      validatedCommands = parsed.commands;
+      flowHasHideKeyboard = flowContainsHideKeyboard(parsed.commands);
+      const rawAppId = resolveAppId(args.appId, platform);
+      headerAppId = resolveMaestroFlowAppId(rawAppId || void 0, parsed.appId);
+      validatedContent = buildMaestroFlow(headerAppId ? { appId: headerAppId } : {}, parsed.commands);
+      flowFile = join44(tmpdir10(), `rn-maestro-run-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.yaml`);
+      writeFileSync14(flowFile, validatedContent, "utf-8");
+    } catch (err) {
+      if (err instanceof MaestroValidationError) {
+        return failResult(`Refusing to run Maestro: ${err.message} (Phase 134.1)`);
+      }
+      throw err;
+    }
+    const dispatch = selectDispatch({ platform, flowHasHideKeyboard });
+    if ("error" in dispatch) {
+      return failResult(dispatch.error);
+    }
+    const timeout = args.timeoutMs ?? 12e4;
+    const flowDeadline = now() + timeout;
+    const appFileResolution = resolveAppFileForClearState(platform, validatedContent, headerAppId, args.appFile, { deviceId: requestedDeviceId });
+    if (!appFileResolution.ok) {
+      return failResult(appFileResolution.error);
+    }
+    const reinstallsApp = Boolean(appFileResolution.appFile) && flowUsesClearState(validatedContent);
+    const reissueInstallReceipt = args.reissueInstallReceipt ?? deps.reissueInstallReceipt ?? nestedMaestroAuthorityCallbacks(args).reissueInstallReceipt;
+    let installReceiptCommitted = false;
+    const commitReinstalledInstall = async () => {
+      if (!reinstallsApp || installReceiptCommitted || !reissueInstallReceipt)
+        return;
+      installReceiptCommitted = true;
+      await reissueInstallReceipt();
+    };
+    const baseArgs = dispatch.buildArgs(platform, flowFile, appFileResolution.appFile, requestedDeviceId);
+    const paramArgs = [];
+    if (args.params) {
+      for (const [key, value] of Object.entries(args.params)) {
+        paramArgs.push("-e", `${key}=${value}`);
+      }
+    }
+    const releaseAndroidSlot = deps.releaseAndroidSlot ?? releaseAndroidInteractionSlot;
+    const androidSlotReleaseWarnings = [];
+    let releasedAndroidDeviceId;
+    let uiAutomationRecoveryAttempted = false;
+    let uiAutomationRecoveryRetried = false;
+    const recordAndroidRelease = (outcome) => {
+      if (outcome?.deviceId)
+        releasedAndroidDeviceId = outcome.deviceId;
+      if (outcome?.warnings?.length)
+        androidSlotReleaseWarnings.push(...outcome.warnings);
+    };
+    const androidReleaseMeta = () => ({
+      ...androidSlotReleaseWarnings.length > 0 ? { androidSlotReleaseWarnings: [...androidSlotReleaseWarnings] } : {},
+      ...uiAutomationRecoveryAttempted ? {
+        androidUiAutomationRecovery: {
+          retried: uiAutomationRecoveryRetried,
+          retryCount: uiAutomationRecoveryRetried ? 1 : 0
+        }
+      } : {}
+    });
+    const androidReleaseCaveat = () => androidSlotReleaseWarnings.length > 0 ? `Android interaction-slot release warnings: ${androidSlotReleaseWarnings.join("; ")}` : void 0;
+    const engineStatus = dispatch.runner === "maestro-runner" ? await resolveEngineStatus() : null;
+    const pinCaveat = engineStatus ? enginePinCaveat(engineStatus) : null;
+    const exactRefusal = exactPinRefusal(engineStatus);
+    if (exactRefusal) {
+      return failResult(exactRefusal, "ENGINE_PIN_MISMATCH", {
+        pin: engineStatus?.pin,
+        installedVersion: engineStatus?.version ?? null,
+        selectedPath: engineStatus?.selectedPath ?? null,
+        provenance: engineStatus?.provenance ?? "none"
+      });
+    }
+    const learnedAction = Boolean(capturedAction || args.actionMetadata);
+    const actionMeta = capturedAction?.metadata ?? args.actionMetadata ?? (args.flowPath ? parseM7Header(rawYaml, basename10(args.flowPath).replace(/\.ya?ml$/i, "")) : null);
+    const compatibilityRefusal = learnedAction || actionMeta !== null ? actionReplayPreflight({
+      enginePin: actionMeta?.enginePin,
+      commands: validatedCommands,
+      engineStatus
+    }) : replayCompatibilityPreflight({
+      commands: validatedCommands,
+      engineStatus,
+      requireEnginePin: false
+    });
+    if (compatibilityRefusal) {
+      return failResult(compatibilityRefusal, "ENGINE_PIN_MISMATCH", {
+        pin: engineStatus?.pin,
+        installedVersion: engineStatus?.version ?? null,
+        selectedPath: engineStatus?.selectedPath ?? null,
+        provenance: engineStatus?.provenance ?? "none"
+      });
+    }
+    let probedAndroidApiLevel = null;
+    if (platform === "android" && dispatch.runner === "maestro-runner" && requestedDeviceId) {
+      const apiLevel = await probeApiLevel(requestedDeviceId).catch(() => null);
+      probedAndroidApiLevel = apiLevel;
+      const apiRefusal = apiLevel === null ? null : preOAndroidApiRefusal(apiLevel);
+      if (apiRefusal) {
+        return failResult(apiRefusal, "ANDROID_API_UNSUPPORTED", {
+          platform,
+          runner: dispatch.runner,
+          transport: dispatch.runner,
+          passed: false,
+          androidApiLevel: apiLevel
+        });
+      }
+    }
+    const runnerReportDir = (deps.createReportDir ?? createRunnerReportDir)(dispatch.runner, "rn-maestro-report");
+    const finalArgs = assembleMaestroArgs(baseArgs, [
+      ...runnerReportArgs(runnerReportDir),
+      ...paramArgs
+    ]);
+    const directRunnerEvidence = (output) => collectDirectRunnerEvidence(runnerReportDir, output);
+    try {
+      const managedAuthority = nestedMaestroAuthorityCallbacks(args);
+      const claimOrigin = args.claimNativeOrigin ?? deps.claimNativeOrigin ?? managedAuthority.claimNativeOrigin;
+      const completeOrigin = args.completeNativeOrigin ?? deps.completeNativeOrigin ?? managedAuthority.completeNativeOrigin;
+      const relaunchManagedApp = args.relaunchManagedApp ?? deps.relaunchManagedApp ?? managedAuthority.relaunchManagedApp;
+      const reproveManagedOrigin = args.reproveManagedOrigin ?? deps.reproveManagedOrigin ?? managedAuthority.reproveManagedOrigin;
+      const stageResults = await parkFlow(() => executeMaestroAuthorityStages(validatedCommands, async (commands) => {
+        writeFileSync14(flowFile, buildMaestroFlow(headerAppId ? { appId: headerAppId } : {}, [...commands]), "utf-8");
+        const executeOnce = async (beforeDispatch) => {
+          if (flowDeadline - now() <= 0) {
+            const error2 = new Error("Maestro flow timeout exhausted before the next stage");
+            Object.assign(error2, { code: "ETIMEDOUT" });
+            throw error2;
+          }
+          const executeRunner = (runnerPath, prefixArgs = []) => {
+            beforeDispatch?.();
+            const remainingTimeout = flowDeadline - now();
+            if (remainingTimeout <= 0) {
+              const error2 = new Error("Maestro flow timeout exhausted before runner execution");
+              Object.assign(error2, { code: "ETIMEDOUT" });
+              throw error2;
+            }
+            return execute2(runnerPath, [...prefixArgs, ...finalArgs], {
+              timeout: remainingTimeout,
+              encoding: "utf8",
+              maxBuffer: 10 * 1024 * 1024
+            });
+          };
+          if (deps.execFile) {
+            const immediateStatus = await resolveEngineStatus();
+            const refusal = exactPinRefusal(immediateStatus);
+            const immediateRefusal = refusal ? `RUNNER_PIN_CHANGED: ${refusal}` : null;
+            if (immediateRefusal)
+              throw new Error(immediateRefusal);
+            return executeRunner(dispatch.binPath);
+          }
+          return withImmediatePinnedRunner(dispatch.binPath, resolveEngineStatus, executeRunner, platform);
+        };
+        try {
+          return await executeOnce();
+        } catch (error2) {
+          const recoveryDeviceId = requestedDeviceId ?? releasedAndroidDeviceId;
+          if (platform !== "android" || uiAutomationRecoveryAttempted || !recoveryDeviceId || !isUiAutomationNotConnectedSessionCreationFailure(error2)) {
+            throw error2;
+          }
+          uiAutomationRecoveryAttempted = true;
+          const recoveryTimeout = flowDeadline - now();
+          if (recoveryTimeout <= 0) {
+            androidSlotReleaseWarnings.push("UiAutomation recovery skipped: Maestro flow timeout was exhausted");
+            throw error2;
+          }
+          const recoveryAbort = new AbortController();
+          const recoveryDeadlineTimer = setTimeout(() => {
+            recoveryAbort.abort(new Error("UiAutomation recovery cleanup exceeded the remaining Maestro flow timeout"));
+          }, recoveryTimeout);
+          try {
+            recordAndroidRelease(await releaseAndroidSlot({
+              deviceId: recoveryDeviceId,
+              includeLegacy: false,
+              signal: recoveryAbort.signal
+            }));
+          } catch (releaseError) {
+            androidSlotReleaseWarnings.push(`UiAutomation recovery release failed: ${releaseError instanceof Error ? releaseError.message : String(releaseError)}`);
+            throw attachCause(error2, releaseError);
+          } finally {
+            clearTimeout(recoveryDeadlineTimer);
+          }
+          try {
+            return await executeOnce(() => {
+              uiAutomationRecoveryRetried = true;
+            });
+          } catch (retryError) {
+            if (uiAutomationRecoveryRetried && !isPreSpawnMaestroError(retryError)) {
+              throw retryError;
+            }
+            uiAutomationRecoveryRetried = false;
+            androidSlotReleaseWarnings.push(`UiAutomation recovery retry did not start: ${retryError instanceof Error ? retryError.message : String(retryError)}`);
+            throw attachCause(error2, retryError);
+          }
+        }
+      }, claimOrigin, completeOrigin, relaunchManagedApp, reproveManagedOrigin), {
+        platform,
+        deviceId: requestedDeviceId,
+        releaseAndroidSlot,
+        onAndroidRelease: recordAndroidRelease,
+        completeRunnerPark: args.completeRunnerPark ?? managedAuthority.completeRunnerPark
+      });
+      await commitReinstalledInstall();
+      const stdout = stageResults.map((result) => result.stdout).join("\n");
+      const stderr = stageResults.map((result) => result.stderr).join("\n");
+      const output = combineRunnerOutput(stdout, stderr);
+      const passed = !outputIndicatesFlowFailure(output);
+      const directEvidence = directRunnerEvidence(output);
+      const deviceAuthority = verifyMaestroDeviceAuthority({
+        runner: dispatch.runner,
+        platform,
+        requestedDeviceId,
+        output: directEvidence.output,
+        directReportDeviceIds: directEvidence.reportDeviceIds,
+        directReportIdentityStrength: directEvidence.reportDeviceIdStrength,
+        requireWdaProvenance: passed
+      });
+      const authorityRefusal = maestroAuthorityRefusal(deviceAuthority);
+      if (authorityRefusal) {
+        return failResult(authorityRefusal, "DEVICE_AUTHORITY_MISMATCH", {
+          flowFile,
+          platform,
+          runner: dispatch.runner,
+          transport: dispatch.runner,
+          passed: false,
+          deviceAuthority,
+          output: output.slice(0, 4e3),
+          ...androidReleaseMeta()
+        });
+      }
+      const summary = buildStepSummary(output, { failed: !passed });
+      const runnerResume = !passed ? await buildRunnerResume(platform, fastHealthCheck2) : void 0;
+      const meta = {
+        passed,
+        flowFile,
+        platform,
+        runner: dispatch.runner,
+        transport: dispatch.runner,
+        transportVersion: engineStatus?.version ?? null,
+        fallback: dispatch.fallbackReason ? dispatch.runner : "none",
+        deviceAuthority,
+        output: output.slice(0, 2e3),
+        ...summary,
+        ...!passed ? { terminal: buildTerminalEvidence(output), ...runnerResume ? { runnerResume } : {} } : {},
+        timedOut: false,
+        outputTruncated: false,
+        ...dispatch.fallbackReason ? { fallbackReason: dispatch.fallbackReason } : {},
+        ...dispatch.degradedReason ? { degradedReason: dispatch.degradedReason } : {},
+        ...engineStatus && engineStatus.pin.status !== "pinned-ok" ? { enginePin: engineStatus.pin } : {},
+        ...androidReleaseMeta()
+      };
+      const caveat = dispatch.fallbackReason ?? dispatch.degradedReason ?? pinCaveat ?? void 0;
+      const releaseCaveat = androidReleaseCaveat();
+      if (passed) {
+        const warnCaveat = caveat && shouldWarnFallback(caveat) ? caveat : void 0;
+        if (releaseCaveat) {
+          return warnResult(meta, warnCaveat ? `${warnCaveat}; ${releaseCaveat}` : releaseCaveat);
+        }
+        if (warnCaveat) {
+          return warnResult(meta, warnCaveat);
+        }
+        return okResult(meta);
+      }
+      const baseWarnMsg = [caveat, releaseCaveat, "Flow completed with warnings or failures"].filter((part) => Boolean(part)).join("; ");
+      const warnAug = augmentFailureWithDegradation(output, resolveFloorMs(process.env.RN_RUNTIME_DEGRADED_FLOOR_MS), baseWarnMsg, meta);
+      return warnResult(warnAug.meta, warnAug.message);
+    } catch (err) {
+      const stageError = err instanceof MaestroStageExecutionError ? err.stageError : err;
+      if (stageError instanceof RunnerCacheUnavailableError) {
+        recordRunnerDiagnostic("typed-failure", {
+          code: stageError.code,
+          errno: stageError.errno,
+          path: stageError.relativePath
+        });
+        return failResult(runnerCacheBootstrapFailure(stageError), "WDA_BOOTSTRAP_FAILED", {
+          flowFile,
+          platform,
+          runner: dispatch.runner,
+          transport: dispatch.runner,
+          passed: false,
+          output: "",
+          terminal: {
+            exitClass: "before-first-step",
+            bootstrapEvidence: stageError.message
+          },
+          ...androidReleaseMeta()
+        });
+      }
+      await commitReinstalledInstall();
+      if (err instanceof SessionAuthorityError) {
+        err.attachMeta(androidReleaseMeta());
+        throw err;
+      }
+      const msg3 = stageError instanceof Error ? stageError.message : String(stageError);
+      if (stageError instanceof ExactAndroidDeviceRequiredError) {
+        return failResult(stageError.message, stageError.code, {
+          platform,
+          runner: dispatch.runner,
+          transport: dispatch.runner,
+          passed: false,
+          ...androidReleaseMeta()
+        });
+      }
+      const errAny = stageError;
+      const completed = err instanceof MaestroStageExecutionError ? err.completedResults : [];
+      const stdout = [
+        ...completed.map((result) => typeof result.stdout === "string" ? result.stdout : ""),
+        typeof errAny?.stdout === "string" ? errAny.stdout : ""
+      ].join("\n");
+      const stderr = [
+        ...completed.map((result) => typeof result.stderr === "string" ? result.stderr : ""),
+        typeof errAny?.stderr === "string" ? errAny.stderr : ""
+      ].join("\n");
+      const combined = combineRunnerOutput(stdout, stderr);
+      const apiLevelAllowsPreO = probedAndroidApiLevel === null || probedAndroidApiLevel < MAESTRO_RUNNER_MIN_ANDROID_API;
+      if (platform === "android" && apiLevelAllowsPreO && isOlderSdkInstallFailure(combined)) {
+        return failResult(olderSdkInstallDiagnosis(dispatch.runner), "ANDROID_API_UNSUPPORTED", {
+          platform,
+          runner: dispatch.runner,
+          transport: dispatch.runner,
+          passed: false,
+          output: combined.slice(0, 4e3),
+          ...androidReleaseMeta()
+        });
+      }
+      const { timedOut, outputTruncated } = classifyExecError(stageError);
+      const directEvidence = directRunnerEvidence(combined);
+      const deviceAuthority = verifyMaestroDeviceAuthority({
+        runner: dispatch.runner,
+        platform,
+        requestedDeviceId,
+        output: directEvidence.output,
+        directReportDeviceIds: directEvidence.reportDeviceIds,
+        directReportIdentityStrength: directEvidence.reportDeviceIdStrength
+      });
+      const summary = buildStepSummary(combined, { failed: true });
+      const spawnError = combined.length === 0 && isPreSpawnMaestroError(stageError);
+      const terminal = buildTerminalEvidence(combined, { timedOut, spawnError });
+      const runnerResume = await buildRunnerResume(platform, fastHealthCheck2);
+      const catchRefusal = combined.length > 0 ? maestroAuthorityRefusal(deviceAuthority, msg3) : null;
+      if (catchRefusal) {
+        return failResult(catchRefusal, "DEVICE_AUTHORITY_MISMATCH", {
+          flowFile,
+          platform,
+          runner: dispatch.runner,
+          transport: dispatch.runner,
+          passed: false,
+          deviceAuthority,
+          output: combined.slice(0, 4e3),
+          ...summary,
+          terminal,
+          ...runnerResume ? { runnerResume } : {},
+          timedOut,
+          outputTruncated,
+          ...androidReleaseMeta()
+        });
+      }
+      const rawHeadline = formatFailureHeadline(summary, { timedOut, outputTruncated }, msg3);
+      const releaseCaveat = androidReleaseCaveat();
+      const headline = releaseCaveat ? `${rawHeadline}; ${releaseCaveat}` : rawHeadline;
+      const failAug = augmentFailureWithDegradation(combined, resolveFloorMs(process.env.RN_RUNTIME_DEGRADED_FLOOR_MS), headline, {
+        flowFile,
+        platform,
+        runner: dispatch.runner,
+        transport: dispatch.runner,
+        transportVersion: engineStatus?.version ?? null,
+        fallback: dispatch.fallbackReason ? dispatch.runner : "none",
+        deviceAuthority,
+        passed: false,
+        // `output` mirrors the success/warn shape so callers can read
+        // it the same way regardless of which path they hit.
+        output: combined.slice(0, 4e3),
+        ...summary,
+        terminal,
+        ...runnerResume ? { runnerResume } : {},
+        timedOut,
+        outputTruncated,
+        // GH #397: a drifted/mismatched engine causing a real failure is
+        // exactly when the pin state matters — carry it on this path too.
+        ...engineStatus && engineStatus.pin.status !== "pinned-ok" ? { enginePin: engineStatus.pin } : {},
+        ...androidReleaseMeta()
+      });
+      return failResult(failAug.message, failAug.meta);
+    } finally {
+      try {
+        writeFileSync14(flowFile, validatedContent, "utf-8");
+      } finally {
+        disposeRunnerReportDir(runnerReportDir);
+      }
+    }
+  };
+}
+var defaultExecFile2, MaestroStageExecutionError, lifecycleCommands, PARAM_KEY_RE, UIAUTOMATION_SESSION_CREATION_FAILURE;
+var init_maestro_run = __esm({
+  "packages/rn-dev-agent-core/dist/tools/maestro-run.js"() {
+    "use strict";
+    init_utils();
+    init_engine_pin();
+    init_runner_diagnostics();
+    init_action_engine_compat();
+    init_reusable_action();
+    init_action_store();
+    init_agent_device_wrapper();
+    init_project_config();
+    init_maestro_dispatch();
+    init_resolve_ios_app_file();
+    init_maestro_validator();
+    init_maestro_error_parser();
+    init_tap_latency();
+    init_maestro_step_parser();
+    init_rn_fast_runner_client();
+    init_release_android_slot();
+    init_recovery();
+    init_maestro_device_authority();
+    init_maestro_runner_report();
+    init_authority_gate();
+    init_registry();
+    defaultExecFile2 = promisify18(execFileCb14);
+    MaestroStageExecutionError = class extends Error {
+      completedResults;
+      stageError;
+      constructor(completedResults, stageError) {
+        super(stageError instanceof Error ? stageError.message : String(stageError), {
+          cause: stageError
+        });
+        this.name = "MaestroStageExecutionError";
+        this.completedResults = [...completedResults];
+        this.stageError = stageError;
+      }
+    };
+    lifecycleCommands = /* @__PURE__ */ new Set(["launchApp", "clearState", "killApp", "stopApp"]);
+    PARAM_KEY_RE = /^[A-Z_][A-Z0-9_]*$/;
+    UIAUTOMATION_SESSION_CREATION_FAILURE = /^Error: failed to create driver: create session: session not created: java\.lang\.IllegalStateException: UiAutomation not connected(?:, UiAutomation@[^\r\n]+)?$/;
   }
 });
 
@@ -82645,7 +82437,7 @@ var init_dev_settings = __esm({
 // packages/rn-dev-agent-core/dist/tools/interact.js
 function createInteractHandler(getClient2) {
   return withConnection(getClient2, async (args, client2) => {
-    const hasLadderSelector = Boolean(args.role || args.text || args.placeholder);
+    const hasLadderSelector = args.action === "typeText" ? Boolean(args.placeholder || args.role && args.name) : Boolean(args.role || args.text || args.placeholder);
     if (!args.testID && !args.accessibilityLabel && !hasLadderSelector) {
       return failResult("A selector is required: testID / accessibilityLabel, or a discovery-ladder selector (role / text / placeholder).");
     }
@@ -82721,15 +82513,27 @@ var init_interact = __esm({
   "packages/rn-dev-agent-core/dist/tools/interact.js"() {
     "use strict";
     init_utils();
-    REFUSAL_FIELDS = ["hint", "walkUpSearched", "count", "candidates", "matches"];
+    REFUSAL_FIELDS = [
+      "hint",
+      "walkUpSearched",
+      "count",
+      "candidates",
+      "matches",
+      "truncated",
+      "reason",
+      "scanned",
+      "work",
+      "workLimit",
+      "handlerCalled"
+    ];
   }
 });
 
 // packages/rn-dev-agent-core/dist/experience/evidence.js
 import { createHash as createHash18, randomBytes as randomBytes8, randomUUID as randomUUID10 } from "node:crypto";
-import { chmodSync as chmodSync7, existsSync as existsSync32, mkdirSync as mkdirSync21, readFileSync as readFileSync33, readdirSync as readdirSync13, renameSync as renameSync9, statSync as statSync15, unlinkSync as unlinkSync15, writeFileSync as writeFileSync16 } from "node:fs";
+import { chmodSync as chmodSync7, existsSync as existsSync32, mkdirSync as mkdirSync21, readFileSync as readFileSync32, readdirSync as readdirSync12, renameSync as renameSync9, statSync as statSync15, unlinkSync as unlinkSync14, writeFileSync as writeFileSync15 } from "node:fs";
 import { homedir as homedir9, platform as hostPlatform, release } from "node:os";
-import { dirname as dirname24, join as join46 } from "node:path";
+import { dirname as dirname24, join as join45 } from "node:path";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
 function configuredExperienceDirectory() {
   return process.env.RN_DEV_AGENT_EXPERIENCE_DIR ?? EXPERIENCE_DIRECTORY;
@@ -82782,11 +82586,11 @@ function readAppIdentity() {
   return appIdentityCache.identity;
 }
 function loadAppIdentity(root) {
-  const manifest = join46(root, "app.json");
+  const manifest = join45(root, "app.json");
   try {
     if (!existsSync32(manifest))
       return { name: null, slug: null };
-    const parsed = JSON.parse(readFileSync33(manifest, "utf8"));
+    const parsed = JSON.parse(readFileSync32(manifest, "utf8"));
     const expo = parsed.expo ?? parsed;
     return { name: usableIdentity(expo?.name), slug: usableIdentity(expo?.slug) };
   } catch {
@@ -82801,14 +82605,14 @@ function discoverPluginVersion(fromUrl = import.meta.url) {
     return process.env.RN_DEV_AGENT_PLUGIN_VERSION;
   const start = dirname24(fileURLToPath3(fromUrl));
   const candidates = [
-    join46(start, "..", "..", ".claude-plugin", "plugin.json"),
-    join46(start, "..", "..", ".codex-plugin", "plugin.json"),
-    join46(start, "..", "..", "..", "claude-plugin", ".claude-plugin", "plugin.json"),
-    join46(start, "..", "..", "..", "codex-plugin", ".codex-plugin", "plugin.json")
+    join45(start, "..", "..", ".claude-plugin", "plugin.json"),
+    join45(start, "..", "..", ".codex-plugin", "plugin.json"),
+    join45(start, "..", "..", "..", "claude-plugin", ".claude-plugin", "plugin.json"),
+    join45(start, "..", "..", "..", "codex-plugin", ".codex-plugin", "plugin.json")
   ];
   for (const candidate of candidates) {
     try {
-      const parsed = JSON.parse(readFileSync33(candidate, "utf8"));
+      const parsed = JSON.parse(readFileSync32(candidate, "utf8"));
       if (typeof parsed.version === "string")
         return sanitizeString(parsed.version);
     } catch {
@@ -82819,7 +82623,7 @@ function discoverPluginVersion(fromUrl = import.meta.url) {
 function readExperienceStore(path) {
   if (!existsSync32(path))
     return [];
-  const contents = readFileSync33(path, "utf8");
+  const contents = readFileSync32(path, "utf8");
   if (!contents.trim())
     return [];
   const records = [];
@@ -83023,20 +82827,20 @@ function stableDeviceHash(directory, deviceId) {
   return createHash18("sha256").update(readOrCreateRunnerDiagnosticsSalt(directory)).update("\0").update(deviceId).digest("hex");
 }
 function readOrCreateRunnerDiagnosticsSalt(directory) {
-  const path = join46(directory, ".runner-diagnostics-salt");
+  const path = join45(directory, ".runner-diagnostics-salt");
   mkdirSync21(directory, { recursive: true, mode: 448 });
   try {
-    const existing = readFileSync33(path);
+    const existing = readFileSync32(path);
     if (existing.length === 32)
       return existing;
   } catch {
   }
   const salt = randomBytes8(32);
   try {
-    writeFileSync16(path, salt, { flag: "wx", mode: 384 });
+    writeFileSync15(path, salt, { flag: "wx", mode: 384 });
     return salt;
   } catch {
-    const raced = readFileSync33(path);
+    const raced = readFileSync32(path);
     if (raced.length !== 32)
       throw new Error("runner diagnostics salt is invalid");
     return raced;
@@ -83048,7 +82852,7 @@ function writeRunnerDiagnosticsBundle(directory, bundle) {
   const files = runnerDiagnosticsFiles(directory);
   const nextSequence = files.reduce((maximum, file) => Math.max(maximum, runnerDiagnosticsSequence(file)), 0) + 1;
   const sessionKey = (bundle.context.sessionId ?? "unknown").slice(0, 64).replace(/[^A-Za-z0-9_-]/g, "-");
-  const outputPath = join46(directory, `runner-diagnostics-${sessionKey}-${nextSequence}.json`);
+  const outputPath = join45(directory, `runner-diagnostics-${sessionKey}-${nextSequence}.json`);
   const bounded = boundRunnerDiagnosticsBundle(bundle);
   let serialized = `${JSON.stringify(bounded, null, 2)}
 `;
@@ -83066,17 +82870,17 @@ function writeRunnerDiagnosticsBundle(directory, bundle) {
   if (Buffer.byteLength(serialized) > RUNNER_DIAGNOSTICS_MAX_BYTES) {
     throw new Error("Runner diagnostics bundle exceeds the 256 KB limit after truncation.");
   }
-  const temporary = join46(directory, `.runner-diagnostics.${process.pid}.${randomUUID10()}`);
-  writeFileSync16(temporary, serialized, { encoding: "utf8", flag: "wx", mode: 384 });
+  const temporary = join45(directory, `.runner-diagnostics.${process.pid}.${randomUUID10()}`);
+  writeFileSync15(temporary, serialized, { encoding: "utf8", flag: "wx", mode: 384 });
   renameSync9(temporary, outputPath);
   chmodSync7(outputPath, 384);
   const retained = runnerDiagnosticsFiles(directory).map((file) => ({
     file,
-    mtimeMs: statSync15(join46(directory, file)).mtimeMs,
+    mtimeMs: statSync15(join45(directory, file)).mtimeMs,
     sequence: runnerDiagnosticsSequence(file)
   })).sort((left, right) => left.mtimeMs - right.mtimeMs || left.sequence - right.sequence || left.file.localeCompare(right.file));
   for (const stale of retained.slice(0, Math.max(0, retained.length - RUNNER_DIAGNOSTICS_RETENTION))) {
-    unlinkSync15(join46(directory, stale.file));
+    unlinkSync14(join45(directory, stale.file));
   }
   return outputPath;
 }
@@ -83132,7 +82936,7 @@ function boundRunnerDiagnosticsBundle(bundle) {
 }
 function runnerDiagnosticsFiles(directory) {
   try {
-    return readdirSync13(directory).filter((file) => /^runner-diagnostics-.+-\d+\.json$/.test(file));
+    return readdirSync12(directory).filter((file) => /^runner-diagnostics-.+-\d+\.json$/.test(file));
   } catch {
     return [];
   }
@@ -83146,13 +82950,13 @@ function latestRunnerDiagnosticsPath(sessionId, directory = configuredExperience
     return null;
   const files = runnerDiagnosticsFiles(directory).map((file) => ({
     file,
-    mtimeMs: statSync15(join46(directory, file)).mtimeMs,
+    mtimeMs: statSync15(join45(directory, file)).mtimeMs,
     sequence: runnerDiagnosticsSequence(file)
   })).sort((left, right) => right.mtimeMs - left.mtimeMs || right.sequence - left.sequence || right.file.localeCompare(left.file));
   for (const file of files) {
-    const path = join46(directory, file.file);
+    const path = join45(directory, file.file);
     try {
-      const contents = readFileSync33(path);
+      const contents = readFileSync32(path);
       if (contents.byteLength > RUNNER_DIAGNOSTICS_MAX_BYTES)
         continue;
       const value = JSON.parse(contents.toString("utf8"));
@@ -83168,7 +82972,7 @@ function exportLatestRunnerDiagnosticsBundle(outputPath, sessionId, directory = 
   const source = latestRunnerDiagnosticsPath(sessionId, directory);
   if (!source)
     throw new Error("No runner diagnostics bundle is available for the exact session.");
-  writeFileSync16(outputPath, readFileSync33(source), { flag: "wx", mode: 384 });
+  writeFileSync15(outputPath, readFileSync32(source), { flag: "wx", mode: 384 });
   chmodSync7(outputPath, 384);
   return outputPath;
 }
@@ -83182,7 +82986,7 @@ var init_evidence = __esm({
     DEFAULT_MAX_RECORDS = 500;
     DEFAULT_RETENTION_DAYS = 14;
     MAX_EVIDENCE_POINTERS = 3;
-    EXPERIENCE_DIRECTORY = join46(homedir9(), ".claude", "rn-agent", "experience");
+    EXPERIENCE_DIRECTORY = join45(homedir9(), ".claude", "rn-agent", "experience");
     EXPERIENCE_STORE_NAME = "patterns.jsonl";
     MAX_SYMPTOM_LENGTH = 2048;
     RUNNER_DIAGNOSTICS_MAX_BYTES = 256 * 1024;
@@ -83233,7 +83037,7 @@ var init_evidence = __esm({
       previousFailure = null;
       constructor(options) {
         this.directory = options.directory ?? configuredExperienceDirectory();
-        this.path = join46(this.directory, EXPERIENCE_STORE_NAME);
+        this.path = join45(this.directory, EXPERIENCE_STORE_NAME);
         this.candidate = {
           pluginVersion: options.pluginVersion ?? null,
           coreVersion: options.coreVersion
@@ -83397,14 +83201,14 @@ var init_evidence = __esm({
       }
       write(records) {
         mkdirSync21(this.directory, { recursive: true, mode: 448 });
-        const temp = join46(this.directory, `.${EXPERIENCE_STORE_NAME}.${process.pid}.${randomUUID10()}`);
+        const temp = join45(this.directory, `.${EXPERIENCE_STORE_NAME}.${process.pid}.${randomUUID10()}`);
         try {
           const sanitized = records.map((record2) => record2.redactionVersion === REDACTION_RULES_VERSION ? record2 : {
             ...sanitizeForEvidence(record2),
             redactionVersion: REDACTION_RULES_VERSION
           });
           const contents = sanitized.map((record2) => JSON.stringify(record2)).join("\n");
-          writeFileSync16(temp, contents.length > 0 ? `${contents}
+          writeFileSync15(temp, contents.length > 0 ? `${contents}
 ` : "", {
             encoding: "utf8",
             flag: "wx",
@@ -83414,7 +83218,7 @@ var init_evidence = __esm({
           chmodSync7(this.path, 384);
         } catch (error2) {
           try {
-            unlinkSync15(temp);
+            unlinkSync14(temp);
           } catch {
           }
           throw error2;
@@ -83471,7 +83275,7 @@ var init_evidence = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/tools/collect-logs.js
-import { execFile as execFileCb16, spawn as spawn9 } from "node:child_process";
+import { execFile as execFileCb16, spawn as spawn8 } from "node:child_process";
 import { promisify as promisify20 } from "node:util";
 function normalizeTimestamp(ts) {
   if (!ts)
@@ -83565,7 +83369,7 @@ async function collectNativeIos(durationMs, signal, deviceId, bundleId, onResolv
     let settled = false;
     let proc;
     try {
-      proc = spawn9("xcrun", buildIosLogStreamArgs(deviceId, pid), {
+      proc = spawn8("xcrun", buildIosLogStreamArgs(deviceId, pid), {
         stdio: ["ignore", "pipe", "pipe"]
       });
     } catch (err) {
@@ -83701,7 +83505,7 @@ function collectNativeAndroid(durationMs, signal, serial) {
     let settled = false;
     let proc;
     try {
-      proc = spawn9("adb", buildAndroidLogcatArgs(serial), { stdio: ["ignore", "pipe", "pipe"] });
+      proc = spawn8("adb", buildAndroidLogcatArgs(serial), { stdio: ["ignore", "pipe", "pipe"] });
     } catch (err) {
       reject(err instanceof Error ? err : new Error("Failed to spawn adb"));
       return;
@@ -84852,6 +84656,504 @@ var init_deep_link_depth = __esm({
     init_envelope();
     SUCCESS_SUFFIX_REGEX = /(success|done|added|complete|completed|confirmation)$/i;
     DEPTH_THRESHOLD = 3;
+  }
+});
+
+// packages/rn-dev-agent-core/dist/session/managed-automation.js
+import { spawn as spawn9 } from "node:child_process";
+import { readdirSync as readdirSync13, readFileSync as readFileSync33, unlinkSync as unlinkSync15 } from "node:fs";
+function sleep5(ms) {
+  return new Promise((resolve21) => setTimeout(resolve21, ms));
+}
+function cleanupKey(platform, deviceId) {
+  return `${platform}:${deviceId}`;
+}
+function cleanupRefusal(pgid) {
+  return {
+    processGroup: "owned-process-group",
+    manualCommand: `kill -TERM -${pgid}`
+  };
+}
+function processGroupLiveness(pgid) {
+  if (process.platform !== "linux")
+    return "unknown";
+  try {
+    for (const entry of readdirSync13("/proc", { withFileTypes: true })) {
+      if (!entry.isDirectory() || !/^\d+$/.test(entry.name))
+        continue;
+      let stat2;
+      try {
+        stat2 = readFileSync33(`/proc/${entry.name}/stat`, "utf8");
+      } catch (error2) {
+        if (error2.code === "ENOENT")
+          continue;
+        return "unknown";
+      }
+      const commandEnd = stat2.lastIndexOf(")");
+      if (commandEnd < 0)
+        return "unknown";
+      const fields = stat2.slice(commandEnd + 1).trim().split(/\s+/);
+      if (Number(fields[2]) === pgid && fields[0] !== "Z")
+        return "live";
+    }
+    return "no-live-members";
+  } catch {
+    return "unknown";
+  }
+}
+function groupPresence(pgid, signalGroup, groupLiveness) {
+  try {
+    signalGroup(pgid, 0);
+    return groupLiveness(pgid) === "no-live-members" ? "absent" : "present";
+  } catch (error2) {
+    return error2.code === "ESRCH" ? "absent" : "unknown";
+  }
+}
+async function waitForGroupAbsence(pgid, signalGroup, groupLiveness, delay, timeoutMs = ABSENCE_CONFIRM_MS) {
+  const deadline = Date.now() + timeoutMs;
+  while (true) {
+    const presence = groupPresence(pgid, signalGroup, groupLiveness);
+    if (presence !== "present")
+      return presence;
+    if (Date.now() >= deadline)
+      return "present";
+    await delay(POLL_MS);
+  }
+}
+function observeChildTerminal(child, timeoutMs) {
+  let closeResult = null;
+  const result = new Promise((resolve21) => {
+    let settled = false;
+    let timer;
+    const done = (value) => {
+      if (settled)
+        return;
+      settled = true;
+      if (timer)
+        clearTimeout(timer);
+      resolve21(value);
+    };
+    child.once("error", (error2) => done({ code: null, signal: null, timedOut: false, error: error2.message }));
+    child.once("close", (code, signal) => {
+      closeResult = { code, signal, timedOut: false };
+      done(closeResult);
+    });
+    timer = setTimeout(() => done({ code: null, signal: null, timedOut: true }), timeoutMs);
+  });
+  return { result, observedClose: () => closeResult };
+}
+function activeRefusal(platform, deviceId, signalGroup, groupLiveness) {
+  if (!deviceId)
+    return null;
+  const key = cleanupKey(platform, deviceId);
+  const refusal = activeCleanupRefusals.get(key);
+  if (!refusal)
+    return null;
+  if (groupPresence(refusal.pgid, signalGroup, groupLiveness) === "absent") {
+    activeCleanupRefusals.delete(key);
+    return null;
+  }
+  return refusal.public;
+}
+async function spawnManagedProcessGroup(bin, args, options, dependencies = {}) {
+  const spawnProcess = dependencies.spawn ?? spawn9;
+  const delay = dependencies.sleep ?? sleep5;
+  const signalGroup = dependencies.signalGroup ?? ((pgid, signal) => {
+    if (process.platform === "win32")
+      process.kill(pgid, signal);
+    else
+      process.kill(-pgid, signal);
+  });
+  const groupLiveness = dependencies.groupLiveness ?? processGroupLiveness;
+  const refusal = activeRefusal(options.platform, options.deviceId, signalGroup, groupLiveness);
+  if (refusal) {
+    return {
+      stdout: "",
+      stderr: "",
+      code: null,
+      signal: null,
+      timedOut: false,
+      cleanupProven: false,
+      cleanupEscalated: false,
+      cleanupRefusal: refusal,
+      error: "AUTOMATION_CLEANUP_UNPROVEN: a prior owned process group remains unproven"
+    };
+  }
+  let child;
+  try {
+    child = spawnProcess(bin, args, {
+      detached: process.platform !== "win32",
+      env: options.env ?? process.env,
+      stdio: ["ignore", "pipe", "pipe"]
+    });
+  } catch (error2) {
+    return {
+      stdout: "",
+      stderr: "",
+      code: null,
+      signal: null,
+      timedOut: false,
+      cleanupProven: true,
+      cleanupEscalated: false,
+      error: error2 instanceof Error ? error2.message : String(error2)
+    };
+  }
+  const terminalObserver = observeChildTerminal(child, options.timeoutMs);
+  const pid = child.pid;
+  if (!pid) {
+    const terminal2 = await terminalObserver.result;
+    return {
+      stdout: "",
+      stderr: "",
+      code: null,
+      signal: null,
+      timedOut: false,
+      cleanupProven: true,
+      cleanupEscalated: false,
+      error: terminal2.error ?? "Managed automation process did not expose a PID"
+    };
+  }
+  const stdout = [];
+  const stderr = [];
+  let outputBytes = 0;
+  let overflow = false;
+  const collect = (target) => (chunk) => {
+    if (outputBytes >= OUTPUT_LIMIT) {
+      overflow = true;
+      return;
+    }
+    const remaining = OUTPUT_LIMIT - outputBytes;
+    target.push(chunk.subarray(0, remaining));
+    outputBytes += Math.min(chunk.length, remaining);
+    if (chunk.length > remaining)
+      overflow = true;
+  };
+  child.stdout.on("data", collect(stdout));
+  child.stderr.on("data", collect(stderr));
+  const terminal = await terminalObserver.result;
+  let cleanupEscalated = false;
+  let presence = await waitForGroupAbsence(pid, signalGroup, groupLiveness, delay, terminal.timedOut ? 0 : 250);
+  if (terminal.timedOut || overflow || presence === "present") {
+    try {
+      signalGroup(pid, "SIGTERM");
+    } catch {
+    }
+    presence = await waitForGroupAbsence(pid, signalGroup, groupLiveness, delay, TERM_GRACE_MS);
+    if (presence === "present") {
+      cleanupEscalated = true;
+      try {
+        signalGroup(pid, "SIGKILL");
+      } catch {
+      }
+      presence = await waitForGroupAbsence(pid, signalGroup, groupLiveness, delay);
+    }
+  }
+  const cleanupProven = presence === "absent";
+  const unproven = cleanupProven ? void 0 : cleanupRefusal(pid);
+  if (unproven && options.deviceId) {
+    activeCleanupRefusals.set(cleanupKey(options.platform, options.deviceId), {
+      pgid: pid,
+      public: unproven
+    });
+  }
+  const observedTerminal = terminal.timedOut ? terminalObserver.observedClose() ?? terminal : terminal;
+  return {
+    stdout: Buffer.concat(stdout).toString("utf8"),
+    stderr: Buffer.concat(stderr).toString("utf8"),
+    code: observedTerminal.code,
+    signal: observedTerminal.signal,
+    timedOut: terminal.timedOut,
+    cleanupProven,
+    cleanupEscalated,
+    ...unproven ? { cleanupRefusal: unproven } : {},
+    ...overflow ? { error: "Maestro output exceeded 10 MiB" } : terminal.error ? { error: terminal.error } : {}
+  };
+}
+function removeTemporaryInlineFlow(path) {
+  try {
+    unlinkSync15(path);
+  } catch {
+  }
+}
+var OUTPUT_LIMIT, TERM_GRACE_MS, ABSENCE_CONFIRM_MS, POLL_MS, activeCleanupRefusals;
+var init_managed_automation = __esm({
+  "packages/rn-dev-agent-core/dist/session/managed-automation.js"() {
+    "use strict";
+    OUTPUT_LIMIT = 10 * 1024 * 1024;
+    TERM_GRACE_MS = 500;
+    ABSENCE_CONFIRM_MS = 2e3;
+    POLL_MS = 25;
+    activeCleanupRefusals = /* @__PURE__ */ new Map();
+  }
+});
+
+// packages/rn-dev-agent-core/dist/maestro-invoke.js
+import { writeFileSync as writeFileSync16 } from "node:fs";
+import { join as join46 } from "node:path";
+import { tmpdir as tmpdir11 } from "node:os";
+function yamlEscape(s) {
+  return s.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n").replace(/\r/g, "\\r").replace(/\t/g, "\\t");
+}
+function maestroRefusalResult(result, fallbackMessage, meta) {
+  if (!result.errorCode)
+    return null;
+  return failResult(result.error ?? fallbackMessage, result.errorCode, {
+    ...meta,
+    timedOut: result.timedOut,
+    exitCode: result.exitCode,
+    signal: result.signal,
+    cleanupEscalated: result.cleanupEscalated,
+    ...result.cleanupRefusal ? { cleanupRefusal: result.cleanupRefusal } : {}
+  });
+}
+async function runMaestroInline(yaml2, opts, dependencies = {}) {
+  maestroInlineObserverForTest?.();
+  const dispatch = (dependencies.chooseDispatch ?? chooseMaestroDispatch)({
+    platform: opts.platform
+  });
+  if ("error" in dispatch) {
+    return { passed: false, output: "", flowFile: "", error: dispatch.error };
+  }
+  const resolveEngineStatus = dependencies.resolveEngineStatus ?? (() => getEngineStatus().catch(() => null));
+  const engineStatus = await resolveEngineStatus();
+  const pinRefusal = exactPinRefusal(engineStatus);
+  if (pinRefusal) {
+    return { passed: false, output: "", flowFile: "", error: pinRefusal };
+  }
+  const rawAppId = opts.appId ?? resolveBundleId(opts.platform) ?? readExpoSlug() ?? "";
+  const flowFile = join46(tmpdir11(), `rn-maestro-invoke-${opts.slug ?? "flow"}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.yaml`);
+  let content;
+  let headerAppId;
+  try {
+    const parsed = parseAndValidateFlow(yaml2, { rejectHeader: true });
+    const selectorRefusal = replayCompatibilityPreflight({
+      commands: parsed.commands,
+      engineStatus,
+      requireEnginePin: false
+    });
+    if (selectorRefusal) {
+      return { passed: false, output: "", flowFile, error: selectorRefusal };
+    }
+    const appIdOpts = {};
+    if (rawAppId && isValidBundleId(rawAppId)) {
+      appIdOpts.appId = rawAppId;
+      headerAppId = rawAppId;
+    } else if (rawAppId) {
+      return {
+        passed: false,
+        output: "",
+        flowFile,
+        error: `Refusing to run Maestro: invalid bundle ID '${rawAppId.slice(0, 80)}' from project config (Phase 134.1)`
+      };
+    }
+    content = buildMaestroFlow(appIdOpts, parsed.commands);
+  } catch (err) {
+    if (err instanceof MaestroValidationError) {
+      return {
+        passed: false,
+        output: "",
+        flowFile,
+        error: `Refusing to run Maestro: ${err.message} (Phase 134.1)`
+      };
+    }
+    throw err;
+  }
+  try {
+    writeFileSync16(flowFile, content, "utf-8");
+  } catch (err) {
+    return {
+      passed: false,
+      output: "",
+      flowFile,
+      error: `Failed to write flow file: ${err instanceof Error ? err.message : String(err)}`
+    };
+  }
+  let runnerReportDir = null;
+  try {
+    const timeout = opts.timeoutMs ?? 12e4;
+    const session2 = getActiveSession();
+    const matchingSessionDeviceId = session2?.platform === opts.platform && session2.deviceId ? session2.deviceId : void 0;
+    if (opts.deviceId && matchingSessionDeviceId && !sameDevice(opts.deviceId, matchingSessionDeviceId)) {
+      return {
+        passed: false,
+        output: "",
+        flowFile,
+        error: `Refusing Maestro target ${opts.deviceId}: active ${opts.platform} session is bound to ${matchingSessionDeviceId}.`
+      };
+    }
+    const requestedDeviceId = opts.deviceId ?? matchingSessionDeviceId;
+    if (requestedDeviceId !== void 0 && (requestedDeviceId.length === 0 || requestedDeviceId.length > 256 || /\s/.test(requestedDeviceId))) {
+      return {
+        passed: false,
+        output: "",
+        flowFile,
+        error: "Refusing Maestro: deviceId must be 1-256 non-whitespace characters."
+      };
+    }
+    const appFileResolution = resolveAppFileForClearState(opts.platform, content, headerAppId, void 0);
+    if (!appFileResolution.ok) {
+      return { passed: false, output: "", flowFile, error: appFileResolution.error };
+    }
+    runnerReportDir = createRunnerReportDir(dispatch.runner, "rn-maestro-inline-report");
+    const baseArgs = dispatch.buildArgs(opts.platform, flowFile, appFileResolution.appFile, requestedDeviceId);
+    const finalArgs = assembleMaestroArgs(baseArgs, runnerReportArgs(runnerReportDir));
+    const executionDeadline = Date.now() + timeout;
+    const execute2 = async () => {
+      const spawn11 = (runnerPath, prefixArgs = []) => {
+        const remainingTimeout = executionDeadline - Date.now();
+        if (remainingTimeout <= 0) {
+          const error2 = new Error("Maestro flow timeout exhausted before runner execution");
+          Object.assign(error2, { code: "ETIMEDOUT" });
+          throw error2;
+        }
+        return (dependencies.spawnManaged ?? spawnManagedProcessGroup)(runnerPath, [...prefixArgs, ...finalArgs], {
+          timeoutMs: remainingTimeout,
+          platform: opts.platform,
+          deviceId: requestedDeviceId,
+          tool: opts.slug ?? "inline-maestro"
+        });
+      };
+      if (dependencies.spawnManaged) {
+        const immediateStatus = await resolveEngineStatus();
+        const refusal = exactPinRefusal(immediateStatus);
+        if (refusal)
+          throw new Error(`RUNNER_PIN_CHANGED: ${refusal}`);
+        return spawn11(dispatch.binPath);
+      }
+      return withImmediatePinnedRunner(dispatch.binPath, resolveEngineStatus, spawn11, opts.platform);
+    };
+    let execution;
+    try {
+      if (opts.authorityArgs && hasManagedRunnerParkAuthority(opts.authorityArgs)) {
+        const promoted = promoteCurrentOperationToManagedFlow();
+        if (!promoted.ok) {
+          return {
+            passed: false,
+            output: "",
+            flowFile,
+            error: "Inline Maestro could not enter the exclusive flow plane because another operation is active.",
+            errorCode: "BUSY_FLOW_ACTIVE"
+          };
+        }
+        execution = await runFlowParked(execute2, {
+          platform: opts.platform,
+          deviceId: requestedDeviceId,
+          completeRunnerPark: () => completeManagedRunnerParkAuthority(opts.authorityArgs)
+        });
+      } else {
+        execution = await execute2();
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (err instanceof RunnerCacheUnavailableError) {
+        return {
+          passed: false,
+          output: "",
+          flowFile,
+          error: runnerCacheBootstrapFailure(err),
+          errorCode: "WDA_BOOTSTRAP_FAILED"
+        };
+      }
+      if (message.startsWith("RUNNER_PIN_CHANGED:")) {
+        return { passed: false, output: "", flowFile, error: message };
+      }
+      throw err;
+    }
+    const output = (execution.stdout + "\n" + execution.stderr).trim();
+    if (!execution.cleanupProven) {
+      const guidance = execution.cleanupRefusal ? ` Process group: ${execution.cleanupRefusal.processGroup}. Run ${execution.cleanupRefusal.manualCommand}, then retry in this bridge process.` : "";
+      return {
+        passed: false,
+        output,
+        flowFile,
+        error: `AUTOMATION_CLEANUP_UNPROVEN: Maestro ended, but owned process-group absence could not be confirmed.${guidance}`,
+        errorCode: "AUTOMATION_CLEANUP_UNPROVEN",
+        timedOut: execution.timedOut,
+        exitCode: execution.code,
+        signal: execution.signal,
+        cleanupEscalated: execution.cleanupEscalated,
+        ...execution.cleanupRefusal ? { cleanupRefusal: execution.cleanupRefusal } : {}
+      };
+    }
+    if (opts.platform === "android" && isOlderSdkInstallFailure(output)) {
+      return {
+        passed: false,
+        output,
+        flowFile,
+        error: olderSdkInstallDiagnosis(dispatch.runner),
+        exitCode: execution.code,
+        signal: execution.signal
+      };
+    }
+    if (execution.timedOut) {
+      return {
+        passed: false,
+        output,
+        flowFile,
+        error: `Maestro timed out after ${timeout}ms`,
+        timedOut: true,
+        exitCode: execution.code,
+        signal: execution.signal,
+        cleanupEscalated: execution.cleanupEscalated
+      };
+    }
+    if (execution.error) {
+      return {
+        passed: false,
+        output,
+        flowFile,
+        error: execution.error.slice(0, 500),
+        exitCode: execution.code,
+        signal: execution.signal
+      };
+    }
+    const passed = execution.code === 0 && !outputIndicatesFlowFailure(output);
+    const directEvidence = collectDirectRunnerEvidence(runnerReportDir, output);
+    const deviceAuthority = verifyMaestroDeviceAuthority({
+      runner: dispatch.runner,
+      platform: opts.platform,
+      requestedDeviceId,
+      output: directEvidence.output,
+      directReportDeviceIds: directEvidence.reportDeviceIds,
+      directReportIdentityStrength: directEvidence.reportDeviceIdStrength,
+      requireWdaProvenance: passed
+    });
+    const authorityRefusal = maestroAuthorityRefusal(deviceAuthority, execution.error);
+    return {
+      passed: authorityRefusal ? false : passed,
+      output,
+      flowFile,
+      ...authorityRefusal ? { error: authorityRefusal } : {},
+      exitCode: execution.code,
+      signal: execution.signal,
+      cleanupEscalated: execution.cleanupEscalated,
+      deviceAuthority
+    };
+  } finally {
+    disposeRunnerReportDir(runnerReportDir);
+    removeTemporaryInlineFlow(flowFile);
+  }
+}
+var maestroInlineObserverForTest;
+var init_maestro_invoke = __esm({
+  "packages/rn-dev-agent-core/dist/maestro-invoke.js"() {
+    "use strict";
+    init_project_config();
+    init_maestro_validator();
+    init_maestro_dispatch();
+    init_maestro_error_parser();
+    init_engine_pin();
+    init_action_engine_compat();
+    init_resolve_ios_app_file();
+    init_maestro_run();
+    init_agent_device_wrapper();
+    init_maestro_device_authority();
+    init_maestro_runner_report();
+    init_managed_automation();
+    init_device_arbiter();
+    init_authority_gate();
+    init_utils();
+    maestroInlineObserverForTest = null;
   }
 });
 
@@ -89561,7 +89863,7 @@ function createRestartHandler(getClient2, setClient2, createClient2, deps = {}) 
   const stopFastRunner2 = deps.stopFastRunner ?? stopFastRunner;
   const unbindRunner = deps.unbindRunner ?? (() => {
   });
-  const sleep7 = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
+  const sleep6 = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
   const probeAppInstalledFn = deps.probeAppInstalled ?? probeAppInstalled;
   const snapshotHintFn = deps.snapshotHint ?? snapshotHintForBundleId;
   const resetDetachedBudgetFn = deps.resetDetachedBudget ?? resetDetachedRecoveryCounter;
@@ -89623,7 +89925,7 @@ function createRestartHandler(getClient2, setClient2, createClient2, deps = {}) 
               hardResetSteps.push(`simctl launch:err(${msg3})`);
             }
           }
-          await sleep7(3e3);
+          await sleep6(3e3);
         } else if (bundleId && targetPlatform === "android") {
           try {
             await execFile24("adb", ["-s", args.deviceId, "shell", "am", "force-stop", bundleId], {
@@ -89647,7 +89949,7 @@ function createRestartHandler(getClient2, setClient2, createClient2, deps = {}) 
           } catch (err) {
             return failResult(`cdp_restart exact Android relaunch failed: ${err instanceof Error ? err.message : String(err)}`, "RECONNECT_TIMEOUT", { hardResetSteps });
           }
-          await sleep7(3e3);
+          await sleep6(3e3);
         } else {
           return failResult(`cdp_restart refused unsupported authority platform "${targetPlatform}"`, "PLATFORM_AUTHORITY_MISMATCH");
         }
@@ -95127,19 +95429,19 @@ var init_index = __esm({
         "hideDevMenu"
       ]).describe("Dev menu action to execute")
     }, createDevSettingsHandler(getClient, { probeForegroundSurface }));
-    trackedTool("cdp_interact", 'Interact with React components by testID (preferred) or accessibilityLabel \u2014 press buttons, long-press, type text, scroll, or set a React Hook Form field value directly. Calls JS handlers directly (not native touch). testID matches strictly; accessibilityLabel matches in tiers (exact \u2192 trim/case-insensitive \u2192 substring) and returns an ambiguity error when >1 component matches. Prefer testID for unambiguous targeting. For native gestures (swipe, drag), use device_swipe/device_press instead. setFieldValue (GH #126 Gap A): explicit fallback when typeText fails because the field routes through a Controller \u2014 pass name + value, walks UP to the nearest FormProvider and calls its setValue. Use only when typeText returns "no handler". Portal-root coverage (GH #126 Gap B): if your app uses react-native-actions-sheet, @gorhom/bottom-sheet, or any Modal-based portal whose fiber root is not in React DevTools\' getFiberRoots() registry, set `globalThis.__RN_AGENT_EXTRA_ROOTS__ = () => [sheetRef.current, ...]` in your __DEV__ block \u2014 testID resolution will then reach inside those subtrees. See CLAUDE.md template for the canonical snippet. walkUp (GH #525, opt-in): for action:"press" with a testID/accessibilityLabel selector only \u2014 when the matched component has no onPress (testID on a non-pressable wrapper), walks up at most 8 fiber ancestors and presses the nearest pressable. Refuses when no pressable exists within the bound, when duplicate matches resolve to distinct pressable ancestors (ambiguous), or when combined with a non-press action or a role/name/text/placeholder selector; default behavior without the flag is unchanged.', {
-      action: external_exports.enum(["press", "longPress", "typeText", "scroll", "setFieldValue"]).describe("press: calls onPress (with `value` if provided, for radio/chip-style value-bearing controls). longPress: calls onLongPress. typeText: calls onChangeText. scroll: calls scrollTo or onScroll. setFieldValue: walks UP to nearest React Hook Form FormProvider and calls setValue(name, value, {shouldValidate, shouldDirty})."),
+    trackedTool("cdp_interact", 'Interact with React components by testID, accessibilityLabel, or supported discovery facts. Calls JS handlers directly, not native touch. typeText joins every matching source to exact eligible handler-owning fibers under one cycle-safe 2,000-work-unit limit and refuses incomplete or ambiguous resolution; success proves one exact React handler dispatch, not native keyboard or input fidelity. It accepts placeholder or role+name, and generic onChange is eligible only on a proven native text-input host Fiber. accessibilityLabel matching uses exact, normalized, then substring tiers. setFieldValue walks to the nearest FormProvider, or safely matches an explicit control prop to an ancestor useForm hook return by object identity before calling setValue. Portal roots can be registered through globalThis.__RN_AGENT_EXTRA_ROOTS__. walkUp (opt-in): for action:"press" with testID/accessibilityLabel selectors only, walks up at most 8 fiber ancestors to the nearest pressable and refuses absence or ambiguity. Use device_swipe/device_press for native gestures.', {
+      action: external_exports.enum(["press", "longPress", "typeText", "scroll", "setFieldValue"]).describe("Action: press, longPress, typeText, scroll, or React Hook Form setFieldValue."),
       testID: external_exports.string().optional().describe("testID prop of the target component (strict match \u2014 preferred). For setFieldValue, this is the testID anchor inside the form's subtree from which to walk up."),
       accessibilityLabel: external_exports.string().optional().describe("accessibilityLabel prop (used if testID not provided). Tiered match: exact \u2192 normalized (trim+lowercase) \u2192 substring. Returns Ambiguous error if >1 component matches."),
-      text: external_exports.string().optional().describe('For typeText: the text to enter. For the discovery ladder (no testID/accessibilityLabel, action:"press"): byText \u2014 match a host Text by its visible text content.'),
-      role: external_exports.string().optional().describe('Discovery ladder (press-only): match by accessibility role (e.g. button, tab, link). Combine with `name` for the accessible name. Needs an explicit accessibilityRole \u2014 Pressables without one resolve as role "none".'),
-      placeholder: external_exports.string().optional().describe("Discovery ladder (press-only): match a TextInput by its placeholder text."),
+      text: external_exports.string().optional().describe("Text to enter, or visible text selector for press."),
+      role: external_exports.string().optional().describe("Accessibility role selector; for typeText combine with name."),
+      placeholder: external_exports.string().optional().describe("Match a TextInput placeholder for press or typeText."),
       exact: external_exports.boolean().optional().describe("Discovery ladder: require an exact (full-string) match for text/name/placeholder instead of case-insensitive substring."),
       includeHidden: external_exports.boolean().optional().describe("Discovery ladder: include accessibility-hidden elements (excluded by default)."),
       scrollX: external_exports.number().optional().describe("For scroll: horizontal offset in pixels (default 0)"),
       scrollY: external_exports.number().optional().describe("For scroll: vertical offset in pixels (default 300)"),
       animated: external_exports.boolean().default(true).describe("For scroll: whether to animate"),
-      name: external_exports.string().optional().describe('For setFieldValue: the React Hook Form field name (same string you passed to useController({name}) or <Controller name="...">). For the discovery ladder with `role`: the accessible name to match (e.g. role:"button" + name:"Save").'),
+      name: external_exports.string().optional().describe("React Hook Form field name, or accessible name paired with role."),
       value: external_exports.union([external_exports.string(), external_exports.number(), external_exports.boolean()]).optional().describe('Value to set. For setFieldValue: passed to setValue (a digit-string is kept a string when the field currently holds a string \u2014 give string fields a "" default so this applies). For press: when provided, onPress receives this value instead of a synthetic event \u2014 use for radio/chip-style value-bearing controls.'),
       shouldValidate: external_exports.boolean().optional().describe("For setFieldValue: pass-through to setValue's options.shouldValidate (default true). Set false to suppress synchronous validation."),
       shouldDirty: external_exports.boolean().optional().describe("For setFieldValue: pass-through to setValue's options.shouldDirty (default true). Set false to keep the field marked pristine."),
@@ -95213,7 +95515,7 @@ var init_index = __esm({
       settleTimeoutMs: external_exports.number().int().min(500).max(3e4).optional().describe("Override the post-action settle budget in ms (default 6000). Settle waits for the UI to stabilize after the action; see meta.settle in the result. Budget knob only \u2014 RN_SETTLE=0 disables settle."),
       retryIfNoChange: external_exports.boolean().optional().describe("Deprecated compatibility option. Interactions are never automatically replayed after a possible dispatch; uncertainty is reported from the first attempt.")
     }, createDevicePressHandler(getClient));
-    trackedTool("device_fill", 'Type text into an input field by its @ref or testID from device_snapshot, binding exactly one direct TextInput or one `${name}-pressable` wrapper uniquely mapped to its inner `${name}` input before mutation. Exact raw control can operate without a managed Metro target and always labels meta.originAuthority as proven or not-proven; a native-to-Maestro fallback still requires proven managed origin. The tool skips the focus tap only when that exact input is already focused and returns filled:true ONLY after a stable exact post-settle read-back (fiber value for controlled inputs, native read for uncontrolled; meta.verify is always "exact" on success). Tiers: controlled inputs fill via onChangeText, others via the native runner, with a clear-first retype and a clear-first Maestro attempt for observed wrong values. Unverifiable outcomes hard-fail: NO_TEXT_INPUT_TARGET means nothing was typed (rebind after a fresh snapshot); TEXT_ENTRY_UNVERIFIED means an attempt ran but the exact value could not be proven \u2014 check meta.mutation: "none" = safe to retry after a fresh snapshot; "observed" = the field holds a wrong value, take a fresh snapshot and re-read before a corrective fill; "possible" = do NOT retry the same ref \u2014 take a fresh device_snapshot, rebind the input by identity, and read its state first (a blind retry can double-type). Secure fields verify only when controlled (masked native values are never proof); empty text is a verified clear. Requires an open session.', {
+    trackedTool("device_fill", 'Type text into an input field by its @ref or testID from device_snapshot, binding exactly one direct native TextInput or one `${name}-pressable` wrapper uniquely mapped to its inner `${name}` input before mutation. Exact raw control can operate without a managed Metro target and always labels meta.originAuthority as proven or not-proven. The tool skips the focus tap only when that exact input is already focused and returns filled:true ONLY after a stable exact native post-settle read-back (meta.verify is always "exact" on success). One operation token owns one native mutation and its read-back; mismatch or uncertainty refuses without resend, rebinding, React Fiber evidence, or Maestro. Unverifiable outcomes hard-fail: NO_TEXT_INPUT_TARGET means nothing was typed (rebind after a fresh snapshot); TEXT_ENTRY_UNVERIFIED means an attempt ran but the exact value could not be proven \u2014 check meta.mutation: "none" = safe to retry after a fresh snapshot; "observed" = the field holds a wrong value, take a fresh snapshot and re-read before a corrective fill; "possible" = do NOT retry the same ref \u2014 take a fresh device_snapshot, rebind the input by identity, and read its state first (a blind retry can double-type). Secure masked native values are never proof; empty text is a verified clear. Requires an open session.', {
       ref: external_exports.string().describe('Input ref from device_snapshot (for example "@e5"), or a testID'),
       text: external_exports.string().describe("Text to type into the field (empty string = verified clear)"),
       waitForKeyboardMs: external_exports.number().int().min(0).max(5e3).optional().describe("Bounded wait for the exact input to gain focus after the in-operation focus tap (default 1500). Bump to 3000-5000ms for slow keyboard animations on Pressable-wrapped TextInputs."),
@@ -96014,8 +96316,8 @@ init_registry();
 init_managed_metro();
 init_android_metro_reverse();
 init_state_root();
-import { createHash as createHash15, randomBytes as randomBytes6, randomUUID as randomUUID8 } from "node:crypto";
-import { dirname as dirname20 } from "node:path";
+import { createHash as createHash14, randomBytes as randomBytes6, randomUUID as randomUUID8 } from "node:crypto";
+import { dirname as dirname12 } from "node:path";
 var RELEASABLE_SESSION_STATES = /* @__PURE__ */ new Set([
   "active",
   "source_bound",
@@ -96144,7 +96446,7 @@ function createSupervisorAuthority(input, dependencies = {}) {
       metroPort,
       observePort,
       ...adoptionRequired ? {
-        recoveryCapabilityHash: createHash15("sha256").update(recoveryCapability).digest("hex"),
+        recoveryCapabilityHash: createHash14("sha256").update(recoveryCapability).digest("hex"),
         adoptionRequired: {
           sessionId: adoptionRequired.sessionId,
           claimEpoch: adoptionRequired.claimEpoch
@@ -96188,7 +96490,7 @@ function createSupervisorAuthority(input, dependencies = {}) {
       RN_DEV_AGENT_SESSION_ID: session2.sessionId,
       RN_DEV_AGENT_CLAIM_EPOCH: String(session2.claimEpoch),
       RN_DEV_AGENT_REGISTRY_PATH: layout.registry,
-      RN_DEV_AGENT_STATE_DIR: dirname20(layout.root),
+      RN_DEV_AGENT_STATE_DIR: dirname12(layout.root),
       RN_DEV_AGENT_SESSION_SECRET_PATH: secretPath,
       RN_DEV_AGENT_SESSION_RUNTIME_ROOT: sessionRuntimeDirectory(layout, sessionId),
       RN_DEV_AGENT_WORKER_INSTANCE: workerInstance,
@@ -96259,7 +96561,7 @@ function createSupervisorAuthority(input, dependencies = {}) {
 }
 
 // packages/rn-dev-agent-core/dist/supervisor-args.js
-import { dirname as dirname21, join as join38 } from "node:path";
+import { dirname as dirname13, join as join27 } from "node:path";
 function sqliteFlagForNode(version2) {
   const v = version2 ?? process.versions.node;
   const [majorStr, minorStr] = v.split(".");
@@ -96285,7 +96587,7 @@ function workerSpawnArgs(workerPath, sqliteWarningFilterPath2, version2, forward
     "--import",
     sqliteWarningFilterPath2,
     "--import",
-    join38(dirname21(sqliteWarningFilterPath2), "startup-integrity-register.js"),
+    join27(dirname13(sqliteWarningFilterPath2), "startup-integrity-register.js"),
     workerPath,
     "--no-lock",
     ...diagnosticArgs

@@ -11689,324 +11689,21 @@ var init_maestro_validator = __esm({
   }
 });
 
-// packages/rn-dev-agent-core/dist/experience/runner-diagnostics.js
-import { AsyncLocalStorage as AsyncLocalStorage2 } from "node:async_hooks";
-var storage;
-var init_runner_diagnostics = __esm({
-  "packages/rn-dev-agent-core/dist/experience/runner-diagnostics.js"() {
-    "use strict";
-    storage = new AsyncLocalStorage2();
-  }
-});
-
-// packages/rn-dev-agent-core/dist/domain/maestro-runner-pin.json
-var maestro_runner_pin_default;
-var init_maestro_runner_pin = __esm({
-  "packages/rn-dev-agent-core/dist/domain/maestro-runner-pin.json"() {
-    maestro_runner_pin_default = {
-      version: "1.1.24",
-      sha256: {
-        "darwin-arm64": "170f12521de83322823dd5fc0ce16e48abeba9952cdbb242670592566c2fd1f3",
-        "darwin-x64": "af7f5ea044afc72ea780c835f05b32203e443d2e26d310a864bfb2bc84959bf6",
-        "linux-x64": "e9bdef6f08f855ca1a884f99b54a519a1eae0a342917181a53eb414a5b00d6d8",
-        "linux-arm64": "8d8a6483ad04da2109636b7192398750657801b8a8d512688d1be3b033a105b8"
-      },
-      archiveSha256: {
-        "darwin-arm64": "0b5b0f087815c5ff348e74a6dd7df260ed50a5588d5ff3e224c66a60d948c936",
-        "darwin-x64": "2ecc5c55d9437ee820691faf43097b5ba8d1ff797db49da9c96ac2631aac03c5",
-        "linux-x64": "f1963b7e3f8bf598d3b14f998fef3dc690e579906f340636cfd9350dea1d67b0",
-        "linux-arm64": "605db5645b161b610e999bcf8235650d41aac8929bbd0f818a592d13b958f148"
-      },
-      knownQuirks: [
-        {
-          id: "android-pre-o-unsupported",
-          ref: "GH #741",
-          note: "bundled UiAutomator2 server APK declares minSdk 26; API 23-25 installs fail with INSTALL_FAILED_OLDER_SDK"
-        }
-      ]
-    };
-  }
-});
-
-// packages/rn-dev-agent-core/dist/domain/engine-pin.js
-var MAESTRO_RUNNER_PIN, TRUSTED_DRIFT_SHA256, ACTION_ENGINE_PIN, HOST_PLUGIN_ROOT, PINNED_RUNNER_INSTALL_HINT, PINNED_RUNNER_DIAGNOSE_HINT;
-var init_engine_pin = __esm({
-  "packages/rn-dev-agent-core/dist/domain/engine-pin.js"() {
-    "use strict";
-    init_process_birth();
-    init_runner_diagnostics();
-    init_maestro_runner_pin();
-    MAESTRO_RUNNER_PIN = Object.freeze({
-      version: maestro_runner_pin_default.version,
-      sha256: Object.freeze({ ...maestro_runner_pin_default.sha256 }),
-      archiveSha256: Object.freeze({ ...maestro_runner_pin_default.archiveSha256 }),
-      knownQuirks: Object.freeze(maestro_runner_pin_default.knownQuirks.map((quirk) => Object.freeze({ ...quirk })))
-    });
-    TRUSTED_DRIFT_SHA256 = Object.freeze({
-      "1.0.9": Object.freeze({
-        "darwin-arm64": "7d3777a67f8cc3d5e3927f498ddda8a56c424a10158f7cd4fa494ecc3ed97923",
-        "darwin-x64": "36f8a973c3231b6b8125db4a3e131b8c3193aec6774145584b18070be979fd5f",
-        "linux-arm64": "a8e8197c63502fba874ce69b908174d46a47c6539025184e3003e70576d9451e",
-        "linux-x64": "bf7e9ef297c35712e9fad0ad56a65b7fd94e1f30168733cf09459b4ea80c4c3e"
-      })
-    });
-    ACTION_ENGINE_PIN = `maestro-runner@${MAESTRO_RUNNER_PIN.version}`;
-    HOST_PLUGIN_ROOT = "${CLAUDE_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}";
-    PINNED_RUNNER_INSTALL_HINT = `bash ${HOST_PLUGIN_ROOT}/scripts/ensure-maestro-runner.sh`;
-    PINNED_RUNNER_DIAGNOSE_HINT = `node ${HOST_PLUGIN_ROOT}/rn-dev-agent-core/dist/maestro-runner-pin.js diagnose`;
-  }
-});
-
-// packages/rn-dev-agent-core/dist/tools/maestro-dispatch.js
-var init_maestro_dispatch = __esm({
-  "packages/rn-dev-agent-core/dist/tools/maestro-dispatch.js"() {
-    "use strict";
-    init_engine_pin();
-  }
-});
-
-// packages/rn-dev-agent-core/dist/domain/ansi.js
-var ANSI_RE;
-var init_ansi = __esm({
-  "packages/rn-dev-agent-core/dist/domain/ansi.js"() {
-    "use strict";
-    ANSI_RE = new RegExp(String.fromCharCode(27) + "\\[[0-9;]*m", "g");
-  }
-});
-
-// packages/rn-dev-agent-core/dist/domain/maestro-error-parser.js
-var init_maestro_error_parser = __esm({
-  "packages/rn-dev-agent-core/dist/domain/maestro-error-parser.js"() {
-    "use strict";
-    init_ansi();
-  }
-});
-
-// packages/rn-dev-agent-core/dist/domain/reusable-action.js
-var init_reusable_action = __esm({
-  "packages/rn-dev-agent-core/dist/domain/reusable-action.js"() {
+// packages/rn-dev-agent-core/dist/tools/runner-leak-recovery.js
+var init_runner_leak_recovery = __esm({
+  "packages/rn-dev-agent-core/dist/tools/runner-leak-recovery.js"() {
     "use strict";
   }
 });
 
-// packages/rn-dev-agent-core/dist/session/runtime-paths.js
-var init_runtime_paths2 = __esm({
-  "packages/rn-dev-agent-core/dist/session/runtime-paths.js"() {
+// packages/rn-dev-agent-core/dist/tools/app-lifecycle.js
+import { execFile as execFileCb2 } from "node:child_process";
+import { promisify as promisify3 } from "node:util";
+var execFile3;
+var init_app_lifecycle = __esm({
+  "packages/rn-dev-agent-core/dist/tools/app-lifecycle.js"() {
     "use strict";
-  }
-});
-
-// packages/rn-dev-agent-core/dist/domain/sidecar-io.js
-var init_sidecar_io = __esm({
-  "packages/rn-dev-agent-core/dist/domain/sidecar-io.js"() {
-    "use strict";
-    init_reusable_action();
-    init_runtime_paths2();
-  }
-});
-
-// packages/rn-dev-agent-core/dist/domain/atomic-writer.js
-var ORPHAN_MAX_AGE_MS, lockWaitBuffer;
-var init_atomic_writer = __esm({
-  "packages/rn-dev-agent-core/dist/domain/atomic-writer.js"() {
-    "use strict";
-    init_process_birth();
-    ORPHAN_MAX_AGE_MS = 5 * 60 * 1e3;
-    lockWaitBuffer = new Int32Array(new SharedArrayBuffer(4));
-  }
-});
-
-// packages/rn-dev-agent-core/dist/domain/path-safety.js
-var init_path_safety = __esm({
-  "packages/rn-dev-agent-core/dist/domain/path-safety.js"() {
-    "use strict";
-  }
-});
-
-// packages/rn-dev-agent-core/dist/domain/unfollowed-file.js
-var UNFOLLOWED_READER_MAX_BUFFER_BYTES, UNFOLLOWED_READER_BATCH_BYTES, UNFOLLOWED_READER_SCRIPT;
-var init_unfollowed_file = __esm({
-  "packages/rn-dev-agent-core/dist/domain/unfollowed-file.js"() {
-    "use strict";
-    init_process_birth();
-    UNFOLLOWED_READER_MAX_BUFFER_BYTES = 32 * 1024 * 1024;
-    UNFOLLOWED_READER_BATCH_BYTES = 24 * 1024 * 1024;
-    UNFOLLOWED_READER_SCRIPT = String.raw`
-const { closeSync, constants, fstatSync, openSync, readSync, realpathSync, writeSync } = require('node:fs');
-const { join } = require('node:path');
-const request = JSON.parse(process.argv[1]);
-const opened = [];
-let directory = -1;
-const closeAll = () => {
-  for (const entry of opened) if (entry.fd >= 0) closeSync(entry.fd);
-  if (directory >= 0) closeSync(directory);
-};
-const matches = (stat, identity) =>
-  stat.isFile() &&
-  String(stat.dev) === identity.dev &&
-  String(stat.ino) === identity.ino &&
-  String(stat.size) === identity.size &&
-  String(stat.mtimeNs) === identity.mtimeNs &&
-  String(stat.ctimeNs) === identity.ctimeNs;
-try {
-  directory = openSync(
-    request.directoryPath,
-    constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_DIRECTORY,
-  );
-  const directoryStat = fstatSync(directory, { bigint: true });
-  if (
-    !directoryStat.isDirectory() ||
-    String(directoryStat.dev) !== request.directoryIdentity.dev ||
-    String(directoryStat.ino) !== request.directoryIdentity.ino
-  ) {
-    throw new Error('directory changed');
-  }
-  let batchBytes = 0;
-  for (const entry of request.entries) {
-    if (!entry.identity) {
-      opened.push({ fd: -1, size: 0, identity: null });
-      batchBytes += 9;
-      continue;
-    }
-    const path = join(request.directoryPath, entry.relativePath);
-    if (realpathSync.native(path) !== path) throw new Error('path followed a link');
-    const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
-    const stat = fstatSync(fd, { bigint: true });
-    if (!matches(stat, entry.identity)) {
-      closeSync(fd);
-      throw new Error('file changed');
-    }
-    const size = Number(stat.size);
-    if (!Number.isSafeInteger(size) || size < 0) {
-      closeSync(fd);
-      throw new Error('invalid size');
-    }
-    batchBytes += 9 + size;
-    if (batchBytes > ${UNFOLLOWED_READER_BATCH_BYTES}) {
-      closeSync(fd);
-      throw new Error('batch too large');
-    }
-    opened.push({ fd, size, identity: entry.identity });
-  }
-  for (const entry of opened) {
-    const frame = Buffer.alloc(9);
-    if (entry.fd < 0) {
-      frame[0] = 1;
-      writeSync(1, frame);
-      continue;
-    }
-    frame.writeBigUInt64BE(BigInt(entry.size), 1);
-    writeSync(1, frame);
-    const buffer = Buffer.allocUnsafe(Math.min(16384, Math.max(entry.size, 1)));
-    let offset = 0;
-    while (offset < entry.size) {
-      const count = readSync(entry.fd, buffer, 0, Math.min(buffer.length, entry.size - offset), offset);
-      if (count <= 0) throw new Error('short read');
-      writeSync(1, buffer, 0, count);
-      offset += count;
-    }
-    if (!matches(fstatSync(entry.fd, { bigint: true }), entry.identity)) {
-      throw new Error('file changed during read');
-    }
-  }
-  closeAll();
-} catch {
-  closeAll();
-  process.exit(10);
-}
-`;
-  }
-});
-
-// packages/rn-dev-agent-core/dist/domain/action-db.js
-import { createRequire as createRequire2 } from "node:module";
-var _require;
-var init_action_db = __esm({
-  "packages/rn-dev-agent-core/dist/domain/action-db.js"() {
-    "use strict";
-    init_runtime_paths2();
-    _require = createRequire2(import.meta.url);
-  }
-});
-
-// packages/rn-dev-agent-core/dist/domain/action-state-store.js
-var init_action_state_store = __esm({
-  "packages/rn-dev-agent-core/dist/domain/action-state-store.js"() {
-    "use strict";
-    init_logger();
-    init_action_db();
-    init_sidecar_io();
-  }
-});
-
-// packages/rn-dev-agent-core/dist/session/worktree-repair-remedy.js
-var WORKTREE_REPAIR_ENTRY, HEADLESS_WORKTREE_REPAIR_COMMAND;
-var init_worktree_repair_remedy = __esm({
-  "packages/rn-dev-agent-core/dist/session/worktree-repair-remedy.js"() {
-    "use strict";
-    WORKTREE_REPAIR_ENTRY = '"${CLAUDE_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}/rn-dev-agent-core/dist/worktree-inheritance.js"';
-    HEADLESS_WORKTREE_REPAIR_COMMAND = `node ${WORKTREE_REPAIR_ENTRY} repair --app-root "$PWD"`;
-  }
-});
-
-// packages/rn-dev-agent-core/dist/session/worktree-inheritance.js
-var init_worktree_inheritance = __esm({
-  "packages/rn-dev-agent-core/dist/session/worktree-inheritance.js"() {
-    "use strict";
-    init_worktree_repair_remedy();
-  }
-});
-
-// packages/rn-dev-agent-core/dist/domain/action-store.js
-var init_action_store = __esm({
-  "packages/rn-dev-agent-core/dist/domain/action-store.js"() {
-    "use strict";
-    init_reusable_action();
-    init_sidecar_io();
-    init_atomic_writer();
-    init_path_safety();
-    init_unfollowed_file();
-    init_maestro_validator();
-    init_action_state_store();
-    init_worktree_inheritance();
-  }
-});
-
-// packages/rn-dev-agent-core/dist/domain/action-engine-compat.js
-var ENGINE_PIN_LINE;
-var init_action_engine_compat = __esm({
-  "packages/rn-dev-agent-core/dist/domain/action-engine-compat.js"() {
-    "use strict";
-    init_engine_pin();
-    init_maestro_validator();
-    init_reusable_action();
-    init_action_store();
-    ENGINE_PIN_LINE = new RegExp(`^#\\s*enginePin\\s*:\\s*.+$`);
-  }
-});
-
-// packages/rn-dev-agent-core/dist/tools/resolve-ios-app-file.js
-var init_resolve_ios_app_file = __esm({
-  "packages/rn-dev-agent-core/dist/tools/resolve-ios-app-file.js"() {
-    "use strict";
-  }
-});
-
-// packages/rn-dev-agent-core/dist/domain/maestro-step-parser.js
-var init_maestro_step_parser = __esm({
-  "packages/rn-dev-agent-core/dist/domain/maestro-step-parser.js"() {
-    "use strict";
-    init_maestro_error_parser();
-    init_ansi();
-    init_ansi();
-  }
-});
-
-// packages/rn-dev-agent-core/dist/domain/tap-latency.js
-var init_tap_latency = __esm({
-  "packages/rn-dev-agent-core/dist/domain/tap-latency.js"() {
-    "use strict";
-    init_maestro_step_parser();
+    execFile3 = promisify3(execFileCb2);
   }
 });
 
@@ -12017,17 +11714,63 @@ var init_recovery = __esm({
   }
 });
 
-// packages/rn-dev-agent-core/dist/domain/maestro-device-authority.js
-var init_maestro_device_authority = __esm({
-  "packages/rn-dev-agent-core/dist/domain/maestro-device-authority.js"() {
-    "use strict";
+// packages/rn-dev-agent-core/dist/runners/external-runner-detect.js
+import { execFile as execFile4 } from "node:child_process";
+import { promisify as promisify4 } from "node:util";
+function executableBasename(command) {
+  const executable = command.trimStart().split(/\s+/, 1)[0] ?? "";
+  return executable.slice(executable.lastIndexOf("/") + 1);
+}
+function shellWrappedMaestro(command) {
+  const tokens = command.trimStart().split(/\s+/);
+  if (!SHELL_WRAPPERS.test(executableBasename(tokens[0] ?? "")))
+    return false;
+  return tokens.slice(1).some((token2) => token2.startsWith("/") && /^maestro(?:\.\w+)?$/i.test(executableBasename(token2)));
+}
+function isIosExternalRunnerProcessLine(line) {
+  const match = line.match(/^\s*\d+\s+(.+)$/);
+  if (!match)
+    return false;
+  const command = match[1];
+  const executable = executableBasename(command);
+  if (/^maestro(?:-driver-iosUITests-Runner)?$/i.test(executable))
+    return true;
+  if (shellWrappedMaestro(command))
+    return true;
+  if (/^WebDriverAgent(?:Runner)?(?:-Runner)?$/i.test(executable))
+    return true;
+  if (/^java$/i.test(executable) && /(?:^|\s)maestro\.cli\.[\w.$]+(?:\s|$)/i.test(command)) {
+    return true;
   }
-});
-
-// packages/rn-dev-agent-core/dist/domain/maestro-runner-report.js
-var init_maestro_runner_report = __esm({
-  "packages/rn-dev-agent-core/dist/domain/maestro-runner-report.js"() {
+  if (/^xcodebuild$/i.test(executable) && /(?:maestro[^\s]*|WebDriverAgent[^\s]*)\.xctestrun(?:\s|$)/i.test(command)) {
+    return true;
+  }
+  return false;
+}
+async function detectIosExternalRunner(execFileImpl = execFile4, udid) {
+  try {
+    const opts = { timeout: 2e3, encoding: "utf8" };
+    const run = execFileImpl === execFile4 ? promisify4(execFileImpl) : execFileImpl;
+    const { stdout } = await run("ps", ["axww", "-o", "pid=,command="], opts);
+    const lines = stdout.split("\n").filter((line) => isIosExternalRunnerProcessLine(line)).filter((line) => !RN_FAST_RUNNER_RE.test(line)).filter((line) => udid ? line.includes(udid) : true).map((line) => line.trim()).filter((line) => line.length > 0);
+    if (lines.length === 0)
+      return null;
+    return {
+      platform: "ios",
+      code: "IOS_XCUITEST_COMPETITOR",
+      message: "A foreign maestro/WebDriverAgent automation session is driving this simulator. Interleaving device_* with it may trigger a re-foreground of your app; CDP reads are unaffected. (If this is your own maestro flow, it is expected.)",
+      processLines: lines
+    };
+  } catch {
+    return null;
+  }
+}
+var SHELL_WRAPPERS, RN_FAST_RUNNER_RE;
+var init_external_runner_detect = __esm({
+  "packages/rn-dev-agent-core/dist/runners/external-runner-detect.js"() {
     "use strict";
+    SHELL_WRAPPERS = /^(?:sh|bash|zsh|dash|ksh|env)$/i;
+    RN_FAST_RUNNER_RE = /RnFastRunner/i;
   }
 });
 
@@ -12039,6 +11782,318 @@ var init_discovery = __esm({
     init_logger();
     init_maestro_validator();
     init_metro_cwd();
+  }
+});
+
+// packages/rn-dev-agent-core/dist/runners/ensure-single-runner.js
+import { homedir as homedir3 } from "node:os";
+import { join as join13 } from "node:path";
+var DAEMON_JSON, DAEMON_LOCK;
+var init_ensure_single_runner = __esm({
+  "packages/rn-dev-agent-core/dist/runners/ensure-single-runner.js"() {
+    "use strict";
+    init_discovery();
+    DAEMON_JSON = join13(homedir3(), ".agent-device", "daemon.json");
+    DAEMON_LOCK = join13(homedir3(), ".agent-device", "daemon.lock");
+  }
+});
+
+// packages/rn-dev-agent-core/dist/runners/suppress-ios-autocorrect.js
+import { execFile as execFileCb3 } from "node:child_process";
+import { promisify as promisify5 } from "node:util";
+var execFile5;
+var init_suppress_ios_autocorrect = __esm({
+  "packages/rn-dev-agent-core/dist/runners/suppress-ios-autocorrect.js"() {
+    "use strict";
+    execFile5 = promisify5(execFileCb3);
+  }
+});
+
+// packages/rn-dev-agent-core/dist/lifecycle/foreign-flow-gate.js
+var ForeignFlowGate, foreignFlowGate;
+var init_foreign_flow_gate = __esm({
+  "packages/rn-dev-agent-core/dist/lifecycle/foreign-flow-gate.js"() {
+    "use strict";
+    init_external_runner_detect();
+    ForeignFlowGate = class {
+      detect;
+      ttlMs;
+      now;
+      cachedAt = -Infinity;
+      cachedUdid = null;
+      cached = null;
+      inFlight = null;
+      inFlightUdid = null;
+      _lastActive = false;
+      constructor(deps = {}) {
+        this.detect = deps.detect ?? ((udid) => detectIosExternalRunner(void 0, udid));
+        this.ttlMs = deps.ttlMs ?? 5e3;
+        this.now = deps.now ?? Date.now;
+      }
+      get lastActive() {
+        return this._lastActive;
+      }
+      async check(udid) {
+        const t = this.now();
+        if (this.cachedUdid === udid && t - this.cachedAt < this.ttlMs) {
+          return { active: this.cached !== null, warning: this.cached, fromCache: true, scanMs: 0 };
+        }
+        if (this.inFlight && this.inFlightUdid === udid)
+          return this.inFlight;
+        this.inFlightUdid = udid;
+        const scan = (async () => {
+          const started = this.now();
+          let warning = null;
+          try {
+            warning = await this.detect(udid);
+          } catch {
+            warning = null;
+          }
+          this.cached = warning;
+          this.cachedUdid = udid;
+          this.cachedAt = this.now();
+          this._lastActive = warning !== null;
+          return { active: warning !== null, warning, fromCache: false, scanMs: this.now() - started };
+        })();
+        this.inFlight = scan;
+        try {
+          return await scan;
+        } finally {
+          if (this.inFlight === scan) {
+            this.inFlight = null;
+            this.inFlightUdid = null;
+          }
+        }
+      }
+    };
+    foreignFlowGate = new ForeignFlowGate();
+  }
+});
+
+// packages/rn-dev-agent-core/dist/lifecycle/device-arbiter.js
+import { AsyncLocalStorage as AsyncLocalStorage2 } from "node:async_hooks";
+var DeviceSessionArbiter, arbiter, activeLease;
+var init_device_arbiter = __esm({
+  "packages/rn-dev-agent-core/dist/lifecycle/device-arbiter.js"() {
+    "use strict";
+    init_utils();
+    init_foreign_flow_gate();
+    init_public_diagnostics();
+    DeviceSessionArbiter = class {
+      flowLeaseHeldBy = null;
+      ops = /* @__PURE__ */ new Map();
+      nextOpId = 1;
+      now;
+      constructor(now = Date.now) {
+        this.now = now;
+      }
+      tryAcquire(plane, tool) {
+        if (plane === "flow") {
+          if (this.flowLeaseHeldBy !== null || this.ops.size > 0) {
+            return { ok: false, code: "BUSY_FLOW_ACTIVE", holder: this.describeBlocker() };
+          }
+          return this.grant(plane, tool, true);
+        }
+        if (this.flowLeaseHeldBy !== null) {
+          return { ok: false, code: "BUSY_FLOW_ACTIVE", holder: this.describeBlocker() };
+        }
+        return this.grant(plane, tool, false);
+      }
+      /** Promote only the currently held interaction lease when it is the sole op.
+       * Ordinary interactions remain interactions and therefore do not start the
+       * pinned post-flow grace window. Inline Maestro escalates lazily at dispatch. */
+      promoteToFlow(lease) {
+        const info = this.ops.get(lease.opId);
+        if (!info || info.plane === "introspection") {
+          return { ok: false, code: "BUSY_FLOW_ACTIVE", holder: this.describeBlocker() };
+        }
+        if (this.flowLeaseHeldBy === lease.opId) {
+          return { ok: true, lease: { plane: "flow", opId: lease.opId } };
+        }
+        if (this.flowLeaseHeldBy !== null || this.ops.size !== 1) {
+          return { ok: false, code: "BUSY_FLOW_ACTIVE", holder: this.describeBlocker() };
+        }
+        info.plane = "flow";
+        this.flowLeaseHeldBy = lease.opId;
+        return { ok: true, lease: { plane: "flow", opId: lease.opId } };
+      }
+      grant(plane, tool, isFlow) {
+        const opId = this.nextOpId++;
+        this.ops.set(opId, { plane, tool, startedAtMs: this.now() });
+        if (isFlow)
+          this.flowLeaseHeldBy = opId;
+        return { ok: true, lease: { plane, opId } };
+      }
+      describeBlocker() {
+        const id = this.flowLeaseHeldBy ?? this.oldestOpId();
+        if (id === null)
+          return null;
+        const info = this.ops.get(id);
+        return info ? { plane: info.plane, tool: info.tool, opId: id } : null;
+      }
+      oldestOpId() {
+        let oldest = null;
+        let oldestAt = Infinity;
+        for (const [id, info] of this.ops) {
+          if (info.startedAtMs < oldestAt) {
+            oldestAt = info.startedAtMs;
+            oldest = id;
+          }
+        }
+        return oldest;
+      }
+      /** GH#186: set when a FLOW lease releases. Our own maestro driver (argv
+       * carries the udid) keeps tearing down WDA for seconds after release and
+       * matches the foreign detector — taps inside this window must not scan. */
+      lastFlowReleasedAt = -Infinity;
+      get msSinceFlowReleased() {
+        return this.now() - this.lastFlowReleasedAt;
+      }
+      release(lease) {
+        this.ops.delete(lease.opId);
+        if (this.flowLeaseHeldBy === lease.opId) {
+          this.flowLeaseHeldBy = null;
+          this.lastFlowReleasedAt = this.now();
+        }
+      }
+      reset(reason) {
+        const clearedOps = this.ops.size;
+        const hadFlow = this.flowLeaseHeldBy !== null;
+        this.ops.clear();
+        this.flowLeaseHeldBy = null;
+        return { clearedOps, hadFlow, reason };
+      }
+      get snapshot() {
+        return {
+          flowLeaseHeldBy: this.flowLeaseHeldBy,
+          activeOps: this.ops.size,
+          ops: [...this.ops.entries()].map(([opId, i]) => ({ opId, plane: i.plane, tool: i.tool }))
+        };
+      }
+      /** #210: true while a flow (Maestro) owns the device. Flow-fallback tools consult this to take an OS-level path. */
+      get flowActive() {
+        return this.flowLeaseHeldBy !== null;
+      }
+    };
+    arbiter = new DeviceSessionArbiter();
+    activeLease = new AsyncLocalStorage2();
+  }
+});
+
+// packages/rn-dev-agent-core/dist/cdp/recover-wedge.js
+import { execFile as execFileCb4 } from "node:child_process";
+import { promisify as promisify6 } from "node:util";
+var execFile6;
+var init_recover_wedge = __esm({
+  "packages/rn-dev-agent-core/dist/cdp/recover-wedge.js"() {
+    "use strict";
+    init_agent_device_wrapper();
+    init_rn_fast_runner_client();
+    init_device_arbiter();
+    init_recovery();
+    execFile6 = promisify6(execFileCb4);
+  }
+});
+
+// packages/rn-dev-agent-core/dist/cdp/app-installed-probe.js
+import { execFile as execFileCb5 } from "node:child_process";
+import { promisify as promisify7 } from "node:util";
+var execFile7;
+var init_app_installed_probe = __esm({
+  "packages/rn-dev-agent-core/dist/cdp/app-installed-probe.js"() {
+    "use strict";
+    execFile7 = promisify7(execFileCb5);
+  }
+});
+
+// packages/rn-dev-agent-core/dist/cdp/recover-detached.js
+import { execFile as execFileCb6 } from "node:child_process";
+import { promisify as promisify8 } from "node:util";
+var execFile8;
+var init_recover_detached = __esm({
+  "packages/rn-dev-agent-core/dist/cdp/recover-detached.js"() {
+    "use strict";
+    init_agent_device_wrapper();
+    init_rn_fast_runner_client();
+    init_device_arbiter();
+    init_recovery();
+    init_app_installed_probe();
+    init_maestro_validator();
+    execFile8 = promisify8(execFileCb6);
+  }
+});
+
+// packages/rn-dev-agent-core/dist/lifecycle/device-lock.js
+var init_device_lock = __esm({
+  "packages/rn-dev-agent-core/dist/lifecycle/device-lock.js"() {
+    "use strict";
+  }
+});
+
+// packages/rn-dev-agent-core/dist/tools/device-session-close.js
+var init_device_session_close = __esm({
+  "packages/rn-dev-agent-core/dist/tools/device-session-close.js"() {
+    "use strict";
+    init_utils();
+  }
+});
+
+// packages/rn-dev-agent-core/dist/tools/device-session.js
+import { execFile as execFileCb7 } from "node:child_process";
+import { promisify as promisify9 } from "node:util";
+var execFile9;
+var init_device_session = __esm({
+  "packages/rn-dev-agent-core/dist/tools/device-session.js"() {
+    "use strict";
+    init_agent_device_wrapper();
+    init_rn_fast_runner_client();
+    init_rn_android_runner_client();
+    init_app_lifecycle();
+    init_recovery();
+    init_external_runner_detect();
+    init_ensure_single_runner();
+    init_suppress_ios_autocorrect();
+    init_recover_wedge();
+    init_recover_detached();
+    init_utils();
+    init_project_config();
+    init_maestro_validator();
+    init_logger();
+    init_runner_leak_recovery();
+    init_device_lock();
+    init_device_arbiter();
+    init_device_session_close();
+    execFile9 = promisify9(execFileCb7);
+  }
+});
+
+// packages/rn-dev-agent-core/dist/tools/fill-verify.js
+var init_fill_verify = __esm({
+  "packages/rn-dev-agent-core/dist/tools/fill-verify.js"() {
+    "use strict";
+  }
+});
+
+// packages/rn-dev-agent-core/dist/tools/device-interact.js
+import { execFile as execFileCb8 } from "node:child_process";
+import { promisify as promisify10 } from "node:util";
+var execFile10;
+var init_device_interact = __esm({
+  "packages/rn-dev-agent-core/dist/tools/device-interact.js"() {
+    "use strict";
+    init_agent_device_wrapper();
+    init_rn_fast_runner_client();
+    init_rn_android_runner_client();
+    init_keyboard_guard();
+    init_project_config();
+    init_maestro_validator();
+    init_utils();
+    init_utils();
+    init_runner_leak_recovery();
+    init_device_session();
+    init_fast_runner_ref_map();
+    init_fill_verify();
+    execFile10 = promisify10(execFileCb8);
   }
 });
 
@@ -12065,6 +12120,13 @@ var init_install_reissue = __esm({
     "use strict";
     init_install_authority();
     init_registry();
+  }
+});
+
+// packages/rn-dev-agent-core/dist/domain/path-safety.js
+var init_path_safety = __esm({
+  "packages/rn-dev-agent-core/dist/domain/path-safety.js"() {
+    "use strict";
   }
 });
 
@@ -12323,460 +12385,6 @@ var init_authority_gate = __esm({
   }
 });
 
-// packages/rn-dev-agent-core/dist/tools/maestro-run.js
-import { execFile as execFileCb2 } from "node:child_process";
-import { promisify as promisify3 } from "node:util";
-var defaultExecFile;
-var init_maestro_run = __esm({
-  "packages/rn-dev-agent-core/dist/tools/maestro-run.js"() {
-    "use strict";
-    init_utils();
-    init_engine_pin();
-    init_runner_diagnostics();
-    init_action_engine_compat();
-    init_reusable_action();
-    init_action_store();
-    init_agent_device_wrapper();
-    init_project_config();
-    init_maestro_dispatch();
-    init_resolve_ios_app_file();
-    init_maestro_validator();
-    init_maestro_error_parser();
-    init_tap_latency();
-    init_maestro_step_parser();
-    init_rn_fast_runner_client();
-    init_release_android_slot();
-    init_recovery();
-    init_maestro_device_authority();
-    init_maestro_runner_report();
-    init_authority_gate();
-    init_registry();
-    defaultExecFile = promisify3(execFileCb2);
-  }
-});
-
-// packages/rn-dev-agent-core/dist/session/managed-automation.js
-var OUTPUT_LIMIT;
-var init_managed_automation = __esm({
-  "packages/rn-dev-agent-core/dist/session/managed-automation.js"() {
-    "use strict";
-    OUTPUT_LIMIT = 10 * 1024 * 1024;
-  }
-});
-
-// packages/rn-dev-agent-core/dist/runners/external-runner-detect.js
-import { execFile as execFile3 } from "node:child_process";
-import { promisify as promisify4 } from "node:util";
-function executableBasename(command) {
-  const executable = command.trimStart().split(/\s+/, 1)[0] ?? "";
-  return executable.slice(executable.lastIndexOf("/") + 1);
-}
-function shellWrappedMaestro(command) {
-  const tokens = command.trimStart().split(/\s+/);
-  if (!SHELL_WRAPPERS.test(executableBasename(tokens[0] ?? "")))
-    return false;
-  return tokens.slice(1).some((token2) => token2.startsWith("/") && /^maestro(?:\.\w+)?$/i.test(executableBasename(token2)));
-}
-function isIosExternalRunnerProcessLine(line) {
-  const match = line.match(/^\s*\d+\s+(.+)$/);
-  if (!match)
-    return false;
-  const command = match[1];
-  const executable = executableBasename(command);
-  if (/^maestro(?:-driver-iosUITests-Runner)?$/i.test(executable))
-    return true;
-  if (shellWrappedMaestro(command))
-    return true;
-  if (/^WebDriverAgent(?:Runner)?(?:-Runner)?$/i.test(executable))
-    return true;
-  if (/^java$/i.test(executable) && /(?:^|\s)maestro\.cli\.[\w.$]+(?:\s|$)/i.test(command)) {
-    return true;
-  }
-  if (/^xcodebuild$/i.test(executable) && /(?:maestro[^\s]*|WebDriverAgent[^\s]*)\.xctestrun(?:\s|$)/i.test(command)) {
-    return true;
-  }
-  return false;
-}
-async function detectIosExternalRunner(execFileImpl = execFile3, udid) {
-  try {
-    const opts = { timeout: 2e3, encoding: "utf8" };
-    const run = execFileImpl === execFile3 ? promisify4(execFileImpl) : execFileImpl;
-    const { stdout } = await run("ps", ["axww", "-o", "pid=,command="], opts);
-    const lines = stdout.split("\n").filter((line) => isIosExternalRunnerProcessLine(line)).filter((line) => !RN_FAST_RUNNER_RE.test(line)).filter((line) => udid ? line.includes(udid) : true).map((line) => line.trim()).filter((line) => line.length > 0);
-    if (lines.length === 0)
-      return null;
-    return {
-      platform: "ios",
-      code: "IOS_XCUITEST_COMPETITOR",
-      message: "A foreign maestro/WebDriverAgent automation session is driving this simulator. Interleaving device_* with it may trigger a re-foreground of your app; CDP reads are unaffected. (If this is your own maestro flow, it is expected.)",
-      processLines: lines
-    };
-  } catch {
-    return null;
-  }
-}
-var SHELL_WRAPPERS, RN_FAST_RUNNER_RE;
-var init_external_runner_detect = __esm({
-  "packages/rn-dev-agent-core/dist/runners/external-runner-detect.js"() {
-    "use strict";
-    SHELL_WRAPPERS = /^(?:sh|bash|zsh|dash|ksh|env)$/i;
-    RN_FAST_RUNNER_RE = /RnFastRunner/i;
-  }
-});
-
-// packages/rn-dev-agent-core/dist/lifecycle/foreign-flow-gate.js
-var ForeignFlowGate, foreignFlowGate;
-var init_foreign_flow_gate = __esm({
-  "packages/rn-dev-agent-core/dist/lifecycle/foreign-flow-gate.js"() {
-    "use strict";
-    init_external_runner_detect();
-    ForeignFlowGate = class {
-      detect;
-      ttlMs;
-      now;
-      cachedAt = -Infinity;
-      cachedUdid = null;
-      cached = null;
-      inFlight = null;
-      inFlightUdid = null;
-      _lastActive = false;
-      constructor(deps = {}) {
-        this.detect = deps.detect ?? ((udid) => detectIosExternalRunner(void 0, udid));
-        this.ttlMs = deps.ttlMs ?? 5e3;
-        this.now = deps.now ?? Date.now;
-      }
-      get lastActive() {
-        return this._lastActive;
-      }
-      async check(udid) {
-        const t = this.now();
-        if (this.cachedUdid === udid && t - this.cachedAt < this.ttlMs) {
-          return { active: this.cached !== null, warning: this.cached, fromCache: true, scanMs: 0 };
-        }
-        if (this.inFlight && this.inFlightUdid === udid)
-          return this.inFlight;
-        this.inFlightUdid = udid;
-        const scan = (async () => {
-          const started = this.now();
-          let warning = null;
-          try {
-            warning = await this.detect(udid);
-          } catch {
-            warning = null;
-          }
-          this.cached = warning;
-          this.cachedUdid = udid;
-          this.cachedAt = this.now();
-          this._lastActive = warning !== null;
-          return { active: warning !== null, warning, fromCache: false, scanMs: this.now() - started };
-        })();
-        this.inFlight = scan;
-        try {
-          return await scan;
-        } finally {
-          if (this.inFlight === scan) {
-            this.inFlight = null;
-            this.inFlightUdid = null;
-          }
-        }
-      }
-    };
-    foreignFlowGate = new ForeignFlowGate();
-  }
-});
-
-// packages/rn-dev-agent-core/dist/lifecycle/device-arbiter.js
-import { AsyncLocalStorage as AsyncLocalStorage3 } from "node:async_hooks";
-var DeviceSessionArbiter, arbiter, activeLease;
-var init_device_arbiter = __esm({
-  "packages/rn-dev-agent-core/dist/lifecycle/device-arbiter.js"() {
-    "use strict";
-    init_utils();
-    init_foreign_flow_gate();
-    init_public_diagnostics();
-    DeviceSessionArbiter = class {
-      flowLeaseHeldBy = null;
-      ops = /* @__PURE__ */ new Map();
-      nextOpId = 1;
-      now;
-      constructor(now = Date.now) {
-        this.now = now;
-      }
-      tryAcquire(plane, tool) {
-        if (plane === "flow") {
-          if (this.flowLeaseHeldBy !== null || this.ops.size > 0) {
-            return { ok: false, code: "BUSY_FLOW_ACTIVE", holder: this.describeBlocker() };
-          }
-          return this.grant(plane, tool, true);
-        }
-        if (this.flowLeaseHeldBy !== null) {
-          return { ok: false, code: "BUSY_FLOW_ACTIVE", holder: this.describeBlocker() };
-        }
-        return this.grant(plane, tool, false);
-      }
-      /** Promote only the currently held interaction lease when it is the sole op.
-       * Ordinary interactions remain interactions and therefore do not start the
-       * pinned post-flow grace window. Inline Maestro escalates lazily at dispatch. */
-      promoteToFlow(lease) {
-        const info = this.ops.get(lease.opId);
-        if (!info || info.plane === "introspection") {
-          return { ok: false, code: "BUSY_FLOW_ACTIVE", holder: this.describeBlocker() };
-        }
-        if (this.flowLeaseHeldBy === lease.opId) {
-          return { ok: true, lease: { plane: "flow", opId: lease.opId } };
-        }
-        if (this.flowLeaseHeldBy !== null || this.ops.size !== 1) {
-          return { ok: false, code: "BUSY_FLOW_ACTIVE", holder: this.describeBlocker() };
-        }
-        info.plane = "flow";
-        this.flowLeaseHeldBy = lease.opId;
-        return { ok: true, lease: { plane: "flow", opId: lease.opId } };
-      }
-      grant(plane, tool, isFlow) {
-        const opId = this.nextOpId++;
-        this.ops.set(opId, { plane, tool, startedAtMs: this.now() });
-        if (isFlow)
-          this.flowLeaseHeldBy = opId;
-        return { ok: true, lease: { plane, opId } };
-      }
-      describeBlocker() {
-        const id = this.flowLeaseHeldBy ?? this.oldestOpId();
-        if (id === null)
-          return null;
-        const info = this.ops.get(id);
-        return info ? { plane: info.plane, tool: info.tool, opId: id } : null;
-      }
-      oldestOpId() {
-        let oldest = null;
-        let oldestAt = Infinity;
-        for (const [id, info] of this.ops) {
-          if (info.startedAtMs < oldestAt) {
-            oldestAt = info.startedAtMs;
-            oldest = id;
-          }
-        }
-        return oldest;
-      }
-      /** GH#186: set when a FLOW lease releases. Our own maestro driver (argv
-       * carries the udid) keeps tearing down WDA for seconds after release and
-       * matches the foreign detector — taps inside this window must not scan. */
-      lastFlowReleasedAt = -Infinity;
-      get msSinceFlowReleased() {
-        return this.now() - this.lastFlowReleasedAt;
-      }
-      release(lease) {
-        this.ops.delete(lease.opId);
-        if (this.flowLeaseHeldBy === lease.opId) {
-          this.flowLeaseHeldBy = null;
-          this.lastFlowReleasedAt = this.now();
-        }
-      }
-      reset(reason) {
-        const clearedOps = this.ops.size;
-        const hadFlow = this.flowLeaseHeldBy !== null;
-        this.ops.clear();
-        this.flowLeaseHeldBy = null;
-        return { clearedOps, hadFlow, reason };
-      }
-      get snapshot() {
-        return {
-          flowLeaseHeldBy: this.flowLeaseHeldBy,
-          activeOps: this.ops.size,
-          ops: [...this.ops.entries()].map(([opId, i]) => ({ opId, plane: i.plane, tool: i.tool }))
-        };
-      }
-      /** #210: true while a flow (Maestro) owns the device. Flow-fallback tools consult this to take an OS-level path. */
-      get flowActive() {
-        return this.flowLeaseHeldBy !== null;
-      }
-    };
-    arbiter = new DeviceSessionArbiter();
-    activeLease = new AsyncLocalStorage3();
-  }
-});
-
-// packages/rn-dev-agent-core/dist/maestro-invoke.js
-var init_maestro_invoke = __esm({
-  "packages/rn-dev-agent-core/dist/maestro-invoke.js"() {
-    "use strict";
-    init_project_config();
-    init_maestro_validator();
-    init_maestro_dispatch();
-    init_maestro_error_parser();
-    init_engine_pin();
-    init_action_engine_compat();
-    init_resolve_ios_app_file();
-    init_maestro_run();
-    init_agent_device_wrapper();
-    init_maestro_device_authority();
-    init_maestro_runner_report();
-    init_managed_automation();
-    init_device_arbiter();
-    init_authority_gate();
-    init_utils();
-  }
-});
-
-// packages/rn-dev-agent-core/dist/tools/runner-leak-recovery.js
-var init_runner_leak_recovery = __esm({
-  "packages/rn-dev-agent-core/dist/tools/runner-leak-recovery.js"() {
-    "use strict";
-  }
-});
-
-// packages/rn-dev-agent-core/dist/tools/app-lifecycle.js
-import { execFile as execFileCb3 } from "node:child_process";
-import { promisify as promisify5 } from "node:util";
-var execFile4;
-var init_app_lifecycle = __esm({
-  "packages/rn-dev-agent-core/dist/tools/app-lifecycle.js"() {
-    "use strict";
-    execFile4 = promisify5(execFileCb3);
-  }
-});
-
-// packages/rn-dev-agent-core/dist/runners/ensure-single-runner.js
-import { homedir as homedir3 } from "node:os";
-import { join as join13 } from "node:path";
-var DAEMON_JSON, DAEMON_LOCK;
-var init_ensure_single_runner = __esm({
-  "packages/rn-dev-agent-core/dist/runners/ensure-single-runner.js"() {
-    "use strict";
-    init_discovery();
-    DAEMON_JSON = join13(homedir3(), ".agent-device", "daemon.json");
-    DAEMON_LOCK = join13(homedir3(), ".agent-device", "daemon.lock");
-  }
-});
-
-// packages/rn-dev-agent-core/dist/runners/suppress-ios-autocorrect.js
-import { execFile as execFileCb4 } from "node:child_process";
-import { promisify as promisify6 } from "node:util";
-var execFile5;
-var init_suppress_ios_autocorrect = __esm({
-  "packages/rn-dev-agent-core/dist/runners/suppress-ios-autocorrect.js"() {
-    "use strict";
-    execFile5 = promisify6(execFileCb4);
-  }
-});
-
-// packages/rn-dev-agent-core/dist/cdp/recover-wedge.js
-import { execFile as execFileCb5 } from "node:child_process";
-import { promisify as promisify7 } from "node:util";
-var execFile6;
-var init_recover_wedge = __esm({
-  "packages/rn-dev-agent-core/dist/cdp/recover-wedge.js"() {
-    "use strict";
-    init_agent_device_wrapper();
-    init_rn_fast_runner_client();
-    init_device_arbiter();
-    init_recovery();
-    execFile6 = promisify7(execFileCb5);
-  }
-});
-
-// packages/rn-dev-agent-core/dist/cdp/app-installed-probe.js
-import { execFile as execFileCb6 } from "node:child_process";
-import { promisify as promisify8 } from "node:util";
-var execFile7;
-var init_app_installed_probe = __esm({
-  "packages/rn-dev-agent-core/dist/cdp/app-installed-probe.js"() {
-    "use strict";
-    execFile7 = promisify8(execFileCb6);
-  }
-});
-
-// packages/rn-dev-agent-core/dist/cdp/recover-detached.js
-import { execFile as execFileCb7 } from "node:child_process";
-import { promisify as promisify9 } from "node:util";
-var execFile8;
-var init_recover_detached = __esm({
-  "packages/rn-dev-agent-core/dist/cdp/recover-detached.js"() {
-    "use strict";
-    init_agent_device_wrapper();
-    init_rn_fast_runner_client();
-    init_device_arbiter();
-    init_recovery();
-    init_app_installed_probe();
-    init_maestro_validator();
-    execFile8 = promisify9(execFileCb7);
-  }
-});
-
-// packages/rn-dev-agent-core/dist/lifecycle/device-lock.js
-var init_device_lock = __esm({
-  "packages/rn-dev-agent-core/dist/lifecycle/device-lock.js"() {
-    "use strict";
-  }
-});
-
-// packages/rn-dev-agent-core/dist/tools/device-session-close.js
-var init_device_session_close = __esm({
-  "packages/rn-dev-agent-core/dist/tools/device-session-close.js"() {
-    "use strict";
-    init_utils();
-  }
-});
-
-// packages/rn-dev-agent-core/dist/tools/device-session.js
-import { execFile as execFileCb8 } from "node:child_process";
-import { promisify as promisify10 } from "node:util";
-var execFile9;
-var init_device_session = __esm({
-  "packages/rn-dev-agent-core/dist/tools/device-session.js"() {
-    "use strict";
-    init_agent_device_wrapper();
-    init_rn_fast_runner_client();
-    init_rn_android_runner_client();
-    init_app_lifecycle();
-    init_recovery();
-    init_external_runner_detect();
-    init_ensure_single_runner();
-    init_suppress_ios_autocorrect();
-    init_recover_wedge();
-    init_recover_detached();
-    init_utils();
-    init_project_config();
-    init_maestro_validator();
-    init_logger();
-    init_runner_leak_recovery();
-    init_device_lock();
-    init_device_arbiter();
-    init_device_session_close();
-    execFile9 = promisify10(execFileCb8);
-  }
-});
-
-// packages/rn-dev-agent-core/dist/tools/fill-verify.js
-var init_fill_verify = __esm({
-  "packages/rn-dev-agent-core/dist/tools/fill-verify.js"() {
-    "use strict";
-  }
-});
-
-// packages/rn-dev-agent-core/dist/tools/device-interact.js
-import { execFile as execFileCb9 } from "node:child_process";
-import { promisify as promisify11 } from "node:util";
-var execFile10;
-var init_device_interact = __esm({
-  "packages/rn-dev-agent-core/dist/tools/device-interact.js"() {
-    "use strict";
-    init_agent_device_wrapper();
-    init_rn_fast_runner_client();
-    init_rn_android_runner_client();
-    init_keyboard_guard();
-    init_project_config();
-    init_maestro_validator();
-    init_utils();
-    init_utils();
-    init_maestro_invoke();
-    init_runner_leak_recovery();
-    init_device_session();
-    init_fast_runner_ref_map();
-    init_fill_verify();
-    execFile10 = promisify11(execFileCb9);
-  }
-});
-
 // packages/rn-dev-agent-core/dist/tools/dev-client-picker.js
 var init_dev_client_picker = __esm({
   "packages/rn-dev-agent-core/dist/tools/dev-client-picker.js"() {
@@ -12808,7 +12416,7 @@ var init_free_port = __esm({
 
 // packages/rn-dev-agent-core/dist/runners/rn-android-runner-client.js
 import { spawn as spawn4, execFile as execFile11 } from "node:child_process";
-import { promisify as promisify12 } from "node:util";
+import { promisify as promisify11 } from "node:util";
 import { join as join14 } from "node:path";
 var execFileAsync2, RN_ANDROID_RUNNER_DIR, GRADLEW, APK_APP, APK_TEST, ANDROID_REBUILD_ROOT, ANDROID_REBUILD_LOCK_DATABASE, ANDROID_REBUILD_LOCK_STALE_MS, fetchImpl2;
 var init_rn_android_runner_client = __esm({
@@ -12825,7 +12433,7 @@ var init_rn_android_runner_client = __esm({
     init_transport_recovery();
     init_process_birth();
     init_authority_store();
-    execFileAsync2 = promisify12(execFile11);
+    execFileAsync2 = promisify11(execFile11);
     RN_ANDROID_RUNNER_DIR = resolveNativeRunnerDir("rn-android-runner");
     GRADLEW = join14(RN_ANDROID_RUNNER_DIR, "gradlew");
     APK_APP = join14(RN_ANDROID_RUNNER_DIR, "app", "build", "outputs", "apk", "debug", "app-debug.apk");
@@ -12838,8 +12446,8 @@ var init_rn_android_runner_client = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/runners/release-android-slot.js
-import { execFile as execFileCb10 } from "node:child_process";
-import { promisify as promisify13 } from "node:util";
+import { execFile as execFileCb9 } from "node:child_process";
+import { promisify as promisify12 } from "node:util";
 import { homedir as homedir4 } from "node:os";
 import { join as join15 } from "node:path";
 var execFile12, DAEMON_JSON2, DAEMON_LOCK2, OWNED_PACKAGES;
@@ -12848,7 +12456,7 @@ var init_release_android_slot = __esm({
     "use strict";
     init_rn_android_runner_client();
     init_agent_device_wrapper();
-    execFile12 = promisify13(execFileCb10);
+    execFile12 = promisify12(execFileCb9);
     DAEMON_JSON2 = join15(homedir4(), ".agent-device", "daemon.json");
     DAEMON_LOCK2 = join15(homedir4(), ".agent-device", "daemon.lock");
     OWNED_PACKAGES = [
@@ -17923,11 +17531,11 @@ function projectPublicAuthorityStatus(status, options = {}) {
 // packages/rn-dev-agent-core/dist/session/process-cleanup.js
 init_release_android_slot();
 init_cleanup_identity();
-import { execFile as execFileCb11, spawn as spawn5 } from "node:child_process";
-import { promisify as promisify14 } from "node:util";
+import { execFile as execFileCb10, spawn as spawn5 } from "node:child_process";
+import { promisify as promisify13 } from "node:util";
 init_process_birth();
 init_registry();
-var execFile13 = promisify14(execFileCb11);
+var execFile13 = promisify13(execFileCb10);
 var RECORDER_POST_KILL_CONFIRM_MS = 2e3;
 function executeRecorderScript(script, args, options) {
   return new Promise((resolve6, reject) => {

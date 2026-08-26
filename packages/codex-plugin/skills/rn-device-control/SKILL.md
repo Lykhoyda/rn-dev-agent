@@ -331,7 +331,7 @@ simctl/adb for interactive testing. There is no external `agent-device` CLI invo
 | Persistent E2E test file | `maestro_run` / `cdp_run_action` (YAML) | Pin-cache replay at maestro-runner `>= 1.1.24` with CI-ready artifacts |
 | Deep React state inspection | `cdp_store_state` | Redux/Zustand internals |
 
-`device_fill` hard-fails ambiguous, transformed, unreadable, lost, or uncertain fills, and never types into ambient focus or falls back to raw adb input. Corrective clear-first retypes (and a clear-first Maestro attempt) target only the same exact bound input, and success is emitted only after stable exact read-back. If failure metadata says `mutation: observed|possible`, inspect current state before deciding on any new fill.
+`device_fill` hard-fails ambiguous, transformed, unreadable, lost, or uncertain fills, and never types into ambient focus or falls back to raw adb input. It dispatches at most one native mutation and verifies only that operation token; mismatch or uncertainty refuses without resend. `device_fill` never escalates to Maestro; use `$rn-dev-agent:rn-testing` separately for an explicitly authorized Maestro flow. If failure metadata says `mutation: observed|possible`, inspect current state before deciding on any new fill.
 
 On Android, `device_find` matches only nodes whose package is the session's app; pass `includeSystemUi=true` to also match system chrome (status/navigation bar), which may leave the app. Android taps also fail closed: a gesture the runner cannot actuate returns `INTERACTION_NOT_ACTUATED` (`mutation: none`), and one whose UI effect cannot be observed returns `INTERACTION_EFFECT_UNVERIFIED` (`mutation: possible`) instead of reporting success.
 

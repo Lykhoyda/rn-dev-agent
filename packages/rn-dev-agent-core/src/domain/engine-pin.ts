@@ -79,7 +79,7 @@ export const MAESTRO_RUNNER_MIN_ANDROID_API = 26;
 const PRE_O_REMEDY =
   'Action replay / E2E via the maestro engine is unsupported on this device; the direct device_* ' +
   'interaction tier still works (rn-android-runner supports API 23+), except for the few device_* ' +
-  'paths that fall back to maestro (dev-client picker, system dialogs, device_fill correction), ' +
+  'paths that fall back to maestro (dev-client picker and system dialogs), ' +
   'which hit this same limit.';
 
 export type ReplayEngineTier = 'maestro-runner' | 'maestro' | 'maestro-cli';
