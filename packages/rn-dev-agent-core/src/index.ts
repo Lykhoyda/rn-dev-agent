@@ -392,7 +392,11 @@ const makeReplayDeps = (_args?: unknown, signal?: AbortSignal): CdpReplayDeps | 
         getClient().bridgeWithFallback(`isTestIdFrontmost(${JSON.stringify(id)})`),
       );
       if (result.error || typeof result.value !== 'string') {
-        return { visible: false, reason: `frontmost route check failed for testID "${id}"` };
+        return {
+          visible: false,
+          reason: `frontmost route check failed for testID "${id}"`,
+          code: 'ASSERTION_FAILED',
+        };
       }
       try {
         const parsed = JSON.parse(result.value) as {
@@ -409,6 +413,7 @@ const makeReplayDeps = (_args?: unknown, signal?: AbortSignal): CdpReplayDeps | 
         return {
           visible: false,
           reason: `frontmost route check was unreadable for testID "${id}"`,
+          code: 'ASSERTION_FAILED',
         };
       }
     },

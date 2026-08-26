@@ -109,6 +109,24 @@ const FAIL_TYPED_REACT_SELECTOR_ENV = {
     failedSelector: 'fab-create-task',
   },
 };
+const FAIL_TYPED_PARTITIONED_REACT_SELECTOR_ENV = {
+  ...FAIL_TYPED_REACT_SELECTOR_ENV,
+  meta: {
+    ...FAIL_TYPED_REACT_SELECTOR_ENV.meta,
+    proofDomain: 'partitioned',
+    proofDomains: ['xctest-native', 'react-tree'],
+    failedProofDomain: 'react-tree',
+  },
+};
+const FAIL_TYPED_PARTITIONED_NATIVE_SELECTOR_ENV = {
+  ...FAIL_TYPED_REACT_SELECTOR_ENV,
+  meta: {
+    ...FAIL_TYPED_REACT_SELECTOR_ENV.meta,
+    proofDomain: 'partitioned',
+    proofDomains: ['react-tree', 'xctest-native'],
+    failedProofDomain: 'xctest-native',
+  },
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Validation paths
@@ -383,6 +401,42 @@ test('run-action: typed React-tree selector miss still reaches auto-repair', asy
   assert.equal(env.ok, true);
   assert.equal(env.data.autoRepair.attempted, true);
   assert.equal(env.data.autoRepair.outcome, 'passed');
+});
+
+test('run-action: partitioned React selector miss still reaches auto-repair', async () => {
+  project.seedAction('demo', fixtureYaml({ id: 'demo', selectors: ['fab-create-task'] }));
+
+  const handler = createRunActionHandler({
+    maestroRun: fakeMaestroRun([FAIL_TYPED_PARTITIONED_REACT_SELECTOR_ENV, PASS_ENV]),
+    repairAction: fakeRepairAction(REPAIR_PATCHED_ENV),
+  });
+  const result = await handler({ actionId: 'demo', projectRoot: project.root });
+
+  assert.equal(result.isError, undefined);
+  const env = JSON.parse(result.content[0].text);
+  assert.equal(env.ok, true);
+  assert.equal(env.data.autoRepair.attempted, true);
+  assert.equal(env.data.autoRepair.outcome, 'passed');
+});
+
+test('run-action: partitioned native selector miss remains terminal', async () => {
+  project.seedAction('demo', fixtureYaml({ id: 'demo', selectors: ['fab-create-task'] }));
+  let repairCalls = 0;
+
+  const handler = createRunActionHandler({
+    maestroRun: fakeMaestroRun([FAIL_TYPED_PARTITIONED_NATIVE_SELECTOR_ENV]),
+    repairAction: async () => {
+      repairCalls += 1;
+      return fakeRepairAction(REPAIR_PATCHED_ENV)({});
+    },
+  });
+  const result = await handler({ actionId: 'demo', projectRoot: project.root });
+
+  assert.equal(result.isError, true);
+  const env = JSON.parse(result.content[0].text);
+  assert.equal(env.code, 'TESTID_NOT_FOUND');
+  assert.equal(env.meta.autoRepair.attempted, false);
+  assert.equal(repairCalls, 0);
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -34901,6 +34901,7 @@ async function replayFlow(steps, dispatch, opts = {}) {
       switch (s.t) {
         case "launch":
           await dispatch.launch(s.stopApp);
+          requireNotAborted();
           trace.push({
             sourceIndex: sourceIndex(i),
             t: s.t,
@@ -34910,6 +34911,7 @@ async function replayFlow(steps, dispatch, opts = {}) {
           break;
         case "tap":
           await dispatch.press(s.id);
+          requireNotAborted();
           lastTapped = s.id;
           trace.push({
             sourceIndex: sourceIndex(i),
@@ -34923,6 +34925,7 @@ async function replayFlow(steps, dispatch, opts = {}) {
           if (!lastTapped)
             return fail3(i, "inputText before any tapOn \u2014 no focus target");
           await dispatch.type(lastTapped, s.text);
+          requireNotAborted();
           trace.push({
             sourceIndex: sourceIndex(i),
             t: s.t,
@@ -34934,6 +34937,7 @@ async function replayFlow(steps, dispatch, opts = {}) {
         }
         case "assert": {
           const verdict = await dispatch.visibility(s.id);
+          requireNotAborted();
           trace.push({
             sourceIndex: sourceIndex(i),
             t: s.t,
@@ -34948,10 +34952,12 @@ async function replayFlow(steps, dispatch, opts = {}) {
         case "waitVisible": {
           const deadline = Date.now() + s.timeoutMs;
           let verdict = await dispatch.visibility(s.id);
+          requireNotAborted();
           while (!verdict.visible && Date.now() < deadline) {
             requireNotAborted();
             await new Promise((resolve20) => setTimeout(resolve20, 100));
             verdict = await dispatch.visibility(s.id);
+            requireNotAborted();
           }
           trace.push({
             sourceIndex: sourceIndex(i),
@@ -34966,6 +34972,7 @@ async function replayFlow(steps, dispatch, opts = {}) {
         }
         case "wait":
           await dispatch.settle(s.timeoutMs);
+          requireNotAborted();
           trace.push({
             sourceIndex: sourceIndex(i),
             t: s.t,
@@ -34974,12 +34981,15 @@ async function replayFlow(steps, dispatch, opts = {}) {
           });
           break;
         case "runFlow": {
-          if ((await dispatch.visibility(s.whenVisible)).visible) {
+          const condition = await dispatch.visibility(s.whenVisible);
+          requireNotAborted();
+          if (condition.visible) {
             const sub = await replayFlow(s.commands, dispatch, {
               sourceIndex: sourceIndex(i),
               signal: opts.signal,
               initialFocusId: lastTapped ?? void 0
             });
+            requireNotAborted();
             trace.push(...sub.steps);
             if (!sub.passed) {
               return {
@@ -34992,6 +35002,8 @@ async function replayFlow(steps, dispatch, opts = {}) {
               };
             }
             lastTapped = sub.finalFocusId ?? null;
+          } else if (condition.code && condition.code !== "TESTID_NOT_FOUND") {
+            return fail3(i, condition.reason ?? `runFlow condition proof failed for "${s.whenVisible}"`, condition.code, condition.meta);
           } else {
             trace.push({
               sourceIndex: sourceIndex(i),
@@ -35014,6 +35026,9 @@ async function replayFlow(steps, dispatch, opts = {}) {
       });
       return fail3(i, e instanceof Error ? e.message : String(e), e instanceof ReplayDispatchError ? e.code : void 0, e instanceof ReplayDispatchError ? e.meta : void 0);
     }
+  }
+  if (opts.signal?.aborted) {
+    return fail3(Math.max(0, steps.length - 1), "React-tree replay exceeded its execution deadline", "RUNNER_TIMEOUT");
   }
   return { passed: true, finalFocusId: lastTapped, steps: trace };
 }
@@ -35257,25 +35272,29 @@ async function runCdpReplayCommands(commands, params, deps, opts = {}) {
   });
 }
 function buildCdpDispatch(deps) {
+  const assertExactInteractable = async (id) => {
+    const tree = await deps.treeFor(id);
+    const treeMatches = countExactMatches(tree, id);
+    if (treeMatches === 0)
+      throw new ReplayDispatchError("TESTID_NOT_FOUND", `testID "${id}" not present`, {
+        failedSelector: id
+      });
+    const frontmost = await deps.frontmostFor?.(id);
+    const matches = frontmost ? frontmost.matchCount ?? 1 : treeMatches;
+    if (matches > 1)
+      throw new ReplayDispatchError("AMBIGUOUS_TESTID", `testID "${id}" resolves to ${matches} mounted elements`, { matchCount: matches });
+    if (frontmost && !frontmost.visible)
+      throw new ReplayDispatchError(frontmost.code ?? "ASSERTION_FAILED", frontmost.reason ?? `testID "${id}" is mounted but not frontmost`);
+    if (isDisabled(nodeProps(tree, id)))
+      throw new ReplayDispatchError("INTERACTION_NOT_ACTUATED", `testID "${id}" is disabled/non-interactable`);
+  };
   return {
     async press(id) {
-      const tree = await deps.treeFor(id);
-      const treeMatches = countExactMatches(tree, id);
-      if (treeMatches === 0)
-        throw new ReplayDispatchError("TESTID_NOT_FOUND", `testID "${id}" not present`, {
-          failedSelector: id
-        });
-      const frontmost = await deps.frontmostFor?.(id);
-      const matches = frontmost ? frontmost.matchCount ?? 1 : treeMatches;
-      if (matches > 1)
-        throw new ReplayDispatchError("AMBIGUOUS_TESTID", `testID "${id}" resolves to ${matches} mounted elements`, { matchCount: matches });
-      if (frontmost && !frontmost.visible)
-        throw new ReplayDispatchError("ASSERTION_FAILED", frontmost.reason ?? `testID "${id}" is mounted but not frontmost`);
-      if (isDisabled(nodeProps(tree, id)))
-        throw new ReplayDispatchError("INTERACTION_NOT_ACTUATED", `testID "${id}" is disabled/non-interactable`);
+      await assertExactInteractable(id);
       await deps.pressByTestId(id);
     },
     async type(id, text) {
+      await assertExactInteractable(id);
       await deps.typeByTestId(id, text);
     },
     async visibility(id) {
@@ -35299,7 +35318,7 @@ function buildCdpDispatch(deps) {
       if (frontmost && !frontmost.visible)
         return {
           visible: false,
-          code: "ASSERTION_FAILED",
+          ...frontmost.code ? { code: frontmost.code } : {},
           reason: frontmost.reason ?? `testID "${id}" is mounted but not frontmost`
         };
       return { visible: true };
@@ -35814,6 +35833,7 @@ function createMaestroRunHandler(deps = {}) {
             ...replay.failureMeta,
             proofDomain,
             proofDomains: uniqueProofDomains,
+            failedProofDomain: "react-tree",
             ...proofDomain === "partitioned" ? { runner: "partitioned", transport: "partitioned" } : {},
             steps: combinedSteps,
             failedStepIndex
@@ -79922,8 +79942,9 @@ function parseEnvelope(toolResult, toolName) {
 }
 function typedReactSelectorFailure(env, raw) {
   const proofDomain = env.meta?.proofDomain;
+  const failedProofDomain = env.meta?.failedProofDomain;
   const failedSelector = env.meta?.failedSelector;
-  if (env.code !== "TESTID_NOT_FOUND" || proofDomain !== "react-tree" || typeof failedSelector !== "string" || failedSelector.length === 0) {
+  if (env.code !== "TESTID_NOT_FOUND" || proofDomain !== "react-tree" && failedProofDomain !== "react-tree" || typeof failedSelector !== "string" || failedSelector.length === 0) {
     return null;
   }
   return {
@@ -92536,7 +92557,11 @@ var makeReplayDeps = (_args, signal) => {
     frontmostFor: async (id) => {
       const result = await getClient().evaluate(getClient().bridgeWithFallback(`isTestIdFrontmost(${JSON.stringify(id)})`));
       if (result.error || typeof result.value !== "string") {
-        return { visible: false, reason: `frontmost route check failed for testID "${id}"` };
+        return {
+          visible: false,
+          reason: `frontmost route check failed for testID "${id}"`,
+          code: "ASSERTION_FAILED"
+        };
       }
       try {
         const parsed = JSON.parse(result.value);
@@ -92548,7 +92573,8 @@ var makeReplayDeps = (_args, signal) => {
       } catch {
         return {
           visible: false,
-          reason: `frontmost route check was unreadable for testID "${id}"`
+          reason: `frontmost route check was unreadable for testID "${id}"`,
+          code: "ASSERTION_FAILED"
         };
       }
     },

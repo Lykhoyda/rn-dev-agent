@@ -74,6 +74,22 @@ test('buildCdpDispatch accepts propagated fiber matches collapsed by the frontmo
   assert.deepEqual(calls, ['welcome']);
 });
 
+test('buildCdpDispatch revalidates a retained input target before mutation', async () => {
+  let mutations = 0;
+  const dispatch = buildCdpDispatch({
+    pressByTestId: async () => {},
+    typeByTestId: async () => {
+      mutations += 1;
+    },
+    treeFor: async () => ({ tree: { testID: 'stale-field', children: [] } }),
+    frontmostFor: async () => ({ visible: false, reason: 'field is behind a modal' }),
+    launchApp: async () => {},
+    settle: async () => {},
+  });
+  await assert.rejects(dispatch.type('stale-field', 'value'), /behind a modal/);
+  assert.equal(mutations, 0);
+});
+
 test('buildCdpDispatch refuses two distinct filtered tree matches as ambiguous', async () => {
   const dispatch = buildCdpDispatch({
     pressByTestId: async () => {},

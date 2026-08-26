@@ -243,10 +243,11 @@ function parseEnvelope(toolResult: ToolResult, toolName: string): MaestroEnvelop
 
 function typedReactSelectorFailure(env: MaestroEnvelope, raw: string): MaestroFailure | null {
   const proofDomain = env.meta?.proofDomain;
+  const failedProofDomain = env.meta?.failedProofDomain;
   const failedSelector = env.meta?.failedSelector;
   if (
     env.code !== 'TESTID_NOT_FOUND' ||
-    proofDomain !== 'react-tree' ||
+    (proofDomain !== 'react-tree' && failedProofDomain !== 'react-tree') ||
     typeof failedSelector !== 'string' ||
     failedSelector.length === 0
   ) {

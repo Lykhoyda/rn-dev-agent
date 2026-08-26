@@ -144,6 +144,59 @@ test('replayFlow runFlow recurses only when whenVisible present', async () => {
   );
 });
 
+test('replayFlow fails when a conditional visibility proof is ambiguous', async () => {
+  let mutated = false;
+  const dispatch = mockDispatch();
+  dispatch.visibility = async () => ({
+    visible: false,
+    code: 'AMBIGUOUS_TESTID',
+    reason: 'condition resolves to multiple elements',
+  });
+  dispatch.press = async () => {
+    mutated = true;
+  };
+  const result = await replayFlow(
+    [{ t: 'runFlow', whenVisible: 'condition', commands: [{ t: 'tap', id: 'nested' }] }],
+    dispatch,
+  );
+  assert.equal(result.passed, false);
+  assert.equal(result.failureCode, 'AMBIGUOUS_TESTID');
+  assert.equal(mutated, false);
+});
+
+test('replayFlow skips a conditional flow when its target is conclusively absent', async () => {
+  let mutated = false;
+  const dispatch = mockDispatch();
+  dispatch.visibility = async () => ({
+    visible: false,
+    code: 'TESTID_NOT_FOUND',
+    reason: 'condition is absent',
+  });
+  dispatch.press = async () => {
+    mutated = true;
+  };
+  const result = await replayFlow(
+    [{ t: 'runFlow', whenVisible: 'condition', commands: [{ t: 'tap', id: 'nested' }] }],
+    dispatch,
+  );
+  assert.equal(result.passed, true);
+  assert.equal(mutated, false);
+});
+
+test('replayFlow cannot pass when an awaited final dispatch exceeds its deadline', async () => {
+  const controller = new AbortController();
+  const dispatch = mockDispatch();
+  dispatch.visibility = async () => {
+    controller.abort(new Error('deadline'));
+    return { visible: true };
+  };
+  const result = await replayFlow([{ t: 'assert', id: 'final' }], dispatch, {
+    signal: controller.signal,
+  });
+  assert.equal(result.passed, false);
+  assert.equal(result.failureCode, 'RUNNER_TIMEOUT');
+});
+
 test('replayFlow fails the step when a target is disabled (no false green)', async () => {
   const d = mockDispatch({ pressThrows: ['save'] });
   const r = await replayFlow([{ t: 'tap', id: 'save' }], d);

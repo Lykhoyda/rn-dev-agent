@@ -822,6 +822,7 @@ test('partitioned React failures retain prior native proof evidence', async () =
   assert.equal(env.code, 'TESTID_NOT_FOUND');
   assert.equal(env.meta?.proofDomain, 'partitioned');
   assert.deepEqual(env.meta?.proofDomains, ['xctest-native', 'react-tree']);
+  assert.equal(env.meta?.failedProofDomain, 'react-tree');
   assert.equal(env.meta?.runner, 'partitioned');
   assert.equal(env.meta?.transport, 'partitioned');
   assert.equal(env.meta?.failedStepIndex, 1);

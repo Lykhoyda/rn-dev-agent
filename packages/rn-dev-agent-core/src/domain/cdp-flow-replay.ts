@@ -225,6 +225,7 @@ export async function replayFlow(
       switch (s.t) {
         case 'launch':
           await dispatch.launch(s.stopApp);
+          requireNotAborted();
           trace.push({
             sourceIndex: sourceIndex(i),
             t: s.t,
@@ -234,6 +235,7 @@ export async function replayFlow(
           break;
         case 'tap':
           await dispatch.press(s.id);
+          requireNotAborted();
           lastTapped = s.id;
           trace.push({
             sourceIndex: sourceIndex(i),
@@ -246,6 +248,7 @@ export async function replayFlow(
         case 'type': {
           if (!lastTapped) return fail(i, 'inputText before any tapOn — no focus target');
           await dispatch.type(lastTapped, s.text);
+          requireNotAborted();
           trace.push({
             sourceIndex: sourceIndex(i),
             t: s.t,
@@ -257,6 +260,7 @@ export async function replayFlow(
         }
         case 'assert': {
           const verdict = await dispatch.visibility(s.id);
+          requireNotAborted();
           trace.push({
             sourceIndex: sourceIndex(i),
             t: s.t,
@@ -276,10 +280,12 @@ export async function replayFlow(
         case 'waitVisible': {
           const deadline = Date.now() + s.timeoutMs;
           let verdict = await dispatch.visibility(s.id);
+          requireNotAborted();
           while (!verdict.visible && Date.now() < deadline) {
             requireNotAborted();
             await new Promise<void>((resolve) => setTimeout(resolve, 100));
             verdict = await dispatch.visibility(s.id);
+            requireNotAborted();
           }
           trace.push({
             sourceIndex: sourceIndex(i),
@@ -299,6 +305,7 @@ export async function replayFlow(
         }
         case 'wait':
           await dispatch.settle(s.timeoutMs);
+          requireNotAborted();
           trace.push({
             sourceIndex: sourceIndex(i),
             t: s.t,
@@ -307,12 +314,15 @@ export async function replayFlow(
           });
           break;
         case 'runFlow': {
-          if ((await dispatch.visibility(s.whenVisible)).visible) {
+          const condition = await dispatch.visibility(s.whenVisible);
+          requireNotAborted();
+          if (condition.visible) {
             const sub = await replayFlow(s.commands, dispatch, {
               sourceIndex: sourceIndex(i),
               signal: opts.signal,
               initialFocusId: lastTapped ?? undefined,
             });
+            requireNotAborted();
             trace.push(...sub.steps);
             if (!sub.passed) {
               return {
@@ -325,6 +335,13 @@ export async function replayFlow(
               };
             }
             lastTapped = sub.finalFocusId ?? null;
+          } else if (condition.code && condition.code !== 'TESTID_NOT_FOUND') {
+            return fail(
+              i,
+              condition.reason ?? `runFlow condition proof failed for "${s.whenVisible}"`,
+              condition.code,
+              condition.meta,
+            );
           } else {
             trace.push({
               sourceIndex: sourceIndex(i),
@@ -354,5 +371,12 @@ export async function replayFlow(
     }
   }
 
+  if (opts.signal?.aborted) {
+    return fail(
+      Math.max(0, steps.length - 1),
+      'React-tree replay exceeded its execution deadline',
+      'RUNNER_TIMEOUT',
+    );
+  }
   return { passed: true, finalFocusId: lastTapped, steps: trace };
 }

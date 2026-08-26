@@ -970,6 +970,7 @@ export function createMaestroRunHandler(
               ...replay.failureMeta,
               proofDomain,
               proofDomains: uniqueProofDomains,
+              failedProofDomain: 'react-tree',
               ...(proofDomain === 'partitioned'
                 ? { runner: 'partitioned', transport: 'partitioned' }
                 : {}),

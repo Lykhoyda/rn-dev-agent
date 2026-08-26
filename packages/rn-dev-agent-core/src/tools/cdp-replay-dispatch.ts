@@ -42,7 +42,12 @@ export interface CdpReplayDeps {
   typeByTestId(id: string, text: string): Promise<void>;
   // returns the parsed getTree JSON filtered to `id`, or null on failure
   treeFor(id: string): Promise<unknown | null>;
-  frontmostFor?(id: string): Promise<{ visible: boolean; reason?: string; matchCount?: number }>;
+  frontmostFor?(id: string): Promise<{
+    visible: boolean;
+    reason?: string;
+    matchCount?: number;
+    code?: string;
+  }>;
   launchApp(stopApp: boolean): Promise<void>;
   settle(timeoutMs: number): Promise<void>;
 }
@@ -99,35 +104,40 @@ export async function runCdpReplayCommands(
 }
 
 export function buildCdpDispatch(deps: CdpReplayDeps): ReplayDispatch {
+  const assertExactInteractable = async (id: string): Promise<void> => {
+    const tree = await deps.treeFor(id);
+    const treeMatches = countExactMatches(tree, id);
+    if (treeMatches === 0)
+      throw new ReplayDispatchError('TESTID_NOT_FOUND', `testID "${id}" not present`, {
+        failedSelector: id,
+      });
+    const frontmost = await deps.frontmostFor?.(id);
+    const matches = frontmost ? (frontmost.matchCount ?? 1) : treeMatches;
+    if (matches > 1)
+      throw new ReplayDispatchError(
+        'AMBIGUOUS_TESTID',
+        `testID "${id}" resolves to ${matches} mounted elements`,
+        { matchCount: matches },
+      );
+    if (frontmost && !frontmost.visible)
+      throw new ReplayDispatchError(
+        frontmost.code ?? 'ASSERTION_FAILED',
+        frontmost.reason ?? `testID "${id}" is mounted but not frontmost`,
+      );
+    if (isDisabled(nodeProps(tree, id)))
+      throw new ReplayDispatchError(
+        'INTERACTION_NOT_ACTUATED',
+        `testID "${id}" is disabled/non-interactable`,
+      );
+  };
+
   return {
     async press(id) {
-      const tree = await deps.treeFor(id);
-      const treeMatches = countExactMatches(tree, id);
-      if (treeMatches === 0)
-        throw new ReplayDispatchError('TESTID_NOT_FOUND', `testID "${id}" not present`, {
-          failedSelector: id,
-        });
-      const frontmost = await deps.frontmostFor?.(id);
-      const matches = frontmost ? (frontmost.matchCount ?? 1) : treeMatches;
-      if (matches > 1)
-        throw new ReplayDispatchError(
-          'AMBIGUOUS_TESTID',
-          `testID "${id}" resolves to ${matches} mounted elements`,
-          { matchCount: matches },
-        );
-      if (frontmost && !frontmost.visible)
-        throw new ReplayDispatchError(
-          'ASSERTION_FAILED',
-          frontmost.reason ?? `testID "${id}" is mounted but not frontmost`,
-        );
-      if (isDisabled(nodeProps(tree, id)))
-        throw new ReplayDispatchError(
-          'INTERACTION_NOT_ACTUATED',
-          `testID "${id}" is disabled/non-interactable`,
-        );
+      await assertExactInteractable(id);
       await deps.pressByTestId(id);
     },
     async type(id, text) {
+      await assertExactInteractable(id);
       await deps.typeByTestId(id, text);
     },
     async visibility(id) {
@@ -151,7 +161,7 @@ export function buildCdpDispatch(deps: CdpReplayDeps): ReplayDispatch {
       if (frontmost && !frontmost.visible)
         return {
           visible: false,
-          code: 'ASSERTION_FAILED',
+          ...(frontmost.code ? { code: frontmost.code } : {}),
           reason: frontmost.reason ?? `testID "${id}" is mounted but not frontmost`,
         };
       return { visible: true };
