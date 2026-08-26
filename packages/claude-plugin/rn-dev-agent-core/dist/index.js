@@ -89015,6 +89015,7 @@ init_utils();
 
 // packages/rn-dev-agent-core/dist/observability/server.js
 import { createServer as createServer3 } from "node:http";
+import { StringDecoder } from "node:string_decoder";
 import { readFileSync as readFileSync38 } from "node:fs";
 import { fileURLToPath as fileURLToPath6 } from "node:url";
 import { dirname as dirname29, join as join54 } from "node:path";
@@ -89366,20 +89367,29 @@ var ObservabilityServer = class {
   // Bounded body read that can never become an unhandled rejection —
   // handle() fire-and-forgets the async routes, so a rejecting await here
   // would crash the process on an oversized/aborted request (GH #438 review).
+  // GH #818: decode with a streaming StringDecoder so a multi-byte UTF-8
+  // code point split across TCP chunks survives intact (per-chunk
+  // toString() corrupts split points), and never destroy() the request —
+  // an oversized body is drained to its 'end' so the JSON 413 response can
+  // still be delivered over a usable connection. The 64 KiB limit stays
+  // byte-based; accumulation stops there, so memory remains bounded.
   readBody(req) {
     return new Promise((resolve20) => {
+      const decoder = new StringDecoder("utf8");
       let body = "";
       let bytes = 0;
+      let oversized = false;
       req.on("data", (chunk) => {
+        if (oversized)
+          return;
         bytes += chunk.length;
         if (bytes > 65536) {
-          req.destroy();
-          resolve20(null);
+          oversized = true;
           return;
         }
-        body += chunk.toString();
+        body += decoder.write(chunk);
       });
-      req.on("end", () => resolve20(body));
+      req.on("end", () => resolve20(oversized ? null : body + decoder.end()));
       req.on("error", () => resolve20(null));
     });
   }
