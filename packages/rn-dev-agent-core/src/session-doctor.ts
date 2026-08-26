@@ -61,6 +61,7 @@ function remedyFor(ownership: SourceOwnershipInspection): string {
     );
   }
   if (ownership.owner === 'live') {
+    if (ownership.loginPrologue) return ownership.loginPrologue.nextAction;
     return sessionOwnerInspectionRemedy('A live same-root owner holds this worktree.');
   }
   if (ownership.owner === 'unprovable') {
@@ -127,6 +128,7 @@ function report(): { payload: Record<string, unknown>; ok: boolean } {
       ...(ownership.startupCleanupBlocked
         ? { startupCleanupBlocked: ownership.startupCleanupBlocked }
         : {}),
+      ...(ownership.loginPrologue ? { loginPrologue: ownership.loginPrologue } : {}),
       remedy: remedyFor(ownership),
     },
   };
@@ -154,6 +156,7 @@ async function repair(): Promise<{ payload: Record<string, unknown>; ok: boolean
       discardedContenders: outcome.discardedContenders,
       ...holderOf(ownership),
       wedged,
+      ...(ownership.loginPrologue ? { loginPrologue: ownership.loginPrologue } : {}),
       ...(outcome.refusal ? { refusal: outcome.refusal } : {}),
       remedy:
         wedged || ownership.owner === 'live'

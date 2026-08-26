@@ -8283,6 +8283,39 @@ var init_cleanup_identity = __esm({
   }
 });
 
+// packages/rn-dev-agent-core/dist/domain/login-prologue.js
+function readLoginPrologueOutcome(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    return null;
+  const candidate = value;
+  if (candidate.schemaVersion !== 1 || candidate.alias !== LOGIN_PROLOGUE_ALIAS || candidate.state !== "passed" && candidate.state !== LOGIN_PROLOGUE_BLOCKED || typeof candidate.startedAt !== "string" || typeof candidate.endedAt !== "string" || typeof candidate.elapsedMs !== "number" || !Array.isArray(candidate.steps)) {
+    return null;
+  }
+  return candidate;
+}
+function isLoginRunnerRecoveryState(input) {
+  const outcome = readLoginPrologueOutcome(input.binding);
+  return Boolean(input.authority && outcome?.state === LOGIN_PROLOGUE_BLOCKED && outcome.role === ACTION_LOGIN_HELPER && outcome.actionId === LOGIN_PROLOGUE_ALIAS && outcome.runRecord?.status === "fail" && input.authority.runner == null && input.authority.bundle == null);
+}
+function loginPrologueNextAction(input) {
+  if (isLoginRunnerRecoveryState(input) && input.authority?.install != null && input.authority.metro != null && input.authority.device != null) {
+    return LOGIN_PROLOGUE_RECOVERY_SEQUENCE;
+  }
+  const outcome = readLoginPrologueOutcome(input.binding);
+  return outcome?.failure?.code === "LOGIN_ACTION_MISSING" || outcome?.failure?.code === "LOGIN_ACTION_ID_MISMATCH" ? `Restore the exact ${LOGIN_PROLOGUE_ALIAS} action, then run cdp_login_prologue.` : LOGIN_PROLOGUE_RETRY_ACTION;
+}
+var LOGIN_PROLOGUE_ALIAS, LOGIN_PROLOGUE_BLOCKED, ACTION_LOGIN_HELPER, LOGIN_PROLOGUE_RECOVERY_SEQUENCE, LOGIN_PROLOGUE_RETRY_ACTION;
+var init_login_prologue = __esm({
+  "packages/rn-dev-agent-core/dist/domain/login-prologue.js"() {
+    "use strict";
+    LOGIN_PROLOGUE_ALIAS = "user-login";
+    LOGIN_PROLOGUE_BLOCKED = "LOGIN_PROLOGUE_BLOCKED";
+    ACTION_LOGIN_HELPER = "ACTION_LOGIN_HELPER";
+    LOGIN_PROLOGUE_RECOVERY_SEQUENCE = 'Run device_snapshot with action "open" and attachOnly true on the already-bound app, rerun cdp_login_prologue, then repeat the same attach-only open before device_press or device_fill.';
+    LOGIN_PROLOGUE_RETRY_ACTION = "Resolve the reported user-login failure, then rerun cdp_login_prologue; attach-only runner recovery is not authorized for this blocked state.";
+  }
+});
+
 // packages/rn-dev-agent-core/dist/session/recovery-remedy.js
 function sessionRecoveryRemedy(lead) {
   return `${lead} Interactive: reconnect the transport with /mcp. Headless: run ${HEADLESS_SESSION_RECOVERY_COMMAND} from the app root. Both run the same proven-dead startup cleanup and neither releases a live or unprovable owner. ${SESSION_RECOVERY_DOCS}.`;
@@ -8385,6 +8418,30 @@ function readStartupCleanupBlocker(bindingsJson) {
     ...typeof record.nextAction === "string" ? { nextAction: record.nextAction } : {}
   };
 }
+function readBlockedLoginPrologue(bindingsJson) {
+  try {
+    const bindings = JSON.parse(bindingsJson);
+    const outcome = readLoginPrologueOutcome(bindings.loginPrologue);
+    if (outcome?.state !== LOGIN_PROLOGUE_BLOCKED)
+      return void 0;
+    return {
+      state: LOGIN_PROLOGUE_BLOCKED,
+      ...outcome.failure?.code ? { failureCode: outcome.failure.code } : {},
+      nextAction: loginPrologueNextAction({
+        binding: outcome,
+        authority: {
+          install: bindings.install,
+          metro: bindings.metro,
+          bundle: bindings.bundle,
+          device: bindings.device,
+          runner: bindings.runner
+        }
+      })
+    };
+  } catch {
+    return void 0;
+  }
+}
 function bindingsRunnerPresent(bindingsJson) {
   const bindings = JSON.parse(bindingsJson);
   return Boolean(bindings.runner && typeof bindings.runner === "object");
@@ -8413,6 +8470,7 @@ var init_registry = __esm({
     "use strict";
     init_authority_store();
     init_cleanup_identity();
+    init_login_prologue();
     init_declared_source_contract();
     init_metro_binding();
     init_recovery_remedy();
@@ -9937,6 +9995,7 @@ var init_registry = __esm({
         const blocked = readStartupCleanupBlocker(row.bindings_json);
         const sameAppRoot = row.worktree_key === input.worktreeKey && row.app_root_key === input.appRootKey;
         const sameSource = row.source_key === input.sourceKey;
+        const loginPrologue = sameAppRoot && sameSource ? readBlockedLoginPrologue(row.bindings_json) : void 0;
         return {
           owner: status === "match" ? "live" : status === "mismatch" ? "stale" : "unprovable",
           sameRoot: sameAppRoot && sameSource,
@@ -9946,7 +10005,8 @@ var init_registry = __esm({
             session: row.session_id.slice(0, 12),
             ...ownerAppRoot === void 0 ? {} : { appRoot: ownerAppRoot }
           },
-          ...blocked ? { startupCleanupBlocked: blocked } : {}
+          ...blocked ? { startupCleanupBlocked: blocked } : {},
+          ...loginPrologue ? { loginPrologue } : {}
         };
       }
       #countAbandonedBlockedContenders(worktreeKey) {
@@ -11377,39 +11437,6 @@ function writeJsonStateFileAtomic(path, value) {
 var init_secure_state_file = __esm({
   "packages/rn-dev-agent-core/dist/util/secure-state-file.js"() {
     "use strict";
-  }
-});
-
-// packages/rn-dev-agent-core/dist/domain/login-prologue.js
-function readLoginPrologueOutcome(value) {
-  if (!value || typeof value !== "object" || Array.isArray(value))
-    return null;
-  const candidate = value;
-  if (candidate.schemaVersion !== 1 || candidate.alias !== LOGIN_PROLOGUE_ALIAS || candidate.state !== "passed" && candidate.state !== LOGIN_PROLOGUE_BLOCKED || typeof candidate.startedAt !== "string" || typeof candidate.endedAt !== "string" || typeof candidate.elapsedMs !== "number" || !Array.isArray(candidate.steps)) {
-    return null;
-  }
-  return candidate;
-}
-function isLoginRunnerRecoveryState(input) {
-  const outcome = readLoginPrologueOutcome(input.binding);
-  return Boolean(input.authority && outcome?.state === LOGIN_PROLOGUE_BLOCKED && outcome.role === ACTION_LOGIN_HELPER && outcome.actionId === LOGIN_PROLOGUE_ALIAS && outcome.runRecord?.status === "fail" && input.authority.runner == null && input.authority.bundle == null);
-}
-function loginPrologueNextAction(input) {
-  if (isLoginRunnerRecoveryState(input) && input.authority?.install != null && input.authority.metro != null && input.authority.device != null) {
-    return LOGIN_PROLOGUE_RECOVERY_SEQUENCE;
-  }
-  const outcome = readLoginPrologueOutcome(input.binding);
-  return outcome?.failure?.code === "LOGIN_ACTION_MISSING" || outcome?.failure?.code === "LOGIN_ACTION_ID_MISMATCH" ? `Restore the exact ${LOGIN_PROLOGUE_ALIAS} action, then run cdp_login_prologue.` : LOGIN_PROLOGUE_RETRY_ACTION;
-}
-var LOGIN_PROLOGUE_ALIAS, LOGIN_PROLOGUE_BLOCKED, ACTION_LOGIN_HELPER, LOGIN_PROLOGUE_RECOVERY_SEQUENCE, LOGIN_PROLOGUE_RETRY_ACTION;
-var init_login_prologue = __esm({
-  "packages/rn-dev-agent-core/dist/domain/login-prologue.js"() {
-    "use strict";
-    LOGIN_PROLOGUE_ALIAS = "user-login";
-    LOGIN_PROLOGUE_BLOCKED = "LOGIN_PROLOGUE_BLOCKED";
-    ACTION_LOGIN_HELPER = "ACTION_LOGIN_HELPER";
-    LOGIN_PROLOGUE_RECOVERY_SEQUENCE = 'Run device_snapshot with action "open" and attachOnly true on the already-bound app, rerun cdp_login_prologue, then repeat the same attach-only open before device_press or device_fill.';
-    LOGIN_PROLOGUE_RETRY_ACTION = "Resolve the reported user-login failure, then rerun cdp_login_prologue; attach-only runner recovery is not authorized for this blocked state.";
   }
 });
 

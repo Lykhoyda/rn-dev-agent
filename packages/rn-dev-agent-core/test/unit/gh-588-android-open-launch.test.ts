@@ -106,6 +106,12 @@ test('GH-588 final Android validation: device_snapshot open follows the proven e
     ]);
     assert.equal(body.data?.deviceId, SERIAL);
     assert.equal(body.data?.appId, APP_ID);
+    assert.deepEqual(body.data?.visibility, {
+      appForeground: true,
+      accessibilityUi: 'visible',
+      reactNativeFiber: 'visible',
+    });
+    assert.equal('readiness' in body.data!, false);
   } finally {
     cleanup();
   }
