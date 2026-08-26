@@ -356,8 +356,8 @@ flakiness never blocks a supported device.
 
 There is no repair for the pinned engine: use the `device_*` interaction tier
 instead, which drives API 23+ through `rn-android-runner`. The few `device_*`
-paths that fall back to maestro (dev-client picker, system dialogs, `device_fill`
-correction) hit the same limit. See [engine version pinning](/rn-dev-agent/actions/#engine-version-pinning).
+paths that fall back to maestro (dev-client picker and system dialogs) hit the
+same limit. See [engine version pinning](/rn-dev-agent/actions/#engine-version-pinning).
 
 ### RUNNER_PROTOCOL_MISMATCH
 
@@ -392,8 +392,8 @@ identity, ambiguous testID, target lost, or a non-text-input node).
 `TEXT_TARGET_LOST` means the bound owner disappeared during the fill.
 `TEXT_TARGET_FOCUS_FAILED` means focus on that exact owner could not be proven.
 `TEXT_ENTRY_UNVERIFIED` covers everything else that ends without stable exact
-read-back: helpers unavailable, secure or occluded fields, unreadable values,
-transformed input, and uncertain dispatch.
+read-back: secure or occluded fields, unreadable values, transformed input, and
+uncertain dispatch.
 
 Every failure carries `meta.mutation`. `none` means nothing was typed — refresh
 the snapshot, resolve one exact input, and retry. `observed` or `possible` means

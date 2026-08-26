@@ -3,7 +3,6 @@ import { settleEnabled } from '../lifecycle/settle.js';
 import {
   buildDirectionalScrollCliArgs,
   buildDirectionalSwipeCliArgs,
-  cdpClientOrNull,
   fetchFindCandidates,
   performExactFill,
   pressCandidate,
@@ -422,9 +421,7 @@ async function executeStep(
       return failResult('press requires ref, testID, or both x and y coordinates');
     }
     case 'fill': {
-      // GH #581: batch fills route through the same exact-target orchestrator
-      // and final-verification arbiter as device_fill (no JS/Maestro tiers —
-      // batch stays a scripted native surface, but truth rules are identical).
+      // GH #581: batch fills use the same exact native binding and verification as device_fill.
       if (step.text === undefined) {
         return failResult('fill requires text', { mutation: 'none' });
       }
@@ -435,19 +432,14 @@ async function executeStep(
           { mutation: 'none' },
         );
       }
-      const client = getClient ? cdpClientOrNull(getClient) : null;
       return performExactFill(
         {
           ref: targetRef,
           text: step.text,
           settleTimeoutMs: step.settle === false ? 0 : BATCH_STEP_SETTLE_BUDGET_MS,
         },
-        client,
-        {
-          js: false,
-          maestro: false,
-          ...(abortSignal ? { abortSignal } : {}),
-        },
+        null,
+        abortSignal ? { abortSignal } : {},
       );
     }
     case 'swipe': {

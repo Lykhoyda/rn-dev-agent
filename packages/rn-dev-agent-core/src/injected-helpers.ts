@@ -2,7 +2,7 @@
 // whenever the injected surface changes; it flows into the IIFE's freshness
 // check (__RN_AGENT.__v) AND the post-injection log line, so they can never
 // drift (the log previously hard-coded a stale "v11").
-export const HELPERS_VERSION = 45;
+export const HELPERS_VERSION = 46;
 
 export const INJECTED_HELPERS = `
 (function() {
@@ -1449,6 +1449,736 @@ export const INJECTED_HELPERS = `
   function getErrors() { return JSON.stringify(errors); }
   function clearErrors() { errors.length = 0; return 'cleared'; }
 
+  var TYPE_TEXT_WORK_LIMIT = 2000;
+
+  function createTypeTextState() {
+    return {
+      work: 0,
+      visitedFibers: 0,
+      truncated: false,
+      reason: null
+    };
+  }
+
+  function consumeTypeTextWork(state) {
+    if (state.work >= TYPE_TEXT_WORK_LIMIT) {
+      state.truncated = true;
+      state.reason = 'work-limit';
+      return false;
+    }
+    state.work++;
+    return true;
+  }
+
+  function sameTypeTextFiber(a, b) {
+    return !!a && !!b && (a === b || a.alternate === b || b.alternate === a);
+  }
+
+  function typeTextFiberName(fiber) {
+    return (fiber && fiber.type && (typeof fiber.type === 'string'
+      ? fiber.type
+      : (fiber.type.displayName || fiber.type.name))) || 'Unknown';
+  }
+
+  function typeTextTruncation(state) {
+    return {
+      error: 'typeText resolution truncated',
+      truncated: true,
+      reason: state.reason,
+      scanned: state.visitedFibers,
+      work: state.work,
+      workLimit: TYPE_TEXT_WORK_LIMIT,
+      handlerCalled: false,
+      hint: 'The bounded typeText resolver did not inspect the complete selector and candidate graph; no handler was called.'
+    };
+  }
+
+  function resolveTypeTextTarget(opts) {
+    var state = createTypeTextState();
+
+    function consumeWork() {
+      return consumeTypeTextWork(state);
+    }
+
+    var TYPE_TEXT_ABORT = {};
+
+    function forEachTypeTextRoot(callback) {
+      if (!consumeWork()) return TYPE_TEXT_ABORT;
+      var hook = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
+      if (hook && typeof hook.getFiberRoots === 'function') {
+        var rendererIds = [];
+        var rendererIdSeen = Object.create(null);
+        var usingRegisteredIds = false;
+        try {
+          if (hook.renderers && typeof hook.renderers.keys === 'function') {
+            if (!consumeWork()) return TYPE_TEXT_ABORT;
+            var rendererIterator = hook.renderers.keys();
+            var rendererStep;
+            while (rendererIterator && typeof rendererIterator.next === 'function') {
+              if (!consumeWork()) return TYPE_TEXT_ABORT;
+              rendererStep = rendererIterator.next();
+              if (rendererStep.done) break;
+              if (!consumeWork()) return TYPE_TEXT_ABORT;
+              var registeredId = rendererStep.value;
+              var registeredKey = typeof registeredId + ':' + String(registeredId);
+              if (typeof registeredId === 'number' && !rendererIdSeen[registeredKey]) {
+                rendererIdSeen[registeredKey] = true;
+                rendererIds.push(registeredId);
+                usingRegisteredIds = true;
+              }
+            }
+          }
+        } catch (_) {}
+        for (var fallbackId = 1; fallbackId <= MAX_RENDERER_IDS; fallbackId++) {
+          if (!consumeWork()) return TYPE_TEXT_ABORT;
+          var fallbackKey = 'number:' + String(fallbackId);
+          if (!rendererIdSeen[fallbackKey]) {
+            rendererIdSeen[fallbackKey] = true;
+            rendererIds.push(fallbackId);
+          }
+        }
+        var emptyStreak = 0;
+        for (var rendererIndex = 0; rendererIndex < rendererIds.length; rendererIndex++) {
+          if (!consumeWork()) return TYPE_TEXT_ABORT;
+          var rendererId = rendererIds[rendererIndex];
+          try {
+            if (!consumeWork()) return TYPE_TEXT_ABORT;
+            var roots = hook.getFiberRoots(rendererId);
+            if (roots && roots.size) {
+              emptyStreak = 0;
+              if (!consumeWork()) return TYPE_TEXT_ABORT;
+              var rootIterator = roots.values();
+              while (rootIterator && typeof rootIterator.next === 'function') {
+                if (!consumeWork()) return TYPE_TEXT_ABORT;
+                var rootStep = rootIterator.next();
+                if (rootStep.done) break;
+                if (!consumeWork()) return TYPE_TEXT_ABORT;
+                var rootFiber = rootStep.value && rootStep.value.current;
+                if (rootFiber) {
+                  if (!consumeWork()) return TYPE_TEXT_ABORT;
+                  var rootResult = callback(rootFiber);
+                  if (rootResult) return rootResult;
+                  if (state.truncated) return TYPE_TEXT_ABORT;
+                }
+              }
+            } else if (!usingRegisteredIds) {
+              emptyStreak++;
+              if (emptyStreak >= EARLY_EXIT_EMPTY_STREAK && rendererId >= 5) break;
+            }
+          } catch (_) {}
+        }
+      }
+      if (state.truncated) return TYPE_TEXT_ABORT;
+      try {
+        if (!consumeWork()) return TYPE_TEXT_ABORT;
+        var extraResolver = globalThis.__RN_AGENT_EXTRA_ROOTS__;
+        if (typeof extraResolver === 'function') {
+          if (!consumeWork()) return TYPE_TEXT_ABORT;
+          var instances = extraResolver();
+          if (Array.isArray(instances)) {
+            for (var instanceIndex = 0; instanceIndex < instances.length; instanceIndex++) {
+              if (!consumeWork()) return TYPE_TEXT_ABORT;
+              var extraFiber = extractFiberFromInstance(instances[instanceIndex]);
+              if (extraFiber) {
+                if (!consumeWork()) return TYPE_TEXT_ABORT;
+                var extraResult = callback(extraFiber);
+                if (extraResult) return extraResult;
+                if (state.truncated) return TYPE_TEXT_ABORT;
+              }
+            }
+          }
+        }
+      } catch (_) {}
+      return null;
+    }
+
+    var selectorKind = null;
+    if (typeof opts.testID === 'string' && opts.testID.length > 0) selectorKind = 'testID';
+    else if (typeof opts.accessibilityLabel === 'string' && opts.accessibilityLabel.length > 0) selectorKind = 'accessibilityLabel';
+    else if (typeof opts.placeholder === 'string' && opts.placeholder.length > 0) selectorKind = 'placeholder';
+    else if (typeof opts.role === 'string' && typeof opts.name === 'string' && opts.name.length > 0) selectorKind = 'role+name';
+
+    if (!selectorKind) {
+      return {
+        error: 'typeText requires testID, accessibilityLabel, placeholder, or role+name',
+        hint: 'The text parameter is the value to enter, not a byText selector.'
+      };
+    }
+
+    var exactSources = [];
+    var normalizedSources = [];
+    var containsSources = [];
+    var sources = [];
+    var selector = opts.testID || opts.accessibilityLabel || opts.placeholder || opts.name;
+    var normalizedSelector = selectorKind === 'accessibilityLabel'
+      ? String(selector).replace(/\\s+/g, ' ').replace(/^\\s+|\\s+$/g, '').toLowerCase()
+      : null;
+    var wantedRole = selectorKind === 'role+name' ? normalizeRole(opts.role) : null;
+    var sourceIdentitySeen = new WeakSet();
+    var candidateIdentitySeen = new WeakSet();
+    var candidates = [];
+
+    function isNativeTextInputHost(fiber) {
+      return fiber && fiber.tag === 5 && typeof fiber.type === 'string' && hostKind(fiber) === 'textinput';
+    }
+
+    function addSource(target, source) {
+      if (!consumeWork()) return;
+      var fiber = source.fiber;
+      if (sourceIdentitySeen.has(fiber) || (fiber.alternate && sourceIdentitySeen.has(fiber.alternate))) return;
+      sourceIdentitySeen.add(fiber);
+      if (fiber.alternate) sourceIdentitySeen.add(fiber.alternate);
+      target.push(source);
+    }
+
+    function addCandidate(fiber) {
+      if (!consumeWork()) return;
+      if (candidateIdentitySeen.has(fiber) || (fiber.alternate && candidateIdentitySeen.has(fiber.alternate))) return;
+      var props = fiber.memoizedProps || {};
+      var contract = null;
+      var handler = null;
+      if (typeof props.onChangeText === 'function') {
+        contract = 'onChangeText:string';
+        handler = props.onChangeText;
+      } else if (typeof props.onChange === 'function' && isNativeTextInputHost(fiber)) {
+        contract = 'onChange:event';
+        handler = props.onChange;
+      }
+      if (!contract) return;
+      candidateIdentitySeen.add(fiber);
+      if (fiber.alternate) candidateIdentitySeen.add(fiber.alternate);
+      candidates.push({
+        fiber: fiber,
+        alternate: fiber.alternate || null,
+        props: props,
+        name: typeTextFiberName(fiber),
+        contract: contract,
+        handler: handler
+      });
+    }
+
+    function typeTextFindByNativeID(id) {
+      var match = null;
+      var completed = new WeakSet();
+      forEachTypeTextRoot(function(rootFiber) {
+        if (match || state.truncated) return match || TYPE_TEXT_ABORT;
+        var localSeen = new WeakSet();
+        if (!consumeWork()) return TYPE_TEXT_ABORT;
+        var stack = [rootFiber];
+        while (stack.length > 0 && !state.truncated) {
+          var node = stack.pop();
+          if (!consumeWork()) break;
+          if (!consumeWork()) break;
+          if (localSeen.has(node)) {
+            state.truncated = true;
+            state.reason = 'cycle';
+            break;
+          }
+          localSeen.add(node);
+          if (completed.has(node)) continue;
+          completed.add(node);
+          state.visitedFibers++;
+          var props = node.memoizedProps || {};
+          if (props.nativeID === id) {
+            match = node;
+            break;
+          }
+          if (node.sibling) {
+            if (!consumeWork()) break;
+            stack.push(node.sibling);
+          }
+          if (node.child) {
+            if (!consumeWork()) break;
+            stack.push(node.child);
+          }
+        }
+        return match || (state.truncated ? TYPE_TEXT_ABORT : null);
+      });
+      return match;
+    }
+
+    function typeTextRefTextContent(fiber) {
+      var parts = [];
+      var seen = new WeakSet();
+      if (!consumeWork()) return undefined;
+      var stack = [{ fiber: fiber, includeSibling: false }];
+      while (stack.length > 0 && !state.truncated) {
+        var frame = stack.pop();
+        var node = frame.fiber;
+        if (!consumeWork()) break;
+        if (!consumeWork()) break;
+        if (seen.has(node)) {
+          state.truncated = true;
+          state.reason = 'cycle';
+          break;
+        }
+        seen.add(node);
+        if (frame.includeSibling && node.sibling) {
+          if (!consumeWork()) break;
+          stack.push({ fiber: node.sibling, includeSibling: true });
+        }
+        if (typeof node.memoizedProps === 'string') {
+          if (node.memoizedProps) parts.push(node.memoizedProps);
+          continue;
+        }
+        if (node.child) {
+          if (!consumeWork()) break;
+          stack.push({ fiber: node.child, includeSibling: true });
+        }
+      }
+      return state.truncated ? undefined : __anNorm(parts.join(' '));
+    }
+
+    function typeTextLabelledByIds(fiber) {
+      if (!consumeWork()) return [];
+      var props = (fiber && fiber.memoizedProps) || {};
+      var ariaLabelledBy = props['aria-labelledby'];
+      if (typeof ariaLabelledBy === 'string') return [ariaLabelledBy];
+      var accessibilityLabelledBy = props.accessibilityLabelledBy;
+      if (typeof accessibilityLabelledBy === 'string') return [accessibilityLabelledBy];
+      var ids = [];
+      if (Array.isArray(accessibilityLabelledBy)) {
+        for (var labelledByIndex = 0; labelledByIndex < accessibilityLabelledBy.length; labelledByIndex++) {
+          if (!consumeWork()) break;
+          ids.push(accessibilityLabelledBy[labelledByIndex]);
+        }
+      }
+      return ids;
+    }
+
+    function typeTextAriaLabel(fiber) {
+      var ids = typeTextLabelledByIds(fiber);
+      if (state.truncated) return undefined;
+      if (ids.length > 0) {
+        var labelTexts = [];
+        for (var idIndex = 0; idIndex < ids.length; idIndex++) {
+          if (!consumeWork()) return undefined;
+          var ref = typeTextFindByNativeID(ids[idIndex]);
+          if (state.truncated) return undefined;
+          if (ref) {
+            var refText = typeTextRefTextContent(ref);
+            if (state.truncated) return undefined;
+            if (refText) labelTexts.push(refText);
+          }
+        }
+        if (labelTexts.length > 0) return __anNorm(labelTexts.join(' '));
+      }
+      var props = (fiber && fiber.memoizedProps) || {};
+      var explicit = props['aria-label'];
+      if (explicit === undefined || explicit === null) explicit = props.accessibilityLabel;
+      if (explicit) return explicit;
+      if (hostKind(fiber) === 'image' && props.alt) return props.alt;
+      return undefined;
+    }
+
+    function typeTextJoinNameParts(parts, inline) {
+      var output = '';
+      for (var partIndex = 0; partIndex < parts.length; partIndex++) {
+        if (!consumeWork()) return undefined;
+        if (partIndex === 0) output = parts[partIndex].text;
+        else {
+          var previous = parts[partIndex - 1];
+          var separator = inline && previous.isInlineText && parts[partIndex].isInlineText ? '' : ' ';
+          output = output + separator + parts[partIndex].text;
+        }
+      }
+      return output;
+    }
+
+    function typeTextAccessibleName(fiber) {
+      var seen = new WeakSet();
+      if (!consumeWork()) return undefined;
+      var stack = [{ fiber: fiber, root: true, entered: false, child: null, parts: [], result: undefined }];
+      while (stack.length > 0 && !state.truncated) {
+        var frame = stack[stack.length - 1];
+        if (!frame.entered) {
+          if (!consumeWork()) break;
+          if (!consumeWork()) break;
+          if (seen.has(frame.fiber)) {
+            state.truncated = true;
+            state.reason = 'cycle';
+            break;
+          }
+          seen.add(frame.fiber);
+          frame.entered = true;
+          if (typeof frame.fiber.memoizedProps === 'string') {
+            frame.result = frame.fiber.memoizedProps || undefined;
+          } else {
+            var label = typeTextAriaLabel(frame.fiber);
+            if (state.truncated) break;
+            if (label) {
+              frame.result = label;
+            } else {
+              var props = frame.fiber.memoizedProps || {};
+              if (frame.root && hostKind(frame.fiber) === 'textinput' && props.placeholder) {
+                frame.result = props.placeholder;
+              } else {
+                frame.child = frame.fiber.child;
+              }
+            }
+          }
+        } else if (frame.result === undefined && frame.child) {
+          if (!consumeWork()) break;
+          var child = frame.child;
+          frame.child = child.sibling;
+          stack.push({ fiber: child, root: false, entered: false, child: null, parts: [], result: undefined });
+        } else {
+          if (frame.result === undefined) {
+            var joined = typeTextJoinNameParts(frame.parts, hostKind(frame.fiber) === 'text');
+            if (state.truncated) break;
+            frame.result = joined || undefined;
+          }
+          if (!consumeWork()) break;
+          stack.pop();
+          if (stack.length === 0) return frame.result;
+          if (frame.result) {
+            if (!consumeWork()) break;
+            stack[stack.length - 1].parts.push({
+              text: frame.result,
+              isInlineText: typeof frame.fiber.memoizedProps === 'string'
+                || hostKind(frame.fiber) === 'text'
+            });
+          }
+        }
+      }
+      return undefined;
+    }
+
+    function typeTextStyleIsHidden(style) {
+      if (style == null) return false;
+      var display = null;
+      var active = new WeakSet();
+      if (!consumeWork()) return false;
+      var stack = [{ value: style, exit: false }];
+      while (stack.length > 0 && !state.truncated) {
+        if (!consumeWork()) break;
+        var frame = stack.pop();
+        var part = frame.value;
+        if (frame.exit) {
+          active.delete(part);
+          continue;
+        }
+        if (!part || typeof part !== 'object') continue;
+        if (!consumeWork()) break;
+        if (active.has(part)) {
+          state.truncated = true;
+          state.reason = 'cycle';
+          break;
+        }
+        active.add(part);
+        if (!consumeWork()) break;
+        stack.push({ value: part, exit: true });
+        if (Array.isArray(part)) {
+          for (var styleIndex = part.length - 1; styleIndex >= 0; styleIndex--) {
+            if (!consumeWork()) break;
+            stack.push({ value: part[styleIndex], exit: false });
+          }
+        } else if (Object.prototype.hasOwnProperty.call(part, 'display')) {
+          display = part.display;
+        }
+      }
+      return !state.truncated && display === 'none';
+    }
+
+    function typeTextSubtreeIsHidden(fiber) {
+      var props = (fiber && fiber.memoizedProps) || {};
+      if (props['aria-hidden']) return true;
+      if (props.accessibilityElementsHidden) return true;
+      if (props.importantForAccessibility === 'no-hide-descendants') return true;
+      if (typeTextStyleIsHidden(props.style)) return true;
+      if (state.truncated) return false;
+      var parent = fiber && fiber.return;
+      if (!parent || !parent.child) return false;
+      var seen = new WeakSet();
+      var sibling = parent.child;
+      while (sibling && !state.truncated) {
+        if (!consumeWork()) break;
+        if (!consumeWork()) break;
+        if (seen.has(sibling)) {
+          state.truncated = true;
+          state.reason = 'cycle';
+          break;
+        }
+        seen.add(sibling);
+        if (sibling !== fiber) {
+          var siblingProps = sibling.memoizedProps || {};
+          if (siblingProps['aria-modal'] || siblingProps.accessibilityViewIsModal) return true;
+        }
+        if (!consumeWork()) break;
+        sibling = sibling.sibling;
+      }
+      return false;
+    }
+
+    function typeTextIsHidden(fiber) {
+      var seen = new WeakSet();
+      var current = fiber;
+      while (current && !state.truncated) {
+        if (!consumeWork()) break;
+        if (!consumeWork()) break;
+        if (seen.has(current)) {
+          state.truncated = true;
+          state.reason = 'cycle';
+          break;
+        }
+        seen.add(current);
+        if (typeTextSubtreeIsHidden(current)) return true;
+        if (!consumeWork()) break;
+        current = current.return;
+      }
+      return false;
+    }
+
+    function addVisibleSource(source) {
+      if (opts.includeHidden === true) {
+        addSource(sources, source);
+        return;
+      }
+      var hidden = typeTextIsHidden(source.fiber);
+      if (!state.truncated && !hidden) addSource(sources, source);
+    }
+
+    function collectSource(fiber) {
+      if (!consumeWork()) return;
+      var props = fiber.memoizedProps || {};
+      if (selectorKind === 'testID') {
+        if (props.testID === opts.testID || props.nativeID === opts.testID) {
+          addSource(sources, {
+            fiber: fiber,
+            evidence: { testID: props.testID, nativeID: props.nativeID, selectorBundle: null }
+          });
+        }
+        return;
+      }
+      if (selectorKind === 'accessibilityLabel') {
+        var raw = props.accessibilityLabel;
+        if (raw === undefined || raw === null || raw === '') return;
+        if (raw === opts.accessibilityLabel) {
+          addSource(exactSources, {
+            fiber: fiber,
+            evidence: { testID: props.testID, accessibilityLabel: raw, selectorBundle: null }
+          });
+          return;
+        }
+        var normalized = String(raw).replace(/\\s+/g, ' ').replace(/^\\s+|\\s+$/g, '').toLowerCase();
+        var labelSource = {
+          fiber: fiber,
+          evidence: { testID: props.testID, accessibilityLabel: raw, selectorBundle: null }
+        };
+        if (normalized === normalizedSelector) addSource(normalizedSources, labelSource);
+        else if (normalized.indexOf(normalizedSelector) >= 0) addSource(containsSources, labelSource);
+        return;
+      }
+      if (selectorKind === 'placeholder') {
+        if (hostKind(fiber) !== 'textinput') return;
+        var placeholder = props && typeof props.placeholder === 'string' ? props.placeholder : null;
+        if (placeholder !== null && __match(placeholder, { value: opts.placeholder, exact: opts.exact === true })) {
+          addVisibleSource({
+            fiber: fiber,
+            evidence: {
+              testID: props.testID,
+              placeholder: placeholder,
+              selectorBundle: {
+                testID: props.testID,
+                role: __role(fiber),
+                placeholder: placeholder
+              }
+            }
+          });
+        }
+        return;
+      }
+      if (!__isA11yElement(fiber) || __role(fiber) !== wantedRole) return;
+      var accessibleName = typeTextAccessibleName(fiber);
+      if (accessibleName != null && __match(accessibleName, { value: opts.name, exact: opts.exact === true })) {
+        addVisibleSource({
+          fiber: fiber,
+          evidence: {
+            testID: props.testID,
+            accessibleName: accessibleName,
+            role: wantedRole,
+            placeholder: props.placeholder,
+            selectorBundle: {
+              testID: props.testID,
+              accessibleName: accessibleName,
+              role: wantedRole,
+              placeholder: props.placeholder
+            }
+          }
+        });
+      }
+    }
+
+    var completed = new WeakSet();
+    forEachTypeTextRoot(function(rootFiber) {
+      if (state.truncated) return TYPE_TEXT_ABORT;
+      var localSeen = new WeakSet();
+      if (!consumeWork()) return TYPE_TEXT_ABORT;
+      var stack = [rootFiber];
+      while (stack.length > 0 && !state.truncated) {
+        var node = stack.pop();
+        if (!consumeWork()) break;
+        if (!consumeWork()) break;
+        if (localSeen.has(node)) {
+          state.truncated = true;
+          state.reason = 'cycle';
+          break;
+        }
+        localSeen.add(node);
+        if (completed.has(node)) continue;
+        completed.add(node);
+        state.visitedFibers++;
+        collectSource(node);
+        if (state.truncated) break;
+        addCandidate(node);
+        if (state.truncated) break;
+        if (node.sibling) {
+          if (!consumeWork()) break;
+          stack.push(node.sibling);
+        }
+        if (node.child) {
+          if (!consumeWork()) break;
+          stack.push(node.child);
+        }
+      }
+      return state.truncated ? TYPE_TEXT_ABORT : null;
+    });
+
+    if (state.truncated) return typeTextTruncation(state);
+    if (selectorKind === 'accessibilityLabel') {
+      sources = exactSources.length > 0
+        ? exactSources
+        : (normalizedSources.length > 0 ? normalizedSources : containsSources);
+    }
+    if (sources.length === 0) {
+      return {
+        error: 'Component not found',
+        selector: selector,
+        hint: 'Use cdp_component_tree to verify the component is mounted, or pass a more specific selector.'
+      };
+    }
+
+    function nearestSource(candidate) {
+      var cursor = candidate.fiber;
+      var returnSeen = new WeakSet();
+      while (cursor) {
+        if (!consumeWork()) return null;
+        if (!consumeWork()) return null;
+        if (returnSeen.has(cursor)) {
+          state.truncated = true;
+          state.reason = 'cycle';
+          return null;
+        }
+        returnSeen.add(cursor);
+        for (var sourceIndex = 0; sourceIndex < sources.length; sourceIndex++) {
+          if (!consumeWork()) return null;
+          if (sameTypeTextFiber(cursor, sources[sourceIndex].fiber)) return sources[sourceIndex];
+        }
+        if (!consumeWork()) return null;
+        cursor = cursor.return;
+      }
+      return null;
+    }
+
+    var bindings = [];
+    for (var candidateIndex = 0; candidateIndex < candidates.length && !state.truncated; candidateIndex++) {
+      var candidate = candidates[candidateIndex];
+      var source = nearestSource(candidate);
+      if (source) {
+        bindings.push({
+          candidateFiber: candidate.fiber,
+          candidateAlternate: candidate.alternate,
+          sourceFiber: source.fiber,
+          contract: candidate.contract,
+          handler: candidate.handler,
+          component: candidate.name,
+          candidateTestID: candidate.props.testID,
+          sourceEvidence: source.evidence,
+          controlled: typeof candidate.props.value === 'string',
+          valueBefore: typeof candidate.props.value === 'string' ? candidate.props.value : null
+        });
+      }
+    }
+
+    if (state.truncated) return typeTextTruncation(state);
+    if (bindings.length > 1) {
+      var ambiguousHandler = bindings[0].contract === 'onChangeText:string' ? 'onChangeText' : 'onChange';
+      for (var handlerIndex = 1; handlerIndex < bindings.length; handlerIndex++) {
+        var nextHandler = bindings[handlerIndex].contract === 'onChangeText:string' ? 'onChangeText' : 'onChange';
+        if (nextHandler !== ambiguousHandler) {
+          ambiguousHandler = 'mixed';
+          break;
+        }
+      }
+      return {
+        error: 'Ambiguous typeText resolution',
+        testID: opts.testID,
+        handler: ambiguousHandler,
+        count: bindings.length,
+        candidates: bindings.slice(0, 5).map(function(binding) {
+          return {
+            component: binding.component,
+            testID: binding.candidateTestID,
+            handler: binding.contract === 'onChangeText:string' ? 'onChangeText' : 'onChange',
+            contract: binding.contract
+          };
+        }),
+        hint: 'Multiple distinct typeable handlers match this selector. Pass a more specific testID for the inner TextInput.'
+      };
+    }
+
+    return {
+      binding: bindings.length === 1 ? bindings[0] : null,
+      sourceCount: sources.length,
+      firstSource: sources[0].fiber,
+      state: state
+    };
+  }
+
+  function executeTypeTextTransaction(opts) {
+    var resolution = resolveTypeTextTarget(opts);
+    if (resolution.error) return resolution;
+    var binding = resolution.binding;
+    var selector = opts.testID || opts.accessibilityLabel;
+    if (!binding) {
+      return {
+        error: 'Component has no onChangeText or onChange handler',
+        component: typeTextFiberName(resolution.firstSource),
+        testID: selector,
+        handlerCalled: false,
+        visitedFibers: resolution.state.visitedFibers,
+        hint: 'Inspected every matching fiber and its bounded ownership graph — no typeable handler exists. Use cdp_component_tree to inspect the field, or pass the inner field testID directly.'
+      };
+    }
+    var text = opts.text !== undefined ? opts.text : '';
+    try {
+      if (binding.contract === 'onChangeText:string') binding.handler(text);
+      else binding.handler({ nativeEvent: { text: text } });
+    } catch (e) {
+      return {
+        success: false,
+        action_executed: true,
+        handler_error: (e && e.message || String(e)),
+        component: binding.component,
+        testID: selector,
+        hint: 'The action was dispatched but the app handler threw — the screen may now be in an error state. Check cdp_error_log before continuing.'
+      };
+    }
+    return {
+      success: true,
+      action: 'typeText',
+      component: binding.component,
+      testID: selector,
+      text: text,
+      handlerCalled: binding.contract === 'onChangeText:string' ? 'onChangeText' : 'onChange',
+      controlled: binding.controlled,
+      valueBefore: binding.valueBefore,
+      resolvedFrom: binding.component + (binding.candidateTestID ? ' [testID="' + binding.candidateTestID + '"]' : ''),
+      visitedFibers: resolution.state.visitedFibers,
+      selectorBundle: binding.sourceEvidence.selectorBundle || undefined
+    };
+  }
+
   // UI Interaction
   function interact(opts) {
     opts = opts || {};
@@ -1456,6 +2186,7 @@ export const INJECTED_HELPERS = `
     var selector = opts.testID || opts.accessibilityLabel;
     var matchField = opts.testID ? 'testID' : 'accessibilityLabel';
     var isLabelMatch = matchField === 'accessibilityLabel';
+    var ladderTarget = null;
 
     if (!action) return JSON.stringify({ error: 'action is required' });
 
@@ -1468,19 +2199,18 @@ export const INJECTED_HELPERS = `
       });
     }
 
-    // Task 7 — ladder routing. When the caller passes a declarative selector
-    // (role/name/text/placeholder) and NO testID/accessibilityLabel, resolve
-    // via resolveLadder then press the found fiber or its nearest onPress
-    // ancestor (walking .return). testID/accessibilityLabel keep the legacy
-    // path below unchanged (including Task 6's fail-closed truncation).
+    if (action === 'typeText') {
+      return JSON.stringify(executeTypeTextTransaction(opts));
+    }
+
+    // Task 7 — ladder routing. typeText reuses the established placeholder
+    // and role+name facts; its text argument remains the value to enter.
     if (!selector && (opts.role || opts.name || opts.text || opts.placeholder)) {
-      // Ladder selectors only support press in Phase 1 — fail closed for any
-      // other action instead of silently pressing (Codex review).
-      if (opts.action && opts.action !== 'press') {
+      if (action !== 'press') {
         return JSON.stringify({
-          error: 'Ladder selectors (role/name/text/placeholder) support only action:"press"',
+          error: 'Ladder selectors support press, plus placeholder or role+name for typeText',
           requestedAction: opts.action,
-          hint: 'Use a testID or accessibilityLabel for longPress / typeText / scroll / setFieldValue.'
+          hint: 'Use a testID or accessibilityLabel for longPress, scroll, or setFieldValue.'
         });
       }
       // GH #525 — walkUp's bounded search and ambiguity refusal belong to the
@@ -1521,9 +2251,10 @@ export const INJECTED_HELPERS = `
       }
     }
 
-    if (!selector) return JSON.stringify({ error: 'testID or accessibilityLabel is required' });
+    if (!selector && !ladderTarget) return JSON.stringify({ error: 'testID or accessibilityLabel is required' });
+    if (ladderTarget) isLabelMatch = false;
 
-    var found = null;
+    var found = ladderTarget;
     var findCount = 0;
     // Fail-closed truncation budget. Mirrors the salient-digest budget
     // (Math.min(cap, perRoot * roots)) and its wall-clock guard
@@ -1551,11 +2282,19 @@ export const INJECTED_HELPERS = `
     // GH #525 — walkUp collects every strict-testID match so duplicates can refuse.
     var walkUpCollect = opts.walkUp === true && !isLabelMatch;
     var walkUpMatches = [];
+    var findSeen = null;
+    var findCycleDetected = false;
 
     function findFiber(fiber) {
-      var current = fiber;
-      while (current) {
+      var findStack = [fiber];
+      while (findStack.length > 0) {
+        var current = findStack.pop();
         if (findTruncated) return;
+        if (findSeen.has(current)) {
+          findCycleDetected = true;
+          continue;
+        }
+        findSeen.add(current);
         findCount++;
         if (findCount > findBudget || (Date.now() - findStart) > 3000) {
           findTruncated = true;
@@ -1588,9 +2327,8 @@ export const INJECTED_HELPERS = `
             }
           }
         }
-        if (current.child) findFiber(current.child);
-        if (!isLabelMatch && found) return;
-        current = current.sibling;
+        if (current.sibling) findStack.push(current.sibling);
+        if (current.child) findStack.push(current.child);
       }
     }
 
@@ -1606,6 +2344,7 @@ export const INJECTED_HELPERS = `
     forEachRootFiber(function(rootFiber) {
       if (findTruncated) return found;
       if (!isLabelMatch && found) return found;
+      findSeen = new WeakSet();
       findFiber(rootFiber);
       return isLabelMatch ? null : found;
     });
@@ -1658,6 +2397,7 @@ export const INJECTED_HELPERS = `
     }
 
     if (walkUpCollect && walkUpMatches.length > 0) found = walkUpMatches[0];
+    if (ladderTarget) found = ladderTarget;
 
     if (!found) {
       return JSON.stringify({
@@ -1756,201 +2496,7 @@ export const INJECTED_HELPERS = `
         return JSON.stringify(pressResult);
       }
 
-      if (action === 'typeText') {
-        var text = opts.text !== undefined ? opts.text : '';
-
-        // Issue #126 Fix A — typeText handler resolution.
-        //
-        // Path 1: matched fiber itself has onChangeText / onChange. SINGLE-
-        // fire — pick onChangeText if present, else onChange. Avoids the
-        // double-fire bug: when an RHF Controller wraps a TextInput via
-        // <TextInput {...field} />, both onChangeText and onChange are bound
-        // to field.onChange. Firing both ran field.onChange twice with
-        // different argument shapes (string then {nativeEvent}), corrupting
-        // the form state and double-triggering validators.
-        //
-        // Path 2: when matched fiber has no typeable handler, walk
-        // descendants for a typeable child. Common case: design-system
-        // TextField wraps TextInput in an outer Pressable/View; the wrapper
-        // testID resolves to the wrapper fiber whose props don't carry
-        // onChangeText. Walking down finds the inner TextInput. Bounds:
-        // depth ≤ 16, visit cap 200 across both passes. Two-pass: pass 1
-        // considers only onChangeText; pass 2 falls back to onChange (the
-        // overloaded RN handler) only if no onChangeText descendant
-        // exists. Within each pass: prefer fibers whose type matches a
-        // TextInput-family fingerprint, then dedupe candidates that share
-        // the same handler function reference (react-native-paper wraps
-        // TextInputOutlined → TextInput → InternalTextInput each forwarding
-        // the same onChangeText — pick the deepest leaf), and return
-        // Ambiguous only when truly distinct typed handlers compete.
-        var verify = opts.verify === true;
-        var controlled = typeof props.value === 'string';
-        var valueBefore = controlled ? props.value : null;
-
-        if (typeof props.onChangeText === 'function' || typeof props.onChange === 'function') {
-          var p1Handler;
-          if (typeof props.onChangeText === 'function') {
-            p1Handler = 'onChangeText';
-            props.onChangeText(text);
-          } else {
-            p1Handler = 'onChange';
-            props.onChange({ nativeEvent: { text: text } });
-          }
-          return JSON.stringify({
-            success: true, action: 'typeText', component: typeName, testID: selector, text: text,
-            handlerCalled: p1Handler, controlled: controlled, valueBefore: valueBefore,
-            resolvedFrom: 'matched-fiber'
-          });
-        }
-
-        // Anchored on TextInput-family names. Drops bare Input/Field
-        // substrings to avoid false-positives on RadioGroupField,
-        // InputAccessoryView, BottomSheetTextInput's wrapper, etc.
-        var TYPEABLE_TYPE_RE = /(TextInput|TextField|EditText)/;
-        var visited = 0;
-        var DESCENDANT_DEPTH_CAP = 16;
-        var DESCENDANT_VISIT_CAP = 200;
-
-        function findHandlerDescendants(handlerName) {
-          var matches = [];
-          function walk(node, depth) {
-            if (!node || depth > DESCENDANT_DEPTH_CAP || visited > DESCENDANT_VISIT_CAP) return;
-            visited++;
-            var nProps = node.memoizedProps || {};
-            if (typeof nProps[handlerName] === 'function') {
-              var nName = (node.type && (node.type.displayName || node.type.name)) || '';
-              matches.push({
-                fiber: node,
-                props: nProps,
-                name: nName,
-                depth: depth,
-                typeFingerprint: TYPEABLE_TYPE_RE.test(nName)
-              });
-            }
-            if (node.child) walk(node.child, depth + 1);
-            if (node.sibling) walk(node.sibling, depth);
-          }
-          if (found.child) walk(found.child, 1);
-          return matches;
-        }
-
-        // Dedupe candidates that share the same handler function reference.
-        // react-native-paper's TextInputOutlined → TextInput → InternalTextInput
-        // chain each forwards the SAME onChangeText down — they're the same
-        // logical handler, not three independent typeable fields. Keep the
-        // deepest leaf so the call lands on the host-component fiber that
-        // actually owns the input. (Codex M4 / multi-LLM review of issue #126.)
-        function dedupeByHandlerIdentity(matches, handlerName) {
-          var byFn = [];
-          for (var i = 0; i < matches.length; i++) {
-            var m = matches[i];
-            var fn = m.props[handlerName];
-            var existingIdx = -1;
-            for (var j = 0; j < byFn.length; j++) {
-              if (byFn[j].props[handlerName] === fn) { existingIdx = j; break; }
-            }
-            if (existingIdx === -1) {
-              byFn.push(m);
-            } else if (m.depth > byFn[existingIdx].depth) {
-              // Same handler, deeper fiber — replace with the leaf.
-              byFn[existingIdx] = m;
-            }
-          }
-          return byFn;
-        }
-
-        function pickFromMatches(matches, handlerName) {
-          if (matches.length === 0) return { kind: 'none' };
-          var deduped = dedupeByHandlerIdentity(matches, handlerName);
-          var typed = [];
-          for (var i = 0; i < deduped.length; i++) if (deduped[i].typeFingerprint) typed.push(deduped[i]);
-          if (typed.length === 1) return { kind: 'one', match: typed[0], handler: handlerName };
-          if (typed.length > 1) return { kind: 'ambiguous', matches: typed, handler: handlerName };
-          if (deduped.length === 1) return { kind: 'one', match: deduped[0], handler: handlerName };
-          return { kind: 'ambiguous', matches: deduped, handler: handlerName };
-        }
-
-        var pass1 = pickFromMatches(findHandlerDescendants('onChangeText'), 'onChangeText');
-        var picked = null;
-        if (pass1.kind === 'one') {
-          picked = pass1;
-        } else if (pass1.kind === 'ambiguous') {
-          return JSON.stringify({
-            error: 'Ambiguous typeText resolution',
-            testID: selector,
-            handler: 'onChangeText',
-            count: pass1.matches.length,
-            candidates: pass1.matches.slice(0, 5).map(function(m) {
-              return { component: m.name, testID: m.props.testID, typeFingerprint: m.typeFingerprint };
-            }),
-            hint: 'Multiple onChangeText descendants under testID "' + selector + '". Pass a more specific testID — ideally the inner TextInput itself.'
-          });
-        } else {
-          // pass 2 — onChange fallback
-          var pass2 = pickFromMatches(findHandlerDescendants('onChange'), 'onChange');
-          if (pass2.kind === 'one') {
-            picked = pass2;
-          } else if (pass2.kind === 'ambiguous') {
-            return JSON.stringify({
-              error: 'Ambiguous typeText resolution',
-              testID: selector,
-              handler: 'onChange',
-              count: pass2.matches.length,
-              candidates: pass2.matches.slice(0, 5).map(function(m) {
-                return { component: m.name, testID: m.props.testID, typeFingerprint: m.typeFingerprint };
-              }),
-              hint: 'Multiple onChange descendants under testID "' + selector + '". Pass a more specific testID — ideally the inner TextInput itself.'
-            });
-          }
-        }
-
-        if (!picked) {
-          if (verify) {
-            return JSON.stringify({ success: true, action: 'typeText', testID: selector, handlerCalled: false, controlled: controlled, valueBefore: valueBefore });
-          }
-          return JSON.stringify({
-            error: 'Component has no onChangeText or onChange handler',
-            component: typeName,
-            testID: selector,
-            hint: 'Walked up to ' + DESCENDANT_DEPTH_CAP + ' levels (' + visited + ' fibers) — no descendant has a typeable handler. The matched fiber may not contain a TextInput. Use cdp_component_tree to inspect, or pass the inner field testID directly.'
-          });
-        }
-
-        // Single-fire — call only the picked handler. Avoids the
-        // double-fire bug on RHF Controllers where field.onChange wired
-        // to onChangeText + RN HostComponent onChange would each run
-        // with different argument shapes.
-        if (picked.handler === 'onChangeText') {
-          picked.match.props.onChangeText(text);
-        } else {
-          picked.match.props.onChange({ nativeEvent: { text: text } });
-        }
-
-        var pickedControlled = typeof picked.match.props.value === 'string';
-        return JSON.stringify({
-          success: true, action: 'typeText', component: typeName, testID: selector, text: text,
-          handlerCalled: picked.handler, controlled: pickedControlled,
-          valueBefore: pickedControlled ? picked.match.props.value : valueBefore,
-          resolvedFrom: picked.match.name + (picked.match.props.testID ? ' [testID="' + picked.match.props.testID + '"]' : ''),
-          visitedFibers: visited
-        });
-      }
-
       if (action === 'setFieldValue') {
-        // Issue #126 Gap A — explicit React Hook Form fallback. typeText's
-        // handler chain walks DOWN looking for a TextInput descendant with
-        // onChangeText/onChange. That works for wrapper-Pressable patterns
-        // where the inner TextInput is reachable, but fails when the field's
-        // value flows through field.onChange → FormProvider context →
-        // setValue. There's no inner TextInput-shaped fiber to find, because
-        // the design-system field calls field.onChange directly via a
-        // Controller render prop.
-        //
-        // Resolution: walk UP from the matched fiber (the testID anchor)
-        // looking for a Provider fiber whose memoizedProps.value duck-types
-        // as a React Hook Form UseFormReturn. Then call value.setValue(
-        // name, value, options). The closest ancestor wins (natural React
-        // context resolution), so nested forms behave intuitively.
         var fieldName = opts.name;
         var fieldValue = opts.value;
         if (typeof fieldName !== 'string' || fieldName.length === 0) {
@@ -1963,8 +2509,7 @@ export const INJECTED_HELPERS = `
         var shouldValidate = opts.shouldValidate !== false;
         var shouldDirty = opts.shouldDirty !== false;
 
-        var ANCESTOR_DEPTH_CAP = 32;
-        var ANCESTOR_VISIT_CAP = 100;
+        var FORM_RESOLUTION_WORK_LIMIT = 200;
         function looksLikeUseFormReturn(v) {
           return (
             v && typeof v === 'object'
@@ -1973,26 +2518,109 @@ export const INJECTED_HELPERS = `
             && v.control && typeof v.control === 'object'
           );
         }
-        var ancestor = found.return;
-        var ancestorDepth = 0;
+        var ancestor = found;
         var ancestorVisits = 0;
+        var formResolutionWork = 0;
+        var formResolutionReason = null;
         var formReturn = null;
-        while (ancestor && ancestorDepth < ANCESTOR_DEPTH_CAP && ancestorVisits < ANCESTOR_VISIT_CAP) {
-          ancestorVisits++;
-          var aProps = ancestor.memoizedProps;
-          if (aProps && looksLikeUseFormReturn(aProps.value)) {
-            formReturn = aProps.value;
+        var formResolution = null;
+        var ancestorSeen = new WeakSet();
+        var nearestExplicitControl = null;
+        var hookFormReturns = [];
+
+        function consumeFormWork() {
+          formResolutionWork++;
+          if (formResolutionWork > FORM_RESOLUTION_WORK_LIMIT) {
+            formResolutionReason = 'work-limit';
+            return false;
+          }
+          return true;
+        }
+
+        function pushIdentityUnique(list, value) {
+          for (var identityIndex = 0; identityIndex < list.length; identityIndex++) {
+            if (list[identityIndex] === value) return;
+          }
+          list.push(value);
+        }
+
+        while (ancestor && !formResolutionReason) {
+          if (!consumeFormWork()) break;
+          if (ancestorSeen.has(ancestor)) {
+            formResolutionReason = 'cycle';
             break;
           }
+          ancestorSeen.add(ancestor);
+          ancestorVisits++;
+          var aProps = ancestor.memoizedProps || {};
+          if (!nearestExplicitControl && aProps.control && typeof aProps.control === 'object') {
+            nearestExplicitControl = aProps.control;
+          }
+          if (aProps && looksLikeUseFormReturn(aProps.value)) {
+            if (!nearestExplicitControl || aProps.value.control === nearestExplicitControl) {
+              formReturn = aProps.value;
+              formResolution = 'form-provider';
+              break;
+            }
+          }
+
+          var hook = ancestor.memoizedState;
+          var hookSeen = new WeakSet();
+          while (hook && typeof hook === 'object' && !formResolutionReason) {
+            if (!consumeFormWork()) break;
+            if (hookSeen.has(hook)) {
+              formResolutionReason = 'cycle';
+              break;
+            }
+            hookSeen.add(hook);
+            var hookValue = hook.memoizedState;
+            if (looksLikeUseFormReturn(hookValue)) pushIdentityUnique(hookFormReturns, hookValue);
+            if (hookValue && typeof hookValue === 'object' && looksLikeUseFormReturn(hookValue.current)) {
+              pushIdentityUnique(hookFormReturns, hookValue.current);
+            }
+            hook = hook.next;
+          }
           ancestor = ancestor.return;
-          ancestorDepth++;
+        }
+
+        if (formResolutionReason) {
+          return JSON.stringify({
+            error: 'setFieldValue resolution truncated',
+            truncated: true,
+            reason: formResolutionReason,
+            work: formResolutionWork,
+            workLimit: FORM_RESOLUTION_WORK_LIMIT,
+            ancestorVisits: ancestorVisits,
+            hint: 'The bounded FormProvider/useForm owner scan was incomplete; setValue was not called.'
+          });
+        }
+
+        if (!formReturn) {
+          var matchingHookReturns = [];
+          for (var hfi = 0; hfi < hookFormReturns.length; hfi++) {
+            if (nearestExplicitControl && hookFormReturns[hfi].control === nearestExplicitControl) {
+              pushIdentityUnique(matchingHookReturns, hookFormReturns[hfi]);
+            }
+          }
+          if (matchingHookReturns.length === 1) {
+            formReturn = matchingHookReturns[0];
+            formResolution = 'control-prop-hook';
+          } else if (matchingHookReturns.length > 1) {
+            return JSON.stringify({
+              error: 'setFieldValue: ambiguous useForm control ownership',
+              testID: selector,
+              count: matchingHookReturns.length,
+              ancestorVisits: ancestorVisits,
+              hint: 'Multiple useForm hook returns own the explicit control prop. Add a more specific testID inside the intended Controller subtree.'
+            });
+          }
         }
         if (!formReturn) {
           return JSON.stringify({
-            error: 'setFieldValue: no FormProvider ancestor found',
+            error: 'setFieldValue: no FormProvider ancestor or matching useForm control found',
             testID: selector,
             ancestorVisits: ancestorVisits,
-            hint: 'No React Hook Form FormProvider ancestor with setValue+getValues+control was reachable within ' + ANCESTOR_DEPTH_CAP + ' levels. Either the form is not wrapped in <FormProvider {...methods}>, or the testID anchor sits outside the form subtree. If you only need to fire onChangeText/onChange, use action="typeText" instead.'
+            hint: 'The target is not wrapped in <FormProvider>, and no ancestor useForm hook return matched the nearest explicit control prop by identity. If you only need to fire onChangeText/onChange, use action="typeText" instead.'
           });
         }
         var coercedToString = false;
@@ -2023,7 +2651,8 @@ export const INJECTED_HELPERS = `
           coercedToString: coercedToString,
           shouldValidate: shouldValidate,
           shouldDirty: shouldDirty,
-          ancestorVisits: ancestorVisits
+          ancestorVisits: ancestorVisits,
+          resolvedFrom: formResolution
         });
       }
 
@@ -2420,35 +3049,11 @@ export const INJECTED_HELPERS = `
 
   function readInputValue(testID) {
     if (!testID) return JSON.stringify({ __agent_error: 'testID is required' });
-    var target = null;
-    function findByTestID(fiber) {
-      if (!fiber || target) return;
-      var p = fiber.memoizedProps;
-      if (p && (p.testID === testID || p.nativeID === testID)) { target = fiber; return; }
-      var child = fiber.child;
-      while (child) { findByTestID(child); child = child.sibling; }
-    }
-    forEachRootFiber(function(rootFiber) { findByTestID(rootFiber); return target; });
-    if (!target) return JSON.stringify({ __agent_error: 'Component not found: ' + testID });
-
-    function valueOf(fiber) {
-      var p = fiber && fiber.memoizedProps;
-      return p && typeof p.value === 'string' ? p.value : null;
-    }
-    var direct = valueOf(target);
-    if (direct !== null) return JSON.stringify({ value: direct, controlled: true });
-
-    var found = [], visited = 0;
-    (function walk(node, depth) {
-      if (!node || depth > 16 || visited > 200 || found.length > 1) return;
-      visited++;
-      var v = valueOf(node);
-      if (v !== null) found.push(v);
-      if (node.child) walk(node.child, depth + 1);
-      if (node.sibling) walk(node.sibling, depth);
-    })(target.child, 1);
-
-    if (found.length === 1) return JSON.stringify({ value: found[0], controlled: true });
+    var resolution = resolveTypeTextTarget({ testID: testID });
+    if (resolution.error) return JSON.stringify({ __agent_error: resolution.error });
+    if (!resolution.binding) return JSON.stringify({ value: null, controlled: false });
+    var props = resolution.binding.candidateFiber.memoizedProps || {};
+    if (typeof props.value === 'string') return JSON.stringify({ value: props.value, controlled: true });
     return JSON.stringify({ value: null, controlled: false });
   }
 

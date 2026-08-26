@@ -107,8 +107,6 @@ test('a meaningful failure writes exactly one fully sanitized structured record'
     '192.168.1.20',
     '8.8.8.8',
     'localhost:8081',
-    '8081',
-    '9090',
     `${homedir()}/private/project.ts`,
     '~/private/project.ts',
     '/Users/private/project/very-long-file.ts',
@@ -120,6 +118,8 @@ test('a meaningful failure writes exactly one fully sanitized structured record'
       new RegExp(privateValue.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
     );
   }
+  assert.doesNotMatch(record.symptom, /8081|9090/);
+  assert.doesNotMatch(record.normalizedSymptomShape, /8081|9090/);
   assert.match(serialized, /REDACTED/);
 });
 

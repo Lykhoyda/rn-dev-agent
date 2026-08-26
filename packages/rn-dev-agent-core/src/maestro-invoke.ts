@@ -101,6 +101,12 @@ export function maestroRefusalResult(
 
 export { getMaestroRunnerPath };
 
+let maestroInlineObserverForTest: (() => void) | null = null;
+
+export function _setMaestroInlineObserverForTest(observer: (() => void) | null): void {
+  maestroInlineObserverForTest = observer;
+}
+
 export async function runMaestroInline(
   yaml: string,
   opts: MaestroInvokeOptions,
@@ -110,6 +116,7 @@ export async function runMaestroInline(
     resolveEngineStatus?: () => Promise<ReplayEngineStatus | null>;
   } = {},
 ): Promise<MaestroInvokeResult> {
+  maestroInlineObserverForTest?.();
   const dispatch = (dependencies.chooseDispatch ?? chooseMaestroDispatch)({
     platform: opts.platform,
   });

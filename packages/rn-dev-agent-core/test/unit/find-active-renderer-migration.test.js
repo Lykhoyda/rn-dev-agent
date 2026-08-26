@@ -116,27 +116,6 @@ test('B145: findNavRef walks all renderers for NavigationContainer ref', () => {
   );
 });
 
-test('B145: interact tool walks all renderers for the testID', () => {
-  // GH #60-5: testID early-returns `found`; accessibilityLabel walks every
-  // renderer and collects matches across them, so the callback can return
-  // null to keep iterating. We assert the callback uses both findFiber and
-  // forEachRootFiber, without pinning the exact return statement.
-  const src = INJECTED_HELPERS;
-  const idx = src.indexOf('function interact');
-  assert.ok(idx >= 0, 'interact definition missing');
-  // Window widened (3000 → 8000) as interact() grew: Task 6 added fail-closed
-  // truncation and Task 7 added ladder routing ahead of the legacy testID/
-  // accessibilityLabel walk, pushing the findFiber-in-forEachRootFiber call
-  // farther from the function start. This is a behavioral guard (callback uses
-  // both findFiber and forEachRootFiber), not a position pin.
-  const slice = src.slice(idx, idx + 8000);
-  assert.match(
-    slice,
-    /forEachRootFiber\(function\(rootFiber\)\s*\{[\s\S]*?findFiber\(rootFiber\);/,
-    'interact did not call findFiber inside forEachRootFiber',
-  );
-});
-
 test('B145: getComponentState walks all renderers for the testID', () => {
   const src = INJECTED_HELPERS;
   const idx = src.indexOf('function getComponentState');

@@ -30,14 +30,12 @@ import { isValidBundleId } from '../domain/maestro-validator.js';
 import { withSession } from '../utils.js';
 import type { ToolResult } from '../utils.js';
 import { okResult, failResult, createStepTimer } from '../utils.js';
-import { maestroRefusalResult, runMaestroInline, yamlEscape } from '../maestro-invoke.js';
 import { isAgentDeviceRunnerSentinel, recoverFromRunnerLeak } from './runner-leak-recovery.js';
 import type { RecoveryTier } from './runner-leak-recovery.js';
 import { reopenSessionForRecovery } from './device-session.js';
 import type { FlatNode } from '../fast-runner-ref-map.js';
 import type { CDPClient } from '../cdp-client.js';
 import {
-  getCachedMetadata,
   getCachedSignature,
   isRefMapFresh,
   lookupRef,
@@ -45,15 +43,9 @@ import {
   type RefSignature,
 } from '../fast-runner-ref-map.js';
 import {
-  attemptJsFill,
-  settleRead,
-  probeInputState,
-  finalFiberVerify,
-  combineVerificationOracles,
-  decideNativeRetype,
-  type FiberVerifyOutcome,
+  classifyNativeVerification,
   type NativeVerifyVerdict,
-  type FinalVerification,
+  type NativeVerification,
 } from './fill-verify.js';
 
 const execFile = promisify(execFileCb);
@@ -880,21 +872,12 @@ export interface FillArgs {
   text: string;
   /** Bounded in-operation focus wait forwarded to the runner (default 1500ms). */
   waitForKeyboardMs?: number;
-  /** Explicit fiber testID; it must equal the exact bound input's current identifier. */
+  /** Explicit native testID; it must equal the exact bound input's current identifier. */
   testID?: string;
   /** Story 04 (#385): per-call settle budget override in ms. */
   settleTimeoutMs?: number;
 }
 
-function isAndroidSession(): boolean {
-  const session = getActiveSession();
-  if (session?.platform === 'android') return true;
-  if (session?.platform) return false;
-  return !!process.env.ANDROID_SERIAL;
-}
-
-// Story 10 (#391): the Android runner proved setText AND keyevents don't land —
-// descend to the clear-first Maestro tier instead of re-tapping healthy focus.
 function isSetTextRejectedError(result: ToolResult): boolean {
   if (!result.isError) return false;
   const text = result.content?.[0]?.text ?? '';
@@ -927,10 +910,6 @@ export function extractTypingMeta(
   }
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((r) => setTimeout(r, ms));
-}
-
 function extractSettleMeta(result: ToolResult): { settle?: unknown; settleMs?: number } {
   try {
     const envelope = JSON.parse(result.content[0].text) as {
@@ -954,23 +933,6 @@ export function cdpClientOrNull(getClient: () => CDPClient): CDPClient | null {
   } catch {
     return null;
   }
-}
-
-// Multi-review "H3" guard: a cached identifier may only seed the JS-first
-// testID resolution when the ref is BOTH map-fresh AND present in the
-// CURRENT snapshot generation. Pre-#386 signature retention, getCachedMetadata
-// returned null for any ref not in the latest snapshot, so `isRefMapFresh()`
-// alone was sufficient. Since 4ff56662, metadataMap retains signatures for ref
-// ids absent from the newest snapshot (to heal stale taps by identity), so
-// getCachedMetadata can return an OLD-generation identifier even when the map
-// is otherwise fresh. lookupRef reads refMap, which IS still cleared every
-// generation, so `lookupRef(ref) !== null` proves the ref exists in the
-// CURRENT generation.
-export function resolveCachedIdentifier(ref: string): string | undefined {
-  const bareRef = ref.replace(/^@/, '');
-  if (!isRefMapFresh() || lookupRef(bareRef) === null) return undefined;
-  const identifier = getCachedMetadata(bareRef)?.identifier?.trim();
-  return identifier || undefined;
 }
 
 export type FillMutationDisposition = 'none' | 'observed' | 'possible';
@@ -1044,39 +1006,16 @@ async function runNativeVerifyInput(
   return { verdict: 'unavailable', stable: false };
 }
 
-async function rebindExactFillTarget(binding: ExactFillBinding): Promise<ExactFillBinding | null> {
-  const snap = await fetchSnapshotNodes();
-  if (!snap.ok) return null;
-  const rebound = bindExactFillTarget(
-    snap.nodes,
-    binding.inputTestId ?? binding.inputRef,
-    binding.inputSignature,
-  );
-  return rebound.ok ? rebound.binding : null;
-}
-
-// The single fill arbiter's evidence gatherer: fiber oracle (controlled
-// inputs) + native verifyInput (uncontrolled inputs), combined per the GH #581
-// contract — disagreement is inconclusive, inconclusive is failure.
 async function finalVerification(
-  client: CDPClient | null,
   binding: ExactFillBinding,
-  jsTestId: string | null,
   text: string,
-  operationToken?: string,
-): Promise<FinalVerification> {
-  const fiberId = binding.inputTestId ?? jsTestId;
-  let fiber: FiberVerifyOutcome | 'unavailable' = 'unavailable';
-  if (client && fiberId) {
-    fiber = await finalFiberVerify({ evaluate: (e) => client.evaluate(e) }, fiberId, text);
-  }
-  const nativeBinding = operationToken ? binding : await rebindExactFillTarget(binding);
-  if (!nativeBinding) return combineVerificationOracles(fiber, 'target-lost', false);
-  const native = await runNativeVerifyInput(nativeBinding, text, operationToken);
-  return combineVerificationOracles(fiber, native.verdict, native.stable);
+  operationToken: string,
+): Promise<NativeVerification> {
+  const native = await runNativeVerifyInput(binding, text, operationToken);
+  return classifyNativeVerification(native.verdict, native.stable);
 }
 
-type FillMethod = 'js-onChangeText' | 'native' | 'maestro';
+type FillMethod = 'native';
 
 // The ONLY producer of public fill success (single-success-rule invariant).
 function verifiedFillResult(
@@ -1093,7 +1032,7 @@ function verifiedFillResult(
 interface FillFailureOpts {
   mutation: FillMutationDisposition;
   pathsTried: string[];
-  verification?: FinalVerification;
+  verification?: NativeVerification;
   hint?: string;
 }
 
@@ -1108,7 +1047,6 @@ function fillFailure(
     ...(opts.verification
       ? {
           verification: {
-            fiber: opts.verification.fiber,
             native: opts.verification.native,
             nativeStable: opts.verification.nativeStable,
           },
@@ -1118,7 +1056,7 @@ function fillFailure(
       opts.hint ??
       (opts.mutation === 'none'
         ? 'No text was entered. Refresh the snapshot (device_snapshot action=snapshot) and rebind the input before retrying.'
-        : 'The field may have been mutated. Read the field state (device_snapshot or the fiber) before any manual retry — do not blindly re-run device_fill.'),
+        : 'The field may have been mutated. Read the field state with device_snapshot before any manual retry — do not blindly re-run device_fill.'),
   });
 }
 
@@ -1141,7 +1079,7 @@ function attachFillFailureDisposition(
       hint:
         mutation === 'none'
           ? 'No text was entered. Refresh the snapshot (device_snapshot action=snapshot) and rebind the input before retrying.'
-          : 'The field may have been mutated. Read the field state (device_snapshot or the fiber) before any manual retry — do not blindly re-run device_fill.',
+          : 'The field may have been mutated. Read the field state with device_snapshot before any manual retry — do not blindly re-run device_fill.',
     };
     return typeof envelope.code === 'string'
       ? failResult(error, envelope.code as never, meta)
@@ -1154,85 +1092,17 @@ function attachFillFailureDisposition(
   }
 }
 
-async function clearControlledValue(client: CDPClient, testID: string): Promise<boolean> {
-  try {
-    await client.evaluate(
-      '__RN_AGENT.interact(' + JSON.stringify({ action: 'typeText', testID, text: '' }) + ')',
-    );
-  } catch {
-    return false;
-  }
-  const settled = await settleRead({ evaluate: (e) => client.evaluate(e) }, testID, '', null);
-  return settled.value === '';
-}
-
-function exactTypeReadback(
-  client: CDPClient | null,
-  testID: string | null,
-): ((expected: string) => Promise<{ matches: boolean; actual?: string | null }>) | undefined {
-  if (!client || !testID) return undefined;
-  return async (expected) => {
-    const result = await client.evaluate(`__RN_AGENT.readInputValue(${JSON.stringify(testID)})`);
-    if (typeof result.value !== 'string') return { matches: false };
-    try {
-      const parsed = JSON.parse(result.value) as { value?: unknown };
-      const actual = typeof parsed.value === 'string' ? parsed.value : null;
-      return { matches: actual === expected, actual };
-    } catch {
-      return { matches: false };
-    }
-  };
-}
-
-// Post-mutation corrective tier: always clear-first (eraseText) so a
-// corrective attempt never appends; Maestro exit status is attempt evidence
-// only and never public success. Failure output is not echoed (it can embed
-// the flow's inputText).
-async function maestroFillAttempt(
-  targetId: string,
-  text: string,
-  platform: 'ios' | 'android',
-  authorityArgs?: object,
-): Promise<{ attempted: boolean; refusal?: ToolResult }> {
-  const escapedRef = yamlEscape(targetId.replace(/^@/, ''));
-  const escapedText = yamlEscape(text);
-  const yaml = `- tapOn:\n    id: "${escapedRef}"\n- eraseText\n- inputText: "${escapedText}"`;
-  const result = await runMaestroInline(yaml, {
-    platform,
-    slug: 'fill-fallback',
-    timeoutMs: 120_000,
-    authorityArgs,
-  });
-  if (result.passed) return { attempted: true };
-  const refusal = maestroRefusalResult(result, 'Maestro fill fallback was refused.', {
-    tried: ['js', 'native', 'maestro'],
-  });
-  if (refusal) return { attempted: false, refusal };
-  return { attempted: false };
-}
-
-const MAX_NATIVE_RETYPE = 2;
-
 export interface ExactFillTiers {
-  js: boolean;
-  maestro: boolean;
   abortSignal?: AbortSignal;
 }
 
-interface ExactFillDeps {
-  maestroFillAttempt?: typeof maestroFillAttempt;
-}
-
 // GH #581 exact fill orchestrator (device_fill and device_batch's fill step):
-// bind exactly one input, mutate through the runner's single exact operation,
-// and emit success only from the final verification arbiter.
+// bind exactly one native input and emit success only from stable exact native verification.
 export async function performExactFill(
   args: FillArgs,
-  client: CDPClient | null,
+  _client: CDPClient | null,
   tiers: ExactFillTiers,
-  deps: ExactFillDeps = {},
 ): Promise<ToolResult> {
-  const platform: 'ios' | 'android' = isAndroidSession() ? 'android' : 'ios';
   const pathsTried: string[] = [];
   let mutationSeen: FillMutationDisposition = 'none';
 
@@ -1278,65 +1148,6 @@ export async function performExactFill(
       { mutation: 'none', pathsTried },
     );
   }
-  const fiberId = binding.inputTestId;
-  const evalSeam = client ? { evaluate: (e: string) => client.evaluate(e) } : null;
-
-  // Controlled inputs go through the fiber; the probe never fires handlers, so
-  // uncontrolled inputs skip straight to native (no double-mutation window).
-  if (tiers.js && client && evalSeam && fiberId) {
-    const probe = await probeInputState(evalSeam, fiberId);
-    if (probe.readable && probe.controlled) {
-      pathsTried.push('js');
-      const tJs = Date.now();
-      const js = await attemptJsFill(evalSeam, fiberId, args.text);
-      if (!js.handled && js.dispatchUncertain) {
-        return fillFailure(
-          'TEXT_ENTRY_UNVERIFIED',
-          'The JS fill dispatch failed after it may have reached the app; not typing again.',
-          { mutation: 'possible', pathsTried },
-        );
-      }
-      if (js.handled) {
-        mutationSeen = 'observed';
-        if (js.outcome === 'exact') {
-          const verification = await finalVerification(client, binding, fiberId, args.text);
-          if (verification.verified) {
-            return verifiedFillResult('js-onChangeText', args.text.length, {
-              textEntryPath: 'js',
-              verifiedOracle: verification.oracle,
-              handler: js.handler,
-              timings_ms: { jsType: Date.now() - tJs },
-            });
-          }
-          if (!verification.observedMismatch) {
-            return fillFailure(
-              'TEXT_ENTRY_UNVERIFIED',
-              'The controlled fill could not be verified against the bound native input; not retrying.',
-              { mutation: 'possible', pathsTried, verification },
-            );
-          }
-        }
-        if (js.outcome === 'unreadable') {
-          return fillFailure(
-            'TEXT_ENTRY_UNVERIFIED',
-            'The onChangeText handler fired but the resulting value is unreadable — app state may have changed; not retrying.',
-            { mutation: 'possible', pathsTried },
-          );
-        }
-        // Readable but not (stably) exact: correct clear-first via the same
-        // handler, prove the clear, then descend to the native tier.
-        const cleared = await clearControlledValue(client, fiberId);
-        if (!cleared) {
-          return fillFailure(
-            'TEXT_ENTRY_UNVERIFIED',
-            'device_fill could not verify the JS fill and could not prove a clean clear; not retrying.',
-            { mutation: 'possible', pathsTried },
-          );
-        }
-      }
-    }
-  }
-
   pathsTried.push('native');
   if (tiers.abortSignal?.aborted) {
     return fillFailure('TEXT_ENTRY_UNVERIFIED', 'device_fill was cancelled before native typing.', {
@@ -1351,208 +1162,100 @@ export async function performExactFill(
     ...(args.waitForKeyboardMs !== undefined ? { focusWaitMs: args.waitForKeyboardMs } : {}),
   };
   const tNative = Date.now();
-  let lastVerification: FinalVerification | null = null;
-  for (let attempt = 0; attempt <= MAX_NATIVE_RETYPE; attempt++) {
-    const operationToken = randomUUID();
-    const clearFirst = attempt > 0 || args.text.length === 0;
-    const primary = await runNative(
-      ['fill', binding.inputRef, args.text, ...(clearFirst ? ['--clear-first'] : [])],
-      {
-        ...(attempt === 0 ? settleOpts(args) : { settle: { enabled: false } }),
-        exactTarget: { ...exactTarget, operationToken },
-        verifyTypeReadback: exactTypeReadback(client, fiberId),
-      },
-    );
-    if (primary.isError) {
-      const mutation = extractMutationDisposition(primary);
-      if (isSetTextRejectedError(primary)) {
-        if (mutation === 'possible') {
-          return fillFailure(
-            'TEXT_ENTRY_UNVERIFIED',
-            `device_fill's native attempt may have mutated the field before rejecting text entry: ${extractErrorText(primary)}`,
-            { mutation: 'possible', pathsTried },
-          );
-        }
-        if (mutation === 'observed') {
-          mutationSeen = 'observed';
-          const verification = await finalVerification(
-            client,
-            binding,
-            fiberId,
-            args.text,
-            operationToken,
-          );
-          lastVerification = verification;
-          if (verification.verified) {
-            return verifiedFillResult('native', args.text.length, {
-              textEntryPath: attempt === 0 ? 'native' : 'native-retype',
-              verifiedOracle: verification.oracle,
-              recovered: 'post-error-exact-readback',
-              retypes: attempt,
-              timings_ms: { nativeType: Date.now() - tNative },
-            });
-          }
-          if (!verification.observedMismatch) {
-            return fillFailure(
-              'TEXT_ENTRY_UNVERIFIED',
-              'device_fill observed a rejected native mutation but could not prove a stable mismatch; not retrying.',
-              { mutation: 'possible', pathsTried, verification },
-            );
-          }
-        }
-        break;
-      }
-      if (mutation === 'none') {
-        if (mutationSeen !== 'none') {
-          return fillFailure(
-            'TEXT_ENTRY_UNVERIFIED',
-            `device_fill's corrective native attempt was refused after an earlier mutation: ${extractErrorText(primary)}`,
-            { mutation: 'possible', pathsTried },
-          );
-        }
-        const code = extractErrorCode(primary);
-        return fillFailure(
-          code === 'FOCUS_TARGET_OCCLUDED' ? 'FOCUS_TARGET_OCCLUDED' : 'NO_TEXT_INPUT_TARGET',
-          `device_fill's native attempt was refused before mutation: ${extractErrorText(primary)}`,
-          { mutation: 'none', pathsTried },
-        );
-      }
-      // Runner-timeout discipline: never resend; only an exact independent
-      // read-back may promote a possibly-mutating failure to success.
-      const verification = await finalVerification(
-        client,
-        binding,
-        fiberId,
-        args.text,
-        operationToken,
-      );
-      if (verification.verified) {
-        return verifiedFillResult('native', args.text.length, {
-          textEntryPath: attempt === 0 ? 'native' : 'native-retype',
-          verifiedOracle: verification.oracle,
-          recovered: 'post-error-exact-readback',
-          retypes: attempt,
-          timings_ms: { nativeType: Date.now() - tNative },
-        });
-      }
-      return fillFailure(
-        'TEXT_ENTRY_UNVERIFIED',
-        `device_fill's native attempt failed and the field could not be verified: ${extractErrorText(primary)}`,
-        {
-          mutation: mutationSeen === 'none' ? mutation : 'possible',
-          pathsTried,
-          verification,
-        },
-      );
-    }
-    mutationSeen = 'observed';
-    const primarySettle = extractSettleMeta(primary);
-    const primaryTyping = extractTypingMeta(primary);
-    const verification = await finalVerification(
-      client,
-      binding,
-      fiberId,
-      args.text,
-      operationToken,
-    );
-    lastVerification = verification;
-    if (verification.verified) {
-      return verifiedFillResult('native', args.text.length, {
-        textEntryPath: attempt === 0 ? 'native' : 'native-retype',
-        verifiedOracle: verification.oracle,
-        retypes: attempt,
-        ...(primaryTyping ? { typing: primaryTyping } : {}),
-        ...(primarySettle.settle !== undefined ? { settle: primarySettle.settle } : {}),
-        timings_ms: {
-          nativeType: Date.now() - tNative,
-          ...(primarySettle.settleMs !== undefined ? { settle: primarySettle.settleMs } : {}),
-        },
-      });
-    }
-    const decision = decideNativeRetype(verification, attempt, MAX_NATIVE_RETYPE);
-    if (decision.action === 'escalate') {
-      if (!verification.observedMismatch) {
+  const operationToken = randomUUID();
+  const primary = await runNative(
+    ['fill', binding.inputRef, args.text, ...(args.text.length === 0 ? ['--clear-first'] : [])],
+    {
+      ...settleOpts(args),
+      exactTarget: { ...exactTarget, operationToken },
+    },
+  );
+  if (primary.isError) {
+    const mutation = extractMutationDisposition(primary);
+    if (isSetTextRejectedError(primary)) {
+      if (mutation === 'possible') {
         return fillFailure(
           'TEXT_ENTRY_UNVERIFIED',
-          'device_fill typed but the final read-back is inconclusive; not retrying.',
-          { mutation: 'possible', pathsTried, verification },
+          `device_fill's native attempt may have mutated the field before rejecting text entry: ${extractErrorText(primary)}`,
+          { mutation: 'possible', pathsTried },
         );
       }
-      break;
-    }
-    if (tiers.abortSignal?.aborted) {
+      if (mutation === 'observed') {
+        mutationSeen = 'observed';
+        const verification = await finalVerification(binding, args.text, operationToken);
+        if (verification.verified) {
+          return verifiedFillResult('native', args.text.length, {
+            textEntryPath: 'native',
+            verifiedOracle: 'native',
+            recovered: 'post-error-exact-readback',
+            timings_ms: { nativeType: Date.now() - tNative },
+          });
+        }
+        return fillFailure(
+          'TEXT_ENTRY_UNVERIFIED',
+          'device_fill observed a rejected native mutation but could not verify the retained target; not retrying.',
+          {
+            mutation: verification.observedMismatch ? 'observed' : 'possible',
+            pathsTried,
+            verification,
+          },
+        );
+      }
       return fillFailure(
         'TEXT_ENTRY_UNVERIFIED',
-        'device_fill was cancelled after a native attempt; no corrective retype was dispatched.',
-        { mutation: 'possible', pathsTried, verification },
+        'device_fill could not verify the fill through the retained native target.',
+        { mutation: 'none', pathsTried },
       );
     }
-    await sleep(decision.delayMs);
-    if (tiers.abortSignal?.aborted) {
+    if (mutation === 'none') {
+      const code = extractErrorCode(primary);
       return fillFailure(
-        'TEXT_ENTRY_UNVERIFIED',
-        'device_fill was cancelled before a corrective retype was dispatched.',
-        { mutation: 'possible', pathsTried, verification },
+        code === 'FOCUS_TARGET_OCCLUDED' ? 'FOCUS_TARGET_OCCLUDED' : 'NO_TEXT_INPUT_TARGET',
+        `device_fill's native attempt was refused before mutation: ${extractErrorText(primary)}`,
+        { mutation: 'none', pathsTried },
       );
     }
-  }
-
-  // Corrective Maestro tier: reachable only after an observed stable mismatch
-  // or a runner-proven SET_TEXT_REJECTED — both safe for clear-first entry.
-  if (!tiers.maestro) {
+    const verification = await finalVerification(binding, args.text, operationToken);
+    if (verification.verified) {
+      return verifiedFillResult('native', args.text.length, {
+        textEntryPath: 'native',
+        verifiedOracle: 'native',
+        recovered: 'post-error-exact-readback',
+        timings_ms: { nativeType: Date.now() - tNative },
+      });
+    }
     return fillFailure(
       'TEXT_ENTRY_UNVERIFIED',
-      'device_fill could not verify the fill and this caller does not use the Maestro tier.',
-      {
-        mutation: mutationSeen,
-        pathsTried,
-        verification: lastVerification ?? undefined,
+      `device_fill's native attempt failed and the field could not be verified: ${extractErrorText(primary)}`,
+      { mutation, pathsTried, verification },
+    );
+  }
+  mutationSeen = 'observed';
+  const primarySettle = extractSettleMeta(primary);
+  const primaryTyping = extractTypingMeta(primary);
+  const verification = await finalVerification(binding, args.text, operationToken);
+  if (verification.verified) {
+    return verifiedFillResult('native', args.text.length, {
+      textEntryPath: 'native',
+      verifiedOracle: 'native',
+      ...(primaryTyping ? { typing: primaryTyping } : {}),
+      ...(primarySettle.settle !== undefined ? { settle: primarySettle.settle } : {}),
+      timings_ms: {
+        nativeType: Date.now() - tNative,
+        ...(primarySettle.settleMs !== undefined ? { settle: primarySettle.settleMs } : {}),
       },
-    );
-  }
-  pathsTried.push('maestro');
-  if (tiers.abortSignal?.aborted) {
-    return fillFailure(
-      'TEXT_ENTRY_UNVERIFIED',
-      'device_fill was cancelled before the Maestro correction was dispatched.',
-      { mutation: 'possible', pathsTried, verification: lastVerification ?? undefined },
-    );
-  }
-  const maestroId = binding.inputTestId;
-  if (!maestroId) {
-    return fillFailure(
-      'TEXT_ENTRY_UNVERIFIED',
-      'device_fill could not verify the fill and the input has no testID for the Maestro tier.',
-      { mutation: mutationSeen, pathsTried, verification: lastVerification ?? undefined },
-    );
-  }
-  const maestro = await (deps.maestroFillAttempt ?? maestroFillAttempt)(
-    maestroId,
-    args.text,
-    platform,
-    args,
-  );
-  if (!maestro.attempted) {
-    if (maestro.refusal)
-      return attachFillFailureDisposition(maestro.refusal, 'possible', pathsTried);
-    return fillFailure(
-      'TEXT_ENTRY_UNVERIFIED',
-      'device_fill fell through all tiers; the Maestro attempt did not run cleanly.',
-      { mutation: 'possible', pathsTried, verification: lastVerification ?? undefined },
-    );
-  }
-  const maestroVerification = await finalVerification(client, binding, fiberId, args.text);
-  if (maestroVerification.verified) {
-    return verifiedFillResult('maestro', args.text.length, {
-      textEntryPath: 'maestro',
-      verifiedOracle: maestroVerification.oracle,
-      timings_ms: { nativeType: Date.now() - tNative },
     });
   }
   return fillFailure(
     'TEXT_ENTRY_UNVERIFIED',
-    'Text entry could not be verified after native and Maestro attempts.',
-    { mutation: 'possible', pathsTried, verification: maestroVerification },
+    verification.observedMismatch
+      ? 'device_fill typed a different value on the retained native target; not retrying.'
+      : 'device_fill typed but the retained native target could not be verified; not retrying.',
+    {
+      mutation: verification.observedMismatch ? mutationSeen : 'possible',
+      pathsTried,
+      verification,
+    },
   );
 }
 
@@ -1576,9 +1279,31 @@ export async function performReactTreeInput(
       pathsTried,
     });
   }
-  const seam = { evaluate: (expression: string) => client.evaluate(expression) };
-  const before = await probeInputState(seam, testID);
-  if (!before.readable || !before.controlled) {
+  const readInput = async (): Promise<{ value: string | null; controlled: boolean } | null> => {
+    try {
+      const result = await client.evaluate(
+        '__RN_AGENT.readInputValue(' + JSON.stringify(testID) + ')',
+      );
+      if (result.error || typeof result.value !== 'string') return null;
+      const parsed = JSON.parse(result.value) as {
+        value?: string | null;
+        controlled?: boolean;
+        __agent_error?: string;
+      };
+      if (parsed.__agent_error) return null;
+      return { value: parsed.value ?? null, controlled: parsed.controlled === true };
+    } catch {
+      return null;
+    }
+  };
+  const before = await readInput();
+  if (signal?.aborted) {
+    return fillFailure('TEXT_ENTRY_UNVERIFIED', 'React-tree input was cancelled before mutation.', {
+      mutation: 'none',
+      pathsTried,
+    });
+  }
+  if (!before?.controlled) {
     return fillFailure(
       'TEXT_ENTRY_UNVERIFIED',
       `React-tree input "${testID}" is uncontrolled or unreadable. Run this native text-entry check on a WDA-healthy runtime; secure masked native values are not plaintext proof.`,
@@ -1586,43 +1311,110 @@ export async function performReactTreeInput(
     );
   }
   const expected = `${before.value ?? ''}${text}`;
-  const dispatch = await attemptJsFill(seam, testID, expected);
-  if (!dispatch.handled) {
+  let dispatch: { handler: string } | { error: string; mutation: 'none' | 'possible' };
+  try {
+    const result = await client.evaluate(
+      '__RN_AGENT.interact(' +
+        JSON.stringify({ action: 'typeText', testID, text: expected, verify: true }) +
+        ')',
+    );
+    if (result.error || typeof result.value !== 'string') {
+      dispatch = { error: 'dispatch result is unavailable', mutation: 'possible' };
+    } else {
+      const parsed = JSON.parse(result.value) as {
+        error?: string;
+        handlerCalled?: string | false;
+        controlled?: boolean;
+      };
+      if (parsed.error) dispatch = { error: parsed.error, mutation: 'none' };
+      else if (typeof parsed.handlerCalled === 'string' && parsed.controlled !== undefined) {
+        dispatch = { handler: parsed.handlerCalled };
+      } else {
+        dispatch = { error: 'dispatch result is inconclusive', mutation: 'possible' };
+      }
+    }
+  } catch {
+    dispatch = { error: 'dispatch result is unavailable', mutation: 'possible' };
+  }
+  if ('error' in dispatch) {
     return fillFailure(
       'TEXT_ENTRY_UNVERIFIED',
-      dispatch.dispatchUncertain
+      dispatch.mutation === 'possible'
         ? `React-tree input "${testID}" may have mutated but its onChangeText result is unknown.`
         : `React-tree input "${testID}" has no verifiable controlled onChangeText path.`,
-      { mutation: dispatch.dispatchUncertain ? 'possible' : 'none', pathsTried },
+      { mutation: dispatch.mutation, pathsTried },
     );
   }
-  const verification = await finalFiberVerify(seam, testID, expected);
+  if (signal?.aborted) {
+    return fillFailure('TEXT_ENTRY_UNVERIFIED', 'React-tree input was cancelled after mutation.', {
+      mutation: 'possible',
+      pathsTried,
+    });
+  }
+  let verification: 'exact' | 'mismatch' | 'unreadable' = 'unreadable';
+  let previous: { value: string | null; controlled: boolean } | null = null;
+  let last: { value: string | null; controlled: boolean } | null = null;
+  for (let attempt = 0; attempt < 6; attempt++) {
+    if (signal?.aborted) break;
+    const read = await readInput();
+    if (read?.controlled && read.value === expected) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 150));
+      if (signal?.aborted) break;
+      const confirm = await readInput();
+      verification =
+        confirm?.controlled === true && confirm.value === expected ? 'exact' : 'unreadable';
+      break;
+    }
+    if (read) {
+      previous = last;
+      last = read;
+    } else {
+      previous = null;
+      last = null;
+    }
+    if (attempt < 5) await new Promise<void>((resolve) => setTimeout(resolve, 100));
+  }
+  if (
+    verification !== 'exact' &&
+    last?.controlled === true &&
+    previous?.controlled === true &&
+    last.value !== null &&
+    last.value === previous.value
+  ) {
+    verification = 'mismatch';
+  }
   if (verification !== 'exact') {
     return fillFailure(
       'TEXT_ENTRY_UNVERIFIED',
       `React-tree input "${testID}" dispatched onChangeText but exact fiber read-back was ${verification}.`,
-      {
-        mutation: 'possible',
-        pathsTried,
-        verification: combineVerificationOracles(verification, 'unavailable', false),
-      },
+      { mutation: 'possible', pathsTried },
     );
   }
-  return verifiedFillResult('js-onChangeText', text.length, {
-    textEntryPath: 'react-tree',
-    verifiedOracle: 'fiber',
-    handler: dispatch.handler,
-    appendedLength: text.length,
-    resultingLength: expected.length,
-  });
+  if (signal?.aborted) {
+    return fillFailure('TEXT_ENTRY_UNVERIFIED', 'React-tree input was cancelled after mutation.', {
+      mutation: 'possible',
+      pathsTried,
+    });
+  }
+  return okResult(
+    { filled: true, method: 'js-onChangeText', length: text.length },
+    {
+      meta: {
+        textEntryPath: 'react-tree',
+        verifiedOracle: 'fiber',
+        handler: dispatch.handler,
+        appendedLength: text.length,
+        resultingLength: expected.length,
+        verify: 'exact',
+      },
+    },
+  );
 }
 
 export function createDeviceFillHandler(
-  getClient: () => CDPClient,
+  _getClient: () => CDPClient,
 ): (args: FillArgs) => Promise<ToolResult> {
-  return withSession(async (args) =>
-    performExactFill(args, cdpClientOrNull(getClient), { js: true, maestro: true }),
-  );
+  return withSession(async (args) => performExactFill(args, null, {}));
 }
 
 // --- Swipe (coordinate-based with direction shortcut) ---

@@ -108,6 +108,7 @@ test('GH#741 pre-flight refuses API 25 with an explicit unsupported diagnosis, b
   assert.match(String(body.error), new RegExp(`API ${MAESTRO_RUNNER_MIN_ANDROID_API}`));
   assert.match(String(body.error), /INSTALL_FAILED_OLDER_SDK/);
   assert.match(String(body.error), /device_\*/, 'must point at the tier that does support API 23+');
+  assert.doesNotMatch(String(body.error), /device_fill correction/);
   assert.equal(body.meta?.androidApiLevel, 25);
   assert.equal(executed, false, 'the runner must not be spawned against an unsupported device');
 });

@@ -34,7 +34,7 @@ jobs:
   # PR → only when Swift/Xcode files (or this workflow) changed; push/schedule → always.
   changes:
     name: Detect changed languages
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       swift: ${{ steps.detect.outputs.swift }}
     steps:

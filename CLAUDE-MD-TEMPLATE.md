@@ -279,6 +279,22 @@ feature task, **assume Verification** — it has the strictest rules.
 
 ### Verification Discipline (non-negotiable during verification)
 
+**Readiness proof:** Do not claim readiness for device/UI work until rn-dev-agent
+has proven, on the same real target, the target claim, a real-app launch, usable
+UI evidence, and representative navigation. App, Metro, Observe, device-claim,
+and ownership health are not evidence of UI control; all can be green while
+mutating tools are latched off. If any proof step cannot be produced, report
+`UNPROVEN` or `FAIL` at that step—never infer readiness or report a flow as running
+unless the requested MCP operation directly proves it started.
+
+**Control-path integrity:** As required by **Tool Routing — STRICT RULES**, raw
+platform tooling and non-rn-dev-agent control paths (raw `adb`/`xcrun simctl`
+input, ad-hoc scripts, or other automation) are not substitutes and must never
+be reported as rn-dev-agent success; use an exact fallback only with explicit
+user authorization. rn-dev-agent MCP tool success, physical hand-driving by a
+human, and non-MCP automation are three distinct outcomes; none substitutes for
+another.
+
 When verifying a feature works for real users, the following are **SHORTCUTS** that
 invalidate the verification unless the user explicitly accepts them:
 
