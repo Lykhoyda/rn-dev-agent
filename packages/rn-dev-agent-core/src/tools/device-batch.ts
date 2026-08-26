@@ -439,9 +439,7 @@ async function executeStep(
           settleTimeoutMs: step.settle === false ? 0 : BATCH_STEP_SETTLE_BUDGET_MS,
         },
         null,
-        {
-          ...(abortSignal ? { abortSignal } : {}),
-        },
+        abortSignal ? { abortSignal } : {},
       );
     }
     case 'swipe': {

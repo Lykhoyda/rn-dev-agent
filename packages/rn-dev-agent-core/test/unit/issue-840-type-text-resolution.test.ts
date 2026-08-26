@@ -931,7 +931,7 @@ test('typeText stops root enumeration when style fan-out exhausts the shared lim
     firstRoot,
     makeFiber('AndroidTextInput', {
       placeholder: 'Huge style field',
-      style: new Array(100_000).fill(null),
+      style: Array.from({ length: 100_000 }, () => null),
       onChangeText(value: string) {
         calls.push(value);
       },
