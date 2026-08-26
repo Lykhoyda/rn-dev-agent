@@ -1,5 +1,14 @@
 # rn-dev-agent-core
 
+## 0.72.4
+
+### Patch Changes
+
+- 8616624: Bound the system-dialog fallback presence probe to a 15-second default (explicit caller timeouts through 120000ms remain accepted) so Android and session-less iOS calls with no dialog return typed DIALOG_NOT_FOUND promptly instead of appearing hung for two minutes, and teach the tool-docs generator to parse prettier-wrapped .describe() calls and wrapped zod chains so parameters such as timeoutMs and device_find.index are no longer published as undocumented unknowns.
+- 37c65e3: Keep inherited learned-action inventory bounded and refuse inventory or replay if its operation-scoped corpus snapshot changes.
+- 804aefb: Fix Observe HTTP request-body handling by preserving multi-byte UTF-8 code points split across TCP chunks and draining oversized bodies while returning parseable JSON 413 responses over usable keep-alive connections.
+- 017ad96: Settle SQLite supervisor relaunch spawn failures on error or exit once, with a diagnostic and no hanging promise.
+
 ## 0.72.3
 
 ### Patch Changes
