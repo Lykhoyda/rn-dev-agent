@@ -198,13 +198,17 @@ export function classifyForegroundSurface(
   ) {
     return 'react_native_dev_menu';
   }
+  const hasTutorialCopy = has('this is the developer menu');
+  const hasGenericTogglePair =
+    has('toggle performance monitor') && has('toggle element inspector');
+  const hasExpoControlPair = has('copy system info') && has('open devtools');
   if (
-    (has('toggle performance monitor') && has('toggle element inspector')) ||
-    (has('copy system info') && has('open devtools'))
+    hasExpoControlPair ||
+    (hasGenericTogglePair && (hasTutorialCopy || has('copy system info')))
   ) {
     return 'expo_dev_menu';
   }
-  if (has('this is the developer menu')) return 'first_run_tutorial';
+  if (hasTutorialCopy) return 'first_run_tutorial';
   if (!boundAppId) return 'unknown';
   return hasBoundApp ? 'app' : 'unknown';
 }

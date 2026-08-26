@@ -227,6 +227,32 @@ test('disconnected sessions without recoverable policy fail before dispatch', as
   assert.equal(dispatched, false);
 });
 
+test('hideDevMenu recommendation admission requires every live remedy authority axis', async () => {
+  const { runtime } = fixture();
+  let metroLive = true;
+  const probedAxes = [];
+  const gate = createAuthorityGate(runtime, {
+    probe: async ({ axis }) => {
+      probedAxes.push(axis);
+      if (axis === 'M' && !metroLive) {
+        throw new SessionAuthorityError(
+          'METRO_AUTHORITY_MISMATCH',
+          'persisted Metro binding has no live listener',
+        );
+      }
+      return { axis, identity: `${axis}-identity` };
+    },
+  });
+
+  assert.equal(await gate.canRecommendHideDevMenu(), true);
+  assert.deepEqual(probedAxes, ['C', 'S', 'I', 'M', 'B', 'D', 'R']);
+
+  metroLive = false;
+  probedAxes.length = 0;
+  assert.equal(await gate.canRecommendHideDevMenu(), false);
+  assert.ok(probedAxes.includes('M'));
+});
+
 test('handler-time reconnect is rebound before bundle postflight', async () => {
   const { calls, runtime, status } = fixture();
   status.bindings.metro.port = 8193;

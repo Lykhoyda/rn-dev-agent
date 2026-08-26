@@ -483,11 +483,7 @@ async function preflightWithInstallReissue(
 ): Promise<{ before: AuthorityObservation[]; operation: OperationRef; status: SessionStatus }> {
   const { tool, profile, args, axes } = context;
   const probeAll = (probed: SessionStatus): Promise<AuthorityObservation[]> =>
-    Promise.all(
-      axes.map((axis) =>
-        dependencies.probe({ axis, phase: 'preflight', tool, profile, status: probed, args }),
-      ),
-    );
+    probeAuthorityAxes(dependencies, { tool, profile, args, axes }, probed);
   try {
     return { before: await probeAll(status), operation, status };
   } catch (preflightError) {
@@ -509,6 +505,24 @@ async function preflightWithInstallReissue(
       status: reissued.status,
     };
   }
+}
+
+function probeAuthorityAxes(
+  dependencies: AuthorityGateDependencies,
+  context: {
+    tool: string;
+    profile: AuthorityProfile;
+    args: Record<string, unknown>;
+    axes: readonly AuthorityAxis[];
+  },
+  status: SessionStatus,
+): Promise<AuthorityObservation[]> {
+  const { tool, profile, args, axes } = context;
+  return Promise.all(
+    axes.map((axis) =>
+      dependencies.probe({ axis, phase: 'preflight', tool, profile, status, args }),
+    ),
+  );
 }
 
 function requireDeviceTransition(status: SessionStatus, args: Record<string, unknown>): void {
@@ -1169,12 +1183,49 @@ export function createAuthorityGate(
   runtime: AuthorityGateRuntime,
   dependencies: AuthorityGateDependencies,
 ): {
+  canRecommendHideDevMenu(): Promise<boolean>;
   wrap(
     tool: string,
     handler: (...args: unknown[]) => Promise<unknown>,
   ): (...args: unknown[]) => Promise<unknown>;
 } {
   return {
+    canRecommendHideDevMenu: async () => {
+      try {
+        const tool = 'cdp_dev_settings';
+        const args: Record<string, unknown> = { action: 'hideDevMenu' };
+        const profile = authorityProfileFor(tool, args);
+        const status = runtime.status();
+        if (
+          !status.available ||
+          status.state === 'blocked' ||
+          status.state === 'handoff_cleanup' ||
+          profile.kind !== 'authoritative'
+        ) {
+          return false;
+        }
+        if (
+          inspectLoginPrologueGuard({
+            binding: status.bindings.loginPrologue,
+            tool,
+            args,
+            mutation: profile.mutation,
+          }).blocked
+        ) {
+          return false;
+        }
+        requireCompleteAxes(status, profile);
+        bindSessionArguments(status, profile, args, tool);
+        await probeAuthorityAxes(
+          dependencies,
+          { tool, profile, args, axes: profile.axes },
+          status,
+        );
+        return true;
+      } catch {
+        return false;
+      }
+    },
     wrap:
       (tool, handler) =>
       async (...handlerArgs) => {

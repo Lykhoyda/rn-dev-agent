@@ -158,7 +158,6 @@ import { addToolObserver, instrumentTool } from './observability/instrumentation
 import { discoverPluginVersion, ExperienceRecorder } from './experience/evidence.js';
 import { recorder } from './observability/recorder.js';
 import { hashProofValue, StrictProofMonitor } from './domain/proof-capture.js';
-import { inspectLoginPrologueGuard } from './domain/login-prologue.js';
 import type { ProofAuthority } from './domain/proof-receipt.js';
 import {
   maybeCaptureLiveFrame,
@@ -2411,19 +2410,7 @@ trackedTool(
     bindRunner: (platform, deviceId, appId) =>
       bindNativeRunner(authorityRuntime, { platform, deviceId, appId }),
     unbindRunner: (beforeRelease) => unbindNativeRunner(authorityRuntime, beforeRelease),
-    remedyAuthorityAvailable: () => {
-      const status = authorityRuntime.status();
-      if (!status.available || status.state === 'blocked' || status.state === 'handoff_cleanup') {
-        return false;
-      }
-      if (!status.bindings.metro || !status.bindings.bundle) return false;
-      return !inspectLoginPrologueGuard({
-        binding: status.bindings.loginPrologue,
-        tool: 'cdp_dev_settings',
-        args: { action: 'hideDevMenu' },
-        mutation: true,
-      }).blocked;
-    },
+    remedyAuthorityAvailable: () => authorityGate.canRecommendHideDevMenu(),
     probeReactNativeUi: async (platform, deviceId, appId) => {
       const client = getClient();
       const filters = {
