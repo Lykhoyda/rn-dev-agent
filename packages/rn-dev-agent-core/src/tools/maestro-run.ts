@@ -900,6 +900,8 @@ export function createMaestroRunHandler(
             }
           }
         }
+        const uniqueDomains = [...new Set(proofDomains)];
+        const proofDomain = uniqueDomains.length === 1 ? uniqueDomains[0] : 'partitioned';
         const expectedRoute = semanticActionMeta?.expectedRouteSequence?.at(-1);
         if (expectedRoute && deps.getLiveRoute) {
           const liveRoute = await deps.getLiveRoute().catch(() => null);
@@ -907,11 +909,22 @@ export function createMaestroRunHandler(
             return failResult(
               `React-tree replay reached its final testID but route ${String(liveRoute)} does not match expected route ${expectedRoute}.`,
               'ASSERTION_FAILED',
-              { proofDomain: 'react-tree', expectedRoute, liveRoute },
+              {
+                proofDomain,
+                proofDomains: uniqueDomains,
+                ...(proofDomain === 'partitioned'
+                  ? { runner: 'partitioned', transport: 'partitioned' }
+                  : {}),
+                transportVersion: nativeTransportVersion,
+                steps: combinedSteps,
+                output: nativeOutput.slice(0, 2000),
+                outputTruncated: nativeOutput.length > 2000,
+                expectedRoute,
+                liveRoute,
+              },
             );
           }
         }
-        const uniqueDomains = [...new Set(proofDomains)];
         return okResult({
           passed: true,
           flowFile,
@@ -1503,7 +1516,9 @@ export function createMaestroRunHandler(
           ...androidReleaseMeta(),
         });
       }
-      const { timedOut, outputTruncated } = classifyExecError(stageError);
+      const errorClass = classifyExecError(stageError);
+      const timedOut = errorClass.timedOut || flowAbort.signal.aborted;
+      const { outputTruncated } = errorClass;
       const directEvidence = directRunnerEvidence(combined);
       const deviceAuthority = verifyMaestroDeviceAuthority({
         runner: dispatch.runner,

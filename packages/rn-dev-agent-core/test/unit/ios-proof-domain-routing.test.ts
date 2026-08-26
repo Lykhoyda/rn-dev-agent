@@ -750,6 +750,44 @@ test('WDA-visible native smoke still passes in the XCTest domain', async () => {
   assert.equal(env.data?.proofDomain, 'xctest-native');
 });
 
+test('a deadline-triggered runner abort remains a timeout', async () => {
+  const handler = createMaestroRunHandler({
+    getActiveSession: () => ({
+      name: 'native-deadline',
+      platform: 'ios',
+      deviceId: IOS_UDID,
+      appId: 'com.example.app',
+      openedAt: new Date(0).toISOString(),
+    }),
+    replayDeps: () => null,
+    chooseDispatch: () => nativeDispatch(),
+    parkFlow: async (run) => run(),
+    resolveEngineStatus: async () =>
+      buildReplayEngineStatus('pinned-ok', MAESTRO_RUNNER_PIN.version, false),
+    execFile: async (_file, _args, options) =>
+      new Promise((_resolve, reject) => {
+        const abort = () =>
+          reject(Object.assign(new Error('runner aborted'), { code: 'ABORT_ERR' }));
+        if (options.signal?.aborted) abort();
+        else options.signal?.addEventListener('abort', abort, { once: true });
+      }),
+  });
+
+  const env = envelope(
+    await handler({
+      platform: 'ios',
+      deviceId: IOS_UDID,
+      timeoutMs: 30,
+      inlineYaml: `appId: com.example.app\n---\n- assertVisible: Native status\n`,
+      ...callbacks,
+    }),
+  );
+
+  assert.equal(env.ok, false);
+  assert.equal(env.meta?.timedOut, true);
+  assert.match(env.error ?? '', /timed out/);
+});
+
 test('partitioned native trace indices map back to original commands', async () => {
   const handler = createMaestroRunHandler({
     getActiveSession: () => ({
@@ -787,6 +825,59 @@ test('partitioned native trace indices map back to original commands', async () 
   assert.equal(env.ok, true);
   assert.deepEqual(
     env.data?.steps.map((step: { index: number }) => step.index),
+    [0, 1],
+  );
+});
+
+test('partitioned route failures retain native and React proof evidence', async () => {
+  const handler = createMaestroRunHandler({
+    getActiveSession: () => ({
+      name: 'partition-route-failure',
+      platform: 'ios',
+      deviceId: IOS_UDID,
+      appId: 'com.example.app',
+      openedAt: new Date(0).toISOString(),
+    }),
+    replayDeps: () => ({
+      pressByTestId: async () => {},
+      typeByTestId: async () => {},
+      treeFor: async (id) => ({ testID: id }),
+      frontmostFor: async () => ({ visible: true }),
+      launchApp: async () => {},
+      settle: async () => {},
+    }),
+    getLiveRoute: async () => 'unexpected-route',
+    chooseDispatch: () => nativeDispatch(),
+    parkFlow: async (run) => run(),
+    resolveEngineStatus: async () =>
+      buildReplayEngineStatus('pinned-ok', MAESTRO_RUNNER_PIN.version, false),
+    execFile: async () => ({
+      stdout: nativeRunnerOutput('    ✓ assertVisible (0.1s)'),
+      stderr: '',
+    }),
+  });
+  const env = envelope(
+    await handler({
+      platform: 'ios',
+      deviceId: IOS_UDID,
+      inlineYaml: `appId: com.example.app\n---\n- assertVisible: Native status\n- assertVisible:\n    id: react-status\n`,
+      actionMetadata: {
+        id: 'partition-route-proof',
+        enginePin: 'maestro-runner@1.1.24',
+        tags: [],
+        expectedRouteSequence: ['expected-route'],
+      },
+      ...callbacks,
+    }),
+  );
+
+  assert.equal(env.ok, false);
+  assert.equal(env.meta?.proofDomain, 'partitioned');
+  assert.deepEqual(env.meta?.proofDomains, ['xctest-native', 'react-tree']);
+  assert.equal(env.meta?.runner, 'partitioned');
+  assert.equal(env.meta?.transport, 'partitioned');
+  assert.deepEqual(
+    env.meta?.steps.map((step: { index: number }) => step.index),
     [0, 1],
   );
 });

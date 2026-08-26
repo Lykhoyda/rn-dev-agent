@@ -15573,15 +15573,15 @@ function createMaestroRunHandler(deps = {}) {
               const nestedMeta = { ...env.meta, ...env.data };
               combinedSteps.push(...remapNativeSteps(nestedMeta.steps, segment.sourceIndices));
               const uniqueProofDomains = [...new Set(proofDomains)];
-              const proofDomain = uniqueProofDomains.length === 1 ? uniqueProofDomains.at(0) ?? "partitioned" : "partitioned";
+              const proofDomain2 = uniqueProofDomains.length === 1 ? uniqueProofDomains.at(0) ?? "partitioned" : "partitioned";
               const failedStep = remapNativeStep(nestedMeta.failedStep, Math.max(0, segment.sourceIndices.length - 1), segment.sourceIndices);
               const lastStep = remapNativeStep(nestedMeta.lastStep, Math.max(0, segment.sourceIndices.length - 1), segment.sourceIndices);
               const meta = {
                 ...nestedMeta,
                 flowFile,
-                proofDomain,
+                proofDomain: proofDomain2,
                 proofDomains: uniqueProofDomains,
-                ...proofDomain === "partitioned" ? { runner: "partitioned", transport: "partitioned" } : {},
+                ...proofDomain2 === "partitioned" ? { runner: "partitioned", transport: "partitioned" } : {},
                 steps: combinedSteps,
                 ...failedStep ? { failedStep } : {},
                 ...lastStep ? { lastStep } : {}
@@ -15635,14 +15635,25 @@ function createMaestroRunHandler(deps = {}) {
             }
           }
         }
+        const uniqueDomains = [...new Set(proofDomains)];
+        const proofDomain = uniqueDomains.length === 1 ? uniqueDomains[0] : "partitioned";
         const expectedRoute = semanticActionMeta?.expectedRouteSequence?.at(-1);
         if (expectedRoute && deps.getLiveRoute) {
           const liveRoute = await deps.getLiveRoute().catch(() => null);
           if (liveRoute !== expectedRoute) {
-            return failResult(`React-tree replay reached its final testID but route ${String(liveRoute)} does not match expected route ${expectedRoute}.`, "ASSERTION_FAILED", { proofDomain: "react-tree", expectedRoute, liveRoute });
+            return failResult(`React-tree replay reached its final testID but route ${String(liveRoute)} does not match expected route ${expectedRoute}.`, "ASSERTION_FAILED", {
+              proofDomain,
+              proofDomains: uniqueDomains,
+              ...proofDomain === "partitioned" ? { runner: "partitioned", transport: "partitioned" } : {},
+              transportVersion: nativeTransportVersion,
+              steps: combinedSteps,
+              output: nativeOutput.slice(0, 2e3),
+              outputTruncated: nativeOutput.length > 2e3,
+              expectedRoute,
+              liveRoute
+            });
           }
         }
-        const uniqueDomains = [...new Set(proofDomains)];
         return okResult({
           passed: true,
           flowFile,
@@ -16055,7 +16066,9 @@ function createMaestroRunHandler(deps = {}) {
           ...androidReleaseMeta()
         });
       }
-      const { timedOut, outputTruncated } = classifyExecError(stageError);
+      const errorClass = classifyExecError(stageError);
+      const timedOut = errorClass.timedOut || flowAbort.signal.aborted;
+      const { outputTruncated } = errorClass;
       const directEvidence = directRunnerEvidence(combined);
       const deviceAuthority = verifyMaestroDeviceAuthority({
         runner: dispatch.runner,
