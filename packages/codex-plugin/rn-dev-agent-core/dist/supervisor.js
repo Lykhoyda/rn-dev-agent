@@ -30476,7 +30476,7 @@ function createDeviceSnapshotHandler(deps = {}) {
         return attachForegroundSurfaceDiscovery(wrapWithMeta(recovery.result, {
           recovered: "agent-device-runner-leak",
           recoveryTier: recovery.tier
-        }), getActiveSession()?.appId, await deps.remedyAuthorityAvailable?.() === true);
+        }), getActiveSession()?.appId, deps.remedyAuthorityAvailable);
       }
       return failResult(runnerLeakFailureMessage(recovery.reason, session2), {
         code: "RUNNER_LEAK",
@@ -30485,13 +30485,14 @@ function createDeviceSnapshotHandler(deps = {}) {
       });
     }
     cacheSnapshotIfPossible(result);
-    return attachForegroundSurfaceDiscovery(result, getActiveSession()?.appId, await deps.remedyAuthorityAvailable?.() === true);
+    return attachForegroundSurfaceDiscovery(result, getActiveSession()?.appId, deps.remedyAuthorityAvailable);
   };
 }
-function attachForegroundSurfaceDiscovery(result, boundAppId, authorityAvailable) {
+async function attachForegroundSurfaceDiscovery(result, boundAppId, remedyAuthorityAvailable) {
   if (result.isError)
     return result;
   const foregroundSurface = foregroundSurfaceFromSnapshot(result, boundAppId);
+  const authorityAvailable = foregroundSurface === "expo_dev_menu" && await remedyAuthorityAvailable?.() === true;
   const recommendation = recommendForegroundSurfaceRemedy({
     condition: foregroundSurface,
     authority: authorityAvailable ? "available" : "unavailable"
@@ -33452,9 +33453,15 @@ async function reconcileRecoverableRuntime(runtime, dependencies, registry2, ope
   const bundle = await dependencies.refreshRuntimeBinding(status);
   return reconcileRuntimeBundleReplacement(runtime, registry2, operation, status, status.bindings.bundle, status.bindings.metro, bundle);
 }
+async function admitAuthoritativePreflight(runtime, dependencies, registry2, operation, status, tool, profile, args) {
+  const recovery = await reconcileRecoverableRuntime(runtime, dependencies, registry2, operation, status, profile, true);
+  return preflightWithInstallReissue(registry2, runtime, dependencies, { tool, profile, args, axes: profile.axes }, recovery.operation, recovery.status);
+}
 function createAuthorityGate(runtime, dependencies) {
   return {
     canRecommendHideDevMenu: async () => {
+      let operation = null;
+      let registry2 = null;
       try {
         const tool = "cdp_dev_settings";
         const args = { action: "hideDevMenu" };
@@ -33473,10 +33480,26 @@ function createAuthorityGate(runtime, dependencies) {
         }
         requireCompleteAxes(status, profile);
         bindSessionArguments(status, profile, args, tool);
-        await probeAuthorityAxes(dependencies, { tool, profile, args, axes: profile.axes }, status);
+        const available = runtime.requireAvailable();
+        registry2 = available.registry;
+        operation = registry2.beginOperation(available.session, {
+          operationId: randomUUID6(),
+          tool,
+          profile: profile.axes.join("")
+        });
+        const admission = await admitAuthoritativePreflight(runtime, dependencies, registry2, operation, status, tool, profile, args);
+        operation = admission.operation;
         return true;
       } catch {
         return false;
+      } finally {
+        if (registry2 && operation) {
+          try {
+            registry2.endOperation(operation);
+          } catch {
+            registry2.cancelOperation(operation);
+          }
+        }
       }
     },
     wrap: (tool, handler) => async (...handlerArgs) => {
@@ -33842,13 +33865,10 @@ function createAuthorityGate(runtime, dependencies) {
           requireCompleteAxes(status, profile);
           bindSessionArguments(status, profile, args, tool);
         }
-        const preflightRecovery = await reconcileRecoverableRuntime(runtime, dependencies, registry2, operation, status, profile, true);
-        operation = preflightRecovery.operation;
-        status = preflightRecovery.status;
-        const preflight2 = await preflightWithInstallReissue(registry2, runtime, dependencies, { tool, profile, args, axes: profile.axes }, operation, status);
-        const before = preflight2.before;
-        operation = preflight2.operation;
-        status = preflight2.status;
+        const admission = await admitAuthoritativePreflight(runtime, dependencies, registry2, operation, status, tool, profile, args);
+        const before = admission.before;
+        operation = admission.operation;
+        status = admission.status;
         const initialOperationAuthorityVersion = operation.authorityVersion;
         const optionalNativeOriginBefore = await beginOptionalNativeOrigin(dependencies, {
           tool,
@@ -94094,9 +94114,13 @@ import { execFile as execFile23 } from "node:child_process";
 import { promisify as promisify26 } from "node:util";
 import { fileURLToPath as fileURLToPath7 } from "node:url";
 import { dirname as dirname32, join as join60 } from "node:path";
-function trackedTool(name, desc, schema, handler) {
+function trackedTool(name, desc, schema, handler, afterAuthority) {
   registeredToolNames.push(name);
-  const base = instrumentTool(name, authorityGate.wrap(name, arbiterWrap(name, handler)));
+  const gated = authorityGate.wrap(name, arbiterWrap(name, handler));
+  const base = instrumentTool(name, async (...args) => {
+    const result = await gated(...args);
+    return afterAuthority ? afterAuthority(result, args) : result;
+  });
   const installLiveCapture = liveEnabled && mayTriggerLiveCapture(name);
   const wrapped = async (...a) => {
     if (diagnosticContractProbe) {
@@ -95543,7 +95567,6 @@ var init_index = __esm({
     }, createDeviceSnapshotHandler({
       bindRunner: (platform, deviceId, appId) => bindNativeRunner(authorityRuntime, { platform, deviceId, appId }),
       unbindRunner: (beforeRelease) => unbindNativeRunner(authorityRuntime, beforeRelease),
-      remedyAuthorityAvailable: () => authorityGate.canRecommendHideDevMenu(),
       probeReactNativeUi: async (platform, deviceId, appId) => {
         const client2 = getClient();
         const filters = {
@@ -95566,7 +95589,10 @@ var init_index = __esm({
         }
         return false;
       }
-    }));
+    }), (result, args) => {
+      const action = args[0]?.action ?? "snapshot";
+      return action === "snapshot" ? attachForegroundSurfaceDiscovery(result, getActiveSession()?.appId, () => authorityGate.canRecommendHideDevMenu()) : Promise.resolve(result);
+    });
     trackedTool("device_find", 'Find a UI element by visible text and optionally interact with it. Android matching is app-window-only by default; includeSystemUi=true explicitly allows system chrome and may leave the app. Use action="click" to tap, omit for find-only. Returns element ref for use with device_press/device_fill. Requires an open session. For overlapping labels (e.g. "Property damaged" vs "Property lost"), pass exact=true for strict match or index=N to pick the Nth candidate directly \u2014 both short-circuit AMBIGUOUS_MATCH. If AMBIGUOUS_MATCH still occurs, the result includes a candidates[] array with refs you can pass to device_press.', {
       text: external_exports.string().describe("Visible text, accessibility label, or identifier to find"),
       action: external_exports.string().optional().describe('Action to perform: "click" to tap, omit for search-only'),

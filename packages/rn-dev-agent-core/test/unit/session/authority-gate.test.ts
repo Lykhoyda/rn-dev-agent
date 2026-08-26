@@ -253,6 +253,50 @@ test('hideDevMenu recommendation admission requires every live remedy authority 
   assert.ok(probedAxes.includes('M'));
 });
 
+test('hideDevMenu recommendation admission recovers runtime and reissues install authority', async () => {
+  const { calls, runtime, status } = fixture();
+  status.bindings.bundle.targetId = 'persisted-target';
+  status.bindings.bundle.connectionGeneration = 1;
+  status.bindings.proof = null;
+  let runtimeRecovered = false;
+  const gate = createAuthorityGate(runtime, {
+    recoverRuntimeConnection: async () => {
+      calls.push('recover-runtime');
+      runtimeRecovered = true;
+      return true;
+    },
+    refreshRuntimeBinding: async () => {
+      calls.push('refresh-binding');
+      return {
+        ...status.bindings.bundle,
+        targetId: 'restored-target',
+        connectionGeneration: 2,
+      };
+    },
+    reissueInstallBinding: (install) => ({ ...install, digest: 'install-reissued' }),
+    probe: async ({ axis, status: probedStatus }) => {
+      calls.push(`preflight:${axis}`);
+      if (axis === 'I' && probedStatus.bindings.install.digest !== 'install-reissued') {
+        throw new SessionAuthorityError(
+          'APP_INSTALL_IDENTITY_CHANGED',
+          'install generation changed',
+        );
+      }
+      if (axis === 'B') {
+        assert.equal(runtimeRecovered, true);
+        assert.equal(probedStatus.bindings.bundle.targetId, 'restored-target');
+      }
+      return { axis, identity: `${axis}-identity` };
+    },
+  });
+
+  assert.equal(await gate.canRecommendHideDevMenu(), true);
+  assert.equal(status.bindings.bundle.targetId, 'restored-target');
+  assert.equal(status.bindings.install.digest, 'install-reissued');
+  assert.ok(calls.indexOf('recover-runtime') < calls.indexOf('preflight:B'));
+  assert.equal(calls.at(-1), 'end');
+});
+
 test('handler-time reconnect is rebound before bundle postflight', async () => {
   const { calls, runtime, status } = fixture();
   status.bindings.metro.port = 8193;

@@ -52,7 +52,10 @@ import { createForegroundSurfaceProbe } from './tools/expo-dev-menu.js';
 import { createInteractHandler } from './tools/interact.js';
 import { createCollectLogsHandler } from './tools/collect-logs.js';
 import { createDeviceListHandler, createDeviceScreenshotHandler } from './tools/device-list.js';
-import { createDeviceSnapshotHandler } from './tools/device-session.js';
+import {
+  attachForegroundSurfaceDiscovery,
+  createDeviceSnapshotHandler,
+} from './tools/device-session.js';
 import { releaseDeviceLockForSession } from './tools/device-session.js';
 import { createSessionRuntimeAbsenceProbe } from './session/session-runtime-absence.js';
 import {
@@ -898,17 +901,27 @@ const liveDeps = buildLiveDeps({
 const registeredToolNames: string[] = [];
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function trackedTool(name: string, desc: string, schema: z.ZodRawShape, handler: any): void {
+function trackedTool(
+  name: string,
+  desc: string,
+  schema: z.ZodRawShape,
+  handler: any,
+  afterAuthority?: (result: unknown, args: readonly unknown[]) => Promise<unknown>,
+): void {
   registeredToolNames.push(name);
+  const gated = authorityGate.wrap(
+    name,
+    arbiterWrap(
+      name,
+      handler as (...args: unknown[]) => Promise<import('./utils.js').ToolResult>,
+    ) as (...args: unknown[]) => Promise<unknown>,
+  );
   const base = instrumentTool(
     name,
-    authorityGate.wrap(
-      name,
-      arbiterWrap(
-        name,
-        handler as (...args: unknown[]) => Promise<import('./utils.js').ToolResult>,
-      ) as (...args: unknown[]) => Promise<unknown>,
-    ),
+    async (...args: unknown[]) => {
+      const result = await gated(...args);
+      return afterAuthority ? afterAuthority(result, args) : result;
+    },
   );
   // GH #321: the device_find snapshot-cache must be invalidated after ANY tool
   // that could change the screen — including JS-level mutations that bypass the
@@ -2410,7 +2423,6 @@ trackedTool(
     bindRunner: (platform, deviceId, appId) =>
       bindNativeRunner(authorityRuntime, { platform, deviceId, appId }),
     unbindRunner: (beforeRelease) => unbindNativeRunner(authorityRuntime, beforeRelease),
-    remedyAuthorityAvailable: () => authorityGate.canRecommendHideDevMenu(),
     probeReactNativeUi: async (platform, deviceId, appId) => {
       const client = getClient();
       const filters = {
@@ -2439,6 +2451,16 @@ trackedTool(
       return false;
     },
   }),
+  (result, args) => {
+    const action = (args[0] as Record<string, unknown> | undefined)?.action ?? 'snapshot';
+    return action === 'snapshot'
+      ? attachForegroundSurfaceDiscovery(
+          result as import('./utils.js').ToolResult,
+          getActiveSession()?.appId,
+          () => authorityGate.canRecommendHideDevMenu(),
+        )
+      : Promise.resolve(result);
+  },
 );
 
 trackedTool(
