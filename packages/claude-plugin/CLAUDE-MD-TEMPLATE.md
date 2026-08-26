@@ -401,7 +401,7 @@ Use `cdp_reload` — triggers a full reload with automatic reconnect and target 
 
 **Expo Developer Menu:** `cdp_reload` does not dismiss native UI. Before
 navigation, take a fresh `device_snapshot`. If it reports
-`foregroundSurface: "expo_dev_menu"`, call
+`meta.foregroundSurface: "expo_dev_menu"`, call
 `cdp_dev_settings({ action: "hideDevMenu" })`, then take another fresh snapshot
 and require the app surface. This remedy is only for the Expo Developer Menu,
 not the React Native core dev menu, Expo `Development servers` picker, system
