@@ -307,15 +307,17 @@ test('React Native core menu markers win when generic Expo toggle labels overlap
   );
 });
 
-test('generic toggle overlap never exposes the Expo remedy without Expo-specific evidence', () => {
+test('generic toggle overlap never exposes the Expo remedy without Expo-specific evidence', async () => {
   const envelope = parseEnvelope(
-    attachForegroundSurfaceDiscovery(
+    await attachForegroundSurfaceDiscovery(
       snapshotEnvelope([
         { label: 'Toggle performance monitor' },
         { label: 'Toggle element inspector' },
       ]),
       'com.example.app',
-      true,
+      () => {
+        throw new Error('generic toggles must not probe remedy authority');
+      },
     ),
   );
 
@@ -406,8 +408,9 @@ test('hideDevMenu executes for the real Expo menu shape that includes tutorial c
   assert.equal(calls.length, 2);
 });
 
-test('foreground discovery does not recommend the Expo remedy for distinct or uncertain surfaces', () => {
+test('foreground discovery does not probe or recommend for distinct or uncertain surfaces', async () => {
   const appId = 'com.example.app';
+  let authorityProbes = 0;
   const cases = [
     {
       name: 'React Native core menu',
@@ -457,19 +460,23 @@ test('foreground discovery does not recommend the Expo remedy for distinct or un
 
   for (const fixture of cases) {
     const envelope = parseEnvelope(
-      attachForegroundSurfaceDiscovery(snapshotEnvelope(fixture.nodes), appId, true),
+      await attachForegroundSurfaceDiscovery(snapshotEnvelope(fixture.nodes), appId, () => {
+        authorityProbes += 1;
+        return true;
+      }),
     );
     assert.equal(envelope.meta.foregroundSurface, fixture.expectedSurface, fixture.name);
     assert.equal(envelope.meta.recommendation, undefined, fixture.name);
   }
+  assert.equal(authorityProbes, 0);
 });
 
-test('foreground discovery withholds the Expo remedy when its authority is unavailable', () => {
+test('foreground discovery withholds the Expo remedy when its authority is unavailable', async () => {
   const envelope = parseEnvelope(
-    attachForegroundSurfaceDiscovery(
+    await attachForegroundSurfaceDiscovery(
       snapshotEnvelope([{ label: 'Copy system info' }, { label: 'Open DevTools' }]),
       'com.example.app',
-      false,
+      () => false,
     ),
   );
 

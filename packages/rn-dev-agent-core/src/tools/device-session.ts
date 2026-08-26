@@ -745,7 +745,7 @@ export function createDeviceSnapshotHandler(
             recoveryTier: recovery.tier,
           }),
           getActiveSession()?.appId,
-          (await deps.remedyAuthorityAvailable?.()) === true,
+          deps.remedyAuthorityAvailable,
         );
       }
 
@@ -760,18 +760,21 @@ export function createDeviceSnapshotHandler(
     return attachForegroundSurfaceDiscovery(
       result,
       getActiveSession()?.appId,
-      (await deps.remedyAuthorityAvailable?.()) === true,
+      deps.remedyAuthorityAvailable,
     );
   };
 }
 
-export function attachForegroundSurfaceDiscovery(
+export async function attachForegroundSurfaceDiscovery(
   result: ToolResult,
   boundAppId: string | undefined,
-  authorityAvailable: boolean,
-): ToolResult {
+  remedyAuthorityAvailable?: () => boolean | Promise<boolean>,
+): Promise<ToolResult> {
   if (result.isError) return result;
   const foregroundSurface = foregroundSurfaceFromSnapshot(result, boundAppId);
+  const authorityAvailable =
+    foregroundSurface === 'expo_dev_menu' &&
+    (await remedyAuthorityAvailable?.()) === true;
   const recommendation = recommendForegroundSurfaceRemedy({
     condition: foregroundSurface,
     authority: authorityAvailable ? 'available' : 'unavailable',
