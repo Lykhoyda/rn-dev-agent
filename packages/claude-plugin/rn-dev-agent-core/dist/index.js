@@ -35091,6 +35091,19 @@ function commandTreeContains(value, names, depth = 0) {
     return false;
   return Object.entries(value).some(([key, child]) => names.has(key) || commandTreeContains(child, names, depth + 1));
 }
+function nativeCommandMayChangeFocus(command, depth = 0) {
+  if (depth > 20)
+    return true;
+  const name = commandName(command);
+  if (name !== "runFlow")
+    return name === null || !nativeFocusPreservingCommands.has(name);
+  if (!isObject2(command))
+    return true;
+  const runFlow = command.runFlow;
+  if (!isObject2(runFlow) || !Array.isArray(runFlow.commands))
+    return true;
+  return runFlow.commands.some((child) => nativeCommandMayChangeFocus(child, depth + 1));
+}
 function exactTapId(command, params) {
   try {
     const step = normalizeSteps([command], params)[0];
@@ -35128,7 +35141,7 @@ function planIosProofDomains(commands, params) {
   const segments = [];
   let focusedDomain = null;
   let focusedReactId = null;
-  const tapCommands = /* @__PURE__ */ new Set(["tapOn"]);
+  const tapCommands = /* @__PURE__ */ new Set(["tapOn", "tap"]);
   const lifecycleCommands2 = /* @__PURE__ */ new Set(["launchApp", "clearState", "killApp", "stopApp"]);
   for (let index = 0; index < commands.length; index++) {
     const name = commandName(commands[index]);
@@ -35150,9 +35163,12 @@ function planIosProofDomains(commands, params) {
         ...domain === "react-tree" && focusedReactId ? { initialReactFocusId: focusedReactId } : {}
       });
     }
-    if (name === "tapOn") {
+    if (domain === "xctest-native" && nativeCommandMayChangeFocus(commands[index])) {
       focusedDomain = domain;
-      focusedReactId = domain === "react-tree" ? exactTapId(commands[index], params) : null;
+      focusedReactId = null;
+    } else if (tapCommands.has(name ?? "")) {
+      focusedDomain = domain;
+      focusedReactId = name === "tapOn" && domain === "react-tree" ? exactTapId(commands[index], params) : null;
     } else if (commandTreeContains(commands[index], tapCommands)) {
       focusedDomain = domain;
       focusedReactId = null;
@@ -35168,13 +35184,21 @@ function selectorsVisibleInNativeSnapshot(selectors, nodes) {
 }
 function nativeSelectorsForCommands(commands) {
   const selectors = /* @__PURE__ */ new Set();
+  const unsupportedSelectors = /* @__PURE__ */ new Set();
   const addSelector = (value) => {
     if (typeof value === "string") {
-      selectors.add(value);
+      if (!unsupportedSelectors.has(value))
+        selectors.add(value);
       return;
     }
-    if (isObject2(value) && typeof value.text === "string")
-      selectors.add(value.text);
+    if (isObject2(value) && typeof value.text === "string") {
+      if (Object.keys(value).length === 1 && !unsupportedSelectors.has(value.text)) {
+        selectors.add(value.text);
+      } else {
+        selectors.delete(value.text);
+        unsupportedSelectors.add(value.text);
+      }
+    }
   };
   const visit = (value, depth = 0) => {
     if (depth > 20)
@@ -35212,10 +35236,18 @@ function loginPostconditionId(commands) {
   const visible = "visible" in command ? command.visible : command;
   return isObject2(visible) && typeof visible.id === "string" ? visible.id : null;
 }
+var nativeFocusPreservingCommands;
 var init_ios_proof_router = __esm({
   "packages/rn-dev-agent-core/dist/domain/ios-proof-router.js"() {
     "use strict";
     init_cdp_flow_replay();
+    nativeFocusPreservingCommands = /* @__PURE__ */ new Set([
+      "assertVisible",
+      "assertNotVisible",
+      "extendedWaitUntil",
+      "takeScreenshot",
+      "waitForAnimationToEnd"
+    ]);
   }
 });
 
@@ -35391,21 +35423,6 @@ function commandName2(command) {
     return null;
   const keys = Object.keys(command);
   return keys.length === 1 ? keys[0] : null;
-}
-function commandTreeContains2(command, names, depth = 0) {
-  if (depth > 20)
-    return true;
-  const name = commandName2(command);
-  if (name !== null && names.has(name))
-    return true;
-  if (name !== "runFlow" || !command || typeof command !== "object" || Array.isArray(command)) {
-    return false;
-  }
-  const runFlow = command.runFlow;
-  if (!runFlow || typeof runFlow !== "object" || Array.isArray(runFlow))
-    return false;
-  const commands = runFlow.commands;
-  return Array.isArray(commands) && commands.some((child) => commandTreeContains2(child, names, depth + 1));
 }
 function nestedLifecycleCommand(command) {
   if (!command || typeof command !== "object" || Array.isArray(command))
@@ -35697,12 +35714,13 @@ function createMaestroRunHandler(deps = {}) {
       const completeOrigin = args.completeNativeOrigin ?? deps.completeNativeOrigin ?? managedAuthority.completeNativeOrigin;
       const relaunchManagedApp = args.relaunchManagedApp ?? deps.relaunchManagedApp ?? managedAuthority.relaunchManagedApp;
       const reproveManagedOrigin = args.reproveManagedOrigin ?? deps.reproveManagedOrigin ?? managedAuthority.reproveManagedOrigin;
+      const completeRunnerPark = args.completeRunnerPark ?? managedAuthority.completeRunnerPark;
+      const reissueInstallReceipt2 = args.reissueInstallReceipt ?? deps.reissueInstallReceipt ?? managedAuthority.reissueInstallReceipt;
       const combinedSteps = [];
       const proofDomains = [];
       let nativeTransportVersion = null;
       let nativeOutput = "";
       let retainedReactFocusId;
-      const nativeFocusInvalidators = /* @__PURE__ */ new Set([...lifecycleCommands, "tapOn"]);
       try {
         for (const segment of iosProofPlan.segments) {
           if (controller.signal.aborted || deadline - now() <= 0) {
@@ -35716,7 +35734,13 @@ function createMaestroRunHandler(deps = {}) {
               ...args,
               flowPath: void 0,
               inlineYaml: buildMaestroFlow(headerAppId ? { appId: headerAppId } : {}, segment.commands),
-              timeoutMs: Math.max(1, deadline - now())
+              timeoutMs: Math.max(1, deadline - now()),
+              claimNativeOrigin: claimOrigin,
+              completeNativeOrigin: completeOrigin,
+              relaunchManagedApp,
+              reproveManagedOrigin,
+              completeRunnerPark,
+              reissueInstallReceipt: reissueInstallReceipt2
             });
             const env = readToolEnvelope(nested);
             if (env.ok !== true || env.data?.passed !== true) {
@@ -35742,7 +35766,7 @@ function createMaestroRunHandler(deps = {}) {
             if (typeof env.data.output === "string")
               nativeOutput += env.data.output;
             combinedSteps.push(...remapNativeSteps(env.data.steps, segment.sourceIndices));
-            if (segment.commands.some((command) => commandTreeContains2(command, nativeFocusInvalidators))) {
+            if (segment.commands.some(nativeCommandMayChangeFocus)) {
               retainedReactFocusId = void 0;
             }
             continue;
@@ -36241,13 +36265,14 @@ function createMaestroRunHandler(deps = {}) {
       const soleNativeSelector = nativeSelectors.length === 1 ? nativeSelectors[0].value : null;
       const selectorLessAssertionFailure = nativeFailure.kind === "UNKNOWN" && terminal.exitClass === "step-failure" && terminal.failedStep?.split(/\s+/, 1)[0] === "assertVisible";
       const failedNativeSelector = nativeFailure.kind === "SELECTOR_NOT_FOUND" ? nativeFailure.selector ?? soleNativeSelector : nativeFailure.kind === "ASSERTION_FAILED" ? nativeFailure.selector ?? soleNativeSelector : nativeFailure.kind === "TIMEOUT" ? nativeFailure.selector : selectorLessAssertionFailure ? soleNativeSelector : null;
+      const comparableNativeSelector = nativeSelectors.find((selector) => selector.value === failedNativeSelector);
       let nativeVisionEvidence = null;
       let nativeVisionAttempted = false;
-      if (requestedDeviceId && failedNativeSelector !== null && deps.nativeVisionProbe && !flowAbort.signal.aborted) {
+      if (requestedDeviceId && comparableNativeSelector && deps.nativeVisionProbe && !flowAbort.signal.aborted) {
         nativeVisionAttempted = true;
         nativeVisionEvidence = await deps.nativeVisionProbe({
           deviceId: requestedDeviceId,
-          selectors: [{ kind: "text", value: failedNativeSelector }],
+          selectors: [comparableNativeSelector],
           signal: flowAbort.signal
         }).catch(() => null);
       }

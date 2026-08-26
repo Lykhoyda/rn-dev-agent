@@ -45,6 +45,24 @@ function commandTreeContains(value: unknown, names: ReadonlySet<string>, depth =
   );
 }
 
+const nativeFocusPreservingCommands = new Set([
+  'assertVisible',
+  'assertNotVisible',
+  'extendedWaitUntil',
+  'takeScreenshot',
+  'waitForAnimationToEnd',
+]);
+
+export function nativeCommandMayChangeFocus(command: unknown, depth = 0): boolean {
+  if (depth > 20) return true;
+  const name = commandName(command);
+  if (name !== 'runFlow') return name === null || !nativeFocusPreservingCommands.has(name);
+  if (!isObject(command)) return true;
+  const runFlow = command.runFlow;
+  if (!isObject(runFlow) || !Array.isArray(runFlow.commands)) return true;
+  return runFlow.commands.some((child) => nativeCommandMayChangeFocus(child, depth + 1));
+}
+
 function exactTapId(command: unknown, params: Record<string, string>): string | null {
   try {
     const step = normalizeSteps([command], params)[0];
@@ -89,7 +107,7 @@ export function planIosProofDomains(
   const segments: IosProofSegment[] = [];
   let focusedDomain: IosProofDomain | null = null;
   let focusedReactId: string | null = null;
-  const tapCommands = new Set(['tapOn']);
+  const tapCommands = new Set(['tapOn', 'tap']);
   const lifecycleCommands = new Set(['launchApp', 'clearState', 'killApp', 'stopApp']);
   for (let index = 0; index < commands.length; index++) {
     const name = commandName(commands[index]);
@@ -116,9 +134,13 @@ export function planIosProofDomains(
           : {}),
       });
     }
-    if (name === 'tapOn') {
+    if (domain === 'xctest-native' && nativeCommandMayChangeFocus(commands[index])) {
       focusedDomain = domain;
-      focusedReactId = domain === 'react-tree' ? exactTapId(commands[index], params) : null;
+      focusedReactId = null;
+    } else if (tapCommands.has(name ?? '')) {
+      focusedDomain = domain;
+      focusedReactId =
+        name === 'tapOn' && domain === 'react-tree' ? exactTapId(commands[index], params) : null;
     } else if (commandTreeContains(commands[index], tapCommands)) {
       focusedDomain = domain;
       focusedReactId = null;
@@ -150,12 +172,20 @@ export function selectorsVisibleInNativeSnapshot(
 
 export function nativeSelectorsForCommands(commands: unknown[]): NativeProofSelector[] {
   const selectors = new Set<string>();
+  const unsupportedSelectors = new Set<string>();
   const addSelector = (value: unknown): void => {
     if (typeof value === 'string') {
-      selectors.add(value);
+      if (!unsupportedSelectors.has(value)) selectors.add(value);
       return;
     }
-    if (isObject(value) && typeof value.text === 'string') selectors.add(value.text);
+    if (isObject(value) && typeof value.text === 'string') {
+      if (Object.keys(value).length === 1 && !unsupportedSelectors.has(value.text)) {
+        selectors.add(value.text);
+      } else {
+        selectors.delete(value.text);
+        unsupportedSelectors.add(value.text);
+      }
+    }
   };
   const visit = (value: unknown, depth = 0): void => {
     if (depth > 20) return;

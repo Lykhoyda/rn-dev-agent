@@ -347,6 +347,29 @@ test('inputText follows a nested native tap instead of reviving stale React focu
   );
 });
 
+test('inputText does not retain React authority after a native coordinate tap', () => {
+  for (const nativeCommand of [
+    { tap: { point: '50%,50%' } },
+    { doubleTapOn: 'Native field' },
+    { back: true },
+    { swipe: { direction: 'LEFT' } },
+  ]) {
+    const plan = planIosProofDomains(
+      [{ tapOn: { id: 'react-field' } }, nativeCommand, { inputText: 'value' }],
+      {},
+    );
+    assert.equal(plan.ok, true);
+    if (!plan.ok) continue;
+    assert.deepEqual(
+      plan.segments.map(({ domain, sourceIndices }) => ({ domain, sourceIndices })),
+      [
+        { domain: 'react-tree', sourceIndices: [0] },
+        { domain: 'xctest-native', sourceIndices: [1, 2] },
+      ],
+    );
+  }
+});
+
 test('negative native assertions cannot prove blindness', () => {
   assert.deepEqual(
     nativeSelectorsForCommands([
@@ -358,6 +381,17 @@ test('negative native assertions cannot prove blindness', () => {
   assert.deepEqual(nativeSelectorsForCommands([{ assertVisible: { text: 'Present' } }]), [
     { kind: 'text', value: 'Present' },
   ]);
+  assert.deepEqual(
+    nativeSelectorsForCommands([{ assertVisible: { text: 'Present', index: 1 } }]),
+    [],
+  );
+  assert.deepEqual(
+    nativeSelectorsForCommands([
+      { assertVisible: 'Present' },
+      { assertVisible: { text: 'Present', index: 1 } },
+    ]),
+    [],
+  );
 });
 
 test('hidden or offscreen native nodes cannot prove blindness', () => {
@@ -673,6 +707,27 @@ test('ordinary native selector miss is not called blind', async () => {
       platform: 'ios',
       deviceId: IOS_UDID,
       inlineYaml: `appId: com.example.app\n---\n- assertVisible: Open in\n`,
+      ...callbacks,
+    }),
+  );
+  assert.notEqual(env.code, 'NATIVE_SURFACE_BLIND');
+});
+
+test('a constrained native selector miss is not reduced to a blind text comparison', async () => {
+  const env = envelope(
+    await nativeHandler(
+      true,
+      true,
+      "Element with text 'Repeated' not found",
+    )({
+      platform: 'ios',
+      deviceId: IOS_UDID,
+      inlineYaml: `appId: com.example.app
+---
+- assertVisible:
+    text: Repeated
+    index: 1
+`,
       ...callbacks,
     }),
   );

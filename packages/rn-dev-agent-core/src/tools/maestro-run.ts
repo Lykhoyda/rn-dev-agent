@@ -86,6 +86,7 @@ import { SessionAuthorityError } from '../session/registry.js';
 import {
   planIosProofDomains,
   loginPostconditionId,
+  nativeCommandMayChangeFocus,
   nativeSelectorsForCommands,
   type NativeProofSelector,
 } from '../domain/ios-proof-router.js';
@@ -238,22 +239,6 @@ function commandName(command: unknown): string | null {
   if (!command || typeof command !== 'object' || Array.isArray(command)) return null;
   const keys = Object.keys(command as Record<string, unknown>);
   return keys.length === 1 ? keys[0]! : null;
-}
-
-function commandTreeContains(command: unknown, names: ReadonlySet<string>, depth = 0): boolean {
-  if (depth > 20) return true;
-  const name = commandName(command);
-  if (name !== null && names.has(name)) return true;
-  if (name !== 'runFlow' || !command || typeof command !== 'object' || Array.isArray(command)) {
-    return false;
-  }
-  const runFlow = (command as Record<string, unknown>).runFlow;
-  if (!runFlow || typeof runFlow !== 'object' || Array.isArray(runFlow)) return false;
-  const commands = (runFlow as Record<string, unknown>).commands;
-  return (
-    Array.isArray(commands) &&
-    commands.some((child) => commandTreeContains(child, names, depth + 1))
-  );
 }
 
 function nestedLifecycleCommand(command: unknown): boolean {
@@ -784,12 +769,16 @@ export function createMaestroRunHandler(
         args.reproveManagedOrigin ??
         deps.reproveManagedOrigin ??
         managedAuthority.reproveManagedOrigin;
+      const completeRunnerPark = args.completeRunnerPark ?? managedAuthority.completeRunnerPark;
+      const reissueInstallReceipt =
+        args.reissueInstallReceipt ??
+        deps.reissueInstallReceipt ??
+        managedAuthority.reissueInstallReceipt;
       const combinedSteps: PartitionedReplayStep[] = [];
       const proofDomains: Array<'react-tree' | 'xctest-native'> = [];
       let nativeTransportVersion: unknown = null;
       let nativeOutput = '';
       let retainedReactFocusId: string | undefined;
-      const nativeFocusInvalidators = new Set([...lifecycleCommands, 'tapOn']);
       try {
         for (const segment of iosProofPlan.segments) {
           if (controller.signal.aborted || deadline - now() <= 0) {
@@ -807,6 +796,12 @@ export function createMaestroRunHandler(
                 segment.commands,
               ),
               timeoutMs: Math.max(1, deadline - now()),
+              claimNativeOrigin: claimOrigin,
+              completeNativeOrigin: completeOrigin,
+              relaunchManagedApp,
+              reproveManagedOrigin,
+              completeRunnerPark,
+              reissueInstallReceipt,
             });
             const env = readToolEnvelope(nested);
             if (env.ok !== true || env.data?.passed !== true) {
@@ -846,11 +841,7 @@ export function createMaestroRunHandler(
             nativeTransportVersion = env.data.transportVersion ?? nativeTransportVersion;
             if (typeof env.data.output === 'string') nativeOutput += env.data.output;
             combinedSteps.push(...remapNativeSteps(env.data.steps, segment.sourceIndices));
-            if (
-              segment.commands.some((command) =>
-                commandTreeContains(command, nativeFocusInvalidators),
-              )
-            ) {
+            if (segment.commands.some(nativeCommandMayChangeFocus)) {
               retainedReactFocusId = undefined;
             }
             continue;
@@ -1564,11 +1555,14 @@ export function createMaestroRunHandler(
               : selectorLessAssertionFailure
                 ? soleNativeSelector
                 : null;
+      const comparableNativeSelector = nativeSelectors.find(
+        (selector) => selector.value === failedNativeSelector,
+      );
       let nativeVisionEvidence: NativeVisionEvidence | null = null;
       let nativeVisionAttempted = false;
       if (
         requestedDeviceId &&
-        failedNativeSelector !== null &&
+        comparableNativeSelector &&
         deps.nativeVisionProbe &&
         !flowAbort.signal.aborted
       ) {
@@ -1576,7 +1570,7 @@ export function createMaestroRunHandler(
         nativeVisionEvidence = await deps
           .nativeVisionProbe({
             deviceId: requestedDeviceId,
-            selectors: [{ kind: 'text', value: failedNativeSelector }],
+            selectors: [comparableNativeSelector],
             signal: flowAbort.signal,
           })
           .catch(() => null);
