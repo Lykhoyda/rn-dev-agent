@@ -93,6 +93,8 @@ const ANDROID_REBUILD_COMPLETION_RETRY_MS = 1_000;
 const ANDROID_REBUILD_COMPLETION_ATTEMPTS = 5;
 const ANDROID_REBUILD_CLEANUP_TIMEOUT_MS = 30_000;
 const ADB_CLEANUP_TIMEOUT_MS = 5_000;
+const ANDROID_CLEANUP_VERIFY_ATTEMPTS = 20;
+const ANDROID_CLEANUP_VERIFY_INTERVAL_MS = 150;
 const GRADLE_BUILD_TIMEOUT_MS = 600_000; // cold assembleDebug can take minutes on a fresh machine
 const ADB_INSTALL_TIMEOUT_MS = 120_000;
 
@@ -778,6 +780,11 @@ export async function reapMismatchedAndroidRunner(
     signal?: AbortSignal,
   ) => Promise<void>,
   signal?: AbortSignal,
+  verification: {
+    attempts?: number;
+    intervalMs?: number;
+    delay?: (ms: number, signal?: AbortSignal) => Promise<void>;
+  } = {},
 ): Promise<void> {
   signal?.throwIfAborted();
   const deviceId = state?.deviceId;
@@ -846,14 +853,45 @@ export async function reapMismatchedAndroidRunner(
             );
           }
         });
-  await verifyReleased(
-    {
-      deviceId,
-      ...(state?.hostPort !== undefined ? { hostPort: state.hostPort } : {}),
-      ...(state?.devicePort !== undefined ? { devicePort: state.devicePort } : {}),
-    },
-    signal,
-  );
+  const expected = {
+    deviceId,
+    ...(state?.hostPort !== undefined ? { hostPort: state.hostPort } : {}),
+    ...(state?.devicePort !== undefined ? { devicePort: state.devicePort } : {}),
+  };
+  const attempts = Math.max(1, verification.attempts ?? ANDROID_CLEANUP_VERIFY_ATTEMPTS);
+  const intervalMs = Math.max(0, verification.intervalMs ?? ANDROID_CLEANUP_VERIFY_INTERVAL_MS);
+  const delay =
+    verification.delay ??
+    ((ms: number, waitSignal?: AbortSignal) =>
+      new Promise<void>((resolve, reject) => {
+        if (waitSignal?.aborted) {
+          reject(waitSignal.reason);
+          return;
+        }
+        const timer = setTimeout(done, ms);
+        const aborted = () => done(waitSignal?.reason ?? new Error('Android cleanup aborted'));
+        function done(error?: unknown) {
+          clearTimeout(timer);
+          waitSignal?.removeEventListener('abort', aborted);
+          if (error !== undefined) reject(error);
+          else resolve();
+        }
+        waitSignal?.addEventListener('abort', aborted, { once: true });
+      }));
+  let verificationError: unknown;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    signal?.throwIfAborted();
+    try {
+      await verifyReleased(expected, signal);
+      verificationError = undefined;
+      break;
+    } catch (error) {
+      signal?.throwIfAborted();
+      verificationError = error;
+    }
+    if (attempt + 1 < attempts) await delay(intervalMs, signal);
+  }
+  if (verificationError !== undefined) throw verificationError;
   signal?.throwIfAborted();
 }
 

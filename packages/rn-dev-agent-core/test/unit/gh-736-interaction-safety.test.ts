@@ -31,6 +31,7 @@ import {
   AndroidFeaturesStaleError,
   androidRetryCleanupContext,
   classifyAndroidHealth,
+  reapMismatchedAndroidRunner,
   runBoundedAndroidRunnerRebuild,
   runAndroid,
 } from '../../dist/runners/rn-android-runner-client.js';
@@ -424,6 +425,81 @@ test('missing exact-label capability uses the bounded artifact rebuild path', as
   );
   assert.equal(result, 'rebuilt');
   assert.equal(rebuilt, 1);
+});
+
+test('unbound stale-feature cleanup waits for current-session runner resources to release', async () => {
+  const error = new AndroidFeaturesStaleError(
+    ['APP_SCOPED_EXACT_LABEL_INTERACTION'],
+    appId,
+    '46828c2c',
+  );
+  const cleanupContext = androidRetryCleanupContext(null, error);
+  const events: string[] = [];
+  let verificationAttempts = 0;
+
+  await reapMismatchedAndroidRunner(
+    cleanupContext,
+    async ({ deviceId, includeLegacy }) => {
+      events.push(`release:${deviceId}:${String(includeLegacy)}`);
+      return {
+        stoppedOwnRunner: true,
+        forceStoppedPackages: [
+          'dev.lykhoyda.rndevagent.androidrunner.test',
+          'dev.lykhoyda.rndevagent.androidrunner',
+        ],
+      };
+    },
+    async ({ deviceId }) => {
+      verificationAttempts += 1;
+      events.push(`verify:${deviceId}:${verificationAttempts}`);
+      if (verificationAttempts === 1) {
+        throw new Error(
+          `RUNNER_CLEANUP_UNCONFIRMED: Android runner resources remain for ${deviceId}`,
+        );
+      }
+    },
+    undefined,
+    { attempts: 2, intervalMs: 0, delay: async () => events.push('settle') },
+  );
+
+  assert.deepEqual(events, [
+    'release:46828c2c:false',
+    'verify:46828c2c:1',
+    'settle',
+    'verify:46828c2c:2',
+  ]);
+});
+
+test('unbound stale-feature cleanup remains truthful when runner resources never release', async () => {
+  const error = new AndroidFeaturesStaleError(
+    ['APP_SCOPED_EXACT_LABEL_INTERACTION'],
+    appId,
+    '46828c2c',
+  );
+  let verificationAttempts = 0;
+
+  await assert.rejects(
+    reapMismatchedAndroidRunner(
+      androidRetryCleanupContext(null, error),
+      async () => ({
+        stoppedOwnRunner: true,
+        forceStoppedPackages: [
+          'dev.lykhoyda.rndevagent.androidrunner.test',
+          'dev.lykhoyda.rndevagent.androidrunner',
+        ],
+      }),
+      async ({ deviceId }) => {
+        verificationAttempts += 1;
+        throw new Error(
+          `RUNNER_CLEANUP_UNCONFIRMED: Android runner resources remain for ${deviceId}`,
+        );
+      },
+      undefined,
+      { attempts: 2, intervalMs: 0, delay: async () => {} },
+    ),
+    /RUNNER_CLEANUP_UNCONFIRMED: Android runner resources remain for 46828c2c/,
+  );
+  assert.equal(verificationAttempts, 2);
 });
 
 test('Android runner reports a rejected tap truthfully per dispatch mechanism', async () => {

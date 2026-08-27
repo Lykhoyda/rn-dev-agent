@@ -14570,7 +14570,7 @@ function consumePendingAndroidUpgradeNote() {
   pendingUpgradeNote = void 0;
   return note;
 }
-async function reapMismatchedAndroidRunner(state, release2, verify, signal) {
+async function reapMismatchedAndroidRunner(state, release2, verify, signal, verification = {}) {
   signal?.throwIfAborted();
   const deviceId = state?.deviceId;
   if (!deviceId) {
@@ -14591,30 +14591,65 @@ async function reapMismatchedAndroidRunner(state, release2, verify, signal) {
     throw new Error(`RUNNER_CLEANUP_UNCONFIRMED: stale Android runner cleanup failed for ${deviceId}`);
   }
   const verifyReleased = verify ?? (release2 ? async () => {
-  } : async (expected) => {
+  } : async (expected2) => {
     const forwards = String((await execFileAsync("adb", ["forward", "--list"], {
       timeout: ADB_CLEANUP_TIMEOUT_MS,
       signal
     })).stdout);
-    const instrumentation = String((await execFileAsync("adb", ["-s", expected.deviceId, "shell", "dumpsys", "activity", "instrumentation"], {
+    const instrumentation = String((await execFileAsync("adb", ["-s", expected2.deviceId, "shell", "dumpsys", "activity", "instrumentation"], {
       timeout: ADB_CLEANUP_TIMEOUT_MS,
       signal
     })).stdout);
-    const forwardRemains = forwards.split("\n").filter((line) => line.startsWith(`${expected.deviceId} `)).some((line) => {
-      if (expected.hostPort !== void 0 && line.includes(`tcp:${expected.hostPort}`)) {
+    const forwardRemains = forwards.split("\n").filter((line) => line.startsWith(`${expected2.deviceId} `)).some((line) => {
+      if (expected2.hostPort !== void 0 && line.includes(`tcp:${expected2.hostPort}`)) {
         return true;
       }
-      return line.includes(`tcp:${expected.devicePort ?? DEFAULT_PORT}`);
+      return line.includes(`tcp:${expected2.devicePort ?? DEFAULT_PORT}`);
     });
     if (forwardRemains || instrumentation.includes("dev.lykhoyda.rndevagent.androidrunner")) {
-      throw new Error(`RUNNER_CLEANUP_UNCONFIRMED: Android runner resources remain for ${expected.deviceId}`);
+      throw new Error(`RUNNER_CLEANUP_UNCONFIRMED: Android runner resources remain for ${expected2.deviceId}`);
     }
   });
-  await verifyReleased({
+  const expected = {
     deviceId,
     ...state?.hostPort !== void 0 ? { hostPort: state.hostPort } : {},
     ...state?.devicePort !== void 0 ? { devicePort: state.devicePort } : {}
-  }, signal);
+  };
+  const attempts3 = Math.max(1, verification.attempts ?? ANDROID_CLEANUP_VERIFY_ATTEMPTS);
+  const intervalMs = Math.max(0, verification.intervalMs ?? ANDROID_CLEANUP_VERIFY_INTERVAL_MS);
+  const delay = verification.delay ?? ((ms, waitSignal) => new Promise((resolve19, reject) => {
+    if (waitSignal?.aborted) {
+      reject(waitSignal.reason);
+      return;
+    }
+    const timer = setTimeout(done, ms);
+    const aborted2 = () => done(waitSignal?.reason ?? new Error("Android cleanup aborted"));
+    function done(error2) {
+      clearTimeout(timer);
+      waitSignal?.removeEventListener("abort", aborted2);
+      if (error2 !== void 0)
+        reject(error2);
+      else
+        resolve19();
+    }
+    waitSignal?.addEventListener("abort", aborted2, { once: true });
+  }));
+  let verificationError;
+  for (let attempt = 0; attempt < attempts3; attempt += 1) {
+    signal?.throwIfAborted();
+    try {
+      await verifyReleased(expected, signal);
+      verificationError = void 0;
+      break;
+    } catch (error2) {
+      signal?.throwIfAborted();
+      verificationError = error2;
+    }
+    if (attempt + 1 < attempts3)
+      await delay(intervalMs, signal);
+  }
+  if (verificationError !== void 0)
+    throw verificationError;
   signal?.throwIfAborted();
 }
 async function reapActiveAndroidRunner(deviceId) {
@@ -15454,7 +15489,7 @@ function errMessage(err) {
 function isAndroidConnectionFailure(message) {
   return /fetch failed|ECONNREFUSED|ECONNRESET|socket hang up|rn-android-runner not started|did not become ready|Android runner instrumentation exited before readiness|Failed to spawn Android runner instrumentation/i.test(message);
 }
-var execFileAsync, DEFAULT_PORT, READY_TIMEOUT_MS2, INSTRUMENTATION, MAIN_LOOP_CLASS, HEALTH_POLL_INTERVAL_MS, HEALTH_PROBE_TIMEOUT_MS, RN_ANDROID_RUNNER_DIR, GRADLEW, APK_APP, APK_TEST, ANDROID_REBUILD_ROOT, ANDROID_REBUILD_LOCK_DATABASE, ANDROID_REBUILD_LOCK_STALE_MS, ANDROID_REBUILD_HEARTBEAT_MS, ANDROID_REBUILD_COMPLETION_RETRY_MS, ANDROID_REBUILD_COMPLETION_ATTEMPTS, ANDROID_REBUILD_CLEANUP_TIMEOUT_MS, ADB_CLEANUP_TIMEOUT_MS, GRADLE_BUILD_TIMEOUT_MS, ADB_INSTALL_TIMEOUT_MS, runnerProcess2, runnerState2, fetchImpl2, testAuthorityState, lastKnownCapabilities2, pendingUpgradeNote, AndroidArtifactStaleError, AndroidCommandsStaleError, AndroidFeaturesStaleError, AndroidAuthorityStaleError, RUNNER_APK_PATHS, STATUS_PROBE_TIMEOUT_MS2;
+var execFileAsync, DEFAULT_PORT, READY_TIMEOUT_MS2, INSTRUMENTATION, MAIN_LOOP_CLASS, HEALTH_POLL_INTERVAL_MS, HEALTH_PROBE_TIMEOUT_MS, RN_ANDROID_RUNNER_DIR, GRADLEW, APK_APP, APK_TEST, ANDROID_REBUILD_ROOT, ANDROID_REBUILD_LOCK_DATABASE, ANDROID_REBUILD_LOCK_STALE_MS, ANDROID_REBUILD_HEARTBEAT_MS, ANDROID_REBUILD_COMPLETION_RETRY_MS, ANDROID_REBUILD_COMPLETION_ATTEMPTS, ANDROID_REBUILD_CLEANUP_TIMEOUT_MS, ADB_CLEANUP_TIMEOUT_MS, ANDROID_CLEANUP_VERIFY_ATTEMPTS, ANDROID_CLEANUP_VERIFY_INTERVAL_MS, GRADLE_BUILD_TIMEOUT_MS, ADB_INSTALL_TIMEOUT_MS, runnerProcess2, runnerState2, fetchImpl2, testAuthorityState, lastKnownCapabilities2, pendingUpgradeNote, AndroidArtifactStaleError, AndroidCommandsStaleError, AndroidFeaturesStaleError, AndroidAuthorityStaleError, RUNNER_APK_PATHS, STATUS_PROBE_TIMEOUT_MS2;
 var init_rn_android_runner_client = __esm({
   "packages/rn-dev-agent-core/dist/runners/rn-android-runner-client.js"() {
     "use strict";
@@ -15488,6 +15523,8 @@ var init_rn_android_runner_client = __esm({
     ANDROID_REBUILD_COMPLETION_ATTEMPTS = 5;
     ANDROID_REBUILD_CLEANUP_TIMEOUT_MS = 3e4;
     ADB_CLEANUP_TIMEOUT_MS = 5e3;
+    ANDROID_CLEANUP_VERIFY_ATTEMPTS = 20;
+    ANDROID_CLEANUP_VERIFY_INTERVAL_MS = 150;
     GRADLE_BUILD_TIMEOUT_MS = 6e5;
     ADB_INSTALL_TIMEOUT_MS = 12e4;
     runnerProcess2 = null;

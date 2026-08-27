@@ -41,6 +41,8 @@ const ANDROID_REBUILD_COMPLETION_RETRY_MS = 1_000;
 const ANDROID_REBUILD_COMPLETION_ATTEMPTS = 5;
 const ANDROID_REBUILD_CLEANUP_TIMEOUT_MS = 30_000;
 const ADB_CLEANUP_TIMEOUT_MS = 5_000;
+const ANDROID_CLEANUP_VERIFY_ATTEMPTS = 20;
+const ANDROID_CLEANUP_VERIFY_INTERVAL_MS = 150;
 const GRADLE_BUILD_TIMEOUT_MS = 600_000; // cold assembleDebug can take minutes on a fresh machine
 const ADB_INSTALL_TIMEOUT_MS = 120_000;
 export function getAndroidRunnerState() {
@@ -508,7 +510,7 @@ export function consumePendingAndroidUpgradeNote() {
 // helper, which stops our runner then force-stops BOTH owned packages.
 // Dynamic import because release-android-slot.ts statically imports this
 // module — a static back-import would be a cycle.
-export async function reapMismatchedAndroidRunner(state, release, verify, signal) {
+export async function reapMismatchedAndroidRunner(state, release, verify, signal, verification = {}) {
     signal?.throwIfAborted();
     const deviceId = state?.deviceId;
     if (!deviceId) {
@@ -554,11 +556,48 @@ export async function reapMismatchedAndroidRunner(state, release, verify, signal
                     throw new Error(`RUNNER_CLEANUP_UNCONFIRMED: Android runner resources remain for ${expected.deviceId}`);
                 }
             });
-    await verifyReleased({
+    const expected = {
         deviceId,
         ...(state?.hostPort !== undefined ? { hostPort: state.hostPort } : {}),
         ...(state?.devicePort !== undefined ? { devicePort: state.devicePort } : {}),
-    }, signal);
+    };
+    const attempts = Math.max(1, verification.attempts ?? ANDROID_CLEANUP_VERIFY_ATTEMPTS);
+    const intervalMs = Math.max(0, verification.intervalMs ?? ANDROID_CLEANUP_VERIFY_INTERVAL_MS);
+    const delay = verification.delay ??
+        ((ms, waitSignal) => new Promise((resolve, reject) => {
+            if (waitSignal?.aborted) {
+                reject(waitSignal.reason);
+                return;
+            }
+            const timer = setTimeout(done, ms);
+            const aborted = () => done(waitSignal?.reason ?? new Error('Android cleanup aborted'));
+            function done(error) {
+                clearTimeout(timer);
+                waitSignal?.removeEventListener('abort', aborted);
+                if (error !== undefined)
+                    reject(error);
+                else
+                    resolve();
+            }
+            waitSignal?.addEventListener('abort', aborted, { once: true });
+        }));
+    let verificationError;
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+        signal?.throwIfAborted();
+        try {
+            await verifyReleased(expected, signal);
+            verificationError = undefined;
+            break;
+        }
+        catch (error) {
+            signal?.throwIfAborted();
+            verificationError = error;
+        }
+        if (attempt + 1 < attempts)
+            await delay(intervalMs, signal);
+    }
+    if (verificationError !== undefined)
+        throw verificationError;
     signal?.throwIfAborted();
 }
 export async function reapActiveAndroidRunner(deviceId) {
