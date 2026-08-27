@@ -183,7 +183,7 @@ export interface MaestroRunArgs {
   params?: Record<string, string>;
   claimNativeOrigin?: () => Promise<void>;
   completeNativeOrigin?: (targetExpected: boolean, signal?: AbortSignal) => Promise<void>;
-  relaunchManagedApp?: () => Promise<void>;
+  relaunchManagedApp?: (stopApp?: boolean) => Promise<void>;
   /** GH #708: re-prove the managed origin at flow end without relaunching. */
   reproveManagedOrigin?: (options?: { signal?: AbortSignal }) => Promise<void>;
   completeRunnerPark?: (signal?: AbortSignal) => Promise<void>;
@@ -194,7 +194,7 @@ export interface MaestroRunArgs {
 export interface MaestroAuthorityCallbacks {
   claimNativeOrigin: () => Promise<void>;
   completeNativeOrigin: (targetExpected: boolean, signal?: AbortSignal) => Promise<void>;
-  relaunchManagedApp: () => Promise<void>;
+  relaunchManagedApp: (stopApp?: boolean) => Promise<void>;
   reproveManagedOrigin: (options?: { signal?: AbortSignal }) => Promise<void>;
   completeRunnerPark: (signal?: AbortSignal) => Promise<void>;
   reissueInstallReceipt: (() => Promise<void>) | null;
@@ -205,7 +205,7 @@ export function nestedMaestroAuthorityCallbacks(args: object): MaestroAuthorityC
     claimNativeOrigin: () => claimManagedNativeOriginAuthority(args),
     completeNativeOrigin: (targetExpected, signal) =>
       completeManagedNativeOriginAuthority(args, targetExpected, signal),
-    relaunchManagedApp: () => relaunchManagedNativeOriginApp(args),
+    relaunchManagedApp: (stopApp) => relaunchManagedNativeOriginApp(args, stopApp),
     reproveManagedOrigin: (options) => reproveManagedNativeOrigin(args, options),
     completeRunnerPark: (signal) => completeManagedRunnerParkAuthority(args, signal),
     reissueInstallReceipt: hasManagedInstallReissueAuthority(args)
@@ -292,7 +292,7 @@ export async function executeMaestroAuthorityStages<T>(
   executeStage: (commands: readonly unknown[]) => Promise<T>,
   claimOrigin: () => Promise<void>,
   completeOrigin: (targetExpected: boolean, signal?: AbortSignal) => Promise<void>,
-  relaunchManagedApp: () => Promise<void>,
+  relaunchManagedApp: (stopApp?: boolean) => Promise<void>,
   reproveManagedOrigin?: (options?: { signal?: AbortSignal }) => Promise<void>,
   options: { firstOriginClaimed?: boolean; signal?: AbortSignal } = {},
 ): Promise<T[]> {
@@ -313,7 +313,16 @@ export async function executeMaestroAuthorityStages<T>(
       results.push(await executeStage(stage.commands));
       if (stage.commands.length === 1 && commandName(stage.commands[0]) === 'launchApp') {
         try {
-          await relaunchManagedApp();
+          const launch = stage.commands[0] as { launchApp?: unknown };
+          const launchOptions =
+            launch.launchApp &&
+            typeof launch.launchApp === 'object' &&
+            !Array.isArray(launch.launchApp)
+              ? (launch.launchApp as { stopApp?: unknown })
+              : undefined;
+          await relaunchManagedApp(
+            typeof launchOptions?.stopApp === 'boolean' ? launchOptions.stopApp : true,
+          );
           pendingOriginError = undefined;
         } catch (error) {
           if (!reproveManagedOrigin || error instanceof SessionAuthorityError) throw error;

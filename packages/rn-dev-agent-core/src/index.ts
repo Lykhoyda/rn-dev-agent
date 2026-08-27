@@ -1354,6 +1354,7 @@ const isSessionRuntimeAbsent = createSessionRuntimeAbsenceProbe({
 
 async function relaunchSessionRuntime(
   status: SessionStatus,
+  stopApp = true,
 ): Promise<StagedRuntimeRelaunch | void> {
   const {
     platform,
@@ -1366,15 +1367,17 @@ async function relaunchSessionRuntime(
     const current = getClient();
     await current.disconnect();
     setClient(createClient(metroPort));
-    await execFileP('xcrun', [
-      'simctl',
-      'launch',
-      '--terminate-running-process',
-      deviceId,
-      appId,
-      '--initialUrl',
-      `http://127.0.0.1:${String(metroPort)}`,
-    ]);
+    if (stopApp) {
+      await execFileP('xcrun', [
+        'simctl',
+        'launch',
+        '--terminate-running-process',
+        deviceId,
+        appId,
+        '--initialUrl',
+        `http://127.0.0.1:${String(metroPort)}`,
+      ]);
+    }
     await connectExactSessionTarget(
       { metroPort, platform, appId, deviceId },
       exactSessionTargetReadinessTimeoutMs(platform),

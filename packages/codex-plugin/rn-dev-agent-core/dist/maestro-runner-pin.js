@@ -10110,12 +10110,12 @@ async function completeManagedNativeOriginAuthority(args, targetExpected, signal
   }
   await authority.complete(targetExpected, signal);
 }
-async function relaunchManagedNativeOriginApp(args) {
+async function relaunchManagedNativeOriginApp(args, stopApp) {
   const authority = args[managedNativeOrigin];
   if (!authority) {
     throw new SessionAuthorityError("METRO_ORIGIN_MISMATCH", "managed native origin relaunch authority is unavailable");
   }
-  await authority.relaunch();
+  await authority.relaunch(stopApp);
 }
 async function reproveManagedNativeOrigin(args, options) {
   const authority = args[managedNativeOrigin];
@@ -15284,7 +15284,7 @@ function nestedMaestroAuthorityCallbacks(args) {
   return {
     claimNativeOrigin: () => claimManagedNativeOriginAuthority(args),
     completeNativeOrigin: (targetExpected, signal) => completeManagedNativeOriginAuthority(args, targetExpected, signal),
-    relaunchManagedApp: () => relaunchManagedNativeOriginApp(args),
+    relaunchManagedApp: (stopApp) => relaunchManagedNativeOriginApp(args, stopApp),
     reproveManagedOrigin: (options) => reproveManagedNativeOrigin(args, options),
     completeRunnerPark: (signal) => completeManagedRunnerParkAuthority(args, signal),
     reissueInstallReceipt: hasManagedInstallReissueAuthority(args) ? () => reissueManagedInstallAuthority(args) : null
@@ -15365,7 +15365,9 @@ async function executeMaestroAuthorityStages(commands, executeStage, claimOrigin
       results.push(await executeStage(stage.commands));
       if (stage.commands.length === 1 && commandName2(stage.commands[0]) === "launchApp") {
         try {
-          await relaunchManagedApp();
+          const launch = stage.commands[0];
+          const launchOptions = launch.launchApp && typeof launch.launchApp === "object" && !Array.isArray(launch.launchApp) ? launch.launchApp : void 0;
+          await relaunchManagedApp(typeof launchOptions?.stopApp === "boolean" ? launchOptions.stopApp : true);
           pendingOriginError = void 0;
         } catch (error) {
           if (!reproveManagedOrigin || error instanceof SessionAuthorityError)

@@ -32725,12 +32725,12 @@ async function completeManagedNativeOriginAuthority(args, targetExpected, signal
   }
   await authority.complete(targetExpected, signal);
 }
-async function relaunchManagedNativeOriginApp(args) {
+async function relaunchManagedNativeOriginApp(args, stopApp) {
   const authority = args[managedNativeOrigin];
   if (!authority) {
     throw new SessionAuthorityError("METRO_ORIGIN_MISMATCH", "managed native origin relaunch authority is unavailable");
   }
-  await authority.relaunch();
+  await authority.relaunch(stopApp);
 }
 async function reproveManagedNativeOrigin(args, options) {
   const authority = args[managedNativeOrigin];
@@ -33891,7 +33891,7 @@ function createAuthorityGate(runtime, dependencies) {
             configurable: true,
             value: {
               claim: claimOrigin,
-              relaunch: async () => {
+              relaunch: async (stopApp) => {
                 const currentStatus = runtime.status();
                 if (!currentStatus.available) {
                   throw new SessionAuthorityError(currentStatus.code, currentStatus.reason);
@@ -33902,7 +33902,7 @@ function createAuthorityGate(runtime, dependencies) {
                 }
                 stagedRuntimeRelaunch?.cancel();
                 stagedRuntimeRelaunch = void 0;
-                stagedRuntimeRelaunch = await dependencies.relaunchBoundRuntime(currentStatus) ?? void 0;
+                stagedRuntimeRelaunch = await dependencies.relaunchBoundRuntime(currentStatus, stopApp) ?? void 0;
                 registry2.verifyOperation(operation);
               },
               reprove: async (options) => {
@@ -80822,7 +80822,7 @@ function nestedMaestroAuthorityCallbacks(args) {
   return {
     claimNativeOrigin: () => claimManagedNativeOriginAuthority(args),
     completeNativeOrigin: (targetExpected, signal) => completeManagedNativeOriginAuthority(args, targetExpected, signal),
-    relaunchManagedApp: () => relaunchManagedNativeOriginApp(args),
+    relaunchManagedApp: (stopApp) => relaunchManagedNativeOriginApp(args, stopApp),
     reproveManagedOrigin: (options) => reproveManagedNativeOrigin(args, options),
     completeRunnerPark: (signal) => completeManagedRunnerParkAuthority(args, signal),
     reissueInstallReceipt: hasManagedInstallReissueAuthority(args) ? () => reissueManagedInstallAuthority(args) : null
@@ -80890,7 +80890,9 @@ async function executeMaestroAuthorityStages(commands, executeStage, claimOrigin
       results.push(await executeStage(stage.commands));
       if (stage.commands.length === 1 && commandName2(stage.commands[0]) === "launchApp") {
         try {
-          await relaunchManagedApp();
+          const launch = stage.commands[0];
+          const launchOptions = launch.launchApp && typeof launch.launchApp === "object" && !Array.isArray(launch.launchApp) ? launch.launchApp : void 0;
+          await relaunchManagedApp(typeof launchOptions?.stopApp === "boolean" ? launchOptions.stopApp : true);
           pendingOriginError = void 0;
         } catch (error2) {
           if (!reproveManagedOrigin || error2 instanceof SessionAuthorityError)
@@ -95654,21 +95656,23 @@ async function reconnectSessionRuntime(status, options) {
   const connection = await awaitWithSignal2(connectExactSessionTarget2({ metroPort, platform, appId, deviceId }, readinessTimeoutMs));
   return stageAndroidRuntimeConnection(connection);
 }
-async function relaunchSessionRuntime(status) {
+async function relaunchSessionRuntime(status, stopApp = true) {
   const { platform, deviceId, appId, metroPort, devClientUrl: boundDevClientUrl } = resolveManagedRuntimeLaunchBinding(status);
   if (platform === "ios") {
     const current = getClient();
     await current.disconnect();
     setClient(createClient(metroPort));
-    await execFileP("xcrun", [
-      "simctl",
-      "launch",
-      "--terminate-running-process",
-      deviceId,
-      appId,
-      "--initialUrl",
-      `http://127.0.0.1:${String(metroPort)}`
-    ]);
+    if (stopApp) {
+      await execFileP("xcrun", [
+        "simctl",
+        "launch",
+        "--terminate-running-process",
+        deviceId,
+        appId,
+        "--initialUrl",
+        `http://127.0.0.1:${String(metroPort)}`
+      ]);
+    }
     await connectExactSessionTarget2({ metroPort, platform, appId, deviceId }, exactSessionTargetReadinessTimeoutMs(platform));
     return;
   }

@@ -9,7 +9,11 @@ import {
   selectorsVisibleInNativeSnapshot,
   soleComparableNativeSelectorForCommands,
 } from '../../dist/domain/ios-proof-router.js';
-import { createMaestroRunHandler, runFlowParked } from '../../dist/tools/maestro-run.js';
+import {
+  createMaestroRunHandler,
+  executeMaestroAuthorityStages,
+  runFlowParked,
+} from '../../dist/tools/maestro-run.js';
 import { runCdpReplayCommands } from '../../dist/tools/cdp-replay-dispatch.js';
 import { performReactTreeInput } from '../../dist/tools/device-interact.js';
 import { chooseMaestroDispatch } from '../../dist/tools/maestro-dispatch.js';
@@ -82,6 +86,23 @@ test('exact iOS commands route before dispatch to react-tree proof', async () =>
   assert.equal(env.data?.proofDomain, 'react-tree');
   assert.equal(env.data?.maestroCertified, false);
   assert.deepEqual(calls, ['press:email', 'type:email:a']);
+});
+
+test('React launchApp stopApp is forwarded to the authority relaunch lifecycle', async () => {
+  const relaunches: boolean[] = [];
+  const run = (launch: unknown) =>
+    executeMaestroAuthorityStages(
+      [launch, { tapOn: { id: 'email' } }],
+      async (commands) => commands,
+      async () => {},
+      async () => {},
+      async (stopApp) => relaunches.push(stopApp ?? true),
+    );
+
+  await run({ launchApp: { stopApp: false } });
+  await run({ launchApp: { stopApp: true } });
+  await run({ launchApp: null });
+  assert.deepEqual(relaunches, [false, true, true]);
 });
 
 test('partitioned reconnect recovery honors the replay deadline', async () => {

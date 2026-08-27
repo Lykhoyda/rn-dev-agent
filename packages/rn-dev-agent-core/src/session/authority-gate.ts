@@ -71,7 +71,10 @@ interface AuthorityGateDependencies {
     awaitWithinBoundary?: <T>(operation: () => Promise<T>) => Promise<T>,
     signal?: AbortSignal,
   ): Promise<Record<string, unknown>>;
-  relaunchBoundRuntime?(status: SessionStatus): Promise<StagedRuntimeRelaunch | void>;
+  relaunchBoundRuntime?(
+    status: SessionStatus,
+    stopApp?: boolean,
+  ): Promise<StagedRuntimeRelaunch | void>;
   reconnectBoundRuntime?(
     status: SessionStatus,
     options?: ManagedNativeOriginReproveOptions,
@@ -119,7 +122,7 @@ type AuthorityAwareArgs = Record<string, unknown> & {
   [managedNativeOrigin]?: {
     claim(): Promise<void>;
     complete(targetExpected: boolean, signal?: AbortSignal): Promise<void>;
-    relaunch(): Promise<void>;
+    relaunch(stopApp?: boolean): Promise<void>;
     reprove(options?: ManagedNativeOriginReproveOptions): Promise<void>;
   };
   [managedRunnerPark]?: (signal?: AbortSignal) => Promise<void>;
@@ -156,7 +159,10 @@ export async function completeManagedNativeOriginAuthority(
   await authority.complete(targetExpected, signal);
 }
 
-export async function relaunchManagedNativeOriginApp(args: object): Promise<void> {
+export async function relaunchManagedNativeOriginApp(
+  args: object,
+  stopApp?: boolean,
+): Promise<void> {
   const authority = (args as AuthorityAwareArgs)[managedNativeOrigin];
   if (!authority) {
     throw new SessionAuthorityError(
@@ -164,7 +170,7 @@ export async function relaunchManagedNativeOriginApp(args: object): Promise<void
       'managed native origin relaunch authority is unavailable',
     );
   }
-  await authority.relaunch();
+  await authority.relaunch(stopApp);
 }
 
 /**
@@ -2068,7 +2074,7 @@ export function createAuthorityGate(
               configurable: true,
               value: {
                 claim: claimOrigin,
-                relaunch: async () => {
+                relaunch: async (stopApp?: boolean) => {
                   const currentStatus = runtime.status();
                   if (!currentStatus.available) {
                     throw new SessionAuthorityError(currentStatus.code, currentStatus.reason);
@@ -2083,7 +2089,7 @@ export function createAuthorityGate(
                   stagedRuntimeRelaunch?.cancel();
                   stagedRuntimeRelaunch = undefined;
                   stagedRuntimeRelaunch =
-                    (await dependencies.relaunchBoundRuntime(currentStatus)) ?? undefined;
+                    (await dependencies.relaunchBoundRuntime(currentStatus, stopApp)) ?? undefined;
                   registry!.verifyOperation(operation!);
                 },
                 reprove: async (options?: ManagedNativeOriginReproveOptions) => {
