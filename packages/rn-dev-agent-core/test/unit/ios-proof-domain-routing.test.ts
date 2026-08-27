@@ -592,6 +592,38 @@ test('current-route ID is frontmost', () => {
   assert.equal(verdict.activeRoute, 'home');
 });
 
+test('unavailable navigation proof is typed and does not skip runFlow commands', async () => {
+  const sandbox = makeFrontmostSandbox(routeTree('coverage', 'home'), {
+    error: 'No navigation state',
+  });
+  const verdict = JSON.parse(sandbox.__RN_AGENT.isTestIdFrontmost('coverage'));
+  assert.equal(verdict.visible, false);
+  assert.equal(verdict.code, 'ASSERTION_FAILED');
+
+  let nestedPresses = 0;
+  const replay = await replayFlow(
+    [
+      {
+        t: 'runFlow',
+        whenVisible: 'coverage',
+        commands: [{ t: 'tap', id: 'nested-action' }],
+      },
+    ],
+    {
+      press: async () => {
+        nestedPresses++;
+      },
+      type: async () => {},
+      visibility: async () => verdict,
+      launch: async () => {},
+      settle: async () => {},
+    },
+  );
+  assert.equal(replay.passed, false);
+  assert.equal(replay.failureCode, 'ASSERTION_FAILED');
+  assert.equal(nestedPresses, 0);
+});
+
 test('a mounted testID without native layout proof fails closed', () => {
   const root = routeTree('coverage', 'home');
   root.child.child.stateNode = null;

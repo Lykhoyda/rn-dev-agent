@@ -67366,6 +67366,7 @@ var init_injected_helpers = __esm({
       return JSON.stringify({
         visible: false,
         reason: 'navigation state is unreadable',
+        code: 'ASSERTION_FAILED',
         matchCount: 1
       });
     }
@@ -67373,6 +67374,7 @@ var init_injected_helpers = __esm({
       return JSON.stringify({
         visible: false,
         reason: 'frontmost route cannot be proven from navigation state',
+        code: 'ASSERTION_FAILED',
         matchCount: 1
       });
     }
@@ -67400,6 +67402,7 @@ var init_injected_helpers = __esm({
       return JSON.stringify({
         visible: false,
         reason: 'active route is unavailable',
+        code: 'ASSERTION_FAILED',
         matchCount: 1
       });
     }
