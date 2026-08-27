@@ -170,10 +170,11 @@ Write a brief test plan BEFORE executing:
    explore login controls first.
 3. Continue only with a fresh passing `runRecord`. That result is a navigation
    helper, not PR proof.
-4. A failed prologue returns the replay's own failure code and latches nothing.
-   Stop the journey anyway: do not enter credentials, run ad-hoc Maestro, inject
-   routes, mutate stores, or navigate to the story. Repair the exact
-   `user-login` action, then rerun the prologue. Locked e2e login proof
+4. A failed action replay returns its failure envelope unchanged and latches
+   nothing. Stop the journey on any prologue failure: do not enter credentials,
+   run ad-hoc Maestro, inject routes, mutate stores, or navigate to the story.
+   Repair the exact `user-login` action, then rerun the prologue. Locked e2e
+   login proof
    (`cdp_lock_e2e_test` / `cdp_run_e2e_suite` on the exact candidate) remains
    the formal proof and is not gated by the login result. Native replay can
    still invalidate bundle authority; after `BUNDLE_HANDSHAKE_UNAVAILABLE`,
