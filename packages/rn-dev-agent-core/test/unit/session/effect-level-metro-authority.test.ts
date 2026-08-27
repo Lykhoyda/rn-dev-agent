@@ -94,21 +94,46 @@ async function attempt(input: {
 }
 
 test('wrong scheme, host, and port effects refuse at the bundle bind and leave no authority', async () => {
-  const cases = [
+  const normalizedHandshakeRefusal =
+    'BUNDLE_HANDSHAKE_UNAVAILABLE: the actual first bundle from this session Metro did not become available';
+  const cases: Array<{
+    name: string;
+    url: string;
+    connectError?: Error;
+    connectedMetroPort?: number;
+    expectedRefusal: string;
+    expectedEvents: string[];
+  }> = [
     {
-      name: 'scheme',
+      name: 'wrong scheme: a caller-precached file bundle never reaches a Metro handshake',
       url: launchUrl('file:///tmp/caller-preloaded.bundle'),
-      error: new Error('BUNDLE_HANDSHAKE_UNAVAILABLE: no Metro bundle loaded'),
+      connectError: new Error('BUNDLE_HANDSHAKE_UNAVAILABLE: no Metro bundle loaded'),
+      expectedRefusal: 'BUNDLE_HANDSHAKE_UNAVAILABLE: no Metro bundle loaded',
+      expectedEvents: ['launch'],
     },
     {
-      name: 'host',
+      name: 'wrong host: an existing typed origin refusal reaches the caller unchanged',
       url: launchUrl('http://192.0.2.10:8213'),
-      error: new Error('METRO_ORIGIN_MISMATCH: first bundle origin is unproven'),
+      connectError: new Error('METRO_ORIGIN_MISMATCH: first bundle origin is unproven'),
+      expectedRefusal: 'METRO_ORIGIN_MISMATCH: first bundle origin is unproven',
+      expectedEvents: ['launch'],
     },
     {
-      name: 'port',
+      name: 'wrong host: any other connect-stage failure normalizes to the handshake refusal',
+      url: launchUrl('http://192.0.2.10:8213'),
+      connectError: new Error(
+        'CDP_TARGET_AUTHORITY_MISMATCH: Metro on port 8213 advertises 2 live target(s), but none carries the proven app identity appId=com.example.app',
+      ),
+      expectedRefusal: normalizedHandshakeRefusal,
+      expectedEvents: ['launch'],
+    },
+    {
+      name: 'wrong port: the bind boundary itself rejects a sibling Metro origin',
       url: launchUrl('http://192.168.1.20:8081'),
       connectedMetroPort: 8081,
+      expectedRefusal:
+        'METRO_ORIGIN_MISMATCH: the actual first bundle did not originate from this session Metro port',
+      expectedEvents: ['launch', 'cancel'],
     },
   ];
 
@@ -116,14 +141,15 @@ test('wrong scheme, host, and port effects refuse at the bundle bind and leave n
     const result = await attempt({
       devClientUrl: candidate.url,
       connectedMetroPort: candidate.connectedMetroPort,
-      connectError: candidate.error,
+      connectError: candidate.connectError,
     });
     assert.equal(result.committed, false, `${candidate.name} must not commit bundle authority`);
-    assert.equal(result.publishedBundle, null);
-    assert.equal(result.events.includes('publish'), false);
-    assert.match(
+    assert.equal(result.publishedBundle, null, candidate.name);
+    assert.deepEqual(result.events, candidate.expectedEvents, candidate.name);
+    assert.equal(
       String((result.error as Error)?.message),
-      /^(BUNDLE_HANDSHAKE_UNAVAILABLE|METRO_ORIGIN_MISMATCH):/,
+      candidate.expectedRefusal,
+      candidate.name,
     );
   }
 });
@@ -158,27 +184,79 @@ test('caller preload and precache effects cannot replace the first-bundle marker
   assert.match(String((result.error as Error)?.message), /^BUNDLE_HANDSHAKE_UNAVAILABLE:/);
 });
 
+const wrongOriginLaunchData = {
+  platform: authority.platform,
+  deviceId: physicalDeviceId,
+  metroPort: 8213,
+  sessionId: authority.sessionId,
+  devClientUrl: launchUrl('http://192.0.2.10:8081'),
+};
+
+function diagnosticVerdict(launchData: typeof wrongOriginLaunchData): string {
+  try {
+    return `accepted:${managedMetroProxyUrl(launchData)}`;
+  } catch (caught) {
+    return `refused:${String((caught as Error).message)}`;
+  }
+}
+
+function authorityOutcome(result: Awaited<ReturnType<typeof attempt>>) {
+  return {
+    committed: result.committed,
+    publishedBundle: result.publishedBundle,
+    events: result.events,
+    refusal: result.error === undefined ? null : String((result.error as Error).message),
+  };
+}
+
 test('suppressing launch diagnostics leaves the wrong-origin authority outcome identical', async () => {
-  let diagnosticAuthorityBound = false;
-  assert.throws(() => {
-    managedMetroProxyUrl({
-      platform: 'android',
-      deviceId: physicalDeviceId,
-      metroPort: 8213,
-      sessionId: authority.sessionId,
-      devClientUrl: launchUrl('http://192.0.2.10:8081'),
-    });
-    diagnosticAuthorityBound = true;
-  }, /SESSION_BUILD_IDENTITY_CONFLICT/);
-  const diagnosticsSuppressed = await attempt({
-    devClientUrl: launchUrl('http://192.0.2.10:8081'),
-    connectedMetroPort: 8081,
+  const pinWrongOrigin = async () =>
+    authorityOutcome(
+      await attempt({
+        metroPort: wrongOriginLaunchData.metroPort,
+        devClientUrl: wrongOriginLaunchData.devClientUrl,
+        connectedMetroPort: 8081,
+      }),
+    );
+
+  const consultedVerdict = diagnosticVerdict(wrongOriginLaunchData);
+  const afterConsultedDiagnostic = await pinWrongOrigin();
+  const withDiagnosticSuppressed = await pinWrongOrigin();
+
+  assert.equal(
+    consultedVerdict,
+    'refused:SESSION_BUILD_IDENTITY_CONFLICT: Dev Client URL contradicts the active managed Metro',
+  );
+  assert.deepEqual(afterConsultedDiagnostic, withDiagnosticSuppressed);
+  assert.deepEqual(withDiagnosticSuppressed, {
+    committed: false,
+    publishedBundle: null,
+    events: ['launch', 'cancel'],
+    refusal:
+      'METRO_ORIGIN_MISMATCH: the actual first bundle did not originate from this session Metro port',
   });
 
-  assert.equal(diagnosticAuthorityBound, diagnosticsSuppressed.committed);
-  assert.equal(diagnosticsSuppressed.publishedBundle, null);
-  assert.deepEqual(diagnosticsSuppressed.events, ['launch', 'cancel']);
-  assert.match(String((diagnosticsSuppressed.error as Error)?.message), /^METRO_ORIGIN_MISMATCH:/);
+  const acceptedLaunchData = {
+    ...wrongOriginLaunchData,
+    devClientUrl: launchUrl(`http://192.168.1.20:${String(wrongOriginLaunchData.metroPort)}`),
+  };
+  assert.equal(diagnosticVerdict(acceptedLaunchData), 'accepted:http://192.168.1.20:8213');
+  const afterAcceptedDiagnostic = authorityOutcome(
+    await attempt({
+      metroPort: acceptedLaunchData.metroPort,
+      devClientUrl: acceptedLaunchData.devClientUrl,
+      marker: buildSignedMetroMarker(
+        { ...authority, sessionId: 'session-stale', metroInstanceId: 'metro-stale' },
+        'signer-current',
+      ),
+    }),
+  );
+  assert.deepEqual(afterAcceptedDiagnostic, {
+    committed: false,
+    publishedBundle: null,
+    events: ['launch', 'cancel'],
+    refusal: 'BUNDLE_IDENTITY_MISMATCH: signed initial-bundle binding did not match',
+  });
 });
 
 test('a correct physical LAN launch binds without manifest or pre-install origin proof', async () => {
