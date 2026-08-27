@@ -80430,7 +80430,7 @@ function runFlowHasUnanchoredLeadingInputText(command) {
     if (name && nativeFocusPreservingCommands.has(name))
       continue;
     if (name === "tapOn" || name === "tap")
-      return false;
+      return commands.some((candidate) => commandName(candidate) === "inputText");
     return false;
   }
   return false;
@@ -80491,15 +80491,7 @@ function planIosProofDomains(commands, params) {
     const name = commandName(commands[index]);
     let domain = classified[index];
     if (name === "runFlow" && runFlowHasUnanchoredLeadingInputText(commands[index])) {
-      if (focusedDomain === "react-tree" && !focusedReactId) {
-        return {
-          ok: false,
-          sourceIndex: index,
-          reason: "runFlow.when.visible begins with inputText but no React focus target has been proven; keep the nested input in the native Maestro domain"
-        };
-      }
-      if (focusedDomain !== "react-tree")
-        domain = "xctest-native";
+      domain = "xctest-native";
     }
     if (domain === "neutral") {
       domain = name === "inputText" ? focusedDomain ?? "xctest-native" : segments.at(-1)?.domain ?? classified.slice(index + 1).find((candidate) => candidate !== "neutral") ?? "react-tree";
@@ -82489,7 +82481,7 @@ function createRunActionHandler(deps = {}) {
         params: args.params,
         claimNativeOrigin: () => claimNativeOrigin(args),
         completeNativeOrigin: (targetExpected) => completeNativeOrigin(args, targetExpected),
-        relaunchManagedApp: () => relaunchManagedApp(args),
+        relaunchManagedApp: (stopApp) => relaunchManagedApp(args, stopApp),
         reproveManagedOrigin: () => reproveManagedOrigin(args),
         completeRunnerPark: (signal) => completeManagedRunnerParkAuthority(args, signal),
         reissueInstallReceipt: () => reissueInstallReceipt(args)
@@ -82755,7 +82747,7 @@ function createRunActionHandler(deps = {}) {
         params: args.params,
         claimNativeOrigin: () => claimNativeOrigin(args),
         completeNativeOrigin: (targetExpected) => completeNativeOrigin(args, targetExpected),
-        relaunchManagedApp: () => relaunchManagedApp(args),
+        relaunchManagedApp: (stopApp) => relaunchManagedApp(args, stopApp),
         reproveManagedOrigin: () => reproveManagedOrigin(args),
         completeRunnerPark: (signal) => completeManagedRunnerParkAuthority(args, signal),
         reissueInstallReceipt: () => reissueInstallReceipt(args)
@@ -95406,8 +95398,11 @@ async function recoverAuthoritativeRuntimeConnection(status, client2, dependenci
   const wait = dependencies.wait ?? ((ms) => new Promise((resolve21) => setTimeout(resolve21, ms)));
   if (client2.reconnectState.active) {
     const deadline = now() + RECONNECT_WAIT_MS;
-    while (client2.reconnectState.active && now() < deadline)
+    while (client2.reconnectState.active && now() < deadline) {
+      if (dependencies.signal?.aborted)
+        throw new Error("RUNNER_TIMEOUT: replay deadline expired");
       await wait(500);
+    }
     if (client2.reconnectState.active || !client2.isConnected) {
       throw new Error("RECONNECT_TIMEOUT: authoritative background reconnect did not complete");
     }
@@ -95712,17 +95707,15 @@ async function relaunchSessionRuntime(status, stopApp = true) {
     const current = getClient();
     await current.disconnect();
     setClient(createClient(metroPort));
-    if (stopApp) {
-      await execFileP("xcrun", [
-        "simctl",
-        "launch",
-        "--terminate-running-process",
-        deviceId,
-        appId,
-        "--initialUrl",
-        `http://127.0.0.1:${String(metroPort)}`
-      ]);
-    }
+    await execFileP("xcrun", [
+      "simctl",
+      "launch",
+      ...stopApp ? ["--terminate-running-process"] : [],
+      deviceId,
+      appId,
+      "--initialUrl",
+      `http://127.0.0.1:${String(metroPort)}`
+    ]);
     await connectExactSessionTarget2({ metroPort, platform, appId, deviceId }, exactSessionTargetReadinessTimeoutMs(platform));
     return;
   }
@@ -95782,7 +95775,7 @@ async function rebindSessionRuntime(status, awaitWithinBoundary, connectedClient
       targetId: target.id,
       connectionGeneration: client2.connectionGeneration
     });
-  }, { getClient });
+  }, { getClient, signal });
   if (!signal)
     return operation;
   return new Promise((resolve21, reject) => {

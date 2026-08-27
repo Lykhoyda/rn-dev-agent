@@ -461,7 +461,7 @@ export interface RunActionDeps {
   claimBundleAuthority?: (args: RunActionArgs) => Promise<boolean>;
   claimNativeOrigin?: (args: RunActionArgs) => Promise<void>;
   completeNativeOrigin?: (args: RunActionArgs, targetExpected: boolean) => Promise<void>;
-  relaunchManagedApp?: (args: RunActionArgs) => Promise<void>;
+  relaunchManagedApp?: (args: RunActionArgs, stopApp?: boolean) => Promise<void>;
   reproveManagedOrigin?: (args: RunActionArgs) => Promise<void>;
   reissueInstallReceipt?: (args: RunActionArgs) => Promise<void>;
   /** GH #705: the session's attested install receipt, for appFile auto-resolution. */
@@ -728,7 +728,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
           params: args.params,
           claimNativeOrigin: () => claimNativeOrigin(args),
           completeNativeOrigin: (targetExpected) => completeNativeOrigin(args, targetExpected),
-          relaunchManagedApp: () => relaunchManagedApp(args),
+          relaunchManagedApp: (stopApp) => relaunchManagedApp(args, stopApp),
           reproveManagedOrigin: () => reproveManagedOrigin(args),
           completeRunnerPark: (signal) => completeManagedRunnerParkAuthority(args, signal),
           reissueInstallReceipt: () => reissueInstallReceipt(args),
@@ -1084,7 +1084,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
           params: args.params,
           claimNativeOrigin: () => claimNativeOrigin(args),
           completeNativeOrigin: (targetExpected) => completeNativeOrigin(args, targetExpected),
-          relaunchManagedApp: () => relaunchManagedApp(args),
+          relaunchManagedApp: (stopApp) => relaunchManagedApp(args, stopApp),
           reproveManagedOrigin: () => reproveManagedOrigin(args),
           completeRunnerPark: (signal) => completeManagedRunnerParkAuthority(args, signal),
           reissueInstallReceipt: () => reissueInstallReceipt(args),

@@ -10,6 +10,7 @@ export async function recoverAuthoritativeRuntimeConnection(
     getClient(): CDPClient;
     now?: () => number;
     wait?: (ms: number) => Promise<void>;
+    signal?: AbortSignal;
   },
 ): Promise<CDPClient> {
   if (client !== dependencies.getClient()) return client;
@@ -35,7 +36,10 @@ export async function recoverAuthoritativeRuntimeConnection(
     dependencies.wait ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   if (client.reconnectState.active) {
     const deadline = now() + RECONNECT_WAIT_MS;
-    while (client.reconnectState.active && now() < deadline) await wait(500);
+    while (client.reconnectState.active && now() < deadline) {
+      if (dependencies.signal?.aborted) throw new Error('RUNNER_TIMEOUT: replay deadline expired');
+      await wait(500);
+    }
     if (client.reconnectState.active || !client.isConnected) {
       throw new Error('RECONNECT_TIMEOUT: authoritative background reconnect did not complete');
     }
@@ -49,7 +53,7 @@ export async function withRecoveredAuthoritativeRuntime<T>(
   status: SessionStatus,
   connectedClient: CDPClient,
   operation: (client: CDPClient) => Promise<T>,
-  dependencies: { getClient(): CDPClient },
+  dependencies: { getClient(): CDPClient; signal?: AbortSignal },
 ): Promise<T> {
   let client = await recoverAuthoritativeRuntimeConnection(status, connectedClient, dependencies);
   try {

@@ -53,7 +53,8 @@ function runFlowHasUnanchoredLeadingInputText(command: unknown): boolean {
     const name = commandName(child);
     if (name === 'inputText') return true;
     if (name && nativeFocusPreservingCommands.has(name)) continue;
-    if (name === 'tapOn' || name === 'tap') return false;
+    if (name === 'tapOn' || name === 'tap')
+      return commands.some((candidate) => commandName(candidate) === 'inputText');
     return false;
   }
   return false;
@@ -127,15 +128,7 @@ export function planIosProofDomains(
     const name = commandName(commands[index]);
     let domain = classified[index];
     if (name === 'runFlow' && runFlowHasUnanchoredLeadingInputText(commands[index])) {
-      if (focusedDomain === 'react-tree' && !focusedReactId) {
-        return {
-          ok: false,
-          sourceIndex: index,
-          reason:
-            'runFlow.when.visible begins with inputText but no React focus target has been proven; keep the nested input in the native Maestro domain',
-        };
-      }
-      if (focusedDomain !== 'react-tree') domain = 'xctest-native';
+      domain = 'xctest-native';
     }
     if (domain === 'neutral') {
       domain =

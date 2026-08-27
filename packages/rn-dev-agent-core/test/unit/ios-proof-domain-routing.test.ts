@@ -490,7 +490,7 @@ test('nested waits before inputText remain native without a React focus anchor',
   }
 });
 
-test('nested leading inputText stays React-eligible after a proven focus tap', () => {
+test('conditional nested tap cannot prove focus for a later inputText', () => {
   const plan = planIosProofDomains(
     [
       { tapOn: { id: 'field' } },
@@ -507,7 +507,7 @@ test('nested leading inputText stays React-eligible after a proven focus tap', (
   if (plan.ok)
     assert.deepEqual(
       plan.segments.map(({ domain }) => domain),
-      ['react-tree'],
+      ['react-tree', 'xctest-native'],
     );
 });
 
