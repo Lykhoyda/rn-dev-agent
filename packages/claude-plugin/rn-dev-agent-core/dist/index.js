@@ -91488,11 +91488,12 @@ async function pinExactDevClient(input, dependencies) {
       deviceId: input.deviceId
     });
   } catch (error2) {
-    const code = /^([A-Z][A-Z0-9_]+):/.exec(error2 instanceof Error ? error2.message : String(error2))?.[1];
+    const leaf = error2 instanceof Error ? error2.message : String(error2);
+    const code = /^([A-Z][A-Z0-9_]+):/.exec(leaf)?.[1];
     if (code === "METRO_ORIGIN_MISMATCH" || code === "BUNDLE_HANDSHAKE_UNAVAILABLE") {
       throw error2;
     }
-    throw new Error("BUNDLE_HANDSHAKE_UNAVAILABLE: the actual first bundle from this session Metro did not become available", { cause: error2 });
+    throw new Error(`BUNDLE_HANDSHAKE_UNAVAILABLE: the actual first bundle from this session Metro did not become available. Exact-connect stage: ${leaf}`, { cause: error2 });
   }
   const connected = connectedResult;
   try {

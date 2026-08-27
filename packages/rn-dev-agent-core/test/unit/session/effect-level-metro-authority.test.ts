@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { managedMetroProxyUrl } from '../../../dist/session/build-adapter.js';
+import {
+  AndroidExactTargetDeadlineError,
+  exactCandidateMismatchError,
+} from '../../../dist/session/connect-exact-session-target.js';
 import { pinExactDevClient } from '../../../dist/session/dev-client-authority.js';
 import { buildSignedMetroMarker } from '../../../dist/session/metro-authority.js';
 
@@ -96,6 +100,12 @@ async function attempt(input: {
 test('wrong scheme, host, and port effects refuse at the bundle bind and leave no authority', async () => {
   const normalizedHandshakeRefusal =
     'BUNDLE_HANDSHAKE_UNAVAILABLE: the actual first bundle from this session Metro did not become available';
+  const stageNamingLeaf = exactCandidateMismatchError(
+    { metroPort: 8213, platform: 'android', appId: authority.appId, deviceId: physicalDeviceId },
+    [{ id: 'a', title: 'other.app', url: 'ws://127.0.0.1:8213/a' }],
+    [],
+    [],
+  );
   const cases: Array<{
     name: string;
     url: string;
@@ -119,12 +129,10 @@ test('wrong scheme, host, and port effects refuse at the bundle bind and leave n
       expectedEvents: ['launch'],
     },
     {
-      name: 'wrong host: any other connect-stage failure normalizes to the handshake refusal',
+      name: 'wrong host: any other connect-stage failure normalizes but retains its named stage',
       url: launchUrl('http://192.0.2.10:8213'),
-      connectError: new Error(
-        'CDP_TARGET_AUTHORITY_MISMATCH: Metro on port 8213 advertises 2 live target(s), but none carries the proven app identity appId=com.example.app',
-      ),
-      expectedRefusal: normalizedHandshakeRefusal,
+      connectError: stageNamingLeaf,
+      expectedRefusal: `${normalizedHandshakeRefusal}. Exact-connect stage: ${stageNamingLeaf.message}`,
       expectedEvents: ['launch'],
     },
     {
@@ -152,6 +160,24 @@ test('wrong scheme, host, and port effects refuse at the bundle bind and leave n
       candidate.name,
     );
   }
+});
+
+test('the normalized handshake refusal carries the Android deadline leaf to the operator', async () => {
+  const deadlineLeaf = new AndroidExactTargetDeadlineError(
+    45_000,
+    new Error('inspector handshook but failed Runtime.evaluate'),
+  );
+  const result = await attempt({ connectError: deadlineLeaf });
+
+  assert.equal(result.committed, false);
+  assert.equal(result.publishedBundle, null);
+  assert.deepEqual(result.events, ['launch']);
+  assert.equal(
+    String((result.error as Error).message),
+    'BUNDLE_HANDSHAKE_UNAVAILABLE: the actual first bundle from this session Metro did not become available. ' +
+      'Exact-connect stage: CDP_TARGET_AUTHORITY_MISMATCH: Android exact-target readiness exceeded its ' +
+      'absolute 45000ms deadline. Last exact-connect failure: inspector handshook but failed Runtime.evaluate',
+  );
 });
 
 test('a signed marker from a stale session identity refuses and cancels staged publication', async () => {

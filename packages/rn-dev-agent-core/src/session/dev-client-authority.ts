@@ -211,14 +211,13 @@ export async function pinExactDevClient(
       deviceId: input.deviceId,
     });
   } catch (error) {
-    const code = /^([A-Z][A-Z0-9_]+):/.exec(
-      error instanceof Error ? error.message : String(error),
-    )?.[1];
+    const leaf = error instanceof Error ? error.message : String(error);
+    const code = /^([A-Z][A-Z0-9_]+):/.exec(leaf)?.[1];
     if (code === 'METRO_ORIGIN_MISMATCH' || code === 'BUNDLE_HANDSHAKE_UNAVAILABLE') {
       throw error;
     }
     throw new Error(
-      'BUNDLE_HANDSHAKE_UNAVAILABLE: the actual first bundle from this session Metro did not become available',
+      `BUNDLE_HANDSHAKE_UNAVAILABLE: the actual first bundle from this session Metro did not become available. Exact-connect stage: ${leaf}`,
       { cause: error },
     );
   }
