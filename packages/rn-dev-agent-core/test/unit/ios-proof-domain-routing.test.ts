@@ -872,6 +872,41 @@ test('current-route ID is frontmost', () => {
   assert.equal(verdict.activeRoute, 'home');
 });
 
+test('filtered replay proves pointer events from the live fiber ancestor chain', async () => {
+  for (const pointerEvents of ['none', 'box-only', 'box-none', 'auto']) {
+    const root = routeTree('coverage', 'home');
+    root.child.memoizedProps.pointerEvents = pointerEvents;
+    const sandbox = makeFrontmostSandbox(root, {
+      index: 0,
+      routes: [{ name: 'home' }],
+    });
+    const mutations: string[] = [];
+    const deps = {
+      pressByTestId: async () => mutations.push('press'),
+      typeByTestId: async () => mutations.push('type'),
+      treeFor: async (id: string) => JSON.parse(sandbox.__RN_AGENT.getTree({ filter: id })),
+      frontmostFor: async (id: string) => JSON.parse(sandbox.__RN_AGENT.isTestIdFrontmost(id)),
+      launchApp: async () => {},
+      settle: async () => {},
+    };
+    const press = await runCdpReplayCommands([{ tapOn: { id: 'coverage' } }], {}, deps);
+    const input = await runCdpReplayCommands([{ inputText: 'value' }], {}, deps, {
+      initialFocusId: 'coverage',
+    });
+    if (pointerEvents === 'none' || pointerEvents === 'box-only') {
+      assert.equal(press.passed, false);
+      assert.equal(input.passed, false);
+      assert.equal(press.failureCode, 'INTERACTION_NOT_ACTUATED');
+      assert.equal(input.failureCode, 'INTERACTION_NOT_ACTUATED');
+      assert.deepEqual(mutations, []);
+    } else {
+      assert.equal(press.passed, true);
+      assert.equal(input.passed, true);
+      assert.deepEqual(mutations, ['press', 'type']);
+    }
+  }
+});
+
 test('unavailable navigation proof is typed and does not skip runFlow commands', async () => {
   const sandbox = makeFrontmostSandbox(routeTree('coverage', 'home'), {
     error: 'No navigation state',

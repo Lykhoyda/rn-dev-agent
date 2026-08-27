@@ -3736,6 +3736,29 @@ export const INJECTED_HELPERS = `
       });
     }
 
+    var pointerAncestor = target.return;
+    var pointerDepth = 0;
+    while (pointerAncestor) {
+      if (++pointerDepth > 1000) {
+        return JSON.stringify({
+          visible: false,
+          reason: 'pointer-event ancestor proof exceeded its bounded React-tree budget',
+          code: 'ASSERTION_FAILED',
+          matchCount: 1
+        });
+      }
+      var pointerProps = pointerAncestor.memoizedProps || {};
+      if (pointerProps.pointerEvents === 'none' || pointerProps.pointerEvents === 'box-only') {
+        return JSON.stringify({
+          visible: false,
+          reason: 'testID is not user-interactable beneath pointerEvents="' + pointerProps.pointerEvents + '"',
+          code: 'INTERACTION_NOT_ACTUATED',
+          matchCount: 1
+        });
+      }
+      pointerAncestor = pointerAncestor.return;
+    }
+
     if (modals.length > 0) {
       var containingModalCount = 0;
       for (var mi = 0; mi < modals.length; mi++) {
