@@ -209,26 +209,21 @@ function authorityOutcome(result: Awaited<ReturnType<typeof attempt>>) {
   };
 }
 
-test('suppressing launch diagnostics leaves the wrong-origin authority outcome identical', async () => {
-  const pinWrongOrigin = async () =>
-    authorityOutcome(
-      await attempt({
-        metroPort: wrongOriginLaunchData.metroPort,
-        devClientUrl: wrongOriginLaunchData.devClientUrl,
-        connectedMetroPort: 8081,
-      }),
-    );
-
-  const consultedVerdict = diagnosticVerdict(wrongOriginLaunchData);
-  const afterConsultedDiagnostic = await pinWrongOrigin();
-  const withDiagnosticSuppressed = await pinWrongOrigin();
-
+// pinExactDevClient consults managedMetroProxyUrl only on ios + expo-dev-client, where it returns
+// http://127.0.0.1:<port> and cannot throw, so verdict-independence is the provable form of the clause.
+test('the authority outcome is independent of the build-leg diagnostic verdict on the same input', async () => {
   assert.equal(
-    consultedVerdict,
+    diagnosticVerdict(wrongOriginLaunchData),
     'refused:SESSION_BUILD_IDENTITY_CONFLICT: Dev Client URL contradicts the active managed Metro',
   );
-  assert.deepEqual(afterConsultedDiagnostic, withDiagnosticSuppressed);
-  assert.deepEqual(withDiagnosticSuppressed, {
+  const afterRefusingDiagnostic = authorityOutcome(
+    await attempt({
+      metroPort: wrongOriginLaunchData.metroPort,
+      devClientUrl: wrongOriginLaunchData.devClientUrl,
+      connectedMetroPort: 8081,
+    }),
+  );
+  assert.deepEqual(afterRefusingDiagnostic, {
     committed: false,
     publishedBundle: null,
     events: ['launch', 'cancel'],
@@ -241,7 +236,7 @@ test('suppressing launch diagnostics leaves the wrong-origin authority outcome i
     devClientUrl: launchUrl(`http://192.168.1.20:${String(wrongOriginLaunchData.metroPort)}`),
   };
   assert.equal(diagnosticVerdict(acceptedLaunchData), 'accepted:http://192.168.1.20:8213');
-  const afterAcceptedDiagnostic = authorityOutcome(
+  const afterAcceptingDiagnostic = authorityOutcome(
     await attempt({
       metroPort: acceptedLaunchData.metroPort,
       devClientUrl: acceptedLaunchData.devClientUrl,
@@ -251,7 +246,7 @@ test('suppressing launch diagnostics leaves the wrong-origin authority outcome i
       ),
     }),
   );
-  assert.deepEqual(afterAcceptedDiagnostic, {
+  assert.deepEqual(afterAcceptingDiagnostic, {
     committed: false,
     publishedBundle: null,
     events: ['launch', 'cancel'],
