@@ -6,6 +6,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { writeFileSync, mkdirSync, existsSync } from 'node:fs';
+import { spawn, type ChildProcess } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 // @ts-expect-error -- untyped JS test helper
@@ -22,7 +23,10 @@ const REF_LESS_IDS = ['home-feature-0', 'home-feature-list', 'task-stats-card'];
 const REF_BEARING_ID = 'quick-add-fab';
 // Occlusion pair is Slice B. Never assert these green under Slice A.
 const OCCLUSION_PAIR = ['qa-covered-btn', 'qa-uncovered-btn'];
+// Only mounted once the FAB opens the menu, so its appearance is a real mutation.
+const MENU_OPTION_ID = 'quick-add-task';
 const SUCCESS_TARGET = 5;
+const BRINGUP_TIMEOUT_MS = Number(process.env.SLICE_A_BRINGUP_TIMEOUT_MS ?? 1_500_000);
 
 if (!APP_ROOT) {
   console.error(
@@ -50,6 +54,77 @@ async function callTool(s: any, name: string, args: Record<string, unknown> = {}
     // Non-JSON tool output; callers fall back to `text`.
   }
   return { isError: Boolean(line.result?.isError), envelope, text };
+}
+
+// The session owns app lifecycle: managed Metro is established only by the
+// verified launcher, so the gate drives the same adapter a developer runs.
+async function bringUpSession(s: any, log: (m: string) => void): Promise<ChildProcess> {
+  const bindSource = await callTool(s, 'rn_session', {
+    action: 'bind_source',
+    projectRoot: APP_ROOT!,
+  });
+  assert.equal(bindSource.envelope?.ok, true, `bind_source: ${bindSource.text.slice(0, 300)}`);
+
+  let bindDevice = await callTool(s, 'rn_session', {
+    action: 'bind_device',
+    platform: 'ios',
+    deviceId: DEVICE_ID!,
+    appId: APP_ID,
+  });
+  if (bindDevice.envelope?.code === 'STALE_DEVICE_RELEASE_REQUIRED') {
+    log('device held by a proven-dead owner; confirming exact-device cleanup');
+    bindDevice = await callTool(s, 'rn_session', {
+      action: 'bind_device',
+      platform: 'ios',
+      deviceId: DEVICE_ID!,
+      appId: APP_ID,
+      confirmed: true,
+    });
+  }
+  assert.equal(bindDevice.envelope?.ok, true, `bind_device: ${bindDevice.text.slice(0, 300)}`);
+
+  let integration = await callTool(s, 'rn_session', {
+    action: 'apply_integration',
+    confirmed: true,
+  });
+  if (integration.envelope?.ok !== true && /observe/i.test(integration.envelope?.error ?? '')) {
+    await callTool(s, 'observe', { action: 'stop' });
+    integration = await callTool(s, 'rn_session', { action: 'apply_integration', confirmed: true });
+  }
+  assert.equal(
+    integration.envelope?.ok,
+    true,
+    `apply_integration: ${integration.text.slice(0, 300)}`,
+  );
+
+  log('starting the managed launcher (build + install + managed Metro)');
+  const adapter = spawn(process.execPath, ['.rn-agent/integration/rn-session-adapter.cjs', 'ios'], {
+    cwd: APP_ROOT,
+    stdio: ['ignore', 'pipe', 'pipe'],
+    // The launcher shells out to the project's own CLI, so the app's
+    // node_modules/.bin must be on PATH exactly as `pnpm ios` provides it.
+    env: {
+      ...process.env,
+      PATH: `${join(APP_ROOT!, 'node_modules', '.bin')}:${process.env.PATH ?? ''}`,
+    },
+  });
+  adapter.stdout?.on('data', (c) => process.stdout.write(`[adapter] ${c}`));
+  adapter.stderr?.on('data', (c) => process.stderr.write(`[adapter] ${c}`));
+
+  const deadline = Date.now() + BRINGUP_TIMEOUT_MS;
+  for (;;) {
+    if (Date.now() >= deadline) {
+      throw new Error(`managed bring-up did not bind install+metro within ${BRINGUP_TIMEOUT_MS}ms`);
+    }
+    await new Promise((r) => setTimeout(r, 10_000));
+    const status = await callTool(s, 'rn_session', { action: 'status' });
+    const authority = status.envelope?.data?.authority ?? {};
+    log(
+      `axes device=${authority.deviceBound} install=${authority.installBound} ` +
+        `metro=${authority.metroBound} bundle=${authority.bundleBound}`,
+    );
+    if (authority.installBound && authority.metroBound) return adapter;
+  }
 }
 
 async function evaluate(s: any, expression: string) {
@@ -128,6 +203,8 @@ test('Slice A visibility gate (real device, no mocks)', { timeout: 900_000 }, as
     ? {}
     : { RN_DEV_AGENT_DECLARED_ROOT: APP_ROOT!, RN_DEV_AGENT_DECLARED_MANIFESTS: 'package.json' };
   const s = startSupervisor({ cwd: APP_ROOT, lineTimeoutMs: 600_000, env: declaredEnv });
+  let adapter: ChildProcess | undefined;
+  let runnerOpened = false;
 
   try {
     const init = await rpc(s, 'initialize', {
@@ -138,12 +215,32 @@ test('Slice A visibility gate (real device, no mocks)', { timeout: 900_000 }, as
     assert.ok(init.result, 'initialize must return a result');
     s.notify('notifications/initialized');
 
+    adapter = await bringUpSession(s, (m) => console.log(`bring-up: ${m}`));
+
     const connect = await callTool(s, 'cdp_connect', DEVICE_ID ? { deviceId: DEVICE_ID } : {});
     assert.equal(
       connect.envelope?.ok,
       true,
       `cdp_connect must bind the real app: ${connect.text.slice(0, 400)}`,
     );
+
+    // maestro_run refuses with RUNNER_OWNERSHIP_MISMATCH until the runner (R)
+    // axis is bound, and device_snapshot action=open is what binds it. The app
+    // is already running from the managed launcher, so attach instead of
+    // relaunching into a bundle-load race.
+    const runner = await callTool(s, 'device_snapshot', {
+      action: 'open',
+      platform: 'ios',
+      appId: APP_ID,
+      ...(DEVICE_ID ? { deviceId: DEVICE_ID } : {}),
+      attachOnly: true,
+    });
+    assert.equal(
+      runner.envelope?.ok,
+      true,
+      `device_snapshot open must bind the runner: ${runner.text.slice(0, 400)}`,
+    );
+    runnerOpened = true;
 
     // 1. Primitive probe. Records what the platform actually exposes.
     const primitives = await evaluate(s, PRIMITIVE_PROBE);
@@ -189,10 +286,20 @@ test('Slice A visibility gate (real device, no mocks)', { timeout: 900_000 }, as
       });
       const passed = run.envelope?.ok === true && run.envelope?.data?.passed === true;
       const proofDomain = run.envelope?.data?.proofDomain ?? null;
-      perId[id] = { passed, proofDomain };
+      perId[id] = {
+        passed,
+        proofDomain,
+        ...(passed
+          ? {}
+          : {
+              code: run.envelope?.code ?? null,
+              error: (run.envelope?.error ?? run.text ?? '').slice(0, 400),
+            }),
+      };
       if (passed && proofDomain === 'react-tree') passedIds.push(id);
     }
     evidence.assertVisible = perId;
+    evidence.reactTreeSuccessIds = passedIds;
 
     for (const id of REF_LESS_IDS) {
       assert.equal(
@@ -208,7 +315,7 @@ test('Slice A visibility gate (real device, no mocks)', { timeout: 900_000 }, as
       true,
       `${REF_BEARING_ID} must assert visible`,
     );
-    const before = await evaluate(s, hostProbe(REF_BEARING_ID));
+    const before = await evaluate(s, hostProbe(MENU_OPTION_ID));
     const press = await callTool(s, 'maestro_run', {
       inlineYaml: `appId: ${APP_ID}\n---\n- tapOn:\n    id: "${REF_BEARING_ID}"\n`,
       platform: 'ios',
@@ -220,15 +327,16 @@ test('Slice A visibility gate (real device, no mocks)', { timeout: 900_000 }, as
       true,
       `replay press on ${REF_BEARING_ID} must pass: ${press.text.slice(0, 400)}`,
     );
-    const after = await evaluate(s, hostProbe('quick-add-menu'));
-    const mutated =
-      JSON.stringify(after?.matches ?? null) !== JSON.stringify(before?.matches ?? null) ||
-      (after?.matches?.length ?? 0) > 0;
-    evidence.pressMutation = { mutated, after };
-    assert.equal(mutated, true, 'replay press must produce an observable tree mutation');
+    const after = await evaluate(s, hostProbe(MENU_OPTION_ID));
+    const beforeCount = before?.matches?.length ?? 0;
+    const afterCount = after?.matches?.length ?? 0;
+    evidence.pressMutation = { id: MENU_OPTION_ID, beforeCount, afterCount };
+    assert.ok(
+      afterCount > beforeCount,
+      `replay press must mount ${MENU_OPTION_ID}: before=${beforeCount} after=${afterCount}`,
+    );
 
     // 5. Threshold on ids and observed mutations — never on reason substrings.
-    evidence.reactTreeSuccessIds = passedIds;
     assert.ok(
       passedIds.length > 0,
       `Slice A requires > 0 exact-testID React-tree successes, got ${passedIds.length}`,
@@ -254,11 +362,22 @@ test('Slice A visibility gate (real device, no mocks)', { timeout: 900_000 }, as
       join(EVIDENCE_DIR, 'slice-a-gate-evidence.json'),
       JSON.stringify(evidence, null, 2),
     );
-    try {
-      await callTool(s, 'cdp_disconnect', {});
-    } catch {
-      // Best-effort teardown; the supervisor kill below is authoritative.
+    // The app root is shared, so each teardown step runs independently: one
+    // failure must not skip the integration restore.
+    for (const step of [
+      ...(runnerOpened ? ([['device_snapshot', { action: 'close' }]] as const) : ([] as const)),
+      ['cdp_disconnect', {}],
+      ['rn_session', { action: 'stop_metro' }],
+      ['rn_session', { action: 'restore_integration', confirmed: true }],
+      ['rn_session', { action: 'release' }],
+    ] as const) {
+      try {
+        await callTool(s, step[0], step[1] as Record<string, unknown>);
+      } catch {
+        // Best-effort; the kills below are authoritative.
+      }
     }
+    adapter?.kill('SIGKILL');
     s.child.kill('SIGKILL');
   }
 });
