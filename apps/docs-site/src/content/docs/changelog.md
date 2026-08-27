@@ -5,6 +5,14 @@ description: "Release history for rn-dev-agent"
 
 ## Claude plugin
 
+### 0.77.5
+
+#### Patch Changes
+
+- c3a202e: Resolve wrapped React text handlers exactly while keeping native fills single-shot and verified.
+- Updated dependencies [c3a202e]
+  - rn-dev-agent-core@0.72.5
+
 ### 0.77.4
 
 #### Patch Changes
@@ -1612,6 +1620,12 @@ identifier, hittable? }`, with a `fullNodeCount`. Far fewer tokens; `@ref`s for
   #188 shipped these to `main` with no version bump, leaving them undeliverable to marketplace installs; this patch publishes them.
 
 ## Core MCP server
+
+### 0.72.5
+
+#### Patch Changes
+
+- c3a202e: Resolve wrapped React text handlers exactly while keeping native fills single-shot and verified.
 
 ### 0.72.4
 

@@ -108,7 +108,12 @@ function fixture() {
       calls.push('replace-binding');
       status.bindings = { ...status.bindings, ...input.bindings };
       status.authorityVersion += 1;
-      return { ...operation, authorityVersion: operation.authorityVersion + 1 };
+      const committedOperation = {
+        ...operation,
+        authorityVersion: operation.authorityVersion + 1,
+      };
+      input.onCommitted?.(committedOperation);
+      return committedOperation;
     },
   };
   const runtime = {
@@ -225,6 +230,240 @@ test('disconnected sessions without recoverable policy fail before dispatch', as
   assert.equal(envelope.ok, false);
   assert.equal(envelope.code, 'BUNDLE_HANDSHAKE_UNAVAILABLE');
   assert.equal(dispatched, false);
+});
+
+test('hideDevMenu recommendation admission requires every live remedy authority axis', async () => {
+  const { runtime } = fixture();
+  let metroLive = true;
+  const probedAxes = [];
+  const gate = createAuthorityGate(runtime, {
+    probe: async ({ axis }) => {
+      probedAxes.push(axis);
+      if (axis === 'M' && !metroLive) {
+        throw new SessionAuthorityError(
+          'METRO_AUTHORITY_MISMATCH',
+          'persisted Metro binding has no live listener',
+        );
+      }
+      return { axis, identity: `${axis}-identity` };
+    },
+  });
+
+  assert.equal(await gate.canRecommendHideDevMenu(), true);
+  assert.deepEqual(probedAxes, ['C', 'S', 'I', 'M', 'B', 'D', 'R']);
+
+  metroLive = false;
+  probedAxes.length = 0;
+  assert.equal(await gate.canRecommendHideDevMenu(), false);
+  assert.ok(probedAxes.includes('M'));
+});
+
+test('hideDevMenu recommendation admission recovers runtime and reissues install authority', async () => {
+  const { calls, runtime, status } = fixture();
+  status.bindings.bundle.targetId = 'persisted-target';
+  status.bindings.bundle.connectionGeneration = 1;
+  status.bindings.proof = null;
+  let runtimeRecovered = false;
+  const gate = createAuthorityGate(runtime, {
+    recoverRuntimeConnection: async () => {
+      calls.push('recover-runtime');
+      runtimeRecovered = true;
+      return true;
+    },
+    refreshRuntimeBinding: async () => {
+      calls.push('refresh-binding');
+      return {
+        ...status.bindings.bundle,
+        targetId: 'restored-target',
+        connectionGeneration: 2,
+      };
+    },
+    reissueInstallBinding: (install) => ({ ...install, digest: 'install-reissued' }),
+    probe: async ({ axis, status: probedStatus }) => {
+      calls.push(`preflight:${axis}`);
+      if (axis === 'I' && probedStatus.bindings.install.digest !== 'install-reissued') {
+        throw new SessionAuthorityError(
+          'APP_INSTALL_IDENTITY_CHANGED',
+          'install generation changed',
+        );
+      }
+      if (axis === 'B') {
+        assert.equal(runtimeRecovered, true);
+        assert.equal(probedStatus.bindings.bundle.targetId, 'restored-target');
+      }
+      return { axis, identity: `${axis}-identity` };
+    },
+  });
+
+  assert.equal(await gate.canRecommendHideDevMenu(), true);
+  assert.equal(status.bindings.bundle.targetId, 'restored-target');
+  assert.equal(status.bindings.install.digest, 'install-reissued');
+  assert.ok(calls.indexOf('recover-runtime') < calls.indexOf('preflight:B'));
+  assert.equal(calls.at(-1), 'end');
+});
+
+test('failed authority probe after recovery cleans the advanced operation generation', async () => {
+  const { registry, runtime, status } = fixture();
+  const activeOperations = new Map();
+  const endedOperations = [];
+  const beginOperation = registry.beginOperation;
+  const replaceBindingsDuringOperation = registry.replaceBindingsDuringOperation;
+  const endOperation = registry.endOperation;
+  const cancelOperation = registry.cancelOperation;
+  registry.beginOperation = (session, input) => {
+    if (activeOperations.size > 0) {
+      throw new SessionAuthorityError(
+        'OPERATION_ALREADY_IN_PROGRESS',
+        'another authority-sensitive operation is already in progress',
+      );
+    }
+    const operation = beginOperation(session, input);
+    activeOperations.set(operation.operationId, operation);
+    return operation;
+  };
+  registry.replaceBindingsDuringOperation = (operation, input) => {
+    const nextOperation = replaceBindingsDuringOperation(operation, input);
+    activeOperations.set(nextOperation.operationId, nextOperation);
+    return nextOperation;
+  };
+  registry.endOperation = (operation) => {
+    const active = activeOperations.get(operation.operationId);
+    if (active?.authorityVersion !== operation.authorityVersion) {
+      throw new SessionAuthorityError(
+        'AUTHORITY_LOST_DURING_OPERATION',
+        'operation fence no longer matches current authority',
+      );
+    }
+    endedOperations.push(operation);
+    activeOperations.delete(operation.operationId);
+    endOperation(operation);
+  };
+  registry.cancelOperation = (operation) => {
+    const active = activeOperations.get(operation.operationId);
+    if (active?.authorityVersion === operation.authorityVersion) {
+      activeOperations.delete(operation.operationId);
+    }
+    cancelOperation(operation);
+  };
+
+  let failAuthorityProbe = true;
+  const gate = createAuthorityGate(runtime, {
+    recoverRuntimeConnection: async () => true,
+    refreshRuntimeBinding: async () => ({
+      ...status.bindings.bundle,
+      targetId: 'restored-target',
+      connectionGeneration: status.bindings.bundle.connectionGeneration + 1,
+    }),
+    probe: async ({ axis }) => {
+      if (failAuthorityProbe && axis === 'M') {
+        throw new SessionAuthorityError(
+          'METRO_AUTHORITY_MISMATCH',
+          'the live Metro authority probe failed after recovery',
+        );
+      }
+      return { axis, identity: `${axis}-identity` };
+    },
+  });
+
+  assert.equal(await gate.canRecommendHideDevMenu(), false);
+  assert.equal(endedOperations.length, 1);
+  assert.equal(endedOperations[0].authorityVersion, 10);
+  assert.equal(activeOperations.size, 0);
+
+  failAuthorityProbe = false;
+  const following = await gate.wrap('cdp_console_log', async () => okResult({ entries: [] }))({});
+  const envelope = JSON.parse(following.content[0].text);
+  assert.equal(envelope.ok, true, following.content[0].text);
+  assert.notEqual(envelope.code, 'OPERATION_ALREADY_IN_PROGRESS');
+});
+
+test('transition install reissue cleans its advanced operation after a later probe failure', async () => {
+  const { registry, runtime, status } = fixture();
+  status.bindings.proof = null;
+  let activeOperation = null;
+  const endedOperations = [];
+  const beginOperation = registry.beginOperation;
+  const replaceBindingsDuringOperation = registry.replaceBindingsDuringOperation;
+  const endOperation = registry.endOperation;
+  const cancelOperation = registry.cancelOperation;
+  registry.beginOperation = (session, input) => {
+    if (activeOperation) {
+      throw new SessionAuthorityError(
+        'OPERATION_ALREADY_IN_PROGRESS',
+        'another authority-sensitive operation is already in progress',
+      );
+    }
+    const operation = beginOperation(session, input);
+    activeOperation = operation;
+    return operation;
+  };
+  registry.replaceBindingsDuringOperation = (operation, input) => {
+    const nextOperation = replaceBindingsDuringOperation(operation, input);
+    activeOperation = nextOperation;
+    return nextOperation;
+  };
+  registry.endOperation = (operation) => {
+    if (activeOperation?.authorityVersion !== operation.authorityVersion) {
+      throw new SessionAuthorityError(
+        'AUTHORITY_LOST_DURING_OPERATION',
+        'operation fence no longer matches current authority',
+      );
+    }
+    endedOperations.push(operation);
+    activeOperation = null;
+    endOperation(operation);
+  };
+  registry.cancelOperation = (operation) => {
+    if (activeOperation?.authorityVersion === operation.authorityVersion) {
+      activeOperation = null;
+    }
+    cancelOperation(operation);
+  };
+
+  let failDeviceProbe = true;
+  let dispatched = false;
+  const gate = createAuthorityGate(runtime, {
+    reissueInstallBinding: (install) => ({ ...install, digest: 'install-reissued' }),
+    probe: async ({ axis, status: probedStatus }) => {
+      const installReissued = probedStatus.bindings.install.digest === 'install-reissued';
+      if (axis === 'I' && !installReissued) {
+        throw new SessionAuthorityError(
+          'APP_INSTALL_IDENTITY_CHANGED',
+          'install generation changed',
+        );
+      }
+      if (axis === 'D' && installReissued && failDeviceProbe) {
+        throw new SessionAuthorityError(
+          'DEVICE_AUTHORITY_MISMATCH',
+          'the live device authority probe failed after install reissue',
+        );
+      }
+      return { axis, identity: `${axis}-identity` };
+    },
+  });
+
+  const refused = await gate.wrap('device_snapshot', async () => {
+    dispatched = true;
+    return okResult({ opened: true });
+  })({
+    action: 'open',
+    platform: 'ios',
+    deviceId: 'device',
+    appId: 'dev.example',
+  });
+  const refusedEnvelope = JSON.parse(refused.content[0].text);
+
+  assert.equal(refusedEnvelope.code, 'DEVICE_AUTHORITY_MISMATCH');
+  assert.equal(dispatched, false);
+  assert.equal(endedOperations.length, 1);
+  assert.equal(endedOperations[0].authorityVersion, 10);
+  assert.equal(activeOperation, null);
+
+  failDeviceProbe = false;
+  const following = await gate.wrap('cdp_console_log', async () => okResult({ entries: [] }))({});
+  const followingEnvelope = JSON.parse(following.content[0].text);
+  assert.equal(followingEnvelope.ok, true, following.content[0].text);
+  assert.notEqual(followingEnvelope.code, 'OPERATION_ALREADY_IN_PROGRESS');
 });
 
 test('handler-time reconnect is rebound before bundle postflight', async () => {

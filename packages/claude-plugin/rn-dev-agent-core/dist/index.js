@@ -28895,6 +28895,305 @@ var init_device_session_close = __esm({
   }
 });
 
+// packages/rn-dev-agent-core/dist/domain/foreground-surface-remedy.js
+function recommendForegroundSurfaceRemedy(input) {
+  if (input.authority !== "available" || input.condition !== "expo_dev_menu")
+    return null;
+  return {
+    ...EXPO_DEVELOPER_MENU_REMEDY,
+    arguments: { ...EXPO_DEVELOPER_MENU_REMEDY.arguments }
+  };
+}
+var EXPO_DEVELOPER_MENU_REMEDY;
+var init_foreground_surface_remedy = __esm({
+  "packages/rn-dev-agent-core/dist/domain/foreground-surface-remedy.js"() {
+    "use strict";
+    EXPO_DEVELOPER_MENU_REMEDY = {
+      condition: "expo_dev_menu",
+      tool: "cdp_dev_settings",
+      arguments: { action: "hideDevMenu" },
+      guidance: 'Expo Developer Menu detected. Call cdp_dev_settings({ action: "hideDevMenu" }), then take a fresh device_snapshot and require the app surface before navigation.'
+    };
+  }
+});
+
+// packages/rn-dev-agent-core/dist/tools/expo-dev-menu.js
+function surfaceText(nodes) {
+  return nodes.flatMap((node) => [node.label, node.identifier].filter((value) => typeof value === "string").map((value) => value.trim().toLowerCase()).filter(Boolean));
+}
+function surfaceRect(node) {
+  if (!node.rect || typeof node.rect !== "object")
+    return null;
+  const rect = node.rect;
+  if (typeof rect.x !== "number" || typeof rect.y !== "number" || typeof rect.width !== "number" || typeof rect.height !== "number" || rect.width < 0 || rect.height < 0) {
+    return null;
+  }
+  return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+}
+function rectContains(container, candidate) {
+  return candidate.x >= container.x && candidate.y >= container.y && candidate.x + candidate.width <= container.x + container.width && candidate.y + candidate.height <= container.y + container.height;
+}
+function hasBlockingForeignSurface(nodes, boundAppId) {
+  const systemNodes = nodes.filter((node) => node.packageName === "com.android.systemui");
+  const chromeRegions = systemNodes.flatMap((node) => {
+    const identifier = typeof node.identifier === "string" ? node.identifier.trim().toLowerCase() : "";
+    const rect = SYSTEM_CHROME_REGION_IDENTIFIERS.has(identifier) ? surfaceRect(node) : null;
+    return rect ? [rect] : [];
+  });
+  return nodes.some((node) => {
+    const packageName = typeof node.packageName === "string" ? node.packageName.trim() : "";
+    if (!packageName || packageName === boundAppId)
+      return false;
+    if (packageName !== "com.android.systemui")
+      return true;
+    const identifier = typeof node.identifier === "string" ? node.identifier.trim().toLowerCase() : "";
+    if (SYSTEM_CHROME_IDENTIFIERS.has(identifier))
+      return false;
+    const rect = surfaceRect(node);
+    return !rect || !chromeRegions.some((region) => rectContains(region, rect));
+  });
+}
+function classifyForegroundSurface(nodes, boundAppId) {
+  const text = surfaceText(nodes);
+  const has = (value) => text.some((candidate) => candidate.includes(value));
+  if (nodes.some((node) => node.type === "Alert") || boundAppId && hasBlockingForeignSurface(nodes, boundAppId)) {
+    return "unknown";
+  }
+  const hasBoundApp = Boolean(boundAppId) && nodes.some((node) => node.packageName === boundAppId || node.type === "Application");
+  if (text.length === 0)
+    return hasBoundApp ? "app" : "unknown";
+  if (has("development servers"))
+    return "dev_client_picker";
+  if (has("open debugger") || has("configure bundler") || has("react native dev menu") && has("open devtools") && has("change bundle location")) {
+    return "react_native_dev_menu";
+  }
+  const hasTutorialCopy = has("this is the developer menu");
+  const hasGenericTogglePair = has("toggle performance monitor") && has("toggle element inspector");
+  const hasExpoControlPair = has("copy system info") && has("open devtools");
+  if (hasExpoControlPair || hasGenericTogglePair && (hasTutorialCopy || has("copy system info"))) {
+    return "expo_dev_menu";
+  }
+  if (hasTutorialCopy)
+    return "first_run_tutorial";
+  if (!boundAppId)
+    return "unknown";
+  return hasBoundApp ? "app" : "unknown";
+}
+function foregroundSurfaceFromSnapshot(result, boundAppId) {
+  if (result.isError)
+    return "unknown";
+  try {
+    const envelope = JSON.parse(result.content[0]?.text ?? "");
+    if (!envelope.ok || !Array.isArray(envelope.data?.nodes))
+      return "unknown";
+    return classifyForegroundSurface(envelope.data.nodes, boundAppId);
+  } catch {
+    return "unknown";
+  }
+}
+function createForegroundSurfaceProbe(dependencies) {
+  return async () => {
+    const status = dependencies.getAuthorityStatus();
+    const session2 = dependencies.getActiveSession();
+    const runner = status.bindings?.runner;
+    if (!status.available || !runner || !session2)
+      return "unknown";
+    const device = status.bindings?.device;
+    const platform = device?.platform;
+    if (platform !== "ios" && platform !== "android" || session2.platform !== platform || session2.deviceId !== device?.deviceId || session2.appId !== device?.appId) {
+      return "unknown";
+    }
+    return foregroundSurfaceFromSnapshot(await dependencies.runNative(["snapshot"], { platform }), session2.appId);
+  };
+}
+function parseSentinel(value, attempts3) {
+  const sentinel = typeof value === "string" ? value : "";
+  if (sentinel === "ok:hideMenu") {
+    return {
+      callSent: true,
+      method: "hideMenu",
+      reason: "ExpoDevMenu.hideMenu() completed.",
+      attempts: attempts3
+    };
+  }
+  if (sentinel === "ok:closeMenu") {
+    return {
+      callSent: true,
+      method: "closeMenu",
+      reason: "ExpoDevMenu.closeMenu() completed.",
+      attempts: attempts3
+    };
+  }
+  if (sentinel === "sent:hideMenu") {
+    return {
+      callSent: true,
+      method: "hideMenu",
+      reason: "ExpoDevMenu.hideMenu() was invoked but did not settle.",
+      attempts: attempts3
+    };
+  }
+  if (sentinel === "sent:closeMenu") {
+    return {
+      callSent: true,
+      method: "closeMenu",
+      reason: "ExpoDevMenu.closeMenu() was invoked but did not settle.",
+      attempts: attempts3
+    };
+  }
+  if (sentinel === "no_module") {
+    return {
+      callSent: false,
+      reason: "No ExpoDevMenu native module resolved.",
+      attempts: attempts3
+    };
+  }
+  if (sentinel === "no_method_available") {
+    return {
+      callSent: false,
+      reason: "ExpoDevMenu resolved but exposes no hideMenu/closeMenu method.",
+      attempts: attempts3
+    };
+  }
+  if (sentinel.startsWith("resolution_error:")) {
+    return {
+      callSent: false,
+      reason: `ExpoDevMenu resolution failed: ${sentinel.slice(17)}`,
+      attempts: attempts3
+    };
+  }
+  const invocationError = sentinel.match(/^error:(hideMenu|closeMenu):(.*)$/s);
+  if (invocationError) {
+    return {
+      callSent: true,
+      method: invocationError[1],
+      reason: `ExpoDevMenu ${invocationError[1]} invocation failed: ${invocationError[2]}`,
+      attempts: attempts3
+    };
+  }
+  return {
+    callSent: false,
+    reason: `Unexpected dev-menu hide result: ${sentinel || "(empty)"}`,
+    attempts: attempts3
+  };
+}
+async function hideExpoDevMenu(client2, options = {}) {
+  const retries = Math.min(1, Math.max(0, options.retries ?? 0));
+  const retryDelayMs = Math.max(0, options.retryDelayMs ?? 300);
+  const evaluationTimeoutMs = Math.min(5e3, Math.max(1, options.evaluationTimeoutMs ?? 5e3));
+  let outcome = {
+    callSent: false,
+    reason: "Dev menu hide not attempted.",
+    attempts: 0
+  };
+  let successfulCall;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    const attempts3 = attempt + 1;
+    try {
+      const result = await client2.evaluate(HIDE_EXPO_DEV_MENU_EXPRESSION, true, evaluationTimeoutMs);
+      const startOutcome = parseSentinel(result.value, attempts3);
+      const attemptOutcome = result.error ? startOutcome.callSent ? {
+        ...startOutcome,
+        reason: `${startOutcome.reason} Async evaluation failed: ${result.error}`
+      } : result.requestDispatched ? {
+        callSent: true,
+        reason: `Dev menu hide evaluation was dispatched but its invocation could not be confirmed: ${result.error}`,
+        attempts: attempts3
+      } : {
+        callSent: false,
+        reason: `Dev menu hide evaluation failed before dispatch: ${result.error}`,
+        attempts: attempts3
+      } : startOutcome;
+      outcome = attemptOutcome;
+      if (attemptOutcome.callSent)
+        successfulCall = attemptOutcome;
+    } catch (error2) {
+      outcome = {
+        callSent: false,
+        reason: `Dev menu hide evaluation threw: ${error2 instanceof Error ? error2.message : String(error2)}`,
+        attempts: attempts3
+      };
+    }
+    if (outcome.reason.startsWith("No ExpoDevMenu")) {
+      if (!successfulCall)
+        return outcome;
+      break;
+    }
+    if (attempt < retries)
+      await new Promise((resolve20) => setTimeout(resolve20, retryDelayMs));
+  }
+  return successfulCall ? { ...successfulCall, attempts: outcome.attempts } : outcome;
+}
+var RESOLVE_EXPO_DEV_MENU, HIDE_EXPO_DEV_MENU_EXPRESSION, SYSTEM_CHROME_REGION_IDENTIFIERS, SYSTEM_CHROME_IDENTIFIERS;
+var init_expo_dev_menu = __esm({
+  "packages/rn-dev-agent-core/dist/tools/expo-dev-menu.js"() {
+    "use strict";
+    RESOLVE_EXPO_DEV_MENU = `(function () {
+  try { var e = globalThis.expo; if (e && e.modules && e.modules.ExpoDevMenu) return e.modules.ExpoDevMenu; } catch (e0) {}
+  try { var nm = require("react-native").NativeModules; if (nm && nm.ExpoDevMenu) return nm.ExpoDevMenu; } catch (e1) {}
+  try { if (typeof __turboModuleProxy === "function") { var t = __turboModuleProxy("ExpoDevMenu"); if (t) return t; } } catch (e2) {}
+  try { if (typeof globalThis.nativeModuleProxy !== "undefined") { var p = globalThis.nativeModuleProxy.ExpoDevMenu; if (p) return p; } } catch (e3) {}
+  return null;
+})()`;
+    HIDE_EXPO_DEV_MENU_EXPRESSION = `(function () {
+  var m = ${RESOLVE_EXPO_DEV_MENU};
+  if (!m) return "no_module";
+  var method = null;
+  var close = null;
+  try {
+    if (typeof m.hideMenu === "function") { method = "hideMenu"; close = m.hideMenu; }
+    else if (typeof m.closeMenu === "function") { method = "closeMenu"; close = m.closeMenu; }
+    if (!method) return "no_method_available";
+  } catch (e) { return "resolution_error:" + (e && e.message ? e.message : String(e)); }
+  try {
+    var pending = Promise.resolve(close.call(m)).then(function () { return "ok:" + method; }, function (e) { return "error:" + method + ":" + (e && e.message ? e.message : String(e)); });
+    return { __rnAgentStartValue: "sent:" + method, then: function (resolve, reject) { return pending.then(resolve, reject); } };
+  } catch (e) { return "error:" + method + ":" + (e && e.message ? e.message : String(e)); }
+})()`;
+    SYSTEM_CHROME_REGION_IDENTIFIERS = /* @__PURE__ */ new Set([
+      "status_bar",
+      "status_bar_container",
+      "navigation_bar_frame",
+      "nav_bar_background",
+      "taskbar_container",
+      "navbuttons_view"
+    ]);
+    SYSTEM_CHROME_IDENTIFIERS = /* @__PURE__ */ new Set([
+      ...SYSTEM_CHROME_REGION_IDENTIFIERS,
+      "status_bar_launch_animation_container",
+      "status_bar_contents",
+      "status_bar_start_side_container",
+      "status_bar_start_side_content",
+      "status_bar_start_side_except_heads_up",
+      "status_bar_end_side_container",
+      "status_bar_end_side_content",
+      "clock",
+      "notification_icon_area",
+      "notificationicons",
+      "cutout_space_view",
+      "system_icons",
+      "statusicons",
+      "wifi_combo",
+      "wifi_group",
+      "wifi_signal",
+      "mobile_combo",
+      "mobile_group",
+      "mobile_signal",
+      "battery",
+      "taskbar_scrim",
+      "start_contextual_buttons",
+      "end_contextual_buttons",
+      "end_nav_buttons",
+      "taskbar_bubbles_container",
+      "back",
+      "home",
+      "recent_apps",
+      "recents",
+      "overview",
+      "home_handle"
+    ]);
+  }
+});
+
 // packages/rn-dev-agent-core/dist/tools/device-session.js
 import { execFile as execFileCb8 } from "node:child_process";
 import { promisify as promisify10 } from "node:util";
@@ -29302,10 +29601,10 @@ function createDeviceSnapshotHandler(deps = {}) {
       if (recovery.recovered) {
         cacheSnapshotIfPossible(recovery.result);
         markCdpStale();
-        return wrapWithMeta(recovery.result, {
+        return attachForegroundSurfaceDiscovery(wrapWithMeta(recovery.result, {
           recovered: "agent-device-runner-leak",
           recoveryTier: recovery.tier
-        });
+        }), getActiveSession()?.appId, deps.remedyAuthorityAvailable);
       }
       return failResult(runnerLeakFailureMessage(recovery.reason, session2), {
         code: "RUNNER_LEAK",
@@ -29314,8 +29613,22 @@ function createDeviceSnapshotHandler(deps = {}) {
       });
     }
     cacheSnapshotIfPossible(result);
-    return result;
+    return attachForegroundSurfaceDiscovery(result, getActiveSession()?.appId, deps.remedyAuthorityAvailable);
   };
+}
+async function attachForegroundSurfaceDiscovery(result, boundAppId, remedyAuthorityAvailable) {
+  if (result.isError)
+    return result;
+  const foregroundSurface = foregroundSurfaceFromSnapshot(result, boundAppId);
+  const authorityAvailable = foregroundSurface === "expo_dev_menu" && await remedyAuthorityAvailable?.() === true;
+  const recommendation = recommendForegroundSurfaceRemedy({
+    condition: foregroundSurface,
+    authority: authorityAvailable ? "available" : "unavailable"
+  });
+  return wrapWithMeta(result, {
+    foregroundSurface,
+    recommendation: recommendation ?? void 0
+  });
 }
 function runnerLeakFailureMessage(reason, session2) {
   if (reason === "no-session-context" && session2 && !session2.appId) {
@@ -29412,6 +29725,8 @@ var init_device_session = __esm({
     init_device_lock();
     init_device_arbiter();
     init_device_session_close();
+    init_foreground_surface_remedy();
+    init_expo_dev_menu();
     execFile11 = promisify10(execFileCb8);
     HEARTBEAT_MS = 3e4;
     activeDeviceLock = null;
@@ -31840,7 +32155,7 @@ function containedRunnerAuthority(result, runner) {
     return null;
   }
 }
-function reissueInstallAfterPreflightRefusal(registry2, runtime, operation, status, dependencies, error2, axes, tool, args) {
+function reissueInstallAfterPreflightRefusal(registry2, runtime, operation, status, dependencies, error2, axes, tool, args, onOperationAdvanced) {
   if (!axes.includes("I") || Boolean(status.bindings.proof) || requiresExactInstalledArtifact(tool, args) || authorityErrorCode(error2) !== "APP_INSTALL_IDENTITY_CHANGED") {
     return null;
   }
@@ -31849,7 +32164,8 @@ function reissueInstallAfterPreflightRefusal(registry2, runtime, operation, stat
     return null;
   registry2.verifyOperation(operation);
   const reissuedOperation = registry2.replaceBindingsDuringOperation(operation, {
-    bindings: { install }
+    bindings: { install },
+    onCommitted: onOperationAdvanced
   });
   const reissuedStatus = runtime.status();
   if (!reissuedStatus.available) {
@@ -31857,13 +32173,13 @@ function reissueInstallAfterPreflightRefusal(registry2, runtime, operation, stat
   }
   return { operation: reissuedOperation, status: reissuedStatus };
 }
-async function preflightWithInstallReissue(registry2, runtime, dependencies, context, operation, status) {
+async function preflightWithInstallReissue(registry2, runtime, dependencies, context, operation, status, onOperationAdvanced) {
   const { tool, profile, args, axes } = context;
-  const probeAll = (probed) => Promise.all(axes.map((axis) => dependencies.probe({ axis, phase: "preflight", tool, profile, status: probed, args })));
+  const probeAll = (probed) => probeAuthorityAxes(dependencies, { tool, profile, args, axes }, probed);
   try {
     return { before: await probeAll(status), operation, status };
   } catch (preflightError) {
-    const reissued = reissueInstallAfterPreflightRefusal(registry2, runtime, operation, status, dependencies, preflightError, axes, tool, args);
+    const reissued = reissueInstallAfterPreflightRefusal(registry2, runtime, operation, status, dependencies, preflightError, axes, tool, args, onOperationAdvanced);
     if (!reissued)
       throw preflightError;
     return {
@@ -31872,6 +32188,10 @@ async function preflightWithInstallReissue(registry2, runtime, dependencies, con
       status: reissued.status
     };
   }
+}
+function probeAuthorityAxes(dependencies, context, status) {
+  const { tool, profile, args, axes } = context;
+  return Promise.all(axes.map((axis) => dependencies.probe({ axis, phase: "preflight", tool, profile, status, args })));
 }
 function requireDeviceTransition(status, args) {
   const action = args.action ?? "snapshot";
@@ -32187,7 +32507,7 @@ function receipt(status, profile, observations) {
     } : void 0
   };
 }
-function reconcileRuntimeBundleReplacement(runtime, registry2, operation, status, priorBundle, metro, bundle, promotion) {
+function reconcileRuntimeBundleReplacement(runtime, registry2, operation, status, priorBundle, metro, bundle, promotion, onOperationAdvanced) {
   const oldTargetId = priorBundle?.targetId;
   const newTargetId = bundle.targetId;
   const metroPort = metro?.port;
@@ -32204,7 +32524,10 @@ function reconcileRuntimeBundleReplacement(runtime, registry2, operation, status
     releaseResources: typeof oldTargetId === "string" && oldTargetId !== newTargetId ? [{ type: "target", key: `${String(metroPort)}:${oldTargetId}` }] : [],
     claimResources: oldTargetId !== newTargetId ? [{ type: "target", key: `${String(metroPort)}:${newTargetId}` }] : [],
     assertBeforeCommit: promotion?.assertActive,
-    onCommitted: promotion?.onCommitted
+    onCommitted: promotion || onOperationAdvanced ? (operation2) => {
+      promotion?.onCommitted(operation2);
+      onOperationAdvanced?.(operation2);
+    } : void 0
   });
   const refreshedStatus = runtime.status();
   if (!refreshedStatus.available) {
@@ -32246,7 +32569,7 @@ function invalidateRuntimeBundle(registry2, operation, status, onInvalidated) {
   onInvalidated?.();
   return nextOperation;
 }
-async function reconcileRecoverableRuntime(runtime, dependencies, registry2, operation, status, profile, allowRecovery) {
+async function reconcileRecoverableRuntime(runtime, dependencies, registry2, operation, status, profile, allowRecovery, onOperationAdvanced) {
   if (!profile.axes.includes("B") && !registry2.operationHasAxis(operation, "B")) {
     return { operation, status, runtimeTargetChanged: false };
   }
@@ -32260,10 +32583,73 @@ async function reconcileRecoverableRuntime(runtime, dependencies, registry2, ope
     throw new SessionAuthorityError("BUNDLE_HANDSHAKE_UNAVAILABLE", "authoritative reconnect cannot commit without a binding refresh");
   }
   const bundle = await dependencies.refreshRuntimeBinding(status);
-  return reconcileRuntimeBundleReplacement(runtime, registry2, operation, status, status.bindings.bundle, status.bindings.metro, bundle);
+  return reconcileRuntimeBundleReplacement(runtime, registry2, operation, status, status.bindings.bundle, status.bindings.metro, bundle, void 0, onOperationAdvanced);
+}
+async function admitAuthoritativePreflight(runtime, dependencies, registry2, operation, status, tool, profile, args) {
+  let currentOperation = operation;
+  const onOperationAdvanced = (nextOperation) => {
+    currentOperation = nextOperation;
+  };
+  try {
+    const recovery = await reconcileRecoverableRuntime(runtime, dependencies, registry2, currentOperation, status, profile, true, onOperationAdvanced);
+    currentOperation = recovery.operation;
+    const admission = await preflightWithInstallReissue(registry2, runtime, dependencies, { tool, profile, args, axes: profile.axes }, currentOperation, recovery.status, onOperationAdvanced);
+    currentOperation = admission.operation;
+    return admission;
+  } catch (error2) {
+    try {
+      registry2.endOperation(currentOperation);
+    } catch {
+      registry2.cancelOperation(currentOperation);
+    }
+    throw error2;
+  }
 }
 function createAuthorityGate(runtime, dependencies) {
   return {
+    canRecommendHideDevMenu: async () => {
+      let operation = null;
+      let registry2 = null;
+      try {
+        const tool = "cdp_dev_settings";
+        const args = { action: "hideDevMenu" };
+        const profile = authorityProfileFor(tool, args);
+        const status = runtime.status();
+        if (!status.available || status.state === "blocked" || status.state === "handoff_cleanup" || profile.kind !== "authoritative") {
+          return false;
+        }
+        if (inspectLoginPrologueGuard({
+          binding: status.bindings.loginPrologue,
+          tool,
+          args,
+          mutation: profile.mutation
+        }).blocked) {
+          return false;
+        }
+        requireCompleteAxes(status, profile);
+        bindSessionArguments(status, profile, args, tool);
+        const available = runtime.requireAvailable();
+        registry2 = available.registry;
+        operation = registry2.beginOperation(available.session, {
+          operationId: randomUUID5(),
+          tool,
+          profile: profile.axes.join("")
+        });
+        const admission = await admitAuthoritativePreflight(runtime, dependencies, registry2, operation, status, tool, profile, args);
+        operation = admission.operation;
+        return true;
+      } catch {
+        return false;
+      } finally {
+        if (registry2 && operation) {
+          try {
+            registry2.endOperation(operation);
+          } catch {
+            registry2.cancelOperation(operation);
+          }
+        }
+      }
+    },
     wrap: (tool, handler) => async (...handlerArgs) => {
       const args = handlerArgs[0] && typeof handlerArgs[0] === "object" ? handlerArgs[0] : {};
       const suppliedSupervisorOverrideToken = typeof args.supervisorOverrideToken === "string" ? args.supervisorOverrideToken : void 0;
@@ -32381,10 +32767,13 @@ function createAuthorityGate(runtime, dependencies) {
             profile: `transition:${transitionAxes.before.join("")}>${transitionAxes.after.join("")}`
           };
           operation2 = tool === "rn_session" && args.action === "cancel_handoff" ? registry3.beginHandoffCancellationOperation(available.session, operationInput) : registry3.beginOperation(available.session, operationInput);
+          const onOperationAdvanced = (nextOperation) => {
+            operation2 = nextOperation;
+          };
           if (retainsRunnerCleanupAuthority) {
             requireRetainedRunnerOwnership(registry3, status);
           }
-          const preflight2 = await preflightWithInstallReissue(registry3, runtime, dependencies, { tool, profile, args, axes: transitionAxes.before }, operation2, status);
+          const preflight2 = await preflightWithInstallReissue(registry3, runtime, dependencies, { tool, profile, args, axes: transitionAxes.before }, operation2, status, onOperationAdvanced);
           const before = preflight2.before;
           operation2 = preflight2.operation;
           status = preflight2.status;
@@ -32627,13 +33016,10 @@ function createAuthorityGate(runtime, dependencies) {
           requireCompleteAxes(status, profile);
           bindSessionArguments(status, profile, args, tool);
         }
-        const preflightRecovery = await reconcileRecoverableRuntime(runtime, dependencies, registry2, operation, status, profile, true);
-        operation = preflightRecovery.operation;
-        status = preflightRecovery.status;
-        const preflight2 = await preflightWithInstallReissue(registry2, runtime, dependencies, { tool, profile, args, axes: profile.axes }, operation, status);
-        const before = preflight2.before;
-        operation = preflight2.operation;
-        status = preflight2.status;
+        const admission = await admitAuthoritativePreflight(runtime, dependencies, registry2, operation, status, tool, profile, args);
+        const before = admission.before;
+        operation = admission.operation;
+        status = admission.status;
         const initialOperationAuthorityVersion = operation.authorityVersion;
         const optionalNativeOriginBefore = await beginOptionalNativeOrigin(dependencies, {
           tool,
@@ -79921,276 +80307,7 @@ function createMmkvHandler(getClient2) {
 
 // packages/rn-dev-agent-core/dist/tools/dev-settings.js
 init_utils();
-
-// packages/rn-dev-agent-core/dist/tools/expo-dev-menu.js
-var RESOLVE_EXPO_DEV_MENU = `(function () {
-  try { var e = globalThis.expo; if (e && e.modules && e.modules.ExpoDevMenu) return e.modules.ExpoDevMenu; } catch (e0) {}
-  try { var nm = require("react-native").NativeModules; if (nm && nm.ExpoDevMenu) return nm.ExpoDevMenu; } catch (e1) {}
-  try { if (typeof __turboModuleProxy === "function") { var t = __turboModuleProxy("ExpoDevMenu"); if (t) return t; } } catch (e2) {}
-  try { if (typeof globalThis.nativeModuleProxy !== "undefined") { var p = globalThis.nativeModuleProxy.ExpoDevMenu; if (p) return p; } } catch (e3) {}
-  return null;
-})()`;
-var HIDE_EXPO_DEV_MENU_EXPRESSION = `(function () {
-  var m = ${RESOLVE_EXPO_DEV_MENU};
-  if (!m) return "no_module";
-  var method = null;
-  var close = null;
-  try {
-    if (typeof m.hideMenu === "function") { method = "hideMenu"; close = m.hideMenu; }
-    else if (typeof m.closeMenu === "function") { method = "closeMenu"; close = m.closeMenu; }
-    if (!method) return "no_method_available";
-  } catch (e) { return "resolution_error:" + (e && e.message ? e.message : String(e)); }
-  try {
-    var pending = Promise.resolve(close.call(m)).then(function () { return "ok:" + method; }, function (e) { return "error:" + method + ":" + (e && e.message ? e.message : String(e)); });
-    return { __rnAgentStartValue: "sent:" + method, then: function (resolve, reject) { return pending.then(resolve, reject); } };
-  } catch (e) { return "error:" + method + ":" + (e && e.message ? e.message : String(e)); }
-})()`;
-function surfaceText(nodes) {
-  return nodes.flatMap((node) => [node.label, node.identifier].filter((value) => typeof value === "string").map((value) => value.trim().toLowerCase()).filter(Boolean));
-}
-var SYSTEM_CHROME_REGION_IDENTIFIERS = /* @__PURE__ */ new Set([
-  "status_bar",
-  "status_bar_container",
-  "navigation_bar_frame",
-  "nav_bar_background",
-  "taskbar_container",
-  "navbuttons_view"
-]);
-var SYSTEM_CHROME_IDENTIFIERS = /* @__PURE__ */ new Set([
-  ...SYSTEM_CHROME_REGION_IDENTIFIERS,
-  "status_bar_launch_animation_container",
-  "status_bar_contents",
-  "status_bar_start_side_container",
-  "status_bar_start_side_content",
-  "status_bar_start_side_except_heads_up",
-  "status_bar_end_side_container",
-  "status_bar_end_side_content",
-  "clock",
-  "notification_icon_area",
-  "notificationicons",
-  "cutout_space_view",
-  "system_icons",
-  "statusicons",
-  "wifi_combo",
-  "wifi_group",
-  "wifi_signal",
-  "mobile_combo",
-  "mobile_group",
-  "mobile_signal",
-  "battery",
-  "taskbar_scrim",
-  "start_contextual_buttons",
-  "end_contextual_buttons",
-  "end_nav_buttons",
-  "taskbar_bubbles_container",
-  "back",
-  "home",
-  "recent_apps",
-  "recents",
-  "overview",
-  "home_handle"
-]);
-function surfaceRect(node) {
-  if (!node.rect || typeof node.rect !== "object")
-    return null;
-  const rect = node.rect;
-  if (typeof rect.x !== "number" || typeof rect.y !== "number" || typeof rect.width !== "number" || typeof rect.height !== "number" || rect.width < 0 || rect.height < 0) {
-    return null;
-  }
-  return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
-}
-function rectContains(container, candidate) {
-  return candidate.x >= container.x && candidate.y >= container.y && candidate.x + candidate.width <= container.x + container.width && candidate.y + candidate.height <= container.y + container.height;
-}
-function hasBlockingForeignSurface(nodes, boundAppId) {
-  const systemNodes = nodes.filter((node) => node.packageName === "com.android.systemui");
-  const chromeRegions = systemNodes.flatMap((node) => {
-    const identifier = typeof node.identifier === "string" ? node.identifier.trim().toLowerCase() : "";
-    const rect = SYSTEM_CHROME_REGION_IDENTIFIERS.has(identifier) ? surfaceRect(node) : null;
-    return rect ? [rect] : [];
-  });
-  return nodes.some((node) => {
-    const packageName = typeof node.packageName === "string" ? node.packageName.trim() : "";
-    if (!packageName || packageName === boundAppId)
-      return false;
-    if (packageName !== "com.android.systemui")
-      return true;
-    const identifier = typeof node.identifier === "string" ? node.identifier.trim().toLowerCase() : "";
-    if (SYSTEM_CHROME_IDENTIFIERS.has(identifier))
-      return false;
-    const rect = surfaceRect(node);
-    return !rect || !chromeRegions.some((region) => rectContains(region, rect));
-  });
-}
-function classifyForegroundSurface(nodes, boundAppId) {
-  const text = surfaceText(nodes);
-  const has = (value) => text.some((candidate) => candidate.includes(value));
-  if (nodes.some((node) => node.type === "Alert") || boundAppId && hasBlockingForeignSurface(nodes, boundAppId)) {
-    return "unknown";
-  }
-  const hasBoundApp = Boolean(boundAppId) && nodes.some((node) => node.packageName === boundAppId || node.type === "Application");
-  if (text.length === 0)
-    return hasBoundApp ? "app" : "unknown";
-  if (has("development servers"))
-    return "dev_client_picker";
-  if (has("this is the developer menu"))
-    return "first_run_tutorial";
-  if (has("toggle performance monitor") && has("toggle element inspector") || has("copy system info") && has("open devtools")) {
-    return "expo_dev_menu";
-  }
-  if (has("open debugger") || has("configure bundler") || has("react native dev menu") && has("open devtools") && has("change bundle location")) {
-    return "react_native_dev_menu";
-  }
-  if (!boundAppId)
-    return "unknown";
-  return hasBoundApp ? "app" : "unknown";
-}
-function foregroundSurfaceFromSnapshot(result, boundAppId) {
-  if (result.isError)
-    return "unknown";
-  try {
-    const envelope = JSON.parse(result.content[0]?.text ?? "");
-    if (!envelope.ok || !Array.isArray(envelope.data?.nodes))
-      return "unknown";
-    return classifyForegroundSurface(envelope.data.nodes, boundAppId);
-  } catch {
-    return "unknown";
-  }
-}
-function createForegroundSurfaceProbe(dependencies) {
-  return async () => {
-    const status = dependencies.getAuthorityStatus();
-    const session2 = dependencies.getActiveSession();
-    const runner = status.bindings?.runner;
-    if (!status.available || !runner || !session2)
-      return "unknown";
-    const device = status.bindings?.device;
-    const platform = device?.platform;
-    if (platform !== "ios" && platform !== "android" || session2.platform !== platform || session2.deviceId !== device?.deviceId || session2.appId !== device?.appId) {
-      return "unknown";
-    }
-    return foregroundSurfaceFromSnapshot(await dependencies.runNative(["snapshot"], { platform }), session2.appId);
-  };
-}
-function parseSentinel(value, attempts3) {
-  const sentinel = typeof value === "string" ? value : "";
-  if (sentinel === "ok:hideMenu") {
-    return {
-      callSent: true,
-      method: "hideMenu",
-      reason: "ExpoDevMenu.hideMenu() completed.",
-      attempts: attempts3
-    };
-  }
-  if (sentinel === "ok:closeMenu") {
-    return {
-      callSent: true,
-      method: "closeMenu",
-      reason: "ExpoDevMenu.closeMenu() completed.",
-      attempts: attempts3
-    };
-  }
-  if (sentinel === "sent:hideMenu") {
-    return {
-      callSent: true,
-      method: "hideMenu",
-      reason: "ExpoDevMenu.hideMenu() was invoked but did not settle.",
-      attempts: attempts3
-    };
-  }
-  if (sentinel === "sent:closeMenu") {
-    return {
-      callSent: true,
-      method: "closeMenu",
-      reason: "ExpoDevMenu.closeMenu() was invoked but did not settle.",
-      attempts: attempts3
-    };
-  }
-  if (sentinel === "no_module") {
-    return {
-      callSent: false,
-      reason: "No ExpoDevMenu native module resolved.",
-      attempts: attempts3
-    };
-  }
-  if (sentinel === "no_method_available") {
-    return {
-      callSent: false,
-      reason: "ExpoDevMenu resolved but exposes no hideMenu/closeMenu method.",
-      attempts: attempts3
-    };
-  }
-  if (sentinel.startsWith("resolution_error:")) {
-    return {
-      callSent: false,
-      reason: `ExpoDevMenu resolution failed: ${sentinel.slice(17)}`,
-      attempts: attempts3
-    };
-  }
-  const invocationError = sentinel.match(/^error:(hideMenu|closeMenu):(.*)$/s);
-  if (invocationError) {
-    return {
-      callSent: true,
-      method: invocationError[1],
-      reason: `ExpoDevMenu ${invocationError[1]} invocation failed: ${invocationError[2]}`,
-      attempts: attempts3
-    };
-  }
-  return {
-    callSent: false,
-    reason: `Unexpected dev-menu hide result: ${sentinel || "(empty)"}`,
-    attempts: attempts3
-  };
-}
-async function hideExpoDevMenu(client2, options = {}) {
-  const retries = Math.min(1, Math.max(0, options.retries ?? 0));
-  const retryDelayMs = Math.max(0, options.retryDelayMs ?? 300);
-  const evaluationTimeoutMs = Math.min(5e3, Math.max(1, options.evaluationTimeoutMs ?? 5e3));
-  let outcome = {
-    callSent: false,
-    reason: "Dev menu hide not attempted.",
-    attempts: 0
-  };
-  let successfulCall;
-  for (let attempt = 0; attempt <= retries; attempt++) {
-    const attempts3 = attempt + 1;
-    try {
-      const result = await client2.evaluate(HIDE_EXPO_DEV_MENU_EXPRESSION, true, evaluationTimeoutMs);
-      const startOutcome = parseSentinel(result.value, attempts3);
-      const attemptOutcome = result.error ? startOutcome.callSent ? {
-        ...startOutcome,
-        reason: `${startOutcome.reason} Async evaluation failed: ${result.error}`
-      } : result.requestDispatched ? {
-        callSent: true,
-        reason: `Dev menu hide evaluation was dispatched but its invocation could not be confirmed: ${result.error}`,
-        attempts: attempts3
-      } : {
-        callSent: false,
-        reason: `Dev menu hide evaluation failed before dispatch: ${result.error}`,
-        attempts: attempts3
-      } : startOutcome;
-      outcome = attemptOutcome;
-      if (attemptOutcome.callSent)
-        successfulCall = attemptOutcome;
-    } catch (error2) {
-      outcome = {
-        callSent: false,
-        reason: `Dev menu hide evaluation threw: ${error2 instanceof Error ? error2.message : String(error2)}`,
-        attempts: attempts3
-      };
-    }
-    if (outcome.reason.startsWith("No ExpoDevMenu")) {
-      if (!successfulCall)
-        return outcome;
-      break;
-    }
-    if (attempt < retries)
-      await new Promise((resolve20) => setTimeout(resolve20, retryDelayMs));
-  }
-  return successfulCall ? { ...successfulCall, attempts: outcome.attempts } : outcome;
-}
-
-// packages/rn-dev-agent-core/dist/tools/dev-settings.js
+init_expo_dev_menu();
 var RESOLVE_DEV_SETTINGS = `(function() {
   if (typeof __turboModuleProxy === 'function') try { var ds = __turboModuleProxy("DevSettings"); if (ds) return ds; } catch(e) {}
   if (typeof globalThis.nativeModuleProxy !== 'undefined') try { var ds2 = globalThis.nativeModuleProxy.DevSettings; if (ds2) return ds2; } catch(e) {}
@@ -80296,6 +80413,9 @@ function createDevSettingsHandler(getClient2, dependencies = {}) {
   const helperAware = withConnection(getClient2, handler);
   return (args) => args.action === "hideDevMenu" ? helperIndependent(args) : helperAware(args);
 }
+
+// packages/rn-dev-agent-core/dist/index.js
+init_expo_dev_menu();
 
 // packages/rn-dev-agent-core/dist/tools/interact.js
 init_utils();
@@ -92339,9 +92459,13 @@ var liveDeps = buildLiveDeps({
   isMirrorActive: () => mirrorManager2?.isStreaming() ?? false
 });
 var registeredToolNames = [];
-function trackedTool(name, desc, schema, handler) {
+function trackedTool(name, desc, schema, handler, afterAuthority) {
   registeredToolNames.push(name);
-  const base = instrumentTool(name, authorityGate.wrap(name, arbiterWrap(name, handler)));
+  const gated = authorityGate.wrap(name, arbiterWrap(name, handler));
+  const base = instrumentTool(name, async (...args) => {
+    const result = await gated(...args);
+    return afterAuthority ? afterAuthority(result, args) : result;
+  });
   const installLiveCapture = liveEnabled && mayTriggerLiveCapture(name);
   const wrapped = async (...a) => {
     if (diagnosticContractProbe) {
@@ -93048,7 +93172,7 @@ trackedTool("device_screenshot", "Capture the exact authority-bound device scree
   maxWidth: external_exports.number().int().min(0).optional().describe("Downscale image so width does not exceed this many pixels. 0 disables resize. Default 800 (saves ~46% on iPhone 15/17 Pro screenshots without losing label readability)."),
   quality: external_exports.number().int().min(1).max(100).optional().describe("JPEG compression quality (1-100). Only applied to .jpg/.jpeg files. Default 85.")
 }, createDeviceScreenshotHandler(getClient));
-trackedTool("device_snapshot", "Manage exact device sessions and capture UI snapshots even when a Dev Client remains at its native picker. Raw control requires exact install/device/runner authority but not a managed Metro target; meta.originAuthority explicitly reports proven or not-proven, and not-proven snapshots are never strict source evidence. action=open starts a session (required before other device_ tools), waits for Android app accessibility, and reports readiness.reactNativeUi=ready only when a matching live CDP helper confirms the RN fiber boundary; otherwise it warns that RN readiness is unverified. Pass deviceId to select an exact iOS simulator UDID or Android adb serial when devices run in parallel. action=snapshot returns the accessibility tree with @ref identifiers for device_press/device_fill. action=close ends the session. Use attachOnly=true on action=open to skip launching the app when it is already running (avoids relaunch-induced bundle races); liveness is checked only on the resolved exact device and refuses when that identity is unavailable.", {
+trackedTool("device_snapshot", 'Manage exact device sessions and capture UI snapshots even when a Dev Client remains at its native picker. Raw control requires exact install/device/runner authority but not a managed Metro target; meta.originAuthority explicitly reports proven or not-proven, and not-proven snapshots are never strict source evidence. A fresh Expo Developer Menu snapshot includes meta.foregroundSurface plus the exact authority-available meta.recommendation for cdp_dev_settings({ action: "hideDevMenu" }); other or uncertain surfaces never receive that recommendation. action=open starts a session (required before other device_ tools), waits for Android app accessibility, and reports readiness.reactNativeUi=ready only when a matching live CDP helper confirms the RN fiber boundary; otherwise it warns that RN readiness is unverified. Pass deviceId to select an exact iOS simulator UDID or Android adb serial when devices run in parallel. action=snapshot returns the accessibility tree with @ref identifiers for device_press/device_fill. action=close ends the session. Use attachOnly=true on action=open to skip launching the app when it is already running (avoids relaunch-induced bundle races); liveness is checked only on the resolved exact device and refuses when that identity is unavailable.', {
   action: external_exports.enum(["open", "close", "snapshot"]).default("snapshot").describe("open: start session for an app. snapshot: capture UI tree with element refs. close: end session."),
   appId: external_exports.string().optional().describe('App bundle ID \u2014 required for action=open (e.g. "com.example.app")'),
   platform: external_exports.enum(["ios", "android"]).optional().describe("Target platform \u2014 used with action=open to select device"),
@@ -93080,7 +93204,10 @@ trackedTool("device_snapshot", "Manage exact device sessions and capture UI snap
     }
     return false;
   }
-}));
+}), (result, args) => {
+  const action = args[0]?.action ?? "snapshot";
+  return action === "snapshot" ? attachForegroundSurfaceDiscovery(result, getActiveSession()?.appId, () => authorityGate.canRecommendHideDevMenu()) : Promise.resolve(result);
+});
 trackedTool("device_find", 'Find a UI element by visible text and optionally interact with it. Android matching is app-window-only by default; includeSystemUi=true explicitly allows system chrome and may leave the app. Use action="click" to tap, omit for find-only. Returns element ref for use with device_press/device_fill. Requires an open session. For overlapping labels (e.g. "Property damaged" vs "Property lost"), pass exact=true for strict match or index=N to pick the Nth candidate directly \u2014 both short-circuit AMBIGUOUS_MATCH. If AMBIGUOUS_MATCH still occurs, the result includes a candidates[] array with refs you can pass to device_press.', {
   text: external_exports.string().describe("Visible text, accessibility label, or identifier to find"),
   action: external_exports.string().optional().describe('Action to perform: "click" to tap, omit for search-only'),

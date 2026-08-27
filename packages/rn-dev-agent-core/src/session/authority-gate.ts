@@ -444,6 +444,7 @@ function reissueInstallAfterPreflightRefusal(
   axes: readonly AuthorityAxis[],
   tool: string,
   args: Record<string, unknown>,
+  onOperationAdvanced: (operation: OperationRef) => void,
 ): { operation: OperationRef; status: SessionStatus } | null {
   if (
     !axes.includes('I') ||
@@ -460,6 +461,7 @@ function reissueInstallAfterPreflightRefusal(
   registry.verifyOperation(operation);
   const reissuedOperation = registry.replaceBindingsDuringOperation(operation, {
     bindings: { install },
+    onCommitted: onOperationAdvanced,
   });
   const reissuedStatus = runtime.status();
   if (!reissuedStatus.available) {
@@ -480,14 +482,11 @@ async function preflightWithInstallReissue(
   },
   operation: OperationRef,
   status: SessionStatus,
+  onOperationAdvanced: (operation: OperationRef) => void,
 ): Promise<{ before: AuthorityObservation[]; operation: OperationRef; status: SessionStatus }> {
   const { tool, profile, args, axes } = context;
   const probeAll = (probed: SessionStatus): Promise<AuthorityObservation[]> =>
-    Promise.all(
-      axes.map((axis) =>
-        dependencies.probe({ axis, phase: 'preflight', tool, profile, status: probed, args }),
-      ),
-    );
+    probeAuthorityAxes(dependencies, { tool, profile, args, axes }, probed);
   try {
     return { before: await probeAll(status), operation, status };
   } catch (preflightError) {
@@ -501,6 +500,7 @@ async function preflightWithInstallReissue(
       axes,
       tool,
       args,
+      onOperationAdvanced,
     );
     if (!reissued) throw preflightError;
     return {
@@ -509,6 +509,24 @@ async function preflightWithInstallReissue(
       status: reissued.status,
     };
   }
+}
+
+function probeAuthorityAxes(
+  dependencies: AuthorityGateDependencies,
+  context: {
+    tool: string;
+    profile: AuthorityProfile;
+    args: Record<string, unknown>;
+    axes: readonly AuthorityAxis[];
+  },
+  status: SessionStatus,
+): Promise<AuthorityObservation[]> {
+  const { tool, profile, args, axes } = context;
+  return Promise.all(
+    axes.map((axis) =>
+      dependencies.probe({ axis, phase: 'preflight', tool, profile, status, args }),
+    ),
+  );
 }
 
 function requireDeviceTransition(status: SessionStatus, args: Record<string, unknown>): void {
@@ -1024,6 +1042,7 @@ function reconcileRuntimeBundleReplacement(
   promotion?: Pick<StagedRuntimeRelaunch, 'assertActive'> & {
     onCommitted(operation: OperationRef): void;
   },
+  onOperationAdvanced?: (operation: OperationRef) => void,
 ): {
   operation: OperationRef;
   status: SessionStatus;
@@ -1056,7 +1075,13 @@ function reconcileRuntimeBundleReplacement(
         ? [{ type: 'target', key: `${String(metroPort)}:${newTargetId}` }]
         : [],
     assertBeforeCommit: promotion?.assertActive,
-    onCommitted: promotion?.onCommitted,
+    onCommitted:
+      promotion || onOperationAdvanced
+        ? (operation) => {
+            promotion?.onCommitted(operation);
+            onOperationAdvanced?.(operation);
+          }
+        : undefined,
   });
   const refreshedStatus = runtime.status();
   if (!refreshedStatus.available) {
@@ -1130,6 +1155,7 @@ async function reconcileRecoverableRuntime(
   status: SessionStatus,
   profile: AuthorityProfile,
   allowRecovery: boolean,
+  onOperationAdvanced?: (operation: OperationRef) => void,
 ): Promise<{
   operation: OperationRef;
   status: SessionStatus;
@@ -1162,19 +1188,132 @@ async function reconcileRecoverableRuntime(
     status.bindings.bundle as Record<string, unknown> | undefined,
     status.bindings.metro as Record<string, unknown> | undefined,
     bundle,
+    undefined,
+    onOperationAdvanced,
   );
+}
+
+async function admitAuthoritativePreflight(
+  runtime: AuthorityGateRuntime,
+  dependencies: AuthorityGateDependencies,
+  registry: SessionRegistry,
+  operation: OperationRef,
+  status: SessionStatus,
+  tool: string,
+  profile: AuthorityProfile,
+  args: Record<string, unknown>,
+): Promise<{
+  before: AuthorityObservation[];
+  operation: OperationRef;
+  status: SessionStatus;
+}> {
+  let currentOperation = operation;
+  const onOperationAdvanced = (nextOperation: OperationRef): void => {
+    currentOperation = nextOperation;
+  };
+  try {
+    const recovery = await reconcileRecoverableRuntime(
+      runtime,
+      dependencies,
+      registry,
+      currentOperation,
+      status,
+      profile,
+      true,
+      onOperationAdvanced,
+    );
+    currentOperation = recovery.operation;
+    const admission = await preflightWithInstallReissue(
+      registry,
+      runtime,
+      dependencies,
+      { tool, profile, args, axes: profile.axes },
+      currentOperation,
+      recovery.status,
+      onOperationAdvanced,
+    );
+    currentOperation = admission.operation;
+    return admission;
+  } catch (error) {
+    try {
+      registry.endOperation(currentOperation);
+    } catch {
+      registry.cancelOperation(currentOperation);
+    }
+    throw error;
+  }
 }
 
 export function createAuthorityGate(
   runtime: AuthorityGateRuntime,
   dependencies: AuthorityGateDependencies,
 ): {
+  canRecommendHideDevMenu(): Promise<boolean>;
   wrap(
     tool: string,
     handler: (...args: unknown[]) => Promise<unknown>,
   ): (...args: unknown[]) => Promise<unknown>;
 } {
   return {
+    canRecommendHideDevMenu: async () => {
+      let operation: OperationRef | null = null;
+      let registry: SessionRegistry | null = null;
+      try {
+        const tool = 'cdp_dev_settings';
+        const args: Record<string, unknown> = { action: 'hideDevMenu' };
+        const profile = authorityProfileFor(tool, args);
+        const status = runtime.status();
+        if (
+          !status.available ||
+          status.state === 'blocked' ||
+          status.state === 'handoff_cleanup' ||
+          profile.kind !== 'authoritative'
+        ) {
+          return false;
+        }
+        if (
+          inspectLoginPrologueGuard({
+            binding: status.bindings.loginPrologue,
+            tool,
+            args,
+            mutation: profile.mutation,
+          }).blocked
+        ) {
+          return false;
+        }
+        requireCompleteAxes(status, profile);
+        bindSessionArguments(status, profile, args, tool);
+        const available = runtime.requireAvailable();
+        registry = available.registry;
+        operation = registry.beginOperation(available.session, {
+          operationId: randomUUID(),
+          tool,
+          profile: profile.axes.join(''),
+        });
+        const admission = await admitAuthoritativePreflight(
+          runtime,
+          dependencies,
+          registry,
+          operation,
+          status,
+          tool,
+          profile,
+          args,
+        );
+        operation = admission.operation;
+        return true;
+      } catch {
+        return false;
+      } finally {
+        if (registry && operation) {
+          try {
+            registry.endOperation(operation);
+          } catch {
+            registry.cancelOperation(operation);
+          }
+        }
+      }
+    },
     wrap:
       (tool, handler) =>
       async (...handlerArgs) => {
@@ -1381,6 +1520,9 @@ export function createAuthorityGate(
               tool === 'rn_session' && args.action === 'cancel_handoff'
                 ? registry.beginHandoffCancellationOperation(available.session, operationInput)
                 : registry.beginOperation(available.session, operationInput);
+            const onOperationAdvanced = (nextOperation: OperationRef): void => {
+              operation = nextOperation;
+            };
             if (retainsRunnerCleanupAuthority) {
               requireRetainedRunnerOwnership(registry, status);
             }
@@ -1391,6 +1533,7 @@ export function createAuthorityGate(
               { tool, profile, args, axes: transitionAxes.before },
               operation,
               status,
+              onOperationAdvanced,
             );
             const before = preflight.before;
             operation = preflight.operation;
@@ -1734,28 +1877,19 @@ export function createAuthorityGate(
             requireCompleteAxes(status, profile);
             bindSessionArguments(status, profile, args, tool);
           }
-          const preflightRecovery = await reconcileRecoverableRuntime(
+          const admission = await admitAuthoritativePreflight(
             runtime,
             dependencies,
             registry,
             operation,
             status,
+            tool,
             profile,
-            true,
+            args,
           );
-          operation = preflightRecovery.operation;
-          status = preflightRecovery.status;
-          const preflight = await preflightWithInstallReissue(
-            registry,
-            runtime,
-            dependencies,
-            { tool, profile, args, axes: profile.axes },
-            operation,
-            status,
-          );
-          const before = preflight.before;
-          operation = preflight.operation;
-          status = preflight.status;
+          const before = admission.before;
+          operation = admission.operation;
+          status = admission.status;
           const initialOperationAuthorityVersion = operation.authorityVersion;
           const optionalNativeOriginBefore = await beginOptionalNativeOrigin(dependencies, {
             tool,

@@ -50,6 +50,8 @@ import { DeviceLock, DEVICE_LOCK_STALE_MS } from '../lifecycle/device-lock.js';
 import type { DeviceLockResult, DeviceLockBody } from '../lifecycle/device-lock.js';
 import { arbiter } from '../lifecycle/device-arbiter.js';
 import { closeDeviceSession } from './device-session-close.js';
+import { recommendForegroundSurfaceRemedy } from '../domain/foreground-surface-remedy.js';
+import { foregroundSurfaceFromSnapshot } from './expo-dev-menu.js';
 
 const execFile = promisify(execFileCb);
 
@@ -260,6 +262,7 @@ interface DeviceSnapshotDependencies {
   ensureIosRunner?: typeof ensureRunnerForCommand;
   stopIosRunner?: typeof stopFastRunner;
   reapAndroidRunner?: typeof reapActiveAndroidRunner;
+  remedyAuthorityAvailable?: () => boolean | Promise<boolean>;
 }
 
 export function createDeviceSnapshotHandler(
@@ -736,10 +739,14 @@ export function createDeviceSnapshotHandler(
         // next cdp_* call re-pins proactively (fast) instead of hitting the
         // ~47s STALE_TARGET timeout that prompted this issue.
         markCdpStale();
-        return wrapWithMeta(recovery.result, {
-          recovered: 'agent-device-runner-leak',
-          recoveryTier: recovery.tier,
-        });
+        return attachForegroundSurfaceDiscovery(
+          wrapWithMeta(recovery.result, {
+            recovered: 'agent-device-runner-leak',
+            recoveryTier: recovery.tier,
+          }),
+          getActiveSession()?.appId,
+          deps.remedyAuthorityAvailable,
+        );
       }
 
       return failResult(runnerLeakFailureMessage(recovery.reason, session), {
@@ -750,8 +757,31 @@ export function createDeviceSnapshotHandler(
     }
 
     cacheSnapshotIfPossible(result);
-    return result;
+    return attachForegroundSurfaceDiscovery(
+      result,
+      getActiveSession()?.appId,
+      deps.remedyAuthorityAvailable,
+    );
   };
+}
+
+export async function attachForegroundSurfaceDiscovery(
+  result: ToolResult,
+  boundAppId: string | undefined,
+  remedyAuthorityAvailable?: () => boolean | Promise<boolean>,
+): Promise<ToolResult> {
+  if (result.isError) return result;
+  const foregroundSurface = foregroundSurfaceFromSnapshot(result, boundAppId);
+  const authorityAvailable =
+    foregroundSurface === 'expo_dev_menu' && (await remedyAuthorityAvailable?.()) === true;
+  const recommendation = recommendForegroundSurfaceRemedy({
+    condition: foregroundSurface,
+    authority: authorityAvailable ? 'available' : 'unavailable',
+  });
+  return wrapWithMeta(result, {
+    foregroundSurface,
+    recommendation: recommendation ?? undefined,
+  });
 }
 
 export function runnerLeakFailureMessage(

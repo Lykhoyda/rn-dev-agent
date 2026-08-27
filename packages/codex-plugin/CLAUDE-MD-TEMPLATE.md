@@ -400,8 +400,14 @@ Use `cdp_reload` — triggers a full reload with automatic reconnect and target 
 3. If multiple Hermes targets exist, use `cdp_targets` only to diagnose why the session-bound signed target is unavailable
 
 **Expo Developer Menu:** `cdp_reload` does not dismiss native UI. Before
-navigation, run the foreground-surface preflight in `/rn-dev-agent:check-env`;
-it owns classification, the single matching remedy, and fresh app-surface proof.
+navigation, take a fresh `device_snapshot`. If it reports
+`meta.foregroundSurface: "expo_dev_menu"`, call
+`cdp_dev_settings({ action: "hideDevMenu" })`, then take another fresh snapshot
+and require the app surface. This remedy is only for the Expo Developer Menu,
+not the React Native core dev menu, Expo `Development servers` picker, system
+dialogs, or app-owned native overlays. Follow `/rn-dev-agent:check-env` for
+their separate routes; never substitute coordinates, screen-wide label search,
+raw shell UI, or a generic native-window action.
 
 #### "I need to manage device permissions"
 - **Query:** `device_permission(action="query", permission="notifications")`

@@ -15,6 +15,11 @@ dismissal. Connect the exact signed target when CDP is not already connected,
 capture one fresh `device_snapshot`, classify the foreground, and invoke exactly
 one matching remedy:
 
+When the snapshot returns `meta.foregroundSurface` and a structured
+`meta.recommendation`, invoke exactly its `tool` with its `arguments`; the first
+supported point-of-need recommendation is
+`expo_dev_menu -> cdp_dev_settings({ action: "hideDevMenu" })`.
+
 | Foreground surface | Single remedy |
 |--------------------|---------------|
 | Expo Developer Menu sheet | `cdp_dev_settings(action="hideDevMenu")` |
@@ -30,7 +35,10 @@ menu. `DEV_MENU_HIDE_UNVERIFIED` means the close call was sent but
 the surface is still occluded or could not be proven clean: classify again and
 do not fall back to coordinates or BACK. `DEV_MENU_HIDE_FAILED` means no close
 call was sent and also requires a fresh classification. Keep USB transport as
-a separate readiness axis; never classify it as a menu state.
+a separate readiness axis; never classify it as a menu state. System dialogs
+and app-owned native overlays have separate owners and never inherit the Expo
+menu remedy. Do not use coordinates, screen-wide label search, raw shell UI, or
+a generic native-window action as a fallback.
 
 Check each subsystem and report status as a table:
 
