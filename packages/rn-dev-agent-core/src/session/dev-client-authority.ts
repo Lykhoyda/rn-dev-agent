@@ -1,9 +1,6 @@
 import { managedMetroProxyUrl } from './build-adapter.js';
-import type { ManagedManifestResponse } from './expo-manifest.js';
-import { verifyManagedManifestLaunchAsset } from './expo-manifest.js';
 import type { MetroAuthorityBinding, MetroAuthorityMarker } from './metro-authority.js';
 import { verifyMetroAuthorityMarker } from './metro-authority.js';
-import { provenMetroOriginMismatch, type ForeignMetroOriginScanner } from './metro-origin.js';
 import type { SessionStatus } from './registry.js';
 import type { ToolErrorCode } from '../types.js';
 import type { ExactSessionTargetConnection } from './connect-exact-session-target.js';
@@ -12,14 +9,13 @@ interface PinDevClientInput extends MetroAuthorityBinding {
   deviceId: string;
   metroPort: number;
   devClientUrl?: string;
-  expectedDevClientUrl?: string;
   runtimeKind: 'bare-react-native' | 'expo-dev-client';
   signerCapability: string;
 }
 
 type ExactConnectionSummary = Pick<
   ExactSessionTargetConnection,
-  'targetId' | 'connectionGeneration' | 'deviceId'
+  'targetId' | 'connectionGeneration' | 'deviceId' | 'metroPort'
 >;
 
 interface PinDevClientDependencies {
@@ -37,12 +33,6 @@ interface PinDevClientDependencies {
     connection: ExactSessionTargetConnection | ExactConnectionSummary,
   ): Promise<{ status: 'signed'; marker: MetroAuthorityMarker } | null>;
   commitBundle?(bundle: BundleAuthorityBinding, promotion: BundleAuthorityPromotion): void;
-  readManagedManifest?(input: {
-    host: string;
-    metroPort: number;
-    platform: 'ios' | 'android';
-  }): Promise<ManagedManifestResponse>;
-  detectForeignMetroOrigin?: ForeignMetroOriginScanner;
 }
 
 export interface BundleAuthorityBinding extends MetroAuthorityBinding, Record<string, unknown> {
@@ -195,32 +185,10 @@ export async function pinExactDevClient(
     input.platform === 'ios' && input.runtimeKind === 'expo-dev-client'
       ? managedMetroProxyUrl(input)
       : undefined;
-  if (input.devClientUrl !== input.expectedDevClientUrl) {
-    throw new Error(
-      'DEV_CLIENT_ENDPOINT_NOT_FOUND: declared dev-client URL does not match the session endpoint',
-    );
-  }
   if (input.runtimeKind === 'bare-react-native' && input.devClientUrl) {
     throw new Error(
       'DEV_CLIENT_ENDPOINT_NOT_FOUND: launch kind contradicts the signed build provenance',
     );
-  }
-  const managedManifestHost = '127.0.0.1';
-  if (input.runtimeKind === 'expo-dev-client') {
-    if (!dependencies.readManagedManifest) {
-      throw new Error(
-        'METRO_MANIFEST_ENDPOINT_MISMATCH: managed manifest verification is unavailable',
-      );
-    }
-    const response = await dependencies.readManagedManifest({
-      host: managedManifestHost,
-      metroPort: input.metroPort,
-      platform: input.platform,
-    });
-    verifyManagedManifestLaunchAsset(response, {
-      host: managedManifestHost,
-      port: input.metroPort,
-    });
   }
   if (input.devClientUrl) {
     await dependencies.openUrl(input.platform, input.deviceId, input.devClientUrl, input.appId);
@@ -243,27 +211,23 @@ export async function pinExactDevClient(
       deviceId: input.deviceId,
     });
   } catch (error) {
-    // GH #630: refuse with the exact hazard when the exact device's app is
-    // provably served by a sibling Metro (dev-client fallback).
-    const evidence = await dependencies
-      .detectForeignMetroOrigin?.({
-        expectedMetroPort: input.metroPort,
-        platform: input.platform,
-        deviceId: input.deviceId,
-        appId: input.appId,
-      })
-      .catch(() => null);
-    if (evidence) {
-      throw provenMetroOriginMismatch(
-        input.metroPort,
-        { platform: input.platform, deviceId: input.deviceId, appId: input.appId },
-        evidence,
-      );
+    const leaf = error instanceof Error ? error.message : String(error);
+    const code = /^([A-Z][A-Z0-9_]+):/.exec(leaf)?.[1];
+    if (code === 'METRO_ORIGIN_MISMATCH' || code === 'BUNDLE_HANDSHAKE_UNAVAILABLE') {
+      throw error;
     }
-    throw error;
+    throw new Error(
+      `BUNDLE_HANDSHAKE_UNAVAILABLE: the actual first bundle from this session Metro did not become available. Exact-connect stage: ${leaf}`,
+      { cause: error },
+    );
   }
   const connected = connectedResult;
   try {
+    if (connected.metroPort !== input.metroPort) {
+      throw new Error(
+        'METRO_ORIGIN_MISMATCH: the actual first bundle did not originate from this session Metro port',
+      );
+    }
     if (connected.deviceId !== input.deviceId) {
       throw new Error(
         'CDP_TARGET_AUTHORITY_MISMATCH: selected target is not proven on the claimed device',

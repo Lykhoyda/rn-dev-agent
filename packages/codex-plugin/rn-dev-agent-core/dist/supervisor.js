@@ -31995,15 +31995,6 @@ function provenMetroOriginMismatch(expectedMetroPort, context, evidence) {
   });
   return error2;
 }
-function recordedMetroOriginConflict(expectedMetroPort, boundMetroPort) {
-  const error2 = new SessionAuthorityError("METRO_ORIGIN_MISMATCH", `the device binding recorded Metro :${expectedMetroPort} as its expected origin, but the session's Metro authority is bound to :${boundMetroPort}`, void 0, {
-    expected: `Metro :${expectedMetroPort}`,
-    observed: `Metro :${boundMetroPort}`,
-    nextAction: 'Re-bind the device with rn_session action "bind_device" so its expected Metro origin matches the bound Metro.'
-  });
-  error2.attachMeta({ [PROVEN_METRO_ORIGIN_META_KEY]: "recorded-origin-conflict" });
-  return error2;
-}
 function isProvenMetroOriginMismatch(error2) {
   return error2 instanceof SessionAuthorityError && error2.code === "METRO_ORIGIN_MISMATCH" && error2.getSupplementalMeta()[PROVEN_METRO_ORIGIN_META_KEY] !== void 0;
 }
@@ -72733,11 +72724,6 @@ function createSessionHandler(runtime, dependencies = {}) {
         if (!input.buildReceipt && currentInstall && (currentInstall.platform !== platform || currentInstall.deviceId !== deviceId || currentInstall.appId !== appId)) {
           throw new SessionAuthorityError("DEVICE_RECEIPT_INCOMPATIBLE", "cannot replace exact-device authority while an incompatible install receipt is bound");
         }
-        const expectedMetroPort = status.bindings.metroPort;
-        if (typeof expectedMetroPort !== "number" || !Number.isSafeInteger(expectedMetroPort) || expectedMetroPort < 1 || expectedMetroPort > 65535) {
-          throw new SessionAuthorityError("METRO_ORIGIN_MISMATCH", "device binding cannot be pinned to a Metro origin: the session has no valid allocated Metro port");
-        }
-        const expectedMetroOrigin = { expectedMetroPort };
         if (!input.buildReceipt) {
           const invalidatesBundle = Boolean(status.bindings.bundle);
           await withInlineStaleDeviceCleanup(registry2, session2, dependencies, { platform, deviceId, appId, confirmed: input.confirmed }, requireWorkerInstance, requireExactDevice, () => registry2.replaceDeviceAuthority(session2, {
@@ -72746,7 +72732,6 @@ function createSessionHandler(runtime, dependencies = {}) {
               platform,
               deviceId,
               appId,
-              ...expectedMetroOrigin,
               ...input.devClientUrl ? { devClientUrl: input.devClientUrl } : {}
             }
           }), yieldObserveDeviceAxis);
@@ -72787,7 +72772,7 @@ function createSessionHandler(runtime, dependencies = {}) {
           requireInstallGeneration();
         }, () => registry2.replaceDeviceAuthority(session2, {
           resource: { type: "device", key: `${platform}:${deviceId}` },
-          device: { platform, deviceId, appId, ...expectedMetroOrigin },
+          device: { platform, deviceId, appId },
           install: { ...receipt2 }
         }), yieldObserveDeviceAxis);
         if (status.bindings.bundle)
@@ -93368,10 +93353,6 @@ function createLocalAuthorityProbe(dependencies) {
       if (!Number.isSafeInteger(port) || platform !== "ios" && platform !== "android" || !deviceId || !appId) {
         throw new SessionAuthorityError("METRO_ORIGIN_MISMATCH", "native app origin authority is incomplete");
       }
-      const expectedMetroPort = Number(device.expectedMetroPort ?? port);
-      if (Number.isSafeInteger(expectedMetroPort) && expectedMetroPort !== port) {
-        throw recordedMetroOriginConflict(expectedMetroPort, port);
-      }
       const refuseWithForeignOriginEvidence = async (unprovable) => {
         const evidence = await dependencies.findForeignMetroOrigin?.({ expectedMetroPort: port, platform, deviceId, appId }).catch(() => null);
         if (evidence)
@@ -93529,99 +93510,6 @@ var init_local_authority_probe = __esm({
   }
 });
 
-// packages/rn-dev-agent-core/dist/session/expo-manifest.js
-function manifestError(message) {
-  const error2 = new Error(`METRO_MANIFEST_ENDPOINT_MISMATCH: ${message}`);
-  error2.code = "METRO_MANIFEST_ENDPOINT_MISMATCH";
-  return error2;
-}
-function extractMultipartManifest(body) {
-  const boundaryEnd = body.indexOf("\r\n");
-  if (boundaryEnd <= 0)
-    return null;
-  const boundary = body.slice(0, boundaryEnd);
-  if (!boundary.startsWith("--"))
-    return null;
-  for (const part of body.split(boundary)) {
-    if (!MULTIPART_MANIFEST_PART.test(part))
-      continue;
-    const headerEnd = part.indexOf("\r\n\r\n");
-    if (headerEnd < 0)
-      continue;
-    return part.slice(headerEnd + 4).replace(/\r\n--$/, "").trim();
-  }
-  return null;
-}
-function parseExpoManifestBody(body) {
-  const trimmed = body.trimStart();
-  const candidate = trimmed.startsWith("--") ? extractMultipartManifest(trimmed) : body;
-  if (!candidate)
-    return null;
-  let parsed;
-  try {
-    parsed = JSON.parse(candidate);
-  } catch {
-    return null;
-  }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
-    return null;
-  const manifest = parsed;
-  const launchAsset = manifest.launchAsset;
-  if (!launchAsset || typeof launchAsset !== "object")
-    return null;
-  if (typeof launchAsset.url !== "string")
-    return null;
-  return manifest;
-}
-function verifyManagedManifestLaunchAsset(response, endpoint2) {
-  if (response.status < 200 || response.status >= 300) {
-    throw manifestError(`manifest request returned HTTP ${response.status}`);
-  }
-  const contentType = response.contentType.split(";", 1)[0]?.trim().toLowerCase();
-  if (contentType !== "application/expo+json" && contentType !== "application/json" && contentType !== "multipart/mixed") {
-    throw manifestError("manifest response content type is not an Expo manifest");
-  }
-  const isMultipart = response.body.trimStart().startsWith("--");
-  if (contentType === "multipart/mixed" !== isMultipart) {
-    throw manifestError("manifest response body does not match its content type");
-  }
-  const manifest = parseExpoManifestBody(response.body);
-  if (!manifest)
-    throw manifestError("manifest response is malformed");
-  const url = manifest.launchAsset.url;
-  let parsed;
-  try {
-    parsed = new URL(url);
-  } catch {
-    throw manifestError("manifest launch asset is not an absolute URL");
-  }
-  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-    throw manifestError("manifest launch asset does not use an HTTP endpoint");
-  }
-  if (parsed.username || parsed.password) {
-    throw manifestError("manifest launch asset carries embedded credentials");
-  }
-  if (parsed.hostname !== endpoint2.host) {
-    throw manifestError("manifest launch asset does not resolve to the managed host");
-  }
-  const port = parsed.port === "" ? parsed.protocol === "https:" ? 443 : 80 : Number(parsed.port);
-  if (port !== endpoint2.port) {
-    throw manifestError("manifest launch asset does not resolve to the managed Metro port");
-  }
-  const runtimeVersion = manifest.runtimeVersion;
-  return {
-    bundleUrl: url,
-    runtimeVersion: typeof runtimeVersion === "string" ? runtimeVersion : null
-  };
-}
-var MULTIPART_MANIFEST_PART;
-var init_expo_manifest = __esm({
-  "packages/rn-dev-agent-core/dist/session/expo-manifest.js"() {
-    "use strict";
-    MULTIPART_MANIFEST_PART = /name="manifest"/;
-  }
-});
-
 // packages/rn-dev-agent-core/dist/session/dev-client-authority.js
 async function reconcileAuthoritativeBundle(status, dependencies) {
   const prior = status.bindings.bundle;
@@ -93694,26 +93582,8 @@ async function pinExactDevClient(input, dependencies) {
     throw new Error("DEV_CLIENT_ENDPOINT_NOT_FOUND: authority-bound Metro port is unavailable");
   }
   const derivedIosExpoLaunchTarget = input.platform === "ios" && input.runtimeKind === "expo-dev-client" ? managedMetroProxyUrl(input) : void 0;
-  if (input.devClientUrl !== input.expectedDevClientUrl) {
-    throw new Error("DEV_CLIENT_ENDPOINT_NOT_FOUND: declared dev-client URL does not match the session endpoint");
-  }
   if (input.runtimeKind === "bare-react-native" && input.devClientUrl) {
     throw new Error("DEV_CLIENT_ENDPOINT_NOT_FOUND: launch kind contradicts the signed build provenance");
-  }
-  const managedManifestHost = "127.0.0.1";
-  if (input.runtimeKind === "expo-dev-client") {
-    if (!dependencies.readManagedManifest) {
-      throw new Error("METRO_MANIFEST_ENDPOINT_MISMATCH: managed manifest verification is unavailable");
-    }
-    const response = await dependencies.readManagedManifest({
-      host: managedManifestHost,
-      metroPort: input.metroPort,
-      platform: input.platform
-    });
-    verifyManagedManifestLaunchAsset(response, {
-      host: managedManifestHost,
-      port: input.metroPort
-    });
   }
   if (input.devClientUrl) {
     await dependencies.openUrl(input.platform, input.deviceId, input.devClientUrl, input.appId);
@@ -93733,19 +93603,18 @@ async function pinExactDevClient(input, dependencies) {
       deviceId: input.deviceId
     });
   } catch (error2) {
-    const evidence = await dependencies.detectForeignMetroOrigin?.({
-      expectedMetroPort: input.metroPort,
-      platform: input.platform,
-      deviceId: input.deviceId,
-      appId: input.appId
-    }).catch(() => null);
-    if (evidence) {
-      throw provenMetroOriginMismatch(input.metroPort, { platform: input.platform, deviceId: input.deviceId, appId: input.appId }, evidence);
+    const leaf = error2 instanceof Error ? error2.message : String(error2);
+    const code = /^([A-Z][A-Z0-9_]+):/.exec(leaf)?.[1];
+    if (code === "METRO_ORIGIN_MISMATCH" || code === "BUNDLE_HANDSHAKE_UNAVAILABLE") {
+      throw error2;
     }
-    throw error2;
+    throw new Error(`BUNDLE_HANDSHAKE_UNAVAILABLE: the actual first bundle from this session Metro did not become available. Exact-connect stage: ${leaf}`, { cause: error2 });
   }
   const connected = connectedResult;
   try {
+    if (connected.metroPort !== input.metroPort) {
+      throw new Error("METRO_ORIGIN_MISMATCH: the actual first bundle did not originate from this session Metro port");
+    }
     if (connected.deviceId !== input.deviceId) {
       throw new Error("CDP_TARGET_AUTHORITY_MISMATCH: selected target is not proven on the claimed device");
     }
@@ -93791,9 +93660,7 @@ var init_dev_client_authority = __esm({
   "packages/rn-dev-agent-core/dist/session/dev-client-authority.js"() {
     "use strict";
     init_build_adapter();
-    init_expo_manifest();
     init_metro_authority();
-    init_metro_origin();
   }
 });
 
@@ -93993,6 +93860,7 @@ async function connectExactAndroidSessionTarget(input, timeoutMs, dependencies) 
         targetId: target.id,
         connectionGeneration,
         deviceId: input.deviceId,
+        metroPort: input.metroPort,
         client: exactClient,
         assertActive,
         run: awaitWithinDeadline,
@@ -94085,6 +93953,7 @@ async function connectExactSessionTarget(input, timeoutMs, dependencies) {
         targetId: target.id,
         connectionGeneration: exactClient.connectionGeneration,
         deviceId: input.deviceId,
+        metroPort: input.metroPort,
         client: exactClient,
         assertActive: () => {
         },
@@ -94209,7 +94078,7 @@ async function pinSessionDevClient(status, options, commitBundle) {
       deviceId: device.deviceId,
       metroPort: metro.port,
       runtimeKind,
-      ...devClientUrl ? { devClientUrl, expectedDevClientUrl: devClientUrl } : {},
+      ...devClientUrl ? { devClientUrl } : {},
       signerCapability: secret.signerCapability
     }, {
       openUrl: async (platform, deviceId, url) => {
@@ -94258,7 +94127,6 @@ async function pinSessionDevClient(status, options, commitBundle) {
       connectExact: async ({ metroPort, platform, appId, deviceId }) => {
         return connectExactSessionTarget2({ metroPort, platform, appId, deviceId }, exactSessionTargetReadinessTimeoutMs(platform));
       },
-      detectForeignMetroOrigin: foreignMetroOriginScanner,
       readMarker: async (connection) => {
         const markerClient = "client" in connection ? connection.client : getClient();
         const result = await markerClient.evaluate("JSON.stringify(globalThis.__RN_DEV_AGENT_AUTHORITY__ ?? null)");
@@ -94267,29 +94135,7 @@ async function pinSessionDevClient(status, options, commitBundle) {
         const parsed = JSON.parse(result.value);
         return parsed?.status === "signed" && parsed.marker ? { status: "signed", marker: parsed.marker } : null;
       },
-      commitBundle,
-      readManagedManifest: async ({ host, metroPort, platform }) => {
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 15e3);
-        try {
-          const response = await fetch(`http://${host}:${metroPort}/`, {
-            headers: {
-              accept: "multipart/mixed,application/expo+json,application/json",
-              "expo-platform": platform
-            },
-            signal: controller.signal
-          });
-          return {
-            body: await response.text(),
-            contentType: response.headers.get("content-type") ?? "",
-            status: response.status
-          };
-        } catch (error2) {
-          throw new Error(`METRO_MANIFEST_ENDPOINT_MISMATCH: managed manifest request failed: ${error2 instanceof Error ? error2.message : String(error2)}`);
-        } finally {
-          clearTimeout(timer);
-        }
-      }
+      commitBundle
     });
     getClient().setAuthoritativeSessionPolicy(createAuthoritativeSessionPolicy(status));
     foreignMetroOriginScanner.invalidate();

@@ -253,39 +253,27 @@ test('axis A stays an unprovable mismatch when no sibling Metro evidence exists'
   );
 });
 
-test('axis A refuses a device binding recorded against a different Metro origin', async () => {
-  let scanned = false;
+test('axis A ignores the obsolete recorded-port observation and proves the live target', async () => {
   const probe = probeWith({
-    fetchTargets: async () => {
-      throw new Error('must not be reached');
-    },
-    findForeignMetroOrigin: async () => {
-      scanned = true;
-      return null;
-    },
+    fetchTargets: async () => [hermesTarget(8081, SESSION_DEVICE_NAME)],
+    proveTargetDevices: async () => {},
+    findForeignMetroOrigin: async () => assert.fail('live target proof must not scan siblings'),
   });
 
-  await assert.rejects(
-    () =>
-      probe({
-        axis: 'A',
-        status: probeStatus({
-          metro: { port: 8081 },
-          device: {
-            platform: 'ios',
-            deviceId: SESSION_DEVICE,
-            appId: APP_ID,
-            expectedMetroPort: 8082,
-          },
-        }),
-      }),
-    (error) => {
-      assert.equal(isProvenMetroOriginMismatch(error), true);
-      assert.match(error.message, /recorded Metro :8082/);
-      return true;
-    },
-  );
-  assert.equal(scanned, false);
+  const observation = await probe({
+    axis: 'A',
+    status: probeStatus({
+      metro: { port: 8081 },
+      device: {
+        platform: 'ios',
+        deviceId: SESSION_DEVICE,
+        appId: APP_ID,
+        expectedMetroPort: 8082,
+      },
+    }),
+  });
+
+  assert.equal(observation.axis, 'A');
 });
 
 test('axis A accepts a device binding pinned to the bound Metro origin', async () => {
@@ -618,32 +606,25 @@ function pinDependencies(overrides = {}) {
   };
 }
 
-test('cdp_connect pin refuses with METRO_ORIGIN_MISMATCH when the device app is on a sibling Metro', async () => {
+test('cdp_connect preserves an effect-level Metro origin refusal from exact bundle discovery', async () => {
   await assert.rejects(
     () =>
       pinExactDevClient(
         pinInput,
         pinDependencies({
-          detectForeignMetroOrigin: async (scanQuery) => {
-            assert.equal(scanQuery.expectedMetroPort, 8082);
-            assert.equal(scanQuery.deviceId, SESSION_DEVICE);
-            return { port: 8081, targetDeviceName: SESSION_DEVICE_NAME };
+          connectExact: async () => {
+            throw new Error('METRO_ORIGIN_MISMATCH: actual first bundle used sibling Metro');
           },
         }),
       ),
-    (error) => {
-      assert.equal(isProvenMetroOriginMismatch(error), true);
-      assert.match(error.message, /pin_dev_client|Metro :8081/);
-      return true;
-    },
+    /METRO_ORIGIN_MISMATCH/,
   );
 });
 
-test('cdp_connect pin keeps the original failure when no foreign origin is provable', async () => {
+test('cdp_connect maps an unproven wrong endpoint to the existing handshake refusal', async () => {
   await assert.rejects(
-    () =>
-      pinExactDevClient(pinInput, pinDependencies({ detectForeignMetroOrigin: async () => null })),
-    /CDP_TARGET_AUTHORITY_MISMATCH: exact managed-Metro target did not re-register/,
+    () => pinExactDevClient(pinInput, pinDependencies()),
+    /BUNDLE_HANDSHAKE_UNAVAILABLE: the actual first bundle/,
   );
 });
 
@@ -678,7 +659,7 @@ function bindDeviceHandler(bindings, onReplace) {
   );
 }
 
-test('bind_device records the session Metro origin on the device binding', async () => {
+test('bind_device does not mint a parallel recorded-port origin authority', async () => {
   let replacement;
   const handler = bindDeviceHandler({ metroPort: 8082 }, (input) => {
     replacement = input;
@@ -692,10 +673,14 @@ test('bind_device records the session Metro origin on the device binding', async
   });
 
   assert.equal(result.isError, undefined);
-  assert.equal(replacement.device.expectedMetroPort, 8082);
+  assert.deepEqual(replacement.device, {
+    platform: 'ios',
+    deviceId: SESSION_DEVICE,
+    appId: APP_ID,
+  });
 });
 
-test('bind_device refuses when the session has no valid Metro origin to pin', async () => {
+test('bind_device remains independent of pre-install Metro origin proof', async () => {
   let replaced = false;
   const handler = bindDeviceHandler({}, () => {
     replaced = true;
@@ -708,7 +693,6 @@ test('bind_device refuses when the session has no valid Metro origin to pin', as
     appId: APP_ID,
   });
 
-  assert.equal(result.isError, true);
-  assert.match(result.content[0].text, /METRO_ORIGIN_MISMATCH/);
-  assert.equal(replaced, false);
+  assert.equal(result.isError, undefined);
+  assert.equal(replaced, true);
 });

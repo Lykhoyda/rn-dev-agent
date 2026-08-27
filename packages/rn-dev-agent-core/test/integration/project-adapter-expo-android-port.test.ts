@@ -295,13 +295,6 @@ const a=process.argv.slice(2);if(a[0]&&a[0].startsWith('-i:'))process.stdout.wri
                 signerCapability,
               ),
             }),
-            readManagedManifest: async () => ({
-              body: JSON.stringify({
-                launchAsset: { url: `http://127.0.0.1:${port}/index.bundle` },
-              }),
-              contentType: 'application/expo+json',
-              status: 200,
-            }),
             commitBundle,
           },
         );

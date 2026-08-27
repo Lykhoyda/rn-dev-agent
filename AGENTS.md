@@ -93,6 +93,21 @@ sibling workspace only when explicitly requested.
   but must not pass it as a gate argument, since `bindSourcePaths` fences
   a supplied `projectRoot` to `status.source.appRoot` and would refuse the
   sibling-workspace primary checkout.
+- Metro/bundle authority has exactly one owner: `pinExactDevClient`
+  (`src/session/dev-client-authority.ts`), which binds only when the actual
+  first bundle exposes this session's signed marker for this Metro instance.
+  Launch-endpoint checks in `managedMetroProxyUrl` (`src/session/build-adapter.ts`,
+  mirrored in the generated adapter) are diagnostics on launch data; never
+  reintroduce a pre-install manifest, port-parity, or origin-scan guard that can
+  grant or deny authority.
+- Android emulator classification is deliberately split and disagrees for an
+  adb-over-TCP serial: `ensureAndroidMetroReverse`
+  (`src/session/android-metro-reverse.ts`) reads `ro.kernel.qemu`, while the build
+  adapter matches `^emulator-\d+$` on the serial. A remote-farm emulator reached as
+  `127.0.0.1:5555` is therefore physical to the launch adapter and needs an exact
+  `devClientUrl` (a host LAN origin works). `bind_device` itself still succeeds;
+  the refusal surfaces one step later from the managed build/launch leg
+  (`managedMetroProxyUrl`) as `DEV_CLIENT_ENDPOINT_NOT_FOUND`.
 - Linked-worktree learned-action inheritance is classified by
   `resolveReadableActionCorpus` (`src/session/worktree-inheritance.ts`).
   Inventory, `loadAction`/`cdp_run_action`, and setup `plan`/`apply` share that

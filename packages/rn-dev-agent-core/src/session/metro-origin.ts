@@ -233,25 +233,6 @@ export function provenMetroOriginMismatch(
   return error;
 }
 
-export function recordedMetroOriginConflict(
-  expectedMetroPort: number,
-  boundMetroPort: number,
-): SessionAuthorityError {
-  const error = new SessionAuthorityError(
-    'METRO_ORIGIN_MISMATCH',
-    `the device binding recorded Metro :${expectedMetroPort} as its expected origin, but the session's Metro authority is bound to :${boundMetroPort}`,
-    undefined,
-    {
-      expected: `Metro :${expectedMetroPort}`,
-      observed: `Metro :${boundMetroPort}`,
-      nextAction:
-        'Re-bind the device with rn_session action "bind_device" so its expected Metro origin matches the bound Metro.',
-    },
-  );
-  error.attachMeta({ [PROVEN_METRO_ORIGIN_META_KEY]: 'recorded-origin-conflict' });
-  return error;
-}
-
 /** True only for a PROVEN origin mismatch — the fail-closed subset the gate must never swallow. */
 export function isProvenMetroOriginMismatch(error: unknown): boolean {
   return (

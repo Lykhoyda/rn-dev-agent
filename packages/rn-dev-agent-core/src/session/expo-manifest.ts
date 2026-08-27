@@ -1,28 +1,4 @@
-export interface ManagedManifestEndpoint {
-  host: string;
-  port: number;
-}
-
-export interface ManagedManifestLaunchAsset {
-  bundleUrl: string;
-  runtimeVersion: string | null;
-}
-
-export interface ManagedManifestResponse {
-  body: string;
-  contentType: string;
-  status: number;
-}
-
 const MULTIPART_MANIFEST_PART = /name="manifest"/;
-
-function manifestError(message: string): Error {
-  const error = new Error(`METRO_MANIFEST_ENDPOINT_MISMATCH: ${message}`) as Error & {
-    code: string;
-  };
-  error.code = 'METRO_MANIFEST_ENDPOINT_MISMATCH';
-  return error;
-}
 
 function extractMultipartManifest(body: string): string | null {
   const boundaryEnd = body.indexOf('\r\n');
@@ -57,53 +33,4 @@ export function parseExpoManifestBody(body: string): Record<string, unknown> | n
   if (!launchAsset || typeof launchAsset !== 'object') return null;
   if (typeof (launchAsset as { url?: unknown }).url !== 'string') return null;
   return manifest;
-}
-
-// Manifest output is non-proof-bearing: the only accepted claim is the exact managed endpoint.
-export function verifyManagedManifestLaunchAsset(
-  response: ManagedManifestResponse,
-  endpoint: ManagedManifestEndpoint,
-): ManagedManifestLaunchAsset {
-  if (response.status < 200 || response.status >= 300) {
-    throw manifestError(`manifest request returned HTTP ${response.status}`);
-  }
-  const contentType = response.contentType.split(';', 1)[0]?.trim().toLowerCase();
-  if (
-    contentType !== 'application/expo+json' &&
-    contentType !== 'application/json' &&
-    contentType !== 'multipart/mixed'
-  ) {
-    throw manifestError('manifest response content type is not an Expo manifest');
-  }
-  const isMultipart = response.body.trimStart().startsWith('--');
-  if ((contentType === 'multipart/mixed') !== isMultipart) {
-    throw manifestError('manifest response body does not match its content type');
-  }
-  const manifest = parseExpoManifestBody(response.body);
-  if (!manifest) throw manifestError('manifest response is malformed');
-  const url = (manifest.launchAsset as { url: string }).url;
-  let parsed: URL;
-  try {
-    parsed = new URL(url);
-  } catch {
-    throw manifestError('manifest launch asset is not an absolute URL');
-  }
-  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-    throw manifestError('manifest launch asset does not use an HTTP endpoint');
-  }
-  if (parsed.username || parsed.password) {
-    throw manifestError('manifest launch asset carries embedded credentials');
-  }
-  if (parsed.hostname !== endpoint.host) {
-    throw manifestError('manifest launch asset does not resolve to the managed host');
-  }
-  const port = parsed.port === '' ? (parsed.protocol === 'https:' ? 443 : 80) : Number(parsed.port);
-  if (port !== endpoint.port) {
-    throw manifestError('manifest launch asset does not resolve to the managed Metro port');
-  }
-  const runtimeVersion = manifest.runtimeVersion;
-  return {
-    bundleUrl: url,
-    runtimeVersion: typeof runtimeVersion === 'string' ? runtimeVersion : null,
-  };
 }

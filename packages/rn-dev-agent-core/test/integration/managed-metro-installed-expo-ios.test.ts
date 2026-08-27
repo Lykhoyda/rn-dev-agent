@@ -757,6 +757,7 @@ async function writeMarker(buildGeneration) {
               targetId: client!.connectedTarget!.id,
               connectionGeneration: client!.connectionGeneration,
               deviceId: simulatorId!,
+              metroPort: port,
             };
           },
           readMarker: async () => {

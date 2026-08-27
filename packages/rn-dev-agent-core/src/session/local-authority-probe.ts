@@ -11,11 +11,7 @@ import {
 } from './install-authority.js';
 import type { AuthorityObservation } from './authority-gate.js';
 import { verifyMetroAuthorityMarker, type MetroAuthorityMarker } from './metro-authority.js';
-import {
-  provenMetroOriginMismatch,
-  recordedMetroOriginConflict,
-  type ForeignMetroOriginScanner,
-} from './metro-origin.js';
+import { provenMetroOriginMismatch, type ForeignMetroOriginScanner } from './metro-origin.js';
 import { metroListenerPid } from './metro-binding.js';
 import { inspectSessionOwner } from './process-owner.js';
 import { readProcessBirth } from './process-birth.js';
@@ -292,10 +288,6 @@ export function createLocalAuthorityProbe(
           'METRO_ORIGIN_MISMATCH',
           'native app origin authority is incomplete',
         );
-      }
-      const expectedMetroPort = Number(device.expectedMetroPort ?? port);
-      if (Number.isSafeInteger(expectedMetroPort) && expectedMetroPort !== port) {
-        throw recordedMetroOriginConflict(expectedMetroPort, port);
       }
       const refuseWithForeignOriginEvidence = async (
         unprovable: SessionAuthorityError,
