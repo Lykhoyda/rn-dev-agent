@@ -207,7 +207,7 @@ export function buildCdpDispatch(deps: CdpReplayDeps, signal?: AbortSignal): Rep
       if (frontmost && !frontmost.visible)
         return {
           visible: false,
-          ...(frontmost.code ? { code: frontmost.code } : {}),
+          code: frontmost.code ?? 'ASSERTION_FAILED',
           reason: frontmost.reason ?? `testID "${id}" is mounted but not frontmost`,
         };
       return { visible: true };

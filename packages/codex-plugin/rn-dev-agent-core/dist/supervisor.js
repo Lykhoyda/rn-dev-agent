@@ -80722,7 +80722,7 @@ function buildCdpDispatch(deps, signal) {
       if (frontmost && !frontmost.visible)
         return {
           visible: false,
-          ...frontmost.code ? { code: frontmost.code } : {},
+          code: frontmost.code ?? "ASSERTION_FAILED",
           reason: frontmost.reason ?? `testID "${id}" is mounted but not frontmost`
         };
       return { visible: true };
@@ -81073,6 +81073,28 @@ function createMaestroRunHandler(deps = {}) {
       return failResult(`Refusing iOS proof-domain ambiguity at step ${iosProofPlan.sourceIndex}: ${iosProofPlan.reason}.`, "UNSUPPORTED_STEP", { sourceIndex: iosProofPlan.sourceIndex, proofDomains: ["react-tree", "xctest-native"] });
     }
     if (iosProofPlan?.ok && iosProofPlan.segments.some((segment) => segment.domain === "react-tree")) {
+      const reactOnlyProof = iosProofPlan.segments.every((segment) => segment.domain === "react-tree");
+      const reactEngineStatus = await resolveEngineStatus();
+      const reactCompatibilityRefusal = capturedAction || semanticActionMeta ? actionReplayPreflight({
+        enginePin: semanticActionMeta?.enginePin,
+        commands: validatedCommands,
+        engineStatus: reactEngineStatus,
+        requireRuntimePin: !reactOnlyProof
+      }) : replayCompatibilityPreflight({
+        commands: validatedCommands,
+        engineStatus: reactEngineStatus,
+        requireEnginePin: false,
+        requireRuntimePin: !reactOnlyProof
+      });
+      if (reactCompatibilityRefusal) {
+        return failResult(reactCompatibilityRefusal, "ENGINE_PIN_MISMATCH", {
+          pin: reactEngineStatus?.pin,
+          installedVersion: reactEngineStatus?.version ?? null,
+          selectedPath: reactEngineStatus?.selectedPath ?? null,
+          provenance: reactEngineStatus?.provenance ?? "none",
+          proofDomain: reactOnlyProof ? "react-tree" : "partitioned"
+        });
+      }
       writeFileSync14(flowFile, validatedContent, "utf-8");
       if (isLoginMetadata(semanticActionMeta) && !loginPostconditionId(validatedCommands)) {
         return failResult("Refusing login replay without a final positive post-submit testID assertion. End the flow with assertVisible.id or extendedWaitUntil.visible.id.", "ASSERTION_FAILED", { proofDomain: "react-tree", postcondition: "missing" });

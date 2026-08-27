@@ -10,6 +10,7 @@ import {
   soleComparableNativeSelectorForCommands,
 } from '../../dist/domain/ios-proof-router.js';
 import { createMaestroRunHandler, runFlowParked } from '../../dist/tools/maestro-run.js';
+import { runCdpReplayCommands } from '../../dist/tools/cdp-replay-dispatch.js';
 import { performReactTreeInput } from '../../dist/tools/device-interact.js';
 import { chooseMaestroDispatch } from '../../dist/tools/maestro-dispatch.js';
 import { buildReplayEngineStatus, MAESTRO_RUNNER_PIN } from '../../dist/domain/engine-pin.js';
@@ -81,6 +82,88 @@ test('exact iOS commands route before dispatch to react-tree proof', async () =>
   assert.equal(env.data?.proofDomain, 'react-tree');
   assert.equal(env.data?.maestroCertified, false);
   assert.deepEqual(calls, ['press:email', 'type:email:a']);
+});
+
+test('React-only learned replay preflights action format before mutation', async () => {
+  let mutations = 0;
+  const handler = createMaestroRunHandler({
+    replayDeps: () => ({
+      pressByTestId: async () => mutations++,
+      typeByTestId: async () => {},
+      treeFor: async (id) => ({ testID: id }),
+      frontmostFor: async () => ({ visible: true }),
+      launchApp: async () => {},
+      settle: async () => {},
+    }),
+    resolveEngineStatus: async () => buildReplayEngineStatus('not-installed', null, false),
+  });
+  const env = envelope(
+    await handler({
+      platform: 'ios',
+      inlineYaml: `appId: com.example.app
+---
+- tapOn:
+    id: submit
+`,
+      actionMetadata: { id: 'saved-login', tags: ['auth'] },
+      ...callbacks,
+    }),
+  );
+  assert.equal(env.ok, false);
+  assert.equal(env.code, 'ENGINE_PIN_MISMATCH');
+  assert.match(env.error ?? '', /migrated to maestro-runner/);
+  assert.equal(mutations, 0);
+});
+
+test('React-only learned replay ignores native runtime pin drift', async () => {
+  let mutations = 0;
+  const handler = createMaestroRunHandler({
+    replayDeps: () => ({
+      pressByTestId: async () => mutations++,
+      typeByTestId: async () => {},
+      treeFor: async (id) => ({ testID: id }),
+      frontmostFor: async () => ({ visible: true }),
+      launchApp: async () => {},
+      settle: async () => {},
+    }),
+    resolveEngineStatus: async () => buildReplayEngineStatus('not-installed', null, false),
+  });
+  const env = envelope(
+    await handler({
+      platform: 'ios',
+      inlineYaml: `appId: com.example.app
+---
+- tapOn:
+    id: submit
+`,
+      actionMetadata: {
+        id: 'saved-submit',
+        enginePin: `maestro-runner@${MAESTRO_RUNNER_PIN.version}`,
+        tags: ['action'],
+      },
+      ...callbacks,
+    }),
+  );
+  assert.equal(env.ok, true);
+  assert.equal(mutations, 1);
+});
+
+test('mounted hidden extendedWaitUntil target is an assertion failure, not absence', async () => {
+  const replay = await runCdpReplayCommands(
+    [{ extendedWaitUntil: { visible: { id: 'clipped' }, timeout: 0 } }],
+    {},
+    {
+      pressByTestId: async () => {},
+      typeByTestId: async () => {},
+      treeFor: async () => ({ testID: 'clipped' }),
+      frontmostFor: async () => ({ visible: false, reason: 'target is clipped' }),
+      launchApp: async () => {},
+      settle: async () => {},
+    },
+  );
+  assert.equal(replay.passed, false);
+  assert.equal(replay.failureCode, 'ASSERTION_FAILED');
+  assert.match(replay.reason ?? '', /clipped/);
 });
 
 test('ordinary missing React testID stays TESTID_NOT_FOUND without WDA', async () => {

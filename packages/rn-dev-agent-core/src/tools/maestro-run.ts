@@ -742,6 +742,33 @@ export function createMaestroRunHandler(
       iosProofPlan?.ok &&
       iosProofPlan.segments.some((segment) => segment.domain === 'react-tree')
     ) {
+      const reactOnlyProof = iosProofPlan.segments.every(
+        (segment) => segment.domain === 'react-tree',
+      );
+      const reactEngineStatus = await resolveEngineStatus();
+      const reactCompatibilityRefusal =
+        capturedAction || semanticActionMeta
+          ? actionReplayPreflight({
+              enginePin: semanticActionMeta?.enginePin,
+              commands: validatedCommands,
+              engineStatus: reactEngineStatus,
+              requireRuntimePin: !reactOnlyProof,
+            })
+          : replayCompatibilityPreflight({
+              commands: validatedCommands,
+              engineStatus: reactEngineStatus,
+              requireEnginePin: false,
+              requireRuntimePin: !reactOnlyProof,
+            });
+      if (reactCompatibilityRefusal) {
+        return failResult(reactCompatibilityRefusal, 'ENGINE_PIN_MISMATCH', {
+          pin: reactEngineStatus?.pin,
+          installedVersion: reactEngineStatus?.version ?? null,
+          selectedPath: reactEngineStatus?.selectedPath ?? null,
+          provenance: reactEngineStatus?.provenance ?? 'none',
+          proofDomain: reactOnlyProof ? 'react-tree' : 'partitioned',
+        });
+      }
       writeFileSync(flowFile, validatedContent, 'utf-8');
       if (isLoginMetadata(semanticActionMeta) && !loginPostconditionId(validatedCommands)) {
         return failResult(
