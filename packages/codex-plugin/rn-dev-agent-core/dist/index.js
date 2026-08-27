@@ -80750,6 +80750,12 @@ function createLoginPrologueHandler(deps) {
       role: ACTION_LOGIN_HELPER,
       alias: LOGIN_PROLOGUE_ALIAS
     });
+    const missingAuthoritativeRunRecord = () => failResult(`cdp_login_prologue: ${LOGIN_PROLOGUE_ALIAS} reported success without a fresh passing RunRecord.`, "LOAD_FAILED", {
+      role: ACTION_LOGIN_HELPER,
+      alias: LOGIN_PROLOGUE_ALIAS,
+      actionId: LOGIN_PROLOGUE_ALIAS,
+      failureKind: "AUTHORITATIVE_RUN_RECORD_MISSING"
+    });
     let action;
     try {
       inventory = await measure("inventory", () => listActions(projectRoot));
@@ -80758,7 +80764,7 @@ function createLoginPrologueHandler(deps) {
       if (error2 instanceof Error && error2.message.includes("does not match filename identity") && error2.message.includes(LOGIN_PROLOGUE_ALIAS)) {
         return unresolved(`the ${LOGIN_PROLOGUE_ALIAS} action file declares a different action id.`);
       }
-      throw error2;
+      return unresolved(`could not load the exact ${LOGIN_PROLOGUE_ALIAS} learned action: ${error2 instanceof Error ? error2.message : String(error2)}`);
     }
     if (!action) {
       return unresolved(`no exact ${LOGIN_PROLOGUE_ALIAS} learned action was found. Auth-tag or intent inference is not permitted.`);
@@ -80778,9 +80784,10 @@ function createLoginPrologueHandler(deps) {
     sealStrictRunAction(replayArgs);
     const replayResult = await measure("replay", () => deps.runAction(replayArgs));
     const replay = parseEnvelope2(replayResult);
-    if (replay.ok !== true || replay.data?.passed !== true) {
+    if (replay.ok !== true)
       return replayResult;
-    }
+    if (replay.data?.passed !== true)
+      return missingAuthoritativeRunRecord();
     const strictRunRecordId = typeof replay.data.strictRunRecordId === "string" ? replay.data.strictRunRecordId : typeof replay.meta?.strictRunRecordId === "string" ? replay.meta.strictRunRecordId : void 0;
     let freshRecord;
     await measure("verify-run-record", async () => {
@@ -80788,12 +80795,7 @@ function createLoginPrologueHandler(deps) {
       freshRecord = strictRunRecordId ? reloaded?.state.runHistory.find((record2) => record2.runId === strictRunRecordId) : void 0;
     });
     if (!freshRecord || freshRecord.status !== "pass") {
-      return failResult(`cdp_login_prologue: ${LOGIN_PROLOGUE_ALIAS} reported success without a fresh passing RunRecord.`, "LOAD_FAILED", {
-        role: ACTION_LOGIN_HELPER,
-        alias: LOGIN_PROLOGUE_ALIAS,
-        actionId: LOGIN_PROLOGUE_ALIAS,
-        failureKind: "AUTHORITATIVE_RUN_RECORD_MISSING"
-      });
+      return missingAuthoritativeRunRecord();
     }
     const ended = now();
     const outcome = {

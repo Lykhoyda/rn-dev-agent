@@ -330,8 +330,8 @@ Before testing an authenticated feature, read the route with
 inventories learned actions, resolves only `.rn-agent/actions/user-login.yaml`,
 and replays it with conservative runner and selector safety checks.
 
-Continue only when the result has `state: "passed"` and a fresh passing
-`runRecord`. The returned prologue and RunRecord timing fields separate
+Continue only when the result has a successful (`ok: true`) envelope and a
+fresh passing `runRecord`. The returned prologue and RunRecord timing fields separate
 inventory, resolution, replay, verification, and transport time. Treat that
 pass as a navigation helper only: it is not PR proof and must not be used as
 a durable authority capability. Formal login proof is locking and running

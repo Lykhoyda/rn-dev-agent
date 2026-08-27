@@ -63,6 +63,18 @@ export function createLoginPrologueHandler(deps: LoginPrologueDependencies) {
         alias: LOGIN_PROLOGUE_ALIAS,
       });
 
+    const missingAuthoritativeRunRecord = (): ToolResult =>
+      failResult(
+        `cdp_login_prologue: ${LOGIN_PROLOGUE_ALIAS} reported success without a fresh passing RunRecord.`,
+        'LOAD_FAILED',
+        {
+          role: ACTION_LOGIN_HELPER,
+          alias: LOGIN_PROLOGUE_ALIAS,
+          actionId: LOGIN_PROLOGUE_ALIAS,
+          failureKind: 'AUTHORITATIVE_RUN_RECORD_MISSING',
+        },
+      );
+
     let action;
     try {
       inventory = await measure('inventory', () => listActions(projectRoot));
@@ -77,7 +89,11 @@ export function createLoginPrologueHandler(deps: LoginPrologueDependencies) {
           `the ${LOGIN_PROLOGUE_ALIAS} action file declares a different action id.`,
         );
       }
-      throw error;
+      return unresolved(
+        `could not load the exact ${LOGIN_PROLOGUE_ALIAS} learned action: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
     }
     if (!action) {
       return unresolved(
@@ -104,9 +120,8 @@ export function createLoginPrologueHandler(deps: LoginPrologueDependencies) {
 
     const replayResult = await measure('replay', () => deps.runAction(replayArgs));
     const replay = parseEnvelope(replayResult);
-    if (replay.ok !== true || replay.data?.passed !== true) {
-      return replayResult;
-    }
+    if (replay.ok !== true) return replayResult;
+    if (replay.data?.passed !== true) return missingAuthoritativeRunRecord();
 
     const strictRunRecordId =
       typeof replay.data.strictRunRecordId === 'string'
@@ -122,16 +137,7 @@ export function createLoginPrologueHandler(deps: LoginPrologueDependencies) {
         : undefined;
     });
     if (!freshRecord || freshRecord.status !== 'pass') {
-      return failResult(
-        `cdp_login_prologue: ${LOGIN_PROLOGUE_ALIAS} reported success without a fresh passing RunRecord.`,
-        'LOAD_FAILED',
-        {
-          role: ACTION_LOGIN_HELPER,
-          alias: LOGIN_PROLOGUE_ALIAS,
-          actionId: LOGIN_PROLOGUE_ALIAS,
-          failureKind: 'AUTHORITATIVE_RUN_RECORD_MISSING',
-        },
-      );
+      return missingAuthoritativeRunRecord();
     }
 
     const ended = now();

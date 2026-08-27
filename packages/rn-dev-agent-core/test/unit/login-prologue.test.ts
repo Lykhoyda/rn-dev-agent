@@ -314,6 +314,33 @@ test('login prologue rejects a filename and metadata id mismatch', async (t) => 
   assert.equal(dispatched, false);
 });
 
+test('login prologue classifies ambiguous action files as an ordinary load failure', async (t) => {
+  const project = createTmpProject();
+  t.after(() => project.cleanup());
+  seedLoginAction(project);
+  writeFileSync(
+    join(project.actionsDir, 'user-login.yml'),
+    fixtureYaml({ id: 'user-login', intent: 'ambiguous login action' }),
+    'utf8',
+  );
+  let dispatched = false;
+  const handler = createLoginPrologueHandler({
+    now: deterministicClock(),
+    runAction: async () => {
+      dispatched = true;
+      return okResult({ passed: true });
+    },
+  });
+
+  const envelope = parse(await handler({ projectRoot: project.root }));
+  assert.equal(envelope.ok, false);
+  assert.equal(envelope.code, 'LOAD_FAILED');
+  assert.equal(envelope.meta.role, ACTION_LOGIN_HELPER);
+  assert.equal(envelope.meta.alias, 'user-login');
+  assert.match(envelope.error, /both user-login\.yaml and user-login\.yml exist/);
+  assert.equal(dispatched, false);
+});
+
 for (const failure of [
   { name: 'runner drift', code: 'ENGINE_PIN_MISMATCH' },
   { name: 'selector failure', code: 'TESTID_NOT_FOUND' },
@@ -356,6 +383,21 @@ test('login prologue rejects transport success without a fresh passing RunRecord
   const handler = createLoginPrologueHandler({
     now: deterministicClock(),
     runAction: async () => okResult({ passed: true, transport: 'maestro' }),
+  });
+
+  const envelope = parse(await handler({ projectRoot: project.root }));
+  assert.equal(envelope.ok, false);
+  assert.equal(envelope.code, 'LOAD_FAILED');
+  assert.equal(envelope.meta.failureKind, 'AUTHORITATIVE_RUN_RECORD_MISSING');
+});
+
+test('login prologue rejects an ok envelope that does not report a passing replay', async (t) => {
+  const project = createTmpProject();
+  t.after(() => project.cleanup());
+  seedLoginAction(project);
+  const handler = createLoginPrologueHandler({
+    now: deterministicClock(),
+    runAction: async () => okResult({ passed: false, transport: 'maestro' }),
   });
 
   const envelope = parse(await handler({ projectRoot: project.root }));
