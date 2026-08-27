@@ -108,7 +108,12 @@ function fixture() {
       calls.push('replace-binding');
       status.bindings = { ...status.bindings, ...input.bindings };
       status.authorityVersion += 1;
-      return { ...operation, authorityVersion: operation.authorityVersion + 1 };
+      const committedOperation = {
+        ...operation,
+        authorityVersion: operation.authorityVersion + 1,
+      };
+      input.onCommitted?.(committedOperation);
+      return committedOperation;
     },
   };
   const runtime = {
@@ -295,6 +300,81 @@ test('hideDevMenu recommendation admission recovers runtime and reissues install
   assert.equal(status.bindings.install.digest, 'install-reissued');
   assert.ok(calls.indexOf('recover-runtime') < calls.indexOf('preflight:B'));
   assert.equal(calls.at(-1), 'end');
+});
+
+test('failed authority probe after recovery cleans the advanced operation generation', async () => {
+  const { registry, runtime, status } = fixture();
+  const activeOperations = new Map();
+  const endedOperations = [];
+  const beginOperation = registry.beginOperation;
+  const replaceBindingsDuringOperation = registry.replaceBindingsDuringOperation;
+  const endOperation = registry.endOperation;
+  const cancelOperation = registry.cancelOperation;
+  registry.beginOperation = (session, input) => {
+    if (activeOperations.size > 0) {
+      throw new SessionAuthorityError(
+        'OPERATION_ALREADY_IN_PROGRESS',
+        'another authority-sensitive operation is already in progress',
+      );
+    }
+    const operation = beginOperation(session, input);
+    activeOperations.set(operation.operationId, operation);
+    return operation;
+  };
+  registry.replaceBindingsDuringOperation = (operation, input) => {
+    const nextOperation = replaceBindingsDuringOperation(operation, input);
+    activeOperations.set(nextOperation.operationId, nextOperation);
+    return nextOperation;
+  };
+  registry.endOperation = (operation) => {
+    const active = activeOperations.get(operation.operationId);
+    if (active?.authorityVersion !== operation.authorityVersion) {
+      throw new SessionAuthorityError(
+        'AUTHORITY_LOST_DURING_OPERATION',
+        'operation fence no longer matches current authority',
+      );
+    }
+    endedOperations.push(operation);
+    activeOperations.delete(operation.operationId);
+    endOperation(operation);
+  };
+  registry.cancelOperation = (operation) => {
+    const active = activeOperations.get(operation.operationId);
+    if (active?.authorityVersion === operation.authorityVersion) {
+      activeOperations.delete(operation.operationId);
+    }
+    cancelOperation(operation);
+  };
+
+  let failAuthorityProbe = true;
+  const gate = createAuthorityGate(runtime, {
+    recoverRuntimeConnection: async () => true,
+    refreshRuntimeBinding: async () => ({
+      ...status.bindings.bundle,
+      targetId: 'restored-target',
+      connectionGeneration: status.bindings.bundle.connectionGeneration + 1,
+    }),
+    probe: async ({ axis }) => {
+      if (failAuthorityProbe && axis === 'M') {
+        throw new SessionAuthorityError(
+          'METRO_AUTHORITY_MISMATCH',
+          'the live Metro authority probe failed after recovery',
+        );
+      }
+      return { axis, identity: `${axis}-identity` };
+    },
+  });
+
+  assert.equal(await gate.canRecommendHideDevMenu(), false);
+  assert.equal(endedOperations.length, 1);
+  assert.equal(endedOperations[0].authorityVersion, 10);
+  assert.equal(activeOperations.size, 0);
+
+  failAuthorityProbe = false;
+  const following = await gate.wrap('cdp_console_log', async () => okResult({ entries: [] }))({});
+  const envelope = JSON.parse(following.content[0].text);
+  assert.equal(envelope.ok, true, following.content[0].text);
+  assert.notEqual(envelope.code, 'OPERATION_ALREADY_IN_PROGRESS');
 });
 
 test('handler-time reconnect is rebound before bundle postflight', async () => {

@@ -444,6 +444,7 @@ function reissueInstallAfterPreflightRefusal(
   axes: readonly AuthorityAxis[],
   tool: string,
   args: Record<string, unknown>,
+  onOperationAdvanced?: (operation: OperationRef) => void,
 ): { operation: OperationRef; status: SessionStatus } | null {
   if (
     !axes.includes('I') ||
@@ -460,6 +461,7 @@ function reissueInstallAfterPreflightRefusal(
   registry.verifyOperation(operation);
   const reissuedOperation = registry.replaceBindingsDuringOperation(operation, {
     bindings: { install },
+    onCommitted: onOperationAdvanced,
   });
   const reissuedStatus = runtime.status();
   if (!reissuedStatus.available) {
@@ -480,6 +482,7 @@ async function preflightWithInstallReissue(
   },
   operation: OperationRef,
   status: SessionStatus,
+  onOperationAdvanced?: (operation: OperationRef) => void,
 ): Promise<{ before: AuthorityObservation[]; operation: OperationRef; status: SessionStatus }> {
   const { tool, profile, args, axes } = context;
   const probeAll = (probed: SessionStatus): Promise<AuthorityObservation[]> =>
@@ -497,6 +500,7 @@ async function preflightWithInstallReissue(
       axes,
       tool,
       args,
+      onOperationAdvanced,
     );
     if (!reissued) throw preflightError;
     return {
@@ -1038,6 +1042,7 @@ function reconcileRuntimeBundleReplacement(
   promotion?: Pick<StagedRuntimeRelaunch, 'assertActive'> & {
     onCommitted(operation: OperationRef): void;
   },
+  onOperationAdvanced?: (operation: OperationRef) => void,
 ): {
   operation: OperationRef;
   status: SessionStatus;
@@ -1070,7 +1075,13 @@ function reconcileRuntimeBundleReplacement(
         ? [{ type: 'target', key: `${String(metroPort)}:${newTargetId}` }]
         : [],
     assertBeforeCommit: promotion?.assertActive,
-    onCommitted: promotion?.onCommitted,
+    onCommitted:
+      promotion || onOperationAdvanced
+        ? (operation) => {
+            promotion?.onCommitted(operation);
+            onOperationAdvanced?.(operation);
+          }
+        : undefined,
   });
   const refreshedStatus = runtime.status();
   if (!refreshedStatus.available) {
@@ -1144,6 +1155,7 @@ async function reconcileRecoverableRuntime(
   status: SessionStatus,
   profile: AuthorityProfile,
   allowRecovery: boolean,
+  onOperationAdvanced?: (operation: OperationRef) => void,
 ): Promise<{
   operation: OperationRef;
   status: SessionStatus;
@@ -1176,6 +1188,8 @@ async function reconcileRecoverableRuntime(
     status.bindings.bundle as Record<string, unknown> | undefined,
     status.bindings.metro as Record<string, unknown> | undefined,
     bundle,
+    undefined,
+    onOperationAdvanced,
   );
 }
 
@@ -1193,23 +1207,41 @@ async function admitAuthoritativePreflight(
   operation: OperationRef;
   status: SessionStatus;
 }> {
-  const recovery = await reconcileRecoverableRuntime(
-    runtime,
-    dependencies,
-    registry,
-    operation,
-    status,
-    profile,
-    true,
-  );
-  return preflightWithInstallReissue(
-    registry,
-    runtime,
-    dependencies,
-    { tool, profile, args, axes: profile.axes },
-    recovery.operation,
-    recovery.status,
-  );
+  let currentOperation = operation;
+  const onOperationAdvanced = (nextOperation: OperationRef): void => {
+    currentOperation = nextOperation;
+  };
+  try {
+    const recovery = await reconcileRecoverableRuntime(
+      runtime,
+      dependencies,
+      registry,
+      currentOperation,
+      status,
+      profile,
+      true,
+      onOperationAdvanced,
+    );
+    currentOperation = recovery.operation;
+    const admission = await preflightWithInstallReissue(
+      registry,
+      runtime,
+      dependencies,
+      { tool, profile, args, axes: profile.axes },
+      currentOperation,
+      recovery.status,
+      onOperationAdvanced,
+    );
+    currentOperation = admission.operation;
+    return admission;
+  } catch (error) {
+    try {
+      registry.endOperation(currentOperation);
+    } catch {
+      registry.cancelOperation(currentOperation);
+    }
+    throw error;
+  }
 }
 
 export function createAuthorityGate(

@@ -32155,7 +32155,7 @@ function containedRunnerAuthority(result, runner) {
     return null;
   }
 }
-function reissueInstallAfterPreflightRefusal(registry2, runtime, operation, status, dependencies, error2, axes, tool, args) {
+function reissueInstallAfterPreflightRefusal(registry2, runtime, operation, status, dependencies, error2, axes, tool, args, onOperationAdvanced) {
   if (!axes.includes("I") || Boolean(status.bindings.proof) || requiresExactInstalledArtifact(tool, args) || authorityErrorCode(error2) !== "APP_INSTALL_IDENTITY_CHANGED") {
     return null;
   }
@@ -32164,7 +32164,8 @@ function reissueInstallAfterPreflightRefusal(registry2, runtime, operation, stat
     return null;
   registry2.verifyOperation(operation);
   const reissuedOperation = registry2.replaceBindingsDuringOperation(operation, {
-    bindings: { install }
+    bindings: { install },
+    onCommitted: onOperationAdvanced
   });
   const reissuedStatus = runtime.status();
   if (!reissuedStatus.available) {
@@ -32172,13 +32173,13 @@ function reissueInstallAfterPreflightRefusal(registry2, runtime, operation, stat
   }
   return { operation: reissuedOperation, status: reissuedStatus };
 }
-async function preflightWithInstallReissue(registry2, runtime, dependencies, context, operation, status) {
+async function preflightWithInstallReissue(registry2, runtime, dependencies, context, operation, status, onOperationAdvanced) {
   const { tool, profile, args, axes } = context;
   const probeAll = (probed) => probeAuthorityAxes(dependencies, { tool, profile, args, axes }, probed);
   try {
     return { before: await probeAll(status), operation, status };
   } catch (preflightError) {
-    const reissued = reissueInstallAfterPreflightRefusal(registry2, runtime, operation, status, dependencies, preflightError, axes, tool, args);
+    const reissued = reissueInstallAfterPreflightRefusal(registry2, runtime, operation, status, dependencies, preflightError, axes, tool, args, onOperationAdvanced);
     if (!reissued)
       throw preflightError;
     return {
@@ -32506,7 +32507,7 @@ function receipt(status, profile, observations) {
     } : void 0
   };
 }
-function reconcileRuntimeBundleReplacement(runtime, registry2, operation, status, priorBundle, metro, bundle, promotion) {
+function reconcileRuntimeBundleReplacement(runtime, registry2, operation, status, priorBundle, metro, bundle, promotion, onOperationAdvanced) {
   const oldTargetId = priorBundle?.targetId;
   const newTargetId = bundle.targetId;
   const metroPort = metro?.port;
@@ -32523,7 +32524,10 @@ function reconcileRuntimeBundleReplacement(runtime, registry2, operation, status
     releaseResources: typeof oldTargetId === "string" && oldTargetId !== newTargetId ? [{ type: "target", key: `${String(metroPort)}:${oldTargetId}` }] : [],
     claimResources: oldTargetId !== newTargetId ? [{ type: "target", key: `${String(metroPort)}:${newTargetId}` }] : [],
     assertBeforeCommit: promotion?.assertActive,
-    onCommitted: promotion?.onCommitted
+    onCommitted: promotion || onOperationAdvanced ? (operation2) => {
+      promotion?.onCommitted(operation2);
+      onOperationAdvanced?.(operation2);
+    } : void 0
   });
   const refreshedStatus = runtime.status();
   if (!refreshedStatus.available) {
@@ -32565,7 +32569,7 @@ function invalidateRuntimeBundle(registry2, operation, status, onInvalidated) {
   onInvalidated?.();
   return nextOperation;
 }
-async function reconcileRecoverableRuntime(runtime, dependencies, registry2, operation, status, profile, allowRecovery) {
+async function reconcileRecoverableRuntime(runtime, dependencies, registry2, operation, status, profile, allowRecovery, onOperationAdvanced) {
   if (!profile.axes.includes("B") && !registry2.operationHasAxis(operation, "B")) {
     return { operation, status, runtimeTargetChanged: false };
   }
@@ -32579,11 +32583,27 @@ async function reconcileRecoverableRuntime(runtime, dependencies, registry2, ope
     throw new SessionAuthorityError("BUNDLE_HANDSHAKE_UNAVAILABLE", "authoritative reconnect cannot commit without a binding refresh");
   }
   const bundle = await dependencies.refreshRuntimeBinding(status);
-  return reconcileRuntimeBundleReplacement(runtime, registry2, operation, status, status.bindings.bundle, status.bindings.metro, bundle);
+  return reconcileRuntimeBundleReplacement(runtime, registry2, operation, status, status.bindings.bundle, status.bindings.metro, bundle, void 0, onOperationAdvanced);
 }
 async function admitAuthoritativePreflight(runtime, dependencies, registry2, operation, status, tool, profile, args) {
-  const recovery = await reconcileRecoverableRuntime(runtime, dependencies, registry2, operation, status, profile, true);
-  return preflightWithInstallReissue(registry2, runtime, dependencies, { tool, profile, args, axes: profile.axes }, recovery.operation, recovery.status);
+  let currentOperation = operation;
+  const onOperationAdvanced = (nextOperation) => {
+    currentOperation = nextOperation;
+  };
+  try {
+    const recovery = await reconcileRecoverableRuntime(runtime, dependencies, registry2, currentOperation, status, profile, true, onOperationAdvanced);
+    currentOperation = recovery.operation;
+    const admission = await preflightWithInstallReissue(registry2, runtime, dependencies, { tool, profile, args, axes: profile.axes }, currentOperation, recovery.status, onOperationAdvanced);
+    currentOperation = admission.operation;
+    return admission;
+  } catch (error2) {
+    try {
+      registry2.endOperation(currentOperation);
+    } catch {
+      registry2.cancelOperation(currentOperation);
+    }
+    throw error2;
+  }
 }
 function createAuthorityGate(runtime, dependencies) {
   return {
