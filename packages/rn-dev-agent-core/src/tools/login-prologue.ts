@@ -130,12 +130,20 @@ export function createLoginPrologueHandler(deps: LoginPrologueDependencies) {
           ? replay.meta.strictRunRecordId
           : undefined;
     let freshRecord: RunRecord | undefined;
-    await measure('verify-run-record', async () => {
-      const reloaded = loadAction(projectRoot, LOGIN_PROLOGUE_ALIAS);
-      freshRecord = strictRunRecordId
-        ? reloaded?.state.runHistory.find((record) => record.runId === strictRunRecordId)
-        : undefined;
-    });
+    try {
+      await measure('verify-run-record', async () => {
+        const reloaded = loadAction(projectRoot, LOGIN_PROLOGUE_ALIAS);
+        freshRecord = strictRunRecordId
+          ? reloaded?.state.runHistory.find((record) => record.runId === strictRunRecordId)
+          : undefined;
+      });
+    } catch (error) {
+      return unresolved(
+        `could not verify the exact ${LOGIN_PROLOGUE_ALIAS} learned action: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
     if (!freshRecord || freshRecord.status !== 'pass') {
       return missingAuthoritativeRunRecord();
     }

@@ -80790,10 +80790,14 @@ function createLoginPrologueHandler(deps) {
       return missingAuthoritativeRunRecord();
     const strictRunRecordId = typeof replay.data.strictRunRecordId === "string" ? replay.data.strictRunRecordId : typeof replay.meta?.strictRunRecordId === "string" ? replay.meta.strictRunRecordId : void 0;
     let freshRecord;
-    await measure("verify-run-record", async () => {
-      const reloaded = loadAction(projectRoot, LOGIN_PROLOGUE_ALIAS);
-      freshRecord = strictRunRecordId ? reloaded?.state.runHistory.find((record2) => record2.runId === strictRunRecordId) : void 0;
-    });
+    try {
+      await measure("verify-run-record", async () => {
+        const reloaded = loadAction(projectRoot, LOGIN_PROLOGUE_ALIAS);
+        freshRecord = strictRunRecordId ? reloaded?.state.runHistory.find((record2) => record2.runId === strictRunRecordId) : void 0;
+      });
+    } catch (error2) {
+      return unresolved(`could not verify the exact ${LOGIN_PROLOGUE_ALIAS} learned action: ${error2 instanceof Error ? error2.message : String(error2)}`);
+    }
     if (!freshRecord || freshRecord.status !== "pass") {
       return missingAuthoritativeRunRecord();
     }

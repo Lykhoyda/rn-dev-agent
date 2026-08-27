@@ -233,6 +233,41 @@ test('login prologue requires the strict executor persisted run identity', async
   assert.equal(envelope.meta.failureKind, 'AUTHORITATIVE_RUN_RECORD_MISSING');
 });
 
+test('login prologue classifies post-replay identity drift as an ordinary load failure', async (t) => {
+  const project = createTmpProject();
+  t.after(() => project.cleanup());
+  seedLoginAction(project);
+  const handler = createLoginPrologueHandler({
+    now: deterministicClock(),
+    runAction: async () => {
+      appendRunRecordToSidecar(project.root, 'user-login', {
+        runId: 'login-run-before-identity-drift',
+        timestamp: '2026-08-21T10:00:01.000Z',
+        durationMs: 125,
+        status: 'pass',
+        trigger: 'agent',
+      });
+      writeFileSync(
+        project.yamlPath('user-login'),
+        fixtureYaml({ id: 'other-login', intent: 'changed during replay' }),
+        'utf8',
+      );
+      return okResult({
+        passed: true,
+        strictRunRecordId: 'login-run-before-identity-drift',
+        transport: 'maestro',
+      });
+    },
+  });
+
+  const envelope = parse(await handler({ projectRoot: project.root }));
+  assert.equal(envelope.ok, false);
+  assert.equal(envelope.code, 'LOAD_FAILED');
+  assert.equal(envelope.meta.role, ACTION_LOGIN_HELPER);
+  assert.equal(envelope.meta.alias, 'user-login');
+  assert.match(envelope.error, /does not match filename identity user-login/);
+});
+
 test('strict replay refuses success when RunRecord persistence is not committed', async (t) => {
   const project = createTmpProject();
   t.after(() => project.cleanup());
