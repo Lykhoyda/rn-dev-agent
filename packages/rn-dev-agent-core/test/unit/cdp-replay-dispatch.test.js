@@ -193,6 +193,47 @@ test('disabled-guard fires on a node found through the getTree `.tree` wrapper',
   assert.deepEqual(calls, [], 'must not press a disabled node found through the wrapper');
 });
 
+test('press refuses a child beneath pointerEvents none or box-only ancestors', async () => {
+  const calls = [];
+  const base = {
+    pressByTestId: async () => calls.push('press'),
+    typeByTestId: async () => calls.push('type'),
+    launchApp: async () => {},
+    settle: async () => {},
+  };
+  for (const pointerEvents of ['none', 'box-only']) {
+    await assert.rejects(
+      buildCdpDispatch({
+        ...base,
+        treeFor: async () => ({
+          tree: { props: { pointerEvents }, children: [{ testID: 'child', children: [] }] },
+        }),
+      }).press('child'),
+      /not user-interactable/,
+    );
+  }
+  assert.deepEqual(calls, []);
+});
+
+test('text input preserves box-none and auto ancestors but rejects hidden hit-testing', async () => {
+  const calls = [];
+  const tree = (pointerEvents) => ({
+    tree: { props: { pointerEvents }, children: [{ testID: 'field', children: [] }] },
+  });
+  const make = (value) =>
+    buildCdpDispatch({
+      pressByTestId: async () => {},
+      typeByTestId: async () => calls.push('type'),
+      treeFor: async () => tree(value),
+      launchApp: async () => {},
+      settle: async () => {},
+    });
+  await make('box-none').type('field', 'ok');
+  await make('auto').type('field', 'ok');
+  await assert.rejects(make('none').type('field', 'no'), /not user-interactable/);
+  assert.deepEqual(calls, ['type', 'type']);
+});
+
 test('isExactPresent: verbatim testID match → true', () => {
   assert.equal(isExactPresent(tree, 'tab-tasks'), true);
 });

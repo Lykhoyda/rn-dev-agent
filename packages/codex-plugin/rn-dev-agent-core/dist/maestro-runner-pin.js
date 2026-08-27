@@ -15166,6 +15166,43 @@ function nodeProps(treeJson, id) {
   }
   return null;
 }
+function nodePath(treeJson, id) {
+  const root2 = treeJson && typeof treeJson === "object" && "tree" in treeJson ? treeJson.tree : treeJson;
+  const visit = (value, ancestors) => {
+    if (!value || typeof value !== "object" || Array.isArray(value))
+      return null;
+    const node = value;
+    const path = [...ancestors, node];
+    if (node.testID === id || node.nativeID === id)
+      return path;
+    const children = node.children ?? node.nodes ?? node.matches;
+    if (!Array.isArray(children))
+      return null;
+    for (const child of children) {
+      const found = visit(child, path);
+      if (found)
+        return found;
+    }
+    return null;
+  };
+  return visit(root2, []);
+}
+function pointerEventsBlock(treeJson, id) {
+  const path = nodePath(treeJson, id);
+  if (!path)
+    return null;
+  for (let index = 0; index < path.length; index += 1) {
+    const node = path[index];
+    const props = node.props ?? node;
+    const pointerEvents = props.pointerEvents;
+    if (pointerEvents === "none")
+      return 'an ancestor has pointerEvents="none"';
+    if (pointerEvents === "box-only" && index < path.length - 1) {
+      return 'an ancestor has pointerEvents="box-only"';
+    }
+  }
+  return null;
+}
 function isDisabled(props) {
   if (!props)
     return false;
@@ -15201,6 +15238,9 @@ function buildCdpDispatch(deps, signal) {
       throw new ReplayDispatchError(frontmost.code ?? "ASSERTION_FAILED", frontmost.reason ?? `testID "${id}" is mounted but not frontmost`);
     if (isDisabled(nodeProps(tree, id)))
       throw new ReplayDispatchError("INTERACTION_NOT_ACTUATED", `testID "${id}" is disabled/non-interactable`);
+    const pointerEventsError = pointerEventsBlock(tree, id);
+    if (pointerEventsError)
+      throw new ReplayDispatchError("INTERACTION_NOT_ACTUATED", `testID "${id}" is not user-interactable: ${pointerEventsError}`);
   };
   return {
     async press(id) {

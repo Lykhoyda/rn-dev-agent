@@ -119,6 +119,45 @@ function nodeProps(treeJson: unknown, id: string): Record<string, unknown> | nul
   return null;
 }
 
+function nodePath(treeJson: unknown, id: string): Array<Record<string, unknown>> | null {
+  const root =
+    treeJson && typeof treeJson === 'object' && 'tree' in treeJson
+      ? (treeJson as Record<string, unknown>).tree
+      : treeJson;
+  const visit = (
+    value: unknown,
+    ancestors: Array<Record<string, unknown>>,
+  ): Array<Record<string, unknown>> | null => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+    const node = value as Record<string, unknown>;
+    const path = [...ancestors, node];
+    if (node.testID === id || node.nativeID === id) return path;
+    const children = node.children ?? node.nodes ?? node.matches;
+    if (!Array.isArray(children)) return null;
+    for (const child of children) {
+      const found = visit(child, path);
+      if (found) return found;
+    }
+    return null;
+  };
+  return visit(root, []);
+}
+
+function pointerEventsBlock(treeJson: unknown, id: string): string | null {
+  const path = nodePath(treeJson, id);
+  if (!path) return null;
+  for (let index = 0; index < path.length; index += 1) {
+    const node = path[index]!;
+    const props = (node.props as Record<string, unknown> | undefined) ?? node;
+    const pointerEvents = props.pointerEvents;
+    if (pointerEvents === 'none') return 'an ancestor has pointerEvents="none"';
+    if (pointerEvents === 'box-only' && index < path.length - 1) {
+      return 'an ancestor has pointerEvents="box-only"';
+    }
+  }
+  return null;
+}
+
 function isDisabled(props: Record<string, unknown> | null): boolean {
   if (!props) return false;
   const a11y = props.accessibilityState as { disabled?: boolean } | undefined;
@@ -172,6 +211,12 @@ export function buildCdpDispatch(deps: CdpReplayDeps, signal?: AbortSignal): Rep
       throw new ReplayDispatchError(
         'INTERACTION_NOT_ACTUATED',
         `testID "${id}" is disabled/non-interactable`,
+      );
+    const pointerEventsError = pointerEventsBlock(tree, id);
+    if (pointerEventsError)
+      throw new ReplayDispatchError(
+        'INTERACTION_NOT_ACTUATED',
+        `testID "${id}" is not user-interactable: ${pointerEventsError}`,
       );
   };
 
