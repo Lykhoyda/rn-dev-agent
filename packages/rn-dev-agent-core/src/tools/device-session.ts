@@ -18,6 +18,7 @@ import {
   stopFastRunner,
 } from '../runners/rn-fast-runner-client.js';
 import {
+  AndroidRunnerCleanupUnconfirmedError,
   stopAndroidRunner,
   reapActiveAndroidRunner,
   startAndroidRunner,
@@ -450,11 +451,15 @@ export function createDeviceSnapshotHandler(
         }
       } catch (err) {
         let cleanupFailure: string | undefined;
+        let cleanupFailureMeta: Record<string, unknown> | undefined;
         try {
           if (lockPlatform === 'ios') await stopIosRunner(deviceId);
           else await reapAndroidRunner(deviceId);
         } catch (cleanupErr) {
           cleanupFailure = cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr);
+          if (cleanupErr instanceof AndroidRunnerCleanupUnconfirmedError) {
+            cleanupFailureMeta = cleanupErr.meta;
+          }
         } finally {
           releaseDeviceLockForSession();
         }
@@ -468,25 +473,25 @@ export function createDeviceSnapshotHandler(
           ? `${rawMsg}; runner cleanup also failed: ${cleanupFailure}`
           : rawMsg;
         if (err instanceof AndroidAppLaunchError) {
-          return failResult(msg, 'APP_LAUNCH_FAILED');
+          return failResult(msg, 'APP_LAUNCH_FAILED', cleanupFailureMeta);
         }
         // The open-path rebuild still lacks the required runner surface.
         if (msg.startsWith('RUNNER_COMMANDS_STALE')) {
-          return failResult(msg, 'RUNNER_COMMANDS_STALE');
+          return failResult(msg, 'RUNNER_COMMANDS_STALE', cleanupFailureMeta);
         }
         if (msg.startsWith('RUNNER_FEATURES_STALE')) {
-          return failResult(msg, 'RUNNER_FEATURES_STALE');
+          return failResult(msg, 'RUNNER_FEATURES_STALE', cleanupFailureMeta);
         }
         // GH #383: a protocol mismatch that survived the reap+reinstall is a
         // distinct, actionable failure — surface it, not the generic runner-down.
         if (msg.startsWith('RUNNER_PROTOCOL_MISMATCH')) {
-          return failResult(msg, 'RUNNER_PROTOCOL_MISMATCH');
+          return failResult(msg, 'RUNNER_PROTOCOL_MISMATCH', cleanupFailureMeta);
         }
         if (msg.startsWith('RUNNER_OWNERSHIP_MISMATCH')) {
-          return failResult(msg, 'RUNNER_OWNERSHIP_MISMATCH');
+          return failResult(msg, 'RUNNER_OWNERSHIP_MISMATCH', cleanupFailureMeta);
         }
         const code = lockPlatform === 'ios' ? 'RN_FAST_RUNNER_DOWN' : 'RN_ANDROID_RUNNER_DOWN';
-        return failResult(`Failed to start device runner: ${msg}`, code);
+        return failResult(`Failed to start device runner: ${msg}`, code, cleanupFailureMeta);
       }
 
       // Set session LAST — only after lock + runner + launch all succeeded.
@@ -501,11 +506,15 @@ export function createDeviceSnapshotHandler(
         await deps.bindRunner?.(lockPlatform, deviceId, appId);
       } catch (error) {
         let cleanupFailure: string | undefined;
+        let cleanupFailureMeta: Record<string, unknown> | undefined;
         try {
           if (lockPlatform === 'ios') await stopIosRunner(deviceId);
           else await reapAndroidRunner(deviceId);
         } catch (cleanupErr) {
           cleanupFailure = cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr);
+          if (cleanupErr instanceof AndroidRunnerCleanupUnconfirmedError) {
+            cleanupFailureMeta = cleanupErr.meta;
+          }
         } finally {
           clearActiveSession();
           releaseDeviceLockForSession();
@@ -515,7 +524,7 @@ export function createDeviceSnapshotHandler(
         const message = cleanupFailure
           ? `${rawMessage}; runner cleanup also failed: ${cleanupFailure}`
           : rawMessage;
-        return failResult(message, code as ToolErrorCode);
+        return failResult(message, code as ToolErrorCode, cleanupFailureMeta);
       }
 
       // GH#202 Phase 2b: a genuinely-succeeded open is a fresh session — clear

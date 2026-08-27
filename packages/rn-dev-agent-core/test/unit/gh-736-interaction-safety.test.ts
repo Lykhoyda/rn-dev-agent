@@ -28,8 +28,12 @@ import { hashAndroidAppSnapshotNodes } from '../../dist/lifecycle/settle.js';
 import {
   _setAndroidRunnerStateForTest,
   _setFetchForTest,
+  AndroidAuthorityStaleError,
   AndroidFeaturesStaleError,
+  AndroidRunnerCleanupUnconfirmedError,
   androidRetryCleanupContext,
+  buildAdbForwardRemoveArgs,
+  classifyAndroidRunnerCleanupResources,
   classifyAndroidHealth,
   reapMismatchedAndroidRunner,
   runBoundedAndroidRunnerRebuild,
@@ -394,13 +398,33 @@ test('stale Android runners without scoped exact-interaction semantics are rejec
 });
 
 test('missing exact-label capability uses the bounded artifact rebuild path', async () => {
+  const attempt = {
+    hostPort: 22136,
+    devicePort: 22089,
+    pid: 736,
+    processBirth: 'issue-736',
+  };
   const error = new AndroidFeaturesStaleError(
     ['APP_SCOPED_EXACT_LABEL_INTERACTION'],
     appId,
     '46828c2c',
+    undefined,
+    attempt,
   );
   assert.match(error.message, /^RUNNER_FEATURES_STALE:/);
-  assert.deepEqual(androidRetryCleanupContext(null, error), { deviceId: '46828c2c' });
+  assert.deepEqual(error.attempt, attempt);
+  assert.deepEqual(androidRetryCleanupContext(null, error), {
+    deviceId: '46828c2c',
+    hostPort: 22136,
+    devicePort: 22089,
+  });
+  assert.deepEqual(
+    androidRetryCleanupContext(
+      null,
+      new AndroidAuthorityStaleError('46828c2c', undefined, attempt),
+    ),
+    { deviceId: '46828c2c', hostPort: 22136, devicePort: 22089 },
+  );
 
   let rebuilt = 0;
   const result = await runBoundedAndroidRunnerRebuild(
@@ -427,7 +451,7 @@ test('missing exact-label capability uses the bounded artifact rebuild path', as
   assert.equal(rebuilt, 1);
 });
 
-test('unbound stale-feature cleanup waits for current-session runner resources to release', async () => {
+test('unbound stale-feature cleanup never converts a remaining predicate into success', async () => {
   const error = new AndroidFeaturesStaleError(
     ['APP_SCOPED_EXACT_LABEL_INTERACTION'],
     appId,
@@ -437,69 +461,124 @@ test('unbound stale-feature cleanup waits for current-session runner resources t
   const events: string[] = [];
   let verificationAttempts = 0;
 
-  await reapMismatchedAndroidRunner(
-    cleanupContext,
-    async ({ deviceId, includeLegacy }) => {
-      events.push(`release:${deviceId}:${String(includeLegacy)}`);
-      return {
-        stoppedOwnRunner: true,
-        forceStoppedPackages: [
-          'dev.lykhoyda.rndevagent.androidrunner.test',
-          'dev.lykhoyda.rndevagent.androidrunner',
-        ],
-      };
+  let rejection: AndroidRunnerCleanupUnconfirmedError | undefined;
+  await assert.rejects(
+    () =>
+      reapMismatchedAndroidRunner(
+        cleanupContext,
+        async ({ deviceId, includeLegacy }) => {
+          events.push(`release:${deviceId}:${String(includeLegacy)}`);
+          return {
+            stoppedOwnRunner: true,
+            forceStoppedPackages: [
+              'dev.lykhoyda.rndevagent.androidrunner.test',
+              'dev.lykhoyda.rndevagent.androidrunner',
+            ],
+          };
+        },
+        async ({ deviceId }) => {
+          verificationAttempts += 1;
+          events.push(`verify:${deviceId}:${verificationAttempts}`);
+          throw new AndroidRunnerCleanupUnconfirmedError(
+            'forward',
+            `${deviceId} tcp:22136 tcp:22089`,
+            deviceId,
+          );
+        },
+        undefined,
+        { attempts: 2, intervalMs: 0, delay: async () => events.push('settle') },
+      ),
+    (error: unknown) => {
+      assert.ok(error instanceof AndroidRunnerCleanupUnconfirmedError);
+      rejection = error;
+      return true;
     },
-    async ({ deviceId }) => {
-      verificationAttempts += 1;
-      events.push(`verify:${deviceId}:${verificationAttempts}`);
-      if (verificationAttempts === 1) {
-        throw new Error(
-          `RUNNER_CLEANUP_UNCONFIRMED: Android runner resources remain for ${deviceId}`,
-        );
-      }
-    },
-    undefined,
-    { attempts: 2, intervalMs: 0, delay: async () => events.push('settle') },
   );
-
+  assert.equal(rejection!.predicate, 'forward');
+  assert.deepEqual(rejection!.meta, {
+    cleanupPredicate: 'forward',
+    cleanupEvidence: '46828c2c tcp:22136 tcp:22089',
+  });
   assert.deepEqual(events, [
     'release:46828c2c:false',
     'verify:46828c2c:1',
     'settle',
     'verify:46828c2c:2',
   ]);
+  assert.equal(verificationAttempts, 2);
 });
 
-test('unbound stale-feature cleanup remains truthful when runner resources never release', async () => {
-  const error = new AndroidFeaturesStaleError(
-    ['APP_SCOPED_EXACT_LABEL_INTERACTION'],
-    appId,
+test('cleanup classification is exact, predicate-specific, and fail-closed', () => {
+  const expected = { deviceId: '46828c2c', hostPort: 22136, devicePort: 22089 };
+  assert.deepEqual(buildAdbForwardRemoveArgs(expected.deviceId, expected.hostPort), [
+    '-s',
     '46828c2c',
-  );
-  let verificationAttempts = 0;
-
-  await assert.rejects(
-    reapMismatchedAndroidRunner(
-      androidRetryCleanupContext(null, error),
-      async () => ({
-        stoppedOwnRunner: true,
-        forceStoppedPackages: [
-          'dev.lykhoyda.rndevagent.androidrunner.test',
-          'dev.lykhoyda.rndevagent.androidrunner',
-        ],
-      }),
-      async ({ deviceId }) => {
-        verificationAttempts += 1;
-        throw new Error(
-          `RUNNER_CLEANUP_UNCONFIRMED: Android runner resources remain for ${deviceId}`,
-        );
-      },
-      undefined,
-      { attempts: 2, intervalMs: 0, delay: async () => {} },
+    'forward',
+    '--remove',
+    'tcp:22136',
+  ]);
+  assert.deepEqual(
+    classifyAndroidRunnerCleanupResources(
+      expected,
+      '46828c2c tcp:22136 tcp:22089',
+      'ACTIVITY MANAGER RUNNING INSTRUMENTATIONS',
     ),
-    /RUNNER_CLEANUP_UNCONFIRMED: Android runner resources remain for 46828c2c/,
+    { predicate: 'forward', evidence: '46828c2c tcp:22136 tcp:22089' },
   );
-  assert.equal(verificationAttempts, 2);
+  assert.deepEqual(
+    classifyAndroidRunnerCleanupResources(
+      expected,
+      '',
+      'ACTIVITY MANAGER RUNNING INSTRUMENTATIONS\n  mClass=ComponentInfo{dev.lykhoyda.rndevagent.androidrunner.test/dev.lykhoyda.rndevagent.androidrunner.Runner}',
+    ),
+    {
+      predicate: 'instrumentation',
+      evidence:
+        'mClass=ComponentInfo{dev.lykhoyda.rndevagent.androidrunner.test/dev.lykhoyda.rndevagent.androidrunner.Runner}',
+    },
+  );
+  assert.equal(
+    classifyAndroidRunnerCleanupResources(
+      expected,
+      '',
+      'ACTIVITY MANAGER RUNNING INSTRUMENTATIONS\n  historical=dev.lykhoyda.rndevagent.androidrunner.test/old',
+    ),
+    null,
+  );
+  assert.deepEqual(classifyAndroidRunnerCleanupResources(expected, '', 'permission denied'), {
+    predicate: 'instrumentation',
+    evidence: 'unparseable instrumentation dump',
+  });
+});
+
+test('fresh typed rejects carry the receipt after exact forward release', () => {
+  const source = readFileSync(
+    join(process.cwd(), 'src/runners/rn-android-runner-client.ts'),
+    'utf8',
+  );
+  const attemptStart = source.indexOf('const attempt: AndroidRunnerAttemptReceipt');
+  const authorityReject = source.indexOf(
+    'reject(new AndroidAuthorityStaleError(serial, undefined, attempt))',
+    attemptStart,
+  );
+  const artifactReject = source.indexOf(
+    'reject(new ErrorType(compat.missing ?? [], bundleId, serial, undefined, attempt))',
+    authorityReject,
+  );
+  assert.ok(attemptStart >= 0);
+  assert.ok(source.lastIndexOf('await removeForward();', authorityReject) > attemptStart);
+  assert.ok(source.lastIndexOf('await removeForward();', artifactReject) > authorityReject);
+  assert.ok(authorityReject > attemptStart);
+  assert.ok(artifactReject > authorityReject);
+
+  const reaperStart = source.indexOf('export async function reapMismatchedAndroidRunner');
+  const exactRelease = source.indexOf(
+    "await execFileAsync('adb', buildAdbForwardRemoveArgs(deviceId, state.hostPort)",
+    reaperStart,
+  );
+  const verification = source.indexOf('const verifyReleased =', reaperStart);
+  assert.ok(exactRelease > reaperStart);
+  assert.ok(verification > exactRelease);
 });
 
 test('Android runner reports a rejected tap truthfully per dispatch mechanism', async () => {

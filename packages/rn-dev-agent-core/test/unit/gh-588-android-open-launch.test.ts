@@ -9,6 +9,7 @@ import {
   releaseDeviceLockForSession,
 } from '../../dist/tools/device-session.js';
 import { clearActiveSession, getActiveSession } from '../../dist/agent-device-wrapper.js';
+import { AndroidRunnerCleanupUnconfirmedError } from '../../dist/runners/rn-android-runner-client.js';
 import { okResult } from '../../dist/utils.js';
 
 const SERIAL = 'emulator-5560';
@@ -21,6 +22,7 @@ function envelope(result: { content: Array<{ text: string }> }) {
     code?: string;
     error?: string;
     data?: Record<string, unknown>;
+    meta?: Record<string, unknown>;
   };
 }
 
@@ -247,7 +249,11 @@ test('android reaper throw on open failure still releases the lock and reports b
       throw new Error('launcher exited 251');
     },
     reapAndroidRunner: async () => {
-      throw new Error(`RUNNER_CLEANUP_UNCONFIRMED: Android runner resources remain for ${SERIAL}`);
+      throw new AndroidRunnerCleanupUnconfirmedError(
+        'forward',
+        `${SERIAL} tcp:22136 tcp:22089`,
+        SERIAL,
+      );
     },
   });
   const reopenHandler = createDeviceSnapshotHandler(workingOpenDeps());
@@ -260,6 +266,10 @@ test('android reaper throw on open failure still releases the lock and reports b
     assert.equal(body.code, 'APP_LAUNCH_FAILED');
     assert.match(body.error!, /launcher exited 251/);
     assert.match(body.error!, /RUNNER_CLEANUP_UNCONFIRMED/);
+    assert.deepEqual(body.meta, {
+      cleanupPredicate: 'forward',
+      cleanupEvidence: `${SERIAL} tcp:22136 tcp:22089`,
+    });
     assert.equal(getActiveSession(), null);
 
     const reopened = envelope(

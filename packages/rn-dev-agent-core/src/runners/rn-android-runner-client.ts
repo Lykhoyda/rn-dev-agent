@@ -763,6 +763,55 @@ export function consumePendingAndroidUpgradeNote(): string | undefined {
   return note;
 }
 
+export type AndroidRunnerCleanupPredicate = 'forward' | 'instrumentation';
+
+export class AndroidRunnerCleanupUnconfirmedError extends Error {
+  readonly meta: { cleanupPredicate: AndroidRunnerCleanupPredicate; cleanupEvidence: string };
+
+  constructor(
+    readonly predicate: AndroidRunnerCleanupPredicate,
+    readonly evidence: string,
+    deviceId: string,
+  ) {
+    super(
+      `RUNNER_CLEANUP_UNCONFIRMED: predicate=${predicate} remains for ${deviceId}; ` +
+        `evidence=${JSON.stringify(evidence)}`,
+    );
+    this.meta = { cleanupPredicate: predicate, cleanupEvidence: evidence };
+  }
+}
+
+export function classifyAndroidRunnerCleanupResources(
+  expected: { deviceId: string; hostPort?: number; devicePort?: number },
+  forwards: string,
+  instrumentation: string,
+): { predicate: AndroidRunnerCleanupPredicate; evidence: string } | null {
+  const forwardLine = forwards
+    .split('\n')
+    .filter((line) => line.startsWith(`${expected.deviceId} `))
+    .find((line) => {
+      if (expected.hostPort !== undefined && line.includes(`tcp:${expected.hostPort}`)) return true;
+      return line.includes(`tcp:${expected.devicePort ?? DEFAULT_PORT}`);
+    });
+  if (forwardLine) return { predicate: 'forward', evidence: forwardLine.trim() };
+
+  const instrumentationLines = instrumentation.split('\n');
+  const dumpHeaderPresent = instrumentationLines.some((line) =>
+    /ACTIVITY MANAGER .*INSTRUMENTATION/i.test(line),
+  );
+  if (!dumpHeaderPresent) {
+    return { predicate: 'instrumentation', evidence: 'unparseable instrumentation dump' };
+  }
+  const activeInstrumentation = instrumentationLines.find(
+    (line) =>
+      /(?:ActiveInstrumentation\{|ComponentInfo\{)/.test(line) &&
+      /dev\.lykhoyda\.rndevagent\.androidrunner\.test\//.test(line),
+  );
+  return activeInstrumentation
+    ? { predicate: 'instrumentation', evidence: activeInstrumentation.trim() }
+    : null;
+}
+
 // Review amendment (BLOCKER): a single `am force-stop` of the app package does
 // NOT reliably free the device-side UiAutomation slot (#237 — system_server
 // keeps it; see release-android-slot.ts:115-128). Reuse the battle-tested
@@ -813,6 +862,16 @@ export async function reapMismatchedAndroidRunner(
       `RUNNER_CLEANUP_UNCONFIRMED: stale Android runner cleanup failed for ${deviceId}`,
     );
   }
+  if (state?.hostPort !== undefined) {
+    try {
+      await execFileAsync('adb', buildAdbForwardRemoveArgs(deviceId, state.hostPort), {
+        timeout: ADB_CLEANUP_TIMEOUT_MS,
+        signal,
+      });
+    } catch {
+      signal?.throwIfAborted();
+    }
+  }
   const verifyReleased =
     verify ??
     (release
@@ -838,18 +897,16 @@ export async function reapMismatchedAndroidRunner(
               )
             ).stdout,
           );
-          const forwardRemains = forwards
-            .split('\n')
-            .filter((line) => line.startsWith(`${expected.deviceId} `))
-            .some((line) => {
-              if (expected.hostPort !== undefined && line.includes(`tcp:${expected.hostPort}`)) {
-                return true;
-              }
-              return line.includes(`tcp:${expected.devicePort ?? DEFAULT_PORT}`);
-            });
-          if (forwardRemains || instrumentation.includes('dev.lykhoyda.rndevagent.androidrunner')) {
-            throw new Error(
-              `RUNNER_CLEANUP_UNCONFIRMED: Android runner resources remain for ${expected.deviceId}`,
+          const remaining = classifyAndroidRunnerCleanupResources(
+            expected,
+            forwards,
+            instrumentation,
+          );
+          if (remaining) {
+            throw new AndroidRunnerCleanupUnconfirmedError(
+              remaining.predicate,
+              remaining.evidence,
+              expected.deviceId,
             );
           }
         });
@@ -914,6 +971,13 @@ export function classifyAndroidHealth(info: AndroidHealthInfo) {
   );
 }
 
+export interface AndroidRunnerAttemptReceipt {
+  hostPort: number;
+  devicePort: number;
+  pid: number;
+  processBirth?: string;
+}
+
 export abstract class AndroidArtifactStaleError extends Error {
   constructor(
     readonly surface: 'commands' | 'features',
@@ -921,6 +985,7 @@ export abstract class AndroidArtifactStaleError extends Error {
     readonly bundleId?: string,
     readonly deviceId?: string,
     detail?: string,
+    readonly attempt?: AndroidRunnerAttemptReceipt,
   ) {
     super(
       `RUNNER_${surface.toUpperCase()}_STALE: ${
@@ -934,14 +999,26 @@ export abstract class AndroidArtifactStaleError extends Error {
 }
 
 export class AndroidCommandsStaleError extends AndroidArtifactStaleError {
-  constructor(missing: string[], bundleId?: string, deviceId?: string, detail?: string) {
-    super('commands', missing, bundleId, deviceId, detail);
+  constructor(
+    missing: string[],
+    bundleId?: string,
+    deviceId?: string,
+    detail?: string,
+    attempt?: AndroidRunnerAttemptReceipt,
+  ) {
+    super('commands', missing, bundleId, deviceId, detail, attempt);
   }
 }
 
 export class AndroidFeaturesStaleError extends AndroidArtifactStaleError {
-  constructor(missing: string[], bundleId?: string, deviceId?: string, detail?: string) {
-    super('features', missing, bundleId, deviceId, detail);
+  constructor(
+    missing: string[],
+    bundleId?: string,
+    deviceId?: string,
+    detail?: string,
+    attempt?: AndroidRunnerAttemptReceipt,
+  ) {
+    super('features', missing, bundleId, deviceId, detail, attempt);
   }
 }
 
@@ -949,6 +1026,7 @@ export class AndroidAuthorityStaleError extends Error {
   constructor(
     readonly deviceId?: string,
     detail?: string,
+    readonly attempt?: AndroidRunnerAttemptReceipt,
   ) {
     super(
       `RUNNER_OWNERSHIP_MISMATCH: ${
@@ -1192,11 +1270,11 @@ function androidRebuildRefusal(
   detail: string,
 ): AndroidAuthorityStaleError | AndroidArtifactStaleError {
   if (error instanceof AndroidAuthorityStaleError) {
-    return new AndroidAuthorityStaleError(error.deviceId, detail);
+    return new AndroidAuthorityStaleError(error.deviceId, detail, error.attempt);
   }
   const ErrorType =
     error.surface === 'features' ? AndroidFeaturesStaleError : AndroidCommandsStaleError;
-  return new ErrorType(error.missing, error.bundleId, error.deviceId, detail);
+  return new ErrorType(error.missing, error.bundleId, error.deviceId, detail, error.attempt);
 }
 
 export async function runBoundedAndroidRunnerRebuild<T>(
@@ -1341,10 +1419,20 @@ export async function runBoundedAndroidRunnerRebuild<T>(
 }
 
 export function androidRetryCleanupContext(
-  state: { deviceId?: string } | null,
+  state: { deviceId?: string; hostPort?: number; devicePort?: number } | null,
   error: AndroidAuthorityStaleError | AndroidArtifactStaleError,
-): { deviceId?: string } | null {
-  return state ?? (error.deviceId ? { deviceId: error.deviceId } : null);
+): { deviceId?: string; hostPort?: number; devicePort?: number } | null {
+  return (
+    state ??
+    (error.deviceId
+      ? {
+          deviceId: error.deviceId,
+          ...(error.attempt
+            ? { hostPort: error.attempt.hostPort, devicePort: error.attempt.devicePort }
+            : {}),
+        }
+      : null)
+  );
 }
 
 // GH #418: deleting the APKs is the artifact invalidation — apksExist flips
@@ -1553,11 +1641,12 @@ async function startAndroidRunnerAttempt(
 
   return new Promise((resolve, reject) => {
     let resolved = false;
-    let forwardRemoved = false;
+    let forwardRemoval: Promise<void> | undefined;
     const removeForward = () => {
-      if (forwardRemoved) return;
-      forwardRemoved = true;
-      void execFileAsync('adb', buildAdbForwardRemoveArgs(serial, hostPort)).catch(() => {});
+      forwardRemoval ??= execFileAsync('adb', buildAdbForwardRemoveArgs(serial, hostPort))
+        .then(() => undefined)
+        .catch(() => undefined);
+      return forwardRemoval;
     };
 
     const child = spawn(
@@ -1584,6 +1673,13 @@ async function startAndroidRunnerAttempt(
     );
 
     runnerProcess = child;
+    const processBirth = child.pid === undefined ? undefined : readProcessBirth(child.pid)?.token;
+    const attempt: AndroidRunnerAttemptReceipt = {
+      hostPort,
+      devicePort,
+      pid: child.pid!,
+      ...(processBirth ? { processBirth } : {}),
+    };
 
     // GH#243: drain + tail the instrument's own output so a cold-start failure stays
     // debuggable now that logcat is gone, and so an unconsumed stdio:'pipe' can't fill
@@ -1641,7 +1737,7 @@ async function startAndroidRunnerAttempt(
     };
 
     child.on('error', (err) => {
-      removeForward();
+      void removeForward();
       if (resolved) return;
       resolved = true;
       reject(new Error(`Failed to spawn Android runner instrumentation: ${err.message}`));
@@ -1651,7 +1747,7 @@ async function startAndroidRunnerAttempt(
       if (runnerProcess === child) {
         clearAndroidStateFile();
       }
-      removeForward();
+      void removeForward();
       if (!resolved) {
         resolved = true;
         reject(
@@ -1680,7 +1776,8 @@ async function startAndroidRunnerAttempt(
           ) {
             resolved = true;
             child.kill('SIGTERM');
-            reject(new AndroidAuthorityStaleError(serial));
+            await removeForward();
+            reject(new AndroidAuthorityStaleError(serial, undefined, attempt));
             return;
           }
           const compat = classifyAndroidHealth(info);
@@ -1688,13 +1785,14 @@ async function startAndroidRunnerAttempt(
             resolved = true;
             pendingUpgradeNote = undefined; // review amendment: never report an upgrade that failed
             child.kill('SIGTERM');
+            await removeForward();
             if (compat.reason === 'missing-commands' || compat.reason === 'missing-features') {
               // The fresh-open path rebuilds a stale runner surface at most once.
               const ErrorType =
                 compat.reason === 'missing-features'
                   ? AndroidFeaturesStaleError
                   : AndroidCommandsStaleError;
-              reject(new ErrorType(compat.missing ?? [], bundleId, serial));
+              reject(new ErrorType(compat.missing ?? [], bundleId, serial, undefined, attempt));
               return;
             }
             reject(

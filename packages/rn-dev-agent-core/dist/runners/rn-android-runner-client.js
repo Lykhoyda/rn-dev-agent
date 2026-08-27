@@ -504,6 +504,40 @@ export function consumePendingAndroidUpgradeNote() {
     pendingUpgradeNote = undefined;
     return note;
 }
+export class AndroidRunnerCleanupUnconfirmedError extends Error {
+    predicate;
+    evidence;
+    meta;
+    constructor(predicate, evidence, deviceId) {
+        super(`RUNNER_CLEANUP_UNCONFIRMED: predicate=${predicate} remains for ${deviceId}; ` +
+            `evidence=${JSON.stringify(evidence)}`);
+        this.predicate = predicate;
+        this.evidence = evidence;
+        this.meta = { cleanupPredicate: predicate, cleanupEvidence: evidence };
+    }
+}
+export function classifyAndroidRunnerCleanupResources(expected, forwards, instrumentation) {
+    const forwardLine = forwards
+        .split('\n')
+        .filter((line) => line.startsWith(`${expected.deviceId} `))
+        .find((line) => {
+        if (expected.hostPort !== undefined && line.includes(`tcp:${expected.hostPort}`))
+            return true;
+        return line.includes(`tcp:${expected.devicePort ?? DEFAULT_PORT}`);
+    });
+    if (forwardLine)
+        return { predicate: 'forward', evidence: forwardLine.trim() };
+    const instrumentationLines = instrumentation.split('\n');
+    const dumpHeaderPresent = instrumentationLines.some((line) => /ACTIVITY MANAGER .*INSTRUMENTATION/i.test(line));
+    if (!dumpHeaderPresent) {
+        return { predicate: 'instrumentation', evidence: 'unparseable instrumentation dump' };
+    }
+    const activeInstrumentation = instrumentationLines.find((line) => /(?:ActiveInstrumentation\{|ComponentInfo\{)/.test(line) &&
+        /dev\.lykhoyda\.rndevagent\.androidrunner\.test\//.test(line));
+    return activeInstrumentation
+        ? { predicate: 'instrumentation', evidence: activeInstrumentation.trim() }
+        : null;
+}
 // Review amendment (BLOCKER): a single `am force-stop` of the app package does
 // NOT reliably free the device-side UiAutomation slot (#237 — system_server
 // keeps it; see release-android-slot.ts:115-128). Reuse the battle-tested
@@ -531,6 +565,17 @@ export async function reapMismatchedAndroidRunner(state, release, verify, signal
     if (!receipt.stoppedOwnRunner || missingPackages.length > 0) {
         throw new Error(`RUNNER_CLEANUP_UNCONFIRMED: stale Android runner cleanup failed for ${deviceId}`);
     }
+    if (state?.hostPort !== undefined) {
+        try {
+            await execFileAsync('adb', buildAdbForwardRemoveArgs(deviceId, state.hostPort), {
+                timeout: ADB_CLEANUP_TIMEOUT_MS,
+                signal,
+            });
+        }
+        catch {
+            signal?.throwIfAborted();
+        }
+    }
     const verifyReleased = verify ??
         (release
             ? async () => { }
@@ -543,17 +588,9 @@ export async function reapMismatchedAndroidRunner(state, release, verify, signal
                     timeout: ADB_CLEANUP_TIMEOUT_MS,
                     signal,
                 })).stdout);
-                const forwardRemains = forwards
-                    .split('\n')
-                    .filter((line) => line.startsWith(`${expected.deviceId} `))
-                    .some((line) => {
-                    if (expected.hostPort !== undefined && line.includes(`tcp:${expected.hostPort}`)) {
-                        return true;
-                    }
-                    return line.includes(`tcp:${expected.devicePort ?? DEFAULT_PORT}`);
-                });
-                if (forwardRemains || instrumentation.includes('dev.lykhoyda.rndevagent.androidrunner')) {
-                    throw new Error(`RUNNER_CLEANUP_UNCONFIRMED: Android runner resources remain for ${expected.deviceId}`);
+                const remaining = classifyAndroidRunnerCleanupResources(expected, forwards, instrumentation);
+                if (remaining) {
+                    throw new AndroidRunnerCleanupUnconfirmedError(remaining.predicate, remaining.evidence, expected.deviceId);
                 }
             });
     const expected = {
@@ -617,7 +654,8 @@ export class AndroidArtifactStaleError extends Error {
     missing;
     bundleId;
     deviceId;
-    constructor(surface, missing, bundleId, deviceId, detail) {
+    attempt;
+    constructor(surface, missing, bundleId, deviceId, detail, attempt) {
         super(`RUNNER_${surface.toUpperCase()}_STALE: ${detail ??
             `installed rn-android-runner lacks required ${surface} ` +
                 `(missing: ${missing.join(', ') || 'unknown'}). Re-open the device session ` +
@@ -626,23 +664,26 @@ export class AndroidArtifactStaleError extends Error {
         this.missing = missing;
         this.bundleId = bundleId;
         this.deviceId = deviceId;
+        this.attempt = attempt;
     }
 }
 export class AndroidCommandsStaleError extends AndroidArtifactStaleError {
-    constructor(missing, bundleId, deviceId, detail) {
-        super('commands', missing, bundleId, deviceId, detail);
+    constructor(missing, bundleId, deviceId, detail, attempt) {
+        super('commands', missing, bundleId, deviceId, detail, attempt);
     }
 }
 export class AndroidFeaturesStaleError extends AndroidArtifactStaleError {
-    constructor(missing, bundleId, deviceId, detail) {
-        super('features', missing, bundleId, deviceId, detail);
+    constructor(missing, bundleId, deviceId, detail, attempt) {
+        super('features', missing, bundleId, deviceId, detail, attempt);
     }
 }
 export class AndroidAuthorityStaleError extends Error {
     deviceId;
-    constructor(deviceId, detail) {
+    attempt;
+    constructor(deviceId, detail, attempt) {
         super(`RUNNER_OWNERSHIP_MISMATCH: ${detail ?? 'installed Android runner lacks current authority identity'}`);
         this.deviceId = deviceId;
+        this.attempt = attempt;
     }
 }
 function initializeAndroidRunnerRebuildState(databasePath) {
@@ -806,10 +847,10 @@ export function markAndroidRunnerRebuildCleanupUnverified(lock, now = Date.now()
 }
 function androidRebuildRefusal(error, detail) {
     if (error instanceof AndroidAuthorityStaleError) {
-        return new AndroidAuthorityStaleError(error.deviceId, detail);
+        return new AndroidAuthorityStaleError(error.deviceId, detail, error.attempt);
     }
     const ErrorType = error.surface === 'features' ? AndroidFeaturesStaleError : AndroidCommandsStaleError;
-    return new ErrorType(error.missing, error.bundleId, error.deviceId, detail);
+    return new ErrorType(error.missing, error.bundleId, error.deviceId, detail, error.attempt);
 }
 export async function runBoundedAndroidRunnerRebuild(error, rebuild, cleanup, dependencies = {}) {
     const pluginVersion = getPluginVersion() ?? 'unknown';
@@ -938,7 +979,15 @@ export async function runBoundedAndroidRunnerRebuild(error, rebuild, cleanup, de
     }
 }
 export function androidRetryCleanupContext(state, error) {
-    return state ?? (error.deviceId ? { deviceId: error.deviceId } : null);
+    return (state ??
+        (error.deviceId
+            ? {
+                deviceId: error.deviceId,
+                ...(error.attempt
+                    ? { hostPort: error.attempt.hostPort, devicePort: error.attempt.devicePort }
+                    : {}),
+            }
+            : null));
 }
 // GH #418: deleting the APKs is the artifact invalidation — apksExist flips
 // false, so resolveAndroidInstallAction returns 'build-then-install' (Gradle).
@@ -1084,12 +1133,12 @@ async function startAndroidRunnerAttempt(deviceId, bundleId, devicePort = DEFAUL
     }
     return new Promise((resolve, reject) => {
         let resolved = false;
-        let forwardRemoved = false;
+        let forwardRemoval;
         const removeForward = () => {
-            if (forwardRemoved)
-                return;
-            forwardRemoved = true;
-            void execFileAsync('adb', buildAdbForwardRemoveArgs(serial, hostPort)).catch(() => { });
+            forwardRemoval ??= execFileAsync('adb', buildAdbForwardRemoveArgs(serial, hostPort))
+                .then(() => undefined)
+                .catch(() => undefined);
+            return forwardRemoval;
         };
         const child = spawn('adb', [
             ...adbSerialArgs(deviceId),
@@ -1110,6 +1159,13 @@ async function startAndroidRunnerAttempt(deviceId, bundleId, devicePort = DEFAUL
             signal: opts._rebuildSignal,
         });
         runnerProcess = child;
+        const processBirth = child.pid === undefined ? undefined : readProcessBirth(child.pid)?.token;
+        const attempt = {
+            hostPort,
+            devicePort,
+            pid: child.pid,
+            ...(processBirth ? { processBirth } : {}),
+        };
         // GH#243: drain + tail the instrument's own output so a cold-start failure stays
         // debuggable now that logcat is gone, and so an unconsumed stdio:'pipe' can't fill
         // its ~64KB buffer and wedge the child.
@@ -1162,7 +1218,7 @@ async function startAndroidRunnerAttempt(deviceId, bundleId, devicePort = DEFAUL
             resolve(state);
         };
         child.on('error', (err) => {
-            removeForward();
+            void removeForward();
             if (resolved)
                 return;
             resolved = true;
@@ -1172,7 +1228,7 @@ async function startAndroidRunnerAttempt(deviceId, bundleId, devicePort = DEFAUL
             if (runnerProcess === child) {
                 clearAndroidStateFile();
             }
-            removeForward();
+            void removeForward();
             if (!resolved) {
                 resolved = true;
                 reject(new Error(`Android runner instrumentation exited before readiness (code ${code})${diag ? `\n${diag.trim()}` : ''}`));
@@ -1194,7 +1250,8 @@ async function startAndroidRunnerAttempt(deviceId, bundleId, devicePort = DEFAUL
                 })) {
                     resolved = true;
                     child.kill('SIGTERM');
-                    reject(new AndroidAuthorityStaleError(serial));
+                    await removeForward();
+                    reject(new AndroidAuthorityStaleError(serial, undefined, attempt));
                     return;
                 }
                 const compat = classifyAndroidHealth(info);
@@ -1202,12 +1259,13 @@ async function startAndroidRunnerAttempt(deviceId, bundleId, devicePort = DEFAUL
                     resolved = true;
                     pendingUpgradeNote = undefined; // review amendment: never report an upgrade that failed
                     child.kill('SIGTERM');
+                    await removeForward();
                     if (compat.reason === 'missing-commands' || compat.reason === 'missing-features') {
                         // The fresh-open path rebuilds a stale runner surface at most once.
                         const ErrorType = compat.reason === 'missing-features'
                             ? AndroidFeaturesStaleError
                             : AndroidCommandsStaleError;
-                        reject(new ErrorType(compat.missing ?? [], bundleId, serial));
+                        reject(new ErrorType(compat.missing ?? [], bundleId, serial, undefined, attempt));
                         return;
                     }
                     reject(new Error(`RUNNER_PROTOCOL_MISMATCH: installed rn-android-runner speaks protocol ` +
