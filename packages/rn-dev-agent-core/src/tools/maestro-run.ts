@@ -1647,6 +1647,11 @@ export function createMaestroRunHandler(
           );
         }
       }
+      if (flowAbort.signal.aborted || now() >= flowDeadline) {
+        timedOut = true;
+        terminal = buildTerminalEvidence(combined, { timedOut, spawnError });
+        nativeVisionEvidence = null;
+      }
       const fastRunnerSawFailedSelector =
         failedNativeSelector !== null &&
         nativeVisionEvidence?.visibleSelectors.some(

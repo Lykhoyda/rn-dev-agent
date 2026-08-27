@@ -16204,6 +16204,11 @@ function createMaestroRunHandler(deps = {}) {
           });
         }
       }
+      if (flowAbort.signal.aborted || now() >= flowDeadline) {
+        timedOut = true;
+        terminal = buildTerminalEvidence(combined, { timedOut, spawnError });
+        nativeVisionEvidence = null;
+      }
       const fastRunnerSawFailedSelector = failedNativeSelector !== null && nativeVisionEvidence?.visibleSelectors.some((selector) => selector.value === failedNativeSelector) === true;
       if (fastRunnerSawFailedSelector) {
         const selectorKind = nativeVisionEvidence.visibleSelectors.find((selector) => selector.value === failedNativeSelector).kind;

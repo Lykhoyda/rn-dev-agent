@@ -916,6 +916,55 @@ test('a deadline reached during the failure-screen probe cannot become native bl
   assert.equal(env.meta?.terminal.exitClass, 'timed-out');
 });
 
+test('a deadline reached during failure-screen cleanup cannot become native blindness', async () => {
+  let clock = 0;
+  const handler = createMaestroRunHandler({
+    getActiveSession: () => ({
+      name: 'native-cleanup-deadline',
+      platform: 'ios',
+      deviceId: IOS_UDID,
+      appId: 'com.example.app',
+      openedAt: new Date(0).toISOString(),
+    }),
+    replayDeps: () => null,
+    chooseDispatch: () => nativeDispatch(),
+    parkFlow: async (run) => run(),
+    stopFastRunner: async () => {},
+    now: () => clock,
+    resolveEngineStatus: async () =>
+      buildReplayEngineStatus('pinned-ok', MAESTRO_RUNNER_PIN.version, false),
+    nativeVisionProbe: async ({ selectors }) => ({
+      source: 'rn-fast-runner-snapshot',
+      nodeCount: 42,
+      visibleSelectors: selectors,
+      runtimeMajor: 26,
+    }),
+    execFile: async () => {
+      throw Object.assign(new Error('native selector failed'), {
+        code: 1,
+        stdout: nativeRunnerOutput("Element with text 'Visible' not found"),
+        stderr: '',
+      });
+    },
+  });
+  const env = envelope(
+    await handler({
+      platform: 'ios',
+      deviceId: IOS_UDID,
+      timeoutMs: 100,
+      inlineYaml: `appId: com.example.app\n---\n- assertVisible: Visible\n`,
+      ...callbacks,
+      completeRunnerPark: async () => {
+        clock = 101;
+      },
+    }),
+  );
+
+  assert.notEqual(env.code, 'NATIVE_SURFACE_BLIND');
+  assert.equal(env.meta?.timedOut, true);
+  assert.equal(env.meta?.terminal.exitClass, 'timed-out');
+});
+
 test('a deadline reached during runner resume skips the failure-screen probe', async () => {
   let clock = 0;
   let comparisonProbes = 0;
