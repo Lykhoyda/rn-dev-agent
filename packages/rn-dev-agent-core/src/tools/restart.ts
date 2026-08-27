@@ -9,7 +9,7 @@ import type { SnapshotHint } from '../cdp/app-installed-probe.js';
 import { resetDetachedRecoveryCounter } from '../cdp/recover-detached.js';
 import { snapshotHintForBundleId } from './resolve-ios-app-file.js';
 import { isValidBundleId } from '../domain/maestro-validator.js';
-import { targetMatchesSession } from './status.js';
+import { targetMatchesSession } from '../session/session-target.js';
 import { filterTargetsForExactDevice } from '../session/target-device-authority.js';
 import type { ToolResult } from '../utils.js';
 

@@ -2,7 +2,8 @@ import type { CDPClient } from '../cdp-client.js';
 import type { ToolResult } from '../utils.js';
 import { okResult, failResult } from '../utils.js';
 import { getActiveSession } from '../agent-device-wrapper.js';
-import { sessionConnectFilters, targetMatchesSession } from './status.js';
+import { sessionConnectFilters } from './status.js';
+import { targetMatchesSession } from '../session/session-target.js';
 import { TargetSelectionError } from '../cdp/discovery.js';
 import type { ConnectFilters } from '../cdp/connect.js';
 

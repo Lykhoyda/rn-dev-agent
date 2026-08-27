@@ -60,7 +60,7 @@ If issues are found, suggest the appropriate fix:
 | Session `state: blocked` | Another session owns this worktree. Report `recoveryRequirement.nextAction` verbatim (plus `startupCleanupBlocked` when present) and stop — do not run setup, do not bind a device, do not pick another booted device. See the `using-rn-dev-agent` skill section "Session ownership recovery" |
 | Session missing or genuinely unbound (not `blocked`) | Run setup, review/apply the integration preview, and bind the intended device and app |
 | Metro not found | Use literal `pnpm ios` or `pnpm android` through the confirmed integration |
-| No Hermes target | Open the bound app, then call `cdp_connect` for the exact signed target |
+| No Hermes target | Open the bound app, wait with `cdp_status({ waitForTargetMs: 120000 })`, then call `cdp_connect` for the exact signed target |
 | CDP code 1006 | Close React Native DevTools, Flipper, Chrome DevTools |
 | `cdp_component_tree` reports RedBox | Run `$rn-dev-agent:debug-screen` |
 | Narrow gated CDP read times out | Check for a blocked JS thread, then use `cdp_reload` |

@@ -14,11 +14,9 @@ import {
   AppDetachedError,
   MetroNotFoundError,
   TargetSelectionError,
-  androidTargetMatchesKind,
   anyMetroRunning,
   enumerateMetroCandidates,
   targetBundleIdentity,
-  targetMatchesBundleId,
 } from '../cdp/discovery.js';
 import { resolveBridgeProjectRoot, pathMatchesRoot } from '../cdp/metro-cwd.js';
 import { getDeviceSessionHealth } from './device-session-health.js';
@@ -28,11 +26,18 @@ import { storeMode } from '../domain/action-state-store.js';
 import { getEngineStatus } from '../domain/engine-pin.js';
 import { getActiveSession } from '../agent-device-wrapper.js';
 import type { ConnectFilters } from '../cdp/connect.js';
-import type { HermesTarget } from '../types.js';
 import type { WorkerAuthorityRuntime } from '../session/runtime.js';
 import { inspectInstallIdentity } from '../session/install-identity-inspection.js';
 import { projectPublicAuthorityStatus } from '../session/public-status.js';
 import { reconcileManagedMetroStatus, type ManagedMetroStatusDependencies } from './session.js';
+import { targetMatchesSession } from '../session/session-target.js';
+import {
+  waitForExactSessionTarget,
+  type ExactSessionTargetWaitDependencies,
+  type ExactSessionTargetWaitResult,
+} from '../session/wait-for-exact-session-target.js';
+
+export { targetMatchesSession } from '../session/session-target.js';
 
 export function sessionConnectFilters(
   session: ReturnType<typeof getActiveSession>,
@@ -47,43 +52,47 @@ export function sessionConnectFilters(
   };
 }
 
-export function targetMatchesSession(
-  target: HermesTarget | null,
-  filters: ConnectFilters,
-): boolean {
-  if (!target) return false;
-  if (
-    filters.platform &&
-    (target.platform !== filters.platform ||
-      target.platformInference === 'defaulted' ||
-      target.platformInference === 'ambiguous')
-  )
-    return false;
-  if (filters.bundleId && !targetMatchesBundleId(target, filters.bundleId)) return false;
-  if (
-    filters.deviceKind === 'physical' &&
-    !androidTargetMatchesKind(target.deviceName, filters.deviceKind)
-  ) {
-    return false;
-  }
-  return true;
-}
-
 export function createPassiveStatusHandler(
   getClient: () => CDPClient,
   authorityRuntime: WorkerAuthorityRuntime,
-  statusDependencies: ManagedMetroStatusDependencies = {},
+  statusDependencies: ManagedMetroStatusDependencies &
+    Partial<Omit<ExactSessionTargetWaitDependencies, 'readAuthority'>> = {},
 ) {
-  return async (args: { metroPort?: number; platform?: string }) => {
+  return async (args: { metroPort?: number; platform?: string; waitForTargetMs?: number }) => {
+    let targetWait: ExactSessionTargetWaitResult | undefined;
+    if (args.waitForTargetMs !== undefined) {
+      if (!statusDependencies.listTargetsExact || !statusDependencies.filterTargetsForExactDevice) {
+        return failResult(
+          'The passive Hermes target waiter is unavailable in this runtime.',
+          'NOT_IMPLEMENTED',
+        );
+      }
+      targetWait = await waitForExactSessionTarget(args.waitForTargetMs, {
+        readAuthority: () => reconcileManagedMetroStatus(authorityRuntime, statusDependencies),
+        listTargetsExact: statusDependencies.listTargetsExact,
+        filterTargetsForExactDevice: statusDependencies.filterTargetsForExactDevice,
+        ...(statusDependencies.now ? { now: statusDependencies.now } : {}),
+        ...(statusDependencies.wait ? { wait: statusDependencies.wait } : {}),
+        ...(statusDependencies.setDeadlineTimer
+          ? { setDeadlineTimer: statusDependencies.setDeadlineTimer }
+          : {}),
+        ...(statusDependencies.clearDeadlineTimer
+          ? { clearDeadlineTimer: statusDependencies.clearDeadlineTimer }
+          : {}),
+      });
+    }
     const client = getClient();
     const target = client.connectedTarget;
-    const authority = reconcileManagedMetroStatus(authorityRuntime, statusDependencies);
+    const authority =
+      targetWait?.outcome === 'ready'
+        ? targetWait.authority
+        : reconcileManagedMetroStatus(authorityRuntime, statusDependencies);
     const installIdentity = authority.available
       ? (statusDependencies.inspectInstallIdentity ?? inspectInstallIdentity)(
           authority.bindings.install as Record<string, unknown> | null | undefined,
         )
       : null;
-    return okResult({
+    const data = {
       authoritative: false,
       authority: projectPublicAuthorityStatus(authority, { installIdentity }),
       metro: {
@@ -104,7 +113,29 @@ export function createPassiveStatusHandler(
       nextAction: client.isConnected
         ? 'Use rn_session status to inspect bindings before authoritative tools.'
         : 'Use rn_session bind_metro and cdp_connect with the claimed exact port.',
-    });
+      ...(targetWait
+        ? {
+            targetWait: {
+              requestedMs: targetWait.requestedMs,
+              elapsedMs: targetWait.elapsedMs,
+              outcome: targetWait.outcome,
+              probes: targetWait.probes,
+              lastObservation: targetWait.lastObservation,
+            },
+          }
+        : {}),
+    };
+    if (targetWait?.outcome === 'timeout') {
+      return failResult(
+        `Timed out after ${targetWait.requestedMs}ms waiting for the exact authority-bound Hermes target.`,
+        'CDP_TARGET_WAIT_TIMEOUT',
+        data,
+      );
+    }
+    if (targetWait?.outcome === 'refused') {
+      return failResult(targetWait.reason, targetWait.code, data);
+    }
+    return okResult(data);
   };
 }
 

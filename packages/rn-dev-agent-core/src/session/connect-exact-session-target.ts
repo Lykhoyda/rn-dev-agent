@@ -1,7 +1,7 @@
 import type { CDPClient } from '../cdp-client.js';
 import { CDPProbeTimeoutError } from '../cdp/connect.js';
 import { describeTarget, targetMatchesBundleId } from '../cdp/discovery.js';
-import { targetMatchesSession } from '../tools/status.js';
+import { targetMatchesSession } from './session-target.js';
 import type { HermesTarget } from '../types.js';
 import {
   filterTargetsForExactDevice,

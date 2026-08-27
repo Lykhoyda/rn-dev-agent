@@ -3,7 +3,7 @@ import { promisify } from 'node:util';
 import type { CDPClient } from '../cdp-client.js';
 import { okResult, failResult, warnResult, withConnection } from '../utils.js';
 import { isValidBundleId } from '../domain/maestro-validator.js';
-import { targetMatchesSession } from './status.js';
+import { targetMatchesSession } from '../session/session-target.js';
 import { filterTargetsForExactDevice } from '../session/target-device-authority.js';
 
 const defaultExecFile = promisify(execFileCb);

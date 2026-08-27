@@ -69795,6 +69795,26 @@ var init_config = __esm({
   }
 });
 
+// packages/rn-dev-agent-core/dist/session/session-target.js
+function targetMatchesSession(target, filters) {
+  if (!target)
+    return false;
+  if (filters.platform && (target.platform !== filters.platform || target.platformInference === "defaulted" || target.platformInference === "ambiguous"))
+    return false;
+  if (filters.bundleId && !targetMatchesBundleId(target, filters.bundleId))
+    return false;
+  if (filters.deviceKind === "physical" && !androidTargetMatchesKind(target.deviceName, filters.deviceKind)) {
+    return false;
+  }
+  return true;
+}
+var init_session_target = __esm({
+  "packages/rn-dev-agent-core/dist/session/session-target.js"() {
+    "use strict";
+    init_discovery();
+  }
+});
+
 // packages/rn-dev-agent-core/dist/tools/reload.js
 import { execFile as execFileCb11 } from "node:child_process";
 import { promisify as promisify14 } from "node:util";
@@ -70068,7 +70088,7 @@ var init_reload = __esm({
     "use strict";
     init_utils();
     init_maestro_validator();
-    init_status();
+    init_session_target();
     init_target_device_authority();
     defaultExecFile = promisify14(execFileCb11);
     sessionReloadCount = 0;
@@ -73433,26 +73453,256 @@ var init_session = __esm({
   }
 });
 
-// packages/rn-dev-agent-core/dist/tools/status.js
-function targetMatchesSession(target, filters) {
-  if (!target)
-    return false;
-  if (filters.platform && (target.platform !== filters.platform || target.platformInference === "defaulted" || target.platformInference === "ambiguous"))
-    return false;
-  if (filters.bundleId && !targetMatchesBundleId(target, filters.bundleId))
-    return false;
-  if (filters.deviceKind === "physical" && !androidTargetMatchesKind(target.deviceName, filters.deviceKind)) {
-    return false;
+// packages/rn-dev-agent-core/dist/session/wait-for-exact-session-target.js
+function authorityRefusal(status) {
+  if (!status.available) {
+    return {
+      code: status.code,
+      reason: "Waiting for a Hermes target requires an available authority session; inspect rn_session status."
+    };
   }
-  return true;
+  if (status.state === "blocked" || status.state === "handoff_cleanup") {
+    return {
+      code: "SESSION_AUTHORITY_REQUIRED",
+      reason: "The current worker does not own this worktree; inspect rn_session status."
+    };
+  }
+  const terminal = status.bindings.metroTerminal;
+  if (terminal) {
+    return {
+      code: "METRO_AUTHORITY_MISMATCH",
+      reason: typeof terminal.reason === "string" ? terminal.reason : "The authority-bound Metro is no longer live."
+    };
+  }
+  const device = status.bindings.device;
+  if (!device || device.platform !== "ios" && device.platform !== "android" || typeof device.deviceId !== "string" || typeof device.appId !== "string") {
+    return {
+      code: "CDP_TARGET_AUTHORITY_MISMATCH",
+      reason: "Waiting for a Hermes target requires an exact session device and app binding."
+    };
+  }
+  return null;
 }
+function targetBinding(status) {
+  const device = status.bindings.device;
+  const metro = status.bindings.metro;
+  const port = metro?.port;
+  if (!Number.isSafeInteger(port) || metro?.mode !== "managed" && metro?.mode !== "external") {
+    return null;
+  }
+  return {
+    sessionId: status.sessionId,
+    claimEpoch: status.claimEpoch,
+    authorityVersion: status.authorityVersion,
+    platform: device.platform,
+    deviceId: device.deviceId,
+    appId: device.appId,
+    metroMode: metro.mode,
+    metroPort: Number(port)
+  };
+}
+function sameTargetBinding(left, right) {
+  return left.sessionId === right.sessionId && left.claimEpoch === right.claimEpoch && left.authorityVersion === right.authorityVersion && left.platform === right.platform && left.deviceId === right.deviceId && left.appId === right.appId && left.metroMode === right.metroMode && left.metroPort === right.metroPort;
+}
+async function waitForExactSessionTarget(timeoutMs, dependencies) {
+  const now = dependencies.now ?? Date.now;
+  const wait = dependencies.wait ?? ((ms) => new Promise((resolve21) => setTimeout(resolve21, ms)));
+  const setDeadlineTimer = dependencies.setDeadlineTimer ?? ((callback, ms) => setTimeout(callback, ms));
+  const clearDeadlineTimer = dependencies.clearDeadlineTimer ?? ((timer) => clearTimeout(timer));
+  const startedAt = now();
+  const deadline = startedAt + timeoutMs;
+  let probes = 0;
+  let lastObservation = null;
+  const elapsedMs = () => Math.max(0, Math.min(timeoutMs, now() - startedAt));
+  const timeoutResult = () => ({
+    outcome: "timeout",
+    requestedMs: timeoutMs,
+    elapsedMs: elapsedMs(),
+    probes,
+    lastObservation
+  });
+  const awaitWithinDeadline = async (operation) => {
+    const remainingMs = deadline - now();
+    if (remainingMs <= 0)
+      throw new TargetWaitDeadlineError();
+    let timer;
+    try {
+      const result = await Promise.race([
+        operation(),
+        new Promise((_resolve, reject) => {
+          timer = setDeadlineTimer(() => reject(new TargetWaitDeadlineError()), remainingMs);
+        })
+      ]);
+      if (now() >= deadline)
+        throw new TargetWaitDeadlineError();
+      return result;
+    } finally {
+      if (timer !== void 0)
+        clearDeadlineTimer(timer);
+    }
+  };
+  while (now() < deadline) {
+    const authority = dependencies.readAuthority();
+    const refusal = authorityRefusal(authority);
+    if (refusal) {
+      return {
+        outcome: "refused",
+        requestedMs: timeoutMs,
+        elapsedMs: elapsedMs(),
+        probes,
+        ...refusal,
+        lastObservation
+      };
+    }
+    if (!authority.available)
+      throw new Error("unreachable");
+    const binding = targetBinding(authority);
+    if (!binding) {
+      if (!authority.bindings.pendingBuild) {
+        return {
+          outcome: "refused",
+          requestedMs: timeoutMs,
+          elapsedMs: elapsedMs(),
+          probes,
+          code: "METRO_AUTHORITY_MISMATCH",
+          reason: "Waiting for a Hermes target requires a live authority-bound Metro.",
+          lastObservation
+        };
+      }
+    } else {
+      let exactDeviceProbeStarted = false;
+      try {
+        const listed = await awaitWithinDeadline(() => dependencies.listTargetsExact(binding.metroPort));
+        probes += 1;
+        if (listed.port !== binding.metroPort) {
+          return {
+            outcome: "refused",
+            requestedMs: timeoutMs,
+            elapsedMs: elapsedMs(),
+            probes,
+            code: "CDP_TARGET_AUTHORITY_MISMATCH",
+            reason: "Target discovery escaped the authority-bound Metro port.",
+            lastObservation
+          };
+        }
+        const sessionTargets = listed.targets.filter((target) => targetMatchesSession(target, {
+          platform: binding.platform,
+          bundleId: binding.appId
+        }));
+        let exactTargets = [];
+        if (sessionTargets.length > 0) {
+          exactDeviceProbeStarted = true;
+          exactTargets = await awaitWithinDeadline(() => dependencies.filterTargetsForExactDevice({
+            platform: binding.platform,
+            deviceId: binding.deviceId,
+            targets: sessionTargets
+          }, awaitWithinDeadline));
+        }
+        lastObservation = {
+          advertisedTargetCount: listed.targets.length,
+          sessionTargetCount: sessionTargets.length,
+          exactTargetCount: exactTargets.length
+        };
+        const refreshedAuthority = dependencies.readAuthority();
+        const refreshedRefusal = authorityRefusal(refreshedAuthority);
+        if (refreshedRefusal) {
+          return {
+            outcome: "refused",
+            requestedMs: timeoutMs,
+            elapsedMs: elapsedMs(),
+            probes,
+            ...refreshedRefusal,
+            lastObservation: null
+          };
+        }
+        if (!refreshedAuthority.available)
+          throw new Error("unreachable");
+        const refreshedBinding = targetBinding(refreshedAuthority);
+        if (!refreshedBinding || !sameTargetBinding(binding, refreshedBinding)) {
+          lastObservation = null;
+        } else if (exactTargets.length === 1) {
+          return {
+            outcome: "ready",
+            requestedMs: timeoutMs,
+            elapsedMs: elapsedMs(),
+            probes,
+            lastObservation,
+            authority: refreshedAuthority
+          };
+        } else if (exactTargets.length > 1) {
+          return {
+            outcome: "refused",
+            requestedMs: timeoutMs,
+            elapsedMs: elapsedMs(),
+            probes,
+            code: "CDP_TARGET_AUTHORITY_MISMATCH",
+            reason: "More than one target matches the exact session device.",
+            lastObservation
+          };
+        }
+      } catch (error2) {
+        if (error2 instanceof TargetWaitDeadlineError)
+          return timeoutResult();
+        if (exactDeviceProbeStarted) {
+          return {
+            outcome: "refused",
+            requestedMs: timeoutMs,
+            elapsedMs: elapsedMs(),
+            probes,
+            code: "CDP_TARGET_AUTHORITY_MISMATCH",
+            reason: "The advertised Hermes target cannot be associated with the exact session device.",
+            lastObservation
+          };
+        }
+      }
+    }
+    const remainingMs = deadline - now();
+    if (remainingMs <= 0)
+      return timeoutResult();
+    try {
+      await awaitWithinDeadline(() => wait(Math.min(TARGET_POLL_INTERVAL_MS, remainingMs)));
+    } catch (error2) {
+      if (error2 instanceof TargetWaitDeadlineError)
+        return timeoutResult();
+      throw error2;
+    }
+  }
+  return timeoutResult();
+}
+var TARGET_POLL_INTERVAL_MS, TargetWaitDeadlineError;
+var init_wait_for_exact_session_target = __esm({
+  "packages/rn-dev-agent-core/dist/session/wait-for-exact-session-target.js"() {
+    "use strict";
+    init_session_target();
+    TARGET_POLL_INTERVAL_MS = 250;
+    TargetWaitDeadlineError = class extends Error {
+    };
+  }
+});
+
+// packages/rn-dev-agent-core/dist/tools/status.js
 function createPassiveStatusHandler(getClient2, authorityRuntime2, statusDependencies = {}) {
   return async (args) => {
+    let targetWait;
+    if (args.waitForTargetMs !== void 0) {
+      if (!statusDependencies.listTargetsExact || !statusDependencies.filterTargetsForExactDevice) {
+        return failResult("The passive Hermes target waiter is unavailable in this runtime.", "NOT_IMPLEMENTED");
+      }
+      targetWait = await waitForExactSessionTarget(args.waitForTargetMs, {
+        readAuthority: () => reconcileManagedMetroStatus(authorityRuntime2, statusDependencies),
+        listTargetsExact: statusDependencies.listTargetsExact,
+        filterTargetsForExactDevice: statusDependencies.filterTargetsForExactDevice,
+        ...statusDependencies.now ? { now: statusDependencies.now } : {},
+        ...statusDependencies.wait ? { wait: statusDependencies.wait } : {},
+        ...statusDependencies.setDeadlineTimer ? { setDeadlineTimer: statusDependencies.setDeadlineTimer } : {},
+        ...statusDependencies.clearDeadlineTimer ? { clearDeadlineTimer: statusDependencies.clearDeadlineTimer } : {}
+      });
+    }
     const client2 = getClient2();
     const target = client2.connectedTarget;
-    const authority = reconcileManagedMetroStatus(authorityRuntime2, statusDependencies);
+    const authority = targetWait?.outcome === "ready" ? targetWait.authority : reconcileManagedMetroStatus(authorityRuntime2, statusDependencies);
     const installIdentity = authority.available ? (statusDependencies.inspectInstallIdentity ?? inspectInstallIdentity)(authority.bindings.install) : null;
-    return okResult({
+    const data = {
       authoritative: false,
       authority: projectPublicAuthorityStatus(authority, { installIdentity }),
       metro: {
@@ -73468,8 +73718,24 @@ function createPassiveStatusHandler(getClient2, authorityRuntime2, statusDepende
         } : null,
         requestedPlatform: args.platform ?? null
       },
-      nextAction: client2.isConnected ? "Use rn_session status to inspect bindings before authoritative tools." : "Use rn_session bind_metro and cdp_connect with the claimed exact port."
-    });
+      nextAction: client2.isConnected ? "Use rn_session status to inspect bindings before authoritative tools." : "Use rn_session bind_metro and cdp_connect with the claimed exact port.",
+      ...targetWait ? {
+        targetWait: {
+          requestedMs: targetWait.requestedMs,
+          elapsedMs: targetWait.elapsedMs,
+          outcome: targetWait.outcome,
+          probes: targetWait.probes,
+          lastObservation: targetWait.lastObservation
+        }
+      } : {}
+    };
+    if (targetWait?.outcome === "timeout") {
+      return failResult(`Timed out after ${targetWait.requestedMs}ms waiting for the exact authority-bound Hermes target.`, "CDP_TARGET_WAIT_TIMEOUT", data);
+    }
+    if (targetWait?.outcome === "refused") {
+      return failResult(targetWait.reason, targetWait.code, data);
+    }
+    return okResult(data);
   };
 }
 var init_status = __esm({
@@ -73495,6 +73761,9 @@ var init_status = __esm({
     init_install_identity_inspection();
     init_public_status();
     init_session();
+    init_session_target();
+    init_wait_for_exact_session_target();
+    init_session_target();
   }
 });
 
@@ -81479,9 +81748,9 @@ function createMaestroRunHandler(deps = {}) {
         directReportIdentityStrength: directEvidence.reportDeviceIdStrength,
         requireWdaProvenance: passed
       });
-      const authorityRefusal = maestroAuthorityRefusal(deviceAuthority);
-      if (authorityRefusal) {
-        return failResult(authorityRefusal, "DEVICE_AUTHORITY_MISMATCH", {
+      const authorityRefusal2 = maestroAuthorityRefusal(deviceAuthority);
+      if (authorityRefusal2) {
+        return failResult(authorityRefusal2, "DEVICE_AUTHORITY_MISMATCH", {
           flowFile,
           platform,
           runner: dispatch.runner,
@@ -84606,7 +84875,7 @@ var SESSION_RUNTIME_ABSENCE_RESAMPLE_MS, IOS_APP_PROBE_TIMEOUT_MS, ANDROID_APP_P
 var init_session_runtime_absence = __esm({
   "packages/rn-dev-agent-core/dist/session/session-runtime-absence.js"() {
     "use strict";
-    init_status();
+    init_session_target();
     init_device_session();
     SESSION_RUNTIME_ABSENCE_RESAMPLE_MS = 1500;
     IOS_APP_PROBE_TIMEOUT_MS = 5e3;
@@ -85967,12 +86236,12 @@ async function runMaestroInline(yaml2, opts, dependencies = {}) {
       directReportIdentityStrength: directEvidence.reportDeviceIdStrength,
       requireWdaProvenance: passed
     });
-    const authorityRefusal = maestroAuthorityRefusal(deviceAuthority, execution.error);
+    const authorityRefusal2 = maestroAuthorityRefusal(deviceAuthority, execution.error);
     return {
-      passed: authorityRefusal ? false : passed,
+      passed: authorityRefusal2 ? false : passed,
       output,
       flowFile,
-      ...authorityRefusal ? { error: authorityRefusal } : {},
+      ...authorityRefusal2 ? { error: authorityRefusal2 } : {},
       exitCode: execution.code,
       signal: execution.signal,
       cleanupEscalated: execution.cleanupEscalated,
@@ -90673,6 +90942,7 @@ var init_connection = __esm({
     init_utils();
     init_agent_device_wrapper();
     init_status();
+    init_session_target();
     init_discovery();
   }
 });
@@ -90878,7 +91148,7 @@ var init_restart = __esm({
     init_recover_detached();
     init_resolve_ios_app_file();
     init_maestro_validator();
-    init_status();
+    init_session_target();
     init_target_device_authority();
     defaultExecFile3 = promisify24(execFileCb18);
     SIMULATOR_UDID_RE = /^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$/i;
@@ -91394,13 +91664,13 @@ function createMaestroTestAllHandler(deps = {}) {
           directReportIdentityStrength: directEvidence.reportDeviceIdStrength,
           requireWdaProvenance: outputPassed
         });
-        const authorityRefusal = maestroAuthorityRefusal(deviceAuthority);
-        const ok = outputPassed && !authorityRefusal;
+        const authorityRefusal2 = maestroAuthorityRefusal(deviceAuthority);
+        const ok = outputPassed && !authorityRefusal2;
         results.push({
           name,
           passed: ok,
           durationMs: now() - start,
-          error: authorityRefusal ?? (ok ? void 0 : output.slice(0, 300)),
+          error: authorityRefusal2 ?? (ok ? void 0 : output.slice(0, 300)),
           deviceAuthority
         });
         if (ok)
@@ -91452,13 +91722,13 @@ function createMaestroTestAllHandler(deps = {}) {
           directReportDeviceIds: directEvidence.reportDeviceIds,
           directReportIdentityStrength: directEvidence.reportDeviceIdStrength
         }) : null;
-        const authorityRefusal = deviceAuthority ? maestroAuthorityRefusal(deviceAuthority, msg3.slice(0, 300)) : null;
+        const authorityRefusal2 = deviceAuthority ? maestroAuthorityRefusal(deviceAuthority, msg3.slice(0, 300)) : null;
         const preOFailure = platform === "android" && isOlderSdkInstallFailure(capturedOutput) ? olderSdkInstallDiagnosis(flowDispatch.runner) : null;
         results.push({
           name,
           passed: false,
           durationMs: now() - start,
-          error: preOFailure ?? authorityRefusal ?? msg3.slice(0, 300),
+          error: preOFailure ?? authorityRefusal2 ?? msg3.slice(0, 300),
           ...deviceAuthority && !preOFailure ? { deviceAuthority } : {}
         });
         failed++;
@@ -94931,7 +95201,7 @@ var init_connect_exact_session_target = __esm({
     "use strict";
     init_connect();
     init_discovery();
-    init_status();
+    init_session_target();
     init_target_device_authority();
     IOS_EXACT_TARGET_READINESS_TIMEOUT_MS = 12e4;
     ANDROID_EXACT_TARGET_READINESS_TIMEOUT_MS = 12e4;
@@ -95628,6 +95898,7 @@ var init_index = __esm({
     init_metro_authority();
     init_target_device_authority();
     init_connect_exact_session_target();
+    init_session_target();
     init_source_identity();
     init_managed_metro();
     init_process_cleanup();
@@ -96198,12 +96469,15 @@ var init_index = __esm({
       confirmed: external_exports.boolean().describe("Authorizes inline proven-dead device cleanup").optional(),
       force: external_exports.boolean().optional()
     }, sessionHandler);
-    trackedTool("cdp_status", "Passively report the current authority session, Metro client, and CDP target without connecting, relaunching, dismissing UI, or choosing an ambient target.", {
+    trackedTool("cdp_status", "Passively report the current authority session, Metro client, and CDP target. waitForTargetMs observes only the exact bound target without connecting, relaunching, dismissing UI, or choosing an ambient target.", {
       metroPort: external_exports.number().optional().describe("Diagnostic comparison only; cdp_status never changes the active Metro port"),
-      platform: external_exports.string().optional().describe('Filter target by platform (e.g. "ios", "android") to avoid connecting to the wrong device in multi-simulator setups')
+      platform: external_exports.string().optional().describe('Filter target by platform (e.g. "ios", "android") to avoid connecting to the wrong device in multi-simulator setups'),
+      waitForTargetMs: external_exports.number().int().min(1).max(12e4).optional().describe("Bounded passive wait for the exact authority-bound Hermes target")
     }, createPassiveStatusHandler(getClient, authorityRuntime, {
       getSignerCapability: getSessionSignerCapability,
-      onBundleInvalidated: () => getClient().clearAuthoritativeSessionPolicy()
+      onBundleInvalidated: () => getClient().clearAuthoritativeSessionPolicy(),
+      listTargetsExact: listTargetsOnExactPort,
+      filterTargetsForExactDevice: (input, awaitWithinBoundary) => filterTargetsForExactDevice(input, { execute: execFileP, awaitWithinBoundary })
     }));
     trackedTool("observe", "Start/stop the read-only observability web UI (watch the agent's live tool-call timeline, device screenshot, and app state). action: start|stop|status.", observeSchema, observeHandler);
     trackedTool("cdp_diagnostic_renderers", 'Diagnostic helper for "fiber root invisibility" bug reports (issue #126 follow-up). Enumerates every registered React renderer and its root count via __REACT_DEVTOOLS_GLOBAL_HOOK__. Returns hook keys, renderer Map keys, per-renderer-id root summaries (top fiber type + first child + testID), and notes when renderers are registered but unscanned. Use this when cdp_component_tree returns empty for a component you know is mounted (modals, portals, sub-apps), or when bug-reporting fiber-walk failures.', {

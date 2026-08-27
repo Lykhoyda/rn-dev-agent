@@ -32,7 +32,7 @@ only and cannot establish authority. See
 
 ### No Hermes target
 
-Open the app on the simulator and ensure Hermes is enabled. Check your `app.json` or `metro.config.js` for Hermes configuration.
+Open the bound app, then call `cdp_status({ waitForTargetMs: 120000 })` to wait for its exact Hermes target without connecting or relaunching. A timeout reports only the existing build or Metro authority state; it does not guess whether the app is on a picker or crashed. Once the target is ready, call `cdp_connect` to pin the exact signed runtime.
 
 ### CDP connection rejected (1006)
 
@@ -46,7 +46,7 @@ The bridge auto-reconnects by default and evicts the visual React Native DevTool
 
 This is normal. `cdp_reload` reconnects the authority-bound target within 15
 seconds. If it fails, call `cdp_status` for passive diagnostics, then
-`cdp_connect` to pin the exact signed target again.
+`cdp_status({ waitForTargetMs: 120000 })`, then `cdp_connect` to pin the exact signed target again.
 
 ### MCP server died when Metro was restarted
 

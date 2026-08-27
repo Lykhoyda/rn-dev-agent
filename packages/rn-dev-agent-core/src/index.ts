@@ -17,7 +17,7 @@ import { okResult, failResult, withConnection } from './utils.js';
 import { annotateMutationAbsence } from './verification/mutation-absence.js';
 import { loadVerificationConfig, getCachedProjectRoot } from './verification/config.js';
 import { logger } from './logger.js';
-import { createPassiveStatusHandler, targetMatchesSession } from './tools/status.js';
+import { createPassiveStatusHandler } from './tools/status.js';
 import { createEvaluateHandler } from './tools/evaluate.js';
 import { createReloadHandler } from './tools/reload.js';
 import { createComponentTreeHandler } from './tools/component-tree.js';
@@ -233,6 +233,7 @@ import { createForeignMetroOriginScanner } from './session/metro-origin.js';
 import {
   DISCOVERY_TIMEOUT_MS,
   discoverAllMetroPorts,
+  listTargetsOnExactPort,
   resolveDefaultPorts,
   mapRegistryDeviceBinding,
   setRegistryDeviceBindingProvider,
@@ -261,6 +262,7 @@ import {
   exactSessionTargetReadinessTimeoutMs,
   type ExactSessionTargetConnection,
 } from './session/connect-exact-session-target.js';
+import { targetMatchesSession } from './session/session-target.js';
 import type { SessionStatus } from './session/registry.js';
 import { strictProofSourceIdentity, type SourceIdentity } from './session/source-identity.js';
 import { verifyManagedMetroManagementProof } from './session/managed-metro.js';
@@ -1613,7 +1615,7 @@ trackedTool(
 
 trackedTool(
   'cdp_status',
-  'Passively report the current authority session, Metro client, and CDP target without connecting, relaunching, dismissing UI, or choosing an ambient target.',
+  'Passively report the current authority session, Metro client, and CDP target. waitForTargetMs observes only the exact bound target without connecting, relaunching, dismissing UI, or choosing an ambient target.',
   {
     metroPort: z
       .number()
@@ -1625,10 +1627,20 @@ trackedTool(
       .describe(
         'Filter target by platform (e.g. "ios", "android") to avoid connecting to the wrong device in multi-simulator setups',
       ),
+    waitForTargetMs: z
+      .number()
+      .int()
+      .min(1)
+      .max(120_000)
+      .optional()
+      .describe('Bounded passive wait for the exact authority-bound Hermes target'),
   },
   createPassiveStatusHandler(getClient, authorityRuntime, {
     getSignerCapability: getSessionSignerCapability,
     onBundleInvalidated: () => getClient().clearAuthoritativeSessionPolicy(),
+    listTargetsExact: listTargetsOnExactPort,
+    filterTargetsForExactDevice: (input, awaitWithinBoundary) =>
+      filterTargetsForExactDevice(input, { execute: execFileP, awaitWithinBoundary }),
   }),
 );
 

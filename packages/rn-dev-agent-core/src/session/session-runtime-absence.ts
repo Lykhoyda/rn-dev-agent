@@ -1,5 +1,5 @@
 import type { HermesTarget } from '../types.js';
-import { targetMatchesSession } from '../tools/status.js';
+import { targetMatchesSession } from './session-target.js';
 import { buildAndroidPidofArgs, buildIosAppRunningArgs } from '../tools/device-session.js';
 
 export interface SessionRuntimeBinding {

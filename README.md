@@ -261,7 +261,7 @@ Claude Code / Codex
 | Problem | Solution |
 |---------|----------|
 | "Metro not found" | Inspect `rn_session(action="status")`, then use literal `pnpm ios` or `pnpm android` through the confirmed project integration |
-| "No Hermes target" | Open the bound app, inspect passive `cdp_status`, then use `cdp_connect` to pin the exact signed target |
+| "No Hermes target" | Open the bound app, call `cdp_status({ waitForTargetMs: 120000 })`, then use `cdp_connect` to pin the exact signed target |
 | CDP rejected (1006) | Close React Native DevTools, Flipper, or Chrome DevTools |
 | Zustand store error | Add `global.__ZUSTAND_STORES__` ([setup](https://lykhoyda.github.io/rn-dev-agent/getting-started/#zustand-stores-one-line)) |
 | Plugin not detected (Claude) | `/plugin install rn-dev-agent@rn-dev-agent` then `/reload-plugins` |
