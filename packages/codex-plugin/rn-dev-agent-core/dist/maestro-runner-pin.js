@@ -15197,9 +15197,13 @@ function pointerEventsBlock(treeJson, id) {
     const node = path[index];
     const props = node.props ?? node;
     const pointerEvents = props.pointerEvents;
-    if (pointerEvents === "none")
+    const target = index === path.length - 1;
+    if (target && (pointerEvents === "none" || pointerEvents === "box-none")) {
+      return `the target has pointerEvents="${pointerEvents}"`;
+    }
+    if (!target && pointerEvents === "none")
       return 'an ancestor has pointerEvents="none"';
-    if (pointerEvents === "box-only" && index < path.length - 1) {
+    if (!target && pointerEvents === "box-only") {
       return 'an ancestor has pointerEvents="box-only"';
     }
   }
@@ -15209,7 +15213,7 @@ function isDisabled(props) {
   if (!props)
     return false;
   const a11y = props.accessibilityState;
-  return props.disabled === true || a11y?.disabled === true || props.pointerEvents === "none";
+  return props.disabled === true || a11y?.disabled === true;
 }
 async function runCdpReplayCommands(commands, params, deps, opts = {}) {
   return replayFlow(normalizeSteps(commands, params), buildCdpDispatch(deps, opts.signal), {

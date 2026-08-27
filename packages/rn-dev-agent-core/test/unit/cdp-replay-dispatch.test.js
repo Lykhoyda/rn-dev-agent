@@ -234,6 +234,20 @@ test('text input preserves box-none and auto ancestors but rejects hidden hit-te
   assert.deepEqual(calls, ['type', 'type']);
 });
 
+test('target box-none refuses press and type without dispatch', async () => {
+  const calls = [];
+  const dispatch = buildCdpDispatch({
+    pressByTestId: async () => calls.push('press'),
+    typeByTestId: async () => calls.push('type'),
+    treeFor: async () => ({ tree: { testID: 'target', props: { pointerEvents: 'box-none' } } }),
+    launchApp: async () => {},
+    settle: async () => {},
+  });
+  await assert.rejects(dispatch.press('target'), /target has pointerEvents="box-none"/);
+  await assert.rejects(dispatch.type('target', 'value'), /target has pointerEvents="box-none"/);
+  assert.deepEqual(calls, []);
+});
+
 test('isExactPresent: verbatim testID match → true', () => {
   assert.equal(isExactPresent(tree, 'tab-tasks'), true);
 });

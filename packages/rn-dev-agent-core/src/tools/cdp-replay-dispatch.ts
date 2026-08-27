@@ -150,8 +150,12 @@ function pointerEventsBlock(treeJson: unknown, id: string): string | null {
     const node = path[index]!;
     const props = (node.props as Record<string, unknown> | undefined) ?? node;
     const pointerEvents = props.pointerEvents;
-    if (pointerEvents === 'none') return 'an ancestor has pointerEvents="none"';
-    if (pointerEvents === 'box-only' && index < path.length - 1) {
+    const target = index === path.length - 1;
+    if (target && (pointerEvents === 'none' || pointerEvents === 'box-none')) {
+      return `the target has pointerEvents="${pointerEvents}"`;
+    }
+    if (!target && pointerEvents === 'none') return 'an ancestor has pointerEvents="none"';
+    if (!target && pointerEvents === 'box-only') {
       return 'an ancestor has pointerEvents="box-only"';
     }
   }
@@ -161,7 +165,7 @@ function pointerEventsBlock(treeJson: unknown, id: string): string | null {
 function isDisabled(props: Record<string, unknown> | null): boolean {
   if (!props) return false;
   const a11y = props.accessibilityState as { disabled?: boolean } | undefined;
-  return props.disabled === true || a11y?.disabled === true || props.pointerEvents === 'none';
+  return props.disabled === true || a11y?.disabled === true;
 }
 
 export async function runCdpReplayCommands(

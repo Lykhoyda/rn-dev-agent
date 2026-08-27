@@ -907,6 +907,39 @@ test('filtered replay proves pointer events from the live fiber ancestor chain',
   }
 });
 
+test('filtered replay enforces target pointer-event semantics before mutation', async () => {
+  for (const pointerEvents of ['none', 'box-none', 'auto', 'box-only']) {
+    const root = routeTree('coverage', 'home');
+    root.child.child.memoizedProps.pointerEvents = pointerEvents;
+    const sandbox = makeFrontmostSandbox(root, {
+      index: 0,
+      routes: [{ name: 'home' }],
+    });
+    const mutations: string[] = [];
+    const deps = {
+      pressByTestId: async () => mutations.push('press'),
+      typeByTestId: async () => mutations.push('type'),
+      treeFor: async (id: string) => JSON.parse(sandbox.__RN_AGENT.getTree({ filter: id })),
+      frontmostFor: async (id: string) => JSON.parse(sandbox.__RN_AGENT.isTestIdFrontmost(id)),
+      launchApp: async () => {},
+      settle: async () => {},
+    };
+    const press = await runCdpReplayCommands([{ tapOn: { id: 'coverage' } }], {}, deps);
+    const input = await runCdpReplayCommands([{ inputText: 'value' }], {}, deps, {
+      initialFocusId: 'coverage',
+    });
+    if (pointerEvents === 'none' || pointerEvents === 'box-none') {
+      assert.equal(press.failureCode, 'INTERACTION_NOT_ACTUATED');
+      assert.equal(input.failureCode, 'INTERACTION_NOT_ACTUATED');
+      assert.deepEqual(mutations, []);
+    } else {
+      assert.equal(press.passed, true);
+      assert.equal(input.passed, true);
+      assert.deepEqual(mutations, ['press', 'type']);
+    }
+  }
+});
+
 test('unavailable navigation proof is typed and does not skip runFlow commands', async () => {
   const sandbox = makeFrontmostSandbox(routeTree('coverage', 'home'), {
     error: 'No navigation state',

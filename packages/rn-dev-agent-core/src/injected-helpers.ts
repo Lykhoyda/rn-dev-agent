@@ -3736,6 +3736,16 @@ export const INJECTED_HELPERS = `
       });
     }
 
+    var targetPointerEvents = (target.memoizedProps || {}).pointerEvents;
+    if (targetPointerEvents === 'none' || targetPointerEvents === 'box-none') {
+      return JSON.stringify({
+        visible: false,
+        reason: 'testID target is not user-interactable with pointerEvents="' + targetPointerEvents + '"',
+        code: 'INTERACTION_NOT_ACTUATED',
+        matchCount: 1
+      });
+    }
+
     var pointerAncestor = target.return;
     var pointerDepth = 0;
     while (pointerAncestor) {
