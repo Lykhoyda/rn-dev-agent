@@ -5,7 +5,7 @@
 // Env: SLICE_A_APP_ROOT (test-app checkout), SLICE_A_APP_ID, SLICE_A_DEVICE_ID.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFileSync, mkdirSync } from 'node:fs';
+import { writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 // @ts-expect-error -- untyped JS test helper
@@ -122,7 +122,12 @@ const assertVisibleFlow = (id: string) =>
 test('Slice A visibility gate (real device, no mocks)', { timeout: 900_000 }, async () => {
   mkdirSync(EVIDENCE_DIR, { recursive: true });
   const evidence: Record<string, unknown> = { appId: APP_ID, sliceA: true };
-  const s = startSupervisor({ cwd: APP_ROOT, lineTimeoutMs: 600_000 });
+  // A non-Git app root must be declared explicitly; the supervisor never
+  // infers one from the working directory.
+  const declaredEnv = existsSync(join(APP_ROOT!, '.git'))
+    ? {}
+    : { RN_DEV_AGENT_DECLARED_ROOT: APP_ROOT!, RN_DEV_AGENT_DECLARED_MANIFESTS: 'package.json' };
+  const s = startSupervisor({ cwd: APP_ROOT, lineTimeoutMs: 600_000, env: declaredEnv });
 
   try {
     const init = await rpc(s, 'initialize', {
