@@ -45,6 +45,13 @@ function commandTreeContains(value: unknown, names: ReadonlySet<string>, depth =
   );
 }
 
+function runFlowStartsWithInputText(command: unknown): boolean {
+  if (!isObject(command) || !isObject(command.runFlow)) return false;
+  const commands = command.runFlow.commands;
+  if (!Array.isArray(commands) || commands.length === 0) return false;
+  return commandName(commands[0]) === 'inputText';
+}
+
 const nativeFocusPreservingCommands = new Set([
   'assertVisible',
   'assertNotVisible',
@@ -112,6 +119,17 @@ export function planIosProofDomains(
   for (let index = 0; index < commands.length; index++) {
     const name = commandName(commands[index]);
     let domain = classified[index];
+    if (name === 'runFlow' && runFlowStartsWithInputText(commands[index])) {
+      if (focusedDomain === 'react-tree' && !focusedReactId) {
+        return {
+          ok: false,
+          sourceIndex: index,
+          reason:
+            'runFlow.when.visible begins with inputText but no React focus target has been proven; keep the nested input in the native Maestro domain',
+        };
+      }
+      if (focusedDomain !== 'react-tree') domain = 'xctest-native';
+    }
     if (domain === 'neutral') {
       domain =
         name === 'inputText'

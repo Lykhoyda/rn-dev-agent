@@ -378,6 +378,68 @@ test('inputText without a proven React focus remains in the native domain', () =
   );
 });
 
+test('nested leading inputText preserves native auto-focus without a proven React focus', () => {
+  const plan = planIosProofDomains(
+    [
+      {
+        runFlow: {
+          when: { visible: { id: 'condition' } },
+          commands: [{ inputText: 'autofocused value' }],
+        },
+      },
+    ],
+    {},
+  );
+  assert.equal(plan.ok, true);
+  if (plan.ok)
+    assert.deepEqual(
+      plan.segments.map(({ domain }) => domain),
+      ['xctest-native'],
+    );
+});
+
+test('nested leading inputText stays React-eligible after a proven focus tap', () => {
+  const plan = planIosProofDomains(
+    [
+      { tapOn: { id: 'field' } },
+      {
+        runFlow: {
+          when: { visible: { id: 'condition' } },
+          commands: [{ inputText: 'focused value' }],
+        },
+      },
+    ],
+    {},
+  );
+  assert.equal(plan.ok, true);
+  if (plan.ok)
+    assert.deepEqual(
+      plan.segments.map(({ domain }) => domain),
+      ['react-tree'],
+    );
+});
+
+test('nested leading inputText preserves native focus after a native tap', () => {
+  const plan = planIosProofDomains(
+    [
+      { tapOn: 'Email' },
+      {
+        runFlow: {
+          when: { visible: { id: 'condition' } },
+          commands: [{ inputText: 'focused value' }],
+        },
+      },
+    ],
+    {},
+  );
+  assert.equal(plan.ok, true);
+  if (plan.ok)
+    assert.deepEqual(
+      plan.segments.map(({ domain }) => domain),
+      ['xctest-native'],
+    );
+});
+
 test('conditional React subflows preserve focus in both directions', async () => {
   const calls: string[] = [];
   const result = await replayFlow(
