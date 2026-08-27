@@ -444,7 +444,7 @@ function reissueInstallAfterPreflightRefusal(
   axes: readonly AuthorityAxis[],
   tool: string,
   args: Record<string, unknown>,
-  onOperationAdvanced?: (operation: OperationRef) => void,
+  onOperationAdvanced: (operation: OperationRef) => void,
 ): { operation: OperationRef; status: SessionStatus } | null {
   if (
     !axes.includes('I') ||
@@ -482,7 +482,7 @@ async function preflightWithInstallReissue(
   },
   operation: OperationRef,
   status: SessionStatus,
-  onOperationAdvanced?: (operation: OperationRef) => void,
+  onOperationAdvanced: (operation: OperationRef) => void,
 ): Promise<{ before: AuthorityObservation[]; operation: OperationRef; status: SessionStatus }> {
   const { tool, profile, args, axes } = context;
   const probeAll = (probed: SessionStatus): Promise<AuthorityObservation[]> =>
@@ -1520,6 +1520,9 @@ export function createAuthorityGate(
               tool === 'rn_session' && args.action === 'cancel_handoff'
                 ? registry.beginHandoffCancellationOperation(available.session, operationInput)
                 : registry.beginOperation(available.session, operationInput);
+            const onOperationAdvanced = (nextOperation: OperationRef): void => {
+              operation = nextOperation;
+            };
             if (retainsRunnerCleanupAuthority) {
               requireRetainedRunnerOwnership(registry, status);
             }
@@ -1530,6 +1533,7 @@ export function createAuthorityGate(
               { tool, profile, args, axes: transitionAxes.before },
               operation,
               status,
+              onOperationAdvanced,
             );
             const before = preflight.before;
             operation = preflight.operation;
