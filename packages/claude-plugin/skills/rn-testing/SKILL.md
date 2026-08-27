@@ -339,20 +339,17 @@ the login e2e on the exact candidate (`cdp_lock_e2e_test` /
 `cdp_run_e2e_suite`). Helper replay and locked e2e coexist without sharing
 that proof or rewriting each other's artifacts.
 
-`LOGIN_PROLOGUE_BLOCKED` is a terminal journey boundary. A missing action,
+A failed prologue fails like any other action replay: it returns the replay's
+own failure code and leaves the session untouched — no authority is latched and
+no tool is disabled. The journey still stops there by policy. A missing action,
 runner drift, selector failure, timeout, or missing fresh RunRecord must not
 fall through to manual credential entry, `cdp_auto_login`, raw or ad-hoc
-Maestro, route injection, navigation shortcuts, or store mutation. Read-only
-diagnostics and cleanup remain available; repair the exact saved action and
-rerun the prologue.
+Maestro, route injection, navigation shortcuts, or store mutation. Repair the
+exact saved action and rerun the prologue.
 
 An empty navigation state may be a splash screen or Dev Client picker, not
 necessarily auth. Wait 3 seconds and retry before concluding the app is logged
 out.
-
-A supervisor may authorize one otherwise-blocked mutation only with an
-out-of-band token configured as `RN_LOGIN_PROLOGUE_OVERRIDE_TOKEN` and supplied
-as `supervisorOverrideToken`. Never infer, discover, log, or persist that token.
 
 ---
 

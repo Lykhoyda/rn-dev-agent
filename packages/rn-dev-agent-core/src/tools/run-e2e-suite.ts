@@ -1,9 +1,4 @@
-import {
-  discoverLockedTests,
-  getResolvedLockedTestIds,
-  loadLockedTest,
-  resolveLockedTestIds,
-} from '../domain/e2e-test.js';
+import { discoverLockedTests, loadLockedTest, resolveLockedTestIds } from '../domain/e2e-test.js';
 import {
   classifyFlowResult,
   skippedResult,
@@ -95,10 +90,7 @@ export async function runE2eSuiteCore(
   const mkRunId = deps.makeRunId ?? makeRunId;
   const rand = (): string => Math.random().toString(36).slice(2, 8);
 
-  const ids = [
-    ...(getResolvedLockedTestIds(args) ??
-      resolveLockedTestIds(projectRoot, args.pattern, discover)),
-  ];
+  const ids = [...resolveLockedTestIds(projectRoot, args.pattern, discover)];
   if (ids.length === 0) {
     return warnResult(
       {

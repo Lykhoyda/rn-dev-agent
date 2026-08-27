@@ -67,7 +67,7 @@ Record / replay / self-repair persistent flows. See the [**Actions concept guide
 
 E2E testing and proof capture — work even when the app is crashed or on native screens.
 
-`maestro_run` / `maestro_generate` → `maestro_test_all` → `proof_step` → `cross_platform_verify`. `cdp_auto_login` remains a legacy per-call helper outside the guarded journey; it is not a fallback from `LOGIN_PROLOGUE_BLOCKED` or PR proof.
+`maestro_run` / `maestro_generate` → `maestro_test_all` → `proof_step` → `cross_platform_verify`. `cdp_auto_login` remains a legacy per-call helper outside the guarded journey; it is not a fallback from a failed `cdp_login_prologue` replay, and it is not PR proof.
 
 ## Macro-Asserts
 

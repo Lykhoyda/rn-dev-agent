@@ -90,7 +90,7 @@ test('session status exposes the bounded managed-sandbox tier', () => {
   assert.equal(projectPublicAuthorityStatus({ ...base, bindings: {} }).sandbox, 'unavailable');
 });
 
-test('session status exposes bounded login-prologue evidence without action parameters', () => {
+test('session status never projects a residual login-prologue binding', () => {
   const projected = projectPublicAuthorityStatus({
     ...operationalStatus('ready'),
     bindings: {
@@ -105,33 +105,13 @@ test('session status exposes bounded login-prologue evidence without action para
         steps: [],
         inventory: { count: 1, actionIds: ['user-login'] },
         failure: { code: 'ENGINE_PIN_MISMATCH', detail: 'private runner detail' },
-        runRecord: {
-          runId: 'login-run-1',
-          timestamp: '2026-08-21T10:00:00.100Z',
-          durationMs: 100,
-          status: 'fail',
-          trigger: 'agent',
-          failureDetail: 'private action output',
-        },
-        overrides: [{ tool: 'cdp_evaluate', usedAt: '2026-08-21T10:01:00.000Z' }],
         params: { PASSWORD: 'secret' },
       },
     },
   });
 
-  assert.deepEqual(projected.loginPrologue, {
-    role: 'ACTION_LOGIN_HELPER',
-    state: 'LOGIN_PROLOGUE_BLOCKED',
-    alias: 'user-login',
-    actionId: 'user-login',
-    startedAt: '2026-08-21T10:00:00.000Z',
-    endedAt: '2026-08-21T10:00:00.100Z',
-    elapsedMs: 100,
-    failureCode: 'ENGINE_PIN_MISMATCH',
-    runId: 'login-run-1',
-    overrideCount: 1,
-    lastOverride: { tool: 'cdp_evaluate', usedAt: '2026-08-21T10:01:00.000Z' },
-  });
+  assert.equal('loginPrologue' in projected, false);
+  assert.equal(JSON.stringify(projected).includes('LOGIN_PROLOGUE_BLOCKED'), false);
   assert.equal(JSON.stringify(projected).includes('secret'), false);
   assert.equal(JSON.stringify(projected).includes('private'), false);
 });

@@ -5,7 +5,7 @@ description: Promote a verified action into a frozen, locked e2e regression test
 
 import { Aside } from '@astrojs/starlight/components';
 
-Freeze a passing [action](../../actions/) into a **locked e2e regression test**. A locked test is a copy of the action in `.rn-agent/e2e/<id>.yaml` that replays **strict** — self-repair is disabled, so any drift fails loudly instead of being absorbed. Locked tests are what [`cdp_run_e2e_suite`](../../tools/cdp/cdp_run_e2e_suite/) (and the observe UI's **E2E** tab) run as the project's regression suite. For login, this locked test on the exact candidate is the formal PR proof; [`cdp_login_prologue`](../../tools/cdp/cdp_login_prologue/) is the fail-stop navigation helper and is not that proof.
+Freeze a passing [action](../../actions/) into a **locked e2e regression test**. A locked test is a copy of the action in `.rn-agent/e2e/<id>.yaml` that replays **strict** — self-repair is disabled, so any drift fails loudly instead of being absorbed. Locked tests are what [`cdp_run_e2e_suite`](../../tools/cdp/cdp_run_e2e_suite/) (and the observe UI's **E2E** tab) run as the project's regression suite. For login, this locked test on the exact candidate is the formal PR proof; [`cdp_login_prologue`](../../tools/cdp/cdp_login_prologue/) is the navigation helper and is not that proof.
 
 ## Usage
 
