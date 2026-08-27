@@ -15754,6 +15754,29 @@ function createMaestroRunHandler(deps = {}) {
         });
       } catch (error) {
         const failure = error instanceof MaestroStageExecutionError ? error.stageError : error;
+        if (error instanceof MaestroStageExecutionError) {
+          for (const completed of error.completedResults) {
+            if (!completed || typeof completed !== "object" || !("replay" in completed))
+              continue;
+            const result = completed;
+            if (!result.replay || !Array.isArray(result.replay.steps))
+              continue;
+            const sourceIndices = result.sourceIndices ?? [];
+            for (const step of result.replay.steps) {
+              if (!step || typeof step !== "object")
+                continue;
+              const record = step;
+              combinedSteps.push({
+                index: sourceIndices[record.sourceIndex ?? -1] ?? record.sourceIndex ?? combinedSteps.length,
+                name: String(record.t ?? "unknown"),
+                verb: String(record.t ?? "unknown"),
+                ...record.target !== void 0 ? { target: String(record.target) } : {},
+                status: record.ok === false ? "fail" : "pass",
+                durationMs: Number(record.durationMs ?? 0)
+              });
+            }
+          }
+        }
         if (failure instanceof ReactReplayFailure) {
           const replay = failure.replay;
           const failedStepIndex = replay.failedStepIndex === void 0 ? void 0 : failure.sourceIndices[replay.failedStepIndex] ?? replay.failedStepIndex;
