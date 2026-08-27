@@ -33639,10 +33639,13 @@ function createAuthorityGate(runtime, dependencies) {
             profile: `transition:${transitionAxes.before.join("")}>${transitionAxes.after.join("")}`
           };
           operation2 = tool === "rn_session" && args.action === "cancel_handoff" ? registry3.beginHandoffCancellationOperation(available.session, operationInput) : registry3.beginOperation(available.session, operationInput);
+          const onOperationAdvanced = (nextOperation) => {
+            operation2 = nextOperation;
+          };
           if (retainsRunnerCleanupAuthority) {
             requireRetainedRunnerOwnership(registry3, status);
           }
-          const preflight2 = await preflightWithInstallReissue(registry3, runtime, dependencies, { tool, profile, args, axes: transitionAxes.before }, operation2, status);
+          const preflight2 = await preflightWithInstallReissue(registry3, runtime, dependencies, { tool, profile, args, axes: transitionAxes.before }, operation2, status, onOperationAdvanced);
           const before = preflight2.before;
           operation2 = preflight2.operation;
           status = preflight2.status;
