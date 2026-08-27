@@ -247,6 +247,26 @@ test('cdp_run_action preserves a typed native-blind refusal', async () => {
   assert.equal(project.readSidecar('demo').runHistory[0].failureCode, 'NATIVE_SURFACE_BLIND');
 });
 
+test('cdp_run_action records a typed runner deadline as TIMEOUT', async () => {
+  project.seedAction('demo', fixtureYaml({ id: 'demo', selectors: ['spinner-done'] }));
+  const handler = createRunActionHandler({
+    maestroRun: fakeMaestroRun([
+      {
+        ok: false,
+        code: 'RUNNER_TIMEOUT',
+        error: 'React replay exceeded its deadline',
+        meta: { proofDomain: 'react-tree' },
+      },
+    ]),
+  });
+
+  const result = await handler({ actionId: 'demo', projectRoot: project.root });
+  const env = JSON.parse(result.content[0].text);
+
+  assert.equal(env.code, 'RUNNER_TIMEOUT');
+  assert.equal(project.readSidecar('demo').runHistory[0].failureCode, 'TIMEOUT');
+});
+
 test('run-action: proofReplay pass on an experimental action discloses no lifecycle-promotion write', async () => {
   const originalYaml = `${fixtureYaml({ id: 'demo', selectors: ['fab-create-task'] })}# retained operator note\n`;
   project.seedAction('demo', originalYaml);
@@ -386,6 +406,36 @@ test('run-action: repair patched but retry still fails → autoRepair.outcome = 
   assert.equal(sidecar.runHistory[0].status, 'fail');
   assert.equal(sidecar.runHistory[0].autoRepair?.outcome, 'failed');
 });
+
+for (const [toolCode, actionCode] of [
+  ['NATIVE_SURFACE_BLIND', 'NATIVE_SURFACE_BLIND'],
+  ['CDP_NOT_CONNECTED', 'ENV_UNREACHABLE'],
+  ['RUNNER_TIMEOUT', 'TIMEOUT'],
+]) {
+  test(`run-action: post-repair ${toolCode} remains typed`, async () => {
+    project.seedAction('demo', fixtureYaml({ id: 'demo', selectors: ['fab-create-task'] }));
+    const handler = createRunActionHandler({
+      maestroRun: fakeMaestroRun([
+        FAIL_TYPED_REACT_SELECTOR_ENV,
+        {
+          ok: false,
+          code: toolCode,
+          error: `retry failed with ${toolCode}`,
+          meta: { proofDomain: 'partitioned' },
+        },
+      ]),
+      repairAction: fakeRepairAction(REPAIR_PATCHED_ENV),
+    });
+
+    const result = await handler({ actionId: 'demo', projectRoot: project.root });
+    const env = JSON.parse(result.content[0].text);
+
+    assert.equal(env.code, toolCode);
+    assert.equal(env.meta.failureKind, toolCode);
+    assert.equal(env.meta.autoRepair.outcome, 'failed');
+    assert.equal(project.readSidecar('demo').runHistory[0].failureCode, actionCode);
+  });
+}
 
 test('run-action: typed React-tree selector miss still reaches auto-repair', async () => {
   project.seedAction('demo', fixtureYaml({ id: 'demo', selectors: ['fab-create-task'] }));

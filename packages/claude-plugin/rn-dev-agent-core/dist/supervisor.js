@@ -81835,6 +81835,28 @@ function classifyFailure(failure) {
       return { actionCode: "UNKNOWN", toolCode: void 0 };
   }
 }
+function actionFailureCodeForToolCode(code) {
+  switch (code) {
+    case "TESTID_NOT_FOUND":
+      return "SELECTOR_NOT_FOUND";
+    case "ASSERTION_FAILED":
+      return "STATE_MISMATCH";
+    case "CDP_NOT_CONNECTED":
+      return "ENV_UNREACHABLE";
+    case "RECONNECT_TIMEOUT":
+    case "RUNNER_TIMEOUT":
+      return "TIMEOUT";
+    case "WDA_BOOTSTRAP_FAILED":
+    case "NATIVE_SURFACE_BLIND":
+    case "DEVICE_AUTHORITY_MISMATCH":
+    case "ROUTE_DRIFT":
+    case "TRANSPORT_BLIND":
+    case "FALLBACK_REPLAY_FAILED":
+      return code;
+    default:
+      return "UNKNOWN";
+  }
+}
 function strictEnginePinDivergence(env) {
   const status = env.data?.enginePin?.status;
   return typeof status === "string" && PROVEN_ENGINE_PIN_DIVERGENCE.has(status) ? status : null;
@@ -82157,7 +82179,7 @@ function createRunActionHandler(deps = {}) {
           timestamp: (/* @__PURE__ */ new Date()).toISOString(),
           durationMs: Date.now() - t0,
           status: "fail",
-          failureCode: typedCode === "DEVICE_AUTHORITY_MISMATCH" ? "DEVICE_AUTHORITY_MISMATCH" : typedCode === "NATIVE_SURFACE_BLIND" ? "NATIVE_SURFACE_BLIND" : typedCode === "RECONNECT_TIMEOUT" ? "TIMEOUT" : "UNKNOWN",
+          failureCode: actionFailureCodeForToolCode(typedCode),
           failureDetail: firstFailureDetail.slice(0, 1e3),
           trigger,
           autoRepair: autoRepair2
@@ -82383,11 +82405,13 @@ function createRunActionHandler(deps = {}) {
       const retryOutput = readMaestroOutput(retryEnv);
       const retryFailureDetail = readMaestroFailureDetail(retryEnv, retryOutput);
       const retryTerminal = readMaestroTerminal(retryEnv);
-      const retryFailure = !retryPassed ? typedReactSelectorFailure(retryEnv, retryOutput) ?? parseMaestroFailure(retryOutput, retryTerminal) : void 0;
+      const retryTypedSelectorFailure = typedReactSelectorFailure(retryEnv, retryOutput);
+      const retryFailure = !retryPassed ? retryTypedSelectorFailure ?? parseMaestroFailure(retryOutput, retryTerminal) : void 0;
       const retryClassification = retryFailure ? classifyFailure(retryFailure) : void 0;
       const retryDeviceAuthority = readMaestroDeviceAuthority(retryEnv);
       probeDeviceId = retryDeviceAuthority?.reportedDeviceId ?? observedDeviceId;
-      if (retryEnv.code === "DEVICE_AUTHORITY_MISMATCH") {
+      if (retryEnv.code && !retryTypedSelectorFailure) {
+        const typedCode = retryEnv.code;
         const autoRepair2 = {
           attempted: true,
           outcome: "failed",
@@ -82397,12 +82421,18 @@ function createRunActionHandler(deps = {}) {
           timestamp: (/* @__PURE__ */ new Date()).toISOString(),
           durationMs: Date.now() - t0,
           status: "fail",
-          failureCode: "DEVICE_AUTHORITY_MISMATCH",
+          failureCode: actionFailureCodeForToolCode(typedCode),
           failureDetail: retryFailureDetail.slice(0, 1e3),
           trigger,
           autoRepair: autoRepair2
         });
-        return failResult(`cdp_run_action: ${args.actionId} refused retry authority: ${retryFailureDetail}`, "DEVICE_AUTHORITY_MISMATCH", { actionId: args.actionId, deviceAuthority: retryDeviceAuthority, autoRepair: autoRepair2 });
+        return failResult(`cdp_run_action: ${args.actionId} retry failed: ${retryFailureDetail}`, typedCode, {
+          ...retryEnv.meta,
+          actionId: args.actionId,
+          failureKind: typedCode,
+          deviceAuthority: retryDeviceAuthority,
+          autoRepair: autoRepair2
+        });
       }
       const repairScore = repairEnv.data?.score;
       const repairTimestamp = reloadedAction.state.repairHistory.length > 0 ? reloadedAction.state.repairHistory[reloadedAction.state.repairHistory.length - 1].timestamp : void 0;
