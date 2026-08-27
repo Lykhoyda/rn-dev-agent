@@ -1045,7 +1045,7 @@ async function pinSessionDevClient(
         deviceId: device.deviceId,
         metroPort: metro.port,
         runtimeKind,
-        ...(devClientUrl ? { devClientUrl, expectedDevClientUrl: devClientUrl } : {}),
+        ...(devClientUrl ? { devClientUrl } : {}),
         signerCapability: secret.signerCapability,
       },
       {
@@ -1100,7 +1100,6 @@ async function pinSessionDevClient(
             exactSessionTargetReadinessTimeoutMs(platform),
           );
         },
-        detectForeignMetroOrigin: foreignMetroOriginScanner,
         readMarker: async (connection) => {
           const markerClient = 'client' in connection ? connection.client : getClient();
           const result = await markerClient.evaluate(
@@ -1116,32 +1115,6 @@ async function pinSessionDevClient(
             : null;
         },
         commitBundle,
-        readManagedManifest: async ({ host, metroPort, platform }) => {
-          const controller = new AbortController();
-          const timer = setTimeout(() => controller.abort(), 15_000);
-          try {
-            const response = await fetch(`http://${host}:${metroPort}/`, {
-              headers: {
-                accept: 'multipart/mixed,application/expo+json,application/json',
-                'expo-platform': platform,
-              },
-              signal: controller.signal,
-            });
-            return {
-              body: await response.text(),
-              contentType: response.headers.get('content-type') ?? '',
-              status: response.status,
-            };
-          } catch (error) {
-            throw new Error(
-              `METRO_MANIFEST_ENDPOINT_MISMATCH: managed manifest request failed: ${
-                error instanceof Error ? error.message : String(error)
-              }`,
-            );
-          } finally {
-            clearTimeout(timer);
-          }
-        },
       },
     );
     getClient().setAuthoritativeSessionPolicy(createAuthoritativeSessionPolicy(status));

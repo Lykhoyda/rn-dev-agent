@@ -32,6 +32,7 @@ export interface ExactSessionTargetConnection {
   targetId: string;
   connectionGeneration: number;
   deviceId: string;
+  metroPort: number;
   client: CDPClient;
   assertActive(): void;
   run<T>(operation: () => Promise<T>): Promise<T>;
@@ -311,6 +312,7 @@ async function connectExactAndroidSessionTarget(
         targetId: target.id,
         connectionGeneration,
         deviceId: input.deviceId,
+        metroPort: input.metroPort,
         client: exactClient,
         assertActive,
         run: awaitWithinDeadline,
@@ -443,6 +445,7 @@ export async function connectExactSessionTarget(
         targetId: target.id,
         connectionGeneration: exactClient.connectionGeneration,
         deviceId: input.deviceId,
+        metroPort: input.metroPort,
         client: exactClient,
         assertActive: () => {},
         run: (operation) => operation(),

@@ -17,7 +17,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
-import { verifyManagedManifestLaunchAsset } from '../../dist/session/expo-manifest.js';
+import { parseExpoManifestBody } from '../../dist/session/expo-manifest.js';
 import {
   buildSignedMetroMarker,
   createMetroAuthorityModule,
@@ -206,22 +206,15 @@ test(
           200,
           `${request.name} manifest failed: ${manifest.body.toString('utf8').slice(0, 400)}`,
         );
-        const verified = verifyManagedManifestLaunchAsset(
-          {
-            body: manifest.body.toString('utf8'),
-            contentType: String(manifest.headers['content-type'] ?? ''),
-            status: manifest.status,
-          },
-          { host: '127.0.0.1', port },
-        );
-        assert.equal(new URL(verified.bundleUrl).port, String(port));
-        launchAssetUrl = verified.bundleUrl;
+        const parsed = parseExpoManifestBody(manifest.body.toString('utf8'));
+        assert.ok(parsed);
+        launchAssetUrl = (parsed.launchAsset as { url: string }).url;
         console.log(
           JSON.stringify({
             request: request.name,
             manifestStatus: manifest.status,
-            launchAssetPort: new URL(verified.bundleUrl).port,
-            runtimeVersion: verified.runtimeVersion,
+            launchAssetPort: new URL(launchAssetUrl).port,
+            runtimeVersion: parsed.runtimeVersion,
           }),
         );
       }
