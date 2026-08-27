@@ -237,7 +237,7 @@ function authorityOutcome(result: Awaited<ReturnType<typeof attempt>>) {
 
 // pinExactDevClient consults managedMetroProxyUrl only on ios + expo-dev-client, where it returns
 // http://127.0.0.1:<port> and cannot throw, so verdict-independence is the provable form of the clause.
-test('the authority outcome is independent of the build-leg diagnostic verdict on the same input', async () => {
+test('a refusing and an accepting build-leg verdict both leave the authority boundary refusing with its own typed code', async () => {
   assert.equal(
     diagnosticVerdict(wrongOriginLaunchData),
     'refused:SESSION_BUILD_IDENTITY_CONFLICT: Dev Client URL contradicts the active managed Metro',
