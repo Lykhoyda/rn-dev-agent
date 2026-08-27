@@ -1008,6 +1008,29 @@ test('a visible testID inside its ScrollView viewport remains frontmost', () => 
   assert.equal(verdict.visible, true);
 });
 
+test('a visible target remains frontmost when clipping bounds are unavailable', () => {
+  const root = routeTree('coverage', 'home');
+  const screen = root.child;
+  const target = screen.child;
+  const scrollView: any = {
+    type: { displayName: 'RCTScrollView' },
+    memoizedProps: {},
+    stateNode: null,
+    return: screen,
+    child: target,
+    sibling: null,
+  };
+  screen.child = scrollView;
+  target.return = scrollView;
+  target.stateNode = layoutStateNode({ x: 20, y: 140, width: 120, height: 44 });
+  const sandbox = makeFrontmostSandbox(root, {
+    index: 0,
+    routes: [{ name: 'home' }],
+  });
+  const verdict = JSON.parse(sandbox.__RN_AGENT.isTestIdFrontmost('coverage'));
+  assert.equal(verdict.visible, true);
+});
+
 test('an inactive mounted modal does not mask the current route', () => {
   const root = routeTree('coverage', 'home');
   root.child.sibling = {

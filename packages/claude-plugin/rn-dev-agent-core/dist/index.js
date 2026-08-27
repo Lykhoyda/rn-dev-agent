@@ -55608,12 +55608,8 @@ var INJECTED_HELPERS = `
       if (clips) {
         var ancestorRect = readRect(publicInstanceFor(layoutAncestor));
         if (!ancestorRect) {
-          return JSON.stringify({
-            visible: false,
-            reason: 'native clipping bounds are unavailable for the matched testID',
-            code: 'ASSERTION_FAILED',
-            matchCount: 1
-          });
+          layoutAncestor = layoutAncestor.return;
+          continue;
         }
         if (
           ancestorRect.width <= 0 ||
