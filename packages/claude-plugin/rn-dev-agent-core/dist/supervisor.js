@@ -78470,12 +78470,18 @@ function regexSelectorCapabilityRefusal(commands) {
   return `Action uses regex text selectors (${selectors[0]}) which are not a validated maestro-runner ${MAESTRO_RUNNER_PIN.version} capability (GH #750 CONTAINS mistranslation). Rewrite as id or literal text selectors before replay. No UI mutation will run.`;
 }
 function actionReplayPreflight(opts) {
-  return replayCompatibilityPreflight({ ...opts, requireEnginePin: true });
+  return replayCompatibilityPreflight({
+    ...opts,
+    requireEnginePin: true,
+    requireRuntimePin: opts.requireRuntimePin
+  });
 }
 function replayCompatibilityPreflight(opts) {
-  const pin = exactPinRefusal(opts.engineStatus);
-  if (pin)
-    return pin;
+  if (opts.requireRuntimePin !== false) {
+    const pin = exactPinRefusal(opts.engineStatus);
+    if (pin)
+      return pin;
+  }
   if (opts.requireEnginePin) {
     const format = actionEnginePinRefusal(opts.enginePin);
     if (format)
@@ -80922,7 +80928,20 @@ function createMaestroRunHandler(deps = {}) {
           proofDomains.push("react-tree");
           const replayDependencies = replayFactory(args, controller.signal);
           if (!replayDependencies) {
-            return failResult("React-tree replay requires the authority-bound bridgeless runtime. Reconnect the exact app bundle and retry.", "CDP_NOT_CONNECTED", { proofDomain: "react-tree" });
+            const uniqueProofDomains = [...new Set(proofDomains)];
+            const proofDomain2 = uniqueProofDomains.length === 1 ? uniqueProofDomains.at(0) ?? "partitioned" : "partitioned";
+            return failResult("React-tree replay requires the authority-bound bridgeless runtime. Reconnect the exact app bundle and retry.", "CDP_NOT_CONNECTED", {
+              flowFile,
+              proofDomain: proofDomain2,
+              proofDomains: uniqueProofDomains,
+              failedProofDomain: "react-tree",
+              ...proofDomain2 === "partitioned" ? { runner: "partitioned", transport: "partitioned" } : {},
+              transportVersion: nativeTransportVersion,
+              steps: combinedSteps,
+              failedStepIndex: segment.sourceIndices.at(0),
+              output: nativeOutput.slice(0, 2e3),
+              outputTruncated: nativeOutput.length > 2e3
+            });
           }
           let stageCursor = 0;
           let reactFocusId = retainedReactFocusId ?? segment.initialReactFocusId;
@@ -81964,6 +81983,10 @@ function createRunActionHandler(deps = {}) {
     const preflightCommands = loaded.replay.commands;
     const forceReload = proofReplay ? false : args.forceReload !== false;
     const action = forceReload ? acknowledgeExternalEdit(loaded) : loaded;
+    const activeTarget = targetContext();
+    const replayPlatform = args.platform && activeTarget?.platform && args.platform !== activeTarget.platform ? void 0 : args.platform ?? activeTarget?.platform;
+    const iosProofPlan = replayPlatform === "ios" ? planIosProofDomains(preflightCommands, args.params ?? {}) : null;
+    const requiresNativeRuntime = iosProofPlan?.ok !== true || iosProofPlan.segments.some((segment) => segment.domain === "xctest-native");
     let engineStatus;
     try {
       engineStatus = await resolveEngineStatus();
@@ -81977,7 +82000,8 @@ function createRunActionHandler(deps = {}) {
     const compatRefusal = actionReplayPreflight({
       enginePin: action.metadata.enginePin,
       commands: preflightCommands,
-      engineStatus
+      engineStatus,
+      requireRuntimePin: requiresNativeRuntime
     });
     if (compatRefusal) {
       return failResult(compatRefusal, "ENGINE_PIN_MISMATCH", {
@@ -82009,7 +82033,6 @@ function createRunActionHandler(deps = {}) {
         });
       }
     };
-    const activeTarget = targetContext();
     if (args.platform && activeTarget?.platform && activeTarget.platform !== args.platform) {
       return failResult(`cdp_run_action: requested ${args.platform}, but the active session is ${activeTarget.platform}; refusing cross-platform replay.`, "TARGET_SESSION_MISMATCH", { requestedPlatform: args.platform, activeSession: activeTarget });
     }
@@ -82499,6 +82522,7 @@ var init_run_action = __esm({
     init_runtime();
     init_resolve_ios_app_file();
     init_action_engine_compat();
+    init_ios_proof_router();
     init_engine_pin();
     strictRunActionPolicy = /* @__PURE__ */ Symbol("strictRunActionPolicy");
     PROVEN_ENGINE_PIN_DIVERGENCE = /* @__PURE__ */ new Set(["drift-newer", "drift-older", "checksum-mismatch"]);
@@ -91137,9 +91161,6 @@ function createMaestroTestAllHandler(deps = {}) {
     }
     const requestedDeviceId = args.deviceId ?? matchingSessionDeviceId;
     const engineStatus = await resolveEngineStatus();
-    const pinRefusal = exactPinRefusal(engineStatus);
-    if (pinRefusal)
-      return failResult(pinRefusal);
     const root = findProjectRoot();
     const flowDir = args.flowDir ?? (root ? join52(root, ".rn-agent", "actions") : null);
     if (!flowDir) {
@@ -91166,6 +91187,11 @@ function createMaestroTestAllHandler(deps = {}) {
       return failResult(`Refusing learned-action corpus without an approved load context: ${resolvedFlowDir}.`);
     }
     const useSharedIosPlanner = learnedCorpus && platform === "ios" && deps.runFlow !== void 0;
+    if (!useSharedIosPlanner) {
+      const pinRefusal = exactPinRefusal(engineStatus);
+      if (pinRefusal)
+        return failResult(pinRefusal);
+    }
     const dispatch = useSharedIosPlanner ? {
       runner: "maestro-runner",
       binPath: "",
@@ -91212,11 +91238,17 @@ function createMaestroTestAllHandler(deps = {}) {
           meta = parseM7Header(yamlText, flowId);
           requireEnginePin = meta !== null || isLearnedActionPath(flow);
         }
+        const iosProofPlan = useSharedIosPlanner ? planIosProofDomains(parsedCommands, {}) : null;
+        if (iosProofPlan && !iosProofPlan.ok) {
+          throw new Error(`Refusing iOS proof-domain ambiguity at step ${iosProofPlan.sourceIndex}: ${iosProofPlan.reason}.`);
+        }
+        const requiresNativeRuntime = iosProofPlan?.ok !== true || iosProofPlan.segments.some((segment) => segment.domain === "xctest-native");
         const preflight2 = replayCompatibilityPreflight({
           enginePin: meta?.enginePin,
           commands: parsedCommands,
           engineStatus,
-          requireEnginePin
+          requireEnginePin,
+          requireRuntimePin: requiresNativeRuntime
         });
         if (preflight2)
           throw new Error(preflight2);
@@ -91506,6 +91538,7 @@ var init_maestro_test_all = __esm({
     init_maestro_run();
     init_maestro_error_parser();
     init_engine_pin();
+    init_ios_proof_router();
     init_action_engine_compat();
     init_reusable_action();
     init_action_store();

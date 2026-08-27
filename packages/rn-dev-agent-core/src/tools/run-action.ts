@@ -74,6 +74,7 @@ import {
 import { getWorkerAuthorityRuntime } from '../session/runtime.js';
 import { flowUsesClearState, resolveIosAppFile } from './resolve-ios-app-file.js';
 import { actionReplayPreflight } from '../domain/action-engine-compat.js';
+import { planIosProofDomains } from '../domain/ios-proof-router.js';
 import {
   getEngineStatus,
   PINNED_RUNNER_DIAGNOSE_HINT,
@@ -538,6 +539,16 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
     // get the strict Phase 129 "respect external edits" behavior back.
     const forceReload = proofReplay ? false : args.forceReload !== false;
     const action = forceReload ? acknowledgeExternalEdit(loaded) : loaded;
+    const activeTarget = targetContext();
+    const replayPlatform =
+      args.platform && activeTarget?.platform && args.platform !== activeTarget.platform
+        ? undefined
+        : (args.platform ?? activeTarget?.platform);
+    const iosProofPlan =
+      replayPlatform === 'ios' ? planIosProofDomains(preflightCommands, args.params ?? {}) : null;
+    const requiresNativeRuntime =
+      iosProofPlan?.ok !== true ||
+      iosProofPlan.segments.some((segment) => segment.domain === 'xctest-native');
 
     let engineStatus: ReplayEngineStatus | null;
     try {
@@ -553,6 +564,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
       enginePin: action.metadata.enginePin,
       commands: preflightCommands,
       engineStatus,
+      requireRuntimePin: requiresNativeRuntime,
     });
     if (compatRefusal) {
       return failResult(compatRefusal, 'ENGINE_PIN_MISMATCH', {
@@ -585,7 +597,6 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
         });
       }
     };
-    const activeTarget = targetContext();
     if (args.platform && activeTarget?.platform && activeTarget.platform !== args.platform) {
       return failResult(
         `cdp_run_action: requested ${args.platform}, but the active session is ${activeTarget.platform}; refusing cross-platform replay.`,

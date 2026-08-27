@@ -851,10 +851,28 @@ export function createMaestroRunHandler(
           proofDomains.push('react-tree');
           const replayDependencies = replayFactory!(args, controller.signal);
           if (!replayDependencies) {
+            const uniqueProofDomains = [...new Set(proofDomains)];
+            const proofDomain =
+              uniqueProofDomains.length === 1
+                ? (uniqueProofDomains.at(0) ?? 'partitioned')
+                : 'partitioned';
             return failResult(
               'React-tree replay requires the authority-bound bridgeless runtime. Reconnect the exact app bundle and retry.',
               'CDP_NOT_CONNECTED',
-              { proofDomain: 'react-tree' },
+              {
+                flowFile,
+                proofDomain,
+                proofDomains: uniqueProofDomains,
+                failedProofDomain: 'react-tree',
+                ...(proofDomain === 'partitioned'
+                  ? { runner: 'partitioned', transport: 'partitioned' }
+                  : {}),
+                transportVersion: nativeTransportVersion,
+                steps: combinedSteps,
+                failedStepIndex: segment.sourceIndices.at(0),
+                output: nativeOutput.slice(0, 2000),
+                outputTruncated: nativeOutput.length > 2000,
+              },
             );
           }
           let stageCursor = 0;

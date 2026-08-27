@@ -13561,12 +13561,18 @@ function regexSelectorCapabilityRefusal(commands) {
   return `Action uses regex text selectors (${selectors[0]}) which are not a validated maestro-runner ${MAESTRO_RUNNER_PIN.version} capability (GH #750 CONTAINS mistranslation). Rewrite as id or literal text selectors before replay. No UI mutation will run.`;
 }
 function actionReplayPreflight(opts) {
-  return replayCompatibilityPreflight({ ...opts, requireEnginePin: true });
+  return replayCompatibilityPreflight({
+    ...opts,
+    requireEnginePin: true,
+    requireRuntimePin: opts.requireRuntimePin
+  });
 }
 function replayCompatibilityPreflight(opts) {
-  const pin = exactPinRefusal(opts.engineStatus);
-  if (pin)
-    return pin;
+  if (opts.requireRuntimePin !== false) {
+    const pin = exactPinRefusal(opts.engineStatus);
+    if (pin)
+      return pin;
+  }
   if (opts.requireEnginePin) {
     const format = actionEnginePinRefusal(opts.enginePin);
     if (format)
@@ -15639,7 +15645,20 @@ function createMaestroRunHandler(deps = {}) {
           proofDomains.push("react-tree");
           const replayDependencies = replayFactory(args, controller.signal);
           if (!replayDependencies) {
-            return failResult("React-tree replay requires the authority-bound bridgeless runtime. Reconnect the exact app bundle and retry.", "CDP_NOT_CONNECTED", { proofDomain: "react-tree" });
+            const uniqueProofDomains = [...new Set(proofDomains)];
+            const proofDomain2 = uniqueProofDomains.length === 1 ? uniqueProofDomains.at(0) ?? "partitioned" : "partitioned";
+            return failResult("React-tree replay requires the authority-bound bridgeless runtime. Reconnect the exact app bundle and retry.", "CDP_NOT_CONNECTED", {
+              flowFile,
+              proofDomain: proofDomain2,
+              proofDomains: uniqueProofDomains,
+              failedProofDomain: "react-tree",
+              ...proofDomain2 === "partitioned" ? { runner: "partitioned", transport: "partitioned" } : {},
+              transportVersion: nativeTransportVersion,
+              steps: combinedSteps,
+              failedStepIndex: segment.sourceIndices.at(0),
+              output: nativeOutput.slice(0, 2e3),
+              outputTruncated: nativeOutput.length > 2e3
+            });
           }
           let stageCursor = 0;
           let reactFocusId = retainedReactFocusId ?? segment.initialReactFocusId;

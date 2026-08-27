@@ -58,8 +58,13 @@ export function actionReplayPreflight(opts: {
   enginePin?: string;
   commands: readonly unknown[];
   engineStatus: ReplayEngineStatus | null;
+  requireRuntimePin?: boolean;
 }): string | null {
-  return replayCompatibilityPreflight({ ...opts, requireEnginePin: true });
+  return replayCompatibilityPreflight({
+    ...opts,
+    requireEnginePin: true,
+    requireRuntimePin: opts.requireRuntimePin,
+  });
 }
 
 export function replayCompatibilityPreflight(opts: {
@@ -67,9 +72,12 @@ export function replayCompatibilityPreflight(opts: {
   commands: readonly unknown[];
   engineStatus: ReplayEngineStatus | null;
   requireEnginePin: boolean;
+  requireRuntimePin?: boolean;
 }): string | null {
-  const pin = exactPinRefusal(opts.engineStatus);
-  if (pin) return pin;
+  if (opts.requireRuntimePin !== false) {
+    const pin = exactPinRefusal(opts.engineStatus);
+    if (pin) return pin;
+  }
   if (opts.requireEnginePin) {
     const format = actionEnginePinRefusal(opts.enginePin);
     if (format) return format;

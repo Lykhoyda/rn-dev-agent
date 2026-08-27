@@ -34,6 +34,7 @@ import {
   runnerCacheBootstrapFailure,
   type ReplayEngineStatus,
 } from '../domain/engine-pin.js';
+import { planIosProofDomains } from '../domain/ios-proof-router.js';
 import {
   classifyLearnedActionPath,
   isLearnedActionPath,
@@ -191,8 +192,6 @@ export function createMaestroTestAllHandler(
     const requestedDeviceId = args.deviceId ?? matchingSessionDeviceId;
 
     const engineStatus = await resolveEngineStatus();
-    const pinRefusal = exactPinRefusal(engineStatus);
-    if (pinRefusal) return failResult(pinRefusal);
 
     const root = findProjectRoot();
     const flowDir = args.flowDir ?? (root ? join(root, '.rn-agent', 'actions') : null);
@@ -227,6 +226,10 @@ export function createMaestroTestAllHandler(
       );
     }
     const useSharedIosPlanner = learnedCorpus && platform === 'ios' && deps.runFlow !== undefined;
+    if (!useSharedIosPlanner) {
+      const pinRefusal = exactPinRefusal(engineStatus);
+      if (pinRefusal) return failResult(pinRefusal);
+    }
     const dispatch = useSharedIosPlanner
       ? {
           runner: 'maestro-runner' as const,
@@ -285,11 +288,21 @@ export function createMaestroTestAllHandler(
           meta = parseM7Header(yamlText, flowId);
           requireEnginePin = meta !== null || isLearnedActionPath(flow);
         }
+        const iosProofPlan = useSharedIosPlanner ? planIosProofDomains(parsedCommands, {}) : null;
+        if (iosProofPlan && !iosProofPlan.ok) {
+          throw new Error(
+            `Refusing iOS proof-domain ambiguity at step ${iosProofPlan.sourceIndex}: ${iosProofPlan.reason}.`,
+          );
+        }
+        const requiresNativeRuntime =
+          iosProofPlan?.ok !== true ||
+          iosProofPlan.segments.some((segment) => segment.domain === 'xctest-native');
         const preflight = replayCompatibilityPreflight({
           enginePin: meta?.enginePin,
           commands: parsedCommands,
           engineStatus,
           requireEnginePin,
+          requireRuntimePin: requiresNativeRuntime,
         });
         if (preflight) throw new Error(preflight);
         planMaestroAuthorityStages(parsedCommands);

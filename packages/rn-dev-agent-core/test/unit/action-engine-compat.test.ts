@@ -1143,6 +1143,73 @@ test('run-action pin mismatch refuses before maestro and before CDP probe', asyn
   }
 });
 
+test('run-action skips native runtime pin checks for an exact React-only action', async () => {
+  const project = createTmpProject();
+  try {
+    project.seedAction('react-only', actionYaml('react-only', `# enginePin: ${ACTION_ENGINE_PIN}`));
+    let maestroCalls = 0;
+    const handler = createRunActionHandler({
+      targetContext: () => ({ platform: 'ios', deviceId: 'SIM', appId: 'com.test.app' }),
+      engineStatus: async () => buildReplayEngineStatus('not-installed', null, false),
+      maestroRun: async () => {
+        maestroCalls += 1;
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({
+                ok: true,
+                data: {
+                  passed: true,
+                  runner: 'cdp-js',
+                  transport: 'cdp-js',
+                  proofDomain: 'react-tree',
+                  steps: [{ index: 0, verb: 'tap', status: 'pass', durationMs: 1 }],
+                },
+              }),
+            },
+          ],
+        };
+      },
+    });
+
+    const result = await handler({ actionId: 'react-only', projectRoot: project.root });
+    const body = JSON.parse(result.content[0]!.text);
+    assert.equal(body.ok, true);
+    assert.equal(body.data.proofDomain, 'react-tree');
+    assert.equal(maestroCalls, 1);
+  } finally {
+    project.cleanup();
+  }
+});
+
+test('run-action still requires the native runtime pin for a native proof segment', async () => {
+  const project = createTmpProject();
+  try {
+    project.seedAction(
+      'native-only',
+      actionYaml('native-only', `# enginePin: ${ACTION_ENGINE_PIN}`, '- tapOn: Continue\n'),
+    );
+    let maestroCalls = 0;
+    const handler = createRunActionHandler({
+      targetContext: () => ({ platform: 'ios', deviceId: 'SIM', appId: 'com.test.app' }),
+      engineStatus: async () => buildReplayEngineStatus('not-installed', null, false),
+      maestroRun: async () => {
+        maestroCalls += 1;
+        return { content: [{ type: 'text', text: '{"ok":true,"data":{"passed":true}}' }] };
+      },
+    });
+
+    const result = await handler({ actionId: 'native-only', projectRoot: project.root });
+    const body = JSON.parse(result.content[0]!.text);
+    assert.equal(body.ok, false);
+    assert.equal(body.code, 'ENGINE_PIN_MISMATCH');
+    assert.equal(maestroCalls, 0);
+  } finally {
+    project.cleanup();
+  }
+});
+
 test('actionReplayPreflight is session-pin then format then selector', () => {
   const drifted = buildReplayEngineStatus('drift-newer', '1.2.0', false);
   assert.match(
@@ -1186,6 +1253,26 @@ test('actionReplayPreflight is session-pin then format then selector', () => {
       engineStatus: PINNED(),
     }),
     null,
+  );
+  assert.equal(
+    actionReplayPreflight({
+      enginePin: ACTION_ENGINE_PIN,
+      commands: [{ tapOn: { id: 'x' } }],
+      engineStatus: buildReplayEngineStatus('not-installed', null, false),
+      requireRuntimePin: false,
+    }),
+    null,
+  );
+  assert.match(
+    String(
+      actionReplayPreflight({
+        enginePin: undefined,
+        commands: [{ tapOn: { id: 'x' } }],
+        engineStatus: buildReplayEngineStatus('not-installed', null, false),
+        requireRuntimePin: false,
+      }),
+    ),
+    /not migrated/,
   );
 });
 

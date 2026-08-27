@@ -1064,6 +1064,48 @@ test('partitioned React failures retain prior native proof evidence', async () =
   );
 });
 
+test('partitioned React setup failures retain prior native proof evidence', async () => {
+  const handler = createMaestroRunHandler({
+    getActiveSession: () => ({
+      name: 'partition-react-setup-failure',
+      platform: 'ios',
+      deviceId: IOS_UDID,
+      appId: 'com.example.app',
+      openedAt: new Date(0).toISOString(),
+    }),
+    replayDeps: () => null,
+    chooseDispatch: () => nativeDispatch(),
+    parkFlow: async (run) => run(),
+    resolveEngineStatus: async () =>
+      buildReplayEngineStatus('pinned-ok', MAESTRO_RUNNER_PIN.version, false),
+    execFile: async () => ({
+      stdout: nativeRunnerOutput('    ✓ assertVisible (0.1s)'),
+      stderr: '',
+    }),
+  });
+  const env = envelope(
+    await handler({
+      platform: 'ios',
+      deviceId: IOS_UDID,
+      inlineYaml: `appId: com.example.app\n---\n- assertVisible: Native status\n- assertVisible:\n    id: react-status\n`,
+      ...callbacks,
+    }),
+  );
+
+  assert.equal(env.ok, false);
+  assert.equal(env.code, 'CDP_NOT_CONNECTED');
+  assert.equal(env.meta?.proofDomain, 'partitioned');
+  assert.deepEqual(env.meta?.proofDomains, ['xctest-native', 'react-tree']);
+  assert.equal(env.meta?.failedProofDomain, 'react-tree');
+  assert.equal(env.meta?.runner, 'partitioned');
+  assert.equal(env.meta?.transport, 'partitioned');
+  assert.equal(env.meta?.failedStepIndex, 1);
+  assert.deepEqual(
+    env.meta?.steps.map((step: { index: number; status: string }) => [step.index, step.status]),
+    [[0, 'pass']],
+  );
+});
+
 test('partitioned warning failures retain native data evidence', async () => {
   const handler = createMaestroRunHandler({
     getActiveSession: () => ({
