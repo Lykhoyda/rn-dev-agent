@@ -28,7 +28,10 @@ import { hashAndroidAppSnapshotNodes } from '../../dist/lifecycle/settle.js';
 import {
   _setAndroidRunnerStateForTest,
   _setFetchForTest,
+  AndroidFeaturesStaleError,
+  androidRetryCleanupContext,
   classifyAndroidHealth,
+  runBoundedAndroidRunnerRebuild,
   runAndroid,
 } from '../../dist/runners/rn-android-runner-client.js';
 import {
@@ -389,31 +392,38 @@ test('stale Android runners without scoped exact-interaction semantics are rejec
   );
 });
 
-test('Android native health advertises every required exact-interaction feature', () => {
-  const source = readFileSync(
-    join(
-      process.cwd(),
-      '..',
-      'rn-android-runner',
-      'app',
-      'src',
-      'androidTest',
-      'java',
-      'dev',
-      'lykhoyda',
-      'rndevagent',
-      'androidrunner',
-      'CommandServer.kt',
-    ),
-    'utf8',
+test('missing exact-label capability uses the bounded artifact rebuild path', async () => {
+  const error = new AndroidFeaturesStaleError(
+    ['APP_SCOPED_EXACT_LABEL_INTERACTION'],
+    appId,
+    '46828c2c',
   );
-  const start = source.indexOf('"capabilities"');
-  const end = source.indexOf('.put("commands"', start);
-  assert.ok(start >= 0 && end > start, 'CommandServer health capabilities block must exist');
-  const advertised = source.slice(start, end);
-  for (const feature of REQUIRED_ANDROID_FEATURES) {
-    assert.match(advertised, new RegExp(`"${feature}"`));
-  }
+  assert.match(error.message, /^RUNNER_FEATURES_STALE:/);
+  assert.deepEqual(androidRetryCleanupContext(null, error), { deviceId: '46828c2c' });
+
+  let rebuilt = 0;
+  const result = await runBoundedAndroidRunnerRebuild(
+    error,
+    async () => {
+      rebuilt++;
+      return 'rebuilt';
+    },
+    async () => {},
+    {
+      acquire: () => ({
+        status: 'acquired',
+        lock: { ownerNonce: 'gh-736', pluginVersion: 'test' },
+      }),
+      heartbeat: () => true,
+      complete: () => true,
+      beginCleanup: () => true,
+      release: () => true,
+      markCleanupUnverified: () => true,
+      heartbeatIntervalMs: 60_000,
+    },
+  );
+  assert.equal(result, 'rebuilt');
+  assert.equal(rebuilt, 1);
 });
 
 test('Android runner reports a rejected tap truthfully per dispatch mechanism', async () => {

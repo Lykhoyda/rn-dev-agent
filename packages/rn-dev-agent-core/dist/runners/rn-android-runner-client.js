@@ -573,22 +573,30 @@ export function classifyAndroidHealth(info) {
         ...(info.capabilities !== undefined ? { capabilities: info.capabilities } : {}),
     }, getPluginVersion(), REQUIRED_ANDROID_COMMANDS, REQUIRED_ANDROID_FEATURES);
 }
-// GH #418: mid-flow refusal + retry-once signal. The message prefix is the
-// wire contract — device-session.ts and agent-device-wrapper.ts map it to the
-// RUNNER_COMMANDS_STALE ToolErrorCode by startsWith, mirroring
-// RUNNER_PROTOCOL_MISMATCH.
-export class AndroidCommandsStaleError extends Error {
+export class AndroidArtifactStaleError extends Error {
+    surface;
     missing;
     bundleId;
     deviceId;
-    constructor(missing, bundleId, deviceId, detail) {
-        super(`RUNNER_COMMANDS_STALE: ${detail ??
-            `installed rn-android-runner lacks required commands ` +
+    constructor(surface, missing, bundleId, deviceId, detail) {
+        super(`RUNNER_${surface.toUpperCase()}_STALE: ${detail ??
+            `installed rn-android-runner lacks required ${surface} ` +
                 `(missing: ${missing.join(', ') || 'unknown'}). Re-open the device session ` +
                 `(device_snapshot action=open appId=${bundleId ?? '<your.app.id>'} platform=android) to rebuild it.`}`);
+        this.surface = surface;
         this.missing = missing;
         this.bundleId = bundleId;
         this.deviceId = deviceId;
+    }
+}
+export class AndroidCommandsStaleError extends AndroidArtifactStaleError {
+    constructor(missing, bundleId, deviceId, detail) {
+        super('commands', missing, bundleId, deviceId, detail);
+    }
+}
+export class AndroidFeaturesStaleError extends AndroidArtifactStaleError {
+    constructor(missing, bundleId, deviceId, detail) {
+        super('features', missing, bundleId, deviceId, detail);
     }
 }
 export class AndroidAuthorityStaleError extends Error {
@@ -758,9 +766,11 @@ export function markAndroidRunnerRebuildCleanupUnverified(lock, now = Date.now()
     return finishAndroidRunnerRebuildLock(lock, 'failed', true, now, databasePath);
 }
 function androidRebuildRefusal(error, detail) {
-    return error instanceof AndroidAuthorityStaleError
-        ? new AndroidAuthorityStaleError(error.deviceId, detail)
-        : new AndroidCommandsStaleError(error.missing, error.bundleId, error.deviceId, detail);
+    if (error instanceof AndroidAuthorityStaleError) {
+        return new AndroidAuthorityStaleError(error.deviceId, detail);
+    }
+    const ErrorType = error.surface === 'features' ? AndroidFeaturesStaleError : AndroidCommandsStaleError;
+    return new ErrorType(error.missing, error.bundleId, error.deviceId, detail);
 }
 export async function runBoundedAndroidRunnerRebuild(error, rebuild, cleanup, dependencies = {}) {
     const pluginVersion = getPluginVersion() ?? 'unknown';
@@ -936,7 +946,7 @@ export async function startAndroidRunner(deviceId, bundleId, devicePort = DEFAUL
             pendingUpgradeNote = 'runner artifact rebuilt (authority identity mismatch)';
             return state;
         }
-        if (opts.allowArtifactRebuild && err instanceof AndroidCommandsStaleError) {
+        if (opts.allowArtifactRebuild && err instanceof AndroidArtifactStaleError) {
             // Killing the local adb child does NOT free the device-side
             // UiAutomation slot (#237) — reap through the slot-release path so the
             // rebuilt instrumentation can bind.
@@ -952,7 +962,7 @@ export async function startAndroidRunner(deviceId, bundleId, devicePort = DEFAUL
             }, async (signal) => {
                 await reapMismatchedAndroidRunner(androidRetryCleanupContext(runnerState, err), undefined, undefined, signal);
             });
-            pendingUpgradeNote = `runner artifact rebuilt (missing commands: ${err.missing.join(', ') || 'unknown'})`;
+            pendingUpgradeNote = `runner artifact rebuilt (missing ${err.surface}: ${err.missing.join(', ') || 'unknown'})`;
             return state;
         }
         throw err;
@@ -991,13 +1001,12 @@ async function startAndroidRunnerAttempt(deviceId, bundleId, devicePort = DEFAUL
                 const compat = classifyAndroidHealth(info);
                 if (compat.compatible)
                     return runnerState;
-                if (compat.reason === 'missing-commands') {
-                    // GH #418: reinstalling the SAME APK can't add commands — artifact
-                    // staleness. Always throw the typed error: the retry-once wrapper is
-                    // the SINGLE rebuild owner (one Gradle build even on a checkout whose
-                    // fresh build still misses commands — multi-review advisory); mid-flow
-                    // callers surface the typed refusal.
-                    throw new AndroidCommandsStaleError(compat.missing ?? [], bundleId, reusableState.deviceId);
+                if (compat.reason === 'missing-commands' || compat.reason === 'missing-features') {
+                    // Reinstalling the same artifact cannot add a missing command or capability.
+                    const ErrorType = compat.reason === 'missing-features'
+                        ? AndroidFeaturesStaleError
+                        : AndroidCommandsStaleError;
+                    throw new ErrorType(compat.missing ?? [], bundleId, reusableState.deviceId);
                 }
                 // GH #383: a reachable-but-incompatible runner is reaped (force-stop +
                 // state clear) and force-reinstalled so the fresh APK supersedes it.
@@ -1154,10 +1163,12 @@ async function startAndroidRunnerAttempt(deviceId, bundleId, devicePort = DEFAUL
                     resolved = true;
                     pendingUpgradeNote = undefined; // review amendment: never report an upgrade that failed
                     child.kill('SIGTERM');
-                    if (compat.reason === 'missing-commands') {
-                        // GH #418: typed — the wrapper's retry-once invalidates the APKs
-                        // at open; mid-flow callers surface RUNNER_COMMANDS_STALE.
-                        reject(new AndroidCommandsStaleError(compat.missing ?? [], bundleId, serial));
+                    if (compat.reason === 'missing-commands' || compat.reason === 'missing-features') {
+                        // The fresh-open path rebuilds a stale runner surface at most once.
+                        const ErrorType = compat.reason === 'missing-features'
+                            ? AndroidFeaturesStaleError
+                            : AndroidCommandsStaleError;
+                        reject(new ErrorType(compat.missing ?? [], bundleId, serial));
                         return;
                     }
                     reject(new Error(`RUNNER_PROTOCOL_MISMATCH: installed rn-android-runner speaks protocol ` +

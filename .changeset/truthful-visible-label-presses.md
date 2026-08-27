@@ -3,4 +3,4 @@
 "rn-dev-agent-plugin": patch
 ---
 
-Actuate identifierless Android visible-label controls through their exact app-owned accessibility descriptor instead of raw coordinates.
+Actuate identifierless Android visible-label controls through their exact app-owned accessibility descriptor and rebuild stale runner artifacts when required interaction capabilities change.

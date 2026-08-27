@@ -319,10 +319,12 @@ export function createDeviceSnapshotHandler(deps = {}) {
                 if (err instanceof AndroidAppLaunchError) {
                     return failResult(msg, 'APP_LAUNCH_FAILED');
                 }
-                // GH #418: even the open-path rebuild couldn't produce a runner with
-                // the required commands — the checkout itself is suspect.
+                // The open-path rebuild still lacks the required runner surface.
                 if (msg.startsWith('RUNNER_COMMANDS_STALE')) {
                     return failResult(msg, 'RUNNER_COMMANDS_STALE');
+                }
+                if (msg.startsWith('RUNNER_FEATURES_STALE')) {
+                    return failResult(msg, 'RUNNER_FEATURES_STALE');
                 }
                 // GH #383: a protocol mismatch that survived the reap+reinstall is a
                 // distinct, actionable failure — surface it, not the generic runner-down.

@@ -327,6 +327,7 @@ export type ToolErrorCode =
   // GH #418: command-surface gate.
   | 'UNSUPPORTED_COMMAND' // runner rejected a verb its artifact predates (typed by the runner)
   | 'RUNNER_COMMANDS_STALE' // liveness gate: artifact lacks required commands; re-open to rebuild
+  | 'RUNNER_FEATURES_STALE' // liveness gate: artifact lacks required capabilities; re-open to rebuild
   | 'DEVICE_RESET_INVALID_APPID' // device_reset_state
   | 'INVALID_PACKAGE_NAME' // device_deeplink
   | 'INVALID_BUNDLE_ID' // GH #262 codex-pair: cdp_restart explicit bundleId arg failed strict validation

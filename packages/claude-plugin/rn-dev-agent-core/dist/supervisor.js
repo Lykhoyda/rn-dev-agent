@@ -26834,6 +26834,9 @@ async function runNative(cliArgs, opts = {}) {
         if (msg3.startsWith("RUNNER_COMMANDS_STALE")) {
           return failResult(msg3, "RUNNER_COMMANDS_STALE");
         }
+        if (msg3.startsWith("RUNNER_FEATURES_STALE")) {
+          return failResult(msg3, "RUNNER_FEATURES_STALE");
+        }
         if (msg3.startsWith("RUNNER_PROTOCOL_MISMATCH")) {
           return failResult(msg3, "RUNNER_PROTOCOL_MISMATCH");
         }
@@ -35687,6 +35690,9 @@ function createDeviceSnapshotHandler(deps = {}) {
         if (msg3.startsWith("RUNNER_COMMANDS_STALE")) {
           return failResult(msg3, "RUNNER_COMMANDS_STALE");
         }
+        if (msg3.startsWith("RUNNER_FEATURES_STALE")) {
+          return failResult(msg3, "RUNNER_FEATURES_STALE");
+        }
         if (msg3.startsWith("RUNNER_PROTOCOL_MISMATCH")) {
           return failResult(msg3, "RUNNER_PROTOCOL_MISMATCH");
         }
@@ -38034,8 +38040,10 @@ var init_free_port = __esm({
 // packages/rn-dev-agent-core/dist/runners/rn-android-runner-client.js
 var rn_android_runner_client_exports = {};
 __export(rn_android_runner_client_exports, {
+  AndroidArtifactStaleError: () => AndroidArtifactStaleError,
   AndroidAuthorityStaleError: () => AndroidAuthorityStaleError,
   AndroidCommandsStaleError: () => AndroidCommandsStaleError,
+  AndroidFeaturesStaleError: () => AndroidFeaturesStaleError,
   _androidRunnerApkPathsForTest: () => _androidRunnerApkPathsForTest,
   _resetCapabilitiesForTest: () => _resetCapabilitiesForTest2,
   _setAndroidRunnerStateForTest: () => _setAndroidRunnerStateForTest,
@@ -38627,7 +38635,11 @@ function markAndroidRunnerRebuildCleanupUnverified(lock, now = Date.now(), datab
   return finishAndroidRunnerRebuildLock(lock, "failed", true, now, databasePath);
 }
 function androidRebuildRefusal(error2, detail) {
-  return error2 instanceof AndroidAuthorityStaleError ? new AndroidAuthorityStaleError(error2.deviceId, detail) : new AndroidCommandsStaleError(error2.missing, error2.bundleId, error2.deviceId, detail);
+  if (error2 instanceof AndroidAuthorityStaleError) {
+    return new AndroidAuthorityStaleError(error2.deviceId, detail);
+  }
+  const ErrorType = error2.surface === "features" ? AndroidFeaturesStaleError : AndroidCommandsStaleError;
+  return new ErrorType(error2.missing, error2.bundleId, error2.deviceId, detail);
 }
 async function runBoundedAndroidRunnerRebuild(error2, rebuild, cleanup, dependencies = {}) {
   const pluginVersion = getPluginVersion() ?? "unknown";
@@ -38784,7 +38796,7 @@ async function startAndroidRunner(deviceId, bundleId, devicePort = DEFAULT_PORT,
       pendingUpgradeNote = "runner artifact rebuilt (authority identity mismatch)";
       return state;
     }
-    if (opts.allowArtifactRebuild && err instanceof AndroidCommandsStaleError) {
+    if (opts.allowArtifactRebuild && err instanceof AndroidArtifactStaleError) {
       const state = await runBoundedAndroidRunnerRebuild(err, async (signal) => {
         await reapMismatchedAndroidRunner(androidRetryCleanupContext(runnerState2, err), void 0, void 0, signal);
         signal.throwIfAborted();
@@ -38797,7 +38809,7 @@ async function startAndroidRunner(deviceId, bundleId, devicePort = DEFAULT_PORT,
       }, async (signal) => {
         await reapMismatchedAndroidRunner(androidRetryCleanupContext(runnerState2, err), void 0, void 0, signal);
       });
-      pendingUpgradeNote = `runner artifact rebuilt (missing commands: ${err.missing.join(", ") || "unknown"})`;
+      pendingUpgradeNote = `runner artifact rebuilt (missing ${err.surface}: ${err.missing.join(", ") || "unknown"})`;
       return state;
     }
     throw err;
@@ -38833,8 +38845,9 @@ async function startAndroidRunnerAttempt(deviceId, bundleId, devicePort = DEFAUL
         const compat = classifyAndroidHealth(info);
         if (compat.compatible)
           return runnerState2;
-        if (compat.reason === "missing-commands") {
-          throw new AndroidCommandsStaleError(compat.missing ?? [], bundleId, reusableState.deviceId);
+        if (compat.reason === "missing-commands" || compat.reason === "missing-features") {
+          const ErrorType = compat.reason === "missing-features" ? AndroidFeaturesStaleError : AndroidCommandsStaleError;
+          throw new ErrorType(compat.missing ?? [], bundleId, reusableState.deviceId);
         }
         pendingUpgradeNote = "runner upgraded (protocol/version mismatch)";
         forceReinstall = true;
@@ -38979,8 +38992,9 @@ ${diag.trim()}` : ""}`));
           resolved = true;
           pendingUpgradeNote = void 0;
           child.kill("SIGTERM");
-          if (compat.reason === "missing-commands") {
-            reject(new AndroidCommandsStaleError(compat.missing ?? [], bundleId, serial));
+          if (compat.reason === "missing-commands" || compat.reason === "missing-features") {
+            const ErrorType = compat.reason === "missing-features" ? AndroidFeaturesStaleError : AndroidCommandsStaleError;
+            reject(new ErrorType(compat.missing ?? [], bundleId, serial));
             return;
           }
           reject(new Error(`RUNNER_PROTOCOL_MISMATCH: installed rn-android-runner speaks protocol ${info.protocolVersion ?? "none"} (bridge expects ${RUNNER_PROTOCOL_VERSION}). Rebuild + reinstall the runner APKs: cd ${RN_ANDROID_RUNNER_DIR} && ./gradlew :app:assembleDebug :app:assembleDebugAndroidTest, then adb install -r both APKs.`));
@@ -39309,7 +39323,7 @@ function errMessage(err) {
 function isAndroidConnectionFailure(message) {
   return /fetch failed|ECONNREFUSED|ECONNRESET|socket hang up|rn-android-runner not started|did not become ready|Android runner instrumentation exited before readiness|Failed to spawn Android runner instrumentation/i.test(message);
 }
-var execFileAsync2, DEFAULT_PORT, READY_TIMEOUT_MS2, INSTRUMENTATION, MAIN_LOOP_CLASS, HEALTH_POLL_INTERVAL_MS, HEALTH_PROBE_TIMEOUT_MS, RN_ANDROID_RUNNER_DIR, GRADLEW, APK_APP, APK_TEST, ANDROID_REBUILD_ROOT, ANDROID_REBUILD_LOCK_DATABASE, ANDROID_REBUILD_LOCK_STALE_MS, ANDROID_REBUILD_HEARTBEAT_MS, ANDROID_REBUILD_COMPLETION_RETRY_MS, ANDROID_REBUILD_COMPLETION_ATTEMPTS, ANDROID_REBUILD_CLEANUP_TIMEOUT_MS, ADB_CLEANUP_TIMEOUT_MS, GRADLE_BUILD_TIMEOUT_MS, ADB_INSTALL_TIMEOUT_MS, runnerProcess2, runnerState2, fetchImpl2, testAuthorityState, lastKnownCapabilities2, pendingUpgradeNote, AndroidCommandsStaleError, AndroidAuthorityStaleError, RUNNER_APK_PATHS, STATUS_PROBE_TIMEOUT_MS2;
+var execFileAsync2, DEFAULT_PORT, READY_TIMEOUT_MS2, INSTRUMENTATION, MAIN_LOOP_CLASS, HEALTH_POLL_INTERVAL_MS, HEALTH_PROBE_TIMEOUT_MS, RN_ANDROID_RUNNER_DIR, GRADLEW, APK_APP, APK_TEST, ANDROID_REBUILD_ROOT, ANDROID_REBUILD_LOCK_DATABASE, ANDROID_REBUILD_LOCK_STALE_MS, ANDROID_REBUILD_HEARTBEAT_MS, ANDROID_REBUILD_COMPLETION_RETRY_MS, ANDROID_REBUILD_COMPLETION_ATTEMPTS, ANDROID_REBUILD_CLEANUP_TIMEOUT_MS, ADB_CLEANUP_TIMEOUT_MS, GRADLE_BUILD_TIMEOUT_MS, ADB_INSTALL_TIMEOUT_MS, runnerProcess2, runnerState2, fetchImpl2, testAuthorityState, lastKnownCapabilities2, pendingUpgradeNote, AndroidArtifactStaleError, AndroidCommandsStaleError, AndroidFeaturesStaleError, AndroidAuthorityStaleError, RUNNER_APK_PATHS, STATUS_PROBE_TIMEOUT_MS2;
 var init_rn_android_runner_client = __esm({
   "packages/rn-dev-agent-core/dist/runners/rn-android-runner-client.js"() {
     "use strict";
@@ -39350,15 +39364,27 @@ var init_rn_android_runner_client = __esm({
     fetchImpl2 = globalThis.fetch;
     testAuthorityState = false;
     lastKnownCapabilities2 = [];
-    AndroidCommandsStaleError = class extends Error {
+    AndroidArtifactStaleError = class extends Error {
+      surface;
       missing;
       bundleId;
       deviceId;
-      constructor(missing, bundleId, deviceId, detail) {
-        super(`RUNNER_COMMANDS_STALE: ${detail ?? `installed rn-android-runner lacks required commands (missing: ${missing.join(", ") || "unknown"}). Re-open the device session (device_snapshot action=open appId=${bundleId ?? "<your.app.id>"} platform=android) to rebuild it.`}`);
+      constructor(surface, missing, bundleId, deviceId, detail) {
+        super(`RUNNER_${surface.toUpperCase()}_STALE: ${detail ?? `installed rn-android-runner lacks required ${surface} (missing: ${missing.join(", ") || "unknown"}). Re-open the device session (device_snapshot action=open appId=${bundleId ?? "<your.app.id>"} platform=android) to rebuild it.`}`);
+        this.surface = surface;
         this.missing = missing;
         this.bundleId = bundleId;
         this.deviceId = deviceId;
+      }
+    };
+    AndroidCommandsStaleError = class extends AndroidArtifactStaleError {
+      constructor(missing, bundleId, deviceId, detail) {
+        super("commands", missing, bundleId, deviceId, detail);
+      }
+    };
+    AndroidFeaturesStaleError = class extends AndroidArtifactStaleError {
+      constructor(missing, bundleId, deviceId, detail) {
+        super("features", missing, bundleId, deviceId, detail);
       }
     };
     AndroidAuthorityStaleError = class extends Error {
