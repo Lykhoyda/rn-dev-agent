@@ -2989,7 +2989,7 @@ test('iOS hard reset returns a typed failure for conflicting session arguments',
   assert.equal(envelope.code, 'DEVICE_AUTHORITY_MISMATCH');
 });
 
-test('a failed login replay leaves every mutating tool admissible', async () => {
+test('a failed login replay sets no latch, so mutating tools stay admissible', async () => {
   const { runtime, status } = fixture();
   const gate = createAuthorityGate(runtime, {
     probe: async ({ axis }) => ({ axis, identity: `${axis}-identity` }),

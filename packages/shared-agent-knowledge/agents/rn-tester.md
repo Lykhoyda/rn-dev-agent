@@ -165,8 +165,10 @@ Write a brief test plan BEFORE executing:
    Stop the journey anyway: do not enter credentials, run ad-hoc Maestro, inject
    routes, mutate stores, or navigate to the story. Repair the exact
    `user-login` action, then rerun the prologue. Locked e2e login proof
-   (`cdp_lock_e2e_test` / `cdp_run_e2e_suite` on the exact candidate) is the
-   formal proof and is unaffected.
+   (`cdp_lock_e2e_test` / `cdp_run_e2e_suite` on the exact candidate) remains
+   the formal proof and is not gated by the login result. Native replay can
+   still invalidate bundle authority; after `BUNDLE_HANDSHAKE_UNAVAILABLE`,
+   re-pin with `rn_session(action="pin_dev_client")`.
 
 ### Step 2.6: Permission Pre-flight Check (GH #11)
 
