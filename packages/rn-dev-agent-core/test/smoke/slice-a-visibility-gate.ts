@@ -1,8 +1,5 @@
-// Slice A real-device gate (#627): drives the SHIPPED injected helper through
-// CDP against the real RN 0.85 / React 19.2.3 test app. No renderer or
-// UIManager is mocked here — that mocking is what made three earlier heads
-// ship a layout proof the platform cannot satisfy.
-// Env: SLICE_A_APP_ROOT (test-app checkout), SLICE_A_APP_ID, SLICE_A_DEVICE_ID.
+// Slice A real-device gate: the shipped injected helper over CDP against the
+// real RN 0.85 app, nothing mocked. Env: SLICE_A_APP_ROOT/_APP_ID/_DEVICE_ID.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { writeFileSync, mkdirSync, existsSync } from 'node:fs';
@@ -26,6 +23,13 @@ const OCCLUSION_PAIR = ['qa-covered-btn', 'qa-uncovered-btn'];
 // Only mounted once the FAB opens the menu, so its appearance is a real mutation.
 const MENU_OPTION_ID = 'quick-add-task';
 const SUCCESS_TARGET = 5;
+type AssertVisibleResult = {
+  passed: boolean;
+  proofDomain: string | null;
+  code?: string | null;
+  error?: string;
+};
+
 const BRINGUP_TIMEOUT_MS = Number(process.env.SLICE_A_BRINGUP_TIMEOUT_MS ?? 1_500_000);
 
 if (!APP_ROOT) {
@@ -224,10 +228,8 @@ test('Slice A visibility gate (real device, no mocks)', { timeout: 900_000 }, as
       `cdp_connect must bind the real app: ${connect.text.slice(0, 400)}`,
     );
 
-    // maestro_run refuses with RUNNER_OWNERSHIP_MISMATCH until the runner (R)
-    // axis is bound, and device_snapshot action=open is what binds it. The app
-    // is already running from the managed launcher, so attach instead of
-    // relaunching into a bundle-load race.
+    // maestro_run refuses with RUNNER_OWNERSHIP_MISMATCH until device_snapshot
+    // action=open binds the runner axis. Attach; the launcher already started it.
     const runner = await callTool(s, 'device_snapshot', {
       action: 'open',
       platform: 'ios',
@@ -249,9 +251,7 @@ test('Slice A visibility gate (real device, no mocks)', { timeout: 900_000 }, as
       Array.isArray(primitives.renderers) && primitives.renderers.length > 0,
       'at least one React renderer must be registered',
     );
-    // Slice A depends on NO layout primitive. Assert that explicitly: if a
-    // renderer ever grows findHostInstanceByFiber, Slice B should reconsider,
-    // but Slice A must never require it.
+    // Slice A requires no layout primitive; availability is recorded, not asserted.
     const anyFindHost = primitives.renderers.some(
       (r: any) => r.findHostInstanceByFiber === 'function',
     );
@@ -276,7 +276,7 @@ test('Slice A visibility gate (real device, no mocks)', { timeout: 900_000 }, as
 
     // 3. assertVisible must now succeed for those ref-less hosts.
     const passedIds: string[] = [];
-    const perId: Record<string, unknown> = {};
+    const perId: Record<string, AssertVisibleResult> = {};
     for (const id of [...REF_LESS_IDS, REF_BEARING_ID]) {
       const run = await callTool(s, 'maestro_run', {
         inlineYaml: assertVisibleFlow(id),
@@ -303,18 +303,14 @@ test('Slice A visibility gate (real device, no mocks)', { timeout: 900_000 }, as
 
     for (const id of REF_LESS_IDS) {
       assert.equal(
-        (perId[id] as any).passed,
+        perId[id].passed,
         true,
         `ref-less host ${id} must assert visible under Slice A: ${JSON.stringify(perId[id])}`,
       );
     }
 
     // 4. Ref-bearing control asserts AND a replay press mutates observable state.
-    assert.equal(
-      (perId[REF_BEARING_ID] as any).passed,
-      true,
-      `${REF_BEARING_ID} must assert visible`,
-    );
+    assert.equal(perId[REF_BEARING_ID].passed, true, `${REF_BEARING_ID} must assert visible`);
     const before = await evaluate(s, hostProbe(MENU_OPTION_ID));
     const press = await callTool(s, 'maestro_run', {
       inlineYaml: `appId: ${APP_ID}\n---\n- tapOn:\n    id: "${REF_BEARING_ID}"\n`,
@@ -364,15 +360,15 @@ test('Slice A visibility gate (real device, no mocks)', { timeout: 900_000 }, as
     );
     // The app root is shared, so each teardown step runs independently: one
     // failure must not skip the integration restore.
-    for (const step of [
-      ...(runnerOpened ? ([['device_snapshot', { action: 'close' }]] as const) : ([] as const)),
-      ['cdp_disconnect', {}],
-      ['rn_session', { action: 'stop_metro' }],
-      ['rn_session', { action: 'restore_integration', confirmed: true }],
-      ['rn_session', { action: 'release' }],
-    ] as const) {
+    const teardownSteps: Array<[string, Record<string, unknown>]> = [];
+    if (runnerOpened) teardownSteps.push(['device_snapshot', { action: 'close' }]);
+    teardownSteps.push(['cdp_disconnect', {}]);
+    teardownSteps.push(['rn_session', { action: 'stop_metro' }]);
+    teardownSteps.push(['rn_session', { action: 'restore_integration', confirmed: true }]);
+    teardownSteps.push(['rn_session', { action: 'release' }]);
+    for (const [toolName, toolArgs] of teardownSteps) {
       try {
-        await callTool(s, step[0], step[1] as Record<string, unknown>);
+        await callTool(s, toolName, toolArgs);
       } catch {
         // Best-effort; the kills below are authoritative.
       }
