@@ -517,6 +517,33 @@ function makeFrontmostSandbox(root: any, navState: Record<string, unknown>) {
   return sandbox;
 }
 
+const viewportRect = { x: 0, y: 0, width: 390, height: 844 };
+
+interface LayoutBoundsInstance {
+  getBoundingClientRect(): Record<string, number>;
+  ownerDocument?: { documentElement: LayoutBoundsInstance };
+  parentElement?: LayoutBoundsInstance | null;
+}
+
+function layoutStateNode(
+  rect: Record<string, number>,
+  viewport = viewportRect,
+  parentElement: LayoutBoundsInstance | null = null,
+) {
+  const documentElement: LayoutBoundsInstance = {
+    getBoundingClientRect: () => viewport,
+  };
+  return {
+    canonical: {
+      publicInstance: {
+        ownerDocument: { documentElement },
+        parentElement,
+        getBoundingClientRect: () => rect,
+      },
+    },
+  };
+}
+
 function routeTree(testID: string, route: string) {
   const root: any = {
     type: { displayName: 'Root' },
@@ -535,6 +562,7 @@ function routeTree(testID: string, route: string) {
   const target: any = {
     type: { displayName: 'View' },
     memoizedProps: { testID },
+    stateNode: layoutStateNode({ x: 20, y: 80, width: 120, height: 44 }),
     return: screen,
     child: null,
     sibling: null,
@@ -562,6 +590,110 @@ test('current-route ID is frontmost', () => {
   const verdict = JSON.parse(sandbox.__RN_AGENT.isTestIdFrontmost('coverage'));
   assert.equal(verdict.visible, true);
   assert.equal(verdict.activeRoute, 'home');
+});
+
+test('a mounted testID without native layout proof fails closed', () => {
+  const root = routeTree('coverage', 'home');
+  root.child.child.stateNode = null;
+  const sandbox = makeFrontmostSandbox(root, {
+    index: 0,
+    routes: [{ name: 'home' }],
+  });
+  const verdict = JSON.parse(sandbox.__RN_AGENT.isTestIdFrontmost('coverage'));
+  assert.equal(verdict.visible, false);
+  assert.equal(verdict.code, 'ASSERTION_FAILED');
+  assert.match(verdict.reason, /layout visibility cannot be proven/);
+});
+
+test('a zero-size mounted testID is not visible', () => {
+  const root = routeTree('coverage', 'home');
+  root.child.child.stateNode = layoutStateNode({ x: 20, y: 80, width: 0, height: 44 });
+  const sandbox = makeFrontmostSandbox(root, {
+    index: 0,
+    routes: [{ name: 'home' }],
+  });
+  const verdict = JSON.parse(sandbox.__RN_AGENT.isTestIdFrontmost('coverage'));
+  assert.equal(verdict.visible, false);
+  assert.match(verdict.reason, /zero-size/);
+});
+
+test('a mounted testID outside the native viewport is not visible', () => {
+  const root = routeTree('coverage', 'home');
+  root.child.child.stateNode = layoutStateNode({ x: 20, y: 900, width: 120, height: 44 });
+  const sandbox = makeFrontmostSandbox(root, {
+    index: 0,
+    routes: [{ name: 'home' }],
+  });
+  const verdict = JSON.parse(sandbox.__RN_AGENT.isTestIdFrontmost('coverage'));
+  assert.equal(verdict.visible, false);
+  assert.match(verdict.reason, /outside the visible viewport/);
+});
+
+test('a mounted testID outside a native ancestor boundary is not visible', () => {
+  const root = routeTree('coverage', 'home');
+  const nativeAncestor: LayoutBoundsInstance = {
+    getBoundingClientRect: () => ({ x: 0, y: 100, width: 390, height: 300 }),
+    parentElement: null,
+  };
+  root.child.child.stateNode = layoutStateNode(
+    { x: 20, y: 600, width: 120, height: 44 },
+    viewportRect,
+    nativeAncestor,
+  );
+  const sandbox = makeFrontmostSandbox(root, {
+    index: 0,
+    routes: [{ name: 'home' }],
+  });
+  const verdict = JSON.parse(sandbox.__RN_AGENT.isTestIdFrontmost('coverage'));
+  assert.equal(verdict.visible, false);
+  assert.match(verdict.reason, /outside an ancestor layout boundary/);
+});
+
+test('a mounted testID outside its ScrollView viewport is not visible', () => {
+  const root = routeTree('coverage', 'home');
+  const screen = root.child;
+  const target = screen.child;
+  const scrollView: any = {
+    type: { displayName: 'RCTScrollView' },
+    memoizedProps: {},
+    stateNode: layoutStateNode({ x: 0, y: 100, width: 390, height: 300 }),
+    return: screen,
+    child: target,
+    sibling: null,
+  };
+  screen.child = scrollView;
+  target.return = scrollView;
+  target.stateNode = layoutStateNode({ x: 20, y: 600, width: 120, height: 44 });
+  const sandbox = makeFrontmostSandbox(root, {
+    index: 0,
+    routes: [{ name: 'home' }],
+  });
+  const verdict = JSON.parse(sandbox.__RN_AGENT.isTestIdFrontmost('coverage'));
+  assert.equal(verdict.visible, false);
+  assert.match(verdict.reason, /clipped by an ancestor viewport/);
+});
+
+test('a visible testID inside its ScrollView viewport remains frontmost', () => {
+  const root = routeTree('coverage', 'home');
+  const screen = root.child;
+  const target = screen.child;
+  const scrollView: any = {
+    type: { displayName: 'RCTScrollView' },
+    memoizedProps: {},
+    stateNode: layoutStateNode({ x: 0, y: 100, width: 390, height: 300 }),
+    return: screen,
+    child: target,
+    sibling: null,
+  };
+  screen.child = scrollView;
+  target.return = scrollView;
+  target.stateNode = layoutStateNode({ x: 20, y: 140, width: 120, height: 44 });
+  const sandbox = makeFrontmostSandbox(root, {
+    index: 0,
+    routes: [{ name: 'home' }],
+  });
+  const verdict = JSON.parse(sandbox.__RN_AGENT.isTestIdFrontmost('coverage'));
+  assert.equal(verdict.visible, true);
 });
 
 test('an inactive mounted modal does not mask the current route', () => {
@@ -658,6 +790,7 @@ test('propagated testIDs on one fiber lineage remain one logical match', () => {
   const propagated = {
     type: { displayName: 'HostView' },
     memoizedProps: { testID: 'coverage' },
+    stateNode: layoutStateNode({ x: 20, y: 80, width: 120, height: 44 }),
     return: root.child.child,
     child: null,
     sibling: null,

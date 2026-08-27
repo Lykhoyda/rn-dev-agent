@@ -63603,7 +63603,7 @@ var HELPERS_VERSION, INJECTED_HELPERS, NETWORK_HOOK_SCRIPT, NETWORK_CB_BUFFERED_
 var init_injected_helpers = __esm({
   "packages/rn-dev-agent-core/dist/injected-helpers.js"() {
     "use strict";
-    HELPERS_VERSION = 46;
+    HELPERS_VERSION = 47;
     INJECTED_HELPERS = `
 (function() {
   var __HELPERS_VERSION__ = ${HELPERS_VERSION};
@@ -67451,6 +67451,189 @@ var init_injected_helpers = __esm({
           matchCount: 1
         });
       }
+    }
+
+    function publicInstanceFor(fiber) {
+      if (!fiber) return null;
+      var stateNode = fiber.stateNode;
+      if (
+        stateNode &&
+        stateNode.canonical &&
+        stateNode.canonical.publicInstance
+      ) {
+        stateNode = stateNode.canonical.publicInstance;
+      }
+      return stateNode && typeof stateNode.getBoundingClientRect === 'function'
+        ? stateNode
+        : null;
+    }
+    function readRect(instance) {
+      if (!instance || typeof instance.getBoundingClientRect !== 'function') return null;
+      try {
+        var raw = instance.getBoundingClientRect();
+        var x = typeof raw.x === 'number' ? raw.x : raw.left;
+        var y = typeof raw.y === 'number' ? raw.y : raw.top;
+        var width = raw.width;
+        var height = raw.height;
+        if (
+          !Number.isFinite(x) ||
+          !Number.isFinite(y) ||
+          !Number.isFinite(width) ||
+          !Number.isFinite(height)
+        ) return null;
+        return { x: x, y: y, width: width, height: height };
+      } catch (_) {
+        return null;
+      }
+    }
+    function intersects(a, b) {
+      return (
+        Math.min(a.x + a.width, b.x + b.width) > Math.max(a.x, b.x) &&
+        Math.min(a.y + a.height, b.y + b.height) > Math.max(a.y, b.y)
+      );
+    }
+    var layoutFiber = null;
+    var layoutInstance = null;
+    for (var layoutIndex = 0; layoutIndex < matches.length; layoutIndex++) {
+      var candidate = matches[layoutIndex];
+      if (!containsFiber(target, candidate) && !containsFiber(candidate, target)) continue;
+      var candidateInstance = publicInstanceFor(candidate);
+      if (!candidateInstance) continue;
+      if (!layoutFiber || containsFiber(layoutFiber, candidate)) {
+        layoutFiber = candidate;
+        layoutInstance = candidateInstance;
+      }
+    }
+    if (!layoutFiber || !layoutInstance) {
+      return JSON.stringify({
+        visible: false,
+        reason: 'native layout visibility cannot be proven for the matched testID',
+        code: 'ASSERTION_FAILED',
+        matchCount: 1
+      });
+    }
+    var targetRect = readRect(layoutInstance);
+    if (!targetRect) {
+      return JSON.stringify({
+        visible: false,
+        reason: 'native layout bounds are unavailable for the matched testID',
+        code: 'ASSERTION_FAILED',
+        matchCount: 1
+      });
+    }
+    if (targetRect.width <= 0 || targetRect.height <= 0) {
+      return JSON.stringify({
+        visible: false,
+        reason: 'testID has zero-size native layout',
+        matchCount: 1
+      });
+    }
+    var viewport = null;
+    try {
+      viewport = readRect(
+        layoutInstance.ownerDocument && layoutInstance.ownerDocument.documentElement
+      );
+    } catch (_) {}
+    if (!viewport || viewport.width <= 0 || viewport.height <= 0) {
+      return JSON.stringify({
+        visible: false,
+        reason: 'native viewport bounds are unavailable for the matched testID',
+        code: 'ASSERTION_FAILED',
+        matchCount: 1
+      });
+    }
+    if (!intersects(targetRect, viewport)) {
+      return JSON.stringify({
+        visible: false,
+        reason: 'testID native layout is outside the visible viewport',
+        matchCount: 1
+      });
+    }
+    var nativeAncestor = null;
+    try {
+      nativeAncestor = layoutInstance.parentElement;
+    } catch (_) {
+      return JSON.stringify({
+        visible: false,
+        reason: 'native ancestor layout is unavailable for the matched testID',
+        code: 'ASSERTION_FAILED',
+        matchCount: 1
+      });
+    }
+    var nativeDepth = 0;
+    while (nativeAncestor) {
+      if (++nativeDepth > 1000) {
+        return JSON.stringify({
+          visible: false,
+          reason: 'native ancestor layout exceeded its bounded visibility budget',
+          code: 'ASSERTION_FAILED',
+          matchCount: 1
+        });
+      }
+      var nativeAncestorRect = readRect(nativeAncestor);
+      if (!nativeAncestorRect) {
+        return JSON.stringify({
+          visible: false,
+          reason: 'native ancestor bounds are unavailable for the matched testID',
+          code: 'ASSERTION_FAILED',
+          matchCount: 1
+        });
+      }
+      if (
+        nativeAncestorRect.width <= 0 ||
+        nativeAncestorRect.height <= 0 ||
+        !intersects(targetRect, nativeAncestorRect)
+      ) {
+        return JSON.stringify({
+          visible: false,
+          reason: 'testID native layout is outside an ancestor layout boundary',
+          matchCount: 1
+        });
+      }
+      try {
+        nativeAncestor = nativeAncestor.parentElement;
+      } catch (_) {
+        return JSON.stringify({
+          visible: false,
+          reason: 'native ancestor layout is unavailable for the matched testID',
+          code: 'ASSERTION_FAILED',
+          matchCount: 1
+        });
+      }
+    }
+    var layoutAncestor = layoutFiber.return;
+    var layoutDepth = 0;
+    while (layoutAncestor && layoutDepth++ < 1000) {
+      var ancestorProps = layoutAncestor.memoizedProps || {};
+      var ancestorStyle = flattenStyle(ancestorProps.style);
+      var clips =
+        hostKind(layoutAncestor) === 'scrollview' ||
+        ancestorProps.removeClippedSubviews === true ||
+        ancestorStyle.overflow === 'hidden' ||
+        ancestorStyle.overflow === 'scroll';
+      if (clips) {
+        var ancestorRect = readRect(publicInstanceFor(layoutAncestor));
+        if (!ancestorRect) {
+          return JSON.stringify({
+            visible: false,
+            reason: 'native clipping bounds are unavailable for the matched testID',
+            code: 'ASSERTION_FAILED',
+            matchCount: 1
+          });
+        }
+        if (
+          ancestorRect.width <= 0 ||
+          ancestorRect.height <= 0 ||
+          !intersects(targetRect, ancestorRect)
+        ) {
+          return JSON.stringify({
+            visible: false,
+            reason: 'testID native layout is clipped by an ancestor viewport',
+            matchCount: 1
+          });
+        }
+      }
+      layoutAncestor = layoutAncestor.return;
     }
     return JSON.stringify({
       visible: true,
