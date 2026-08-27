@@ -5,12 +5,16 @@ import { createMockClient } from '../../helpers/mock-cdp-client.js';
 import { createBootErrorCaptureModule } from '../../../dist/session/metro-authority.js';
 import { createErrorLogHandler } from '../../../dist/tools/error-log.js';
 import { createStatusHandler } from '../../../dist/tools/status.js';
+import { getActiveSession, _setActiveSessionForTest } from '../../../dist/agent-device-wrapper.js';
 
 function envelope(result: { content: Array<{ text: string }> }) {
   return JSON.parse(result.content[0]!.text);
 }
 
 test('fatal pre-helper boot errors reach cdp_status and cdp_error_log', async () => {
+  const priorSession = getActiveSession();
+  _setActiveSessionForTest(null);
+  test.after(() => _setActiveSessionForTest(priorSession));
   let globalHandler: (error: Error, isFatal: boolean) => void = () => {};
   const context = createContext({
     ErrorUtils: {

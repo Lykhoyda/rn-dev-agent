@@ -695,23 +695,49 @@ test('engine lookup corpus mutation returns a structured refusal without replay'
   }
 });
 
-test('blind-probe corpus mutation refuses before replay dispatch', async () => {
+test('route lookup corpus mutation refuses before reading the live route', async () => {
   const fixture = makeFixture();
   try {
     seedLoginCorpus(fixture.primary);
+    const actionPath = join(fixture.primary, '.rn-agent', 'actions', 'login.yaml');
+    writeFileSync(
+      actionPath,
+      readFileSync(actionPath, 'utf8').replace(
+        '# mutates: false',
+        '# expectedRouteSequence: [auth/intro]\n# mutates: false',
+      ),
+    );
     const worktree = addWorktree(fixture);
     inherit(worktree);
     const actionsDir = join(fixture.primary, '.rn-agent', 'actions');
     let maestroCalls = 0;
+    let routeCalls = 0;
     const handler = createRunActionHandler({
-      blindProbeContext: async () => {
-        renameSync(actionsDir, join(fixture.root, 'blind-probe-actions'));
+      claimBundleAuthority: async () => {
+        renameSync(actionsDir, join(fixture.root, 'route-lookup-actions'));
         mkdirSync(actionsDir);
-        return null;
+        return true;
       },
       maestroRun: async () => {
         maestroCalls += 1;
-        throw new Error('replay must not start');
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({
+                ok: false,
+                data: {
+                  passed: false,
+                  output: 'Element with id "login-button" not found',
+                },
+              }),
+            },
+          ],
+        };
+      },
+      getLiveRoute: async () => {
+        routeCalls += 1;
+        throw new Error('route lookup must not start');
       },
     });
     const result = await handler({
@@ -728,7 +754,8 @@ test('blind-probe corpus mutation refuses before replay dispatch', async () => {
     assert.equal(envelope.ok, false);
     assert.equal(envelope.code, 'BAD_FILENAME', result.content[0]!.text);
     assert.match(envelope.error ?? '', /Refusing replaced learned-action corpus symlink/);
-    assert.equal(maestroCalls, 0);
+    assert.equal(maestroCalls, 1);
+    assert.equal(routeCalls, 0);
   } finally {
     fixture.cleanup();
   }

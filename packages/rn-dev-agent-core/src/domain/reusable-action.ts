@@ -47,6 +47,7 @@ export type ActionFailureCode =
   | 'ENV_UNREACHABLE'
   | 'TIMEOUT'
   | 'WDA_BOOTSTRAP_FAILED'
+  | 'NATIVE_SURFACE_BLIND'
   // Exact active-session target differed from direct maestro-runner/WDA evidence.
   | 'DEVICE_AUTHORITY_MISMATCH'
   // GH #317 Phase 2: a CDP/JS transport-blind replay ran and the flow failed —
@@ -271,9 +272,9 @@ export interface RunRecord {
    * run-action orchestrator.
    */
   autoRepair?: AutoRepairOutcome;
-  /** GH #317 Phase 2: set to 'cdp-js' only when the run was replayed via the
-   *  CDP/JS fallback. Absent ⇒ maestro (healthy run-history JSON unchanged). */
+  /** React-tree transport passes never promote an action to Maestro-certified active. */
   transport?: 'cdp-js';
+  proofDomain?: 'react-tree' | 'xctest-native' | 'partitioned';
   /** GH #397: simulator UDID / device serial the run targeted (additive, optional). */
   deviceId?: string;
   /** GH #397 Phase 2: set when the proactive blind-probe routed this run. */
@@ -484,9 +485,12 @@ export function shouldAutoPromoteToActive(
   metadata: M7Metadata,
   lastRun: RunRecord | undefined,
 ): boolean {
-  // GH #397: a probe-routed cdp-js pass validated only the narrower fallback
-  // grammar — never promote on it. "active" means validated on the full engine.
-  if (lastRun?.blindProbe?.skippedMaestro) return false;
+  if (
+    lastRun?.transport === 'cdp-js' ||
+    lastRun?.proofDomain === 'react-tree' ||
+    lastRun?.proofDomain === 'partitioned'
+  )
+    return false;
   return metadata.status === 'experimental' && lastRun?.status === 'pass';
 }
 

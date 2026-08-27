@@ -215,6 +215,37 @@ test(`Phase B golden set (${PLATFORM})`, { timeout: 900_000 }, async () => {
       assert.ok(refFor(snap.envelope, id), `snapshot missing @ref for ${id}`);
     }
 
+    if (PLATFORM === 'ios') {
+      const wdaSmoke = record(
+        'wda-native-smoke',
+        await callTool(s, 'maestro_run', {
+          platform: 'ios',
+          appId: APP_ID,
+          inlineYaml: `appId: ${APP_ID}\n---\n- assertVisible: Increment\n`,
+          timeoutMs: 30_000,
+        }),
+      );
+      assert.equal(
+        wdaSmoke.envelope?.ok,
+        true,
+        `native WDA smoke failed: ${wdaSmoke.text.slice(0, 500)}`,
+      );
+      assert.equal(
+        wdaSmoke.envelope?.data?.proofDomain,
+        'xctest-native',
+        'native text smoke must stay in the XCTest/WDA proof domain',
+      );
+      snap = record(
+        'snapshot-after-wda-smoke',
+        await callTool(s, 'device_snapshot', { action: 'snapshot' }),
+      );
+      assert.equal(
+        snap.envelope?.ok,
+        true,
+        `runner must re-attest after WDA parking: ${snap.text.slice(0, 500)}`,
+      );
+    }
+
     // index: 0 — SwiftUI double-exposes a Button's label (inner text element +
     // the button itself), so exact "Increment" is a designed AMBIGUOUS_MATCH;
     // the index short-circuit is the documented remedy and worth exercising.

@@ -131,7 +131,6 @@ export function createLoginPrologueHandler(deps: LoginPrologueDependencies) {
         autoRepair: false,
         forceReload: false,
         proofReplay: false,
-        blindProbeMode: 'forbid',
         trigger: args.trigger ?? 'agent',
       });
       sealStrictRunAction(replayArgs);

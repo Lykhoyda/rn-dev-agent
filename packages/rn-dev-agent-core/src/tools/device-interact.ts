@@ -183,6 +183,17 @@ interface SnapshotProvenance {
 }
 
 export async function fetchSnapshotNodes(allowCache = false): Promise<SnapshotFetchResult> {
+  return fetchSnapshotNodesWithPolicy(allowCache, true);
+}
+
+export async function fetchSnapshotNodesForSameScreenProof(): Promise<SnapshotFetchResult> {
+  return fetchSnapshotNodesWithPolicy(false, false);
+}
+
+async function fetchSnapshotNodesWithPolicy(
+  allowCache = false,
+  recoverRunnerLeak = true,
+): Promise<SnapshotFetchResult> {
   // GH #321 (live-sim speedup): serve device_find from the snapshot we already
   // captured when it's still a faithful picture of the screen (clean + fresh),
   // skipping a redundant runner round-trip. isSnapshotCacheValid() is false the
@@ -224,6 +235,13 @@ export async function fetchSnapshotNodes(allowCache = false): Promise<SnapshotFe
 
   const session = getActiveSession();
   markSnapshotDirty(session?.platform);
+  if (!recoverRunnerLeak) {
+    return {
+      ok: false,
+      reason: 'runner-leak-unrecovered',
+      recoveryReason: 'recovery-disabled-for-proof',
+    };
+  }
   const recovery = await recoverFromRunnerLeak(
     {
       platform: session?.platform,
@@ -1255,6 +1273,158 @@ export async function performExactFill(
       mutation: verification.observedMismatch ? mutationSeen : 'possible',
       pathsTried,
       verification,
+    },
+  );
+}
+
+export async function performReactTreeInput(
+  testID: string,
+  text: string,
+  client: CDPClient | null,
+  signal?: AbortSignal,
+): Promise<ToolResult> {
+  const pathsTried = ['react-tree'];
+  if (!client) {
+    return fillFailure(
+      'TEXT_ENTRY_UNVERIFIED',
+      `React-tree input "${testID}" cannot be verified because the authoritative bundle is unavailable.`,
+      { mutation: 'none', pathsTried },
+    );
+  }
+  if (signal?.aborted) {
+    return fillFailure('TEXT_ENTRY_UNVERIFIED', 'React-tree input was cancelled before mutation.', {
+      mutation: 'none',
+      pathsTried,
+    });
+  }
+  const readInput = async (): Promise<{ value: string | null; controlled: boolean } | null> => {
+    try {
+      const result = await client.evaluate(
+        '__RN_AGENT.readInputValue(' + JSON.stringify(testID) + ')',
+      );
+      if (result.error || typeof result.value !== 'string') return null;
+      const parsed: {
+        value?: string | null;
+        controlled?: boolean;
+        __agent_error?: string;
+      } = JSON.parse(result.value);
+      if (parsed.__agent_error) return null;
+      return { value: parsed.value ?? null, controlled: parsed.controlled === true };
+    } catch {
+      return null;
+    }
+  };
+  const before = await readInput();
+  if (signal?.aborted) {
+    return fillFailure('TEXT_ENTRY_UNVERIFIED', 'React-tree input was cancelled before mutation.', {
+      mutation: 'none',
+      pathsTried,
+    });
+  }
+  if (!before?.controlled) {
+    return fillFailure(
+      'TEXT_ENTRY_UNVERIFIED',
+      `React-tree input "${testID}" is uncontrolled or unreadable. Run this native text-entry check on a WDA-healthy runtime; secure masked native values are not plaintext proof.`,
+      { mutation: 'none', pathsTried },
+    );
+  }
+  const expected = `${before.value ?? ''}${text}`;
+  let dispatch: { handler: string } | { error: string; mutation: 'none' | 'possible' };
+  try {
+    const result = await client.evaluate(
+      '__RN_AGENT.interact(' +
+        JSON.stringify({ action: 'typeText', testID, text: expected, verify: true }) +
+        ')',
+    );
+    if (result.error || typeof result.value !== 'string') {
+      dispatch = { error: 'dispatch result is unavailable', mutation: 'possible' };
+    } else {
+      const parsed: {
+        error?: string;
+        handlerCalled?: string | false;
+        controlled?: boolean;
+      } = JSON.parse(result.value);
+      if (parsed.error) dispatch = { error: parsed.error, mutation: 'none' };
+      else if (typeof parsed.handlerCalled === 'string' && parsed.controlled !== undefined) {
+        dispatch = { handler: parsed.handlerCalled };
+      } else {
+        dispatch = { error: 'dispatch result is inconclusive', mutation: 'possible' };
+      }
+    }
+  } catch {
+    dispatch = { error: 'dispatch result is unavailable', mutation: 'possible' };
+  }
+  if ('error' in dispatch) {
+    return fillFailure(
+      'TEXT_ENTRY_UNVERIFIED',
+      dispatch.mutation === 'possible'
+        ? `React-tree input "${testID}" may have mutated but its onChangeText result is unknown.`
+        : `React-tree input "${testID}" has no verifiable controlled onChangeText path.`,
+      { mutation: dispatch.mutation, pathsTried },
+    );
+  }
+  if (signal?.aborted) {
+    return fillFailure('TEXT_ENTRY_UNVERIFIED', 'React-tree input was cancelled after mutation.', {
+      mutation: 'possible',
+      pathsTried,
+    });
+  }
+  let verification: 'exact' | 'mismatch' | 'unreadable' = 'unreadable';
+  let previous: { value: string | null; controlled: boolean } | null = null;
+  let last: { value: string | null; controlled: boolean } | null = null;
+  for (let attempt = 0; attempt < 6; attempt++) {
+    if (signal?.aborted) break;
+    const read = await readInput();
+    if (read?.controlled && read.value === expected) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 150));
+      if (signal?.aborted) break;
+      const confirm = await readInput();
+      verification =
+        confirm?.controlled === true && confirm.value === expected ? 'exact' : 'unreadable';
+      break;
+    }
+    if (read) {
+      previous = last;
+      last = read;
+    } else {
+      previous = null;
+      last = null;
+    }
+    if (attempt < 5) await new Promise<void>((resolve) => setTimeout(resolve, 100));
+  }
+  if (
+    verification !== 'exact' &&
+    last?.controlled === true &&
+    previous?.controlled === true &&
+    last.value !== null &&
+    last.value === previous.value
+  ) {
+    verification = 'mismatch';
+  }
+  if (verification !== 'exact') {
+    return fillFailure(
+      'TEXT_ENTRY_UNVERIFIED',
+      `React-tree input "${testID}" dispatched onChangeText but exact fiber read-back was ${verification}.`,
+      { mutation: 'possible', pathsTried },
+    );
+  }
+  if (signal?.aborted) {
+    return fillFailure('TEXT_ENTRY_UNVERIFIED', 'React-tree input was cancelled after mutation.', {
+      mutation: 'possible',
+      pathsTried,
+    });
+  }
+  return okResult(
+    { filled: true, method: 'js-onChangeText', length: text.length },
+    {
+      meta: {
+        textEntryPath: 'react-tree',
+        verifiedOracle: 'fiber',
+        handler: dispatch.handler,
+        appendedLength: text.length,
+        resultingLength: expected.length,
+        verify: 'exact',
+      },
     },
   );
 }

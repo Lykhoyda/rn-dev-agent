@@ -188,6 +188,14 @@ test("Phase127 shouldAutoPromoteToActive: failed run doesn't promote", () => {
   assert.equal(shouldAutoPromoteToActive(meta, lastRun), false);
 });
 
+test('React-tree and partitioned passes never become Maestro certification', () => {
+  const meta = { id: 'x', intent: 'y', status: 'experimental' };
+  const base = { timestamp: FROZEN_DATE, durationMs: 4000, status: 'pass', trigger: 'agent' };
+  assert.equal(shouldAutoPromoteToActive(meta, { ...base, proofDomain: 'react-tree' }), false);
+  assert.equal(shouldAutoPromoteToActive(meta, { ...base, proofDomain: 'partitioned' }), false);
+  assert.equal(shouldAutoPromoteToActive(meta, { ...base, proofDomain: 'xctest-native' }), true);
+});
+
 test('Phase127 shouldDemoteAfterRepair: active → experimental', () => {
   assert.equal(shouldDemoteAfterRepair({ id: 'x', intent: 'y', status: 'active' }), true);
   assert.equal(shouldDemoteAfterRepair({ id: 'x', intent: 'y', status: 'experimental' }), false);

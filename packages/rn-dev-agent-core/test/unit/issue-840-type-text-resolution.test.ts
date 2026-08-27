@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import vm from 'node:vm';
 import { INJECTED_HELPERS } from '../../dist/injected-helpers.js';
+import { performReactTreeInput } from '../../dist/tools/device-interact.js';
 import { createInteractHandler } from '../../dist/tools/interact.js';
 import { createMockClient } from '../helpers/mock-cdp-client.js';
 import { expectOk } from '../helpers/result-helpers.js';
@@ -192,6 +193,26 @@ test('typeText readback resolves the same deep controlled target as mutation', (
   assert.equal(mutation.controlled, true);
   assert.equal(mutation.valueBefore, '');
   assert.deepEqual(readback, { value: 'verified', controlled: true });
+});
+
+test('React replay types through a wrapper and verifies the same controlled input', async () => {
+  const root = makeFiber('Root');
+  const wrapper = appendChild(root, makeFiber('View', { testID: 'replay-wrapper' }));
+  const input = appendChild(
+    wrap(wrapper, 28),
+    makeFiber('AndroidTextInput', {
+      value: '04',
+      onChangeText(value: string) {
+        input.memoizedProps.value = value;
+      },
+    }),
+  );
+  const agent = createAgent(root);
+
+  const result = await performReactTreeInput('replay-wrapper', '5', agent as never);
+
+  assert.deepEqual(expectOk(result), { filled: true, method: 'js-onChangeText', length: 1 });
+  assert.equal(input.memoizedProps.value, '045');
 });
 
 test('typeText searches matching fibers across every registered renderer', () => {

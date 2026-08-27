@@ -901,6 +901,12 @@ export interface PinDoctorReport {
   selectedPath: string | null;
   provenance: RunnerProvenance;
   correction: string | null;
+  iosProofPolicy: {
+    exactTestId: 'react-tree';
+    nativeSurface: 'xctest-native';
+    nativeBlindRefusal: 'NATIVE_SURFACE_BLIND';
+    runtimeVersionHeuristicIsProof: false;
+  };
 }
 
 export function doctorPinnedRunner(
@@ -919,6 +925,12 @@ export function doctorPinnedRunner(
     selectedPath: status.selectedPath ?? null,
     provenance: status.provenance ?? (status.pin.status === 'not-installed' ? 'none' : 'pin-cache'),
     correction: ok ? null : pinCorrection(status, platformKey),
+    iosProofPolicy: {
+      exactTestId: 'react-tree',
+      nativeSurface: 'xctest-native',
+      nativeBlindRefusal: 'NATIVE_SURFACE_BLIND',
+      runtimeVersionHeuristicIsProof: false,
+    },
   };
 }
 

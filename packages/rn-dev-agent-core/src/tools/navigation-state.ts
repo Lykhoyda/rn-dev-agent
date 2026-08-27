@@ -10,6 +10,11 @@ import { loadVerificationConfig, getCachedProjectRoot } from '../verification/co
  * different shapes via the helper.
  */
 export function extractActiveScreen(parsed: Record<string, unknown>): string | null {
+  const nested = parsed.nested;
+  if (nested && typeof nested === 'object' && !Array.isArray(nested)) {
+    const deepest = extractActiveScreen(nested as Record<string, unknown>);
+    if (deepest) return deepest;
+  }
   const direct = parsed.routeName;
   if (typeof direct === 'string' && direct.length > 0) return direct;
   const routes = parsed.routes;
@@ -18,6 +23,10 @@ export function extractActiveScreen(parsed: Record<string, unknown>): string | n
     const active = routes[Math.max(0, Math.min(idx, routes.length - 1))] as
       | Record<string, unknown>
       | undefined;
+    if (active?.state && typeof active.state === 'object' && !Array.isArray(active.state)) {
+      const deepest = extractActiveScreen(active.state as Record<string, unknown>);
+      if (deepest) return deepest;
+    }
     const name = active?.name;
     if (typeof name === 'string') return name;
     const path = active?.path;

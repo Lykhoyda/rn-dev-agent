@@ -30,7 +30,8 @@
     "lint:fix": "oxlint --fix",
     "format": "oxfmt",
     "format:check": "oxfmt --check",
-    "prepare": "husky"
+    "prepare": "husky",
+    "gate:slice-a": "yarn build:core && node packages/rn-dev-agent-core/test/smoke/slice-a-visibility-gate.ts"
   },
   "devDependencies": {
     "@changesets/cli": "^2.27.10",

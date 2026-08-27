@@ -2,7 +2,7 @@
 // whenever the injected surface changes; it flows into the IIFE's freshness
 // check (__RN_AGENT.__v) AND the post-injection log line, so they can never
 // drift (the log previously hard-coded a stale "v11").
-export const HELPERS_VERSION = 46;
+export const HELPERS_VERSION = 47;
 
 export const INJECTED_HELPERS = `
 (function() {
@@ -3661,6 +3661,251 @@ export const INJECTED_HELPERS = `
     return false;
   }
 
+  function isTestIdFrontmost(testID) {
+    if (typeof testID !== 'string' || !testID) {
+      return JSON.stringify({ visible: false, reason: 'testID is required' });
+    }
+    var matches = [];
+    var modals = [];
+    var scanned = 0;
+    var truncated = false;
+    forEachRootFiber(function(rootFiber) {
+      var stack = [rootFiber];
+      while (stack.length) {
+        if (++scanned > 40000) { truncated = true; return true; }
+        var fiber = stack.pop();
+        if (!fiber) continue;
+        var props = fiber.memoizedProps || {};
+        if (props.testID === testID || props.nativeID === testID) matches.push(fiber);
+        if (
+          props.visible !== false &&
+          !__hidden(fiber) &&
+          (props['aria-modal'] || props.accessibilityViewIsModal || hostKind(fiber) === 'modal')
+        ) modals.push(fiber);
+        if (fiber.sibling) stack.push(fiber.sibling);
+        if (fiber.child) stack.push(fiber.child);
+      }
+      return null;
+    });
+    if (truncated) {
+      return JSON.stringify({
+        visible: false,
+        reason: 'frontmost testID scan exceeded its bounded React-tree budget',
+        code: 'ASSERTION_FAILED',
+        truncated: true
+      });
+    }
+    function containsFiber(ancestor, candidate) {
+      var current = candidate;
+      var guard = 0;
+      while (current && guard++ < 1000) {
+        if (current === ancestor) return true;
+        current = current.return;
+      }
+      return false;
+    }
+    var logicalMatches = [];
+    for (var matchIndex = 0; matchIndex < matches.length; matchIndex++) {
+      var sameLineage = false;
+      for (var logicalIndex = 0; logicalIndex < logicalMatches.length; logicalIndex++) {
+        if (
+          containsFiber(matches[matchIndex], logicalMatches[logicalIndex]) ||
+          containsFiber(logicalMatches[logicalIndex], matches[matchIndex])
+        ) {
+          sameLineage = true;
+          break;
+        }
+      }
+      if (!sameLineage) logicalMatches.push(matches[matchIndex]);
+    }
+    if (logicalMatches.length !== 1) {
+      return JSON.stringify({
+        visible: false,
+        reason: logicalMatches.length === 0
+          ? 'testID is not mounted'
+          : 'testID is ambiguous across mounted React trees',
+        matchCount: logicalMatches.length
+      });
+    }
+    var target = logicalMatches[0];
+    if (__hidden(target)) {
+      return JSON.stringify({
+        visible: false,
+        reason: 'testID is mounted in a hidden subtree',
+        matchCount: 1
+      });
+    }
+
+    var targetPointerEvents = (target.memoizedProps || {}).pointerEvents;
+    if (targetPointerEvents === 'none' || targetPointerEvents === 'box-none') {
+      return JSON.stringify({
+        visible: false,
+        reason: 'testID target is not user-interactable with pointerEvents="' + targetPointerEvents + '"',
+        code: 'INTERACTION_NOT_ACTUATED',
+        matchCount: 1
+      });
+    }
+
+    var pointerAncestor = target.return;
+    var pointerDepth = 0;
+    while (pointerAncestor) {
+      if (++pointerDepth > 1000) {
+        return JSON.stringify({
+          visible: false,
+          reason: 'pointer-event ancestor proof exceeded its bounded React-tree budget',
+          code: 'ASSERTION_FAILED',
+          matchCount: 1
+        });
+      }
+      var pointerProps = pointerAncestor.memoizedProps || {};
+      if (pointerProps.pointerEvents === 'none' || pointerProps.pointerEvents === 'box-only') {
+        return JSON.stringify({
+          visible: false,
+          reason: 'testID is not user-interactable beneath pointerEvents="' + pointerProps.pointerEvents + '"',
+          code: 'INTERACTION_NOT_ACTUATED',
+          matchCount: 1
+        });
+      }
+      pointerAncestor = pointerAncestor.return;
+    }
+
+    if (modals.length > 0) {
+      var containingModalCount = 0;
+      for (var mi = 0; mi < modals.length; mi++) {
+        if (containsFiber(modals[mi], target)) containingModalCount++;
+      }
+      if (containingModalCount === 0) {
+        return JSON.stringify({
+          visible: false,
+          reason: 'testID is mounted behind the active modal React subtree',
+          matchCount: 1
+        });
+      }
+      if (containingModalCount !== modals.length) {
+        return JSON.stringify({
+          visible: false,
+          reason: 'frontmost modal ordering cannot be proven across visible modal subtrees',
+          code: 'ASSERTION_FAILED',
+          matchCount: 1,
+          modalCount: modals.length
+        });
+      }
+    }
+
+    var navRaw = getNavState();
+    var nav;
+    try { nav = JSON.parse(navRaw); }
+    catch(e) {
+      return JSON.stringify({
+        visible: false,
+        reason: 'navigation state is unreadable',
+        code: 'ASSERTION_FAILED',
+        matchCount: 1
+      });
+    }
+    if (!nav || nav.error) {
+      return JSON.stringify({
+        visible: false,
+        reason: 'frontmost route cannot be proven from navigation state',
+        code: 'ASSERTION_FAILED',
+        matchCount: 1
+      });
+    }
+    function activeNavigationChain(node) {
+      var current = node;
+      var routeNames = [];
+      var guard = 0;
+      while (current && guard++ < 100) {
+        if (
+          typeof current.routeName === 'string' &&
+          routeNames.indexOf(current.routeName) === -1
+        ) routeNames.push(current.routeName);
+        if (current.nested) { current = current.nested; continue; }
+        if (Array.isArray(current.routes) && current.routes.length > 0) {
+          var index = typeof current.index === 'number' ? current.index : current.routes.length - 1;
+          if (index < 0) index = 0;
+          if (index >= current.routes.length) index = current.routes.length - 1;
+          var activeEntry = current.routes[index];
+          if (
+            activeEntry &&
+            typeof activeEntry.name === 'string' &&
+            routeNames.indexOf(activeEntry.name) === -1
+          ) routeNames.push(activeEntry.name);
+          if (activeEntry && activeEntry.state) { current = activeEntry.state; continue; }
+        }
+        break;
+      }
+      return routeNames;
+    }
+    var activeRoutes = activeNavigationChain(nav);
+    var activeRoute = activeRoutes.length > 0 ? activeRoutes[activeRoutes.length - 1] : null;
+    if (typeof activeRoute !== 'string' || !activeRoute) {
+      return JSON.stringify({
+        visible: false,
+        reason: 'active route is unavailable',
+        code: 'ASSERTION_FAILED',
+        matchCount: 1
+      });
+    }
+    var routeOwner = null;
+    var current = target;
+    var depth = 0;
+    while (current && depth++ < 1000) {
+      var currentProps = current.memoizedProps;
+      if (
+        currentProps &&
+        currentProps.route &&
+        typeof currentProps.route.name === 'string'
+      ) {
+        routeOwner = currentProps.route.name;
+        break;
+      }
+      current = current.return;
+    }
+    if (routeOwner && activeRoutes.indexOf(routeOwner) === -1) {
+      return JSON.stringify({
+        visible: false,
+        reason: 'testID belongs to an inactive mounted route',
+        route: routeOwner,
+        activeRoute: activeRoute,
+        matchCount: 1
+      });
+    }
+    if (!routeOwner) {
+      var cursor = nav;
+      var stacked = false;
+      while (cursor) {
+        if (Array.isArray(cursor.stack) && cursor.stack.length > 1) stacked = true;
+        if (Array.isArray(cursor.routes) && cursor.routes.length > 1) stacked = true;
+        if (cursor.nested) {
+          cursor = cursor.nested;
+        } else if (Array.isArray(cursor.routes) && cursor.routes.length > 0) {
+          var cursorIndex = typeof cursor.index === 'number' ? cursor.index : cursor.routes.length - 1;
+          var cursorRoute = cursor.routes[Math.max(0, Math.min(cursorIndex, cursor.routes.length - 1))];
+          cursor = cursorRoute && cursorRoute.state;
+        } else {
+          cursor = null;
+        }
+      }
+      if (stacked && modals.length === 0) {
+        return JSON.stringify({
+          visible: false,
+          reason: 'testID has no route owner in a multi-route navigation tree',
+          activeRoute: activeRoute,
+          matchCount: 1
+        });
+      }
+    }
+
+    return JSON.stringify({
+      visible: true,
+      route: routeOwner,
+      activeRoute: activeRoute,
+      modalCount: modals.length,
+      matchCount: 1
+    });
+  }
+
   // #379: JS-first keyboard dismissal for the KEYBOARD_OCCLUDED auto-heal.
   // Deterministic (no gestures, no QuickPath corruption): prefer the RN
   // Keyboard module; fall back to blurring the focused TextInput host
@@ -3775,6 +4020,7 @@ export const INJECTED_HELPERS = `
     __match: __match,
     __hostKind: hostKind,
     __role: __role,
+    isTestIdFrontmost: isTestIdFrontmost,
     isReady: function() {
       // B145: ready when ANY renderer has at least one root fiber. The
       // single-renderer short-circuit from findActiveRenderer would return

@@ -99,6 +99,34 @@ const REPAIR_TRANSPORT_BLIND_ENV = {
     'cdp_repair_action: Maestro/WDA reported "fab-create-task" not visible, but rn-fast-runner sees it (3 testIDs in the live snapshot). This is transport-blindness, not testID drift (GH #317).',
   code: 'TRANSPORT_BLIND',
 };
+const FAIL_TYPED_REACT_SELECTOR_ENV = {
+  ok: false,
+  error: 'React-tree replay failed at step 0: testID not present',
+  code: 'TESTID_NOT_FOUND',
+  meta: {
+    proofDomain: 'react-tree',
+    failedStepIndex: 0,
+    failedSelector: 'fab-create-task',
+  },
+};
+const FAIL_TYPED_PARTITIONED_REACT_SELECTOR_ENV = {
+  ...FAIL_TYPED_REACT_SELECTOR_ENV,
+  meta: {
+    ...FAIL_TYPED_REACT_SELECTOR_ENV.meta,
+    proofDomain: 'partitioned',
+    proofDomains: ['xctest-native', 'react-tree'],
+    failedProofDomain: 'react-tree',
+  },
+};
+const FAIL_TYPED_PARTITIONED_NATIVE_SELECTOR_ENV = {
+  ...FAIL_TYPED_REACT_SELECTOR_ENV,
+  meta: {
+    ...FAIL_TYPED_REACT_SELECTOR_ENV.meta,
+    proofDomain: 'partitioned',
+    proofDomains: ['react-tree', 'xctest-native'],
+    failedProofDomain: 'xctest-native',
+  },
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Validation paths
@@ -185,6 +213,58 @@ test('run-action: first-attempt pass appends RunRecord with no auto-repair', asy
     Date.parse(sidecar.runHistory[0].timing.steps[0].endedAt) -
       Date.parse(sidecar.runHistory[0].timing.steps[0].startedAt),
   );
+});
+
+test('cdp_run_action preserves a typed native-blind refusal', async () => {
+  project.seedAction('demo', fixtureYaml({ id: 'demo', selectors: ['fab-create-task'] }));
+  const handler = createRunActionHandler({
+    maestroRun: fakeMaestroRun([
+      {
+        ok: false,
+        code: 'NATIVE_SURFACE_BLIND',
+        error: 'bounded native comparison proved a blind surface',
+        meta: {
+          proofDomain: 'xctest-native',
+          runner: 'maestro-runner',
+          transportVersion: '1.1.24',
+          nativeVision: { source: 'rn-fast-runner-snapshot', runtimeMajor: 26 },
+          cleanup: { cleanupProven: true },
+          nextAction: 'run the native smoke on a healthy runtime',
+        },
+      },
+    ]),
+  });
+  const env = JSON.parse(
+    (await handler({ actionId: 'demo', projectRoot: project.root })).content[0].text,
+  );
+  assert.equal(env.code, 'NATIVE_SURFACE_BLIND');
+  assert.equal(env.meta.failureKind, 'NATIVE_SURFACE_BLIND');
+  assert.equal(env.meta.proofDomain, 'xctest-native');
+  assert.equal(env.meta.transportVersion, '1.1.24');
+  assert.equal(env.meta.nativeVision.runtimeMajor, 26);
+  assert.equal(env.meta.cleanup.cleanupProven, true);
+  assert.match(env.meta.nextAction, /native smoke/);
+  assert.equal(project.readSidecar('demo').runHistory[0].failureCode, 'NATIVE_SURFACE_BLIND');
+});
+
+test('cdp_run_action records a typed runner deadline as TIMEOUT', async () => {
+  project.seedAction('demo', fixtureYaml({ id: 'demo', selectors: ['spinner-done'] }));
+  const handler = createRunActionHandler({
+    maestroRun: fakeMaestroRun([
+      {
+        ok: false,
+        code: 'RUNNER_TIMEOUT',
+        error: 'React replay exceeded its deadline',
+        meta: { proofDomain: 'react-tree' },
+      },
+    ]),
+  });
+
+  const result = await handler({ actionId: 'demo', projectRoot: project.root });
+  const env = JSON.parse(result.content[0].text);
+
+  assert.equal(env.code, 'RUNNER_TIMEOUT');
+  assert.equal(project.readSidecar('demo').runHistory[0].failureCode, 'TIMEOUT');
 });
 
 test('run-action: proofReplay pass on an experimental action discloses no lifecycle-promotion write', async () => {
@@ -327,6 +407,88 @@ test('run-action: repair patched but retry still fails → autoRepair.outcome = 
   assert.equal(sidecar.runHistory[0].autoRepair?.outcome, 'failed');
 });
 
+for (const [toolCode, actionCode] of [
+  ['NATIVE_SURFACE_BLIND', 'NATIVE_SURFACE_BLIND'],
+  ['CDP_NOT_CONNECTED', 'ENV_UNREACHABLE'],
+  ['RUNNER_TIMEOUT', 'TIMEOUT'],
+]) {
+  test(`run-action: post-repair ${toolCode} remains typed`, async () => {
+    project.seedAction('demo', fixtureYaml({ id: 'demo', selectors: ['fab-create-task'] }));
+    const handler = createRunActionHandler({
+      maestroRun: fakeMaestroRun([
+        FAIL_TYPED_REACT_SELECTOR_ENV,
+        {
+          ok: false,
+          code: toolCode,
+          error: `retry failed with ${toolCode}`,
+          meta: { proofDomain: 'partitioned' },
+        },
+      ]),
+      repairAction: fakeRepairAction(REPAIR_PATCHED_ENV),
+    });
+
+    const result = await handler({ actionId: 'demo', projectRoot: project.root });
+    const env = JSON.parse(result.content[0].text);
+
+    assert.equal(env.code, toolCode);
+    assert.equal(env.meta.failureKind, toolCode);
+    assert.equal(env.meta.autoRepair.outcome, 'failed');
+    assert.equal(project.readSidecar('demo').runHistory[0].failureCode, actionCode);
+  });
+}
+
+test('run-action: typed React-tree selector miss still reaches auto-repair', async () => {
+  project.seedAction('demo', fixtureYaml({ id: 'demo', selectors: ['fab-create-task'] }));
+
+  const handler = createRunActionHandler({
+    maestroRun: fakeMaestroRun([FAIL_TYPED_REACT_SELECTOR_ENV, PASS_ENV]),
+    repairAction: fakeRepairAction(REPAIR_PATCHED_ENV),
+  });
+  const result = await handler({ actionId: 'demo', projectRoot: project.root });
+
+  assert.equal(result.isError, undefined);
+  const env = JSON.parse(result.content[0].text);
+  assert.equal(env.ok, true);
+  assert.equal(env.data.autoRepair.attempted, true);
+  assert.equal(env.data.autoRepair.outcome, 'passed');
+});
+
+test('run-action: partitioned React selector miss still reaches auto-repair', async () => {
+  project.seedAction('demo', fixtureYaml({ id: 'demo', selectors: ['fab-create-task'] }));
+
+  const handler = createRunActionHandler({
+    maestroRun: fakeMaestroRun([FAIL_TYPED_PARTITIONED_REACT_SELECTOR_ENV, PASS_ENV]),
+    repairAction: fakeRepairAction(REPAIR_PATCHED_ENV),
+  });
+  const result = await handler({ actionId: 'demo', projectRoot: project.root });
+
+  assert.equal(result.isError, undefined);
+  const env = JSON.parse(result.content[0].text);
+  assert.equal(env.ok, true);
+  assert.equal(env.data.autoRepair.attempted, true);
+  assert.equal(env.data.autoRepair.outcome, 'passed');
+});
+
+test('run-action: partitioned native selector miss remains terminal', async () => {
+  project.seedAction('demo', fixtureYaml({ id: 'demo', selectors: ['fab-create-task'] }));
+  let repairCalls = 0;
+
+  const handler = createRunActionHandler({
+    maestroRun: fakeMaestroRun([FAIL_TYPED_PARTITIONED_NATIVE_SELECTOR_ENV]),
+    repairAction: async () => {
+      repairCalls += 1;
+      return fakeRepairAction(REPAIR_PATCHED_ENV)({});
+    },
+  });
+  const result = await handler({ actionId: 'demo', projectRoot: project.root });
+
+  assert.equal(result.isError, true);
+  const env = JSON.parse(result.content[0].text);
+  assert.equal(env.code, 'TESTID_NOT_FOUND');
+  assert.equal(env.meta.autoRepair.attempted, false);
+  assert.equal(repairCalls, 0);
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Auto-repair refused: budget exhausted
 // ─────────────────────────────────────────────────────────────────────────────
@@ -367,7 +529,7 @@ test('run-action: repair refused (no fuzzy match) → autoRepair.refusedReason =
   assert.equal(env.meta.autoRepair.refusedReason, 'NO_MATCH');
 });
 
-test('GH #317: repair returns TRANSPORT_BLIND → refused, no retry, honest code', async () => {
+test('authority inversion: legacy repair code cannot create a transport-blind verdict', async () => {
   project.seedAction('demo', fixtureYaml({ id: 'demo', selectors: ['fab-create-task'] }));
 
   const handler = createRunActionHandler({
@@ -378,9 +540,9 @@ test('GH #317: repair returns TRANSPORT_BLIND → refused, no retry, honest code
 
   assert.equal(result.isError, true);
   const env = JSON.parse(result.content[0].text);
-  assert.equal(env.code, 'TRANSPORT_BLIND');
+  assert.equal(env.code, 'TESTID_NOT_FOUND');
   assert.equal(env.meta.autoRepair.outcome, 'refused');
-  assert.equal(env.meta.autoRepair.refusedReason, 'TRANSPORT_BLIND');
+  assert.equal(env.meta.autoRepair.refusedReason, 'INTERNAL_ERROR');
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -566,6 +728,38 @@ test('run-action: TIMEOUT failure does NOT invoke repair (phase 1 scope)', async
   // RunRecord uses the action-domain code (TIMEOUT, not TESTID_NOT_FOUND).
   const sidecar = project.readSidecar('demo');
   assert.equal(sidecar.runHistory[0].failureCode, 'TIMEOUT');
+});
+
+test('run-action: APP_HAS_REDBOX tree failure never enters selector repair', async () => {
+  project.seedAction('demo', fixtureYaml({ id: 'demo', selectors: ['submit'] }));
+
+  let repairCalled = false;
+  const handler = createRunActionHandler({
+    maestroRun: fakeMaestroRun([
+      {
+        ok: false,
+        code: 'APP_HAS_REDBOX',
+        error: 'App is showing an error screen.',
+        meta: {
+          proofDomain: 'react-tree',
+          treeEnvelope: { ok: true, warning: 'APP_HAS_REDBOX' },
+        },
+      },
+    ]),
+    repairAction: async () => {
+      repairCalled = true;
+      return { content: [{ type: 'text', text: JSON.stringify(REPAIR_PATCHED_ENV) }] };
+    },
+  });
+  const result = await handler({ actionId: 'demo', projectRoot: project.root });
+
+  assert.equal(result.isError, true);
+  assert.equal(repairCalled, false);
+  const env = JSON.parse(result.content[0].text);
+  assert.equal(env.code, 'APP_HAS_REDBOX');
+  assert.deepEqual(env.meta.treeEnvelope, { ok: true, warning: 'APP_HAS_REDBOX' });
+  assert.equal(env.meta.autoRepair.attempted, false);
+  assert.equal(env.meta.autoRepair.refusedReason, 'NOT_REPAIRABLE_KIND');
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

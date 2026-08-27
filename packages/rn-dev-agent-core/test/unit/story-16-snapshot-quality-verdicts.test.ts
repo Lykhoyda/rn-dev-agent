@@ -15,7 +15,10 @@ import { parseEnvelope } from '../helpers/result-helpers.js';
 import { createComponentTreeHandler } from '../../dist/tools/component-tree.js';
 import { updateRefMapFromFlat, clearRefMap } from '../../dist/fast-runner-ref-map.js';
 import { buildRunIOSArgs, _setRunAgentDeviceForTest } from '../../dist/agent-device-wrapper.js';
-import { fetchSnapshotNodes } from '../../dist/tools/device-interact.js';
+import {
+  fetchSnapshotNodes,
+  fetchSnapshotNodesForSameScreenProof,
+} from '../../dist/tools/device-interact.js';
 import { okResult } from '../../dist/utils.js';
 import {
   runIOS,
@@ -332,6 +335,27 @@ test('fetchSnapshotNodes: zero-node capture refuses with empty-capture instead o
   try {
     const snap = await fetchSnapshotNodes(false);
     assert.deepEqual(snap, { ok: false, reason: 'empty-capture' });
+  } finally {
+    _setRunAgentDeviceForTest(null);
+  }
+});
+
+test('fetchSnapshotNodes can refuse runner-leak recovery for same-screen proof', async () => {
+  let snapshotCalls = 0;
+  _setRunAgentDeviceForTest(async () => {
+    snapshotCalls += 1;
+    return okResult({
+      nodes: [{ ref: 'e0', label: 'AgentDeviceRunner', type: 'Application' }],
+    });
+  });
+  try {
+    const snap = await fetchSnapshotNodesForSameScreenProof();
+    assert.deepEqual(snap, {
+      ok: false,
+      reason: 'runner-leak-unrecovered',
+      recoveryReason: 'recovery-disabled-for-proof',
+    });
+    assert.equal(snapshotCalls, 1);
   } finally {
     _setRunAgentDeviceForTest(null);
   }

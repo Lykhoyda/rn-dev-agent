@@ -237,6 +237,14 @@ export async function runMaestroInline(
     );
     const finalArgs = assembleMaestroArgs(baseArgs, runnerReportArgs(runnerReportDir));
     const executionDeadline = Date.now() + timeout;
+    const flowAbort = new AbortController();
+    const abortTimer = setTimeout(
+      () => {
+        flowAbort.abort(new Error(`Maestro timed out after ${timeout}ms`));
+      },
+      Math.max(0, executionDeadline - Date.now()),
+    );
+    abortTimer.unref?.();
     const execute = async () => {
       const spawn = (runnerPath: string, prefixArgs: readonly string[] = []) => {
         const remainingTimeout = executionDeadline - Date.now();
@@ -282,7 +290,9 @@ export async function runMaestroInline(
         execution = await runFlowParked(execute, {
           platform: opts.platform,
           deviceId: requestedDeviceId,
-          completeRunnerPark: () => completeManagedRunnerParkAuthority(opts.authorityArgs!),
+          signal: flowAbort.signal,
+          completeRunnerPark: (signal) =>
+            completeManagedRunnerParkAuthority(opts.authorityArgs!, signal),
         });
       } else {
         execution = await execute();
@@ -302,6 +312,8 @@ export async function runMaestroInline(
         return { passed: false, output: '', flowFile, error: message };
       }
       throw err;
+    } finally {
+      clearTimeout(abortTimer);
     }
 
     const output = (execution.stdout + '\n' + execution.stderr).trim();

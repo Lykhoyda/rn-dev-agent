@@ -4,6 +4,8 @@ import {
   collectTestIds,
   isExactPresent,
   buildCdpDispatch,
+  replayTreeData,
+  runCdpReplayCommands,
   unwrapTree,
 } from '../../dist/tools/cdp-replay-dispatch.js';
 
@@ -42,6 +44,67 @@ test('isExactPresent sees testIDs through the `{ tree: { matches: [...] } }` mul
   assert.equal(isExactPresent(GETTREE_MULTI, 'tab'), false); // substring, not verbatim
 });
 
+test('buildCdpDispatch counts the filtered tree once when the interactive digest repeats it', async () => {
+  const calls = [];
+  const dispatch = buildCdpDispatch({
+    pressByTestId: async (id) => calls.push(id),
+    typeByTestId: async () => {},
+    treeFor: async () => ({
+      tree: { testID: 'quick-add-fab', children: [] },
+      interactive: [{ testID: 'quick-add-fab' }],
+    }),
+    launchApp: async () => {},
+    settle: async () => {},
+  });
+  await dispatch.press('quick-add-fab');
+  assert.deepEqual(calls, ['quick-add-fab']);
+});
+
+test('buildCdpDispatch accepts propagated fiber matches collapsed by the frontmost oracle', async () => {
+  const calls = [];
+  const dispatch = buildCdpDispatch({
+    pressByTestId: async (id) => calls.push(id),
+    typeByTestId: async () => {},
+    treeFor: async () => ({
+      tree: { matches: [{ testID: 'welcome' }, { testID: 'welcome' }] },
+    }),
+    frontmostFor: async () => ({ visible: true, matchCount: 1 }),
+    launchApp: async () => {},
+    settle: async () => {},
+  });
+  await dispatch.press('welcome');
+  assert.deepEqual(calls, ['welcome']);
+});
+
+test('buildCdpDispatch revalidates a retained input target before mutation', async () => {
+  let mutations = 0;
+  const dispatch = buildCdpDispatch({
+    pressByTestId: async () => {},
+    typeByTestId: async () => {
+      mutations += 1;
+    },
+    treeFor: async () => ({ tree: { testID: 'stale-field', children: [] } }),
+    frontmostFor: async () => ({ visible: false, reason: 'field is behind a modal' }),
+    launchApp: async () => {},
+    settle: async () => {},
+  });
+  await assert.rejects(dispatch.type('stale-field', 'value'), /behind a modal/);
+  assert.equal(mutations, 0);
+});
+
+test('buildCdpDispatch refuses two distinct filtered tree matches as ambiguous', async () => {
+  const dispatch = buildCdpDispatch({
+    pressByTestId: async () => {},
+    typeByTestId: async () => {},
+    treeFor: async () => ({
+      tree: { matches: [{ testID: 'duplicate' }, { testID: 'duplicate' }] },
+    }),
+    launchApp: async () => {},
+    settle: async () => {},
+  });
+  await assert.rejects(dispatch.press('duplicate'), /resolves to 2 mounted elements/);
+});
+
 test('unwrapTree returns the bare node for a single match and the matches wrapper for many', () => {
   assert.deepEqual(unwrapTree(GETTREE_SINGLE), { testID: 'fab-create-task', children: [] });
   assert.deepEqual(unwrapTree(GETTREE_MULTI), {
@@ -53,6 +116,63 @@ test('unwrapTree returns the bare node for a single match and the matches wrappe
   assert.equal(unwrapTree(null), null);
   // already a bare node (no `.tree`) → returned unchanged
   assert.deepEqual(unwrapTree({ testID: 'x', children: [] }), { testID: 'x', children: [] });
+});
+
+test('React replay propagates a component-tree transport envelope without selector repair evidence', async () => {
+  const replay = await runCdpReplayCommands(
+    [{ assertVisible: { id: 'ready' } }],
+    {},
+    {
+      pressByTestId: async () => {},
+      typeByTestId: async () => {},
+      treeFor: async () =>
+        replayTreeData({
+          ok: false,
+          code: 'RECONNECT_TIMEOUT',
+          error: 'Component tree connection timed out',
+          meta: { reconnectAttempted: true },
+        }),
+      launchApp: async () => {},
+      settle: async () => {},
+    },
+  );
+  assert.equal(replay.passed, false);
+  assert.equal(replay.failureCode, 'RECONNECT_TIMEOUT');
+  assert.equal(replay.failureMeta?.failedSelector, undefined);
+  assert.deepEqual(replay.failureMeta?.treeEnvelope, {
+    ok: false,
+    code: 'RECONNECT_TIMEOUT',
+    error: 'Component tree connection timed out',
+    meta: { reconnectAttempted: true },
+  });
+});
+
+test('React replay propagates APP_HAS_REDBOX instead of reporting a missing testID', async () => {
+  const replay = await runCdpReplayCommands(
+    [{ tapOn: { id: 'submit' } }],
+    {},
+    {
+      pressByTestId: async () => assert.fail('redbox must refuse before mutation'),
+      typeByTestId: async () => {},
+      treeFor: async () =>
+        replayTreeData({
+          ok: true,
+          data: { message: 'App is showing an error screen.' },
+          meta: { warning: 'APP_HAS_REDBOX', treeVerdict: { quality: 'unavailable' } },
+        }),
+      launchApp: async () => {},
+      settle: async () => {},
+    },
+  );
+  assert.equal(replay.passed, false);
+  assert.equal(replay.failureCode, 'APP_HAS_REDBOX');
+  assert.equal(replay.failureMeta?.failedSelector, undefined);
+  assert.deepEqual(replay.failureMeta?.treeEnvelope, {
+    ok: true,
+    warning: 'APP_HAS_REDBOX',
+    message: 'App is showing an error screen.',
+    meta: { warning: 'APP_HAS_REDBOX', treeVerdict: { quality: 'unavailable' } },
+  });
 });
 
 test('disabled-guard fires on a node found through the getTree `.tree` wrapper', async () => {
@@ -71,6 +191,61 @@ test('disabled-guard fires on a node found through the getTree `.tree` wrapper',
   };
   await assert.rejects(buildCdpDispatch(deps).press('save'), /disabled|non-interactable/);
   assert.deepEqual(calls, [], 'must not press a disabled node found through the wrapper');
+});
+
+test('press refuses a child beneath pointerEvents none or box-only ancestors', async () => {
+  const calls = [];
+  const base = {
+    pressByTestId: async () => calls.push('press'),
+    typeByTestId: async () => calls.push('type'),
+    launchApp: async () => {},
+    settle: async () => {},
+  };
+  for (const pointerEvents of ['none', 'box-only']) {
+    await assert.rejects(
+      buildCdpDispatch({
+        ...base,
+        treeFor: async () => ({
+          tree: { props: { pointerEvents }, children: [{ testID: 'child', children: [] }] },
+        }),
+      }).press('child'),
+      /not user-interactable/,
+    );
+  }
+  assert.deepEqual(calls, []);
+});
+
+test('text input preserves box-none and auto ancestors but rejects hidden hit-testing', async () => {
+  const calls = [];
+  const tree = (pointerEvents) => ({
+    tree: { props: { pointerEvents }, children: [{ testID: 'field', children: [] }] },
+  });
+  const make = (value) =>
+    buildCdpDispatch({
+      pressByTestId: async () => {},
+      typeByTestId: async () => calls.push('type'),
+      treeFor: async () => tree(value),
+      launchApp: async () => {},
+      settle: async () => {},
+    });
+  await make('box-none').type('field', 'ok');
+  await make('auto').type('field', 'ok');
+  await assert.rejects(make('none').type('field', 'no'), /not user-interactable/);
+  assert.deepEqual(calls, ['type', 'type']);
+});
+
+test('target box-none refuses press and type without dispatch', async () => {
+  const calls = [];
+  const dispatch = buildCdpDispatch({
+    pressByTestId: async () => calls.push('press'),
+    typeByTestId: async () => calls.push('type'),
+    treeFor: async () => ({ tree: { testID: 'target', props: { pointerEvents: 'box-none' } } }),
+    launchApp: async () => {},
+    settle: async () => {},
+  });
+  await assert.rejects(dispatch.press('target'), /target has pointerEvents="box-none"/);
+  await assert.rejects(dispatch.type('target', 'value'), /target has pointerEvents="box-none"/);
+  assert.deepEqual(calls, []);
 });
 
 test('isExactPresent: verbatim testID match → true', () => {

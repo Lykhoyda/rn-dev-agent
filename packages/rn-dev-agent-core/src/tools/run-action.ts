@@ -62,15 +62,6 @@ import { createRepairActionHandler } from './repair-action.js';
 import { isValidActionId } from '../domain/path-safety.js';
 import { classifyRouteDriftAfterFailure } from '../nav-graph/route-sequence.js';
 import { SessionAuthorityError } from '../session/registry.js';
-import {
-  isExactPresent,
-  runCdpReplay,
-  firstReplayTestId,
-  type CdpReplayDeps,
-} from './cdp-replay-dispatch.js';
-import { UnsupportedStepError } from '../domain/cdp-flow-replay.js';
-import { evaluateBlindProbeGate } from '../domain/blind-probe-gate.js';
-import type { BlindProbeAtRisk } from '../domain/blind-probe-gate.js';
 import type { MaestroDeviceAuthority } from '../domain/maestro-device-authority.js';
 import {
   claimManagedNativeOriginAuthority,
@@ -83,6 +74,7 @@ import {
 import { getWorkerAuthorityRuntime } from '../session/runtime.js';
 import { flowUsesClearState, resolveIosAppFile } from './resolve-ios-app-file.js';
 import { actionReplayPreflight } from '../domain/action-engine-compat.js';
+import { planIosProofDomains } from '../domain/ios-proof-router.js';
 import {
   getEngineStatus,
   PINNED_RUNNER_DIAGNOSE_HINT,
@@ -141,6 +133,29 @@ function classifyFailure(failure: MaestroFailure): {
   }
 }
 
+function actionFailureCodeForToolCode(code: ToolErrorCode): ActionFailureCode {
+  switch (code) {
+    case 'TESTID_NOT_FOUND':
+      return 'SELECTOR_NOT_FOUND';
+    case 'ASSERTION_FAILED':
+      return 'STATE_MISMATCH';
+    case 'CDP_NOT_CONNECTED':
+      return 'ENV_UNREACHABLE';
+    case 'RECONNECT_TIMEOUT':
+    case 'RUNNER_TIMEOUT':
+      return 'TIMEOUT';
+    case 'WDA_BOOTSTRAP_FAILED':
+    case 'NATIVE_SURFACE_BLIND':
+    case 'DEVICE_AUTHORITY_MISMATCH':
+    case 'ROUTE_DRIFT':
+    case 'TRANSPORT_BLIND':
+    case 'FALLBACK_REPLAY_FAILED':
+      return code;
+    default:
+      return 'UNKNOWN';
+  }
+}
+
 export interface RunActionArgs {
   /** Action id matching `<projectRoot>/.rn-agent/actions/<actionId>.yaml` or `.yml`. */
   actionId: string;
@@ -193,14 +208,6 @@ export interface RunActionArgs {
   forceReload?: boolean;
   /** Execute the action without persistence for strict proof rehearsal. */
   proofReplay?: boolean;
-  /**
-   * Per-call proactive CDP/JS compatibility control. `inherit` (default)
-   * honors RN_BLIND_PROBE; `allow` explicitly enables the normal at-risk
-   * probe for this call; `forbid` keeps this call maestro-first even when the
-   * process default enables the probe. Reactive fallback semantics are
-   * unchanged.
-   */
-  blindProbeMode?: 'inherit' | 'allow' | 'forbid';
 }
 
 interface MaestroTerminal {
@@ -214,7 +221,7 @@ interface MaestroTerminal {
 
 interface MaestroEnvelope {
   ok?: boolean;
-  code?: string;
+  code?: ToolErrorCode;
   data?: {
     passed?: boolean;
     output?: string;
@@ -223,6 +230,7 @@ interface MaestroEnvelope {
     terminal?: MaestroTerminal;
     runner?: string;
     transport?: string;
+    proofDomain?: 'react-tree' | 'xctest-native' | 'partitioned';
     transportVersion?: string | null;
     fallback?: string;
     enginePin?: {
@@ -257,13 +265,34 @@ function parseEnvelope(toolResult: ToolResult, toolName: string): MaestroEnvelop
   }
 }
 
+function typedReactSelectorFailure(env: MaestroEnvelope, raw: string): MaestroFailure | null {
+  const proofDomain = env.meta?.proofDomain;
+  const failedProofDomain = env.meta?.failedProofDomain;
+  const failedSelector = env.meta?.failedSelector;
+  if (
+    env.code !== 'TESTID_NOT_FOUND' ||
+    (proofDomain !== 'react-tree' && failedProofDomain !== 'react-tree') ||
+    typeof failedSelector !== 'string' ||
+    failedSelector.length === 0
+  ) {
+    return null;
+  }
+  return {
+    kind: 'SELECTOR_NOT_FOUND',
+    selectorKind: 'id',
+    selector: failedSelector,
+    raw,
+  };
+}
+
 function replaySuccessEvidence(env: MaestroEnvelope): {
   transport: string;
   transportVersion: string | null;
   fallback: string;
+  proofDomain: 'react-tree' | 'xctest-native' | 'partitioned';
   deviceAuthority?: MaestroDeviceAuthority;
   perStepReadback: {
-    source: 'maestro-runner-step-report';
+    source: 'maestro-runner-step-report' | 'react-tree-step-trace' | 'partitioned-step-trace';
     complete: boolean;
     steps: Array<{
       index: number;
@@ -284,9 +313,15 @@ function replaySuccessEvidence(env: MaestroEnvelope): {
     transport: env.data?.transport ?? env.data?.runner ?? 'unproven',
     transportVersion: env.data?.transportVersion ?? null,
     fallback: env.data?.fallback ?? 'unproven',
+    proofDomain: env.data?.proofDomain ?? 'xctest-native',
     ...(env.data?.deviceAuthority ? { deviceAuthority: env.data.deviceAuthority } : {}),
     perStepReadback: {
-      source: 'maestro-runner-step-report',
+      source:
+        env.data?.proofDomain === 'react-tree'
+          ? 'react-tree-step-trace'
+          : env.data?.proofDomain === 'partitioned'
+            ? 'partitioned-step-trace'
+            : 'maestro-runner-step-report',
       complete: steps.length > 0 && steps.every((step) => step.status === 'pass'),
       steps,
     },
@@ -390,9 +425,6 @@ function mapRefusedReason(
   // it with SNAPSHOT_FAILED so MTTR analytics surface it instead of hiding it
   // under INTERNAL_ERROR.
   if (repairCode === 'RUNNER_LEAK') return 'SNAPSHOT_FAILED';
-  // GH #317: rn-fast-runner saw the selector but Maestro/WDA could not. Surface
-  // it as its own reason (NOT INTERNAL_ERROR) so MTTR sees transport-blindness.
-  if (repairCode === 'TRANSPORT_BLIND') return 'TRANSPORT_BLIND';
   if (repairCode === 'TESTID_NOT_FOUND') return 'NO_MATCH';
   if (repairCode === 'STALE_TARGET') {
     if (/repair budget/i.test(repairError)) return 'BUDGET_EXHAUSTED';
@@ -420,27 +452,6 @@ export interface RunActionDeps {
    * CDP-backed fetcher; tests inject a fake.
    */
   getLiveRoute?: () => Promise<string | null>;
-  /**
-   * GH #317 Phase 2: factory that returns CdpReplayDeps for the CDP/JS
-   * transport-blind fallback, or null to skip the fallback entirely.
-   * Defaults to () => null so existing callers and tests are unchanged.
-   * Production wiring lives in index.ts.
-   */
-  replayDeps?: (args: RunActionArgs) => CdpReplayDeps | null;
-  /**
-   * GH #423: retry budget for the fallback's tree probe. The failed flow has
-   * usually just relaunched the app, so CDP is mid-reconnect exactly when the
-   * probe runs — a single attempt silently disabled the fallback in the field.
-   */
-  probeRetry?: { attempts: number; delayMs: number };
-  /**
-   * GH #397 Phase 2: device context for the proactive blind-probe.
-   * null ⇒ gate inert (today's behavior). Production wiring lives in index.ts.
-   */
-  blindProbeContext?: () => Promise<{
-    deviceId: string | null;
-    iosRuntimeMajor: number | null;
-  } | null>;
   /** Exact active session authority forwarded to Maestro; never best-available. */
   targetContext?: () => {
     platform?: string;
@@ -450,19 +461,13 @@ export interface RunActionDeps {
   claimBundleAuthority?: (args: RunActionArgs) => Promise<boolean>;
   claimNativeOrigin?: (args: RunActionArgs) => Promise<void>;
   completeNativeOrigin?: (args: RunActionArgs, targetExpected: boolean) => Promise<void>;
-  relaunchManagedApp?: (args: RunActionArgs) => Promise<void>;
+  relaunchManagedApp?: (args: RunActionArgs, stopApp?: boolean) => Promise<void>;
   reproveManagedOrigin?: (args: RunActionArgs) => Promise<void>;
   reissueInstallReceipt?: (args: RunActionArgs) => Promise<void>;
   /** GH #705: the session's attested install receipt, for appFile auto-resolution. */
   installReceipt?: () => { platform?: unknown; deviceId?: unknown; appId?: unknown } | null;
   resolveAppFile?: (appId: string, deviceId: string) => string | null;
   engineStatus?: () => Promise<ReplayEngineStatus | null>;
-}
-
-/** GH #423: why the CDP/JS fallback did not replay — surfaced in failure meta. */
-interface CdpJsFallbackSkip {
-  attempted: false;
-  reason: 'no-replay-deps' | 'no-probe-testid' | 'cdp-unreachable' | 'testid-not-in-tree';
 }
 
 function replayCorpusIdentityRefusal(
@@ -472,49 +477,18 @@ function replayCorpusIdentityRefusal(
   try {
     assertReadableActionLoadContextStable(context);
     return null;
-  } catch (err) {
-    return failResult(err instanceof Error ? err.message : String(err), 'BAD_FILENAME', {
+  } catch (error) {
+    return failResult(error instanceof Error ? error.message : String(error), 'BAD_FILENAME', {
       actionId,
       fallback: 'none',
     });
   }
 }
 
-async function probeTreeWithRetry(
-  replay: CdpReplayDeps,
-  probe: string,
-  retry: { attempts: number; delayMs: number },
-): Promise<{ found: boolean; sawTree: boolean }> {
-  // Retry until the probe testID is PRESENT, not merely until a tree is
-  // readable — after a WDA-death relaunch the app may serve an early/loading
-  // tree while the target element hasn't mounted yet (per-edit review).
-  let sawTree = false;
-  for (let attempt = 0; attempt < retry.attempts; attempt++) {
-    const tree = await replay.treeFor(probe).catch(() => null);
-    if (tree !== null) {
-      sawTree = true;
-      if (isExactPresent(tree, probe)) return { found: true, sawTree: true };
-    }
-    if (attempt < retry.attempts - 1) {
-      await new Promise((r) => setTimeout(r, retry.delayMs));
-    }
-  }
-  return { found: false, sawTree };
-}
-
 export function createRunActionHandler(deps: RunActionDeps = {}) {
   const maestroRun = deps.maestroRun ?? createMaestroRunHandler();
   const repairAction = deps.repairAction ?? createRepairActionHandler();
   const getLiveRoute = deps.getLiveRoute ?? (async () => null);
-  const getReplayDeps = deps.replayDeps ?? (() => null);
-  const probeRetryRaw = deps.probeRetry ?? { attempts: 3, delayMs: 1500 };
-  // Clamp so an injected budget can't stall cdp_run_action beyond a few extra
-  // seconds (each attempt also carries the tree handler's own CDP timeout).
-  const probeRetry = {
-    attempts: Math.min(Math.max(1, probeRetryRaw.attempts), 5),
-    delayMs: Math.min(Math.max(0, probeRetryRaw.delayMs), 5000),
-  };
-  const blindProbeContext = deps.blindProbeContext ?? (async () => null);
   const targetContext = deps.targetContext ?? (() => null);
   const claimBundleAuthority = deps.claimBundleAuthority ?? (async () => true);
   const claimNativeOrigin = deps.claimNativeOrigin ?? claimManagedNativeOriginAuthority;
@@ -581,7 +555,6 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
       );
     }
     const replayYaml = loaded.replay.yamlText;
-    const cdpReplayYaml = loaded.replay.cdpYaml;
     const preflightCommands = loaded.replay.commands;
     // GH #173 (sub-issue 3): default-true forceReload acknowledges any
     // human edit to the YAML as the new baseline so downstream auto-repair
@@ -589,6 +562,16 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
     // get the strict Phase 129 "respect external edits" behavior back.
     const forceReload = proofReplay ? false : args.forceReload !== false;
     const action = forceReload ? acknowledgeExternalEdit(loaded) : loaded;
+    const activeTarget = targetContext();
+    const replayPlatform =
+      args.platform && activeTarget?.platform && args.platform !== activeTarget.platform
+        ? undefined
+        : (args.platform ?? activeTarget?.platform);
+    const iosProofPlan =
+      replayPlatform === 'ios' ? planIosProofDomains(preflightCommands, args.params ?? {}) : null;
+    const requiresNativeRuntime =
+      iosProofPlan?.ok !== true ||
+      iosProofPlan.segments.some((segment) => segment.domain === 'xctest-native');
 
     let engineStatus: ReplayEngineStatus | null;
     try {
@@ -604,6 +587,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
       enginePin: action.metadata.enginePin,
       commands: preflightCommands,
       engineStatus,
+      requireRuntimePin: requiresNativeRuntime,
     });
     if (compatRefusal) {
       return failResult(compatRefusal, 'ENGINE_PIN_MISMATCH', {
@@ -616,7 +600,6 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
     }
 
     const autoRepairEnabled = args.autoRepair !== false;
-    const blindProbeControl = args.blindProbeMode ? { blindProbeMode: args.blindProbeMode } : {};
     const trigger: 'agent' | 'ci' | 'human' = args.trigger ?? 'agent';
     const timeoutMs = args.timeoutMs ?? 120_000;
     const t0 = Date.now();
@@ -637,7 +620,6 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
         });
       }
     };
-    const activeTarget = targetContext();
     if (args.platform && activeTarget?.platform && activeTarget.platform !== args.platform) {
       return failResult(
         `cdp_run_action: requested ${args.platform}, but the active session is ${activeTarget.platform}; refusing cross-platform replay.`,
@@ -717,123 +699,11 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
     // structured failResult WITH a persisted RunRecord, instead of
     // bubbling up unwrapped to the MCP framework.
     try {
-      // GH #397 Phase 2: proactive blind-probe. On at-risk iOS runtimes
-      // (>= 26, or a recent device-matched TRANSPORT_BLIND) with a CDP-visible
-      // anchor, skip the doomed ~40s WDA attempt and replay via CDP/JS
-      // directly. Every branch fails open to the maestro-first path below.
-      // Opt out globally with RN_BLIND_PROBE=0.
-      let atRisk: BlindProbeAtRisk | null = null;
       const strictExecutor = usesStrictRunActionPolicy(args);
       const strictRunRecordMeta = (outcome: PersistRunOutcome): Record<string, unknown> =>
         strictExecutor && outcome.persistedRunId
           ? { strictRunRecordId: outcome.persistedRunId }
           : {};
-      const inheritedBlindProbeDisabled =
-        process.env.RN_BLIND_PROBE === '0' || process.env.RN_BLIND_PROBE === 'false';
-      const blindProbeDisabled =
-        strictExecutor ||
-        args.blindProbeMode === 'forbid' ||
-        (args.blindProbeMode !== 'allow' && inheritedBlindProbeDisabled);
-      if (args.platform !== 'android') {
-        // Resolve the device context even when the gate is opted out: a clean
-        // maestro pass recorded WITHOUT deviceId can never clear a prior
-        // device-matched latch (strict matching), which would defeat the
-        // documented "rerun with RN_BLIND_PROBE=0" recovery workflow.
-        const ctx = await blindProbeContext().catch(() => null);
-        if (ctx) {
-          probeDeviceId = ctx.deviceId;
-          observedDeviceId = ctx.deviceId ?? observedDeviceId;
-          if (!blindProbeDisabled) {
-            atRisk = evaluateBlindProbeGate({
-              platform: args.platform,
-              iosRuntimeMajor: ctx.iosRuntimeMajor,
-              deviceId: ctx.deviceId,
-              runHistory: action.state.runHistory,
-            }).atRisk;
-          }
-        }
-      }
-
-      if (atRisk) {
-        const candidate = getReplayDeps(args);
-        const replayDeps = candidate && (await claimBundleAuthority(args)) ? candidate : null;
-        const probe = replayDeps ? firstReplayTestId(cdpReplayYaml, args.params ?? {}) : null;
-        if (replayDeps && probe) {
-          const tProbe = Date.now();
-          const probeOutcome = await measureStep('proactive-probe', () =>
-            probeTreeWithRetry(replayDeps, probe, probeRetry),
-          );
-          if (probeOutcome.found) {
-            const tReplay = Date.now();
-            try {
-              const corpusRefusal = replayCorpusIdentityRefusal(loadContext, args.actionId);
-              if (corpusRefusal) return corpusRefusal;
-              const replay = await measureStep('proactive-cdp-replay', () =>
-                runCdpReplay(cdpReplayYaml, args.params ?? {}, replayDeps),
-              );
-              const timings_ms = { probe: tReplay - tProbe, replay: Date.now() - tReplay };
-              const blindProbe = { atRisk, skippedMaestro: true };
-              const autoRepair: AutoRepairOutcome = {
-                attempted: false,
-                outcome: 'skipped',
-                // The probe+replay IS this run's first (and only) attempt —
-                // maestro was skipped by design.
-                phases: { firstAttemptMs: Date.now() - tProbe },
-              };
-              const persisted = await persistRunWithDevice({
-                timestamp: new Date().toISOString(),
-                durationMs: Date.now() - t0,
-                status: replay.passed ? 'pass' : 'fail',
-                failureCode: replay.passed ? undefined : 'FALLBACK_REPLAY_FAILED',
-                failureDetail: replay.reason,
-                trigger,
-                autoRepair,
-                transport: 'cdp-js',
-                blindProbe,
-              });
-              if (replay.passed) {
-                return okResult({
-                  passed: true,
-                  actionId: args.actionId,
-                  transport: 'cdp-js',
-                  transportVersion: null,
-                  fallback: 'none',
-                  repair: autoRepair,
-                  writes: writeDisclosure(promotionDisclosure(persisted), persisted),
-                  blindProbe,
-                  ...blindProbeControl,
-                  timings_ms,
-                  autoRepair,
-                  durationMs: Date.now() - t0,
-                  flowFile: action.filePath,
-                });
-              }
-              // NOT 'TRANSPORT_BLIND': maestro was never attempted, so no
-              // blindness was observed — this may be app drift or a stale
-              // anchor. FALLBACK_REPLAY_FAILED is non-decisive for the latch,
-              // so the genuine latch record ages out and maestro gets retried.
-              return failResult(
-                `cdp_run_action: ${args.actionId} probe-routed to CDP/JS (at-risk: ${atRisk}) and failed at step ${replay.failedStepIndex}: ${replay.reason}. Maestro was not attempted; rerun with RN_BLIND_PROBE=0 to force the engine path.`,
-                'FALLBACK_REPLAY_FAILED',
-                {
-                  actionId: args.actionId,
-                  transport: 'cdp-js',
-                  blindProbe,
-                  ...blindProbeControl,
-                  timings_ms,
-                  failedStepIndex: replay.failedStepIndex,
-                },
-              );
-            } catch (e) {
-              if (!(e instanceof UnsupportedStepError)) throw e;
-              // Defensive only: firstReplayTestId() already returns null when
-              // the flow contains ANY unsupported step (it normalizes the whole
-              // flow), so this catch is normally unreachable — kept so a
-              // grammar divergence can never block the maestro path below.
-            }
-          }
-        }
-      }
 
       // ─── First attempt ───────────────────────────────────────────────
       // Issue #120: capture per-phase timing so MTTR analysis (#105) can
@@ -858,9 +728,9 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
           params: args.params,
           claimNativeOrigin: () => claimNativeOrigin(args),
           completeNativeOrigin: (targetExpected) => completeNativeOrigin(args, targetExpected),
-          relaunchManagedApp: () => relaunchManagedApp(args),
+          relaunchManagedApp: (stopApp) => relaunchManagedApp(args, stopApp),
           reproveManagedOrigin: () => reproveManagedOrigin(args),
-          completeRunnerPark: () => completeManagedRunnerParkAuthority(args),
+          completeRunnerPark: (signal) => completeManagedRunnerParkAuthority(args, signal),
           reissueInstallReceipt: () => reissueInstallReceipt(args),
         }),
       );
@@ -871,6 +741,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
       const firstDeviceAuthority = readMaestroDeviceAuthority(firstEnv);
       probeDeviceId = firstDeviceAuthority?.reportedDeviceId ?? observedDeviceId;
       const enginePinDivergence = strictExecutor ? strictEnginePinDivergence(firstEnv) : null;
+      const firstTypedSelectorFailure = typedReactSelectorFailure(firstEnv, firstOutput);
 
       if (enginePinDivergence) {
         const autoRepair: AutoRepairOutcome = {
@@ -904,8 +775,8 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
 
       const firstPassed = firstEnv.ok === true && firstEnv.data?.passed === true;
 
-      if (firstEnv.code) {
-        const typedCode = firstEnv.code as ToolErrorCode;
+      if (firstEnv.code && !firstTypedSelectorFailure) {
+        const typedCode = firstEnv.code;
         const autoRepair: AutoRepairOutcome = {
           attempted: false,
           outcome: args.autoRepair === false ? 'refused' : 'skipped',
@@ -916,12 +787,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
           timestamp: new Date().toISOString(),
           durationMs: Date.now() - t0,
           status: 'fail',
-          failureCode:
-            typedCode === 'DEVICE_AUTHORITY_MISMATCH'
-              ? 'DEVICE_AUTHORITY_MISMATCH'
-              : typedCode === 'RECONNECT_TIMEOUT'
-                ? 'TIMEOUT'
-                : 'UNKNOWN',
+          failureCode: actionFailureCodeForToolCode(typedCode),
           failureDetail: firstFailureDetail.slice(0, 1000),
           trigger,
           autoRepair,
@@ -930,9 +796,20 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
           `cdp_run_action: ${args.actionId} refused replay: ${firstFailureDetail}`,
           typedCode,
           {
+            ...firstEnv.meta,
             actionId: args.actionId,
             failureKind: typedCode,
             deviceAuthority: firstDeviceAuthority,
+            ...(typedCode === 'NATIVE_SURFACE_BLIND'
+              ? {
+                  proofDomain: firstEnv.meta?.proofDomain,
+                  runner: firstEnv.meta?.runner,
+                  transportVersion: firstEnv.meta?.transportVersion,
+                  nativeVision: firstEnv.meta?.nativeVision,
+                  cleanup: firstEnv.meta?.cleanup,
+                  nextAction: firstEnv.meta?.nextAction,
+                }
+              : {}),
             autoRepair,
             writes: writeDisclosure('none', persisted),
             ...strictRunRecordMeta(persisted),
@@ -953,6 +830,8 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
           status: 'pass',
           trigger,
           autoRepair,
+          ...(firstEnv.data?.transport === 'cdp-js' ? { transport: 'cdp-js' as const } : {}),
+          ...(firstEnv.data?.proofDomain ? { proofDomain: firstEnv.data.proofDomain } : {}),
         });
         if (strictExecutor && persisted.persistedRunId !== runId) {
           return failResult(
@@ -981,7 +860,9 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
       }
 
       // ─── First attempt failed — classify ─────────────────────────────
-      const failure = parseMaestroFailure(firstOutput, readMaestroTerminal(firstEnv));
+      const failure =
+        firstTypedSelectorFailure ??
+        parseMaestroFailure(firstOutput, readMaestroTerminal(firstEnv));
 
       // GH #186: structural route-drift takes precedence over selector repair.
       // If the action recorded an expected route sequence and the LIVE route is
@@ -991,9 +872,10 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
       // the default fetcher is a no-op until index.ts wires a CDP-backed one).
       const expectedSeq = action.metadata.expectedRouteSequence;
       if (failure.kind === 'SELECTOR_NOT_FOUND' && expectedSeq && expectedSeq.length > 0) {
-        const liveRoute = (await claimBundleAuthority(args))
-          ? await getLiveRoute().catch(() => null)
-          : null;
+        const bundleAuthorityClaimed = await claimBundleAuthority(args);
+        const routeCorpusRefusal = replayCorpusIdentityRefusal(loadContext, args.actionId);
+        if (routeCorpusRefusal) return routeCorpusRefusal;
+        const liveRoute = bundleAuthorityClaimed ? await getLiveRoute().catch(() => null) : null;
         const drift = classifyRouteDriftAfterFailure({ expectedSequence: expectedSeq, liveRoute });
         if (drift.isDrift) {
           const autoRepair: AutoRepairOutcome = {
@@ -1022,122 +904,6 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
               autoRepair,
             },
           );
-        }
-      }
-
-      // GH #317 Phase 2: CDP/JS transport-blind fallback (broadened to UNKNOWN).
-      // On iOS 26.x bridgeless, WDA fails two ways while the app renders fine:
-      //   SELECTOR_NOT_FOUND — WDA drove but couldn't see the element (probe = failed selector)
-      //   UNKNOWN            — WDA died at launch before any selector (probe = first action testID)
-      // In both, if the probe testID is verbatim-present in the CDP tree the app IS
-      // rendering, so this is transport-blindness, not a crash — replay via CDP/JS.
-      // GH #423: the probe retries through a reconnecting CDP (the failed flow
-      // usually just relaunched the app), and every skip records its reason —
-      // a silent skip surfaced in the field as an unexplained UNKNOWN.
-      let cdpJsFallback: CdpJsFallbackSkip | undefined;
-      if (
-        !strictExecutor &&
-        (failure.kind === 'SELECTOR_NOT_FOUND' || failure.kind === 'UNKNOWN')
-      ) {
-        const candidate = getReplayDeps(args);
-        const replayDeps = candidate && (await claimBundleAuthority(args)) ? candidate : null;
-        const probe = !replayDeps
-          ? null
-          : failure.kind === 'SELECTOR_NOT_FOUND'
-            ? failure.selector
-            : firstReplayTestId(cdpReplayYaml, args.params ?? {});
-        if (!replayDeps) {
-          cdpJsFallback = { attempted: false, reason: 'no-replay-deps' };
-        } else if (!probe) {
-          cdpJsFallback = { attempted: false, reason: 'no-probe-testid' };
-        } else {
-          const probeOutcome = await measureStep('fallback-probe', () =>
-            probeTreeWithRetry(replayDeps, probe, probeRetry),
-          );
-          if (!probeOutcome.found) {
-            cdpJsFallback = {
-              attempted: false,
-              reason: probeOutcome.sawTree ? 'testid-not-in-tree' : 'cdp-unreachable',
-            };
-          } else {
-            // GH #580: what Maestro actually reported, carried onto every fallback
-            // failure return so the caller never has to re-derive it from stdout.
-            const maestroEvidence = {
-              failureKind: failure.kind,
-              ...(failure.kind === 'SELECTOR_NOT_FOUND'
-                ? { failureSelector: failure.selector }
-                : {}),
-              underlyingFailure: firstFailureDetail,
-              terminal: readMaestroTerminal(firstEnv),
-              firstAttemptOutput: boundedOutput(firstOutput),
-            };
-            try {
-              // GH #580: resume at the proven failed selector; UNKNOWN failed before
-              // any step, so it keeps start-at-zero.
-              const corpusRefusal = replayCorpusIdentityRefusal(loadContext, args.actionId);
-              if (corpusRefusal) return corpusRefusal;
-              const replay = await measureStep('fallback-cdp-replay', () =>
-                runCdpReplay(cdpReplayYaml, args.params ?? {}, replayDeps, {
-                  resumeAtSelector: failure.kind === 'SELECTOR_NOT_FOUND' ? failure.selector : null,
-                }),
-              );
-              const status = replay.passed ? 'pass' : 'fail';
-              const autoRepair: AutoRepairOutcome = {
-                attempted: false,
-                outcome: 'skipped',
-                phases: { firstAttemptMs },
-              };
-              // The fallback is a different transport. Its existing active-session
-              // context remains the affinity input; never carry Maestro's device
-              // report across transports.
-              probeDeviceId = maestroDeviceId ?? observedDeviceId;
-              const persisted = await persistRunWithDevice({
-                timestamp: new Date().toISOString(),
-                durationMs: Date.now() - t0,
-                status,
-                failureCode: replay.passed ? undefined : 'TRANSPORT_BLIND',
-                failureDetail: replay.reason,
-                trigger,
-                autoRepair,
-                transport: 'cdp-js',
-              });
-              if (replay.passed) {
-                return okResult({
-                  passed: true,
-                  actionId: args.actionId,
-                  transport: 'cdp-js',
-                  transportVersion: null,
-                  fallback: 'cdp-js',
-                  repair: autoRepair,
-                  autoRepair,
-                  writes: writeDisclosure(promotionDisclosure(persisted), persisted),
-                  durationMs: Date.now() - t0,
-                  flowFile: action.filePath,
-                  resume: replay.resume,
-                });
-              }
-              return failResult(
-                `cdp_run_action: ${args.actionId} replayed via CDP/JS (WDA transport-blind) and failed at step ${replay.failedStepIndex}: ${replay.reason}`,
-                'TRANSPORT_BLIND',
-                {
-                  actionId: args.actionId,
-                  transport: 'cdp-js',
-                  failedStepIndex: replay.failedStepIndex,
-                  resume: replay.resume,
-                  ...maestroEvidence,
-                },
-              );
-            } catch (e) {
-              if (e instanceof UnsupportedStepError) {
-                return failResult(
-                  `cdp_run_action: ${args.actionId} cannot replay via CDP/JS — ${e.message}. This action uses a step type the iOS 26.x fallback doesn't support; run on iOS 18 (WDA works there).`,
-                  'UNSUPPORTED_STEP' as ToolErrorCode,
-                  { actionId: args.actionId, stepKey: e.stepKey, ...maestroEvidence },
-                );
-              }
-              throw e;
-            }
-          }
         }
       }
 
@@ -1183,7 +949,6 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
           firstAttemptOutput: boundedOutput(firstOutput),
           terminal: readMaestroTerminal(firstEnv),
           runnerResume: (firstEnv.meta as { runnerResume?: unknown } | undefined)?.runnerResume,
-          ...(cdpJsFallback ? { cdpJsFallback } : {}),
           ...strictRunRecordMeta(persisted),
         };
         const cacheProvisionRefusal =
@@ -1194,12 +959,6 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
           : failure.kind === 'WDA_BOOTSTRAP_FAILED'
             ? `cdp_run_action: ${args.actionId} failed (WDA_BOOTSTRAP_FAILED) before the first replay step: ${failure.detail}. Re-run the replay (bootstrap retries itself); check network access; diagnose the pin-cache runner with ${PINNED_RUNNER_DIAGNOSE_HINT}. Supported correction: ${PINNED_RUNNER_INSTALL_HINT}. Never invoke PATH, ~/.maestro-runner, maestro-cli, or manual login. No preparation or cache mutation was attempted.`
             : `cdp_run_action: ${args.actionId} failed (${failure.kind})${autoRepairEnabled ? ' — failure not auto-repairable' : ' — auto-repair disabled'}: ${firstFailureDetail}`;
-        // GH #423: an UNKNOWN with the fallback skipped for CDP reasons was an
-        // opaque dead end in the field — say why and what to do next.
-        if (cdpJsFallback?.reason === 'cdp-unreachable') {
-          message +=
-            '. Maestro failed before completing the flow (on iOS 26.x WDA often dies at startup) and the CDP/JS replay fallback was skipped: CDP was unreachable after the flow. Check cdp_status and reconnect, then retry; if another XCUITest automation is driving this simulator, stop it first.';
-        }
         return toolCode ? failResult(message, toolCode, meta) : failResult(message, meta);
       }
 
@@ -1253,7 +1012,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
         });
         return failResult(
           `cdp_run_action: ${args.actionId} failed with SELECTOR_NOT_FOUND (${failure.selector}); auto-repair refused (${refusedReason}): ${repairEnv.error ?? 'unknown'}`,
-          refusedReason === 'TRANSPORT_BLIND' ? 'TRANSPORT_BLIND' : 'TESTID_NOT_FOUND',
+          'TESTID_NOT_FOUND',
           {
             actionId: args.actionId,
             failureKind: failure.kind,
@@ -1325,9 +1084,9 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
           params: args.params,
           claimNativeOrigin: () => claimNativeOrigin(args),
           completeNativeOrigin: (targetExpected) => completeNativeOrigin(args, targetExpected),
-          relaunchManagedApp: () => relaunchManagedApp(args),
+          relaunchManagedApp: (stopApp) => relaunchManagedApp(args, stopApp),
           reproveManagedOrigin: () => reproveManagedOrigin(args),
-          completeRunnerPark: () => completeManagedRunnerParkAuthority(args),
+          completeRunnerPark: (signal) => completeManagedRunnerParkAuthority(args, signal),
           reissueInstallReceipt: () => reissueInstallReceipt(args),
         }),
       );
@@ -1337,14 +1096,16 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
       const retryOutput = readMaestroOutput(retryEnv);
       const retryFailureDetail = readMaestroFailureDetail(retryEnv, retryOutput);
       const retryTerminal = readMaestroTerminal(retryEnv);
+      const retryTypedSelectorFailure = typedReactSelectorFailure(retryEnv, retryOutput);
       const retryFailure = !retryPassed
-        ? parseMaestroFailure(retryOutput, retryTerminal)
+        ? (retryTypedSelectorFailure ?? parseMaestroFailure(retryOutput, retryTerminal))
         : undefined;
       const retryClassification = retryFailure ? classifyFailure(retryFailure) : undefined;
       const retryDeviceAuthority = readMaestroDeviceAuthority(retryEnv);
       probeDeviceId = retryDeviceAuthority?.reportedDeviceId ?? observedDeviceId;
 
-      if (retryEnv.code === 'DEVICE_AUTHORITY_MISMATCH') {
+      if (retryEnv.code && !retryTypedSelectorFailure) {
+        const typedCode = retryEnv.code;
         const autoRepair: AutoRepairOutcome = {
           attempted: true,
           outcome: 'failed',
@@ -1354,15 +1115,21 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
           timestamp: new Date().toISOString(),
           durationMs: Date.now() - t0,
           status: 'fail',
-          failureCode: 'DEVICE_AUTHORITY_MISMATCH',
+          failureCode: actionFailureCodeForToolCode(typedCode),
           failureDetail: retryFailureDetail.slice(0, 1000),
           trigger,
           autoRepair,
         });
         return failResult(
-          `cdp_run_action: ${args.actionId} refused retry authority: ${retryFailureDetail}`,
-          'DEVICE_AUTHORITY_MISMATCH',
-          { actionId: args.actionId, deviceAuthority: retryDeviceAuthority, autoRepair },
+          `cdp_run_action: ${args.actionId} retry failed: ${retryFailureDetail}`,
+          typedCode,
+          {
+            ...retryEnv.meta,
+            actionId: args.actionId,
+            failureKind: typedCode,
+            deviceAuthority: retryDeviceAuthority,
+            autoRepair,
+          },
         );
       }
 
@@ -1415,6 +1182,12 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
         failureDetail: retryPassed ? undefined : retryFailureDetail.slice(0, 1000),
         trigger,
         autoRepair,
+        ...(retryPassed && retryEnv.data?.transport === 'cdp-js'
+          ? { transport: 'cdp-js' as const }
+          : {}),
+        ...(retryPassed && retryEnv.data?.proofDomain
+          ? { proofDomain: retryEnv.data.proofDomain }
+          : {}),
       });
 
       if (retryPassed) {

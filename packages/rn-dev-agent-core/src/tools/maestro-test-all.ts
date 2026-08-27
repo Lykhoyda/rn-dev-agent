@@ -21,6 +21,7 @@ import {
   planMaestroAuthorityStages,
   resolveMaestroFlowAppId,
   runFlowParked,
+  type MaestroRunArgs,
 } from './maestro-run.js';
 import { outputIndicatesFlowFailure } from '../domain/maestro-error-parser.js';
 import {
@@ -33,6 +34,7 @@ import {
   runnerCacheBootstrapFailure,
   type ReplayEngineStatus,
 } from '../domain/engine-pin.js';
+import { planIosProofDomains } from '../domain/ios-proof-router.js';
 import {
   classifyLearnedActionPath,
   isLearnedActionPath,
@@ -90,6 +92,7 @@ export interface MaestroTestAllDeps {
   ) => Promise<{ stdout: string; stderr: string }>;
   now?: () => number;
   resolveEngineStatus?: () => Promise<ReplayEngineStatus | null>;
+  runFlow?: (args: MaestroRunArgs) => Promise<ToolResult>;
 }
 
 interface FlowResult {
@@ -98,6 +101,12 @@ interface FlowResult {
   durationMs: number;
   error?: string;
   deviceAuthority?: MaestroDeviceAuthority;
+  code?: string;
+  proofDomain?: string;
+  proofDomains?: string[];
+  runner?: string;
+  transport?: string;
+  treeEnvelope?: Record<string, unknown>;
 }
 
 interface PreparedFlow {
@@ -107,6 +116,23 @@ interface PreparedFlow {
   canonical: string;
   appFile: string | undefined;
   reinstallsApp: boolean;
+  actionMetadata: MaestroRunArgs['actionMetadata'];
+}
+
+interface NestedFlowEnvelope {
+  ok?: boolean;
+  code?: string;
+  error?: string;
+  data?: Record<string, unknown>;
+  meta?: Record<string, unknown>;
+}
+
+function readNestedFlowEnvelope(result: ToolResult): NestedFlowEnvelope {
+  try {
+    return JSON.parse(result.content[0]?.text ?? '{}') as NestedFlowEnvelope;
+  } catch {
+    return { ok: false, error: 'Shared iOS proof planner returned an unreadable result.' };
+  }
 }
 
 function filterFlows(yamls: string[], pattern?: string): string[] {
@@ -165,13 +191,7 @@ export function createMaestroTestAllHandler(
     }
     const requestedDeviceId = args.deviceId ?? matchingSessionDeviceId;
 
-    const dispatch = selectDispatch({ platform });
-    if ('error' in dispatch) {
-      return failResult(dispatch.error);
-    }
     const engineStatus = await resolveEngineStatus();
-    const pinRefusal = exactPinRefusal(engineStatus);
-    if (pinRefusal) return failResult(pinRefusal);
 
     const root = findProjectRoot();
     const flowDir = args.flowDir ?? (root ? join(root, '.rn-agent', 'actions') : null);
@@ -204,6 +224,21 @@ export function createMaestroTestAllHandler(
       return failResult(
         `Refusing learned-action corpus without an approved load context: ${resolvedFlowDir}.`,
       );
+    }
+    const useSharedIosPlanner = learnedCorpus && platform === 'ios' && deps.runFlow !== undefined;
+    if (!useSharedIosPlanner) {
+      const pinRefusal = exactPinRefusal(engineStatus);
+      if (pinRefusal) return failResult(pinRefusal);
+    }
+    const dispatch = useSharedIosPlanner
+      ? {
+          runner: 'maestro-runner' as const,
+          binPath: '',
+          buildArgs: () => [],
+        }
+      : selectDispatch({ platform });
+    if ('error' in dispatch) {
+      return failResult(dispatch.error);
     }
     const flows = learnedContext
       ? filterFlows(
@@ -253,11 +288,21 @@ export function createMaestroTestAllHandler(
           meta = parseM7Header(yamlText, flowId);
           requireEnginePin = meta !== null || isLearnedActionPath(flow);
         }
+        const iosProofPlan = useSharedIosPlanner ? planIosProofDomains(parsedCommands, {}) : null;
+        if (iosProofPlan && !iosProofPlan.ok) {
+          throw new Error(
+            `Refusing iOS proof-domain ambiguity at step ${iosProofPlan.sourceIndex}: ${iosProofPlan.reason}.`,
+          );
+        }
+        const requiresNativeRuntime =
+          iosProofPlan?.ok !== true ||
+          iosProofPlan.segments.some((segment) => segment.domain === 'xctest-native');
         const preflight = replayCompatibilityPreflight({
           enginePin: meta?.enginePin,
           commands: parsedCommands,
           engineStatus,
           requireEnginePin,
+          requireRuntimePin: requiresNativeRuntime,
         });
         if (preflight) throw new Error(preflight);
         planMaestroAuthorityStages(parsedCommands);
@@ -277,6 +322,7 @@ export function createMaestroTestAllHandler(
           canonical,
           appFile: appFileResolution.appFile,
           reinstallsApp: Boolean(appFileResolution.appFile) && flowUsesClearState(canonical),
+          actionMetadata: meta ?? undefined,
         });
       } catch (err) {
         const reason =
@@ -303,7 +349,7 @@ export function createMaestroTestAllHandler(
           failed: preflightResults.length,
           platform,
           flowDir,
-          runner: dispatch.runner,
+          runner: useSharedIosPlanner ? 'semantic-proof-planner' : dispatch.runner,
           requestedDeviceId: requestedDeviceId ?? null,
           results: preflightResults,
         },
@@ -326,6 +372,74 @@ export function createMaestroTestAllHandler(
     for (const prepared of preparedFlows) {
       const { name } = prepared;
       const start = now();
+      if (useSharedIosPlanner && deps.runFlow) {
+        try {
+          const nested = readNestedFlowEnvelope(
+            await deps.runFlow({
+              inlineYaml: prepared.canonical,
+              actionMetadata: prepared.actionMetadata,
+              platform,
+              appId: prepared.appId,
+              deviceId: requestedDeviceId,
+              timeoutMs: timeout,
+              claimNativeOrigin: claimOrigin,
+              completeNativeOrigin: completeOrigin,
+              relaunchManagedApp,
+              reproveManagedOrigin,
+              completeRunnerPark,
+              reissueInstallReceipt,
+            }),
+          );
+          const evidence = { ...nested.meta, ...nested.data };
+          const flowPassed = nested.ok === true && nested.data?.passed === true;
+          results.push({
+            name,
+            passed: flowPassed,
+            durationMs: now() - start,
+            ...(flowPassed
+              ? {}
+              : {
+                  error:
+                    nested.error ??
+                    (typeof nested.meta?.warning === 'string'
+                      ? nested.meta.warning
+                      : 'Shared iOS proof replay failed.'),
+                }),
+            ...(nested.code ? { code: nested.code } : {}),
+            ...(typeof evidence.proofDomain === 'string'
+              ? { proofDomain: evidence.proofDomain }
+              : {}),
+            ...(Array.isArray(evidence.proofDomains)
+              ? {
+                  proofDomains: evidence.proofDomains.filter(
+                    (value): value is string => typeof value === 'string',
+                  ),
+                }
+              : {}),
+            ...(typeof evidence.runner === 'string' ? { runner: evidence.runner } : {}),
+            ...(typeof evidence.transport === 'string' ? { transport: evidence.transport } : {}),
+            ...(evidence.treeEnvelope &&
+            typeof evidence.treeEnvelope === 'object' &&
+            !Array.isArray(evidence.treeEnvelope)
+              ? { treeEnvelope: evidence.treeEnvelope as Record<string, unknown> }
+              : {}),
+          });
+          if (flowPassed) passed++;
+          else failed++;
+        } catch (error) {
+          if (error instanceof SessionAuthorityError) throw error;
+          results.push({
+            name,
+            passed: false,
+            durationMs: now() - start,
+            error:
+              error instanceof Error ? error.message.slice(0, 300) : String(error).slice(0, 300),
+          });
+          failed++;
+        }
+        if (failed > 0 && args.stopOnFailure) break;
+        continue;
+      }
       const safeFlowFile = join(
         tmpdir(),
         `rn-maestro-validated-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.yaml`,
@@ -538,7 +652,8 @@ export function createMaestroTestAllHandler(
       failed,
       platform,
       flowDir,
-      runner: dispatch.runner,
+      runner: useSharedIosPlanner ? 'semantic-proof-planner' : dispatch.runner,
+      ...(useSharedIosPlanner ? { proofPlanner: 'shared-maestro-run' } : {}),
       requestedDeviceId: requestedDeviceId ?? null,
       ...(batchCaveat ? { fallbackReason: batchCaveat } : {}),
       results,

@@ -176,12 +176,15 @@ interaction tier still covers API 23+. See
 [`ANDROID_API_UNSUPPORTED`](../troubleshooting/#android_api_unsupported) for the
 full diagnosis and what still works.
 
-On WDA-blind runtimes (iOS 26 bridgeless, or after a transport-blind failure on the same
-device), `cdp_run_action` probes the component tree first and — when the action's anchor is
-visible — replays through the CDP/JS fallback directly instead of paying the doomed ~40s WDA
-attempt (`RunRecord.blindProbe` records the routing; disable with `RN_BLIND_PROBE=0`). Per call,
-`cdp_run_action(blindProbeMode: …)` overrides that default: `inherit` honors the env var,
-`allow` enables the probe for this call, `forbid` keeps this call maestro-first.
+On iOS, replay routes by proof semantics before execution. Exact `testID` tap, type, wait,
+assert, conditional-flow, and launch stages use the authority-bound React tree; native text,
+system-dialog, permission, and SpringBoard stages use XCTest/WDA. Results label the domain as
+`react-tree`, `xctest-native`, or `partitioned`. A React-tree pass proves deterministic React
+identity and controlled fiber text read-back, not IME composition, AutoFill, keyboard
+occlusion, or secure native-entry fidelity, and it never promotes an action to
+Maestro-certified active status. Native WDA blindness is reported as
+`NATIVE_SURFACE_BLIND` only when a bounded same-screen native snapshot saw the selector WDA
+missed; runtime version alone is never proof, and ordinary selector misses stay ordinary.
 
 ## What actions are NOT
 

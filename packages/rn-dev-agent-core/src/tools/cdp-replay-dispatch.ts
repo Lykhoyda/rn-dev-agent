@@ -1,22 +1,10 @@
-import { parse as yamlParse } from 'yaml';
 import {
   normalizeSteps,
   replayFlow,
-  firstTestId,
-  findResumeAnchor,
+  ReplayDispatchError,
   type ReplayResult,
 } from '../domain/cdp-flow-replay.js';
 import type { ReplayDispatch } from '../domain/cdp-flow-replay.js';
-
-export function firstReplayTestId(bodyYaml: string, params: Record<string, string>): string | null {
-  try {
-    const parsed = yamlParse(bodyYaml) as unknown[];
-    if (!Array.isArray(parsed)) return null;
-    return firstTestId(normalizeSteps(parsed, params));
-  } catch {
-    return null;
-  }
-}
 
 // __RN_AGENT.getTree() wraps the node tree under a top-level `.tree` key —
 // `{ tree: <node> | { matches: [...] }, totalNodes, rootsSeeded }` — and the
@@ -49,13 +37,71 @@ export function unwrapTree(data: unknown): unknown {
   return 'tree' in d ? d.tree : d;
 }
 
+export interface ReplayTreeEnvelope {
+  ok?: boolean;
+  code?: string;
+  error?: string;
+  data?: unknown;
+  meta?: Record<string, unknown>;
+}
+
+export function replayTreeData(envelope: ReplayTreeEnvelope): unknown {
+  const warning = typeof envelope.meta?.warning === 'string' ? envelope.meta.warning : undefined;
+  const redbox = warning === 'APP_HAS_REDBOX';
+  if (envelope.ok === true && !redbox) return envelope.data;
+
+  const data =
+    envelope.data && typeof envelope.data === 'object' && !Array.isArray(envelope.data)
+      ? (envelope.data as Record<string, unknown>)
+      : null;
+  const message =
+    redbox && typeof data?.message === 'string'
+      ? data.message.slice(0, 1000)
+      : (envelope.error?.slice(0, 1000) ?? 'Component tree proof is unavailable');
+  const code = redbox ? warning : (envelope.code ?? 'EVAL_FAILED');
+  throw new ReplayDispatchError(code, message, {
+    treeEnvelope: {
+      ok: envelope.ok === true,
+      ...(envelope.code ? { code: envelope.code } : {}),
+      ...(envelope.error ? { error: envelope.error.slice(0, 1000) } : {}),
+      ...(warning ? { warning } : {}),
+      ...(typeof data?.message === 'string' ? { message: data.message.slice(0, 1000) } : {}),
+      ...(envelope.meta ? { meta: envelope.meta } : {}),
+    },
+  });
+}
+
 export interface CdpReplayDeps {
   pressByTestId(id: string): Promise<void>;
   typeByTestId(id: string, text: string): Promise<void>;
-  // returns the parsed getTree JSON filtered to `id`, or null on failure
-  treeFor(id: string): Promise<unknown | null>;
+  // returns parsed successful getTree data filtered to `id`; failures reject with their envelope
+  treeFor(id: string): Promise<unknown>;
+  frontmostFor?(id: string): Promise<{
+    visible: boolean;
+    reason?: string;
+    matchCount?: number;
+    code?: string;
+  }>;
   launchApp(stopApp: boolean): Promise<void>;
-  settle(): Promise<void>;
+  settle(timeoutMs: number): Promise<void>;
+}
+
+function countExactMatches(treeJson: unknown, id: string): number {
+  let matches = 0;
+  const root =
+    treeJson && typeof treeJson === 'object' && 'tree' in treeJson
+      ? (treeJson as Record<string, unknown>).tree
+      : treeJson;
+  const stack: unknown[] = [root];
+  while (stack.length > 0) {
+    const node = stack.pop();
+    if (!node || typeof node !== 'object') continue;
+    const record = node as Record<string, unknown>;
+    if (record.testID === id || record.nativeID === id) matches++;
+    const children = record.children ?? record.nodes ?? record.matches;
+    if (Array.isArray(children)) stack.push(...children);
+  }
+  return matches;
 }
 
 function nodeProps(treeJson: unknown, id: string): Record<string, unknown> | null {
@@ -73,76 +119,153 @@ function nodeProps(treeJson: unknown, id: string): Record<string, unknown> | nul
   return null;
 }
 
+function nodePath(treeJson: unknown, id: string): Array<Record<string, unknown>> | null {
+  const root =
+    treeJson && typeof treeJson === 'object' && 'tree' in treeJson
+      ? (treeJson as Record<string, unknown>).tree
+      : treeJson;
+  const visit = (
+    value: unknown,
+    ancestors: Array<Record<string, unknown>>,
+  ): Array<Record<string, unknown>> | null => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+    const node = value as Record<string, unknown>;
+    const path = [...ancestors, node];
+    if (node.testID === id || node.nativeID === id) return path;
+    const children = node.children ?? node.nodes ?? node.matches;
+    if (!Array.isArray(children)) return null;
+    for (const child of children) {
+      const found = visit(child, path);
+      if (found) return found;
+    }
+    return null;
+  };
+  return visit(root, []);
+}
+
+function pointerEventsBlock(treeJson: unknown, id: string): string | null {
+  const path = nodePath(treeJson, id);
+  if (!path) return null;
+  for (let index = 0; index < path.length; index += 1) {
+    const node = path[index]!;
+    const props = (node.props as Record<string, unknown> | undefined) ?? node;
+    const pointerEvents = props.pointerEvents;
+    const target = index === path.length - 1;
+    if (target && (pointerEvents === 'none' || pointerEvents === 'box-none')) {
+      return `the target has pointerEvents="${pointerEvents}"`;
+    }
+    if (!target && pointerEvents === 'none') return 'an ancestor has pointerEvents="none"';
+    if (!target && pointerEvents === 'box-only') {
+      return 'an ancestor has pointerEvents="box-only"';
+    }
+  }
+  return null;
+}
+
 function isDisabled(props: Record<string, unknown> | null): boolean {
   if (!props) return false;
   const a11y = props.accessibilityState as { disabled?: boolean } | undefined;
-  return props.disabled === true || a11y?.disabled === true || props.pointerEvents === 'none';
+  return props.disabled === true || a11y?.disabled === true;
 }
 
-/** GH #580: why a reactive replay did or did not resume at the failed selector. */
-export type CdpReplayResume =
-  | { applied: true; selector: string; startIndex: number }
-  | {
-      applied: false;
-      reason: 'not-requested' | 'no-match' | 'ambiguous' | 'nested-match' | 'too-deep';
-    };
-
-export interface CdpReplayResult extends ReplayResult {
-  resume: CdpReplayResume;
-}
-
-/**
- * GH #580: `resumeAtSelector` replays only the suffix from the step targeting that
- * selector. The anchor is found on the RAW body and normalization applies to the
- * suffix alone, so unsupported commands in the executed prefix stop disqualifying
- * the whole action. A refused anchor keeps start-at-zero.
- */
-export async function runCdpReplay(
-  bodyYaml: string,
+export async function runCdpReplayCommands(
+  commands: unknown[],
   params: Record<string, string>,
   deps: CdpReplayDeps,
-  opts: { resumeAtSelector?: string | null } = {},
-): Promise<CdpReplayResult> {
-  const parsed = yamlParse(bodyYaml) as unknown[];
-  const resume = resolveResume(parsed, params, opts.resumeAtSelector);
-  const startIndex = resume.applied ? resume.startIndex : 0;
-  const steps = normalizeSteps(startIndex === 0 ? parsed : parsed.slice(startIndex), params);
-  const result = await replayFlow(steps, buildCdpDispatch(deps), { indexOffset: startIndex });
-  return { ...result, resume };
+  opts: { signal?: AbortSignal; initialFocusId?: string } = {},
+): Promise<ReplayResult> {
+  return replayFlow(normalizeSteps(commands, params), buildCdpDispatch(deps, opts.signal), {
+    signal: opts.signal,
+    initialFocusId: opts.initialFocusId,
+  });
 }
 
-function resolveResume(
-  parsed: unknown[],
-  params: Record<string, string>,
-  selector: string | null | undefined,
-): CdpReplayResume {
-  if (!selector || !Array.isArray(parsed)) return { applied: false, reason: 'not-requested' };
-  const anchor = findResumeAnchor(parsed, params, selector);
-  return anchor.found
-    ? { applied: true, selector, startIndex: anchor.index }
-    : { applied: false, reason: anchor.reason };
-}
+export function buildCdpDispatch(deps: CdpReplayDeps, signal?: AbortSignal): ReplayDispatch {
+  const requireNotAborted = (): void => {
+    if (signal?.aborted) {
+      throw new ReplayDispatchError(
+        'RUNNER_TIMEOUT',
+        'React-tree replay exceeded its execution deadline',
+      );
+    }
+  };
+  const assertExactInteractable = async (id: string): Promise<void> => {
+    const tree = await deps.treeFor(id);
+    requireNotAborted();
+    const treeMatches = countExactMatches(tree, id);
+    if (treeMatches === 0)
+      throw new ReplayDispatchError('TESTID_NOT_FOUND', `testID "${id}" not present`, {
+        failedSelector: id,
+      });
+    const frontmost = await deps.frontmostFor?.(id);
+    requireNotAborted();
+    const matches = frontmost ? (frontmost.matchCount ?? 1) : treeMatches;
+    if (matches > 1)
+      throw new ReplayDispatchError(
+        'AMBIGUOUS_TESTID',
+        `testID "${id}" resolves to ${matches} mounted elements`,
+        { matchCount: matches },
+      );
+    if (frontmost && !frontmost.visible)
+      throw new ReplayDispatchError(
+        frontmost.code ?? 'ASSERTION_FAILED',
+        frontmost.reason ?? `testID "${id}" is mounted but not frontmost`,
+      );
+    if (isDisabled(nodeProps(tree, id)))
+      throw new ReplayDispatchError(
+        'INTERACTION_NOT_ACTUATED',
+        `testID "${id}" is disabled/non-interactable`,
+      );
+    const pointerEventsError = pointerEventsBlock(tree, id);
+    if (pointerEventsError)
+      throw new ReplayDispatchError(
+        'INTERACTION_NOT_ACTUATED',
+        `testID "${id}" is not user-interactable: ${pointerEventsError}`,
+      );
+  };
 
-export function buildCdpDispatch(deps: CdpReplayDeps): ReplayDispatch {
   return {
     async press(id) {
-      const tree = await deps.treeFor(id);
-      if (!isExactPresent(tree, id)) throw new Error(`testID "${id}" not present`);
-      if (isDisabled(nodeProps(tree, id)))
-        throw new Error(`testID "${id}" is disabled/non-interactable`);
+      await assertExactInteractable(id);
+      requireNotAborted();
       await deps.pressByTestId(id);
     },
     async type(id, text) {
+      await assertExactInteractable(id);
+      requireNotAborted();
       await deps.typeByTestId(id, text);
     },
-    async isVisible(id) {
-      return isExactPresent(await deps.treeFor(id), id);
+    async visibility(id) {
+      const tree = await deps.treeFor(id);
+      const treeMatches = countExactMatches(tree, id);
+      if (treeMatches === 0)
+        return {
+          visible: false,
+          code: 'TESTID_NOT_FOUND',
+          reason: `testID "${id}" not present in the React tree`,
+          meta: { failedSelector: id },
+        };
+      const frontmost = await deps.frontmostFor?.(id);
+      const matches = frontmost ? (frontmost.matchCount ?? 1) : treeMatches;
+      if (matches > 1)
+        return {
+          visible: false,
+          code: 'AMBIGUOUS_TESTID',
+          reason: `testID "${id}" resolves to ${matches} mounted elements`,
+        };
+      if (frontmost && !frontmost.visible)
+        return {
+          visible: false,
+          code: frontmost.code ?? 'ASSERTION_FAILED',
+          reason: frontmost.reason ?? `testID "${id}" is mounted but not frontmost`,
+        };
+      return { visible: true };
     },
     async launch(stopApp) {
       await deps.launchApp(stopApp);
     },
-    async settle() {
-      await deps.settle();
+    async settle(timeoutMs) {
+      await deps.settle(timeoutMs);
     },
   };
 }
