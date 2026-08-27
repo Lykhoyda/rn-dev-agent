@@ -339,9 +339,12 @@ the login e2e on the exact candidate (`cdp_lock_e2e_test` /
 `cdp_run_e2e_suite`). Helper replay and locked e2e coexist without sharing
 that proof or rewriting each other's artifacts.
 
-A failed prologue fails like any other action replay: it returns the replay's
-own failure code and leaves the session untouched — no authority is latched and
-no tool is disabled. The journey still stops there by policy. A missing action,
+A failed prologue returns the replay's own failure code. It sets no login latch,
+persists no durable blocked state, and disables no tool because of the login
+result. Ordinary native replay authority transitions still apply exactly as
+they do for any other native replay: replay can invalidate bundle authority, so
+a following `cdp_*` call may refuse `BUNDLE_HANDSHAKE_UNAVAILABLE`; re-pin with
+`rn_session(action="pin_dev_client")`. The journey still stops there by policy. A missing action,
 runner drift, selector failure, timeout, or missing fresh RunRecord must not
 fall through to manual credential entry, `cdp_auto_login`, raw or ad-hoc
 Maestro, route injection, navigation shortcuts, or store mutation. Repair the
