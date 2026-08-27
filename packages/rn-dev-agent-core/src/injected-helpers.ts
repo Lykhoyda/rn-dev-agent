@@ -3811,26 +3811,34 @@ export const INJECTED_HELPERS = `
         matchCount: 1
       });
     }
-    function deepestNavigation(node) {
+    function activeNavigationChain(node) {
       var current = node;
-      var routeName = null;
+      var routeNames = [];
       var guard = 0;
       while (current && guard++ < 100) {
-        if (typeof current.routeName === 'string') routeName = current.routeName;
+        if (
+          typeof current.routeName === 'string' &&
+          routeNames.indexOf(current.routeName) === -1
+        ) routeNames.push(current.routeName);
         if (current.nested) { current = current.nested; continue; }
         if (Array.isArray(current.routes) && current.routes.length > 0) {
           var index = typeof current.index === 'number' ? current.index : current.routes.length - 1;
           if (index < 0) index = 0;
           if (index >= current.routes.length) index = current.routes.length - 1;
           var activeEntry = current.routes[index];
-          if (activeEntry && typeof activeEntry.name === 'string') routeName = activeEntry.name;
+          if (
+            activeEntry &&
+            typeof activeEntry.name === 'string' &&
+            routeNames.indexOf(activeEntry.name) === -1
+          ) routeNames.push(activeEntry.name);
           if (activeEntry && activeEntry.state) { current = activeEntry.state; continue; }
         }
         break;
       }
-      return routeName;
+      return routeNames;
     }
-    var activeRoute = deepestNavigation(nav);
+    var activeRoutes = activeNavigationChain(nav);
+    var activeRoute = activeRoutes.length > 0 ? activeRoutes[activeRoutes.length - 1] : null;
     if (typeof activeRoute !== 'string' || !activeRoute) {
       return JSON.stringify({
         visible: false,
@@ -3854,7 +3862,7 @@ export const INJECTED_HELPERS = `
       }
       current = current.return;
     }
-    if (routeOwner && routeOwner !== activeRoute) {
+    if (routeOwner && activeRoutes.indexOf(routeOwner) === -1) {
       return JSON.stringify({
         visible: false,
         reason: 'testID belongs to an inactive mounted route',
@@ -3899,9 +3907,38 @@ export const INJECTED_HELPERS = `
       ) {
         stateNode = stateNode.canonical.publicInstance;
       }
-      return stateNode && typeof stateNode.getBoundingClientRect === 'function'
-        ? stateNode
-        : null;
+      if (stateNode && typeof stateNode.getBoundingClientRect === 'function') return stateNode;
+      var hook = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
+      var registries = hook && [hook.renderers, hook.rendererInterfaces];
+      if (!registries) return null;
+      for (var registryIndex = 0; registryIndex < registries.length; registryIndex++) {
+        var registry = registries[registryIndex];
+        if (!registry || typeof registry.values !== 'function') continue;
+        try {
+          var iterator = registry.values();
+          var step;
+          var attempts = 0;
+          while (!(step = iterator.next()).done && attempts++ < MAX_REGISTERED_RENDERER_IDS) {
+            var renderer = step.value;
+            if (!renderer || typeof renderer.findHostInstanceByFiber !== 'function') continue;
+            var hostInstance = null;
+            try {
+              hostInstance = renderer.findHostInstanceByFiber(fiber);
+            } catch (_) {
+              continue;
+            }
+            if (
+              hostInstance &&
+              hostInstance.canonical &&
+              hostInstance.canonical.publicInstance
+            ) hostInstance = hostInstance.canonical.publicInstance;
+            if (hostInstance && typeof hostInstance.getBoundingClientRect === 'function') {
+              return hostInstance;
+            }
+          }
+        } catch (_) {}
+      }
+      return null;
     }
     function readRect(instance) {
       if (!instance || typeof instance.getBoundingClientRect !== 'function') return null;

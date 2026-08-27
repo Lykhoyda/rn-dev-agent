@@ -872,6 +872,23 @@ test('current-route ID is frontmost', () => {
   assert.equal(verdict.activeRoute, 'home');
 });
 
+test('a target owned by an active ancestor route remains frontmost', () => {
+  const sandbox = makeFrontmostSandbox(routeTree('coverage', 'home'), {
+    index: 1,
+    routes: [
+      { name: 'login' },
+      {
+        name: 'home',
+        state: { index: 0, routes: [{ name: 'feed' }, { name: 'settings' }] },
+      },
+    ],
+  });
+  const verdict = JSON.parse(sandbox.__RN_AGENT.isTestIdFrontmost('coverage'));
+  assert.equal(verdict.visible, true);
+  assert.equal(verdict.route, 'home');
+  assert.equal(verdict.activeRoute, 'feed');
+});
+
 test('filtered replay proves pointer events from the live fiber ancestor chain', async () => {
   for (const pointerEvents of ['none', 'box-only', 'box-none', 'auto']) {
     const root = routeTree('coverage', 'home');
@@ -983,6 +1000,28 @@ test('a mounted testID without native layout proof fails closed', () => {
   assert.equal(verdict.visible, false);
   assert.equal(verdict.code, 'ASSERTION_FAILED');
   assert.match(verdict.reason, /layout visibility cannot be proven/);
+});
+
+test('a ref-less Fabric host uses the renderer public instance for bounded layout proof', () => {
+  for (const rect of [
+    { x: 20, y: 80, width: 120, height: 44 },
+    { x: 20, y: 900, width: 120, height: 44 },
+  ]) {
+    const root = routeTree('coverage', 'home');
+    const target = root.child.child;
+    const publicInstance = layoutStateNode(rect).canonical.publicInstance;
+    target.stateNode = { canonical: { publicInstance: null } };
+    const sandbox = makeFrontmostSandbox(root, {
+      index: 0,
+      routes: [{ name: 'home' }],
+    });
+    sandbox.__REACT_DEVTOOLS_GLOBAL_HOOK__.renderers.set(1, {
+      findHostInstanceByFiber: (fiber: unknown) => (fiber === target ? publicInstance : null),
+    });
+    const verdict = JSON.parse(sandbox.__RN_AGENT.isTestIdFrontmost('coverage'));
+    assert.equal(verdict.visible, rect.y < viewportRect.height);
+    if (!verdict.visible) assert.match(verdict.reason, /outside the visible viewport/);
+  }
 });
 
 test('a zero-size mounted testID is not visible', () => {
