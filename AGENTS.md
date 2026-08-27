@@ -173,6 +173,19 @@ needed; an observe server you started yourself — or one you brought back with
 `observe action="start"` or `"restart"`, either of which forfeits the automatic
 yield — still refuses and must be stopped.
 
+There is no `start_metro` action and no build/launch tool: after
+`apply_integration`, Metro and the install come from running the rewritten
+package script (`<pm> run ios` / `<pm> run android`) as a subprocess in the
+test-app, then polling `rn_session status` until `metroBound` and `installBound`
+before `pin_dev_client`. Clean up with `stop_metro` → `restore_integration` →
+`release`; `release` refuses while integration is still applied.
+
+Several suite tests fail only on macOS because `$TMPDIR` resolves through the
+`/var` → `/private/var` symlink and action-corpus paths are realpathed
+(`action-engine-compat`, `save-as-action` overwrite, one observe bind test).
+They fail identically on `main`; confirm against `main` before treating a local
+failure in those files as a regression.
+
 Native runner checks:
 
 ```bash
