@@ -16125,7 +16125,7 @@ function createMaestroRunHandler(deps = {}) {
         });
       }
       const errorClass = classifyExecError(stageError);
-      const timedOut = errorClass.timedOut || flowAbort.signal.aborted;
+      let timedOut = errorClass.timedOut || flowAbort.signal.aborted;
       const { outputTruncated } = errorClass;
       const directEvidence = directRunnerEvidence(combined);
       const deviceAuthority = verifyMaestroDeviceAuthority({
@@ -16138,8 +16138,12 @@ function createMaestroRunHandler(deps = {}) {
       });
       const summary = buildStepSummary(combined, { failed: true });
       const spawnError = combined.length === 0 && isPreSpawnMaestroError(stageError);
-      const terminal = buildTerminalEvidence(combined, { timedOut, spawnError });
+      let terminal = buildTerminalEvidence(combined, { timedOut, spawnError });
       const runnerResume = await buildRunnerResume(platform, fastHealthCheck2);
+      if (flowAbort.signal.aborted || now() >= flowDeadline) {
+        timedOut = true;
+        terminal = buildTerminalEvidence(combined, { timedOut, spawnError });
+      }
       const catchRefusal = combined.length > 0 ? maestroAuthorityRefusal(deviceAuthority, msg2) : null;
       if (catchRefusal) {
         return failResult(catchRefusal, "DEVICE_AUTHORITY_MISMATCH", {
@@ -16172,6 +16176,11 @@ function createMaestroRunHandler(deps = {}) {
           selectors: [comparableNativeSelector],
           signal: flowAbort.signal
         }).catch(() => null);
+        if (flowAbort.signal.aborted || now() >= flowDeadline) {
+          timedOut = true;
+          terminal = buildTerminalEvidence(combined, { timedOut, spawnError });
+          nativeVisionEvidence = null;
+        }
       }
       if (nativeVisionAttempted) {
         try {

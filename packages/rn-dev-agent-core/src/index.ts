@@ -58,7 +58,7 @@ import { releaseDeviceLockForSession } from './tools/device-session.js';
 import { createSessionRuntimeAbsenceProbe } from './session/session-runtime-absence.js';
 import {
   createDeviceFindHandler,
-  fetchSnapshotNodes,
+  fetchSnapshotNodesForSameScreenProof,
   createDevicePressHandler,
   createDeviceFillHandler,
   performReactTreeInput,
@@ -415,11 +415,13 @@ const makeReplayDeps = (_args?: unknown, signal?: AbortSignal): CdpReplayDeps | 
           visible?: boolean;
           reason?: string;
           matchCount?: number;
+          code?: string;
         };
         return {
           visible: parsed.visible === true,
           ...(parsed.reason ? { reason: parsed.reason } : {}),
           ...(typeof parsed.matchCount === 'number' ? { matchCount: parsed.matchCount } : {}),
+          ...(parsed.code ? { code: parsed.code } : {}),
         };
       } catch {
         return {
@@ -464,9 +466,9 @@ const probeNativeVision: NonNullable<MaestroRunDeps['nativeVisionProbe']> = asyn
   signal,
 }) => {
   signal.throwIfAborted();
-  const snapshot = await fetchSnapshotNodes(false);
+  const snapshot = await fetchSnapshotNodesForSameScreenProof();
   signal.throwIfAborted();
-  if (!snapshot.ok) return null;
+  if (!snapshot.ok || snapshot.recoveredTier) return null;
   const visibleSelectors = selectorsVisibleInNativeSnapshot(selectors, snapshot.nodes);
   return {
     source: 'rn-fast-runner-snapshot',

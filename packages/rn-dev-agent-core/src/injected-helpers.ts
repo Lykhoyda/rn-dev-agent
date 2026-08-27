@@ -3691,6 +3691,7 @@ export const INJECTED_HELPERS = `
       return JSON.stringify({
         visible: false,
         reason: 'frontmost testID scan exceeded its bounded React-tree budget',
+        code: 'ASSERTION_FAILED',
         truncated: true
       });
     }

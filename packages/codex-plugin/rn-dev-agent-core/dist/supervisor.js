@@ -30396,6 +30396,12 @@ function parseSnapshotEnvelope(result) {
   }
 }
 async function fetchSnapshotNodes(allowCache = false) {
+  return fetchSnapshotNodesWithPolicy(allowCache, true);
+}
+async function fetchSnapshotNodesForSameScreenProof() {
+  return fetchSnapshotNodesWithPolicy(false, false);
+}
+async function fetchSnapshotNodesWithPolicy(allowCache = false, recoverRunnerLeak = true) {
   if (allowCache) {
     const platform2 = getActiveSession()?.platform;
     if (platform2 && isSnapshotCacheValid(platform2)) {
@@ -30430,6 +30436,13 @@ async function fetchSnapshotNodes(allowCache = false) {
   }
   const session2 = getActiveSession();
   markSnapshotDirty(session2?.platform);
+  if (!recoverRunnerLeak) {
+    return {
+      ok: false,
+      reason: "runner-leak-unrecovered",
+      recoveryReason: "recovery-disabled-for-proof"
+    };
+  }
   const recovery = await recoverFromRunnerLeak({
     platform: session2?.platform,
     appId: session2?.appId,
@@ -67278,6 +67291,7 @@ var init_injected_helpers = __esm({
       return JSON.stringify({
         visible: false,
         reason: 'frontmost testID scan exceeded its bounded React-tree budget',
+        code: 'ASSERTION_FAILED',
         truncated: true
       });
     }
@@ -81408,7 +81422,7 @@ function createMaestroRunHandler(deps = {}) {
         });
       }
       const errorClass = classifyExecError(stageError);
-      const timedOut = errorClass.timedOut || flowAbort.signal.aborted;
+      let timedOut = errorClass.timedOut || flowAbort.signal.aborted;
       const { outputTruncated } = errorClass;
       const directEvidence = directRunnerEvidence(combined);
       const deviceAuthority = verifyMaestroDeviceAuthority({
@@ -81421,8 +81435,12 @@ function createMaestroRunHandler(deps = {}) {
       });
       const summary = buildStepSummary(combined, { failed: true });
       const spawnError = combined.length === 0 && isPreSpawnMaestroError(stageError);
-      const terminal = buildTerminalEvidence(combined, { timedOut, spawnError });
+      let terminal = buildTerminalEvidence(combined, { timedOut, spawnError });
       const runnerResume = await buildRunnerResume(platform, fastHealthCheck2);
+      if (flowAbort.signal.aborted || now() >= flowDeadline) {
+        timedOut = true;
+        terminal = buildTerminalEvidence(combined, { timedOut, spawnError });
+      }
       const catchRefusal = combined.length > 0 ? maestroAuthorityRefusal(deviceAuthority, msg3) : null;
       if (catchRefusal) {
         return failResult(catchRefusal, "DEVICE_AUTHORITY_MISMATCH", {
@@ -81455,6 +81473,11 @@ function createMaestroRunHandler(deps = {}) {
           selectors: [comparableNativeSelector],
           signal: flowAbort.signal
         }).catch(() => null);
+        if (flowAbort.signal.aborted || now() >= flowDeadline) {
+          timedOut = true;
+          terminal = buildTerminalEvidence(combined, { timedOut, spawnError });
+          nativeVisionEvidence = null;
+        }
       }
       if (nativeVisionAttempted) {
         try {
@@ -95743,7 +95766,8 @@ var init_index = __esm({
             return {
               visible: parsed.visible === true,
               ...parsed.reason ? { reason: parsed.reason } : {},
-              ...typeof parsed.matchCount === "number" ? { matchCount: parsed.matchCount } : {}
+              ...typeof parsed.matchCount === "number" ? { matchCount: parsed.matchCount } : {},
+              ...parsed.code ? { code: parsed.code } : {}
             };
           } catch {
             return {
@@ -95780,9 +95804,9 @@ var init_index = __esm({
     };
     probeNativeVision = async ({ deviceId, selectors, signal }) => {
       signal.throwIfAborted();
-      const snapshot = await fetchSnapshotNodes(false);
+      const snapshot = await fetchSnapshotNodesForSameScreenProof();
       signal.throwIfAborted();
-      if (!snapshot.ok)
+      if (!snapshot.ok || snapshot.recoveredTier)
         return null;
       const visibleSelectors = selectorsVisibleInNativeSnapshot(selectors, snapshot.nodes);
       return {

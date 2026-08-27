@@ -183,6 +183,17 @@ interface SnapshotProvenance {
 }
 
 export async function fetchSnapshotNodes(allowCache = false): Promise<SnapshotFetchResult> {
+  return fetchSnapshotNodesWithPolicy(allowCache, true);
+}
+
+export async function fetchSnapshotNodesForSameScreenProof(): Promise<SnapshotFetchResult> {
+  return fetchSnapshotNodesWithPolicy(false, false);
+}
+
+async function fetchSnapshotNodesWithPolicy(
+  allowCache = false,
+  recoverRunnerLeak = true,
+): Promise<SnapshotFetchResult> {
   // GH #321 (live-sim speedup): serve device_find from the snapshot we already
   // captured when it's still a faithful picture of the screen (clean + fresh),
   // skipping a redundant runner round-trip. isSnapshotCacheValid() is false the
@@ -224,6 +235,13 @@ export async function fetchSnapshotNodes(allowCache = false): Promise<SnapshotFe
 
   const session = getActiveSession();
   markSnapshotDirty(session?.platform);
+  if (!recoverRunnerLeak) {
+    return {
+      ok: false,
+      reason: 'runner-leak-unrecovered',
+      recoveryReason: 'recovery-disabled-for-proof',
+    };
+  }
   const recovery = await recoverFromRunnerLeak(
     {
       platform: session?.platform,

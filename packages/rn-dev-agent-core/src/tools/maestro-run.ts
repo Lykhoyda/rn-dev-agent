@@ -1536,7 +1536,7 @@ export function createMaestroRunHandler(
         });
       }
       const errorClass = classifyExecError(stageError);
-      const timedOut = errorClass.timedOut || flowAbort.signal.aborted;
+      let timedOut = errorClass.timedOut || flowAbort.signal.aborted;
       const { outputTruncated } = errorClass;
       const directEvidence = directRunnerEvidence(combined);
       const deviceAuthority = verifyMaestroDeviceAuthority({
@@ -1549,8 +1549,12 @@ export function createMaestroRunHandler(
       });
       const summary = buildStepSummary(combined, { failed: true });
       const spawnError = combined.length === 0 && isPreSpawnMaestroError(stageError);
-      const terminal = buildTerminalEvidence(combined, { timedOut, spawnError });
+      let terminal = buildTerminalEvidence(combined, { timedOut, spawnError });
       const runnerResume = await buildRunnerResume(platform, fastHealthCheck);
+      if (flowAbort.signal.aborted || now() >= flowDeadline) {
+        timedOut = true;
+        terminal = buildTerminalEvidence(combined, { timedOut, spawnError });
+      }
       // A run that produced no output never reached the device, so there is no
       // authority verdict to render — reporting one would mask the spawn/park
       // failure behind DEVICE_AUTHORITY_MISMATCH and refuse auto-repair.
@@ -1609,6 +1613,11 @@ export function createMaestroRunHandler(
             signal: flowAbort.signal,
           })
           .catch(() => null);
+        if (flowAbort.signal.aborted || now() >= flowDeadline) {
+          timedOut = true;
+          terminal = buildTerminalEvidence(combined, { timedOut, spawnError });
+          nativeVisionEvidence = null;
+        }
       }
       if (nativeVisionAttempted) {
         try {

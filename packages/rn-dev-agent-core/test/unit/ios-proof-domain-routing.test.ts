@@ -598,6 +598,33 @@ test('propagated testIDs on one fiber lineage remain one logical match', () => {
   assert.equal(verdict.visible, true);
 });
 
+test('frontmost scan-budget exhaustion is a typed proof failure', () => {
+  const root: any = {
+    type: { displayName: 'Root' },
+    memoizedProps: {},
+    return: null,
+    child: null,
+    sibling: null,
+  };
+  let cursor = root;
+  for (let index = 0; index < 40_001; index++) {
+    const fiber = {
+      type: { displayName: 'View' },
+      memoizedProps: {},
+      return: root,
+      child: null,
+      sibling: null,
+    };
+    cursor.sibling = fiber;
+    cursor = fiber;
+  }
+  const sandbox = makeFrontmostSandbox(root, { index: 0, routes: [{ name: 'home' }] });
+  const verdict = JSON.parse(sandbox.__RN_AGENT.isTestIdFrontmost('coverage'));
+  assert.equal(verdict.visible, false);
+  assert.equal(verdict.code, 'ASSERTION_FAILED');
+  assert.equal(verdict.truncated, true);
+});
+
 const IOS_UDID = 'B5E71CBD-D1F7-46C6-944C-28FF15F773B4';
 
 function nativeDispatch() {
@@ -814,6 +841,109 @@ test('a timed-out selector failure cannot become native blindness', async () => 
   );
   assert.notEqual(env.code, 'NATIVE_SURFACE_BLIND');
   assert.equal(env.meta?.timedOut, true);
+  assert.equal(comparisonProbes, 0);
+});
+
+test('a deadline reached during the failure-screen probe cannot become native blindness', async () => {
+  let clock = 0;
+  const handler = createMaestroRunHandler({
+    getActiveSession: () => ({
+      name: 'native-probe-deadline',
+      platform: 'ios',
+      deviceId: IOS_UDID,
+      appId: 'com.example.app',
+      openedAt: new Date(0).toISOString(),
+    }),
+    replayDeps: () => null,
+    chooseDispatch: () => nativeDispatch(),
+    parkFlow: async (run) => run(),
+    stopFastRunner: async () => {},
+    now: () => clock,
+    resolveEngineStatus: async () =>
+      buildReplayEngineStatus('pinned-ok', MAESTRO_RUNNER_PIN.version, false),
+    nativeVisionProbe: async ({ selectors }) => {
+      clock = 101;
+      return {
+        source: 'rn-fast-runner-snapshot',
+        nodeCount: 42,
+        visibleSelectors: selectors,
+        runtimeMajor: 26,
+      };
+    },
+    execFile: async () => {
+      throw Object.assign(new Error('native selector failed'), {
+        code: 1,
+        stdout: nativeRunnerOutput("Element with text 'Visible' not found"),
+        stderr: '',
+      });
+    },
+  });
+  const env = envelope(
+    await handler({
+      platform: 'ios',
+      deviceId: IOS_UDID,
+      timeoutMs: 100,
+      inlineYaml: `appId: com.example.app\n---\n- assertVisible: Visible\n`,
+      ...callbacks,
+    }),
+  );
+
+  assert.notEqual(env.code, 'NATIVE_SURFACE_BLIND');
+  assert.equal(env.meta?.timedOut, true);
+  assert.equal(env.meta?.terminal.exitClass, 'timed-out');
+});
+
+test('a deadline reached during runner resume skips the failure-screen probe', async () => {
+  let clock = 0;
+  let comparisonProbes = 0;
+  const handler = createMaestroRunHandler({
+    getActiveSession: () => ({
+      name: 'runner-resume-deadline',
+      platform: 'ios',
+      deviceId: IOS_UDID,
+      appId: 'com.example.app',
+      openedAt: new Date(0).toISOString(),
+    }),
+    replayDeps: () => null,
+    chooseDispatch: () => nativeDispatch(),
+    parkFlow: async (run) => run(),
+    fastHealthCheck: async () => {
+      clock = 101;
+      return true;
+    },
+    now: () => clock,
+    resolveEngineStatus: async () =>
+      buildReplayEngineStatus('pinned-ok', MAESTRO_RUNNER_PIN.version, false),
+    nativeVisionProbe: async ({ selectors }) => {
+      comparisonProbes += 1;
+      return {
+        source: 'rn-fast-runner-snapshot',
+        nodeCount: 42,
+        visibleSelectors: selectors,
+        runtimeMajor: 26,
+      };
+    },
+    execFile: async () => {
+      throw Object.assign(new Error('native selector failed'), {
+        code: 1,
+        stdout: nativeRunnerOutput("Element with text 'Visible' not found"),
+        stderr: '',
+      });
+    },
+  });
+  const env = envelope(
+    await handler({
+      platform: 'ios',
+      deviceId: IOS_UDID,
+      timeoutMs: 100,
+      inlineYaml: `appId: com.example.app\n---\n- assertVisible: Visible\n`,
+      ...callbacks,
+    }),
+  );
+
+  assert.notEqual(env.code, 'NATIVE_SURFACE_BLIND');
+  assert.equal(env.meta?.timedOut, true);
+  assert.equal(env.meta?.terminal.exitClass, 'timed-out');
   assert.equal(comparisonProbes, 0);
 });
 
