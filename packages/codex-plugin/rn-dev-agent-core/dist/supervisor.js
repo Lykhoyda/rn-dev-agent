@@ -97077,7 +97077,7 @@ var init_index = __esm({
       appId: external_exports.string().optional().describe("App bundle ID override (auto-detected from app.json if omitted)"),
       platform: external_exports.enum(["ios", "android"]).optional().describe("Platform override (auto-detected from session if omitted)")
     }, withConnection(getClient, async (args, client2) => {
-      return autoLoginToolResult(await handleAutoLogin(client2, args));
+      return autoLoginToolResult(await handleAutoLogin(client2, args, { maestroRun: maestroRunHandler }));
     }));
     trackedTool("proof_step", "Atomic proof capture step: navigate to a screen (optional), wait for settlement, verify an element (optional), and take a screenshot. Combines 3-4 tool calls into one. Use in proof flows to reduce tool-call overhead.", {
       screen: external_exports.string().optional().describe("Screen to navigate to (omit to stay on current screen)"),

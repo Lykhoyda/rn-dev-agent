@@ -3361,7 +3361,9 @@ trackedTool(
       .describe('Platform override (auto-detected from session if omitted)'),
   },
   withConnection(getClient, async (args: { appId?: string; platform?: string }, client) => {
-    return autoLoginToolResult(await handleAutoLogin(client, args));
+    return autoLoginToolResult(
+      await handleAutoLogin(client, args, { maestroRun: maestroRunHandler }),
+    );
   }),
 );
 

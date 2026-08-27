@@ -55,6 +55,44 @@ test('cdp_auto_login targets only the bound serial when a second device is ambie
   assert.match(String(replayArgs?.inlineYaml), /id: login/);
 });
 
+test('cdp_auto_login forwards exact iOS testIDs to the shared React-tree proof handler', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-auto-login-react-proof-'));
+  const flowDir = join(root, '.maestro', 'subflows');
+  mkdirSync(flowDir, { recursive: true });
+  writeFileSync(join(flowDir, 'login.yaml'), '- tapOn:\n    id: "direct_login_button"\n', 'utf8');
+  let replayArgs: Record<string, unknown> | null = null;
+  const sharedMaestroRun = async (args: Record<string, unknown>) => {
+    replayArgs = args;
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: JSON.stringify({
+            ok: true,
+            data: { passed: true, proofDomain: 'react-tree', proofDomains: ['react-tree'] },
+          }),
+        },
+      ],
+    };
+  };
+
+  const result = await handleAutoLogin(
+    authClient(),
+    { appId: 'com.test.app', platform: 'ios' },
+    {
+      getSession: () => ({ platform: 'ios', deviceId: 'SIM-BOUND' }),
+      projectRoot: () => root,
+      boundProjectRoot: () => root,
+      maestroRun: sharedMaestroRun,
+    },
+  );
+
+  assert.equal(result?.loggedIn, true);
+  assert.equal(replayArgs?.platform, 'ios');
+  assert.equal(replayArgs?.deviceId, 'SIM-BOUND');
+  assert.match(String(replayArgs?.inlineYaml), /direct_login_button/);
+});
+
 test('cdp_auto_login refuses an unbound session without selecting an ambient device', async (t) => {
   let replayed = false;
   const previousAndroidSerial = process.env.ANDROID_SERIAL;
