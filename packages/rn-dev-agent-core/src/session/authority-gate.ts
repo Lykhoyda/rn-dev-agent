@@ -41,8 +41,11 @@ export interface AuthorityProbeInput {
 }
 
 export interface StagedRuntimeRelaunch {
-  probe(input: AuthorityProbeInput): Promise<AuthorityObservation>;
-  refreshRuntimeBinding(status: SessionStatus): Promise<Record<string, unknown>>;
+  probe(input: AuthorityProbeInput, signal?: AbortSignal): Promise<AuthorityObservation>;
+  refreshRuntimeBinding(
+    status: SessionStatus,
+    signal?: AbortSignal,
+  ): Promise<Record<string, unknown>>;
   assertActive(): void;
   publish(status: SessionStatus): void;
   cancel(): void;
@@ -50,6 +53,7 @@ export interface StagedRuntimeRelaunch {
 
 export interface ManagedNativeOriginReproveOptions {
   readinessTimeoutMs?: number;
+  signal?: AbortSignal;
 }
 
 interface AuthorityGateRuntime {
@@ -59,10 +63,14 @@ interface AuthorityGateRuntime {
 }
 
 interface AuthorityGateDependencies {
-  probe(input: AuthorityProbeInput): Promise<AuthorityObservation>;
+  probe(input: AuthorityProbeInput, signal?: AbortSignal): Promise<AuthorityObservation>;
   recoverRuntimeConnection?(status: SessionStatus): Promise<boolean>;
   runtimeConnectionChanged?(status: SessionStatus): boolean;
-  refreshRuntimeBinding?(status: SessionStatus): Promise<Record<string, unknown>>;
+  refreshRuntimeBinding?(
+    status: SessionStatus,
+    awaitWithinBoundary?: <T>(operation: () => Promise<T>) => Promise<T>,
+    signal?: AbortSignal,
+  ): Promise<Record<string, unknown>>;
   relaunchBoundRuntime?(status: SessionStatus): Promise<StagedRuntimeRelaunch | void>;
   reconnectBoundRuntime?(
     status: SessionStatus,
@@ -87,11 +95,30 @@ const managedNativeOrigin = Symbol('managedNativeOrigin');
 const managedRunnerPark = Symbol('managedRunnerPark');
 const managedInstallReissue = Symbol('managedInstallReissue');
 
+function awaitWithSignal<T>(operation: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return operation;
+  if (signal.aborted) return Promise.reject(new Error('RUNNER_TIMEOUT: replay deadline expired'));
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(new Error('RUNNER_TIMEOUT: replay deadline expired'));
+    signal.addEventListener('abort', onAbort, { once: true });
+    operation.then(
+      (value) => {
+        signal.removeEventListener('abort', onAbort);
+        resolve(value);
+      },
+      (error) => {
+        signal.removeEventListener('abort', onAbort);
+        reject(error);
+      },
+    );
+  });
+}
+
 type AuthorityAwareArgs = Record<string, unknown> & {
   [optionalBundleAdmission]?: () => Promise<boolean>;
   [managedNativeOrigin]?: {
     claim(): Promise<void>;
-    complete(targetExpected: boolean): Promise<void>;
+    complete(targetExpected: boolean, signal?: AbortSignal): Promise<void>;
     relaunch(): Promise<void>;
     reprove(options?: ManagedNativeOriginReproveOptions): Promise<void>;
   };
@@ -117,6 +144,7 @@ export async function claimManagedNativeOriginAuthority(args: object): Promise<v
 export async function completeManagedNativeOriginAuthority(
   args: object,
   targetExpected: boolean,
+  signal?: AbortSignal,
 ): Promise<void> {
   const authority = (args as AuthorityAwareArgs)[managedNativeOrigin];
   if (!authority) {
@@ -125,7 +153,7 @@ export async function completeManagedNativeOriginAuthority(
       'managed native origin authority is unavailable',
     );
   }
-  await authority.complete(targetExpected);
+  await authority.complete(targetExpected, signal);
 }
 
 export async function relaunchManagedNativeOriginApp(args: object): Promise<void> {
@@ -1897,7 +1925,8 @@ export function createAuthorityGate(
             });
           }
           if (profile.managedOrigin) {
-            const claimOrigin = async (): Promise<void> => {
+            const claimOrigin = async (signal?: AbortSignal): Promise<void> => {
+              if (signal?.aborted) throw new Error('RUNNER_TIMEOUT: replay deadline expired');
               const currentStatus = runtime.status();
               if (!currentStatus.available) {
                 throw new SessionAuthorityError(currentStatus.code, currentStatus.reason);
@@ -1914,14 +1943,20 @@ export function createAuthorityGate(
               let candidateBundle: Record<string, unknown> | undefined;
               try {
                 const probe = stagedRelaunch?.probe ?? dependencies.probe;
-                originObservation = await probe({
-                  axis: 'A',
-                  phase: 'postflight',
-                  tool,
-                  profile,
-                  status: currentStatus,
-                  args,
-                });
+                originObservation = await awaitWithSignal(
+                  probe(
+                    {
+                      axis: 'A',
+                      phase: 'postflight',
+                      tool,
+                      profile,
+                      status: currentStatus,
+                      args,
+                    },
+                    signal,
+                  ),
+                  signal,
+                );
                 if (!stagedRelaunch && !dependencies.refreshRuntimeBinding) {
                   throw new SessionAuthorityError(
                     'BUNDLE_HANDSHAKE_UNAVAILABLE',
@@ -1929,19 +1964,31 @@ export function createAuthorityGate(
                   );
                 }
                 candidateBundle = stagedRelaunch
-                  ? await stagedRelaunch.refreshRuntimeBinding(currentStatus)
-                  : await dependencies.refreshRuntimeBinding!(currentStatus);
-                bundleObservation = await probe({
-                  axis: 'B',
-                  phase: 'postflight',
-                  tool,
-                  profile,
-                  status: {
-                    ...currentStatus,
-                    bindings: { ...currentStatus.bindings, bundle: candidateBundle },
-                  },
-                  args,
-                });
+                  ? await awaitWithSignal(
+                      stagedRelaunch.refreshRuntimeBinding(currentStatus, signal),
+                      signal,
+                    )
+                  : await awaitWithSignal(
+                      dependencies.refreshRuntimeBinding!(currentStatus, undefined, signal),
+                      signal,
+                    );
+                bundleObservation = await awaitWithSignal(
+                  probe(
+                    {
+                      axis: 'B',
+                      phase: 'postflight',
+                      tool,
+                      profile,
+                      status: {
+                        ...currentStatus,
+                        bindings: { ...currentStatus.bindings, bundle: candidateBundle },
+                      },
+                      args,
+                    },
+                    signal,
+                  ),
+                  signal,
+                );
                 registry!.verifyOperation(operation!);
                 const reconciliation = reconcileRuntimeBundleReplacement(
                   runtime,
@@ -2057,11 +2104,12 @@ export function createAuthorityGate(
                     (await dependencies.reconnectBoundRuntime(currentStatus, options)) ?? undefined;
                   registry!.verifyOperation(operation!);
                 },
-                complete: async (targetExpected: boolean) => {
+                complete: async (targetExpected: boolean, signal?: AbortSignal) => {
+                  if (signal?.aborted) throw new Error('RUNNER_TIMEOUT: replay deadline expired');
                   managedOriginCompleted = true;
                   managedOriginCompletedWithTarget = targetExpected;
                   if (targetExpected) {
-                    await claimOrigin();
+                    await claimOrigin(signal);
                     return;
                   }
                   const currentStatus = runtime.status();

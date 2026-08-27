@@ -32691,6 +32691,23 @@ var init_tool_profiles = __esm({
 import { randomUUID as randomUUID6 } from "node:crypto";
 import { realpathSync as realpathSync12 } from "node:fs";
 import { isAbsolute as isAbsolute7, relative as relative5, resolve as resolve10 } from "node:path";
+function awaitWithSignal(operation, signal) {
+  if (!signal)
+    return operation;
+  if (signal.aborted)
+    return Promise.reject(new Error("RUNNER_TIMEOUT: replay deadline expired"));
+  return new Promise((resolve21, reject) => {
+    const onAbort = () => reject(new Error("RUNNER_TIMEOUT: replay deadline expired"));
+    signal.addEventListener("abort", onAbort, { once: true });
+    operation.then((value) => {
+      signal.removeEventListener("abort", onAbort);
+      resolve21(value);
+    }, (error2) => {
+      signal.removeEventListener("abort", onAbort);
+      reject(error2);
+    });
+  });
+}
 async function claimOptionalBundleAuthority(args) {
   return await args[optionalBundleAdmission]?.() ?? false;
 }
@@ -32701,12 +32718,12 @@ async function claimManagedNativeOriginAuthority(args) {
   }
   await authority.claim();
 }
-async function completeManagedNativeOriginAuthority(args, targetExpected) {
+async function completeManagedNativeOriginAuthority(args, targetExpected, signal) {
   const authority = args[managedNativeOrigin];
   if (!authority) {
     throw new SessionAuthorityError("METRO_ORIGIN_MISMATCH", "managed native origin authority is unavailable");
   }
-  await authority.complete(targetExpected);
+  await authority.complete(targetExpected, signal);
 }
 async function relaunchManagedNativeOriginApp(args) {
   const authority = args[managedNativeOrigin];
@@ -33774,7 +33791,9 @@ function createAuthorityGate(runtime, dependencies) {
           });
         }
         if (profile.managedOrigin) {
-          const claimOrigin = async () => {
+          const claimOrigin = async (signal) => {
+            if (signal?.aborted)
+              throw new Error("RUNNER_TIMEOUT: replay deadline expired");
             const currentStatus = runtime.status();
             if (!currentStatus.available) {
               throw new SessionAuthorityError(currentStatus.code, currentStatus.reason);
@@ -33791,19 +33810,19 @@ function createAuthorityGate(runtime, dependencies) {
             let candidateBundle;
             try {
               const probe = stagedRelaunch?.probe ?? dependencies.probe;
-              originObservation = await probe({
+              originObservation = await awaitWithSignal(probe({
                 axis: "A",
                 phase: "postflight",
                 tool,
                 profile,
                 status: currentStatus,
                 args
-              });
+              }, signal), signal);
               if (!stagedRelaunch && !dependencies.refreshRuntimeBinding) {
                 throw new SessionAuthorityError("BUNDLE_HANDSHAKE_UNAVAILABLE", "managed lifecycle cannot commit without a binding refresh");
               }
-              candidateBundle = stagedRelaunch ? await stagedRelaunch.refreshRuntimeBinding(currentStatus) : await dependencies.refreshRuntimeBinding(currentStatus);
-              bundleObservation = await probe({
+              candidateBundle = stagedRelaunch ? await awaitWithSignal(stagedRelaunch.refreshRuntimeBinding(currentStatus, signal), signal) : await awaitWithSignal(dependencies.refreshRuntimeBinding(currentStatus, void 0, signal), signal);
+              bundleObservation = await awaitWithSignal(probe({
                 axis: "B",
                 phase: "postflight",
                 tool,
@@ -33813,7 +33832,7 @@ function createAuthorityGate(runtime, dependencies) {
                   bindings: { ...currentStatus.bindings, bundle: candidateBundle }
                 },
                 args
-              });
+              }, signal), signal);
               registry2.verifyOperation(operation);
               const reconciliation = reconcileRuntimeBundleReplacement(runtime, registry2, operation, currentStatus, currentStatus.bindings.bundle, currentStatus.bindings.metro, candidateBundle, stagedRelaunch ? {
                 assertActive: stagedRelaunch.assertActive,
@@ -33900,11 +33919,13 @@ function createAuthorityGate(runtime, dependencies) {
                 stagedRuntimeRelaunch = await dependencies.reconnectBoundRuntime(currentStatus, options) ?? void 0;
                 registry2.verifyOperation(operation);
               },
-              complete: async (targetExpected) => {
+              complete: async (targetExpected, signal) => {
+                if (signal?.aborted)
+                  throw new Error("RUNNER_TIMEOUT: replay deadline expired");
                 managedOriginCompleted = true;
                 managedOriginCompletedWithTarget = targetExpected;
                 if (targetExpected) {
-                  await claimOrigin();
+                  await claimOrigin(signal);
                   return;
                 }
                 const currentStatus = runtime.status();
@@ -80800,9 +80821,9 @@ function assembleMaestroArgs(baseArgs, paramArgs) {
 function nestedMaestroAuthorityCallbacks(args) {
   return {
     claimNativeOrigin: () => claimManagedNativeOriginAuthority(args),
-    completeNativeOrigin: (targetExpected) => completeManagedNativeOriginAuthority(args, targetExpected),
+    completeNativeOrigin: (targetExpected, signal) => completeManagedNativeOriginAuthority(args, targetExpected, signal),
     relaunchManagedApp: () => relaunchManagedNativeOriginApp(args),
-    reproveManagedOrigin: () => reproveManagedNativeOrigin(args),
+    reproveManagedOrigin: (options) => reproveManagedNativeOrigin(args, options),
     completeRunnerPark: (signal) => completeManagedRunnerParkAuthority(args, signal),
     reissueInstallReceipt: hasManagedInstallReissueAuthority(args) ? () => reissueManagedInstallAuthority(args) : null
   };
@@ -80878,19 +80899,19 @@ async function executeMaestroAuthorityStages(commands, executeStage, claimOrigin
         }
       }
     } catch (error2) {
-      await completeOrigin(false);
+      await completeOrigin(false, options.signal);
       throw new MaestroStageExecutionError(results, error2);
     }
   }
   if (pendingOriginError !== void 0) {
     try {
-      await reproveManagedOrigin();
+      await reproveManagedOrigin({ signal: options.signal });
     } catch {
-      await completeOrigin(false);
+      await completeOrigin(false, options.signal);
       throw new MaestroStageExecutionError(results, pendingOriginError);
     }
   }
-  await completeOrigin(plan.targetExpected);
+  await completeOrigin(plan.targetExpected, options.signal);
   return results;
 }
 function resolveMaestroFlowAppId(boundAppId, parsedAppId) {
@@ -81221,7 +81242,7 @@ function createMaestroRunHandler(deps = {}) {
                 reactFocusId = step.target;
             }
             return { replay, sourceIndices };
-          }, claimOrigin, completeOrigin, relaunchManagedApp, reproveManagedOrigin);
+          }, claimOrigin, completeOrigin, relaunchManagedApp, reproveManagedOrigin, { signal: controller.signal });
           retainedReactFocusId = reactFocusId;
           for (const { replay, sourceIndices } of stageResults) {
             for (const step of replay.steps) {
@@ -81463,12 +81484,12 @@ function createMaestroRunHandler(deps = {}) {
         await claimOrigin();
         nativeOriginPreclaimed = true;
       }
-      const completeTrackedOrigin = async (targetExpected) => {
+      const completeTrackedOrigin = async (targetExpected, signal) => {
         if (platform === "ios" && targetExpected) {
           deferredNativeOriginTarget = true;
           return;
         }
-        await completeOrigin(targetExpected);
+        await completeOrigin(targetExpected, signal);
         nativeOriginPreclaimed = false;
       };
       completePreclaimedOrigin = completeTrackedOrigin;
@@ -81547,7 +81568,7 @@ function createMaestroRunHandler(deps = {}) {
             throw attachCause(error2, retryError);
           }
         }
-      }, claimOrigin, completeTrackedOrigin, relaunchManagedApp, reproveManagedOrigin, { firstOriginClaimed: nativeOriginPreclaimed }), {
+      }, claimOrigin, completeTrackedOrigin, relaunchManagedApp, reproveManagedOrigin, { firstOriginClaimed: nativeOriginPreclaimed, signal: flowAbort.signal }), {
         platform,
         deviceId: requestedDeviceId,
         releaseAndroidSlot,
@@ -95602,17 +95623,35 @@ function stageAndroidRuntimeConnection(connection) {
   };
 }
 async function reconnectSessionRuntime(status, options) {
+  const awaitWithSignal2 = (operation) => {
+    const signal = options?.signal;
+    if (!signal)
+      return operation;
+    if (signal.aborted)
+      return Promise.reject(new Error("RUNNER_TIMEOUT: reconnect cancelled"));
+    return new Promise((resolve21, reject) => {
+      const onAbort = () => reject(new Error("RUNNER_TIMEOUT: reconnect cancelled"));
+      signal.addEventListener("abort", onAbort, { once: true });
+      operation.then((value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve21(value);
+      }, (error2) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(error2);
+      });
+    });
+  };
   const { platform, deviceId, appId, metroPort } = resolveManagedRuntimeLaunchBinding(status);
   const platformBudgetMs = exactSessionTargetReadinessTimeoutMs(platform);
   const readinessTimeoutMs = typeof options?.readinessTimeoutMs === "number" ? Math.max(1, Math.min(options.readinessTimeoutMs, platformBudgetMs)) : platformBudgetMs;
   if (platform === "ios") {
     const current = getClient();
-    await current.disconnect();
+    await awaitWithSignal2(current.disconnect());
     setClient(createClient(metroPort));
-    await connectExactSessionTarget2({ metroPort, platform, appId, deviceId }, readinessTimeoutMs);
+    await awaitWithSignal2(connectExactSessionTarget2({ metroPort, platform, appId, deviceId }, readinessTimeoutMs));
     return;
   }
-  const connection = await connectExactSessionTarget2({ metroPort, platform, appId, deviceId }, readinessTimeoutMs);
+  const connection = await awaitWithSignal2(connectExactSessionTarget2({ metroPort, platform, appId, deviceId }, readinessTimeoutMs));
   return stageAndroidRuntimeConnection(connection);
 }
 async function relaunchSessionRuntime(status) {
@@ -95644,14 +95683,16 @@ async function relaunchSessionRuntime(status) {
   const connection = await connectExactSessionTarget2({ metroPort, platform, appId, deviceId }, exactSessionTargetReadinessTimeoutMs(platform));
   return stageAndroidRuntimeConnection(connection);
 }
-async function rebindSessionRuntime(status, awaitWithinBoundary, connectedClient = getClient()) {
+async function rebindSessionRuntime(status, awaitWithinBoundary, connectedClient = getClient(), signal) {
+  if (signal?.aborted)
+    throw new Error("RUNNER_TIMEOUT: replay deadline expired");
   const device = status.bindings.device;
   const metro = status.bindings.metro;
   const prior = status.bindings.bundle;
   const install = status.bindings.install;
   const declaredDevice = status.bindings.device;
   const secret = process.env.RN_DEV_AGENT_SESSION_SECRET_PATH ? readJsonStateFile(process.env.RN_DEV_AGENT_SESSION_SECRET_PATH) : null;
-  return withRecoveredAuthoritativeRuntime(status, connectedClient, async (client2) => {
+  const operation = withRecoveredAuthoritativeRuntime(status, connectedClient, async (client2) => {
     const target = client2.connectedTarget;
     if (!client2.isConnected || !target || client2.metroPort !== metro.port || !targetMatchesSession(target, {
       platform: device.platform,
@@ -95688,6 +95729,19 @@ async function rebindSessionRuntime(status, awaitWithinBoundary, connectedClient
       connectionGeneration: client2.connectionGeneration
     });
   }, { getClient });
+  if (!signal)
+    return operation;
+  return new Promise((resolve21, reject) => {
+    const onAbort = () => reject(new Error("RUNNER_TIMEOUT: replay deadline expired"));
+    signal.addEventListener("abort", onAbort, { once: true });
+    operation.then((value) => {
+      signal.removeEventListener("abort", onAbort);
+      resolve21(value);
+    }, (error2) => {
+      signal.removeEventListener("abort", onAbort);
+      reject(error2);
+    });
+  });
 }
 async function reconcileAuthoritativeConnection(connectedClient, awaitWithinBoundary) {
   if (getClient() !== connectedClient) {
@@ -96340,7 +96394,7 @@ var init_index = __esm({
         const bundle = status.bindings.bundle;
         return current.connectedTarget?.id !== bundle?.targetId || current.connectionGeneration !== bundle?.connectionGeneration;
       },
-      refreshRuntimeBinding: rebindSessionRuntime,
+      refreshRuntimeBinding: (status, awaitWithinBoundary, signal) => rebindSessionRuntime(status, awaitWithinBoundary, getClient(), signal),
       relaunchBoundRuntime: relaunchSessionRuntime,
       reconnectBoundRuntime: reconnectSessionRuntime,
       snapshotCaptureCheckpoint: getSnapshotCaptureCheckpoint,

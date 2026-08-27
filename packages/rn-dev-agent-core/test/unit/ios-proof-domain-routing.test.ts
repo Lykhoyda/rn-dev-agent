@@ -84,6 +84,52 @@ test('exact iOS commands route before dispatch to react-tree proof', async () =>
   assert.deepEqual(calls, ['press:email', 'type:email:a']);
 });
 
+test('partitioned reconnect recovery honors the replay deadline', async () => {
+  const started = Date.now();
+  const handler = createMaestroRunHandler({
+    replayDeps: () => ({
+      pressByTestId: async () => {},
+      typeByTestId: async () => {},
+      treeFor: async (id) => ({ testID: id }),
+      frontmostFor: async () => ({ visible: true }),
+      launchApp: async () => {},
+      settle: async () => {},
+    }),
+  });
+  const result = await handler({
+    platform: 'ios',
+    timeoutMs: 20,
+    inlineYaml: 'appId: com.example.app\n---\n- launchApp: null\n- tapOn:\n    id: submit\n',
+    relaunchManagedApp: async () => {
+      throw new Error('reconnect required');
+    },
+    reproveManagedOrigin: async ({ signal } = {}) =>
+      new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(resolve, 30_000);
+        if (signal?.aborted) {
+          clearTimeout(timer);
+          reject(new Error('RUNNER_TIMEOUT: reconnect cancelled'));
+          return;
+        }
+        signal?.addEventListener(
+          'abort',
+          () => {
+            clearTimeout(timer);
+            reject(new Error('RUNNER_TIMEOUT: reconnect cancelled'));
+          },
+          { once: true },
+        );
+      }),
+    completeNativeOrigin: async () => {},
+    claimNativeOrigin: async () => {},
+    completeRunnerPark: async () => {},
+  });
+  const env = envelope(result);
+  assert.equal(env.ok, false);
+  assert.equal(env.code, 'RUNNER_TIMEOUT');
+  assert.ok(Date.now() - started < 3000);
+});
+
 test('React-only learned replay preflights action format before mutation', async () => {
   let mutations = 0;
   const handler = createMaestroRunHandler({

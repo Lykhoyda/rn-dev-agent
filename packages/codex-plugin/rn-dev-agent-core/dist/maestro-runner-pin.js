@@ -10103,12 +10103,12 @@ async function claimManagedNativeOriginAuthority(args) {
   }
   await authority.claim();
 }
-async function completeManagedNativeOriginAuthority(args, targetExpected) {
+async function completeManagedNativeOriginAuthority(args, targetExpected, signal) {
   const authority = args[managedNativeOrigin];
   if (!authority) {
     throw new SessionAuthorityError("METRO_ORIGIN_MISMATCH", "managed native origin authority is unavailable");
   }
-  await authority.complete(targetExpected);
+  await authority.complete(targetExpected, signal);
 }
 async function relaunchManagedNativeOriginApp(args) {
   const authority = args[managedNativeOrigin];
@@ -15283,9 +15283,9 @@ function assembleMaestroArgs(baseArgs, paramArgs) {
 function nestedMaestroAuthorityCallbacks(args) {
   return {
     claimNativeOrigin: () => claimManagedNativeOriginAuthority(args),
-    completeNativeOrigin: (targetExpected) => completeManagedNativeOriginAuthority(args, targetExpected),
+    completeNativeOrigin: (targetExpected, signal) => completeManagedNativeOriginAuthority(args, targetExpected, signal),
     relaunchManagedApp: () => relaunchManagedNativeOriginApp(args),
-    reproveManagedOrigin: () => reproveManagedNativeOrigin(args),
+    reproveManagedOrigin: (options) => reproveManagedNativeOrigin(args, options),
     completeRunnerPark: (signal) => completeManagedRunnerParkAuthority(args, signal),
     reissueInstallReceipt: hasManagedInstallReissueAuthority(args) ? () => reissueManagedInstallAuthority(args) : null
   };
@@ -15374,19 +15374,19 @@ async function executeMaestroAuthorityStages(commands, executeStage, claimOrigin
         }
       }
     } catch (error) {
-      await completeOrigin(false);
+      await completeOrigin(false, options.signal);
       throw new MaestroStageExecutionError(results, error);
     }
   }
   if (pendingOriginError !== void 0) {
     try {
-      await reproveManagedOrigin();
+      await reproveManagedOrigin({ signal: options.signal });
     } catch {
-      await completeOrigin(false);
+      await completeOrigin(false, options.signal);
       throw new MaestroStageExecutionError(results, pendingOriginError);
     }
   }
-  await completeOrigin(plan.targetExpected);
+  await completeOrigin(plan.targetExpected, options.signal);
   return results;
 }
 function resolveMaestroFlowAppId(boundAppId, parsedAppId) {
@@ -15729,7 +15729,7 @@ function createMaestroRunHandler(deps = {}) {
                 reactFocusId = step.target;
             }
             return { replay, sourceIndices };
-          }, claimOrigin, completeOrigin, relaunchManagedApp, reproveManagedOrigin);
+          }, claimOrigin, completeOrigin, relaunchManagedApp, reproveManagedOrigin, { signal: controller.signal });
           retainedReactFocusId = reactFocusId;
           for (const { replay, sourceIndices } of stageResults) {
             for (const step of replay.steps) {
@@ -15971,12 +15971,12 @@ function createMaestroRunHandler(deps = {}) {
         await claimOrigin();
         nativeOriginPreclaimed = true;
       }
-      const completeTrackedOrigin = async (targetExpected) => {
+      const completeTrackedOrigin = async (targetExpected, signal) => {
         if (platform === "ios" && targetExpected) {
           deferredNativeOriginTarget = true;
           return;
         }
-        await completeOrigin(targetExpected);
+        await completeOrigin(targetExpected, signal);
         nativeOriginPreclaimed = false;
       };
       completePreclaimedOrigin = completeTrackedOrigin;
@@ -16055,7 +16055,7 @@ function createMaestroRunHandler(deps = {}) {
             throw attachCause(error, retryError);
           }
         }
-      }, claimOrigin, completeTrackedOrigin, relaunchManagedApp, reproveManagedOrigin, { firstOriginClaimed: nativeOriginPreclaimed }), {
+      }, claimOrigin, completeTrackedOrigin, relaunchManagedApp, reproveManagedOrigin, { firstOriginClaimed: nativeOriginPreclaimed, signal: flowAbort.signal }), {
         platform,
         deviceId: requestedDeviceId,
         releaseAndroidSlot,

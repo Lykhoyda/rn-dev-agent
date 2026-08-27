@@ -750,7 +750,8 @@ const authorityGate = createAuthorityGate(authorityRuntime, {
       current.connectionGeneration !== bundle?.connectionGeneration
     );
   },
-  refreshRuntimeBinding: rebindSessionRuntime,
+  refreshRuntimeBinding: (status, awaitWithinBoundary, signal) =>
+    rebindSessionRuntime(status, awaitWithinBoundary, getClient(), signal),
   relaunchBoundRuntime: relaunchSessionRuntime,
   reconnectBoundRuntime: reconnectSessionRuntime,
   snapshotCaptureCheckpoint: getSnapshotCaptureCheckpoint,
@@ -1300,6 +1301,25 @@ async function reconnectSessionRuntime(
   status: SessionStatus,
   options?: ManagedNativeOriginReproveOptions,
 ): Promise<StagedRuntimeRelaunch | void> {
+  const awaitWithSignal = <T>(operation: Promise<T>): Promise<T> => {
+    const signal = options?.signal;
+    if (!signal) return operation;
+    if (signal.aborted) return Promise.reject(new Error('RUNNER_TIMEOUT: reconnect cancelled'));
+    return new Promise<T>((resolve, reject) => {
+      const onAbort = () => reject(new Error('RUNNER_TIMEOUT: reconnect cancelled'));
+      signal.addEventListener('abort', onAbort, { once: true });
+      operation.then(
+        (value) => {
+          signal.removeEventListener('abort', onAbort);
+          resolve(value);
+        },
+        (error) => {
+          signal.removeEventListener('abort', onAbort);
+          reject(error);
+        },
+      );
+    });
+  };
   const { platform, deviceId, appId, metroPort } = resolveManagedRuntimeLaunchBinding(status);
   const platformBudgetMs = exactSessionTargetReadinessTimeoutMs(platform);
   const readinessTimeoutMs =
@@ -1308,14 +1328,15 @@ async function reconnectSessionRuntime(
       : platformBudgetMs;
   if (platform === 'ios') {
     const current = getClient();
-    await current.disconnect();
+    await awaitWithSignal(current.disconnect());
     setClient(createClient(metroPort));
-    await connectExactSessionTarget({ metroPort, platform, appId, deviceId }, readinessTimeoutMs);
+    await awaitWithSignal(
+      connectExactSessionTarget({ metroPort, platform, appId, deviceId }, readinessTimeoutMs),
+    );
     return;
   }
-  const connection = await connectExactSessionTarget(
-    { metroPort, platform, appId, deviceId },
-    readinessTimeoutMs,
+  const connection = await awaitWithSignal(
+    connectExactSessionTarget({ metroPort, platform, appId, deviceId }, readinessTimeoutMs),
   );
   return stageAndroidRuntimeConnection(connection);
 }
@@ -1382,7 +1403,9 @@ async function rebindSessionRuntime(
   status: SessionStatus,
   awaitWithinBoundary?: AwaitWithinBoundary,
   connectedClient: CDPClient = getClient(),
+  signal?: AbortSignal,
 ): Promise<Record<string, unknown>> {
+  if (signal?.aborted) throw new Error('RUNNER_TIMEOUT: replay deadline expired');
   const device = status.bindings.device as {
     platform: 'ios' | 'android';
     deviceId: string;
@@ -1399,7 +1422,7 @@ async function rebindSessionRuntime(
   const secret = process.env.RN_DEV_AGENT_SESSION_SECRET_PATH
     ? readJsonStateFile<{ signerCapability?: string }>(process.env.RN_DEV_AGENT_SESSION_SECRET_PATH)
     : null;
-  return withRecoveredAuthoritativeRuntime(
+  const operation = withRecoveredAuthoritativeRuntime(
     status,
     connectedClient,
     async (client) => {
@@ -1465,6 +1488,21 @@ async function rebindSessionRuntime(
     },
     { getClient },
   );
+  if (!signal) return operation;
+  return new Promise<Record<string, unknown>>((resolve, reject) => {
+    const onAbort = () => reject(new Error('RUNNER_TIMEOUT: replay deadline expired'));
+    signal.addEventListener('abort', onAbort, { once: true });
+    operation.then(
+      (value) => {
+        signal.removeEventListener('abort', onAbort);
+        resolve(value);
+      },
+      (error) => {
+        signal.removeEventListener('abort', onAbort);
+        reject(error);
+      },
+    );
+  });
 }
 
 async function reconcileAuthoritativeConnection(
