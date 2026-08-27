@@ -113,6 +113,49 @@ test('ordinary missing React testID stays TESTID_NOT_FOUND without WDA', async (
   assert.match(env.error ?? '', /React-tree replay failed/);
 });
 
+test('React stage failures retain completed tap and launch evidence', async () => {
+  const calls: string[] = [];
+  let relaunches = 0;
+  const handler = createMaestroRunHandler({
+    replayDeps: () => ({
+      pressByTestId: async (id) => calls.push(`press:${id}`),
+      typeByTestId: async () => {},
+      treeFor: async (id) => (id === 'missing' ? { tree: {} } : { testID: id }),
+      frontmostFor: async () => ({ visible: true }),
+      launchApp: async () => calls.push('launch'),
+      settle: async () => {},
+    }),
+  });
+  const result = await handler({
+    platform: 'ios',
+    inlineYaml: `appId: com.example.app
+---
+- launchApp: null
+- tapOn:
+    id: continue
+- launchApp: null
+- assertVisible:
+    id: missing
+`,
+    claimNativeOrigin: async () => {},
+    completeNativeOrigin: async () => {},
+    relaunchManagedApp: async () => {
+      relaunches++;
+    },
+    reproveManagedOrigin: async () => {},
+    completeRunnerPark: async () => {},
+  });
+  const env = envelope(result);
+  assert.equal(env.ok, false);
+  assert.match(env.error ?? '', /testID "missing" not present/);
+  assert.equal(relaunches, 2);
+  assert.deepEqual(calls, ['press:continue']);
+  assert.deepEqual(
+    env.meta?.steps?.map((step: { name: string }) => step.name),
+    ['launch', 'tap', 'launch', 'assert'],
+  );
+});
+
 test('login replay refuses before mutation without a final positive ID', async () => {
   let mutations = 0;
   const handler = createMaestroRunHandler({
