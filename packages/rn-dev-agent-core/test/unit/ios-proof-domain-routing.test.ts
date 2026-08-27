@@ -465,6 +465,31 @@ test('nested leading inputText preserves native auto-focus without a proven Reac
     );
 });
 
+test('nested waits before inputText remain native without a React focus anchor', () => {
+  for (const leading of [
+    [{ waitForAnimationToEnd: null }],
+    [{ waitForAnimationToEnd: null }, { waitForAnimationToEnd: null }],
+  ]) {
+    const plan = planIosProofDomains(
+      [
+        {
+          runFlow: {
+            when: { visible: { id: 'condition' } },
+            commands: [...leading, { inputText: 'value' }],
+          },
+        },
+      ],
+      {},
+    );
+    assert.equal(plan.ok, true);
+    if (plan.ok)
+      assert.deepEqual(
+        plan.segments.map(({ domain }) => domain),
+        ['xctest-native'],
+      );
+  }
+});
+
 test('nested leading inputText stays React-eligible after a proven focus tap', () => {
   const plan = planIosProofDomains(
     [

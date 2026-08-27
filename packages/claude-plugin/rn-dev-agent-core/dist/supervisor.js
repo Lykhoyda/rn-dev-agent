@@ -80417,13 +80417,23 @@ function commandTreeContains(value, names, depth = 0) {
     return false;
   return Object.entries(value).some(([key, child]) => names.has(key) || commandTreeContains(child, names, depth + 1));
 }
-function runFlowStartsWithInputText(command) {
+function runFlowHasUnanchoredLeadingInputText(command) {
   if (!isObject2(command) || !isObject2(command.runFlow))
     return false;
   const commands = command.runFlow.commands;
   if (!Array.isArray(commands) || commands.length === 0)
     return false;
-  return commandName(commands[0]) === "inputText";
+  for (const child of commands) {
+    const name = commandName(child);
+    if (name === "inputText")
+      return true;
+    if (name && nativeFocusPreservingCommands.has(name))
+      continue;
+    if (name === "tapOn" || name === "tap")
+      return false;
+    return false;
+  }
+  return false;
 }
 function nativeCommandMayChangeFocus(command, depth = 0) {
   if (depth > 20)
@@ -80480,7 +80490,7 @@ function planIosProofDomains(commands, params) {
   for (let index = 0; index < commands.length; index++) {
     const name = commandName(commands[index]);
     let domain = classified[index];
-    if (name === "runFlow" && runFlowStartsWithInputText(commands[index])) {
+    if (name === "runFlow" && runFlowHasUnanchoredLeadingInputText(commands[index])) {
       if (focusedDomain === "react-tree" && !focusedReactId) {
         return {
           ok: false,
