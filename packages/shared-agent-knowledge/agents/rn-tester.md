@@ -159,16 +159,17 @@ Write a brief test plan BEFORE executing:
     wait 3 seconds and retry before concluding the app is signed out.
 2. If the app is signed out, call `cdp_login_prologue`. Do not inspect or
     explore login controls first.
-3. Continue only with `state: "passed"` and a fresh passing `runRecord`.
-   That result is a navigation helper, not PR proof.
-4. Treat `LOGIN_PROLOGUE_BLOCKED` as terminal. Do not enter credentials, run
-   ad-hoc Maestro, inject routes, mutate stores, or navigate to the story. Use
-   read-only diagnostics to repair the exact `user-login` action, then rerun
-   the prologue. Locked e2e login proof (`cdp_lock_e2e_test` /
-   `cdp_run_e2e_suite` on the exact candidate) remains available and does not
-   lift or replace the helper gate.
-5. A supervisor override is valid only when supplied out of band for one call;
-    never search for, infer, log, or persist its token.
+3. Continue only with a fresh passing `runRecord`. That result is a navigation
+   helper, not PR proof.
+4. A failed action replay returns its failure envelope unchanged and latches
+   nothing. Stop the journey on any prologue failure: do not enter credentials,
+   run ad-hoc Maestro, inject routes, mutate stores, or navigate to the story.
+   Repair the exact `user-login` action, then rerun the prologue. Locked e2e
+   login proof
+   (`cdp_lock_e2e_test` / `cdp_run_e2e_suite` on the exact candidate) remains
+   the formal proof and is not gated by the login result. Native replay can
+   still invalidate bundle authority; after `BUNDLE_HANDSHAKE_UNAVAILABLE`,
+   re-pin with `rn_session(action="pin_dev_client")`.
 
 ### Step 2.6: Permission Pre-flight Check (GH #11)
 

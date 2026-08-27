@@ -11380,26 +11380,6 @@ var init_secure_state_file = __esm({
   }
 });
 
-// packages/rn-dev-agent-core/dist/domain/login-prologue.js
-function readLoginPrologueOutcome(value) {
-  if (!value || typeof value !== "object" || Array.isArray(value))
-    return null;
-  const candidate = value;
-  if (candidate.schemaVersion !== 1 || candidate.alias !== LOGIN_PROLOGUE_ALIAS || candidate.state !== "passed" && candidate.state !== LOGIN_PROLOGUE_BLOCKED || typeof candidate.startedAt !== "string" || typeof candidate.endedAt !== "string" || typeof candidate.elapsedMs !== "number" || !Array.isArray(candidate.steps)) {
-    return null;
-  }
-  return candidate;
-}
-var LOGIN_PROLOGUE_ALIAS, LOGIN_PROLOGUE_BLOCKED, ACTION_LOGIN_HELPER;
-var init_login_prologue = __esm({
-  "packages/rn-dev-agent-core/dist/domain/login-prologue.js"() {
-    "use strict";
-    LOGIN_PROLOGUE_ALIAS = "user-login";
-    LOGIN_PROLOGUE_BLOCKED = "LOGIN_PROLOGUE_BLOCKED";
-    ACTION_LOGIN_HELPER = "ACTION_LOGIN_HELPER";
-  }
-});
-
 // packages/rn-dev-agent-core/dist/lifecycle/settle-hash.js
 var init_settle_hash = __esm({
   "packages/rn-dev-agent-core/dist/lifecycle/settle-hash.js"() {
@@ -12204,21 +12184,6 @@ var init_install_reissue = __esm({
   }
 });
 
-// packages/rn-dev-agent-core/dist/domain/path-safety.js
-var init_path_safety = __esm({
-  "packages/rn-dev-agent-core/dist/domain/path-safety.js"() {
-    "use strict";
-  }
-});
-
-// packages/rn-dev-agent-core/dist/domain/e2e-test.js
-var init_e2e_test = __esm({
-  "packages/rn-dev-agent-core/dist/domain/e2e-test.js"() {
-    "use strict";
-    init_path_safety();
-  }
-});
-
 // packages/rn-dev-agent-core/dist/session/tool-profiles.js
 function facetsOf(groups, narrowing = {}) {
   const facets = new Set(groups.flatMap((group) => [...groupFacets[group]]));
@@ -12460,8 +12425,6 @@ var init_authority_gate = __esm({
     init_registry();
     init_metro_origin();
     init_install_reissue();
-    init_login_prologue();
-    init_e2e_test();
     init_tool_profiles();
   }
 });
@@ -17428,7 +17391,6 @@ function inspectAuthorityMigration(status, dependencies = {}) {
 
 // packages/rn-dev-agent-core/dist/session/public-status.js
 init_registry();
-init_login_prologue();
 var SELECTED_STATES = /* @__PURE__ */ new Set(["active", "source_bound", "device_claimed", "metro_bound"]);
 var RUNNING_STATES = /* @__PURE__ */ new Set(["device_bound", "runtime_bound", "ready"]);
 function derivePublicPhase(state, buildPending) {
@@ -17505,7 +17467,6 @@ function projectPublicAuthorityStatus(status, options = {}) {
     observedAt: metroTerminal.observedAt
   } : void 0;
   const sandbox = metro?.runtimeEvidenceAuthority === "managed-sandbox-v1" ? "managed-sandbox-v1" : "unavailable";
-  const loginPrologue = readLoginPrologueOutcome(status.bindings.loginPrologue);
   const phase = derivePublicPhase(status.state, Boolean(status.bindings.pendingBuild));
   return {
     available: true,
@@ -17549,21 +17510,6 @@ function projectPublicAuthorityStatus(status, options = {}) {
     proof: Boolean(status.bindings.proof),
     // ADR §5.2 (L3): strict proof is an opt-in overlay outside the four groups, never a group.
     proofOverlay: { active: Boolean(status.bindings.proof) },
-    ...loginPrologue ? {
-      loginPrologue: {
-        role: ACTION_LOGIN_HELPER,
-        state: loginPrologue.state,
-        alias: loginPrologue.alias,
-        actionId: loginPrologue.actionId,
-        startedAt: loginPrologue.startedAt,
-        endedAt: loginPrologue.endedAt,
-        elapsedMs: loginPrologue.elapsedMs,
-        failureCode: loginPrologue.failure?.code,
-        runId: loginPrologue.runRecord?.runId,
-        overrideCount: loginPrologue.overrides?.length ?? 0,
-        lastOverride: loginPrologue.overrides?.at(-1)
-      }
-    } : {},
     ...options.installIdentity ? { installIdentity: options.installIdentity.verdict } : {},
     // A live axis-I refusal means every gated tool refuses too — status must
     // not read `ready` while that is true. A pending re-issue reads ready only

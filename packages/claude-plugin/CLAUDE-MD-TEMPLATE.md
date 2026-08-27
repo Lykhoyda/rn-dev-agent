@@ -60,9 +60,9 @@ Authentication is fail-stop: when login is required, call
 `cdp_login_prologue`. It inventories learned actions, resolves only the exact
 `user-login` action, and requires a fresh passing RunRecord. That result is a
 navigation helper, not PR proof. Any missing action, runner drift, selector
-failure, or timeout returns `LOGIN_PROLOGUE_BLOCKED`. Do not continue with
-credentials, ad-hoc Maestro, navigation shortcuts, or store mutation after
-that result. Formal login proof is `cdp_lock_e2e_test` / `cdp_run_e2e_suite` on
+failure, or timeout fails like an ordinary replay and latches nothing, but the
+journey stops there: do not continue with credentials, ad-hoc Maestro,
+navigation shortcuts, or store mutation after that result. Formal login proof is `cdp_lock_e2e_test` / `cdp_run_e2e_suite` on
 the exact candidate; helper and locked tests coexist without sharing that proof.
 
 Manual walks are a fallback, not a default. Codified in
@@ -595,8 +595,8 @@ the runner's settle engine.
 Before testing **auth-gated features:**
 1. `cdp_navigation_state` — check if on a login screen
 2. Call `cdp_login_prologue` — it inventories and resolves the exact `user-login` action itself
-3. Require `state: "passed"` plus a fresh passing `runRecord`; only then continue. Treat that pass as a navigation helper, not PR proof
-4. On `LOGIN_PROLOGUE_BLOCKED`, stop the journey; never fall through to manual credentials, `cdp_auto_login`, or ad-hoc Maestro
+3. Require a fresh passing `runRecord`; only then continue. Treat that pass as a navigation helper, not PR proof
+4. On a failed prologue the session is not latched — stop the journey anyway; never fall through to manual credentials, `cdp_auto_login`, or ad-hoc Maestro
 5. Formal login proof is locking and running the login e2e on the exact candidate (`cdp_lock_e2e_test` / `cdp_run_e2e_suite`)
 
 Before testing **permission-gated features:**

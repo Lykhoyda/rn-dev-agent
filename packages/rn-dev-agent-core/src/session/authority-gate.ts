@@ -9,16 +9,6 @@ import { isProvenMetroOriginMismatch } from './metro-origin.js';
 import { reissueInstallBinding } from './install-reissue.js';
 import type { WorkerAuthorityStatus } from './runtime.js';
 import {
-  LOGIN_PROLOGUE_ALIAS,
-  LOGIN_PROLOGUE_BLOCKED,
-  appendLoginOverrideAudit,
-  authorizeLoginSupervisorOverride,
-  inspectLoginPrologueGuard,
-  readLoginPrologueOutcome,
-  type LoginPrologueOutcome,
-} from '../domain/login-prologue.js';
-import { setResolvedLockedTestIds } from '../domain/e2e-test.js';
-import {
   authorityProfileFor,
   requiresExactInstalledArtifact,
   type AuthorityAxis,
@@ -86,11 +76,6 @@ interface AuthorityGateDependencies {
   reissueInstallBinding?(
     install: Record<string, unknown> | undefined,
   ): Record<string, unknown> | null;
-  loginSupervisorOverrideToken?(): string | undefined;
-  resolveLockedE2eTestIds?(
-    args: Record<string, unknown>,
-    status: SessionStatus,
-  ): { ids: string[]; identitiesValid: boolean };
 }
 
 const optionalBundleAdmission = Symbol('optionalBundleAdmission');
@@ -772,89 +757,6 @@ function authorityFailure(error: unknown): ToolResult {
   );
 }
 
-function parseLoginPrologueOutcome(result: unknown): LoginPrologueOutcome | null {
-  try {
-    const envelope = JSON.parse((result as ToolResult).content?.[0]?.text ?? '{}') as {
-      data?: unknown;
-      meta?: { loginPrologue?: unknown };
-    };
-    return readLoginPrologueOutcome(envelope.data ?? envelope.meta?.loginPrologue);
-  } catch {
-    return null;
-  }
-}
-
-function missingLoginPrologueOutcome(result: unknown): LoginPrologueOutcome {
-  const timestamp = new Date().toISOString();
-  let failure = {
-    code: 'LOGIN_PROLOGUE_RESULT_INVALID',
-    detail: 'The login prologue returned no valid terminal state.',
-  };
-  try {
-    const envelope = JSON.parse((result as ToolResult).content?.[0]?.text ?? '{}') as {
-      code?: unknown;
-      error?: unknown;
-    };
-    if (envelope.code === 'BUSY_FLOW_ACTIVE' && typeof envelope.error === 'string') {
-      failure = { code: envelope.code, detail: envelope.error };
-    }
-  } catch {}
-  return {
-    schemaVersion: 1,
-    state: LOGIN_PROLOGUE_BLOCKED,
-    alias: LOGIN_PROLOGUE_ALIAS,
-    startedAt: timestamp,
-    endedAt: timestamp,
-    elapsedMs: 0,
-    steps: [],
-    inventory: { count: 0, actionIds: [] },
-    failure,
-  };
-}
-
-function pendingLoginPrologueOutcome(attemptId: string): LoginPrologueOutcome {
-  const timestamp = new Date().toISOString();
-  return {
-    schemaVersion: 1,
-    state: LOGIN_PROLOGUE_BLOCKED,
-    alias: LOGIN_PROLOGUE_ALIAS,
-    attemptId,
-    startedAt: timestamp,
-    endedAt: timestamp,
-    elapsedMs: 0,
-    steps: [],
-    inventory: { count: 0, actionIds: [] },
-    failure: {
-      code: 'LOGIN_PROLOGUE_IN_PROGRESS',
-      detail: 'The login prologue has not completed authoritative validation.',
-    },
-  };
-}
-
-function persistLoginPrologueOutcome(
-  runtime: AuthorityGateRuntime,
-  registry: SessionRegistry,
-  operation: OperationRef,
-  status: SessionStatus,
-  outcome: LoginPrologueOutcome,
-): { operation: OperationRef; status: SessionStatus } {
-  const priorOutcome = readLoginPrologueOutcome(status.bindings.loginPrologue);
-  const overrides = outcome.overrides ?? priorOutcome?.overrides;
-  const nextOperation = registry.replaceBindingsDuringOperation(operation, {
-    bindings: {
-      loginPrologue: {
-        ...outcome,
-        ...(overrides ? { overrides } : {}),
-      },
-    },
-  });
-  const nextStatus = runtime.status();
-  if (!nextStatus.available) {
-    throw new SessionAuthorityError(nextStatus.code, nextStatus.reason);
-  }
-  return { operation: nextOperation, status: nextStatus };
-}
-
 function isActionReplayTool(tool: string): boolean {
   return tool === 'cdp_run_action' || tool === 'cdp_login_prologue';
 }
@@ -1308,16 +1210,6 @@ export function createAuthorityGate(
         ) {
           return false;
         }
-        if (
-          inspectLoginPrologueGuard({
-            binding: status.bindings.loginPrologue,
-            tool,
-            args,
-            mutation: profile.mutation,
-          }).blocked
-        ) {
-          return false;
-        }
         requireCompleteAxes(status, profile);
         bindSessionArguments(status, profile, args, tool);
         const available = runtime.requireAvailable();
@@ -1358,11 +1250,6 @@ export function createAuthorityGate(
           handlerArgs[0] && typeof handlerArgs[0] === 'object'
             ? (handlerArgs[0] as Record<string, unknown>)
             : {};
-        const suppliedSupervisorOverrideToken =
-          typeof args.supervisorOverrideToken === 'string'
-            ? args.supervisorOverrideToken
-            : undefined;
-        delete args.supervisorOverrideToken;
         const baseProfile = authorityProfileFor(tool, args);
         let profile =
           tool === 'rn_session' &&
@@ -1415,51 +1302,6 @@ export function createAuthorityGate(
                   : baseProfile;
 
         const runtimeStatus = runtime.status();
-        const loginGuard = inspectLoginPrologueGuard({
-          binding: runtimeStatus.available ? runtimeStatus.bindings.loginPrologue : undefined,
-          tool,
-          args,
-          mutation: profile.mutation,
-        });
-        const pendingSupervisorOverrideToken = loginGuard.blocked
-          ? suppliedSupervisorOverrideToken
-          : undefined;
-        const pendingLockedE2eAdmission =
-          loginGuard.blocked &&
-          tool === 'cdp_run_e2e_suite' &&
-          pendingSupervisorOverrideToken === undefined;
-        if (
-          loginGuard.blocked &&
-          pendingSupervisorOverrideToken === undefined &&
-          !pendingLockedE2eAdmission
-        ) {
-          return failResult(
-            'LOGIN_PROLOGUE_BLOCKED: the deterministic login action did not produce an authoritative passing RunRecord; mutating tools are disabled for this session.',
-            'LOGIN_PROLOGUE_BLOCKED',
-            {
-              loginPrologue: runtimeStatus.available
-                ? runtimeStatus.bindings.loginPrologue
-                : undefined,
-              overrideRejected: false,
-              nextAction:
-                'Repair the exact user-login action and rerun cdp_login_prologue, or supply a supervisorOverrideToken configured by RN_LOGIN_PROLOGUE_OVERRIDE_TOKEN for this mutating call.',
-            },
-          );
-        }
-        if (loginGuard.blocked && profile.kind === 'transition') {
-          return failResult(
-            'LOGIN_PROLOGUE_BLOCKED: supervisor overrides cannot authorize transition mutations.',
-            'LOGIN_PROLOGUE_BLOCKED',
-            {
-              loginPrologue: runtimeStatus.available
-                ? runtimeStatus.bindings.loginPrologue
-                : undefined,
-              transitionOverrideRejected: true,
-              nextAction:
-                'Repair the exact user-login action and rerun cdp_login_prologue before this transition.',
-            },
-          );
-        }
         if (profile.kind === 'diagnostic') {
           return addMeta(await handler(...handlerArgs), { authoritative: false });
         }
@@ -1830,7 +1672,6 @@ export function createAuthorityGate(
         let retainProofCleanupFence = false;
         let publishedProofFinalize = false;
         let stagedRuntimeRelaunch: StagedRuntimeRelaunch | undefined;
-        let loginPrologueAttemptOperationId: string | null = null;
         try {
           const available = runtime.requireAvailable();
           registry = available.registry;
@@ -1839,81 +1680,13 @@ export function createAuthorityGate(
             throw new SessionAuthorityError(initialStatus.code, initialStatus.reason);
           }
           let status: SessionStatus = initialStatus;
-          const deferredAdmissionChecks =
-            tool === 'cdp_login_prologue' || pendingSupervisorOverrideToken !== undefined;
-          if (!deferredAdmissionChecks) {
-            requireCompleteAxes(status, profile);
-            bindSessionArguments(status, profile, args, tool);
-          }
-          if (pendingLockedE2eAdmission) {
-            const resolvedSelection = dependencies.resolveLockedE2eTestIds?.(args, status);
-            if (
-              !resolvedSelection?.identitiesValid ||
-              inspectLoginPrologueGuard({
-                binding: status.bindings.loginPrologue,
-                tool,
-                args,
-                mutation: profile.mutation,
-                resolvedLockedTestIds: resolvedSelection.ids,
-              }).blocked
-            ) {
-              throw new SessionAuthorityError(
-                'LOGIN_PROLOGUE_BLOCKED',
-                'the locked e2e suite did not resolve to the exact user-login candidate',
-              );
-            }
-            setResolvedLockedTestIds(args, resolvedSelection.ids);
-          }
+          requireCompleteAxes(status, profile);
+          bindSessionArguments(status, profile, args, tool);
           operation = registry.beginOperation(available.session, {
             operationId: randomUUID(),
             tool,
             profile: profile.axes.join(''),
           });
-          if (tool === 'cdp_login_prologue') {
-            const persisted = persistLoginPrologueOutcome(
-              runtime,
-              registry,
-              operation,
-              status,
-              pendingLoginPrologueOutcome(operation.operationId),
-            );
-            operation = persisted.operation;
-            status = persisted.status;
-            loginPrologueAttemptOperationId = operation.operationId;
-            requireCompleteAxes(status, profile);
-            bindSessionArguments(status, profile, args, tool);
-          }
-          if (pendingSupervisorOverrideToken !== undefined) {
-            const outcome = readLoginPrologueOutcome(status.bindings.loginPrologue);
-            if (outcome?.state !== LOGIN_PROLOGUE_BLOCKED) {
-              throw new SessionAuthorityError(
-                'LOGIN_PROLOGUE_BLOCKED',
-                'the blocked login prologue state disappeared before override audit',
-              );
-            }
-            const audit = authorizeLoginSupervisorOverride({
-              expectedOverrideToken: dependencies.loginSupervisorOverrideToken?.(),
-              suppliedOverrideToken: pendingSupervisorOverrideToken,
-              tool,
-            });
-            if (!audit) {
-              throw new SessionAuthorityError(
-                'LOGIN_PROLOGUE_BLOCKED',
-                'the supervisor override token was rejected under the operation fence',
-              );
-            }
-            const persisted = persistLoginPrologueOutcome(
-              runtime,
-              registry,
-              operation,
-              status,
-              appendLoginOverrideAudit(outcome, audit),
-            );
-            operation = persisted.operation;
-            status = persisted.status;
-            requireCompleteAxes(status, profile);
-            bindSessionArguments(status, profile, args, tool);
-          }
           const admission = await admitAuthoritativePreflight(
             runtime,
             dependencies,
@@ -2352,30 +2125,7 @@ export function createAuthorityGate(
           }
           registry.verifyOperation(operation);
           const snapshotCheckpoint = dependencies.snapshotCaptureCheckpoint?.();
-          let result = await registry.runWithOperation(operation, () => handler(...handlerArgs));
-          let loginPrologueOutcome: LoginPrologueOutcome | null = null;
-          if (tool === 'cdp_login_prologue') {
-            loginPrologueOutcome = parseLoginPrologueOutcome(result);
-            if (!loginPrologueOutcome) {
-              loginPrologueOutcome = missingLoginPrologueOutcome(result);
-              result = failResult(
-                `Login prologue blocked: ${loginPrologueOutcome.failure?.detail ?? 'The login prologue returned no valid terminal state.'}`,
-                'LOGIN_PROLOGUE_BLOCKED',
-                { loginPrologue: loginPrologueOutcome },
-              );
-            }
-            if (loginPrologueOutcome.state === LOGIN_PROLOGUE_BLOCKED) {
-              const persisted = persistLoginPrologueOutcome(
-                runtime,
-                registry,
-                operation,
-                status,
-                loginPrologueOutcome,
-              );
-              operation = persisted.operation;
-              status = persisted.status;
-            }
-          }
+          const result = await registry.runWithOperation(operation, () => handler(...handlerArgs));
           let runtimeTargetChanged = false;
           const postHandlerRecovery = await reconcileRecoverableRuntime(
             runtime,
@@ -2646,29 +2396,6 @@ export function createAuthorityGate(
           }
           if (operation && receiptsCommittable) {
             registry.commitPlatformAuthorityReceipts(operation);
-          }
-          if (operation && loginPrologueOutcome?.state === 'passed') {
-            const pendingOutcome = readLoginPrologueOutcome(status.bindings.loginPrologue);
-            if (
-              operation.operationId !== loginPrologueAttemptOperationId ||
-              pendingOutcome?.state !== LOGIN_PROLOGUE_BLOCKED ||
-              pendingOutcome.attemptId !== loginPrologueAttemptOperationId ||
-              pendingOutcome.failure?.code !== 'LOGIN_PROLOGUE_IN_PROGRESS'
-            ) {
-              throw new SessionAuthorityError(
-                'LOGIN_PROLOGUE_BLOCKED',
-                'the passing login result does not match the active blocked attempt',
-              );
-            }
-            const persisted = persistLoginPrologueOutcome(
-              runtime,
-              registry,
-              operation,
-              status,
-              loginPrologueOutcome,
-            );
-            operation = persisted.operation;
-            status = persisted.status;
           }
           return addMeta(result, {
             ...nativeOriginMeta(profile, nativeOriginProven),

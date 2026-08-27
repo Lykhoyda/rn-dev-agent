@@ -2,11 +2,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import {
-  ACTION_LOGIN_HELPER,
-  evaluateLoginPrologueGuard,
-  LOGIN_PROLOGUE_BLOCKED,
-} from '../../dist/domain/login-prologue.js';
+import { ACTION_LOGIN_HELPER } from '../../dist/domain/login-prologue.js';
 import { createLoginPrologueHandler } from '../../dist/tools/login-prologue.js';
 import { failResult, okResult } from '../../dist/utils.js';
 import { appendRunRecordToSidecar } from '../helpers/action-state.ts';
@@ -17,7 +13,13 @@ import {
 } from '../helpers/tmp-project.js';
 
 function parse(result: { content: Array<{ text?: string }> }) {
-  return JSON.parse(result.content[0]?.text ?? '{}');
+  const text = result.content[0]?.text ?? '{}';
+  assert.equal(
+    text.includes('LOGIN_PROLOGUE_BLOCKED'),
+    false,
+    'the login latch must not appear in any cdp_login_prologue envelope',
+  );
+  return JSON.parse(text);
 }
 
 function deterministicClock() {
@@ -74,7 +76,6 @@ test('login prologue resolves the exact alias and requires a fresh passing RunRe
   for (const expectedRunId of ['login-run-1', 'login-run-2']) {
     const envelope = parse(await handler({ projectRoot: project.root }));
     assert.equal(envelope.ok, true);
-    assert.equal(envelope.data.state, 'passed');
     assert.equal(envelope.data.role, ACTION_LOGIN_HELPER);
     assert.equal(envelope.data.actionId, 'user-login');
     assert.equal(envelope.data.runRecord.runId, expectedRunId);
@@ -179,8 +180,8 @@ test('login prologue seals selector replay against every CDP fallback', async (t
 
   const envelope = parse(await handler({ projectRoot: project.root }));
 
-  assert.equal(envelope.code, 'LOGIN_PROLOGUE_BLOCKED');
-  assert.equal(envelope.meta.loginPrologue.failure.code, 'TESTID_NOT_FOUND');
+  assert.equal(envelope.code, 'TESTID_NOT_FOUND');
+  assert.equal(envelope.meta.failureKind, 'SELECTOR_NOT_FOUND');
   assert.equal(replayDepsCalled, false);
 });
 
@@ -200,8 +201,7 @@ test('login prologue rejects a passing result from a divergent runner pin', asyn
 
   const envelope = parse(await handler({ projectRoot: project.root }));
 
-  assert.equal(envelope.code, 'LOGIN_PROLOGUE_BLOCKED');
-  assert.equal(envelope.meta.loginPrologue.failure.code, 'ENGINE_PIN_MISMATCH');
+  assert.equal(envelope.code, 'ENGINE_PIN_MISMATCH');
   assert.equal(project.readSidecar('user-login').runHistory.at(-1).status, 'fail');
 });
 
@@ -229,8 +229,43 @@ test('login prologue requires the strict executor persisted run identity', async
 
   const envelope = parse(await handler({ projectRoot: project.root }));
 
-  assert.equal(envelope.code, 'LOGIN_PROLOGUE_BLOCKED');
-  assert.equal(envelope.meta.loginPrologue.failure.code, 'AUTHORITATIVE_RUN_RECORD_MISSING');
+  assert.equal(envelope.code, 'LOAD_FAILED');
+  assert.equal(envelope.meta.failureKind, 'AUTHORITATIVE_RUN_RECORD_MISSING');
+});
+
+test('login prologue classifies post-replay identity drift as an ordinary load failure', async (t) => {
+  const project = createTmpProject();
+  t.after(() => project.cleanup());
+  seedLoginAction(project);
+  const handler = createLoginPrologueHandler({
+    now: deterministicClock(),
+    runAction: async () => {
+      appendRunRecordToSidecar(project.root, 'user-login', {
+        runId: 'login-run-before-identity-drift',
+        timestamp: '2026-08-21T10:00:01.000Z',
+        durationMs: 125,
+        status: 'pass',
+        trigger: 'agent',
+      });
+      writeFileSync(
+        project.yamlPath('user-login'),
+        fixtureYaml({ id: 'other-login', intent: 'changed during replay' }),
+        'utf8',
+      );
+      return okResult({
+        passed: true,
+        strictRunRecordId: 'login-run-before-identity-drift',
+        transport: 'maestro',
+      });
+    },
+  });
+
+  const envelope = parse(await handler({ projectRoot: project.root }));
+  assert.equal(envelope.ok, false);
+  assert.equal(envelope.code, 'LOAD_FAILED');
+  assert.equal(envelope.meta.role, ACTION_LOGIN_HELPER);
+  assert.equal(envelope.meta.alias, 'user-login');
+  assert.match(envelope.error, /does not match filename identity user-login/);
 });
 
 test('strict replay refuses success when RunRecord persistence is not committed', async (t) => {
@@ -247,8 +282,8 @@ test('strict replay refuses success when RunRecord persistence is not committed'
 
   const envelope = parse(await handler({ projectRoot: project.root }));
 
-  assert.equal(envelope.code, 'LOGIN_PROLOGUE_BLOCKED');
-  assert.equal(envelope.meta.loginPrologue.failure.code, 'LOAD_FAILED');
+  assert.equal(envelope.ok, false);
+  assert.equal(envelope.code, 'LOAD_FAILED');
 });
 
 test('login prologue preserves timeout classification from replay metadata', async (t) => {
@@ -262,11 +297,11 @@ test('login prologue preserves timeout classification from replay metadata', asy
 
   const envelope = parse(await handler({ projectRoot: project.root }));
 
-  assert.equal(envelope.code, 'LOGIN_PROLOGUE_BLOCKED');
-  assert.equal(envelope.meta.loginPrologue.failure.code, 'TIMEOUT');
+  assert.equal(envelope.ok, false);
+  assert.equal(envelope.meta.failureKind, 'TIMEOUT');
 });
 
-test('login prologue blocks when the exact user-login action is missing', async (t) => {
+test('login prologue refuses when the exact user-login action is missing', async (t) => {
   const project = createTmpProject();
   t.after(() => project.cleanup());
   project.seedAction('similar-login', fixtureYaml({ id: 'similar-login', tags: ['auth'] }), null);
@@ -281,8 +316,8 @@ test('login prologue blocks when the exact user-login action is missing', async 
 
   const envelope = parse(await handler({ projectRoot: project.root }));
   assert.equal(envelope.ok, false);
-  assert.equal(envelope.code, 'LOGIN_PROLOGUE_BLOCKED');
-  assert.equal(envelope.meta.loginPrologue.failure.code, 'LOGIN_ACTION_MISSING');
+  assert.equal(envelope.code, 'LOAD_FAILED');
+  assert.match(envelope.error, /no exact user-login learned action was found/);
   assert.equal(dispatched, false);
 });
 
@@ -309,8 +344,35 @@ test('login prologue rejects a filename and metadata id mismatch', async (t) => 
   });
 
   const envelope = parse(await handler({ projectRoot: project.root }));
-  assert.equal(envelope.code, 'LOGIN_PROLOGUE_BLOCKED');
-  assert.equal(envelope.meta.loginPrologue.failure.code, 'LOGIN_ACTION_ID_MISMATCH');
+  assert.equal(envelope.code, 'LOAD_FAILED');
+  assert.match(envelope.error, /declares a different action id/);
+  assert.equal(dispatched, false);
+});
+
+test('login prologue classifies ambiguous action files as an ordinary load failure', async (t) => {
+  const project = createTmpProject();
+  t.after(() => project.cleanup());
+  seedLoginAction(project);
+  writeFileSync(
+    join(project.actionsDir, 'user-login.yml'),
+    fixtureYaml({ id: 'user-login', intent: 'ambiguous login action' }),
+    'utf8',
+  );
+  let dispatched = false;
+  const handler = createLoginPrologueHandler({
+    now: deterministicClock(),
+    runAction: async () => {
+      dispatched = true;
+      return okResult({ passed: true });
+    },
+  });
+
+  const envelope = parse(await handler({ projectRoot: project.root }));
+  assert.equal(envelope.ok, false);
+  assert.equal(envelope.code, 'LOAD_FAILED');
+  assert.equal(envelope.meta.role, ACTION_LOGIN_HELPER);
+  assert.equal(envelope.meta.alias, 'user-login');
+  assert.match(envelope.error, /both user-login\.yaml and user-login\.yml exist/);
   assert.equal(dispatched, false);
 });
 
@@ -319,7 +381,7 @@ for (const failure of [
   { name: 'selector failure', code: 'TESTID_NOT_FOUND' },
   { name: 'timeout', code: 'RECONNECT_TIMEOUT' },
 ]) {
-  test(`login prologue terminally blocks on ${failure.name}`, async (t) => {
+  test(`login prologue returns the replay failure verbatim on ${failure.name}`, async (t) => {
     const project = createTmpProject();
     t.after(() => project.cleanup());
     seedLoginAction(project);
@@ -342,11 +404,10 @@ for (const failure of [
 
     const envelope = parse(await handler({ projectRoot: project.root }));
     assert.equal(envelope.ok, false);
-    assert.equal(envelope.code, 'LOGIN_PROLOGUE_BLOCKED');
-    assert.equal(envelope.meta.loginPrologue.state, 'LOGIN_PROLOGUE_BLOCKED');
-    assert.equal(envelope.meta.loginPrologue.failure.code, failure.code);
-    assert.equal(envelope.meta.loginPrologue.runRecord.status, 'fail');
-    assert.ok(envelope.meta.loginPrologue.elapsedMs < 1_000);
+    assert.equal(envelope.code, failure.code);
+    assert.equal(envelope.error, `injected ${failure.name}`);
+    assert.equal(envelope.meta.strictRunRecordId, `failed-${failure.code}`);
+    assert.equal(project.readSidecar('user-login').runHistory.at(-1).status, 'fail');
   });
 }
 
@@ -361,95 +422,23 @@ test('login prologue rejects transport success without a fresh passing RunRecord
 
   const envelope = parse(await handler({ projectRoot: project.root }));
   assert.equal(envelope.ok, false);
-  assert.equal(envelope.code, 'LOGIN_PROLOGUE_BLOCKED');
-  assert.equal(envelope.meta.loginPrologue.failure.code, 'AUTHORITATIVE_RUN_RECORD_MISSING');
+  assert.equal(envelope.code, 'LOAD_FAILED');
+  assert.equal(envelope.meta.failureKind, 'AUTHORITATIVE_RUN_RECORD_MISSING');
 });
 
-function blockedBinding() {
-  return {
-    schemaVersion: 1,
-    state: LOGIN_PROLOGUE_BLOCKED,
-    role: ACTION_LOGIN_HELPER,
-    alias: 'user-login',
-    startedAt: '2026-08-21T10:00:00.000Z',
-    endedAt: '2026-08-21T10:00:00.100Z',
-    elapsedMs: 100,
-    steps: [],
-    inventory: { count: 1, actionIds: ['user-login'] },
-    failure: { code: 'ENGINE_PIN_MISMATCH', detail: 'runner drift' },
-  };
-}
+test('login prologue rejects an ok envelope that does not report a passing replay', async (t) => {
+  const project = createTmpProject();
+  t.after(() => project.cleanup());
+  seedLoginAction(project);
+  const handler = createLoginPrologueHandler({
+    now: deterministicClock(),
+    runAction: async () => okResult({ passed: false, transport: 'maestro' }),
+  });
 
-test('blocked helper still allows locked e2e proof without a supervisor override', () => {
-  const binding = blockedBinding();
-  for (const [tool, args] of [
-    ['cdp_lock_e2e_test', { actionId: 'user-login' }],
-    ['cdp_run_e2e_suite', { pattern: '.*' }],
-  ] as const) {
-    const decision = evaluateLoginPrologueGuard({
-      binding,
-      tool,
-      args,
-      mutation: true,
-      ...(tool === 'cdp_run_e2e_suite' ? { resolvedLockedTestIds: ['user-login'] } : {}),
-    });
-    assert.deepEqual(decision, { allowed: true, override: false }, tool);
-  }
-});
-
-test('blocked helper refuses locked e2e requests outside the exact login candidate', () => {
-  const binding = blockedBinding();
-  for (const [tool, args] of [
-    ['cdp_lock_e2e_test', { actionId: 'other-login' }],
-    ['cdp_run_e2e_suite', {}],
-    ['cdp_run_e2e_suite', { pattern: 'user-login' }],
-    ['cdp_run_e2e_suite', { pattern: '^user-login$|^other-login$' }],
-  ] as const) {
-    const decision = evaluateLoginPrologueGuard({
-      binding,
-      tool,
-      args,
-      mutation: true,
-    });
-    assert.deepEqual(decision, { allowed: false, suppliedOverride: false }, tool);
-  }
-});
-
-test('blocked helper requires case-sensitive exact resolved locked e2e ids', () => {
-  const binding = blockedBinding();
-  for (const resolvedLockedTestIds of [
-    [],
-    ['USER-LOGIN'],
-    ['user-login', 'USER-LOGIN'],
-    ['user-login', 'other-login'],
-  ]) {
-    const decision = evaluateLoginPrologueGuard({
-      binding,
-      tool: 'cdp_run_e2e_suite',
-      args: { pattern: '^user-login$' },
-      mutation: true,
-      resolvedLockedTestIds,
-    });
-    assert.deepEqual(decision, { allowed: false, suppliedOverride: false });
-  }
-});
-
-test('blocked helper still refuses credential and ad-hoc login mutations', () => {
-  const binding = blockedBinding();
-  for (const [tool, args] of [
-    ['device_fill', { text: 'secret' }],
-    ['cdp_evaluate', { expression: 'credential()' }],
-    ['cdp_interact', { action: 'press', testID: 'submit' }],
-    ['maestro_run', { yaml: '- tapOn: Login' }],
-  ]) {
-    const decision = evaluateLoginPrologueGuard({
-      binding,
-      tool,
-      args,
-      mutation: true,
-    });
-    assert.deepEqual(decision, { allowed: false, suppliedOverride: false }, tool);
-  }
+  const envelope = parse(await handler({ projectRoot: project.root }));
+  assert.equal(envelope.ok, false);
+  assert.equal(envelope.code, 'LOAD_FAILED');
+  assert.equal(envelope.meta.failureKind, 'AUTHORITATIVE_RUN_RECORD_MISSING');
 });
 
 test('login prologue does not freeze or rewrite locked e2e artifacts', async (t) => {

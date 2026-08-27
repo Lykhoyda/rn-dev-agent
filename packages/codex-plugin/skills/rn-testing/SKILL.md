@@ -330,8 +330,8 @@ Before testing an authenticated feature, read the route with
 inventories learned actions, resolves only `.rn-agent/actions/user-login.yaml`,
 and replays it with conservative runner and selector safety checks.
 
-Continue only when the result has `state: "passed"` and a fresh passing
-`runRecord`. The returned prologue and RunRecord timing fields separate
+Continue only when the result has a successful (`ok: true`) envelope and a
+fresh passing `runRecord`. The returned prologue and RunRecord timing fields separate
 inventory, resolution, replay, verification, and transport time. Treat that
 pass as a navigation helper only: it is not PR proof and must not be used as
 a durable authority capability. Formal login proof is locking and running
@@ -339,20 +339,21 @@ the login e2e on the exact candidate (`cdp_lock_e2e_test` /
 `cdp_run_e2e_suite`). Helper replay and locked e2e coexist without sharing
 that proof or rewriting each other's artifacts.
 
-`LOGIN_PROLOGUE_BLOCKED` is a terminal journey boundary. A missing action,
-runner drift, selector failure, timeout, or missing fresh RunRecord must not
-fall through to manual credential entry, `cdp_auto_login`, raw or ad-hoc
-Maestro, route injection, navigation shortcuts, or store mutation. Read-only
-diagnostics and cleanup remain available; repair the exact saved action and
-rerun the prologue.
+A failed action replay returns the replay's failure envelope unchanged. It sets
+no login latch, persists no durable blocked state, and disables no tool because
+of the login result. Ordinary native replay authority transitions still apply
+exactly as they do for any other native replay: replay can invalidate bundle
+authority, so a following `cdp_*` call may refuse
+`BUNDLE_HANDSHAKE_UNAVAILABLE`; re-pin with
+`rn_session(action="pin_dev_client")`. The journey still stops there by policy.
+A missing action, runner drift, selector failure, timeout, or missing fresh
+RunRecord must not fall through to manual credential entry, `cdp_auto_login`,
+raw or ad-hoc Maestro, route injection, navigation shortcuts, or store mutation.
+Repair the exact saved action and rerun the prologue.
 
 An empty navigation state may be a splash screen or Dev Client picker, not
 necessarily auth. Wait 3 seconds and retry before concluding the app is logged
 out.
-
-A supervisor may authorize one otherwise-blocked mutation only with an
-out-of-band token configured as `RN_LOGIN_PROLOGUE_OVERRIDE_TOKEN` and supplied
-as `supervisorOverrideToken`. Never infer, discover, log, or persist that token.
 
 ---
 
