@@ -15154,20 +15154,27 @@ function isDisabled(props) {
   return props.disabled === true || a11y?.disabled === true || props.pointerEvents === "none";
 }
 async function runCdpReplayCommands(commands, params, deps, opts = {}) {
-  return replayFlow(normalizeSteps(commands, params), buildCdpDispatch(deps), {
+  return replayFlow(normalizeSteps(commands, params), buildCdpDispatch(deps, opts.signal), {
     signal: opts.signal,
     initialFocusId: opts.initialFocusId
   });
 }
-function buildCdpDispatch(deps) {
+function buildCdpDispatch(deps, signal) {
+  const requireNotAborted = () => {
+    if (signal?.aborted) {
+      throw new ReplayDispatchError("RUNNER_TIMEOUT", "React-tree replay exceeded its execution deadline");
+    }
+  };
   const assertExactInteractable = async (id) => {
     const tree = await deps.treeFor(id);
+    requireNotAborted();
     const treeMatches = countExactMatches(tree, id);
     if (treeMatches === 0)
       throw new ReplayDispatchError("TESTID_NOT_FOUND", `testID "${id}" not present`, {
         failedSelector: id
       });
     const frontmost = await deps.frontmostFor?.(id);
+    requireNotAborted();
     const matches = frontmost ? frontmost.matchCount ?? 1 : treeMatches;
     if (matches > 1)
       throw new ReplayDispatchError("AMBIGUOUS_TESTID", `testID "${id}" resolves to ${matches} mounted elements`, { matchCount: matches });
@@ -15179,10 +15186,12 @@ function buildCdpDispatch(deps) {
   return {
     async press(id) {
       await assertExactInteractable(id);
+      requireNotAborted();
       await deps.pressByTestId(id);
     },
     async type(id, text) {
       await assertExactInteractable(id);
+      requireNotAborted();
       await deps.typeByTestId(id, text);
     },
     async visibility(id) {
