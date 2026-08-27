@@ -1024,6 +1024,101 @@ test('a ref-less Fabric host uses the renderer public instance for bounded layou
   }
 });
 
+test('a frontmost ordinary sibling covering the target center prevents replay mutation', async () => {
+  for (const overlayBeforeTarget of [false, true]) {
+    const root = routeTree('coverage', 'home');
+    const screen = root.child;
+    const target = screen.child;
+    const overlay: any = {
+      type: { displayName: 'View' },
+      memoizedProps: { style: overlayBeforeTarget ? { zIndex: 1 } : {} },
+      stateNode: layoutStateNode({ x: 0, y: 0, width: 390, height: 844 }),
+      return: screen,
+      child: null,
+      sibling: null,
+    };
+    if (overlayBeforeTarget) {
+      screen.child = overlay;
+      overlay.sibling = target;
+    } else {
+      target.sibling = overlay;
+    }
+    const sandbox = makeFrontmostSandbox(root, {
+      index: 0,
+      routes: [{ name: 'home' }],
+    });
+    const verdict = JSON.parse(sandbox.__RN_AGENT.isTestIdFrontmost('coverage'));
+    assert.equal(verdict.visible, false);
+    assert.match(verdict.reason, /covered by a frontmost sibling/);
+    const mutations: string[] = [];
+    const deps = {
+      pressByTestId: async () => mutations.push('press'),
+      typeByTestId: async () => mutations.push('type'),
+      treeFor: async (id: string) => JSON.parse(sandbox.__RN_AGENT.getTree({ filter: id })),
+      frontmostFor: async (id: string) => JSON.parse(sandbox.__RN_AGENT.isTestIdFrontmost(id)),
+      launchApp: async () => {},
+      settle: async () => {},
+    };
+    const press = await runCdpReplayCommands([{ tapOn: { id: 'coverage' } }], {}, deps);
+    const input = await runCdpReplayCommands([{ inputText: 'value' }], {}, deps, {
+      initialFocusId: 'coverage',
+    });
+    assert.equal(press.passed, false);
+    assert.equal(input.passed, false);
+    assert.deepEqual(mutations, []);
+  }
+});
+
+test('a non-covering or pointer-transparent frontmost sibling preserves visibility', () => {
+  for (const overlay of [
+    {
+      memoizedProps: {},
+      stateNode: layoutStateNode({ x: 250, y: 600, width: 100, height: 100 }),
+    },
+    {
+      memoizedProps: { pointerEvents: 'none' },
+      stateNode: layoutStateNode({ x: 0, y: 0, width: 390, height: 844 }),
+    },
+  ]) {
+    const root = routeTree('coverage', 'home');
+    const target = root.child.child;
+    target.sibling = {
+      type: { displayName: 'View' },
+      return: root.child,
+      child: null,
+      sibling: null,
+      ...overlay,
+    };
+    const sandbox = makeFrontmostSandbox(root, {
+      index: 0,
+      routes: [{ name: 'home' }],
+    });
+    const verdict = JSON.parse(sandbox.__RN_AGENT.isTestIdFrontmost('coverage'));
+    assert.equal(verdict.visible, true);
+  }
+});
+
+test('a covered sibling underneath the target does not mask visibility', () => {
+  const root = routeTree('coverage', 'home');
+  const screen = root.child;
+  const target = screen.child;
+  const underlay: any = {
+    type: { displayName: 'View' },
+    memoizedProps: {},
+    stateNode: layoutStateNode({ x: 0, y: 0, width: 390, height: 844 }),
+    return: screen,
+    child: null,
+    sibling: target,
+  };
+  screen.child = underlay;
+  const sandbox = makeFrontmostSandbox(root, {
+    index: 0,
+    routes: [{ name: 'home' }],
+  });
+  const verdict = JSON.parse(sandbox.__RN_AGENT.isTestIdFrontmost('coverage'));
+  assert.equal(verdict.visible, true);
+});
+
 test('a zero-size mounted testID is not visible', () => {
   const root = routeTree('coverage', 'home');
   root.child.child.stateNode = layoutStateNode({ x: 20, y: 80, width: 0, height: 44 });

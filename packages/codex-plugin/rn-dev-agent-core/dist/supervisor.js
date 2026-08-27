@@ -67725,6 +67725,166 @@ var init_injected_helpers = __esm({
       }
       layoutAncestor = layoutAncestor.return;
     }
+    var stackingScanned = 0;
+    var stackingBudgetExceeded = false;
+    function topLevelStackingHosts(branch) {
+      var stack = [branch];
+      var hosts = [];
+      while (stack.length) {
+        if (++stackingScanned > 10000) {
+          stackingBudgetExceeded = true;
+          return hosts;
+        }
+        var fiber = stack.pop();
+        if (!fiber) continue;
+        if (publicInstanceFor(fiber)) {
+          hosts.push(fiber);
+          continue;
+        }
+        var children = [];
+        var child = fiber.child;
+        while (child) {
+          children.push(child);
+          child = child.sibling;
+        }
+        for (var childIndex = children.length - 1; childIndex >= 0; childIndex--) {
+          stack.push(children[childIndex]);
+        }
+      }
+      return hosts;
+    }
+    function stackingIndexFor(host) {
+      var style = flattenStyle(host && (host.memoizedProps || {}).style);
+      return typeof style.zIndex === 'number' && Number.isFinite(style.zIndex)
+        ? style.zIndex
+        : 0;
+    }
+    function targetStackingHost(branch) {
+      var cursor = layoutFiber;
+      var host = null;
+      var budget = 0;
+      while (cursor && budget++ < 1000) {
+        if (publicInstanceFor(cursor)) host = cursor;
+        if (cursor === branch) break;
+        cursor = cursor.return;
+      }
+      return host || branch;
+    }
+    function routeOwnerFor(fiber) {
+      var cursor = fiber;
+      var budget = 0;
+      while (cursor && budget++ < 1000) {
+        var props = cursor.memoizedProps;
+        if (props && props.route && typeof props.route.name === 'string') {
+          return props.route.name;
+        }
+        cursor = cursor.return;
+      }
+      return null;
+    }
+    function coversTargetCenter(rect) {
+      var centerX = targetRect.x + targetRect.width / 2;
+      var centerY = targetRect.y + targetRect.height / 2;
+      return (
+        centerX >= rect.x &&
+        centerX < rect.x + rect.width &&
+        centerY >= rect.y &&
+        centerY < rect.y + rect.height
+      );
+    }
+    var occlusionScanned = 0;
+    function siblingOverlayVerdict(branch) {
+      var stack = [branch];
+      while (stack.length) {
+        if (++occlusionScanned > 10000) return 'budget';
+        var fiber = stack.pop();
+        if (!fiber || __hidden(fiber)) continue;
+        var props = fiber.memoizedProps || {};
+        if (hostKind(fiber) === 'modal' && props.visible === false) continue;
+        var pointerEvents = props.pointerEvents;
+        if (pointerEvents === 'none') continue;
+        var instance = publicInstanceFor(fiber);
+        if (instance && pointerEvents !== 'box-none') {
+          var rect = readRect(instance);
+          if (!rect) return 'unknown';
+          if (rect.width > 0 && rect.height > 0 && coversTargetCenter(rect)) return 'covered';
+        } else if (
+          !instance &&
+          pointerEvents !== 'box-none' &&
+          (hostKind(fiber) || typeof fiber.type === 'string' || fiber.tag === 5)
+        ) {
+          return 'unknown';
+        }
+        if (pointerEvents === 'box-only') continue;
+        var children = [];
+        var child = fiber.child;
+        while (child) {
+          children.push(child);
+          child = child.sibling;
+        }
+        for (var childIndex = children.length - 1; childIndex >= 0; childIndex--) {
+          stack.push(children[childIndex]);
+        }
+      }
+      return 'clear';
+    }
+    var lineage = layoutFiber;
+    var siblingDepth = 0;
+    while (lineage && lineage.return && siblingDepth++ < 1000) {
+      var parent = lineage.return;
+      var lineageZ = stackingIndexFor(targetStackingHost(lineage));
+      if (stackingBudgetExceeded) {
+        return JSON.stringify({
+          visible: false,
+          reason: 'sibling stacking proof exceeded its bounded React-tree budget',
+          code: 'ASSERTION_FAILED',
+          matchCount: 1
+        });
+      }
+      var afterLineage = false;
+      for (var sibling = parent.child; sibling; sibling = sibling.sibling) {
+        if (sibling === lineage) {
+          afterLineage = true;
+          continue;
+        }
+        var siblingRoute = routeOwnerFor(sibling);
+        if (siblingRoute && activeRoutes.indexOf(siblingRoute) === -1) continue;
+        var siblingHosts = topLevelStackingHosts(sibling);
+        if (stackingBudgetExceeded) {
+          return JSON.stringify({
+            visible: false,
+            reason: 'sibling stacking proof exceeded its bounded React-tree budget',
+            code: 'ASSERTION_FAILED',
+            matchCount: 1
+          });
+        }
+        if (siblingHosts.length === 0) siblingHosts.push(sibling);
+        for (var hostIndex = 0; hostIndex < siblingHosts.length; hostIndex++) {
+          var siblingHost = siblingHosts[hostIndex];
+          var siblingZ = stackingIndexFor(siblingHost);
+          if (siblingZ < lineageZ || (siblingZ === lineageZ && !afterLineage)) continue;
+          var overlayVerdict = siblingOverlayVerdict(siblingHost);
+          if (overlayVerdict === 'covered') {
+            return JSON.stringify({
+              visible: false,
+              reason: 'testID native layout is covered by a frontmost sibling',
+              matchCount: 1
+            });
+          }
+          if (overlayVerdict === 'unknown' || overlayVerdict === 'budget') {
+            return JSON.stringify({
+              visible: false,
+              reason: overlayVerdict === 'budget'
+                ? 'sibling occlusion proof exceeded its bounded React-tree budget'
+                : 'frontmost sibling layout bounds are unavailable',
+              code: 'ASSERTION_FAILED',
+              matchCount: 1
+            });
+          }
+        }
+      }
+      lineage = parent;
+    }
     return JSON.stringify({
       visible: true,
       route: routeOwner,
