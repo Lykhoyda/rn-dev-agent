@@ -1578,6 +1578,10 @@ export function createMaestroRunHandler(
         });
       }
       const nativeFailure = parseMaestroFailure(combined, terminal);
+      if (nativeFailure.kind === 'TIMEOUT' && !timedOut) {
+        timedOut = true;
+        terminal = buildTerminalEvidence(combined, { timedOut, spawnError });
+      }
       const soleNativeSelector = soleComparableNativeSelectorForCommands(validatedCommands)?.value;
       const selectorLessAssertionFailure =
         nativeFailure.kind === 'UNKNOWN' &&

@@ -16163,6 +16163,10 @@ function createMaestroRunHandler(deps = {}) {
         });
       }
       const nativeFailure = parseMaestroFailure(combined, terminal);
+      if (nativeFailure.kind === "TIMEOUT" && !timedOut) {
+        timedOut = true;
+        terminal = buildTerminalEvidence(combined, { timedOut, spawnError });
+      }
       const soleNativeSelector = soleComparableNativeSelectorForCommands(validatedCommands)?.value;
       const selectorLessAssertionFailure = nativeFailure.kind === "UNKNOWN" && terminal.exitClass === "step-failure" && terminal.failedStep?.split(/\s+/, 1)[0] === "assertVisible";
       const failedNativeSelector = nativeFailure.kind === "SELECTOR_NOT_FOUND" ? nativeFailure.selector ?? soleNativeSelector : nativeFailure.kind === "ASSERTION_FAILED" ? nativeFailure.selector ?? soleNativeSelector : nativeFailure.kind === "TIMEOUT" ? nativeFailure.selector : selectorLessAssertionFailure ? soleNativeSelector : null;

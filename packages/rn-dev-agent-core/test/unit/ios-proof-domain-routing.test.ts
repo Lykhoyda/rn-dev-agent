@@ -844,6 +844,29 @@ test('a timed-out selector failure cannot become native blindness', async () => 
   assert.equal(comparisonProbes, 0);
 });
 
+test('a Maestro-internal selector timeout cannot become native blindness', async () => {
+  let comparisonProbes = 0;
+  const env = envelope(
+    await nativeHandler(
+      () => {
+        comparisonProbes += 1;
+        return true;
+      },
+      true,
+      "Timed out waiting for element 'Visible'",
+    )({
+      platform: 'ios',
+      deviceId: IOS_UDID,
+      inlineYaml: `appId: com.example.app\n---\n- assertVisible: Visible\n`,
+      ...callbacks,
+    }),
+  );
+
+  assert.notEqual(env.code, 'NATIVE_SURFACE_BLIND');
+  assert.equal(env.meta?.timedOut, true);
+  assert.equal(comparisonProbes, 0);
+});
+
 test('a deadline reached during the failure-screen probe cannot become native blindness', async () => {
   let clock = 0;
   const handler = createMaestroRunHandler({
