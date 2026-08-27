@@ -55307,15 +55307,24 @@ var INJECTED_HELPERS = `
     }
 
     if (modals.length > 0) {
-      var insideModal = false;
+      var containingModalCount = 0;
       for (var mi = 0; mi < modals.length; mi++) {
-        if (containsFiber(modals[mi], target)) { insideModal = true; break; }
+        if (containsFiber(modals[mi], target)) containingModalCount++;
       }
-      if (!insideModal) {
+      if (containingModalCount === 0) {
         return JSON.stringify({
           visible: false,
           reason: 'testID is mounted behind the active modal React subtree',
           matchCount: 1
+        });
+      }
+      if (containingModalCount !== modals.length) {
+        return JSON.stringify({
+          visible: false,
+          reason: 'frontmost modal ordering cannot be proven across visible modal subtrees',
+          code: 'ASSERTION_FAILED',
+          matchCount: 1,
+          modalCount: modals.length
         });
       }
     }
@@ -78974,6 +78983,17 @@ function createMaestroRunHandler(deps = {}) {
         const expectedRoute = semanticActionMeta?.expectedRouteSequence?.at(-1);
         if (expectedRoute && deps.getLiveRoute) {
           const liveRoute = await deps.getLiveRoute().catch(() => null);
+          if (controller.signal.aborted || deadline - now() <= 0) {
+            return failResult("Partitioned iOS replay exceeded its deadline during route verification.", "RUNNER_TIMEOUT", {
+              proofDomain,
+              proofDomains: uniqueDomains,
+              ...proofDomain === "partitioned" ? { runner: "partitioned", transport: "partitioned" } : {},
+              transportVersion: nativeTransportVersion,
+              steps: combinedSteps,
+              expectedRoute,
+              liveRoute
+            });
+          }
           if (liveRoute !== expectedRoute) {
             return failResult(`React-tree replay reached its final testID but route ${String(liveRoute)} does not match expected route ${expectedRoute}.`, "ASSERTION_FAILED", {
               proofDomain,

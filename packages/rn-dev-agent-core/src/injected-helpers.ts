@@ -3737,15 +3737,24 @@ export const INJECTED_HELPERS = `
     }
 
     if (modals.length > 0) {
-      var insideModal = false;
+      var containingModalCount = 0;
       for (var mi = 0; mi < modals.length; mi++) {
-        if (containsFiber(modals[mi], target)) { insideModal = true; break; }
+        if (containsFiber(modals[mi], target)) containingModalCount++;
       }
-      if (!insideModal) {
+      if (containingModalCount === 0) {
         return JSON.stringify({
           visible: false,
           reason: 'testID is mounted behind the active modal React subtree',
           matchCount: 1
+        });
+      }
+      if (containingModalCount !== modals.length) {
+        return JSON.stringify({
+          visible: false,
+          reason: 'frontmost modal ordering cannot be proven across visible modal subtrees',
+          code: 'ASSERTION_FAILED',
+          matchCount: 1,
+          modalCount: modals.length
         });
       }
     }

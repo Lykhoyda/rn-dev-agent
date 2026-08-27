@@ -506,9 +506,11 @@ function makeFrontmostSandbox(root: any, navState: Record<string, unknown>) {
     __expo_router_state__: navState,
   };
   sandbox.globalThis = sandbox;
+  const roots = Array.isArray(root) ? root : [root];
   sandbox.__REACT_DEVTOOLS_GLOBAL_HOOK__ = {
     renderers: new Map([[1, {}]]),
-    getFiberRoots: (id: number) => (id === 1 ? new Set([{ current: root }]) : new Set()),
+    getFiberRoots: (id: number) =>
+      id === 1 ? new Set(roots.map((current) => ({ current }))) : new Set(),
   };
   vm.createContext(sandbox);
   vm.runInContext(INJECTED_HELPERS, sandbox);
@@ -578,6 +580,77 @@ test('an inactive mounted modal does not mask the current route', () => {
   const verdict = JSON.parse(sandbox.__RN_AGENT.isTestIdFrontmost('coverage'));
   assert.equal(verdict.visible, true);
   assert.equal(verdict.modalCount, 0);
+});
+
+test('stacked visible modal roots fail closed when ordering is unavailable', () => {
+  const backgroundModal: any = {
+    type: { displayName: 'Modal' },
+    memoizedProps: { visible: true },
+    return: null,
+    child: null,
+    sibling: null,
+  };
+  const target: any = {
+    type: { displayName: 'View' },
+    memoizedProps: { testID: 'covered-action' },
+    return: backgroundModal,
+    child: null,
+    sibling: null,
+  };
+  backgroundModal.child = target;
+  const foregroundModal = {
+    type: { displayName: 'Modal' },
+    memoizedProps: { visible: true },
+    return: null,
+    child: null,
+    sibling: null,
+  };
+  const sandbox = makeFrontmostSandbox([backgroundModal, foregroundModal], {
+    index: 0,
+    routes: [{ name: 'home' }],
+  });
+
+  const verdict = JSON.parse(sandbox.__RN_AGENT.isTestIdFrontmost('covered-action'));
+  assert.equal(verdict.visible, false);
+  assert.equal(verdict.code, 'ASSERTION_FAILED');
+  assert.equal(verdict.modalCount, 2);
+});
+
+test('a matching route returned after the replay deadline cannot report success', async () => {
+  let clock = 0;
+  const handler = createMaestroRunHandler({
+    replayDeps: () => ({
+      pressByTestId: async () => {},
+      typeByTestId: async () => {},
+      treeFor: async (id) => ({ testID: id }),
+      frontmostFor: async () => ({ visible: true }),
+      launchApp: async () => {},
+      settle: async () => {},
+    }),
+    getLiveRoute: async () => {
+      clock = 101;
+      return 'home';
+    },
+    now: () => clock,
+  });
+  const env = envelope(
+    await handler({
+      platform: 'ios',
+      timeoutMs: 100,
+      inlineYaml: `appId: com.example.app\n---\n- assertVisible:\n    id: home\n`,
+      actionMetadata: {
+        id: 'route-deadline-proof',
+        enginePin: 'maestro-runner@1.1.24',
+        tags: [],
+        expectedRouteSequence: ['home'],
+      },
+      ...callbacks,
+    }),
+  );
+
+  assert.equal(env.code, 'RUNNER_TIMEOUT');
+  assert.equal(env.meta?.expectedRoute, 'home');
+  assert.equal(env.meta?.liveRoute, 'home');
 });
 
 test('propagated testIDs on one fiber lineage remain one logical match', () => {

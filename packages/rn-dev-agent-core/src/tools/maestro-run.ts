@@ -924,6 +924,23 @@ export function createMaestroRunHandler(
         const expectedRoute = semanticActionMeta?.expectedRouteSequence?.at(-1);
         if (expectedRoute && deps.getLiveRoute) {
           const liveRoute = await deps.getLiveRoute().catch(() => null);
+          if (controller.signal.aborted || deadline - now() <= 0) {
+            return failResult(
+              'Partitioned iOS replay exceeded its deadline during route verification.',
+              'RUNNER_TIMEOUT',
+              {
+                proofDomain,
+                proofDomains: uniqueDomains,
+                ...(proofDomain === 'partitioned'
+                  ? { runner: 'partitioned', transport: 'partitioned' }
+                  : {}),
+                transportVersion: nativeTransportVersion,
+                steps: combinedSteps,
+                expectedRoute,
+                liveRoute,
+              },
+            );
+          }
           if (liveRoute !== expectedRoute) {
             return failResult(
               `React-tree replay reached its final testID but route ${String(liveRoute)} does not match expected route ${expectedRoute}.`,
