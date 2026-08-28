@@ -1,0 +1,151 @@
+// test/unit/gh-636-live-capture-target.test.js
+// GH #636 (B266): after cdp_run_action the flow parks the fast runner and leaves
+// CDP stale. The Observe Device pane used to go blank because the live capture
+// resolved its own device from exactly those two volatile sources. It now shares
+// the mirror's target resolver, so the authority-proven device still drives the
+// supported simctl/adb capture — and an unprovable frame is reported, not faked.
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import {
+  buildLiveDeps,
+  maybeCaptureLiveFrame,
+  _resetLiveCaptureForTest,
+} from '../../dist/observability/live-device.js';
+import { buildMirrorTargetResolver } from '../../dist/observability/mirror/target.js';
+import {
+  tryRawScreenshot,
+  _setForTest,
+  _resetForTest,
+} from '../../dist/tools/device-screenshot-raw.js';
+import { Recorder } from '../../dist/observability/recorder.js';
+
+const AUTHORITY_UDID = 'AAAAAAAA-1111-2222-3333-444444444444';
+const JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46]);
+
+// The exact post-flow world: no agent-device session (runner parked), no CDP
+// target (stale), and no unambiguous ambient device — only the authority
+// session's proven device binding.
+function parkedRunnerResolver(registryBinding) {
+  return buildMirrorTargetResolver({
+    getPlatform: () => null,
+    getSessionDeviceId: () => undefined,
+    getRegistryDeviceBinding: () => registryBinding,
+    resolveIosUdid: async () => undefined,
+    listAndroidSerials: async () => [],
+  });
+}
+
+function liveDepsFor(overrides = {}) {
+  const recorder = new Recorder();
+  recorder.attach(() => {});
+  const blocked = [];
+  const deps = buildLiveDeps({
+    recorder,
+    isFlowActive: () => false,
+    resolveTarget: parkedRunnerResolver({
+      platform: 'ios',
+      deviceId: AUTHORITY_UDID,
+    }),
+    // Pre-fix inputs, kept so this case is expressible against either wiring:
+    // both volatile sources are empty exactly as they are after a flow.
+    getActiveSession: () => null,
+    getClient: () => ({ isConnected: false, connectedTarget: null }),
+    captureScreenshot: (platform, path, deviceId) => tryRawScreenshot(platform, path, deviceId),
+    readRoute: async () => null,
+    readShotFile: () => ({ buf: JPEG, contentType: 'image/jpeg' }),
+    reportBlocked: (o) => blocked.push(o),
+    ...overrides,
+  });
+  return { deps, recorder, blocked };
+}
+
+test('parked runner + stale CDP: the supported simctl fallback still lands a real frame', async () => {
+  _resetLiveCaptureForTest();
+  _resetForTest();
+  const dir = mkdtempSync(join(tmpdir(), 'gh636-'));
+  const capturedWith = [];
+  _setForTest({
+    // Ambient resolution refuses, proving the device came from the authority
+    // binding and not from a lucky single-booted simulator.
+    iosResolver: async () => null,
+    iosCapturer: async (udid, path) => {
+      capturedWith.push(udid);
+      writeFileSync(path, JPEG);
+      return true;
+    },
+  });
+  try {
+    const { deps, recorder } = liveDepsFor({ tmpPath: () => join(dir, 'live.jpg') });
+    const outcome = await maybeCaptureLiveFrame(deps);
+    const shot = recorder.getLiveScreenshot();
+    assert.ok(shot, 'the Device pane received a real frame');
+    assert.deepEqual(shot.buf, JPEG);
+    assert.deepEqual(capturedWith, [AUTHORITY_UDID], 'captured the authority-proven device');
+    assert.deepEqual(outcome, { ok: true, pushed: 'frame' });
+  } finally {
+    _resetForTest();
+  }
+});
+
+test('no provable device: truthful typed refusal, no blank or fabricated frame', async () => {
+  _resetLiveCaptureForTest();
+  // An authority session with no device binding — the {} sentinel the mirror
+  // already refuses on, rather than guessing a device.
+  const { deps, recorder, blocked } = liveDepsFor({
+    resolveTarget: parkedRunnerResolver({}),
+    captureScreenshot: async () => {
+      throw new Error('capture must not be attempted without a proven device');
+    },
+  });
+  const outcome = await maybeCaptureLiveFrame(deps);
+  assert.equal(outcome.ok, false);
+  assert.equal(outcome.code, 'DEVICE_AUTHORITY_UNBOUND');
+  assert.match(outcome.reason, /device authority is not bound/);
+  assert.deepEqual(blocked, [{ code: outcome.code, reason: outcome.reason }]);
+  assert.equal(recorder.getLiveScreenshot(), undefined, 'nothing was pushed to the Device pane');
+});
+
+test('neither supported source proves a frame: typed refusal, nothing pushed', async () => {
+  _resetLiveCaptureForTest();
+  const { deps, recorder, blocked } = liveDepsFor({
+    captureScreenshot: async () => ({ ok: false }),
+    readRoute: async () => null,
+  });
+  const outcome = await maybeCaptureLiveFrame(deps);
+  assert.equal(outcome.ok, false);
+  assert.equal(outcome.code, 'LIVE_FRAME_UNAVAILABLE');
+  assert.match(outcome.reason, /simctl/);
+  assert.equal(blocked.length, 1);
+  assert.equal(recorder.getLiveScreenshot(), undefined);
+});
+
+test('a capture that throws is reported, never swallowed into a blank pane', async () => {
+  _resetLiveCaptureForTest();
+  const { deps, recorder, blocked } = liveDepsFor({
+    captureScreenshot: async () => {
+      throw new Error('simctl io screenshot timed out');
+    },
+    readRoute: async () => null,
+  });
+  const outcome = await maybeCaptureLiveFrame(deps);
+  assert.equal(outcome.ok, false);
+  assert.equal(outcome.code, 'LIVE_FRAME_UNAVAILABLE');
+  assert.match(outcome.reason, /timed out/);
+  assert.equal(blocked.length, 1);
+  assert.equal(recorder.getLiveScreenshot(), undefined);
+});
+
+test('the route leg alone still lands a frame when pixels are unavailable', async () => {
+  _resetLiveCaptureForTest();
+  const { deps, blocked } = liveDepsFor({
+    getClient: () => ({ isConnected: true, connectedTarget: null }),
+    captureScreenshot: async () => ({ ok: false }),
+    readRoute: async () => 'Tasks',
+  });
+  const outcome = await maybeCaptureLiveFrame(deps);
+  assert.deepEqual(outcome, { ok: true, pushed: 'frame' });
+  assert.equal(blocked.length, 0);
+});

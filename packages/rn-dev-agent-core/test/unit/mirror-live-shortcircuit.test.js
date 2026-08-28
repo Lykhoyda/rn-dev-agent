@@ -12,7 +12,7 @@ function deps({ mirrorActive }) {
     deps: {
       hasObservers: () => true,
       isFlowActive: () => false,
-      getPlatform: () => 'ios',
+      resolveTarget: async () => ({ ok: true, target: { platform: 'ios', deviceId: 'UDID-1' } }),
       captureScreenshot: async (_p, path) => {
         calls.screenshot++;
         return { ok: true, path };

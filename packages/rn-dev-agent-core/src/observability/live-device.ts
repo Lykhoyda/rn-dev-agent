@@ -2,6 +2,7 @@
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { classifyFamily } from './events.js';
+import type { MirrorTargetResolution } from './mirror/target.js';
 
 /**
  * GH #206: does THIS tool call change on-screen state (→ trigger a live
@@ -150,13 +151,27 @@ export function mayTriggerLiveCapture(tool: string): boolean {
   );
 }
 
+/**
+ * GH #636 (B266): the Device pane has exactly one owner of "which device am I
+ * showing" — the mirror target resolver. The live per-tool frame used to
+ * resolve its own platform from the agent-device session and the live CDP
+ * target; a flow that parks the runner and leaves CDP stale erased both and the
+ * capture silently produced nothing, even though the authority-proven device
+ * binding was intact and the simctl/adb capture needs neither.
+ */
+export type LiveCaptureOutcome =
+  | { ok: true; pushed: 'frame' }
+  | { ok: true; pushed: 'skipped'; reason: 'no-observers' | 'flow-active' | 'coalesced' }
+  | { ok: false; code: string; reason: string };
+
 export interface LiveCaptureDeps {
   hasObservers: () => boolean;
   isFlowActive: () => boolean;
-  getPlatform: () => 'ios' | 'android' | null;
+  resolveTarget: () => Promise<MirrorTargetResolution>;
   captureScreenshot: (
     platform: 'ios' | 'android',
     path: string,
+    deviceId: string,
   ) => Promise<{ ok: true; path: string } | { ok: false }>;
   readRoute: () => Promise<string | null>;
   readShotFile: (path: string) => { buf: Buffer; contentType: string } | null;
@@ -165,6 +180,8 @@ export interface LiveCaptureDeps {
   /** GH #206 + mirror spec: while the MJPEG mirror is streaming, the per-tool
    * screenshot is redundant — the browser already sees live pixels. */
   isMirrorActive?: () => boolean;
+  /** Truthful reporting seam: an unprovable frame is announced, never faked. */
+  reportBlocked?: (outcome: { code: string; reason: string }) => void;
 }
 
 let inFlight = false;
@@ -176,19 +193,21 @@ export function _resetLiveCaptureForTest(): void {
   pending = false;
 }
 
-export async function maybeCaptureLiveFrame(deps: LiveCaptureDeps): Promise<void> {
+export async function maybeCaptureLiveFrame(deps: LiveCaptureDeps): Promise<LiveCaptureOutcome> {
   try {
-    if (!deps.hasObservers() || deps.isFlowActive()) return;
+    if (!deps.hasObservers()) return { ok: true, pushed: 'skipped', reason: 'no-observers' };
+    if (deps.isFlowActive()) return { ok: true, pushed: 'skipped', reason: 'flow-active' };
     if (inFlight) {
       pending = true;
-      return;
+      return { ok: true, pushed: 'skipped', reason: 'coalesced' };
     }
     inFlight = true;
   } catch {
-    return;
+    return { ok: true, pushed: 'skipped', reason: 'no-observers' };
   }
+  let outcome: LiveCaptureOutcome;
   try {
-    await runCapture(deps);
+    outcome = await runCapture(deps);
   } finally {
     inFlight = false;
     if (pending) {
@@ -196,56 +215,81 @@ export async function maybeCaptureLiveFrame(deps: LiveCaptureDeps): Promise<void
       void maybeCaptureLiveFrame(deps);
     }
   }
+  if (!outcome.ok) {
+    try {
+      deps.reportBlocked?.({ code: outcome.code, reason: outcome.reason });
+    } catch {
+      /* reporting is best-effort; it must never mask the capture outcome */
+    }
+  }
+  return outcome;
 }
 
-async function runCapture(deps: LiveCaptureDeps): Promise<void> {
-  const platform = deps.getPlatform();
-  if (!platform) return;
+async function runCapture(deps: LiveCaptureDeps): Promise<LiveCaptureOutcome> {
+  let resolution: MirrorTargetResolution;
+  try {
+    resolution = await deps.resolveTarget();
+  } catch (error) {
+    return {
+      ok: false,
+      code: 'LIVE_TARGET_UNRESOLVED',
+      reason: error instanceof Error ? error.message : String(error),
+    };
+  }
+  if (!resolution.ok) {
+    return {
+      ok: false,
+      code: resolution.code ?? 'LIVE_TARGET_UNRESOLVED',
+      reason: resolution.reason,
+    };
+  }
+  const { platform, deviceId } = resolution.target;
   const frame: { shot?: { buf: Buffer; contentType: string }; route?: string } = {};
+  let captureDetail = 'the mirror is streaming, so no still frame was requested';
   if (!deps.isMirrorActive?.()) {
+    captureDetail = `the supported ${platform === 'ios' ? 'simctl' : 'adb'} capture produced no frame`;
     try {
-      const shot = await deps.captureScreenshot(platform, deps.tmpPath());
+      const shot = await deps.captureScreenshot(platform, deps.tmpPath(), deviceId);
       if (shot.ok) {
         const bytes = deps.readShotFile(shot.path);
         if (bytes) frame.shot = bytes;
+        else captureDetail = 'the captured file could not be read back';
       }
-    } catch {
-      /* screenshot best-effort */
+    } catch (error) {
+      captureDetail = error instanceof Error ? error.message : String(error);
     }
   }
   try {
     const route = await deps.readRoute();
     if (route) frame.route = route;
   } catch {
-    /* route best-effort */
+    /* route best-effort — CDP is stale by design right after a flow */
   }
-  if (frame.shot || frame.route) deps.pushLive(frame);
+  if (frame.shot || frame.route) {
+    deps.pushLive(frame);
+    return { ok: true, pushed: 'frame' };
+  }
+  return { ok: false, code: 'LIVE_FRAME_UNAVAILABLE', reason: captureDetail };
 }
 
 interface BuildLiveDepsInput {
   recorder: { hasSubscribers: () => boolean; pushLive: LiveCaptureDeps['pushLive'] };
   isFlowActive: () => boolean;
-  getActiveSession: () => { platform?: string } | null;
-  getClient: () => { isConnected: boolean; connectedTarget: { platform?: string } | null };
+  /** The Device pane's single target owner — the same resolver the mirror uses. */
+  resolveTarget: () => Promise<MirrorTargetResolution>;
+  getClient: () => { isConnected: boolean };
   captureScreenshot: LiveCaptureDeps['captureScreenshot'];
   readRoute: (client: unknown) => Promise<string | null>;
   readShotFile: LiveCaptureDeps['readShotFile'];
   isMirrorActive?: () => boolean;
-}
-
-function asDevicePlatform(p: string | undefined): 'ios' | 'android' | null {
-  return p === 'ios' || p === 'android' ? p : null;
+  reportBlocked?: LiveCaptureDeps['reportBlocked'];
 }
 
 export function buildLiveDeps(input: BuildLiveDepsInput): LiveCaptureDeps {
   return {
     hasObservers: () => input.recorder.hasSubscribers(),
     isFlowActive: () => input.isFlowActive(),
-    getPlatform: () => {
-      const fromSession = asDevicePlatform(input.getActiveSession()?.platform);
-      if (fromSession) return fromSession;
-      return asDevicePlatform(input.getClient().connectedTarget?.platform);
-    },
+    resolveTarget: () => input.resolveTarget(),
     captureScreenshot: input.captureScreenshot,
     readRoute: async () => {
       const c = input.getClient();
@@ -260,5 +304,6 @@ export function buildLiveDeps(input: BuildLiveDepsInput): LiveCaptureDeps {
     pushLive: (frame) => input.recorder.pushLive(frame),
     tmpPath: () => join(tmpdir(), `rn-observe-live-${process.pid}.jpg`),
     isMirrorActive: input.isMirrorActive,
+    reportBlocked: input.reportBlocked,
   };
 }

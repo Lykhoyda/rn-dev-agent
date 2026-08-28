@@ -11,7 +11,7 @@ function baseDeps(over = {}) {
   const deps = {
     hasObservers: () => true,
     isFlowActive: () => false,
-    getPlatform: () => 'ios',
+    resolveTarget: async () => ({ ok: true, target: { platform: 'ios', deviceId: 'UDID-1' } }),
     captureScreenshot: async (_p, path) => ({ ok: true, path }),
     readRoute: async () => 'Home',
     readShotFile: () => ({ buf: Buffer.from([1]), contentType: 'image/jpeg' }),
@@ -45,11 +45,15 @@ test('skips when a flow is active', async () => {
   assert.equal(pushed.length, 0);
 });
 
-test('skips when no platform resolvable (no session and CDP not connected)', async () => {
+test('refuses truthfully when no device target is resolvable', async () => {
   _resetLiveCaptureForTest();
-  const { deps, pushed } = baseDeps({ getPlatform: () => null });
-  await maybeCaptureLiveFrame(deps);
+  const { deps, pushed } = baseDeps({
+    resolveTarget: async () => ({ ok: false, reason: 'no active device session' }),
+  });
+  const outcome = await maybeCaptureLiveFrame(deps);
   assert.equal(pushed.length, 0);
+  assert.equal(outcome.ok, false);
+  assert.equal(outcome.code, 'LIVE_TARGET_UNRESOLVED');
 });
 
 test('route read failure (CDP down) still pushes the shot', async () => {
