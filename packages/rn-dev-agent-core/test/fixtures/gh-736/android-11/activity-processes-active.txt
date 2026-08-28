@@ -1,0 +1,4 @@
+ACTIVITY MANAGER RUNNING PROCESSES (dumpsys activity processes)
+  Active instrumentation:
+    Instrumentation #0: ActiveInstrumentation{68af35f {dev.lykhoyda.rndevagent.androidrunner.test/androidx.test.runner.AndroidJUnitRunner} 1 procs}
+      mClass=ComponentInfo{dev.lykhoyda.rndevagent.androidrunner.test/androidx.test.runner.AndroidJUnitRunner} mFinished=false

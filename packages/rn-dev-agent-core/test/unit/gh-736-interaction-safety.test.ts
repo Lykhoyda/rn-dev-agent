@@ -66,11 +66,14 @@ const idleProcessesCapture = readFileSync(
   join(android11CaptureRoot, 'activity-processes-idle-header.txt'),
   'utf8',
 );
-const activeProcessesCapture = `${idleProcessesCapture}  Active instrumentation:
-    ActiveInstrumentation{84c91a2}
-      mClass=ComponentInfo{dev.lykhoyda.rndevagent.androidrunner.test/dev.lykhoyda.rndevagent.androidrunner.Runner}
-  UID states:
-`;
+const activeProcessesCapture = readFileSync(
+  join(android11CaptureRoot, 'activity-processes-active.txt'),
+  'utf8',
+);
+const activeProcessesEvidence = activeProcessesCapture
+  .split('\n')
+  .find((line) => /ActiveInstrumentation\{/.test(line))!
+  .trim();
 const appHome = {
   ref: '@e1',
   type: 'android.widget.TextView',
@@ -544,23 +547,8 @@ test('cleanup classification is exact, predicate-specific, and fail-closed', () 
   );
   assert.deepEqual(classifyAndroidRunnerCleanupResources(expected, '', activeProcessesCapture), {
     predicate: 'instrumentation',
-    evidence: 'ActiveInstrumentation{84c91a2}',
+    evidence: activeProcessesEvidence,
   });
-  assert.deepEqual(
-    classifyAndroidRunnerCleanupResources(
-      expected,
-      '',
-      `${idleProcessesCapture}  Active instrumentation:
-    mClass=ComponentInfo{dev.lykhoyda.rndevagent.androidrunner.test/dev.lykhoyda.rndevagent.androidrunner.Runner}
-  UID states:
-`,
-    ),
-    {
-      predicate: 'instrumentation',
-      evidence:
-        'mClass=ComponentInfo{dev.lykhoyda.rndevagent.androidrunner.test/dev.lykhoyda.rndevagent.androidrunner.Runner}',
-    },
-  );
   assert.equal(classifyAndroidRunnerCleanupResources(expected, '', idleProcessesCapture), null);
   assert.equal(
     classifyAndroidRunnerCleanupResources(
@@ -598,7 +586,7 @@ test('processes verifier preserves typed sanitized outcomes for every refusal', 
     (error: unknown) => {
       assert.ok(error instanceof AndroidRunnerCleanupUnconfirmedError);
       assert.equal(error.predicate, 'instrumentation');
-      assert.equal(error.evidence, 'ActiveInstrumentation{84c91a2}');
+      assert.equal(error.evidence, activeProcessesEvidence);
       assert.equal(error.meta.instrumentationCleanup?.exitCode, 0);
       assert.ok(error.meta.instrumentationCleanup?.argv.join(' ').includes('device-'));
       assert.ok(!JSON.stringify(error.meta).includes('46828c2c'));
