@@ -76678,7 +76678,7 @@ var init_recorder = __esm({
       pushLive(frame) {
         const ev = { type: "live" };
         let changed = false;
-        if (frame.shot && frame.shot.buf.length <= MAX_SHOT_BYTES) {
+        if (frame.shot && frame.shot.buf.length > 0 && frame.shot.buf.length <= MAX_SHOT_BYTES) {
           this.liveShotData = frame.shot;
           ev.shotSeq = ++this.liveSeqVal;
           changed = true;
@@ -76688,13 +76688,14 @@ var init_recorder = __esm({
           changed = true;
         }
         if (!changed)
-          return;
+          return false;
         for (const fn of this.subs) {
           try {
             fn(ev);
           } catch {
           }
         }
+        return true;
       }
       push(ev) {
         for (const fn of this.subs) {
@@ -94301,8 +94302,8 @@ async function runCapture(deps) {
     try {
       const route = await deps.readRoute();
       if (route) {
-        deps.pushLive({ route });
-        return { ok: true, pushed: "frame" };
+        if (deps.pushLive({ route }))
+          return { ok: true, pushed: "frame" };
       }
     } catch {
       return { ok: true, pushed: "skipped", reason: "mirror-active" };
@@ -94348,8 +94349,9 @@ async function runCapture(deps) {
   } catch {
   }
   if (frame.shot || frame.route) {
-    deps.pushLive(frame);
-    return { ok: true, pushed: "frame" };
+    if (deps.pushLive(frame))
+      return { ok: true, pushed: "frame" };
+    captureDetail = "the Recorder rejected the captured frame as empty or oversized";
   }
   return { ok: false, code: "LIVE_FRAME_UNAVAILABLE", reason: captureDetail };
 }

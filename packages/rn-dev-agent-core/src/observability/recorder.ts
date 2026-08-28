@@ -139,10 +139,10 @@ export class Recorder {
   getLiveScreenshot(): ScreenshotBytes | undefined {
     return this.liveShotData;
   }
-  pushLive(frame: { shot?: ScreenshotBytes; route?: string }): void {
+  pushLive(frame: { shot?: ScreenshotBytes; route?: string }): boolean {
     const ev: Record<string, unknown> = { type: 'live' };
     let changed = false;
-    if (frame.shot && frame.shot.buf.length <= MAX_SHOT_BYTES) {
+    if (frame.shot && frame.shot.buf.length > 0 && frame.shot.buf.length <= MAX_SHOT_BYTES) {
       this.liveShotData = frame.shot;
       ev.shotSeq = ++this.liveSeqVal;
       changed = true;
@@ -151,7 +151,7 @@ export class Recorder {
       ev.route = frame.route;
       changed = true;
     }
-    if (!changed) return;
+    if (!changed) return false;
     for (const fn of this.subs) {
       try {
         fn(ev as unknown as AgentEvent);
@@ -159,6 +159,7 @@ export class Recorder {
         /* per-subscriber swallow */
       }
     }
+    return true;
   }
   push(ev: { type: string; [k: string]: unknown }): void {
     for (const fn of this.subs) {

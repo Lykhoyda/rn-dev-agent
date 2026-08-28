@@ -1,4 +1,3 @@
-// test/unit/gh-636-live-capture-target.test.js
 // GH #636 (B266): after cdp_run_action the flow parks the fast runner and leaves
 // CDP stale. The Observe Device pane used to go blank because the live capture
 // resolved its own device from exactly those two volatile sources. It now shares
@@ -6,9 +5,7 @@
 // supported simctl/adb capture — and an unprovable frame is reported, not faked.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { writeFileSync } from 'node:fs';
 import {
   buildLiveDeps,
   maybeCaptureLiveFrame,
@@ -25,10 +22,25 @@ import { Recorder } from '../../dist/observability/recorder.js';
 const AUTHORITY_UDID = 'AAAAAAAA-1111-2222-3333-444444444444';
 const JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46]);
 
+type RegistryBinding = { platform?: string; deviceId?: string };
+type BlockedOutcome = { code: string; reason: string };
+type LiveDepsOverrides = {
+  resolveTarget?: ReturnType<typeof buildMirrorTargetResolver>;
+  getClient?: () => { isConnected: boolean; connectedTarget?: unknown };
+  captureScreenshot?: (
+    platform: 'ios' | 'android',
+    path: string,
+    deviceId: string,
+  ) => Promise<{ ok: true; path: string } | { ok: false }>;
+  readRoute?: (client: unknown) => Promise<string | null>;
+  readShotFile?: (path: string) => { buf: Buffer; contentType: string } | null;
+  reportBlocked?: (outcome: BlockedOutcome) => void;
+};
+
 // The exact post-flow world: no agent-device session (runner parked), no CDP
 // target (stale), and no unambiguous ambient device — only the authority
 // session's proven device binding.
-function parkedRunnerResolver(registryBinding) {
+function parkedRunnerResolver(registryBinding: RegistryBinding) {
   return buildMirrorTargetResolver({
     getPlatform: () => null,
     getSessionDeviceId: () => undefined,
@@ -38,10 +50,10 @@ function parkedRunnerResolver(registryBinding) {
   });
 }
 
-function liveDepsFor(overrides = {}) {
+function liveDepsFor(overrides: LiveDepsOverrides = {}) {
   const recorder = new Recorder();
   recorder.attach(() => {});
-  const blocked = [];
+  const blocked: BlockedOutcome[] = [];
   const deps = buildLiveDeps({
     recorder,
     isFlowActive: () => false,
@@ -49,9 +61,6 @@ function liveDepsFor(overrides = {}) {
       platform: 'ios',
       deviceId: AUTHORITY_UDID,
     }),
-    // Pre-fix inputs, kept so this case is expressible against either wiring:
-    // both volatile sources are empty exactly as they are after a flow.
-    getActiveSession: () => null,
     getClient: () => ({ isConnected: false, connectedTarget: null }),
     captureScreenshot: (platform, path, deviceId) => tryRawScreenshot(platform, path, deviceId),
     readRoute: async () => null,
@@ -65,8 +74,7 @@ function liveDepsFor(overrides = {}) {
 test('parked runner + stale CDP: the supported simctl fallback still lands a real frame', async () => {
   _resetLiveCaptureForTest();
   _resetForTest();
-  const dir = mkdtempSync(join(tmpdir(), 'gh636-'));
-  const capturedWith = [];
+  const capturedWith: string[] = [];
   _setForTest({
     // Ambient resolution refuses, proving the device came from the authority
     // binding and not from a lucky single-booted simulator.
@@ -78,7 +86,7 @@ test('parked runner + stale CDP: the supported simctl fallback still lands a rea
     },
   });
   try {
-    const { deps, recorder } = liveDepsFor({ tmpPath: () => join(dir, 'live.jpg') });
+    const { deps, recorder } = liveDepsFor();
     const outcome = await maybeCaptureLiveFrame(deps);
     const shot = recorder.getLiveScreenshot();
     assert.ok(shot, 'the Device pane received a real frame');
@@ -89,6 +97,26 @@ test('parked runner + stale CDP: the supported simctl fallback still lands a rea
     _resetForTest();
   }
 });
+
+for (const [label, buf] of [
+  ['zero-byte', Buffer.alloc(0)],
+  ['oversized', Buffer.alloc(4_000_001)],
+] as const) {
+  test(`${label} screenshot is truthfully reported as unavailable`, async () => {
+    _resetLiveCaptureForTest();
+    const { deps, recorder, blocked } = liveDepsFor({
+      captureScreenshot: async (_platform, path) => ({ ok: true, path }),
+      readShotFile: () => ({ buf, contentType: 'image/jpeg' }),
+    });
+    const outcome = await maybeCaptureLiveFrame(deps);
+    assert.equal(outcome.ok, false);
+    if (outcome.ok) assert.fail('unusable screenshot must not report success');
+    assert.equal(outcome.code, 'LIVE_FRAME_UNAVAILABLE');
+    assert.match(outcome.reason, /empty or oversized/);
+    assert.deepEqual(blocked, [{ code: outcome.code, reason: outcome.reason }]);
+    assert.equal(recorder.getLiveScreenshot(), undefined);
+  });
+}
 
 test('no provable device: truthful typed refusal, no blank or fabricated frame', async () => {
   _resetLiveCaptureForTest();

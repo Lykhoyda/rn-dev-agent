@@ -9,8 +9,9 @@ test('pushLive stores latest frame + route and emits a {type:live} event, not a 
   rec.attach((ev) => got.push(ev));
   const buf = Buffer.from([0xff, 0xd8, 0xff]);
 
-  rec.pushLive({ shot: { buf, contentType: 'image/jpeg' }, route: 'Home' });
+  const emitted = rec.pushLive({ shot: { buf, contentType: 'image/jpeg' }, route: 'Home' });
 
+  assert.equal(emitted, true);
   assert.equal(got.length, 1, 'one subscriber event');
   assert.equal(got[0].type, 'live');
   assert.equal(got[0].route, 'Home');
@@ -36,8 +37,21 @@ test('pushLive with neither shot nor route is a no-op (no event)', () => {
   const rec = new Recorder();
   const got = [];
   rec.attach((ev) => got.push(ev));
-  rec.pushLive({});
+  const emitted = rec.pushLive({});
+  assert.equal(emitted, false);
   assert.equal(got.length, 0);
+});
+
+test('pushLive rejects empty and oversized screenshots without a route', () => {
+  for (const buf of [Buffer.alloc(0), Buffer.alloc(4_000_001)]) {
+    const rec = new Recorder();
+    const got = [];
+    rec.attach((ev) => got.push(ev));
+    const emitted = rec.pushLive({ shot: { buf, contentType: 'image/jpeg' } });
+    assert.equal(emitted, false);
+    assert.equal(rec.getLiveScreenshot(), undefined);
+    assert.deepEqual(got, []);
+  }
 });
 
 test('hasSubscribers reflects attach/detach', () => {
@@ -62,7 +76,8 @@ test('pushLive drops an oversized shot but still pushes the route', () => {
   const got = [];
   rec.attach((ev) => got.push(ev));
   const huge = Buffer.alloc(4_000_001); // > MAX_SHOT_BYTES
-  rec.pushLive({ shot: { buf: huge, contentType: 'image/jpeg' }, route: 'Big' });
+  const emitted = rec.pushLive({ shot: { buf: huge, contentType: 'image/jpeg' }, route: 'Big' });
+  assert.equal(emitted, true);
   assert.equal(rec.getLiveScreenshot(), undefined, 'oversized shot not stored');
   assert.equal(got.length, 1);
   assert.equal(got[0].shotSeq, undefined, 'no shotSeq when shot dropped');
