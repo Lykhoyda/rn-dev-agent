@@ -45,11 +45,13 @@ sibling workspace only when explicitly requested.
   `observe-*.png`, simulator screenshots, temporary logs, or proof captures.
 - Do not add or restore `BUGS.md`. Bugs are tracked in GitHub Issues.
 - The SessionStart hook (`packages/claude-plugin/hooks/detect-rn-project.sh`)
-  must never fetch or execute network content. It verifies the runner with
+  must never download the maestro-runner. It verifies the runner with
   `ensure-maestro-runner.sh --print-bin`, the no-download mode also used by
   `ensure-android-ready.sh`, and prints the explicit install command; the hook
   itself stays exit 0 so that guidance reaches the agent.
-  `scripts/test/session-start-bounded.test.sh` pins both (GH #773).
+  `scripts/test/session-start-bounded.test.sh` pins both (GH #773). Other
+  SessionStart installers (`ensure-cdp-deps.sh` via npm and `ensure-ffmpeg.sh`
+  via brew) remain network-capable and are tracked separately.
 - Do not create compatibility symlinks for legacy root paths. Host package
   outputs must be real directories/files, not symlinks.
 - Do not hand-edit generated host runtime or packaged native-runner copies.

@@ -155,9 +155,9 @@ run_session_start() {
 assert_session_start_offline() {
   local label="$1" out="$2"
   if [ -s "$NET_LOG" ]; then
-    bad "SessionStart fetched over the network ($label): $(tr '\n' '; ' < "$NET_LOG")"
+    bad "SessionStart downloaded the maestro-runner ($label): $(tr '\n' '; ' < "$NET_LOG")"
   else
-    ok "SessionStart makes no network calls ($label)"
+    ok "SessionStart does not download the maestro-runner ($label)"
   fi
   # Exit 0 matters: the hook's own contract makes a non-zero exit "logged,
   # non-blocking", which would hide the install command from the agent.
@@ -209,9 +209,9 @@ else
 fi
 
 if [ -s "$IDB_STATE/spawn.log" ]; then
-  bad "SessionStart spawned a background installer: $(tr '\n' '; ' < "$IDB_STATE/spawn.log")"
+  bad "SessionStart spawned the idb background installer: $(tr '\n' '; ' < "$IDB_STATE/spawn.log")"
 else
-  ok "SessionStart spawns no background installer"
+  ok "SessionStart spawns no idb background installer"
 fi
 if [ -s "$PKG_LOG" ]; then
   echo "note: SessionStart package-manager calls (pre-existing, outside GH#773): $(tr '\n' '; ' < "$PKG_LOG")"
