@@ -116,10 +116,20 @@ exit 0
 EOF
   chmod +x "$TEST_DIR/bin/$tool"
 done
+cat > "$TEST_DIR/bin/adb" << 'EOF'
+#!/usr/bin/env bash
+if [ "${1:-}" = "devices" ]; then
+  printf 'List of devices attached\n\n'
+fi
+exit 0
+EOF
+chmod +x "$TEST_DIR/bin/adb"
 
 NET_LOG="$TEST_DIR/session-start-net.log"
 PKG_LOG="$TEST_DIR/session-start-pkg.log"
 IDB_STATE="$TEST_DIR/idb-state"
+SESSION_TMP="$TEST_DIR/session-tmp"
+mkdir -p "$SESSION_TMP"
 PIN_VERSION="$(node -e 'process.stdout.write(require(process.argv[1]).version)' \
   "$REPO_ROOT/packages/rn-dev-agent-core/src/domain/maestro-runner-pin.json")"
 EXPECTED_CMD="bash $REPO_ROOT/packages/claude-plugin/scripts/ensure-maestro-runner.sh"
@@ -133,6 +143,7 @@ run_session_start() {
       PATH="$TEST_DIR/bin:$PATH" \
       NET_LOG="$NET_LOG" \
       PKG_LOG="$PKG_LOG" \
+      TMPDIR="$SESSION_TMP" \
       RN_DEV_AGENT_RUNNER_CACHE="$1" \
       RN_AGENT_IDB_STATE_DIR="$IDB_STATE" \
       RN_AGENT_IDB_DRY_SPAWN=1 \
