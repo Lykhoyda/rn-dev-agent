@@ -68,10 +68,11 @@ export function projectPublicAuthorityStatus(
   } = {},
 ): Record<string, unknown> {
   if (!status.available) {
-    const nextAction = authorityRemedyNextAction(status.code);
+    const nextAction = status.details?.nextAction ?? authorityRemedyNextAction(status.code);
     return {
       available: false,
       code: status.code,
+      ...status.details,
       ...(nextAction ? { nextAction } : {}),
     };
   }

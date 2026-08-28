@@ -24,12 +24,8 @@ import {
   resolveTrustedSystemExecutable,
   type TrustedSystemExecutableDependencies,
 } from '../util/trusted-system-executable.js';
-import {
-  probeProcessBirth,
-  readProcessBirth,
-  type ProcessBirth,
-  type ProcessBirthProbe,
-} from './process-birth.js';
+import { probeProcessBirth, type ProcessBirth, type ProcessBirthProbe } from './process-birth.js';
+import { processBirthProbeFromReader, requireProcessBirthAttestation } from './process-owner.js';
 import { canonicalAuthorityJson } from './authority-json.js';
 import {
   prepareManagedMetroEnforcement,
@@ -2174,9 +2170,13 @@ export async function startManagedMetro(
   if (!child.pid) {
     throw new Error('METRO_START_UNAVAILABLE: package-local Metro process did not start');
   }
-  const readBirth = dependencies.readBirth ?? readProcessBirth;
-  const launcherBirth = readBirth(child.pid);
-  if (!launcherBirth) {
+  const launcherProbe = dependencies.readBirth
+    ? (pid: number) => processBirthProbeFromReader(pid, dependencies.readBirth!)
+    : (dependencies.probeBirth ?? probeProcessBirth);
+  let launcherBirth: ProcessBirth;
+  try {
+    launcherBirth = requireProcessBirthAttestation(child.pid, 'Metro launcher', launcherProbe);
+  } catch (error) {
     const cleanupProven = await stopSpawnedProcessGroup(
       { launcherPid: child.pid, port: input.port },
       dependencies,
@@ -2189,7 +2189,7 @@ export async function startManagedMetro(
     if (!removeManagedMetroEvidenceSocketSafely(runtimeEvidenceSocket, dependencies)) {
       throw new Error('METRO_START_CLEANUP_UNPROVEN: Metro evidence socket cleanup failed');
     }
-    throw new Error('PROCESS_BIRTH_UNAVAILABLE: Metro launcher birth could not be proven');
+    throw error;
   }
   child.unref();
 

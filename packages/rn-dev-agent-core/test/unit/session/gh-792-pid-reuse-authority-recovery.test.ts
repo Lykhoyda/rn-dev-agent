@@ -101,21 +101,21 @@ test('GH #792: probeProcessBirth reports a signal-denied pid as absent, never as
       reason: 'foreign',
     },
   );
-  assert.deepEqual(
-    probeProcessBirth(OWNER.pid, { ...unreadable, signalPermission: () => 'permitted' }),
-    { status: 'unknown' },
+  assert.equal(
+    probeProcessBirth(OWNER.pid, { ...unreadable, signalPermission: () => 'permitted' }).status,
+    'unknown',
   );
   // ESRCH stays `unknown` here: every platform branch already reports a missing process as
   // absent from its own read, and `inspectSessionOwner` proves that case via `kill(pid, 0)`
   // before it ever probes. Widening it would break the fail-closed contract that an
   // unavailable identity path answers `unknown`.
-  assert.deepEqual(
-    probeProcessBirth(OWNER.pid, { ...unreadable, signalPermission: () => 'absent' }),
-    { status: 'unknown' },
+  assert.equal(
+    probeProcessBirth(OWNER.pid, { ...unreadable, signalPermission: () => 'absent' }).status,
+    'unknown',
   );
-  assert.deepEqual(
-    probeProcessBirth(OWNER.pid, { ...unreadable, signalPermission: () => 'unknown' }),
-    { status: 'unknown' },
+  assert.equal(
+    probeProcessBirth(OWNER.pid, { ...unreadable, signalPermission: () => 'unknown' }).status,
+    'unknown',
   );
 });
 
@@ -131,11 +131,11 @@ test('GH #792: EPERM is never disproof on Windows, and never consulted for an in
       executableDependencies: { exists: () => false },
       signalPermission: () => permission,
     });
-  assert.deepEqual(onWindows('denied'), { status: 'unknown' });
+  assert.equal(onWindows('denied').status, 'unknown');
   // A non-pid must never reach `process.kill`, where 0 and negatives address process groups.
   const consulted: number[] = [];
   for (const pid of [0, -4242, 1.5]) {
-    assert.deepEqual(
+    assert.equal(
       probeProcessBirth(pid, {
         platform: 'linux',
         read: () => {
@@ -145,8 +145,8 @@ test('GH #792: EPERM is never disproof on Windows, and never consulted for an in
           consulted.push(value);
           return 'denied';
         },
-      }),
-      { status: 'unknown' },
+      }).status,
+      'unknown',
     );
   }
   assert.deepEqual(consulted, []);

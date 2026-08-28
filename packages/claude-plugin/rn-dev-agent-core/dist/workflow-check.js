@@ -7371,6 +7371,25 @@ import path from "node:path";
 var import_yaml = __toESM(require_dist(), 1);
 var STRIKE_COOLDOWN_MS = 5 * 60 * 1e3;
 
+// packages/rn-dev-agent-core/dist/session/authority-store.js
+import { createRequire } from "node:module";
+var require2 = createRequire(import.meta.url);
+var INITIALIZATION_WAIT = new Int32Array(new SharedArrayBuffer(4));
+
+// packages/rn-dev-agent-core/dist/session/declared-source-contract.js
+var DECLARED_ROOT_ENV = "RN_DEV_AGENT_DECLARED_ROOT";
+var DECLARED_MANIFESTS_ENV = "RN_DEV_AGENT_DECLARED_MANIFESTS";
+var NON_GIT_DECLARATION_NEXT_ACTION = `Declare the non-Git source explicitly: set ${DECLARED_ROOT_ENV} to the exact existing application root, and set ${DECLARED_MANIFESTS_ENV} to a comma-separated list of required existing manifest files inside that root, then restart the supervisor. Neither value is inferred from the working directory or generated.`;
+
+// packages/rn-dev-agent-core/dist/session/recovery-remedy.js
+var SESSION_DOCTOR = '"${CLAUDE_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}/rn-dev-agent-core/dist/session-doctor.js"';
+var HEADLESS_SESSION_RECOVERY_COMMAND = `node ${SESSION_DOCTOR} repair`;
+var HEADLESS_SESSION_REPORT_COMMAND = `node ${SESSION_DOCTOR} report`;
+
+// packages/rn-dev-agent-core/dist/session/registry.js
+var INITIALIZATION_WAIT2 = new Int32Array(new SharedArrayBuffer(4));
+var RECOVERY_HANDLE_TTL_MS = 5 * 6e4;
+
 // packages/rn-dev-agent-core/dist/session/authority-json.js
 var intrinsicArraySort = Array.prototype.sort;
 var intrinsicNumberIsFinite = Number.isFinite;

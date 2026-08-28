@@ -1,11 +1,15 @@
-import type { ProcessBirth } from './process-birth.js';
-import { readProcessBirth } from './process-birth.js';
-import { inspectSessionOwner } from './process-owner.js';
+import { probeProcessBirth, type ProcessBirth, type ProcessBirthProbe } from './process-birth.js';
+import {
+  inspectSessionOwner,
+  processBirthProbeFromReader,
+  requireProcessBirthAttestation,
+} from './process-owner.js';
 import {
   openSessionRegistry,
   SessionAuthorityError,
   type OwnerStatus,
   type RecoveryRequirementInspection,
+  type SessionAuthorityErrorDetails,
   type SessionRef,
   type SessionRegistry,
   type SessionStatus,
@@ -17,6 +21,7 @@ export const BLOCKED_CONTENDER_REFUSAL =
 
 interface WorkerAuthorityDependencies {
   readBirth?: (pid: number) => ProcessBirth | null;
+  probeBirth?: (pid: number) => ProcessBirthProbe;
   ownerStatus?: (owner: { sessionId: string; pid: number; token: string }) => OwnerStatus;
 }
 
@@ -25,6 +30,7 @@ export type WorkerAuthorityStatus =
       available: false;
       code: string;
       reason: string;
+      details?: SessionAuthorityErrorDetails;
     }
   | (SessionStatus & { available: true });
 
@@ -32,14 +38,18 @@ export class WorkerAuthorityRuntime {
   readonly available: boolean;
   readonly #registry: SessionRegistry | null;
   readonly #session: SessionRef | null;
-  readonly #unavailable: { code: string; reason: string } | null;
+  readonly #unavailable: {
+    code: string;
+    reason: string;
+    details?: SessionAuthorityErrorDetails;
+  } | null;
   readonly #recoveryOnly: boolean;
   readonly #recoveryCapability: string | null;
 
   constructor(
     registry: SessionRegistry | null,
     session: SessionRef | null,
-    unavailable: { code: string; reason: string } | null,
+    unavailable: { code: string; reason: string; details?: SessionAuthorityErrorDetails } | null,
     recoveryOnly = false,
     recoveryCapability: string | null = null,
   ) {
@@ -56,6 +66,8 @@ export class WorkerAuthorityRuntime {
       throw new SessionAuthorityError(
         this.#unavailable?.code ?? 'SESSION_NOT_INITIALIZED',
         this.#unavailable?.reason ?? 'authority session is unavailable',
+        undefined,
+        this.#unavailable?.details,
       );
     }
     return { registry: this.#registry, session: this.#session };
@@ -141,6 +153,7 @@ export class WorkerAuthorityRuntime {
         available: false,
         code: this.#unavailable?.code ?? 'SESSION_NOT_INITIALIZED',
         reason: this.#unavailable?.reason ?? 'authority session is unavailable',
+        ...(this.#unavailable?.details ? { details: this.#unavailable.details } : {}),
       };
     }
     const status = this.#registry.getSessionStatus(this.#session.sessionId);
@@ -159,11 +172,16 @@ export class WorkerAuthorityRuntime {
   }
 }
 
-function unavailable(reason: string, fallbackCode: string): WorkerAuthorityRuntime {
+function unavailable(
+  reason: string,
+  fallbackCode: string,
+  details?: SessionAuthorityErrorDetails,
+): WorkerAuthorityRuntime {
   const matched = /^([A-Z][A-Z0-9_]+):/.exec(reason);
   return new WorkerAuthorityRuntime(null, null, {
     code: matched?.[1] ?? fallbackCode,
     reason,
+    details,
   });
 }
 
@@ -190,12 +208,19 @@ export function createWorkerAuthorityRuntime(
       'SESSION_NOT_INITIALIZED',
     );
   }
-  const birth = (dependencies.readBirth ?? readProcessBirth)(process.pid);
-  if (!birth) {
-    return unavailable(
-      'PROCESS_BIRTH_UNAVAILABLE: worker process birth could not be proven conservatively',
-      'PROCESS_BIRTH_UNAVAILABLE',
-    );
+  const probeBirth =
+    dependencies.probeBirth ??
+    (dependencies.readBirth
+      ? (pid: number) => processBirthProbeFromReader(pid, dependencies.readBirth!)
+      : probeProcessBirth);
+  let birth: ProcessBirth;
+  try {
+    birth = requireProcessBirthAttestation(process.pid, 'worker', probeBirth);
+  } catch (error) {
+    if (error instanceof SessionAuthorityError) {
+      return unavailable(error.message, error.code, error.details);
+    }
+    throw error;
   }
 
   try {

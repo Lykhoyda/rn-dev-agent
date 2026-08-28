@@ -412,30 +412,56 @@ function probeProcessBirth(pid, dependencies = {}) {
   return permission === "denied" ? { status: "absent", reason: "foreign" } : probe;
 }
 function probeRecordedProcessBirth(pid, dependencies) {
+  const now = dependencies.now ?? Date.now;
+  let step = "input";
+  let stepStartedAt = now();
+  const start = (nextStep) => {
+    step = nextStep;
+    stepStartedAt = now();
+  };
+  const unknown = (failure, failedStep = step) => ({
+    status: "unknown",
+    cause: {
+      pid,
+      step: failedStep,
+      failure,
+      elapsedMs: Math.max(0, now() - stepStartedAt)
+    }
+  });
+  const failureClass = (error) => {
+    const failure = error;
+    if (failure.code === "ETIMEDOUT" || failure.killed === true || failure.signal === "SIGTERM") {
+      return "timeout";
+    }
+    return typeof failure.status === "number" || typeof failure.signal === "string" ? "exit" : "read";
+  };
   if (!Number.isSafeInteger(pid) || pid <= 0)
-    return { status: "unknown" };
+    return unknown("parse");
   const platform = dependencies.platform ?? process.platform;
   const read = dependencies.read ?? ((path) => readFileSync(path, "utf8"));
   const run = dependencies.run ?? defaultRun;
   const runVerifiedHelper = dependencies.runVerifiedHelper ?? defaultRunVerifiedHelper;
   try {
     if (platform === "darwin") {
+      start("ps");
       const observed = run("/bin/ps", ["-p", String(pid), "-o", "pid=,state="]).trim();
       if (observed.length === 0)
         return { status: "absent" };
       const observedFields = /^(\d+)(?:\s+(\S+))?$/.exec(observed);
       if (!observedFields || Number(observedFields[1]) !== pid)
-        return { status: "unknown" };
+        return unknown("parse");
       if (observedFields[2]?.startsWith("Z"))
         return { status: "absent" };
+      start("helper");
       const helper = verifyDarwinProcessBirthHelper(dependencies);
       const processInfo = runVerifiedHelper(helper.path, pid, helper.requirement).trim();
       const processMatch = /^(\d+):(\d+):(\d+)$/.exec(processInfo);
       if (!processMatch || Number(processMatch[1]) !== pid)
-        return { status: "unknown" };
+        return unknown("parse");
+      start("sysctl");
       const bootSession = run("/usr/sbin/sysctl", ["-n", "kern.bootsessionuuid"]).trim();
       if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(bootSession)) {
-        return { status: "unknown" };
+        return unknown("parse");
       }
       return {
         status: "present",
@@ -447,44 +473,50 @@ function probeRecordedProcessBirth(pid, dependencies) {
       };
     }
     if (platform === "linux") {
+      start("proc-boot-id");
       const boot = read("/proc/sys/kernel/random/boot_id").trim();
+      if (!boot)
+        return unknown("parse");
       let stat;
+      start("proc-stat");
       try {
         stat = read(`/proc/${pid}/stat`).trim();
       } catch (error) {
-        return error.code === "ENOENT" ? { status: "absent" } : { status: "unknown" };
+        return error.code === "ENOENT" ? { status: "absent" } : unknown(failureClass(error));
       }
       const commandEnd = stat.lastIndexOf(")");
       const fields = commandEnd >= 0 ? stat.slice(commandEnd + 1).trim().split(/\s+/) : [];
       if (fields[0] === "Z")
         return { status: "absent" };
       const started = fields[19];
-      if (!boot || !started || !/^\d+$/.test(started))
-        return { status: "unknown" };
+      if (!started || !/^\d+$/.test(started))
+        return unknown("parse");
       return {
         status: "present",
         birth: { pid, source: "linux-proc", token: token([platform, boot, started]) }
       };
     }
     if (platform === "win32") {
+      start("powershell");
       const powershell = resolveTrustedSystemExecutable("powershell", platform, dependencies.executableDependencies);
       if (!powershell)
-        return { status: "unknown" };
+        return unknown("unsupported");
       const script = `$p = Get-Process -Id ${pid} -ErrorAction SilentlyContinue; if ($null -eq $p) { 'ABSENT' } else { $p.StartTime.ToUniversalTime().Ticks }`;
       const started = run(powershell, ["-NoProfile", "-NonInteractive", "-Command", script]).trim();
       if (started === "ABSENT")
         return { status: "absent" };
       if (!/^\d+$/.test(started))
-        return { status: "unknown" };
+        return unknown("parse");
       return {
         status: "present",
         birth: { pid, source: "windows-powershell", token: token([platform, started]) }
       };
     }
-  } catch {
-    return { status: "unknown" };
+  } catch (error) {
+    return unknown(failureClass(error));
   }
-  return { status: "unknown" };
+  start("platform");
+  return unknown("unsupported");
 }
 var DARWIN_HELPER_MANIFEST, LINUX_PUBLICATION_HELPER_SHA256, VERIFIED_HELPER_SCRIPT;
 var init_process_birth = __esm({
@@ -8492,8 +8524,276 @@ var init_transport_recovery = __esm({
   }
 });
 
+// packages/rn-dev-agent-core/dist/session/authority-store.js
+import { createRequire as createRequire2 } from "node:module";
+var require2, INITIALIZATION_WAIT;
+var init_authority_store = __esm({
+  "packages/rn-dev-agent-core/dist/session/authority-store.js"() {
+    "use strict";
+    require2 = createRequire2(import.meta.url);
+    INITIALIZATION_WAIT = new Int32Array(new SharedArrayBuffer(4));
+  }
+});
+
+// packages/rn-dev-agent-core/dist/session/cleanup-identity.js
+var init_cleanup_identity = __esm({
+  "packages/rn-dev-agent-core/dist/session/cleanup-identity.js"() {
+    "use strict";
+  }
+});
+
+// packages/rn-dev-agent-core/dist/session/declared-source-contract.js
+var DECLARED_ROOT_ENV, DECLARED_MANIFESTS_ENV, NON_GIT_DECLARATION_NEXT_ACTION;
+var init_declared_source_contract = __esm({
+  "packages/rn-dev-agent-core/dist/session/declared-source-contract.js"() {
+    "use strict";
+    DECLARED_ROOT_ENV = "RN_DEV_AGENT_DECLARED_ROOT";
+    DECLARED_MANIFESTS_ENV = "RN_DEV_AGENT_DECLARED_MANIFESTS";
+    NON_GIT_DECLARATION_NEXT_ACTION = `Declare the non-Git source explicitly: set ${DECLARED_ROOT_ENV} to the exact existing application root, and set ${DECLARED_MANIFESTS_ENV} to a comma-separated list of required existing manifest files inside that root, then restart the supervisor. Neither value is inferred from the working directory or generated.`;
+  }
+});
+
+// packages/rn-dev-agent-core/dist/nav-graph/storage.js
+import { readFileSync as readFileSync11, writeFileSync as writeFileSync4, existsSync as existsSync12, renameSync as renameSync4, readdirSync as readdirSync5, lstatSync as lstatSync10, mkdirSync as mkdirSync9, realpathSync as realpathSync6 } from "node:fs";
+import { join as join14, dirname as dirname13 } from "node:path";
+function isRnProject(dir) {
+  const pkgPath = join14(dir, "package.json");
+  if (!existsSync12(pkgPath))
+    return false;
+  try {
+    const pkg = JSON.parse(readFileSync11(pkgPath, "utf-8"));
+    const deps = { ...pkg.dependencies, ...pkg.devDependencies };
+    return !!(deps["react-native"] || deps["expo"]);
+  } catch {
+    return false;
+  }
+}
+function scanForRnProject(rootDir, maxDepth) {
+  if (maxDepth < 0)
+    return null;
+  let entries;
+  try {
+    entries = readdirSync5(rootDir);
+  } catch {
+    return null;
+  }
+  entries.sort();
+  const subdirs = [];
+  for (const name of entries) {
+    if (name.startsWith(".") || name === "node_modules")
+      continue;
+    const full = join14(rootDir, name);
+    try {
+      const stat = lstatSync10(full);
+      if (!(stat.isDirectory() || stat.isSymbolicLink()))
+        continue;
+    } catch {
+      continue;
+    }
+    if (isRnProject(full))
+      return full;
+    subdirs.push(full);
+  }
+  if (maxDepth > 0) {
+    for (const dir of subdirs) {
+      const deeper = scanForRnProject(dir, maxDepth - 1);
+      if (deeper)
+        return deeper;
+    }
+  }
+  return null;
+}
+function collectRnProjects(rootDir, maxDepth, out) {
+  if (maxDepth < 0)
+    return;
+  let entries;
+  try {
+    entries = readdirSync5(rootDir);
+  } catch {
+    return;
+  }
+  entries.sort();
+  const subdirs = [];
+  for (const name of entries) {
+    if (name.startsWith(".") || name === "node_modules")
+      continue;
+    const full = join14(rootDir, name);
+    try {
+      const stat = lstatSync10(full);
+      if (!(stat.isDirectory() || stat.isSymbolicLink()))
+        continue;
+    } catch {
+      continue;
+    }
+    if (isRnProject(full)) {
+      out.push(full);
+    } else {
+      subdirs.push(full);
+    }
+  }
+  if (maxDepth > 0) {
+    for (const dir of subdirs)
+      collectRnProjects(dir, maxDepth - 1, out);
+  }
+}
+function readProjectBundleId(projectRoot) {
+  const appJsonPath = join14(projectRoot, "app.json");
+  if (!existsSync12(appJsonPath))
+    return null;
+  try {
+    const raw = JSON.parse(readFileSync11(appJsonPath, "utf-8"));
+    const iosId = raw.expo?.ios?.bundleIdentifier ?? raw.ios?.bundleIdentifier;
+    const androidId = raw.expo?.android?.package ?? raw.android?.package;
+    if (typeof iosId === "string" && iosId.length > 0)
+      return iosId;
+    if (typeof androidId === "string" && androidId.length > 0)
+      return androidId;
+    return null;
+  } catch {
+    return null;
+  }
+}
+function findProjectRoot(opts = {}) {
+  const targetBundleId = opts.bundleId;
+  const envRoot = process.env.RN_PROJECT_ROOT;
+  if (envRoot && isRnProject(envRoot))
+    return envRoot;
+  let walkupHit = null;
+  const starts = [process.env.CLAUDE_USER_CWD, process.cwd()].filter(Boolean);
+  for (const start of starts) {
+    if (isRnProject(start)) {
+      if (targetBundleId && readProjectBundleId(start) === targetBundleId)
+        return start;
+      walkupHit = walkupHit ?? start;
+      continue;
+    }
+    let dir = start;
+    for (let i = 0; i < 10; i++) {
+      if (isRnProject(dir)) {
+        if (targetBundleId && readProjectBundleId(dir) === targetBundleId)
+          return dir;
+        walkupHit = walkupHit ?? dir;
+        break;
+      }
+      const parent = join14(dir, "..");
+      if (parent === dir)
+        break;
+      dir = parent;
+    }
+  }
+  if (!targetBundleId && walkupHit)
+    return walkupHit;
+  const cwd = process.cwd();
+  const parentOfCwd = join14(cwd, "..");
+  if (targetBundleId) {
+    const all = [];
+    collectRnProjects(cwd, 0, all);
+    if (parentOfCwd !== cwd)
+      collectRnProjects(parentOfCwd, 1, all);
+    for (const candidate of all) {
+      if (readProjectBundleId(candidate) === targetBundleId)
+        return candidate;
+    }
+    if (walkupHit)
+      return walkupHit;
+    return all[0] ?? null;
+  }
+  const cwdScan = scanForRnProject(cwd, 0);
+  if (cwdScan)
+    return cwdScan;
+  if (parentOfCwd !== cwd) {
+    const siblingScan = scanForRnProject(parentOfCwd, 1);
+    if (siblingScan)
+      return siblingScan;
+  }
+  return null;
+}
+var import_yaml2, STRIKE_COOLDOWN_MS;
+var init_storage = __esm({
+  "packages/rn-dev-agent-core/dist/nav-graph/storage.js"() {
+    "use strict";
+    import_yaml2 = __toESM(require_dist(), 1);
+    STRIKE_COOLDOWN_MS = 5 * 60 * 1e3;
+  }
+});
+
+// packages/rn-dev-agent-core/dist/cdp/metro-cwd.js
+var init_metro_cwd = __esm({
+  "packages/rn-dev-agent-core/dist/cdp/metro-cwd.js"() {
+    "use strict";
+    init_storage();
+    init_trusted_system_executable();
+  }
+});
+
+// packages/rn-dev-agent-core/dist/session/metro-binding.js
+var init_metro_binding = __esm({
+  "packages/rn-dev-agent-core/dist/session/metro-binding.js"() {
+    "use strict";
+    init_metro_cwd();
+    init_trusted_system_executable();
+    init_process_birth();
+    init_process_owner();
+    init_trusted_system_executable();
+  }
+});
+
+// packages/rn-dev-agent-core/dist/session/recovery-remedy.js
+var SESSION_DOCTOR, HEADLESS_SESSION_RECOVERY_COMMAND, HEADLESS_SESSION_REPORT_COMMAND;
+var init_recovery_remedy = __esm({
+  "packages/rn-dev-agent-core/dist/session/recovery-remedy.js"() {
+    "use strict";
+    SESSION_DOCTOR = '"${CLAUDE_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}/rn-dev-agent-core/dist/session-doctor.js"';
+    HEADLESS_SESSION_RECOVERY_COMMAND = `node ${SESSION_DOCTOR} repair`;
+    HEADLESS_SESSION_REPORT_COMMAND = `node ${SESSION_DOCTOR} report`;
+  }
+});
+
+// packages/rn-dev-agent-core/dist/session/registry.js
+var INITIALIZATION_WAIT2, SessionAuthorityError, RECOVERY_HANDLE_TTL_MS;
+var init_registry = __esm({
+  "packages/rn-dev-agent-core/dist/session/registry.js"() {
+    "use strict";
+    init_authority_store();
+    init_cleanup_identity();
+    init_declared_source_contract();
+    init_metro_binding();
+    init_recovery_remedy();
+    INITIALIZATION_WAIT2 = new Int32Array(new SharedArrayBuffer(4));
+    SessionAuthorityError = class extends Error {
+      code;
+      holder;
+      supplementalMeta;
+      details;
+      constructor(code, message, holder, details) {
+        super(`${code}: ${message}`);
+        this.name = "SessionAuthorityError";
+        this.code = code;
+        this.holder = holder;
+        this.details = details;
+      }
+      attachMeta(meta) {
+        this.supplementalMeta = { ...this.supplementalMeta, ...meta };
+      }
+      getSupplementalMeta() {
+        return { ...this.supplementalMeta };
+      }
+    };
+    RECOVERY_HANDLE_TTL_MS = 5 * 6e4;
+  }
+});
+
+// packages/rn-dev-agent-core/dist/session/process-owner.js
+var init_process_owner = __esm({
+  "packages/rn-dev-agent-core/dist/session/process-owner.js"() {
+    "use strict";
+    init_process_birth();
+    init_registry();
+  }
+});
+
 // packages/rn-dev-agent-core/dist/runners/rn-fast-runner-client.js
-import { join as join14 } from "node:path";
+import { join as join15 } from "node:path";
 function resolveReadyTimeoutMs() {
   const raw = Number(process.env.RN_FAST_RUNNER_READY_TIMEOUT_MS);
   return Number.isFinite(raw) && raw > 0 ? raw : 3e4;
@@ -8777,274 +9077,17 @@ var init_rn_fast_runner_client = __esm({
     init_runtime_paths();
     init_transport_recovery();
     init_process_birth();
+    init_process_owner();
     READY_TIMEOUT_MS = resolveReadyTimeoutMs();
     FAST_RUNNER_PROJECT = resolveNativeRunnerDir("rn-fast-runner");
     runnerProcess = null;
     runnerState = null;
     lastKnownCapabilities = [];
     quiescenceAnnouncementPending = false;
-    REBUILD_LOCK_DIR = join14(FAST_RUNNER_PROJECT, "build", ".rebuild-lock");
+    REBUILD_LOCK_DIR = join15(FAST_RUNNER_PROJECT, "build", ".rebuild-lock");
     REBUILD_LOCK_STALE_MS = 15 * 6e4;
-    REBUILD_BUDGET_FILE = join14(FAST_RUNNER_PROJECT, "build", "commands-rebuild.json");
+    REBUILD_BUDGET_FILE = join15(FAST_RUNNER_PROJECT, "build", "commands-rebuild.json");
     fetchImpl = globalThis.fetch;
-  }
-});
-
-// packages/rn-dev-agent-core/dist/session/authority-store.js
-import { createRequire as createRequire2 } from "node:module";
-var require2, INITIALIZATION_WAIT;
-var init_authority_store = __esm({
-  "packages/rn-dev-agent-core/dist/session/authority-store.js"() {
-    "use strict";
-    require2 = createRequire2(import.meta.url);
-    INITIALIZATION_WAIT = new Int32Array(new SharedArrayBuffer(4));
-  }
-});
-
-// packages/rn-dev-agent-core/dist/session/cleanup-identity.js
-var init_cleanup_identity = __esm({
-  "packages/rn-dev-agent-core/dist/session/cleanup-identity.js"() {
-    "use strict";
-  }
-});
-
-// packages/rn-dev-agent-core/dist/session/declared-source-contract.js
-var DECLARED_ROOT_ENV, DECLARED_MANIFESTS_ENV, NON_GIT_DECLARATION_NEXT_ACTION;
-var init_declared_source_contract = __esm({
-  "packages/rn-dev-agent-core/dist/session/declared-source-contract.js"() {
-    "use strict";
-    DECLARED_ROOT_ENV = "RN_DEV_AGENT_DECLARED_ROOT";
-    DECLARED_MANIFESTS_ENV = "RN_DEV_AGENT_DECLARED_MANIFESTS";
-    NON_GIT_DECLARATION_NEXT_ACTION = `Declare the non-Git source explicitly: set ${DECLARED_ROOT_ENV} to the exact existing application root, and set ${DECLARED_MANIFESTS_ENV} to a comma-separated list of required existing manifest files inside that root, then restart the supervisor. Neither value is inferred from the working directory or generated.`;
-  }
-});
-
-// packages/rn-dev-agent-core/dist/nav-graph/storage.js
-import { readFileSync as readFileSync11, writeFileSync as writeFileSync4, existsSync as existsSync12, renameSync as renameSync4, readdirSync as readdirSync5, lstatSync as lstatSync10, mkdirSync as mkdirSync9, realpathSync as realpathSync6 } from "node:fs";
-import { join as join15, dirname as dirname13 } from "node:path";
-function isRnProject(dir) {
-  const pkgPath = join15(dir, "package.json");
-  if (!existsSync12(pkgPath))
-    return false;
-  try {
-    const pkg = JSON.parse(readFileSync11(pkgPath, "utf-8"));
-    const deps = { ...pkg.dependencies, ...pkg.devDependencies };
-    return !!(deps["react-native"] || deps["expo"]);
-  } catch {
-    return false;
-  }
-}
-function scanForRnProject(rootDir, maxDepth) {
-  if (maxDepth < 0)
-    return null;
-  let entries;
-  try {
-    entries = readdirSync5(rootDir);
-  } catch {
-    return null;
-  }
-  entries.sort();
-  const subdirs = [];
-  for (const name of entries) {
-    if (name.startsWith(".") || name === "node_modules")
-      continue;
-    const full = join15(rootDir, name);
-    try {
-      const stat = lstatSync10(full);
-      if (!(stat.isDirectory() || stat.isSymbolicLink()))
-        continue;
-    } catch {
-      continue;
-    }
-    if (isRnProject(full))
-      return full;
-    subdirs.push(full);
-  }
-  if (maxDepth > 0) {
-    for (const dir of subdirs) {
-      const deeper = scanForRnProject(dir, maxDepth - 1);
-      if (deeper)
-        return deeper;
-    }
-  }
-  return null;
-}
-function collectRnProjects(rootDir, maxDepth, out) {
-  if (maxDepth < 0)
-    return;
-  let entries;
-  try {
-    entries = readdirSync5(rootDir);
-  } catch {
-    return;
-  }
-  entries.sort();
-  const subdirs = [];
-  for (const name of entries) {
-    if (name.startsWith(".") || name === "node_modules")
-      continue;
-    const full = join15(rootDir, name);
-    try {
-      const stat = lstatSync10(full);
-      if (!(stat.isDirectory() || stat.isSymbolicLink()))
-        continue;
-    } catch {
-      continue;
-    }
-    if (isRnProject(full)) {
-      out.push(full);
-    } else {
-      subdirs.push(full);
-    }
-  }
-  if (maxDepth > 0) {
-    for (const dir of subdirs)
-      collectRnProjects(dir, maxDepth - 1, out);
-  }
-}
-function readProjectBundleId(projectRoot) {
-  const appJsonPath = join15(projectRoot, "app.json");
-  if (!existsSync12(appJsonPath))
-    return null;
-  try {
-    const raw = JSON.parse(readFileSync11(appJsonPath, "utf-8"));
-    const iosId = raw.expo?.ios?.bundleIdentifier ?? raw.ios?.bundleIdentifier;
-    const androidId = raw.expo?.android?.package ?? raw.android?.package;
-    if (typeof iosId === "string" && iosId.length > 0)
-      return iosId;
-    if (typeof androidId === "string" && androidId.length > 0)
-      return androidId;
-    return null;
-  } catch {
-    return null;
-  }
-}
-function findProjectRoot(opts = {}) {
-  const targetBundleId = opts.bundleId;
-  const envRoot = process.env.RN_PROJECT_ROOT;
-  if (envRoot && isRnProject(envRoot))
-    return envRoot;
-  let walkupHit = null;
-  const starts = [process.env.CLAUDE_USER_CWD, process.cwd()].filter(Boolean);
-  for (const start of starts) {
-    if (isRnProject(start)) {
-      if (targetBundleId && readProjectBundleId(start) === targetBundleId)
-        return start;
-      walkupHit = walkupHit ?? start;
-      continue;
-    }
-    let dir = start;
-    for (let i = 0; i < 10; i++) {
-      if (isRnProject(dir)) {
-        if (targetBundleId && readProjectBundleId(dir) === targetBundleId)
-          return dir;
-        walkupHit = walkupHit ?? dir;
-        break;
-      }
-      const parent = join15(dir, "..");
-      if (parent === dir)
-        break;
-      dir = parent;
-    }
-  }
-  if (!targetBundleId && walkupHit)
-    return walkupHit;
-  const cwd = process.cwd();
-  const parentOfCwd = join15(cwd, "..");
-  if (targetBundleId) {
-    const all = [];
-    collectRnProjects(cwd, 0, all);
-    if (parentOfCwd !== cwd)
-      collectRnProjects(parentOfCwd, 1, all);
-    for (const candidate of all) {
-      if (readProjectBundleId(candidate) === targetBundleId)
-        return candidate;
-    }
-    if (walkupHit)
-      return walkupHit;
-    return all[0] ?? null;
-  }
-  const cwdScan = scanForRnProject(cwd, 0);
-  if (cwdScan)
-    return cwdScan;
-  if (parentOfCwd !== cwd) {
-    const siblingScan = scanForRnProject(parentOfCwd, 1);
-    if (siblingScan)
-      return siblingScan;
-  }
-  return null;
-}
-var import_yaml2, STRIKE_COOLDOWN_MS;
-var init_storage = __esm({
-  "packages/rn-dev-agent-core/dist/nav-graph/storage.js"() {
-    "use strict";
-    import_yaml2 = __toESM(require_dist(), 1);
-    STRIKE_COOLDOWN_MS = 5 * 60 * 1e3;
-  }
-});
-
-// packages/rn-dev-agent-core/dist/cdp/metro-cwd.js
-var init_metro_cwd = __esm({
-  "packages/rn-dev-agent-core/dist/cdp/metro-cwd.js"() {
-    "use strict";
-    init_storage();
-    init_trusted_system_executable();
-  }
-});
-
-// packages/rn-dev-agent-core/dist/session/metro-binding.js
-var init_metro_binding = __esm({
-  "packages/rn-dev-agent-core/dist/session/metro-binding.js"() {
-    "use strict";
-    init_metro_cwd();
-    init_trusted_system_executable();
-    init_process_birth();
-    init_trusted_system_executable();
-  }
-});
-
-// packages/rn-dev-agent-core/dist/session/recovery-remedy.js
-var SESSION_DOCTOR, HEADLESS_SESSION_RECOVERY_COMMAND, HEADLESS_SESSION_REPORT_COMMAND;
-var init_recovery_remedy = __esm({
-  "packages/rn-dev-agent-core/dist/session/recovery-remedy.js"() {
-    "use strict";
-    SESSION_DOCTOR = '"${CLAUDE_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}/rn-dev-agent-core/dist/session-doctor.js"';
-    HEADLESS_SESSION_RECOVERY_COMMAND = `node ${SESSION_DOCTOR} repair`;
-    HEADLESS_SESSION_REPORT_COMMAND = `node ${SESSION_DOCTOR} report`;
-  }
-});
-
-// packages/rn-dev-agent-core/dist/session/registry.js
-var INITIALIZATION_WAIT2, SessionAuthorityError, RECOVERY_HANDLE_TTL_MS;
-var init_registry = __esm({
-  "packages/rn-dev-agent-core/dist/session/registry.js"() {
-    "use strict";
-    init_authority_store();
-    init_cleanup_identity();
-    init_declared_source_contract();
-    init_metro_binding();
-    init_recovery_remedy();
-    INITIALIZATION_WAIT2 = new Int32Array(new SharedArrayBuffer(4));
-    SessionAuthorityError = class extends Error {
-      code;
-      holder;
-      supplementalMeta;
-      details;
-      constructor(code, message, holder, details) {
-        super(`${code}: ${message}`);
-        this.name = "SessionAuthorityError";
-        this.code = code;
-        this.holder = holder;
-        this.details = details;
-      }
-      attachMeta(meta) {
-        this.supplementalMeta = { ...this.supplementalMeta, ...meta };
-      }
-      getSupplementalMeta() {
-        return { ...this.supplementalMeta };
-      }
-    };
-    RECOVERY_HANDLE_TTL_MS = 5 * 6e4;
   }
 });
 
@@ -9342,7 +9385,7 @@ var init_rn_android_runner_client = __esm({
     init_runner_artifacts();
     init_runtime_paths();
     init_transport_recovery();
-    init_process_birth();
+    init_process_owner();
     init_authority_store();
     execFileAsync2 = promisify3(execFile3);
     RN_ANDROID_RUNNER_DIR = resolveNativeRunnerDir("rn-android-runner");

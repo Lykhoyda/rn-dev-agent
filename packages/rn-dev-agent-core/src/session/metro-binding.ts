@@ -4,7 +4,8 @@ import {
   resolveTrustedSystemExecutable,
   type TrustedSystemExecutableDependencies,
 } from '../util/trusted-system-executable.js';
-import { readProcessBirth, type ProcessBirth } from './process-birth.js';
+import { probeProcessBirth, type ProcessBirth, type ProcessBirthProbe } from './process-birth.js';
+import { processBirthProbeFromReader, requireProcessBirthAttestation } from './process-owner.js';
 
 export {
   resolveTrustedSystemExecutable,
@@ -23,6 +24,7 @@ export interface MetroBinding {
 
 interface MetroBindingDependencies {
   readBirth?: (pid: number) => ProcessBirth | null;
+  probeBirth?: (pid: number) => ProcessBirthProbe;
   fetchStatus?: (port: number) => Promise<string>;
   servingRoot?: (port: number) => string | null;
   listenerPid?: (port: number) => number | null;
@@ -173,12 +175,12 @@ export async function captureMetroBinding(
   if (listenerPid !== input.pid) {
     throw new Error('METRO_AUTHORITY_MISMATCH: Metro process does not own the claimed listener');
   }
-  const birth = (dependencies.readBirth ?? readProcessBirth)(input.pid);
-  if (!birth) {
-    throw new Error(
-      'PROCESS_BIRTH_UNAVAILABLE: Metro process birth could not be proven conservatively',
-    );
-  }
+  const probeBirth =
+    dependencies.probeBirth ??
+    (dependencies.readBirth
+      ? (pid: number) => processBirthProbeFromReader(pid, dependencies.readBirth!)
+      : probeProcessBirth);
+  const birth = requireProcessBirthAttestation(input.pid, 'Metro', probeBirth);
   const status = await (dependencies.fetchStatus ?? fetchMetroStatus)(input.port);
   if (!status.includes('packager-status:running')) {
     throw new Error('METRO_AUTHORITY_MISMATCH: claimed Metro endpoint is not running');

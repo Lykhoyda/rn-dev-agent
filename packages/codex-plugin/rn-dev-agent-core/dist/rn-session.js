@@ -7804,10 +7804,6 @@ function verifyDarwinProcessBirthHelper(dependencies) {
 async function withVerifiedDarwinProcessBirthHelper(callback) {
   return callback(verifyDarwinProcessBirthHelper({}));
 }
-function readProcessBirth(pid, dependencies = {}) {
-  const probe = probeProcessBirth(pid, dependencies);
-  return probe.status === "present" ? probe.birth : null;
-}
 function defaultProcessSignalPermission(pid) {
   try {
     process.kill(pid, 0);
@@ -7833,30 +7829,56 @@ function probeProcessBirth(pid, dependencies = {}) {
   return permission === "denied" ? { status: "absent", reason: "foreign" } : probe;
 }
 function probeRecordedProcessBirth(pid, dependencies) {
+  const now = dependencies.now ?? Date.now;
+  let step = "input";
+  let stepStartedAt = now();
+  const start = (nextStep) => {
+    step = nextStep;
+    stepStartedAt = now();
+  };
+  const unknown = (failure, failedStep = step) => ({
+    status: "unknown",
+    cause: {
+      pid,
+      step: failedStep,
+      failure,
+      elapsedMs: Math.max(0, now() - stepStartedAt)
+    }
+  });
+  const failureClass = (error) => {
+    const failure = error;
+    if (failure.code === "ETIMEDOUT" || failure.killed === true || failure.signal === "SIGTERM") {
+      return "timeout";
+    }
+    return typeof failure.status === "number" || typeof failure.signal === "string" ? "exit" : "read";
+  };
   if (!Number.isSafeInteger(pid) || pid <= 0)
-    return { status: "unknown" };
+    return unknown("parse");
   const platform = dependencies.platform ?? process.platform;
   const read = dependencies.read ?? ((path) => readFileSync2(path, "utf8"));
   const run = dependencies.run ?? defaultRun;
   const runVerifiedHelper = dependencies.runVerifiedHelper ?? defaultRunVerifiedHelper;
   try {
     if (platform === "darwin") {
+      start("ps");
       const observed = run("/bin/ps", ["-p", String(pid), "-o", "pid=,state="]).trim();
       if (observed.length === 0)
         return { status: "absent" };
       const observedFields = /^(\d+)(?:\s+(\S+))?$/.exec(observed);
       if (!observedFields || Number(observedFields[1]) !== pid)
-        return { status: "unknown" };
+        return unknown("parse");
       if (observedFields[2]?.startsWith("Z"))
         return { status: "absent" };
+      start("helper");
       const helper = verifyDarwinProcessBirthHelper(dependencies);
       const processInfo = runVerifiedHelper(helper.path, pid, helper.requirement).trim();
       const processMatch = /^(\d+):(\d+):(\d+)$/.exec(processInfo);
       if (!processMatch || Number(processMatch[1]) !== pid)
-        return { status: "unknown" };
+        return unknown("parse");
+      start("sysctl");
       const bootSession = run("/usr/sbin/sysctl", ["-n", "kern.bootsessionuuid"]).trim();
       if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(bootSession)) {
-        return { status: "unknown" };
+        return unknown("parse");
       }
       return {
         status: "present",
@@ -7868,44 +7890,50 @@ function probeRecordedProcessBirth(pid, dependencies) {
       };
     }
     if (platform === "linux") {
+      start("proc-boot-id");
       const boot = read("/proc/sys/kernel/random/boot_id").trim();
+      if (!boot)
+        return unknown("parse");
       let stat;
+      start("proc-stat");
       try {
         stat = read(`/proc/${pid}/stat`).trim();
       } catch (error) {
-        return error.code === "ENOENT" ? { status: "absent" } : { status: "unknown" };
+        return error.code === "ENOENT" ? { status: "absent" } : unknown(failureClass(error));
       }
       const commandEnd = stat.lastIndexOf(")");
       const fields = commandEnd >= 0 ? stat.slice(commandEnd + 1).trim().split(/\s+/) : [];
       if (fields[0] === "Z")
         return { status: "absent" };
       const started = fields[19];
-      if (!boot || !started || !/^\d+$/.test(started))
-        return { status: "unknown" };
+      if (!started || !/^\d+$/.test(started))
+        return unknown("parse");
       return {
         status: "present",
         birth: { pid, source: "linux-proc", token: token([platform, boot, started]) }
       };
     }
     if (platform === "win32") {
+      start("powershell");
       const powershell = resolveTrustedSystemExecutable("powershell", platform, dependencies.executableDependencies);
       if (!powershell)
-        return { status: "unknown" };
+        return unknown("unsupported");
       const script = `$p = Get-Process -Id ${pid} -ErrorAction SilentlyContinue; if ($null -eq $p) { 'ABSENT' } else { $p.StartTime.ToUniversalTime().Ticks }`;
       const started = run(powershell, ["-NoProfile", "-NonInteractive", "-Command", script]).trim();
       if (started === "ABSENT")
         return { status: "absent" };
       if (!/^\d+$/.test(started))
-        return { status: "unknown" };
+        return unknown("parse");
       return {
         status: "present",
         birth: { pid, source: "windows-powershell", token: token([platform, started]) }
       };
     }
-  } catch {
-    return { status: "unknown" };
+  } catch (error) {
+    return unknown(failureClass(error));
   }
-  return { status: "unknown" };
+  start("platform");
+  return unknown("unsupported");
 }
 var DARWIN_HELPER_MANIFEST, VERIFIED_HELPER_SCRIPT;
 var init_process_birth = __esm({
@@ -7973,126 +8001,10 @@ print -r -- "$result"
   }
 });
 
-// packages/rn-dev-agent-core/dist/session/metro-binding.js
-import { execFileSync as execFileSync5 } from "node:child_process";
-function resolveMetroListenerExecutable(platform, dependencies = {}) {
-  const executable = platform === "win32" ? "powershell" : platform === "linux" ? "ss" : platform === "darwin" ? "lsof" : null;
-  return executable ? resolveTrustedSystemExecutable(executable, platform, dependencies) : null;
-}
-function numericListener(output, emptyStatus) {
-  const value = String(output).trim();
-  if (!value)
-    return { status: emptyStatus };
-  const candidates = value.split(/\s+/);
-  if (candidates.some((candidate) => !/^\d+$/.test(candidate))) {
-    return { status: "unknown" };
-  }
-  const pids = new Set(candidates.map(Number));
-  const [pid] = pids;
-  return pids.size === 1 && Number.isSafeInteger(pid) && pid > 0 ? { status: "listening", pid } : { status: "unknown" };
-}
-function probeMetroListener(port, platform = process.platform, execute2 = execFileSync5, executableDependencies = {}) {
-  const executable = resolveMetroListenerExecutable(platform, executableDependencies);
-  if (!executable)
-    return { status: "unknown" };
-  try {
-    if (platform === "win32") {
-      const output = execute2(executable, [
-        "-NoProfile",
-        "-NonInteractive",
-        "-Command",
-        `$connections = @(Get-NetTCPConnection -State Listen -ErrorAction Stop | Where-Object LocalPort -eq ${port}); if ($connections.Count -eq 0) { 'ABSENT' } else { $connections.OwningProcess | Sort-Object -Unique }`
-      ], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 2e3 });
-      return String(output).trim() === "ABSENT" ? { status: "absent" } : numericListener(output, "unknown");
-    }
-    if (platform === "linux") {
-      const output = execute2(executable, ["-H", "-ltnp", `sport = :${port}`], {
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "ignore"],
-        timeout: 2e3
-      });
-      const value = String(output).trim();
-      if (!value)
-        return { status: "absent" };
-      const pids = new Set([...value.matchAll(/pid=(\d+)/g)].map((match) => Number(match[1])));
-      const [pid] = pids;
-      return pids.size === 1 && Number.isSafeInteger(pid) && pid > 0 ? { status: "listening", pid } : { status: "unknown" };
-    }
-    if (platform === "darwin") {
-      const output = execute2(executable, ["-ti", `tcp:${port}`, "-sTCP:LISTEN"], {
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "pipe"],
-        timeout: 2e3
-      });
-      return numericListener(output, "unknown");
-    }
-    return { status: "unknown" };
-  } catch (error) {
-    const failure = error;
-    return platform === "darwin" && failure.status === 1 && !String(failure.stdout ?? "").trim() && !String(failure.stderr ?? "").trim() ? { status: "absent" } : { status: "unknown" };
-  }
-}
-function metroListenerPid(port, platform = process.platform, execute2 = execFileSync5, executableDependencies = {}) {
-  const probe = probeMetroListener(port, platform, execute2, executableDependencies);
-  return probe.status === "listening" ? probe.pid : null;
-}
-async function fetchMetroStatus(port) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 2e3);
-  try {
-    const response = await fetch(`http://127.0.0.1:${port}/status`, {
-      signal: controller.signal
-    });
-    if (!response.ok)
-      throw new Error(`HTTP ${response.status}`);
-    return await response.text();
-  } finally {
-    clearTimeout(timer);
-  }
-}
-async function captureMetroBinding(input, dependencies = {}) {
-  if (!Number.isSafeInteger(input.port) || input.port < 1 || input.port > 65535 || !Number.isSafeInteger(input.pid) || input.pid < 1 || !input.instanceId || !Number.isSafeInteger(input.buildGeneration) || input.buildGeneration < 1) {
-    throw new Error("METRO_AUTHORITY_MISMATCH: Metro binding is incomplete");
-  }
-  const listenerPid = (dependencies.listenerPid ?? metroListenerPid)(input.port);
-  if (listenerPid !== input.pid) {
-    throw new Error("METRO_AUTHORITY_MISMATCH: Metro process does not own the claimed listener");
-  }
-  const birth = (dependencies.readBirth ?? readProcessBirth)(input.pid);
-  if (!birth) {
-    throw new Error("PROCESS_BIRTH_UNAVAILABLE: Metro process birth could not be proven conservatively");
-  }
-  const status = await (dependencies.fetchStatus ?? fetchMetroStatus)(input.port);
-  if (!status.includes("packager-status:running")) {
-    throw new Error("METRO_AUTHORITY_MISMATCH: claimed Metro endpoint is not running");
-  }
-  const servingRoot = dependencies.servingRoot ? dependencies.servingRoot(input.port) : cwdForProcess(input.pid);
-  if (!servingRoot || !pathIsWithinRoot(servingRoot, input.sourceRoot)) {
-    throw new Error("METRO_AUTHORITY_MISMATCH: Metro serving root does not match the source worktree");
-  }
-  return {
-    port: input.port,
-    pid: input.pid,
-    birth: birth.token,
-    instanceId: input.instanceId,
-    servingRoot,
-    buildGeneration: input.buildGeneration
-  };
-}
-var init_metro_binding = __esm({
-  "packages/rn-dev-agent-core/dist/session/metro-binding.js"() {
-    "use strict";
-    init_metro_cwd();
-    init_trusted_system_executable();
-    init_process_birth();
-    init_trusted_system_executable();
-  }
-});
-
 // packages/rn-dev-agent-core/dist/session/authority-store.js
-import { chmodSync as chmodSync2, lstatSync as lstatSync3, mkdirSync as mkdirSync3, statSync as statSync3 } from "node:fs";
+import { chmodSync as chmodSync2, lstatSync as lstatSync3, mkdirSync, statSync as statSync2 } from "node:fs";
 import { createRequire } from "node:module";
-import { dirname as dirname4 } from "node:path";
+import { dirname as dirname2 } from "node:path";
 function loadAuthoritySqlite() {
   try {
     const sqlite = require2("node:sqlite");
@@ -8102,12 +8014,12 @@ function loadAuthoritySqlite() {
   }
 }
 function assertPrivateDirectory(path) {
-  mkdirSync3(path, { mode: 448, recursive: true });
+  mkdirSync(path, { mode: 448, recursive: true });
   const link = lstatSync3(path);
   if (link.isSymbolicLink() || !link.isDirectory()) {
     throw new Error("authority state root must be a real directory");
   }
-  const stat = statSync3(path);
+  const stat = statSync2(path);
   if (typeof process.getuid === "function" && stat.uid !== process.getuid()) {
     throw new Error("authority state root is not owned by the current user");
   }
@@ -8120,7 +8032,7 @@ function secureDatabaseFiles(path) {
       if (link.isSymbolicLink() || !link.isFile()) {
         throw new Error("authority database path is not a regular file");
       }
-      const stat = statSync3(candidate);
+      const stat = statSync2(candidate);
       if (typeof process.getuid === "function" && stat.uid !== process.getuid()) {
         throw new Error("authority database is not owned by the current user");
       }
@@ -8173,7 +8085,7 @@ function openAuthorityStore(path, options = {}) {
   }
   let database = null;
   try {
-    assertPrivateDirectory(dirname4(path));
+    assertPrivateDirectory(dirname2(path));
     try {
       const existing = lstatSync3(path);
       if (existing.isSymbolicLink() || !existing.isFile()) {
@@ -8311,7 +8223,7 @@ var init_recovery_remedy = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/session/registry.js
-import { createHash as createHash5, randomBytes, timingSafeEqual as timingSafeEqual4 } from "node:crypto";
+import { createHash as createHash3, randomBytes, timingSafeEqual as timingSafeEqual3 } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
 function referencesMetroEvidenceSocket(value, path) {
   if (Array.isArray(value)) {
@@ -8640,8 +8552,8 @@ var init_registry = __esm({
           const row = this.#requireRecoverableSession(session2);
           const bindings = JSON.parse(row.bindings_json);
           const expected = Buffer.from(String(bindings.recoveryCapabilityHash ?? ""), "hex");
-          const actual = createHash5("sha256").update(capability).digest();
-          if (expected.length !== actual.length || !timingSafeEqual4(expected, actual)) {
+          const actual = createHash3("sha256").update(capability).digest();
+          if (expected.length !== actual.length || !timingSafeEqual3(expected, actual)) {
             throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "blocked recovery capability is invalid");
           }
           const pendingHandoffs = this.#database.prepare(`SELECT handoff.handoff_id, handoff.claim_epoch, handoff.target_instance,
@@ -8745,8 +8657,8 @@ var init_registry = __esm({
           const row = this.#requireRecoverableSession(session2);
           const bindings = JSON.parse(row.bindings_json);
           const expected = Buffer.from(String(bindings.recoveryCapabilityHash ?? ""), "hex");
-          const actual = createHash5("sha256").update(capability).digest();
-          if (expected.length !== actual.length || !timingSafeEqual4(expected, actual)) {
+          const actual = createHash3("sha256").update(capability).digest();
+          if (expected.length !== actual.length || !timingSafeEqual3(expected, actual)) {
             throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "blocked recovery capability is invalid");
           }
           if (row.worker_instance !== worker.instanceId) {
@@ -9990,7 +9902,7 @@ var init_registry = __esm({
         const now = this.#now();
         const handoffId = randomBytes(16).toString("hex");
         const token2 = randomBytes(32).toString("base64url");
-        const tokenHash = createHash5("sha256").update(token2).digest("hex");
+        const tokenHash = createHash3("sha256").update(token2).digest("hex");
         this.#transaction(() => {
           const current = this.#requireSession(session2);
           let targetInstance = input.targetInstance;
@@ -10174,8 +10086,8 @@ var init_registry = __esm({
           const cleanup = bindings.handoffCleanup && typeof bindings.handoffCleanup === "object" ? bindings.handoffCleanup : null;
           const handoff = this.#database.prepare("SELECT token_hash, consumed_ms FROM handoffs WHERE handoff_id = ?").get(input.handoffId);
           const expected = Buffer.from(typeof handoff?.token_hash === "string" ? handoff.token_hash : "", "hex");
-          const actual = createHash5("sha256").update(input.token).digest();
-          const tokenMatches = expected.length === actual.length && timingSafeEqual4(expected, actual);
+          const actual = createHash3("sha256").update(input.token).digest();
+          const tokenMatches = expected.length === actual.length && timingSafeEqual3(expected, actual);
           if (!row || row.state !== "handoff_cleanup" || row.claim_epoch !== target.claimEpoch || row.worker_instance !== input.targetInstance || cleanup?.handoffId !== input.handoffId || cleanup?.targetSessionId !== target.sessionId || cleanup?.targetClaimEpoch !== target.claimEpoch || typeof handoff?.consumed_ms !== "number" || !tokenMatches) {
             throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "handoff cleanup resumption requires the original handoff capability");
           }
@@ -10200,8 +10112,8 @@ var init_registry = __esm({
             throw new SessionAuthorityError("HANDOFF_TARGET_MISMATCH", "handoff target instance does not match");
           }
           const expected = Buffer.from(handoff.token_hash, "hex");
-          const actual = Buffer.from(createHash5("sha256").update(input.token).digest("hex"), "hex");
-          if (expected.length !== actual.length || !timingSafeEqual4(expected, actual)) {
+          const actual = Buffer.from(createHash3("sha256").update(input.token).digest("hex"), "hex");
+          if (expected.length !== actual.length || !timingSafeEqual3(expected, actual)) {
             throw new SessionAuthorityError("HANDOFF_TOKEN_INVALID", "handoff capability is invalid");
           }
           const session2 = asSession(this.#database.prepare(`SELECT session_id, state, claim_epoch, authority_version,
@@ -10497,7 +10409,7 @@ var init_registry = __esm({
           return null;
         const persisted = JSON.parse(row.receipt_json);
         const probe = persisted.probe;
-        if (!probe || createHash5("sha256").update(probe.capability).digest("hex") !== receipt.runnerCapabilityHash) {
+        if (!probe || createHash3("sha256").update(probe.capability).digest("hex") !== receipt.runnerCapabilityHash) {
           return null;
         }
         return probe;
@@ -10813,7 +10725,7 @@ var init_registry = __esm({
             }
             this.#database.prepare("DELETE FROM allocations WHERE service = ? AND worktree_key = ?").run(input.service, input.worktreeKey);
           }
-          const digest3 = createHash5("sha256").update(`${input.uid}\0${input.worktreeKey}\0${input.service}`).digest();
+          const digest3 = createHash3("sha256").update(`${input.uid}\0${input.worktreeKey}\0${input.service}`).digest();
           const preferred = digest3.readUInt32BE(0) % input.span;
           for (let offset = 0; offset < input.span; offset += 1) {
             const port = input.base + (preferred + offset) % input.span;
@@ -11087,8 +10999,8 @@ var init_registry = __esm({
           throw new SessionAuthorityError("HANDOFF_NOT_FOUND", "handoff does not exist");
         }
         const expected = Buffer.from(handoff.token_hash, "hex");
-        const actual = createHash5("sha256").update(input.token).digest();
-        if (expected.length !== actual.length || !timingSafeEqual4(expected, actual)) {
+        const actual = createHash3("sha256").update(input.token).digest();
+        if (expected.length !== actual.length || !timingSafeEqual3(expected, actual)) {
           throw new SessionAuthorityError("HANDOFF_TOKEN_INVALID", "handoff capability is invalid");
         }
         if (handoff.consumed_ms !== null) {
@@ -11210,7 +11122,7 @@ var init_registry = __esm({
          WHERE session_id = ? AND claim_epoch = ? AND resource_type = 'runner'`).get(session2.sessionId, session2.claimEpoch);
         const deviceClaim = this.#database.prepare(`SELECT resource_key FROM claims
          WHERE session_id = ? AND claim_epoch = ? AND resource_type = 'device'`).get(session2.sessionId, session2.claimEpoch);
-        const runnerCapabilityHash = typeof runner?.capability === "string" ? createHash5("sha256").update(runner.capability).digest("hex") : null;
+        const runnerCapabilityHash = typeof runner?.capability === "string" ? createHash3("sha256").update(runner.capability).digest("hex") : null;
         if (device?.platform !== platform || receipt.sessionId !== session2.sessionId || receipt.claimEpoch !== session2.claimEpoch || receipt.sourceKey !== row.source_key || receipt.worktreeKey !== row.worktree_key || receipt.appRootKey !== row.app_root_key || receipt.deviceId !== device.deviceId || receipt.appId !== device.appId || receipt.installGeneration !== install?.installGeneration || receipt.artifactDigest !== install?.artifactDigest || receipt.runnerInstanceId !== runner?.instanceId || receipt.runnerPid !== runner?.pid || receipt.runnerProcessBirth !== runner?.processBirth || receipt.runnerPort !== runner?.port || receipt.runnerClaim !== runnerClaim?.resource_key || receipt.deviceClaim !== deviceClaim?.resource_key || receipt.runnerCapabilityHash !== runnerCapabilityHash || typeof runner?.port !== "number" || typeof runner.capability !== "string" || typeof runner.instanceId !== "string" || typeof runner.pid !== "number" || typeof runner.processBirth !== "string" || typeof device?.deviceId !== "string" || typeof device.appId !== "string" || typeof install?.installGeneration !== "string") {
           throw new SessionAuthorityError("RUNNER_OWNERSHIP_MISMATCH", "snapshot receipt does not match exact persistent platform authority");
         }
@@ -11254,9 +11166,9 @@ var init_registry = __esm({
          WHERE session_id = ? AND claim_epoch = ? AND platform = ?`).run(session2.sessionId, session2.claimEpoch, platform);
       }
       #capabilityMatches(expected, actual) {
-        const expectedDigest = createHash5("sha256").update(expected).digest();
-        const actualDigest = createHash5("sha256").update(actual).digest();
-        return timingSafeEqual4(expectedDigest, actualDigest);
+        const expectedDigest = createHash3("sha256").update(expected).digest();
+        const actualDigest = createHash3("sha256").update(actual).digest();
+        return timingSafeEqual3(expectedDigest, actualDigest);
       }
       #recoveryHandleMatches(handle, actual, now) {
         if (typeof handle.token === "string" && typeof handle.expiresMs === "number" && handle.expiresMs >= now && this.#capabilityMatches(handle.token, actual)) {
@@ -11342,6 +11254,201 @@ var init_registry = __esm({
         }
       }
     };
+  }
+});
+
+// packages/rn-dev-agent-core/dist/session/process-owner.js
+function defaultProcessState(pid) {
+  try {
+    process.kill(pid, 0);
+    return "alive";
+  } catch (error) {
+    const code = error.code;
+    if (code === "ESRCH")
+      return "dead";
+    if (code === "EPERM")
+      return "alive";
+    return "unknown";
+  }
+}
+function inspectSessionOwner(owner, dependencies = {}) {
+  const inspection = inspectSessionOwnerAttestation(owner, dependencies);
+  return inspection.status === "match" ? "match" : inspection.status === "unknown" ? "unknown" : "mismatch";
+}
+function inspectSessionOwnerAttestation(owner, dependencies = {}) {
+  const now = dependencies.now ?? Date.now;
+  const stateStartedAt = now();
+  const state = (dependencies.processState ?? defaultProcessState)(owner.pid);
+  if (state === "dead")
+    return { status: "absent", pid: owner.pid };
+  if (state === "unknown") {
+    return {
+      status: "unknown",
+      pid: owner.pid,
+      cause: {
+        pid: owner.pid,
+        step: "signal",
+        failure: "read",
+        elapsedMs: Math.max(0, now() - stateStartedAt)
+      }
+    };
+  }
+  const observed = (dependencies.probeBirth ?? probeProcessBirth)(owner.pid);
+  if (observed.status === "absent")
+    return { status: "absent", pid: owner.pid };
+  if (observed.status === "unknown") {
+    return { status: "unknown", pid: owner.pid, cause: observed.cause };
+  }
+  return observed.birth.token === owner.token ? { status: "match", pid: owner.pid } : {
+    status: "mismatch",
+    pid: owner.pid,
+    expected: owner.token,
+    observed: observed.birth.token
+  };
+}
+function processBirthRefusalDetails(probe, pid) {
+  return probe.status === "unknown" ? {
+    attestation: "unavailable",
+    ...probe.cause,
+    nextAction: PROCESS_ATTESTATION_UNAVAILABLE_NEXT_ACTION
+  } : { attestation: "absent", pid };
+}
+function requireProcessBirthAttestation(pid, subject, probeBirth = probeProcessBirth) {
+  const probe = probeBirth(pid);
+  if (probe.status === "present")
+    return probe.birth;
+  const unavailable = probe.status === "unknown";
+  throw new SessionAuthorityError("PROCESS_BIRTH_UNAVAILABLE", unavailable ? `${subject} process identity could not be read on a loaded host` : `${subject} process is absent`, void 0, processBirthRefusalDetails(probe, pid));
+}
+function processBirthProbeFromReader(pid, readBirth) {
+  const birth = readBirth(pid);
+  return birth ? { status: "present", birth } : {
+    status: "unknown",
+    cause: { pid, step: "platform", failure: "read", elapsedMs: 0 }
+  };
+}
+var PROCESS_ATTESTATION_UNAVAILABLE_NEXT_ACTION;
+var init_process_owner = __esm({
+  "packages/rn-dev-agent-core/dist/session/process-owner.js"() {
+    "use strict";
+    init_process_birth();
+    init_registry();
+    PROCESS_ATTESTATION_UNAVAILABLE_NEXT_ACTION = "Process identity could not be read in time on a loaded host. Reduce host process contention, then retry the original operation; do not reopen or rebind the device.";
+  }
+});
+
+// packages/rn-dev-agent-core/dist/session/metro-binding.js
+import { execFileSync as execFileSync5 } from "node:child_process";
+function resolveMetroListenerExecutable(platform, dependencies = {}) {
+  const executable = platform === "win32" ? "powershell" : platform === "linux" ? "ss" : platform === "darwin" ? "lsof" : null;
+  return executable ? resolveTrustedSystemExecutable(executable, platform, dependencies) : null;
+}
+function numericListener(output, emptyStatus) {
+  const value = String(output).trim();
+  if (!value)
+    return { status: emptyStatus };
+  const candidates = value.split(/\s+/);
+  if (candidates.some((candidate) => !/^\d+$/.test(candidate))) {
+    return { status: "unknown" };
+  }
+  const pids = new Set(candidates.map(Number));
+  const [pid] = pids;
+  return pids.size === 1 && Number.isSafeInteger(pid) && pid > 0 ? { status: "listening", pid } : { status: "unknown" };
+}
+function probeMetroListener(port, platform = process.platform, execute2 = execFileSync5, executableDependencies = {}) {
+  const executable = resolveMetroListenerExecutable(platform, executableDependencies);
+  if (!executable)
+    return { status: "unknown" };
+  try {
+    if (platform === "win32") {
+      const output = execute2(executable, [
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        `$connections = @(Get-NetTCPConnection -State Listen -ErrorAction Stop | Where-Object LocalPort -eq ${port}); if ($connections.Count -eq 0) { 'ABSENT' } else { $connections.OwningProcess | Sort-Object -Unique }`
+      ], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 2e3 });
+      return String(output).trim() === "ABSENT" ? { status: "absent" } : numericListener(output, "unknown");
+    }
+    if (platform === "linux") {
+      const output = execute2(executable, ["-H", "-ltnp", `sport = :${port}`], {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+        timeout: 2e3
+      });
+      const value = String(output).trim();
+      if (!value)
+        return { status: "absent" };
+      const pids = new Set([...value.matchAll(/pid=(\d+)/g)].map((match) => Number(match[1])));
+      const [pid] = pids;
+      return pids.size === 1 && Number.isSafeInteger(pid) && pid > 0 ? { status: "listening", pid } : { status: "unknown" };
+    }
+    if (platform === "darwin") {
+      const output = execute2(executable, ["-ti", `tcp:${port}`, "-sTCP:LISTEN"], {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+        timeout: 2e3
+      });
+      return numericListener(output, "unknown");
+    }
+    return { status: "unknown" };
+  } catch (error) {
+    const failure = error;
+    return platform === "darwin" && failure.status === 1 && !String(failure.stdout ?? "").trim() && !String(failure.stderr ?? "").trim() ? { status: "absent" } : { status: "unknown" };
+  }
+}
+function metroListenerPid(port, platform = process.platform, execute2 = execFileSync5, executableDependencies = {}) {
+  const probe = probeMetroListener(port, platform, execute2, executableDependencies);
+  return probe.status === "listening" ? probe.pid : null;
+}
+async function fetchMetroStatus(port) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 2e3);
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/status`, {
+      signal: controller.signal
+    });
+    if (!response.ok)
+      throw new Error(`HTTP ${response.status}`);
+    return await response.text();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+async function captureMetroBinding(input, dependencies = {}) {
+  if (!Number.isSafeInteger(input.port) || input.port < 1 || input.port > 65535 || !Number.isSafeInteger(input.pid) || input.pid < 1 || !input.instanceId || !Number.isSafeInteger(input.buildGeneration) || input.buildGeneration < 1) {
+    throw new Error("METRO_AUTHORITY_MISMATCH: Metro binding is incomplete");
+  }
+  const listenerPid = (dependencies.listenerPid ?? metroListenerPid)(input.port);
+  if (listenerPid !== input.pid) {
+    throw new Error("METRO_AUTHORITY_MISMATCH: Metro process does not own the claimed listener");
+  }
+  const probeBirth = dependencies.probeBirth ?? (dependencies.readBirth ? (pid) => processBirthProbeFromReader(pid, dependencies.readBirth) : probeProcessBirth);
+  const birth = requireProcessBirthAttestation(input.pid, "Metro", probeBirth);
+  const status = await (dependencies.fetchStatus ?? fetchMetroStatus)(input.port);
+  if (!status.includes("packager-status:running")) {
+    throw new Error("METRO_AUTHORITY_MISMATCH: claimed Metro endpoint is not running");
+  }
+  const servingRoot = dependencies.servingRoot ? dependencies.servingRoot(input.port) : cwdForProcess(input.pid);
+  if (!servingRoot || !pathIsWithinRoot(servingRoot, input.sourceRoot)) {
+    throw new Error("METRO_AUTHORITY_MISMATCH: Metro serving root does not match the source worktree");
+  }
+  return {
+    port: input.port,
+    pid: input.pid,
+    birth: birth.token,
+    instanceId: input.instanceId,
+    servingRoot,
+    buildGeneration: input.buildGeneration
+  };
+}
+var init_metro_binding = __esm({
+  "packages/rn-dev-agent-core/dist/session/metro-binding.js"() {
+    "use strict";
+    init_metro_cwd();
+    init_trusted_system_executable();
+    init_process_birth();
+    init_process_owner();
+    init_trusted_system_executable();
   }
 });
 
@@ -11505,6 +11612,7 @@ var init_rn_fast_runner_client = __esm({
     init_runtime_paths();
     init_transport_recovery();
     init_process_birth();
+    init_process_owner();
     READY_TIMEOUT_MS = resolveReadyTimeoutMs();
     FAST_RUNNER_PROJECT = resolveNativeRunnerDir("rn-fast-runner");
     REBUILD_LOCK_DIR = join10(FAST_RUNNER_PROJECT, "build", ".rebuild-lock");
@@ -12475,7 +12583,7 @@ var init_rn_android_runner_client = __esm({
     init_runner_artifacts();
     init_runtime_paths();
     init_transport_recovery();
-    init_process_birth();
+    init_process_owner();
     init_authority_store();
     execFileAsync2 = promisify11(execFile11);
     RN_ANDROID_RUNNER_DIR = resolveNativeRunnerDir("rn-android-runner");
@@ -12661,10 +12769,11 @@ init_metro_binding();
 init_metro_binding();
 init_trusted_system_executable();
 init_process_birth();
+init_process_owner();
 import { execFileSync as execFileSync6, spawn } from "node:child_process";
-import { createHash as createHash4, createHmac as createHmac3, timingSafeEqual as timingSafeEqual3 } from "node:crypto";
-import { closeSync as closeSync3, existsSync as existsSync4, fstatSync as fstatSync2, mkdirSync as mkdirSync2, openSync as openSync3, readFileSync as readFileSync4, readSync as readSync2, realpathSync as realpathSync5, rmSync as rmSync2 } from "node:fs";
-import { dirname as dirname3, isAbsolute as isAbsolute2, join as join3, relative as relative2, resolve as resolve3 } from "node:path";
+import { createHash as createHash5, createHmac as createHmac3, timingSafeEqual as timingSafeEqual4 } from "node:crypto";
+import { closeSync as closeSync3, existsSync as existsSync4, fstatSync as fstatSync2, mkdirSync as mkdirSync3, openSync as openSync3, readFileSync as readFileSync4, readSync as readSync2, realpathSync as realpathSync5, rmSync as rmSync2 } from "node:fs";
+import { dirname as dirname4, isAbsolute as isAbsolute2, join as join3, relative as relative2, resolve as resolve3 } from "node:path";
 
 // packages/rn-dev-agent-core/dist/session/authority-json.js
 var intrinsicJsonStringify = JSON.stringify;
@@ -12758,13 +12867,13 @@ function canonicalAuthorityJson(value) {
 
 // packages/rn-dev-agent-core/dist/session/managed-metro-enforcement.js
 import { spawnSync } from "node:child_process";
-import { createHash as createHash3 } from "node:crypto";
-import { closeSync as closeSync2, constants as constants2, existsSync as existsSync3, mkdirSync, openSync as openSync2, readFileSync as readFileSync3, realpathSync as realpathSync4, rmSync, statSync as statSync2, symlinkSync, writeSync } from "node:fs";
-import { dirname as dirname2, resolve as resolve2 } from "node:path";
+import { createHash as createHash4 } from "node:crypto";
+import { closeSync as closeSync2, constants as constants2, existsSync as existsSync3, mkdirSync as mkdirSync2, openSync as openSync2, readFileSync as readFileSync3, realpathSync as realpathSync4, rmSync, statSync as statSync3, symlinkSync, writeSync } from "node:fs";
+import { dirname as dirname3, resolve as resolve2 } from "node:path";
 var DARWIN_SANDBOX_EXECUTABLE = "/usr/bin/sandbox-exec";
 var DARWIN_CODESIGN_EXECUTABLE = "/usr/bin/codesign";
 function sha256(value) {
-  return createHash3("sha256").update(value).digest("hex");
+  return createHash4("sha256").update(value).digest("hex");
 }
 function defaultRun2(command, args) {
   const result = spawnSync(command, [...args], {
@@ -12785,7 +12894,7 @@ function field(details, name) {
 function verifiedSandboxExecutable(dependencies) {
   const exists = dependencies.exists ?? existsSync3;
   const canonicalize = dependencies.canonicalize ?? realpathSync4;
-  const stat = dependencies.stat ?? statSync2;
+  const stat = dependencies.stat ?? statSync3;
   const readBytes = dependencies.readBytes ?? readFileSync3;
   const run = dependencies.run ?? defaultRun2;
   try {
@@ -12859,7 +12968,7 @@ function defaultRuntimeCache(exists) {
 }
 function attestRuntimeFile(path, dependencies) {
   const canonicalize = dependencies.canonicalize ?? realpathSync4;
-  const stat = dependencies.stat ?? statSync2;
+  const stat = dependencies.stat ?? statSync3;
   const readBytes = dependencies.readBytes ?? readFileSync3;
   const run = dependencies.run ?? defaultRun2;
   const canonical = canonicalize(path);
@@ -13233,14 +13342,14 @@ function runManagedMetroEnforcementPreflight(plan, dependencies = {}) {
   try {
     writeCanary(plan.canaryPath, "rn-dev-agent sandbox canary");
     canaryCreated = true;
-    mkdirSync(dirname2(plan.preflightEnvironmentPath), { recursive: true });
+    mkdirSync2(dirname3(plan.preflightEnvironmentPath), { recursive: true });
     const preflightEnvironment = Object.fromEntries(Object.entries(dependencies.environment ?? process.env));
     preflightEnvironment.NODE_OPTIONS = plan.baseNodeOptions;
     delete preflightEnvironment.RN_DEV_AGENT_METRO_EVIDENCE_FD;
     delete preflightEnvironment.RN_DEV_AGENT_METRO_NATIVE_ADDON_ACK_ROOT;
     writeCanary(plan.preflightEnvironmentPath, canonicalAuthorityJson(preflightEnvironment));
     environmentCreated = true;
-    mkdirSync(dirname2(plan.symlinkCanaryPath), { recursive: true });
+    mkdirSync2(dirname3(plan.symlinkCanaryPath), { recursive: true });
     rmSync(plan.symlinkCanaryPath, { force: true });
     symlinkSync(plan.canaryPath, plan.symlinkCanaryPath);
     symlinkCreated = true;
@@ -14508,7 +14617,7 @@ function verifyManagedMetroRuntimeAdmission(path, capability, expected) {
     }
     delete observedDescendantAuthority.rootIdentity;
     delete expectedDescendantAuthority.rootIdentity;
-    return computedBytes.length === signatureBytes.length && timingSafeEqual3(computedBytes, signatureBytes) && payload.runtimeEvidenceAuthority === "managed-sandbox-v1" && payload.runtimeEnforcement === "os-enforced-v1" && payload.sessionId === expected.sessionId && payload.metroInstanceId === expected.metroInstanceId && payload.contentRoot === expected.contentRoot && payload.appRoot === expected.appRoot && Array.isArray(payload.violations) && payload.violations.length === 0 && canonicalAuthorityJson(observedManifest) === canonicalAuthorityJson(expectedManifest) && canonicalAuthorityJson(payload.runtimeEnforcementReceipt) === canonicalAuthorityJson(expected.enforcementReceipt);
+    return computedBytes.length === signatureBytes.length && timingSafeEqual4(computedBytes, signatureBytes) && payload.runtimeEvidenceAuthority === "managed-sandbox-v1" && payload.runtimeEnforcement === "os-enforced-v1" && payload.sessionId === expected.sessionId && payload.metroInstanceId === expected.metroInstanceId && payload.contentRoot === expected.contentRoot && payload.appRoot === expected.appRoot && Array.isArray(payload.violations) && payload.violations.length === 0 && canonicalAuthorityJson(observedManifest) === canonicalAuthorityJson(expectedManifest) && canonicalAuthorityJson(payload.runtimeEnforcementReceipt) === canonicalAuthorityJson(expected.enforcementReceipt);
   } catch {
     return false;
   }
@@ -14533,7 +14642,7 @@ function verifyManagedMetroManagementProof(binding, input) {
   }, input.signerCapability);
   const expectedBuffer = Buffer.from(expected, "hex");
   const observedBuffer = Buffer.from(binding.managementProof, "hex");
-  return expectedBuffer.length === observedBuffer.length && timingSafeEqual3(expectedBuffer, observedBuffer);
+  return expectedBuffer.length === observedBuffer.length && timingSafeEqual4(expectedBuffer, observedBuffer);
 }
 function exactManagedProcessInspection(role, pid, birth, probe) {
   const prefix = role === "launcher" ? "METRO_LAUNCHER" : "METRO_LISTENER";
@@ -14643,7 +14752,7 @@ function dependencyRoots(appRoot, sourceRoot, exists) {
       const candidate = join3(current, "node_modules");
       if (exists(candidate))
         roots.add(candidate);
-      const parent = dirname3(current);
+      const parent = dirname4(current);
       if (parent === current)
         break;
       current = parent;
@@ -14683,7 +14792,7 @@ function latestSignedRuntimeViolation(path, capability, expected) {
       const expectedSignature = createHmac3("sha256", capability).update(canonicalAuthorityJson(payload)).digest("hex");
       const actualBytes = Buffer.from(signature, "hex");
       const expectedBytes = Buffer.from(expectedSignature, "hex");
-      if (actualBytes.length !== expectedBytes.length || !timingSafeEqual3(actualBytes, expectedBytes) || payload.sessionId !== expected.sessionId || payload.metroInstanceId !== expected.metroInstanceId || payload.sequence !== sequence + 1 || payload.previousSignature !== previousSignature) {
+      if (actualBytes.length !== expectedBytes.length || !timingSafeEqual4(actualBytes, expectedBytes) || payload.sessionId !== expected.sessionId || payload.metroInstanceId !== expected.metroInstanceId || payload.sequence !== sequence + 1 || payload.previousSignature !== previousSignature) {
         return null;
       }
       sequence += 1;
@@ -14865,7 +14974,7 @@ async function startManagedMetro(input, dependencies = {}) {
     nativeAddonAcknowledgmentRoot
   ]) {
     if (!exists(path))
-      mkdirSync2(path, { recursive: true, mode: 448 });
+      mkdirSync3(path, { recursive: true, mode: 448 });
   }
   const metroEnvironment = managedMetroChildEnvironment({
     ...dependencies.environment ?? process.env,
@@ -14919,7 +15028,7 @@ async function startManagedMetro(input, dependencies = {}) {
     port: input.port,
     args: metroArgs,
     nodeOptions: authorityNodeOptions,
-    environmentDigest: createHash4("sha256").update(canonicalAuthorityJson(childEnvironment)).digest("hex"),
+    environmentDigest: createHash5("sha256").update(canonicalAuthorityJson(childEnvironment)).digest("hex"),
     contentRoot: resolve3(input.sourceRoot),
     appRoot: resolve3(input.appRoot),
     servingRoot: resolve3(input.sourceRoot),
@@ -15006,9 +15115,11 @@ async function startManagedMetro(input, dependencies = {}) {
   if (!child.pid) {
     throw new Error("METRO_START_UNAVAILABLE: package-local Metro process did not start");
   }
-  const readBirth = dependencies.readBirth ?? readProcessBirth;
-  const launcherBirth = readBirth(child.pid);
-  if (!launcherBirth) {
+  const launcherProbe = dependencies.readBirth ? (pid) => processBirthProbeFromReader(pid, dependencies.readBirth) : dependencies.probeBirth ?? probeProcessBirth;
+  let launcherBirth;
+  try {
+    launcherBirth = requireProcessBirthAttestation(child.pid, "Metro launcher", launcherProbe);
+  } catch (error) {
     const cleanupProven2 = await stopSpawnedProcessGroup({ launcherPid: child.pid, port: input.port }, dependencies);
     if (!cleanupProven2) {
       throw new Error("METRO_START_CLEANUP_UNPROVEN: Metro launcher birth and cleanup could not be proven");
@@ -15016,7 +15127,7 @@ async function startManagedMetro(input, dependencies = {}) {
     if (!removeManagedMetroEvidenceSocketSafely(runtimeEvidenceSocket, dependencies)) {
       throw new Error("METRO_START_CLEANUP_UNPROVEN: Metro evidence socket cleanup failed");
     }
-    throw new Error("PROCESS_BIRTH_UNAVAILABLE: Metro launcher birth could not be proven");
+    throw error;
   }
   child.unref();
   const listenerPid = dependencies.listenerPid ?? managedMetroListenerPid;
@@ -15240,7 +15351,7 @@ async function stopManagedMetro(binding, input, dependencies = {}) {
   ];
   if (!expectedProofs.some((expected) => {
     const expectedBuffer = Buffer.from(expected, "hex");
-    return expectedBuffer.length === observedBuffer.length && timingSafeEqual3(expectedBuffer, observedBuffer);
+    return expectedBuffer.length === observedBuffer.length && timingSafeEqual4(expectedBuffer, observedBuffer);
   })) {
     return false;
   }
@@ -15285,36 +15396,8 @@ function resolveManagedMetroRestartGeneration(input, dependencies = {}) {
   return { buildGeneration: Number(generation2), receiptPreserved: true, reason: "preserved" };
 }
 
-// packages/rn-dev-agent-core/dist/session/process-owner.js
-init_process_birth();
-function defaultProcessState(pid) {
-  try {
-    process.kill(pid, 0);
-    return "alive";
-  } catch (error) {
-    const code = error.code;
-    if (code === "ESRCH")
-      return "dead";
-    if (code === "EPERM")
-      return "alive";
-    return "unknown";
-  }
-}
-function inspectSessionOwner(owner, dependencies = {}) {
-  const state = (dependencies.processState ?? defaultProcessState)(owner.pid);
-  if (state === "dead")
-    return "mismatch";
-  if (state === "unknown")
-    return "unknown";
-  const observed = (dependencies.probeBirth ?? probeProcessBirth)(owner.pid);
-  if (observed.status === "absent")
-    return "mismatch";
-  if (observed.status === "unknown")
-    return "unknown";
-  return observed.birth.token === owner.token ? "match" : "mismatch";
-}
-
 // packages/rn-dev-agent-core/dist/rn-session.js
+init_process_owner();
 init_registry();
 
 // packages/rn-dev-agent-core/dist/session/source-identity.js
@@ -17428,10 +17511,11 @@ function installIdentityRefusal(inspection, proofBound) {
 }
 function projectPublicAuthorityStatus(status, options = {}) {
   if (!status.available) {
-    const nextAction = authorityRemedyNextAction(status.code);
+    const nextAction = status.details?.nextAction ?? authorityRemedyNextAction(status.code);
     return {
       available: false,
       code: status.code,
+      ...status.details,
       ...nextAction ? { nextAction } : {}
     };
   }

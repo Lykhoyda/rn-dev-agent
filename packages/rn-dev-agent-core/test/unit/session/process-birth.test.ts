@@ -62,14 +62,16 @@ test('macOS process probes distinguish confirmed absence from unreadable identit
     }),
     { status: 'absent' },
   );
-  assert.deepEqual(
-    probeProcessBirth(123, {
-      platform: 'darwin',
-      ...noHostPidLookup,
-      run: (command) => (command === '/bin/ps' ? '123\n' : 'unparseable\n'),
-    }),
-    { status: 'unknown' },
-  );
+  const unreadable = probeProcessBirth(123, {
+    platform: 'darwin',
+    ...noHostPidLookup,
+    run: (command) => (command === '/bin/ps' ? '123\n' : 'unparseable\n'),
+  });
+  assert.equal(unreadable.status, 'unknown');
+  if (unreadable.status === 'unknown') {
+    assert.equal(unreadable.cause.pid, 123);
+    assert.ok(unreadable.cause.elapsedMs >= 0);
+  }
 });
 
 test('a terminated but unreaped process reads as absent, not as an unknown identity', () => {
@@ -112,7 +114,11 @@ test('macOS process identity refuses a replaced helper manifest', () => {
     },
   });
 
-  assert.deepEqual(birth, { status: 'unknown' });
+  assert.equal(birth.status, 'unknown');
+  if (birth.status === 'unknown') {
+    assert.equal(birth.cause.step, 'helper');
+    assert.equal(birth.cause.failure, 'read');
+  }
   assert.equal(helperExecuted, false);
 });
 
@@ -173,7 +179,11 @@ test('macOS process identity rejects a live helper outside the pinned CDHashes',
     },
   });
 
-  assert.deepEqual(birth, { status: 'unknown' });
+  assert.equal(birth.status, 'unknown');
+  if (birth.status === 'unknown') {
+    assert.equal(birth.cause.step, 'helper');
+    assert.equal(birth.cause.failure, 'read');
+  }
 });
 
 test('macOS helper verification waits for SIGSTOP and applies the pinned requirement', () => {
@@ -241,7 +251,11 @@ test('Windows process identity fails closed without trusted PowerShell', () => {
     },
   });
 
-  assert.deepEqual(birth, { status: 'unknown' });
+  assert.equal(birth.status, 'unknown');
+  if (birth.status === 'unknown') {
+    assert.equal(birth.cause.step, 'powershell');
+    assert.equal(birth.cause.failure, 'unsupported');
+  }
   assert.equal(executed, false);
 });
 
@@ -280,17 +294,44 @@ test('process birth probes distinguish confirmed absence from unreadable identit
   assert.deepEqual(probeProcessBirth(789, { platform: 'linux', ...noHostPidLookup, read }), {
     status: 'absent',
   });
-  assert.deepEqual(
-    probeProcessBirth(789, {
-      platform: 'linux',
-      ...noHostPidLookup,
-      read: (path) => {
-        if (path.endsWith('boot_id')) return 'boot-123';
-        throw new Error('permission denied');
-      },
-    }),
-    { status: 'unknown' },
-  );
+  const unreadable = probeProcessBirth(789, {
+    platform: 'linux',
+    ...noHostPidLookup,
+    read: (path) => {
+      if (path.endsWith('boot_id')) return 'boot-123';
+      throw new Error('permission denied');
+    },
+  });
+  assert.equal(unreadable.status, 'unknown');
+  if (unreadable.status === 'unknown') {
+    assert.deepEqual(unreadable.cause, {
+      pid: 789,
+      step: 'proc-stat',
+      failure: 'read',
+      elapsedMs: unreadable.cause.elapsedMs,
+    });
+  }
+});
+
+test('helper timeout reports a safe mandatory cause and never becomes a match', () => {
+  const timeout = new Error('unsafe helper output');
+  Object.assign(timeout, { code: 'ETIMEDOUT', killed: true, signal: 'SIGTERM' });
+  const times = [100, 110, 125, 140];
+  const probe = probeProcessBirth(123, {
+    platform: 'darwin',
+    ...noHostPidLookup,
+    now: () => times.shift() ?? 140,
+    run: (command) => (command === '/bin/ps' ? '123\n' : assert.fail()),
+    runVerifiedHelper: () => {
+      throw timeout;
+    },
+  });
+
+  assert.deepEqual(probe, {
+    status: 'unknown',
+    cause: { pid: 123, step: 'helper', failure: 'timeout', elapsedMs: 15 },
+  });
+  assert.doesNotMatch(JSON.stringify(probe), /unsafe helper output/);
 });
 
 test('current process has a portable birth identity on supported hosts', () => {

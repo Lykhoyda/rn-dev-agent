@@ -1,12 +1,25 @@
 import { getFastRunnerState } from '../runners/rn-fast-runner-client.js';
 import { getAndroidRunnerState } from '../runners/rn-android-runner-client.js';
-import { inspectSessionOwner } from './process-owner.js';
+import {
+  inspectSessionOwnerAttestation,
+  ownerRefusalDetails,
+  type ProcessOwnerInspection,
+} from './process-owner.js';
 import { SessionAuthorityError } from './registry.js';
 import type { WorkerAuthorityRuntime } from './runtime.js';
+
+interface RunnerBindingDependencies {
+  inspectOwner?: (owner: {
+    sessionId: string;
+    pid: number;
+    token: string;
+  }) => ProcessOwnerInspection;
+}
 
 export function bindNativeRunner(
   runtime: WorkerAuthorityRuntime,
   target: { platform: 'ios' | 'android'; deviceId: string; appId: string },
+  dependencies: RunnerBindingDependencies = {},
 ): void {
   const { registry, session } = runtime.requireAvailable();
   const status = registry.getSessionStatus(session.sessionId);
@@ -34,16 +47,27 @@ export function bindNativeRunner(
     state.sessionId !== session.sessionId ||
     state.claimEpoch !== session.claimEpoch ||
     !state.capability ||
-    !state.processBirth ||
-    inspectSessionOwner({
-      sessionId: session.sessionId,
-      pid: state.pid,
-      token: state.processBirth,
-    }) !== 'match'
+    !state.processBirth
   ) {
     throw new SessionAuthorityError(
       'RUNNER_OWNERSHIP_MISMATCH',
       'native runner process and capability could not be bound to this claim epoch',
+    );
+  }
+  const owner = {
+    sessionId: session.sessionId,
+    pid: state.pid,
+    token: state.processBirth,
+  };
+  const inspection = (dependencies.inspectOwner ?? inspectSessionOwnerAttestation)(owner);
+  if (inspection.status !== 'match') {
+    throw new SessionAuthorityError(
+      'RUNNER_OWNERSHIP_MISMATCH',
+      inspection.status === 'unknown'
+        ? 'native runner process identity could not be read on a loaded host'
+        : 'native runner process and capability could not be bound to this claim epoch',
+      undefined,
+      ownerRefusalDetails(inspection),
     );
   }
 

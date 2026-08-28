@@ -234,6 +234,77 @@ test('runner binding commits its claim and binding in one registry transaction',
   assert.equal(update.bindings.runner.instanceId, 'runner-1');
 });
 
+test('runner binding refuses unknown and mismatch with distinct attestation details', () => {
+  _setFastRunnerStateForTest({
+    schemaVersion: 1,
+    port: 9100,
+    pid: 4242,
+    deviceId: 'device-1',
+    bundleId: 'dev.example',
+    startedAt: new Date().toISOString(),
+    protocolVersion: 1,
+    processBirth: 'runner-birth',
+    instanceId: 'runner-1',
+    sessionId: 'session-1',
+    claimEpoch: 9,
+    capability: 'secret',
+  });
+  let updates = 0;
+  const runtime = {
+    requireAvailable: () => ({
+      registry: {
+        getSessionStatus: () => ({
+          bindings: {
+            device: { platform: 'ios', deviceId: 'device-1', appId: 'dev.example' },
+          },
+        }),
+        updateBindings: () => {
+          updates += 1;
+        },
+      },
+      session: { sessionId: 'session-1', claimEpoch: 9 },
+    }),
+  };
+  const target = { platform: 'ios', deviceId: 'device-1', appId: 'dev.example' } as const;
+
+  assert.throws(
+    () =>
+      bindNativeRunner(runtime, target, {
+        inspectOwner: (owner) => ({
+          status: 'unknown',
+          pid: owner.pid,
+          cause: {
+            pid: owner.pid,
+            step: 'helper',
+            failure: 'timeout',
+            elapsedMs: 2000,
+          },
+        }),
+      }),
+    (error: { code?: string; details?: Record<string, unknown> }) =>
+      error.code === 'RUNNER_OWNERSHIP_MISMATCH' &&
+      error.details?.attestation === 'unavailable' &&
+      error.details?.step === 'helper' &&
+      error.details?.failure === 'timeout' &&
+      String(error.details?.nextAction).includes('loaded host') &&
+      !String(error.details?.nextAction).includes('Re-open'),
+  );
+  assert.throws(
+    () =>
+      bindNativeRunner(runtime, target, {
+        inspectOwner: (owner) => ({
+          status: 'mismatch',
+          pid: owner.pid,
+          expected: 'runner-birth',
+          observed: 'different-birth',
+        }),
+      }),
+    (error: { code?: string; details?: Record<string, unknown> }) =>
+      error.code === 'RUNNER_OWNERSHIP_MISMATCH' && error.details?.attestation === 'mismatch',
+  );
+  assert.equal(updates, 0);
+});
+
 test('runner unbind finalizes the bound platform before one atomic release+unbind write', () => {
   const calls: string[] = [];
   let update;

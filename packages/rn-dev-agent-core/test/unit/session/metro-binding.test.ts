@@ -6,6 +6,7 @@ import {
   resolveMetroListenerExecutable,
   resolveTrustedSystemExecutable,
 } from '../../../dist/session/metro-binding.js';
+import { SessionAuthorityError } from '../../../dist/session/registry.js';
 
 test('listener probes select an existing trusted absolute executable', () => {
   const windowsExecutable = 'D:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe';
@@ -149,5 +150,49 @@ test('Metro binding rejects a serving root above the claimed worktree', async ()
       },
     ),
     /METRO_AUTHORITY_MISMATCH/,
+  );
+});
+
+test('Metro birth refusal distinguishes unreadable identity from an absent process', async () => {
+  const input = {
+    port: 8341,
+    pid: 202,
+    instanceId: 'metro-a',
+    sourceRoot: '/repo/worktree',
+    buildGeneration: 3,
+  };
+  const common = {
+    listenerPid: () => 202,
+    fetchStatus: async () => 'packager-status:running',
+    servingRoot: () => '/repo/worktree',
+  };
+
+  await assert.rejects(
+    captureMetroBinding(input, {
+      ...common,
+      probeBirth: () => ({
+        status: 'unknown',
+        cause: { pid: 202, step: 'sysctl', failure: 'timeout', elapsedMs: 2000 },
+      }),
+    }),
+    (error) =>
+      error instanceof SessionAuthorityError &&
+      error.code === 'PROCESS_BIRTH_UNAVAILABLE' &&
+      error.details?.attestation === 'unavailable' &&
+      error.details?.step === 'sysctl' &&
+      error.details?.failure === 'timeout' &&
+      error.details?.nextAction?.includes('loaded host'),
+  );
+  await assert.rejects(
+    captureMetroBinding(input, {
+      ...common,
+      probeBirth: () => ({ status: 'absent' }),
+    }),
+    (error) =>
+      error instanceof SessionAuthorityError &&
+      error.code === 'PROCESS_BIRTH_UNAVAILABLE' &&
+      error.details?.attestation === 'absent' &&
+      error.details?.pid === 202 &&
+      error.details?.step === undefined,
   );
 });

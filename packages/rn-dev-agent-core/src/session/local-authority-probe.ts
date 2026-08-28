@@ -13,8 +13,13 @@ import type { AuthorityObservation } from './authority-gate.js';
 import { verifyMetroAuthorityMarker, type MetroAuthorityMarker } from './metro-authority.js';
 import { provenMetroOriginMismatch, type ForeignMetroOriginScanner } from './metro-origin.js';
 import { metroListenerPid } from './metro-binding.js';
-import { inspectSessionOwner } from './process-owner.js';
-import { readProcessBirth } from './process-birth.js';
+import {
+  inspectSessionOwnerAttestation,
+  ownerRefusalDetails,
+  processBirthRefusalDetails,
+  type ProcessOwnerInspection,
+} from './process-owner.js';
+import { probeProcessBirth, type ProcessBirthProbe } from './process-birth.js';
 import { SessionAuthorityError, type SessionStatus } from './registry.js';
 import type { WorkerAuthorityRuntime } from './runtime.js';
 import { resolveSourceIdentity, type SourceIdentity } from './source-identity.js';
@@ -37,7 +42,12 @@ interface LocalAuthorityProbeDependencies {
   findForeignMetroOrigin?: ForeignMetroOriginScanner;
   deviceExists?: (platform: 'ios' | 'android', deviceId: string) => boolean;
   proofActive?: (runId: string) => boolean;
-  inspectOwner?: typeof inspectSessionOwner;
+  inspectOwner?: (owner: {
+    sessionId: string;
+    pid: number;
+    token: string;
+  }) => ProcessOwnerInspection;
+  probeBirth?: (pid: number) => ProcessBirthProbe;
   captureInstalled?: typeof captureInstalledArtifact;
   captureInstallGeneration?: typeof captureInstallGeneration;
 }
@@ -126,7 +136,8 @@ export function createLocalAuthorityProbe(
       }));
   const sourceResolver = dependencies.resolveSource ?? defaultSource;
   const deviceExists = dependencies.deviceExists ?? deviceExistsOnHost;
-  const inspectOwner = dependencies.inspectOwner ?? inspectSessionOwner;
+  const inspectOwner = dependencies.inspectOwner ?? inspectSessionOwnerAttestation;
+  const probeBirth = dependencies.probeBirth ?? probeProcessBirth;
   const captureInstalled = dependencies.captureInstalled ?? captureInstalledArtifact;
   const captureGeneration = dependencies.captureInstallGeneration ?? captureInstallGeneration;
 
@@ -137,24 +148,48 @@ export function createLocalAuthorityProbe(
         phase === 'preflight' && tool === 'rn_session' && args?.action === 'cancel_handoff'
           ? registry.getHandoffCancellationControllerBinding(session)
           : registry.getControllerBinding(session);
-      const supervisor = inspectOwner({
+      const supervisorOwner = {
         sessionId: controller.sessionId,
         pid: controller.supervisor.pid,
         token: controller.supervisor.token,
-      });
-      const workerBirth =
-        controller.worker.pid === process.pid && controller.worker.token
-          ? readProcessBirth(process.pid)
-          : null;
+      };
+      const supervisor = inspectOwner(supervisorOwner);
+      if (supervisor.status !== 'match') {
+        throw new SessionAuthorityError(
+          'SESSION_OWNER_LOST',
+          supervisor.status === 'unknown'
+            ? 'controller process identity could not be read on a loaded host'
+            : 'controller process identity no longer matches the fenced session',
+          undefined,
+          ownerRefusalDetails(supervisor),
+        );
+      }
       if (
-        supervisor !== 'match' ||
         !controller.worker.instanceId ||
-        !workerBirth ||
-        workerBirth.token !== controller.worker.token
+        controller.worker.pid !== process.pid ||
+        !controller.worker.token
       ) {
         throw new SessionAuthorityError(
           'SESSION_OWNER_LOST',
           'controller process identity no longer matches the fenced session',
+        );
+      }
+      const workerBirth = probeBirth(process.pid);
+      if (workerBirth.status !== 'present' || workerBirth.birth.token !== controller.worker.token) {
+        throw new SessionAuthorityError(
+          'SESSION_OWNER_LOST',
+          workerBirth.status === 'unknown'
+            ? 'worker process identity could not be read on a loaded host'
+            : 'controller process identity no longer matches the fenced session',
+          undefined,
+          workerBirth.status === 'present'
+            ? ownerRefusalDetails({
+                status: 'mismatch',
+                pid: process.pid,
+                expected: controller.worker.token,
+                observed: workerBirth.birth.token,
+              })
+            : processBirthRefusalDetails(workerBirth, process.pid),
         );
       }
       return { axis, identity: identity(controller) };
@@ -223,12 +258,23 @@ export function createLocalAuthorityProbe(
         !Number.isSafeInteger(port) ||
         !Number.isSafeInteger(pid) ||
         !birth ||
-        metroListenerPid(port) !== pid ||
-        inspectSessionOwner({ sessionId: status.sessionId, pid, token: birth }) !== 'match'
+        metroListenerPid(port) !== pid
       ) {
         throw new SessionAuthorityError(
           'METRO_INSTANCE_CHANGED',
           'Metro process identity no longer matches the bound instance',
+        );
+      }
+      const metroOwner = { sessionId: status.sessionId, pid, token: birth };
+      const metroInspection = inspectOwner(metroOwner);
+      if (metroInspection.status !== 'match') {
+        throw new SessionAuthorityError(
+          'METRO_INSTANCE_CHANGED',
+          metroInspection.status === 'unknown'
+            ? 'Metro process identity could not be read on a loaded host'
+            : 'Metro process identity no longer matches the bound instance',
+          undefined,
+          ownerRefusalDetails(metroInspection),
         );
       }
       let statusText: string;
@@ -438,12 +484,23 @@ export function createLocalAuthorityProbe(
         !Number.isSafeInteger(port) ||
         !Number.isSafeInteger(pid) ||
         !processBirth ||
-        !capability ||
-        inspectOwner({ sessionId: status.sessionId, pid, token: processBirth }) !== 'match'
+        !capability
       ) {
         throw new SessionAuthorityError(
           'RUNNER_OWNERSHIP_MISMATCH',
           'runner process identity and endpoint capability no longer match the binding',
+        );
+      }
+      const runnerOwner = { sessionId: status.sessionId, pid, token: processBirth };
+      const runnerInspection = inspectOwner(runnerOwner);
+      if (runnerInspection.status !== 'match') {
+        throw new SessionAuthorityError(
+          'RUNNER_OWNERSHIP_MISMATCH',
+          runnerInspection.status === 'unknown'
+            ? 'runner process identity could not be read on a loaded host'
+            : 'runner process identity and endpoint capability no longer match the binding',
+          undefined,
+          ownerRefusalDetails(runnerInspection),
         );
       }
       const health = await fetchJson(`http://127.0.0.1:${port}/health`, {

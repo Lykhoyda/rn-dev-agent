@@ -43,7 +43,7 @@ import {
   isAmbiguousTransportFailure,
   parseStatusProbeReply,
 } from './transport-recovery.js';
-import { readProcessBirth } from '../session/process-birth.js';
+import { requireProcessBirthAttestation } from '../session/process-owner.js';
 import { openAuthorityStore } from '../session/authority-store.js';
 
 const execFileAsync = promisify(execFile);
@@ -1570,17 +1570,13 @@ async function startAndroidRunnerAttempt(
         provenance,
         ...authority,
       };
-      const processBirth = readProcessBirth(child.pid!);
-      if (!processBirth) {
+      try {
+        state.processBirth = requireProcessBirthAttestation(child.pid!, 'native runner').token;
+      } catch (error) {
         child.kill('SIGTERM');
-        reject(
-          new Error(
-            'PROCESS_BIRTH_UNAVAILABLE: native runner process identity could not be proven',
-          ),
-        );
+        reject(error);
         return;
       }
-      state.processBirth = processBirth.token;
       runnerState = state;
       if (serial) {
         try {

@@ -38,7 +38,12 @@ test('runner authority rejects a dead or PID-reused bound process before health 
   let healthProbed = false;
   const probe = createLocalAuthorityProbe(
     dependencies({
-      inspectOwner: () => 'mismatch',
+      inspectOwner: (owner) => ({
+        status: 'mismatch',
+        pid: owner.pid,
+        expected: owner.token,
+        observed: 'different',
+      }),
       fetchJson: async () => {
         healthProbed = true;
         return {};
@@ -59,6 +64,48 @@ test('runner authority rejects a dead or PID-reused bound process before health 
     (error) => error instanceof SessionAuthorityError && error.code === 'RUNNER_OWNERSHIP_MISMATCH',
   );
   assert.equal(healthProbed, false);
+});
+
+test('controller axis reports unavailable process attestation without changing its refusal code', async () => {
+  const controller = {
+    sessionId: 'session-a',
+    claimEpoch: 4,
+    authorityVersion: 9,
+    supervisor: { pid: 123, token: 'supervisor-birth' },
+    worker: { instanceId: 'worker', pid: process.pid, token: 'worker-birth' },
+  };
+  const probe = createLocalAuthorityProbe(
+    dependencies({
+      runtime: {
+        requireAvailable: () => ({
+          registry: { getControllerBinding: () => controller },
+          session: { sessionId: 'session-a', claimEpoch: 4 },
+        }),
+      },
+      inspectOwner: (owner) => ({
+        status: 'unknown',
+        pid: owner.pid,
+        cause: {
+          pid: owner.pid,
+          step: 'ps',
+          failure: 'timeout',
+          elapsedMs: 2000,
+        },
+      }),
+    }),
+  );
+
+  await assert.rejects(
+    () => probe({ axis: 'C', phase: 'preflight', status: statusWith({}) }),
+    (error) =>
+      error instanceof SessionAuthorityError &&
+      error.code === 'SESSION_OWNER_LOST' &&
+      error.details?.attestation === 'unavailable' &&
+      error.details?.step === 'ps' &&
+      error.details?.failure === 'timeout' &&
+      error.details?.pid === 123 &&
+      error.details?.nextAction?.includes('loaded host'),
+  );
 });
 
 test('runner authority identity excludes mutable health diagnostics and array ordering', async () => {
@@ -88,7 +135,7 @@ test('runner authority identity excludes mutable health diagnostics and array or
   };
   const probe = createLocalAuthorityProbe(
     dependencies({
-      inspectOwner: () => 'match',
+      inspectOwner: (owner) => ({ status: 'match', pid: owner.pid }),
       fetchJson: async () => health,
     }),
   );
@@ -126,7 +173,7 @@ test('runner authority reports wedged health as a typed ownership mismatch', asy
   };
   const probe = createLocalAuthorityProbe(
     dependencies({
-      inspectOwner: () => 'match',
+      inspectOwner: (owner) => ({ status: 'match', pid: owner.pid }),
       fetchJson: async () => ({
         ok: false,
         reason: 'wedged',
@@ -408,7 +455,7 @@ test('controller probe uses the handoff-only lookup solely for cancellation', as
           session: { sessionId: 'session-a', claimEpoch: 4 },
         }),
       },
-      inspectOwner: () => 'match',
+      inspectOwner: (owner) => ({ status: 'match', pid: owner.pid }),
     }),
   );
   const status = statusWith({});

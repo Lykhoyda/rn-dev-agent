@@ -1064,30 +1064,56 @@ function probeProcessBirth(pid, dependencies = {}) {
   return permission === "denied" ? { status: "absent", reason: "foreign" } : probe;
 }
 function probeRecordedProcessBirth(pid, dependencies) {
+  const now = dependencies.now ?? Date.now;
+  let step = "input";
+  let stepStartedAt = now();
+  const start = (nextStep) => {
+    step = nextStep;
+    stepStartedAt = now();
+  };
+  const unknown2 = (failure, failedStep = step) => ({
+    status: "unknown",
+    cause: {
+      pid,
+      step: failedStep,
+      failure,
+      elapsedMs: Math.max(0, now() - stepStartedAt)
+    }
+  });
+  const failureClass = (error2) => {
+    const failure = error2;
+    if (failure.code === "ETIMEDOUT" || failure.killed === true || failure.signal === "SIGTERM") {
+      return "timeout";
+    }
+    return typeof failure.status === "number" || typeof failure.signal === "string" ? "exit" : "read";
+  };
   if (!Number.isSafeInteger(pid) || pid <= 0)
-    return { status: "unknown" };
+    return unknown2("parse");
   const platform = dependencies.platform ?? process.platform;
   const read = dependencies.read ?? ((path) => readFileSync2(path, "utf8"));
   const run = dependencies.run ?? defaultRun;
   const runVerifiedHelper = dependencies.runVerifiedHelper ?? defaultRunVerifiedHelper;
   try {
     if (platform === "darwin") {
+      start("ps");
       const observed = run("/bin/ps", ["-p", String(pid), "-o", "pid=,state="]).trim();
       if (observed.length === 0)
         return { status: "absent" };
       const observedFields = /^(\d+)(?:\s+(\S+))?$/.exec(observed);
       if (!observedFields || Number(observedFields[1]) !== pid)
-        return { status: "unknown" };
+        return unknown2("parse");
       if (observedFields[2]?.startsWith("Z"))
         return { status: "absent" };
+      start("helper");
       const helper = verifyDarwinProcessBirthHelper(dependencies);
       const processInfo = runVerifiedHelper(helper.path, pid, helper.requirement).trim();
       const processMatch = /^(\d+):(\d+):(\d+)$/.exec(processInfo);
       if (!processMatch || Number(processMatch[1]) !== pid)
-        return { status: "unknown" };
+        return unknown2("parse");
+      start("sysctl");
       const bootSession = run("/usr/sbin/sysctl", ["-n", "kern.bootsessionuuid"]).trim();
       if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(bootSession)) {
-        return { status: "unknown" };
+        return unknown2("parse");
       }
       return {
         status: "present",
@@ -1099,44 +1125,50 @@ function probeRecordedProcessBirth(pid, dependencies) {
       };
     }
     if (platform === "linux") {
+      start("proc-boot-id");
       const boot = read("/proc/sys/kernel/random/boot_id").trim();
+      if (!boot)
+        return unknown2("parse");
       let stat2;
+      start("proc-stat");
       try {
         stat2 = read(`/proc/${pid}/stat`).trim();
       } catch (error2) {
-        return error2.code === "ENOENT" ? { status: "absent" } : { status: "unknown" };
+        return error2.code === "ENOENT" ? { status: "absent" } : unknown2(failureClass(error2));
       }
       const commandEnd = stat2.lastIndexOf(")");
       const fields = commandEnd >= 0 ? stat2.slice(commandEnd + 1).trim().split(/\s+/) : [];
       if (fields[0] === "Z")
         return { status: "absent" };
       const started = fields[19];
-      if (!boot || !started || !/^\d+$/.test(started))
-        return { status: "unknown" };
+      if (!started || !/^\d+$/.test(started))
+        return unknown2("parse");
       return {
         status: "present",
         birth: { pid, source: "linux-proc", token: token([platform, boot, started]) }
       };
     }
     if (platform === "win32") {
+      start("powershell");
       const powershell = resolveTrustedSystemExecutable("powershell", platform, dependencies.executableDependencies);
       if (!powershell)
-        return { status: "unknown" };
+        return unknown2("unsupported");
       const script = `$p = Get-Process -Id ${pid} -ErrorAction SilentlyContinue; if ($null -eq $p) { 'ABSENT' } else { $p.StartTime.ToUniversalTime().Ticks }`;
       const started = run(powershell, ["-NoProfile", "-NonInteractive", "-Command", script]).trim();
       if (started === "ABSENT")
         return { status: "absent" };
       if (!/^\d+$/.test(started))
-        return { status: "unknown" };
+        return unknown2("parse");
       return {
         status: "present",
         birth: { pid, source: "windows-powershell", token: token([platform, started]) }
       };
     }
-  } catch {
-    return { status: "unknown" };
+  } catch (error2) {
+    return unknown2(failureClass(error2));
   }
-  return { status: "unknown" };
+  start("platform");
+  return unknown2("unsupported");
 }
 var DARWIN_HELPER_MANIFEST, LINUX_PUBLICATION_HELPER_SHA256, VERIFIED_HELPER_SCRIPT;
 var init_process_birth = __esm({
@@ -1208,37 +1240,197 @@ print -r -- "$result"
   }
 });
 
-// packages/rn-dev-agent-core/dist/session/process-owner.js
-function defaultProcessState(pid) {
+// packages/rn-dev-agent-core/dist/session/authority-store.js
+import { chmodSync as chmodSync2, lstatSync as lstatSync2, mkdirSync as mkdirSync3, statSync as statSync2 } from "node:fs";
+import { createRequire } from "node:module";
+import { dirname as dirname2 } from "node:path";
+function loadAuthoritySqlite() {
   try {
-    process.kill(pid, 0);
-    return "alive";
-  } catch (error2) {
-    const code = error2.code;
-    if (code === "ESRCH")
-      return "dead";
-    if (code === "EPERM")
-      return "alive";
-    return "unknown";
+    const sqlite = require2("node:sqlite");
+    return sqlite.DatabaseSync ?? null;
+  } catch {
+    return null;
   }
 }
-function inspectSessionOwner(owner, dependencies = {}) {
-  const state = (dependencies.processState ?? defaultProcessState)(owner.pid);
-  if (state === "dead")
-    return "mismatch";
-  if (state === "unknown")
-    return "unknown";
-  const observed = (dependencies.probeBirth ?? probeProcessBirth)(owner.pid);
-  if (observed.status === "absent")
-    return "mismatch";
-  if (observed.status === "unknown")
-    return "unknown";
-  return observed.birth.token === owner.token ? "match" : "mismatch";
+function assertPrivateDirectory(path) {
+  mkdirSync3(path, { mode: 448, recursive: true });
+  const link = lstatSync2(path);
+  if (link.isSymbolicLink() || !link.isDirectory()) {
+    throw new Error("authority state root must be a real directory");
+  }
+  const stat2 = statSync2(path);
+  if (typeof process.getuid === "function" && stat2.uid !== process.getuid()) {
+    throw new Error("authority state root is not owned by the current user");
+  }
+  chmodSync2(path, 448);
 }
-var init_process_owner = __esm({
-  "packages/rn-dev-agent-core/dist/session/process-owner.js"() {
+function secureDatabaseFiles(path) {
+  for (const candidate of [path, `${path}-wal`, `${path}-shm`]) {
+    try {
+      const link = lstatSync2(candidate);
+      if (link.isSymbolicLink() || !link.isFile()) {
+        throw new Error("authority database path is not a regular file");
+      }
+      const stat2 = statSync2(candidate);
+      if (typeof process.getuid === "function" && stat2.uid !== process.getuid()) {
+        throw new Error("authority database is not owned by the current user");
+      }
+      chmodSync2(candidate, 384);
+    } catch (error2) {
+      const code = error2.code;
+      if (code !== "ENOENT")
+        throw error2;
+    }
+  }
+}
+function runInitialization(operation) {
+  runWithBusyRetry(operation, INITIALIZATION_TIMEOUT_MS);
+}
+function runWithBusyRetry(operation, timeoutMs = DATABASE_OPERATION_TIMEOUT_MS) {
+  const deadline = Date.now() + timeoutMs;
+  for (; ; ) {
+    try {
+      return operation();
+    } catch (error2) {
+      const code = error2.code;
+      const message = error2 instanceof Error ? error2.message : "";
+      if (code !== "SQLITE_BUSY" && !/database is (?:locked|busy)/i.test(message))
+        throw error2;
+      const remaining = deadline - Date.now();
+      if (remaining <= 0)
+        throw error2;
+      Atomics.wait(INITIALIZATION_WAIT, 0, 0, Math.min(25, remaining));
+    }
+  }
+}
+function retryingDatabase(database) {
+  return {
+    close: () => database.close(),
+    exec: (sql) => runWithBusyRetry(() => database.exec(sql)),
+    prepare: (sql) => {
+      const statement = database.prepare(sql);
+      return {
+        get: (...params) => runWithBusyRetry(() => statement.get(...params)),
+        run: (...params) => runWithBusyRetry(() => statement.run(...params)),
+        all: (...params) => runWithBusyRetry(() => statement.all(...params))
+      };
+    }
+  };
+}
+function openAuthorityStore(path, options = {}) {
+  const ctor = options.sqliteCtor === void 0 ? loadAuthoritySqlite() : options.sqliteCtor;
+  if (!ctor) {
+    throw new AuthorityStoreUnavailableError("node:sqlite could not be loaded by this Node runtime");
+  }
+  let database = null;
+  try {
+    assertPrivateDirectory(dirname2(path));
+    try {
+      const existing = lstatSync2(path);
+      if (existing.isSymbolicLink() || !existing.isFile()) {
+        throw new Error("authority database path is not a regular file");
+      }
+    } catch (error2) {
+      if (error2.code !== "ENOENT")
+        throw error2;
+    }
+    const rawDatabase = new ctor(path);
+    const openedDatabase = retryingDatabase(rawDatabase);
+    database = openedDatabase;
+    secureDatabaseFiles(path);
+    runInitialization(() => openedDatabase.exec(`
+        PRAGMA busy_timeout=50;
+        PRAGMA journal_mode=WAL;
+        CREATE TABLE IF NOT EXISTS authority_meta (
+          key TEXT PRIMARY KEY,
+          value TEXT NOT NULL
+        );
+        INSERT INTO authority_meta(key, value)
+        VALUES ('schema_version', '1')
+        ON CONFLICT(key) DO NOTHING;
+      `));
+    secureDatabaseFiles(path);
+    return {
+      database: openedDatabase,
+      secureFiles: () => secureDatabaseFiles(path),
+      close: () => {
+        let failure;
+        try {
+          secureDatabaseFiles(path);
+        } catch (error2) {
+          failure = error2;
+        }
+        try {
+          openedDatabase.close();
+        } catch (error2) {
+          failure ??= error2;
+        }
+        try {
+          secureDatabaseFiles(path);
+        } catch (error2) {
+          failure ??= error2;
+        }
+        if (failure)
+          throw failure;
+      }
+    };
+  } catch (cause) {
+    try {
+      database?.close();
+    } catch {
+    }
+    throw new AuthorityStoreUnavailableError("authority registry could not be opened", { cause });
+  }
+}
+var require2, INITIALIZATION_WAIT, INITIALIZATION_TIMEOUT_MS, DATABASE_OPERATION_TIMEOUT_MS, AuthorityStoreUnavailableError;
+var init_authority_store = __esm({
+  "packages/rn-dev-agent-core/dist/session/authority-store.js"() {
     "use strict";
-    init_process_birth();
+    require2 = createRequire(import.meta.url);
+    INITIALIZATION_WAIT = new Int32Array(new SharedArrayBuffer(4));
+    INITIALIZATION_TIMEOUT_MS = 1e3;
+    DATABASE_OPERATION_TIMEOUT_MS = 1e3;
+    AuthorityStoreUnavailableError = class extends Error {
+      code = "AUTHORITY_STORE_UNAVAILABLE";
+      constructor(reason, options) {
+        super(reason, options);
+        this.name = "AuthorityStoreUnavailableError";
+      }
+    };
+  }
+});
+
+// packages/rn-dev-agent-core/dist/session/cleanup-identity.js
+function isPositiveSafeInteger(value) {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+}
+function isTcpPort(value) {
+  return isPositiveSafeInteger(value) && value <= 65535;
+}
+function hasCompleteRunnerCleanupIdentity(binding) {
+  const processBirth = String(binding.processBirth ?? "");
+  const instanceId = String(binding.instanceId ?? "");
+  const capability = String(binding.capability ?? "");
+  if (!isPositiveSafeInteger(binding.pid) || !isTcpPort(binding.port) || !processBirth || !instanceId || !capability) {
+    return false;
+  }
+  if (String(binding.platform ?? "") !== "android")
+    return true;
+  return Boolean(String(binding.deviceId ?? ""));
+}
+function hasCompleteRecorderCleanupIdentity(binding) {
+  const script = String(binding.script ?? "");
+  const scope = String(binding.scope ?? "");
+  if (!script || !/^[a-f0-9]{64}$/.test(scope) || binding.port !== void 0 && !isTcpPort(binding.port)) {
+    return false;
+  }
+  if (binding.phase === "starting")
+    return true;
+  return isPositiveSafeInteger(binding.pid) && Boolean(String(binding.processBirth ?? ""));
+}
+var init_cleanup_identity = __esm({
+  "packages/rn-dev-agent-core/dist/session/cleanup-identity.js"() {
+    "use strict";
   }
 });
 
@@ -8570,8 +8762,8 @@ var require_dist = __commonJS({
 });
 
 // packages/rn-dev-agent-core/dist/nav-graph/storage.js
-import { readFileSync as readFileSync3, writeFileSync as writeFileSync2, existsSync as existsSync5, renameSync, readdirSync, lstatSync as lstatSync2, mkdirSync as mkdirSync3, realpathSync as realpathSync2 } from "node:fs";
-import { join as join4, dirname as dirname2 } from "node:path";
+import { readFileSync as readFileSync3, writeFileSync as writeFileSync2, existsSync as existsSync5, renameSync, readdirSync, lstatSync as lstatSync3, mkdirSync as mkdirSync4, realpathSync as realpathSync2 } from "node:fs";
+import { join as join4, dirname as dirname3 } from "node:path";
 function isRnProject(dir) {
   const pkgPath2 = join4(dir, "package.json");
   if (!existsSync5(pkgPath2))
@@ -8600,7 +8792,7 @@ function scanForRnProject(rootDir, maxDepth) {
       continue;
     const full = join4(rootDir, name);
     try {
-      const stat2 = lstatSync2(full);
+      const stat2 = lstatSync3(full);
       if (!(stat2.isDirectory() || stat2.isSymbolicLink()))
         continue;
     } catch {
@@ -8635,7 +8827,7 @@ function collectRnProjects(rootDir, maxDepth, out) {
       continue;
     const full = join4(rootDir, name);
     try {
-      const stat2 = lstatSync2(full);
+      const stat2 = lstatSync3(full);
       if (!(stat2.isDirectory() || stat2.isSymbolicLink()))
         continue;
     } catch {
@@ -8796,7 +8988,7 @@ function readGraph(projectRoot) {
 }
 function writeGraph(projectRoot, graph) {
   const filePath = getGraphPath(projectRoot);
-  mkdirSync3(dirname2(filePath), { recursive: true });
+  mkdirSync4(dirname3(filePath), { recursive: true });
   const tmpPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
   const yaml2 = (0, import_yaml.stringify)({ nav_graph: graph }, { lineWidth: 120 });
   writeFileSync2(tmpPath, yaml2, "utf-8");
@@ -9188,6 +9380,3326 @@ var init_metro_cwd = __esm({
   }
 });
 
+// packages/rn-dev-agent-core/dist/session/metro-binding.js
+import { execFileSync as execFileSync4 } from "node:child_process";
+function resolveMetroListenerExecutable(platform, dependencies = {}) {
+  const executable = platform === "win32" ? "powershell" : platform === "linux" ? "ss" : platform === "darwin" ? "lsof" : null;
+  return executable ? resolveTrustedSystemExecutable(executable, platform, dependencies) : null;
+}
+function numericListener(output, emptyStatus) {
+  const value = String(output).trim();
+  if (!value)
+    return { status: emptyStatus };
+  const candidates = value.split(/\s+/);
+  if (candidates.some((candidate) => !/^\d+$/.test(candidate))) {
+    return { status: "unknown" };
+  }
+  const pids = new Set(candidates.map(Number));
+  const [pid] = pids;
+  return pids.size === 1 && Number.isSafeInteger(pid) && pid > 0 ? { status: "listening", pid } : { status: "unknown" };
+}
+function probeMetroListener(port, platform = process.platform, execute2 = execFileSync4, executableDependencies = {}) {
+  const executable = resolveMetroListenerExecutable(platform, executableDependencies);
+  if (!executable)
+    return { status: "unknown" };
+  try {
+    if (platform === "win32") {
+      const output = execute2(executable, [
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        `$connections = @(Get-NetTCPConnection -State Listen -ErrorAction Stop | Where-Object LocalPort -eq ${port}); if ($connections.Count -eq 0) { 'ABSENT' } else { $connections.OwningProcess | Sort-Object -Unique }`
+      ], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 2e3 });
+      return String(output).trim() === "ABSENT" ? { status: "absent" } : numericListener(output, "unknown");
+    }
+    if (platform === "linux") {
+      const output = execute2(executable, ["-H", "-ltnp", `sport = :${port}`], {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+        timeout: 2e3
+      });
+      const value = String(output).trim();
+      if (!value)
+        return { status: "absent" };
+      const pids = new Set([...value.matchAll(/pid=(\d+)/g)].map((match) => Number(match[1])));
+      const [pid] = pids;
+      return pids.size === 1 && Number.isSafeInteger(pid) && pid > 0 ? { status: "listening", pid } : { status: "unknown" };
+    }
+    if (platform === "darwin") {
+      const output = execute2(executable, ["-ti", `tcp:${port}`, "-sTCP:LISTEN"], {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+        timeout: 2e3
+      });
+      return numericListener(output, "unknown");
+    }
+    return { status: "unknown" };
+  } catch (error2) {
+    const failure = error2;
+    return platform === "darwin" && failure.status === 1 && !String(failure.stdout ?? "").trim() && !String(failure.stderr ?? "").trim() ? { status: "absent" } : { status: "unknown" };
+  }
+}
+function metroListenerPid(port, platform = process.platform, execute2 = execFileSync4, executableDependencies = {}) {
+  const probe = probeMetroListener(port, platform, execute2, executableDependencies);
+  return probe.status === "listening" ? probe.pid : null;
+}
+async function fetchMetroStatus(port) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 2e3);
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/status`, {
+      signal: controller.signal
+    });
+    if (!response.ok)
+      throw new Error(`HTTP ${response.status}`);
+    return await response.text();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+async function captureMetroBinding(input, dependencies = {}) {
+  if (!Number.isSafeInteger(input.port) || input.port < 1 || input.port > 65535 || !Number.isSafeInteger(input.pid) || input.pid < 1 || !input.instanceId || !Number.isSafeInteger(input.buildGeneration) || input.buildGeneration < 1) {
+    throw new Error("METRO_AUTHORITY_MISMATCH: Metro binding is incomplete");
+  }
+  const listenerPid = (dependencies.listenerPid ?? metroListenerPid)(input.port);
+  if (listenerPid !== input.pid) {
+    throw new Error("METRO_AUTHORITY_MISMATCH: Metro process does not own the claimed listener");
+  }
+  const probeBirth = dependencies.probeBirth ?? (dependencies.readBirth ? (pid) => processBirthProbeFromReader(pid, dependencies.readBirth) : probeProcessBirth);
+  const birth = requireProcessBirthAttestation(input.pid, "Metro", probeBirth);
+  const status = await (dependencies.fetchStatus ?? fetchMetroStatus)(input.port);
+  if (!status.includes("packager-status:running")) {
+    throw new Error("METRO_AUTHORITY_MISMATCH: claimed Metro endpoint is not running");
+  }
+  const servingRoot = dependencies.servingRoot ? dependencies.servingRoot(input.port) : cwdForProcess(input.pid);
+  if (!servingRoot || !pathIsWithinRoot(servingRoot, input.sourceRoot)) {
+    throw new Error("METRO_AUTHORITY_MISMATCH: Metro serving root does not match the source worktree");
+  }
+  return {
+    port: input.port,
+    pid: input.pid,
+    birth: birth.token,
+    instanceId: input.instanceId,
+    servingRoot,
+    buildGeneration: input.buildGeneration
+  };
+}
+var init_metro_binding = __esm({
+  "packages/rn-dev-agent-core/dist/session/metro-binding.js"() {
+    "use strict";
+    init_metro_cwd();
+    init_trusted_system_executable();
+    init_process_birth();
+    init_process_owner();
+    init_trusted_system_executable();
+  }
+});
+
+// packages/rn-dev-agent-core/dist/session/recovery-remedy.js
+function sessionRecoveryRemedy(lead) {
+  return `${lead} Interactive: reconnect the transport with /mcp. Headless: run ${HEADLESS_SESSION_RECOVERY_COMMAND} from the app root. Both run the same proven-dead startup cleanup and neither releases a live or unprovable owner. ${SESSION_RECOVERY_DOCS}.`;
+}
+function sessionOwnerInspectionRemedy(lead) {
+  return `${lead} ${HEADLESS_SESSION_REPORT_COMMAND} from the app root names the owning app root and session; close that session, then run ${HEADLESS_SESSION_RECOVERY_COMMAND}. A live or unprovable owner is never force-released. ${SESSION_RECOVERY_DOCS}.`;
+}
+function sessionOtherRootRecoveryRemedy(lead) {
+  return `${lead} ${HEADLESS_SESSION_REPORT_COMMAND} names the owning app root and session; run ${HEADLESS_SESSION_RECOVERY_COMMAND} from that app root \u2014 this one can never release it \u2014 or work in a separate worktree. Nothing is force-released either way. ${SESSION_RECOVERY_DOCS}.`;
+}
+function sessionCleanupObligationRemedy(lead) {
+  return `${lead} Read the outstanding obligation with ${HEADLESS_SESSION_REPORT_COMMAND} from the app root, clear what it names, then run ${HEADLESS_SESSION_RECOVERY_COMMAND}; interactive clients can reconnect with /mcp instead. Neither releases a live or unprovable owner. ${SESSION_RECOVERY_DOCS}.`;
+}
+function sessionDeclaredSourceRemedy(lead) {
+  return `${lead} Restore the declared manifests that produced the prior identity, then run ${HEADLESS_SESSION_RECOVERY_COMMAND} from this app root or reconnect the transport with /mcp, and reapply the manifest changes afterwards; otherwise use a separate worktree. ${SESSION_RECOVERY_DOCS}.`;
+}
+var SESSION_DOCTOR, HEADLESS_SESSION_RECOVERY_COMMAND, HEADLESS_SESSION_REPORT_COMMAND, SESSION_RECOVERY_DOCS;
+var init_recovery_remedy = __esm({
+  "packages/rn-dev-agent-core/dist/session/recovery-remedy.js"() {
+    "use strict";
+    SESSION_DOCTOR = '"${CLAUDE_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}/rn-dev-agent-core/dist/session-doctor.js"';
+    HEADLESS_SESSION_RECOVERY_COMMAND = `node ${SESSION_DOCTOR} repair`;
+    HEADLESS_SESSION_REPORT_COMMAND = `node ${SESSION_DOCTOR} report`;
+    SESSION_RECOVERY_DOCS = 'docs: session-authority "Recovering a wedged source root"';
+  }
+});
+
+// packages/rn-dev-agent-core/dist/session/registry.js
+import { createHash as createHash3, randomBytes, timingSafeEqual } from "node:crypto";
+import { AsyncLocalStorage } from "node:async_hooks";
+function referencesMetroEvidenceSocket(value, path) {
+  if (Array.isArray(value)) {
+    return value.some((entry) => referencesMetroEvidenceSocket(entry, path));
+  }
+  if (!value || typeof value !== "object")
+    return false;
+  const record2 = value;
+  if (record2.runtimeEvidenceSocket === path)
+    return true;
+  return Object.values(record2).some((entry) => referencesMetroEvidenceSocket(entry, path));
+}
+function authorityRemedyNextAction(code) {
+  return errorNextActions[code];
+}
+function shortAuthorityIdentity(value) {
+  return createHash3("sha256").update(JSON.stringify(value)).digest("hex").slice(0, 16);
+}
+function authorityErrorMeta(error2) {
+  return {
+    ...error2.getSupplementalMeta(),
+    ...error2.details,
+    axis: error2.details?.axis ?? errorAxes[error2.code],
+    holder: error2.holder ? {
+      sessionId: error2.holder.sessionId.slice(0, 12),
+      claimEpoch: error2.holder.claimEpoch
+    } : void 0,
+    nextAction: error2.details?.nextAction ?? errorNextActions[error2.code] ?? 'Run rn_session with action "status" and repair the named authority axis.'
+  };
+}
+function asSession(row) {
+  return row ? row : null;
+}
+function asClaim(row) {
+  return row ? row : null;
+}
+function claimConflict(claim) {
+  const code = conflictCodes[claim.resource_type] ?? "RESOURCE_CLAIM_CONFLICT";
+  return new SessionAuthorityError(code, `${claim.resource_type}:${claim.resource_key} is held`, {
+    sessionId: claim.session_id,
+    claimEpoch: claim.claim_epoch
+  });
+}
+function isOperationalState(state) {
+  return (/* @__PURE__ */ new Set([
+    "active",
+    "source_bound",
+    "metro_bound",
+    "device_claimed",
+    "device_bound",
+    "runtime_bound",
+    "ready"
+  ])).has(state);
+}
+function isFenceableState(state) {
+  return isOperationalState(state) || state === "handoff";
+}
+function readSourceAppRoot(sourceJson) {
+  try {
+    const source = JSON.parse(sourceJson);
+    return typeof source.appRoot === "string" ? source.appRoot : void 0;
+  } catch {
+    return void 0;
+  }
+}
+function readStartupCleanupBlocker(bindingsJson) {
+  let journal;
+  try {
+    const bindings = JSON.parse(bindingsJson);
+    const value = bindings.startupCleanup;
+    journal = value && typeof value === "object" ? value : void 0;
+  } catch {
+    return void 0;
+  }
+  if (!journal || typeof journal.finishedAt === "number")
+    return void 0;
+  const refusal = journal.refusal;
+  if (!refusal || typeof refusal !== "object")
+    return void 0;
+  const record2 = refusal;
+  if (typeof record2.code !== "string" || typeof record2.reason !== "string")
+    return void 0;
+  return {
+    code: record2.code,
+    reason: record2.reason,
+    ...typeof record2.nextAction === "string" ? { nextAction: record2.nextAction } : {}
+  };
+}
+function bindingsRunnerPresent(bindingsJson) {
+  const bindings = JSON.parse(bindingsJson);
+  return Boolean(bindings.runner && typeof bindings.runner === "object");
+}
+function managedMetroHandoffReservation(bindings) {
+  const value = bindings.managedMetroHandoffReservation;
+  if (value === null || value === void 0)
+    return null;
+  if (typeof value !== "object" || typeof value.handoffId !== "string" || typeof value.sourceClaimEpoch !== "number" || typeof value.targetSessionId !== "string" || typeof value.targetClaimEpoch !== "number" || typeof value.targetInstance !== "string" || !["shutdown_reserved", "shutdown_completed"].includes(String(value.phase)) || typeof value.metro !== "object" || value.metro === null || typeof value.metro.sourceSessionId !== "string") {
+    throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "managed Metro handoff reservation is malformed");
+  }
+  return value;
+}
+function openSessionRegistry(path, dependencies) {
+  const store = openAuthorityStore(path, { sqliteCtor: dependencies.sqliteCtor });
+  try {
+    return new SessionRegistry(store.database, store.close, store.secureFiles, dependencies);
+  } catch (error2) {
+    store.close();
+    throw error2;
+  }
+}
+var OWNER_IDENTITY_REFUSAL_REASONS, INITIALIZATION_WAIT2, AUTHORITY_REGISTRY_SCHEMA_VERSION, SessionAuthorityError, RECOVERY_HANDLE_TTL_MS, RECOVERY_HANDLE_RENEW_MS, errorAxes, errorNextActions, conflictCodes, SessionRegistry;
+var init_registry = __esm({
+  "packages/rn-dev-agent-core/dist/session/registry.js"() {
+    "use strict";
+    init_authority_store();
+    init_cleanup_identity();
+    init_declared_source_contract();
+    init_metro_binding();
+    init_recovery_remedy();
+    OWNER_IDENTITY_REFUSAL_REASONS = {
+      sourceOwnerLive: "the same-root owner is live; a live owner is never released",
+      sourceOwnerUnprovable: "the same-root owner identity could not be proven, so it is treated as live",
+      leaseOwnerUnprovable: "expired lease owner identity could not be proven"
+    };
+    INITIALIZATION_WAIT2 = new Int32Array(new SharedArrayBuffer(4));
+    AUTHORITY_REGISTRY_SCHEMA_VERSION = 4;
+    SessionAuthorityError = class extends Error {
+      code;
+      holder;
+      supplementalMeta;
+      details;
+      constructor(code, message, holder, details) {
+        super(`${code}: ${message}`);
+        this.name = "SessionAuthorityError";
+        this.code = code;
+        this.holder = holder;
+        this.details = details;
+      }
+      attachMeta(meta) {
+        this.supplementalMeta = { ...this.supplementalMeta, ...meta };
+      }
+      getSupplementalMeta() {
+        return { ...this.supplementalMeta };
+      }
+    };
+    RECOVERY_HANDLE_TTL_MS = 5 * 6e4;
+    RECOVERY_HANDLE_RENEW_MS = 6e4;
+    errorAxes = {
+      SESSION_AUTHORITY_REQUIRED: "C",
+      SESSION_OWNER_LOST: "C",
+      OPERATION_ALREADY_IN_PROGRESS: "C",
+      SOURCE_WORKTREE_MISMATCH: "S",
+      SOURCE_ROOT_DIVERGENCE: "S",
+      SOURCE_REVISION_NOT_BUNDLED: "S",
+      NON_GIT_MANIFEST_REQUIRED: "S",
+      APP_INSTALL_IDENTITY_CHANGED: "I",
+      METRO_PORT_CLAIM_CONFLICT: "M",
+      PORT_OCCUPIED_UNOWNED: "M",
+      METRO_AUTHORITY_MISMATCH: "M",
+      METRO_INSTANCE_CHANGED: "M",
+      METRO_ORIGIN_MISMATCH: "A",
+      BUNDLE_HANDSHAKE_UNAVAILABLE: "B",
+      BUNDLE_IDENTITY_MISMATCH: "B",
+      CDP_TARGET_AUTHORITY_MISMATCH: "B",
+      TARGET_CLAIM_CONFLICT: "B",
+      DEVICE_CLAIM_CONFLICT: "D",
+      DEVICE_DISCOVERY_UNAVAILABLE: "D",
+      DEVICE_NOT_FOUND: "D",
+      DEVICE_RECEIPT_INCOMPATIBLE: "D",
+      DEVICE_AUTHORITY_MISMATCH: "D",
+      PLATFORM_AUTHORITY_MISMATCH: "D",
+      RUNNER_OWNERSHIP_MISMATCH: "R",
+      RUNNER_ADOPTION_REQUIRED: "R",
+      AUTOMATION_CLEANUP_UNPROVEN: "R",
+      OBSERVE_AUTHORITY_MISMATCH: "O",
+      PROOF_AUTHORITY_MISMATCH: "P"
+    };
+    errorNextActions = {
+      NON_GIT_MANIFEST_REQUIRED: NON_GIT_DECLARATION_NEXT_ACTION,
+      // GH #741: a released/stale runner axis is invisible to a status read — only
+      // re-opening the device snapshot restarts and rebinds the interaction runner.
+      RUNNER_OWNERSHIP_MISMATCH: 'Re-open the device with device_snapshot action "open" (same platform, deviceId, and appId) to restart and rebind the interaction runner; rn_session "status" only reports state and cannot rebind it.'
+    };
+    conflictCodes = {
+      device: "DEVICE_CLAIM_CONFLICT",
+      "device-receipt": "DEVICE_CLAIM_CONFLICT",
+      target: "TARGET_CLAIM_CONFLICT",
+      "metro-port": "METRO_PORT_CLAIM_CONFLICT",
+      "observe-port": "OBSERVE_PORT_CLAIM_CONFLICT",
+      runner: "RUNNER_CLAIM_CONFLICT",
+      "runner-receipt": "RUNNER_CLAIM_CONFLICT"
+    };
+    SessionRegistry = class {
+      #database;
+      #close;
+      #secureFiles;
+      #now;
+      #ownerStatus;
+      #listenerStatus;
+      #leaseMs;
+      #operationContext = new AsyncLocalStorage();
+      #pendingPlatformReceipts = /* @__PURE__ */ new Map();
+      constructor(database, close, secureFiles, dependencies) {
+        this.#database = database;
+        this.#close = close;
+        this.#secureFiles = secureFiles;
+        this.#now = dependencies.now ?? Date.now;
+        this.#ownerStatus = dependencies.ownerStatus;
+        this.#listenerStatus = dependencies.listenerStatus ?? ((port) => probeMetroListener(port).status);
+        this.#leaseMs = dependencies.leaseMs ?? 3e4;
+        this.#initializeWithRetry();
+      }
+      close() {
+        this.#close();
+      }
+      runWithOperation(operation, callback) {
+        return this.#operationContext.run(operation, callback);
+      }
+      currentOperation() {
+        const operation = this.#operationContext.getStore();
+        if (!operation)
+          return void 0;
+        const session2 = asSession(this.#database.prepare(`SELECT state, claim_epoch, authority_version
+           FROM sessions WHERE session_id = ?`).get(operation.sessionId));
+        const active = this.#database.prepare(`SELECT operation_id FROM operations
+         WHERE operation_id = ? AND session_id = ? AND claim_epoch = ?
+           AND authority_version = ?`).get(operation.operationId, operation.sessionId, operation.claimEpoch, operation.authorityVersion);
+        return session2 && isFenceableState(session2.state) && session2.claim_epoch === operation.claimEpoch && session2.authority_version === operation.authorityVersion && active ? operation : void 0;
+      }
+      hasActiveBundleOperation(session2) {
+        return Boolean(this.#database.prepare(`SELECT operation_id FROM operations
+           WHERE session_id = ? AND claim_epoch = ? AND instr(profile, 'B') > 0
+           LIMIT 1`).get(session2.sessionId, session2.claimEpoch));
+      }
+      operationHasAxis(operation, axis) {
+        this.verifyOperation(operation);
+        const pendingAxis = `~${axis}`;
+        return Boolean(this.#database.prepare(`SELECT operation_id FROM operations
+           WHERE operation_id = ? AND session_id = ? AND claim_epoch = ?
+             AND authority_version = ?
+             AND instr(replace(profile, ?, ''), ?) > 0`).get(operation.operationId, operation.sessionId, operation.claimEpoch, operation.authorityVersion, pendingAxis, axis));
+      }
+      beginOperationAxisAdmission(operation, axis) {
+        const pendingAxis = `~${axis}`;
+        this.#transaction(() => {
+          this.verifyOperation(operation);
+          this.#database.prepare(`UPDATE operations
+           SET profile = CASE
+             WHEN instr(replace(profile, ?, ''), ?) > 0 OR instr(profile, ?) > 0 THEN profile
+             ELSE profile || ?
+           END
+           WHERE operation_id = ? AND session_id = ? AND claim_epoch = ?
+             AND authority_version = ?`).run(pendingAxis, axis, pendingAxis, pendingAxis, operation.operationId, operation.sessionId, operation.claimEpoch, operation.authorityVersion);
+        });
+      }
+      completeOperationAxisAdmission(operation, axis, admitted) {
+        const pendingAxis = `~${axis}`;
+        this.#transaction(() => {
+          this.verifyOperation(operation);
+          this.#database.prepare(`UPDATE operations
+           SET profile = CASE
+             WHEN ? = 0 THEN replace(profile, ?, '')
+             WHEN instr(replace(profile, ?, ''), ?) > 0 THEN replace(profile, ?, '')
+             ELSE replace(profile, ?, '') || ?
+           END
+           WHERE operation_id = ? AND session_id = ? AND claim_epoch = ?
+             AND authority_version = ?`).run(admitted ? 1 : 0, pendingAxis, pendingAxis, axis, pendingAxis, pendingAxis, axis, operation.operationId, operation.sessionId, operation.claimEpoch, operation.authorityVersion);
+        });
+      }
+      createSession(input) {
+        const now = this.#now();
+        this.#transaction(() => {
+          this.#discardAbsentBlockedContenders(input);
+          this.#database.prepare(`INSERT INTO sessions(
+            session_id, source_key, worktree_key, app_root_key, state,
+            claim_epoch, authority_version, supervisor_pid, supervisor_birth,
+            worker_instance, worker_pid, worker_birth, heartbeat_ms, lease_until_ms,
+            source_json, bindings_json, created_ms, updated_ms
+          ) VALUES (?, ?, ?, ?, 'active', 1, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(input.sessionId, input.sourceKey, input.worktreeKey, input.appRootKey, input.supervisor.pid, input.supervisor.token, input.worker?.instanceId ?? null, input.worker?.pid ?? null, input.worker?.token ?? null, now, now + this.#leaseMs, JSON.stringify(input.source ?? {}), JSON.stringify(input.bindings ?? {}), now, now);
+        });
+        return { sessionId: input.sessionId, claimEpoch: 1 };
+      }
+      claimResources(session2, resources) {
+        const unique = new Map(resources.map((resource) => [`${resource.type}\0${resource.key}`, resource]));
+        if (unique.size !== resources.length) {
+          throw new SessionAuthorityError("DUPLICATE_RESOURCE_CLAIM", "claim set contains duplicates");
+        }
+        const probes = this.#probeClaimOwners(session2, resources);
+        const now = this.#now();
+        return this.#transaction(() => {
+          const owner = this.#requireSession(session2);
+          const bindings = JSON.parse(owner.bindings_json);
+          if (resources.some((resource) => resource.type === "device")) {
+            this.#assertNoStaleDeviceCleanup(bindings);
+          }
+          this.#assertClaimsAvailable(session2, resources, probes, now);
+          const leaseUntil = now + this.#leaseMs;
+          for (const resource of resources) {
+            this.#database.prepare(`INSERT INTO claims(
+              resource_type, resource_key, session_id, claim_epoch, lease_until_ms
+            ) VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(resource_type, resource_key) DO UPDATE SET
+              session_id = excluded.session_id,
+              claim_epoch = excluded.claim_epoch,
+              lease_until_ms = excluded.lease_until_ms`).run(resource.type, resource.key, session2.sessionId, session2.claimEpoch, leaseUntil);
+          }
+          this.#database.prepare(`UPDATE sessions
+           SET authority_version = authority_version + 1, updated_ms = ?
+           WHERE session_id = ? AND claim_epoch = ?`).run(now, owner.session_id, owner.claim_epoch);
+          this.#advanceActiveOperationFence(session2, owner.authority_version, owner.authority_version + 1);
+          return session2;
+        });
+      }
+      releaseResources(session2, resources) {
+        const now = this.#now();
+        this.#transaction(() => {
+          const current = this.#requireSession(session2);
+          for (const resource of resources) {
+            if (resource.type === "runner" || resource.type === "device") {
+              const rows = this.#database.prepare(`SELECT platform, receipt_json FROM platform_authority_receipts
+               WHERE session_id = ? AND claim_epoch = ?`).all(session2.sessionId, session2.claimEpoch);
+              for (const row of rows) {
+                const persisted = JSON.parse(row.receipt_json);
+                const receipt2 = persisted.receipt && typeof persisted.receipt === "object" ? persisted.receipt : persisted;
+                if (resource.type === "runner" && receipt2.runnerClaim === resource.key || resource.type === "device" && receipt2.deviceClaim === resource.key) {
+                  this.#invalidatePlatformReceipt(session2, row.platform);
+                }
+              }
+            }
+            this.#database.prepare(`DELETE FROM claims
+             WHERE resource_type = ? AND resource_key = ?
+               AND session_id = ? AND claim_epoch = ?`).run(resource.type, resource.key, session2.sessionId, session2.claimEpoch);
+          }
+          this.#database.prepare(`UPDATE sessions SET authority_version = authority_version + 1, updated_ms = ?
+           WHERE session_id = ? AND claim_epoch = ?`).run(now, session2.sessionId, session2.claimEpoch);
+          this.#advanceActiveOperationFence(session2, current.authority_version, current.authority_version + 1);
+        });
+      }
+      async claimResourcesWithRetry(session2, resources, options = {}) {
+        return this.#retry(() => this.claimResources(session2, resources), options.timeoutMs ?? 1e3, options.retryDelayMs ?? 5);
+      }
+      renewSession(session2) {
+        const now = this.#now();
+        this.#transaction(() => {
+          this.#requireSession(session2);
+          const leaseUntil = now + this.#leaseMs;
+          this.#database.prepare(`UPDATE sessions
+           SET heartbeat_ms = ?, lease_until_ms = ?, updated_ms = ?
+           WHERE session_id = ? AND claim_epoch = ?`).run(now, leaseUntil, now, session2.sessionId, session2.claimEpoch);
+          this.#database.prepare(`UPDATE claims SET lease_until_ms = ?
+           WHERE session_id = ? AND claim_epoch = ?`).run(leaseUntil, session2.sessionId, session2.claimEpoch);
+        });
+      }
+      async renewSessionWithRetry(session2, options = {}) {
+        return this.#retry(() => this.renewSession(session2), options.timeoutMs ?? 1e3, options.retryDelayMs ?? 5);
+      }
+      bindWorker(session2, worker) {
+        const now = this.#now();
+        this.#transaction(() => {
+          this.#requireSession(session2);
+          this.#database.prepare("DELETE FROM operations WHERE session_id = ? AND claim_epoch = ?").run(session2.sessionId, session2.claimEpoch);
+          this.#database.prepare(`UPDATE sessions
+           SET worker_instance = ?, worker_pid = ?, worker_birth = ?,
+               authority_version = authority_version + 1, updated_ms = ?
+           WHERE session_id = ? AND claim_epoch = ?`).run(worker.instanceId, worker.pid, worker.token, now, session2.sessionId, session2.claimEpoch);
+        });
+      }
+      bindRecoveryWorker(session2, worker, capability) {
+        const now = this.#now();
+        this.#transaction(() => {
+          const row = this.#requireRecoverableSession(session2);
+          const bindings = JSON.parse(row.bindings_json);
+          const expected = Buffer.from(String(bindings.recoveryCapabilityHash ?? ""), "hex");
+          const actual = createHash3("sha256").update(capability).digest();
+          if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) {
+            throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "blocked recovery capability is invalid");
+          }
+          const pendingHandoffs = this.#database.prepare(`SELECT handoff.handoff_id, handoff.claim_epoch, handoff.target_instance,
+                  donor.session_id, donor.claim_epoch AS donor_claim_epoch,
+                  donor.bindings_json
+           FROM handoffs handoff
+           JOIN sessions donor ON donor.session_id = handoff.session_id
+           WHERE handoff.consumed_ms IS NULL
+             AND donor.state = 'handoff'
+             AND donor.source_key = ?
+             AND donor.worktree_key = ?
+             AND donor.app_root_key = ?`).all(row.source_key, row.worktree_key, row.app_root_key);
+          const adoptionRequired = bindings.adoptionRequired;
+          const rotations = pendingHandoffs.flatMap((handoff) => {
+            const donorBindings = JSON.parse(handoff.bindings_json);
+            const reservation = managedMetroHandoffReservation(donorBindings);
+            if (!reservation)
+              return [];
+            if (reservation.handoffId !== handoff.handoff_id || reservation.sourceClaimEpoch !== handoff.claim_epoch || reservation.sourceClaimEpoch !== handoff.donor_claim_epoch || reservation.metro.sourceSessionId !== handoff.session_id) {
+              throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "managed Metro handoff reservation no longer matches the recovery worker fence");
+            }
+            if (reservation.targetSessionId !== session2.sessionId || reservation.targetClaimEpoch !== session2.claimEpoch) {
+              return [];
+            }
+            if (reservation.targetInstance !== row.worker_instance || handoff.target_instance !== row.worker_instance) {
+              throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "managed Metro handoff reservation no longer matches the recovery worker fence");
+            }
+            return [{ handoff, donorBindings, reservation }];
+          });
+          if (rotations.length > 1) {
+            throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "multiple managed Metro handoffs target the same recovery session");
+          }
+          const rotation = rotations[0];
+          if (rotation) {
+            const rotatedReservation = {
+              ...rotation.reservation,
+              targetSessionId: session2.sessionId,
+              targetClaimEpoch: session2.claimEpoch,
+              targetInstance: worker.instanceId
+            };
+            const handoffChanged = this.#database.prepare(`UPDATE handoffs SET target_instance = ?
+             WHERE handoff_id = ? AND target_instance = ? AND consumed_ms IS NULL`).run(worker.instanceId, rotation.handoff.handoff_id, rotation.reservation.targetInstance);
+            if (handoffChanged.changes !== 1) {
+              throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "managed Metro handoff target changed during recovery worker rotation");
+            }
+            const donorChanged = this.#database.prepare(`UPDATE sessions
+             SET bindings_json = ?, authority_version = authority_version + 1, updated_ms = ?
+             WHERE session_id = ? AND claim_epoch = ? AND state = 'handoff'`).run(JSON.stringify({
+              ...rotation.donorBindings,
+              managedMetroHandoffReservation: rotatedReservation
+            }), now, rotation.handoff.session_id, rotation.handoff.donor_claim_epoch);
+            if (donorChanged.changes !== 1) {
+              throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "managed Metro donor authority changed during recovery worker rotation");
+            }
+          }
+          const grouped = JSON.parse(row.source_json).model === "grouped-v1";
+          const expiresMs = now + RECOVERY_HANDLE_TTL_MS;
+          const priorHandles = bindings.recoveryHandles;
+          const resumableAdoptStale = row.state === "handoff_cleanup" && priorHandles?.adoptStale && typeof priorHandles.adoptStale === "object" ? priorHandles.adoptStale : void 0;
+          const reboundAdoptStale = resumableAdoptStale ? {
+            ...resumableAdoptStale,
+            previous: typeof resumableAdoptStale.token === "string" && typeof resumableAdoptStale.expiresMs === "number" && resumableAdoptStale.expiresMs >= now ? {
+              token: resumableAdoptStale.token,
+              expiresMs: resumableAdoptStale.expiresMs
+            } : void 0,
+            token: randomBytes(32).toString("base64url"),
+            expiresMs
+          } : void 0;
+          const recoveryHandles = {
+            handoffRecipient: {
+              token: randomBytes(32).toString("base64url"),
+              expiresMs,
+              workerInstance: worker.instanceId
+            },
+            ...typeof adoptionRequired?.sessionId === "string" ? {
+              adoptStale: {
+                token: randomBytes(32).toString("base64url"),
+                expiresMs,
+                priorSessionId: adoptionRequired.sessionId,
+                priorClaimEpoch: adoptionRequired.claimEpoch
+              }
+            } : reboundAdoptStale ? { adoptStale: reboundAdoptStale } : {}
+          };
+          this.#database.prepare("DELETE FROM operations WHERE session_id = ? AND claim_epoch = ?").run(session2.sessionId, session2.claimEpoch);
+          this.#database.prepare(`UPDATE sessions
+           SET worker_instance = ?, worker_pid = ?, worker_birth = ?,
+               bindings_json = ?, authority_version = authority_version + 1, updated_ms = ?
+           WHERE session_id = ? AND claim_epoch = ?
+             AND state IN ('blocked', 'handoff_cleanup')`).run(worker.instanceId, worker.pid, worker.token, grouped ? JSON.stringify(bindings) : JSON.stringify({ ...bindings, recoveryHandles }), now, session2.sessionId, session2.claimEpoch);
+        });
+      }
+      /**
+       * GH #672: rotate a recovery handle that is expired or about to expire, so `status`
+       * can never advertise a token `validateStaleAdoption` will refuse. Capability- and
+       * worker-bound, re-reads durable state, and leaves a still-fresh handle untouched.
+       * Returns whether anything rotated.
+       */
+      refreshRecoveryHandles(session2, worker, capability) {
+        const now = this.#now();
+        return this.#transaction(() => {
+          const row = this.#requireRecoverableSession(session2);
+          const bindings = JSON.parse(row.bindings_json);
+          const expected = Buffer.from(String(bindings.recoveryCapabilityHash ?? ""), "hex");
+          const actual = createHash3("sha256").update(capability).digest();
+          if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) {
+            throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "blocked recovery capability is invalid");
+          }
+          if (row.worker_instance !== worker.instanceId) {
+            throw new SessionAuthorityError("HANDOFF_TARGET_MISMATCH", "recovery handle refresh is not owned by this recovery worker");
+          }
+          const handles = bindings.recoveryHandles;
+          if (!handles || typeof handles !== "object")
+            return false;
+          const expiresMs = now + RECOVERY_HANDLE_TTL_MS;
+          let changed = false;
+          const next = { ...handles };
+          for (const name of ["handoffRecipient", "adoptStale"]) {
+            const handle = handles[name];
+            if (!handle || typeof handle !== "object")
+              continue;
+            const current = handle;
+            const previous = current.previous;
+            const previousExpired = previous && typeof previous.expiresMs === "number" && previous.expiresMs < now;
+            const retained = previousExpired ? { ...current, previous: void 0 } : current;
+            if (previousExpired)
+              changed = true;
+            if (typeof current.expiresMs === "number" && current.expiresMs > now + RECOVERY_HANDLE_RENEW_MS) {
+              next[name] = retained;
+              continue;
+            }
+            next[name] = {
+              ...retained,
+              previous: typeof current.token === "string" && typeof current.expiresMs === "number" && current.expiresMs >= now ? { token: current.token, expiresMs: current.expiresMs } : void 0,
+              token: randomBytes(32).toString("base64url"),
+              expiresMs
+            };
+            changed = true;
+          }
+          if (!changed)
+            return false;
+          this.#database.prepare(`UPDATE sessions SET bindings_json = ?, updated_ms = ?
+           WHERE session_id = ? AND claim_epoch = ?
+             AND state IN ('blocked', 'handoff_cleanup')`).run(JSON.stringify({ ...bindings, recoveryHandles: next }), now, session2.sessionId, session2.claimEpoch);
+          return true;
+        });
+      }
+      /**
+       * GH #672: distinguish the three real recovery answers for a blocked contender.
+       * A dead prior owner is adoptable; a LIVE one never is (the caller must close it or
+       * use another worktree); an owner whose identity cannot be proven is treated as live.
+       * A vanished claim epoch only needs a fresh transport.
+       */
+      inspectRecoveryRequirement(sessionId) {
+        const row = asSession(this.#database.prepare(`SELECT source_key, worktree_key, app_root_key, state, source_json, bindings_json
+           FROM sessions WHERE session_id = ?`).get(sessionId));
+        if (!row || row.state !== "blocked" && row.state !== "handoff_cleanup") {
+          return { requirement: "none", priorOwner: "absent", nextAction: "" };
+        }
+        if (row.state === "handoff_cleanup") {
+          return {
+            requirement: "adoption",
+            priorOwner: "stale",
+            nextAction: 'Resume the transferred cleanup with rn_session({ action: "adopt_stale", adoptionHandle }).'
+          };
+        }
+        const grouped = JSON.parse(row.source_json).model === "grouped-v1";
+        const bindings = JSON.parse(row.bindings_json);
+        const adoptionRequired = bindings.adoptionRequired;
+        const priorSessionId = typeof adoptionRequired?.sessionId === "string" ? adoptionRequired.sessionId : null;
+        const prior = priorSessionId ? asSession(this.#database.prepare(`SELECT session_id, source_key, worktree_key, app_root_key, claim_epoch,
+                      supervisor_pid, supervisor_birth, heartbeat_ms, bindings_json
+               FROM sessions WHERE session_id = ?`).get(priorSessionId)) : null;
+        if (!prior || prior.claim_epoch !== adoptionRequired?.claimEpoch) {
+          return {
+            requirement: "transport-restart",
+            priorOwner: "absent",
+            nextAction: sessionRecoveryRemedy("The blocking claim epoch is gone; a clean session can start here.")
+          };
+        }
+        let status = "unknown";
+        try {
+          status = this.#ownerStatus({
+            sessionId: prior.session_id,
+            pid: prior.supervisor_pid,
+            token: prior.supervisor_birth
+          });
+        } catch {
+          status = "unknown";
+        }
+        if (status === "mismatch") {
+          if (grouped) {
+            const isSameAppRoot = prior.worktree_key === row.worktree_key && prior.app_root_key === row.app_root_key;
+            if (!isSameAppRoot) {
+              return {
+                requirement: "attach",
+                priorOwner: "stale",
+                nextAction: sessionOtherRootRecoveryRemedy("The proven-dead owner belongs to a different app root in this worktree, so startup cleanup cannot release it here.")
+              };
+            }
+            if (prior.source_key !== row.source_key) {
+              return {
+                requirement: "attach",
+                priorOwner: "stale",
+                nextAction: sessionDeclaredSourceRemedy("The proven-dead owner has a different source identity for this app root, so startup cleanup cannot release it under the current declared manifests.")
+              };
+            }
+            const blocked = readStartupCleanupBlocker(prior.bindings_json);
+            if (blocked) {
+              return {
+                requirement: "transport-restart",
+                priorOwner: "stale",
+                startupCleanupBlocked: blocked,
+                nextAction: blocked.nextAction ?? sessionCleanupObligationRemedy(`Startup cleanup refused with ${blocked.code} and will refuse again until that is resolved: ${blocked.reason}.`)
+              };
+            }
+            return {
+              requirement: "transport-restart",
+              priorOwner: "stale",
+              nextAction: sessionRecoveryRemedy("The prior owner is proven dead and is released automatically.")
+            };
+          }
+          return {
+            requirement: "adoption",
+            priorOwner: "stale",
+            nextAction: 'The prior owner is proven dead. Adopt it with rn_session({ action: "adopt_stale", adoptionHandle }).'
+          };
+        }
+        const heartbeatAgeMs = Math.min(Math.max(0, this.#now() - (typeof prior.heartbeat_ms === "number" ? prior.heartbeat_ms : 0)), 24 * 36e5);
+        return {
+          requirement: "attach",
+          priorOwner: status === "match" ? "live" : "unknown",
+          ...grouped ? { priorOwnerHeartbeatAgeMs: heartbeatAgeMs } : {},
+          nextAction: status === "match" ? sessionOwnerInspectionRemedy("Another live rn-dev-agent supervisor owns this worktree; a live owner is never adopted.") : sessionOwnerInspectionRemedy("The prior owner identity could not be proven, so it is treated as live.")
+        };
+      }
+      #assertDeviceAuthorityAvailable(session2, resource, probes, currentBindings) {
+        this.#assertNoStaleDeviceCleanup(currentBindings);
+        const claim = this.#findConflictingClaim(resource);
+        if (claim && (claim.session_id !== session2.sessionId || claim.claim_epoch !== session2.claimEpoch)) {
+          const probe = probes.get(claim.session_id);
+          if (!probe || probe.claimEpoch !== claim.claim_epoch || probe.status !== "mismatch") {
+            throw claimConflict(claim);
+          }
+          throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "a proven-stale device owner requires explicit adopt_stale before rebinding", { sessionId: claim.session_id, claimEpoch: claim.claim_epoch });
+        }
+      }
+      /**
+       * GH #776: the exact refusals replaceDeviceAuthority would raise, proven without
+       * writing anything, so a caller can refuse before it yields any other axis.
+       */
+      inspectDeviceAuthorityAvailability(session2, resource) {
+        const probes = this.#probeClaimOwners(session2, [resource]);
+        this.#transaction(() => {
+          const current = this.#requireSession(session2);
+          const currentBindings = JSON.parse(current.bindings_json);
+          this.#assertDeviceAuthorityAvailable(session2, resource, probes, currentBindings);
+        });
+      }
+      replaceDeviceAuthority(session2, input) {
+        const resource = input.resource ?? {
+          type: "device",
+          key: `${String(input.device.platform)}:${String(input.device.deviceId)}`
+        };
+        const probes = this.#probeClaimOwners(session2, [resource]);
+        const now = this.#now();
+        this.#transaction(() => {
+          const current = this.#requireSession(session2);
+          const currentBindings = JSON.parse(current.bindings_json);
+          this.#assertDeviceAuthorityAvailable(session2, resource, probes, currentBindings);
+          this.#database.prepare(`DELETE FROM claims
+           WHERE session_id = ? AND claim_epoch = ?
+             AND resource_type IN ('device', 'target', 'runner')`).run(session2.sessionId, session2.claimEpoch);
+          this.#database.prepare(`INSERT INTO claims(
+            resource_type, resource_key, session_id, claim_epoch, lease_until_ms
+          ) VALUES (?, ?, ?, ?, ?)`).run(resource.type, resource.key, session2.sessionId, session2.claimEpoch, now + this.#leaseMs);
+          const bindings = {
+            ...currentBindings,
+            device: input.device,
+            install: input.install ?? null,
+            bundle: null,
+            runner: null,
+            observe: null,
+            proof: null,
+            pendingBuild: null
+          };
+          this.#invalidatePlatformReceipt(session2, String(input.device.platform));
+          this.#database.prepare(`UPDATE sessions
+           SET state = ?, bindings_json = ?, authority_version = authority_version + 1,
+               updated_ms = ?
+           WHERE session_id = ? AND claim_epoch = ?`).run(input.install ? "device_bound" : "device_claimed", JSON.stringify(bindings), now, session2.sessionId, session2.claimEpoch);
+          this.#advanceActiveOperationFence(session2, current.authority_version, current.authority_version + 1);
+        });
+      }
+      /**
+       * GH #672: device-family claims held by a proven-dead owner discovered AFTER startup.
+       * Startup adoption only exists for source/port conflicts, so a dead device/runner owner
+       * left `bind_device` demanding an `adopt_stale` handle that no path could mint. This
+       * offers a bounded, capability-authenticated release for the exact device only — it
+       * never transfers source, package-integration, Metro, or port authority, so a dead
+       * owner from a foreign worktree can be cleaned up without adopting its session.
+       * ADR L5: new code no longer mints these offers; `beginConfirmedStaleDeviceRelease`
+       * is the default path. This mint stays only as the trivially revertible legacy path.
+       */
+      prepareStaleResourceRelease(session2, target) {
+        const deviceKey = `${target.platform}:${target.deviceId}`;
+        const now = this.#now();
+        return this.#transaction(() => {
+          const current = this.#requireSession(session2);
+          const prior = this.#requireSingleProvenDeadDeviceOwner(session2, deviceKey);
+          const family = this.#requireExactStaleDeviceFamily(session2, prior, target);
+          const obligations = [];
+          if (family.androidMetroReverse)
+            obligations.push("androidMetroReverse");
+          if (family.runner)
+            obligations.push("runner");
+          if (family.recorder)
+            obligations.push("recorder");
+          const offer = {
+            token: randomBytes(32).toString("base64url"),
+            expiresMs: now + RECOVERY_HANDLE_TTL_MS,
+            priorSessionId: prior.session_id,
+            priorClaimEpoch: prior.claim_epoch,
+            obligations
+          };
+          const bindings = JSON.parse(current.bindings_json);
+          this.#database.prepare(`UPDATE sessions SET bindings_json = ?, updated_ms = ?
+           WHERE session_id = ? AND claim_epoch = ?`).run(JSON.stringify({
+            ...bindings,
+            staleDeviceRelease: {
+              ...offer,
+              platform: target.platform,
+              deviceId: target.deviceId,
+              priorSupervisorPid: prior.supervisor_pid,
+              deathProvenAt: now
+            }
+          }), now, session2.sessionId, session2.claimEpoch);
+          return offer;
+        });
+      }
+      /**
+       * ADR L5: read-only view of what a confirmed inline release would transfer. Proves
+       * the owner's death and computes the exact obligations without minting a capability
+       * or writing any state.
+       */
+      inspectStaleDeviceRelease(session2, target) {
+        const deviceKey = `${target.platform}:${target.deviceId}`;
+        this.#requireSession(session2);
+        const prior = this.#requireSingleProvenDeadDeviceOwner(session2, deviceKey);
+        const family = this.#requireExactStaleDeviceFamily(session2, prior, target);
+        const obligations = [];
+        if (family.androidMetroReverse)
+          obligations.push("androidMetroReverse");
+        if (family.runner)
+          obligations.push("runner");
+        if (family.recorder)
+          obligations.push("recorder");
+        return {
+          priorSessionId: prior.session_id,
+          priorClaimEpoch: prior.claim_epoch,
+          obligations
+        };
+      }
+      /**
+       * ADR L5 (captain-approved D3): confirmed inline replacement for the capability-token
+       * transfer. Authorization is the caller's explicit confirmation plus positive death
+       * proof re-read from durable state inside this transaction, scoped to the exact
+       * requested device. An existing journal resumes token-lessly; nothing is minted and
+       * nothing expires.
+       */
+      beginConfirmedStaleDeviceRelease(session2, workerInstance, target) {
+        const now = this.#now();
+        return this.#transaction(() => {
+          const current = this.#requireSession(session2);
+          const bindings = JSON.parse(current.bindings_json);
+          if (current.worker_instance !== workerInstance) {
+            throw new SessionAuthorityError("HANDOFF_TARGET_MISMATCH", "stale device release is not owned by this worker");
+          }
+          const resumed = bindings.staleDeviceCleanup;
+          if (resumed) {
+            this.#assertStaleReleaseJournalScope(current, resumed, target);
+            return {
+              platform: String(resumed.platform),
+              deviceId: String(resumed.deviceId),
+              ...resumed.androidMetroReverse ? { androidMetroReverse: resumed.androidMetroReverse } : {},
+              runner: resumed.runner ?? null,
+              recorder: resumed.recorder ?? null
+            };
+          }
+          const deviceKey = `${target.platform}:${target.deviceId}`;
+          const prior = this.#requireSingleProvenDeadDeviceOwner(session2, deviceKey);
+          return this.#transferStaleDeviceAuthority(session2, bindings, prior, target, now);
+        });
+      }
+      /**
+       * GH #672: take over the dead owner's exact device-family claims and its cleanup
+       * obligations. Every proof is re-read from durable state here, not trusted from the
+       * mint: a prior owner that came back to life, changed epoch, or cannot be identified
+       * refuses even with a valid handle.
+       */
+      beginStaleResourceRelease(session2, handle, workerInstance, target) {
+        const now = this.#now();
+        return this.#transaction(() => {
+          const current = this.#requireSession(session2);
+          const bindings = JSON.parse(current.bindings_json);
+          if (current.worker_instance !== workerInstance) {
+            throw new SessionAuthorityError("HANDOFF_TARGET_MISMATCH", "stale device release is not owned by this worker");
+          }
+          const resumed = bindings.staleDeviceCleanup;
+          if (resumed) {
+            this.#assertStaleReleaseJournalScope(current, resumed, target);
+            return {
+              platform: String(resumed.platform),
+              deviceId: String(resumed.deviceId),
+              ...resumed.androidMetroReverse ? { androidMetroReverse: resumed.androidMetroReverse } : {},
+              runner: resumed.runner ?? null,
+              recorder: resumed.recorder ?? null
+            };
+          }
+          const offer = bindings.staleDeviceRelease;
+          if (!offer || typeof offer.token !== "string" || typeof offer.expiresMs !== "number" || typeof offer.platform !== "string" || typeof offer.deviceId !== "string" || typeof offer.priorSessionId !== "string" || typeof offer.priorClaimEpoch !== "number" || typeof handle !== "string" || !this.#capabilityMatches(offer.token, handle)) {
+            throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "stale device release capability is invalid or expired");
+          }
+          const platform = offer.platform;
+          const deviceId = offer.deviceId;
+          if (target && (target.platform !== platform || target.deviceId !== deviceId)) {
+            throw new SessionAuthorityError("DEVICE_AUTHORITY_MISMATCH", "stale device release offer does not match the requested exact device", void 0, { axis: "D", nextAction: 'Run rn_session with action "status" for the exact recovery.' });
+          }
+          if (offer.expiresMs < now) {
+            throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "stale device release capability is invalid or expired");
+          }
+          const prior = this.#requireProvenDeadOwner(offer.priorSessionId, offer.priorClaimEpoch);
+          return this.#transferStaleDeviceAuthority(session2, bindings, prior, { platform, deviceId }, now);
+        });
+      }
+      #transferStaleDeviceAuthority(session2, bindings, prior, target, now) {
+        const { platform, deviceId } = target;
+        const deviceKey = `${platform}:${deviceId}`;
+        const priorBindings = JSON.parse(prior.bindings_json);
+        const family = this.#requireExactStaleDeviceFamily(session2, prior, target);
+        const { androidMetroReverse, runner, recorder: recorder2 } = family;
+        for (const claim of family.claims) {
+          this.#database.prepare(`UPDATE claims SET session_id = ?, claim_epoch = ?, lease_until_ms = ?
+           WHERE resource_type = ? AND resource_key = ?
+             AND session_id = ? AND claim_epoch = ?`).run(session2.sessionId, session2.claimEpoch, now + this.#leaseMs, claim.resource_type, claim.resource_key, prior.session_id, prior.claim_epoch);
+        }
+        const runnerClaimKey = runner ? `${platform}:${deviceId}:${String(runner.port)}` : null;
+        const cleanup = {
+          platform,
+          deviceId,
+          priorSessionId: prior.session_id,
+          priorClaimEpoch: prior.claim_epoch,
+          transferredAt: now,
+          ...androidMetroReverse ? {
+            androidMetroReverse: {
+              ...androidMetroReverse,
+              claimKey: deviceKey,
+              stopRequestedAt: now,
+              completedAt: null
+            }
+          } : {},
+          runner: runner ? { ...runner, claimKey: runnerClaimKey, stopRequestedAt: now, completedAt: null } : null,
+          recorder: recorder2 ? { ...recorder2, claimKey: deviceKey, stopRequestedAt: now, completedAt: null } : null
+        };
+        this.#database.prepare(`UPDATE sessions SET bindings_json = ?, updated_ms = ?
+         WHERE session_id = ? AND claim_epoch = ?`).run(JSON.stringify({ ...bindings, staleDeviceCleanup: cleanup }), now, session2.sessionId, session2.claimEpoch);
+        this.#database.prepare(`UPDATE sessions SET bindings_json = ?, updated_ms = ?
+         WHERE session_id = ? AND claim_epoch = ?`).run(JSON.stringify({
+          ...priorBindings,
+          device: null,
+          androidMetroReverse: null,
+          runner: null,
+          recorder: null,
+          deviceReleased: {
+            toSessionId: session2.sessionId,
+            toClaimEpoch: session2.claimEpoch,
+            at: now,
+            platform,
+            deviceId,
+            device: priorBindings.device ?? null,
+            androidMetroReverse,
+            runner,
+            recorder: recorder2
+          }
+        }), now, prior.session_id, prior.claim_epoch);
+        return {
+          platform,
+          deviceId,
+          ...cleanup.androidMetroReverse ? { androidMetroReverse: cleanup.androidMetroReverse } : {},
+          runner: cleanup.runner,
+          recorder: cleanup.recorder
+        };
+      }
+      #requireSingleProvenDeadDeviceOwner(session2, deviceKey) {
+        const claims = this.#deviceFamilyClaims(deviceKey);
+        if (claims.length === 0) {
+          throw new SessionAuthorityError("DEVICE_CLAIM_CONFLICT", `no foreign claim on ${deviceKey} needs release`);
+        }
+        const owners = new Set(claims.map((claim) => `${claim.session_id}\0${claim.claim_epoch}`));
+        if (owners.size !== 1) {
+          throw new SessionAuthorityError("DEVICE_CLAIM_CONFLICT", `${deviceKey} is split across several claim epochs; release each owner explicitly`);
+        }
+        if (claims[0].session_id === session2.sessionId && claims[0].claim_epoch === session2.claimEpoch) {
+          throw new SessionAuthorityError("DEVICE_CLAIM_CONFLICT", `no foreign claim on ${deviceKey} needs release`);
+        }
+        return this.#requireProvenDeadOwner(claims[0].session_id, claims[0].claim_epoch);
+      }
+      #requireExactStaleDeviceFamily(session2, prior, target) {
+        const deviceKey = `${target.platform}:${target.deviceId}`;
+        const claims = this.#deviceFamilyClaims(deviceKey);
+        if (claims.length === 0 || claims.some((claim) => claim.session_id !== prior.session_id || claim.claim_epoch !== prior.claim_epoch)) {
+          throw new SessionAuthorityError("DEVICE_CLAIM_CONFLICT", `${deviceKey} is split across several claim epochs; release each owner explicitly`);
+        }
+        if (claims.some((claim) => claim.resource_type === "device-receipt" || claim.resource_type === "runner-receipt")) {
+          throw new SessionAuthorityError("DEVICE_AUTHORITY_MISMATCH", "stale device cleanup cannot transfer platform validation receipt authority");
+        }
+        const bindings = JSON.parse(prior.bindings_json);
+        if (!this.#bindingMatchesDevice(bindings.device, target)) {
+          throw new SessionAuthorityError("DEVICE_AUTHORITY_MISMATCH", "stale device claim does not match its owner binding");
+        }
+        const deviceClaims = claims.filter((claim) => claim.resource_type === "device");
+        if (deviceClaims.length !== 1 || deviceClaims[0].resource_key !== deviceKey) {
+          throw new SessionAuthorityError("DEVICE_AUTHORITY_MISMATCH", "stale device binding has no exclusive cleanup claim");
+        }
+        const current = this.#requireSession(session2);
+        const currentBindings = JSON.parse(current.bindings_json);
+        if (this.#bindingMatchesDevice(currentBindings.device, target) || this.#bindingMatchesDevice(currentBindings.runner, target) || this.#bindingMatchesDevice(currentBindings.recorder, target)) {
+          throw new SessionAuthorityError("DEVICE_AUTHORITY_MISMATCH", "stale device cleanup conflicts with existing target bindings");
+        }
+        const reverseValue = bindings.androidMetroReverse;
+        const androidMetroReverse = reverseValue && typeof reverseValue === "object" && target.platform === "android" && reverseValue.platform === "android" && reverseValue.deviceId === target.deviceId && Number.isSafeInteger(reverseValue.metroPort) && reverseValue.local === `tcp:${String(reverseValue.metroPort)}` && reverseValue.remote === `tcp:${String(reverseValue.metroPort)}` ? reverseValue : null;
+        if (reverseValue !== null && reverseValue !== void 0 && !androidMetroReverse) {
+          throw new SessionAuthorityError("PHYSICAL_ANDROID_METRO_CLEANUP_UNPROVEN", "stale physical Android Metro reverse binding does not match the exact device and port");
+        }
+        const runnerClaims = claims.filter((claim) => claim.resource_type === "runner");
+        const runnerValue = bindings.runner;
+        const runner = this.#bindingMatchesDevice(runnerValue, target) ? runnerValue : null;
+        if (runnerValue !== null && runnerValue !== void 0 && !runner) {
+          throw new SessionAuthorityError("RUNNER_OWNERSHIP_MISMATCH", "stale runner binding targets another device");
+        }
+        if (runner && !hasCompleteRunnerCleanupIdentity(runner)) {
+          throw new SessionAuthorityError("RUNNER_ADOPTION_REQUIRED", "stale runner cleanup identity is incomplete");
+        }
+        const runnerClaimKey = runner ? `${deviceKey}:${String(runner.port)}` : null;
+        if (runnerClaims.length !== (runner ? 1 : 0) || runner && runnerClaims[0].resource_key !== runnerClaimKey) {
+          throw new SessionAuthorityError("RUNNER_OWNERSHIP_MISMATCH", "stale runner binding has no exclusive cleanup claim");
+        }
+        const recorderClaims = claims.filter((claim) => claim.resource_type === "recorder");
+        const recorderValue = bindings.recorder;
+        const recorder2 = this.#bindingMatchesDevice(recorderValue, target) ? recorderValue : null;
+        if (recorderValue !== null && recorderValue !== void 0 && !recorder2) {
+          throw new SessionAuthorityError("RECORDING_AUTHORITY_MISMATCH", "stale recorder binding targets another device");
+        }
+        if (recorder2 && !hasCompleteRecorderCleanupIdentity(recorder2)) {
+          throw new SessionAuthorityError("RECORDING_AUTHORITY_MISMATCH", "stale recorder cleanup identity is incomplete");
+        }
+        if (recorderClaims.length !== (recorder2 ? 1 : 0) || recorder2 && recorderClaims[0].resource_key !== deviceKey) {
+          throw new SessionAuthorityError("RECORDING_AUTHORITY_MISMATCH", "stale recorder binding has no exclusive cleanup claim");
+        }
+        return { claims, androidMetroReverse, runner, recorder: recorder2 };
+      }
+      completeStaleResourceRelease(session2, workerInstance, resource) {
+        const now = this.#now();
+        this.#transaction(() => {
+          const { row, bindings, cleanup } = this.#requireStaleReleaseOwner(session2, workerInstance);
+          const binding = cleanup[resource];
+          if (!binding || typeof binding !== "object")
+            return;
+          const entry = binding;
+          if (typeof entry.stopRequestedAt !== "number") {
+            throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", `${resource} release was not durably requested`);
+          }
+          if (typeof entry.completedAt === "number")
+            return;
+          if (resource !== "androidMetroReverse") {
+            const claimType = resource === "runner" ? "runner" : "recorder";
+            this.#database.prepare(`DELETE FROM claims
+             WHERE resource_type = ? AND resource_key = ?
+               AND session_id = ? AND claim_epoch = ?`).run(claimType, String(entry.claimKey), session2.sessionId, session2.claimEpoch);
+          }
+          this.#database.prepare(`UPDATE sessions SET bindings_json = ?, updated_ms = ?
+           WHERE session_id = ? AND claim_epoch = ?`).run(JSON.stringify({
+            ...bindings,
+            staleDeviceCleanup: { ...cleanup, [resource]: { ...entry, completedAt: now } }
+          }), now, row.session_id, row.claim_epoch);
+        });
+      }
+      finishStaleResourceRelease(session2, workerInstance) {
+        const now = this.#now();
+        this.#transaction(() => {
+          const { row, bindings, cleanup } = this.#requireStaleReleaseOwner(session2, workerInstance);
+          for (const resource of ["androidMetroReverse", "runner", "recorder"]) {
+            const binding = cleanup[resource];
+            if (binding && typeof binding === "object" && typeof binding.completedAt !== "number") {
+              throw new SessionAuthorityError("AUTOMATION_CLEANUP_UNPROVEN", `${resource} release has not been durably completed`);
+            }
+          }
+          const deviceKey = `${String(cleanup.platform)}:${String(cleanup.deviceId)}`;
+          const unrelatedClaim = this.#deviceFamilyClaims(deviceKey).find((claim) => claim.resource_type !== "device");
+          if (unrelatedClaim) {
+            throw new SessionAuthorityError("DEVICE_AUTHORITY_MISMATCH", "stale device cleanup found authority outside its completed journal");
+          }
+          this.#database.prepare(`DELETE FROM claims
+           WHERE resource_type = 'device' AND resource_key = ?
+             AND session_id = ? AND claim_epoch = ?`).run(deviceKey, session2.sessionId, session2.claimEpoch);
+          const nextAuthorityVersion = row.authority_version + 1;
+          this.#database.prepare(`UPDATE sessions
+           SET bindings_json = ?, authority_version = ?, updated_ms = ?
+           WHERE session_id = ? AND claim_epoch = ? AND authority_version = ?`).run(JSON.stringify({ ...bindings, staleDeviceCleanup: null, staleDeviceRelease: null }), nextAuthorityVersion, now, row.session_id, row.claim_epoch, row.authority_version);
+          this.#advanceActiveOperationFence(session2, row.authority_version, nextAuthorityVersion, true);
+        });
+      }
+      /**
+       * L4: verified-dead startup cleanup. The durable journal lives on the DEAD session's
+       * row and is written before any side effect; claims release only in finish, after
+       * every obligation is durably complete. Death is positively re-proven by every method.
+       */
+      findStartupCleanupCandidate(input) {
+        const claim = this.#findClaim("source", input.worktreeKey);
+        if (!claim)
+          return null;
+        const row = asSession(this.#database.prepare(`SELECT session_id, source_key, worktree_key, app_root_key, claim_epoch
+           FROM sessions WHERE session_id = ?`).get(claim.session_id));
+        if (!row || row.claim_epoch !== claim.claim_epoch || row.source_key !== input.sourceKey || row.worktree_key !== input.worktreeKey || row.app_root_key !== input.appRootKey) {
+          return null;
+        }
+        return { sessionId: claim.session_id, claimEpoch: claim.claim_epoch };
+      }
+      beginStartupOwnerCleanup(prior) {
+        const now = this.#now();
+        return this.#transaction(() => {
+          const row = this.#requireProvenDeadStartupOwner(prior);
+          const bindings = JSON.parse(row.bindings_json);
+          const existing = bindings.startupCleanup;
+          if (existing && typeof existing === "object" && typeof existing.finishedAt !== "number") {
+            return {
+              resumed: true,
+              obligations: existing.obligations ?? {},
+              integration: existing.integration ?? null
+            };
+          }
+          const record2 = (value) => value && typeof value === "object" ? { ...value } : null;
+          const obligation = (source, claimKey) => source ? {
+            ...source,
+            claimKey: String(source.claimKey ?? claimKey ?? ""),
+            stopRequestedAt: typeof source.stopRequestedAt === "number" ? source.stopRequestedAt : now,
+            completedAt: typeof source.completedAt === "number" ? source.completedAt : null
+          } : void 0;
+          const handoffCleanup = record2(bindings.handoffCleanup);
+          const staleDevice = record2(bindings.staleDeviceCleanup);
+          const androidMetroReverseSource = record2(bindings.androidMetroReverse) ?? record2(staleDevice?.androidMetroReverse);
+          const recorderSource = record2(bindings.recorder) ?? record2(staleDevice?.recorder) ?? record2(handoffCleanup?.recorder);
+          const runnerSource = record2(bindings.runner) ?? record2(staleDevice?.runner) ?? record2(handoffCleanup?.runner);
+          const observeSource = record2(bindings.observe) ?? record2(handoffCleanup?.observe);
+          const liveMetro = record2(bindings.metroCleanup) ?? record2(bindings.metro);
+          const metroSource = liveMetro && liveMetro.mode === "managed" ? liveMetro : record2(handoffCleanup?.metro);
+          const obligations = {};
+          const androidMetroReverseEntry = obligation(androidMetroReverseSource, androidMetroReverseSource ? `android:${String(androidMetroReverseSource.deviceId)}` : null);
+          if (androidMetroReverseEntry) {
+            obligations.androidMetroReverse = androidMetroReverseEntry;
+          }
+          const recorderEntry = obligation(recorderSource, recorderSource ? `${String(recorderSource.platform)}:${String(recorderSource.deviceId)}` : null);
+          if (recorderEntry)
+            obligations.recorder = recorderEntry;
+          const runnerEntry = obligation(runnerSource, runnerSource ? `${String(runnerSource.platform)}:${String(runnerSource.deviceId)}:${String(runnerSource.port)}` : null);
+          if (runnerEntry)
+            obligations.runner = runnerEntry;
+          const observeEntry = obligation(observeSource, observeSource ? String(observeSource.port) : null);
+          if (observeEntry)
+            obligations.observe = observeEntry;
+          const metroEntry = obligation(metroSource, metroSource ? String(metroSource.port) : null);
+          if (metroEntry)
+            obligations.metro = metroEntry;
+          const integrationBinding = record2(bindings.packageIntegration);
+          const integration = integrationBinding ? {
+            installedBySessionId: integrationBinding.installedBySessionId ?? null,
+            manifestSha256: integrationBinding.manifestSha256 ?? null,
+            requestedAt: now,
+            completedAt: null
+          } : null;
+          this.#database.prepare(`UPDATE sessions SET bindings_json = ?, updated_ms = ?
+           WHERE session_id = ? AND claim_epoch = ?`).run(JSON.stringify({
+            ...bindings,
+            startupCleanup: { journaledAt: now, obligations, integration }
+          }), now, row.session_id, row.claim_epoch);
+          return { resumed: false, obligations, integration };
+        });
+      }
+      /** Re-recording an identical cleanup refusal is a no-op across repeated restarts. */
+      recordStartupCleanupRefusal(prior, refusal) {
+        const now = this.#now();
+        this.#transaction(() => {
+          const row = this.#requireProvenDeadStartupOwner(prior);
+          const { bindings, journal } = this.#requireStartupCleanupJournal(row);
+          if (typeof journal.finishedAt === "number")
+            return;
+          const existing = journal.refusal;
+          if (existing && existing.code === refusal.code && existing.reason === refusal.reason && existing.nextAction === refusal.nextAction) {
+            return;
+          }
+          this.#database.prepare(`UPDATE sessions SET bindings_json = ?, updated_ms = ?
+           WHERE session_id = ? AND claim_epoch = ?`).run(JSON.stringify({
+            ...bindings,
+            startupCleanup: {
+              ...journal,
+              refusal: {
+                code: refusal.code,
+                reason: refusal.reason,
+                ...refusal.nextAction ? { nextAction: refusal.nextAction } : {}
+              }
+            }
+          }), now, row.session_id, row.claim_epoch);
+        });
+      }
+      verifyStartupOwnerObligation(prior, resource) {
+        const row = this.#requireProvenDeadStartupOwner(prior);
+        const { journal } = this.#requireStartupCleanupJournal(row);
+        const entry = journal.obligations?.[resource];
+        if (!entry || typeof entry !== "object")
+          return null;
+        const binding = entry;
+        if (typeof binding.completedAt === "number")
+          return binding;
+        this.#assertStartupObligationScope(row, resource, binding);
+        return binding;
+      }
+      completeStartupOwnerObligation(prior, resource) {
+        const now = this.#now();
+        this.#transaction(() => {
+          const row = this.#requireProvenDeadStartupOwner(prior);
+          const { bindings, journal } = this.#requireStartupCleanupJournal(row);
+          const obligations = journal.obligations ?? {};
+          const entry = obligations[resource];
+          if (!entry || typeof entry !== "object")
+            return;
+          const binding = entry;
+          if (typeof binding.completedAt === "number")
+            return;
+          if (typeof binding.stopRequestedAt !== "number") {
+            throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", `${resource} cleanup was not durably requested`);
+          }
+          this.#assertStartupObligationScope(row, resource, binding);
+          this.#database.prepare(`UPDATE sessions SET bindings_json = ?, updated_ms = ?
+           WHERE session_id = ? AND claim_epoch = ?`).run(JSON.stringify({
+            ...bindings,
+            startupCleanup: {
+              ...journal,
+              obligations: { ...obligations, [resource]: { ...binding, completedAt: now } }
+            }
+          }), now, row.session_id, row.claim_epoch);
+        });
+      }
+      completeStartupOwnerIntegrationRestore(prior, input) {
+        const now = this.#now();
+        this.#transaction(() => {
+          const row = this.#requireProvenDeadStartupOwner(prior);
+          const { bindings, journal } = this.#requireStartupCleanupJournal(row);
+          const integration = journal.integration;
+          if (!integration || typeof integration !== "object")
+            return;
+          if (typeof integration.completedAt === "number")
+            return;
+          const binding = bindings.packageIntegration;
+          if (!binding || typeof binding !== "object" || binding.manifestSha256 !== input.manifestSha256 || integration.manifestSha256 !== input.manifestSha256) {
+            throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "integration restoration requires the recorded manifest authority");
+          }
+          this.#database.prepare(`UPDATE sessions SET bindings_json = ?, updated_ms = ?
+           WHERE session_id = ? AND claim_epoch = ?`).run(JSON.stringify({
+            ...bindings,
+            packageIntegration: null,
+            startupCleanup: { ...journal, integration: { ...integration, completedAt: now } }
+          }), now, row.session_id, row.claim_epoch);
+        });
+      }
+      verifyStartupOwnerIntegrationRestore(prior, input) {
+        const row = this.#requireProvenDeadStartupOwner(prior);
+        this.#assertStartupSourceScope(row, input);
+        const { bindings, journal } = this.#requireStartupCleanupJournal(row);
+        const integration = journal.integration;
+        const binding = bindings.packageIntegration;
+        if (!integration || typeof integration !== "object" || typeof integration.completedAt === "number" || !binding || typeof binding !== "object" || binding.manifestSha256 !== input.manifestSha256 || integration.manifestSha256 !== input.manifestSha256) {
+          throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "integration restoration requires the active startup journal and recorded manifest authority");
+        }
+      }
+      finishStartupOwnerCleanup(prior) {
+        const now = this.#now();
+        this.#transaction(() => {
+          const row = this.#requireProvenDeadStartupOwner(prior);
+          const { bindings, journal } = this.#requireStartupCleanupJournal(row);
+          const obligations = journal.obligations ?? {};
+          for (const resource of ["androidMetroReverse", "recorder", "runner", "observe"]) {
+            const entry = obligations[resource];
+            if (entry && typeof entry === "object" && typeof entry.completedAt !== "number") {
+              throw new SessionAuthorityError("AUTOMATION_CLEANUP_UNPROVEN", `${resource} cleanup has not been durably completed`);
+            }
+          }
+          const metro = obligations.metro;
+          if (metro && typeof metro === "object" && typeof metro.completedAt !== "number") {
+            throw new SessionAuthorityError("METRO_CLEANUP_PENDING", "managed Metro cleanup has not been durably completed");
+          }
+          this.#requireIntegrationRestored(bindings);
+          this.#database.prepare("DELETE FROM claims WHERE session_id = ? AND claim_epoch = ?").run(row.session_id, row.claim_epoch);
+          this.#database.prepare(`UPDATE sessions
+           SET state = 'released', claim_epoch = claim_epoch + 1,
+               authority_version = authority_version + 1, bindings_json = ?, updated_ms = ?
+           WHERE session_id = ? AND claim_epoch = ?`).run(JSON.stringify({ ...bindings, startupCleanup: { ...journal, finishedAt: now } }), now, row.session_id, row.claim_epoch);
+        });
+      }
+      #requireProvenDeadStartupOwner(prior) {
+        const row = asSession(this.#database.prepare(`SELECT session_id, source_key, worktree_key, app_root_key,
+                  claim_epoch, state, supervisor_pid, supervisor_birth,
+                  lease_until_ms, bindings_json
+           FROM sessions WHERE session_id = ?`).get(prior.sessionId));
+        if (!row || row.claim_epoch !== prior.claimEpoch) {
+          throw new SessionAuthorityError("SESSION_OWNER_LOST", "the startup cleanup owner no longer matches the proven claim epoch");
+        }
+        let status = "unknown";
+        try {
+          status = this.#ownerStatus({
+            sessionId: row.session_id,
+            pid: row.supervisor_pid,
+            token: row.supervisor_birth
+          });
+        } catch {
+          status = "unknown";
+        }
+        if (status === "match") {
+          throw new SessionAuthorityError("RESOURCE_CLAIM_CONFLICT", OWNER_IDENTITY_REFUSAL_REASONS.sourceOwnerLive, { sessionId: row.session_id, claimEpoch: row.claim_epoch });
+        }
+        if (status !== "mismatch") {
+          if (row.lease_until_ms < this.#now()) {
+            throw new SessionAuthorityError("STALE_LEASE_NOT_RECLAIMABLE", OWNER_IDENTITY_REFUSAL_REASONS.leaseOwnerUnprovable, { sessionId: row.session_id, claimEpoch: row.claim_epoch });
+          }
+          throw new SessionAuthorityError("RESOURCE_CLAIM_CONFLICT", OWNER_IDENTITY_REFUSAL_REASONS.sourceOwnerUnprovable, { sessionId: row.session_id, claimEpoch: row.claim_epoch });
+        }
+        return row;
+      }
+      #requireStartupCleanupJournal(row) {
+        const bindings = JSON.parse(row.bindings_json);
+        const journal = bindings.startupCleanup;
+        if (!journal || typeof journal !== "object") {
+          throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "no startup cleanup is in progress");
+        }
+        return { bindings, journal };
+      }
+      #assertStartupSourceScope(row, input) {
+        if (row.source_key !== input.sourceKey || row.worktree_key !== input.worktreeKey || row.app_root_key !== input.appRootKey) {
+          throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "startup cleanup no longer matches the exact source and app root");
+        }
+      }
+      #assertStartupObligationScope(row, resource, entry) {
+        const claimType = resource === "observe" ? "observe-port" : resource === "metro" ? "metro-port" : resource === "androidMetroReverse" ? "device" : resource;
+        const claimKey = String(entry.claimKey ?? "");
+        const claim = this.#findClaim(claimType, claimKey);
+        if (!claimKey || claim?.session_id !== row.session_id || claim.claim_epoch !== row.claim_epoch) {
+          const codes = {
+            androidMetroReverse: "PHYSICAL_ANDROID_METRO_CLEANUP_UNPROVEN",
+            recorder: "RECORDING_AUTHORITY_MISMATCH",
+            runner: "RUNNER_OWNERSHIP_MISMATCH",
+            observe: "OBSERVE_AUTHORITY_MISMATCH",
+            metro: "METRO_AUTHORITY_MISMATCH"
+          };
+          throw new SessionAuthorityError(codes[resource], `startup ${resource} cleanup journal no longer owns its exact claim`);
+        }
+      }
+      #requireStaleReleaseOwner(session2, workerInstance) {
+        const row = this.#requireSession(session2);
+        if (row.worker_instance !== workerInstance) {
+          throw new SessionAuthorityError("HANDOFF_TARGET_MISMATCH", "stale device release is not owned by this worker");
+        }
+        const bindings = JSON.parse(row.bindings_json);
+        const cleanup = bindings.staleDeviceCleanup;
+        if (!cleanup || typeof cleanup !== "object") {
+          throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "no stale device release is in progress");
+        }
+        const journal = cleanup;
+        this.#assertStaleReleaseJournalScope(row, journal);
+        return { row, bindings, cleanup: journal };
+      }
+      #assertNoStaleDeviceCleanup(bindings) {
+        const cleanup = bindings.staleDeviceCleanup;
+        if (!cleanup || typeof cleanup.platform !== "string" || typeof cleanup.deviceId !== "string") {
+          return;
+        }
+        throw new SessionAuthorityError("AUTOMATION_CLEANUP_UNPROVEN", "stale device cleanup journal is incomplete", void 0, {
+          axis: "D",
+          nextAction: 'Resume it with rn_session({ action: "bind_device" }) for the exact journaled device or rn_session({ action: "release_stale_device" }) before binding any other device.'
+        });
+      }
+      #assertStaleReleaseJournalScope(row, cleanup, target) {
+        if (typeof cleanup.platform !== "string" || typeof cleanup.deviceId !== "string" || target && (cleanup.platform !== target.platform || cleanup.deviceId !== target.deviceId)) {
+          throw new SessionAuthorityError("DEVICE_AUTHORITY_MISMATCH", "stale device cleanup journal does not match the requested exact device", void 0, { axis: "D", nextAction: 'Run rn_session with action "status" for the exact recovery.' });
+        }
+        const deviceKey = `${cleanup.platform}:${cleanup.deviceId}`;
+        const deviceClaim = this.#findClaim("device", deviceKey);
+        if (deviceClaim?.session_id !== row.session_id || deviceClaim.claim_epoch !== row.claim_epoch) {
+          throw new SessionAuthorityError("DEVICE_AUTHORITY_MISMATCH", "stale device cleanup journal no longer owns its exact device claim");
+        }
+        const reverse = cleanup.androidMetroReverse;
+        if (reverse && typeof reverse === "object" && typeof reverse.completedAt !== "number" && String(reverse.claimKey ?? "") !== deviceKey) {
+          throw new SessionAuthorityError("PHYSICAL_ANDROID_METRO_CLEANUP_UNPROVEN", "stale physical Android Metro cleanup journal no longer matches its exact device claim");
+        }
+        for (const resource of ["runner", "recorder"]) {
+          const entry = cleanup[resource];
+          if (!entry || typeof entry !== "object" || typeof entry.completedAt === "number") {
+            continue;
+          }
+          const binding = entry;
+          const claimType = resource === "runner" ? "runner" : "recorder";
+          const expectedKey = resource === "runner" ? `${deviceKey}:${String(binding.port)}` : deviceKey;
+          const claimKey = String(binding.claimKey ?? "");
+          const claim = this.#findClaim(claimType, claimKey);
+          if (claimKey !== expectedKey || claim?.session_id !== row.session_id || claim.claim_epoch !== row.claim_epoch) {
+            throw new SessionAuthorityError(resource === "runner" ? "RUNNER_OWNERSHIP_MISMATCH" : "RECORDING_AUTHORITY_MISMATCH", `stale ${resource} cleanup journal no longer owns its exact claim`);
+          }
+        }
+      }
+      #deviceFamilyClaims(deviceKey) {
+        return this.#database.prepare(`SELECT resource_type, resource_key, session_id, claim_epoch, lease_until_ms
+         FROM claims
+         WHERE (resource_type IN ('device', 'device-receipt', 'recorder') AND resource_key = ?)
+            OR (resource_type IN ('runner', 'runner-receipt') AND resource_key LIKE ? ESCAPE '\\')
+         ORDER BY resource_type, resource_key`).all(deviceKey, `${deviceKey.replace(/[\\%_]/g, "\\$&")}:%`);
+      }
+      #bindingMatchesDevice(binding, target) {
+        if (!binding || typeof binding !== "object")
+          return false;
+        const record2 = binding;
+        return record2.platform === target.platform && record2.deviceId === target.deviceId;
+      }
+      #requireProvenDeadOwner(sessionId, claimEpoch) {
+        const prior = asSession(this.#database.prepare(`SELECT session_id, claim_epoch, state, supervisor_pid, supervisor_birth, bindings_json
+           FROM sessions WHERE session_id = ?`).get(sessionId));
+        if (!prior || prior.claim_epoch !== claimEpoch) {
+          throw new SessionAuthorityError("SESSION_OWNER_LOST", "the released owner no longer matches the proven claim epoch");
+        }
+        let status = "unknown";
+        try {
+          status = this.#ownerStatus({
+            sessionId: prior.session_id,
+            pid: prior.supervisor_pid,
+            token: prior.supervisor_birth
+          });
+        } catch {
+          status = "unknown";
+        }
+        if (status === "match") {
+          throw new SessionAuthorityError("DEVICE_CLAIM_CONFLICT", "the device owner is live; a live owner is never released", { sessionId: prior.session_id, claimEpoch: prior.claim_epoch });
+        }
+        if (status !== "mismatch") {
+          throw new SessionAuthorityError("STALE_LEASE_NOT_RECLAIMABLE", "the device owner identity could not be proven, so it is treated as live", { sessionId: prior.session_id, claimEpoch: prior.claim_epoch });
+        }
+        return prior;
+      }
+      updateBindings(session2, input) {
+        const claimed = input.claimResources ?? [];
+        const probes = input.probeClaimOwners && claimed.length > 0 ? this.#probeClaimOwners(session2, claimed) : null;
+        const now = this.#now();
+        this.#transaction(() => {
+          const current = this.#requireSession(session2);
+          if (input.expectedAuthorityVersion !== void 0 && current.authority_version !== input.expectedAuthorityVersion) {
+            throw new SessionAuthorityError("AUTHORITY_LOST_DURING_OPERATION", "session authority version changed before binding commit");
+          }
+          const bindings = {
+            ...JSON.parse(current.bindings_json),
+            ...input.bindings
+          };
+          this.#assertClaimsAvailable(session2, claimed, probes, now);
+          if (Object.hasOwn(input.bindings, "device") || Object.hasOwn(input.bindings, "install")) {
+            const currentBindings = JSON.parse(current.bindings_json);
+            const platform = String((input.bindings.device ?? currentBindings.device)?.platform ?? "");
+            if (platform) {
+              this.#invalidatePlatformReceipt(session2, platform);
+            }
+          }
+          for (const resource of input.releaseResources ?? []) {
+            this.#database.prepare(`DELETE FROM claims
+             WHERE resource_type = ? AND resource_key = ?
+               AND session_id = ? AND claim_epoch = ?`).run(resource.type, resource.key, session2.sessionId, session2.claimEpoch);
+          }
+          const leaseUntil = now + this.#leaseMs;
+          for (const resource of input.claimResources ?? []) {
+            this.#database.prepare(`INSERT INTO claims(
+              resource_type, resource_key, session_id, claim_epoch, lease_until_ms
+            ) VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(resource_type, resource_key) DO UPDATE SET
+              session_id = excluded.session_id,
+              claim_epoch = excluded.claim_epoch,
+              lease_until_ms = excluded.lease_until_ms`).run(resource.type, resource.key, session2.sessionId, session2.claimEpoch, leaseUntil);
+          }
+          this.#database.prepare(`UPDATE sessions
+           SET state = ?, bindings_json = ?, authority_version = authority_version + 1,
+               updated_ms = ?
+           WHERE session_id = ? AND claim_epoch = ?`).run(input.state ?? current.state, JSON.stringify(bindings), now, session2.sessionId, session2.claimEpoch);
+          this.#advanceActiveOperationFence(session2, current.authority_version, current.authority_version + 1);
+        }, input.assertBeforeCommit, input.onCommitted);
+      }
+      replaceBindingsDuringOperation(operation, input) {
+        const now = this.#now();
+        return this.#transaction(() => {
+          const current = asSession(this.#database.prepare(`SELECT state, claim_epoch, authority_version, bindings_json
+             FROM sessions WHERE session_id = ?`).get(operation.sessionId));
+          const active = this.#database.prepare(`SELECT operation_id FROM operations
+           WHERE operation_id = ? AND session_id = ? AND claim_epoch = ?
+             AND authority_version = ?`).get(operation.operationId, operation.sessionId, operation.claimEpoch, operation.authorityVersion);
+          if (!current || !isOperationalState(current.state) || current.claim_epoch !== operation.claimEpoch || current.authority_version !== operation.authorityVersion || !active) {
+            throw new SessionAuthorityError("AUTHORITY_LOST_DURING_OPERATION", "operation fence no longer matches current authority");
+          }
+          for (const resource of input.claimResources ?? []) {
+            const claim = this.#findConflictingClaim(resource);
+            if (claim && (claim.session_id !== operation.sessionId || claim.claim_epoch !== operation.claimEpoch)) {
+              throw claimConflict(claim);
+            }
+          }
+          for (const resource of input.releaseResources ?? []) {
+            this.#database.prepare(`DELETE FROM claims
+             WHERE resource_type = ? AND resource_key = ?
+               AND session_id = ? AND claim_epoch = ?`).run(resource.type, resource.key, operation.sessionId, operation.claimEpoch);
+          }
+          const leaseUntil = now + this.#leaseMs;
+          for (const resource of input.claimResources ?? []) {
+            this.#database.prepare(`INSERT INTO claims(
+              resource_type, resource_key, session_id, claim_epoch, lease_until_ms
+            ) VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(resource_type, resource_key) DO UPDATE SET
+              session_id = excluded.session_id,
+              claim_epoch = excluded.claim_epoch,
+              lease_until_ms = excluded.lease_until_ms`).run(resource.type, resource.key, operation.sessionId, operation.claimEpoch, leaseUntil);
+          }
+          const nextAuthorityVersion = operation.authorityVersion + 1;
+          const bindings = {
+            ...JSON.parse(current.bindings_json),
+            ...input.bindings
+          };
+          this.#database.prepare(`UPDATE sessions
+           SET state = ?, bindings_json = ?, authority_version = ?, updated_ms = ?
+           WHERE session_id = ? AND claim_epoch = ? AND authority_version = ?`).run(input.state ?? current.state, JSON.stringify(bindings), nextAuthorityVersion, now, operation.sessionId, operation.claimEpoch, operation.authorityVersion);
+          this.#database.prepare(`UPDATE operations SET authority_version = ?, lease_until_ms = ?
+           WHERE operation_id = ? AND session_id = ? AND claim_epoch = ?
+             AND authority_version = ?`).run(nextAuthorityVersion, leaseUntil, operation.operationId, operation.sessionId, operation.claimEpoch, operation.authorityVersion);
+          const context = this.#operationContext.getStore();
+          if (context?.operationId === operation.operationId) {
+            context.authorityVersion = nextAuthorityVersion;
+          }
+          return { ...operation, authorityVersion: nextAuthorityVersion };
+        }, input.assertBeforeCommit, input.onCommitted);
+      }
+      endOperationWithBindings(operation, bindings) {
+        const now = this.#now();
+        this.#transaction(() => {
+          const current = asSession(this.#database.prepare(`SELECT state, claim_epoch, authority_version, bindings_json
+             FROM sessions WHERE session_id = ?`).get(operation.sessionId));
+          const active = this.#database.prepare(`SELECT operation_id FROM operations
+           WHERE operation_id = ? AND session_id = ? AND claim_epoch = ?
+             AND authority_version = ?`).get(operation.operationId, operation.sessionId, operation.claimEpoch, operation.authorityVersion);
+          if (!current || !isOperationalState(current.state) || current.claim_epoch !== operation.claimEpoch || current.authority_version !== operation.authorityVersion || !active) {
+            throw new SessionAuthorityError("AUTHORITY_LOST_DURING_OPERATION", "operation fence no longer matches current authority");
+          }
+          const nextBindings = {
+            ...JSON.parse(current.bindings_json),
+            ...bindings
+          };
+          this.#database.prepare(`UPDATE sessions
+           SET bindings_json = ?, authority_version = authority_version + 1, updated_ms = ?
+           WHERE session_id = ? AND claim_epoch = ? AND authority_version = ?`).run(JSON.stringify(nextBindings), now, operation.sessionId, operation.claimEpoch, operation.authorityVersion);
+          this.#database.prepare(`DELETE FROM operations
+           WHERE operation_id = ? AND session_id = ? AND claim_epoch = ?
+             AND authority_version = ?`).run(operation.operationId, operation.sessionId, operation.claimEpoch, operation.authorityVersion);
+        });
+        this.#pendingPlatformReceipts.delete(operation.operationId);
+      }
+      getSessionStatus(sessionId) {
+        const row = asSession(this.#database.prepare(`SELECT session_id, source_key, worktree_key, app_root_key, state,
+                  claim_epoch, authority_version, supervisor_pid, supervisor_birth,
+                  worker_instance, worker_pid, worker_birth, lease_until_ms,
+                  source_json, bindings_json
+           FROM sessions WHERE session_id = ?`).get(sessionId));
+        if (!row)
+          return null;
+        const claims = this.#database.prepare(`SELECT resource_type, resource_key, session_id, claim_epoch, lease_until_ms
+         FROM claims WHERE session_id = ? AND claim_epoch = ?
+         ORDER BY resource_type, resource_key`).all(sessionId, row.claim_epoch).map((claim) => {
+          const typed = claim;
+          return {
+            type: typed.resource_type,
+            key: typed.resource_key,
+            sessionId: typed.session_id,
+            claimEpoch: typed.claim_epoch,
+            leaseUntilMs: typed.lease_until_ms
+          };
+        });
+        return {
+          sessionId: row.session_id,
+          sourceKey: row.source_key,
+          worktreeKey: row.worktree_key,
+          appRootKey: row.app_root_key,
+          state: row.state,
+          claimEpoch: row.claim_epoch,
+          authorityVersion: row.authority_version,
+          leaseUntilMs: row.lease_until_ms,
+          source: JSON.parse(row.source_json),
+          bindings: JSON.parse(row.bindings_json),
+          claims,
+          worker: {
+            instanceId: row.worker_instance,
+            pid: row.worker_pid,
+            birthAvailable: row.worker_birth !== null
+          }
+        };
+      }
+      countOtherOperationalSessions(sessionId) {
+        const rows = this.#database.prepare(`SELECT state FROM sessions
+         WHERE session_id <> ?`).all(sessionId);
+        return rows.filter((row) => typeof row.state === "string" && isOperationalState(row.state)).length;
+      }
+      isMetroEvidenceSocketReferencedByOtherSession(sessionId, path) {
+        const rows = this.#database.prepare(`SELECT bindings_json FROM sessions
+         WHERE session_id <> ? AND state <> 'released'`).all(sessionId);
+        return rows.some((row) => {
+          try {
+            return referencesMetroEvidenceSocket(JSON.parse(String(row.bindings_json)), path);
+          } catch {
+            return true;
+          }
+        });
+      }
+      // GH #706: released and proven-stale rows are not live sessions, so they never
+      // count towards the "multiple live sessions match this worktree" refusal.
+      findSessionsByWorktree(worktreeKey) {
+        const rows = this.#database.prepare(`SELECT session_id, supervisor_pid, supervisor_birth FROM sessions
+         WHERE worktree_key = ? AND state NOT IN ('released', 'stale')
+         ORDER BY updated_ms DESC`).all(worktreeKey);
+        return rows.filter((row) => !this.#supervisorProvenDead(row)).map((row) => this.getSessionStatus(row.session_id)).filter((status) => status !== null);
+      }
+      #supervisorProvenDead(row) {
+        try {
+          return this.#ownerStatus({
+            sessionId: row.session_id,
+            pid: row.supervisor_pid,
+            token: row.supervisor_birth
+          }) === "mismatch";
+        } catch {
+          return false;
+        }
+      }
+      getControllerBinding(session2) {
+        const row = this.#requireSession(session2);
+        return this.#controllerBinding(row);
+      }
+      getHandoffCancellationControllerBinding(session2) {
+        const row = this.#requireHandoffSession(session2);
+        return this.#controllerBinding(row);
+      }
+      #controllerBinding(row) {
+        return {
+          sessionId: row.session_id,
+          claimEpoch: row.claim_epoch,
+          authorityVersion: row.authority_version,
+          supervisor: { pid: row.supervisor_pid, token: row.supervisor_birth },
+          worker: {
+            instanceId: row.worker_instance,
+            pid: row.worker_pid,
+            token: row.worker_birth
+          }
+        };
+      }
+      beginSessionClose(session2) {
+        const now = this.#now();
+        const operationIds = this.#transaction(() => {
+          const current = this.#requireSession(session2);
+          const active = this.#database.prepare(`SELECT operation_id, profile FROM operations
+           WHERE session_id = ? AND claim_epoch = ? LIMIT 1`).get(session2.sessionId, session2.claimEpoch);
+          const bindings = JSON.parse(current.bindings_json);
+          this.#requireIntegrationRestored(bindings);
+          const metro = bindings.metroCleanup ?? bindings.metro;
+          if (active?.profile === "transition:ensure-metro" && metro?.mode !== "managed") {
+            throw new SessionAuthorityError("SESSION_OPERATION_ACTIVE", "managed Metro transition has not published exact cleanup authority");
+          }
+          const rows = this.#database.prepare(`SELECT operation_id FROM operations
+           WHERE session_id = ? AND claim_epoch = ?`).all(session2.sessionId, session2.claimEpoch);
+          this.#database.prepare("DELETE FROM operations WHERE session_id = ? AND claim_epoch = ?").run(session2.sessionId, session2.claimEpoch);
+          this.#database.prepare(`UPDATE sessions
+           SET state = 'closing', authority_version = authority_version + 1, updated_ms = ?
+           WHERE session_id = ? AND claim_epoch = ?`).run(now, session2.sessionId, session2.claimEpoch);
+          return rows.map((row) => String(row.operation_id));
+        });
+        for (const operationId of operationIds) {
+          this.#pendingPlatformReceipts.delete(operationId);
+        }
+        const status = this.getSessionStatus(session2.sessionId);
+        if (!status || status.state !== "closing") {
+          throw new SessionAuthorityError("SESSION_OWNER_LOST", "session close reservation did not persist");
+        }
+        return status;
+      }
+      completeSessionClose(session2) {
+        const now = this.#now();
+        this.#transaction(() => {
+          const row = asSession(this.#database.prepare("SELECT state, claim_epoch, bindings_json FROM sessions WHERE session_id = ?").get(session2.sessionId));
+          if (!row || row.state !== "closing" || row.claim_epoch !== session2.claimEpoch) {
+            throw new SessionAuthorityError("SESSION_OWNER_LOST", "only the unchanged closing session may be released");
+          }
+          this.#requireIntegrationRestored(JSON.parse(String(row.bindings_json)));
+          this.#database.prepare("DELETE FROM claims WHERE session_id = ? AND claim_epoch = ?").run(session2.sessionId, session2.claimEpoch);
+          this.#database.prepare(`UPDATE sessions
+           SET state = 'released', claim_epoch = claim_epoch + 1,
+               authority_version = authority_version + 1, updated_ms = ?
+           WHERE session_id = ? AND claim_epoch = ? AND state = 'closing'`).run(now, session2.sessionId, session2.claimEpoch);
+        });
+      }
+      releaseSession(session2) {
+        const now = this.#now();
+        this.#transaction(() => {
+          const current = this.#requireSession(session2);
+          this.#requireIntegrationRestored(JSON.parse(current.bindings_json));
+          const active = this.#database.prepare(`SELECT operation_id, profile FROM operations
+           WHERE session_id = ? AND claim_epoch = ? LIMIT 1`).get(session2.sessionId, session2.claimEpoch);
+          if (active && !String(active.profile).startsWith("transition:")) {
+            throw new SessionAuthorityError("SESSION_OPERATION_ACTIVE", "session cannot be released while an operation is active");
+          }
+          if (active) {
+            const context = this.#operationContext.getStore();
+            if (!context || context.operationId !== active.operation_id || context.sessionId !== session2.sessionId || context.claimEpoch !== session2.claimEpoch) {
+              throw new SessionAuthorityError("AUTHORITY_LOST_DURING_OPERATION", "session release is not owned by the active operation fence");
+            }
+            this.#database.prepare("DELETE FROM operations WHERE session_id = ? AND claim_epoch = ?").run(session2.sessionId, session2.claimEpoch);
+          }
+          this.#database.prepare("DELETE FROM claims WHERE session_id = ? AND claim_epoch = ?").run(session2.sessionId, session2.claimEpoch);
+          this.#database.prepare(`UPDATE sessions
+           SET state = 'released', claim_epoch = claim_epoch + 1,
+               authority_version = authority_version + 1, updated_ms = ?
+           WHERE session_id = ? AND claim_epoch = ?`).run(now, session2.sessionId, session2.claimEpoch);
+        });
+      }
+      #discardAbsentBlockedContenders(input) {
+        if (this.#findClaim("source", input.worktreeKey))
+          return;
+        const rows = this.#database.prepare(`SELECT session_id, claim_epoch FROM sessions
+         WHERE state = 'blocked' AND source_key = ? AND worktree_key = ? AND app_root_key = ?`).all(input.sourceKey, input.worktreeKey, input.appRootKey);
+        const now = this.#now();
+        for (const row of rows) {
+          const requirement = this.inspectRecoveryRequirement(row.session_id);
+          if (requirement.requirement !== "transport-restart" || requirement.priorOwner !== "absent") {
+            continue;
+          }
+          const owned = this.#database.prepare("SELECT resource_key FROM claims WHERE session_id = ? LIMIT 1").get(row.session_id);
+          if (owned)
+            continue;
+          this.#database.prepare(`UPDATE sessions
+           SET state = 'released', claim_epoch = claim_epoch + 1,
+               authority_version = authority_version + 1, updated_ms = ?
+           WHERE session_id = ? AND claim_epoch = ? AND state = 'blocked'`).run(now, row.session_id, row.claim_epoch);
+        }
+      }
+      discardBlockedSession(session2) {
+        const now = this.#now();
+        this.#transaction(() => {
+          const row = asSession(this.#database.prepare("SELECT state, claim_epoch FROM sessions WHERE session_id = ?").get(session2.sessionId));
+          if (!row || row.state !== "blocked" || row.claim_epoch !== session2.claimEpoch) {
+            throw new SessionAuthorityError("SESSION_OWNER_LOST", "only the unchanged blocked session may be discarded");
+          }
+          const claim = this.#database.prepare("SELECT resource_key FROM claims WHERE session_id = ? LIMIT 1").get(session2.sessionId);
+          if (claim) {
+            throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "blocked session unexpectedly owns resource claims");
+          }
+          this.#database.prepare(`UPDATE sessions
+           SET state = 'released', claim_epoch = claim_epoch + 1,
+               authority_version = authority_version + 1, updated_ms = ?
+           WHERE session_id = ? AND claim_epoch = ?`).run(now, session2.sessionId, session2.claimEpoch);
+        });
+      }
+      /** GH #792: the ownership picture headless recovery reports; releases nothing. */
+      inspectSourceOwnership(input) {
+        const abandonedContenders = this.#countAbandonedBlockedContenders(input.worktreeKey);
+        const claim = this.#findClaim("source", input.worktreeKey);
+        if (!claim)
+          return { owner: "absent", sameRoot: false, abandonedContenders };
+        const row = asSession(this.#database.prepare(`SELECT session_id, source_key, worktree_key, app_root_key, claim_epoch,
+                  supervisor_pid, supervisor_birth, source_json, bindings_json
+           FROM sessions WHERE session_id = ?`).get(claim.session_id));
+        if (!row)
+          return { owner: "absent", sameRoot: false, abandonedContenders };
+        const ownerAppRoot = readSourceAppRoot(row.source_json);
+        let status = "unknown";
+        try {
+          status = this.#ownerStatus({
+            sessionId: row.session_id,
+            pid: row.supervisor_pid,
+            token: row.supervisor_birth
+          });
+        } catch {
+          status = "unknown";
+        }
+        const blocked = readStartupCleanupBlocker(row.bindings_json);
+        const sameAppRoot = row.worktree_key === input.worktreeKey && row.app_root_key === input.appRootKey;
+        const sameSource2 = row.source_key === input.sourceKey;
+        return {
+          owner: status === "match" ? "live" : status === "mismatch" ? "stale" : "unprovable",
+          sameRoot: sameAppRoot && sameSource2,
+          ...sameAppRoot ? sameSource2 ? {} : { mismatch: "source-identity" } : { mismatch: "app-root" },
+          abandonedContenders,
+          holder: {
+            session: row.session_id.slice(0, 12),
+            ...ownerAppRoot === void 0 ? {} : { appRoot: ownerAppRoot }
+          },
+          ...blocked ? { startupCleanupBlocked: blocked } : {}
+        };
+      }
+      #countAbandonedBlockedContenders(worktreeKey) {
+        const rows = this.#database.prepare(`SELECT session_id, supervisor_pid, supervisor_birth FROM sessions
+         WHERE worktree_key = ? AND state = 'blocked'
+           AND NOT EXISTS (SELECT 1 FROM claims WHERE claims.session_id = sessions.session_id)`).all(worktreeKey);
+        return rows.filter((row) => this.#supervisorProvenDead(row)).length;
+      }
+      /**
+       * GH #792: a blocked contender holds no authority, so an abandoned row must not survive
+       * as the next attempt's prior owner. Proven-dead and claim-less only.
+       */
+      discardAbandonedBlockedContenders(worktreeKey) {
+        const rows = this.#database.prepare(`SELECT session_id, claim_epoch, supervisor_pid, supervisor_birth
+         FROM sessions WHERE worktree_key = ? AND state = 'blocked'
+         ORDER BY updated_ms ASC`).all(worktreeKey);
+        const discarded = [];
+        for (const row of rows) {
+          if (!this.#supervisorProvenDead(row))
+            continue;
+          try {
+            const now = this.#now();
+            const released = this.#transaction(() => {
+              const claim = this.#database.prepare("SELECT resource_key FROM claims WHERE session_id = ? LIMIT 1").get(row.session_id);
+              if (claim)
+                return false;
+              const update = this.#database.prepare(`UPDATE sessions
+               SET state = 'released', claim_epoch = claim_epoch + 1,
+                   authority_version = authority_version + 1, updated_ms = ?
+               WHERE session_id = ? AND claim_epoch = ? AND state = 'blocked'`).run(now, row.session_id, row.claim_epoch);
+              return update.changes === 1;
+            });
+            if (released)
+              discarded.push(row.session_id);
+          } catch {
+          }
+        }
+        return discarded;
+      }
+      prepareHandoff(session2, input) {
+        const now = this.#now();
+        const handoffId = randomBytes(16).toString("hex");
+        const token2 = randomBytes(32).toString("base64url");
+        const tokenHash = createHash3("sha256").update(token2).digest("hex");
+        this.#transaction(() => {
+          const current = this.#requireSession(session2);
+          let targetInstance = input.targetInstance;
+          if (input.targetHandle) {
+            const targets = this.#database.prepare(`SELECT session_id, bindings_json FROM sessions
+             WHERE state = 'blocked' AND source_key = ? AND worktree_key = ? AND app_root_key = ?`).all(current.source_key, current.worktree_key, current.app_root_key);
+            for (const target of targets) {
+              const bindings = JSON.parse(target.bindings_json);
+              const handles = bindings.recoveryHandles;
+              const handle = handles?.handoffRecipient;
+              if (handle && this.#recoveryHandleMatches(handle, input.targetHandle, now)) {
+                targetInstance = typeof handle.workerInstance === "string" ? handle.workerInstance : void 0;
+                this.#database.prepare("UPDATE sessions SET bindings_json = ? WHERE session_id = ?").run(JSON.stringify({
+                  ...bindings,
+                  recoveryHandles: { ...handles, handoffRecipient: null }
+                }), target.session_id);
+                break;
+              }
+            }
+          }
+          if (!targetInstance) {
+            throw new SessionAuthorityError("HANDOFF_TARGET_MISMATCH", "handoff recipient capability is invalid or expired");
+          }
+          const active = this.#database.prepare(`SELECT operation_id, profile FROM operations
+           WHERE session_id = ? AND claim_epoch = ? LIMIT 1`).get(session2.sessionId, session2.claimEpoch);
+          if (active && !String(active.profile).startsWith("transition:")) {
+            throw new SessionAuthorityError("SESSION_OPERATION_ACTIVE", "session cannot enter handoff while an operation is active");
+          }
+          this.#database.prepare(`INSERT INTO handoffs(
+            handoff_id, session_id, claim_epoch, target_instance,
+            token_hash, source_state, expires_ms, consumed_ms
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL)`).run(handoffId, session2.sessionId, session2.claimEpoch, targetInstance, tokenHash, this.#requireSession(session2).state, now + (input.ttlMs ?? 15e3));
+          this.#database.prepare(`UPDATE sessions
+           SET state = 'handoff', authority_version = authority_version + 1, updated_ms = ?
+           WHERE session_id = ? AND claim_epoch = ?`).run(now, session2.sessionId, session2.claimEpoch);
+          this.#advanceActiveOperationFence(session2, current.authority_version, current.authority_version + 1);
+        });
+        return { handoffId, token: token2 };
+      }
+      prepareHandoffForHandle(session2, input) {
+        return this.prepareHandoff(session2, input);
+      }
+      cancelHandoff(session2, handoffId) {
+        const now = this.#now();
+        this.#transaction(() => {
+          const handoff = this.#database.prepare(`SELECT session_id, claim_epoch, source_state, consumed_ms
+           FROM handoffs WHERE handoff_id = ?`).get(handoffId);
+          if (!handoff || handoff.session_id !== session2.sessionId || handoff.claim_epoch !== session2.claimEpoch) {
+            throw new SessionAuthorityError("HANDOFF_NOT_FOUND", "handoff does not belong to session");
+          }
+          if (handoff.consumed_ms !== null) {
+            throw new SessionAuthorityError("HANDOFF_ALREADY_CONSUMED", "handoff is already terminal");
+          }
+          const row = asSession(this.#database.prepare(`SELECT state, claim_epoch, authority_version, bindings_json
+             FROM sessions WHERE session_id = ?`).get(session2.sessionId));
+          if (!row || row.state !== "handoff" || row.claim_epoch !== session2.claimEpoch) {
+            throw new SessionAuthorityError("SESSION_OWNER_LOST", "handoff source owner changed");
+          }
+          const bindings = JSON.parse(row.bindings_json);
+          if (bindings.managedMetroHandoffReservation) {
+            throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "handoff cancellation is fenced while managed Metro shutdown is reserved");
+          }
+          this.#database.prepare(`UPDATE sessions
+           SET state = ?, authority_version = authority_version + 1, updated_ms = ?
+           WHERE session_id = ? AND claim_epoch = ?`).run(handoff.source_state, now, session2.sessionId, session2.claimEpoch);
+          this.#database.prepare("UPDATE handoffs SET consumed_ms = ? WHERE handoff_id = ?").run(now, handoffId);
+          this.#advanceActiveOperationFence(session2, row.authority_version, row.authority_version + 1);
+        });
+      }
+      getHandoffOwner(handoffId) {
+        const row = this.#database.prepare("SELECT session_id FROM handoffs WHERE handoff_id = ?").get(handoffId);
+        return typeof row?.session_id === "string" ? row.session_id : null;
+      }
+      reserveManagedMetroHandoffCleanup(target, input) {
+        const now = this.#now();
+        return this.#transaction(() => {
+          const context = this.#requireHandoffIntoContext(target, input, {
+            allowExactReservationAfterExpiry: true,
+            commitRecipientRotation: true
+          });
+          const active = this.#database.prepare(`SELECT operation_id FROM operations
+           WHERE session_id = ?
+              OR (session_id = ? AND profile NOT LIKE 'transition:%')
+           LIMIT 1`).get(context.prior.session_id, target.sessionId);
+          if (active) {
+            throw new SessionAuthorityError("SESSION_OPERATION_ACTIVE", "handoff cleanup cannot be reserved while either session has an active operation");
+          }
+          const managedMetro = context.bindings.metro && typeof context.bindings.metro === "object" && context.bindings.metro.mode === "managed" ? context.bindings.metro : null;
+          if (!managedMetro)
+            return null;
+          if (context.reservation)
+            return context.reservation;
+          const reservation = {
+            handoffId: context.handoff.handoff_id,
+            sourceClaimEpoch: context.handoff.claim_epoch,
+            targetSessionId: target.sessionId,
+            targetClaimEpoch: target.claimEpoch,
+            targetInstance: input.targetInstance,
+            phase: "shutdown_reserved",
+            metro: {
+              ...managedMetro,
+              sourceSessionId: context.prior.session_id,
+              stopRequestedAt: now,
+              completedAt: null
+            }
+          };
+          this.#database.prepare(`UPDATE sessions
+           SET bindings_json = ?, authority_version = authority_version + 1, updated_ms = ?
+           WHERE session_id = ? AND claim_epoch = ? AND state = 'handoff'`).run(JSON.stringify({
+            ...context.bindings,
+            managedMetroHandoffReservation: reservation
+          }), now, context.prior.session_id, context.prior.claim_epoch);
+          return reservation;
+        });
+      }
+      completeManagedMetroHandoffCleanup(target, input) {
+        const now = this.#now();
+        return this.#transaction(() => {
+          const context = this.#requireHandoffIntoContext(target, input, {
+            allowExactReservationAfterExpiry: true,
+            commitRecipientRotation: true
+          });
+          const reservation = context.reservation;
+          if (!reservation) {
+            throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "managed Metro shutdown has no durable handoff reservation");
+          }
+          if (reservation.phase === "shutdown_completed")
+            return reservation;
+          const completed = {
+            ...reservation,
+            phase: "shutdown_completed",
+            metro: { ...reservation.metro, completedAt: now }
+          };
+          this.#database.prepare(`UPDATE sessions
+           SET bindings_json = ?, authority_version = authority_version + 1, updated_ms = ?
+           WHERE session_id = ? AND claim_epoch = ? AND state = 'handoff'`).run(JSON.stringify({
+            ...context.bindings,
+            managedMetroHandoffReservation: completed
+          }), now, context.prior.session_id, context.prior.claim_epoch);
+          return completed;
+        });
+      }
+      refuseManagedMetroHandoffCleanup(target, input) {
+        const now = this.#now();
+        this.#transaction(() => {
+          const context = this.#requireHandoffIntoContext(target, input, {
+            allowExactReservationAfterExpiry: true,
+            commitRecipientRotation: true
+          });
+          const reservation = context.reservation;
+          if (!reservation || reservation.phase !== "shutdown_reserved") {
+            throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "managed Metro shutdown refusal does not match an active reservation");
+          }
+          const sourceState2 = this.#database.prepare("SELECT source_state FROM handoffs WHERE handoff_id = ?").get(input.handoffId);
+          if (typeof sourceState2?.source_state !== "string") {
+            throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "handoff source state is unavailable for donor restoration");
+          }
+          this.#database.prepare(`UPDATE sessions
+           SET state = ?, bindings_json = ?, authority_version = authority_version + 1,
+               updated_ms = ?
+           WHERE session_id = ? AND claim_epoch = ? AND state = 'handoff'`).run(sourceState2.source_state, JSON.stringify({
+            ...context.bindings,
+            managedMetroHandoffReservation: null
+          }), now, context.prior.session_id, context.prior.claim_epoch);
+          this.#database.prepare("UPDATE handoffs SET consumed_ms = ? WHERE handoff_id = ?").run(now, input.handoffId);
+        });
+      }
+      validateHandoffInto(target, input) {
+        this.#transaction(() => {
+          this.#requireHandoffIntoContext(target, input, {
+            allowExactReservationAfterExpiry: false,
+            commitRecipientRotation: false
+          });
+        });
+      }
+      validateHandoffCleanupResumption(target, input) {
+        this.#transaction(() => {
+          const row = asSession(this.#database.prepare(`SELECT state, claim_epoch, worker_instance, bindings_json
+             FROM sessions WHERE session_id = ?`).get(target.sessionId));
+          const bindings = row ? JSON.parse(row.bindings_json) : {};
+          const cleanup = bindings.handoffCleanup && typeof bindings.handoffCleanup === "object" ? bindings.handoffCleanup : null;
+          const handoff = this.#database.prepare("SELECT token_hash, consumed_ms FROM handoffs WHERE handoff_id = ?").get(input.handoffId);
+          const expected = Buffer.from(typeof handoff?.token_hash === "string" ? handoff.token_hash : "", "hex");
+          const actual = createHash3("sha256").update(input.token).digest();
+          const tokenMatches = expected.length === actual.length && timingSafeEqual(expected, actual);
+          if (!row || row.state !== "handoff_cleanup" || row.claim_epoch !== target.claimEpoch || row.worker_instance !== input.targetInstance || cleanup?.handoffId !== input.handoffId || cleanup?.targetSessionId !== target.sessionId || cleanup?.targetClaimEpoch !== target.claimEpoch || typeof handoff?.consumed_ms !== "number" || !tokenMatches) {
+            throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "handoff cleanup resumption requires the original handoff capability");
+          }
+        });
+      }
+      acceptHandoff(input) {
+        const now = this.#now();
+        return this.#transaction(() => {
+          const handoff = this.#database.prepare(`SELECT handoff_id, session_id, claim_epoch, target_instance,
+                  token_hash, expires_ms, consumed_ms
+           FROM handoffs WHERE handoff_id = ?`).get(input.handoffId);
+          if (!handoff) {
+            throw new SessionAuthorityError("HANDOFF_NOT_FOUND", "handoff does not exist");
+          }
+          if (handoff.consumed_ms !== null) {
+            throw new SessionAuthorityError("HANDOFF_ALREADY_CONSUMED", "handoff was already accepted");
+          }
+          if (handoff.expires_ms < now) {
+            throw new SessionAuthorityError("HANDOFF_EXPIRED", "handoff capability expired");
+          }
+          if (handoff.target_instance !== input.targetInstance) {
+            throw new SessionAuthorityError("HANDOFF_TARGET_MISMATCH", "handoff target instance does not match");
+          }
+          const expected = Buffer.from(handoff.token_hash, "hex");
+          const actual = Buffer.from(createHash3("sha256").update(input.token).digest("hex"), "hex");
+          if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) {
+            throw new SessionAuthorityError("HANDOFF_TOKEN_INVALID", "handoff capability is invalid");
+          }
+          const session2 = asSession(this.#database.prepare(`SELECT session_id, state, claim_epoch, authority_version,
+                    supervisor_pid, supervisor_birth, lease_until_ms, bindings_json
+             FROM sessions WHERE session_id = ?`).get(handoff.session_id));
+          if (!session2 || session2.state !== "handoff" || session2.claim_epoch !== handoff.claim_epoch) {
+            throw new SessionAuthorityError("SESSION_OWNER_LOST", "handoff no longer matches the session claim epoch");
+          }
+          const sessionBindings = JSON.parse(session2.bindings_json);
+          if (sessionBindings.metro && typeof sessionBindings.metro === "object" && sessionBindings.metro.mode === "managed") {
+            throw new SessionAuthorityError("METRO_AUTHORITY_MISMATCH", "managed Metro handoff requires durable cleanup through a blocked recipient");
+          }
+          const nextEpoch = session2.claim_epoch + 1;
+          const leaseUntil = now + this.#leaseMs;
+          this.#database.prepare(`DELETE FROM claims
+           WHERE session_id = ? AND claim_epoch = ?
+             AND resource_type NOT IN ('source', 'metro-port', 'observe-port', 'device', 'recorder')`).run(session2.session_id, session2.claim_epoch);
+          this.#database.prepare(`UPDATE claims SET claim_epoch = ?, lease_until_ms = ?
+           WHERE session_id = ? AND claim_epoch = ?`).run(nextEpoch, leaseUntil, session2.session_id, session2.claim_epoch);
+          this.#database.prepare(`UPDATE sessions
+           SET state = 'source_bound', claim_epoch = ?, authority_version = authority_version + 1,
+               supervisor_pid = ?, supervisor_birth = ?, heartbeat_ms = ?,
+               lease_until_ms = ?, bindings_json = ?, updated_ms = ?
+           WHERE session_id = ? AND claim_epoch = ?`).run(nextEpoch, input.supervisor.pid, input.supervisor.token, now, leaseUntil, JSON.stringify({
+            ...sessionBindings,
+            bundle: null,
+            runner: null,
+            observe: null,
+            proof: null,
+            pendingBuild: null
+          }), now, session2.session_id, session2.claim_epoch);
+          this.#database.prepare("UPDATE handoffs SET consumed_ms = ? WHERE handoff_id = ?").run(now, handoff.handoff_id);
+          return { sessionId: session2.session_id, claimEpoch: nextEpoch };
+        });
+      }
+      acceptHandoffInto(target, input) {
+        const now = this.#now();
+        return this.#transaction(() => {
+          const context = this.#requireHandoffIntoContext(target, input, {
+            allowExactReservationAfterExpiry: true,
+            commitRecipientRotation: true
+          });
+          const { targetRow, handoff, prior, bindings } = context;
+          const active = this.#database.prepare(`SELECT operation_id FROM operations
+           WHERE session_id = ?
+              OR (session_id = ? AND profile NOT LIKE 'transition:%')
+           LIMIT 1`).get(prior.session_id, target.sessionId);
+          if (active) {
+            throw new SessionAuthorityError("SESSION_OPERATION_ACTIVE", "handoff cannot transfer while either session has an active operation");
+          }
+          const priorRunnerClaim = this.#database.prepare(`SELECT resource_key FROM claims
+           WHERE session_id = ? AND claim_epoch = ? AND resource_type = 'runner'`).get(prior.session_id, prior.claim_epoch);
+          if (bindingsRunnerPresent(prior.bindings_json) && !priorRunnerClaim?.resource_key) {
+            throw new SessionAuthorityError("RUNNER_OWNERSHIP_MISMATCH", "handoff runner binding has no exclusive cleanup claim");
+          }
+          const managedMetro = bindings.metro && typeof bindings.metro === "object" && bindings.metro.mode === "managed" ? bindings.metro : null;
+          if (managedMetro && (!context.reservation || context.reservation.phase !== "shutdown_completed" || typeof context.reservation.metro.completedAt !== "number")) {
+            throw new SessionAuthorityError("METRO_AUTHORITY_MISMATCH", "managed Metro shutdown reservation must be durably completed before ownership transfers");
+          }
+          const priorRecorderClaim = this.#database.prepare(`SELECT resource_key FROM claims
+           WHERE session_id = ? AND claim_epoch = ? AND resource_type = 'recorder'`).get(prior.session_id, prior.claim_epoch);
+          if (bindings.recorder && !priorRecorderClaim?.resource_key) {
+            throw new SessionAuthorityError("RECORDING_AUTHORITY_MISMATCH", "handoff recorder binding has no exclusive cleanup claim");
+          }
+          this.#database.prepare(`DELETE FROM claims
+           WHERE session_id = ? AND claim_epoch = ?`).run(target.sessionId, target.claimEpoch);
+          this.#database.prepare(`DELETE FROM claims
+           WHERE session_id = ? AND claim_epoch = ?
+             AND resource_type NOT IN ('source', 'metro-port', 'observe-port', 'device', 'runner', 'recorder')`).run(prior.session_id, prior.claim_epoch);
+          this.#database.prepare(`UPDATE claims SET session_id = ?, claim_epoch = ?, lease_until_ms = ?
+           WHERE session_id = ? AND claim_epoch = ?`).run(target.sessionId, target.claimEpoch, now + this.#leaseMs, prior.session_id, prior.claim_epoch);
+          const targetBindings = JSON.parse(targetRow.bindings_json);
+          this.#database.prepare(`UPDATE sessions
+           SET state = 'handoff_cleanup', bindings_json = ?,
+               authority_version = authority_version + 1, updated_ms = ?
+           WHERE session_id = ? AND claim_epoch = ?`).run(JSON.stringify({
+            ...bindings,
+            managedMetroHandoffReservation: null,
+            metro: managedMetro ? null : bindings.metro,
+            bundle: null,
+            runner: null,
+            recorder: null,
+            observe: null,
+            proof: null,
+            pendingBuild: null,
+            recoveryCapabilityHash: targetBindings.recoveryCapabilityHash,
+            handoffCleanup: {
+              handoffId: handoff.handoff_id,
+              targetSessionId: target.sessionId,
+              targetClaimEpoch: target.claimEpoch,
+              metro: null,
+              observe: bindings.observe && typeof bindings.observe === "object" ? {
+                ...bindings.observe,
+                stopRequestedAt: null,
+                completedAt: null
+              } : null,
+              runner: bindings.runner && typeof bindings.runner === "object" ? {
+                ...bindings.runner,
+                claimKey: priorRunnerClaim?.resource_key,
+                stopRequestedAt: null,
+                completedAt: null
+              } : null,
+              recorder: bindings.recorder && typeof bindings.recorder === "object" ? {
+                ...bindings.recorder,
+                claimKey: priorRecorderClaim?.resource_key,
+                stopRequestedAt: null,
+                completedAt: null
+              } : null
+            }
+          }), now, target.sessionId, target.claimEpoch);
+          this.#database.prepare(`UPDATE sessions
+           SET state = 'released', claim_epoch = claim_epoch + 1,
+               authority_version = authority_version + 1, updated_ms = ?
+           WHERE session_id = ? AND claim_epoch = ?`).run(now, prior.session_id, prior.claim_epoch);
+          this.#database.prepare("UPDATE handoffs SET consumed_ms = ? WHERE handoff_id = ?").run(now, handoff.handoff_id);
+          return {
+            ...this.getSessionStatus(target.sessionId)?.bindings.handoffCleanup
+          };
+        });
+      }
+      beginHandoffCleanupResource(target, targetInstance, resource) {
+        const now = this.#now();
+        return this.#transaction(() => {
+          const row = this.#requireHandoffCleanupOwner(target, targetInstance);
+          const bindings = JSON.parse(row.bindings_json);
+          const cleanup = bindings.handoffCleanup;
+          const current = cleanup?.[resource];
+          if (!current || typeof current !== "object")
+            return null;
+          const binding = current;
+          if (typeof binding.completedAt === "number")
+            return binding;
+          if (resource === "runner") {
+            const claimKey = String(binding.claimKey ?? "");
+            const expectedClaimKey = `${String(binding.platform)}:${String(binding.deviceId)}:${String(binding.port)}`;
+            const claim = this.#findClaim("runner", claimKey);
+            if (!claimKey || claimKey !== expectedClaimKey || claim?.session_id !== target.sessionId || claim.claim_epoch !== target.claimEpoch || typeof binding.capability !== "string" || typeof binding.instanceId !== "string") {
+              throw new SessionAuthorityError("RUNNER_OWNERSHIP_MISMATCH", "handoff runner cleanup claim no longer matches the authenticated binding");
+            }
+          }
+          if (resource === "recorder") {
+            const claimKey = String(binding.claimKey ?? "");
+            const expectedClaimKey = `${String(binding.platform)}:${String(binding.deviceId)}`;
+            const claim = this.#findClaim("recorder", claimKey);
+            if (!claimKey || claimKey !== expectedClaimKey || claim?.session_id !== target.sessionId || claim.claim_epoch !== target.claimEpoch || typeof binding.scope !== "string" || binding.phase !== "starting" && typeof binding.processBirth !== "string") {
+              throw new SessionAuthorityError("RECORDING_AUTHORITY_MISMATCH", "handoff recorder cleanup claim no longer matches the authenticated binding");
+            }
+          }
+          if (resource === "metro") {
+            const claim = this.#findClaim("metro-port", String(binding.port));
+            if (binding.port !== bindings.metroPort || claim?.session_id !== target.sessionId || claim.claim_epoch !== target.claimEpoch) {
+              throw new SessionAuthorityError("METRO_AUTHORITY_MISMATCH", "handoff Metro cleanup claim no longer matches the authenticated binding");
+            }
+          }
+          if (resource === "observe") {
+            const claim = this.#findClaim("observe-port", String(binding.port));
+            if (binding.port !== bindings.observePort || claim?.session_id !== target.sessionId || claim.claim_epoch !== target.claimEpoch) {
+              throw new SessionAuthorityError("OBSERVE_AUTHORITY_MISMATCH", "handoff Observe cleanup claim no longer matches the authenticated binding");
+            }
+          }
+          const requested = {
+            ...binding,
+            stopRequestedAt: typeof binding.stopRequestedAt === "number" ? binding.stopRequestedAt : now
+          };
+          this.#database.prepare(`UPDATE sessions SET bindings_json = ?, updated_ms = ?
+           WHERE session_id = ? AND claim_epoch = ? AND state = 'handoff_cleanup'`).run(JSON.stringify({
+            ...bindings,
+            handoffCleanup: { ...cleanup, [resource]: requested }
+          }), now, target.sessionId, target.claimEpoch);
+          return requested;
+        });
+      }
+      completeHandoffCleanupResource(target, targetInstance, resource) {
+        const now = this.#now();
+        this.#transaction(() => {
+          const row = this.#requireHandoffCleanupOwner(target, targetInstance);
+          const bindings = JSON.parse(row.bindings_json);
+          const cleanup = bindings.handoffCleanup;
+          const current = cleanup?.[resource];
+          if (!current || typeof current !== "object")
+            return;
+          const binding = current;
+          if (typeof binding.stopRequestedAt !== "number") {
+            throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", `${resource} cleanup was not durably requested`);
+          }
+          if (typeof binding.completedAt === "number")
+            return;
+          if (resource === "runner") {
+            this.#database.prepare(`DELETE FROM claims
+             WHERE resource_type = 'runner' AND resource_key = ?
+               AND session_id = ? AND claim_epoch = ?`).run(String(binding.claimKey), target.sessionId, target.claimEpoch);
+          }
+          if (resource === "recorder") {
+            this.#database.prepare(`DELETE FROM claims
+             WHERE resource_type = 'recorder' AND resource_key = ?
+               AND session_id = ? AND claim_epoch = ?`).run(String(binding.claimKey), target.sessionId, target.claimEpoch);
+          }
+          this.#database.prepare(`UPDATE sessions SET bindings_json = ?, updated_ms = ?
+           WHERE session_id = ? AND claim_epoch = ? AND state = 'handoff_cleanup'`).run(JSON.stringify({
+            ...bindings,
+            handoffCleanup: {
+              ...cleanup,
+              [resource]: { ...binding, completedAt: now }
+            }
+          }), now, target.sessionId, target.claimEpoch);
+        });
+      }
+      finishHandoffCleanup(target, targetInstance) {
+        const now = this.#now();
+        this.#transaction(() => {
+          const row = asSession(this.#database.prepare(`SELECT state, claim_epoch, worker_instance, bindings_json
+             FROM sessions WHERE session_id = ?`).get(target.sessionId));
+          if (!row || row.state !== "handoff_cleanup" || row.claim_epoch !== target.claimEpoch || row.worker_instance !== targetInstance) {
+            throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "handoff cleanup is not owned by this recovery worker");
+          }
+          const bindings = JSON.parse(row.bindings_json);
+          const cleanup = bindings.handoffCleanup;
+          for (const resource of ["metro", "runner", "observe", "recorder"]) {
+            const binding = cleanup?.[resource];
+            if (binding && typeof binding === "object" && typeof binding.completedAt !== "number") {
+              throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", `${resource} cleanup has not been durably completed`);
+            }
+          }
+          const staleDeviceCleanup = bindings.staleDeviceCleanup;
+          if (staleDeviceCleanup && typeof staleDeviceCleanup.platform === "string" && typeof staleDeviceCleanup.deviceId === "string") {
+            const deviceKey = `${staleDeviceCleanup.platform}:${staleDeviceCleanup.deviceId}`;
+            for (const claim of this.#deviceFamilyClaims(deviceKey)) {
+              if (claim.session_id !== target.sessionId || claim.claim_epoch !== target.claimEpoch) {
+                continue;
+              }
+              this.#database.prepare(`DELETE FROM claims
+               WHERE resource_type = ? AND resource_key = ?
+                 AND session_id = ? AND claim_epoch = ?`).run(claim.resource_type, claim.resource_key, target.sessionId, target.claimEpoch);
+            }
+          }
+          this.#database.prepare(`UPDATE sessions
+           SET state = 'source_bound', bindings_json = ?,
+               authority_version = authority_version + 1, updated_ms = ?
+           WHERE session_id = ? AND claim_epoch = ? AND state = 'handoff_cleanup'`).run(JSON.stringify({
+            ...bindings,
+            handoffCleanup: null,
+            recoveryHandles: null,
+            staleDeviceCleanup: null,
+            staleDeviceRelease: null
+          }), now, target.sessionId, target.claimEpoch);
+        });
+      }
+      recordPlatformAuthorityReceipt(session2, platform, receipt2) {
+        const operation = this.#operationContext.getStore();
+        if (!operation || operation.sessionId !== session2.sessionId || operation.claimEpoch !== session2.claimEpoch) {
+          throw new SessionAuthorityError("AUTHORITY_LOST_DURING_OPERATION", "platform receipt recording requires the active operation fence");
+        }
+        this.verifyOperation(operation);
+        const staged = this.#platformReceiptFromCurrentAuthority(session2, platform, receipt2);
+        const pending2 = this.#pendingPlatformReceipts.get(operation.operationId) ?? [];
+        pending2.push(staged);
+        this.#pendingPlatformReceipts.set(operation.operationId, pending2);
+      }
+      commitPlatformAuthorityReceipts(operation) {
+        const pending2 = this.#pendingPlatformReceipts.get(operation.operationId) ?? [];
+        if (pending2.length === 0)
+          return;
+        const now = this.#now();
+        this.#transaction(() => {
+          this.verifyOperation(operation);
+          for (const staged of pending2) {
+            const current = this.#platformReceiptFromCurrentAuthority(staged.session, staged.platform, staged.receipt);
+            this.#invalidatePlatformReceipt(staged.session, staged.platform);
+            this.#database.prepare(`INSERT INTO platform_authority_receipts(
+               session_id, claim_epoch, platform, receipt_json, updated_ms
+             ) VALUES (?, ?, ?, ?, ?)
+             ON CONFLICT(session_id, platform) DO UPDATE SET
+               claim_epoch = excluded.claim_epoch,
+               receipt_json = excluded.receipt_json,
+               updated_ms = excluded.updated_ms`).run(staged.session.sessionId, staged.session.claimEpoch, staged.platform, JSON.stringify({ receipt: staged.receipt, probe: current.probe }), now);
+          }
+        });
+        this.#pendingPlatformReceipts.delete(operation.operationId);
+      }
+      validatePlatformAuthorityReceipt(session2, platform, receipt2) {
+        const row = this.#database.prepare(`SELECT claim_epoch, receipt_json FROM platform_authority_receipts
+         WHERE session_id = ? AND platform = ?`).get(session2.sessionId, platform);
+        const persisted = typeof row?.receipt_json === "string" ? JSON.parse(row.receipt_json) : null;
+        const persistedReceipt = persisted?.receipt && typeof persisted.receipt === "object" ? persisted.receipt : persisted;
+        return row?.claim_epoch === session2.claimEpoch && JSON.stringify(persistedReceipt) === JSON.stringify(receipt2);
+      }
+      getPlatformAuthorityProbe(session2, platform, receipt2) {
+        if (!this.validatePlatformAuthorityReceipt(session2, platform, receipt2))
+          return null;
+        const row = this.#database.prepare(`SELECT receipt_json FROM platform_authority_receipts
+         WHERE session_id = ? AND claim_epoch = ? AND platform = ?`).get(session2.sessionId, session2.claimEpoch, platform);
+        if (typeof row?.receipt_json !== "string")
+          return null;
+        const persisted = JSON.parse(row.receipt_json);
+        const probe = persisted.probe;
+        if (!probe || createHash3("sha256").update(probe.capability).digest("hex") !== receipt2.runnerCapabilityHash) {
+          return null;
+        }
+        return probe;
+      }
+      adoptStaleIntoBlocked(target, priorSessionId, targetInstance, options = {}) {
+        const priorStatus = this.getSessionStatus(priorSessionId);
+        if (!priorStatus) {
+          throw new SessionAuthorityError("SESSION_OWNER_LOST", "stale session is unavailable");
+        }
+        const owner = asSession(this.#database.prepare(`SELECT supervisor_pid, supervisor_birth FROM sessions WHERE session_id = ?`).get(priorSessionId));
+        if (!owner || this.#ownerStatus({
+          sessionId: priorSessionId,
+          pid: owner.supervisor_pid,
+          token: owner.supervisor_birth
+        }) !== "mismatch") {
+          throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "prior source owner is not proven stale");
+        }
+        const now = this.#now();
+        this.#transaction(() => {
+          const targetRow = this.#requireRecoverableSession(target);
+          if (targetRow.state !== "blocked") {
+            throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "stale adoption is not available during handoff cleanup");
+          }
+          if (options.expectedTargetAuthorityVersion !== void 0 && targetRow.authority_version !== options.expectedTargetAuthorityVersion) {
+            throw new SessionAuthorityError("AUTHORITY_LOST_DURING_OPERATION", "session authority version changed after the adoption preflight proof");
+          }
+          if (targetRow.worker_instance !== targetInstance) {
+            throw new SessionAuthorityError("HANDOFF_TARGET_MISMATCH", "stale adoption target is not the recovery worker");
+          }
+          const prior = asSession(this.#database.prepare(`SELECT session_id, source_key, worktree_key, app_root_key, state,
+                    claim_epoch, bindings_json
+             FROM sessions WHERE session_id = ?`).get(priorSessionId));
+          if (!prior || prior.claim_epoch !== priorStatus.claimEpoch || prior.source_key !== targetRow.source_key || prior.worktree_key !== targetRow.worktree_key || prior.app_root_key !== targetRow.app_root_key) {
+            throw new SessionAuthorityError("SOURCE_WORKTREE_MISMATCH", "stale session does not belong to this exact source worktree");
+          }
+          const priorBindings = JSON.parse(prior.bindings_json);
+          const targetBindings = JSON.parse(targetRow.bindings_json);
+          const priorStaleDeviceCleanup = priorBindings.staleDeviceCleanup && typeof priorBindings.staleDeviceCleanup === "object" ? priorBindings.staleDeviceCleanup : null;
+          const priorCleanup = priorBindings.handoffCleanup && typeof priorBindings.handoffCleanup === "object" ? priorBindings.handoffCleanup : null;
+          const resumesCleanup = prior.state === "handoff_cleanup" && priorCleanup !== null;
+          if (prior.state === "handoff_cleanup" && !resumesCleanup) {
+            throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "stale handoff cleanup state has no durable cleanup plan");
+          }
+          if (resumesCleanup) {
+            const mergedCleanup = this.#mergeStaleDeviceCleanup(priorCleanup, priorStaleDeviceCleanup);
+            const resumesMetroCleanup = mergedCleanup.metro !== null && typeof mergedCleanup.metro === "object";
+            this.#database.prepare(`UPDATE claims SET session_id = ?, claim_epoch = ?, lease_until_ms = ?
+             WHERE session_id = ? AND claim_epoch = ?`).run(target.sessionId, target.claimEpoch, now + this.#leaseMs, prior.session_id, prior.claim_epoch);
+            this.#database.prepare(`UPDATE sessions
+             SET state = 'handoff_cleanup', bindings_json = ?,
+                 authority_version = authority_version + 1, updated_ms = ?
+             WHERE session_id = ? AND claim_epoch = ? AND state = 'blocked'`).run(JSON.stringify({
+              ...targetBindings,
+              adoptionRequired: null,
+              recoveryHandles: targetBindings.recoveryHandles,
+              metro: resumesMetroCleanup ? null : priorBindings.metro ?? null,
+              metroCleanup: resumesMetroCleanup ? null : priorBindings.metroCleanup ?? null,
+              device: priorBindings.device ?? null,
+              install: priorBindings.install ?? null,
+              packageIntegration: priorBindings.packageIntegration ?? null,
+              bundle: null,
+              runner: null,
+              recorder: null,
+              observe: null,
+              proof: null,
+              handoffCleanup: mergedCleanup,
+              staleDeviceCleanup: priorStaleDeviceCleanup
+            }), now, target.sessionId, target.claimEpoch);
+            this.#fenceSession(prior.session_id, now);
+            return;
+          }
+          const activeOperation = this.#database.prepare(`SELECT profile FROM operations
+           WHERE session_id = ? AND claim_epoch = ? LIMIT 1`).get(prior.session_id, prior.claim_epoch);
+          const priorMetro = priorBindings.metro && typeof priorBindings.metro === "object" ? priorBindings.metro : null;
+          const metroCleanup = priorBindings.metroCleanup && typeof priorBindings.metroCleanup === "object" ? priorBindings.metroCleanup : priorMetro?.mode === "managed" ? priorMetro : null;
+          const runnerCleanup = priorBindings.runner && typeof priorBindings.runner === "object" ? priorBindings.runner : priorStaleDeviceCleanup?.runner && typeof priorStaleDeviceCleanup.runner === "object" ? priorStaleDeviceCleanup.runner : null;
+          const observeCleanup = priorBindings.observe && typeof priorBindings.observe === "object" ? priorBindings.observe : null;
+          const recorderCleanup = priorBindings.recorder && typeof priorBindings.recorder === "object" ? priorBindings.recorder : priorStaleDeviceCleanup?.recorder && typeof priorStaleDeviceCleanup.recorder === "object" ? priorStaleDeviceCleanup.recorder : null;
+          const runnerFromStale = runnerCleanup === priorStaleDeviceCleanup?.runner;
+          const recorderFromStale = recorderCleanup === priorStaleDeviceCleanup?.recorder;
+          if (activeOperation?.profile === "transition:ensure-metro" && !metroCleanup && !priorBindings.metro) {
+            throw new SessionAuthorityError("SESSION_OPERATION_ACTIVE", "stale Metro transition has not published exact cleanup authority");
+          }
+          let runnerClaimKey = null;
+          if (runnerCleanup) {
+            runnerClaimKey = runnerFromStale ? String(runnerCleanup.claimKey) : `${String(runnerCleanup.platform)}:${String(runnerCleanup.deviceId)}:${String(runnerCleanup.port)}`;
+            if (typeof runnerCleanup.completedAt !== "number") {
+              const runnerClaim = this.#findClaim("runner", runnerClaimKey);
+              if (runnerClaim?.session_id !== prior.session_id || runnerClaim.claim_epoch !== prior.claim_epoch) {
+                throw new SessionAuthorityError("RUNNER_OWNERSHIP_MISMATCH", "stale runner cleanup claim no longer matches the authenticated binding");
+              }
+            }
+          }
+          let recorderClaimKey = null;
+          if (recorderCleanup) {
+            recorderClaimKey = recorderFromStale ? String(recorderCleanup.claimKey) : `${String(recorderCleanup.platform)}:${String(recorderCleanup.deviceId)}`;
+            if (typeof recorderCleanup.completedAt !== "number") {
+              const recorderClaim = this.#findClaim("recorder", recorderClaimKey);
+              if (recorderClaim?.session_id !== prior.session_id || recorderClaim.claim_epoch !== prior.claim_epoch) {
+                throw new SessionAuthorityError("RECORDING_AUTHORITY_MISMATCH", "stale recorder cleanup claim no longer matches the authenticated binding");
+              }
+            }
+          }
+          if (observeCleanup) {
+            const observePort = String(observeCleanup.port);
+            const observeClaim = this.#findClaim("observe-port", observePort);
+            if (priorBindings.observePort !== observeCleanup.port || observeClaim?.session_id !== prior.session_id || observeClaim.claim_epoch !== prior.claim_epoch) {
+              throw new SessionAuthorityError("OBSERVE_AUTHORITY_MISMATCH", "stale Observe cleanup claim no longer matches the authenticated binding");
+            }
+          }
+          this.#database.prepare(`DELETE FROM claims
+           WHERE session_id = ? AND claim_epoch = ?
+             AND resource_type NOT IN ('source', 'metro-port', 'observe-port', 'device', 'runner', 'recorder')`).run(prior.session_id, prior.claim_epoch);
+          this.#database.prepare(`UPDATE claims SET session_id = ?, claim_epoch = ?, lease_until_ms = ?
+           WHERE session_id = ? AND claim_epoch = ?`).run(target.sessionId, target.claimEpoch, now + this.#leaseMs, prior.session_id, prior.claim_epoch);
+          const cleanupRequired = Boolean(metroCleanup || runnerCleanup || observeCleanup || recorderCleanup || priorStaleDeviceCleanup);
+          const sameMetro = Number(priorMetro?.port) === Number(targetBindings.metroPort);
+          this.#database.prepare(`UPDATE sessions
+           SET state = ?, bindings_json = ?, authority_version = authority_version + 1,
+               updated_ms = ?
+           WHERE session_id = ? AND claim_epoch = ? AND state = 'blocked'`).run(cleanupRequired ? "handoff_cleanup" : sameMetro && priorBindings.device ? "device_bound" : "source_bound", JSON.stringify({
+            ...targetBindings,
+            adoptionRequired: null,
+            recoveryHandles: cleanupRequired ? targetBindings.recoveryHandles : null,
+            metro: metroCleanup ? null : sameMetro ? priorBindings.metro : null,
+            metroCleanup: null,
+            device: priorBindings.device ?? null,
+            install: priorBindings.install ?? null,
+            packageIntegration: priorBindings.packageIntegration ?? null,
+            bundle: null,
+            runner: null,
+            recorder: null,
+            observe: null,
+            proof: null,
+            staleDeviceCleanup: priorStaleDeviceCleanup,
+            handoffCleanup: cleanupRequired ? {
+              metro: metroCleanup ? {
+                ...metroCleanup,
+                sourceSessionId: prior.session_id,
+                stopRequestedAt: null,
+                completedAt: null
+              } : null,
+              runner: runnerCleanup ? runnerFromStale ? runnerCleanup : {
+                ...runnerCleanup,
+                claimKey: runnerClaimKey,
+                stopRequestedAt: null,
+                completedAt: null
+              } : null,
+              recorder: recorderCleanup ? recorderFromStale ? recorderCleanup : {
+                ...recorderCleanup,
+                claimKey: recorderClaimKey,
+                stopRequestedAt: null,
+                completedAt: null
+              } : null,
+              observe: observeCleanup ? {
+                ...observeCleanup,
+                stopRequestedAt: null,
+                completedAt: null
+              } : null
+            } : null
+          }), now, target.sessionId, target.claimEpoch);
+          this.#fenceSession(prior.session_id, now);
+        });
+      }
+      #requireStaleAdoptionContext(target, handle, targetInstance) {
+        const targetStatus = this.getSessionStatus(target.sessionId);
+        const recovery = targetStatus?.bindings.recoveryHandles;
+        const adoption = recovery?.adoptStale;
+        if (targetStatus?.state !== "blocked" || targetStatus.claimEpoch !== target.claimEpoch || typeof adoption?.token !== "string" || typeof adoption.expiresMs !== "number" || typeof adoption.priorSessionId !== "string" || !this.#recoveryHandleMatches(adoption, handle, this.#now())) {
+          throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "stale adoption capability is invalid or expired");
+        }
+        if (targetStatus.worker.instanceId !== targetInstance) {
+          throw new SessionAuthorityError("HANDOFF_TARGET_MISMATCH", "stale adoption target is not the recovery worker");
+        }
+        const prior = this.getSessionStatus(adoption.priorSessionId);
+        if (!prior || prior.claimEpoch !== adoption.priorClaimEpoch) {
+          throw new SessionAuthorityError("SESSION_OWNER_LOST", "stale adoption capability no longer matches the prior claim epoch");
+        }
+        if (prior.sourceKey !== targetStatus.sourceKey || prior.worktreeKey !== targetStatus.worktreeKey || prior.appRootKey !== targetStatus.appRootKey) {
+          throw new SessionAuthorityError("SOURCE_WORKTREE_MISMATCH", "stale session does not belong to this exact source worktree");
+        }
+        return { priorSessionId: adoption.priorSessionId };
+      }
+      validateStaleAdoption(target, handle, targetInstance) {
+        this.#requireStaleAdoptionContext(target, handle, targetInstance);
+      }
+      adoptStaleWithHandle(target, handle, targetInstance, options = {}) {
+        const { priorSessionId } = this.#requireStaleAdoptionContext(target, handle, targetInstance);
+        this.adoptStaleIntoBlocked(target, priorSessionId, targetInstance, options);
+      }
+      verifyStaleAdoptionResumption(target, handle, targetInstance) {
+        const status = this.getSessionStatus(target.sessionId);
+        const recovery = status?.bindings.recoveryHandles;
+        const adoption = recovery?.adoptStale;
+        if (status?.state !== "handoff_cleanup" || status.claimEpoch !== target.claimEpoch || status.worker.instanceId !== targetInstance || !adoption || !this.#recoveryHandleMatches(adoption, handle, this.#now())) {
+          throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "stale adoption resumption requires the original adoption capability");
+        }
+      }
+      beginOperation(session2, operation) {
+        return this.#beginOperation(session2, operation, false);
+      }
+      beginHandoffCancellationOperation(session2, operation) {
+        return this.#beginOperation(session2, operation, true);
+      }
+      #beginOperation(session2, operation, handoffCancellation) {
+        const now = this.#now();
+        return this.#transaction(() => {
+          const owner = handoffCancellation ? this.#requireHandoffSession(session2) : this.#requireSession(session2);
+          if (handoffCancellation && JSON.parse(owner.bindings_json).managedMetroHandoffReservation) {
+            throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "handoff cancellation is fenced while managed Metro shutdown is reserved");
+          }
+          const active = this.#database.prepare(`SELECT operation_id FROM operations
+           WHERE session_id = ? AND claim_epoch = ? LIMIT 1`).get(session2.sessionId, session2.claimEpoch);
+          if (active) {
+            throw new SessionAuthorityError("OPERATION_ALREADY_IN_PROGRESS", "session already has an active fenced operation");
+          }
+          this.#database.prepare(`INSERT INTO operations(
+            operation_id, session_id, claim_epoch, authority_version,
+            tool, profile, started_ms, lease_until_ms
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(operation.operationId, session2.sessionId, session2.claimEpoch, owner.authority_version, operation.tool, operation.profile, now, now + this.#leaseMs);
+          return {
+            operationId: operation.operationId,
+            sessionId: session2.sessionId,
+            claimEpoch: session2.claimEpoch,
+            authorityVersion: owner.authority_version
+          };
+        });
+      }
+      refreshOperation(operation) {
+        this.verifyOperation(operation);
+        return operation;
+      }
+      endOperation(operation) {
+        this.#transaction(() => {
+          const session2 = asSession(this.#database.prepare(`SELECT state, claim_epoch, authority_version
+             FROM sessions WHERE session_id = ?`).get(operation.sessionId));
+          const active = this.#database.prepare(`SELECT operation_id FROM operations
+           WHERE operation_id = ? AND session_id = ? AND claim_epoch = ?
+             AND authority_version = ?`).get(operation.operationId, operation.sessionId, operation.claimEpoch, operation.authorityVersion);
+          if (!session2 || !isFenceableState(session2.state) || session2.claim_epoch !== operation.claimEpoch || session2.authority_version !== operation.authorityVersion || !active) {
+            throw new SessionAuthorityError("AUTHORITY_LOST_DURING_OPERATION", "operation fence no longer matches current authority");
+          }
+          this.#database.prepare("DELETE FROM operations WHERE operation_id = ?").run(operation.operationId);
+        });
+        this.#pendingPlatformReceipts.delete(operation.operationId);
+      }
+      cancelOperation(operation) {
+        this.#transaction(() => {
+          this.#database.prepare(`DELETE FROM operations
+           WHERE operation_id = ? AND session_id = ? AND claim_epoch = ?
+             AND authority_version = ?`).run(operation.operationId, operation.sessionId, operation.claimEpoch, operation.authorityVersion);
+        });
+        this.#pendingPlatformReceipts.delete(operation.operationId);
+      }
+      cancelActiveOperationForSession(session2) {
+        const operationIds = this.#transaction(() => {
+          this.#requireSession(session2);
+          const rows = this.#database.prepare(`SELECT operation_id FROM operations
+           WHERE session_id = ? AND claim_epoch = ?`).all(session2.sessionId, session2.claimEpoch);
+          this.#database.prepare("DELETE FROM operations WHERE session_id = ? AND claim_epoch = ?").run(session2.sessionId, session2.claimEpoch);
+          return rows.map((row) => String(row.operation_id));
+        });
+        for (const operationId of operationIds) {
+          this.#pendingPlatformReceipts.delete(operationId);
+        }
+      }
+      verifyOperation(operation) {
+        const session2 = asSession(this.#database.prepare(`SELECT state, claim_epoch, authority_version
+           FROM sessions WHERE session_id = ?`).get(operation.sessionId));
+        const active = this.#database.prepare(`SELECT operation_id FROM operations
+         WHERE operation_id = ? AND session_id = ? AND claim_epoch = ?
+           AND authority_version = ?`).get(operation.operationId, operation.sessionId, operation.claimEpoch, operation.authorityVersion);
+        if (!session2 || !isFenceableState(session2.state) || session2.claim_epoch !== operation.claimEpoch || session2.authority_version !== operation.authorityVersion || !active) {
+          throw new SessionAuthorityError("AUTHORITY_LOST_DURING_OPERATION", "operation fence no longer matches current authority");
+        }
+      }
+      renewOperation(operation) {
+        const now = this.#now();
+        this.#transaction(() => {
+          this.verifyOperation(operation);
+          this.#database.prepare("UPDATE operations SET lease_until_ms = ? WHERE operation_id = ?").run(now + this.#leaseMs, operation.operationId);
+        });
+      }
+      getClaim(type, key) {
+        const claim = this.#findClaim(type, key);
+        return claim ? {
+          type: claim.resource_type,
+          key: claim.resource_key,
+          sessionId: claim.session_id,
+          claimEpoch: claim.claim_epoch,
+          leaseUntilMs: claim.lease_until_ms
+        } : null;
+      }
+      // GH #630: every allocated port for a service across all worktrees, own
+      // session included — foreign-origin scanners must exclude their own port.
+      allocatedServicePorts(service) {
+        const rows = this.#database.prepare("SELECT port, worktree_key FROM allocations WHERE service = ?").all(service);
+        return rows.map((row) => row.port).filter((port) => Number.isSafeInteger(port));
+      }
+      allocatePort(input) {
+        if (!Number.isSafeInteger(input.base) || input.base < 1 || !Number.isSafeInteger(input.span) || input.span < 1 || input.base + input.span > 65536) {
+          throw new SessionAuthorityError("INVALID_PORT_RANGE", "port allocation range is invalid");
+        }
+        return this.#transaction(() => {
+          const existing = this.#database.prepare("SELECT port FROM allocations WHERE service = ? AND worktree_key = ?").get(input.service, input.worktreeKey);
+          if (existing) {
+            const claim = this.#findClaim(`${input.service}-port`, String(existing.port));
+            const listenerStatus = claim ? "absent" : this.#listenerStatus(existing.port);
+            if (listenerStatus === "absent")
+              return existing.port;
+            if (listenerStatus === "unknown") {
+              throw new SessionAuthorityError("PORT_LISTENER_PROBE_UNAVAILABLE", `listener ownership for ${input.service} port ${existing.port} is unavailable`);
+            }
+            this.#database.prepare("DELETE FROM allocations WHERE service = ? AND worktree_key = ?").run(input.service, input.worktreeKey);
+          }
+          const digest3 = createHash3("sha256").update(`${input.uid}\0${input.worktreeKey}\0${input.service}`).digest();
+          const preferred = digest3.readUInt32BE(0) % input.span;
+          for (let offset = 0; offset < input.span; offset += 1) {
+            const port = input.base + (preferred + offset) % input.span;
+            const occupied = this.#database.prepare("SELECT worktree_key FROM allocations WHERE service = ? AND port = ?").get(input.service, port);
+            if (occupied)
+              continue;
+            const listenerStatus = this.#listenerStatus(port);
+            if (listenerStatus === "listening")
+              continue;
+            if (listenerStatus === "unknown") {
+              throw new SessionAuthorityError("PORT_LISTENER_PROBE_UNAVAILABLE", `listener ownership for ${input.service} port ${port} is unavailable`);
+            }
+            this.#database.prepare(`INSERT INTO allocations(service, worktree_key, port, generation)
+             VALUES (?, ?, ?, 1)`).run(input.service, input.worktreeKey, port);
+            return port;
+          }
+          const orphanRows = this.#database.prepare(`SELECT allocation.worktree_key, allocation.port
+           FROM allocations allocation
+           WHERE allocation.service = ?
+             AND allocation.port >= ?
+             AND allocation.port < ?
+             AND NOT EXISTS (
+               SELECT 1 FROM sessions session
+               WHERE session.worktree_key = allocation.worktree_key
+                 AND session.state NOT IN ('released', 'stale')
+             )
+           ORDER BY allocation.generation ASC, allocation.worktree_key ASC
+           `).all(input.service, input.base, input.base + input.span);
+          for (const row of orphanRows) {
+            if (!Number.isSafeInteger(row.port) || typeof row.worktree_key !== "string") {
+              throw new SessionAuthorityError("AUTHORITY_STORE_INVALID", "persisted port allocation is malformed");
+            }
+            const orphan = { port: row.port, worktree_key: row.worktree_key };
+            const listenerStatus = this.#listenerStatus(orphan.port);
+            if (listenerStatus === "listening")
+              continue;
+            if (listenerStatus === "unknown") {
+              throw new SessionAuthorityError("PORT_LISTENER_PROBE_UNAVAILABLE", `listener ownership for ${input.service} port ${orphan.port} is unavailable`);
+            }
+            this.#database.prepare(`DELETE FROM allocations
+             WHERE service = ? AND worktree_key = ? AND port = ?`).run(input.service, orphan.worktree_key, orphan.port);
+            this.#database.prepare(`INSERT INTO allocations(service, worktree_key, port, generation)
+             VALUES (?, ?, ?, 1)`).run(input.service, input.worktreeKey, orphan.port);
+            return orphan.port;
+          }
+          throw new SessionAuthorityError("PORT_RANGE_EXHAUSTED", `no ${input.service} port is available in the configured range`);
+        });
+      }
+      #initialize() {
+        const schema = this.#database.prepare("SELECT value FROM authority_meta WHERE key = ?").get("schema_version")?.value;
+        const version2 = Number(schema);
+        if (!Number.isSafeInteger(version2) || version2 < 1 || version2 > AUTHORITY_REGISTRY_SCHEMA_VERSION) {
+          throw new SessionAuthorityError("AUTHORITY_STORE_UNAVAILABLE", version2 > 4 ? `authority registry schema ${version2} is newer than supported schema ${AUTHORITY_REGISTRY_SCHEMA_VERSION}` : "authority registry schema version is invalid");
+        }
+        this.#database.exec("BEGIN IMMEDIATE");
+        try {
+          this.#database.exec(`
+      CREATE TABLE IF NOT EXISTS sessions (
+        session_id TEXT PRIMARY KEY,
+        source_key TEXT NOT NULL,
+        worktree_key TEXT NOT NULL,
+        app_root_key TEXT NOT NULL,
+        state TEXT NOT NULL,
+        claim_epoch INTEGER NOT NULL,
+        authority_version INTEGER NOT NULL,
+        supervisor_pid INTEGER NOT NULL,
+        supervisor_birth TEXT NOT NULL,
+        worker_instance TEXT,
+        worker_pid INTEGER,
+        worker_birth TEXT,
+        heartbeat_ms INTEGER NOT NULL,
+        lease_until_ms INTEGER NOT NULL,
+        source_json TEXT NOT NULL,
+        bindings_json TEXT NOT NULL,
+        created_ms INTEGER NOT NULL,
+        updated_ms INTEGER NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS claims (
+        resource_type TEXT NOT NULL,
+        resource_key TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        claim_epoch INTEGER NOT NULL,
+        lease_until_ms INTEGER NOT NULL,
+        PRIMARY KEY(resource_type, resource_key)
+      );
+      CREATE INDEX IF NOT EXISTS claims_session_idx
+        ON claims(session_id, claim_epoch);
+      CREATE TABLE IF NOT EXISTS operations (
+        operation_id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        claim_epoch INTEGER NOT NULL,
+        authority_version INTEGER NOT NULL,
+        tool TEXT NOT NULL,
+        profile TEXT NOT NULL,
+        started_ms INTEGER NOT NULL,
+        lease_until_ms INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS operations_session_idx
+        ON operations(session_id, claim_epoch);
+      CREATE TABLE IF NOT EXISTS allocations (
+        service TEXT NOT NULL,
+        worktree_key TEXT NOT NULL,
+        port INTEGER NOT NULL,
+        generation INTEGER NOT NULL,
+        PRIMARY KEY(service, worktree_key),
+        UNIQUE(service, port)
+      );
+      CREATE TABLE IF NOT EXISTS handoffs (
+        handoff_id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        claim_epoch INTEGER NOT NULL,
+        target_instance TEXT NOT NULL,
+        token_hash TEXT NOT NULL,
+        expires_ms INTEGER NOT NULL,
+        consumed_ms INTEGER
+      );
+      CREATE TABLE IF NOT EXISTS platform_authority_receipts (
+        session_id TEXT NOT NULL,
+        claim_epoch INTEGER NOT NULL,
+        platform TEXT NOT NULL,
+        receipt_json TEXT NOT NULL,
+        updated_ms INTEGER NOT NULL,
+        PRIMARY KEY(session_id, platform)
+      );
+      `);
+          if (version2 < 3) {
+            const columns = this.#database.prepare("PRAGMA table_info(handoffs)").all();
+            if (!columns.some((column) => column.name === "source_state")) {
+              this.#database.exec("ALTER TABLE handoffs ADD COLUMN source_state TEXT NOT NULL DEFAULT 'active';");
+            }
+          }
+          this.#database.exec(`UPDATE authority_meta SET value = '${AUTHORITY_REGISTRY_SCHEMA_VERSION}' WHERE key = 'schema_version';`);
+          this.#database.exec("COMMIT");
+        } catch (error2) {
+          this.#database.exec("ROLLBACK");
+          throw error2;
+        }
+        this.#secureFiles();
+      }
+      #initializeWithRetry() {
+        const deadline = Date.now() + 1e3;
+        for (; ; ) {
+          try {
+            this.#initialize();
+            return;
+          } catch (error2) {
+            const code = error2.code;
+            const message = error2 instanceof Error ? error2.message : "";
+            if (code !== "SQLITE_BUSY" && !/database is (?:locked|busy)/i.test(message))
+              throw error2;
+            const remaining = deadline - Date.now();
+            if (remaining <= 0)
+              throw error2;
+            Atomics.wait(INITIALIZATION_WAIT2, 0, 0, Math.min(25, remaining));
+          }
+        }
+      }
+      #probeClaimOwners(session2, resources) {
+        const owners = /* @__PURE__ */ new Map();
+        for (const resource of resources) {
+          const claim = this.#findConflictingClaim(resource);
+          if (!claim || claim.session_id === session2.sessionId || owners.has(claim.session_id)) {
+            continue;
+          }
+          const owner = asSession(this.#database.prepare(`SELECT session_id, claim_epoch, supervisor_pid, supervisor_birth
+             FROM sessions WHERE session_id = ?`).get(claim.session_id));
+          let status = "unknown";
+          if (owner && owner.claim_epoch === claim.claim_epoch) {
+            try {
+              status = this.#ownerStatus({
+                sessionId: owner.session_id,
+                pid: owner.supervisor_pid,
+                token: owner.supervisor_birth
+              });
+            } catch {
+              status = "unknown";
+            }
+          }
+          owners.set(claim.session_id, { claimEpoch: claim.claim_epoch, status });
+        }
+        return owners;
+      }
+      #assertClaimsAvailable(session2, resources, probes, now) {
+        for (const resource of resources) {
+          const claim = this.#findConflictingClaim(resource);
+          if (!claim || claim.session_id === session2.sessionId && claim.claim_epoch === session2.claimEpoch) {
+            continue;
+          }
+          if (!probes)
+            throw claimConflict(claim);
+          const probe = probes.get(claim.session_id);
+          if (!probe || probe.claimEpoch !== claim.claim_epoch) {
+            throw claimConflict(claim);
+          }
+          if (probe.status === "match")
+            throw claimConflict(claim);
+          if (probe.status === "unknown") {
+            if (claim.lease_until_ms < now) {
+              throw new SessionAuthorityError("STALE_LEASE_NOT_RECLAIMABLE", OWNER_IDENTITY_REFUSAL_REASONS.leaseOwnerUnprovable, { sessionId: claim.session_id, claimEpoch: claim.claim_epoch });
+            }
+            throw claimConflict(claim);
+          }
+          throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "a proven-stale owner requires explicit adopt_stale before claims transfer", { sessionId: claim.session_id, claimEpoch: claim.claim_epoch });
+        }
+      }
+      #requireSession(session2) {
+        const row = asSession(this.#database.prepare(`SELECT session_id, state, claim_epoch, authority_version,
+                  source_key, worktree_key, app_root_key,
+                  supervisor_pid, supervisor_birth, worker_instance, worker_pid,
+                  worker_birth, lease_until_ms, source_json, bindings_json
+           FROM sessions WHERE session_id = ?`).get(session2.sessionId));
+        if (!row || !isOperationalState(row.state) || row.claim_epoch !== session2.claimEpoch) {
+          throw new SessionAuthorityError("SESSION_OWNER_LOST", "session owner no longer matches the active claim epoch");
+        }
+        return row;
+      }
+      #requireIntegrationRestored(bindings) {
+        if (bindings.packageIntegration) {
+          throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "package integration must be restored before session release");
+        }
+      }
+      #requireFenceableSession(session2) {
+        const row = asSession(this.#database.prepare(`SELECT session_id, state, claim_epoch, authority_version,
+                  source_key, worktree_key, app_root_key,
+                  supervisor_pid, supervisor_birth, worker_instance, worker_pid,
+                  worker_birth, lease_until_ms, source_json, bindings_json
+           FROM sessions WHERE session_id = ?`).get(session2.sessionId));
+        if (!row || !isFenceableState(row.state) || row.claim_epoch !== session2.claimEpoch) {
+          throw new SessionAuthorityError("SESSION_OWNER_LOST", "session owner no longer matches the fenceable claim epoch");
+        }
+        return row;
+      }
+      #requireHandoffSession(session2) {
+        const row = this.#requireFenceableSession(session2);
+        if (row.state !== "handoff") {
+          throw new SessionAuthorityError("SESSION_OWNER_LOST", "session owner no longer matches the handoff claim epoch");
+        }
+        return row;
+      }
+      #requireRecoverableSession(session2) {
+        const row = asSession(this.#database.prepare(`SELECT session_id, state, claim_epoch, authority_version,
+                  source_key, worktree_key, app_root_key,
+                  supervisor_pid, supervisor_birth, worker_instance, worker_pid,
+                  worker_birth, lease_until_ms, source_json, bindings_json
+           FROM sessions WHERE session_id = ?`).get(session2.sessionId));
+        if (!row || row.state !== "blocked" && row.state !== "handoff_cleanup" || row.claim_epoch !== session2.claimEpoch) {
+          throw new SessionAuthorityError("SESSION_OWNER_LOST", "session is not an unchanged recovery contender");
+        }
+        return row;
+      }
+      #requireHandoffCleanupOwner(session2, targetInstance) {
+        const row = this.#requireRecoverableSession(session2);
+        if (row.state !== "handoff_cleanup" || row.worker_instance !== targetInstance) {
+          throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "handoff cleanup is not owned by this recovery worker");
+        }
+        return row;
+      }
+      #requireHandoffIntoContext(target, input, options) {
+        const { allowExactReservationAfterExpiry, commitRecipientRotation } = options;
+        const targetRow = this.#requireRecoverableSession(target);
+        if (targetRow.state !== "blocked") {
+          throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "handoff acceptance is not available during cleanup");
+        }
+        if (targetRow.worker_instance !== input.targetInstance) {
+          throw new SessionAuthorityError("HANDOFF_TARGET_MISMATCH", "handoff target is not the current fenced worker instance");
+        }
+        const handoff = this.#database.prepare(`SELECT handoff_id, session_id, claim_epoch, target_instance,
+                token_hash, expires_ms, consumed_ms
+         FROM handoffs WHERE handoff_id = ?`).get(input.handoffId);
+        if (!handoff) {
+          throw new SessionAuthorityError("HANDOFF_NOT_FOUND", "handoff does not exist");
+        }
+        const expected = Buffer.from(handoff.token_hash, "hex");
+        const actual = createHash3("sha256").update(input.token).digest();
+        if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) {
+          throw new SessionAuthorityError("HANDOFF_TOKEN_INVALID", "handoff capability is invalid");
+        }
+        if (handoff.consumed_ms !== null) {
+          throw new SessionAuthorityError("HANDOFF_ALREADY_CONSUMED", "handoff was already accepted");
+        }
+        const prior = asSession(this.#database.prepare(`SELECT session_id, source_key, worktree_key, app_root_key, state,
+                  claim_epoch, authority_version, bindings_json
+           FROM sessions WHERE session_id = ?`).get(handoff.session_id));
+        if (!prior || prior.state !== "handoff" || prior.claim_epoch !== handoff.claim_epoch) {
+          throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "handoff no longer matches the live owner epoch");
+        }
+        if (prior.source_key !== targetRow.source_key || prior.worktree_key !== targetRow.worktree_key || prior.app_root_key !== targetRow.app_root_key) {
+          throw new SessionAuthorityError("SOURCE_WORKTREE_MISMATCH", "handoff source does not match the target session");
+        }
+        let bindings = JSON.parse(prior.bindings_json);
+        let reservation = managedMetroHandoffReservation(bindings);
+        let exactReservation = reservation?.handoffId === handoff.handoff_id && reservation.sourceClaimEpoch === handoff.claim_epoch && reservation.targetSessionId === target.sessionId && reservation.targetClaimEpoch === target.claimEpoch && reservation.targetInstance === input.targetInstance && reservation.metro?.sourceSessionId === prior.session_id;
+        if (handoff.target_instance !== input.targetInstance || reservation && !exactReservation) {
+          const targetBindings = JSON.parse(targetRow.bindings_json);
+          const adoptionRequired = targetBindings.adoptionRequired;
+          const priorTarget = reservation ? asSession(this.#database.prepare(`SELECT session_id, source_key, worktree_key, app_root_key, state,
+                        claim_epoch, supervisor_pid, supervisor_birth
+                 FROM sessions WHERE session_id = ?`).get(reservation.targetSessionId)) : null;
+          const priorTargetTerminal = priorTarget !== null && (priorTarget.state === "released" || priorTarget.state === "stale") && priorTarget.claim_epoch === reservation.targetClaimEpoch + 1;
+          let priorTargetDead = false;
+          if (priorTarget?.state === "blocked" && priorTarget.claim_epoch === reservation?.targetClaimEpoch) {
+            try {
+              priorTargetDead = this.#ownerStatus({
+                sessionId: priorTarget.session_id,
+                pid: priorTarget.supervisor_pid,
+                token: priorTarget.supervisor_birth
+              }) === "mismatch";
+            } catch {
+              priorTargetDead = false;
+            }
+          }
+          if (!reservation || reservation.handoffId !== handoff.handoff_id || reservation.sourceClaimEpoch !== handoff.claim_epoch || reservation.metro.sourceSessionId !== prior.session_id || reservation.targetInstance !== handoff.target_instance || adoptionRequired?.sessionId !== prior.session_id || adoptionRequired.claimEpoch !== prior.claim_epoch || !priorTarget || priorTarget.source_key !== targetRow.source_key || priorTarget.worktree_key !== targetRow.worktree_key || priorTarget.app_root_key !== targetRow.app_root_key || !priorTargetTerminal && !priorTargetDead) {
+            throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "managed Metro cleanup reservation belongs to a different handoff recipient");
+          }
+          if (handoff.expires_ms < this.#now() && !allowExactReservationAfterExpiry) {
+            throw new SessionAuthorityError("HANDOFF_EXPIRED", "handoff capability expired");
+          }
+          const rotatedReservation = {
+            ...reservation,
+            targetSessionId: target.sessionId,
+            targetClaimEpoch: target.claimEpoch,
+            targetInstance: input.targetInstance
+          };
+          if (commitRecipientRotation) {
+            const handoffChanged = this.#database.prepare(`UPDATE handoffs SET target_instance = ?
+             WHERE handoff_id = ? AND target_instance = ? AND consumed_ms IS NULL`).run(input.targetInstance, handoff.handoff_id, reservation.targetInstance);
+            if (handoffChanged.changes !== 1) {
+              throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "managed Metro handoff target changed during recipient rotation");
+            }
+            bindings = {
+              ...bindings,
+              managedMetroHandoffReservation: rotatedReservation
+            };
+            const donorChanged = this.#database.prepare(`UPDATE sessions
+             SET bindings_json = ?, authority_version = authority_version + 1, updated_ms = ?
+             WHERE session_id = ? AND claim_epoch = ? AND state = 'handoff'`).run(JSON.stringify(bindings), this.#now(), prior.session_id, prior.claim_epoch);
+            if (donorChanged.changes !== 1) {
+              throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "managed Metro donor authority changed during recipient rotation");
+            }
+            if (priorTarget.state === "blocked") {
+              this.#fenceSession(priorTarget.session_id, this.#now());
+            }
+          }
+          handoff.target_instance = input.targetInstance;
+          reservation = rotatedReservation;
+          exactReservation = true;
+        }
+        if (handoff.expires_ms < this.#now() && !(allowExactReservationAfterExpiry && exactReservation)) {
+          throw new SessionAuthorityError("HANDOFF_EXPIRED", "handoff capability expired");
+        }
+        return {
+          targetRow,
+          handoff,
+          prior,
+          bindings,
+          reservation: exactReservation ? reservation : null
+        };
+      }
+      #advanceActiveOperationFence(session2, priorAuthorityVersion, nextAuthorityVersion, requireActiveFence = false) {
+        const active = this.#database.prepare(`SELECT operation_id, authority_version FROM operations
+         WHERE session_id = ? AND claim_epoch = ? LIMIT 1`).get(session2.sessionId, session2.claimEpoch);
+        const context = this.#operationContext.getStore();
+        if (!active) {
+          if (requireActiveFence && context?.sessionId === session2.sessionId && context.claimEpoch === session2.claimEpoch) {
+            throw new SessionAuthorityError("AUTHORITY_LOST_DURING_OPERATION", "active operation fence disappeared before authority commit");
+          }
+          return;
+        }
+        if (!context || context.operationId !== active.operation_id || context.sessionId !== session2.sessionId || context.claimEpoch !== session2.claimEpoch || context.authorityVersion !== priorAuthorityVersion || active.authority_version !== priorAuthorityVersion) {
+          throw new SessionAuthorityError("AUTHORITY_LOST_DURING_OPERATION", "authority mutation is not owned by the active operation fence");
+        }
+        const changed = this.#database.prepare(`UPDATE operations SET authority_version = ?, lease_until_ms = ?
+         WHERE operation_id = ? AND session_id = ? AND claim_epoch = ?
+           AND authority_version = ?`).run(nextAuthorityVersion, this.#now() + this.#leaseMs, context.operationId, session2.sessionId, session2.claimEpoch, priorAuthorityVersion);
+        if (changed.changes === 0) {
+          throw new SessionAuthorityError("AUTHORITY_LOST_DURING_OPERATION", "operation fence did not advance atomically");
+        }
+        context.authorityVersion = nextAuthorityVersion;
+      }
+      #findClaim(type, key) {
+        return asClaim(this.#database.prepare(`SELECT resource_type, resource_key, session_id, claim_epoch, lease_until_ms
+           FROM claims WHERE resource_type = ? AND resource_key = ?`).get(type, key));
+      }
+      #findConflictingClaim(resource) {
+        return this.#findClaim(resource.type, resource.key) ?? (resource.type === "runner" ? this.#findClaim("runner-receipt", resource.key) : resource.type === "device" ? this.#findClaim("device-receipt", resource.key) : null);
+      }
+      #platformReceiptFromCurrentAuthority(session2, platform, receipt2) {
+        const row = this.#requireSession(session2);
+        const bindings = JSON.parse(row.bindings_json);
+        const device = bindings.device;
+        const install = bindings.install;
+        const runner = bindings.runner;
+        const runnerClaim = this.#database.prepare(`SELECT resource_key FROM claims
+         WHERE session_id = ? AND claim_epoch = ? AND resource_type = 'runner'`).get(session2.sessionId, session2.claimEpoch);
+        const deviceClaim = this.#database.prepare(`SELECT resource_key FROM claims
+         WHERE session_id = ? AND claim_epoch = ? AND resource_type = 'device'`).get(session2.sessionId, session2.claimEpoch);
+        const runnerCapabilityHash = typeof runner?.capability === "string" ? createHash3("sha256").update(runner.capability).digest("hex") : null;
+        if (device?.platform !== platform || receipt2.sessionId !== session2.sessionId || receipt2.claimEpoch !== session2.claimEpoch || receipt2.sourceKey !== row.source_key || receipt2.worktreeKey !== row.worktree_key || receipt2.appRootKey !== row.app_root_key || receipt2.deviceId !== device.deviceId || receipt2.appId !== device.appId || receipt2.installGeneration !== install?.installGeneration || receipt2.artifactDigest !== install?.artifactDigest || receipt2.runnerInstanceId !== runner?.instanceId || receipt2.runnerPid !== runner?.pid || receipt2.runnerProcessBirth !== runner?.processBirth || receipt2.runnerPort !== runner?.port || receipt2.runnerClaim !== runnerClaim?.resource_key || receipt2.deviceClaim !== deviceClaim?.resource_key || receipt2.runnerCapabilityHash !== runnerCapabilityHash || typeof runner?.port !== "number" || typeof runner.capability !== "string" || typeof runner.instanceId !== "string" || typeof runner.pid !== "number" || typeof runner.processBirth !== "string" || typeof device?.deviceId !== "string" || typeof device.appId !== "string" || typeof install?.installGeneration !== "string") {
+          throw new SessionAuthorityError("RUNNER_OWNERSHIP_MISMATCH", "snapshot receipt does not match exact persistent platform authority");
+        }
+        return {
+          session: session2,
+          platform,
+          receipt: receipt2,
+          probe: {
+            platform,
+            port: runner.port,
+            capability: runner.capability,
+            instanceId: runner.instanceId,
+            sessionId: session2.sessionId,
+            claimEpoch: session2.claimEpoch,
+            deviceId: device.deviceId,
+            appId: device.appId,
+            pid: runner.pid,
+            processBirth: runner.processBirth,
+            installGeneration: install.installGeneration
+          }
+        };
+      }
+      #invalidatePlatformReceipt(session2, platform) {
+        const row = this.#database.prepare(`SELECT receipt_json FROM platform_authority_receipts
+         WHERE session_id = ? AND claim_epoch = ? AND platform = ?`).get(session2.sessionId, session2.claimEpoch, platform);
+        if (typeof row?.receipt_json === "string") {
+          const persisted = JSON.parse(row.receipt_json);
+          const receipt2 = persisted.receipt && typeof persisted.receipt === "object" ? persisted.receipt : persisted;
+          if (typeof receipt2.runnerClaim === "string") {
+            this.#database.prepare(`DELETE FROM claims
+             WHERE resource_type = 'runner-receipt' AND resource_key = ?
+               AND session_id = ? AND claim_epoch = ?`).run(receipt2.runnerClaim, session2.sessionId, session2.claimEpoch);
+          }
+          if (typeof receipt2.deviceClaim === "string") {
+            this.#database.prepare(`DELETE FROM claims
+             WHERE resource_type = 'device-receipt' AND resource_key = ?
+               AND session_id = ? AND claim_epoch = ?`).run(receipt2.deviceClaim, session2.sessionId, session2.claimEpoch);
+          }
+        }
+        this.#database.prepare(`DELETE FROM platform_authority_receipts
+         WHERE session_id = ? AND claim_epoch = ? AND platform = ?`).run(session2.sessionId, session2.claimEpoch, platform);
+      }
+      #capabilityMatches(expected, actual) {
+        const expectedDigest = createHash3("sha256").update(expected).digest();
+        const actualDigest = createHash3("sha256").update(actual).digest();
+        return timingSafeEqual(expectedDigest, actualDigest);
+      }
+      #recoveryHandleMatches(handle, actual, now) {
+        if (typeof handle.token === "string" && typeof handle.expiresMs === "number" && handle.expiresMs >= now && this.#capabilityMatches(handle.token, actual)) {
+          return true;
+        }
+        const previous = handle.previous;
+        return Boolean(previous && typeof previous.token === "string" && typeof previous.expiresMs === "number" && previous.expiresMs >= now && this.#capabilityMatches(previous.token, actual));
+      }
+      #mergeStaleDeviceCleanup(cleanup, staleDeviceCleanup) {
+        if (!staleDeviceCleanup)
+          return cleanup;
+        const merged = { ...cleanup };
+        for (const resource of ["runner", "recorder"]) {
+          const current = cleanup[resource];
+          const stale = staleDeviceCleanup[resource];
+          if (!stale || typeof stale !== "object")
+            continue;
+          if (current && typeof current === "object") {
+            const currentKey = current.claimKey;
+            const staleKey = stale.claimKey;
+            if (currentKey !== staleKey) {
+              throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", `stale ${resource} cleanup conflicts with the existing handoff plan`);
+            }
+          } else {
+            merged[resource] = stale;
+          }
+        }
+        return merged;
+      }
+      #fenceSession(sessionId, now) {
+        this.#database.prepare("DELETE FROM claims WHERE session_id = ?").run(sessionId);
+        this.#database.prepare("DELETE FROM operations WHERE session_id = ?").run(sessionId);
+        this.#database.prepare(`UPDATE sessions
+         SET state = 'stale', claim_epoch = claim_epoch + 1,
+             authority_version = authority_version + 1, updated_ms = ?
+         WHERE session_id = ?`).run(now, sessionId);
+      }
+      #transaction(operation, assertBeforeCommit, onCommitted) {
+        this.#database.exec("BEGIN IMMEDIATE");
+        const context = this.#operationContext.getStore();
+        const priorContextAuthorityVersion = context?.authorityVersion;
+        let committed = false;
+        try {
+          const result = operation();
+          assertBeforeCommit?.();
+          this.#database.exec("COMMIT");
+          committed = true;
+          try {
+            onCommitted?.(result);
+          } finally {
+            this.#secureFiles();
+          }
+          return result;
+        } catch (error2) {
+          if (!committed) {
+            try {
+              this.#database.exec("ROLLBACK");
+            } finally {
+              if (context && priorContextAuthorityVersion !== void 0) {
+                context.authorityVersion = priorContextAuthorityVersion;
+              }
+              this.#secureFiles();
+            }
+          }
+          throw error2;
+        }
+      }
+      async #retry(operation, timeoutMs, retryDelayMs) {
+        const deadline = Date.now() + timeoutMs;
+        for (; ; ) {
+          try {
+            return operation();
+          } catch (error2) {
+            const code = error2.code;
+            const message = error2 instanceof Error ? error2.message : "";
+            if (code !== "SQLITE_BUSY" && !/database is (?:locked|busy)/i.test(message))
+              throw error2;
+            if (Date.now() >= deadline) {
+              throw new SessionAuthorityError("AUTHORITY_STORE_BUSY", "authority registry remained contended past the retry deadline");
+            }
+            await new Promise((resolve21) => setTimeout(resolve21, retryDelayMs));
+          }
+        }
+      }
+    };
+  }
+});
+
+// packages/rn-dev-agent-core/dist/session/process-owner.js
+function defaultProcessState(pid) {
+  try {
+    process.kill(pid, 0);
+    return "alive";
+  } catch (error2) {
+    const code = error2.code;
+    if (code === "ESRCH")
+      return "dead";
+    if (code === "EPERM")
+      return "alive";
+    return "unknown";
+  }
+}
+function inspectSessionOwner(owner, dependencies = {}) {
+  const inspection = inspectSessionOwnerAttestation(owner, dependencies);
+  return inspection.status === "match" ? "match" : inspection.status === "unknown" ? "unknown" : "mismatch";
+}
+function inspectSessionOwnerAttestation(owner, dependencies = {}) {
+  const now = dependencies.now ?? Date.now;
+  const stateStartedAt = now();
+  const state = (dependencies.processState ?? defaultProcessState)(owner.pid);
+  if (state === "dead")
+    return { status: "absent", pid: owner.pid };
+  if (state === "unknown") {
+    return {
+      status: "unknown",
+      pid: owner.pid,
+      cause: {
+        pid: owner.pid,
+        step: "signal",
+        failure: "read",
+        elapsedMs: Math.max(0, now() - stateStartedAt)
+      }
+    };
+  }
+  const observed = (dependencies.probeBirth ?? probeProcessBirth)(owner.pid);
+  if (observed.status === "absent")
+    return { status: "absent", pid: owner.pid };
+  if (observed.status === "unknown") {
+    return { status: "unknown", pid: owner.pid, cause: observed.cause };
+  }
+  return observed.birth.token === owner.token ? { status: "match", pid: owner.pid } : {
+    status: "mismatch",
+    pid: owner.pid,
+    expected: owner.token,
+    observed: observed.birth.token
+  };
+}
+function ownerRefusalDetails(inspection) {
+  if (inspection.status === "unknown") {
+    return {
+      attestation: "unavailable",
+      ...inspection.cause,
+      nextAction: PROCESS_ATTESTATION_UNAVAILABLE_NEXT_ACTION
+    };
+  }
+  if (inspection.status === "absent") {
+    return { attestation: "absent", pid: inspection.pid };
+  }
+  return {
+    attestation: "mismatch",
+    pid: inspection.pid,
+    expected: inspection.expected,
+    observed: inspection.observed
+  };
+}
+function processBirthRefusalDetails(probe, pid) {
+  return probe.status === "unknown" ? {
+    attestation: "unavailable",
+    ...probe.cause,
+    nextAction: PROCESS_ATTESTATION_UNAVAILABLE_NEXT_ACTION
+  } : { attestation: "absent", pid };
+}
+function requireProcessBirthAttestation(pid, subject, probeBirth = probeProcessBirth) {
+  const probe = probeBirth(pid);
+  if (probe.status === "present")
+    return probe.birth;
+  const unavailable2 = probe.status === "unknown";
+  throw new SessionAuthorityError("PROCESS_BIRTH_UNAVAILABLE", unavailable2 ? `${subject} process identity could not be read on a loaded host` : `${subject} process is absent`, void 0, processBirthRefusalDetails(probe, pid));
+}
+function processBirthProbeFromReader(pid, readBirth) {
+  const birth = readBirth(pid);
+  return birth ? { status: "present", birth } : {
+    status: "unknown",
+    cause: { pid, step: "platform", failure: "read", elapsedMs: 0 }
+  };
+}
+var PROCESS_ATTESTATION_UNAVAILABLE_NEXT_ACTION;
+var init_process_owner = __esm({
+  "packages/rn-dev-agent-core/dist/session/process-owner.js"() {
+    "use strict";
+    init_process_birth();
+    init_registry();
+    PROCESS_ATTESTATION_UNAVAILABLE_NEXT_ACTION = "Process identity could not be read in time on a loaded host. Reduce host process contention, then retry the original operation; do not reopen or rebind the device.";
+  }
+});
+
 // packages/rn-dev-agent-core/dist/session/authority-json.js
 function quoted(value) {
   return intrinsicReflectApply(intrinsicJsonStringify, JSON, [value]);
@@ -9286,11 +12798,11 @@ var init_authority_json = __esm({
 
 // packages/rn-dev-agent-core/dist/session/managed-metro-enforcement.js
 import { spawnSync } from "node:child_process";
-import { createHash as createHash3 } from "node:crypto";
-import { closeSync as closeSync3, constants as constants2, existsSync as existsSync6, mkdirSync as mkdirSync4, openSync as openSync3, readFileSync as readFileSync4, realpathSync as realpathSync4, rmSync, statSync as statSync2, symlinkSync, writeSync as writeSync2 } from "node:fs";
-import { dirname as dirname3, resolve as resolve3 } from "node:path";
+import { createHash as createHash4 } from "node:crypto";
+import { closeSync as closeSync3, constants as constants2, existsSync as existsSync6, mkdirSync as mkdirSync5, openSync as openSync3, readFileSync as readFileSync4, realpathSync as realpathSync4, rmSync, statSync as statSync3, symlinkSync, writeSync as writeSync2 } from "node:fs";
+import { dirname as dirname4, resolve as resolve3 } from "node:path";
 function sha256(value) {
-  return createHash3("sha256").update(value).digest("hex");
+  return createHash4("sha256").update(value).digest("hex");
 }
 function defaultRun2(command, args) {
   const result = spawnSync(command, [...args], {
@@ -9311,7 +12823,7 @@ function field(details, name) {
 function verifiedSandboxExecutable(dependencies) {
   const exists = dependencies.exists ?? existsSync6;
   const canonicalize = dependencies.canonicalize ?? realpathSync4;
-  const stat2 = dependencies.stat ?? statSync2;
+  const stat2 = dependencies.stat ?? statSync3;
   const readBytes = dependencies.readBytes ?? readFileSync4;
   const run = dependencies.run ?? defaultRun2;
   try {
@@ -9385,7 +12897,7 @@ function defaultRuntimeCache(exists) {
 }
 function attestRuntimeFile(path, dependencies) {
   const canonicalize = dependencies.canonicalize ?? realpathSync4;
-  const stat2 = dependencies.stat ?? statSync2;
+  const stat2 = dependencies.stat ?? statSync3;
   const readBytes = dependencies.readBytes ?? readFileSync4;
   const run = dependencies.run ?? defaultRun2;
   const canonical2 = canonicalize(path);
@@ -9760,12 +13272,12 @@ const processGroupExists = (pid) => {
 });
 
 // packages/rn-dev-agent-core/dist/session/source-identity.js
-import { createHash as createHash4, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
-import { execFileSync as execFileSync4 } from "node:child_process";
-import { closeSync as closeSync4, constants as constants3, existsSync as existsSync7, fstatSync as fstatSync2, lstatSync as lstatSync3, openSync as openSync4, readdirSync as readdirSync2, readFileSync as readFileSync5, readlinkSync as readlinkSync2, readSync as readSync2, realpathSync as realpathSync5 } from "node:fs";
-import { dirname as dirname4, isAbsolute, join as join5, relative, resolve as resolve4 } from "node:path";
+import { createHash as createHash5, createHmac, randomBytes as randomBytes2, timingSafeEqual as timingSafeEqual2 } from "node:crypto";
+import { execFileSync as execFileSync5 } from "node:child_process";
+import { closeSync as closeSync4, constants as constants3, existsSync as existsSync7, fstatSync as fstatSync2, lstatSync as lstatSync4, openSync as openSync4, readdirSync as readdirSync2, readFileSync as readFileSync5, readlinkSync as readlinkSync2, readSync as readSync2, realpathSync as realpathSync5 } from "node:fs";
+import { dirname as dirname5, isAbsolute, join as join5, relative, resolve as resolve4 } from "node:path";
 function digest(parts) {
-  const hash = createHash4("sha256");
+  const hash = createHash5("sha256");
   for (const part of parts) {
     hash.update(part);
     hash.update("\0");
@@ -9773,7 +13285,7 @@ function digest(parts) {
   return hash.digest("hex");
 }
 function readMetroEvidenceHead(socket, challenge) {
-  return execFileSync4(process.execPath, ["-e", METRO_EVIDENCE_HEAD_CLIENT, socket, challenge], {
+  return execFileSync5(process.execPath, ["-e", METRO_EVIDENCE_HEAD_CLIENT, socket, challenge], {
     encoding: "utf8",
     maxBuffer: 4096,
     stdio: ["ignore", "pipe", "ignore"],
@@ -9820,7 +13332,7 @@ function updateFramedFile(hash, path, maximumBytes) {
   return updateStableFile(hash, path, maximumBytes, true);
 }
 function fileDigest(path) {
-  const hash = createHash4("sha256");
+  const hash = createHash5("sha256");
   updateStableFile(hash, path, MAX_STRICT_PROOF_DEPENDENCY_FILE_BYTES, false);
   return hash.digest("hex");
 }
@@ -9835,7 +13347,7 @@ function updateDependencyPath(hash, path, label, state) {
     if (current.depth > MAX_STRICT_PROOF_DEPENDENCY_DEPTH) {
       throw new Error("STRICT_PROOF_DEPENDENCY_LIMIT: dependency depth exceeds the limit");
     }
-    const stat2 = lstatSync3(current.path);
+    const stat2 = lstatSync4(current.path);
     updateFramed(hash, current.label);
     updateFramed(hash, String(stat2.mode & 511));
     if (stat2.isSymbolicLink()) {
@@ -9927,7 +13439,7 @@ function metroRuntimeInputs(identity2, authority, readEvidenceHead, verifyRuntim
   const expected = createHmac("sha256", authority.capability).update(canonicalAuthorityJson(payload)).digest();
   const observed = typeof receipt2.signature === "string" ? Buffer.from(receipt2.signature, "hex") : Buffer.alloc(0);
   const runtimeManifest = receipt2.runtimeManifest && typeof receipt2.runtimeManifest === "object" ? receipt2.runtimeManifest : null;
-  if (receipt2.version !== 1 || receipt2.runtimeEvidenceAuthority !== authority.evidenceAuthority || receipt2.sessionId !== authority.sessionId || receipt2.metroInstanceId !== authority.metroInstanceId || receipt2.contentRoot !== identity2.contentRoot || receipt2.appRoot !== identity2.appRoot || !runtimeManifest || runtimeManifest.version !== 1 || typeof runtimeManifest.executable !== "string" || typeof runtimeManifest.sourceExecutable !== "string" || typeof runtimeManifest.nodeExecutable !== "string" || typeof runtimeManifest.nodeVersion !== "string" || !Number.isSafeInteger(runtimeManifest.port) || runtimeManifest.port < 1 || runtimeManifest.port > 65535 || !Array.isArray(runtimeManifest.args) || runtimeManifest.args.some((entry) => typeof entry !== "string") || !Array.isArray(runtimeManifest.commandProbeArguments) || runtimeManifest.commandProbeArguments.some((entry) => typeof entry !== "string") || !Array.isArray(runtimeManifest.commandExecutableMappings) || runtimeManifest.commandExecutableMappings.some((entry) => typeof entry !== "string") || !Array.isArray(runtimeManifest.commandChainInputs) || runtimeManifest.commandChainInputs.some((entry) => typeof entry !== "string") || !Array.isArray(runtimeManifest.protectedRuntimeRoots) || runtimeManifest.protectedRuntimeRoots.some((entry) => typeof entry !== "string") || typeof runtimeManifest.nodeOptions !== "string" || typeof runtimeManifest.environmentDigest !== "string" || !/^[a-f0-9]{64}$/.test(runtimeManifest.environmentDigest) || runtimeManifest.contentRoot !== identity2.contentRoot || runtimeManifest.appRoot !== identity2.appRoot || typeof runtimeManifest.servingRoot !== "string" || !Number.isSafeInteger(runtimeManifest.buildGeneration) || !Array.isArray(runtimeManifest.packageInputs) || runtimeManifest.packageInputs.some((entry) => typeof entry !== "string") || !Array.isArray(runtimeManifest.metroConfigInputs) || runtimeManifest.metroConfigInputs.some((entry) => typeof entry !== "string") || !Array.isArray(runtimeManifest.dependencyRoots) || runtimeManifest.dependencyRoots.some((entry) => typeof entry !== "string") || !Array.isArray(runtimeManifest.runtimeInputs) || runtimeManifest.runtimeInputs.some((entry) => typeof entry !== "string") || !runtimeManifest.descendantAuthority || typeof runtimeManifest.descendantAuthority !== "object" || !Array.isArray(receipt2.runtimeInputs) || receipt2.runtimeInputs.some((entry) => typeof entry !== "string") || canonicalAuthorityJson(runtimeManifest.runtimeInputs) !== canonicalAuthorityJson(receipt2.runtimeInputs) || !Array.isArray(receipt2.violations) || receipt2.violations.some((entry) => typeof entry !== "string") || observed.length !== expected.length || !timingSafeEqual(observed, expected)) {
+  if (receipt2.version !== 1 || receipt2.runtimeEvidenceAuthority !== authority.evidenceAuthority || receipt2.sessionId !== authority.sessionId || receipt2.metroInstanceId !== authority.metroInstanceId || receipt2.contentRoot !== identity2.contentRoot || receipt2.appRoot !== identity2.appRoot || !runtimeManifest || runtimeManifest.version !== 1 || typeof runtimeManifest.executable !== "string" || typeof runtimeManifest.sourceExecutable !== "string" || typeof runtimeManifest.nodeExecutable !== "string" || typeof runtimeManifest.nodeVersion !== "string" || !Number.isSafeInteger(runtimeManifest.port) || runtimeManifest.port < 1 || runtimeManifest.port > 65535 || !Array.isArray(runtimeManifest.args) || runtimeManifest.args.some((entry) => typeof entry !== "string") || !Array.isArray(runtimeManifest.commandProbeArguments) || runtimeManifest.commandProbeArguments.some((entry) => typeof entry !== "string") || !Array.isArray(runtimeManifest.commandExecutableMappings) || runtimeManifest.commandExecutableMappings.some((entry) => typeof entry !== "string") || !Array.isArray(runtimeManifest.commandChainInputs) || runtimeManifest.commandChainInputs.some((entry) => typeof entry !== "string") || !Array.isArray(runtimeManifest.protectedRuntimeRoots) || runtimeManifest.protectedRuntimeRoots.some((entry) => typeof entry !== "string") || typeof runtimeManifest.nodeOptions !== "string" || typeof runtimeManifest.environmentDigest !== "string" || !/^[a-f0-9]{64}$/.test(runtimeManifest.environmentDigest) || runtimeManifest.contentRoot !== identity2.contentRoot || runtimeManifest.appRoot !== identity2.appRoot || typeof runtimeManifest.servingRoot !== "string" || !Number.isSafeInteger(runtimeManifest.buildGeneration) || !Array.isArray(runtimeManifest.packageInputs) || runtimeManifest.packageInputs.some((entry) => typeof entry !== "string") || !Array.isArray(runtimeManifest.metroConfigInputs) || runtimeManifest.metroConfigInputs.some((entry) => typeof entry !== "string") || !Array.isArray(runtimeManifest.dependencyRoots) || runtimeManifest.dependencyRoots.some((entry) => typeof entry !== "string") || !Array.isArray(runtimeManifest.runtimeInputs) || runtimeManifest.runtimeInputs.some((entry) => typeof entry !== "string") || !runtimeManifest.descendantAuthority || typeof runtimeManifest.descendantAuthority !== "object" || !Array.isArray(receipt2.runtimeInputs) || receipt2.runtimeInputs.some((entry) => typeof entry !== "string") || canonicalAuthorityJson(runtimeManifest.runtimeInputs) !== canonicalAuthorityJson(receipt2.runtimeInputs) || !Array.isArray(receipt2.violations) || receipt2.violations.some((entry) => typeof entry !== "string") || observed.length !== expected.length || !timingSafeEqual2(observed, expected)) {
     throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime policy receipt is invalid");
   }
   if (!pathIsWithinRoot(runtimeManifest.servingRoot, identity2.contentRoot)) {
@@ -9942,7 +13454,7 @@ function metroRuntimeInputs(identity2, authority, readEvidenceHead, verifyRuntim
     platform: process.platform,
     appRoot: identity2.appRoot,
     sourceRoot: identity2.contentRoot,
-    runtimeRoot: dirname4(authority.evidencePath),
+    runtimeRoot: dirname5(authority.evidencePath),
     nodeExecutable: runtimeManifest.nodeExecutable,
     nodeVersion: runtimeManifest.nodeVersion,
     commandExecutable: runtimeManifest.executable,
@@ -9967,7 +13479,7 @@ function metroRuntimeInputs(identity2, authority, readEvidenceHead, verifyRuntim
   const runtimeLoadsPath = authority.evidencePath;
   let runtimeLoadsRaw;
   try {
-    const runtimeLoadsStat = lstatSync3(runtimeLoadsPath);
+    const runtimeLoadsStat = lstatSync4(runtimeLoadsPath);
     if (!runtimeLoadsStat.isFile() || runtimeLoadsStat.size > MAX_STRICT_PROOF_FILE_BYTES) {
       throw new Error("runtime load evidence is not a bounded regular file");
     }
@@ -10012,7 +13524,7 @@ function metroRuntimeInputs(identity2, authority, readEvidenceHead, verifyRuntim
     };
     const expectedLoad = createHmac("sha256", authority.capability).update(canonicalAuthorityJson(loadPayload)).digest();
     const observedLoad = typeof load.signature === "string" ? Buffer.from(load.signature, "hex") : Buffer.alloc(0);
-    if (load.version !== 1 || load.runtimeEvidenceAuthority !== authority.evidenceAuthority || load.sessionId !== authority.sessionId || load.metroInstanceId !== authority.metroInstanceId || load.kind !== "input" && load.kind !== "violation" && load.kind !== "launch" && load.kind !== "attestation" && load.kind !== "semantics" && load.kind !== "pending" && load.kind !== "completion" && load.kind !== "stability" || typeof load.value !== "string" || !Number.isSafeInteger(load.sequence) || load.sequence !== evidenceSequence + 1 || load.previousSignature !== previousEvidenceSignature || (load.kind === "input" || load.kind === "stability" ? typeof load.digest !== "string" || !/^[a-f0-9]{64}$/.test(load.digest) : load.digest !== null) || observedLoad.length !== expectedLoad.length || !timingSafeEqual(observedLoad, expectedLoad)) {
+    if (load.version !== 1 || load.runtimeEvidenceAuthority !== authority.evidenceAuthority || load.sessionId !== authority.sessionId || load.metroInstanceId !== authority.metroInstanceId || load.kind !== "input" && load.kind !== "violation" && load.kind !== "launch" && load.kind !== "attestation" && load.kind !== "semantics" && load.kind !== "pending" && load.kind !== "completion" && load.kind !== "stability" || typeof load.value !== "string" || !Number.isSafeInteger(load.sequence) || load.sequence !== evidenceSequence + 1 || load.previousSignature !== previousEvidenceSignature || (load.kind === "input" || load.kind === "stability" ? typeof load.digest !== "string" || !/^[a-f0-9]{64}$/.test(load.digest) : load.digest !== null) || observedLoad.length !== expectedLoad.length || !timingSafeEqual2(observedLoad, expectedLoad)) {
       throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime load evidence is invalid");
     }
     evidenceSequence = load.sequence;
@@ -10050,7 +13562,7 @@ function metroRuntimeInputs(identity2, authority, readEvidenceHead, verifyRuntim
         throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime semantics are unbounded");
       }
       runtimeSemantics.add(load.value);
-      runtimeSemanticsByDigest.set(createHash4("sha256").update(load.value).digest("hex"), load.value);
+      runtimeSemanticsByDigest.set(createHash5("sha256").update(load.value).digest("hex"), load.value);
       orderedRuntimeSemantics.push(load.value);
       continue;
     }
@@ -10074,7 +13586,7 @@ function metroRuntimeInputs(identity2, authority, readEvidenceHead, verifyRuntim
   if (evidenceSequence === 0 || previousEvidenceSignature === null) {
     throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime load evidence is empty");
   }
-  const challenge = randomBytes(32).toString("hex");
+  const challenge = randomBytes2(32).toString("hex");
   let head;
   try {
     head = JSON.parse(readEvidenceHead(authority.evidenceSocket, challenge));
@@ -10094,7 +13606,7 @@ function metroRuntimeInputs(identity2, authority, readEvidenceHead, verifyRuntim
   };
   const expectedHead = createHmac("sha256", authority.capability).update(canonicalAuthorityJson(headPayload)).digest();
   const observedHead = typeof head.signature === "string" ? Buffer.from(head.signature, "hex") : Buffer.alloc(0);
-  if (head.version !== 1 || head.runtimeEvidenceAuthority !== authority.evidenceAuthority || head.sessionId !== authority.sessionId || head.metroInstanceId !== authority.metroInstanceId || head.challenge !== challenge || head.sequence !== evidenceSequence || head.journalSignature !== previousEvidenceSignature || observedHead.length !== expectedHead.length || !timingSafeEqual(observedHead, expectedHead)) {
+  if (head.version !== 1 || head.runtimeEvidenceAuthority !== authority.evidenceAuthority || head.sessionId !== authority.sessionId || head.metroInstanceId !== authority.metroInstanceId || head.challenge !== challenge || head.sequence !== evidenceSequence || head.journalSignature !== previousEvidenceSignature || observedHead.length !== expectedHead.length || !timingSafeEqual2(observedHead, expectedHead)) {
     throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime evidence head is invalid");
   }
   for (const launch of descendantLaunches.keys()) {
@@ -10212,7 +13724,7 @@ function dependencyStoreRoots(identity2, git2, pathExists) {
     pnpRoots.push(pnpRoot);
     if (pnpRoot === identity2.contentRoot)
       break;
-    const parent = dirname4(pnpRoot);
+    const parent = dirname5(pnpRoot);
     if (parent === pnpRoot || !isContained(identity2.contentRoot, parent))
       break;
     pnpRoot = parent;
@@ -10221,12 +13733,12 @@ function dependencyStoreRoots(identity2, git2, pathExists) {
   if (pnpLoaders.length > 0) {
     throw new Error("STRICT_PROOF_UNVERIFIED_DEPENDENCY_LAYOUT: Plug\u2019n\u2019Play dependency resolution is unsupported");
   }
-  let ancestor = dirname4(identity2.contentRoot);
+  let ancestor = dirname5(identity2.contentRoot);
   while (true) {
     if (pathExists(join5(ancestor, "node_modules"))) {
       throw new Error("STRICT_PROOF_UNVERIFIED_DEPENDENCY_LAYOUT: ancestor node_modules resolves outside the content root");
     }
-    const parent = dirname4(ancestor);
+    const parent = dirname5(ancestor);
     if (parent === ancestor)
       break;
     ancestor = parent;
@@ -10252,7 +13764,7 @@ function updateDependencyStores(hash, identity2, git2, pathExists, runtimeInputs
   }
 }
 function defaultGit(root, args) {
-  return execFileSync4("git", ["-C", root, ...args], {
+  return execFileSync5("git", ["-C", root, ...args], {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
     timeout: 5e3,
@@ -10371,7 +13883,7 @@ function strictProofSourceIdentity(identity2, dependencies = {}) {
       throw new Error(`STRICT_PROOF_DIRTY_SUBMODULE: ${entry} contains source changes outside the parent digest`);
     }
   }
-  const dirtyHash = createHash4("sha256");
+  const dirtyHash = createHash5("sha256");
   updateFramed(dirtyHash, "git-dirty-v3");
   updateFramed(dirtyHash, diff);
   for (const semantics of runtimeInputs.semantics) {
@@ -10390,7 +13902,7 @@ function strictProofSourceIdentity(identity2, dependencies = {}) {
   for (const [classification, entry] of sourceEntries) {
     const file = resolve4(identity2.contentRoot, entry);
     assertContained(identity2.contentRoot, file, "STRICT_PROOF_PATH_ESCAPE");
-    const stat2 = lstatSync3(file);
+    const stat2 = lstatSync4(file);
     updateFramed(dirtyHash, classification);
     updateFramed(dirtyHash, entry);
     if (stat2.isFile()) {
@@ -10409,7 +13921,7 @@ function strictProofSourceIdentity(identity2, dependencies = {}) {
       const target = realpathSync5(file);
       assertContained(identity2.contentRoot, target, "STRICT_PROOF_PATH_ESCAPE");
       const link = readlinkSync2(file);
-      const targetStat = lstatSync3(target);
+      const targetStat = lstatSync4(target);
       if (!targetStat.isFile()) {
         throw new Error("STRICT_PROOF_UNSUPPORTED_FILE: untracked symlink target is not a regular file");
       }
@@ -10519,8 +14031,8 @@ var init_worktree_repair_remedy = __esm({
 
 // packages/rn-dev-agent-core/dist/session/worktree-inheritance.js
 import { spawnSync as spawnSync2 } from "node:child_process";
-import { closeSync as closeSync5, constants as constants4, existsSync as existsSync8, fstatSync as fstatSync3, lstatSync as lstatSync4, mkdirSync as mkdirSync5, openSync as openSync5, readFileSync as readFileSync6, readlinkSync as readlinkSync3, realpathSync as realpathSync6, renameSync as renameSync2, statSync as statSync3, symlinkSync as symlinkSync2, unlinkSync as unlinkSync3 } from "node:fs";
-import { dirname as dirname5, isAbsolute as isAbsolute2, join as join6, relative as relative2, resolve as resolve5, sep as sep2 } from "node:path";
+import { closeSync as closeSync5, constants as constants4, existsSync as existsSync8, fstatSync as fstatSync3, lstatSync as lstatSync5, mkdirSync as mkdirSync6, openSync as openSync5, readFileSync as readFileSync6, readlinkSync as readlinkSync3, realpathSync as realpathSync6, renameSync as renameSync2, statSync as statSync4, symlinkSync as symlinkSync2, unlinkSync as unlinkSync3 } from "node:fs";
+import { dirname as dirname6, isAbsolute as isAbsolute2, join as join6, relative as relative2, resolve as resolve5, sep as sep2 } from "node:path";
 function gitEnvironment() {
   const env = { ...process.env };
   for (const key of GIT_ENV_OVERRIDES)
@@ -10671,7 +14183,7 @@ function resolveWorktreeLayout(input) {
     return { ...base, refusal: "PRIMARY_APP_MISSING" };
   let primaryAppReal = null;
   try {
-    if (lstatSync4(primaryAppRoot).isDirectory())
+    if (lstatSync5(primaryAppRoot).isDirectory())
       primaryAppReal = canonical(primaryAppRoot);
   } catch {
     primaryAppReal = null;
@@ -10699,7 +14211,7 @@ function classifySource(path, type, boundary) {
     for (let index = 0; index < paths.length; index += 1) {
       let node;
       try {
-        node = lstatSync4(paths[index], { bigint: true });
+        node = lstatSync5(paths[index], { bigint: true });
       } catch (error2) {
         const code = error2.code;
         if (code === "EACCES" || code === "EPERM")
@@ -10746,7 +14258,7 @@ function repositoryIdentityUnchanged(identity2) {
 function classifyDestination(path, sourcePath, type) {
   let link;
   try {
-    link = lstatSync4(path, { bigint: true });
+    link = lstatSync5(path, { bigint: true });
   } catch (error2) {
     const code = error2.code;
     if (code === "EACCES" || code === "EPERM")
@@ -10766,7 +14278,7 @@ function classifyDestination(path, sourcePath, type) {
   if (!expected || resolved !== expected)
     return { state: "LINK_FOREIGN", evidence };
   try {
-    const stats = statSync3(resolved);
+    const stats = statSync4(resolved);
     const typeOk = type === "directory" ? stats.isDirectory() : stats.isFile();
     return { state: typeOk ? "LINK_VALID" : "LINK_FOREIGN", evidence };
   } catch {
@@ -10778,7 +14290,7 @@ function identityOf(stat2) {
 }
 function lstatIfPresent(path) {
   try {
-    return lstatSync4(path, { bigint: true });
+    return lstatSync5(path, { bigint: true });
   } catch (error2) {
     if (error2.code === "ENOENT")
       return null;
@@ -11221,7 +14733,7 @@ function classifyLegacyParent(layout, localAnchor, parent) {
   const localParent = join6(localAnchor, parent);
   let stats;
   try {
-    stats = lstatSync4(localParent);
+    stats = lstatSync5(localParent);
   } catch {
     return null;
   }
@@ -11233,7 +14745,7 @@ function classifyLegacyParent(layout, localAnchor, parent) {
 }
 function pathExistsNoFollow(path) {
   try {
-    lstatSync4(path);
+    lstatSync5(path);
     return true;
   } catch {
     return false;
@@ -11241,7 +14753,7 @@ function pathExistsNoFollow(path) {
 }
 function directoryIdentity(path) {
   try {
-    const stats = lstatSync4(path, { bigint: true });
+    const stats = lstatSync5(path, { bigint: true });
     if (stats.isSymbolicLink() || !stats.isDirectory())
       return null;
     return { dev: String(stats.dev), ino: String(stats.ino) };
@@ -11257,7 +14769,7 @@ function expectedLegacyRoot(layout) {
 }
 function isVerifiedLegacyRootLink(root, expected) {
   try {
-    if (resolve5(dirname5(root), readlinkSync3(root)) !== expected)
+    if (resolve5(dirname6(root), readlinkSync3(root)) !== expected)
       return false;
     const resolvedExpected = canonical(expected);
     return resolvedExpected === null || canonical(root) === resolvedExpected;
@@ -11278,7 +14790,7 @@ function detectLegacyRootRepair(input) {
   const backupPresent = pathExistsNoFollow(backup);
   let rootStats;
   try {
-    rootStats = lstatSync4(root);
+    rootStats = lstatSync5(root);
   } catch (error2) {
     if (error2.code === "ENOENT") {
       return backupPresent ? repairReport("refused", "RN_AGENT_LEGACY_ROOT_REPAIR_REFUSED", "A .rn-agent.bak recovery directory exists without its displaced root; preserve it and inspect the partial migration explicitly.", [".rn-agent.bak"]) : repairReport("unchanged", "RN_AGENT_LEGACY_ROOT_REPAIR_NOT_NEEDED", "No .rn-agent root exists.");
@@ -11331,8 +14843,8 @@ var init_worktree_inheritance = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/util/secure-state-file.js
-import { readFileSync as readFileSync7, writeFileSync as writeFileSync3, unlinkSync as unlinkSync4, mkdirSync as mkdirSync6, renameSync as renameSync3, lstatSync as lstatSync5 } from "node:fs";
-import { join as join7, dirname as dirname6 } from "node:path";
+import { readFileSync as readFileSync7, writeFileSync as writeFileSync3, unlinkSync as unlinkSync4, mkdirSync as mkdirSync7, renameSync as renameSync3, lstatSync as lstatSync6 } from "node:fs";
+import { join as join7, dirname as dirname7 } from "node:path";
 import { homedir as homedir2 } from "node:os";
 function getStateDir() {
   if (process.env.XDG_STATE_HOME) {
@@ -11349,7 +14861,7 @@ function runnerStatePath(key) {
 }
 function readJsonStateFile(path) {
   try {
-    const stat2 = lstatSync5(path);
+    const stat2 = lstatSync6(path);
     if (stat2.isSymbolicLink())
       return null;
     return JSON.parse(readFileSync7(path, "utf8"));
@@ -11358,7 +14870,7 @@ function readJsonStateFile(path) {
   }
 }
 function writeJsonStateFileAtomic(path, value) {
-  mkdirSync6(dirname6(path), { recursive: true });
+  mkdirSync7(dirname7(path), { recursive: true });
   const tmpPath = `${path}.tmp.${process.pid}`;
   writeFileSync3(tmpPath, JSON.stringify(value), { encoding: "utf8", mode: 384 });
   renameSync3(tmpPath, path);
@@ -11388,21 +14900,21 @@ var init_secure_state_file = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/session/state-root.js
-import { randomBytes as randomBytes2, randomUUID } from "node:crypto";
-import { chmodSync as chmodSync2, linkSync, lstatSync as lstatSync6, mkdirSync as mkdirSync7, readFileSync as readFileSync8, renameSync as renameSync4, rmSync as rmSync2, statSync as statSync4, writeFileSync as writeFileSync4 } from "node:fs";
+import { randomBytes as randomBytes3, randomUUID } from "node:crypto";
+import { chmodSync as chmodSync3, linkSync, lstatSync as lstatSync7, mkdirSync as mkdirSync8, readFileSync as readFileSync8, renameSync as renameSync4, rmSync as rmSync2, statSync as statSync5, writeFileSync as writeFileSync4 } from "node:fs";
 import { join as join8, resolve as resolve6 } from "node:path";
 function fail(code, detail) {
   throw new Error(`${code}: ${detail}`);
 }
 function ensurePrivateDirectory(path) {
   try {
-    mkdirSync7(path, { recursive: true, mode: 448 });
-    const link = lstatSync6(path);
-    const stat2 = statSync4(path);
+    mkdirSync8(path, { recursive: true, mode: 448 });
+    const link = lstatSync7(path);
+    const stat2 = statSync5(path);
     if (link.isSymbolicLink() || !link.isDirectory() || typeof process.getuid === "function" && stat2.uid !== process.getuid()) {
       fail("AUTHORITY_STATE_ROOT_UNSAFE", "state directory is not private and user-owned");
     }
-    chmodSync2(path, 448);
+    chmodSync3(path, 448);
   } catch (error2) {
     if (error2 instanceof Error && error2.message.startsWith("AUTHORITY_STATE_ROOT_UNSAFE")) {
       throw error2;
@@ -11443,7 +14955,7 @@ function createAuthorityStateLayout(stateDir = getStateDir()) {
 function openAuthorityStateLayout(stateDir) {
   const layout = authorityStateLayout(stateDir);
   try {
-    const registry2 = lstatSync6(layout.registry);
+    const registry2 = lstatSync7(layout.registry);
     if (registry2.isSymbolicLink() || !registry2.isFile()) {
       fail("AUTHORITY_STATE_HOME_UNKNOWN", "requested state home has no regular authority registry");
     }
@@ -11471,7 +14983,7 @@ function getBoundDirectoryJournalKey(layout = createAuthorityStateLayout()) {
   const temporary = join8(layout.root, `.bound-directory.${randomUUID()}.key`);
   try {
     try {
-      writeFileSync4(temporary, randomBytes2(32), { flag: "wx", mode: 384, flush: true });
+      writeFileSync4(temporary, randomBytes3(32), { flag: "wx", mode: 384, flush: true });
       try {
         linkSync(temporary, path);
       } catch (error2) {
@@ -11481,13 +14993,13 @@ function getBoundDirectoryJournalKey(layout = createAuthorityStateLayout()) {
     } finally {
       rmSync2(temporary, { force: true });
     }
-    const link = lstatSync6(path);
-    const stat2 = statSync4(path);
+    const link = lstatSync7(path);
+    const stat2 = statSync5(path);
     const key = readFileSync8(path);
     if (link.isSymbolicLink() || !link.isFile() || key.length !== 32 || typeof process.getuid === "function" && stat2.uid !== process.getuid()) {
       fail("AUTHORITY_STATE_ROOT_UNSAFE", "bound-directory journal key is invalid");
     }
-    chmodSync2(path, 384);
+    chmodSync3(path, 384);
     return key.toString("base64url");
   } catch (error2) {
     if (error2 instanceof Error && error2.message.startsWith("AUTHORITY_STATE_ROOT_UNSAFE")) {
@@ -11500,7 +15012,7 @@ function writeSessionJson(layout, sessionId, filename, value) {
   const directory = sessionDirectory(layout, sessionId);
   const path = join8(directory, filename);
   try {
-    const existing = lstatSync6(path);
+    const existing = lstatSync7(path);
     if (existing.isSymbolicLink() || !existing.isFile()) {
       fail("AUTHORITY_STATE_ROOT_UNSAFE", `${filename} is not a regular file`);
     }
@@ -11510,9 +15022,9 @@ function writeSessionJson(layout, sessionId, filename, value) {
   }
   const temporary = join8(directory, `.${filename}.${process.pid}.${Date.now()}.tmp`);
   writeFileSync4(temporary, JSON.stringify(value), { encoding: "utf8", mode: 384 });
-  chmodSync2(temporary, 384);
+  chmodSync3(temporary, 384);
   renameSync4(temporary, path);
-  chmodSync2(path, 384);
+  chmodSync3(path, 384);
   return path;
 }
 function writeSessionSecret(layout, sessionId, value) {
@@ -11640,126 +15152,10 @@ var init_successor_source = __esm({
   }
 });
 
-// packages/rn-dev-agent-core/dist/session/metro-binding.js
-import { execFileSync as execFileSync5 } from "node:child_process";
-function resolveMetroListenerExecutable(platform, dependencies = {}) {
-  const executable = platform === "win32" ? "powershell" : platform === "linux" ? "ss" : platform === "darwin" ? "lsof" : null;
-  return executable ? resolveTrustedSystemExecutable(executable, platform, dependencies) : null;
-}
-function numericListener(output, emptyStatus) {
-  const value = String(output).trim();
-  if (!value)
-    return { status: emptyStatus };
-  const candidates = value.split(/\s+/);
-  if (candidates.some((candidate) => !/^\d+$/.test(candidate))) {
-    return { status: "unknown" };
-  }
-  const pids = new Set(candidates.map(Number));
-  const [pid] = pids;
-  return pids.size === 1 && Number.isSafeInteger(pid) && pid > 0 ? { status: "listening", pid } : { status: "unknown" };
-}
-function probeMetroListener(port, platform = process.platform, execute2 = execFileSync5, executableDependencies = {}) {
-  const executable = resolveMetroListenerExecutable(platform, executableDependencies);
-  if (!executable)
-    return { status: "unknown" };
-  try {
-    if (platform === "win32") {
-      const output = execute2(executable, [
-        "-NoProfile",
-        "-NonInteractive",
-        "-Command",
-        `$connections = @(Get-NetTCPConnection -State Listen -ErrorAction Stop | Where-Object LocalPort -eq ${port}); if ($connections.Count -eq 0) { 'ABSENT' } else { $connections.OwningProcess | Sort-Object -Unique }`
-      ], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 2e3 });
-      return String(output).trim() === "ABSENT" ? { status: "absent" } : numericListener(output, "unknown");
-    }
-    if (platform === "linux") {
-      const output = execute2(executable, ["-H", "-ltnp", `sport = :${port}`], {
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "ignore"],
-        timeout: 2e3
-      });
-      const value = String(output).trim();
-      if (!value)
-        return { status: "absent" };
-      const pids = new Set([...value.matchAll(/pid=(\d+)/g)].map((match) => Number(match[1])));
-      const [pid] = pids;
-      return pids.size === 1 && Number.isSafeInteger(pid) && pid > 0 ? { status: "listening", pid } : { status: "unknown" };
-    }
-    if (platform === "darwin") {
-      const output = execute2(executable, ["-ti", `tcp:${port}`, "-sTCP:LISTEN"], {
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "pipe"],
-        timeout: 2e3
-      });
-      return numericListener(output, "unknown");
-    }
-    return { status: "unknown" };
-  } catch (error2) {
-    const failure = error2;
-    return platform === "darwin" && failure.status === 1 && !String(failure.stdout ?? "").trim() && !String(failure.stderr ?? "").trim() ? { status: "absent" } : { status: "unknown" };
-  }
-}
-function metroListenerPid(port, platform = process.platform, execute2 = execFileSync5, executableDependencies = {}) {
-  const probe = probeMetroListener(port, platform, execute2, executableDependencies);
-  return probe.status === "listening" ? probe.pid : null;
-}
-async function fetchMetroStatus(port) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 2e3);
-  try {
-    const response = await fetch(`http://127.0.0.1:${port}/status`, {
-      signal: controller.signal
-    });
-    if (!response.ok)
-      throw new Error(`HTTP ${response.status}`);
-    return await response.text();
-  } finally {
-    clearTimeout(timer);
-  }
-}
-async function captureMetroBinding(input, dependencies = {}) {
-  if (!Number.isSafeInteger(input.port) || input.port < 1 || input.port > 65535 || !Number.isSafeInteger(input.pid) || input.pid < 1 || !input.instanceId || !Number.isSafeInteger(input.buildGeneration) || input.buildGeneration < 1) {
-    throw new Error("METRO_AUTHORITY_MISMATCH: Metro binding is incomplete");
-  }
-  const listenerPid = (dependencies.listenerPid ?? metroListenerPid)(input.port);
-  if (listenerPid !== input.pid) {
-    throw new Error("METRO_AUTHORITY_MISMATCH: Metro process does not own the claimed listener");
-  }
-  const birth = (dependencies.readBirth ?? readProcessBirth)(input.pid);
-  if (!birth) {
-    throw new Error("PROCESS_BIRTH_UNAVAILABLE: Metro process birth could not be proven conservatively");
-  }
-  const status = await (dependencies.fetchStatus ?? fetchMetroStatus)(input.port);
-  if (!status.includes("packager-status:running")) {
-    throw new Error("METRO_AUTHORITY_MISMATCH: claimed Metro endpoint is not running");
-  }
-  const servingRoot = dependencies.servingRoot ? dependencies.servingRoot(input.port) : cwdForProcess(input.pid);
-  if (!servingRoot || !pathIsWithinRoot(servingRoot, input.sourceRoot)) {
-    throw new Error("METRO_AUTHORITY_MISMATCH: Metro serving root does not match the source worktree");
-  }
-  return {
-    port: input.port,
-    pid: input.pid,
-    birth: birth.token,
-    instanceId: input.instanceId,
-    servingRoot,
-    buildGeneration: input.buildGeneration
-  };
-}
-var init_metro_binding = __esm({
-  "packages/rn-dev-agent-core/dist/session/metro-binding.js"() {
-    "use strict";
-    init_metro_cwd();
-    init_trusted_system_executable();
-    init_process_birth();
-    init_trusted_system_executable();
-  }
-});
-
 // packages/rn-dev-agent-core/dist/session/managed-metro.js
 import { execFileSync as execFileSync6, spawn } from "node:child_process";
-import { createHash as createHash5, createHmac as createHmac2, timingSafeEqual as timingSafeEqual2 } from "node:crypto";
-import { closeSync as closeSync6, existsSync as existsSync9, fstatSync as fstatSync4, mkdirSync as mkdirSync8, openSync as openSync6, readFileSync as readFileSync9, readSync as readSync3, realpathSync as realpathSync8, rmSync as rmSync3 } from "node:fs";
+import { createHash as createHash6, createHmac as createHmac2, timingSafeEqual as timingSafeEqual3 } from "node:crypto";
+import { closeSync as closeSync6, existsSync as existsSync9, fstatSync as fstatSync4, mkdirSync as mkdirSync9, openSync as openSync6, readFileSync as readFileSync9, readSync as readSync3, realpathSync as realpathSync8, rmSync as rmSync3 } from "node:fs";
 function parseNodeOptions(value) {
   const tokens = [];
   let token2 = "";
@@ -11878,7 +15274,7 @@ function verifyManagedMetroManagementProof(binding, input) {
   }, input.signerCapability);
   const expectedBuffer = Buffer.from(expected, "hex");
   const observedBuffer = Buffer.from(binding.managementProof, "hex");
-  return expectedBuffer.length === observedBuffer.length && timingSafeEqual2(expectedBuffer, observedBuffer);
+  return expectedBuffer.length === observedBuffer.length && timingSafeEqual3(expectedBuffer, observedBuffer);
 }
 function exactManagedProcessInspection(role, pid, birth, probe) {
   const prefix = role === "launcher" ? "METRO_LAUNCHER" : "METRO_LISTENER";
@@ -12138,7 +15534,7 @@ async function stopManagedMetro(binding, input, dependencies = {}) {
   ];
   if (!expectedProofs.some((expected) => {
     const expectedBuffer = Buffer.from(expected, "hex");
-    return expectedBuffer.length === observedBuffer.length && timingSafeEqual2(expectedBuffer, observedBuffer);
+    return expectedBuffer.length === observedBuffer.length && timingSafeEqual3(expectedBuffer, observedBuffer);
   })) {
     return false;
   }
@@ -12180,6 +15576,7 @@ var init_managed_metro = __esm({
     init_metro_binding();
     init_trusted_system_executable();
     init_process_birth();
+    init_process_owner();
     init_authority_json();
     init_managed_metro_enforcement();
     METRO_LAUNCHER_SOURCE = String.raw`
@@ -13529,7 +16926,7 @@ var init_build_adapter = __esm({
 // packages/rn-dev-agent-core/dist/session/bound-directory.js
 import { spawn as spawn2 } from "node:child_process";
 import { randomUUID as randomUUID2 } from "node:crypto";
-import { closeSync as closeSync7, constants as constants5, existsSync as existsSync10, fstatSync as fstatSync5, lstatSync as lstatSync7, mkdtempSync, openSync as openSync7, readFileSync as readFileSync10, realpathSync as realpathSync9, renameSync as renameSync5, rmSync as rmSync4, writeFileSync as writeFileSync5 } from "node:fs";
+import { closeSync as closeSync7, constants as constants5, existsSync as existsSync10, fstatSync as fstatSync5, lstatSync as lstatSync8, mkdtempSync, openSync as openSync7, readFileSync as readFileSync10, realpathSync as realpathSync9, renameSync as renameSync5, rmSync as rmSync4, writeFileSync as writeFileSync5 } from "node:fs";
 import { tmpdir as tmpdir3 } from "node:os";
 import { join as join10 } from "node:path";
 function sameIdentity(left, right) {
@@ -13756,7 +17153,7 @@ function runBoundOperation(directory, request2, dependencies = {}) {
   let current;
   let currentRealPath;
   try {
-    current = lstatSync7(directory.path, { bigint: true });
+    current = lstatSync8(directory.path, { bigint: true });
     currentRealPath = realpathSync9(directory.path);
   } catch {
     throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: bound directory path is unavailable");
@@ -13873,13 +17270,13 @@ function openValidatedDirectory(path, expected) {
   let descriptor;
   let worker;
   try {
-    const before = lstatSync7(path, { bigint: true });
+    const before = lstatSync8(path, { bigint: true });
     if (!before.isDirectory() || before.isSymbolicLink()) {
       throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: integration ancestor is not a directory");
     }
     descriptor = openSync7(path, constants5.O_RDONLY | (constants5.O_DIRECTORY ?? 0) | (constants5.O_NOFOLLOW ?? 0));
     const opened = fstatSync5(descriptor, { bigint: true });
-    const after = lstatSync7(path, { bigint: true });
+    const after = lstatSync8(path, { bigint: true });
     const realPath = realpathSync9(path);
     if (!opened.isDirectory() || !sameIdentity(before, opened) || !sameIdentity(after, opened) || expected !== void 0 && (!sameIdentity(expected.identity, opened) || expected.realPath !== realPath)) {
       throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: integration ancestor changed while opening");
@@ -15255,7 +18652,7 @@ run().catch((error) => {
 });
 
 // packages/rn-dev-agent-core/dist/session/metro-authority.js
-import { createHmac as createHmac3, createSecretKey, timingSafeEqual as timingSafeEqual3 } from "node:crypto";
+import { createHmac as createHmac3, createSecretKey, timingSafeEqual as timingSafeEqual4 } from "node:crypto";
 function serializePayload(payload) {
   return JSON.stringify(payload);
 }
@@ -15272,7 +18669,7 @@ function verifyMetroAuthorityMarker(marker, signerCapability, expected = {}) {
   }
   const signature = Buffer.from(marker.signature, "hex");
   const actual = Buffer.from(signPayload(marker.payload, signerCapability), "hex");
-  if (signature.length !== actual.length || !timingSafeEqual3(signature, actual)) {
+  if (signature.length !== actual.length || !timingSafeEqual4(signature, actual)) {
     throw mismatch();
   }
   for (const [key, value] of Object.entries(expected)) {
@@ -15319,7 +18716,7 @@ var init_metro_authority = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/session/package-integration.js
-import { closeSync as closeSync8, constants as constants6, fstatSync as fstatSync6, lstatSync as lstatSync8, openSync as openSync8, readFileSync as readFileSync11 } from "node:fs";
+import { closeSync as closeSync8, constants as constants6, fstatSync as fstatSync6, lstatSync as lstatSync9, openSync as openSync8, readFileSync as readFileSync11 } from "node:fs";
 import { basename, isAbsolute as isAbsolute3, join as join11, relative as relative3, resolve as resolve8, sep as sep3 } from "node:path";
 function serializePackageIntegrationManifest(manifest) {
   return `${JSON.stringify(manifest, null, 2)}
@@ -19037,7 +22434,7 @@ function assertNoSymlinkPath(root, candidate) {
   for (const component of [root, ...child.split(sep3).filter(Boolean)]) {
     current = component === root ? root : join11(current, component);
     try {
-      if (lstatSync8(current).isSymbolicLink()) {
+      if (lstatSync9(current).isSymbolicLink()) {
         throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: integration path is symlinked");
       }
     } catch (error2) {
@@ -19049,7 +22446,7 @@ function assertNoSymlinkPath(root, candidate) {
 }
 function regularFileIdentity(root, candidate) {
   assertNoSymlinkPath(root, candidate);
-  const identity2 = lstatSync8(candidate, { bigint: true });
+  const identity2 = lstatSync9(candidate, { bigint: true });
   if (!identity2.isFile()) {
     throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: integration input is not a regular file");
   }
@@ -19504,7 +22901,7 @@ var init_package_integration = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/lifecycle/settle-hash.js
-import { createHash as createHash6 } from "node:crypto";
+import { createHash as createHash7 } from "node:crypto";
 function normalizeNodeForHash(node) {
   const q = (v) => Math.round(v / BOUNDS_QUANTUM_PX);
   return JSON.stringify([
@@ -19520,7 +22917,7 @@ function normalizeNodeForHash(node) {
   ]);
 }
 function hashSnapshotNodes(nodes) {
-  const h = createHash6("sha256");
+  const h = createHash7("sha256");
   for (const node of nodes) {
     h.update(normalizeNodeForHash(node));
     h.update("\n");
@@ -20019,7 +23416,7 @@ var init_keyboard_guard = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/runners/runtime-paths.js
-import { existsSync as existsSync11, statSync as statSync5 } from "node:fs";
+import { existsSync as existsSync11, statSync as statSync6 } from "node:fs";
 import { join as join12 } from "node:path";
 function compactUnique(paths) {
   const out = [];
@@ -20032,7 +23429,7 @@ function compactUnique(paths) {
 }
 function isDirectory(path) {
   try {
-    return statSync5(path).isDirectory();
+    return statSync6(path).isDirectory();
   } catch {
     return false;
   }
@@ -20216,10 +23613,10 @@ var init_quiescence = __esm({
 
 // packages/rn-dev-agent-core/dist/runners/runner-artifacts.js
 import { execFileSync as execFileSync9 } from "node:child_process";
-import { createHash as createHash7 } from "node:crypto";
-import { existsSync as existsSync12, mkdirSync as mkdirSync9, readdirSync as readdirSync3, readFileSync as readFileSync13, rmSync as rmSync5, writeFileSync as writeFileSync6 } from "node:fs";
+import { createHash as createHash8 } from "node:crypto";
+import { existsSync as existsSync12, mkdirSync as mkdirSync10, readdirSync as readdirSync3, readFileSync as readFileSync13, rmSync as rmSync5, writeFileSync as writeFileSync6 } from "node:fs";
 import { homedir as homedir3 } from "node:os";
-import { dirname as dirname7, join as join13 } from "node:path";
+import { dirname as dirname8, join as join13 } from "node:path";
 function resolveArtifactDecision(input) {
   if (input.envOverride)
     return "build-local";
@@ -20373,7 +23770,7 @@ function readCommittedManifest() {
   }
 }
 function sha256File(p) {
-  return createHash7("sha256").update(readFileSync13(p)).digest("hex");
+  return createHash8("sha256").update(readFileSync13(p)).digest("hex");
 }
 async function fetchToFile(url, dest, opts) {
   const controller = new AbortController();
@@ -20384,7 +23781,7 @@ async function fetchToFile(url, dest, opts) {
       throw new Error(`HTTP ${res.status} fetching ${url}`);
     if (!res.body)
       throw new Error(`empty response body for ${url}`);
-    mkdirSync9(dirname7(dest), { recursive: true });
+    mkdirSync10(dirname8(dest), { recursive: true });
     const reader = res.body.getReader();
     const chunks = [];
     let total = 0;
@@ -20407,7 +23804,7 @@ function unzipWithGuard(zipPath, destDir) {
   const listing = execFileSync9("unzip", ["-Z1", zipPath], { encoding: "utf-8" });
   const entries = listing.split("\n").map((s) => s.trim()).filter(Boolean);
   assertNoTraversal(entries);
-  mkdirSync9(destDir, { recursive: true });
+  mkdirSync10(destDir, { recursive: true });
   execFileSync9("unzip", ["-o", "-qq", zipPath, "-d", destDir], { stdio: "ignore" });
 }
 function defaultArtifactDeps() {
@@ -20427,7 +23824,7 @@ function defaultArtifactDeps() {
     fetchToFile,
     unzip: unzipWithGuard,
     mkdirp: (p) => {
-      mkdirSync9(p, { recursive: true });
+      mkdirSync10(p, { recursive: true });
     },
     rm: (p) => {
       rmSync5(p, { recursive: true, force: true });
@@ -20586,8 +23983,8 @@ __export(rn_fast_runner_client_exports, {
 });
 import { spawn as spawn3 } from "node:child_process";
 import { join as join14 } from "node:path";
-import { randomBytes as randomBytes3, randomUUID as randomUUID4 } from "node:crypto";
-import { existsSync as existsSync13, readdirSync as readdirSync4, mkdirSync as mkdirSync10, rmSync as rmSync6, statSync as statSync6, readFileSync as readFileSync14, writeFileSync as writeFileSync7 } from "node:fs";
+import { randomBytes as randomBytes4, randomUUID as randomUUID4 } from "node:crypto";
+import { existsSync as existsSync13, readdirSync as readdirSync4, mkdirSync as mkdirSync11, rmSync as rmSync6, statSync as statSync7, readFileSync as readFileSync14, writeFileSync as writeFileSync7 } from "node:fs";
 function resolveReadyTimeoutMs() {
   const raw = Number(process.env.RN_FAST_RUNNER_READY_TIMEOUT_MS);
   return Number.isFinite(raw) && raw > 0 ? raw : 3e4;
@@ -20804,13 +24201,13 @@ function derivedDataPathForRunner() {
 function acquireRunnerRebuildLock() {
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      mkdirSync10(REBUILD_LOCK_DIR, { recursive: false });
+      mkdirSync11(REBUILD_LOCK_DIR, { recursive: false });
       return true;
     } catch (err) {
       if (err.code !== "EEXIST")
         return true;
       try {
-        const age = Date.now() - statSync6(REBUILD_LOCK_DIR).mtimeMs;
+        const age = Date.now() - statSync7(REBUILD_LOCK_DIR).mtimeMs;
         if (age < REBUILD_LOCK_STALE_MS)
           return false;
         rmSync6(REBUILD_LOCK_DIR, { recursive: true, force: true });
@@ -20864,7 +24261,7 @@ function runnerAuthorityFromEnvironment(required3) {
     instanceId: randomUUID4(),
     sessionId,
     claimEpoch,
-    capability: randomBytes3(32).toString("base64url")
+    capability: randomBytes4(32).toString("base64url")
   };
 }
 function buildRunnerAuthorityEnv(authority) {
@@ -21029,13 +24426,13 @@ async function startFastRunner(deviceId, bundleId, port, opts = {}) {
         ...result.quiescence !== void 0 ? { quiescence: result.quiescence } : {},
         ...authority
       };
-      const processBirth = readProcessBirth(child.pid);
-      if (!processBirth) {
+      try {
+        state.processBirth = requireProcessBirthAttestation(child.pid, "native runner").token;
+      } catch (error2) {
         child.kill("SIGTERM");
-        reject(new Error("PROCESS_BIRTH_UNAVAILABLE: native runner process identity could not be proven"));
+        reject(error2);
         return;
       }
-      state.processBirth = processBirth.token;
       runnerState = state;
       if (Object.keys(runnerTestFaultEnv).length > 0)
         runnerTestFaultForwarded = true;
@@ -21934,6 +25331,7 @@ var init_rn_fast_runner_client = __esm({
     init_runtime_paths();
     init_transport_recovery();
     init_process_birth();
+    init_process_owner();
     READY_TIMEOUT_MS = resolveReadyTimeoutMs();
     BUILD_READY_TIMEOUT_MS = 36e4;
     HTTP_TIMEOUT_MS = 1e4;
@@ -21964,7 +25362,7 @@ var init_rn_fast_runner_client = __esm({
       },
       recordRebuild(pluginVersion) {
         try {
-          mkdirSync10(join14(FAST_RUNNER_PROJECT, "build"), { recursive: true });
+          mkdirSync11(join14(FAST_RUNNER_PROJECT, "build"), { recursive: true });
           writeFileSync7(REBUILD_BUDGET_FILE, JSON.stringify({ pluginVersion, at: (/* @__PURE__ */ new Date()).toISOString() }));
         } catch {
         }
@@ -21987,3308 +25385,6 @@ var init_rn_fast_runner_client = __esm({
     STATUS_PROBE_TIMEOUT_MS = 2e3;
     POST_SETTLE_HEALTH_ATTEMPTS = 2;
     POST_SETTLE_HEALTH_RETRY_MS = 250;
-  }
-});
-
-// packages/rn-dev-agent-core/dist/session/authority-store.js
-import { chmodSync as chmodSync3, lstatSync as lstatSync9, mkdirSync as mkdirSync11, statSync as statSync7 } from "node:fs";
-import { createRequire } from "node:module";
-import { dirname as dirname8 } from "node:path";
-function loadAuthoritySqlite() {
-  try {
-    const sqlite = require2("node:sqlite");
-    return sqlite.DatabaseSync ?? null;
-  } catch {
-    return null;
-  }
-}
-function assertPrivateDirectory(path) {
-  mkdirSync11(path, { mode: 448, recursive: true });
-  const link = lstatSync9(path);
-  if (link.isSymbolicLink() || !link.isDirectory()) {
-    throw new Error("authority state root must be a real directory");
-  }
-  const stat2 = statSync7(path);
-  if (typeof process.getuid === "function" && stat2.uid !== process.getuid()) {
-    throw new Error("authority state root is not owned by the current user");
-  }
-  chmodSync3(path, 448);
-}
-function secureDatabaseFiles(path) {
-  for (const candidate of [path, `${path}-wal`, `${path}-shm`]) {
-    try {
-      const link = lstatSync9(candidate);
-      if (link.isSymbolicLink() || !link.isFile()) {
-        throw new Error("authority database path is not a regular file");
-      }
-      const stat2 = statSync7(candidate);
-      if (typeof process.getuid === "function" && stat2.uid !== process.getuid()) {
-        throw new Error("authority database is not owned by the current user");
-      }
-      chmodSync3(candidate, 384);
-    } catch (error2) {
-      const code = error2.code;
-      if (code !== "ENOENT")
-        throw error2;
-    }
-  }
-}
-function runInitialization(operation) {
-  runWithBusyRetry(operation, INITIALIZATION_TIMEOUT_MS);
-}
-function runWithBusyRetry(operation, timeoutMs = DATABASE_OPERATION_TIMEOUT_MS) {
-  const deadline = Date.now() + timeoutMs;
-  for (; ; ) {
-    try {
-      return operation();
-    } catch (error2) {
-      const code = error2.code;
-      const message = error2 instanceof Error ? error2.message : "";
-      if (code !== "SQLITE_BUSY" && !/database is (?:locked|busy)/i.test(message))
-        throw error2;
-      const remaining = deadline - Date.now();
-      if (remaining <= 0)
-        throw error2;
-      Atomics.wait(INITIALIZATION_WAIT, 0, 0, Math.min(25, remaining));
-    }
-  }
-}
-function retryingDatabase(database) {
-  return {
-    close: () => database.close(),
-    exec: (sql) => runWithBusyRetry(() => database.exec(sql)),
-    prepare: (sql) => {
-      const statement = database.prepare(sql);
-      return {
-        get: (...params) => runWithBusyRetry(() => statement.get(...params)),
-        run: (...params) => runWithBusyRetry(() => statement.run(...params)),
-        all: (...params) => runWithBusyRetry(() => statement.all(...params))
-      };
-    }
-  };
-}
-function openAuthorityStore(path, options = {}) {
-  const ctor = options.sqliteCtor === void 0 ? loadAuthoritySqlite() : options.sqliteCtor;
-  if (!ctor) {
-    throw new AuthorityStoreUnavailableError("node:sqlite could not be loaded by this Node runtime");
-  }
-  let database = null;
-  try {
-    assertPrivateDirectory(dirname8(path));
-    try {
-      const existing = lstatSync9(path);
-      if (existing.isSymbolicLink() || !existing.isFile()) {
-        throw new Error("authority database path is not a regular file");
-      }
-    } catch (error2) {
-      if (error2.code !== "ENOENT")
-        throw error2;
-    }
-    const rawDatabase = new ctor(path);
-    const openedDatabase = retryingDatabase(rawDatabase);
-    database = openedDatabase;
-    secureDatabaseFiles(path);
-    runInitialization(() => openedDatabase.exec(`
-        PRAGMA busy_timeout=50;
-        PRAGMA journal_mode=WAL;
-        CREATE TABLE IF NOT EXISTS authority_meta (
-          key TEXT PRIMARY KEY,
-          value TEXT NOT NULL
-        );
-        INSERT INTO authority_meta(key, value)
-        VALUES ('schema_version', '1')
-        ON CONFLICT(key) DO NOTHING;
-      `));
-    secureDatabaseFiles(path);
-    return {
-      database: openedDatabase,
-      secureFiles: () => secureDatabaseFiles(path),
-      close: () => {
-        let failure;
-        try {
-          secureDatabaseFiles(path);
-        } catch (error2) {
-          failure = error2;
-        }
-        try {
-          openedDatabase.close();
-        } catch (error2) {
-          failure ??= error2;
-        }
-        try {
-          secureDatabaseFiles(path);
-        } catch (error2) {
-          failure ??= error2;
-        }
-        if (failure)
-          throw failure;
-      }
-    };
-  } catch (cause) {
-    try {
-      database?.close();
-    } catch {
-    }
-    throw new AuthorityStoreUnavailableError("authority registry could not be opened", { cause });
-  }
-}
-var require2, INITIALIZATION_WAIT, INITIALIZATION_TIMEOUT_MS, DATABASE_OPERATION_TIMEOUT_MS, AuthorityStoreUnavailableError;
-var init_authority_store = __esm({
-  "packages/rn-dev-agent-core/dist/session/authority-store.js"() {
-    "use strict";
-    require2 = createRequire(import.meta.url);
-    INITIALIZATION_WAIT = new Int32Array(new SharedArrayBuffer(4));
-    INITIALIZATION_TIMEOUT_MS = 1e3;
-    DATABASE_OPERATION_TIMEOUT_MS = 1e3;
-    AuthorityStoreUnavailableError = class extends Error {
-      code = "AUTHORITY_STORE_UNAVAILABLE";
-      constructor(reason, options) {
-        super(reason, options);
-        this.name = "AuthorityStoreUnavailableError";
-      }
-    };
-  }
-});
-
-// packages/rn-dev-agent-core/dist/session/cleanup-identity.js
-function isPositiveSafeInteger(value) {
-  return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
-}
-function isTcpPort(value) {
-  return isPositiveSafeInteger(value) && value <= 65535;
-}
-function hasCompleteRunnerCleanupIdentity(binding) {
-  const processBirth = String(binding.processBirth ?? "");
-  const instanceId = String(binding.instanceId ?? "");
-  const capability = String(binding.capability ?? "");
-  if (!isPositiveSafeInteger(binding.pid) || !isTcpPort(binding.port) || !processBirth || !instanceId || !capability) {
-    return false;
-  }
-  if (String(binding.platform ?? "") !== "android")
-    return true;
-  return Boolean(String(binding.deviceId ?? ""));
-}
-function hasCompleteRecorderCleanupIdentity(binding) {
-  const script = String(binding.script ?? "");
-  const scope = String(binding.scope ?? "");
-  if (!script || !/^[a-f0-9]{64}$/.test(scope) || binding.port !== void 0 && !isTcpPort(binding.port)) {
-    return false;
-  }
-  if (binding.phase === "starting")
-    return true;
-  return isPositiveSafeInteger(binding.pid) && Boolean(String(binding.processBirth ?? ""));
-}
-var init_cleanup_identity = __esm({
-  "packages/rn-dev-agent-core/dist/session/cleanup-identity.js"() {
-    "use strict";
-  }
-});
-
-// packages/rn-dev-agent-core/dist/session/recovery-remedy.js
-function sessionRecoveryRemedy(lead) {
-  return `${lead} Interactive: reconnect the transport with /mcp. Headless: run ${HEADLESS_SESSION_RECOVERY_COMMAND} from the app root. Both run the same proven-dead startup cleanup and neither releases a live or unprovable owner. ${SESSION_RECOVERY_DOCS}.`;
-}
-function sessionOwnerInspectionRemedy(lead) {
-  return `${lead} ${HEADLESS_SESSION_REPORT_COMMAND} from the app root names the owning app root and session; close that session, then run ${HEADLESS_SESSION_RECOVERY_COMMAND}. A live or unprovable owner is never force-released. ${SESSION_RECOVERY_DOCS}.`;
-}
-function sessionOtherRootRecoveryRemedy(lead) {
-  return `${lead} ${HEADLESS_SESSION_REPORT_COMMAND} names the owning app root and session; run ${HEADLESS_SESSION_RECOVERY_COMMAND} from that app root \u2014 this one can never release it \u2014 or work in a separate worktree. Nothing is force-released either way. ${SESSION_RECOVERY_DOCS}.`;
-}
-function sessionCleanupObligationRemedy(lead) {
-  return `${lead} Read the outstanding obligation with ${HEADLESS_SESSION_REPORT_COMMAND} from the app root, clear what it names, then run ${HEADLESS_SESSION_RECOVERY_COMMAND}; interactive clients can reconnect with /mcp instead. Neither releases a live or unprovable owner. ${SESSION_RECOVERY_DOCS}.`;
-}
-function sessionDeclaredSourceRemedy(lead) {
-  return `${lead} Restore the declared manifests that produced the prior identity, then run ${HEADLESS_SESSION_RECOVERY_COMMAND} from this app root or reconnect the transport with /mcp, and reapply the manifest changes afterwards; otherwise use a separate worktree. ${SESSION_RECOVERY_DOCS}.`;
-}
-var SESSION_DOCTOR, HEADLESS_SESSION_RECOVERY_COMMAND, HEADLESS_SESSION_REPORT_COMMAND, SESSION_RECOVERY_DOCS;
-var init_recovery_remedy = __esm({
-  "packages/rn-dev-agent-core/dist/session/recovery-remedy.js"() {
-    "use strict";
-    SESSION_DOCTOR = '"${CLAUDE_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}/rn-dev-agent-core/dist/session-doctor.js"';
-    HEADLESS_SESSION_RECOVERY_COMMAND = `node ${SESSION_DOCTOR} repair`;
-    HEADLESS_SESSION_REPORT_COMMAND = `node ${SESSION_DOCTOR} report`;
-    SESSION_RECOVERY_DOCS = 'docs: session-authority "Recovering a wedged source root"';
-  }
-});
-
-// packages/rn-dev-agent-core/dist/session/registry.js
-import { createHash as createHash8, randomBytes as randomBytes4, timingSafeEqual as timingSafeEqual4 } from "node:crypto";
-import { AsyncLocalStorage } from "node:async_hooks";
-function referencesMetroEvidenceSocket(value, path) {
-  if (Array.isArray(value)) {
-    return value.some((entry) => referencesMetroEvidenceSocket(entry, path));
-  }
-  if (!value || typeof value !== "object")
-    return false;
-  const record2 = value;
-  if (record2.runtimeEvidenceSocket === path)
-    return true;
-  return Object.values(record2).some((entry) => referencesMetroEvidenceSocket(entry, path));
-}
-function authorityRemedyNextAction(code) {
-  return errorNextActions[code];
-}
-function shortAuthorityIdentity(value) {
-  return createHash8("sha256").update(JSON.stringify(value)).digest("hex").slice(0, 16);
-}
-function authorityErrorMeta(error2) {
-  return {
-    ...error2.getSupplementalMeta(),
-    axis: error2.details?.axis ?? errorAxes[error2.code],
-    expected: error2.details?.expected,
-    observed: error2.details?.observed,
-    holder: error2.holder ? {
-      sessionId: error2.holder.sessionId.slice(0, 12),
-      claimEpoch: error2.holder.claimEpoch
-    } : void 0,
-    nextAction: error2.details?.nextAction ?? errorNextActions[error2.code] ?? 'Run rn_session with action "status" and repair the named authority axis.'
-  };
-}
-function asSession(row) {
-  return row ? row : null;
-}
-function asClaim(row) {
-  return row ? row : null;
-}
-function claimConflict(claim) {
-  const code = conflictCodes[claim.resource_type] ?? "RESOURCE_CLAIM_CONFLICT";
-  return new SessionAuthorityError(code, `${claim.resource_type}:${claim.resource_key} is held`, {
-    sessionId: claim.session_id,
-    claimEpoch: claim.claim_epoch
-  });
-}
-function isOperationalState(state) {
-  return (/* @__PURE__ */ new Set([
-    "active",
-    "source_bound",
-    "metro_bound",
-    "device_claimed",
-    "device_bound",
-    "runtime_bound",
-    "ready"
-  ])).has(state);
-}
-function isFenceableState(state) {
-  return isOperationalState(state) || state === "handoff";
-}
-function readSourceAppRoot(sourceJson) {
-  try {
-    const source = JSON.parse(sourceJson);
-    return typeof source.appRoot === "string" ? source.appRoot : void 0;
-  } catch {
-    return void 0;
-  }
-}
-function readStartupCleanupBlocker(bindingsJson) {
-  let journal;
-  try {
-    const bindings = JSON.parse(bindingsJson);
-    const value = bindings.startupCleanup;
-    journal = value && typeof value === "object" ? value : void 0;
-  } catch {
-    return void 0;
-  }
-  if (!journal || typeof journal.finishedAt === "number")
-    return void 0;
-  const refusal = journal.refusal;
-  if (!refusal || typeof refusal !== "object")
-    return void 0;
-  const record2 = refusal;
-  if (typeof record2.code !== "string" || typeof record2.reason !== "string")
-    return void 0;
-  return {
-    code: record2.code,
-    reason: record2.reason,
-    ...typeof record2.nextAction === "string" ? { nextAction: record2.nextAction } : {}
-  };
-}
-function bindingsRunnerPresent(bindingsJson) {
-  const bindings = JSON.parse(bindingsJson);
-  return Boolean(bindings.runner && typeof bindings.runner === "object");
-}
-function managedMetroHandoffReservation(bindings) {
-  const value = bindings.managedMetroHandoffReservation;
-  if (value === null || value === void 0)
-    return null;
-  if (typeof value !== "object" || typeof value.handoffId !== "string" || typeof value.sourceClaimEpoch !== "number" || typeof value.targetSessionId !== "string" || typeof value.targetClaimEpoch !== "number" || typeof value.targetInstance !== "string" || !["shutdown_reserved", "shutdown_completed"].includes(String(value.phase)) || typeof value.metro !== "object" || value.metro === null || typeof value.metro.sourceSessionId !== "string") {
-    throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "managed Metro handoff reservation is malformed");
-  }
-  return value;
-}
-function openSessionRegistry(path, dependencies) {
-  const store = openAuthorityStore(path, { sqliteCtor: dependencies.sqliteCtor });
-  try {
-    return new SessionRegistry(store.database, store.close, store.secureFiles, dependencies);
-  } catch (error2) {
-    store.close();
-    throw error2;
-  }
-}
-var OWNER_IDENTITY_REFUSAL_REASONS, INITIALIZATION_WAIT2, AUTHORITY_REGISTRY_SCHEMA_VERSION, SessionAuthorityError, RECOVERY_HANDLE_TTL_MS, RECOVERY_HANDLE_RENEW_MS, errorAxes, errorNextActions, conflictCodes, SessionRegistry;
-var init_registry = __esm({
-  "packages/rn-dev-agent-core/dist/session/registry.js"() {
-    "use strict";
-    init_authority_store();
-    init_cleanup_identity();
-    init_declared_source_contract();
-    init_metro_binding();
-    init_recovery_remedy();
-    OWNER_IDENTITY_REFUSAL_REASONS = {
-      sourceOwnerLive: "the same-root owner is live; a live owner is never released",
-      sourceOwnerUnprovable: "the same-root owner identity could not be proven, so it is treated as live",
-      leaseOwnerUnprovable: "expired lease owner identity could not be proven"
-    };
-    INITIALIZATION_WAIT2 = new Int32Array(new SharedArrayBuffer(4));
-    AUTHORITY_REGISTRY_SCHEMA_VERSION = 4;
-    SessionAuthorityError = class extends Error {
-      code;
-      holder;
-      supplementalMeta;
-      details;
-      constructor(code, message, holder, details) {
-        super(`${code}: ${message}`);
-        this.name = "SessionAuthorityError";
-        this.code = code;
-        this.holder = holder;
-        this.details = details;
-      }
-      attachMeta(meta) {
-        this.supplementalMeta = { ...this.supplementalMeta, ...meta };
-      }
-      getSupplementalMeta() {
-        return { ...this.supplementalMeta };
-      }
-    };
-    RECOVERY_HANDLE_TTL_MS = 5 * 6e4;
-    RECOVERY_HANDLE_RENEW_MS = 6e4;
-    errorAxes = {
-      SESSION_AUTHORITY_REQUIRED: "C",
-      SESSION_OWNER_LOST: "C",
-      OPERATION_ALREADY_IN_PROGRESS: "C",
-      SOURCE_WORKTREE_MISMATCH: "S",
-      SOURCE_ROOT_DIVERGENCE: "S",
-      SOURCE_REVISION_NOT_BUNDLED: "S",
-      NON_GIT_MANIFEST_REQUIRED: "S",
-      APP_INSTALL_IDENTITY_CHANGED: "I",
-      METRO_PORT_CLAIM_CONFLICT: "M",
-      PORT_OCCUPIED_UNOWNED: "M",
-      METRO_AUTHORITY_MISMATCH: "M",
-      METRO_INSTANCE_CHANGED: "M",
-      METRO_ORIGIN_MISMATCH: "A",
-      BUNDLE_HANDSHAKE_UNAVAILABLE: "B",
-      BUNDLE_IDENTITY_MISMATCH: "B",
-      CDP_TARGET_AUTHORITY_MISMATCH: "B",
-      TARGET_CLAIM_CONFLICT: "B",
-      DEVICE_CLAIM_CONFLICT: "D",
-      DEVICE_DISCOVERY_UNAVAILABLE: "D",
-      DEVICE_NOT_FOUND: "D",
-      DEVICE_RECEIPT_INCOMPATIBLE: "D",
-      DEVICE_AUTHORITY_MISMATCH: "D",
-      PLATFORM_AUTHORITY_MISMATCH: "D",
-      RUNNER_OWNERSHIP_MISMATCH: "R",
-      RUNNER_ADOPTION_REQUIRED: "R",
-      AUTOMATION_CLEANUP_UNPROVEN: "R",
-      OBSERVE_AUTHORITY_MISMATCH: "O",
-      PROOF_AUTHORITY_MISMATCH: "P"
-    };
-    errorNextActions = {
-      NON_GIT_MANIFEST_REQUIRED: NON_GIT_DECLARATION_NEXT_ACTION,
-      // GH #741: a released/stale runner axis is invisible to a status read — only
-      // re-opening the device snapshot restarts and rebinds the interaction runner.
-      RUNNER_OWNERSHIP_MISMATCH: 'Re-open the device with device_snapshot action "open" (same platform, deviceId, and appId) to restart and rebind the interaction runner; rn_session "status" only reports state and cannot rebind it.'
-    };
-    conflictCodes = {
-      device: "DEVICE_CLAIM_CONFLICT",
-      "device-receipt": "DEVICE_CLAIM_CONFLICT",
-      target: "TARGET_CLAIM_CONFLICT",
-      "metro-port": "METRO_PORT_CLAIM_CONFLICT",
-      "observe-port": "OBSERVE_PORT_CLAIM_CONFLICT",
-      runner: "RUNNER_CLAIM_CONFLICT",
-      "runner-receipt": "RUNNER_CLAIM_CONFLICT"
-    };
-    SessionRegistry = class {
-      #database;
-      #close;
-      #secureFiles;
-      #now;
-      #ownerStatus;
-      #listenerStatus;
-      #leaseMs;
-      #operationContext = new AsyncLocalStorage();
-      #pendingPlatformReceipts = /* @__PURE__ */ new Map();
-      constructor(database, close, secureFiles, dependencies) {
-        this.#database = database;
-        this.#close = close;
-        this.#secureFiles = secureFiles;
-        this.#now = dependencies.now ?? Date.now;
-        this.#ownerStatus = dependencies.ownerStatus;
-        this.#listenerStatus = dependencies.listenerStatus ?? ((port) => probeMetroListener(port).status);
-        this.#leaseMs = dependencies.leaseMs ?? 3e4;
-        this.#initializeWithRetry();
-      }
-      close() {
-        this.#close();
-      }
-      runWithOperation(operation, callback) {
-        return this.#operationContext.run(operation, callback);
-      }
-      currentOperation() {
-        const operation = this.#operationContext.getStore();
-        if (!operation)
-          return void 0;
-        const session2 = asSession(this.#database.prepare(`SELECT state, claim_epoch, authority_version
-           FROM sessions WHERE session_id = ?`).get(operation.sessionId));
-        const active = this.#database.prepare(`SELECT operation_id FROM operations
-         WHERE operation_id = ? AND session_id = ? AND claim_epoch = ?
-           AND authority_version = ?`).get(operation.operationId, operation.sessionId, operation.claimEpoch, operation.authorityVersion);
-        return session2 && isFenceableState(session2.state) && session2.claim_epoch === operation.claimEpoch && session2.authority_version === operation.authorityVersion && active ? operation : void 0;
-      }
-      hasActiveBundleOperation(session2) {
-        return Boolean(this.#database.prepare(`SELECT operation_id FROM operations
-           WHERE session_id = ? AND claim_epoch = ? AND instr(profile, 'B') > 0
-           LIMIT 1`).get(session2.sessionId, session2.claimEpoch));
-      }
-      operationHasAxis(operation, axis) {
-        this.verifyOperation(operation);
-        const pendingAxis = `~${axis}`;
-        return Boolean(this.#database.prepare(`SELECT operation_id FROM operations
-           WHERE operation_id = ? AND session_id = ? AND claim_epoch = ?
-             AND authority_version = ?
-             AND instr(replace(profile, ?, ''), ?) > 0`).get(operation.operationId, operation.sessionId, operation.claimEpoch, operation.authorityVersion, pendingAxis, axis));
-      }
-      beginOperationAxisAdmission(operation, axis) {
-        const pendingAxis = `~${axis}`;
-        this.#transaction(() => {
-          this.verifyOperation(operation);
-          this.#database.prepare(`UPDATE operations
-           SET profile = CASE
-             WHEN instr(replace(profile, ?, ''), ?) > 0 OR instr(profile, ?) > 0 THEN profile
-             ELSE profile || ?
-           END
-           WHERE operation_id = ? AND session_id = ? AND claim_epoch = ?
-             AND authority_version = ?`).run(pendingAxis, axis, pendingAxis, pendingAxis, operation.operationId, operation.sessionId, operation.claimEpoch, operation.authorityVersion);
-        });
-      }
-      completeOperationAxisAdmission(operation, axis, admitted) {
-        const pendingAxis = `~${axis}`;
-        this.#transaction(() => {
-          this.verifyOperation(operation);
-          this.#database.prepare(`UPDATE operations
-           SET profile = CASE
-             WHEN ? = 0 THEN replace(profile, ?, '')
-             WHEN instr(replace(profile, ?, ''), ?) > 0 THEN replace(profile, ?, '')
-             ELSE replace(profile, ?, '') || ?
-           END
-           WHERE operation_id = ? AND session_id = ? AND claim_epoch = ?
-             AND authority_version = ?`).run(admitted ? 1 : 0, pendingAxis, pendingAxis, axis, pendingAxis, pendingAxis, axis, operation.operationId, operation.sessionId, operation.claimEpoch, operation.authorityVersion);
-        });
-      }
-      createSession(input) {
-        const now = this.#now();
-        this.#transaction(() => {
-          this.#discardAbsentBlockedContenders(input);
-          this.#database.prepare(`INSERT INTO sessions(
-            session_id, source_key, worktree_key, app_root_key, state,
-            claim_epoch, authority_version, supervisor_pid, supervisor_birth,
-            worker_instance, worker_pid, worker_birth, heartbeat_ms, lease_until_ms,
-            source_json, bindings_json, created_ms, updated_ms
-          ) VALUES (?, ?, ?, ?, 'active', 1, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(input.sessionId, input.sourceKey, input.worktreeKey, input.appRootKey, input.supervisor.pid, input.supervisor.token, input.worker?.instanceId ?? null, input.worker?.pid ?? null, input.worker?.token ?? null, now, now + this.#leaseMs, JSON.stringify(input.source ?? {}), JSON.stringify(input.bindings ?? {}), now, now);
-        });
-        return { sessionId: input.sessionId, claimEpoch: 1 };
-      }
-      claimResources(session2, resources) {
-        const unique = new Map(resources.map((resource) => [`${resource.type}\0${resource.key}`, resource]));
-        if (unique.size !== resources.length) {
-          throw new SessionAuthorityError("DUPLICATE_RESOURCE_CLAIM", "claim set contains duplicates");
-        }
-        const probes = this.#probeClaimOwners(session2, resources);
-        const now = this.#now();
-        return this.#transaction(() => {
-          const owner = this.#requireSession(session2);
-          const bindings = JSON.parse(owner.bindings_json);
-          if (resources.some((resource) => resource.type === "device")) {
-            this.#assertNoStaleDeviceCleanup(bindings);
-          }
-          this.#assertClaimsAvailable(session2, resources, probes, now);
-          const leaseUntil = now + this.#leaseMs;
-          for (const resource of resources) {
-            this.#database.prepare(`INSERT INTO claims(
-              resource_type, resource_key, session_id, claim_epoch, lease_until_ms
-            ) VALUES (?, ?, ?, ?, ?)
-            ON CONFLICT(resource_type, resource_key) DO UPDATE SET
-              session_id = excluded.session_id,
-              claim_epoch = excluded.claim_epoch,
-              lease_until_ms = excluded.lease_until_ms`).run(resource.type, resource.key, session2.sessionId, session2.claimEpoch, leaseUntil);
-          }
-          this.#database.prepare(`UPDATE sessions
-           SET authority_version = authority_version + 1, updated_ms = ?
-           WHERE session_id = ? AND claim_epoch = ?`).run(now, owner.session_id, owner.claim_epoch);
-          this.#advanceActiveOperationFence(session2, owner.authority_version, owner.authority_version + 1);
-          return session2;
-        });
-      }
-      releaseResources(session2, resources) {
-        const now = this.#now();
-        this.#transaction(() => {
-          const current = this.#requireSession(session2);
-          for (const resource of resources) {
-            if (resource.type === "runner" || resource.type === "device") {
-              const rows = this.#database.prepare(`SELECT platform, receipt_json FROM platform_authority_receipts
-               WHERE session_id = ? AND claim_epoch = ?`).all(session2.sessionId, session2.claimEpoch);
-              for (const row of rows) {
-                const persisted = JSON.parse(row.receipt_json);
-                const receipt2 = persisted.receipt && typeof persisted.receipt === "object" ? persisted.receipt : persisted;
-                if (resource.type === "runner" && receipt2.runnerClaim === resource.key || resource.type === "device" && receipt2.deviceClaim === resource.key) {
-                  this.#invalidatePlatformReceipt(session2, row.platform);
-                }
-              }
-            }
-            this.#database.prepare(`DELETE FROM claims
-             WHERE resource_type = ? AND resource_key = ?
-               AND session_id = ? AND claim_epoch = ?`).run(resource.type, resource.key, session2.sessionId, session2.claimEpoch);
-          }
-          this.#database.prepare(`UPDATE sessions SET authority_version = authority_version + 1, updated_ms = ?
-           WHERE session_id = ? AND claim_epoch = ?`).run(now, session2.sessionId, session2.claimEpoch);
-          this.#advanceActiveOperationFence(session2, current.authority_version, current.authority_version + 1);
-        });
-      }
-      async claimResourcesWithRetry(session2, resources, options = {}) {
-        return this.#retry(() => this.claimResources(session2, resources), options.timeoutMs ?? 1e3, options.retryDelayMs ?? 5);
-      }
-      renewSession(session2) {
-        const now = this.#now();
-        this.#transaction(() => {
-          this.#requireSession(session2);
-          const leaseUntil = now + this.#leaseMs;
-          this.#database.prepare(`UPDATE sessions
-           SET heartbeat_ms = ?, lease_until_ms = ?, updated_ms = ?
-           WHERE session_id = ? AND claim_epoch = ?`).run(now, leaseUntil, now, session2.sessionId, session2.claimEpoch);
-          this.#database.prepare(`UPDATE claims SET lease_until_ms = ?
-           WHERE session_id = ? AND claim_epoch = ?`).run(leaseUntil, session2.sessionId, session2.claimEpoch);
-        });
-      }
-      async renewSessionWithRetry(session2, options = {}) {
-        return this.#retry(() => this.renewSession(session2), options.timeoutMs ?? 1e3, options.retryDelayMs ?? 5);
-      }
-      bindWorker(session2, worker) {
-        const now = this.#now();
-        this.#transaction(() => {
-          this.#requireSession(session2);
-          this.#database.prepare("DELETE FROM operations WHERE session_id = ? AND claim_epoch = ?").run(session2.sessionId, session2.claimEpoch);
-          this.#database.prepare(`UPDATE sessions
-           SET worker_instance = ?, worker_pid = ?, worker_birth = ?,
-               authority_version = authority_version + 1, updated_ms = ?
-           WHERE session_id = ? AND claim_epoch = ?`).run(worker.instanceId, worker.pid, worker.token, now, session2.sessionId, session2.claimEpoch);
-        });
-      }
-      bindRecoveryWorker(session2, worker, capability) {
-        const now = this.#now();
-        this.#transaction(() => {
-          const row = this.#requireRecoverableSession(session2);
-          const bindings = JSON.parse(row.bindings_json);
-          const expected = Buffer.from(String(bindings.recoveryCapabilityHash ?? ""), "hex");
-          const actual = createHash8("sha256").update(capability).digest();
-          if (expected.length !== actual.length || !timingSafeEqual4(expected, actual)) {
-            throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "blocked recovery capability is invalid");
-          }
-          const pendingHandoffs = this.#database.prepare(`SELECT handoff.handoff_id, handoff.claim_epoch, handoff.target_instance,
-                  donor.session_id, donor.claim_epoch AS donor_claim_epoch,
-                  donor.bindings_json
-           FROM handoffs handoff
-           JOIN sessions donor ON donor.session_id = handoff.session_id
-           WHERE handoff.consumed_ms IS NULL
-             AND donor.state = 'handoff'
-             AND donor.source_key = ?
-             AND donor.worktree_key = ?
-             AND donor.app_root_key = ?`).all(row.source_key, row.worktree_key, row.app_root_key);
-          const adoptionRequired = bindings.adoptionRequired;
-          const rotations = pendingHandoffs.flatMap((handoff) => {
-            const donorBindings = JSON.parse(handoff.bindings_json);
-            const reservation = managedMetroHandoffReservation(donorBindings);
-            if (!reservation)
-              return [];
-            if (reservation.handoffId !== handoff.handoff_id || reservation.sourceClaimEpoch !== handoff.claim_epoch || reservation.sourceClaimEpoch !== handoff.donor_claim_epoch || reservation.metro.sourceSessionId !== handoff.session_id) {
-              throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "managed Metro handoff reservation no longer matches the recovery worker fence");
-            }
-            if (reservation.targetSessionId !== session2.sessionId || reservation.targetClaimEpoch !== session2.claimEpoch) {
-              return [];
-            }
-            if (reservation.targetInstance !== row.worker_instance || handoff.target_instance !== row.worker_instance) {
-              throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "managed Metro handoff reservation no longer matches the recovery worker fence");
-            }
-            return [{ handoff, donorBindings, reservation }];
-          });
-          if (rotations.length > 1) {
-            throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "multiple managed Metro handoffs target the same recovery session");
-          }
-          const rotation = rotations[0];
-          if (rotation) {
-            const rotatedReservation = {
-              ...rotation.reservation,
-              targetSessionId: session2.sessionId,
-              targetClaimEpoch: session2.claimEpoch,
-              targetInstance: worker.instanceId
-            };
-            const handoffChanged = this.#database.prepare(`UPDATE handoffs SET target_instance = ?
-             WHERE handoff_id = ? AND target_instance = ? AND consumed_ms IS NULL`).run(worker.instanceId, rotation.handoff.handoff_id, rotation.reservation.targetInstance);
-            if (handoffChanged.changes !== 1) {
-              throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "managed Metro handoff target changed during recovery worker rotation");
-            }
-            const donorChanged = this.#database.prepare(`UPDATE sessions
-             SET bindings_json = ?, authority_version = authority_version + 1, updated_ms = ?
-             WHERE session_id = ? AND claim_epoch = ? AND state = 'handoff'`).run(JSON.stringify({
-              ...rotation.donorBindings,
-              managedMetroHandoffReservation: rotatedReservation
-            }), now, rotation.handoff.session_id, rotation.handoff.donor_claim_epoch);
-            if (donorChanged.changes !== 1) {
-              throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "managed Metro donor authority changed during recovery worker rotation");
-            }
-          }
-          const grouped = JSON.parse(row.source_json).model === "grouped-v1";
-          const expiresMs = now + RECOVERY_HANDLE_TTL_MS;
-          const priorHandles = bindings.recoveryHandles;
-          const resumableAdoptStale = row.state === "handoff_cleanup" && priorHandles?.adoptStale && typeof priorHandles.adoptStale === "object" ? priorHandles.adoptStale : void 0;
-          const reboundAdoptStale = resumableAdoptStale ? {
-            ...resumableAdoptStale,
-            previous: typeof resumableAdoptStale.token === "string" && typeof resumableAdoptStale.expiresMs === "number" && resumableAdoptStale.expiresMs >= now ? {
-              token: resumableAdoptStale.token,
-              expiresMs: resumableAdoptStale.expiresMs
-            } : void 0,
-            token: randomBytes4(32).toString("base64url"),
-            expiresMs
-          } : void 0;
-          const recoveryHandles = {
-            handoffRecipient: {
-              token: randomBytes4(32).toString("base64url"),
-              expiresMs,
-              workerInstance: worker.instanceId
-            },
-            ...typeof adoptionRequired?.sessionId === "string" ? {
-              adoptStale: {
-                token: randomBytes4(32).toString("base64url"),
-                expiresMs,
-                priorSessionId: adoptionRequired.sessionId,
-                priorClaimEpoch: adoptionRequired.claimEpoch
-              }
-            } : reboundAdoptStale ? { adoptStale: reboundAdoptStale } : {}
-          };
-          this.#database.prepare("DELETE FROM operations WHERE session_id = ? AND claim_epoch = ?").run(session2.sessionId, session2.claimEpoch);
-          this.#database.prepare(`UPDATE sessions
-           SET worker_instance = ?, worker_pid = ?, worker_birth = ?,
-               bindings_json = ?, authority_version = authority_version + 1, updated_ms = ?
-           WHERE session_id = ? AND claim_epoch = ?
-             AND state IN ('blocked', 'handoff_cleanup')`).run(worker.instanceId, worker.pid, worker.token, grouped ? JSON.stringify(bindings) : JSON.stringify({ ...bindings, recoveryHandles }), now, session2.sessionId, session2.claimEpoch);
-        });
-      }
-      /**
-       * GH #672: rotate a recovery handle that is expired or about to expire, so `status`
-       * can never advertise a token `validateStaleAdoption` will refuse. Capability- and
-       * worker-bound, re-reads durable state, and leaves a still-fresh handle untouched.
-       * Returns whether anything rotated.
-       */
-      refreshRecoveryHandles(session2, worker, capability) {
-        const now = this.#now();
-        return this.#transaction(() => {
-          const row = this.#requireRecoverableSession(session2);
-          const bindings = JSON.parse(row.bindings_json);
-          const expected = Buffer.from(String(bindings.recoveryCapabilityHash ?? ""), "hex");
-          const actual = createHash8("sha256").update(capability).digest();
-          if (expected.length !== actual.length || !timingSafeEqual4(expected, actual)) {
-            throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "blocked recovery capability is invalid");
-          }
-          if (row.worker_instance !== worker.instanceId) {
-            throw new SessionAuthorityError("HANDOFF_TARGET_MISMATCH", "recovery handle refresh is not owned by this recovery worker");
-          }
-          const handles = bindings.recoveryHandles;
-          if (!handles || typeof handles !== "object")
-            return false;
-          const expiresMs = now + RECOVERY_HANDLE_TTL_MS;
-          let changed = false;
-          const next = { ...handles };
-          for (const name of ["handoffRecipient", "adoptStale"]) {
-            const handle = handles[name];
-            if (!handle || typeof handle !== "object")
-              continue;
-            const current = handle;
-            const previous = current.previous;
-            const previousExpired = previous && typeof previous.expiresMs === "number" && previous.expiresMs < now;
-            const retained = previousExpired ? { ...current, previous: void 0 } : current;
-            if (previousExpired)
-              changed = true;
-            if (typeof current.expiresMs === "number" && current.expiresMs > now + RECOVERY_HANDLE_RENEW_MS) {
-              next[name] = retained;
-              continue;
-            }
-            next[name] = {
-              ...retained,
-              previous: typeof current.token === "string" && typeof current.expiresMs === "number" && current.expiresMs >= now ? { token: current.token, expiresMs: current.expiresMs } : void 0,
-              token: randomBytes4(32).toString("base64url"),
-              expiresMs
-            };
-            changed = true;
-          }
-          if (!changed)
-            return false;
-          this.#database.prepare(`UPDATE sessions SET bindings_json = ?, updated_ms = ?
-           WHERE session_id = ? AND claim_epoch = ?
-             AND state IN ('blocked', 'handoff_cleanup')`).run(JSON.stringify({ ...bindings, recoveryHandles: next }), now, session2.sessionId, session2.claimEpoch);
-          return true;
-        });
-      }
-      /**
-       * GH #672: distinguish the three real recovery answers for a blocked contender.
-       * A dead prior owner is adoptable; a LIVE one never is (the caller must close it or
-       * use another worktree); an owner whose identity cannot be proven is treated as live.
-       * A vanished claim epoch only needs a fresh transport.
-       */
-      inspectRecoveryRequirement(sessionId) {
-        const row = asSession(this.#database.prepare(`SELECT source_key, worktree_key, app_root_key, state, source_json, bindings_json
-           FROM sessions WHERE session_id = ?`).get(sessionId));
-        if (!row || row.state !== "blocked" && row.state !== "handoff_cleanup") {
-          return { requirement: "none", priorOwner: "absent", nextAction: "" };
-        }
-        if (row.state === "handoff_cleanup") {
-          return {
-            requirement: "adoption",
-            priorOwner: "stale",
-            nextAction: 'Resume the transferred cleanup with rn_session({ action: "adopt_stale", adoptionHandle }).'
-          };
-        }
-        const grouped = JSON.parse(row.source_json).model === "grouped-v1";
-        const bindings = JSON.parse(row.bindings_json);
-        const adoptionRequired = bindings.adoptionRequired;
-        const priorSessionId = typeof adoptionRequired?.sessionId === "string" ? adoptionRequired.sessionId : null;
-        const prior = priorSessionId ? asSession(this.#database.prepare(`SELECT session_id, source_key, worktree_key, app_root_key, claim_epoch,
-                      supervisor_pid, supervisor_birth, heartbeat_ms, bindings_json
-               FROM sessions WHERE session_id = ?`).get(priorSessionId)) : null;
-        if (!prior || prior.claim_epoch !== adoptionRequired?.claimEpoch) {
-          return {
-            requirement: "transport-restart",
-            priorOwner: "absent",
-            nextAction: sessionRecoveryRemedy("The blocking claim epoch is gone; a clean session can start here.")
-          };
-        }
-        let status = "unknown";
-        try {
-          status = this.#ownerStatus({
-            sessionId: prior.session_id,
-            pid: prior.supervisor_pid,
-            token: prior.supervisor_birth
-          });
-        } catch {
-          status = "unknown";
-        }
-        if (status === "mismatch") {
-          if (grouped) {
-            const isSameAppRoot = prior.worktree_key === row.worktree_key && prior.app_root_key === row.app_root_key;
-            if (!isSameAppRoot) {
-              return {
-                requirement: "attach",
-                priorOwner: "stale",
-                nextAction: sessionOtherRootRecoveryRemedy("The proven-dead owner belongs to a different app root in this worktree, so startup cleanup cannot release it here.")
-              };
-            }
-            if (prior.source_key !== row.source_key) {
-              return {
-                requirement: "attach",
-                priorOwner: "stale",
-                nextAction: sessionDeclaredSourceRemedy("The proven-dead owner has a different source identity for this app root, so startup cleanup cannot release it under the current declared manifests.")
-              };
-            }
-            const blocked = readStartupCleanupBlocker(prior.bindings_json);
-            if (blocked) {
-              return {
-                requirement: "transport-restart",
-                priorOwner: "stale",
-                startupCleanupBlocked: blocked,
-                nextAction: blocked.nextAction ?? sessionCleanupObligationRemedy(`Startup cleanup refused with ${blocked.code} and will refuse again until that is resolved: ${blocked.reason}.`)
-              };
-            }
-            return {
-              requirement: "transport-restart",
-              priorOwner: "stale",
-              nextAction: sessionRecoveryRemedy("The prior owner is proven dead and is released automatically.")
-            };
-          }
-          return {
-            requirement: "adoption",
-            priorOwner: "stale",
-            nextAction: 'The prior owner is proven dead. Adopt it with rn_session({ action: "adopt_stale", adoptionHandle }).'
-          };
-        }
-        const heartbeatAgeMs = Math.min(Math.max(0, this.#now() - (typeof prior.heartbeat_ms === "number" ? prior.heartbeat_ms : 0)), 24 * 36e5);
-        return {
-          requirement: "attach",
-          priorOwner: status === "match" ? "live" : "unknown",
-          ...grouped ? { priorOwnerHeartbeatAgeMs: heartbeatAgeMs } : {},
-          nextAction: status === "match" ? sessionOwnerInspectionRemedy("Another live rn-dev-agent supervisor owns this worktree; a live owner is never adopted.") : sessionOwnerInspectionRemedy("The prior owner identity could not be proven, so it is treated as live.")
-        };
-      }
-      #assertDeviceAuthorityAvailable(session2, resource, probes, currentBindings) {
-        this.#assertNoStaleDeviceCleanup(currentBindings);
-        const claim = this.#findConflictingClaim(resource);
-        if (claim && (claim.session_id !== session2.sessionId || claim.claim_epoch !== session2.claimEpoch)) {
-          const probe = probes.get(claim.session_id);
-          if (!probe || probe.claimEpoch !== claim.claim_epoch || probe.status !== "mismatch") {
-            throw claimConflict(claim);
-          }
-          throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "a proven-stale device owner requires explicit adopt_stale before rebinding", { sessionId: claim.session_id, claimEpoch: claim.claim_epoch });
-        }
-      }
-      /**
-       * GH #776: the exact refusals replaceDeviceAuthority would raise, proven without
-       * writing anything, so a caller can refuse before it yields any other axis.
-       */
-      inspectDeviceAuthorityAvailability(session2, resource) {
-        const probes = this.#probeClaimOwners(session2, [resource]);
-        this.#transaction(() => {
-          const current = this.#requireSession(session2);
-          const currentBindings = JSON.parse(current.bindings_json);
-          this.#assertDeviceAuthorityAvailable(session2, resource, probes, currentBindings);
-        });
-      }
-      replaceDeviceAuthority(session2, input) {
-        const resource = input.resource ?? {
-          type: "device",
-          key: `${String(input.device.platform)}:${String(input.device.deviceId)}`
-        };
-        const probes = this.#probeClaimOwners(session2, [resource]);
-        const now = this.#now();
-        this.#transaction(() => {
-          const current = this.#requireSession(session2);
-          const currentBindings = JSON.parse(current.bindings_json);
-          this.#assertDeviceAuthorityAvailable(session2, resource, probes, currentBindings);
-          this.#database.prepare(`DELETE FROM claims
-           WHERE session_id = ? AND claim_epoch = ?
-             AND resource_type IN ('device', 'target', 'runner')`).run(session2.sessionId, session2.claimEpoch);
-          this.#database.prepare(`INSERT INTO claims(
-            resource_type, resource_key, session_id, claim_epoch, lease_until_ms
-          ) VALUES (?, ?, ?, ?, ?)`).run(resource.type, resource.key, session2.sessionId, session2.claimEpoch, now + this.#leaseMs);
-          const bindings = {
-            ...currentBindings,
-            device: input.device,
-            install: input.install ?? null,
-            bundle: null,
-            runner: null,
-            observe: null,
-            proof: null,
-            pendingBuild: null
-          };
-          this.#invalidatePlatformReceipt(session2, String(input.device.platform));
-          this.#database.prepare(`UPDATE sessions
-           SET state = ?, bindings_json = ?, authority_version = authority_version + 1,
-               updated_ms = ?
-           WHERE session_id = ? AND claim_epoch = ?`).run(input.install ? "device_bound" : "device_claimed", JSON.stringify(bindings), now, session2.sessionId, session2.claimEpoch);
-          this.#advanceActiveOperationFence(session2, current.authority_version, current.authority_version + 1);
-        });
-      }
-      /**
-       * GH #672: device-family claims held by a proven-dead owner discovered AFTER startup.
-       * Startup adoption only exists for source/port conflicts, so a dead device/runner owner
-       * left `bind_device` demanding an `adopt_stale` handle that no path could mint. This
-       * offers a bounded, capability-authenticated release for the exact device only — it
-       * never transfers source, package-integration, Metro, or port authority, so a dead
-       * owner from a foreign worktree can be cleaned up without adopting its session.
-       * ADR L5: new code no longer mints these offers; `beginConfirmedStaleDeviceRelease`
-       * is the default path. This mint stays only as the trivially revertible legacy path.
-       */
-      prepareStaleResourceRelease(session2, target) {
-        const deviceKey = `${target.platform}:${target.deviceId}`;
-        const now = this.#now();
-        return this.#transaction(() => {
-          const current = this.#requireSession(session2);
-          const prior = this.#requireSingleProvenDeadDeviceOwner(session2, deviceKey);
-          const family = this.#requireExactStaleDeviceFamily(session2, prior, target);
-          const obligations = [];
-          if (family.androidMetroReverse)
-            obligations.push("androidMetroReverse");
-          if (family.runner)
-            obligations.push("runner");
-          if (family.recorder)
-            obligations.push("recorder");
-          const offer = {
-            token: randomBytes4(32).toString("base64url"),
-            expiresMs: now + RECOVERY_HANDLE_TTL_MS,
-            priorSessionId: prior.session_id,
-            priorClaimEpoch: prior.claim_epoch,
-            obligations
-          };
-          const bindings = JSON.parse(current.bindings_json);
-          this.#database.prepare(`UPDATE sessions SET bindings_json = ?, updated_ms = ?
-           WHERE session_id = ? AND claim_epoch = ?`).run(JSON.stringify({
-            ...bindings,
-            staleDeviceRelease: {
-              ...offer,
-              platform: target.platform,
-              deviceId: target.deviceId,
-              priorSupervisorPid: prior.supervisor_pid,
-              deathProvenAt: now
-            }
-          }), now, session2.sessionId, session2.claimEpoch);
-          return offer;
-        });
-      }
-      /**
-       * ADR L5: read-only view of what a confirmed inline release would transfer. Proves
-       * the owner's death and computes the exact obligations without minting a capability
-       * or writing any state.
-       */
-      inspectStaleDeviceRelease(session2, target) {
-        const deviceKey = `${target.platform}:${target.deviceId}`;
-        this.#requireSession(session2);
-        const prior = this.#requireSingleProvenDeadDeviceOwner(session2, deviceKey);
-        const family = this.#requireExactStaleDeviceFamily(session2, prior, target);
-        const obligations = [];
-        if (family.androidMetroReverse)
-          obligations.push("androidMetroReverse");
-        if (family.runner)
-          obligations.push("runner");
-        if (family.recorder)
-          obligations.push("recorder");
-        return {
-          priorSessionId: prior.session_id,
-          priorClaimEpoch: prior.claim_epoch,
-          obligations
-        };
-      }
-      /**
-       * ADR L5 (captain-approved D3): confirmed inline replacement for the capability-token
-       * transfer. Authorization is the caller's explicit confirmation plus positive death
-       * proof re-read from durable state inside this transaction, scoped to the exact
-       * requested device. An existing journal resumes token-lessly; nothing is minted and
-       * nothing expires.
-       */
-      beginConfirmedStaleDeviceRelease(session2, workerInstance, target) {
-        const now = this.#now();
-        return this.#transaction(() => {
-          const current = this.#requireSession(session2);
-          const bindings = JSON.parse(current.bindings_json);
-          if (current.worker_instance !== workerInstance) {
-            throw new SessionAuthorityError("HANDOFF_TARGET_MISMATCH", "stale device release is not owned by this worker");
-          }
-          const resumed = bindings.staleDeviceCleanup;
-          if (resumed) {
-            this.#assertStaleReleaseJournalScope(current, resumed, target);
-            return {
-              platform: String(resumed.platform),
-              deviceId: String(resumed.deviceId),
-              ...resumed.androidMetroReverse ? { androidMetroReverse: resumed.androidMetroReverse } : {},
-              runner: resumed.runner ?? null,
-              recorder: resumed.recorder ?? null
-            };
-          }
-          const deviceKey = `${target.platform}:${target.deviceId}`;
-          const prior = this.#requireSingleProvenDeadDeviceOwner(session2, deviceKey);
-          return this.#transferStaleDeviceAuthority(session2, bindings, prior, target, now);
-        });
-      }
-      /**
-       * GH #672: take over the dead owner's exact device-family claims and its cleanup
-       * obligations. Every proof is re-read from durable state here, not trusted from the
-       * mint: a prior owner that came back to life, changed epoch, or cannot be identified
-       * refuses even with a valid handle.
-       */
-      beginStaleResourceRelease(session2, handle, workerInstance, target) {
-        const now = this.#now();
-        return this.#transaction(() => {
-          const current = this.#requireSession(session2);
-          const bindings = JSON.parse(current.bindings_json);
-          if (current.worker_instance !== workerInstance) {
-            throw new SessionAuthorityError("HANDOFF_TARGET_MISMATCH", "stale device release is not owned by this worker");
-          }
-          const resumed = bindings.staleDeviceCleanup;
-          if (resumed) {
-            this.#assertStaleReleaseJournalScope(current, resumed, target);
-            return {
-              platform: String(resumed.platform),
-              deviceId: String(resumed.deviceId),
-              ...resumed.androidMetroReverse ? { androidMetroReverse: resumed.androidMetroReverse } : {},
-              runner: resumed.runner ?? null,
-              recorder: resumed.recorder ?? null
-            };
-          }
-          const offer = bindings.staleDeviceRelease;
-          if (!offer || typeof offer.token !== "string" || typeof offer.expiresMs !== "number" || typeof offer.platform !== "string" || typeof offer.deviceId !== "string" || typeof offer.priorSessionId !== "string" || typeof offer.priorClaimEpoch !== "number" || typeof handle !== "string" || !this.#capabilityMatches(offer.token, handle)) {
-            throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "stale device release capability is invalid or expired");
-          }
-          const platform = offer.platform;
-          const deviceId = offer.deviceId;
-          if (target && (target.platform !== platform || target.deviceId !== deviceId)) {
-            throw new SessionAuthorityError("DEVICE_AUTHORITY_MISMATCH", "stale device release offer does not match the requested exact device", void 0, { axis: "D", nextAction: 'Run rn_session with action "status" for the exact recovery.' });
-          }
-          if (offer.expiresMs < now) {
-            throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "stale device release capability is invalid or expired");
-          }
-          const prior = this.#requireProvenDeadOwner(offer.priorSessionId, offer.priorClaimEpoch);
-          return this.#transferStaleDeviceAuthority(session2, bindings, prior, { platform, deviceId }, now);
-        });
-      }
-      #transferStaleDeviceAuthority(session2, bindings, prior, target, now) {
-        const { platform, deviceId } = target;
-        const deviceKey = `${platform}:${deviceId}`;
-        const priorBindings = JSON.parse(prior.bindings_json);
-        const family = this.#requireExactStaleDeviceFamily(session2, prior, target);
-        const { androidMetroReverse, runner, recorder: recorder2 } = family;
-        for (const claim of family.claims) {
-          this.#database.prepare(`UPDATE claims SET session_id = ?, claim_epoch = ?, lease_until_ms = ?
-           WHERE resource_type = ? AND resource_key = ?
-             AND session_id = ? AND claim_epoch = ?`).run(session2.sessionId, session2.claimEpoch, now + this.#leaseMs, claim.resource_type, claim.resource_key, prior.session_id, prior.claim_epoch);
-        }
-        const runnerClaimKey = runner ? `${platform}:${deviceId}:${String(runner.port)}` : null;
-        const cleanup = {
-          platform,
-          deviceId,
-          priorSessionId: prior.session_id,
-          priorClaimEpoch: prior.claim_epoch,
-          transferredAt: now,
-          ...androidMetroReverse ? {
-            androidMetroReverse: {
-              ...androidMetroReverse,
-              claimKey: deviceKey,
-              stopRequestedAt: now,
-              completedAt: null
-            }
-          } : {},
-          runner: runner ? { ...runner, claimKey: runnerClaimKey, stopRequestedAt: now, completedAt: null } : null,
-          recorder: recorder2 ? { ...recorder2, claimKey: deviceKey, stopRequestedAt: now, completedAt: null } : null
-        };
-        this.#database.prepare(`UPDATE sessions SET bindings_json = ?, updated_ms = ?
-         WHERE session_id = ? AND claim_epoch = ?`).run(JSON.stringify({ ...bindings, staleDeviceCleanup: cleanup }), now, session2.sessionId, session2.claimEpoch);
-        this.#database.prepare(`UPDATE sessions SET bindings_json = ?, updated_ms = ?
-         WHERE session_id = ? AND claim_epoch = ?`).run(JSON.stringify({
-          ...priorBindings,
-          device: null,
-          androidMetroReverse: null,
-          runner: null,
-          recorder: null,
-          deviceReleased: {
-            toSessionId: session2.sessionId,
-            toClaimEpoch: session2.claimEpoch,
-            at: now,
-            platform,
-            deviceId,
-            device: priorBindings.device ?? null,
-            androidMetroReverse,
-            runner,
-            recorder: recorder2
-          }
-        }), now, prior.session_id, prior.claim_epoch);
-        return {
-          platform,
-          deviceId,
-          ...cleanup.androidMetroReverse ? { androidMetroReverse: cleanup.androidMetroReverse } : {},
-          runner: cleanup.runner,
-          recorder: cleanup.recorder
-        };
-      }
-      #requireSingleProvenDeadDeviceOwner(session2, deviceKey) {
-        const claims = this.#deviceFamilyClaims(deviceKey);
-        if (claims.length === 0) {
-          throw new SessionAuthorityError("DEVICE_CLAIM_CONFLICT", `no foreign claim on ${deviceKey} needs release`);
-        }
-        const owners = new Set(claims.map((claim) => `${claim.session_id}\0${claim.claim_epoch}`));
-        if (owners.size !== 1) {
-          throw new SessionAuthorityError("DEVICE_CLAIM_CONFLICT", `${deviceKey} is split across several claim epochs; release each owner explicitly`);
-        }
-        if (claims[0].session_id === session2.sessionId && claims[0].claim_epoch === session2.claimEpoch) {
-          throw new SessionAuthorityError("DEVICE_CLAIM_CONFLICT", `no foreign claim on ${deviceKey} needs release`);
-        }
-        return this.#requireProvenDeadOwner(claims[0].session_id, claims[0].claim_epoch);
-      }
-      #requireExactStaleDeviceFamily(session2, prior, target) {
-        const deviceKey = `${target.platform}:${target.deviceId}`;
-        const claims = this.#deviceFamilyClaims(deviceKey);
-        if (claims.length === 0 || claims.some((claim) => claim.session_id !== prior.session_id || claim.claim_epoch !== prior.claim_epoch)) {
-          throw new SessionAuthorityError("DEVICE_CLAIM_CONFLICT", `${deviceKey} is split across several claim epochs; release each owner explicitly`);
-        }
-        if (claims.some((claim) => claim.resource_type === "device-receipt" || claim.resource_type === "runner-receipt")) {
-          throw new SessionAuthorityError("DEVICE_AUTHORITY_MISMATCH", "stale device cleanup cannot transfer platform validation receipt authority");
-        }
-        const bindings = JSON.parse(prior.bindings_json);
-        if (!this.#bindingMatchesDevice(bindings.device, target)) {
-          throw new SessionAuthorityError("DEVICE_AUTHORITY_MISMATCH", "stale device claim does not match its owner binding");
-        }
-        const deviceClaims = claims.filter((claim) => claim.resource_type === "device");
-        if (deviceClaims.length !== 1 || deviceClaims[0].resource_key !== deviceKey) {
-          throw new SessionAuthorityError("DEVICE_AUTHORITY_MISMATCH", "stale device binding has no exclusive cleanup claim");
-        }
-        const current = this.#requireSession(session2);
-        const currentBindings = JSON.parse(current.bindings_json);
-        if (this.#bindingMatchesDevice(currentBindings.device, target) || this.#bindingMatchesDevice(currentBindings.runner, target) || this.#bindingMatchesDevice(currentBindings.recorder, target)) {
-          throw new SessionAuthorityError("DEVICE_AUTHORITY_MISMATCH", "stale device cleanup conflicts with existing target bindings");
-        }
-        const reverseValue = bindings.androidMetroReverse;
-        const androidMetroReverse = reverseValue && typeof reverseValue === "object" && target.platform === "android" && reverseValue.platform === "android" && reverseValue.deviceId === target.deviceId && Number.isSafeInteger(reverseValue.metroPort) && reverseValue.local === `tcp:${String(reverseValue.metroPort)}` && reverseValue.remote === `tcp:${String(reverseValue.metroPort)}` ? reverseValue : null;
-        if (reverseValue !== null && reverseValue !== void 0 && !androidMetroReverse) {
-          throw new SessionAuthorityError("PHYSICAL_ANDROID_METRO_CLEANUP_UNPROVEN", "stale physical Android Metro reverse binding does not match the exact device and port");
-        }
-        const runnerClaims = claims.filter((claim) => claim.resource_type === "runner");
-        const runnerValue = bindings.runner;
-        const runner = this.#bindingMatchesDevice(runnerValue, target) ? runnerValue : null;
-        if (runnerValue !== null && runnerValue !== void 0 && !runner) {
-          throw new SessionAuthorityError("RUNNER_OWNERSHIP_MISMATCH", "stale runner binding targets another device");
-        }
-        if (runner && !hasCompleteRunnerCleanupIdentity(runner)) {
-          throw new SessionAuthorityError("RUNNER_ADOPTION_REQUIRED", "stale runner cleanup identity is incomplete");
-        }
-        const runnerClaimKey = runner ? `${deviceKey}:${String(runner.port)}` : null;
-        if (runnerClaims.length !== (runner ? 1 : 0) || runner && runnerClaims[0].resource_key !== runnerClaimKey) {
-          throw new SessionAuthorityError("RUNNER_OWNERSHIP_MISMATCH", "stale runner binding has no exclusive cleanup claim");
-        }
-        const recorderClaims = claims.filter((claim) => claim.resource_type === "recorder");
-        const recorderValue = bindings.recorder;
-        const recorder2 = this.#bindingMatchesDevice(recorderValue, target) ? recorderValue : null;
-        if (recorderValue !== null && recorderValue !== void 0 && !recorder2) {
-          throw new SessionAuthorityError("RECORDING_AUTHORITY_MISMATCH", "stale recorder binding targets another device");
-        }
-        if (recorder2 && !hasCompleteRecorderCleanupIdentity(recorder2)) {
-          throw new SessionAuthorityError("RECORDING_AUTHORITY_MISMATCH", "stale recorder cleanup identity is incomplete");
-        }
-        if (recorderClaims.length !== (recorder2 ? 1 : 0) || recorder2 && recorderClaims[0].resource_key !== deviceKey) {
-          throw new SessionAuthorityError("RECORDING_AUTHORITY_MISMATCH", "stale recorder binding has no exclusive cleanup claim");
-        }
-        return { claims, androidMetroReverse, runner, recorder: recorder2 };
-      }
-      completeStaleResourceRelease(session2, workerInstance, resource) {
-        const now = this.#now();
-        this.#transaction(() => {
-          const { row, bindings, cleanup } = this.#requireStaleReleaseOwner(session2, workerInstance);
-          const binding = cleanup[resource];
-          if (!binding || typeof binding !== "object")
-            return;
-          const entry = binding;
-          if (typeof entry.stopRequestedAt !== "number") {
-            throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", `${resource} release was not durably requested`);
-          }
-          if (typeof entry.completedAt === "number")
-            return;
-          if (resource !== "androidMetroReverse") {
-            const claimType = resource === "runner" ? "runner" : "recorder";
-            this.#database.prepare(`DELETE FROM claims
-             WHERE resource_type = ? AND resource_key = ?
-               AND session_id = ? AND claim_epoch = ?`).run(claimType, String(entry.claimKey), session2.sessionId, session2.claimEpoch);
-          }
-          this.#database.prepare(`UPDATE sessions SET bindings_json = ?, updated_ms = ?
-           WHERE session_id = ? AND claim_epoch = ?`).run(JSON.stringify({
-            ...bindings,
-            staleDeviceCleanup: { ...cleanup, [resource]: { ...entry, completedAt: now } }
-          }), now, row.session_id, row.claim_epoch);
-        });
-      }
-      finishStaleResourceRelease(session2, workerInstance) {
-        const now = this.#now();
-        this.#transaction(() => {
-          const { row, bindings, cleanup } = this.#requireStaleReleaseOwner(session2, workerInstance);
-          for (const resource of ["androidMetroReverse", "runner", "recorder"]) {
-            const binding = cleanup[resource];
-            if (binding && typeof binding === "object" && typeof binding.completedAt !== "number") {
-              throw new SessionAuthorityError("AUTOMATION_CLEANUP_UNPROVEN", `${resource} release has not been durably completed`);
-            }
-          }
-          const deviceKey = `${String(cleanup.platform)}:${String(cleanup.deviceId)}`;
-          const unrelatedClaim = this.#deviceFamilyClaims(deviceKey).find((claim) => claim.resource_type !== "device");
-          if (unrelatedClaim) {
-            throw new SessionAuthorityError("DEVICE_AUTHORITY_MISMATCH", "stale device cleanup found authority outside its completed journal");
-          }
-          this.#database.prepare(`DELETE FROM claims
-           WHERE resource_type = 'device' AND resource_key = ?
-             AND session_id = ? AND claim_epoch = ?`).run(deviceKey, session2.sessionId, session2.claimEpoch);
-          const nextAuthorityVersion = row.authority_version + 1;
-          this.#database.prepare(`UPDATE sessions
-           SET bindings_json = ?, authority_version = ?, updated_ms = ?
-           WHERE session_id = ? AND claim_epoch = ? AND authority_version = ?`).run(JSON.stringify({ ...bindings, staleDeviceCleanup: null, staleDeviceRelease: null }), nextAuthorityVersion, now, row.session_id, row.claim_epoch, row.authority_version);
-          this.#advanceActiveOperationFence(session2, row.authority_version, nextAuthorityVersion, true);
-        });
-      }
-      /**
-       * L4: verified-dead startup cleanup. The durable journal lives on the DEAD session's
-       * row and is written before any side effect; claims release only in finish, after
-       * every obligation is durably complete. Death is positively re-proven by every method.
-       */
-      findStartupCleanupCandidate(input) {
-        const claim = this.#findClaim("source", input.worktreeKey);
-        if (!claim)
-          return null;
-        const row = asSession(this.#database.prepare(`SELECT session_id, source_key, worktree_key, app_root_key, claim_epoch
-           FROM sessions WHERE session_id = ?`).get(claim.session_id));
-        if (!row || row.claim_epoch !== claim.claim_epoch || row.source_key !== input.sourceKey || row.worktree_key !== input.worktreeKey || row.app_root_key !== input.appRootKey) {
-          return null;
-        }
-        return { sessionId: claim.session_id, claimEpoch: claim.claim_epoch };
-      }
-      beginStartupOwnerCleanup(prior) {
-        const now = this.#now();
-        return this.#transaction(() => {
-          const row = this.#requireProvenDeadStartupOwner(prior);
-          const bindings = JSON.parse(row.bindings_json);
-          const existing = bindings.startupCleanup;
-          if (existing && typeof existing === "object" && typeof existing.finishedAt !== "number") {
-            return {
-              resumed: true,
-              obligations: existing.obligations ?? {},
-              integration: existing.integration ?? null
-            };
-          }
-          const record2 = (value) => value && typeof value === "object" ? { ...value } : null;
-          const obligation = (source, claimKey) => source ? {
-            ...source,
-            claimKey: String(source.claimKey ?? claimKey ?? ""),
-            stopRequestedAt: typeof source.stopRequestedAt === "number" ? source.stopRequestedAt : now,
-            completedAt: typeof source.completedAt === "number" ? source.completedAt : null
-          } : void 0;
-          const handoffCleanup = record2(bindings.handoffCleanup);
-          const staleDevice = record2(bindings.staleDeviceCleanup);
-          const androidMetroReverseSource = record2(bindings.androidMetroReverse) ?? record2(staleDevice?.androidMetroReverse);
-          const recorderSource = record2(bindings.recorder) ?? record2(staleDevice?.recorder) ?? record2(handoffCleanup?.recorder);
-          const runnerSource = record2(bindings.runner) ?? record2(staleDevice?.runner) ?? record2(handoffCleanup?.runner);
-          const observeSource = record2(bindings.observe) ?? record2(handoffCleanup?.observe);
-          const liveMetro = record2(bindings.metroCleanup) ?? record2(bindings.metro);
-          const metroSource = liveMetro && liveMetro.mode === "managed" ? liveMetro : record2(handoffCleanup?.metro);
-          const obligations = {};
-          const androidMetroReverseEntry = obligation(androidMetroReverseSource, androidMetroReverseSource ? `android:${String(androidMetroReverseSource.deviceId)}` : null);
-          if (androidMetroReverseEntry) {
-            obligations.androidMetroReverse = androidMetroReverseEntry;
-          }
-          const recorderEntry = obligation(recorderSource, recorderSource ? `${String(recorderSource.platform)}:${String(recorderSource.deviceId)}` : null);
-          if (recorderEntry)
-            obligations.recorder = recorderEntry;
-          const runnerEntry = obligation(runnerSource, runnerSource ? `${String(runnerSource.platform)}:${String(runnerSource.deviceId)}:${String(runnerSource.port)}` : null);
-          if (runnerEntry)
-            obligations.runner = runnerEntry;
-          const observeEntry = obligation(observeSource, observeSource ? String(observeSource.port) : null);
-          if (observeEntry)
-            obligations.observe = observeEntry;
-          const metroEntry = obligation(metroSource, metroSource ? String(metroSource.port) : null);
-          if (metroEntry)
-            obligations.metro = metroEntry;
-          const integrationBinding = record2(bindings.packageIntegration);
-          const integration = integrationBinding ? {
-            installedBySessionId: integrationBinding.installedBySessionId ?? null,
-            manifestSha256: integrationBinding.manifestSha256 ?? null,
-            requestedAt: now,
-            completedAt: null
-          } : null;
-          this.#database.prepare(`UPDATE sessions SET bindings_json = ?, updated_ms = ?
-           WHERE session_id = ? AND claim_epoch = ?`).run(JSON.stringify({
-            ...bindings,
-            startupCleanup: { journaledAt: now, obligations, integration }
-          }), now, row.session_id, row.claim_epoch);
-          return { resumed: false, obligations, integration };
-        });
-      }
-      /** Re-recording an identical cleanup refusal is a no-op across repeated restarts. */
-      recordStartupCleanupRefusal(prior, refusal) {
-        const now = this.#now();
-        this.#transaction(() => {
-          const row = this.#requireProvenDeadStartupOwner(prior);
-          const { bindings, journal } = this.#requireStartupCleanupJournal(row);
-          if (typeof journal.finishedAt === "number")
-            return;
-          const existing = journal.refusal;
-          if (existing && existing.code === refusal.code && existing.reason === refusal.reason && existing.nextAction === refusal.nextAction) {
-            return;
-          }
-          this.#database.prepare(`UPDATE sessions SET bindings_json = ?, updated_ms = ?
-           WHERE session_id = ? AND claim_epoch = ?`).run(JSON.stringify({
-            ...bindings,
-            startupCleanup: {
-              ...journal,
-              refusal: {
-                code: refusal.code,
-                reason: refusal.reason,
-                ...refusal.nextAction ? { nextAction: refusal.nextAction } : {}
-              }
-            }
-          }), now, row.session_id, row.claim_epoch);
-        });
-      }
-      verifyStartupOwnerObligation(prior, resource) {
-        const row = this.#requireProvenDeadStartupOwner(prior);
-        const { journal } = this.#requireStartupCleanupJournal(row);
-        const entry = journal.obligations?.[resource];
-        if (!entry || typeof entry !== "object")
-          return null;
-        const binding = entry;
-        if (typeof binding.completedAt === "number")
-          return binding;
-        this.#assertStartupObligationScope(row, resource, binding);
-        return binding;
-      }
-      completeStartupOwnerObligation(prior, resource) {
-        const now = this.#now();
-        this.#transaction(() => {
-          const row = this.#requireProvenDeadStartupOwner(prior);
-          const { bindings, journal } = this.#requireStartupCleanupJournal(row);
-          const obligations = journal.obligations ?? {};
-          const entry = obligations[resource];
-          if (!entry || typeof entry !== "object")
-            return;
-          const binding = entry;
-          if (typeof binding.completedAt === "number")
-            return;
-          if (typeof binding.stopRequestedAt !== "number") {
-            throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", `${resource} cleanup was not durably requested`);
-          }
-          this.#assertStartupObligationScope(row, resource, binding);
-          this.#database.prepare(`UPDATE sessions SET bindings_json = ?, updated_ms = ?
-           WHERE session_id = ? AND claim_epoch = ?`).run(JSON.stringify({
-            ...bindings,
-            startupCleanup: {
-              ...journal,
-              obligations: { ...obligations, [resource]: { ...binding, completedAt: now } }
-            }
-          }), now, row.session_id, row.claim_epoch);
-        });
-      }
-      completeStartupOwnerIntegrationRestore(prior, input) {
-        const now = this.#now();
-        this.#transaction(() => {
-          const row = this.#requireProvenDeadStartupOwner(prior);
-          const { bindings, journal } = this.#requireStartupCleanupJournal(row);
-          const integration = journal.integration;
-          if (!integration || typeof integration !== "object")
-            return;
-          if (typeof integration.completedAt === "number")
-            return;
-          const binding = bindings.packageIntegration;
-          if (!binding || typeof binding !== "object" || binding.manifestSha256 !== input.manifestSha256 || integration.manifestSha256 !== input.manifestSha256) {
-            throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "integration restoration requires the recorded manifest authority");
-          }
-          this.#database.prepare(`UPDATE sessions SET bindings_json = ?, updated_ms = ?
-           WHERE session_id = ? AND claim_epoch = ?`).run(JSON.stringify({
-            ...bindings,
-            packageIntegration: null,
-            startupCleanup: { ...journal, integration: { ...integration, completedAt: now } }
-          }), now, row.session_id, row.claim_epoch);
-        });
-      }
-      verifyStartupOwnerIntegrationRestore(prior, input) {
-        const row = this.#requireProvenDeadStartupOwner(prior);
-        this.#assertStartupSourceScope(row, input);
-        const { bindings, journal } = this.#requireStartupCleanupJournal(row);
-        const integration = journal.integration;
-        const binding = bindings.packageIntegration;
-        if (!integration || typeof integration !== "object" || typeof integration.completedAt === "number" || !binding || typeof binding !== "object" || binding.manifestSha256 !== input.manifestSha256 || integration.manifestSha256 !== input.manifestSha256) {
-          throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "integration restoration requires the active startup journal and recorded manifest authority");
-        }
-      }
-      finishStartupOwnerCleanup(prior) {
-        const now = this.#now();
-        this.#transaction(() => {
-          const row = this.#requireProvenDeadStartupOwner(prior);
-          const { bindings, journal } = this.#requireStartupCleanupJournal(row);
-          const obligations = journal.obligations ?? {};
-          for (const resource of ["androidMetroReverse", "recorder", "runner", "observe"]) {
-            const entry = obligations[resource];
-            if (entry && typeof entry === "object" && typeof entry.completedAt !== "number") {
-              throw new SessionAuthorityError("AUTOMATION_CLEANUP_UNPROVEN", `${resource} cleanup has not been durably completed`);
-            }
-          }
-          const metro = obligations.metro;
-          if (metro && typeof metro === "object" && typeof metro.completedAt !== "number") {
-            throw new SessionAuthorityError("METRO_CLEANUP_PENDING", "managed Metro cleanup has not been durably completed");
-          }
-          this.#requireIntegrationRestored(bindings);
-          this.#database.prepare("DELETE FROM claims WHERE session_id = ? AND claim_epoch = ?").run(row.session_id, row.claim_epoch);
-          this.#database.prepare(`UPDATE sessions
-           SET state = 'released', claim_epoch = claim_epoch + 1,
-               authority_version = authority_version + 1, bindings_json = ?, updated_ms = ?
-           WHERE session_id = ? AND claim_epoch = ?`).run(JSON.stringify({ ...bindings, startupCleanup: { ...journal, finishedAt: now } }), now, row.session_id, row.claim_epoch);
-        });
-      }
-      #requireProvenDeadStartupOwner(prior) {
-        const row = asSession(this.#database.prepare(`SELECT session_id, source_key, worktree_key, app_root_key,
-                  claim_epoch, state, supervisor_pid, supervisor_birth,
-                  lease_until_ms, bindings_json
-           FROM sessions WHERE session_id = ?`).get(prior.sessionId));
-        if (!row || row.claim_epoch !== prior.claimEpoch) {
-          throw new SessionAuthorityError("SESSION_OWNER_LOST", "the startup cleanup owner no longer matches the proven claim epoch");
-        }
-        let status = "unknown";
-        try {
-          status = this.#ownerStatus({
-            sessionId: row.session_id,
-            pid: row.supervisor_pid,
-            token: row.supervisor_birth
-          });
-        } catch {
-          status = "unknown";
-        }
-        if (status === "match") {
-          throw new SessionAuthorityError("RESOURCE_CLAIM_CONFLICT", OWNER_IDENTITY_REFUSAL_REASONS.sourceOwnerLive, { sessionId: row.session_id, claimEpoch: row.claim_epoch });
-        }
-        if (status !== "mismatch") {
-          if (row.lease_until_ms < this.#now()) {
-            throw new SessionAuthorityError("STALE_LEASE_NOT_RECLAIMABLE", OWNER_IDENTITY_REFUSAL_REASONS.leaseOwnerUnprovable, { sessionId: row.session_id, claimEpoch: row.claim_epoch });
-          }
-          throw new SessionAuthorityError("RESOURCE_CLAIM_CONFLICT", OWNER_IDENTITY_REFUSAL_REASONS.sourceOwnerUnprovable, { sessionId: row.session_id, claimEpoch: row.claim_epoch });
-        }
-        return row;
-      }
-      #requireStartupCleanupJournal(row) {
-        const bindings = JSON.parse(row.bindings_json);
-        const journal = bindings.startupCleanup;
-        if (!journal || typeof journal !== "object") {
-          throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "no startup cleanup is in progress");
-        }
-        return { bindings, journal };
-      }
-      #assertStartupSourceScope(row, input) {
-        if (row.source_key !== input.sourceKey || row.worktree_key !== input.worktreeKey || row.app_root_key !== input.appRootKey) {
-          throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "startup cleanup no longer matches the exact source and app root");
-        }
-      }
-      #assertStartupObligationScope(row, resource, entry) {
-        const claimType = resource === "observe" ? "observe-port" : resource === "metro" ? "metro-port" : resource === "androidMetroReverse" ? "device" : resource;
-        const claimKey = String(entry.claimKey ?? "");
-        const claim = this.#findClaim(claimType, claimKey);
-        if (!claimKey || claim?.session_id !== row.session_id || claim.claim_epoch !== row.claim_epoch) {
-          const codes = {
-            androidMetroReverse: "PHYSICAL_ANDROID_METRO_CLEANUP_UNPROVEN",
-            recorder: "RECORDING_AUTHORITY_MISMATCH",
-            runner: "RUNNER_OWNERSHIP_MISMATCH",
-            observe: "OBSERVE_AUTHORITY_MISMATCH",
-            metro: "METRO_AUTHORITY_MISMATCH"
-          };
-          throw new SessionAuthorityError(codes[resource], `startup ${resource} cleanup journal no longer owns its exact claim`);
-        }
-      }
-      #requireStaleReleaseOwner(session2, workerInstance) {
-        const row = this.#requireSession(session2);
-        if (row.worker_instance !== workerInstance) {
-          throw new SessionAuthorityError("HANDOFF_TARGET_MISMATCH", "stale device release is not owned by this worker");
-        }
-        const bindings = JSON.parse(row.bindings_json);
-        const cleanup = bindings.staleDeviceCleanup;
-        if (!cleanup || typeof cleanup !== "object") {
-          throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "no stale device release is in progress");
-        }
-        const journal = cleanup;
-        this.#assertStaleReleaseJournalScope(row, journal);
-        return { row, bindings, cleanup: journal };
-      }
-      #assertNoStaleDeviceCleanup(bindings) {
-        const cleanup = bindings.staleDeviceCleanup;
-        if (!cleanup || typeof cleanup.platform !== "string" || typeof cleanup.deviceId !== "string") {
-          return;
-        }
-        throw new SessionAuthorityError("AUTOMATION_CLEANUP_UNPROVEN", "stale device cleanup journal is incomplete", void 0, {
-          axis: "D",
-          nextAction: 'Resume it with rn_session({ action: "bind_device" }) for the exact journaled device or rn_session({ action: "release_stale_device" }) before binding any other device.'
-        });
-      }
-      #assertStaleReleaseJournalScope(row, cleanup, target) {
-        if (typeof cleanup.platform !== "string" || typeof cleanup.deviceId !== "string" || target && (cleanup.platform !== target.platform || cleanup.deviceId !== target.deviceId)) {
-          throw new SessionAuthorityError("DEVICE_AUTHORITY_MISMATCH", "stale device cleanup journal does not match the requested exact device", void 0, { axis: "D", nextAction: 'Run rn_session with action "status" for the exact recovery.' });
-        }
-        const deviceKey = `${cleanup.platform}:${cleanup.deviceId}`;
-        const deviceClaim = this.#findClaim("device", deviceKey);
-        if (deviceClaim?.session_id !== row.session_id || deviceClaim.claim_epoch !== row.claim_epoch) {
-          throw new SessionAuthorityError("DEVICE_AUTHORITY_MISMATCH", "stale device cleanup journal no longer owns its exact device claim");
-        }
-        const reverse = cleanup.androidMetroReverse;
-        if (reverse && typeof reverse === "object" && typeof reverse.completedAt !== "number" && String(reverse.claimKey ?? "") !== deviceKey) {
-          throw new SessionAuthorityError("PHYSICAL_ANDROID_METRO_CLEANUP_UNPROVEN", "stale physical Android Metro cleanup journal no longer matches its exact device claim");
-        }
-        for (const resource of ["runner", "recorder"]) {
-          const entry = cleanup[resource];
-          if (!entry || typeof entry !== "object" || typeof entry.completedAt === "number") {
-            continue;
-          }
-          const binding = entry;
-          const claimType = resource === "runner" ? "runner" : "recorder";
-          const expectedKey = resource === "runner" ? `${deviceKey}:${String(binding.port)}` : deviceKey;
-          const claimKey = String(binding.claimKey ?? "");
-          const claim = this.#findClaim(claimType, claimKey);
-          if (claimKey !== expectedKey || claim?.session_id !== row.session_id || claim.claim_epoch !== row.claim_epoch) {
-            throw new SessionAuthorityError(resource === "runner" ? "RUNNER_OWNERSHIP_MISMATCH" : "RECORDING_AUTHORITY_MISMATCH", `stale ${resource} cleanup journal no longer owns its exact claim`);
-          }
-        }
-      }
-      #deviceFamilyClaims(deviceKey) {
-        return this.#database.prepare(`SELECT resource_type, resource_key, session_id, claim_epoch, lease_until_ms
-         FROM claims
-         WHERE (resource_type IN ('device', 'device-receipt', 'recorder') AND resource_key = ?)
-            OR (resource_type IN ('runner', 'runner-receipt') AND resource_key LIKE ? ESCAPE '\\')
-         ORDER BY resource_type, resource_key`).all(deviceKey, `${deviceKey.replace(/[\\%_]/g, "\\$&")}:%`);
-      }
-      #bindingMatchesDevice(binding, target) {
-        if (!binding || typeof binding !== "object")
-          return false;
-        const record2 = binding;
-        return record2.platform === target.platform && record2.deviceId === target.deviceId;
-      }
-      #requireProvenDeadOwner(sessionId, claimEpoch) {
-        const prior = asSession(this.#database.prepare(`SELECT session_id, claim_epoch, state, supervisor_pid, supervisor_birth, bindings_json
-           FROM sessions WHERE session_id = ?`).get(sessionId));
-        if (!prior || prior.claim_epoch !== claimEpoch) {
-          throw new SessionAuthorityError("SESSION_OWNER_LOST", "the released owner no longer matches the proven claim epoch");
-        }
-        let status = "unknown";
-        try {
-          status = this.#ownerStatus({
-            sessionId: prior.session_id,
-            pid: prior.supervisor_pid,
-            token: prior.supervisor_birth
-          });
-        } catch {
-          status = "unknown";
-        }
-        if (status === "match") {
-          throw new SessionAuthorityError("DEVICE_CLAIM_CONFLICT", "the device owner is live; a live owner is never released", { sessionId: prior.session_id, claimEpoch: prior.claim_epoch });
-        }
-        if (status !== "mismatch") {
-          throw new SessionAuthorityError("STALE_LEASE_NOT_RECLAIMABLE", "the device owner identity could not be proven, so it is treated as live", { sessionId: prior.session_id, claimEpoch: prior.claim_epoch });
-        }
-        return prior;
-      }
-      updateBindings(session2, input) {
-        const claimed = input.claimResources ?? [];
-        const probes = input.probeClaimOwners && claimed.length > 0 ? this.#probeClaimOwners(session2, claimed) : null;
-        const now = this.#now();
-        this.#transaction(() => {
-          const current = this.#requireSession(session2);
-          if (input.expectedAuthorityVersion !== void 0 && current.authority_version !== input.expectedAuthorityVersion) {
-            throw new SessionAuthorityError("AUTHORITY_LOST_DURING_OPERATION", "session authority version changed before binding commit");
-          }
-          const bindings = {
-            ...JSON.parse(current.bindings_json),
-            ...input.bindings
-          };
-          this.#assertClaimsAvailable(session2, claimed, probes, now);
-          if (Object.hasOwn(input.bindings, "device") || Object.hasOwn(input.bindings, "install")) {
-            const currentBindings = JSON.parse(current.bindings_json);
-            const platform = String((input.bindings.device ?? currentBindings.device)?.platform ?? "");
-            if (platform) {
-              this.#invalidatePlatformReceipt(session2, platform);
-            }
-          }
-          for (const resource of input.releaseResources ?? []) {
-            this.#database.prepare(`DELETE FROM claims
-             WHERE resource_type = ? AND resource_key = ?
-               AND session_id = ? AND claim_epoch = ?`).run(resource.type, resource.key, session2.sessionId, session2.claimEpoch);
-          }
-          const leaseUntil = now + this.#leaseMs;
-          for (const resource of input.claimResources ?? []) {
-            this.#database.prepare(`INSERT INTO claims(
-              resource_type, resource_key, session_id, claim_epoch, lease_until_ms
-            ) VALUES (?, ?, ?, ?, ?)
-            ON CONFLICT(resource_type, resource_key) DO UPDATE SET
-              session_id = excluded.session_id,
-              claim_epoch = excluded.claim_epoch,
-              lease_until_ms = excluded.lease_until_ms`).run(resource.type, resource.key, session2.sessionId, session2.claimEpoch, leaseUntil);
-          }
-          this.#database.prepare(`UPDATE sessions
-           SET state = ?, bindings_json = ?, authority_version = authority_version + 1,
-               updated_ms = ?
-           WHERE session_id = ? AND claim_epoch = ?`).run(input.state ?? current.state, JSON.stringify(bindings), now, session2.sessionId, session2.claimEpoch);
-          this.#advanceActiveOperationFence(session2, current.authority_version, current.authority_version + 1);
-        }, input.assertBeforeCommit, input.onCommitted);
-      }
-      replaceBindingsDuringOperation(operation, input) {
-        const now = this.#now();
-        return this.#transaction(() => {
-          const current = asSession(this.#database.prepare(`SELECT state, claim_epoch, authority_version, bindings_json
-             FROM sessions WHERE session_id = ?`).get(operation.sessionId));
-          const active = this.#database.prepare(`SELECT operation_id FROM operations
-           WHERE operation_id = ? AND session_id = ? AND claim_epoch = ?
-             AND authority_version = ?`).get(operation.operationId, operation.sessionId, operation.claimEpoch, operation.authorityVersion);
-          if (!current || !isOperationalState(current.state) || current.claim_epoch !== operation.claimEpoch || current.authority_version !== operation.authorityVersion || !active) {
-            throw new SessionAuthorityError("AUTHORITY_LOST_DURING_OPERATION", "operation fence no longer matches current authority");
-          }
-          for (const resource of input.claimResources ?? []) {
-            const claim = this.#findConflictingClaim(resource);
-            if (claim && (claim.session_id !== operation.sessionId || claim.claim_epoch !== operation.claimEpoch)) {
-              throw claimConflict(claim);
-            }
-          }
-          for (const resource of input.releaseResources ?? []) {
-            this.#database.prepare(`DELETE FROM claims
-             WHERE resource_type = ? AND resource_key = ?
-               AND session_id = ? AND claim_epoch = ?`).run(resource.type, resource.key, operation.sessionId, operation.claimEpoch);
-          }
-          const leaseUntil = now + this.#leaseMs;
-          for (const resource of input.claimResources ?? []) {
-            this.#database.prepare(`INSERT INTO claims(
-              resource_type, resource_key, session_id, claim_epoch, lease_until_ms
-            ) VALUES (?, ?, ?, ?, ?)
-            ON CONFLICT(resource_type, resource_key) DO UPDATE SET
-              session_id = excluded.session_id,
-              claim_epoch = excluded.claim_epoch,
-              lease_until_ms = excluded.lease_until_ms`).run(resource.type, resource.key, operation.sessionId, operation.claimEpoch, leaseUntil);
-          }
-          const nextAuthorityVersion = operation.authorityVersion + 1;
-          const bindings = {
-            ...JSON.parse(current.bindings_json),
-            ...input.bindings
-          };
-          this.#database.prepare(`UPDATE sessions
-           SET state = ?, bindings_json = ?, authority_version = ?, updated_ms = ?
-           WHERE session_id = ? AND claim_epoch = ? AND authority_version = ?`).run(input.state ?? current.state, JSON.stringify(bindings), nextAuthorityVersion, now, operation.sessionId, operation.claimEpoch, operation.authorityVersion);
-          this.#database.prepare(`UPDATE operations SET authority_version = ?, lease_until_ms = ?
-           WHERE operation_id = ? AND session_id = ? AND claim_epoch = ?
-             AND authority_version = ?`).run(nextAuthorityVersion, leaseUntil, operation.operationId, operation.sessionId, operation.claimEpoch, operation.authorityVersion);
-          const context = this.#operationContext.getStore();
-          if (context?.operationId === operation.operationId) {
-            context.authorityVersion = nextAuthorityVersion;
-          }
-          return { ...operation, authorityVersion: nextAuthorityVersion };
-        }, input.assertBeforeCommit, input.onCommitted);
-      }
-      endOperationWithBindings(operation, bindings) {
-        const now = this.#now();
-        this.#transaction(() => {
-          const current = asSession(this.#database.prepare(`SELECT state, claim_epoch, authority_version, bindings_json
-             FROM sessions WHERE session_id = ?`).get(operation.sessionId));
-          const active = this.#database.prepare(`SELECT operation_id FROM operations
-           WHERE operation_id = ? AND session_id = ? AND claim_epoch = ?
-             AND authority_version = ?`).get(operation.operationId, operation.sessionId, operation.claimEpoch, operation.authorityVersion);
-          if (!current || !isOperationalState(current.state) || current.claim_epoch !== operation.claimEpoch || current.authority_version !== operation.authorityVersion || !active) {
-            throw new SessionAuthorityError("AUTHORITY_LOST_DURING_OPERATION", "operation fence no longer matches current authority");
-          }
-          const nextBindings = {
-            ...JSON.parse(current.bindings_json),
-            ...bindings
-          };
-          this.#database.prepare(`UPDATE sessions
-           SET bindings_json = ?, authority_version = authority_version + 1, updated_ms = ?
-           WHERE session_id = ? AND claim_epoch = ? AND authority_version = ?`).run(JSON.stringify(nextBindings), now, operation.sessionId, operation.claimEpoch, operation.authorityVersion);
-          this.#database.prepare(`DELETE FROM operations
-           WHERE operation_id = ? AND session_id = ? AND claim_epoch = ?
-             AND authority_version = ?`).run(operation.operationId, operation.sessionId, operation.claimEpoch, operation.authorityVersion);
-        });
-        this.#pendingPlatformReceipts.delete(operation.operationId);
-      }
-      getSessionStatus(sessionId) {
-        const row = asSession(this.#database.prepare(`SELECT session_id, source_key, worktree_key, app_root_key, state,
-                  claim_epoch, authority_version, supervisor_pid, supervisor_birth,
-                  worker_instance, worker_pid, worker_birth, lease_until_ms,
-                  source_json, bindings_json
-           FROM sessions WHERE session_id = ?`).get(sessionId));
-        if (!row)
-          return null;
-        const claims = this.#database.prepare(`SELECT resource_type, resource_key, session_id, claim_epoch, lease_until_ms
-         FROM claims WHERE session_id = ? AND claim_epoch = ?
-         ORDER BY resource_type, resource_key`).all(sessionId, row.claim_epoch).map((claim) => {
-          const typed = claim;
-          return {
-            type: typed.resource_type,
-            key: typed.resource_key,
-            sessionId: typed.session_id,
-            claimEpoch: typed.claim_epoch,
-            leaseUntilMs: typed.lease_until_ms
-          };
-        });
-        return {
-          sessionId: row.session_id,
-          sourceKey: row.source_key,
-          worktreeKey: row.worktree_key,
-          appRootKey: row.app_root_key,
-          state: row.state,
-          claimEpoch: row.claim_epoch,
-          authorityVersion: row.authority_version,
-          leaseUntilMs: row.lease_until_ms,
-          source: JSON.parse(row.source_json),
-          bindings: JSON.parse(row.bindings_json),
-          claims,
-          worker: {
-            instanceId: row.worker_instance,
-            pid: row.worker_pid,
-            birthAvailable: row.worker_birth !== null
-          }
-        };
-      }
-      countOtherOperationalSessions(sessionId) {
-        const rows = this.#database.prepare(`SELECT state FROM sessions
-         WHERE session_id <> ?`).all(sessionId);
-        return rows.filter((row) => typeof row.state === "string" && isOperationalState(row.state)).length;
-      }
-      isMetroEvidenceSocketReferencedByOtherSession(sessionId, path) {
-        const rows = this.#database.prepare(`SELECT bindings_json FROM sessions
-         WHERE session_id <> ? AND state <> 'released'`).all(sessionId);
-        return rows.some((row) => {
-          try {
-            return referencesMetroEvidenceSocket(JSON.parse(String(row.bindings_json)), path);
-          } catch {
-            return true;
-          }
-        });
-      }
-      // GH #706: released and proven-stale rows are not live sessions, so they never
-      // count towards the "multiple live sessions match this worktree" refusal.
-      findSessionsByWorktree(worktreeKey) {
-        const rows = this.#database.prepare(`SELECT session_id, supervisor_pid, supervisor_birth FROM sessions
-         WHERE worktree_key = ? AND state NOT IN ('released', 'stale')
-         ORDER BY updated_ms DESC`).all(worktreeKey);
-        return rows.filter((row) => !this.#supervisorProvenDead(row)).map((row) => this.getSessionStatus(row.session_id)).filter((status) => status !== null);
-      }
-      #supervisorProvenDead(row) {
-        try {
-          return this.#ownerStatus({
-            sessionId: row.session_id,
-            pid: row.supervisor_pid,
-            token: row.supervisor_birth
-          }) === "mismatch";
-        } catch {
-          return false;
-        }
-      }
-      getControllerBinding(session2) {
-        const row = this.#requireSession(session2);
-        return this.#controllerBinding(row);
-      }
-      getHandoffCancellationControllerBinding(session2) {
-        const row = this.#requireHandoffSession(session2);
-        return this.#controllerBinding(row);
-      }
-      #controllerBinding(row) {
-        return {
-          sessionId: row.session_id,
-          claimEpoch: row.claim_epoch,
-          authorityVersion: row.authority_version,
-          supervisor: { pid: row.supervisor_pid, token: row.supervisor_birth },
-          worker: {
-            instanceId: row.worker_instance,
-            pid: row.worker_pid,
-            token: row.worker_birth
-          }
-        };
-      }
-      beginSessionClose(session2) {
-        const now = this.#now();
-        const operationIds = this.#transaction(() => {
-          const current = this.#requireSession(session2);
-          const active = this.#database.prepare(`SELECT operation_id, profile FROM operations
-           WHERE session_id = ? AND claim_epoch = ? LIMIT 1`).get(session2.sessionId, session2.claimEpoch);
-          const bindings = JSON.parse(current.bindings_json);
-          this.#requireIntegrationRestored(bindings);
-          const metro = bindings.metroCleanup ?? bindings.metro;
-          if (active?.profile === "transition:ensure-metro" && metro?.mode !== "managed") {
-            throw new SessionAuthorityError("SESSION_OPERATION_ACTIVE", "managed Metro transition has not published exact cleanup authority");
-          }
-          const rows = this.#database.prepare(`SELECT operation_id FROM operations
-           WHERE session_id = ? AND claim_epoch = ?`).all(session2.sessionId, session2.claimEpoch);
-          this.#database.prepare("DELETE FROM operations WHERE session_id = ? AND claim_epoch = ?").run(session2.sessionId, session2.claimEpoch);
-          this.#database.prepare(`UPDATE sessions
-           SET state = 'closing', authority_version = authority_version + 1, updated_ms = ?
-           WHERE session_id = ? AND claim_epoch = ?`).run(now, session2.sessionId, session2.claimEpoch);
-          return rows.map((row) => String(row.operation_id));
-        });
-        for (const operationId of operationIds) {
-          this.#pendingPlatformReceipts.delete(operationId);
-        }
-        const status = this.getSessionStatus(session2.sessionId);
-        if (!status || status.state !== "closing") {
-          throw new SessionAuthorityError("SESSION_OWNER_LOST", "session close reservation did not persist");
-        }
-        return status;
-      }
-      completeSessionClose(session2) {
-        const now = this.#now();
-        this.#transaction(() => {
-          const row = asSession(this.#database.prepare("SELECT state, claim_epoch, bindings_json FROM sessions WHERE session_id = ?").get(session2.sessionId));
-          if (!row || row.state !== "closing" || row.claim_epoch !== session2.claimEpoch) {
-            throw new SessionAuthorityError("SESSION_OWNER_LOST", "only the unchanged closing session may be released");
-          }
-          this.#requireIntegrationRestored(JSON.parse(String(row.bindings_json)));
-          this.#database.prepare("DELETE FROM claims WHERE session_id = ? AND claim_epoch = ?").run(session2.sessionId, session2.claimEpoch);
-          this.#database.prepare(`UPDATE sessions
-           SET state = 'released', claim_epoch = claim_epoch + 1,
-               authority_version = authority_version + 1, updated_ms = ?
-           WHERE session_id = ? AND claim_epoch = ? AND state = 'closing'`).run(now, session2.sessionId, session2.claimEpoch);
-        });
-      }
-      releaseSession(session2) {
-        const now = this.#now();
-        this.#transaction(() => {
-          const current = this.#requireSession(session2);
-          this.#requireIntegrationRestored(JSON.parse(current.bindings_json));
-          const active = this.#database.prepare(`SELECT operation_id, profile FROM operations
-           WHERE session_id = ? AND claim_epoch = ? LIMIT 1`).get(session2.sessionId, session2.claimEpoch);
-          if (active && !String(active.profile).startsWith("transition:")) {
-            throw new SessionAuthorityError("SESSION_OPERATION_ACTIVE", "session cannot be released while an operation is active");
-          }
-          if (active) {
-            const context = this.#operationContext.getStore();
-            if (!context || context.operationId !== active.operation_id || context.sessionId !== session2.sessionId || context.claimEpoch !== session2.claimEpoch) {
-              throw new SessionAuthorityError("AUTHORITY_LOST_DURING_OPERATION", "session release is not owned by the active operation fence");
-            }
-            this.#database.prepare("DELETE FROM operations WHERE session_id = ? AND claim_epoch = ?").run(session2.sessionId, session2.claimEpoch);
-          }
-          this.#database.prepare("DELETE FROM claims WHERE session_id = ? AND claim_epoch = ?").run(session2.sessionId, session2.claimEpoch);
-          this.#database.prepare(`UPDATE sessions
-           SET state = 'released', claim_epoch = claim_epoch + 1,
-               authority_version = authority_version + 1, updated_ms = ?
-           WHERE session_id = ? AND claim_epoch = ?`).run(now, session2.sessionId, session2.claimEpoch);
-        });
-      }
-      #discardAbsentBlockedContenders(input) {
-        if (this.#findClaim("source", input.worktreeKey))
-          return;
-        const rows = this.#database.prepare(`SELECT session_id, claim_epoch FROM sessions
-         WHERE state = 'blocked' AND source_key = ? AND worktree_key = ? AND app_root_key = ?`).all(input.sourceKey, input.worktreeKey, input.appRootKey);
-        const now = this.#now();
-        for (const row of rows) {
-          const requirement = this.inspectRecoveryRequirement(row.session_id);
-          if (requirement.requirement !== "transport-restart" || requirement.priorOwner !== "absent") {
-            continue;
-          }
-          const owned = this.#database.prepare("SELECT resource_key FROM claims WHERE session_id = ? LIMIT 1").get(row.session_id);
-          if (owned)
-            continue;
-          this.#database.prepare(`UPDATE sessions
-           SET state = 'released', claim_epoch = claim_epoch + 1,
-               authority_version = authority_version + 1, updated_ms = ?
-           WHERE session_id = ? AND claim_epoch = ? AND state = 'blocked'`).run(now, row.session_id, row.claim_epoch);
-        }
-      }
-      discardBlockedSession(session2) {
-        const now = this.#now();
-        this.#transaction(() => {
-          const row = asSession(this.#database.prepare("SELECT state, claim_epoch FROM sessions WHERE session_id = ?").get(session2.sessionId));
-          if (!row || row.state !== "blocked" || row.claim_epoch !== session2.claimEpoch) {
-            throw new SessionAuthorityError("SESSION_OWNER_LOST", "only the unchanged blocked session may be discarded");
-          }
-          const claim = this.#database.prepare("SELECT resource_key FROM claims WHERE session_id = ? LIMIT 1").get(session2.sessionId);
-          if (claim) {
-            throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "blocked session unexpectedly owns resource claims");
-          }
-          this.#database.prepare(`UPDATE sessions
-           SET state = 'released', claim_epoch = claim_epoch + 1,
-               authority_version = authority_version + 1, updated_ms = ?
-           WHERE session_id = ? AND claim_epoch = ?`).run(now, session2.sessionId, session2.claimEpoch);
-        });
-      }
-      /** GH #792: the ownership picture headless recovery reports; releases nothing. */
-      inspectSourceOwnership(input) {
-        const abandonedContenders = this.#countAbandonedBlockedContenders(input.worktreeKey);
-        const claim = this.#findClaim("source", input.worktreeKey);
-        if (!claim)
-          return { owner: "absent", sameRoot: false, abandonedContenders };
-        const row = asSession(this.#database.prepare(`SELECT session_id, source_key, worktree_key, app_root_key, claim_epoch,
-                  supervisor_pid, supervisor_birth, source_json, bindings_json
-           FROM sessions WHERE session_id = ?`).get(claim.session_id));
-        if (!row)
-          return { owner: "absent", sameRoot: false, abandonedContenders };
-        const ownerAppRoot = readSourceAppRoot(row.source_json);
-        let status = "unknown";
-        try {
-          status = this.#ownerStatus({
-            sessionId: row.session_id,
-            pid: row.supervisor_pid,
-            token: row.supervisor_birth
-          });
-        } catch {
-          status = "unknown";
-        }
-        const blocked = readStartupCleanupBlocker(row.bindings_json);
-        const sameAppRoot = row.worktree_key === input.worktreeKey && row.app_root_key === input.appRootKey;
-        const sameSource2 = row.source_key === input.sourceKey;
-        return {
-          owner: status === "match" ? "live" : status === "mismatch" ? "stale" : "unprovable",
-          sameRoot: sameAppRoot && sameSource2,
-          ...sameAppRoot ? sameSource2 ? {} : { mismatch: "source-identity" } : { mismatch: "app-root" },
-          abandonedContenders,
-          holder: {
-            session: row.session_id.slice(0, 12),
-            ...ownerAppRoot === void 0 ? {} : { appRoot: ownerAppRoot }
-          },
-          ...blocked ? { startupCleanupBlocked: blocked } : {}
-        };
-      }
-      #countAbandonedBlockedContenders(worktreeKey) {
-        const rows = this.#database.prepare(`SELECT session_id, supervisor_pid, supervisor_birth FROM sessions
-         WHERE worktree_key = ? AND state = 'blocked'
-           AND NOT EXISTS (SELECT 1 FROM claims WHERE claims.session_id = sessions.session_id)`).all(worktreeKey);
-        return rows.filter((row) => this.#supervisorProvenDead(row)).length;
-      }
-      /**
-       * GH #792: a blocked contender holds no authority, so an abandoned row must not survive
-       * as the next attempt's prior owner. Proven-dead and claim-less only.
-       */
-      discardAbandonedBlockedContenders(worktreeKey) {
-        const rows = this.#database.prepare(`SELECT session_id, claim_epoch, supervisor_pid, supervisor_birth
-         FROM sessions WHERE worktree_key = ? AND state = 'blocked'
-         ORDER BY updated_ms ASC`).all(worktreeKey);
-        const discarded = [];
-        for (const row of rows) {
-          if (!this.#supervisorProvenDead(row))
-            continue;
-          try {
-            const now = this.#now();
-            const released = this.#transaction(() => {
-              const claim = this.#database.prepare("SELECT resource_key FROM claims WHERE session_id = ? LIMIT 1").get(row.session_id);
-              if (claim)
-                return false;
-              const update = this.#database.prepare(`UPDATE sessions
-               SET state = 'released', claim_epoch = claim_epoch + 1,
-                   authority_version = authority_version + 1, updated_ms = ?
-               WHERE session_id = ? AND claim_epoch = ? AND state = 'blocked'`).run(now, row.session_id, row.claim_epoch);
-              return update.changes === 1;
-            });
-            if (released)
-              discarded.push(row.session_id);
-          } catch {
-          }
-        }
-        return discarded;
-      }
-      prepareHandoff(session2, input) {
-        const now = this.#now();
-        const handoffId = randomBytes4(16).toString("hex");
-        const token2 = randomBytes4(32).toString("base64url");
-        const tokenHash = createHash8("sha256").update(token2).digest("hex");
-        this.#transaction(() => {
-          const current = this.#requireSession(session2);
-          let targetInstance = input.targetInstance;
-          if (input.targetHandle) {
-            const targets = this.#database.prepare(`SELECT session_id, bindings_json FROM sessions
-             WHERE state = 'blocked' AND source_key = ? AND worktree_key = ? AND app_root_key = ?`).all(current.source_key, current.worktree_key, current.app_root_key);
-            for (const target of targets) {
-              const bindings = JSON.parse(target.bindings_json);
-              const handles = bindings.recoveryHandles;
-              const handle = handles?.handoffRecipient;
-              if (handle && this.#recoveryHandleMatches(handle, input.targetHandle, now)) {
-                targetInstance = typeof handle.workerInstance === "string" ? handle.workerInstance : void 0;
-                this.#database.prepare("UPDATE sessions SET bindings_json = ? WHERE session_id = ?").run(JSON.stringify({
-                  ...bindings,
-                  recoveryHandles: { ...handles, handoffRecipient: null }
-                }), target.session_id);
-                break;
-              }
-            }
-          }
-          if (!targetInstance) {
-            throw new SessionAuthorityError("HANDOFF_TARGET_MISMATCH", "handoff recipient capability is invalid or expired");
-          }
-          const active = this.#database.prepare(`SELECT operation_id, profile FROM operations
-           WHERE session_id = ? AND claim_epoch = ? LIMIT 1`).get(session2.sessionId, session2.claimEpoch);
-          if (active && !String(active.profile).startsWith("transition:")) {
-            throw new SessionAuthorityError("SESSION_OPERATION_ACTIVE", "session cannot enter handoff while an operation is active");
-          }
-          this.#database.prepare(`INSERT INTO handoffs(
-            handoff_id, session_id, claim_epoch, target_instance,
-            token_hash, source_state, expires_ms, consumed_ms
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL)`).run(handoffId, session2.sessionId, session2.claimEpoch, targetInstance, tokenHash, this.#requireSession(session2).state, now + (input.ttlMs ?? 15e3));
-          this.#database.prepare(`UPDATE sessions
-           SET state = 'handoff', authority_version = authority_version + 1, updated_ms = ?
-           WHERE session_id = ? AND claim_epoch = ?`).run(now, session2.sessionId, session2.claimEpoch);
-          this.#advanceActiveOperationFence(session2, current.authority_version, current.authority_version + 1);
-        });
-        return { handoffId, token: token2 };
-      }
-      prepareHandoffForHandle(session2, input) {
-        return this.prepareHandoff(session2, input);
-      }
-      cancelHandoff(session2, handoffId) {
-        const now = this.#now();
-        this.#transaction(() => {
-          const handoff = this.#database.prepare(`SELECT session_id, claim_epoch, source_state, consumed_ms
-           FROM handoffs WHERE handoff_id = ?`).get(handoffId);
-          if (!handoff || handoff.session_id !== session2.sessionId || handoff.claim_epoch !== session2.claimEpoch) {
-            throw new SessionAuthorityError("HANDOFF_NOT_FOUND", "handoff does not belong to session");
-          }
-          if (handoff.consumed_ms !== null) {
-            throw new SessionAuthorityError("HANDOFF_ALREADY_CONSUMED", "handoff is already terminal");
-          }
-          const row = asSession(this.#database.prepare(`SELECT state, claim_epoch, authority_version, bindings_json
-             FROM sessions WHERE session_id = ?`).get(session2.sessionId));
-          if (!row || row.state !== "handoff" || row.claim_epoch !== session2.claimEpoch) {
-            throw new SessionAuthorityError("SESSION_OWNER_LOST", "handoff source owner changed");
-          }
-          const bindings = JSON.parse(row.bindings_json);
-          if (bindings.managedMetroHandoffReservation) {
-            throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "handoff cancellation is fenced while managed Metro shutdown is reserved");
-          }
-          this.#database.prepare(`UPDATE sessions
-           SET state = ?, authority_version = authority_version + 1, updated_ms = ?
-           WHERE session_id = ? AND claim_epoch = ?`).run(handoff.source_state, now, session2.sessionId, session2.claimEpoch);
-          this.#database.prepare("UPDATE handoffs SET consumed_ms = ? WHERE handoff_id = ?").run(now, handoffId);
-          this.#advanceActiveOperationFence(session2, row.authority_version, row.authority_version + 1);
-        });
-      }
-      getHandoffOwner(handoffId) {
-        const row = this.#database.prepare("SELECT session_id FROM handoffs WHERE handoff_id = ?").get(handoffId);
-        return typeof row?.session_id === "string" ? row.session_id : null;
-      }
-      reserveManagedMetroHandoffCleanup(target, input) {
-        const now = this.#now();
-        return this.#transaction(() => {
-          const context = this.#requireHandoffIntoContext(target, input, {
-            allowExactReservationAfterExpiry: true,
-            commitRecipientRotation: true
-          });
-          const active = this.#database.prepare(`SELECT operation_id FROM operations
-           WHERE session_id = ?
-              OR (session_id = ? AND profile NOT LIKE 'transition:%')
-           LIMIT 1`).get(context.prior.session_id, target.sessionId);
-          if (active) {
-            throw new SessionAuthorityError("SESSION_OPERATION_ACTIVE", "handoff cleanup cannot be reserved while either session has an active operation");
-          }
-          const managedMetro = context.bindings.metro && typeof context.bindings.metro === "object" && context.bindings.metro.mode === "managed" ? context.bindings.metro : null;
-          if (!managedMetro)
-            return null;
-          if (context.reservation)
-            return context.reservation;
-          const reservation = {
-            handoffId: context.handoff.handoff_id,
-            sourceClaimEpoch: context.handoff.claim_epoch,
-            targetSessionId: target.sessionId,
-            targetClaimEpoch: target.claimEpoch,
-            targetInstance: input.targetInstance,
-            phase: "shutdown_reserved",
-            metro: {
-              ...managedMetro,
-              sourceSessionId: context.prior.session_id,
-              stopRequestedAt: now,
-              completedAt: null
-            }
-          };
-          this.#database.prepare(`UPDATE sessions
-           SET bindings_json = ?, authority_version = authority_version + 1, updated_ms = ?
-           WHERE session_id = ? AND claim_epoch = ? AND state = 'handoff'`).run(JSON.stringify({
-            ...context.bindings,
-            managedMetroHandoffReservation: reservation
-          }), now, context.prior.session_id, context.prior.claim_epoch);
-          return reservation;
-        });
-      }
-      completeManagedMetroHandoffCleanup(target, input) {
-        const now = this.#now();
-        return this.#transaction(() => {
-          const context = this.#requireHandoffIntoContext(target, input, {
-            allowExactReservationAfterExpiry: true,
-            commitRecipientRotation: true
-          });
-          const reservation = context.reservation;
-          if (!reservation) {
-            throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "managed Metro shutdown has no durable handoff reservation");
-          }
-          if (reservation.phase === "shutdown_completed")
-            return reservation;
-          const completed = {
-            ...reservation,
-            phase: "shutdown_completed",
-            metro: { ...reservation.metro, completedAt: now }
-          };
-          this.#database.prepare(`UPDATE sessions
-           SET bindings_json = ?, authority_version = authority_version + 1, updated_ms = ?
-           WHERE session_id = ? AND claim_epoch = ? AND state = 'handoff'`).run(JSON.stringify({
-            ...context.bindings,
-            managedMetroHandoffReservation: completed
-          }), now, context.prior.session_id, context.prior.claim_epoch);
-          return completed;
-        });
-      }
-      refuseManagedMetroHandoffCleanup(target, input) {
-        const now = this.#now();
-        this.#transaction(() => {
-          const context = this.#requireHandoffIntoContext(target, input, {
-            allowExactReservationAfterExpiry: true,
-            commitRecipientRotation: true
-          });
-          const reservation = context.reservation;
-          if (!reservation || reservation.phase !== "shutdown_reserved") {
-            throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "managed Metro shutdown refusal does not match an active reservation");
-          }
-          const sourceState2 = this.#database.prepare("SELECT source_state FROM handoffs WHERE handoff_id = ?").get(input.handoffId);
-          if (typeof sourceState2?.source_state !== "string") {
-            throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "handoff source state is unavailable for donor restoration");
-          }
-          this.#database.prepare(`UPDATE sessions
-           SET state = ?, bindings_json = ?, authority_version = authority_version + 1,
-               updated_ms = ?
-           WHERE session_id = ? AND claim_epoch = ? AND state = 'handoff'`).run(sourceState2.source_state, JSON.stringify({
-            ...context.bindings,
-            managedMetroHandoffReservation: null
-          }), now, context.prior.session_id, context.prior.claim_epoch);
-          this.#database.prepare("UPDATE handoffs SET consumed_ms = ? WHERE handoff_id = ?").run(now, input.handoffId);
-        });
-      }
-      validateHandoffInto(target, input) {
-        this.#transaction(() => {
-          this.#requireHandoffIntoContext(target, input, {
-            allowExactReservationAfterExpiry: false,
-            commitRecipientRotation: false
-          });
-        });
-      }
-      validateHandoffCleanupResumption(target, input) {
-        this.#transaction(() => {
-          const row = asSession(this.#database.prepare(`SELECT state, claim_epoch, worker_instance, bindings_json
-             FROM sessions WHERE session_id = ?`).get(target.sessionId));
-          const bindings = row ? JSON.parse(row.bindings_json) : {};
-          const cleanup = bindings.handoffCleanup && typeof bindings.handoffCleanup === "object" ? bindings.handoffCleanup : null;
-          const handoff = this.#database.prepare("SELECT token_hash, consumed_ms FROM handoffs WHERE handoff_id = ?").get(input.handoffId);
-          const expected = Buffer.from(typeof handoff?.token_hash === "string" ? handoff.token_hash : "", "hex");
-          const actual = createHash8("sha256").update(input.token).digest();
-          const tokenMatches = expected.length === actual.length && timingSafeEqual4(expected, actual);
-          if (!row || row.state !== "handoff_cleanup" || row.claim_epoch !== target.claimEpoch || row.worker_instance !== input.targetInstance || cleanup?.handoffId !== input.handoffId || cleanup?.targetSessionId !== target.sessionId || cleanup?.targetClaimEpoch !== target.claimEpoch || typeof handoff?.consumed_ms !== "number" || !tokenMatches) {
-            throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "handoff cleanup resumption requires the original handoff capability");
-          }
-        });
-      }
-      acceptHandoff(input) {
-        const now = this.#now();
-        return this.#transaction(() => {
-          const handoff = this.#database.prepare(`SELECT handoff_id, session_id, claim_epoch, target_instance,
-                  token_hash, expires_ms, consumed_ms
-           FROM handoffs WHERE handoff_id = ?`).get(input.handoffId);
-          if (!handoff) {
-            throw new SessionAuthorityError("HANDOFF_NOT_FOUND", "handoff does not exist");
-          }
-          if (handoff.consumed_ms !== null) {
-            throw new SessionAuthorityError("HANDOFF_ALREADY_CONSUMED", "handoff was already accepted");
-          }
-          if (handoff.expires_ms < now) {
-            throw new SessionAuthorityError("HANDOFF_EXPIRED", "handoff capability expired");
-          }
-          if (handoff.target_instance !== input.targetInstance) {
-            throw new SessionAuthorityError("HANDOFF_TARGET_MISMATCH", "handoff target instance does not match");
-          }
-          const expected = Buffer.from(handoff.token_hash, "hex");
-          const actual = Buffer.from(createHash8("sha256").update(input.token).digest("hex"), "hex");
-          if (expected.length !== actual.length || !timingSafeEqual4(expected, actual)) {
-            throw new SessionAuthorityError("HANDOFF_TOKEN_INVALID", "handoff capability is invalid");
-          }
-          const session2 = asSession(this.#database.prepare(`SELECT session_id, state, claim_epoch, authority_version,
-                    supervisor_pid, supervisor_birth, lease_until_ms, bindings_json
-             FROM sessions WHERE session_id = ?`).get(handoff.session_id));
-          if (!session2 || session2.state !== "handoff" || session2.claim_epoch !== handoff.claim_epoch) {
-            throw new SessionAuthorityError("SESSION_OWNER_LOST", "handoff no longer matches the session claim epoch");
-          }
-          const sessionBindings = JSON.parse(session2.bindings_json);
-          if (sessionBindings.metro && typeof sessionBindings.metro === "object" && sessionBindings.metro.mode === "managed") {
-            throw new SessionAuthorityError("METRO_AUTHORITY_MISMATCH", "managed Metro handoff requires durable cleanup through a blocked recipient");
-          }
-          const nextEpoch = session2.claim_epoch + 1;
-          const leaseUntil = now + this.#leaseMs;
-          this.#database.prepare(`DELETE FROM claims
-           WHERE session_id = ? AND claim_epoch = ?
-             AND resource_type NOT IN ('source', 'metro-port', 'observe-port', 'device', 'recorder')`).run(session2.session_id, session2.claim_epoch);
-          this.#database.prepare(`UPDATE claims SET claim_epoch = ?, lease_until_ms = ?
-           WHERE session_id = ? AND claim_epoch = ?`).run(nextEpoch, leaseUntil, session2.session_id, session2.claim_epoch);
-          this.#database.prepare(`UPDATE sessions
-           SET state = 'source_bound', claim_epoch = ?, authority_version = authority_version + 1,
-               supervisor_pid = ?, supervisor_birth = ?, heartbeat_ms = ?,
-               lease_until_ms = ?, bindings_json = ?, updated_ms = ?
-           WHERE session_id = ? AND claim_epoch = ?`).run(nextEpoch, input.supervisor.pid, input.supervisor.token, now, leaseUntil, JSON.stringify({
-            ...sessionBindings,
-            bundle: null,
-            runner: null,
-            observe: null,
-            proof: null,
-            pendingBuild: null
-          }), now, session2.session_id, session2.claim_epoch);
-          this.#database.prepare("UPDATE handoffs SET consumed_ms = ? WHERE handoff_id = ?").run(now, handoff.handoff_id);
-          return { sessionId: session2.session_id, claimEpoch: nextEpoch };
-        });
-      }
-      acceptHandoffInto(target, input) {
-        const now = this.#now();
-        return this.#transaction(() => {
-          const context = this.#requireHandoffIntoContext(target, input, {
-            allowExactReservationAfterExpiry: true,
-            commitRecipientRotation: true
-          });
-          const { targetRow, handoff, prior, bindings } = context;
-          const active = this.#database.prepare(`SELECT operation_id FROM operations
-           WHERE session_id = ?
-              OR (session_id = ? AND profile NOT LIKE 'transition:%')
-           LIMIT 1`).get(prior.session_id, target.sessionId);
-          if (active) {
-            throw new SessionAuthorityError("SESSION_OPERATION_ACTIVE", "handoff cannot transfer while either session has an active operation");
-          }
-          const priorRunnerClaim = this.#database.prepare(`SELECT resource_key FROM claims
-           WHERE session_id = ? AND claim_epoch = ? AND resource_type = 'runner'`).get(prior.session_id, prior.claim_epoch);
-          if (bindingsRunnerPresent(prior.bindings_json) && !priorRunnerClaim?.resource_key) {
-            throw new SessionAuthorityError("RUNNER_OWNERSHIP_MISMATCH", "handoff runner binding has no exclusive cleanup claim");
-          }
-          const managedMetro = bindings.metro && typeof bindings.metro === "object" && bindings.metro.mode === "managed" ? bindings.metro : null;
-          if (managedMetro && (!context.reservation || context.reservation.phase !== "shutdown_completed" || typeof context.reservation.metro.completedAt !== "number")) {
-            throw new SessionAuthorityError("METRO_AUTHORITY_MISMATCH", "managed Metro shutdown reservation must be durably completed before ownership transfers");
-          }
-          const priorRecorderClaim = this.#database.prepare(`SELECT resource_key FROM claims
-           WHERE session_id = ? AND claim_epoch = ? AND resource_type = 'recorder'`).get(prior.session_id, prior.claim_epoch);
-          if (bindings.recorder && !priorRecorderClaim?.resource_key) {
-            throw new SessionAuthorityError("RECORDING_AUTHORITY_MISMATCH", "handoff recorder binding has no exclusive cleanup claim");
-          }
-          this.#database.prepare(`DELETE FROM claims
-           WHERE session_id = ? AND claim_epoch = ?`).run(target.sessionId, target.claimEpoch);
-          this.#database.prepare(`DELETE FROM claims
-           WHERE session_id = ? AND claim_epoch = ?
-             AND resource_type NOT IN ('source', 'metro-port', 'observe-port', 'device', 'runner', 'recorder')`).run(prior.session_id, prior.claim_epoch);
-          this.#database.prepare(`UPDATE claims SET session_id = ?, claim_epoch = ?, lease_until_ms = ?
-           WHERE session_id = ? AND claim_epoch = ?`).run(target.sessionId, target.claimEpoch, now + this.#leaseMs, prior.session_id, prior.claim_epoch);
-          const targetBindings = JSON.parse(targetRow.bindings_json);
-          this.#database.prepare(`UPDATE sessions
-           SET state = 'handoff_cleanup', bindings_json = ?,
-               authority_version = authority_version + 1, updated_ms = ?
-           WHERE session_id = ? AND claim_epoch = ?`).run(JSON.stringify({
-            ...bindings,
-            managedMetroHandoffReservation: null,
-            metro: managedMetro ? null : bindings.metro,
-            bundle: null,
-            runner: null,
-            recorder: null,
-            observe: null,
-            proof: null,
-            pendingBuild: null,
-            recoveryCapabilityHash: targetBindings.recoveryCapabilityHash,
-            handoffCleanup: {
-              handoffId: handoff.handoff_id,
-              targetSessionId: target.sessionId,
-              targetClaimEpoch: target.claimEpoch,
-              metro: null,
-              observe: bindings.observe && typeof bindings.observe === "object" ? {
-                ...bindings.observe,
-                stopRequestedAt: null,
-                completedAt: null
-              } : null,
-              runner: bindings.runner && typeof bindings.runner === "object" ? {
-                ...bindings.runner,
-                claimKey: priorRunnerClaim?.resource_key,
-                stopRequestedAt: null,
-                completedAt: null
-              } : null,
-              recorder: bindings.recorder && typeof bindings.recorder === "object" ? {
-                ...bindings.recorder,
-                claimKey: priorRecorderClaim?.resource_key,
-                stopRequestedAt: null,
-                completedAt: null
-              } : null
-            }
-          }), now, target.sessionId, target.claimEpoch);
-          this.#database.prepare(`UPDATE sessions
-           SET state = 'released', claim_epoch = claim_epoch + 1,
-               authority_version = authority_version + 1, updated_ms = ?
-           WHERE session_id = ? AND claim_epoch = ?`).run(now, prior.session_id, prior.claim_epoch);
-          this.#database.prepare("UPDATE handoffs SET consumed_ms = ? WHERE handoff_id = ?").run(now, handoff.handoff_id);
-          return {
-            ...this.getSessionStatus(target.sessionId)?.bindings.handoffCleanup
-          };
-        });
-      }
-      beginHandoffCleanupResource(target, targetInstance, resource) {
-        const now = this.#now();
-        return this.#transaction(() => {
-          const row = this.#requireHandoffCleanupOwner(target, targetInstance);
-          const bindings = JSON.parse(row.bindings_json);
-          const cleanup = bindings.handoffCleanup;
-          const current = cleanup?.[resource];
-          if (!current || typeof current !== "object")
-            return null;
-          const binding = current;
-          if (typeof binding.completedAt === "number")
-            return binding;
-          if (resource === "runner") {
-            const claimKey = String(binding.claimKey ?? "");
-            const expectedClaimKey = `${String(binding.platform)}:${String(binding.deviceId)}:${String(binding.port)}`;
-            const claim = this.#findClaim("runner", claimKey);
-            if (!claimKey || claimKey !== expectedClaimKey || claim?.session_id !== target.sessionId || claim.claim_epoch !== target.claimEpoch || typeof binding.capability !== "string" || typeof binding.instanceId !== "string") {
-              throw new SessionAuthorityError("RUNNER_OWNERSHIP_MISMATCH", "handoff runner cleanup claim no longer matches the authenticated binding");
-            }
-          }
-          if (resource === "recorder") {
-            const claimKey = String(binding.claimKey ?? "");
-            const expectedClaimKey = `${String(binding.platform)}:${String(binding.deviceId)}`;
-            const claim = this.#findClaim("recorder", claimKey);
-            if (!claimKey || claimKey !== expectedClaimKey || claim?.session_id !== target.sessionId || claim.claim_epoch !== target.claimEpoch || typeof binding.scope !== "string" || binding.phase !== "starting" && typeof binding.processBirth !== "string") {
-              throw new SessionAuthorityError("RECORDING_AUTHORITY_MISMATCH", "handoff recorder cleanup claim no longer matches the authenticated binding");
-            }
-          }
-          if (resource === "metro") {
-            const claim = this.#findClaim("metro-port", String(binding.port));
-            if (binding.port !== bindings.metroPort || claim?.session_id !== target.sessionId || claim.claim_epoch !== target.claimEpoch) {
-              throw new SessionAuthorityError("METRO_AUTHORITY_MISMATCH", "handoff Metro cleanup claim no longer matches the authenticated binding");
-            }
-          }
-          if (resource === "observe") {
-            const claim = this.#findClaim("observe-port", String(binding.port));
-            if (binding.port !== bindings.observePort || claim?.session_id !== target.sessionId || claim.claim_epoch !== target.claimEpoch) {
-              throw new SessionAuthorityError("OBSERVE_AUTHORITY_MISMATCH", "handoff Observe cleanup claim no longer matches the authenticated binding");
-            }
-          }
-          const requested = {
-            ...binding,
-            stopRequestedAt: typeof binding.stopRequestedAt === "number" ? binding.stopRequestedAt : now
-          };
-          this.#database.prepare(`UPDATE sessions SET bindings_json = ?, updated_ms = ?
-           WHERE session_id = ? AND claim_epoch = ? AND state = 'handoff_cleanup'`).run(JSON.stringify({
-            ...bindings,
-            handoffCleanup: { ...cleanup, [resource]: requested }
-          }), now, target.sessionId, target.claimEpoch);
-          return requested;
-        });
-      }
-      completeHandoffCleanupResource(target, targetInstance, resource) {
-        const now = this.#now();
-        this.#transaction(() => {
-          const row = this.#requireHandoffCleanupOwner(target, targetInstance);
-          const bindings = JSON.parse(row.bindings_json);
-          const cleanup = bindings.handoffCleanup;
-          const current = cleanup?.[resource];
-          if (!current || typeof current !== "object")
-            return;
-          const binding = current;
-          if (typeof binding.stopRequestedAt !== "number") {
-            throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", `${resource} cleanup was not durably requested`);
-          }
-          if (typeof binding.completedAt === "number")
-            return;
-          if (resource === "runner") {
-            this.#database.prepare(`DELETE FROM claims
-             WHERE resource_type = 'runner' AND resource_key = ?
-               AND session_id = ? AND claim_epoch = ?`).run(String(binding.claimKey), target.sessionId, target.claimEpoch);
-          }
-          if (resource === "recorder") {
-            this.#database.prepare(`DELETE FROM claims
-             WHERE resource_type = 'recorder' AND resource_key = ?
-               AND session_id = ? AND claim_epoch = ?`).run(String(binding.claimKey), target.sessionId, target.claimEpoch);
-          }
-          this.#database.prepare(`UPDATE sessions SET bindings_json = ?, updated_ms = ?
-           WHERE session_id = ? AND claim_epoch = ? AND state = 'handoff_cleanup'`).run(JSON.stringify({
-            ...bindings,
-            handoffCleanup: {
-              ...cleanup,
-              [resource]: { ...binding, completedAt: now }
-            }
-          }), now, target.sessionId, target.claimEpoch);
-        });
-      }
-      finishHandoffCleanup(target, targetInstance) {
-        const now = this.#now();
-        this.#transaction(() => {
-          const row = asSession(this.#database.prepare(`SELECT state, claim_epoch, worker_instance, bindings_json
-             FROM sessions WHERE session_id = ?`).get(target.sessionId));
-          if (!row || row.state !== "handoff_cleanup" || row.claim_epoch !== target.claimEpoch || row.worker_instance !== targetInstance) {
-            throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "handoff cleanup is not owned by this recovery worker");
-          }
-          const bindings = JSON.parse(row.bindings_json);
-          const cleanup = bindings.handoffCleanup;
-          for (const resource of ["metro", "runner", "observe", "recorder"]) {
-            const binding = cleanup?.[resource];
-            if (binding && typeof binding === "object" && typeof binding.completedAt !== "number") {
-              throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", `${resource} cleanup has not been durably completed`);
-            }
-          }
-          const staleDeviceCleanup = bindings.staleDeviceCleanup;
-          if (staleDeviceCleanup && typeof staleDeviceCleanup.platform === "string" && typeof staleDeviceCleanup.deviceId === "string") {
-            const deviceKey = `${staleDeviceCleanup.platform}:${staleDeviceCleanup.deviceId}`;
-            for (const claim of this.#deviceFamilyClaims(deviceKey)) {
-              if (claim.session_id !== target.sessionId || claim.claim_epoch !== target.claimEpoch) {
-                continue;
-              }
-              this.#database.prepare(`DELETE FROM claims
-               WHERE resource_type = ? AND resource_key = ?
-                 AND session_id = ? AND claim_epoch = ?`).run(claim.resource_type, claim.resource_key, target.sessionId, target.claimEpoch);
-            }
-          }
-          this.#database.prepare(`UPDATE sessions
-           SET state = 'source_bound', bindings_json = ?,
-               authority_version = authority_version + 1, updated_ms = ?
-           WHERE session_id = ? AND claim_epoch = ? AND state = 'handoff_cleanup'`).run(JSON.stringify({
-            ...bindings,
-            handoffCleanup: null,
-            recoveryHandles: null,
-            staleDeviceCleanup: null,
-            staleDeviceRelease: null
-          }), now, target.sessionId, target.claimEpoch);
-        });
-      }
-      recordPlatformAuthorityReceipt(session2, platform, receipt2) {
-        const operation = this.#operationContext.getStore();
-        if (!operation || operation.sessionId !== session2.sessionId || operation.claimEpoch !== session2.claimEpoch) {
-          throw new SessionAuthorityError("AUTHORITY_LOST_DURING_OPERATION", "platform receipt recording requires the active operation fence");
-        }
-        this.verifyOperation(operation);
-        const staged = this.#platformReceiptFromCurrentAuthority(session2, platform, receipt2);
-        const pending2 = this.#pendingPlatformReceipts.get(operation.operationId) ?? [];
-        pending2.push(staged);
-        this.#pendingPlatformReceipts.set(operation.operationId, pending2);
-      }
-      commitPlatformAuthorityReceipts(operation) {
-        const pending2 = this.#pendingPlatformReceipts.get(operation.operationId) ?? [];
-        if (pending2.length === 0)
-          return;
-        const now = this.#now();
-        this.#transaction(() => {
-          this.verifyOperation(operation);
-          for (const staged of pending2) {
-            const current = this.#platformReceiptFromCurrentAuthority(staged.session, staged.platform, staged.receipt);
-            this.#invalidatePlatformReceipt(staged.session, staged.platform);
-            this.#database.prepare(`INSERT INTO platform_authority_receipts(
-               session_id, claim_epoch, platform, receipt_json, updated_ms
-             ) VALUES (?, ?, ?, ?, ?)
-             ON CONFLICT(session_id, platform) DO UPDATE SET
-               claim_epoch = excluded.claim_epoch,
-               receipt_json = excluded.receipt_json,
-               updated_ms = excluded.updated_ms`).run(staged.session.sessionId, staged.session.claimEpoch, staged.platform, JSON.stringify({ receipt: staged.receipt, probe: current.probe }), now);
-          }
-        });
-        this.#pendingPlatformReceipts.delete(operation.operationId);
-      }
-      validatePlatformAuthorityReceipt(session2, platform, receipt2) {
-        const row = this.#database.prepare(`SELECT claim_epoch, receipt_json FROM platform_authority_receipts
-         WHERE session_id = ? AND platform = ?`).get(session2.sessionId, platform);
-        const persisted = typeof row?.receipt_json === "string" ? JSON.parse(row.receipt_json) : null;
-        const persistedReceipt = persisted?.receipt && typeof persisted.receipt === "object" ? persisted.receipt : persisted;
-        return row?.claim_epoch === session2.claimEpoch && JSON.stringify(persistedReceipt) === JSON.stringify(receipt2);
-      }
-      getPlatformAuthorityProbe(session2, platform, receipt2) {
-        if (!this.validatePlatformAuthorityReceipt(session2, platform, receipt2))
-          return null;
-        const row = this.#database.prepare(`SELECT receipt_json FROM platform_authority_receipts
-         WHERE session_id = ? AND claim_epoch = ? AND platform = ?`).get(session2.sessionId, session2.claimEpoch, platform);
-        if (typeof row?.receipt_json !== "string")
-          return null;
-        const persisted = JSON.parse(row.receipt_json);
-        const probe = persisted.probe;
-        if (!probe || createHash8("sha256").update(probe.capability).digest("hex") !== receipt2.runnerCapabilityHash) {
-          return null;
-        }
-        return probe;
-      }
-      adoptStaleIntoBlocked(target, priorSessionId, targetInstance, options = {}) {
-        const priorStatus = this.getSessionStatus(priorSessionId);
-        if (!priorStatus) {
-          throw new SessionAuthorityError("SESSION_OWNER_LOST", "stale session is unavailable");
-        }
-        const owner = asSession(this.#database.prepare(`SELECT supervisor_pid, supervisor_birth FROM sessions WHERE session_id = ?`).get(priorSessionId));
-        if (!owner || this.#ownerStatus({
-          sessionId: priorSessionId,
-          pid: owner.supervisor_pid,
-          token: owner.supervisor_birth
-        }) !== "mismatch") {
-          throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "prior source owner is not proven stale");
-        }
-        const now = this.#now();
-        this.#transaction(() => {
-          const targetRow = this.#requireRecoverableSession(target);
-          if (targetRow.state !== "blocked") {
-            throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "stale adoption is not available during handoff cleanup");
-          }
-          if (options.expectedTargetAuthorityVersion !== void 0 && targetRow.authority_version !== options.expectedTargetAuthorityVersion) {
-            throw new SessionAuthorityError("AUTHORITY_LOST_DURING_OPERATION", "session authority version changed after the adoption preflight proof");
-          }
-          if (targetRow.worker_instance !== targetInstance) {
-            throw new SessionAuthorityError("HANDOFF_TARGET_MISMATCH", "stale adoption target is not the recovery worker");
-          }
-          const prior = asSession(this.#database.prepare(`SELECT session_id, source_key, worktree_key, app_root_key, state,
-                    claim_epoch, bindings_json
-             FROM sessions WHERE session_id = ?`).get(priorSessionId));
-          if (!prior || prior.claim_epoch !== priorStatus.claimEpoch || prior.source_key !== targetRow.source_key || prior.worktree_key !== targetRow.worktree_key || prior.app_root_key !== targetRow.app_root_key) {
-            throw new SessionAuthorityError("SOURCE_WORKTREE_MISMATCH", "stale session does not belong to this exact source worktree");
-          }
-          const priorBindings = JSON.parse(prior.bindings_json);
-          const targetBindings = JSON.parse(targetRow.bindings_json);
-          const priorStaleDeviceCleanup = priorBindings.staleDeviceCleanup && typeof priorBindings.staleDeviceCleanup === "object" ? priorBindings.staleDeviceCleanup : null;
-          const priorCleanup = priorBindings.handoffCleanup && typeof priorBindings.handoffCleanup === "object" ? priorBindings.handoffCleanup : null;
-          const resumesCleanup = prior.state === "handoff_cleanup" && priorCleanup !== null;
-          if (prior.state === "handoff_cleanup" && !resumesCleanup) {
-            throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "stale handoff cleanup state has no durable cleanup plan");
-          }
-          if (resumesCleanup) {
-            const mergedCleanup = this.#mergeStaleDeviceCleanup(priorCleanup, priorStaleDeviceCleanup);
-            const resumesMetroCleanup = mergedCleanup.metro !== null && typeof mergedCleanup.metro === "object";
-            this.#database.prepare(`UPDATE claims SET session_id = ?, claim_epoch = ?, lease_until_ms = ?
-             WHERE session_id = ? AND claim_epoch = ?`).run(target.sessionId, target.claimEpoch, now + this.#leaseMs, prior.session_id, prior.claim_epoch);
-            this.#database.prepare(`UPDATE sessions
-             SET state = 'handoff_cleanup', bindings_json = ?,
-                 authority_version = authority_version + 1, updated_ms = ?
-             WHERE session_id = ? AND claim_epoch = ? AND state = 'blocked'`).run(JSON.stringify({
-              ...targetBindings,
-              adoptionRequired: null,
-              recoveryHandles: targetBindings.recoveryHandles,
-              metro: resumesMetroCleanup ? null : priorBindings.metro ?? null,
-              metroCleanup: resumesMetroCleanup ? null : priorBindings.metroCleanup ?? null,
-              device: priorBindings.device ?? null,
-              install: priorBindings.install ?? null,
-              packageIntegration: priorBindings.packageIntegration ?? null,
-              bundle: null,
-              runner: null,
-              recorder: null,
-              observe: null,
-              proof: null,
-              handoffCleanup: mergedCleanup,
-              staleDeviceCleanup: priorStaleDeviceCleanup
-            }), now, target.sessionId, target.claimEpoch);
-            this.#fenceSession(prior.session_id, now);
-            return;
-          }
-          const activeOperation = this.#database.prepare(`SELECT profile FROM operations
-           WHERE session_id = ? AND claim_epoch = ? LIMIT 1`).get(prior.session_id, prior.claim_epoch);
-          const priorMetro = priorBindings.metro && typeof priorBindings.metro === "object" ? priorBindings.metro : null;
-          const metroCleanup = priorBindings.metroCleanup && typeof priorBindings.metroCleanup === "object" ? priorBindings.metroCleanup : priorMetro?.mode === "managed" ? priorMetro : null;
-          const runnerCleanup = priorBindings.runner && typeof priorBindings.runner === "object" ? priorBindings.runner : priorStaleDeviceCleanup?.runner && typeof priorStaleDeviceCleanup.runner === "object" ? priorStaleDeviceCleanup.runner : null;
-          const observeCleanup = priorBindings.observe && typeof priorBindings.observe === "object" ? priorBindings.observe : null;
-          const recorderCleanup = priorBindings.recorder && typeof priorBindings.recorder === "object" ? priorBindings.recorder : priorStaleDeviceCleanup?.recorder && typeof priorStaleDeviceCleanup.recorder === "object" ? priorStaleDeviceCleanup.recorder : null;
-          const runnerFromStale = runnerCleanup === priorStaleDeviceCleanup?.runner;
-          const recorderFromStale = recorderCleanup === priorStaleDeviceCleanup?.recorder;
-          if (activeOperation?.profile === "transition:ensure-metro" && !metroCleanup && !priorBindings.metro) {
-            throw new SessionAuthorityError("SESSION_OPERATION_ACTIVE", "stale Metro transition has not published exact cleanup authority");
-          }
-          let runnerClaimKey = null;
-          if (runnerCleanup) {
-            runnerClaimKey = runnerFromStale ? String(runnerCleanup.claimKey) : `${String(runnerCleanup.platform)}:${String(runnerCleanup.deviceId)}:${String(runnerCleanup.port)}`;
-            if (typeof runnerCleanup.completedAt !== "number") {
-              const runnerClaim = this.#findClaim("runner", runnerClaimKey);
-              if (runnerClaim?.session_id !== prior.session_id || runnerClaim.claim_epoch !== prior.claim_epoch) {
-                throw new SessionAuthorityError("RUNNER_OWNERSHIP_MISMATCH", "stale runner cleanup claim no longer matches the authenticated binding");
-              }
-            }
-          }
-          let recorderClaimKey = null;
-          if (recorderCleanup) {
-            recorderClaimKey = recorderFromStale ? String(recorderCleanup.claimKey) : `${String(recorderCleanup.platform)}:${String(recorderCleanup.deviceId)}`;
-            if (typeof recorderCleanup.completedAt !== "number") {
-              const recorderClaim = this.#findClaim("recorder", recorderClaimKey);
-              if (recorderClaim?.session_id !== prior.session_id || recorderClaim.claim_epoch !== prior.claim_epoch) {
-                throw new SessionAuthorityError("RECORDING_AUTHORITY_MISMATCH", "stale recorder cleanup claim no longer matches the authenticated binding");
-              }
-            }
-          }
-          if (observeCleanup) {
-            const observePort = String(observeCleanup.port);
-            const observeClaim = this.#findClaim("observe-port", observePort);
-            if (priorBindings.observePort !== observeCleanup.port || observeClaim?.session_id !== prior.session_id || observeClaim.claim_epoch !== prior.claim_epoch) {
-              throw new SessionAuthorityError("OBSERVE_AUTHORITY_MISMATCH", "stale Observe cleanup claim no longer matches the authenticated binding");
-            }
-          }
-          this.#database.prepare(`DELETE FROM claims
-           WHERE session_id = ? AND claim_epoch = ?
-             AND resource_type NOT IN ('source', 'metro-port', 'observe-port', 'device', 'runner', 'recorder')`).run(prior.session_id, prior.claim_epoch);
-          this.#database.prepare(`UPDATE claims SET session_id = ?, claim_epoch = ?, lease_until_ms = ?
-           WHERE session_id = ? AND claim_epoch = ?`).run(target.sessionId, target.claimEpoch, now + this.#leaseMs, prior.session_id, prior.claim_epoch);
-          const cleanupRequired = Boolean(metroCleanup || runnerCleanup || observeCleanup || recorderCleanup || priorStaleDeviceCleanup);
-          const sameMetro = Number(priorMetro?.port) === Number(targetBindings.metroPort);
-          this.#database.prepare(`UPDATE sessions
-           SET state = ?, bindings_json = ?, authority_version = authority_version + 1,
-               updated_ms = ?
-           WHERE session_id = ? AND claim_epoch = ? AND state = 'blocked'`).run(cleanupRequired ? "handoff_cleanup" : sameMetro && priorBindings.device ? "device_bound" : "source_bound", JSON.stringify({
-            ...targetBindings,
-            adoptionRequired: null,
-            recoveryHandles: cleanupRequired ? targetBindings.recoveryHandles : null,
-            metro: metroCleanup ? null : sameMetro ? priorBindings.metro : null,
-            metroCleanup: null,
-            device: priorBindings.device ?? null,
-            install: priorBindings.install ?? null,
-            packageIntegration: priorBindings.packageIntegration ?? null,
-            bundle: null,
-            runner: null,
-            recorder: null,
-            observe: null,
-            proof: null,
-            staleDeviceCleanup: priorStaleDeviceCleanup,
-            handoffCleanup: cleanupRequired ? {
-              metro: metroCleanup ? {
-                ...metroCleanup,
-                sourceSessionId: prior.session_id,
-                stopRequestedAt: null,
-                completedAt: null
-              } : null,
-              runner: runnerCleanup ? runnerFromStale ? runnerCleanup : {
-                ...runnerCleanup,
-                claimKey: runnerClaimKey,
-                stopRequestedAt: null,
-                completedAt: null
-              } : null,
-              recorder: recorderCleanup ? recorderFromStale ? recorderCleanup : {
-                ...recorderCleanup,
-                claimKey: recorderClaimKey,
-                stopRequestedAt: null,
-                completedAt: null
-              } : null,
-              observe: observeCleanup ? {
-                ...observeCleanup,
-                stopRequestedAt: null,
-                completedAt: null
-              } : null
-            } : null
-          }), now, target.sessionId, target.claimEpoch);
-          this.#fenceSession(prior.session_id, now);
-        });
-      }
-      #requireStaleAdoptionContext(target, handle, targetInstance) {
-        const targetStatus = this.getSessionStatus(target.sessionId);
-        const recovery = targetStatus?.bindings.recoveryHandles;
-        const adoption = recovery?.adoptStale;
-        if (targetStatus?.state !== "blocked" || targetStatus.claimEpoch !== target.claimEpoch || typeof adoption?.token !== "string" || typeof adoption.expiresMs !== "number" || typeof adoption.priorSessionId !== "string" || !this.#recoveryHandleMatches(adoption, handle, this.#now())) {
-          throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "stale adoption capability is invalid or expired");
-        }
-        if (targetStatus.worker.instanceId !== targetInstance) {
-          throw new SessionAuthorityError("HANDOFF_TARGET_MISMATCH", "stale adoption target is not the recovery worker");
-        }
-        const prior = this.getSessionStatus(adoption.priorSessionId);
-        if (!prior || prior.claimEpoch !== adoption.priorClaimEpoch) {
-          throw new SessionAuthorityError("SESSION_OWNER_LOST", "stale adoption capability no longer matches the prior claim epoch");
-        }
-        if (prior.sourceKey !== targetStatus.sourceKey || prior.worktreeKey !== targetStatus.worktreeKey || prior.appRootKey !== targetStatus.appRootKey) {
-          throw new SessionAuthorityError("SOURCE_WORKTREE_MISMATCH", "stale session does not belong to this exact source worktree");
-        }
-        return { priorSessionId: adoption.priorSessionId };
-      }
-      validateStaleAdoption(target, handle, targetInstance) {
-        this.#requireStaleAdoptionContext(target, handle, targetInstance);
-      }
-      adoptStaleWithHandle(target, handle, targetInstance, options = {}) {
-        const { priorSessionId } = this.#requireStaleAdoptionContext(target, handle, targetInstance);
-        this.adoptStaleIntoBlocked(target, priorSessionId, targetInstance, options);
-      }
-      verifyStaleAdoptionResumption(target, handle, targetInstance) {
-        const status = this.getSessionStatus(target.sessionId);
-        const recovery = status?.bindings.recoveryHandles;
-        const adoption = recovery?.adoptStale;
-        if (status?.state !== "handoff_cleanup" || status.claimEpoch !== target.claimEpoch || status.worker.instanceId !== targetInstance || !adoption || !this.#recoveryHandleMatches(adoption, handle, this.#now())) {
-          throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "stale adoption resumption requires the original adoption capability");
-        }
-      }
-      beginOperation(session2, operation) {
-        return this.#beginOperation(session2, operation, false);
-      }
-      beginHandoffCancellationOperation(session2, operation) {
-        return this.#beginOperation(session2, operation, true);
-      }
-      #beginOperation(session2, operation, handoffCancellation) {
-        const now = this.#now();
-        return this.#transaction(() => {
-          const owner = handoffCancellation ? this.#requireHandoffSession(session2) : this.#requireSession(session2);
-          if (handoffCancellation && JSON.parse(owner.bindings_json).managedMetroHandoffReservation) {
-            throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "handoff cancellation is fenced while managed Metro shutdown is reserved");
-          }
-          const active = this.#database.prepare(`SELECT operation_id FROM operations
-           WHERE session_id = ? AND claim_epoch = ? LIMIT 1`).get(session2.sessionId, session2.claimEpoch);
-          if (active) {
-            throw new SessionAuthorityError("OPERATION_ALREADY_IN_PROGRESS", "session already has an active fenced operation");
-          }
-          this.#database.prepare(`INSERT INTO operations(
-            operation_id, session_id, claim_epoch, authority_version,
-            tool, profile, started_ms, lease_until_ms
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(operation.operationId, session2.sessionId, session2.claimEpoch, owner.authority_version, operation.tool, operation.profile, now, now + this.#leaseMs);
-          return {
-            operationId: operation.operationId,
-            sessionId: session2.sessionId,
-            claimEpoch: session2.claimEpoch,
-            authorityVersion: owner.authority_version
-          };
-        });
-      }
-      refreshOperation(operation) {
-        this.verifyOperation(operation);
-        return operation;
-      }
-      endOperation(operation) {
-        this.#transaction(() => {
-          const session2 = asSession(this.#database.prepare(`SELECT state, claim_epoch, authority_version
-             FROM sessions WHERE session_id = ?`).get(operation.sessionId));
-          const active = this.#database.prepare(`SELECT operation_id FROM operations
-           WHERE operation_id = ? AND session_id = ? AND claim_epoch = ?
-             AND authority_version = ?`).get(operation.operationId, operation.sessionId, operation.claimEpoch, operation.authorityVersion);
-          if (!session2 || !isFenceableState(session2.state) || session2.claim_epoch !== operation.claimEpoch || session2.authority_version !== operation.authorityVersion || !active) {
-            throw new SessionAuthorityError("AUTHORITY_LOST_DURING_OPERATION", "operation fence no longer matches current authority");
-          }
-          this.#database.prepare("DELETE FROM operations WHERE operation_id = ?").run(operation.operationId);
-        });
-        this.#pendingPlatformReceipts.delete(operation.operationId);
-      }
-      cancelOperation(operation) {
-        this.#transaction(() => {
-          this.#database.prepare(`DELETE FROM operations
-           WHERE operation_id = ? AND session_id = ? AND claim_epoch = ?
-             AND authority_version = ?`).run(operation.operationId, operation.sessionId, operation.claimEpoch, operation.authorityVersion);
-        });
-        this.#pendingPlatformReceipts.delete(operation.operationId);
-      }
-      cancelActiveOperationForSession(session2) {
-        const operationIds = this.#transaction(() => {
-          this.#requireSession(session2);
-          const rows = this.#database.prepare(`SELECT operation_id FROM operations
-           WHERE session_id = ? AND claim_epoch = ?`).all(session2.sessionId, session2.claimEpoch);
-          this.#database.prepare("DELETE FROM operations WHERE session_id = ? AND claim_epoch = ?").run(session2.sessionId, session2.claimEpoch);
-          return rows.map((row) => String(row.operation_id));
-        });
-        for (const operationId of operationIds) {
-          this.#pendingPlatformReceipts.delete(operationId);
-        }
-      }
-      verifyOperation(operation) {
-        const session2 = asSession(this.#database.prepare(`SELECT state, claim_epoch, authority_version
-           FROM sessions WHERE session_id = ?`).get(operation.sessionId));
-        const active = this.#database.prepare(`SELECT operation_id FROM operations
-         WHERE operation_id = ? AND session_id = ? AND claim_epoch = ?
-           AND authority_version = ?`).get(operation.operationId, operation.sessionId, operation.claimEpoch, operation.authorityVersion);
-        if (!session2 || !isFenceableState(session2.state) || session2.claim_epoch !== operation.claimEpoch || session2.authority_version !== operation.authorityVersion || !active) {
-          throw new SessionAuthorityError("AUTHORITY_LOST_DURING_OPERATION", "operation fence no longer matches current authority");
-        }
-      }
-      renewOperation(operation) {
-        const now = this.#now();
-        this.#transaction(() => {
-          this.verifyOperation(operation);
-          this.#database.prepare("UPDATE operations SET lease_until_ms = ? WHERE operation_id = ?").run(now + this.#leaseMs, operation.operationId);
-        });
-      }
-      getClaim(type, key) {
-        const claim = this.#findClaim(type, key);
-        return claim ? {
-          type: claim.resource_type,
-          key: claim.resource_key,
-          sessionId: claim.session_id,
-          claimEpoch: claim.claim_epoch,
-          leaseUntilMs: claim.lease_until_ms
-        } : null;
-      }
-      // GH #630: every allocated port for a service across all worktrees, own
-      // session included — foreign-origin scanners must exclude their own port.
-      allocatedServicePorts(service) {
-        const rows = this.#database.prepare("SELECT port, worktree_key FROM allocations WHERE service = ?").all(service);
-        return rows.map((row) => row.port).filter((port) => Number.isSafeInteger(port));
-      }
-      allocatePort(input) {
-        if (!Number.isSafeInteger(input.base) || input.base < 1 || !Number.isSafeInteger(input.span) || input.span < 1 || input.base + input.span > 65536) {
-          throw new SessionAuthorityError("INVALID_PORT_RANGE", "port allocation range is invalid");
-        }
-        return this.#transaction(() => {
-          const existing = this.#database.prepare("SELECT port FROM allocations WHERE service = ? AND worktree_key = ?").get(input.service, input.worktreeKey);
-          if (existing) {
-            const claim = this.#findClaim(`${input.service}-port`, String(existing.port));
-            const listenerStatus = claim ? "absent" : this.#listenerStatus(existing.port);
-            if (listenerStatus === "absent")
-              return existing.port;
-            if (listenerStatus === "unknown") {
-              throw new SessionAuthorityError("PORT_LISTENER_PROBE_UNAVAILABLE", `listener ownership for ${input.service} port ${existing.port} is unavailable`);
-            }
-            this.#database.prepare("DELETE FROM allocations WHERE service = ? AND worktree_key = ?").run(input.service, input.worktreeKey);
-          }
-          const digest3 = createHash8("sha256").update(`${input.uid}\0${input.worktreeKey}\0${input.service}`).digest();
-          const preferred = digest3.readUInt32BE(0) % input.span;
-          for (let offset = 0; offset < input.span; offset += 1) {
-            const port = input.base + (preferred + offset) % input.span;
-            const occupied = this.#database.prepare("SELECT worktree_key FROM allocations WHERE service = ? AND port = ?").get(input.service, port);
-            if (occupied)
-              continue;
-            const listenerStatus = this.#listenerStatus(port);
-            if (listenerStatus === "listening")
-              continue;
-            if (listenerStatus === "unknown") {
-              throw new SessionAuthorityError("PORT_LISTENER_PROBE_UNAVAILABLE", `listener ownership for ${input.service} port ${port} is unavailable`);
-            }
-            this.#database.prepare(`INSERT INTO allocations(service, worktree_key, port, generation)
-             VALUES (?, ?, ?, 1)`).run(input.service, input.worktreeKey, port);
-            return port;
-          }
-          const orphanRows = this.#database.prepare(`SELECT allocation.worktree_key, allocation.port
-           FROM allocations allocation
-           WHERE allocation.service = ?
-             AND allocation.port >= ?
-             AND allocation.port < ?
-             AND NOT EXISTS (
-               SELECT 1 FROM sessions session
-               WHERE session.worktree_key = allocation.worktree_key
-                 AND session.state NOT IN ('released', 'stale')
-             )
-           ORDER BY allocation.generation ASC, allocation.worktree_key ASC
-           `).all(input.service, input.base, input.base + input.span);
-          for (const row of orphanRows) {
-            if (!Number.isSafeInteger(row.port) || typeof row.worktree_key !== "string") {
-              throw new SessionAuthorityError("AUTHORITY_STORE_INVALID", "persisted port allocation is malformed");
-            }
-            const orphan = { port: row.port, worktree_key: row.worktree_key };
-            const listenerStatus = this.#listenerStatus(orphan.port);
-            if (listenerStatus === "listening")
-              continue;
-            if (listenerStatus === "unknown") {
-              throw new SessionAuthorityError("PORT_LISTENER_PROBE_UNAVAILABLE", `listener ownership for ${input.service} port ${orphan.port} is unavailable`);
-            }
-            this.#database.prepare(`DELETE FROM allocations
-             WHERE service = ? AND worktree_key = ? AND port = ?`).run(input.service, orphan.worktree_key, orphan.port);
-            this.#database.prepare(`INSERT INTO allocations(service, worktree_key, port, generation)
-             VALUES (?, ?, ?, 1)`).run(input.service, input.worktreeKey, orphan.port);
-            return orphan.port;
-          }
-          throw new SessionAuthorityError("PORT_RANGE_EXHAUSTED", `no ${input.service} port is available in the configured range`);
-        });
-      }
-      #initialize() {
-        const schema = this.#database.prepare("SELECT value FROM authority_meta WHERE key = ?").get("schema_version")?.value;
-        const version2 = Number(schema);
-        if (!Number.isSafeInteger(version2) || version2 < 1 || version2 > AUTHORITY_REGISTRY_SCHEMA_VERSION) {
-          throw new SessionAuthorityError("AUTHORITY_STORE_UNAVAILABLE", version2 > 4 ? `authority registry schema ${version2} is newer than supported schema ${AUTHORITY_REGISTRY_SCHEMA_VERSION}` : "authority registry schema version is invalid");
-        }
-        this.#database.exec("BEGIN IMMEDIATE");
-        try {
-          this.#database.exec(`
-      CREATE TABLE IF NOT EXISTS sessions (
-        session_id TEXT PRIMARY KEY,
-        source_key TEXT NOT NULL,
-        worktree_key TEXT NOT NULL,
-        app_root_key TEXT NOT NULL,
-        state TEXT NOT NULL,
-        claim_epoch INTEGER NOT NULL,
-        authority_version INTEGER NOT NULL,
-        supervisor_pid INTEGER NOT NULL,
-        supervisor_birth TEXT NOT NULL,
-        worker_instance TEXT,
-        worker_pid INTEGER,
-        worker_birth TEXT,
-        heartbeat_ms INTEGER NOT NULL,
-        lease_until_ms INTEGER NOT NULL,
-        source_json TEXT NOT NULL,
-        bindings_json TEXT NOT NULL,
-        created_ms INTEGER NOT NULL,
-        updated_ms INTEGER NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS claims (
-        resource_type TEXT NOT NULL,
-        resource_key TEXT NOT NULL,
-        session_id TEXT NOT NULL,
-        claim_epoch INTEGER NOT NULL,
-        lease_until_ms INTEGER NOT NULL,
-        PRIMARY KEY(resource_type, resource_key)
-      );
-      CREATE INDEX IF NOT EXISTS claims_session_idx
-        ON claims(session_id, claim_epoch);
-      CREATE TABLE IF NOT EXISTS operations (
-        operation_id TEXT PRIMARY KEY,
-        session_id TEXT NOT NULL,
-        claim_epoch INTEGER NOT NULL,
-        authority_version INTEGER NOT NULL,
-        tool TEXT NOT NULL,
-        profile TEXT NOT NULL,
-        started_ms INTEGER NOT NULL,
-        lease_until_ms INTEGER NOT NULL
-      );
-      CREATE INDEX IF NOT EXISTS operations_session_idx
-        ON operations(session_id, claim_epoch);
-      CREATE TABLE IF NOT EXISTS allocations (
-        service TEXT NOT NULL,
-        worktree_key TEXT NOT NULL,
-        port INTEGER NOT NULL,
-        generation INTEGER NOT NULL,
-        PRIMARY KEY(service, worktree_key),
-        UNIQUE(service, port)
-      );
-      CREATE TABLE IF NOT EXISTS handoffs (
-        handoff_id TEXT PRIMARY KEY,
-        session_id TEXT NOT NULL,
-        claim_epoch INTEGER NOT NULL,
-        target_instance TEXT NOT NULL,
-        token_hash TEXT NOT NULL,
-        expires_ms INTEGER NOT NULL,
-        consumed_ms INTEGER
-      );
-      CREATE TABLE IF NOT EXISTS platform_authority_receipts (
-        session_id TEXT NOT NULL,
-        claim_epoch INTEGER NOT NULL,
-        platform TEXT NOT NULL,
-        receipt_json TEXT NOT NULL,
-        updated_ms INTEGER NOT NULL,
-        PRIMARY KEY(session_id, platform)
-      );
-      `);
-          if (version2 < 3) {
-            const columns = this.#database.prepare("PRAGMA table_info(handoffs)").all();
-            if (!columns.some((column) => column.name === "source_state")) {
-              this.#database.exec("ALTER TABLE handoffs ADD COLUMN source_state TEXT NOT NULL DEFAULT 'active';");
-            }
-          }
-          this.#database.exec(`UPDATE authority_meta SET value = '${AUTHORITY_REGISTRY_SCHEMA_VERSION}' WHERE key = 'schema_version';`);
-          this.#database.exec("COMMIT");
-        } catch (error2) {
-          this.#database.exec("ROLLBACK");
-          throw error2;
-        }
-        this.#secureFiles();
-      }
-      #initializeWithRetry() {
-        const deadline = Date.now() + 1e3;
-        for (; ; ) {
-          try {
-            this.#initialize();
-            return;
-          } catch (error2) {
-            const code = error2.code;
-            const message = error2 instanceof Error ? error2.message : "";
-            if (code !== "SQLITE_BUSY" && !/database is (?:locked|busy)/i.test(message))
-              throw error2;
-            const remaining = deadline - Date.now();
-            if (remaining <= 0)
-              throw error2;
-            Atomics.wait(INITIALIZATION_WAIT2, 0, 0, Math.min(25, remaining));
-          }
-        }
-      }
-      #probeClaimOwners(session2, resources) {
-        const owners = /* @__PURE__ */ new Map();
-        for (const resource of resources) {
-          const claim = this.#findConflictingClaim(resource);
-          if (!claim || claim.session_id === session2.sessionId || owners.has(claim.session_id)) {
-            continue;
-          }
-          const owner = asSession(this.#database.prepare(`SELECT session_id, claim_epoch, supervisor_pid, supervisor_birth
-             FROM sessions WHERE session_id = ?`).get(claim.session_id));
-          let status = "unknown";
-          if (owner && owner.claim_epoch === claim.claim_epoch) {
-            try {
-              status = this.#ownerStatus({
-                sessionId: owner.session_id,
-                pid: owner.supervisor_pid,
-                token: owner.supervisor_birth
-              });
-            } catch {
-              status = "unknown";
-            }
-          }
-          owners.set(claim.session_id, { claimEpoch: claim.claim_epoch, status });
-        }
-        return owners;
-      }
-      #assertClaimsAvailable(session2, resources, probes, now) {
-        for (const resource of resources) {
-          const claim = this.#findConflictingClaim(resource);
-          if (!claim || claim.session_id === session2.sessionId && claim.claim_epoch === session2.claimEpoch) {
-            continue;
-          }
-          if (!probes)
-            throw claimConflict(claim);
-          const probe = probes.get(claim.session_id);
-          if (!probe || probe.claimEpoch !== claim.claim_epoch) {
-            throw claimConflict(claim);
-          }
-          if (probe.status === "match")
-            throw claimConflict(claim);
-          if (probe.status === "unknown") {
-            if (claim.lease_until_ms < now) {
-              throw new SessionAuthorityError("STALE_LEASE_NOT_RECLAIMABLE", OWNER_IDENTITY_REFUSAL_REASONS.leaseOwnerUnprovable, { sessionId: claim.session_id, claimEpoch: claim.claim_epoch });
-            }
-            throw claimConflict(claim);
-          }
-          throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "a proven-stale owner requires explicit adopt_stale before claims transfer", { sessionId: claim.session_id, claimEpoch: claim.claim_epoch });
-        }
-      }
-      #requireSession(session2) {
-        const row = asSession(this.#database.prepare(`SELECT session_id, state, claim_epoch, authority_version,
-                  source_key, worktree_key, app_root_key,
-                  supervisor_pid, supervisor_birth, worker_instance, worker_pid,
-                  worker_birth, lease_until_ms, source_json, bindings_json
-           FROM sessions WHERE session_id = ?`).get(session2.sessionId));
-        if (!row || !isOperationalState(row.state) || row.claim_epoch !== session2.claimEpoch) {
-          throw new SessionAuthorityError("SESSION_OWNER_LOST", "session owner no longer matches the active claim epoch");
-        }
-        return row;
-      }
-      #requireIntegrationRestored(bindings) {
-        if (bindings.packageIntegration) {
-          throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "package integration must be restored before session release");
-        }
-      }
-      #requireFenceableSession(session2) {
-        const row = asSession(this.#database.prepare(`SELECT session_id, state, claim_epoch, authority_version,
-                  source_key, worktree_key, app_root_key,
-                  supervisor_pid, supervisor_birth, worker_instance, worker_pid,
-                  worker_birth, lease_until_ms, source_json, bindings_json
-           FROM sessions WHERE session_id = ?`).get(session2.sessionId));
-        if (!row || !isFenceableState(row.state) || row.claim_epoch !== session2.claimEpoch) {
-          throw new SessionAuthorityError("SESSION_OWNER_LOST", "session owner no longer matches the fenceable claim epoch");
-        }
-        return row;
-      }
-      #requireHandoffSession(session2) {
-        const row = this.#requireFenceableSession(session2);
-        if (row.state !== "handoff") {
-          throw new SessionAuthorityError("SESSION_OWNER_LOST", "session owner no longer matches the handoff claim epoch");
-        }
-        return row;
-      }
-      #requireRecoverableSession(session2) {
-        const row = asSession(this.#database.prepare(`SELECT session_id, state, claim_epoch, authority_version,
-                  source_key, worktree_key, app_root_key,
-                  supervisor_pid, supervisor_birth, worker_instance, worker_pid,
-                  worker_birth, lease_until_ms, source_json, bindings_json
-           FROM sessions WHERE session_id = ?`).get(session2.sessionId));
-        if (!row || row.state !== "blocked" && row.state !== "handoff_cleanup" || row.claim_epoch !== session2.claimEpoch) {
-          throw new SessionAuthorityError("SESSION_OWNER_LOST", "session is not an unchanged recovery contender");
-        }
-        return row;
-      }
-      #requireHandoffCleanupOwner(session2, targetInstance) {
-        const row = this.#requireRecoverableSession(session2);
-        if (row.state !== "handoff_cleanup" || row.worker_instance !== targetInstance) {
-          throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "handoff cleanup is not owned by this recovery worker");
-        }
-        return row;
-      }
-      #requireHandoffIntoContext(target, input, options) {
-        const { allowExactReservationAfterExpiry, commitRecipientRotation } = options;
-        const targetRow = this.#requireRecoverableSession(target);
-        if (targetRow.state !== "blocked") {
-          throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "handoff acceptance is not available during cleanup");
-        }
-        if (targetRow.worker_instance !== input.targetInstance) {
-          throw new SessionAuthorityError("HANDOFF_TARGET_MISMATCH", "handoff target is not the current fenced worker instance");
-        }
-        const handoff = this.#database.prepare(`SELECT handoff_id, session_id, claim_epoch, target_instance,
-                token_hash, expires_ms, consumed_ms
-         FROM handoffs WHERE handoff_id = ?`).get(input.handoffId);
-        if (!handoff) {
-          throw new SessionAuthorityError("HANDOFF_NOT_FOUND", "handoff does not exist");
-        }
-        const expected = Buffer.from(handoff.token_hash, "hex");
-        const actual = createHash8("sha256").update(input.token).digest();
-        if (expected.length !== actual.length || !timingSafeEqual4(expected, actual)) {
-          throw new SessionAuthorityError("HANDOFF_TOKEN_INVALID", "handoff capability is invalid");
-        }
-        if (handoff.consumed_ms !== null) {
-          throw new SessionAuthorityError("HANDOFF_ALREADY_CONSUMED", "handoff was already accepted");
-        }
-        const prior = asSession(this.#database.prepare(`SELECT session_id, source_key, worktree_key, app_root_key, state,
-                  claim_epoch, authority_version, bindings_json
-           FROM sessions WHERE session_id = ?`).get(handoff.session_id));
-        if (!prior || prior.state !== "handoff" || prior.claim_epoch !== handoff.claim_epoch) {
-          throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "handoff no longer matches the live owner epoch");
-        }
-        if (prior.source_key !== targetRow.source_key || prior.worktree_key !== targetRow.worktree_key || prior.app_root_key !== targetRow.app_root_key) {
-          throw new SessionAuthorityError("SOURCE_WORKTREE_MISMATCH", "handoff source does not match the target session");
-        }
-        let bindings = JSON.parse(prior.bindings_json);
-        let reservation = managedMetroHandoffReservation(bindings);
-        let exactReservation = reservation?.handoffId === handoff.handoff_id && reservation.sourceClaimEpoch === handoff.claim_epoch && reservation.targetSessionId === target.sessionId && reservation.targetClaimEpoch === target.claimEpoch && reservation.targetInstance === input.targetInstance && reservation.metro?.sourceSessionId === prior.session_id;
-        if (handoff.target_instance !== input.targetInstance || reservation && !exactReservation) {
-          const targetBindings = JSON.parse(targetRow.bindings_json);
-          const adoptionRequired = targetBindings.adoptionRequired;
-          const priorTarget = reservation ? asSession(this.#database.prepare(`SELECT session_id, source_key, worktree_key, app_root_key, state,
-                        claim_epoch, supervisor_pid, supervisor_birth
-                 FROM sessions WHERE session_id = ?`).get(reservation.targetSessionId)) : null;
-          const priorTargetTerminal = priorTarget !== null && (priorTarget.state === "released" || priorTarget.state === "stale") && priorTarget.claim_epoch === reservation.targetClaimEpoch + 1;
-          let priorTargetDead = false;
-          if (priorTarget?.state === "blocked" && priorTarget.claim_epoch === reservation?.targetClaimEpoch) {
-            try {
-              priorTargetDead = this.#ownerStatus({
-                sessionId: priorTarget.session_id,
-                pid: priorTarget.supervisor_pid,
-                token: priorTarget.supervisor_birth
-              }) === "mismatch";
-            } catch {
-              priorTargetDead = false;
-            }
-          }
-          if (!reservation || reservation.handoffId !== handoff.handoff_id || reservation.sourceClaimEpoch !== handoff.claim_epoch || reservation.metro.sourceSessionId !== prior.session_id || reservation.targetInstance !== handoff.target_instance || adoptionRequired?.sessionId !== prior.session_id || adoptionRequired.claimEpoch !== prior.claim_epoch || !priorTarget || priorTarget.source_key !== targetRow.source_key || priorTarget.worktree_key !== targetRow.worktree_key || priorTarget.app_root_key !== targetRow.app_root_key || !priorTargetTerminal && !priorTargetDead) {
-            throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "managed Metro cleanup reservation belongs to a different handoff recipient");
-          }
-          if (handoff.expires_ms < this.#now() && !allowExactReservationAfterExpiry) {
-            throw new SessionAuthorityError("HANDOFF_EXPIRED", "handoff capability expired");
-          }
-          const rotatedReservation = {
-            ...reservation,
-            targetSessionId: target.sessionId,
-            targetClaimEpoch: target.claimEpoch,
-            targetInstance: input.targetInstance
-          };
-          if (commitRecipientRotation) {
-            const handoffChanged = this.#database.prepare(`UPDATE handoffs SET target_instance = ?
-             WHERE handoff_id = ? AND target_instance = ? AND consumed_ms IS NULL`).run(input.targetInstance, handoff.handoff_id, reservation.targetInstance);
-            if (handoffChanged.changes !== 1) {
-              throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "managed Metro handoff target changed during recipient rotation");
-            }
-            bindings = {
-              ...bindings,
-              managedMetroHandoffReservation: rotatedReservation
-            };
-            const donorChanged = this.#database.prepare(`UPDATE sessions
-             SET bindings_json = ?, authority_version = authority_version + 1, updated_ms = ?
-             WHERE session_id = ? AND claim_epoch = ? AND state = 'handoff'`).run(JSON.stringify(bindings), this.#now(), prior.session_id, prior.claim_epoch);
-            if (donorChanged.changes !== 1) {
-              throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "managed Metro donor authority changed during recipient rotation");
-            }
-            if (priorTarget.state === "blocked") {
-              this.#fenceSession(priorTarget.session_id, this.#now());
-            }
-          }
-          handoff.target_instance = input.targetInstance;
-          reservation = rotatedReservation;
-          exactReservation = true;
-        }
-        if (handoff.expires_ms < this.#now() && !(allowExactReservationAfterExpiry && exactReservation)) {
-          throw new SessionAuthorityError("HANDOFF_EXPIRED", "handoff capability expired");
-        }
-        return {
-          targetRow,
-          handoff,
-          prior,
-          bindings,
-          reservation: exactReservation ? reservation : null
-        };
-      }
-      #advanceActiveOperationFence(session2, priorAuthorityVersion, nextAuthorityVersion, requireActiveFence = false) {
-        const active = this.#database.prepare(`SELECT operation_id, authority_version FROM operations
-         WHERE session_id = ? AND claim_epoch = ? LIMIT 1`).get(session2.sessionId, session2.claimEpoch);
-        const context = this.#operationContext.getStore();
-        if (!active) {
-          if (requireActiveFence && context?.sessionId === session2.sessionId && context.claimEpoch === session2.claimEpoch) {
-            throw new SessionAuthorityError("AUTHORITY_LOST_DURING_OPERATION", "active operation fence disappeared before authority commit");
-          }
-          return;
-        }
-        if (!context || context.operationId !== active.operation_id || context.sessionId !== session2.sessionId || context.claimEpoch !== session2.claimEpoch || context.authorityVersion !== priorAuthorityVersion || active.authority_version !== priorAuthorityVersion) {
-          throw new SessionAuthorityError("AUTHORITY_LOST_DURING_OPERATION", "authority mutation is not owned by the active operation fence");
-        }
-        const changed = this.#database.prepare(`UPDATE operations SET authority_version = ?, lease_until_ms = ?
-         WHERE operation_id = ? AND session_id = ? AND claim_epoch = ?
-           AND authority_version = ?`).run(nextAuthorityVersion, this.#now() + this.#leaseMs, context.operationId, session2.sessionId, session2.claimEpoch, priorAuthorityVersion);
-        if (changed.changes === 0) {
-          throw new SessionAuthorityError("AUTHORITY_LOST_DURING_OPERATION", "operation fence did not advance atomically");
-        }
-        context.authorityVersion = nextAuthorityVersion;
-      }
-      #findClaim(type, key) {
-        return asClaim(this.#database.prepare(`SELECT resource_type, resource_key, session_id, claim_epoch, lease_until_ms
-           FROM claims WHERE resource_type = ? AND resource_key = ?`).get(type, key));
-      }
-      #findConflictingClaim(resource) {
-        return this.#findClaim(resource.type, resource.key) ?? (resource.type === "runner" ? this.#findClaim("runner-receipt", resource.key) : resource.type === "device" ? this.#findClaim("device-receipt", resource.key) : null);
-      }
-      #platformReceiptFromCurrentAuthority(session2, platform, receipt2) {
-        const row = this.#requireSession(session2);
-        const bindings = JSON.parse(row.bindings_json);
-        const device = bindings.device;
-        const install = bindings.install;
-        const runner = bindings.runner;
-        const runnerClaim = this.#database.prepare(`SELECT resource_key FROM claims
-         WHERE session_id = ? AND claim_epoch = ? AND resource_type = 'runner'`).get(session2.sessionId, session2.claimEpoch);
-        const deviceClaim = this.#database.prepare(`SELECT resource_key FROM claims
-         WHERE session_id = ? AND claim_epoch = ? AND resource_type = 'device'`).get(session2.sessionId, session2.claimEpoch);
-        const runnerCapabilityHash = typeof runner?.capability === "string" ? createHash8("sha256").update(runner.capability).digest("hex") : null;
-        if (device?.platform !== platform || receipt2.sessionId !== session2.sessionId || receipt2.claimEpoch !== session2.claimEpoch || receipt2.sourceKey !== row.source_key || receipt2.worktreeKey !== row.worktree_key || receipt2.appRootKey !== row.app_root_key || receipt2.deviceId !== device.deviceId || receipt2.appId !== device.appId || receipt2.installGeneration !== install?.installGeneration || receipt2.artifactDigest !== install?.artifactDigest || receipt2.runnerInstanceId !== runner?.instanceId || receipt2.runnerPid !== runner?.pid || receipt2.runnerProcessBirth !== runner?.processBirth || receipt2.runnerPort !== runner?.port || receipt2.runnerClaim !== runnerClaim?.resource_key || receipt2.deviceClaim !== deviceClaim?.resource_key || receipt2.runnerCapabilityHash !== runnerCapabilityHash || typeof runner?.port !== "number" || typeof runner.capability !== "string" || typeof runner.instanceId !== "string" || typeof runner.pid !== "number" || typeof runner.processBirth !== "string" || typeof device?.deviceId !== "string" || typeof device.appId !== "string" || typeof install?.installGeneration !== "string") {
-          throw new SessionAuthorityError("RUNNER_OWNERSHIP_MISMATCH", "snapshot receipt does not match exact persistent platform authority");
-        }
-        return {
-          session: session2,
-          platform,
-          receipt: receipt2,
-          probe: {
-            platform,
-            port: runner.port,
-            capability: runner.capability,
-            instanceId: runner.instanceId,
-            sessionId: session2.sessionId,
-            claimEpoch: session2.claimEpoch,
-            deviceId: device.deviceId,
-            appId: device.appId,
-            pid: runner.pid,
-            processBirth: runner.processBirth,
-            installGeneration: install.installGeneration
-          }
-        };
-      }
-      #invalidatePlatformReceipt(session2, platform) {
-        const row = this.#database.prepare(`SELECT receipt_json FROM platform_authority_receipts
-         WHERE session_id = ? AND claim_epoch = ? AND platform = ?`).get(session2.sessionId, session2.claimEpoch, platform);
-        if (typeof row?.receipt_json === "string") {
-          const persisted = JSON.parse(row.receipt_json);
-          const receipt2 = persisted.receipt && typeof persisted.receipt === "object" ? persisted.receipt : persisted;
-          if (typeof receipt2.runnerClaim === "string") {
-            this.#database.prepare(`DELETE FROM claims
-             WHERE resource_type = 'runner-receipt' AND resource_key = ?
-               AND session_id = ? AND claim_epoch = ?`).run(receipt2.runnerClaim, session2.sessionId, session2.claimEpoch);
-          }
-          if (typeof receipt2.deviceClaim === "string") {
-            this.#database.prepare(`DELETE FROM claims
-             WHERE resource_type = 'device-receipt' AND resource_key = ?
-               AND session_id = ? AND claim_epoch = ?`).run(receipt2.deviceClaim, session2.sessionId, session2.claimEpoch);
-          }
-        }
-        this.#database.prepare(`DELETE FROM platform_authority_receipts
-         WHERE session_id = ? AND claim_epoch = ? AND platform = ?`).run(session2.sessionId, session2.claimEpoch, platform);
-      }
-      #capabilityMatches(expected, actual) {
-        const expectedDigest = createHash8("sha256").update(expected).digest();
-        const actualDigest = createHash8("sha256").update(actual).digest();
-        return timingSafeEqual4(expectedDigest, actualDigest);
-      }
-      #recoveryHandleMatches(handle, actual, now) {
-        if (typeof handle.token === "string" && typeof handle.expiresMs === "number" && handle.expiresMs >= now && this.#capabilityMatches(handle.token, actual)) {
-          return true;
-        }
-        const previous = handle.previous;
-        return Boolean(previous && typeof previous.token === "string" && typeof previous.expiresMs === "number" && previous.expiresMs >= now && this.#capabilityMatches(previous.token, actual));
-      }
-      #mergeStaleDeviceCleanup(cleanup, staleDeviceCleanup) {
-        if (!staleDeviceCleanup)
-          return cleanup;
-        const merged = { ...cleanup };
-        for (const resource of ["runner", "recorder"]) {
-          const current = cleanup[resource];
-          const stale = staleDeviceCleanup[resource];
-          if (!stale || typeof stale !== "object")
-            continue;
-          if (current && typeof current === "object") {
-            const currentKey = current.claimKey;
-            const staleKey = stale.claimKey;
-            if (currentKey !== staleKey) {
-              throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", `stale ${resource} cleanup conflicts with the existing handoff plan`);
-            }
-          } else {
-            merged[resource] = stale;
-          }
-        }
-        return merged;
-      }
-      #fenceSession(sessionId, now) {
-        this.#database.prepare("DELETE FROM claims WHERE session_id = ?").run(sessionId);
-        this.#database.prepare("DELETE FROM operations WHERE session_id = ?").run(sessionId);
-        this.#database.prepare(`UPDATE sessions
-         SET state = 'stale', claim_epoch = claim_epoch + 1,
-             authority_version = authority_version + 1, updated_ms = ?
-         WHERE session_id = ?`).run(now, sessionId);
-      }
-      #transaction(operation, assertBeforeCommit, onCommitted) {
-        this.#database.exec("BEGIN IMMEDIATE");
-        const context = this.#operationContext.getStore();
-        const priorContextAuthorityVersion = context?.authorityVersion;
-        let committed = false;
-        try {
-          const result = operation();
-          assertBeforeCommit?.();
-          this.#database.exec("COMMIT");
-          committed = true;
-          try {
-            onCommitted?.(result);
-          } finally {
-            this.#secureFiles();
-          }
-          return result;
-        } catch (error2) {
-          if (!committed) {
-            try {
-              this.#database.exec("ROLLBACK");
-            } finally {
-              if (context && priorContextAuthorityVersion !== void 0) {
-                context.authorityVersion = priorContextAuthorityVersion;
-              }
-              this.#secureFiles();
-            }
-          }
-          throw error2;
-        }
-      }
-      async #retry(operation, timeoutMs, retryDelayMs) {
-        const deadline = Date.now() + timeoutMs;
-        for (; ; ) {
-          try {
-            return operation();
-          } catch (error2) {
-            const code = error2.code;
-            const message = error2 instanceof Error ? error2.message : "";
-            if (code !== "SQLITE_BUSY" && !/database is (?:locked|busy)/i.test(message))
-              throw error2;
-            if (Date.now() >= deadline) {
-              throw new SessionAuthorityError("AUTHORITY_STORE_BUSY", "authority registry remained contended past the retry deadline");
-            }
-            await new Promise((resolve21) => setTimeout(resolve21, retryDelayMs));
-          }
-        }
-      }
-    };
   }
 });
 
@@ -35678,13 +35774,13 @@ async function startAndroidRunnerAttempt(deviceId, bundleId, devicePort = DEFAUL
         provenance,
         ...authority
       };
-      const processBirth = readProcessBirth(child.pid);
-      if (!processBirth) {
+      try {
+        state.processBirth = requireProcessBirthAttestation(child.pid, "native runner").token;
+      } catch (error2) {
         child.kill("SIGTERM");
-        reject(new Error("PROCESS_BIRTH_UNAVAILABLE: native runner process identity could not be proven"));
+        reject(error2);
         return;
       }
-      state.processBirth = processBirth.token;
       runnerState2 = state;
       if (serial) {
         try {
@@ -36076,7 +36172,7 @@ var init_rn_android_runner_client = __esm({
     init_runner_artifacts();
     init_runtime_paths();
     init_transport_recovery();
-    init_process_birth();
+    init_process_owner();
     init_authority_store();
     execFileAsync2 = promisify11(execFile12);
     DEFAULT_PORT = 22089;
@@ -71874,10 +71970,11 @@ function installIdentityRefusal(inspection, proofBound) {
 }
 function projectPublicAuthorityStatus(status, options = {}) {
   if (!status.available) {
-    const nextAction = authorityRemedyNextAction(status.code);
+    const nextAction = status.details?.nextAction ?? authorityRemedyNextAction(status.code);
     return {
       available: false,
       code: status.code,
+      ...status.details,
       ...nextAction ? { nextAction } : {}
     };
   }
@@ -81830,11 +81927,12 @@ var init_route_sequence = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/session/runtime.js
-function unavailable(reason, fallbackCode) {
+function unavailable(reason, fallbackCode, details) {
   const matched = /^([A-Z][A-Z0-9_]+):/.exec(reason);
   return new WorkerAuthorityRuntime(null, null, {
     code: matched?.[1] ?? fallbackCode,
-    reason
+    reason,
+    details
   });
 }
 function createWorkerAuthorityRuntime(environment = process.env, dependencies = {}) {
@@ -81848,9 +81946,15 @@ function createWorkerAuthorityRuntime(environment = process.env, dependencies = 
   if (!sessionId || !Number.isSafeInteger(claimEpoch) || claimEpoch < 1 || !registryPath || !workerInstance) {
     return unavailable("SESSION_NOT_INITIALIZED: supervisor did not provide a complete authority context", "SESSION_NOT_INITIALIZED");
   }
-  const birth = (dependencies.readBirth ?? readProcessBirth)(process.pid);
-  if (!birth) {
-    return unavailable("PROCESS_BIRTH_UNAVAILABLE: worker process birth could not be proven conservatively", "PROCESS_BIRTH_UNAVAILABLE");
+  const probeBirth = dependencies.probeBirth ?? (dependencies.readBirth ? (pid) => processBirthProbeFromReader(pid, dependencies.readBirth) : probeProcessBirth);
+  let birth;
+  try {
+    birth = requireProcessBirthAttestation(process.pid, "worker", probeBirth);
+  } catch (error2) {
+    if (error2 instanceof SessionAuthorityError) {
+      return unavailable(error2.message, error2.code, error2.details);
+    }
+    throw error2;
   }
   try {
     const registry2 = openSessionRegistry(registryPath, {
@@ -81909,7 +82013,7 @@ var init_runtime = __esm({
       }
       requireAvailable() {
         if (!this.#registry || !this.#session) {
-          throw new SessionAuthorityError(this.#unavailable?.code ?? "SESSION_NOT_INITIALIZED", this.#unavailable?.reason ?? "authority session is unavailable");
+          throw new SessionAuthorityError(this.#unavailable?.code ?? "SESSION_NOT_INITIALIZED", this.#unavailable?.reason ?? "authority session is unavailable", void 0, this.#unavailable?.details);
         }
         return { registry: this.#registry, session: this.#session };
       }
@@ -81968,7 +82072,8 @@ var init_runtime = __esm({
           return {
             available: false,
             code: this.#unavailable?.code ?? "SESSION_NOT_INITIALIZED",
-            reason: this.#unavailable?.reason ?? "authority session is unavailable"
+            reason: this.#unavailable?.reason ?? "authority session is unavailable",
+            ...this.#unavailable?.details ? { details: this.#unavailable.details } : {}
           };
         }
         const status = this.#registry.getSessionStatus(this.#session.sessionId);
@@ -94083,7 +94188,7 @@ var init_preflight = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/session/runner-binding.js
-function bindNativeRunner(runtime, target) {
+function bindNativeRunner(runtime, target, dependencies = {}) {
   const { registry: registry2, session: session2 } = runtime.requireAvailable();
   const status = registry2.getSessionStatus(session2.sessionId);
   const expectedDevice = status?.bindings.device;
@@ -94092,12 +94197,17 @@ function bindNativeRunner(runtime, target) {
   }
   const state = target.platform === "ios" ? getFastRunnerState() : getAndroidRunnerState();
   const port = state && ("port" in state ? state.port : state.hostPort);
-  if (!state || !Number.isSafeInteger(port) || !state.instanceId || state.sessionId !== session2.sessionId || state.claimEpoch !== session2.claimEpoch || !state.capability || !state.processBirth || inspectSessionOwner({
+  if (!state || !Number.isSafeInteger(port) || !state.instanceId || state.sessionId !== session2.sessionId || state.claimEpoch !== session2.claimEpoch || !state.capability || !state.processBirth) {
+    throw new SessionAuthorityError("RUNNER_OWNERSHIP_MISMATCH", "native runner process and capability could not be bound to this claim epoch");
+  }
+  const owner = {
     sessionId: session2.sessionId,
     pid: state.pid,
     token: state.processBirth
-  }) !== "match") {
-    throw new SessionAuthorityError("RUNNER_OWNERSHIP_MISMATCH", "native runner process and capability could not be bound to this claim epoch");
+  };
+  const inspection = (dependencies.inspectOwner ?? inspectSessionOwnerAttestation)(owner);
+  if (inspection.status !== "match") {
+    throw new SessionAuthorityError("RUNNER_OWNERSHIP_MISMATCH", inspection.status === "unknown" ? "native runner process identity could not be read on a loaded host" : "native runner process and capability could not be bound to this claim epoch", void 0, ownerRefusalDetails(inspection));
   }
   registry2.updateBindings(session2, {
     state: status.bindings.bundle ? "ready" : "runtime_bound",
@@ -94202,21 +94312,34 @@ function createLocalAuthorityProbe(dependencies) {
   }));
   const sourceResolver = dependencies.resolveSource ?? defaultSource;
   const deviceExists = dependencies.deviceExists ?? deviceExistsOnHost;
-  const inspectOwner = dependencies.inspectOwner ?? inspectSessionOwner;
+  const inspectOwner = dependencies.inspectOwner ?? inspectSessionOwnerAttestation;
+  const probeBirth = dependencies.probeBirth ?? probeProcessBirth;
   const captureInstalled = dependencies.captureInstalled ?? captureInstalledArtifact;
   const captureGeneration = dependencies.captureInstallGeneration ?? captureInstallGeneration;
   return async ({ axis, phase, status, tool, args }) => {
     if (axis === "C") {
       const { registry: registry2, session: session2 } = dependencies.runtime.requireAvailable();
       const controller = phase === "preflight" && tool === "rn_session" && args?.action === "cancel_handoff" ? registry2.getHandoffCancellationControllerBinding(session2) : registry2.getControllerBinding(session2);
-      const supervisor = inspectOwner({
+      const supervisorOwner = {
         sessionId: controller.sessionId,
         pid: controller.supervisor.pid,
         token: controller.supervisor.token
-      });
-      const workerBirth = controller.worker.pid === process.pid && controller.worker.token ? readProcessBirth(process.pid) : null;
-      if (supervisor !== "match" || !controller.worker.instanceId || !workerBirth || workerBirth.token !== controller.worker.token) {
+      };
+      const supervisor = inspectOwner(supervisorOwner);
+      if (supervisor.status !== "match") {
+        throw new SessionAuthorityError("SESSION_OWNER_LOST", supervisor.status === "unknown" ? "controller process identity could not be read on a loaded host" : "controller process identity no longer matches the fenced session", void 0, ownerRefusalDetails(supervisor));
+      }
+      if (!controller.worker.instanceId || controller.worker.pid !== process.pid || !controller.worker.token) {
         throw new SessionAuthorityError("SESSION_OWNER_LOST", "controller process identity no longer matches the fenced session");
+      }
+      const workerBirth = probeBirth(process.pid);
+      if (workerBirth.status !== "present" || workerBirth.birth.token !== controller.worker.token) {
+        throw new SessionAuthorityError("SESSION_OWNER_LOST", workerBirth.status === "unknown" ? "worker process identity could not be read on a loaded host" : "controller process identity no longer matches the fenced session", void 0, workerBirth.status === "present" ? ownerRefusalDetails({
+          status: "mismatch",
+          pid: process.pid,
+          expected: controller.worker.token,
+          observed: workerBirth.birth.token
+        }) : processBirthRefusalDetails(workerBirth, process.pid));
       }
       return { axis, identity: identity(controller) };
     }
@@ -94265,8 +94388,13 @@ function createLocalAuthorityProbe(dependencies) {
       const port = Number(metro.port);
       const pid = Number(metro.pid);
       const birth = String(metro.birth ?? "");
-      if (!Number.isSafeInteger(port) || !Number.isSafeInteger(pid) || !birth || metroListenerPid(port) !== pid || inspectSessionOwner({ sessionId: status.sessionId, pid, token: birth }) !== "match") {
+      if (!Number.isSafeInteger(port) || !Number.isSafeInteger(pid) || !birth || metroListenerPid(port) !== pid) {
         throw new SessionAuthorityError("METRO_INSTANCE_CHANGED", "Metro process identity no longer matches the bound instance");
+      }
+      const metroOwner = { sessionId: status.sessionId, pid, token: birth };
+      const metroInspection = inspectOwner(metroOwner);
+      if (metroInspection.status !== "match") {
+        throw new SessionAuthorityError("METRO_INSTANCE_CHANGED", metroInspection.status === "unknown" ? "Metro process identity could not be read on a loaded host" : "Metro process identity no longer matches the bound instance", void 0, ownerRefusalDetails(metroInspection));
       }
       let statusText;
       try {
@@ -94397,8 +94525,13 @@ function createLocalAuthorityProbe(dependencies) {
       const pid = Number(runner.pid);
       const processBirth = String(runner.processBirth ?? "");
       const capability = String(runner.capability ?? "");
-      if (!Number.isSafeInteger(port) || !Number.isSafeInteger(pid) || !processBirth || !capability || inspectOwner({ sessionId: status.sessionId, pid, token: processBirth }) !== "match") {
+      if (!Number.isSafeInteger(port) || !Number.isSafeInteger(pid) || !processBirth || !capability) {
         throw new SessionAuthorityError("RUNNER_OWNERSHIP_MISMATCH", "runner process identity and endpoint capability no longer match the binding");
+      }
+      const runnerOwner = { sessionId: status.sessionId, pid, token: processBirth };
+      const runnerInspection = inspectOwner(runnerOwner);
+      if (runnerInspection.status !== "match") {
+        throw new SessionAuthorityError("RUNNER_OWNERSHIP_MISMATCH", runnerInspection.status === "unknown" ? "runner process identity could not be read on a loaded host" : "runner process identity and endpoint capability no longer match the binding", void 0, ownerRefusalDetails(runnerInspection));
       }
       const health = await fetchJson(`http://127.0.0.1:${port}/health`, {
         headers: { authorization: `Bearer ${capability}` }
@@ -97315,7 +97448,6 @@ init_supervisor_core();
 init_logger();
 init_declared_source_contract();
 init_process_owner();
-init_process_birth();
 init_source_identity();
 init_worktree_inheritance();
 init_successor_source();
@@ -97830,7 +97962,7 @@ if (process.env.RN_BRIDGE_SUPERVISOR === "0") {
         diagnostic: (message) => process.stderr.write(`rn-dev-agent successor source: ${message}
 `)
       }),
-      supervisorBirth: readProcessBirth(process.pid),
+      supervisorBirth: requireProcessBirthAttestation(process.pid, "supervisor"),
       uid: typeof process.getuid === "function" ? String(process.getuid()) : process.env.USER ?? "unknown",
       ownerStatus: inspectSessionOwner
     });

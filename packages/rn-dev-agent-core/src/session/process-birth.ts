@@ -28,10 +28,30 @@ export interface ProcessBirth {
   token: string;
 }
 
+export type ProcessBirthProbeStep =
+  | 'input'
+  | 'signal'
+  | 'ps'
+  | 'helper'
+  | 'sysctl'
+  | 'proc-boot-id'
+  | 'proc-stat'
+  | 'powershell'
+  | 'platform';
+
+export type ProcessBirthProbeFailure = 'timeout' | 'exit' | 'parse' | 'read' | 'unsupported';
+
+export interface ProcessBirthProbeCause {
+  pid: number;
+  step: ProcessBirthProbeStep;
+  failure: ProcessBirthProbeFailure;
+  elapsedMs: number;
+}
+
 export type ProcessBirthProbe =
   | { status: 'present'; birth: ProcessBirth }
   | { status: 'absent'; reason?: 'foreign' }
-  | { status: 'unknown' };
+  | { status: 'unknown'; cause: ProcessBirthProbeCause };
 
 export type ProcessSignalPermission = 'permitted' | 'denied' | 'absent' | 'unknown';
 
@@ -54,6 +74,7 @@ interface ProcessBirthDependencies {
     isFile(): boolean;
   };
   signalPermission?: (pid: number) => ProcessSignalPermission;
+  now?: () => number;
   uid?: number;
 }
 
@@ -590,7 +611,41 @@ function probeRecordedProcessBirth(
   pid: number,
   dependencies: ProcessBirthDependencies,
 ): ProcessBirthProbe {
-  if (!Number.isSafeInteger(pid) || pid <= 0) return { status: 'unknown' };
+  const now = dependencies.now ?? Date.now;
+  let step: ProcessBirthProbeStep = 'input';
+  let stepStartedAt = now();
+  const start = (nextStep: ProcessBirthProbeStep): void => {
+    step = nextStep;
+    stepStartedAt = now();
+  };
+  const unknown = (
+    failure: ProcessBirthProbeFailure,
+    failedStep: ProcessBirthProbeStep = step,
+  ): ProcessBirthProbe => ({
+    status: 'unknown',
+    cause: {
+      pid,
+      step: failedStep,
+      failure,
+      elapsedMs: Math.max(0, now() - stepStartedAt),
+    },
+  });
+  const failureClass = (error: unknown): ProcessBirthProbeFailure => {
+    const failure = error as {
+      code?: unknown;
+      status?: unknown;
+      signal?: unknown;
+      killed?: unknown;
+    };
+    if (failure.code === 'ETIMEDOUT' || failure.killed === true || failure.signal === 'SIGTERM') {
+      return 'timeout';
+    }
+    return typeof failure.status === 'number' || typeof failure.signal === 'string'
+      ? 'exit'
+      : 'read';
+  };
+
+  if (!Number.isSafeInteger(pid) || pid <= 0) return unknown('parse');
 
   const platform = dependencies.platform ?? process.platform;
   const read = dependencies.read ?? ((path: string) => readFileSync(path, 'utf8'));
@@ -599,22 +654,25 @@ function probeRecordedProcessBirth(
 
   try {
     if (platform === 'darwin') {
+      start('ps');
       const observed = run('/bin/ps', ['-p', String(pid), '-o', 'pid=,state=']).trim();
       if (observed.length === 0) return { status: 'absent' };
       const observedFields = /^(\d+)(?:\s+(\S+))?$/.exec(observed);
-      if (!observedFields || Number(observedFields[1]) !== pid) return { status: 'unknown' };
+      if (!observedFields || Number(observedFields[1]) !== pid) return unknown('parse');
       // A zombie has already terminated; it runs no code and its pid cannot be
       // reused until the parent reaps it. Reporting it as absent — rather than
       // as an unreadable identity — is what lets a caller prove a stop it just
       // performed (GH #707).
       if (observedFields[2]?.startsWith('Z')) return { status: 'absent' };
+      start('helper');
       const helper = verifyDarwinProcessBirthHelper(dependencies);
       const processInfo = runVerifiedHelper(helper.path, pid, helper.requirement).trim();
       const processMatch = /^(\d+):(\d+):(\d+)$/.exec(processInfo);
-      if (!processMatch || Number(processMatch[1]) !== pid) return { status: 'unknown' };
+      if (!processMatch || Number(processMatch[1]) !== pid) return unknown('parse');
+      start('sysctl');
       const bootSession = run('/usr/sbin/sysctl', ['-n', 'kern.bootsessionuuid']).trim();
       if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(bootSession)) {
-        return { status: 'unknown' };
+        return unknown('parse');
       }
       return {
         status: 'present',
@@ -627,14 +685,17 @@ function probeRecordedProcessBirth(
     }
 
     if (platform === 'linux') {
+      start('proc-boot-id');
       const boot = read('/proc/sys/kernel/random/boot_id').trim();
+      if (!boot) return unknown('parse');
       let stat: string;
+      start('proc-stat');
       try {
         stat = read(`/proc/${pid}/stat`).trim();
       } catch (error) {
         return (error as NodeJS.ErrnoException).code === 'ENOENT'
           ? { status: 'absent' }
-          : { status: 'unknown' };
+          : unknown(failureClass(error));
       }
       const commandEnd = stat.lastIndexOf(')');
       const fields =
@@ -646,7 +707,7 @@ function probeRecordedProcessBirth(
           : [];
       if (fields[0] === 'Z') return { status: 'absent' };
       const started = fields[19];
-      if (!boot || !started || !/^\d+$/.test(started)) return { status: 'unknown' };
+      if (!started || !/^\d+$/.test(started)) return unknown('parse');
       return {
         status: 'present',
         birth: { pid, source: 'linux-proc', token: token([platform, boot, started]) },
@@ -654,28 +715,30 @@ function probeRecordedProcessBirth(
     }
 
     if (platform === 'win32') {
+      start('powershell');
       const powershell = resolveTrustedSystemExecutable(
         'powershell',
         platform,
         dependencies.executableDependencies,
       );
-      if (!powershell) return { status: 'unknown' };
+      if (!powershell) return unknown('unsupported');
       const script =
         `$p = Get-Process -Id ${pid} -ErrorAction SilentlyContinue; ` +
         `if ($null -eq $p) { 'ABSENT' } else { $p.StartTime.ToUniversalTime().Ticks }`;
       const started = run(powershell, ['-NoProfile', '-NonInteractive', '-Command', script]).trim();
       if (started === 'ABSENT') return { status: 'absent' };
-      if (!/^\d+$/.test(started)) return { status: 'unknown' };
+      if (!/^\d+$/.test(started)) return unknown('parse');
       return {
         status: 'present',
         birth: { pid, source: 'windows-powershell', token: token([platform, started]) },
       };
     }
-  } catch {
-    return { status: 'unknown' };
+  } catch (error) {
+    return unknown(failureClass(error));
   }
 
-  return { status: 'unknown' };
+  start('platform');
+  return unknown('unsupported');
 }
 
 export function processBirthMatches(

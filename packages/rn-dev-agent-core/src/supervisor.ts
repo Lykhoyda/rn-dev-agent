@@ -11,8 +11,7 @@ import { LineSplitter } from './lifecycle/stdio-frames.js';
 import { SupervisorCore, type SupervisorAction } from './lifecycle/supervisor-core.js';
 import { logger } from './logger.js';
 import { declaredSourceContractFromEnv } from './session/declared-source-contract.js';
-import { inspectSessionOwner } from './session/process-owner.js';
-import { readProcessBirth } from './session/process-birth.js';
+import { inspectSessionOwner, requireProcessBirthAttestation } from './session/process-owner.js';
 import { resolveSourceIdentity } from './session/source-identity.js';
 import { detectLegacyRootRepair } from './session/worktree-inheritance.js';
 import {
@@ -172,7 +171,7 @@ if (process.env.RN_BRIDGE_SUPERVISOR === '0') {
           diagnostic: (message) =>
             process.stderr.write(`rn-dev-agent successor source: ${message}\n`),
         }),
-        supervisorBirth: readProcessBirth(process.pid),
+        supervisorBirth: requireProcessBirthAttestation(process.pid, 'supervisor'),
         uid:
           typeof process.getuid === 'function'
             ? String(process.getuid())

@@ -234,30 +234,56 @@ function probeProcessBirth(pid, dependencies = {}) {
   return permission === "denied" ? { status: "absent", reason: "foreign" } : probe;
 }
 function probeRecordedProcessBirth(pid, dependencies) {
+  const now = dependencies.now ?? Date.now;
+  let step = "input";
+  let stepStartedAt = now();
+  const start = (nextStep) => {
+    step = nextStep;
+    stepStartedAt = now();
+  };
+  const unknown = (failure, failedStep = step) => ({
+    status: "unknown",
+    cause: {
+      pid,
+      step: failedStep,
+      failure,
+      elapsedMs: Math.max(0, now() - stepStartedAt)
+    }
+  });
+  const failureClass = (error) => {
+    const failure = error;
+    if (failure.code === "ETIMEDOUT" || failure.killed === true || failure.signal === "SIGTERM") {
+      return "timeout";
+    }
+    return typeof failure.status === "number" || typeof failure.signal === "string" ? "exit" : "read";
+  };
   if (!Number.isSafeInteger(pid) || pid <= 0)
-    return { status: "unknown" };
+    return unknown("parse");
   const platform = dependencies.platform ?? process.platform;
   const read = dependencies.read ?? ((path) => readFileSync(path, "utf8"));
   const run = dependencies.run ?? defaultRun;
   const runVerifiedHelper = dependencies.runVerifiedHelper ?? defaultRunVerifiedHelper;
   try {
     if (platform === "darwin") {
+      start("ps");
       const observed = run("/bin/ps", ["-p", String(pid), "-o", "pid=,state="]).trim();
       if (observed.length === 0)
         return { status: "absent" };
       const observedFields = /^(\d+)(?:\s+(\S+))?$/.exec(observed);
       if (!observedFields || Number(observedFields[1]) !== pid)
-        return { status: "unknown" };
+        return unknown("parse");
       if (observedFields[2]?.startsWith("Z"))
         return { status: "absent" };
+      start("helper");
       const helper = verifyDarwinProcessBirthHelper(dependencies);
       const processInfo = runVerifiedHelper(helper.path, pid, helper.requirement).trim();
       const processMatch = /^(\d+):(\d+):(\d+)$/.exec(processInfo);
       if (!processMatch || Number(processMatch[1]) !== pid)
-        return { status: "unknown" };
+        return unknown("parse");
+      start("sysctl");
       const bootSession = run("/usr/sbin/sysctl", ["-n", "kern.bootsessionuuid"]).trim();
       if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(bootSession)) {
-        return { status: "unknown" };
+        return unknown("parse");
       }
       return {
         status: "present",
@@ -269,44 +295,50 @@ function probeRecordedProcessBirth(pid, dependencies) {
       };
     }
     if (platform === "linux") {
+      start("proc-boot-id");
       const boot = read("/proc/sys/kernel/random/boot_id").trim();
+      if (!boot)
+        return unknown("parse");
       let stat;
+      start("proc-stat");
       try {
         stat = read(`/proc/${pid}/stat`).trim();
       } catch (error) {
-        return error.code === "ENOENT" ? { status: "absent" } : { status: "unknown" };
+        return error.code === "ENOENT" ? { status: "absent" } : unknown(failureClass(error));
       }
       const commandEnd = stat.lastIndexOf(")");
       const fields = commandEnd >= 0 ? stat.slice(commandEnd + 1).trim().split(/\s+/) : [];
       if (fields[0] === "Z")
         return { status: "absent" };
       const started = fields[19];
-      if (!boot || !started || !/^\d+$/.test(started))
-        return { status: "unknown" };
+      if (!started || !/^\d+$/.test(started))
+        return unknown("parse");
       return {
         status: "present",
         birth: { pid, source: "linux-proc", token: token([platform, boot, started]) }
       };
     }
     if (platform === "win32") {
+      start("powershell");
       const powershell = resolveTrustedSystemExecutable("powershell", platform, dependencies.executableDependencies);
       if (!powershell)
-        return { status: "unknown" };
+        return unknown("unsupported");
       const script = `$p = Get-Process -Id ${pid} -ErrorAction SilentlyContinue; if ($null -eq $p) { 'ABSENT' } else { $p.StartTime.ToUniversalTime().Ticks }`;
       const started = run(powershell, ["-NoProfile", "-NonInteractive", "-Command", script]).trim();
       if (started === "ABSENT")
         return { status: "absent" };
       if (!/^\d+$/.test(started))
-        return { status: "unknown" };
+        return unknown("parse");
       return {
         status: "present",
         birth: { pid, source: "windows-powershell", token: token([platform, started]) }
       };
     }
-  } catch {
-    return { status: "unknown" };
+  } catch (error) {
+    return unknown(failureClass(error));
   }
-  return { status: "unknown" };
+  start("platform");
+  return unknown("unsupported");
 }
 var DARWIN_HELPER_MANIFEST, VERIFIED_HELPER_SCRIPT;
 var init_process_birth = __esm({
@@ -7979,6 +8011,7 @@ var init_metro_binding = __esm({
     init_metro_cwd();
     init_trusted_system_executable();
     init_process_birth();
+    init_process_owner();
     init_trusted_system_executable();
   }
 });
@@ -11036,6 +11069,63 @@ var init_registry = __esm({
   }
 });
 
+// packages/rn-dev-agent-core/dist/session/process-owner.js
+function defaultProcessState(pid) {
+  try {
+    process.kill(pid, 0);
+    return "alive";
+  } catch (error) {
+    const code = error.code;
+    if (code === "ESRCH")
+      return "dead";
+    if (code === "EPERM")
+      return "alive";
+    return "unknown";
+  }
+}
+function inspectSessionOwner(owner, dependencies = {}) {
+  const inspection = inspectSessionOwnerAttestation(owner, dependencies);
+  return inspection.status === "match" ? "match" : inspection.status === "unknown" ? "unknown" : "mismatch";
+}
+function inspectSessionOwnerAttestation(owner, dependencies = {}) {
+  const now = dependencies.now ?? Date.now;
+  const stateStartedAt = now();
+  const state = (dependencies.processState ?? defaultProcessState)(owner.pid);
+  if (state === "dead")
+    return { status: "absent", pid: owner.pid };
+  if (state === "unknown") {
+    return {
+      status: "unknown",
+      pid: owner.pid,
+      cause: {
+        pid: owner.pid,
+        step: "signal",
+        failure: "read",
+        elapsedMs: Math.max(0, now() - stateStartedAt)
+      }
+    };
+  }
+  const observed = (dependencies.probeBirth ?? probeProcessBirth)(owner.pid);
+  if (observed.status === "absent")
+    return { status: "absent", pid: owner.pid };
+  if (observed.status === "unknown") {
+    return { status: "unknown", pid: owner.pid, cause: observed.cause };
+  }
+  return observed.birth.token === owner.token ? { status: "match", pid: owner.pid } : {
+    status: "mismatch",
+    pid: owner.pid,
+    expected: owner.token,
+    observed: observed.birth.token
+  };
+}
+var init_process_owner = __esm({
+  "packages/rn-dev-agent-core/dist/session/process-owner.js"() {
+    "use strict";
+    init_process_birth();
+    init_registry();
+  }
+});
+
 // packages/rn-dev-agent-core/dist/util/secure-state-file.js
 import { readFileSync as readFileSync3, writeFileSync, unlinkSync as unlinkSync2, mkdirSync as mkdirSync2, renameSync, lstatSync as lstatSync4 } from "node:fs";
 import { join as join3, dirname as dirname4 } from "node:path";
@@ -11196,6 +11286,7 @@ var init_rn_fast_runner_client = __esm({
     init_runtime_paths();
     init_transport_recovery();
     init_process_birth();
+    init_process_owner();
     READY_TIMEOUT_MS = resolveReadyTimeoutMs();
     FAST_RUNNER_PROJECT = resolveNativeRunnerDir("rn-fast-runner");
     REBUILD_LOCK_DIR = join8(FAST_RUNNER_PROJECT, "build", ".rebuild-lock");
@@ -12173,7 +12264,7 @@ var init_rn_android_runner_client = __esm({
     init_runner_artifacts();
     init_runtime_paths();
     init_transport_recovery();
-    init_process_birth();
+    init_process_owner();
     init_authority_store();
     execFileAsync2 = promisify11(execFile11);
     RN_ANDROID_RUNNER_DIR = resolveNativeRunnerDir("rn-android-runner");
@@ -12210,37 +12301,7 @@ var init_release_android_slot = __esm({
 
 // packages/rn-dev-agent-core/dist/session-doctor.js
 init_declared_source_contract();
-
-// packages/rn-dev-agent-core/dist/session/process-owner.js
-init_process_birth();
-function defaultProcessState(pid) {
-  try {
-    process.kill(pid, 0);
-    return "alive";
-  } catch (error) {
-    const code = error.code;
-    if (code === "ESRCH")
-      return "dead";
-    if (code === "EPERM")
-      return "alive";
-    return "unknown";
-  }
-}
-function inspectSessionOwner(owner, dependencies = {}) {
-  const state = (dependencies.processState ?? defaultProcessState)(owner.pid);
-  if (state === "dead")
-    return "mismatch";
-  if (state === "unknown")
-    return "unknown";
-  const observed = (dependencies.probeBirth ?? probeProcessBirth)(owner.pid);
-  if (observed.status === "absent")
-    return "mismatch";
-  if (observed.status === "unknown")
-    return "unknown";
-  return observed.birth.token === owner.token ? "match" : "mismatch";
-}
-
-// packages/rn-dev-agent-core/dist/session-doctor.js
+init_process_owner();
 init_registry();
 init_recovery_remedy();
 
@@ -12654,6 +12715,7 @@ import { closeSync as closeSync3, existsSync as existsSync4, fstatSync as fstatS
 init_metro_binding();
 init_trusted_system_executable();
 init_process_birth();
+init_process_owner();
 var METRO_LAUNCHER_SOURCE = String.raw`
 const { spawn, spawnSync } = require('node:child_process');
 const { createHash, createHmac } = require('node:crypto');

@@ -49,11 +49,8 @@ import {
   isAmbiguousTransportFailure,
   parseStatusProbeReply,
 } from './transport-recovery.js';
-import {
-  probeProcessBirth,
-  readProcessBirth,
-  type ProcessBirthProbe,
-} from '../session/process-birth.js';
+import { probeProcessBirth, type ProcessBirthProbe } from '../session/process-birth.js';
+import { requireProcessBirthAttestation } from '../session/process-owner.js';
 
 // Warm-launch ready gate. Overridable via RN_FAST_RUNNER_READY_TIMEOUT_MS
 // because a cold/slow CI simulator can need well over 30s to install + launch
@@ -817,17 +814,13 @@ export async function startFastRunner(
         ...(result.quiescence !== undefined ? { quiescence: result.quiescence } : {}),
         ...authority,
       };
-      const processBirth = readProcessBirth(child.pid!);
-      if (!processBirth) {
+      try {
+        state.processBirth = requireProcessBirthAttestation(child.pid!, 'native runner').token;
+      } catch (error) {
         child.kill('SIGTERM');
-        reject(
-          new Error(
-            'PROCESS_BIRTH_UNAVAILABLE: native runner process identity could not be proven',
-          ),
-        );
+        reject(error);
         return;
       }
-      state.processBirth = processBirth.token;
       runnerState = state;
       if (Object.keys(runnerTestFaultEnv).length > 0) runnerTestFaultForwarded = true;
       quiescenceAnnouncementPending = true;

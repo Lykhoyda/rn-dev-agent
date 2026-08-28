@@ -63,6 +63,44 @@ test('worker runtime keeps diagnostics available but refuses authority when setu
   assert.throws(() => runtime.requireAvailable(), /AUTHORITY_STORE_UNAVAILABLE/);
 });
 
+test('worker runtime preserves unavailable process-birth attestation details', () => {
+  const runtime = createWorkerAuthorityRuntime(
+    {
+      RN_DEV_AGENT_SESSION_ID: 'session-a',
+      RN_DEV_AGENT_CLAIM_EPOCH: '1',
+      RN_DEV_AGENT_REGISTRY_PATH: '/not-opened.sqlite3',
+      RN_DEV_AGENT_WORKER_INSTANCE: 'worker-a',
+    },
+    {
+      probeBirth: (pid) => ({
+        status: 'unknown',
+        cause: { pid, step: 'helper', failure: 'timeout', elapsedMs: 2000 },
+      }),
+    },
+  );
+
+  assert.equal(runtime.available, false);
+  assert.deepEqual(runtime.status(), {
+    available: false,
+    code: 'PROCESS_BIRTH_UNAVAILABLE',
+    reason: 'PROCESS_BIRTH_UNAVAILABLE: worker process identity could not be read on a loaded host',
+    details: {
+      attestation: 'unavailable',
+      pid: process.pid,
+      step: 'helper',
+      failure: 'timeout',
+      elapsedMs: 2000,
+      nextAction:
+        'Process identity could not be read in time on a loaded host. Reduce host process contention, then retry the original operation; do not reopen or rebind the device.',
+    },
+  });
+  assert.throws(
+    () => runtime.requireAvailable(),
+    (error: { code?: string; details?: Record<string, unknown> }) =>
+      error.code === 'PROCESS_BIRTH_UNAVAILABLE' && error.details?.attestation === 'unavailable',
+  );
+});
+
 test('blocked worker runtime exposes only capability-bound recovery', () => {
   const root = mkdtempSync(join(tmpdir(), 'rn-authority-runtime-'));
   roots.push(root);

@@ -200,27 +200,29 @@ export interface ControllerBinding {
   worker: { instanceId: string | null; pid: number | null; token: string | null };
 }
 
+export interface SessionAuthorityErrorDetails {
+  axis?: string;
+  expected?: string;
+  observed?: string;
+  nextAction?: string;
+  attestation?: 'unavailable' | 'mismatch' | 'absent';
+  pid?: number;
+  step?: string;
+  failure?: string;
+  elapsedMs?: number;
+}
+
 export class SessionAuthorityError extends Error {
   readonly code: string;
   readonly holder?: { sessionId: string; claimEpoch: number };
   private supplementalMeta?: Record<string, unknown>;
-  readonly details?: {
-    axis?: string;
-    expected?: string;
-    observed?: string;
-    nextAction?: string;
-  };
+  readonly details?: SessionAuthorityErrorDetails;
 
   constructor(
     code: string,
     message: string,
     holder?: { sessionId: string; claimEpoch: number },
-    details?: {
-      axis?: string;
-      expected?: string;
-      observed?: string;
-      nextAction?: string;
-    },
+    details?: SessionAuthorityErrorDetails,
   ) {
     super(`${code}: ${message}`);
     this.name = 'SessionAuthorityError';
@@ -358,9 +360,8 @@ export function shortAuthorityIdentity(value: unknown): string {
 export function authorityErrorMeta(error: SessionAuthorityError): Record<string, unknown> {
   return {
     ...error.getSupplementalMeta(),
+    ...error.details,
     axis: error.details?.axis ?? errorAxes[error.code],
-    expected: error.details?.expected,
-    observed: error.details?.observed,
     holder: error.holder
       ? {
           sessionId: error.holder.sessionId.slice(0, 12),
