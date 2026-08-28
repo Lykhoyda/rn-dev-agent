@@ -11408,6 +11408,7 @@ var init_agent_device_wrapper = __esm({
     init_utils();
     init_rn_fast_runner_client();
     init_protocol();
+    init_registry();
     init_device_screenshot_raw();
     init_fast_runner_ref_map();
     init_no_change_tracker();
@@ -11897,6 +11898,7 @@ var init_device_session = __esm({
     init_recover_wedge();
     init_recover_detached();
     init_utils();
+    init_registry();
     init_project_config();
     init_maestro_validator();
     init_logger();
@@ -12266,6 +12268,7 @@ var init_rn_android_runner_client = __esm({
     init_transport_recovery();
     init_process_owner();
     init_authority_store();
+    init_registry();
     execFileAsync2 = promisify11(execFile11);
     RN_ANDROID_RUNNER_DIR = resolveNativeRunnerDir("rn-android-runner");
     GRADLEW = join12(RN_ANDROID_RUNNER_DIR, "gradlew");

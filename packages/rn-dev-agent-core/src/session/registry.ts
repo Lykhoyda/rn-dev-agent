@@ -212,6 +212,35 @@ export interface SessionAuthorityErrorDetails {
   elapsedMs?: number;
 }
 
+export function parseSessionAuthorityErrorDetails(
+  value: string | undefined,
+): SessionAuthorityErrorDetails | undefined {
+  if (!value) return undefined;
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return undefined;
+    const source = parsed as Record<string, unknown>;
+    const details: SessionAuthorityErrorDetails = {};
+    for (const key of ['axis', 'expected', 'observed', 'nextAction', 'step', 'failure'] as const) {
+      if (typeof source[key] === 'string') details[key] = source[key];
+    }
+    if (
+      source.attestation === 'unavailable' ||
+      source.attestation === 'mismatch' ||
+      source.attestation === 'absent'
+    ) {
+      details.attestation = source.attestation;
+    }
+    if (Number.isSafeInteger(source.pid)) details.pid = source.pid as number;
+    if (typeof source.elapsedMs === 'number' && Number.isFinite(source.elapsedMs)) {
+      details.elapsedMs = Math.max(0, source.elapsedMs);
+    }
+    return Object.keys(details).length > 0 ? details : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export class SessionAuthorityError extends Error {
   readonly code: string;
   readonly holder?: { sessionId: string; claimEpoch: number };
@@ -238,6 +267,12 @@ export class SessionAuthorityError extends Error {
   getSupplementalMeta(): Record<string, unknown> {
     return { ...this.supplementalMeta };
   }
+}
+
+export function processBirthAttestationError(error: unknown): SessionAuthorityError | null {
+  return error instanceof SessionAuthorityError && error.code === 'PROCESS_BIRTH_UNAVAILABLE'
+    ? error
+    : null;
 }
 
 // GH #672: recovery handles are bounded. `status` rotates one that is expired or

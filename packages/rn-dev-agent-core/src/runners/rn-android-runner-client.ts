@@ -45,6 +45,7 @@ import {
 } from './transport-recovery.js';
 import { requireProcessBirthAttestation } from '../session/process-owner.js';
 import { openAuthorityStore } from '../session/authority-store.js';
+import { authorityErrorMeta, processBirthAttestationError } from '../session/registry.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -1949,6 +1950,10 @@ export async function runAndroid(args: RunAndroidArgs): Promise<ToolResult> {
     ));
   } catch (err) {
     const m = errMessage(err);
+    const authorityError = processBirthAttestationError(err);
+    if (authorityError) {
+      return failResult(m, 'PROCESS_BIRTH_UNAVAILABLE', authorityErrorMeta(authorityError));
+    }
     // GH #383: a protocol mismatch (reuse-gate reject, post-start verify, or the
     // /command v-stamp) is a distinct, actionable failure — surface it before the
     // generic connection-failure mapping so it is never mislabeled RN_ANDROID_RUNNER_DOWN.

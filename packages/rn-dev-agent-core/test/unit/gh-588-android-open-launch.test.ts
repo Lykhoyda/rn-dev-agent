@@ -10,6 +10,7 @@ import {
 } from '../../dist/tools/device-session.js';
 import { clearActiveSession, getActiveSession } from '../../dist/agent-device-wrapper.js';
 import { okResult } from '../../dist/utils.js';
+import { SessionAuthorityError } from '../../dist/session/registry.js';
 
 const SERIAL = 'emulator-5560';
 const OTHER_SERIAL = 'emulator-5556';
@@ -21,8 +22,49 @@ function envelope(result: { content: Array<{ text: string }> }) {
     code?: string;
     error?: string;
     data?: Record<string, unknown>;
+    meta?: Record<string, unknown>;
   };
 }
+
+test('Android open preserves unavailable runner attestation metadata', async () => {
+  const handler = createDeviceSnapshotHandler({
+    startAndroidRunner: async () => {
+      throw new SessionAuthorityError(
+        'PROCESS_BIRTH_UNAVAILABLE',
+        'native runner process identity could not be read on a loaded host',
+        undefined,
+        {
+          attestation: 'unavailable',
+          pid: 4242,
+          step: 'helper',
+          failure: 'timeout',
+          elapsedMs: 2000,
+          nextAction:
+            'Process identity could not be read in time on a loaded host. Reduce host process contention, then retry the original operation; do not reopen or rebind the device.',
+        },
+      );
+    },
+    reapAndroidRunner: async () => {},
+  });
+
+  try {
+    const body = envelope(
+      await handler({
+        action: 'open',
+        platform: 'android',
+        deviceId: SERIAL,
+        appId: APP_ID,
+      }),
+    );
+    assert.equal(body.ok, false);
+    assert.equal(body.code, 'PROCESS_BIRTH_UNAVAILABLE');
+    assert.equal(body.meta?.attestation, 'unavailable');
+    assert.equal(body.meta?.pid, 4242);
+    assert.match(String(body.meta?.nextAction), /loaded host/);
+  } finally {
+    cleanup();
+  }
+});
 
 function cleanup(): void {
   clearActiveSession();

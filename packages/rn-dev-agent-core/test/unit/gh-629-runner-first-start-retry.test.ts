@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { ensureRunnerForCommand } from '../../dist/agent-device-wrapper.js';
 import type { FastRunnerLivenessDetail } from '../../dist/runners/rn-fast-runner-client.js';
+import { SessionAuthorityError } from '../../dist/session/registry.js';
 
 // GH #629: a fresh simulator's first XCTest bootstrap predictably overruns the
 // warm READY window, so the first spawn dies while its side effects make an
@@ -143,6 +144,44 @@ test('typed post-spawn staleness surfaces without burning the retry', async () =
   assert.equal(script.ensureCalls.length, 1, 'typed failures must not trigger the transient retry');
 });
 
+test('unavailable runner attestation refuses with safe details and no retry', async () => {
+  let ensureCalls = 0;
+  const result = await ensureRunnerForCommand('SIM-UDID', 'com.example.app', {
+    probe: async () => DEAD,
+    ensure: async () => {
+      ensureCalls += 1;
+      throw new SessionAuthorityError(
+        'PROCESS_BIRTH_UNAVAILABLE',
+        'native runner process identity could not be read on a loaded host',
+        undefined,
+        {
+          attestation: 'unavailable',
+          pid: 4242,
+          step: 'helper',
+          failure: 'timeout',
+          elapsedMs: 2000,
+          nextAction:
+            'Process identity could not be read in time on a loaded host. Reduce host process contention, then retry the original operation; do not reopen or rebind the device.',
+        },
+      );
+    },
+    launchCount: () => ensureCalls,
+    prebuilt: () => true,
+    adopt: () => {},
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(ensureCalls, 1);
+  assert.ok(!result.ok && result.code === 'PROCESS_BIRTH_UNAVAILABLE');
+  assert.ok(!result.ok && result.meta?.attestation === 'unavailable');
+  assert.ok(!result.ok && result.meta?.pid === 4242);
+  assert.ok(!result.ok && result.meta?.step === 'helper');
+  assert.ok(!result.ok && result.meta?.failure === 'timeout');
+  assert.ok(!result.ok && result.meta?.elapsedMs === 2000);
+  assert.match(String(!result.ok && result.meta?.nextAction), /loaded host/);
+  assert.match(String(!result.ok && result.meta?.nextAction), /do not reopen or rebind/i);
+});
+
 test('attachOnly is preserved across the internal retry spawn', async () => {
   const { script, deps } = makeDeps([DEAD, DEAD, ALIVE], { attachOnly: true });
   const result = await ensureRunnerForCommand('SIM-UDID', 'com.example.app', deps);
@@ -175,4 +214,45 @@ test('device_snapshot action=open maps the exhausted-retry failure to RN_FAST_RU
   const body = JSON.parse(result.content[0]!.text) as { ok: boolean; code?: string };
   assert.equal(body.ok, false);
   assert.equal(body.code, 'RN_FAST_RUNNER_DOWN');
+});
+
+test('device_snapshot action=open preserves unavailable runner attestation metadata', async () => {
+  const { createDeviceSnapshotHandler } = await import('../../dist/tools/device-session.js');
+  const deviceId = randomUUID().toUpperCase();
+  const handler = createDeviceSnapshotHandler({
+    isAppRunning: async () => true,
+    ensureIosRunner: async () => ({
+      ok: false,
+      code: 'PROCESS_BIRTH_UNAVAILABLE',
+      message:
+        'PROCESS_BIRTH_UNAVAILABLE: native runner process identity could not be read on a loaded host',
+      meta: {
+        attestation: 'unavailable',
+        pid: 4242,
+        step: 'helper',
+        failure: 'timeout',
+        elapsedMs: 2000,
+        nextAction:
+          'Process identity could not be read in time on a loaded host. Reduce host process contention, then retry the original operation; do not reopen or rebind the device.',
+      },
+    }),
+    stopIosRunner: async () => {},
+  });
+  const result = await handler({
+    action: 'open',
+    platform: 'ios',
+    deviceId,
+    appId: 'com.example.app',
+    attachOnly: true,
+  });
+  const body = JSON.parse(result.content[0]!.text) as {
+    ok: boolean;
+    code?: string;
+    meta?: Record<string, unknown>;
+  };
+  assert.equal(body.ok, false);
+  assert.equal(body.code, 'PROCESS_BIRTH_UNAVAILABLE');
+  assert.equal(body.meta?.attestation, 'unavailable');
+  assert.equal(body.meta?.pid, 4242);
+  assert.match(String(body.meta?.nextAction), /loaded host/);
 });

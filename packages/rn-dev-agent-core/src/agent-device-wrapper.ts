@@ -26,6 +26,11 @@ import type {
   FastRunnerLivenessDetail,
 } from './runners/rn-fast-runner-client.js';
 import type { ToolErrorCode } from './types.js';
+import {
+  authorityErrorMeta,
+  processBirthAttestationError,
+  SessionAuthorityError,
+} from './session/registry.js';
 import type { SettleProbes, SettleOutcome, waitForSettle } from './lifecycle/settle.js';
 import { resolveBootedIosUdid } from './tools/device-screenshot-raw.js';
 import {
@@ -1078,7 +1083,30 @@ export interface EnsureRunnerDeps {
 
 export type EnsureRunnerResult =
   | { ok: true; note?: string }
-  | { ok: false; message: string; code?: ToolErrorCode };
+  | { ok: false; message: string; code?: ToolErrorCode; meta?: Record<string, unknown> };
+
+async function ensureRunnerStart(
+  ensure: NonNullable<EnsureRunnerDeps['ensure']>,
+  deviceId: string,
+  bundleId: string,
+  opts: { forceLocalBuild?: boolean; attachOnly?: boolean },
+): Promise<Extract<EnsureRunnerResult, { ok: false }> | null> {
+  try {
+    await ensure(deviceId, bundleId, opts);
+    return null;
+  } catch (error) {
+    const authorityError = processBirthAttestationError(error);
+    if (authorityError) {
+      return {
+        ok: false,
+        code: 'PROCESS_BIRTH_UNAVAILABLE',
+        message: authorityError.message,
+        meta: authorityErrorMeta(authorityError),
+      };
+    }
+    throw error;
+  }
+}
 
 const PROTOCOL_STALE_REASONS = new Set([
   'legacy',
@@ -1153,10 +1181,11 @@ async function rebuildStaleRunnerArtifact(
     // GH #382 (Codex P1): force a source rebuild — a stale prebuilt artifact must
     // not be re-selected here, or the cold rebuild that heals the command surface
     // never runs.
-    await ensure(deviceId, bundleId, {
+    const authorityFailure = await ensureRunnerStart(ensure, deviceId, bundleId, {
       forceLocalBuild: true,
       ...(deps.attachOnly === true ? { attachOnly: true } : {}),
     });
+    if (authorityFailure) return authorityFailure;
   } finally {
     release();
   }
@@ -1247,7 +1276,8 @@ export async function ensureRunnerForCommand(
   const spawnOpts = deps.attachOnly === true ? { attachOnly: true } : {};
   const launchCount = deps.launchCount ?? getRunnerLaunchCount;
   const launchesBefore = launchCount();
-  await ensure(spawnDeviceId, bundleId, spawnOpts);
+  const authorityFailure = await ensureRunnerStart(ensure, spawnDeviceId, bundleId, spawnOpts);
+  if (authorityFailure) return authorityFailure;
   let after = await probe();
   // GH #629: a fresh simulator's first XCTest bootstrap predictably overruns
   // the warm READY window and primes the next spawn — absorb it with exactly
@@ -1263,7 +1293,13 @@ export async function ensureRunnerForCommand(
     )();
     if (firstSpawnGone) {
       firstStartRetried = true;
-      await ensure(spawnDeviceId, bundleId, spawnOpts);
+      const retryAuthorityFailure = await ensureRunnerStart(
+        ensure,
+        spawnDeviceId,
+        bundleId,
+        spawnOpts,
+      );
+      if (retryAuthorityFailure) return retryAuthorityFailure;
       after = await probe();
     }
   }
@@ -1365,6 +1401,7 @@ export async function ensureFastRunner(
   try {
     await startFastRunner(deviceId, bundleId, undefined, opts);
   } catch (err) {
+    if (err instanceof SessionAuthorityError) throw err;
     console.error(
       `Fast runner auto-start failed: ${err instanceof Error ? err.message : String(err)}`,
     );
@@ -1877,6 +1914,7 @@ export async function runNative(
         // GH #382: discard any pending artifact note from a failed start.
         consumePendingFastRunnerArtifactNote();
         return failResult(ready.message, ready.code ?? 'RN_FAST_RUNNER_DOWN', {
+          ...ready.meta,
           runnerPostMortem: getRunnerPostMortem(),
         });
       }
@@ -2023,6 +2061,10 @@ export async function runNative(
         // note must never attach to a LATER unrelated result.
         consumePendingAndroidUpgradeNote();
         const msg = err instanceof Error ? err.message : String(err);
+        const authorityError = processBirthAttestationError(err);
+        if (authorityError) {
+          return failResult(msg, 'PROCESS_BIRTH_UNAVAILABLE', authorityErrorMeta(authorityError));
+        }
         // GH #418: a stale command surface mid-flow is a fast refusal — the
         // open path (device_snapshot action=open) is the rebuild entry.
         if (msg.startsWith('RUNNER_COMMANDS_STALE')) {

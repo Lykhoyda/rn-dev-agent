@@ -20749,6 +20749,35 @@ function referencesMetroEvidenceSocket(value, path) {
     return true;
   return Object.values(record2).some((entry) => referencesMetroEvidenceSocket(entry, path));
 }
+function parseSessionAuthorityErrorDetails(value) {
+  if (!value)
+    return void 0;
+  try {
+    const parsed = JSON.parse(value);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
+      return void 0;
+    const source = parsed;
+    const details = {};
+    for (const key of ["axis", "expected", "observed", "nextAction", "step", "failure"]) {
+      if (typeof source[key] === "string")
+        details[key] = source[key];
+    }
+    if (source.attestation === "unavailable" || source.attestation === "mismatch" || source.attestation === "absent") {
+      details.attestation = source.attestation;
+    }
+    if (Number.isSafeInteger(source.pid))
+      details.pid = source.pid;
+    if (typeof source.elapsedMs === "number" && Number.isFinite(source.elapsedMs)) {
+      details.elapsedMs = Math.max(0, source.elapsedMs);
+    }
+    return Object.keys(details).length > 0 ? details : void 0;
+  } catch {
+    return void 0;
+  }
+}
+function processBirthAttestationError(error2) {
+  return error2 instanceof SessionAuthorityError && error2.code === "PROCESS_BIRTH_UNAVAILABLE" ? error2 : null;
+}
 function authorityRemedyNextAction(code) {
   return errorNextActions[code];
 }
@@ -26774,6 +26803,10 @@ async function runAndroid(args) {
     ({ resp, recovery } = await postCommandWithRecovery2(withKeyboardGuard(body, args.command, process.env)));
   } catch (err) {
     const m = errMessage(err);
+    const authorityError = processBirthAttestationError(err);
+    if (authorityError) {
+      return failResult(m, "PROCESS_BIRTH_UNAVAILABLE", authorityErrorMeta(authorityError));
+    }
     if (m.startsWith("RUNNER_PROTOCOL_MISMATCH")) {
       return failResult(m, "RUNNER_PROTOCOL_MISMATCH", {
         hint: "The installed runner APK predates this plugin version. Rebuild + reinstall (command in the error), then retry."
@@ -26873,6 +26906,7 @@ var init_rn_android_runner_client = __esm({
     init_transport_recovery();
     init_process_owner();
     init_authority_store();
+    init_registry();
     execFileAsync = promisify3(execFile3);
     DEFAULT_PORT = 22089;
     READY_TIMEOUT_MS2 = 3e4;
@@ -29513,7 +29547,7 @@ function createDeviceSnapshotHandler(deps = {}) {
             await stopIosRunner(deviceId);
             consumePendingFastRunnerArtifactNote();
             releaseDeviceLockForSession();
-            return failResult(ready.message, ready.code ?? "RN_FAST_RUNNER_DOWN");
+            return failResult(ready.message, ready.code ?? "RN_FAST_RUNNER_DOWN", ready.meta);
           }
           upgradeNote = ready.note ?? consumePendingFastRunnerArtifactNote();
           if (!args.attachOnly) {
@@ -29557,6 +29591,13 @@ function createDeviceSnapshotHandler(deps = {}) {
         const msg3 = cleanupFailure ? `${rawMsg}; runner cleanup also failed: ${cleanupFailure}` : rawMsg;
         if (err instanceof AndroidAppLaunchError) {
           return failResult(msg3, "APP_LAUNCH_FAILED");
+        }
+        const authorityError = processBirthAttestationError(err);
+        if (authorityError) {
+          return failResult(msg3, "PROCESS_BIRTH_UNAVAILABLE", {
+            ...authorityErrorMeta(authorityError),
+            ...cleanupFailure ? { runnerCleanupFailure: cleanupFailure } : {}
+          });
         }
         if (msg3.startsWith("RUNNER_COMMANDS_STALE")) {
           return failResult(msg3, "RUNNER_COMMANDS_STALE");
@@ -29866,6 +29907,7 @@ var init_device_session = __esm({
     init_recover_wedge();
     init_recover_detached();
     init_utils();
+    init_registry();
     init_project_config();
     init_maestro_validator();
     init_logger();
@@ -35081,6 +35123,23 @@ function decideRunnerSpawn(input) {
   }
   return { action: "spawn", deviceId: input.deviceId };
 }
+async function ensureRunnerStart(ensure, deviceId, bundleId, opts) {
+  try {
+    await ensure(deviceId, bundleId, opts);
+    return null;
+  } catch (error2) {
+    const authorityError = processBirthAttestationError(error2);
+    if (authorityError) {
+      return {
+        ok: false,
+        code: "PROCESS_BIRTH_UNAVAILABLE",
+        message: authorityError.message,
+        meta: authorityErrorMeta(authorityError)
+      };
+    }
+    throw error2;
+  }
+}
 function isArtifactStaleReason(reason) {
   return reason === "missing-commands" || reason === "missing-features";
 }
@@ -35115,10 +35174,12 @@ async function rebuildStaleRunnerArtifact(first, deviceId, bundleId, deps) {
     if (plugin !== null)
       budget.recordRebuild(plugin);
     const ensure = deps.ensure ?? ensureFastRunner;
-    await ensure(deviceId, bundleId, {
+    const authorityFailure3 = await ensureRunnerStart(ensure, deviceId, bundleId, {
       forceLocalBuild: true,
       ...deps.attachOnly === true ? { attachOnly: true } : {}
     });
+    if (authorityFailure3)
+      return authorityFailure3;
   } finally {
     release2();
   }
@@ -35172,7 +35233,9 @@ async function ensureRunnerForCommand(deviceId, bundleId, deps = {}) {
   const spawnOpts = deps.attachOnly === true ? { attachOnly: true } : {};
   const launchCount = deps.launchCount ?? getRunnerLaunchCount;
   const launchesBefore = launchCount();
-  await ensure(spawnDeviceId, bundleId, spawnOpts);
+  const authorityFailure3 = await ensureRunnerStart(ensure, spawnDeviceId, bundleId, spawnOpts);
+  if (authorityFailure3)
+    return authorityFailure3;
   let after = await probe();
   let firstStartRetried = false;
   const launchesAfter = launchCount();
@@ -35180,7 +35243,9 @@ async function ensureRunnerForCommand(deviceId, bundleId, deps = {}) {
     const firstSpawnGone = await (deps.awaitSpawnExit ?? (() => awaitSpawnedRunnerExit(void 0, launchesAfter)))();
     if (firstSpawnGone) {
       firstStartRetried = true;
-      await ensure(spawnDeviceId, bundleId, spawnOpts);
+      const retryAuthorityFailure = await ensureRunnerStart(ensure, spawnDeviceId, bundleId, spawnOpts);
+      if (retryAuthorityFailure)
+        return retryAuthorityFailure;
       after = await probe();
     }
   }
@@ -35240,6 +35305,8 @@ async function ensureFastRunner(deviceId, bundleId, opts = {}) {
   try {
     await startFastRunner(deviceId, bundleId, void 0, opts);
   } catch (err) {
+    if (err instanceof SessionAuthorityError)
+      throw err;
     console.error(`Fast runner auto-start failed: ${err instanceof Error ? err.message : String(err)}`);
   }
 }
@@ -35480,6 +35547,7 @@ async function runNative(cliArgs, opts = {}) {
       if (!ready.ok) {
         consumePendingFastRunnerArtifactNote();
         return failResult(ready.message, ready.code ?? "RN_FAST_RUNNER_DOWN", {
+          ...ready.meta,
           runnerPostMortem: getRunnerPostMortem()
         });
       }
@@ -35574,6 +35642,10 @@ async function runNative(cliArgs, opts = {}) {
       } catch (err) {
         consumePendingAndroidUpgradeNote3();
         const msg3 = err instanceof Error ? err.message : String(err);
+        const authorityError = processBirthAttestationError(err);
+        if (authorityError) {
+          return failResult(msg3, "PROCESS_BIRTH_UNAVAILABLE", authorityErrorMeta(authorityError));
+        }
         if (msg3.startsWith("RUNNER_COMMANDS_STALE")) {
           return failResult(msg3, "RUNNER_COMMANDS_STALE");
         }
@@ -35650,6 +35722,7 @@ var init_agent_device_wrapper = __esm({
     init_utils();
     init_rn_fast_runner_client();
     init_protocol();
+    init_registry();
     init_device_screenshot_raw();
     init_fast_runner_ref_map();
     init_no_change_tracker();
@@ -79957,7 +80030,7 @@ function unavailable(reason, fallbackCode, details) {
 }
 function createWorkerAuthorityRuntime(environment = process.env, dependencies = {}) {
   if (environment.RN_DEV_AGENT_AUTHORITY_ERROR) {
-    return unavailable(environment.RN_DEV_AGENT_AUTHORITY_ERROR, "AUTHORITY_STORE_UNAVAILABLE");
+    return unavailable(environment.RN_DEV_AGENT_AUTHORITY_ERROR, "AUTHORITY_STORE_UNAVAILABLE", parseSessionAuthorityErrorDetails(environment.RN_DEV_AGENT_AUTHORITY_ERROR_DETAILS));
   }
   const sessionId = environment.RN_DEV_AGENT_SESSION_ID;
   const claimEpoch = Number(environment.RN_DEV_AGENT_CLAIM_EPOCH);

@@ -5,7 +5,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, test } from 'node:test';
 import { openSessionRegistry } from '../../../dist/session/registry.js';
-import { createWorkerAuthorityRuntime } from '../../../dist/session/runtime.js';
+import {
+  createWorkerAuthorityRuntime,
+  workerAuthorityFailureEnvironment,
+} from '../../../dist/session/runtime.js';
+import { SessionAuthorityError } from '../../../dist/session/registry.js';
 
 const roots = [];
 
@@ -99,6 +103,34 @@ test('worker runtime preserves unavailable process-birth attestation details', (
     (error: { code?: string; details?: Record<string, unknown> }) =>
       error.code === 'PROCESS_BIRTH_UNAVAILABLE' && error.details?.attestation === 'unavailable',
   );
+});
+
+test('supervisor authority failure handoff preserves safe process-birth details', () => {
+  const error = new SessionAuthorityError(
+    'PROCESS_BIRTH_UNAVAILABLE',
+    'supervisor process identity could not be read on a loaded host',
+    undefined,
+    {
+      attestation: 'unavailable',
+      pid: 4242,
+      step: 'helper',
+      failure: 'timeout',
+      elapsedMs: 2000,
+      nextAction:
+        'Process identity could not be read in time on a loaded host. Reduce host process contention, then retry the original operation; do not reopen or rebind the device.',
+    },
+  );
+  const runtime = createWorkerAuthorityRuntime(
+    workerAuthorityFailureEnvironment(error.message, error.details),
+  );
+
+  assert.deepEqual(runtime.status(), {
+    available: false,
+    code: 'PROCESS_BIRTH_UNAVAILABLE',
+    reason:
+      'PROCESS_BIRTH_UNAVAILABLE: supervisor process identity could not be read on a loaded host',
+    details: error.details,
+  });
 });
 
 test('blocked worker runtime exposes only capability-bound recovery', () => {

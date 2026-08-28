@@ -6,6 +6,7 @@ import {
 } from './process-owner.js';
 import {
   openSessionRegistry,
+  parseSessionAuthorityErrorDetails,
   SessionAuthorityError,
   type OwnerStatus,
   type RecoveryRequirementInspection,
@@ -185,12 +186,26 @@ function unavailable(
   });
 }
 
+export function workerAuthorityFailureEnvironment(
+  reason: string,
+  details?: SessionAuthorityErrorDetails,
+): NodeJS.ProcessEnv {
+  return {
+    RN_DEV_AGENT_AUTHORITY_ERROR: reason,
+    ...(details ? { RN_DEV_AGENT_AUTHORITY_ERROR_DETAILS: JSON.stringify(details) } : {}),
+  };
+}
+
 export function createWorkerAuthorityRuntime(
   environment: NodeJS.ProcessEnv = process.env,
   dependencies: WorkerAuthorityDependencies = {},
 ): WorkerAuthorityRuntime {
   if (environment.RN_DEV_AGENT_AUTHORITY_ERROR) {
-    return unavailable(environment.RN_DEV_AGENT_AUTHORITY_ERROR, 'AUTHORITY_STORE_UNAVAILABLE');
+    return unavailable(
+      environment.RN_DEV_AGENT_AUTHORITY_ERROR,
+      'AUTHORITY_STORE_UNAVAILABLE',
+      parseSessionAuthorityErrorDetails(environment.RN_DEV_AGENT_AUTHORITY_ERROR_DETAILS),
+    );
   }
   const sessionId = environment.RN_DEV_AGENT_SESSION_ID;
   const claimEpoch = Number(environment.RN_DEV_AGENT_CLAIM_EPOCH);

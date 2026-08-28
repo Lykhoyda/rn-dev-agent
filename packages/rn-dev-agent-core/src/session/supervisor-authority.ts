@@ -2,8 +2,13 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { dirname } from 'node:path';
 import type { ProcessBirth } from './process-birth.js';
 import { stopBoundObserve, stopBoundRecorder, stopBoundRunner } from './process-cleanup.js';
-import type { OwnerStatus, SessionRef, SessionRegistry } from './registry.js';
-import { openSessionRegistry } from './registry.js';
+import type {
+  OwnerStatus,
+  SessionAuthorityErrorDetails,
+  SessionRef,
+  SessionRegistry,
+} from './registry.js';
+import { openSessionRegistry, SessionAuthorityError } from './registry.js';
 import type { SourceIdentity } from './source-identity.js';
 import { stopManagedMetro, type ManagedMetroBinding } from './managed-metro.js';
 import {
@@ -56,7 +61,12 @@ export function supervisorSessionIsTerminal(authority: SupervisorAuthority): boo
 export function resolveSupervisorAuthorityForSpawn(
   current: SupervisorAuthority | null,
   mint: () => SupervisorAuthority,
-): { authority: SupervisorAuthority | null; error: string | null; minted: boolean } {
+): {
+  authority: SupervisorAuthority | null;
+  error: string | null;
+  errorDetails?: SessionAuthorityErrorDetails;
+  minted: boolean;
+} {
   if (!current || !supervisorSessionIsTerminal(current)) {
     return { authority: current, error: null, minted: false };
   }
@@ -77,6 +87,9 @@ export function resolveSupervisorAuthorityForSpawn(
         error instanceof Error
           ? error.message
           : 'AUTHORITY_STORE_UNAVAILABLE: authority session could not be initialized',
+      ...(error instanceof SessionAuthorityError && error.details
+        ? { errorDetails: error.details }
+        : {}),
       minted: false,
     };
   }

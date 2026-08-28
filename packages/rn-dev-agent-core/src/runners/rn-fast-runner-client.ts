@@ -51,6 +51,7 @@ import {
 } from './transport-recovery.js';
 import { probeProcessBirth, type ProcessBirthProbe } from '../session/process-birth.js';
 import { requireProcessBirthAttestation } from '../session/process-owner.js';
+import { SessionAuthorityError } from '../session/registry.js';
 
 // Warm-launch ready gate. Overridable via RN_FAST_RUNNER_READY_TIMEOUT_MS
 // because a cold/slow CI simulator can need well over 30s to install + launch

@@ -12,6 +12,8 @@ import { SupervisorCore, type SupervisorAction } from './lifecycle/supervisor-co
 import { logger } from './logger.js';
 import { declaredSourceContractFromEnv } from './session/declared-source-contract.js';
 import { inspectSessionOwner, requireProcessBirthAttestation } from './session/process-owner.js';
+import { SessionAuthorityError, type SessionAuthorityErrorDetails } from './session/registry.js';
+import { workerAuthorityFailureEnvironment } from './session/runtime.js';
 import { resolveSourceIdentity } from './session/source-identity.js';
 import { detectLegacyRootRepair } from './session/worktree-inheritance.js';
 import {
@@ -111,6 +113,7 @@ if (process.env.RN_BRIDGE_SUPERVISOR === '0') {
 
   let authority: SupervisorAuthority | null = null;
   let authorityError: string | null = null;
+  let authorityErrorDetails: SessionAuthorityErrorDetails | undefined;
   let mintAuthority: (() => SupervisorAuthority) | null = null;
   let resolveIdentityForSpawn: (root: string) => ReturnType<typeof resolveSourceIdentity> = (
     root,
@@ -184,6 +187,7 @@ if (process.env.RN_BRIDGE_SUPERVISOR === '0') {
       error instanceof Error
         ? error.message
         : 'AUTHORITY_STORE_UNAVAILABLE: authority session could not be initialized';
+    authorityErrorDetails = error instanceof SessionAuthorityError ? error.details : undefined;
     if (!diagnosticContractProbe) {
       process.stderr.write(`rn-dev-agent authority diagnostic: ${authorityError}\n`);
     }
@@ -214,6 +218,7 @@ if (process.env.RN_BRIDGE_SUPERVISOR === '0') {
     if (!resolution.minted && resolution.error === null) return;
     authority = resolution.authority;
     authorityError = resolution.error;
+    authorityErrorDetails = resolution.errorDetails;
     process.stderr.write(
       resolution.error === null
         ? 'rn-bridge-supervisor: minted a fresh session for the released worktree\n'
@@ -257,12 +262,18 @@ if (process.env.RN_BRIDGE_SUPERVISOR === '0') {
       ...(core.lastExit ? { RN_BRIDGE_LAST_EXIT: core.lastExit } : {}),
       ...(authority && spawnAuthorityError === null
         ? authority.workerEnvironment(workerInstance)
-        : {
-            RN_DEV_AGENT_AUTHORITY_ERROR:
-              spawnAuthorityError ?? authorityError ?? 'AUTHORITY_STORE_UNAVAILABLE',
-          }),
+        : workerAuthorityFailureEnvironment(
+            spawnAuthorityError ?? authorityError ?? 'AUTHORITY_STORE_UNAVAILABLE',
+            spawnAuthorityError === null ? authorityErrorDetails : undefined,
+          )),
       ...rootEnvironment.set,
     };
+    if (authority && spawnAuthorityError === null) {
+      delete workerEnvironment.RN_DEV_AGENT_AUTHORITY_ERROR;
+      delete workerEnvironment.RN_DEV_AGENT_AUTHORITY_ERROR_DETAILS;
+    } else if (spawnAuthorityError !== null || authorityErrorDetails === undefined) {
+      delete workerEnvironment.RN_DEV_AGENT_AUTHORITY_ERROR_DETAILS;
+    }
     for (const key of rootEnvironment.unset) delete workerEnvironment[key];
     const child = spawn(
       process.execPath,

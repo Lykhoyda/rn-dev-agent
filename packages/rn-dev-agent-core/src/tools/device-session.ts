@@ -38,6 +38,7 @@ import { resetDetachedRecoveryCounter } from '../cdp/recover-detached.js';
 import type { ToolResult } from '../utils.js';
 import type { ToolErrorCode } from '../types.js';
 import { okResult, failResult, warnResult } from '../utils.js';
+import { authorityErrorMeta, processBirthAttestationError } from '../session/registry.js';
 import { resolveBundleId } from '../project-config.js';
 import { isValidBundleId } from '../domain/maestro-validator.js';
 import { logger } from '../logger.js';
@@ -409,7 +410,7 @@ export function createDeviceSnapshotHandler(
             // discard it so it never leaks onto a later successful result.
             consumePendingFastRunnerArtifactNote();
             releaseDeviceLockForSession();
-            return failResult(ready.message, ready.code ?? 'RN_FAST_RUNNER_DOWN');
+            return failResult(ready.message, ready.code ?? 'RN_FAST_RUNNER_DOWN', ready.meta);
           }
           // GH #382: an upgrade note wins; otherwise surface the artifact note
           // (e.g. "downloaded prebuilt runner (~4 MB)").
@@ -472,6 +473,13 @@ export function createDeviceSnapshotHandler(
           : rawMsg;
         if (err instanceof AndroidAppLaunchError) {
           return failResult(msg, 'APP_LAUNCH_FAILED');
+        }
+        const authorityError = processBirthAttestationError(err);
+        if (authorityError) {
+          return failResult(msg, 'PROCESS_BIRTH_UNAVAILABLE', {
+            ...authorityErrorMeta(authorityError),
+            ...(cleanupFailure ? { runnerCleanupFailure: cleanupFailure } : {}),
+          });
         }
         // GH #418: even the open-path rebuild couldn't produce a runner with
         // the required commands — the checkout itself is suspect.
