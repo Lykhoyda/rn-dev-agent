@@ -161,7 +161,11 @@ export function mayTriggerLiveCapture(tool: string): boolean {
  */
 export type LiveCaptureOutcome =
   | { ok: true; pushed: 'frame' }
-  | { ok: true; pushed: 'skipped'; reason: 'no-observers' | 'flow-active' | 'coalesced' }
+  | {
+      ok: true;
+      pushed: 'skipped';
+      reason: 'no-observers' | 'flow-active' | 'coalesced' | 'mirror-active';
+    }
   | { ok: false; code: string; reason: string };
 
 export interface LiveCaptureDeps {
@@ -226,6 +230,20 @@ export async function maybeCaptureLiveFrame(deps: LiveCaptureDeps): Promise<Live
 }
 
 async function runCapture(deps: LiveCaptureDeps): Promise<LiveCaptureOutcome> {
+  const mirrorActive = deps.isMirrorActive?.() === true;
+  if (mirrorActive) {
+    try {
+      const route = await deps.readRoute();
+      if (route) {
+        deps.pushLive({ route });
+        return { ok: true, pushed: 'frame' };
+      }
+    } catch {
+      return { ok: true, pushed: 'skipped', reason: 'mirror-active' };
+    }
+    return { ok: true, pushed: 'skipped', reason: 'mirror-active' };
+  }
+
   let resolution: MirrorTargetResolution;
   try {
     resolution = await deps.resolveTarget();
@@ -245,19 +263,16 @@ async function runCapture(deps: LiveCaptureDeps): Promise<LiveCaptureOutcome> {
   }
   const { platform, deviceId } = resolution.target;
   const frame: { shot?: { buf: Buffer; contentType: string }; route?: string } = {};
-  let captureDetail = 'the mirror is streaming, so no still frame was requested';
-  if (!deps.isMirrorActive?.()) {
-    captureDetail = `the supported ${platform === 'ios' ? 'simctl' : 'adb'} capture produced no frame`;
-    try {
-      const shot = await deps.captureScreenshot(platform, deps.tmpPath(), deviceId);
-      if (shot.ok) {
-        const bytes = deps.readShotFile(shot.path);
-        if (bytes) frame.shot = bytes;
-        else captureDetail = 'the captured file could not be read back';
-      }
-    } catch (error) {
-      captureDetail = error instanceof Error ? error.message : String(error);
+  let captureDetail = `the supported ${platform === 'ios' ? 'simctl' : 'adb'} capture produced no frame`;
+  try {
+    const shot = await deps.captureScreenshot(platform, deps.tmpPath(), deviceId);
+    if (shot.ok) {
+      const bytes = deps.readShotFile(shot.path);
+      if (bytes) frame.shot = bytes;
+      else captureDetail = 'the captured file could not be read back';
     }
+  } catch (error) {
+    captureDetail = error instanceof Error ? error.message : String(error);
   }
   try {
     const route = await deps.readRoute();

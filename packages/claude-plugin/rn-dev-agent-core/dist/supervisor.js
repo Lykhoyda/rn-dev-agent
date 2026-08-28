@@ -94296,6 +94296,19 @@ async function maybeCaptureLiveFrame(deps) {
   return outcome;
 }
 async function runCapture(deps) {
+  const mirrorActive = deps.isMirrorActive?.() === true;
+  if (mirrorActive) {
+    try {
+      const route = await deps.readRoute();
+      if (route) {
+        deps.pushLive({ route });
+        return { ok: true, pushed: "frame" };
+      }
+    } catch {
+      return { ok: true, pushed: "skipped", reason: "mirror-active" };
+    }
+    return { ok: true, pushed: "skipped", reason: "mirror-active" };
+  }
   let resolution;
   try {
     resolution = await deps.resolveTarget();
@@ -94315,21 +94328,18 @@ async function runCapture(deps) {
   }
   const { platform, deviceId } = resolution.target;
   const frame = {};
-  let captureDetail = "the mirror is streaming, so no still frame was requested";
-  if (!deps.isMirrorActive?.()) {
-    captureDetail = `the supported ${platform === "ios" ? "simctl" : "adb"} capture produced no frame`;
-    try {
-      const shot = await deps.captureScreenshot(platform, deps.tmpPath(), deviceId);
-      if (shot.ok) {
-        const bytes = deps.readShotFile(shot.path);
-        if (bytes)
-          frame.shot = bytes;
-        else
-          captureDetail = "the captured file could not be read back";
-      }
-    } catch (error2) {
-      captureDetail = error2 instanceof Error ? error2.message : String(error2);
+  let captureDetail = `the supported ${platform === "ios" ? "simctl" : "adb"} capture produced no frame`;
+  try {
+    const shot = await deps.captureScreenshot(platform, deps.tmpPath(), deviceId);
+    if (shot.ok) {
+      const bytes = deps.readShotFile(shot.path);
+      if (bytes)
+        frame.shot = bytes;
+      else
+        captureDetail = "the captured file could not be read back";
     }
+  } catch (error2) {
+    captureDetail = error2 instanceof Error ? error2.message : String(error2);
   }
   try {
     const route = await deps.readRoute();
