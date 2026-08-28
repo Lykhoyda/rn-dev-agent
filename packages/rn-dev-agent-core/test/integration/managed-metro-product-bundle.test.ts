@@ -31,6 +31,23 @@ import {
 } from '../../dist/session/package-integration.js';
 import { resolveSourceIdentity } from '../../dist/session/source-identity.js';
 
+// Metro is launched through the package bin, which pnpm and npm generate as a /bin/sh shim
+// that re-resolves `node` from PATH — process.execPath only selects the launcher. Pinning this
+// Node is what makes the descendant-convention regression falsifiable here; without it the test
+// passes identically against the pre-fix fence whenever PATH resolves an older Node.
+process.env.PATH = [dirname(process.execPath), process.env.PATH].filter(Boolean).join(':');
+
+function processExecutable(pid: number): string | null {
+  try {
+    if (process.platform === 'linux') return realpathSync(`/proc/${pid}/exe`);
+    return (
+      execFileSync('ps', ['-p', String(pid), '-o', 'comm='], { encoding: 'utf8' }).trim() || null
+    );
+  } catch {
+    return null;
+  }
+}
+
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
 const fixtureRoot = join(repositoryRoot, 'test-fixtures', 'managed-metro-installed-expo');
 const sessionId = 'managed-product-bundle-session';
@@ -337,6 +354,17 @@ for (const transport of [
           buildGeneration: 1,
           signerCapability,
         });
+
+        const listenerExecutable = processExecutable(binding.pid);
+        assert.ok(
+          listenerExecutable,
+          `could not resolve the executable of Metro listener ${binding.pid}`,
+        );
+        assert.equal(
+          realpathSync(listenerExecutable),
+          realpathSync(process.execPath),
+          `managed Metro must run under the Node this test pins (${process.version}); it ran under ${listenerExecutable}`,
+        );
 
         const origin = `http://127.0.0.1:${port}`;
         const manifestHeaders = {

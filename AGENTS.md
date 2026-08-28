@@ -82,9 +82,20 @@ sibling workspace only when explicitly requested.
 
 ## Supported Node runtimes
 
-`packages/rn-dev-agent-core` declares `engines.node >= 22.5`, and the managed
-Metro launcher runs Metro under the supervisor's own `process.execPath` — so the
-operator's Node, not CI's, is what the descendant fence must survive.
+`packages/rn-dev-agent-core` declares `engines.node >= 22.5`. The managed Metro
+*launcher* runs under the supervisor's own `process.execPath`, but *Metro
+itself* usually does not: `resolveManagedMetroLaunchCommand` only re-executes
+`process.execPath` when the resolved package bin starts with `#!/usr/bin/env
+node`, and pnpm and npm generate `node_modules/.bin/<tool>` as a `#!/bin/sh`
+shim, whose own `exec node` line re-resolves `node` from `PATH`. So it is the
+operator's `PATH` node, not CI's and not necessarily the supervisor's, that the
+descendant fence must survive.
+
+A test that does not pin `PATH` and assert the Metro listener's actual
+executable cannot distinguish the fixed fence from the unfixed one — it passes
+either way whenever `PATH` resolves a Node outside the affected range.
+`test/smoke/managed-metro-node26-bind.ts` and
+`test/integration/managed-metro-product-bundle.test.ts` both pin and assert it.
 
 Node changed the private `ChildProcess.prototype.spawn` -> `handle.spawn()`
 calling convention from one options object to eight positional arguments, and

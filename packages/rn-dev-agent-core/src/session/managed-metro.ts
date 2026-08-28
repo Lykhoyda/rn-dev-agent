@@ -1526,7 +1526,7 @@ export function managedMetroExitAttribution(
   const diagnostic = readManagedMetroLauncherDiagnostic(
     join(runtimeRoot, 'metro-launcher-diagnostic.json'),
   );
-  const logTail = boundedMetroLogTail(join(runtimeRoot, 'metro.log'));
+  const logCauses = managedMetroFirstPartyLogCauses(join(runtimeRoot, 'metro.log'));
   const redactions = [
     runtimeRoot,
     input.sessionId,
@@ -1548,14 +1548,11 @@ export function managedMetroExitAttribution(
         )
       : null,
   ].filter((detail): detail is string => Boolean(detail));
-  if (logTail) {
-    const prefix = 'Metro log tail:\n';
+  if (logCauses) {
+    const prefix = 'Metro log causes: ';
     const used = details.join('; ').length;
     const available = 4_096 - used - (used > 0 ? 2 : 0) - prefix.length;
-    if (available > 0) {
-      const sanitizedLogTail = sanitizeManagedMetroStartupDetailValue(logTail, redactions);
-      details.push(`${prefix}${sanitizedLogTail.slice(-available)}`);
-    }
+    if (available > 0) details.push(`${prefix}${logCauses.slice(0, available)}`);
   }
   if (details.length === 0) return null;
   return details.join('; ');
@@ -1844,6 +1841,20 @@ function readManagedMetroLauncherDiagnostic(path: string): ManagedMetroLauncherD
   } catch {
     return null;
   }
+}
+
+// NOTE: exit attribution runs in a later process than the start, so it has no credentialRedactions
+// to sanitize metro.log with; it publishes only fixed-vocabulary tokens that cannot carry a secret.
+const MANAGED_METRO_FIRST_PARTY_LOG_CAUSE =
+  /\bRN_DEV_AGENT_[A-Z0-9_]+\b|\bNode\.js v\d+\.\d+\.\d+\b|\bJavaScript heap out of memory\b|\b(?:EADDRINUSE|EADDRNOTAVAIL|EACCES|EMFILE|ENFILE|ENOMEM|ENOSPC|EPIPE)\b/g;
+
+function managedMetroFirstPartyLogCauses(path: string): string | null {
+  // Wider window than the startup reader: only matched tokens are published, so a fatal that
+  // bundle chatter has scrolled past stays attributable.
+  const tail = boundedMetroLogTail(path, 65_536);
+  if (!tail) return null;
+  const causes = [...new Set(tail.match(MANAGED_METRO_FIRST_PARTY_LOG_CAUSE) ?? [])].slice(0, 16);
+  return causes.length > 0 ? causes.join(', ') : null;
 }
 
 function sanitizeManagedMetroStartupDetailValue(

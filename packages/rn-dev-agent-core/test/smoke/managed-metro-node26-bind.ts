@@ -4,17 +4,21 @@
 // proof caller that makes Metro fork a descendant (the NativeWind Tailwind
 // pipeline), which is what died before the fix on Node >= 24.19.
 //
-// Must run under the Node whose convention is being proven — the supervisor
-// launches Metro with its own process.execPath.
+// Must run under the Node whose convention is being proven. The launcher runs
+// under the supervisor's process.execPath, but Metro itself is started through
+// the package bin, which pnpm and npm generate as a /bin/sh shim that
+// re-resolves `node` from PATH. This proof therefore pins PATH to its own Node
+// and asserts the Metro listener's actual executable — without that, the whole
+// run passes identically on a PATH Node where the bug does not exist.
 //
 //   MANAGED_METRO_PROOF_APP=/abs/path/to/app \
 //   /path/to/node26 packages/rn-dev-agent-core/test/smoke/managed-metro-node26-bind.ts
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 // @ts-expect-error -- untyped JS test helper
 import { startSupervisor } from '../helpers/supervisor-harness.js';
@@ -53,6 +57,34 @@ function log(step: string, detail = ''): void {
   process.stdout.write(`[proof] ${step}${detail ? ` — ${detail}` : ''}\n`);
 }
 
+// PATH, not process.execPath, selects the Node that runs Metro behind a /bin/sh
+// bin shim. Pinning this Node first is what makes the proof falsifiable.
+const PINNED_PATH = [dirname(process.execPath), process.env.PATH].filter(Boolean).join(':');
+
+function metroListenerPid(port: number): number | null {
+  try {
+    const pid = Number(
+      execFileSync('lsof', ['-ti', `tcp:${port}`, '-sTCP:LISTEN'], { encoding: 'utf8' })
+        .trim()
+        .split('\n')[0],
+    );
+    return Number.isSafeInteger(pid) && pid > 0 ? pid : null;
+  } catch {
+    return null;
+  }
+}
+
+function processExecutable(pid: number): string | null {
+  try {
+    if (process.platform === 'linux') return realpathSync(`/proc/${pid}/exe`);
+    return (
+      execFileSync('ps', ['-p', String(pid), '-o', 'comm='], { encoding: 'utf8' }).trim() || null
+    );
+  } catch {
+    return null;
+  }
+}
+
 async function main(): Promise<void> {
   log('node', process.version);
   const before = bootedSimulatorCount();
@@ -76,13 +108,15 @@ async function main(): Promise<void> {
   const udid = simctl(['create', deviceName, DEVICE_TYPE, runtime]);
   log('created task-owned simulator', `${deviceName} ${udid}`);
 
-  let released = false;
+  let stopEnvelope: Record<string, any> | null = null;
+  let restoreEnvelope: Record<string, any> | null = null;
+  let releaseEnvelope: Record<string, any> | null = null;
   let integrationApplied = false;
   let deviceRemoved = false;
   const supervisor = startSupervisor({
     cwd: APP_ROOT,
     lineTimeoutMs: 180_000,
-    env: { RN_DEV_AGENT_STATE_DIR: STATE_DIR },
+    env: { RN_DEV_AGENT_STATE_DIR: STATE_DIR, PATH: PINNED_PATH },
   });
 
   const call = async (
@@ -144,7 +178,7 @@ async function main(): Promise<void> {
       cwd: APP_ROOT,
       encoding: 'utf8',
       timeout: 3_600_000,
-      env: { ...process.env, RN_DEV_AGENT_STATE_DIR: STATE_DIR },
+      env: { ...process.env, RN_DEV_AGENT_STATE_DIR: STATE_DIR, PATH: PINNED_PATH },
     });
     assert.equal(
       build.status,
@@ -163,6 +197,20 @@ async function main(): Promise<void> {
     const metroPort = Number(afterBuild.metroPort);
     assert.ok(Number.isSafeInteger(metroPort), 'no allocated Metro port');
     log('managed Metro bound', `port ${metroPort}`);
+
+    // The axis this proof exists to protect: the descendant fence must be
+    // exercised on the Node under test, not on whatever Node PATH happened to
+    // resolve. Without this the entire run passes against the pre-fix fence.
+    const listenerPid = metroListenerPid(metroPort);
+    assert.ok(listenerPid, `could not resolve the Metro listener on port ${metroPort}`);
+    const listenerExecutable = processExecutable(listenerPid);
+    assert.ok(listenerExecutable, `could not resolve the executable of listener ${listenerPid}`);
+    assert.equal(
+      realpathSync(listenerExecutable),
+      realpathSync(process.execPath),
+      `managed Metro must run under the Node this proof pins (${process.version}); it ran under ${listenerExecutable}`,
+    );
+    log('managed Metro runs the pinned Node', `${process.version} ${listenerExecutable}`);
 
     // The proof caller: a real bundle request drives Metro's transform pipeline,
     // which forks the NativeWind Tailwind CSS processor. Before the fix that
@@ -197,29 +245,36 @@ async function main(): Promise<void> {
     log('managed Metro survived the proof caller');
   } finally {
     // Cleanup must never throw: an exception here would mask the failure that
-    // brought us in. Outcomes are recorded and asserted after the block.
+    // brought us in. Outcomes are recorded and asserted after the block. Each
+    // step is judged on the tool's own {ok} envelope — call() resolves a failed
+    // envelope rather than rejecting, so catching alone proves nothing.
     try {
-      await call('rn_session', { action: 'stop_metro', projectRoot: APP_ROOT });
-      log('metro stopped');
+      stopEnvelope = await call('rn_session', { action: 'stop_metro', projectRoot: APP_ROOT });
+      log('metro stopped', `ok=${stopEnvelope?.ok}`);
     } catch (error) {
       log('metro stop failed', String(error));
     }
     if (integrationApplied) {
       try {
-        await call('rn_session', {
+        restoreEnvelope = await call('rn_session', {
           action: 'restore_integration',
           projectRoot: APP_ROOT,
           confirmed: true,
         });
-        log('integration restored');
+        log('integration restored', `ok=${restoreEnvelope?.ok}`);
       } catch (error) {
         log('integration restore failed', String(error));
       }
+    } else {
+      restoreEnvelope = { ok: true };
     }
     try {
-      await call('rn_session', { action: 'release', projectRoot: APP_ROOT, confirmed: true });
-      released = true;
-      log('session released');
+      releaseEnvelope = await call('rn_session', {
+        action: 'release',
+        projectRoot: APP_ROOT,
+        confirmed: true,
+      });
+      log('session released', `ok=${releaseEnvelope?.ok}`);
     } catch (error) {
       log('session release failed', String(error));
     }
@@ -243,7 +298,21 @@ async function main(): Promise<void> {
     }
   }
   assert.ok(deviceRemoved, 'the task-owned simulator was not deleted');
-  assert.ok(released, 'the session claim was not released');
+  assert.equal(
+    stopEnvelope?.ok,
+    true,
+    `managed Metro was not stopped: ${JSON.stringify(stopEnvelope)}`,
+  );
+  assert.equal(
+    restoreEnvelope?.ok,
+    true,
+    `the package integration was not restored: ${JSON.stringify(restoreEnvelope)}`,
+  );
+  assert.equal(
+    releaseEnvelope?.ok,
+    true,
+    `the session claim was not released: ${JSON.stringify(releaseEnvelope)}`,
+  );
   log('PROOF PASSED');
 }
 

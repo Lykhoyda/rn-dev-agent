@@ -11886,7 +11886,7 @@ function managedMetroExitAttribution(binding, input) {
   const runtimePolicyCapability = createHmac2("sha256", input.signerCapability).update("metro-runtime-policy").digest("base64url");
   const violation = latestSignedRuntimeViolation(binding.runtimeEvidencePath, runtimePolicyCapability, { sessionId: input.sessionId, metroInstanceId: binding.instanceId });
   const diagnostic2 = readManagedMetroLauncherDiagnostic(join10(runtimeRoot, "metro-launcher-diagnostic.json"));
-  const logTail = boundedMetroLogTail(join10(runtimeRoot, "metro.log"));
+  const logCauses = managedMetroFirstPartyLogCauses(join10(runtimeRoot, "metro.log"));
   const redactions = [
     runtimeRoot,
     input.sessionId,
@@ -11899,14 +11899,12 @@ function managedMetroExitAttribution(binding, input) {
     diagnostic2?.detail ? sanitizeManagedMetroStartupDetailValue(diagnostic2.detail, redactions) : null,
     violation ? sanitizeManagedMetroStartupDetailValue(`runtime violation: ${violation}`, redactions).slice(0, 2048) : null
   ].filter((detail) => Boolean(detail));
-  if (logTail) {
-    const prefix = "Metro log tail:\n";
+  if (logCauses) {
+    const prefix = "Metro log causes: ";
     const used = details.join("; ").length;
     const available = 4096 - used - (used > 0 ? 2 : 0) - prefix.length;
-    if (available > 0) {
-      const sanitizedLogTail = sanitizeManagedMetroStartupDetailValue(logTail, redactions);
-      details.push(`${prefix}${sanitizedLogTail.slice(-available)}`);
-    }
+    if (available > 0)
+      details.push(`${prefix}${logCauses.slice(0, available)}`);
   }
   if (details.length === 0)
     return null;
@@ -12071,6 +12069,13 @@ function readManagedMetroLauncherDiagnostic(path) {
   } catch {
     return null;
   }
+}
+function managedMetroFirstPartyLogCauses(path) {
+  const tail = boundedMetroLogTail(path, 65536);
+  if (!tail)
+    return null;
+  const causes = [...new Set(tail.match(MANAGED_METRO_FIRST_PARTY_LOG_CAUSE) ?? [])].slice(0, 16);
+  return causes.length > 0 ? causes.join(", ") : null;
 }
 function sanitizeManagedMetroStartupDetailValue(value, redactions) {
   let sanitized = value.replace(/[^\t\n\r\x20-\x7e]/g, "?");
@@ -12283,7 +12288,7 @@ async function stopManagedMetroWithEvidence(binding, input, dependencies = {}) {
     evidence
   };
 }
-var METRO_LAUNCHER_SOURCE, signalProcessTree, MANAGED_METRO_STOP_TIMEOUT_MS;
+var METRO_LAUNCHER_SOURCE, MANAGED_METRO_FIRST_PARTY_LOG_CAUSE, signalProcessTree, MANAGED_METRO_STOP_TIMEOUT_MS;
 var init_managed_metro = __esm({
   "packages/rn-dev-agent-core/dist/session/managed-metro.js"() {
     "use strict";
@@ -13218,6 +13223,7 @@ child.once('exit', (code, signal) => {
 });
 setInterval(() => {}, 1 << 30);
 `;
+    MANAGED_METRO_FIRST_PARTY_LOG_CAUSE = /\bRN_DEV_AGENT_[A-Z0-9_]+\b|\bNode\.js v\d+\.\d+\.\d+\b|\bJavaScript heap out of memory\b|\b(?:EADDRINUSE|EADDRNOTAVAIL|EACCES|EMFILE|ENFILE|ENOMEM|ENOSPC|EPIPE)\b/g;
     signalProcessTree = signalManagedMetroProcessTree;
     MANAGED_METRO_STOP_TIMEOUT_MS = 5e3;
   }

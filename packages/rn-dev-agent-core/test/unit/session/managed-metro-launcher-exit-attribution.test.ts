@@ -108,7 +108,8 @@ test('a managed Metro launcher that exits before bundle bind names its cause in 
   ]);
   writeFileSync(
     join(runtimeRoot, 'metro.log'),
-    `${'x'.repeat(5_000)}\n${SESSION_ID}\n${INSTANCE_ID}\n${SIGNER}\n${policyCapability}\nMETRO_LOG_TAIL_END\n`,
+    `${'x'.repeat(5_000)}\n${SESSION_ID}\n${INSTANCE_ID}\n${SIGNER}\n${policyCapability}\n` +
+      `Error: RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION\nNode.js v26.7.0\nMETRO_LOG_TAIL_END\n`,
   );
   writeFileSync(
     join(runtimeRoot, 'metro-launcher-diagnostic.json'),
@@ -138,8 +139,12 @@ test('a managed Metro launcher that exits before bundle bind names its cause in 
     'a launcher exit must attribute its cause instead of reporting a bare exit',
   );
   assert.match(inspection.attribution, /RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION/);
-  assert.match(inspection.attribution, /Metro log tail/);
-  assert.match(inspection.attribution, /METRO_LOG_TAIL_END/);
+  assert.match(inspection.attribution, /Metro log causes: /);
+  assert.doesNotMatch(
+    inspection.attribution,
+    /METRO_LOG_TAIL_END/,
+    'attribution must never republish free text from metro.log',
+  );
   assert.ok(
     inspection.attribution.indexOf('stage metro-child') <
       inspection.attribution.indexOf('metro-process-exited'),
@@ -150,8 +155,9 @@ test('a managed Metro launcher that exits before bundle bind names its cause in 
   );
   assert.ok(
     inspection.attribution.indexOf('runtime violation:') <
-      inspection.attribution.indexOf('Metro log tail:'),
+      inspection.attribution.indexOf('Metro log causes:'),
   );
+  assert.match(inspection.attribution, /Metro log causes: [^;]*Node\.js v26\.7\.0/);
   assert.doesNotMatch(inspection.attribution, new RegExp(SIGNER));
   assert.doesNotMatch(inspection.attribution, new RegExp(SESSION_ID));
   assert.doesNotMatch(inspection.attribution, new RegExp(INSTANCE_ID));
@@ -202,4 +208,44 @@ test('an unsigned runtime violation is never attributed to a launcher exit', asy
 
   assert.equal(inspection.code, 'METRO_LAUNCHER_EXITED');
   assert.ok(!String(inspection.attribution ?? '').includes('FORGED_VIOLATION'));
+});
+
+test('a bare credential value printed into metro.log never reaches exit attribution', async () => {
+  const runtimeRoot = mkdtempSync(join(tmpdir(), 'rn-managed-metro-launcher-credential-'));
+  const binding = await boundManagedMetro(runtimeRoot);
+  const policyCapability = runtimePolicyCapability(SIGNER);
+  const bareCredential = 'synthetic-credential-for-redaction-test-only';
+
+  writeSignedEvidence(join(runtimeRoot, 'metro-runtime-evidence.jsonl'), policyCapability, [
+    {
+      kind: 'violation',
+      value: canonicalAuthorityJson({ code: 'RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION' }),
+    },
+  ]);
+  // The operator's credential reaches metro.log without its key name — exactly the case the
+  // sibling startup path covers with credentialRedactions, which exit attribution cannot see.
+  writeFileSync(
+    join(runtimeRoot, 'metro.log'),
+    `env dump\n${bareCredential}\nAUTH_TOKEN=${bareCredential}\nhttps://user:${bareCredential}@example.test/x\nDone\n`,
+  );
+
+  const inspection = inspectManagedMetroLifecycle(
+    binding as unknown as Record<string, unknown>,
+    { sessionId: SESSION_ID, signerCapability: SIGNER },
+    {
+      exists: () => true,
+      probeBirth: (pid: number) => (pid === LAUNCHER_PID ? { status: 'absent' } : liveBirth(pid)),
+      probeListener: () => ({ status: 'listening', pid: LISTENER_PID }),
+    } as never,
+  );
+
+  assert.equal(inspection.code, 'METRO_LAUNCHER_EXITED');
+  assert.ok(inspection.attribution, 'the signed violation must still attribute the exit');
+  assert.doesNotMatch(
+    inspection.attribution,
+    new RegExp(bareCredential),
+    'exit attribution must not copy credential values out of metro.log',
+  );
+  assert.doesNotMatch(inspection.attribution, /env dump|Done/);
+  assert.match(inspection.attribution, /RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION/);
 });
