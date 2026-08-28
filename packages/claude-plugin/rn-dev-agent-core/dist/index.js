@@ -30187,9 +30187,16 @@ function bindExactFillTarget(nodes, rawRef, priorSignature) {
           detail: `wrapper "${id}" maps to ${inputs.length} inputs with testID "${base}" \u2014 ambiguous`
         };
       }
+      const sameId = nodes.filter((n) => n.identifier === base);
+      if (sameId.length > 0) {
+        return {
+          ok: false,
+          detail: `wrapper "${id}" maps to ${sameId.length} element(s) with testID "${base}", none of them a recognized text input (${sameId.map((n) => n.type ?? "unknown type").join(", ")})`
+        };
+      }
       return {
         ok: false,
-        detail: `wrapper "${id}" has no recognized input with testID "${base}" in the current snapshot`
+        detail: `wrapper "${id}" exposes no element with testID "${base}"; when the inner input sits inside an accessible wrapper iOS merges it away and no snapshot can reveal it \u2014 type through the React tree with cdp_interact action:"typeText" testID:"${base}"`
       };
     }
   }
@@ -53208,7 +53215,6 @@ var INJECTED_HELPERS = `
         while (stack.length > 0 && !state.truncated) {
           var node = stack.pop();
           if (!consumeWork()) break;
-          if (!consumeWork()) break;
           if (localSeen.has(node)) {
             state.truncated = true;
             state.reason = 'cycle';
@@ -53223,14 +53229,8 @@ var INJECTED_HELPERS = `
             match = node;
             break;
           }
-          if (node.sibling) {
-            if (!consumeWork()) break;
-            stack.push(node.sibling);
-          }
-          if (node.child) {
-            if (!consumeWork()) break;
-            stack.push(node.child);
-          }
+          if (node.sibling) stack.push(node.sibling);
+          if (node.child) stack.push(node.child);
         }
         return match || (state.truncated ? TYPE_TEXT_ABORT : null);
       });
@@ -53479,7 +53479,6 @@ var INJECTED_HELPERS = `
     }
 
     function collectSource(fiber) {
-      if (!consumeWork()) return;
       var props = fiber.memoizedProps || {};
       if (selectorKind === 'testID') {
         if (props.testID === opts.testID || props.nativeID === opts.testID) {
@@ -53558,7 +53557,6 @@ var INJECTED_HELPERS = `
       while (stack.length > 0 && !state.truncated) {
         var node = stack.pop();
         if (!consumeWork()) break;
-        if (!consumeWork()) break;
         if (localSeen.has(node)) {
           state.truncated = true;
           state.reason = 'cycle';
@@ -53570,16 +53568,8 @@ var INJECTED_HELPERS = `
         state.visitedFibers++;
         collectSource(node);
         if (state.truncated) break;
-        addCandidate(node);
-        if (state.truncated) break;
-        if (node.sibling) {
-          if (!consumeWork()) break;
-          stack.push(node.sibling);
-        }
-        if (node.child) {
-          if (!consumeWork()) break;
-          stack.push(node.child);
-        }
+        if (node.sibling) stack.push(node.sibling);
+        if (node.child) stack.push(node.child);
       }
       return state.truncated ? TYPE_TEXT_ABORT : null;
     });
@@ -53597,6 +53587,40 @@ var INJECTED_HELPERS = `
         hint: 'Use cdp_component_tree to verify the component is mounted, or pass a more specific selector.'
       };
     }
+
+    // #869: only a fiber whose return chain reaches a matched source can bind
+    // (see nearestSource below), so candidate discovery starts at the matched
+    // selector fiber instead of charging the whole forest. Same fixed budget,
+    // same truncation payload.
+    var candidateScanned = new WeakSet();
+    function collectCandidatesUnder(sourceFiber) {
+      var localSeen = new WeakSet();
+      var stack = [{ fiber: sourceFiber, includeSibling: false }];
+      while (stack.length > 0 && !state.truncated) {
+        var frame = stack.pop();
+        var node = frame.fiber;
+        if (!consumeWork()) break;
+        if (localSeen.has(node)) {
+          state.truncated = true;
+          state.reason = 'cycle';
+          break;
+        }
+        localSeen.add(node);
+        if (!candidateScanned.has(node)) {
+          candidateScanned.add(node);
+          addCandidate(node);
+          if (state.truncated) break;
+        }
+        if (frame.includeSibling && node.sibling) {
+          stack.push({ fiber: node.sibling, includeSibling: true });
+        }
+        if (node.child) stack.push({ fiber: node.child, includeSibling: true });
+      }
+    }
+    for (var sourceScan = 0; sourceScan < sources.length && !state.truncated; sourceScan++) {
+      collectCandidatesUnder(sources[sourceScan].fiber);
+    }
+    if (state.truncated) return typeTextTruncation(state);
 
     function nearestSource(candidate) {
       var cursor = candidate.fiber;

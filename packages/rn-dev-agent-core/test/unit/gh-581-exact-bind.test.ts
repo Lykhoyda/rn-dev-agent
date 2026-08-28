@@ -195,7 +195,9 @@ test('gh-581 bind: wrapper with no inner input is rejected (no first-match fallb
   ];
   const out = bindExactFillTarget(nodes as never, '@e1', signatureFor('@e1', nodes) as never);
   assert.ok(!out.ok);
-  assert.match((out as { detail: string }).detail, /no recognized input/);
+  // #869: same rejection, now routed to the supported React typing path
+  // instead of implying a snapshot rebind that can never succeed.
+  assert.match((out as { detail: string }).detail, /exposes no element with testID "orphan"/);
 });
 
 test('gh-581 bind: wrapper whose sibling matches by id but not type is rejected', () => {

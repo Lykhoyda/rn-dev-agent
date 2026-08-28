@@ -1668,7 +1668,6 @@ export const INJECTED_HELPERS = `
         while (stack.length > 0 && !state.truncated) {
           var node = stack.pop();
           if (!consumeWork()) break;
-          if (!consumeWork()) break;
           if (localSeen.has(node)) {
             state.truncated = true;
             state.reason = 'cycle';
@@ -1683,14 +1682,8 @@ export const INJECTED_HELPERS = `
             match = node;
             break;
           }
-          if (node.sibling) {
-            if (!consumeWork()) break;
-            stack.push(node.sibling);
-          }
-          if (node.child) {
-            if (!consumeWork()) break;
-            stack.push(node.child);
-          }
+          if (node.sibling) stack.push(node.sibling);
+          if (node.child) stack.push(node.child);
         }
         return match || (state.truncated ? TYPE_TEXT_ABORT : null);
       });
@@ -1939,7 +1932,6 @@ export const INJECTED_HELPERS = `
     }
 
     function collectSource(fiber) {
-      if (!consumeWork()) return;
       var props = fiber.memoizedProps || {};
       if (selectorKind === 'testID') {
         if (props.testID === opts.testID || props.nativeID === opts.testID) {
@@ -2018,7 +2010,6 @@ export const INJECTED_HELPERS = `
       while (stack.length > 0 && !state.truncated) {
         var node = stack.pop();
         if (!consumeWork()) break;
-        if (!consumeWork()) break;
         if (localSeen.has(node)) {
           state.truncated = true;
           state.reason = 'cycle';
@@ -2030,16 +2021,8 @@ export const INJECTED_HELPERS = `
         state.visitedFibers++;
         collectSource(node);
         if (state.truncated) break;
-        addCandidate(node);
-        if (state.truncated) break;
-        if (node.sibling) {
-          if (!consumeWork()) break;
-          stack.push(node.sibling);
-        }
-        if (node.child) {
-          if (!consumeWork()) break;
-          stack.push(node.child);
-        }
+        if (node.sibling) stack.push(node.sibling);
+        if (node.child) stack.push(node.child);
       }
       return state.truncated ? TYPE_TEXT_ABORT : null;
     });
@@ -2057,6 +2040,40 @@ export const INJECTED_HELPERS = `
         hint: 'Use cdp_component_tree to verify the component is mounted, or pass a more specific selector.'
       };
     }
+
+    // #869: only a fiber whose return chain reaches a matched source can bind
+    // (see nearestSource below), so candidate discovery starts at the matched
+    // selector fiber instead of charging the whole forest. Same fixed budget,
+    // same truncation payload.
+    var candidateScanned = new WeakSet();
+    function collectCandidatesUnder(sourceFiber) {
+      var localSeen = new WeakSet();
+      var stack = [{ fiber: sourceFiber, includeSibling: false }];
+      while (stack.length > 0 && !state.truncated) {
+        var frame = stack.pop();
+        var node = frame.fiber;
+        if (!consumeWork()) break;
+        if (localSeen.has(node)) {
+          state.truncated = true;
+          state.reason = 'cycle';
+          break;
+        }
+        localSeen.add(node);
+        if (!candidateScanned.has(node)) {
+          candidateScanned.add(node);
+          addCandidate(node);
+          if (state.truncated) break;
+        }
+        if (frame.includeSibling && node.sibling) {
+          stack.push({ fiber: node.sibling, includeSibling: true });
+        }
+        if (node.child) stack.push({ fiber: node.child, includeSibling: true });
+      }
+    }
+    for (var sourceScan = 0; sourceScan < sources.length && !state.truncated; sourceScan++) {
+      collectCandidatesUnder(sources[sourceScan].fiber);
+    }
+    if (state.truncated) return typeTextTruncation(state);
 
     function nearestSource(candidate) {
       var cursor = candidate.fiber;

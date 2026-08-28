@@ -748,9 +748,20 @@ export function bindExactFillTarget(
           detail: `wrapper "${id}" maps to ${inputs.length} inputs with testID "${base}" — ambiguous`,
         };
       }
+      // #869: an iOS wrapper that is itself an accessibility element merges its
+      // inner input away, so no snapshot generation can expose it and the
+      // "rebind after a fresh snapshot" recovery cannot apply. Name the
+      // supported React typing route instead of implying a retry.
+      const sameId = nodes.filter((n) => n.identifier === base);
+      if (sameId.length > 0) {
+        return {
+          ok: false,
+          detail: `wrapper "${id}" maps to ${sameId.length} element(s) with testID "${base}", none of them a recognized text input (${sameId.map((n) => n.type ?? 'unknown type').join(', ')})`,
+        };
+      }
       return {
         ok: false,
-        detail: `wrapper "${id}" has no recognized input with testID "${base}" in the current snapshot`,
+        detail: `wrapper "${id}" exposes no element with testID "${base}"; when the inner input sits inside an accessible wrapper iOS merges it away and no snapshot can reveal it — type through the React tree with cdp_interact action:"typeText" testID:"${base}"`,
       };
     }
   }
