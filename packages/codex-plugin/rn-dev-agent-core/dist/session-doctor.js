@@ -11118,11 +11118,20 @@ function inspectSessionOwnerAttestation(owner, dependencies = {}) {
     observed: observed.birth.token
   };
 }
+function processBirthRefusalDetails(probe, pid) {
+  return probe.status === "unknown" ? {
+    attestation: "unavailable",
+    ...probe.cause,
+    nextAction: PROCESS_ATTESTATION_UNAVAILABLE_NEXT_ACTION
+  } : { attestation: "absent", pid };
+}
+var PROCESS_ATTESTATION_UNAVAILABLE_NEXT_ACTION;
 var init_process_owner = __esm({
   "packages/rn-dev-agent-core/dist/session/process-owner.js"() {
     "use strict";
     init_process_birth();
     init_registry();
+    PROCESS_ATTESTATION_UNAVAILABLE_NEXT_ACTION = "Process identity could not be read in time on a loaded host. Reduce host process contention, then retry the original operation; do not reopen or rebind the device.";
   }
 });
 
@@ -11287,6 +11296,7 @@ var init_rn_fast_runner_client = __esm({
     init_transport_recovery();
     init_process_birth();
     init_process_owner();
+    init_registry();
     READY_TIMEOUT_MS = resolveReadyTimeoutMs();
     FAST_RUNNER_PROJECT = resolveNativeRunnerDir("rn-fast-runner");
     REBUILD_LOCK_DIR = join8(FAST_RUNNER_PROJECT, "build", ".rebuild-lock");
@@ -15993,6 +16003,7 @@ init_cleanup_identity();
 import { execFile as execFileCb10, spawn as spawn5 } from "node:child_process";
 import { promisify as promisify13 } from "node:util";
 init_process_birth();
+init_process_owner();
 init_registry();
 var execFile13 = promisify13(execFileCb10);
 var RECORDER_POST_KILL_CONFIRM_MS = 2e3;
@@ -16219,16 +16230,17 @@ async function stopBoundRunner(binding, processProbe = probeProcessBirth, signal
   const port = binding.port;
   const current = processProbe(pid);
   if (current.status === "unknown") {
-    throw new SessionAuthorityError("RUNNER_ADOPTION_REQUIRED", "runner process identity is unavailable");
+    throw new SessionAuthorityError("RUNNER_ADOPTION_REQUIRED", "runner process identity is unavailable", void 0, processBirthRefusalDetails(current, pid));
   }
   if (current.status === "present" && current.birth.token === expectedBirth) {
+    const message = "runner process did not stop before the cleanup deadline";
     const observeStop = () => {
       const observed = processProbe(pid);
-      if (observed.status === "unknown")
-        return "unknown";
+      if (observed.status === "unknown") {
+        throw new SessionAuthorityError("RUNNER_ADOPTION_REQUIRED", `${message}; shutdown identity is unknown`, void 0, processBirthRefusalDetails(observed, pid));
+      }
       return observed.status === "present" && observed.birth.token === expectedBirth ? "running" : "stopped";
     };
-    const message = "runner process did not stop before the cleanup deadline";
     const signalTolerated = (value) => {
       try {
         signalProcess(pid, value);
@@ -16240,7 +16252,7 @@ async function stopBoundRunner(binding, processProbe = probeProcessBirth, signal
     if (!await awaitExactStopped(observeStop, graceDeadlineMs, "RUNNER_ADOPTION_REQUIRED", message)) {
       const escalation = processProbe(pid);
       if (escalation.status === "unknown") {
-        throw new SessionAuthorityError("RUNNER_ADOPTION_REQUIRED", `${message}; shutdown identity is unknown`);
+        throw new SessionAuthorityError("RUNNER_ADOPTION_REQUIRED", `${message}; shutdown identity is unknown`, void 0, processBirthRefusalDetails(escalation, pid));
       }
       if (escalation.status === "present" && escalation.birth.token === expectedBirth) {
         signalTolerated("SIGKILL");

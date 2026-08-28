@@ -12,6 +12,7 @@ import {
   type VerifiedDarwinProcessBirthHelper,
   type ProcessBirthProbe,
 } from './process-birth.js';
+import { processBirthRefusalDetails } from './process-owner.js';
 import { SessionAuthorityError } from './registry.js';
 
 const execFile = promisify(execFileCb);
@@ -325,17 +326,26 @@ export async function stopBoundRunner(
     throw new SessionAuthorityError(
       'RUNNER_ADOPTION_REQUIRED',
       'runner process identity is unavailable',
+      undefined,
+      processBirthRefusalDetails(current, pid),
     );
   }
   if (current.status === 'present' && current.birth.token === expectedBirth) {
+    const message = 'runner process did not stop before the cleanup deadline';
     const observeStop = (): 'running' | 'stopped' | 'unknown' => {
       const observed = processProbe(pid);
-      if (observed.status === 'unknown') return 'unknown';
+      if (observed.status === 'unknown') {
+        throw new SessionAuthorityError(
+          'RUNNER_ADOPTION_REQUIRED',
+          `${message}; shutdown identity is unknown`,
+          undefined,
+          processBirthRefusalDetails(observed, pid),
+        );
+      }
       return observed.status === 'present' && observed.birth.token === expectedBirth
         ? 'running'
         : 'stopped';
     };
-    const message = 'runner process did not stop before the cleanup deadline';
     const signalTolerated = (value: NodeJS.Signals): void => {
       try {
         signalProcess(pid, value);
@@ -353,6 +363,8 @@ export async function stopBoundRunner(
         throw new SessionAuthorityError(
           'RUNNER_ADOPTION_REQUIRED',
           `${message}; shutdown identity is unknown`,
+          undefined,
+          processBirthRefusalDetails(escalation, pid),
         );
       }
       if (escalation.status === 'present' && escalation.birth.token === expectedBirth) {

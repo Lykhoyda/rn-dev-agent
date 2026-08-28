@@ -50,7 +50,10 @@ import {
   parseStatusProbeReply,
 } from './transport-recovery.js';
 import { probeProcessBirth, type ProcessBirthProbe } from '../session/process-birth.js';
-import { requireProcessBirthAttestation } from '../session/process-owner.js';
+import {
+  processBirthRefusalDetails,
+  requireProcessBirthAttestation,
+} from '../session/process-owner.js';
 import { SessionAuthorityError } from '../session/registry.js';
 
 // Warm-launch ready gate. Overridable via RN_FAST_RUNNER_READY_TIMEOUT_MS
@@ -1391,30 +1394,44 @@ export async function reapStaleFastRunner(deps: ReapDeps = {}): Promise<void> {
       clearState(state);
       return;
     }
-    throw new Error(
-      'RUNNER_ADOPTION_REQUIRED: live persisted iOS runner lacks process-birth authority',
+    throw new SessionAuthorityError(
+      'RUNNER_ADOPTION_REQUIRED',
+      'live persisted iOS runner lacks process-birth authority',
+      undefined,
+      observed.status === 'unknown' ? processBirthRefusalDetails(observed, state.pid) : undefined,
     );
   }
-  const probeExpected = (): 'match' | 'gone' | 'unknown' => {
+  type ExpectedBirthProbe =
+    | { status: 'match' }
+    | { status: 'gone' }
+    | Extract<ProcessBirthProbe, { status: 'unknown' }>;
+  const probeExpected = (): ExpectedBirthProbe => {
     if (deps.probeProcessBirth) {
       const observed = deps.probeProcessBirth(expectedBirth.pid);
-      if (observed.status === 'unknown') return 'unknown';
-      if (observed.status === 'absent') return 'gone';
-      return observed.birth.token === expectedBirth.token ? 'match' : 'gone';
+      if (observed.status === 'unknown') return observed;
+      if (observed.status === 'absent') return { status: 'gone' };
+      return observed.birth.token === expectedBirth.token
+        ? { status: 'match' }
+        : { status: 'gone' };
     }
     if (deps.matchesProcessBirth) {
-      return deps.matchesProcessBirth(expectedBirth) ? 'match' : 'gone';
+      return deps.matchesProcessBirth(expectedBirth) ? { status: 'match' } : { status: 'gone' };
     }
     const observed = probeProcessBirth(expectedBirth.pid);
-    if (observed.status === 'unknown') return 'unknown';
-    if (observed.status === 'absent') return 'gone';
-    return observed.birth.token === expectedBirth.token ? 'match' : 'gone';
+    if (observed.status === 'unknown') return observed;
+    if (observed.status === 'absent') return { status: 'gone' };
+    return observed.birth.token === expectedBirth.token ? { status: 'match' } : { status: 'gone' };
   };
   const initial = probeExpected();
-  if (initial === 'unknown') {
-    throw new Error('RUNNER_ADOPTION_REQUIRED: iOS runner process identity is unproven');
+  if (initial.status === 'unknown') {
+    throw new SessionAuthorityError(
+      'RUNNER_ADOPTION_REQUIRED',
+      'iOS runner process identity is unproven',
+      undefined,
+      processBirthRefusalDetails(initial, expectedBirth.pid),
+    );
   }
-  if (initial === 'gone') {
+  if (initial.status === 'gone') {
     clearState(state);
     return;
   }
@@ -1430,10 +1447,15 @@ export async function reapStaleFastRunner(deps: ReapDeps = {}): Promise<void> {
   }
   await reapDelay(sleep, graceMs, deps.signal);
   const afterTerm = probeExpected();
-  if (afterTerm === 'unknown') {
-    throw new Error('RUNNER_ADOPTION_REQUIRED: iOS runner termination is unproven');
+  if (afterTerm.status === 'unknown') {
+    throw new SessionAuthorityError(
+      'RUNNER_ADOPTION_REQUIRED',
+      'iOS runner termination is unproven',
+      undefined,
+      processBirthRefusalDetails(afterTerm, expectedBirth.pid),
+    );
   }
-  if (afterTerm === 'gone') {
+  if (afterTerm.status === 'gone') {
     clearState(state);
     return;
   }
@@ -1448,8 +1470,15 @@ export async function reapStaleFastRunner(deps: ReapDeps = {}): Promise<void> {
     await sleep(50);
   }
   const afterKill = probeExpected();
-  if (afterKill !== 'gone') {
-    throw new Error('RUNNER_ADOPTION_REQUIRED: iOS runner termination is unproven');
+  if (afterKill.status !== 'gone') {
+    throw new SessionAuthorityError(
+      'RUNNER_ADOPTION_REQUIRED',
+      'iOS runner termination is unproven',
+      undefined,
+      afterKill.status === 'unknown'
+        ? processBirthRefusalDetails(afterKill, expectedBirth.pid)
+        : undefined,
+    );
   }
   clearState(state);
 }

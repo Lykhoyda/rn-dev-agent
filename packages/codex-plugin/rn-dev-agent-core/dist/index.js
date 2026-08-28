@@ -24769,32 +24769,32 @@ async function reapStaleFastRunner(deps = {}) {
       clearState(state);
       return;
     }
-    throw new Error("RUNNER_ADOPTION_REQUIRED: live persisted iOS runner lacks process-birth authority");
+    throw new SessionAuthorityError("RUNNER_ADOPTION_REQUIRED", "live persisted iOS runner lacks process-birth authority", void 0, observed.status === "unknown" ? processBirthRefusalDetails(observed, state.pid) : void 0);
   }
   const probeExpected = () => {
     if (deps.probeProcessBirth) {
       const observed2 = deps.probeProcessBirth(expectedBirth.pid);
       if (observed2.status === "unknown")
-        return "unknown";
+        return observed2;
       if (observed2.status === "absent")
-        return "gone";
-      return observed2.birth.token === expectedBirth.token ? "match" : "gone";
+        return { status: "gone" };
+      return observed2.birth.token === expectedBirth.token ? { status: "match" } : { status: "gone" };
     }
     if (deps.matchesProcessBirth) {
-      return deps.matchesProcessBirth(expectedBirth) ? "match" : "gone";
+      return deps.matchesProcessBirth(expectedBirth) ? { status: "match" } : { status: "gone" };
     }
     const observed = probeProcessBirth(expectedBirth.pid);
     if (observed.status === "unknown")
-      return "unknown";
+      return observed;
     if (observed.status === "absent")
-      return "gone";
-    return observed.birth.token === expectedBirth.token ? "match" : "gone";
+      return { status: "gone" };
+    return observed.birth.token === expectedBirth.token ? { status: "match" } : { status: "gone" };
   };
   const initial = probeExpected();
-  if (initial === "unknown") {
-    throw new Error("RUNNER_ADOPTION_REQUIRED: iOS runner process identity is unproven");
+  if (initial.status === "unknown") {
+    throw new SessionAuthorityError("RUNNER_ADOPTION_REQUIRED", "iOS runner process identity is unproven", void 0, processBirthRefusalDetails(initial, expectedBirth.pid));
   }
-  if (initial === "gone") {
+  if (initial.status === "gone") {
     clearState(state);
     return;
   }
@@ -24806,10 +24806,10 @@ async function reapStaleFastRunner(deps = {}) {
   }
   await reapDelay(sleep6, graceMs, deps.signal);
   const afterTerm = probeExpected();
-  if (afterTerm === "unknown") {
-    throw new Error("RUNNER_ADOPTION_REQUIRED: iOS runner termination is unproven");
+  if (afterTerm.status === "unknown") {
+    throw new SessionAuthorityError("RUNNER_ADOPTION_REQUIRED", "iOS runner termination is unproven", void 0, processBirthRefusalDetails(afterTerm, expectedBirth.pid));
   }
-  if (afterTerm === "gone") {
+  if (afterTerm.status === "gone") {
     clearState(state);
     return;
   }
@@ -24823,8 +24823,8 @@ async function reapStaleFastRunner(deps = {}) {
     await sleep6(50);
   }
   const afterKill = probeExpected();
-  if (afterKill !== "gone") {
-    throw new Error("RUNNER_ADOPTION_REQUIRED: iOS runner termination is unproven");
+  if (afterKill.status !== "gone") {
+    throw new SessionAuthorityError("RUNNER_ADOPTION_REQUIRED", "iOS runner termination is unproven", void 0, afterKill.status === "unknown" ? processBirthRefusalDetails(afterKill, expectedBirth.pid) : void 0);
   }
   clearState(state);
 }
@@ -25346,6 +25346,7 @@ var init_rn_fast_runner_client = __esm({
     init_transport_recovery();
     init_process_birth();
     init_process_owner();
+    init_registry();
     READY_TIMEOUT_MS = resolveReadyTimeoutMs();
     BUILD_READY_TIMEOUT_MS = 36e4;
     HTTP_TIMEOUT_MS = 1e4;
@@ -69237,6 +69238,7 @@ init_cleanup_identity();
 import { execFile as execFileCb11, spawn as spawn7 } from "node:child_process";
 import { promisify as promisify14 } from "node:util";
 init_process_birth();
+init_process_owner();
 init_registry();
 var execFile14 = promisify14(execFileCb11);
 var RECORDER_POST_KILL_CONFIRM_MS = 2e3;
@@ -69463,16 +69465,17 @@ async function stopBoundRunner(binding, processProbe = probeProcessBirth, signal
   const port = binding.port;
   const current = processProbe(pid);
   if (current.status === "unknown") {
-    throw new SessionAuthorityError("RUNNER_ADOPTION_REQUIRED", "runner process identity is unavailable");
+    throw new SessionAuthorityError("RUNNER_ADOPTION_REQUIRED", "runner process identity is unavailable", void 0, processBirthRefusalDetails(current, pid));
   }
   if (current.status === "present" && current.birth.token === expectedBirth) {
+    const message = "runner process did not stop before the cleanup deadline";
     const observeStop = () => {
       const observed = processProbe(pid);
-      if (observed.status === "unknown")
-        return "unknown";
+      if (observed.status === "unknown") {
+        throw new SessionAuthorityError("RUNNER_ADOPTION_REQUIRED", `${message}; shutdown identity is unknown`, void 0, processBirthRefusalDetails(observed, pid));
+      }
       return observed.status === "present" && observed.birth.token === expectedBirth ? "running" : "stopped";
     };
-    const message = "runner process did not stop before the cleanup deadline";
     const signalTolerated = (value) => {
       try {
         signalProcess(pid, value);
@@ -69484,7 +69487,7 @@ async function stopBoundRunner(binding, processProbe = probeProcessBirth, signal
     if (!await awaitExactStopped(observeStop, graceDeadlineMs, "RUNNER_ADOPTION_REQUIRED", message)) {
       const escalation = processProbe(pid);
       if (escalation.status === "unknown") {
-        throw new SessionAuthorityError("RUNNER_ADOPTION_REQUIRED", `${message}; shutdown identity is unknown`);
+        throw new SessionAuthorityError("RUNNER_ADOPTION_REQUIRED", `${message}; shutdown identity is unknown`, void 0, processBirthRefusalDetails(escalation, pid));
       }
       if (escalation.status === "present" && escalation.birth.token === expectedBirth) {
         signalTolerated("SIGKILL");

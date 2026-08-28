@@ -8784,11 +8784,20 @@ var init_registry = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/session/process-owner.js
+function processBirthRefusalDetails(probe, pid) {
+  return probe.status === "unknown" ? {
+    attestation: "unavailable",
+    ...probe.cause,
+    nextAction: PROCESS_ATTESTATION_UNAVAILABLE_NEXT_ACTION
+  } : { attestation: "absent", pid };
+}
+var PROCESS_ATTESTATION_UNAVAILABLE_NEXT_ACTION;
 var init_process_owner = __esm({
   "packages/rn-dev-agent-core/dist/session/process-owner.js"() {
     "use strict";
     init_process_birth();
     init_registry();
+    PROCESS_ATTESTATION_UNAVAILABLE_NEXT_ACTION = "Process identity could not be read in time on a loaded host. Reduce host process contention, then retry the original operation; do not reopen or rebind the device.";
   }
 });
 
@@ -9004,32 +9013,32 @@ async function reapStaleFastRunner(deps = {}) {
       clearState(state);
       return;
     }
-    throw new Error("RUNNER_ADOPTION_REQUIRED: live persisted iOS runner lacks process-birth authority");
+    throw new SessionAuthorityError("RUNNER_ADOPTION_REQUIRED", "live persisted iOS runner lacks process-birth authority", void 0, observed.status === "unknown" ? processBirthRefusalDetails(observed, state.pid) : void 0);
   }
   const probeExpected = () => {
     if (deps.probeProcessBirth) {
       const observed2 = deps.probeProcessBirth(expectedBirth.pid);
       if (observed2.status === "unknown")
-        return "unknown";
+        return observed2;
       if (observed2.status === "absent")
-        return "gone";
-      return observed2.birth.token === expectedBirth.token ? "match" : "gone";
+        return { status: "gone" };
+      return observed2.birth.token === expectedBirth.token ? { status: "match" } : { status: "gone" };
     }
     if (deps.matchesProcessBirth) {
-      return deps.matchesProcessBirth(expectedBirth) ? "match" : "gone";
+      return deps.matchesProcessBirth(expectedBirth) ? { status: "match" } : { status: "gone" };
     }
     const observed = probeProcessBirth(expectedBirth.pid);
     if (observed.status === "unknown")
-      return "unknown";
+      return observed;
     if (observed.status === "absent")
-      return "gone";
-    return observed.birth.token === expectedBirth.token ? "match" : "gone";
+      return { status: "gone" };
+    return observed.birth.token === expectedBirth.token ? { status: "match" } : { status: "gone" };
   };
   const initial = probeExpected();
-  if (initial === "unknown") {
-    throw new Error("RUNNER_ADOPTION_REQUIRED: iOS runner process identity is unproven");
+  if (initial.status === "unknown") {
+    throw new SessionAuthorityError("RUNNER_ADOPTION_REQUIRED", "iOS runner process identity is unproven", void 0, processBirthRefusalDetails(initial, expectedBirth.pid));
   }
-  if (initial === "gone") {
+  if (initial.status === "gone") {
     clearState(state);
     return;
   }
@@ -9041,10 +9050,10 @@ async function reapStaleFastRunner(deps = {}) {
   }
   await reapDelay(sleep, graceMs, deps.signal);
   const afterTerm = probeExpected();
-  if (afterTerm === "unknown") {
-    throw new Error("RUNNER_ADOPTION_REQUIRED: iOS runner termination is unproven");
+  if (afterTerm.status === "unknown") {
+    throw new SessionAuthorityError("RUNNER_ADOPTION_REQUIRED", "iOS runner termination is unproven", void 0, processBirthRefusalDetails(afterTerm, expectedBirth.pid));
   }
-  if (afterTerm === "gone") {
+  if (afterTerm.status === "gone") {
     clearState(state);
     return;
   }
@@ -9058,8 +9067,8 @@ async function reapStaleFastRunner(deps = {}) {
     await sleep(50);
   }
   const afterKill = probeExpected();
-  if (afterKill !== "gone") {
-    throw new Error("RUNNER_ADOPTION_REQUIRED: iOS runner termination is unproven");
+  if (afterKill.status !== "gone") {
+    throw new SessionAuthorityError("RUNNER_ADOPTION_REQUIRED", "iOS runner termination is unproven", void 0, afterKill.status === "unknown" ? processBirthRefusalDetails(afterKill, expectedBirth.pid) : void 0);
   }
   clearState(state);
 }
@@ -9078,6 +9087,7 @@ var init_rn_fast_runner_client = __esm({
     init_transport_recovery();
     init_process_birth();
     init_process_owner();
+    init_registry();
     READY_TIMEOUT_MS = resolveReadyTimeoutMs();
     FAST_RUNNER_PROJECT = resolveNativeRunnerDir("rn-fast-runner");
     runnerProcess = null;
