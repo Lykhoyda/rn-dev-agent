@@ -215,8 +215,9 @@ test('the descendant spawn convention matrix brackets both Node calling conventi
 
   assert.ok(convention, 'ci.yml must gate the managed-Metro descendant spawn convention');
   assert.equal(convention.strategy?.['fail-fast'], false);
-  // 24.18 is the last object-form 24; 24 latest and 26 are positional.
-  assert.deepEqual(convention.strategy?.matrix?.node, ['22', '24.18', '24', '26']);
+  // 24.18 is the last object-form 24; 24 latest and 26 are positional. 25 is a representative
+  // odd major the pinned drift table does not list, proving admission does not depend on it.
+  assert.deepEqual(convention.strategy?.matrix?.node, ['22', '24.18', '24', '25', '26']);
 
   const probe = convention.steps?.find((step) =>
     step.name?.includes('Descendant fence, convention probe and drift detector'),

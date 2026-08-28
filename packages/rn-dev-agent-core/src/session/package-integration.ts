@@ -458,13 +458,16 @@ function establishNativeSpawnConvention() {
   const pinned = pinnedNativeSpawnConventions(process.versions.node);
   const constants = observedNativeSpawnFlagConstants();
   const observed = constants ? 'positional' : 'object';
-  let admitted = false;
+  // Admission authenticates argument content, not the Node version, so the observed
+  // convention and its flag constants are always recorded. The pinned table stays a
+  // drift probe: an unpinned major is evidence, never a refusal.
+  nativeSpawnConvention = observed;
+  nativeSpawnFlagConstants = constants;
+  let pinnedKnowsObserved = false;
   for (let index = 0; index < pinned.length; index += 1) {
-    if (pinned[index] === observed) admitted = true;
+    if (pinned[index] === observed) pinnedKnowsObserved = true;
   }
-  nativeSpawnConvention = admitted ? observed : 'unverified';
-  nativeSpawnFlagConstants = nativeSpawnConvention === 'positional' ? constants : null;
-  if (nativeSpawnConvention === 'unverified') {
+  if (!pinnedKnowsObserved) {
     recordLoaderViolation(
       canonicalAuthorityJson({
         code: 'RN_DEV_AGENT_DESCENDANT_CONVENTION_UNVERIFIED',
@@ -477,36 +480,44 @@ function establishNativeSpawnConvention() {
   }
 }
 function authorizedNativeSpawnFlags(options) {
+  const constants = nativeSpawnFlagConstants;
+  if (!constants) return null;
   return (
-    (options.detached ? nativeSpawnFlagConstants.kProcessFlagDetached : 0) |
-    (options.windowsHide ? nativeSpawnFlagConstants.kProcessFlagWindowsHide : 0) |
-    (options.windowsVerbatimArguments
-      ? nativeSpawnFlagConstants.kProcessFlagWindowsVerbatimArguments
-      : 0)
+    (options.detached ? constants.kProcessFlagDetached : 0) |
+    (options.windowsHide ? constants.kProcessFlagWindowsHide : 0) |
+    (options.windowsVerbatimArguments ? constants.kProcessFlagWindowsVerbatimArguments : 0)
   );
 }
+// The single-argument shape carries the authorized options object itself, so any other object
+// is a forged identity and must throw. The eight-argument shape is the one Node produces, so an
+// argument that fails to authenticate there is an ordinary spawn refusal reporting Node's own
+// errno. Every other arity is a shape Node never emits and stays a hard refusal.
+function containsNativeSpawnRefusal(arity) {
+  return arity === 8;
+}
+// Admission authenticates argument content per position and never consults the Node version, so
+// every major - listed or not - is admitted on the same evidence.
+//
+// NOTE: position is part of the authentication, not incidental. file and cwd are both plain
+// strings, so a membership-only rule cannot tell a future ABI reorder from a caller permuting the
+// arguments it was authorized for: passing cwd in the file slot would execute the cwd path.
+// A reordering major must therefore be re-pinned deliberately rather than admitted silently.
 function admitsAuthorizedNativeSpawn(args, authorizedOptions) {
   if (authorizedOptions === undefined) return false;
-  if (nativeSpawnConvention === 'object') {
-    return args.length === 1 && args[0] === authorizedOptions;
-  }
-  if (nativeSpawnConvention === 'positional') {
-    return (
-      args.length === 8 &&
-      args[0] === authorizedOptions.file &&
-      args[1] === authorizedOptions.args &&
-      args[2] === authorizedOptions.cwd &&
-      args[3] === authorizedOptions.envPairs &&
-      args[4] === authorizedOptions.stdio &&
-      args[5] === authorizedNativeSpawnFlags(authorizedOptions) &&
-      args[6] === authorizedOptions.uid &&
-      args[7] === authorizedOptions.gid
-    );
-  }
-  return false;
-}
-function containsNativeSpawnRefusal(arity) {
-  return nativeSpawnConvention === 'unverified' || arity === 8;
+  if (args.length === 1) return args[0] === authorizedOptions;
+  if (args.length !== 8) return false;
+  const flags = authorizedNativeSpawnFlags(authorizedOptions);
+  if (flags === null) return false;
+  return (
+    args[0] === authorizedOptions.file &&
+    args[1] === authorizedOptions.args &&
+    args[2] === authorizedOptions.cwd &&
+    args[3] === authorizedOptions.envPairs &&
+    args[4] === authorizedOptions.stdio &&
+    args[5] === flags &&
+    args[6] === authorizedOptions.uid &&
+    args[7] === authorizedOptions.gid
+  );
 }
 function refuseNativeSpawn(arity) {
   recordLoaderViolation(
@@ -1207,10 +1218,16 @@ function fenceNativeProcessHandle(handle, context) {
         const authorizedOptions = privateWeakMapGet(authorizedNativeProcessSpawns, this);
         const slot = privateWeakMapGet(nativeProcessHandleSlots, this);
         const admitted = admitsAuthorizedNativeSpawn(args, authorizedOptions);
+        // Inside the handle's own authorized spawn (spawnDepth > 0), an eight-argument call
+        // whose arguments fail to authenticate is a genuine spawn refusal and reports Node's
+        // own errno - including a re-entrant one from a hook, which the one-shot consumption
+        // then retires. Every other shape - raw handle, expired authorization, any other
+        // arity - is an identity failure and throws.
         const contained =
           !admitted &&
           authorizedOptions !== undefined &&
           slot !== undefined &&
+          slot.spawnDepth > 0 &&
           containsNativeSpawnRefusal(args.length);
         if (!admitted && !contained) {
           throw descendantError();

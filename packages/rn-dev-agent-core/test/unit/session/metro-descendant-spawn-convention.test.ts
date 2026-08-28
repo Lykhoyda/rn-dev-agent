@@ -50,7 +50,78 @@ childProcess.ChildProcess.prototype.spawn = function (options) {
 };
 `,
   );
-  return { root, integration, adapterPath, childEntry, versionShim, doubleSpawnShim };
+  // Substitutes a foreign executable for the authorized one while the fence's one-shot
+  // authorization is live, so admission is tested on argument content rather than arity.
+  const forgedFileShim = join(root, 'forged-file-shim.cjs');
+  writeFileSync(
+    forgedFileShim,
+    `const childProcess = require('node:child_process');
+const originalSpawn = childProcess.ChildProcess.prototype.spawn;
+childProcess.ChildProcess.prototype.spawn = function (options) {
+  let outcome;
+  try {
+    outcome =
+      'errno:' +
+      this._handle.spawn(
+        '/nonexistent-rn-dev-agent-forged',
+        options.args,
+        options.cwd,
+        options.envPairs,
+        options.stdio,
+        0,
+        options.uid,
+        options.gid,
+      );
+  } catch (error) {
+    outcome = 'threw:' + error.code;
+  }
+  console.log(outcome);
+  return Reflect.apply(originalSpawn, this, [options]);
+};
+`,
+  );
+  // Every argument is a member of the authorized options, but `cwd` sits in the file slot and
+  // the authorized file is parked in an ignored ninth argument. A membership-only admission
+  // rule accepts this and executes the cwd path; positional authentication refuses it.
+  const permutedArgumentShim = join(root, 'permuted-argument-shim.cjs');
+  writeFileSync(
+    permutedArgumentShim,
+    `const childProcess = require('node:child_process');
+const originalSpawn = childProcess.ChildProcess.prototype.spawn;
+childProcess.ChildProcess.prototype.spawn = function (options) {
+  let outcome;
+  try {
+    outcome =
+      'errno:' +
+      this._handle.spawn(
+        options.cwd,
+        options.args,
+        options.uid,
+        options.envPairs,
+        options.stdio,
+        0,
+        options.uid,
+        options.gid,
+        options.file,
+      );
+  } catch (error) {
+    outcome = 'threw:' + error.code;
+  }
+  console.log(outcome);
+  return Reflect.apply(originalSpawn, this, [options]);
+};
+`,
+  );
+  return {
+    root,
+    integration,
+    adapterPath,
+    childEntry,
+    versionShim,
+    doubleSpawnShim,
+    forgedFileShim,
+    permutedArgumentShim,
+  };
 }
 
 function runFenced(project: ReturnType<typeof fencedProject>, source: string, preload?: string) {
@@ -126,10 +197,13 @@ test('Node still calls the native process handle with a convention the fence kno
     observed.hasConstants ? 'positional' : 'object',
     'process_wrap constants disagree with the observed native spawn invocation',
   );
-  assert.ok(
-    pinnedNativeSpawnConventions(observed.nodeVersion).includes(observedConvention),
-    `Node ${observed.nodeVersion} uses an unpinned ${observedConvention} convention`,
-  );
+  const pinned = pinnedNativeSpawnConventions(observed.nodeVersion);
+  if (pinned.length > 0) {
+    assert.ok(
+      pinned.includes(observedConvention),
+      `Node ${observed.nodeVersion} is pinned as ${JSON.stringify(pinned)} but invokes ${observedConvention}`,
+    );
+  }
 });
 
 test('an authorized descendant fork is admitted under this host convention', () => {
@@ -150,32 +224,65 @@ test('an authorized descendant fork is admitted under this host convention', () 
   );
 });
 
-test('an unverified Node convention refuses descendants without killing the fenced process', () => {
-  const project = fencedProject('rn-session-metro-convention-unverified-');
+// Representative odd-major coverage. Node 99 is unpinned, so the pre-content-authentication
+// fence refused every descendant here and killed managed Metro on the first NativeWind
+// bundle request. Admission now authenticates argument content, so an unpinned major is
+// fully functional and the table records drift as evidence only.
+test('an unpinned Node major still admits an authorized descendant and records drift evidence', () => {
+  const project = fencedProject('rn-session-metro-convention-unpinned-');
   const result = runFenced(
     project,
     `const compose = require(${JSON.stringify(project.adapterPath)});
      compose({});
      const childProcess = require('node:child_process');
      const child = childProcess.fork(${JSON.stringify(project.childEntry)}, [], { execArgv: ['--no-warnings'] });
-     child.once('error', (error) => {
-       if (error.code !== 'EACCES') { console.error('unexpected error code ' + error.code); process.exit(5); }
-       console.log('contained');
-       process.exit(0);
-     });
-     child.once('exit', () => {});
-     setTimeout(() => { console.error('no error event'); process.exit(6); }, 10000).unref();`,
+     child.once('error', (error) => { console.error('fork refused ' + error.code); process.exit(5); });
+     child.once('exit', (code) => process.exit(code === 0 ? 0 : 6));`,
     project.versionShim,
   );
   assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
-  assert.match(result.stdout, /contained/);
   assert.ok(
     result.runtimeLoads.includes('RN_DEV_AGENT_DESCENDANT_CONVENTION_UNVERIFIED'),
-    'the install-time convention refusal was not recorded as signed evidence',
+    'the unpinned major was not recorded as signed drift evidence',
+  );
+  assert.ok(
+    !result.runtimeLoads.includes('RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION'),
+    'an unpinned major must not refuse an authorized descendant',
+  );
+});
+
+// A forged argument is the refusal that must survive: it reports Node's own errno so a
+// listener-bearing caller sees an ordinary spawn failure, and it is signed as evidence.
+test('a forged spawn argument is refused by errno on this host convention', () => {
+  const project = fencedProject('rn-session-metro-convention-forged-');
+  const result = runFenced(
+    project,
+    `const compose = require(${JSON.stringify(project.adapterPath)});
+     compose({});
+     const childProcess = require('node:child_process');
+     try {
+       childProcess.spawn(process.execPath, [${JSON.stringify(project.childEntry)}]);
+       console.error('the forged call did not consume the one-shot authorization');
+       process.exit(7);
+     } catch (error) {
+       if (error.code !== 'RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION') {
+         console.error('unexpected error ' + error.code);
+         process.exit(8);
+       }
+       process.exit(0);
+     }`,
+    project.forgedFileShim,
+  );
+  assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+  // Contained, not thrown: the requester gets the errno Node reports for any denied spawn.
+  assert.match(
+    result.stdout,
+    /^errno:-\d+$/m,
+    `a forged argument must be refused by errno, got ${JSON.stringify(result.stdout)}`,
   );
   assert.ok(
     result.runtimeLoads.includes('RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION'),
-    'the contained native spawn refusal was not recorded as signed evidence',
+    'the forged-argument refusal was not recorded as signed evidence',
   );
 });
 
@@ -289,3 +396,38 @@ test('a contained native refusal consumes its one-shot authorization', () => {
     'the contained first refusal was not recorded as signed evidence',
   );
 });
+
+// Regression: an order-agnostic membership rule admitted this permutation, substituting the
+// authorized `cwd` for the executable. Position is part of the authentication.
+test(
+  'a permuted spawn argument list cannot substitute the executable',
+  { skip: hostConvention !== 'positional' ? 'host uses the object spawn convention' : false },
+  () => {
+    const project = fencedProject('rn-session-metro-convention-permuted-');
+    const result = runFenced(
+      project,
+      `const compose = require(${JSON.stringify(project.adapterPath)});
+     compose({});
+     const childProcess = require('node:child_process');
+     const child = childProcess.spawn(process.execPath, [${JSON.stringify(project.childEntry)}], {
+       cwd: require('node:path').dirname(process.execPath),
+     });
+     child.once('error', (error) => { console.error('authorized spawn refused ' + error.code); process.exit(21); });
+     child.once('exit', (code) => process.exit(code === 0 ? 0 : 22));`,
+      project.permutedArgumentShim,
+    );
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+    // The permutation is an unrecognised shape, so it is a hard identity refusal, never an errno
+    // and never a spawn of the cwd path.
+    assert.match(
+      result.stdout,
+      /^threw:RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION$/m,
+      `a permuted argument list must be refused outright, got ${JSON.stringify(result.stdout)}`,
+    );
+    assert.doesNotMatch(
+      result.stdout,
+      /^errno:/m,
+      'a permuted argument list must not reach the native spawn at all',
+    );
+  },
+);

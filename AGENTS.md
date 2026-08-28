@@ -100,17 +100,36 @@ either way whenever `PATH` resolves a Node outside the affected range.
 Node changed the private `ChildProcess.prototype.spawn` -> `handle.spawn()`
 calling convention from one options object to eight positional arguments, and
 backported it to the 24 line at 24.19.0. The fence in
-`src/session/package-integration.ts` authenticates both shapes against the same
-authorized options, decides which one to expect once at install time
-(`pinnedNativeSpawnConventions` plus the `process_wrap` `constants` export), and
-refuses every native spawn on a convention it has not verified.
+`src/session/package-integration.ts` admits by **argument content, never by Node
+version**: whatever arity `handle.spawn` receives, every argument must be one of
+the authorized options' own values — `file`, `cwd`, `uid`, `gid` by value;
+`args`, `envPairs`, `stdio` and the options object by reference identity; the
+flags word recomputed from the `process_wrap` `constants` export — and the call
+must carry `file`, `args`, `envPairs` and `stdio`. A future major that reorders
+those arguments still authenticates; a foreign argument never does. So Node 24
+and every later major stays functional, including majors nobody pinned.
 
-The `descendant-spawn-convention` CI job pins the four cells that bracket that
-boundary: Node 22.x, 24.18 (last object-form 24), 24.x latest (positional), and
-26.x. When a new Node line ships, extend `pinnedNativeSpawnConventions` and add
-its cell — a version outside that table fails closed with a recorded
-`RN_DEV_AGENT_DESCENDANT_CONVENTION_UNVERIFIED` violation rather than silently
-degrading.
+`pinnedNativeSpawnConventions` is a **drift probe, not an admission gate**. An
+unpinned major records a signed `RN_DEV_AGENT_DESCENDANT_CONVENTION_UNVERIFIED`
+observation and keeps working; the table only has to stay truthful about the
+majors it does pin. The `descendant-spawn-convention` CI job covers Node 22.x,
+24.18 (last object-form 24), 24.x latest (positional), 25.x (a representative
+odd major the table does not list) and 26.x.
+
+Refusals split by shape, not by version. A single-argument call carries the
+authorized options object itself, so a different object is a forged identity and
+throws, as do raw handles, expired authorizations and re-entrant native calls. A
+positional call whose arguments fail to authenticate is an ordinary spawn
+refusal: it returns `UV_EACCES`, which is one of the five errnos Node reports
+through an `'error'` event rather than a throw, and it is recorded as signed
+evidence.
+
+Containment buys Node-standard spawn-failure semantics and an attributable
+record — **not** "Metro keeps serving". A caller that registers no `'error'`
+listener (NativeWind's Tailwind wrapper is exactly that shape) still dies on an
+unhandled `'error'` event, and a hard throw would not save it either: Expo's
+bundle path rethrows it top-level. Do not describe containment as keeping Metro
+alive for such callers.
 
 ## Where To Make Changes
 

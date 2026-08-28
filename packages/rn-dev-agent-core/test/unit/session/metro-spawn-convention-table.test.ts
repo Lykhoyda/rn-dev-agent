@@ -25,11 +25,19 @@ test('pinned native spawn convention table brackets every published convention b
   assert.deepEqual(pinnedNativeSpawnConventions('not-a-version'), []);
 });
 
-test('this Node host observes a convention the pinned table admits', () => {
+test('the pinned table is a drift probe, not an admission gate for this host', () => {
   const observed = hostSpawnConvention();
   const pinned = pinnedNativeSpawnConventions(process.versions.node);
   assert.ok(
-    pinned.includes(observed),
-    `Node ${process.versions.node} observes the ${observed} spawn convention but the pinned table admits ${JSON.stringify(pinned)}`,
+    observed === 'object' || observed === 'positional',
+    `Node ${process.versions.node} observes an unknown spawn convention ${observed}`,
   );
+  // An unpinned major is expected and supported: admission authenticates argument
+  // content, so the table only has to stay truthful about the majors it does pin.
+  if (pinned.length > 0) {
+    assert.ok(
+      pinned.includes(observed),
+      `Node ${process.versions.node} is pinned as ${JSON.stringify(pinned)} but observes ${observed}`,
+    );
+  }
 });
