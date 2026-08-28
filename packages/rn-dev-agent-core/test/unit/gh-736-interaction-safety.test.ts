@@ -39,6 +39,7 @@ import {
   removeAndroidForwardWithOutcome,
   runBoundedAndroidRunnerRebuild,
   runAndroid,
+  verifyAndroidRunnerCleanupResources,
 } from '../../dist/runners/rn-android-runner-client.js';
 import {
   classifyRunnerCompatibility,
@@ -56,6 +57,20 @@ import {
 } from '../../dist/tools/device-interact.js';
 
 const appId = 'com.example.app';
+const android11CaptureRoot = join(process.cwd(), 'test/fixtures/gh-736/android-11');
+const unsupportedInstrumentationCapture = readFileSync(
+  join(android11CaptureRoot, 'activity-instrumentation-unsupported.txt'),
+  'utf8',
+);
+const idleProcessesCapture = readFileSync(
+  join(android11CaptureRoot, 'activity-processes-idle-header.txt'),
+  'utf8',
+);
+const activeProcessesCapture = `${idleProcessesCapture}  Active instrumentation:
+    ActiveInstrumentation{84c91a2}
+      mClass=ComponentInfo{dev.lykhoyda.rndevagent.androidrunner.test/dev.lykhoyda.rndevagent.androidrunner.Runner}
+  UID states:
+`;
 const appHome = {
   ref: '@e1',
   type: 'android.widget.TextView',
@@ -511,6 +526,7 @@ test('unbound stale-feature cleanup never converts a remaining predicate into su
 
 test('cleanup classification is exact, predicate-specific, and fail-closed', () => {
   const expected = { deviceId: '46828c2c', hostPort: 22136, devicePort: 22089 };
+  assert.equal(Buffer.byteLength(unsupportedInstrumentationCapture), 112);
   assert.deepEqual(buildAdbForwardRemoveArgs(expected.deviceId, expected.hostPort), [
     '-s',
     '46828c2c',
@@ -522,15 +538,22 @@ test('cleanup classification is exact, predicate-specific, and fail-closed', () 
     classifyAndroidRunnerCleanupResources(
       expected,
       '46828c2c tcp:22136 tcp:22089',
-      'ACTIVITY MANAGER RUNNING INSTRUMENTATIONS',
+      idleProcessesCapture,
     ),
     { predicate: 'forward', evidence: '46828c2c tcp:22136 tcp:22089' },
   );
+  assert.deepEqual(classifyAndroidRunnerCleanupResources(expected, '', activeProcessesCapture), {
+    predicate: 'instrumentation',
+    evidence: 'ActiveInstrumentation{84c91a2}',
+  });
   assert.deepEqual(
     classifyAndroidRunnerCleanupResources(
       expected,
       '',
-      'ACTIVITY MANAGER RUNNING INSTRUMENTATIONS\n  mClass=ComponentInfo{dev.lykhoyda.rndevagent.androidrunner.test/dev.lykhoyda.rndevagent.androidrunner.Runner}',
+      `${idleProcessesCapture}  Active instrumentation:
+    mClass=ComponentInfo{dev.lykhoyda.rndevagent.androidrunner.test/dev.lykhoyda.rndevagent.androidrunner.Runner}
+  UID states:
+`,
     ),
     {
       predicate: 'instrumentation',
@@ -538,18 +561,84 @@ test('cleanup classification is exact, predicate-specific, and fail-closed', () 
         'mClass=ComponentInfo{dev.lykhoyda.rndevagent.androidrunner.test/dev.lykhoyda.rndevagent.androidrunner.Runner}',
     },
   );
+  assert.equal(classifyAndroidRunnerCleanupResources(expected, '', idleProcessesCapture), null);
   assert.equal(
     classifyAndroidRunnerCleanupResources(
       expected,
       '',
-      'ACTIVITY MANAGER RUNNING INSTRUMENTATIONS\n  historical=dev.lykhoyda.rndevagent.androidrunner.test/old',
+      `${idleProcessesCapture}  UID states:
+    ActiveInstrumentation{outside-active-block}
+`,
     ),
     null,
   );
-  assert.deepEqual(classifyAndroidRunnerCleanupResources(expected, '', 'permission denied'), {
-    predicate: 'instrumentation',
-    evidence: 'unparseable instrumentation dump',
+  assert.deepEqual(
+    classifyAndroidRunnerCleanupResources(expected, '', unsupportedInstrumentationCapture),
+    {
+      predicate: 'instrumentation',
+      evidence: 'unparseable instrumentation dump',
+    },
+  );
+});
+
+test('processes verifier preserves typed sanitized outcomes for every refusal', async () => {
+  const expected = { deviceId: '46828c2c', hostPort: 22136, devicePort: 22089 };
+  const observedArgs: string[][] = [];
+  await verifyAndroidRunnerCleanupResources(expected, '', {}, undefined, async (args) => {
+    observedArgs.push(args);
+    return { stdout: idleProcessesCapture };
   });
+  assert.deepEqual(observedArgs, [['-s', '46828c2c', 'shell', 'dumpsys', 'activity', 'processes']]);
+
+  await assert.rejects(
+    () =>
+      verifyAndroidRunnerCleanupResources(expected, '', {}, undefined, async () => ({
+        stdout: activeProcessesCapture,
+      })),
+    (error: unknown) => {
+      assert.ok(error instanceof AndroidRunnerCleanupUnconfirmedError);
+      assert.equal(error.predicate, 'instrumentation');
+      assert.equal(error.evidence, 'ActiveInstrumentation{84c91a2}');
+      assert.equal(error.meta.instrumentationCleanup?.exitCode, 0);
+      assert.ok(error.meta.instrumentationCleanup?.argv.join(' ').includes('device-'));
+      assert.ok(!JSON.stringify(error.meta).includes('46828c2c'));
+      return true;
+    },
+  );
+
+  await assert.rejects(
+    () =>
+      verifyAndroidRunnerCleanupResources(expected, '', {}, undefined, async () => ({
+        stdout: unsupportedInstrumentationCapture,
+      })),
+    (error: unknown) => {
+      assert.ok(error instanceof AndroidRunnerCleanupUnconfirmedError);
+      assert.equal(error.evidence, 'unparseable instrumentation dump');
+      assert.equal(error.meta.instrumentationCleanup?.exitCode, 0);
+      assert.ok(error.meta.instrumentationCleanup?.stdoutTail.includes('Unknown command'));
+      return true;
+    },
+  );
+
+  await assert.rejects(
+    () =>
+      verifyAndroidRunnerCleanupResources(expected, '', {}, undefined, async () => {
+        throw Object.assign(new Error('denied for /Users/private on 46828c2c'), {
+          code: 1,
+          stdout: 'device 46828c2c output',
+          stderr: 'permission denied at /Users/private',
+        });
+      }),
+    (error: unknown) => {
+      assert.ok(error instanceof AndroidRunnerCleanupUnconfirmedError);
+      assert.equal(error.predicate, 'instrumentation');
+      assert.equal(error.meta.instrumentationCleanup?.exitCode, 1);
+      assert.equal(error.meta.instrumentationCleanup?.timedOut, false);
+      assert.ok(!JSON.stringify(error.meta).includes('/Users/private'));
+      assert.ok(!JSON.stringify(error.meta).includes('46828c2c'));
+      return true;
+    },
+  );
 });
 
 test('exact forward removal preserves sanitized non-zero and timeout outcomes', async () => {

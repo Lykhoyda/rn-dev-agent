@@ -1,0 +1,1 @@
+ACTIVITY MANAGER RUNNING PROCESSES (dumpsys activity processes)

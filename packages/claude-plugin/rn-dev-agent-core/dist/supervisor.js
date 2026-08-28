@@ -38103,6 +38103,7 @@ __export(rn_android_runner_client_exports, {
   shouldReuseAndroidRunner: () => shouldReuseAndroidRunner,
   startAndroidRunner: () => startAndroidRunner,
   stopAndroidRunner: () => stopAndroidRunner,
+  verifyAndroidRunnerCleanupResources: () => verifyAndroidRunnerCleanupResources,
   waitForAndroidRunnerHealth: () => waitForAndroidRunnerHealth
 });
 import { spawn as spawn7, execFile as execFile12 } from "node:child_process";
@@ -38505,17 +38506,43 @@ function exactAndroidForwardLine(expected, forwards) {
     return expected.devicePort === void 0 || remote === `tcp:${expected.devicePort}`;
   });
 }
-function classifyAndroidRunnerCleanupResources(expected, forwards, instrumentation) {
+function classifyAndroidRunnerCleanupResources(expected, forwards, processes) {
   const forwardLine = exactAndroidForwardLine({ ...expected, devicePort: expected.devicePort ?? DEFAULT_PORT }, forwards);
   if (forwardLine)
     return { predicate: "forward", evidence: forwardLine.trim() };
-  const instrumentationLines = instrumentation.split("\n");
-  const dumpHeaderPresent = instrumentationLines.some((line) => /ACTIVITY MANAGER .*INSTRUMENTATION/i.test(line));
+  const processLines = processes.split("\n");
+  const dumpHeaderPresent = processLines.some((line) => /^ACTIVITY MANAGER RUNNING PROCESSES\b/.test(line));
   if (!dumpHeaderPresent) {
     return { predicate: "instrumentation", evidence: "unparseable instrumentation dump" };
   }
-  const activeInstrumentation = instrumentationLines.find((line) => /(?:ActiveInstrumentation\{|ComponentInfo\{)/.test(line) && /dev\.lykhoyda\.rndevagent\.androidrunner\.test\//.test(line));
+  const activeBlockStart = processLines.findIndex((line) => /^\s*Active instrumentation:\s*$/.test(line));
+  const activeBlockIndent = activeBlockStart >= 0 ? processLines[activeBlockStart].search(/\S/) : -1;
+  let activeInstrumentation;
+  for (const line of processLines.slice(activeBlockStart + 1)) {
+    if (activeBlockStart < 0 || line.trim() === "")
+      continue;
+    if (line.search(/\S/) <= activeBlockIndent)
+      break;
+    if (/ActiveInstrumentation\{/.test(line) || /mClass=ComponentInfo\{dev\.lykhoyda\.rndevagent\.androidrunner\.test\//.test(line)) {
+      activeInstrumentation = line;
+      break;
+    }
+  }
   return activeInstrumentation ? { predicate: "instrumentation", evidence: activeInstrumentation.trim() } : null;
+}
+async function verifyAndroidRunnerCleanupResources(expected, forwards, commandEvidence = {}, signal, execute2) {
+  const processes = await executeAndroidPlatformCommand(expected.deviceId, ["-s", expected.deviceId, "shell", "dumpsys", "activity", "processes"], signal, execute2);
+  const evidence = {
+    ...commandEvidence,
+    instrumentationCleanup: processes.outcome
+  };
+  if (processes.outcome.exitCode !== 0 || processes.outcome.signal !== null || processes.outcome.timedOut) {
+    throw new AndroidRunnerCleanupUnconfirmedError("instrumentation", `argv=${JSON.stringify(processes.outcome.argv)} exitCode=${String(processes.outcome.exitCode)} signal=${String(processes.outcome.signal)} timedOut=${String(processes.outcome.timedOut)} stderrTail=${JSON.stringify(processes.outcome.stderrTail)}`, expected.deviceId, evidence);
+  }
+  const remaining = classifyAndroidRunnerCleanupResources(expected, forwards, processes.stdout);
+  if (remaining) {
+    throw new AndroidRunnerCleanupUnconfirmedError(remaining.predicate, remaining.evidence, expected.deviceId, evidence);
+  }
 }
 async function reapMismatchedAndroidRunner(state, release2, verify, signal, verification = {}) {
   signal?.throwIfAborted();
@@ -38583,14 +38610,7 @@ async function reapMismatchedAndroidRunner(state, release2, verify, signal, veri
       timeout: ADB_CLEANUP_TIMEOUT_MS,
       signal
     })).stdout);
-    const instrumentation = String((await execFileAsync2("adb", ["-s", expected2.deviceId, "shell", "dumpsys", "activity", "instrumentation"], {
-      timeout: ADB_CLEANUP_TIMEOUT_MS,
-      signal
-    })).stdout);
-    const remaining = classifyAndroidRunnerCleanupResources(expected2, forwards, instrumentation);
-    if (remaining) {
-      throw new AndroidRunnerCleanupUnconfirmedError(remaining.predicate, remaining.evidence, expected2.deviceId, commandEvidence);
-    }
+    await verifyAndroidRunnerCleanupResources(expected2, forwards, commandEvidence, signal);
   });
   const attempts3 = Math.max(1, verification.attempts ?? ANDROID_CLEANUP_VERIFY_ATTEMPTS);
   const intervalMs = Math.max(0, verification.intervalMs ?? ANDROID_CLEANUP_VERIFY_INTERVAL_MS);
