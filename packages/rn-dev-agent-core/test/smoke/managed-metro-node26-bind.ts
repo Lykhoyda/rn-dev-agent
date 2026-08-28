@@ -12,7 +12,8 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { existsSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 // @ts-expect-error -- untyped JS test helper
@@ -23,6 +24,12 @@ const APP_ID = process.env.MANAGED_METRO_PROOF_APP_ID ?? 'com.rndevagent.testapp
 const DEVICE_TYPE = process.env.MANAGED_METRO_PROOF_DEVICE_TYPE ?? 'iPhone 17';
 const RUNTIME = process.env.MANAGED_METRO_PROOF_RUNTIME;
 const FLEET_CAP = 5;
+// A task-owned authority registry: the shared one is contended by other live
+// sessions ("database is locked"), and an isolated root also guarantees this
+// proof cannot disturb them.
+const STATE_DIR =
+  process.env.MANAGED_METRO_PROOF_STATE_DIR ??
+  mkdtempSync(join(tmpdir(), 'rn-managed-metro-proof-state-'));
 
 if (!APP_ROOT || !existsSync(join(APP_ROOT, 'package.json'))) {
   console.error('MANAGED_METRO_PROOF_APP must point at a React Native app root');
@@ -71,9 +78,17 @@ async function main(): Promise<void> {
 
   let released = false;
   let integrationApplied = false;
-  const supervisor = startSupervisor({ cwd: APP_ROOT, lineTimeoutMs: 180_000 });
+  let deviceRemoved = false;
+  const supervisor = startSupervisor({
+    cwd: APP_ROOT,
+    lineTimeoutMs: 180_000,
+    env: { RN_DEV_AGENT_STATE_DIR: STATE_DIR },
+  });
 
-  const call = async (name: string, args: Record<string, unknown>) => {
+  const call = async (
+    name: string,
+    args: Record<string, unknown>,
+  ): Promise<Record<string, any>> => {
     supervisor.send('tools/call', { name, arguments: args });
     for (;;) {
       const line = await supervisor.nextLine();
@@ -85,8 +100,15 @@ async function main(): Promise<void> {
   };
 
   try {
+    // A brand-new simulator's first boot runs data migration; it routinely
+    // exceeds the default timeout used for the other simctl calls, and installd
+    // stays unsettled afterwards ("Failed to set metadata" on the first
+    // install). A full shutdown and second boot settles it deterministically.
     simctl(['boot', udid]);
-    simctl(['bootstatus', udid, '-b']);
+    simctl(['bootstatus', udid, '-b'], 1_800_000);
+    simctl(['shutdown', udid]);
+    simctl(['boot', udid]);
+    simctl(['bootstatus', udid, '-b'], 1_800_000);
     log('booted task-owned simulator');
 
     supervisor.send('initialize', {
@@ -104,7 +126,7 @@ async function main(): Promise<void> {
       deviceId: udid,
       appId: APP_ID,
     });
-    assert.equal(bound?.error, undefined, JSON.stringify(bound));
+    assert.equal(bound?.ok, true, JSON.stringify(bound));
     log('device bound');
 
     const applied = await call('rn_session', {
@@ -112,7 +134,7 @@ async function main(): Promise<void> {
       projectRoot: APP_ROOT,
       confirmed: true,
     });
-    assert.equal(applied?.error, undefined, JSON.stringify(applied));
+    assert.equal(applied?.ok, true, JSON.stringify(applied));
     integrationApplied = true;
     log('package integration applied');
 
@@ -122,7 +144,7 @@ async function main(): Promise<void> {
       cwd: APP_ROOT,
       encoding: 'utf8',
       timeout: 3_600_000,
-      env: { ...process.env },
+      env: { ...process.env, RN_DEV_AGENT_STATE_DIR: STATE_DIR },
     });
     assert.equal(
       build.status,
@@ -131,13 +153,14 @@ async function main(): Promise<void> {
     );
     log('native build and install succeeded');
 
-    const afterBuild = await call('rn_session', { action: 'status', projectRoot: APP_ROOT });
+    const afterBuild = (await call('rn_session', { action: 'status', projectRoot: APP_ROOT }))?.data
+      ?.authority;
     assert.equal(
-      afterBuild?.authority?.metroBound,
+      afterBuild?.metroBound,
       true,
-      `managed Metro did not bind: ${JSON.stringify(afterBuild?.authority?.metroTerminal ?? afterBuild)}`,
+      `managed Metro did not bind: ${JSON.stringify(afterBuild?.metroTerminal ?? afterBuild)}`,
     );
-    const metroPort = Number(afterBuild.authority.metroPort);
+    const metroPort = Number(afterBuild.metroPort);
     assert.ok(Number.isSafeInteger(metroPort), 'no allocated Metro port');
     log('managed Metro bound', `port ${metroPort}`);
 
@@ -163,15 +186,18 @@ async function main(): Promise<void> {
     assert.equal(bundle.stdout.trim(), '200', `bundle request failed: ${bundle.stdout}`);
     log('bundle request served');
 
-    const afterBundle = await call('rn_session', { action: 'status', projectRoot: APP_ROOT });
+    const afterBundle = (await call('rn_session', { action: 'status', projectRoot: APP_ROOT }))
+      ?.data?.authority;
     assert.equal(
-      afterBundle?.authority?.metroBound,
+      afterBundle?.metroBound,
       true,
-      `managed Metro did not survive the proof caller: ${JSON.stringify(afterBundle?.authority?.metroTerminal ?? afterBundle)}`,
+      `managed Metro did not survive the proof caller: ${JSON.stringify(afterBundle?.metroTerminal ?? afterBundle)}`,
     );
-    assert.equal(afterBundle?.authority?.metroTerminal ?? null, null);
+    assert.equal(afterBundle?.metroTerminal ?? null, null);
     log('managed Metro survived the proof caller');
   } finally {
+    // Cleanup must never throw: an exception here would mask the failure that
+    // brought us in. Outcomes are recorded and asserted after the block.
     try {
       await call('rn_session', { action: 'stop_metro', projectRoot: APP_ROOT });
       log('metro stopped');
@@ -200,16 +226,24 @@ async function main(): Promise<void> {
     supervisor.child.kill('SIGINT');
     try {
       simctl(['shutdown', udid]);
-      simctl(['delete', udid]);
-      log('task-owned simulator shut down and deleted');
-    } catch (error) {
-      log('simulator cleanup failed', String(error));
+    } catch {
+      // already shut down
     }
-    const after = bootedSimulatorCount();
-    log('fleet booted simulators', `${before} before, ${after} after`);
-    assert.equal(after, before, 'the task-owned simulator was not cleaned up');
-    assert.ok(released, 'the session claim was not released');
+    try {
+      simctl(['delete', udid]);
+    } catch (error) {
+      log('simulator delete failed', String(error));
+    }
+    // Only this task's device is ours to account for; the fleet-wide count moves
+    // under concurrent lanes.
+    deviceRemoved = !simctl(['list', 'devices']).includes(udid);
+    log('task-owned simulator removed', String(deviceRemoved));
+    if (!process.env.MANAGED_METRO_PROOF_STATE_DIR) {
+      rmSync(STATE_DIR, { recursive: true, force: true });
+    }
   }
+  assert.ok(deviceRemoved, 'the task-owned simulator was not deleted');
+  assert.ok(released, 'the session claim was not released');
   log('PROOF PASSED');
 }
 
