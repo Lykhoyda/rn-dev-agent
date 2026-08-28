@@ -263,6 +263,56 @@ test('installer verifies the complete archive before replacing the live pin-cach
   assert.equal(existsSync(outsideStageMarker), false);
 });
 
+// GH #773 negative control: a tampered artifact must never reach execution.
+test('a tampered artifact fails the pin and its payload never executes', () => {
+  const fixture = createInstallerFixture('mr-tampered-exec-');
+  const root = dirname(fixture.archive);
+  const marker = join(root, 'tampered-payload-executed');
+  // A marker path the payload's shell could mangle would make this control
+  // pass even if the payload ran, so refuse it outright.
+  assert.doesNotMatch(marker, /["$`\\\s]/);
+  // A drifted pin-cache forces a real install attempt instead of the fast path,
+  // so the probe below always has a real executable to run.
+  const pinnedBin = join(fixture.pinDir, 'bin', 'maestro-runner');
+  mkdirSync(dirname(pinnedBin), { recursive: true });
+  writeFileSync(pinnedBin, '#!/bin/sh\necho drifted\n', 'utf8');
+  chmodSync(pinnedBin, 0o755);
+  const tamperedPayload = join(root, 'tampered', 'maestro-runner');
+  const tamperedArchive = join(root, 'tampered.tar.gz');
+  mkdirSync(join(tamperedPayload, 'bin'), { recursive: true });
+  const tamperedRunner = join(tamperedPayload, 'bin', 'maestro-runner');
+  writeFileSync(tamperedRunner, `#!/bin/sh\nprintf executed > ${JSON.stringify(marker)}\n`, 'utf8');
+  chmodSync(tamperedRunner, 0o755);
+  const packed = spawnSync('tar', [
+    '-czf',
+    tamperedArchive,
+    '-C',
+    join(root, 'tampered'),
+    'maestro-runner',
+  ]);
+  assert.equal(packed.status, 0, String(packed.stderr));
+
+  const env = {
+    ...fixture.env,
+    RN_DEV_AGENT_MAESTRO_DOWNLOAD_URL: pathToFileURL(tamperedArchive).href,
+  };
+  const result = spawnSync('bash', [fixture.copiedScript], { encoding: 'utf8', env });
+
+  assert.notEqual(result.status, 0);
+  assert.match(`${result.stdout}${result.stderr}`, /archive checksum/);
+  // The session is never handed a runner path it could execute.
+  const printed = spawnSync('bash', [fixture.copiedScript, '--print-bin'], {
+    encoding: 'utf8',
+    env,
+  });
+  assert.notEqual(printed.status, 0);
+  // Falsifiable: the pin path is executable, so had the tampered payload been
+  // published over it this would run it and leave the marker behind.
+  const probe = spawnSync(pinnedBin, [], { encoding: 'utf8' });
+  assert.equal(probe.stdout, 'drifted\n');
+  assert.equal(existsSync(marker), false);
+});
+
 test('installed fast path refuses a payload changed after verified installation', () => {
   const root = mkdtempSync(join(tmpdir(), 'mr-live-payload-'));
   const scriptDir = join(root, 'scripts');
