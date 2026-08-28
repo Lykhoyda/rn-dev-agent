@@ -151,14 +151,6 @@ export function mayTriggerLiveCapture(tool: string): boolean {
   );
 }
 
-/**
- * GH #636 (B266): the Device pane has exactly one owner of "which device am I
- * showing" — the mirror target resolver. The live per-tool frame used to
- * resolve its own platform from the agent-device session and the live CDP
- * target; a flow that parks the runner and leaves CDP stale erased both and the
- * capture silently produced nothing, even though the authority-proven device
- * binding was intact and the simctl/adb capture needs neither.
- */
 export type LiveCaptureOutcome =
   | { ok: true; pushed: 'frame' }
   | {
@@ -179,13 +171,9 @@ export interface LiveCaptureDeps {
   ) => Promise<{ ok: true; path: string } | { ok: false }>;
   readRoute: () => Promise<string | null>;
   readShotFile: (path: string) => { buf: Buffer; contentType: string } | null;
-  pushLive: (frame: {
-    shot?: { buf: Buffer; contentType: string };
-    route?: string;
-  }) => boolean;
+  pushLive: (frame: { shot?: { buf: Buffer; contentType: string }; route?: string }) => boolean;
   tmpPath: () => string;
-  /** GH #206 + mirror spec: while the MJPEG mirror is streaming, the per-tool
-   * screenshot is redundant — the browser already sees live pixels. */
+  /** Skip redundant screenshots while the MJPEG mirror supplies pixels. */
   isMirrorActive?: () => boolean;
   /** Truthful reporting seam: an unprovable frame is announced, never faked. */
   reportBlocked?: (outcome: { code: string; reason: string }) => void;
@@ -292,7 +280,6 @@ async function runCapture(deps: LiveCaptureDeps): Promise<LiveCaptureOutcome> {
 interface BuildLiveDepsInput {
   recorder: { hasSubscribers: () => boolean; pushLive: LiveCaptureDeps['pushLive'] };
   isFlowActive: () => boolean;
-  /** The Device pane's single target owner — the same resolver the mirror uses. */
   resolveTarget: () => Promise<MirrorTargetResolution>;
   getClient: () => { isConnected: boolean };
   captureScreenshot: LiveCaptureDeps['captureScreenshot'];
@@ -314,10 +301,7 @@ export function buildLiveDeps(input: BuildLiveDepsInput): LiveCaptureDeps {
       return input.readRoute(c);
     },
     readShotFile: input.readShotFile,
-    // Arrow-wrap, NOT a bare method reference: `input.recorder.pushLive`
-    // detaches `this`, so the real Recorder.pushLive throws "this.subs is not
-    // iterable" when invoked as deps.pushLive(...). The live device gate caught
-    // this — the unit fakes used standalone arrows and missed it.
+    // Preserve Recorder.pushLive's `this` binding.
     pushLive: (frame) => input.recorder.pushLive(frame),
     tmpPath: () => join(tmpdir(), `rn-observe-live-${process.pid}.jpg`),
     isMirrorActive: input.isMirrorActive,

@@ -710,17 +710,14 @@ setForeignGateUdidProvider(() => {
 const mirrorCfg = diagnosticContractProbe
   ? { enabled: false as const, fps: 0 }
   : resolveMirrorConfig();
-// GH #636 (B266): one owner of the Observe Device pane's target. The mirror and
-// the per-tool live frame resolve the same way, so a parked runner or a stale
-// CDP target can no longer erase the device the authority session already proved.
+// Share one authority-fenced target resolver across both Device pane capture paths.
 const observeTargetResolver = buildMirrorTargetResolver({
   getPlatform: () => {
     const p = getActiveSession()?.platform ?? getClient().connectedTarget?.platform;
     return p === 'ios' || p === 'android' ? p : null;
   },
   getSessionDeviceId: () => getActiveSession()?.deviceId ?? undefined,
-  // GH #791: same fence as cdp discovery (PR #786) — an authority session
-  // without a proven device binding blocks the mirror instead of guessing.
+  // Keep authority sessions fail-closed when their device binding is missing.
   getRegistryDeviceBinding: () =>
     mapRegistryDeviceBinding(authorityRuntime.status(), authorityRuntime.available),
   resolveIosUdid: () => resolveIosUdid(),
@@ -769,8 +766,7 @@ const liveDeps = buildLiveDeps({
   isFlowActive: () => arbiter.flowActive || foreignFlowGate.lastActive,
   resolveTarget: observeTargetResolver,
   getClient: () => getClient(),
-  // GH #422 / #636: the exact device comes from the resolver, so the still frame
-  // never falls back to first-booted and never needs the runner or CDP.
+  // Capture only the exact resolver-approved device.
   captureScreenshot: (platform, path, deviceId) => tryRawScreenshot(platform, path, deviceId),
   readRoute: (c) => readLiveRoute(c as Parameters<typeof readLiveRoute>[0]),
   readShotFile: (path) => {

@@ -1,8 +1,4 @@
-// GH #636 (B266): after cdp_run_action the flow parks the fast runner and leaves
-// CDP stale. The Observe Device pane used to go blank because the live capture
-// resolved its own device from exactly those two volatile sources. It now shares
-// the mirror's target resolver, so the authority-proven device still drives the
-// supported simctl/adb capture — and an unprovable frame is reported, not faked.
+// Reproduces the post-flow state where only the authority device binding remains.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { writeFileSync } from 'node:fs';
@@ -37,9 +33,6 @@ type LiveDepsOverrides = {
   reportBlocked?: (outcome: BlockedOutcome) => void;
 };
 
-// The exact post-flow world: no agent-device session (runner parked), no CDP
-// target (stale), and no unambiguous ambient device — only the authority
-// session's proven device binding.
 function parkedRunnerResolver(registryBinding: RegistryBinding) {
   return buildMirrorTargetResolver({
     getPlatform: () => null,
@@ -76,8 +69,7 @@ test('parked runner + stale CDP: the supported simctl fallback still lands a rea
   _resetForTest();
   const capturedWith: string[] = [];
   _setForTest({
-    // Ambient resolution refuses, proving the device came from the authority
-    // binding and not from a lucky single-booted simulator.
+    // Ambient resolution is unavailable; only the authority binding may resolve.
     iosResolver: async () => null,
     iosCapturer: async (udid, path) => {
       capturedWith.push(udid);
@@ -120,8 +112,7 @@ for (const [label, buf] of [
 
 test('no provable device: truthful typed refusal, no blank or fabricated frame', async () => {
   _resetLiveCaptureForTest();
-  // An authority session with no device binding — the {} sentinel the mirror
-  // already refuses on, rather than guessing a device.
+  // An empty authority binding must refuse instead of selecting an ambient device.
   const { deps, recorder, blocked } = liveDepsFor({
     resolveTarget: parkedRunnerResolver({}),
     captureScreenshot: async () => {
