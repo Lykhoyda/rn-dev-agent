@@ -438,3 +438,201 @@ test('issue-869: a wrapper whose base id is a non-input element keeps its own re
   assert.match(detail, /StaticText/);
   assert.doesNotMatch(detail, /typeText/);
 });
+
+// --- #869 follow-up: nested-fiber semantic identity -------------------------
+// RN 0.85 renders ONE <TextInput> as CssInterop.TextInput > TextInput >
+// InternalTextInput > host, every level forwarding onChangeText: four dispatch
+// points, one semantic input. Collapse only by the owned host text-input fiber;
+// two real inputs own two hosts, so true ambiguity must survive untouched.
+
+const RN_CHAIN = ['CssInterop.TextInput', 'TextInput', 'InternalTextInput'];
+
+function appendRnTextInputChain(
+  parent: Fiber,
+  testID: string | undefined,
+  calls: string[],
+  label = 'host',
+): Fiber {
+  let cursor = parent;
+  for (const displayName of RN_CHAIN) {
+    cursor = appendChild(
+      cursor,
+      makeFiber(
+        { displayName },
+        {
+          ...(testID ? { testID } : {}),
+          value: '',
+          onChangeText(value: string) {
+            calls.push(`${displayName}:${value}`);
+          },
+        },
+      ),
+    );
+  }
+  return appendChild(
+    cursor,
+    makeFiber('RCTSinglelineTextInputView', {
+      ...(testID ? { testID } : {}),
+      value: '',
+      onChangeText(value: string) {
+        calls.push(`${label}:${value}`);
+      },
+    }),
+  );
+}
+
+test('issue-869: one RN chain collapses to its host and dispatches once', () => {
+  const calls: string[] = [];
+  const root = makeFiber('Root');
+  appendRnTextInputChain(appendChild(root, makeFiber({ displayName: 'Screen' })), 'fld', calls);
+
+  const result = createAgent(root).interact({ action: 'typeText', testID: 'fld', text: 'x' });
+
+  assert.equal(result.success, true, JSON.stringify(result));
+  assert.equal(result.semanticInput, 1, JSON.stringify(result));
+  assert.equal((result.collapsed as unknown[]).length, 3, JSON.stringify(result.collapsed));
+  assert.deepEqual(calls, ['host:x'], 'exactly one dispatch, on the host');
+});
+
+test('issue-869: the collapsed chain still reads its value back', () => {
+  const calls: string[] = [];
+  const root = makeFiber('Root');
+  appendRnTextInputChain(appendChild(root, makeFiber({ displayName: 'Screen' })), 'fld', calls);
+  const agent = createAgent(root);
+
+  agent.interact({ action: 'typeText', testID: 'fld', text: 'x' });
+  const read = agent.readInputValue('fld');
+
+  assert.equal(read.__agent_error, undefined, JSON.stringify(read));
+  assert.equal(read.controlled, true, JSON.stringify(read));
+});
+
+test('issue-869: an accessible wrapper over one RN chain collapses too', () => {
+  const calls: string[] = [];
+  const root = makeFiber('Root');
+  const pressable = appendChild(
+    appendChild(root, makeFiber({ displayName: 'Screen' })),
+    makeFiber({ displayName: 'Pressable' }, { testID: 'fld-pressable', accessible: true }),
+  );
+  appendRnTextInputChain(pressable, 'fld', calls);
+
+  const result = createAgent(root).interact({
+    action: 'typeText',
+    testID: 'fld-pressable',
+    text: 'x',
+  });
+
+  assert.equal(result.success, true, JSON.stringify(result));
+  assert.equal(result.semanticInput, 1);
+  assert.deepEqual(calls, ['host:x']);
+});
+
+test('issue-869: two real inputs sharing a testID stay ambiguous', () => {
+  const calls: string[] = [];
+  const root = makeFiber('Root');
+  const screen = appendChild(root, makeFiber({ displayName: 'Screen' }));
+  appendRnTextInputChain(screen, 'dup', calls, 'hostA');
+  appendRnTextInputChain(screen, 'dup', calls, 'hostB');
+
+  const result = createAgent(root).interact({ action: 'typeText', testID: 'dup', text: 'x' });
+
+  assert.equal(result.error, 'Ambiguous typeText resolution', JSON.stringify(result));
+  assert.equal(result.count, 2, 'one entry per semantic input, not per dispatch point');
+  assert.deepEqual(calls, []);
+});
+
+test('issue-869: a wrapper holding two inner inputs stays ambiguous', () => {
+  const calls: string[] = [];
+  const root = makeFiber('Root');
+  const pressable = appendChild(
+    appendChild(root, makeFiber({ displayName: 'Screen' })),
+    makeFiber({ displayName: 'Pressable' }, { testID: 'two-pressable', accessible: true }),
+  );
+  appendRnTextInputChain(pressable, undefined, calls, 'hostA');
+  appendRnTextInputChain(pressable, undefined, calls, 'hostB');
+
+  const result = createAgent(root).interact({
+    action: 'typeText',
+    testID: 'two-pressable',
+    text: 'x',
+  });
+
+  assert.equal(result.error, 'Ambiguous typeText resolution', JSON.stringify(result));
+  assert.equal(result.count, 2, JSON.stringify(result));
+  assert.deepEqual(calls, []);
+});
+
+test('issue-869: a foreign host nested inside the chain blocks the collapse', () => {
+  const calls: string[] = [];
+  const root = makeFiber('Root');
+  const outer = appendChild(
+    appendChild(root, makeFiber({ displayName: 'Screen' })),
+    makeFiber(
+      { displayName: 'Composite' },
+      {
+        testID: 'fld',
+        value: '',
+        onChangeText(value: string) {
+          calls.push(`composite:${value}`);
+        },
+      },
+    ),
+  );
+  const own = appendChild(
+    outer,
+    makeFiber('RCTSinglelineTextInputView', {
+      testID: 'fld',
+      value: '',
+      onChangeText(value: string) {
+        calls.push(`own:${value}`);
+      },
+    }),
+  );
+  // an unrelated input nested below the first host — the composite's subtree
+  // now holds two hosts, so it owns neither.
+  appendChild(
+    own,
+    makeFiber('RCTSinglelineTextInputView', {
+      value: '',
+      onChangeText(value: string) {
+        calls.push(`foreign:${value}`);
+      },
+    }),
+  );
+
+  const result = createAgent(root).interact({ action: 'typeText', testID: 'fld', text: 'x' });
+
+  assert.equal(result.error, 'Ambiguous typeText resolution', JSON.stringify(result));
+  assert.deepEqual(calls, []);
+});
+
+test('issue-869: truncation during the host descent keeps the unchanged payload', () => {
+  const calls: string[] = [];
+  const root = makeFiber('Root');
+  const composite = appendChild(
+    appendChild(root, makeFiber({ displayName: 'Screen' })),
+    makeFiber(
+      { displayName: 'Composite' },
+      {
+        testID: 'deep',
+        value: '',
+        onChangeText(value: string) {
+          calls.push(value);
+        },
+      },
+    ),
+  );
+  let cursor = composite;
+  for (let index = 0; index < 4000; index += 1) {
+    cursor = appendChild(cursor, makeFiber({ displayName: 'CssInterop.View' }));
+  }
+  appendRnTextInputChain(cursor, undefined, calls);
+
+  const result = createAgent(root).interact({ action: 'typeText', testID: 'deep', text: 'x' });
+
+  assert.equal(result.truncated, true, JSON.stringify(result));
+  assert.equal(result.reason, 'work-limit');
+  assert.equal(result.workLimit, 2000, 'the fixed budget is unchanged');
+  assert.equal(result.handlerCalled, false);
+  assert.deepEqual(calls, []);
+});

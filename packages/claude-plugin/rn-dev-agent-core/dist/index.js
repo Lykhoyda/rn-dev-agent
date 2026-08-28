@@ -53665,6 +53665,131 @@ var INJECTED_HELPERS = `
     }
 
     if (state.truncated) return typeTextTruncation(state);
+
+    // #869: RN renders ONE <TextInput> as a chain of composite fibers that
+    // forward the same onChangeText plus one host fiber \u2014 four dispatch points
+    // for one semantic input. Collapse only by the owned host text-input fiber
+    // identity: two real inputs own two hosts, so true ambiguity is untouched.
+    // Never collapse by count, label, or position.
+    function hostTextInputsUnder(rootFiber) {
+      var hosts = [];
+      var localSeen = new WeakSet();
+      var stack = [{ fiber: rootFiber, includeSibling: false }];
+      while (stack.length > 0 && !state.truncated) {
+        var frame = stack.pop();
+        var node = frame.fiber;
+        if (!consumeWork()) break;
+        if (localSeen.has(node)) {
+          state.truncated = true;
+          state.reason = 'cycle';
+          break;
+        }
+        localSeen.add(node);
+        if (isNativeTextInputHost(node)) {
+          var known = false;
+          for (var seenIndex = 0; seenIndex < hosts.length; seenIndex++) {
+            if (sameTypeTextFiber(hosts[seenIndex], node)) { known = true; break; }
+          }
+          if (!known) hosts.push(node);
+        }
+        if (frame.includeSibling && node.sibling) {
+          stack.push({ fiber: node.sibling, includeSibling: true });
+        }
+        if (node.child) stack.push({ fiber: node.child, includeSibling: true });
+      }
+      return hosts;
+    }
+
+    // The candidate must lie on the host's own return path with no other host
+    // text input in between; otherwise it does not own that host.
+    function ownsHostChain(candidateFiber, host) {
+      if (sameTypeTextFiber(candidateFiber, host)) return true;
+      var cursor = host.return;
+      var chainSeen = new WeakSet();
+      while (cursor) {
+        if (!consumeWork()) return false;
+        if (chainSeen.has(cursor)) {
+          state.truncated = true;
+          state.reason = 'cycle';
+          return false;
+        }
+        chainSeen.add(cursor);
+        if (isNativeTextInputHost(cursor)) return false;
+        if (sameTypeTextFiber(cursor, candidateFiber)) return true;
+        cursor = cursor.return;
+      }
+      return false;
+    }
+
+    var semanticGroups = [];
+    for (var bindingIndex = 0; bindingIndex < bindings.length && !state.truncated; bindingIndex++) {
+      var grouped = bindings[bindingIndex];
+      var ownedHost = null;
+      if (isNativeTextInputHost(grouped.candidateFiber)) {
+        ownedHost = grouped.candidateFiber;
+      } else {
+        var hostsBelow = hostTextInputsUnder(grouped.candidateFiber);
+        if (state.truncated) break;
+        if (hostsBelow.length === 1) ownedHost = hostsBelow[0];
+      }
+      if (ownedHost && !ownsHostChain(grouped.candidateFiber, ownedHost)) ownedHost = null;
+      if (state.truncated) break;
+      var placed = false;
+      if (ownedHost) {
+        for (var groupIndex = 0; groupIndex < semanticGroups.length; groupIndex++) {
+          if (semanticGroups[groupIndex].host && sameTypeTextFiber(semanticGroups[groupIndex].host, ownedHost)) {
+            semanticGroups[groupIndex].members.push(grouped);
+            placed = true;
+            break;
+          }
+        }
+      }
+      if (!placed) semanticGroups.push({ host: ownedHost, members: [grouped] });
+    }
+    if (state.truncated) return typeTextTruncation(state);
+
+    // One entry per semantic input: a group that owns a bound host collapses to
+    // that host, anything else stays as-is. The host must itself be a bound
+    // dispatch point; if it sits outside the candidate chain the identity is
+    // unproven and every member stays separate, so the refusal still fires.
+    var semanticBindings = [];
+    for (var sgIndex = 0; sgIndex < semanticGroups.length; sgIndex++) {
+      var group = semanticGroups[sgIndex];
+      var groupHostBinding = null;
+      if (group.host) {
+        for (var memberIndex = 0; memberIndex < group.members.length; memberIndex++) {
+          if (sameTypeTextFiber(group.members[memberIndex].candidateFiber, group.host)) {
+            groupHostBinding = group.members[memberIndex];
+            break;
+          }
+        }
+      }
+      if (groupHostBinding) {
+        var groupCollapsed = [];
+        for (var collapsedIndex = 0; collapsedIndex < group.members.length; collapsedIndex++) {
+          if (group.members[collapsedIndex] === groupHostBinding) continue;
+          groupCollapsed.push({
+            component: group.members[collapsedIndex].component,
+            contract: group.members[collapsedIndex].contract
+          });
+        }
+        semanticBindings.push({ binding: groupHostBinding, collapsed: groupCollapsed });
+      } else {
+        for (var keptIndex = 0; keptIndex < group.members.length; keptIndex++) {
+          semanticBindings.push({ binding: group.members[keptIndex], collapsed: [] });
+        }
+      }
+    }
+
+    var collapsedComposites = null;
+    if (semanticBindings.length === 1 && semanticBindings[0].collapsed.length > 0) {
+      collapsedComposites = semanticBindings[0].collapsed;
+    }
+    bindings = [];
+    for (var semanticIndex = 0; semanticIndex < semanticBindings.length; semanticIndex++) {
+      bindings.push(semanticBindings[semanticIndex].binding);
+    }
+
     if (bindings.length > 1) {
       var ambiguousHandler = bindings[0].contract === 'onChangeText:string' ? 'onChangeText' : 'onChange';
       for (var handlerIndex = 1; handlerIndex < bindings.length; handlerIndex++) {
@@ -53695,6 +53820,7 @@ var INJECTED_HELPERS = `
       binding: bindings.length === 1 ? bindings[0] : null,
       sourceCount: sources.length,
       firstSource: sources[0].fiber,
+      collapsed: collapsedComposites,
       state: state
     };
   }
@@ -53739,6 +53865,8 @@ var INJECTED_HELPERS = `
       valueBefore: binding.valueBefore,
       resolvedFrom: binding.component + (binding.candidateTestID ? ' [testID="' + binding.candidateTestID + '"]' : ''),
       visitedFibers: resolution.state.visitedFibers,
+      semanticInput: resolution.collapsed ? 1 : undefined,
+      collapsed: resolution.collapsed || undefined,
       selectorBundle: binding.sourceEvidence.selectorBundle || undefined
     };
   }

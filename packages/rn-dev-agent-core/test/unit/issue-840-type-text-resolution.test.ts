@@ -478,7 +478,12 @@ test('typeText refuses mixed component-name candidates without preferring a host
   assert.deepEqual(calls, []);
 });
 
-test('typeText keeps shared functions with different handler contracts ambiguous', () => {
+// SUPERSEDED by the #869 nested-fiber verdict: a composite and the single host
+// text input it owns are ONE semantic input, so mixed contracts over one host no
+// longer refuse — the host is bound as the dispatch point. Ambiguity is now
+// reserved for genuinely distinct hosts (see the multi-host cases below and in
+// issue-869-source-scoped-type-text.test.ts).
+test('typeText binds the single owned host even when contracts differ', () => {
   const calls: unknown[] = [];
   const shared = (value: unknown) => calls.push(value);
   const root = makeFiber('Root');
@@ -500,13 +505,10 @@ test('typeText keeps shared functions with different handler contracts ambiguous
     text: 'unsafe',
   });
 
-  assert.equal(result.error, 'Ambiguous typeText resolution');
-  assert.equal(result.handler, 'mixed');
-  assert.deepEqual(
-    (result.candidates as Array<{ contract: string }>).map((candidate) => candidate.contract),
-    ['onChangeText:string', 'onChange:event'],
-  );
-  assert.deepEqual(calls, []);
+  assert.equal(result.success, true, JSON.stringify(result));
+  assert.equal(result.semanticInput, 1);
+  assert.equal(result.handlerCalled, 'onChange', 'the host is the dispatch point');
+  assert.equal(calls.length, 1, 'dispatched exactly once');
 });
 
 test('typeText binds nested selector evidence to the nearest matching source', () => {
@@ -830,7 +832,10 @@ test('typeText does not collapse distinct sibling fields that share one handler'
   assert.deepEqual(calls, []);
 });
 
-test('typeText preserves distinct wrapper and host handlers as ambiguous', () => {
+// SUPERSEDED by the #869 nested-fiber verdict, as above. Dispatching on the host
+// is what a real keystroke does: a wrapper's own onChangeText runs only if the
+// inner handler calls it, so binding the innermost point is the faithful choice.
+test('typeText dispatches on the host when a wrapper owns exactly one', () => {
   const calls: string[] = [];
   const root = makeFiber('Root');
   const wrapper = appendChild(
@@ -849,8 +854,9 @@ test('typeText preserves distinct wrapper and host handlers as ambiguous', () =>
 
   const result = runInteract(root, { action: 'typeText', testID: 'compound', text: 'unsafe' });
 
-  assert.match(String(result.error), /Ambiguous typeText resolution/);
-  assert.deepEqual(calls, []);
+  assert.equal(result.success, true, JSON.stringify(result));
+  assert.equal(result.semanticInput, 1);
+  assert.deepEqual(calls, ['inner:unsafe'], 'the host handler, once');
 });
 
 test('typeText refuses on a cyclic subtree without firing a partial candidate', () => {
