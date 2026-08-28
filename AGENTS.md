@@ -140,6 +140,13 @@ degrading.
   mirrored in the generated adapter) are diagnostics on launch data; never
   reintroduce a pre-install manifest, port-parity, or origin-scan guard that can
   grant or deny authority.
+- `managedMetroExitAttribution` (`src/session/managed-metro.ts`) runs in a later
+  process than `startManagedMetro`, so it has none of the `credentialRedactions`
+  the startup path builds from the managed child environment. It must therefore
+  publish only fixed-vocabulary first-party causes from `metro.log` — never its
+  free text — because `metroTerminal` is persisted into session bindings and
+  projected into public `rn_session` status. Widening it back to a raw log tail
+  re-opens a durable credential leak.
 - Android emulator classification is deliberately split and disagrees for an
   adb-over-TCP serial: `ensureAndroidMetroReverse`
   (`src/session/android-metro-reverse.ts`) reads `ro.kernel.qemu`, while the build

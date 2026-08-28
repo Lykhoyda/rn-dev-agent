@@ -74,11 +74,16 @@ function metroListenerPid(port: number): number | null {
   }
 }
 
+// `ps -o comm=` reports argv[0], which a bin shim's `exec node` leaves as a bare name; the
+// first lsof txt descriptor is the actual executable image.
 function processExecutable(pid: number): string | null {
   try {
     if (process.platform === 'linux') return realpathSync(`/proc/${pid}/exe`);
     return (
-      execFileSync('ps', ['-p', String(pid), '-o', 'comm='], { encoding: 'utf8' }).trim() || null
+      execFileSync('lsof', ['-p', String(pid), '-a', '-d', 'txt', '-Fn'], { encoding: 'utf8' })
+        .split('\n')
+        .find((line) => line.startsWith('n/'))
+        ?.slice(1) ?? null
     );
   } catch {
     return null;

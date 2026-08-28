@@ -37,11 +37,16 @@ import { resolveSourceIdentity } from '../../dist/session/source-identity.js';
 // passes identically against the pre-fix fence whenever PATH resolves an older Node.
 process.env.PATH = [dirname(process.execPath), process.env.PATH].filter(Boolean).join(':');
 
+// `ps -o comm=` reports argv[0], which a bin shim's `exec node` leaves as a bare name; the
+// first lsof txt descriptor is the actual executable image.
 function processExecutable(pid: number): string | null {
   try {
     if (process.platform === 'linux') return realpathSync(`/proc/${pid}/exe`);
     return (
-      execFileSync('ps', ['-p', String(pid), '-o', 'comm='], { encoding: 'utf8' }).trim() || null
+      execFileSync('lsof', ['-p', String(pid), '-a', '-d', 'txt', '-Fn'], { encoding: 'utf8' })
+        .split('\n')
+        .find((line) => line.startsWith('n/'))
+        ?.slice(1) ?? null
     );
   } catch {
     return null;
