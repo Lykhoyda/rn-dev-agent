@@ -92331,10 +92331,7 @@ function buildLiveDeps(input) {
       return input.readRoute(c);
     },
     readShotFile: input.readShotFile,
-    // Arrow-wrap, NOT a bare method reference: `input.recorder.pushLive`
-    // detaches `this`, so the real Recorder.pushLive throws "this.subs is not
-    // iterable" when invoked as deps.pushLive(...). The live device gate caught
-    // this — the unit fakes used standalone arrows and missed it.
+    // Preserve Recorder.pushLive's `this` binding.
     pushLive: (frame) => input.recorder.pushLive(frame),
     tmpPath: () => join53(tmpdir14(), `rn-observe-live-${process.pid}.jpg`),
     isMirrorActive: input.isMirrorActive,
@@ -95516,8 +95513,7 @@ var observeTargetResolver = buildMirrorTargetResolver({
     return p === "ios" || p === "android" ? p : null;
   },
   getSessionDeviceId: () => getActiveSession()?.deviceId ?? void 0,
-  // GH #791: same fence as cdp discovery (PR #786) — an authority session
-  // without a proven device binding blocks the mirror instead of guessing.
+  // Keep authority sessions fail-closed when their device binding is missing.
   getRegistryDeviceBinding: () => mapRegistryDeviceBinding(authorityRuntime.status(), authorityRuntime.available),
   resolveIosUdid: () => resolveIosUdid(),
   listAndroidSerials: async () => {
@@ -95560,8 +95556,7 @@ var liveDeps = buildLiveDeps({
   isFlowActive: () => arbiter.flowActive || foreignFlowGate.lastActive,
   resolveTarget: observeTargetResolver,
   getClient: () => getClient(),
-  // GH #422 / #636: the exact device comes from the resolver, so the still frame
-  // never falls back to first-booted and never needs the runner or CDP.
+  // Capture only the exact resolver-approved device.
   captureScreenshot: (platform, path, deviceId) => tryRawScreenshot(platform, path, deviceId),
   readRoute: (c) => readLiveRoute(c),
   readShotFile: (path) => {
