@@ -14535,6 +14535,29 @@ function verifyManagedMetroManagementProof(binding, input) {
   const observedBuffer = Buffer.from(binding.managementProof, "hex");
   return expectedBuffer.length === observedBuffer.length && timingSafeEqual3(expectedBuffer, observedBuffer);
 }
+function managedMetroExitAttribution(binding, input) {
+  const runtimeRoot = dirname3(binding.runtimeEvidencePath);
+  const runtimePolicyCapability = createHmac3("sha256", input.signerCapability).update("metro-runtime-policy").digest("base64url");
+  const violation = latestSignedRuntimeViolation(binding.runtimeEvidencePath, runtimePolicyCapability, { sessionId: input.sessionId, metroInstanceId: binding.instanceId });
+  const diagnostic2 = readManagedMetroLauncherDiagnostic(join3(runtimeRoot, "metro-launcher-diagnostic.json"));
+  const logTail = boundedMetroLogTail(join3(runtimeRoot, "metro.log"));
+  const details = [
+    diagnostic2 ? `stage ${diagnostic2.stage}` : null,
+    diagnostic2?.detail ?? null,
+    violation ? `runtime violation: ${violation}` : null,
+    logTail ? `Metro log tail:
+${logTail}` : null
+  ].filter((detail) => Boolean(detail));
+  if (details.length === 0)
+    return null;
+  return sanitizeManagedMetroStartupDetail(details.join("; "), [
+    runtimeRoot,
+    input.sessionId,
+    binding.instanceId,
+    input.signerCapability,
+    runtimePolicyCapability
+  ]);
+}
 function exactManagedProcessInspection(role, pid, birth, probe) {
   const prefix = role === "launcher" ? "METRO_LAUNCHER" : "METRO_LISTENER";
   if (probe.status === "absent") {
@@ -14569,12 +14592,18 @@ function inspectManagedMetroLifecycle(binding, input, dependencies = {}) {
     };
   }
   const probeBirth = dependencies.probeBirth ?? probeProcessBirth;
+  const attributed = (inspection) => {
+    if (inspection.status === "live" || !inspection.code.endsWith("_EXITED"))
+      return inspection;
+    const attribution = managedMetroExitAttribution(binding, input);
+    return attribution ? { ...inspection, attribution } : inspection;
+  };
   const launcher = exactManagedProcessInspection("launcher", binding.launcherPid, binding.launcherBirth, probeBirth(binding.launcherPid));
   if (launcher)
-    return launcher;
+    return attributed(launcher);
   const listener = exactManagedProcessInspection("listener", binding.pid, binding.birth, probeBirth(binding.pid));
   if (listener)
-    return listener;
+    return attributed(listener);
   const port = (dependencies.probeListener ?? probeManagedMetroListener)(binding.port);
   if (port.status === "absent") {
     return {
@@ -17464,7 +17493,8 @@ function projectPublicAuthorityStatus(status, options = {}) {
     code: metroTerminal.code,
     reason: metroTerminal.reason,
     phase: metroTerminal.phase,
-    observedAt: metroTerminal.observedAt
+    observedAt: metroTerminal.observedAt,
+    ...typeof metroTerminal.attribution === "string" ? { attribution: metroTerminal.attribution } : {}
   } : void 0;
   const sandbox = metro?.runtimeEvidenceAuthority === "managed-sandbox-v1" ? "managed-sandbox-v1" : "unavailable";
   const phase = derivePublicPhase(status.state, Boolean(status.bindings.pendingBuild));
@@ -18076,7 +18106,8 @@ function reconcileManagedMetroStatus(status) {
         reason: inspection.reason,
         phase: status.bindings.bundle ? "after-bind" : "before-bind",
         observedAt: Date.now(),
-        instanceId: metro.instanceId
+        instanceId: metro.instanceId,
+        ...inspection.attribution ? { attribution: inspection.attribution } : {}
       },
       bundle: null
     },
