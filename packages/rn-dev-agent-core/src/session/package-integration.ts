@@ -1207,13 +1207,17 @@ function fenceNativeProcessHandle(handle, context) {
         const authorizedOptions = privateWeakMapGet(authorizedNativeProcessSpawns, this);
         const slot = privateWeakMapGet(nativeProcessHandleSlots, this);
         const admitted = admitsAuthorizedNativeSpawn(args, authorizedOptions);
-        // A refusal Node itself provoked - an unverified calling convention, or a
-        // positional call whose fields do not authenticate - is contained through
-        // Node's own errno contract. An identity failure is still a hard refusal.
-        if (!admitted && !(slot && containsNativeSpawnRefusal(args.length))) {
+        const contained =
+          !admitted &&
+          authorizedOptions !== undefined &&
+          slot !== undefined &&
+          containsNativeSpawnRefusal(args.length);
+        if (!admitted && !contained) {
           throw descendantError();
         }
-        if (admitted) privateWeakMapDelete(authorizedNativeProcessSpawns, this);
+        if (admitted || contained) {
+          privateWeakMapDelete(authorizedNativeProcessSpawns, this);
+        }
         const result = admitted
           ? intrinsicReflectApply(spawn, this, args)
           : refuseNativeSpawn(args.length);

@@ -1,12 +1,14 @@
 import assert from 'node:assert/strict';
-import { ChildProcess } from 'node:child_process';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, openSync, closeSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import test from 'node:test';
 
-import { renderMetroIntegrationAdapter } from '../../../dist/session/package-integration.js';
+import {
+  pinnedNativeSpawnConventions,
+  renderMetroIntegrationAdapter,
+} from '../../../dist/session/package-integration.js';
 
 function metroPolicyEnvironment(adapterPath: string): NodeJS.ProcessEnv {
   const runtimeLoads = join(dirname(adapterPath), 'metro-runtime-loads.jsonl');
@@ -37,7 +39,18 @@ function fencedProject(prefix: string) {
     versionShim,
     "Object.defineProperty(process.versions, 'node', { value: '99.0.0', configurable: true });\n",
   );
-  return { root, integration, adapterPath, childEntry, versionShim };
+  const doubleSpawnShim = join(root, 'double-spawn-shim.cjs');
+  writeFileSync(
+    doubleSpawnShim,
+    `const childProcess = require('node:child_process');
+const originalSpawn = childProcess.ChildProcess.prototype.spawn;
+childProcess.ChildProcess.prototype.spawn = function (options) {
+  this._handle.spawn(process.execPath, [], null, [], [], 0, undefined, undefined);
+  return Reflect.apply(originalSpawn, this, [options]);
+};
+`,
+  );
+  return { root, integration, adapterPath, childEntry, versionShim, doubleSpawnShim };
 }
 
 function runFenced(project: ReturnType<typeof fencedProject>, source: string, preload?: string) {
@@ -68,21 +81,54 @@ const hostConvention = (() => {
 })();
 
 test('Node still calls the native process handle with a convention the fence knows', () => {
-  const source = String(ChildProcess.prototype.spawn);
-  const objectConvention = /this\._handle\.spawn\(\s*options\s*\)/.test(source);
-  const positionalConvention =
-    /this\._handle\.spawn\(/.test(source) &&
-    ['options.file', 'options.args', 'options.cwd', 'options.envPairs', 'options.stdio'].every(
-      (field) => source.includes(field),
-    );
-  assert.ok(
-    objectConvention || positionalConvention,
-    `ChildProcess.prototype.spawn on Node ${process.versions.node} uses an unrecognized calling convention:\n${source}`,
+  const environment = { ...process.env };
+  delete environment.NODE_OPTIONS;
+  for (const name of Object.keys(environment)) {
+    if (name.startsWith('RN_DEV_AGENT_')) delete environment[name];
+  }
+  const result = spawnSync(
+    process.execPath,
+    [
+      '-e',
+      `const processWrap = process.binding('process_wrap');
+       const originalSpawn = processWrap.Process.prototype.spawn;
+       let observedArity = null;
+       processWrap.Process.prototype.spawn = function (...args) {
+         observedArity = args.length;
+         return Reflect.apply(originalSpawn, this, args);
+       };
+       const child = require('node:child_process').spawn(process.execPath, ['-e', 'process.exit(0)']);
+       child.once('error', (error) => { console.error(error.stack || error); process.exit(2); });
+       child.once('exit', (code) => {
+         if (code !== 0) process.exit(3);
+         process.stdout.write(JSON.stringify({
+           observedArity,
+           hasConstants: Boolean(processWrap.constants),
+           nodeVersion: process.versions.node,
+         }));
+       });`,
+    ],
+    { encoding: 'utf8', env: environment },
   );
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  const observed = JSON.parse(result.stdout) as {
+    observedArity: number;
+    hasConstants: boolean;
+    nodeVersion: string;
+  };
+  assert.ok(
+    observed.observedArity === 1 || observed.observedArity === 8,
+    `Node ${observed.nodeVersion} invoked native spawn with arity ${observed.observedArity}`,
+  );
+  const observedConvention = observed.observedArity === 1 ? 'object' : 'positional';
   assert.equal(
-    objectConvention ? 'object' : 'positional',
-    hostConvention,
-    'process_wrap constants disagree with the observed ChildProcess.prototype.spawn source',
+    observedConvention,
+    observed.hasConstants ? 'positional' : 'object',
+    'process_wrap constants disagree with the observed native spawn invocation',
+  );
+  assert.ok(
+    pinnedNativeSpawnConventions(observed.nodeVersion).includes(observedConvention),
+    `Node ${observed.nodeVersion} uses an unpinned ${observedConvention} convention`,
   );
 });
 
@@ -183,4 +229,63 @@ test('a raw native handle spawn is still a hard refusal, not a contained errno',
   );
   assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
   assert.match(result.stdout, /threw/);
+});
+
+test('an eight-argument native call without live authorization cannot detach a child', () => {
+  const project = fencedProject('rn-session-metro-convention-expired-');
+  const result = runFenced(
+    project,
+    `const compose = require(${JSON.stringify(project.adapterPath)});
+     compose({});
+     const diagnosticsChannel = require('node:diagnostics_channel');
+     const childProcess = require('node:child_process');
+     let nativeHandle;
+     diagnosticsChannel.subscribe('child_process', ({ process: constructed }) => {
+       nativeHandle = constructed._handle;
+     });
+     const child = childProcess.spawn(process.execPath, [${JSON.stringify(project.childEntry)}]);
+     child.once('error', (error) => { console.error('child error ' + error.code); process.exit(13); });
+     child.once('spawn', () => {
+       try {
+         nativeHandle.spawn(process.execPath, [], null, [], [], 0, undefined, undefined);
+         console.error('expired native authorization returned an errno');
+         process.exit(14);
+       } catch (error) {
+         if (error.code !== 'RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION') {
+           console.error('unexpected error ' + error.code);
+           process.exit(15);
+         }
+       }
+     });
+     child.once('exit', (code) => process.exit(code === 0 ? 0 : 16));`,
+  );
+  assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+});
+
+test('a contained native refusal consumes its one-shot authorization', () => {
+  const project = fencedProject('rn-session-metro-convention-one-shot-');
+  const result = runFenced(
+    project,
+    `const compose = require(${JSON.stringify(project.adapterPath)});
+     compose({});
+     const childProcess = require('node:child_process');
+     try {
+       const child = childProcess.spawn(process.execPath, [${JSON.stringify(project.childEntry)}]);
+       child.kill();
+       console.error('second native spawn reused the authorization');
+       process.exit(17);
+     } catch (error) {
+       if (error.code !== 'RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION') {
+         console.error('unexpected error ' + error.code);
+         process.exit(18);
+       }
+       process.exit(0);
+     }`,
+    project.doubleSpawnShim,
+  );
+  assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+  assert.ok(
+    result.runtimeLoads.includes('RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION'),
+    'the contained first refusal was not recorded as signed evidence',
+  );
 });

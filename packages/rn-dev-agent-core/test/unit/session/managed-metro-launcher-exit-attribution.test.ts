@@ -91,29 +91,33 @@ const liveBirth = (pid: number) => ({
 test('a managed Metro launcher that exits before bundle bind names its cause in the receipt', async () => {
   const runtimeRoot = mkdtempSync(join(tmpdir(), 'rn-managed-metro-launcher-exit-'));
   const binding = await boundManagedMetro(runtimeRoot);
+  const policyCapability = runtimePolicyCapability(SIGNER);
 
-  // The install succeeded and Metro published authority; the launcher then dies
-  // because its Metro child refused a descendant and crashed out.
-  writeSignedEvidence(
-    join(runtimeRoot, 'metro-runtime-evidence.jsonl'),
-    runtimePolicyCapability(SIGNER),
-    [
-      { kind: 'semantics', value: canonicalAuthorityJson({ mode: 'metro' }) },
-      {
-        kind: 'violation',
-        value: canonicalAuthorityJson({
-          code: 'RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION',
-          stage: 'native-spawn',
-          nodeVersion: '26.7.0',
-          convention: 'unverified',
-          arity: 8,
-        }),
-      },
-    ],
-  );
+  writeSignedEvidence(join(runtimeRoot, 'metro-runtime-evidence.jsonl'), policyCapability, [
+    { kind: 'semantics', value: canonicalAuthorityJson({ mode: 'metro' }) },
+    {
+      kind: 'violation',
+      value: canonicalAuthorityJson({
+        code: 'RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION',
+        stage: 'native-spawn',
+        nodeVersion: '26.7.0',
+        convention: 'unverified',
+        arity: 8,
+      }),
+    },
+  ]);
   writeFileSync(
     join(runtimeRoot, 'metro.log'),
-    'Error: RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION\n',
+    `${'x'.repeat(5_000)}\n${SESSION_ID}\n${INSTANCE_ID}\n${SIGNER}\n${policyCapability}\nMETRO_LOG_TAIL_END\n`,
+  );
+  writeFileSync(
+    join(runtimeRoot, 'metro-launcher-diagnostic.json'),
+    JSON.stringify({
+      version: 1,
+      code: 'METRO_LAUNCHER_CHILD_EXITED',
+      stage: 'metro-child',
+      detail: 'metro-process-exited',
+    }),
   );
 
   const inspection = inspectManagedMetroLifecycle(
@@ -135,8 +139,24 @@ test('a managed Metro launcher that exits before bundle bind names its cause in 
   );
   assert.match(inspection.attribution, /RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION/);
   assert.match(inspection.attribution, /Metro log tail/);
+  assert.match(inspection.attribution, /METRO_LOG_TAIL_END/);
+  assert.ok(
+    inspection.attribution.indexOf('stage metro-child') <
+      inspection.attribution.indexOf('metro-process-exited'),
+  );
+  assert.ok(
+    inspection.attribution.indexOf('metro-process-exited') <
+      inspection.attribution.indexOf('runtime violation:'),
+  );
+  assert.ok(
+    inspection.attribution.indexOf('runtime violation:') <
+      inspection.attribution.indexOf('Metro log tail:'),
+  );
   assert.doesNotMatch(inspection.attribution, new RegExp(SIGNER));
   assert.doesNotMatch(inspection.attribution, new RegExp(SESSION_ID));
+  assert.doesNotMatch(inspection.attribution, new RegExp(INSTANCE_ID));
+  assert.doesNotMatch(inspection.attribution, new RegExp(policyCapability));
+  assert.ok(inspection.attribution.length <= 4_096);
 });
 
 test('a launcher exit with no recorded evidence still reports a truthful bare refusal', async () => {

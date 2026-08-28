@@ -145,6 +145,31 @@ function captureCoverageArguments(shard?: string): string[] {
   }
 }
 
+function captureNodeArguments(run: string): string[] {
+  const directory = mkdtempSync(join(tmpdir(), 'ci-node-invocation-'));
+  try {
+    const bin = join(directory, 'bin');
+    const argsFile = join(directory, 'node-args');
+    mkdirSync(bin);
+    writeFileSync(join(bin, 'node'), '#!/usr/bin/env sh\nprintf \'%s\\n\' "$@" > "$NODE_ARGS"\n');
+    chmodSync(join(bin, 'node'), 0o755);
+
+    const result = spawnSync('bash', ['-eu', '-o', 'pipefail', '-c', run], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        PATH: `${bin}:${process.env.PATH}`,
+        NODE_ARGS: argsFile,
+      },
+    });
+
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    return readFileSync(argsFile, 'utf8').trim().split('\n');
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+}
+
 test('CI exposes five non-cancelling unit-test batches behind Build & Test', () => {
   const jobs = loadCiJobs();
   const coreTests = jobs['core-tests'];
@@ -197,14 +222,13 @@ test('the descendant spawn convention matrix brackets both Node calling conventi
     step.name?.includes('Descendant fence, convention probe and drift detector'),
   );
   assert.ok(probe?.run, 'the matrix must run the convention probe and drift detector');
-  for (const suite of [
-    'metro-spawn-convention-table.test.ts',
-    'metro-descendant-spawn-convention.test.ts',
-    'managed-metro-launcher-exit-attribution.test.ts',
-    'package-integration.test.ts',
-  ]) {
-    assert.ok(probe.run.includes(suite), `the matrix must run ${suite}`);
-  }
+  assert.deepEqual(captureNodeArguments(probe.run), [
+    '--test',
+    'packages/rn-dev-agent-core/test/unit/session/metro-spawn-convention-table.test.ts',
+    'packages/rn-dev-agent-core/test/unit/session/metro-descendant-spawn-convention.test.ts',
+    'packages/rn-dev-agent-core/test/unit/session/managed-metro-launcher-exit-attribution.test.ts',
+    'packages/rn-dev-agent-core/test/unit/session/package-integration.test.ts',
+  ]);
 });
 
 test('coverage command inserts the native shard option before authoritative discovery globs', () => {

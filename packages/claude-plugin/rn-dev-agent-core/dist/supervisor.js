@@ -11887,22 +11887,30 @@ function managedMetroExitAttribution(binding, input) {
   const violation = latestSignedRuntimeViolation(binding.runtimeEvidencePath, runtimePolicyCapability, { sessionId: input.sessionId, metroInstanceId: binding.instanceId });
   const diagnostic2 = readManagedMetroLauncherDiagnostic(join10(runtimeRoot, "metro-launcher-diagnostic.json"));
   const logTail = boundedMetroLogTail(join10(runtimeRoot, "metro.log"));
-  const details = [
-    diagnostic2 ? `stage ${diagnostic2.stage}` : null,
-    diagnostic2?.detail ?? null,
-    violation ? `runtime violation: ${violation}` : null,
-    logTail ? `Metro log tail:
-${logTail}` : null
-  ].filter((detail) => Boolean(detail));
-  if (details.length === 0)
-    return null;
-  return sanitizeManagedMetroStartupDetail(details.join("; "), [
+  const redactions = [
     runtimeRoot,
     input.sessionId,
     binding.instanceId,
     input.signerCapability,
     runtimePolicyCapability
-  ]);
+  ];
+  const details = [
+    diagnostic2 ? sanitizeManagedMetroStartupDetailValue(`stage ${diagnostic2.stage}`, redactions) : null,
+    diagnostic2?.detail ? sanitizeManagedMetroStartupDetailValue(diagnostic2.detail, redactions) : null,
+    violation ? sanitizeManagedMetroStartupDetailValue(`runtime violation: ${violation}`, redactions).slice(0, 2048) : null
+  ].filter((detail) => Boolean(detail));
+  if (logTail) {
+    const prefix = "Metro log tail:\n";
+    const used = details.join("; ").length;
+    const available = 4096 - used - (used > 0 ? 2 : 0) - prefix.length;
+    if (available > 0) {
+      const sanitizedLogTail = sanitizeManagedMetroStartupDetailValue(logTail, redactions);
+      details.push(`${prefix}${sanitizedLogTail.slice(-available)}`);
+    }
+  }
+  if (details.length === 0)
+    return null;
+  return details.join("; ");
 }
 function exactManagedProcessInspection(role, pid, birth, probe) {
   const prefix = role === "launcher" ? "METRO_LAUNCHER" : "METRO_LISTENER";
@@ -12064,13 +12072,13 @@ function readManagedMetroLauncherDiagnostic(path) {
     return null;
   }
 }
-function sanitizeManagedMetroStartupDetail(value, redactions) {
+function sanitizeManagedMetroStartupDetailValue(value, redactions) {
   let sanitized = value.replace(/[^\t\n\r\x20-\x7e]/g, "?");
   for (const redaction of [...redactions].sort((left, right) => right.length - left.length)) {
     if (redaction)
       sanitized = sanitized.replaceAll(redaction, "<redacted>");
   }
-  return sanitized.replace(/\b(?:Basic|Bearer)\s+\S+/gi, "<redacted-authorization>").replace(/(\b[A-Za-z_][A-Za-z0-9_.-]*(?:access[-_]?key|token|secret|password|passwd|pwd|credential|api[-_]?key|authorization|auth|cookie|private[-_]?key)[A-Za-z0-9_.-]*\b["']?\s*[:=]\s*["']?)[^"'\s,;}]+/gi, "$1<redacted>").replace(/\b([a-z][a-z0-9+.-]*:\/\/)[^/\s@]+@/gi, "$1<redacted>@").replace(/[A-Za-z]:\\(?:[^\\\s]+\\)*[^\\\s]*/g, "<path>").replace(/(?:\/[A-Za-z0-9._@%+~=-]+){2,}/g, "<path>").trim().slice(-4096);
+  return sanitized.replace(/\b(?:Basic|Bearer)\s+\S+/gi, "<redacted-authorization>").replace(/(\b[A-Za-z_][A-Za-z0-9_.-]*(?:access[-_]?key|token|secret|password|passwd|pwd|credential|api[-_]?key|authorization|auth|cookie|private[-_]?key)[A-Za-z0-9_.-]*\b["']?\s*[:=]\s*["']?)[^"'\s,;}]+/gi, "$1<redacted>").replace(/\b([a-z][a-z0-9+.-]*:\/\/)[^/\s@]+@/gi, "$1<redacted>@").replace(/[A-Za-z]:\\(?:[^\\\s]+\\)*[^\\\s]*/g, "<path>").replace(/(?:\/[A-Za-z0-9._@%+~=-]+){2,}/g, "<path>").trim();
 }
 function signalManagedMetroProcessTree(input, platform = process.platform, execute2 = execFileSync6, executableDependencies = {}) {
   if (platform === "win32") {
@@ -16582,13 +16590,17 @@ function fenceNativeProcessHandle(handle, context) {
         const authorizedOptions = privateWeakMapGet(authorizedNativeProcessSpawns, this);
         const slot = privateWeakMapGet(nativeProcessHandleSlots, this);
         const admitted = admitsAuthorizedNativeSpawn(args, authorizedOptions);
-        // A refusal Node itself provoked - an unverified calling convention, or a
-        // positional call whose fields do not authenticate - is contained through
-        // Node's own errno contract. An identity failure is still a hard refusal.
-        if (!admitted && !(slot && containsNativeSpawnRefusal(args.length))) {
+        const contained =
+          !admitted &&
+          authorizedOptions !== undefined &&
+          slot !== undefined &&
+          containsNativeSpawnRefusal(args.length);
+        if (!admitted && !contained) {
           throw descendantError();
         }
-        if (admitted) privateWeakMapDelete(authorizedNativeProcessSpawns, this);
+        if (admitted || contained) {
+          privateWeakMapDelete(authorizedNativeProcessSpawns, this);
+        }
         const result = admitted
           ? intrinsicReflectApply(spawn, this, args)
           : refuseNativeSpawn(args.length);

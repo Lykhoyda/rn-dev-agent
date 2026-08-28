@@ -1527,20 +1527,38 @@ export function managedMetroExitAttribution(
     join(runtimeRoot, 'metro-launcher-diagnostic.json'),
   );
   const logTail = boundedMetroLogTail(join(runtimeRoot, 'metro.log'));
-  const details = [
-    diagnostic ? `stage ${diagnostic.stage}` : null,
-    diagnostic?.detail ?? null,
-    violation ? `runtime violation: ${violation}` : null,
-    logTail ? `Metro log tail:\n${logTail}` : null,
-  ].filter((detail): detail is string => Boolean(detail));
-  if (details.length === 0) return null;
-  return sanitizeManagedMetroStartupDetail(details.join('; '), [
+  const redactions = [
     runtimeRoot,
     input.sessionId,
     binding.instanceId,
     input.signerCapability,
     runtimePolicyCapability,
-  ]);
+  ];
+  const details = [
+    diagnostic
+      ? sanitizeManagedMetroStartupDetailValue(`stage ${diagnostic.stage}`, redactions)
+      : null,
+    diagnostic?.detail
+      ? sanitizeManagedMetroStartupDetailValue(diagnostic.detail, redactions)
+      : null,
+    violation
+      ? sanitizeManagedMetroStartupDetailValue(`runtime violation: ${violation}`, redactions).slice(
+          0,
+          2_048,
+        )
+      : null,
+  ].filter((detail): detail is string => Boolean(detail));
+  if (logTail) {
+    const prefix = 'Metro log tail:\n';
+    const used = details.join('; ').length;
+    const available = 4_096 - used - (used > 0 ? 2 : 0) - prefix.length;
+    if (available > 0) {
+      const sanitizedLogTail = sanitizeManagedMetroStartupDetailValue(logTail, redactions);
+      details.push(`${prefix}${sanitizedLogTail.slice(-available)}`);
+    }
+  }
+  if (details.length === 0) return null;
+  return details.join('; ');
 }
 
 function exactManagedProcessInspection(
@@ -1828,7 +1846,10 @@ function readManagedMetroLauncherDiagnostic(path: string): ManagedMetroLauncherD
   }
 }
 
-function sanitizeManagedMetroStartupDetail(value: string, redactions: readonly string[]): string {
+function sanitizeManagedMetroStartupDetailValue(
+  value: string,
+  redactions: readonly string[],
+): string {
   let sanitized = value.replace(/[^\t\n\r\x20-\x7e]/g, '?');
   for (const redaction of [...redactions].sort((left, right) => right.length - left.length)) {
     if (redaction) sanitized = sanitized.replaceAll(redaction, '<redacted>');
@@ -1842,8 +1863,11 @@ function sanitizeManagedMetroStartupDetail(value: string, redactions: readonly s
     .replace(/\b([a-z][a-z0-9+.-]*:\/\/)[^/\s@]+@/gi, '$1<redacted>@')
     .replace(/[A-Za-z]:\\(?:[^\\\s]+\\)*[^\\\s]*/g, '<path>')
     .replace(/(?:\/[A-Za-z0-9._@%+~=-]+){2,}/g, '<path>')
-    .trim()
-    .slice(-4_096);
+    .trim();
+}
+
+function sanitizeManagedMetroStartupDetail(value: string, redactions: readonly string[]): string {
+  return sanitizeManagedMetroStartupDetailValue(value, redactions).slice(-4_096);
 }
 
 function boundedManagedMetroStartupMessage(
