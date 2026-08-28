@@ -2106,6 +2106,7 @@ test('session status atomically invalidates lost managed Metro before and after 
           status: 'lost',
           code: 'METRO_LAUNCHER_EXITED',
           reason: 'authenticated managed Metro launcher exited',
+          attribution: 'runtime violation: descendant spawn convention unverified',
         }),
         now: () => 1234,
       });
@@ -2121,6 +2122,7 @@ test('session status atomically invalidates lost managed Metro before and after 
         reason: 'authenticated managed Metro launcher exited',
         phase: bundleBound ? 'after-bind' : 'before-bind',
         observedAt: 1234,
+        attribution: 'runtime violation: descendant spawn convention unverified',
       });
       assert.deepEqual(status.bindings.metroCleanup, metro);
       assert.equal(status.bindings.metro, null);
