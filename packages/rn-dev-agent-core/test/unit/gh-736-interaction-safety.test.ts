@@ -606,6 +606,34 @@ test('reaper branches on the exact remove outcome and same-invocation list sampl
   assert.equal(verified, true);
   assert.equal(successfulReplies.length, 0);
 
+  const idempotentReplies: Array<unknown> = [
+    { stdout: '' },
+    Object.assign(new Error('listener absent'), {
+      code: 1,
+      stderr: "adb: error: listener 'tcp:22089' not found\n",
+    }),
+    { stdout: '' },
+  ];
+  let idempotentVerified = false;
+  await reapMismatchedAndroidRunner(
+    { deviceId: '46828c2c', hostPort: 22089, devicePort: 22089 },
+    release,
+    async () => {
+      idempotentVerified = true;
+    },
+    undefined,
+    {
+      attempts: 1,
+      executeForwardCommand: async () => {
+        const reply = idempotentReplies.shift();
+        if (reply instanceof Error) throw reply;
+        return reply as { stdout: string };
+      },
+    },
+  );
+  assert.equal(idempotentVerified, true);
+  assert.equal(idempotentReplies.length, 0);
+
   const retainedReplies = [forwardLine, '', forwardLine];
   await assert.rejects(
     () =>
@@ -658,6 +686,79 @@ test('reaper branches on the exact remove outcome and same-invocation list sampl
       return true;
     },
   );
+
+  for (const [name, replies] of [
+    [
+      'mapping present before',
+      [
+        { stdout: forwardLine },
+        Object.assign(new Error('listener absent'), {
+          code: 1,
+          stderr: "adb: error: listener 'tcp:22089' not found\n",
+        }),
+        { stdout: '' },
+      ],
+    ],
+    [
+      'same local mapped to a different remote before',
+      [
+        { stdout: '46828c2c tcp:22089 tcp:22100\n' },
+        Object.assign(new Error('listener absent'), {
+          code: 1,
+          stderr: "adb: error: listener 'tcp:22089' not found\n",
+        }),
+        { stdout: '' },
+      ],
+    ],
+    [
+      'different local listener',
+      [
+        { stdout: '' },
+        Object.assign(new Error('different listener absent'), {
+          code: 1,
+          stderr: "adb: error: listener 'tcp:22090' not found\n",
+        }),
+        { stdout: '' },
+      ],
+    ],
+    [
+      'mapping present after',
+      [
+        { stdout: '' },
+        Object.assign(new Error('listener absent'), {
+          code: 1,
+          stderr: "adb: error: listener 'tcp:22089' not found\n",
+        }),
+        { stdout: forwardLine },
+      ],
+    ],
+  ] as const) {
+    const pending = [...replies] as unknown[];
+    await assert.rejects(
+      () =>
+        reapMismatchedAndroidRunner(
+          { deviceId: '46828c2c', hostPort: 22089, devicePort: 22089 },
+          release,
+          async () => assert.fail(`${name} must not reach instrumentation verify`),
+          undefined,
+          {
+            attempts: 1,
+            executeForwardCommand: async () => {
+              const reply = pending.shift();
+              if (reply instanceof Error) throw reply;
+              return reply as { stdout: string };
+            },
+          },
+        ),
+      (error: unknown) => {
+        assert.ok(error instanceof AndroidRunnerCleanupUnconfirmedError);
+        assert.equal(error.predicate, 'forward-release');
+        assert.equal(error.meta.forwardCleanup?.remove.exitCode, 1);
+        return true;
+      },
+      name,
+    );
+  }
 });
 
 test('fresh typed rejects carry the receipt after exact forward release', () => {

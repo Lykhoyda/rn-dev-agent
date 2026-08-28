@@ -1034,9 +1034,25 @@ export async function reapMismatchedAndroidRunner(
     };
     const commandFailed = (outcome: AndroidPlatformCommandOutcome) =>
       outcome.exitCode !== 0 || outcome.signal !== null || outcome.timedOut;
+    const expectedMissingListener = `adb: error: listener 'tcp:${state.hostPort}' not found`;
+    const expectedForwardLocal = { deviceId, hostPort: state.hostPort };
+    const listenerNotFound =
+      remove.outcome.exitCode !== null &&
+      remove.outcome.exitCode !== 0 &&
+      remove.outcome.signal === null &&
+      !remove.outcome.timedOut &&
+      (remove.outcome.stderrTail === expectedMissingListener ||
+        remove.outcome.stderrTail === `${expectedMissingListener}\n` ||
+        remove.outcome.stderrTail === `${expectedMissingListener}\r\n`);
+    const idempotentMissingForward =
+      !commandFailed(before.outcome) &&
+      exactAndroidForwardLine(expectedForwardLocal, before.stdout) === undefined &&
+      listenerNotFound &&
+      !commandFailed(after.outcome) &&
+      exactAndroidForwardLine(expectedForwardLocal, after.stdout) === undefined;
     if (
       commandFailed(before.outcome) ||
-      commandFailed(remove.outcome) ||
+      (commandFailed(remove.outcome) && !idempotentMissingForward) ||
       commandFailed(after.outcome)
     ) {
       const failed = commandFailed(remove.outcome)

@@ -25946,7 +25946,13 @@ async function reapMismatchedAndroidRunner(state, release2, verify, signal, veri
       ...state.attemptForwardRemoval ? { attemptForwardRemoval: state.attemptForwardRemoval } : {}
     };
     const commandFailed = (outcome) => outcome.exitCode !== 0 || outcome.signal !== null || outcome.timedOut;
-    if (commandFailed(before.outcome) || commandFailed(remove.outcome) || commandFailed(after.outcome)) {
+    const expectedMissingListener = `adb: error: listener 'tcp:${state.hostPort}' not found`;
+    const expectedForwardLocal = { deviceId, hostPort: state.hostPort };
+    const listenerNotFound = remove.outcome.exitCode !== null && remove.outcome.exitCode !== 0 && remove.outcome.signal === null && !remove.outcome.timedOut && (remove.outcome.stderrTail === expectedMissingListener || remove.outcome.stderrTail === `${expectedMissingListener}
+` || remove.outcome.stderrTail === `${expectedMissingListener}\r
+`);
+    const idempotentMissingForward = !commandFailed(before.outcome) && exactAndroidForwardLine(expectedForwardLocal, before.stdout) === void 0 && listenerNotFound && !commandFailed(after.outcome) && exactAndroidForwardLine(expectedForwardLocal, after.stdout) === void 0;
+    if (commandFailed(before.outcome) || commandFailed(remove.outcome) && !idempotentMissingForward || commandFailed(after.outcome)) {
       const failed = commandFailed(remove.outcome) ? remove.outcome : commandFailed(after.outcome) ? after.outcome : before.outcome;
       throw new AndroidRunnerCleanupUnconfirmedError("forward-release", `argv=${JSON.stringify(failed.argv)} exitCode=${String(failed.exitCode)} signal=${String(failed.signal)} timedOut=${String(failed.timedOut)} stderrTail=${JSON.stringify(failed.stderrTail)}`, deviceId, commandEvidence2);
     }
