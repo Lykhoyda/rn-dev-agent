@@ -35671,7 +35671,7 @@ function createDeviceSnapshotHandler(deps = {}) {
         }
       } catch (err) {
         let cleanupFailure;
-        let cleanupFailureMeta;
+        let cleanupFailureMeta = err instanceof AndroidRunnerCleanupUnconfirmedError ? err.meta : void 0;
         try {
           if (lockPlatform === "ios")
             await stopIosRunner(deviceId);
@@ -35680,7 +35680,7 @@ function createDeviceSnapshotHandler(deps = {}) {
         } catch (cleanupErr) {
           cleanupFailure = cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr);
           if (cleanupErr instanceof AndroidRunnerCleanupUnconfirmedError) {
-            cleanupFailureMeta = cleanupErr.meta;
+            cleanupFailureMeta ??= cleanupErr.meta;
           }
         } finally {
           releaseDeviceLockForSession();
@@ -35717,7 +35717,7 @@ function createDeviceSnapshotHandler(deps = {}) {
         await deps.bindRunner?.(lockPlatform, deviceId, appId);
       } catch (error2) {
         let cleanupFailure;
-        let cleanupFailureMeta;
+        let cleanupFailureMeta = error2 instanceof AndroidRunnerCleanupUnconfirmedError ? error2.meta : void 0;
         try {
           if (lockPlatform === "ios")
             await stopIosRunner(deviceId);
@@ -35726,7 +35726,7 @@ function createDeviceSnapshotHandler(deps = {}) {
         } catch (cleanupErr) {
           cleanupFailure = cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr);
           if (cleanupErr instanceof AndroidRunnerCleanupUnconfirmedError) {
-            cleanupFailureMeta = cleanupErr.meta;
+            cleanupFailureMeta ??= cleanupErr.meta;
           }
         } finally {
           clearActiveSession();
@@ -38093,6 +38093,7 @@ __export(rn_android_runner_client_exports, {
   reapActiveAndroidRunner: () => reapActiveAndroidRunner,
   reapMismatchedAndroidRunner: () => reapMismatchedAndroidRunner,
   releaseAndroidRunnerRebuildLock: () => releaseAndroidRunnerRebuildLock,
+  removeAndroidForwardWithOutcome: () => removeAndroidForwardWithOutcome,
   resolveAndroidInstallAction: () => resolveAndroidInstallAction,
   resolveAndroidSerial: () => resolveAndroidSerial,
   runAndroid: () => runAndroid,
@@ -38235,6 +38236,51 @@ function buildAdbForwardArgs(deviceId, hostPort, devicePort) {
 }
 function buildAdbForwardRemoveArgs(deviceId, hostPort) {
   return [...adbSerialArgs(deviceId), "forward", "--remove", `tcp:${hostPort}`];
+}
+function sanitizedCommandValue(value, deviceId) {
+  const tail = String(value ?? "").slice(-2e3);
+  return sanitizePublicDiagnostic(tail, {
+    deviceIds: [deviceId],
+    maxLength: ADB_OUTCOME_TAIL_LENGTH
+  });
+}
+async function executeAndroidPlatformCommand(deviceId, args, signal, execute2 = async (commandArgs, options) => execFileAsync2("adb", commandArgs, options)) {
+  const publicArgv = ["adb", ...args].map((arg) => sanitizePublicDiagnostic(arg, { deviceIds: [deviceId], maxLength: 240 }));
+  try {
+    const result = await execute2(args, { timeout: ADB_CLEANUP_TIMEOUT_MS, signal });
+    const stdout = String(result.stdout ?? "");
+    return {
+      stdout,
+      outcome: {
+        argv: publicArgv,
+        exitCode: 0,
+        signal: null,
+        timedOut: false,
+        stdoutTail: sanitizedCommandValue(stdout, deviceId),
+        stderrTail: sanitizedCommandValue(result.stderr, deviceId)
+      }
+    };
+  } catch (error2) {
+    const failure = error2;
+    const code = failure.code;
+    const commandSignal = typeof failure.signal === "string" ? failure.signal : typeof code === "string" ? code : null;
+    const timedOut = code === "ETIMEDOUT" || failure.killed === true && !signal?.aborted;
+    const stdout = String(failure.stdout ?? "");
+    return {
+      stdout,
+      outcome: {
+        argv: publicArgv,
+        exitCode: typeof code === "number" ? code : null,
+        signal: commandSignal,
+        timedOut,
+        stdoutTail: sanitizedCommandValue(stdout, deviceId),
+        stderrTail: sanitizedCommandValue(failure.stderr ?? failure.message, deviceId)
+      }
+    };
+  }
+}
+async function removeAndroidForwardWithOutcome(deviceId, hostPort, signal, execute2) {
+  return (await executeAndroidPlatformCommand(deviceId, buildAdbForwardRemoveArgs(deviceId, hostPort), signal, execute2)).outcome;
 }
 function buildInstrumentPortArgs(devicePort) {
   return ["-e", "RN_ANDROID_RUNNER_PORT", String(devicePort)];
@@ -38449,12 +38495,18 @@ function consumePendingAndroidUpgradeNote() {
   pendingUpgradeNote = void 0;
   return note;
 }
-function classifyAndroidRunnerCleanupResources(expected, forwards, instrumentation) {
-  const forwardLine = forwards.split("\n").filter((line) => line.startsWith(`${expected.deviceId} `)).find((line) => {
-    if (expected.hostPort !== void 0 && line.includes(`tcp:${expected.hostPort}`))
-      return true;
-    return line.includes(`tcp:${expected.devicePort ?? DEFAULT_PORT}`);
+function exactAndroidForwardLine(expected, forwards) {
+  return forwards.split("\n").map((line) => line.trim()).find((line) => {
+    const [deviceId, local, remote, extra] = line.split(/\s+/);
+    if (extra !== void 0 || deviceId !== expected.deviceId)
+      return false;
+    if (expected.hostPort !== void 0 && local !== `tcp:${expected.hostPort}`)
+      return false;
+    return expected.devicePort === void 0 || remote === `tcp:${expected.devicePort}`;
   });
+}
+function classifyAndroidRunnerCleanupResources(expected, forwards, instrumentation) {
+  const forwardLine = exactAndroidForwardLine({ ...expected, devicePort: expected.devicePort ?? DEFAULT_PORT }, forwards);
   if (forwardLine)
     return { predicate: "forward", evidence: forwardLine.trim() };
   const instrumentationLines = instrumentation.split("\n");
@@ -38485,16 +38537,40 @@ async function reapMismatchedAndroidRunner(state, release2, verify, signal, veri
   if (!receipt2.stoppedOwnRunner || missingPackages.length > 0) {
     throw new Error(`RUNNER_CLEANUP_UNCONFIRMED: stale Android runner cleanup failed for ${deviceId}`);
   }
-  if (state?.hostPort !== void 0) {
-    try {
-      await execFileAsync2("adb", buildAdbForwardRemoveArgs(deviceId, state.hostPort), {
-        timeout: ADB_CLEANUP_TIMEOUT_MS,
-        signal
-      });
-    } catch {
-      signal?.throwIfAborted();
+  const expected = {
+    deviceId,
+    ...state?.hostPort !== void 0 ? { hostPort: state.hostPort } : {},
+    ...state?.devicePort !== void 0 ? { devicePort: state.devicePort } : {}
+  };
+  let forwardCleanup;
+  if (state?.hostPort !== void 0 && (release2 === void 0 || verification.executeForwardCommand !== void 0)) {
+    const before = await executeAndroidPlatformCommand(deviceId, ["forward", "--list"], signal, verification.executeForwardCommand);
+    const remove = await executeAndroidPlatformCommand(deviceId, buildAdbForwardRemoveArgs(deviceId, state.hostPort), signal, verification.executeForwardCommand);
+    const after = await executeAndroidPlatformCommand(deviceId, ["forward", "--list"], signal, verification.executeForwardCommand);
+    signal?.throwIfAborted();
+    forwardCleanup = {
+      before: before.outcome,
+      remove: remove.outcome,
+      after: after.outcome
+    };
+    const commandEvidence2 = {
+      forwardCleanup,
+      ...state.attemptForwardRemoval ? { attemptForwardRemoval: state.attemptForwardRemoval } : {}
+    };
+    const commandFailed = (outcome) => outcome.exitCode !== 0 || outcome.signal !== null || outcome.timedOut;
+    if (commandFailed(before.outcome) || commandFailed(remove.outcome) || commandFailed(after.outcome)) {
+      const failed = commandFailed(remove.outcome) ? remove.outcome : commandFailed(after.outcome) ? after.outcome : before.outcome;
+      throw new AndroidRunnerCleanupUnconfirmedError("forward-release", `argv=${JSON.stringify(failed.argv)} exitCode=${String(failed.exitCode)} signal=${String(failed.signal)} timedOut=${String(failed.timedOut)} stderrTail=${JSON.stringify(failed.stderrTail)}`, deviceId, commandEvidence2);
+    }
+    const retained = exactAndroidForwardLine(expected, after.stdout);
+    if (retained) {
+      throw new AndroidRunnerCleanupUnconfirmedError("forward", sanitizedCommandValue(retained, deviceId), deviceId, commandEvidence2);
     }
   }
+  const commandEvidence = {
+    ...forwardCleanup ? { forwardCleanup } : {},
+    ...state?.attemptForwardRemoval ? { attemptForwardRemoval: state.attemptForwardRemoval } : {}
+  };
   const verifyReleased = verify ?? (release2 ? async () => {
   } : async (expected2) => {
     const forwards = String((await execFileAsync2("adb", ["forward", "--list"], {
@@ -38507,14 +38583,9 @@ async function reapMismatchedAndroidRunner(state, release2, verify, signal, veri
     })).stdout);
     const remaining = classifyAndroidRunnerCleanupResources(expected2, forwards, instrumentation);
     if (remaining) {
-      throw new AndroidRunnerCleanupUnconfirmedError(remaining.predicate, remaining.evidence, expected2.deviceId);
+      throw new AndroidRunnerCleanupUnconfirmedError(remaining.predicate, remaining.evidence, expected2.deviceId, commandEvidence);
     }
   });
-  const expected = {
-    deviceId,
-    ...state?.hostPort !== void 0 ? { hostPort: state.hostPort } : {},
-    ...state?.devicePort !== void 0 ? { devicePort: state.devicePort } : {}
-  };
   const attempts3 = Math.max(1, verification.attempts ?? ANDROID_CLEANUP_VERIFY_ATTEMPTS);
   const intervalMs = Math.max(0, verification.intervalMs ?? ANDROID_CLEANUP_VERIFY_INTERVAL_MS);
   const delay = verification.delay ?? ((ms, waitSignal) => new Promise((resolve20, reject) => {
@@ -38806,11 +38877,13 @@ async function runBoundedAndroidRunnerRebuild(error2, rebuild, cleanup, dependen
     cleanupController = new AbortController();
     const cleanupTimer = setTimeout(() => cleanupController?.abort(androidRebuildRefusal(error2, "runner artifact cleanup exceeded its time limit")), dependencies.cleanupTimeoutMs ?? ANDROID_REBUILD_CLEANUP_TIMEOUT_MS);
     let cleanupVerified = false;
+    let cleanupFailure;
     try {
       await cleanup(cleanupController.signal);
       cleanupController.signal.throwIfAborted();
       cleanupVerified = true;
-    } catch {
+    } catch (cleanupError) {
+      cleanupFailure = cleanupError;
     }
     clearTimeout(cleanupTimer);
     cleanupController = void 0;
@@ -38820,6 +38893,9 @@ async function runBoundedAndroidRunnerRebuild(error2, rebuild, cleanup, dependen
       throw leaseAuthorityLost ? controller.signal.reason : androidRebuildRefusal(error2, "runner artifact failure state was not durable");
     }
     if (!cleanupVerified) {
+      if (cleanupFailure instanceof AndroidRunnerCleanupUnconfirmedError) {
+        throw cleanupFailure;
+      }
       throw androidRebuildRefusal(error2, "runner artifact cleanup could not be verified");
     }
     throw controller.signal.aborted ? controller.signal.reason : cause;
@@ -38828,7 +38904,11 @@ async function runBoundedAndroidRunnerRebuild(error2, rebuild, cleanup, dependen
 function androidRetryCleanupContext(state, error2) {
   return state ?? (error2.deviceId ? {
     deviceId: error2.deviceId,
-    ...error2.attempt ? { hostPort: error2.attempt.hostPort, devicePort: error2.attempt.devicePort } : {}
+    ...error2.attempt ? {
+      hostPort: error2.attempt.hostPort,
+      devicePort: error2.attempt.devicePort,
+      ...error2.attempt.forwardRemoval ? { attemptForwardRemoval: error2.attempt.forwardRemoval } : {}
+    } : {}
   } : null);
 }
 function androidRunnerApksExist() {
@@ -38950,7 +39030,7 @@ async function startAndroidRunnerAttempt(deviceId, bundleId, devicePort = DEFAUL
     let resolved = false;
     let forwardRemoval;
     const removeForward = () => {
-      forwardRemoval ??= execFileAsync2("adb", buildAdbForwardRemoveArgs(serial, hostPort)).then(() => void 0).catch(() => void 0);
+      forwardRemoval ??= removeAndroidForwardWithOutcome(serial, hostPort, opts._rebuildSignal);
       return forwardRemoval;
     };
     const child = spawn7("adb", [
@@ -39057,7 +39137,7 @@ ${diag.trim()}` : ""}`));
         })) {
           resolved = true;
           child.kill("SIGTERM");
-          await removeForward();
+          attempt.forwardRemoval = await removeForward();
           reject(new AndroidAuthorityStaleError(serial, void 0, attempt));
           return;
         }
@@ -39066,7 +39146,7 @@ ${diag.trim()}` : ""}`));
           resolved = true;
           pendingUpgradeNote = void 0;
           child.kill("SIGTERM");
-          await removeForward();
+          attempt.forwardRemoval = await removeForward();
           if (compat.reason === "missing-commands" || compat.reason === "missing-features") {
             const ErrorType = compat.reason === "missing-features" ? AndroidFeaturesStaleError : AndroidCommandsStaleError;
             reject(new ErrorType(compat.missing ?? [], bundleId, serial, void 0, attempt));
@@ -39398,7 +39478,7 @@ function errMessage(err) {
 function isAndroidConnectionFailure(message) {
   return /fetch failed|ECONNREFUSED|ECONNRESET|socket hang up|rn-android-runner not started|did not become ready|Android runner instrumentation exited before readiness|Failed to spawn Android runner instrumentation/i.test(message);
 }
-var execFileAsync2, DEFAULT_PORT, READY_TIMEOUT_MS2, INSTRUMENTATION, MAIN_LOOP_CLASS, HEALTH_POLL_INTERVAL_MS, HEALTH_PROBE_TIMEOUT_MS, RN_ANDROID_RUNNER_DIR, GRADLEW, APK_APP, APK_TEST, ANDROID_REBUILD_ROOT, ANDROID_REBUILD_LOCK_DATABASE, ANDROID_REBUILD_LOCK_STALE_MS, ANDROID_REBUILD_HEARTBEAT_MS, ANDROID_REBUILD_COMPLETION_RETRY_MS, ANDROID_REBUILD_COMPLETION_ATTEMPTS, ANDROID_REBUILD_CLEANUP_TIMEOUT_MS, ADB_CLEANUP_TIMEOUT_MS, ANDROID_CLEANUP_VERIFY_ATTEMPTS, ANDROID_CLEANUP_VERIFY_INTERVAL_MS, GRADLE_BUILD_TIMEOUT_MS, ADB_INSTALL_TIMEOUT_MS, runnerProcess2, runnerState2, fetchImpl2, testAuthorityState, lastKnownCapabilities2, pendingUpgradeNote, AndroidRunnerCleanupUnconfirmedError, AndroidArtifactStaleError, AndroidCommandsStaleError, AndroidFeaturesStaleError, AndroidAuthorityStaleError, RUNNER_APK_PATHS, STATUS_PROBE_TIMEOUT_MS2;
+var execFileAsync2, DEFAULT_PORT, READY_TIMEOUT_MS2, INSTRUMENTATION, MAIN_LOOP_CLASS, HEALTH_POLL_INTERVAL_MS, HEALTH_PROBE_TIMEOUT_MS, RN_ANDROID_RUNNER_DIR, GRADLEW, APK_APP, APK_TEST, ANDROID_REBUILD_ROOT, ANDROID_REBUILD_LOCK_DATABASE, ANDROID_REBUILD_LOCK_STALE_MS, ANDROID_REBUILD_HEARTBEAT_MS, ANDROID_REBUILD_COMPLETION_RETRY_MS, ANDROID_REBUILD_COMPLETION_ATTEMPTS, ANDROID_REBUILD_CLEANUP_TIMEOUT_MS, ADB_CLEANUP_TIMEOUT_MS, ADB_OUTCOME_TAIL_LENGTH, ANDROID_CLEANUP_VERIFY_ATTEMPTS, ANDROID_CLEANUP_VERIFY_INTERVAL_MS, GRADLE_BUILD_TIMEOUT_MS, ADB_INSTALL_TIMEOUT_MS, runnerProcess2, runnerState2, fetchImpl2, testAuthorityState, lastKnownCapabilities2, pendingUpgradeNote, AndroidRunnerCleanupUnconfirmedError, AndroidArtifactStaleError, AndroidCommandsStaleError, AndroidFeaturesStaleError, AndroidAuthorityStaleError, RUNNER_APK_PATHS, STATUS_PROBE_TIMEOUT_MS2;
 var init_rn_android_runner_client = __esm({
   "packages/rn-dev-agent-core/dist/runners/rn-android-runner-client.js"() {
     "use strict";
@@ -39413,6 +39493,7 @@ var init_rn_android_runner_client = __esm({
     init_transport_recovery();
     init_process_birth();
     init_authority_store();
+    init_public_diagnostics();
     execFileAsync2 = promisify12(execFile12);
     DEFAULT_PORT = 22089;
     READY_TIMEOUT_MS2 = 3e4;
@@ -39432,6 +39513,7 @@ var init_rn_android_runner_client = __esm({
     ANDROID_REBUILD_COMPLETION_ATTEMPTS = 5;
     ANDROID_REBUILD_CLEANUP_TIMEOUT_MS = 3e4;
     ADB_CLEANUP_TIMEOUT_MS = 5e3;
+    ADB_OUTCOME_TAIL_LENGTH = 600;
     ANDROID_CLEANUP_VERIFY_ATTEMPTS = 20;
     ANDROID_CLEANUP_VERIFY_INTERVAL_MS = 150;
     GRADLE_BUILD_TIMEOUT_MS = 6e5;
@@ -39445,11 +39527,15 @@ var init_rn_android_runner_client = __esm({
       predicate;
       evidence;
       meta;
-      constructor(predicate, evidence, deviceId) {
+      constructor(predicate, evidence, deviceId, commandEvidence) {
         super(`RUNNER_CLEANUP_UNCONFIRMED: predicate=${predicate} remains for ${deviceId}; evidence=${JSON.stringify(evidence)}`);
         this.predicate = predicate;
         this.evidence = evidence;
-        this.meta = { cleanupPredicate: predicate, cleanupEvidence: evidence };
+        this.meta = {
+          cleanupPredicate: predicate,
+          cleanupEvidence: evidence,
+          ...commandEvidence
+        };
       }
     };
     AndroidArtifactStaleError = class extends Error {

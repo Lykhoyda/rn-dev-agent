@@ -451,14 +451,15 @@ export function createDeviceSnapshotHandler(
         }
       } catch (err) {
         let cleanupFailure: string | undefined;
-        let cleanupFailureMeta: Record<string, unknown> | undefined;
+        let cleanupFailureMeta: Record<string, unknown> | undefined =
+          err instanceof AndroidRunnerCleanupUnconfirmedError ? err.meta : undefined;
         try {
           if (lockPlatform === 'ios') await stopIosRunner(deviceId);
           else await reapAndroidRunner(deviceId);
         } catch (cleanupErr) {
           cleanupFailure = cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr);
           if (cleanupErr instanceof AndroidRunnerCleanupUnconfirmedError) {
-            cleanupFailureMeta = cleanupErr.meta;
+            cleanupFailureMeta ??= cleanupErr.meta;
           }
         } finally {
           releaseDeviceLockForSession();
@@ -506,14 +507,15 @@ export function createDeviceSnapshotHandler(
         await deps.bindRunner?.(lockPlatform, deviceId, appId);
       } catch (error) {
         let cleanupFailure: string | undefined;
-        let cleanupFailureMeta: Record<string, unknown> | undefined;
+        let cleanupFailureMeta: Record<string, unknown> | undefined =
+          error instanceof AndroidRunnerCleanupUnconfirmedError ? error.meta : undefined;
         try {
           if (lockPlatform === 'ios') await stopIosRunner(deviceId);
           else await reapAndroidRunner(deviceId);
         } catch (cleanupErr) {
           cleanupFailure = cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr);
           if (cleanupErr instanceof AndroidRunnerCleanupUnconfirmedError) {
-            cleanupFailureMeta = cleanupErr.meta;
+            cleanupFailureMeta ??= cleanupErr.meta;
           }
         } finally {
           clearActiveSession();

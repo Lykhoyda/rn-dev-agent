@@ -12383,6 +12383,7 @@ var init_rn_android_runner_client = __esm({
     init_transport_recovery();
     init_process_birth();
     init_authority_store();
+    init_public_diagnostics();
     execFileAsync2 = promisify12(execFile11);
     RN_ANDROID_RUNNER_DIR = resolveNativeRunnerDir("rn-android-runner");
     GRADLEW = join12(RN_ANDROID_RUNNER_DIR, "gradlew");

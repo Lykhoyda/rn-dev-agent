@@ -36,6 +36,7 @@ import {
   classifyAndroidRunnerCleanupResources,
   classifyAndroidHealth,
   reapMismatchedAndroidRunner,
+  removeAndroidForwardWithOutcome,
   runBoundedAndroidRunnerRebuild,
   runAndroid,
 } from '../../dist/runners/rn-android-runner-client.js';
@@ -551,6 +552,114 @@ test('cleanup classification is exact, predicate-specific, and fail-closed', () 
   });
 });
 
+test('exact forward removal preserves sanitized non-zero and timeout outcomes', async () => {
+  const nonZero = Object.assign(new Error('remove failed in /Users/private/repo'), {
+    code: 1,
+    stdout: 'device 46828c2c output',
+    stderr: 'cannot remove for 46828c2c at /Users/private/repo',
+  });
+  const rejected = await removeAndroidForwardWithOutcome('46828c2c', 22089, undefined, async () => {
+    throw nonZero;
+  });
+  assert.equal(rejected.exitCode, 1);
+  assert.equal(rejected.signal, null);
+  assert.equal(rejected.timedOut, false);
+  assert.ok(rejected.argv.join(' ').includes('device-'));
+  assert.ok(!JSON.stringify(rejected).includes('46828c2c'));
+  assert.ok(!JSON.stringify(rejected).includes('/Users/private'));
+
+  const timedOut = await removeAndroidForwardWithOutcome('46828c2c', 22089, undefined, async () => {
+    throw Object.assign(new Error('timed out'), {
+      code: 'ETIMEDOUT',
+      killed: true,
+      signal: 'SIGTERM',
+    });
+  });
+  assert.equal(timedOut.exitCode, null);
+  assert.equal(timedOut.signal, 'SIGTERM');
+  assert.equal(timedOut.timedOut, true);
+});
+
+test('reaper branches on the exact remove outcome and same-invocation list samples', async () => {
+  const forwardLine = '46828c2c tcp:22089 tcp:22089\n';
+  const release = async () => ({
+    stoppedOwnRunner: true,
+    forceStoppedPackages: [
+      'dev.lykhoyda.rndevagent.androidrunner.test',
+      'dev.lykhoyda.rndevagent.androidrunner',
+    ],
+  });
+  const successfulReplies = [forwardLine, '', ''];
+  let verified = false;
+  await reapMismatchedAndroidRunner(
+    { deviceId: '46828c2c', hostPort: 22089, devicePort: 22089 },
+    release,
+    async () => {
+      verified = true;
+    },
+    undefined,
+    {
+      attempts: 1,
+      executeForwardCommand: async () => ({ stdout: successfulReplies.shift() ?? '' }),
+    },
+  );
+  assert.equal(verified, true);
+  assert.equal(successfulReplies.length, 0);
+
+  const retainedReplies = [forwardLine, '', forwardLine];
+  await assert.rejects(
+    () =>
+      reapMismatchedAndroidRunner(
+        { deviceId: '46828c2c', hostPort: 22089, devicePort: 22089 },
+        release,
+        async () => assert.fail('retained forward must refuse before instrumentation verify'),
+        undefined,
+        {
+          attempts: 1,
+          executeForwardCommand: async () => ({ stdout: retainedReplies.shift() ?? '' }),
+        },
+      ),
+    (error: unknown) => {
+      assert.ok(error instanceof AndroidRunnerCleanupUnconfirmedError);
+      assert.equal(error.predicate, 'forward');
+      assert.equal(error.meta.forwardCleanup?.remove.exitCode, 0);
+      assert.ok(error.meta.forwardCleanup?.before.stdoutTail.includes('device-'));
+      assert.ok(error.meta.forwardCleanup?.after.stdoutTail.includes('device-'));
+      return true;
+    },
+  );
+
+  const failedReplies: Array<unknown> = [
+    { stdout: forwardLine },
+    Object.assign(new Error('cannot remove listener'), { code: 1, stderr: 'not found' }),
+    { stdout: forwardLine },
+  ];
+  await assert.rejects(
+    () =>
+      reapMismatchedAndroidRunner(
+        { deviceId: '46828c2c', hostPort: 22089, devicePort: 22089 },
+        release,
+        async () => assert.fail('failed remove must refuse before instrumentation verify'),
+        undefined,
+        {
+          attempts: 1,
+          executeForwardCommand: async () => {
+            const reply = failedReplies.shift();
+            if (reply instanceof Error) throw reply;
+            return reply as { stdout: string };
+          },
+        },
+      ),
+    (error: unknown) => {
+      assert.ok(error instanceof AndroidRunnerCleanupUnconfirmedError);
+      assert.equal(error.predicate, 'forward-release');
+      assert.equal(error.meta.forwardCleanup?.remove.exitCode, 1);
+      assert.equal(error.meta.forwardCleanup?.remove.stderrTail, 'not found');
+      return true;
+    },
+  );
+});
+
 test('fresh typed rejects carry the receipt after exact forward release', () => {
   const source = readFileSync(
     join(process.cwd(), 'src/runners/rn-android-runner-client.ts'),
@@ -572,13 +681,17 @@ test('fresh typed rejects carry the receipt after exact forward release', () => 
   assert.ok(artifactReject > authorityReject);
 
   const reaperStart = source.indexOf('export async function reapMismatchedAndroidRunner');
+  const beforeList = source.indexOf("['forward', '--list']", reaperStart);
   const exactRelease = source.indexOf(
-    "await execFileAsync('adb', buildAdbForwardRemoveArgs(deviceId, state.hostPort)",
+    'buildAdbForwardRemoveArgs(deviceId, state.hostPort)',
     reaperStart,
   );
+  const afterList = source.indexOf("['forward', '--list']", exactRelease);
   const verification = source.indexOf('const verifyReleased =', reaperStart);
+  assert.ok(beforeList > reaperStart);
   assert.ok(exactRelease > reaperStart);
-  assert.ok(verification > exactRelease);
+  assert.ok(afterList > exactRelease);
+  assert.ok(verification > afterList);
 });
 
 test('Android runner reports a rejected tap truthfully per dispatch mechanism', async () => {

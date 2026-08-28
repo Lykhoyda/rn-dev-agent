@@ -13990,1627 +13990,57 @@ var init_authority_store = __esm({
   }
 });
 
-// packages/rn-dev-agent-core/dist/runners/release-android-slot.js
-var release_android_slot_exports = {};
-__export(release_android_slot_exports, {
-  ExactAndroidDeviceRequiredError: () => ExactAndroidDeviceRequiredError,
-  OWNED_PACKAGES: () => OWNED_PACKAGES,
-  isProtectedPid: () => isProtectedPid,
-  releaseAndroidInteractionSlot: () => releaseAndroidInteractionSlot
-});
-import { execFile as execFileCb2 } from "node:child_process";
-import { promisify as promisify2 } from "node:util";
-import { existsSync as existsSync8, readFileSync as readFileSync7, unlinkSync as unlinkSync4 } from "node:fs";
-import { homedir as homedir4 } from "node:os";
-import { join as join9 } from "node:path";
-function isProtectedPid(pid, selfPid, parentPid) {
-  return pid === selfPid || pid === parentPid;
+// packages/rn-dev-agent-core/dist/session/cleanup-identity.js
+function isPositiveSafeInteger(value) {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
 }
-function defaultDeps() {
-  return {
-    stopOwnRunner: (deviceId, signal) => stopAndroidRunner(deviceId, signal),
-    adbForceStop: async (pkg, serial, signal) => {
-      await execFile2("adb", [...serial, "shell", "am", "force-stop", pkg], {
-        timeout: ADB_TIMEOUT_MS,
-        encoding: "utf8",
-        signal
-      });
-    },
-    resolveSerial: (deviceId) => deviceId ? ["-s", deviceId] : getAdbSerial(),
-    readDaemonPid: () => {
-      try {
-        const parsed = JSON.parse(readFileSync7(DAEMON_JSON, "utf8"));
-        return typeof parsed.pid === "number" ? parsed.pid : null;
-      } catch {
-        return null;
-      }
-    },
-    isAlive: (pid) => {
-      try {
-        process.kill(pid, 0);
-        return true;
-      } catch {
-        return false;
-      }
-    },
-    protectedPids: () => ({ selfPid: process.pid, parentPid: process.ppid }),
-    kill: (pid, sig) => process.kill(pid, sig),
-    fileExists: (p) => existsSync8(p),
-    removeFile: (p) => unlinkSync4(p),
-    delay: (ms) => new Promise((resolve19) => setTimeout(resolve19, ms)),
-    killLegacy: () => process.env.RN_DEVICE_KILL_LEGACY !== "0",
-    now: () => Date.now()
-  };
+function isTcpPort(value) {
+  return isPositiveSafeInteger(value) && value <= 65535;
 }
-function resolveExactSerialArgs(deps, deviceId) {
-  try {
-    return deps.resolveSerial(deviceId);
-  } catch (err) {
-    throw new ExactAndroidDeviceRequiredError(err);
+function hasCompleteRunnerCleanupIdentity(binding) {
+  const processBirth = String(binding.processBirth ?? "");
+  const instanceId = String(binding.instanceId ?? "");
+  const capability = String(binding.capability ?? "");
+  if (!isPositiveSafeInteger(binding.pid) || !isTcpPort(binding.port) || !processBirth || !instanceId || !capability) {
+    return false;
   }
+  if (String(binding.platform ?? "") !== "android")
+    return true;
+  return Boolean(String(binding.deviceId ?? ""));
 }
-function exactSerial(deviceId, serialArgs) {
-  const serial = serialArgs.length === 2 && serialArgs[0] === "-s" ? serialArgs[1] : void 0;
-  if (!serial || deviceId !== void 0 && serial !== deviceId || serial.length > 256 || /\s/.test(serial)) {
-    throw new ExactAndroidDeviceRequiredError();
+function hasCompleteRecorderCleanupIdentity(binding) {
+  const script = String(binding.script ?? "");
+  const scope = String(binding.scope ?? "");
+  if (!script || !/^[a-f0-9]{64}$/.test(scope) || binding.port !== void 0 && !isTcpPort(binding.port)) {
+    return false;
   }
-  return serial;
+  if (binding.phase === "starting")
+    return true;
+  return isPositiveSafeInteger(binding.pid) && Boolean(String(binding.processBirth ?? ""));
 }
-async function releaseAndroidInteractionSlot(opts = {}, deps = defaultDeps()) {
-  opts.signal?.throwIfAborted();
-  const serialArgs = resolveExactSerialArgs(deps, opts.deviceId);
-  const deviceId = exactSerial(opts.deviceId, serialArgs);
-  const timings = {};
-  const warnings = [];
-  const forceStoppedPackages = [];
-  const killedDaemonPids = [];
-  const removedFiles = [];
-  let stoppedOwnRunner = false;
-  const tStop = deps.now();
-  try {
-    await deps.stopOwnRunner(deviceId, opts.signal);
-    opts.signal?.throwIfAborted();
-    stoppedOwnRunner = true;
-  } catch (err) {
-    opts.signal?.throwIfAborted();
-    warnings.push(`stopping the Android runner failed: ${msg(err)}`);
-  }
-  timings.stopOwnRunner = deps.now() - tStop;
-  const tForceStop = deps.now();
-  for (const pkg of OWNED_PACKAGES) {
-    opts.signal?.throwIfAborted();
-    try {
-      await deps.adbForceStop(pkg, serialArgs, opts.signal);
-      opts.signal?.throwIfAborted();
-      forceStoppedPackages.push(pkg);
-    } catch (err) {
-      opts.signal?.throwIfAborted();
-      warnings.push(`am force-stop ${pkg} failed: ${msg(err)}`);
-    }
-  }
-  timings.forceStop = deps.now() - tForceStop;
-  const tLegacy = deps.now();
-  if (opts.includeLegacy !== false && deps.killLegacy()) {
-    try {
-      const pid = deps.readDaemonPid();
-      let keepFiles = false;
-      if (pid !== null && deps.isAlive(pid)) {
-        const { selfPid, parentPid } = deps.protectedPids();
-        if (isProtectedPid(pid, selfPid, parentPid)) {
-          warnings.push(`Refusing to kill agent-device daemon PID ${pid} \u2014 it is our own process/parent.`);
-          keepFiles = true;
-        } else {
-          try {
-            deps.kill(pid, "SIGTERM");
-            await deps.delay(SIGKILL_GRACE_MS);
-            if (deps.isAlive(pid))
-              deps.kill(pid, "SIGKILL");
-            killedDaemonPids.push(pid);
-          } catch (err) {
-            warnings.push(`kill daemon ${pid} failed: ${msg(err)}`);
-            keepFiles = true;
-          }
-        }
-      }
-      if (!keepFiles) {
-        for (const f of DAEMON_FILES) {
-          if (!deps.fileExists(f))
-            continue;
-          try {
-            deps.removeFile(f);
-            removedFiles.push(f);
-          } catch (err) {
-            warnings.push(`rm ${f} failed: ${msg(err)}`);
-          }
-        }
-      }
-    } catch (err) {
-      warnings.push(`legacy daemon cleanup failed: ${msg(err)}`);
-    }
-  }
-  timings.legacyDaemon = deps.now() - tLegacy;
-  return {
-    deviceId,
-    stoppedOwnRunner,
-    forceStoppedPackages,
-    killedDaemonPids,
-    removedFiles,
-    warnings,
-    meta: { timings_ms: timings }
-  };
-}
-function msg(err) {
-  return err instanceof Error ? err.message : String(err);
-}
-var execFile2, DAEMON_JSON, DAEMON_LOCK, DAEMON_FILES, SIGKILL_GRACE_MS, ADB_TIMEOUT_MS, OWNED_PACKAGES, ExactAndroidDeviceRequiredError;
-var init_release_android_slot = __esm({
-  "packages/rn-dev-agent-core/dist/runners/release-android-slot.js"() {
+var init_cleanup_identity = __esm({
+  "packages/rn-dev-agent-core/dist/session/cleanup-identity.js"() {
     "use strict";
-    init_rn_android_runner_client();
-    init_agent_device_wrapper();
-    execFile2 = promisify2(execFileCb2);
-    DAEMON_JSON = join9(homedir4(), ".agent-device", "daemon.json");
-    DAEMON_LOCK = join9(homedir4(), ".agent-device", "daemon.lock");
-    DAEMON_FILES = [DAEMON_JSON, DAEMON_LOCK];
-    SIGKILL_GRACE_MS = 500;
-    ADB_TIMEOUT_MS = 5e3;
-    OWNED_PACKAGES = [
-      "dev.lykhoyda.rndevagent.androidrunner.test",
-      "dev.lykhoyda.rndevagent.androidrunner"
-    ];
-    ExactAndroidDeviceRequiredError = class extends Error {
-      code = "EXACT_ANDROID_DEVICE_REQUIRED";
-      constructor(cause) {
-        super("Refusing to release the Android interaction slot without an exact serial. When multiple adb targets are attached, open or bind a session to the intended device, pass deviceId, or set ANDROID_SERIAL, then retry. No device was mutated.", cause === void 0 ? void 0 : { cause });
-        this.name = "ExactAndroidDeviceRequiredError";
-      }
-    };
   }
 });
 
-// packages/rn-dev-agent-core/dist/runners/rn-android-runner-client.js
-var rn_android_runner_client_exports = {};
-__export(rn_android_runner_client_exports, {
-  AndroidArtifactStaleError: () => AndroidArtifactStaleError,
-  AndroidAuthorityStaleError: () => AndroidAuthorityStaleError,
-  AndroidCommandsStaleError: () => AndroidCommandsStaleError,
-  AndroidFeaturesStaleError: () => AndroidFeaturesStaleError,
-  AndroidRunnerCleanupUnconfirmedError: () => AndroidRunnerCleanupUnconfirmedError,
-  _androidRunnerApkPathsForTest: () => _androidRunnerApkPathsForTest,
-  _resetCapabilitiesForTest: () => _resetCapabilitiesForTest2,
-  _setAndroidRunnerStateForTest: () => _setAndroidRunnerStateForTest,
-  _setFetchForTest: () => _setFetchForTest2,
-  acquireAndroidRunnerRebuildLock: () => acquireAndroidRunnerRebuildLock,
-  adoptPersistedAndroidState: () => adoptPersistedAndroidState,
-  androidHealthMatchesAuthority: () => androidHealthMatchesAuthority,
-  androidIsWindowUpdatingProbe: () => androidIsWindowUpdatingProbe,
-  androidRetryCleanupContext: () => androidRetryCleanupContext,
-  androidRunnerApksExist: () => androidRunnerApksExist,
-  androidSnapshotNodesViaProbe: () => androidSnapshotNodesViaProbe,
-  androidStatePath: () => androidStatePath,
-  beginAndroidRunnerRebuildCleanup: () => beginAndroidRunnerRebuildCleanup,
-  buildAdbForwardArgs: () => buildAdbForwardArgs,
-  buildAdbForwardRemoveArgs: () => buildAdbForwardRemoveArgs,
-  buildAdbInstallArgs: () => buildAdbInstallArgs,
-  buildGradleAssembleArgs: () => buildGradleAssembleArgs,
-  buildInstrumentAuthorityArgs: () => buildInstrumentAuthorityArgs,
-  buildInstrumentPortArgs: () => buildInstrumentPortArgs,
-  buildInstrumentVersionArgs: () => buildInstrumentVersionArgs,
-  classifyAndroidHealth: () => classifyAndroidHealth,
-  classifyAndroidRunnerCleanupResources: () => classifyAndroidRunnerCleanupResources,
-  completeAndroidRunnerRebuildLock: () => completeAndroidRunnerRebuildLock,
-  consumePendingAndroidUpgradeNote: () => consumePendingAndroidUpgradeNote,
-  getAndroidRunnerCapabilities: () => getAndroidRunnerCapabilities,
-  getAndroidRunnerHostPort: () => getAndroidRunnerHostPort,
-  getAndroidRunnerState: () => getAndroidRunnerState,
-  heartbeatAndroidRunnerRebuildLock: () => heartbeatAndroidRunnerRebuildLock,
-  invalidateAndroidRunnerApks: () => invalidateAndroidRunnerApks,
-  isAndroidConnectionFailure: () => isAndroidConnectionFailure,
-  isAndroidRunnerAvailable: () => isAndroidRunnerAvailable,
-  isInstrumentationRegistered: () => isInstrumentationRegistered,
-  markAndroidRunnerRebuildCleanupUnverified: () => markAndroidRunnerRebuildCleanupUnverified,
-  parseAdbDevicesSerials: () => parseAdbDevicesSerials,
-  parseLegacyAndroidState: () => parseLegacyAndroidState,
-  parsePersistedAndroidState: () => parsePersistedAndroidState,
-  probeAndroidRunnerHealthInfo: () => probeAndroidRunnerHealthInfo,
-  reapActiveAndroidRunner: () => reapActiveAndroidRunner,
-  reapMismatchedAndroidRunner: () => reapMismatchedAndroidRunner,
-  releaseAndroidRunnerRebuildLock: () => releaseAndroidRunnerRebuildLock,
-  resolveAndroidInstallAction: () => resolveAndroidInstallAction,
-  resolveAndroidSerial: () => resolveAndroidSerial,
-  runAndroid: () => runAndroid,
-  runBoundedAndroidRunnerRebuild: () => runBoundedAndroidRunnerRebuild,
-  shouldReapAndroidRunnerBeforeStart: () => shouldReapAndroidRunnerBeforeStart,
-  shouldRecoverAndroidAccessibility: () => shouldRecoverAndroidAccessibility,
-  shouldReuseAndroidRunner: () => shouldReuseAndroidRunner,
-  startAndroidRunner: () => startAndroidRunner,
-  stopAndroidRunner: () => stopAndroidRunner,
-  waitForAndroidRunnerHealth: () => waitForAndroidRunnerHealth
-});
-import { spawn as spawn2, execFile as execFile3 } from "node:child_process";
-import { promisify as promisify3 } from "node:util";
-import { existsSync as existsSync9, rmSync as rmSync3, writeFileSync as writeFileSync5 } from "node:fs";
-import { tmpdir as tmpdir3 } from "node:os";
-import { randomBytes as randomBytes3, randomUUID as randomUUID3 } from "node:crypto";
-import { join as join10 } from "node:path";
-function getAndroidRunnerState() {
-  return runnerState2;
-}
-function _setFetchForTest2(fn) {
-  fetchImpl2 = fn;
-}
-function _setAndroidRunnerStateForTest(state) {
-  testAuthorityState = state !== null;
-  runnerState2 = state ? {
-    ...state,
-    instanceId: state.instanceId ?? "test-runner-instance",
-    sessionId: state.sessionId ?? "test-session",
-    claimEpoch: state.claimEpoch ?? 1,
-    capability: state.capability ?? "test-capability".repeat(3)
-  } : null;
-}
-function androidStatePath(serial) {
-  return runnerStatePath(`android-${serial}`);
-}
-function defaultProcessAlive2(pid) {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-function parsePersistedAndroidState(raw, pidAlive = defaultProcessAlive2) {
-  if (!raw || typeof raw !== "object")
-    return null;
-  const s = raw;
-  if (s.schemaVersion !== 1)
-    return null;
-  if (typeof s.hostPort !== "number" || typeof s.devicePort !== "number")
-    return null;
-  if (typeof s.pid !== "number")
-    return null;
-  if (!pidAlive(s.pid))
-    return null;
-  return s;
-}
-function parseLegacyAndroidState(raw, pidAlive = defaultProcessAlive2) {
-  if (!raw || typeof raw !== "object")
-    return null;
-  const s = raw;
-  if (typeof s.hostPort !== "number" || typeof s.devicePort !== "number")
-    return null;
-  if (typeof s.pid !== "number")
-    return null;
-  if (!pidAlive(s.pid))
-    return null;
-  return {
-    schemaVersion: 1,
-    hostPort: s.hostPort,
-    devicePort: s.devicePort,
-    pid: s.pid,
-    ...typeof s.deviceId === "string" ? { deviceId: s.deviceId } : {},
-    ...typeof s.bundleId === "string" ? { bundleId: s.bundleId } : {},
-    startedAt: "",
-    protocolVersion: 0
-  };
-}
-function adoptPersistedAndroidState(serial) {
-  if (runnerState2)
-    return;
-  if (serial) {
-    const path = androidStatePath(serial);
-    const raw = readJsonStateFile(path);
-    if (raw !== null) {
-      const parsed = parsePersistedAndroidState(raw);
-      if (!parsed) {
-        deleteStateFile(path);
-        return;
-      }
-      runnerState2 = parsed;
-      return;
-    }
-  }
-  const legacy = readLegacyTmpState("android");
-  if (legacy === null)
-    return;
-  const parsedLegacy = parseLegacyAndroidState(legacy);
-  if (!parsedLegacy) {
-    cleanupLegacyTmpState();
-    return;
-  }
-  if (!serial || !parsedLegacy.deviceId || parsedLegacy.deviceId === serial) {
-    runnerState2 = parsedLegacy;
-  }
-}
-function clearAndroidStateFile() {
-  const path = runnerState2?.deviceId ? androidStatePath(runnerState2.deviceId) : null;
-  runnerState2 = null;
-  runnerProcess2 = null;
-  if (path)
-    deleteStateFile(path);
-}
-function parseAdbDevicesSerials(stdout) {
-  return stdout.split("\n").slice(1).map((l) => l.trim()).map((l) => /^(\S+)\s+device\b/.exec(l)).filter((m) => m !== null).map((m) => m[1]);
-}
-async function resolveAndroidSerial(explicit) {
-  if (explicit)
-    return explicit;
-  if (process.env.ANDROID_SERIAL)
-    return process.env.ANDROID_SERIAL;
-  try {
-    const { stdout } = await execFileAsync("adb", ["devices"]);
-    const serials = parseAdbDevicesSerials(stdout);
-    return serials.length === 1 ? serials[0] : void 0;
-  } catch {
-    return void 0;
-  }
-}
-function adbSerialArgs(deviceId) {
-  if (deviceId)
-    return ["-s", deviceId];
-  if (process.env.ANDROID_SERIAL)
-    return ["-s", process.env.ANDROID_SERIAL];
-  return [];
-}
-function buildAdbForwardArgs(deviceId, hostPort, devicePort) {
-  return [...adbSerialArgs(deviceId), "forward", `tcp:${hostPort}`, `tcp:${devicePort}`];
-}
-function buildAdbForwardRemoveArgs(deviceId, hostPort) {
-  return [...adbSerialArgs(deviceId), "forward", "--remove", `tcp:${hostPort}`];
-}
-function buildInstrumentPortArgs(devicePort) {
-  return ["-e", "RN_ANDROID_RUNNER_PORT", String(devicePort)];
-}
-function buildInstrumentVersionArgs(pluginVersion) {
-  return pluginVersion ? ["-e", "RN_PLUGIN_VERSION", pluginVersion] : [];
-}
-function androidRunnerAuthority(deviceId, appId) {
-  const sessionId = (testAuthorityState ? runnerState2?.sessionId : void 0) ?? process.env.RN_DEV_AGENT_SESSION_ID;
-  const claimEpoch = (testAuthorityState ? runnerState2?.claimEpoch : void 0) ?? Number(process.env.RN_DEV_AGENT_CLAIM_EPOCH);
-  if (!sessionId || !Number.isSafeInteger(claimEpoch) || claimEpoch < 1) {
-    throw new Error("SESSION_AUTHORITY_REQUIRED: native runner launch requires a fenced rn-dev-agent session");
-  }
-  return {
-    instanceId: randomUUID3(),
-    sessionId,
-    claimEpoch,
-    capability: randomBytes3(32).toString("base64url"),
-    deviceId,
-    appId
-  };
-}
-function buildInstrumentAuthorityArgs(authority) {
-  return Object.entries({
-    RN_RUNNER_INSTANCE_ID: authority.instanceId,
-    RN_RUNNER_SESSION_ID: authority.sessionId,
-    RN_RUNNER_CLAIM_EPOCH: String(authority.claimEpoch),
-    RN_RUNNER_CAPABILITY: authority.capability,
-    RN_RUNNER_DEVICE_ID: authority.deviceId,
-    RN_RUNNER_APP_ID: authority.appId
-  }).flatMap(([key, value]) => ["-e", key, value]);
-}
-function buildAdbInstallArgs(deviceId, apkPath) {
-  return [...adbSerialArgs(deviceId), "install", "-r", apkPath];
-}
-function buildGradleAssembleArgs() {
-  return [":app:assembleDebug", ":app:assembleDebugAndroidTest"];
-}
-function isInstrumentationRegistered(pmListStdout, instrumentation) {
-  const escaped = instrumentation.replace(/[.$*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(`(^|:)${escaped}(\\s|$)`, "m").test(pmListStdout);
-}
-function resolveAndroidInstallAction(opts) {
-  if (opts.instrumentationRegistered)
-    return "reuse";
-  if (opts.apksExist)
-    return "install";
-  return "build-then-install";
-}
-async function ensureAndroidRunnerInstalled(deviceId, opts = {}) {
-  opts.signal?.throwIfAborted();
-  try {
-    const { stdout } = await execFileAsync("adb", [...adbSerialArgs(deviceId), "get-state"], {
-      timeout: 5e3,
-      signal: opts.signal
-    });
-    if (stdout.trim() !== "device")
-      throw new Error(`adb state is "${stdout.trim()}"`);
-  } catch (err) {
-    opts.signal?.throwIfAborted();
-    throw new Error(`rn-android-runner: target device not online (adb get-state) \u2014 boot the emulator / connect the device. ${err instanceof Error ? err.message : String(err)}`);
-  }
-  let pmOut = "";
-  try {
-    pmOut = (await execFileAsync("adb", [...adbSerialArgs(deviceId), "shell", "pm", "list", "instrumentation"], {
-      signal: opts.signal
-    })).stdout;
-  } catch {
-    opts.signal?.throwIfAborted();
-  }
-  const artifacts = await resolveAndroidRunnerArtifacts(getPluginVersion(), { appApk: APK_APP, testApk: APK_TEST }, void 0, opts.forceLocalBuild);
-  opts.signal?.throwIfAborted();
-  const provenance = artifactProvenanceToState(artifacts.provenance);
-  if (artifacts.note)
-    pendingUpgradeNote = artifacts.note;
-  const action = resolveAndroidInstallAction({
-    instrumentationRegistered: !opts.forceReinstall && isInstrumentationRegistered(pmOut, INSTRUMENTATION),
-    apksExist: existsSync9(artifacts.appApk) && existsSync9(artifacts.testApk)
-  });
-  if (action === "reuse")
-    return provenance;
-  if (action === "build-then-install") {
-    try {
-      await execFileAsync(GRADLEW, buildGradleAssembleArgs(), {
-        cwd: RN_ANDROID_RUNNER_DIR,
-        timeout: GRADLE_BUILD_TIMEOUT_MS,
-        maxBuffer: 10 * 1024 * 1024,
-        signal: opts.signal
-      });
-    } catch (err) {
-      opts.signal?.throwIfAborted();
-      throw new Error(`rn-android-runner cold build failed (gradlew assembleDebug assembleDebugAndroidTest in ${RN_ANDROID_RUNNER_DIR}). Ensure the Android SDK + a JDK are installed and on PATH. ${err instanceof Error ? err.message : String(err)}`);
-    }
-  }
-  try {
-    await execFileAsync("adb", buildAdbInstallArgs(deviceId, artifacts.appApk), {
-      timeout: ADB_INSTALL_TIMEOUT_MS,
-      signal: opts.signal
-    });
-    opts.signal?.throwIfAborted();
-    await execFileAsync("adb", buildAdbInstallArgs(deviceId, artifacts.testApk), {
-      timeout: ADB_INSTALL_TIMEOUT_MS,
-      signal: opts.signal
-    });
-  } catch (err) {
-    opts.signal?.throwIfAborted();
-    throw new Error(`rn-android-runner APK install failed (adb install -r). Is the emulator/device online? ${err instanceof Error ? err.message : String(err)}`);
-  }
-  return provenance;
-}
-function isAndroidRunnerAvailable() {
-  if (!runnerState2)
-    return false;
-  try {
-    process.kill(runnerState2.pid, 0);
-    return true;
-  } catch {
-    clearAndroidStateFile();
-    return false;
-  }
-}
-function shouldReuseAndroidRunner(state, deviceId) {
-  if (state === null)
-    return false;
-  const sessionId = (testAuthorityState ? state.sessionId : void 0) ?? process.env.RN_DEV_AGENT_SESSION_ID;
-  const claimEpoch = (testAuthorityState ? state.claimEpoch : void 0) ?? Number(process.env.RN_DEV_AGENT_CLAIM_EPOCH);
-  if (!sessionId || !Number.isSafeInteger(claimEpoch) || state.sessionId !== sessionId || state.claimEpoch !== claimEpoch || typeof state.capability !== "string" || state.capability.length < 32) {
-    return false;
-  }
-  return typeof deviceId === "string" && state.deviceId === deviceId;
-}
-function shouldReapAndroidRunnerBeforeStart(state, deviceId, isAvailable) {
-  return isAvailable && !shouldReuseAndroidRunner(state, deviceId);
-}
-async function waitForAndroidRunnerHealth(port, opts = {}) {
-  const timeoutMs = opts.timeoutMs ?? READY_TIMEOUT_MS2;
-  const intervalMs = opts.intervalMs ?? HEALTH_POLL_INTERVAL_MS;
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), HEALTH_PROBE_TIMEOUT_MS);
-    try {
-      const capability = opts.capability ?? (runnerState2?.hostPort === port ? runnerState2.capability : void 0);
-      const resp = await fetchImpl2(`http://127.0.0.1:${port}/health`, {
-        signal: controller.signal,
-        headers: capability ? { authorization: `Bearer ${capability}` } : {}
-      });
-      if (resp.ok) {
-        const body = await resp.json();
-        if (body?.ok === true)
-          return true;
-      }
-    } catch {
-    } finally {
-      clearTimeout(timer);
-    }
-    await new Promise((r) => setTimeout(r, intervalMs));
-  }
-  return false;
-}
-function androidHealthMatchesAuthority(info, expected) {
-  return info.instanceId === expected.instanceId && info.sessionId === expected.sessionId && info.claimEpoch === expected.claimEpoch && info.deviceId === expected.deviceId && info.appId === expected.appId;
-}
-function getAndroidRunnerCapabilities() {
-  return lastKnownCapabilities2;
-}
-function _resetCapabilitiesForTest2() {
-  lastKnownCapabilities2 = [];
-}
-async function probeAndroidRunnerHealthInfo(port, capabilityOverride) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), HEALTH_PROBE_TIMEOUT_MS);
-  try {
-    const capability = capabilityOverride ?? (runnerState2?.hostPort === port ? runnerState2.capability : void 0);
-    const resp = await fetchImpl2(`http://127.0.0.1:${port}/health`, {
-      signal: controller.signal,
-      headers: capability ? { authorization: `Bearer ${capability}` } : {}
-    });
-    if (!resp.ok)
-      return { reachable: false };
-    const body = await resp.json();
-    const capabilities = Array.isArray(body.capabilities) ? body.capabilities.filter((c) => typeof c === "string") : void 0;
-    if (body.ok === true) {
-      lastKnownCapabilities2 = capabilities ?? [];
-    } else if (runnerState2?.hostPort === port) {
-      lastKnownCapabilities2 = [];
-    }
-    const testIdentity = testAuthorityState && runnerState2?.hostPort === port ? runnerState2 : null;
-    return {
-      reachable: true,
-      ok: body.ok === true,
-      ...typeof body.protocolVersion === "number" ? { protocolVersion: body.protocolVersion } : {},
-      ...typeof body.runnerVersion === "string" ? { runnerVersion: body.runnerVersion } : {},
-      ...capabilities !== void 0 ? { capabilities } : {},
-      ...Array.isArray(body.commands) ? { commands: body.commands.filter((c) => typeof c === "string") } : {},
-      ...typeof body.instanceId === "string" ? { instanceId: body.instanceId } : testIdentity?.instanceId ? { instanceId: testIdentity.instanceId } : {},
-      ...typeof body.sessionId === "string" ? { sessionId: body.sessionId } : testIdentity?.sessionId ? { sessionId: testIdentity.sessionId } : {},
-      ...typeof body.claimEpoch === "number" ? { claimEpoch: body.claimEpoch } : typeof testIdentity?.claimEpoch === "number" ? { claimEpoch: testIdentity.claimEpoch } : {},
-      ...typeof body.deviceId === "string" ? { deviceId: body.deviceId } : testIdentity?.deviceId ? { deviceId: testIdentity.deviceId } : {},
-      ...typeof body.appId === "string" ? { appId: body.appId } : testIdentity?.bundleId ? { appId: testIdentity.bundleId } : {}
-    };
-  } catch {
-    if (runnerState2?.hostPort === port)
-      lastKnownCapabilities2 = [];
-    return { reachable: false };
-  } finally {
-    clearTimeout(timer);
-  }
-}
-function consumePendingAndroidUpgradeNote() {
-  const note = pendingUpgradeNote;
-  pendingUpgradeNote = void 0;
-  return note;
-}
-function classifyAndroidRunnerCleanupResources(expected, forwards, instrumentation) {
-  const forwardLine = forwards.split("\n").filter((line) => line.startsWith(`${expected.deviceId} `)).find((line) => {
-    if (expected.hostPort !== void 0 && line.includes(`tcp:${expected.hostPort}`))
-      return true;
-    return line.includes(`tcp:${expected.devicePort ?? DEFAULT_PORT}`);
-  });
-  if (forwardLine)
-    return { predicate: "forward", evidence: forwardLine.trim() };
-  const instrumentationLines = instrumentation.split("\n");
-  const dumpHeaderPresent = instrumentationLines.some((line) => /ACTIVITY MANAGER .*INSTRUMENTATION/i.test(line));
-  if (!dumpHeaderPresent) {
-    return { predicate: "instrumentation", evidence: "unparseable instrumentation dump" };
-  }
-  const activeInstrumentation = instrumentationLines.find((line) => /(?:ActiveInstrumentation\{|ComponentInfo\{)/.test(line) && /dev\.lykhoyda\.rndevagent\.androidrunner\.test\//.test(line));
-  return activeInstrumentation ? { predicate: "instrumentation", evidence: activeInstrumentation.trim() } : null;
-}
-async function reapMismatchedAndroidRunner(state, release2, verify, signal, verification = {}) {
-  signal?.throwIfAborted();
-  const deviceId = state?.deviceId;
-  if (!deviceId) {
-    throw new Error("RUNNER_CLEANUP_UNCONFIRMED: stale Android runner has no recorded device identity");
-  }
-  const releaseSlot = release2 ?? (async (opts) => {
-    const { releaseAndroidInteractionSlot: releaseAndroidInteractionSlot2 } = await Promise.resolve().then(() => (init_release_android_slot(), release_android_slot_exports));
-    return releaseAndroidInteractionSlot2({ ...opts, signal });
-  });
-  const receipt2 = await releaseSlot({ deviceId, includeLegacy: false });
-  signal?.throwIfAborted();
-  const requiredPackages = [
-    "dev.lykhoyda.rndevagent.androidrunner.test",
-    "dev.lykhoyda.rndevagent.androidrunner"
-  ];
-  const missingPackages = requiredPackages.filter((pkg) => !receipt2.forceStoppedPackages.includes(pkg));
-  if (!receipt2.stoppedOwnRunner || missingPackages.length > 0) {
-    throw new Error(`RUNNER_CLEANUP_UNCONFIRMED: stale Android runner cleanup failed for ${deviceId}`);
-  }
-  if (state?.hostPort !== void 0) {
-    try {
-      await execFileAsync("adb", buildAdbForwardRemoveArgs(deviceId, state.hostPort), {
-        timeout: ADB_CLEANUP_TIMEOUT_MS,
-        signal
-      });
-    } catch {
-      signal?.throwIfAborted();
-    }
-  }
-  const verifyReleased = verify ?? (release2 ? async () => {
-  } : async (expected2) => {
-    const forwards = String((await execFileAsync("adb", ["forward", "--list"], {
-      timeout: ADB_CLEANUP_TIMEOUT_MS,
-      signal
-    })).stdout);
-    const instrumentation = String((await execFileAsync("adb", ["-s", expected2.deviceId, "shell", "dumpsys", "activity", "instrumentation"], {
-      timeout: ADB_CLEANUP_TIMEOUT_MS,
-      signal
-    })).stdout);
-    const remaining = classifyAndroidRunnerCleanupResources(expected2, forwards, instrumentation);
-    if (remaining) {
-      throw new AndroidRunnerCleanupUnconfirmedError(remaining.predicate, remaining.evidence, expected2.deviceId);
-    }
-  });
-  const expected = {
-    deviceId,
-    ...state?.hostPort !== void 0 ? { hostPort: state.hostPort } : {},
-    ...state?.devicePort !== void 0 ? { devicePort: state.devicePort } : {}
-  };
-  const attempts3 = Math.max(1, verification.attempts ?? ANDROID_CLEANUP_VERIFY_ATTEMPTS);
-  const intervalMs = Math.max(0, verification.intervalMs ?? ANDROID_CLEANUP_VERIFY_INTERVAL_MS);
-  const delay = verification.delay ?? ((ms, waitSignal) => new Promise((resolve19, reject) => {
-    if (waitSignal?.aborted) {
-      reject(waitSignal.reason);
-      return;
-    }
-    const timer = setTimeout(done, ms);
-    const aborted2 = () => done(waitSignal?.reason ?? new Error("Android cleanup aborted"));
-    function done(error2) {
-      clearTimeout(timer);
-      waitSignal?.removeEventListener("abort", aborted2);
-      if (error2 !== void 0)
-        reject(error2);
-      else
-        resolve19();
-    }
-    waitSignal?.addEventListener("abort", aborted2, { once: true });
-  }));
-  let verificationError;
-  for (let attempt = 0; attempt < attempts3; attempt += 1) {
-    signal?.throwIfAborted();
-    try {
-      await verifyReleased(expected, signal);
-      verificationError = void 0;
-      break;
-    } catch (error2) {
-      signal?.throwIfAborted();
-      verificationError = error2;
-    }
-    if (attempt + 1 < attempts3)
-      await delay(intervalMs, signal);
-  }
-  if (verificationError !== void 0)
-    throw verificationError;
-  signal?.throwIfAborted();
-}
-async function reapActiveAndroidRunner(deviceId) {
-  adoptPersistedAndroidState(deviceId);
-  await reapMismatchedAndroidRunner(runnerState2 ?? (deviceId ? { deviceId } : null));
-}
-function classifyAndroidHealth(info) {
-  return classifyRunnerCompatibility({
-    ...info.protocolVersion !== void 0 ? { protocolVersion: info.protocolVersion } : {},
-    ...info.runnerVersion !== void 0 ? { runnerVersion: info.runnerVersion } : {},
-    ...info.commands !== void 0 ? { commands: info.commands } : {},
-    ...info.capabilities !== void 0 ? { capabilities: info.capabilities } : {}
-  }, getPluginVersion(), REQUIRED_ANDROID_COMMANDS, REQUIRED_ANDROID_FEATURES);
-}
-function initializeAndroidRunnerRebuildState(databasePath) {
-  const store = openAuthorityStore(databasePath);
-  try {
-    store.database.exec(`
-      CREATE TABLE IF NOT EXISTS android_runner_rebuild_attempt (
-        lock_name TEXT PRIMARY KEY,
-        plugin_version TEXT NOT NULL,
-        status TEXT NOT NULL CHECK(status IN ('in_progress', 'completed', 'failed')),
-        owner_nonce TEXT,
-        lease_ms INTEGER NOT NULL,
-        cleanup_unverified INTEGER NOT NULL DEFAULT 0
-      )
-    `);
-    const columns = store.database.prepare(`PRAGMA table_info(android_runner_rebuild_attempt)`).all();
-    if (!columns.some((column) => column.name === "cleanup_unverified")) {
-      store.database.exec(`ALTER TABLE android_runner_rebuild_attempt
-         ADD COLUMN cleanup_unverified INTEGER NOT NULL DEFAULT 0`);
-    }
-    return store;
-  } catch (cause) {
-    try {
-      store.close();
-    } catch {
-    }
-    throw cause;
-  }
-}
-function acquireAndroidRunnerRebuildLock(pluginVersion, now = Date.now(), ownerNonce = randomUUID3(), databasePath = ANDROID_REBUILD_LOCK_DATABASE) {
-  try {
-    const store = initializeAndroidRunnerRebuildState(databasePath);
-    try {
-      const claimed = store.database.prepare(`INSERT INTO android_runner_rebuild_attempt(
-             lock_name, plugin_version, status, owner_nonce, lease_ms, cleanup_unverified
-           )
-           VALUES ('artifact', ?, 'in_progress', ?, ?, 0)
-           ON CONFLICT(lock_name) DO UPDATE SET
-             plugin_version = excluded.plugin_version,
-             status = 'in_progress',
-             owner_nonce = excluded.owner_nonce,
-             lease_ms = excluded.lease_ms,
-             cleanup_unverified = 0
-           WHERE
-             (
-               android_runner_rebuild_attempt.status != 'in_progress'
-               AND android_runner_rebuild_attempt.plugin_version != excluded.plugin_version
-               AND android_runner_rebuild_attempt.cleanup_unverified = 0
-             )
-             OR (
-               android_runner_rebuild_attempt.status = 'in_progress'
-               AND android_runner_rebuild_attempt.lease_ms <= ?
-               AND android_runner_rebuild_attempt.cleanup_unverified = 0
-             )
-           RETURNING owner_nonce, plugin_version`).get(pluginVersion, ownerNonce, now, now - ANDROID_REBUILD_LOCK_STALE_MS);
-      store.secureFiles();
-      if (claimed?.owner_nonce === ownerNonce && claimed.plugin_version === pluginVersion) {
-        return { status: "acquired", lock: { ownerNonce, pluginVersion } };
-      }
-      const current = store.database.prepare(`SELECT plugin_version, status
-           FROM android_runner_rebuild_attempt
-           WHERE lock_name = 'artifact'`).get();
-      return current?.plugin_version === pluginVersion && current.status !== "in_progress" ? { status: "exhausted" } : { status: "busy" };
-    } finally {
-      store.close();
-    }
-  } catch {
-    return { status: "busy" };
-  }
-}
-function heartbeatAndroidRunnerRebuildLock(lock, now = Date.now(), databasePath = ANDROID_REBUILD_LOCK_DATABASE) {
-  try {
-    const store = initializeAndroidRunnerRebuildState(databasePath);
-    try {
-      const refreshed = store.database.prepare(`UPDATE android_runner_rebuild_attempt
-           SET lease_ms = ?
-           WHERE lock_name = 'artifact'
-             AND plugin_version = ?
-             AND status = 'in_progress'
-             AND owner_nonce = ?`).run(now, lock.pluginVersion, lock.ownerNonce);
-      store.secureFiles();
-      return refreshed.changes === 1;
-    } finally {
-      store.close();
-    }
-  } catch {
-    return false;
-  }
-}
-function finishAndroidRunnerRebuildLock(lock, status, cleanupUnverified, now = Date.now(), databasePath = ANDROID_REBUILD_LOCK_DATABASE) {
-  try {
-    const store = initializeAndroidRunnerRebuildState(databasePath);
-    try {
-      const finished = store.database.prepare(`UPDATE android_runner_rebuild_attempt
-           SET status = ?, owner_nonce = NULL, lease_ms = ?, cleanup_unverified = ?
-           WHERE lock_name = 'artifact'
-             AND plugin_version = ?
-             AND status = 'in_progress'
-             AND (cleanup_unverified = 0 OR ? = 1)
-             AND owner_nonce = ?`).run(status, now, cleanupUnverified ? 1 : 0, lock.pluginVersion, status === "failed" ? 1 : 0, lock.ownerNonce);
-      store.secureFiles();
-      return finished.changes === 1;
-    } finally {
-      store.close();
-    }
-  } catch {
-    return false;
-  }
-}
-function completeAndroidRunnerRebuildLock(lock, now = Date.now(), databasePath = ANDROID_REBUILD_LOCK_DATABASE) {
-  return finishAndroidRunnerRebuildLock(lock, "completed", false, now, databasePath);
-}
-function releaseAndroidRunnerRebuildLock(lock, now = Date.now(), databasePath = ANDROID_REBUILD_LOCK_DATABASE) {
-  return finishAndroidRunnerRebuildLock(lock, "failed", false, now, databasePath);
-}
-function beginAndroidRunnerRebuildCleanup(lock, now = Date.now(), databasePath = ANDROID_REBUILD_LOCK_DATABASE) {
-  try {
-    const store = initializeAndroidRunnerRebuildState(databasePath);
-    try {
-      const fenced = store.database.prepare(`UPDATE android_runner_rebuild_attempt
-           SET cleanup_unverified = 1, lease_ms = ?
-           WHERE lock_name = 'artifact'
-             AND plugin_version = ?
-             AND status = 'in_progress'
-             AND cleanup_unverified = 0
-             AND owner_nonce = ?`).run(now, lock.pluginVersion, lock.ownerNonce);
-      store.secureFiles();
-      return fenced.changes === 1;
-    } finally {
-      store.close();
-    }
-  } catch {
-    return false;
-  }
-}
-function markAndroidRunnerRebuildCleanupUnverified(lock, now = Date.now(), databasePath = ANDROID_REBUILD_LOCK_DATABASE) {
-  return finishAndroidRunnerRebuildLock(lock, "failed", true, now, databasePath);
-}
-function androidRebuildRefusal(error2, detail) {
-  if (error2 instanceof AndroidAuthorityStaleError) {
-    return new AndroidAuthorityStaleError(error2.deviceId, detail, error2.attempt);
-  }
-  const ErrorType = error2.surface === "features" ? AndroidFeaturesStaleError : AndroidCommandsStaleError;
-  return new ErrorType(error2.missing, error2.bundleId, error2.deviceId, detail, error2.attempt);
-}
-async function runBoundedAndroidRunnerRebuild(error2, rebuild, cleanup, dependencies = {}) {
-  const pluginVersion = getPluginVersion() ?? "unknown";
-  const acquire = dependencies.acquire ?? acquireAndroidRunnerRebuildLock;
-  const claim = acquire(pluginVersion);
-  if (claim.status !== "acquired") {
-    throw androidRebuildRefusal(error2, claim.status === "exhausted" ? `runner artifact was already rebuilt once for plugin v${pluginVersion}` : "another session is rebuilding the shared runner artifact");
-  }
-  const { lock } = claim;
-  const heartbeat = dependencies.heartbeat ?? heartbeatAndroidRunnerRebuildLock;
-  const complete = dependencies.complete ?? completeAndroidRunnerRebuildLock;
-  const beginCleanup = dependencies.beginCleanup ?? beginAndroidRunnerRebuildCleanup;
-  const release2 = dependencies.release ?? releaseAndroidRunnerRebuildLock;
-  const markCleanupUnverified = dependencies.markCleanupUnverified ?? markAndroidRunnerRebuildCleanupUnverified;
-  const controller = new AbortController();
-  let cleanupController;
-  let leaseAuthorityLost = false;
-  const authorityLost = () => {
-    if (leaseAuthorityLost)
-      return;
-    leaseAuthorityLost = true;
-    const refusal = androidRebuildRefusal(error2, "runner artifact rebuild authority was lost");
-    if (!controller.signal.aborted)
-      controller.abort(refusal);
-    if (cleanupController && !cleanupController.signal.aborted)
-      cleanupController.abort(refusal);
-  };
-  const refreshAuthority = () => {
-    try {
-      if (heartbeat(lock))
-        return true;
-    } catch {
-    }
-    authorityLost();
-    return false;
-  };
-  const heartbeatTimer2 = setInterval(() => {
-    try {
-      if (!heartbeat(lock))
-        authorityLost();
-    } catch {
-      authorityLost();
-    }
-  }, dependencies.heartbeatIntervalMs ?? ANDROID_REBUILD_HEARTBEAT_MS);
-  const transitionAttempts = Math.max(1, dependencies.completionAttempts ?? ANDROID_REBUILD_COMPLETION_ATTEMPTS);
-  const persistTransition = async (transition2) => {
-    for (let attempt = 0; attempt < transitionAttempts; attempt += 1) {
-      if (leaseAuthorityLost)
-        return false;
-      try {
-        if (transition2(lock))
-          return true;
-      } catch {
-      }
-      if (!refreshAuthority())
-        return false;
-      if (attempt + 1 < transitionAttempts) {
-        await new Promise((resolve19) => {
-          setTimeout(resolve19, dependencies.completionRetryIntervalMs ?? ANDROID_REBUILD_COMPLETION_RETRY_MS);
-        });
-      }
-    }
-    return false;
-  };
-  try {
-    const result = await rebuild(controller.signal);
-    controller.signal.throwIfAborted();
-    for (let attempt = 0; attempt < transitionAttempts; attempt += 1) {
-      controller.signal.throwIfAborted();
-      try {
-        if (complete(lock)) {
-          controller.signal.throwIfAborted();
-          clearInterval(heartbeatTimer2);
-          return result;
-        }
-      } catch {
-      }
-      if (attempt + 1 < transitionAttempts) {
-        await new Promise((resolve19) => {
-          setTimeout(resolve19, dependencies.completionRetryIntervalMs ?? ANDROID_REBUILD_COMPLETION_RETRY_MS);
-        });
-      }
-    }
-    if (!controller.signal.aborted) {
-      controller.abort(androidRebuildRefusal(error2, "runner artifact rebuild completion was not durable"));
-    }
-    controller.signal.throwIfAborted();
-    throw androidRebuildRefusal(error2, "runner artifact rebuild completion was not durable");
-  } catch (cause) {
-    if (leaseAuthorityLost) {
-      clearInterval(heartbeatTimer2);
-      throw controller.signal.reason;
-    }
-    if (!await persistTransition(beginCleanup)) {
-      clearInterval(heartbeatTimer2);
-      throw leaseAuthorityLost ? controller.signal.reason : androidRebuildRefusal(error2, "runner artifact cleanup fence was not durable");
-    }
-    cleanupController = new AbortController();
-    const cleanupTimer = setTimeout(() => cleanupController?.abort(androidRebuildRefusal(error2, "runner artifact cleanup exceeded its time limit")), dependencies.cleanupTimeoutMs ?? ANDROID_REBUILD_CLEANUP_TIMEOUT_MS);
-    let cleanupVerified = false;
-    try {
-      await cleanup(cleanupController.signal);
-      cleanupController.signal.throwIfAborted();
-      cleanupVerified = true;
-    } catch {
-    }
-    clearTimeout(cleanupTimer);
-    cleanupController = void 0;
-    const terminalPersisted = await persistTransition(cleanupVerified ? release2 : markCleanupUnverified);
-    clearInterval(heartbeatTimer2);
-    if (!terminalPersisted) {
-      throw leaseAuthorityLost ? controller.signal.reason : androidRebuildRefusal(error2, "runner artifact failure state was not durable");
-    }
-    if (!cleanupVerified) {
-      throw androidRebuildRefusal(error2, "runner artifact cleanup could not be verified");
-    }
-    throw controller.signal.aborted ? controller.signal.reason : cause;
-  }
-}
-function androidRetryCleanupContext(state, error2) {
-  return state ?? (error2.deviceId ? {
-    deviceId: error2.deviceId,
-    ...error2.attempt ? { hostPort: error2.attempt.hostPort, devicePort: error2.attempt.devicePort } : {}
-  } : null);
-}
-function androidRunnerApksExist() {
-  return RUNNER_APK_PATHS.every((p) => existsSync9(p));
-}
-function _androidRunnerApkPathsForTest() {
-  return RUNNER_APK_PATHS;
-}
-function invalidateAndroidRunnerApks(rm2 = (p) => rmSync3(p, { force: true })) {
-  for (const apk of RUNNER_APK_PATHS) {
-    try {
-      rm2(apk);
-    } catch {
-    }
-  }
-}
-async function startAndroidRunner(deviceId, bundleId, devicePort = DEFAULT_PORT, opts = {}) {
-  try {
-    return await startAndroidRunnerAttempt(deviceId, bundleId, devicePort, opts);
-  } catch (err) {
-    if (opts.allowArtifactRebuild && err instanceof AndroidAuthorityStaleError) {
-      const state = await runBoundedAndroidRunnerRebuild(err, async (signal) => {
-        await reapMismatchedAndroidRunner(androidRetryCleanupContext(runnerState2, err), void 0, void 0, signal);
-        signal.throwIfAborted();
-        invalidateAndroidRunnerApks();
-        return startAndroidRunnerAttempt(deviceId, bundleId, devicePort, {
-          _forceReinstall: true,
-          _forceLocalBuild: true,
-          _rebuildSignal: signal
-        });
-      }, async (signal) => {
-        await reapMismatchedAndroidRunner(androidRetryCleanupContext(runnerState2, err), void 0, void 0, signal);
-      });
-      pendingUpgradeNote = "runner artifact rebuilt (authority identity mismatch)";
-      return state;
-    }
-    if (opts.allowArtifactRebuild && err instanceof AndroidArtifactStaleError) {
-      const state = await runBoundedAndroidRunnerRebuild(err, async (signal) => {
-        await reapMismatchedAndroidRunner(androidRetryCleanupContext(runnerState2, err), void 0, void 0, signal);
-        signal.throwIfAborted();
-        invalidateAndroidRunnerApks();
-        return startAndroidRunnerAttempt(deviceId, bundleId, devicePort, {
-          _forceReinstall: true,
-          _forceLocalBuild: true,
-          _rebuildSignal: signal
-        });
-      }, async (signal) => {
-        await reapMismatchedAndroidRunner(androidRetryCleanupContext(runnerState2, err), void 0, void 0, signal);
-      });
-      pendingUpgradeNote = `runner artifact rebuilt (missing ${err.surface}: ${err.missing.join(", ") || "unknown"})`;
-      return state;
-    }
-    throw err;
-  }
-}
-async function startAndroidRunnerAttempt(deviceId, bundleId, devicePort = DEFAULT_PORT, opts = {}) {
-  opts._rebuildSignal?.throwIfAborted();
-  const serial = deviceId ?? (testAuthorityState ? runnerState2?.deviceId : void 0) ?? await resolveAndroidSerial();
-  if (!serial) {
-    throw new Error("DEVICE_AUTHORITY_MISMATCH: Android native runner requires an exact claimed device");
-  }
-  const authority = androidRunnerAuthority(serial, bundleId ?? "");
-  adoptPersistedAndroidState(serial);
-  let forceReinstall = opts._forceReinstall === true;
-  if (shouldReapAndroidRunnerBeforeStart(runnerState2, serial, isAndroidRunnerAvailable())) {
-    await reapMismatchedAndroidRunner(runnerState2);
-    forceReinstall = true;
-  }
-  if (isAndroidRunnerAvailable() && shouldReuseAndroidRunner(runnerState2, serial)) {
-    const reusableState = runnerState2;
-    const info = await probeAndroidRunnerHealthInfo(runnerState2.hostPort);
-    if (info.reachable && info.ok) {
-      if (!androidHealthMatchesAuthority(info, {
-        instanceId: runnerState2.instanceId,
-        sessionId: runnerState2.sessionId,
-        claimEpoch: runnerState2.claimEpoch,
-        deviceId: runnerState2.deviceId,
-        appId: runnerState2.bundleId
-      })) {
-        await reapMismatchedAndroidRunner(reusableState);
-        forceReinstall = true;
-      } else {
-        const compat = classifyAndroidHealth(info);
-        if (compat.compatible)
-          return runnerState2;
-        if (compat.reason === "missing-commands" || compat.reason === "missing-features") {
-          const ErrorType = compat.reason === "missing-features" ? AndroidFeaturesStaleError : AndroidCommandsStaleError;
-          throw new ErrorType(compat.missing ?? [], bundleId, reusableState.deviceId);
-        }
-        pendingUpgradeNote = "runner upgraded (protocol/version mismatch)";
-        forceReinstall = true;
-        await reapMismatchedAndroidRunner(reusableState);
-      }
-    } else {
-      await reapMismatchedAndroidRunner(reusableState);
-      forceReinstall = true;
-    }
-  }
-  opts._rebuildSignal?.throwIfAborted();
-  const provenance = await ensureAndroidRunnerInstalled(deviceId, {
-    forceReinstall,
-    forceLocalBuild: opts._forceLocalBuild === true,
-    signal: opts._rebuildSignal
-  });
-  let hostPort = await findFreePort(devicePort);
-  opts._rebuildSignal?.throwIfAborted();
-  try {
-    await execFileAsync("adb", buildAdbForwardArgs(deviceId, hostPort, devicePort), {
-      signal: opts._rebuildSignal
-    });
-  } catch {
-    opts._rebuildSignal?.throwIfAborted();
-    hostPort = await findFreePort(0);
-    await execFileAsync("adb", buildAdbForwardArgs(deviceId, hostPort, devicePort), {
-      signal: opts._rebuildSignal
-    });
-  }
-  return new Promise((resolve19, reject) => {
-    let resolved = false;
-    let forwardRemoval;
-    const removeForward = () => {
-      forwardRemoval ??= execFileAsync("adb", buildAdbForwardRemoveArgs(serial, hostPort)).then(() => void 0).catch(() => void 0);
-      return forwardRemoval;
-    };
-    const child = spawn2("adb", [
-      ...adbSerialArgs(deviceId),
-      "shell",
-      "am",
-      "instrument",
-      "-w",
-      "-r",
-      ...buildInstrumentPortArgs(devicePort),
-      ...buildInstrumentVersionArgs(getPluginVersion()),
-      ...buildInstrumentAuthorityArgs(authority),
-      "-e",
-      "class",
-      MAIN_LOOP_CLASS,
-      INSTRUMENTATION
-    ], {
-      stdio: ["ignore", "pipe", "pipe"],
-      signal: opts._rebuildSignal
-    });
-    runnerProcess2 = child;
-    const processBirth = child.pid === void 0 ? void 0 : readProcessBirth(child.pid)?.token;
-    const attempt = {
-      hostPort,
-      devicePort,
-      pid: child.pid,
-      ...processBirth ? { processBirth } : {}
-    };
-    let diag = "";
-    const capture = (chunk) => {
-      diag = (diag + chunk.toString("utf-8")).slice(-4e3);
-    };
-    child.stdout?.on("data", capture);
-    child.stderr?.on("data", capture);
-    const finishReady = () => {
-      if (resolved)
-        return;
-      if (opts._rebuildSignal?.aborted) {
-        resolved = true;
-        child.kill("SIGTERM");
-        reject(opts._rebuildSignal.reason);
-        return;
-      }
-      resolved = true;
-      const state = {
-        schemaVersion: 1,
-        hostPort,
-        devicePort,
-        pid: child.pid,
-        ...serial ? { deviceId: serial } : {},
-        ...bundleId ? { bundleId } : {},
-        startedAt: (/* @__PURE__ */ new Date()).toISOString(),
-        protocolVersion: RUNNER_PROTOCOL_VERSION,
-        ...getPluginVersion() !== null ? { runnerVersion: getPluginVersion() } : {},
-        provenance,
-        ...authority
-      };
-      const processBirth2 = readProcessBirth(child.pid);
-      if (!processBirth2) {
-        child.kill("SIGTERM");
-        reject(new Error("PROCESS_BIRTH_UNAVAILABLE: native runner process identity could not be proven"));
-        return;
-      }
-      state.processBirth = processBirth2.token;
-      runnerState2 = state;
-      if (serial) {
-        try {
-          writeJsonStateFileAtomic(androidStatePath(serial), state);
-        } catch {
-        }
-      }
-      cleanupLegacyTmpState();
-      resolve19(state);
-    };
-    child.on("error", (err) => {
-      void removeForward();
-      if (resolved)
-        return;
-      resolved = true;
-      reject(new Error(`Failed to spawn Android runner instrumentation: ${err.message}`));
-    });
-    child.on("exit", (code) => {
-      if (runnerProcess2 === child) {
-        clearAndroidStateFile();
-      }
-      void removeForward();
-      if (!resolved) {
-        resolved = true;
-        reject(new Error(`Android runner instrumentation exited before readiness (code ${code})${diag ? `
-${diag.trim()}` : ""}`));
-      }
-    });
-    void waitForAndroidRunnerHealth(hostPort, { capability: authority.capability }).then(async (healthy) => {
-      if (resolved)
-        return;
-      if (healthy) {
-        const info = await probeAndroidRunnerHealthInfo(hostPort, authority.capability);
-        if (!androidHealthMatchesAuthority(info, {
-          instanceId: authority.instanceId,
-          sessionId: authority.sessionId,
-          claimEpoch: authority.claimEpoch,
-          deviceId: authority.deviceId,
-          appId: authority.appId
-        })) {
-          resolved = true;
-          child.kill("SIGTERM");
-          await removeForward();
-          reject(new AndroidAuthorityStaleError(serial, void 0, attempt));
-          return;
-        }
-        const compat = classifyAndroidHealth(info);
-        if (!compat.compatible) {
-          resolved = true;
-          pendingUpgradeNote = void 0;
-          child.kill("SIGTERM");
-          await removeForward();
-          if (compat.reason === "missing-commands" || compat.reason === "missing-features") {
-            const ErrorType = compat.reason === "missing-features" ? AndroidFeaturesStaleError : AndroidCommandsStaleError;
-            reject(new ErrorType(compat.missing ?? [], bundleId, serial, void 0, attempt));
-            return;
-          }
-          reject(new Error(`RUNNER_PROTOCOL_MISMATCH: installed rn-android-runner speaks protocol ${info.protocolVersion ?? "none"} (bridge expects ${RUNNER_PROTOCOL_VERSION}). Rebuild + reinstall the runner APKs: cd ${RN_ANDROID_RUNNER_DIR} && ./gradlew :app:assembleDebug :app:assembleDebugAndroidTest, then adb install -r both APKs.`));
-          return;
-        }
-        finishReady();
-        return;
-      }
-      resolved = true;
-      child.kill("SIGTERM");
-      reject(new Error(`Android runner did not become ready within ${READY_TIMEOUT_MS2 / 1e3}s (no /health on port ${hostPort})${diag ? `
-${diag.trim()}` : ""}`));
-    });
-  });
-}
-async function stopAndroidRunner(deviceId, signal) {
-  signal?.throwIfAborted();
-  adoptPersistedAndroidState(deviceId ?? void 0);
-  const stoppedState = runnerState2;
-  runnerProcess2?.kill("SIGTERM");
-  clearAndroidStateFile();
-  if (typeof stoppedState?.hostPort === "number") {
-    const resolvedDeviceId = deviceId ?? stoppedState.deviceId;
-    try {
-      await execFileAsync("adb", buildAdbForwardRemoveArgs(resolvedDeviceId, stoppedState.hostPort), { timeout: ADB_CLEANUP_TIMEOUT_MS, signal });
-    } catch {
-    }
-  }
-}
-function commandTimeoutMs2(command) {
-  return command === "type" || command === "snapshot" || command === "screenshot" ? 35e3 : 1e4;
-}
-async function sendCommandOnce2(hostPort, body, timeoutMs) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  let resp;
-  try {
-    const capability = runnerState2?.hostPort === hostPort ? runnerState2.capability : void 0;
-    if (!capability) {
-      throw new Error("RUNNER_OWNERSHIP_MISMATCH: runner capability is unavailable");
-    }
-    resp = await fetchImpl2(`http://127.0.0.1:${hostPort}/command`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json; charset=UTF-8",
-        authorization: `Bearer ${capability}`
-      },
-      body: JSON.stringify(body),
-      signal: controller.signal
-    });
-  } catch (err) {
-    if (err?.name === "AbortError") {
-      throw new Error(`RUNNER_TIMEOUT: rn-android-runner did not respond to "${String(body.command)}" within ${timeoutMs}ms`);
-    }
-    throw err;
-  } finally {
-    clearTimeout(timer);
-  }
-  let parsed;
-  try {
-    parsed = await resp.json();
-  } catch {
-    throw new Error("rn-android-runner returned a non-JSON response body");
-  }
-  if (typeof parsed.v === "number" && (parsed.v < MIN_SUPPORTED_RUNNER_PROTOCOL || parsed.v > RUNNER_PROTOCOL_VERSION)) {
-    throw new Error(`RUNNER_PROTOCOL_MISMATCH: runner replied with wire protocol v${parsed.v}, bridge supports v${MIN_SUPPORTED_RUNNER_PROTOCOL}..${RUNNER_PROTOCOL_VERSION}`);
-  }
-  return parsed;
-}
-async function probeCommandStatus2(hostPort, commandId) {
-  try {
-    const resp = await sendCommandOnce2(hostPort, { command: "status", commandId }, STATUS_PROBE_TIMEOUT_MS2);
-    return parseStatusProbeReply(resp, commandId);
-  } catch {
-    return null;
-  }
-}
-async function postCommandWithRecovery2(body) {
-  const state = runnerState2;
-  if (!state)
-    throw new Error("rn-android-runner not started");
-  const commandId = generateCommandId();
-  const timeoutMs = commandTimeoutMs2(body.command);
-  try {
-    return { resp: await sendCommandOnce2(state.hostPort, { ...body, commandId }, timeoutMs) };
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    if (!isAmbiguousTransportFailure(message))
-      throw err;
-    const decision = decideRecovery(await probeCommandStatus2(state.hostPort, commandId), body.command);
-    if (decision.action === "return-recovered") {
-      return {
-        resp: decision.response,
-        recovery: { commandId, outcome: decision.outcome }
-      };
-    }
-    if (decision.action === "resend-once") {
-      const resent = await sendCommandOnce2(state.hostPort, { ...body, commandId: generateCommandId() }, timeoutMs);
-      return { resp: resent, recovery: { commandId, outcome: "resent" } };
-    }
-    throw err;
-  }
-}
-async function postCommand2(body) {
-  return (await postCommandWithRecovery2(body)).resp;
-}
-function getAndroidRunnerHostPort() {
-  return runnerState2?.hostPort ?? null;
-}
-async function androidIsWindowUpdatingProbe(timeoutMs, bundleId, pinnedHostPort) {
-  if (pinnedHostPort !== void 0 && runnerState2?.hostPort !== pinnedHostPort)
-    return null;
-  try {
-    const body = { command: "isWindowUpdating", timeoutMs };
-    if (bundleId)
-      body.appBundleId = bundleId;
-    const resp = await postCommand2(body);
-    const updating = resp.data?.updating;
-    return resp.ok && typeof updating === "boolean" ? updating : null;
-  } catch {
-    return null;
-  }
-}
-async function androidSnapshotNodesViaProbe(bundleId, pinnedHostPort) {
-  if (pinnedHostPort !== void 0 && runnerState2?.hostPort !== pinnedHostPort)
-    return null;
-  try {
-    const body = { command: "snapshot", interactiveOnly: true };
-    if (bundleId)
-      body.appBundleId = bundleId;
-    const resp = await postCommand2(body);
-    if (!resp.ok || !resp.data || typeof resp.data !== "object")
-      return null;
-    const data = resp.data;
-    if (!Array.isArray(data.nodes))
-      return null;
-    const flat = mapRunnerNodesToFlat2(data.nodes);
-    updateRefMapFromFlat(flat);
-    return flat;
-  } catch {
-    return null;
-  }
-}
-function mapRunnerNodesToFlat2(nodes) {
-  const out = [];
-  let synthCounter = 0;
-  for (const n of nodes) {
-    if (!n.rect)
-      continue;
-    const ref = `@e${n.index ?? synthCounter++}`;
-    const flat = { ref, type: n.type ?? "", rect: n.rect };
-    if (n.label !== void 0)
-      flat.label = n.label;
-    if (n.identifier !== void 0)
-      flat.identifier = n.identifier;
-    if (n.packageName !== void 0)
-      flat.packageName = n.packageName;
-    if (n.checked !== void 0)
-      flat.checked = n.checked;
-    if (n.enabled !== void 0)
-      flat.enabled = n.enabled;
-    if (n.hittable !== void 0)
-      flat.hittable = n.hittable;
-    if (n.secure !== void 0)
-      flat.secure = n.secure;
-    out.push(flat);
-  }
-  return out;
-}
-function shouldRecoverAndroidAccessibility(command, response) {
-  return command === "snapshot" && !response.ok && response.error?.code === "ACCESSIBILITY_UNAVAILABLE";
-}
-async function runAndroid(args) {
-  if (args._staleRef) {
-    return failResult(`Element at ref ${args._staleRef} no longer hittable - UI re-rendered since snapshot`, "STALE_REF", {
-      cachedMetadata: getCachedMetadata(args._staleRef),
-      reResolution: "self-heal-disabled",
-      candidates: [],
-      mutation: "none",
-      hint: "Call device_snapshot action=snapshot to refresh refs, then retry the action with the new ref."
-    });
-  }
-  const body = { command: args.command };
-  if (args.bundleId)
-    body.appBundleId = args.bundleId;
-  if (args.x !== void 0)
-    body.x = args.x;
-  if (args.y !== void 0)
-    body.y = args.y;
-  if (args.x1 !== void 0)
-    body.x1 = args.x1;
-  if (args.y1 !== void 0)
-    body.y1 = args.y1;
-  if (args.x2 !== void 0)
-    body.x2 = args.x2;
-  if (args.y2 !== void 0)
-    body.y2 = args.y2;
-  if (args.text !== void 0)
-    body.text = args.text;
-  if (args.exactIdentifier !== void 0)
-    body.exactIdentifier = args.exactIdentifier;
-  if (args.exactLabel !== void 0)
-    body.exactLabel = args.exactLabel;
-  if (args.exactType !== void 0)
-    body.exactType = args.exactType;
-  if (args.exact !== void 0)
-    body.exact = args.exact;
-  if (args.includeSystemUi !== void 0)
-    body.includeSystemUi = args.includeSystemUi;
-  if (args.durationMs !== void 0)
-    body.durationMs = args.durationMs;
-  if (args.timeoutMs !== void 0)
-    body.timeoutMs = args.timeoutMs;
-  if (args.scale !== void 0)
-    body.scale = args.scale;
-  if (args.interactiveOnly !== void 0)
-    body.interactiveOnly = args.interactiveOnly;
-  if (args.snapshotGeneration !== void 0)
-    body.snapshotGeneration = args.snapshotGeneration;
-  if (args.snapshotNodeIndex !== void 0)
-    body.snapshotNodeIndex = args.snapshotNodeIndex;
-  if (args.snapshotIdentifier !== void 0)
-    body.snapshotIdentifier = args.snapshotIdentifier;
-  if (args.snapshotElementType !== void 0)
-    body.snapshotElementType = args.snapshotElementType;
-  if (args.targetBounds !== void 0)
-    body.targetBounds = args.targetBounds;
-  if (args.focusX !== void 0)
-    body.focusX = args.focusX;
-  if (args.focusY !== void 0)
-    body.focusY = args.focusY;
-  if (args.focusWaitMs !== void 0)
-    body.focusWaitMs = args.focusWaitMs;
-  if (args.secureInput !== void 0)
-    body.secureInput = args.secureInput;
-  if (args.operationToken !== void 0)
-    body.operationToken = args.operationToken;
-  let resp;
-  let recovery;
-  try {
-    await startAndroidRunner(args.deviceId, args.bundleId);
-    ({ resp, recovery } = await postCommandWithRecovery2(withKeyboardGuard(body, args.command, process.env)));
-  } catch (err) {
-    const m = errMessage(err);
-    if (m.startsWith("RUNNER_PROTOCOL_MISMATCH")) {
-      return failResult(m, "RUNNER_PROTOCOL_MISMATCH", {
-        hint: "The installed runner APK predates this plugin version. Rebuild + reinstall (command in the error), then retry."
-      });
-    }
-    if (isAndroidConnectionFailure(m)) {
-      return failResult(`rn-android-runner is not reachable: ${m}`, "RN_ANDROID_RUNNER_DOWN", {
-        hint: "The runner could not start or bind its port (e.g. just restarted after a Maestro flow). Retry the command; if it persists, ensure the emulator is booted and the app is installed."
-      });
-    }
-    throw err;
-  }
-  let accessibilityRecovery;
-  if (shouldRecoverAndroidAccessibility(args.command, resp)) {
-    await stopAndroidRunner(args.deviceId);
-    await startAndroidRunner(args.deviceId, args.bundleId);
-    ({ resp, recovery } = await postCommandWithRecovery2(withKeyboardGuard(body, args.command, process.env)));
-    if (resp.ok)
-      accessibilityRecovery = "runner-restarted";
-  }
-  const recoveryMeta = {
-    ...recovery ? { transportRecovery: recovery } : {},
-    ...accessibilityRecovery ? { accessibilityRecovery } : {}
-  };
-  if (!resp.ok) {
-    const message = resp.error?.message ?? "Android runner returned !ok with no error";
-    const code = resp.error?.code;
-    if (args.command === "type" && args.exactIdentifier === void 0 && typeof message === "string" && (message.includes("Could not detect idle state") || message.includes("window-content-idle") || message.includes("Idle timeout exceeded"))) {
-      return failResult("rn-android-runner type hit the window-idle timeout after dispatching the mutation; the field value is unverified", "TYPE_IDLE_TIMEOUT", { mutation: "possible", runnerTimeoutShim: true, ...recoveryMeta });
-    }
-    const VALID_MUTATIONS = /* @__PURE__ */ new Set(["none", "observed", "possible"]);
-    const rawMutation = resp.error?.mutation;
-    const mutation = rawMutation !== void 0 && VALID_MUTATIONS.has(rawMutation) ? rawMutation : args.command === "type" || args.command === "fill" ? "possible" : void 0;
-    const reason = resp.error?.reason;
-    const failExtras = {
-      ...recovery ? { transportRecovery: recovery } : {},
-      ...mutation !== void 0 ? { mutation } : {},
-      ...reason !== void 0 ? { reason } : {}
-    };
-    if (code) {
-      return failResult(message, code, Object.keys(failExtras).length > 0 ? failExtras : void 0);
-    }
-    return Object.keys(failExtras).length > 0 ? failResult(message, failExtras) : failResult(message);
-  }
-  if (args.command === "tap") {
-    const data = resp.data;
-    if (data?.tapped !== true) {
-      const exactTarget = (args.exactIdentifier !== void 0 || args.exactLabel !== void 0) && args.exactType !== void 0;
-      if (exactTarget) {
-        return failResult("Android runner could not prove that the requested interaction was actuated.", "INTERACTION_NOT_ACTUATED", { mutation: "none", reason: "runner-rejected-tap", ...recoveryMeta });
-      }
-      return failResult("The Android coordinate tap did not complete, and part of the gesture may have reached the app.", "INTERACTION_EFFECT_UNVERIFIED", {
-        mutation: "possible",
-        reason: "coordinate-tap-incomplete",
-        attempts: 1,
-        ...recoveryMeta
-      });
-    }
-  }
-  if (args.command === "snapshot" && resp.data && typeof resp.data === "object") {
-    const data = resp.data;
-    if (Array.isArray(data.nodes)) {
-      const flat = mapRunnerNodesToFlat2(data.nodes);
-      const outcome = updateRefMapFromFlat(flat);
-      const snapshotVerdict = buildSnapshotVerdict("rn-android-runner", flat.length, outcome);
-      return okResult({ nodes: flat }, { meta: { snapshotVerdict, ...recoveryMeta } });
-    }
-  }
-  if (args.command === "screenshot") {
-    const data = resp.data;
-    if (!data?.pngBase64)
-      return failResult("Android runner screenshot response did not include pngBase64", "SCREENSHOT_FAILED", recovery ? { transportRecovery: recovery } : void 0);
-    const outPath = args.outPath ?? join10(tmpdir3(), `rn-android-screenshot-${Date.now()}.png`);
-    writeFileSync5(outPath, Buffer.from(data.pngBase64, "base64"));
-    return okResult({ path: outPath }, Object.keys(recoveryMeta).length ? { meta: recoveryMeta } : void 0);
-  }
-  return okResult(resp.data ?? {}, Object.keys(recoveryMeta).length ? { meta: recoveryMeta } : void 0);
-}
-function errMessage(err) {
-  return err instanceof Error ? err.message : String(err);
-}
-function isAndroidConnectionFailure(message) {
-  return /fetch failed|ECONNREFUSED|ECONNRESET|socket hang up|rn-android-runner not started|did not become ready|Android runner instrumentation exited before readiness|Failed to spawn Android runner instrumentation/i.test(message);
-}
-var execFileAsync, DEFAULT_PORT, READY_TIMEOUT_MS2, INSTRUMENTATION, MAIN_LOOP_CLASS, HEALTH_POLL_INTERVAL_MS, HEALTH_PROBE_TIMEOUT_MS, RN_ANDROID_RUNNER_DIR, GRADLEW, APK_APP, APK_TEST, ANDROID_REBUILD_ROOT, ANDROID_REBUILD_LOCK_DATABASE, ANDROID_REBUILD_LOCK_STALE_MS, ANDROID_REBUILD_HEARTBEAT_MS, ANDROID_REBUILD_COMPLETION_RETRY_MS, ANDROID_REBUILD_COMPLETION_ATTEMPTS, ANDROID_REBUILD_CLEANUP_TIMEOUT_MS, ADB_CLEANUP_TIMEOUT_MS, ANDROID_CLEANUP_VERIFY_ATTEMPTS, ANDROID_CLEANUP_VERIFY_INTERVAL_MS, GRADLE_BUILD_TIMEOUT_MS, ADB_INSTALL_TIMEOUT_MS, runnerProcess2, runnerState2, fetchImpl2, testAuthorityState, lastKnownCapabilities2, pendingUpgradeNote, AndroidRunnerCleanupUnconfirmedError, AndroidArtifactStaleError, AndroidCommandsStaleError, AndroidFeaturesStaleError, AndroidAuthorityStaleError, RUNNER_APK_PATHS, STATUS_PROBE_TIMEOUT_MS2;
-var init_rn_android_runner_client = __esm({
-  "packages/rn-dev-agent-core/dist/runners/rn-android-runner-client.js"() {
+// packages/rn-dev-agent-core/dist/session/declared-source-contract.js
+function missingDeclaredRootMessage() {
+  return `NON_GIT_MANIFEST_REQUIRED: ${DECLARED_ROOT_ENV} is not set. ${NON_GIT_DECLARATION_NEXT_ACTION}`;
+}
+function missingDeclaredManifestListMessage() {
+  return `NON_GIT_MANIFEST_REQUIRED: ${DECLARED_MANIFESTS_ENV} is not set. ${NON_GIT_DECLARATION_NEXT_ACTION}`;
+}
+function missingDeclaredManifestMessage(entry) {
+  return `NON_GIT_MANIFEST_REQUIRED: declared manifest "${entry}" does not exist. ${NON_GIT_DECLARATION_NEXT_ACTION}`;
+}
+var DECLARED_ROOT_ENV, DECLARED_MANIFESTS_ENV, NON_GIT_DECLARATION_NEXT_ACTION;
+var init_declared_source_contract = __esm({
+  "packages/rn-dev-agent-core/dist/session/declared-source-contract.js"() {
     "use strict";
-    init_utils();
-    init_fast_runner_ref_map();
-    init_free_port();
-    init_keyboard_guard();
-    init_secure_state_file();
-    init_protocol();
-    init_runner_artifacts();
-    init_runtime_paths();
-    init_transport_recovery();
-    init_process_birth();
-    init_authority_store();
-    execFileAsync = promisify3(execFile3);
-    DEFAULT_PORT = 22089;
-    READY_TIMEOUT_MS2 = 3e4;
-    INSTRUMENTATION = "dev.lykhoyda.rndevagent.androidrunner.test/androidx.test.runner.AndroidJUnitRunner";
-    MAIN_LOOP_CLASS = "dev.lykhoyda.rndevagent.androidrunner.RnAndroidRunnerInstrumentedTest#mainLoop";
-    HEALTH_POLL_INTERVAL_MS = 150;
-    HEALTH_PROBE_TIMEOUT_MS = 1e3;
-    RN_ANDROID_RUNNER_DIR = resolveNativeRunnerDir("rn-android-runner");
-    GRADLEW = join10(RN_ANDROID_RUNNER_DIR, "gradlew");
-    APK_APP = join10(RN_ANDROID_RUNNER_DIR, "app", "build", "outputs", "apk", "debug", "app-debug.apk");
-    APK_TEST = join10(RN_ANDROID_RUNNER_DIR, "app", "build", "outputs", "apk", "androidTest", "debug", "app-debug-androidTest.apk");
-    ANDROID_REBUILD_ROOT = join10(RN_ANDROID_RUNNER_DIR, "app", "build");
-    ANDROID_REBUILD_LOCK_DATABASE = join10(ANDROID_REBUILD_ROOT, ".authority-rebuild", "lock.sqlite");
-    ANDROID_REBUILD_LOCK_STALE_MS = 15 * 6e4;
-    ANDROID_REBUILD_HEARTBEAT_MS = 6e4;
-    ANDROID_REBUILD_COMPLETION_RETRY_MS = 1e3;
-    ANDROID_REBUILD_COMPLETION_ATTEMPTS = 5;
-    ANDROID_REBUILD_CLEANUP_TIMEOUT_MS = 3e4;
-    ADB_CLEANUP_TIMEOUT_MS = 5e3;
-    ANDROID_CLEANUP_VERIFY_ATTEMPTS = 20;
-    ANDROID_CLEANUP_VERIFY_INTERVAL_MS = 150;
-    GRADLE_BUILD_TIMEOUT_MS = 6e5;
-    ADB_INSTALL_TIMEOUT_MS = 12e4;
-    runnerProcess2 = null;
-    runnerState2 = null;
-    fetchImpl2 = globalThis.fetch;
-    testAuthorityState = false;
-    lastKnownCapabilities2 = [];
-    AndroidRunnerCleanupUnconfirmedError = class extends Error {
-      predicate;
-      evidence;
-      meta;
-      constructor(predicate, evidence, deviceId) {
-        super(`RUNNER_CLEANUP_UNCONFIRMED: predicate=${predicate} remains for ${deviceId}; evidence=${JSON.stringify(evidence)}`);
-        this.predicate = predicate;
-        this.evidence = evidence;
-        this.meta = { cleanupPredicate: predicate, cleanupEvidence: evidence };
-      }
-    };
-    AndroidArtifactStaleError = class extends Error {
-      surface;
-      missing;
-      bundleId;
-      deviceId;
-      attempt;
-      constructor(surface, missing, bundleId, deviceId, detail, attempt) {
-        super(`RUNNER_${surface.toUpperCase()}_STALE: ${detail ?? `installed rn-android-runner lacks required ${surface} (missing: ${missing.join(", ") || "unknown"}). Re-open the device session (device_snapshot action=open appId=${bundleId ?? "<your.app.id>"} platform=android) to rebuild it.`}`);
-        this.surface = surface;
-        this.missing = missing;
-        this.bundleId = bundleId;
-        this.deviceId = deviceId;
-        this.attempt = attempt;
-      }
-    };
-    AndroidCommandsStaleError = class extends AndroidArtifactStaleError {
-      constructor(missing, bundleId, deviceId, detail, attempt) {
-        super("commands", missing, bundleId, deviceId, detail, attempt);
-      }
-    };
-    AndroidFeaturesStaleError = class extends AndroidArtifactStaleError {
-      constructor(missing, bundleId, deviceId, detail, attempt) {
-        super("features", missing, bundleId, deviceId, detail, attempt);
-      }
-    };
-    AndroidAuthorityStaleError = class extends Error {
-      deviceId;
-      attempt;
-      constructor(deviceId, detail, attempt) {
-        super(`RUNNER_OWNERSHIP_MISMATCH: ${detail ?? "installed Android runner lacks current authority identity"}`);
-        this.deviceId = deviceId;
-        this.attempt = attempt;
-      }
-    };
-    RUNNER_APK_PATHS = [APK_APP, APK_TEST];
-    STATUS_PROBE_TIMEOUT_MS2 = 2e3;
+    DECLARED_ROOT_ENV = "RN_DEV_AGENT_DECLARED_ROOT";
+    DECLARED_MANIFESTS_ENV = "RN_DEV_AGENT_DECLARED_MANIFESTS";
+    NON_GIT_DECLARATION_NEXT_ACTION = `Declare the non-Git source explicitly: set ${DECLARED_ROOT_ENV} to the exact existing application root, and set ${DECLARED_MANIFESTS_ENV} to a comma-separated list of required existing manifest files inside that root, then restart the supervisor. Neither value is inferred from the working directory or generated.`;
   }
 });
 
@@ -22942,14 +21372,14 @@ var require_dist2 = __commonJS({
 });
 
 // packages/rn-dev-agent-core/dist/nav-graph/storage.js
-import { readFileSync as readFileSync8, writeFileSync as writeFileSync6, existsSync as existsSync10, renameSync as renameSync2, readdirSync as readdirSync3, lstatSync as lstatSync4, mkdirSync as mkdirSync6, realpathSync as realpathSync2 } from "node:fs";
-import { join as join11, dirname as dirname5 } from "node:path";
+import { readFileSync as readFileSync7, writeFileSync as writeFileSync5, existsSync as existsSync8, renameSync as renameSync2, readdirSync as readdirSync3, lstatSync as lstatSync4, mkdirSync as mkdirSync6, realpathSync as realpathSync2 } from "node:fs";
+import { join as join9, dirname as dirname5 } from "node:path";
 function isRnProject(dir) {
-  const pkgPath2 = join11(dir, "package.json");
-  if (!existsSync10(pkgPath2))
+  const pkgPath2 = join9(dir, "package.json");
+  if (!existsSync8(pkgPath2))
     return false;
   try {
-    const pkg = JSON.parse(readFileSync8(pkgPath2, "utf-8"));
+    const pkg = JSON.parse(readFileSync7(pkgPath2, "utf-8"));
     const deps = { ...pkg.dependencies, ...pkg.devDependencies };
     return !!(deps["react-native"] || deps["expo"]);
   } catch {
@@ -22970,7 +21400,7 @@ function scanForRnProject(rootDir, maxDepth) {
   for (const name of entries) {
     if (name.startsWith(".") || name === "node_modules")
       continue;
-    const full = join11(rootDir, name);
+    const full = join9(rootDir, name);
     try {
       const stat2 = lstatSync4(full);
       if (!(stat2.isDirectory() || stat2.isSymbolicLink()))
@@ -23005,7 +21435,7 @@ function collectRnProjects(rootDir, maxDepth, out) {
   for (const name of entries) {
     if (name.startsWith(".") || name === "node_modules")
       continue;
-    const full = join11(rootDir, name);
+    const full = join9(rootDir, name);
     try {
       const stat2 = lstatSync4(full);
       if (!(stat2.isDirectory() || stat2.isSymbolicLink()))
@@ -23025,11 +21455,11 @@ function collectRnProjects(rootDir, maxDepth, out) {
   }
 }
 function readProjectBundleId(projectRoot) {
-  const appJsonPath = join11(projectRoot, "app.json");
-  if (!existsSync10(appJsonPath))
+  const appJsonPath = join9(projectRoot, "app.json");
+  if (!existsSync8(appJsonPath))
     return null;
   try {
-    const raw = JSON.parse(readFileSync8(appJsonPath, "utf-8"));
+    const raw = JSON.parse(readFileSync7(appJsonPath, "utf-8"));
     const iosId = raw.expo?.ios?.bundleIdentifier ?? raw.ios?.bundleIdentifier;
     const androidId = raw.expo?.android?.package ?? raw.android?.package;
     if (typeof iosId === "string" && iosId.length > 0)
@@ -23063,7 +21493,7 @@ function findProjectRoot(opts = {}) {
         walkupHit = walkupHit ?? dir;
         break;
       }
-      const parent = join11(dir, "..");
+      const parent = join9(dir, "..");
       if (parent === dir)
         break;
       dir = parent;
@@ -23072,7 +21502,7 @@ function findProjectRoot(opts = {}) {
   if (!targetBundleId && walkupHit)
     return walkupHit;
   const cwd = process.cwd();
-  const parentOfCwd = join11(cwd, "..");
+  const parentOfCwd = join9(cwd, "..");
   if (targetBundleId) {
     const all = [];
     collectRnProjects(cwd, 0, all);
@@ -23120,7 +21550,7 @@ function collectMatchingRnProjects(bundleId) {
         consider(dir);
         break;
       }
-      const parent = join11(dir, "..");
+      const parent = join9(dir, "..");
       if (parent === dir)
         break;
       dir = parent;
@@ -23129,7 +21559,7 @@ function collectMatchingRnProjects(bundleId) {
   const cwd = process.cwd();
   const all = [];
   collectRnProjects(cwd, 0, all);
-  const parentOfCwd = join11(cwd, "..");
+  const parentOfCwd = join9(cwd, "..");
   if (parentOfCwd !== cwd)
     collectRnProjects(parentOfCwd, 1, all);
   for (const candidate of all)
@@ -23138,7 +21568,7 @@ function collectMatchingRnProjects(bundleId) {
 }
 function getProjectSlug(projectRoot) {
   try {
-    const pkg = JSON.parse(readFileSync8(join11(projectRoot, "package.json"), "utf-8"));
+    const pkg = JSON.parse(readFileSync7(join9(projectRoot, "package.json"), "utf-8"));
     if (pkg.name && typeof pkg.name === "string")
       return pkg.name;
   } catch {
@@ -23146,18 +21576,18 @@ function getProjectSlug(projectRoot) {
   return projectRoot.split("/").pop() ?? "unknown";
 }
 function getGraphPath(projectRoot) {
-  return join11(projectRoot, RN_AGENT_DIR, GRAPH_FILENAME);
+  return join9(projectRoot, RN_AGENT_DIR, GRAPH_FILENAME);
 }
 function readGraph(projectRoot) {
   try {
     let filePath = getGraphPath(projectRoot);
-    if (!existsSync10(filePath)) {
-      const legacyPath = join11(projectRoot, LEGACY_GRAPH_FILENAME);
-      if (!existsSync10(legacyPath))
+    if (!existsSync8(filePath)) {
+      const legacyPath = join9(projectRoot, LEGACY_GRAPH_FILENAME);
+      if (!existsSync8(legacyPath))
         return null;
       filePath = legacyPath;
     }
-    const raw = (0, import_yaml.parse)(readFileSync8(filePath, "utf-8"));
+    const raw = (0, import_yaml.parse)(readFileSync7(filePath, "utf-8"));
     if (!raw || !raw.nav_graph)
       return null;
     hydrateStrikesFromGraph(raw.nav_graph, projectRoot);
@@ -23171,7 +21601,7 @@ function writeGraph(projectRoot, graph) {
   mkdirSync6(dirname5(filePath), { recursive: true });
   const tmpPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
   const yaml2 = (0, import_yaml.stringify)({ nav_graph: graph }, { lineWidth: 120 });
-  writeFileSync6(tmpPath, yaml2, "utf-8");
+  writeFileSync5(tmpPath, yaml2, "utf-8");
   renameSync2(tmpPath, filePath);
   return filePath;
 }
@@ -23434,4208 +21864,10 @@ var init_storage = __esm({
   }
 });
 
-// packages/rn-dev-agent-core/dist/observability/mirror/jpeg-stream.js
-var MAX_FRAME_BYTES, SOI, EOI, JpegFrameExtractor;
-var init_jpeg_stream = __esm({
-  "packages/rn-dev-agent-core/dist/observability/mirror/jpeg-stream.js"() {
-    "use strict";
-    MAX_FRAME_BYTES = 8e6;
-    SOI = Buffer.from([255, 216]);
-    EOI = Buffer.from([255, 217]);
-    JpegFrameExtractor = class {
-      acc = Buffer.alloc(0);
-      /** Sticky: a SOI without EOI exceeded MAX_FRAME_BYTES. Process liveness is not a valid frame. */
-      overflowed = false;
-      push(chunk) {
-        this.acc = this.acc.length === 0 ? chunk : Buffer.concat([this.acc, chunk]);
-        const frames = [];
-        for (; ; ) {
-          const soi = this.acc.indexOf(SOI);
-          if (soi === -1) {
-            this.acc = this.acc.length > 0 && this.acc[this.acc.length - 1] === 255 ? this.acc.subarray(this.acc.length - 1) : Buffer.alloc(0);
-            break;
-          }
-          if (soi > 0)
-            this.acc = this.acc.subarray(soi);
-          const eoi = this.acc.indexOf(EOI, SOI.length);
-          if (eoi === -1) {
-            if (this.acc.length > MAX_FRAME_BYTES) {
-              this.overflowed = true;
-              this.acc = Buffer.alloc(0);
-            }
-            break;
-          }
-          frames.push(this.acc.subarray(0, eoi + EOI.length));
-          this.acc = this.acc.subarray(eoi + EOI.length);
-        }
-        return frames;
-      }
-    };
-  }
-});
-
-// packages/rn-dev-agent-core/dist/observability/mirror/sources.js
-import { spawn as spawn3, execFile as execFile4 } from "node:child_process";
-import { readFile, unlink } from "node:fs/promises";
-import { tmpdir as tmpdir4 } from "node:os";
-import { join as join12 } from "node:path";
-function idbDemotionHint(cause) {
-  if (cause?.hint)
-    return cause.hint;
-  if (cause?.reason)
-    return `${cause.reason} \u2014 using simctl screenshot loop`;
-  return IDB_STREAM_UNHEALTHY_HINT;
-}
-async function probeIdbClient(execFileFn = execFile4) {
-  return new Promise((resolve19) => {
-    execFileFn("idb", ["--help"], { timeout: 3e3 }, (err) => {
-      if (!err)
-        return resolve19("ready");
-      resolve19(isEnoent(err) ? "absent" : "broken");
-    });
-  });
-}
-function isEnoent(err) {
-  return !!err && typeof err === "object" && err.code === "ENOENT";
-}
-function defaultExecJpeg(cmd, args, signal) {
-  const outPath = args[args.length - 1];
-  return new Promise((resolve19, reject) => {
-    execFile4(cmd, args, { maxBuffer: 16 * 1024 * 1024, timeout: 1e4, signal }, (err) => {
-      if (err) {
-        reject(err);
-        return;
-      }
-      readFile(outPath).then((buf) => {
-        void unlink(outPath).catch(() => {
-        });
-        resolve19(buf);
-      }).catch((readErr) => {
-        void unlink(outPath).catch(() => {
-        });
-        reject(readErr);
-      });
-    });
-  });
-}
-async function createMirrorSource(target, fps, opts = {}) {
-  if (target.platform === "android") {
-    return new AndroidScreenrecordSource(target.deviceId);
-  }
-  const state = await probeIdbClient();
-  if (state === "ready") {
-    return new IosIdbSource(target.deviceId, fps, {
-      firstFrameTimeoutMs: opts.firstFrameTimeoutMs
-    });
-  }
-  const idbHint = state === "broken" ? SIMCTL_BROKEN_IDB_HINT : SIMCTL_HINT;
-  return new IosSimctlLoopSource(target.deviceId, {
-    degradedHint: idbHint,
-    failureHint: idbHint
-  });
-}
-var RestartGate, IDB_INSTALL_COMMAND, SIMCTL_HINT, SIMCTL_BROKEN_IDB_HINT, IDB_NO_FIRST_FRAME_REASON, IDB_MALFORMED_FRAME_REASON, IDB_STREAM_UNHEALTHY_HINT, DEFAULT_IDB_FIRST_FRAME_TIMEOUT_MS, IDB_HINT, FFMPEG_HINT, sleep2, scheduleAfter, defaultSpawn, IosIdbSource, IosSimctlLoopSource, AndroidScreenrecordSource;
-var init_sources = __esm({
-  "packages/rn-dev-agent-core/dist/observability/mirror/sources.js"() {
-    "use strict";
-    init_jpeg_stream();
-    RestartGate = class {
-      limit;
-      windowMs;
-      now;
-      exits = [];
-      constructor(limit = 3, windowMs = 1e4, now = Date.now) {
-        this.limit = limit;
-        this.windowMs = windowMs;
-        this.now = now;
-      }
-      record() {
-        const t = this.now();
-        this.exits = this.exits.filter((e) => t - e < this.windowMs);
-        this.exits.push(t);
-        return this.exits.length < this.limit;
-      }
-    };
-    IDB_INSTALL_COMMAND = "brew install python@3.13 && brew tap facebook/fb && brew trust facebook/fb && brew install idb-companion && pipx install --python python3.13 --force fb-idb";
-    SIMCTL_HINT = `install idb for smoother mirroring (${IDB_INSTALL_COMMAND})`;
-    SIMCTL_BROKEN_IDB_HINT = "idb is installed but did not respond successfully \u2014 most likely fb-idb 1.1.7 under Python 3.14, which removed the asyncio.get_event_loop() it needs. Reinstall it under a supported interpreter: pipx install --python python3.13 --force fb-idb";
-    IDB_NO_FIRST_FRAME_REASON = "idb video-stream produced no first frame";
-    IDB_MALFORMED_FRAME_REASON = "idb video-stream produced a malformed frame";
-    IDB_STREAM_UNHEALTHY_HINT = "idb video-stream produced no usable frame \u2014 using simctl screenshot loop";
-    DEFAULT_IDB_FIRST_FRAME_TIMEOUT_MS = 3e4;
-    IDB_HINT = `idb not found \u2014 ${IDB_INSTALL_COMMAND}`;
-    FFMPEG_HINT = "ffmpeg not found \u2014 run scripts/ensure-ffmpeg.sh or brew install ffmpeg";
-    sleep2 = (ms) => new Promise((resolve19) => setTimeout(resolve19, ms));
-    scheduleAfter = (fn, delayMs) => {
-      if (delayMs <= 0)
-        setImmediate(fn);
-      else
-        setTimeout(fn, delayMs);
-    };
-    defaultSpawn = (cmd, args) => spawn3(cmd, args, {
-      stdio: ["pipe", "pipe", "pipe"]
-    });
-    IosIdbSource = class {
-      udid;
-      pipeline = "idb";
-      nominalFps;
-      active = false;
-      proc = null;
-      firstFrameTimer = null;
-      spawnFn;
-      gate;
-      restartDelayMs;
-      firstFrameTimeoutMs;
-      constructor(udid, fps, opts = {}) {
-        this.udid = udid;
-        this.nominalFps = fps;
-        this.spawnFn = opts.spawnFn ?? defaultSpawn;
-        this.gate = new RestartGate(3, 1e4, opts.now ?? Date.now);
-        this.restartDelayMs = opts.restartDelayMs ?? 300;
-        this.firstFrameTimeoutMs = opts.firstFrameTimeoutMs ?? DEFAULT_IDB_FIRST_FRAME_TIMEOUT_MS;
-      }
-      start(sink) {
-        this.active = true;
-        this.spawnOnce(sink);
-      }
-      spawnOnce(sink) {
-        const extractor = new JpegFrameExtractor();
-        let gotFrame = false;
-        const proc = this.spawnFn("idb", [
-          "video-stream",
-          "--udid",
-          this.udid,
-          "--fps",
-          String(this.nominalFps),
-          "--format",
-          "mjpeg",
-          "--compression-quality",
-          "0.7"
-        ]);
-        this.proc = proc;
-        proc.stderr?.resume();
-        this.armFirstFrameTimer(sink);
-        proc.stdout.on("data", (chunk) => {
-          if (!this.active)
-            return;
-          for (const frame of extractor.push(chunk)) {
-            gotFrame = true;
-            this.clearFirstFrameTimer();
-            if (this.active)
-              sink.onFrame(frame);
-          }
-          if (this.active && extractor.overflowed && !gotFrame) {
-            this.fail(sink, IDB_MALFORMED_FRAME_REASON);
-          }
-        });
-        proc.on("error", (err) => {
-          if (!this.active)
-            return;
-          if (isEnoent(err)) {
-            this.fail(sink, "idb not found", IDB_HINT);
-          }
-        });
-        proc.on("close", () => {
-          if (!this.active)
-            return;
-          this.clearFirstFrameTimer();
-          if (this.gate.record()) {
-            scheduleAfter(() => {
-              if (!this.active)
-                return;
-              sink.onRestart?.();
-              this.spawnOnce(sink);
-            }, this.restartDelayMs);
-          } else {
-            this.fail(sink, "idb video-stream keeps exiting");
-          }
-        });
-      }
-      armFirstFrameTimer(sink) {
-        this.clearFirstFrameTimer();
-        this.firstFrameTimer = setTimeout(() => {
-          this.firstFrameTimer = null;
-          if (!this.active)
-            return;
-          this.fail(sink, IDB_NO_FIRST_FRAME_REASON, IDB_STREAM_UNHEALTHY_HINT);
-        }, this.firstFrameTimeoutMs);
-      }
-      fail(sink, reason, hint) {
-        if (!this.active)
-          return;
-        this.active = false;
-        this.clearFirstFrameTimer();
-        this.proc?.kill();
-        sink.onExit({ reason, hint });
-      }
-      clearFirstFrameTimer() {
-        if (this.firstFrameTimer) {
-          clearTimeout(this.firstFrameTimer);
-          this.firstFrameTimer = null;
-        }
-      }
-      stop() {
-        this.active = false;
-        this.clearFirstFrameTimer();
-        this.proc?.kill();
-      }
-    };
-    IosSimctlLoopSource = class {
-      udid;
-      pipeline = "simctl";
-      nominalFps = 6;
-      degradedHint;
-      failureHint;
-      active = false;
-      inFlight = null;
-      execJpeg;
-      gate;
-      idleDelayMs;
-      failurePauseMs;
-      tmpPath;
-      constructor(udid, opts = {}) {
-        this.udid = udid;
-        this.execJpeg = opts.execJpeg ?? defaultExecJpeg;
-        this.gate = new RestartGate(3, 1e4, opts.now ?? Date.now);
-        this.idleDelayMs = opts.idleDelayMs ?? 25;
-        this.failurePauseMs = opts.failurePauseMs ?? 500;
-        this.tmpPath = opts.tmpPath ?? (() => join12(tmpdir4(), "rn-mirror-simctl-" + process.pid + ".jpg"));
-        this.degradedHint = opts.degradedHint ?? SIMCTL_HINT;
-        this.failureHint = opts.failureHint;
-      }
-      start(sink) {
-        this.active = true;
-        void this.loop(sink);
-      }
-      async loop(sink) {
-        while (this.active) {
-          const controller = new AbortController();
-          this.inFlight = controller;
-          try {
-            const buf = await this.execJpeg("xcrun", ["simctl", "io", this.udid, "screenshot", "--type=jpeg", this.tmpPath()], controller.signal);
-            sink.onFrame(buf);
-            if (!this.active)
-              break;
-            await sleep2(this.idleDelayMs);
-          } catch {
-            if (!this.active)
-              break;
-            if (!this.gate.record()) {
-              if (this.active)
-                sink.onExit({
-                  reason: "simctl screenshot failing",
-                  hint: this.failureHint
-                });
-              this.active = false;
-              break;
-            }
-            await sleep2(this.failurePauseMs);
-          } finally {
-            this.inFlight = null;
-          }
-        }
-      }
-      stop() {
-        this.active = false;
-        this.inFlight?.abort();
-      }
-    };
-    AndroidScreenrecordSource = class {
-      serial;
-      pipeline = "screenrecord";
-      nominalFps = 25;
-      active = false;
-      adb = null;
-      ffmpeg = null;
-      spawnFn;
-      gate;
-      restartDelayMs;
-      constructor(serial, opts = {}) {
-        this.serial = serial;
-        this.spawnFn = opts.spawnFn ?? defaultSpawn;
-        this.gate = new RestartGate(3, 1e4, opts.now ?? Date.now);
-        this.restartDelayMs = opts.restartDelayMs ?? 300;
-      }
-      start(sink) {
-        this.active = true;
-        this.spawnCycle(sink);
-      }
-      spawnCycle(sink) {
-        let cycleDone = false;
-        const extractor = new JpegFrameExtractor();
-        const adb2 = this.spawnFn("adb", [
-          "-s",
-          this.serial,
-          "exec-out",
-          "screenrecord",
-          "--output-format=h264",
-          "--time-limit=179",
-          "-"
-        ]);
-        const ffmpeg = this.spawnFn("ffmpeg", [
-          "-loglevel",
-          "error",
-          "-fflags",
-          "nobuffer",
-          "-f",
-          "h264",
-          "-i",
-          "pipe:0",
-          "-q:v",
-          "7",
-          "-f",
-          "mjpeg",
-          "pipe:1"
-        ]);
-        this.adb = adb2;
-        this.ffmpeg = ffmpeg;
-        adb2.stderr?.resume();
-        ffmpeg.stderr?.resume();
-        if (ffmpeg.stdin) {
-          ffmpeg.stdin.on("error", () => {
-          });
-          adb2.stdout.pipe(ffmpeg.stdin);
-        }
-        ffmpeg.stdout.on("data", (chunk) => {
-          if (!this.active)
-            return;
-          for (const frame of extractor.push(chunk)) {
-            if (this.active)
-              sink.onFrame(frame);
-          }
-        });
-        const killSibling = (self) => {
-          if (self === "adb")
-            ffmpeg.kill();
-          else
-            adb2.kill();
-        };
-        adb2.on("error", (err) => {
-          if (!this.active || cycleDone)
-            return;
-          if (isEnoent(err)) {
-            cycleDone = true;
-            this.active = false;
-            killSibling("adb");
-            sink.onExit({ reason: "adb not found" });
-          }
-        });
-        ffmpeg.on("error", (err) => {
-          if (!this.active || cycleDone)
-            return;
-          if (isEnoent(err)) {
-            cycleDone = true;
-            this.active = false;
-            killSibling("ffmpeg");
-            sink.onExit({ reason: "ffmpeg not found", hint: FFMPEG_HINT });
-          }
-        });
-        const onClose = (self) => {
-          if (!this.active || cycleDone)
-            return;
-          cycleDone = true;
-          killSibling(self);
-          if (this.gate.record()) {
-            scheduleAfter(() => {
-              if (!this.active)
-                return;
-              sink.onRestart?.();
-              this.spawnCycle(sink);
-            }, this.restartDelayMs);
-          } else {
-            this.active = false;
-            sink.onExit({ reason: "screen capture pipeline keeps exiting" });
-          }
-        };
-        adb2.on("close", () => onClose("adb"));
-        ffmpeg.on("close", () => onClose("ffmpeg"));
-      }
-      stop() {
-        this.active = false;
-        this.adb?.kill();
-        this.ffmpeg?.kill();
-      }
-    };
-  }
-});
-
-// packages/rn-dev-agent-core/dist/project-config.js
-import { existsSync as existsSync11, readFileSync as readFileSync9 } from "node:fs";
-import { join as join13 } from "node:path";
-function readAppId(projectRoot, platform) {
-  for (const filename of ["app.json", "app.config.json"]) {
-    const p = join13(projectRoot, filename);
-    if (!existsSync11(p))
-      continue;
-    try {
-      const raw = JSON.parse(readFileSync9(p, "utf-8"));
-      const expo = raw.expo ?? raw;
-      const iosBundleId = expo?.ios?.bundleIdentifier;
-      const androidPkg = expo?.android?.package;
-      if (platform === "android")
-        return androidPkg ?? iosBundleId ?? null;
-      return iosBundleId ?? androidPkg ?? null;
-    } catch {
-      continue;
-    }
-  }
-  return null;
-}
-function resolveBundleId(platform) {
-  const projectRoot = findProjectRoot();
-  if (!projectRoot)
-    return null;
-  return readAppId(projectRoot, platform);
-}
-function readExpoSlug() {
-  const projectRoot = findProjectRoot();
-  if (!projectRoot)
-    return null;
-  for (const filename of ["app.json", "app.config.json"]) {
-    const p = join13(projectRoot, filename);
-    if (!existsSync11(p))
-      continue;
-    try {
-      const raw = JSON.parse(readFileSync9(p, "utf-8"));
-      return raw.expo?.slug ?? null;
-    } catch {
-      continue;
-    }
-  }
-  return null;
-}
-function readRnAgentConfig(projectRoot) {
-  const root = projectRoot ?? findProjectRoot();
-  if (!root)
-    return null;
-  const p = join13(root, ".rn-agent", "config.json");
-  if (!existsSync11(p))
-    return null;
-  try {
-    return JSON.parse(readFileSync9(p, "utf-8"));
-  } catch (err) {
-    if (!warnedBadConfig) {
-      warnedBadConfig = true;
-      logger.warn("CONFIG", `.rn-agent/config.json is unreadable \u2014 ignoring it: ${err instanceof Error ? err.message : err}`);
-    }
-    return null;
-  }
-}
-function resolveAutoConnect(deps = {}) {
-  const envRaw = "env" in deps ? deps.env : process.env.RN_CDP_AUTOCONNECT;
-  if (envRaw === "0" || envRaw === "false")
-    return { enabled: false, source: "env" };
-  if (envRaw === "1" || envRaw === "true")
-    return { enabled: true, source: "env" };
-  const cfg = (deps.readConfig ?? readRnAgentConfig)();
-  if (typeof cfg?.cdp?.autoConnect === "boolean") {
-    return { enabled: cfg.cdp.autoConnect, source: "config" };
-  }
-  return { enabled: true, source: "default" };
-}
-function parsePort(raw) {
-  if (!raw)
-    return void 0;
-  const n = Number.parseInt(raw, 10);
-  return Number.isInteger(n) && n > 0 && n <= 65535 ? n : void 0;
-}
-function resolveObserveAutostart(deps = {}) {
-  const envRaw = "env" in deps ? deps.env : process.env.RN_AGENT_OBSERVE_AUTOSTART;
-  if (envRaw === "0" || envRaw === "false")
-    return { enabled: false, source: "env" };
-  if (envRaw === "1" || envRaw === "true")
-    return { enabled: true, source: "env" };
-  const cfg = (deps.readConfig ?? readRnAgentConfig)();
-  if (typeof cfg?.observe?.autoStart === "boolean") {
-    return { enabled: cfg.observe.autoStart, source: "config" };
-  }
-  return { enabled: true, source: "default" };
-}
-function resolveObservePort(deps = {}) {
-  const envRaw = "env" in deps ? deps.env : process.env.RN_AGENT_OBSERVE_PORT;
-  const envPort = parsePort(envRaw);
-  if (envPort !== void 0)
-    return { port: envPort, source: "env" };
-  const cfg = (deps.readConfig ?? readRnAgentConfig)();
-  const cfgPort = cfg?.observe?.port;
-  if (typeof cfgPort === "number" && Number.isInteger(cfgPort) && cfgPort > 0 && cfgPort <= 65535) {
-    return { port: cfgPort, source: "config" };
-  }
-  return { port: DEFAULT_OBSERVE_PORT, source: "default" };
-}
-function resolveMirrorConfig(deps = {}) {
-  const envRaw = "env" in deps ? deps.env : process.env.RN_AGENT_OBSERVE_MIRROR;
-  let cfg = null;
-  try {
-    cfg = (deps.readConfig ?? readRnAgentConfig)();
-  } catch {
-    cfg = null;
-  }
-  const rawFps = cfg?.observe?.mirror?.fps;
-  const fps = typeof rawFps === "number" && Number.isFinite(rawFps) ? Math.min(MIRROR_FPS_MAX, Math.max(MIRROR_FPS_MIN, Math.round(rawFps))) : DEFAULT_MIRROR_FPS;
-  const rawTimeout = cfg?.observe?.mirror?.firstFrameTimeoutMs;
-  const firstFrameTimeoutMs = typeof rawTimeout === "number" && Number.isFinite(rawTimeout) ? Math.min(MIRROR_FIRST_FRAME_TIMEOUT_MAX_MS, Math.max(MIRROR_FIRST_FRAME_TIMEOUT_MIN_MS, Math.round(rawTimeout))) : DEFAULT_IDB_FIRST_FRAME_TIMEOUT_MS;
-  if (envRaw === "0" || envRaw === "false")
-    return { enabled: false, fps, firstFrameTimeoutMs, source: "env" };
-  if (envRaw === "1" || envRaw === "true")
-    return { enabled: true, fps, firstFrameTimeoutMs, source: "env" };
-  const cfgEnabled = cfg?.observe?.mirror?.enabled;
-  if (typeof cfgEnabled === "boolean")
-    return { enabled: cfgEnabled, fps, firstFrameTimeoutMs, source: "config" };
-  return { enabled: true, fps, firstFrameTimeoutMs, source: "default" };
-}
-var warnedBadConfig, DEFAULT_OBSERVE_PORT, DEFAULT_MIRROR_FPS, MIRROR_FPS_MIN, MIRROR_FPS_MAX, MIRROR_FIRST_FRAME_TIMEOUT_MIN_MS, MIRROR_FIRST_FRAME_TIMEOUT_MAX_MS;
-var init_project_config = __esm({
-  "packages/rn-dev-agent-core/dist/project-config.js"() {
-    "use strict";
-    init_storage();
-    init_logger();
-    init_sources();
-    warnedBadConfig = false;
-    DEFAULT_OBSERVE_PORT = 7333;
-    DEFAULT_MIRROR_FPS = 20;
-    MIRROR_FPS_MIN = 5;
-    MIRROR_FPS_MAX = 30;
-    MIRROR_FIRST_FRAME_TIMEOUT_MIN_MS = 1e3;
-    MIRROR_FIRST_FRAME_TIMEOUT_MAX_MS = 12e4;
-  }
-});
-
-// packages/rn-dev-agent-core/dist/domain/maestro-validator.js
-import { join as join14, dirname as dirname6, isAbsolute, sep } from "node:path";
-import { readFileSync as readFileSync10, realpathSync as realpathSync3 } from "node:fs";
-function isValidBundleId(s) {
-  if (typeof s !== "string")
-    return false;
-  if (s.length === 0 || s.length >= BUNDLE_ID_MAX_LEN)
-    return false;
-  return BUNDLE_ID_RE.test(s);
-}
-function assertValidBundleId(s, context) {
-  if (!isValidBundleId(s)) {
-    const preview = JSON.stringify(s).slice(0, 80);
-    throw new MaestroValidationError(`Invalid bundle ID for ${context}: ${preview}`);
-  }
-}
-function isSafeMaestroScalar(s) {
-  if (typeof s !== "string")
-    return false;
-  if (s.length > SCALAR_MAX_LEN)
-    return false;
-  if (UNSAFE_SCALAR_RE.test(s))
-    return false;
-  return true;
-}
-function buildMaestroFlow(opts, commands) {
-  if (opts.appId !== void 0) {
-    assertValidBundleId(opts.appId, "appId header");
-  }
-  for (const cmd of commands) {
-    validateCommand(cmd);
-  }
-  const headerYaml = opts.appId ? import_yaml2.default.stringify({ appId: opts.appId }) : "";
-  const bodyYaml = import_yaml2.default.stringify(commands);
-  return `${headerYaml}---
-${bodyYaml}`;
-}
-function validateCommand(cmd) {
-  if (cmd === null || cmd === void 0) {
-    throw new MaestroValidationError("Command is null/undefined");
-  }
-  if (typeof cmd === "string") {
-    if (!isSafeMaestroScalar(cmd)) {
-      throw new MaestroValidationError(`Unsafe shorthand command: ${JSON.stringify(cmd).slice(0, 80)}`);
-    }
-    if (DENIED_COMMANDS.has(cmd)) {
-      throw new MaestroValidationError(`Command not allowed (denied by default): ${cmd}`);
-    }
-    if (!ALLOWED_COMMANDS.has(cmd)) {
-      throw new MaestroValidationError(`Command not in allowlist: ${cmd}`);
-    }
-    return;
-  }
-  if (typeof cmd !== "object") {
-    throw new MaestroValidationError(`Command is not an object or string: ${typeof cmd}`);
-  }
-  const keys = Object.keys(cmd);
-  if (keys.length !== 1) {
-    throw new MaestroValidationError(`Command must have exactly one root key, got ${keys.length}: ${keys.join(", ")}`);
-  }
-  const key = keys[0];
-  if (DENIED_COMMANDS.has(key)) {
-    throw new MaestroValidationError(`Command not allowed (denied by default): ${key}`);
-  }
-  if (!ALLOWED_COMMANDS.has(key)) {
-    throw new MaestroValidationError(`Command not in allowlist: ${key}`);
-  }
-  if (key === "runFlow") {
-    validateRunFlowValue(cmd[key]);
-    return;
-  }
-  validateValue(cmd[key]);
-}
-function validateRunFlowValue(v) {
-  if (typeof v === "string") {
-    if (!isSafeMaestroScalar(v)) {
-      throw new MaestroValidationError(`Unsafe runFlow file ref: ${JSON.stringify(v).slice(0, 80)}`);
-    }
-    return;
-  }
-  if (v === null || typeof v !== "object" || Array.isArray(v)) {
-    throw new MaestroValidationError(`runFlow value must be a file string or an object, got ${Array.isArray(v) ? "array" : typeof v}`);
-  }
-  const obj = v;
-  if ("file" in obj && (typeof obj.file !== "string" || !isSafeMaestroScalar(obj.file))) {
-    throw new MaestroValidationError(`runFlow.file must be a safe scalar string`);
-  }
-  if ("when" in obj)
-    validateValue(obj.when);
-  if ("commands" in obj) {
-    if (!Array.isArray(obj.commands)) {
-      throw new MaestroValidationError(`runFlow.commands must be an array`);
-    }
-    for (const c of obj.commands)
-      validateCommand(c);
-  }
-  for (const [k, val] of Object.entries(obj)) {
-    if (k === "file" || k === "when" || k === "commands")
-      continue;
-    if (!isSafeMaestroScalar(k)) {
-      throw new MaestroValidationError(`Unsafe runFlow key: ${JSON.stringify(k).slice(0, 80)}`);
-    }
-    validateValue(val);
-  }
-}
-function validateValue(v) {
-  if (v === null || v === void 0)
-    return;
-  if (typeof v === "boolean" || typeof v === "number")
-    return;
-  if (typeof v === "string") {
-    if (!isSafeMaestroScalar(v)) {
-      throw new MaestroValidationError(`Unsafe scalar value: ${JSON.stringify(v).slice(0, 80)}`);
-    }
-    return;
-  }
-  if (Array.isArray(v)) {
-    for (const item of v)
-      validateValue(item);
-    return;
-  }
-  if (typeof v === "object") {
-    for (const [key, value] of Object.entries(v)) {
-      if (!isSafeMaestroScalar(key)) {
-        throw new MaestroValidationError(`Unsafe scalar key: ${JSON.stringify(key).slice(0, 80)}`);
-      }
-      validateValue(value);
-    }
-    return;
-  }
-  throw new MaestroValidationError(`Unsupported value type: ${typeof v}`);
-}
-function asRunFlow(cmd) {
-  if (!cmd || typeof cmd !== "object" || Array.isArray(cmd))
-    return null;
-  const keys = Object.keys(cmd);
-  if (keys.length !== 1 || keys[0] !== "runFlow")
-    return null;
-  const v = cmd.runFlow;
-  if (typeof v === "string")
-    return { file: v };
-  if (v && typeof v === "object" && !Array.isArray(v)) {
-    const o = v;
-    return {
-      file: typeof o.file === "string" ? o.file : void 0,
-      when: o.when,
-      commands: Array.isArray(o.commands) ? o.commands : void 0
-    };
-  }
-  return null;
-}
-function resolveRunFlowTarget(file, opts) {
-  if (!opts.flowDir || !opts.flowRoot) {
-    throw new MaestroValidationError(`runFlow file ref "${file}" requires a flow root context (flowDir + flowRoot)`);
-  }
-  if (isAbsolute(file)) {
-    throw new MaestroValidationError(`runFlow file ref must be relative, got absolute: ${file}`);
-  }
-  if (file.split(/[\\/]/).includes("..")) {
-    throw new MaestroValidationError(`runFlow file ref must not contain '..': ${file}`);
-  }
-  if (!/\.ya?ml$/i.test(file)) {
-    throw new MaestroValidationError(`runFlow file ref must be a .yaml/.yml file: ${file}`);
-  }
-  const realpath = opts.realpathFn ?? realpathSync3;
-  let resolved;
-  let rootReal;
-  try {
-    resolved = realpath(join14(opts.flowDir, file));
-    rootReal = realpath(opts.flowRoot);
-  } catch (err) {
-    throw new MaestroValidationError(`runFlow file ref "${file}" could not be resolved: ${err.message}`);
-  }
-  if (resolved !== rootReal && !resolved.startsWith(rootReal + sep)) {
-    throw new MaestroValidationError(`runFlow file ref "${file}" escapes the flow root`);
-  }
-  return resolved;
-}
-function expandRunFlows(commands, opts) {
-  const out = [];
-  for (const cmd of commands) {
-    const rf = asRunFlow(cmd);
-    if (!rf) {
-      out.push(cmd);
-      continue;
-    }
-    if (rf.file !== void 0) {
-      const depth = opts._depth ?? 0;
-      const max = opts.maxRunFlowDepth ?? 5;
-      if (depth >= max) {
-        throw new MaestroValidationError(`runFlow nesting exceeded max depth ${max}`);
-      }
-      const resolved = resolveRunFlowTarget(rf.file, opts);
-      const visited = opts._visited ?? /* @__PURE__ */ new Set();
-      if (visited.has(resolved)) {
-        throw new MaestroValidationError(`runFlow cycle detected at "${rf.file}"`);
-      }
-      const readFile3 = opts.readFileFn ?? ((p) => readFileSync10(p, "utf8"));
-      let subText;
-      try {
-        subText = readFile3(resolved);
-      } catch (err) {
-        throw new MaestroValidationError(`runFlow file "${rf.file}" could not be read: ${err.message}`);
-      }
-      const sub = parseAndValidateFlow(subText, {
-        ...opts,
-        rejectHeader: true,
-        flowDir: dirname6(resolved),
-        _depth: depth + 1,
-        _visited: /* @__PURE__ */ new Set([...visited, resolved])
-      });
-      if (rf.when !== void 0) {
-        out.push({ runFlow: { when: rf.when, commands: sub.commands } });
-      } else {
-        out.push(...sub.commands);
-      }
-    } else {
-      const inner = rf.commands ? expandRunFlows(rf.commands, { ...opts, _depth: (opts._depth ?? 0) + 1 }) : [];
-      const wrapped = { commands: inner };
-      if (rf.when !== void 0)
-        wrapped.when = rf.when;
-      out.push({ runFlow: wrapped });
-    }
-  }
-  return out;
-}
-function parseAndValidateFlow(yamlText, opts = {}) {
-  let docs;
-  try {
-    docs = import_yaml2.default.parseAllDocuments(yamlText, { strict: true });
-  } catch (err) {
-    throw new MaestroValidationError(`YAML parse error: ${err.message}`);
-  }
-  if (docs.length === 0) {
-    throw new MaestroValidationError("Empty Maestro flow");
-  }
-  let appId;
-  let body;
-  if (docs.length === 1) {
-    body = docs[0].toJS();
-  } else {
-    const header = docs[0].toJS() ?? {};
-    if (header && typeof header === "object" && "appId" in header) {
-      if (opts.rejectHeader) {
-        throw new MaestroValidationError("Header (appId) not allowed in this context");
-      }
-      const rawAppId = header.appId;
-      assertValidBundleId(rawAppId, "parsed flow header");
-      appId = rawAppId;
-    }
-    body = docs[docs.length - 1].toJS();
-  }
-  if (body === null || body === void 0) {
-    body = [];
-  }
-  if (!Array.isArray(body)) {
-    throw new MaestroValidationError(`Flow body must be an array, got ${typeof body}`);
-  }
-  const expanded = expandRunFlows(body, opts);
-  for (const cmd of expanded) {
-    validateCommand(cmd);
-  }
-  const raw = buildMaestroFlow(appId !== void 0 ? { appId } : {}, expanded);
-  return { appId, commands: expanded, raw };
-}
-var import_yaml2, MaestroValidationError, BUNDLE_ID_RE, BUNDLE_ID_MAX_LEN, UNSAFE_SCALAR_RE, SCALAR_MAX_LEN, ALLOWED_COMMANDS, DENIED_COMMANDS;
-var init_maestro_validator = __esm({
-  "packages/rn-dev-agent-core/dist/domain/maestro-validator.js"() {
-    "use strict";
-    import_yaml2 = __toESM(require_dist2(), 1);
-    MaestroValidationError = class extends Error {
-      constructor(message) {
-        super(message);
-        this.name = "MaestroValidationError";
-      }
-    };
-    BUNDLE_ID_RE = /^[A-Za-z][A-Za-z0-9_-]*(\.[A-Za-z][A-Za-z0-9_-]*)+$/;
-    BUNDLE_ID_MAX_LEN = 256;
-    UNSAFE_SCALAR_RE = /[\u0000-\u0008\u000A-\u001F\u007F-\u009F\u2028\u2029]/;
-    SCALAR_MAX_LEN = 4096;
-    ALLOWED_COMMANDS = /* @__PURE__ */ new Set([
-      "launchApp",
-      "tapOn",
-      "doubleTapOn",
-      "longPressOn",
-      "assertVisible",
-      "assertNotVisible",
-      "inputText",
-      "eraseText",
-      "scroll",
-      "scrollUntilVisible",
-      "swipe",
-      // Multi-LLM review caught these: test-recorder-generators emits the
-      // shorthand `- swipeUp` / `- swipeDown` / `- swipeLeft` / `- swipeRight`
-      // top-level commands. Without these in the allowlist, every recorded
-      // action containing a swipe would be refused at replay time. The
-      // deepsec attack vector (newline-injected direction) is already
-      // mitigated by isSafeMaestroScalar catching the embedded newline.
-      "swipeUp",
-      "swipeDown",
-      "swipeLeft",
-      "swipeRight",
-      "back",
-      "pressKey",
-      "openLink",
-      "waitForAnimationToEnd",
-      "extendedWaitUntil",
-      "hideKeyboard",
-      "takeScreenshot",
-      "clearState",
-      "addMedia",
-      "copyTextFrom",
-      "pasteText",
-      "travel",
-      "setLocation",
-      "setAirplaneMode",
-      "killApp",
-      "stopApp",
-      "tap",
-      // GH #186: runFlow (conditional dialog handling — deep-link "Open in", Expo
-      // dev-client picker). Validated specially (validateRunFlowValue) so nested
-      // `commands` get full command-level allowlist checks, and {file} refs are
-      // securely resolved + expanded inline (expandRunFlows) — they are NOT passed
-      // through generic validateValue, which would miss nested denied commands.
-      "runFlow"
-    ]);
-    DENIED_COMMANDS = /* @__PURE__ */ new Set([
-      "runScript",
-      "evalScript",
-      "startRecording",
-      "stopRecording"
-    ]);
-  }
-});
-
-// packages/rn-dev-agent-core/dist/domain/maestro-runner-pin.json
-var maestro_runner_pin_default;
-var init_maestro_runner_pin = __esm({
-  "packages/rn-dev-agent-core/dist/domain/maestro-runner-pin.json"() {
-    maestro_runner_pin_default = {
-      version: "1.1.24",
-      sha256: {
-        "darwin-arm64": "170f12521de83322823dd5fc0ce16e48abeba9952cdbb242670592566c2fd1f3",
-        "darwin-x64": "af7f5ea044afc72ea780c835f05b32203e443d2e26d310a864bfb2bc84959bf6",
-        "linux-x64": "e9bdef6f08f855ca1a884f99b54a519a1eae0a342917181a53eb414a5b00d6d8",
-        "linux-arm64": "8d8a6483ad04da2109636b7192398750657801b8a8d512688d1be3b033a105b8"
-      },
-      archiveSha256: {
-        "darwin-arm64": "0b5b0f087815c5ff348e74a6dd7df260ed50a5588d5ff3e224c66a60d948c936",
-        "darwin-x64": "2ecc5c55d9437ee820691faf43097b5ba8d1ff797db49da9c96ac2631aac03c5",
-        "linux-x64": "f1963b7e3f8bf598d3b14f998fef3dc690e579906f340636cfd9350dea1d67b0",
-        "linux-arm64": "605db5645b161b610e999bcf8235650d41aac8929bbd0f818a592d13b958f148"
-      },
-      knownQuirks: [
-        {
-          id: "android-pre-o-unsupported",
-          ref: "GH #741",
-          note: "bundled UiAutomator2 server APK declares minSdk 26; API 23-25 installs fail with INSTALL_FAILED_OLDER_SDK"
-        }
-      ]
-    };
-  }
-});
-
-// packages/rn-dev-agent-core/dist/domain/engine-pin.js
-import { createHash as createHash4 } from "node:crypto";
-import { accessSync, chmodSync as chmodSync3, constants as constants2, copyFileSync as copyFileSync2, lstatSync as lstatSync5, mkdirSync as mkdirSync7, mkdtempSync, readFileSync as readFileSync11, readdirSync as readdirSync4, readlinkSync, rmSync as rmSync4, symlinkSync, unlinkSync as unlinkSync5 } from "node:fs";
-import { homedir as homedir5 } from "node:os";
-import { basename, dirname as dirname7, join as join15, relative, resolve, sep as sep2 } from "node:path";
-import { gunzipSync } from "node:zlib";
-function parseActionEnginePinVersion(enginePin) {
-  const match = ACTION_ENGINE_PIN_RE.exec(enginePin.trim());
-  return match?.[1] ?? null;
-}
-function engineLabel(_runner) {
-  return `the pinned maestro-runner ${MAESTRO_RUNNER_PIN.version}`;
-}
-function preOAndroidApiRefusal(apiLevel) {
-  if (apiLevel >= MAESTRO_RUNNER_MIN_ANDROID_API)
-    return null;
-  return `maestro_run refused: Android API ${apiLevel} is below API ${MAESTRO_RUNNER_MIN_ANDROID_API}, the minimum the pinned maestro-runner ${MAESTRO_RUNNER_PIN.version} can drive \u2014 its bundled UiAutomator2 server APK declares minSdk ${MAESTRO_RUNNER_MIN_ANDROID_API}, so the install fails with INSTALL_FAILED_OLDER_SDK. ${PRE_O_REMEDY}`;
-}
-function isOlderSdkInstallFailure(output) {
-  return output.split(/\r?\n/).some((line) => line.includes("INSTALL_FAILED_OLDER_SDK") && INSTALL_REJECT_CONTEXT.test(line.replace(OLDER_SDK_TOKEN, " ")));
-}
-function olderSdkInstallDiagnosis(runner = "maestro-runner") {
-  return `The device rejected the bundled UiAutomator2 server APK with INSTALL_FAILED_OLDER_SDK: ${engineLabel(runner)} requires Android API ${MAESTRO_RUNNER_MIN_ANDROID_API}+ and this device is below it. ${PRE_O_REMEDY}`;
-}
-function compareVersions(a, b) {
-  const pa = a.split(".").map(Number);
-  const pb = b.split(".").map(Number);
-  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
-    const x = pa[i] ?? 0;
-    const y = pb[i] ?? 0;
-    if (x > y)
-      return 1;
-    if (x < y)
-      return -1;
-  }
-  return 0;
-}
-function meetsMaestroRunnerFloor(version2) {
-  return /^\d+(?:\.\d+)*$/.test(version2) && compareVersions(version2, MAESTRO_RUNNER_PIN.version) >= 0;
-}
-function pinCacheRoot(home = homedir5()) {
-  const override = process.env.RN_DEV_AGENT_RUNNER_CACHE;
-  const base = override && override.length > 0 ? override : join15(home, ".cache", "rn-dev-agent");
-  return join15(base, "maestro-runner", MAESTRO_RUNNER_PIN.version);
-}
-function pinnedRunnerBinPath(home) {
-  return join15(pinCacheRoot(home), "bin", "maestro-runner");
-}
-function isPinCacheMetadataPath(relPath) {
-  return relPath.split(/[/\\]/).some((part) => part.startsWith("._") || part === "PaxHeader" || part.startsWith("PaxHeaders."));
-}
-function tarText(buffer, offset, length) {
-  const end = buffer.indexOf(0, offset);
-  return buffer.subarray(offset, end >= offset && end < offset + length ? end : offset + length).toString();
-}
-function expectedPayloadEntries(archive) {
-  const tar = gunzipSync(archive, { maxOutputLength: 1024 * 1024 * 1024 });
-  const raw = [];
-  let offset = 0;
-  let longPath = null;
-  while (offset + 512 <= tar.length) {
-    const header = tar.subarray(offset, offset + 512);
-    if (header.every((byte) => byte === 0))
-      break;
-    const prefix = tarText(header, 345, 155);
-    const name = tarText(header, 0, 100);
-    const sizeText = tarText(header, 124, 12).trim();
-    const size = Number.parseInt(sizeText || "0", 8);
-    if (!Number.isSafeInteger(size) || size < 0 || offset + 512 + size > tar.length)
-      return null;
-    const type = String.fromCharCode(header[156] || 48);
-    const data = tar.subarray(offset + 512, offset + 512 + size);
-    const archivePath = longPath ?? [prefix, name].filter(Boolean).join("/");
-    longPath = null;
-    if (type === "L") {
-      longPath = data.toString().split("\0")[0].trim();
-    } else if (type === "0" || type === "\0" || type === "2" || type === "5") {
-      raw.push({ path: archivePath, type, data, link: tarText(header, 157, 100) });
-    }
-    offset += 512 + Math.ceil(size / 512) * 512;
-  }
-  const runner = raw.find((entry) => (entry.type === "0" || entry.type === "\0") && (entry.path === "bin/maestro-runner" || entry.path.endsWith("/bin/maestro-runner")));
-  if (!runner)
-    return null;
-  const rootPrefix = runner.path.slice(0, -"bin/maestro-runner".length);
-  const expected = /* @__PURE__ */ new Map();
-  for (const entry of raw) {
-    if (!entry.path.startsWith(rootPrefix) || entry.type === "5")
-      continue;
-    const path = entry.path.slice(rootPrefix.length).replace(/^\.\//, "");
-    if (!path || path.startsWith("/") || path.split("/").some((part) => part === ".."))
-      return null;
-    if (isPinCacheMetadataPath(path))
-      continue;
-    if (entry.type === "2") {
-      expected.set(path, { kind: "symlink", target: entry.link });
-    } else {
-      expected.set(path, {
-        kind: "file",
-        sha256: createHash4("sha256").update(entry.data).digest("hex")
-      });
-    }
-  }
-  return expected;
-}
-function payloadMatchesPinnedArchive(root, archive, expectedArchiveSha256) {
-  if (createHash4("sha256").update(archive).digest("hex") !== expectedArchiveSha256)
-    return false;
-  const expected = expectedPayloadEntries(archive);
-  if (!expected)
-    return false;
-  const seen = /* @__PURE__ */ new Set();
-  const visit = (directory) => {
-    for (const entry of readdirSync4(directory, { withFileTypes: true })) {
-      const path = join15(directory, entry.name);
-      const rel = relative(root, path).split(sep2).join("/");
-      if (rel === ".payload.tar.gz" || isPinCacheMetadataPath(rel))
-        continue;
-      if (entry.isDirectory()) {
-        if (!visit(path))
-          return false;
-        continue;
-      }
-      const wanted = expected.get(rel);
-      if (!wanted)
-        return false;
-      seen.add(rel);
-      if (entry.isSymbolicLink()) {
-        if (wanted.kind !== "symlink" || readlinkSync(path) !== wanted.target)
-          return false;
-        continue;
-      }
-      if (!entry.isFile() || wanted.kind !== "file")
-        return false;
-      const sha2562 = createHash4("sha256").update(readFileSync11(path)).digest("hex");
-      if (sha2562 !== wanted.sha256)
-        return false;
-    }
-    return true;
-  };
-  return visit(root) && seen.size === expected.size;
-}
-function installedPayloadMatchesPin(platformKey, root = pinCacheRoot()) {
-  try {
-    const expectedArchiveSha = pinnedArchiveSha256(platformKey);
-    if (!expectedArchiveSha)
-      return false;
-    const archive = readFileSync11(join15(root, ".payload.tar.gz"));
-    return payloadMatchesPinnedArchive(root, archive, expectedArchiveSha);
-  } catch {
-    return false;
-  }
-}
-function isRegularPinCacheBinary(path) {
-  try {
-    const stat2 = lstatSync5(path);
-    const ancestors = [dirname7(path), dirname7(dirname7(path)), dirname7(dirname7(dirname7(path)))];
-    const contained2 = ancestors.every((ancestor) => {
-      const ancestorStat = lstatSync5(ancestor);
-      return ancestorStat.isDirectory() && !ancestorStat.isSymbolicLink();
-    });
-    accessSync(path, constants2.X_OK);
-    return contained2 && stat2.isFile() && !stat2.isSymbolicLink();
-  } catch {
-    return false;
-  }
-}
-function getMaestroRunnerPath() {
-  const path = pinnedRunnerBinPath();
-  return isRegularPinCacheBinary(path) ? path : null;
-}
-function runnerCacheVersionsRoot() {
-  return dirname7(pinCacheRoot());
-}
-function pinCacheVersionForPath(path) {
-  if (!isRegularPinCacheBinary(path) || basename(path) !== "maestro-runner")
-    return null;
-  const versionDir = dirname7(dirname7(resolve(path)));
-  if (dirname7(versionDir) !== resolve(runnerCacheVersionsRoot()))
-    return null;
-  const version2 = basename(versionDir);
-  return /^\d+(?:\.\d+)*$/.test(version2) ? version2 : null;
-}
-function getMaestroRunnerDetectionPath() {
-  const exact = getMaestroRunnerPath();
-  if (exact)
-    return exact;
-  const root = runnerCacheVersionsRoot();
-  try {
-    const candidates = readdirSync4(root, { withFileTypes: true }).filter((entry) => entry.isDirectory() && /^\d+(?:\.\d+)*$/.test(entry.name)).map((entry) => ({
-      version: entry.name,
-      path: join15(root, entry.name, "bin", "maestro-runner")
-    })).filter((candidate) => isRegularPinCacheBinary(candidate.path)).sort((left, right) => compareVersions(right.version, left.version));
-    return candidates[0]?.path ?? null;
-  } catch {
-    return null;
-  }
-}
-function nodePlatformKey(platform = process.platform, arch = process.arch) {
-  return `${platform}-${arch}`;
-}
-function pinArchiveCoords(platformKey) {
-  switch (platformKey) {
-    case "darwin-arm64":
-      return { os: "darwin", arch: "arm64" };
-    case "darwin-x64":
-      return { os: "darwin", arch: "amd64" };
-    case "linux-x64":
-      return { os: "linux", arch: "amd64" };
-    case "linux-arm64":
-      return { os: "linux", arch: "arm64" };
-    default:
-      return null;
-  }
-}
-function buildReplayEngineStatus(cls, version2, _cliPresent, extras = {}) {
-  const engine = cls === "pinned-ok" ? "maestro-runner" : "none";
-  return {
-    engine,
-    version: version2,
-    pin: { pinned: MAESTRO_RUNNER_PIN.version, status: cls },
-    quirks: MAESTRO_RUNNER_PIN.knownQuirks.map((q) => q.id),
-    selectedPath: extras.selectedPath ?? null,
-    provenance: extras.provenance ?? (cls === "not-installed" ? "none" : "pin-cache")
-  };
-}
-function enginePinCaveat(status) {
-  const cls = status.pin.status;
-  if (cls === "drift-newer" || cls === "drift-older") {
-    return `maestro-runner ${status.version} differs from the tested pin ${status.pin.pinned} (untested drift \u2014 B223-class behavior changes arrive silently; see the upgrade ritual in engine-pin.ts)`;
-  }
-  if (cls === "checksum-mismatch") {
-    return `maestro-runner pin-cache binary checksum does not match the ${status.pin.pinned} manifest \u2014 possible corruption or tampering; reinstall via ensure-maestro-runner.sh`;
-  }
-  return null;
-}
-function isRegexShapedSelector(value) {
-  for (let i = 0; i < value.length; i += 1) {
-    const ch = value[i];
-    if (ch === "\\")
-      return true;
-    if (REGEX_METACHARACTERS.has(ch))
-      return true;
-  }
-  return false;
-}
-function selectorTextValues(value, found) {
-  if (typeof value === "string") {
-    if (isRegexShapedSelector(value))
-      found.push(value);
-    return;
-  }
-  if (Array.isArray(value)) {
-    for (const entry of value)
-      selectorTextValues(entry, found);
-    return;
-  }
-  if (!value || typeof value !== "object")
-    return;
-  for (const [key, nested] of Object.entries(value)) {
-    if (key === "text" || RELATIVE_SELECTOR_KEYS.has(key)) {
-      selectorTextValues(nested, found);
-    }
-  }
-}
-function conditionTextValues(value, found) {
-  if (!value || typeof value !== "object" || Array.isArray(value))
-    return;
-  for (const [key, nested] of Object.entries(value)) {
-    if (key === "visible" || key === "notVisible")
-      selectorTextValues(nested, found);
-  }
-}
-function findRegexTextSelectors(commands) {
-  const found = [];
-  const visit = (value) => {
-    if (Array.isArray(value)) {
-      for (const entry of value)
-        visit(entry);
-      return;
-    }
-    if (value && typeof value === "object") {
-      for (const [key, nested] of Object.entries(value)) {
-        if (TEXT_SELECTOR_KEYS.has(key))
-          selectorTextValues(nested, found);
-        if (key === "scrollUntilVisible" && nested && typeof nested === "object") {
-          selectorTextValues(nested.element, found);
-        }
-        if (key === "extendedWaitUntil")
-          conditionTextValues(nested, found);
-        if (key === "when")
-          conditionTextValues(nested, found);
-        visit(nested);
-      }
-    }
-  };
-  visit(commands);
-  return found;
-}
-function pinCorrection(status, platformKey = nodePlatformKey()) {
-  const cls = status.pin.status;
-  const pinned = status.pin.pinned;
-  const installed = status.version ?? "unknown";
-  const install = `Install attested ${pinned} (floor >= ${pinned}) via ${PINNED_RUNNER_INSTALL_HINT} (session pin-cache; do not use PATH or brew maestro).`;
-  if (pinArchiveCoords(platformKey) === null) {
-    return `maestro-runner is unsupported on ${platformKey}. Supported platforms: darwin-arm64, darwin-x64, linux-x64, linux-arm64. ${install}`;
-  }
-  switch (cls) {
-    case "not-installed":
-      return `Session maestro-runner ${pinned} is not installed. ${install}`;
-    case "drift-older":
-      return `Session maestro-runner ${installed} is older than the required pin ${pinned}. ${install}`;
-    case "drift-newer":
-      return `Session maestro-runner ${installed} is newer than the attested default ${pinned} and is not executed without attestation. ${install}`;
-    case "checksum-mismatch":
-      return `Session maestro-runner binary checksum does not match the ${pinned} pin manifest. ${install}`;
-    case "unknown-version":
-      return `Session maestro-runner version could not be read. ${install}`;
-    case "unverified":
-      if (status.version && compareVersions(status.version, pinned) > 0) {
-        return `UNVERIFIED_NEWER_DRIFT: Session pin-cache contains an unverified newer maestro-runner entry ${installed}; its directory name is not trusted binary evidence and it will not be executed. ${install}`;
-      }
-      return `Session maestro-runner ${installed} could not be checksum-verified on ${platformKey}. ${install}`;
-    case "pinned-ok":
-      return `Session maestro-runner ${pinned} is selected from the pin-cache.`;
-  }
-}
-function exactPinRefusal(status, platformKey = nodePlatformKey()) {
-  if (!status) {
-    return `maestro_run refused: session runner ${MAESTRO_RUNNER_PIN.version} could not be detected. ${pinCorrection(buildReplayEngineStatus("not-installed", null, false), platformKey)}`;
-  }
-  if (status.pin.status === "pinned-ok")
-    return null;
-  return `maestro_run refused: ${pinCorrection(status, platformKey)}`;
-}
-async function immediateRunnerPinRefusal(runnerPath, resolveStatus = () => getEngineStatus().catch(() => null)) {
-  const status = await resolveStatus();
-  const refusal = exactPinRefusal(status);
-  if (refusal)
-    return `RUNNER_PIN_CHANGED: ${refusal}`;
-  const canonicalPath3 = getMaestroRunnerPath();
-  if (!canonicalPath3 || !status?.selectedPath) {
-    return "RUNNER_PIN_CHANGED: verified runner path disappeared before execution.";
-  }
-  if (resolve(canonicalPath3) !== resolve(runnerPath) || resolve(status.selectedPath) !== resolve(runnerPath)) {
-    return "RUNNER_PIN_CHANGED: verified runner path changed before execution.";
-  }
-  return null;
-}
-function copyPayloadTree(source, destination) {
-  const sourceStat = lstatSync5(source);
-  if (!sourceStat.isDirectory() || sourceStat.isSymbolicLink()) {
-    throw new Error(`RUNNER_PIN_CHANGED: payload directory changed before execution.`);
-  }
-  mkdirSync7(destination, { recursive: true });
-  for (const entry of readdirSync4(source, { withFileTypes: true })) {
-    const sourcePath = join15(source, entry.name);
-    const destinationPath = join15(destination, entry.name);
-    const stat2 = lstatSync5(sourcePath);
-    if (stat2.isDirectory() && !stat2.isSymbolicLink()) {
-      copyPayloadTree(sourcePath, destinationPath);
-      chmodSync3(destinationPath, stat2.mode & 511);
-    } else if (stat2.isFile() && !stat2.isSymbolicLink()) {
-      copyFileSync2(sourcePath, destinationPath, constants2.COPYFILE_EXCL | constants2.COPYFILE_FICLONE);
-      chmodSync3(destinationPath, stat2.mode & 511);
-    } else if (stat2.isSymbolicLink()) {
-      symlinkSync(readlinkSync(sourcePath), destinationPath);
-    } else {
-      throw new Error(`RUNNER_PIN_CHANGED: unsupported payload entry ${sourcePath}.`);
-    }
-  }
-}
-async function withImmediatePinnedRunner(runnerPath, resolveStatus, execute2) {
-  const refusal = await immediateRunnerPinRefusal(runnerPath, resolveStatus);
-  if (refusal)
-    throw new Error(refusal);
-  const expectedSha256 = pinnedSha256(nodePlatformKey());
-  if (!expectedSha256) {
-    throw new Error("RUNNER_PIN_CHANGED: runner checksum is unavailable for this platform.");
-  }
-  const snapshotRoot = mkdtempSync(join15(runnerCacheVersionsRoot(), `.spawn-${MAESTRO_RUNNER_PIN.version}-`));
-  try {
-    copyPayloadTree(pinCacheRoot(), snapshotRoot);
-    const snapshotRunner = join15(snapshotRoot, "bin", "maestro-runner");
-    const snapshotStat = lstatSync5(snapshotRunner);
-    if (!snapshotStat.isFile() || snapshotStat.isSymbolicLink() || !installedPayloadMatchesPin(nodePlatformKey(), snapshotRoot) || createHash4("sha256").update(readFileSync11(snapshotRunner)).digest("hex") !== expectedSha256) {
-      throw new Error("RUNNER_PIN_CHANGED: payload content changed before execution.");
-    }
-    const helper = verifiedNativePublicationHelper();
-    const snapshotHelper = join15(snapshotRoot, ".runner-exec");
-    copyFileSync2(helper.path, snapshotHelper, constants2.COPYFILE_EXCL | constants2.COPYFILE_FICLONE);
-    chmodSync3(snapshotHelper, 320);
-    if (createHash4("sha256").update(readFileSync11(snapshotHelper)).digest("hex") !== helper.sha256) {
-      throw new Error("RUNNER_PIN_CHANGED: execution binding changed before execution.");
-    }
-    for (const entry of readdirSync4(snapshotRoot, { recursive: true, withFileTypes: true })) {
-      const entryPath = join15(entry.parentPath, entry.name);
-      if (entry.isDirectory())
-        chmodSync3(entryPath, 320);
-      else if (entry.isFile()) {
-        chmodSync3(entryPath, entryPath === snapshotRunner || entryPath === snapshotHelper ? 320 : 256);
-      }
-    }
-    chmodSync3(snapshotRoot, 320);
-    const openedRunner = lstatSync5(snapshotRunner);
-    return await execute2(snapshotHelper, [
-      "--exec-file",
-      snapshotRunner,
-      String(openedRunner.dev),
-      String(openedRunner.ino),
-      "--"
-    ]);
-  } finally {
-    try {
-      chmodSync3(snapshotRoot, 448);
-      for (const entry of readdirSync4(snapshotRoot, { recursive: true, withFileTypes: true })) {
-        const entryPath = join15(entry.parentPath, entry.name);
-        if (entry.isDirectory())
-          chmodSync3(entryPath, 448);
-        else if (entry.isFile())
-          chmodSync3(entryPath, 384);
-      }
-    } catch {
-    }
-    rmSync4(snapshotRoot, { recursive: true, force: true });
-  }
-}
-function pinnedSha256(platformKey) {
-  return testAttestation?.sha256 ?? MAESTRO_RUNNER_PIN.sha256[platformKey];
-}
-function pinnedArchiveSha256(platformKey) {
-  return testAttestation?.archiveSha256 ?? MAESTRO_RUNNER_PIN.archiveSha256[platformKey];
-}
-function defaultHashFile(bin) {
-  return createHash4("sha256").update(readFileSync11(bin)).digest("hex");
-}
-async function detect(resolvers) {
-  const binPath = (resolvers.binPath ?? getMaestroRunnerDetectionPath)();
-  const platformKey = resolvers.platformKey ?? nodePlatformKey();
-  if (!binPath) {
-    return buildReplayEngineStatus("not-installed", null, false, {
-      selectedPath: null,
-      provenance: "none"
-    });
-  }
-  const cacheVersion = pinCacheVersionForPath(binPath);
-  if (cacheVersion && cacheVersion !== MAESTRO_RUNNER_PIN.version) {
-    let sha2563 = null;
-    try {
-      sha2563 = (resolvers.hashFile ?? defaultHashFile)(binPath);
-    } catch {
-      sha2563 = null;
-    }
-    const expectedSha2562 = TRUSTED_DRIFT_SHA256[cacheVersion]?.[platformKey];
-    if (!sha2563) {
-      return buildReplayEngineStatus("unverified", null, false, {
-        selectedPath: binPath,
-        provenance: "pin-cache"
-      });
-    }
-    const comparison = compareVersions(cacheVersion, MAESTRO_RUNNER_PIN.version);
-    if (!expectedSha2562) {
-      return buildReplayEngineStatus("unverified", cacheVersion, false, {
-        selectedPath: binPath,
-        provenance: "pin-cache"
-      });
-    }
-    if (sha2563 !== expectedSha2562) {
-      return buildReplayEngineStatus("checksum-mismatch", null, false, {
-        selectedPath: binPath,
-        provenance: "pin-cache"
-      });
-    }
-    const cls = comparison < 0 ? "drift-older" : comparison > 0 ? "drift-newer" : "unknown-version";
-    return buildReplayEngineStatus(cls, cacheVersion, false, {
-      selectedPath: binPath,
-      provenance: "pin-cache"
-    });
-  }
-  let sha2562 = null;
-  try {
-    sha2562 = (resolvers.hashFile ?? defaultHashFile)(binPath);
-  } catch {
-    sha2562 = null;
-  }
-  const expectedSha256 = MAESTRO_RUNNER_PIN.sha256[platformKey];
-  if (!expectedSha256 || !sha2562) {
-    return buildReplayEngineStatus("unverified", null, false, {
-      selectedPath: binPath,
-      provenance: "pin-cache"
-    });
-  }
-  if (sha2562 !== expectedSha256) {
-    return buildReplayEngineStatus("checksum-mismatch", null, false, {
-      selectedPath: binPath,
-      provenance: "pin-cache"
-    });
-  }
-  if (!resolvers.binPath && !resolvers.hashFile && !installedPayloadMatchesPin(platformKey)) {
-    return buildReplayEngineStatus("checksum-mismatch", null, false, {
-      selectedPath: binPath,
-      provenance: "pin-cache"
-    });
-  }
-  return buildReplayEngineStatus("pinned-ok", MAESTRO_RUNNER_PIN.version, false, {
-    selectedPath: binPath,
-    provenance: "pin-cache"
-  });
-}
-function getEngineStatus(resolvers) {
-  if (testStatus)
-    return Promise.resolve(testStatus);
-  return detect(resolvers ?? {}).catch(() => buildReplayEngineStatus("unknown-version", null, false));
-}
-var MAESTRO_RUNNER_PIN, TRUSTED_DRIFT_SHA256, ACTION_ENGINE_PIN, ACTION_ENGINE_PIN_RE, HOST_PLUGIN_ROOT, PINNED_RUNNER_INSTALL_HINT, PINNED_RUNNER_DIAGNOSE_HINT, MAESTRO_RUNNER_MIN_ANDROID_API, PRE_O_REMEDY, OLDER_SDK_TOKEN, INSTALL_REJECT_CONTEXT, REGEX_METACHARACTERS, TEXT_SELECTOR_KEYS, RELATIVE_SELECTOR_KEYS, testStatus, testAttestation;
-var init_engine_pin = __esm({
-  "packages/rn-dev-agent-core/dist/domain/engine-pin.js"() {
-    "use strict";
-    init_process_birth();
-    init_maestro_runner_pin();
-    MAESTRO_RUNNER_PIN = Object.freeze({
-      version: maestro_runner_pin_default.version,
-      sha256: Object.freeze({ ...maestro_runner_pin_default.sha256 }),
-      archiveSha256: Object.freeze({ ...maestro_runner_pin_default.archiveSha256 }),
-      knownQuirks: Object.freeze(maestro_runner_pin_default.knownQuirks.map((quirk) => Object.freeze({ ...quirk })))
-    });
-    TRUSTED_DRIFT_SHA256 = Object.freeze({
-      "1.0.9": Object.freeze({
-        "darwin-arm64": "7d3777a67f8cc3d5e3927f498ddda8a56c424a10158f7cd4fa494ecc3ed97923",
-        "darwin-x64": "36f8a973c3231b6b8125db4a3e131b8c3193aec6774145584b18070be979fd5f",
-        "linux-arm64": "a8e8197c63502fba874ce69b908174d46a47c6539025184e3003e70576d9451e",
-        "linux-x64": "bf7e9ef297c35712e9fad0ad56a65b7fd94e1f30168733cf09459b4ea80c4c3e"
-      })
-    });
-    ACTION_ENGINE_PIN = `maestro-runner@${MAESTRO_RUNNER_PIN.version}`;
-    ACTION_ENGINE_PIN_RE = /^maestro-runner@(\d+(?:\.\d+)*)$/;
-    HOST_PLUGIN_ROOT = "${CLAUDE_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}";
-    PINNED_RUNNER_INSTALL_HINT = `bash ${HOST_PLUGIN_ROOT}/scripts/ensure-maestro-runner.sh`;
-    PINNED_RUNNER_DIAGNOSE_HINT = `node ${HOST_PLUGIN_ROOT}/rn-dev-agent-core/dist/maestro-runner-pin.js diagnose`;
-    MAESTRO_RUNNER_MIN_ANDROID_API = 26;
-    PRE_O_REMEDY = "Action replay / E2E via the maestro engine is unsupported on this device; the direct device_* interaction tier still works (rn-android-runner supports API 23+), except for the few device_* paths that fall back to maestro (dev-client picker, system dialogs, device_fill correction), which hit this same limit.";
-    OLDER_SDK_TOKEN = /INSTALL_FAILED_OLDER_SDK/g;
-    INSTALL_REJECT_CONTEXT = /\b(?:adb|install|installing|failure|uiautomator2)\b|\.apk\b/i;
-    REGEX_METACHARACTERS = /* @__PURE__ */ new Set([
-      ".",
-      "^",
-      "$",
-      "*",
-      "+",
-      "?",
-      "(",
-      ")",
-      "[",
-      "]",
-      "{",
-      "}",
-      "|"
-    ]);
-    TEXT_SELECTOR_KEYS = /* @__PURE__ */ new Set([
-      "tapOn",
-      "doubleTapOn",
-      "longPressOn",
-      "assertVisible",
-      "assertNotVisible",
-      "copyTextFrom"
-    ]);
-    RELATIVE_SELECTOR_KEYS = /* @__PURE__ */ new Set([
-      "above",
-      "below",
-      "leftOf",
-      "rightOf",
-      "childOf",
-      "containsChild",
-      "containsDescendants"
-    ]);
-  }
-});
-
-// packages/rn-dev-agent-core/dist/tools/maestro-dispatch.js
-function shouldWarnFallback(reason) {
-  if (warnedFallbackReasons.has(reason))
-    return false;
-  warnedFallbackReasons.add(reason);
-  return true;
-}
-function flowContainsHideKeyboard(commands) {
-  return commands.some((c) => c === "hideKeyboard" || typeof c === "object" && c !== null && "hideKeyboard" in c);
-}
-function chooseMaestroDispatch(inputs) {
-  const runnerPath = (inputs.maestroRunnerPath ?? getMaestroRunnerPath)();
-  if (runnerPath) {
-    return {
-      runner: "maestro-runner",
-      binPath: runnerPath,
-      buildArgs: (platform, flowFile, appFile, deviceId) => [
-        ...appFile ? ["--app-file", appFile] : [],
-        "--platform",
-        platform,
-        ...deviceId ? ["--device", deviceId] : [],
-        "test",
-        flowFile
-      ]
-    };
-  }
-  return {
-    error: `Session maestro-runner ${MAESTRO_RUNNER_PIN.version} is not installed in the pin-cache. Install attested ${MAESTRO_RUNNER_PIN.version} (floor >= ${MAESTRO_RUNNER_PIN.version}) via ${PINNED_RUNNER_INSTALL_HINT}. Ambient PATH maestro-runner, ~/.maestro-runner, and brew maestro are never used.`,
-    hint: `run ensure-maestro-runner.sh for attested ${MAESTRO_RUNNER_PIN.version} (floor >= ${MAESTRO_RUNNER_PIN.version})`
-  };
-}
-var warnedFallbackReasons;
-var init_maestro_dispatch = __esm({
-  "packages/rn-dev-agent-core/dist/tools/maestro-dispatch.js"() {
-    "use strict";
-    init_engine_pin();
-    warnedFallbackReasons = /* @__PURE__ */ new Set();
-  }
-});
-
-// packages/rn-dev-agent-core/dist/domain/ansi.js
-function stripAnsi(value) {
-  return value.replace(ANSI_RE, "");
-}
-var ANSI_RE;
-var init_ansi = __esm({
-  "packages/rn-dev-agent-core/dist/domain/ansi.js"() {
-    "use strict";
-    ANSI_RE = new RegExp(String.fromCharCode(27) + "\\[[0-9;]*m", "g");
-  }
-});
-
-// packages/rn-dev-agent-core/dist/domain/maestro-error-parser.js
-function blockReasons(lines, stepIndex) {
-  const reasons = [];
-  for (let i = stepIndex + 1; i < lines.length; i++) {
-    if (RUNNER_STEP_RE.test(lines[i]))
-      break;
-    if (REASON_LINE_RE.test(lines[i]))
-      reasons.push(lines[i]);
-  }
-  return reasons;
-}
-function idWaitStepAmongDuplicates(lines, terminalIndex, terminalReason2) {
-  for (let i = terminalIndex - 1; i >= 0; i--) {
-    const step = RUNNER_STEP_RE.exec(lines[i]);
-    if (!step)
-      continue;
-    if (step[1] !== "\u2717")
-      return null;
-    if (!blockReasons(lines, i).includes(terminalReason2))
-      return null;
-    const stepMatch = ID_WAIT_STEP_RE.exec(step[2]);
-    if (stepMatch)
-      return stepMatch;
-  }
-  return null;
-}
-function parseTerminalIdWait(output, suppliedFailedStep) {
-  const lines = stripAnsi(output).split("\n");
-  let terminalStep;
-  for (let index = 0; index < lines.length; index++) {
-    const match = RUNNER_STEP_RE.exec(lines[index]);
-    if (match)
-      terminalStep = { index, status: match[1], name: match[2] };
-  }
-  if (terminalStep?.status === "\u2713")
-    return null;
-  if (suppliedFailedStep && terminalStep && terminalStep.name !== suppliedFailedStep)
-    return null;
-  const failedStep = suppliedFailedStep ?? terminalStep?.name;
-  if (!failedStep || terminalStep && terminalStep.status !== "\u2717")
-    return null;
-  const reasonLine = lines.slice(terminalStep ? terminalStep.index + 1 : 0).filter((line) => REASON_LINE_RE.test(line)).at(-1);
-  if (!reasonLine)
-    return null;
-  const reasonMatch = ID_WAIT_REASON_RE.exec(reasonLine);
-  if (!reasonMatch)
-    return null;
-  const stepMatch = ID_WAIT_STEP_RE.exec(failedStep) ?? (terminalStep && SELECTOR_LESS_ID_WAIT_SUMMARY_RE.test(failedStep) ? idWaitStepAmongDuplicates(lines, terminalStep.index, reasonLine) : null);
-  if (!stepMatch || reasonMatch[2] !== stepMatch[2])
-    return null;
-  return {
-    kind: "SELECTOR_NOT_FOUND",
-    selectorKind: "id",
-    selector: stepMatch[2],
-    raw: output
-  };
-}
-function parseMaestroFailure(output, terminal) {
-  const raw = typeof output === "string" ? output : "";
-  if (terminal?.exitClass === "timed-out") {
-    return { kind: "TIMEOUT", selector: terminal.failureSelector ?? null, raw };
-  }
-  if (terminal?.failureKind === "SELECTOR_NOT_FOUND") {
-    return {
-      kind: "SELECTOR_NOT_FOUND",
-      selectorKind: "unknown",
-      selector: terminal.failureSelector ?? "",
-      raw
-    };
-  }
-  if (terminal?.failureKind === "TIMEOUT") {
-    return { kind: "TIMEOUT", selector: terminal.failureSelector ?? null, raw };
-  }
-  if (terminal?.failureKind === "ASSERTION_FAILED") {
-    return { kind: "ASSERTION_FAILED", selector: terminal.failureSelector ?? null, raw };
-  }
-  if (terminal?.exitClass === "before-first-step" && terminal.bootstrapEvidence) {
-    return {
-      kind: "WDA_BOOTSTRAP_FAILED",
-      detail: terminal.bootstrapEvidence.slice(0, 500),
-      raw
-    };
-  }
-  if (!raw) {
-    return { kind: "UNKNOWN", raw: "" };
-  }
-  output = raw;
-  const terminalIdWait = parseTerminalIdWait(output, terminal?.failedStep);
-  if (terminalIdWait)
-    return terminalIdWait;
-  const lines = output.split("\n");
-  for (const { re, build } of PATTERNS) {
-    for (let i = lines.length - 1; i >= 0; i--) {
-      const line = lines[i];
-      if (!line)
-        continue;
-      const m = line.match(re);
-      if (m)
-        return build(m, output);
-    }
-  }
-  for (const { re, build } of PATTERNS) {
-    const m = output.match(re);
-    if (m)
-      return build(m, output);
-  }
-  return { kind: "UNKNOWN", raw: output };
-}
-function isAutoRepairable(failure) {
-  return failure.kind === "SELECTOR_NOT_FOUND";
-}
-function outputIndicatesFlowFailure(output) {
-  return /^\s*(?:\[FAILED\]|(?:Test|Flow) FAILED\b|FAILED\s*$)/m.test(output);
-}
-var PATTERNS, RUNNER_STEP_RE, REASON_LINE_RE, ID_WAIT_STEP_RE, SELECTOR_LESS_ID_WAIT_SUMMARY_RE, ID_WAIT_REASON_RE;
-var init_maestro_error_parser = __esm({
-  "packages/rn-dev-agent-core/dist/domain/maestro-error-parser.js"() {
-    "use strict";
-    init_ansi();
-    PATTERNS = [
-      {
-        re: /Element with id (['"])((?:(?!\1).)+)\1 (?:was )?not found/i,
-        build: (m, raw) => ({ kind: "SELECTOR_NOT_FOUND", selectorKind: "id", selector: m[2], raw })
-      },
-      {
-        re: /Element with text (['"])((?:(?!\1).)+)\1 (?:was )?not found/i,
-        build: (m, raw) => ({ kind: "SELECTOR_NOT_FOUND", selectorKind: "text", selector: m[2], raw })
-      },
-      // maestro-runner 1.0.x shape — issue #105.
-      // "Element not found: id='X'" or "Element not found: text='X'".
-      {
-        re: /Element not found:\s*id=(['"])((?:(?!\1).)+)\1/i,
-        build: (m, raw) => ({ kind: "SELECTOR_NOT_FOUND", selectorKind: "id", selector: m[2], raw })
-      },
-      {
-        re: /Element not found:\s*text=(['"])((?:(?!\1).)+)\1/i,
-        build: (m, raw) => ({ kind: "SELECTOR_NOT_FOUND", selectorKind: "text", selector: m[2], raw })
-      },
-      {
-        re: /Element (['"])((?:(?!\1).)+)\1 (?:was )?not found/i,
-        build: (m, raw) => ({
-          kind: "SELECTOR_NOT_FOUND",
-          selectorKind: "unknown",
-          selector: m[2],
-          raw
-        })
-      },
-      {
-        re: /Timed out waiting for element with id (['"])((?:(?!\1).)+)\1/i,
-        build: (m, raw) => ({ kind: "TIMEOUT", selector: m[2], raw })
-      },
-      {
-        re: /Timed out waiting for element (['"])((?:(?!\1).)+)\1/i,
-        build: (m, raw) => ({ kind: "TIMEOUT", selector: m[2], raw })
-      },
-      {
-        re: /Assertion failed: (['"])((?:(?!\1).)+)\1 (?:is )?not visible/i,
-        build: (m, raw) => ({ kind: "ASSERTION_FAILED", selector: m[2], raw })
-      },
-      {
-        re: /Element (['"])((?:(?!\1).)+)\1 is not visible/i,
-        build: (m, raw) => ({ kind: "ASSERTION_FAILED", selector: m[2], raw })
-      }
-    ];
-    RUNNER_STEP_RE = /^[ \t]+([✓✗])\s+(\S.*\S|\S)\s*\(([\d.]+)s\)\s*$/;
-    REASON_LINE_RE = /^[ \t]+╰─\s+/;
-    ID_WAIT_STEP_RE = /^extendedWaitUntil:\s+visible\s+id=(['"])((?:(?!\1).)+)\1$/i;
-    SELECTOR_LESS_ID_WAIT_SUMMARY_RE = /^extendedWaitUntil$/;
-    ID_WAIT_REASON_RE = /^[ \t]+╰─\s+Element (['"])#((?:(?!\1).)+)\1 not visible within\b/i;
-  }
-});
-
-// packages/rn-dev-agent-core/dist/domain/reusable-action.js
-function freshRuntimeState(now = () => /* @__PURE__ */ new Date(), mtimeMs = 0) {
-  const ts = now().toISOString();
-  return {
-    schemaVersion: 1,
-    revision: 1,
-    updatedAt: ts,
-    lastSeenMtimeMs: mtimeMs,
-    runHistory: [],
-    repairHistory: [],
-    stats: {
-      totalRuns: 0,
-      successCount: 0,
-      failureCount: 0,
-      avgDurationMs: 0
-    }
-  };
-}
-function appendRunRecord(state, record2) {
-  const newHistory = [...state.runHistory, record2];
-  while (newHistory.length > HISTORY_LIMITS.RUN_HISTORY_MAX)
-    newHistory.shift();
-  const totalRuns = state.stats.totalRuns + 1;
-  const successCount = state.stats.successCount + (record2.status === "pass" ? 1 : 0);
-  const failureCount = state.stats.failureCount + (record2.status === "fail" ? 1 : 0);
-  const successDurations = newHistory.filter((r) => r.status === "pass").map((r) => r.durationMs);
-  const avgDurationMs = successDurations.length ? Math.round(successDurations.reduce((s, n) => s + n, 0) / successDurations.length) : state.stats.avgDurationMs;
-  return {
-    ...state,
-    updatedAt: record2.timestamp,
-    runHistory: newHistory,
-    stats: {
-      totalRuns,
-      successCount,
-      failureCount,
-      avgDurationMs,
-      lastSuccessAt: record2.status === "pass" ? record2.timestamp : state.stats.lastSuccessAt,
-      lastFailureAt: record2.status === "fail" ? record2.timestamp : state.stats.lastFailureAt
-    }
-  };
-}
-function appendRepairRecord(state, record2) {
-  const newHistory = [...state.repairHistory, record2];
-  while (newHistory.length > HISTORY_LIMITS.REPAIR_HISTORY_MAX)
-    newHistory.shift();
-  return {
-    ...state,
-    updatedAt: record2.timestamp,
-    revision: state.revision + 1,
-    repairHistory: newHistory
-  };
-}
-function recentRepairCount(state, now = () => /* @__PURE__ */ new Date()) {
-  const cutoff = now().getTime() - 24 * 60 * 60 * 1e3;
-  return state.repairHistory.filter((r) => new Date(r.timestamp).getTime() >= cutoff).length;
-}
-function repairBudgetAvailable(state, now = () => /* @__PURE__ */ new Date()) {
-  return recentRepairCount(state, now) < REPAIR_BUDGET.ATTEMPTS_PER_24H;
-}
-function shouldAutoPromoteToActive(metadata, lastRun) {
-  if (lastRun?.blindProbe?.skippedMaestro)
-    return false;
-  return metadata.status === "experimental" && lastRun?.status === "pass";
-}
-function shouldDemoteAfterRepair(metadata) {
-  return metadata.status === "active";
-}
-function parseM7Header(yamlText, fallbackId) {
-  const lines = yamlText.split("\n");
-  const meta = {};
-  let inComment = false;
-  for (const line of lines) {
-    if (line.startsWith("#")) {
-      inComment = true;
-      const stripped = line.replace(/^#\s?/, "").trim();
-      if (!stripped)
-        continue;
-      const kv = stripped.match(/^([a-zA-Z][\w-]*)\s*:\s*(.+)$/);
-      if (!kv)
-        continue;
-      const key = kv[1];
-      const raw = kv[2].trim();
-      if (key === "tags") {
-        meta.tags = raw.replace(/^\[|\]$/g, "").split(",").map((t) => t.trim()).filter(Boolean);
-      } else if (key === "mutates") {
-        meta.mutates = /^true$/i.test(raw);
-      } else if (key === "params") {
-        meta.params = raw.replace(/^\[|\]$/g, "").split(",").map((t) => t.trim()).filter(Boolean);
-      } else if (key === "produces") {
-        meta.produces = parseProducesMap(raw);
-      } else if (key === "expectedRouteSequence") {
-        meta.expectedRouteSequence = raw.replace(/^\[|\]$/g, "").split(",").map((t) => t.trim()).filter(Boolean);
-      } else if (key === "id" || key === "intent" || key === "status" || key === "appId" || key === "createdAt" || key === "author" || key === "enginePin") {
-        meta[key] = raw;
-      }
-    } else if (inComment && line.trim() === "") {
-      if (Object.keys(meta).length > 0)
-        break;
-    } else if (inComment) {
-      break;
-    }
-  }
-  const id = meta.id ?? fallbackId;
-  const intent = meta.intent;
-  if (!id || !intent)
-    return null;
-  const status = meta.status ?? "experimental";
-  return {
-    id,
-    intent,
-    tags: meta.tags,
-    mutates: meta.mutates,
-    status,
-    params: meta.params,
-    appId: meta.appId,
-    createdAt: meta.createdAt,
-    author: meta.author,
-    produces: meta.produces,
-    expectedRouteSequence: meta.expectedRouteSequence,
-    enginePin: meta.enginePin
-  };
-}
-function parseProducesMap(raw) {
-  const inner = raw.trim().replace(/^\{|\}$/g, "").trim();
-  if (!inner)
-    return void 0;
-  const result = {};
-  for (const part of inner.split(",")) {
-    const kv = part.match(/^\s*([a-zA-Z_][\w.-]*)\s*:\s*(.+?)\s*$/);
-    if (!kv)
-      return void 0;
-    const key = kv[1];
-    const valueRaw = kv[2].trim();
-    if (/^(true|false)$/i.test(valueRaw)) {
-      result[key] = /^true$/i.test(valueRaw);
-    } else if (/^-?\d+(\.\d+)?$/.test(valueRaw)) {
-      result[key] = Number(valueRaw);
-    } else {
-      result[key] = valueRaw.replace(/^['"]|['"]$/g, "");
-    }
-  }
-  return Object.keys(result).length ? result : void 0;
-}
-function serializeM7Header(metadata) {
-  const lines = [];
-  const stripNewlines2 = (s) => String(s).replace(/[\r\n]+/g, " ");
-  lines.push(`# id: ${stripNewlines2(metadata.id)}`);
-  lines.push(`# intent: ${stripNewlines2(metadata.intent)}`);
-  if (metadata.tags && metadata.tags.length) {
-    lines.push(`# tags: [${metadata.tags.map(stripNewlines2).join(", ")}]`);
-  }
-  if (typeof metadata.mutates === "boolean") {
-    lines.push(`# mutates: ${metadata.mutates}`);
-  }
-  if (metadata.status)
-    lines.push(`# status: ${stripNewlines2(metadata.status)}`);
-  if (metadata.enginePin)
-    lines.push(`# enginePin: ${stripNewlines2(metadata.enginePin)}`);
-  if (metadata.params && metadata.params.length) {
-    lines.push(`# params: [${metadata.params.map(stripNewlines2).join(", ")}]`);
-  }
-  if (metadata.appId)
-    lines.push(`# appId: ${stripNewlines2(metadata.appId)}`);
-  if (metadata.createdAt)
-    lines.push(`# createdAt: ${stripNewlines2(metadata.createdAt)}`);
-  if (metadata.author)
-    lines.push(`# author: ${stripNewlines2(metadata.author)}`);
-  if (metadata.produces && Object.keys(metadata.produces).length > 0) {
-    const pairs = Object.keys(metadata.produces).sort().map((k) => {
-      const v = metadata.produces[k];
-      const formatted = typeof v === "string" ? stripNewlines2(v) : String(v);
-      return `${k}: ${formatted}`;
-    });
-    lines.push(`# produces: { ${pairs.join(", ")} }`);
-  }
-  if (metadata.expectedRouteSequence && metadata.expectedRouteSequence.length) {
-    lines.push(`# expectedRouteSequence: [${metadata.expectedRouteSequence.map(stripNewlines2).join(", ")}]`);
-  }
-  return lines.join("\n");
-}
-var REPAIR_BUDGET, HISTORY_LIMITS;
-var init_reusable_action = __esm({
-  "packages/rn-dev-agent-core/dist/domain/reusable-action.js"() {
-    "use strict";
-    REPAIR_BUDGET = {
-      /** Max successful self-repairs allowed in a rolling 24h window. */
-      ATTEMPTS_PER_24H: 3,
-      /** Max repair attempts per run before escalating to user. */
-      ATTEMPTS_PER_RUN: 1
-    };
-    HISTORY_LIMITS = {
-      /** Cap runHistory at this many records; oldest dropped on append. */
-      RUN_HISTORY_MAX: 50,
-      /** Cap repairHistory at this many records; oldest dropped on append. */
-      REPAIR_HISTORY_MAX: 25
-    };
-  }
-});
-
-// packages/rn-dev-agent-core/dist/session/runtime-paths.js
-import { chmodSync as chmodSync4, lstatSync as lstatSync6, mkdirSync as mkdirSync8 } from "node:fs";
-import { join as join16, resolve as resolve2 } from "node:path";
-function privateDirectory(path) {
-  mkdirSync8(path, { recursive: true, mode: 448 });
-  const stat2 = lstatSync6(path);
-  if (stat2.isSymbolicLink() || !stat2.isDirectory()) {
-    throw new Error("SESSION_RUNTIME_ROOT_UNSAFE: runtime root must be a real directory");
-  }
-  chmodSync4(path, 448);
-  return path;
-}
-function sessionRuntimeRoot(projectRoot) {
-  const configured = process.env.RN_DEV_AGENT_SESSION_RUNTIME_ROOT;
-  return configured ? privateDirectory(resolve2(configured)) : join16(resolve2(projectRoot), ".rn-agent");
-}
-function sessionStateDirectory(projectRoot) {
-  const path = join16(sessionRuntimeRoot(projectRoot), "state");
-  return process.env.RN_DEV_AGENT_SESSION_RUNTIME_ROOT ? privateDirectory(path) : path;
-}
-function sessionRecordingsDirectory(projectRoot) {
-  const path = join16(sessionRuntimeRoot(projectRoot), "recordings");
-  return process.env.RN_DEV_AGENT_SESSION_RUNTIME_ROOT ? privateDirectory(path) : path;
-}
-var init_runtime_paths2 = __esm({
-  "packages/rn-dev-agent-core/dist/session/runtime-paths.js"() {
-    "use strict";
-  }
-});
-
-// packages/rn-dev-agent-core/dist/domain/sidecar-io.js
-import { existsSync as existsSync12, readFileSync as readFileSync12, writeFileSync as writeFileSync7, mkdirSync as mkdirSync9, statSync as statSync4 } from "node:fs";
-import { join as join17, dirname as dirname8 } from "node:path";
-function sidecarPathFor(yamlFilePath) {
-  const dir = dirname8(yamlFilePath);
-  const parent = dirname8(dir);
-  const filename = yamlFilePath.replace(/\.ya?ml$/i, ".state.json");
-  const base = filename.split(/[\\/]/).pop();
-  const stateDirectory = process.env.RN_DEV_AGENT_SESSION_RUNTIME_ROOT ? sessionStateDirectory(dirname8(parent)) : join17(parent, "state");
-  return join17(stateDirectory, base);
-}
-function loadOrInitSidecar(yamlFilePath, now = () => /* @__PURE__ */ new Date()) {
-  const path = sidecarPathFor(yamlFilePath);
-  if (existsSync12(path)) {
-    try {
-      const text = readFileSync12(path, "utf8");
-      const parsed = JSON.parse(text);
-      if (parsed && parsed.schemaVersion === 1 && typeof parsed.revision === "number" && typeof parsed.updatedAt === "string" && Array.isArray(parsed.runHistory) && Array.isArray(parsed.repairHistory) && typeof parsed.stats === "object") {
-        if (typeof parsed.lastSeenMtimeMs !== "number") {
-          try {
-            parsed.lastSeenMtimeMs = statSync4(yamlFilePath).mtimeMs;
-          } catch {
-            parsed.lastSeenMtimeMs = 0;
-          }
-        }
-        return parsed;
-      }
-    } catch {
-    }
-  }
-  let mtimeMs = 0;
-  try {
-    mtimeMs = statSync4(yamlFilePath).mtimeMs;
-  } catch {
-  }
-  return freshRuntimeState(now, mtimeMs);
-}
-function saveSidecar(yamlFilePath, state) {
-  const path = sidecarPathFor(yamlFilePath);
-  const parentDir = dirname8(path);
-  if (!existsSync12(parentDir))
-    mkdirSync9(parentDir, { recursive: true });
-  writeFileSync7(path, JSON.stringify(state, null, 2) + "\n", "utf8");
-  return { path };
-}
-function yamlEditedSinceLastSeen(yamlFilePath, state) {
-  try {
-    const current = statSync4(yamlFilePath).mtimeMs;
-    return current > state.lastSeenMtimeMs;
-  } catch {
-    return false;
-  }
-}
-function markSeen(state, mtimeMs) {
-  return { ...state, lastSeenMtimeMs: mtimeMs };
-}
-var init_sidecar_io = __esm({
-  "packages/rn-dev-agent-core/dist/domain/sidecar-io.js"() {
-    "use strict";
-    init_reusable_action();
-    init_runtime_paths2();
-  }
-});
-
-// packages/rn-dev-agent-core/dist/domain/atomic-writer.js
-import { writeFileSync as writeFileSync8, renameSync as renameSync3, statSync as statSync5, mkdirSync as mkdirSync10, existsSync as existsSync13, unlinkSync as unlinkSync6, readdirSync as readdirSync5, openSync as openSync2, closeSync as closeSync2, chmodSync as chmodSync5, fstatSync as fstatSync2, lstatSync as lstatSync7, readFileSync as readFileSync13, linkSync, constants as constants3 } from "node:fs";
-import { dirname as dirname9, basename as basename2 } from "node:path";
-function generateTmpStamp() {
-  const rand = Math.random().toString(36).slice(2, 10);
-  return `${process.pid}.${Date.now().toString(36)}.${rand}`;
-}
-function actionWriteLockPath(yamlPath) {
-  return `${yamlPath.replace(/\.yml$/i, ".yaml")}.write.lock`;
-}
-function currentLockOwner() {
-  if (localLockOwner)
-    return localLockOwner;
-  const observed = probeProcessBirth(process.pid);
-  if (observed.status !== "present") {
-    throw new Error("Could not establish action writer process identity.");
-  }
-  localLockOwner = { pid: process.pid, birth: observed.birth.token };
-  return localLockOwner;
-}
-function readLockOwner(lockPath) {
-  try {
-    const parsed = JSON.parse(readFileSync13(lockPath, "utf8"));
-    if (!Number.isSafeInteger(parsed.pid) || Number(parsed.pid) <= 0 || !parsed.birth)
-      return null;
-    return { pid: Number(parsed.pid), birth: parsed.birth };
-  } catch {
-    return null;
-  }
-}
-function lockOwnerIsGone(owner) {
-  const observed = probeProcessBirth(owner.pid);
-  return observed.status === "absent" || observed.status === "present" && observed.birth.token !== owner.birth;
-}
-function withPairWriteLock(yamlPath, operation, acquisitionPrecondition) {
-  if (acquisitionPrecondition && !acquisitionPrecondition())
-    throw ACTION_WRITE_PRECONDITION;
-  ensureDir(yamlPath);
-  const lockPath = actionWriteLockPath(yamlPath);
-  if (heldWriteLocks.has(lockPath))
-    return operation();
-  const ownerPath = `${dirname9(yamlPath)}/.rn-action-write-owner.${generateTmpStamp()}`;
-  const owner = currentLockOwner();
-  const lockFd = openSync2(ownerPath, "wx", 384);
-  writeFileSync8(lockFd, `${JSON.stringify(owner)}
-`, "utf8");
-  const deadline = Date.now() + ACTION_WRITE_LOCK_TIMEOUT_MS;
-  let acquired = false;
-  let identity2 = null;
-  try {
-    while (!acquired) {
-      try {
-        if (acquisitionPrecondition && !acquisitionPrecondition()) {
-          throw ACTION_WRITE_PRECONDITION;
-        }
-        linkSync(ownerPath, lockPath);
-        acquired = true;
-      } catch (err) {
-        if (err.code !== "EEXIST")
-          throw err;
-        let lockStat;
-        try {
-          lockStat = lstatSync7(lockPath);
-        } catch (statError) {
-          if (statError.code === "ENOENT")
-            continue;
-          throw statError;
-        }
-        if (!lockStat.isFile() || lockStat.isSymbolicLink()) {
-          throw new Error(`Refusing invalid action write lock at ${lockPath}.`);
-        }
-        const existingOwner = readLockOwner(lockPath);
-        if (existingOwner && lockOwnerIsGone(existingOwner)) {
-          try {
-            const current = lstatSync7(lockPath);
-            if (current.dev === lockStat.dev && current.ino === lockStat.ino)
-              unlinkSync6(lockPath);
-          } catch (unlinkError) {
-            if (unlinkError.code !== "ENOENT")
-              throw unlinkError;
-          }
-          continue;
-        }
-        if (Date.now() >= deadline) {
-          throw new Error(`Timed out waiting for action write lock at ${lockPath}.`);
-        }
-        Atomics.wait(lockWaitBuffer, 0, 0, 10);
-      }
-    }
-    unlinkSync6(ownerPath);
-    identity2 = fstatSync2(lockFd);
-    heldWriteLocks.add(lockPath);
-    try {
-      return operation();
-    } finally {
-      heldWriteLocks.delete(lockPath);
-    }
-  } finally {
-    if (identity2) {
-      try {
-        const current = lstatSync7(lockPath);
-        if (current.dev === identity2.dev && current.ino === identity2.ino)
-          unlinkSync6(lockPath);
-      } catch {
-      }
-    }
-    closeSync2(lockFd);
-    try {
-      unlinkSync6(ownerPath);
-    } catch {
-    }
-  }
-}
-function pairWriteImpl(yamlPath, yamlContent, sidecarPath, state, publicationPrecondition, yamlPublicationPrecondition, expectedYamlContent, createExclusive = false) {
-  if (publicationPrecondition && !publicationPrecondition())
-    return null;
-  ensureDir(yamlPath);
-  ensureDir(sidecarPath);
-  let yamlMode;
-  if (expectedYamlContent !== void 0) {
-    let targetFd;
-    try {
-      targetFd = openSync2(yamlPath, constants3.O_RDONLY | constants3.O_NOFOLLOW);
-    } catch {
-      return null;
-    }
-    try {
-      const target = fstatSync2(targetFd);
-      if (!target.isFile() || readFileSync13(targetFd, "utf8") !== expectedYamlContent)
-        return null;
-      yamlMode = target.mode & 4095;
-    } finally {
-      closeSync2(targetFd);
-    }
-  } else if (createExclusive) {
-    yamlMode = 384;
-  }
-  let sidecarMode = 384;
-  try {
-    const sidecarFd = openSync2(sidecarPath, constants3.O_RDONLY | constants3.O_NOFOLLOW);
-    try {
-      const sidecar = fstatSync2(sidecarFd);
-      if (!sidecar.isFile())
-        return null;
-      sidecarMode = sidecar.mode & 4095;
-    } finally {
-      closeSync2(sidecarFd);
-    }
-  } catch (error2) {
-    if (error2.code !== "ENOENT")
-      return null;
-  }
-  const stamp = generateTmpStamp();
-  const yamlTmp = `${yamlPath}.tmp.${stamp}`;
-  const sidecarTmp = `${sidecarPath}.tmp.${stamp}`;
-  const projectedMtimeMs = Date.now() + FUTURE_MTIME_BUFFER_MS;
-  const projectedState = {
-    ...state,
-    lastSeenMtimeMs: projectedMtimeMs
-  };
-  if (publicationPrecondition && !publicationPrecondition())
-    return null;
-  atomicWriter._writeFileWithMode(sidecarTmp, JSON.stringify(projectedState, null, 2) + "\n", sidecarMode);
-  if (publicationPrecondition && !publicationPrecondition()) {
-    atomicWriter._unlink(sidecarTmp);
-    return null;
-  }
-  const priorSidecarExisted = publicationPrecondition ? atomicWriter._exists(sidecarPath) : false;
-  const priorSidecar = priorSidecarExisted ? readFileSync13(sidecarPath, "utf8") : null;
-  function restorePriorSidecar() {
-    if (priorSidecar === null) {
-      atomicWriter._unlink(sidecarPath);
-    } else {
-      atomicWriter._writeFileWithMode(sidecarTmp, priorSidecar, sidecarMode);
-      atomicWriter._rename(sidecarTmp, sidecarPath);
-    }
-  }
-  function writeYamlTmp() {
-    if (yamlMode === void 0)
-      atomicWriter._writeFile(yamlTmp, yamlContent);
-    else
-      atomicWriter._writeFileWithMode(yamlTmp, yamlContent, yamlMode);
-  }
-  if (createExclusive) {
-    try {
-      writeYamlTmp();
-    } catch (error2) {
-      try {
-        atomicWriter._unlink(sidecarTmp);
-      } catch {
-      }
-      try {
-        atomicWriter._unlink(yamlTmp);
-      } catch {
-      }
-      throw error2;
-    }
-    if (publicationPrecondition && !publicationPrecondition()) {
-      atomicWriter._unlink(sidecarTmp);
-      atomicWriter._unlink(yamlTmp);
-      return null;
-    }
-    const yamlPublished = (!publicationPrecondition || publicationPrecondition()) && atomicWriter._linkIfAbsent(yamlTmp, yamlPath, publicationPrecondition);
-    if (!yamlPublished) {
-      atomicWriter._unlink(sidecarTmp);
-      atomicWriter._unlink(yamlTmp);
-      return null;
-    }
-    atomicWriter._rename(sidecarTmp, sidecarPath);
-    atomicWriter._unlink(yamlTmp);
-  } else {
-    if (publicationPrecondition && !publicationPrecondition()) {
-      atomicWriter._unlink(sidecarTmp);
-      return null;
-    }
-    atomicWriter._rename(sidecarTmp, sidecarPath);
-    try {
-      writeYamlTmp();
-    } catch (error2) {
-      try {
-        atomicWriter._unlink(yamlTmp);
-      } catch {
-      }
-      throw error2;
-    }
-    const yamlPublished = expectedYamlContent === void 0 ? !yamlPublicationPrecondition || yamlPublicationPrecondition() : atomicWriter._publishIfUnchanged(yamlTmp, yamlPath, expectedYamlContent, stamp, yamlPublicationPrecondition);
-    if (!yamlPublished) {
-      if (yamlPublicationPrecondition && !yamlPublicationPrecondition()) {
-        try {
-          const candidate = lstatSync7(yamlTmp);
-          if (!candidate.isFile() || candidate.isSymbolicLink())
-            return null;
-        } catch {
-          return null;
-        }
-      }
-      restorePriorSidecar();
-      atomicWriter._unlink(yamlTmp);
-      return null;
-    }
-    if (expectedYamlContent === void 0)
-      atomicWriter._rename(yamlTmp, yamlPath);
-  }
-  const actualMtimeMs = atomicWriter._statMtimeMs(yamlPath);
-  const finalMtimeMs = Math.max(actualMtimeMs, projectedMtimeMs);
-  const finalState = {
-    ...state,
-    lastSeenMtimeMs: finalMtimeMs
-  };
-  atomicWriter._writeFileWithMode(sidecarTmp, JSON.stringify(finalState, null, 2) + "\n", sidecarMode);
-  atomicWriter._rename(sidecarTmp, sidecarPath);
-  return { yamlPath, sidecarPath, finalMtimeMs, refreshedSidecar: true };
-}
-function ensureDir(filePath) {
-  const dir = dirname9(filePath);
-  if (!atomicWriter._exists(dir))
-    atomicWriter._mkdir(dir);
-}
-function cleanupOrphans(yamlPath, sidecarPath) {
-  const now = Date.now();
-  for (const targetPath of [yamlPath, sidecarPath]) {
-    const dir = dirname9(targetPath);
-    const prefix = `${basename2(targetPath)}.tmp.`;
-    let entries;
-    try {
-      entries = atomicWriter._readdir(dir);
-    } catch {
-      continue;
-    }
-    for (const entry of entries) {
-      if (!entry.startsWith(prefix))
-        continue;
-      const orphanPath = `${dir}/${entry}`;
-      try {
-        const mtimeMs = atomicWriter._statMtimeMs(orphanPath);
-        if (now - mtimeMs < ORPHAN_MAX_AGE_MS)
-          continue;
-        atomicWriter._unlink(orphanPath);
-      } catch {
-      }
-    }
-  }
-}
-var FUTURE_MTIME_BUFFER_MS, ORPHAN_MAX_AGE_MS, ACTION_WRITE_LOCK_TIMEOUT_MS, lockWaitBuffer, ACTION_WRITE_PRECONDITION, localLockOwner, heldWriteLocks, atomicWriter;
-var init_atomic_writer = __esm({
-  "packages/rn-dev-agent-core/dist/domain/atomic-writer.js"() {
-    "use strict";
-    init_process_birth();
-    FUTURE_MTIME_BUFFER_MS = 1e3;
-    ORPHAN_MAX_AGE_MS = 5 * 60 * 1e3;
-    ACTION_WRITE_LOCK_TIMEOUT_MS = 5e3;
-    lockWaitBuffer = new Int32Array(new SharedArrayBuffer(4));
-    ACTION_WRITE_PRECONDITION = /* @__PURE__ */ Symbol("action-write-precondition");
-    localLockOwner = null;
-    heldWriteLocks = /* @__PURE__ */ new Set();
-    atomicWriter = {
-      /** Underlying `fs.writeFileSync(path, content, 'utf8')`. */
-      _writeFile(path, content) {
-        writeFileSync8(path, content, "utf8");
-      },
-      _writeFileWithMode(path, content, mode) {
-        const fd = openSync2(path, "wx", mode);
-        try {
-          writeFileSync8(fd, content, "utf8");
-        } finally {
-          closeSync2(fd);
-        }
-      },
-      /** Underlying `fs.renameSync(from, to)`. */
-      _rename(from, to) {
-        renameSync3(from, to);
-      },
-      /** Underlying `fs.statSync(path).mtimeMs`. */
-      _statMtimeMs(path) {
-        return statSync5(path).mtimeMs;
-      },
-      /** Underlying `fs.existsSync(path)`. Routed through the seam so test
-       *  cases for ensureDir / cleanupOrphans can simulate exotic failures
-       *  (PR #109 review). */
-      _exists(path) {
-        return existsSync13(path);
-      },
-      /** Underlying `fs.mkdirSync(path, { recursive: true })`. */
-      _mkdir(path) {
-        mkdirSync10(path, { recursive: true });
-      },
-      /** Underlying `fs.unlinkSync(path)`. Used by orphan-cleanup. */
-      _unlink(path) {
-        unlinkSync6(path);
-      },
-      /** Underlying `fs.readdirSync(path)`. Used by GH #111 prefix-scan cleanup. */
-      _readdir(path) {
-        return readdirSync5(path);
-      },
-      _linkIfAbsent(candidatePath, targetPath, publicationPrecondition) {
-        if (publicationPrecondition && !publicationPrecondition())
-          return false;
-        let directoryFd;
-        try {
-          directoryFd = openSync2(dirname9(targetPath), constants3.O_RDONLY | constants3.O_NOFOLLOW | constants3.O_DIRECTORY);
-        } catch {
-          return false;
-        }
-        try {
-          const directory = fstatSync2(directoryFd);
-          if (!directory.isDirectory() || publicationPrecondition && !publicationPrecondition()) {
-            return false;
-          }
-          return atomicWriter._linkIntoVerifiedDirectory(directoryFd, candidatePath, targetPath);
-        } finally {
-          closeSync2(directoryFd);
-        }
-      },
-      _linkIntoVerifiedDirectory(directoryFd, candidatePath, targetPath) {
-        return linkFileIntoVerifiedDirectory(directoryFd, candidatePath, targetPath);
-      },
-      _publishIfUnchanged(candidatePath, targetPath, expectedContent, stamp, publicationPrecondition) {
-        let targetFd;
-        try {
-          targetFd = openSync2(targetPath, constants3.O_RDONLY | constants3.O_NOFOLLOW);
-        } catch {
-          return false;
-        }
-        try {
-          const opened = fstatSync2(targetFd);
-          const current = lstatSync7(targetPath);
-          if (!opened.isFile() || current.isSymbolicLink() || current.dev !== opened.dev || current.ino !== opened.ino || readFileSync13(targetFd, "utf8") !== expectedContent || publicationPrecondition && !publicationPrecondition()) {
-            return false;
-          }
-          const expectedPath = `${candidatePath}.expected.${stamp}`;
-          chmodSync5(candidatePath, opened.mode & 4095);
-          atomicWriter._writeFileWithMode(expectedPath, expectedContent, opened.mode & 4095);
-          try {
-            return publishFileIfUnchangedDarwin(targetFd, targetPath, candidatePath, expectedPath);
-          } finally {
-            atomicWriter._unlink(expectedPath);
-          }
-        } catch {
-          return false;
-        } finally {
-          closeSync2(targetFd);
-        }
-      },
-      withLock(yamlPath, operation) {
-        return withPairWriteLock(yamlPath, operation);
-      },
-      writeTextCreateExclusive(yamlPath, content, precondition) {
-        try {
-          return withPairWriteLock(yamlPath, () => {
-            if (!precondition())
-              return false;
-            const candidatePath = `${dirname9(yamlPath)}/.rn-action-create.${generateTmpStamp()}`;
-            atomicWriter._writeFileWithMode(candidatePath, content, 384);
-            try {
-              return atomicWriter._linkIfAbsent(candidatePath, yamlPath, precondition);
-            } finally {
-              try {
-                atomicWriter._unlink(candidatePath);
-              } catch {
-              }
-            }
-          }, precondition);
-        } catch (error2) {
-          if (error2 === ACTION_WRITE_PRECONDITION)
-            return false;
-          throw error2;
-        }
-      },
-      /**
-       * Atomic pair-write. Cleans up any orphaned `.tmp` files before
-       * starting. Throws on the first failed step — caller decides whether
-       * to surface or recover.
-       */
-      pairWrite(yamlPath, yamlContent, sidecarPath, state) {
-        return withPairWriteLock(yamlPath, () => {
-          cleanupOrphans(yamlPath, sidecarPath);
-          const result = pairWriteImpl(yamlPath, yamlContent, sidecarPath, state);
-          if (!result)
-            throw new Error(`Unconditional pair write refused for ${yamlPath}.`);
-          return result;
-        });
-      },
-      pairWriteCreateExclusive(yamlPath, yamlContent, sidecarPath, state, precondition) {
-        try {
-          return withPairWriteLock(yamlPath, () => {
-            if (precondition && !precondition())
-              return null;
-            cleanupOrphans(yamlPath, sidecarPath);
-            return pairWriteImpl(yamlPath, yamlContent, sidecarPath, state, precondition, precondition, void 0, true);
-          }, precondition);
-        } catch (error2) {
-          if (error2 === ACTION_WRITE_PRECONDITION)
-            return null;
-          throw error2;
-        }
-      },
-      pairWriteConditional(yamlPath, yamlContent, sidecarPath, state, precondition, yamlPublicationPrecondition, expectedYamlContent) {
-        try {
-          return withPairWriteLock(yamlPath, () => {
-            if (!precondition())
-              return null;
-            cleanupOrphans(yamlPath, sidecarPath);
-            return pairWriteImpl(yamlPath, yamlContent, sidecarPath, state, precondition, yamlPublicationPrecondition, expectedYamlContent);
-          }, precondition);
-        } catch (error2) {
-          if (error2 === ACTION_WRITE_PRECONDITION)
-            return null;
-          throw error2;
-        }
-      }
-    };
-  }
-});
-
-// packages/rn-dev-agent-core/dist/domain/path-safety.js
-import { resolve as resolve3, sep as sep3 } from "node:path";
-function isValidActionId(s) {
-  if (typeof s !== "string")
-    return false;
-  if (s.length === 0 || s.length > ACTION_ID_MAX_LEN)
-    return false;
-  if (s.includes(".."))
-    return false;
-  return ACTION_ID_RE.test(s);
-}
-function assertValidActionId(s, context) {
-  if (!isValidActionId(s)) {
-    const preview = JSON.stringify(s).slice(0, 80);
-    throw new PathTraversalError(`Invalid action ID for ${context}: ${preview}`);
-  }
-}
-function assertWithinDir(child, baseDir) {
-  const resolvedBase = resolve3(baseDir);
-  const resolvedChild = resolve3(baseDir, child);
-  if (resolvedChild === resolvedBase)
-    return;
-  const baseWithSep = resolvedBase.endsWith(sep3) ? resolvedBase : resolvedBase + sep3;
-  if (!resolvedChild.startsWith(baseWithSep)) {
-    throw new PathTraversalError(`Path "${child}" escapes containment dir "${baseDir}" (resolved to ${resolvedChild})`);
-  }
-}
-function pathHasTraversal(p) {
-  if (typeof p !== "string")
-    return false;
-  return /(^|[\\/])\.\.([\\/]|$)/.test(p) || /%2e%2e/i.test(p);
-}
-var PathTraversalError, ACTION_ID_RE, ACTION_ID_MAX_LEN;
-var init_path_safety = __esm({
-  "packages/rn-dev-agent-core/dist/domain/path-safety.js"() {
-    "use strict";
-    PathTraversalError = class extends Error {
-      constructor(message) {
-        super(message);
-        this.name = "PathTraversalError";
-      }
-    };
-    ACTION_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]*$/;
-    ACTION_ID_MAX_LEN = 64;
-  }
-});
-
-// packages/rn-dev-agent-core/dist/domain/action-db.js
-import { createRequire as createRequire2 } from "node:module";
-import { existsSync as existsSync14, mkdirSync as mkdirSync11, readdirSync as readdirSync6, readFileSync as readFileSync14 } from "node:fs";
-import { dirname as dirname10, join as join18 } from "node:path";
-function loadSqlite() {
-  try {
-    const mod = _require("node:sqlite");
-    return mod.DatabaseSync ?? null;
-  } catch {
-    return null;
-  }
-}
-function openActionDb(projectRoot, opts = {}) {
-  const Ctor = opts.sqliteCtor === void 0 ? loadSqlite() : opts.sqliteCtor;
-  if (!Ctor)
-    return null;
-  try {
-    const dbPath = join18(sessionStateDirectory(projectRoot), "actions.db");
-    mkdirSync11(dirname10(dbPath), { recursive: true });
-    const db = new Ctor(dbPath);
-    db.exec(SCHEMA);
-    for (const alter of [
-      "ALTER TABLE run_records ADD COLUMN device_id TEXT",
-      "ALTER TABLE run_records ADD COLUMN blind_probe_json TEXT"
-    ]) {
-      try {
-        db.exec(alter);
-      } catch (e) {
-        if (!String(e).includes("duplicate column name"))
-          throw e;
-      }
-    }
-    const handle = {
-      db,
-      close: () => db.close(),
-      insertRunRecord(actionId, record2) {
-        db.exec("BEGIN IMMEDIATE");
-        try {
-          const dup = db.prepare("SELECT 1 FROM run_records WHERE action_id = ? AND ts = ? LIMIT 1").get(actionId, record2.timestamp);
-          if (dup) {
-            db.exec("COMMIT");
-            return;
-          }
-          db.prepare(`INSERT INTO run_records
-               (action_id, ts, trigger, status, failure_code, failure_detail,
-                transport, auto_repair_json, duration_ms, device_id, blind_probe_json)
-             VALUES (?,?,?,?,?,?,?,?,?,?,?)`).run(actionId, record2.timestamp, record2.trigger, record2.status, record2.failureCode ?? null, record2.failureDetail ?? null, record2.transport ?? null, record2.autoRepair ? JSON.stringify(record2.autoRepair) : null, record2.durationMs, record2.deviceId ?? null, record2.blindProbe ? JSON.stringify(record2.blindProbe) : null);
-          db.prepare(`DELETE FROM run_records
-             WHERE action_id = ?
-               AND id NOT IN (
-                 SELECT id FROM run_records
-                 WHERE action_id = ?
-                 ORDER BY id DESC
-                 LIMIT ${RUN_HISTORY_MAX}
-               )`).run(actionId, actionId);
-          db.exec("COMMIT");
-        } catch (e) {
-          db.exec("ROLLBACK");
-          throw e;
-        }
-      },
-      insertRepairRecord(actionId, record2) {
-        db.exec("BEGIN IMMEDIATE");
-        try {
-          const dup = db.prepare("SELECT 1 FROM repair_records WHERE action_id = ? AND ts = ? LIMIT 1").get(actionId, record2.timestamp);
-          if (dup) {
-            db.exec("COMMIT");
-            return;
-          }
-          db.prepare(`INSERT INTO repair_records
-               (action_id, ts, failure_code, diff_json, duration_ms, agent_reasoning)
-             VALUES (?,?,?,?,?,?)`).run(actionId, record2.timestamp, record2.failureCode, JSON.stringify(record2.diff ?? {}), record2.durationMs, record2.agentReasoning ?? null);
-          db.prepare(`DELETE FROM repair_records
-             WHERE action_id = ?
-               AND id NOT IN (
-                 SELECT id FROM repair_records
-                 WHERE action_id = ?
-                 ORDER BY id DESC
-                 LIMIT ${REPAIR_HISTORY_MAX}
-               )`).run(actionId, actionId);
-          db.exec("COMMIT");
-        } catch (e) {
-          db.exec("ROLLBACK");
-          throw e;
-        }
-      },
-      upsertIndex(actionId, fields) {
-        db.prepare(`INSERT INTO actions_index
-             (id, app_id, path, content_hash, status, revision,
-              created_at, updated_at, mtime_baseline, stats_json)
-           VALUES (?,?,?,?,?,?,?,?,?,?)
-           ON CONFLICT(id) DO UPDATE SET
-             app_id         = COALESCE(excluded.app_id,         actions_index.app_id),
-             path           = COALESCE(excluded.path,           actions_index.path),
-             content_hash   = COALESCE(excluded.content_hash,   actions_index.content_hash),
-             status         = COALESCE(excluded.status,         actions_index.status),
-             revision       = COALESCE(excluded.revision,       actions_index.revision),
-             updated_at     = COALESCE(excluded.updated_at,     actions_index.updated_at),
-             mtime_baseline = COALESCE(excluded.mtime_baseline, actions_index.mtime_baseline),
-             stats_json     = COALESCE(excluded.stats_json,     actions_index.stats_json)`).run(actionId, fields.appId ?? null, fields.path ?? null, fields.contentHash ?? null, fields.status ?? null, fields.revision ?? null, fields.updatedAt ?? null, fields.updatedAt ?? null, fields.mtimeBaseline ?? null, fields.statsJson ?? null);
-      },
-      loadState(actionId) {
-        const idx = db.prepare("SELECT * FROM actions_index WHERE id = ?").get(actionId);
-        if (!idx)
-          return null;
-        const runRows = db.prepare("SELECT * FROM run_records WHERE action_id = ? ORDER BY id ASC").all(actionId);
-        const repairRows = db.prepare("SELECT * FROM repair_records WHERE action_id = ? ORDER BY id ASC").all(actionId);
-        const runHistory = runRows.map((r) => {
-          const rec = {
-            timestamp: String(r.ts),
-            durationMs: Number(r.duration_ms),
-            status: r.status,
-            trigger: r.trigger
-          };
-          if (r.failure_code)
-            rec.failureCode = r.failure_code;
-          if (r.failure_detail)
-            rec.failureDetail = String(r.failure_detail);
-          if (r.transport === "cdp-js")
-            rec.transport = "cdp-js";
-          if (r.auto_repair_json)
-            rec.autoRepair = JSON.parse(String(r.auto_repair_json));
-          if (r.device_id)
-            rec.deviceId = String(r.device_id);
-          if (r.blind_probe_json) {
-            try {
-              rec.blindProbe = JSON.parse(String(r.blind_probe_json));
-            } catch {
-            }
-          }
-          return rec;
-        });
-        const repairHistory = repairRows.map((r) => {
-          const rec = {
-            timestamp: String(r.ts),
-            failureCode: r.failure_code,
-            diff: r.diff_json ? JSON.parse(String(r.diff_json)) : {},
-            durationMs: Number(r.duration_ms)
-          };
-          if (r.agent_reasoning)
-            rec.agentReasoning = String(r.agent_reasoning);
-          return rec;
-        });
-        const stats = idx.stats_json ? JSON.parse(String(idx.stats_json)) : { totalRuns: 0, successCount: 0, failureCount: 0, avgDurationMs: 0 };
-        return {
-          schemaVersion: 1,
-          revision: Number(idx.revision) || 1,
-          updatedAt: String(idx.updated_at ?? (/* @__PURE__ */ new Date(0)).toISOString()),
-          lastSeenMtimeMs: Number(idx.mtime_baseline) || 0,
-          runHistory,
-          repairHistory,
-          stats
-        };
-      },
-      recentRepairCount(actionId, sinceIso) {
-        const row = db.prepare(`SELECT COUNT(*) as cnt FROM repair_records
-           WHERE action_id = ? AND ts >= ?`).get(actionId, sinceIso);
-        return row.cnt;
-      },
-      migrateSidecars() {
-        const stateDir = join18(projectRoot, ".rn-agent", "state");
-        if (!existsSync14(stateDir))
-          return { migrated: 0 };
-        let migrated = 0;
-        for (const f of readdirSync6(stateDir)) {
-          if (!f.endsWith(".state.json"))
-            continue;
-          const id = f.replace(/\.state\.json$/, "");
-          const exists = db.prepare("SELECT 1 FROM actions_index WHERE id = ?").get(id);
-          if (exists)
-            continue;
-          try {
-            const parsed = JSON.parse(readFileSync14(join18(stateDir, f), "utf8"));
-            if (parsed?.schemaVersion !== 1)
-              continue;
-            if (!Array.isArray(parsed.runHistory) || !Array.isArray(parsed.repairHistory)) {
-              continue;
-            }
-            for (const r of parsed.runHistory) {
-              handle.insertRunRecord(id, r);
-            }
-            for (const r of parsed.repairHistory) {
-              handle.insertRepairRecord(id, r);
-            }
-            handle.upsertIndex(id, {
-              revision: parsed.revision,
-              statsJson: JSON.stringify(parsed.stats),
-              mtimeBaseline: parsed.lastSeenMtimeMs,
-              updatedAt: parsed.updatedAt
-            });
-            migrated++;
-          } catch {
-          }
-        }
-        return { migrated };
-      }
-    };
-    return handle;
-  } catch {
-    return null;
-  }
-}
-var _require, SCHEMA, RUN_HISTORY_MAX, REPAIR_HISTORY_MAX;
-var init_action_db = __esm({
-  "packages/rn-dev-agent-core/dist/domain/action-db.js"() {
-    "use strict";
-    init_runtime_paths2();
-    _require = createRequire2(import.meta.url);
-    SCHEMA = `
-PRAGMA busy_timeout=5000;
-PRAGMA journal_mode=WAL;
-
-CREATE TABLE IF NOT EXISTS actions_index (
-  id             TEXT PRIMARY KEY,
-  app_id         TEXT,
-  path           TEXT,
-  content_hash   TEXT,
-  status         TEXT,
-  revision       INTEGER,
-  created_at     INTEGER,
-  updated_at     INTEGER,
-  mtime_baseline INTEGER,
-  stats_json     TEXT
-);
-
-CREATE TABLE IF NOT EXISTS run_records (
-  id              INTEGER PRIMARY KEY AUTOINCREMENT,
-  action_id       TEXT,
-  ts              TEXT,
-  trigger         TEXT,
-  status          TEXT,
-  failure_code    TEXT,
-  failure_detail  TEXT,
-  transport       TEXT,
-  auto_repair_json TEXT,
-  duration_ms     INTEGER,
-  device_id       TEXT,
-  blind_probe_json TEXT
-);
-
-CREATE TABLE IF NOT EXISTS repair_records (
-  id               INTEGER PRIMARY KEY AUTOINCREMENT,
-  action_id        TEXT,
-  ts               TEXT,
-  failure_code     TEXT,
-  diff_json        TEXT,
-  duration_ms      INTEGER,
-  agent_reasoning  TEXT
-);
-
-CREATE INDEX IF NOT EXISTS idx_run_action    ON run_records(action_id);
-CREATE INDEX IF NOT EXISTS idx_repair_action ON repair_records(action_id);
-CREATE INDEX IF NOT EXISTS idx_index_app     ON actions_index(app_id);
-`;
-    RUN_HISTORY_MAX = 50;
-    REPAIR_HISTORY_MAX = 25;
-  }
-});
-
-// packages/rn-dev-agent-core/dist/domain/action-state-store.js
-import { basename as basename3, dirname as dirname11, sep as sep4 } from "node:path";
-function dbFor(projectRoot) {
-  if (dbCache.has(projectRoot))
-    return dbCache.get(projectRoot) ?? null;
-  const handle = sqliteCtorOverride === void 0 ? openActionDb(projectRoot) : openActionDb(projectRoot, { sqliteCtor: sqliteCtorOverride });
-  if (handle) {
-    try {
-      handle.migrateSidecars();
-    } catch (err) {
-      logger.debug(TAG, `migrateSidecars failed for ${projectRoot}: ${String(err)}`);
-    }
-  }
-  dbCache.set(projectRoot, handle);
-  return handle;
-}
-function mirrorToDb(opts) {
-  const { yamlFilePath, state, newRunRecord, newRepairRecord, meta } = opts;
-  try {
-    const projectRoot = opts.projectRoot ?? projectRootFromYaml(yamlFilePath);
-    if (!projectRoot)
-      return;
-    const handle = dbFor(projectRoot);
-    if (!handle)
-      return;
-    const actionId = idOf(yamlFilePath);
-    handle.upsertIndex(actionId, {
-      appId: meta?.appId,
-      path: meta?.path,
-      contentHash: meta?.contentHash,
-      status: meta?.status,
-      revision: state.revision,
-      statsJson: JSON.stringify(state.stats),
-      mtimeBaseline: state.lastSeenMtimeMs,
-      updatedAt: state.updatedAt
-    });
-    if (newRunRecord)
-      handle.insertRunRecord(actionId, newRunRecord);
-    if (newRepairRecord)
-      handle.insertRepairRecord(actionId, newRepairRecord);
-  } catch (err) {
-    logger.debug(TAG, `DB mirror failed for ${idOf(yamlFilePath)} (authoritative write succeeded): ${String(err)}`);
-  }
-}
-function projectRootFromYaml(yamlFilePath) {
-  const actionsDir = dirname11(yamlFilePath);
-  const rnAgentDir = dirname11(actionsDir);
-  const root = dirname11(rnAgentDir);
-  if (basename3(actionsDir) !== "actions" || basename3(rnAgentDir) !== ".rn-agent") {
-    return null;
-  }
-  if (!root || root === sep4)
-    return null;
-  return root;
-}
-var TAG, sqliteCtorOverride, dbCache, idOf;
-var init_action_state_store = __esm({
-  "packages/rn-dev-agent-core/dist/domain/action-state-store.js"() {
-    "use strict";
-    init_logger();
-    init_action_db();
-    init_sidecar_io();
-    TAG = "action-state-store";
-    dbCache = /* @__PURE__ */ new Map();
-    idOf = (yamlFilePath) => basename3(yamlFilePath).replace(/\.ya?ml$/i, "");
-  }
-});
-
-// packages/rn-dev-agent-core/dist/session/worktree-repair-remedy.js
-var WORKTREE_REPAIR_ENTRY, HEADLESS_WORKTREE_REPAIR_COMMAND;
-var init_worktree_repair_remedy = __esm({
-  "packages/rn-dev-agent-core/dist/session/worktree-repair-remedy.js"() {
-    "use strict";
-    WORKTREE_REPAIR_ENTRY = '"${CLAUDE_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}/rn-dev-agent-core/dist/worktree-inheritance.js"';
-    HEADLESS_WORKTREE_REPAIR_COMMAND = `node ${WORKTREE_REPAIR_ENTRY} repair --app-root "$PWD"`;
-  }
-});
-
-// packages/rn-dev-agent-core/dist/session/worktree-inheritance.js
-import { spawnSync } from "node:child_process";
-import { closeSync as closeSync3, existsSync as existsSync15, fstatSync as fstatSync3, lstatSync as lstatSync8, mkdirSync as mkdirSync12, openSync as openSync3, readFileSync as readFileSync15, readlinkSync as readlinkSync2, realpathSync as realpathSync4, renameSync as renameSync4, statSync as statSync6, symlinkSync as symlinkSync2, unlinkSync as unlinkSync7 } from "node:fs";
-import { dirname as dirname12, isAbsolute as isAbsolute2, join as join19, relative as relative2, resolve as resolve4, sep as sep5 } from "node:path";
-function gitEnvironment() {
-  const env = { ...process.env };
-  for (const key of GIT_ENV_OVERRIDES)
-    delete env[key];
-  return env;
-}
-function git(cwd, args) {
-  const result = spawnSync("git", args, {
-    cwd,
-    encoding: "utf8",
-    env: gitEnvironment(),
-    stdio: ["ignore", "pipe", "pipe"]
-  });
-  if (result.error || result.status !== 0)
-    return { ok: false, stdout: "" };
-  return { ok: true, stdout: (result.stdout ?? "").replace(/\n$/, "") };
-}
-function canonical(path) {
-  try {
-    return realpathSync4(path);
-  } catch {
-    return null;
-  }
-}
-function contained(parent, child) {
-  if (parent === child)
-    return true;
-  const rel = relative2(parent, child);
-  return rel !== "" && !rel.startsWith(`..${sep5}`) && rel !== ".." && !isAbsolute2(rel);
-}
-function toPosix(path) {
-  return sep5 === "/" ? path : path.split(sep5).join("/");
-}
-function isRnAppRoot(directory) {
-  const manifest = join19(directory, "package.json");
-  try {
-    const parsed = JSON.parse(readFileSync15(manifest, "utf8"));
-    const deps = { ...parsed.dependencies, ...parsed.devDependencies };
-    return Boolean(deps["react-native"] || deps["expo"]);
-  } catch {
-    return false;
-  }
-}
-function parseWorktreeRecords(porcelain) {
-  const records = [];
-  let current = null;
-  for (const line of porcelain.split("\n")) {
-    if (line.startsWith("worktree ")) {
-      if (current)
-        records.push(current);
-      current = { path: line.slice("worktree ".length), bare: false, prunable: false };
-      continue;
-    }
-    if (!current)
-      continue;
-    if (line === "bare")
-      current.bare = true;
-    if (line === "prunable" || line.startsWith("prunable "))
-      current.prunable = true;
-  }
-  if (current)
-    records.push(current);
-  return records;
-}
-function verifiedPrimaries(worktreeRoot, commonDir) {
-  const listing = git(worktreeRoot, ["worktree", "list", "--porcelain"]);
-  if (!listing.ok)
-    return [];
-  const verified = /* @__PURE__ */ new Set();
-  for (const record2 of parseWorktreeRecords(listing.stdout)) {
-    if (record2.bare || record2.prunable)
-      continue;
-    const candidate = canonical(record2.path);
-    if (!candidate)
-      continue;
-    try {
-      if (!statSync6(candidate).isDirectory())
-        continue;
-    } catch {
-      continue;
-    }
-    const top = git(candidate, ["rev-parse", "--show-toplevel"]);
-    if (!top.ok || canonical(top.stdout) !== candidate)
-      continue;
-    const candidateGitDir = git(candidate, ["rev-parse", "--path-format=absolute", "--git-dir"]);
-    const candidateCommon = git(candidate, [
-      "rev-parse",
-      "--path-format=absolute",
-      "--git-common-dir"
-    ]);
-    if (!candidateGitDir.ok || !candidateCommon.ok)
-      continue;
-    const resolvedGitDir = canonical(candidateGitDir.stdout);
-    const resolvedCommon = canonical(candidateCommon.stdout);
-    if (!resolvedGitDir || !resolvedCommon)
-      continue;
-    if (resolvedCommon !== commonDir || resolvedGitDir !== resolvedCommon)
-      continue;
-    verified.add(candidate);
-  }
-  return [...verified];
-}
-function resolveWorktreeLayout(input) {
-  const cwd = canonical(input.cwd);
-  if (!cwd)
-    return { refusal: "NOT_GIT" };
-  const insideWorkTree = git(cwd, ["rev-parse", "--is-inside-work-tree"]);
-  if (!insideWorkTree.ok) {
-    const bare = git(cwd, ["rev-parse", "--is-bare-repository"]);
-    if (bare.ok && bare.stdout === "true")
-      return { refusal: "BARE" };
-    return { refusal: "NOT_GIT" };
-  }
-  if (insideWorkTree.stdout !== "true")
-    return { refusal: "BARE" };
-  const top = git(cwd, ["rev-parse", "--show-toplevel"]);
-  const gitDirRaw = git(cwd, ["rev-parse", "--path-format=absolute", "--git-dir"]);
-  const commonRaw = git(cwd, ["rev-parse", "--path-format=absolute", "--git-common-dir"]);
-  if (!top.ok || !gitDirRaw.ok || !commonRaw.ok)
-    return { refusal: "GIT_UNAVAILABLE" };
-  const worktreeRoot = canonical(top.stdout);
-  const gitDir = canonical(gitDirRaw.stdout);
-  const commonDir = canonical(commonRaw.stdout);
-  if (!worktreeRoot || !gitDir || !commonDir)
-    return { refusal: "GIT_UNAVAILABLE" };
-  const appRootInput = canonical(input.appRoot ? resolve4(input.appRoot) : cwd);
-  if (!appRootInput)
-    return { refusal: "NOT_RN_APP" };
-  if (!contained(worktreeRoot, appRootInput))
-    return { refusal: "APP_OUTSIDE_WORKTREE" };
-  if (!input.allowNonRnApp && !isRnAppRoot(appRootInput))
-    return { refusal: "NOT_RN_APP" };
-  const appRelative = worktreeRoot === appRootInput ? "." : toPosix(relative2(worktreeRoot, appRootInput));
-  const base = {
-    kind: gitDir === commonDir ? "primary" : "linked",
-    worktreeRoot,
-    commonDir,
-    gitDir,
-    appRoot: appRootInput,
-    appRelative
-  };
-  if (base.kind === "primary")
-    return base;
-  const primaries = verifiedPrimaries(worktreeRoot, commonDir);
-  if (primaries.length === 0)
-    return { ...base, refusal: "NO_PRIMARY" };
-  if (primaries.length > 1)
-    return { ...base, refusal: "AMBIGUOUS" };
-  const primaryRoot = primaries[0];
-  const primaryAppRoot = appRelative === "." ? primaryRoot : join19(primaryRoot, appRelative);
-  if (!contained(primaryRoot, primaryAppRoot))
-    return { ...base, refusal: "PRIMARY_APP_MISSING" };
-  let primaryAppReal = null;
-  try {
-    if (lstatSync8(primaryAppRoot).isDirectory())
-      primaryAppReal = canonical(primaryAppRoot);
-  } catch {
-    primaryAppReal = null;
-  }
-  if (!primaryAppReal || !contained(primaryRoot, primaryAppReal)) {
-    return { ...base, refusal: "PRIMARY_APP_MISSING" };
-  }
-  return { ...base, primaryRoot, primaryAppRoot };
-}
-var GIT_ENV_OVERRIDES;
-var init_worktree_inheritance = __esm({
-  "packages/rn-dev-agent-core/dist/session/worktree-inheritance.js"() {
-    "use strict";
-    init_worktree_repair_remedy();
-    GIT_ENV_OVERRIDES = [
-      "GIT_DIR",
-      "GIT_WORK_TREE",
-      "GIT_INDEX_FILE",
-      "GIT_COMMON_DIR",
-      "GIT_OBJECT_DIRECTORY",
-      "GIT_NAMESPACE"
-    ];
-  }
-});
-
-// packages/rn-dev-agent-core/dist/domain/action-store.js
-import { existsSync as existsSync16, lstatSync as lstatSync9, readFileSync as readFileSync16, realpathSync as realpathSync5, statSync as statSync7, unlinkSync as unlinkSync8 } from "node:fs";
-import { basename as basename4, dirname as dirname13, join as join20 } from "node:path";
-function actionPathFor(projectRoot, actionId) {
-  assertValidActionId(actionId, "actionPathFor");
-  const actionsDir = join20(projectRoot, ".rn-agent", "actions");
-  assertOwnedActionCorpus(projectRoot);
-  const fileName = `${actionId}.yaml`;
-  assertWithinDir(fileName, actionsDir);
-  return join20(actionsDir, fileName);
-}
-function assertOwnedActionCorpus(projectRoot) {
-  for (const path of [join20(projectRoot, ".rn-agent"), join20(projectRoot, ".rn-agent", "actions")]) {
-    const stat2 = lstatIfPresent(path);
-    if (stat2?.isSymbolicLink()) {
-      throw new Error(`Refusing learned-action corpus symlink at ${path}.`);
-    }
-  }
-}
-function assertReadableActionCorpus(projectRoot) {
-  const rnAgentDir = join20(projectRoot, ".rn-agent");
-  const actionsDir = join20(rnAgentDir, "actions");
-  const rnAgentStat = lstatIfPresent(rnAgentDir);
-  if (rnAgentStat?.isSymbolicLink()) {
-    throw new Error(`Refusing learned-action corpus symlink at ${rnAgentDir}.`);
-  }
-  const actionsStat = lstatIfPresent(actionsDir);
-  if (!actionsStat?.isSymbolicLink())
-    return;
-  const target = realpathSync5(actionsDir);
-  const layout = resolveWorktreeLayout({ cwd: projectRoot, appRoot: projectRoot });
-  const primaryRnAgentDir = "primaryAppRoot" in layout && layout.primaryAppRoot ? join20(layout.primaryAppRoot, ".rn-agent") : null;
-  const primaryActionsDir = primaryRnAgentDir ? join20(primaryRnAgentDir, "actions") : null;
-  const expectedTarget = primaryRnAgentDir && primaryActionsDir && "kind" in layout && layout.kind === "linked" && !layout.refusal && isOwnedDirectory(primaryRnAgentDir) && isOwnedDirectory(primaryActionsDir) ? canonicalPath(primaryActionsDir) : null;
-  if (!expectedTarget || target !== expectedTarget || !statSync7(target).isDirectory()) {
-    throw new Error(`Refusing foreign learned-action corpus symlink at ${actionsDir}.`);
-  }
-}
-function isOwnedDirectory(path) {
-  const stat2 = lstatIfPresent(path);
-  return Boolean(stat2?.isDirectory() && !stat2.isSymbolicLink());
-}
-function canonicalPath(path) {
-  try {
-    return realpathSync5(path);
-  } catch {
-    return null;
-  }
-}
-function lstatIfPresent(path) {
-  try {
-    return lstatSync9(path);
-  } catch (err) {
-    if (err.code === "ENOENT")
-      return null;
-    throw err;
-  }
-}
-function actionFileExists(path) {
-  const stat2 = lstatIfPresent(path);
-  if (!stat2)
-    return false;
-  if (stat2.isSymbolicLink()) {
-    throw new Error(`Refusing inherited action symlink at ${path}.`);
-  }
-  return true;
-}
-function captureOwnedActionPathIdentity(projectRoot, filePath) {
-  const paths = [
-    { path: join20(projectRoot, ".rn-agent"), kind: "directory" },
-    { path: join20(projectRoot, ".rn-agent", "actions"), kind: "directory" }
-  ];
-  if (filePath)
-    paths.push({ path: filePath, kind: "file" });
-  return paths.map(({ path, kind }) => {
-    const stat2 = lstatSync9(path);
-    const valid = !stat2.isSymbolicLink() && (kind === "directory" ? stat2.isDirectory() : stat2.isFile());
-    if (!valid)
-      throw new Error(`Refusing changed learned-action path at ${path}.`);
-    return { path, kind, dev: stat2.dev, ino: stat2.ino };
-  });
-}
-function ownedActionPathIdentityMatches(entries) {
-  try {
-    return entries.every((entry) => {
-      const stat2 = lstatSync9(entry.path);
-      return !stat2.isSymbolicLink() && stat2.dev === entry.dev && stat2.ino === entry.ino && (entry.kind === "directory" ? stat2.isDirectory() : stat2.isFile());
-    });
-  } catch {
-    return false;
-  }
-}
-function resolveActionPath(projectRoot, actionId) {
-  assertValidActionId(actionId, "resolveActionPath");
-  assertReadableActionCorpus(projectRoot);
-  const actionsDir = join20(projectRoot, ".rn-agent", "actions");
-  const fileName = `${actionId}.yaml`;
-  assertWithinDir(fileName, actionsDir);
-  const yamlPath = join20(actionsDir, fileName);
-  const ymlPath = yamlPath.replace(/\.yaml$/, ".yml");
-  const yamlExists = actionFileExists(yamlPath);
-  const ymlExists = actionFileExists(ymlPath);
-  if (yamlExists && ymlExists) {
-    throw new Error(`Action ${actionId} is ambiguous because both ${actionId}.yaml and ${actionId}.yml exist; keep exactly one file before replay.`);
-  }
-  if (yamlExists)
-    return yamlPath;
-  if (ymlExists)
-    return ymlPath;
-  return null;
-}
-function createActionTextExclusive(projectRoot, actionId, yamlText) {
-  const yamlPath = actionPathFor(projectRoot, actionId);
-  const ymlPath = yamlPath.replace(/\.yaml$/, ".yml");
-  return atomicWriter.withLock(yamlPath, () => {
-    const pathIdentity = captureOwnedActionPathIdentity(projectRoot);
-    const pathIsOwned = () => ownedActionPathIdentityMatches(pathIdentity);
-    const existing = resolveActionPath(projectRoot, actionId);
-    if (existing)
-      throw new Error(`Action ${actionId} already exists at ${existing}.`);
-    if (!atomicWriter.writeTextCreateExclusive(yamlPath, yamlText, pathIsOwned)) {
-      throw new Error(`Action ${actionId} changed during creation.`);
-    }
-    try {
-      if (pathIsOwned() && !actionFileExists(ymlPath))
-        return yamlPath;
-      throw new Error(`Action ${actionId} changed during creation; keep exactly one extension.`);
-    } catch (err) {
-      if (pathIsOwned() && readFileSync16(yamlPath, "utf8") === yamlText)
-        unlinkSync8(yamlPath);
-      throw err;
-    }
-  });
-}
-function writeRecordedActionTransaction(projectRoot, actionId, yamlText, state, overwrite) {
-  const yamlPath = actionPathFor(projectRoot, actionId);
-  return atomicWriter.withLock(yamlPath, () => {
-    const existingPath = resolveActionPath(projectRoot, actionId);
-    if (existingPath && !overwrite)
-      return { ok: false, existingPath };
-    const filePath = existingPath ?? yamlPath;
-    const pathIdentity = captureOwnedActionPathIdentity(projectRoot, existingPath ?? void 0);
-    const pathIsOwned = () => ownedActionPathIdentityMatches(pathIdentity);
-    const sidecarPath = sidecarPathFor(filePath);
-    if (!existingPath && existsSync16(sidecarPath))
-      return { ok: false, existingPath: null };
-    const written = existingPath ? atomicWriter.pairWriteConditional(filePath, yamlText, sidecarPath, state, pathIsOwned, pathIsOwned, readFileSync16(filePath, "utf8")) : atomicWriter.pairWriteCreateExclusive(filePath, yamlText, sidecarPath, state, pathIsOwned);
-    if (!written)
-      return { ok: false, existingPath: resolveActionPath(projectRoot, actionId) };
-    return {
-      ok: true,
-      filePath,
-      sidecarPath,
-      finalMtimeMs: written.finalMtimeMs,
-      preexisted: existingPath !== null
-    };
-  });
-}
-function splitYaml(text) {
-  const allLines = text.split("\n");
-  let separatorIdx = -1;
-  for (let i = 0; i < allLines.length; i++) {
-    if (allLines[i].trim() === "---") {
-      separatorIdx = i;
-      break;
-    }
-  }
-  if (separatorIdx === -1) {
-    const headerLines2 = [];
-    const bodyLines2 = [];
-    let inBody = false;
-    let seenAnyContent = false;
-    for (const line of allLines) {
-      if (!inBody && !seenAnyContent && line.trim() === "") {
-        continue;
-      }
-      if (!inBody && line.startsWith("#")) {
-        seenAnyContent = true;
-        headerLines2.push(line);
-      } else if (!inBody && line.trim() === "" && headerLines2.length > 0) {
-        inBody = true;
-        bodyLines2.push(line);
-      } else {
-        seenAnyContent = true;
-        inBody = true;
-        bodyLines2.push(line);
-      }
-    }
-    return { topSection: "", headerLines: headerLines2, bodyLines: bodyLines2 };
-  }
-  const topSection = allLines.slice(0, separatorIdx).join("\n");
-  const afterSep = allLines.slice(separatorIdx + 1);
-  const headerLines = [];
-  const bodyLines = [];
-  let stillHeader = true;
-  for (const line of afterSep) {
-    if (stillHeader && (line.startsWith("#") || line.trim() === "")) {
-      headerLines.push(line);
-    } else {
-      stillHeader = false;
-      bodyLines.push(line);
-    }
-  }
-  return { topSection, headerLines, bodyLines };
-}
-function joinYaml(parts) {
-  const out = [];
-  if (parts.topSection) {
-    out.push(parts.topSection);
-    out.push("---");
-  }
-  for (const h of parts.headerLines)
-    out.push(h);
-  for (const b of parts.bodyLines)
-    out.push(b);
-  return out.join("\n");
-}
-function loadAction(projectRoot, actionId) {
-  const filePath = resolveActionPath(projectRoot, actionId);
-  if (!filePath)
-    return null;
-  const text = readFileSync16(filePath, "utf8");
-  const metadata = parseM7Header(text, actionId);
-  if (!metadata)
-    return null;
-  assertActionMetadataIdentity(filePath, metadata);
-  const { bodyLines } = splitYaml(text);
-  const state = loadOrInitSidecar(filePath);
-  return {
-    metadata,
-    body: bodyLines.join("\n"),
-    filePath,
-    state
-  };
-}
-function saveAction(action) {
-  assertWritableActionFile(action.filePath);
-  if (existsSync16(action.filePath) && actionWasEditedExternally(action)) {
-    throw new SaveActionPreconditionError(action.filePath);
-  }
-  let topSection = "";
-  if (existsSync16(action.filePath)) {
-    const existing = readFileSync16(action.filePath, "utf8");
-    topSection = splitYaml(existing).topSection;
-  }
-  if (!topSection && action.metadata.appId) {
-    topSection = `appId: ${action.metadata.appId}`;
-  }
-  const headerLines = serializeM7Header(action.metadata).split("\n");
-  const bodyLines = action.body.split("\n");
-  const yamlText = joinYaml({ topSection, headerLines, bodyLines });
-  const sidecarPath = sidecarPathFor(action.filePath);
-  const result = atomicWriter.pairWrite(action.filePath, yamlText, sidecarPath, action.state);
-  const stateToWrite = { ...action.state, lastSeenMtimeMs: result.finalMtimeMs };
-  action.state = stateToWrite;
-  mirrorToDb({
-    yamlFilePath: action.filePath,
-    state: stateToWrite,
-    meta: { appId: action.metadata.appId, status: action.metadata.status, path: action.filePath }
-  });
-  return { filePath: action.filePath, sidecarPath };
-}
-function actionWasEditedExternally(action) {
-  return yamlEditedSinceLastSeen(action.filePath, action.state);
-}
-function acknowledgeExternalEdit(action) {
-  const nextAction = atomicWriter.withLock(action.filePath, () => {
-    let currentMtimeMs;
-    try {
-      currentMtimeMs = statSync7(action.filePath).mtimeMs;
-    } catch {
-      return action;
-    }
-    const currentState = loadOrInitSidecar(action.filePath);
-    if (currentMtimeMs <= currentState.lastSeenMtimeMs) {
-      return action;
-    }
-    const nextState = markSeen(currentState, currentMtimeMs);
-    saveSidecar(action.filePath, nextState);
-    return { ...action, state: nextState };
-  });
-  if (nextAction === action)
-    return action;
-  mirrorToDb({
-    yamlFilePath: action.filePath,
-    state: nextAction.state,
-    meta: { appId: action.metadata.appId, status: action.metadata.status, path: action.filePath }
-  });
-  return nextAction;
-}
-function canonicalRuntimeJson(state) {
-  return JSON.stringify(state, (_key, value) => {
-    if (value && typeof value === "object" && !Array.isArray(value)) {
-      const record2 = value;
-      return Object.fromEntries(Object.keys(record2).sort().map((k) => [k, record2[k]]));
-    }
-    return value;
-  });
-}
-function runtimeSidecarMatches(sidecarPath, expected) {
-  let onDisk;
-  try {
-    onDisk = JSON.parse(readFileSync16(sidecarPath, "utf8"));
-  } catch {
-    return false;
-  }
-  const normalized = typeof onDisk?.lastSeenMtimeMs === "number" ? onDisk : { ...onDisk, lastSeenMtimeMs: expected.lastSeenMtimeMs };
-  return canonicalRuntimeJson(normalized) === canonicalRuntimeJson(expected);
-}
-function runtimeBaselineMatches(filePath, expected) {
-  const sidecarPath = sidecarPathFor(filePath);
-  return existsSync16(sidecarPath) ? runtimeSidecarMatches(sidecarPath, expected) : expected.runHistory.length === 0 && expected.repairHistory.length === 0;
-}
-function saveActionRuntimeWithCAS(expected, nextState) {
-  return atomicWriter.withLock(expected.filePath, () => {
-    const sidecarPath = sidecarPathFor(expected.filePath);
-    if (!runtimeBaselineMatches(expected.filePath, expected.state)) {
-      return { ok: false, conflict: "EXTERNAL_WRITE" };
-    }
-    saveSidecar(expected.filePath, nextState);
-    expected.state = nextState;
-    return { ok: true, sidecarPath };
-  });
-}
-function promoteActionRuntimeWithCAS(expected, nextState) {
-  try {
-    assertWritableActionFile(expected.filePath);
-  } catch {
-    return { ok: false, conflict: "EXTERNAL_WRITE" };
-  }
-  const sidecarPath = sidecarPathFor(expected.filePath);
-  if (existsSync16(sidecarPath)) {
-    if (!runtimeSidecarMatches(sidecarPath, expected.state)) {
-      return { ok: false, conflict: "EXTERNAL_WRITE" };
-    }
-  } else if (expected.state.runHistory.length > 0 || expected.state.repairHistory.length > 0) {
-    return { ok: false, conflict: "EXTERNAL_WRITE" };
-  }
-  if (actionWasEditedExternally(expected))
-    return { ok: false, conflict: "EXTERNAL_WRITE" };
-  const yaml2 = readFileSync16(expected.filePath, "utf8");
-  const marker = /^# status: experimental[ \t]*$/gm;
-  if ((yaml2.match(marker) ?? []).length !== 1)
-    return { ok: false, conflict: "EXTERNAL_WRITE" };
-  const promoted = yaml2.replace(marker, "# status: active");
-  const written = atomicWriter.pairWriteConditional(expected.filePath, promoted, sidecarPath, nextState, () => {
-    try {
-      return runtimeBaselineMatches(expected.filePath, expected.state) && !actionWasEditedExternally(expected) && readFileSync16(expected.filePath, "utf8") === yaml2;
-    } catch {
-      return false;
-    }
-  }, void 0, yaml2);
-  if (!written)
-    return { ok: false, conflict: "EXTERNAL_WRITE" };
-  expected.state = { ...nextState, lastSeenMtimeMs: written.finalMtimeMs };
-  return { ok: true, sidecarPath };
-}
-function assertWritableActionFile(filePath) {
-  const actionsDir = dirname13(filePath);
-  const rnAgentDir = dirname13(actionsDir);
-  if (basename4(actionsDir) !== "actions" || basename4(rnAgentDir) !== ".rn-agent") {
-    throw new Error(`Refusing action mutation outside an owned learned-action corpus: ${filePath}.`);
-  }
-  assertOwnedActionCorpus(dirname13(rnAgentDir));
-  actionFileExists(filePath);
-}
-function assertActionMetadataIdentity(filePath, metadata) {
-  const fileId = basename4(filePath).replace(/\.ya?ml$/i, "");
-  if (metadata.id !== fileId) {
-    throw new Error(`Action metadata id ${metadata.id} does not match filename identity ${fileId}.`);
-  }
-}
-function withMetadata(action, metadata) {
-  return { ...action, metadata };
-}
-function withBody(action, body) {
-  return { ...action, body };
-}
-var SaveActionPreconditionError;
-var init_action_store = __esm({
-  "packages/rn-dev-agent-core/dist/domain/action-store.js"() {
-    "use strict";
-    init_reusable_action();
-    init_sidecar_io();
-    init_atomic_writer();
-    init_path_safety();
-    init_action_state_store();
-    init_worktree_inheritance();
-    SaveActionPreconditionError = class extends Error {
-      constructor(filePath) {
-        super(`saveAction precondition violated: yaml at ${filePath} has been edited externally since the in-memory action was loaded. The caller must invoke actionWasEditedExternally() first and abort on true (or use saveActionWithCAS for atomic detection). GH #113 contract enforcement.`);
-        this.name = "SaveActionPreconditionError";
-      }
-    };
-  }
-});
-
-// packages/rn-dev-agent-core/dist/domain/action-engine-compat.js
-import { existsSync as existsSync17, lstatSync as lstatSync10, readFileSync as readFileSync17, readdirSync as readdirSync7, realpathSync as realpathSync6 } from "node:fs";
-import { basename as basename5, dirname as dirname14, join as join21, resolve as resolve5 } from "node:path";
-function actionEnginePinRefusal(enginePin) {
-  if (!enginePin) {
-    return `Action is not migrated to ${ACTION_ENGINE_PIN} or newer. Run node <plugin-root>/rn-dev-agent-core/dist/maestro-runner-pin.js migrate-actions --root <app> before replay. Incompatible actions are terminal \u2014 no manual fallback.`;
-  }
-  const version2 = parseActionEnginePinVersion(enginePin);
-  if (!version2) {
-    return `Action enginePin ${enginePin} is incompatible with the required floor ${ACTION_ENGINE_PIN}. Migrate or re-record the action. Incompatible actions are terminal \u2014 no manual fallback.`;
-  }
-  if (!meetsMaestroRunnerFloor(version2)) {
-    return `Action enginePin ${enginePin} is below the required floor ${ACTION_ENGINE_PIN}. Migrate or re-record the action. Incompatible actions are terminal \u2014 no manual fallback.`;
-  }
-  return null;
-}
-function regexSelectorCapabilityRefusal(commands) {
-  const selectors = findRegexTextSelectors(commands);
-  if (selectors.length === 0)
-    return null;
-  return `Action uses regex text selectors (${selectors[0]}) which are not a validated maestro-runner ${MAESTRO_RUNNER_PIN.version} capability (GH #750 CONTAINS mistranslation). Rewrite as id or literal text selectors before replay. No UI mutation will run.`;
-}
-function actionReplayPreflight(opts) {
-  return replayCompatibilityPreflight({ ...opts, requireEnginePin: true });
-}
-function replayCompatibilityPreflight(opts) {
-  const pin = exactPinRefusal(opts.engineStatus);
-  if (pin)
-    return pin;
-  if (opts.requireEnginePin) {
-    const format = actionEnginePinRefusal(opts.enginePin);
-    if (format)
-      return format;
-  }
-  return regexSelectorCapabilityRefusal(opts.commands);
-}
-function isLearnedActionPath(path) {
-  return classifyLearnedActionPath(path) === "action";
-}
-function classifyLearnedActionPath(path) {
-  const lexical = classifyResolvedLearnedActionPath(resolve5(path));
-  try {
-    const canonical2 = classifyResolvedLearnedActionPath(canonicalizeExistingPath(path));
-    if (lexical === canonical2)
-      return lexical;
-    if (lexical === "outside")
-      return canonical2;
-    return "descendant";
-  } catch {
-    return lexical;
-  }
-}
-function classifyResolvedLearnedActionPath(path) {
-  let parent = dirname14(path);
-  let direct = true;
-  while (true) {
-    if (basename5(parent) === "actions" && basename5(dirname14(parent)) === ".rn-agent") {
-      return direct ? "action" : "descendant";
-    }
-    const next = dirname14(parent);
-    if (next === parent)
-      return "outside";
-    parent = next;
-    direct = false;
-  }
-}
-function canonicalizeExistingPath(path) {
-  let cursor = resolve5(path);
-  const suffix = [];
-  while (!existsSync17(cursor)) {
-    const parent = dirname14(cursor);
-    if (parent === cursor)
-      return cursor;
-    suffix.unshift(basename5(cursor));
-    cursor = parent;
-  }
-  return resolve5(realpathSync6(cursor), ...suffix);
-}
-function standaloneLearnedActionPathRefusal(path) {
-  const classification = classifyLearnedActionPath(path);
-  if (classification === "outside")
-    return null;
-  if (classification === "descendant") {
-    return `Refusing to execute learned-action descendant ${path} as a standalone flow.`;
-  }
-  const actionId = basename5(path).replace(/\.ya?ml$/i, "");
-  const projectRoot = dirname14(dirname14(dirname14(resolve5(path))));
-  try {
-    const resolvedAction = resolveActionPath(projectRoot, actionId);
-    if (resolvedAction === null || resolve5(resolvedAction) !== resolve5(path)) {
-      return `Action ${actionId} does not resolve uniquely to ${path}.`;
-    }
-    const metadata = parseM7Header(readFileSync17(path, "utf8"), actionId);
-    if (metadata)
-      assertActionMetadataIdentity(path, metadata);
-  } catch (err) {
-    return err instanceof Error ? err.message : String(err);
-  }
-  return null;
-}
-var ENGINE_PIN_LINE;
-var init_action_engine_compat = __esm({
-  "packages/rn-dev-agent-core/dist/domain/action-engine-compat.js"() {
-    "use strict";
-    init_engine_pin();
-    init_maestro_validator();
-    init_reusable_action();
-    init_action_store();
-    ENGINE_PIN_LINE = new RegExp(`^#\\s*enginePin\\s*:\\s*.+$`);
-  }
-});
-
-// packages/rn-dev-agent-core/dist/tools/resolve-ios-app-file.js
-import { execFileSync as execFileSync3 } from "node:child_process";
-import { existsSync as existsSync18, cpSync, rmSync as rmSync5, mkdirSync as mkdirSync13, readdirSync as readdirSync8, statSync as statSync8 } from "node:fs";
-import { tmpdir as tmpdir5 } from "node:os";
-import { join as join22, basename as basename6 } from "node:path";
-function flowUsesClearState(flowText) {
-  return /clearState:\s*true\b/.test(flowText) || /^[ \t]*-[ \t]*clearState[ \t]*$/m.test(flowText);
-}
-function defaultSnapshotApp(appPath) {
-  try {
-    const destDir = join22(tmpdir5(), "rn-appfile-snapshots");
-    const dest = join22(destDir, basename6(appPath));
-    rmSync5(dest, { recursive: true, force: true });
-    mkdirSync13(destDir, { recursive: true });
-    try {
-      execFileSync3("cp", ["-Rc", appPath, dest], { timeout: 3e4, stdio: "ignore" });
-    } catch {
-      cpSync(appPath, dest, { recursive: true });
-    }
-    return dest;
-  } catch {
-    return null;
-  }
-}
-function resolveIosAppFile(bundleId, deps = {}) {
-  const exists = deps.exists ?? existsSync18;
-  const getAppContainer = deps.getAppContainer ?? defaultGetAppContainer;
-  const snapshotApp = deps.snapshotApp ?? defaultSnapshotApp;
-  const fromContainer = getAppContainer(bundleId, deps.deviceId);
-  if (fromContainer && exists(fromContainer)) {
-    const snapshot = snapshotApp(fromContainer);
-    if (snapshot)
-      return snapshot;
-  }
-  const fromDerived = (deps.newestDerivedDataApp ?? (() => null))();
-  if (fromDerived && exists(fromDerived))
-    return fromDerived;
-  return null;
-}
-function resolveAppFileForClearState(platform, flowText, headerAppId, explicitAppFile, deps) {
-  if (explicitAppFile)
-    return { ok: true, appFile: explicitAppFile };
-  if (platform !== "ios" || !flowUsesClearState(flowText))
-    return { ok: true };
-  if (!headerAppId) {
-    return {
-      ok: false,
-      error: "Flow uses clearState on iOS but no appId is known to locate the .app. Add `appId:` to the flow header or pass appFile=<path-to-.app>."
-    };
-  }
-  const appFile = resolveIosAppFile(headerAppId, deps) ?? void 0;
-  if (!appFile) {
-    return {
-      ok: false,
-      error: `Flow uses clearState on iOS but no built .app could be located for ${headerAppId}. Pass appFile=<path-to-.app> (e.g. <DerivedData>/Build/Products/Debug-iphonesimulator/<App>.app).`
-    };
-  }
-  return { ok: true, appFile };
-}
-function defaultGetAppContainer(bundleId, deviceId) {
-  try {
-    const target = deviceId && !/\s/.test(deviceId) ? deviceId : "booted";
-    const out = execFileSync3("xcrun", ["simctl", "get_app_container", target, bundleId, "app"], {
-      encoding: "utf8",
-      timeout: 5e3
-    }).trim();
-    return out || null;
-  } catch {
-    return null;
-  }
-}
-function defaultListSnapshots() {
-  const dir = join22(tmpdir5(), "rn-appfile-snapshots");
-  try {
-    return readdirSync8(dir).filter((name) => name.endsWith(".app")).map((name) => join22(dir, name));
-  } catch {
-    return [];
-  }
-}
-function defaultReadBundleId(appPath, timeoutMs) {
-  try {
-    const out = execFileSync3("plutil", ["-extract", "CFBundleIdentifier", "raw", join22(appPath, "Info.plist")], { timeout: timeoutMs, encoding: "utf8" });
-    return out.trim() || null;
-  } catch {
-    return null;
-  }
-}
-function defaultMtimeMs(appPath) {
-  try {
-    return statSync8(appPath).mtimeMs;
-  } catch {
-    return null;
-  }
-}
-function findSnapshotForBundleId(bundleId, deps = {}) {
-  const listSnapshots = deps.listSnapshots ?? defaultListSnapshots;
-  const readBundleId = deps.readBundleId ?? defaultReadBundleId;
-  const mtimeMs = deps.mtimeMs ?? defaultMtimeMs;
-  const now = deps.now ?? Date.now;
-  try {
-    const deadline = now() + SNAPSHOT_SCAN_BUDGET_MS;
-    const candidates = listSnapshots().map((path) => ({ path, m: mtimeMs(path) })).filter((c) => c.m !== null).sort((a, b) => b.m - a.m).slice(0, SNAPSHOT_SCAN_CAP);
-    for (const { path, m } of candidates) {
-      const remaining = deadline - now();
-      if (remaining <= 0)
-        return null;
-      if (readBundleId(path, Math.min(PLUTIL_TIMEOUT_MS, remaining)) === bundleId) {
-        return { path, mtimeMs: m };
-      }
-    }
-    return null;
-  } catch {
-    return null;
-  }
-}
-function snapshotHintForBundleId(bundleId, deps = {}) {
-  try {
-    const now = deps.now ?? Date.now;
-    const snap = findSnapshotForBundleId(bundleId, deps);
-    if (!snap)
-      return null;
-    return {
-      path: snap.path,
-      ageMinutes: Math.max(0, Math.round((now() - snap.mtimeMs) / 6e4))
-    };
-  } catch {
-    return null;
-  }
-}
-var SNAPSHOT_SCAN_CAP, SNAPSHOT_SCAN_BUDGET_MS, PLUTIL_TIMEOUT_MS;
-var init_resolve_ios_app_file = __esm({
-  "packages/rn-dev-agent-core/dist/tools/resolve-ios-app-file.js"() {
-    "use strict";
-    SNAPSHOT_SCAN_CAP = 10;
-    SNAPSHOT_SCAN_BUDGET_MS = 3e3;
-    PLUTIL_TIMEOUT_MS = 2e3;
-  }
-});
-
-// packages/rn-dev-agent-core/dist/domain/maestro-step-parser.js
-function cap(s) {
-  return s.length > MAX_FIELD ? s.slice(0, MAX_FIELD) + "\u2026" : s;
-}
-function combineRunnerOutput(stdout, stderr) {
-  return (stdout + "\n" + stderr).replace(/^[\r\n]+/, "").trimEnd();
-}
-function parseExactSteps(output) {
-  if (!output || typeof output !== "string")
-    return [];
-  const steps = [];
-  let index = 0;
-  for (const raw of stripAnsi(output).split("\n")) {
-    const m = STEP_RE.exec(raw);
-    if (!m)
-      continue;
-    const name = m[2];
-    const verb = cap(name.split(/\s+/)[0].replace(/:$/, ""));
-    if (verb === "rn-maestro-run")
-      continue;
-    const seconds = Number(m[3]);
-    if (!Number.isFinite(seconds))
-      continue;
-    steps.push({
-      index: index++,
-      name,
-      verb,
-      status: m[1] === "\u2713" ? "pass" : "fail",
-      durationMs: Math.round(seconds * 1e3)
-    });
-  }
-  return steps.length > MAX_STEPS ? steps.slice(-MAX_STEPS) : steps;
-}
-function boundStep(step) {
-  return { ...step, name: cap(step.name) };
-}
-function parseSteps(output) {
-  return parseExactSteps(output).map(boundStep);
-}
-function findFailedStep(steps) {
-  const last = steps.length ? steps[steps.length - 1] : null;
-  return last && last.status === "fail" ? last : null;
-}
-function lastObservedStep(steps) {
-  return steps.length ? steps[steps.length - 1] : null;
-}
-function summarizeExactReason(output, failedStep) {
-  const f = parseMaestroFailure(output, failedStep ? { failedStep } : void 0);
-  if (f.kind === "UNKNOWN" || f.kind === "WDA_BOOTSTRAP_FAILED")
-    return null;
-  const selector = "selector" in f ? f.selector ?? null : null;
-  return { kind: f.kind, selector };
-}
-function buildStepSummary(output, opts) {
-  const exactSteps = parseExactSteps(output);
-  const exactFailedStep = opts.failed ? findFailedStep(exactSteps) : null;
-  const exactReason = opts.failed ? summarizeExactReason(output, exactFailedStep?.name) : null;
-  const steps = exactSteps.map(boundStep);
-  return {
-    steps,
-    failedStep: exactFailedStep ? boundStep(exactFailedStep) : null,
-    reason: exactReason ? {
-      ...exactReason,
-      selector: exactReason.selector === null ? null : cap(exactReason.selector)
-    } : null,
-    lastStep: lastObservedStep(steps)
-  };
-}
-function isWdaFailureLine(line) {
-  return WDA_TOKEN_RE.test(line) && WDA_FAILURE_RE.test(line);
-}
-function buildTerminalEvidence(output, opts = {}) {
-  const exactSteps = parseExactSteps(output);
-  const failedStep = findFailedStep(exactSteps);
-  const reason = summarizeExactReason(output, failedStep?.name);
-  const bootstrapEvidence = stripAnsi(output).split("\n").filter((line) => isWdaFailureLine(line)).join("\n").slice(0, 500);
-  const exitClass = opts.timedOut ? "timed-out" : opts.spawnError ? "spawn-error" : exactSteps.length === 0 ? "before-first-step" : "step-failure";
-  return {
-    completedSteps: exactSteps.filter((step) => step.status === "pass").length,
-    ...failedStep ? { failedStep: failedStep.name } : {},
-    exitClass,
-    ...bootstrapEvidence ? { bootstrapEvidence } : {},
-    ...reason ? {
-      failureKind: reason.kind,
-      failureSelector: reason.selector
-    } : {}
-  };
-}
-function classifyExecError(err) {
-  const e = err;
-  const killed = e?.killed === true;
-  const overflow = e?.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER";
-  return { timedOut: (killed || e?.code === "ETIMEDOUT") && !overflow, outputTruncated: overflow };
-}
-function formatFailureHeadline(summary, cls, fallbackMsg) {
-  if (cls.timedOut) {
-    return `Maestro flow timed out${summary.lastStep ? ` after step "${summary.lastStep.name}"` : ""}`;
-  }
-  if (cls.outputTruncated) {
-    return "Maestro flow output exceeded the 10MB buffer";
-  }
-  if (summary.failedStep) {
-    const r = summary.reason;
-    const reasonStr = r ? ` (${r.kind}${r.selector ? `: ${r.selector}` : ""})` : "";
-    return `Maestro flow failed at step "${summary.failedStep.name}"${reasonStr}`;
-  }
-  if (summary.reason) {
-    const r = summary.reason;
-    return `Maestro flow failed (${r.kind}${r.selector ? `: ${r.selector}` : ""})`;
-  }
-  return `Maestro flow failed: ${fallbackMsg.slice(0, 500)}`;
-}
-var STEP_RE, MAX_FIELD, MAX_STEPS, WDA_TOKEN_RE, WDA_FAILURE_RE;
-var init_maestro_step_parser = __esm({
-  "packages/rn-dev-agent-core/dist/domain/maestro-step-parser.js"() {
-    "use strict";
-    init_maestro_error_parser();
-    init_ansi();
-    init_ansi();
-    STEP_RE = /^[ \t]+([✓✗])\s+(\S.*\S|\S)\s*\(([\d.]+)s\)\s*$/;
-    MAX_FIELD = 200;
-    MAX_STEPS = 1e3;
-    WDA_TOKEN_RE = /\bWDA\b|WebDriverAgent/i;
-    WDA_FAILURE_RE = /\b(?:fail(?:ed|ure|s)?|error|unable|cannot|can't|could not|timed out|timeout|refused|denied|crash(?:ed)?|panic|aborted)\b/i;
-  }
-});
-
-// packages/rn-dev-agent-core/dist/domain/tap-latency.js
-function parseTapLatencies(output) {
-  return parseSteps(output).filter((s) => s.verb === "tapOn" && s.status === "pass").map((s) => s.durationMs);
-}
-function median(samples) {
-  if (samples.length === 0)
-    return null;
-  const s = [...samples].sort((a, b) => a - b);
-  const mid = Math.floor(s.length / 2);
-  return s.length % 2 === 0 ? Math.round((s[mid - 1] + s[mid]) / 2) : s[mid];
-}
-function resolveFloorMs(envVal) {
-  if (envVal === void 0)
-    return DEFAULT_FLOOR_MS;
-  const n = Number(envVal);
-  return Number.isFinite(n) && n > 0 ? n : DEFAULT_FLOOR_MS;
-}
-function classifyRuntimeDegradation(output, floorMs) {
-  const samples = parseTapLatencies(output);
-  const medianMs = median(samples);
-  return {
-    degraded: medianMs != null && samples.length >= MIN_SAMPLES_FOR_DEGRADED && medianMs >= floorMs,
-    medianMs,
-    floorMs,
-    sampleCount: samples.length
-  };
-}
-function formatRuntimeDegradedHint(d) {
-  return `RUNTIME_DEGRADED: median tapOn latency ${d.medianMs}ms (>= ${d.floorMs}ms) \u2014 the simulator test runtime is likely wedged; reboot it (xcrun simctl shutdown <udid> && xcrun simctl boot <udid>), relaunch the app, and retry.`;
-}
-function augmentFailureWithDegradation(output, floorMs, baseMessage, baseMeta) {
-  const d = classifyRuntimeDegradation(output, floorMs);
-  if (!d.degraded)
-    return { message: baseMessage, meta: baseMeta };
-  return {
-    message: `${baseMessage} \u2014 ${formatRuntimeDegradedHint(d)}`,
-    meta: {
-      ...baseMeta,
-      runtimeDegraded: { medianTapMs: d.medianMs, floorMs: d.floorMs, sampleCount: d.sampleCount }
-    }
-  };
-}
-var DEFAULT_FLOOR_MS, MIN_SAMPLES_FOR_DEGRADED;
-var init_tap_latency = __esm({
-  "packages/rn-dev-agent-core/dist/domain/tap-latency.js"() {
-    "use strict";
-    init_maestro_step_parser();
-    DEFAULT_FLOOR_MS = 1500;
-    MIN_SAMPLES_FOR_DEGRADED = 2;
-  }
-});
-
-// packages/rn-dev-agent-core/dist/cdp/recovery.js
-function markCdpStale() {
-  cdpStale = true;
-}
-function consumeCdpStale() {
-  const was = cdpStale;
-  cdpStale = false;
-  return was;
-}
-async function probeFreshness(client2, timeoutMs = FRESHNESS_PROBE_MS) {
-  return client2.probeHelperFreshness(timeoutMs);
-}
-async function recoverFromStaleTarget(client2) {
-  if (!client2.isConnected) {
-    return { recovered: false, reason: "probe-failed", error: "Client not connected" };
-  }
-  let probe = await probeDev(client2, FRESHNESS_PROBE_MS);
-  let isStale = !probe.ok;
-  if (isStale && probe.timedOut) {
-    await sleep3(STALE_RETRY_DELAY_MS);
-    probe = await probeDev(client2, STALE_RETRY_PROBE_MS);
-    isStale = !probe.ok;
-  }
-  if (!isStale) {
-    return { recovered: false, reason: "not-stale" };
-  }
-  try {
-    await client2.softReconnect();
-    return { recovered: true, reason: "reconnected" };
-  } catch (err) {
-    const msg3 = err instanceof Error ? err.message : String(err);
-    return { recovered: false, reason: "reconnect-failed", error: msg3 };
-  }
-}
-async function probeDev(client2, timeoutMs) {
-  let timer;
-  try {
-    const evalPromise = client2.evaluate('typeof __DEV__ !== "undefined" && __DEV__ === true');
-    evalPromise.catch(() => {
-    });
-    const result = await Promise.race([
-      evalPromise,
-      new Promise((resolve19) => {
-        timer = setTimeout(() => resolve19({ error: "probe timeout" }), timeoutMs);
-      })
-    ]);
-    if (timer)
-      clearTimeout(timer);
-    return {
-      ok: result.error === void 0 && result.value === true,
-      timedOut: result.error === "probe timeout"
-    };
-  } catch {
-    if (timer)
-      clearTimeout(timer);
-    return { ok: false, timedOut: false };
-  }
-}
-function sleep3(ms) {
-  return new Promise((r) => setTimeout(r, ms));
-}
-var FRESHNESS_PROBE_MS, STALE_RETRY_DELAY_MS, STALE_RETRY_PROBE_MS, cdpStale;
-var init_recovery = __esm({
-  "packages/rn-dev-agent-core/dist/cdp/recovery.js"() {
-    "use strict";
-    FRESHNESS_PROBE_MS = 2e3;
-    STALE_RETRY_DELAY_MS = 500;
-    STALE_RETRY_PROBE_MS = 3e3;
-    cdpStale = false;
-  }
-});
-
-// packages/rn-dev-agent-core/dist/domain/maestro-device-authority.js
-function canonicalDeviceId(value) {
-  return value.toLowerCase();
-}
-function sameDevice(left, right) {
-  return canonicalDeviceId(left) === canonicalDeviceId(right);
-}
-function uniqueValues(values) {
-  const seen = /* @__PURE__ */ new Map();
-  for (const value of values) {
-    if (!value)
-      continue;
-    const key = canonicalDeviceId(value);
-    if (!seen.has(key))
-      seen.set(key, value);
-  }
-  return [...seen.values()];
-}
-function uniqueMatches(output, pattern) {
-  return uniqueValues([...output.matchAll(pattern)].map((match) => match[1]));
-}
-function verifyMaestroDeviceAuthority(input) {
-  const requestedDeviceId = input.requestedDeviceId?.trim() || null;
-  const reportedIds = uniqueValues([
-    ...input.directReportDeviceIds ?? [],
-    ...uniqueMatches(input.output, /\b(?:Found|Using specified|Connecting to) (?:(?:iOS|Android) )?device:\s*([A-Za-z0-9._:-]+)/gi)
-  ]);
-  const wdaDeviceIds = uniqueMatches(input.output, /\b(?:Building|Starting|Launching|Installing)\s+(?:WDA|WebDriverAgent(?:Runner)?)\s+(?:for|on|to)\s+device\s+([A-Za-z0-9._:-]+)/gi);
-  const observedDeviceIds = uniqueValues([...reportedIds, ...wdaDeviceIds]);
-  const reportedDeviceId = reportedIds.length === 1 ? reportedIds[0] : null;
-  if (!requestedDeviceId) {
-    return {
-      requestedDeviceId,
-      reportedDeviceId,
-      observedDeviceIds,
-      wdaDeviceIds,
-      verified: false,
-      source: reportedIds.length > 0 ? "maestro-runner-log" : "none",
-      reason: "no-exact-device-request"
-    };
-  }
-  if (input.runner !== "maestro-runner") {
-    return {
-      requestedDeviceId,
-      reportedDeviceId,
-      observedDeviceIds,
-      wdaDeviceIds,
-      verified: false,
-      source: "maestro-cli-explicit-udid",
-      reason: "direct-runner-evidence-unavailable"
-    };
-  }
-  const base = {
-    requestedDeviceId,
-    reportedDeviceId,
-    observedDeviceIds,
-    wdaDeviceIds,
-    source: "maestro-runner-log"
-  };
-  if (reportedIds.length === 0) {
-    return { ...base, verified: false, reason: "reported-device-missing" };
-  }
-  if (reportedIds.length !== 1) {
-    return { ...base, verified: false, reason: "reported-device-ambiguous" };
-  }
-  if (!reportedDeviceId || !sameDevice(reportedDeviceId, requestedDeviceId)) {
-    const weakOnly = input.directReportIdentityStrength === "weak" && (input.directReportDeviceIds ?? []).some((id) => sameDevice(id, reportedDeviceId ?? ""));
-    return {
-      ...base,
-      verified: false,
-      reason: weakOnly ? "reported-device-weak-identity" : "reported-device-mismatch"
-    };
-  }
-  if (observedDeviceIds.some((id) => !sameDevice(id, requestedDeviceId))) {
-    return { ...base, verified: false, reason: "wda-device-mismatch" };
-  }
-  return {
-    ...base,
-    verified: true,
-    ...input.platform === "ios" && input.requireWdaProvenance === true ? {
-      wdaProvenance: wdaDeviceIds.length > 0 ? "exact-match" : "unavailable"
-    } : {},
-    reason: input.platform === "ios" && wdaDeviceIds.length > 0 ? "exact-runner-and-wda-match" : "exact-runner-match"
-  };
-}
-function shouldRejectMaestroDeviceAuthority(authority) {
-  return authority.requestedDeviceId !== null && authority.source === "maestro-runner-log" && !authority.verified;
-}
-function maestroAuthorityRefusal(authority, underlyingError) {
-  if (!shouldRejectMaestroDeviceAuthority(authority))
-    return null;
-  const headline = `Maestro device authority refused: requested ${authority.requestedDeviceId}, direct runner/WDA evidence was ${authority.reportedDeviceId ?? "missing"} (${authority.reason}).`;
-  return underlyingError ? `${headline} Underlying failure: ${underlyingError}` : headline;
-}
-var init_maestro_device_authority = __esm({
-  "packages/rn-dev-agent-core/dist/domain/maestro-device-authority.js"() {
-    "use strict";
-  }
-});
-
-// packages/rn-dev-agent-core/dist/domain/maestro-runner-report.js
-import { existsSync as existsSync19, readFileSync as readFileSync18, rmSync as rmSync6 } from "node:fs";
-import { tmpdir as tmpdir6 } from "node:os";
-import { join as join23 } from "node:path";
-function idsFrom(value, keys) {
-  if (!value || typeof value !== "object")
-    return [];
-  const record2 = value;
-  for (const key of keys) {
-    const id = record2[key];
-    if (typeof id === "string")
-      return [id];
-  }
-  return [];
-}
-function deviceIdsFrom(value) {
-  return idsFrom(value, DEVICE_ID_KEYS);
-}
-function weakDeviceIdsFrom(value) {
-  if (typeof value === "string")
-    return [value];
-  return idsFrom(value, WEAK_DEVICE_ID_KEYS);
-}
-function containerDeviceIdsFrom(value) {
-  return idsFrom(value, CONTAINER_DEVICE_ID_KEYS);
-}
-function reportDeviceIds(reportDir) {
-  const reportPath = join23(reportDir, "report.json");
-  if (!existsSync19(reportPath))
-    return { ids: [], strength: "none" };
-  try {
-    const report = JSON.parse(readFileSync18(reportPath, "utf8"));
-    const flows = Array.isArray(report.flows) ? report.flows : [];
-    const devices = [report.device, ...flows.map((flow) => flow?.device)];
-    const strong = [
-      ...devices.flatMap((device) => deviceIdsFrom(device)),
-      ...[report, ...flows].flatMap((container) => containerDeviceIdsFrom(container))
-    ];
-    const usingStrong = strong.length > 0;
-    const ids = usingStrong ? strong : devices.flatMap((device) => weakDeviceIdsFrom(device));
-    const accepted = [
-      ...new Set(ids.map((id) => id.trim()).filter((id) => DIRECT_DEVICE_ID_RE.test(id)))
-    ];
-    return {
-      ids: accepted,
-      strength: accepted.length === 0 ? "none" : usingStrong ? "strong" : "weak"
-    };
-  } catch {
-    return { ids: [], strength: "none" };
-  }
-}
-function createRunnerReportDir(runner, prefix) {
-  if (runner !== "maestro-runner")
-    return null;
-  return join23(tmpdir6(), `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
-}
-function runnerReportArgs(reportDir) {
-  return reportDir ? ["--output", reportDir, "--flatten"] : [];
-}
-function collectDirectRunnerEvidence(reportDir, output) {
-  if (!reportDir)
-    return { output, reportDeviceIds: [], reportDeviceIdStrength: "none" };
-  const report = reportDeviceIds(reportDir);
-  const evidence = {
-    output,
-    reportDeviceIds: report.ids,
-    reportDeviceIdStrength: report.strength
-  };
-  const logPath = join23(reportDir, "maestro-runner.log");
-  if (!existsSync19(logPath))
-    return evidence;
-  try {
-    evidence.output = `${output}
-${readFileSync18(logPath, "utf8")}`;
-  } catch {
-  }
-  return evidence;
-}
-function disposeRunnerReportDir(reportDir) {
-  if (!reportDir)
-    return;
-  try {
-    rmSync6(reportDir, { recursive: true, force: true });
-  } catch {
-  }
-}
-var DIRECT_DEVICE_ID_RE, DEVICE_ID_KEYS, WEAK_DEVICE_ID_KEYS, CONTAINER_DEVICE_ID_KEYS;
-var init_maestro_runner_report = __esm({
-  "packages/rn-dev-agent-core/dist/domain/maestro-runner-report.js"() {
-    "use strict";
-    DIRECT_DEVICE_ID_RE = /^[A-Za-z0-9._:-]{1,256}$/;
-    DEVICE_ID_KEYS = ["udid", "deviceId", "serial"];
-    WEAK_DEVICE_ID_KEYS = ["id"];
-    CONTAINER_DEVICE_ID_KEYS = ["udid", "deviceId", "deviceSerial"];
-  }
-});
-
-// packages/rn-dev-agent-core/dist/session/cleanup-identity.js
-function isPositiveSafeInteger(value) {
-  return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
-}
-function isTcpPort(value) {
-  return isPositiveSafeInteger(value) && value <= 65535;
-}
-function hasCompleteRunnerCleanupIdentity(binding) {
-  const processBirth = String(binding.processBirth ?? "");
-  const instanceId = String(binding.instanceId ?? "");
-  const capability = String(binding.capability ?? "");
-  if (!isPositiveSafeInteger(binding.pid) || !isTcpPort(binding.port) || !processBirth || !instanceId || !capability) {
-    return false;
-  }
-  if (String(binding.platform ?? "") !== "android")
-    return true;
-  return Boolean(String(binding.deviceId ?? ""));
-}
-function hasCompleteRecorderCleanupIdentity(binding) {
-  const script = String(binding.script ?? "");
-  const scope = String(binding.scope ?? "");
-  if (!script || !/^[a-f0-9]{64}$/.test(scope) || binding.port !== void 0 && !isTcpPort(binding.port)) {
-    return false;
-  }
-  if (binding.phase === "starting")
-    return true;
-  return isPositiveSafeInteger(binding.pid) && Boolean(String(binding.processBirth ?? ""));
-}
-var init_cleanup_identity = __esm({
-  "packages/rn-dev-agent-core/dist/session/cleanup-identity.js"() {
-    "use strict";
-  }
-});
-
-// packages/rn-dev-agent-core/dist/session/declared-source-contract.js
-function missingDeclaredRootMessage() {
-  return `NON_GIT_MANIFEST_REQUIRED: ${DECLARED_ROOT_ENV} is not set. ${NON_GIT_DECLARATION_NEXT_ACTION}`;
-}
-function missingDeclaredManifestListMessage() {
-  return `NON_GIT_MANIFEST_REQUIRED: ${DECLARED_MANIFESTS_ENV} is not set. ${NON_GIT_DECLARATION_NEXT_ACTION}`;
-}
-function missingDeclaredManifestMessage(entry) {
-  return `NON_GIT_MANIFEST_REQUIRED: declared manifest "${entry}" does not exist. ${NON_GIT_DECLARATION_NEXT_ACTION}`;
-}
-var DECLARED_ROOT_ENV, DECLARED_MANIFESTS_ENV, NON_GIT_DECLARATION_NEXT_ACTION;
-var init_declared_source_contract = __esm({
-  "packages/rn-dev-agent-core/dist/session/declared-source-contract.js"() {
-    "use strict";
-    DECLARED_ROOT_ENV = "RN_DEV_AGENT_DECLARED_ROOT";
-    DECLARED_MANIFESTS_ENV = "RN_DEV_AGENT_DECLARED_MANIFESTS";
-    NON_GIT_DECLARATION_NEXT_ACTION = `Declare the non-Git source explicitly: set ${DECLARED_ROOT_ENV} to the exact existing application root, and set ${DECLARED_MANIFESTS_ENV} to a comma-separated list of required existing manifest files inside that root, then restart the supervisor. Neither value is inferred from the working directory or generated.`;
-  }
-});
-
 // packages/rn-dev-agent-core/dist/cdp/metro-cwd.js
-import { execFileSync as execFileSync4 } from "node:child_process";
-import { readlinkSync as readlinkSync3, realpathSync as realpathSync7 } from "node:fs";
-import { resolve as resolve6, sep as sep6 } from "node:path";
+import { execFileSync as execFileSync3 } from "node:child_process";
+import { readlinkSync, realpathSync as realpathSync3 } from "node:fs";
+import { resolve, sep } from "node:path";
 function parseLsofPid(stdout) {
   for (const line of stdout.split("\n")) {
     const n = parseInt(line.trim(), 10);
@@ -27680,7 +21912,7 @@ function parseWindowsMetroRoot(commandLine) {
   const explicit = explicitRoot?.[1] ?? explicitRoot?.[2] ?? explicitRoot?.[3];
   return explicit ?? null;
 }
-function cwdForProcess(pid, platform = process.platform, exec = defaultExec, readLink = readlinkSync3, executableDependencies = {}) {
+function cwdForProcess(pid, platform = process.platform, exec = defaultExec, readLink = readlinkSync, executableDependencies = {}) {
   try {
     if (platform === "linux") {
       return realpathOrResolve(readLink(`/proc/${pid}/cwd`));
@@ -27712,16 +21944,16 @@ function cwdForProcess(pid, platform = process.platform, exec = defaultExec, rea
 }
 function realpathOrResolve(p) {
   try {
-    return realpathSync7(resolve6(p));
+    return realpathSync3(resolve(p));
   } catch {
-    return resolve6(p);
+    return resolve(p);
   }
 }
 function cwdForPort(port, exec = defaultExec, platform = process.platform, executableDependencies = {}) {
   const pid = pidForPort(port, exec, platform, executableDependencies);
   if (pid == null)
     return null;
-  return cwdForProcess(pid, platform, exec, readlinkSync3, executableDependencies);
+  return cwdForProcess(pid, platform, exec, readlinkSync, executableDependencies);
 }
 function pathMatchesRoot(servingCwd, projectRoot) {
   if (!servingCwd || !projectRoot)
@@ -27730,14 +21962,14 @@ function pathMatchesRoot(servingCwd, projectRoot) {
   const b = realpathOrResolve(projectRoot);
   if (a === b)
     return true;
-  return a.startsWith(b + sep6) || b.startsWith(a + sep6);
+  return a.startsWith(b + sep) || b.startsWith(a + sep);
 }
 function pathIsWithinRoot(candidate, root) {
   if (!candidate || !root)
     return false;
   const canonicalCandidate = realpathOrResolve(candidate);
   const canonicalRoot2 = realpathOrResolve(root);
-  return canonicalCandidate === canonicalRoot2 || canonicalCandidate.startsWith(canonicalRoot2 + sep6);
+  return canonicalCandidate === canonicalRoot2 || canonicalCandidate.startsWith(canonicalRoot2 + sep);
 }
 function resolveBridgeProjectRoot() {
   const root = findProjectRoot();
@@ -27750,7 +21982,7 @@ var init_metro_cwd = __esm({
     init_storage();
     init_trusted_system_executable();
     CWD_LSOF_TIMEOUT_MS = 800;
-    defaultExec = (cmd, args) => execFileSync4(cmd, args, {
+    defaultExec = (cmd, args) => execFileSync3(cmd, args, {
       timeout: CWD_LSOF_TIMEOUT_MS,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"]
@@ -27759,7 +21991,7 @@ var init_metro_cwd = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/session/metro-binding.js
-import { execFileSync as execFileSync5 } from "node:child_process";
+import { execFileSync as execFileSync4 } from "node:child_process";
 function resolveMetroListenerExecutable(platform, dependencies = {}) {
   const executable = platform === "win32" ? "powershell" : platform === "linux" ? "ss" : platform === "darwin" ? "lsof" : null;
   return executable ? resolveTrustedSystemExecutable(executable, platform, dependencies) : null;
@@ -27776,7 +22008,7 @@ function numericListener(output, emptyStatus) {
   const [pid] = pids;
   return pids.size === 1 && Number.isSafeInteger(pid) && pid > 0 ? { status: "listening", pid } : { status: "unknown" };
 }
-function probeMetroListener(port, platform = process.platform, execute2 = execFileSync5, executableDependencies = {}) {
+function probeMetroListener(port, platform = process.platform, execute2 = execFileSync4, executableDependencies = {}) {
   const executable = resolveMetroListenerExecutable(platform, executableDependencies);
   if (!executable)
     return { status: "unknown" };
@@ -27817,7 +22049,7 @@ function probeMetroListener(port, platform = process.platform, execute2 = execFi
     return platform === "darwin" && failure.status === 1 && !String(failure.stdout ?? "").trim() && !String(failure.stderr ?? "").trim() ? { status: "absent" } : { status: "unknown" };
   }
 }
-function metroListenerPid(port, platform = process.platform, execute2 = execFileSync5, executableDependencies = {}) {
+function metroListenerPid(port, platform = process.platform, execute2 = execFileSync4, executableDependencies = {}) {
   const probe = probeMetroListener(port, platform, execute2, executableDependencies);
   return probe.status === "listening" ? probe.pid : null;
 }
@@ -27902,7 +22134,7 @@ var init_recovery_remedy = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/session/registry.js
-import { createHash as createHash5, randomBytes as randomBytes4, timingSafeEqual as timingSafeEqual2 } from "node:crypto";
+import { createHash as createHash4, randomBytes as randomBytes3, timingSafeEqual as timingSafeEqual2 } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
 function referencesMetroEvidenceSocket(value, path) {
   if (Array.isArray(value)) {
@@ -27919,7 +22151,7 @@ function authorityRemedyNextAction(code) {
   return errorNextActions[code];
 }
 function shortAuthorityIdentity(value) {
-  return createHash5("sha256").update(JSON.stringify(value)).digest("hex").slice(0, 16);
+  return createHash4("sha256").update(JSON.stringify(value)).digest("hex").slice(0, 16);
 }
 function authorityErrorMeta(error2) {
   return {
@@ -28277,7 +22509,7 @@ var init_registry = __esm({
           const row = this.#requireRecoverableSession(session2);
           const bindings = JSON.parse(row.bindings_json);
           const expected = Buffer.from(String(bindings.recoveryCapabilityHash ?? ""), "hex");
-          const actual = createHash5("sha256").update(capability).digest();
+          const actual = createHash4("sha256").update(capability).digest();
           if (expected.length !== actual.length || !timingSafeEqual2(expected, actual)) {
             throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "blocked recovery capability is invalid");
           }
@@ -28344,18 +22576,18 @@ var init_registry = __esm({
               token: resumableAdoptStale.token,
               expiresMs: resumableAdoptStale.expiresMs
             } : void 0,
-            token: randomBytes4(32).toString("base64url"),
+            token: randomBytes3(32).toString("base64url"),
             expiresMs
           } : void 0;
           const recoveryHandles = {
             handoffRecipient: {
-              token: randomBytes4(32).toString("base64url"),
+              token: randomBytes3(32).toString("base64url"),
               expiresMs,
               workerInstance: worker.instanceId
             },
             ...typeof adoptionRequired?.sessionId === "string" ? {
               adoptStale: {
-                token: randomBytes4(32).toString("base64url"),
+                token: randomBytes3(32).toString("base64url"),
                 expiresMs,
                 priorSessionId: adoptionRequired.sessionId,
                 priorClaimEpoch: adoptionRequired.claimEpoch
@@ -28382,7 +22614,7 @@ var init_registry = __esm({
           const row = this.#requireRecoverableSession(session2);
           const bindings = JSON.parse(row.bindings_json);
           const expected = Buffer.from(String(bindings.recoveryCapabilityHash ?? ""), "hex");
-          const actual = createHash5("sha256").update(capability).digest();
+          const actual = createHash4("sha256").update(capability).digest();
           if (expected.length !== actual.length || !timingSafeEqual2(expected, actual)) {
             throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "blocked recovery capability is invalid");
           }
@@ -28412,7 +22644,7 @@ var init_registry = __esm({
             next[name] = {
               ...retained,
               previous: typeof current.token === "string" && typeof current.expiresMs === "number" && current.expiresMs >= now ? { token: current.token, expiresMs: current.expiresMs } : void 0,
-              token: randomBytes4(32).toString("base64url"),
+              token: randomBytes3(32).toString("base64url"),
               expiresMs
             };
             changed = true;
@@ -28597,7 +22829,7 @@ var init_registry = __esm({
           if (family.recorder)
             obligations.push("recorder");
           const offer = {
-            token: randomBytes4(32).toString("base64url"),
+            token: randomBytes3(32).toString("base64url"),
             expiresMs: now + RECOVERY_HANDLE_TTL_MS,
             priorSessionId: prior.session_id,
             priorClaimEpoch: prior.claim_epoch,
@@ -29625,9 +23857,9 @@ var init_registry = __esm({
       }
       prepareHandoff(session2, input) {
         const now = this.#now();
-        const handoffId = randomBytes4(16).toString("hex");
-        const token2 = randomBytes4(32).toString("base64url");
-        const tokenHash = createHash5("sha256").update(token2).digest("hex");
+        const handoffId = randomBytes3(16).toString("hex");
+        const token2 = randomBytes3(32).toString("base64url");
+        const tokenHash = createHash4("sha256").update(token2).digest("hex");
         this.#transaction(() => {
           const current = this.#requireSession(session2);
           let targetInstance = input.targetInstance;
@@ -29811,7 +24043,7 @@ var init_registry = __esm({
           const cleanup = bindings.handoffCleanup && typeof bindings.handoffCleanup === "object" ? bindings.handoffCleanup : null;
           const handoff = this.#database.prepare("SELECT token_hash, consumed_ms FROM handoffs WHERE handoff_id = ?").get(input.handoffId);
           const expected = Buffer.from(typeof handoff?.token_hash === "string" ? handoff.token_hash : "", "hex");
-          const actual = createHash5("sha256").update(input.token).digest();
+          const actual = createHash4("sha256").update(input.token).digest();
           const tokenMatches = expected.length === actual.length && timingSafeEqual2(expected, actual);
           if (!row || row.state !== "handoff_cleanup" || row.claim_epoch !== target.claimEpoch || row.worker_instance !== input.targetInstance || cleanup?.handoffId !== input.handoffId || cleanup?.targetSessionId !== target.sessionId || cleanup?.targetClaimEpoch !== target.claimEpoch || typeof handoff?.consumed_ms !== "number" || !tokenMatches) {
             throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "handoff cleanup resumption requires the original handoff capability");
@@ -29837,7 +24069,7 @@ var init_registry = __esm({
             throw new SessionAuthorityError("HANDOFF_TARGET_MISMATCH", "handoff target instance does not match");
           }
           const expected = Buffer.from(handoff.token_hash, "hex");
-          const actual = Buffer.from(createHash5("sha256").update(input.token).digest("hex"), "hex");
+          const actual = Buffer.from(createHash4("sha256").update(input.token).digest("hex"), "hex");
           if (expected.length !== actual.length || !timingSafeEqual2(expected, actual)) {
             throw new SessionAuthorityError("HANDOFF_TOKEN_INVALID", "handoff capability is invalid");
           }
@@ -30134,7 +24366,7 @@ var init_registry = __esm({
           return null;
         const persisted = JSON.parse(row.receipt_json);
         const probe = persisted.probe;
-        if (!probe || createHash5("sha256").update(probe.capability).digest("hex") !== receipt2.runnerCapabilityHash) {
+        if (!probe || createHash4("sha256").update(probe.capability).digest("hex") !== receipt2.runnerCapabilityHash) {
           return null;
         }
         return probe;
@@ -30450,7 +24682,7 @@ var init_registry = __esm({
             }
             this.#database.prepare("DELETE FROM allocations WHERE service = ? AND worktree_key = ?").run(input.service, input.worktreeKey);
           }
-          const digest3 = createHash5("sha256").update(`${input.uid}\0${input.worktreeKey}\0${input.service}`).digest();
+          const digest3 = createHash4("sha256").update(`${input.uid}\0${input.worktreeKey}\0${input.service}`).digest();
           const preferred = digest3.readUInt32BE(0) % input.span;
           for (let offset = 0; offset < input.span; offset += 1) {
             const port = input.base + (preferred + offset) % input.span;
@@ -30724,7 +24956,7 @@ var init_registry = __esm({
           throw new SessionAuthorityError("HANDOFF_NOT_FOUND", "handoff does not exist");
         }
         const expected = Buffer.from(handoff.token_hash, "hex");
-        const actual = createHash5("sha256").update(input.token).digest();
+        const actual = createHash4("sha256").update(input.token).digest();
         if (expected.length !== actual.length || !timingSafeEqual2(expected, actual)) {
           throw new SessionAuthorityError("HANDOFF_TOKEN_INVALID", "handoff capability is invalid");
         }
@@ -30847,7 +25079,7 @@ var init_registry = __esm({
          WHERE session_id = ? AND claim_epoch = ? AND resource_type = 'runner'`).get(session2.sessionId, session2.claimEpoch);
         const deviceClaim = this.#database.prepare(`SELECT resource_key FROM claims
          WHERE session_id = ? AND claim_epoch = ? AND resource_type = 'device'`).get(session2.sessionId, session2.claimEpoch);
-        const runnerCapabilityHash = typeof runner?.capability === "string" ? createHash5("sha256").update(runner.capability).digest("hex") : null;
+        const runnerCapabilityHash = typeof runner?.capability === "string" ? createHash4("sha256").update(runner.capability).digest("hex") : null;
         if (device?.platform !== platform || receipt2.sessionId !== session2.sessionId || receipt2.claimEpoch !== session2.claimEpoch || receipt2.sourceKey !== row.source_key || receipt2.worktreeKey !== row.worktree_key || receipt2.appRootKey !== row.app_root_key || receipt2.deviceId !== device.deviceId || receipt2.appId !== device.appId || receipt2.installGeneration !== install?.installGeneration || receipt2.artifactDigest !== install?.artifactDigest || receipt2.runnerInstanceId !== runner?.instanceId || receipt2.runnerPid !== runner?.pid || receipt2.runnerProcessBirth !== runner?.processBirth || receipt2.runnerPort !== runner?.port || receipt2.runnerClaim !== runnerClaim?.resource_key || receipt2.deviceClaim !== deviceClaim?.resource_key || receipt2.runnerCapabilityHash !== runnerCapabilityHash || typeof runner?.port !== "number" || typeof runner.capability !== "string" || typeof runner.instanceId !== "string" || typeof runner.pid !== "number" || typeof runner.processBirth !== "string" || typeof device?.deviceId !== "string" || typeof device.appId !== "string" || typeof install?.installGeneration !== "string") {
           throw new SessionAuthorityError("RUNNER_OWNERSHIP_MISMATCH", "snapshot receipt does not match exact persistent platform authority");
         }
@@ -30891,8 +25123,8 @@ var init_registry = __esm({
          WHERE session_id = ? AND claim_epoch = ? AND platform = ?`).run(session2.sessionId, session2.claimEpoch, platform);
       }
       #capabilityMatches(expected, actual) {
-        const expectedDigest = createHash5("sha256").update(expected).digest();
-        const actualDigest = createHash5("sha256").update(actual).digest();
+        const expectedDigest = createHash4("sha256").update(expected).digest();
+        const actualDigest = createHash4("sha256").update(actual).digest();
         return timingSafeEqual2(expectedDigest, actualDigest);
       }
       #recoveryHandleMatches(handle, actual, now) {
@@ -30979,6 +25211,5901 @@ var init_registry = __esm({
         }
       }
     };
+  }
+});
+
+// packages/rn-dev-agent-core/dist/util/public-diagnostics.js
+import { basename, isAbsolute } from "node:path";
+function publicDeviceIdentity(deviceId) {
+  return `device-${shortAuthorityIdentity(deviceId).slice(0, 12)}`;
+}
+function publicLocalPath(path) {
+  return isAbsolute(path) ? `<local-path>/${basename(path)}` : path;
+}
+function sanitizePublicDiagnostic(value, options = {}) {
+  let safe = value.replace(/[^\t\n\r\x20-\x7e]/g, "?");
+  for (const deviceId of [...options.deviceIds ?? []].sort((a, b) => b.length - a.length)) {
+    if (deviceId)
+      safe = safe.replaceAll(deviceId, publicDeviceIdentity(deviceId));
+  }
+  safe = safe.replace(DEVICE_ID_RE, (id) => publicDeviceIdentity(id));
+  safe = safe.replace(POSIX_PATH_RE, (path) => `<local-path>/${basename(path)}`);
+  safe = safe.replace(/\b(?:Bearer|Basic)\s+\S+/gi, "<redacted-authorization>");
+  return safe.slice(0, options.maxLength ?? MAX_PUBLIC_DIAGNOSTIC);
+}
+function sanitizeAutomationProcessLines(lines, deviceId) {
+  return lines.slice(0, 8).map((line) => {
+    const pid = line.trim().match(/^(\d+)\b/)?.[1] ?? "unknown";
+    const executable = /WebDriverAgentRunner-Runner/.test(line) ? "WebDriverAgentRunner-Runner" : /\bxcodebuild\b/.test(line) ? "xcodebuild" : /\bmaestro(?:-runner)?\b/i.test(line) ? "maestro-runner" : "automation-process";
+    const identity2 = deviceId ? ` ${publicDeviceIdentity(deviceId)}` : "";
+    return sanitizePublicDiagnostic(`pid=${pid} executable=${executable}${identity2}`, {
+      deviceIds: deviceId ? [deviceId] : [],
+      maxLength: 240
+    });
+  });
+}
+var DEVICE_ID_RE, POSIX_PATH_RE, MAX_PUBLIC_DIAGNOSTIC;
+var init_public_diagnostics = __esm({
+  "packages/rn-dev-agent-core/dist/util/public-diagnostics.js"() {
+    "use strict";
+    init_registry();
+    DEVICE_ID_RE = /\b[0-9A-F]{8}(?:-[0-9A-F]{4}){3}-[0-9A-F]{12}\b/gi;
+    POSIX_PATH_RE = /(?<![\w:])\/(?!\/)[^\n\r'"`<>|]*?(?=['"`]|:\s|[,;)\]}](?:\s|$)|\s+[A-Za-z][\w-]*=|$)/g;
+    MAX_PUBLIC_DIAGNOSTIC = 2e3;
+  }
+});
+
+// packages/rn-dev-agent-core/dist/runners/release-android-slot.js
+var release_android_slot_exports = {};
+__export(release_android_slot_exports, {
+  ExactAndroidDeviceRequiredError: () => ExactAndroidDeviceRequiredError,
+  OWNED_PACKAGES: () => OWNED_PACKAGES,
+  isProtectedPid: () => isProtectedPid,
+  releaseAndroidInteractionSlot: () => releaseAndroidInteractionSlot
+});
+import { execFile as execFileCb2 } from "node:child_process";
+import { promisify as promisify2 } from "node:util";
+import { existsSync as existsSync9, readFileSync as readFileSync8, unlinkSync as unlinkSync4 } from "node:fs";
+import { homedir as homedir4 } from "node:os";
+import { join as join10 } from "node:path";
+function isProtectedPid(pid, selfPid, parentPid) {
+  return pid === selfPid || pid === parentPid;
+}
+function defaultDeps() {
+  return {
+    stopOwnRunner: (deviceId, signal) => stopAndroidRunner(deviceId, signal),
+    adbForceStop: async (pkg, serial, signal) => {
+      await execFile2("adb", [...serial, "shell", "am", "force-stop", pkg], {
+        timeout: ADB_TIMEOUT_MS,
+        encoding: "utf8",
+        signal
+      });
+    },
+    resolveSerial: (deviceId) => deviceId ? ["-s", deviceId] : getAdbSerial(),
+    readDaemonPid: () => {
+      try {
+        const parsed = JSON.parse(readFileSync8(DAEMON_JSON, "utf8"));
+        return typeof parsed.pid === "number" ? parsed.pid : null;
+      } catch {
+        return null;
+      }
+    },
+    isAlive: (pid) => {
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    protectedPids: () => ({ selfPid: process.pid, parentPid: process.ppid }),
+    kill: (pid, sig) => process.kill(pid, sig),
+    fileExists: (p) => existsSync9(p),
+    removeFile: (p) => unlinkSync4(p),
+    delay: (ms) => new Promise((resolve19) => setTimeout(resolve19, ms)),
+    killLegacy: () => process.env.RN_DEVICE_KILL_LEGACY !== "0",
+    now: () => Date.now()
+  };
+}
+function resolveExactSerialArgs(deps, deviceId) {
+  try {
+    return deps.resolveSerial(deviceId);
+  } catch (err) {
+    throw new ExactAndroidDeviceRequiredError(err);
+  }
+}
+function exactSerial(deviceId, serialArgs) {
+  const serial = serialArgs.length === 2 && serialArgs[0] === "-s" ? serialArgs[1] : void 0;
+  if (!serial || deviceId !== void 0 && serial !== deviceId || serial.length > 256 || /\s/.test(serial)) {
+    throw new ExactAndroidDeviceRequiredError();
+  }
+  return serial;
+}
+async function releaseAndroidInteractionSlot(opts = {}, deps = defaultDeps()) {
+  opts.signal?.throwIfAborted();
+  const serialArgs = resolveExactSerialArgs(deps, opts.deviceId);
+  const deviceId = exactSerial(opts.deviceId, serialArgs);
+  const timings = {};
+  const warnings = [];
+  const forceStoppedPackages = [];
+  const killedDaemonPids = [];
+  const removedFiles = [];
+  let stoppedOwnRunner = false;
+  const tStop = deps.now();
+  try {
+    await deps.stopOwnRunner(deviceId, opts.signal);
+    opts.signal?.throwIfAborted();
+    stoppedOwnRunner = true;
+  } catch (err) {
+    opts.signal?.throwIfAborted();
+    warnings.push(`stopping the Android runner failed: ${msg(err)}`);
+  }
+  timings.stopOwnRunner = deps.now() - tStop;
+  const tForceStop = deps.now();
+  for (const pkg of OWNED_PACKAGES) {
+    opts.signal?.throwIfAborted();
+    try {
+      await deps.adbForceStop(pkg, serialArgs, opts.signal);
+      opts.signal?.throwIfAborted();
+      forceStoppedPackages.push(pkg);
+    } catch (err) {
+      opts.signal?.throwIfAborted();
+      warnings.push(`am force-stop ${pkg} failed: ${msg(err)}`);
+    }
+  }
+  timings.forceStop = deps.now() - tForceStop;
+  const tLegacy = deps.now();
+  if (opts.includeLegacy !== false && deps.killLegacy()) {
+    try {
+      const pid = deps.readDaemonPid();
+      let keepFiles = false;
+      if (pid !== null && deps.isAlive(pid)) {
+        const { selfPid, parentPid } = deps.protectedPids();
+        if (isProtectedPid(pid, selfPid, parentPid)) {
+          warnings.push(`Refusing to kill agent-device daemon PID ${pid} \u2014 it is our own process/parent.`);
+          keepFiles = true;
+        } else {
+          try {
+            deps.kill(pid, "SIGTERM");
+            await deps.delay(SIGKILL_GRACE_MS);
+            if (deps.isAlive(pid))
+              deps.kill(pid, "SIGKILL");
+            killedDaemonPids.push(pid);
+          } catch (err) {
+            warnings.push(`kill daemon ${pid} failed: ${msg(err)}`);
+            keepFiles = true;
+          }
+        }
+      }
+      if (!keepFiles) {
+        for (const f of DAEMON_FILES) {
+          if (!deps.fileExists(f))
+            continue;
+          try {
+            deps.removeFile(f);
+            removedFiles.push(f);
+          } catch (err) {
+            warnings.push(`rm ${f} failed: ${msg(err)}`);
+          }
+        }
+      }
+    } catch (err) {
+      warnings.push(`legacy daemon cleanup failed: ${msg(err)}`);
+    }
+  }
+  timings.legacyDaemon = deps.now() - tLegacy;
+  return {
+    deviceId,
+    stoppedOwnRunner,
+    forceStoppedPackages,
+    killedDaemonPids,
+    removedFiles,
+    warnings,
+    meta: { timings_ms: timings }
+  };
+}
+function msg(err) {
+  return err instanceof Error ? err.message : String(err);
+}
+var execFile2, DAEMON_JSON, DAEMON_LOCK, DAEMON_FILES, SIGKILL_GRACE_MS, ADB_TIMEOUT_MS, OWNED_PACKAGES, ExactAndroidDeviceRequiredError;
+var init_release_android_slot = __esm({
+  "packages/rn-dev-agent-core/dist/runners/release-android-slot.js"() {
+    "use strict";
+    init_rn_android_runner_client();
+    init_agent_device_wrapper();
+    execFile2 = promisify2(execFileCb2);
+    DAEMON_JSON = join10(homedir4(), ".agent-device", "daemon.json");
+    DAEMON_LOCK = join10(homedir4(), ".agent-device", "daemon.lock");
+    DAEMON_FILES = [DAEMON_JSON, DAEMON_LOCK];
+    SIGKILL_GRACE_MS = 500;
+    ADB_TIMEOUT_MS = 5e3;
+    OWNED_PACKAGES = [
+      "dev.lykhoyda.rndevagent.androidrunner.test",
+      "dev.lykhoyda.rndevagent.androidrunner"
+    ];
+    ExactAndroidDeviceRequiredError = class extends Error {
+      code = "EXACT_ANDROID_DEVICE_REQUIRED";
+      constructor(cause) {
+        super("Refusing to release the Android interaction slot without an exact serial. When multiple adb targets are attached, open or bind a session to the intended device, pass deviceId, or set ANDROID_SERIAL, then retry. No device was mutated.", cause === void 0 ? void 0 : { cause });
+        this.name = "ExactAndroidDeviceRequiredError";
+      }
+    };
+  }
+});
+
+// packages/rn-dev-agent-core/dist/runners/rn-android-runner-client.js
+var rn_android_runner_client_exports = {};
+__export(rn_android_runner_client_exports, {
+  AndroidArtifactStaleError: () => AndroidArtifactStaleError,
+  AndroidAuthorityStaleError: () => AndroidAuthorityStaleError,
+  AndroidCommandsStaleError: () => AndroidCommandsStaleError,
+  AndroidFeaturesStaleError: () => AndroidFeaturesStaleError,
+  AndroidRunnerCleanupUnconfirmedError: () => AndroidRunnerCleanupUnconfirmedError,
+  _androidRunnerApkPathsForTest: () => _androidRunnerApkPathsForTest,
+  _resetCapabilitiesForTest: () => _resetCapabilitiesForTest2,
+  _setAndroidRunnerStateForTest: () => _setAndroidRunnerStateForTest,
+  _setFetchForTest: () => _setFetchForTest2,
+  acquireAndroidRunnerRebuildLock: () => acquireAndroidRunnerRebuildLock,
+  adoptPersistedAndroidState: () => adoptPersistedAndroidState,
+  androidHealthMatchesAuthority: () => androidHealthMatchesAuthority,
+  androidIsWindowUpdatingProbe: () => androidIsWindowUpdatingProbe,
+  androidRetryCleanupContext: () => androidRetryCleanupContext,
+  androidRunnerApksExist: () => androidRunnerApksExist,
+  androidSnapshotNodesViaProbe: () => androidSnapshotNodesViaProbe,
+  androidStatePath: () => androidStatePath,
+  beginAndroidRunnerRebuildCleanup: () => beginAndroidRunnerRebuildCleanup,
+  buildAdbForwardArgs: () => buildAdbForwardArgs,
+  buildAdbForwardRemoveArgs: () => buildAdbForwardRemoveArgs,
+  buildAdbInstallArgs: () => buildAdbInstallArgs,
+  buildGradleAssembleArgs: () => buildGradleAssembleArgs,
+  buildInstrumentAuthorityArgs: () => buildInstrumentAuthorityArgs,
+  buildInstrumentPortArgs: () => buildInstrumentPortArgs,
+  buildInstrumentVersionArgs: () => buildInstrumentVersionArgs,
+  classifyAndroidHealth: () => classifyAndroidHealth,
+  classifyAndroidRunnerCleanupResources: () => classifyAndroidRunnerCleanupResources,
+  completeAndroidRunnerRebuildLock: () => completeAndroidRunnerRebuildLock,
+  consumePendingAndroidUpgradeNote: () => consumePendingAndroidUpgradeNote,
+  getAndroidRunnerCapabilities: () => getAndroidRunnerCapabilities,
+  getAndroidRunnerHostPort: () => getAndroidRunnerHostPort,
+  getAndroidRunnerState: () => getAndroidRunnerState,
+  heartbeatAndroidRunnerRebuildLock: () => heartbeatAndroidRunnerRebuildLock,
+  invalidateAndroidRunnerApks: () => invalidateAndroidRunnerApks,
+  isAndroidConnectionFailure: () => isAndroidConnectionFailure,
+  isAndroidRunnerAvailable: () => isAndroidRunnerAvailable,
+  isInstrumentationRegistered: () => isInstrumentationRegistered,
+  markAndroidRunnerRebuildCleanupUnverified: () => markAndroidRunnerRebuildCleanupUnverified,
+  parseAdbDevicesSerials: () => parseAdbDevicesSerials,
+  parseLegacyAndroidState: () => parseLegacyAndroidState,
+  parsePersistedAndroidState: () => parsePersistedAndroidState,
+  probeAndroidRunnerHealthInfo: () => probeAndroidRunnerHealthInfo,
+  reapActiveAndroidRunner: () => reapActiveAndroidRunner,
+  reapMismatchedAndroidRunner: () => reapMismatchedAndroidRunner,
+  releaseAndroidRunnerRebuildLock: () => releaseAndroidRunnerRebuildLock,
+  removeAndroidForwardWithOutcome: () => removeAndroidForwardWithOutcome,
+  resolveAndroidInstallAction: () => resolveAndroidInstallAction,
+  resolveAndroidSerial: () => resolveAndroidSerial,
+  runAndroid: () => runAndroid,
+  runBoundedAndroidRunnerRebuild: () => runBoundedAndroidRunnerRebuild,
+  shouldReapAndroidRunnerBeforeStart: () => shouldReapAndroidRunnerBeforeStart,
+  shouldRecoverAndroidAccessibility: () => shouldRecoverAndroidAccessibility,
+  shouldReuseAndroidRunner: () => shouldReuseAndroidRunner,
+  startAndroidRunner: () => startAndroidRunner,
+  stopAndroidRunner: () => stopAndroidRunner,
+  waitForAndroidRunnerHealth: () => waitForAndroidRunnerHealth
+});
+import { spawn as spawn2, execFile as execFile3 } from "node:child_process";
+import { promisify as promisify3 } from "node:util";
+import { existsSync as existsSync10, rmSync as rmSync3, writeFileSync as writeFileSync6 } from "node:fs";
+import { tmpdir as tmpdir3 } from "node:os";
+import { randomBytes as randomBytes4, randomUUID as randomUUID3 } from "node:crypto";
+import { join as join11 } from "node:path";
+function getAndroidRunnerState() {
+  return runnerState2;
+}
+function _setFetchForTest2(fn) {
+  fetchImpl2 = fn;
+}
+function _setAndroidRunnerStateForTest(state) {
+  testAuthorityState = state !== null;
+  runnerState2 = state ? {
+    ...state,
+    instanceId: state.instanceId ?? "test-runner-instance",
+    sessionId: state.sessionId ?? "test-session",
+    claimEpoch: state.claimEpoch ?? 1,
+    capability: state.capability ?? "test-capability".repeat(3)
+  } : null;
+}
+function androidStatePath(serial) {
+  return runnerStatePath(`android-${serial}`);
+}
+function defaultProcessAlive2(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+function parsePersistedAndroidState(raw, pidAlive = defaultProcessAlive2) {
+  if (!raw || typeof raw !== "object")
+    return null;
+  const s = raw;
+  if (s.schemaVersion !== 1)
+    return null;
+  if (typeof s.hostPort !== "number" || typeof s.devicePort !== "number")
+    return null;
+  if (typeof s.pid !== "number")
+    return null;
+  if (!pidAlive(s.pid))
+    return null;
+  return s;
+}
+function parseLegacyAndroidState(raw, pidAlive = defaultProcessAlive2) {
+  if (!raw || typeof raw !== "object")
+    return null;
+  const s = raw;
+  if (typeof s.hostPort !== "number" || typeof s.devicePort !== "number")
+    return null;
+  if (typeof s.pid !== "number")
+    return null;
+  if (!pidAlive(s.pid))
+    return null;
+  return {
+    schemaVersion: 1,
+    hostPort: s.hostPort,
+    devicePort: s.devicePort,
+    pid: s.pid,
+    ...typeof s.deviceId === "string" ? { deviceId: s.deviceId } : {},
+    ...typeof s.bundleId === "string" ? { bundleId: s.bundleId } : {},
+    startedAt: "",
+    protocolVersion: 0
+  };
+}
+function adoptPersistedAndroidState(serial) {
+  if (runnerState2)
+    return;
+  if (serial) {
+    const path = androidStatePath(serial);
+    const raw = readJsonStateFile(path);
+    if (raw !== null) {
+      const parsed = parsePersistedAndroidState(raw);
+      if (!parsed) {
+        deleteStateFile(path);
+        return;
+      }
+      runnerState2 = parsed;
+      return;
+    }
+  }
+  const legacy = readLegacyTmpState("android");
+  if (legacy === null)
+    return;
+  const parsedLegacy = parseLegacyAndroidState(legacy);
+  if (!parsedLegacy) {
+    cleanupLegacyTmpState();
+    return;
+  }
+  if (!serial || !parsedLegacy.deviceId || parsedLegacy.deviceId === serial) {
+    runnerState2 = parsedLegacy;
+  }
+}
+function clearAndroidStateFile() {
+  const path = runnerState2?.deviceId ? androidStatePath(runnerState2.deviceId) : null;
+  runnerState2 = null;
+  runnerProcess2 = null;
+  if (path)
+    deleteStateFile(path);
+}
+function parseAdbDevicesSerials(stdout) {
+  return stdout.split("\n").slice(1).map((l) => l.trim()).map((l) => /^(\S+)\s+device\b/.exec(l)).filter((m) => m !== null).map((m) => m[1]);
+}
+async function resolveAndroidSerial(explicit) {
+  if (explicit)
+    return explicit;
+  if (process.env.ANDROID_SERIAL)
+    return process.env.ANDROID_SERIAL;
+  try {
+    const { stdout } = await execFileAsync("adb", ["devices"]);
+    const serials = parseAdbDevicesSerials(stdout);
+    return serials.length === 1 ? serials[0] : void 0;
+  } catch {
+    return void 0;
+  }
+}
+function adbSerialArgs(deviceId) {
+  if (deviceId)
+    return ["-s", deviceId];
+  if (process.env.ANDROID_SERIAL)
+    return ["-s", process.env.ANDROID_SERIAL];
+  return [];
+}
+function buildAdbForwardArgs(deviceId, hostPort, devicePort) {
+  return [...adbSerialArgs(deviceId), "forward", `tcp:${hostPort}`, `tcp:${devicePort}`];
+}
+function buildAdbForwardRemoveArgs(deviceId, hostPort) {
+  return [...adbSerialArgs(deviceId), "forward", "--remove", `tcp:${hostPort}`];
+}
+function sanitizedCommandValue(value, deviceId) {
+  const tail = String(value ?? "").slice(-2e3);
+  return sanitizePublicDiagnostic(tail, {
+    deviceIds: [deviceId],
+    maxLength: ADB_OUTCOME_TAIL_LENGTH
+  });
+}
+async function executeAndroidPlatformCommand(deviceId, args, signal, execute2 = async (commandArgs, options) => execFileAsync("adb", commandArgs, options)) {
+  const publicArgv = ["adb", ...args].map((arg) => sanitizePublicDiagnostic(arg, { deviceIds: [deviceId], maxLength: 240 }));
+  try {
+    const result = await execute2(args, { timeout: ADB_CLEANUP_TIMEOUT_MS, signal });
+    const stdout = String(result.stdout ?? "");
+    return {
+      stdout,
+      outcome: {
+        argv: publicArgv,
+        exitCode: 0,
+        signal: null,
+        timedOut: false,
+        stdoutTail: sanitizedCommandValue(stdout, deviceId),
+        stderrTail: sanitizedCommandValue(result.stderr, deviceId)
+      }
+    };
+  } catch (error2) {
+    const failure = error2;
+    const code = failure.code;
+    const commandSignal = typeof failure.signal === "string" ? failure.signal : typeof code === "string" ? code : null;
+    const timedOut = code === "ETIMEDOUT" || failure.killed === true && !signal?.aborted;
+    const stdout = String(failure.stdout ?? "");
+    return {
+      stdout,
+      outcome: {
+        argv: publicArgv,
+        exitCode: typeof code === "number" ? code : null,
+        signal: commandSignal,
+        timedOut,
+        stdoutTail: sanitizedCommandValue(stdout, deviceId),
+        stderrTail: sanitizedCommandValue(failure.stderr ?? failure.message, deviceId)
+      }
+    };
+  }
+}
+async function removeAndroidForwardWithOutcome(deviceId, hostPort, signal, execute2) {
+  return (await executeAndroidPlatformCommand(deviceId, buildAdbForwardRemoveArgs(deviceId, hostPort), signal, execute2)).outcome;
+}
+function buildInstrumentPortArgs(devicePort) {
+  return ["-e", "RN_ANDROID_RUNNER_PORT", String(devicePort)];
+}
+function buildInstrumentVersionArgs(pluginVersion) {
+  return pluginVersion ? ["-e", "RN_PLUGIN_VERSION", pluginVersion] : [];
+}
+function androidRunnerAuthority(deviceId, appId) {
+  const sessionId = (testAuthorityState ? runnerState2?.sessionId : void 0) ?? process.env.RN_DEV_AGENT_SESSION_ID;
+  const claimEpoch = (testAuthorityState ? runnerState2?.claimEpoch : void 0) ?? Number(process.env.RN_DEV_AGENT_CLAIM_EPOCH);
+  if (!sessionId || !Number.isSafeInteger(claimEpoch) || claimEpoch < 1) {
+    throw new Error("SESSION_AUTHORITY_REQUIRED: native runner launch requires a fenced rn-dev-agent session");
+  }
+  return {
+    instanceId: randomUUID3(),
+    sessionId,
+    claimEpoch,
+    capability: randomBytes4(32).toString("base64url"),
+    deviceId,
+    appId
+  };
+}
+function buildInstrumentAuthorityArgs(authority) {
+  return Object.entries({
+    RN_RUNNER_INSTANCE_ID: authority.instanceId,
+    RN_RUNNER_SESSION_ID: authority.sessionId,
+    RN_RUNNER_CLAIM_EPOCH: String(authority.claimEpoch),
+    RN_RUNNER_CAPABILITY: authority.capability,
+    RN_RUNNER_DEVICE_ID: authority.deviceId,
+    RN_RUNNER_APP_ID: authority.appId
+  }).flatMap(([key, value]) => ["-e", key, value]);
+}
+function buildAdbInstallArgs(deviceId, apkPath) {
+  return [...adbSerialArgs(deviceId), "install", "-r", apkPath];
+}
+function buildGradleAssembleArgs() {
+  return [":app:assembleDebug", ":app:assembleDebugAndroidTest"];
+}
+function isInstrumentationRegistered(pmListStdout, instrumentation) {
+  const escaped = instrumentation.replace(/[.$*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(^|:)${escaped}(\\s|$)`, "m").test(pmListStdout);
+}
+function resolveAndroidInstallAction(opts) {
+  if (opts.instrumentationRegistered)
+    return "reuse";
+  if (opts.apksExist)
+    return "install";
+  return "build-then-install";
+}
+async function ensureAndroidRunnerInstalled(deviceId, opts = {}) {
+  opts.signal?.throwIfAborted();
+  try {
+    const { stdout } = await execFileAsync("adb", [...adbSerialArgs(deviceId), "get-state"], {
+      timeout: 5e3,
+      signal: opts.signal
+    });
+    if (stdout.trim() !== "device")
+      throw new Error(`adb state is "${stdout.trim()}"`);
+  } catch (err) {
+    opts.signal?.throwIfAborted();
+    throw new Error(`rn-android-runner: target device not online (adb get-state) \u2014 boot the emulator / connect the device. ${err instanceof Error ? err.message : String(err)}`);
+  }
+  let pmOut = "";
+  try {
+    pmOut = (await execFileAsync("adb", [...adbSerialArgs(deviceId), "shell", "pm", "list", "instrumentation"], {
+      signal: opts.signal
+    })).stdout;
+  } catch {
+    opts.signal?.throwIfAborted();
+  }
+  const artifacts = await resolveAndroidRunnerArtifacts(getPluginVersion(), { appApk: APK_APP, testApk: APK_TEST }, void 0, opts.forceLocalBuild);
+  opts.signal?.throwIfAborted();
+  const provenance = artifactProvenanceToState(artifacts.provenance);
+  if (artifacts.note)
+    pendingUpgradeNote = artifacts.note;
+  const action = resolveAndroidInstallAction({
+    instrumentationRegistered: !opts.forceReinstall && isInstrumentationRegistered(pmOut, INSTRUMENTATION),
+    apksExist: existsSync10(artifacts.appApk) && existsSync10(artifacts.testApk)
+  });
+  if (action === "reuse")
+    return provenance;
+  if (action === "build-then-install") {
+    try {
+      await execFileAsync(GRADLEW, buildGradleAssembleArgs(), {
+        cwd: RN_ANDROID_RUNNER_DIR,
+        timeout: GRADLE_BUILD_TIMEOUT_MS,
+        maxBuffer: 10 * 1024 * 1024,
+        signal: opts.signal
+      });
+    } catch (err) {
+      opts.signal?.throwIfAborted();
+      throw new Error(`rn-android-runner cold build failed (gradlew assembleDebug assembleDebugAndroidTest in ${RN_ANDROID_RUNNER_DIR}). Ensure the Android SDK + a JDK are installed and on PATH. ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+  try {
+    await execFileAsync("adb", buildAdbInstallArgs(deviceId, artifacts.appApk), {
+      timeout: ADB_INSTALL_TIMEOUT_MS,
+      signal: opts.signal
+    });
+    opts.signal?.throwIfAborted();
+    await execFileAsync("adb", buildAdbInstallArgs(deviceId, artifacts.testApk), {
+      timeout: ADB_INSTALL_TIMEOUT_MS,
+      signal: opts.signal
+    });
+  } catch (err) {
+    opts.signal?.throwIfAborted();
+    throw new Error(`rn-android-runner APK install failed (adb install -r). Is the emulator/device online? ${err instanceof Error ? err.message : String(err)}`);
+  }
+  return provenance;
+}
+function isAndroidRunnerAvailable() {
+  if (!runnerState2)
+    return false;
+  try {
+    process.kill(runnerState2.pid, 0);
+    return true;
+  } catch {
+    clearAndroidStateFile();
+    return false;
+  }
+}
+function shouldReuseAndroidRunner(state, deviceId) {
+  if (state === null)
+    return false;
+  const sessionId = (testAuthorityState ? state.sessionId : void 0) ?? process.env.RN_DEV_AGENT_SESSION_ID;
+  const claimEpoch = (testAuthorityState ? state.claimEpoch : void 0) ?? Number(process.env.RN_DEV_AGENT_CLAIM_EPOCH);
+  if (!sessionId || !Number.isSafeInteger(claimEpoch) || state.sessionId !== sessionId || state.claimEpoch !== claimEpoch || typeof state.capability !== "string" || state.capability.length < 32) {
+    return false;
+  }
+  return typeof deviceId === "string" && state.deviceId === deviceId;
+}
+function shouldReapAndroidRunnerBeforeStart(state, deviceId, isAvailable) {
+  return isAvailable && !shouldReuseAndroidRunner(state, deviceId);
+}
+async function waitForAndroidRunnerHealth(port, opts = {}) {
+  const timeoutMs = opts.timeoutMs ?? READY_TIMEOUT_MS2;
+  const intervalMs = opts.intervalMs ?? HEALTH_POLL_INTERVAL_MS;
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), HEALTH_PROBE_TIMEOUT_MS);
+    try {
+      const capability = opts.capability ?? (runnerState2?.hostPort === port ? runnerState2.capability : void 0);
+      const resp = await fetchImpl2(`http://127.0.0.1:${port}/health`, {
+        signal: controller.signal,
+        headers: capability ? { authorization: `Bearer ${capability}` } : {}
+      });
+      if (resp.ok) {
+        const body = await resp.json();
+        if (body?.ok === true)
+          return true;
+      }
+    } catch {
+    } finally {
+      clearTimeout(timer);
+    }
+    await new Promise((r) => setTimeout(r, intervalMs));
+  }
+  return false;
+}
+function androidHealthMatchesAuthority(info, expected) {
+  return info.instanceId === expected.instanceId && info.sessionId === expected.sessionId && info.claimEpoch === expected.claimEpoch && info.deviceId === expected.deviceId && info.appId === expected.appId;
+}
+function getAndroidRunnerCapabilities() {
+  return lastKnownCapabilities2;
+}
+function _resetCapabilitiesForTest2() {
+  lastKnownCapabilities2 = [];
+}
+async function probeAndroidRunnerHealthInfo(port, capabilityOverride) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), HEALTH_PROBE_TIMEOUT_MS);
+  try {
+    const capability = capabilityOverride ?? (runnerState2?.hostPort === port ? runnerState2.capability : void 0);
+    const resp = await fetchImpl2(`http://127.0.0.1:${port}/health`, {
+      signal: controller.signal,
+      headers: capability ? { authorization: `Bearer ${capability}` } : {}
+    });
+    if (!resp.ok)
+      return { reachable: false };
+    const body = await resp.json();
+    const capabilities = Array.isArray(body.capabilities) ? body.capabilities.filter((c) => typeof c === "string") : void 0;
+    if (body.ok === true) {
+      lastKnownCapabilities2 = capabilities ?? [];
+    } else if (runnerState2?.hostPort === port) {
+      lastKnownCapabilities2 = [];
+    }
+    const testIdentity = testAuthorityState && runnerState2?.hostPort === port ? runnerState2 : null;
+    return {
+      reachable: true,
+      ok: body.ok === true,
+      ...typeof body.protocolVersion === "number" ? { protocolVersion: body.protocolVersion } : {},
+      ...typeof body.runnerVersion === "string" ? { runnerVersion: body.runnerVersion } : {},
+      ...capabilities !== void 0 ? { capabilities } : {},
+      ...Array.isArray(body.commands) ? { commands: body.commands.filter((c) => typeof c === "string") } : {},
+      ...typeof body.instanceId === "string" ? { instanceId: body.instanceId } : testIdentity?.instanceId ? { instanceId: testIdentity.instanceId } : {},
+      ...typeof body.sessionId === "string" ? { sessionId: body.sessionId } : testIdentity?.sessionId ? { sessionId: testIdentity.sessionId } : {},
+      ...typeof body.claimEpoch === "number" ? { claimEpoch: body.claimEpoch } : typeof testIdentity?.claimEpoch === "number" ? { claimEpoch: testIdentity.claimEpoch } : {},
+      ...typeof body.deviceId === "string" ? { deviceId: body.deviceId } : testIdentity?.deviceId ? { deviceId: testIdentity.deviceId } : {},
+      ...typeof body.appId === "string" ? { appId: body.appId } : testIdentity?.bundleId ? { appId: testIdentity.bundleId } : {}
+    };
+  } catch {
+    if (runnerState2?.hostPort === port)
+      lastKnownCapabilities2 = [];
+    return { reachable: false };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+function consumePendingAndroidUpgradeNote() {
+  const note = pendingUpgradeNote;
+  pendingUpgradeNote = void 0;
+  return note;
+}
+function exactAndroidForwardLine(expected, forwards) {
+  return forwards.split("\n").map((line) => line.trim()).find((line) => {
+    const [deviceId, local, remote, extra] = line.split(/\s+/);
+    if (extra !== void 0 || deviceId !== expected.deviceId)
+      return false;
+    if (expected.hostPort !== void 0 && local !== `tcp:${expected.hostPort}`)
+      return false;
+    return expected.devicePort === void 0 || remote === `tcp:${expected.devicePort}`;
+  });
+}
+function classifyAndroidRunnerCleanupResources(expected, forwards, instrumentation) {
+  const forwardLine = exactAndroidForwardLine({ ...expected, devicePort: expected.devicePort ?? DEFAULT_PORT }, forwards);
+  if (forwardLine)
+    return { predicate: "forward", evidence: forwardLine.trim() };
+  const instrumentationLines = instrumentation.split("\n");
+  const dumpHeaderPresent = instrumentationLines.some((line) => /ACTIVITY MANAGER .*INSTRUMENTATION/i.test(line));
+  if (!dumpHeaderPresent) {
+    return { predicate: "instrumentation", evidence: "unparseable instrumentation dump" };
+  }
+  const activeInstrumentation = instrumentationLines.find((line) => /(?:ActiveInstrumentation\{|ComponentInfo\{)/.test(line) && /dev\.lykhoyda\.rndevagent\.androidrunner\.test\//.test(line));
+  return activeInstrumentation ? { predicate: "instrumentation", evidence: activeInstrumentation.trim() } : null;
+}
+async function reapMismatchedAndroidRunner(state, release2, verify, signal, verification = {}) {
+  signal?.throwIfAborted();
+  const deviceId = state?.deviceId;
+  if (!deviceId) {
+    throw new Error("RUNNER_CLEANUP_UNCONFIRMED: stale Android runner has no recorded device identity");
+  }
+  const releaseSlot = release2 ?? (async (opts) => {
+    const { releaseAndroidInteractionSlot: releaseAndroidInteractionSlot2 } = await Promise.resolve().then(() => (init_release_android_slot(), release_android_slot_exports));
+    return releaseAndroidInteractionSlot2({ ...opts, signal });
+  });
+  const receipt2 = await releaseSlot({ deviceId, includeLegacy: false });
+  signal?.throwIfAborted();
+  const requiredPackages = [
+    "dev.lykhoyda.rndevagent.androidrunner.test",
+    "dev.lykhoyda.rndevagent.androidrunner"
+  ];
+  const missingPackages = requiredPackages.filter((pkg) => !receipt2.forceStoppedPackages.includes(pkg));
+  if (!receipt2.stoppedOwnRunner || missingPackages.length > 0) {
+    throw new Error(`RUNNER_CLEANUP_UNCONFIRMED: stale Android runner cleanup failed for ${deviceId}`);
+  }
+  const expected = {
+    deviceId,
+    ...state?.hostPort !== void 0 ? { hostPort: state.hostPort } : {},
+    ...state?.devicePort !== void 0 ? { devicePort: state.devicePort } : {}
+  };
+  let forwardCleanup;
+  if (state?.hostPort !== void 0 && (release2 === void 0 || verification.executeForwardCommand !== void 0)) {
+    const before = await executeAndroidPlatformCommand(deviceId, ["forward", "--list"], signal, verification.executeForwardCommand);
+    const remove = await executeAndroidPlatformCommand(deviceId, buildAdbForwardRemoveArgs(deviceId, state.hostPort), signal, verification.executeForwardCommand);
+    const after = await executeAndroidPlatformCommand(deviceId, ["forward", "--list"], signal, verification.executeForwardCommand);
+    signal?.throwIfAborted();
+    forwardCleanup = {
+      before: before.outcome,
+      remove: remove.outcome,
+      after: after.outcome
+    };
+    const commandEvidence2 = {
+      forwardCleanup,
+      ...state.attemptForwardRemoval ? { attemptForwardRemoval: state.attemptForwardRemoval } : {}
+    };
+    const commandFailed = (outcome) => outcome.exitCode !== 0 || outcome.signal !== null || outcome.timedOut;
+    if (commandFailed(before.outcome) || commandFailed(remove.outcome) || commandFailed(after.outcome)) {
+      const failed = commandFailed(remove.outcome) ? remove.outcome : commandFailed(after.outcome) ? after.outcome : before.outcome;
+      throw new AndroidRunnerCleanupUnconfirmedError("forward-release", `argv=${JSON.stringify(failed.argv)} exitCode=${String(failed.exitCode)} signal=${String(failed.signal)} timedOut=${String(failed.timedOut)} stderrTail=${JSON.stringify(failed.stderrTail)}`, deviceId, commandEvidence2);
+    }
+    const retained = exactAndroidForwardLine(expected, after.stdout);
+    if (retained) {
+      throw new AndroidRunnerCleanupUnconfirmedError("forward", sanitizedCommandValue(retained, deviceId), deviceId, commandEvidence2);
+    }
+  }
+  const commandEvidence = {
+    ...forwardCleanup ? { forwardCleanup } : {},
+    ...state?.attemptForwardRemoval ? { attemptForwardRemoval: state.attemptForwardRemoval } : {}
+  };
+  const verifyReleased = verify ?? (release2 ? async () => {
+  } : async (expected2) => {
+    const forwards = String((await execFileAsync("adb", ["forward", "--list"], {
+      timeout: ADB_CLEANUP_TIMEOUT_MS,
+      signal
+    })).stdout);
+    const instrumentation = String((await execFileAsync("adb", ["-s", expected2.deviceId, "shell", "dumpsys", "activity", "instrumentation"], {
+      timeout: ADB_CLEANUP_TIMEOUT_MS,
+      signal
+    })).stdout);
+    const remaining = classifyAndroidRunnerCleanupResources(expected2, forwards, instrumentation);
+    if (remaining) {
+      throw new AndroidRunnerCleanupUnconfirmedError(remaining.predicate, remaining.evidence, expected2.deviceId, commandEvidence);
+    }
+  });
+  const attempts3 = Math.max(1, verification.attempts ?? ANDROID_CLEANUP_VERIFY_ATTEMPTS);
+  const intervalMs = Math.max(0, verification.intervalMs ?? ANDROID_CLEANUP_VERIFY_INTERVAL_MS);
+  const delay = verification.delay ?? ((ms, waitSignal) => new Promise((resolve19, reject) => {
+    if (waitSignal?.aborted) {
+      reject(waitSignal.reason);
+      return;
+    }
+    const timer = setTimeout(done, ms);
+    const aborted2 = () => done(waitSignal?.reason ?? new Error("Android cleanup aborted"));
+    function done(error2) {
+      clearTimeout(timer);
+      waitSignal?.removeEventListener("abort", aborted2);
+      if (error2 !== void 0)
+        reject(error2);
+      else
+        resolve19();
+    }
+    waitSignal?.addEventListener("abort", aborted2, { once: true });
+  }));
+  let verificationError;
+  for (let attempt = 0; attempt < attempts3; attempt += 1) {
+    signal?.throwIfAborted();
+    try {
+      await verifyReleased(expected, signal);
+      verificationError = void 0;
+      break;
+    } catch (error2) {
+      signal?.throwIfAborted();
+      verificationError = error2;
+    }
+    if (attempt + 1 < attempts3)
+      await delay(intervalMs, signal);
+  }
+  if (verificationError !== void 0)
+    throw verificationError;
+  signal?.throwIfAborted();
+}
+async function reapActiveAndroidRunner(deviceId) {
+  adoptPersistedAndroidState(deviceId);
+  await reapMismatchedAndroidRunner(runnerState2 ?? (deviceId ? { deviceId } : null));
+}
+function classifyAndroidHealth(info) {
+  return classifyRunnerCompatibility({
+    ...info.protocolVersion !== void 0 ? { protocolVersion: info.protocolVersion } : {},
+    ...info.runnerVersion !== void 0 ? { runnerVersion: info.runnerVersion } : {},
+    ...info.commands !== void 0 ? { commands: info.commands } : {},
+    ...info.capabilities !== void 0 ? { capabilities: info.capabilities } : {}
+  }, getPluginVersion(), REQUIRED_ANDROID_COMMANDS, REQUIRED_ANDROID_FEATURES);
+}
+function initializeAndroidRunnerRebuildState(databasePath) {
+  const store = openAuthorityStore(databasePath);
+  try {
+    store.database.exec(`
+      CREATE TABLE IF NOT EXISTS android_runner_rebuild_attempt (
+        lock_name TEXT PRIMARY KEY,
+        plugin_version TEXT NOT NULL,
+        status TEXT NOT NULL CHECK(status IN ('in_progress', 'completed', 'failed')),
+        owner_nonce TEXT,
+        lease_ms INTEGER NOT NULL,
+        cleanup_unverified INTEGER NOT NULL DEFAULT 0
+      )
+    `);
+    const columns = store.database.prepare(`PRAGMA table_info(android_runner_rebuild_attempt)`).all();
+    if (!columns.some((column) => column.name === "cleanup_unverified")) {
+      store.database.exec(`ALTER TABLE android_runner_rebuild_attempt
+         ADD COLUMN cleanup_unverified INTEGER NOT NULL DEFAULT 0`);
+    }
+    return store;
+  } catch (cause) {
+    try {
+      store.close();
+    } catch {
+    }
+    throw cause;
+  }
+}
+function acquireAndroidRunnerRebuildLock(pluginVersion, now = Date.now(), ownerNonce = randomUUID3(), databasePath = ANDROID_REBUILD_LOCK_DATABASE) {
+  try {
+    const store = initializeAndroidRunnerRebuildState(databasePath);
+    try {
+      const claimed = store.database.prepare(`INSERT INTO android_runner_rebuild_attempt(
+             lock_name, plugin_version, status, owner_nonce, lease_ms, cleanup_unverified
+           )
+           VALUES ('artifact', ?, 'in_progress', ?, ?, 0)
+           ON CONFLICT(lock_name) DO UPDATE SET
+             plugin_version = excluded.plugin_version,
+             status = 'in_progress',
+             owner_nonce = excluded.owner_nonce,
+             lease_ms = excluded.lease_ms,
+             cleanup_unverified = 0
+           WHERE
+             (
+               android_runner_rebuild_attempt.status != 'in_progress'
+               AND android_runner_rebuild_attempt.plugin_version != excluded.plugin_version
+               AND android_runner_rebuild_attempt.cleanup_unverified = 0
+             )
+             OR (
+               android_runner_rebuild_attempt.status = 'in_progress'
+               AND android_runner_rebuild_attempt.lease_ms <= ?
+               AND android_runner_rebuild_attempt.cleanup_unverified = 0
+             )
+           RETURNING owner_nonce, plugin_version`).get(pluginVersion, ownerNonce, now, now - ANDROID_REBUILD_LOCK_STALE_MS);
+      store.secureFiles();
+      if (claimed?.owner_nonce === ownerNonce && claimed.plugin_version === pluginVersion) {
+        return { status: "acquired", lock: { ownerNonce, pluginVersion } };
+      }
+      const current = store.database.prepare(`SELECT plugin_version, status
+           FROM android_runner_rebuild_attempt
+           WHERE lock_name = 'artifact'`).get();
+      return current?.plugin_version === pluginVersion && current.status !== "in_progress" ? { status: "exhausted" } : { status: "busy" };
+    } finally {
+      store.close();
+    }
+  } catch {
+    return { status: "busy" };
+  }
+}
+function heartbeatAndroidRunnerRebuildLock(lock, now = Date.now(), databasePath = ANDROID_REBUILD_LOCK_DATABASE) {
+  try {
+    const store = initializeAndroidRunnerRebuildState(databasePath);
+    try {
+      const refreshed = store.database.prepare(`UPDATE android_runner_rebuild_attempt
+           SET lease_ms = ?
+           WHERE lock_name = 'artifact'
+             AND plugin_version = ?
+             AND status = 'in_progress'
+             AND owner_nonce = ?`).run(now, lock.pluginVersion, lock.ownerNonce);
+      store.secureFiles();
+      return refreshed.changes === 1;
+    } finally {
+      store.close();
+    }
+  } catch {
+    return false;
+  }
+}
+function finishAndroidRunnerRebuildLock(lock, status, cleanupUnverified, now = Date.now(), databasePath = ANDROID_REBUILD_LOCK_DATABASE) {
+  try {
+    const store = initializeAndroidRunnerRebuildState(databasePath);
+    try {
+      const finished = store.database.prepare(`UPDATE android_runner_rebuild_attempt
+           SET status = ?, owner_nonce = NULL, lease_ms = ?, cleanup_unverified = ?
+           WHERE lock_name = 'artifact'
+             AND plugin_version = ?
+             AND status = 'in_progress'
+             AND (cleanup_unverified = 0 OR ? = 1)
+             AND owner_nonce = ?`).run(status, now, cleanupUnverified ? 1 : 0, lock.pluginVersion, status === "failed" ? 1 : 0, lock.ownerNonce);
+      store.secureFiles();
+      return finished.changes === 1;
+    } finally {
+      store.close();
+    }
+  } catch {
+    return false;
+  }
+}
+function completeAndroidRunnerRebuildLock(lock, now = Date.now(), databasePath = ANDROID_REBUILD_LOCK_DATABASE) {
+  return finishAndroidRunnerRebuildLock(lock, "completed", false, now, databasePath);
+}
+function releaseAndroidRunnerRebuildLock(lock, now = Date.now(), databasePath = ANDROID_REBUILD_LOCK_DATABASE) {
+  return finishAndroidRunnerRebuildLock(lock, "failed", false, now, databasePath);
+}
+function beginAndroidRunnerRebuildCleanup(lock, now = Date.now(), databasePath = ANDROID_REBUILD_LOCK_DATABASE) {
+  try {
+    const store = initializeAndroidRunnerRebuildState(databasePath);
+    try {
+      const fenced = store.database.prepare(`UPDATE android_runner_rebuild_attempt
+           SET cleanup_unverified = 1, lease_ms = ?
+           WHERE lock_name = 'artifact'
+             AND plugin_version = ?
+             AND status = 'in_progress'
+             AND cleanup_unverified = 0
+             AND owner_nonce = ?`).run(now, lock.pluginVersion, lock.ownerNonce);
+      store.secureFiles();
+      return fenced.changes === 1;
+    } finally {
+      store.close();
+    }
+  } catch {
+    return false;
+  }
+}
+function markAndroidRunnerRebuildCleanupUnverified(lock, now = Date.now(), databasePath = ANDROID_REBUILD_LOCK_DATABASE) {
+  return finishAndroidRunnerRebuildLock(lock, "failed", true, now, databasePath);
+}
+function androidRebuildRefusal(error2, detail) {
+  if (error2 instanceof AndroidAuthorityStaleError) {
+    return new AndroidAuthorityStaleError(error2.deviceId, detail, error2.attempt);
+  }
+  const ErrorType = error2.surface === "features" ? AndroidFeaturesStaleError : AndroidCommandsStaleError;
+  return new ErrorType(error2.missing, error2.bundleId, error2.deviceId, detail, error2.attempt);
+}
+async function runBoundedAndroidRunnerRebuild(error2, rebuild, cleanup, dependencies = {}) {
+  const pluginVersion = getPluginVersion() ?? "unknown";
+  const acquire = dependencies.acquire ?? acquireAndroidRunnerRebuildLock;
+  const claim = acquire(pluginVersion);
+  if (claim.status !== "acquired") {
+    throw androidRebuildRefusal(error2, claim.status === "exhausted" ? `runner artifact was already rebuilt once for plugin v${pluginVersion}` : "another session is rebuilding the shared runner artifact");
+  }
+  const { lock } = claim;
+  const heartbeat = dependencies.heartbeat ?? heartbeatAndroidRunnerRebuildLock;
+  const complete = dependencies.complete ?? completeAndroidRunnerRebuildLock;
+  const beginCleanup = dependencies.beginCleanup ?? beginAndroidRunnerRebuildCleanup;
+  const release2 = dependencies.release ?? releaseAndroidRunnerRebuildLock;
+  const markCleanupUnverified = dependencies.markCleanupUnverified ?? markAndroidRunnerRebuildCleanupUnverified;
+  const controller = new AbortController();
+  let cleanupController;
+  let leaseAuthorityLost = false;
+  const authorityLost = () => {
+    if (leaseAuthorityLost)
+      return;
+    leaseAuthorityLost = true;
+    const refusal = androidRebuildRefusal(error2, "runner artifact rebuild authority was lost");
+    if (!controller.signal.aborted)
+      controller.abort(refusal);
+    if (cleanupController && !cleanupController.signal.aborted)
+      cleanupController.abort(refusal);
+  };
+  const refreshAuthority = () => {
+    try {
+      if (heartbeat(lock))
+        return true;
+    } catch {
+    }
+    authorityLost();
+    return false;
+  };
+  const heartbeatTimer2 = setInterval(() => {
+    try {
+      if (!heartbeat(lock))
+        authorityLost();
+    } catch {
+      authorityLost();
+    }
+  }, dependencies.heartbeatIntervalMs ?? ANDROID_REBUILD_HEARTBEAT_MS);
+  const transitionAttempts = Math.max(1, dependencies.completionAttempts ?? ANDROID_REBUILD_COMPLETION_ATTEMPTS);
+  const persistTransition = async (transition2) => {
+    for (let attempt = 0; attempt < transitionAttempts; attempt += 1) {
+      if (leaseAuthorityLost)
+        return false;
+      try {
+        if (transition2(lock))
+          return true;
+      } catch {
+      }
+      if (!refreshAuthority())
+        return false;
+      if (attempt + 1 < transitionAttempts) {
+        await new Promise((resolve19) => {
+          setTimeout(resolve19, dependencies.completionRetryIntervalMs ?? ANDROID_REBUILD_COMPLETION_RETRY_MS);
+        });
+      }
+    }
+    return false;
+  };
+  try {
+    const result = await rebuild(controller.signal);
+    controller.signal.throwIfAborted();
+    for (let attempt = 0; attempt < transitionAttempts; attempt += 1) {
+      controller.signal.throwIfAborted();
+      try {
+        if (complete(lock)) {
+          controller.signal.throwIfAborted();
+          clearInterval(heartbeatTimer2);
+          return result;
+        }
+      } catch {
+      }
+      if (attempt + 1 < transitionAttempts) {
+        await new Promise((resolve19) => {
+          setTimeout(resolve19, dependencies.completionRetryIntervalMs ?? ANDROID_REBUILD_COMPLETION_RETRY_MS);
+        });
+      }
+    }
+    if (!controller.signal.aborted) {
+      controller.abort(androidRebuildRefusal(error2, "runner artifact rebuild completion was not durable"));
+    }
+    controller.signal.throwIfAborted();
+    throw androidRebuildRefusal(error2, "runner artifact rebuild completion was not durable");
+  } catch (cause) {
+    if (leaseAuthorityLost) {
+      clearInterval(heartbeatTimer2);
+      throw controller.signal.reason;
+    }
+    if (!await persistTransition(beginCleanup)) {
+      clearInterval(heartbeatTimer2);
+      throw leaseAuthorityLost ? controller.signal.reason : androidRebuildRefusal(error2, "runner artifact cleanup fence was not durable");
+    }
+    cleanupController = new AbortController();
+    const cleanupTimer = setTimeout(() => cleanupController?.abort(androidRebuildRefusal(error2, "runner artifact cleanup exceeded its time limit")), dependencies.cleanupTimeoutMs ?? ANDROID_REBUILD_CLEANUP_TIMEOUT_MS);
+    let cleanupVerified = false;
+    let cleanupFailure;
+    try {
+      await cleanup(cleanupController.signal);
+      cleanupController.signal.throwIfAborted();
+      cleanupVerified = true;
+    } catch (cleanupError) {
+      cleanupFailure = cleanupError;
+    }
+    clearTimeout(cleanupTimer);
+    cleanupController = void 0;
+    const terminalPersisted = await persistTransition(cleanupVerified ? release2 : markCleanupUnverified);
+    clearInterval(heartbeatTimer2);
+    if (!terminalPersisted) {
+      throw leaseAuthorityLost ? controller.signal.reason : androidRebuildRefusal(error2, "runner artifact failure state was not durable");
+    }
+    if (!cleanupVerified) {
+      if (cleanupFailure instanceof AndroidRunnerCleanupUnconfirmedError) {
+        throw cleanupFailure;
+      }
+      throw androidRebuildRefusal(error2, "runner artifact cleanup could not be verified");
+    }
+    throw controller.signal.aborted ? controller.signal.reason : cause;
+  }
+}
+function androidRetryCleanupContext(state, error2) {
+  return state ?? (error2.deviceId ? {
+    deviceId: error2.deviceId,
+    ...error2.attempt ? {
+      hostPort: error2.attempt.hostPort,
+      devicePort: error2.attempt.devicePort,
+      ...error2.attempt.forwardRemoval ? { attemptForwardRemoval: error2.attempt.forwardRemoval } : {}
+    } : {}
+  } : null);
+}
+function androidRunnerApksExist() {
+  return RUNNER_APK_PATHS.every((p) => existsSync10(p));
+}
+function _androidRunnerApkPathsForTest() {
+  return RUNNER_APK_PATHS;
+}
+function invalidateAndroidRunnerApks(rm2 = (p) => rmSync3(p, { force: true })) {
+  for (const apk of RUNNER_APK_PATHS) {
+    try {
+      rm2(apk);
+    } catch {
+    }
+  }
+}
+async function startAndroidRunner(deviceId, bundleId, devicePort = DEFAULT_PORT, opts = {}) {
+  try {
+    return await startAndroidRunnerAttempt(deviceId, bundleId, devicePort, opts);
+  } catch (err) {
+    if (opts.allowArtifactRebuild && err instanceof AndroidAuthorityStaleError) {
+      const state = await runBoundedAndroidRunnerRebuild(err, async (signal) => {
+        await reapMismatchedAndroidRunner(androidRetryCleanupContext(runnerState2, err), void 0, void 0, signal);
+        signal.throwIfAborted();
+        invalidateAndroidRunnerApks();
+        return startAndroidRunnerAttempt(deviceId, bundleId, devicePort, {
+          _forceReinstall: true,
+          _forceLocalBuild: true,
+          _rebuildSignal: signal
+        });
+      }, async (signal) => {
+        await reapMismatchedAndroidRunner(androidRetryCleanupContext(runnerState2, err), void 0, void 0, signal);
+      });
+      pendingUpgradeNote = "runner artifact rebuilt (authority identity mismatch)";
+      return state;
+    }
+    if (opts.allowArtifactRebuild && err instanceof AndroidArtifactStaleError) {
+      const state = await runBoundedAndroidRunnerRebuild(err, async (signal) => {
+        await reapMismatchedAndroidRunner(androidRetryCleanupContext(runnerState2, err), void 0, void 0, signal);
+        signal.throwIfAborted();
+        invalidateAndroidRunnerApks();
+        return startAndroidRunnerAttempt(deviceId, bundleId, devicePort, {
+          _forceReinstall: true,
+          _forceLocalBuild: true,
+          _rebuildSignal: signal
+        });
+      }, async (signal) => {
+        await reapMismatchedAndroidRunner(androidRetryCleanupContext(runnerState2, err), void 0, void 0, signal);
+      });
+      pendingUpgradeNote = `runner artifact rebuilt (missing ${err.surface}: ${err.missing.join(", ") || "unknown"})`;
+      return state;
+    }
+    throw err;
+  }
+}
+async function startAndroidRunnerAttempt(deviceId, bundleId, devicePort = DEFAULT_PORT, opts = {}) {
+  opts._rebuildSignal?.throwIfAborted();
+  const serial = deviceId ?? (testAuthorityState ? runnerState2?.deviceId : void 0) ?? await resolveAndroidSerial();
+  if (!serial) {
+    throw new Error("DEVICE_AUTHORITY_MISMATCH: Android native runner requires an exact claimed device");
+  }
+  const authority = androidRunnerAuthority(serial, bundleId ?? "");
+  adoptPersistedAndroidState(serial);
+  let forceReinstall = opts._forceReinstall === true;
+  if (shouldReapAndroidRunnerBeforeStart(runnerState2, serial, isAndroidRunnerAvailable())) {
+    await reapMismatchedAndroidRunner(runnerState2);
+    forceReinstall = true;
+  }
+  if (isAndroidRunnerAvailable() && shouldReuseAndroidRunner(runnerState2, serial)) {
+    const reusableState = runnerState2;
+    const info = await probeAndroidRunnerHealthInfo(runnerState2.hostPort);
+    if (info.reachable && info.ok) {
+      if (!androidHealthMatchesAuthority(info, {
+        instanceId: runnerState2.instanceId,
+        sessionId: runnerState2.sessionId,
+        claimEpoch: runnerState2.claimEpoch,
+        deviceId: runnerState2.deviceId,
+        appId: runnerState2.bundleId
+      })) {
+        await reapMismatchedAndroidRunner(reusableState);
+        forceReinstall = true;
+      } else {
+        const compat = classifyAndroidHealth(info);
+        if (compat.compatible)
+          return runnerState2;
+        if (compat.reason === "missing-commands" || compat.reason === "missing-features") {
+          const ErrorType = compat.reason === "missing-features" ? AndroidFeaturesStaleError : AndroidCommandsStaleError;
+          throw new ErrorType(compat.missing ?? [], bundleId, reusableState.deviceId);
+        }
+        pendingUpgradeNote = "runner upgraded (protocol/version mismatch)";
+        forceReinstall = true;
+        await reapMismatchedAndroidRunner(reusableState);
+      }
+    } else {
+      await reapMismatchedAndroidRunner(reusableState);
+      forceReinstall = true;
+    }
+  }
+  opts._rebuildSignal?.throwIfAborted();
+  const provenance = await ensureAndroidRunnerInstalled(deviceId, {
+    forceReinstall,
+    forceLocalBuild: opts._forceLocalBuild === true,
+    signal: opts._rebuildSignal
+  });
+  let hostPort = await findFreePort(devicePort);
+  opts._rebuildSignal?.throwIfAborted();
+  try {
+    await execFileAsync("adb", buildAdbForwardArgs(deviceId, hostPort, devicePort), {
+      signal: opts._rebuildSignal
+    });
+  } catch {
+    opts._rebuildSignal?.throwIfAborted();
+    hostPort = await findFreePort(0);
+    await execFileAsync("adb", buildAdbForwardArgs(deviceId, hostPort, devicePort), {
+      signal: opts._rebuildSignal
+    });
+  }
+  return new Promise((resolve19, reject) => {
+    let resolved = false;
+    let forwardRemoval;
+    const removeForward = () => {
+      forwardRemoval ??= removeAndroidForwardWithOutcome(serial, hostPort, opts._rebuildSignal);
+      return forwardRemoval;
+    };
+    const child = spawn2("adb", [
+      ...adbSerialArgs(deviceId),
+      "shell",
+      "am",
+      "instrument",
+      "-w",
+      "-r",
+      ...buildInstrumentPortArgs(devicePort),
+      ...buildInstrumentVersionArgs(getPluginVersion()),
+      ...buildInstrumentAuthorityArgs(authority),
+      "-e",
+      "class",
+      MAIN_LOOP_CLASS,
+      INSTRUMENTATION
+    ], {
+      stdio: ["ignore", "pipe", "pipe"],
+      signal: opts._rebuildSignal
+    });
+    runnerProcess2 = child;
+    const processBirth = child.pid === void 0 ? void 0 : readProcessBirth(child.pid)?.token;
+    const attempt = {
+      hostPort,
+      devicePort,
+      pid: child.pid,
+      ...processBirth ? { processBirth } : {}
+    };
+    let diag = "";
+    const capture = (chunk) => {
+      diag = (diag + chunk.toString("utf-8")).slice(-4e3);
+    };
+    child.stdout?.on("data", capture);
+    child.stderr?.on("data", capture);
+    const finishReady = () => {
+      if (resolved)
+        return;
+      if (opts._rebuildSignal?.aborted) {
+        resolved = true;
+        child.kill("SIGTERM");
+        reject(opts._rebuildSignal.reason);
+        return;
+      }
+      resolved = true;
+      const state = {
+        schemaVersion: 1,
+        hostPort,
+        devicePort,
+        pid: child.pid,
+        ...serial ? { deviceId: serial } : {},
+        ...bundleId ? { bundleId } : {},
+        startedAt: (/* @__PURE__ */ new Date()).toISOString(),
+        protocolVersion: RUNNER_PROTOCOL_VERSION,
+        ...getPluginVersion() !== null ? { runnerVersion: getPluginVersion() } : {},
+        provenance,
+        ...authority
+      };
+      const processBirth2 = readProcessBirth(child.pid);
+      if (!processBirth2) {
+        child.kill("SIGTERM");
+        reject(new Error("PROCESS_BIRTH_UNAVAILABLE: native runner process identity could not be proven"));
+        return;
+      }
+      state.processBirth = processBirth2.token;
+      runnerState2 = state;
+      if (serial) {
+        try {
+          writeJsonStateFileAtomic(androidStatePath(serial), state);
+        } catch {
+        }
+      }
+      cleanupLegacyTmpState();
+      resolve19(state);
+    };
+    child.on("error", (err) => {
+      void removeForward();
+      if (resolved)
+        return;
+      resolved = true;
+      reject(new Error(`Failed to spawn Android runner instrumentation: ${err.message}`));
+    });
+    child.on("exit", (code) => {
+      if (runnerProcess2 === child) {
+        clearAndroidStateFile();
+      }
+      void removeForward();
+      if (!resolved) {
+        resolved = true;
+        reject(new Error(`Android runner instrumentation exited before readiness (code ${code})${diag ? `
+${diag.trim()}` : ""}`));
+      }
+    });
+    void waitForAndroidRunnerHealth(hostPort, { capability: authority.capability }).then(async (healthy) => {
+      if (resolved)
+        return;
+      if (healthy) {
+        const info = await probeAndroidRunnerHealthInfo(hostPort, authority.capability);
+        if (!androidHealthMatchesAuthority(info, {
+          instanceId: authority.instanceId,
+          sessionId: authority.sessionId,
+          claimEpoch: authority.claimEpoch,
+          deviceId: authority.deviceId,
+          appId: authority.appId
+        })) {
+          resolved = true;
+          child.kill("SIGTERM");
+          attempt.forwardRemoval = await removeForward();
+          reject(new AndroidAuthorityStaleError(serial, void 0, attempt));
+          return;
+        }
+        const compat = classifyAndroidHealth(info);
+        if (!compat.compatible) {
+          resolved = true;
+          pendingUpgradeNote = void 0;
+          child.kill("SIGTERM");
+          attempt.forwardRemoval = await removeForward();
+          if (compat.reason === "missing-commands" || compat.reason === "missing-features") {
+            const ErrorType = compat.reason === "missing-features" ? AndroidFeaturesStaleError : AndroidCommandsStaleError;
+            reject(new ErrorType(compat.missing ?? [], bundleId, serial, void 0, attempt));
+            return;
+          }
+          reject(new Error(`RUNNER_PROTOCOL_MISMATCH: installed rn-android-runner speaks protocol ${info.protocolVersion ?? "none"} (bridge expects ${RUNNER_PROTOCOL_VERSION}). Rebuild + reinstall the runner APKs: cd ${RN_ANDROID_RUNNER_DIR} && ./gradlew :app:assembleDebug :app:assembleDebugAndroidTest, then adb install -r both APKs.`));
+          return;
+        }
+        finishReady();
+        return;
+      }
+      resolved = true;
+      child.kill("SIGTERM");
+      reject(new Error(`Android runner did not become ready within ${READY_TIMEOUT_MS2 / 1e3}s (no /health on port ${hostPort})${diag ? `
+${diag.trim()}` : ""}`));
+    });
+  });
+}
+async function stopAndroidRunner(deviceId, signal) {
+  signal?.throwIfAborted();
+  adoptPersistedAndroidState(deviceId ?? void 0);
+  const stoppedState = runnerState2;
+  runnerProcess2?.kill("SIGTERM");
+  clearAndroidStateFile();
+  if (typeof stoppedState?.hostPort === "number") {
+    const resolvedDeviceId = deviceId ?? stoppedState.deviceId;
+    try {
+      await execFileAsync("adb", buildAdbForwardRemoveArgs(resolvedDeviceId, stoppedState.hostPort), { timeout: ADB_CLEANUP_TIMEOUT_MS, signal });
+    } catch {
+    }
+  }
+}
+function commandTimeoutMs2(command) {
+  return command === "type" || command === "snapshot" || command === "screenshot" ? 35e3 : 1e4;
+}
+async function sendCommandOnce2(hostPort, body, timeoutMs) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let resp;
+  try {
+    const capability = runnerState2?.hostPort === hostPort ? runnerState2.capability : void 0;
+    if (!capability) {
+      throw new Error("RUNNER_OWNERSHIP_MISMATCH: runner capability is unavailable");
+    }
+    resp = await fetchImpl2(`http://127.0.0.1:${hostPort}/command`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json; charset=UTF-8",
+        authorization: `Bearer ${capability}`
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal
+    });
+  } catch (err) {
+    if (err?.name === "AbortError") {
+      throw new Error(`RUNNER_TIMEOUT: rn-android-runner did not respond to "${String(body.command)}" within ${timeoutMs}ms`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+  let parsed;
+  try {
+    parsed = await resp.json();
+  } catch {
+    throw new Error("rn-android-runner returned a non-JSON response body");
+  }
+  if (typeof parsed.v === "number" && (parsed.v < MIN_SUPPORTED_RUNNER_PROTOCOL || parsed.v > RUNNER_PROTOCOL_VERSION)) {
+    throw new Error(`RUNNER_PROTOCOL_MISMATCH: runner replied with wire protocol v${parsed.v}, bridge supports v${MIN_SUPPORTED_RUNNER_PROTOCOL}..${RUNNER_PROTOCOL_VERSION}`);
+  }
+  return parsed;
+}
+async function probeCommandStatus2(hostPort, commandId) {
+  try {
+    const resp = await sendCommandOnce2(hostPort, { command: "status", commandId }, STATUS_PROBE_TIMEOUT_MS2);
+    return parseStatusProbeReply(resp, commandId);
+  } catch {
+    return null;
+  }
+}
+async function postCommandWithRecovery2(body) {
+  const state = runnerState2;
+  if (!state)
+    throw new Error("rn-android-runner not started");
+  const commandId = generateCommandId();
+  const timeoutMs = commandTimeoutMs2(body.command);
+  try {
+    return { resp: await sendCommandOnce2(state.hostPort, { ...body, commandId }, timeoutMs) };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (!isAmbiguousTransportFailure(message))
+      throw err;
+    const decision = decideRecovery(await probeCommandStatus2(state.hostPort, commandId), body.command);
+    if (decision.action === "return-recovered") {
+      return {
+        resp: decision.response,
+        recovery: { commandId, outcome: decision.outcome }
+      };
+    }
+    if (decision.action === "resend-once") {
+      const resent = await sendCommandOnce2(state.hostPort, { ...body, commandId: generateCommandId() }, timeoutMs);
+      return { resp: resent, recovery: { commandId, outcome: "resent" } };
+    }
+    throw err;
+  }
+}
+async function postCommand2(body) {
+  return (await postCommandWithRecovery2(body)).resp;
+}
+function getAndroidRunnerHostPort() {
+  return runnerState2?.hostPort ?? null;
+}
+async function androidIsWindowUpdatingProbe(timeoutMs, bundleId, pinnedHostPort) {
+  if (pinnedHostPort !== void 0 && runnerState2?.hostPort !== pinnedHostPort)
+    return null;
+  try {
+    const body = { command: "isWindowUpdating", timeoutMs };
+    if (bundleId)
+      body.appBundleId = bundleId;
+    const resp = await postCommand2(body);
+    const updating = resp.data?.updating;
+    return resp.ok && typeof updating === "boolean" ? updating : null;
+  } catch {
+    return null;
+  }
+}
+async function androidSnapshotNodesViaProbe(bundleId, pinnedHostPort) {
+  if (pinnedHostPort !== void 0 && runnerState2?.hostPort !== pinnedHostPort)
+    return null;
+  try {
+    const body = { command: "snapshot", interactiveOnly: true };
+    if (bundleId)
+      body.appBundleId = bundleId;
+    const resp = await postCommand2(body);
+    if (!resp.ok || !resp.data || typeof resp.data !== "object")
+      return null;
+    const data = resp.data;
+    if (!Array.isArray(data.nodes))
+      return null;
+    const flat = mapRunnerNodesToFlat2(data.nodes);
+    updateRefMapFromFlat(flat);
+    return flat;
+  } catch {
+    return null;
+  }
+}
+function mapRunnerNodesToFlat2(nodes) {
+  const out = [];
+  let synthCounter = 0;
+  for (const n of nodes) {
+    if (!n.rect)
+      continue;
+    const ref = `@e${n.index ?? synthCounter++}`;
+    const flat = { ref, type: n.type ?? "", rect: n.rect };
+    if (n.label !== void 0)
+      flat.label = n.label;
+    if (n.identifier !== void 0)
+      flat.identifier = n.identifier;
+    if (n.packageName !== void 0)
+      flat.packageName = n.packageName;
+    if (n.checked !== void 0)
+      flat.checked = n.checked;
+    if (n.enabled !== void 0)
+      flat.enabled = n.enabled;
+    if (n.hittable !== void 0)
+      flat.hittable = n.hittable;
+    if (n.secure !== void 0)
+      flat.secure = n.secure;
+    out.push(flat);
+  }
+  return out;
+}
+function shouldRecoverAndroidAccessibility(command, response) {
+  return command === "snapshot" && !response.ok && response.error?.code === "ACCESSIBILITY_UNAVAILABLE";
+}
+async function runAndroid(args) {
+  if (args._staleRef) {
+    return failResult(`Element at ref ${args._staleRef} no longer hittable - UI re-rendered since snapshot`, "STALE_REF", {
+      cachedMetadata: getCachedMetadata(args._staleRef),
+      reResolution: "self-heal-disabled",
+      candidates: [],
+      mutation: "none",
+      hint: "Call device_snapshot action=snapshot to refresh refs, then retry the action with the new ref."
+    });
+  }
+  const body = { command: args.command };
+  if (args.bundleId)
+    body.appBundleId = args.bundleId;
+  if (args.x !== void 0)
+    body.x = args.x;
+  if (args.y !== void 0)
+    body.y = args.y;
+  if (args.x1 !== void 0)
+    body.x1 = args.x1;
+  if (args.y1 !== void 0)
+    body.y1 = args.y1;
+  if (args.x2 !== void 0)
+    body.x2 = args.x2;
+  if (args.y2 !== void 0)
+    body.y2 = args.y2;
+  if (args.text !== void 0)
+    body.text = args.text;
+  if (args.exactIdentifier !== void 0)
+    body.exactIdentifier = args.exactIdentifier;
+  if (args.exactLabel !== void 0)
+    body.exactLabel = args.exactLabel;
+  if (args.exactType !== void 0)
+    body.exactType = args.exactType;
+  if (args.exact !== void 0)
+    body.exact = args.exact;
+  if (args.includeSystemUi !== void 0)
+    body.includeSystemUi = args.includeSystemUi;
+  if (args.durationMs !== void 0)
+    body.durationMs = args.durationMs;
+  if (args.timeoutMs !== void 0)
+    body.timeoutMs = args.timeoutMs;
+  if (args.scale !== void 0)
+    body.scale = args.scale;
+  if (args.interactiveOnly !== void 0)
+    body.interactiveOnly = args.interactiveOnly;
+  if (args.snapshotGeneration !== void 0)
+    body.snapshotGeneration = args.snapshotGeneration;
+  if (args.snapshotNodeIndex !== void 0)
+    body.snapshotNodeIndex = args.snapshotNodeIndex;
+  if (args.snapshotIdentifier !== void 0)
+    body.snapshotIdentifier = args.snapshotIdentifier;
+  if (args.snapshotElementType !== void 0)
+    body.snapshotElementType = args.snapshotElementType;
+  if (args.targetBounds !== void 0)
+    body.targetBounds = args.targetBounds;
+  if (args.focusX !== void 0)
+    body.focusX = args.focusX;
+  if (args.focusY !== void 0)
+    body.focusY = args.focusY;
+  if (args.focusWaitMs !== void 0)
+    body.focusWaitMs = args.focusWaitMs;
+  if (args.secureInput !== void 0)
+    body.secureInput = args.secureInput;
+  if (args.operationToken !== void 0)
+    body.operationToken = args.operationToken;
+  let resp;
+  let recovery;
+  try {
+    await startAndroidRunner(args.deviceId, args.bundleId);
+    ({ resp, recovery } = await postCommandWithRecovery2(withKeyboardGuard(body, args.command, process.env)));
+  } catch (err) {
+    const m = errMessage(err);
+    if (m.startsWith("RUNNER_PROTOCOL_MISMATCH")) {
+      return failResult(m, "RUNNER_PROTOCOL_MISMATCH", {
+        hint: "The installed runner APK predates this plugin version. Rebuild + reinstall (command in the error), then retry."
+      });
+    }
+    if (isAndroidConnectionFailure(m)) {
+      return failResult(`rn-android-runner is not reachable: ${m}`, "RN_ANDROID_RUNNER_DOWN", {
+        hint: "The runner could not start or bind its port (e.g. just restarted after a Maestro flow). Retry the command; if it persists, ensure the emulator is booted and the app is installed."
+      });
+    }
+    throw err;
+  }
+  let accessibilityRecovery;
+  if (shouldRecoverAndroidAccessibility(args.command, resp)) {
+    await stopAndroidRunner(args.deviceId);
+    await startAndroidRunner(args.deviceId, args.bundleId);
+    ({ resp, recovery } = await postCommandWithRecovery2(withKeyboardGuard(body, args.command, process.env)));
+    if (resp.ok)
+      accessibilityRecovery = "runner-restarted";
+  }
+  const recoveryMeta = {
+    ...recovery ? { transportRecovery: recovery } : {},
+    ...accessibilityRecovery ? { accessibilityRecovery } : {}
+  };
+  if (!resp.ok) {
+    const message = resp.error?.message ?? "Android runner returned !ok with no error";
+    const code = resp.error?.code;
+    if (args.command === "type" && args.exactIdentifier === void 0 && typeof message === "string" && (message.includes("Could not detect idle state") || message.includes("window-content-idle") || message.includes("Idle timeout exceeded"))) {
+      return failResult("rn-android-runner type hit the window-idle timeout after dispatching the mutation; the field value is unverified", "TYPE_IDLE_TIMEOUT", { mutation: "possible", runnerTimeoutShim: true, ...recoveryMeta });
+    }
+    const VALID_MUTATIONS = /* @__PURE__ */ new Set(["none", "observed", "possible"]);
+    const rawMutation = resp.error?.mutation;
+    const mutation = rawMutation !== void 0 && VALID_MUTATIONS.has(rawMutation) ? rawMutation : args.command === "type" || args.command === "fill" ? "possible" : void 0;
+    const reason = resp.error?.reason;
+    const failExtras = {
+      ...recovery ? { transportRecovery: recovery } : {},
+      ...mutation !== void 0 ? { mutation } : {},
+      ...reason !== void 0 ? { reason } : {}
+    };
+    if (code) {
+      return failResult(message, code, Object.keys(failExtras).length > 0 ? failExtras : void 0);
+    }
+    return Object.keys(failExtras).length > 0 ? failResult(message, failExtras) : failResult(message);
+  }
+  if (args.command === "tap") {
+    const data = resp.data;
+    if (data?.tapped !== true) {
+      const exactTarget = (args.exactIdentifier !== void 0 || args.exactLabel !== void 0) && args.exactType !== void 0;
+      if (exactTarget) {
+        return failResult("Android runner could not prove that the requested interaction was actuated.", "INTERACTION_NOT_ACTUATED", { mutation: "none", reason: "runner-rejected-tap", ...recoveryMeta });
+      }
+      return failResult("The Android coordinate tap did not complete, and part of the gesture may have reached the app.", "INTERACTION_EFFECT_UNVERIFIED", {
+        mutation: "possible",
+        reason: "coordinate-tap-incomplete",
+        attempts: 1,
+        ...recoveryMeta
+      });
+    }
+  }
+  if (args.command === "snapshot" && resp.data && typeof resp.data === "object") {
+    const data = resp.data;
+    if (Array.isArray(data.nodes)) {
+      const flat = mapRunnerNodesToFlat2(data.nodes);
+      const outcome = updateRefMapFromFlat(flat);
+      const snapshotVerdict = buildSnapshotVerdict("rn-android-runner", flat.length, outcome);
+      return okResult({ nodes: flat }, { meta: { snapshotVerdict, ...recoveryMeta } });
+    }
+  }
+  if (args.command === "screenshot") {
+    const data = resp.data;
+    if (!data?.pngBase64)
+      return failResult("Android runner screenshot response did not include pngBase64", "SCREENSHOT_FAILED", recovery ? { transportRecovery: recovery } : void 0);
+    const outPath = args.outPath ?? join11(tmpdir3(), `rn-android-screenshot-${Date.now()}.png`);
+    writeFileSync6(outPath, Buffer.from(data.pngBase64, "base64"));
+    return okResult({ path: outPath }, Object.keys(recoveryMeta).length ? { meta: recoveryMeta } : void 0);
+  }
+  return okResult(resp.data ?? {}, Object.keys(recoveryMeta).length ? { meta: recoveryMeta } : void 0);
+}
+function errMessage(err) {
+  return err instanceof Error ? err.message : String(err);
+}
+function isAndroidConnectionFailure(message) {
+  return /fetch failed|ECONNREFUSED|ECONNRESET|socket hang up|rn-android-runner not started|did not become ready|Android runner instrumentation exited before readiness|Failed to spawn Android runner instrumentation/i.test(message);
+}
+var execFileAsync, DEFAULT_PORT, READY_TIMEOUT_MS2, INSTRUMENTATION, MAIN_LOOP_CLASS, HEALTH_POLL_INTERVAL_MS, HEALTH_PROBE_TIMEOUT_MS, RN_ANDROID_RUNNER_DIR, GRADLEW, APK_APP, APK_TEST, ANDROID_REBUILD_ROOT, ANDROID_REBUILD_LOCK_DATABASE, ANDROID_REBUILD_LOCK_STALE_MS, ANDROID_REBUILD_HEARTBEAT_MS, ANDROID_REBUILD_COMPLETION_RETRY_MS, ANDROID_REBUILD_COMPLETION_ATTEMPTS, ANDROID_REBUILD_CLEANUP_TIMEOUT_MS, ADB_CLEANUP_TIMEOUT_MS, ADB_OUTCOME_TAIL_LENGTH, ANDROID_CLEANUP_VERIFY_ATTEMPTS, ANDROID_CLEANUP_VERIFY_INTERVAL_MS, GRADLE_BUILD_TIMEOUT_MS, ADB_INSTALL_TIMEOUT_MS, runnerProcess2, runnerState2, fetchImpl2, testAuthorityState, lastKnownCapabilities2, pendingUpgradeNote, AndroidRunnerCleanupUnconfirmedError, AndroidArtifactStaleError, AndroidCommandsStaleError, AndroidFeaturesStaleError, AndroidAuthorityStaleError, RUNNER_APK_PATHS, STATUS_PROBE_TIMEOUT_MS2;
+var init_rn_android_runner_client = __esm({
+  "packages/rn-dev-agent-core/dist/runners/rn-android-runner-client.js"() {
+    "use strict";
+    init_utils();
+    init_fast_runner_ref_map();
+    init_free_port();
+    init_keyboard_guard();
+    init_secure_state_file();
+    init_protocol();
+    init_runner_artifacts();
+    init_runtime_paths();
+    init_transport_recovery();
+    init_process_birth();
+    init_authority_store();
+    init_public_diagnostics();
+    execFileAsync = promisify3(execFile3);
+    DEFAULT_PORT = 22089;
+    READY_TIMEOUT_MS2 = 3e4;
+    INSTRUMENTATION = "dev.lykhoyda.rndevagent.androidrunner.test/androidx.test.runner.AndroidJUnitRunner";
+    MAIN_LOOP_CLASS = "dev.lykhoyda.rndevagent.androidrunner.RnAndroidRunnerInstrumentedTest#mainLoop";
+    HEALTH_POLL_INTERVAL_MS = 150;
+    HEALTH_PROBE_TIMEOUT_MS = 1e3;
+    RN_ANDROID_RUNNER_DIR = resolveNativeRunnerDir("rn-android-runner");
+    GRADLEW = join11(RN_ANDROID_RUNNER_DIR, "gradlew");
+    APK_APP = join11(RN_ANDROID_RUNNER_DIR, "app", "build", "outputs", "apk", "debug", "app-debug.apk");
+    APK_TEST = join11(RN_ANDROID_RUNNER_DIR, "app", "build", "outputs", "apk", "androidTest", "debug", "app-debug-androidTest.apk");
+    ANDROID_REBUILD_ROOT = join11(RN_ANDROID_RUNNER_DIR, "app", "build");
+    ANDROID_REBUILD_LOCK_DATABASE = join11(ANDROID_REBUILD_ROOT, ".authority-rebuild", "lock.sqlite");
+    ANDROID_REBUILD_LOCK_STALE_MS = 15 * 6e4;
+    ANDROID_REBUILD_HEARTBEAT_MS = 6e4;
+    ANDROID_REBUILD_COMPLETION_RETRY_MS = 1e3;
+    ANDROID_REBUILD_COMPLETION_ATTEMPTS = 5;
+    ANDROID_REBUILD_CLEANUP_TIMEOUT_MS = 3e4;
+    ADB_CLEANUP_TIMEOUT_MS = 5e3;
+    ADB_OUTCOME_TAIL_LENGTH = 600;
+    ANDROID_CLEANUP_VERIFY_ATTEMPTS = 20;
+    ANDROID_CLEANUP_VERIFY_INTERVAL_MS = 150;
+    GRADLE_BUILD_TIMEOUT_MS = 6e5;
+    ADB_INSTALL_TIMEOUT_MS = 12e4;
+    runnerProcess2 = null;
+    runnerState2 = null;
+    fetchImpl2 = globalThis.fetch;
+    testAuthorityState = false;
+    lastKnownCapabilities2 = [];
+    AndroidRunnerCleanupUnconfirmedError = class extends Error {
+      predicate;
+      evidence;
+      meta;
+      constructor(predicate, evidence, deviceId, commandEvidence) {
+        super(`RUNNER_CLEANUP_UNCONFIRMED: predicate=${predicate} remains for ${deviceId}; evidence=${JSON.stringify(evidence)}`);
+        this.predicate = predicate;
+        this.evidence = evidence;
+        this.meta = {
+          cleanupPredicate: predicate,
+          cleanupEvidence: evidence,
+          ...commandEvidence
+        };
+      }
+    };
+    AndroidArtifactStaleError = class extends Error {
+      surface;
+      missing;
+      bundleId;
+      deviceId;
+      attempt;
+      constructor(surface, missing, bundleId, deviceId, detail, attempt) {
+        super(`RUNNER_${surface.toUpperCase()}_STALE: ${detail ?? `installed rn-android-runner lacks required ${surface} (missing: ${missing.join(", ") || "unknown"}). Re-open the device session (device_snapshot action=open appId=${bundleId ?? "<your.app.id>"} platform=android) to rebuild it.`}`);
+        this.surface = surface;
+        this.missing = missing;
+        this.bundleId = bundleId;
+        this.deviceId = deviceId;
+        this.attempt = attempt;
+      }
+    };
+    AndroidCommandsStaleError = class extends AndroidArtifactStaleError {
+      constructor(missing, bundleId, deviceId, detail, attempt) {
+        super("commands", missing, bundleId, deviceId, detail, attempt);
+      }
+    };
+    AndroidFeaturesStaleError = class extends AndroidArtifactStaleError {
+      constructor(missing, bundleId, deviceId, detail, attempt) {
+        super("features", missing, bundleId, deviceId, detail, attempt);
+      }
+    };
+    AndroidAuthorityStaleError = class extends Error {
+      deviceId;
+      attempt;
+      constructor(deviceId, detail, attempt) {
+        super(`RUNNER_OWNERSHIP_MISMATCH: ${detail ?? "installed Android runner lacks current authority identity"}`);
+        this.deviceId = deviceId;
+        this.attempt = attempt;
+      }
+    };
+    RUNNER_APK_PATHS = [APK_APP, APK_TEST];
+    STATUS_PROBE_TIMEOUT_MS2 = 2e3;
+  }
+});
+
+// packages/rn-dev-agent-core/dist/observability/mirror/jpeg-stream.js
+var MAX_FRAME_BYTES, SOI, EOI, JpegFrameExtractor;
+var init_jpeg_stream = __esm({
+  "packages/rn-dev-agent-core/dist/observability/mirror/jpeg-stream.js"() {
+    "use strict";
+    MAX_FRAME_BYTES = 8e6;
+    SOI = Buffer.from([255, 216]);
+    EOI = Buffer.from([255, 217]);
+    JpegFrameExtractor = class {
+      acc = Buffer.alloc(0);
+      /** Sticky: a SOI without EOI exceeded MAX_FRAME_BYTES. Process liveness is not a valid frame. */
+      overflowed = false;
+      push(chunk) {
+        this.acc = this.acc.length === 0 ? chunk : Buffer.concat([this.acc, chunk]);
+        const frames = [];
+        for (; ; ) {
+          const soi = this.acc.indexOf(SOI);
+          if (soi === -1) {
+            this.acc = this.acc.length > 0 && this.acc[this.acc.length - 1] === 255 ? this.acc.subarray(this.acc.length - 1) : Buffer.alloc(0);
+            break;
+          }
+          if (soi > 0)
+            this.acc = this.acc.subarray(soi);
+          const eoi = this.acc.indexOf(EOI, SOI.length);
+          if (eoi === -1) {
+            if (this.acc.length > MAX_FRAME_BYTES) {
+              this.overflowed = true;
+              this.acc = Buffer.alloc(0);
+            }
+            break;
+          }
+          frames.push(this.acc.subarray(0, eoi + EOI.length));
+          this.acc = this.acc.subarray(eoi + EOI.length);
+        }
+        return frames;
+      }
+    };
+  }
+});
+
+// packages/rn-dev-agent-core/dist/observability/mirror/sources.js
+import { spawn as spawn3, execFile as execFile4 } from "node:child_process";
+import { readFile, unlink } from "node:fs/promises";
+import { tmpdir as tmpdir4 } from "node:os";
+import { join as join12 } from "node:path";
+function idbDemotionHint(cause) {
+  if (cause?.hint)
+    return cause.hint;
+  if (cause?.reason)
+    return `${cause.reason} \u2014 using simctl screenshot loop`;
+  return IDB_STREAM_UNHEALTHY_HINT;
+}
+async function probeIdbClient(execFileFn = execFile4) {
+  return new Promise((resolve19) => {
+    execFileFn("idb", ["--help"], { timeout: 3e3 }, (err) => {
+      if (!err)
+        return resolve19("ready");
+      resolve19(isEnoent(err) ? "absent" : "broken");
+    });
+  });
+}
+function isEnoent(err) {
+  return !!err && typeof err === "object" && err.code === "ENOENT";
+}
+function defaultExecJpeg(cmd, args, signal) {
+  const outPath = args[args.length - 1];
+  return new Promise((resolve19, reject) => {
+    execFile4(cmd, args, { maxBuffer: 16 * 1024 * 1024, timeout: 1e4, signal }, (err) => {
+      if (err) {
+        reject(err);
+        return;
+      }
+      readFile(outPath).then((buf) => {
+        void unlink(outPath).catch(() => {
+        });
+        resolve19(buf);
+      }).catch((readErr) => {
+        void unlink(outPath).catch(() => {
+        });
+        reject(readErr);
+      });
+    });
+  });
+}
+async function createMirrorSource(target, fps, opts = {}) {
+  if (target.platform === "android") {
+    return new AndroidScreenrecordSource(target.deviceId);
+  }
+  const state = await probeIdbClient();
+  if (state === "ready") {
+    return new IosIdbSource(target.deviceId, fps, {
+      firstFrameTimeoutMs: opts.firstFrameTimeoutMs
+    });
+  }
+  const idbHint = state === "broken" ? SIMCTL_BROKEN_IDB_HINT : SIMCTL_HINT;
+  return new IosSimctlLoopSource(target.deviceId, {
+    degradedHint: idbHint,
+    failureHint: idbHint
+  });
+}
+var RestartGate, IDB_INSTALL_COMMAND, SIMCTL_HINT, SIMCTL_BROKEN_IDB_HINT, IDB_NO_FIRST_FRAME_REASON, IDB_MALFORMED_FRAME_REASON, IDB_STREAM_UNHEALTHY_HINT, DEFAULT_IDB_FIRST_FRAME_TIMEOUT_MS, IDB_HINT, FFMPEG_HINT, sleep2, scheduleAfter, defaultSpawn, IosIdbSource, IosSimctlLoopSource, AndroidScreenrecordSource;
+var init_sources = __esm({
+  "packages/rn-dev-agent-core/dist/observability/mirror/sources.js"() {
+    "use strict";
+    init_jpeg_stream();
+    RestartGate = class {
+      limit;
+      windowMs;
+      now;
+      exits = [];
+      constructor(limit = 3, windowMs = 1e4, now = Date.now) {
+        this.limit = limit;
+        this.windowMs = windowMs;
+        this.now = now;
+      }
+      record() {
+        const t = this.now();
+        this.exits = this.exits.filter((e) => t - e < this.windowMs);
+        this.exits.push(t);
+        return this.exits.length < this.limit;
+      }
+    };
+    IDB_INSTALL_COMMAND = "brew install python@3.13 && brew tap facebook/fb && brew trust facebook/fb && brew install idb-companion && pipx install --python python3.13 --force fb-idb";
+    SIMCTL_HINT = `install idb for smoother mirroring (${IDB_INSTALL_COMMAND})`;
+    SIMCTL_BROKEN_IDB_HINT = "idb is installed but did not respond successfully \u2014 most likely fb-idb 1.1.7 under Python 3.14, which removed the asyncio.get_event_loop() it needs. Reinstall it under a supported interpreter: pipx install --python python3.13 --force fb-idb";
+    IDB_NO_FIRST_FRAME_REASON = "idb video-stream produced no first frame";
+    IDB_MALFORMED_FRAME_REASON = "idb video-stream produced a malformed frame";
+    IDB_STREAM_UNHEALTHY_HINT = "idb video-stream produced no usable frame \u2014 using simctl screenshot loop";
+    DEFAULT_IDB_FIRST_FRAME_TIMEOUT_MS = 3e4;
+    IDB_HINT = `idb not found \u2014 ${IDB_INSTALL_COMMAND}`;
+    FFMPEG_HINT = "ffmpeg not found \u2014 run scripts/ensure-ffmpeg.sh or brew install ffmpeg";
+    sleep2 = (ms) => new Promise((resolve19) => setTimeout(resolve19, ms));
+    scheduleAfter = (fn, delayMs) => {
+      if (delayMs <= 0)
+        setImmediate(fn);
+      else
+        setTimeout(fn, delayMs);
+    };
+    defaultSpawn = (cmd, args) => spawn3(cmd, args, {
+      stdio: ["pipe", "pipe", "pipe"]
+    });
+    IosIdbSource = class {
+      udid;
+      pipeline = "idb";
+      nominalFps;
+      active = false;
+      proc = null;
+      firstFrameTimer = null;
+      spawnFn;
+      gate;
+      restartDelayMs;
+      firstFrameTimeoutMs;
+      constructor(udid, fps, opts = {}) {
+        this.udid = udid;
+        this.nominalFps = fps;
+        this.spawnFn = opts.spawnFn ?? defaultSpawn;
+        this.gate = new RestartGate(3, 1e4, opts.now ?? Date.now);
+        this.restartDelayMs = opts.restartDelayMs ?? 300;
+        this.firstFrameTimeoutMs = opts.firstFrameTimeoutMs ?? DEFAULT_IDB_FIRST_FRAME_TIMEOUT_MS;
+      }
+      start(sink) {
+        this.active = true;
+        this.spawnOnce(sink);
+      }
+      spawnOnce(sink) {
+        const extractor = new JpegFrameExtractor();
+        let gotFrame = false;
+        const proc = this.spawnFn("idb", [
+          "video-stream",
+          "--udid",
+          this.udid,
+          "--fps",
+          String(this.nominalFps),
+          "--format",
+          "mjpeg",
+          "--compression-quality",
+          "0.7"
+        ]);
+        this.proc = proc;
+        proc.stderr?.resume();
+        this.armFirstFrameTimer(sink);
+        proc.stdout.on("data", (chunk) => {
+          if (!this.active)
+            return;
+          for (const frame of extractor.push(chunk)) {
+            gotFrame = true;
+            this.clearFirstFrameTimer();
+            if (this.active)
+              sink.onFrame(frame);
+          }
+          if (this.active && extractor.overflowed && !gotFrame) {
+            this.fail(sink, IDB_MALFORMED_FRAME_REASON);
+          }
+        });
+        proc.on("error", (err) => {
+          if (!this.active)
+            return;
+          if (isEnoent(err)) {
+            this.fail(sink, "idb not found", IDB_HINT);
+          }
+        });
+        proc.on("close", () => {
+          if (!this.active)
+            return;
+          this.clearFirstFrameTimer();
+          if (this.gate.record()) {
+            scheduleAfter(() => {
+              if (!this.active)
+                return;
+              sink.onRestart?.();
+              this.spawnOnce(sink);
+            }, this.restartDelayMs);
+          } else {
+            this.fail(sink, "idb video-stream keeps exiting");
+          }
+        });
+      }
+      armFirstFrameTimer(sink) {
+        this.clearFirstFrameTimer();
+        this.firstFrameTimer = setTimeout(() => {
+          this.firstFrameTimer = null;
+          if (!this.active)
+            return;
+          this.fail(sink, IDB_NO_FIRST_FRAME_REASON, IDB_STREAM_UNHEALTHY_HINT);
+        }, this.firstFrameTimeoutMs);
+      }
+      fail(sink, reason, hint) {
+        if (!this.active)
+          return;
+        this.active = false;
+        this.clearFirstFrameTimer();
+        this.proc?.kill();
+        sink.onExit({ reason, hint });
+      }
+      clearFirstFrameTimer() {
+        if (this.firstFrameTimer) {
+          clearTimeout(this.firstFrameTimer);
+          this.firstFrameTimer = null;
+        }
+      }
+      stop() {
+        this.active = false;
+        this.clearFirstFrameTimer();
+        this.proc?.kill();
+      }
+    };
+    IosSimctlLoopSource = class {
+      udid;
+      pipeline = "simctl";
+      nominalFps = 6;
+      degradedHint;
+      failureHint;
+      active = false;
+      inFlight = null;
+      execJpeg;
+      gate;
+      idleDelayMs;
+      failurePauseMs;
+      tmpPath;
+      constructor(udid, opts = {}) {
+        this.udid = udid;
+        this.execJpeg = opts.execJpeg ?? defaultExecJpeg;
+        this.gate = new RestartGate(3, 1e4, opts.now ?? Date.now);
+        this.idleDelayMs = opts.idleDelayMs ?? 25;
+        this.failurePauseMs = opts.failurePauseMs ?? 500;
+        this.tmpPath = opts.tmpPath ?? (() => join12(tmpdir4(), "rn-mirror-simctl-" + process.pid + ".jpg"));
+        this.degradedHint = opts.degradedHint ?? SIMCTL_HINT;
+        this.failureHint = opts.failureHint;
+      }
+      start(sink) {
+        this.active = true;
+        void this.loop(sink);
+      }
+      async loop(sink) {
+        while (this.active) {
+          const controller = new AbortController();
+          this.inFlight = controller;
+          try {
+            const buf = await this.execJpeg("xcrun", ["simctl", "io", this.udid, "screenshot", "--type=jpeg", this.tmpPath()], controller.signal);
+            sink.onFrame(buf);
+            if (!this.active)
+              break;
+            await sleep2(this.idleDelayMs);
+          } catch {
+            if (!this.active)
+              break;
+            if (!this.gate.record()) {
+              if (this.active)
+                sink.onExit({
+                  reason: "simctl screenshot failing",
+                  hint: this.failureHint
+                });
+              this.active = false;
+              break;
+            }
+            await sleep2(this.failurePauseMs);
+          } finally {
+            this.inFlight = null;
+          }
+        }
+      }
+      stop() {
+        this.active = false;
+        this.inFlight?.abort();
+      }
+    };
+    AndroidScreenrecordSource = class {
+      serial;
+      pipeline = "screenrecord";
+      nominalFps = 25;
+      active = false;
+      adb = null;
+      ffmpeg = null;
+      spawnFn;
+      gate;
+      restartDelayMs;
+      constructor(serial, opts = {}) {
+        this.serial = serial;
+        this.spawnFn = opts.spawnFn ?? defaultSpawn;
+        this.gate = new RestartGate(3, 1e4, opts.now ?? Date.now);
+        this.restartDelayMs = opts.restartDelayMs ?? 300;
+      }
+      start(sink) {
+        this.active = true;
+        this.spawnCycle(sink);
+      }
+      spawnCycle(sink) {
+        let cycleDone = false;
+        const extractor = new JpegFrameExtractor();
+        const adb2 = this.spawnFn("adb", [
+          "-s",
+          this.serial,
+          "exec-out",
+          "screenrecord",
+          "--output-format=h264",
+          "--time-limit=179",
+          "-"
+        ]);
+        const ffmpeg = this.spawnFn("ffmpeg", [
+          "-loglevel",
+          "error",
+          "-fflags",
+          "nobuffer",
+          "-f",
+          "h264",
+          "-i",
+          "pipe:0",
+          "-q:v",
+          "7",
+          "-f",
+          "mjpeg",
+          "pipe:1"
+        ]);
+        this.adb = adb2;
+        this.ffmpeg = ffmpeg;
+        adb2.stderr?.resume();
+        ffmpeg.stderr?.resume();
+        if (ffmpeg.stdin) {
+          ffmpeg.stdin.on("error", () => {
+          });
+          adb2.stdout.pipe(ffmpeg.stdin);
+        }
+        ffmpeg.stdout.on("data", (chunk) => {
+          if (!this.active)
+            return;
+          for (const frame of extractor.push(chunk)) {
+            if (this.active)
+              sink.onFrame(frame);
+          }
+        });
+        const killSibling = (self) => {
+          if (self === "adb")
+            ffmpeg.kill();
+          else
+            adb2.kill();
+        };
+        adb2.on("error", (err) => {
+          if (!this.active || cycleDone)
+            return;
+          if (isEnoent(err)) {
+            cycleDone = true;
+            this.active = false;
+            killSibling("adb");
+            sink.onExit({ reason: "adb not found" });
+          }
+        });
+        ffmpeg.on("error", (err) => {
+          if (!this.active || cycleDone)
+            return;
+          if (isEnoent(err)) {
+            cycleDone = true;
+            this.active = false;
+            killSibling("ffmpeg");
+            sink.onExit({ reason: "ffmpeg not found", hint: FFMPEG_HINT });
+          }
+        });
+        const onClose = (self) => {
+          if (!this.active || cycleDone)
+            return;
+          cycleDone = true;
+          killSibling(self);
+          if (this.gate.record()) {
+            scheduleAfter(() => {
+              if (!this.active)
+                return;
+              sink.onRestart?.();
+              this.spawnCycle(sink);
+            }, this.restartDelayMs);
+          } else {
+            this.active = false;
+            sink.onExit({ reason: "screen capture pipeline keeps exiting" });
+          }
+        };
+        adb2.on("close", () => onClose("adb"));
+        ffmpeg.on("close", () => onClose("ffmpeg"));
+      }
+      stop() {
+        this.active = false;
+        this.adb?.kill();
+        this.ffmpeg?.kill();
+      }
+    };
+  }
+});
+
+// packages/rn-dev-agent-core/dist/project-config.js
+import { existsSync as existsSync11, readFileSync as readFileSync9 } from "node:fs";
+import { join as join13 } from "node:path";
+function readAppId(projectRoot, platform) {
+  for (const filename of ["app.json", "app.config.json"]) {
+    const p = join13(projectRoot, filename);
+    if (!existsSync11(p))
+      continue;
+    try {
+      const raw = JSON.parse(readFileSync9(p, "utf-8"));
+      const expo = raw.expo ?? raw;
+      const iosBundleId = expo?.ios?.bundleIdentifier;
+      const androidPkg = expo?.android?.package;
+      if (platform === "android")
+        return androidPkg ?? iosBundleId ?? null;
+      return iosBundleId ?? androidPkg ?? null;
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+function resolveBundleId(platform) {
+  const projectRoot = findProjectRoot();
+  if (!projectRoot)
+    return null;
+  return readAppId(projectRoot, platform);
+}
+function readExpoSlug() {
+  const projectRoot = findProjectRoot();
+  if (!projectRoot)
+    return null;
+  for (const filename of ["app.json", "app.config.json"]) {
+    const p = join13(projectRoot, filename);
+    if (!existsSync11(p))
+      continue;
+    try {
+      const raw = JSON.parse(readFileSync9(p, "utf-8"));
+      return raw.expo?.slug ?? null;
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+function readRnAgentConfig(projectRoot) {
+  const root = projectRoot ?? findProjectRoot();
+  if (!root)
+    return null;
+  const p = join13(root, ".rn-agent", "config.json");
+  if (!existsSync11(p))
+    return null;
+  try {
+    return JSON.parse(readFileSync9(p, "utf-8"));
+  } catch (err) {
+    if (!warnedBadConfig) {
+      warnedBadConfig = true;
+      logger.warn("CONFIG", `.rn-agent/config.json is unreadable \u2014 ignoring it: ${err instanceof Error ? err.message : err}`);
+    }
+    return null;
+  }
+}
+function resolveAutoConnect(deps = {}) {
+  const envRaw = "env" in deps ? deps.env : process.env.RN_CDP_AUTOCONNECT;
+  if (envRaw === "0" || envRaw === "false")
+    return { enabled: false, source: "env" };
+  if (envRaw === "1" || envRaw === "true")
+    return { enabled: true, source: "env" };
+  const cfg = (deps.readConfig ?? readRnAgentConfig)();
+  if (typeof cfg?.cdp?.autoConnect === "boolean") {
+    return { enabled: cfg.cdp.autoConnect, source: "config" };
+  }
+  return { enabled: true, source: "default" };
+}
+function parsePort(raw) {
+  if (!raw)
+    return void 0;
+  const n = Number.parseInt(raw, 10);
+  return Number.isInteger(n) && n > 0 && n <= 65535 ? n : void 0;
+}
+function resolveObserveAutostart(deps = {}) {
+  const envRaw = "env" in deps ? deps.env : process.env.RN_AGENT_OBSERVE_AUTOSTART;
+  if (envRaw === "0" || envRaw === "false")
+    return { enabled: false, source: "env" };
+  if (envRaw === "1" || envRaw === "true")
+    return { enabled: true, source: "env" };
+  const cfg = (deps.readConfig ?? readRnAgentConfig)();
+  if (typeof cfg?.observe?.autoStart === "boolean") {
+    return { enabled: cfg.observe.autoStart, source: "config" };
+  }
+  return { enabled: true, source: "default" };
+}
+function resolveObservePort(deps = {}) {
+  const envRaw = "env" in deps ? deps.env : process.env.RN_AGENT_OBSERVE_PORT;
+  const envPort = parsePort(envRaw);
+  if (envPort !== void 0)
+    return { port: envPort, source: "env" };
+  const cfg = (deps.readConfig ?? readRnAgentConfig)();
+  const cfgPort = cfg?.observe?.port;
+  if (typeof cfgPort === "number" && Number.isInteger(cfgPort) && cfgPort > 0 && cfgPort <= 65535) {
+    return { port: cfgPort, source: "config" };
+  }
+  return { port: DEFAULT_OBSERVE_PORT, source: "default" };
+}
+function resolveMirrorConfig(deps = {}) {
+  const envRaw = "env" in deps ? deps.env : process.env.RN_AGENT_OBSERVE_MIRROR;
+  let cfg = null;
+  try {
+    cfg = (deps.readConfig ?? readRnAgentConfig)();
+  } catch {
+    cfg = null;
+  }
+  const rawFps = cfg?.observe?.mirror?.fps;
+  const fps = typeof rawFps === "number" && Number.isFinite(rawFps) ? Math.min(MIRROR_FPS_MAX, Math.max(MIRROR_FPS_MIN, Math.round(rawFps))) : DEFAULT_MIRROR_FPS;
+  const rawTimeout = cfg?.observe?.mirror?.firstFrameTimeoutMs;
+  const firstFrameTimeoutMs = typeof rawTimeout === "number" && Number.isFinite(rawTimeout) ? Math.min(MIRROR_FIRST_FRAME_TIMEOUT_MAX_MS, Math.max(MIRROR_FIRST_FRAME_TIMEOUT_MIN_MS, Math.round(rawTimeout))) : DEFAULT_IDB_FIRST_FRAME_TIMEOUT_MS;
+  if (envRaw === "0" || envRaw === "false")
+    return { enabled: false, fps, firstFrameTimeoutMs, source: "env" };
+  if (envRaw === "1" || envRaw === "true")
+    return { enabled: true, fps, firstFrameTimeoutMs, source: "env" };
+  const cfgEnabled = cfg?.observe?.mirror?.enabled;
+  if (typeof cfgEnabled === "boolean")
+    return { enabled: cfgEnabled, fps, firstFrameTimeoutMs, source: "config" };
+  return { enabled: true, fps, firstFrameTimeoutMs, source: "default" };
+}
+var warnedBadConfig, DEFAULT_OBSERVE_PORT, DEFAULT_MIRROR_FPS, MIRROR_FPS_MIN, MIRROR_FPS_MAX, MIRROR_FIRST_FRAME_TIMEOUT_MIN_MS, MIRROR_FIRST_FRAME_TIMEOUT_MAX_MS;
+var init_project_config = __esm({
+  "packages/rn-dev-agent-core/dist/project-config.js"() {
+    "use strict";
+    init_storage();
+    init_logger();
+    init_sources();
+    warnedBadConfig = false;
+    DEFAULT_OBSERVE_PORT = 7333;
+    DEFAULT_MIRROR_FPS = 20;
+    MIRROR_FPS_MIN = 5;
+    MIRROR_FPS_MAX = 30;
+    MIRROR_FIRST_FRAME_TIMEOUT_MIN_MS = 1e3;
+    MIRROR_FIRST_FRAME_TIMEOUT_MAX_MS = 12e4;
+  }
+});
+
+// packages/rn-dev-agent-core/dist/domain/maestro-validator.js
+import { join as join14, dirname as dirname6, isAbsolute as isAbsolute2, sep as sep2 } from "node:path";
+import { readFileSync as readFileSync10, realpathSync as realpathSync4 } from "node:fs";
+function isValidBundleId(s) {
+  if (typeof s !== "string")
+    return false;
+  if (s.length === 0 || s.length >= BUNDLE_ID_MAX_LEN)
+    return false;
+  return BUNDLE_ID_RE.test(s);
+}
+function assertValidBundleId(s, context) {
+  if (!isValidBundleId(s)) {
+    const preview = JSON.stringify(s).slice(0, 80);
+    throw new MaestroValidationError(`Invalid bundle ID for ${context}: ${preview}`);
+  }
+}
+function isSafeMaestroScalar(s) {
+  if (typeof s !== "string")
+    return false;
+  if (s.length > SCALAR_MAX_LEN)
+    return false;
+  if (UNSAFE_SCALAR_RE.test(s))
+    return false;
+  return true;
+}
+function buildMaestroFlow(opts, commands) {
+  if (opts.appId !== void 0) {
+    assertValidBundleId(opts.appId, "appId header");
+  }
+  for (const cmd of commands) {
+    validateCommand(cmd);
+  }
+  const headerYaml = opts.appId ? import_yaml2.default.stringify({ appId: opts.appId }) : "";
+  const bodyYaml = import_yaml2.default.stringify(commands);
+  return `${headerYaml}---
+${bodyYaml}`;
+}
+function validateCommand(cmd) {
+  if (cmd === null || cmd === void 0) {
+    throw new MaestroValidationError("Command is null/undefined");
+  }
+  if (typeof cmd === "string") {
+    if (!isSafeMaestroScalar(cmd)) {
+      throw new MaestroValidationError(`Unsafe shorthand command: ${JSON.stringify(cmd).slice(0, 80)}`);
+    }
+    if (DENIED_COMMANDS.has(cmd)) {
+      throw new MaestroValidationError(`Command not allowed (denied by default): ${cmd}`);
+    }
+    if (!ALLOWED_COMMANDS.has(cmd)) {
+      throw new MaestroValidationError(`Command not in allowlist: ${cmd}`);
+    }
+    return;
+  }
+  if (typeof cmd !== "object") {
+    throw new MaestroValidationError(`Command is not an object or string: ${typeof cmd}`);
+  }
+  const keys = Object.keys(cmd);
+  if (keys.length !== 1) {
+    throw new MaestroValidationError(`Command must have exactly one root key, got ${keys.length}: ${keys.join(", ")}`);
+  }
+  const key = keys[0];
+  if (DENIED_COMMANDS.has(key)) {
+    throw new MaestroValidationError(`Command not allowed (denied by default): ${key}`);
+  }
+  if (!ALLOWED_COMMANDS.has(key)) {
+    throw new MaestroValidationError(`Command not in allowlist: ${key}`);
+  }
+  if (key === "runFlow") {
+    validateRunFlowValue(cmd[key]);
+    return;
+  }
+  validateValue(cmd[key]);
+}
+function validateRunFlowValue(v) {
+  if (typeof v === "string") {
+    if (!isSafeMaestroScalar(v)) {
+      throw new MaestroValidationError(`Unsafe runFlow file ref: ${JSON.stringify(v).slice(0, 80)}`);
+    }
+    return;
+  }
+  if (v === null || typeof v !== "object" || Array.isArray(v)) {
+    throw new MaestroValidationError(`runFlow value must be a file string or an object, got ${Array.isArray(v) ? "array" : typeof v}`);
+  }
+  const obj = v;
+  if ("file" in obj && (typeof obj.file !== "string" || !isSafeMaestroScalar(obj.file))) {
+    throw new MaestroValidationError(`runFlow.file must be a safe scalar string`);
+  }
+  if ("when" in obj)
+    validateValue(obj.when);
+  if ("commands" in obj) {
+    if (!Array.isArray(obj.commands)) {
+      throw new MaestroValidationError(`runFlow.commands must be an array`);
+    }
+    for (const c of obj.commands)
+      validateCommand(c);
+  }
+  for (const [k, val] of Object.entries(obj)) {
+    if (k === "file" || k === "when" || k === "commands")
+      continue;
+    if (!isSafeMaestroScalar(k)) {
+      throw new MaestroValidationError(`Unsafe runFlow key: ${JSON.stringify(k).slice(0, 80)}`);
+    }
+    validateValue(val);
+  }
+}
+function validateValue(v) {
+  if (v === null || v === void 0)
+    return;
+  if (typeof v === "boolean" || typeof v === "number")
+    return;
+  if (typeof v === "string") {
+    if (!isSafeMaestroScalar(v)) {
+      throw new MaestroValidationError(`Unsafe scalar value: ${JSON.stringify(v).slice(0, 80)}`);
+    }
+    return;
+  }
+  if (Array.isArray(v)) {
+    for (const item of v)
+      validateValue(item);
+    return;
+  }
+  if (typeof v === "object") {
+    for (const [key, value] of Object.entries(v)) {
+      if (!isSafeMaestroScalar(key)) {
+        throw new MaestroValidationError(`Unsafe scalar key: ${JSON.stringify(key).slice(0, 80)}`);
+      }
+      validateValue(value);
+    }
+    return;
+  }
+  throw new MaestroValidationError(`Unsupported value type: ${typeof v}`);
+}
+function asRunFlow(cmd) {
+  if (!cmd || typeof cmd !== "object" || Array.isArray(cmd))
+    return null;
+  const keys = Object.keys(cmd);
+  if (keys.length !== 1 || keys[0] !== "runFlow")
+    return null;
+  const v = cmd.runFlow;
+  if (typeof v === "string")
+    return { file: v };
+  if (v && typeof v === "object" && !Array.isArray(v)) {
+    const o = v;
+    return {
+      file: typeof o.file === "string" ? o.file : void 0,
+      when: o.when,
+      commands: Array.isArray(o.commands) ? o.commands : void 0
+    };
+  }
+  return null;
+}
+function resolveRunFlowTarget(file, opts) {
+  if (!opts.flowDir || !opts.flowRoot) {
+    throw new MaestroValidationError(`runFlow file ref "${file}" requires a flow root context (flowDir + flowRoot)`);
+  }
+  if (isAbsolute2(file)) {
+    throw new MaestroValidationError(`runFlow file ref must be relative, got absolute: ${file}`);
+  }
+  if (file.split(/[\\/]/).includes("..")) {
+    throw new MaestroValidationError(`runFlow file ref must not contain '..': ${file}`);
+  }
+  if (!/\.ya?ml$/i.test(file)) {
+    throw new MaestroValidationError(`runFlow file ref must be a .yaml/.yml file: ${file}`);
+  }
+  const realpath = opts.realpathFn ?? realpathSync4;
+  let resolved;
+  let rootReal;
+  try {
+    resolved = realpath(join14(opts.flowDir, file));
+    rootReal = realpath(opts.flowRoot);
+  } catch (err) {
+    throw new MaestroValidationError(`runFlow file ref "${file}" could not be resolved: ${err.message}`);
+  }
+  if (resolved !== rootReal && !resolved.startsWith(rootReal + sep2)) {
+    throw new MaestroValidationError(`runFlow file ref "${file}" escapes the flow root`);
+  }
+  return resolved;
+}
+function expandRunFlows(commands, opts) {
+  const out = [];
+  for (const cmd of commands) {
+    const rf = asRunFlow(cmd);
+    if (!rf) {
+      out.push(cmd);
+      continue;
+    }
+    if (rf.file !== void 0) {
+      const depth = opts._depth ?? 0;
+      const max = opts.maxRunFlowDepth ?? 5;
+      if (depth >= max) {
+        throw new MaestroValidationError(`runFlow nesting exceeded max depth ${max}`);
+      }
+      const resolved = resolveRunFlowTarget(rf.file, opts);
+      const visited = opts._visited ?? /* @__PURE__ */ new Set();
+      if (visited.has(resolved)) {
+        throw new MaestroValidationError(`runFlow cycle detected at "${rf.file}"`);
+      }
+      const readFile3 = opts.readFileFn ?? ((p) => readFileSync10(p, "utf8"));
+      let subText;
+      try {
+        subText = readFile3(resolved);
+      } catch (err) {
+        throw new MaestroValidationError(`runFlow file "${rf.file}" could not be read: ${err.message}`);
+      }
+      const sub = parseAndValidateFlow(subText, {
+        ...opts,
+        rejectHeader: true,
+        flowDir: dirname6(resolved),
+        _depth: depth + 1,
+        _visited: /* @__PURE__ */ new Set([...visited, resolved])
+      });
+      if (rf.when !== void 0) {
+        out.push({ runFlow: { when: rf.when, commands: sub.commands } });
+      } else {
+        out.push(...sub.commands);
+      }
+    } else {
+      const inner = rf.commands ? expandRunFlows(rf.commands, { ...opts, _depth: (opts._depth ?? 0) + 1 }) : [];
+      const wrapped = { commands: inner };
+      if (rf.when !== void 0)
+        wrapped.when = rf.when;
+      out.push({ runFlow: wrapped });
+    }
+  }
+  return out;
+}
+function parseAndValidateFlow(yamlText, opts = {}) {
+  let docs;
+  try {
+    docs = import_yaml2.default.parseAllDocuments(yamlText, { strict: true });
+  } catch (err) {
+    throw new MaestroValidationError(`YAML parse error: ${err.message}`);
+  }
+  if (docs.length === 0) {
+    throw new MaestroValidationError("Empty Maestro flow");
+  }
+  let appId;
+  let body;
+  if (docs.length === 1) {
+    body = docs[0].toJS();
+  } else {
+    const header = docs[0].toJS() ?? {};
+    if (header && typeof header === "object" && "appId" in header) {
+      if (opts.rejectHeader) {
+        throw new MaestroValidationError("Header (appId) not allowed in this context");
+      }
+      const rawAppId = header.appId;
+      assertValidBundleId(rawAppId, "parsed flow header");
+      appId = rawAppId;
+    }
+    body = docs[docs.length - 1].toJS();
+  }
+  if (body === null || body === void 0) {
+    body = [];
+  }
+  if (!Array.isArray(body)) {
+    throw new MaestroValidationError(`Flow body must be an array, got ${typeof body}`);
+  }
+  const expanded = expandRunFlows(body, opts);
+  for (const cmd of expanded) {
+    validateCommand(cmd);
+  }
+  const raw = buildMaestroFlow(appId !== void 0 ? { appId } : {}, expanded);
+  return { appId, commands: expanded, raw };
+}
+var import_yaml2, MaestroValidationError, BUNDLE_ID_RE, BUNDLE_ID_MAX_LEN, UNSAFE_SCALAR_RE, SCALAR_MAX_LEN, ALLOWED_COMMANDS, DENIED_COMMANDS;
+var init_maestro_validator = __esm({
+  "packages/rn-dev-agent-core/dist/domain/maestro-validator.js"() {
+    "use strict";
+    import_yaml2 = __toESM(require_dist2(), 1);
+    MaestroValidationError = class extends Error {
+      constructor(message) {
+        super(message);
+        this.name = "MaestroValidationError";
+      }
+    };
+    BUNDLE_ID_RE = /^[A-Za-z][A-Za-z0-9_-]*(\.[A-Za-z][A-Za-z0-9_-]*)+$/;
+    BUNDLE_ID_MAX_LEN = 256;
+    UNSAFE_SCALAR_RE = /[\u0000-\u0008\u000A-\u001F\u007F-\u009F\u2028\u2029]/;
+    SCALAR_MAX_LEN = 4096;
+    ALLOWED_COMMANDS = /* @__PURE__ */ new Set([
+      "launchApp",
+      "tapOn",
+      "doubleTapOn",
+      "longPressOn",
+      "assertVisible",
+      "assertNotVisible",
+      "inputText",
+      "eraseText",
+      "scroll",
+      "scrollUntilVisible",
+      "swipe",
+      // Multi-LLM review caught these: test-recorder-generators emits the
+      // shorthand `- swipeUp` / `- swipeDown` / `- swipeLeft` / `- swipeRight`
+      // top-level commands. Without these in the allowlist, every recorded
+      // action containing a swipe would be refused at replay time. The
+      // deepsec attack vector (newline-injected direction) is already
+      // mitigated by isSafeMaestroScalar catching the embedded newline.
+      "swipeUp",
+      "swipeDown",
+      "swipeLeft",
+      "swipeRight",
+      "back",
+      "pressKey",
+      "openLink",
+      "waitForAnimationToEnd",
+      "extendedWaitUntil",
+      "hideKeyboard",
+      "takeScreenshot",
+      "clearState",
+      "addMedia",
+      "copyTextFrom",
+      "pasteText",
+      "travel",
+      "setLocation",
+      "setAirplaneMode",
+      "killApp",
+      "stopApp",
+      "tap",
+      // GH #186: runFlow (conditional dialog handling — deep-link "Open in", Expo
+      // dev-client picker). Validated specially (validateRunFlowValue) so nested
+      // `commands` get full command-level allowlist checks, and {file} refs are
+      // securely resolved + expanded inline (expandRunFlows) — they are NOT passed
+      // through generic validateValue, which would miss nested denied commands.
+      "runFlow"
+    ]);
+    DENIED_COMMANDS = /* @__PURE__ */ new Set([
+      "runScript",
+      "evalScript",
+      "startRecording",
+      "stopRecording"
+    ]);
+  }
+});
+
+// packages/rn-dev-agent-core/dist/domain/maestro-runner-pin.json
+var maestro_runner_pin_default;
+var init_maestro_runner_pin = __esm({
+  "packages/rn-dev-agent-core/dist/domain/maestro-runner-pin.json"() {
+    maestro_runner_pin_default = {
+      version: "1.1.24",
+      sha256: {
+        "darwin-arm64": "170f12521de83322823dd5fc0ce16e48abeba9952cdbb242670592566c2fd1f3",
+        "darwin-x64": "af7f5ea044afc72ea780c835f05b32203e443d2e26d310a864bfb2bc84959bf6",
+        "linux-x64": "e9bdef6f08f855ca1a884f99b54a519a1eae0a342917181a53eb414a5b00d6d8",
+        "linux-arm64": "8d8a6483ad04da2109636b7192398750657801b8a8d512688d1be3b033a105b8"
+      },
+      archiveSha256: {
+        "darwin-arm64": "0b5b0f087815c5ff348e74a6dd7df260ed50a5588d5ff3e224c66a60d948c936",
+        "darwin-x64": "2ecc5c55d9437ee820691faf43097b5ba8d1ff797db49da9c96ac2631aac03c5",
+        "linux-x64": "f1963b7e3f8bf598d3b14f998fef3dc690e579906f340636cfd9350dea1d67b0",
+        "linux-arm64": "605db5645b161b610e999bcf8235650d41aac8929bbd0f818a592d13b958f148"
+      },
+      knownQuirks: [
+        {
+          id: "android-pre-o-unsupported",
+          ref: "GH #741",
+          note: "bundled UiAutomator2 server APK declares minSdk 26; API 23-25 installs fail with INSTALL_FAILED_OLDER_SDK"
+        }
+      ]
+    };
+  }
+});
+
+// packages/rn-dev-agent-core/dist/domain/engine-pin.js
+import { createHash as createHash5 } from "node:crypto";
+import { accessSync, chmodSync as chmodSync3, constants as constants2, copyFileSync as copyFileSync2, lstatSync as lstatSync5, mkdirSync as mkdirSync7, mkdtempSync, readFileSync as readFileSync11, readdirSync as readdirSync4, readlinkSync as readlinkSync2, rmSync as rmSync4, symlinkSync, unlinkSync as unlinkSync5 } from "node:fs";
+import { homedir as homedir5 } from "node:os";
+import { basename as basename2, dirname as dirname7, join as join15, relative, resolve as resolve2, sep as sep3 } from "node:path";
+import { gunzipSync } from "node:zlib";
+function parseActionEnginePinVersion(enginePin) {
+  const match = ACTION_ENGINE_PIN_RE.exec(enginePin.trim());
+  return match?.[1] ?? null;
+}
+function engineLabel(_runner) {
+  return `the pinned maestro-runner ${MAESTRO_RUNNER_PIN.version}`;
+}
+function preOAndroidApiRefusal(apiLevel) {
+  if (apiLevel >= MAESTRO_RUNNER_MIN_ANDROID_API)
+    return null;
+  return `maestro_run refused: Android API ${apiLevel} is below API ${MAESTRO_RUNNER_MIN_ANDROID_API}, the minimum the pinned maestro-runner ${MAESTRO_RUNNER_PIN.version} can drive \u2014 its bundled UiAutomator2 server APK declares minSdk ${MAESTRO_RUNNER_MIN_ANDROID_API}, so the install fails with INSTALL_FAILED_OLDER_SDK. ${PRE_O_REMEDY}`;
+}
+function isOlderSdkInstallFailure(output) {
+  return output.split(/\r?\n/).some((line) => line.includes("INSTALL_FAILED_OLDER_SDK") && INSTALL_REJECT_CONTEXT.test(line.replace(OLDER_SDK_TOKEN, " ")));
+}
+function olderSdkInstallDiagnosis(runner = "maestro-runner") {
+  return `The device rejected the bundled UiAutomator2 server APK with INSTALL_FAILED_OLDER_SDK: ${engineLabel(runner)} requires Android API ${MAESTRO_RUNNER_MIN_ANDROID_API}+ and this device is below it. ${PRE_O_REMEDY}`;
+}
+function compareVersions(a, b) {
+  const pa = a.split(".").map(Number);
+  const pb = b.split(".").map(Number);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const x = pa[i] ?? 0;
+    const y = pb[i] ?? 0;
+    if (x > y)
+      return 1;
+    if (x < y)
+      return -1;
+  }
+  return 0;
+}
+function meetsMaestroRunnerFloor(version2) {
+  return /^\d+(?:\.\d+)*$/.test(version2) && compareVersions(version2, MAESTRO_RUNNER_PIN.version) >= 0;
+}
+function pinCacheRoot(home = homedir5()) {
+  const override = process.env.RN_DEV_AGENT_RUNNER_CACHE;
+  const base = override && override.length > 0 ? override : join15(home, ".cache", "rn-dev-agent");
+  return join15(base, "maestro-runner", MAESTRO_RUNNER_PIN.version);
+}
+function pinnedRunnerBinPath(home) {
+  return join15(pinCacheRoot(home), "bin", "maestro-runner");
+}
+function isPinCacheMetadataPath(relPath) {
+  return relPath.split(/[/\\]/).some((part) => part.startsWith("._") || part === "PaxHeader" || part.startsWith("PaxHeaders."));
+}
+function tarText(buffer, offset, length) {
+  const end = buffer.indexOf(0, offset);
+  return buffer.subarray(offset, end >= offset && end < offset + length ? end : offset + length).toString();
+}
+function expectedPayloadEntries(archive) {
+  const tar = gunzipSync(archive, { maxOutputLength: 1024 * 1024 * 1024 });
+  const raw = [];
+  let offset = 0;
+  let longPath = null;
+  while (offset + 512 <= tar.length) {
+    const header = tar.subarray(offset, offset + 512);
+    if (header.every((byte) => byte === 0))
+      break;
+    const prefix = tarText(header, 345, 155);
+    const name = tarText(header, 0, 100);
+    const sizeText = tarText(header, 124, 12).trim();
+    const size = Number.parseInt(sizeText || "0", 8);
+    if (!Number.isSafeInteger(size) || size < 0 || offset + 512 + size > tar.length)
+      return null;
+    const type = String.fromCharCode(header[156] || 48);
+    const data = tar.subarray(offset + 512, offset + 512 + size);
+    const archivePath = longPath ?? [prefix, name].filter(Boolean).join("/");
+    longPath = null;
+    if (type === "L") {
+      longPath = data.toString().split("\0")[0].trim();
+    } else if (type === "0" || type === "\0" || type === "2" || type === "5") {
+      raw.push({ path: archivePath, type, data, link: tarText(header, 157, 100) });
+    }
+    offset += 512 + Math.ceil(size / 512) * 512;
+  }
+  const runner = raw.find((entry) => (entry.type === "0" || entry.type === "\0") && (entry.path === "bin/maestro-runner" || entry.path.endsWith("/bin/maestro-runner")));
+  if (!runner)
+    return null;
+  const rootPrefix = runner.path.slice(0, -"bin/maestro-runner".length);
+  const expected = /* @__PURE__ */ new Map();
+  for (const entry of raw) {
+    if (!entry.path.startsWith(rootPrefix) || entry.type === "5")
+      continue;
+    const path = entry.path.slice(rootPrefix.length).replace(/^\.\//, "");
+    if (!path || path.startsWith("/") || path.split("/").some((part) => part === ".."))
+      return null;
+    if (isPinCacheMetadataPath(path))
+      continue;
+    if (entry.type === "2") {
+      expected.set(path, { kind: "symlink", target: entry.link });
+    } else {
+      expected.set(path, {
+        kind: "file",
+        sha256: createHash5("sha256").update(entry.data).digest("hex")
+      });
+    }
+  }
+  return expected;
+}
+function payloadMatchesPinnedArchive(root, archive, expectedArchiveSha256) {
+  if (createHash5("sha256").update(archive).digest("hex") !== expectedArchiveSha256)
+    return false;
+  const expected = expectedPayloadEntries(archive);
+  if (!expected)
+    return false;
+  const seen = /* @__PURE__ */ new Set();
+  const visit = (directory) => {
+    for (const entry of readdirSync4(directory, { withFileTypes: true })) {
+      const path = join15(directory, entry.name);
+      const rel = relative(root, path).split(sep3).join("/");
+      if (rel === ".payload.tar.gz" || isPinCacheMetadataPath(rel))
+        continue;
+      if (entry.isDirectory()) {
+        if (!visit(path))
+          return false;
+        continue;
+      }
+      const wanted = expected.get(rel);
+      if (!wanted)
+        return false;
+      seen.add(rel);
+      if (entry.isSymbolicLink()) {
+        if (wanted.kind !== "symlink" || readlinkSync2(path) !== wanted.target)
+          return false;
+        continue;
+      }
+      if (!entry.isFile() || wanted.kind !== "file")
+        return false;
+      const sha2562 = createHash5("sha256").update(readFileSync11(path)).digest("hex");
+      if (sha2562 !== wanted.sha256)
+        return false;
+    }
+    return true;
+  };
+  return visit(root) && seen.size === expected.size;
+}
+function installedPayloadMatchesPin(platformKey, root = pinCacheRoot()) {
+  try {
+    const expectedArchiveSha = pinnedArchiveSha256(platformKey);
+    if (!expectedArchiveSha)
+      return false;
+    const archive = readFileSync11(join15(root, ".payload.tar.gz"));
+    return payloadMatchesPinnedArchive(root, archive, expectedArchiveSha);
+  } catch {
+    return false;
+  }
+}
+function isRegularPinCacheBinary(path) {
+  try {
+    const stat2 = lstatSync5(path);
+    const ancestors = [dirname7(path), dirname7(dirname7(path)), dirname7(dirname7(dirname7(path)))];
+    const contained2 = ancestors.every((ancestor) => {
+      const ancestorStat = lstatSync5(ancestor);
+      return ancestorStat.isDirectory() && !ancestorStat.isSymbolicLink();
+    });
+    accessSync(path, constants2.X_OK);
+    return contained2 && stat2.isFile() && !stat2.isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
+function getMaestroRunnerPath() {
+  const path = pinnedRunnerBinPath();
+  return isRegularPinCacheBinary(path) ? path : null;
+}
+function runnerCacheVersionsRoot() {
+  return dirname7(pinCacheRoot());
+}
+function pinCacheVersionForPath(path) {
+  if (!isRegularPinCacheBinary(path) || basename2(path) !== "maestro-runner")
+    return null;
+  const versionDir = dirname7(dirname7(resolve2(path)));
+  if (dirname7(versionDir) !== resolve2(runnerCacheVersionsRoot()))
+    return null;
+  const version2 = basename2(versionDir);
+  return /^\d+(?:\.\d+)*$/.test(version2) ? version2 : null;
+}
+function getMaestroRunnerDetectionPath() {
+  const exact = getMaestroRunnerPath();
+  if (exact)
+    return exact;
+  const root = runnerCacheVersionsRoot();
+  try {
+    const candidates = readdirSync4(root, { withFileTypes: true }).filter((entry) => entry.isDirectory() && /^\d+(?:\.\d+)*$/.test(entry.name)).map((entry) => ({
+      version: entry.name,
+      path: join15(root, entry.name, "bin", "maestro-runner")
+    })).filter((candidate) => isRegularPinCacheBinary(candidate.path)).sort((left, right) => compareVersions(right.version, left.version));
+    return candidates[0]?.path ?? null;
+  } catch {
+    return null;
+  }
+}
+function nodePlatformKey(platform = process.platform, arch = process.arch) {
+  return `${platform}-${arch}`;
+}
+function pinArchiveCoords(platformKey) {
+  switch (platformKey) {
+    case "darwin-arm64":
+      return { os: "darwin", arch: "arm64" };
+    case "darwin-x64":
+      return { os: "darwin", arch: "amd64" };
+    case "linux-x64":
+      return { os: "linux", arch: "amd64" };
+    case "linux-arm64":
+      return { os: "linux", arch: "arm64" };
+    default:
+      return null;
+  }
+}
+function buildReplayEngineStatus(cls, version2, _cliPresent, extras = {}) {
+  const engine = cls === "pinned-ok" ? "maestro-runner" : "none";
+  return {
+    engine,
+    version: version2,
+    pin: { pinned: MAESTRO_RUNNER_PIN.version, status: cls },
+    quirks: MAESTRO_RUNNER_PIN.knownQuirks.map((q) => q.id),
+    selectedPath: extras.selectedPath ?? null,
+    provenance: extras.provenance ?? (cls === "not-installed" ? "none" : "pin-cache")
+  };
+}
+function enginePinCaveat(status) {
+  const cls = status.pin.status;
+  if (cls === "drift-newer" || cls === "drift-older") {
+    return `maestro-runner ${status.version} differs from the tested pin ${status.pin.pinned} (untested drift \u2014 B223-class behavior changes arrive silently; see the upgrade ritual in engine-pin.ts)`;
+  }
+  if (cls === "checksum-mismatch") {
+    return `maestro-runner pin-cache binary checksum does not match the ${status.pin.pinned} manifest \u2014 possible corruption or tampering; reinstall via ensure-maestro-runner.sh`;
+  }
+  return null;
+}
+function isRegexShapedSelector(value) {
+  for (let i = 0; i < value.length; i += 1) {
+    const ch = value[i];
+    if (ch === "\\")
+      return true;
+    if (REGEX_METACHARACTERS.has(ch))
+      return true;
+  }
+  return false;
+}
+function selectorTextValues(value, found) {
+  if (typeof value === "string") {
+    if (isRegexShapedSelector(value))
+      found.push(value);
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const entry of value)
+      selectorTextValues(entry, found);
+    return;
+  }
+  if (!value || typeof value !== "object")
+    return;
+  for (const [key, nested] of Object.entries(value)) {
+    if (key === "text" || RELATIVE_SELECTOR_KEYS.has(key)) {
+      selectorTextValues(nested, found);
+    }
+  }
+}
+function conditionTextValues(value, found) {
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    return;
+  for (const [key, nested] of Object.entries(value)) {
+    if (key === "visible" || key === "notVisible")
+      selectorTextValues(nested, found);
+  }
+}
+function findRegexTextSelectors(commands) {
+  const found = [];
+  const visit = (value) => {
+    if (Array.isArray(value)) {
+      for (const entry of value)
+        visit(entry);
+      return;
+    }
+    if (value && typeof value === "object") {
+      for (const [key, nested] of Object.entries(value)) {
+        if (TEXT_SELECTOR_KEYS.has(key))
+          selectorTextValues(nested, found);
+        if (key === "scrollUntilVisible" && nested && typeof nested === "object") {
+          selectorTextValues(nested.element, found);
+        }
+        if (key === "extendedWaitUntil")
+          conditionTextValues(nested, found);
+        if (key === "when")
+          conditionTextValues(nested, found);
+        visit(nested);
+      }
+    }
+  };
+  visit(commands);
+  return found;
+}
+function pinCorrection(status, platformKey = nodePlatformKey()) {
+  const cls = status.pin.status;
+  const pinned = status.pin.pinned;
+  const installed = status.version ?? "unknown";
+  const install = `Install attested ${pinned} (floor >= ${pinned}) via ${PINNED_RUNNER_INSTALL_HINT} (session pin-cache; do not use PATH or brew maestro).`;
+  if (pinArchiveCoords(platformKey) === null) {
+    return `maestro-runner is unsupported on ${platformKey}. Supported platforms: darwin-arm64, darwin-x64, linux-x64, linux-arm64. ${install}`;
+  }
+  switch (cls) {
+    case "not-installed":
+      return `Session maestro-runner ${pinned} is not installed. ${install}`;
+    case "drift-older":
+      return `Session maestro-runner ${installed} is older than the required pin ${pinned}. ${install}`;
+    case "drift-newer":
+      return `Session maestro-runner ${installed} is newer than the attested default ${pinned} and is not executed without attestation. ${install}`;
+    case "checksum-mismatch":
+      return `Session maestro-runner binary checksum does not match the ${pinned} pin manifest. ${install}`;
+    case "unknown-version":
+      return `Session maestro-runner version could not be read. ${install}`;
+    case "unverified":
+      if (status.version && compareVersions(status.version, pinned) > 0) {
+        return `UNVERIFIED_NEWER_DRIFT: Session pin-cache contains an unverified newer maestro-runner entry ${installed}; its directory name is not trusted binary evidence and it will not be executed. ${install}`;
+      }
+      return `Session maestro-runner ${installed} could not be checksum-verified on ${platformKey}. ${install}`;
+    case "pinned-ok":
+      return `Session maestro-runner ${pinned} is selected from the pin-cache.`;
+  }
+}
+function exactPinRefusal(status, platformKey = nodePlatformKey()) {
+  if (!status) {
+    return `maestro_run refused: session runner ${MAESTRO_RUNNER_PIN.version} could not be detected. ${pinCorrection(buildReplayEngineStatus("not-installed", null, false), platformKey)}`;
+  }
+  if (status.pin.status === "pinned-ok")
+    return null;
+  return `maestro_run refused: ${pinCorrection(status, platformKey)}`;
+}
+async function immediateRunnerPinRefusal(runnerPath, resolveStatus = () => getEngineStatus().catch(() => null)) {
+  const status = await resolveStatus();
+  const refusal = exactPinRefusal(status);
+  if (refusal)
+    return `RUNNER_PIN_CHANGED: ${refusal}`;
+  const canonicalPath3 = getMaestroRunnerPath();
+  if (!canonicalPath3 || !status?.selectedPath) {
+    return "RUNNER_PIN_CHANGED: verified runner path disappeared before execution.";
+  }
+  if (resolve2(canonicalPath3) !== resolve2(runnerPath) || resolve2(status.selectedPath) !== resolve2(runnerPath)) {
+    return "RUNNER_PIN_CHANGED: verified runner path changed before execution.";
+  }
+  return null;
+}
+function copyPayloadTree(source, destination) {
+  const sourceStat = lstatSync5(source);
+  if (!sourceStat.isDirectory() || sourceStat.isSymbolicLink()) {
+    throw new Error(`RUNNER_PIN_CHANGED: payload directory changed before execution.`);
+  }
+  mkdirSync7(destination, { recursive: true });
+  for (const entry of readdirSync4(source, { withFileTypes: true })) {
+    const sourcePath = join15(source, entry.name);
+    const destinationPath = join15(destination, entry.name);
+    const stat2 = lstatSync5(sourcePath);
+    if (stat2.isDirectory() && !stat2.isSymbolicLink()) {
+      copyPayloadTree(sourcePath, destinationPath);
+      chmodSync3(destinationPath, stat2.mode & 511);
+    } else if (stat2.isFile() && !stat2.isSymbolicLink()) {
+      copyFileSync2(sourcePath, destinationPath, constants2.COPYFILE_EXCL | constants2.COPYFILE_FICLONE);
+      chmodSync3(destinationPath, stat2.mode & 511);
+    } else if (stat2.isSymbolicLink()) {
+      symlinkSync(readlinkSync2(sourcePath), destinationPath);
+    } else {
+      throw new Error(`RUNNER_PIN_CHANGED: unsupported payload entry ${sourcePath}.`);
+    }
+  }
+}
+async function withImmediatePinnedRunner(runnerPath, resolveStatus, execute2) {
+  const refusal = await immediateRunnerPinRefusal(runnerPath, resolveStatus);
+  if (refusal)
+    throw new Error(refusal);
+  const expectedSha256 = pinnedSha256(nodePlatformKey());
+  if (!expectedSha256) {
+    throw new Error("RUNNER_PIN_CHANGED: runner checksum is unavailable for this platform.");
+  }
+  const snapshotRoot = mkdtempSync(join15(runnerCacheVersionsRoot(), `.spawn-${MAESTRO_RUNNER_PIN.version}-`));
+  try {
+    copyPayloadTree(pinCacheRoot(), snapshotRoot);
+    const snapshotRunner = join15(snapshotRoot, "bin", "maestro-runner");
+    const snapshotStat = lstatSync5(snapshotRunner);
+    if (!snapshotStat.isFile() || snapshotStat.isSymbolicLink() || !installedPayloadMatchesPin(nodePlatformKey(), snapshotRoot) || createHash5("sha256").update(readFileSync11(snapshotRunner)).digest("hex") !== expectedSha256) {
+      throw new Error("RUNNER_PIN_CHANGED: payload content changed before execution.");
+    }
+    const helper = verifiedNativePublicationHelper();
+    const snapshotHelper = join15(snapshotRoot, ".runner-exec");
+    copyFileSync2(helper.path, snapshotHelper, constants2.COPYFILE_EXCL | constants2.COPYFILE_FICLONE);
+    chmodSync3(snapshotHelper, 320);
+    if (createHash5("sha256").update(readFileSync11(snapshotHelper)).digest("hex") !== helper.sha256) {
+      throw new Error("RUNNER_PIN_CHANGED: execution binding changed before execution.");
+    }
+    for (const entry of readdirSync4(snapshotRoot, { recursive: true, withFileTypes: true })) {
+      const entryPath = join15(entry.parentPath, entry.name);
+      if (entry.isDirectory())
+        chmodSync3(entryPath, 320);
+      else if (entry.isFile()) {
+        chmodSync3(entryPath, entryPath === snapshotRunner || entryPath === snapshotHelper ? 320 : 256);
+      }
+    }
+    chmodSync3(snapshotRoot, 320);
+    const openedRunner = lstatSync5(snapshotRunner);
+    return await execute2(snapshotHelper, [
+      "--exec-file",
+      snapshotRunner,
+      String(openedRunner.dev),
+      String(openedRunner.ino),
+      "--"
+    ]);
+  } finally {
+    try {
+      chmodSync3(snapshotRoot, 448);
+      for (const entry of readdirSync4(snapshotRoot, { recursive: true, withFileTypes: true })) {
+        const entryPath = join15(entry.parentPath, entry.name);
+        if (entry.isDirectory())
+          chmodSync3(entryPath, 448);
+        else if (entry.isFile())
+          chmodSync3(entryPath, 384);
+      }
+    } catch {
+    }
+    rmSync4(snapshotRoot, { recursive: true, force: true });
+  }
+}
+function pinnedSha256(platformKey) {
+  return testAttestation?.sha256 ?? MAESTRO_RUNNER_PIN.sha256[platformKey];
+}
+function pinnedArchiveSha256(platformKey) {
+  return testAttestation?.archiveSha256 ?? MAESTRO_RUNNER_PIN.archiveSha256[platformKey];
+}
+function defaultHashFile(bin) {
+  return createHash5("sha256").update(readFileSync11(bin)).digest("hex");
+}
+async function detect(resolvers) {
+  const binPath = (resolvers.binPath ?? getMaestroRunnerDetectionPath)();
+  const platformKey = resolvers.platformKey ?? nodePlatformKey();
+  if (!binPath) {
+    return buildReplayEngineStatus("not-installed", null, false, {
+      selectedPath: null,
+      provenance: "none"
+    });
+  }
+  const cacheVersion = pinCacheVersionForPath(binPath);
+  if (cacheVersion && cacheVersion !== MAESTRO_RUNNER_PIN.version) {
+    let sha2563 = null;
+    try {
+      sha2563 = (resolvers.hashFile ?? defaultHashFile)(binPath);
+    } catch {
+      sha2563 = null;
+    }
+    const expectedSha2562 = TRUSTED_DRIFT_SHA256[cacheVersion]?.[platformKey];
+    if (!sha2563) {
+      return buildReplayEngineStatus("unverified", null, false, {
+        selectedPath: binPath,
+        provenance: "pin-cache"
+      });
+    }
+    const comparison = compareVersions(cacheVersion, MAESTRO_RUNNER_PIN.version);
+    if (!expectedSha2562) {
+      return buildReplayEngineStatus("unverified", cacheVersion, false, {
+        selectedPath: binPath,
+        provenance: "pin-cache"
+      });
+    }
+    if (sha2563 !== expectedSha2562) {
+      return buildReplayEngineStatus("checksum-mismatch", null, false, {
+        selectedPath: binPath,
+        provenance: "pin-cache"
+      });
+    }
+    const cls = comparison < 0 ? "drift-older" : comparison > 0 ? "drift-newer" : "unknown-version";
+    return buildReplayEngineStatus(cls, cacheVersion, false, {
+      selectedPath: binPath,
+      provenance: "pin-cache"
+    });
+  }
+  let sha2562 = null;
+  try {
+    sha2562 = (resolvers.hashFile ?? defaultHashFile)(binPath);
+  } catch {
+    sha2562 = null;
+  }
+  const expectedSha256 = MAESTRO_RUNNER_PIN.sha256[platformKey];
+  if (!expectedSha256 || !sha2562) {
+    return buildReplayEngineStatus("unverified", null, false, {
+      selectedPath: binPath,
+      provenance: "pin-cache"
+    });
+  }
+  if (sha2562 !== expectedSha256) {
+    return buildReplayEngineStatus("checksum-mismatch", null, false, {
+      selectedPath: binPath,
+      provenance: "pin-cache"
+    });
+  }
+  if (!resolvers.binPath && !resolvers.hashFile && !installedPayloadMatchesPin(platformKey)) {
+    return buildReplayEngineStatus("checksum-mismatch", null, false, {
+      selectedPath: binPath,
+      provenance: "pin-cache"
+    });
+  }
+  return buildReplayEngineStatus("pinned-ok", MAESTRO_RUNNER_PIN.version, false, {
+    selectedPath: binPath,
+    provenance: "pin-cache"
+  });
+}
+function getEngineStatus(resolvers) {
+  if (testStatus)
+    return Promise.resolve(testStatus);
+  return detect(resolvers ?? {}).catch(() => buildReplayEngineStatus("unknown-version", null, false));
+}
+var MAESTRO_RUNNER_PIN, TRUSTED_DRIFT_SHA256, ACTION_ENGINE_PIN, ACTION_ENGINE_PIN_RE, HOST_PLUGIN_ROOT, PINNED_RUNNER_INSTALL_HINT, PINNED_RUNNER_DIAGNOSE_HINT, MAESTRO_RUNNER_MIN_ANDROID_API, PRE_O_REMEDY, OLDER_SDK_TOKEN, INSTALL_REJECT_CONTEXT, REGEX_METACHARACTERS, TEXT_SELECTOR_KEYS, RELATIVE_SELECTOR_KEYS, testStatus, testAttestation;
+var init_engine_pin = __esm({
+  "packages/rn-dev-agent-core/dist/domain/engine-pin.js"() {
+    "use strict";
+    init_process_birth();
+    init_maestro_runner_pin();
+    MAESTRO_RUNNER_PIN = Object.freeze({
+      version: maestro_runner_pin_default.version,
+      sha256: Object.freeze({ ...maestro_runner_pin_default.sha256 }),
+      archiveSha256: Object.freeze({ ...maestro_runner_pin_default.archiveSha256 }),
+      knownQuirks: Object.freeze(maestro_runner_pin_default.knownQuirks.map((quirk) => Object.freeze({ ...quirk })))
+    });
+    TRUSTED_DRIFT_SHA256 = Object.freeze({
+      "1.0.9": Object.freeze({
+        "darwin-arm64": "7d3777a67f8cc3d5e3927f498ddda8a56c424a10158f7cd4fa494ecc3ed97923",
+        "darwin-x64": "36f8a973c3231b6b8125db4a3e131b8c3193aec6774145584b18070be979fd5f",
+        "linux-arm64": "a8e8197c63502fba874ce69b908174d46a47c6539025184e3003e70576d9451e",
+        "linux-x64": "bf7e9ef297c35712e9fad0ad56a65b7fd94e1f30168733cf09459b4ea80c4c3e"
+      })
+    });
+    ACTION_ENGINE_PIN = `maestro-runner@${MAESTRO_RUNNER_PIN.version}`;
+    ACTION_ENGINE_PIN_RE = /^maestro-runner@(\d+(?:\.\d+)*)$/;
+    HOST_PLUGIN_ROOT = "${CLAUDE_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}";
+    PINNED_RUNNER_INSTALL_HINT = `bash ${HOST_PLUGIN_ROOT}/scripts/ensure-maestro-runner.sh`;
+    PINNED_RUNNER_DIAGNOSE_HINT = `node ${HOST_PLUGIN_ROOT}/rn-dev-agent-core/dist/maestro-runner-pin.js diagnose`;
+    MAESTRO_RUNNER_MIN_ANDROID_API = 26;
+    PRE_O_REMEDY = "Action replay / E2E via the maestro engine is unsupported on this device; the direct device_* interaction tier still works (rn-android-runner supports API 23+), except for the few device_* paths that fall back to maestro (dev-client picker, system dialogs, device_fill correction), which hit this same limit.";
+    OLDER_SDK_TOKEN = /INSTALL_FAILED_OLDER_SDK/g;
+    INSTALL_REJECT_CONTEXT = /\b(?:adb|install|installing|failure|uiautomator2)\b|\.apk\b/i;
+    REGEX_METACHARACTERS = /* @__PURE__ */ new Set([
+      ".",
+      "^",
+      "$",
+      "*",
+      "+",
+      "?",
+      "(",
+      ")",
+      "[",
+      "]",
+      "{",
+      "}",
+      "|"
+    ]);
+    TEXT_SELECTOR_KEYS = /* @__PURE__ */ new Set([
+      "tapOn",
+      "doubleTapOn",
+      "longPressOn",
+      "assertVisible",
+      "assertNotVisible",
+      "copyTextFrom"
+    ]);
+    RELATIVE_SELECTOR_KEYS = /* @__PURE__ */ new Set([
+      "above",
+      "below",
+      "leftOf",
+      "rightOf",
+      "childOf",
+      "containsChild",
+      "containsDescendants"
+    ]);
+  }
+});
+
+// packages/rn-dev-agent-core/dist/tools/maestro-dispatch.js
+function shouldWarnFallback(reason) {
+  if (warnedFallbackReasons.has(reason))
+    return false;
+  warnedFallbackReasons.add(reason);
+  return true;
+}
+function flowContainsHideKeyboard(commands) {
+  return commands.some((c) => c === "hideKeyboard" || typeof c === "object" && c !== null && "hideKeyboard" in c);
+}
+function chooseMaestroDispatch(inputs) {
+  const runnerPath = (inputs.maestroRunnerPath ?? getMaestroRunnerPath)();
+  if (runnerPath) {
+    return {
+      runner: "maestro-runner",
+      binPath: runnerPath,
+      buildArgs: (platform, flowFile, appFile, deviceId) => [
+        ...appFile ? ["--app-file", appFile] : [],
+        "--platform",
+        platform,
+        ...deviceId ? ["--device", deviceId] : [],
+        "test",
+        flowFile
+      ]
+    };
+  }
+  return {
+    error: `Session maestro-runner ${MAESTRO_RUNNER_PIN.version} is not installed in the pin-cache. Install attested ${MAESTRO_RUNNER_PIN.version} (floor >= ${MAESTRO_RUNNER_PIN.version}) via ${PINNED_RUNNER_INSTALL_HINT}. Ambient PATH maestro-runner, ~/.maestro-runner, and brew maestro are never used.`,
+    hint: `run ensure-maestro-runner.sh for attested ${MAESTRO_RUNNER_PIN.version} (floor >= ${MAESTRO_RUNNER_PIN.version})`
+  };
+}
+var warnedFallbackReasons;
+var init_maestro_dispatch = __esm({
+  "packages/rn-dev-agent-core/dist/tools/maestro-dispatch.js"() {
+    "use strict";
+    init_engine_pin();
+    warnedFallbackReasons = /* @__PURE__ */ new Set();
+  }
+});
+
+// packages/rn-dev-agent-core/dist/domain/ansi.js
+function stripAnsi(value) {
+  return value.replace(ANSI_RE, "");
+}
+var ANSI_RE;
+var init_ansi = __esm({
+  "packages/rn-dev-agent-core/dist/domain/ansi.js"() {
+    "use strict";
+    ANSI_RE = new RegExp(String.fromCharCode(27) + "\\[[0-9;]*m", "g");
+  }
+});
+
+// packages/rn-dev-agent-core/dist/domain/maestro-error-parser.js
+function blockReasons(lines, stepIndex) {
+  const reasons = [];
+  for (let i = stepIndex + 1; i < lines.length; i++) {
+    if (RUNNER_STEP_RE.test(lines[i]))
+      break;
+    if (REASON_LINE_RE.test(lines[i]))
+      reasons.push(lines[i]);
+  }
+  return reasons;
+}
+function idWaitStepAmongDuplicates(lines, terminalIndex, terminalReason2) {
+  for (let i = terminalIndex - 1; i >= 0; i--) {
+    const step = RUNNER_STEP_RE.exec(lines[i]);
+    if (!step)
+      continue;
+    if (step[1] !== "\u2717")
+      return null;
+    if (!blockReasons(lines, i).includes(terminalReason2))
+      return null;
+    const stepMatch = ID_WAIT_STEP_RE.exec(step[2]);
+    if (stepMatch)
+      return stepMatch;
+  }
+  return null;
+}
+function parseTerminalIdWait(output, suppliedFailedStep) {
+  const lines = stripAnsi(output).split("\n");
+  let terminalStep;
+  for (let index = 0; index < lines.length; index++) {
+    const match = RUNNER_STEP_RE.exec(lines[index]);
+    if (match)
+      terminalStep = { index, status: match[1], name: match[2] };
+  }
+  if (terminalStep?.status === "\u2713")
+    return null;
+  if (suppliedFailedStep && terminalStep && terminalStep.name !== suppliedFailedStep)
+    return null;
+  const failedStep = suppliedFailedStep ?? terminalStep?.name;
+  if (!failedStep || terminalStep && terminalStep.status !== "\u2717")
+    return null;
+  const reasonLine = lines.slice(terminalStep ? terminalStep.index + 1 : 0).filter((line) => REASON_LINE_RE.test(line)).at(-1);
+  if (!reasonLine)
+    return null;
+  const reasonMatch = ID_WAIT_REASON_RE.exec(reasonLine);
+  if (!reasonMatch)
+    return null;
+  const stepMatch = ID_WAIT_STEP_RE.exec(failedStep) ?? (terminalStep && SELECTOR_LESS_ID_WAIT_SUMMARY_RE.test(failedStep) ? idWaitStepAmongDuplicates(lines, terminalStep.index, reasonLine) : null);
+  if (!stepMatch || reasonMatch[2] !== stepMatch[2])
+    return null;
+  return {
+    kind: "SELECTOR_NOT_FOUND",
+    selectorKind: "id",
+    selector: stepMatch[2],
+    raw: output
+  };
+}
+function parseMaestroFailure(output, terminal) {
+  const raw = typeof output === "string" ? output : "";
+  if (terminal?.exitClass === "timed-out") {
+    return { kind: "TIMEOUT", selector: terminal.failureSelector ?? null, raw };
+  }
+  if (terminal?.failureKind === "SELECTOR_NOT_FOUND") {
+    return {
+      kind: "SELECTOR_NOT_FOUND",
+      selectorKind: "unknown",
+      selector: terminal.failureSelector ?? "",
+      raw
+    };
+  }
+  if (terminal?.failureKind === "TIMEOUT") {
+    return { kind: "TIMEOUT", selector: terminal.failureSelector ?? null, raw };
+  }
+  if (terminal?.failureKind === "ASSERTION_FAILED") {
+    return { kind: "ASSERTION_FAILED", selector: terminal.failureSelector ?? null, raw };
+  }
+  if (terminal?.exitClass === "before-first-step" && terminal.bootstrapEvidence) {
+    return {
+      kind: "WDA_BOOTSTRAP_FAILED",
+      detail: terminal.bootstrapEvidence.slice(0, 500),
+      raw
+    };
+  }
+  if (!raw) {
+    return { kind: "UNKNOWN", raw: "" };
+  }
+  output = raw;
+  const terminalIdWait = parseTerminalIdWait(output, terminal?.failedStep);
+  if (terminalIdWait)
+    return terminalIdWait;
+  const lines = output.split("\n");
+  for (const { re, build } of PATTERNS) {
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const line = lines[i];
+      if (!line)
+        continue;
+      const m = line.match(re);
+      if (m)
+        return build(m, output);
+    }
+  }
+  for (const { re, build } of PATTERNS) {
+    const m = output.match(re);
+    if (m)
+      return build(m, output);
+  }
+  return { kind: "UNKNOWN", raw: output };
+}
+function isAutoRepairable(failure) {
+  return failure.kind === "SELECTOR_NOT_FOUND";
+}
+function outputIndicatesFlowFailure(output) {
+  return /^\s*(?:\[FAILED\]|(?:Test|Flow) FAILED\b|FAILED\s*$)/m.test(output);
+}
+var PATTERNS, RUNNER_STEP_RE, REASON_LINE_RE, ID_WAIT_STEP_RE, SELECTOR_LESS_ID_WAIT_SUMMARY_RE, ID_WAIT_REASON_RE;
+var init_maestro_error_parser = __esm({
+  "packages/rn-dev-agent-core/dist/domain/maestro-error-parser.js"() {
+    "use strict";
+    init_ansi();
+    PATTERNS = [
+      {
+        re: /Element with id (['"])((?:(?!\1).)+)\1 (?:was )?not found/i,
+        build: (m, raw) => ({ kind: "SELECTOR_NOT_FOUND", selectorKind: "id", selector: m[2], raw })
+      },
+      {
+        re: /Element with text (['"])((?:(?!\1).)+)\1 (?:was )?not found/i,
+        build: (m, raw) => ({ kind: "SELECTOR_NOT_FOUND", selectorKind: "text", selector: m[2], raw })
+      },
+      // maestro-runner 1.0.x shape — issue #105.
+      // "Element not found: id='X'" or "Element not found: text='X'".
+      {
+        re: /Element not found:\s*id=(['"])((?:(?!\1).)+)\1/i,
+        build: (m, raw) => ({ kind: "SELECTOR_NOT_FOUND", selectorKind: "id", selector: m[2], raw })
+      },
+      {
+        re: /Element not found:\s*text=(['"])((?:(?!\1).)+)\1/i,
+        build: (m, raw) => ({ kind: "SELECTOR_NOT_FOUND", selectorKind: "text", selector: m[2], raw })
+      },
+      {
+        re: /Element (['"])((?:(?!\1).)+)\1 (?:was )?not found/i,
+        build: (m, raw) => ({
+          kind: "SELECTOR_NOT_FOUND",
+          selectorKind: "unknown",
+          selector: m[2],
+          raw
+        })
+      },
+      {
+        re: /Timed out waiting for element with id (['"])((?:(?!\1).)+)\1/i,
+        build: (m, raw) => ({ kind: "TIMEOUT", selector: m[2], raw })
+      },
+      {
+        re: /Timed out waiting for element (['"])((?:(?!\1).)+)\1/i,
+        build: (m, raw) => ({ kind: "TIMEOUT", selector: m[2], raw })
+      },
+      {
+        re: /Assertion failed: (['"])((?:(?!\1).)+)\1 (?:is )?not visible/i,
+        build: (m, raw) => ({ kind: "ASSERTION_FAILED", selector: m[2], raw })
+      },
+      {
+        re: /Element (['"])((?:(?!\1).)+)\1 is not visible/i,
+        build: (m, raw) => ({ kind: "ASSERTION_FAILED", selector: m[2], raw })
+      }
+    ];
+    RUNNER_STEP_RE = /^[ \t]+([✓✗])\s+(\S.*\S|\S)\s*\(([\d.]+)s\)\s*$/;
+    REASON_LINE_RE = /^[ \t]+╰─\s+/;
+    ID_WAIT_STEP_RE = /^extendedWaitUntil:\s+visible\s+id=(['"])((?:(?!\1).)+)\1$/i;
+    SELECTOR_LESS_ID_WAIT_SUMMARY_RE = /^extendedWaitUntil$/;
+    ID_WAIT_REASON_RE = /^[ \t]+╰─\s+Element (['"])#((?:(?!\1).)+)\1 not visible within\b/i;
+  }
+});
+
+// packages/rn-dev-agent-core/dist/domain/reusable-action.js
+function freshRuntimeState(now = () => /* @__PURE__ */ new Date(), mtimeMs = 0) {
+  const ts = now().toISOString();
+  return {
+    schemaVersion: 1,
+    revision: 1,
+    updatedAt: ts,
+    lastSeenMtimeMs: mtimeMs,
+    runHistory: [],
+    repairHistory: [],
+    stats: {
+      totalRuns: 0,
+      successCount: 0,
+      failureCount: 0,
+      avgDurationMs: 0
+    }
+  };
+}
+function appendRunRecord(state, record2) {
+  const newHistory = [...state.runHistory, record2];
+  while (newHistory.length > HISTORY_LIMITS.RUN_HISTORY_MAX)
+    newHistory.shift();
+  const totalRuns = state.stats.totalRuns + 1;
+  const successCount = state.stats.successCount + (record2.status === "pass" ? 1 : 0);
+  const failureCount = state.stats.failureCount + (record2.status === "fail" ? 1 : 0);
+  const successDurations = newHistory.filter((r) => r.status === "pass").map((r) => r.durationMs);
+  const avgDurationMs = successDurations.length ? Math.round(successDurations.reduce((s, n) => s + n, 0) / successDurations.length) : state.stats.avgDurationMs;
+  return {
+    ...state,
+    updatedAt: record2.timestamp,
+    runHistory: newHistory,
+    stats: {
+      totalRuns,
+      successCount,
+      failureCount,
+      avgDurationMs,
+      lastSuccessAt: record2.status === "pass" ? record2.timestamp : state.stats.lastSuccessAt,
+      lastFailureAt: record2.status === "fail" ? record2.timestamp : state.stats.lastFailureAt
+    }
+  };
+}
+function appendRepairRecord(state, record2) {
+  const newHistory = [...state.repairHistory, record2];
+  while (newHistory.length > HISTORY_LIMITS.REPAIR_HISTORY_MAX)
+    newHistory.shift();
+  return {
+    ...state,
+    updatedAt: record2.timestamp,
+    revision: state.revision + 1,
+    repairHistory: newHistory
+  };
+}
+function recentRepairCount(state, now = () => /* @__PURE__ */ new Date()) {
+  const cutoff = now().getTime() - 24 * 60 * 60 * 1e3;
+  return state.repairHistory.filter((r) => new Date(r.timestamp).getTime() >= cutoff).length;
+}
+function repairBudgetAvailable(state, now = () => /* @__PURE__ */ new Date()) {
+  return recentRepairCount(state, now) < REPAIR_BUDGET.ATTEMPTS_PER_24H;
+}
+function shouldAutoPromoteToActive(metadata, lastRun) {
+  if (lastRun?.blindProbe?.skippedMaestro)
+    return false;
+  return metadata.status === "experimental" && lastRun?.status === "pass";
+}
+function shouldDemoteAfterRepair(metadata) {
+  return metadata.status === "active";
+}
+function parseM7Header(yamlText, fallbackId) {
+  const lines = yamlText.split("\n");
+  const meta = {};
+  let inComment = false;
+  for (const line of lines) {
+    if (line.startsWith("#")) {
+      inComment = true;
+      const stripped = line.replace(/^#\s?/, "").trim();
+      if (!stripped)
+        continue;
+      const kv = stripped.match(/^([a-zA-Z][\w-]*)\s*:\s*(.+)$/);
+      if (!kv)
+        continue;
+      const key = kv[1];
+      const raw = kv[2].trim();
+      if (key === "tags") {
+        meta.tags = raw.replace(/^\[|\]$/g, "").split(",").map((t) => t.trim()).filter(Boolean);
+      } else if (key === "mutates") {
+        meta.mutates = /^true$/i.test(raw);
+      } else if (key === "params") {
+        meta.params = raw.replace(/^\[|\]$/g, "").split(",").map((t) => t.trim()).filter(Boolean);
+      } else if (key === "produces") {
+        meta.produces = parseProducesMap(raw);
+      } else if (key === "expectedRouteSequence") {
+        meta.expectedRouteSequence = raw.replace(/^\[|\]$/g, "").split(",").map((t) => t.trim()).filter(Boolean);
+      } else if (key === "id" || key === "intent" || key === "status" || key === "appId" || key === "createdAt" || key === "author" || key === "enginePin") {
+        meta[key] = raw;
+      }
+    } else if (inComment && line.trim() === "") {
+      if (Object.keys(meta).length > 0)
+        break;
+    } else if (inComment) {
+      break;
+    }
+  }
+  const id = meta.id ?? fallbackId;
+  const intent = meta.intent;
+  if (!id || !intent)
+    return null;
+  const status = meta.status ?? "experimental";
+  return {
+    id,
+    intent,
+    tags: meta.tags,
+    mutates: meta.mutates,
+    status,
+    params: meta.params,
+    appId: meta.appId,
+    createdAt: meta.createdAt,
+    author: meta.author,
+    produces: meta.produces,
+    expectedRouteSequence: meta.expectedRouteSequence,
+    enginePin: meta.enginePin
+  };
+}
+function parseProducesMap(raw) {
+  const inner = raw.trim().replace(/^\{|\}$/g, "").trim();
+  if (!inner)
+    return void 0;
+  const result = {};
+  for (const part of inner.split(",")) {
+    const kv = part.match(/^\s*([a-zA-Z_][\w.-]*)\s*:\s*(.+?)\s*$/);
+    if (!kv)
+      return void 0;
+    const key = kv[1];
+    const valueRaw = kv[2].trim();
+    if (/^(true|false)$/i.test(valueRaw)) {
+      result[key] = /^true$/i.test(valueRaw);
+    } else if (/^-?\d+(\.\d+)?$/.test(valueRaw)) {
+      result[key] = Number(valueRaw);
+    } else {
+      result[key] = valueRaw.replace(/^['"]|['"]$/g, "");
+    }
+  }
+  return Object.keys(result).length ? result : void 0;
+}
+function serializeM7Header(metadata) {
+  const lines = [];
+  const stripNewlines2 = (s) => String(s).replace(/[\r\n]+/g, " ");
+  lines.push(`# id: ${stripNewlines2(metadata.id)}`);
+  lines.push(`# intent: ${stripNewlines2(metadata.intent)}`);
+  if (metadata.tags && metadata.tags.length) {
+    lines.push(`# tags: [${metadata.tags.map(stripNewlines2).join(", ")}]`);
+  }
+  if (typeof metadata.mutates === "boolean") {
+    lines.push(`# mutates: ${metadata.mutates}`);
+  }
+  if (metadata.status)
+    lines.push(`# status: ${stripNewlines2(metadata.status)}`);
+  if (metadata.enginePin)
+    lines.push(`# enginePin: ${stripNewlines2(metadata.enginePin)}`);
+  if (metadata.params && metadata.params.length) {
+    lines.push(`# params: [${metadata.params.map(stripNewlines2).join(", ")}]`);
+  }
+  if (metadata.appId)
+    lines.push(`# appId: ${stripNewlines2(metadata.appId)}`);
+  if (metadata.createdAt)
+    lines.push(`# createdAt: ${stripNewlines2(metadata.createdAt)}`);
+  if (metadata.author)
+    lines.push(`# author: ${stripNewlines2(metadata.author)}`);
+  if (metadata.produces && Object.keys(metadata.produces).length > 0) {
+    const pairs = Object.keys(metadata.produces).sort().map((k) => {
+      const v = metadata.produces[k];
+      const formatted = typeof v === "string" ? stripNewlines2(v) : String(v);
+      return `${k}: ${formatted}`;
+    });
+    lines.push(`# produces: { ${pairs.join(", ")} }`);
+  }
+  if (metadata.expectedRouteSequence && metadata.expectedRouteSequence.length) {
+    lines.push(`# expectedRouteSequence: [${metadata.expectedRouteSequence.map(stripNewlines2).join(", ")}]`);
+  }
+  return lines.join("\n");
+}
+var REPAIR_BUDGET, HISTORY_LIMITS;
+var init_reusable_action = __esm({
+  "packages/rn-dev-agent-core/dist/domain/reusable-action.js"() {
+    "use strict";
+    REPAIR_BUDGET = {
+      /** Max successful self-repairs allowed in a rolling 24h window. */
+      ATTEMPTS_PER_24H: 3,
+      /** Max repair attempts per run before escalating to user. */
+      ATTEMPTS_PER_RUN: 1
+    };
+    HISTORY_LIMITS = {
+      /** Cap runHistory at this many records; oldest dropped on append. */
+      RUN_HISTORY_MAX: 50,
+      /** Cap repairHistory at this many records; oldest dropped on append. */
+      REPAIR_HISTORY_MAX: 25
+    };
+  }
+});
+
+// packages/rn-dev-agent-core/dist/session/runtime-paths.js
+import { chmodSync as chmodSync4, lstatSync as lstatSync6, mkdirSync as mkdirSync8 } from "node:fs";
+import { join as join16, resolve as resolve3 } from "node:path";
+function privateDirectory(path) {
+  mkdirSync8(path, { recursive: true, mode: 448 });
+  const stat2 = lstatSync6(path);
+  if (stat2.isSymbolicLink() || !stat2.isDirectory()) {
+    throw new Error("SESSION_RUNTIME_ROOT_UNSAFE: runtime root must be a real directory");
+  }
+  chmodSync4(path, 448);
+  return path;
+}
+function sessionRuntimeRoot(projectRoot) {
+  const configured = process.env.RN_DEV_AGENT_SESSION_RUNTIME_ROOT;
+  return configured ? privateDirectory(resolve3(configured)) : join16(resolve3(projectRoot), ".rn-agent");
+}
+function sessionStateDirectory(projectRoot) {
+  const path = join16(sessionRuntimeRoot(projectRoot), "state");
+  return process.env.RN_DEV_AGENT_SESSION_RUNTIME_ROOT ? privateDirectory(path) : path;
+}
+function sessionRecordingsDirectory(projectRoot) {
+  const path = join16(sessionRuntimeRoot(projectRoot), "recordings");
+  return process.env.RN_DEV_AGENT_SESSION_RUNTIME_ROOT ? privateDirectory(path) : path;
+}
+var init_runtime_paths2 = __esm({
+  "packages/rn-dev-agent-core/dist/session/runtime-paths.js"() {
+    "use strict";
+  }
+});
+
+// packages/rn-dev-agent-core/dist/domain/sidecar-io.js
+import { existsSync as existsSync12, readFileSync as readFileSync12, writeFileSync as writeFileSync7, mkdirSync as mkdirSync9, statSync as statSync4 } from "node:fs";
+import { join as join17, dirname as dirname8 } from "node:path";
+function sidecarPathFor(yamlFilePath) {
+  const dir = dirname8(yamlFilePath);
+  const parent = dirname8(dir);
+  const filename = yamlFilePath.replace(/\.ya?ml$/i, ".state.json");
+  const base = filename.split(/[\\/]/).pop();
+  const stateDirectory = process.env.RN_DEV_AGENT_SESSION_RUNTIME_ROOT ? sessionStateDirectory(dirname8(parent)) : join17(parent, "state");
+  return join17(stateDirectory, base);
+}
+function loadOrInitSidecar(yamlFilePath, now = () => /* @__PURE__ */ new Date()) {
+  const path = sidecarPathFor(yamlFilePath);
+  if (existsSync12(path)) {
+    try {
+      const text = readFileSync12(path, "utf8");
+      const parsed = JSON.parse(text);
+      if (parsed && parsed.schemaVersion === 1 && typeof parsed.revision === "number" && typeof parsed.updatedAt === "string" && Array.isArray(parsed.runHistory) && Array.isArray(parsed.repairHistory) && typeof parsed.stats === "object") {
+        if (typeof parsed.lastSeenMtimeMs !== "number") {
+          try {
+            parsed.lastSeenMtimeMs = statSync4(yamlFilePath).mtimeMs;
+          } catch {
+            parsed.lastSeenMtimeMs = 0;
+          }
+        }
+        return parsed;
+      }
+    } catch {
+    }
+  }
+  let mtimeMs = 0;
+  try {
+    mtimeMs = statSync4(yamlFilePath).mtimeMs;
+  } catch {
+  }
+  return freshRuntimeState(now, mtimeMs);
+}
+function saveSidecar(yamlFilePath, state) {
+  const path = sidecarPathFor(yamlFilePath);
+  const parentDir = dirname8(path);
+  if (!existsSync12(parentDir))
+    mkdirSync9(parentDir, { recursive: true });
+  writeFileSync7(path, JSON.stringify(state, null, 2) + "\n", "utf8");
+  return { path };
+}
+function yamlEditedSinceLastSeen(yamlFilePath, state) {
+  try {
+    const current = statSync4(yamlFilePath).mtimeMs;
+    return current > state.lastSeenMtimeMs;
+  } catch {
+    return false;
+  }
+}
+function markSeen(state, mtimeMs) {
+  return { ...state, lastSeenMtimeMs: mtimeMs };
+}
+var init_sidecar_io = __esm({
+  "packages/rn-dev-agent-core/dist/domain/sidecar-io.js"() {
+    "use strict";
+    init_reusable_action();
+    init_runtime_paths2();
+  }
+});
+
+// packages/rn-dev-agent-core/dist/domain/atomic-writer.js
+import { writeFileSync as writeFileSync8, renameSync as renameSync3, statSync as statSync5, mkdirSync as mkdirSync10, existsSync as existsSync13, unlinkSync as unlinkSync6, readdirSync as readdirSync5, openSync as openSync2, closeSync as closeSync2, chmodSync as chmodSync5, fstatSync as fstatSync2, lstatSync as lstatSync7, readFileSync as readFileSync13, linkSync, constants as constants3 } from "node:fs";
+import { dirname as dirname9, basename as basename3 } from "node:path";
+function generateTmpStamp() {
+  const rand = Math.random().toString(36).slice(2, 10);
+  return `${process.pid}.${Date.now().toString(36)}.${rand}`;
+}
+function actionWriteLockPath(yamlPath) {
+  return `${yamlPath.replace(/\.yml$/i, ".yaml")}.write.lock`;
+}
+function currentLockOwner() {
+  if (localLockOwner)
+    return localLockOwner;
+  const observed = probeProcessBirth(process.pid);
+  if (observed.status !== "present") {
+    throw new Error("Could not establish action writer process identity.");
+  }
+  localLockOwner = { pid: process.pid, birth: observed.birth.token };
+  return localLockOwner;
+}
+function readLockOwner(lockPath) {
+  try {
+    const parsed = JSON.parse(readFileSync13(lockPath, "utf8"));
+    if (!Number.isSafeInteger(parsed.pid) || Number(parsed.pid) <= 0 || !parsed.birth)
+      return null;
+    return { pid: Number(parsed.pid), birth: parsed.birth };
+  } catch {
+    return null;
+  }
+}
+function lockOwnerIsGone(owner) {
+  const observed = probeProcessBirth(owner.pid);
+  return observed.status === "absent" || observed.status === "present" && observed.birth.token !== owner.birth;
+}
+function withPairWriteLock(yamlPath, operation, acquisitionPrecondition) {
+  if (acquisitionPrecondition && !acquisitionPrecondition())
+    throw ACTION_WRITE_PRECONDITION;
+  ensureDir(yamlPath);
+  const lockPath = actionWriteLockPath(yamlPath);
+  if (heldWriteLocks.has(lockPath))
+    return operation();
+  const ownerPath = `${dirname9(yamlPath)}/.rn-action-write-owner.${generateTmpStamp()}`;
+  const owner = currentLockOwner();
+  const lockFd = openSync2(ownerPath, "wx", 384);
+  writeFileSync8(lockFd, `${JSON.stringify(owner)}
+`, "utf8");
+  const deadline = Date.now() + ACTION_WRITE_LOCK_TIMEOUT_MS;
+  let acquired = false;
+  let identity2 = null;
+  try {
+    while (!acquired) {
+      try {
+        if (acquisitionPrecondition && !acquisitionPrecondition()) {
+          throw ACTION_WRITE_PRECONDITION;
+        }
+        linkSync(ownerPath, lockPath);
+        acquired = true;
+      } catch (err) {
+        if (err.code !== "EEXIST")
+          throw err;
+        let lockStat;
+        try {
+          lockStat = lstatSync7(lockPath);
+        } catch (statError) {
+          if (statError.code === "ENOENT")
+            continue;
+          throw statError;
+        }
+        if (!lockStat.isFile() || lockStat.isSymbolicLink()) {
+          throw new Error(`Refusing invalid action write lock at ${lockPath}.`);
+        }
+        const existingOwner = readLockOwner(lockPath);
+        if (existingOwner && lockOwnerIsGone(existingOwner)) {
+          try {
+            const current = lstatSync7(lockPath);
+            if (current.dev === lockStat.dev && current.ino === lockStat.ino)
+              unlinkSync6(lockPath);
+          } catch (unlinkError) {
+            if (unlinkError.code !== "ENOENT")
+              throw unlinkError;
+          }
+          continue;
+        }
+        if (Date.now() >= deadline) {
+          throw new Error(`Timed out waiting for action write lock at ${lockPath}.`);
+        }
+        Atomics.wait(lockWaitBuffer, 0, 0, 10);
+      }
+    }
+    unlinkSync6(ownerPath);
+    identity2 = fstatSync2(lockFd);
+    heldWriteLocks.add(lockPath);
+    try {
+      return operation();
+    } finally {
+      heldWriteLocks.delete(lockPath);
+    }
+  } finally {
+    if (identity2) {
+      try {
+        const current = lstatSync7(lockPath);
+        if (current.dev === identity2.dev && current.ino === identity2.ino)
+          unlinkSync6(lockPath);
+      } catch {
+      }
+    }
+    closeSync2(lockFd);
+    try {
+      unlinkSync6(ownerPath);
+    } catch {
+    }
+  }
+}
+function pairWriteImpl(yamlPath, yamlContent, sidecarPath, state, publicationPrecondition, yamlPublicationPrecondition, expectedYamlContent, createExclusive = false) {
+  if (publicationPrecondition && !publicationPrecondition())
+    return null;
+  ensureDir(yamlPath);
+  ensureDir(sidecarPath);
+  let yamlMode;
+  if (expectedYamlContent !== void 0) {
+    let targetFd;
+    try {
+      targetFd = openSync2(yamlPath, constants3.O_RDONLY | constants3.O_NOFOLLOW);
+    } catch {
+      return null;
+    }
+    try {
+      const target = fstatSync2(targetFd);
+      if (!target.isFile() || readFileSync13(targetFd, "utf8") !== expectedYamlContent)
+        return null;
+      yamlMode = target.mode & 4095;
+    } finally {
+      closeSync2(targetFd);
+    }
+  } else if (createExclusive) {
+    yamlMode = 384;
+  }
+  let sidecarMode = 384;
+  try {
+    const sidecarFd = openSync2(sidecarPath, constants3.O_RDONLY | constants3.O_NOFOLLOW);
+    try {
+      const sidecar = fstatSync2(sidecarFd);
+      if (!sidecar.isFile())
+        return null;
+      sidecarMode = sidecar.mode & 4095;
+    } finally {
+      closeSync2(sidecarFd);
+    }
+  } catch (error2) {
+    if (error2.code !== "ENOENT")
+      return null;
+  }
+  const stamp = generateTmpStamp();
+  const yamlTmp = `${yamlPath}.tmp.${stamp}`;
+  const sidecarTmp = `${sidecarPath}.tmp.${stamp}`;
+  const projectedMtimeMs = Date.now() + FUTURE_MTIME_BUFFER_MS;
+  const projectedState = {
+    ...state,
+    lastSeenMtimeMs: projectedMtimeMs
+  };
+  if (publicationPrecondition && !publicationPrecondition())
+    return null;
+  atomicWriter._writeFileWithMode(sidecarTmp, JSON.stringify(projectedState, null, 2) + "\n", sidecarMode);
+  if (publicationPrecondition && !publicationPrecondition()) {
+    atomicWriter._unlink(sidecarTmp);
+    return null;
+  }
+  const priorSidecarExisted = publicationPrecondition ? atomicWriter._exists(sidecarPath) : false;
+  const priorSidecar = priorSidecarExisted ? readFileSync13(sidecarPath, "utf8") : null;
+  function restorePriorSidecar() {
+    if (priorSidecar === null) {
+      atomicWriter._unlink(sidecarPath);
+    } else {
+      atomicWriter._writeFileWithMode(sidecarTmp, priorSidecar, sidecarMode);
+      atomicWriter._rename(sidecarTmp, sidecarPath);
+    }
+  }
+  function writeYamlTmp() {
+    if (yamlMode === void 0)
+      atomicWriter._writeFile(yamlTmp, yamlContent);
+    else
+      atomicWriter._writeFileWithMode(yamlTmp, yamlContent, yamlMode);
+  }
+  if (createExclusive) {
+    try {
+      writeYamlTmp();
+    } catch (error2) {
+      try {
+        atomicWriter._unlink(sidecarTmp);
+      } catch {
+      }
+      try {
+        atomicWriter._unlink(yamlTmp);
+      } catch {
+      }
+      throw error2;
+    }
+    if (publicationPrecondition && !publicationPrecondition()) {
+      atomicWriter._unlink(sidecarTmp);
+      atomicWriter._unlink(yamlTmp);
+      return null;
+    }
+    const yamlPublished = (!publicationPrecondition || publicationPrecondition()) && atomicWriter._linkIfAbsent(yamlTmp, yamlPath, publicationPrecondition);
+    if (!yamlPublished) {
+      atomicWriter._unlink(sidecarTmp);
+      atomicWriter._unlink(yamlTmp);
+      return null;
+    }
+    atomicWriter._rename(sidecarTmp, sidecarPath);
+    atomicWriter._unlink(yamlTmp);
+  } else {
+    if (publicationPrecondition && !publicationPrecondition()) {
+      atomicWriter._unlink(sidecarTmp);
+      return null;
+    }
+    atomicWriter._rename(sidecarTmp, sidecarPath);
+    try {
+      writeYamlTmp();
+    } catch (error2) {
+      try {
+        atomicWriter._unlink(yamlTmp);
+      } catch {
+      }
+      throw error2;
+    }
+    const yamlPublished = expectedYamlContent === void 0 ? !yamlPublicationPrecondition || yamlPublicationPrecondition() : atomicWriter._publishIfUnchanged(yamlTmp, yamlPath, expectedYamlContent, stamp, yamlPublicationPrecondition);
+    if (!yamlPublished) {
+      if (yamlPublicationPrecondition && !yamlPublicationPrecondition()) {
+        try {
+          const candidate = lstatSync7(yamlTmp);
+          if (!candidate.isFile() || candidate.isSymbolicLink())
+            return null;
+        } catch {
+          return null;
+        }
+      }
+      restorePriorSidecar();
+      atomicWriter._unlink(yamlTmp);
+      return null;
+    }
+    if (expectedYamlContent === void 0)
+      atomicWriter._rename(yamlTmp, yamlPath);
+  }
+  const actualMtimeMs = atomicWriter._statMtimeMs(yamlPath);
+  const finalMtimeMs = Math.max(actualMtimeMs, projectedMtimeMs);
+  const finalState = {
+    ...state,
+    lastSeenMtimeMs: finalMtimeMs
+  };
+  atomicWriter._writeFileWithMode(sidecarTmp, JSON.stringify(finalState, null, 2) + "\n", sidecarMode);
+  atomicWriter._rename(sidecarTmp, sidecarPath);
+  return { yamlPath, sidecarPath, finalMtimeMs, refreshedSidecar: true };
+}
+function ensureDir(filePath) {
+  const dir = dirname9(filePath);
+  if (!atomicWriter._exists(dir))
+    atomicWriter._mkdir(dir);
+}
+function cleanupOrphans(yamlPath, sidecarPath) {
+  const now = Date.now();
+  for (const targetPath of [yamlPath, sidecarPath]) {
+    const dir = dirname9(targetPath);
+    const prefix = `${basename3(targetPath)}.tmp.`;
+    let entries;
+    try {
+      entries = atomicWriter._readdir(dir);
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      if (!entry.startsWith(prefix))
+        continue;
+      const orphanPath = `${dir}/${entry}`;
+      try {
+        const mtimeMs = atomicWriter._statMtimeMs(orphanPath);
+        if (now - mtimeMs < ORPHAN_MAX_AGE_MS)
+          continue;
+        atomicWriter._unlink(orphanPath);
+      } catch {
+      }
+    }
+  }
+}
+var FUTURE_MTIME_BUFFER_MS, ORPHAN_MAX_AGE_MS, ACTION_WRITE_LOCK_TIMEOUT_MS, lockWaitBuffer, ACTION_WRITE_PRECONDITION, localLockOwner, heldWriteLocks, atomicWriter;
+var init_atomic_writer = __esm({
+  "packages/rn-dev-agent-core/dist/domain/atomic-writer.js"() {
+    "use strict";
+    init_process_birth();
+    FUTURE_MTIME_BUFFER_MS = 1e3;
+    ORPHAN_MAX_AGE_MS = 5 * 60 * 1e3;
+    ACTION_WRITE_LOCK_TIMEOUT_MS = 5e3;
+    lockWaitBuffer = new Int32Array(new SharedArrayBuffer(4));
+    ACTION_WRITE_PRECONDITION = /* @__PURE__ */ Symbol("action-write-precondition");
+    localLockOwner = null;
+    heldWriteLocks = /* @__PURE__ */ new Set();
+    atomicWriter = {
+      /** Underlying `fs.writeFileSync(path, content, 'utf8')`. */
+      _writeFile(path, content) {
+        writeFileSync8(path, content, "utf8");
+      },
+      _writeFileWithMode(path, content, mode) {
+        const fd = openSync2(path, "wx", mode);
+        try {
+          writeFileSync8(fd, content, "utf8");
+        } finally {
+          closeSync2(fd);
+        }
+      },
+      /** Underlying `fs.renameSync(from, to)`. */
+      _rename(from, to) {
+        renameSync3(from, to);
+      },
+      /** Underlying `fs.statSync(path).mtimeMs`. */
+      _statMtimeMs(path) {
+        return statSync5(path).mtimeMs;
+      },
+      /** Underlying `fs.existsSync(path)`. Routed through the seam so test
+       *  cases for ensureDir / cleanupOrphans can simulate exotic failures
+       *  (PR #109 review). */
+      _exists(path) {
+        return existsSync13(path);
+      },
+      /** Underlying `fs.mkdirSync(path, { recursive: true })`. */
+      _mkdir(path) {
+        mkdirSync10(path, { recursive: true });
+      },
+      /** Underlying `fs.unlinkSync(path)`. Used by orphan-cleanup. */
+      _unlink(path) {
+        unlinkSync6(path);
+      },
+      /** Underlying `fs.readdirSync(path)`. Used by GH #111 prefix-scan cleanup. */
+      _readdir(path) {
+        return readdirSync5(path);
+      },
+      _linkIfAbsent(candidatePath, targetPath, publicationPrecondition) {
+        if (publicationPrecondition && !publicationPrecondition())
+          return false;
+        let directoryFd;
+        try {
+          directoryFd = openSync2(dirname9(targetPath), constants3.O_RDONLY | constants3.O_NOFOLLOW | constants3.O_DIRECTORY);
+        } catch {
+          return false;
+        }
+        try {
+          const directory = fstatSync2(directoryFd);
+          if (!directory.isDirectory() || publicationPrecondition && !publicationPrecondition()) {
+            return false;
+          }
+          return atomicWriter._linkIntoVerifiedDirectory(directoryFd, candidatePath, targetPath);
+        } finally {
+          closeSync2(directoryFd);
+        }
+      },
+      _linkIntoVerifiedDirectory(directoryFd, candidatePath, targetPath) {
+        return linkFileIntoVerifiedDirectory(directoryFd, candidatePath, targetPath);
+      },
+      _publishIfUnchanged(candidatePath, targetPath, expectedContent, stamp, publicationPrecondition) {
+        let targetFd;
+        try {
+          targetFd = openSync2(targetPath, constants3.O_RDONLY | constants3.O_NOFOLLOW);
+        } catch {
+          return false;
+        }
+        try {
+          const opened = fstatSync2(targetFd);
+          const current = lstatSync7(targetPath);
+          if (!opened.isFile() || current.isSymbolicLink() || current.dev !== opened.dev || current.ino !== opened.ino || readFileSync13(targetFd, "utf8") !== expectedContent || publicationPrecondition && !publicationPrecondition()) {
+            return false;
+          }
+          const expectedPath = `${candidatePath}.expected.${stamp}`;
+          chmodSync5(candidatePath, opened.mode & 4095);
+          atomicWriter._writeFileWithMode(expectedPath, expectedContent, opened.mode & 4095);
+          try {
+            return publishFileIfUnchangedDarwin(targetFd, targetPath, candidatePath, expectedPath);
+          } finally {
+            atomicWriter._unlink(expectedPath);
+          }
+        } catch {
+          return false;
+        } finally {
+          closeSync2(targetFd);
+        }
+      },
+      withLock(yamlPath, operation) {
+        return withPairWriteLock(yamlPath, operation);
+      },
+      writeTextCreateExclusive(yamlPath, content, precondition) {
+        try {
+          return withPairWriteLock(yamlPath, () => {
+            if (!precondition())
+              return false;
+            const candidatePath = `${dirname9(yamlPath)}/.rn-action-create.${generateTmpStamp()}`;
+            atomicWriter._writeFileWithMode(candidatePath, content, 384);
+            try {
+              return atomicWriter._linkIfAbsent(candidatePath, yamlPath, precondition);
+            } finally {
+              try {
+                atomicWriter._unlink(candidatePath);
+              } catch {
+              }
+            }
+          }, precondition);
+        } catch (error2) {
+          if (error2 === ACTION_WRITE_PRECONDITION)
+            return false;
+          throw error2;
+        }
+      },
+      /**
+       * Atomic pair-write. Cleans up any orphaned `.tmp` files before
+       * starting. Throws on the first failed step — caller decides whether
+       * to surface or recover.
+       */
+      pairWrite(yamlPath, yamlContent, sidecarPath, state) {
+        return withPairWriteLock(yamlPath, () => {
+          cleanupOrphans(yamlPath, sidecarPath);
+          const result = pairWriteImpl(yamlPath, yamlContent, sidecarPath, state);
+          if (!result)
+            throw new Error(`Unconditional pair write refused for ${yamlPath}.`);
+          return result;
+        });
+      },
+      pairWriteCreateExclusive(yamlPath, yamlContent, sidecarPath, state, precondition) {
+        try {
+          return withPairWriteLock(yamlPath, () => {
+            if (precondition && !precondition())
+              return null;
+            cleanupOrphans(yamlPath, sidecarPath);
+            return pairWriteImpl(yamlPath, yamlContent, sidecarPath, state, precondition, precondition, void 0, true);
+          }, precondition);
+        } catch (error2) {
+          if (error2 === ACTION_WRITE_PRECONDITION)
+            return null;
+          throw error2;
+        }
+      },
+      pairWriteConditional(yamlPath, yamlContent, sidecarPath, state, precondition, yamlPublicationPrecondition, expectedYamlContent) {
+        try {
+          return withPairWriteLock(yamlPath, () => {
+            if (!precondition())
+              return null;
+            cleanupOrphans(yamlPath, sidecarPath);
+            return pairWriteImpl(yamlPath, yamlContent, sidecarPath, state, precondition, yamlPublicationPrecondition, expectedYamlContent);
+          }, precondition);
+        } catch (error2) {
+          if (error2 === ACTION_WRITE_PRECONDITION)
+            return null;
+          throw error2;
+        }
+      }
+    };
+  }
+});
+
+// packages/rn-dev-agent-core/dist/domain/path-safety.js
+import { resolve as resolve4, sep as sep4 } from "node:path";
+function isValidActionId(s) {
+  if (typeof s !== "string")
+    return false;
+  if (s.length === 0 || s.length > ACTION_ID_MAX_LEN)
+    return false;
+  if (s.includes(".."))
+    return false;
+  return ACTION_ID_RE.test(s);
+}
+function assertValidActionId(s, context) {
+  if (!isValidActionId(s)) {
+    const preview = JSON.stringify(s).slice(0, 80);
+    throw new PathTraversalError(`Invalid action ID for ${context}: ${preview}`);
+  }
+}
+function assertWithinDir(child, baseDir) {
+  const resolvedBase = resolve4(baseDir);
+  const resolvedChild = resolve4(baseDir, child);
+  if (resolvedChild === resolvedBase)
+    return;
+  const baseWithSep = resolvedBase.endsWith(sep4) ? resolvedBase : resolvedBase + sep4;
+  if (!resolvedChild.startsWith(baseWithSep)) {
+    throw new PathTraversalError(`Path "${child}" escapes containment dir "${baseDir}" (resolved to ${resolvedChild})`);
+  }
+}
+function pathHasTraversal(p) {
+  if (typeof p !== "string")
+    return false;
+  return /(^|[\\/])\.\.([\\/]|$)/.test(p) || /%2e%2e/i.test(p);
+}
+var PathTraversalError, ACTION_ID_RE, ACTION_ID_MAX_LEN;
+var init_path_safety = __esm({
+  "packages/rn-dev-agent-core/dist/domain/path-safety.js"() {
+    "use strict";
+    PathTraversalError = class extends Error {
+      constructor(message) {
+        super(message);
+        this.name = "PathTraversalError";
+      }
+    };
+    ACTION_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]*$/;
+    ACTION_ID_MAX_LEN = 64;
+  }
+});
+
+// packages/rn-dev-agent-core/dist/domain/action-db.js
+import { createRequire as createRequire2 } from "node:module";
+import { existsSync as existsSync14, mkdirSync as mkdirSync11, readdirSync as readdirSync6, readFileSync as readFileSync14 } from "node:fs";
+import { dirname as dirname10, join as join18 } from "node:path";
+function loadSqlite() {
+  try {
+    const mod = _require("node:sqlite");
+    return mod.DatabaseSync ?? null;
+  } catch {
+    return null;
+  }
+}
+function openActionDb(projectRoot, opts = {}) {
+  const Ctor = opts.sqliteCtor === void 0 ? loadSqlite() : opts.sqliteCtor;
+  if (!Ctor)
+    return null;
+  try {
+    const dbPath = join18(sessionStateDirectory(projectRoot), "actions.db");
+    mkdirSync11(dirname10(dbPath), { recursive: true });
+    const db = new Ctor(dbPath);
+    db.exec(SCHEMA);
+    for (const alter of [
+      "ALTER TABLE run_records ADD COLUMN device_id TEXT",
+      "ALTER TABLE run_records ADD COLUMN blind_probe_json TEXT"
+    ]) {
+      try {
+        db.exec(alter);
+      } catch (e) {
+        if (!String(e).includes("duplicate column name"))
+          throw e;
+      }
+    }
+    const handle = {
+      db,
+      close: () => db.close(),
+      insertRunRecord(actionId, record2) {
+        db.exec("BEGIN IMMEDIATE");
+        try {
+          const dup = db.prepare("SELECT 1 FROM run_records WHERE action_id = ? AND ts = ? LIMIT 1").get(actionId, record2.timestamp);
+          if (dup) {
+            db.exec("COMMIT");
+            return;
+          }
+          db.prepare(`INSERT INTO run_records
+               (action_id, ts, trigger, status, failure_code, failure_detail,
+                transport, auto_repair_json, duration_ms, device_id, blind_probe_json)
+             VALUES (?,?,?,?,?,?,?,?,?,?,?)`).run(actionId, record2.timestamp, record2.trigger, record2.status, record2.failureCode ?? null, record2.failureDetail ?? null, record2.transport ?? null, record2.autoRepair ? JSON.stringify(record2.autoRepair) : null, record2.durationMs, record2.deviceId ?? null, record2.blindProbe ? JSON.stringify(record2.blindProbe) : null);
+          db.prepare(`DELETE FROM run_records
+             WHERE action_id = ?
+               AND id NOT IN (
+                 SELECT id FROM run_records
+                 WHERE action_id = ?
+                 ORDER BY id DESC
+                 LIMIT ${RUN_HISTORY_MAX}
+               )`).run(actionId, actionId);
+          db.exec("COMMIT");
+        } catch (e) {
+          db.exec("ROLLBACK");
+          throw e;
+        }
+      },
+      insertRepairRecord(actionId, record2) {
+        db.exec("BEGIN IMMEDIATE");
+        try {
+          const dup = db.prepare("SELECT 1 FROM repair_records WHERE action_id = ? AND ts = ? LIMIT 1").get(actionId, record2.timestamp);
+          if (dup) {
+            db.exec("COMMIT");
+            return;
+          }
+          db.prepare(`INSERT INTO repair_records
+               (action_id, ts, failure_code, diff_json, duration_ms, agent_reasoning)
+             VALUES (?,?,?,?,?,?)`).run(actionId, record2.timestamp, record2.failureCode, JSON.stringify(record2.diff ?? {}), record2.durationMs, record2.agentReasoning ?? null);
+          db.prepare(`DELETE FROM repair_records
+             WHERE action_id = ?
+               AND id NOT IN (
+                 SELECT id FROM repair_records
+                 WHERE action_id = ?
+                 ORDER BY id DESC
+                 LIMIT ${REPAIR_HISTORY_MAX}
+               )`).run(actionId, actionId);
+          db.exec("COMMIT");
+        } catch (e) {
+          db.exec("ROLLBACK");
+          throw e;
+        }
+      },
+      upsertIndex(actionId, fields) {
+        db.prepare(`INSERT INTO actions_index
+             (id, app_id, path, content_hash, status, revision,
+              created_at, updated_at, mtime_baseline, stats_json)
+           VALUES (?,?,?,?,?,?,?,?,?,?)
+           ON CONFLICT(id) DO UPDATE SET
+             app_id         = COALESCE(excluded.app_id,         actions_index.app_id),
+             path           = COALESCE(excluded.path,           actions_index.path),
+             content_hash   = COALESCE(excluded.content_hash,   actions_index.content_hash),
+             status         = COALESCE(excluded.status,         actions_index.status),
+             revision       = COALESCE(excluded.revision,       actions_index.revision),
+             updated_at     = COALESCE(excluded.updated_at,     actions_index.updated_at),
+             mtime_baseline = COALESCE(excluded.mtime_baseline, actions_index.mtime_baseline),
+             stats_json     = COALESCE(excluded.stats_json,     actions_index.stats_json)`).run(actionId, fields.appId ?? null, fields.path ?? null, fields.contentHash ?? null, fields.status ?? null, fields.revision ?? null, fields.updatedAt ?? null, fields.updatedAt ?? null, fields.mtimeBaseline ?? null, fields.statsJson ?? null);
+      },
+      loadState(actionId) {
+        const idx = db.prepare("SELECT * FROM actions_index WHERE id = ?").get(actionId);
+        if (!idx)
+          return null;
+        const runRows = db.prepare("SELECT * FROM run_records WHERE action_id = ? ORDER BY id ASC").all(actionId);
+        const repairRows = db.prepare("SELECT * FROM repair_records WHERE action_id = ? ORDER BY id ASC").all(actionId);
+        const runHistory = runRows.map((r) => {
+          const rec = {
+            timestamp: String(r.ts),
+            durationMs: Number(r.duration_ms),
+            status: r.status,
+            trigger: r.trigger
+          };
+          if (r.failure_code)
+            rec.failureCode = r.failure_code;
+          if (r.failure_detail)
+            rec.failureDetail = String(r.failure_detail);
+          if (r.transport === "cdp-js")
+            rec.transport = "cdp-js";
+          if (r.auto_repair_json)
+            rec.autoRepair = JSON.parse(String(r.auto_repair_json));
+          if (r.device_id)
+            rec.deviceId = String(r.device_id);
+          if (r.blind_probe_json) {
+            try {
+              rec.blindProbe = JSON.parse(String(r.blind_probe_json));
+            } catch {
+            }
+          }
+          return rec;
+        });
+        const repairHistory = repairRows.map((r) => {
+          const rec = {
+            timestamp: String(r.ts),
+            failureCode: r.failure_code,
+            diff: r.diff_json ? JSON.parse(String(r.diff_json)) : {},
+            durationMs: Number(r.duration_ms)
+          };
+          if (r.agent_reasoning)
+            rec.agentReasoning = String(r.agent_reasoning);
+          return rec;
+        });
+        const stats = idx.stats_json ? JSON.parse(String(idx.stats_json)) : { totalRuns: 0, successCount: 0, failureCount: 0, avgDurationMs: 0 };
+        return {
+          schemaVersion: 1,
+          revision: Number(idx.revision) || 1,
+          updatedAt: String(idx.updated_at ?? (/* @__PURE__ */ new Date(0)).toISOString()),
+          lastSeenMtimeMs: Number(idx.mtime_baseline) || 0,
+          runHistory,
+          repairHistory,
+          stats
+        };
+      },
+      recentRepairCount(actionId, sinceIso) {
+        const row = db.prepare(`SELECT COUNT(*) as cnt FROM repair_records
+           WHERE action_id = ? AND ts >= ?`).get(actionId, sinceIso);
+        return row.cnt;
+      },
+      migrateSidecars() {
+        const stateDir = join18(projectRoot, ".rn-agent", "state");
+        if (!existsSync14(stateDir))
+          return { migrated: 0 };
+        let migrated = 0;
+        for (const f of readdirSync6(stateDir)) {
+          if (!f.endsWith(".state.json"))
+            continue;
+          const id = f.replace(/\.state\.json$/, "");
+          const exists = db.prepare("SELECT 1 FROM actions_index WHERE id = ?").get(id);
+          if (exists)
+            continue;
+          try {
+            const parsed = JSON.parse(readFileSync14(join18(stateDir, f), "utf8"));
+            if (parsed?.schemaVersion !== 1)
+              continue;
+            if (!Array.isArray(parsed.runHistory) || !Array.isArray(parsed.repairHistory)) {
+              continue;
+            }
+            for (const r of parsed.runHistory) {
+              handle.insertRunRecord(id, r);
+            }
+            for (const r of parsed.repairHistory) {
+              handle.insertRepairRecord(id, r);
+            }
+            handle.upsertIndex(id, {
+              revision: parsed.revision,
+              statsJson: JSON.stringify(parsed.stats),
+              mtimeBaseline: parsed.lastSeenMtimeMs,
+              updatedAt: parsed.updatedAt
+            });
+            migrated++;
+          } catch {
+          }
+        }
+        return { migrated };
+      }
+    };
+    return handle;
+  } catch {
+    return null;
+  }
+}
+var _require, SCHEMA, RUN_HISTORY_MAX, REPAIR_HISTORY_MAX;
+var init_action_db = __esm({
+  "packages/rn-dev-agent-core/dist/domain/action-db.js"() {
+    "use strict";
+    init_runtime_paths2();
+    _require = createRequire2(import.meta.url);
+    SCHEMA = `
+PRAGMA busy_timeout=5000;
+PRAGMA journal_mode=WAL;
+
+CREATE TABLE IF NOT EXISTS actions_index (
+  id             TEXT PRIMARY KEY,
+  app_id         TEXT,
+  path           TEXT,
+  content_hash   TEXT,
+  status         TEXT,
+  revision       INTEGER,
+  created_at     INTEGER,
+  updated_at     INTEGER,
+  mtime_baseline INTEGER,
+  stats_json     TEXT
+);
+
+CREATE TABLE IF NOT EXISTS run_records (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  action_id       TEXT,
+  ts              TEXT,
+  trigger         TEXT,
+  status          TEXT,
+  failure_code    TEXT,
+  failure_detail  TEXT,
+  transport       TEXT,
+  auto_repair_json TEXT,
+  duration_ms     INTEGER,
+  device_id       TEXT,
+  blind_probe_json TEXT
+);
+
+CREATE TABLE IF NOT EXISTS repair_records (
+  id               INTEGER PRIMARY KEY AUTOINCREMENT,
+  action_id        TEXT,
+  ts               TEXT,
+  failure_code     TEXT,
+  diff_json        TEXT,
+  duration_ms      INTEGER,
+  agent_reasoning  TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_run_action    ON run_records(action_id);
+CREATE INDEX IF NOT EXISTS idx_repair_action ON repair_records(action_id);
+CREATE INDEX IF NOT EXISTS idx_index_app     ON actions_index(app_id);
+`;
+    RUN_HISTORY_MAX = 50;
+    REPAIR_HISTORY_MAX = 25;
+  }
+});
+
+// packages/rn-dev-agent-core/dist/domain/action-state-store.js
+import { basename as basename4, dirname as dirname11, sep as sep5 } from "node:path";
+function dbFor(projectRoot) {
+  if (dbCache.has(projectRoot))
+    return dbCache.get(projectRoot) ?? null;
+  const handle = sqliteCtorOverride === void 0 ? openActionDb(projectRoot) : openActionDb(projectRoot, { sqliteCtor: sqliteCtorOverride });
+  if (handle) {
+    try {
+      handle.migrateSidecars();
+    } catch (err) {
+      logger.debug(TAG, `migrateSidecars failed for ${projectRoot}: ${String(err)}`);
+    }
+  }
+  dbCache.set(projectRoot, handle);
+  return handle;
+}
+function mirrorToDb(opts) {
+  const { yamlFilePath, state, newRunRecord, newRepairRecord, meta } = opts;
+  try {
+    const projectRoot = opts.projectRoot ?? projectRootFromYaml(yamlFilePath);
+    if (!projectRoot)
+      return;
+    const handle = dbFor(projectRoot);
+    if (!handle)
+      return;
+    const actionId = idOf(yamlFilePath);
+    handle.upsertIndex(actionId, {
+      appId: meta?.appId,
+      path: meta?.path,
+      contentHash: meta?.contentHash,
+      status: meta?.status,
+      revision: state.revision,
+      statsJson: JSON.stringify(state.stats),
+      mtimeBaseline: state.lastSeenMtimeMs,
+      updatedAt: state.updatedAt
+    });
+    if (newRunRecord)
+      handle.insertRunRecord(actionId, newRunRecord);
+    if (newRepairRecord)
+      handle.insertRepairRecord(actionId, newRepairRecord);
+  } catch (err) {
+    logger.debug(TAG, `DB mirror failed for ${idOf(yamlFilePath)} (authoritative write succeeded): ${String(err)}`);
+  }
+}
+function projectRootFromYaml(yamlFilePath) {
+  const actionsDir = dirname11(yamlFilePath);
+  const rnAgentDir = dirname11(actionsDir);
+  const root = dirname11(rnAgentDir);
+  if (basename4(actionsDir) !== "actions" || basename4(rnAgentDir) !== ".rn-agent") {
+    return null;
+  }
+  if (!root || root === sep5)
+    return null;
+  return root;
+}
+var TAG, sqliteCtorOverride, dbCache, idOf;
+var init_action_state_store = __esm({
+  "packages/rn-dev-agent-core/dist/domain/action-state-store.js"() {
+    "use strict";
+    init_logger();
+    init_action_db();
+    init_sidecar_io();
+    TAG = "action-state-store";
+    dbCache = /* @__PURE__ */ new Map();
+    idOf = (yamlFilePath) => basename4(yamlFilePath).replace(/\.ya?ml$/i, "");
+  }
+});
+
+// packages/rn-dev-agent-core/dist/session/worktree-repair-remedy.js
+var WORKTREE_REPAIR_ENTRY, HEADLESS_WORKTREE_REPAIR_COMMAND;
+var init_worktree_repair_remedy = __esm({
+  "packages/rn-dev-agent-core/dist/session/worktree-repair-remedy.js"() {
+    "use strict";
+    WORKTREE_REPAIR_ENTRY = '"${CLAUDE_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}/rn-dev-agent-core/dist/worktree-inheritance.js"';
+    HEADLESS_WORKTREE_REPAIR_COMMAND = `node ${WORKTREE_REPAIR_ENTRY} repair --app-root "$PWD"`;
+  }
+});
+
+// packages/rn-dev-agent-core/dist/session/worktree-inheritance.js
+import { spawnSync } from "node:child_process";
+import { closeSync as closeSync3, existsSync as existsSync15, fstatSync as fstatSync3, lstatSync as lstatSync8, mkdirSync as mkdirSync12, openSync as openSync3, readFileSync as readFileSync15, readlinkSync as readlinkSync3, realpathSync as realpathSync5, renameSync as renameSync4, statSync as statSync6, symlinkSync as symlinkSync2, unlinkSync as unlinkSync7 } from "node:fs";
+import { dirname as dirname12, isAbsolute as isAbsolute3, join as join19, relative as relative2, resolve as resolve5, sep as sep6 } from "node:path";
+function gitEnvironment() {
+  const env = { ...process.env };
+  for (const key of GIT_ENV_OVERRIDES)
+    delete env[key];
+  return env;
+}
+function git(cwd, args) {
+  const result = spawnSync("git", args, {
+    cwd,
+    encoding: "utf8",
+    env: gitEnvironment(),
+    stdio: ["ignore", "pipe", "pipe"]
+  });
+  if (result.error || result.status !== 0)
+    return { ok: false, stdout: "" };
+  return { ok: true, stdout: (result.stdout ?? "").replace(/\n$/, "") };
+}
+function canonical(path) {
+  try {
+    return realpathSync5(path);
+  } catch {
+    return null;
+  }
+}
+function contained(parent, child) {
+  if (parent === child)
+    return true;
+  const rel = relative2(parent, child);
+  return rel !== "" && !rel.startsWith(`..${sep6}`) && rel !== ".." && !isAbsolute3(rel);
+}
+function toPosix(path) {
+  return sep6 === "/" ? path : path.split(sep6).join("/");
+}
+function isRnAppRoot(directory) {
+  const manifest = join19(directory, "package.json");
+  try {
+    const parsed = JSON.parse(readFileSync15(manifest, "utf8"));
+    const deps = { ...parsed.dependencies, ...parsed.devDependencies };
+    return Boolean(deps["react-native"] || deps["expo"]);
+  } catch {
+    return false;
+  }
+}
+function parseWorktreeRecords(porcelain) {
+  const records = [];
+  let current = null;
+  for (const line of porcelain.split("\n")) {
+    if (line.startsWith("worktree ")) {
+      if (current)
+        records.push(current);
+      current = { path: line.slice("worktree ".length), bare: false, prunable: false };
+      continue;
+    }
+    if (!current)
+      continue;
+    if (line === "bare")
+      current.bare = true;
+    if (line === "prunable" || line.startsWith("prunable "))
+      current.prunable = true;
+  }
+  if (current)
+    records.push(current);
+  return records;
+}
+function verifiedPrimaries(worktreeRoot, commonDir) {
+  const listing = git(worktreeRoot, ["worktree", "list", "--porcelain"]);
+  if (!listing.ok)
+    return [];
+  const verified = /* @__PURE__ */ new Set();
+  for (const record2 of parseWorktreeRecords(listing.stdout)) {
+    if (record2.bare || record2.prunable)
+      continue;
+    const candidate = canonical(record2.path);
+    if (!candidate)
+      continue;
+    try {
+      if (!statSync6(candidate).isDirectory())
+        continue;
+    } catch {
+      continue;
+    }
+    const top = git(candidate, ["rev-parse", "--show-toplevel"]);
+    if (!top.ok || canonical(top.stdout) !== candidate)
+      continue;
+    const candidateGitDir = git(candidate, ["rev-parse", "--path-format=absolute", "--git-dir"]);
+    const candidateCommon = git(candidate, [
+      "rev-parse",
+      "--path-format=absolute",
+      "--git-common-dir"
+    ]);
+    if (!candidateGitDir.ok || !candidateCommon.ok)
+      continue;
+    const resolvedGitDir = canonical(candidateGitDir.stdout);
+    const resolvedCommon = canonical(candidateCommon.stdout);
+    if (!resolvedGitDir || !resolvedCommon)
+      continue;
+    if (resolvedCommon !== commonDir || resolvedGitDir !== resolvedCommon)
+      continue;
+    verified.add(candidate);
+  }
+  return [...verified];
+}
+function resolveWorktreeLayout(input) {
+  const cwd = canonical(input.cwd);
+  if (!cwd)
+    return { refusal: "NOT_GIT" };
+  const insideWorkTree = git(cwd, ["rev-parse", "--is-inside-work-tree"]);
+  if (!insideWorkTree.ok) {
+    const bare = git(cwd, ["rev-parse", "--is-bare-repository"]);
+    if (bare.ok && bare.stdout === "true")
+      return { refusal: "BARE" };
+    return { refusal: "NOT_GIT" };
+  }
+  if (insideWorkTree.stdout !== "true")
+    return { refusal: "BARE" };
+  const top = git(cwd, ["rev-parse", "--show-toplevel"]);
+  const gitDirRaw = git(cwd, ["rev-parse", "--path-format=absolute", "--git-dir"]);
+  const commonRaw = git(cwd, ["rev-parse", "--path-format=absolute", "--git-common-dir"]);
+  if (!top.ok || !gitDirRaw.ok || !commonRaw.ok)
+    return { refusal: "GIT_UNAVAILABLE" };
+  const worktreeRoot = canonical(top.stdout);
+  const gitDir = canonical(gitDirRaw.stdout);
+  const commonDir = canonical(commonRaw.stdout);
+  if (!worktreeRoot || !gitDir || !commonDir)
+    return { refusal: "GIT_UNAVAILABLE" };
+  const appRootInput = canonical(input.appRoot ? resolve5(input.appRoot) : cwd);
+  if (!appRootInput)
+    return { refusal: "NOT_RN_APP" };
+  if (!contained(worktreeRoot, appRootInput))
+    return { refusal: "APP_OUTSIDE_WORKTREE" };
+  if (!input.allowNonRnApp && !isRnAppRoot(appRootInput))
+    return { refusal: "NOT_RN_APP" };
+  const appRelative = worktreeRoot === appRootInput ? "." : toPosix(relative2(worktreeRoot, appRootInput));
+  const base = {
+    kind: gitDir === commonDir ? "primary" : "linked",
+    worktreeRoot,
+    commonDir,
+    gitDir,
+    appRoot: appRootInput,
+    appRelative
+  };
+  if (base.kind === "primary")
+    return base;
+  const primaries = verifiedPrimaries(worktreeRoot, commonDir);
+  if (primaries.length === 0)
+    return { ...base, refusal: "NO_PRIMARY" };
+  if (primaries.length > 1)
+    return { ...base, refusal: "AMBIGUOUS" };
+  const primaryRoot = primaries[0];
+  const primaryAppRoot = appRelative === "." ? primaryRoot : join19(primaryRoot, appRelative);
+  if (!contained(primaryRoot, primaryAppRoot))
+    return { ...base, refusal: "PRIMARY_APP_MISSING" };
+  let primaryAppReal = null;
+  try {
+    if (lstatSync8(primaryAppRoot).isDirectory())
+      primaryAppReal = canonical(primaryAppRoot);
+  } catch {
+    primaryAppReal = null;
+  }
+  if (!primaryAppReal || !contained(primaryRoot, primaryAppReal)) {
+    return { ...base, refusal: "PRIMARY_APP_MISSING" };
+  }
+  return { ...base, primaryRoot, primaryAppRoot };
+}
+var GIT_ENV_OVERRIDES;
+var init_worktree_inheritance = __esm({
+  "packages/rn-dev-agent-core/dist/session/worktree-inheritance.js"() {
+    "use strict";
+    init_worktree_repair_remedy();
+    GIT_ENV_OVERRIDES = [
+      "GIT_DIR",
+      "GIT_WORK_TREE",
+      "GIT_INDEX_FILE",
+      "GIT_COMMON_DIR",
+      "GIT_OBJECT_DIRECTORY",
+      "GIT_NAMESPACE"
+    ];
+  }
+});
+
+// packages/rn-dev-agent-core/dist/domain/action-store.js
+import { existsSync as existsSync16, lstatSync as lstatSync9, readFileSync as readFileSync16, realpathSync as realpathSync6, statSync as statSync7, unlinkSync as unlinkSync8 } from "node:fs";
+import { basename as basename5, dirname as dirname13, join as join20 } from "node:path";
+function actionPathFor(projectRoot, actionId) {
+  assertValidActionId(actionId, "actionPathFor");
+  const actionsDir = join20(projectRoot, ".rn-agent", "actions");
+  assertOwnedActionCorpus(projectRoot);
+  const fileName = `${actionId}.yaml`;
+  assertWithinDir(fileName, actionsDir);
+  return join20(actionsDir, fileName);
+}
+function assertOwnedActionCorpus(projectRoot) {
+  for (const path of [join20(projectRoot, ".rn-agent"), join20(projectRoot, ".rn-agent", "actions")]) {
+    const stat2 = lstatIfPresent(path);
+    if (stat2?.isSymbolicLink()) {
+      throw new Error(`Refusing learned-action corpus symlink at ${path}.`);
+    }
+  }
+}
+function assertReadableActionCorpus(projectRoot) {
+  const rnAgentDir = join20(projectRoot, ".rn-agent");
+  const actionsDir = join20(rnAgentDir, "actions");
+  const rnAgentStat = lstatIfPresent(rnAgentDir);
+  if (rnAgentStat?.isSymbolicLink()) {
+    throw new Error(`Refusing learned-action corpus symlink at ${rnAgentDir}.`);
+  }
+  const actionsStat = lstatIfPresent(actionsDir);
+  if (!actionsStat?.isSymbolicLink())
+    return;
+  const target = realpathSync6(actionsDir);
+  const layout = resolveWorktreeLayout({ cwd: projectRoot, appRoot: projectRoot });
+  const primaryRnAgentDir = "primaryAppRoot" in layout && layout.primaryAppRoot ? join20(layout.primaryAppRoot, ".rn-agent") : null;
+  const primaryActionsDir = primaryRnAgentDir ? join20(primaryRnAgentDir, "actions") : null;
+  const expectedTarget = primaryRnAgentDir && primaryActionsDir && "kind" in layout && layout.kind === "linked" && !layout.refusal && isOwnedDirectory(primaryRnAgentDir) && isOwnedDirectory(primaryActionsDir) ? canonicalPath(primaryActionsDir) : null;
+  if (!expectedTarget || target !== expectedTarget || !statSync7(target).isDirectory()) {
+    throw new Error(`Refusing foreign learned-action corpus symlink at ${actionsDir}.`);
+  }
+}
+function isOwnedDirectory(path) {
+  const stat2 = lstatIfPresent(path);
+  return Boolean(stat2?.isDirectory() && !stat2.isSymbolicLink());
+}
+function canonicalPath(path) {
+  try {
+    return realpathSync6(path);
+  } catch {
+    return null;
+  }
+}
+function lstatIfPresent(path) {
+  try {
+    return lstatSync9(path);
+  } catch (err) {
+    if (err.code === "ENOENT")
+      return null;
+    throw err;
+  }
+}
+function actionFileExists(path) {
+  const stat2 = lstatIfPresent(path);
+  if (!stat2)
+    return false;
+  if (stat2.isSymbolicLink()) {
+    throw new Error(`Refusing inherited action symlink at ${path}.`);
+  }
+  return true;
+}
+function captureOwnedActionPathIdentity(projectRoot, filePath) {
+  const paths = [
+    { path: join20(projectRoot, ".rn-agent"), kind: "directory" },
+    { path: join20(projectRoot, ".rn-agent", "actions"), kind: "directory" }
+  ];
+  if (filePath)
+    paths.push({ path: filePath, kind: "file" });
+  return paths.map(({ path, kind }) => {
+    const stat2 = lstatSync9(path);
+    const valid = !stat2.isSymbolicLink() && (kind === "directory" ? stat2.isDirectory() : stat2.isFile());
+    if (!valid)
+      throw new Error(`Refusing changed learned-action path at ${path}.`);
+    return { path, kind, dev: stat2.dev, ino: stat2.ino };
+  });
+}
+function ownedActionPathIdentityMatches(entries) {
+  try {
+    return entries.every((entry) => {
+      const stat2 = lstatSync9(entry.path);
+      return !stat2.isSymbolicLink() && stat2.dev === entry.dev && stat2.ino === entry.ino && (entry.kind === "directory" ? stat2.isDirectory() : stat2.isFile());
+    });
+  } catch {
+    return false;
+  }
+}
+function resolveActionPath(projectRoot, actionId) {
+  assertValidActionId(actionId, "resolveActionPath");
+  assertReadableActionCorpus(projectRoot);
+  const actionsDir = join20(projectRoot, ".rn-agent", "actions");
+  const fileName = `${actionId}.yaml`;
+  assertWithinDir(fileName, actionsDir);
+  const yamlPath = join20(actionsDir, fileName);
+  const ymlPath = yamlPath.replace(/\.yaml$/, ".yml");
+  const yamlExists = actionFileExists(yamlPath);
+  const ymlExists = actionFileExists(ymlPath);
+  if (yamlExists && ymlExists) {
+    throw new Error(`Action ${actionId} is ambiguous because both ${actionId}.yaml and ${actionId}.yml exist; keep exactly one file before replay.`);
+  }
+  if (yamlExists)
+    return yamlPath;
+  if (ymlExists)
+    return ymlPath;
+  return null;
+}
+function createActionTextExclusive(projectRoot, actionId, yamlText) {
+  const yamlPath = actionPathFor(projectRoot, actionId);
+  const ymlPath = yamlPath.replace(/\.yaml$/, ".yml");
+  return atomicWriter.withLock(yamlPath, () => {
+    const pathIdentity = captureOwnedActionPathIdentity(projectRoot);
+    const pathIsOwned = () => ownedActionPathIdentityMatches(pathIdentity);
+    const existing = resolveActionPath(projectRoot, actionId);
+    if (existing)
+      throw new Error(`Action ${actionId} already exists at ${existing}.`);
+    if (!atomicWriter.writeTextCreateExclusive(yamlPath, yamlText, pathIsOwned)) {
+      throw new Error(`Action ${actionId} changed during creation.`);
+    }
+    try {
+      if (pathIsOwned() && !actionFileExists(ymlPath))
+        return yamlPath;
+      throw new Error(`Action ${actionId} changed during creation; keep exactly one extension.`);
+    } catch (err) {
+      if (pathIsOwned() && readFileSync16(yamlPath, "utf8") === yamlText)
+        unlinkSync8(yamlPath);
+      throw err;
+    }
+  });
+}
+function writeRecordedActionTransaction(projectRoot, actionId, yamlText, state, overwrite) {
+  const yamlPath = actionPathFor(projectRoot, actionId);
+  return atomicWriter.withLock(yamlPath, () => {
+    const existingPath = resolveActionPath(projectRoot, actionId);
+    if (existingPath && !overwrite)
+      return { ok: false, existingPath };
+    const filePath = existingPath ?? yamlPath;
+    const pathIdentity = captureOwnedActionPathIdentity(projectRoot, existingPath ?? void 0);
+    const pathIsOwned = () => ownedActionPathIdentityMatches(pathIdentity);
+    const sidecarPath = sidecarPathFor(filePath);
+    if (!existingPath && existsSync16(sidecarPath))
+      return { ok: false, existingPath: null };
+    const written = existingPath ? atomicWriter.pairWriteConditional(filePath, yamlText, sidecarPath, state, pathIsOwned, pathIsOwned, readFileSync16(filePath, "utf8")) : atomicWriter.pairWriteCreateExclusive(filePath, yamlText, sidecarPath, state, pathIsOwned);
+    if (!written)
+      return { ok: false, existingPath: resolveActionPath(projectRoot, actionId) };
+    return {
+      ok: true,
+      filePath,
+      sidecarPath,
+      finalMtimeMs: written.finalMtimeMs,
+      preexisted: existingPath !== null
+    };
+  });
+}
+function splitYaml(text) {
+  const allLines = text.split("\n");
+  let separatorIdx = -1;
+  for (let i = 0; i < allLines.length; i++) {
+    if (allLines[i].trim() === "---") {
+      separatorIdx = i;
+      break;
+    }
+  }
+  if (separatorIdx === -1) {
+    const headerLines2 = [];
+    const bodyLines2 = [];
+    let inBody = false;
+    let seenAnyContent = false;
+    for (const line of allLines) {
+      if (!inBody && !seenAnyContent && line.trim() === "") {
+        continue;
+      }
+      if (!inBody && line.startsWith("#")) {
+        seenAnyContent = true;
+        headerLines2.push(line);
+      } else if (!inBody && line.trim() === "" && headerLines2.length > 0) {
+        inBody = true;
+        bodyLines2.push(line);
+      } else {
+        seenAnyContent = true;
+        inBody = true;
+        bodyLines2.push(line);
+      }
+    }
+    return { topSection: "", headerLines: headerLines2, bodyLines: bodyLines2 };
+  }
+  const topSection = allLines.slice(0, separatorIdx).join("\n");
+  const afterSep = allLines.slice(separatorIdx + 1);
+  const headerLines = [];
+  const bodyLines = [];
+  let stillHeader = true;
+  for (const line of afterSep) {
+    if (stillHeader && (line.startsWith("#") || line.trim() === "")) {
+      headerLines.push(line);
+    } else {
+      stillHeader = false;
+      bodyLines.push(line);
+    }
+  }
+  return { topSection, headerLines, bodyLines };
+}
+function joinYaml(parts) {
+  const out = [];
+  if (parts.topSection) {
+    out.push(parts.topSection);
+    out.push("---");
+  }
+  for (const h of parts.headerLines)
+    out.push(h);
+  for (const b of parts.bodyLines)
+    out.push(b);
+  return out.join("\n");
+}
+function loadAction(projectRoot, actionId) {
+  const filePath = resolveActionPath(projectRoot, actionId);
+  if (!filePath)
+    return null;
+  const text = readFileSync16(filePath, "utf8");
+  const metadata = parseM7Header(text, actionId);
+  if (!metadata)
+    return null;
+  assertActionMetadataIdentity(filePath, metadata);
+  const { bodyLines } = splitYaml(text);
+  const state = loadOrInitSidecar(filePath);
+  return {
+    metadata,
+    body: bodyLines.join("\n"),
+    filePath,
+    state
+  };
+}
+function saveAction(action) {
+  assertWritableActionFile(action.filePath);
+  if (existsSync16(action.filePath) && actionWasEditedExternally(action)) {
+    throw new SaveActionPreconditionError(action.filePath);
+  }
+  let topSection = "";
+  if (existsSync16(action.filePath)) {
+    const existing = readFileSync16(action.filePath, "utf8");
+    topSection = splitYaml(existing).topSection;
+  }
+  if (!topSection && action.metadata.appId) {
+    topSection = `appId: ${action.metadata.appId}`;
+  }
+  const headerLines = serializeM7Header(action.metadata).split("\n");
+  const bodyLines = action.body.split("\n");
+  const yamlText = joinYaml({ topSection, headerLines, bodyLines });
+  const sidecarPath = sidecarPathFor(action.filePath);
+  const result = atomicWriter.pairWrite(action.filePath, yamlText, sidecarPath, action.state);
+  const stateToWrite = { ...action.state, lastSeenMtimeMs: result.finalMtimeMs };
+  action.state = stateToWrite;
+  mirrorToDb({
+    yamlFilePath: action.filePath,
+    state: stateToWrite,
+    meta: { appId: action.metadata.appId, status: action.metadata.status, path: action.filePath }
+  });
+  return { filePath: action.filePath, sidecarPath };
+}
+function actionWasEditedExternally(action) {
+  return yamlEditedSinceLastSeen(action.filePath, action.state);
+}
+function acknowledgeExternalEdit(action) {
+  const nextAction = atomicWriter.withLock(action.filePath, () => {
+    let currentMtimeMs;
+    try {
+      currentMtimeMs = statSync7(action.filePath).mtimeMs;
+    } catch {
+      return action;
+    }
+    const currentState = loadOrInitSidecar(action.filePath);
+    if (currentMtimeMs <= currentState.lastSeenMtimeMs) {
+      return action;
+    }
+    const nextState = markSeen(currentState, currentMtimeMs);
+    saveSidecar(action.filePath, nextState);
+    return { ...action, state: nextState };
+  });
+  if (nextAction === action)
+    return action;
+  mirrorToDb({
+    yamlFilePath: action.filePath,
+    state: nextAction.state,
+    meta: { appId: action.metadata.appId, status: action.metadata.status, path: action.filePath }
+  });
+  return nextAction;
+}
+function canonicalRuntimeJson(state) {
+  return JSON.stringify(state, (_key, value) => {
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      const record2 = value;
+      return Object.fromEntries(Object.keys(record2).sort().map((k) => [k, record2[k]]));
+    }
+    return value;
+  });
+}
+function runtimeSidecarMatches(sidecarPath, expected) {
+  let onDisk;
+  try {
+    onDisk = JSON.parse(readFileSync16(sidecarPath, "utf8"));
+  } catch {
+    return false;
+  }
+  const normalized = typeof onDisk?.lastSeenMtimeMs === "number" ? onDisk : { ...onDisk, lastSeenMtimeMs: expected.lastSeenMtimeMs };
+  return canonicalRuntimeJson(normalized) === canonicalRuntimeJson(expected);
+}
+function runtimeBaselineMatches(filePath, expected) {
+  const sidecarPath = sidecarPathFor(filePath);
+  return existsSync16(sidecarPath) ? runtimeSidecarMatches(sidecarPath, expected) : expected.runHistory.length === 0 && expected.repairHistory.length === 0;
+}
+function saveActionRuntimeWithCAS(expected, nextState) {
+  return atomicWriter.withLock(expected.filePath, () => {
+    const sidecarPath = sidecarPathFor(expected.filePath);
+    if (!runtimeBaselineMatches(expected.filePath, expected.state)) {
+      return { ok: false, conflict: "EXTERNAL_WRITE" };
+    }
+    saveSidecar(expected.filePath, nextState);
+    expected.state = nextState;
+    return { ok: true, sidecarPath };
+  });
+}
+function promoteActionRuntimeWithCAS(expected, nextState) {
+  try {
+    assertWritableActionFile(expected.filePath);
+  } catch {
+    return { ok: false, conflict: "EXTERNAL_WRITE" };
+  }
+  const sidecarPath = sidecarPathFor(expected.filePath);
+  if (existsSync16(sidecarPath)) {
+    if (!runtimeSidecarMatches(sidecarPath, expected.state)) {
+      return { ok: false, conflict: "EXTERNAL_WRITE" };
+    }
+  } else if (expected.state.runHistory.length > 0 || expected.state.repairHistory.length > 0) {
+    return { ok: false, conflict: "EXTERNAL_WRITE" };
+  }
+  if (actionWasEditedExternally(expected))
+    return { ok: false, conflict: "EXTERNAL_WRITE" };
+  const yaml2 = readFileSync16(expected.filePath, "utf8");
+  const marker = /^# status: experimental[ \t]*$/gm;
+  if ((yaml2.match(marker) ?? []).length !== 1)
+    return { ok: false, conflict: "EXTERNAL_WRITE" };
+  const promoted = yaml2.replace(marker, "# status: active");
+  const written = atomicWriter.pairWriteConditional(expected.filePath, promoted, sidecarPath, nextState, () => {
+    try {
+      return runtimeBaselineMatches(expected.filePath, expected.state) && !actionWasEditedExternally(expected) && readFileSync16(expected.filePath, "utf8") === yaml2;
+    } catch {
+      return false;
+    }
+  }, void 0, yaml2);
+  if (!written)
+    return { ok: false, conflict: "EXTERNAL_WRITE" };
+  expected.state = { ...nextState, lastSeenMtimeMs: written.finalMtimeMs };
+  return { ok: true, sidecarPath };
+}
+function assertWritableActionFile(filePath) {
+  const actionsDir = dirname13(filePath);
+  const rnAgentDir = dirname13(actionsDir);
+  if (basename5(actionsDir) !== "actions" || basename5(rnAgentDir) !== ".rn-agent") {
+    throw new Error(`Refusing action mutation outside an owned learned-action corpus: ${filePath}.`);
+  }
+  assertOwnedActionCorpus(dirname13(rnAgentDir));
+  actionFileExists(filePath);
+}
+function assertActionMetadataIdentity(filePath, metadata) {
+  const fileId = basename5(filePath).replace(/\.ya?ml$/i, "");
+  if (metadata.id !== fileId) {
+    throw new Error(`Action metadata id ${metadata.id} does not match filename identity ${fileId}.`);
+  }
+}
+function withMetadata(action, metadata) {
+  return { ...action, metadata };
+}
+function withBody(action, body) {
+  return { ...action, body };
+}
+var SaveActionPreconditionError;
+var init_action_store = __esm({
+  "packages/rn-dev-agent-core/dist/domain/action-store.js"() {
+    "use strict";
+    init_reusable_action();
+    init_sidecar_io();
+    init_atomic_writer();
+    init_path_safety();
+    init_action_state_store();
+    init_worktree_inheritance();
+    SaveActionPreconditionError = class extends Error {
+      constructor(filePath) {
+        super(`saveAction precondition violated: yaml at ${filePath} has been edited externally since the in-memory action was loaded. The caller must invoke actionWasEditedExternally() first and abort on true (or use saveActionWithCAS for atomic detection). GH #113 contract enforcement.`);
+        this.name = "SaveActionPreconditionError";
+      }
+    };
+  }
+});
+
+// packages/rn-dev-agent-core/dist/domain/action-engine-compat.js
+import { existsSync as existsSync17, lstatSync as lstatSync10, readFileSync as readFileSync17, readdirSync as readdirSync7, realpathSync as realpathSync7 } from "node:fs";
+import { basename as basename6, dirname as dirname14, join as join21, resolve as resolve6 } from "node:path";
+function actionEnginePinRefusal(enginePin) {
+  if (!enginePin) {
+    return `Action is not migrated to ${ACTION_ENGINE_PIN} or newer. Run node <plugin-root>/rn-dev-agent-core/dist/maestro-runner-pin.js migrate-actions --root <app> before replay. Incompatible actions are terminal \u2014 no manual fallback.`;
+  }
+  const version2 = parseActionEnginePinVersion(enginePin);
+  if (!version2) {
+    return `Action enginePin ${enginePin} is incompatible with the required floor ${ACTION_ENGINE_PIN}. Migrate or re-record the action. Incompatible actions are terminal \u2014 no manual fallback.`;
+  }
+  if (!meetsMaestroRunnerFloor(version2)) {
+    return `Action enginePin ${enginePin} is below the required floor ${ACTION_ENGINE_PIN}. Migrate or re-record the action. Incompatible actions are terminal \u2014 no manual fallback.`;
+  }
+  return null;
+}
+function regexSelectorCapabilityRefusal(commands) {
+  const selectors = findRegexTextSelectors(commands);
+  if (selectors.length === 0)
+    return null;
+  return `Action uses regex text selectors (${selectors[0]}) which are not a validated maestro-runner ${MAESTRO_RUNNER_PIN.version} capability (GH #750 CONTAINS mistranslation). Rewrite as id or literal text selectors before replay. No UI mutation will run.`;
+}
+function actionReplayPreflight(opts) {
+  return replayCompatibilityPreflight({ ...opts, requireEnginePin: true });
+}
+function replayCompatibilityPreflight(opts) {
+  const pin = exactPinRefusal(opts.engineStatus);
+  if (pin)
+    return pin;
+  if (opts.requireEnginePin) {
+    const format = actionEnginePinRefusal(opts.enginePin);
+    if (format)
+      return format;
+  }
+  return regexSelectorCapabilityRefusal(opts.commands);
+}
+function isLearnedActionPath(path) {
+  return classifyLearnedActionPath(path) === "action";
+}
+function classifyLearnedActionPath(path) {
+  const lexical = classifyResolvedLearnedActionPath(resolve6(path));
+  try {
+    const canonical2 = classifyResolvedLearnedActionPath(canonicalizeExistingPath(path));
+    if (lexical === canonical2)
+      return lexical;
+    if (lexical === "outside")
+      return canonical2;
+    return "descendant";
+  } catch {
+    return lexical;
+  }
+}
+function classifyResolvedLearnedActionPath(path) {
+  let parent = dirname14(path);
+  let direct = true;
+  while (true) {
+    if (basename6(parent) === "actions" && basename6(dirname14(parent)) === ".rn-agent") {
+      return direct ? "action" : "descendant";
+    }
+    const next = dirname14(parent);
+    if (next === parent)
+      return "outside";
+    parent = next;
+    direct = false;
+  }
+}
+function canonicalizeExistingPath(path) {
+  let cursor = resolve6(path);
+  const suffix = [];
+  while (!existsSync17(cursor)) {
+    const parent = dirname14(cursor);
+    if (parent === cursor)
+      return cursor;
+    suffix.unshift(basename6(cursor));
+    cursor = parent;
+  }
+  return resolve6(realpathSync7(cursor), ...suffix);
+}
+function standaloneLearnedActionPathRefusal(path) {
+  const classification = classifyLearnedActionPath(path);
+  if (classification === "outside")
+    return null;
+  if (classification === "descendant") {
+    return `Refusing to execute learned-action descendant ${path} as a standalone flow.`;
+  }
+  const actionId = basename6(path).replace(/\.ya?ml$/i, "");
+  const projectRoot = dirname14(dirname14(dirname14(resolve6(path))));
+  try {
+    const resolvedAction = resolveActionPath(projectRoot, actionId);
+    if (resolvedAction === null || resolve6(resolvedAction) !== resolve6(path)) {
+      return `Action ${actionId} does not resolve uniquely to ${path}.`;
+    }
+    const metadata = parseM7Header(readFileSync17(path, "utf8"), actionId);
+    if (metadata)
+      assertActionMetadataIdentity(path, metadata);
+  } catch (err) {
+    return err instanceof Error ? err.message : String(err);
+  }
+  return null;
+}
+var ENGINE_PIN_LINE;
+var init_action_engine_compat = __esm({
+  "packages/rn-dev-agent-core/dist/domain/action-engine-compat.js"() {
+    "use strict";
+    init_engine_pin();
+    init_maestro_validator();
+    init_reusable_action();
+    init_action_store();
+    ENGINE_PIN_LINE = new RegExp(`^#\\s*enginePin\\s*:\\s*.+$`);
+  }
+});
+
+// packages/rn-dev-agent-core/dist/tools/resolve-ios-app-file.js
+import { execFileSync as execFileSync5 } from "node:child_process";
+import { existsSync as existsSync18, cpSync, rmSync as rmSync5, mkdirSync as mkdirSync13, readdirSync as readdirSync8, statSync as statSync8 } from "node:fs";
+import { tmpdir as tmpdir5 } from "node:os";
+import { join as join22, basename as basename7 } from "node:path";
+function flowUsesClearState(flowText) {
+  return /clearState:\s*true\b/.test(flowText) || /^[ \t]*-[ \t]*clearState[ \t]*$/m.test(flowText);
+}
+function defaultSnapshotApp(appPath) {
+  try {
+    const destDir = join22(tmpdir5(), "rn-appfile-snapshots");
+    const dest = join22(destDir, basename7(appPath));
+    rmSync5(dest, { recursive: true, force: true });
+    mkdirSync13(destDir, { recursive: true });
+    try {
+      execFileSync5("cp", ["-Rc", appPath, dest], { timeout: 3e4, stdio: "ignore" });
+    } catch {
+      cpSync(appPath, dest, { recursive: true });
+    }
+    return dest;
+  } catch {
+    return null;
+  }
+}
+function resolveIosAppFile(bundleId, deps = {}) {
+  const exists = deps.exists ?? existsSync18;
+  const getAppContainer = deps.getAppContainer ?? defaultGetAppContainer;
+  const snapshotApp = deps.snapshotApp ?? defaultSnapshotApp;
+  const fromContainer = getAppContainer(bundleId, deps.deviceId);
+  if (fromContainer && exists(fromContainer)) {
+    const snapshot = snapshotApp(fromContainer);
+    if (snapshot)
+      return snapshot;
+  }
+  const fromDerived = (deps.newestDerivedDataApp ?? (() => null))();
+  if (fromDerived && exists(fromDerived))
+    return fromDerived;
+  return null;
+}
+function resolveAppFileForClearState(platform, flowText, headerAppId, explicitAppFile, deps) {
+  if (explicitAppFile)
+    return { ok: true, appFile: explicitAppFile };
+  if (platform !== "ios" || !flowUsesClearState(flowText))
+    return { ok: true };
+  if (!headerAppId) {
+    return {
+      ok: false,
+      error: "Flow uses clearState on iOS but no appId is known to locate the .app. Add `appId:` to the flow header or pass appFile=<path-to-.app>."
+    };
+  }
+  const appFile = resolveIosAppFile(headerAppId, deps) ?? void 0;
+  if (!appFile) {
+    return {
+      ok: false,
+      error: `Flow uses clearState on iOS but no built .app could be located for ${headerAppId}. Pass appFile=<path-to-.app> (e.g. <DerivedData>/Build/Products/Debug-iphonesimulator/<App>.app).`
+    };
+  }
+  return { ok: true, appFile };
+}
+function defaultGetAppContainer(bundleId, deviceId) {
+  try {
+    const target = deviceId && !/\s/.test(deviceId) ? deviceId : "booted";
+    const out = execFileSync5("xcrun", ["simctl", "get_app_container", target, bundleId, "app"], {
+      encoding: "utf8",
+      timeout: 5e3
+    }).trim();
+    return out || null;
+  } catch {
+    return null;
+  }
+}
+function defaultListSnapshots() {
+  const dir = join22(tmpdir5(), "rn-appfile-snapshots");
+  try {
+    return readdirSync8(dir).filter((name) => name.endsWith(".app")).map((name) => join22(dir, name));
+  } catch {
+    return [];
+  }
+}
+function defaultReadBundleId(appPath, timeoutMs) {
+  try {
+    const out = execFileSync5("plutil", ["-extract", "CFBundleIdentifier", "raw", join22(appPath, "Info.plist")], { timeout: timeoutMs, encoding: "utf8" });
+    return out.trim() || null;
+  } catch {
+    return null;
+  }
+}
+function defaultMtimeMs(appPath) {
+  try {
+    return statSync8(appPath).mtimeMs;
+  } catch {
+    return null;
+  }
+}
+function findSnapshotForBundleId(bundleId, deps = {}) {
+  const listSnapshots = deps.listSnapshots ?? defaultListSnapshots;
+  const readBundleId = deps.readBundleId ?? defaultReadBundleId;
+  const mtimeMs = deps.mtimeMs ?? defaultMtimeMs;
+  const now = deps.now ?? Date.now;
+  try {
+    const deadline = now() + SNAPSHOT_SCAN_BUDGET_MS;
+    const candidates = listSnapshots().map((path) => ({ path, m: mtimeMs(path) })).filter((c) => c.m !== null).sort((a, b) => b.m - a.m).slice(0, SNAPSHOT_SCAN_CAP);
+    for (const { path, m } of candidates) {
+      const remaining = deadline - now();
+      if (remaining <= 0)
+        return null;
+      if (readBundleId(path, Math.min(PLUTIL_TIMEOUT_MS, remaining)) === bundleId) {
+        return { path, mtimeMs: m };
+      }
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+function snapshotHintForBundleId(bundleId, deps = {}) {
+  try {
+    const now = deps.now ?? Date.now;
+    const snap = findSnapshotForBundleId(bundleId, deps);
+    if (!snap)
+      return null;
+    return {
+      path: snap.path,
+      ageMinutes: Math.max(0, Math.round((now() - snap.mtimeMs) / 6e4))
+    };
+  } catch {
+    return null;
+  }
+}
+var SNAPSHOT_SCAN_CAP, SNAPSHOT_SCAN_BUDGET_MS, PLUTIL_TIMEOUT_MS;
+var init_resolve_ios_app_file = __esm({
+  "packages/rn-dev-agent-core/dist/tools/resolve-ios-app-file.js"() {
+    "use strict";
+    SNAPSHOT_SCAN_CAP = 10;
+    SNAPSHOT_SCAN_BUDGET_MS = 3e3;
+    PLUTIL_TIMEOUT_MS = 2e3;
+  }
+});
+
+// packages/rn-dev-agent-core/dist/domain/maestro-step-parser.js
+function cap(s) {
+  return s.length > MAX_FIELD ? s.slice(0, MAX_FIELD) + "\u2026" : s;
+}
+function combineRunnerOutput(stdout, stderr) {
+  return (stdout + "\n" + stderr).replace(/^[\r\n]+/, "").trimEnd();
+}
+function parseExactSteps(output) {
+  if (!output || typeof output !== "string")
+    return [];
+  const steps = [];
+  let index = 0;
+  for (const raw of stripAnsi(output).split("\n")) {
+    const m = STEP_RE.exec(raw);
+    if (!m)
+      continue;
+    const name = m[2];
+    const verb = cap(name.split(/\s+/)[0].replace(/:$/, ""));
+    if (verb === "rn-maestro-run")
+      continue;
+    const seconds = Number(m[3]);
+    if (!Number.isFinite(seconds))
+      continue;
+    steps.push({
+      index: index++,
+      name,
+      verb,
+      status: m[1] === "\u2713" ? "pass" : "fail",
+      durationMs: Math.round(seconds * 1e3)
+    });
+  }
+  return steps.length > MAX_STEPS ? steps.slice(-MAX_STEPS) : steps;
+}
+function boundStep(step) {
+  return { ...step, name: cap(step.name) };
+}
+function parseSteps(output) {
+  return parseExactSteps(output).map(boundStep);
+}
+function findFailedStep(steps) {
+  const last = steps.length ? steps[steps.length - 1] : null;
+  return last && last.status === "fail" ? last : null;
+}
+function lastObservedStep(steps) {
+  return steps.length ? steps[steps.length - 1] : null;
+}
+function summarizeExactReason(output, failedStep) {
+  const f = parseMaestroFailure(output, failedStep ? { failedStep } : void 0);
+  if (f.kind === "UNKNOWN" || f.kind === "WDA_BOOTSTRAP_FAILED")
+    return null;
+  const selector = "selector" in f ? f.selector ?? null : null;
+  return { kind: f.kind, selector };
+}
+function buildStepSummary(output, opts) {
+  const exactSteps = parseExactSteps(output);
+  const exactFailedStep = opts.failed ? findFailedStep(exactSteps) : null;
+  const exactReason = opts.failed ? summarizeExactReason(output, exactFailedStep?.name) : null;
+  const steps = exactSteps.map(boundStep);
+  return {
+    steps,
+    failedStep: exactFailedStep ? boundStep(exactFailedStep) : null,
+    reason: exactReason ? {
+      ...exactReason,
+      selector: exactReason.selector === null ? null : cap(exactReason.selector)
+    } : null,
+    lastStep: lastObservedStep(steps)
+  };
+}
+function isWdaFailureLine(line) {
+  return WDA_TOKEN_RE.test(line) && WDA_FAILURE_RE.test(line);
+}
+function buildTerminalEvidence(output, opts = {}) {
+  const exactSteps = parseExactSteps(output);
+  const failedStep = findFailedStep(exactSteps);
+  const reason = summarizeExactReason(output, failedStep?.name);
+  const bootstrapEvidence = stripAnsi(output).split("\n").filter((line) => isWdaFailureLine(line)).join("\n").slice(0, 500);
+  const exitClass = opts.timedOut ? "timed-out" : opts.spawnError ? "spawn-error" : exactSteps.length === 0 ? "before-first-step" : "step-failure";
+  return {
+    completedSteps: exactSteps.filter((step) => step.status === "pass").length,
+    ...failedStep ? { failedStep: failedStep.name } : {},
+    exitClass,
+    ...bootstrapEvidence ? { bootstrapEvidence } : {},
+    ...reason ? {
+      failureKind: reason.kind,
+      failureSelector: reason.selector
+    } : {}
+  };
+}
+function classifyExecError(err) {
+  const e = err;
+  const killed = e?.killed === true;
+  const overflow = e?.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER";
+  return { timedOut: (killed || e?.code === "ETIMEDOUT") && !overflow, outputTruncated: overflow };
+}
+function formatFailureHeadline(summary, cls, fallbackMsg) {
+  if (cls.timedOut) {
+    return `Maestro flow timed out${summary.lastStep ? ` after step "${summary.lastStep.name}"` : ""}`;
+  }
+  if (cls.outputTruncated) {
+    return "Maestro flow output exceeded the 10MB buffer";
+  }
+  if (summary.failedStep) {
+    const r = summary.reason;
+    const reasonStr = r ? ` (${r.kind}${r.selector ? `: ${r.selector}` : ""})` : "";
+    return `Maestro flow failed at step "${summary.failedStep.name}"${reasonStr}`;
+  }
+  if (summary.reason) {
+    const r = summary.reason;
+    return `Maestro flow failed (${r.kind}${r.selector ? `: ${r.selector}` : ""})`;
+  }
+  return `Maestro flow failed: ${fallbackMsg.slice(0, 500)}`;
+}
+var STEP_RE, MAX_FIELD, MAX_STEPS, WDA_TOKEN_RE, WDA_FAILURE_RE;
+var init_maestro_step_parser = __esm({
+  "packages/rn-dev-agent-core/dist/domain/maestro-step-parser.js"() {
+    "use strict";
+    init_maestro_error_parser();
+    init_ansi();
+    init_ansi();
+    STEP_RE = /^[ \t]+([✓✗])\s+(\S.*\S|\S)\s*\(([\d.]+)s\)\s*$/;
+    MAX_FIELD = 200;
+    MAX_STEPS = 1e3;
+    WDA_TOKEN_RE = /\bWDA\b|WebDriverAgent/i;
+    WDA_FAILURE_RE = /\b(?:fail(?:ed|ure|s)?|error|unable|cannot|can't|could not|timed out|timeout|refused|denied|crash(?:ed)?|panic|aborted)\b/i;
+  }
+});
+
+// packages/rn-dev-agent-core/dist/domain/tap-latency.js
+function parseTapLatencies(output) {
+  return parseSteps(output).filter((s) => s.verb === "tapOn" && s.status === "pass").map((s) => s.durationMs);
+}
+function median(samples) {
+  if (samples.length === 0)
+    return null;
+  const s = [...samples].sort((a, b) => a - b);
+  const mid = Math.floor(s.length / 2);
+  return s.length % 2 === 0 ? Math.round((s[mid - 1] + s[mid]) / 2) : s[mid];
+}
+function resolveFloorMs(envVal) {
+  if (envVal === void 0)
+    return DEFAULT_FLOOR_MS;
+  const n = Number(envVal);
+  return Number.isFinite(n) && n > 0 ? n : DEFAULT_FLOOR_MS;
+}
+function classifyRuntimeDegradation(output, floorMs) {
+  const samples = parseTapLatencies(output);
+  const medianMs = median(samples);
+  return {
+    degraded: medianMs != null && samples.length >= MIN_SAMPLES_FOR_DEGRADED && medianMs >= floorMs,
+    medianMs,
+    floorMs,
+    sampleCount: samples.length
+  };
+}
+function formatRuntimeDegradedHint(d) {
+  return `RUNTIME_DEGRADED: median tapOn latency ${d.medianMs}ms (>= ${d.floorMs}ms) \u2014 the simulator test runtime is likely wedged; reboot it (xcrun simctl shutdown <udid> && xcrun simctl boot <udid>), relaunch the app, and retry.`;
+}
+function augmentFailureWithDegradation(output, floorMs, baseMessage, baseMeta) {
+  const d = classifyRuntimeDegradation(output, floorMs);
+  if (!d.degraded)
+    return { message: baseMessage, meta: baseMeta };
+  return {
+    message: `${baseMessage} \u2014 ${formatRuntimeDegradedHint(d)}`,
+    meta: {
+      ...baseMeta,
+      runtimeDegraded: { medianTapMs: d.medianMs, floorMs: d.floorMs, sampleCount: d.sampleCount }
+    }
+  };
+}
+var DEFAULT_FLOOR_MS, MIN_SAMPLES_FOR_DEGRADED;
+var init_tap_latency = __esm({
+  "packages/rn-dev-agent-core/dist/domain/tap-latency.js"() {
+    "use strict";
+    init_maestro_step_parser();
+    DEFAULT_FLOOR_MS = 1500;
+    MIN_SAMPLES_FOR_DEGRADED = 2;
+  }
+});
+
+// packages/rn-dev-agent-core/dist/cdp/recovery.js
+function markCdpStale() {
+  cdpStale = true;
+}
+function consumeCdpStale() {
+  const was = cdpStale;
+  cdpStale = false;
+  return was;
+}
+async function probeFreshness(client2, timeoutMs = FRESHNESS_PROBE_MS) {
+  return client2.probeHelperFreshness(timeoutMs);
+}
+async function recoverFromStaleTarget(client2) {
+  if (!client2.isConnected) {
+    return { recovered: false, reason: "probe-failed", error: "Client not connected" };
+  }
+  let probe = await probeDev(client2, FRESHNESS_PROBE_MS);
+  let isStale = !probe.ok;
+  if (isStale && probe.timedOut) {
+    await sleep3(STALE_RETRY_DELAY_MS);
+    probe = await probeDev(client2, STALE_RETRY_PROBE_MS);
+    isStale = !probe.ok;
+  }
+  if (!isStale) {
+    return { recovered: false, reason: "not-stale" };
+  }
+  try {
+    await client2.softReconnect();
+    return { recovered: true, reason: "reconnected" };
+  } catch (err) {
+    const msg3 = err instanceof Error ? err.message : String(err);
+    return { recovered: false, reason: "reconnect-failed", error: msg3 };
+  }
+}
+async function probeDev(client2, timeoutMs) {
+  let timer;
+  try {
+    const evalPromise = client2.evaluate('typeof __DEV__ !== "undefined" && __DEV__ === true');
+    evalPromise.catch(() => {
+    });
+    const result = await Promise.race([
+      evalPromise,
+      new Promise((resolve19) => {
+        timer = setTimeout(() => resolve19({ error: "probe timeout" }), timeoutMs);
+      })
+    ]);
+    if (timer)
+      clearTimeout(timer);
+    return {
+      ok: result.error === void 0 && result.value === true,
+      timedOut: result.error === "probe timeout"
+    };
+  } catch {
+    if (timer)
+      clearTimeout(timer);
+    return { ok: false, timedOut: false };
+  }
+}
+function sleep3(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+var FRESHNESS_PROBE_MS, STALE_RETRY_DELAY_MS, STALE_RETRY_PROBE_MS, cdpStale;
+var init_recovery = __esm({
+  "packages/rn-dev-agent-core/dist/cdp/recovery.js"() {
+    "use strict";
+    FRESHNESS_PROBE_MS = 2e3;
+    STALE_RETRY_DELAY_MS = 500;
+    STALE_RETRY_PROBE_MS = 3e3;
+    cdpStale = false;
+  }
+});
+
+// packages/rn-dev-agent-core/dist/domain/maestro-device-authority.js
+function canonicalDeviceId(value) {
+  return value.toLowerCase();
+}
+function sameDevice(left, right) {
+  return canonicalDeviceId(left) === canonicalDeviceId(right);
+}
+function uniqueValues(values) {
+  const seen = /* @__PURE__ */ new Map();
+  for (const value of values) {
+    if (!value)
+      continue;
+    const key = canonicalDeviceId(value);
+    if (!seen.has(key))
+      seen.set(key, value);
+  }
+  return [...seen.values()];
+}
+function uniqueMatches(output, pattern) {
+  return uniqueValues([...output.matchAll(pattern)].map((match) => match[1]));
+}
+function verifyMaestroDeviceAuthority(input) {
+  const requestedDeviceId = input.requestedDeviceId?.trim() || null;
+  const reportedIds = uniqueValues([
+    ...input.directReportDeviceIds ?? [],
+    ...uniqueMatches(input.output, /\b(?:Found|Using specified|Connecting to) (?:(?:iOS|Android) )?device:\s*([A-Za-z0-9._:-]+)/gi)
+  ]);
+  const wdaDeviceIds = uniqueMatches(input.output, /\b(?:Building|Starting|Launching|Installing)\s+(?:WDA|WebDriverAgent(?:Runner)?)\s+(?:for|on|to)\s+device\s+([A-Za-z0-9._:-]+)/gi);
+  const observedDeviceIds = uniqueValues([...reportedIds, ...wdaDeviceIds]);
+  const reportedDeviceId = reportedIds.length === 1 ? reportedIds[0] : null;
+  if (!requestedDeviceId) {
+    return {
+      requestedDeviceId,
+      reportedDeviceId,
+      observedDeviceIds,
+      wdaDeviceIds,
+      verified: false,
+      source: reportedIds.length > 0 ? "maestro-runner-log" : "none",
+      reason: "no-exact-device-request"
+    };
+  }
+  if (input.runner !== "maestro-runner") {
+    return {
+      requestedDeviceId,
+      reportedDeviceId,
+      observedDeviceIds,
+      wdaDeviceIds,
+      verified: false,
+      source: "maestro-cli-explicit-udid",
+      reason: "direct-runner-evidence-unavailable"
+    };
+  }
+  const base = {
+    requestedDeviceId,
+    reportedDeviceId,
+    observedDeviceIds,
+    wdaDeviceIds,
+    source: "maestro-runner-log"
+  };
+  if (reportedIds.length === 0) {
+    return { ...base, verified: false, reason: "reported-device-missing" };
+  }
+  if (reportedIds.length !== 1) {
+    return { ...base, verified: false, reason: "reported-device-ambiguous" };
+  }
+  if (!reportedDeviceId || !sameDevice(reportedDeviceId, requestedDeviceId)) {
+    const weakOnly = input.directReportIdentityStrength === "weak" && (input.directReportDeviceIds ?? []).some((id) => sameDevice(id, reportedDeviceId ?? ""));
+    return {
+      ...base,
+      verified: false,
+      reason: weakOnly ? "reported-device-weak-identity" : "reported-device-mismatch"
+    };
+  }
+  if (observedDeviceIds.some((id) => !sameDevice(id, requestedDeviceId))) {
+    return { ...base, verified: false, reason: "wda-device-mismatch" };
+  }
+  return {
+    ...base,
+    verified: true,
+    ...input.platform === "ios" && input.requireWdaProvenance === true ? {
+      wdaProvenance: wdaDeviceIds.length > 0 ? "exact-match" : "unavailable"
+    } : {},
+    reason: input.platform === "ios" && wdaDeviceIds.length > 0 ? "exact-runner-and-wda-match" : "exact-runner-match"
+  };
+}
+function shouldRejectMaestroDeviceAuthority(authority) {
+  return authority.requestedDeviceId !== null && authority.source === "maestro-runner-log" && !authority.verified;
+}
+function maestroAuthorityRefusal(authority, underlyingError) {
+  if (!shouldRejectMaestroDeviceAuthority(authority))
+    return null;
+  const headline = `Maestro device authority refused: requested ${authority.requestedDeviceId}, direct runner/WDA evidence was ${authority.reportedDeviceId ?? "missing"} (${authority.reason}).`;
+  return underlyingError ? `${headline} Underlying failure: ${underlyingError}` : headline;
+}
+var init_maestro_device_authority = __esm({
+  "packages/rn-dev-agent-core/dist/domain/maestro-device-authority.js"() {
+    "use strict";
+  }
+});
+
+// packages/rn-dev-agent-core/dist/domain/maestro-runner-report.js
+import { existsSync as existsSync19, readFileSync as readFileSync18, rmSync as rmSync6 } from "node:fs";
+import { tmpdir as tmpdir6 } from "node:os";
+import { join as join23 } from "node:path";
+function idsFrom(value, keys) {
+  if (!value || typeof value !== "object")
+    return [];
+  const record2 = value;
+  for (const key of keys) {
+    const id = record2[key];
+    if (typeof id === "string")
+      return [id];
+  }
+  return [];
+}
+function deviceIdsFrom(value) {
+  return idsFrom(value, DEVICE_ID_KEYS);
+}
+function weakDeviceIdsFrom(value) {
+  if (typeof value === "string")
+    return [value];
+  return idsFrom(value, WEAK_DEVICE_ID_KEYS);
+}
+function containerDeviceIdsFrom(value) {
+  return idsFrom(value, CONTAINER_DEVICE_ID_KEYS);
+}
+function reportDeviceIds(reportDir) {
+  const reportPath = join23(reportDir, "report.json");
+  if (!existsSync19(reportPath))
+    return { ids: [], strength: "none" };
+  try {
+    const report = JSON.parse(readFileSync18(reportPath, "utf8"));
+    const flows = Array.isArray(report.flows) ? report.flows : [];
+    const devices = [report.device, ...flows.map((flow) => flow?.device)];
+    const strong = [
+      ...devices.flatMap((device) => deviceIdsFrom(device)),
+      ...[report, ...flows].flatMap((container) => containerDeviceIdsFrom(container))
+    ];
+    const usingStrong = strong.length > 0;
+    const ids = usingStrong ? strong : devices.flatMap((device) => weakDeviceIdsFrom(device));
+    const accepted = [
+      ...new Set(ids.map((id) => id.trim()).filter((id) => DIRECT_DEVICE_ID_RE.test(id)))
+    ];
+    return {
+      ids: accepted,
+      strength: accepted.length === 0 ? "none" : usingStrong ? "strong" : "weak"
+    };
+  } catch {
+    return { ids: [], strength: "none" };
+  }
+}
+function createRunnerReportDir(runner, prefix) {
+  if (runner !== "maestro-runner")
+    return null;
+  return join23(tmpdir6(), `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+}
+function runnerReportArgs(reportDir) {
+  return reportDir ? ["--output", reportDir, "--flatten"] : [];
+}
+function collectDirectRunnerEvidence(reportDir, output) {
+  if (!reportDir)
+    return { output, reportDeviceIds: [], reportDeviceIdStrength: "none" };
+  const report = reportDeviceIds(reportDir);
+  const evidence = {
+    output,
+    reportDeviceIds: report.ids,
+    reportDeviceIdStrength: report.strength
+  };
+  const logPath = join23(reportDir, "maestro-runner.log");
+  if (!existsSync19(logPath))
+    return evidence;
+  try {
+    evidence.output = `${output}
+${readFileSync18(logPath, "utf8")}`;
+  } catch {
+  }
+  return evidence;
+}
+function disposeRunnerReportDir(reportDir) {
+  if (!reportDir)
+    return;
+  try {
+    rmSync6(reportDir, { recursive: true, force: true });
+  } catch {
+  }
+}
+var DIRECT_DEVICE_ID_RE, DEVICE_ID_KEYS, WEAK_DEVICE_ID_KEYS, CONTAINER_DEVICE_ID_KEYS;
+var init_maestro_runner_report = __esm({
+  "packages/rn-dev-agent-core/dist/domain/maestro-runner-report.js"() {
+    "use strict";
+    DIRECT_DEVICE_ID_RE = /^[A-Za-z0-9._:-]{1,256}$/;
+    DEVICE_ID_KEYS = ["udid", "deviceId", "serial"];
+    WEAK_DEVICE_ID_KEYS = ["id"];
+    CONTAINER_DEVICE_ID_KEYS = ["udid", "deviceId", "deviceSerial"];
   }
 });
 
@@ -31231,7 +31358,7 @@ var init_metro_origin = __esm({
 import { execFileSync as execFileSync6 } from "node:child_process";
 import { createHash as createHash6 } from "node:crypto";
 import { lstatSync as lstatSync11, readFileSync as readFileSync19, readdirSync as readdirSync9, readlinkSync as readlinkSync4, realpathSync as realpathSync8, statSync as statSync9 } from "node:fs";
-import { isAbsolute as isAbsolute3, join as join24, relative as relative3 } from "node:path";
+import { isAbsolute as isAbsolute4, join as join24, relative as relative3 } from "node:path";
 function runText(command, args) {
   return execFileSync6(command, [...args], {
     encoding: "utf8",
@@ -31282,7 +31409,7 @@ function iosAppFiles(appPath, dependencies) {
 function assertIosSymlinkContained(appPath, path, realpath) {
   const target = realpath(path);
   const child = relative3(realpath(appPath), target);
-  if (child === ".." || child.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) || isAbsolute3(child)) {
+  if (child === ".." || child.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) || isAbsolute4(child)) {
     throw new Error("APP_INSTALL_IDENTITY_CHANGED: iOS app symlink escapes the installed bundle");
   }
 }
@@ -31799,7 +31926,7 @@ var init_tool_profiles = __esm({
 // packages/rn-dev-agent-core/dist/session/authority-gate.js
 import { randomUUID as randomUUID4 } from "node:crypto";
 import { realpathSync as realpathSync9 } from "node:fs";
-import { isAbsolute as isAbsolute4, relative as relative4, resolve as resolve7 } from "node:path";
+import { isAbsolute as isAbsolute5, relative as relative4, resolve as resolve7 } from "node:path";
 async function claimOptionalBundleAuthority(args) {
   return await args[optionalBundleAdmission]?.() ?? false;
 }
@@ -32059,12 +32186,12 @@ function bindSourcePaths(status, args, tool) {
     }
     let candidate;
     try {
-      candidate = realpathSync9(isAbsolute4(supplied) ? supplied : resolve7(appRoot, supplied));
+      candidate = realpathSync9(isAbsolute5(supplied) ? supplied : resolve7(appRoot, supplied));
     } catch {
       throw new SessionAuthorityError("SOURCE_WORKTREE_MISMATCH", `${field2} cannot be resolved within the active app root`);
     }
     const child = relative4(appRoot, candidate);
-    if (child === ".." || child.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) || isAbsolute4(child)) {
+    if (child === ".." || child.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) || isAbsolute5(child)) {
       throw new SessionAuthorityError("SOURCE_WORKTREE_MISMATCH", `${field2} ${candidate} is outside the active session app root ${appRoot}`, void 0, field2 === "projectRoot" ? {
         nextAction: `Run rn_session action "bind_source" with projectRoot "${candidate}" to rebind the session to that worktree, then retry.`
       } : void 0);
@@ -33213,7 +33340,7 @@ import { execFile as execFileCb3 } from "node:child_process";
 import { promisify as promisify4 } from "node:util";
 import { existsSync as existsSync20, readFileSync as readFileSync20, writeFileSync as writeFileSync9 } from "node:fs";
 import { tmpdir as tmpdir7 } from "node:os";
-import { basename as basename7, join as join25, dirname as dirname15 } from "node:path";
+import { basename as basename8, join as join25, dirname as dirname15 } from "node:path";
 async function runFlowParked(run, opts = {}) {
   const stale = opts.markCdpStale ?? markCdpStale;
   try {
@@ -33530,7 +33657,7 @@ function createMaestroRunHandler(deps = {}) {
       return failResult(learnedActionPathRefusal, "BAD_RECORDING");
     }
     const learnedAction = args.flowPath ? isLearnedActionPath(args.flowPath) : false;
-    const actionMeta = args.flowPath ? parseM7Header(rawYaml, basename7(args.flowPath).replace(/\.ya?ml$/i, "")) : null;
+    const actionMeta = args.flowPath ? parseM7Header(rawYaml, basename8(args.flowPath).replace(/\.ya?ml$/i, "")) : null;
     const compatibilityRefusal = learnedAction || actionMeta !== null ? actionReplayPreflight({
       enginePin: actionMeta?.enginePin,
       commands: validatedCommands,
@@ -34256,47 +34383,6 @@ var init_foreign_flow_gate = __esm({
     };
     foreignFlowGate = new ForeignFlowGate();
     udidProvider = () => null;
-  }
-});
-
-// packages/rn-dev-agent-core/dist/util/public-diagnostics.js
-import { basename as basename8, isAbsolute as isAbsolute5 } from "node:path";
-function publicDeviceIdentity(deviceId) {
-  return `device-${shortAuthorityIdentity(deviceId).slice(0, 12)}`;
-}
-function publicLocalPath(path) {
-  return isAbsolute5(path) ? `<local-path>/${basename8(path)}` : path;
-}
-function sanitizePublicDiagnostic(value, options = {}) {
-  let safe = value.replace(/[^\t\n\r\x20-\x7e]/g, "?");
-  for (const deviceId of [...options.deviceIds ?? []].sort((a, b) => b.length - a.length)) {
-    if (deviceId)
-      safe = safe.replaceAll(deviceId, publicDeviceIdentity(deviceId));
-  }
-  safe = safe.replace(DEVICE_ID_RE, (id) => publicDeviceIdentity(id));
-  safe = safe.replace(POSIX_PATH_RE, (path) => `<local-path>/${basename8(path)}`);
-  safe = safe.replace(/\b(?:Bearer|Basic)\s+\S+/gi, "<redacted-authorization>");
-  return safe.slice(0, options.maxLength ?? MAX_PUBLIC_DIAGNOSTIC);
-}
-function sanitizeAutomationProcessLines(lines, deviceId) {
-  return lines.slice(0, 8).map((line) => {
-    const pid = line.trim().match(/^(\d+)\b/)?.[1] ?? "unknown";
-    const executable = /WebDriverAgentRunner-Runner/.test(line) ? "WebDriverAgentRunner-Runner" : /\bxcodebuild\b/.test(line) ? "xcodebuild" : /\bmaestro(?:-runner)?\b/i.test(line) ? "maestro-runner" : "automation-process";
-    const identity2 = deviceId ? ` ${publicDeviceIdentity(deviceId)}` : "";
-    return sanitizePublicDiagnostic(`pid=${pid} executable=${executable}${identity2}`, {
-      deviceIds: deviceId ? [deviceId] : [],
-      maxLength: 240
-    });
-  });
-}
-var DEVICE_ID_RE, POSIX_PATH_RE, MAX_PUBLIC_DIAGNOSTIC;
-var init_public_diagnostics = __esm({
-  "packages/rn-dev-agent-core/dist/util/public-diagnostics.js"() {
-    "use strict";
-    init_registry();
-    DEVICE_ID_RE = /\b[0-9A-F]{8}(?:-[0-9A-F]{4}){3}-[0-9A-F]{12}\b/gi;
-    POSIX_PATH_RE = /(?<![\w:])\/(?!\/)[^\n\r'"`<>|]*?(?=['"`]|:\s|[,;)\]}](?:\s|$)|\s+[A-Za-z][\w-]*=|$)/g;
-    MAX_PUBLIC_DIAGNOSTIC = 2e3;
   }
 });
 
@@ -35665,7 +35751,7 @@ function createDeviceSnapshotHandler(deps = {}) {
         }
       } catch (err) {
         let cleanupFailure;
-        let cleanupFailureMeta;
+        let cleanupFailureMeta = err instanceof AndroidRunnerCleanupUnconfirmedError ? err.meta : void 0;
         try {
           if (lockPlatform === "ios")
             await stopIosRunner(deviceId);
@@ -35674,7 +35760,7 @@ function createDeviceSnapshotHandler(deps = {}) {
         } catch (cleanupErr) {
           cleanupFailure = cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr);
           if (cleanupErr instanceof AndroidRunnerCleanupUnconfirmedError) {
-            cleanupFailureMeta = cleanupErr.meta;
+            cleanupFailureMeta ??= cleanupErr.meta;
           }
         } finally {
           releaseDeviceLockForSession();
@@ -35711,7 +35797,7 @@ function createDeviceSnapshotHandler(deps = {}) {
         await deps.bindRunner?.(lockPlatform, deviceId, appId);
       } catch (error2) {
         let cleanupFailure;
-        let cleanupFailureMeta;
+        let cleanupFailureMeta = error2 instanceof AndroidRunnerCleanupUnconfirmedError ? error2.meta : void 0;
         try {
           if (lockPlatform === "ios")
             await stopIosRunner(deviceId);
@@ -35720,7 +35806,7 @@ function createDeviceSnapshotHandler(deps = {}) {
         } catch (cleanupErr) {
           cleanupFailure = cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr);
           if (cleanupErr instanceof AndroidRunnerCleanupUnconfirmedError) {
-            cleanupFailureMeta = cleanupErr.meta;
+            cleanupFailureMeta ??= cleanupErr.meta;
           }
         } finally {
           clearActiveSession();

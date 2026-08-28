@@ -295,7 +295,7 @@ export function createDeviceSnapshotHandler(deps = {}) {
             }
             catch (err) {
                 let cleanupFailure;
-                let cleanupFailureMeta;
+                let cleanupFailureMeta = err instanceof AndroidRunnerCleanupUnconfirmedError ? err.meta : undefined;
                 try {
                     if (lockPlatform === 'ios')
                         await stopIosRunner(deviceId);
@@ -305,7 +305,7 @@ export function createDeviceSnapshotHandler(deps = {}) {
                 catch (cleanupErr) {
                     cleanupFailure = cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr);
                     if (cleanupErr instanceof AndroidRunnerCleanupUnconfirmedError) {
-                        cleanupFailureMeta = cleanupErr.meta;
+                        cleanupFailureMeta ??= cleanupErr.meta;
                     }
                 }
                 finally {
@@ -354,7 +354,7 @@ export function createDeviceSnapshotHandler(deps = {}) {
             }
             catch (error) {
                 let cleanupFailure;
-                let cleanupFailureMeta;
+                let cleanupFailureMeta = error instanceof AndroidRunnerCleanupUnconfirmedError ? error.meta : undefined;
                 try {
                     if (lockPlatform === 'ios')
                         await stopIosRunner(deviceId);
@@ -364,7 +364,7 @@ export function createDeviceSnapshotHandler(deps = {}) {
                 catch (cleanupErr) {
                     cleanupFailure = cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr);
                     if (cleanupErr instanceof AndroidRunnerCleanupUnconfirmedError) {
-                        cleanupFailureMeta = cleanupErr.meta;
+                        cleanupFailureMeta ??= cleanupErr.meta;
                     }
                 }
                 finally {
