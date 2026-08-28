@@ -109,6 +109,13 @@ exit 1
 EOF
   chmod +x "$TEST_DIR/bin/$tool"
 done
+for tool in idb idb_companion; do
+  cat > "$TEST_DIR/bin/$tool" << 'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+  chmod +x "$TEST_DIR/bin/$tool"
+done
 
 NET_LOG="$TEST_DIR/session-start-net.log"
 PKG_LOG="$TEST_DIR/session-start-pkg.log"
