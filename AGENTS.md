@@ -80,6 +80,27 @@ sibling workspace only when explicitly requested.
   code does not need new layers or types, but it must reuse established domain
   boundaries and must not bypass or duplicate them.
 
+## Supported Node runtimes
+
+`packages/rn-dev-agent-core` declares `engines.node >= 22.5`, and the managed
+Metro launcher runs Metro under the supervisor's own `process.execPath` — so the
+operator's Node, not CI's, is what the descendant fence must survive.
+
+Node changed the private `ChildProcess.prototype.spawn` -> `handle.spawn()`
+calling convention from one options object to eight positional arguments, and
+backported it to the 24 line at 24.19.0. The fence in
+`src/session/package-integration.ts` authenticates both shapes against the same
+authorized options, decides which one to expect once at install time
+(`pinnedNativeSpawnConventions` plus the `process_wrap` `constants` export), and
+refuses every native spawn on a convention it has not verified.
+
+The `descendant-spawn-convention` CI job pins the four cells that bracket that
+boundary: Node 22.x, 24.18 (last object-form 24), 24.x latest (positional), and
+26.x. When a new Node line ships, extend `pinnedNativeSpawnConventions` and add
+its cell — a version outside that table fails closed with a recorded
+`RN_DEV_AGENT_DESCENDANT_CONVENTION_UNVERIFIED` violation rather than silently
+degrading.
+
 ## Where To Make Changes
 
 - Core MCP behavior: edit `packages/rn-dev-agent-core/src/`, then run

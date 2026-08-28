@@ -55,6 +55,17 @@ export function serializePackageIntegrationManifest(manifest: PackageIntegration
   return `${JSON.stringify(manifest, null, 2)}\n`;
 }
 
+export function pinnedNativeSpawnConventions(version: string): string[] {
+  const parts = String(version).split('.');
+  const major = Number(parts[0]);
+  const minor = Number(parts[1]);
+  if (!Number.isSafeInteger(major) || !Number.isSafeInteger(minor)) return [];
+  if (major === 22) return minor >= 5 ? ['object'] : [];
+  if (major === 24) return minor >= 19 ? ['positional'] : ['object'];
+  if (major === 26) return ['object', 'positional'];
+  return [];
+}
+
 export function renderMetroIntegrationAdapter(): string {
   return `'use strict';
 const fs = require('node:fs');
@@ -119,6 +130,13 @@ const intrinsicWeakSetHas = WeakSet.prototype.has;
 const intrinsicProcessNextTick = process.nextTick;
 const intrinsicProcessBinding = process.binding;
 const intrinsicUvBinding = intrinsicReflectApply(intrinsicProcessBinding, process, ['uv']);
+const intrinsicProcessWrapBinding = (() => {
+  try {
+    return intrinsicReflectApply(intrinsicProcessBinding, process, ['process_wrap']);
+  } catch {
+    return null;
+  }
+})();
 function isAsynchronousNativeSpawnError(result) {
   return (
     result === intrinsicUvBinding.UV_EACCES ||
@@ -285,6 +303,7 @@ function canonicalAuthorityJson(value) {
   };
   return encode(value);
 }
+${pinnedNativeSpawnConventions.toString()}
 ${parseNodeOptions.toString()}
 ${hasNodeLoaderOption.toString()}
 ${hasUnsupportedNodeOption.toString()}
@@ -414,6 +433,92 @@ function recordLoaderViolation(value) {
   privateSetAdd(accumulatedViolations, value);
   loaderEpoch += 1;
   persistLoaderObservation('violation', value);
+}
+let nativeSpawnConvention = 'unverified';
+let nativeSpawnFlagConstants = null;
+function observedNativeSpawnFlagConstants() {
+  const descriptor = privateGetOwnPropertyDescriptor(
+    intrinsicProcessWrapBinding || {},
+    'constants',
+  );
+  const constants = descriptor ? descriptor.value : undefined;
+  if (!constants || typeof constants !== 'object') return null;
+  const flags = {
+    kProcessFlagDetached: constants.kProcessFlagDetached,
+    kProcessFlagWindowsHide: constants.kProcessFlagWindowsHide,
+    kProcessFlagWindowsVerbatimArguments: constants.kProcessFlagWindowsVerbatimArguments,
+  };
+  const values = privateObjectValues(flags);
+  for (let index = 0; index < values.length; index += 1) {
+    if (!Number.isSafeInteger(values[index])) return null;
+  }
+  return flags;
+}
+function establishNativeSpawnConvention() {
+  const pinned = pinnedNativeSpawnConventions(process.versions.node);
+  const constants = observedNativeSpawnFlagConstants();
+  const observed = constants ? 'positional' : 'object';
+  let admitted = false;
+  for (let index = 0; index < pinned.length; index += 1) {
+    if (pinned[index] === observed) admitted = true;
+  }
+  nativeSpawnConvention = admitted ? observed : 'unverified';
+  nativeSpawnFlagConstants = nativeSpawnConvention === 'positional' ? constants : null;
+  if (nativeSpawnConvention === 'unverified') {
+    recordLoaderViolation(
+      canonicalAuthorityJson({
+        code: 'RN_DEV_AGENT_DESCENDANT_CONVENTION_UNVERIFIED',
+        stage: 'fence-install',
+        nodeVersion: process.versions.node,
+        pinnedConventions: pinned,
+        observedConvention: observed,
+      }),
+    );
+  }
+}
+function authorizedNativeSpawnFlags(options) {
+  return (
+    (options.detached ? nativeSpawnFlagConstants.kProcessFlagDetached : 0) |
+    (options.windowsHide ? nativeSpawnFlagConstants.kProcessFlagWindowsHide : 0) |
+    (options.windowsVerbatimArguments
+      ? nativeSpawnFlagConstants.kProcessFlagWindowsVerbatimArguments
+      : 0)
+  );
+}
+function admitsAuthorizedNativeSpawn(args, authorizedOptions) {
+  if (authorizedOptions === undefined) return false;
+  if (nativeSpawnConvention === 'object') {
+    return args.length === 1 && args[0] === authorizedOptions;
+  }
+  if (nativeSpawnConvention === 'positional') {
+    return (
+      args.length === 8 &&
+      args[0] === authorizedOptions.file &&
+      args[1] === authorizedOptions.args &&
+      args[2] === authorizedOptions.cwd &&
+      args[3] === authorizedOptions.envPairs &&
+      args[4] === authorizedOptions.stdio &&
+      args[5] === authorizedNativeSpawnFlags(authorizedOptions) &&
+      args[6] === authorizedOptions.uid &&
+      args[7] === authorizedOptions.gid
+    );
+  }
+  return false;
+}
+function containsNativeSpawnRefusal(arity) {
+  return nativeSpawnConvention === 'unverified' || arity === 8;
+}
+function refuseNativeSpawn(arity) {
+  recordLoaderViolation(
+    canonicalAuthorityJson({
+      code: 'RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION',
+      stage: 'native-spawn',
+      nodeVersion: process.versions.node,
+      convention: nativeSpawnConvention,
+      arity,
+    }),
+  );
+  return intrinsicUvBinding.UV_EACCES;
 }
 const nativeChannelContexts = new IntrinsicWeakMap();
 const nativeProcessContexts = new IntrinsicWeakMap();
@@ -1100,16 +1205,18 @@ function fenceNativeProcessHandle(handle, context) {
       enumerable: false,
       value(...args) {
         const authorizedOptions = privateWeakMapGet(authorizedNativeProcessSpawns, this);
-        if (
-          authorizedOptions === undefined ||
-          args.length !== 1 ||
-          args[0] !== authorizedOptions
-        ) {
+        const slot = privateWeakMapGet(nativeProcessHandleSlots, this);
+        const admitted = admitsAuthorizedNativeSpawn(args, authorizedOptions);
+        // A refusal Node itself provoked - an unverified calling convention, or a
+        // positional call whose fields do not authenticate - is contained through
+        // Node's own errno contract. An identity failure is still a hard refusal.
+        if (!admitted && !(slot && containsNativeSpawnRefusal(args.length))) {
           throw descendantError();
         }
-        privateWeakMapDelete(authorizedNativeProcessSpawns, this);
-        const result = intrinsicReflectApply(spawn, this, args);
-        const slot = privateWeakMapGet(nativeProcessHandleSlots, this);
+        if (admitted) privateWeakMapDelete(authorizedNativeProcessSpawns, this);
+        const result = admitted
+          ? intrinsicReflectApply(spawn, this, args)
+          : refuseNativeSpawn(args.length);
         if (slot && isAsynchronousNativeSpawnError(result)) {
           slot.pendingSpawnError = result;
           intrinsicReflectApply(intrinsicProcessNextTick, process, [
@@ -2321,6 +2428,7 @@ function rejectChildProcessMethod(name) {
   });
 }
 function fenceNativeProcessLaunchBindings() {
+  establishNativeSpawnConvention();
   const originalBinding = process.binding;
   Object.defineProperty(process, 'binding', {
     configurable: false,

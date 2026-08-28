@@ -133,6 +133,7 @@ function reconcileManagedMetroStatus(
         phase: status.bindings.bundle ? 'after-bind' : 'before-bind',
         observedAt: Date.now(),
         instanceId: metro.instanceId,
+        ...(inspection.attribution ? { attribution: inspection.attribution } : {}),
       },
       bundle: null,
     },

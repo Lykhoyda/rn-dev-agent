@@ -1507,7 +1507,41 @@ export type ManagedMetroLifecycleInspection =
         | 'METRO_PORT_UNVERIFIABLE'
         | 'METRO_EVIDENCE_SOCKET_MISSING';
       reason: string;
+      attribution?: string;
     };
+
+export function managedMetroExitAttribution(
+  binding: { runtimeEvidencePath: string; instanceId: string },
+  input: { sessionId: string; signerCapability: string },
+): string | null {
+  const runtimeRoot = dirname(binding.runtimeEvidencePath);
+  const runtimePolicyCapability = createHmac('sha256', input.signerCapability)
+    .update('metro-runtime-policy')
+    .digest('base64url');
+  const violation = latestSignedRuntimeViolation(
+    binding.runtimeEvidencePath,
+    runtimePolicyCapability,
+    { sessionId: input.sessionId, metroInstanceId: binding.instanceId },
+  );
+  const diagnostic = readManagedMetroLauncherDiagnostic(
+    join(runtimeRoot, 'metro-launcher-diagnostic.json'),
+  );
+  const logTail = boundedMetroLogTail(join(runtimeRoot, 'metro.log'));
+  const details = [
+    diagnostic ? `stage ${diagnostic.stage}` : null,
+    diagnostic?.detail ?? null,
+    violation ? `runtime violation: ${violation}` : null,
+    logTail ? `Metro log tail:\n${logTail}` : null,
+  ].filter((detail): detail is string => Boolean(detail));
+  if (details.length === 0) return null;
+  return sanitizeManagedMetroStartupDetail(details.join('; '), [
+    runtimeRoot,
+    input.sessionId,
+    binding.instanceId,
+    input.signerCapability,
+    runtimePolicyCapability,
+  ]);
+}
 
 function exactManagedProcessInspection(
   role: 'launcher' | 'listener',
@@ -1553,20 +1587,25 @@ export function inspectManagedMetroLifecycle(
     };
   }
   const probeBirth = dependencies.probeBirth ?? probeProcessBirth;
+  const attributed = (inspection: ManagedMetroLifecycleInspection) => {
+    if (inspection.status === 'live' || !inspection.code.endsWith('_EXITED')) return inspection;
+    const attribution = managedMetroExitAttribution(binding, input);
+    return attribution ? { ...inspection, attribution } : inspection;
+  };
   const launcher = exactManagedProcessInspection(
     'launcher',
     binding.launcherPid,
     binding.launcherBirth,
     probeBirth(binding.launcherPid),
   );
-  if (launcher) return launcher;
+  if (launcher) return attributed(launcher);
   const listener = exactManagedProcessInspection(
     'listener',
     binding.pid,
     binding.birth,
     probeBirth(binding.pid),
   );
-  if (listener) return listener;
+  if (listener) return attributed(listener);
   const port = (dependencies.probeListener ?? probeManagedMetroListener)(binding.port);
   if (port.status === 'absent') {
     return {

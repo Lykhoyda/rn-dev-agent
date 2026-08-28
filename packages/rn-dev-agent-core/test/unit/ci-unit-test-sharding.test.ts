@@ -14,7 +14,7 @@ type WorkflowJob = {
   if?: string;
   strategy?: {
     'fail-fast'?: boolean;
-    matrix?: { batch?: number[] };
+    matrix?: { batch?: number[]; node?: string[] };
   };
   steps?: Array<{
     name?: string;
@@ -180,8 +180,31 @@ test('CI exposes five non-cancelling unit-test batches behind Build & Test', () 
 
   assert.ok(aggregate);
   assert.equal(aggregate.name, 'Build & Test');
-  assert.deepEqual(aggregate.needs, ['core-tests', 'unit-tests']);
+  assert.deepEqual(aggregate.needs, ['core-tests', 'unit-tests', 'descendant-spawn-convention']);
   assert.equal(aggregate.if, '${{ always() }}');
+});
+
+test('the descendant spawn convention matrix brackets both Node calling conventions', () => {
+  const jobs = loadCiJobs();
+  const convention = jobs['descendant-spawn-convention'];
+
+  assert.ok(convention, 'ci.yml must gate the managed-Metro descendant spawn convention');
+  assert.equal(convention.strategy?.['fail-fast'], false);
+  // 24.18 is the last object-form 24; 24 latest and 26 are positional.
+  assert.deepEqual(convention.strategy?.matrix?.node, ['22', '24.18', '24', '26']);
+
+  const probe = convention.steps?.find((step) =>
+    step.name?.includes('Descendant fence, convention probe and drift detector'),
+  );
+  assert.ok(probe?.run, 'the matrix must run the convention probe and drift detector');
+  for (const suite of [
+    'metro-spawn-convention-table.test.ts',
+    'metro-descendant-spawn-convention.test.ts',
+    'managed-metro-launcher-exit-attribution.test.ts',
+    'package-integration.test.ts',
+  ]) {
+    assert.ok(probe.run.includes(suite), `the matrix must run ${suite}`);
+  }
 });
 
 test('coverage command inserts the native shard option before authoritative discovery globs', () => {

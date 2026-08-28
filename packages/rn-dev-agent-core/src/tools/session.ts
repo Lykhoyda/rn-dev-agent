@@ -550,6 +550,7 @@ export function reconcileManagedMetroStatus(
     phase: authority.bindings.bundle ? 'after-bind' : 'before-bind',
     observedAt: (dependencies.now ?? Date.now)(),
     instanceId: metro.instanceId,
+    ...(inspection.attribution ? { attribution: inspection.attribution } : {}),
   };
   registry.updateBindings(session, {
     expectedAuthorityVersion: authority.authorityVersion,
