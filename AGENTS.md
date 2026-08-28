@@ -100,14 +100,22 @@ either way whenever `PATH` resolves a Node outside the affected range.
 Node changed the private `ChildProcess.prototype.spawn` -> `handle.spawn()`
 calling convention from one options object to eight positional arguments, and
 backported it to the 24 line at 24.19.0. The fence in
-`src/session/package-integration.ts` admits by **argument content, never by Node
-version**: whatever arity `handle.spawn` receives, every argument must be one of
-the authorized options' own values — `file`, `cwd`, `uid`, `gid` by value;
-`args`, `envPairs`, `stdio` and the options object by reference identity; the
-flags word recomputed from the `process_wrap` `constants` export — and the call
-must carry `file`, `args`, `envPairs` and `stdio`. A future major that reorders
-those arguments still authenticates; a foreign argument never does. So Node 24
-and every later major stays functional, including majors nobody pinned.
+`src/session/package-integration.ts` admits by **argument content per position,
+never by Node version**. The one-argument shape must be the authorized options
+object itself. The eight-argument shape must carry, in Node's own slot order,
+`file`, `cwd`, `uid` and `gid` by value; `args`, `envPairs` and `stdio` by
+reference identity; and a flags word recomputed from the `process_wrap`
+`constants` export. So Node 24 and every later major stays functional, including
+majors nobody pinned.
+
+Position is part of the authentication. A native binding reads arguments by
+position and `file` and `cwd` are both plain strings, so tolerating a permutation
+would admit `cwd` in the executable slot — no membership, bijection or type rule
+can separate a reordered ABI from a caller permuting the arguments it was
+authorized for. **A future ABI that reorders `_handle.spawn` therefore refuses
+with a signed `RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION` and stays refused
+until the new order is pinned**; the drift probe and its CI cell turn red first,
+making that a pre-release event rather than a field surprise.
 
 `pinnedNativeSpawnConventions` is a **drift probe, not an admission gate**. An
 unpinned major records a signed `RN_DEV_AGENT_DESCENDANT_CONVENTION_UNVERIFIED`
@@ -116,13 +124,20 @@ majors it does pin. The `descendant-spawn-convention` CI job covers Node 22.x,
 24.18 (last object-form 24), 24.x latest (positional), 25.x (a representative
 odd major the table does not list) and 26.x.
 
-Refusals split by shape, not by version. A single-argument call carries the
-authorized options object itself, so a different object is a forged identity and
-throws, as do raw handles, expired authorizations and re-entrant native calls. A
-positional call whose arguments fail to authenticate is an ordinary spawn
-refusal: it returns `UV_EACCES`, which is one of the five errnos Node reports
-through an `'error'` event rather than a throw, and it is recorded as signed
-evidence.
+**Each authorization admits at most one native spawn.** Inside an active
+authorization, an eight-argument call that authenticates is admitted and retires
+the authorization; an eight-argument call that does not authenticate is refused
+with Node's own errno (`UV_EACCES`, which Node reports through an `'error'` event
+rather than a throw), recorded as a signed violation, and *also* retires the
+authorization — so Node's own call following a forged one is refused. Outside an
+active authorization, on a raw handle, or at any other arity, the call is an
+identity failure and throws.
+
+That is stronger than "re-entrancy throws": a forged re-entrant call cannot
+execute and cannot leave a second admitted spawn behind. Node's own call and a
+forged one are indistinguishable at that site — same handle, same depth, same
+arity — and do not need to be distinguished. Do not add a re-entrancy
+classifier.
 
 Containment buys Node-standard spawn-failure semantics and an attributable
 record — **not** "Metro keeps serving". A caller that registers no `'error'`

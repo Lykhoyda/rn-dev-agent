@@ -1,6 +1,14 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, openSync, closeSync, readFileSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  openSync,
+  closeSync,
+  readFileSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import test from 'node:test';
@@ -112,11 +120,20 @@ childProcess.ChildProcess.prototype.spawn = function (options) {
 };
 `,
   );
+  // Writes a marker so "no child ran" is observable rather than inferred.
+  const markerPath = join(root, 'child-ran.marker');
+  const markerEntry = join(root, 'marker-child.cjs');
+  writeFileSync(
+    markerEntry,
+    `require('node:fs').writeFileSync(${JSON.stringify(markerPath)}, 'ran');\n`,
+  );
   return {
     root,
     integration,
     adapterPath,
     childEntry,
+    markerEntry,
+    markerPath,
     versionShim,
     doubleSpawnShim,
     forgedFileShim,
@@ -431,3 +448,48 @@ test(
     );
   },
 );
+
+// The consequence of the one-shot: a forged eight-argument call inside an active authorization is
+// contained AND retires the authorization, so Node's own call that follows it is refused outright.
+// A forged re-entrant call therefore cannot execute and cannot leave a second admitted spawn.
+test("a forged native call retires the authorization so Node's own spawn is refused", () => {
+  const project = fencedProject('rn-session-metro-convention-consequence-');
+  const result = runFenced(
+    project,
+    `const compose = require(${JSON.stringify(project.adapterPath)});
+     compose({});
+     const childProcess = require('node:child_process');
+     try {
+       childProcess.spawn(process.execPath, [${JSON.stringify(project.markerEntry)}]);
+       console.error('Node own spawn was admitted after a forged call');
+       process.exit(31);
+     } catch (error) {
+       if (error.code !== 'RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION') {
+         console.error('unexpected error ' + error.code);
+         process.exit(32);
+       }
+       process.exit(0);
+     }`,
+    project.doubleSpawnShim,
+  );
+  assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+  assert.equal(
+    existsSync(project.markerPath),
+    false,
+    'no child may run once a forged call has retired the authorization',
+  );
+  const violations = result.runtimeLoads
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as { kind?: string; value?: string })
+    .filter(
+      (entry) =>
+        entry.kind === 'violation' &&
+        String(entry.value ?? '').includes('RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION'),
+    );
+  assert.equal(
+    violations.length,
+    1,
+    `exactly one signed violation must be recorded, got ${violations.length}`,
+  );
+});

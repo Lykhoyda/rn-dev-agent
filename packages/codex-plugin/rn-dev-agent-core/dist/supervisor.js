@@ -15887,10 +15887,12 @@ function containsNativeSpawnRefusal(arity) {
 // Admission authenticates argument content per position and never consults the Node version, so
 // every major - listed or not - is admitted on the same evidence.
 //
-// NOTE: position is part of the authentication, not incidental. file and cwd are both plain
-// strings, so a membership-only rule cannot tell a future ABI reorder from a caller permuting the
-// arguments it was authorized for: passing cwd in the file slot would execute the cwd path.
-// A reordering major must therefore be re-pinned deliberately rather than admitted silently.
+// NOTE: position is part of the authentication, not incidental. A native binding reads arguments
+// by position, and file and cwd are both plain strings, so no membership, bijection or type rule
+// separates a future ABI reorder from a caller permuting the arguments it was authorized for:
+// tolerating permutations admits cwd in the executable slot. A future ABI that reorders
+// _handle.spawn therefore refuses with signed RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION and
+// stays refused until the new order is pinned; the drift probe and CI cell surface it first.
 function admitsAuthorizedNativeSpawn(args, authorizedOptions) {
   if (authorizedOptions === undefined) return false;
   if (args.length === 1) return args[0] === authorizedOptions;
@@ -16607,11 +16609,12 @@ function fenceNativeProcessHandle(handle, context) {
         const authorizedOptions = privateWeakMapGet(authorizedNativeProcessSpawns, this);
         const slot = privateWeakMapGet(nativeProcessHandleSlots, this);
         const admitted = admitsAuthorizedNativeSpawn(args, authorizedOptions);
-        // Inside the handle's own authorized spawn (spawnDepth > 0), an eight-argument call
-        // whose arguments fail to authenticate is a genuine spawn refusal and reports Node's
-        // own errno - including a re-entrant one from a hook, which the one-shot consumption
-        // then retires. Every other shape - raw handle, expired authorization, any other
-        // arity - is an identity failure and throws.
+        // Each authorization admits at most one native spawn. Inside an active authorization an
+        // eight-argument call that authenticates is admitted and retires it; one that does not
+        // is refused with Node's errno, signed as a violation, and retires it too - so Node's
+        // own call following a forged one is refused. Outside an active authorization, on a raw
+        // handle, or at any other arity, the call is an identity failure and throws. Node's own
+        // call and a forged one are indistinguishable here, and need not be distinguished.
         const contained =
           !admitted &&
           authorizedOptions !== undefined &&
