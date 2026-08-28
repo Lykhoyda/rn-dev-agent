@@ -12719,6 +12719,7 @@ init_metro_binding();
 init_trusted_system_executable();
 init_process_birth();
 init_process_owner();
+init_registry();
 var METRO_LAUNCHER_SOURCE = String.raw`
 const { spawn, spawnSync } = require('node:child_process');
 const { createHash, createHmac } = require('node:crypto');

@@ -15780,6 +15780,7 @@ var init_managed_metro = __esm({
     init_trusted_system_executable();
     init_process_birth();
     init_process_owner();
+    init_registry();
     init_authority_json();
     init_managed_metro_enforcement();
     METRO_LAUNCHER_SOURCE = String.raw`
@@ -30418,6 +30419,14 @@ var init_expo_dev_menu = __esm({
 // packages/rn-dev-agent-core/dist/tools/device-session.js
 import { execFile as execFileCb7 } from "node:child_process";
 import { promisify as promisify9 } from "node:util";
+function sessionAuthorityFailureResult(error2, message, meta = {}) {
+  if (!(error2 instanceof SessionAuthorityError))
+    return null;
+  return failResult(message, error2.code, {
+    ...authorityErrorMeta(error2),
+    ...meta
+  });
+}
 function acquireDeviceLockForSession(platform, deviceId, appId) {
   releaseDeviceLockForSession();
   const lock = new DeviceLock({ platform, deviceId, appId });
@@ -30673,8 +30682,11 @@ function createDeviceSnapshotHandler(deps = {}) {
           releaseDeviceLockForSession();
         }
         const rawMessage = error2 instanceof Error ? error2.message : String(error2);
-        const code = /^([A-Z][A-Z0-9_]+):/.exec(rawMessage)?.[1] ?? "RUNNER_OWNERSHIP_MISMATCH";
         const message = cleanupFailure ? `${rawMessage}; runner cleanup also failed: ${cleanupFailure}` : rawMessage;
+        const authorityFailure3 = sessionAuthorityFailureResult(error2, message, cleanupFailure ? { runnerCleanupFailure: cleanupFailure } : {});
+        if (authorityFailure3)
+          return authorityFailure3;
+        const code = /^([A-Z][A-Z0-9_]+):/.exec(rawMessage)?.[1] ?? "RUNNER_OWNERSHIP_MISMATCH";
         return failResult(message, code);
       }
       resetWedgeRecoveryCounter();
@@ -30879,7 +30891,8 @@ async function reacquireIosTargetApp(appId, deviceId, dependencies) {
     await dependencies.bindRunner("ios", deviceId, appId);
     return okResult({ reacquired: true, appId });
   } catch (error2) {
-    return failResult(`Runner authority reacquire failed: ${error2 instanceof Error ? error2.message : String(error2)}`, "RUNNER_OWNERSHIP_MISMATCH");
+    const message = `Runner authority reacquire failed: ${error2 instanceof Error ? error2.message : String(error2)}`;
+    return sessionAuthorityFailureResult(error2, message) ?? failResult(message, "RUNNER_OWNERSHIP_MISMATCH");
   }
 }
 async function rawSnapshot() {

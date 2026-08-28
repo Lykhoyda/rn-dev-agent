@@ -26,6 +26,7 @@ import {
 } from '../util/trusted-system-executable.js';
 import { probeProcessBirth, type ProcessBirth, type ProcessBirthProbe } from './process-birth.js';
 import { processBirthProbeFromReader, requireProcessBirthAttestation } from './process-owner.js';
+import { processBirthAttestationError, type SessionAuthorityError } from './registry.js';
 import { canonicalAuthorityJson } from './authority-json.js';
 import {
   prepareManagedMetroEnforcement,
@@ -2201,6 +2202,7 @@ export async function startManagedMetro(
     dependencies.wait ?? ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
   const deadline = Date.now() + 20_000;
   let lastError: unknown = null;
+  let terminalAttestationError: SessionAuthorityError | null = null;
   let listenerIdentity: ManagedMetroProcessIdentity | null = null;
   while (Date.now() < deadline) {
     if (child.exitCode !== null || child.signalCode != null) break;
@@ -2209,6 +2211,15 @@ export async function startManagedMetro(
       const listenerBirth = probeBirth(pid);
       if (listenerBirth.status === 'present') {
         listenerIdentity = { pid, birth: listenerBirth.birth.token };
+      } else if (listenerBirth.status === 'unknown') {
+        try {
+          requireProcessBirthAttestation(pid, 'Metro listener', () => listenerBirth);
+        } catch (error) {
+          const attestationError = processBirthAttestationError(error);
+          if (!attestationError) throw error;
+          terminalAttestationError = attestationError;
+        }
+        break;
       }
       try {
         if (
@@ -2257,6 +2268,11 @@ export async function startManagedMetro(
         };
       } catch (error) {
         lastError = error;
+        const attestationError = processBirthAttestationError(error);
+        if (attestationError?.details?.attestation === 'unavailable') {
+          terminalAttestationError = attestationError;
+          break;
+        }
       }
     }
     await wait(100);
@@ -2277,6 +2293,7 @@ export async function startManagedMetro(
   if (!removeManagedMetroEvidenceSocketSafely(runtimeEvidenceSocket, dependencies)) {
     throw new Error('METRO_START_CLEANUP_UNPROVEN: Metro evidence socket cleanup failed');
   }
+  if (terminalAttestationError) throw terminalAttestationError;
   throw managedMetroStartupError({
     runtimeEvidencePath,
     runtimePolicyCapability,

@@ -38,7 +38,11 @@ import { resetDetachedRecoveryCounter } from '../cdp/recover-detached.js';
 import type { ToolResult } from '../utils.js';
 import type { ToolErrorCode } from '../types.js';
 import { okResult, failResult, warnResult } from '../utils.js';
-import { authorityErrorMeta, processBirthAttestationError } from '../session/registry.js';
+import {
+  authorityErrorMeta,
+  processBirthAttestationError,
+  SessionAuthorityError,
+} from '../session/registry.js';
 import { resolveBundleId } from '../project-config.js';
 import { isValidBundleId } from '../domain/maestro-validator.js';
 import { logger } from '../logger.js';
@@ -58,6 +62,18 @@ const execFile = promisify(execFileCb);
 
 const HEARTBEAT_MS = 30_000;
 let activeDeviceLock: DeviceLock | null = null;
+
+function sessionAuthorityFailureResult(
+  error: unknown,
+  message: string,
+  meta: Record<string, unknown> = {},
+): ToolResult | null {
+  if (!(error instanceof SessionAuthorityError)) return null;
+  return failResult(message, error.code as ToolErrorCode, {
+    ...authorityErrorMeta(error),
+    ...meta,
+  });
+}
 let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
 
 function acquireDeviceLockForSession(
@@ -520,10 +536,16 @@ export function createDeviceSnapshotHandler(
           releaseDeviceLockForSession();
         }
         const rawMessage = error instanceof Error ? error.message : String(error);
-        const code = /^([A-Z][A-Z0-9_]+):/.exec(rawMessage)?.[1] ?? 'RUNNER_OWNERSHIP_MISMATCH';
         const message = cleanupFailure
           ? `${rawMessage}; runner cleanup also failed: ${cleanupFailure}`
           : rawMessage;
+        const authorityFailure = sessionAuthorityFailureResult(
+          error,
+          message,
+          cleanupFailure ? { runnerCleanupFailure: cleanupFailure } : {},
+        );
+        if (authorityFailure) return authorityFailure;
+        const code = /^([A-Z][A-Z0-9_]+):/.exec(rawMessage)?.[1] ?? 'RUNNER_OWNERSHIP_MISMATCH';
         return failResult(message, code as ToolErrorCode);
       }
 
@@ -831,9 +853,10 @@ export async function reacquireIosTargetApp(
     await dependencies.bindRunner('ios', deviceId, appId);
     return okResult({ reacquired: true, appId });
   } catch (error) {
-    return failResult(
-      `Runner authority reacquire failed: ${error instanceof Error ? error.message : String(error)}`,
-      'RUNNER_OWNERSHIP_MISMATCH',
+    const message = `Runner authority reacquire failed: ${error instanceof Error ? error.message : String(error)}`;
+    return (
+      sessionAuthorityFailureResult(error, message) ??
+      failResult(message, 'RUNNER_OWNERSHIP_MISMATCH')
     );
   }
 }

@@ -22,6 +22,7 @@ import {
   stopManagedMetroWithEvidence,
   verifyManagedMetroManagementProof,
 } from '../../../dist/session/managed-metro.js';
+import { SessionAuthorityError } from '../../../dist/session/registry.js';
 
 const listenerExecutableDependencies = {
   exists: () => true,
@@ -1545,6 +1546,79 @@ test('managed Metro startup cleanup signals its group before listener birth is k
     /METRO_LAUNCHER_PRE_EVIDENCE_FAILED/,
   );
 
+  assert.deepEqual(signals, [101]);
+});
+
+test('managed Metro treats the first unknown listener birth as terminal', async () => {
+  const child = {
+    pid: 101,
+    exitCode: null,
+    signalCode: null,
+    kill: () => true,
+    unref: () => {},
+  };
+  let stopped = false;
+  let captureAttempts = 0;
+  let listenerBirthProbes = 0;
+  const signals: number[] = [];
+
+  await assert.rejects(
+    startManagedMetro(
+      {
+        appRoot: '/app',
+        runtimeRoot: '/tmp',
+        sourceRoot: '/app',
+        sessionId: 'session-a',
+        port: 8341,
+        instanceId: 'metro-a',
+        buildGeneration: 1,
+        signerCapability: 'signer',
+      },
+      {
+        readText: () => JSON.stringify({ dependencies: { expo: '1' } }),
+        exists: () => true,
+        spawnProcess: () => child,
+        listenerPid: () => 202,
+        listenerOwnedByLauncher: () => true,
+        readBirth: (pid) => ({ pid, source: 'linux-proc', token: `birth-${pid}` }),
+        probeBirth: (pid) => {
+          if (stopped) return { status: 'absent' };
+          if (pid === 202) {
+            listenerBirthProbes += 1;
+            return {
+              status: 'unknown',
+              cause: { pid, step: 'helper', failure: 'timeout', elapsedMs: 2000 },
+            };
+          }
+          return {
+            status: 'present',
+            birth: { pid, source: 'linux-proc', token: `birth-${pid}` },
+          };
+        },
+        probeListener: () => (stopped ? { status: 'absent' } : { status: 'listening', pid: 202 }),
+        capture: async () => {
+          captureAttempts += 1;
+          throw new Error('capture must not run after unknown attestation');
+        },
+        signalTree: ({ launcherPid }) => {
+          signals.push(launcherPid);
+          stopped = true;
+        },
+        removeEvidenceSocket: () => {},
+      },
+    ),
+    (error: unknown) =>
+      error instanceof SessionAuthorityError &&
+      error.code === 'PROCESS_BIRTH_UNAVAILABLE' &&
+      error.details?.attestation === 'unavailable' &&
+      error.details?.pid === 202 &&
+      error.details?.step === 'helper' &&
+      error.details?.failure === 'timeout' &&
+      error.details?.elapsedMs === 2000,
+  );
+
+  assert.equal(listenerBirthProbes, 1);
+  assert.equal(captureAttempts, 0);
   assert.deepEqual(signals, [101]);
 });
 

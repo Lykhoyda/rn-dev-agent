@@ -345,6 +345,45 @@ test('bind failure reaps the runner, clears session state, and releases the lock
   }
 });
 
+test('bind failure preserves unavailable runner attestation metadata', async () => {
+  const handler = createDeviceSnapshotHandler({
+    ...workingOpenDeps(),
+    bindRunner: async () => {
+      throw new SessionAuthorityError(
+        'RUNNER_OWNERSHIP_MISMATCH',
+        'native runner process identity could not be read on a loaded host',
+        undefined,
+        {
+          attestation: 'unavailable',
+          pid: 4242,
+          step: 'helper',
+          failure: 'timeout',
+          elapsedMs: 2000,
+          nextAction:
+            'Process identity could not be read in time on a loaded host. Reduce host process contention, then retry the original operation; do not reopen or rebind the device.',
+        },
+      );
+    },
+    reapAndroidRunner: async () => {},
+  });
+
+  try {
+    const body = envelope(
+      await handler({ action: 'open', platform: 'android', deviceId: SERIAL, appId: APP_ID }),
+    );
+    assert.equal(body.ok, false);
+    assert.equal(body.code, 'RUNNER_OWNERSHIP_MISMATCH');
+    assert.equal(body.meta?.attestation, 'unavailable');
+    assert.equal(body.meta?.pid, 4242);
+    assert.equal(body.meta?.step, 'helper');
+    assert.equal(body.meta?.failure, 'timeout');
+    assert.equal(body.meta?.elapsedMs, 2000);
+    assert.match(String(body.meta?.nextAction), /loaded host/);
+  } finally {
+    cleanup();
+  }
+});
+
 test('android reaper throw on bind failure still clears session state and releases the lock', async () => {
   const handler = createDeviceSnapshotHandler({
     ...workingOpenDeps(),

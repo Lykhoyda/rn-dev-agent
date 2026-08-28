@@ -8236,6 +8236,9 @@ function referencesMetroEvidenceSocket(value, path) {
     return true;
   return Object.values(record).some((entry) => referencesMetroEvidenceSocket(entry, path));
 }
+function processBirthAttestationError(error) {
+  return error instanceof SessionAuthorityError && error.code === "PROCESS_BIRTH_UNAVAILABLE" ? error : null;
+}
 function authorityRemedyNextAction(code) {
   return errorNextActions[code];
 }
@@ -12773,6 +12776,7 @@ init_metro_binding();
 init_trusted_system_executable();
 init_process_birth();
 init_process_owner();
+init_registry();
 import { execFileSync as execFileSync6, spawn } from "node:child_process";
 import { createHash as createHash5, createHmac as createHmac3, timingSafeEqual as timingSafeEqual4 } from "node:crypto";
 import { closeSync as closeSync3, existsSync as existsSync4, fstatSync as fstatSync2, mkdirSync as mkdirSync3, openSync as openSync3, readFileSync as readFileSync4, readSync as readSync2, realpathSync as realpathSync5, rmSync as rmSync2 } from "node:fs";
@@ -15140,6 +15144,7 @@ async function startManagedMetro(input, dependencies = {}) {
   const wait = dependencies.wait ?? ((ms) => new Promise((resolve6) => setTimeout(resolve6, ms)));
   const deadline = Date.now() + 2e4;
   let lastError = null;
+  let terminalAttestationError = null;
   let listenerIdentity = null;
   while (Date.now() < deadline) {
     if (child.exitCode !== null || child.signalCode != null)
@@ -15149,6 +15154,16 @@ async function startManagedMetro(input, dependencies = {}) {
       const listenerBirth = probeBirth(pid);
       if (listenerBirth.status === "present") {
         listenerIdentity = { pid, birth: listenerBirth.birth.token };
+      } else if (listenerBirth.status === "unknown") {
+        try {
+          requireProcessBirthAttestation(pid, "Metro listener", () => listenerBirth);
+        } catch (error) {
+          const attestationError = processBirthAttestationError(error);
+          if (!attestationError)
+            throw error;
+          terminalAttestationError = attestationError;
+        }
+        break;
       }
       try {
         if (requiresSandboxAdmission && (!enforcementReceiptForAdmission || !(dependencies.verifyRuntimeAdmission ?? verifyManagedMetroRuntimeAdmission)(runtimePolicyPath, runtimePolicyCapability, {
@@ -15184,6 +15199,11 @@ async function startManagedMetro(input, dependencies = {}) {
         };
       } catch (error) {
         lastError = error;
+        const attestationError = processBirthAttestationError(error);
+        if (attestationError?.details?.attestation === "unavailable") {
+          terminalAttestationError = attestationError;
+          break;
+        }
       }
     }
     await wait(100);
@@ -15199,6 +15219,8 @@ async function startManagedMetro(input, dependencies = {}) {
   if (!removeManagedMetroEvidenceSocketSafely(runtimeEvidenceSocket, dependencies)) {
     throw new Error("METRO_START_CLEANUP_UNPROVEN: Metro evidence socket cleanup failed");
   }
+  if (terminalAttestationError)
+    throw terminalAttestationError;
   throw managedMetroStartupError({
     runtimeEvidencePath,
     runtimePolicyCapability,
@@ -18316,7 +18338,10 @@ async function ensureManagedMetro(status) {
             buildGeneration: existing.buildGeneration
           });
           isCurrent = true;
-        } catch {
+        } catch (error) {
+          const attestationError = processBirthAttestationError(error);
+          if (attestationError)
+            throw attestationError;
         }
         if (isCurrent) {
           status.registry.verifyOperation(currentOperation);

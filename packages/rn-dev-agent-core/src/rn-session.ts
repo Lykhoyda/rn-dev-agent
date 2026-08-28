@@ -23,6 +23,7 @@ import {
 import { inspectSessionOwner } from './session/process-owner.js';
 import {
   openSessionRegistry,
+  processBirthAttestationError,
   SessionAuthorityError,
   type OperationRef,
 } from './session/registry.js';
@@ -389,7 +390,10 @@ async function ensureManagedMetro(status: ReturnType<typeof resolveStatus>): Pro
             buildGeneration: existing.buildGeneration,
           });
           isCurrent = true;
-        } catch {}
+        } catch (error) {
+          const attestationError = processBirthAttestationError(error);
+          if (attestationError) throw attestationError;
+        }
         if (isCurrent) {
           status.registry.verifyOperation(currentOperation);
           return;
