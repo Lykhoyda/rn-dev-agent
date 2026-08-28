@@ -86,9 +86,7 @@ if [ "$has_rn_config" = true ]; then
     INSTALL_WARNINGS+=("WARNING: CDP bridge deps failed. Run: cd ${CORE_ROOT} && npm install")
   fi
 
-  # GH #773: verify the maestro-runner pin-cache WITHOUT touching the network.
-  # --print-bin is the no-download verify mode (same call shape as
-  # ensure-android-ready.sh); downloading is an explicit user-run command.
+  # Verify offline so SessionStart can surface the explicit install command (GH #773).
   if ! bash "$SCRIPT_ROOT/ensure-maestro-runner.sh" --print-bin >/dev/null; then
     INSTALL_WARNINGS+=("WARNING: attested maestro-runner 1.1.24 is missing from the pin-cache (floor >= 1.1.24). Install it explicitly (SessionStart never downloads): bash ${SCRIPT_ROOT}/ensure-maestro-runner.sh")
   fi

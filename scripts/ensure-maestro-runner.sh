@@ -1,9 +1,8 @@
 #!/bin/bash
 # ensure-maestro-runner.sh — Install or converge the session pin-cache to
 # the attested maestro-runner (floor >= the tested pin). Never uses PATH,
-# ~/.maestro-runner, or the Maestro CLI. Downloading is an explicit user action
-# (/rn-dev-agent:setup); SessionStart only verifies, via the no-network
-# --print-bin mode (GH #773).
+# ~/.maestro-runner, or the Maestro CLI. Setup downloads explicitly;
+# SessionStart only verifies with --print-bin (GH #773).
 #
 # Exit codes:
 #   0 — pin-cache binary is the attested tested pin (already or just installed)
