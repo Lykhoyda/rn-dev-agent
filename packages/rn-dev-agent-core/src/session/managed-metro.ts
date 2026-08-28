@@ -1843,14 +1843,12 @@ function readManagedMetroLauncherDiagnostic(path: string): ManagedMetroLauncherD
   }
 }
 
-// NOTE: exit attribution runs in a later process than the start, so it has no credentialRedactions
-// to sanitize metro.log with; it publishes only fixed-vocabulary tokens that cannot carry a secret.
+// Cross-process exit attribution lacks startup redactions, so only fixed-vocabulary log tokens are safe.
 const MANAGED_METRO_FIRST_PARTY_LOG_CAUSE =
   /\bRN_DEV_AGENT_[A-Z0-9_]+\b|\bNode\.js v\d+\.\d+\.\d+\b|\bJavaScript heap out of memory\b|\b(?:EADDRINUSE|EADDRNOTAVAIL|EACCES|EMFILE|ENFILE|ENOMEM|ENOSPC|EPIPE)\b/g;
 
 function managedMetroFirstPartyLogCauses(path: string): string | null {
-  // Wider window than the startup reader: only matched tokens are published, so a fatal that
-  // bundle chatter has scrolled past stays attributable.
+  // The token allowlist makes a wider window safe when bundle chatter buries a fatal cause.
   const tail = boundedMetroLogTail(path, 65_536);
   if (!tail) return null;
   const causes = [...new Set(tail.match(MANAGED_METRO_FIRST_PARTY_LOG_CAUSE) ?? [])].slice(0, 16);
