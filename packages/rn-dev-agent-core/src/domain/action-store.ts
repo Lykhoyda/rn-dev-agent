@@ -35,6 +35,7 @@ import {
 import {
   buildMaestroFlow,
   collectRunFlowFileReferences,
+  MaestroValidationError,
   parseAndValidateFlow,
 } from './maestro-validator.js';
 import { mirrorToDb } from './action-state-store.js';
@@ -499,7 +500,7 @@ export type ActionReplaySnapshot =
       commands: unknown[];
       appId: string | undefined;
     }
-  | { ok: false; error: string };
+  | { ok: false; error: string; runFlowFile?: string };
 
 export interface CapturedActionReplay {
   filePath: string;
@@ -552,7 +553,13 @@ export function captureActionFromContext(
       appId: parsed.appId,
     };
   } catch (err) {
-    replay = { ok: false, error: err instanceof Error ? err.message : String(err) };
+    replay = {
+      ok: false,
+      error: err instanceof Error ? err.message : String(err),
+      ...(err instanceof MaestroValidationError && err.runFlowFile !== undefined
+        ? { runFlowFile: err.runFlowFile }
+        : {}),
+    };
   }
   assertReadableActionLoadContextStable(context);
   return { filePath, yamlText: text, metadata, replay };

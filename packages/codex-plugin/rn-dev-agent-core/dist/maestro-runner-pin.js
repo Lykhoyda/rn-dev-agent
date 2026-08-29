@@ -8094,34 +8094,42 @@ function expandRunFlows(commands, opts) {
       continue;
     }
     if (rf.file !== void 0) {
-      const depth = opts._depth ?? 0;
-      const max = opts.maxRunFlowDepth ?? 5;
-      if (depth >= max) {
-        throw new MaestroValidationError(`runFlow nesting exceeded max depth ${max}`);
-      }
-      const resolved = resolveRunFlowTarget(rf.file, opts);
-      const visited = opts._visited ?? /* @__PURE__ */ new Set();
-      if (visited.has(resolved)) {
-        throw new MaestroValidationError(`runFlow cycle detected at "${rf.file}"`);
-      }
-      const readFile = opts.readFileFn ?? ((p) => readFileSync3(p, "utf8"));
-      let subText;
       try {
-        subText = readFile(resolved);
+        const depth = opts._depth ?? 0;
+        const max = opts.maxRunFlowDepth ?? 5;
+        if (depth >= max) {
+          throw new MaestroValidationError(`runFlow nesting exceeded max depth ${max}`);
+        }
+        const resolved = resolveRunFlowTarget(rf.file, opts);
+        const visited = opts._visited ?? /* @__PURE__ */ new Set();
+        if (visited.has(resolved)) {
+          throw new MaestroValidationError(`runFlow cycle detected at "${rf.file}"`);
+        }
+        const readFile = opts.readFileFn ?? ((p) => readFileSync3(p, "utf8"));
+        let subText;
+        try {
+          subText = readFile(resolved);
+        } catch (err) {
+          throw new MaestroValidationError(`runFlow file "${rf.file}" could not be read: ${err.message}`);
+        }
+        const sub = parseAndValidateFlow(subText, {
+          ...opts,
+          rejectHeader: true,
+          flowDir: dirname3(resolved),
+          _depth: depth + 1,
+          _visited: /* @__PURE__ */ new Set([...visited, resolved])
+        });
+        if (rf.when !== void 0) {
+          out.push({ runFlow: { when: rf.when, commands: sub.commands } });
+        } else {
+          out.push(...sub.commands);
+        }
       } catch (err) {
-        throw new MaestroValidationError(`runFlow file "${rf.file}" could not be read: ${err.message}`);
-      }
-      const sub = parseAndValidateFlow(subText, {
-        ...opts,
-        rejectHeader: true,
-        flowDir: dirname3(resolved),
-        _depth: depth + 1,
-        _visited: /* @__PURE__ */ new Set([...visited, resolved])
-      });
-      if (rf.when !== void 0) {
-        out.push({ runFlow: { when: rf.when, commands: sub.commands } });
-      } else {
-        out.push(...sub.commands);
+        if (err instanceof MaestroValidationError && err.runFlowFile !== void 0)
+          throw err;
+        throw new MaestroValidationError(err instanceof Error ? err.message : String(err), {
+          runFlowFile: rf.file
+        });
       }
     } else {
       const inner = rf.commands ? expandRunFlows(rf.commands, { ...opts, _depth: (opts._depth ?? 0) + 1 }) : [];
@@ -8178,9 +8186,11 @@ var init_maestro_validator = __esm({
     "use strict";
     import_yaml = __toESM(require_dist(), 1);
     MaestroValidationError = class extends Error {
-      constructor(message) {
+      runFlowFile;
+      constructor(message, options = {}) {
         super(message);
         this.name = "MaestroValidationError";
+        this.runFlowFile = options.runFlowFile;
       }
     };
     BUNDLE_ID_RE = /^[A-Za-z][A-Za-z0-9_-]*(\.[A-Za-z][A-Za-z0-9_-]*)+$/;
@@ -13465,7 +13475,11 @@ function captureActionFromContext(context, actionId) {
       appId: parsed.appId
     };
   } catch (err) {
-    replay = { ok: false, error: err instanceof Error ? err.message : String(err) };
+    replay = {
+      ok: false,
+      error: err instanceof Error ? err.message : String(err),
+      ...err instanceof MaestroValidationError && err.runFlowFile !== void 0 ? { runFlowFile: err.runFlowFile } : {}
+    };
   }
   assertReadableActionLoadContextStable(context);
   return { filePath, yamlText: text, metadata, replay };

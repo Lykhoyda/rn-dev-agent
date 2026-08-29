@@ -49,7 +49,6 @@ import {
   type AutoRepairOutcome,
   type AutoRepairRefusedReason,
   type ActionFailureCode,
-  type M7Metadata,
   appendRunRecord,
   shouldAutoPromoteToActive,
 } from '../domain/reusable-action.js';
@@ -75,7 +74,6 @@ import {
 import { getWorkerAuthorityRuntime } from '../session/runtime.js';
 import { flowUsesClearState, resolveIosAppFile } from './resolve-ios-app-file.js';
 import { actionReplayPreflight } from '../domain/action-engine-compat.js';
-import { collectRunFlowFileReferences } from '../domain/maestro-validator.js';
 import {
   deriveParkAnchor,
   parkedBodyViolation,
@@ -114,24 +112,16 @@ function usesStrictRunActionPolicy(args: RunActionArgs): boolean {
 }
 
 function parkedRunFlowFileRefusal(actionId: string, reference: string): ToolResult {
+  const reportedReference = reference.length > 0 ? reference : '<empty>';
   return failResult(
-    `cdp_run_action: ${actionId} is entry: parked but references subflow file "${reference}" — a parked body must be fully inspectable inline so no hidden lifecycle command can run.`,
+    `cdp_run_action: ${actionId} is entry: parked but references subflow file "${reportedReference}" — a parked body must be fully inspectable inline so no hidden lifecycle command can run.`,
     'BAD_RECORDING',
     {
       actionId,
       fallback: 'none',
-      cause: { parkedRunFlowFile: reference },
+      cause: { parkedRunFlowFile: reportedReference },
     },
   );
-}
-
-function parkedRunFlowReference(
-  metadata: Pick<M7Metadata, 'entry'>,
-  yamlText: string,
-): string | null {
-  const entry = resolveEntryMode(metadata);
-  if (!entry.ok || entry.mode !== 'parked') return null;
-  return collectRunFlowFileReferences(yamlText)[0] ?? null;
 }
 
 function loadParkedRunFlowReference(projectRoot: string, actionId: string): string | null {
@@ -141,7 +131,9 @@ function loadParkedRunFlowReference(projectRoot: string, actionId: string): stri
       includeRunFlowFiles: false,
     });
     const action = context ? loadActionFromContext(context, actionId) : null;
-    return action ? parkedRunFlowReference(action.metadata, action.yamlText) : null;
+    if (!action || action.replay.ok || action.replay.runFlowFile === undefined) return null;
+    const entry = resolveEntryMode(action.metadata);
+    return entry.ok && entry.mode === 'parked' ? action.replay.runFlowFile : null;
   } catch {
     return null;
   }
@@ -635,7 +627,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
       loaded = openedContext ? loadActionFromContext(openedContext, args.actionId) : null;
     } catch (err) {
       const reference = loadParkedRunFlowReference(projectRoot, args.actionId);
-      if (reference) return parkedRunFlowFileRefusal(args.actionId, reference);
+      if (reference !== null) return parkedRunFlowFileRefusal(args.actionId, reference);
       return failResult(err instanceof Error ? err.message : String(err), 'BAD_FILENAME', {
         actionId: args.actionId,
         fallback: 'none',
@@ -661,8 +653,9 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
     }
     const entryMode = entryResolution.mode;
     if (!loaded.replay.ok) {
-      const reference = parkedRunFlowReference(loaded.metadata, loaded.yamlText);
-      if (reference) return parkedRunFlowFileRefusal(args.actionId, reference);
+      if (entryMode === 'parked' && loaded.replay.runFlowFile !== undefined) {
+        return parkedRunFlowFileRefusal(args.actionId, loaded.replay.runFlowFile);
+      }
       return failResult(
         `Action ${args.actionId} is not valid Maestro YAML: ${loaded.replay.error}`,
         'BAD_RECORDING',

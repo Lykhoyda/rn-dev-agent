@@ -28197,34 +28197,42 @@ function expandRunFlows(commands, opts) {
       continue;
     }
     if (rf.file !== void 0) {
-      const depth = opts._depth ?? 0;
-      const max = opts.maxRunFlowDepth ?? 5;
-      if (depth >= max) {
-        throw new MaestroValidationError(`runFlow nesting exceeded max depth ${max}`);
-      }
-      const resolved = resolveRunFlowTarget(rf.file, opts);
-      const visited = opts._visited ?? /* @__PURE__ */ new Set();
-      if (visited.has(resolved)) {
-        throw new MaestroValidationError(`runFlow cycle detected at "${rf.file}"`);
-      }
-      const readFile3 = opts.readFileFn ?? ((p) => readFileSync16(p, "utf8"));
-      let subText;
       try {
-        subText = readFile3(resolved);
+        const depth = opts._depth ?? 0;
+        const max = opts.maxRunFlowDepth ?? 5;
+        if (depth >= max) {
+          throw new MaestroValidationError(`runFlow nesting exceeded max depth ${max}`);
+        }
+        const resolved = resolveRunFlowTarget(rf.file, opts);
+        const visited = opts._visited ?? /* @__PURE__ */ new Set();
+        if (visited.has(resolved)) {
+          throw new MaestroValidationError(`runFlow cycle detected at "${rf.file}"`);
+        }
+        const readFile3 = opts.readFileFn ?? ((p) => readFileSync16(p, "utf8"));
+        let subText;
+        try {
+          subText = readFile3(resolved);
+        } catch (err) {
+          throw new MaestroValidationError(`runFlow file "${rf.file}" could not be read: ${err.message}`);
+        }
+        const sub = parseAndValidateFlow(subText, {
+          ...opts,
+          rejectHeader: true,
+          flowDir: dirname11(resolved),
+          _depth: depth + 1,
+          _visited: /* @__PURE__ */ new Set([...visited, resolved])
+        });
+        if (rf.when !== void 0) {
+          out.push({ runFlow: { when: rf.when, commands: sub.commands } });
+        } else {
+          out.push(...sub.commands);
+        }
       } catch (err) {
-        throw new MaestroValidationError(`runFlow file "${rf.file}" could not be read: ${err.message}`);
-      }
-      const sub = parseAndValidateFlow(subText, {
-        ...opts,
-        rejectHeader: true,
-        flowDir: dirname11(resolved),
-        _depth: depth + 1,
-        _visited: /* @__PURE__ */ new Set([...visited, resolved])
-      });
-      if (rf.when !== void 0) {
-        out.push({ runFlow: { when: rf.when, commands: sub.commands } });
-      } else {
-        out.push(...sub.commands);
+        if (err instanceof MaestroValidationError && err.runFlowFile !== void 0)
+          throw err;
+        throw new MaestroValidationError(err instanceof Error ? err.message : String(err), {
+          runFlowFile: rf.file
+        });
       }
     } else {
       const inner = rf.commands ? expandRunFlows(rf.commands, { ...opts, _depth: (opts._depth ?? 0) + 1 }) : [];
@@ -28281,9 +28289,11 @@ var init_maestro_validator = __esm({
     "use strict";
     import_yaml2 = __toESM(require_dist(), 1);
     MaestroValidationError = class extends Error {
-      constructor(message) {
+      runFlowFile;
+      constructor(message, options = {}) {
         super(message);
         this.name = "MaestroValidationError";
+        this.runFlowFile = options.runFlowFile;
       }
     };
     BUNDLE_ID_RE = /^[A-Za-z][A-Za-z0-9_-]*(\.[A-Za-z][A-Za-z0-9_-]*)+$/;
@@ -77897,7 +77907,11 @@ function captureActionFromContext(context, actionId) {
       appId: parsed.appId
     };
   } catch (err) {
-    replay = { ok: false, error: err instanceof Error ? err.message : String(err) };
+    replay = {
+      ok: false,
+      error: err instanceof Error ? err.message : String(err),
+      ...err instanceof MaestroValidationError && err.runFlowFile !== void 0 ? { runFlowFile: err.runFlowFile } : {}
+    };
   }
   assertReadableActionLoadContextStable(context);
   return { filePath, yamlText: text, metadata, replay };
@@ -79687,32 +79701,40 @@ function anchorIdOf(name, value) {
 function substituteParams(id, params) {
   return id.replace(/\$\{([A-Z_][A-Z0-9_]*)\}/g, (whole, key) => params[key] ?? whole);
 }
-function firstAnchorId(commands) {
+function firstAnchorId(commands, canSupplyAnchor = true) {
   for (const command of commands) {
     const name = commandName(command);
     if (name !== null && ANCHOR_COMMANDS.has(name)) {
       const id = anchorIdOf(name, command[name]);
-      if (id !== null)
-        return id;
+      if (id !== null && canSupplyAnchor)
+        return { kind: "anchor", id };
+      if (name === "tapOn")
+        return { kind: "blocked" };
       continue;
     }
     const composite = compositeShape(command);
-    if (composite?.kind === "inline" && composite.name === "runFlow" && !composite.conditional) {
-      const nested = firstAnchorId(composite.commands);
-      if (nested !== null)
+    if (composite?.kind === "inline") {
+      const suppliesAnchor = canSupplyAnchor && composite.name === "runFlow" && !composite.conditional;
+      const nested = firstAnchorId(composite.commands, suppliesAnchor);
+      if (nested.kind !== "continue")
         return nested;
+      continue;
     }
+    if (name !== null && PRE_ANCHOR_READ_COMMANDS.has(name))
+      continue;
+    return { kind: "blocked" };
   }
-  return null;
+  return { kind: "continue" };
 }
 function deriveParkAnchor(commands, params = {}) {
-  const id = firstAnchorId(commands);
-  if (id === null) {
+  const anchor = firstAnchorId(commands);
+  if (anchor.kind !== "anchor") {
     return {
       ok: false,
       reason: "no id-bearing assertVisible/extendedWaitUntil/tapOn opens the body"
     };
   }
+  const id = anchor.id;
   const substituted = substituteParams(id, params);
   if (/\$\{[A-Z_][A-Z0-9_]*\}/.test(substituted)) {
     return {
@@ -79723,12 +79745,18 @@ function deriveParkAnchor(commands, params = {}) {
   }
   return { ok: true, anchorId: substituted };
 }
-var PARKED_FORBIDDEN_COMMANDS, ANCHOR_COMMANDS;
+var PARKED_FORBIDDEN_COMMANDS, ANCHOR_COMMANDS, PRE_ANCHOR_READ_COMMANDS;
 var init_park_entry = __esm({
   "packages/rn-dev-agent-core/dist/domain/park-entry.js"() {
     "use strict";
     PARKED_FORBIDDEN_COMMANDS = /* @__PURE__ */ new Set(["launchApp", "stopApp", "killApp", "clearState"]);
     ANCHOR_COMMANDS = /* @__PURE__ */ new Set(["assertVisible", "extendedWaitUntil", "tapOn"]);
+    PRE_ANCHOR_READ_COMMANDS = /* @__PURE__ */ new Set([
+      "assertVisible",
+      "assertNotVisible",
+      "extendedWaitUntil",
+      "waitForAnimationToEnd"
+    ]);
   }
 });
 
@@ -83114,17 +83142,12 @@ function usesStrictRunActionPolicy(args) {
   return args[strictRunActionPolicy] === true;
 }
 function parkedRunFlowFileRefusal(actionId, reference) {
-  return failResult(`cdp_run_action: ${actionId} is entry: parked but references subflow file "${reference}" \u2014 a parked body must be fully inspectable inline so no hidden lifecycle command can run.`, "BAD_RECORDING", {
+  const reportedReference = reference.length > 0 ? reference : "<empty>";
+  return failResult(`cdp_run_action: ${actionId} is entry: parked but references subflow file "${reportedReference}" \u2014 a parked body must be fully inspectable inline so no hidden lifecycle command can run.`, "BAD_RECORDING", {
     actionId,
     fallback: "none",
-    cause: { parkedRunFlowFile: reference }
+    cause: { parkedRunFlowFile: reportedReference }
   });
-}
-function parkedRunFlowReference(metadata, yamlText) {
-  const entry = resolveEntryMode(metadata);
-  if (!entry.ok || entry.mode !== "parked")
-    return null;
-  return collectRunFlowFileReferences(yamlText)[0] ?? null;
 }
 function loadParkedRunFlowReference(projectRoot, actionId) {
   try {
@@ -83133,7 +83156,10 @@ function loadParkedRunFlowReference(projectRoot, actionId) {
       includeRunFlowFiles: false
     });
     const action = context ? loadActionFromContext(context, actionId) : null;
-    return action ? parkedRunFlowReference(action.metadata, action.yamlText) : null;
+    if (!action || action.replay.ok || action.replay.runFlowFile === void 0)
+      return null;
+    const entry = resolveEntryMode(action.metadata);
+    return entry.ok && entry.mode === "parked" ? action.replay.runFlowFile : null;
   } catch {
     return null;
   }
@@ -83364,7 +83390,7 @@ function createRunActionHandler(deps = {}) {
       loaded = openedContext ? loadActionFromContext(openedContext, args.actionId) : null;
     } catch (err) {
       const reference = loadParkedRunFlowReference(projectRoot, args.actionId);
-      if (reference)
+      if (reference !== null)
         return parkedRunFlowFileRefusal(args.actionId, reference);
       return failResult(err instanceof Error ? err.message : String(err), "BAD_FILENAME", {
         actionId: args.actionId,
@@ -83383,9 +83409,9 @@ function createRunActionHandler(deps = {}) {
     }
     const entryMode = entryResolution.mode;
     if (!loaded.replay.ok) {
-      const reference = parkedRunFlowReference(loaded.metadata, loaded.yamlText);
-      if (reference)
-        return parkedRunFlowFileRefusal(args.actionId, reference);
+      if (entryMode === "parked" && loaded.replay.runFlowFile !== void 0) {
+        return parkedRunFlowFileRefusal(args.actionId, loaded.replay.runFlowFile);
+      }
       return failResult(`Action ${args.actionId} is not valid Maestro YAML: ${loaded.replay.error}`, "BAD_RECORDING", { actionId: args.actionId, fallback: "none" });
     }
     const replayYaml = loaded.replay.yamlText;
@@ -84096,7 +84122,6 @@ var init_run_action = __esm({
     init_runtime();
     init_resolve_ios_app_file();
     init_action_engine_compat();
-    init_maestro_validator();
     init_park_entry();
     init_ios_proof_router();
     init_engine_pin();

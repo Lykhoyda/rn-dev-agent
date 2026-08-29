@@ -88,6 +88,12 @@ export function parkedBodyViolation(commands: readonly unknown[]): ParkedBodyVio
 }
 
 const ANCHOR_COMMANDS = new Set(['assertVisible', 'extendedWaitUntil', 'tapOn']);
+const PRE_ANCHOR_READ_COMMANDS = new Set([
+  'assertVisible',
+  'assertNotVisible',
+  'extendedWaitUntil',
+  'waitForAnimationToEnd',
+]);
 
 function anchorIdOf(name: string, value: unknown): string | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
@@ -109,23 +115,35 @@ export type ParkAnchorResolution =
   | { ok: true; anchorId: string }
   | { ok: false; reason: string; unresolvedParam?: true };
 
-function firstAnchorId(commands: readonly unknown[]): string | null {
+type AnchorSearchResult =
+  | { kind: 'anchor'; id: string }
+  | { kind: 'continue' }
+  | { kind: 'blocked' };
+
+function firstAnchorId(
+  commands: readonly unknown[],
+  canSupplyAnchor: boolean = true,
+): AnchorSearchResult {
   for (const command of commands) {
     const name = commandName(command);
     if (name !== null && ANCHOR_COMMANDS.has(name)) {
       const id = anchorIdOf(name, (command as Record<string, unknown>)[name]);
-      if (id !== null) return id;
+      if (id !== null && canSupplyAnchor) return { kind: 'anchor', id };
+      if (name === 'tapOn') return { kind: 'blocked' };
       continue;
     }
     const composite = compositeShape(command);
-    // Only an unconditional inline runFlow can supply the park anchor — a
-    // conditional or repeating composite may not run first (or at all).
-    if (composite?.kind === 'inline' && composite.name === 'runFlow' && !composite.conditional) {
-      const nested = firstAnchorId(composite.commands);
-      if (nested !== null) return nested;
+    if (composite?.kind === 'inline') {
+      const suppliesAnchor =
+        canSupplyAnchor && composite.name === 'runFlow' && !composite.conditional;
+      const nested = firstAnchorId(composite.commands, suppliesAnchor);
+      if (nested.kind !== 'continue') return nested;
+      continue;
     }
+    if (name !== null && PRE_ANCHOR_READ_COMMANDS.has(name)) continue;
+    return { kind: 'blocked' };
   }
-  return null;
+  return { kind: 'continue' };
 }
 
 /**
@@ -138,13 +156,14 @@ export function deriveParkAnchor(
   commands: readonly unknown[],
   params: Record<string, string> = {},
 ): ParkAnchorResolution {
-  const id = firstAnchorId(commands);
-  if (id === null) {
+  const anchor = firstAnchorId(commands);
+  if (anchor.kind !== 'anchor') {
     return {
       ok: false,
       reason: 'no id-bearing assertVisible/extendedWaitUntil/tapOn opens the body',
     };
   }
+  const id = anchor.id;
   const substituted = substituteParams(id, params);
   if (/\$\{[A-Z_][A-Z0-9_]*\}/.test(substituted)) {
     return {

@@ -6,7 +6,7 @@ The M7 header lives as `# key: value` comment lines above the Maestro YAML body.
 
 `parseM7Header` walks the file line by line:
 
-- Only `#`-prefixed lines are considered. Each is stripped of `# ` and **trimmed**, then matched against `^([a-zA-Z][\w-]*)\s*:\s*(.+)$`.
+- Only `#`-prefixed lines are considered. Each is stripped of `# ` and **trimmed**, then matched against `^([a-zA-Z][\w-]*)\s*:\s*(.*)$`. Empty values are ignored except an explicit `# entry:`, which is preserved so replay refuses `BAD_RECORDING` instead of defaulting to cold.
 - A matching line whose key is **recognized** (table below) sets that field — **later occurrences overwrite earlier ones**. This is why embedded diagram/prose lines must never begin with a bare recognized key: `# status: shows spinner` would overwrite `status`.
 - A matching line with an unrecognized key (e.g. `verify: cart-list`) is ignored — harmless but avoid relying on it.
 - Lines whose content starts with a non-letter glyph (`[`, `│`, `▼`, `(`, `-`) can never match — the safe shape for diagram lines.

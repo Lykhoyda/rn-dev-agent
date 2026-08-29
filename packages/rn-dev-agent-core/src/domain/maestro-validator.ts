@@ -22,9 +22,12 @@ import { readFileSync, realpathSync } from 'node:fs';
 // ── Errors ──────────────────────────────────────────────────────────
 
 export class MaestroValidationError extends Error {
-  constructor(message: string) {
+  readonly runFlowFile: string | undefined;
+
+  constructor(message: string, options: { runFlowFile?: string } = {}) {
     super(message);
     this.name = 'MaestroValidationError';
+    this.runFlowFile = options.runFlowFile;
   }
 }
 
@@ -379,36 +382,43 @@ export function expandRunFlows(commands: unknown[], opts: ParseAndValidateOption
     }
 
     if (rf.file !== undefined) {
-      const depth = opts._depth ?? 0;
-      const max = opts.maxRunFlowDepth ?? 5;
-      if (depth >= max) {
-        throw new MaestroValidationError(`runFlow nesting exceeded max depth ${max}`);
-      }
-      const resolved = resolveRunFlowTarget(rf.file, opts);
-      const visited = opts._visited ?? new Set<string>();
-      if (visited.has(resolved)) {
-        throw new MaestroValidationError(`runFlow cycle detected at "${rf.file}"`);
-      }
-      const readFile = opts.readFileFn ?? ((p: string) => readFileSync(p, 'utf8'));
-      let subText: string;
       try {
-        subText = readFile(resolved);
+        const depth = opts._depth ?? 0;
+        const max = opts.maxRunFlowDepth ?? 5;
+        if (depth >= max) {
+          throw new MaestroValidationError(`runFlow nesting exceeded max depth ${max}`);
+        }
+        const resolved = resolveRunFlowTarget(rf.file, opts);
+        const visited = opts._visited ?? new Set<string>();
+        if (visited.has(resolved)) {
+          throw new MaestroValidationError(`runFlow cycle detected at "${rf.file}"`);
+        }
+        const readFile = opts.readFileFn ?? ((p: string) => readFileSync(p, 'utf8'));
+        let subText: string;
+        try {
+          subText = readFile(resolved);
+        } catch (err) {
+          throw new MaestroValidationError(
+            `runFlow file "${rf.file}" could not be read: ${(err as Error).message}`,
+          );
+        }
+        const sub = parseAndValidateFlow(subText, {
+          ...opts,
+          rejectHeader: true,
+          flowDir: dirname(resolved),
+          _depth: depth + 1,
+          _visited: new Set([...visited, resolved]),
+        });
+        if (rf.when !== undefined) {
+          out.push({ runFlow: { when: rf.when, commands: sub.commands } });
+        } else {
+          out.push(...sub.commands);
+        }
       } catch (err) {
-        throw new MaestroValidationError(
-          `runFlow file "${rf.file}" could not be read: ${(err as Error).message}`,
-        );
-      }
-      const sub = parseAndValidateFlow(subText, {
-        ...opts,
-        rejectHeader: true,
-        flowDir: dirname(resolved),
-        _depth: depth + 1,
-        _visited: new Set([...visited, resolved]),
-      });
-      if (rf.when !== undefined) {
-        out.push({ runFlow: { when: rf.when, commands: sub.commands } });
-      } else {
-        out.push(...sub.commands);
+        if (err instanceof MaestroValidationError && err.runFlowFile !== undefined) throw err;
+        throw new MaestroValidationError(err instanceof Error ? err.message : String(err), {
+          runFlowFile: rf.file,
+        });
       }
     } else {
       // Inline runFlow (no file) — recurse into nested commands, keep the wrapper.

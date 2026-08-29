@@ -20,9 +20,11 @@ import { executeMaestroAuthorityStages } from '../../dist/tools/maestro-run.js';
 import { generateMaestro } from '../../dist/tools/test-recorder-generators.js';
 import {
   _resetState,
+  _setRecordingStartRoute,
   _setStoredEvents,
   createRecordTestGenerateHandler,
 } from '../../dist/tools/test-recorder.js';
+import { createSaveAsActionHandler } from '../../dist/tools/save-as-action.js';
 import { parseM7Header, serializeM7Header } from '../../dist/domain/reusable-action.js';
 import { parkedBodyViolation } from '../../dist/domain/park-entry.js';
 import { createParkAnchorProbe, type ParkProbeClient } from '../../dist/tools/park-probe.js';
@@ -438,6 +440,52 @@ test('GH #628: an unreadable subflow reference refuses BAD_RECORDING with zero d
   assert.equal(calls.length, 0, 'the uninspectable graph never dispatched');
 });
 
+test('GH #628: an unreadable subflow reports the actual failing reference', async () => {
+  writeFileSync(
+    join(project.actionsDir, 'readable-sub.yaml'),
+    '- assertVisible:\n    id: "ready"\n',
+  );
+  project.seedAction(
+    'parked-sign-mandate',
+    parkedYaml([
+      `- assertVisible:\n    id: "${PARK_ANCHOR}"`,
+      '- runFlow: readable-sub.yaml',
+      '- runFlow: missing-sub.yaml',
+    ]),
+    null,
+  );
+  const calls: Array<Record<string, unknown>> = [];
+  const handler = handlerWith(calls, { status: 'visible' });
+
+  const result = envelope(
+    await handler({ actionId: 'parked-sign-mandate', projectRoot: project.root }),
+  );
+
+  assert.equal(result.ok, false);
+  assert.equal(result.code, 'BAD_RECORDING');
+  assert.deepEqual(result.meta?.cause, { parkedRunFlowFile: 'missing-sub.yaml' });
+  assert.equal(calls.length, 0);
+});
+
+test('GH #628: an empty subflow reference has a non-empty structured cause', async () => {
+  project.seedAction(
+    'parked-sign-mandate',
+    parkedYaml([`- assertVisible:\n    id: "${PARK_ANCHOR}"`, '- runFlow: ""']),
+    null,
+  );
+  const calls: Array<Record<string, unknown>> = [];
+  const handler = handlerWith(calls, { status: 'visible' });
+
+  const result = envelope(
+    await handler({ actionId: 'parked-sign-mandate', projectRoot: project.root }),
+  );
+
+  assert.equal(result.ok, false);
+  assert.equal(result.code, 'BAD_RECORDING');
+  assert.deepEqual(result.meta?.cause, { parkedRunFlowFile: '<empty>' });
+  assert.equal(calls.length, 0);
+});
+
 test('GH #628: generated parked metadata refuses replay off the recorded start route', async () => {
   const generated = generateMaestro([{ type: 'tap', testID: PARK_ANCHOR, t: 1 }], {
     bundleId: 'com.test.app',
@@ -572,6 +620,56 @@ test('GH #628: recorder handler forwards entry: parked to the Detox refusal', as
     assert.equal(result.ok, false);
     assert.equal(result.code, 'BAD_RECORDING');
     assert.match(result.error ?? '', /parked is supported for Maestro actions only/);
+  } finally {
+    _resetState();
+  }
+});
+
+test('GH #628: parked save refuses a destination anchor reached after a label-only tap', async () => {
+  _setStoredEvents([
+    { type: 'tap', label: 'Continue', route: 'Start', t: 1 },
+    { type: 'navigate', from: 'Start', to: 'Destination', t: 2 },
+    { type: 'tap', testID: 'destination-anchor', route: 'Destination', t: 3 },
+  ]);
+  _setRecordingStartRoute('Start');
+  try {
+    const result = envelope(
+      await createSaveAsActionHandler()({
+        id: 'parked-destination-anchor',
+        intent: 'continue from the parked screen',
+        bundleId: 'com.test.app',
+        projectRoot: project.root,
+        entry: 'parked',
+      }),
+    );
+    assert.equal(result.ok, false);
+    assert.equal(result.code, 'BAD_RECORDING');
+    assert.ok(
+      typeof result.meta?.cause === 'object' &&
+        result.meta.cause !== null &&
+        'parkedAnchorUnresolvable' in result.meta.cause,
+    );
+    assert.equal(project.yamlExists('parked-destination-anchor'), false);
+  } finally {
+    _resetState();
+  }
+});
+
+test('GH #628: parked save accepts an opening parameterized anchor', async () => {
+  _setStoredEvents([{ type: 'tap', testID: '${ANCHOR}', route: 'Start', t: 1 }]);
+  _setRecordingStartRoute('Start');
+  try {
+    const result = envelope(
+      await createSaveAsActionHandler()({
+        id: 'parked-parameter-anchor',
+        intent: 'continue from a parameterized park state',
+        bundleId: 'com.test.app',
+        projectRoot: project.root,
+        entry: 'parked',
+      }),
+    );
+    assert.equal(result.ok, true);
+    assert.equal(project.yamlExists('parked-parameter-anchor'), true);
   } finally {
     _resetState();
   }
