@@ -14,8 +14,7 @@ import { verifyMetroAuthorityMarker, type MetroAuthorityMarker } from './metro-a
 import { provenMetroOriginMismatch, type ForeignMetroOriginScanner } from './metro-origin.js';
 import { metroListenerPid } from './metro-binding.js';
 import { inspectSessionOwner } from './process-owner.js';
-import { readProcessBirth } from './process-birth.js';
-import { SessionAuthorityError, type SessionStatus } from './registry.js';
+import { SessionAuthorityError, type OwnerStatus, type SessionStatus } from './registry.js';
 import type { WorkerAuthorityRuntime } from './runtime.js';
 import { resolveSourceIdentity, type SourceIdentity } from './source-identity.js';
 import {
@@ -38,6 +37,7 @@ interface LocalAuthorityProbeDependencies {
   deviceExists?: (platform: 'ios' | 'android', deviceId: string) => boolean;
   proofActive?: (runId: string) => boolean;
   inspectOwner?: typeof inspectSessionOwner;
+  metroListenerPid?: typeof metroListenerPid;
   captureInstalled?: typeof captureInstalledArtifact;
   captureInstallGeneration?: typeof captureInstallGeneration;
 }
@@ -97,6 +97,31 @@ function sameSource(expected: SourceIdentity, observed: SourceIdentity): boolean
   );
 }
 
+function requireMatchingProcessOwner(
+  ownerStatus: OwnerStatus,
+  input: {
+    axis: AuthorityAxis;
+    subject: string;
+    mismatchCode: string;
+    mismatchMessage: string;
+  },
+): void {
+  if (ownerStatus === 'match') return;
+  if (ownerStatus === 'unknown') {
+    throw new SessionAuthorityError(
+      'PROCESS_BIRTH_UNAVAILABLE',
+      `${input.subject} process birth could not be proven conservatively`,
+      undefined,
+      {
+        axis: input.axis,
+        nextAction:
+          'Restore process-birth probing for the installed rn-dev-agent runtime, restart the MCP transport, then retry.',
+      },
+    );
+  }
+  throw new SessionAuthorityError(input.mismatchCode, input.mismatchMessage);
+}
+
 export function createLocalAuthorityProbe(
   dependencies: LocalAuthorityProbeDependencies,
 ): (input: {
@@ -127,6 +152,7 @@ export function createLocalAuthorityProbe(
   const sourceResolver = dependencies.resolveSource ?? defaultSource;
   const deviceExists = dependencies.deviceExists ?? deviceExistsOnHost;
   const inspectOwner = dependencies.inspectOwner ?? inspectSessionOwner;
+  const listenerPid = dependencies.metroListenerPid ?? metroListenerPid;
   const captureInstalled = dependencies.captureInstalled ?? captureInstalledArtifact;
   const captureGeneration = dependencies.captureInstallGeneration ?? captureInstallGeneration;
 
@@ -137,26 +163,42 @@ export function createLocalAuthorityProbe(
         phase === 'preflight' && tool === 'rn_session' && args?.action === 'cancel_handoff'
           ? registry.getHandoffCancellationControllerBinding(session)
           : registry.getControllerBinding(session);
-      const supervisor = inspectOwner({
-        sessionId: controller.sessionId,
-        pid: controller.supervisor.pid,
-        token: controller.supervisor.token,
-      });
-      const workerBirth =
-        controller.worker.pid === process.pid && controller.worker.token
-          ? readProcessBirth(process.pid)
-          : null;
       if (
-        supervisor !== 'match' ||
         !controller.worker.instanceId ||
-        !workerBirth ||
-        workerBirth.token !== controller.worker.token
+        controller.worker.pid !== process.pid ||
+        !controller.worker.token
       ) {
         throw new SessionAuthorityError(
           'SESSION_OWNER_LOST',
           'controller process identity no longer matches the fenced session',
         );
       }
+      requireMatchingProcessOwner(
+        inspectOwner({
+          sessionId: controller.sessionId,
+          pid: controller.supervisor.pid,
+          token: controller.supervisor.token,
+        }),
+        {
+          axis,
+          subject: 'supervisor',
+          mismatchCode: 'SESSION_OWNER_LOST',
+          mismatchMessage: 'controller process identity no longer matches the fenced session',
+        },
+      );
+      requireMatchingProcessOwner(
+        inspectOwner({
+          sessionId: controller.sessionId,
+          pid: controller.worker.pid,
+          token: controller.worker.token,
+        }),
+        {
+          axis,
+          subject: 'worker',
+          mismatchCode: 'SESSION_OWNER_LOST',
+          mismatchMessage: 'controller process identity no longer matches the fenced session',
+        },
+      );
       return { axis, identity: identity(controller) };
     }
 
@@ -223,14 +265,22 @@ export function createLocalAuthorityProbe(
         !Number.isSafeInteger(port) ||
         !Number.isSafeInteger(pid) ||
         !birth ||
-        metroListenerPid(port) !== pid ||
-        inspectSessionOwner({ sessionId: status.sessionId, pid, token: birth }) !== 'match'
+        listenerPid(port) !== pid
       ) {
         throw new SessionAuthorityError(
           'METRO_INSTANCE_CHANGED',
           'Metro process identity no longer matches the bound instance',
         );
       }
+      requireMatchingProcessOwner(
+        inspectOwner({ sessionId: status.sessionId, pid, token: birth }),
+        {
+          axis,
+          subject: 'Metro',
+          mismatchCode: 'METRO_INSTANCE_CHANGED',
+          mismatchMessage: 'Metro process identity no longer matches the bound instance',
+        },
+      );
       let statusText: string;
       try {
         statusText = await fetchText(`http://127.0.0.1:${port}/status`);
@@ -438,14 +488,23 @@ export function createLocalAuthorityProbe(
         !Number.isSafeInteger(port) ||
         !Number.isSafeInteger(pid) ||
         !processBirth ||
-        !capability ||
-        inspectOwner({ sessionId: status.sessionId, pid, token: processBirth }) !== 'match'
+        !capability
       ) {
         throw new SessionAuthorityError(
           'RUNNER_OWNERSHIP_MISMATCH',
           'runner process identity and endpoint capability no longer match the binding',
         );
       }
+      requireMatchingProcessOwner(
+        inspectOwner({ sessionId: status.sessionId, pid, token: processBirth }),
+        {
+          axis,
+          subject: 'runner',
+          mismatchCode: 'RUNNER_OWNERSHIP_MISMATCH',
+          mismatchMessage:
+            'runner process identity and endpoint capability no longer match the binding',
+        },
+      );
       const health = await fetchJson(`http://127.0.0.1:${port}/health`, {
         headers: { authorization: `Bearer ${capability}` },
       });

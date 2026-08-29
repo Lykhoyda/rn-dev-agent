@@ -93014,7 +93014,6 @@ import { execFileSync as execFileSync19 } from "node:child_process";
 import { createHash as createHash23 } from "node:crypto";
 init_metro_origin();
 init_metro_binding();
-init_process_birth();
 init_registry();
 init_target_device_authority();
 init_tool_profiles();
@@ -93053,6 +93052,17 @@ async function defaultFetchJson(url, init) {
 function sameSource(expected, observed) {
   return expected.kind === observed.kind && expected.sourceKey === observed.sourceKey && expected.worktreeKey === observed.worktreeKey && expected.appRootKey === observed.appRootKey && (expected.kind !== "declared-root" || observed.kind === "declared-root" && expected.manifestDigest === observed.manifestDigest);
 }
+function requireMatchingProcessOwner(ownerStatus, input) {
+  if (ownerStatus === "match")
+    return;
+  if (ownerStatus === "unknown") {
+    throw new SessionAuthorityError("PROCESS_BIRTH_UNAVAILABLE", `${input.subject} process birth could not be proven conservatively`, void 0, {
+      axis: input.axis,
+      nextAction: "Restore process-birth probing for the installed rn-dev-agent runtime, restart the MCP transport, then retry."
+    });
+  }
+  throw new SessionAuthorityError(input.mismatchCode, input.mismatchMessage);
+}
 function createLocalAuthorityProbe(dependencies) {
   const fetchText = dependencies.fetchText ?? defaultFetchText;
   const fetchJson = dependencies.fetchJson ?? defaultFetchJson;
@@ -93069,21 +93079,36 @@ function createLocalAuthorityProbe(dependencies) {
   const sourceResolver = dependencies.resolveSource ?? defaultSource;
   const deviceExists = dependencies.deviceExists ?? deviceExistsOnHost;
   const inspectOwner = dependencies.inspectOwner ?? inspectSessionOwner;
+  const listenerPid = dependencies.metroListenerPid ?? metroListenerPid;
   const captureInstalled = dependencies.captureInstalled ?? captureInstalledArtifact;
   const captureGeneration = dependencies.captureInstallGeneration ?? captureInstallGeneration;
   return async ({ axis, phase, status, tool, args }) => {
     if (axis === "C") {
       const { registry: registry2, session: session2 } = dependencies.runtime.requireAvailable();
       const controller = phase === "preflight" && tool === "rn_session" && args?.action === "cancel_handoff" ? registry2.getHandoffCancellationControllerBinding(session2) : registry2.getControllerBinding(session2);
-      const supervisor = inspectOwner({
+      if (!controller.worker.instanceId || controller.worker.pid !== process.pid || !controller.worker.token) {
+        throw new SessionAuthorityError("SESSION_OWNER_LOST", "controller process identity no longer matches the fenced session");
+      }
+      requireMatchingProcessOwner(inspectOwner({
         sessionId: controller.sessionId,
         pid: controller.supervisor.pid,
         token: controller.supervisor.token
+      }), {
+        axis,
+        subject: "supervisor",
+        mismatchCode: "SESSION_OWNER_LOST",
+        mismatchMessage: "controller process identity no longer matches the fenced session"
       });
-      const workerBirth = controller.worker.pid === process.pid && controller.worker.token ? readProcessBirth(process.pid) : null;
-      if (supervisor !== "match" || !controller.worker.instanceId || !workerBirth || workerBirth.token !== controller.worker.token) {
-        throw new SessionAuthorityError("SESSION_OWNER_LOST", "controller process identity no longer matches the fenced session");
-      }
+      requireMatchingProcessOwner(inspectOwner({
+        sessionId: controller.sessionId,
+        pid: controller.worker.pid,
+        token: controller.worker.token
+      }), {
+        axis,
+        subject: "worker",
+        mismatchCode: "SESSION_OWNER_LOST",
+        mismatchMessage: "controller process identity no longer matches the fenced session"
+      });
       return { axis, identity: identity(controller) };
     }
     if (axis === "S") {
@@ -93131,9 +93156,15 @@ function createLocalAuthorityProbe(dependencies) {
       const port = Number(metro.port);
       const pid = Number(metro.pid);
       const birth = String(metro.birth ?? "");
-      if (!Number.isSafeInteger(port) || !Number.isSafeInteger(pid) || !birth || metroListenerPid(port) !== pid || inspectSessionOwner({ sessionId: status.sessionId, pid, token: birth }) !== "match") {
+      if (!Number.isSafeInteger(port) || !Number.isSafeInteger(pid) || !birth || listenerPid(port) !== pid) {
         throw new SessionAuthorityError("METRO_INSTANCE_CHANGED", "Metro process identity no longer matches the bound instance");
       }
+      requireMatchingProcessOwner(inspectOwner({ sessionId: status.sessionId, pid, token: birth }), {
+        axis,
+        subject: "Metro",
+        mismatchCode: "METRO_INSTANCE_CHANGED",
+        mismatchMessage: "Metro process identity no longer matches the bound instance"
+      });
       let statusText;
       try {
         statusText = await fetchText(`http://127.0.0.1:${port}/status`);
@@ -93263,9 +93294,15 @@ function createLocalAuthorityProbe(dependencies) {
       const pid = Number(runner.pid);
       const processBirth = String(runner.processBirth ?? "");
       const capability = String(runner.capability ?? "");
-      if (!Number.isSafeInteger(port) || !Number.isSafeInteger(pid) || !processBirth || !capability || inspectOwner({ sessionId: status.sessionId, pid, token: processBirth }) !== "match") {
+      if (!Number.isSafeInteger(port) || !Number.isSafeInteger(pid) || !processBirth || !capability) {
         throw new SessionAuthorityError("RUNNER_OWNERSHIP_MISMATCH", "runner process identity and endpoint capability no longer match the binding");
       }
+      requireMatchingProcessOwner(inspectOwner({ sessionId: status.sessionId, pid, token: processBirth }), {
+        axis,
+        subject: "runner",
+        mismatchCode: "RUNNER_OWNERSHIP_MISMATCH",
+        mismatchMessage: "runner process identity and endpoint capability no longer match the binding"
+      });
       const health = await fetchJson(`http://127.0.0.1:${port}/health`, {
         headers: { authorization: `Bearer ${capability}` }
       });
