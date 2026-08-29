@@ -363,6 +363,32 @@ test(
       reason: 'timeout',
       recipient: 'b'.repeat(32),
     });
+    const syntheticCode = 'RN_DEV_AGENT_OBVIOUSLY_SYNTHETIC_OUT_OF_VOCABULARY';
+    const syntheticStage = 'obviously-synthetic-stage';
+    const syntheticNodeVersion = '24.14.0-obviously.synthetic.version.payload';
+    const invalidStructuredViolations = [
+      canonicalAuthorityJson({
+        code: syntheticCode,
+        stage: 'native-spawn',
+        nodeVersion: '24.14.0',
+        convention: 'positional',
+        arity: 8,
+      }),
+      canonicalAuthorityJson({
+        code: 'RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION',
+        stage: syntheticStage,
+        nodeVersion: '24.14.0',
+        convention: 'positional',
+        arity: 8,
+      }),
+      canonicalAuthorityJson({
+        code: 'RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION',
+        stage: 'native-spawn',
+        nodeVersion: syntheticNodeVersion,
+        convention: 'positional',
+        arity: 8,
+      }),
+    ];
     const nativeAddonRequest = canonicalAuthorityJson({
       requestId: 'c'.repeat(32),
       path: outsideAddonPath,
@@ -387,6 +413,7 @@ for (const [kind, value] of [
   ['violation', ${JSON.stringify(genuineViolation)}],
   ['violation', ${JSON.stringify(stalledViolation)}],
   ['native-addon-request', ${JSON.stringify(nativeAddonRequest)}],
+  ...${JSON.stringify(invalidStructuredViolations)}.map((value) => ['violation', value]),
 ]) {
   writeSync(9, JSON.stringify({
     version: 1,
@@ -458,11 +485,24 @@ setInterval(() => {}, 1 << 30);
       assert.doesNotMatch(String(inspection.attribution ?? ''), new RegExp(syntheticValue));
       assert.match(String(inspection.attribution ?? ''), /RN_DEV_AGENT_UNSUPPORTED_NATIVE_ADDON/);
       assert.doesNotMatch(String(inspection.attribution ?? ''), new RegExp(syntheticBasename));
+      assert.doesNotMatch(String(inspection.attribution ?? ''), new RegExp(syntheticCode));
+      assert.doesNotMatch(String(inspection.attribution ?? ''), new RegExp(syntheticStage));
+      assert.doesNotMatch(String(inspection.attribution ?? ''), new RegExp(syntheticNodeVersion));
       const evidence = readFileSync(join(runtimeRoot, 'metro-runtime-evidence.jsonl'), 'utf8');
+      const violationValues = evidence
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line) as { kind: string; value: string })
+        .filter((entry) => entry.kind === 'violation')
+        .map((entry) => entry.value);
       assert.doesNotMatch(evidence, new RegExp(syntheticValue));
       assert.doesNotMatch(evidence, new RegExp(syntheticBasename));
+      assert.doesNotMatch(evidence, new RegExp(syntheticCode));
+      assert.doesNotMatch(evidence, new RegExp(syntheticStage));
+      assert.doesNotMatch(evidence, new RegExp(syntheticNodeVersion));
       assert.match(evidence, /RN_DEV_AGENT_UNSUPPORTED_NATIVE_ADDON/);
-      assert.match(evidence, /MANAGED_TRANSFORM_CHANNEL_STALLED/);
+      assert.ok(violationValues.includes(genuineViolation));
+      assert.ok(violationValues.includes(stalledViolation));
     } finally {
       if (binding && probeProcessBirth(binding.launcherPid).status !== 'absent') {
         process.kill(-binding.launcherPid, 'SIGKILL');

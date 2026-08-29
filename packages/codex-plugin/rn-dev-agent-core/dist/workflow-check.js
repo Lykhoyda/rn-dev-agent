@@ -8019,9 +8019,11 @@ function normalizeChildViolationPayload(payload) {
     intrinsicReflectApply(intrinsicArraySort, structuredNames, []);
     if (
       structuredNames.join('\0') === 'arity\0code\0convention\0nodeVersion\0stage' &&
-      /^RN_DEV_AGENT_[A-Z0-9_]+$/.test(structured.code) &&
-      /^[a-z0-9-]{1,64}$/.test(structured.stage) &&
-      /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(structured.nodeVersion) &&
+      structured.code === 'RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION' &&
+      structured.stage === 'native-spawn' &&
+      typeof structured.nodeVersion === 'string' &&
+      structured.nodeVersion.length <= 32 &&
+      /^\d+\.\d+\.\d+$/.test(structured.nodeVersion) &&
       ['object', 'positional', 'unverified'].includes(structured.convention) &&
       Number.isSafeInteger(structured.arity) &&
       structured.arity >= 0 &&
