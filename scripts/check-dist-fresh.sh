@@ -86,9 +86,9 @@ payload=json.load(sys.stdin)
 files=payload[0]["files"] if isinstance(payload, list) else payload["files"]
 print("\n".join(entry["path"] for entry in files))'
   )"
-  if ! printf '%s\n' "$pack_paths" | grep -qx 'dist/supervisor.js'; then
+  if ! grep -qx 'dist/supervisor.js' <<< "$pack_paths"; then
     echo "ERROR: npm pack does not include dist/supervisor.js (gitignore must not apply to the tarball)."
-    printf '%s\n' "$pack_paths" | head
+    sed -n '1,10p' <<< "$pack_paths"
     exit 1
   fi
 fi
