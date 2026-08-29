@@ -177,15 +177,15 @@ function trailingHandler(stagePlans: StagePlan[]) {
     reproveManagedOrigin: async () => {},
     fastHealthCheck: async () => true,
     execFile: async (_file: string, args: string[]) => {
-      if (invocation >= stagePlans.length) {
-        throw new Error(
-          `unexpected extra runner invocation #${invocation + 1} — no retries allowed`,
-        );
-      }
-      const plan = stagePlans[invocation];
-      const dir = reportDirFrom(args);
+      // Count the ATTEMPT before the bounds check so a forbidden extra
+      // invocation is visible even if its throw gets swallowed upstream.
       invocation++;
       invocationCounter.count = invocation;
+      if (invocation > stagePlans.length) {
+        throw new Error(`unexpected extra runner invocation #${invocation} — no retries allowed`);
+      }
+      const plan = stagePlans[invocation - 1];
+      const dir = reportDirFrom(args);
       if (!plan.skipReportWrite) writeStageReport(dir, plan.rows, invocation);
       if (plan.throwWith) {
         throw Object.assign(new Error('runner exited 1'), {
