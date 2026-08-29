@@ -65078,6 +65078,22 @@ async function stopManagedMetroProcesses(input, dependencies) {
   }
 }
 async function stopManagedMetro(binding, input, dependencies = {}) {
+  if (!verifyManagedMetroStopProof(binding, input))
+    return false;
+  const authenticatedBinding = binding;
+  const stopped = await stopManagedMetroProcesses({
+    port: authenticatedBinding.port,
+    launcher: {
+      pid: authenticatedBinding.launcherPid,
+      birth: authenticatedBinding.launcherBirth
+    },
+    listener: { pid: authenticatedBinding.pid, birth: authenticatedBinding.birth }
+  }, dependencies);
+  if (!stopped)
+    return false;
+  return removeManagedMetroEvidenceSocketSafely(authenticatedBinding.runtimeEvidenceSocket, dependencies);
+}
+function verifyManagedMetroStopProof(binding, input) {
   if (binding?.mode !== "managed" || typeof binding.port !== "number" || typeof binding.pid !== "number" || typeof binding.birth !== "string" || typeof binding.launcherPid !== "number" || typeof binding.launcherBirth !== "string" || typeof binding.instanceId !== "string" || typeof binding.runtimeEvidencePath !== "string" || typeof binding.runtimeEvidenceSocket !== "string" || binding.runtimeEvidenceAuthority !== void 0 && binding.runtimeEvidenceAuthority !== "reported-v1" && binding.runtimeEvidenceAuthority !== "managed-sandbox-v1" || binding.runtimeEvidenceAuthority === "managed-sandbox-v1" && binding.runtimeEvidenceProtocol !== 2 || typeof binding.managementProof !== "string") {
     return false;
   }
@@ -65129,17 +65145,10 @@ async function stopManagedMetro(binding, input, dependencies = {}) {
   })) {
     return false;
   }
-  const stopped = await stopManagedMetroProcesses({
-    port: binding.port,
-    launcher: { pid: binding.launcherPid, birth: binding.launcherBirth },
-    listener: { pid: binding.pid, birth: binding.birth }
-  }, dependencies);
-  if (!stopped)
-    return false;
-  return removeManagedMetroEvidenceSocketSafely(binding.runtimeEvidenceSocket, dependencies);
+  return true;
 }
 async function stopManagedMetroWithEvidence(binding, input, dependencies = {}) {
-  const proofAuthenticated = binding !== null && binding !== void 0 && verifyManagedMetroManagementProof(binding, input);
+  const proofAuthenticated = binding !== null && binding !== void 0 && verifyManagedMetroStopProof(binding, input);
   const stopped = await stopManagedMetro(binding, input, dependencies);
   const authenticated = proofAuthenticated || stopped;
   let evidence = inspectManagedMetroCleanupEvidence(binding ?? {}, dependencies);
@@ -70886,7 +70895,7 @@ async function completeObligations(registry2, prior, dependencies) {
 }
 function managedMetroStopProofMissing(binding, input, dependencies) {
   try {
-    const authenticated = (dependencies.verifyManagedMetroManagementProof ?? verifyManagedMetroManagementProof)(binding, input);
+    const authenticated = (dependencies.verifyManagedMetroStopProof ?? verifyManagedMetroStopProof)(binding, input);
     const evidence = (dependencies.inspectManagedMetroCleanupEvidence ?? inspectManagedMetroCleanupEvidence)(binding);
     const runtimeEvidencePath = binding.runtimeEvidencePath;
     const evidenceExists = dependencies.managedMetroEvidenceExists ?? existsSync24;

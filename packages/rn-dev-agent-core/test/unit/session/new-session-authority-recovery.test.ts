@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, createHmac } from 'node:crypto';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -502,7 +502,7 @@ test('GH#801: missing managed-Metro stop proof is reported as unrecoverable in-b
   const outcome = await runStartupOwnerCleanup(cleanupInput(missingProof), {
     ...executorDeps(),
     stopManagedMetro: async () => false,
-    verifyManagedMetroManagementProof: () => false,
+    verifyManagedMetroStopProof: () => false,
     inspectManagedMetroCleanupEvidence: () => ({
       complete: true,
       launcher: 'absent',
@@ -551,11 +551,61 @@ test('GH#801: missing managed-Metro stop proof is reported as unrecoverable in-b
     'managed-metro-stop-proof-missing',
   );
 
+  const legacy = contenderFacing('mismatch');
+  const legacyMetro = {
+    mode: 'managed',
+    port: 8300,
+    pid: 9914,
+    birth: 'metro-birth',
+    launcherPid: 9915,
+    launcherBirth: 'launcher-birth',
+    instanceId: 'metro-instance',
+    runtimeEvidencePath: join(legacy.root, 'missing-runtime-evidence.jsonl'),
+    runtimeEvidenceSocket: join(legacy.root, 'missing-runtime-evidence.sock'),
+  };
+  legacy.registry.updateBindings(legacy.owner, {
+    bindings: {
+      metro: {
+        ...legacyMetro,
+        managementProof: createHmac('sha256', 'dead-signer-capability')
+          .update(
+            [
+              'prior-owner',
+              legacyMetro.port,
+              legacyMetro.pid,
+              legacyMetro.birth,
+              legacyMetro.launcherPid,
+              legacyMetro.launcherBirth,
+              legacyMetro.instanceId,
+              legacyMetro.runtimeEvidencePath,
+              legacyMetro.runtimeEvidenceSocket,
+            ].join('\0'),
+          )
+          .digest('hex'),
+      },
+    },
+  });
+  await runStartupOwnerCleanup(cleanupInput(legacy), {
+    ...executorDeps(),
+    stopManagedMetro: async () => false,
+    inspectManagedMetroCleanupEvidence: () => ({
+      complete: true,
+      launcher: 'absent',
+      listener: 'absent',
+      port: { status: 'absent' },
+      evidenceSocket: 'absent',
+    }),
+    managedMetroEvidenceExists: () => false,
+  });
+  const legacyRequirement = legacy.registry.inspectRecoveryRequirement('contender');
+  assert.equal(legacyRequirement.requirement, 'transport-restart');
+  assert.equal(legacyRequirement.startupCleanupBlocked?.cause, undefined);
+
   const retryable = contenderFacing('mismatch');
   await runStartupOwnerCleanup(cleanupInput(retryable), {
     ...executorDeps(),
     stopManagedMetro: async () => false,
-    verifyManagedMetroManagementProof: () => true,
+    verifyManagedMetroStopProof: () => true,
     inspectManagedMetroCleanupEvidence: () => ({
       complete: false,
       launcher: 'present',

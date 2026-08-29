@@ -5,7 +5,7 @@ import { readJsonStateFile } from '../util/secure-state-file.js';
 import {
   inspectManagedMetroCleanupEvidence,
   stopManagedMetro,
-  verifyManagedMetroManagementProof,
+  verifyManagedMetroStopProof,
   type ManagedMetroBinding,
 } from './managed-metro.js';
 import {
@@ -63,7 +63,7 @@ export interface StartupCleanupDependencies {
     input: { sessionId: string; signerCapability: string },
   ) => Promise<boolean>;
   inspectManagedMetroCleanupEvidence?: typeof inspectManagedMetroCleanupEvidence;
-  verifyManagedMetroManagementProof?: typeof verifyManagedMetroManagementProof;
+  verifyManagedMetroStopProof?: typeof verifyManagedMetroStopProof;
   managedMetroEvidenceExists?: (path: string) => boolean;
   restoreIntegrationFiles?: (input: { appRoot: string; manifestSource?: string }) => void;
   readSessionSecret?: (sessionId: string) => Record<string, unknown> | null;
@@ -225,9 +225,10 @@ function managedMetroStopProofMissing(
   dependencies: StartupCleanupDependencies,
 ): boolean {
   try {
-    const authenticated = (
-      dependencies.verifyManagedMetroManagementProof ?? verifyManagedMetroManagementProof
-    )(binding, input);
+    const authenticated = (dependencies.verifyManagedMetroStopProof ?? verifyManagedMetroStopProof)(
+      binding,
+      input,
+    );
     const evidence = (
       dependencies.inspectManagedMetroCleanupEvidence ?? inspectManagedMetroCleanupEvidence
     )(binding);

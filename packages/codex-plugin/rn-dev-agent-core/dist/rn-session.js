@@ -15332,6 +15332,22 @@ async function stopManagedMetroProcesses(input, dependencies) {
   }
 }
 async function stopManagedMetro(binding, input, dependencies = {}) {
+  if (!verifyManagedMetroStopProof(binding, input))
+    return false;
+  const authenticatedBinding = binding;
+  const stopped = await stopManagedMetroProcesses({
+    port: authenticatedBinding.port,
+    launcher: {
+      pid: authenticatedBinding.launcherPid,
+      birth: authenticatedBinding.launcherBirth
+    },
+    listener: { pid: authenticatedBinding.pid, birth: authenticatedBinding.birth }
+  }, dependencies);
+  if (!stopped)
+    return false;
+  return removeManagedMetroEvidenceSocketSafely(authenticatedBinding.runtimeEvidenceSocket, dependencies);
+}
+function verifyManagedMetroStopProof(binding, input) {
   if (binding?.mode !== "managed" || typeof binding.port !== "number" || typeof binding.pid !== "number" || typeof binding.birth !== "string" || typeof binding.launcherPid !== "number" || typeof binding.launcherBirth !== "string" || typeof binding.instanceId !== "string" || typeof binding.runtimeEvidencePath !== "string" || typeof binding.runtimeEvidenceSocket !== "string" || binding.runtimeEvidenceAuthority !== void 0 && binding.runtimeEvidenceAuthority !== "reported-v1" && binding.runtimeEvidenceAuthority !== "managed-sandbox-v1" || binding.runtimeEvidenceAuthority === "managed-sandbox-v1" && binding.runtimeEvidenceProtocol !== 2 || typeof binding.managementProof !== "string") {
     return false;
   }
@@ -15383,14 +15399,7 @@ async function stopManagedMetro(binding, input, dependencies = {}) {
   })) {
     return false;
   }
-  const stopped = await stopManagedMetroProcesses({
-    port: binding.port,
-    launcher: { pid: binding.launcherPid, birth: binding.launcherBirth },
-    listener: { pid: binding.pid, birth: binding.birth }
-  }, dependencies);
-  if (!stopped)
-    return false;
-  return removeManagedMetroEvidenceSocketSafely(binding.runtimeEvidenceSocket, dependencies);
+  return true;
 }
 
 // packages/rn-dev-agent-core/dist/session/managed-metro-restart.js
