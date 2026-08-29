@@ -85,6 +85,12 @@ import {
   isProvenTrailingVerificationQualifier,
   type TrailingVerificationQualifier,
 } from '../domain/maestro-run-ledger.js';
+import {
+  formatRuntimeSlowCaveat,
+  runtimeDegradationFromMetadata,
+  runtimeDegradationMetadata,
+  type RuntimeDegradation,
+} from '../domain/tap-latency.js';
 
 const strictRunActionPolicy = Symbol('strictRunActionPolicy');
 
@@ -356,6 +362,14 @@ function readMaestroOutput(env: MaestroEnvelope): string {
 function readMaestroDeviceAuthority(env: MaestroEnvelope): MaestroDeviceAuthority | undefined {
   if (env.data?.deviceAuthority) return env.data.deviceAuthority;
   return (env.meta as { deviceAuthority?: MaestroDeviceAuthority } | undefined)?.deviceAuthority;
+}
+
+function readRuntimeDegradation(env: MaestroEnvelope): RuntimeDegradation | undefined {
+  for (const source of [env.meta, env.data as Record<string, unknown> | undefined]) {
+    const degradation = runtimeDegradationFromMetadata(source?.runtimeDegraded);
+    if (degradation) return degradation;
+  }
+  return undefined;
 }
 
 // GH #623: anything short of the fully validated proven shape reads as absent.
@@ -909,6 +923,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
         kind: 'initial',
       });
       if (firstTrailingVerification) {
+        const firstRuntimeDegradation = readRuntimeDegradation(firstEnv);
         // Auto-repair REFUSES (contract): rewriting a merely-slow selector is
         // the harm this path exists to prevent. The true cause lives in the
         // adjacent qualifier block; no new refusal code is introduced.
@@ -935,7 +950,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
             : readMaestroTerminal(firstEnv)?.failedStep
               ? ` ("${readMaestroTerminal(firstEnv)?.failedStep}")`
               : '';
-        const message =
+        const baseMessage =
           `cdp_run_action: ${args.actionId} failed (${failure.kind}) — trailing verification only: ` +
           `the run ledger proves every authored mutating command completed ` +
           `(${firstTrailingVerification.provenMutations} mutations), and only the final wait/assert${anchor} ` +
@@ -943,6 +958,9 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
           `after the wait gave up. Verify the live state (device_screenshot, cdp_navigation_state, ` +
           `expect_visible_by_testid) before re-running. Auto-repair skipped: the selector may be ` +
           `merely slow, not stale.`;
+        const message = firstRuntimeDegradation
+          ? `${baseMessage} — ${formatRuntimeSlowCaveat(firstRuntimeDegradation)}`
+          : baseMessage;
         const meta = {
           actionId: args.actionId,
           failureKind: failure.kind,
@@ -951,6 +969,9 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
             : {}),
           underlyingFailure: firstFailureDetail,
           trailingVerification: firstTrailingVerification,
+          ...(firstRuntimeDegradation
+            ? { runtimeDegraded: runtimeDegradationMetadata(firstRuntimeDegradation) }
+            : {}),
           autoRepair,
           firstAttemptOutput: boundedOutput(firstOutput),
           terminal: readMaestroTerminal(firstEnv),
@@ -1286,6 +1307,9 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
             kind: 'repaired',
             parentAttemptId: initialAttemptId,
           });
+      const retryRuntimeDegradation = retryTrailingVerification
+        ? readRuntimeDegradation(retryEnv)
+        : undefined;
       const persisted = await persistRunWithDevice({
         timestamp: new Date().toISOString(),
         durationMs: Date.now() - t0,
@@ -1318,12 +1342,18 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
         });
       }
 
-      const retryMessage = retryTrailingVerification
+      const retryBaseMessage = retryTrailingVerification
         ? `cdp_run_action: ${args.actionId} failed after auto-repair (${repairData.oldSelector} → ${repairData.newSelector}) — trailing verification only: the run ledger proves every authored mutating command completed (${retryTrailingVerification.provenMutations} mutations); only the final wait/assert did not verify within its deadline. The goal state is UNPROVEN — verify the live state before re-running.`
         : `cdp_run_action: ${args.actionId} still failing after auto-repair (${repairData.oldSelector} → ${repairData.newSelector}): ${retryFailureDetail}`;
+      const retryMessage = retryRuntimeDegradation
+        ? `${retryBaseMessage} — ${formatRuntimeSlowCaveat(retryRuntimeDegradation)}`
+        : retryBaseMessage;
       const retryMeta = {
         actionId: args.actionId,
         ...(retryTrailingVerification ? { trailingVerification: retryTrailingVerification } : {}),
+        ...(retryRuntimeDegradation
+          ? { runtimeDegraded: runtimeDegradationMetadata(retryRuntimeDegradation) }
+          : {}),
         autoRepair,
         writes: writeDisclosure('auto-repair', persisted),
         firstAttemptOutput: boundedOutput(firstOutput),

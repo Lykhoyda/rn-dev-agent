@@ -14436,6 +14436,27 @@ function resolveFloorMs(envVal) {
   const n = Number(envVal);
   return Number.isFinite(n) && n > 0 ? n : DEFAULT_FLOOR_MS;
 }
+function runtimeDegradationFromMetadata(candidate) {
+  if (!candidate || typeof candidate !== "object" || Array.isArray(candidate))
+    return null;
+  const metadata = candidate;
+  if (typeof metadata.medianTapMs !== "number" || !Number.isFinite(metadata.medianTapMs) || typeof metadata.floorMs !== "number" || !Number.isFinite(metadata.floorMs) || typeof metadata.sampleCount !== "number" || !Number.isSafeInteger(metadata.sampleCount) || metadata.medianTapMs < 0 || metadata.floorMs <= 0 || metadata.sampleCount < 0) {
+    return null;
+  }
+  return {
+    degraded: true,
+    medianMs: metadata.medianTapMs,
+    floorMs: metadata.floorMs,
+    sampleCount: metadata.sampleCount
+  };
+}
+function runtimeDegradationMetadata(degradation) {
+  return {
+    medianTapMs: degradation.medianMs,
+    floorMs: degradation.floorMs,
+    sampleCount: degradation.sampleCount
+  };
+}
 var MIN_SAMPLES_FOR_DEGRADED = 2;
 function classifyRuntimeDegradation(output, floorMs) {
   const samples = parseTapLatencies(output);
@@ -14462,7 +14483,7 @@ function augmentFailureWithDegradation(output, floorMs, baseMessage, baseMeta, o
     message: `${baseMessage} \u2014 ${hint}`,
     meta: {
       ...baseMeta,
-      runtimeDegraded: { medianTapMs: d.medianMs, floorMs: d.floorMs, sampleCount: d.sampleCount }
+      runtimeDegraded: runtimeDegradationMetadata(d)
     }
   };
 }
@@ -14848,7 +14869,7 @@ function digestCommand(command) {
   }
 }
 function terminationClean(t) {
-  return !t.timedOut && t.signal === null && !t.outputTruncated && !t.bootstrapFailure && !t.transportFailure && t.artifactFinalized;
+  return Number.isFinite(t.exitCode) && !t.timedOut && t.signal === null && !t.outputTruncated && !t.bootstrapFailure && !t.transportFailure && t.artifactFinalized;
 }
 function buildMaestroRunLedger(input) {
   const stages = [];
@@ -15968,6 +15989,19 @@ function remapNativeSteps(steps, sourceIndices) {
     return mapped ? [mapped] : [];
   });
 }
+function partialNativeFailureMessage(meta) {
+  const failedStep = remapNativeStep(meta.failedStep, 0, []);
+  const lastStep = remapNativeStep(meta.lastStep, 0, []);
+  const terminal = isRecord(meta.terminal) ? meta.terminal : null;
+  const failureKind = terminal?.failureKind;
+  const reason = failureKind === "SELECTOR_NOT_FOUND" || failureKind === "TIMEOUT" || failureKind === "ASSERTION_FAILED" ? {
+    kind: failureKind,
+    selector: typeof terminal?.failureSelector === "string" ? terminal.failureSelector : null
+  } : null;
+  const headline = formatFailureHeadline({ steps: [], failedStep, lastStep, reason }, { timedOut: meta.timedOut === true, outputTruncated: meta.outputTruncated === true }, "Native replay segment failed.");
+  const runtimeDegradation = runtimeDegradationFromMetadata(meta.runtimeDegraded);
+  return runtimeDegradation ? `${headline} \u2014 ${formatRuntimeDegradedHint(runtimeDegradation)}` : headline;
+}
 var ReactReplayFailure = class extends Error {
   replay;
   sourceIndices;
@@ -16198,6 +16232,13 @@ function createMaestroRunHandler(deps = {}) {
             const env = readToolEnvelope(nested);
             if (env.ok !== true || env.data?.passed !== true) {
               const nestedMeta = { ...env.meta, ...env.data };
+              const nativeSegmentCoversAttempt = segment.sourceIndices.length === validatedCommands.length && segment.sourceIndices.every((sourceIndex, index) => sourceIndex === index);
+              let nestedError = env.error ?? "Native replay segment failed.";
+              if (!nativeSegmentCoversAttempt) {
+                delete nestedMeta.trailingVerification;
+                delete nestedMeta.ledger;
+                nestedError = partialNativeFailureMessage(nestedMeta);
+              }
               combinedSteps.push(...remapNativeSteps(nestedMeta.steps, segment.sourceIndices));
               const uniqueProofDomains = [...new Set(proofDomains)];
               const proofDomain2 = uniqueProofDomains.length === 1 ? uniqueProofDomains.at(0) ?? "partitioned" : "partitioned";
@@ -16213,7 +16254,7 @@ function createMaestroRunHandler(deps = {}) {
                 ...failedStep ? { failedStep } : {},
                 ...lastStep ? { lastStep } : {}
               };
-              return env.code ? failResult(env.error ?? "Native replay segment failed.", env.code, meta) : failResult(env.error ?? "Native replay segment failed.", meta);
+              return env.code ? failResult(nestedError, env.code, meta) : failResult(nestedError, meta);
             }
             nativeTransportVersion = env.data.transportVersion ?? nativeTransportVersion;
             if (typeof env.data.output === "string")
@@ -16745,6 +16786,9 @@ function createMaestroRunHandler(deps = {}) {
       return warnResult(warnAug.meta, warnAug.message);
     } catch (err) {
       const stageError = err instanceof MaestroStageExecutionError ? err.stageError : err;
+      const errorClass = classifyExecError(stageError);
+      const stageErrorSignal = stageError?.signal;
+      const processTerminationVeto = errorClass.timedOut || typeof stageErrorSignal === "string" || isPreSpawnMaestroError(stageError) || flowAbort.signal.aborted;
       if (nativeOriginPreclaimed && completePreclaimedOrigin) {
         try {
           await completePreclaimedOrigin(false);
@@ -16815,7 +16859,6 @@ function createMaestroRunHandler(deps = {}) {
           ...androidReleaseMeta()
         });
       }
-      const errorClass = classifyExecError(stageError);
       let timedOut = errorClass.timedOut || flowAbort.signal.aborted;
       const { outputTruncated } = errorClass;
       const directEvidence = directRunnerEvidence(combined);
@@ -16931,7 +16974,7 @@ function createMaestroRunHandler(deps = {}) {
       const releaseCaveat = androidReleaseCaveat();
       const headline = releaseCaveat ? `${rawHeadline}; ${releaseCaveat}` : rawHeadline;
       const failLedger = buildAttemptLedger();
-      const failTrailingVerification = timedOut || spawnError ? null : classifyTrailingVerification(failLedger);
+      const failTrailingVerification = processTerminationVeto ? null : classifyTrailingVerification(failLedger);
       const failAug = augmentFailureWithDegradation(combined, resolveFloorMs(process.env.RN_RUNTIME_DEGRADED_FLOOR_MS), headline, {
         ledger: failLedger,
         ...failTrailingVerification ? { trailingVerification: failTrailingVerification } : {},

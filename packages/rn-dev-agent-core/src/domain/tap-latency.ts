@@ -38,6 +38,48 @@ export interface RuntimeDegradation {
   sampleCount: number;
 }
 
+export interface RuntimeDegradationMetadata {
+  medianTapMs: number;
+  floorMs: number;
+  sampleCount: number;
+}
+
+export function runtimeDegradationFromMetadata(
+  candidate: unknown,
+): RuntimeDegradation | null {
+  if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) return null;
+  const metadata = candidate as Partial<RuntimeDegradationMetadata>;
+  if (
+    typeof metadata.medianTapMs !== 'number' ||
+    !Number.isFinite(metadata.medianTapMs) ||
+    typeof metadata.floorMs !== 'number' ||
+    !Number.isFinite(metadata.floorMs) ||
+    typeof metadata.sampleCount !== 'number' ||
+    !Number.isSafeInteger(metadata.sampleCount) ||
+    metadata.medianTapMs < 0 ||
+    metadata.floorMs <= 0 ||
+    metadata.sampleCount < 0
+  ) {
+    return null;
+  }
+  return {
+    degraded: true,
+    medianMs: metadata.medianTapMs,
+    floorMs: metadata.floorMs,
+    sampleCount: metadata.sampleCount,
+  };
+}
+
+export function runtimeDegradationMetadata(
+  degradation: RuntimeDegradation,
+): RuntimeDegradationMetadata {
+  return {
+    medianTapMs: degradation.medianMs!,
+    floorMs: degradation.floorMs,
+    sampleCount: degradation.sampleCount,
+  };
+}
+
 // Require at least this many successful-tap samples before attributing slowness
 // to a wedge. A single slow tap (e.g. a cold-start navigation tap) is normal
 // variance — flagging it would mis-hint "reboot" on an ordinary element-not-found
@@ -99,7 +141,7 @@ export function augmentFailureWithDegradation(
     message: `${baseMessage} — ${hint}`,
     meta: {
       ...baseMeta,
-      runtimeDegraded: { medianTapMs: d.medianMs, floorMs: d.floorMs, sampleCount: d.sampleCount },
+      runtimeDegraded: runtimeDegradationMetadata(d),
     },
   };
 }

@@ -158,7 +158,10 @@ interface StagePlan {
 
 const invocationCounter = { count: 0 };
 
-function trailingHandler(stagePlans: StagePlan[]) {
+function trailingHandler(
+  stagePlans: StagePlan[],
+  options: { fastHealthCheck?: () => Promise<boolean>; now?: () => number } = {},
+) {
   let invocation = 0;
   invocationCounter.count = 0;
   return createMaestroRunHandler({
@@ -175,7 +178,8 @@ function trailingHandler(stagePlans: StagePlan[]) {
     completeNativeOrigin: async () => {},
     relaunchManagedApp: async () => {},
     reproveManagedOrigin: async () => {},
-    fastHealthCheck: async () => true,
+    fastHealthCheck: options.fastHealthCheck ?? (async () => true),
+    ...(options.now ? { now: options.now } : {}),
     execFile: async (_file: string, args: string[]) => {
       // Count the ATTEMPT before the bounds check so a forbidden extra
       // invocation is visible even if its throw gets swallowed upstream.
@@ -290,6 +294,26 @@ test('gh-623 regression: renderer timeout wording does not veto clean producer t
   assert.ok(!body.error.includes(REBOOT_ADVICE), body.error);
 });
 
+test('gh-623 regression: post-run deadline expiry does not veto clean producer termination', async () => {
+  let clock = 0;
+  const body = await runFlow(
+    trailingHandler(TRAILING_STAGES, {
+      now: () => clock,
+      fastHealthCheck: async () => {
+        clock = 120_001;
+        return true;
+      },
+    }),
+  );
+  assert.equal(body.ok, false);
+  assert.equal(body.meta.passed, false);
+  assert.equal(body.meta.timedOut, true);
+  assert.equal(body.meta.terminal.exitClass, 'timed-out');
+  assert.ok(isProvenTrailingVerificationQualifier(body.meta.trailingVerification));
+  assert.ok(body.error.includes(VERIFY_CAVEAT), body.error);
+  assert.ok(!body.error.includes(REBOOT_ADVICE), body.error);
+});
+
 test('gh-623 regression: a partial native partition forwards no whole-attempt ledger claims', async () => {
   let reactPresses = 0;
   let invocation = 0;
@@ -324,6 +348,7 @@ test('gh-623 regression: a partial native partition forwards no whole-attempt le
         reportDirFrom(args),
         [
           ['tapOn', 'passed'],
+          ['tapOn', 'passed'],
           ['extendedWaitUntil', 'failed'],
         ],
         invocation,
@@ -333,6 +358,7 @@ test('gh-623 regression: a partial native partition forwards no whole-attempt le
           'maestro-runner 1.1.24',
           `Starting WDA on device ${EXACT} (port: 8447)`,
           '    ✓ tapOn: text="Native submit" (1.8s)',
+          '    ✓ tapOn: text="Native confirm" (1.9s)',
           '    ✗ extendedWaitUntil: visible text="Native done" (30.0s)',
           '      ╰─ Timed out waiting for element "Native done"',
         ].join('\n'),
@@ -344,6 +370,7 @@ test('gh-623 regression: a partial native partition forwards no whole-attempt le
   const result = await handler({
     inlineYaml: [
       '- tapOn: "Native submit"',
+      '- tapOn: "Native confirm"',
       '- extendedWaitUntil:',
       '    visible: "Native done"',
       '    timeout: 30000',
@@ -359,6 +386,8 @@ test('gh-623 regression: a partial native partition forwards no whole-attempt le
   assert.equal(body.meta.passed, false);
   assert.equal(body.meta.trailingVerification, undefined);
   assert.equal(body.meta.ledger, undefined);
+  assert.ok(body.error.includes(REBOOT_ADVICE), body.error);
+  assert.ok(!body.error.includes(VERIFY_CAVEAT), body.error);
   assert.equal(reactPresses, 0);
 });
 

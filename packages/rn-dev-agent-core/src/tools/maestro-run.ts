@@ -43,13 +43,19 @@ import {
 } from '../domain/maestro-validator.js';
 import { outputIndicatesFlowFailure } from '../domain/maestro-error-parser.js';
 import { parseMaestroFailure } from '../domain/maestro-error-parser.js';
-import { augmentFailureWithDegradation, resolveFloorMs } from '../domain/tap-latency.js';
+import {
+  augmentFailureWithDegradation,
+  formatRuntimeDegradedHint,
+  resolveFloorMs,
+  runtimeDegradationFromMetadata,
+} from '../domain/tap-latency.js';
 import {
   buildStepSummary,
   buildTerminalEvidence,
   classifyExecError,
   combineRunnerOutput,
   formatFailureHeadline,
+  type ReasonSummary,
 } from '../domain/maestro-step-parser.js';
 import {
   fastHealthCheck as defaultFastHealthCheck,
@@ -481,6 +487,32 @@ function remapNativeSteps(steps: unknown, sourceIndices: number[]): PartitionedR
   });
 }
 
+function partialNativeFailureMessage(meta: Record<string, unknown>): string {
+  const failedStep = remapNativeStep(meta.failedStep, 0, []);
+  const lastStep = remapNativeStep(meta.lastStep, 0, []);
+  const terminal = isRecord(meta.terminal) ? meta.terminal : null;
+  const failureKind = terminal?.failureKind;
+  const reason: ReasonSummary | null =
+    failureKind === 'SELECTOR_NOT_FOUND' ||
+    failureKind === 'TIMEOUT' ||
+    failureKind === 'ASSERTION_FAILED'
+      ? {
+          kind: failureKind,
+          selector:
+            typeof terminal?.failureSelector === 'string' ? terminal.failureSelector : null,
+        }
+      : null;
+  const headline = formatFailureHeadline(
+    { steps: [], failedStep, lastStep, reason },
+    { timedOut: meta.timedOut === true, outputTruncated: meta.outputTruncated === true },
+    'Native replay segment failed.',
+  );
+  const runtimeDegradation = runtimeDegradationFromMetadata(meta.runtimeDegraded);
+  return runtimeDegradation
+    ? `${headline} — ${formatRuntimeDegradedHint(runtimeDegradation)}`
+    : headline;
+}
+
 class ReactReplayFailure extends Error {
   constructor(
     readonly replay: Awaited<ReturnType<typeof runCdpReplayCommands>>,
@@ -863,9 +895,11 @@ export function createMaestroRunHandler(
               const nativeSegmentCoversAttempt =
                 segment.sourceIndices.length === validatedCommands.length &&
                 segment.sourceIndices.every((sourceIndex, index) => sourceIndex === index);
+              let nestedError = env.error ?? 'Native replay segment failed.';
               if (!nativeSegmentCoversAttempt) {
                 delete nestedMeta.trailingVerification;
                 delete nestedMeta.ledger;
+                nestedError = partialNativeFailureMessage(nestedMeta);
               }
               combinedSteps.push(...remapNativeSteps(nestedMeta.steps, segment.sourceIndices));
               const uniqueProofDomains = [...new Set(proofDomains)];
@@ -896,8 +930,8 @@ export function createMaestroRunHandler(
                 ...(lastStep ? { lastStep } : {}),
               };
               return env.code
-                ? failResult(env.error ?? 'Native replay segment failed.', env.code, meta)
-                : failResult(env.error ?? 'Native replay segment failed.', meta);
+                ? failResult(nestedError, env.code, meta)
+                : failResult(nestedError, meta);
             }
             nativeTransportVersion = env.data.transportVersion ?? nativeTransportVersion;
             if (typeof env.data.output === 'string') nativeOutput += env.data.output;
@@ -1653,6 +1687,13 @@ export function createMaestroRunHandler(
       return warnResult(warnAug.meta, warnAug.message);
     } catch (err) {
       const stageError = err instanceof MaestroStageExecutionError ? err.stageError : err;
+      const errorClass = classifyExecError(stageError);
+      const stageErrorSignal = (stageError as { signal?: unknown } | null)?.signal;
+      const processTerminationVeto =
+        errorClass.timedOut ||
+        typeof stageErrorSignal === 'string' ||
+        isPreSpawnMaestroError(stageError) ||
+        flowAbort.signal.aborted;
       if (nativeOriginPreclaimed && completePreclaimedOrigin) {
         try {
           await completePreclaimedOrigin(false);
@@ -1746,7 +1787,6 @@ export function createMaestroRunHandler(
           ...androidReleaseMeta(),
         });
       }
-      const errorClass = classifyExecError(stageError);
       let timedOut = errorClass.timedOut || flowAbort.signal.aborted;
       const { outputTruncated } = errorClass;
       const directEvidence = directRunnerEvidence(combined);
@@ -1766,7 +1806,6 @@ export function createMaestroRunHandler(
         timedOut = true;
         terminal = buildTerminalEvidence(combined, { timedOut, spawnError });
       }
-      const processTimedOut = timedOut;
       // A run that produced no output never reached the device, so there is no
       // authority verdict to render — reporting one would mask the spawn/park
       // failure behind DEVICE_AUTHORITY_MISMATCH and refuse auto-repair.
@@ -1912,7 +1951,7 @@ export function createMaestroRunHandler(
       // never-spawned run never classifies as trailing verification.
       const failLedger = buildAttemptLedger();
       const failTrailingVerification =
-        processTimedOut || spawnError ? null : classifyTrailingVerification(failLedger);
+        processTerminationVeto ? null : classifyTrailingVerification(failLedger);
       // GH #263: a timeout/non-zero exit is also a failure surface — flag a
       // wedged runtime here too if the successful taps were degraded.
       const failAug = augmentFailureWithDegradation(

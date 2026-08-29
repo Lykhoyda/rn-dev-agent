@@ -55,6 +55,10 @@ const CLEAN_TERMINATION = {
   artifactFinalized: true,
 };
 
+const RUNTIME_DEGRADED = { medianTapMs: 1800, floorMs: 1500, sampleCount: 3 };
+const RUNTIME_CAVEAT =
+  'RUNTIME_DEGRADED: median tapOn latency 1800ms (>= 1500ms) — runtime is slow; the goal state may have appeared after the wait — verify before rebooting.';
+
 function qualifier(overrides: Record<string, unknown> = {}) {
   return {
     trailingVerificationOnly: true,
@@ -87,6 +91,7 @@ function trailingIdWaitEnv(trailingVerification: Record<string, unknown>) {
         failureSelector: 'home_screen',
       },
       trailingVerification,
+      runtimeDegraded: RUNTIME_DEGRADED,
       runnerResume: { attempted: true, healthy: true },
     },
   };
@@ -131,12 +136,15 @@ test('gh-623: trailing verification failure refuses repair, keeps kind, persists
   assert.equal(body.meta.failureKind, 'SELECTOR_NOT_FOUND', 'existing failureKind preserved');
   assert.equal(body.meta.trailingVerification.trailingVerificationOnly, true);
   assert.equal(body.meta.trailingVerification.mutationEvidence, 'proven');
+  assert.deepEqual(body.meta.runtimeDegraded, RUNTIME_DEGRADED);
   assert.equal(body.meta.autoRepair.attempted, false);
   assert.equal(body.meta.autoRepair.outcome, 'refused');
   assert.equal(body.meta.autoRepair.refusedReason, 'NOT_REPAIRABLE_KIND');
   assert.match(body.error, /trailing verification only/);
   assert.match(body.error, /UNPROVEN/);
   assert.match(body.error, /verify the live state/i);
+  assert.ok(body.error.includes(RUNTIME_CAVEAT), body.error);
+  assert.equal(body.error.split(RUNTIME_CAVEAT).length - 1, 1);
   assert.ok(!/reboot it \(xcrun simctl/.test(body.error), body.error);
   assert.ok(!/relaunch the app/.test(body.error), body.error);
 
@@ -337,8 +345,12 @@ test('gh-623: a repaired retry that fails only trailing verification carries the
     kind: 'repaired',
     parentAttemptId: initialAttempt.attemptId,
   });
+  assert.deepEqual(body.meta.runtimeDegraded, RUNTIME_DEGRADED);
+  assert.ok(body.error.includes(RUNTIME_CAVEAT), body.error);
+  assert.equal(body.error.split(RUNTIME_CAVEAT).length - 1, 1);
   assert.match(body.error, /trailing verification only/);
-  assert.ok(!/reboot/.test(body.error), body.error);
+  assert.ok(!/reboot it \(xcrun simctl/.test(body.error), body.error);
+  assert.ok(!/relaunch the app/.test(body.error), body.error);
   const sidecar = JSON.parse(readFileSync(project.sidecarPath('demo'), 'utf8'));
   const run = sidecar.runHistory.at(-1);
   assert.equal(run.status, 'fail');

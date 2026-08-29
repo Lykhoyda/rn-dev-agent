@@ -77668,6 +77668,27 @@ function resolveFloorMs(envVal) {
   const n = Number(envVal);
   return Number.isFinite(n) && n > 0 ? n : DEFAULT_FLOOR_MS;
 }
+function runtimeDegradationFromMetadata(candidate) {
+  if (!candidate || typeof candidate !== "object" || Array.isArray(candidate))
+    return null;
+  const metadata = candidate;
+  if (typeof metadata.medianTapMs !== "number" || !Number.isFinite(metadata.medianTapMs) || typeof metadata.floorMs !== "number" || !Number.isFinite(metadata.floorMs) || typeof metadata.sampleCount !== "number" || !Number.isSafeInteger(metadata.sampleCount) || metadata.medianTapMs < 0 || metadata.floorMs <= 0 || metadata.sampleCount < 0) {
+    return null;
+  }
+  return {
+    degraded: true,
+    medianMs: metadata.medianTapMs,
+    floorMs: metadata.floorMs,
+    sampleCount: metadata.sampleCount
+  };
+}
+function runtimeDegradationMetadata(degradation) {
+  return {
+    medianTapMs: degradation.medianMs,
+    floorMs: degradation.floorMs,
+    sampleCount: degradation.sampleCount
+  };
+}
 var MIN_SAMPLES_FOR_DEGRADED = 2;
 function classifyRuntimeDegradation(output, floorMs) {
   const samples = parseTapLatencies(output);
@@ -77694,7 +77715,7 @@ function augmentFailureWithDegradation(output, floorMs, baseMessage, baseMeta, o
     message: `${baseMessage} \u2014 ${hint}`,
     meta: {
       ...baseMeta,
-      runtimeDegraded: { medianTapMs: d.medianMs, floorMs: d.floorMs, sampleCount: d.sampleCount }
+      runtimeDegraded: runtimeDegradationMetadata(d)
     }
   };
 }
@@ -78080,7 +78101,7 @@ function digestCommand(command) {
   }
 }
 function terminationClean(t) {
-  return !t.timedOut && t.signal === null && !t.outputTruncated && !t.bootstrapFailure && !t.transportFailure && t.artifactFinalized;
+  return Number.isFinite(t.exitCode) && !t.timedOut && t.signal === null && !t.outputTruncated && !t.bootstrapFailure && !t.transportFailure && t.artifactFinalized;
 }
 function buildMaestroRunLedger(input) {
   const stages = [];
@@ -78242,7 +78263,7 @@ function isProvenTrailingVerificationQualifier(candidate) {
   if (!Array.isArray(qualifier.stageTerminations) || qualifier.stageTerminations.length === 0) {
     return false;
   }
-  return qualifier.stageTerminations.every((termination) => termination !== null && typeof termination === "object" && (termination.exitCode === null || typeof termination.exitCode === "number") && termination.signal === null && termination.timedOut === false && termination.outputTruncated === false && termination.bootstrapFailure === false && termination.transportFailure === false && termination.artifactFinalized === true);
+  return qualifier.stageTerminations.every((termination) => termination !== null && typeof termination === "object" && typeof termination.exitCode === "number" && Number.isFinite(termination.exitCode) && termination.signal === null && termination.timedOut === false && termination.outputTruncated === false && termination.bootstrapFailure === false && termination.transportFailure === false && termination.artifactFinalized === true);
 }
 function classifyTrailingVerification(ledger) {
   if (ledger.schemaVersion !== MAESTRO_RUN_LEDGER_SCHEMA_VERSION)
@@ -79254,6 +79275,19 @@ function remapNativeSteps(steps, sourceIndices) {
     return mapped ? [mapped] : [];
   });
 }
+function partialNativeFailureMessage(meta) {
+  const failedStep = remapNativeStep(meta.failedStep, 0, []);
+  const lastStep = remapNativeStep(meta.lastStep, 0, []);
+  const terminal = isRecord(meta.terminal) ? meta.terminal : null;
+  const failureKind = terminal?.failureKind;
+  const reason = failureKind === "SELECTOR_NOT_FOUND" || failureKind === "TIMEOUT" || failureKind === "ASSERTION_FAILED" ? {
+    kind: failureKind,
+    selector: typeof terminal?.failureSelector === "string" ? terminal.failureSelector : null
+  } : null;
+  const headline = formatFailureHeadline({ steps: [], failedStep, lastStep, reason }, { timedOut: meta.timedOut === true, outputTruncated: meta.outputTruncated === true }, "Native replay segment failed.");
+  const runtimeDegradation = runtimeDegradationFromMetadata(meta.runtimeDegraded);
+  return runtimeDegradation ? `${headline} \u2014 ${formatRuntimeDegradedHint(runtimeDegradation)}` : headline;
+}
 var ReactReplayFailure = class extends Error {
   replay;
   sourceIndices;
@@ -79484,6 +79518,13 @@ function createMaestroRunHandler(deps = {}) {
             const env = readToolEnvelope(nested);
             if (env.ok !== true || env.data?.passed !== true) {
               const nestedMeta = { ...env.meta, ...env.data };
+              const nativeSegmentCoversAttempt = segment.sourceIndices.length === validatedCommands.length && segment.sourceIndices.every((sourceIndex, index) => sourceIndex === index);
+              let nestedError = env.error ?? "Native replay segment failed.";
+              if (!nativeSegmentCoversAttempt) {
+                delete nestedMeta.trailingVerification;
+                delete nestedMeta.ledger;
+                nestedError = partialNativeFailureMessage(nestedMeta);
+              }
               combinedSteps.push(...remapNativeSteps(nestedMeta.steps, segment.sourceIndices));
               const uniqueProofDomains = [...new Set(proofDomains)];
               const proofDomain2 = uniqueProofDomains.length === 1 ? uniqueProofDomains.at(0) ?? "partitioned" : "partitioned";
@@ -79499,7 +79540,7 @@ function createMaestroRunHandler(deps = {}) {
                 ...failedStep ? { failedStep } : {},
                 ...lastStep ? { lastStep } : {}
               };
-              return env.code ? failResult(env.error ?? "Native replay segment failed.", env.code, meta) : failResult(env.error ?? "Native replay segment failed.", meta);
+              return env.code ? failResult(nestedError, env.code, meta) : failResult(nestedError, meta);
             }
             nativeTransportVersion = env.data.transportVersion ?? nativeTransportVersion;
             if (typeof env.data.output === "string")
@@ -80031,6 +80072,9 @@ function createMaestroRunHandler(deps = {}) {
       return warnResult(warnAug.meta, warnAug.message);
     } catch (err) {
       const stageError = err instanceof MaestroStageExecutionError ? err.stageError : err;
+      const errorClass = classifyExecError(stageError);
+      const stageErrorSignal = stageError?.signal;
+      const processTerminationVeto = errorClass.timedOut || typeof stageErrorSignal === "string" || isPreSpawnMaestroError(stageError) || flowAbort.signal.aborted;
       if (nativeOriginPreclaimed && completePreclaimedOrigin) {
         try {
           await completePreclaimedOrigin(false);
@@ -80101,7 +80145,6 @@ function createMaestroRunHandler(deps = {}) {
           ...androidReleaseMeta()
         });
       }
-      const errorClass = classifyExecError(stageError);
       let timedOut = errorClass.timedOut || flowAbort.signal.aborted;
       const { outputTruncated } = errorClass;
       const directEvidence = directRunnerEvidence(combined);
@@ -80217,7 +80260,7 @@ function createMaestroRunHandler(deps = {}) {
       const releaseCaveat = androidReleaseCaveat();
       const headline = releaseCaveat ? `${rawHeadline}; ${releaseCaveat}` : rawHeadline;
       const failLedger = buildAttemptLedger();
-      const failTrailingVerification = timedOut || spawnError ? null : classifyTrailingVerification(failLedger);
+      const failTrailingVerification = processTerminationVeto ? null : classifyTrailingVerification(failLedger);
       const failAug = augmentFailureWithDegradation(combined, resolveFloorMs(process.env.RN_RUNTIME_DEGRADED_FLOOR_MS), headline, {
         ledger: failLedger,
         ...failTrailingVerification ? { trailingVerification: failTrailingVerification } : {},
@@ -80553,12 +80596,20 @@ function readMaestroDeviceAuthority(env) {
     return env.data.deviceAuthority;
   return env.meta?.deviceAuthority;
 }
+function readRuntimeDegradation(env) {
+  for (const source of [env.meta, env.data]) {
+    const degradation = runtimeDegradationFromMetadata(source?.runtimeDegraded);
+    if (degradation)
+      return degradation;
+  }
+  return void 0;
+}
 function readTrailingVerification(env, dispatched) {
   for (const source of [env.meta, env.data]) {
     const candidate = source?.trailingVerification;
     if (!isProvenTrailingVerificationQualifier(candidate))
       continue;
-    if (candidate.attempt.attemptId !== dispatched.attemptId || candidate.attempt.ordinal !== dispatched.ordinal || candidate.attempt.kind !== dispatched.kind) {
+    if (candidate.attempt.attemptId !== dispatched.attemptId || candidate.attempt.ordinal !== dispatched.ordinal || candidate.attempt.kind !== dispatched.kind || candidate.attempt.parentAttemptId !== dispatched.parentAttemptId) {
       continue;
     }
     return candidate;
@@ -80892,6 +80943,7 @@ function createRunActionHandler(deps = {}) {
         kind: "initial"
       });
       if (firstTrailingVerification) {
+        const firstRuntimeDegradation = readRuntimeDegradation(firstEnv);
         const autoRepair2 = {
           attempted: false,
           outcome: "refused",
@@ -80910,13 +80962,15 @@ function createRunActionHandler(deps = {}) {
           trailingVerification: firstTrailingVerification
         });
         const anchor = "selector" in failure && failure.selector ? ` ("${failure.selector}")` : readMaestroTerminal(firstEnv)?.failedStep ? ` ("${readMaestroTerminal(firstEnv)?.failedStep}")` : "";
-        const message = `cdp_run_action: ${args.actionId} failed (${failure.kind}) \u2014 trailing verification only: the run ledger proves every authored mutating command completed (${firstTrailingVerification.provenMutations} mutations), and only the final wait/assert${anchor} did not verify within its deadline. The goal state is UNPROVEN \u2014 the app may have reached it after the wait gave up. Verify the live state (device_screenshot, cdp_navigation_state, expect_visible_by_testid) before re-running. Auto-repair skipped: the selector may be merely slow, not stale.`;
+        const baseMessage = `cdp_run_action: ${args.actionId} failed (${failure.kind}) \u2014 trailing verification only: the run ledger proves every authored mutating command completed (${firstTrailingVerification.provenMutations} mutations), and only the final wait/assert${anchor} did not verify within its deadline. The goal state is UNPROVEN \u2014 the app may have reached it after the wait gave up. Verify the live state (device_screenshot, cdp_navigation_state, expect_visible_by_testid) before re-running. Auto-repair skipped: the selector may be merely slow, not stale.`;
+        const message = firstRuntimeDegradation ? `${baseMessage} \u2014 ${formatRuntimeSlowCaveat(firstRuntimeDegradation)}` : baseMessage;
         const meta = {
           actionId: args.actionId,
           failureKind: failure.kind,
           ..."selector" in failure && failure.selector ? { failureSelector: failure.selector } : {},
           underlyingFailure: firstFailureDetail,
           trailingVerification: firstTrailingVerification,
+          ...firstRuntimeDegradation ? { runtimeDegraded: runtimeDegradationMetadata(firstRuntimeDegradation) } : {},
           autoRepair: autoRepair2,
           firstAttemptOutput: boundedOutput(firstOutput),
           terminal: readMaestroTerminal(firstEnv),
@@ -81151,8 +81205,10 @@ function createRunActionHandler(deps = {}) {
       const retryTrailingVerification = retryPassed ? void 0 : readTrailingVerification(retryEnv, {
         attemptId: repairedAttemptId,
         ordinal: 2,
-        kind: "repaired"
+        kind: "repaired",
+        parentAttemptId: initialAttemptId
       });
+      const retryRuntimeDegradation = retryTrailingVerification ? readRuntimeDegradation(retryEnv) : void 0;
       const persisted = await persistRunWithDevice({
         timestamp: (/* @__PURE__ */ new Date()).toISOString(),
         durationMs: Date.now() - t0,
@@ -81179,10 +81235,12 @@ function createRunActionHandler(deps = {}) {
           retryOutput: boundedOutput(retryOutput)
         });
       }
-      const retryMessage = retryTrailingVerification ? `cdp_run_action: ${args.actionId} failed after auto-repair (${repairData.oldSelector} \u2192 ${repairData.newSelector}) \u2014 trailing verification only: the run ledger proves every authored mutating command completed (${retryTrailingVerification.provenMutations} mutations); only the final wait/assert did not verify within its deadline. The goal state is UNPROVEN \u2014 verify the live state before re-running.` : `cdp_run_action: ${args.actionId} still failing after auto-repair (${repairData.oldSelector} \u2192 ${repairData.newSelector}): ${retryFailureDetail}`;
+      const retryBaseMessage = retryTrailingVerification ? `cdp_run_action: ${args.actionId} failed after auto-repair (${repairData.oldSelector} \u2192 ${repairData.newSelector}) \u2014 trailing verification only: the run ledger proves every authored mutating command completed (${retryTrailingVerification.provenMutations} mutations); only the final wait/assert did not verify within its deadline. The goal state is UNPROVEN \u2014 verify the live state before re-running.` : `cdp_run_action: ${args.actionId} still failing after auto-repair (${repairData.oldSelector} \u2192 ${repairData.newSelector}): ${retryFailureDetail}`;
+      const retryMessage = retryRuntimeDegradation ? `${retryBaseMessage} \u2014 ${formatRuntimeSlowCaveat(retryRuntimeDegradation)}` : retryBaseMessage;
       const retryMeta = {
         actionId: args.actionId,
         ...retryTrailingVerification ? { trailingVerification: retryTrailingVerification } : {},
+        ...retryRuntimeDegradation ? { runtimeDegraded: runtimeDegradationMetadata(retryRuntimeDegradation) } : {},
         autoRepair,
         writes: writeDisclosure("auto-repair", persisted),
         firstAttemptOutput: boundedOutput(firstOutput),
