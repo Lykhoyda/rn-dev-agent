@@ -122,6 +122,17 @@ sibling workspace only when explicitly requested.
   allowlist: a real actions directory, or the approved `.rn-agent/actions`
   symlink to the same-repo primary corpus. `isDirectNode` still refuses
   per-file action symlinks.
+- Trailing-verification classification (GH #623) has exactly one owner: the
+  canonical per-attempt ledger built inside `maestro_run` from per-stage
+  producer artifacts (`src/domain/maestro-run-ledger.ts`, artifact reader in
+  `src/domain/maestro-runner-report.ts`) and its single
+  `classifyTrailingVerification` classifier. Never classify command outcomes
+  from renderer `✓`/`✗` text, step counts, or positional joins — the step
+  parser stays display/diagnostic only; renderer or producer ordering may only
+  VETO a qualifier, never establish or promote an operation outcome. Unknown
+  ledger evidence and any unclean or incomplete termination provenance
+  (unfinalized artifact, truncation, signal, timeout, bootstrap/transport
+  failure) withhold the qualifier regardless of row states.
 - Claude-only host behavior: edit `packages/claude-plugin/`.
 - Codex-only host behavior: edit `packages/codex-plugin/`.
 - Host-neutral workflow knowledge: edit `packages/shared-agent-knowledge/`,
