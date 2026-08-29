@@ -58,3 +58,44 @@ test('gh-397: records without the new fields reconstruct clean', () => {
     assert.equal('blindProbe' in rec, false, 'no null-pollution');
   });
 });
+
+test('gh-623: trailing verification qualifier round-trips through the mirror', () => {
+  withDb((db) => {
+    const trailingVerification: NonNullable<RunRecord['trailingVerification']> = {
+      trailingVerificationOnly: true,
+      mutationEvidence: 'proven',
+      provenMutations: 5,
+      failedVerifications: 1,
+      notRunOperations: 0,
+      attempt: {
+        attemptId: 'attempt-repaired',
+        ordinal: 2,
+        kind: 'repaired',
+        parentAttemptId: 'attempt-initial',
+      },
+      stageTerminations: [
+        {
+          exitCode: 1,
+          signal: null,
+          timedOut: false,
+          outputTruncated: false,
+          bootstrapFailure: false,
+          transportFailure: false,
+          artifactFinalized: true,
+        },
+      ],
+    };
+    db.upsertIndex('demo', { appId: 'com.test.app', status: 'experimental', path: '/x/demo.yaml' });
+    db.insertRunRecord('demo', {
+      timestamp: '2026-08-29T00:00:00Z',
+      durationMs: 30_000,
+      status: 'fail',
+      trigger: 'agent',
+      trailingVerification,
+    });
+
+    const rec = db.loadState('demo')?.runHistory.at(-1);
+    assert.ok(rec);
+    assert.deepEqual(rec.trailingVerification, trailingVerification);
+  });
+});

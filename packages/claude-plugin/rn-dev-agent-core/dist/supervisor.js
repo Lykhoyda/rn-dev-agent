@@ -52305,8 +52305,8 @@ var require_resolve = __commonJS({
       }
       return count;
     }
-    function getFullPath(resolver, id = "", normalize2) {
-      if (normalize2 !== false)
+    function getFullPath(resolver, id = "", normalize) {
+      if (normalize !== false)
         id = normalizeId(id);
       const p = resolver.parse(id);
       return _getFullPath(resolver, p);
@@ -53796,7 +53796,7 @@ var require_fast_uri = __commonJS({
     "use strict";
     var { normalizeIPv6, removeDotSegments, recomposeAuthority, normalizePercentEncoding, normalizePathEncoding, normalizeQueryFragmentEncoding, escapePreservingEscapes, reescapeHostDelimiters, isIPv4, nonSimpleDomain } = require_utils();
     var { SCHEMES, getSchemeHandler } = require_schemes();
-    function normalize2(uri, options) {
+    function normalize(uri, options) {
       if (typeof uri === "string") {
         uri = /** @type {T} */
         normalizeString(uri, options);
@@ -54062,7 +54062,7 @@ var require_fast_uri = __commonJS({
     }
     var fastUri = {
       SCHEMES,
-      normalize: normalize2,
+      normalize,
       resolve: resolve21,
       resolveComponent,
       equal,
@@ -70281,7 +70281,8 @@ function openActionDb(projectRoot, opts = {}) {
     db.exec(SCHEMA);
     for (const alter of [
       "ALTER TABLE run_records ADD COLUMN device_id TEXT",
-      "ALTER TABLE run_records ADD COLUMN blind_probe_json TEXT"
+      "ALTER TABLE run_records ADD COLUMN blind_probe_json TEXT",
+      "ALTER TABLE run_records ADD COLUMN trailing_verification_json TEXT"
     ]) {
       try {
         db.exec(alter);
@@ -70303,8 +70304,9 @@ function openActionDb(projectRoot, opts = {}) {
           }
           db.prepare(`INSERT INTO run_records
                (action_id, ts, trigger, status, failure_code, failure_detail,
-                transport, auto_repair_json, duration_ms, device_id, blind_probe_json)
-             VALUES (?,?,?,?,?,?,?,?,?,?,?)`).run(actionId, record2.timestamp, record2.trigger, record2.status, record2.failureCode ?? null, record2.failureDetail ?? null, record2.transport ?? null, record2.autoRepair ? JSON.stringify(record2.autoRepair) : null, record2.durationMs, record2.deviceId ?? null, record2.blindProbe ? JSON.stringify(record2.blindProbe) : null);
+                transport, auto_repair_json, duration_ms, device_id, blind_probe_json,
+                trailing_verification_json)
+             VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`).run(actionId, record2.timestamp, record2.trigger, record2.status, record2.failureCode ?? null, record2.failureDetail ?? null, record2.transport ?? null, record2.autoRepair ? JSON.stringify(record2.autoRepair) : null, record2.durationMs, record2.deviceId ?? null, record2.blindProbe ? JSON.stringify(record2.blindProbe) : null, record2.trailingVerification ? JSON.stringify(record2.trailingVerification) : null);
           db.prepare(`DELETE FROM run_records
              WHERE action_id = ?
                AND id NOT IN (
@@ -70387,6 +70389,9 @@ function openActionDb(projectRoot, opts = {}) {
               rec.blindProbe = JSON.parse(String(r.blind_probe_json));
             } catch {
             }
+          }
+          if (r.trailing_verification_json) {
+            rec.trailingVerification = JSON.parse(String(r.trailing_verification_json));
           }
           return rec;
         });
@@ -70495,7 +70500,8 @@ CREATE TABLE IF NOT EXISTS run_records (
   auto_repair_json TEXT,
   duration_ms     INTEGER,
   device_id       TEXT,
-  blind_probe_json TEXT
+  blind_probe_json TEXT,
+  trailing_verification_json TEXT
 );
 
 CREATE TABLE IF NOT EXISTS repair_records (
@@ -79854,7 +79860,7 @@ var init_maestro_device_authority = __esm({
 import { existsSync as existsSync29, readFileSync as readFileSync29, readdirSync as readdirSync11, realpathSync as realpathSync15, rmSync as rmSync11 } from "node:fs";
 import { createHash as createHash16 } from "node:crypto";
 import { tmpdir as tmpdir9 } from "node:os";
-import { isAbsolute as isAbsolute12, join as join42, normalize, sep as sep9 } from "node:path";
+import { isAbsolute as isAbsolute12, join as join42, sep as sep9 } from "node:path";
 function idsFrom(value, keys) {
   if (!value || typeof value !== "object")
     return [];
@@ -79958,7 +79964,7 @@ function runnerReportFingerprint(reportDir) {
   for (const entry of flowEntries.sort()) {
     const flowHash = contentHash(join42(reportDir, "flows", entry));
     if (flowHash)
-      fingerprint[join42("flows", entry)] = flowHash;
+      fingerprint[`flows/${entry}`] = flowHash;
   }
   return fingerprint;
 }
@@ -79992,8 +79998,8 @@ function readStructuredFlowArtifact(reportDir, previous) {
       return unfinalized;
     if (typeof flow.dataFile !== "string" || flow.dataFile.length === 0)
       return unfinalized;
-    const normalizedDataFile = normalize(flow.dataFile);
-    if (isAbsolute12(normalizedDataFile) || !/^flows[/\\][^/\\]+$/.test(normalizedDataFile) || normalizedDataFile.split(sep9).includes("..")) {
+    const normalizedDataFile = flow.dataFile;
+    if (isAbsolute12(normalizedDataFile) || !/^flows\/[^/\\]+$/.test(normalizedDataFile)) {
       return unfinalized;
     }
     const realDataFile = realpathSync15(join42(reportDir, normalizedDataFile));
@@ -81916,6 +81922,7 @@ function createMaestroRunHandler(deps = {}) {
       const stageResults = await parkFlow(() => executeMaestroAuthorityStages(validatedCommands, async (commands) => {
         const ledgerStageIndex = ledgerStageCursor++;
         const preFingerprint = runnerReportFingerprint(runnerReportDir);
+        let failedInvocationTermination = null;
         const captureStageInvocation = (termination) => {
           const meta2 = plannedStageMeta[ledgerStageIndex];
           stageCaptures[ledgerStageIndex] = {
@@ -81966,14 +81973,17 @@ function createMaestroRunHandler(deps = {}) {
             try {
               return await executeOnce();
             } catch (error2) {
+              const initialFailureTermination = stageTerminationFromError(error2);
               const recoveryDeviceId = requestedDeviceId ?? releasedAndroidDeviceId;
               if (platform !== "android" || uiAutomationRecoveryAttempted || !recoveryDeviceId || !isUiAutomationNotConnectedSessionCreationFailure(error2)) {
+                failedInvocationTermination = initialFailureTermination;
                 throw error2;
               }
               uiAutomationRecoveryAttempted = true;
               const recoveryTimeout = flowDeadline - now();
               if (recoveryTimeout <= 0) {
                 androidSlotReleaseWarnings.push("UiAutomation recovery skipped: Maestro flow timeout was exhausted");
+                failedInvocationTermination = initialFailureTermination;
                 throw error2;
               }
               const recoveryAbort = new AbortController();
@@ -81988,6 +81998,10 @@ function createMaestroRunHandler(deps = {}) {
                 }));
               } catch (releaseError) {
                 androidSlotReleaseWarnings.push(`UiAutomation recovery release failed: ${releaseError instanceof Error ? releaseError.message : String(releaseError)}`);
+                failedInvocationTermination = {
+                  ...initialFailureTermination,
+                  transportFailure: true
+                };
                 throw attachCause(error2, releaseError);
               } finally {
                 clearTimeout(recoveryDeadlineTimer);
@@ -81997,11 +82011,14 @@ function createMaestroRunHandler(deps = {}) {
                   uiAutomationRecoveryRetried = true;
                 });
               } catch (retryError) {
+                const retryFailureTermination = stageTerminationFromError(retryError);
                 if (uiAutomationRecoveryRetried && !isPreSpawnMaestroError(retryError)) {
+                  failedInvocationTermination = retryFailureTermination;
                   throw retryError;
                 }
                 uiAutomationRecoveryRetried = false;
                 androidSlotReleaseWarnings.push(`UiAutomation recovery retry did not start: ${retryError instanceof Error ? retryError.message : String(retryError)}`);
+                failedInvocationTermination = retryFailureTermination;
                 throw attachCause(error2, retryError);
               }
             }
@@ -82016,7 +82033,7 @@ function createMaestroRunHandler(deps = {}) {
           });
           return stageResult;
         } catch (stageInvocationError) {
-          captureStageInvocation(stageTerminationFromError(stageInvocationError));
+          captureStageInvocation(failedInvocationTermination ?? stageTerminationFromError(stageInvocationError));
           throw stageInvocationError;
         }
       }, claimOrigin, completeTrackedOrigin, relaunchManagedApp, reproveManagedOrigin, { firstOriginClaimed: nativeOriginPreclaimed, signal: flowAbort.signal }), {
@@ -82109,8 +82126,12 @@ function createMaestroRunHandler(deps = {}) {
     } catch (err) {
       const stageError = err instanceof MaestroStageExecutionError ? err.stageError : err;
       const errorClass = classifyExecError(stageError);
-      const stageErrorSignal = stageError?.signal;
-      const processTerminationVeto = errorClass.timedOut || typeof stageErrorSignal === "string" || isPreSpawnMaestroError(stageError) || flowAbort.signal.aborted;
+      const processTerminationVeto = stageCaptures.some((capture) => {
+        const termination = capture.invocation?.termination;
+        if (!termination)
+          return false;
+        return termination.timedOut || termination.signal !== null || termination.outputTruncated || termination.bootstrapFailure || termination.transportFailure;
+      });
       if (nativeOriginPreclaimed && completePreclaimedOrigin) {
         try {
           await completePreclaimedOrigin(false);

@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, readdirSync, realpathSync, rmSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
-import { isAbsolute, join, normalize, sep } from 'node:path';
+import { isAbsolute, join, sep } from 'node:path';
 import type { LedgerObservationStatus, StructuredFlowArtifact } from './maestro-run-ledger.js';
 
 export type ReportDeviceIdStrength = 'strong' | 'weak' | 'none';
@@ -160,7 +160,7 @@ export function runnerReportFingerprint(reportDir: string | null): RunnerReportF
   }
   for (const entry of flowEntries.sort()) {
     const flowHash = contentHash(join(reportDir, 'flows', entry));
-    if (flowHash) fingerprint[join('flows', entry)] = flowHash;
+    if (flowHash) fingerprint[`flows/${entry}`] = flowHash;
   }
   return fingerprint;
 }
@@ -207,12 +207,8 @@ export function readStructuredFlowArtifact(
     // The dataFile must be exactly flows/<name> — the shape the fingerprint
     // records — so its pre-invocation state is always conclusively known and
     // it can never resolve outside the report tree.
-    const normalizedDataFile = normalize(flow.dataFile);
-    if (
-      isAbsolute(normalizedDataFile) ||
-      !/^flows[/\\][^/\\]+$/.test(normalizedDataFile) ||
-      normalizedDataFile.split(sep).includes('..')
-    ) {
+    const normalizedDataFile = flow.dataFile;
+    if (isAbsolute(normalizedDataFile) || !/^flows\/[^/\\]+$/.test(normalizedDataFile)) {
       return unfinalized;
     }
     // Symlink containment: the resolved file must live under the resolved

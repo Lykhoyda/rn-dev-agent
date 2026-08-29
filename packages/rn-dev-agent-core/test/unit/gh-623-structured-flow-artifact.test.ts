@@ -159,3 +159,14 @@ test('gh-623: an absolute or parent-escaping dataFile path is refused even when 
     rmSync(outside, { recursive: true, force: true });
   }
 });
+
+test('gh-623: a backslash dataFile path is refused on POSIX', () => {
+  const dataFile = 'flows\\flow-000.json';
+  writeReport({ status: 'failed', flows: [{ ...FLOW_ENTRY, dataFile }] });
+  writeFileSync(join(dir, dataFile), JSON.stringify(FLOW_DATA), 'utf8');
+
+  const artifact = readStructuredFlowArtifact(dir);
+  assert.ok(artifact);
+  assert.equal(artifact.finalized, false);
+  assert.equal(artifact.commands.length, 0);
+});

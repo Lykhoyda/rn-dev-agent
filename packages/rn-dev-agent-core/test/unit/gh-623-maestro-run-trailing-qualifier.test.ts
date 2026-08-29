@@ -160,7 +160,11 @@ const invocationCounter = { count: 0 };
 
 function trailingHandler(
   stagePlans: StagePlan[],
-  options: { fastHealthCheck?: () => Promise<boolean>; now?: () => number } = {},
+  options: {
+    fastHealthCheck?: () => Promise<boolean>;
+    now?: () => number;
+    completeNativeOrigin?: (targetExpected: boolean, signal?: AbortSignal) => Promise<void>;
+  } = {},
 ) {
   let invocation = 0;
   invocationCounter.count = 0;
@@ -175,7 +179,7 @@ function trailingHandler(
     chooseDispatch: () => fakeRunnerDispatch(),
     parkFlow: async (run: () => Promise<unknown>) => run(),
     claimNativeOrigin: async () => {},
-    completeNativeOrigin: async () => {},
+    completeNativeOrigin: options.completeNativeOrigin ?? (async () => {}),
     relaunchManagedApp: async () => {},
     reproveManagedOrigin: async () => {},
     fastHealthCheck: options.fastHealthCheck ?? (async () => true),
@@ -213,12 +217,17 @@ const TRAILING_STAGES: StagePlan[] = [
   },
 ];
 
-async function runFlow(handler: ReturnType<typeof createMaestroRunHandler>, attempt?: object) {
+async function runFlow(
+  handler: ReturnType<typeof createMaestroRunHandler>,
+  attempt?: object,
+  overrides: Record<string, unknown> = {},
+) {
   const result = await handler({
     inlineYaml: REGISTRATION_YAML,
     platform: 'ios',
     appId: APP_ID,
     ...(attempt ? { attempt } : {}),
+    ...overrides,
   } as Parameters<typeof handler>[0]);
   return JSON.parse(result.content[0].text);
 }
@@ -304,6 +313,27 @@ test('gh-623 regression: post-run deadline expiry does not veto clean producer t
         return true;
       },
     }),
+  );
+  assert.equal(body.ok, false);
+  assert.equal(body.meta.passed, false);
+  assert.equal(body.meta.timedOut, true);
+  assert.equal(body.meta.terminal.exitClass, 'timed-out');
+  assert.ok(isProvenTrailingVerificationQualifier(body.meta.trailingVerification));
+  assert.ok(body.error.includes(VERIFY_CAVEAT), body.error);
+  assert.ok(!body.error.includes(REBOOT_ADVICE), body.error);
+});
+
+test('gh-623 regression: authority cleanup crossing the deadline does not veto a self-exited runner', async () => {
+  const body = await runFlow(
+    trailingHandler(TRAILING_STAGES, {
+      completeNativeOrigin: async (_targetExpected, signal) => {
+        assert.ok(signal);
+        if (signal.aborted) return;
+        await new Promise<void>((resolve) => signal.addEventListener('abort', () => resolve()));
+      },
+    }),
+    undefined,
+    { timeoutMs: 20 },
   );
   assert.equal(body.ok, false);
   assert.equal(body.meta.passed, false);

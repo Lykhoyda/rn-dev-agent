@@ -125,7 +125,8 @@ CREATE TABLE IF NOT EXISTS run_records (
   auto_repair_json TEXT,
   duration_ms     INTEGER,
   device_id       TEXT,
-  blind_probe_json TEXT
+  blind_probe_json TEXT,
+  trailing_verification_json TEXT
 );
 
 CREATE TABLE IF NOT EXISTS repair_records (
@@ -200,6 +201,7 @@ export function openActionDb(
     for (const alter of [
       'ALTER TABLE run_records ADD COLUMN device_id TEXT',
       'ALTER TABLE run_records ADD COLUMN blind_probe_json TEXT',
+      'ALTER TABLE run_records ADD COLUMN trailing_verification_json TEXT',
     ]) {
       try {
         db.exec(alter);
@@ -227,8 +229,9 @@ export function openActionDb(
           db.prepare(
             `INSERT INTO run_records
                (action_id, ts, trigger, status, failure_code, failure_detail,
-                transport, auto_repair_json, duration_ms, device_id, blind_probe_json)
-             VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+                transport, auto_repair_json, duration_ms, device_id, blind_probe_json,
+                trailing_verification_json)
+             VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
           ).run(
             actionId,
             record.timestamp,
@@ -241,6 +244,7 @@ export function openActionDb(
             record.durationMs,
             record.deviceId ?? null,
             record.blindProbe ? JSON.stringify(record.blindProbe) : null,
+            record.trailingVerification ? JSON.stringify(record.trailingVerification) : null,
           );
           // Trim oldest rows beyond cap
           db.prepare(
@@ -375,6 +379,9 @@ export function openActionDb(
             } catch {
               /* malformed mirror row — omit the field rather than fail the load */
             }
+          }
+          if (r.trailing_verification_json) {
+            rec.trailingVerification = JSON.parse(String(r.trailing_verification_json));
           }
           return rec;
         });

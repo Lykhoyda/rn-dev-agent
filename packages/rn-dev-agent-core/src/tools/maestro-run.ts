@@ -498,8 +498,7 @@ function partialNativeFailureMessage(meta: Record<string, unknown>): string {
     failureKind === 'ASSERTION_FAILED'
       ? {
           kind: failureKind,
-          selector:
-            typeof terminal?.failureSelector === 'string' ? terminal.failureSelector : null,
+          selector: typeof terminal?.failureSelector === 'string' ? terminal.failureSelector : null,
         }
       : null;
   const headline = formatFailureHeadline(
@@ -1405,6 +1404,10 @@ export function createMaestroRunHandler(
             async (commands) => {
               const ledgerStageIndex = ledgerStageCursor++;
               const preFingerprint = runnerReportFingerprint(runnerReportDir);
+              let failedInvocationTermination: Omit<
+                LedgerInvocationTermination,
+                'artifactFinalized'
+              > | null = null;
               const captureStageInvocation = (
                 termination: Omit<LedgerInvocationTermination, 'artifactFinalized'>,
               ): void => {
@@ -1474,6 +1477,7 @@ export function createMaestroRunHandler(
                   try {
                     return await executeOnce();
                   } catch (error) {
+                    const initialFailureTermination = stageTerminationFromError(error);
                     const recoveryDeviceId = requestedDeviceId ?? releasedAndroidDeviceId;
                     if (
                       platform !== 'android' ||
@@ -1481,6 +1485,7 @@ export function createMaestroRunHandler(
                       !recoveryDeviceId ||
                       !isUiAutomationNotConnectedSessionCreationFailure(error)
                     ) {
+                      failedInvocationTermination = initialFailureTermination;
                       throw error;
                     }
                     uiAutomationRecoveryAttempted = true;
@@ -1489,6 +1494,7 @@ export function createMaestroRunHandler(
                       androidSlotReleaseWarnings.push(
                         'UiAutomation recovery skipped: Maestro flow timeout was exhausted',
                       );
+                      failedInvocationTermination = initialFailureTermination;
                       throw error;
                     }
                     // NOTE: AbortSignal.timeout()'s timer is unref'd, so a cleanup
@@ -1517,6 +1523,10 @@ export function createMaestroRunHandler(
                             : String(releaseError)
                         }`,
                       );
+                      failedInvocationTermination = {
+                        ...initialFailureTermination,
+                        transportFailure: true,
+                      };
                       throw attachCause(error, releaseError);
                     } finally {
                       clearTimeout(recoveryDeadlineTimer);
@@ -1526,7 +1536,9 @@ export function createMaestroRunHandler(
                         uiAutomationRecoveryRetried = true;
                       });
                     } catch (retryError) {
+                      const retryFailureTermination = stageTerminationFromError(retryError);
                       if (uiAutomationRecoveryRetried && !isPreSpawnMaestroError(retryError)) {
+                        failedInvocationTermination = retryFailureTermination;
                         throw retryError;
                       }
                       uiAutomationRecoveryRetried = false;
@@ -1535,6 +1547,7 @@ export function createMaestroRunHandler(
                           retryError instanceof Error ? retryError.message : String(retryError)
                         }`,
                       );
+                      failedInvocationTermination = retryFailureTermination;
                       throw attachCause(error, retryError);
                     }
                   }
@@ -1549,7 +1562,9 @@ export function createMaestroRunHandler(
                 });
                 return stageResult;
               } catch (stageInvocationError) {
-                captureStageInvocation(stageTerminationFromError(stageInvocationError));
+                captureStageInvocation(
+                  failedInvocationTermination ?? stageTerminationFromError(stageInvocationError),
+                );
                 throw stageInvocationError;
               }
             },
@@ -1688,12 +1703,17 @@ export function createMaestroRunHandler(
     } catch (err) {
       const stageError = err instanceof MaestroStageExecutionError ? err.stageError : err;
       const errorClass = classifyExecError(stageError);
-      const stageErrorSignal = (stageError as { signal?: unknown } | null)?.signal;
-      const processTerminationVeto =
-        errorClass.timedOut ||
-        typeof stageErrorSignal === 'string' ||
-        isPreSpawnMaestroError(stageError) ||
-        flowAbort.signal.aborted;
+      const processTerminationVeto = stageCaptures.some((capture) => {
+        const termination = capture.invocation?.termination;
+        if (!termination) return false;
+        return (
+          termination.timedOut ||
+          termination.signal !== null ||
+          termination.outputTruncated ||
+          termination.bootstrapFailure ||
+          termination.transportFailure
+        );
+      });
       if (nativeOriginPreclaimed && completePreclaimedOrigin) {
         try {
           await completePreclaimedOrigin(false);
@@ -1950,8 +1970,9 @@ export function createMaestroRunHandler(
       // process-level kill outranks it (gh-580 precedence), so a timed-out or
       // never-spawned run never classifies as trailing verification.
       const failLedger = buildAttemptLedger();
-      const failTrailingVerification =
-        processTerminationVeto ? null : classifyTrailingVerification(failLedger);
+      const failTrailingVerification = processTerminationVeto
+        ? null
+        : classifyTrailingVerification(failLedger);
       // GH #263: a timeout/non-zero exit is also a failure surface — flag a
       // wedged runtime here too if the successful taps were degraded.
       const failAug = augmentFailureWithDegradation(

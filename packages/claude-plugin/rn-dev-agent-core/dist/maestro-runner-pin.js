@@ -12198,7 +12198,8 @@ CREATE TABLE IF NOT EXISTS run_records (
   auto_repair_json TEXT,
   duration_ms     INTEGER,
   device_id       TEXT,
-  blind_probe_json TEXT
+  blind_probe_json TEXT,
+  trailing_verification_json TEXT
 );
 
 CREATE TABLE IF NOT EXISTS repair_records (
@@ -12234,7 +12235,8 @@ function openActionDb(projectRoot, opts = {}) {
     db.exec(SCHEMA);
     for (const alter of [
       "ALTER TABLE run_records ADD COLUMN device_id TEXT",
-      "ALTER TABLE run_records ADD COLUMN blind_probe_json TEXT"
+      "ALTER TABLE run_records ADD COLUMN blind_probe_json TEXT",
+      "ALTER TABLE run_records ADD COLUMN trailing_verification_json TEXT"
     ]) {
       try {
         db.exec(alter);
@@ -12256,8 +12258,9 @@ function openActionDb(projectRoot, opts = {}) {
           }
           db.prepare(`INSERT INTO run_records
                (action_id, ts, trigger, status, failure_code, failure_detail,
-                transport, auto_repair_json, duration_ms, device_id, blind_probe_json)
-             VALUES (?,?,?,?,?,?,?,?,?,?,?)`).run(actionId, record.timestamp, record.trigger, record.status, record.failureCode ?? null, record.failureDetail ?? null, record.transport ?? null, record.autoRepair ? JSON.stringify(record.autoRepair) : null, record.durationMs, record.deviceId ?? null, record.blindProbe ? JSON.stringify(record.blindProbe) : null);
+                transport, auto_repair_json, duration_ms, device_id, blind_probe_json,
+                trailing_verification_json)
+             VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`).run(actionId, record.timestamp, record.trigger, record.status, record.failureCode ?? null, record.failureDetail ?? null, record.transport ?? null, record.autoRepair ? JSON.stringify(record.autoRepair) : null, record.durationMs, record.deviceId ?? null, record.blindProbe ? JSON.stringify(record.blindProbe) : null, record.trailingVerification ? JSON.stringify(record.trailingVerification) : null);
           db.prepare(`DELETE FROM run_records
              WHERE action_id = ?
                AND id NOT IN (
@@ -12340,6 +12343,9 @@ function openActionDb(projectRoot, opts = {}) {
               rec.blindProbe = JSON.parse(String(r.blind_probe_json));
             } catch {
             }
+          }
+          if (r.trailing_verification_json) {
+            rec.trailingVerification = JSON.parse(String(r.trailing_verification_json));
           }
           return rec;
         });
@@ -14592,7 +14598,7 @@ function maestroAuthorityRefusal(authority, underlyingError) {
 import { existsSync as existsSync16, readFileSync as readFileSync14, readdirSync as readdirSync7, realpathSync as realpathSync7, rmSync as rmSync3 } from "node:fs";
 import { createHash as createHash4 } from "node:crypto";
 import { tmpdir as tmpdir3 } from "node:os";
-import { isAbsolute as isAbsolute5, join as join22, normalize, sep as sep7 } from "node:path";
+import { isAbsolute as isAbsolute5, join as join22, sep as sep7 } from "node:path";
 var DIRECT_DEVICE_ID_RE = /^[A-Za-z0-9._:-]{1,256}$/;
 var DEVICE_ID_KEYS = ["udid", "deviceId", "serial"];
 var WEAK_DEVICE_ID_KEYS = ["id"];
@@ -14708,7 +14714,7 @@ function runnerReportFingerprint(reportDir) {
   for (const entry of flowEntries.sort()) {
     const flowHash = contentHash(join22(reportDir, "flows", entry));
     if (flowHash)
-      fingerprint[join22("flows", entry)] = flowHash;
+      fingerprint[`flows/${entry}`] = flowHash;
   }
   return fingerprint;
 }
@@ -14742,8 +14748,8 @@ function readStructuredFlowArtifact(reportDir, previous) {
       return unfinalized;
     if (typeof flow.dataFile !== "string" || flow.dataFile.length === 0)
       return unfinalized;
-    const normalizedDataFile = normalize(flow.dataFile);
-    if (isAbsolute5(normalizedDataFile) || !/^flows[/\\][^/\\]+$/.test(normalizedDataFile) || normalizedDataFile.split(sep7).includes("..")) {
+    const normalizedDataFile = flow.dataFile;
+    if (isAbsolute5(normalizedDataFile) || !/^flows\/[^/\\]+$/.test(normalizedDataFile)) {
       return unfinalized;
     }
     const realDataFile = realpathSync7(join22(reportDir, normalizedDataFile));
@@ -16594,6 +16600,7 @@ function createMaestroRunHandler(deps = {}) {
       const stageResults = await parkFlow(() => executeMaestroAuthorityStages(validatedCommands, async (commands) => {
         const ledgerStageIndex = ledgerStageCursor++;
         const preFingerprint = runnerReportFingerprint(runnerReportDir);
+        let failedInvocationTermination = null;
         const captureStageInvocation = (termination) => {
           const meta2 = plannedStageMeta[ledgerStageIndex];
           stageCaptures[ledgerStageIndex] = {
@@ -16644,14 +16651,17 @@ function createMaestroRunHandler(deps = {}) {
             try {
               return await executeOnce();
             } catch (error) {
+              const initialFailureTermination = stageTerminationFromError(error);
               const recoveryDeviceId = requestedDeviceId ?? releasedAndroidDeviceId;
               if (platform !== "android" || uiAutomationRecoveryAttempted || !recoveryDeviceId || !isUiAutomationNotConnectedSessionCreationFailure(error)) {
+                failedInvocationTermination = initialFailureTermination;
                 throw error;
               }
               uiAutomationRecoveryAttempted = true;
               const recoveryTimeout = flowDeadline - now();
               if (recoveryTimeout <= 0) {
                 androidSlotReleaseWarnings.push("UiAutomation recovery skipped: Maestro flow timeout was exhausted");
+                failedInvocationTermination = initialFailureTermination;
                 throw error;
               }
               const recoveryAbort = new AbortController();
@@ -16666,6 +16676,10 @@ function createMaestroRunHandler(deps = {}) {
                 }));
               } catch (releaseError) {
                 androidSlotReleaseWarnings.push(`UiAutomation recovery release failed: ${releaseError instanceof Error ? releaseError.message : String(releaseError)}`);
+                failedInvocationTermination = {
+                  ...initialFailureTermination,
+                  transportFailure: true
+                };
                 throw attachCause(error, releaseError);
               } finally {
                 clearTimeout(recoveryDeadlineTimer);
@@ -16675,11 +16689,14 @@ function createMaestroRunHandler(deps = {}) {
                   uiAutomationRecoveryRetried = true;
                 });
               } catch (retryError) {
+                const retryFailureTermination = stageTerminationFromError(retryError);
                 if (uiAutomationRecoveryRetried && !isPreSpawnMaestroError(retryError)) {
+                  failedInvocationTermination = retryFailureTermination;
                   throw retryError;
                 }
                 uiAutomationRecoveryRetried = false;
                 androidSlotReleaseWarnings.push(`UiAutomation recovery retry did not start: ${retryError instanceof Error ? retryError.message : String(retryError)}`);
+                failedInvocationTermination = retryFailureTermination;
                 throw attachCause(error, retryError);
               }
             }
@@ -16694,7 +16711,7 @@ function createMaestroRunHandler(deps = {}) {
           });
           return stageResult;
         } catch (stageInvocationError) {
-          captureStageInvocation(stageTerminationFromError(stageInvocationError));
+          captureStageInvocation(failedInvocationTermination ?? stageTerminationFromError(stageInvocationError));
           throw stageInvocationError;
         }
       }, claimOrigin, completeTrackedOrigin, relaunchManagedApp, reproveManagedOrigin, { firstOriginClaimed: nativeOriginPreclaimed, signal: flowAbort.signal }), {
@@ -16787,8 +16804,12 @@ function createMaestroRunHandler(deps = {}) {
     } catch (err) {
       const stageError = err instanceof MaestroStageExecutionError ? err.stageError : err;
       const errorClass = classifyExecError(stageError);
-      const stageErrorSignal = stageError?.signal;
-      const processTerminationVeto = errorClass.timedOut || typeof stageErrorSignal === "string" || isPreSpawnMaestroError(stageError) || flowAbort.signal.aborted;
+      const processTerminationVeto = stageCaptures.some((capture) => {
+        const termination = capture.invocation?.termination;
+        if (!termination)
+          return false;
+        return termination.timedOut || termination.signal !== null || termination.outputTruncated || termination.bootstrapFailure || termination.transportFailure;
+      });
       if (nativeOriginPreclaimed && completePreclaimedOrigin) {
         try {
           await completePreclaimedOrigin(false);
