@@ -458,7 +458,7 @@ cdp_store_state(path="auth")           # reads full useAuthStore.getState()
 | maestro-runner >= 1.1.24 | Required | YAML E2E test execution | Package pin-cache installer |
 | Xcode + Simulator | iOS | iOS testing | Mac App Store |
 | Android SDK + adb | Android | Android testing | developer.android.com |
-| Node.js >= 18 | Required | CDP MCP server | nodejs.org |
+| Node.js >= 24 | Required | CDP MCP server | nodejs.org |
 
 ---
 

@@ -12,8 +12,8 @@ function hostSpawnConvention(): 'object' | 'positional' {
 
 test('pinned native spawn convention table brackets every published convention boundary', () => {
   assert.deepEqual(pinnedNativeSpawnConventions('22.4.0'), []);
-  assert.deepEqual(pinnedNativeSpawnConventions('22.5.0'), ['object']);
-  assert.deepEqual(pinnedNativeSpawnConventions('22.23.2'), ['object']);
+  assert.deepEqual(pinnedNativeSpawnConventions('22.5.0'), []);
+  assert.deepEqual(pinnedNativeSpawnConventions('22.23.2'), []);
   assert.deepEqual(pinnedNativeSpawnConventions('24.18.0'), ['object']);
   assert.deepEqual(pinnedNativeSpawnConventions('24.19.0'), ['positional']);
   assert.deepEqual(pinnedNativeSpawnConventions('24.20.0'), ['positional']);

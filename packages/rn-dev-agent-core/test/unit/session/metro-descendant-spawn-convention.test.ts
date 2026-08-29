@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
+import { createHmac } from 'node:crypto';
 import {
   existsSync,
   mkdirSync,
@@ -17,6 +18,7 @@ import {
   pinnedNativeSpawnConventions,
   renderMetroIntegrationAdapter,
 } from '../../../dist/session/package-integration.js';
+import { canonicalAuthorityJson } from '../../../dist/session/authority-json.js';
 
 function metroPolicyEnvironment(adapterPath: string): NodeJS.ProcessEnv {
   const runtimeLoads = join(dirname(adapterPath), 'metro-runtime-loads.jsonl');
@@ -258,9 +260,31 @@ test('an unpinned Node major still admits an authorized descendant and records d
     project.versionShim,
   );
   assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
-  assert.ok(
-    result.runtimeLoads.includes('RN_DEV_AGENT_DESCENDANT_CONVENTION_UNVERIFIED'),
-    'the unpinned major was not recorded as signed drift evidence',
+  const evidence = result.runtimeLoads
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as { kind?: string; value?: string; signature?: string });
+  const advisories = evidence.filter(
+    (entry) =>
+      entry.kind === 'observation' &&
+      String(entry.value).includes('RN_DEV_AGENT_DESCENDANT_CONVENTION_UNVERIFIED'),
+  );
+  assert.ok(advisories.length > 0, 'the unpinned major must record signed advisory evidence');
+  for (const advisory of advisories) {
+    const { signature, ...payload } = advisory;
+    assert.equal(
+      signature,
+      createHmac('sha256', 'capability').update(canonicalAuthorityJson(payload)).digest('hex'),
+    );
+  }
+  assert.equal(
+    evidence.filter(
+      (entry) =>
+        entry.kind === 'violation' &&
+        String(entry.value).includes('RN_DEV_AGENT_DESCENDANT_CONVENTION_UNVERIFIED'),
+    ).length,
+    0,
+    'the unpinned-major advisory must not enter the violation channel',
   );
   assert.ok(
     !result.runtimeLoads.includes('RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION'),

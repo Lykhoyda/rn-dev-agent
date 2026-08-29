@@ -41,7 +41,7 @@
     "zod-to-json-schema": "3.25.2"
   },
   "engines": {
-    "node": ">=22.5"
+    "node": ">=24"
   },
   "overrides": {
     "@hono/node-server": ">=1.19.13 <2",

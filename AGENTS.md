@@ -82,7 +82,8 @@ sibling workspace only when explicitly requested.
 
 ## Supported Node runtimes
 
-`packages/rn-dev-agent-core` declares `engines.node >= 22.5`. The managed Metro
+`packages/rn-dev-agent-core` declares `engines.node >= 24`; Node 22 and 23 are
+unsupported, while every major from Node 24 onward is supported. The managed Metro
 *launcher* runs under the supervisor's own `process.execPath`, but *Metro
 itself* usually does not: `resolveManagedMetroLaunchCommand` only re-executes
 `process.execPath` when the resolved package bin starts with `#!/usr/bin/env
@@ -120,8 +121,8 @@ making that a pre-release event rather than a field surprise.
 `pinnedNativeSpawnConventions` is a **drift probe, not an admission gate**. An
 unpinned major records a signed `RN_DEV_AGENT_DESCENDANT_CONVENTION_UNVERIFIED`
 observation and keeps working; the table only has to stay truthful about the
-majors it does pin. The `descendant-spawn-convention` CI job covers Node 22.x,
-24.18 (last object-form 24), 24.x latest (positional), 25.x (a representative
+majors it does pin. The `descendant-spawn-convention` CI job covers Node 24.18
+(last object-form 24), 24.x latest (positional), 25.x (a representative
 odd major the table does not list) and 26.x.
 
 **Each authorization admits at most one native spawn.** Inside an active

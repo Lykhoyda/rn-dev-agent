@@ -589,7 +589,8 @@ function metroRuntimeInputs(
         load.kind !== 'semantics' &&
         load.kind !== 'pending' &&
         load.kind !== 'completion' &&
-        load.kind !== 'stability') ||
+        load.kind !== 'stability' &&
+        load.kind !== 'observation') ||
       typeof load.value !== 'string' ||
       !Number.isSafeInteger(load.sequence) ||
       load.sequence !== evidenceSequence + 1 ||
@@ -667,6 +668,12 @@ function metroRuntimeInputs(
         throw new Error('STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime load evidence is invalid');
       }
       (load.kind === 'pending' ? pendingIpcCompletions : completedIpcCompletions).add(load.value);
+      continue;
+    }
+    if (load.kind === 'observation') {
+      if (load.value.length > 4_096) {
+        throw new Error('STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime observation is unbounded');
+      }
       continue;
     }
     const prior = runtimeLoads.get(key);

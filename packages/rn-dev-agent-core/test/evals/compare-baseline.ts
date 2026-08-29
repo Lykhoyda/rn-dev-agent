@@ -2,7 +2,7 @@
 // Parses mcp-server-tester --junit-xml output and compares against the
 // committed baseline.json. Gating rule (spec): regression = a fixture
 // recorded 'pass' in the baseline that now fails OR is missing from the
-// results; non-baselined fixtures never gate. Runs under Node >= 22.18
+// results; non-baselined fixtures never gate. Runs under Node >= 24
 // type stripping (no build step).
 import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';

@@ -1,6 +1,6 @@
 ---
-'rn-dev-agent-core': patch
-'rn-dev-agent-plugin': patch
+'rn-dev-agent-core': major
+'rn-dev-agent-plugin': major
 ---
 
-Authenticate both Node calling conventions for managed-Metro descendant spawns so Metro keeps serving on Node 24.19+ and 26 instead of exiting before bundle authority binds.
+Require Node 24 or newer and authenticate both Node calling conventions for managed-Metro descendant spawns so supported runtimes bind Metro without weakening strict proof.

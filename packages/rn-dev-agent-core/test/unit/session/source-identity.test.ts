@@ -601,6 +601,29 @@ test('strict proof rejects unenforced reporter silence and validates enforced ru
   );
   publishRuntimeLoads([runtimeLoadPayload]);
   const first = strictProofSourceIdentity(identity, dependencies);
+  const conventionObservationPayload = {
+    ...runtimeLoadPayload,
+    kind: 'observation',
+    value: canonicalAuthorityJson({
+      code: 'RN_DEV_AGENT_DESCENDANT_CONVENTION_UNVERIFIED',
+      nodeVersion: '25.5.0',
+      observedConvention: 'positional',
+    }),
+    digest: null,
+  };
+  publishRuntimeLoads([runtimeLoadPayload, conventionObservationPayload]);
+  assert.doesNotThrow(() => strictProofSourceIdentity(identity, dependencies));
+  const genuineViolationPayload = {
+    ...runtimeLoadPayload,
+    kind: 'violation',
+    value: canonicalAuthorityJson({ code: 'RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION' }),
+    digest: null,
+  };
+  publishRuntimeLoads([runtimeLoadPayload, conventionObservationPayload, genuineViolationPayload]);
+  assert.throws(
+    () => strictProofSourceIdentity(identity, dependencies),
+    /RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION/,
+  );
   const stabilityPayload = { ...runtimeLoadPayload, kind: 'stability' };
   publishRuntimeLoads([runtimeLoadPayload, stabilityPayload]);
   assert.doesNotThrow(() => strictProofSourceIdentity(identity, dependencies));

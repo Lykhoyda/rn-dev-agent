@@ -10012,7 +10012,7 @@ function metroRuntimeInputs(identity2, authority, readEvidenceHead, verifyRuntim
     };
     const expectedLoad = createHmac("sha256", authority.capability).update(canonicalAuthorityJson(loadPayload)).digest();
     const observedLoad = typeof load.signature === "string" ? Buffer.from(load.signature, "hex") : Buffer.alloc(0);
-    if (load.version !== 1 || load.runtimeEvidenceAuthority !== authority.evidenceAuthority || load.sessionId !== authority.sessionId || load.metroInstanceId !== authority.metroInstanceId || load.kind !== "input" && load.kind !== "violation" && load.kind !== "launch" && load.kind !== "attestation" && load.kind !== "semantics" && load.kind !== "pending" && load.kind !== "completion" && load.kind !== "stability" || typeof load.value !== "string" || !Number.isSafeInteger(load.sequence) || load.sequence !== evidenceSequence + 1 || load.previousSignature !== previousEvidenceSignature || (load.kind === "input" || load.kind === "stability" ? typeof load.digest !== "string" || !/^[a-f0-9]{64}$/.test(load.digest) : load.digest !== null) || observedLoad.length !== expectedLoad.length || !timingSafeEqual(observedLoad, expectedLoad)) {
+    if (load.version !== 1 || load.runtimeEvidenceAuthority !== authority.evidenceAuthority || load.sessionId !== authority.sessionId || load.metroInstanceId !== authority.metroInstanceId || load.kind !== "input" && load.kind !== "violation" && load.kind !== "launch" && load.kind !== "attestation" && load.kind !== "semantics" && load.kind !== "pending" && load.kind !== "completion" && load.kind !== "stability" && load.kind !== "observation" || typeof load.value !== "string" || !Number.isSafeInteger(load.sequence) || load.sequence !== evidenceSequence + 1 || load.previousSignature !== previousEvidenceSignature || (load.kind === "input" || load.kind === "stability" ? typeof load.digest !== "string" || !/^[a-f0-9]{64}$/.test(load.digest) : load.digest !== null) || observedLoad.length !== expectedLoad.length || !timingSafeEqual(observedLoad, expectedLoad)) {
       throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime load evidence is invalid");
     }
     evidenceSequence = load.sequence;
@@ -10059,6 +10059,12 @@ function metroRuntimeInputs(identity2, authority, readEvidenceHead, verifyRuntim
         throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime load evidence is invalid");
       }
       (load.kind === "pending" ? pendingIpcCompletions : completedIpcCompletions).add(load.value);
+      continue;
+    }
+    if (load.kind === "observation") {
+      if (load.value.length > 4096) {
+        throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime observation is unbounded");
+      }
       continue;
     }
     const prior = runtimeLoads.get(key);
@@ -13141,9 +13147,11 @@ evidence.on('data', (chunk) => {
           'native-addon-request',
           'native-addon-completion',
           'stability',
+          'observation',
           'unattested-utility',
         ].includes(payload.kind) ||
         typeof payload.value !== 'string' ||
+        (payload.kind === 'observation' && payload.value.length > 4_096) ||
         (payload.kind === 'input' || payload.kind === 'stability'
           ? typeof payload.digest !== 'string'
           : payload.digest !== null)
@@ -15447,8 +15455,6 @@ function pinnedNativeSpawnConventions(version2) {
   const minor = Number(parts[1]);
   if (!Number.isSafeInteger(major) || !Number.isSafeInteger(minor))
     return [];
-  if (major === 22)
-    return minor >= 5 ? ["object"] : [];
   if (major === 24)
     return minor >= 19 ? ["positional"] : ["object"];
   if (major === 26)
@@ -15857,7 +15863,8 @@ function establishNativeSpawnConvention() {
     if (pinned[index] === observed) pinnedKnowsObserved = true;
   }
   if (!pinnedKnowsObserved) {
-    recordLoaderViolation(
+    persistLoaderObservation(
+      'observation',
       canonicalAuthorityJson({
         code: 'RN_DEV_AGENT_DESCENDANT_CONVENTION_UNVERIFIED',
         stage: 'fence-install',
@@ -15885,7 +15892,7 @@ function containsNativeSpawnRefusal(arity) {
   return arity === 8;
 }
 // Admission authenticates argument content per position and never consults the Node version, so
-// every major - listed or not - is admitted on the same evidence.
+// every supported major - listed or not - is admitted on the same evidence.
 //
 // NOTE: position is part of the authentication, not incidental. A native binding reads arguments
 // by position, and file and cwd are both plain strings, so no membership, bijection or type rule
@@ -18364,7 +18371,7 @@ if (typeof registerHooks === 'function') {
   moduleApi.registerHooks = rejectHookRegistration;
   moduleApi.syncBuiltinESMExports();
 } else {
-  recordLoaderViolation('Metro runtime module loading requires Node.js 22.15 or newer');
+  recordLoaderViolation('Metro runtime module loading requires Node.js 24 or newer');
 }
 const preloadPath = fs.realpathSync(__filename);
 const preloadDigest = digestRuntimeFile(preloadPath);
@@ -98526,14 +98533,13 @@ function sqliteFlagForNode(version2) {
   return requiresFlag ? ["--experimental-sqlite"] : [];
 }
 function isSupportedNodeVersion(version2) {
-  const [majorStr, minorStr] = (version2 ?? process.versions.node).split(".");
+  const [majorStr] = (version2 ?? process.versions.node).split(".");
   const major = parseInt(majorStr ?? "0", 10);
-  const minor = parseInt(minorStr ?? "0", 10);
-  return major > 22 || major === 22 && minor >= 5;
+  return major >= 24;
 }
 function unsupportedNodeVersionMessage(version2) {
   const actual = version2 ?? process.versions.node;
-  return isSupportedNodeVersion(actual) ? null : `rn-dev-agent requires Node.js >=22.5; current runtime is ${actual}`;
+  return isSupportedNodeVersion(actual) ? null : `rn-dev-agent requires Node.js >=24; current runtime is ${actual}`;
 }
 function workerSpawnArgs(workerPath, sqliteWarningFilterPath2, version2, forwardedArgs = []) {
   const diagnosticArgs = forwardedArgs.includes("--diagnostic-contract-probe") ? ["--diagnostic-contract-probe"] : [];

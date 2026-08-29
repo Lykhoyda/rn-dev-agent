@@ -166,7 +166,7 @@ jobs:
         # argument content, so both sides of that boundary have to stay covered.
         # 25 is a representative odd major the pinned drift table does not list:
         # admission must not depend on it being listed.
-        node: ['22', '24.18', '24', '25', '26']
+        node: ['24.18', '24', '25', '26']
 
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2 — Phase 134.5 SHA pin

@@ -3,7 +3,7 @@
 // one `claude -p` against the real server (dist/supervisor.js), required-
 // implies-success + llm-judge scoring, one retry per failing fixture, then
 // junit + summary + the compare-baseline gate. Filtered and device-tainted
-// runs are INFORMATIONAL (gate skipped). Runs under Node >= 22.18 type
+// runs are INFORMATIONAL (gate skipped). Runs under Node >= 24 type
 // stripping.
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';

@@ -5,11 +5,9 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const pluginRoot = dirname(dirname(fileURLToPath(import.meta.url)));
-const [nodeMajor, nodeMinor] = process.versions.node.split('.').map(Number);
-if (nodeMajor < 22 || (nodeMajor === 22 && nodeMinor < 5)) {
-  console.error(
-    `rn-dev-agent requires Node.js >=22.5; current runtime is ${process.versions.node}`,
-  );
+const nodeMajor = Number(process.versions.node.split('.')[0]);
+if (!Number.isInteger(nodeMajor) || nodeMajor < 24) {
+  console.error(`rn-dev-agent requires Node.js >=24; current runtime is ${process.versions.node}`);
   process.exit(1);
 }
 

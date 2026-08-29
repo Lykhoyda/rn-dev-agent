@@ -2,7 +2,7 @@
 // YAML fixture parsing (schema-compatible with the retired mcp-server-tester,
 // so committed eval YAMLs stay byte-identical), stream-json transcript
 // parsing, required-tool verdicts, and junit output that round-trips through
-// compare-baseline's parseJunitXml. Runs under Node >= 22.18 type stripping.
+// compare-baseline's parseJunitXml. Runs under Node >= 24 type stripping.
 import { parse } from 'yaml';
 
 export type ScorerSpec =

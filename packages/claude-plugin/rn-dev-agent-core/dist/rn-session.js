@@ -14153,9 +14153,11 @@ evidence.on('data', (chunk) => {
           'native-addon-request',
           'native-addon-completion',
           'stability',
+          'observation',
           'unattested-utility',
         ].includes(payload.kind) ||
         typeof payload.value !== 'string' ||
+        (payload.kind === 'observation' && payload.value.length > 4_096) ||
         (payload.kind === 'input' || payload.kind === 'stability'
           ? typeof payload.digest !== 'string'
           : payload.digest !== null)
@@ -15020,7 +15022,7 @@ async function startManagedMetro(input, dependencies = {}) {
   const enforcementReceiptForAdmission = runtimeEnforcement.status === "enforced" && "receipt" in runtimeEnforcement ? runtimeEnforcement.receipt : null;
   const logPath = join3(input.runtimeRoot, "metro.log");
   rmSync2(launcherDiagnosticPath, { force: true });
-  const log = openSync3(logPath, "a", 384);
+  const log = openSync3(logPath, "w", 384);
   const child = (dependencies.spawnProcess ?? spawn)(launchCommand.nodeExecutable, ["-e", METRO_LAUNCHER_SOURCE], {
     cwd: input.appRoot,
     env: {

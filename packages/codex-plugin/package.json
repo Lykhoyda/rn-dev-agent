@@ -6,7 +6,7 @@
   "description": "Workspace boundary for the Codex rn-dev-agent plugin adapter.",
   "license": "MIT",
   "engines": {
-    "node": ">=22.5"
+    "node": ">=24"
   },
   "dependencies": {
     "rn-dev-agent-core": "workspace:*",

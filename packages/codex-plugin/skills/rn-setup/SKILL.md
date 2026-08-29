@@ -58,7 +58,7 @@ Read/report without mutation:
 | Check | Passive evidence | Guidance only |
 |---|---|---|
 | Source declaration | `git -C "$APP_ROOT" rev-parse --show-toplevel`; for a non-Git app root, `RN_DEV_AGENT_DECLARED_ROOT` and `RN_DEV_AGENT_DECLARED_MANIFESTS` in the supervisor environment | Report the missing declaration and point to the [session-authority contract](https://lykhoyda.github.io/rn-dev-agent/session-authority/#what-each-source-identity-proves) |
-| Node | `node --version` | Require Node >= 22.5; every later major, including odd-numbered releases, is supported. Prefer current LTS installation guidance if missing/old. |
+| Node | `node --version` | Require Node >= 24; every later major, including odd-numbered releases, is supported. Prefer current LTS installation guidance if missing/old. |
 | Core package | selected package runtime files | marketplace refresh/materialization |
 | iOS runner | packaged Xcode project/artifact presence | one-time build command |
 | Android runner | packaged Gradle/APK presence | one-time Gradle command |

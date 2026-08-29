@@ -19,7 +19,7 @@ controller + source
 
 ## Requirements
 
-The authority registry uses Node's built-in `node:sqlite` `DatabaseSync`. Node 22 launches it with `--experimental-sqlite`; if the API cannot load, tools return `AUTHORITY_STORE_UNAVAILABLE`. There is no JSON registry fallback and no warning-only authoritative mode.
+The authority registry uses Node's built-in `node:sqlite` `DatabaseSync`, available by default on every supported Node release. If the API cannot load, tools return `AUTHORITY_STORE_UNAVAILABLE`. There is no JSON registry fallback and no warning-only authoritative mode.
 
 The registry lives in a private user-local `v2` state root. Its SQLite database, WAL/SHM files, session secrets, runner state, and Observe bootstrap state refuse symlinks and use private permissions. After any safe shared-corpus materialization described below, the integration mutation layer rejects a symlinked `.rn-agent` directory or symlinked path ancestor and fences each retained ancestor against replacement during reads, writes, rollback, and recovery.
 

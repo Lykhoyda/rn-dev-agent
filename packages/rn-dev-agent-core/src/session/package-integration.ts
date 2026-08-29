@@ -60,7 +60,6 @@ export function pinnedNativeSpawnConventions(version: string): string[] {
   const major = Number(parts[0]);
   const minor = Number(parts[1]);
   if (!Number.isSafeInteger(major) || !Number.isSafeInteger(minor)) return [];
-  if (major === 22) return minor >= 5 ? ['object'] : [];
   if (major === 24) return minor >= 19 ? ['positional'] : ['object'];
   if (major === 26) return ['object', 'positional'];
   return [];
@@ -468,7 +467,8 @@ function establishNativeSpawnConvention() {
     if (pinned[index] === observed) pinnedKnowsObserved = true;
   }
   if (!pinnedKnowsObserved) {
-    recordLoaderViolation(
+    persistLoaderObservation(
+      'observation',
       canonicalAuthorityJson({
         code: 'RN_DEV_AGENT_DESCENDANT_CONVENTION_UNVERIFIED',
         stage: 'fence-install',
@@ -496,7 +496,7 @@ function containsNativeSpawnRefusal(arity) {
   return arity === 8;
 }
 // Admission authenticates argument content per position and never consults the Node version, so
-// every major - listed or not - is admitted on the same evidence.
+// every supported major - listed or not - is admitted on the same evidence.
 //
 // NOTE: position is part of the authentication, not incidental. A native binding reads arguments
 // by position, and file and cwd are both plain strings, so no membership, bijection or type rule
@@ -2975,7 +2975,7 @@ if (typeof registerHooks === 'function') {
   moduleApi.registerHooks = rejectHookRegistration;
   moduleApi.syncBuiltinESMExports();
 } else {
-  recordLoaderViolation('Metro runtime module loading requires Node.js 22.15 or newer');
+  recordLoaderViolation('Metro runtime module loading requires Node.js 24 or newer');
 }
 const preloadPath = fs.realpathSync(__filename);
 const preloadDigest = digestRuntimeFile(preloadPath);
