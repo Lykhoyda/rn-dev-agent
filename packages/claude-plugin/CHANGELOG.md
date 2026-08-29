@@ -1,5 +1,18 @@
 # rn-dev-agent-plugin
 
+## 1.0.0
+
+### Major Changes
+
+- 52f183f: Require Node 24 or newer and authenticate both Node calling conventions for managed-Metro descendant spawns so supported runtimes bind Metro without weakening strict proof.
+
+### Patch Changes
+
+- 4c417dc: Report unreadable process births as unavailable while preserving genuine authority identity-mismatch refusals.
+- Updated dependencies [52f183f]
+- Updated dependencies [4c417dc]
+  - rn-dev-agent-core@1.0.0
+
 ## 0.77.7
 
 ### Patch Changes
