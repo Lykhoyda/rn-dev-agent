@@ -117,8 +117,17 @@ test('GH #628: M7 header round-trips entry and defaults to absent', () => {
 });
 
 test('GH #628: generateMaestro omits the launch prologue for parked and keeps it for cold', () => {
-  const events = [{ type: 'tap', testID: PARK_ANCHOR, timestamp: 1 }];
-  const parked = generateMaestro(events as never, {
+  const events = [
+    { type: 'tap', testID: PARK_ANCHOR, t: 1 } as const,
+    {
+      type: 'navigate',
+      from: 'onboarding/mandate',
+      to: 'onboarding/review',
+      t: 2,
+    } as const,
+    { type: 'tap', testID: 'review-anchor', t: 3 } as const,
+  ];
+  const parked = generateMaestro(events, {
     id: 'p',
     intent: 'x',
     entry: 'parked',
@@ -126,16 +135,19 @@ test('GH #628: generateMaestro omits the launch prologue for parked and keeps it
   });
   assert.ok(!parked.includes('- launchApp'), 'parked emission must not self-bootstrap');
   assert.match(parked, /^# entry: parked$/m);
-  assert.match(parked, /^# expectedRouteSequence: \[onboarding\/mandate\]$/m);
-  const cold = generateMaestro(events as never, { id: 'c', intent: 'x' });
+  assert.deepEqual(parseM7Header(parked)?.expectedRouteSequence, [
+    'onboarding/mandate',
+    'onboarding/review',
+  ]);
+  const cold = generateMaestro(events, { id: 'c', intent: 'x' });
   assert.ok(cold.includes('- launchApp'), 'cold emission keeps the self-bootstrap prologue');
   assert.ok(!cold.includes('# entry:'));
-  const routedCold = generateMaestro(events as never, {
+  const routedCold = generateMaestro(events, {
     id: 'c',
     intent: 'x',
     startRoute: 'onboarding/mandate',
   });
-  assert.ok(!routedCold.includes('# expectedRouteSequence:'));
+  assert.equal(parseM7Header(routedCold)?.expectedRouteSequence, undefined);
 });
 
 // ─── Parked replay (the regression) ─────────────────────────────────────────
@@ -279,24 +291,29 @@ test('GH #628: non-allowlisted composites refuse upstream; domain scan still cat
   });
 });
 
-test('GH #628: an unknown entry value refuses instead of downgrading to cold', async () => {
-  project.seedAction(
-    'parked-sign-mandate',
-    parkedYaml(PARKED_BODY).replace('# entry: parked', '# entry: parkd'),
-    null,
-  );
-  const calls: Array<Record<string, unknown>> = [];
-  const handler = handlerWith(calls, { status: 'visible' });
+for (const declaration of [
+  { header: '# entry: parkd', value: 'parkd', label: 'unknown' },
+  { header: '# entry:', value: '', label: 'empty' },
+]) {
+  test(`GH #628: an ${declaration.label} entry value refuses instead of downgrading to cold`, async () => {
+    project.seedAction(
+      'parked-sign-mandate',
+      parkedYaml(PARKED_BODY).replace('# entry: parked', declaration.header),
+      null,
+    );
+    const calls: Array<Record<string, unknown>> = [];
+    const handler = handlerWith(calls, { status: 'visible' });
 
-  const result = envelope(
-    await handler({ actionId: 'parked-sign-mandate', projectRoot: project.root }),
-  );
+    const result = envelope(
+      await handler({ actionId: 'parked-sign-mandate', projectRoot: project.root }),
+    );
 
-  assert.equal(result.ok, false);
-  assert.equal(result.code, 'BAD_RECORDING');
-  assert.deepEqual(result.meta?.cause, { invalidEntry: 'parkd' });
-  assert.equal(calls.length, 0);
-});
+    assert.equal(result.ok, false);
+    assert.equal(result.code, 'BAD_RECORDING');
+    assert.deepEqual(result.meta?.cause, { invalidEntry: declaration.value });
+    assert.equal(calls.length, 0);
+  });
+}
 
 // ─── Park preflight negative controls (PARK_STATE_MISSING) ──────────────────
 

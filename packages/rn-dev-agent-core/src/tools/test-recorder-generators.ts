@@ -101,7 +101,7 @@ function assertRecorderCommandShapes(commands: readonly unknown[]): void {
   }
 }
 
-function metaPairs(opts: GenerateOpts): MetaPair[] {
+function metaPairs(opts: GenerateOpts, expectedRouteSequence?: readonly string[]): MetaPair[] {
   const out: MetaPair[] = [];
   if (opts.id) out.push(['id', stripNewlines(opts.id)]);
   if (opts.intent) out.push(['intent', stripNewlines(opts.intent)]);
@@ -128,10 +128,21 @@ function metaPairs(opts: GenerateOpts): MetaPair[] {
       });
     out.push(['produces', `{ ${pairs.join(', ')} }`]);
   }
-  if (opts.entry === 'parked' && opts.startRoute) {
-    out.push(['expectedRouteSequence', `[${stripNewlines(opts.startRoute)}]`]);
+  if (expectedRouteSequence?.length) {
+    out.push(['expectedRouteSequence', `[${expectedRouteSequence.map(stripNewlines).join(', ')}]`]);
   }
   return out;
+}
+
+function recordedRouteSequence(
+  events: readonly RecordedEvent[],
+  opts: GenerateOpts,
+): string[] | undefined {
+  if (opts.entry !== 'parked' || !opts.startRoute) return undefined;
+  return [
+    opts.startRoute,
+    ...events.flatMap((event) => (event.type === 'navigate' ? [event.to] : [])),
+  ];
 }
 
 // B137: window (ms) after a tap in which a subsequent `navigate` event is
@@ -241,7 +252,7 @@ export function generateMaestro(events: RecordedEvent[], opts: GenerateOpts = {}
     lines.push('---');
   }
   lines.push(`# ${stripNewlines(opts.testName ?? 'Recorded flow')}`);
-  for (const [k, v] of metaPairs(opts)) {
+  for (const [k, v] of metaPairs(opts, recordedRouteSequence(events, opts))) {
     lines.push(`# ${k}: ${v}`);
   }
   if (opts.startRoute) {

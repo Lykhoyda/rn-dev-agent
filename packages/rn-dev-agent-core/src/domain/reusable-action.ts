@@ -541,10 +541,11 @@ export function parseM7Header(yamlText: string, fallbackId?: string): M7Metadata
       inComment = true;
       const stripped = line.replace(/^#\s?/, '').trim();
       if (!stripped) continue;
-      const kv = stripped.match(/^([a-zA-Z][\w-]*)\s*:\s*(.+)$/);
+      const kv = stripped.match(/^([a-zA-Z][\w-]*)\s*:\s*(.*)$/);
       if (!kv) continue;
       const key = kv[1];
       const raw = kv[2].trim();
+      if (raw.length === 0 && key !== 'entry') continue;
       if (key === 'tags') {
         meta.tags = raw
           .replace(/^\[|\]$/g, '')

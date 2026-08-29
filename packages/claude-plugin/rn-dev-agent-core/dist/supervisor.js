@@ -70944,11 +70944,13 @@ function parseM7Header(yamlText, fallbackId) {
       const stripped = line.replace(/^#\s?/, "").trim();
       if (!stripped)
         continue;
-      const kv = stripped.match(/^([a-zA-Z][\w-]*)\s*:\s*(.+)$/);
+      const kv = stripped.match(/^([a-zA-Z][\w-]*)\s*:\s*(.*)$/);
       if (!kv)
         continue;
       const key = kv[1];
       const raw = kv[2].trim();
+      if (raw.length === 0 && key !== "entry")
+        continue;
       if (key === "tags") {
         meta.tags = raw.replace(/^\[|\]$/g, "").split(",").map((t) => t.trim()).filter(Boolean);
       } else if (key === "mutates") {
@@ -79001,7 +79003,7 @@ function assertRecorderCommandShapes(commands) {
     }
   }
 }
-function metaPairs(opts) {
+function metaPairs(opts, expectedRouteSequence) {
   const out = [];
   if (opts.id)
     out.push(["id", stripNewlines(opts.id)]);
@@ -79028,10 +79030,18 @@ function metaPairs(opts) {
     });
     out.push(["produces", `{ ${pairs.join(", ")} }`]);
   }
-  if (opts.entry === "parked" && opts.startRoute) {
-    out.push(["expectedRouteSequence", `[${stripNewlines(opts.startRoute)}]`]);
+  if (expectedRouteSequence?.length) {
+    out.push(["expectedRouteSequence", `[${expectedRouteSequence.map(stripNewlines).join(", ")}]`]);
   }
   return out;
+}
+function recordedRouteSequence(events, opts) {
+  if (opts.entry !== "parked" || !opts.startRoute)
+    return void 0;
+  return [
+    opts.startRoute,
+    ...events.flatMap((event) => event.type === "navigate" ? [event.to] : [])
+  ];
 }
 function lookaheadNavigate(events, fromIndex, windowMs = TAP_TO_NAV_WINDOW_MS) {
   const source = events[fromIndex];
@@ -79100,7 +79110,7 @@ function generateMaestro(events, opts = {}) {
     lines.push("---");
   }
   lines.push(`# ${stripNewlines(opts.testName ?? "Recorded flow")}`);
-  for (const [k, v] of metaPairs(opts)) {
+  for (const [k, v] of metaPairs(opts, recordedRouteSequence(events, opts))) {
     lines.push(`# ${k}: ${v}`);
   }
   if (opts.startRoute) {
