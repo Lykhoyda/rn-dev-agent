@@ -228,11 +228,14 @@ async function run() {
     };
     assertCompleteExactTree(cdpVisibility, 'otp_email-pressable');
     assert.equal(
-      wdaProbe.envelope?.ok,
-      false,
+      wdaProbe.envelope?.code,
+      'NATIVE_SURFACE_BLIND',
       `owned OTP fixture did not reproduce the WDA-blind boundary: ${wdaProbe.text.slice(0, 800)}`,
     );
     assert.equal(wdaProbe.envelope?.meta?.proofDomain, 'xctest-native');
+    assert.equal(wdaProbe.envelope?.meta?.cleanup?.cleanupProven, true);
+    assert.equal(wdaProbe.envelope?.meta?.cleanup?.wdaProcessSettled, true);
+    assert.equal(wdaProbe.envelope?.meta?.cleanup?.runnerParkCommitted, true);
     (evidence.surfaceBoundary as Record<string, unknown>).wdaBlind = true;
     await requireOk(supervisor, 'cdp_interact', { action: 'press', testID: 'otp_cancel' });
 

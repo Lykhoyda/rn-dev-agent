@@ -15138,12 +15138,14 @@ var asString = (x) => typeof x === "string" ? x : null;
 var isObj = (x) => typeof x === "object" && x !== null && !Array.isArray(x);
 var DEFAULT_VISIBILITY_TIMEOUT_MS = 17e3;
 var VISIBILITY_POLL_INTERVAL_MS = 200;
+var MAX_TIMER_DELAY_MS = 2147483647;
 async function readVisibilityBeforeDeadline(dispatch, id, deadline) {
   const remainingMs = deadline - Date.now();
   if (remainingMs < 0)
     return null;
   return new Promise((resolve9, reject) => {
     let settled = false;
+    let timer;
     const finish = (value) => {
       if (settled)
         return;
@@ -15151,7 +15153,11 @@ async function readVisibilityBeforeDeadline(dispatch, id, deadline) {
       clearTimeout(timer);
       resolve9(Date.now() <= deadline ? value : null);
     };
-    const timer = setTimeout(() => finish(null), remainingMs);
+    const armDeadline = () => {
+      const nextRemainingMs = deadline - Date.now();
+      timer = setTimeout(() => Date.now() >= deadline ? finish(null) : armDeadline(), Math.min(Math.max(0, nextRemainingMs), MAX_TIMER_DELAY_MS));
+    };
+    armDeadline();
     Promise.resolve().then(() => dispatch.visibility(id)).then(finish, (error) => {
       if (settled)
         return;
@@ -15691,6 +15697,20 @@ function countExactMatches(treeJson, id) {
   }
   return matches;
 }
+function countVisibilityMatches(treeJson, id) {
+  const treeMatches = countExactMatches(treeJson, id);
+  if (treeMatches > 0 || !treeJson || typeof treeJson !== "object")
+    return treeMatches;
+  const interactive = treeJson.interactive;
+  if (!Array.isArray(interactive))
+    return 0;
+  return interactive.filter((node) => {
+    if (!node || typeof node !== "object")
+      return false;
+    const record = node;
+    return record.testID === id || record.nativeID === id;
+  }).length;
+}
 function nodeProps(treeJson, id) {
   const stack = [treeJson];
   while (stack.length) {
@@ -15800,7 +15820,7 @@ function buildCdpDispatch(deps, signal) {
     },
     async visibility(id) {
       const tree = await deps.treeFor(id);
-      const treeMatches = countExactMatches(tree, id);
+      const treeMatches = countVisibilityMatches(tree, id);
       if (treeMatches === 0)
         return {
           visible: false,

@@ -61,6 +61,7 @@ const isObj = (x: unknown): x is Record<string, unknown> =>
   typeof x === 'object' && x !== null && !Array.isArray(x);
 const DEFAULT_VISIBILITY_TIMEOUT_MS = 17_000;
 const VISIBILITY_POLL_INTERVAL_MS = 200;
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
 
 async function readVisibilityBeforeDeadline(
   dispatch: ReplayDispatch,
@@ -71,13 +72,21 @@ async function readVisibilityBeforeDeadline(
   if (remainingMs < 0) return null;
   return new Promise<ReplayVisibility | null>((resolve, reject) => {
     let settled = false;
+    let timer: ReturnType<typeof setTimeout>;
     const finish = (value: ReplayVisibility | null): void => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
       resolve(Date.now() <= deadline ? value : null);
     };
-    const timer = setTimeout(() => finish(null), remainingMs);
+    const armDeadline = (): void => {
+      const nextRemainingMs = deadline - Date.now();
+      timer = setTimeout(
+        () => (Date.now() >= deadline ? finish(null) : armDeadline()),
+        Math.min(Math.max(0, nextRemainingMs), MAX_TIMER_DELAY_MS),
+      );
+    };
+    armDeadline();
     Promise.resolve()
       .then(() => dispatch.visibility(id))
       .then(finish, (error: unknown) => {

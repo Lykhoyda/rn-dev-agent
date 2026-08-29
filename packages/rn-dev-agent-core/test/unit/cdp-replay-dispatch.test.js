@@ -76,6 +76,33 @@ test('buildCdpDispatch accepts propagated fiber matches collapsed by the frontmo
   assert.deepEqual(calls, ['welcome']);
 });
 
+test('buildCdpDispatch uses a complete interactive fallback only for visibility', async () => {
+  let mutations = 0;
+  const dispatch = buildCdpDispatch({
+    pressByTestId: async () => {
+      mutations += 1;
+    },
+    typeByTestId: async () => {},
+    treeFor: async () =>
+      unwrapTree(
+        replayTreeData(
+          {
+            ok: true,
+            data: { interactive: [{ testID: 'otp' }] },
+            meta: { treeVerdict: { state: 'ok', path: 'interactive', reasons: [] } },
+          },
+          'otp',
+        ),
+      ),
+    frontmostFor: async () => ({ visible: true }),
+    launchApp: async () => {},
+    settle: async () => {},
+  });
+  assert.deepEqual(await dispatch.visibility('otp'), { visible: true });
+  await assert.rejects(dispatch.press('otp'), /not present/);
+  assert.equal(mutations, 0);
+});
+
 test('buildCdpDispatch revalidates a retained input target before mutation', async () => {
   let mutations = 0;
   const dispatch = buildCdpDispatch({

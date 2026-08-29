@@ -129,6 +129,18 @@ function countExactMatches(treeJson: unknown, id: string): number {
   return matches;
 }
 
+function countVisibilityMatches(treeJson: unknown, id: string): number {
+  const treeMatches = countExactMatches(treeJson, id);
+  if (treeMatches > 0 || !treeJson || typeof treeJson !== 'object') return treeMatches;
+  const interactive = (treeJson as Record<string, unknown>).interactive;
+  if (!Array.isArray(interactive)) return 0;
+  return interactive.filter((node) => {
+    if (!node || typeof node !== 'object') return false;
+    const record = node as Record<string, unknown>;
+    return record.testID === id || record.nativeID === id;
+  }).length;
+}
+
 function nodeProps(treeJson: unknown, id: string): Record<string, unknown> | null {
   // find the node whose testID === id or nativeID === id and return its props bag if exposed
   const stack: unknown[] = [treeJson];
@@ -262,7 +274,7 @@ export function buildCdpDispatch(deps: CdpReplayDeps, signal?: AbortSignal): Rep
     },
     async visibility(id) {
       const tree = await deps.treeFor(id);
-      const treeMatches = countExactMatches(tree, id);
+      const treeMatches = countVisibilityMatches(tree, id);
       if (treeMatches === 0)
         return {
           visible: false,

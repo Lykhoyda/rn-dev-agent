@@ -347,3 +347,17 @@ test('waitVisible cannot pass from an oracle result completed after its deadline
   assert.equal(reads, 2);
   assert.ok(elapsedMs >= 225 && elapsedMs < 500, `deadline completed after ${elapsedMs}ms`);
 });
+
+test('waitVisible preserves finite timeouts above Node timer range', async () => {
+  const dispatch = mockDispatch();
+  dispatch.visibility = async () => {
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    return { visible: true };
+  };
+  const result = await replayFlow(
+    [{ t: 'waitVisible', id: 'slow', timeoutMs: 3_000_000_000 }],
+    dispatch,
+  );
+  assert.equal(result.passed, true);
+  assert.ok(result.steps[0].durationMs >= 20);
+});
