@@ -11,8 +11,19 @@ export type ParkRefusalCause = 'anchor-missing' | 'route-mismatch' | 'app-backgr
 
 export type EntryModeResolution = { ok: true; mode: ActionEntryMode } | { ok: false; raw: string };
 
+export type LearnedActionEntryCause =
+  | { invalidEntry: string }
+  | { parkedActionLifecycle: string }
+  | { parkedRunFlowFile: string };
+
+export type LearnedActionBodyInspection =
+  | { commands: readonly unknown[] }
+  | { runFlowFile: string }
+  | null;
+
 export type LearnedActionEntryRefusal =
-  | { kind: 'invalid-entry'; raw: string; message: string }
+  | { kind: 'invalid-entry'; raw: string; message: string; cause: LearnedActionEntryCause }
+  | { kind: 'parked-body'; message: string; cause: LearnedActionEntryCause }
   | { kind: 'park-preflight-required'; message: string };
 
 /** Absent means cold; an unknown declared value is refused, never downgraded. */
@@ -26,6 +37,7 @@ export function resolveEntryMode(metadata: Pick<M7Metadata, 'entry'>): EntryMode
 export function learnedActionEntryRefusal(
   metadata: Pick<M7Metadata, 'entry'>,
   parkPreflightPassed: boolean,
+  inspectBody?: () => LearnedActionBodyInspection,
 ): LearnedActionEntryRefusal | null {
   const entry = resolveEntryMode(metadata);
   if (!entry.ok) {
@@ -33,7 +45,31 @@ export function learnedActionEntryRefusal(
       kind: 'invalid-entry',
       raw: entry.raw,
       message: `Learned action declares unknown entry mode "${entry.raw}" — use "cold" or "parked".`,
+      cause: { invalidEntry: entry.raw },
     };
+  }
+  if (entry.mode === 'parked') {
+    const inspection = inspectBody?.() ?? null;
+    const violation = inspection && 'commands' in inspection
+      ? parkedBodyViolation(inspection.commands)
+      : inspection && 'runFlowFile' in inspection
+        ? { kind: 'runflow-file' as const, reference: inspection.runFlowFile }
+        : null;
+    if (violation?.kind === 'lifecycle') {
+      return {
+        kind: 'parked-body',
+        message: `Learned action declares entry: parked but its body contains forbidden lifecycle command "${violation.command}".`,
+        cause: { parkedActionLifecycle: violation.command },
+      };
+    }
+    if (violation?.kind === 'runflow-file') {
+      const reference = violation.reference.length > 0 ? violation.reference : '<empty>';
+      return {
+        kind: 'parked-body',
+        message: `Learned action declares entry: parked but its body contains uninspectable runFlow file reference "${reference}".`,
+        cause: { parkedRunFlowFile: reference },
+      };
+    }
   }
   if (entry.mode === 'parked' && !parkPreflightPassed) {
     return {

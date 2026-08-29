@@ -819,6 +819,71 @@ test('GH #628: lock-e2e preserves shared parked entry refusal envelopes', async 
   assert.equal(spawned, false);
 });
 
+test('GH #628: alternate executors preserve parked body refusal causes', async () => {
+  let executed = false;
+  const maestroRun = createMaestroRunHandler({
+    getActiveSession: () => null,
+    execFile: async () => {
+      executed = true;
+      return { stdout: '', stderr: '' };
+    },
+  });
+  for (const scenario of [
+    {
+      body: [`- assertVisible:\n    id: "${PARK_ANCHOR}"`, '- launchApp'],
+      cause: { parkedActionLifecycle: 'launchApp' },
+    },
+    {
+      body: [
+        `- assertVisible:\n    id: "${PARK_ANCHOR}"`,
+        '- runFlow:\n    file: "missing-sub.yaml"',
+      ],
+      cause: { parkedRunFlowFile: 'missing-sub.yaml' },
+    },
+  ]) {
+    project.seedAction('parked-sign-mandate', parkedYaml(scenario.body), null);
+
+    const maestro = envelope(
+      await maestroRun({
+        platform: 'ios',
+        flowPath: project.yamlPath('parked-sign-mandate'),
+      }),
+    );
+    assert.equal(maestro.code, 'BAD_RECORDING');
+    assert.deepEqual(maestro.meta?.cause, scenario.cause);
+
+    const suite = envelope(
+      await createMaestroTestAllHandler({
+        getActiveSession: () => null,
+        runFlow: async () => {
+          executed = true;
+          return { content: [{ type: 'text', text: JSON.stringify(PASS_ENV) }] };
+        },
+      })({ platform: 'ios', flowDir: project.actionsDir }),
+    );
+    assert.equal(suite.code, 'BAD_RECORDING');
+    assert.deepEqual(suite.meta?.cause, scenario.cause);
+
+    const verification = prepareActionVerificationSuite(
+      [project.yamlPath('parked-sign-mandate')],
+      project.actionsDir,
+      null,
+    );
+    assert.equal(verification.prepared.length, 0);
+    assert.deepEqual(verification.errors[0]?.cause, scenario.cause);
+
+    const lock = envelope(
+      await lockE2eTestCore(
+        { actionId: 'parked-sign-mandate', projectRoot: project.root },
+        { maestroRun },
+      ),
+    );
+    assert.equal(lock.code, 'BAD_RECORDING');
+    assert.deepEqual(lock.meta?.cause, scenario.cause);
+  }
+  assert.equal(executed, false);
+});
+
 test('GH #628: invalid entry outranks malformed bodies in every alternate executor', async () => {
   project.seedAction(
     'parked-sign-mandate',

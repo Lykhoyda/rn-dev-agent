@@ -25,7 +25,10 @@ import {
   replayCompatibilityPreflight,
 } from '../domain/action-engine-compat.js';
 import { parseM7Header, type M7Metadata } from '../domain/reusable-action.js';
-import { learnedActionEntryRefusal } from '../domain/park-entry.js';
+import {
+  learnedActionEntryRefusal,
+  type LearnedActionBodyInspection,
+} from '../domain/park-entry.js';
 import { captureActionFromPath, type CapturedActionReplay } from '../domain/action-store.js';
 import { getActiveSession } from '../agent-device-wrapper.js';
 import { resolveBundleId, readExpoSlug } from '../project-config.js';
@@ -230,15 +233,17 @@ export function markParkPreflightPassed<T extends MaestroRunArgs>(args: T): T {
 function learnedActionEntryAdmissionResult(
   metadata: Pick<M7Metadata, 'id' | 'entry'>,
   args: MaestroRunArgs,
+  inspectBody?: () => LearnedActionBodyInspection,
 ): ToolResult | null {
   const refusal = learnedActionEntryRefusal(
     metadata,
     (args as ParkPreflightMarkedArgs)[parkPreflightPassed] === true,
+    inspectBody,
   );
   if (!refusal) return null;
   return failResult(refusal.message, 'BAD_RECORDING', {
     actionId: metadata.id,
-    ...(refusal.kind === 'invalid-entry' ? { cause: { invalidEntry: refusal.raw } } : {}),
+    ...('cause' in refusal ? { cause: refusal.cause } : {}),
   });
 }
 
@@ -777,8 +782,27 @@ export function createMaestroRunHandler(
         rawYaml,
         args.flowPath ? basename(args.flowPath).replace(/\.ya?ml$/i, '') : undefined,
       );
+    const runFlowOpts =
+      args.flowPath && flowPathClassification === 'outside'
+        ? { flowDir: dirname(args.flowPath), flowRoot: dirname(args.flowPath) }
+        : {};
     if (semanticActionMeta) {
-      const entryRefusal = learnedActionEntryAdmissionResult(semanticActionMeta, args);
+      const entryRefusal = learnedActionEntryAdmissionResult(semanticActionMeta, args, () => {
+        if (capturedAction) {
+          return capturedAction.replay.ok
+            ? { commands: capturedAction.replay.commands }
+            : capturedAction.replay.runFlowFile !== undefined
+              ? { runFlowFile: capturedAction.replay.runFlowFile }
+              : null;
+        }
+        try {
+          return { commands: parseAndValidateFlow(rawYaml, runFlowOpts).commands };
+        } catch (err) {
+          return err instanceof MaestroValidationError && err.runFlowFile !== undefined
+            ? { runFlowFile: err.runFlowFile }
+            : null;
+        }
+      });
       if (entryRefusal) return entryRefusal;
     }
     if (capturedAction && !capturedAction.replay.ok) {
@@ -789,10 +813,6 @@ export function createMaestroRunHandler(
       // GH #186: when running a saved flow FILE, resolve+inline any runFlow file
       // refs relative to that file's directory, contained within it. Inline YAML
       // has no on-disk root, so runFlow file refs stay rejected there.
-      const runFlowOpts =
-        args.flowPath && flowPathClassification === 'outside'
-          ? { flowDir: dirname(args.flowPath), flowRoot: dirname(args.flowPath) }
-          : {};
       const parsed = parseAndValidateFlow(rawYaml, runFlowOpts);
       planMaestroAuthorityStages(parsed.commands);
       validatedCommands = parsed.commands;

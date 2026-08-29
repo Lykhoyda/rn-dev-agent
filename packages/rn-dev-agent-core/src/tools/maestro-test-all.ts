@@ -41,7 +41,10 @@ import {
   replayCompatibilityPreflight,
 } from '../domain/action-engine-compat.js';
 import { parseM7Header } from '../domain/reusable-action.js';
-import { learnedActionEntryRefusal } from '../domain/park-entry.js';
+import {
+  learnedActionEntryRefusal,
+  type LearnedActionEntryCause,
+} from '../domain/park-entry.js';
 import {
   captureActionFromContext,
   openReadableActionLoadContext,
@@ -108,7 +111,7 @@ interface FlowResult {
   runner?: string;
   transport?: string;
   treeEnvelope?: Record<string, unknown>;
-  cause?: { invalidEntry: string };
+  cause?: LearnedActionEntryCause;
 }
 
 interface PreparedFlow {
@@ -285,7 +288,29 @@ export function createMaestroTestAllHandler(
           meta = parseM7Header(yamlText, flowId);
           requireEnginePin = meta !== null || isLearnedActionPath(flow);
         }
-        const entryRefusal = meta ? learnedActionEntryRefusal(meta, false) : null;
+        const entryRefusal = meta
+          ? learnedActionEntryRefusal(meta, false, () => {
+              if (actionReplay) {
+                return actionReplay.replay.ok
+                  ? { commands: actionReplay.replay.commands }
+                  : actionReplay.replay.runFlowFile !== undefined
+                    ? { runFlowFile: actionReplay.replay.runFlowFile }
+                    : null;
+              }
+              try {
+                return {
+                  commands: parseAndValidateFlow(yamlText, {
+                    flowDir: dirname(flow),
+                    flowRoot: flowDir,
+                  }).commands,
+                };
+              } catch (err) {
+                return err instanceof MaestroValidationError && err.runFlowFile !== undefined
+                  ? { runFlowFile: err.runFlowFile }
+                  : null;
+              }
+            })
+          : null;
         if (entryRefusal) {
           preflightResults.push({
             name,
@@ -293,9 +318,7 @@ export function createMaestroTestAllHandler(
             durationMs: now() - start,
             error: entryRefusal.message,
             code: 'BAD_RECORDING',
-            ...(entryRefusal.kind === 'invalid-entry'
-              ? { cause: { invalidEntry: entryRefusal.raw } }
-              : {}),
+            ...('cause' in entryRefusal ? { cause: entryRefusal.cause } : {}),
           });
           continue;
         }

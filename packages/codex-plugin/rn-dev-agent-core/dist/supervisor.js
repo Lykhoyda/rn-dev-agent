@@ -78916,14 +78916,34 @@ function resolveEntryMode(metadata) {
     return { ok: true, mode: raw };
   return { ok: false, raw: String(raw) };
 }
-function learnedActionEntryRefusal(metadata, parkPreflightPassed2) {
+function learnedActionEntryRefusal(metadata, parkPreflightPassed2, inspectBody) {
   const entry = resolveEntryMode(metadata);
   if (!entry.ok) {
     return {
       kind: "invalid-entry",
       raw: entry.raw,
-      message: `Learned action declares unknown entry mode "${entry.raw}" \u2014 use "cold" or "parked".`
+      message: `Learned action declares unknown entry mode "${entry.raw}" \u2014 use "cold" or "parked".`,
+      cause: { invalidEntry: entry.raw }
     };
+  }
+  if (entry.mode === "parked") {
+    const inspection = inspectBody?.() ?? null;
+    const violation = inspection && "commands" in inspection ? parkedBodyViolation(inspection.commands) : inspection && "runFlowFile" in inspection ? { kind: "runflow-file", reference: inspection.runFlowFile } : null;
+    if (violation?.kind === "lifecycle") {
+      return {
+        kind: "parked-body",
+        message: `Learned action declares entry: parked but its body contains forbidden lifecycle command "${violation.command}".`,
+        cause: { parkedActionLifecycle: violation.command }
+      };
+    }
+    if (violation?.kind === "runflow-file") {
+      const reference = violation.reference.length > 0 ? violation.reference : "<empty>";
+      return {
+        kind: "parked-body",
+        message: `Learned action declares entry: parked but its body contains uninspectable runFlow file reference "${reference}".`,
+        cause: { parkedRunFlowFile: reference }
+      };
+    }
   }
   if (entry.mode === "parked" && !parkPreflightPassed2) {
     return {
@@ -81806,13 +81826,13 @@ function markParkPreflightPassed(args) {
   Object.defineProperty(args, parkPreflightPassed, { value: true, enumerable: true });
   return args;
 }
-function learnedActionEntryAdmissionResult(metadata, args) {
-  const refusal = learnedActionEntryRefusal(metadata, args[parkPreflightPassed] === true);
+function learnedActionEntryAdmissionResult(metadata, args, inspectBody) {
+  const refusal = learnedActionEntryRefusal(metadata, args[parkPreflightPassed] === true, inspectBody);
   if (!refusal)
     return null;
   return failResult(refusal.message, "BAD_RECORDING", {
     actionId: metadata.id,
-    ...refusal.kind === "invalid-entry" ? { cause: { invalidEntry: refusal.raw } } : {}
+    ..."cause" in refusal ? { cause: refusal.cause } : {}
   });
 }
 function nestedMaestroAuthorityCallbacks(args) {
@@ -82101,8 +82121,18 @@ function createMaestroRunHandler(deps = {}) {
       return failResult("Provide either flowPath or inlineYaml.");
     }
     const semanticActionMeta = capturedAction?.metadata ?? args.actionMetadata ?? parseM7Header(rawYaml, args.flowPath ? basename10(args.flowPath).replace(/\.ya?ml$/i, "") : void 0);
+    const runFlowOpts = args.flowPath && flowPathClassification === "outside" ? { flowDir: dirname23(args.flowPath), flowRoot: dirname23(args.flowPath) } : {};
     if (semanticActionMeta) {
-      const entryRefusal = learnedActionEntryAdmissionResult(semanticActionMeta, args);
+      const entryRefusal = learnedActionEntryAdmissionResult(semanticActionMeta, args, () => {
+        if (capturedAction) {
+          return capturedAction.replay.ok ? { commands: capturedAction.replay.commands } : capturedAction.replay.runFlowFile !== void 0 ? { runFlowFile: capturedAction.replay.runFlowFile } : null;
+        }
+        try {
+          return { commands: parseAndValidateFlow(rawYaml, runFlowOpts).commands };
+        } catch (err) {
+          return err instanceof MaestroValidationError && err.runFlowFile !== void 0 ? { runFlowFile: err.runFlowFile } : null;
+        }
+      });
       if (entryRefusal)
         return entryRefusal;
     }
@@ -82110,7 +82140,6 @@ function createMaestroRunHandler(deps = {}) {
       return failResult(capturedAction.replay.error, "BAD_RECORDING");
     }
     try {
-      const runFlowOpts = args.flowPath && flowPathClassification === "outside" ? { flowDir: dirname23(args.flowPath), flowRoot: dirname23(args.flowPath) } : {};
       const parsed = parseAndValidateFlow(rawYaml, runFlowOpts);
       planMaestroAuthorityStages(parsed.commands);
       validatedCommands = parsed.commands;
@@ -92824,7 +92853,21 @@ function createMaestroTestAllHandler(deps = {}) {
           meta = parseM7Header(yamlText, flowId);
           requireEnginePin = meta !== null || isLearnedActionPath(flow);
         }
-        const entryRefusal = meta ? learnedActionEntryRefusal(meta, false) : null;
+        const entryRefusal = meta ? learnedActionEntryRefusal(meta, false, () => {
+          if (actionReplay) {
+            return actionReplay.replay.ok ? { commands: actionReplay.replay.commands } : actionReplay.replay.runFlowFile !== void 0 ? { runFlowFile: actionReplay.replay.runFlowFile } : null;
+          }
+          try {
+            return {
+              commands: parseAndValidateFlow(yamlText, {
+                flowDir: dirname30(flow),
+                flowRoot: flowDir
+              }).commands
+            };
+          } catch (err) {
+            return err instanceof MaestroValidationError && err.runFlowFile !== void 0 ? { runFlowFile: err.runFlowFile } : null;
+          }
+        }) : null;
         if (entryRefusal) {
           preflightResults.push({
             name,
@@ -92832,7 +92875,7 @@ function createMaestroTestAllHandler(deps = {}) {
             durationMs: now() - start,
             error: entryRefusal.message,
             code: "BAD_RECORDING",
-            ...entryRefusal.kind === "invalid-entry" ? { cause: { invalidEntry: entryRefusal.raw } } : {}
+            ..."cause" in entryRefusal ? { cause: entryRefusal.cause } : {}
           });
           continue;
         }
@@ -95204,6 +95247,13 @@ async function lockE2eTestCore(args, deps = {}) {
   const action = load(projectRoot, args.actionId);
   if (!action)
     return failResult(`Action '${args.actionId}' not found`, "NOT_FOUND");
+  const entryRefusal = learnedActionEntryRefusal(action.metadata, false, () => action.replay.ok ? { commands: action.replay.commands } : action.replay.runFlowFile !== void 0 ? { runFlowFile: action.replay.runFlowFile } : null);
+  if (entryRefusal) {
+    return failResult(entryRefusal.message, "BAD_RECORDING", {
+      actionId: args.actionId,
+      ..."cause" in entryRefusal ? { cause: entryRefusal.cause } : {}
+    });
+  }
   if (!action.replay.ok) {
     return failResult(`Action '${args.actionId}' is invalid: ${action.replay.error}`, "BAD_RECORDING");
   }
@@ -95273,6 +95323,7 @@ var init_lock_e2e_test = __esm({
     init_maestro_run();
     init_storage();
     init_utils();
+    init_park_entry();
   }
 });
 

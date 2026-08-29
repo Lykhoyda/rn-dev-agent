@@ -13948,6 +13948,7 @@ import { basename as basename6, dirname as dirname11, resolve as resolve7 } from
 init_maestro_validator();
 
 // packages/rn-dev-agent-core/dist/domain/park-entry.js
+var PARKED_FORBIDDEN_COMMANDS = /* @__PURE__ */ new Set(["launchApp", "stopApp", "killApp", "clearState"]);
 function resolveEntryMode(metadata) {
   const raw = metadata.entry;
   if (raw === void 0)
@@ -13956,20 +13957,98 @@ function resolveEntryMode(metadata) {
     return { ok: true, mode: raw };
   return { ok: false, raw: String(raw) };
 }
-function learnedActionEntryRefusal(metadata, parkPreflightPassed2) {
+function learnedActionEntryRefusal(metadata, parkPreflightPassed2, inspectBody) {
   const entry = resolveEntryMode(metadata);
   if (!entry.ok) {
     return {
       kind: "invalid-entry",
       raw: entry.raw,
-      message: `Learned action declares unknown entry mode "${entry.raw}" \u2014 use "cold" or "parked".`
+      message: `Learned action declares unknown entry mode "${entry.raw}" \u2014 use "cold" or "parked".`,
+      cause: { invalidEntry: entry.raw }
     };
+  }
+  if (entry.mode === "parked") {
+    const inspection = inspectBody?.() ?? null;
+    const violation = inspection && "commands" in inspection ? parkedBodyViolation(inspection.commands) : inspection && "runFlowFile" in inspection ? { kind: "runflow-file", reference: inspection.runFlowFile } : null;
+    if (violation?.kind === "lifecycle") {
+      return {
+        kind: "parked-body",
+        message: `Learned action declares entry: parked but its body contains forbidden lifecycle command "${violation.command}".`,
+        cause: { parkedActionLifecycle: violation.command }
+      };
+    }
+    if (violation?.kind === "runflow-file") {
+      const reference = violation.reference.length > 0 ? violation.reference : "<empty>";
+      return {
+        kind: "parked-body",
+        message: `Learned action declares entry: parked but its body contains uninspectable runFlow file reference "${reference}".`,
+        cause: { parkedRunFlowFile: reference }
+      };
+    }
   }
   if (entry.mode === "parked" && !parkPreflightPassed2) {
     return {
       kind: "park-preflight-required",
       message: "Learned action declares entry: parked and requires the read-only park preflight; replay it through cdp_run_action."
     };
+  }
+  return null;
+}
+function commandName(command) {
+  if (typeof command === "string")
+    return command;
+  if (!command || typeof command !== "object" || Array.isArray(command))
+    return null;
+  const keys = Object.keys(command);
+  return keys.length === 1 ? keys[0] : null;
+}
+function compositeShape(command) {
+  const name = commandName(command);
+  if (name === null || typeof command === "string")
+    return null;
+  const value = command[name];
+  if (name === "runFlow") {
+    if (typeof value === "string")
+      return { kind: "file", reference: value };
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return { kind: "file", reference: String(value) };
+    }
+    const record2 = value;
+    if (typeof record2.file === "string")
+      return { kind: "file", reference: record2.file };
+    return {
+      kind: "inline",
+      name,
+      commands: Array.isArray(record2.commands) ? record2.commands : [],
+      conditional: record2.when !== void 0
+    };
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    return null;
+  const record = value;
+  if (!Array.isArray(record.commands))
+    return null;
+  return {
+    kind: "inline",
+    name,
+    commands: record.commands,
+    conditional: record.when !== void 0
+  };
+}
+function parkedBodyViolation(commands) {
+  for (const command of commands) {
+    const name = commandName(command);
+    if (name !== null && PARKED_FORBIDDEN_COMMANDS.has(name)) {
+      return { kind: "lifecycle", command: name };
+    }
+    const composite = compositeShape(command);
+    if (composite?.kind === "file")
+      return { kind: "runflow-file", reference: composite.reference };
+    if (composite?.kind === "inline") {
+      const nested = parkedBodyViolation(composite.commands);
+      if (nested !== null)
+        return nested;
+    }
   }
   return null;
 }
@@ -14014,13 +14093,27 @@ function prepareActionVerificationSuite(files, flowDir, engineStatus, context) {
         sourceText = readFileSync9(file, "utf8");
         meta = parseM7Header(sourceText, id);
       }
-      const entryRefusal = meta ? learnedActionEntryRefusal(meta, false) : null;
+      const entryRefusal = meta ? learnedActionEntryRefusal(meta, false, () => {
+        if (actionReplay) {
+          return actionReplay.replay.ok ? { commands: actionReplay.replay.commands } : actionReplay.replay.runFlowFile !== void 0 ? { runFlowFile: actionReplay.replay.runFlowFile } : null;
+        }
+        try {
+          return {
+            commands: parseAndValidateFlow(sourceText, {
+              flowDir: dirname11(file),
+              flowRoot: flowDir
+            }).commands
+          };
+        } catch (err) {
+          return err instanceof MaestroValidationError && err.runFlowFile !== void 0 ? { runFlowFile: err.runFlowFile } : null;
+        }
+      }) : null;
       if (entryRefusal) {
         errors.push({
           file,
           error: entryRefusal.message,
           code: "BAD_RECORDING",
-          ...entryRefusal.kind === "invalid-entry" ? { cause: { invalidEntry: entryRefusal.raw } } : {}
+          ..."cause" in entryRefusal ? { cause: entryRefusal.cause } : {}
         });
         continue;
       }
@@ -15508,7 +15601,7 @@ function containsExactId(value, depth = 0) {
     return false;
   return Object.entries(value).some(([key, child]) => key === "id" && typeof child === "string" || containsExactId(child, depth + 1));
 }
-function commandName(command) {
+function commandName2(command) {
   if (typeof command === "string")
     return command;
   if (!isObject(command))
@@ -15533,13 +15626,13 @@ function runFlowHasUnanchoredLeadingInputText(command) {
   if (!Array.isArray(commands) || commands.length === 0)
     return false;
   for (const child of commands) {
-    const name = commandName(child);
+    const name = commandName2(child);
     if (name === "inputText")
       return true;
     if (name && nativeFocusPreservingCommands.has(name))
       continue;
     if (name === "tapOn" || name === "tap")
-      return commands.some((candidate) => commandName(candidate) === "inputText");
+      return commands.some((candidate) => commandName2(candidate) === "inputText");
     return false;
   }
   return false;
@@ -15554,7 +15647,7 @@ var nativeFocusPreservingCommands = /* @__PURE__ */ new Set([
 function nativeCommandMayChangeFocus(command, depth = 0) {
   if (depth > 20)
     return true;
-  const name = commandName(command);
+  const name = commandName2(command);
   if (name !== "runFlow")
     return name === null || !nativeFocusPreservingCommands.has(name);
   if (!isObject(command))
@@ -15575,7 +15668,7 @@ function exactTapId(command, params) {
   }
 }
 function commandDomain(command, params) {
-  const name = commandName(command);
+  const name = commandName2(command);
   if (name === "waitForAnimationToEnd" || name === "inputText")
     return "neutral";
   try {
@@ -15604,7 +15697,7 @@ function planIosProofDomains(commands, params) {
   const tapCommands = /* @__PURE__ */ new Set(["tapOn", "tap"]);
   const lifecycleCommands2 = /* @__PURE__ */ new Set(["launchApp", "clearState", "killApp", "stopApp"]);
   for (let index = 0; index < commands.length; index++) {
-    const name = commandName(commands[index]);
+    const name = commandName2(commands[index]);
     let domain = classified[index];
     if (name === "runFlow" && runFlowHasUnanchoredLeadingInputText(commands[index])) {
       domain = "xctest-native";
@@ -15929,13 +16022,13 @@ function assembleMaestroArgs(baseArgs, paramArgs) {
   return [...baseArgs.slice(0, -1), ...paramArgs, baseArgs[baseArgs.length - 1]];
 }
 var parkPreflightPassed = /* @__PURE__ */ Symbol("parkPreflightPassed");
-function learnedActionEntryAdmissionResult(metadata, args) {
-  const refusal = learnedActionEntryRefusal(metadata, args[parkPreflightPassed] === true);
+function learnedActionEntryAdmissionResult(metadata, args, inspectBody) {
+  const refusal = learnedActionEntryRefusal(metadata, args[parkPreflightPassed] === true, inspectBody);
   if (!refusal)
     return null;
   return failResult(refusal.message, "BAD_RECORDING", {
     actionId: metadata.id,
-    ...refusal.kind === "invalid-entry" ? { cause: { invalidEntry: refusal.raw } } : {}
+    ..."cause" in refusal ? { cause: refusal.cause } : {}
   });
 }
 function nestedMaestroAuthorityCallbacks(args) {
@@ -15961,7 +16054,7 @@ var MaestroStageExecutionError = class extends Error {
   }
 };
 var lifecycleCommands = /* @__PURE__ */ new Set(["launchApp", "clearState", "killApp", "stopApp"]);
-function commandName2(command) {
+function commandName3(command) {
   if (typeof command === "string")
     return command;
   if (!command || typeof command !== "object" || Array.isArray(command))
@@ -15979,7 +16072,7 @@ function nestedLifecycleCommand(command) {
   return Array.isArray(commands) && commands.some(nestedLifecycleCommandOrSelf);
 }
 function nestedLifecycleCommandOrSelf(command) {
-  const name = commandName2(command);
+  const name = commandName3(command);
   return name !== null && lifecycleCommands.has(name) || nestedLifecycleCommand(command);
 }
 function planMaestroAuthorityStages(commands) {
@@ -15993,7 +16086,7 @@ function planMaestroAuthorityStages(commands) {
     pending = [];
   };
   for (const command of commands) {
-    const name = commandName2(command);
+    const name = commandName3(command);
     if (nestedLifecycleCommand(command)) {
       throw new MaestroValidationError("conditional runFlow commands cannot contain app lifecycle transitions");
     }
@@ -16021,7 +16114,7 @@ async function executeMaestroAuthorityStages(commands, executeStage, claimOrigin
     }
     try {
       results.push(await executeStage(stage.commands));
-      if (stage.commands.length === 1 && commandName2(stage.commands[0]) === "launchApp") {
+      if (stage.commands.length === 1 && commandName3(stage.commands[0]) === "launchApp") {
         try {
           const launch = stage.commands[0];
           const launchOptions = launch.launchApp && typeof launch.launchApp === "object" && !Array.isArray(launch.launchApp) ? launch.launchApp : void 0;
@@ -16249,8 +16342,18 @@ function createMaestroRunHandler(deps = {}) {
       return failResult("Provide either flowPath or inlineYaml.");
     }
     const semanticActionMeta = capturedAction?.metadata ?? args.actionMetadata ?? parseM7Header(rawYaml, args.flowPath ? basename8(args.flowPath).replace(/\.ya?ml$/i, "") : void 0);
+    const runFlowOpts = args.flowPath && flowPathClassification === "outside" ? { flowDir: dirname14(args.flowPath), flowRoot: dirname14(args.flowPath) } : {};
     if (semanticActionMeta) {
-      const entryRefusal = learnedActionEntryAdmissionResult(semanticActionMeta, args);
+      const entryRefusal = learnedActionEntryAdmissionResult(semanticActionMeta, args, () => {
+        if (capturedAction) {
+          return capturedAction.replay.ok ? { commands: capturedAction.replay.commands } : capturedAction.replay.runFlowFile !== void 0 ? { runFlowFile: capturedAction.replay.runFlowFile } : null;
+        }
+        try {
+          return { commands: parseAndValidateFlow(rawYaml, runFlowOpts).commands };
+        } catch (err) {
+          return err instanceof MaestroValidationError && err.runFlowFile !== void 0 ? { runFlowFile: err.runFlowFile } : null;
+        }
+      });
       if (entryRefusal)
         return entryRefusal;
     }
@@ -16258,7 +16361,6 @@ function createMaestroRunHandler(deps = {}) {
       return failResult(capturedAction.replay.error, "BAD_RECORDING");
     }
     try {
-      const runFlowOpts = args.flowPath && flowPathClassification === "outside" ? { flowDir: dirname14(args.flowPath), flowRoot: dirname14(args.flowPath) } : {};
       const parsed = parseAndValidateFlow(rawYaml, runFlowOpts);
       planMaestroAuthorityStages(parsed.commands);
       validatedCommands = parsed.commands;
