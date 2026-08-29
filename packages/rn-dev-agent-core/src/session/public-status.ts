@@ -221,6 +221,9 @@ export function projectPublicAuthorityStatus(
           startupCleanupBlocked: {
             code: options.recoveryRequirement.startupCleanupBlocked.code,
             reason: options.recoveryRequirement.startupCleanupBlocked.reason,
+            ...(options.recoveryRequirement.startupCleanupBlocked.cause
+              ? { cause: options.recoveryRequirement.startupCleanupBlocked.cause }
+              : {}),
             nextAction: options.recoveryRequirement.nextAction,
           },
         }

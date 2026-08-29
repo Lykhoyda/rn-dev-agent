@@ -206,6 +206,7 @@ export class SessionAuthorityError extends Error {
   private supplementalMeta?: Record<string, unknown>;
   readonly details?: {
     axis?: string;
+    cause?: string;
     expected?: string;
     observed?: string;
     nextAction?: string;
@@ -217,6 +218,7 @@ export class SessionAuthorityError extends Error {
     holder?: { sessionId: string; claimEpoch: number },
     details?: {
       axis?: string;
+      cause?: string;
       expected?: string;
       observed?: string;
       nextAction?: string;
@@ -244,11 +246,22 @@ export class SessionAuthorityError extends Error {
 const RECOVERY_HANDLE_TTL_MS = 5 * 60_000;
 const RECOVERY_HANDLE_RENEW_MS = 60_000;
 
-export type RecoveryRequirement = 'none' | 'adoption' | 'attach' | 'transport-restart';
+export type RecoveryRequirement =
+  | 'none'
+  | 'adoption'
+  | 'attach'
+  | 'transport-restart'
+  | 'unrecoverable-in-band';
+
+export type StartupCleanupBlockerCause = 'managed-metro-stop-proof-missing';
+
+export const UNRECOVERABLE_METRO_CLEANUP_NEXT_ACTION =
+  'Managed Metro cleanup cannot be discharged because its authenticated stop proof is unavailable. No supported in-band recovery action can reconstruct that proof; preserve the authority state and report METRO_CLEANUP_PENDING.';
 
 export interface StartupCleanupBlocker {
   code: string;
   reason: string;
+  cause?: StartupCleanupBlockerCause;
   nextAction?: string;
 }
 
@@ -442,6 +455,7 @@ function readStartupCleanupBlocker(bindingsJson: string): StartupCleanupBlocker 
   return {
     code: record.code,
     reason: record.reason,
+    ...(record.cause === 'managed-metro-stop-proof-missing' ? { cause: record.cause } : {}),
     ...(typeof record.nextAction === 'string' ? { nextAction: record.nextAction } : {}),
   };
 }
@@ -1239,6 +1253,17 @@ export class SessionRegistry {
         // Only cleanup without a retained refusal may promise automatic convergence.
         const blocked = readStartupCleanupBlocker(prior.bindings_json);
         if (blocked) {
+          if (
+            blocked.code === 'METRO_CLEANUP_PENDING' &&
+            blocked.cause === 'managed-metro-stop-proof-missing'
+          ) {
+            return {
+              requirement: 'unrecoverable-in-band',
+              priorOwner: 'stale',
+              startupCleanupBlocked: blocked,
+              nextAction: blocked.nextAction ?? UNRECOVERABLE_METRO_CLEANUP_NEXT_ACTION,
+            };
+          }
           return {
             requirement: 'transport-restart',
             priorOwner: 'stale',
@@ -2115,6 +2140,7 @@ export class SessionRegistry {
         existing &&
         existing.code === refusal.code &&
         existing.reason === refusal.reason &&
+        existing.cause === refusal.cause &&
         existing.nextAction === refusal.nextAction
       ) {
         return;
@@ -2132,6 +2158,7 @@ export class SessionRegistry {
               refusal: {
                 code: refusal.code,
                 reason: refusal.reason,
+                ...(refusal.cause ? { cause: refusal.cause } : {}),
                 ...(refusal.nextAction ? { nextAction: refusal.nextAction } : {}),
               },
             },

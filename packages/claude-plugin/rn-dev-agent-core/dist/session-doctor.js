@@ -8079,6 +8079,7 @@ function readStartupCleanupBlocker(bindingsJson) {
   return {
     code: record.code,
     reason: record.reason,
+    ...record.cause === "managed-metro-stop-proof-missing" ? { cause: record.cause } : {},
     ...typeof record.nextAction === "string" ? { nextAction: record.nextAction } : {}
   };
 }
@@ -8104,7 +8105,7 @@ function openSessionRegistry(path, dependencies) {
     throw error;
   }
 }
-var OWNER_IDENTITY_REFUSAL_REASONS, INITIALIZATION_WAIT2, AUTHORITY_REGISTRY_SCHEMA_VERSION, SessionAuthorityError, RECOVERY_HANDLE_TTL_MS, RECOVERY_HANDLE_RENEW_MS, conflictCodes, SessionRegistry;
+var OWNER_IDENTITY_REFUSAL_REASONS, INITIALIZATION_WAIT2, AUTHORITY_REGISTRY_SCHEMA_VERSION, SessionAuthorityError, RECOVERY_HANDLE_TTL_MS, RECOVERY_HANDLE_RENEW_MS, UNRECOVERABLE_METRO_CLEANUP_NEXT_ACTION, conflictCodes, SessionRegistry;
 var init_registry = __esm({
   "packages/rn-dev-agent-core/dist/session/registry.js"() {
     "use strict";
@@ -8141,6 +8142,7 @@ var init_registry = __esm({
     };
     RECOVERY_HANDLE_TTL_MS = 5 * 6e4;
     RECOVERY_HANDLE_RENEW_MS = 6e4;
+    UNRECOVERABLE_METRO_CLEANUP_NEXT_ACTION = "Managed Metro cleanup cannot be discharged because its authenticated stop proof is unavailable. No supported in-band recovery action can reconstruct that proof; preserve the authority state and report METRO_CLEANUP_PENDING.";
     conflictCodes = {
       device: "DEVICE_CLAIM_CONFLICT",
       "device-receipt": "DEVICE_CLAIM_CONFLICT",
@@ -8541,6 +8543,14 @@ var init_registry = __esm({
             }
             const blocked = readStartupCleanupBlocker(prior.bindings_json);
             if (blocked) {
+              if (blocked.code === "METRO_CLEANUP_PENDING" && blocked.cause === "managed-metro-stop-proof-missing") {
+                return {
+                  requirement: "unrecoverable-in-band",
+                  priorOwner: "stale",
+                  startupCleanupBlocked: blocked,
+                  nextAction: blocked.nextAction ?? UNRECOVERABLE_METRO_CLEANUP_NEXT_ACTION
+                };
+              }
               return {
                 requirement: "transport-restart",
                 priorOwner: "stale",
@@ -9029,7 +9039,7 @@ var init_registry = __esm({
           if (typeof journal.finishedAt === "number")
             return;
           const existing = journal.refusal;
-          if (existing && existing.code === refusal.code && existing.reason === refusal.reason && existing.nextAction === refusal.nextAction) {
+          if (existing && existing.code === refusal.code && existing.reason === refusal.reason && existing.cause === refusal.cause && existing.nextAction === refusal.nextAction) {
             return;
           }
           this.#database.prepare(`UPDATE sessions SET bindings_json = ?, updated_ms = ?
@@ -9040,6 +9050,7 @@ var init_registry = __esm({
               refusal: {
                 code: refusal.code,
                 reason: refusal.reason,
+                ...refusal.cause ? { cause: refusal.cause } : {},
                 ...refusal.nextAction ? { nextAction: refusal.nextAction } : {}
               }
             }
@@ -12647,6 +12658,7 @@ function resolveSourceIdentity(inputRoot, dependencies = {}) {
 // packages/rn-dev-agent-core/dist/session/startup-cleanup.js
 init_secure_state_file();
 import { createHash as createHash6 } from "node:crypto";
+import { existsSync as existsSync8 } from "node:fs";
 import { join as join14 } from "node:path";
 
 // packages/rn-dev-agent-core/dist/session/managed-metro.js
@@ -13674,6 +13686,28 @@ function managementProof(sessionId, authority, signerCapability) {
     buildGeneration: authority.buildGeneration
   })).digest("hex");
 }
+function verifyManagedMetroManagementProof(binding, input) {
+  if (binding.mode !== "managed" || typeof binding.port !== "number" || typeof binding.pid !== "number" || typeof binding.birth !== "string" || typeof binding.launcherPid !== "number" || typeof binding.launcherBirth !== "string" || typeof binding.instanceId !== "string" || typeof binding.runtimeEvidencePath !== "string" || typeof binding.runtimeEvidenceSocket !== "string" || typeof binding.servingRoot !== "string" || !Number.isSafeInteger(binding.buildGeneration) || binding.buildGeneration < 0 || binding.runtimeEvidenceAuthority !== "managed-sandbox-v1" && binding.runtimeEvidenceAuthority !== "reported-v1" || binding.runtimeEvidenceProtocol !== 2 || typeof binding.managementProof !== "string") {
+    return false;
+  }
+  const expected = managementProof(input.sessionId, {
+    port: binding.port,
+    pid: binding.pid,
+    birth: binding.birth,
+    launcherPid: binding.launcherPid,
+    launcherBirth: binding.launcherBirth,
+    instanceId: binding.instanceId,
+    runtimeEvidencePath: binding.runtimeEvidencePath,
+    runtimeEvidenceSocket: binding.runtimeEvidenceSocket,
+    runtimeEvidenceAuthority: binding.runtimeEvidenceAuthority,
+    runtimeEvidenceProtocol: binding.runtimeEvidenceProtocol,
+    servingRoot: binding.servingRoot,
+    buildGeneration: binding.buildGeneration
+  }, input.signerCapability);
+  const expectedBuffer = Buffer.from(expected, "hex");
+  const observedBuffer = Buffer.from(binding.managementProof, "hex");
+  return expectedBuffer.length === observedBuffer.length && timingSafeEqual3(expectedBuffer, observedBuffer);
+}
 function legacyManagementProof(sessionId, authority, signerCapability) {
   return createHmac2("sha256", signerCapability).update([
     sessionId,
@@ -13734,6 +13768,38 @@ function exactProcessState(expected, probe) {
   if (probe.status === "absent")
     return "stopped";
   return probe.birth.token === expected.birth ? "present" : "stopped";
+}
+function cleanupProcessPresence(pid, birth, probeBirth) {
+  if (typeof pid !== "number" || typeof birth !== "string")
+    return "unknown";
+  const state = exactProcessState({ pid, birth }, probeBirth(pid));
+  return state === "stopped" ? "absent" : state;
+}
+function cleanupSocketPresence(path, exists) {
+  if (typeof path !== "string")
+    return "unknown";
+  try {
+    return exists(path) ? "present" : "absent";
+  } catch {
+    return "unknown";
+  }
+}
+function inspectManagedMetroCleanupEvidence(binding, dependencies = {}) {
+  const probeBirth = dependencies.probeBirth ?? probeProcessBirth;
+  const probeListener = dependencies.probeListener ?? probeManagedMetroListener;
+  const managed = binding.mode === "managed";
+  const launcher = managed ? cleanupProcessPresence(binding.launcherPid, binding.launcherBirth, probeBirth) : "not-applicable";
+  const listener = cleanupProcessPresence(binding.pid, binding.birth, probeBirth);
+  let port = { status: "unknown" };
+  if (typeof binding.port === "number") {
+    try {
+      port = probeListener(binding.port);
+    } catch {
+    }
+  }
+  const evidenceSocket = managed ? cleanupSocketPresence(binding.runtimeEvidenceSocket, dependencies.exists ?? existsSync4) : "not-applicable";
+  const complete = launcher !== "present" && launcher !== "unknown" && listener === "absent" && port.status === "absent" && evidenceSocket !== "present" && evidenceSocket !== "unknown";
+  return { complete, launcher, listener, port, evidenceSocket };
 }
 async function stopManagedMetroProcesses(input, dependencies) {
   const probeBirth = dependencies.probeBirth ?? probeProcessBirth;
@@ -16409,10 +16475,28 @@ async function completeObligations(registry, prior, dependencies) {
       const stop = dependencies.stopManagedMetro ?? ((binding, stopInput) => stopManagedMetro(binding, stopInput));
       const stopped = await stop(entry, { sessionId: prior.sessionId, signerCapability });
       if (!stopped) {
+        if (managedMetroStopProofMissing(entry, { sessionId: prior.sessionId, signerCapability }, dependencies)) {
+          throw new SessionAuthorityError("METRO_CLEANUP_PENDING", "managed Metro could not be stopped with exact process authority", void 0, {
+            cause: "managed-metro-stop-proof-missing",
+            nextAction: UNRECOVERABLE_METRO_CLEANUP_NEXT_ACTION
+          });
+        }
         throw new SessionAuthorityError("METRO_CLEANUP_PENDING", "managed Metro could not be stopped with exact process authority");
       }
     }
     registry.completeStartupOwnerObligation(prior, resource);
+  }
+}
+function managedMetroStopProofMissing(binding, input, dependencies) {
+  try {
+    const authenticated = (dependencies.verifyManagedMetroManagementProof ?? verifyManagedMetroManagementProof)(binding, input);
+    const evidence = (dependencies.inspectManagedMetroCleanupEvidence ?? inspectManagedMetroCleanupEvidence)(binding);
+    const runtimeEvidencePath = binding.runtimeEvidencePath;
+    const evidenceExists = dependencies.managedMetroEvidenceExists ?? existsSync8;
+    const runtimeEvidenceMissing = typeof runtimeEvidencePath !== "string" || !evidenceExists(runtimeEvidencePath);
+    return !authenticated && evidence.complete && runtimeEvidenceMissing;
+  } catch {
+    return false;
   }
 }
 function restoreDeadOwnerIntegration(input, prior, plan, dependencies) {
@@ -16460,6 +16544,7 @@ function retainRefusal(registry, prior, refusal) {
     registry.recordStartupCleanupRefusal(prior, {
       code: refusal.code,
       reason: refusal.message,
+      ...refusal.cause ? { cause: refusal.cause } : {},
       ...refusal.nextAction ? { nextAction: refusal.nextAction } : {}
     });
   } catch {
@@ -16493,6 +16578,7 @@ function publicRefusal(refusal) {
   return {
     code: refusal.code,
     message: authored ? sentence : `startup cleanup refused with ${refusal.code} and preserved the prior owner binding`,
+    ...refusal.code === "METRO_CLEANUP_PENDING" && refusal.cause === "managed-metro-stop-proof-missing" ? { cause: refusal.cause } : {},
     nextAction: authored ? refusal.nextAction ?? fallback : fallback
   };
 }
@@ -16501,6 +16587,7 @@ function refusalOf(error) {
     return publicRefusal({
       code: error.code,
       message: error.message,
+      ...error.details?.cause === "managed-metro-stop-proof-missing" ? { cause: error.details.cause } : {},
       ...error.details?.nextAction ? { nextAction: error.details.nextAction } : {}
     });
   }

@@ -1,7 +1,13 @@
 import { createHash } from 'node:crypto';
+import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { readJsonStateFile } from '../util/secure-state-file.js';
-import { stopManagedMetro, type ManagedMetroBinding } from './managed-metro.js';
+import {
+  inspectManagedMetroCleanupEvidence,
+  stopManagedMetro,
+  verifyManagedMetroManagementProof,
+  type ManagedMetroBinding,
+} from './managed-metro.js';
 import {
   removeAndroidMetroReverse,
   type AndroidMetroReverseBinding,
@@ -24,8 +30,10 @@ import {
   type SessionOwner,
   type SessionRef,
   type SessionRegistry,
+  type StartupCleanupBlockerCause,
   type StartupCleanupResource,
   type StartupOwnerCleanupPlan,
+  UNRECOVERABLE_METRO_CLEANUP_NEXT_ACTION,
 } from './registry.js';
 import type { SourceIdentity } from './source-identity.js';
 import { resolveAuthorityStateLayout } from './state-root.js';
@@ -33,6 +41,7 @@ import { resolveAuthorityStateLayout } from './state-root.js';
 export interface StartupCleanupRefusal {
   code: string;
   message: string;
+  cause?: StartupCleanupBlockerCause;
   nextAction?: string;
 }
 
@@ -53,6 +62,9 @@ export interface StartupCleanupDependencies {
     binding: Record<string, unknown>,
     input: { sessionId: string; signerCapability: string },
   ) => Promise<boolean>;
+  inspectManagedMetroCleanupEvidence?: typeof inspectManagedMetroCleanupEvidence;
+  verifyManagedMetroManagementProof?: typeof verifyManagedMetroManagementProof;
+  managedMetroEvidenceExists?: (path: string) => boolean;
   restoreIntegrationFiles?: (input: { appRoot: string; manifestSource?: string }) => void;
   readSessionSecret?: (sessionId: string) => Record<string, unknown> | null;
 }
@@ -180,6 +192,23 @@ async function completeObligations(
         ) => stopManagedMetro(binding as Partial<ManagedMetroBinding>, stopInput));
       const stopped = await stop(entry, { sessionId: prior.sessionId, signerCapability });
       if (!stopped) {
+        if (
+          managedMetroStopProofMissing(
+            entry,
+            { sessionId: prior.sessionId, signerCapability },
+            dependencies,
+          )
+        ) {
+          throw new SessionAuthorityError(
+            'METRO_CLEANUP_PENDING',
+            'managed Metro could not be stopped with exact process authority',
+            undefined,
+            {
+              cause: 'managed-metro-stop-proof-missing',
+              nextAction: UNRECOVERABLE_METRO_CLEANUP_NEXT_ACTION,
+            },
+          );
+        }
         throw new SessionAuthorityError(
           'METRO_CLEANUP_PENDING',
           'managed Metro could not be stopped with exact process authority',
@@ -187,6 +216,28 @@ async function completeObligations(
       }
     }
     registry.completeStartupOwnerObligation(prior, resource);
+  }
+}
+
+function managedMetroStopProofMissing(
+  binding: Record<string, unknown>,
+  input: { sessionId: string; signerCapability: string },
+  dependencies: StartupCleanupDependencies,
+): boolean {
+  try {
+    const authenticated = (
+      dependencies.verifyManagedMetroManagementProof ?? verifyManagedMetroManagementProof
+    )(binding, input);
+    const evidence = (
+      dependencies.inspectManagedMetroCleanupEvidence ?? inspectManagedMetroCleanupEvidence
+    )(binding);
+    const runtimeEvidencePath = binding.runtimeEvidencePath;
+    const evidenceExists = dependencies.managedMetroEvidenceExists ?? existsSync;
+    const runtimeEvidenceMissing =
+      typeof runtimeEvidencePath !== 'string' || !evidenceExists(runtimeEvidencePath);
+    return !authenticated && evidence.complete && runtimeEvidenceMissing;
+  } catch {
+    return false;
   }
 }
 
@@ -268,6 +319,7 @@ function retainRefusal(
     registry.recordStartupCleanupRefusal(prior, {
       code: refusal.code,
       reason: refusal.message,
+      ...(refusal.cause ? { cause: refusal.cause } : {}),
       ...(refusal.nextAction ? { nextAction: refusal.nextAction } : {}),
     });
   } catch {
@@ -337,6 +389,10 @@ function publicRefusal(refusal: StartupCleanupRefusal): StartupCleanupRefusal {
     message: authored
       ? sentence
       : `startup cleanup refused with ${refusal.code} and preserved the prior owner binding`,
+    ...(refusal.code === 'METRO_CLEANUP_PENDING' &&
+    refusal.cause === 'managed-metro-stop-proof-missing'
+      ? { cause: refusal.cause }
+      : {}),
     nextAction: authored ? (refusal.nextAction ?? fallback) : fallback,
   };
 }
@@ -346,6 +402,9 @@ function refusalOf(error: unknown): StartupCleanupRefusal {
     return publicRefusal({
       code: error.code,
       message: error.message,
+      ...(error.details?.cause === 'managed-metro-stop-proof-missing'
+        ? { cause: error.details.cause }
+        : {}),
       ...(error.details?.nextAction ? { nextAction: error.details.nextAction } : {}),
     });
   }
