@@ -7959,7 +7959,7 @@ function validateCommand(cmd2) {
 function validateRunFlowValue(v) {
   if (typeof v === "string") {
     if (!isSafeMaestroScalar(v)) {
-      throw new MaestroValidationError(`Unsafe runFlow file ref: ${JSON.stringify(v).slice(0, 80)}`);
+      throw new MaestroValidationError(`Unsafe runFlow file ref: ${JSON.stringify(v).slice(0, 80)}`, { runFlowFile: renderRunFlowFileReference(v) });
     }
     return;
   }
@@ -7967,8 +7967,18 @@ function validateRunFlowValue(v) {
     throw new MaestroValidationError(`runFlow value must be a file string or an object, got ${Array.isArray(v) ? "array" : typeof v}`);
   }
   const obj = v;
-  if ("file" in obj && (typeof obj.file !== "string" || !isSafeMaestroScalar(obj.file))) {
-    throw new MaestroValidationError(`runFlow.file must be a safe scalar string`);
+  if ("file" in obj) {
+    const file = obj.file;
+    if (typeof file !== "string") {
+      throw new MaestroValidationError(`runFlow.file must be a safe scalar string`, {
+        runFlowFile: invalidRunFlowFileReference(file)
+      });
+    }
+    if (!isSafeMaestroScalar(file)) {
+      throw new MaestroValidationError(`runFlow.file must be a safe scalar string`, {
+        runFlowFile: renderRunFlowFileReference(file)
+      });
+    }
   }
   if ("when" in obj)
     validateValue(obj.when);

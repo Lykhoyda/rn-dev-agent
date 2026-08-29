@@ -16,6 +16,7 @@ import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, existsSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { runInNewContext } from 'node:vm';
 import {
   createMaestroRunHandler,
   executeMaestroAuthorityStages,
@@ -626,6 +627,27 @@ test('GH #628: a non-string runFlow file refuses with a structured cause', async
   assert.equal(calls.length, 0);
 });
 
+test('GH #628: a nested invalid runFlow file preserves its structured cause', async () => {
+  project.seedAction(
+    'parked-sign-mandate',
+    parkedYaml([
+      `- assertVisible:\n    id: "${PARK_ANCHOR}"`,
+      '- runFlow:\n    commands:\n      - runFlow:\n          file: 123',
+    ]),
+    null,
+  );
+  const calls: Array<Record<string, unknown>> = [];
+  const result = envelope(
+    await handlerWith(calls, { status: 'visible' })({
+      actionId: 'parked-sign-mandate',
+      projectRoot: project.root,
+    }),
+  );
+  assert.equal(result.code, 'BAD_RECORDING');
+  assert.deepEqual(result.meta?.cause, { parkedRunFlowFile: '<invalid:number>' });
+  assert.equal(calls.length, 0);
+});
+
 test('GH #628: unsafe runFlow references retain safe bounded structured causes', async () => {
   const references = [
     { yaml: 'missing\\n.yaml', expected: 'missing\\n.yaml' },
@@ -1069,6 +1091,33 @@ test('GH #628 probe adapter: classifies visible / missing / backgrounded / timeo
   );
 });
 
+test('GH #628 probe adapter reads explicit AppState from a Metro Map registry', async () => {
+  const modules = new Map([
+    [
+      1,
+      {
+        isInitialized: true,
+        verboseName: 'node_modules/react-native/Libraries/AppState/AppState.js',
+        publicModule: { exports: { default: { currentState: 'background' } } },
+      },
+    ],
+  ]);
+  const probe = createParkAnchorProbe(() => ({
+    isConnected: true,
+    bridgeWithFallback: (call: string) => call,
+    evaluate: async (expression: string) => ({
+      value: runInNewContext(expression, {
+        globalThis: { __r: { getModules: () => modules } },
+      }) as unknown,
+    }),
+  }));
+
+  assert.deepEqual(await probe(PARK_ANCHOR), {
+    status: 'backgrounded',
+    reason: 'AppState.currentState is "background"',
+  });
+});
+
 test('GH #628: recorder handler forwards entry: parked to the Detox refusal', async () => {
   _setStoredEvents([{ type: 'tap', testID: PARK_ANCHOR, t: 1 }]);
   try {
@@ -1240,7 +1289,7 @@ test('GH #628: parked auto-repair never retries after a completed mutation', asy
   assert.equal(repairCalls, 0);
 });
 
-test('GH #628: parked auto-repair rechecks the park state before retry', async () => {
+test('GH #628: parked auto-repair refuses before lifecycle-mutating repair', async () => {
   project.seedAction(
     'parked-sign-mandate',
     parkedYaml([
@@ -1255,9 +1304,7 @@ test('GH #628: parked auto-repair rechecks the park state before retry', async (
   const handler = createPinnedRunActionHandler({
     probeParkAnchor: async () => {
       probeCalls += 1;
-      return probeCalls === 1
-        ? ({ status: 'visible' } as const)
-        : ({ status: 'anchor-missing', reason: 'opening screen was replaced' } as const);
+      return { status: 'visible' as const };
     },
     maestroRun: async () => {
       maestroCalls += 1;
@@ -1294,10 +1341,74 @@ test('GH #628: parked auto-repair rechecks the park state before retry', async (
   );
 
   assert.equal(result.ok, false);
-  assert.equal(result.code, 'PARK_STATE_MISSING');
-  assert.equal(probeCalls, 2);
+  assert.equal(result.code, 'TESTID_NOT_FOUND');
+  assert.match(result.error ?? '', /repair relaunches the app.*cannot preserve entry: parked/);
+  assert.equal(
+    (result.meta?.autoRepair as Record<string, unknown>)?.refusedReason,
+    'NOT_REPAIRABLE_KIND',
+  );
+  assert.equal(probeCalls, 1);
   assert.equal(maestroCalls, 1);
+  assert.equal(repairCalls, 0);
+});
+
+test('GH #628 control: cold auto-repair still repairs and retries', async () => {
+  project.seedAction(
+    'parked-sign-mandate',
+    parkedYaml([
+      `- assertVisible:\n    id: "${PARK_ANCHOR}"`,
+      '- tapOn:\n    id: "stale-selector"',
+    ]).replace('# entry: parked', '# entry: cold'),
+    null,
+  );
+  let maestroCalls = 0;
+  let repairCalls = 0;
+  let probeCalls = 0;
+  const handler = createPinnedRunActionHandler({
+    probeParkAnchor: async () => {
+      probeCalls += 1;
+      return { status: 'visible' as const };
+    },
+    maestroRun: async () => {
+      maestroCalls += 1;
+      return maestroCalls === 1
+        ? selectorFailure(
+            [
+              { index: 0, verb: 'assertVisible', status: 'pass' },
+              { index: 1, verb: 'tapOn', status: 'fail' },
+            ],
+            1,
+          )
+        : { content: [{ type: 'text' as const, text: JSON.stringify(PASS_ENV) }] };
+    },
+    repairAction: async () => {
+      repairCalls += 1;
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: JSON.stringify({
+              ok: true,
+              data: {
+                patched: true,
+                oldSelector: 'stale-selector',
+                newSelector: 'fresh-selector',
+              },
+            }),
+          },
+        ],
+      };
+    },
+  });
+
+  const result = envelope(
+    await handler({ actionId: 'parked-sign-mandate', projectRoot: project.root }),
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(maestroCalls, 2);
   assert.equal(repairCalls, 1);
+  assert.equal(probeCalls, 0);
 });
 
 // ─── Cold-entry behavior unchanged ──────────────────────────────────────────

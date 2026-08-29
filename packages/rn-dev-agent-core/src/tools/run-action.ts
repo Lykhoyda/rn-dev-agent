@@ -81,7 +81,6 @@ import { flowUsesClearState, resolveIosAppFile } from './resolve-ios-app-file.js
 import { actionReplayPreflight } from '../domain/action-engine-compat.js';
 import {
   deriveParkAnchor,
-  parkedCommandMayMutate,
   parkedBodyViolation,
   resolveEntryMode,
   type ParkRefusalCause,
@@ -390,45 +389,6 @@ function readMaestroTerminal(env: MaestroEnvelope): MaestroTerminal | undefined 
   if (fromData) return fromData;
   const fromMeta = (env.meta as { terminal?: MaestroTerminal } | undefined)?.terminal;
   return fromMeta;
-}
-
-const PARKED_READ_ONLY_STEP_VERBS = new Set([
-  'assertVisible',
-  'assertNotVisible',
-  'extendedWaitUntil',
-  'waitForAnimationToEnd',
-  'assert',
-  'waitVisible',
-  'wait',
-]);
-
-function completedParkedMutation(env: MaestroEnvelope, commands: readonly unknown[]): boolean {
-  const metaSteps = (env.meta as { steps?: unknown } | undefined)?.steps;
-  const steps = Array.isArray(env.data?.steps)
-    ? env.data.steps
-    : Array.isArray(metaSteps)
-      ? metaSteps
-      : [];
-  let passedSteps = 0;
-  for (const rawStep of steps) {
-    if (!rawStep || typeof rawStep !== 'object') continue;
-    const step = rawStep as { index?: unknown; verb?: unknown; name?: unknown; status?: unknown };
-    if (step.status !== 'pass') continue;
-    passedSteps += 1;
-    const verb = String(step.verb ?? step.name ?? '');
-    if (PARKED_READ_ONLY_STEP_VERBS.has(verb)) continue;
-    const index = Number(step.index);
-    if (verb === 'runFlow' && Number.isSafeInteger(index) && commands[index] !== undefined) {
-      if (parkedCommandMayMutate(commands[index])) return true;
-      continue;
-    }
-    return true;
-  }
-  const completedSteps = readMaestroTerminal(env)?.completedSteps ?? 0;
-  if (passedSteps >= completedSteps) return false;
-  return commands
-    .slice(0, Math.max(0, completedSteps))
-    .some((command) => parkedCommandMayMutate(command));
 }
 
 function readMaestroOutput(env: MaestroEnvelope): string {
@@ -1352,7 +1312,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
         );
       }
 
-      if (entryMode === 'parked' && completedParkedMutation(firstEnv, preflightCommands)) {
+      if (entryMode === 'parked') {
         const autoRepair: AutoRepairOutcome = {
           attempted: false,
           outcome: 'refused',
@@ -1369,7 +1329,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
           autoRepair,
         });
         return failResult(
-          `cdp_run_action: ${args.actionId} failed with SELECTOR_NOT_FOUND (${failure.selector}) after a parked mutation completed; auto-repair retry refused because replaying the body could repeat that mutation.`,
+          `cdp_run_action: ${args.actionId} failed with SELECTOR_NOT_FOUND (${failure.selector}); auto-repair refused because repair relaunches the app and cannot preserve entry: parked state.`,
           'TESTID_NOT_FOUND',
           {
             actionId: args.actionId,
@@ -1479,20 +1439,6 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
       }
       const retryYaml = reloadedAction.replay.yamlText;
 
-      const retryParkRefusal = await runParkPreflight(
-        reloadedAction.replay.commands,
-        reloadedAction.metadata,
-        {
-          attempted: true,
-          outcome: 'refused',
-          refusedReason: 'NOT_REPAIRABLE_KIND',
-          phases: { firstAttemptMs, repairMs },
-        },
-        'retry',
-        'auto-repair',
-      );
-      if (retryParkRefusal) return retryParkRefusal;
-
       const tBeforeRetry = Date.now();
       probeDeviceId = null;
       const retryCorpusRefusal = replayCorpusIdentityRefusal(loadContext, args.actionId);
@@ -1521,7 +1467,6 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
         completeRunnerPark: (signal) => completeManagedRunnerParkAuthority(args, signal),
         reissueInstallReceipt: () => reissueInstallReceipt(args),
       };
-      if (entryMode === 'parked') markParkPreflightPassed(retryRunArgs);
       const retryResult = await measureStep('maestro-retry', () => maestroRun(retryRunArgs));
       const retryMs = Date.now() - tBeforeRetry;
       const retryEnv = parseEnvelope(retryResult, 'maestro_run');

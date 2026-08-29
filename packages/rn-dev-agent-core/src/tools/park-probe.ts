@@ -23,15 +23,27 @@ const APP_STATE_EXPR = `(function () {
     var mods = r && typeof r.getModules === 'function' ? r.getModules() : null;
     if (!mods) return JSON.stringify({ state: 'unknown', reason: 'metro dev registry unavailable' });
     var scanned = 0;
-    for (var key in mods) {
-      if (++scanned > 40000) return JSON.stringify({ state: 'unknown', reason: 'registry scan budget exceeded' });
-      var mod = mods[key];
-      if (!mod || !mod.isInitialized || !mod.verboseName) continue;
-      if (mod.verboseName.indexOf('Libraries/AppState/AppState') === -1) continue;
+    function readAppState(mod) {
+      if (!mod || !mod.isInitialized || !mod.verboseName) return null;
+      if (mod.verboseName.indexOf('Libraries/AppState/AppState') === -1) return null;
       var exp = mod.publicModule && mod.publicModule.exports;
       var appState = exp && (exp.default || exp);
       var state = appState && appState.currentState;
       return JSON.stringify({ state: typeof state === 'string' ? state : 'unknown' });
+    }
+    if (typeof mods.values === 'function') {
+      var iterator = mods.values();
+      while (true) {
+        var next = iterator.next();
+        if (next.done) break;
+        if (++scanned > 40000) return JSON.stringify({ state: 'unknown', reason: 'registry scan budget exceeded' });
+        var result = readAppState(next.value);
+        if (result) return result;
+      }
+    } else for (var key in mods) {
+      if (++scanned > 40000) return JSON.stringify({ state: 'unknown', reason: 'registry scan budget exceeded' });
+      var legacyResult = readAppState(mods[key]);
+      if (legacyResult) return legacyResult;
     }
     return JSON.stringify({ state: 'unknown', reason: 'AppState module not initialized' });
   } catch (e) {

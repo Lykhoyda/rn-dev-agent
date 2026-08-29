@@ -205,6 +205,7 @@ function validateRunFlowValue(v: unknown): void {
     if (!isSafeMaestroScalar(v)) {
       throw new MaestroValidationError(
         `Unsafe runFlow file ref: ${JSON.stringify(v).slice(0, 80)}`,
+        { runFlowFile: renderRunFlowFileReference(v) },
       );
     }
     return;
@@ -215,8 +216,18 @@ function validateRunFlowValue(v: unknown): void {
     );
   }
   const obj = v as Record<string, unknown>;
-  if ('file' in obj && (typeof obj.file !== 'string' || !isSafeMaestroScalar(obj.file))) {
-    throw new MaestroValidationError(`runFlow.file must be a safe scalar string`);
+  if ('file' in obj) {
+    const file = obj.file;
+    if (typeof file !== 'string') {
+      throw new MaestroValidationError(`runFlow.file must be a safe scalar string`, {
+        runFlowFile: invalidRunFlowFileReference(file),
+      });
+    }
+    if (!isSafeMaestroScalar(file)) {
+      throw new MaestroValidationError(`runFlow.file must be a safe scalar string`, {
+        runFlowFile: renderRunFlowFileReference(file),
+      });
+    }
   }
   if ('when' in obj) validateValue(obj.when);
   if ('commands' in obj) {

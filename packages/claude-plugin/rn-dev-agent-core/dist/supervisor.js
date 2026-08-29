@@ -28062,7 +28062,7 @@ function validateCommand(cmd) {
 function validateRunFlowValue(v) {
   if (typeof v === "string") {
     if (!isSafeMaestroScalar(v)) {
-      throw new MaestroValidationError(`Unsafe runFlow file ref: ${JSON.stringify(v).slice(0, 80)}`);
+      throw new MaestroValidationError(`Unsafe runFlow file ref: ${JSON.stringify(v).slice(0, 80)}`, { runFlowFile: renderRunFlowFileReference(v) });
     }
     return;
   }
@@ -28070,8 +28070,18 @@ function validateRunFlowValue(v) {
     throw new MaestroValidationError(`runFlow value must be a file string or an object, got ${Array.isArray(v) ? "array" : typeof v}`);
   }
   const obj = v;
-  if ("file" in obj && (typeof obj.file !== "string" || !isSafeMaestroScalar(obj.file))) {
-    throw new MaestroValidationError(`runFlow.file must be a safe scalar string`);
+  if ("file" in obj) {
+    const file = obj.file;
+    if (typeof file !== "string") {
+      throw new MaestroValidationError(`runFlow.file must be a safe scalar string`, {
+        runFlowFile: invalidRunFlowFileReference(file)
+      });
+    }
+    if (!isSafeMaestroScalar(file)) {
+      throw new MaestroValidationError(`runFlow.file must be a safe scalar string`, {
+        runFlowFile: renderRunFlowFileReference(file)
+      });
+    }
   }
   if ("when" in obj)
     validateValue(obj.when);
@@ -79011,16 +79021,6 @@ function parkedBodyViolation(commands) {
   }
   return null;
 }
-function parkedCommandMayMutate(command) {
-  const name = commandName(command);
-  const composite = compositeShape(command);
-  if (composite?.kind === "file")
-    return true;
-  if (composite?.kind === "inline") {
-    return composite.commands.some((nested) => parkedCommandMayMutate(nested));
-  }
-  return name === null || !PARKED_READ_ONLY_COMMANDS.has(name);
-}
 function anchorIdOf(name, value) {
   if (!value || typeof value !== "object" || Array.isArray(value))
     return null;
@@ -83394,33 +83394,6 @@ function readMaestroTerminal(env) {
   const fromMeta = env.meta?.terminal;
   return fromMeta;
 }
-function completedParkedMutation(env, commands) {
-  const metaSteps = env.meta?.steps;
-  const steps = Array.isArray(env.data?.steps) ? env.data.steps : Array.isArray(metaSteps) ? metaSteps : [];
-  let passedSteps = 0;
-  for (const rawStep of steps) {
-    if (!rawStep || typeof rawStep !== "object")
-      continue;
-    const step = rawStep;
-    if (step.status !== "pass")
-      continue;
-    passedSteps += 1;
-    const verb = String(step.verb ?? step.name ?? "");
-    if (PARKED_READ_ONLY_STEP_VERBS.has(verb))
-      continue;
-    const index = Number(step.index);
-    if (verb === "runFlow" && Number.isSafeInteger(index) && commands[index] !== void 0) {
-      if (parkedCommandMayMutate(commands[index]))
-        return true;
-      continue;
-    }
-    return true;
-  }
-  const completedSteps = readMaestroTerminal(env)?.completedSteps ?? 0;
-  if (passedSteps >= completedSteps)
-    return false;
-  return commands.slice(0, Math.max(0, completedSteps)).some((command) => parkedCommandMayMutate(command));
-}
 function readMaestroOutput(env) {
   if (typeof env.data?.output === "string")
     return env.data.output;
@@ -84000,7 +83973,7 @@ function createRunActionHandler(deps = {}) {
       if (failure.kind !== "SELECTOR_NOT_FOUND") {
         throw new Error("Internal: isAutoRepairable returned true for non-SELECTOR_NOT_FOUND failure");
       }
-      if (entryMode === "parked" && completedParkedMutation(firstEnv, preflightCommands)) {
+      if (entryMode === "parked") {
         const autoRepair2 = {
           attempted: false,
           outcome: "refused",
@@ -84016,7 +83989,7 @@ function createRunActionHandler(deps = {}) {
           trigger,
           autoRepair: autoRepair2
         });
-        return failResult(`cdp_run_action: ${args.actionId} failed with SELECTOR_NOT_FOUND (${failure.selector}) after a parked mutation completed; auto-repair retry refused because replaying the body could repeat that mutation.`, "TESTID_NOT_FOUND", {
+        return failResult(`cdp_run_action: ${args.actionId} failed with SELECTOR_NOT_FOUND (${failure.selector}); auto-repair refused because repair relaunches the app and cannot preserve entry: parked state.`, "TESTID_NOT_FOUND", {
           actionId: args.actionId,
           failureKind: failure.kind,
           failureSelector: failure.selector,
@@ -84092,14 +84065,6 @@ function createRunActionHandler(deps = {}) {
         return failResult(`cdp_run_action: repaired action is not valid Maestro YAML: ${reloadedAction.replay.error}`, "BAD_RECORDING", { actionId: args.actionId });
       }
       const retryYaml = reloadedAction.replay.yamlText;
-      const retryParkRefusal = await runParkPreflight(reloadedAction.replay.commands, reloadedAction.metadata, {
-        attempted: true,
-        outcome: "refused",
-        refusedReason: "NOT_REPAIRABLE_KIND",
-        phases: { firstAttemptMs, repairMs }
-      }, "retry", "auto-repair");
-      if (retryParkRefusal)
-        return retryParkRefusal;
       const tBeforeRetry = Date.now();
       probeDeviceId = null;
       const retryCorpusRefusal = replayCorpusIdentityRefusal(loadContext, args.actionId);
@@ -84129,8 +84094,6 @@ function createRunActionHandler(deps = {}) {
         completeRunnerPark: (signal) => completeManagedRunnerParkAuthority(args, signal),
         reissueInstallReceipt: () => reissueInstallReceipt(args)
       };
-      if (entryMode === "parked")
-        markParkPreflightPassed(retryRunArgs);
       const retryResult = await measureStep("maestro-retry", () => maestroRun(retryRunArgs));
       const retryMs = Date.now() - tBeforeRetry;
       const retryEnv = parseEnvelope(retryResult, "maestro_run");
@@ -84301,7 +84264,7 @@ async function persistRun(actionId, projectRoot, record2) {
   }
   return { promoted: false, promotionRefused: false };
 }
-var strictRunActionPolicy, PROVEN_ENGINE_PIN_DIVERGENCE, PARKED_READ_ONLY_STEP_VERBS, OUTPUT_BUDGET, OUTPUT_ELISION;
+var strictRunActionPolicy, PROVEN_ENGINE_PIN_DIVERGENCE, OUTPUT_BUDGET, OUTPUT_ELISION;
 var init_run_action = __esm({
   "packages/rn-dev-agent-core/dist/tools/run-action.js"() {
     "use strict";
@@ -84326,15 +84289,6 @@ var init_run_action = __esm({
     init_tap_latency();
     strictRunActionPolicy = /* @__PURE__ */ Symbol("strictRunActionPolicy");
     PROVEN_ENGINE_PIN_DIVERGENCE = /* @__PURE__ */ new Set(["drift-newer", "drift-older", "checksum-mismatch"]);
-    PARKED_READ_ONLY_STEP_VERBS = /* @__PURE__ */ new Set([
-      "assertVisible",
-      "assertNotVisible",
-      "extendedWaitUntil",
-      "waitForAnimationToEnd",
-      "assert",
-      "waitVisible",
-      "wait"
-    ]);
     OUTPUT_BUDGET = 500;
     OUTPUT_ELISION = "\n\u2026\n";
   }
@@ -84410,15 +84364,27 @@ var init_park_probe = __esm({
     var mods = r && typeof r.getModules === 'function' ? r.getModules() : null;
     if (!mods) return JSON.stringify({ state: 'unknown', reason: 'metro dev registry unavailable' });
     var scanned = 0;
-    for (var key in mods) {
-      if (++scanned > 40000) return JSON.stringify({ state: 'unknown', reason: 'registry scan budget exceeded' });
-      var mod = mods[key];
-      if (!mod || !mod.isInitialized || !mod.verboseName) continue;
-      if (mod.verboseName.indexOf('Libraries/AppState/AppState') === -1) continue;
+    function readAppState(mod) {
+      if (!mod || !mod.isInitialized || !mod.verboseName) return null;
+      if (mod.verboseName.indexOf('Libraries/AppState/AppState') === -1) return null;
       var exp = mod.publicModule && mod.publicModule.exports;
       var appState = exp && (exp.default || exp);
       var state = appState && appState.currentState;
       return JSON.stringify({ state: typeof state === 'string' ? state : 'unknown' });
+    }
+    if (typeof mods.values === 'function') {
+      var iterator = mods.values();
+      while (true) {
+        var next = iterator.next();
+        if (next.done) break;
+        if (++scanned > 40000) return JSON.stringify({ state: 'unknown', reason: 'registry scan budget exceeded' });
+        var result = readAppState(next.value);
+        if (result) return result;
+      }
+    } else for (var key in mods) {
+      if (++scanned > 40000) return JSON.stringify({ state: 'unknown', reason: 'registry scan budget exceeded' });
+      var legacyResult = readAppState(mods[key]);
+      if (legacyResult) return legacyResult;
     }
     return JSON.stringify({ state: 'unknown', reason: 'AppState module not initialized' });
   } catch (e) {
