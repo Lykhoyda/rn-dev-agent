@@ -186,6 +186,29 @@ test('a launcher exit with no recorded evidence still reports a truthful bare re
   });
 });
 
+test('a silent Metro generation does not inherit an earlier generation log cause', async () => {
+  const runtimeRoot = mkdtempSync(join(tmpdir(), 'rn-managed-metro-generation-log-'));
+  await boundManagedMetro(runtimeRoot);
+  writeFileSync(join(runtimeRoot, 'metro.log'), 'Error: listen EADDRINUSE\n');
+
+  const binding = await boundManagedMetro(runtimeRoot);
+  const inspection = inspectManagedMetroLifecycle(
+    binding as unknown as Record<string, unknown>,
+    { sessionId: SESSION_ID, signerCapability: SIGNER },
+    {
+      exists: () => true,
+      probeBirth: (pid: number) => (pid === LAUNCHER_PID ? { status: 'absent' } : liveBirth(pid)),
+      probeListener: () => ({ status: 'listening', pid: LISTENER_PID }),
+    } as never,
+  );
+
+  assert.deepEqual(inspection, {
+    status: 'lost',
+    code: 'METRO_LAUNCHER_EXITED',
+    reason: 'authenticated managed Metro launcher exited',
+  });
+});
+
 test('an unsigned runtime violation is never attributed to a launcher exit', async () => {
   const runtimeRoot = mkdtempSync(join(tmpdir(), 'rn-managed-metro-launcher-forged-'));
   const binding = await boundManagedMetro(runtimeRoot);

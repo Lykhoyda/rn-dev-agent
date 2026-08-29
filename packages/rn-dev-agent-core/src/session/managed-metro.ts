@@ -2210,7 +2210,7 @@ export async function startManagedMetro(
       : null;
   const logPath = join(input.runtimeRoot, 'metro.log');
   rmSync(launcherDiagnosticPath, { force: true });
-  const log = openSync(logPath, 'a', 0o600);
+  const log = openSync(logPath, 'w', 0o600);
   const child = (dependencies.spawnProcess ?? spawn)(
     launchCommand.nodeExecutable,
     ['-e', METRO_LAUNCHER_SOURCE],

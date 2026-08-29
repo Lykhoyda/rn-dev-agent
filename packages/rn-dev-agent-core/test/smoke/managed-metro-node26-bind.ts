@@ -171,16 +171,34 @@ async function main(): Promise<void> {
     }
   };
 
-  // Allocated after the supervisor, so a throw from startSupervisor cannot leak a
-  // simulator that nothing is yet in scope to delete; a failure here has to take
-  // the supervisor down with it for the same reason.
   let udid: string;
   try {
     udid = simctl(['create', deviceName, DEVICE_TYPE, runtime]);
   } catch (error) {
-    await stopSupervisor(supervisor);
-    if (!process.env.MANAGED_METRO_PROOF_STATE_DIR) {
-      rmSync(STATE_DIR, { recursive: true, force: true });
+    const failures: Error[] = [];
+    let supervisorStopped = false;
+    try {
+      supervisorStopped = await stopSupervisor(supervisor);
+    } catch (stopError) {
+      failures.push(new Error(`the proof supervisor could not be stopped: ${String(stopError)}`));
+    }
+    if (!supervisorStopped && failures.length === 0) {
+      failures.push(new Error('the proof supervisor did not exit'));
+    }
+    if (!process.env.MANAGED_METRO_PROOF_STATE_DIR && supervisorStopped) {
+      try {
+        rmSync(STATE_DIR, { recursive: true, force: true });
+      } catch (removeError) {
+        failures.push(
+          new Error(`the proof state directory was not removed: ${String(removeError)}`),
+        );
+      }
+    }
+    if (failures.length > 0) {
+      throw new AggregateError(
+        [error, ...failures],
+        'simulator creation failed and proof cleanup did not complete',
+      );
     }
     throw error;
   }
@@ -309,11 +327,6 @@ async function main(): Promise<void> {
   } catch (error) {
     primaryError = error;
   } finally {
-    // Cleanup must never throw: an exception here would mask the failure that
-    // brought us in. Every outcome is recorded and judged after the block, on the
-    // failure path too. Each step is judged on the tool's own {ok} envelope —
-    // call() resolves a failed envelope rather than rejecting, so catching alone
-    // proves nothing.
     try {
       stopEnvelope = await call('rn_session', { action: 'stop_metro', projectRoot: APP_ROOT });
       log('metro stopped', `ok=${stopEnvelope?.ok}`);
@@ -344,8 +357,12 @@ async function main(): Promise<void> {
     } catch (error) {
       log('session release failed', String(error));
     }
-    if (!(await stopSupervisor(supervisor))) {
-      cleanupFailures.push('the proof supervisor did not exit');
+    let supervisorStopped = false;
+    try {
+      supervisorStopped = await stopSupervisor(supervisor);
+      if (!supervisorStopped) cleanupFailures.push('the proof supervisor did not exit');
+    } catch (error) {
+      cleanupFailures.push(`the proof supervisor could not be stopped: ${String(error)}`);
     }
     try {
       simctl(['shutdown', udid]);
@@ -365,7 +382,7 @@ async function main(): Promise<void> {
     } catch (error) {
       cleanupFailures.push(`the device inventory could not be read: ${String(error)}`);
     }
-    if (!process.env.MANAGED_METRO_PROOF_STATE_DIR) {
+    if (!process.env.MANAGED_METRO_PROOF_STATE_DIR && supervisorStopped) {
       try {
         rmSync(STATE_DIR, { recursive: true, force: true });
       } catch (error) {
