@@ -5,7 +5,7 @@
   "description": "Claude Code rn-dev-agent plugin package and changesets version source for host manifests.",
   "license": "MIT",
   "engines": {
-    "node": ">=22.5"
+    "node": ">=24"
   },
   "dependencies": {
     "rn-dev-agent-core": "workspace:*",

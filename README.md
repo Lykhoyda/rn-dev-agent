@@ -74,7 +74,7 @@ read-only and prints the exact commands for the user to confirm and run.
 
 | Check | Required | Automatic handling |
 |-------|----------|--------------|
-| Node.js ≥ 22.18 LTS | Yes | No |
+| Node.js ≥ 24 | Yes | No |
 | CDP bridge deps | Yes | Yes |
 | rn-fast-runner (iOS) | iOS targets only | Prebuilt artifact on releases; one-time `xcodebuild build-for-testing` fallback |
 | rn-android-runner (Android) | Android targets only | Prebuilt artifact on releases; Gradle build fallback on first use |

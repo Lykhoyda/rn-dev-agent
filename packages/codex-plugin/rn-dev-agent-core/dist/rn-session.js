@@ -13308,6 +13308,10 @@ function runManagedMetroEnforcementPreflight(plan, dependencies = {}) {
   }
 }
 
+// packages/rn-dev-agent-core/dist/session/strict-proof-limits.js
+var MAX_STRICT_PROOF_FILE_BYTES = 16 * 1024 * 1024;
+var MAX_STRICT_PROOF_DEPENDENCY_ENTRIES = 5e4;
+
 // packages/rn-dev-agent-core/dist/session/managed-metro.js
 var METRO_LAUNCHER_SOURCE = String.raw`
 const { spawn, spawnSync } = require('node:child_process');
@@ -13325,6 +13329,7 @@ const intrinsicNumberIsFinite = Number.isFinite;
 const intrinsicReflectApply = Reflect.apply;
 const intrinsicObjectPrototype = Object.prototype;
 const IntrinsicObject = Object;
+const IntrinsicSet = Set;
 const IntrinsicWeakSet = WeakSet;
 const intrinsicWeakSetAdd = WeakSet.prototype.add;
 const intrinsicWeakSetDelete = WeakSet.prototype.delete;
@@ -13745,6 +13750,74 @@ function appendViolation(value) {
     digest: null,
   });
 }
+const fixedChildViolationValues = new IntrinsicSet([
+  'Metro descendant execution semantics are unavailable',
+  'Metro descendant parent identity is unavailable',
+  'Metro descendant parent nonce is unavailable',
+  'Metro runtime module URL scheme is unsupported',
+  'Metro runtime module cannot be resolved',
+  'additional Metro runtime loader hooks are unsupported',
+  'Metro runtime module loading requires Node.js 24 or newer',
+]);
+function normalizeChildViolationPayload(payload) {
+  const names = intrinsicReflectApply(intrinsicGetOwnPropertyNames, IntrinsicObject, [payload]);
+  intrinsicReflectApply(intrinsicArraySort, names, []);
+  if (
+    names.join('\0') !==
+      'digest\0kind\0metroInstanceId\0runtimeEvidenceAuthority\0sessionId\0value\0version' ||
+    payload.runtimeEvidenceAuthority !== 'reported-v1' ||
+    typeof payload.value !== 'string' ||
+    payload.value.length === 0 ||
+    Buffer.byteLength(payload.value, 'utf8') > 4_096
+  ) {
+    return null;
+  }
+  let structured;
+  try {
+    structured = JSON.parse(payload.value);
+  } catch {}
+  if (structured && typeof structured === 'object' && !intrinsicArrayIsArray(structured)) {
+    const structuredNames = intrinsicReflectApply(
+      intrinsicGetOwnPropertyNames,
+      IntrinsicObject,
+      [structured],
+    );
+    intrinsicReflectApply(intrinsicArraySort, structuredNames, []);
+    if (
+      structuredNames.join('\0') === 'arity\0code\0convention\0nodeVersion\0stage' &&
+      structured.code === 'RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION' &&
+      structured.stage === 'native-spawn' &&
+      typeof structured.nodeVersion === 'string' &&
+      structured.nodeVersion.length <= 32 &&
+      /^\d+\.\d+\.\d+$/.test(structured.nodeVersion) &&
+      ['object', 'positional', 'unverified'].includes(structured.convention) &&
+      Number.isSafeInteger(structured.arity) &&
+      structured.arity >= 0 &&
+      structured.arity <= 16
+    ) {
+      return canonicalAuthorityJson(structured);
+    }
+    if (
+      structuredNames.join('\0') === 'cleanup\0code\0pid\0reason\0recipient' &&
+      structured.code === 'MANAGED_TRANSFORM_CHANNEL_STALLED' &&
+      ['not-required', 'signal-accepted', 'target-retired', 'signal-refused'].includes(
+        structured.cleanup,
+      ) &&
+      (structured.pid === null ||
+        (Number.isSafeInteger(structured.pid) && structured.pid > 0)) &&
+      ['timeout', 'exit-before-first-exchange'].includes(structured.reason) &&
+      /^[a-f0-9]{32}$/.test(structured.recipient)
+    ) {
+      return canonicalAuthorityJson(structured);
+    }
+    return null;
+  }
+  if (fixedChildViolationValues.has(payload.value)) return payload.value;
+  const code = /^(RN_DEV_AGENT_[A-Z0-9_]+|METRO_[A-Z0-9_]+)(?::(?: [\x20-\x7e]*)?)?$/.exec(
+    payload.value,
+  );
+  return code ? code[1] + ':' : null;
+}
 function publishNativeAddonAcknowledgment(requestId, acknowledgment) {
   writeFileSync(
     nativeAddonAcknowledgmentRoot + '/' + requestId + '.json',
@@ -13865,9 +13938,8 @@ function handleNativeAddonRequest(payload) {
   } catch (error) {
     const reason =
       error?.code === 'NATIVE_ADDON_OUTSIDE_ROOTS'
-        ? 'RN_DEV_AGENT_UNSUPPORTED_NATIVE_ADDON: ' + error.message
-        : 'METRO_NATIVE_ADDON_EVIDENCE_UNAVAILABLE: ' +
-          (error instanceof Error ? error.message : 'native addon bytes could not be verified');
+        ? 'RN_DEV_AGENT_UNSUPPORTED_NATIVE_ADDON:'
+        : 'METRO_NATIVE_ADDON_EVIDENCE_UNAVAILABLE: native addon bytes could not be verified';
     appendViolation(reason);
     if (request && /^[a-f0-9]{32}$/.test(request.requestId || '')) {
       try {
@@ -14153,9 +14225,11 @@ evidence.on('data', (chunk) => {
           'native-addon-request',
           'native-addon-completion',
           'stability',
+          'observation',
           'unattested-utility',
         ].includes(payload.kind) ||
         typeof payload.value !== 'string' ||
+        (payload.kind === 'observation' && payload.value.length > 4_096) ||
         (payload.kind === 'input' || payload.kind === 'stability'
           ? typeof payload.digest !== 'string'
           : payload.digest !== null)
@@ -14179,7 +14253,9 @@ evidence.on('data', (chunk) => {
         continue;
       }
       if (payload.kind === 'violation') {
-        appendViolation(payload.value);
+        const normalizedViolation = normalizeChildViolationPayload(payload);
+        if (!normalizedViolation) throw new Error('invalid evidence');
+        appendViolation(normalizedViolation);
         continue;
       }
       if (payload.kind === 'input') {
@@ -14535,6 +14611,35 @@ function verifyManagedMetroManagementProof(binding, input) {
   const observedBuffer = Buffer.from(binding.managementProof, "hex");
   return expectedBuffer.length === observedBuffer.length && timingSafeEqual3(expectedBuffer, observedBuffer);
 }
+function managedMetroExitAttribution(binding, input) {
+  const runtimeRoot = dirname3(binding.runtimeEvidencePath);
+  const runtimePolicyCapability = createHmac3("sha256", input.signerCapability).update("metro-runtime-policy").digest("base64url");
+  const violation = latestSignedRuntimeViolation(binding.runtimeEvidencePath, runtimePolicyCapability, { sessionId: input.sessionId, metroInstanceId: binding.instanceId });
+  const diagnostic2 = readManagedMetroLauncherDiagnostic(join3(runtimeRoot, "metro-launcher-diagnostic.json"));
+  const logCauses = managedMetroFirstPartyLogCauses(join3(runtimeRoot, "metro.log"));
+  const redactions = [
+    runtimeRoot,
+    input.sessionId,
+    binding.instanceId,
+    input.signerCapability,
+    runtimePolicyCapability
+  ];
+  const details = [
+    diagnostic2 ? sanitizeManagedMetroStartupDetailValue(`stage ${diagnostic2.stage}`, redactions) : null,
+    diagnostic2?.detail ? sanitizeManagedMetroStartupDetailValue(diagnostic2.detail, redactions) : null,
+    violation ? sanitizeManagedMetroStartupDetailValue(`runtime violation: ${violation}`, redactions).slice(0, 2048) : null
+  ].filter((detail) => Boolean(detail));
+  if (logCauses) {
+    const prefix = "Metro log causes: ";
+    const used = details.join("; ").length;
+    const available = 4096 - used - (used > 0 ? 2 : 0) - prefix.length;
+    if (available > 0)
+      details.push(`${prefix}${logCauses.slice(0, available)}`);
+  }
+  if (details.length === 0)
+    return null;
+  return details.join("; ");
+}
 function exactManagedProcessInspection(role, pid, birth, probe) {
   const prefix = role === "launcher" ? "METRO_LAUNCHER" : "METRO_LISTENER";
   if (probe.status === "absent") {
@@ -14569,12 +14674,18 @@ function inspectManagedMetroLifecycle(binding, input, dependencies = {}) {
     };
   }
   const probeBirth = dependencies.probeBirth ?? probeProcessBirth;
+  const attributed = (inspection) => {
+    if (inspection.status === "live" || !inspection.code.endsWith("_EXITED"))
+      return inspection;
+    const attribution = managedMetroExitAttribution(binding, input);
+    return attribution ? { ...inspection, attribution } : inspection;
+  };
   const launcher = exactManagedProcessInspection("launcher", binding.launcherPid, binding.launcherBirth, probeBirth(binding.launcherPid));
   if (launcher)
-    return launcher;
+    return attributed(launcher);
   const listener = exactManagedProcessInspection("listener", binding.pid, binding.birth, probeBirth(binding.pid));
   if (listener)
-    return listener;
+    return attributed(listener);
   const port = (dependencies.probeListener ?? probeManagedMetroListener)(binding.port);
   if (port.status === "absent") {
     return {
@@ -14669,11 +14780,12 @@ function canonicalRuntimeInput(path) {
 function latestSignedRuntimeViolation(path, capability, expected) {
   try {
     const bytes = readFileSync4(path);
-    if (bytes.byteLength > 2 * 1024 * 1024)
+    if (bytes.byteLength > MAX_STRICT_PROOF_FILE_BYTES)
       return null;
     let previousSignature = null;
     let sequence = 0;
     let latest = null;
+    let latestFirstParty = null;
     for (const line of bytes.toString("utf8").split("\n").filter(Boolean)) {
       const observed = JSON.parse(line);
       const signature = observed.signature;
@@ -14687,12 +14799,17 @@ function latestSignedRuntimeViolation(path, capability, expected) {
         return null;
       }
       sequence += 1;
+      if (sequence > MAX_STRICT_PROOF_DEPENDENCY_ENTRIES)
+        return null;
       previousSignature = signature;
       if (payload.kind === "violation" && typeof payload.value === "string") {
         latest = payload.value;
+        if (/\bRN_DEV_AGENT_[A-Z0-9_]+\b/.test(payload.value)) {
+          latestFirstParty = payload.value;
+        }
       }
     }
-    return latest;
+    return latestFirstParty ?? latest;
   } catch {
     return null;
   }
@@ -14731,13 +14848,24 @@ function readManagedMetroLauncherDiagnostic(path) {
     return null;
   }
 }
-function sanitizeManagedMetroStartupDetail(value, redactions) {
+var MANAGED_METRO_FIRST_PARTY_LOG_CAUSE = /\bRN_DEV_AGENT_[A-Z0-9_]+\b|\bNode\.js v\d+\.\d+\.\d+\b|\bJavaScript heap out of memory\b|\b(?:EADDRINUSE|EADDRNOTAVAIL|EACCES|EMFILE|ENFILE|ENOMEM|ENOSPC|EPIPE)\b/g;
+function managedMetroFirstPartyLogCauses(path) {
+  const tail = boundedMetroLogTail(path, 65536);
+  if (!tail)
+    return null;
+  const causes = [...new Set(tail.match(MANAGED_METRO_FIRST_PARTY_LOG_CAUSE) ?? [])].slice(0, 16);
+  return causes.length > 0 ? causes.join(", ") : null;
+}
+function sanitizeManagedMetroStartupDetailValue(value, redactions) {
   let sanitized = value.replace(/[^\t\n\r\x20-\x7e]/g, "?");
   for (const redaction of [...redactions].sort((left, right) => right.length - left.length)) {
     if (redaction)
       sanitized = sanitized.replaceAll(redaction, "<redacted>");
   }
-  return sanitized.replace(/\b(?:Basic|Bearer)\s+\S+/gi, "<redacted-authorization>").replace(/(\b[A-Za-z_][A-Za-z0-9_.-]*(?:access[-_]?key|token|secret|password|passwd|pwd|credential|api[-_]?key|authorization|auth|cookie|private[-_]?key)[A-Za-z0-9_.-]*\b["']?\s*[:=]\s*["']?)[^"'\s,;}]+/gi, "$1<redacted>").replace(/\b([a-z][a-z0-9+.-]*:\/\/)[^/\s@]+@/gi, "$1<redacted>@").replace(/[A-Za-z]:\\(?:[^\\\s]+\\)*[^\\\s]*/g, "<path>").replace(/(?:\/[A-Za-z0-9._@%+~=-]+){2,}/g, "<path>").trim().slice(-4096);
+  return sanitized.replace(/\b(?:Basic|Bearer)\s+\S+/gi, "<redacted-authorization>").replace(/(\b[A-Za-z_][A-Za-z0-9_.-]*(?:access[-_]?key|token|secret|password|passwd|pwd|credential|api[-_]?key|authorization|auth|cookie|private[-_]?key)[A-Za-z0-9_.-]*\b["']?\s*[:=]\s*["']?)[^"'\s,;}]+/gi, "$1<redacted>").replace(/\b([a-z][a-z0-9+.-]*:\/\/)[^/\s@]+@/gi, "$1<redacted>@").replace(/[A-Za-z]:\\(?:[^\\\s]+\\)*[^\\\s]*/g, "<path>").replace(/(?:\/[A-Za-z0-9._@%+~=-]+){2,}/g, "<path>").trim();
+}
+function sanitizeManagedMetroStartupDetail(value, redactions) {
+  return sanitizeManagedMetroStartupDetailValue(value, redactions).slice(-4096);
 }
 function boundedManagedMetroStartupMessage(code, details) {
   const compactDetails = details.filter((detail) => Boolean(detail));
@@ -14974,7 +15102,7 @@ async function startManagedMetro(input, dependencies = {}) {
   const enforcementReceiptForAdmission = runtimeEnforcement.status === "enforced" && "receipt" in runtimeEnforcement ? runtimeEnforcement.receipt : null;
   const logPath = join3(input.runtimeRoot, "metro.log");
   rmSync2(launcherDiagnosticPath, { force: true });
-  const log = openSync3(logPath, "a", 384);
+  const log = openSync3(logPath, "w", 384);
   const child = (dependencies.spawnProcess ?? spawn)(launchCommand.nodeExecutable, ["-e", METRO_LAUNCHER_SOURCE], {
     cwd: input.appRoot,
     env: {
@@ -15332,7 +15460,6 @@ function digest2(parts) {
   }
   return hash.digest("hex");
 }
-var MAX_STRICT_PROOF_FILE_BYTES = 16 * 1024 * 1024;
 var MAX_STRICT_PROOF_TOTAL_BYTES = 64 * 1024 * 1024;
 var MAX_STRICT_PROOF_DEPENDENCY_FILE_BYTES = 128 * 1024 * 1024;
 var MAX_STRICT_PROOF_DEPENDENCY_TOTAL_BYTES = 512 * 1024 * 1024;
@@ -17464,7 +17591,8 @@ function projectPublicAuthorityStatus(status, options = {}) {
     code: metroTerminal.code,
     reason: metroTerminal.reason,
     phase: metroTerminal.phase,
-    observedAt: metroTerminal.observedAt
+    observedAt: metroTerminal.observedAt,
+    ...typeof metroTerminal.attribution === "string" ? { attribution: metroTerminal.attribution } : {}
   } : void 0;
   const sandbox = metro?.runtimeEvidenceAuthority === "managed-sandbox-v1" ? "managed-sandbox-v1" : "unavailable";
   const phase = derivePublicPhase(status.state, Boolean(status.bindings.pendingBuild));
@@ -18076,7 +18204,8 @@ function reconcileManagedMetroStatus(status) {
         reason: inspection.reason,
         phase: status.bindings.bundle ? "after-bind" : "before-bind",
         observedAt: Date.now(),
-        instanceId: metro.instanceId
+        instanceId: metro.instanceId,
+        ...inspection.attribution ? { attribution: inspection.attribution } : {}
       },
       bundle: null
     },

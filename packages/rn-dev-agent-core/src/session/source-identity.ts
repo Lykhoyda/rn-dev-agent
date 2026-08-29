@@ -23,6 +23,10 @@ import {
 } from './declared-source-contract.js';
 import type { MetroRuntimeEvidenceAuthority } from './managed-metro.js';
 import { verifyManagedMetroEnforcementReceipt } from './managed-metro-enforcement.js';
+import {
+  MAX_STRICT_PROOF_DEPENDENCY_ENTRIES,
+  MAX_STRICT_PROOF_FILE_BYTES,
+} from './strict-proof-limits.js';
 
 export interface GitSourceIdentity {
   kind: 'git';
@@ -75,9 +79,7 @@ function digest(parts: readonly (string | Buffer)[]): string {
 }
 
 const MAX_STRICT_PROOF_FILES = 4_096;
-const MAX_STRICT_PROOF_FILE_BYTES = 16 * 1024 * 1024;
 const MAX_STRICT_PROOF_TOTAL_BYTES = 64 * 1024 * 1024;
-const MAX_STRICT_PROOF_DEPENDENCY_ENTRIES = 50_000;
 const MAX_STRICT_PROOF_DEPENDENCY_DEPTH = 128;
 const MAX_STRICT_PROOF_DEPENDENCY_FILE_BYTES = 128 * 1024 * 1024;
 const MAX_STRICT_PROOF_DEPENDENCY_TOTAL_BYTES = 512 * 1024 * 1024;
@@ -589,7 +591,8 @@ function metroRuntimeInputs(
         load.kind !== 'semantics' &&
         load.kind !== 'pending' &&
         load.kind !== 'completion' &&
-        load.kind !== 'stability') ||
+        load.kind !== 'stability' &&
+        load.kind !== 'observation') ||
       typeof load.value !== 'string' ||
       !Number.isSafeInteger(load.sequence) ||
       load.sequence !== evidenceSequence + 1 ||
@@ -667,6 +670,12 @@ function metroRuntimeInputs(
         throw new Error('STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime load evidence is invalid');
       }
       (load.kind === 'pending' ? pendingIpcCompletions : completedIpcCompletions).add(load.value);
+      continue;
+    }
+    if (load.kind === 'observation') {
+      if (load.value.length > 4_096) {
+        throw new Error('STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime observation is unbounded');
+      }
       continue;
     }
     const prior = runtimeLoads.get(key);

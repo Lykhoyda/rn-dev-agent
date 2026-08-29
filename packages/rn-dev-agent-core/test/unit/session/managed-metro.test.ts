@@ -565,10 +565,6 @@ test('managed Metro binds the actual listener rather than the launcher shim', as
     calls[0]?.args[1] ?? '',
     /createHash\('sha256'\)\.update\(snapshot\).*if \(!argumentPaths\.has\(entry\.path\)\) continue/s,
   );
-  assert.match(
-    calls[0]?.args[1] ?? '',
-    /if \(payload\.kind === 'violation'\) \{\s+appendViolation/,
-  );
   assert.match(calls[0]?.args[1] ?? '', /appendEvidence\(payload\);/);
 });
 
@@ -694,7 +690,6 @@ test('managed Metro stops polling when the launcher exits by signal', async () =
         .digest('hex'),
     })}\n`,
   );
-  writeFileSync(join(runtimeRoot, 'metro.log'), 'first line\nnative addon startup failed\n');
   let listenerProbes = 0;
   try {
     await assert.rejects(
@@ -734,15 +729,10 @@ test('managed Metro stops polling when the launcher exits by signal', async () =
       (error: Error) => {
         assert.match(error.message, /^RN_DEV_AGENT_UNSUPPORTED_NATIVE_ADDON:/);
         assert.match(error.message, /launcher signal SIGTERM/);
-        assert.match(error.message, /native addon startup failed/);
         return true;
       },
     );
     assert.equal(listenerProbes, 0);
-    assert.match(
-      readFileSync(join(runtimeRoot, 'metro.log'), 'utf8'),
-      /native addon startup failed/,
-    );
   } finally {
     rmSync(runtimeRoot, { force: true, recursive: true });
   }

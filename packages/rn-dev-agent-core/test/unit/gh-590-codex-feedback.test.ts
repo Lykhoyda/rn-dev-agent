@@ -13,6 +13,15 @@ async function text(path: string): Promise<string> {
   return readFile(join(repoRoot, path), 'utf8');
 }
 
+async function nodeVersionShim(root: string, version: string): Promise<string> {
+  const shim = join(root, 'node-version-shim.cjs');
+  await writeFile(
+    shim,
+    `Object.defineProperty(process.versions, 'node', { value: ${JSON.stringify(version)}, configurable: true });\n`,
+  );
+  return shim;
+}
+
 test('Codex launcher bypasses the process-wide bridge lock without changing app cwd', async () => {
   const temp = await mkdtemp(join(tmpdir(), 'rn-gh590-'));
   const probe = join(temp, 'probe.json');
@@ -49,9 +58,19 @@ test('Codex launcher bypasses the process-wide bridge lock without changing app 
 });
 
 test('Codex launcher enforces the authority runtime Node floor', async () => {
-  const launcher = await text('packages/codex-plugin/bin/cdp-supervisor.js');
-  assert.match(launcher, /nodeMajor === 22 && nodeMinor < 5/);
-  assert.match(launcher, /requires Node\.js >=22\.5/);
+  const temp = await mkdtemp(join(tmpdir(), 'rn-gh590-node-floor-'));
+  try {
+    const shim = await nodeVersionShim(temp, '23.11.0');
+    const result = spawnSync(
+      process.execPath,
+      ['--require', shim, join(repoRoot, 'packages/codex-plugin/bin/cdp-supervisor.js')],
+      { encoding: 'utf8' },
+    );
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(result.stderr, /requires Node\.js >=24/);
+  } finally {
+    await rm(temp, { recursive: true, force: true });
+  }
 });
 
 test('installed host packages declare and execute the authority runtime floor', async () => {
@@ -64,14 +83,24 @@ test('installed host packages declare and execute the authority runtime floor', 
     ].map(async (path) => JSON.parse(await text(path))),
   );
   for (const manifest of manifests) {
-    assert.equal(manifest.engines.node, '>=22.5');
+    assert.equal(manifest.engines.node, '>=24');
   }
-  const [claudeSupervisor, codexSupervisor] = await Promise.all([
-    text('packages/claude-plugin/rn-dev-agent-core/dist/supervisor.js'),
-    text('packages/codex-plugin/rn-dev-agent-core/dist/supervisor.js'),
-  ]);
-  assert.match(claudeSupervisor, /requires Node\.js >=22\.5/);
-  assert.match(codexSupervisor, /requires Node\.js >=22\.5/);
+  const temp = await mkdtemp(join(tmpdir(), 'rn-gh590-host-node-floor-'));
+  try {
+    const shim = await nodeVersionShim(temp, '23.11.0');
+    for (const supervisor of [
+      'packages/claude-plugin/rn-dev-agent-core/dist/supervisor.js',
+      'packages/codex-plugin/rn-dev-agent-core/dist/supervisor.js',
+    ]) {
+      const result = spawnSync(process.execPath, ['--require', shim, join(repoRoot, supervisor)], {
+        encoding: 'utf8',
+      });
+      assert.equal(result.status, 1, `${supervisor}: ${result.stderr}`);
+      assert.match(result.stderr, /requires Node\.js >=24/, supervisor);
+    }
+  } finally {
+    await rm(temp, { recursive: true, force: true });
+  }
 });
 
 test('Codex ships a discoverable feedback skill and package-local collector', async () => {

@@ -80,6 +80,73 @@ sibling workspace only when explicitly requested.
   code does not need new layers or types, but it must reuse established domain
   boundaries and must not bypass or duplicate them.
 
+## Supported Node runtimes
+
+`packages/rn-dev-agent-core` declares `engines.node >= 24`; Node 22 and 23 are
+unsupported, while every major from Node 24 onward is supported. The managed Metro
+*launcher* runs under the supervisor's own `process.execPath`, but *Metro
+itself* usually does not: `resolveManagedMetroLaunchCommand` only re-executes
+`process.execPath` when the resolved package bin starts with `#!/usr/bin/env
+node`, and pnpm and npm generate `node_modules/.bin/<tool>` as a `#!/bin/sh`
+shim, whose own `exec node` line re-resolves `node` from `PATH`. So it is the
+operator's `PATH` node, not CI's and not necessarily the supervisor's, that the
+descendant fence must survive.
+
+A test that does not pin `PATH` and assert the Metro listener's actual
+executable cannot distinguish the fixed fence from the unfixed one — it passes
+either way whenever `PATH` resolves a Node outside the affected range.
+`test/smoke/managed-metro-node26-bind.ts` and
+`test/integration/managed-metro-product-bundle.test.ts` both pin and assert it.
+
+Node changed the private `ChildProcess.prototype.spawn` -> `handle.spawn()`
+calling convention from one options object to eight positional arguments, and
+backported it to the 24 line at 24.19.0. The fence in
+`src/session/package-integration.ts` admits by **argument content per position,
+never by Node version**. The one-argument shape must be the authorized options
+object itself. The eight-argument shape must carry, in Node's own slot order,
+`file`, `cwd`, `uid` and `gid` by value; `args`, `envPairs` and `stdio` by
+reference identity; and a flags word recomputed from the `process_wrap`
+`constants` export. So Node 24 and every later major stays functional, including
+majors nobody pinned.
+
+Position is part of the authentication. A native binding reads arguments by
+position and `file` and `cwd` are both plain strings, so tolerating a permutation
+would admit `cwd` in the executable slot — no membership, bijection or type rule
+can separate a reordered ABI from a caller permuting the arguments it was
+authorized for. **A future ABI that reorders `_handle.spawn` therefore refuses
+with a signed `RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION` and stays refused
+until the new order is pinned**; the drift probe and its CI cell turn red first,
+making that a pre-release event rather than a field surprise.
+
+`pinnedNativeSpawnConventions` is a **drift probe, not an admission gate**. An
+unpinned major records a signed `RN_DEV_AGENT_DESCENDANT_CONVENTION_UNVERIFIED`
+observation and keeps working; the table only has to stay truthful about the
+majors it does pin. The `descendant-spawn-convention` CI job covers Node 24.18
+(last object-form 24), 24.x latest (positional), 25.x (a representative
+odd major the table does not list) and 26.x.
+
+**Each authorization admits at most one native spawn.** Inside an active
+authorization, an eight-argument call that authenticates is admitted and retires
+the authorization; an eight-argument call that does not authenticate is refused
+with Node's own errno (`UV_EACCES`, which Node reports through an `'error'` event
+rather than a throw), recorded as a signed violation, and *also* retires the
+authorization — so Node's own call following a forged one is refused. Outside an
+active authorization, on a raw handle, or at any other arity, the call is an
+identity failure and throws.
+
+That is stronger than "re-entrancy throws": a forged re-entrant call cannot
+execute and cannot leave a second admitted spawn behind. Node's own call and a
+forged one are indistinguishable at that site — same handle, same depth, same
+arity — and do not need to be distinguished. Do not add a re-entrancy
+classifier.
+
+Containment buys Node-standard spawn-failure semantics and an attributable
+record — **not** "Metro keeps serving". A caller that registers no `'error'`
+listener (NativeWind's Tailwind wrapper is exactly that shape) still dies on an
+unhandled `'error'` event, and a hard throw would not save it either: Expo's
+bundle path rethrows it top-level. Do not describe containment as keeping Metro
+alive for such callers.
+
 ## Where To Make Changes
 
 - Core MCP behavior: edit `packages/rn-dev-agent-core/src/`, then run
@@ -108,6 +175,13 @@ sibling workspace only when explicitly requested.
   mirrored in the generated adapter) are diagnostics on launch data; never
   reintroduce a pre-install manifest, port-parity, or origin-scan guard that can
   grant or deny authority.
+- `managedMetroExitAttribution` (`src/session/managed-metro.ts`) runs in a later
+  process than `startManagedMetro`, so it has none of the `credentialRedactions`
+  the startup path builds from the managed child environment. It must therefore
+  publish only fixed-vocabulary first-party causes from `metro.log` — never its
+  free text — because `metroTerminal` is persisted into session bindings and
+  projected into public `rn_session` status. Widening it back to a raw log tail
+  re-opens a durable credential leak.
 - Android emulator classification is deliberately split and disagrees for an
   adb-over-TCP serial: `ensureAndroidMetroReverse`
   (`src/session/android-metro-reverse.ts`) reads `ro.kernel.qemu`, while the build

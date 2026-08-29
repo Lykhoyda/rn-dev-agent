@@ -22,7 +22,7 @@ jobs:
 
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e  # v6.4.0 — Phase 134.5 SHA pin
         with:
-          node-version: 22
+          node-version: 24
           cache: yarn
           cache-dependency-path: yarn.lock
 
@@ -129,7 +129,7 @@ jobs:
 
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e  # v6.4.0 — Phase 134.5 SHA pin
         with:
-          node-version: 22
+          node-version: 24
           cache: yarn
           cache-dependency-path: yarn.lock
 
@@ -154,9 +154,44 @@ jobs:
           echo "Unit-test batch $UNIT_TEST_SHARD: discovered $TOTAL_TEST_FILES files; selected $SELECTED_TEST_FILES files"
           corepack yarn test:coverage
 
+  descendant-spawn-convention:
+    name: Metro descendant spawn convention (Node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Node changed ChildProcess.prototype.spawn -> handle.spawn() from one
+        # options object to eight positional arguments, landing on the 24 line at
+        # 24.19.0. The managed-Metro descendant fence authenticates both shapes by
+        # argument content, so both sides of that boundary have to stay covered.
+        # 25 is a representative odd major the pinned drift table does not list:
+        # admission must not depend on it being listed.
+        node: ['24.18', '24', '25', '26']
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2 — Phase 134.5 SHA pin
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e  # v6.4.0 — Phase 134.5 SHA pin
+        with:
+          node-version: ${{ matrix.node }}
+          cache: yarn
+          cache-dependency-path: yarn.lock
+
+      - run: corepack enable
+      - run: corepack yarn install --immutable
+      - run: corepack yarn build:core
+
+      - name: Descendant fence, convention probe and drift detector
+        run: |
+          node --test \
+            packages/rn-dev-agent-core/test/unit/session/metro-spawn-convention-table.test.ts \
+            packages/rn-dev-agent-core/test/unit/session/metro-descendant-spawn-convention.test.ts \
+            packages/rn-dev-agent-core/test/unit/session/managed-metro-launcher-exit-attribution.test.ts \
+            packages/rn-dev-agent-core/test/unit/session/package-integration.test.ts
+
   test:
     name: Build & Test
-    needs: [core-tests, unit-tests]
+    needs: [core-tests, unit-tests, descendant-spawn-convention]
     if: ${{ always() }}
     runs-on: ubuntu-latest
     steps:
@@ -164,11 +199,14 @@ jobs:
         env:
           CORE_TESTS_RESULT: ${{ needs.core-tests.result }}
           UNIT_TESTS_RESULT: ${{ needs.unit-tests.result }}
+          SPAWN_CONVENTION_RESULT: ${{ needs.descendant-spawn-convention.result }}
         run: |
           echo "Core/integration/docs: $CORE_TESTS_RESULT"
           echo "Five unit-test batches: $UNIT_TESTS_RESULT"
+          echo "Descendant spawn convention matrix: $SPAWN_CONVENTION_RESULT"
           test "$CORE_TESTS_RESULT" = success
           test "$UNIT_TESTS_RESULT" = success
+          test "$SPAWN_CONVENTION_RESULT" = success
 
   lint-format:
     name: Lint & format
@@ -177,7 +215,7 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2 — Phase 134.5 SHA pin
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e  # v6.4.0 — Phase 134.5 SHA pin
         with:
-          node-version: 22
+          node-version: 24
           cache: yarn
           cache-dependency-path: yarn.lock
       - run: corepack enable
@@ -194,6 +232,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2 — Phase 134.5 SHA pin
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e  # v6.4.0 — Phase 134.5 SHA pin
+        with:
+          node-version: 24
       - run: bash scripts/sync-versions.sh
 
   require-changeset:
@@ -229,7 +270,7 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2 — Phase 134.5 SHA pin
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e  # v6.4.0 — Phase 134.5 SHA pin
         with:
-          node-version: 22
+          node-version: 24
           cache: yarn
           cache-dependency-path: yarn.lock
       - run: bash scripts/check-web-bundle.sh

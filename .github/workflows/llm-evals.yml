@@ -46,7 +46,7 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
       - name: Install Claude Code CLI (pinned — stream-json schema stability)
         run: npm install -g @anthropic-ai/claude-code@2.1.205
       - name: Install workspace deps

@@ -13,8 +13,7 @@
 #   packages/claude-plugin/scripts/ — generated copies of repo scripts
 #     (single writer: scripts/build-host-runtimes.ts)
 #   packages/codex-plugin/bin/cdp-supervisor.js — shipped launcher; must be
-#     plain .js so `node <file>` works on every supported Node 22.x (a .ts
-#     extension hard-fails before 22.18 regardless of content)
+#     plain .js so `node <file>` works before the runtime support check
 #   packages/codex-plugin/bin/plugin-health.js — esbuild output owned by
 #     build-host-runtimes.ts; source is packages/codex-plugin/src/plugin-health.ts
 #   packages/codex-plugin/scripts/check-vercel-rules.mjs — generated copy of
@@ -47,7 +46,7 @@ violations="$(comm -23 <(printf '%s\n' "$current" | sort) <(sort "$BASELINE"))"
 
 if [ -n "$violations" ]; then
   echo "ERROR: new JavaScript files detected — this repo is TypeScript-only for new code."
-  echo "Write these as .ts (tests run via node --test with type stripping on Node >= 22.18),"
+  echo "Write these as .ts (tests run via node --test with type stripping on Node >= 24),"
   echo "or if this is a deliberate exception, add them to scripts/js-migration-baseline.txt"
   echo "in this PR with a justification in the PR description:"
   printf '  %s\n' $violations

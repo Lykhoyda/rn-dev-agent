@@ -3,7 +3,7 @@
 // app (test-fixtures/). SMOKE_PLATFORM=ios|android selects the lane. CDP is
 // intentionally absent — device_fill exercises its native read-back path.
 // RN_RUNNER_BUILD=local pins runner provenance to the checkout's own build.
-// Executed directly as TypeScript via Node >= 22.18 type stripping (a .mjs
+// Executed directly as TypeScript via Node >= 24 type stripping (a .mjs
 // file would fail ci.yml's check-typescript-only gate).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';

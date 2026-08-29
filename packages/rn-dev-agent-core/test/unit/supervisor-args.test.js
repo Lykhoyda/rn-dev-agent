@@ -54,15 +54,16 @@ describe('sqliteFlagForNode', () => {
   });
 });
 
-test('authority runtime rejects Node versions without node:sqlite', () => {
-  assert.equal(isSupportedNodeVersion('22.4.1'), false);
-  assert.equal(isSupportedNodeVersion('22.5.0'), true);
+test('authority runtime enforces the Node 24 support floor', () => {
+  assert.equal(isSupportedNodeVersion('22.5.0'), false);
+  assert.equal(isSupportedNodeVersion('23.11.0'), false);
   assert.equal(isSupportedNodeVersion('24.0.0'), true);
+  assert.equal(isSupportedNodeVersion('25.0.0'), true);
   assert.equal(
-    unsupportedNodeVersionMessage('22.4.1'),
-    'rn-dev-agent requires Node.js >=22.5; current runtime is 22.4.1',
+    unsupportedNodeVersionMessage('23.11.0'),
+    'rn-dev-agent requires Node.js >=24; current runtime is 23.11.0',
   );
-  assert.equal(unsupportedNodeVersionMessage('22.5.0'), null);
+  assert.equal(unsupportedNodeVersionMessage('24.0.0'), null);
 });
 
 // ── workerSpawnArgs ───────────────────────────────────────────────────────────

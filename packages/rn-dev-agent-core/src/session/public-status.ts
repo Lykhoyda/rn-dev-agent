@@ -136,7 +136,13 @@ export function projectPublicAuthorityStatus(
   });
   const metro = status.bindings.metro as Record<string, unknown> | undefined;
   const metroTerminal = status.bindings.metroTerminal as
-    | { code?: unknown; reason?: unknown; phase?: unknown; observedAt?: unknown }
+    | {
+        code?: unknown;
+        reason?: unknown;
+        phase?: unknown;
+        observedAt?: unknown;
+        attribution?: unknown;
+      }
     | undefined;
   const projectedMetroTerminal = metroTerminal
     ? {
@@ -144,6 +150,9 @@ export function projectPublicAuthorityStatus(
         reason: metroTerminal.reason,
         phase: metroTerminal.phase,
         observedAt: metroTerminal.observedAt,
+        ...(typeof metroTerminal.attribution === 'string'
+          ? { attribution: metroTerminal.attribution }
+          : {}),
       }
     : undefined;
   const sandbox =

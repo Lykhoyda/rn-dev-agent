@@ -1,6 +1,14 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import test from 'node:test';
@@ -14,22 +22,38 @@ type WorkflowJob = {
   if?: string;
   strategy?: {
     'fail-fast'?: boolean;
-    matrix?: { batch?: number[] };
+    matrix?: { batch?: number[]; node?: string[] };
   };
   steps?: Array<{
     name?: string;
     env?: Record<string, string | number>;
     run?: string;
+    uses?: string;
+    with?: Record<string, string | number>;
   }>;
 };
 
-function loadCiJobs(): Record<string, WorkflowJob> {
-  const workflow = parse(
-    readFileSync(join(repositoryRoot, '.github', 'workflows', 'ci.yml'), 'utf8'),
-  ) as { jobs?: Record<string, WorkflowJob> };
+type WorkflowCommand = {
+  executable: string;
+  arguments: string[];
+};
+
+const workflowRoot = join(repositoryRoot, '.github', 'workflows');
+const nodeExecutables = new Set(['node', 'corepack', 'npm', 'npx', 'yarn']);
+const nodeExecutingScripts = new Set(['scripts/sync-versions.sh', './scripts/sync-versions.sh']);
+const shellKeywords = new Set(['!', 'do', 'elif', 'else', 'if', 'then', 'until', 'while']);
+
+function loadWorkflowJobs(fileName: string): Record<string, WorkflowJob> {
+  const workflow = parse(readFileSync(join(workflowRoot, fileName), 'utf8')) as {
+    jobs?: Record<string, WorkflowJob>;
+  };
 
   assert.ok(workflow.jobs);
   return workflow.jobs;
+}
+
+function loadCiJobs(): Record<string, WorkflowJob> {
+  return loadWorkflowJobs('ci.yml');
 }
 
 function loadCoverageScript(): string {
@@ -145,6 +169,137 @@ function captureCoverageArguments(shard?: string): string[] {
   }
 }
 
+function captureNodeArguments(run: string): string[] {
+  const directory = mkdtempSync(join(tmpdir(), 'ci-node-invocation-'));
+  try {
+    const bin = join(directory, 'bin');
+    const argsFile = join(directory, 'node-args');
+    mkdirSync(bin);
+    writeFileSync(join(bin, 'node'), '#!/usr/bin/env sh\nprintf \'%s\\n\' "$@" > "$NODE_ARGS"\n');
+    chmodSync(join(bin, 'node'), 0o755);
+
+    const result = spawnSync('bash', ['-eu', '-o', 'pipefail', '-c', run], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        PATH: `${bin}:${process.env.PATH}`,
+        NODE_ARGS: argsFile,
+      },
+    });
+
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    return readFileSync(argsFile, 'utf8').trim().split('\n');
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+}
+
+function tokenizeWorkflowRun(run: string): string[] {
+  const tokens: string[] = [];
+  let token = '';
+  let quote: "'" | '"' | null = null;
+  let escaped = false;
+  let comment = false;
+
+  const pushToken = () => {
+    if (token) tokens.push(token);
+    token = '';
+  };
+
+  for (let index = 0; index < run.length; index += 1) {
+    const character = run[index]!;
+    if (comment) {
+      if (character === '\n') {
+        comment = false;
+        pushToken();
+        tokens.push('\n');
+      }
+      continue;
+    }
+    if (escaped) {
+      if (character !== '\n') token += character;
+      escaped = false;
+      continue;
+    }
+    if (character === '\\' && quote !== "'") {
+      escaped = true;
+      continue;
+    }
+    if (quote) {
+      if (character === quote) quote = null;
+      else token += character;
+      continue;
+    }
+    if (character === "'" || character === '"') {
+      quote = character;
+      continue;
+    }
+    if (character === '#' && token === '') {
+      comment = true;
+      continue;
+    }
+    if (character === '\n' || character === ';' || character === '|' || character === '&') {
+      pushToken();
+      tokens.push('\n');
+      continue;
+    }
+    if (/\s/.test(character)) {
+      pushToken();
+      continue;
+    }
+    token += character;
+  }
+  pushToken();
+  return tokens;
+}
+
+function normalizeWorkflowCommands(run: string): WorkflowCommand[] {
+  const commands: WorkflowCommand[] = [];
+  let words: string[] = [];
+
+  const pushCommand = () => {
+    let index = 0;
+    while (
+      index < words.length &&
+      (shellKeywords.has(words[index]!) || /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[index]!))
+    ) {
+      index += 1;
+    }
+    if (words[index] === 'env') {
+      index += 1;
+      while (
+        index < words.length &&
+        (words[index]!.startsWith('-') || /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[index]!))
+      ) {
+        index += 1;
+      }
+    }
+    const executable = words[index];
+    if (executable) commands.push({ executable, arguments: words.slice(index + 1) });
+    words = [];
+  };
+
+  for (const token of tokenizeWorkflowRun(run)) {
+    if (token === '\n') pushCommand();
+    else words.push(token);
+  }
+  pushCommand();
+  return commands;
+}
+
+function jobExecutesNode(job: WorkflowJob): boolean {
+  return (job.steps ?? []).some((step) =>
+    normalizeWorkflowCommands(step.run ?? '').some((command) => {
+      const executable = command.executable.split('/').at(-1)!;
+      return (
+        nodeExecutables.has(executable) ||
+        ((executable === 'bash' || executable === 'sh') &&
+          command.arguments.some((argument) => nodeExecutingScripts.has(argument)))
+      );
+    }),
+  );
+}
+
 test('CI exposes five non-cancelling unit-test batches behind Build & Test', () => {
   const jobs = loadCiJobs();
   const coreTests = jobs['core-tests'];
@@ -180,8 +335,66 @@ test('CI exposes five non-cancelling unit-test batches behind Build & Test', () 
 
   assert.ok(aggregate);
   assert.equal(aggregate.name, 'Build & Test');
-  assert.deepEqual(aggregate.needs, ['core-tests', 'unit-tests']);
+  assert.deepEqual(aggregate.needs, ['core-tests', 'unit-tests', 'descendant-spawn-convention']);
   assert.equal(aggregate.if, '${{ always() }}');
+});
+
+test('the descendant spawn convention matrix brackets both Node calling conventions', () => {
+  const jobs = loadCiJobs();
+  const convention = jobs['descendant-spawn-convention'];
+
+  assert.ok(convention, 'ci.yml must gate the managed-Metro descendant spawn convention');
+  assert.equal(convention.strategy?.['fail-fast'], false);
+  // 24.18 is the last object-form 24; 24 latest and 26 are positional. 25 is a representative
+  // odd major the pinned drift table does not list, proving admission does not depend on it.
+  assert.deepEqual(convention.strategy?.matrix?.node, ['24.18', '24', '25', '26']);
+
+  const probe = convention.steps?.find((step) =>
+    step.name?.includes('Descendant fence, convention probe and drift detector'),
+  );
+  assert.ok(probe?.run, 'the matrix must run the convention probe and drift detector');
+  assert.deepEqual(captureNodeArguments(probe.run), [
+    '--test',
+    'packages/rn-dev-agent-core/test/unit/session/metro-spawn-convention-table.test.ts',
+    'packages/rn-dev-agent-core/test/unit/session/metro-descendant-spawn-convention.test.ts',
+    'packages/rn-dev-agent-core/test/unit/session/managed-metro-launcher-exit-attribution.test.ts',
+    'packages/rn-dev-agent-core/test/unit/session/package-integration.test.ts',
+  ]);
+});
+
+test('workflow Node runtimes satisfy the supported floor', () => {
+  const workflowFiles = readdirSync(workflowRoot).filter(
+    (fileName) => fileName.endsWith('.yml') || fileName.endsWith('.yaml'),
+  );
+
+  for (const fileName of workflowFiles) {
+    for (const [jobName, job] of Object.entries(loadWorkflowJobs(fileName))) {
+      const setupSteps = (job.steps ?? []).filter((step) =>
+        step.uses?.startsWith('actions/setup-node@'),
+      );
+      if (jobExecutesNode(job)) {
+        assert.notEqual(
+          setupSteps.length,
+          0,
+          `${fileName}:${jobName} executes Node without selecting a runtime`,
+        );
+      }
+      for (const step of setupSteps) {
+        const nodeVersion = step.with?.['node-version'];
+        assert.notEqual(nodeVersion, undefined, `${fileName}:${jobName} must select Node`);
+        const versions =
+          nodeVersion === '${{ matrix.node }}' ? (job.strategy?.matrix?.node ?? []) : [nodeVersion];
+        assert.notEqual(versions.length, 0, `${fileName}:${jobName} must define its Node matrix`);
+        for (const version of versions) {
+          const major = Number.parseInt(String(version), 10);
+          assert.ok(
+            Number.isSafeInteger(major) && major >= 24,
+            `${fileName}:${jobName} selects unsupported Node ${String(version)}`,
+          );
+        }
+      }
+    }
+  }
 });
 
 test('coverage command inserts the native shard option before authoritative discovery globs', () => {

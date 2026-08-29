@@ -7543,6 +7543,9 @@ const processGroupExists = (pid) => {
 })().catch(() => process.exit(1));
 `;
 
+// packages/rn-dev-agent-core/dist/session/strict-proof-limits.js
+var MAX_STRICT_PROOF_FILE_BYTES = 16 * 1024 * 1024;
+
 // packages/rn-dev-agent-core/dist/session/managed-metro.js
 var METRO_LAUNCHER_SOURCE = String.raw`
 const { spawn, spawnSync } = require('node:child_process');
@@ -7560,6 +7563,7 @@ const intrinsicNumberIsFinite = Number.isFinite;
 const intrinsicReflectApply = Reflect.apply;
 const intrinsicObjectPrototype = Object.prototype;
 const IntrinsicObject = Object;
+const IntrinsicSet = Set;
 const IntrinsicWeakSet = WeakSet;
 const intrinsicWeakSetAdd = WeakSet.prototype.add;
 const intrinsicWeakSetDelete = WeakSet.prototype.delete;
@@ -7980,6 +7984,74 @@ function appendViolation(value) {
     digest: null,
   });
 }
+const fixedChildViolationValues = new IntrinsicSet([
+  'Metro descendant execution semantics are unavailable',
+  'Metro descendant parent identity is unavailable',
+  'Metro descendant parent nonce is unavailable',
+  'Metro runtime module URL scheme is unsupported',
+  'Metro runtime module cannot be resolved',
+  'additional Metro runtime loader hooks are unsupported',
+  'Metro runtime module loading requires Node.js 24 or newer',
+]);
+function normalizeChildViolationPayload(payload) {
+  const names = intrinsicReflectApply(intrinsicGetOwnPropertyNames, IntrinsicObject, [payload]);
+  intrinsicReflectApply(intrinsicArraySort, names, []);
+  if (
+    names.join('\0') !==
+      'digest\0kind\0metroInstanceId\0runtimeEvidenceAuthority\0sessionId\0value\0version' ||
+    payload.runtimeEvidenceAuthority !== 'reported-v1' ||
+    typeof payload.value !== 'string' ||
+    payload.value.length === 0 ||
+    Buffer.byteLength(payload.value, 'utf8') > 4_096
+  ) {
+    return null;
+  }
+  let structured;
+  try {
+    structured = JSON.parse(payload.value);
+  } catch {}
+  if (structured && typeof structured === 'object' && !intrinsicArrayIsArray(structured)) {
+    const structuredNames = intrinsicReflectApply(
+      intrinsicGetOwnPropertyNames,
+      IntrinsicObject,
+      [structured],
+    );
+    intrinsicReflectApply(intrinsicArraySort, structuredNames, []);
+    if (
+      structuredNames.join('\0') === 'arity\0code\0convention\0nodeVersion\0stage' &&
+      structured.code === 'RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION' &&
+      structured.stage === 'native-spawn' &&
+      typeof structured.nodeVersion === 'string' &&
+      structured.nodeVersion.length <= 32 &&
+      /^\d+\.\d+\.\d+$/.test(structured.nodeVersion) &&
+      ['object', 'positional', 'unverified'].includes(structured.convention) &&
+      Number.isSafeInteger(structured.arity) &&
+      structured.arity >= 0 &&
+      structured.arity <= 16
+    ) {
+      return canonicalAuthorityJson(structured);
+    }
+    if (
+      structuredNames.join('\0') === 'cleanup\0code\0pid\0reason\0recipient' &&
+      structured.code === 'MANAGED_TRANSFORM_CHANNEL_STALLED' &&
+      ['not-required', 'signal-accepted', 'target-retired', 'signal-refused'].includes(
+        structured.cleanup,
+      ) &&
+      (structured.pid === null ||
+        (Number.isSafeInteger(structured.pid) && structured.pid > 0)) &&
+      ['timeout', 'exit-before-first-exchange'].includes(structured.reason) &&
+      /^[a-f0-9]{32}$/.test(structured.recipient)
+    ) {
+      return canonicalAuthorityJson(structured);
+    }
+    return null;
+  }
+  if (fixedChildViolationValues.has(payload.value)) return payload.value;
+  const code = /^(RN_DEV_AGENT_[A-Z0-9_]+|METRO_[A-Z0-9_]+)(?::(?: [\x20-\x7e]*)?)?$/.exec(
+    payload.value,
+  );
+  return code ? code[1] + ':' : null;
+}
 function publishNativeAddonAcknowledgment(requestId, acknowledgment) {
   writeFileSync(
     nativeAddonAcknowledgmentRoot + '/' + requestId + '.json',
@@ -8100,9 +8172,8 @@ function handleNativeAddonRequest(payload) {
   } catch (error) {
     const reason =
       error?.code === 'NATIVE_ADDON_OUTSIDE_ROOTS'
-        ? 'RN_DEV_AGENT_UNSUPPORTED_NATIVE_ADDON: ' + error.message
-        : 'METRO_NATIVE_ADDON_EVIDENCE_UNAVAILABLE: ' +
-          (error instanceof Error ? error.message : 'native addon bytes could not be verified');
+        ? 'RN_DEV_AGENT_UNSUPPORTED_NATIVE_ADDON:'
+        : 'METRO_NATIVE_ADDON_EVIDENCE_UNAVAILABLE: native addon bytes could not be verified';
     appendViolation(reason);
     if (request && /^[a-f0-9]{32}$/.test(request.requestId || '')) {
       try {
@@ -8388,9 +8459,11 @@ evidence.on('data', (chunk) => {
           'native-addon-request',
           'native-addon-completion',
           'stability',
+          'observation',
           'unattested-utility',
         ].includes(payload.kind) ||
         typeof payload.value !== 'string' ||
+        (payload.kind === 'observation' && payload.value.length > 4_096) ||
         (payload.kind === 'input' || payload.kind === 'stability'
           ? typeof payload.digest !== 'string'
           : payload.digest !== null)
@@ -8414,7 +8487,9 @@ evidence.on('data', (chunk) => {
         continue;
       }
       if (payload.kind === 'violation') {
-        appendViolation(payload.value);
+        const normalizedViolation = normalizeChildViolationPayload(payload);
+        if (!normalizedViolation) throw new Error('invalid evidence');
+        appendViolation(normalizedViolation);
         continue;
       }
       if (payload.kind === 'input') {
