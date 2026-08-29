@@ -3582,6 +3582,10 @@ trackedTool(
       .enum(['experimental', 'active', 'deprecated'])
       .optional()
       .describe('M7 lifecycle status. When set, emitted as `# status: <status>`.'),
+    entry: z
+      .enum(['cold', 'parked'])
+      .optional()
+      .describe('Start cold, or preserve and preflight an existing parked state.'),
   },
   createRecordTestGenerateHandler(),
 );

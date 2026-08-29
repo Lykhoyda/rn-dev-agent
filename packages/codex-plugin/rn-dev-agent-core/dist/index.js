@@ -77056,6 +77056,9 @@ function metaPairs(opts) {
     });
     out.push(["produces", `{ ${pairs.join(", ")} }`]);
   }
+  if (opts.entry === "parked" && opts.startRoute) {
+    out.push(["expectedRouteSequence", `[${stripNewlines(opts.startRoute)}]`]);
+  }
   return out;
 }
 var TAP_TO_NAV_WINDOW_MS = 1e3;
@@ -77462,7 +77465,8 @@ function createRecordTestGenerateHandler() {
       intent: args.intent,
       tags: args.tags,
       mutates: args.mutates,
-      status: args.status
+      status: args.status,
+      entry: args.entry
     };
     let text;
     try {
@@ -80975,6 +80979,7 @@ function getWorkerAuthorityRuntime() {
 }
 
 // packages/rn-dev-agent-core/dist/tools/run-action.js
+init_maestro_validator();
 var strictRunActionPolicy = /* @__PURE__ */ Symbol("strictRunActionPolicy");
 function sealStrictRunAction(args) {
   Object.defineProperty(args, strictRunActionPolicy, { value: true });
@@ -80982,6 +80987,31 @@ function sealStrictRunAction(args) {
 }
 function usesStrictRunActionPolicy(args) {
   return args[strictRunActionPolicy] === true;
+}
+function parkedRunFlowFileRefusal(actionId, reference) {
+  return failResult(`cdp_run_action: ${actionId} is entry: parked but references subflow file "${reference}" \u2014 a parked body must be fully inspectable inline so no hidden lifecycle command can run.`, "BAD_RECORDING", {
+    actionId,
+    fallback: "none",
+    cause: { parkedRunFlowFile: reference }
+  });
+}
+function parkedRunFlowReference(metadata, yamlText) {
+  const entry = resolveEntryMode(metadata);
+  if (!entry.ok || entry.mode !== "parked")
+    return null;
+  return collectRunFlowFileReferences(yamlText)[0] ?? null;
+}
+function loadParkedRunFlowReference(projectRoot, actionId) {
+  try {
+    const context = openReadableActionLoadContext(projectRoot, {
+      actionId,
+      includeRunFlowFiles: false
+    });
+    const action = context ? loadActionFromContext(context, actionId) : null;
+    return action ? parkedRunFlowReference(action.metadata, action.yamlText) : null;
+  } catch {
+    return null;
+  }
 }
 function boundInstallReceipt() {
   try {
@@ -81211,6 +81241,9 @@ function createRunActionHandler(deps = {}) {
       });
       loaded = openedContext ? loadActionFromContext(openedContext, args.actionId) : null;
     } catch (err) {
+      const reference = loadParkedRunFlowReference(projectRoot, args.actionId);
+      if (reference)
+        return parkedRunFlowFileRefusal(args.actionId, reference);
       return failResult(err instanceof Error ? err.message : String(err), "BAD_FILENAME", {
         actionId: args.actionId,
         fallback: "none"
@@ -81222,16 +81255,19 @@ function createRunActionHandler(deps = {}) {
       });
     }
     let loadContext = openedContext;
-    if (!loaded.replay.ok) {
-      return failResult(`Action ${args.actionId} is not valid Maestro YAML: ${loaded.replay.error}`, "BAD_RECORDING", { actionId: args.actionId, fallback: "none" });
-    }
-    const replayYaml = loaded.replay.yamlText;
-    const preflightCommands = loaded.replay.commands;
     const entryResolution = resolveEntryMode(loaded.metadata);
     if (!entryResolution.ok) {
       return failResult(`cdp_run_action: ${args.actionId} declares unknown entry mode "${entryResolution.raw}" \u2014 use "cold" or "parked".`, "BAD_RECORDING", { actionId: args.actionId, fallback: "none", cause: { invalidEntry: entryResolution.raw } });
     }
     const entryMode = entryResolution.mode;
+    if (!loaded.replay.ok) {
+      const reference = parkedRunFlowReference(loaded.metadata, loaded.yamlText);
+      if (reference)
+        return parkedRunFlowFileRefusal(args.actionId, reference);
+      return failResult(`Action ${args.actionId} is not valid Maestro YAML: ${loaded.replay.error}`, "BAD_RECORDING", { actionId: args.actionId, fallback: "none" });
+    }
+    const replayYaml = loaded.replay.yamlText;
+    const preflightCommands = loaded.replay.commands;
     if (entryMode === "parked") {
       const violation = parkedBodyViolation(preflightCommands);
       if (violation?.kind === "lifecycle") {
@@ -81242,11 +81278,7 @@ function createRunActionHandler(deps = {}) {
         });
       }
       if (violation?.kind === "runflow-file") {
-        return failResult(`cdp_run_action: ${args.actionId} is entry: parked but references subflow file "${violation.reference}" \u2014 a parked body must be fully inspectable inline so no hidden lifecycle command can run.`, "BAD_RECORDING", {
-          actionId: args.actionId,
-          fallback: "none",
-          cause: { parkedRunFlowFile: violation.reference }
-        });
+        return parkedRunFlowFileRefusal(args.actionId, violation.reference);
       }
     }
     const forceReload = proofReplay ? false : args.forceReload !== false;
@@ -95864,7 +95896,8 @@ trackedTool("cdp_record_test_generate", "Render the stored recording as replayab
   intent: external_exports.string().optional().describe("M7 one-line goal. When set, emitted as `# intent: <intent>` header line."),
   tags: external_exports.array(external_exports.string()).optional().describe("M7 filterable tags. When set, emitted as `# tags: [a, b, c]`."),
   mutates: external_exports.boolean().optional().describe("M7 side-effect flag. When set, emitted as `# mutates: true|false`."),
-  status: external_exports.enum(["experimental", "active", "deprecated"]).optional().describe("M7 lifecycle status. When set, emitted as `# status: <status>`.")
+  status: external_exports.enum(["experimental", "active", "deprecated"]).optional().describe("M7 lifecycle status. When set, emitted as `# status: <status>`."),
+  entry: external_exports.enum(["cold", "parked"]).optional().describe("Start cold, or preserve and preflight an existing parked state.")
 }, createRecordTestGenerateHandler());
 trackedTool("cdp_record_test_annotate", 'Push a human-readable note into the live event stream \u2014 appears as a comment in generated tests. Useful for marking flow checkpoints ("reached checkout", "error appeared"). Only valid during an active recording.', {
   note: external_exports.string().min(1).describe("Annotation text")

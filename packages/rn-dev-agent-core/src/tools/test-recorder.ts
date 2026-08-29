@@ -290,6 +290,7 @@ export function createRecordTestGenerateHandler(): (args: GenerateArgs) => Promi
       tags: args.tags,
       mutates: args.mutates,
       status: args.status,
+      entry: args.entry,
     };
     let text: string;
     try {

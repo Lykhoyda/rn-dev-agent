@@ -17,7 +17,12 @@ import assert from 'node:assert/strict';
 import { readFileSync, existsSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { executeMaestroAuthorityStages } from '../../dist/tools/maestro-run.js';
-import { generateDetox, generateMaestro } from '../../dist/tools/test-recorder-generators.js';
+import { generateMaestro } from '../../dist/tools/test-recorder-generators.js';
+import {
+  _resetState,
+  _setStoredEvents,
+  createRecordTestGenerateHandler,
+} from '../../dist/tools/test-recorder.js';
 import { parseM7Header, serializeM7Header } from '../../dist/domain/reusable-action.js';
 import { parkedBodyViolation } from '../../dist/domain/park-entry.js';
 import { createParkAnchorProbe, type ParkProbeClient } from '../../dist/tools/park-probe.js';
@@ -121,9 +126,16 @@ test('GH #628: generateMaestro omits the launch prologue for parked and keeps it
   });
   assert.ok(!parked.includes('- launchApp'), 'parked emission must not self-bootstrap');
   assert.match(parked, /^# entry: parked$/m);
+  assert.match(parked, /^# expectedRouteSequence: \[onboarding\/mandate\]$/m);
   const cold = generateMaestro(events as never, { id: 'c', intent: 'x' });
   assert.ok(cold.includes('- launchApp'), 'cold emission keeps the self-bootstrap prologue');
   assert.ok(!cold.includes('# entry:'));
+  const routedCold = generateMaestro(events as never, {
+    id: 'c',
+    intent: 'x',
+    startRoute: 'onboarding/mandate',
+  });
+  assert.ok(!routedCold.includes('# expectedRouteSequence:'));
 });
 
 // ─── Parked replay (the regression) ─────────────────────────────────────────
@@ -405,15 +417,21 @@ test('GH #628: an unreadable subflow reference refuses BAD_RECORDING with zero d
 
   assert.equal(result.ok, false);
   assert.equal(result.code, 'BAD_RECORDING');
+  assert.deepEqual(result.meta?.cause, { parkedRunFlowFile: 'missing-sub.yaml' });
   assert.equal(calls.length, 0, 'the uninspectable graph never dispatched');
 });
 
-test('GH #628: live route off the recorded start route refuses route-mismatch', async () => {
-  project.seedAction(
-    'parked-sign-mandate',
-    parkedYaml(PARKED_BODY, ['# expectedRouteSequence: [MandateSign, Done]']),
-    null,
-  );
+test('GH #628: generated parked metadata refuses replay off the recorded start route', async () => {
+  const generated = generateMaestro([{ type: 'tap', testID: PARK_ANCHOR, t: 1 }], {
+    bundleId: 'com.test.app',
+    id: 'parked-sign-mandate',
+    intent: 'sign the parked mandate',
+    mutates: true,
+    status: 'experimental',
+    entry: 'parked',
+    startRoute: 'MandateSign',
+  });
+  project.seedAction('parked-sign-mandate', generated, null);
   const calls: Array<Record<string, unknown>> = [];
   const handler = handlerWith(calls, { status: 'visible' }, { getLiveRoute: async () => 'Home' });
 
@@ -523,11 +541,23 @@ test('GH #628 probe adapter: classifies visible / missing / backgrounded / timeo
   );
 });
 
-test('GH #628: Detox generation refuses entry: parked (no preflight exists there)', () => {
-  assert.throws(
-    () => generateDetox([], { id: 'p', intent: 'x', entry: 'parked' }),
-    /parked is supported for Maestro actions only/,
-  );
+test('GH #628: recorder handler forwards entry: parked to the Detox refusal', async () => {
+  _setStoredEvents([{ type: 'tap', testID: PARK_ANCHOR, t: 1 }]);
+  try {
+    const result = envelope(
+      await createRecordTestGenerateHandler()({
+        format: 'detox',
+        id: 'p',
+        intent: 'x',
+        entry: 'parked',
+      }),
+    );
+    assert.equal(result.ok, false);
+    assert.equal(result.code, 'BAD_RECORDING');
+    assert.match(result.error ?? '', /parked is supported for Maestro actions only/);
+  } finally {
+    _resetState();
+  }
 });
 
 // ─── Cold-entry behavior unchanged ──────────────────────────────────────────

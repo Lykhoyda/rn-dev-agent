@@ -49,6 +49,7 @@ import {
   type AutoRepairOutcome,
   type AutoRepairRefusedReason,
   type ActionFailureCode,
+  type M7Metadata,
   appendRunRecord,
   shouldAutoPromoteToActive,
 } from '../domain/reusable-action.js';
@@ -74,6 +75,7 @@ import {
 import { getWorkerAuthorityRuntime } from '../session/runtime.js';
 import { flowUsesClearState, resolveIosAppFile } from './resolve-ios-app-file.js';
 import { actionReplayPreflight } from '../domain/action-engine-compat.js';
+import { collectRunFlowFileReferences } from '../domain/maestro-validator.js';
 import {
   deriveParkAnchor,
   parkedBodyViolation,
@@ -109,6 +111,40 @@ export function sealStrictRunAction(args: RunActionArgs): RunActionArgs {
 
 function usesStrictRunActionPolicy(args: RunActionArgs): boolean {
   return (args as StrictRunActionArgs)[strictRunActionPolicy] === true;
+}
+
+function parkedRunFlowFileRefusal(actionId: string, reference: string): ToolResult {
+  return failResult(
+    `cdp_run_action: ${actionId} is entry: parked but references subflow file "${reference}" — a parked body must be fully inspectable inline so no hidden lifecycle command can run.`,
+    'BAD_RECORDING',
+    {
+      actionId,
+      fallback: 'none',
+      cause: { parkedRunFlowFile: reference },
+    },
+  );
+}
+
+function parkedRunFlowReference(
+  metadata: Pick<M7Metadata, 'entry'>,
+  yamlText: string,
+): string | null {
+  const entry = resolveEntryMode(metadata);
+  if (!entry.ok || entry.mode !== 'parked') return null;
+  return collectRunFlowFileReferences(yamlText)[0] ?? null;
+}
+
+function loadParkedRunFlowReference(projectRoot: string, actionId: string): string | null {
+  try {
+    const context = openReadableActionLoadContext(projectRoot, {
+      actionId,
+      includeRunFlowFiles: false,
+    });
+    const action = context ? loadActionFromContext(context, actionId) : null;
+    return action ? parkedRunFlowReference(action.metadata, action.yamlText) : null;
+  } catch {
+    return null;
+  }
 }
 
 /** GH #705: the session's attested install receipt, or null outside a session. */
@@ -598,6 +634,8 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
       });
       loaded = openedContext ? loadActionFromContext(openedContext, args.actionId) : null;
     } catch (err) {
+      const reference = loadParkedRunFlowReference(projectRoot, args.actionId);
+      if (reference) return parkedRunFlowFileRefusal(args.actionId, reference);
       return failResult(err instanceof Error ? err.message : String(err), 'BAD_FILENAME', {
         actionId: args.actionId,
         fallback: 'none',
@@ -613,7 +651,18 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
       );
     }
     let loadContext = openedContext;
+    const entryResolution = resolveEntryMode(loaded.metadata);
+    if (!entryResolution.ok) {
+      return failResult(
+        `cdp_run_action: ${args.actionId} declares unknown entry mode "${entryResolution.raw}" — use "cold" or "parked".`,
+        'BAD_RECORDING',
+        { actionId: args.actionId, fallback: 'none', cause: { invalidEntry: entryResolution.raw } },
+      );
+    }
+    const entryMode = entryResolution.mode;
     if (!loaded.replay.ok) {
+      const reference = parkedRunFlowReference(loaded.metadata, loaded.yamlText);
+      if (reference) return parkedRunFlowFileRefusal(args.actionId, reference);
       return failResult(
         `Action ${args.actionId} is not valid Maestro YAML: ${loaded.replay.error}`,
         'BAD_RECORDING',
@@ -625,15 +674,6 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
     // GH #628: entry-mode invariants refuse before anything can dispatch. A
     // typo'd mode never downgrades to cold, and a parked body must be fully
     // inspectable and free of app lifecycle transitions.
-    const entryResolution = resolveEntryMode(loaded.metadata);
-    if (!entryResolution.ok) {
-      return failResult(
-        `cdp_run_action: ${args.actionId} declares unknown entry mode "${entryResolution.raw}" — use "cold" or "parked".`,
-        'BAD_RECORDING',
-        { actionId: args.actionId, fallback: 'none', cause: { invalidEntry: entryResolution.raw } },
-      );
-    }
-    const entryMode = entryResolution.mode;
     if (entryMode === 'parked') {
       const violation = parkedBodyViolation(preflightCommands);
       if (violation?.kind === 'lifecycle') {
@@ -648,15 +688,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
         );
       }
       if (violation?.kind === 'runflow-file') {
-        return failResult(
-          `cdp_run_action: ${args.actionId} is entry: parked but references subflow file "${violation.reference}" — a parked body must be fully inspectable inline so no hidden lifecycle command can run.`,
-          'BAD_RECORDING',
-          {
-            actionId: args.actionId,
-            fallback: 'none',
-            cause: { parkedRunFlowFile: violation.reference },
-          },
-        );
+        return parkedRunFlowFileRefusal(args.actionId, violation.reference);
       }
     }
     // GH #173 (sub-issue 3): default-true forceReload acknowledges any

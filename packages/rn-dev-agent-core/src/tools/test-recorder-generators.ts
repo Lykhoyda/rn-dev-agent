@@ -128,6 +128,9 @@ function metaPairs(opts: GenerateOpts): MetaPair[] {
       });
     out.push(['produces', `{ ${pairs.join(', ')} }`]);
   }
+  if (opts.entry === 'parked' && opts.startRoute) {
+    out.push(['expectedRouteSequence', `[${stripNewlines(opts.startRoute)}]`]);
+  }
   return out;
 }
 
