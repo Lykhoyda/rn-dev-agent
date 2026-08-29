@@ -35,17 +35,19 @@ export interface LockE2eTestDeps {
   loadConfig?: (projectRoot: string) => E2eConfig;
 }
 
-function readPassed(result: ToolResult): { passed: boolean; output: string } {
+function readPassed(result: ToolResult): { passed: boolean; output: string; code?: string } {
   try {
     const env = JSON.parse(result.content[0].text) as {
       ok?: boolean;
       data?: { passed?: boolean; output?: string };
       error?: string;
+      code?: string;
       meta?: { output?: string };
     };
     return {
       passed: env.ok === true && env.data?.passed === true,
       output: env.data?.output ?? env.meta?.output ?? env.error ?? '',
+      ...(env.code ? { code: env.code } : {}),
     };
   } catch {
     return { passed: false, output: 'unparseable maestro result' };
@@ -107,8 +109,9 @@ export async function lockE2eTestCore(
   if (resolvedParams) runArgs.params = resolvedParams;
 
   const result = await maestroRun(runArgs);
-  const { passed, output } = readPassed(result);
+  const { passed, output, code } = readPassed(result);
   if (!passed) {
+    if (code === 'BAD_RECORDING') return result;
     let failOutput = output.slice(0, 500);
     if (resolvedParams) {
       const config = loadCfg(projectRoot);

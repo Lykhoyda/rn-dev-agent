@@ -773,9 +773,10 @@ export function createMaestroRunHandler(
     const semanticActionMeta =
       capturedAction?.metadata ??
       args.actionMetadata ??
-      (args.flowPath
-        ? parseM7Header(rawYaml, basename(args.flowPath).replace(/\.ya?ml$/i, ''))
-        : null);
+      parseM7Header(
+        rawYaml,
+        args.flowPath ? basename(args.flowPath).replace(/\.ya?ml$/i, '') : undefined,
+      );
     if (semanticActionMeta) {
       const entryRefusal = learnedActionEntryAdmissionResult(semanticActionMeta, args);
       if (entryRefusal) return entryRefusal;

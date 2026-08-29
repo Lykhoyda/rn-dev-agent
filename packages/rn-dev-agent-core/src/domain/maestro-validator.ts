@@ -325,6 +325,17 @@ function invalidRunFlowFileReference(value: unknown): string {
   return `<invalid:${kind}>`;
 }
 
+function renderRunFlowFileReference(file: string): string {
+  if (isSafeMaestroScalar(file) && file.length <= 240) return file;
+  const escaped = JSON.stringify(file)
+    .slice(1, -1)
+    .replace(
+      /[\u007F-\u009F\u2028\u2029]/g,
+      (character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, '0')}`,
+    );
+  return escaped.length <= 240 ? escaped : `${escaped.slice(0, 237)}...`;
+}
+
 export function collectRunFlowFileReferences(yamlText: string): string[] {
   try {
     const docs = yaml.parseAllDocuments(yamlText, { strict: true });
@@ -404,10 +415,9 @@ export function expandRunFlows(commands: unknown[], opts: ParseAndValidateOption
         runFlowFile: rf.file,
       });
     }
-    validateRunFlowValue((cmd as Record<string, unknown>).runFlow);
-
     if (rf.file !== undefined) {
       try {
+        validateRunFlowValue((cmd as Record<string, unknown>).runFlow);
         const depth = opts._depth ?? 0;
         const max = opts.maxRunFlowDepth ?? 5;
         if (depth >= max) {
@@ -442,10 +452,11 @@ export function expandRunFlows(commands: unknown[], opts: ParseAndValidateOption
       } catch (err) {
         if (err instanceof MaestroValidationError && err.runFlowFile !== undefined) throw err;
         throw new MaestroValidationError(err instanceof Error ? err.message : String(err), {
-          runFlowFile: rf.file,
+          runFlowFile: renderRunFlowFileReference(rf.file),
         });
       }
     } else {
+      validateRunFlowValue((cmd as Record<string, unknown>).runFlow);
       // Inline runFlow (no file) — recurse into nested commands, keep the wrapper.
       const inner = rf.commands
         ? expandRunFlows(rf.commands, { ...opts, _depth: (opts._depth ?? 0) + 1 })

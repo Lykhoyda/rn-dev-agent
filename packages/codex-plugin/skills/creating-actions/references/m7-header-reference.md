@@ -57,5 +57,5 @@ Created lazily by `loadOrInitSidecar` on first load. Holds `runHistory` (cap 50)
 | `ROUTE_DRIFT` | Live navigation diverged from `expectedRouteSequence` — structural change; repair is refused on purpose |
 | `STATE_MISMATCH` | Flow ran but produced wrong state — real regression, not an authoring bug |
 | `MUTATE_PRECONDITION_FAILED` | Entry assumption violated (e.g. not logged in) — make the prologue conditional or compose with a login action |
-| `PARK_STATE_MISSING` | An `entry: parked` action's read-only preflight found the park state absent (anchor/route missing, or the app backgrounded — cause `app-backgrounded`). Drive the app to the park state and retry; replay never launches or navigates for you |
+| `PARK_STATE_MISSING` | An `entry: parked` action's read-only preflight found the park state absent (anchor/route missing, or the app backgrounded — cause `app-backgrounded`). Drive the app to the park state and retry; replay never launches or navigates for you. Non-proof replays persist the refusal RunRecord; `proofReplay` rehearsal preserves its no-sidecar/DB-write contract. |
 | `TIMEOUT` | Flaky timing — add `waitForAnimationToEnd` / anchor asserts instead of sleeps |

@@ -8,6 +8,7 @@ import { stringify as yamlStringify } from 'yaml';
 import type { RecordedEvent } from './test-recorder.js';
 import { ACTION_ENGINE_PIN } from '../domain/engine-pin.js';
 import type { ActionEntryMode } from '../domain/reusable-action.js';
+import { deriveParkAnchor } from '../domain/park-entry.js';
 import { regexSelectorCapabilityRefusal } from '../domain/action-engine-compat.js';
 import { isSafeMaestroScalar, parseAndValidateFlow } from '../domain/maestro-validator.js';
 
@@ -387,6 +388,12 @@ export function generateMaestro(events: RecordedEvent[], opts: GenerateOpts = {}
   const bodyYaml = yaml.replace(/^appId:[^\n]*\n---\n/, '');
   const commands = parseAndValidateFlow(bodyYaml).commands;
   assertRecorderCommandShapes(commands);
+  if (opts.entry === 'parked') {
+    const anchor = deriveParkAnchor(commands);
+    if (!anchor.ok && !anchor.unresolvedParam) {
+      throw new Error(`entry: parked cannot be generated because ${anchor.reason}`);
+    }
+  }
   if (opts.id && opts.intent) {
     const refusal = regexSelectorCapabilityRefusal(commands);
     if (refusal) throw new Error(refusal);

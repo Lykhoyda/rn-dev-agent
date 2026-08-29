@@ -35,6 +35,7 @@ import { createParkAnchorProbe, type ParkProbeClient } from '../../dist/tools/pa
 import { prepareActionVerificationSuite } from '../../dist/domain/action-verification-suite.js';
 import { loadAction, saveAction } from '../../dist/domain/action-store.js';
 import { applyRepair, attemptRepair } from '../../dist/domain/repair-engine.js';
+import { lockE2eTestCore } from '../../dist/tools/lock-e2e-test.js';
 import type { ParkAnchorProbe, RunActionArgs } from '../../dist/tools/run-action.js';
 import type { ToolResult } from '../../dist/utils.js';
 import { createPinnedRunActionHandler, createTmpProject } from '../helpers/tmp-project.js';
@@ -185,6 +186,23 @@ test('GH #628: generateMaestro omits the launch prologue for parked and keeps it
     startRoute: 'onboarding/mandate',
   });
   assert.equal(parseM7Header(routedCold)?.expectedRouteSequence, undefined);
+});
+
+test('GH #628: parked generation refuses every mutation before the shared park anchor', () => {
+  const anchor = { type: 'tap', testID: PARK_ANCHOR, t: 2 } as const;
+  const openings = [
+    { type: 'long_press', testID: 'menu', t: 1 } as const,
+    { type: 'swipe', direction: 'up', t: 1 } as const,
+    { type: 'submit', t: 1 } as const,
+    { type: 'tap', label: 'Continue', t: 1 } as const,
+  ];
+  for (const opening of openings) {
+    assert.throws(
+      () => generateMaestro([opening, anchor], { id: 'p', intent: 'x', entry: 'parked' }),
+      /no id-bearing assertVisible\/extendedWaitUntil\/tapOn opens the body/,
+    );
+  }
+  assert.doesNotThrow(() => generateMaestro([openings[0]!, anchor], { id: 'c', intent: 'x' }));
 });
 
 // ─── Parked replay (the regression) ─────────────────────────────────────────
@@ -413,6 +431,38 @@ test('GH #628 negative control: absent park anchor refuses PARK_STATE_MISSING be
   assert.equal(records[0]?.failureCode, 'MUTATE_PRECONDITION_FAILED');
 });
 
+test('GH #628: proof rehearsals keep both park refusals sidecar-free', async () => {
+  for (const scenario of [
+    {
+      probe: { status: 'anchor-missing', reason: 'wrong screen' } as const,
+      code: 'PARK_STATE_MISSING',
+    },
+    {
+      probe: { status: 'unreachable', reason: 'transport closed' } as const,
+      code: 'CDP_NOT_CONNECTED',
+    },
+  ]) {
+    project.seedAction('parked-sign-mandate', parkedYaml(PARKED_BODY), null);
+    const calls: Array<Record<string, unknown>> = [];
+    const result = envelope(
+      await handlerWith(
+        calls,
+        scenario.probe,
+      )({
+        actionId: 'parked-sign-mandate',
+        projectRoot: project.root,
+        proofReplay: true,
+        autoRepair: false,
+        forceReload: false,
+      }),
+    );
+    assert.equal(result.code, scenario.code);
+    assert.equal(((result.meta?.writes ?? {}) as Record<string, unknown>).runtimeState, 'none');
+    assert.equal(sidecarRecords('parked-sign-mandate').length, 0);
+    assert.equal(calls.length, 0);
+  }
+});
+
 for (const probe of [
   { status: 'unresponsive', reason: 'no answer in 4000ms' } as const,
   { status: 'backgrounded', reason: 'AppState.currentState is "background"' } as const,
@@ -576,6 +626,40 @@ test('GH #628: a non-string runFlow file refuses with a structured cause', async
   assert.equal(calls.length, 0);
 });
 
+test('GH #628: unsafe runFlow references retain safe bounded structured causes', async () => {
+  const references = [
+    { yaml: 'missing\\n.yaml', expected: 'missing\\n.yaml' },
+    { yaml: 'missing\\u2028.yaml', expected: 'missing\\u2028.yaml' },
+    { yaml: `${'a'.repeat(5000)}.yaml`, expected: null },
+  ];
+  for (const reference of references) {
+    project.seedAction(
+      'parked-sign-mandate',
+      parkedYaml([
+        `- assertVisible:\n    id: "${PARK_ANCHOR}"`,
+        `- runFlow:\n    file: "${reference.yaml}"`,
+      ]),
+      null,
+    );
+    const calls: Array<Record<string, unknown>> = [];
+    const result = envelope(
+      await handlerWith(calls, { status: 'visible' })({
+        actionId: 'parked-sign-mandate',
+        projectRoot: project.root,
+      }),
+    );
+    assert.equal(result.code, 'BAD_RECORDING');
+    const cause = (result.meta?.cause as Record<string, unknown>)?.parkedRunFlowFile;
+    assert.equal(typeof cause, 'string');
+    assert.ok(String(cause).length <= 240);
+    assert.ok(!String(cause).includes('\n'));
+    assert.ok(!String(cause).includes('\u2028'));
+    if (reference.expected) assert.equal(cause, reference.expected);
+    else assert.match(String(cause), /\.\.\.$/);
+    assert.equal(calls.length, 0);
+  }
+});
+
 test('GH #628: maestro_run refuses parked and invalid learned-action entry modes', async () => {
   project.seedAction('parked-sign-mandate', parkedYaml(PARKED_BODY), null);
   let spawned = false;
@@ -637,6 +721,31 @@ test('GH #628: maestro_run admits external M7 flows only through the shared entr
   assert.equal(spawned, false);
 });
 
+test('GH #628: maestro_run admits inline M7 flows through the shared entry contract', async () => {
+  let spawned = false;
+  const handler = createMaestroRunHandler({
+    getActiveSession: () => null,
+    execFile: async () => {
+      spawned = true;
+      return { stdout: '', stderr: '' };
+    },
+  });
+
+  const parked = envelope(await handler({ platform: 'ios', inlineYaml: parkedYaml(PARKED_BODY) }));
+  assert.equal(parked.code, 'BAD_RECORDING');
+  assert.match(parked.error ?? '', /cdp_run_action/);
+
+  const invalid = envelope(
+    await handler({
+      platform: 'ios',
+      inlineYaml: parkedYaml(PARKED_BODY).replace('# entry: parked', '# entry: parkd'),
+    }),
+  );
+  assert.equal(invalid.code, 'BAD_RECORDING');
+  assert.deepEqual(invalid.meta?.cause, { invalidEntry: 'parkd' });
+  assert.equal(spawned, false);
+});
+
 test('GH #628: suite executors refuse parked actions before execution', async () => {
   project.seedAction('parked-sign-mandate', parkedYaml(PARKED_BODY), null);
   let executed = false;
@@ -661,6 +770,53 @@ test('GH #628: suite executors refuse parked actions before execution', async ()
   assert.equal(verification.errors[0]?.code, 'BAD_RECORDING');
   assert.match(verification.errors[0]?.error ?? '', /cdp_run_action/);
   assert.equal(executed, false);
+});
+
+test('GH #628: lock-e2e preserves shared parked entry refusal envelopes', async () => {
+  let spawned = false;
+  const maestroRun = createMaestroRunHandler({
+    getActiveSession: () => null,
+    execFile: async () => {
+      spawned = true;
+      return { stdout: '', stderr: '' };
+    },
+  });
+  for (const declaration of [
+    { header: '# entry: parked', invalidEntry: null },
+    { header: '# entry: parkd', invalidEntry: 'parkd' },
+  ]) {
+    project.seedAction(
+      'parked-sign-mandate',
+      parkedYaml(PARKED_BODY).replace('# entry: parked', declaration.header),
+      null,
+    );
+    const result = envelope(
+      await lockE2eTestCore(
+        { actionId: 'parked-sign-mandate', projectRoot: project.root },
+        {
+          maestroRun,
+          getSession: () => ({
+            name: 'test',
+            platform: 'ios',
+            deviceId: 'device',
+            appId: 'com.test.app',
+            openedAt: '',
+          }),
+        },
+      ),
+    );
+    assert.equal(result.code, 'BAD_RECORDING');
+    if (declaration.invalidEntry) {
+      assert.deepEqual(result.meta?.cause, { invalidEntry: declaration.invalidEntry });
+    } else {
+      assert.match(result.error ?? '', /cdp_run_action/);
+    }
+    assert.equal(
+      existsSync(join(project.root, '.rn-agent', 'e2e', 'parked-sign-mandate.yaml')),
+      false,
+    );
+  }
+  assert.equal(spawned, false);
 });
 
 test('GH #628: invalid entry outranks malformed bodies in every alternate executor', async () => {

@@ -24112,6 +24112,12 @@ function invalidRunFlowFileReference(value) {
   const kind = value === null ? "null" : Array.isArray(value) ? "array" : typeof value;
   return `<invalid:${kind}>`;
 }
+function renderRunFlowFileReference(file) {
+  if (isSafeMaestroScalar(file) && file.length <= 240)
+    return file;
+  const escaped = JSON.stringify(file).slice(1, -1).replace(/[\u007F-\u009F\u2028\u2029]/g, (character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`);
+  return escaped.length <= 240 ? escaped : `${escaped.slice(0, 237)}...`;
+}
 function collectRunFlowFileReferences(yamlText) {
   try {
     const docs = import_yaml2.default.parseAllDocuments(yamlText, { strict: true });
@@ -24181,9 +24187,9 @@ function expandRunFlows(commands, opts) {
         runFlowFile: rf.file
       });
     }
-    validateRunFlowValue(cmd.runFlow);
     if (rf.file !== void 0) {
       try {
+        validateRunFlowValue(cmd.runFlow);
         const depth = opts._depth ?? 0;
         const max = opts.maxRunFlowDepth ?? 5;
         if (depth >= max) {
@@ -24217,10 +24223,11 @@ function expandRunFlows(commands, opts) {
         if (err instanceof MaestroValidationError && err.runFlowFile !== void 0)
           throw err;
         throw new MaestroValidationError(err instanceof Error ? err.message : String(err), {
-          runFlowFile: rf.file
+          runFlowFile: renderRunFlowFileReference(rf.file)
         });
       }
     } else {
+      validateRunFlowValue(cmd.runFlow);
       const inner = rf.commands ? expandRunFlows(rf.commands, { ...opts, _depth: (opts._depth ?? 0) + 1 }) : [];
       const wrapped = { commands: inner };
       if (rf.when !== void 0)
@@ -76923,6 +76930,166 @@ function buildAnnotationJs(note) {
 // packages/rn-dev-agent-core/dist/tools/test-recorder-generators.js
 var import_yaml3 = __toESM(require_dist2(), 1);
 
+// packages/rn-dev-agent-core/dist/domain/park-entry.js
+var PARKED_FORBIDDEN_COMMANDS = /* @__PURE__ */ new Set(["launchApp", "stopApp", "killApp", "clearState"]);
+function resolveEntryMode(metadata) {
+  const raw = metadata.entry;
+  if (raw === void 0)
+    return { ok: true, mode: "cold" };
+  if (raw === "cold" || raw === "parked")
+    return { ok: true, mode: raw };
+  return { ok: false, raw: String(raw) };
+}
+function learnedActionEntryRefusal(metadata, parkPreflightPassed2) {
+  const entry = resolveEntryMode(metadata);
+  if (!entry.ok) {
+    return {
+      kind: "invalid-entry",
+      raw: entry.raw,
+      message: `Learned action declares unknown entry mode "${entry.raw}" \u2014 use "cold" or "parked".`
+    };
+  }
+  if (entry.mode === "parked" && !parkPreflightPassed2) {
+    return {
+      kind: "park-preflight-required",
+      message: "Learned action declares entry: parked and requires the read-only park preflight; replay it through cdp_run_action."
+    };
+  }
+  return null;
+}
+function commandName(command) {
+  if (typeof command === "string")
+    return command;
+  if (!command || typeof command !== "object" || Array.isArray(command))
+    return null;
+  const keys = Object.keys(command);
+  return keys.length === 1 ? keys[0] : null;
+}
+function compositeShape(command) {
+  const name = commandName(command);
+  if (name === null || typeof command === "string")
+    return null;
+  const value = command[name];
+  if (name === "runFlow") {
+    if (typeof value === "string")
+      return { kind: "file", reference: value };
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return { kind: "file", reference: String(value) };
+    }
+    const record3 = value;
+    if (typeof record3.file === "string")
+      return { kind: "file", reference: record3.file };
+    return {
+      kind: "inline",
+      name,
+      commands: Array.isArray(record3.commands) ? record3.commands : [],
+      conditional: record3.when !== void 0
+    };
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    return null;
+  const record2 = value;
+  if (!Array.isArray(record2.commands))
+    return null;
+  return {
+    kind: "inline",
+    name,
+    commands: record2.commands,
+    conditional: record2.when !== void 0
+  };
+}
+function parkedBodyViolation(commands) {
+  for (const command of commands) {
+    const name = commandName(command);
+    if (name !== null && PARKED_FORBIDDEN_COMMANDS.has(name)) {
+      return { kind: "lifecycle", command: name };
+    }
+    const composite = compositeShape(command);
+    if (composite?.kind === "file")
+      return { kind: "runflow-file", reference: composite.reference };
+    if (composite?.kind === "inline") {
+      const nested = parkedBodyViolation(composite.commands);
+      if (nested !== null)
+        return nested;
+    }
+  }
+  return null;
+}
+var ANCHOR_COMMANDS = /* @__PURE__ */ new Set(["assertVisible", "extendedWaitUntil", "tapOn"]);
+var PARKED_READ_ONLY_COMMANDS = /* @__PURE__ */ new Set([
+  "assertVisible",
+  "assertNotVisible",
+  "extendedWaitUntil",
+  "waitForAnimationToEnd"
+]);
+function parkedCommandMayMutate(command) {
+  const name = commandName(command);
+  const composite = compositeShape(command);
+  if (composite?.kind === "file")
+    return true;
+  if (composite?.kind === "inline") {
+    return composite.commands.some((nested) => parkedCommandMayMutate(nested));
+  }
+  return name === null || !PARKED_READ_ONLY_COMMANDS.has(name);
+}
+function anchorIdOf(name, value) {
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    return null;
+  const record2 = value;
+  if (name === "extendedWaitUntil") {
+    const visible = record2.visible;
+    return visible && typeof visible === "object" && !Array.isArray(visible) ? anchorIdOf("assertVisible", visible) : null;
+  }
+  return typeof record2.id === "string" && record2.id.length > 0 ? record2.id : null;
+}
+function substituteParams(id, params) {
+  return id.replace(/\$\{([A-Z_][A-Z0-9_]*)\}/g, (whole, key) => params[key] ?? whole);
+}
+function firstAnchorId(commands, canSupplyAnchor = true) {
+  for (const command of commands) {
+    const name = commandName(command);
+    if (name !== null && ANCHOR_COMMANDS.has(name)) {
+      const id = anchorIdOf(name, command[name]);
+      if (id !== null && canSupplyAnchor)
+        return { kind: "anchor", id };
+      if (name === "tapOn")
+        return { kind: "blocked" };
+      continue;
+    }
+    const composite = compositeShape(command);
+    if (composite?.kind === "inline") {
+      const suppliesAnchor = canSupplyAnchor && composite.name === "runFlow" && !composite.conditional;
+      const nested = firstAnchorId(composite.commands, suppliesAnchor);
+      if (nested.kind !== "continue")
+        return nested;
+      continue;
+    }
+    if (name !== null && PARKED_READ_ONLY_COMMANDS.has(name))
+      continue;
+    return { kind: "blocked" };
+  }
+  return { kind: "continue" };
+}
+function deriveParkAnchor(commands, params = {}) {
+  const anchor = firstAnchorId(commands);
+  if (anchor.kind !== "anchor") {
+    return {
+      ok: false,
+      reason: "no id-bearing assertVisible/extendedWaitUntil/tapOn opens the body"
+    };
+  }
+  const id = anchor.id;
+  const substituted = substituteParams(id, params);
+  if (/\$\{[A-Z_][A-Z0-9_]*\}/.test(substituted)) {
+    return {
+      ok: false,
+      reason: `park anchor "${id}" references a parameter with no supplied value`,
+      unresolvedParam: true
+    };
+  }
+  return { ok: true, anchorId: substituted };
+}
+
 // packages/rn-dev-agent-core/dist/domain/action-engine-compat.js
 import { existsSync as existsSync27, lstatSync as lstatSync16, readdirSync as readdirSync10, realpathSync as realpathSync13 } from "node:fs";
 import { basename as basename9, dirname as dirname20, join as join39, resolve as resolve16 } from "node:path";
@@ -77295,6 +77462,12 @@ function generateMaestro(events, opts = {}) {
   const bodyYaml = yaml2.replace(/^appId:[^\n]*\n---\n/, "");
   const commands = parseAndValidateFlow(bodyYaml).commands;
   assertRecorderCommandShapes(commands);
+  if (opts.entry === "parked") {
+    const anchor = deriveParkAnchor(commands);
+    if (!anchor.ok && !anchor.unresolvedParam) {
+      throw new Error(`entry: parked cannot be generated because ${anchor.reason}`);
+    }
+  }
   if (opts.id && opts.intent) {
     const refusal = regexSelectorCapabilityRefusal(commands);
     if (refusal)
@@ -77646,166 +77819,6 @@ function createRecordTestListHandler(getClient2) {
     const recordings = files.filter((f) => f.endsWith(".json")).map((f) => f.replace(/\.json$/, "")).sort();
     return okResult({ dir, files: recordings });
   };
-}
-
-// packages/rn-dev-agent-core/dist/domain/park-entry.js
-var PARKED_FORBIDDEN_COMMANDS = /* @__PURE__ */ new Set(["launchApp", "stopApp", "killApp", "clearState"]);
-function resolveEntryMode(metadata) {
-  const raw = metadata.entry;
-  if (raw === void 0)
-    return { ok: true, mode: "cold" };
-  if (raw === "cold" || raw === "parked")
-    return { ok: true, mode: raw };
-  return { ok: false, raw: String(raw) };
-}
-function learnedActionEntryRefusal(metadata, parkPreflightPassed2) {
-  const entry = resolveEntryMode(metadata);
-  if (!entry.ok) {
-    return {
-      kind: "invalid-entry",
-      raw: entry.raw,
-      message: `Learned action declares unknown entry mode "${entry.raw}" \u2014 use "cold" or "parked".`
-    };
-  }
-  if (entry.mode === "parked" && !parkPreflightPassed2) {
-    return {
-      kind: "park-preflight-required",
-      message: "Learned action declares entry: parked and requires the read-only park preflight; replay it through cdp_run_action."
-    };
-  }
-  return null;
-}
-function commandName(command) {
-  if (typeof command === "string")
-    return command;
-  if (!command || typeof command !== "object" || Array.isArray(command))
-    return null;
-  const keys = Object.keys(command);
-  return keys.length === 1 ? keys[0] : null;
-}
-function compositeShape(command) {
-  const name = commandName(command);
-  if (name === null || typeof command === "string")
-    return null;
-  const value = command[name];
-  if (name === "runFlow") {
-    if (typeof value === "string")
-      return { kind: "file", reference: value };
-    if (!value || typeof value !== "object" || Array.isArray(value)) {
-      return { kind: "file", reference: String(value) };
-    }
-    const record3 = value;
-    if (typeof record3.file === "string")
-      return { kind: "file", reference: record3.file };
-    return {
-      kind: "inline",
-      name,
-      commands: Array.isArray(record3.commands) ? record3.commands : [],
-      conditional: record3.when !== void 0
-    };
-  }
-  if (!value || typeof value !== "object" || Array.isArray(value))
-    return null;
-  const record2 = value;
-  if (!Array.isArray(record2.commands))
-    return null;
-  return {
-    kind: "inline",
-    name,
-    commands: record2.commands,
-    conditional: record2.when !== void 0
-  };
-}
-function parkedBodyViolation(commands) {
-  for (const command of commands) {
-    const name = commandName(command);
-    if (name !== null && PARKED_FORBIDDEN_COMMANDS.has(name)) {
-      return { kind: "lifecycle", command: name };
-    }
-    const composite = compositeShape(command);
-    if (composite?.kind === "file")
-      return { kind: "runflow-file", reference: composite.reference };
-    if (composite?.kind === "inline") {
-      const nested = parkedBodyViolation(composite.commands);
-      if (nested !== null)
-        return nested;
-    }
-  }
-  return null;
-}
-var ANCHOR_COMMANDS = /* @__PURE__ */ new Set(["assertVisible", "extendedWaitUntil", "tapOn"]);
-var PARKED_READ_ONLY_COMMANDS = /* @__PURE__ */ new Set([
-  "assertVisible",
-  "assertNotVisible",
-  "extendedWaitUntil",
-  "waitForAnimationToEnd"
-]);
-function parkedCommandMayMutate(command) {
-  const name = commandName(command);
-  const composite = compositeShape(command);
-  if (composite?.kind === "file")
-    return true;
-  if (composite?.kind === "inline") {
-    return composite.commands.some((nested) => parkedCommandMayMutate(nested));
-  }
-  return name === null || !PARKED_READ_ONLY_COMMANDS.has(name);
-}
-function anchorIdOf(name, value) {
-  if (!value || typeof value !== "object" || Array.isArray(value))
-    return null;
-  const record2 = value;
-  if (name === "extendedWaitUntil") {
-    const visible = record2.visible;
-    return visible && typeof visible === "object" && !Array.isArray(visible) ? anchorIdOf("assertVisible", visible) : null;
-  }
-  return typeof record2.id === "string" && record2.id.length > 0 ? record2.id : null;
-}
-function substituteParams(id, params) {
-  return id.replace(/\$\{([A-Z_][A-Z0-9_]*)\}/g, (whole, key) => params[key] ?? whole);
-}
-function firstAnchorId(commands, canSupplyAnchor = true) {
-  for (const command of commands) {
-    const name = commandName(command);
-    if (name !== null && ANCHOR_COMMANDS.has(name)) {
-      const id = anchorIdOf(name, command[name]);
-      if (id !== null && canSupplyAnchor)
-        return { kind: "anchor", id };
-      if (name === "tapOn")
-        return { kind: "blocked" };
-      continue;
-    }
-    const composite = compositeShape(command);
-    if (composite?.kind === "inline") {
-      const suppliesAnchor = canSupplyAnchor && composite.name === "runFlow" && !composite.conditional;
-      const nested = firstAnchorId(composite.commands, suppliesAnchor);
-      if (nested.kind !== "continue")
-        return nested;
-      continue;
-    }
-    if (name !== null && PARKED_READ_ONLY_COMMANDS.has(name))
-      continue;
-    return { kind: "blocked" };
-  }
-  return { kind: "continue" };
-}
-function deriveParkAnchor(commands, params = {}) {
-  const anchor = firstAnchorId(commands);
-  if (anchor.kind !== "anchor") {
-    return {
-      ok: false,
-      reason: "no id-bearing assertVisible/extendedWaitUntil/tapOn opens the body"
-    };
-  }
-  const id = anchor.id;
-  const substituted = substituteParams(id, params);
-  if (/\$\{[A-Z_][A-Z0-9_]*\}/.test(substituted)) {
-    return {
-      ok: false,
-      reason: `park anchor "${id}" references a parameter with no supplied value`,
-      unresolvedParam: true
-    };
-  }
-  return { ok: true, anchorId: substituted };
 }
 
 // packages/rn-dev-agent-core/dist/tools/save-as-action.js
@@ -80036,7 +80049,7 @@ function createMaestroRunHandler(deps = {}) {
     } else {
       return failResult("Provide either flowPath or inlineYaml.");
     }
-    const semanticActionMeta = capturedAction?.metadata ?? args.actionMetadata ?? (args.flowPath ? parseM7Header(rawYaml, basename10(args.flowPath).replace(/\.ya?ml$/i, "")) : null);
+    const semanticActionMeta = capturedAction?.metadata ?? args.actionMetadata ?? parseM7Header(rawYaml, args.flowPath ? basename10(args.flowPath).replace(/\.ya?ml$/i, "") : void 0);
     if (semanticActionMeta) {
       const entryRefusal = learnedActionEntryAdmissionResult(semanticActionMeta, args);
       if (entryRefusal)
@@ -93020,7 +93033,8 @@ function readPassed(result) {
     const env = JSON.parse(result.content[0].text);
     return {
       passed: env.ok === true && env.data?.passed === true,
-      output: env.data?.output ?? env.meta?.output ?? env.error ?? ""
+      output: env.data?.output ?? env.meta?.output ?? env.error ?? "",
+      ...env.code ? { code: env.code } : {}
     };
   } catch {
     return { passed: false, output: "unparseable maestro result" };
@@ -93064,8 +93078,10 @@ async function lockE2eTestCore(args, deps = {}) {
   if (resolvedParams)
     runArgs.params = resolvedParams;
   const result = await maestroRun(runArgs);
-  const { passed, output } = readPassed(result);
+  const { passed, output, code } = readPassed(result);
   if (!passed) {
+    if (code === "BAD_RECORDING")
+      return result;
     let failOutput = output.slice(0, 500);
     if (resolvedParams) {
       const config2 = loadCfg(projectRoot);

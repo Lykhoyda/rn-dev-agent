@@ -8039,6 +8039,12 @@ function invalidRunFlowFileReference(value) {
   const kind = value === null ? "null" : Array.isArray(value) ? "array" : typeof value;
   return `<invalid:${kind}>`;
 }
+function renderRunFlowFileReference(file) {
+  if (isSafeMaestroScalar(file) && file.length <= 240)
+    return file;
+  const escaped = JSON.stringify(file).slice(1, -1).replace(/[\u007F-\u009F\u2028\u2029]/g, (character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`);
+  return escaped.length <= 240 ? escaped : `${escaped.slice(0, 237)}...`;
+}
 function collectRunFlowFileReferences(yamlText) {
   try {
     const docs = import_yaml.default.parseAllDocuments(yamlText, { strict: true });
@@ -8108,9 +8114,9 @@ function expandRunFlows(commands, opts) {
         runFlowFile: rf.file
       });
     }
-    validateRunFlowValue(cmd2.runFlow);
     if (rf.file !== void 0) {
       try {
+        validateRunFlowValue(cmd2.runFlow);
         const depth = opts._depth ?? 0;
         const max = opts.maxRunFlowDepth ?? 5;
         if (depth >= max) {
@@ -8144,10 +8150,11 @@ function expandRunFlows(commands, opts) {
         if (err instanceof MaestroValidationError && err.runFlowFile !== void 0)
           throw err;
         throw new MaestroValidationError(err instanceof Error ? err.message : String(err), {
-          runFlowFile: rf.file
+          runFlowFile: renderRunFlowFileReference(rf.file)
         });
       }
     } else {
+      validateRunFlowValue(cmd2.runFlow);
       const inner = rf.commands ? expandRunFlows(rf.commands, { ...opts, _depth: (opts._depth ?? 0) + 1 }) : [];
       const wrapped = { commands: inner };
       if (rf.when !== void 0)
@@ -16241,7 +16248,7 @@ function createMaestroRunHandler(deps = {}) {
     } else {
       return failResult("Provide either flowPath or inlineYaml.");
     }
-    const semanticActionMeta = capturedAction?.metadata ?? args.actionMetadata ?? (args.flowPath ? parseM7Header(rawYaml, basename8(args.flowPath).replace(/\.ya?ml$/i, "")) : null);
+    const semanticActionMeta = capturedAction?.metadata ?? args.actionMetadata ?? parseM7Header(rawYaml, args.flowPath ? basename8(args.flowPath).replace(/\.ya?ml$/i, "") : void 0);
     if (semanticActionMeta) {
       const entryRefusal = learnedActionEntryAdmissionResult(semanticActionMeta, args);
       if (entryRefusal)
