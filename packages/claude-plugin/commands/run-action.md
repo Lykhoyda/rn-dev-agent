@@ -147,6 +147,13 @@ Example calls:
    temporary artifact that is deleted after every run — no report path is
    returned, and none should be looked for.
 
+   When `meta.trailingVerification.trailingVerificationOnly === true`, the
+   result remains failed and the goal state remains unproven, but the ledger
+   proved every authored mutation completed and only trailing verification
+   failed. Verify the live state before re-running, and do not add reboot,
+   relaunch, or selector-repair advice. Surface any `RUNTIME_DEGRADED` caveat
+   from the returned error unchanged.
+
    Branch on `data.autoRepair.outcome`:
    - **`outcome === 'skipped'`** with `attempted: false`: happy path —
      report `✅ <flow-name> passed in <durationMs>ms` and stop.
@@ -162,8 +169,9 @@ Example calls:
    - **`outcome === 'refused'`** with `refusedReason`: auto-repair declined
      (user disabled, file edited since load, repair budget exhausted, or
      no candidate). Surface the refused reason verbatim — DO NOT edit
-     the flow yourself; suggest re-running with `--no-auto-repair` to
-     see the raw failure or running `cdp_repair_action` manually.
+     the flow yourself. Unless `meta.trailingVerification` is present, suggest
+     re-running with `--no-auto-repair` to see the raw failure or running
+     `cdp_repair_action` manually.
 
    In all cases, diagnose in three lines max — point at the most likely
    cause (stale testID, iOS keyboard digraph drop per

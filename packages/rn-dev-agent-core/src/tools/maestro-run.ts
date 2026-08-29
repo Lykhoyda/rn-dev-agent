@@ -43,13 +43,19 @@ import {
 } from '../domain/maestro-validator.js';
 import { outputIndicatesFlowFailure } from '../domain/maestro-error-parser.js';
 import { parseMaestroFailure } from '../domain/maestro-error-parser.js';
-import { augmentFailureWithDegradation, resolveFloorMs } from '../domain/tap-latency.js';
+import {
+  augmentFailureWithDegradation,
+  formatRuntimeDegradedHint,
+  resolveFloorMs,
+  runtimeDegradationFromMetadata,
+} from '../domain/tap-latency.js';
 import {
   buildStepSummary,
   buildTerminalEvidence,
   classifyExecError,
   combineRunnerOutput,
   formatFailureHeadline,
+  type ReasonSummary,
 } from '../domain/maestro-step-parser.js';
 import {
   fastHealthCheck as defaultFastHealthCheck,
@@ -69,8 +75,18 @@ import {
   collectDirectRunnerEvidence,
   createRunnerReportDir,
   disposeRunnerReportDir,
+  readStructuredFlowArtifact,
   runnerReportArgs,
+  runnerReportFingerprint,
 } from '../domain/maestro-runner-report.js';
+import {
+  buildMaestroRunLedger,
+  classifyTrailingVerification,
+  type LedgerAttemptInput,
+  type LedgerInvocationTermination,
+  type LedgerStageCaptureInput,
+} from '../domain/maestro-run-ledger.js';
+import { randomUUID } from 'node:crypto';
 import type { SessionState } from '../types.js';
 import {
   completeManagedRunnerParkAuthority,
@@ -189,6 +205,13 @@ export interface MaestroRunArgs {
   completeRunnerPark?: (signal?: AbortSignal) => Promise<void>;
   /** GH #705: commit a new install receipt after a clearState reinstall. */
   reissueInstallReceipt?: (() => Promise<void>) | null;
+  /**
+   * GH #623: attempt lineage for the canonical run ledger. cdp_run_action
+   * passes kind 'repaired' + parentAttemptId on its post-repair retry so one
+   * classifier sees both attempts; a plain call defaults to a fresh initial
+   * attempt. Not part of the public MCP schema.
+   */
+  attempt?: LedgerAttemptInput;
 }
 
 export interface MaestroAuthorityCallbacks {
@@ -462,6 +485,31 @@ function remapNativeSteps(steps: unknown, sourceIndices: number[]): PartitionedR
     const mapped = remapNativeStep(step, ordinal, sourceIndices);
     return mapped ? [mapped] : [];
   });
+}
+
+function partialNativeFailureMessage(meta: Record<string, unknown>): string {
+  const failedStep = remapNativeStep(meta.failedStep, 0, []);
+  const lastStep = remapNativeStep(meta.lastStep, 0, []);
+  const terminal = isRecord(meta.terminal) ? meta.terminal : null;
+  const failureKind = terminal?.failureKind;
+  const reason: ReasonSummary | null =
+    failureKind === 'SELECTOR_NOT_FOUND' ||
+    failureKind === 'TIMEOUT' ||
+    failureKind === 'ASSERTION_FAILED'
+      ? {
+          kind: failureKind,
+          selector: typeof terminal?.failureSelector === 'string' ? terminal.failureSelector : null,
+        }
+      : null;
+  const headline = formatFailureHeadline(
+    { steps: [], failedStep, lastStep, reason },
+    { timedOut: meta.timedOut === true, outputTruncated: meta.outputTruncated === true },
+    'Native replay segment failed.',
+  );
+  const runtimeDegradation = runtimeDegradationFromMetadata(meta.runtimeDegraded);
+  return runtimeDegradation
+    ? `${headline} — ${formatRuntimeDegradedHint(runtimeDegradation)}`
+    : headline;
 }
 
 class ReactReplayFailure extends Error {
@@ -842,7 +890,16 @@ export function createMaestroRunHandler(
             });
             const env = readToolEnvelope(nested);
             if (env.ok !== true || env.data?.passed !== true) {
-              const nestedMeta = { ...env.meta, ...env.data };
+              const nestedMeta: Record<string, unknown> = { ...env.meta, ...env.data };
+              const nativeSegmentCoversAttempt =
+                segment.sourceIndices.length === validatedCommands.length &&
+                segment.sourceIndices.every((sourceIndex, index) => sourceIndex === index);
+              let nestedError = env.error ?? 'Native replay segment failed.';
+              if (!nativeSegmentCoversAttempt) {
+                delete nestedMeta.trailingVerification;
+                delete nestedMeta.ledger;
+                nestedError = partialNativeFailureMessage(nestedMeta);
+              }
               combinedSteps.push(...remapNativeSteps(nestedMeta.steps, segment.sourceIndices));
               const uniqueProofDomains = [...new Set(proofDomains)];
               const proofDomain =
@@ -872,8 +929,8 @@ export function createMaestroRunHandler(
                 ...(lastStep ? { lastStep } : {}),
               };
               return env.code
-                ? failResult(env.error ?? 'Native replay segment failed.', env.code, meta)
-                : failResult(env.error ?? 'Native replay segment failed.', meta);
+                ? failResult(nestedError, env.code, meta)
+                : failResult(nestedError, meta);
             }
             nativeTransportVersion = env.data.transportVersion ?? nativeTransportVersion;
             if (typeof env.data.output === 'string') nativeOutput += env.data.output;
@@ -1256,6 +1313,56 @@ export function createMaestroRunHandler(
     let deferredNativeOriginTarget = false;
     let completePreclaimedOrigin: ((targetExpected: boolean) => Promise<void>) | null = null;
 
+    // GH #623: canonical ledger evidence, captured per stage invocation BEFORE
+    // the next stage overwrites the shared report dir and before stage outputs
+    // are flattened into one string. Hoisted above the try so the catch path
+    // classifies the same attempt from the same ledger.
+    const ledgerAttempt: LedgerAttemptInput = args.attempt ?? {
+      attemptId: randomUUID(),
+      ordinal: 1,
+      maxAttempts: 1,
+      kind: 'initial',
+    };
+    const authorityPlan = planMaestroAuthorityStages(validatedCommands);
+    const plannedStageMeta = (() => {
+      let cursor = 0;
+      return authorityPlan.stages.map((stage) => {
+        const sourceIndices = stage.commands.map((_, i) => cursor + i);
+        cursor += stage.commands.length;
+        return { sourceIndices, requiresOrigin: stage.requiresOrigin };
+      });
+    })();
+    const stageCaptures: LedgerStageCaptureInput[] = [];
+    let ledgerStageCursor = 0;
+    const stageTerminationFromError = (
+      error: unknown,
+    ): Omit<LedgerInvocationTermination, 'artifactFinalized'> => {
+      const errorClass = classifyExecError(error);
+      const raw = error as { code?: unknown; signal?: unknown } | null;
+      return {
+        exitCode: typeof raw?.code === 'number' ? raw.code : null,
+        signal: typeof raw?.signal === 'string' ? raw.signal : null,
+        timedOut: errorClass.timedOut,
+        outputTruncated: errorClass.outputTruncated,
+        bootstrapFailure: error instanceof RunnerCacheUnavailableError,
+        transportFailure: isPreSpawnMaestroError(error),
+      };
+    };
+    const buildAttemptLedger = () =>
+      buildMaestroRunLedger({
+        attempt: ledgerAttempt,
+        sourceText: validatedContent,
+        commands: validatedCommands,
+        stages: plannedStageMeta.map(
+          (meta, index) =>
+            stageCaptures[index] ?? {
+              sourceIndices: meta.sourceIndices,
+              requiresOrigin: meta.requiresOrigin,
+              invocation: null,
+            },
+        ),
+      });
+
     try {
       // 10MB buffer: a multi-step flow with screenshots + app console/network
       // logs routinely exceeds Node's 1MB execFile default, which would kill
@@ -1274,7 +1381,6 @@ export function createMaestroRunHandler(
         args.reproveManagedOrigin ??
         deps.reproveManagedOrigin ??
         managedAuthority.reproveManagedOrigin;
-      const authorityPlan = planMaestroAuthorityStages(validatedCommands);
       if (platform === 'ios' && authorityPlan.stages[0]?.requiresOrigin) {
         await claimOrigin();
         nativeOriginPreclaimed = true;
@@ -1296,114 +1402,170 @@ export function createMaestroRunHandler(
           executeMaestroAuthorityStages(
             validatedCommands,
             async (commands) => {
-              writeFileSync(
-                flowFile,
-                buildMaestroFlow(headerAppId ? { appId: headerAppId } : {}, [...commands]),
-                'utf-8',
-              );
-              const executeOnce = async (
-                beforeDispatch?: () => void,
-              ): Promise<{ stdout: string; stderr: string }> => {
-                if (flowDeadline - now() <= 0) {
-                  const error = new Error('Maestro flow timeout exhausted before the next stage');
-                  Object.assign(error, { code: 'ETIMEDOUT' });
-                  throw error;
-                }
-                const executeRunner = (runnerPath: string, prefixArgs: readonly string[] = []) => {
-                  beforeDispatch?.();
-                  const remainingTimeout = flowDeadline - now();
-                  if (remainingTimeout <= 0) {
-                    const error = new Error(
-                      'Maestro flow timeout exhausted before runner execution',
-                    );
-                    Object.assign(error, { code: 'ETIMEDOUT' });
-                    throw error;
-                  }
-                  return execute(runnerPath, [...prefixArgs, ...finalArgs], {
-                    timeout: remainingTimeout,
-                    encoding: 'utf8',
-                    maxBuffer: 10 * 1024 * 1024,
-                    signal: flowAbort.signal,
-                  });
+              const ledgerStageIndex = ledgerStageCursor++;
+              const preFingerprint = runnerReportFingerprint(runnerReportDir);
+              let failedInvocationTermination: Omit<
+                LedgerInvocationTermination,
+                'artifactFinalized'
+              > | null = null;
+              const captureStageInvocation = (
+                termination: Omit<LedgerInvocationTermination, 'artifactFinalized'>,
+              ): void => {
+                const meta = plannedStageMeta[ledgerStageIndex];
+                stageCaptures[ledgerStageIndex] = {
+                  sourceIndices: meta?.sourceIndices ?? [],
+                  requiresOrigin: meta?.requiresOrigin ?? true,
+                  invocation: {
+                    termination,
+                    // The pre-invocation fingerprint lets the reader refuse
+                    // leftover or mixed-generation evidence for this stage.
+                    artifact: readStructuredFlowArtifact(runnerReportDir, preFingerprint),
+                  },
                 };
-                if (deps.execFile) {
-                  const immediateStatus = await resolveEngineStatus();
-                  const refusal = exactPinRefusal(immediateStatus);
-                  const immediateRefusal = refusal ? `RUNNER_PIN_CHANGED: ${refusal}` : null;
-                  if (immediateRefusal) throw new Error(immediateRefusal);
-                  return executeRunner(dispatch.binPath);
-                }
-                return withImmediatePinnedRunner(
-                  dispatch.binPath,
-                  resolveEngineStatus,
-                  executeRunner,
-                  platform,
-                );
               };
               try {
-                return await executeOnce();
-              } catch (error) {
-                const recoveryDeviceId = requestedDeviceId ?? releasedAndroidDeviceId;
-                if (
-                  platform !== 'android' ||
-                  uiAutomationRecoveryAttempted ||
-                  !recoveryDeviceId ||
-                  !isUiAutomationNotConnectedSessionCreationFailure(error)
-                ) {
-                  throw error;
-                }
-                uiAutomationRecoveryAttempted = true;
-                const recoveryTimeout = flowDeadline - now();
-                if (recoveryTimeout <= 0) {
-                  androidSlotReleaseWarnings.push(
-                    'UiAutomation recovery skipped: Maestro flow timeout was exhausted',
+                const stageResult = await (async () => {
+                  writeFileSync(
+                    flowFile,
+                    buildMaestroFlow(headerAppId ? { appId: headerAppId } : {}, [...commands]),
+                    'utf-8',
                   );
-                  throw error;
-                }
-                // NOTE: AbortSignal.timeout()'s timer is unref'd, so a cleanup
-                // awaiting only that signal never aborts once the loop drains.
-                const recoveryAbort = new AbortController();
-                const recoveryDeadlineTimer = setTimeout(() => {
-                  recoveryAbort.abort(
-                    new Error(
-                      'UiAutomation recovery cleanup exceeded the remaining Maestro flow timeout',
-                    ),
-                  );
-                }, recoveryTimeout);
-                try {
-                  recordAndroidRelease(
-                    await releaseAndroidSlot({
-                      deviceId: recoveryDeviceId,
-                      includeLegacy: false,
-                      signal: recoveryAbort.signal,
-                    }),
-                  );
-                } catch (releaseError) {
-                  androidSlotReleaseWarnings.push(
-                    `UiAutomation recovery release failed: ${
-                      releaseError instanceof Error ? releaseError.message : String(releaseError)
-                    }`,
-                  );
-                  throw attachCause(error, releaseError);
-                } finally {
-                  clearTimeout(recoveryDeadlineTimer);
-                }
-                try {
-                  return await executeOnce(() => {
-                    uiAutomationRecoveryRetried = true;
-                  });
-                } catch (retryError) {
-                  if (uiAutomationRecoveryRetried && !isPreSpawnMaestroError(retryError)) {
-                    throw retryError;
+                  const executeOnce = async (
+                    beforeDispatch?: () => void,
+                  ): Promise<{ stdout: string; stderr: string }> => {
+                    if (flowDeadline - now() <= 0) {
+                      const error = new Error(
+                        'Maestro flow timeout exhausted before the next stage',
+                      );
+                      Object.assign(error, { code: 'ETIMEDOUT' });
+                      throw error;
+                    }
+                    const executeRunner = (
+                      runnerPath: string,
+                      prefixArgs: readonly string[] = [],
+                    ) => {
+                      beforeDispatch?.();
+                      const remainingTimeout = flowDeadline - now();
+                      if (remainingTimeout <= 0) {
+                        const error = new Error(
+                          'Maestro flow timeout exhausted before runner execution',
+                        );
+                        Object.assign(error, { code: 'ETIMEDOUT' });
+                        throw error;
+                      }
+                      return execute(runnerPath, [...prefixArgs, ...finalArgs], {
+                        timeout: remainingTimeout,
+                        encoding: 'utf8',
+                        maxBuffer: 10 * 1024 * 1024,
+                        signal: flowAbort.signal,
+                      });
+                    };
+                    if (deps.execFile) {
+                      const immediateStatus = await resolveEngineStatus();
+                      const refusal = exactPinRefusal(immediateStatus);
+                      const immediateRefusal = refusal ? `RUNNER_PIN_CHANGED: ${refusal}` : null;
+                      if (immediateRefusal) throw new Error(immediateRefusal);
+                      return executeRunner(dispatch.binPath);
+                    }
+                    return withImmediatePinnedRunner(
+                      dispatch.binPath,
+                      resolveEngineStatus,
+                      executeRunner,
+                      platform,
+                    );
+                  };
+                  try {
+                    return await executeOnce();
+                  } catch (error) {
+                    const initialFailureTermination = stageTerminationFromError(error);
+                    const recoveryDeviceId = requestedDeviceId ?? releasedAndroidDeviceId;
+                    if (
+                      platform !== 'android' ||
+                      uiAutomationRecoveryAttempted ||
+                      !recoveryDeviceId ||
+                      !isUiAutomationNotConnectedSessionCreationFailure(error)
+                    ) {
+                      failedInvocationTermination = initialFailureTermination;
+                      throw error;
+                    }
+                    uiAutomationRecoveryAttempted = true;
+                    const recoveryTimeout = flowDeadline - now();
+                    if (recoveryTimeout <= 0) {
+                      androidSlotReleaseWarnings.push(
+                        'UiAutomation recovery skipped: Maestro flow timeout was exhausted',
+                      );
+                      failedInvocationTermination = initialFailureTermination;
+                      throw error;
+                    }
+                    // NOTE: AbortSignal.timeout()'s timer is unref'd, so a cleanup
+                    // awaiting only that signal never aborts once the loop drains.
+                    const recoveryAbort = new AbortController();
+                    const recoveryDeadlineTimer = setTimeout(() => {
+                      recoveryAbort.abort(
+                        new Error(
+                          'UiAutomation recovery cleanup exceeded the remaining Maestro flow timeout',
+                        ),
+                      );
+                    }, recoveryTimeout);
+                    try {
+                      recordAndroidRelease(
+                        await releaseAndroidSlot({
+                          deviceId: recoveryDeviceId,
+                          includeLegacy: false,
+                          signal: recoveryAbort.signal,
+                        }),
+                      );
+                    } catch (releaseError) {
+                      androidSlotReleaseWarnings.push(
+                        `UiAutomation recovery release failed: ${
+                          releaseError instanceof Error
+                            ? releaseError.message
+                            : String(releaseError)
+                        }`,
+                      );
+                      failedInvocationTermination = {
+                        ...initialFailureTermination,
+                        transportFailure: true,
+                      };
+                      throw attachCause(error, releaseError);
+                    } finally {
+                      clearTimeout(recoveryDeadlineTimer);
+                    }
+                    try {
+                      return await executeOnce(() => {
+                        uiAutomationRecoveryRetried = true;
+                      });
+                    } catch (retryError) {
+                      const retryFailureTermination = stageTerminationFromError(retryError);
+                      if (uiAutomationRecoveryRetried && !isPreSpawnMaestroError(retryError)) {
+                        failedInvocationTermination = retryFailureTermination;
+                        throw retryError;
+                      }
+                      uiAutomationRecoveryRetried = false;
+                      androidSlotReleaseWarnings.push(
+                        `UiAutomation recovery retry did not start: ${
+                          retryError instanceof Error ? retryError.message : String(retryError)
+                        }`,
+                      );
+                      failedInvocationTermination = retryFailureTermination;
+                      throw attachCause(error, retryError);
+                    }
                   }
-                  uiAutomationRecoveryRetried = false;
-                  androidSlotReleaseWarnings.push(
-                    `UiAutomation recovery retry did not start: ${
-                      retryError instanceof Error ? retryError.message : String(retryError)
-                    }`,
-                  );
-                  throw attachCause(error, retryError);
-                }
+                })();
+                captureStageInvocation({
+                  exitCode: 0,
+                  signal: null,
+                  timedOut: false,
+                  outputTruncated: false,
+                  bootstrapFailure: false,
+                  transportFailure: false,
+                });
+                return stageResult;
+              } catch (stageInvocationError) {
+                captureStageInvocation(
+                  failedInvocationTermination ?? stageTerminationFromError(stageInvocationError),
+                );
+                throw stageInvocationError;
               }
             },
             claimOrigin,
@@ -1521,16 +1683,37 @@ export function createMaestroRunHandler(
       const baseWarnMsg = [caveat, releaseCaveat, 'Flow completed with warnings or failures']
         .filter((part): part is string => Boolean(part))
         .join('; ');
+      // GH #623: the canonical ledger (built from per-stage producer evidence,
+      // never from the flattened output) is the only source of the qualifier.
+      const warnLedger = buildAttemptLedger();
+      const warnTrailingVerification = classifyTrailingVerification(warnLedger);
       // GH #263: classify on the FULL output (not the sliced meta.output).
       const warnAug = augmentFailureWithDegradation(
         output,
         resolveFloorMs(process.env.RN_RUNTIME_DEGRADED_FLOOR_MS),
         baseWarnMsg,
-        meta,
+        {
+          ...meta,
+          ledger: warnLedger,
+          ...(warnTrailingVerification ? { trailingVerification: warnTrailingVerification } : {}),
+        },
+        { trailingVerification: warnTrailingVerification },
       );
       return warnResult(warnAug.meta, warnAug.message);
     } catch (err) {
       const stageError = err instanceof MaestroStageExecutionError ? err.stageError : err;
+      const errorClass = classifyExecError(stageError);
+      const processTerminationVeto = stageCaptures.some((capture) => {
+        const termination = capture.invocation?.termination;
+        if (!termination) return false;
+        return (
+          termination.timedOut ||
+          termination.signal !== null ||
+          termination.outputTruncated ||
+          termination.bootstrapFailure ||
+          termination.transportFailure
+        );
+      });
       if (nativeOriginPreclaimed && completePreclaimedOrigin) {
         try {
           await completePreclaimedOrigin(false);
@@ -1624,7 +1807,6 @@ export function createMaestroRunHandler(
           ...androidReleaseMeta(),
         });
       }
-      const errorClass = classifyExecError(stageError);
       let timedOut = errorClass.timedOut || flowAbort.signal.aborted;
       const { outputTruncated } = errorClass;
       const directEvidence = directRunnerEvidence(combined);
@@ -1784,6 +1966,13 @@ export function createMaestroRunHandler(
       const rawHeadline = formatFailureHeadline(summary, { timedOut, outputTruncated }, msg);
       const releaseCaveat = androidReleaseCaveat();
       const headline = releaseCaveat ? `${rawHeadline}; ${releaseCaveat}` : rawHeadline;
+      // GH #623: the canonical ledger is the only source of the qualifier. A
+      // process-level kill outranks it (gh-580 precedence), so a timed-out or
+      // never-spawned run never classifies as trailing verification.
+      const failLedger = buildAttemptLedger();
+      const failTrailingVerification = processTerminationVeto
+        ? null
+        : classifyTrailingVerification(failLedger);
       // GH #263: a timeout/non-zero exit is also a failure surface — flag a
       // wedged runtime here too if the successful taps were degraded.
       const failAug = augmentFailureWithDegradation(
@@ -1791,6 +1980,8 @@ export function createMaestroRunHandler(
         resolveFloorMs(process.env.RN_RUNTIME_DEGRADED_FLOOR_MS),
         headline,
         {
+          ledger: failLedger,
+          ...(failTrailingVerification ? { trailingVerification: failTrailingVerification } : {}),
           flowFile,
           platform,
           runner: dispatch.runner,
@@ -1815,6 +2006,7 @@ export function createMaestroRunHandler(
             : {}),
           ...androidReleaseMeta(),
         },
+        { trailingVerification: failTrailingVerification },
       );
       return failResult(failAug.message, failAug.meta);
     } finally {

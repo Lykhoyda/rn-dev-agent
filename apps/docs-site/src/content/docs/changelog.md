@@ -5,6 +5,20 @@ description: "Release history for rn-dev-agent"
 
 ## Claude plugin
 
+### 0.77.6
+
+#### Patch Changes
+
+- 9f6c1d0: Route iOS exact-testID actions through the authoritative React-tree prover, reconnect that exact runtime after native segments, refuse evidenced blind native WDA surfaces, and bound runner parking cleanup by the replay deadline.
+- 7d70570: Surface the exact Expo Developer Menu dismissal tool and arguments in authoritative snapshots and always-loaded guidance while cleaning the exact advanced operation generation when recoverable admission later fails.
+- 9dbb2c9: Consolidate Metro origin and session authority at the signed initial-bundle handshake while keeping launch endpoint checks diagnostic-only.
+- b121a18: Delete the login prologue authority latch so `cdp_login_prologue` runs the exact `user-login` action and passes or fails like any other replay, and no tool is disabled because of the login result.
+- Updated dependencies [9f6c1d0]
+- Updated dependencies [7d70570]
+- Updated dependencies [9dbb2c9]
+- Updated dependencies [b121a18]
+  - rn-dev-agent-core@0.72.6
+
 ### 0.77.5
 
 #### Patch Changes
@@ -1620,6 +1634,15 @@ identifier, hittable? }`, with a `fullNodeCount`. Far fewer tokens; `@ref`s for
   #188 shipped these to `main` with no version bump, leaving them undeliverable to marketplace installs; this patch publishes them.
 
 ## Core MCP server
+
+### 0.72.6
+
+#### Patch Changes
+
+- 9f6c1d0: Route iOS exact-testID actions through the authoritative React-tree prover, reconnect that exact runtime after native segments, refuse evidenced blind native WDA surfaces, and bound runner parking cleanup by the replay deadline.
+- 7d70570: Surface the exact Expo Developer Menu dismissal tool and arguments in authoritative snapshots and always-loaded guidance while cleaning the exact advanced operation generation when recoverable admission later fails.
+- 9dbb2c9: Consolidate Metro origin and session authority at the signed initial-bundle handshake while keeping launch endpoint checks diagnostic-only.
+- b121a18: Delete the login prologue authority latch so `cdp_login_prologue` runs the exact `user-login` action and passes or fails like any other replay, and no tool is disabled because of the login result.
 
 ### 0.72.5
 

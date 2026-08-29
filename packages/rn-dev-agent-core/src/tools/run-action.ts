@@ -81,6 +81,16 @@ import {
   PINNED_RUNNER_INSTALL_HINT,
   type ReplayEngineStatus,
 } from '../domain/engine-pin.js';
+import {
+  isProvenTrailingVerificationQualifier,
+  type TrailingVerificationQualifier,
+} from '../domain/maestro-run-ledger.js';
+import {
+  formatRuntimeSlowCaveat,
+  runtimeDegradationFromMetadata,
+  runtimeDegradationMetadata,
+  type RuntimeDegradation,
+} from '../domain/tap-latency.js';
 
 const strictRunActionPolicy = Symbol('strictRunActionPolicy');
 
@@ -352,6 +362,42 @@ function readMaestroOutput(env: MaestroEnvelope): string {
 function readMaestroDeviceAuthority(env: MaestroEnvelope): MaestroDeviceAuthority | undefined {
   if (env.data?.deviceAuthority) return env.data.deviceAuthority;
   return (env.meta as { deviceAuthority?: MaestroDeviceAuthority } | undefined)?.deviceAuthority;
+}
+
+function readRuntimeDegradation(env: MaestroEnvelope): RuntimeDegradation | undefined {
+  for (const source of [env.meta, env.data as Record<string, unknown> | undefined]) {
+    const degradation = runtimeDegradationFromMetadata(source?.runtimeDegraded);
+    if (degradation) return degradation;
+  }
+  return undefined;
+}
+
+// GH #623: anything short of the fully validated proven shape reads as absent.
+function readTrailingVerification(
+  env: MaestroEnvelope,
+  dispatched: {
+    attemptId: string;
+    ordinal: number;
+    kind: 'initial' | 'repaired';
+    parentAttemptId?: string;
+  },
+): TrailingVerificationQualifier | undefined {
+  for (const source of [env.meta, env.data as Record<string, unknown> | undefined]) {
+    const candidate = (source as { trailingVerification?: unknown })?.trailingVerification;
+    if (!isProvenTrailingVerificationQualifier(candidate)) continue;
+    // The qualifier must be bound to THIS dispatched attempt — a stale or
+    // unrelated attempt's evidence never softens this failure.
+    if (
+      candidate.attempt.attemptId !== dispatched.attemptId ||
+      candidate.attempt.ordinal !== dispatched.ordinal ||
+      candidate.attempt.kind !== dispatched.kind ||
+      candidate.attempt.parentAttemptId !== dispatched.parentAttemptId
+    ) {
+      continue;
+    }
+    return candidate;
+  }
+  return undefined;
 }
 
 function terminalReason(terminal: MaestroTerminal | undefined): string {
@@ -716,6 +762,9 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
       probeDeviceId = null;
       const firstCorpusRefusal = replayCorpusIdentityRefusal(loadContext, args.actionId);
       if (firstCorpusRefusal) return firstCorpusRefusal;
+      // GH #623: the post-repair retry names this attempt as its parent.
+      const initialAttemptId = randomUUID();
+      const maxAttempts = autoRepairEnabled ? 2 : 1;
       const firstResult = await measureStep('maestro-first-attempt', () =>
         maestroRun({
           inlineYaml: replayYaml,
@@ -726,6 +775,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
           deviceId: maestroDeviceId,
           timeoutMs,
           params: args.params,
+          attempt: { attemptId: initialAttemptId, ordinal: 1, maxAttempts, kind: 'initial' },
           claimNativeOrigin: () => claimNativeOrigin(args),
           completeNativeOrigin: (targetExpected) => completeNativeOrigin(args, targetExpected),
           relaunchManagedApp: (stopApp) => relaunchManagedApp(args, stopApp),
@@ -863,6 +913,73 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
       const failure =
         firstTypedSelectorFailure ??
         parseMaestroFailure(firstOutput, readMaestroTerminal(firstEnv));
+
+      // GH #623: ledger-proven trailing verification. The failing-step kind is
+      // preserved; the qualifier only changes repair/guidance behavior. The
+      // final goal state stays UNPROVEN — this is still passed:false.
+      const firstTrailingVerification = readTrailingVerification(firstEnv, {
+        attemptId: initialAttemptId,
+        ordinal: 1,
+        kind: 'initial',
+      });
+      if (firstTrailingVerification) {
+        const firstRuntimeDegradation = readRuntimeDegradation(firstEnv);
+        // Auto-repair REFUSES (contract): rewriting a merely-slow selector is
+        // the harm this path exists to prevent. The true cause lives in the
+        // adjacent qualifier block; no new refusal code is introduced.
+        const autoRepair: AutoRepairOutcome = {
+          attempted: false,
+          outcome: 'refused',
+          refusedReason: autoRepairEnabled ? 'NOT_REPAIRABLE_KIND' : 'USER_DISABLED',
+          phases: { firstAttemptMs },
+        };
+        const { actionCode, toolCode } = classifyFailure(failure);
+        const persisted = await persistRunWithDevice({
+          timestamp: new Date().toISOString(),
+          durationMs: Date.now() - t0,
+          status: 'fail',
+          failureCode: actionCode,
+          failureDetail: firstFailureDetail.slice(0, 1000),
+          trigger,
+          autoRepair,
+          trailingVerification: firstTrailingVerification,
+        });
+        const anchor =
+          'selector' in failure && failure.selector
+            ? ` ("${failure.selector}")`
+            : readMaestroTerminal(firstEnv)?.failedStep
+              ? ` ("${readMaestroTerminal(firstEnv)?.failedStep}")`
+              : '';
+        const baseMessage =
+          `cdp_run_action: ${args.actionId} failed (${failure.kind}) — trailing verification only: ` +
+          `the run ledger proves every authored mutating command completed ` +
+          `(${firstTrailingVerification.provenMutations} mutations), and only the final wait/assert${anchor} ` +
+          `did not verify within its deadline. The goal state is UNPROVEN — the app may have reached it ` +
+          `after the wait gave up. Verify the live state (device_screenshot, cdp_navigation_state, ` +
+          `expect_visible_by_testid) before re-running. Auto-repair skipped: the selector may be ` +
+          `merely slow, not stale.`;
+        const message = firstRuntimeDegradation
+          ? `${baseMessage} — ${formatRuntimeSlowCaveat(firstRuntimeDegradation)}`
+          : baseMessage;
+        const meta = {
+          actionId: args.actionId,
+          failureKind: failure.kind,
+          ...('selector' in failure && failure.selector
+            ? { failureSelector: failure.selector }
+            : {}),
+          underlyingFailure: firstFailureDetail,
+          trailingVerification: firstTrailingVerification,
+          ...(firstRuntimeDegradation
+            ? { runtimeDegraded: runtimeDegradationMetadata(firstRuntimeDegradation) }
+            : {}),
+          autoRepair,
+          firstAttemptOutput: boundedOutput(firstOutput),
+          terminal: readMaestroTerminal(firstEnv),
+          runnerResume: (firstEnv.meta as { runnerResume?: unknown } | undefined)?.runnerResume,
+          ...strictRunRecordMeta(persisted),
+        };
+        return toolCode ? failResult(message, toolCode, meta) : failResult(message, meta);
+      }
 
       // GH #186: structural route-drift takes precedence over selector repair.
       // If the action recorded an expected route sequence and the LIVE route is
@@ -1072,6 +1189,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
       probeDeviceId = null;
       const retryCorpusRefusal = replayCorpusIdentityRefusal(loadContext, args.actionId);
       if (retryCorpusRefusal) return retryCorpusRefusal;
+      const repairedAttemptId = randomUUID();
       const retryResult = await measureStep('maestro-retry', () =>
         maestroRun({
           inlineYaml: retryYaml,
@@ -1082,6 +1200,13 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
           deviceId: maestroDeviceId,
           timeoutMs,
           params: args.params,
+          attempt: {
+            attemptId: repairedAttemptId,
+            ordinal: 2,
+            maxAttempts,
+            kind: 'repaired',
+            parentAttemptId: initialAttemptId,
+          },
           claimNativeOrigin: () => claimNativeOrigin(args),
           completeNativeOrigin: (targetExpected) => completeNativeOrigin(args, targetExpected),
           relaunchManagedApp: (stopApp) => relaunchManagedApp(args, stopApp),
@@ -1174,6 +1299,17 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
         ...(nextFailedSelector ? { nextFailedSelector } : {}),
       };
 
+      const retryTrailingVerification = retryPassed
+        ? undefined
+        : readTrailingVerification(retryEnv, {
+            attemptId: repairedAttemptId,
+            ordinal: 2,
+            kind: 'repaired',
+            parentAttemptId: initialAttemptId,
+          });
+      const retryRuntimeDegradation = retryTrailingVerification
+        ? readRuntimeDegradation(retryEnv)
+        : undefined;
       const persisted = await persistRunWithDevice({
         timestamp: new Date().toISOString(),
         durationMs: Date.now() - t0,
@@ -1182,6 +1318,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
         failureDetail: retryPassed ? undefined : retryFailureDetail.slice(0, 1000),
         trigger,
         autoRepair,
+        ...(retryTrailingVerification ? { trailingVerification: retryTrailingVerification } : {}),
         ...(retryPassed && retryEnv.data?.transport === 'cdp-js'
           ? { transport: 'cdp-js' as const }
           : {}),
@@ -1205,9 +1342,18 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
         });
       }
 
-      const retryMessage = `cdp_run_action: ${args.actionId} still failing after auto-repair (${repairData.oldSelector} → ${repairData.newSelector}): ${retryFailureDetail}`;
+      const retryBaseMessage = retryTrailingVerification
+        ? `cdp_run_action: ${args.actionId} failed after auto-repair (${repairData.oldSelector} → ${repairData.newSelector}) — trailing verification only: the run ledger proves every authored mutating command completed (${retryTrailingVerification.provenMutations} mutations); only the final wait/assert did not verify within its deadline. The goal state is UNPROVEN — verify the live state before re-running.`
+        : `cdp_run_action: ${args.actionId} still failing after auto-repair (${repairData.oldSelector} → ${repairData.newSelector}): ${retryFailureDetail}`;
+      const retryMessage = retryRuntimeDegradation
+        ? `${retryBaseMessage} — ${formatRuntimeSlowCaveat(retryRuntimeDegradation)}`
+        : retryBaseMessage;
       const retryMeta = {
         actionId: args.actionId,
+        ...(retryTrailingVerification ? { trailingVerification: retryTrailingVerification } : {}),
+        ...(retryRuntimeDegradation
+          ? { runtimeDegraded: runtimeDegradationMetadata(retryRuntimeDegradation) }
+          : {}),
         autoRepair,
         writes: writeDisclosure('auto-repair', persisted),
         firstAttemptOutput: boundedOutput(firstOutput),

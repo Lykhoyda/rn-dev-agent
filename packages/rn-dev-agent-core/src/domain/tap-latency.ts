@@ -3,6 +3,7 @@
 // Pure, no I/O. Fail-open: unparseable output yields no samples → no hint.
 
 import { parseSteps } from './maestro-step-parser.js';
+import type { TrailingVerificationQualifier } from './maestro-run-ledger.js';
 
 export const DEFAULT_FLOOR_MS = 1500;
 
@@ -37,6 +38,46 @@ export interface RuntimeDegradation {
   sampleCount: number;
 }
 
+export interface RuntimeDegradationMetadata {
+  medianTapMs: number;
+  floorMs: number;
+  sampleCount: number;
+}
+
+export function runtimeDegradationFromMetadata(candidate: unknown): RuntimeDegradation | null {
+  if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) return null;
+  const metadata = candidate as Partial<RuntimeDegradationMetadata>;
+  if (
+    typeof metadata.medianTapMs !== 'number' ||
+    !Number.isFinite(metadata.medianTapMs) ||
+    typeof metadata.floorMs !== 'number' ||
+    !Number.isFinite(metadata.floorMs) ||
+    typeof metadata.sampleCount !== 'number' ||
+    !Number.isSafeInteger(metadata.sampleCount) ||
+    metadata.medianTapMs < 0 ||
+    metadata.floorMs <= 0 ||
+    metadata.sampleCount < 0
+  ) {
+    return null;
+  }
+  return {
+    degraded: true,
+    medianMs: metadata.medianTapMs,
+    floorMs: metadata.floorMs,
+    sampleCount: metadata.sampleCount,
+  };
+}
+
+export function runtimeDegradationMetadata(
+  degradation: RuntimeDegradation,
+): RuntimeDegradationMetadata {
+  return {
+    medianTapMs: degradation.medianMs!,
+    floorMs: degradation.floorMs,
+    sampleCount: degradation.sampleCount,
+  };
+}
+
 // Require at least this many successful-tap samples before attributing slowness
 // to a wedge. A single slow tap (e.g. a cold-start navigation tap) is normal
 // variance — flagging it would mis-hint "reboot" on an ordinary element-not-found
@@ -62,25 +103,43 @@ export function formatRuntimeDegradedHint(d: RuntimeDegradation): string {
   );
 }
 
+// GH #623 (ledger amendment): the latency DETECTOR is unchanged; only the
+// destructive advice is gated. On a ledger-proven trailing-verification-only
+// failure the runner demonstrably terminated on its own, so the reboot command
+// is withheld in favor of the approved verify-first caveat.
+export function formatRuntimeSlowCaveat(d: RuntimeDegradation): string {
+  return (
+    `RUNTIME_DEGRADED: median tapOn latency ${d.medianMs}ms (>= ${d.floorMs}ms) — ` +
+    `runtime is slow; the goal state may have appeared after the wait — verify before rebooting.`
+  );
+}
+
 /**
  * Integration helper: given the runner output and an already-built failure
  * (message + meta), append the RUNTIME_DEGRADED hint + meta.runtimeDegraded
  * IFF degraded. Returns the base unchanged otherwise. Call ONLY on a failure
  * path — never on a passing flow (a passing-but-slow run must not be hinted).
+ * The advice clause is selected by the ledger classifier's own product: a
+ * present TrailingVerificationQualifier (GH #623) swaps in the approved
+ * verify-first caveat; genuine wedges keep the reboot wording verbatim.
  */
 export function augmentFailureWithDegradation(
   output: string,
   floorMs: number,
   baseMessage: string,
   baseMeta: Record<string, unknown>,
+  opts: { trailingVerification?: TrailingVerificationQualifier | null } = {},
 ): { message: string; meta: Record<string, unknown> } {
   const d = classifyRuntimeDegradation(output, floorMs);
   if (!d.degraded) return { message: baseMessage, meta: baseMeta };
+  const hint = opts.trailingVerification?.trailingVerificationOnly
+    ? formatRuntimeSlowCaveat(d)
+    : formatRuntimeDegradedHint(d);
   return {
-    message: `${baseMessage} — ${formatRuntimeDegradedHint(d)}`,
+    message: `${baseMessage} — ${hint}`,
     meta: {
       ...baseMeta,
-      runtimeDegraded: { medianTapMs: d.medianMs, floorMs: d.floorMs, sampleCount: d.sampleCount },
+      runtimeDegraded: runtimeDegradationMetadata(d),
     },
   };
 }

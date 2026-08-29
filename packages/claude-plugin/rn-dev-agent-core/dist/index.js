@@ -9244,7 +9244,7 @@ var require_websocket = __commonJS({
     var http = __require("http");
     var net = __require("net");
     var tls = __require("tls");
-    var { randomBytes: randomBytes9, createHash: createHash23 } = __require("crypto");
+    var { randomBytes: randomBytes9, createHash: createHash25 } = __require("crypto");
     var { Duplex, Readable } = __require("stream");
     var { URL: URL2 } = __require("url");
     var PerMessageDeflate2 = require_permessage_deflate();
@@ -9912,7 +9912,7 @@ var require_websocket = __commonJS({
           abortHandshake(websocket, socket, "Invalid Upgrade header");
           return;
         }
-        const digest3 = createHash23("sha1").update(key + GUID).digest("base64");
+        const digest3 = createHash25("sha1").update(key + GUID).digest("base64");
         if (res.headers["sec-websocket-accept"] !== digest3) {
           abortHandshake(websocket, socket, "Invalid Sec-WebSocket-Accept header");
           return;
@@ -10281,7 +10281,7 @@ var require_websocket_server = __commonJS({
     var EventEmitter = __require("events");
     var http = __require("http");
     var { Duplex } = __require("stream");
-    var { createHash: createHash23 } = __require("crypto");
+    var { createHash: createHash25 } = __require("crypto");
     var extension2 = require_extension();
     var PerMessageDeflate2 = require_permessage_deflate();
     var subprotocol2 = require_subprotocol();
@@ -10588,7 +10588,7 @@ var require_websocket_server = __commonJS({
           );
         }
         if (this._state > RUNNING) return abortHandshake(socket, 503);
-        const digest3 = createHash23("sha1").update(key + GUID).digest("base64");
+        const digest3 = createHash25("sha1").update(key + GUID).digest("base64");
         const headers = [
           "HTTP/1.1 101 Switching Protocols",
           "Upgrade: websocket",
@@ -19530,10 +19530,10 @@ var require_resolve_block_map = __commonJS({
       let offset = bm.offset;
       let commentEnd = null;
       for (const collItem of bm.items) {
-        const { start, key, sep: sep10, value } = collItem;
+        const { start, key, sep: sep11, value } = collItem;
         const keyProps = resolveProps.resolveProps(start, {
           indicator: "explicit-key-ind",
-          next: key ?? sep10?.[0],
+          next: key ?? sep11?.[0],
           offset,
           onError,
           parentIndent: bm.indent,
@@ -19547,7 +19547,7 @@ var require_resolve_block_map = __commonJS({
             else if ("indent" in key && key.indent !== bm.indent)
               onError(offset, "BAD_INDENT", startColMsg);
           }
-          if (!keyProps.anchor && !keyProps.tag && !sep10) {
+          if (!keyProps.anchor && !keyProps.tag && !sep11) {
             commentEnd = keyProps.end;
             if (keyProps.comment) {
               if (map.comment)
@@ -19571,7 +19571,7 @@ var require_resolve_block_map = __commonJS({
         ctx.atKey = false;
         if (utilMapIncludes.mapIncludes(ctx, map.items, keyNode))
           onError(keyStart, "DUPLICATE_KEY", "Map keys must be unique");
-        const valueProps = resolveProps.resolveProps(sep10 ?? [], {
+        const valueProps = resolveProps.resolveProps(sep11 ?? [], {
           indicator: "map-value-ind",
           next: value,
           offset: keyNode.range[2],
@@ -19587,7 +19587,7 @@ var require_resolve_block_map = __commonJS({
             if (ctx.options.strict && keyProps.start < valueProps.found.offset - 1024)
               onError(keyNode.range, "KEY_OVER_1024_CHARS", "The : indicator must be at most 1024 chars after the start of an implicit block mapping key");
           }
-          const valueNode = value ? composeNode(ctx, value, valueProps, onError) : composeEmptyNode(ctx, offset, sep10, null, valueProps, onError);
+          const valueNode = value ? composeNode(ctx, value, valueProps, onError) : composeEmptyNode(ctx, offset, sep11, null, valueProps, onError);
           if (ctx.schema.compat)
             utilFlowIndentCheck.flowIndentCheck(bm.indent, value, onError);
           offset = valueNode.range[2];
@@ -19678,7 +19678,7 @@ var require_resolve_end = __commonJS({
       let comment = "";
       if (end) {
         let hasSpace = false;
-        let sep10 = "";
+        let sep11 = "";
         for (const token2 of end) {
           const { source, type } = token2;
           switch (type) {
@@ -19692,13 +19692,13 @@ var require_resolve_end = __commonJS({
               if (!comment)
                 comment = cb;
               else
-                comment += sep10 + cb;
-              sep10 = "";
+                comment += sep11 + cb;
+              sep11 = "";
               break;
             }
             case "newline":
               if (comment)
-                sep10 += source;
+                sep11 += source;
               hasSpace = true;
               break;
             default:
@@ -19741,18 +19741,18 @@ var require_resolve_flow_collection = __commonJS({
       let offset = fc.offset + fc.start.source.length;
       for (let i = 0; i < fc.items.length; ++i) {
         const collItem = fc.items[i];
-        const { start, key, sep: sep10, value } = collItem;
+        const { start, key, sep: sep11, value } = collItem;
         const props = resolveProps.resolveProps(start, {
           flow: fcName,
           indicator: "explicit-key-ind",
-          next: key ?? sep10?.[0],
+          next: key ?? sep11?.[0],
           offset,
           onError,
           parentIndent: fc.indent,
           startOnNewline: false
         });
         if (!props.found) {
-          if (!props.anchor && !props.tag && !sep10 && !value) {
+          if (!props.anchor && !props.tag && !sep11 && !value) {
             if (i === 0 && props.comma)
               onError(props.comma, "UNEXPECTED_TOKEN", `Unexpected , in ${fcName}`);
             else if (i < fc.items.length - 1)
@@ -19806,8 +19806,8 @@ var require_resolve_flow_collection = __commonJS({
             }
           }
         }
-        if (!isMap && !sep10 && !props.found) {
-          const valueNode = value ? composeNode(ctx, value, props, onError) : composeEmptyNode(ctx, props.end, sep10, null, props, onError);
+        if (!isMap && !sep11 && !props.found) {
+          const valueNode = value ? composeNode(ctx, value, props, onError) : composeEmptyNode(ctx, props.end, sep11, null, props, onError);
           coll.items.push(valueNode);
           offset = valueNode.range[2];
           if (isBlock(value))
@@ -19819,7 +19819,7 @@ var require_resolve_flow_collection = __commonJS({
           if (isBlock(key))
             onError(keyNode.range, "BLOCK_IN_FLOW", blockMsg);
           ctx.atKey = false;
-          const valueProps = resolveProps.resolveProps(sep10 ?? [], {
+          const valueProps = resolveProps.resolveProps(sep11 ?? [], {
             flow: fcName,
             indicator: "map-value-ind",
             next: value,
@@ -19830,8 +19830,8 @@ var require_resolve_flow_collection = __commonJS({
           });
           if (valueProps.found) {
             if (!isMap && !props.found && ctx.options.strict) {
-              if (sep10)
-                for (const st of sep10) {
+              if (sep11)
+                for (const st of sep11) {
                   if (st === valueProps.found)
                     break;
                   if (st.type === "newline") {
@@ -19848,7 +19848,7 @@ var require_resolve_flow_collection = __commonJS({
             else
               onError(valueProps.start, "MISSING_CHAR", `Missing , or : between ${fcName} items`);
           }
-          const valueNode = value ? composeNode(ctx, value, valueProps, onError) : valueProps.found ? composeEmptyNode(ctx, valueProps.end, sep10, null, valueProps, onError) : null;
+          const valueNode = value ? composeNode(ctx, value, valueProps, onError) : valueProps.found ? composeEmptyNode(ctx, valueProps.end, sep11, null, valueProps, onError) : null;
           if (valueNode) {
             if (isBlock(value))
               onError(valueNode.range, "BLOCK_IN_FLOW", blockMsg);
@@ -20028,7 +20028,7 @@ var require_resolve_block_scalar = __commonJS({
           chompStart = i + 1;
       }
       let value = "";
-      let sep10 = "";
+      let sep11 = "";
       let prevMoreIndented = false;
       for (let i = 0; i < contentStart; ++i)
         value += lines[i][0].slice(trimIndent) + "\n";
@@ -20045,24 +20045,24 @@ var require_resolve_block_scalar = __commonJS({
           indent = "";
         }
         if (type === Scalar.Scalar.BLOCK_LITERAL) {
-          value += sep10 + indent.slice(trimIndent) + content;
-          sep10 = "\n";
+          value += sep11 + indent.slice(trimIndent) + content;
+          sep11 = "\n";
         } else if (indent.length > trimIndent || content[0] === "	") {
-          if (sep10 === " ")
-            sep10 = "\n";
-          else if (!prevMoreIndented && sep10 === "\n")
-            sep10 = "\n\n";
-          value += sep10 + indent.slice(trimIndent) + content;
-          sep10 = "\n";
+          if (sep11 === " ")
+            sep11 = "\n";
+          else if (!prevMoreIndented && sep11 === "\n")
+            sep11 = "\n\n";
+          value += sep11 + indent.slice(trimIndent) + content;
+          sep11 = "\n";
           prevMoreIndented = true;
         } else if (content === "") {
-          if (sep10 === "\n")
+          if (sep11 === "\n")
             value += "\n";
           else
-            sep10 = "\n";
+            sep11 = "\n";
         } else {
-          value += sep10 + content;
-          sep10 = " ";
+          value += sep11 + content;
+          sep11 = " ";
           prevMoreIndented = false;
         }
       }
@@ -20244,25 +20244,25 @@ var require_resolve_flow_scalar = __commonJS({
       if (!match)
         return source;
       let res = match[1];
-      let sep10 = " ";
+      let sep11 = " ";
       let pos = first.lastIndex;
       line.lastIndex = pos;
       while (match = line.exec(source)) {
         if (match[1] === "") {
-          if (sep10 === "\n")
-            res += sep10;
+          if (sep11 === "\n")
+            res += sep11;
           else
-            sep10 = "\n";
+            sep11 = "\n";
         } else {
-          res += sep10 + match[1];
-          sep10 = " ";
+          res += sep11 + match[1];
+          sep11 = " ";
         }
         pos = line.lastIndex;
       }
       const last = /[ \t]*(.*)/sy;
       last.lastIndex = pos;
       match = last.exec(source);
-      return res + sep10 + (match?.[1] ?? "");
+      return res + sep11 + (match?.[1] ?? "");
     }
     function doubleQuotedValue(source, onError) {
       let res = "";
@@ -21072,14 +21072,14 @@ var require_cst_stringify = __commonJS({
         }
       }
     }
-    function stringifyItem({ start, key, sep: sep10, value }) {
+    function stringifyItem({ start, key, sep: sep11, value }) {
       let res = "";
       for (const st of start)
         res += st.source;
       if (key)
         res += stringifyToken(key);
-      if (sep10)
-        for (const st of sep10)
+      if (sep11)
+        for (const st of sep11)
           res += st.source;
       if (value)
         res += stringifyToken(value);
@@ -22246,18 +22246,18 @@ var require_parser = __commonJS({
         if (this.type === "map-value-ind") {
           const prev = getPrevProps(this.peek(2));
           const start = getFirstKeyStartProps(prev);
-          let sep10;
+          let sep11;
           if (scalar.end) {
-            sep10 = scalar.end;
-            sep10.push(this.sourceToken);
+            sep11 = scalar.end;
+            sep11.push(this.sourceToken);
             delete scalar.end;
           } else
-            sep10 = [this.sourceToken];
+            sep11 = [this.sourceToken];
           const map = {
             type: "block-map",
             offset: scalar.offset,
             indent: scalar.indent,
-            items: [{ start, key: scalar, sep: sep10 }]
+            items: [{ start, key: scalar, sep: sep11 }]
           };
           this.onKeyLine = true;
           this.stack[this.stack.length - 1] = map;
@@ -22410,15 +22410,15 @@ var require_parser = __commonJS({
                 } else if (isFlowToken(it.key) && !includesToken(it.sep, "newline")) {
                   const start2 = getFirstKeyStartProps(it.start);
                   const key = it.key;
-                  const sep10 = it.sep;
-                  sep10.push(this.sourceToken);
+                  const sep11 = it.sep;
+                  sep11.push(this.sourceToken);
                   delete it.key;
                   delete it.sep;
                   this.stack.push({
                     type: "block-map",
                     offset: this.offset,
                     indent: this.indent,
-                    items: [{ start: start2, key, sep: sep10 }]
+                    items: [{ start: start2, key, sep: sep11 }]
                   });
                 } else if (start.length > 0) {
                   it.sep = it.sep.concat(start, this.sourceToken);
@@ -22612,13 +22612,13 @@ var require_parser = __commonJS({
             const prev = getPrevProps(parent);
             const start = getFirstKeyStartProps(prev);
             fixFlowSeqItems(fc);
-            const sep10 = fc.end.splice(1, fc.end.length);
-            sep10.push(this.sourceToken);
+            const sep11 = fc.end.splice(1, fc.end.length);
+            sep11.push(this.sourceToken);
             const map = {
               type: "block-map",
               offset: fc.offset,
               indent: fc.indent,
-              items: [{ start, key: fc, sep: sep10 }]
+              items: [{ start, key: fc, sep: sep11 }]
             };
             this.onKeyLine = true;
             this.stack[this.stack.length - 1] = map;
@@ -36284,7 +36284,7 @@ ensureJavaEnv();
 ensureCwd();
 
 // packages/rn-dev-agent-core/dist/index.js
-import { createHash as createHash22, createHmac as createHmac5, randomUUID as randomUUID11 } from "node:crypto";
+import { createHash as createHash24, createHmac as createHmac5, randomUUID as randomUUID12 } from "node:crypto";
 import { readFileSync as readFileSync42, rmSync as rmSync12 } from "node:fs";
 import { execFile as execFile23 } from "node:child_process";
 import { promisify as promisify26 } from "node:util";
@@ -58186,7 +58186,8 @@ CREATE TABLE IF NOT EXISTS run_records (
   auto_repair_json TEXT,
   duration_ms     INTEGER,
   device_id       TEXT,
-  blind_probe_json TEXT
+  blind_probe_json TEXT,
+  trailing_verification_json TEXT
 );
 
 CREATE TABLE IF NOT EXISTS repair_records (
@@ -58222,7 +58223,8 @@ function openActionDb(projectRoot, opts = {}) {
     db.exec(SCHEMA);
     for (const alter of [
       "ALTER TABLE run_records ADD COLUMN device_id TEXT",
-      "ALTER TABLE run_records ADD COLUMN blind_probe_json TEXT"
+      "ALTER TABLE run_records ADD COLUMN blind_probe_json TEXT",
+      "ALTER TABLE run_records ADD COLUMN trailing_verification_json TEXT"
     ]) {
       try {
         db.exec(alter);
@@ -58244,8 +58246,9 @@ function openActionDb(projectRoot, opts = {}) {
           }
           db.prepare(`INSERT INTO run_records
                (action_id, ts, trigger, status, failure_code, failure_detail,
-                transport, auto_repair_json, duration_ms, device_id, blind_probe_json)
-             VALUES (?,?,?,?,?,?,?,?,?,?,?)`).run(actionId, record2.timestamp, record2.trigger, record2.status, record2.failureCode ?? null, record2.failureDetail ?? null, record2.transport ?? null, record2.autoRepair ? JSON.stringify(record2.autoRepair) : null, record2.durationMs, record2.deviceId ?? null, record2.blindProbe ? JSON.stringify(record2.blindProbe) : null);
+                transport, auto_repair_json, duration_ms, device_id, blind_probe_json,
+                trailing_verification_json)
+             VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`).run(actionId, record2.timestamp, record2.trigger, record2.status, record2.failureCode ?? null, record2.failureDetail ?? null, record2.transport ?? null, record2.autoRepair ? JSON.stringify(record2.autoRepair) : null, record2.durationMs, record2.deviceId ?? null, record2.blindProbe ? JSON.stringify(record2.blindProbe) : null, record2.trailingVerification ? JSON.stringify(record2.trailingVerification) : null);
           db.prepare(`DELETE FROM run_records
              WHERE action_id = ?
                AND id NOT IN (
@@ -58328,6 +58331,9 @@ function openActionDb(projectRoot, opts = {}) {
               rec.blindProbe = JSON.parse(String(r.blind_probe_json));
             } catch {
             }
+          }
+          if (r.trailing_verification_json) {
+            rec.trailingVerification = JSON.parse(String(r.trailing_verification_json));
           }
           return rec;
         });
@@ -58969,8 +58975,8 @@ function payloadMatchesPinnedArchive(root, archive, expectedArchiveSha256) {
       }
       if (!entry.isFile() || wanted.kind !== "file")
         return false;
-      const sha2562 = createHash7("sha256").update(readFileSync17(path)).digest("hex");
-      if (sha2562 !== wanted.sha256)
+      const sha2563 = createHash7("sha256").update(readFileSync17(path)).digest("hex");
+      if (sha2563 !== wanted.sha256)
         return false;
     }
     return true;
@@ -59464,14 +59470,14 @@ async function detect(resolvers) {
   }
   const cacheVersion = pinCacheVersionForPath(binPath);
   if (cacheVersion && cacheVersion !== MAESTRO_RUNNER_PIN.version) {
-    let sha2563 = null;
+    let sha2564 = null;
     try {
-      sha2563 = (resolvers.hashFile ?? defaultHashFile)(binPath);
+      sha2564 = (resolvers.hashFile ?? defaultHashFile)(binPath);
     } catch {
-      sha2563 = null;
+      sha2564 = null;
     }
     const expectedSha2562 = TRUSTED_DRIFT_SHA256[cacheVersion]?.[platformKey];
-    if (!sha2563) {
+    if (!sha2564) {
       return buildReplayEngineStatus("unverified", null, false, {
         selectedPath: binPath,
         provenance: "pin-cache"
@@ -59484,7 +59490,7 @@ async function detect(resolvers) {
         provenance: "pin-cache"
       });
     }
-    if (sha2563 !== expectedSha2562) {
+    if (sha2564 !== expectedSha2562) {
       return buildReplayEngineStatus("checksum-mismatch", null, false, {
         selectedPath: binPath,
         provenance: "pin-cache"
@@ -59496,20 +59502,20 @@ async function detect(resolvers) {
       provenance: "pin-cache"
     });
   }
-  let sha2562 = null;
+  let sha2563 = null;
   try {
-    sha2562 = (resolvers.hashFile ?? defaultHashFile)(binPath);
+    sha2563 = (resolvers.hashFile ?? defaultHashFile)(binPath);
   } catch {
-    sha2562 = null;
+    sha2563 = null;
   }
   const expectedSha256 = MAESTRO_RUNNER_PIN.sha256[platformKey];
-  if (!expectedSha256 || !sha2562) {
+  if (!expectedSha256 || !sha2563) {
     return buildReplayEngineStatus("unverified", null, false, {
       selectedPath: binPath,
       provenance: "pin-cache"
     });
   }
-  if (sha2562 !== expectedSha256) {
+  if (sha2563 !== expectedSha256) {
     return buildReplayEngineStatus("checksum-mismatch", null, false, {
       selectedPath: binPath,
       provenance: "pin-cache"
@@ -77313,7 +77319,7 @@ function createSaveAsActionHandler() {
 
 // packages/rn-dev-agent-core/dist/tools/run-action.js
 init_utils();
-import { randomUUID as randomUUID8 } from "node:crypto";
+import { randomUUID as randomUUID9 } from "node:crypto";
 
 // packages/rn-dev-agent-core/dist/domain/ansi.js
 var ANSI_RE = new RegExp(String.fromCharCode(27) + "\\[[0-9;]*m", "g");
@@ -77668,6 +77674,27 @@ function resolveFloorMs(envVal) {
   const n = Number(envVal);
   return Number.isFinite(n) && n > 0 ? n : DEFAULT_FLOOR_MS;
 }
+function runtimeDegradationFromMetadata(candidate) {
+  if (!candidate || typeof candidate !== "object" || Array.isArray(candidate))
+    return null;
+  const metadata = candidate;
+  if (typeof metadata.medianTapMs !== "number" || !Number.isFinite(metadata.medianTapMs) || typeof metadata.floorMs !== "number" || !Number.isFinite(metadata.floorMs) || typeof metadata.sampleCount !== "number" || !Number.isSafeInteger(metadata.sampleCount) || metadata.medianTapMs < 0 || metadata.floorMs <= 0 || metadata.sampleCount < 0) {
+    return null;
+  }
+  return {
+    degraded: true,
+    medianMs: metadata.medianTapMs,
+    floorMs: metadata.floorMs,
+    sampleCount: metadata.sampleCount
+  };
+}
+function runtimeDegradationMetadata(degradation) {
+  return {
+    medianTapMs: degradation.medianMs,
+    floorMs: degradation.floorMs,
+    sampleCount: degradation.sampleCount
+  };
+}
 var MIN_SAMPLES_FOR_DEGRADED = 2;
 function classifyRuntimeDegradation(output, floorMs) {
   const samples = parseTapLatencies(output);
@@ -77682,15 +77709,19 @@ function classifyRuntimeDegradation(output, floorMs) {
 function formatRuntimeDegradedHint(d) {
   return `RUNTIME_DEGRADED: median tapOn latency ${d.medianMs}ms (>= ${d.floorMs}ms) \u2014 the simulator test runtime is likely wedged; reboot it (xcrun simctl shutdown <udid> && xcrun simctl boot <udid>), relaunch the app, and retry.`;
 }
-function augmentFailureWithDegradation(output, floorMs, baseMessage, baseMeta) {
+function formatRuntimeSlowCaveat(d) {
+  return `RUNTIME_DEGRADED: median tapOn latency ${d.medianMs}ms (>= ${d.floorMs}ms) \u2014 runtime is slow; the goal state may have appeared after the wait \u2014 verify before rebooting.`;
+}
+function augmentFailureWithDegradation(output, floorMs, baseMessage, baseMeta, opts = {}) {
   const d = classifyRuntimeDegradation(output, floorMs);
   if (!d.degraded)
     return { message: baseMessage, meta: baseMeta };
+  const hint = opts.trailingVerification?.trailingVerificationOnly ? formatRuntimeSlowCaveat(d) : formatRuntimeDegradedHint(d);
   return {
-    message: `${baseMessage} \u2014 ${formatRuntimeDegradedHint(d)}`,
+    message: `${baseMessage} \u2014 ${hint}`,
     meta: {
       ...baseMeta,
-      runtimeDegraded: { medianTapMs: d.medianMs, floorMs: d.floorMs, sampleCount: d.sampleCount }
+      runtimeDegraded: runtimeDegradationMetadata(d)
     }
   };
 }
@@ -77796,9 +77827,10 @@ function maestroAuthorityRefusal(authority, underlyingError) {
 }
 
 // packages/rn-dev-agent-core/dist/domain/maestro-runner-report.js
-import { existsSync as existsSync28, readFileSync as readFileSync28, rmSync as rmSync11 } from "node:fs";
+import { existsSync as existsSync28, readFileSync as readFileSync28, readdirSync as readdirSync11, realpathSync as realpathSync14, rmSync as rmSync11 } from "node:fs";
+import { createHash as createHash14 } from "node:crypto";
 import { tmpdir as tmpdir8 } from "node:os";
-import { join as join40 } from "node:path";
+import { isAbsolute as isAbsolute12, join as join40, sep as sep9 } from "node:path";
 var DIRECT_DEVICE_ID_RE = /^[A-Za-z0-9._:-]{1,256}$/;
 var DEVICE_ID_KEYS = ["udid", "deviceId", "serial"];
 var WEAK_DEVICE_ID_KEYS = ["id"];
@@ -77877,6 +77909,128 @@ ${readFileSync28(logPath, "utf8")}`;
   }
   return evidence;
 }
+var OBSERVATION_STATUSES = /* @__PURE__ */ new Set([
+  "passed",
+  "failed",
+  "skipped",
+  "running",
+  "pending"
+]);
+function observationStatus(value) {
+  return typeof value === "string" && OBSERVATION_STATUSES.has(value) ? value : "unknown";
+}
+var FINGERPRINT_INCONCLUSIVE = "unreadable";
+function contentHash(path) {
+  try {
+    return createHash14("sha256").update(readFileSync28(path)).digest("hex");
+  } catch (error2) {
+    return error2?.code === "ENOENT" ? null : FINGERPRINT_INCONCLUSIVE;
+  }
+}
+function runnerReportFingerprint(reportDir) {
+  const fingerprint = {};
+  if (!reportDir)
+    return fingerprint;
+  const reportHash = contentHash(join40(reportDir, "report.json"));
+  if (reportHash)
+    fingerprint["report.json"] = reportHash;
+  let flowEntries = [];
+  try {
+    flowEntries = readdirSync11(join40(reportDir, "flows"));
+  } catch (error2) {
+    if (error2?.code !== "ENOENT") {
+      fingerprint["flows"] = FINGERPRINT_INCONCLUSIVE;
+    }
+    return fingerprint;
+  }
+  for (const entry of flowEntries.sort()) {
+    const flowHash = contentHash(join40(reportDir, "flows", entry));
+    if (flowHash)
+      fingerprint[`flows/${entry}`] = flowHash;
+  }
+  return fingerprint;
+}
+function readStructuredFlowArtifact(reportDir, previous) {
+  if (!reportDir)
+    return null;
+  const reportPath = join40(reportDir, "report.json");
+  if (!existsSync28(reportPath))
+    return null;
+  const unfinalized = {
+    finalized: false,
+    flowStatus: "unknown",
+    commands: []
+  };
+  try {
+    const reportText = readFileSync28(reportPath, "utf8");
+    if (previous) {
+      if (Object.values(previous).includes(FINGERPRINT_INCONCLUSIVE))
+        return unfinalized;
+      const reportHash = createHash14("sha256").update(reportText).digest("hex");
+      if (previous["report.json"] === reportHash)
+        return null;
+    }
+    const report = JSON.parse(reportText);
+    const flows = Array.isArray(report.flows) ? report.flows : [];
+    if (flows.length !== 1)
+      return unfinalized;
+    const flow = flows[0];
+    const flowStatus = flow.status === "passed" || flow.status === "failed" ? flow.status : "unknown";
+    if (flowStatus === "unknown")
+      return unfinalized;
+    if (typeof flow.dataFile !== "string" || flow.dataFile.length === 0)
+      return unfinalized;
+    const normalizedDataFile = flow.dataFile;
+    if (isAbsolute12(normalizedDataFile) || !/^flows\/[^/\\]+$/.test(normalizedDataFile)) {
+      return unfinalized;
+    }
+    const realDataFile = realpathSync14(join40(reportDir, normalizedDataFile));
+    if (!realDataFile.startsWith(realpathSync14(reportDir) + sep9))
+      return unfinalized;
+    const dataText = readFileSync28(realDataFile, "utf8");
+    if (previous) {
+      const dataHash = createHash14("sha256").update(dataText).digest("hex");
+      if (previous[normalizedDataFile] === dataHash)
+        return unfinalized;
+    }
+    const data = JSON.parse(dataText);
+    if (!Array.isArray(data.commands))
+      return unfinalized;
+    let malformedRow = false;
+    const seenIndices = /* @__PURE__ */ new Set();
+    const commands = data.commands.map((entry) => {
+      const record2 = entry ?? {};
+      const error2 = record2.error ?? void 0;
+      const status = observationStatus(record2.status);
+      const producerIndex = typeof record2.index === "number" && Number.isInteger(record2.index) && record2.index >= 0 ? record2.index : null;
+      if (producerIndex === null || seenIndices.has(producerIndex)) {
+        malformedRow = true;
+      } else {
+        seenIndices.add(producerIndex);
+      }
+      if (typeof record2.type !== "string" || record2.type.length === 0 || status === "unknown") {
+        malformedRow = true;
+      }
+      return {
+        index: producerIndex ?? -1,
+        type: typeof record2.type === "string" ? record2.type : "unknown",
+        status,
+        ...error2 && typeof error2.message === "string" ? { error: error2.message.slice(0, 500) } : {}
+      };
+    });
+    if (malformedRow)
+      return { finalized: false, flowStatus, commands: [] };
+    const counts = flow.commands ?? {};
+    const statusCount = (status) => commands.filter((command) => command.status === status).length;
+    const countExact = (key, actual) => counts[key] === actual;
+    const anyFailedRow = commands.some((command) => command.status === "failed");
+    const contiguousIndices = Array.from({ length: commands.length }, (_, i) => i).every((i) => seenIndices.has(i));
+    const finalized = (report.status === "passed" || report.status === "failed") && report.status === flowStatus && flowStatus === "failed" === anyFailedRow && !malformedRow && contiguousIndices && commands.length > 0 && countExact("total", commands.length) && countExact("passed", statusCount("passed")) && countExact("failed", statusCount("failed")) && countExact("skipped", statusCount("skipped")) && countExact("running", 0) && countExact("pending", 0) && commands.every((command) => command.status !== "running" && command.status !== "pending");
+    return { finalized, flowStatus, commands };
+  } catch {
+    return unfinalized;
+  }
+}
 function disposeRunnerReportDir(reportDir) {
   if (!reportDir)
     return;
@@ -77886,9 +78040,337 @@ function disposeRunnerReportDir(reportDir) {
   }
 }
 
+// packages/rn-dev-agent-core/dist/domain/maestro-run-ledger.js
+import { createHash as createHash15 } from "node:crypto";
+var MAESTRO_RUN_LEDGER_SCHEMA_VERSION = 1;
+var MAESTRO_RUNNER_FLOW_JSON_ADAPTER = "maestro-runner/flow-json@1";
+var MUTATION_VERBS = /* @__PURE__ */ new Set([
+  "launchApp",
+  "stopApp",
+  "killApp",
+  "clearState",
+  "tap",
+  "tapOn",
+  "doubleTapOn",
+  "longPressOn",
+  "back",
+  "inputText",
+  "eraseText",
+  "pasteText",
+  "hideKeyboard",
+  "pressKey",
+  "scroll",
+  "scrollUntilVisible",
+  "swipe",
+  "swipeUp",
+  "swipeDown",
+  "swipeLeft",
+  "swipeRight",
+  "openLink",
+  "setLocation",
+  "addMedia",
+  "setAirplaneMode",
+  "travel"
+]);
+var VERIFICATION_VERBS = /* @__PURE__ */ new Set([
+  "assertVisible",
+  "assertNotVisible",
+  "extendedWaitUntil",
+  "waitForAnimationToEnd"
+]);
+var CONTROL_VERBS = /* @__PURE__ */ new Set(["takeScreenshot", "copyTextFrom"]);
+function commandEffect(verb) {
+  if (MUTATION_VERBS.has(verb))
+    return "mutation";
+  if (VERIFICATION_VERBS.has(verb))
+    return "verification";
+  if (CONTROL_VERBS.has(verb))
+    return "control";
+  return "unknown";
+}
+function authoredVerb(command) {
+  if (typeof command === "string")
+    return command;
+  if (!command || typeof command !== "object" || Array.isArray(command))
+    return null;
+  const keys = Object.keys(command);
+  return keys.length === 1 ? keys[0] : null;
+}
+function sha2562(text) {
+  return createHash15("sha256").update(text, "utf8").digest("hex");
+}
+function digestCommand(command) {
+  try {
+    return sha2562(JSON.stringify(command) ?? String(command));
+  } catch {
+    return sha2562(String(command));
+  }
+}
+function terminationClean(t) {
+  return Number.isFinite(t.exitCode) && !t.timedOut && t.signal === null && !t.outputTruncated && !t.bootstrapFailure && !t.transportFailure && t.artifactFinalized;
+}
+function buildMaestroRunLedger(input) {
+  const stages = [];
+  const observations = [];
+  const operations = input.commands.map((command, index) => {
+    const verb = authoredVerb(command);
+    return {
+      operationId: `op-${index}`,
+      sourceIndex: index,
+      sourceRange: [index, index],
+      sourceDigest: digestCommand(command),
+      verb: verb ?? `unknown-${index}`,
+      effect: verb === null ? "unknown" : commandEffect(verb),
+      stageId: "unassigned",
+      outcome: { state: "unknown" }
+    };
+  });
+  const claimedIndices = /* @__PURE__ */ new Set();
+  let claimConflict2 = false;
+  input.stages.forEach((capture, stageIndex) => {
+    const stageId = `stage-${stageIndex}`;
+    const artifact = capture.invocation?.artifact ?? null;
+    const artifactFinalized = artifact?.finalized === true;
+    const termination = capture.invocation ? { ...capture.invocation.termination, artifactFinalized } : null;
+    const stageOperations = [];
+    for (const sourceIndex of capture.sourceIndices) {
+      const row = operations[sourceIndex];
+      if (!row || claimedIndices.has(sourceIndex)) {
+        claimConflict2 = true;
+        continue;
+      }
+      claimedIndices.add(sourceIndex);
+      row.stageId = stageId;
+      stageOperations.push(row);
+    }
+    if (!capture.invocation) {
+      for (const operation of stageOperations)
+        operation.outcome = { state: "notRun" };
+    } else if (artifact && artifactFinalized && artifactSelfConsistent(artifact) && terminationClean(termination)) {
+      assignOutcomesFromArtifact(stageOperations, artifact, stageId, observations);
+    } else if (artifact) {
+      recordObservations(stageOperations, artifact, stageId, observations);
+    }
+    stages.push({
+      stageId,
+      authorityKind: capture.requiresOrigin ? "origin" : "lifecycle",
+      sourceOperationIds: stageOperations.map((operation) => operation.operationId),
+      invoked: capture.invocation !== null,
+      invocationTermination: termination
+    });
+  });
+  const coversAllCommands = !claimConflict2 && claimedIndices.size === input.commands.length;
+  const complete = coversAllCommands && input.stages.length > 0 && input.stages.every((capture) => capture.invocation !== null && capture.invocation.artifact?.finalized === true && capture.invocation.artifact.flowStatus !== "unknown") && stages.every((stage) => stage.invocationTermination !== null && terminationClean(stage.invocationTermination));
+  return {
+    schemaVersion: MAESTRO_RUN_LEDGER_SCHEMA_VERSION,
+    producerAdapterVersion: MAESTRO_RUNNER_FLOW_JSON_ADAPTER,
+    attempt: {
+      ...input.attempt,
+      sourceDigest: sha2562(input.sourceText),
+      complete
+    },
+    stages,
+    observations,
+    operations
+  };
+}
+function recordObservations(stageOperations, artifact, stageId, observations) {
+  const byVerb = /* @__PURE__ */ new Map();
+  for (const operation of stageOperations) {
+    const ids = byVerb.get(operation.verb) ?? [];
+    ids.push(operation.operationId);
+    byVerb.set(operation.verb, ids);
+  }
+  const observedCounts = /* @__PURE__ */ new Map();
+  for (const command of artifact.commands) {
+    observedCounts.set(command.type, (observedCounts.get(command.type) ?? 0) + 1);
+  }
+  for (const command of artifact.commands) {
+    const candidates = byVerb.get(command.type) ?? [];
+    const oneToOne = candidates.length === 1 && observedCounts.get(command.type) === 1;
+    observations.push({
+      producer: "maestro-commands-json",
+      producerSequence: command.index,
+      stageId,
+      command: command.type,
+      status: command.status,
+      ...command.error ? { error: command.error.slice(0, 500) } : {},
+      mapping: oneToOne ? { kind: "exact", operationId: candidates[0] } : candidates.length >= 1 ? { kind: "ambiguous", candidates: [...candidates] } : { kind: "none" }
+    });
+  }
+}
+function artifactSelfConsistent(artifact) {
+  const anyFailed = artifact.commands.some((command) => command.status === "failed");
+  if (artifact.flowStatus === "passed")
+    return !anyFailed;
+  if (artifact.flowStatus === "failed")
+    return anyFailed;
+  return false;
+}
+function assignOutcomesFromArtifact(stageOperations, artifact, stageId, observations) {
+  recordObservations(stageOperations, artifact, stageId, observations);
+  const authoredByVerb = /* @__PURE__ */ new Map();
+  for (const operation of stageOperations) {
+    const rows = authoredByVerb.get(operation.verb) ?? [];
+    rows.push(operation);
+    authoredByVerb.set(operation.verb, rows);
+  }
+  const observedByVerb = /* @__PURE__ */ new Map();
+  for (const command of artifact.commands) {
+    const evidence = observedByVerb.get(command.type) ?? { operationIds: [], statuses: [] };
+    evidence.statuses.push(command.status);
+    observedByVerb.set(command.type, evidence);
+  }
+  for (const [verb, rows] of authoredByVerb) {
+    const statuses = observedByVerb.get(verb)?.statuses ?? [];
+    if (statuses.length !== rows.length)
+      continue;
+    const uniform = statuses.every((status2) => status2 === statuses[0]);
+    if (!uniform)
+      continue;
+    const status = statuses[0];
+    for (const row of rows) {
+      row.outcome = status === "passed" ? { state: "proven", status: "passed" } : status === "failed" ? { state: "proven", status: "failed" } : status === "skipped" ? { state: "notRun" } : { state: "unknown" };
+    }
+  }
+  const deviated = artifact.commands.some((command) => {
+    const rows = authoredByVerb.get(command.type);
+    return !rows || (observedByVerb.get(command.type)?.statuses.length ?? 0) > rows.length;
+  });
+  if (deviated) {
+    for (const row of stageOperations) {
+      if (row.outcome.state === "proven" && row.outcome.status === "passed") {
+        row.outcome = { state: "unknown" };
+      }
+    }
+  }
+}
+function isProvenTrailingVerificationQualifier(candidate) {
+  const qualifier = candidate;
+  if (!qualifier || typeof qualifier !== "object")
+    return false;
+  if (qualifier.trailingVerificationOnly !== true)
+    return false;
+  if (qualifier.mutationEvidence !== "proven")
+    return false;
+  if (typeof qualifier.provenMutations !== "number" || qualifier.provenMutations < 1 || typeof qualifier.failedVerifications !== "number" || qualifier.failedVerifications < 1) {
+    return false;
+  }
+  const attempt = qualifier.attempt;
+  if (!attempt || typeof attempt.attemptId !== "string" || attempt.attemptId.length === 0) {
+    return false;
+  }
+  if (attempt.kind === "repaired" && !attempt.parentAttemptId)
+    return false;
+  if (attempt.kind === "initial" && attempt.parentAttemptId)
+    return false;
+  if (attempt.kind !== "initial" && attempt.kind !== "repaired")
+    return false;
+  if (!Array.isArray(qualifier.stageTerminations) || qualifier.stageTerminations.length === 0) {
+    return false;
+  }
+  return qualifier.stageTerminations.every((termination) => termination !== null && typeof termination === "object" && typeof termination.exitCode === "number" && Number.isFinite(termination.exitCode) && termination.signal === null && termination.timedOut === false && termination.outputTruncated === false && termination.bootstrapFailure === false && termination.transportFailure === false && termination.artifactFinalized === true);
+}
+function classifyTrailingVerification(ledger) {
+  if (ledger.schemaVersion !== MAESTRO_RUN_LEDGER_SCHEMA_VERSION)
+    return null;
+  if (ledger.producerAdapterVersion !== MAESTRO_RUNNER_FLOW_JSON_ADAPTER)
+    return null;
+  if (ledger.stages.length === 0)
+    return null;
+  const stageById = new Map(ledger.stages.map((stage) => [stage.stageId, stage]));
+  if (ledger.operations.some((operation) => {
+    const stage = stageById.get(operation.stageId);
+    return !stage || !stage.invoked;
+  })) {
+    return null;
+  }
+  if (!ledger.attempt.complete)
+    return null;
+  if (ledger.operations.length === 0)
+    return null;
+  if (ledger.attempt.kind === "repaired" && !ledger.attempt.parentAttemptId)
+    return null;
+  if (ledger.attempt.kind === "initial" && ledger.attempt.parentAttemptId)
+    return null;
+  const stageTerminations = [];
+  for (const stage of ledger.stages) {
+    if (!stage.invoked || stage.invocationTermination === null)
+      return null;
+    if (!terminationClean(stage.invocationTermination))
+      return null;
+    stageTerminations.push(stage.invocationTermination);
+  }
+  if (ledger.operations.some((operation) => operation.effect === "unknown"))
+    return null;
+  if (ledger.operations.some((operation) => operation.outcome.state === "unknown"))
+    return null;
+  let failureSeen = false;
+  for (const stage of ledger.stages) {
+    const stageObservations = ledger.observations.filter((observation) => observation.stageId === stage.stageId && observation.producer === "maestro-commands-json");
+    const passedMutation = (observation) => observation.status === "passed" && commandEffect(observation.command) === "mutation";
+    if (failureSeen && stageObservations.some(passedMutation))
+      return null;
+    const failedSequences = [];
+    for (const observation of stageObservations) {
+      if (observation.status !== "failed")
+        continue;
+      if (typeof observation.producerSequence !== "number")
+        return null;
+      failedSequences.push(observation.producerSequence);
+    }
+    if (failedSequences.length > 0) {
+      const firstFailure = Math.min(...failedSequences);
+      const mutationAfterFailure = stageObservations.some((observation) => passedMutation(observation) && (typeof observation.producerSequence !== "number" || observation.producerSequence > firstFailure));
+      if (mutationAfterFailure)
+        return null;
+      failureSeen = true;
+    }
+  }
+  let provenMutations = 0;
+  let failedVerifications = 0;
+  let notRunOperations = 0;
+  for (const operation of ledger.operations) {
+    const { effect, outcome } = operation;
+    if (outcome.state === "notRun") {
+      if (effect === "mutation")
+        return null;
+      notRunOperations++;
+      continue;
+    }
+    if (outcome.state === "proven" && outcome.status === "failed") {
+      if (effect !== "verification")
+        return null;
+      failedVerifications++;
+      continue;
+    }
+    if (effect === "mutation")
+      provenMutations++;
+  }
+  if (failedVerifications === 0)
+    return null;
+  if (provenMutations === 0)
+    return null;
+  return {
+    trailingVerificationOnly: true,
+    mutationEvidence: "proven",
+    provenMutations,
+    failedVerifications,
+    notRunOperations,
+    stageTerminations,
+    attempt: {
+      attemptId: ledger.attempt.attemptId,
+      ordinal: ledger.attempt.ordinal,
+      kind: ledger.attempt.kind,
+      ...ledger.attempt.parentAttemptId ? { parentAttemptId: ledger.attempt.parentAttemptId } : {}
+    }
+  };
+}
+
 // packages/rn-dev-agent-core/dist/tools/maestro-run.js
 init_authority_gate();
 init_registry();
+import { randomUUID as randomUUID8 } from "node:crypto";
 
 // packages/rn-dev-agent-core/dist/domain/cdp-flow-replay.js
 var UnsupportedStepError = class extends Error {
@@ -78799,6 +79281,19 @@ function remapNativeSteps(steps, sourceIndices) {
     return mapped ? [mapped] : [];
   });
 }
+function partialNativeFailureMessage(meta) {
+  const failedStep = remapNativeStep(meta.failedStep, 0, []);
+  const lastStep = remapNativeStep(meta.lastStep, 0, []);
+  const terminal = isRecord(meta.terminal) ? meta.terminal : null;
+  const failureKind = terminal?.failureKind;
+  const reason = failureKind === "SELECTOR_NOT_FOUND" || failureKind === "TIMEOUT" || failureKind === "ASSERTION_FAILED" ? {
+    kind: failureKind,
+    selector: typeof terminal?.failureSelector === "string" ? terminal.failureSelector : null
+  } : null;
+  const headline = formatFailureHeadline({ steps: [], failedStep, lastStep, reason }, { timedOut: meta.timedOut === true, outputTruncated: meta.outputTruncated === true }, "Native replay segment failed.");
+  const runtimeDegradation = runtimeDegradationFromMetadata(meta.runtimeDegraded);
+  return runtimeDegradation ? `${headline} \u2014 ${formatRuntimeDegradedHint(runtimeDegradation)}` : headline;
+}
 var ReactReplayFailure = class extends Error {
   replay;
   sourceIndices;
@@ -79029,6 +79524,13 @@ function createMaestroRunHandler(deps = {}) {
             const env = readToolEnvelope(nested);
             if (env.ok !== true || env.data?.passed !== true) {
               const nestedMeta = { ...env.meta, ...env.data };
+              const nativeSegmentCoversAttempt = segment.sourceIndices.length === validatedCommands.length && segment.sourceIndices.every((sourceIndex, index) => sourceIndex === index);
+              let nestedError = env.error ?? "Native replay segment failed.";
+              if (!nativeSegmentCoversAttempt) {
+                delete nestedMeta.trailingVerification;
+                delete nestedMeta.ledger;
+                nestedError = partialNativeFailureMessage(nestedMeta);
+              }
               combinedSteps.push(...remapNativeSteps(nestedMeta.steps, segment.sourceIndices));
               const uniqueProofDomains = [...new Set(proofDomains)];
               const proofDomain2 = uniqueProofDomains.length === 1 ? uniqueProofDomains.at(0) ?? "partitioned" : "partitioned";
@@ -79044,7 +79546,7 @@ function createMaestroRunHandler(deps = {}) {
                 ...failedStep ? { failedStep } : {},
                 ...lastStep ? { lastStep } : {}
               };
-              return env.code ? failResult(env.error ?? "Native replay segment failed.", env.code, meta) : failResult(env.error ?? "Native replay segment failed.", meta);
+              return env.code ? failResult(nestedError, env.code, meta) : failResult(nestedError, meta);
             }
             nativeTransportVersion = env.data.transportVersion ?? nativeTransportVersion;
             if (typeof env.data.output === "string")
@@ -79323,13 +79825,51 @@ function createMaestroRunHandler(deps = {}) {
     let nativeOriginPreclaimed = false;
     let deferredNativeOriginTarget = false;
     let completePreclaimedOrigin = null;
+    const ledgerAttempt = args.attempt ?? {
+      attemptId: randomUUID8(),
+      ordinal: 1,
+      maxAttempts: 1,
+      kind: "initial"
+    };
+    const authorityPlan = planMaestroAuthorityStages(validatedCommands);
+    const plannedStageMeta = (() => {
+      let cursor = 0;
+      return authorityPlan.stages.map((stage) => {
+        const sourceIndices = stage.commands.map((_, i) => cursor + i);
+        cursor += stage.commands.length;
+        return { sourceIndices, requiresOrigin: stage.requiresOrigin };
+      });
+    })();
+    const stageCaptures = [];
+    let ledgerStageCursor = 0;
+    const stageTerminationFromError = (error2) => {
+      const errorClass = classifyExecError(error2);
+      const raw = error2;
+      return {
+        exitCode: typeof raw?.code === "number" ? raw.code : null,
+        signal: typeof raw?.signal === "string" ? raw.signal : null,
+        timedOut: errorClass.timedOut,
+        outputTruncated: errorClass.outputTruncated,
+        bootstrapFailure: error2 instanceof RunnerCacheUnavailableError,
+        transportFailure: isPreSpawnMaestroError(error2)
+      };
+    };
+    const buildAttemptLedger = () => buildMaestroRunLedger({
+      attempt: ledgerAttempt,
+      sourceText: validatedContent,
+      commands: validatedCommands,
+      stages: plannedStageMeta.map((meta, index) => stageCaptures[index] ?? {
+        sourceIndices: meta.sourceIndices,
+        requiresOrigin: meta.requiresOrigin,
+        invocation: null
+      })
+    });
     try {
       const managedAuthority = nestedMaestroAuthorityCallbacks(args);
       const claimOrigin = args.claimNativeOrigin ?? deps.claimNativeOrigin ?? managedAuthority.claimNativeOrigin;
       const completeOrigin = args.completeNativeOrigin ?? deps.completeNativeOrigin ?? managedAuthority.completeNativeOrigin;
       const relaunchManagedApp = args.relaunchManagedApp ?? deps.relaunchManagedApp ?? managedAuthority.relaunchManagedApp;
       const reproveManagedOrigin = args.reproveManagedOrigin ?? deps.reproveManagedOrigin ?? managedAuthority.reproveManagedOrigin;
-      const authorityPlan = planMaestroAuthorityStages(validatedCommands);
       if (platform === "ios" && authorityPlan.stages[0]?.requiresOrigin) {
         await claimOrigin();
         nativeOriginPreclaimed = true;
@@ -79344,79 +79884,121 @@ function createMaestroRunHandler(deps = {}) {
       };
       completePreclaimedOrigin = completeTrackedOrigin;
       const stageResults = await parkFlow(() => executeMaestroAuthorityStages(validatedCommands, async (commands) => {
-        writeFileSync12(flowFile, buildMaestroFlow(headerAppId ? { appId: headerAppId } : {}, [...commands]), "utf-8");
-        const executeOnce = async (beforeDispatch) => {
-          if (flowDeadline - now() <= 0) {
-            const error2 = new Error("Maestro flow timeout exhausted before the next stage");
-            Object.assign(error2, { code: "ETIMEDOUT" });
-            throw error2;
-          }
-          const executeRunner = (runnerPath, prefixArgs = []) => {
-            beforeDispatch?.();
-            const remainingTimeout = flowDeadline - now();
-            if (remainingTimeout <= 0) {
-              const error2 = new Error("Maestro flow timeout exhausted before runner execution");
-              Object.assign(error2, { code: "ETIMEDOUT" });
-              throw error2;
+        const ledgerStageIndex = ledgerStageCursor++;
+        const preFingerprint = runnerReportFingerprint(runnerReportDir);
+        let failedInvocationTermination = null;
+        const captureStageInvocation = (termination) => {
+          const meta2 = plannedStageMeta[ledgerStageIndex];
+          stageCaptures[ledgerStageIndex] = {
+            sourceIndices: meta2?.sourceIndices ?? [],
+            requiresOrigin: meta2?.requiresOrigin ?? true,
+            invocation: {
+              termination,
+              // The pre-invocation fingerprint lets the reader refuse
+              // leftover or mixed-generation evidence for this stage.
+              artifact: readStructuredFlowArtifact(runnerReportDir, preFingerprint)
             }
-            return execute2(runnerPath, [...prefixArgs, ...finalArgs], {
-              timeout: remainingTimeout,
-              encoding: "utf8",
-              maxBuffer: 10 * 1024 * 1024,
-              signal: flowAbort.signal
-            });
           };
-          if (deps.execFile) {
-            const immediateStatus = await resolveEngineStatus();
-            const refusal = exactPinRefusal(immediateStatus);
-            const immediateRefusal = refusal ? `RUNNER_PIN_CHANGED: ${refusal}` : null;
-            if (immediateRefusal)
-              throw new Error(immediateRefusal);
-            return executeRunner(dispatch.binPath);
-          }
-          return withImmediatePinnedRunner(dispatch.binPath, resolveEngineStatus, executeRunner, platform);
         };
         try {
-          return await executeOnce();
-        } catch (error2) {
-          const recoveryDeviceId = requestedDeviceId ?? releasedAndroidDeviceId;
-          if (platform !== "android" || uiAutomationRecoveryAttempted || !recoveryDeviceId || !isUiAutomationNotConnectedSessionCreationFailure(error2)) {
-            throw error2;
-          }
-          uiAutomationRecoveryAttempted = true;
-          const recoveryTimeout = flowDeadline - now();
-          if (recoveryTimeout <= 0) {
-            androidSlotReleaseWarnings.push("UiAutomation recovery skipped: Maestro flow timeout was exhausted");
-            throw error2;
-          }
-          const recoveryAbort = new AbortController();
-          const recoveryDeadlineTimer = setTimeout(() => {
-            recoveryAbort.abort(new Error("UiAutomation recovery cleanup exceeded the remaining Maestro flow timeout"));
-          }, recoveryTimeout);
-          try {
-            recordAndroidRelease(await releaseAndroidSlot({
-              deviceId: recoveryDeviceId,
-              includeLegacy: false,
-              signal: recoveryAbort.signal
-            }));
-          } catch (releaseError) {
-            androidSlotReleaseWarnings.push(`UiAutomation recovery release failed: ${releaseError instanceof Error ? releaseError.message : String(releaseError)}`);
-            throw attachCause(error2, releaseError);
-          } finally {
-            clearTimeout(recoveryDeadlineTimer);
-          }
-          try {
-            return await executeOnce(() => {
-              uiAutomationRecoveryRetried = true;
-            });
-          } catch (retryError) {
-            if (uiAutomationRecoveryRetried && !isPreSpawnMaestroError(retryError)) {
-              throw retryError;
+          const stageResult = await (async () => {
+            writeFileSync12(flowFile, buildMaestroFlow(headerAppId ? { appId: headerAppId } : {}, [...commands]), "utf-8");
+            const executeOnce = async (beforeDispatch) => {
+              if (flowDeadline - now() <= 0) {
+                const error2 = new Error("Maestro flow timeout exhausted before the next stage");
+                Object.assign(error2, { code: "ETIMEDOUT" });
+                throw error2;
+              }
+              const executeRunner = (runnerPath, prefixArgs = []) => {
+                beforeDispatch?.();
+                const remainingTimeout = flowDeadline - now();
+                if (remainingTimeout <= 0) {
+                  const error2 = new Error("Maestro flow timeout exhausted before runner execution");
+                  Object.assign(error2, { code: "ETIMEDOUT" });
+                  throw error2;
+                }
+                return execute2(runnerPath, [...prefixArgs, ...finalArgs], {
+                  timeout: remainingTimeout,
+                  encoding: "utf8",
+                  maxBuffer: 10 * 1024 * 1024,
+                  signal: flowAbort.signal
+                });
+              };
+              if (deps.execFile) {
+                const immediateStatus = await resolveEngineStatus();
+                const refusal = exactPinRefusal(immediateStatus);
+                const immediateRefusal = refusal ? `RUNNER_PIN_CHANGED: ${refusal}` : null;
+                if (immediateRefusal)
+                  throw new Error(immediateRefusal);
+                return executeRunner(dispatch.binPath);
+              }
+              return withImmediatePinnedRunner(dispatch.binPath, resolveEngineStatus, executeRunner, platform);
+            };
+            try {
+              return await executeOnce();
+            } catch (error2) {
+              const initialFailureTermination = stageTerminationFromError(error2);
+              const recoveryDeviceId = requestedDeviceId ?? releasedAndroidDeviceId;
+              if (platform !== "android" || uiAutomationRecoveryAttempted || !recoveryDeviceId || !isUiAutomationNotConnectedSessionCreationFailure(error2)) {
+                failedInvocationTermination = initialFailureTermination;
+                throw error2;
+              }
+              uiAutomationRecoveryAttempted = true;
+              const recoveryTimeout = flowDeadline - now();
+              if (recoveryTimeout <= 0) {
+                androidSlotReleaseWarnings.push("UiAutomation recovery skipped: Maestro flow timeout was exhausted");
+                failedInvocationTermination = initialFailureTermination;
+                throw error2;
+              }
+              const recoveryAbort = new AbortController();
+              const recoveryDeadlineTimer = setTimeout(() => {
+                recoveryAbort.abort(new Error("UiAutomation recovery cleanup exceeded the remaining Maestro flow timeout"));
+              }, recoveryTimeout);
+              try {
+                recordAndroidRelease(await releaseAndroidSlot({
+                  deviceId: recoveryDeviceId,
+                  includeLegacy: false,
+                  signal: recoveryAbort.signal
+                }));
+              } catch (releaseError) {
+                androidSlotReleaseWarnings.push(`UiAutomation recovery release failed: ${releaseError instanceof Error ? releaseError.message : String(releaseError)}`);
+                failedInvocationTermination = {
+                  ...initialFailureTermination,
+                  transportFailure: true
+                };
+                throw attachCause(error2, releaseError);
+              } finally {
+                clearTimeout(recoveryDeadlineTimer);
+              }
+              try {
+                return await executeOnce(() => {
+                  uiAutomationRecoveryRetried = true;
+                });
+              } catch (retryError) {
+                const retryFailureTermination = stageTerminationFromError(retryError);
+                if (uiAutomationRecoveryRetried && !isPreSpawnMaestroError(retryError)) {
+                  failedInvocationTermination = retryFailureTermination;
+                  throw retryError;
+                }
+                uiAutomationRecoveryRetried = false;
+                androidSlotReleaseWarnings.push(`UiAutomation recovery retry did not start: ${retryError instanceof Error ? retryError.message : String(retryError)}`);
+                failedInvocationTermination = retryFailureTermination;
+                throw attachCause(error2, retryError);
+              }
             }
-            uiAutomationRecoveryRetried = false;
-            androidSlotReleaseWarnings.push(`UiAutomation recovery retry did not start: ${retryError instanceof Error ? retryError.message : String(retryError)}`);
-            throw attachCause(error2, retryError);
-          }
+          })();
+          captureStageInvocation({
+            exitCode: 0,
+            signal: null,
+            timedOut: false,
+            outputTruncated: false,
+            bootstrapFailure: false,
+            transportFailure: false
+          });
+          return stageResult;
+        } catch (stageInvocationError) {
+          captureStageInvocation(failedInvocationTermination ?? stageTerminationFromError(stageInvocationError));
+          throw stageInvocationError;
         }
       }, claimOrigin, completeTrackedOrigin, relaunchManagedApp, reproveManagedOrigin, { firstOriginClaimed: nativeOriginPreclaimed, signal: flowAbort.signal }), {
         platform,
@@ -79497,10 +80079,23 @@ function createMaestroRunHandler(deps = {}) {
         return okResult(meta);
       }
       const baseWarnMsg = [caveat, releaseCaveat, "Flow completed with warnings or failures"].filter((part) => Boolean(part)).join("; ");
-      const warnAug = augmentFailureWithDegradation(output, resolveFloorMs(process.env.RN_RUNTIME_DEGRADED_FLOOR_MS), baseWarnMsg, meta);
+      const warnLedger = buildAttemptLedger();
+      const warnTrailingVerification = classifyTrailingVerification(warnLedger);
+      const warnAug = augmentFailureWithDegradation(output, resolveFloorMs(process.env.RN_RUNTIME_DEGRADED_FLOOR_MS), baseWarnMsg, {
+        ...meta,
+        ledger: warnLedger,
+        ...warnTrailingVerification ? { trailingVerification: warnTrailingVerification } : {}
+      }, { trailingVerification: warnTrailingVerification });
       return warnResult(warnAug.meta, warnAug.message);
     } catch (err) {
       const stageError = err instanceof MaestroStageExecutionError ? err.stageError : err;
+      const errorClass = classifyExecError(stageError);
+      const processTerminationVeto = stageCaptures.some((capture) => {
+        const termination = capture.invocation?.termination;
+        if (!termination)
+          return false;
+        return termination.timedOut || termination.signal !== null || termination.outputTruncated || termination.bootstrapFailure || termination.transportFailure;
+      });
       if (nativeOriginPreclaimed && completePreclaimedOrigin) {
         try {
           await completePreclaimedOrigin(false);
@@ -79571,7 +80166,6 @@ function createMaestroRunHandler(deps = {}) {
           ...androidReleaseMeta()
         });
       }
-      const errorClass = classifyExecError(stageError);
       let timedOut = errorClass.timedOut || flowAbort.signal.aborted;
       const { outputTruncated } = errorClass;
       const directEvidence = directRunnerEvidence(combined);
@@ -79686,7 +80280,11 @@ function createMaestroRunHandler(deps = {}) {
       const rawHeadline = formatFailureHeadline(summary, { timedOut, outputTruncated }, msg3);
       const releaseCaveat = androidReleaseCaveat();
       const headline = releaseCaveat ? `${rawHeadline}; ${releaseCaveat}` : rawHeadline;
+      const failLedger = buildAttemptLedger();
+      const failTrailingVerification = processTerminationVeto ? null : classifyTrailingVerification(failLedger);
       const failAug = augmentFailureWithDegradation(combined, resolveFloorMs(process.env.RN_RUNTIME_DEGRADED_FLOOR_MS), headline, {
+        ledger: failLedger,
+        ...failTrailingVerification ? { trailingVerification: failTrailingVerification } : {},
         flowFile,
         platform,
         runner: dispatch.runner,
@@ -79708,7 +80306,7 @@ function createMaestroRunHandler(deps = {}) {
         // exactly when the pin state matters — carry it on this path too.
         ...engineStatus && engineStatus.pin.status !== "pinned-ok" ? { enginePin: engineStatus.pin } : {},
         ...androidReleaseMeta()
-      });
+      }, { trailingVerification: failTrailingVerification });
       return failResult(failAug.message, failAug.meta);
     } finally {
       clearTimeout(flowAbortTimer);
@@ -80019,6 +80617,26 @@ function readMaestroDeviceAuthority(env) {
     return env.data.deviceAuthority;
   return env.meta?.deviceAuthority;
 }
+function readRuntimeDegradation(env) {
+  for (const source of [env.meta, env.data]) {
+    const degradation = runtimeDegradationFromMetadata(source?.runtimeDegraded);
+    if (degradation)
+      return degradation;
+  }
+  return void 0;
+}
+function readTrailingVerification(env, dispatched) {
+  for (const source of [env.meta, env.data]) {
+    const candidate = source?.trailingVerification;
+    if (!isProvenTrailingVerificationQualifier(candidate))
+      continue;
+    if (candidate.attempt.attemptId !== dispatched.attemptId || candidate.attempt.ordinal !== dispatched.ordinal || candidate.attempt.kind !== dispatched.kind || candidate.attempt.parentAttemptId !== dispatched.parentAttemptId) {
+      continue;
+    }
+    return candidate;
+  }
+  return void 0;
+}
 function terminalReason(terminal) {
   if (!terminal?.failureKind)
     return "";
@@ -80160,7 +80778,7 @@ function createRunActionHandler(deps = {}) {
     const timeoutMs = args.timeoutMs ?? 12e4;
     const t0 = Date.now();
     const startedAt = new Date(t0).toISOString();
-    const runId = randomUUID8();
+    const runId = randomUUID9();
     const timingSteps = [];
     const measureStep = async (name, run) => {
       const stepStartedMs = Date.now();
@@ -80215,6 +80833,8 @@ function createRunActionHandler(deps = {}) {
       const firstCorpusRefusal = replayCorpusIdentityRefusal(loadContext, args.actionId);
       if (firstCorpusRefusal)
         return firstCorpusRefusal;
+      const initialAttemptId = randomUUID9();
+      const maxAttempts = autoRepairEnabled ? 2 : 1;
       const firstResult = await measureStep("maestro-first-attempt", () => maestroRun({
         inlineYaml: replayYaml,
         actionMetadata: action.metadata,
@@ -80224,6 +80844,7 @@ function createRunActionHandler(deps = {}) {
         deviceId: maestroDeviceId,
         timeoutMs,
         params: args.params,
+        attempt: { attemptId: initialAttemptId, ordinal: 1, maxAttempts, kind: "initial" },
         claimNativeOrigin: () => claimNativeOrigin(args),
         completeNativeOrigin: (targetExpected) => completeNativeOrigin(args, targetExpected),
         relaunchManagedApp: (stopApp) => relaunchManagedApp(args, stopApp),
@@ -80337,6 +80958,48 @@ function createRunActionHandler(deps = {}) {
         });
       }
       const failure = firstTypedSelectorFailure ?? parseMaestroFailure(firstOutput, readMaestroTerminal(firstEnv));
+      const firstTrailingVerification = readTrailingVerification(firstEnv, {
+        attemptId: initialAttemptId,
+        ordinal: 1,
+        kind: "initial"
+      });
+      if (firstTrailingVerification) {
+        const firstRuntimeDegradation = readRuntimeDegradation(firstEnv);
+        const autoRepair2 = {
+          attempted: false,
+          outcome: "refused",
+          refusedReason: autoRepairEnabled ? "NOT_REPAIRABLE_KIND" : "USER_DISABLED",
+          phases: { firstAttemptMs }
+        };
+        const { actionCode, toolCode } = classifyFailure(failure);
+        const persisted2 = await persistRunWithDevice({
+          timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+          durationMs: Date.now() - t0,
+          status: "fail",
+          failureCode: actionCode,
+          failureDetail: firstFailureDetail.slice(0, 1e3),
+          trigger,
+          autoRepair: autoRepair2,
+          trailingVerification: firstTrailingVerification
+        });
+        const anchor = "selector" in failure && failure.selector ? ` ("${failure.selector}")` : readMaestroTerminal(firstEnv)?.failedStep ? ` ("${readMaestroTerminal(firstEnv)?.failedStep}")` : "";
+        const baseMessage = `cdp_run_action: ${args.actionId} failed (${failure.kind}) \u2014 trailing verification only: the run ledger proves every authored mutating command completed (${firstTrailingVerification.provenMutations} mutations), and only the final wait/assert${anchor} did not verify within its deadline. The goal state is UNPROVEN \u2014 the app may have reached it after the wait gave up. Verify the live state (device_screenshot, cdp_navigation_state, expect_visible_by_testid) before re-running. Auto-repair skipped: the selector may be merely slow, not stale.`;
+        const message = firstRuntimeDegradation ? `${baseMessage} \u2014 ${formatRuntimeSlowCaveat(firstRuntimeDegradation)}` : baseMessage;
+        const meta = {
+          actionId: args.actionId,
+          failureKind: failure.kind,
+          ..."selector" in failure && failure.selector ? { failureSelector: failure.selector } : {},
+          underlyingFailure: firstFailureDetail,
+          trailingVerification: firstTrailingVerification,
+          ...firstRuntimeDegradation ? { runtimeDegraded: runtimeDegradationMetadata(firstRuntimeDegradation) } : {},
+          autoRepair: autoRepair2,
+          firstAttemptOutput: boundedOutput(firstOutput),
+          terminal: readMaestroTerminal(firstEnv),
+          runnerResume: firstEnv.meta?.runnerResume,
+          ...strictRunRecordMeta(persisted2)
+        };
+        return toolCode ? failResult(message, toolCode, meta) : failResult(message, meta);
+      }
       const expectedSeq = action.metadata.expectedRouteSequence;
       if (failure.kind === "SELECTOR_NOT_FOUND" && expectedSeq && expectedSeq.length > 0) {
         const bundleAuthorityClaimed = await claimBundleAuthority(args);
@@ -80481,6 +81144,7 @@ function createRunActionHandler(deps = {}) {
       const retryCorpusRefusal = replayCorpusIdentityRefusal(loadContext, args.actionId);
       if (retryCorpusRefusal)
         return retryCorpusRefusal;
+      const repairedAttemptId = randomUUID9();
       const retryResult = await measureStep("maestro-retry", () => maestroRun({
         inlineYaml: retryYaml,
         actionMetadata: reloadedAction.metadata,
@@ -80490,6 +81154,13 @@ function createRunActionHandler(deps = {}) {
         deviceId: maestroDeviceId,
         timeoutMs,
         params: args.params,
+        attempt: {
+          attemptId: repairedAttemptId,
+          ordinal: 2,
+          maxAttempts,
+          kind: "repaired",
+          parentAttemptId: initialAttemptId
+        },
         claimNativeOrigin: () => claimNativeOrigin(args),
         completeNativeOrigin: (targetExpected) => completeNativeOrigin(args, targetExpected),
         relaunchManagedApp: (stopApp) => relaunchManagedApp(args, stopApp),
@@ -80552,6 +81223,13 @@ function createRunActionHandler(deps = {}) {
         repairTimestamp,
         ...nextFailedSelector ? { nextFailedSelector } : {}
       };
+      const retryTrailingVerification = retryPassed ? void 0 : readTrailingVerification(retryEnv, {
+        attemptId: repairedAttemptId,
+        ordinal: 2,
+        kind: "repaired",
+        parentAttemptId: initialAttemptId
+      });
+      const retryRuntimeDegradation = retryTrailingVerification ? readRuntimeDegradation(retryEnv) : void 0;
       const persisted = await persistRunWithDevice({
         timestamp: (/* @__PURE__ */ new Date()).toISOString(),
         durationMs: Date.now() - t0,
@@ -80560,6 +81238,7 @@ function createRunActionHandler(deps = {}) {
         failureDetail: retryPassed ? void 0 : retryFailureDetail.slice(0, 1e3),
         trigger,
         autoRepair,
+        ...retryTrailingVerification ? { trailingVerification: retryTrailingVerification } : {},
         ...retryPassed && retryEnv.data?.transport === "cdp-js" ? { transport: "cdp-js" } : {},
         ...retryPassed && retryEnv.data?.proofDomain ? { proofDomain: retryEnv.data.proofDomain } : {}
       });
@@ -80577,9 +81256,12 @@ function createRunActionHandler(deps = {}) {
           retryOutput: boundedOutput(retryOutput)
         });
       }
-      const retryMessage = `cdp_run_action: ${args.actionId} still failing after auto-repair (${repairData.oldSelector} \u2192 ${repairData.newSelector}): ${retryFailureDetail}`;
+      const retryBaseMessage = retryTrailingVerification ? `cdp_run_action: ${args.actionId} failed after auto-repair (${repairData.oldSelector} \u2192 ${repairData.newSelector}) \u2014 trailing verification only: the run ledger proves every authored mutating command completed (${retryTrailingVerification.provenMutations} mutations); only the final wait/assert did not verify within its deadline. The goal state is UNPROVEN \u2014 verify the live state before re-running.` : `cdp_run_action: ${args.actionId} still failing after auto-repair (${repairData.oldSelector} \u2192 ${repairData.newSelector}): ${retryFailureDetail}`;
+      const retryMessage = retryRuntimeDegradation ? `${retryBaseMessage} \u2014 ${formatRuntimeSlowCaveat(retryRuntimeDegradation)}` : retryBaseMessage;
       const retryMeta = {
         actionId: args.actionId,
+        ...retryTrailingVerification ? { trailingVerification: retryTrailingVerification } : {},
+        ...retryRuntimeDegradation ? { runtimeDegraded: runtimeDegradationMetadata(retryRuntimeDegradation) } : {},
         autoRepair,
         writes: writeDisclosure("auto-repair", persisted),
         firstAttemptOutput: boundedOutput(firstOutput),
@@ -81180,8 +81862,8 @@ import { execFile as execFileCb15, spawn as spawn8 } from "node:child_process";
 import { promisify as promisify19 } from "node:util";
 
 // packages/rn-dev-agent-core/dist/experience/evidence.js
-import { createHash as createHash14, randomBytes as randomBytes7, randomUUID as randomUUID9 } from "node:crypto";
-import { chmodSync as chmodSync7, existsSync as existsSync30, mkdirSync as mkdirSync19, readFileSync as readFileSync30, readdirSync as readdirSync11, renameSync as renameSync8, statSync as statSync14, unlinkSync as unlinkSync13, writeFileSync as writeFileSync13 } from "node:fs";
+import { createHash as createHash16, randomBytes as randomBytes7, randomUUID as randomUUID10 } from "node:crypto";
+import { chmodSync as chmodSync7, existsSync as existsSync30, mkdirSync as mkdirSync19, readFileSync as readFileSync30, readdirSync as readdirSync12, renameSync as renameSync8, statSync as statSync14, unlinkSync as unlinkSync13, writeFileSync as writeFileSync13 } from "node:fs";
 import { homedir as homedir9, platform as hostPlatform, release } from "node:os";
 import { dirname as dirname21, join as join42 } from "node:path";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
@@ -81417,7 +82099,7 @@ var ExperienceRecorder = class {
       recovery: null,
       cleanup: null,
       classification,
-      evidencePointers: [`event:${randomUUID9()}`],
+      evidencePointers: [`event:${randomUUID10()}`],
       tool,
       status: event.status === "ERROR" ? "ERROR" : "FAIL",
       normalizedSymptomShape,
@@ -81463,13 +82145,13 @@ var ExperienceRecorder = class {
     existing.lastRecoveredAt = now;
     delete existing.unknownReasons.recovery;
     existing.evidencePointers = boundedPointers(existing.evidencePointers, [
-      `event:${randomUUID9()}`
+      `event:${randomUUID10()}`
     ]);
     this.write(pruneExperienceRecords(records, this.now(), this.maxRecords, this.retentionMs));
   }
   write(records) {
     mkdirSync19(this.directory, { recursive: true, mode: 448 });
-    const temp = join42(this.directory, `.${EXPERIENCE_STORE_NAME}.${process.pid}.${randomUUID9()}`);
+    const temp = join42(this.directory, `.${EXPERIENCE_STORE_NAME}.${process.pid}.${randomUUID10()}`);
     try {
       const sanitized = records.map((record2) => record2.redactionVersion === REDACTION_RULES_VERSION ? record2 : {
         ...sanitizeForEvidence(record2),
@@ -81541,7 +82223,7 @@ function pruneExperienceRecords(records, now, maxRecords = DEFAULT_MAX_RECORDS, 
   }).sort((a, b) => Date.parse(b.lastSeen) - Date.parse(a.lastSeen) || a.signature.localeCompare(b.signature)).slice(0, Math.max(0, maxRecords)).sort((a, b) => a.signature.localeCompare(b.signature));
 }
 function experienceSignature(input) {
-  return createHash14("sha256").update(JSON.stringify([
+  return createHash16("sha256").update(JSON.stringify([
     input.classification,
     input.tool,
     input.normalizedSymptomShape,
@@ -81763,7 +82445,7 @@ function findNumber(value, keys, depth) {
   return null;
 }
 function stableDeviceHash(directory, deviceId) {
-  return createHash14("sha256").update(readOrCreateRunnerDiagnosticsSalt(directory)).update("\0").update(deviceId).digest("hex");
+  return createHash16("sha256").update(readOrCreateRunnerDiagnosticsSalt(directory)).update("\0").update(deviceId).digest("hex");
 }
 function readOrCreateRunnerDiagnosticsSalt(directory) {
   const path = join42(directory, ".runner-diagnostics-salt");
@@ -81809,7 +82491,7 @@ function writeRunnerDiagnosticsBundle(directory, bundle) {
   if (Buffer.byteLength(serialized) > RUNNER_DIAGNOSTICS_MAX_BYTES) {
     throw new Error("Runner diagnostics bundle exceeds the 256 KB limit after truncation.");
   }
-  const temporary = join42(directory, `.runner-diagnostics.${process.pid}.${randomUUID9()}`);
+  const temporary = join42(directory, `.runner-diagnostics.${process.pid}.${randomUUID10()}`);
   writeFileSync13(temporary, serialized, { encoding: "utf8", flag: "wx", mode: 384 });
   renameSync8(temporary, outputPath);
   chmodSync7(outputPath, 384);
@@ -81875,7 +82557,7 @@ function boundRunnerDiagnosticsBundle(bundle) {
 }
 function runnerDiagnosticsFiles(directory) {
   try {
-    return readdirSync11(directory).filter((file) => /^runner-diagnostics-.+-\d+\.json$/.test(file));
+    return readdirSync12(directory).filter((file) => /^runner-diagnostics-.+-\d+\.json$/.test(file));
   } catch {
     return [];
   }
@@ -83321,7 +84003,7 @@ init_agent_device_wrapper();
 
 // packages/rn-dev-agent-core/dist/session/managed-automation.js
 import { spawn as spawn9 } from "node:child_process";
-import { readdirSync as readdirSync12, readFileSync as readFileSync31, unlinkSync as unlinkSync14 } from "node:fs";
+import { readdirSync as readdirSync13, readFileSync as readFileSync31, unlinkSync as unlinkSync14 } from "node:fs";
 var OUTPUT_LIMIT = 10 * 1024 * 1024;
 var TERM_GRACE_MS = 500;
 var ABSENCE_CONFIRM_MS = 2e3;
@@ -83343,7 +84025,7 @@ function processGroupLiveness(pgid) {
   if (process.platform !== "linux")
     return "unknown";
   try {
-    for (const entry of readdirSync12("/proc", { withFileTypes: true })) {
+    for (const entry of readdirSync13("/proc", { withFileTypes: true })) {
       if (!entry.isDirectory() || !/^\d+$/.test(entry.name))
         continue;
       let stat2;
@@ -84111,7 +84793,7 @@ init_dev_client_picker();
 // packages/rn-dev-agent-core/dist/tools/device-record.js
 init_utils();
 import { execFile as execFile22 } from "node:child_process";
-import { createHash as createHash15 } from "node:crypto";
+import { createHash as createHash17 } from "node:crypto";
 import { existsSync as existsSync31 } from "node:fs";
 import { promisify as promisify23 } from "node:util";
 import { fileURLToPath as fileURLToPath4 } from "node:url";
@@ -84264,7 +84946,7 @@ function parseStatusOutput(stdout) {
   return active;
 }
 function recordingScope(args) {
-  return createHash15("sha256").update(`${args.sessionId}\0${args.claimEpoch}\0${args.platform}\0${args.deviceId}`).digest("hex");
+  return createHash17("sha256").update(`${args.sessionId}\0${args.claimEpoch}\0${args.platform}\0${args.deviceId}`).digest("hex");
 }
 function bindRecorderSession(runtime, args) {
   const available = runtime.requireAvailable();
@@ -84533,14 +85215,14 @@ function createDeviceRecordHandler(deps = {}) {
 }
 
 // packages/rn-dev-agent-core/dist/tools/proof-capture.js
-import { createHash as createHash17, randomUUID as randomUUID10 } from "node:crypto";
+import { createHash as createHash19, randomUUID as randomUUID11 } from "node:crypto";
 import { execFileSync as execFileSync15 } from "node:child_process";
-import { chmodSync as chmodSync8, closeSync as closeSync11, existsSync as existsSync32, fsyncSync, lstatSync as lstatSync17, mkdirSync as mkdirSync20, openSync as openSync11, readFileSync as readFileSync32, realpathSync as realpathSync14, renameSync as renameSync9, unlinkSync as unlinkSync15, writeFileSync as writeFileSync15 } from "node:fs";
-import { basename as basename11, dirname as dirname23, extname, isAbsolute as isAbsolute12, join as join45, relative as relative8, resolve as resolve16, sep as sep9 } from "node:path";
+import { chmodSync as chmodSync8, closeSync as closeSync11, existsSync as existsSync32, fsyncSync, lstatSync as lstatSync17, mkdirSync as mkdirSync20, openSync as openSync11, readFileSync as readFileSync32, realpathSync as realpathSync15, renameSync as renameSync9, unlinkSync as unlinkSync15, writeFileSync as writeFileSync15 } from "node:fs";
+import { basename as basename11, dirname as dirname23, extname, isAbsolute as isAbsolute13, join as join45, relative as relative8, resolve as resolve16, sep as sep10 } from "node:path";
 import { fileURLToPath as fileURLToPath5 } from "node:url";
 
 // packages/rn-dev-agent-core/dist/domain/proof-capture.js
-import { createHash as createHash16 } from "node:crypto";
+import { createHash as createHash18 } from "node:crypto";
 var StrictProofMonitor = class {
   now;
   events = [];
@@ -84614,14 +85296,14 @@ function hashProofArgs(params) {
   return hashProofValue(redact(params));
 }
 function hashProofValue(value) {
-  return createHash16("sha256").update(JSON.stringify(canonicalizeProofValue(value))).digest("hex");
+  return createHash18("sha256").update(JSON.stringify(canonicalizeProofValue(value))).digest("hex");
 }
 function proofRuntimeAuthorityMarker(input) {
   return hashProofValue(input);
 }
 function hashObservedValue(value) {
   const bytes = JSON.stringify(value) ?? String(value);
-  return createHash16("sha256").update(bytes).digest("hex");
+  return createHash18("sha256").update(bytes).digest("hex");
 }
 function resultEnvelope(result) {
   if (!result || typeof result !== "object")
@@ -85065,7 +85747,7 @@ function readStartupIntegrityAttestation() {
 }
 
 // packages/rn-dev-agent-core/dist/tools/proof-capture.js
-var absolutePathSchema = external_exports.string().min(1).refine(isAbsolute12, "path must be absolute");
+var absolutePathSchema = external_exports.string().min(1).refine(isAbsolute13, "path must be absolute");
 var beginRehearsalSchema = external_exports.object({
   action: external_exports.literal("begin_rehearsal"),
   projectRoot: absolutePathSchema,
@@ -85183,22 +85865,22 @@ var readinessSchema = external_exports.object({
   runtime: proofRuntimeSchema
 }).strict();
 function hashBytes(bytes) {
-  return createHash17("sha256").update(bytes).digest("hex");
+  return createHash19("sha256").update(bytes).digest("hex");
 }
 function captureProofWorkerStartup(argv = process.argv, attestation = readStartupIntegrityAttestation()) {
   let executedEntrypointPath = null;
   let loadedCoreBundlePath = null;
   let coreBundleSha256 = null;
   try {
-    if (typeof argv[1] === "string" && isAbsolute12(argv[1])) {
-      executedEntrypointPath = realpathSync14(argv[1]);
+    if (typeof argv[1] === "string" && isAbsolute13(argv[1])) {
+      executedEntrypointPath = realpathSync15(argv[1]);
     }
   } catch {
     executedEntrypointPath = null;
   }
   if (attestation) {
     try {
-      loadedCoreBundlePath = realpathSync14(fileURLToPath5(attestation.entrypointUrl));
+      loadedCoreBundlePath = realpathSync15(fileURLToPath5(attestation.entrypointUrl));
       coreBundleSha256 = attestation.coreBundleSha256;
     } catch {
       loadedCoreBundlePath = null;
@@ -85215,7 +85897,7 @@ function captureProofWorkerStartup(argv = process.argv, attestation = readStartu
 var proofWorkerStartup = captureProofWorkerStartup();
 function realpathOrSelf(path) {
   try {
-    return realpathSync14(path);
+    return realpathSync15(path);
   } catch {
     return path;
   }
@@ -85223,16 +85905,16 @@ function realpathOrSelf(path) {
 function resolveProofCandidateEntrypoint(candidateRoot, argv) {
   let root;
   try {
-    root = realpathSync14(candidateRoot);
+    root = realpathSync15(candidateRoot);
   } catch {
     return null;
   }
   const authorityArg = argv[1];
-  if (typeof authorityArg !== "string" || !isAbsolute12(authorityArg))
+  if (typeof authorityArg !== "string" || !isAbsolute13(authorityArg))
     return null;
   let arg;
   try {
-    arg = realpathSync14(authorityArg);
+    arg = realpathSync15(authorityArg);
   } catch {
     return null;
   }
@@ -85277,10 +85959,10 @@ function proofCandidateStartupMatches(entrypoint, startup, headCoreBundleSha256)
 }
 function proofCandidateEntrypointEnvironmentMatches(entrypoint, env) {
   const normalizedOverride = (value) => {
-    if (!value || !isAbsolute12(value))
+    if (!value || !isAbsolute13(value))
       return value ? null : "";
     try {
-      return realpathSync14(value);
+      return realpathSync15(value);
     } catch {
       return null;
     }
@@ -85302,7 +85984,7 @@ function proofCandidateEntrypointEnvironmentMatches(entrypoint, env) {
 }
 function readProofCandidateHeadArtifacts(candidateRoot, artifactPaths) {
   try {
-    const root = realpathSync14(candidateRoot);
+    const root = realpathSync15(candidateRoot);
     const statusArgs = [
       "-C",
       root,
@@ -85315,8 +85997,8 @@ function readProofCandidateHeadArtifacts(candidateRoot, artifactPaths) {
       return null;
     const verifiedBytes = [];
     for (const artifactPath of artifactPaths) {
-      const resolvedArtifactPath = realpathSync14(artifactPath);
-      const artifactRelativePath = relative8(root, resolvedArtifactPath).split(sep9).join("/");
+      const resolvedArtifactPath = realpathSync15(artifactPath);
+      const artifactRelativePath = relative8(root, resolvedArtifactPath).split(sep10).join("/");
       if (!artifactRelativePath || artifactRelativePath === ".." || artifactRelativePath.startsWith("../")) {
         return null;
       }
@@ -85335,7 +86017,7 @@ function readProofCandidateHeadArtifacts(candidateRoot, artifactPaths) {
   }
 }
 function readProofCandidateRuntime(candidateRoot, startup = proofWorkerStartup) {
-  const root = realpathSync14(resolve16(candidateRoot));
+  const root = realpathSync15(resolve16(candidateRoot));
   const sha = execFileSync15("git", ["-C", root, "rev-parse", "HEAD"], {
     encoding: "utf8"
   }).trim();
@@ -85409,21 +86091,21 @@ function readProofActionIdentity(appProjectRoot, actionId, dependencies = {}) {
     return {
       id: actionId,
       version: String(action.state.revision),
-      sha256: createHash17("sha256").update(action.yamlText).digest("hex")
+      sha256: createHash19("sha256").update(action.yamlText).digest("hex")
     };
   } catch {
     return null;
   }
 }
 function isNormalizedDescendant(root, path) {
-  if (!isAbsolute12(root) || !isAbsolute12(path) || resolve16(root) !== root || resolve16(path) !== path) {
+  if (!isAbsolute13(root) || !isAbsolute13(path) || resolve16(root) !== root || resolve16(path) !== path) {
     return false;
   }
   const fromRoot = relative8(root, path);
-  return fromRoot.length > 0 && fromRoot !== ".." && !fromRoot.startsWith(`..${sep9}`) && !isAbsolute12(fromRoot);
+  return fromRoot.length > 0 && fromRoot !== ".." && !fromRoot.startsWith(`..${sep10}`) && !isAbsolute13(fromRoot);
 }
 function hasExistingSymlink(root, path) {
-  const parts = relative8(root, path).split(sep9);
+  const parts = relative8(root, path).split(sep10);
   for (let length = 0; length <= parts.length; length += 1) {
     const candidate = resolve16(root, ...parts.slice(0, length));
     try {
@@ -85469,7 +86151,7 @@ function proofRootExists(args) {
   }
 }
 function resolveProofWorktreeRoot(detectedProjectRoot) {
-  if (!detectedProjectRoot || !isAbsolute12(detectedProjectRoot) || resolve16(detectedProjectRoot) !== detectedProjectRoot) {
+  if (!detectedProjectRoot || !isAbsolute13(detectedProjectRoot) || resolve16(detectedProjectRoot) !== detectedProjectRoot) {
     return null;
   }
   try {
@@ -85477,7 +86159,7 @@ function resolveProofWorktreeRoot(detectedProjectRoot) {
       cwd: detectedProjectRoot,
       encoding: "utf8"
     }).trim();
-    return root && isAbsolute12(root) && resolve16(root) === root ? root : null;
+    return root && isAbsolute13(root) && resolve16(root) === root ? root : null;
   } catch {
     return null;
   }
@@ -85516,7 +86198,7 @@ function readProofGitInfo(root) {
 function proofRootHasTrackedEntries(root, proofRoot) {
   if (!isNormalizedDescendant(root, proofRoot))
     throw new Error("INVALID_PROOF_ROOT");
-  const path = relative8(root, proofRoot).replaceAll(sep9, "/");
+  const path = relative8(root, proofRoot).replaceAll(sep10, "/");
   return execFileSync15("git", ["ls-files", "-z", "--", path], {
     cwd: root,
     encoding: "utf8"
@@ -85610,7 +86292,7 @@ function readProofContractAt(moduleUrl = import.meta.url) {
 function writeProofReceiptAtomic(path, receipt2) {
   const directory = dirname23(path);
   mkdirSync20(directory, { recursive: true, mode: 448 });
-  const temporary = resolve16(directory, `.${randomUUID10()}.proof-receipt.tmp`);
+  const temporary = resolve16(directory, `.${randomUUID11()}.proof-receipt.tmp`);
   let descriptor = null;
   try {
     descriptor = openSync11(temporary, "wx", 384);
@@ -85785,7 +86467,7 @@ function createProofCaptureHandler(deps) {
       return current.reasons;
     return sameProofAction(current.value, active.actionIdentity) ? [] : ["PROOF_ACTION_IDENTITY_CHANGED"];
   };
-  const repositoryPath = (active, path) => relative8(active.context.projectRoot, path).replaceAll(sep9, "/");
+  const repositoryPath = (active, path) => relative8(active.context.projectRoot, path).replaceAll(sep10, "/");
   const observedSetupScreenshots = (active) => {
     const owned = /* @__PURE__ */ new Set();
     for (const observation of deps.monitor.observations()) {
@@ -85804,7 +86486,7 @@ function createProofCaptureHandler(deps) {
     ].map((path) => repositoryPath(active, path));
     const requiredOutputs = new Set(phase === "finalized" ? [...proofOutputs, repositoryPath(active, active.context.receiptPath)] : proofOutputs);
     const allowedOutputs = phase === "setup" ? observedSetupScreenshots(active) : phase === "clean" ? /* @__PURE__ */ new Set() : requiredOutputs;
-    const invalidChange = git2.changes.some((change) => isAbsolute12(change.path) || change.path === ".." || change.path.startsWith("../") || change.indexStatus !== "?" || change.worktreeStatus !== "?" || change.sourcePath !== void 0);
+    const invalidChange = git2.changes.some((change) => isAbsolute13(change.path) || change.path === ".." || change.path.startsWith("../") || change.indexStatus !== "?" || change.worktreeStatus !== "?" || change.sourcePath !== void 0);
     const changedPaths = new Set(git2.changes.map((change) => change.path.replaceAll("\\", "/")));
     const unrelated = [...changedPaths].some((path) => !allowedOutputs.has(path));
     const missing = (phase === "validation" || phase === "finalized") && [...requiredOutputs].some((path) => !changedPaths.has(path));
@@ -86411,7 +87093,7 @@ function createProofCaptureHandler(deps) {
 }
 
 // packages/rn-dev-agent-core/dist/tools/proof-media.js
-import { createHash as createHash18 } from "node:crypto";
+import { createHash as createHash20 } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { mkdir as mkdir2, mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir as tmpdir11 } from "node:os";
@@ -86454,7 +87136,7 @@ async function hashAcceptedFile(path) {
   }
 }
 async function sha256File2(path) {
-  const hash = createHash18("sha256");
+  const hash = createHash20("sha256");
   const stream = createReadStream(path);
   for await (const chunk of stream)
     hash.update(chunk);
@@ -87888,7 +88570,7 @@ init_agent_device_wrapper();
 init_storage();
 init_project_config();
 init_maestro_validator();
-import { lstatSync as lstatSync18, readFileSync as readFileSync33, readdirSync as readdirSync13, realpathSync as realpathSync15 } from "node:fs";
+import { lstatSync as lstatSync18, readFileSync as readFileSync33, readdirSync as readdirSync14, realpathSync as realpathSync16 } from "node:fs";
 import { dirname as dirname25, join as join47, resolve as resolve17 } from "node:path";
 var AUTH_ROUTE_PATTERNS = [
   "login",
@@ -87961,7 +88643,7 @@ function findLoginFlow(projectRoot) {
       }
       if (!maestroStat.isDirectory() || !dirStat.isDirectory())
         continue;
-      files = readdirSync13(dir);
+      files = readdirSync14(dir);
     } catch (err) {
       if (err.code !== "ENOENT")
         throw err;
@@ -88005,7 +88687,7 @@ function boundSessionProjectRoot() {
 }
 function canonicalRoot(path) {
   try {
-    return realpathSync15(path);
+    return realpathSync16(path);
   } catch {
     return null;
   }
@@ -88603,7 +89285,7 @@ function buildGracefulShutdown(deps) {
 }
 
 // packages/rn-dev-agent-core/dist/lifecycle/lockfile.js
-import { createHash as createHash19 } from "node:crypto";
+import { createHash as createHash21 } from "node:crypto";
 import { execFileSync as execFileSync17 } from "node:child_process";
 import { closeSync as closeSync12, existsSync as existsSync33, mkdirSync as mkdirSync21, openSync as openSync12, readFileSync as readFileSync34, statSync as statSync15, unlinkSync as unlinkSync16, writeFileSync as writeFileSync16, writeSync as writeSync3 } from "node:fs";
 import { tmpdir as tmpdir12, userInfo as userInfo2 } from "node:os";
@@ -88656,7 +89338,7 @@ function defaultSelfPpid() {
   return typeof process.ppid === "number" ? process.ppid : 0;
 }
 function hashProjectRoot(projectRoot) {
-  return createHash19("md5").update(resolve18(projectRoot)).digest("hex").slice(0, 8);
+  return createHash21("md5").update(resolve18(projectRoot)).digest("hex").slice(0, 8);
 }
 var Lockfile = class {
   opts;
@@ -89053,7 +89735,7 @@ init_agent_device_wrapper();
 init_storage();
 import { execFile as execFileCb19 } from "node:child_process";
 import { promisify as promisify25 } from "node:util";
-import { existsSync as existsSync34, readdirSync as readdirSync14, readFileSync as readFileSync35, writeFileSync as writeFileSync17 } from "node:fs";
+import { existsSync as existsSync34, readdirSync as readdirSync15, readFileSync as readFileSync35, writeFileSync as writeFileSync17 } from "node:fs";
 import { basename as basename13, dirname as dirname27, join as join50, resolve as resolve19 } from "node:path";
 import { tmpdir as tmpdir13 } from "node:os";
 init_maestro_validator();
@@ -89083,7 +89765,7 @@ function filterFlows(yamls, pattern) {
 function discoverFlows(dir, pattern) {
   if (!existsSync34(dir))
     return [];
-  const yamls = readdirSync14(dir, { recursive: true }).filter((f) => f.endsWith(".yaml") || f.endsWith(".yml")).map((f) => join50(dir, f)).sort();
+  const yamls = readdirSync15(dir, { recursive: true }).filter((f) => f.endsWith(".yaml") || f.endsWith(".yml")).map((f) => join50(dir, f)).sort();
   return filterFlows(yamls, pattern);
 }
 function createMaestroTestAllHandler(deps = {}) {
@@ -89476,7 +90158,7 @@ function createMaestroTestAllHandler(deps = {}) {
 // packages/rn-dev-agent-core/dist/tools/cross-platform-verify.js
 init_agent_device_wrapper();
 init_utils();
-import { readFileSync as readFileSync36, readdirSync as readdirSync15, lstatSync as lstatSync19 } from "node:fs";
+import { readFileSync as readFileSync36, readdirSync as readdirSync16, lstatSync as lstatSync19 } from "node:fs";
 import { join as join51, extname as extname2 } from "node:path";
 function findElement(nodes, query, matchBy) {
   const q = query.toLowerCase();
@@ -89495,7 +90177,7 @@ function discoverTestIDs(dir) {
   function walk(d) {
     let entries;
     try {
-      entries = readdirSync15(d);
+      entries = readdirSync16(d);
     } catch {
       return;
     }
@@ -91238,8 +91920,8 @@ init_sources();
 
 // packages/rn-dev-agent-core/dist/domain/e2e-test.js
 import { dirname as dirname29, join as join55 } from "node:path";
-import { mkdirSync as mkdirSync22, writeFileSync as writeFileSync18, renameSync as renameSync10, readFileSync as readFileSync38, readdirSync as readdirSync16, existsSync as existsSync35 } from "node:fs";
-import { createHash as createHash20 } from "node:crypto";
+import { mkdirSync as mkdirSync22, writeFileSync as writeFileSync18, renameSync as renameSync10, readFileSync as readFileSync38, readdirSync as readdirSync17, existsSync as existsSync35 } from "node:fs";
+import { createHash as createHash22 } from "node:crypto";
 var FLOW_SENTINEL = "# e2e-locked-flow-below";
 function e2eDirFor(projectRoot) {
   return join55(projectRoot, ".rn-agent", "e2e");
@@ -91271,7 +91953,7 @@ function serializeLockedTest(meta) {
 ${meta.flow}`;
 }
 function hashBody(s) {
-  return createHash20("sha256").update(s).digest("hex");
+  return createHash22("sha256").update(s).digest("hex");
 }
 function freezeLockedTest(projectRoot, source, ctx) {
   const filePath = e2ePathFor(projectRoot, source.id);
@@ -91307,7 +91989,7 @@ function discoverLockedTests(projectRoot) {
   const dir = e2eDirFor(projectRoot);
   if (!existsSync35(dir))
     return [];
-  return readdirSync16(dir).filter((f) => f.endsWith(".yaml")).map((f) => f.replace(/\.yaml$/, "")).sort();
+  return readdirSync17(dir).filter((f) => f.endsWith(".yaml")).map((f) => f.replace(/\.yaml$/, "")).sort();
 }
 function resolveLockedTestIds(projectRoot, pattern, discover2 = discoverLockedTests) {
   const ids = discover2(projectRoot);
@@ -91602,7 +92284,7 @@ init_utils();
 
 // packages/rn-dev-agent-core/dist/domain/e2e-run-request.js
 import { join as join58 } from "node:path";
-import { mkdirSync as mkdirSync24, writeFileSync as writeFileSync20, renameSync as renameSync12, readFileSync as readFileSync41, readdirSync as readdirSync17, existsSync as existsSync37 } from "node:fs";
+import { mkdirSync as mkdirSync24, writeFileSync as writeFileSync20, renameSync as renameSync12, readFileSync as readFileSync41, readdirSync as readdirSync18, existsSync as existsSync37 } from "node:fs";
 var TERMINAL_STATUSES = /* @__PURE__ */ new Set([
   "done",
   "failed",
@@ -91646,7 +92328,7 @@ function listRequests(projectRoot) {
   if (!existsSync37(dir))
     return [];
   const out = [];
-  for (const f of readdirSync17(dir)) {
+  for (const f of readdirSync18(dir)) {
     if (!f.endsWith(".json"))
       continue;
     try {
@@ -91991,7 +92673,7 @@ init_discovery();
 init_metro_cwd();
 init_install_authority();
 import { execFileSync as execFileSync19 } from "node:child_process";
-import { createHash as createHash21 } from "node:crypto";
+import { createHash as createHash23 } from "node:crypto";
 init_metro_origin();
 init_metro_binding();
 init_process_birth();
@@ -91999,7 +92681,7 @@ init_registry();
 init_target_device_authority();
 init_tool_profiles();
 function identity(value) {
-  return createHash21("sha256").update(JSON.stringify(value)).digest("hex");
+  return createHash23("sha256").update(JSON.stringify(value)).digest("hex");
 }
 function objectBinding(status, name) {
   const value = status.bindings[name];
@@ -92999,7 +93681,7 @@ setSnapshotAuthorityProvider({
       runnerInstanceId: runner?.instanceId,
       runnerPid: runner?.pid,
       runnerProcessBirth: runner?.processBirth,
-      runnerCapabilityHash: typeof runner?.capability === "string" ? createHash22("sha256").update(runner.capability).digest("hex") : void 0,
+      runnerCapabilityHash: typeof runner?.capability === "string" ? createHash24("sha256").update(runner.capability).digest("hex") : void 0,
       runnerPort: runner?.port,
       runnerClaim: status.claims.find((claim) => claim.type === "runner")?.key,
       deviceClaim: status.claims.find((claim) => claim.type === "device")?.key
@@ -93183,7 +93865,7 @@ setObserveAuthorityDeps({
       authority: {
         sessionId: status.sessionId,
         claimEpoch: status.claimEpoch,
-        instanceId: randomUUID11(),
+        instanceId: randomUUID12(),
         capability: secret.observeCapability
       }
     };
@@ -94233,7 +94915,7 @@ var proofReadiness = async () => {
       connectedAt: current.connectedAt
     }),
     errorCount: errors.length,
-    errorSha256: createHash22("sha256").update(errorBytes).digest("hex"),
+    errorSha256: createHash24("sha256").update(errorBytes).digest("hex"),
     device: identity2.device,
     runtime: identity2.runtime
   };
@@ -94424,7 +95106,7 @@ var maestroRunHandler = createMaestroRunHandler({
   getLiveRoute: () => readLiveRoute(getClient()),
   nativeVisionProbe: probeNativeVision
 });
-trackedTool("maestro_run", "Execute a validated flow using semantic proof-domain routing. On iOS, exact-testID React commands execute through the authority-bound React tree before WDA can claim selector truth; text/system/native-only commands remain XCTest, and mixed flows are partitioned before execution without React-to-XCTest correlation. Results label react-tree and xctest-native proof domains explicitly; a React-tree pass is never Maestro certification or proof of IME, AutoFill, keyboard occlusion, or native interaction fidelity. Android and native-only iOS flows use the pin-cache maestro-runner >= 1.1.24. Pass flowPath for an existing .yaml file or inlineYaml for an ephemeral flow.", {
+trackedTool("maestro_run", "Execute a validated flow using semantic proof-domain routing. On iOS, exact-testID React commands execute through the authority-bound React tree before WDA can claim selector truth; text/system/native-only commands remain XCTest, and mixed flows are partitioned before execution without React-to-XCTest correlation. Results label react-tree and xctest-native proof domains explicitly; a React-tree pass is never Maestro certification or proof of IME, AutoFill, keyboard occlusion, or native interaction fidelity. Android and native-only iOS flows use the pin-cache maestro-runner >= 1.1.24. A ledger-proven trailing-verification-only failure remains failed with meta.trailingVerification; verify the unproven goal state before retrying or rebooting. Pass flowPath for an existing .yaml file or inlineYaml for an ephemeral flow.", {
   flowPath: external_exports.string().optional().describe("Path to a .yaml flow file to execute"),
   inlineYaml: external_exports.string().optional().describe("Inline YAML flow content (written to /tmp and executed)"),
   platform: external_exports.enum(["ios", "android"]).optional().describe("Target platform (auto-detected from session)"),
@@ -94580,7 +95262,7 @@ var runActionHandler = createRunActionHandler({
   targetContext: getActiveSession,
   claimBundleAuthority: claimOptionalBundleAuthority
 });
-trackedTool("cdp_run_action", "Replay a learned action by id with end-to-end auto-repair. On iOS, the validated flow is partitioned before execution: exact-testID commands use the authority-bound React-tree prover, while native-only commands use XCTest. The RunRecord and result preserve the reported proof domain, and a react-tree pass never promotes an experimental action to Maestro-certified active status. Ordinary missing React testIDs remain TESTID_NOT_FOUND; native selector misses remain ordinary Maestro failures unless direct bounded evidence proves a NATIVE_SURFACE_BLIND environment. Pass autoRepair=false to opt out of selector repair. proofReplay=true is reserved for proof-capture rehearsal and writes no runtime state.", {
+trackedTool("cdp_run_action", "Replay a learned action by id with end-to-end auto-repair. On iOS, the validated flow is partitioned before execution: exact-testID commands use the authority-bound React-tree prover, while native-only commands use XCTest. The RunRecord and result preserve the reported proof domain, and a react-tree pass never promotes an experimental action to Maestro-certified active status. Ordinary missing React testIDs remain TESTID_NOT_FOUND; native selector misses remain ordinary Maestro failures unless direct bounded evidence proves a NATIVE_SURFACE_BLIND environment. Pass autoRepair=false to opt out of selector repair. proofReplay=true is reserved for proof-capture rehearsal and writes no runtime state. When the canonical run ledger proves every authored mutating command completed and only trailing verification (extendedWaitUntil/assert) failed, the result stays failed but carries meta.trailingVerification (mutationEvidence proven, attempt lineage, termination provenance) \u2014 verify the live goal state instead of retrying or rebooting; auto-repair refuses so a merely-slow selector is never rewritten.", {
   actionId: external_exports.string().describe("Owned action id; resolves one .yaml or .yml file."),
   projectRoot: external_exports.string().optional().describe("Override project root (default: process.cwd())."),
   platform: external_exports.enum(["ios", "android"]).optional().describe("Force a specific platform; otherwise auto-detected from the active device session."),

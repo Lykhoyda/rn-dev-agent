@@ -272,6 +272,12 @@ export interface RunRecord {
    * run-action orchestrator.
    */
   autoRepair?: AutoRepairOutcome;
+  /**
+   * GH #623: ledger-derived qualifier — present only when the canonical run
+   * ledger proved every authored mutation and only trailing verification
+   * failed. The run stays status 'fail'; this block preserves the distinction.
+   */
+  trailingVerification?: import('./maestro-run-ledger.js').TrailingVerificationQualifier;
   /** React-tree transport passes never promote an action to Maestro-certified active. */
   transport?: 'cdp-js';
   proofDomain?: 'react-tree' | 'xctest-native' | 'partitioned';
