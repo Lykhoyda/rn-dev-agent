@@ -33,7 +33,15 @@ type WorkflowJob = {
   }>;
 };
 
+type WorkflowCommand = {
+  executable: string;
+  arguments: string[];
+};
+
 const workflowRoot = join(repositoryRoot, '.github', 'workflows');
+const nodeExecutables = new Set(['node', 'corepack', 'npm', 'npx', 'yarn']);
+const nodeExecutingScripts = new Set(['scripts/sync-versions.sh', './scripts/sync-versions.sh']);
+const shellKeywords = new Set(['!', 'do', 'elif', 'else', 'if', 'then', 'until', 'while']);
 
 function loadWorkflowJobs(fileName: string): Record<string, WorkflowJob> {
   const workflow = parse(readFileSync(join(workflowRoot, fileName), 'utf8')) as {
@@ -186,6 +194,112 @@ function captureNodeArguments(run: string): string[] {
   }
 }
 
+function tokenizeWorkflowRun(run: string): string[] {
+  const tokens: string[] = [];
+  let token = '';
+  let quote: "'" | '"' | null = null;
+  let escaped = false;
+  let comment = false;
+
+  const pushToken = () => {
+    if (token) tokens.push(token);
+    token = '';
+  };
+
+  for (let index = 0; index < run.length; index += 1) {
+    const character = run[index]!;
+    if (comment) {
+      if (character === '\n') {
+        comment = false;
+        pushToken();
+        tokens.push('\n');
+      }
+      continue;
+    }
+    if (escaped) {
+      if (character !== '\n') token += character;
+      escaped = false;
+      continue;
+    }
+    if (character === '\\' && quote !== "'") {
+      escaped = true;
+      continue;
+    }
+    if (quote) {
+      if (character === quote) quote = null;
+      else token += character;
+      continue;
+    }
+    if (character === "'" || character === '"') {
+      quote = character;
+      continue;
+    }
+    if (character === '#' && token === '') {
+      comment = true;
+      continue;
+    }
+    if (character === '\n' || character === ';' || character === '|' || character === '&') {
+      pushToken();
+      tokens.push('\n');
+      continue;
+    }
+    if (/\s/.test(character)) {
+      pushToken();
+      continue;
+    }
+    token += character;
+  }
+  pushToken();
+  return tokens;
+}
+
+function normalizeWorkflowCommands(run: string): WorkflowCommand[] {
+  const commands: WorkflowCommand[] = [];
+  let words: string[] = [];
+
+  const pushCommand = () => {
+    let index = 0;
+    while (
+      index < words.length &&
+      (shellKeywords.has(words[index]!) || /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[index]!))
+    ) {
+      index += 1;
+    }
+    if (words[index] === 'env') {
+      index += 1;
+      while (
+        index < words.length &&
+        (words[index]!.startsWith('-') || /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[index]!))
+      ) {
+        index += 1;
+      }
+    }
+    const executable = words[index];
+    if (executable) commands.push({ executable, arguments: words.slice(index + 1) });
+    words = [];
+  };
+
+  for (const token of tokenizeWorkflowRun(run)) {
+    if (token === '\n') pushCommand();
+    else words.push(token);
+  }
+  pushCommand();
+  return commands;
+}
+
+function jobExecutesNode(job: WorkflowJob): boolean {
+  return (job.steps ?? []).some((step) =>
+    normalizeWorkflowCommands(step.run ?? '').some((command) => {
+      const executable = command.executable.split('/').at(-1)!;
+      return (
+        nodeExecutables.has(executable) ||
+        ((executable === 'bash' || executable === 'sh') &&
+          command.arguments.some((argument) => nodeExecutingScripts.has(argument)))
+      );
+    }),
+  );
+}
+
 test('CI exposes five non-cancelling unit-test batches behind Build & Test', () => {
   const jobs = loadCiJobs();
   const coreTests = jobs['core-tests'];
@@ -255,8 +369,17 @@ test('workflow Node runtimes satisfy the supported floor', () => {
 
   for (const fileName of workflowFiles) {
     for (const [jobName, job] of Object.entries(loadWorkflowJobs(fileName))) {
-      for (const step of job.steps ?? []) {
-        if (!step.uses?.startsWith('actions/setup-node@')) continue;
+      const setupSteps = (job.steps ?? []).filter((step) =>
+        step.uses?.startsWith('actions/setup-node@'),
+      );
+      if (jobExecutesNode(job)) {
+        assert.notEqual(
+          setupSteps.length,
+          0,
+          `${fileName}:${jobName} executes Node without selecting a runtime`,
+        );
+      }
+      for (const step of setupSteps) {
         const nodeVersion = step.with?.['node-version'];
         assert.notEqual(nodeVersion, undefined, `${fileName}:${jobName} must select Node`);
         const versions =
