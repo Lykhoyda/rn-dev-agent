@@ -368,6 +368,49 @@ test('gh-623 negative control: a non-terminal (running) artifact row never quali
   assert.equal(body.meta.ledger.attempt.complete, false);
 });
 
+test('gh-623 adversarial: stdout renders a trailing wait but the artifact proves an early tap failure — no qualifier', async () => {
+  // Renderer text lies about where the flow stopped; only the producer
+  // artifact may decide, so the qualifier must be withheld.
+  const body = await runFlow(
+    trailingHandler([
+      { rows: [['launchApp', 'passed']] },
+      {
+        rows: [
+          ['tapOn', 'passed'],
+          ['inputText', 'passed'],
+          ['tapOn', 'failed'],
+          ['inputText', 'skipped'],
+          ['tapOn', 'skipped'],
+          ['extendedWaitUntil', 'skipped'],
+        ],
+        stdout: TRAILING_FAIL_STDOUT,
+        throwWith: { code: 1 },
+      },
+    ]),
+  );
+  assert.equal(body.ok, false);
+  assert.equal(body.meta.trailingVerification, undefined);
+});
+
+test('gh-623 adversarial: unparseable stdout with a ledger-proven trailing failure still qualifies', async () => {
+  // No step lines at all — a renderer-derived classifier would see nothing,
+  // but the canonical ledger alone establishes the qualifier.
+  const body = await runFlow(
+    trailingHandler([
+      { rows: [['launchApp', 'passed']] },
+      {
+        rows: [...MAIN_STAGE_PASSING, ['extendedWaitUntil', 'failed']],
+        stdout: 'maestro-runner 1.1.24\nunstructured noise without any step lines',
+        throwWith: { code: 1 },
+      },
+    ]),
+  );
+  assert.equal(body.ok, false);
+  const qualifier = body.meta.trailingVerification;
+  assert.ok(isProvenTrailingVerificationQualifier(qualifier), JSON.stringify(qualifier));
+  assert.equal(qualifier.provenMutations, 6);
+});
+
 test('gh-623: a repaired attempt carries its lineage through the qualifier', async () => {
   const body = await runFlow(trailingHandler(TRAILING_STAGES), {
     attemptId: 'att-repair-2',
