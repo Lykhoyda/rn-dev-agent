@@ -1,6 +1,14 @@
 import assert from 'node:assert/strict';
-import { createHmac } from 'node:crypto';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { createHash, createHmac } from 'node:crypto';
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -292,8 +300,44 @@ test('an unsigned runtime violation is never attributed to a launcher exit', asy
   assert.ok(!String(inspection.attribution ?? '').includes('FORGED_VIOLATION'));
 });
 
+test('a signed managed transform stall retains its concrete exit attribution', async () => {
+  const runtimeRoot = mkdtempSync(join(tmpdir(), 'rn-managed-metro-transform-stall-'));
+  const binding = await boundManagedMetro(runtimeRoot);
+
+  writeSignedEvidence(
+    join(runtimeRoot, 'metro-runtime-evidence.jsonl'),
+    runtimePolicyCapability(SIGNER),
+    [
+      {
+        kind: 'violation',
+        value: canonicalAuthorityJson({
+          cleanup: 'signal-accepted',
+          code: 'MANAGED_TRANSFORM_CHANNEL_STALLED',
+          pid: 4242,
+          reason: 'timeout',
+          recipient: 'b'.repeat(32),
+        }),
+      },
+    ],
+  );
+
+  const inspection = inspectManagedMetroLifecycle(
+    binding as unknown as Record<string, unknown>,
+    { sessionId: SESSION_ID, signerCapability: SIGNER },
+    {
+      exists: () => true,
+      probeBirth: () => ({ status: 'absent' }),
+      probeListener: () => ({ status: 'absent' }),
+    },
+  );
+
+  assert.equal(inspection.status, 'lost');
+  assert.match(String(inspection.attribution ?? ''), /MANAGED_TRANSFORM_CHANNEL_STALLED/);
+  assert.match(String(inspection.attribution ?? ''), /signal-accepted/);
+});
+
 test(
-  'a child-supplied free-text violation never reaches launcher exit attribution',
+  'child violations preserve fixed schemas without publishing attacker-controlled details',
   { skip: process.platform === 'win32', timeout: 15_000 },
   async () => {
     const root = mkdtempSync(join(tmpdir(), 'rn-managed-metro-child-violation-'));
@@ -302,6 +346,9 @@ test(
     const binRoot = join(root, 'node_modules', '.bin');
     const listenerPidPath = join(runtimeRoot, 'listener.pid');
     const syntheticValue = 'obviously-synthetic-private-value-for-fd9-test';
+    const syntheticBasename = `obviously-synthetic-sensitive-basename-${process.pid}.node`;
+    const outsideAddonPath = join(root, '..', syntheticBasename);
+    const outsideAddonBytes = Buffer.from('obviously synthetic native addon bytes');
     const genuineViolation = canonicalAuthorityJson({
       code: 'RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION',
       stage: 'native-spawn',
@@ -309,11 +356,24 @@ test(
       convention: 'positional',
       arity: 8,
     });
+    const stalledViolation = canonicalAuthorityJson({
+      cleanup: 'signal-accepted',
+      code: 'MANAGED_TRANSFORM_CHANNEL_STALLED',
+      pid: 4242,
+      reason: 'timeout',
+      recipient: 'b'.repeat(32),
+    });
+    const nativeAddonRequest = canonicalAuthorityJson({
+      requestId: 'c'.repeat(32),
+      path: outsideAddonPath,
+      digest: createHash('sha256').update(outsideAddonBytes).digest('hex'),
+    });
     mkdirSync(runtimeRoot, { recursive: true });
     mkdirSync(integrationRoot, { recursive: true });
     mkdirSync(binRoot, { recursive: true });
     writeFileSync(join(root, 'package.json'), JSON.stringify({ dependencies: { expo: '1' } }));
     writeFileSync(join(integrationRoot, 'rn-session-metro.cjs'), '');
+    writeFileSync(outsideAddonPath, outsideAddonBytes);
     const executable = join(binRoot, 'expo');
     writeFileSync(
       executable,
@@ -322,13 +382,18 @@ const { writeFileSync, writeSync } = require('node:fs');
 const { createServer } = require('node:net');
 if (process.argv.includes('--version')) process.exit(0);
 const port = Number(process.argv[process.argv.indexOf('--port') + 1]);
-for (const value of [${JSON.stringify(syntheticValue)}, ${JSON.stringify(genuineViolation)}]) {
+for (const [kind, value] of [
+  ['violation', ${JSON.stringify(syntheticValue)}],
+  ['violation', ${JSON.stringify(genuineViolation)}],
+  ['violation', ${JSON.stringify(stalledViolation)}],
+  ['native-addon-request', ${JSON.stringify(nativeAddonRequest)}],
+]) {
   writeSync(9, JSON.stringify({
     version: 1,
     runtimeEvidenceAuthority: 'reported-v1',
     sessionId: process.env.RN_DEV_AGENT_SESSION_ID,
     metroInstanceId: process.env.RN_DEV_AGENT_METRO_INSTANCE_ID,
-    kind: 'violation',
+    kind,
     value,
     digest: null,
   }) + '\\n');
@@ -391,18 +456,18 @@ setInterval(() => {}, 1 << 30);
       );
       assert.equal(inspection.status, 'lost');
       assert.doesNotMatch(String(inspection.attribution ?? ''), new RegExp(syntheticValue));
-      assert.match(
-        String(inspection.attribution ?? ''),
-        /RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION/,
-      );
-      assert.doesNotMatch(
-        readFileSync(join(runtimeRoot, 'metro-runtime-evidence.jsonl'), 'utf8'),
-        new RegExp(syntheticValue),
-      );
+      assert.match(String(inspection.attribution ?? ''), /RN_DEV_AGENT_UNSUPPORTED_NATIVE_ADDON/);
+      assert.doesNotMatch(String(inspection.attribution ?? ''), new RegExp(syntheticBasename));
+      const evidence = readFileSync(join(runtimeRoot, 'metro-runtime-evidence.jsonl'), 'utf8');
+      assert.doesNotMatch(evidence, new RegExp(syntheticValue));
+      assert.doesNotMatch(evidence, new RegExp(syntheticBasename));
+      assert.match(evidence, /RN_DEV_AGENT_UNSUPPORTED_NATIVE_ADDON/);
+      assert.match(evidence, /MANAGED_TRANSFORM_CHANNEL_STALLED/);
     } finally {
       if (binding && probeProcessBirth(binding.launcherPid).status !== 'absent') {
         process.kill(-binding.launcherPid, 'SIGKILL');
       }
+      rmSync(outsideAddonPath, { force: true });
     }
   },
 );

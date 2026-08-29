@@ -8029,6 +8029,19 @@ function normalizeChildViolationPayload(payload) {
     ) {
       return canonicalAuthorityJson(structured);
     }
+    if (
+      structuredNames.join('\0') === 'cleanup\0code\0pid\0reason\0recipient' &&
+      structured.code === 'MANAGED_TRANSFORM_CHANNEL_STALLED' &&
+      ['not-required', 'signal-accepted', 'target-retired', 'signal-refused'].includes(
+        structured.cleanup,
+      ) &&
+      (structured.pid === null ||
+        (Number.isSafeInteger(structured.pid) && structured.pid > 0)) &&
+      ['timeout', 'exit-before-first-exchange'].includes(structured.reason) &&
+      /^[a-f0-9]{32}$/.test(structured.recipient)
+    ) {
+      return canonicalAuthorityJson(structured);
+    }
     return null;
   }
   if (fixedChildViolationValues.has(payload.value)) return payload.value;
@@ -8157,9 +8170,8 @@ function handleNativeAddonRequest(payload) {
   } catch (error) {
     const reason =
       error?.code === 'NATIVE_ADDON_OUTSIDE_ROOTS'
-        ? 'RN_DEV_AGENT_UNSUPPORTED_NATIVE_ADDON: ' + error.message
-        : 'METRO_NATIVE_ADDON_EVIDENCE_UNAVAILABLE: ' +
-          (error instanceof Error ? error.message : 'native addon bytes could not be verified');
+        ? 'RN_DEV_AGENT_UNSUPPORTED_NATIVE_ADDON:'
+        : 'METRO_NATIVE_ADDON_EVIDENCE_UNAVAILABLE: native addon bytes could not be verified';
     appendViolation(reason);
     if (request && /^[a-f0-9]{32}$/.test(request.requestId || '')) {
       try {
