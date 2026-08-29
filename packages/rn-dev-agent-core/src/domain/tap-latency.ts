@@ -44,9 +44,7 @@ export interface RuntimeDegradationMetadata {
   sampleCount: number;
 }
 
-export function runtimeDegradationFromMetadata(
-  candidate: unknown,
-): RuntimeDegradation | null {
+export function runtimeDegradationFromMetadata(candidate: unknown): RuntimeDegradation | null {
   if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) return null;
   const metadata = candidate as Partial<RuntimeDegradationMetadata>;
   if (
