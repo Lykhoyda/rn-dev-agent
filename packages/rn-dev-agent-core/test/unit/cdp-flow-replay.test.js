@@ -329,3 +329,21 @@ test('failed waitVisible preserves source index, selector, elapsed wait, and sto
     false,
   );
 });
+
+test('waitVisible cannot pass from an oracle result completed after its deadline', async () => {
+  let reads = 0;
+  const dispatch = mockDispatch();
+  dispatch.visibility = async () => {
+    reads += 1;
+    if (reads === 1) return { visible: false, code: 'TESTID_NOT_FOUND' };
+    await new Promise((resolve) => setTimeout(resolve, 75));
+    return { visible: true };
+  };
+  const startedAt = Date.now();
+  const result = await replayFlow([{ t: 'waitVisible', id: 'late', timeoutMs: 250 }], dispatch);
+  const elapsedMs = Date.now() - startedAt;
+  assert.equal(result.passed, false);
+  assert.equal(result.failureCode, 'TESTID_NOT_FOUND');
+  assert.equal(reads, 2);
+  assert.ok(elapsedMs >= 225 && elapsedMs < 500, `deadline completed after ${elapsedMs}ms`);
+});

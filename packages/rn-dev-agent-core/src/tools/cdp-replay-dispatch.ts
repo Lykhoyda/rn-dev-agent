@@ -45,26 +45,45 @@ export interface ReplayTreeEnvelope {
   meta?: Record<string, unknown>;
 }
 
-export function replayTreeData(envelope: ReplayTreeEnvelope): unknown {
+export function replayTreeData(envelope: ReplayTreeEnvelope, selector?: string): unknown {
   const warning = typeof envelope.meta?.warning === 'string' ? envelope.meta.warning : undefined;
   const redbox = warning === 'APP_HAS_REDBOX';
   const data =
     envelope.data && typeof envelope.data === 'object' && !Array.isArray(envelope.data)
       ? (envelope.data as Record<string, unknown>)
       : null;
-  const truncated = data !== null && data.__agent_truncated === true;
-  if (envelope.ok === true && !redbox && !truncated) return envelope.data;
+  const verdict =
+    envelope.meta?.treeVerdict &&
+    typeof envelope.meta.treeVerdict === 'object' &&
+    !Array.isArray(envelope.meta.treeVerdict)
+      ? (envelope.meta.treeVerdict as Record<string, unknown>)
+      : null;
+  const reasons = Array.isArray(verdict?.reasons) ? verdict.reasons : [];
+  const truncated = data !== null && (data.__agent_truncated === true || data.truncated === true);
+  const complete = verdict?.state === 'ok' && reasons.length === 0;
+  const completeFiltered = complete && verdict.path === 'filter' && data !== null && 'tree' in data;
+  const completeInteractiveMatch =
+    complete &&
+    verdict.path === 'interactive' &&
+    typeof selector === 'string' &&
+    isExactPresent(data, selector);
+  const incomplete =
+    envelope.ok === true && !redbox && !truncated && !completeFiltered && !completeInteractiveMatch;
+  if (envelope.ok === true && !redbox && !truncated && !incomplete) return envelope.data;
 
   const message = truncated
     ? 'Component tree proof exceeded the readable payload budget'
-    : redbox && typeof data?.message === 'string'
-      ? data.message.slice(0, 1000)
-      : (envelope.error?.slice(0, 1000) ?? 'Component tree proof is unavailable');
+    : incomplete
+      ? 'Component tree proof is incomplete'
+      : redbox && typeof data?.message === 'string'
+        ? data.message.slice(0, 1000)
+        : (envelope.error?.slice(0, 1000) ?? 'Component tree proof is unavailable');
   const code = redbox ? warning : (envelope.code ?? 'EVAL_FAILED');
   throw new ReplayDispatchError(code, message, {
     treeEnvelope: {
       ok: envelope.ok === true,
       ...(truncated ? { truncated: true } : {}),
+      ...(incomplete ? { incomplete: true } : {}),
       ...(truncated && typeof data.originalLength === 'number'
         ? { originalLength: data.originalLength }
         : {}),

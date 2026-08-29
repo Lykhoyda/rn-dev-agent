@@ -52,6 +52,60 @@ async function requireOk(supervisor: any, name: string, args: Record<string, unk
   return result.envelope;
 }
 
+function collectTestIds(value: unknown, ids: Set<string> = new Set()): Set<string> {
+  if (!value || typeof value !== 'object') return ids;
+  const record = value as Record<string, unknown>;
+  if (typeof record.testID === 'string') ids.add(record.testID);
+  if (typeof record.nativeID === 'string') ids.add(record.nativeID);
+  for (const child of [record.tree, record.children, record.nodes, record.matches]) {
+    if (Array.isArray(child)) {
+      for (const item of child) collectTestIds(item, ids);
+    } else {
+      collectTestIds(child, ids);
+    }
+  }
+  return ids;
+}
+
+function assertCompleteExactTree(
+  result: Awaited<ReturnType<typeof callTool>>,
+  testId: string,
+): void {
+  assert.equal(result.envelope?.ok, true, `CDP modal probe: ${result.text.slice(0, 800)}`);
+  assert.notEqual(result.envelope?.data?.__agent_truncated, true);
+  assert.notEqual(result.envelope?.data?.truncated, true);
+  assert.equal(result.envelope?.meta?.treeVerdict?.state, 'ok');
+  assert.equal(result.envelope?.meta?.treeVerdict?.path, 'filter');
+  assert.deepEqual(result.envelope?.meta?.treeVerdict?.reasons, []);
+  assert.equal(collectTestIds(result.envelope?.data).has(testId), true, `${testId} is absent`);
+}
+
+function hasExited(child: ChildProcess): boolean {
+  return child.exitCode !== null || child.signalCode !== null;
+}
+
+async function waitForExit(child: ChildProcess, timeoutMs: number): Promise<boolean> {
+  if (hasExited(child)) return true;
+  return new Promise((resolveExit) => {
+    const finish = (exited: boolean): void => {
+      clearTimeout(timer);
+      child.off('exit', onExit);
+      resolveExit(exited);
+    };
+    const onExit = (): void => finish(true);
+    const timer = setTimeout(() => finish(hasExited(child)), timeoutMs);
+    child.once('exit', onExit);
+  });
+}
+
+async function terminateChild(child: ChildProcess, label: string): Promise<void> {
+  if (hasExited(child)) return;
+  child.kill('SIGTERM');
+  if (await waitForExit(child, 10_000)) return;
+  child.kill('SIGKILL');
+  assert.equal(await waitForExit(child, 5_000), true, `${label} did not terminate`);
+}
+
 async function run() {
   const declaredEnv = {
     RN_DEV_AGENT_DECLARED_ROOT: APP_ROOT!,
@@ -170,15 +224,16 @@ async function run() {
       nativeVisibility: nativeVisibility.envelope,
       cdpVisibility: cdpVisibility.envelope,
       wdaProbe: wdaProbe.envelope,
-      wdaBlind: wdaProbe.envelope?.ok !== true && cdpVisibility.envelope?.ok === true,
+      wdaBlind: false,
     };
-    assert.equal(cdpVisibility.envelope?.ok, true, `CDP modal probe: ${cdpVisibility.text}`);
+    assertCompleteExactTree(cdpVisibility, 'otp_email-pressable');
     assert.equal(
       wdaProbe.envelope?.ok,
       false,
       `owned OTP fixture did not reproduce the WDA-blind boundary: ${wdaProbe.text.slice(0, 800)}`,
     );
     assert.equal(wdaProbe.envelope?.meta?.proofDomain, 'xctest-native');
+    (evidence.surfaceBoundary as Record<string, unknown>).wdaBlind = true;
     await requireOk(supervisor, 'cdp_interact', { action: 'press', testID: 'otp_cancel' });
 
     const beforeRuns = totalRuns();
@@ -193,7 +248,21 @@ async function run() {
     assert.equal(action.data?.passed, true);
     assert.equal(action.data?.proofDomain, 'partitioned');
     assert.equal(afterRuns, beforeRuns + 1);
-    const waitStep = action.data?.perStepReadback?.steps?.find(
+    const actionTrace = action.data?.perStepReadback?.steps ?? [];
+    assert.equal(action.data?.perStepReadback?.complete, true);
+    assert.deepEqual(
+      actionTrace.map((step: any) => step.index),
+      [0, 1, 2, 3, 4, 5, 6],
+      `incomplete or repeated action trace: ${JSON.stringify(actionTrace)}`,
+    );
+    assert.deepEqual(
+      actionTrace.slice(0, 2).map((step: any) => [step.index, step.status]),
+      [
+        [0, 'pass'],
+        [1, 'pass'],
+      ],
+    );
+    const waitStep = actionTrace.find(
       (step: any) => step.index === 2 && step.verb === 'waitVisible',
     );
     assert.ok(waitStep, `missing wait trace: ${JSON.stringify(action.data?.perStepReadback)}`);
@@ -243,40 +312,102 @@ async function run() {
   } catch (error) {
     primaryError = error;
   } finally {
-    const teardown: Array<[string, Record<string, unknown>]> = [];
-    if (runnerOpened) teardown.push(['device_snapshot', { action: 'close' }]);
-    teardown.push(['cdp_disconnect', {}]);
-    teardown.push(['rn_session', { action: 'stop_metro' }]);
-    teardown.push(['rn_session', { action: 'restore_integration', confirmed: true }]);
-    teardown.push(['rn_session', { action: 'release' }]);
+    const teardown: Array<[string, string, Record<string, unknown>]> = [];
+    if (runnerOpened)
+      teardown.push(['device_snapshot.close', 'device_snapshot', { action: 'close' }]);
+    teardown.push(['cdp_disconnect', 'cdp_disconnect', {}]);
+    teardown.push(['rn_session.stop_metro', 'rn_session', { action: 'stop_metro' }]);
+    teardown.push([
+      'rn_session.restore_integration',
+      'rn_session',
+      { action: 'restore_integration', confirmed: true },
+    ]);
+    teardown.push(['rn_session.release', 'rn_session', { action: 'release' }]);
     const cleanup: Record<string, unknown> = {};
-    for (const [name, args] of teardown) {
+    const cleanupErrors: Error[] = [];
+    for (const [label, name, args] of teardown) {
       try {
-        cleanup[name] = (await callTool(supervisor, name, args)).envelope;
+        const result = await callTool(supervisor, name, args);
+        cleanup[label] = result.envelope ?? { text: result.text.slice(0, 800) };
+        assert.equal(result.envelope?.ok, true, `${label}: ${result.text.slice(0, 800)}`);
       } catch (error) {
-        cleanup[name] = { error: error instanceof Error ? error.message : String(error) };
+        const cleanupError = error instanceof Error ? error : new Error(String(error));
+        cleanup[label] = { error: cleanupError.message };
+        cleanupErrors.push(cleanupError);
       }
     }
     evidence.cleanup = cleanup;
-    finalStatus = await callTool(supervisor, 'rn_session', { action: 'status' });
-    evidence.finalStatus = finalStatus.envelope;
-    writeFileSync(EVIDENCE_PATH, JSON.stringify(evidence, null, 2));
-    writeFileSync(STATUS_PATH, JSON.stringify(finalStatus.envelope, null, 2));
-    adapter?.kill('SIGTERM');
-    supervisor.child.kill('SIGTERM');
+    try {
+      finalStatus = await callTool(supervisor, 'rn_session', { action: 'status' });
+      evidence.finalStatus = finalStatus.envelope;
+      assert.equal(finalStatus.envelope?.ok, true, finalStatus.text.slice(0, 800));
+      assert.ok(
+        ['released', 'selected'].includes(finalStatus.envelope?.data?.authority?.state),
+        `unexpected post-release state: ${finalStatus.text.slice(0, 800)}`,
+      );
+      assert.equal(finalStatus.envelope?.data?.authority?.deviceBound, false);
+      assert.equal(finalStatus.envelope?.data?.authority?.installBound, false);
+      assert.equal(finalStatus.envelope?.data?.authority?.metroBound, false);
+      assert.equal(finalStatus.envelope?.data?.authority?.bundleBound, false);
+      assert.equal(finalStatus.envelope?.data?.authority?.runnerBound, false);
+      assert.equal(finalStatus.envelope?.data?.authority?.recorderBound, false);
+      assert.equal(
+        finalStatus.envelope?.data?.authority?.migration?.packageIntegration?.installed,
+        false,
+      );
+    } catch (error) {
+      cleanupErrors.push(error instanceof Error ? error : new Error(String(error)));
+    }
+    const processes: Record<string, unknown> = {};
+    if (adapter) {
+      try {
+        await terminateChild(adapter, 'fixture adapter');
+        processes.adapter = {
+          exited: true,
+          exitCode: adapter.exitCode,
+          signalCode: adapter.signalCode,
+        };
+      } catch (error) {
+        const cleanupError = error instanceof Error ? error : new Error(String(error));
+        processes.adapter = { error: cleanupError.message };
+        cleanupErrors.push(cleanupError);
+      }
+    }
+    try {
+      await terminateChild(supervisor.child, 'supervisor');
+      processes.supervisor = {
+        exited: true,
+        exitCode: supervisor.child.exitCode,
+        signalCode: supervisor.child.signalCode,
+      };
+    } catch (error) {
+      const cleanupError = error instanceof Error ? error : new Error(String(error));
+      processes.supervisor = { error: cleanupError.message };
+      cleanupErrors.push(cleanupError);
+    }
+    evidence.processes = processes;
+    evidence.cleanupErrors = cleanupErrors.map((error) => error.message);
+    try {
+      writeFileSync(EVIDENCE_PATH, JSON.stringify(evidence, null, 2));
+    } catch (error) {
+      cleanupErrors.push(error instanceof Error ? error : new Error(String(error)));
+    }
+    try {
+      writeFileSync(STATUS_PATH, JSON.stringify(finalStatus?.envelope ?? null, null, 2));
+    } catch (error) {
+      cleanupErrors.push(error instanceof Error ? error : new Error(String(error)));
+    }
+    if (primaryError && cleanupErrors.length > 0) {
+      throw new AggregateError(
+        [primaryError, ...cleanupErrors],
+        'OTP proof failed and reverse cleanup was incomplete',
+      );
+    }
+    if (cleanupErrors.length > 0) {
+      throw new AggregateError(cleanupErrors, 'OTP proof reverse cleanup was incomplete');
+    }
   }
   if (primaryError) throw primaryError;
-  assert.ok(finalStatus);
-  assert.ok(
-    ['released', 'selected'].includes(finalStatus.envelope?.data?.authority?.state),
-    `unexpected post-release state: ${finalStatus.text.slice(0, 800)}`,
-  );
-  assert.equal(finalStatus.envelope?.data?.authority?.metroBound, false);
-  assert.equal(finalStatus.envelope?.data?.authority?.runnerBound, false);
-  assert.equal(
-    finalStatus.envelope?.data?.authority?.migration?.packageIntegration?.installed,
-    false,
-  );
 }
 
 await run();

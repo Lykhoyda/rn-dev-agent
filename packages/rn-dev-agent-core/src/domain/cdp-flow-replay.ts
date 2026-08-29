@@ -62,6 +62,33 @@ const isObj = (x: unknown): x is Record<string, unknown> =>
 const DEFAULT_VISIBILITY_TIMEOUT_MS = 17_000;
 const VISIBILITY_POLL_INTERVAL_MS = 200;
 
+async function readVisibilityBeforeDeadline(
+  dispatch: ReplayDispatch,
+  id: string,
+  deadline: number,
+): Promise<ReplayVisibility | null> {
+  const remainingMs = deadline - Date.now();
+  if (remainingMs < 0) return null;
+  return new Promise<ReplayVisibility | null>((resolve, reject) => {
+    let settled = false;
+    const finish = (value: ReplayVisibility | null): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(Date.now() <= deadline ? value : null);
+    };
+    const timer = setTimeout(() => finish(null), remainingMs);
+    Promise.resolve()
+      .then(() => dispatch.visibility(id))
+      .then(finish, (error: unknown) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        reject(error);
+      });
+  });
+}
+
 function refuseUnsupportedKeys(
   value: Record<string, unknown>,
   allowed: readonly string[],
@@ -265,10 +292,16 @@ export async function replayFlow(
         }
         case 'waitVisible': {
           const deadline = startedAt + s.timeoutMs;
-          let verdict: ReplayVisibility;
+          let verdict: ReplayVisibility = {
+            visible: false,
+            code: 'TESTID_NOT_FOUND',
+            reason: `testID "${s.id}" not present before the visibility deadline`,
+          };
           for (;;) {
-            verdict = await dispatch.visibility(s.id);
+            const observed = await readVisibilityBeforeDeadline(dispatch, s.id, deadline);
             requireNotAborted();
+            if (!observed) break;
+            verdict = observed;
             if (verdict.visible) break;
             const remainingMs = deadline - Date.now();
             if (remainingMs <= 0) break;

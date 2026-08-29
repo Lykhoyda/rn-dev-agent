@@ -78734,6 +78734,29 @@ var asString = (x) => typeof x === "string" ? x : null;
 var isObj = (x) => typeof x === "object" && x !== null && !Array.isArray(x);
 var DEFAULT_VISIBILITY_TIMEOUT_MS = 17e3;
 var VISIBILITY_POLL_INTERVAL_MS = 200;
+async function readVisibilityBeforeDeadline(dispatch, id, deadline) {
+  const remainingMs = deadline - Date.now();
+  if (remainingMs < 0)
+    return null;
+  return new Promise((resolve21, reject) => {
+    let settled = false;
+    const finish = (value) => {
+      if (settled)
+        return;
+      settled = true;
+      clearTimeout(timer);
+      resolve21(Date.now() <= deadline ? value : null);
+    };
+    const timer = setTimeout(() => finish(null), remainingMs);
+    Promise.resolve().then(() => dispatch.visibility(id)).then(finish, (error2) => {
+      if (settled)
+        return;
+      settled = true;
+      clearTimeout(timer);
+      reject(error2);
+    });
+  });
+}
 function refuseUnsupportedKeys(value, allowed, label) {
   const unsupported = Object.keys(value).filter((key) => !allowed.includes(key));
   if (unsupported.length > 0) {
@@ -78910,10 +78933,17 @@ async function replayFlow(steps, dispatch, opts = {}) {
         }
         case "waitVisible": {
           const deadline = startedAt + s.timeoutMs;
-          let verdict;
+          let verdict = {
+            visible: false,
+            code: "TESTID_NOT_FOUND",
+            reason: `testID "${s.id}" not present before the visibility deadline`
+          };
           for (; ; ) {
-            verdict = await dispatch.visibility(s.id);
+            const observed = await readVisibilityBeforeDeadline(dispatch, s.id, deadline);
             requireNotAborted();
+            if (!observed)
+              break;
+            verdict = observed;
             if (verdict.visible)
               break;
             const remainingMs = deadline - Date.now();
@@ -79243,25 +79273,51 @@ function loginPostconditionId(commands) {
 }
 
 // packages/rn-dev-agent-core/dist/tools/cdp-replay-dispatch.js
+function collectTestIds(node, acc = /* @__PURE__ */ new Set()) {
+  if (!node || typeof node !== "object")
+    return acc;
+  const n = node;
+  if (typeof n.testID === "string")
+    acc.add(n.testID);
+  if (typeof n.nativeID === "string")
+    acc.add(n.nativeID);
+  if (n.tree)
+    collectTestIds(n.tree, acc);
+  const kids = n.children ?? n.interactive ?? n.nodes ?? n.matches;
+  if (Array.isArray(kids))
+    for (const c of kids)
+      collectTestIds(c, acc);
+  return acc;
+}
+function isExactPresent(treeJson, selector) {
+  return collectTestIds(treeJson).has(selector);
+}
 function unwrapTree(data) {
   if (!data || typeof data !== "object")
     return null;
   const d = data;
   return "tree" in d ? d.tree : d;
 }
-function replayTreeData(envelope) {
+function replayTreeData(envelope, selector) {
   const warning = typeof envelope.meta?.warning === "string" ? envelope.meta.warning : void 0;
   const redbox = warning === "APP_HAS_REDBOX";
   const data = envelope.data && typeof envelope.data === "object" && !Array.isArray(envelope.data) ? envelope.data : null;
-  const truncated = data !== null && data.__agent_truncated === true;
-  if (envelope.ok === true && !redbox && !truncated)
+  const verdict = envelope.meta?.treeVerdict && typeof envelope.meta.treeVerdict === "object" && !Array.isArray(envelope.meta.treeVerdict) ? envelope.meta.treeVerdict : null;
+  const reasons = Array.isArray(verdict?.reasons) ? verdict.reasons : [];
+  const truncated = data !== null && (data.__agent_truncated === true || data.truncated === true);
+  const complete = verdict?.state === "ok" && reasons.length === 0;
+  const completeFiltered = complete && verdict.path === "filter" && data !== null && "tree" in data;
+  const completeInteractiveMatch = complete && verdict.path === "interactive" && typeof selector === "string" && isExactPresent(data, selector);
+  const incomplete = envelope.ok === true && !redbox && !truncated && !completeFiltered && !completeInteractiveMatch;
+  if (envelope.ok === true && !redbox && !truncated && !incomplete)
     return envelope.data;
-  const message = truncated ? "Component tree proof exceeded the readable payload budget" : redbox && typeof data?.message === "string" ? data.message.slice(0, 1e3) : envelope.error?.slice(0, 1e3) ?? "Component tree proof is unavailable";
+  const message = truncated ? "Component tree proof exceeded the readable payload budget" : incomplete ? "Component tree proof is incomplete" : redbox && typeof data?.message === "string" ? data.message.slice(0, 1e3) : envelope.error?.slice(0, 1e3) ?? "Component tree proof is unavailable";
   const code = redbox ? warning : envelope.code ?? "EVAL_FAILED";
   throw new ReplayDispatchError(code, message, {
     treeEnvelope: {
       ok: envelope.ok === true,
       ...truncated ? { truncated: true } : {},
+      ...incomplete ? { incomplete: true } : {},
       ...truncated && typeof data.originalLength === "number" ? { originalLength: data.originalLength } : {},
       ...envelope.code ? { code: envelope.code } : {},
       ...envelope.error ? { error: envelope.error.slice(0, 1e3) } : {},
@@ -93947,7 +94003,7 @@ var makeReplayDeps = (_args, signal) => {
       if (d && typeof d === "object" && "__agent_truncated" in d) {
         env = await fetchTree(true);
       }
-      const data = replayTreeData(env);
+      const data = replayTreeData(env, id);
       return unwrapTree(data);
     },
     frontmostFor: async (id) => {

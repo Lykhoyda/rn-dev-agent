@@ -118,6 +118,28 @@ test('unwrapTree returns the bare node for a single match and the matches wrappe
   assert.deepEqual(unwrapTree({ testID: 'x', children: [] }), { testID: 'x', children: [] });
 });
 
+test('replayTreeData accepts complete filtered absence and exact interactive presence', () => {
+  assert.deepEqual(
+    replayTreeData({
+      ok: true,
+      data: { tree: null },
+      meta: { treeVerdict: { state: 'ok', path: 'filter', reasons: [] } },
+    }),
+    { tree: null },
+  );
+  assert.deepEqual(
+    replayTreeData(
+      {
+        ok: true,
+        data: { interactive: [{ testID: 'otp' }] },
+        meta: { treeVerdict: { state: 'ok', path: 'interactive', reasons: [] } },
+      },
+      'otp',
+    ),
+    { interactive: [{ testID: 'otp' }] },
+  );
+});
+
 test('React replay propagates a component-tree transport envelope without selector repair evidence', async () => {
   const replay = await runCdpReplayCommands(
     [{ assertVisible: { id: 'ready' } }],
@@ -172,6 +194,63 @@ test('React replay refuses a truncated component tree distinctly from readable a
     truncated: true,
     originalLength: 75_000,
   });
+});
+
+test('React replay refuses helper-truncated filtered evidence', async () => {
+  const replay = await runCdpReplayCommands(
+    [{ extendedWaitUntil: { visible: { id: 'otp' }, timeout: 250 } }],
+    {},
+    {
+      pressByTestId: async () => {},
+      typeByTestId: async () => {},
+      treeFor: async () =>
+        replayTreeData({
+          ok: true,
+          data: { tree: { testID: 'otp' }, truncated: true },
+          meta: {
+            treeVerdict: {
+              state: 'degraded',
+              path: 'filter',
+              reasons: ['output-truncated'],
+            },
+          },
+        }),
+      launchApp: async () => {},
+      settle: async () => {},
+    },
+  );
+  assert.equal(replay.passed, false);
+  assert.equal(replay.failureCode, 'EVAL_FAILED');
+  assert.equal(replay.failureMeta?.treeEnvelope?.truncated, true);
+});
+
+test('React replay refuses budget-exhausted absence as incomplete evidence', async () => {
+  const replay = await runCdpReplayCommands(
+    [{ extendedWaitUntil: { visible: { id: 'otp' }, timeout: 250 } }],
+    {},
+    {
+      pressByTestId: async () => {},
+      typeByTestId: async () => {},
+      treeFor: async () =>
+        replayTreeData({
+          ok: true,
+          data: { tree: null },
+          meta: {
+            treeVerdict: {
+              state: 'degraded',
+              path: 'filter',
+              reasons: ['scan-budget-exhausted'],
+            },
+          },
+        }),
+      launchApp: async () => {},
+      settle: async () => {},
+    },
+  );
+  assert.equal(replay.passed, false);
+  assert.equal(replay.failureCode, 'EVAL_FAILED');
+  assert.equal(replay.failureMeta?.treeEnvelope?.incomplete, true);
+  assert.equal(replay.failureMeta?.failedSelector, 'otp');
 });
 
 test('React replay propagates APP_HAS_REDBOX instead of reporting a missing testID', async () => {
