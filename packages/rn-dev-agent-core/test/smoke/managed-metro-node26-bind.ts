@@ -72,14 +72,20 @@ function bootedSimulatorCount(): number {
 // SIGINT then a bounded wait then SIGKILL: the state directory must not be
 // removed while the supervisor can still write to it.
 async function stopSupervisor(supervisor: {
-  child: { kill: (signal: string) => boolean; exitCode: number | null };
+  child: {
+    kill: (signal: string) => boolean;
+    exitCode: number | null;
+    signalCode: NodeJS.Signals | null;
+  };
 }): Promise<boolean> {
+  const hasExited = (): boolean =>
+    supervisor.child.exitCode !== null || supervisor.child.signalCode !== null;
   const settle = async (budgetMs: number): Promise<boolean> => {
     for (let waited = 0; waited < budgetMs; waited += 100) {
-      if (supervisor.child.exitCode !== null) return true;
+      if (hasExited()) return true;
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
-    return supervisor.child.exitCode !== null;
+    return hasExited();
   };
   supervisor.child.kill('SIGINT');
   if (await settle(10_000)) return true;
