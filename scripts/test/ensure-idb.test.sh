@@ -40,8 +40,8 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
 mkstubs() { # $1 = space-separated binary names to stub as present
-  local dir="$TMP/stubs-$RANDOM"
-  mkdir -p "$dir"
+  local dir
+  dir="$(mktemp -d "$TMP/stubs.XXXXXX")"
   for b in $1; do
     printf '#!/bin/sh\nexit 0\n' > "$dir/$b"
     chmod +x "$dir/$b"
