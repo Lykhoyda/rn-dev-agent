@@ -11275,7 +11275,7 @@ function parseM7Header(yamlText, fallbackId) {
         meta.produces = parseProducesMap(raw);
       } else if (key === "expectedRouteSequence") {
         meta.expectedRouteSequence = raw.replace(/^\[|\]$/g, "").split(",").map((t) => t.trim()).filter(Boolean);
-      } else if (key === "id" || key === "intent" || key === "status" || key === "appId" || key === "createdAt" || key === "author" || key === "enginePin") {
+      } else if (key === "entry" || key === "id" || key === "intent" || key === "status" || key === "appId" || key === "createdAt" || key === "author" || key === "enginePin") {
         meta[key] = raw;
       }
     } else if (inComment && line.trim() === "") {
@@ -11302,7 +11302,10 @@ function parseM7Header(yamlText, fallbackId) {
     author: meta.author,
     produces: meta.produces,
     expectedRouteSequence: meta.expectedRouteSequence,
-    enginePin: meta.enginePin
+    enginePin: meta.enginePin,
+    // GH #628: carried raw like `status`; run-action refuses invalid values
+    // instead of silently downgrading a typo'd `parked` to cold.
+    entry: meta.entry
   };
 }
 function parseProducesMap(raw) {

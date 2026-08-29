@@ -157,6 +157,13 @@ alive for such callers.
   `createConnectHandler` in `src/tools/connection.ts` is the unregistered
   ambient compat connector, tree-shaken out of host bundles but still pinned
   by contract tests.
+- Park-state action replay (GH #628): `src/domain/park-entry.ts` owns the
+  `entry: cold|parked` invariants (lifecycle-command ban, anchor derivation);
+  `cdp_run_action` refuses parked bodies with existing `BAD_RECORDING` +
+  cause payload and runs the read-only park preflight (`src/tools/park-probe.ts`
+  adapter) that refuses `PARK_STATE_MISSING` before any step. Refuse-not-strip
+  and default-cold compatibility are captain decisions — never auto-suppress a
+  launch prologue or auto-classify legacy actions as parked.
 - Observe actions/e2e panels resolve their project root through
   `createObserveRootResolver` (`src/observability/observe-project-root.ts`):
   bound-session `source.appRoot` > `RN_PROJECT_ROOT` > heuristic discovery,

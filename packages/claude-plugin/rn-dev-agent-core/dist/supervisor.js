@@ -70959,7 +70959,7 @@ function parseM7Header(yamlText, fallbackId) {
         meta.produces = parseProducesMap(raw);
       } else if (key === "expectedRouteSequence") {
         meta.expectedRouteSequence = raw.replace(/^\[|\]$/g, "").split(",").map((t) => t.trim()).filter(Boolean);
-      } else if (key === "id" || key === "intent" || key === "status" || key === "appId" || key === "createdAt" || key === "author" || key === "enginePin") {
+      } else if (key === "entry" || key === "id" || key === "intent" || key === "status" || key === "appId" || key === "createdAt" || key === "author" || key === "enginePin") {
         meta[key] = raw;
       }
     } else if (inComment && line.trim() === "") {
@@ -70986,7 +70986,10 @@ function parseM7Header(yamlText, fallbackId) {
     author: meta.author,
     produces: meta.produces,
     expectedRouteSequence: meta.expectedRouteSequence,
-    enginePin: meta.enginePin
+    enginePin: meta.enginePin,
+    // GH #628: carried raw like `status`; run-action refuses invalid values
+    // instead of silently downgrading a typo'd `parked` to cold.
+    entry: meta.entry
   };
 }
 function parseProducesMap(raw) {
@@ -71023,6 +71026,8 @@ function serializeM7Header(metadata) {
   }
   if (metadata.status)
     lines.push(`# status: ${stripNewlines2(metadata.status)}`);
+  if (metadata.entry)
+    lines.push(`# entry: ${stripNewlines2(metadata.entry)}`);
   if (metadata.enginePin)
     lines.push(`# enginePin: ${stripNewlines2(metadata.enginePin)}`);
   if (metadata.params && metadata.params.length) {
@@ -79011,6 +79016,8 @@ function metaPairs(opts) {
     out.push(["mutates", String(opts.mutates)]);
   if (opts.status)
     out.push(["status", stripNewlines(opts.status)]);
+  if (opts.entry)
+    out.push(["entry", stripNewlines(opts.entry)]);
   if (opts.id && opts.intent)
     out.push(["enginePin", ACTION_ENGINE_PIN]);
   if (opts.produces && Object.keys(opts.produces).length > 0) {
@@ -79095,9 +79102,10 @@ function generateMaestro(events, opts = {}) {
   }
   if (opts.startRoute) {
     lines.push(`# startRoute: ${stripNewlines(opts.startRoute)}`);
-    lines.push("# NOTE: replay requires the app to be on this route before `- launchApp` finishes. If your app does not default to it, insert a navigation step here (e.g. deep link or tab tap).");
+    lines.push(opts.entry === "parked" ? "# NOTE: entry: parked \u2014 replay verifies this park state read-only before any step and refuses PARK_STATE_MISSING when it is absent. No launch prologue: drive the app here first." : "# NOTE: replay requires the app to be on this route before `- launchApp` finishes. If your app does not default to it, insert a navigation step here (e.g. deep link or tab tap).");
   }
-  lines.push("- launchApp");
+  if (opts.entry !== "parked")
+    lines.push("- launchApp");
   const consumedNavIndices = /* @__PURE__ */ new Set();
   let keyboardLikelyUp = false;
   for (let i = 0; i < events.length; i++) {
@@ -79204,6 +79212,9 @@ function generateMaestro(events, opts = {}) {
   return yaml2;
 }
 function generateDetox(events, opts = {}) {
+  if (opts.entry === "parked") {
+    throw new Error("entry: parked is supported for Maestro actions only \u2014 Detox output cannot verify the park state before its first step.");
+  }
   const lines = [];
   const name = stripNewlines(opts.testName ?? "Recorded flow");
   lines.push(`describe(${JSON.stringify(name)}, () => {`);
@@ -79582,6 +79593,131 @@ var init_test_recorder = __esm({
   }
 });
 
+// packages/rn-dev-agent-core/dist/domain/park-entry.js
+function resolveEntryMode(metadata) {
+  const raw = metadata.entry;
+  if (raw === void 0)
+    return { ok: true, mode: "cold" };
+  if (raw === "cold" || raw === "parked")
+    return { ok: true, mode: raw };
+  return { ok: false, raw: String(raw) };
+}
+function commandName(command) {
+  if (typeof command === "string")
+    return command;
+  if (!command || typeof command !== "object" || Array.isArray(command))
+    return null;
+  const keys = Object.keys(command);
+  return keys.length === 1 ? keys[0] : null;
+}
+function compositeShape(command) {
+  const name = commandName(command);
+  if (name === null || typeof command === "string")
+    return null;
+  const value = command[name];
+  if (name === "runFlow") {
+    if (typeof value === "string")
+      return { kind: "file", reference: value };
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return { kind: "file", reference: String(value) };
+    }
+    const record3 = value;
+    if (typeof record3.file === "string")
+      return { kind: "file", reference: record3.file };
+    return {
+      kind: "inline",
+      name,
+      commands: Array.isArray(record3.commands) ? record3.commands : [],
+      conditional: record3.when !== void 0
+    };
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    return null;
+  const record2 = value;
+  if (!Array.isArray(record2.commands))
+    return null;
+  return {
+    kind: "inline",
+    name,
+    commands: record2.commands,
+    conditional: record2.when !== void 0
+  };
+}
+function parkedBodyViolation(commands) {
+  for (const command of commands) {
+    const name = commandName(command);
+    if (name !== null && PARKED_FORBIDDEN_COMMANDS.has(name)) {
+      return { kind: "lifecycle", command: name };
+    }
+    const composite = compositeShape(command);
+    if (composite?.kind === "file")
+      return { kind: "runflow-file", reference: composite.reference };
+    if (composite?.kind === "inline") {
+      const nested = parkedBodyViolation(composite.commands);
+      if (nested !== null)
+        return nested;
+    }
+  }
+  return null;
+}
+function anchorIdOf(name, value) {
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    return null;
+  const record2 = value;
+  if (name === "extendedWaitUntil") {
+    const visible = record2.visible;
+    return visible && typeof visible === "object" && !Array.isArray(visible) ? anchorIdOf("assertVisible", visible) : null;
+  }
+  return typeof record2.id === "string" && record2.id.length > 0 ? record2.id : null;
+}
+function substituteParams(id, params) {
+  return id.replace(/\$\{([A-Z_][A-Z0-9_]*)\}/g, (whole, key) => params[key] ?? whole);
+}
+function firstAnchorId(commands) {
+  for (const command of commands) {
+    const name = commandName(command);
+    if (name !== null && ANCHOR_COMMANDS.has(name)) {
+      const id = anchorIdOf(name, command[name]);
+      if (id !== null)
+        return id;
+      continue;
+    }
+    const composite = compositeShape(command);
+    if (composite?.kind === "inline" && composite.name === "runFlow" && !composite.conditional) {
+      const nested = firstAnchorId(composite.commands);
+      if (nested !== null)
+        return nested;
+    }
+  }
+  return null;
+}
+function deriveParkAnchor(commands, params = {}) {
+  const id = firstAnchorId(commands);
+  if (id === null) {
+    return {
+      ok: false,
+      reason: "no id-bearing assertVisible/extendedWaitUntil/tapOn opens the body"
+    };
+  }
+  const substituted = substituteParams(id, params);
+  if (/\$\{[A-Z_][A-Z0-9_]*\}/.test(substituted)) {
+    return {
+      ok: false,
+      reason: `park anchor "${id}" references a parameter with no supplied value`,
+      unresolvedParam: true
+    };
+  }
+  return { ok: true, anchorId: substituted };
+}
+var PARKED_FORBIDDEN_COMMANDS, ANCHOR_COMMANDS;
+var init_park_entry = __esm({
+  "packages/rn-dev-agent-core/dist/domain/park-entry.js"() {
+    "use strict";
+    PARKED_FORBIDDEN_COMMANDS = /* @__PURE__ */ new Set(["launchApp", "stopApp", "killApp", "clearState"]);
+    ANCHOR_COMMANDS = /* @__PURE__ */ new Set(["assertVisible", "extendedWaitUntil", "tapOn"]);
+  }
+});
+
 // packages/rn-dev-agent-core/dist/tools/save-as-action.js
 function createSaveAsActionHandler() {
   return async (args) => {
@@ -79617,10 +79753,21 @@ function createSaveAsActionHandler() {
         tags: args.tags,
         mutates: args.mutates,
         status,
-        produces: args.produces
+        produces: args.produces,
+        entry: args.entry
       });
     } catch (err) {
       return failResult(err instanceof Error ? err.message : String(err), "BAD_RECORDING");
+    }
+    if (args.entry === "parked") {
+      try {
+        const anchor = deriveParkAnchor(parseAndValidateFlow(yamlText).commands);
+        if (!anchor.ok && !anchor.unresolvedParam) {
+          return failResult(`cdp_record_test_save_as_action: entry: parked needs a probeable park anchor, but ${anchor.reason}. Start the recording with a testID-bearing interaction or assertion, or save as entry: cold.`, "BAD_RECORDING", { cause: { parkedAnchorUnresolvable: anchor.reason } });
+        }
+      } catch (err) {
+        return failResult(err instanceof Error ? err.message : String(err), "BAD_RECORDING");
+      }
     }
     const initialState = freshRuntimeState(() => /* @__PURE__ */ new Date(), 0);
     const writeResult = writeRecordedActionTransaction(projectRoot, args.id, yamlText, initialState, args.overwrite === true);
@@ -79656,7 +79803,8 @@ function createSaveAsActionHandler() {
         mutates: args.mutates,
         status,
         appId: args.bundleId,
-        produces: args.produces
+        produces: args.produces,
+        entry: args.entry
       },
       hint: `Action emitted as experimental. Run /run-action ${args.id} to validate; on first clean replay it auto-promotes to active.`
     });
@@ -79671,6 +79819,8 @@ var init_save_as_action = __esm({
     init_reusable_action();
     init_action_store();
     init_action_state_store();
+    init_park_entry();
+    init_maestro_validator();
   }
 });
 
@@ -81064,7 +81214,7 @@ function containsExactId(value, depth = 0) {
     return false;
   return Object.entries(value).some(([key, child]) => key === "id" && typeof child === "string" || containsExactId(child, depth + 1));
 }
-function commandName(command) {
+function commandName2(command) {
   if (typeof command === "string")
     return command;
   if (!isObject2(command))
@@ -81089,13 +81239,13 @@ function runFlowHasUnanchoredLeadingInputText(command) {
   if (!Array.isArray(commands) || commands.length === 0)
     return false;
   for (const child of commands) {
-    const name = commandName(child);
+    const name = commandName2(child);
     if (name === "inputText")
       return true;
     if (name && nativeFocusPreservingCommands.has(name))
       continue;
     if (name === "tapOn" || name === "tap")
-      return commands.some((candidate) => commandName(candidate) === "inputText");
+      return commands.some((candidate) => commandName2(candidate) === "inputText");
     return false;
   }
   return false;
@@ -81103,7 +81253,7 @@ function runFlowHasUnanchoredLeadingInputText(command) {
 function nativeCommandMayChangeFocus(command, depth = 0) {
   if (depth > 20)
     return true;
-  const name = commandName(command);
+  const name = commandName2(command);
   if (name !== "runFlow")
     return name === null || !nativeFocusPreservingCommands.has(name);
   if (!isObject2(command))
@@ -81124,7 +81274,7 @@ function exactTapId(command, params) {
   }
 }
 function commandDomain(command, params) {
-  const name = commandName(command);
+  const name = commandName2(command);
   if (name === "waitForAnimationToEnd" || name === "inputText")
     return "neutral";
   try {
@@ -81153,7 +81303,7 @@ function planIosProofDomains(commands, params) {
   const tapCommands = /* @__PURE__ */ new Set(["tapOn", "tap"]);
   const lifecycleCommands2 = /* @__PURE__ */ new Set(["launchApp", "clearState", "killApp", "stopApp"]);
   for (let index = 0; index < commands.length; index++) {
-    const name = commandName(commands[index]);
+    const name = commandName2(commands[index]);
     let domain = classified[index];
     if (name === "runFlow" && runFlowHasUnanchoredLeadingInputText(commands[index])) {
       domain = "xctest-native";
@@ -81540,7 +81690,7 @@ function nestedMaestroAuthorityCallbacks(args) {
     reissueInstallReceipt: hasManagedInstallReissueAuthority(args) ? () => reissueManagedInstallAuthority(args) : null
   };
 }
-function commandName2(command) {
+function commandName3(command) {
   if (typeof command === "string")
     return command;
   if (!command || typeof command !== "object" || Array.isArray(command))
@@ -81558,7 +81708,7 @@ function nestedLifecycleCommand(command) {
   return Array.isArray(commands) && commands.some(nestedLifecycleCommandOrSelf);
 }
 function nestedLifecycleCommandOrSelf(command) {
-  const name = commandName2(command);
+  const name = commandName3(command);
   return name !== null && lifecycleCommands.has(name) || nestedLifecycleCommand(command);
 }
 function planMaestroAuthorityStages(commands) {
@@ -81572,7 +81722,7 @@ function planMaestroAuthorityStages(commands) {
     pending2 = [];
   };
   for (const command of commands) {
-    const name = commandName2(command);
+    const name = commandName3(command);
     if (nestedLifecycleCommand(command)) {
       throw new MaestroValidationError("conditional runFlow commands cannot contain app lifecycle transitions");
     }
@@ -81600,7 +81750,7 @@ async function executeMaestroAuthorityStages(commands, executeStage, claimOrigin
     }
     try {
       results.push(await executeStage(stage.commands));
-      if (stage.commands.length === 1 && commandName2(stage.commands[0]) === "launchApp") {
+      if (stage.commands.length === 1 && commandName3(stage.commands[0]) === "launchApp") {
         try {
           const launch = stage.commands[0];
           const launchOptions = launch.launchApp && typeof launch.launchApp === "object" && !Array.isArray(launch.launchApp) ? launch.launchApp : void 0;
@@ -83149,6 +83299,10 @@ function createRunActionHandler(deps = {}) {
   const installReceipt = deps.installReceipt ?? boundInstallReceipt;
   const resolveAppFile = deps.resolveAppFile ?? ((appId, deviceId) => resolveIosAppFile(appId, { deviceId }));
   const resolveEngineStatus = deps.engineStatus ?? (() => getEngineStatus().catch(() => null));
+  const probeParkAnchor = deps.probeParkAnchor ?? (async () => ({
+    status: "unreachable",
+    reason: "park preflight probe is not wired in this environment"
+  }));
   return async (args) => {
     if (!args.actionId || typeof args.actionId !== "string") {
       return failResult("cdp_run_action requires actionId", "BAD_FILENAME");
@@ -83186,6 +83340,28 @@ function createRunActionHandler(deps = {}) {
     }
     const replayYaml = loaded.replay.yamlText;
     const preflightCommands = loaded.replay.commands;
+    const entryResolution = resolveEntryMode(loaded.metadata);
+    if (!entryResolution.ok) {
+      return failResult(`cdp_run_action: ${args.actionId} declares unknown entry mode "${entryResolution.raw}" \u2014 use "cold" or "parked".`, "BAD_RECORDING", { actionId: args.actionId, fallback: "none", cause: { invalidEntry: entryResolution.raw } });
+    }
+    const entryMode = entryResolution.mode;
+    if (entryMode === "parked") {
+      const violation = parkedBodyViolation(preflightCommands);
+      if (violation?.kind === "lifecycle") {
+        return failResult(`cdp_run_action: ${args.actionId} is entry: parked but its body contains "${violation.command}" \u2014 parked actions start from the already-running app and must not include app lifecycle commands. Remove "${violation.command}", or re-author the action as entry: cold.`, "BAD_RECORDING", {
+          actionId: args.actionId,
+          fallback: "none",
+          cause: { parkedActionLifecycle: violation.command }
+        });
+      }
+      if (violation?.kind === "runflow-file") {
+        return failResult(`cdp_run_action: ${args.actionId} is entry: parked but references subflow file "${violation.reference}" \u2014 a parked body must be fully inspectable inline so no hidden lifecycle command can run.`, "BAD_RECORDING", {
+          actionId: args.actionId,
+          fallback: "none",
+          cause: { parkedRunFlowFile: violation.reference }
+        });
+      }
+    }
     const forceReload = proofReplay ? false : args.forceReload !== false;
     const action = forceReload ? acknowledgeExternalEdit(loaded) : loaded;
     const activeTarget = targetContext();
@@ -83272,6 +83448,86 @@ function createRunActionHandler(deps = {}) {
     try {
       const strictExecutor = usesStrictRunActionPolicy(args);
       const strictRunRecordMeta = (outcome) => strictExecutor && outcome.persistedRunId ? { strictRunRecordId: outcome.persistedRunId } : {};
+      if (entryMode === "parked") {
+        const refuseParkState = async (cause, detail, headline) => {
+          const autoRepair2 = {
+            attempted: false,
+            outcome: "refused",
+            refusedReason: "NOT_REPAIRABLE_KIND",
+            phases: { firstAttemptMs: 0 }
+          };
+          const persisted2 = await persistRunWithDevice({
+            timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+            durationMs: Date.now() - t0,
+            status: "fail",
+            failureCode: "MUTATE_PRECONDITION_FAILED",
+            failureDetail: `park preflight refused (${cause}): ${headline}`.slice(0, 500),
+            trigger,
+            autoRepair: autoRepair2
+          });
+          return failResult(`cdp_run_action: ${args.actionId} refused before any step ran \u2014 ${headline}. Drive the app to the action's park state and retry; the parked preflight never launches or navigates for you.`, "PARK_STATE_MISSING", {
+            actionId: args.actionId,
+            failureKind: "PARK_STATE_MISSING",
+            parkPreflight: { cause, ...detail },
+            autoRepair: autoRepair2,
+            writes: writeDisclosure("none", persisted2),
+            ...strictRunRecordMeta(persisted2)
+          });
+        };
+        const anchor = deriveParkAnchor(preflightCommands, args.params ?? {});
+        if (!anchor.ok) {
+          return refuseParkState("anchor-missing", { reason: anchor.reason }, anchor.reason);
+        }
+        const bundleAdmitted = await claimBundleAuthority(args);
+        const refuseParkUnverifiable = async (detail, headline) => {
+          const autoRepair2 = {
+            attempted: false,
+            outcome: "refused",
+            refusedReason: "NOT_REPAIRABLE_KIND",
+            phases: { firstAttemptMs: 0 }
+          };
+          const persisted2 = await persistRunWithDevice({
+            timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+            durationMs: Date.now() - t0,
+            status: "fail",
+            failureCode: "ENV_UNREACHABLE",
+            failureDetail: `park preflight unverifiable: ${headline}`.slice(0, 500),
+            trigger,
+            autoRepair: autoRepair2
+          });
+          return failResult(`cdp_run_action: ${args.actionId} is entry: parked but the park state cannot be verified \u2014 ${headline}. No step ran.`, "CDP_NOT_CONNECTED", {
+            actionId: args.actionId,
+            failureKind: "CDP_NOT_CONNECTED",
+            parkPreflight: detail,
+            autoRepair: autoRepair2,
+            writes: writeDisclosure("none", persisted2),
+            ...strictRunRecordMeta(persisted2)
+          });
+        };
+        const probe = bundleAdmitted ? await measureStep("park-preflight", () => probeParkAnchor(anchor.anchorId)) : { status: "unreachable", reason: "bundle authority admission was refused" };
+        if (probe.status === "unreachable") {
+          return refuseParkUnverifiable({ anchorId: anchor.anchorId, reason: probe.reason }, probe.reason ?? "no connected runtime to probe");
+        }
+        if (probe.status === "backgrounded") {
+          return refuseParkState("app-backgrounded", { anchorId: anchor.anchorId, reason: probe.reason }, `the app is not foregrounded (${probe.reason ?? "AppState is not active"})`);
+        }
+        if (probe.status === "unresponsive") {
+          return refuseParkState("app-backgrounded", { anchorId: anchor.anchorId, reason: probe.reason }, `the app did not answer the read-only park probe (${probe.reason ?? "suspended JS"}), which is the backgrounded dev-client signature`);
+        }
+        if (probe.status === "anchor-missing") {
+          return refuseParkState("anchor-missing", { anchorId: anchor.anchorId, reason: probe.reason }, `park anchor "${anchor.anchorId}" is not on screen${probe.reason ? ` (${probe.reason})` : ""}`);
+        }
+        const expectedSeq2 = action.metadata.expectedRouteSequence;
+        if (expectedSeq2 && expectedSeq2.length > 0) {
+          const liveRoute = await getLiveRoute().catch(() => null);
+          if (liveRoute === null) {
+            return refuseParkUnverifiable({ anchorId: anchor.anchorId, expectedRoute: expectedSeq2[0] }, `the live route could not be read to verify start route "${expectedSeq2[0]}"`);
+          }
+          if (liveRoute !== expectedSeq2[0]) {
+            return refuseParkState("route-mismatch", { anchorId: anchor.anchorId, expectedRoute: expectedSeq2[0], liveRoute }, `live route "${liveRoute}" is not the action's recorded start route "${expectedSeq2[0]}"`);
+          }
+        }
+      }
       const tBeforeFirst = Date.now();
       probeDeviceId = null;
       const firstCorpusRefusal = replayCorpusIdentityRefusal(loadContext, args.actionId);
@@ -83799,6 +84055,7 @@ var init_run_action = __esm({
     init_runtime();
     init_resolve_ios_app_file();
     init_action_engine_compat();
+    init_park_entry();
     init_ios_proof_router();
     init_engine_pin();
     init_maestro_run_ledger();
@@ -83807,6 +84064,94 @@ var init_run_action = __esm({
     PROVEN_ENGINE_PIN_DIVERGENCE = /* @__PURE__ */ new Set(["drift-newer", "drift-older", "checksum-mismatch"]);
     OUTPUT_BUDGET = 500;
     OUTPUT_ELISION = "\n\u2026\n";
+  }
+});
+
+// packages/rn-dev-agent-core/dist/tools/park-probe.js
+async function boundedEvaluate(client2, expression, timeoutMs) {
+  let result;
+  try {
+    result = await client2.evaluate(expression, false, timeoutMs);
+  } catch (error2) {
+    const reason = error2 instanceof Error ? error2.message : String(error2);
+    return reason.startsWith("CDP timeout (") ? { kind: "unresponsive", reason: `park probe got no answer within ${String(timeoutMs)}ms` } : { kind: "unreachable", reason };
+  }
+  if (result.error || typeof result.value !== "string") {
+    return { kind: "unreachable", reason: result.error ?? "park probe read was unreadable" };
+  }
+  return { kind: "value", value: result.value };
+}
+function createParkAnchorProbe(getClient2, timeoutMs = PARK_PROBE_TIMEOUT_MS) {
+  return async (anchorId) => {
+    let client2;
+    try {
+      client2 = getClient2();
+    } catch (error2) {
+      return {
+        status: "unreachable",
+        reason: error2 instanceof Error ? error2.message : String(error2)
+      };
+    }
+    if (!client2.isConnected) {
+      return { status: "unreachable", reason: "CDP client is not connected" };
+    }
+    const appState = await boundedEvaluate(client2, APP_STATE_EXPR, timeoutMs);
+    if (appState.kind !== "value")
+      return { status: appState.kind, reason: appState.reason };
+    try {
+      const parsed = JSON.parse(appState.value);
+      if (typeof parsed.state !== "string") {
+        return { status: "unreachable", reason: "AppState read was unreadable" };
+      }
+      if (parsed.state !== "active" && parsed.state !== "unknown") {
+        return { status: "backgrounded", reason: `AppState.currentState is "${parsed.state}"` };
+      }
+    } catch {
+      return { status: "unreachable", reason: "AppState read was unreadable" };
+    }
+    const frontmost = await boundedEvaluate(client2, client2.bridgeWithFallback(`isTestIdFrontmost(${JSON.stringify(anchorId)})`), timeoutMs);
+    if (frontmost.kind !== "value")
+      return { status: frontmost.kind, reason: frontmost.reason };
+    try {
+      const parsed = JSON.parse(frontmost.value);
+      if (typeof parsed.visible !== "boolean") {
+        return { status: "unreachable", reason: "frontmost check was unreadable" };
+      }
+      return parsed.visible ? { status: "visible" } : {
+        status: "anchor-missing",
+        reason: typeof parsed.reason === "string" ? parsed.reason : void 0
+      };
+    } catch {
+      return { status: "unreachable", reason: "frontmost check was unreadable" };
+    }
+  };
+}
+var PARK_PROBE_TIMEOUT_MS, APP_STATE_EXPR;
+var init_park_probe = __esm({
+  "packages/rn-dev-agent-core/dist/tools/park-probe.js"() {
+    "use strict";
+    PARK_PROBE_TIMEOUT_MS = 4e3;
+    APP_STATE_EXPR = `(function () {
+  try {
+    var r = globalThis.__r;
+    var mods = r && typeof r.getModules === 'function' ? r.getModules() : null;
+    if (!mods) return JSON.stringify({ state: 'unknown', reason: 'metro dev registry unavailable' });
+    var scanned = 0;
+    for (var key in mods) {
+      if (++scanned > 40000) return JSON.stringify({ state: 'unknown', reason: 'registry scan budget exceeded' });
+      var mod = mods[key];
+      if (!mod || !mod.isInitialized || !mod.verboseName) continue;
+      if (mod.verboseName.indexOf('Libraries/AppState/AppState') === -1) continue;
+      var exp = mod.publicModule && mod.publicModule.exports;
+      var appState = exp && (exp.default || exp);
+      var state = appState && appState.currentState;
+      return JSON.stringify({ state: typeof state === 'string' ? state : 'unknown' });
+    }
+    return JSON.stringify({ state: 'unknown', reason: 'AppState module not initialized' });
+  } catch (e) {
+    return JSON.stringify({ state: 'unknown', reason: String(e) });
+  }
+})()`;
   }
 });
 
@@ -96608,6 +96953,7 @@ var init_index = __esm({
     init_repair_action();
     init_save_as_action();
     init_run_action();
+    init_park_probe();
     init_login_prologue2();
     init_cdp_replay_dispatch();
     init_cdp_flow_replay();
@@ -98011,7 +98357,8 @@ var init_index = __esm({
       projectRoot: external_exports.string().optional().describe("Override project root (default: process.cwd())."),
       overwrite: external_exports.boolean().optional().describe("If an action with this id already exists, replace it. Default false (refuse with hint)."),
       testName: external_exports.string().optional().describe("Optional one-line description shown as a comment above the M7 header. Falls back to intent."),
-      produces: external_exports.record(external_exports.union([external_exports.string(), external_exports.number(), external_exports.boolean()])).optional().describe('D1209 \u2014 state postconditions this action establishes when it runs cleanly. Flat map of primitive values for hybrid composition (e.g. { authenticated: true, route: "home" }). Optional. Values containing commas or newlines are not supported; use multiple keys instead.')
+      produces: external_exports.record(external_exports.union([external_exports.string(), external_exports.number(), external_exports.boolean()])).optional().describe('D1209 \u2014 state postconditions this action establishes when it runs cleanly. Flat map of primitive values for hybrid composition (e.g. { authenticated: true, route: "home" }). Optional. Values containing commas or newlines are not supported; use multiple keys instead.'),
+      entry: external_exports.enum(["cold", "parked"]).optional().describe('"parked" omits launchApp; replay preflights the park anchor.')
     }, createSaveAsActionHandler());
     trackedTool("cdp_repair_action", "Repair a learned action using a fresh snapshot from the exact authority-bound device and capability-bound native runner.", {
       actionId: external_exports.string().describe("Owned action id; resolves one .yaml or .yml file."),
@@ -98028,9 +98375,10 @@ var init_index = __esm({
       maestroRun: maestroRunHandler,
       getLiveRoute: () => readLiveRoute(getClient()),
       targetContext: getActiveSession,
-      claimBundleAuthority: claimOptionalBundleAuthority
+      claimBundleAuthority: claimOptionalBundleAuthority,
+      probeParkAnchor: createParkAnchorProbe(getClient)
     });
-    trackedTool("cdp_run_action", "Replay a learned action by id with end-to-end auto-repair. On iOS, the validated flow is partitioned before execution: exact-testID commands use the authority-bound React-tree prover, while native-only commands use XCTest. The RunRecord and result preserve the reported proof domain, and a react-tree pass never promotes an experimental action to Maestro-certified active status. Ordinary missing React testIDs remain TESTID_NOT_FOUND; native selector misses remain ordinary Maestro failures unless direct bounded evidence proves a NATIVE_SURFACE_BLIND environment. Pass autoRepair=false to opt out of selector repair. proofReplay=true is reserved for proof-capture rehearsal and writes no runtime state. When the canonical run ledger proves every authored mutating command completed and only trailing verification (extendedWaitUntil/assert) failed, the result stays failed but carries meta.trailingVerification (mutationEvidence proven, attempt lineage, termination provenance) \u2014 verify the live goal state instead of retrying or rebooting; auto-repair refuses so a merely-slow selector is never rewritten.", {
+    trackedTool("cdp_run_action", "Replay a learned action by id with end-to-end auto-repair. On iOS, the validated flow is partitioned before execution: exact-testID commands use the authority-bound React-tree prover, while native-only commands use XCTest. The RunRecord and result preserve the reported proof domain, and a react-tree pass never promotes an experimental action to Maestro-certified active status. Ordinary missing React testIDs remain TESTID_NOT_FOUND; native selector misses remain ordinary Maestro failures unless direct bounded evidence proves a NATIVE_SURFACE_BLIND environment. An entry: parked action gets a read-only park preflight instead of a launch prologue \u2014 the declared park state absent refuses PARK_STATE_MISSING before any step runs (GH #628). Pass autoRepair=false to opt out of selector repair. proofReplay=true is reserved for proof-capture rehearsal and writes no runtime state. When the canonical run ledger proves every authored mutating command completed and only trailing verification (extendedWaitUntil/assert) failed, the result stays failed but carries meta.trailingVerification (mutationEvidence proven, attempt lineage, termination provenance) \u2014 verify the live goal state instead of retrying or rebooting; auto-repair refuses so a merely-slow selector is never rewritten.", {
       actionId: external_exports.string().describe("Owned action id; resolves one .yaml or .yml file."),
       projectRoot: external_exports.string().optional().describe("Override project root (default: process.cwd())."),
       platform: external_exports.enum(["ios", "android"]).optional().describe("Force a specific platform; otherwise auto-detected from the active device session."),

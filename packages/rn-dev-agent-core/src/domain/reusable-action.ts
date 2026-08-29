@@ -68,6 +68,14 @@ export type ActionFailureCode =
  */
 export type ActionAuthor = 'auto' | 'human' | 'imported';
 
+/**
+ * GH #628 — declared start state of the action. `cold` (default when absent)
+ * self-bootstraps via a `launchApp` prologue; `parked` starts from an
+ * already-running app parked on the recorded screen, bans app lifecycle
+ * commands in the body, and gets a read-only park preflight before replay.
+ */
+export type ActionEntryMode = 'cold' | 'parked';
+
 // ─────────────────────────────────────────────────────────────────────────────
 // M7 metadata — IMMUTABLE contract, lives in the YAML header
 // ─────────────────────────────────────────────────────────────────────────────
@@ -159,6 +167,8 @@ export interface M7Metadata {
   expectedRouteSequence?: string[];
   /** `maestro-runner@<semver>`; replay refuses any other value. */
   enginePin?: string;
+  /** GH #628 — declared start state; absent means `cold` (self-bootstrap). */
+  entry?: ActionEntryMode;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -558,6 +568,7 @@ export function parseM7Header(yamlText: string, fallbackId?: string): M7Metadata
           .map((t) => t.trim())
           .filter(Boolean);
       } else if (
+        key === 'entry' ||
         key === 'id' ||
         key === 'intent' ||
         key === 'status' ||
@@ -592,6 +603,9 @@ export function parseM7Header(yamlText: string, fallbackId?: string): M7Metadata
     produces: meta.produces as Record<string, string | number | boolean> | undefined,
     expectedRouteSequence: meta.expectedRouteSequence as string[] | undefined,
     enginePin: meta.enginePin as string | undefined,
+    // GH #628: carried raw like `status`; run-action refuses invalid values
+    // instead of silently downgrading a typo'd `parked` to cold.
+    entry: meta.entry as ActionEntryMode | undefined,
   };
 }
 
@@ -643,6 +657,7 @@ export function serializeM7Header(metadata: M7Metadata): string {
     lines.push(`# mutates: ${metadata.mutates}`);
   }
   if (metadata.status) lines.push(`# status: ${stripNewlines(metadata.status)}`);
+  if (metadata.entry) lines.push(`# entry: ${stripNewlines(metadata.entry)}`);
   if (metadata.enginePin) lines.push(`# enginePin: ${stripNewlines(metadata.enginePin)}`);
   if (metadata.params && metadata.params.length) {
     lines.push(`# params: [${metadata.params.map(stripNewlines).join(', ')}]`);

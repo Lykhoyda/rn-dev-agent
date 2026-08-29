@@ -74,6 +74,12 @@ import {
 import { getWorkerAuthorityRuntime } from '../session/runtime.js';
 import { flowUsesClearState, resolveIosAppFile } from './resolve-ios-app-file.js';
 import { actionReplayPreflight } from '../domain/action-engine-compat.js';
+import {
+  deriveParkAnchor,
+  parkedBodyViolation,
+  resolveEntryMode,
+  type ParkRefusalCause,
+} from '../domain/park-entry.js';
 import { planIosProofDomains } from '../domain/ios-proof-router.js';
 import {
   getEngineStatus,
@@ -514,6 +520,14 @@ export interface RunActionDeps {
   installReceipt?: () => { platform?: unknown; deviceId?: unknown; appId?: unknown } | null;
   resolveAppFile?: (appId: string, deviceId: string) => string | null;
   engineStatus?: () => Promise<ReplayEngineStatus | null>;
+  /** GH #628: read-only park-anchor probe for `entry: parked` preflight; default fail-closed. */
+  probeParkAnchor?: (anchorId: string) => Promise<ParkAnchorProbe>;
+}
+
+/** GH #628 probe outcome; 'unresponsive' = connected but suspended JS (backgrounded dev client). */
+export interface ParkAnchorProbe {
+  status: 'visible' | 'anchor-missing' | 'backgrounded' | 'unresponsive' | 'unreachable';
+  reason?: string;
 }
 
 function replayCorpusIdentityRefusal(
@@ -547,6 +561,12 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
     deps.resolveAppFile ??
     ((appId: string, deviceId: string) => resolveIosAppFile(appId, { deviceId }));
   const resolveEngineStatus = deps.engineStatus ?? (() => getEngineStatus().catch(() => null));
+  const probeParkAnchor =
+    deps.probeParkAnchor ??
+    (async (): Promise<ParkAnchorProbe> => ({
+      status: 'unreachable',
+      reason: 'park preflight probe is not wired in this environment',
+    }));
   return async (args: RunActionArgs): Promise<ToolResult> => {
     if (!args.actionId || typeof args.actionId !== 'string') {
       return failResult('cdp_run_action requires actionId', 'BAD_FILENAME');
@@ -602,6 +622,43 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
     }
     const replayYaml = loaded.replay.yamlText;
     const preflightCommands = loaded.replay.commands;
+    // GH #628: entry-mode invariants refuse before anything can dispatch. A
+    // typo'd mode never downgrades to cold, and a parked body must be fully
+    // inspectable and free of app lifecycle transitions.
+    const entryResolution = resolveEntryMode(loaded.metadata);
+    if (!entryResolution.ok) {
+      return failResult(
+        `cdp_run_action: ${args.actionId} declares unknown entry mode "${entryResolution.raw}" — use "cold" or "parked".`,
+        'BAD_RECORDING',
+        { actionId: args.actionId, fallback: 'none', cause: { invalidEntry: entryResolution.raw } },
+      );
+    }
+    const entryMode = entryResolution.mode;
+    if (entryMode === 'parked') {
+      const violation = parkedBodyViolation(preflightCommands);
+      if (violation?.kind === 'lifecycle') {
+        return failResult(
+          `cdp_run_action: ${args.actionId} is entry: parked but its body contains "${violation.command}" — parked actions start from the already-running app and must not include app lifecycle commands. Remove "${violation.command}", or re-author the action as entry: cold.`,
+          'BAD_RECORDING',
+          {
+            actionId: args.actionId,
+            fallback: 'none',
+            cause: { parkedActionLifecycle: violation.command },
+          },
+        );
+      }
+      if (violation?.kind === 'runflow-file') {
+        return failResult(
+          `cdp_run_action: ${args.actionId} is entry: parked but references subflow file "${violation.reference}" — a parked body must be fully inspectable inline so no hidden lifecycle command can run.`,
+          'BAD_RECORDING',
+          {
+            actionId: args.actionId,
+            fallback: 'none',
+            cause: { parkedRunFlowFile: violation.reference },
+          },
+        );
+      }
+    }
     // GH #173 (sub-issue 3): default-true forceReload acknowledges any
     // human edit to the YAML as the new baseline so downstream auto-repair
     // doesn't abort with STALE_TARGET. Opt out with forceReload: false to
@@ -750,6 +807,134 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
         strictExecutor && outcome.persistedRunId
           ? { strictRunRecordId: outcome.persistedRunId }
           : {};
+
+      // ─── GH #628: parked-entry preflight (read-only, refuse-closed) ──
+      // Verifies the declared park state before anything can dispatch:
+      // zero steps run on refusal, and the preflight never launches,
+      // foregrounds, navigates, or repairs.
+      if (entryMode === 'parked') {
+        const refuseParkState = async (
+          cause: ParkRefusalCause,
+          detail: Record<string, unknown>,
+          headline: string,
+        ): Promise<ToolResult> => {
+          const autoRepair: AutoRepairOutcome = {
+            attempted: false,
+            outcome: 'refused',
+            refusedReason: 'NOT_REPAIRABLE_KIND',
+            phases: { firstAttemptMs: 0 },
+          };
+          const persisted = await persistRunWithDevice({
+            timestamp: new Date().toISOString(),
+            durationMs: Date.now() - t0,
+            status: 'fail',
+            failureCode: 'MUTATE_PRECONDITION_FAILED',
+            failureDetail: `park preflight refused (${cause}): ${headline}`.slice(0, 500),
+            trigger,
+            autoRepair,
+          });
+          return failResult(
+            `cdp_run_action: ${args.actionId} refused before any step ran — ${headline}. Drive the app to the action's park state and retry; the parked preflight never launches or navigates for you.`,
+            'PARK_STATE_MISSING',
+            {
+              actionId: args.actionId,
+              failureKind: 'PARK_STATE_MISSING',
+              parkPreflight: { cause, ...detail },
+              autoRepair,
+              writes: writeDisclosure('none', persisted),
+              ...strictRunRecordMeta(persisted),
+            },
+          );
+        };
+        const anchor = deriveParkAnchor(preflightCommands, args.params ?? {});
+        if (!anchor.ok) {
+          return refuseParkState('anchor-missing', { reason: anchor.reason }, anchor.reason);
+        }
+        // The probe reads only through the authority-admitted bundle plane —
+        // same admission the route-drift reader uses (GH #628 pairing review).
+        const bundleAdmitted = await claimBundleAuthority(args);
+        const refuseParkUnverifiable = async (
+          detail: Record<string, unknown>,
+          headline: string,
+        ): Promise<ToolResult> => {
+          const autoRepair: AutoRepairOutcome = {
+            attempted: false,
+            outcome: 'refused',
+            refusedReason: 'NOT_REPAIRABLE_KIND',
+            phases: { firstAttemptMs: 0 },
+          };
+          const persisted = await persistRunWithDevice({
+            timestamp: new Date().toISOString(),
+            durationMs: Date.now() - t0,
+            status: 'fail',
+            failureCode: 'ENV_UNREACHABLE',
+            failureDetail: `park preflight unverifiable: ${headline}`.slice(0, 500),
+            trigger,
+            autoRepair,
+          });
+          return failResult(
+            `cdp_run_action: ${args.actionId} is entry: parked but the park state cannot be verified — ${headline}. No step ran.`,
+            'CDP_NOT_CONNECTED',
+            {
+              actionId: args.actionId,
+              failureKind: 'CDP_NOT_CONNECTED',
+              parkPreflight: detail,
+              autoRepair,
+              writes: writeDisclosure('none', persisted),
+              ...strictRunRecordMeta(persisted),
+            },
+          );
+        };
+        const probe: ParkAnchorProbe = bundleAdmitted
+          ? await measureStep('park-preflight', () => probeParkAnchor(anchor.anchorId))
+          : { status: 'unreachable', reason: 'bundle authority admission was refused' };
+        if (probe.status === 'unreachable') {
+          return refuseParkUnverifiable(
+            { anchorId: anchor.anchorId, reason: probe.reason },
+            probe.reason ?? 'no connected runtime to probe',
+          );
+        }
+        if (probe.status === 'backgrounded') {
+          return refuseParkState(
+            'app-backgrounded',
+            { anchorId: anchor.anchorId, reason: probe.reason },
+            `the app is not foregrounded (${probe.reason ?? 'AppState is not active'})`,
+          );
+        }
+        if (probe.status === 'unresponsive') {
+          return refuseParkState(
+            'app-backgrounded',
+            { anchorId: anchor.anchorId, reason: probe.reason },
+            `the app did not answer the read-only park probe (${probe.reason ?? 'suspended JS'}), which is the backgrounded dev-client signature`,
+          );
+        }
+        if (probe.status === 'anchor-missing') {
+          return refuseParkState(
+            'anchor-missing',
+            { anchorId: anchor.anchorId, reason: probe.reason },
+            `park anchor "${anchor.anchorId}" is not on screen${probe.reason ? ` (${probe.reason})` : ''}`,
+          );
+        }
+        const expectedSeq = action.metadata.expectedRouteSequence;
+        if (expectedSeq && expectedSeq.length > 0) {
+          const liveRoute = await getLiveRoute().catch(() => null);
+          // An unreadable route is not evidence of a wrong route — refuse
+          // under the connectivity distinction, not PARK_STATE_MISSING.
+          if (liveRoute === null) {
+            return refuseParkUnverifiable(
+              { anchorId: anchor.anchorId, expectedRoute: expectedSeq[0] },
+              `the live route could not be read to verify start route "${expectedSeq[0]}"`,
+            );
+          }
+          if (liveRoute !== expectedSeq[0]) {
+            return refuseParkState(
+              'route-mismatch',
+              { anchorId: anchor.anchorId, expectedRoute: expectedSeq[0], liveRoute },
+              `live route "${liveRoute}" is not the action's recorded start route "${expectedSeq[0]}"`,
+            );
+          }
+        }
+      }
 
       // ─── First attempt ───────────────────────────────────────────────
       // Issue #120: capture per-phase timing so MTTR analysis (#105) can

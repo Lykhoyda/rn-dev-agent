@@ -7,6 +7,7 @@
 import { stringify as yamlStringify } from 'yaml';
 import type { RecordedEvent } from './test-recorder.js';
 import { ACTION_ENGINE_PIN } from '../domain/engine-pin.js';
+import type { ActionEntryMode } from '../domain/reusable-action.js';
 import { regexSelectorCapabilityRefusal } from '../domain/action-engine-compat.js';
 import { isSafeMaestroScalar, parseAndValidateFlow } from '../domain/maestro-validator.js';
 
@@ -45,6 +46,10 @@ export interface GenerateOpts {
   // can pick it up. Values containing commas or newlines are not
   // supported in v1.
   produces?: Record<string, string | number | boolean>;
+  // GH #628 — declared start state. 'parked' omits the launchApp prologue and
+  // marks the action for the read-only park preflight; absent/cold keeps the
+  // self-bootstrap prologue.
+  entry?: ActionEntryMode;
 }
 
 type MetaPair = [string, string];
@@ -106,6 +111,7 @@ function metaPairs(opts: GenerateOpts): MetaPair[] {
   }
   if (typeof opts.mutates === 'boolean') out.push(['mutates', String(opts.mutates)]);
   if (opts.status) out.push(['status', stripNewlines(opts.status)]);
+  if (opts.entry) out.push(['entry', stripNewlines(opts.entry)]);
   if (opts.id && opts.intent) out.push(['enginePin', ACTION_ENGINE_PIN]);
   if (opts.produces && Object.keys(opts.produces).length > 0) {
     // Phase 134.1 (deepsec CRITICAL #6): keys MUST also pass through
@@ -238,10 +244,14 @@ export function generateMaestro(events: RecordedEvent[], opts: GenerateOpts = {}
   if (opts.startRoute) {
     lines.push(`# startRoute: ${stripNewlines(opts.startRoute)}`);
     lines.push(
-      '# NOTE: replay requires the app to be on this route before `- launchApp` finishes. If your app does not default to it, insert a navigation step here (e.g. deep link or tab tap).',
+      opts.entry === 'parked'
+        ? '# NOTE: entry: parked — replay verifies this park state read-only before any step and refuses PARK_STATE_MISSING when it is absent. No launch prologue: drive the app here first.'
+        : '# NOTE: replay requires the app to be on this route before `- launchApp` finishes. If your app does not default to it, insert a navigation step here (e.g. deep link or tab tap).',
     );
   }
-  lines.push('- launchApp');
+  // GH #628: a parked action starts from the already-running app — a launch
+  // prologue would reset the dev client and destroy the recorded park state.
+  if (opts.entry !== 'parked') lines.push('- launchApp');
 
   // B137: navigate events reached via tap lookahead are emitted inline with the
   // tap; skip them here to avoid double-emission.
@@ -353,6 +363,13 @@ export function generateMaestro(events: RecordedEvent[], opts: GenerateOpts = {}
 // --- Detox JS ---
 
 export function generateDetox(events: RecordedEvent[], opts: GenerateOpts = {}): string {
+  // GH #628: Detox has no read-only park preflight; a parked test would run
+  // its first mutation against an unverified state, so refuse generation.
+  if (opts.entry === 'parked') {
+    throw new Error(
+      'entry: parked is supported for Maestro actions only — Detox output cannot verify the park state before its first step.',
+    );
+  }
   const lines: string[] = [];
   const name = stripNewlines(opts.testName ?? 'Recorded flow');
   lines.push(`describe(${JSON.stringify(name)}, () => {`);

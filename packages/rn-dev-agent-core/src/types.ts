@@ -378,6 +378,9 @@ export type ToolErrorCode =
   // GH #186: cdp_run_action replay hit structural route-drift (live route off
   // the action's expectedRouteSequence) — distinct from a stale selector.
   | 'ROUTE_DRIFT'
+  // GH #628: an entry: parked action's read-only preflight found the declared
+  // park state absent (anchor/route/foreground); refused before any step ran.
+  | 'PARK_STATE_MISSING'
   // GH #136: cdp_dismiss_dev_client_picker called with no active device session.
   | 'DEV_CLIENT_PICKER_NO_SESSION'
   // GH #202 Phase 2a: DeviceSessionArbiter refused an op because an exclusive

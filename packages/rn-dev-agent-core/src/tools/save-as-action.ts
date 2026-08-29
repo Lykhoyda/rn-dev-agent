@@ -17,9 +17,15 @@ import { okResult, failResult } from '../utils.js';
 import type { ToolResult } from '../utils.js';
 import { getStoredEvents, getRecordingStartRoute } from './test-recorder.js';
 import { generateMaestro } from './test-recorder-generators.js';
-import { type ActionLifecycle, freshRuntimeState } from '../domain/reusable-action.js';
+import {
+  type ActionEntryMode,
+  type ActionLifecycle,
+  freshRuntimeState,
+} from '../domain/reusable-action.js';
 import { assertOwnedActionCorpus, writeRecordedActionTransaction } from '../domain/action-store.js';
 import { mirrorToDb } from '../domain/action-state-store.js';
+import { deriveParkAnchor } from '../domain/park-entry.js';
+import { parseAndValidateFlow } from '../domain/maestro-validator.js';
 
 export interface SaveAsActionArgs {
   /**
@@ -78,6 +84,8 @@ export interface SaveAsActionArgs {
    * `{ authenticated: true, route: 'home' }`.
    */
   produces?: Record<string, string | number | boolean>;
+  /** GH #628 — declared start state; 'parked' omits the launchApp prologue. Default: cold. */
+  entry?: ActionEntryMode;
 }
 
 export function createSaveAsActionHandler() {
@@ -134,9 +142,28 @@ export function createSaveAsActionHandler() {
         mutates: args.mutates,
         status,
         produces: args.produces,
+        entry: args.entry,
       });
     } catch (err) {
       return failResult(err instanceof Error ? err.message : String(err), 'BAD_RECORDING');
+    }
+
+    // GH #628: a parked action's replay preflight needs an id-bearing opening
+    // anchor — refuse at save time instead of emitting an unreplayable action.
+    if (args.entry === 'parked') {
+      try {
+        const anchor = deriveParkAnchor(parseAndValidateFlow(yamlText).commands);
+        // A ${VAR} anchor is fine here — replay supplies params and re-derives.
+        if (!anchor.ok && !anchor.unresolvedParam) {
+          return failResult(
+            `cdp_record_test_save_as_action: entry: parked needs a probeable park anchor, but ${anchor.reason}. Start the recording with a testID-bearing interaction or assertion, or save as entry: cold.`,
+            'BAD_RECORDING',
+            { cause: { parkedAnchorUnresolvable: anchor.reason } },
+          );
+        }
+      } catch (err) {
+        return failResult(err instanceof Error ? err.message : String(err), 'BAD_RECORDING');
+      }
     }
 
     // Issue #101: sidecar-first atomic pair-write. The atomicWriter
@@ -198,6 +225,7 @@ export function createSaveAsActionHandler() {
         status,
         appId: args.bundleId,
         produces: args.produces,
+        entry: args.entry,
       },
       hint: `Action emitted as experimental. Run /run-action ${args.id} to validate; on first clean replay it auto-promotes to active.`,
     });
