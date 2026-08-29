@@ -754,10 +754,7 @@ export function createMaestroRunHandler(
       if (!capturedAction) {
         return failResult(`Action does not resolve uniquely to ${args.flowPath}.`, 'BAD_RECORDING');
       }
-      if (!capturedAction.replay.ok) {
-        return failResult(capturedAction.replay.error, 'BAD_RECORDING');
-      }
-      rawYaml = capturedAction.replay.yamlText;
+      rawYaml = capturedAction.replay.ok ? capturedAction.replay.yamlText : capturedAction.yamlText;
     } else if (args.inlineYaml) {
       rawYaml = args.inlineYaml;
     } else if (args.flowPath) {
@@ -782,6 +779,9 @@ export function createMaestroRunHandler(
     if (semanticActionMeta) {
       const entryRefusal = learnedActionEntryAdmissionResult(semanticActionMeta, args);
       if (entryRefusal) return entryRefusal;
+    }
+    if (capturedAction && !capturedAction.replay.ok) {
+      return failResult(capturedAction.replay.error, 'BAD_RECORDING');
     }
 
     try {

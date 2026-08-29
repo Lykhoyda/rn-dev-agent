@@ -33,6 +33,8 @@ import { parseM7Header, serializeM7Header } from '../../dist/domain/reusable-act
 import { parkedBodyViolation } from '../../dist/domain/park-entry.js';
 import { createParkAnchorProbe, type ParkProbeClient } from '../../dist/tools/park-probe.js';
 import { prepareActionVerificationSuite } from '../../dist/domain/action-verification-suite.js';
+import { loadAction, saveAction } from '../../dist/domain/action-store.js';
+import { applyRepair, attemptRepair } from '../../dist/domain/repair-engine.js';
 import type { ParkAnchorProbe, RunActionArgs } from '../../dist/tools/run-action.js';
 import type { ToolResult } from '../../dist/utils.js';
 import { createPinnedRunActionHandler, createTmpProject } from '../helpers/tmp-project.js';
@@ -350,6 +352,42 @@ for (const declaration of [
   });
 }
 
+test('GH #628: repair preserves an empty entry declaration and its replay refusal', async () => {
+  project.seedAction(
+    'parked-sign-mandate',
+    parkedYaml([
+      `- assertVisible:\n    id: "${PARK_ANCHOR}"`,
+      '- tapOn:\n    id: "stale-selector"',
+    ]).replace('# entry: parked', '# entry:'),
+    null,
+  );
+  const action = loadAction(project.root, 'parked-sign-mandate');
+  assert.ok(action);
+  const repair = attemptRepair(action, 'stale-selector', ['fresh-selector']);
+  assert.equal(repair.kind, 'patched');
+  if (repair.kind !== 'patched') return;
+  saveAction(applyRepair(action, repair));
+
+  const persisted = project.readYaml('parked-sign-mandate');
+  assert.deepEqual(
+    persisted.split('\n').filter((line: string) => line.startsWith('# entry:')),
+    ['# entry:'],
+  );
+  assert.equal(parseM7Header(persisted)?.entry, '');
+
+  const calls: Array<Record<string, unknown>> = [];
+  const result = envelope(
+    await handlerWith(calls, { status: 'visible' })({
+      actionId: 'parked-sign-mandate',
+      projectRoot: project.root,
+    }),
+  );
+  assert.equal(result.ok, false);
+  assert.equal(result.code, 'BAD_RECORDING');
+  assert.deepEqual(result.meta?.cause, { invalidEntry: '' });
+  assert.equal(calls.length, 0);
+});
+
 // ─── Park preflight negative controls (PARK_STATE_MISSING) ──────────────────
 
 test('GH #628 negative control: absent park anchor refuses PARK_STATE_MISSING before mutations', async () => {
@@ -622,6 +660,71 @@ test('GH #628: suite executors refuse parked actions before execution', async ()
   assert.equal(verification.prepared.length, 0);
   assert.equal(verification.errors[0]?.code, 'BAD_RECORDING');
   assert.match(verification.errors[0]?.error ?? '', /cdp_run_action/);
+  assert.equal(executed, false);
+});
+
+test('GH #628: invalid entry outranks malformed bodies in every alternate executor', async () => {
+  project.seedAction(
+    'parked-sign-mandate',
+    parkedYaml([`- assertVisible:\n    id: "${PARK_ANCHOR}"`, '- runFlow:\n    file: 123']).replace(
+      '# entry: parked',
+      '# entry: parkd',
+    ),
+    null,
+  );
+  let executed = false;
+  const maestro = envelope(
+    await createMaestroRunHandler({
+      getActiveSession: () => null,
+      execFile: async () => {
+        executed = true;
+        return { stdout: '', stderr: '' };
+      },
+    })({ platform: 'ios', flowPath: project.yamlPath('parked-sign-mandate') }),
+  );
+  assert.equal(maestro.code, 'BAD_RECORDING');
+  assert.deepEqual(maestro.meta?.cause, { invalidEntry: 'parkd' });
+
+  const suite = envelope(
+    await createMaestroTestAllHandler({
+      getActiveSession: () => null,
+      runFlow: async () => {
+        executed = true;
+        return { content: [{ type: 'text', text: JSON.stringify(PASS_ENV) }] };
+      },
+    })({ platform: 'ios', flowDir: project.actionsDir }),
+  );
+  assert.equal(suite.code, 'BAD_RECORDING');
+  assert.deepEqual(suite.meta?.cause, { invalidEntry: 'parkd' });
+
+  const verification = prepareActionVerificationSuite(
+    [project.yamlPath('parked-sign-mandate')],
+    project.actionsDir,
+    null,
+  );
+  assert.equal(verification.prepared.length, 0);
+  assert.equal(verification.errors[0]?.code, 'BAD_RECORDING');
+  assert.deepEqual(verification.errors[0]?.cause, { invalidEntry: 'parkd' });
+
+  project.seedAction(
+    'parked-sign-mandate',
+    parkedYaml([`- assertVisible:\n    id: "${PARK_ANCHOR}"`, '- runFlow:\n    file: 123']).replace(
+      '# entry: parked',
+      '# entry: cold',
+    ),
+    null,
+  );
+  const malformedCold = envelope(
+    await createMaestroRunHandler({
+      getActiveSession: () => null,
+      execFile: async () => {
+        executed = true;
+        return { stdout: '', stderr: '' };
+      },
+    })({ platform: 'ios', flowPath: project.yamlPath('parked-sign-mandate') }),
+  );
+  assert.equal(malformedCold.code, 'BAD_RECORDING');
+  assert.equal(malformedCold.meta?.cause, undefined);
   assert.equal(executed, false);
 });
 

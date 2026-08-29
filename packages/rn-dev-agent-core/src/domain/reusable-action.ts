@@ -658,7 +658,10 @@ export function serializeM7Header(metadata: M7Metadata): string {
     lines.push(`# mutates: ${metadata.mutates}`);
   }
   if (metadata.status) lines.push(`# status: ${stripNewlines(metadata.status)}`);
-  if (metadata.entry) lines.push(`# entry: ${stripNewlines(metadata.entry)}`);
+  if (metadata.entry !== undefined) {
+    const entry = String(metadata.entry);
+    lines.push(entry.length === 0 ? '# entry:' : `# entry: ${stripNewlines(entry)}`);
+  }
   if (metadata.enginePin) lines.push(`# enginePin: ${stripNewlines(metadata.enginePin)}`);
   if (metadata.params && metadata.params.length) {
     lines.push(`# params: [${metadata.params.map(stripNewlines).join(', ')}]`);

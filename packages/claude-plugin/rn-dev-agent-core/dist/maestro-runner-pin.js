@@ -13990,25 +13990,22 @@ function prepareActionVerificationSuite(files, flowDir, engineStatus, context) {
       let inlineYaml;
       let commands;
       let meta;
+      let actionReplay = null;
+      let sourceText;
       if (learnedContext) {
         const action = captureActionFromContext(learnedContext, id);
         if (!action || basename6(action.filePath) !== basename6(file)) {
           throw new Error(`Action ${id} did not resolve to ${file}`);
         }
-        if (!action.replay.ok)
-          throw new Error(action.replay.error);
-        inlineYaml = action.replay.yamlText;
-        commands = action.replay.commands;
+        actionReplay = action;
+        sourceText = action.yamlText;
         meta = action.metadata;
       } else {
         const actionPathRefusal = standaloneLearnedActionPathRefusal(file);
         if (actionPathRefusal)
           throw new Error(actionPathRefusal);
-        const text = readFileSync9(file, "utf8");
-        const parsed = parseAndValidateFlow(text, { flowDir: dirname11(file), flowRoot: flowDir });
-        inlineYaml = parsed.raw;
-        commands = parsed.commands;
-        meta = parseM7Header(text, id);
+        sourceText = readFileSync9(file, "utf8");
+        meta = parseM7Header(sourceText, id);
       }
       const entryRefusal = meta ? learnedActionEntryRefusal(meta, false) : null;
       if (entryRefusal) {
@@ -14019,6 +14016,19 @@ function prepareActionVerificationSuite(files, flowDir, engineStatus, context) {
           ...entryRefusal.kind === "invalid-entry" ? { cause: { invalidEntry: entryRefusal.raw } } : {}
         });
         continue;
+      }
+      if (actionReplay) {
+        if (!actionReplay.replay.ok)
+          throw new Error(actionReplay.replay.error);
+        inlineYaml = actionReplay.replay.yamlText;
+        commands = actionReplay.replay.commands;
+      } else {
+        const parsed = parseAndValidateFlow(sourceText, {
+          flowDir: dirname11(file),
+          flowRoot: flowDir
+        });
+        inlineYaml = parsed.raw;
+        commands = parsed.commands;
       }
       const refusal = replayCompatibilityPreflight({
         enginePin: meta?.enginePin,
@@ -16216,10 +16226,7 @@ function createMaestroRunHandler(deps = {}) {
       if (!capturedAction) {
         return failResult(`Action does not resolve uniquely to ${args.flowPath}.`, "BAD_RECORDING");
       }
-      if (!capturedAction.replay.ok) {
-        return failResult(capturedAction.replay.error, "BAD_RECORDING");
-      }
-      rawYaml = capturedAction.replay.yamlText;
+      rawYaml = capturedAction.replay.ok ? capturedAction.replay.yamlText : capturedAction.yamlText;
     } else if (args.inlineYaml) {
       rawYaml = args.inlineYaml;
     } else if (args.flowPath) {
@@ -16239,6 +16246,9 @@ function createMaestroRunHandler(deps = {}) {
       const entryRefusal = learnedActionEntryAdmissionResult(semanticActionMeta, args);
       if (entryRefusal)
         return entryRefusal;
+    }
+    if (capturedAction && !capturedAction.replay.ok) {
+      return failResult(capturedAction.replay.error, "BAD_RECORDING");
     }
     try {
       const runFlowOpts = args.flowPath && flowPathClassification === "outside" ? { flowDir: dirname14(args.flowPath), flowRoot: dirname14(args.flowPath) } : {};

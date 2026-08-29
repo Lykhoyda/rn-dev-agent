@@ -58613,8 +58613,10 @@ function serializeM7Header(metadata) {
   }
   if (metadata.status)
     lines.push(`# status: ${stripNewlines2(metadata.status)}`);
-  if (metadata.entry)
-    lines.push(`# entry: ${stripNewlines2(metadata.entry)}`);
+  if (metadata.entry !== void 0) {
+    const entry = String(metadata.entry);
+    lines.push(entry.length === 0 ? "# entry:" : `# entry: ${stripNewlines2(entry)}`);
+  }
   if (metadata.enginePin)
     lines.push(`# enginePin: ${stripNewlines2(metadata.enginePin)}`);
   if (metadata.params && metadata.params.length) {
@@ -80019,10 +80021,7 @@ function createMaestroRunHandler(deps = {}) {
       if (!capturedAction) {
         return failResult(`Action does not resolve uniquely to ${args.flowPath}.`, "BAD_RECORDING");
       }
-      if (!capturedAction.replay.ok) {
-        return failResult(capturedAction.replay.error, "BAD_RECORDING");
-      }
-      rawYaml = capturedAction.replay.yamlText;
+      rawYaml = capturedAction.replay.ok ? capturedAction.replay.yamlText : capturedAction.yamlText;
     } else if (args.inlineYaml) {
       rawYaml = args.inlineYaml;
     } else if (args.flowPath) {
@@ -80042,6 +80041,9 @@ function createMaestroRunHandler(deps = {}) {
       const entryRefusal = learnedActionEntryAdmissionResult(semanticActionMeta, args);
       if (entryRefusal)
         return entryRefusal;
+    }
+    if (capturedAction && !capturedAction.replay.ok) {
+      return failResult(capturedAction.replay.error, "BAD_RECORDING");
     }
     try {
       const runFlowOpts = args.flowPath && flowPathClassification === "outside" ? { flowDir: dirname21(args.flowPath), flowRoot: dirname21(args.flowPath) } : {};
@@ -90738,35 +90740,24 @@ function createMaestroTestAllHandler(deps = {}) {
         let parsedFlowAppId;
         let meta;
         let requireEnginePin;
+        let actionReplay = null;
+        let yamlText;
         if (learnedContext) {
           const actionId = basename13(flow).replace(/\.ya?ml$/i, "");
           const action = captureActionFromContext(learnedContext, actionId);
           if (!action || basename13(action.filePath) !== basename13(flow)) {
             throw new Error(`Action ${actionId} does not resolve to ${flow}.`);
           }
-          if (!action.replay.ok)
-            throw new MaestroValidationError(action.replay.error);
-          parsedCommands = action.replay.commands;
-          parsedFlowAppId = action.replay.appId;
+          actionReplay = action;
+          yamlText = action.yamlText;
           meta = action.metadata;
           requireEnginePin = true;
         } else {
-          const yamlText = readFileSync35(flow, "utf-8");
-          const parsed = parseAndValidateFlow(yamlText, {
-            flowDir: dirname28(flow),
-            flowRoot: flowDir
-          });
+          yamlText = readFileSync35(flow, "utf-8");
           const flowId = name.replace(/\.ya?ml$/i, "");
-          parsedCommands = parsed.commands;
-          parsedFlowAppId = parsed.appId;
           meta = parseM7Header(yamlText, flowId);
           requireEnginePin = meta !== null || isLearnedActionPath(flow);
         }
-        const iosProofPlan = useSharedIosPlanner ? planIosProofDomains(parsedCommands, {}) : null;
-        if (iosProofPlan && !iosProofPlan.ok) {
-          throw new Error(`Refusing iOS proof-domain ambiguity at step ${iosProofPlan.sourceIndex}: ${iosProofPlan.reason}.`);
-        }
-        const requiresNativeRuntime = iosProofPlan?.ok !== true || iosProofPlan.segments.some((segment) => segment.domain === "xctest-native");
         const entryRefusal = meta ? learnedActionEntryRefusal(meta, false) : null;
         if (entryRefusal) {
           preflightResults.push({
@@ -90779,6 +90770,25 @@ function createMaestroTestAllHandler(deps = {}) {
           });
           continue;
         }
+        if (actionReplay) {
+          if (!actionReplay.replay.ok) {
+            throw new MaestroValidationError(actionReplay.replay.error);
+          }
+          parsedCommands = actionReplay.replay.commands;
+          parsedFlowAppId = actionReplay.replay.appId;
+        } else {
+          const parsed = parseAndValidateFlow(yamlText, {
+            flowDir: dirname28(flow),
+            flowRoot: flowDir
+          });
+          parsedCommands = parsed.commands;
+          parsedFlowAppId = parsed.appId;
+        }
+        const iosProofPlan = useSharedIosPlanner ? planIosProofDomains(parsedCommands, {}) : null;
+        if (iosProofPlan && !iosProofPlan.ok) {
+          throw new Error(`Refusing iOS proof-domain ambiguity at step ${iosProofPlan.sourceIndex}: ${iosProofPlan.reason}.`);
+        }
+        const requiresNativeRuntime = iosProofPlan?.ok !== true || iosProofPlan.segments.some((segment) => segment.domain === "xctest-native");
         const preflight2 = replayCompatibilityPreflight({
           enginePin: meta?.enginePin,
           commands: parsedCommands,

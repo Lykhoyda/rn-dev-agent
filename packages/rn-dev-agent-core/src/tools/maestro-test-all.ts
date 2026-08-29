@@ -267,38 +267,24 @@ export function createMaestroTestAllHandler(
         let parsedFlowAppId: string | undefined;
         let meta: ReturnType<typeof parseM7Header>;
         let requireEnginePin: boolean;
+        let actionReplay: ReturnType<typeof captureActionFromContext> = null;
+        let yamlText: string;
         if (learnedContext) {
           const actionId = basename(flow).replace(/\.ya?ml$/i, '');
           const action = captureActionFromContext(learnedContext, actionId);
           if (!action || basename(action.filePath) !== basename(flow)) {
             throw new Error(`Action ${actionId} does not resolve to ${flow}.`);
           }
-          if (!action.replay.ok) throw new MaestroValidationError(action.replay.error);
-          parsedCommands = action.replay.commands;
-          parsedFlowAppId = action.replay.appId;
+          actionReplay = action;
+          yamlText = action.yamlText;
           meta = action.metadata;
           requireEnginePin = true;
         } else {
-          const yamlText = readFileSync(flow, 'utf-8');
-          const parsed = parseAndValidateFlow(yamlText, {
-            flowDir: dirname(flow),
-            flowRoot: flowDir,
-          });
+          yamlText = readFileSync(flow, 'utf-8');
           const flowId = name.replace(/\.ya?ml$/i, '');
-          parsedCommands = parsed.commands;
-          parsedFlowAppId = parsed.appId;
           meta = parseM7Header(yamlText, flowId);
           requireEnginePin = meta !== null || isLearnedActionPath(flow);
         }
-        const iosProofPlan = useSharedIosPlanner ? planIosProofDomains(parsedCommands, {}) : null;
-        if (iosProofPlan && !iosProofPlan.ok) {
-          throw new Error(
-            `Refusing iOS proof-domain ambiguity at step ${iosProofPlan.sourceIndex}: ${iosProofPlan.reason}.`,
-          );
-        }
-        const requiresNativeRuntime =
-          iosProofPlan?.ok !== true ||
-          iosProofPlan.segments.some((segment) => segment.domain === 'xctest-native');
         const entryRefusal = meta ? learnedActionEntryRefusal(meta, false) : null;
         if (entryRefusal) {
           preflightResults.push({
@@ -313,6 +299,29 @@ export function createMaestroTestAllHandler(
           });
           continue;
         }
+        if (actionReplay) {
+          if (!actionReplay.replay.ok) {
+            throw new MaestroValidationError(actionReplay.replay.error);
+          }
+          parsedCommands = actionReplay.replay.commands;
+          parsedFlowAppId = actionReplay.replay.appId;
+        } else {
+          const parsed = parseAndValidateFlow(yamlText, {
+            flowDir: dirname(flow),
+            flowRoot: flowDir,
+          });
+          parsedCommands = parsed.commands;
+          parsedFlowAppId = parsed.appId;
+        }
+        const iosProofPlan = useSharedIosPlanner ? planIosProofDomains(parsedCommands, {}) : null;
+        if (iosProofPlan && !iosProofPlan.ok) {
+          throw new Error(
+            `Refusing iOS proof-domain ambiguity at step ${iosProofPlan.sourceIndex}: ${iosProofPlan.reason}.`,
+          );
+        }
+        const requiresNativeRuntime =
+          iosProofPlan?.ok !== true ||
+          iosProofPlan.segments.some((segment) => segment.domain === 'xctest-native');
         const preflight = replayCompatibilityPreflight({
           enginePin: meta?.enginePin,
           commands: parsedCommands,

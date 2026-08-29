@@ -60,23 +60,21 @@ export function prepareActionVerificationSuite(
       let inlineYaml: string;
       let commands: unknown[];
       let meta: ReturnType<typeof parseM7Header>;
+      let actionReplay: ReturnType<typeof captureActionFromContext> = null;
+      let sourceText: string;
       if (learnedContext) {
         const action = captureActionFromContext(learnedContext, id);
         if (!action || basename(action.filePath) !== basename(file)) {
           throw new Error(`Action ${id} did not resolve to ${file}`);
         }
-        if (!action.replay.ok) throw new Error(action.replay.error);
-        inlineYaml = action.replay.yamlText;
-        commands = action.replay.commands;
+        actionReplay = action;
+        sourceText = action.yamlText;
         meta = action.metadata;
       } else {
         const actionPathRefusal = standaloneLearnedActionPathRefusal(file);
         if (actionPathRefusal) throw new Error(actionPathRefusal);
-        const text = readFileSync(file, 'utf8');
-        const parsed = parseAndValidateFlow(text, { flowDir: dirname(file), flowRoot: flowDir });
-        inlineYaml = parsed.raw;
-        commands = parsed.commands;
-        meta = parseM7Header(text, id);
+        sourceText = readFileSync(file, 'utf8');
+        meta = parseM7Header(sourceText, id);
       }
       const entryRefusal = meta ? learnedActionEntryRefusal(meta, false) : null;
       if (entryRefusal) {
@@ -89,6 +87,18 @@ export function prepareActionVerificationSuite(
             : {}),
         });
         continue;
+      }
+      if (actionReplay) {
+        if (!actionReplay.replay.ok) throw new Error(actionReplay.replay.error);
+        inlineYaml = actionReplay.replay.yamlText;
+        commands = actionReplay.replay.commands;
+      } else {
+        const parsed = parseAndValidateFlow(sourceText, {
+          flowDir: dirname(file),
+          flowRoot: flowDir,
+        });
+        inlineYaml = parsed.raw;
+        commands = parsed.commands;
       }
       const refusal = replayCompatibilityPreflight({
         enginePin: meta?.enginePin,
