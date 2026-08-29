@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { createHmac } from 'node:crypto';
-import { mkdtempSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -10,6 +11,7 @@ import {
   inspectManagedMetroLifecycle,
   startManagedMetro,
 } from '../../../dist/session/managed-metro.js';
+import { probeProcessBirth, readProcessBirth } from '../../../dist/session/process-birth.js';
 import { MAX_STRICT_PROOF_FILE_BYTES } from '../../../dist/session/strict-proof-limits.js';
 
 const SESSION_ID = 'session-a';
@@ -88,6 +90,22 @@ const liveBirth = (pid: number) => ({
   status: 'present' as const,
   birth: { pid, source: 'linux-proc' as const, token: `birth-${pid}` },
 });
+
+async function availablePort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const server = createServer();
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address();
+      if (!address || typeof address === 'string') {
+        server.close();
+        reject(new Error('test port unavailable'));
+        return;
+      }
+      server.close((error) => (error ? reject(error) : resolve(address.port)));
+    });
+  });
+}
 
 test('a managed Metro launcher that exits before bundle bind names its cause in the receipt', async () => {
   const runtimeRoot = mkdtempSync(join(tmpdir(), 'rn-managed-metro-launcher-exit-'));
@@ -273,6 +291,121 @@ test('an unsigned runtime violation is never attributed to a launcher exit', asy
   assert.equal(inspection.code, 'METRO_LAUNCHER_EXITED');
   assert.ok(!String(inspection.attribution ?? '').includes('FORGED_VIOLATION'));
 });
+
+test(
+  'a child-supplied free-text violation never reaches launcher exit attribution',
+  { skip: process.platform === 'win32', timeout: 15_000 },
+  async () => {
+    const root = mkdtempSync(join(tmpdir(), 'rn-managed-metro-child-violation-'));
+    const runtimeRoot = join(root, 'runtime');
+    const integrationRoot = join(root, '.rn-agent', 'integration');
+    const binRoot = join(root, 'node_modules', '.bin');
+    const listenerPidPath = join(runtimeRoot, 'listener.pid');
+    const syntheticValue = 'obviously-synthetic-private-value-for-fd9-test';
+    const genuineViolation = canonicalAuthorityJson({
+      code: 'RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION',
+      stage: 'native-spawn',
+      nodeVersion: process.versions.node,
+      convention: 'positional',
+      arity: 8,
+    });
+    mkdirSync(runtimeRoot, { recursive: true });
+    mkdirSync(integrationRoot, { recursive: true });
+    mkdirSync(binRoot, { recursive: true });
+    writeFileSync(join(root, 'package.json'), JSON.stringify({ dependencies: { expo: '1' } }));
+    writeFileSync(join(integrationRoot, 'rn-session-metro.cjs'), '');
+    const executable = join(binRoot, 'expo');
+    writeFileSync(
+      executable,
+      `#!/usr/bin/env node
+const { writeFileSync, writeSync } = require('node:fs');
+const { createServer } = require('node:net');
+if (process.argv.includes('--version')) process.exit(0);
+const port = Number(process.argv[process.argv.indexOf('--port') + 1]);
+for (const value of [${JSON.stringify(syntheticValue)}, ${JSON.stringify(genuineViolation)}]) {
+  writeSync(9, JSON.stringify({
+    version: 1,
+    runtimeEvidenceAuthority: 'reported-v1',
+    sessionId: process.env.RN_DEV_AGENT_SESSION_ID,
+    metroInstanceId: process.env.RN_DEV_AGENT_METRO_INSTANCE_ID,
+    kind: 'violation',
+    value,
+    digest: null,
+  }) + '\\n');
+}
+writeFileSync(${JSON.stringify(listenerPidPath)}, String(process.pid));
+createServer(() => {}).listen(port, '127.0.0.1');
+setInterval(() => {}, 1 << 30);
+`,
+    );
+    chmodSync(executable, 0o755);
+    const port = await availablePort();
+    let binding: Awaited<ReturnType<typeof startManagedMetro>> | undefined;
+    try {
+      binding = await startManagedMetro(
+        {
+          sessionId: SESSION_ID,
+          appRoot: root,
+          sourceRoot: root,
+          runtimeRoot,
+          port,
+          instanceId: INSTANCE_ID,
+          buildGeneration: 1,
+          signerCapability: SIGNER,
+        },
+        {
+          prepareEnforcement: () => ({
+            status: 'unsupported',
+            reason: 'host-enforcement-unavailable',
+          }),
+          listenerPid: () => {
+            try {
+              return Number(readFileSync(listenerPidPath, 'utf8')) || null;
+            } catch {
+              return null;
+            }
+          },
+          listenerOwnedByLauncher: () => true,
+          capture: async (input) => ({
+            ...input,
+            birth: readProcessBirth(input.pid)?.token ?? 'listener-birth-unavailable',
+            servingRoot: root,
+          }),
+        },
+      );
+      process.kill(binding.pid, 'SIGTERM');
+      const deadline = Date.now() + 5_000;
+      while (Date.now() < deadline && probeProcessBirth(binding.launcherPid).status !== 'absent') {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      assert.equal(probeProcessBirth(binding.launcherPid).status, 'absent');
+
+      const inspection = inspectManagedMetroLifecycle(
+        binding as unknown as Record<string, unknown>,
+        { sessionId: SESSION_ID, signerCapability: SIGNER },
+        {
+          exists: () => true,
+          probeBirth: () => ({ status: 'absent' }),
+          probeListener: () => ({ status: 'absent' }),
+        },
+      );
+      assert.equal(inspection.status, 'lost');
+      assert.doesNotMatch(String(inspection.attribution ?? ''), new RegExp(syntheticValue));
+      assert.match(
+        String(inspection.attribution ?? ''),
+        /RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION/,
+      );
+      assert.doesNotMatch(
+        readFileSync(join(runtimeRoot, 'metro-runtime-evidence.jsonl'), 'utf8'),
+        new RegExp(syntheticValue),
+      );
+    } finally {
+      if (binding && probeProcessBirth(binding.launcherPid).status !== 'absent') {
+        process.kill(-binding.launcherPid, 'SIGKILL');
+      }
+    }
+  },
+);
 
 test('a bare credential value printed into metro.log never reaches exit attribution', async () => {
   const runtimeRoot = mkdtempSync(join(tmpdir(), 'rn-managed-metro-launcher-credential-'));

@@ -71,7 +71,7 @@ if [ "$has_rn_config" = true ]; then
   NODE_VERSION=$(node -e 'console.log(process.versions.node)' 2>/dev/null)
   NODE_MAJOR=${NODE_VERSION%%.*}
   if [ -n "$NODE_MAJOR" ] && [ "$NODE_MAJOR" -lt 24 ]; then
-    echo "WARNING: Node.js v${NODE_VERSION} is below the minimum (24). Some CDP bridge features may not work."
+    echo "WARNING: rn-dev-agent cannot start on Node.js v${NODE_VERSION}; Node.js 24 or newer is required."
   fi
 
   # Track tool installation status for the banner

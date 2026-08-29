@@ -62568,6 +62568,7 @@ const intrinsicNumberIsFinite = Number.isFinite;
 const intrinsicReflectApply = Reflect.apply;
 const intrinsicObjectPrototype = Object.prototype;
 const IntrinsicObject = Object;
+const IntrinsicSet = Set;
 const IntrinsicWeakSet = WeakSet;
 const intrinsicWeakSetAdd = WeakSet.prototype.add;
 const intrinsicWeakSetDelete = WeakSet.prototype.delete;
@@ -62987,6 +62988,59 @@ function appendViolation(value) {
     value,
     digest: null,
   });
+}
+const fixedChildViolationValues = new IntrinsicSet([
+  'Metro descendant execution semantics are unavailable',
+  'Metro descendant parent identity is unavailable',
+  'Metro descendant parent nonce is unavailable',
+  'Metro runtime module URL scheme is unsupported',
+  'Metro runtime module cannot be resolved',
+  'additional Metro runtime loader hooks are unsupported',
+  'Metro runtime module loading requires Node.js 24 or newer',
+]);
+function normalizeChildViolationPayload(payload) {
+  const names = intrinsicReflectApply(intrinsicGetOwnPropertyNames, IntrinsicObject, [payload]);
+  intrinsicReflectApply(intrinsicArraySort, names, []);
+  if (
+    names.join('\0') !==
+      'digest\0kind\0metroInstanceId\0runtimeEvidenceAuthority\0sessionId\0value\0version' ||
+    payload.runtimeEvidenceAuthority !== 'reported-v1' ||
+    typeof payload.value !== 'string' ||
+    payload.value.length === 0 ||
+    Buffer.byteLength(payload.value, 'utf8') > 4_096
+  ) {
+    return null;
+  }
+  let structured;
+  try {
+    structured = JSON.parse(payload.value);
+  } catch {}
+  if (structured && typeof structured === 'object' && !intrinsicArrayIsArray(structured)) {
+    const structuredNames = intrinsicReflectApply(
+      intrinsicGetOwnPropertyNames,
+      IntrinsicObject,
+      [structured],
+    );
+    intrinsicReflectApply(intrinsicArraySort, structuredNames, []);
+    if (
+      structuredNames.join('\0') === 'arity\0code\0convention\0nodeVersion\0stage' &&
+      /^RN_DEV_AGENT_[A-Z0-9_]+$/.test(structured.code) &&
+      /^[a-z0-9-]{1,64}$/.test(structured.stage) &&
+      /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(structured.nodeVersion) &&
+      ['object', 'positional', 'unverified'].includes(structured.convention) &&
+      Number.isSafeInteger(structured.arity) &&
+      structured.arity >= 0 &&
+      structured.arity <= 16
+    ) {
+      return canonicalAuthorityJson(structured);
+    }
+    return null;
+  }
+  if (fixedChildViolationValues.has(payload.value)) return payload.value;
+  const code = /^(RN_DEV_AGENT_[A-Z0-9_]+|METRO_[A-Z0-9_]+)(?::(?: [\x20-\x7e]*)?)?$/.exec(
+    payload.value,
+  );
+  return code ? code[1] + ':' : null;
 }
 function publishNativeAddonAcknowledgment(requestId, acknowledgment) {
   writeFileSync(
@@ -63424,7 +63478,9 @@ evidence.on('data', (chunk) => {
         continue;
       }
       if (payload.kind === 'violation') {
-        appendViolation(payload.value);
+        const normalizedViolation = normalizeChildViolationPayload(payload);
+        if (!normalizedViolation) throw new Error('invalid evidence');
+        appendViolation(normalizedViolation);
         continue;
       }
       if (payload.kind === 'input') {
@@ -63733,6 +63789,7 @@ function latestSignedRuntimeViolation(path, capability, expected) {
     let previousSignature = null;
     let sequence = 0;
     let latest = null;
+    let latestFirstParty = null;
     for (const line of bytes.toString("utf8").split("\n").filter(Boolean)) {
       const observed = JSON.parse(line);
       const signature = observed.signature;
@@ -63751,9 +63808,12 @@ function latestSignedRuntimeViolation(path, capability, expected) {
       previousSignature = signature;
       if (payload.kind === "violation" && typeof payload.value === "string") {
         latest = payload.value;
+        if (/\bRN_DEV_AGENT_[A-Z0-9_]+\b/.test(payload.value)) {
+          latestFirstParty = payload.value;
+        }
       }
     }
-    return latest;
+    return latestFirstParty ?? latest;
   } catch {
     return null;
   }
