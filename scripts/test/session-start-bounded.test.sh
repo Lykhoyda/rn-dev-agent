@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# Regression test for GH#252/B196 — SessionStart must be bounded. The hook runs
-# installers (npm install, curl | bash) on fresh machines; without an explicit
-# hook timeout and curl time limits, a stalled CDN blocks every session start
-# and the install is silently re-attempted each session.
+# Regression test for SessionStart safety.
+# GH#252/B196 — SessionStart must be bounded: without an explicit hook timeout
+# and curl time limits, a stalled CDN blocks every session start.
+# GH#773 — SessionStart must not fetch the runner over the network at all; the
+# explicit install is a user-run command.
 #
 # Run: bash scripts/test/session-start-bounded.test.sh
 
@@ -79,6 +80,141 @@ then
   ok "ensure-maestro-runner.sh: download uses positive connect and total timeouts"
 else
   bad "ensure-maestro-runner.sh: download is not bounded by positive connect and total timeouts"
+fi
+
+# 3. GH#773 — SessionStart must not fetch the runner over the network. The hook
+# verifies the pin-cache; downloading is an explicit user-run command.
+PROJECT="$TEST_DIR/rn-project"
+mkdir -p "$PROJECT"
+echo '{"name":"fixture","dependencies":{"expo":"51.0.0","react-native":"0.74.0"}}' > "$PROJECT/package.json"
+echo '{"expo":{"name":"fixture"}}' > "$PROJECT/app.json"
+
+# curl/wget are the fetchers the runner installer uses; any call fails the test.
+for tool in curl wget; do
+  cat > "$TEST_DIR/bin/$tool" << 'EOF'
+#!/usr/bin/env bash
+printf '%s %s\n' "$(basename "$0")" "$*" >> "$NET_LOG"
+exit 28
+EOF
+  chmod +x "$TEST_DIR/bin/$tool"
+done
+# npm/brew get their own log rather than a silent stub: SessionStart already
+# runs them for CDP deps and ffmpeg, so they must stay visible here without
+# failing this runner-scoped assertion.
+for tool in npm brew; do
+  cat > "$TEST_DIR/bin/$tool" << 'EOF'
+#!/usr/bin/env bash
+printf '%s %s\n' "$(basename "$0")" "$*" >> "$PKG_LOG"
+exit 1
+EOF
+  chmod +x "$TEST_DIR/bin/$tool"
+done
+for tool in idb idb_companion; do
+  cat > "$TEST_DIR/bin/$tool" << 'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+  chmod +x "$TEST_DIR/bin/$tool"
+done
+cat > "$TEST_DIR/bin/adb" << 'EOF'
+#!/usr/bin/env bash
+if [ "${1:-}" = "devices" ]; then
+  printf 'List of devices attached\n\n'
+fi
+exit 0
+EOF
+chmod +x "$TEST_DIR/bin/adb"
+
+NET_LOG="$TEST_DIR/session-start-net.log"
+PKG_LOG="$TEST_DIR/session-start-pkg.log"
+IDB_STATE="$TEST_DIR/idb-state"
+SESSION_TMP="$TEST_DIR/session-tmp"
+mkdir -p "$SESSION_TMP"
+PIN_VERSION="$(node -e 'process.stdout.write(require(process.argv[1]).version)' \
+  "$REPO_ROOT/packages/rn-dev-agent-core/src/domain/maestro-runner-pin.json")"
+EXPECTED_CMD="bash $REPO_ROOT/packages/claude-plugin/scripts/ensure-maestro-runner.sh"
+
+# RN_AGENT_IDB_* keep ensure-idb.sh off the real $HOME and stop it detaching a
+# worker just because this test put a `brew` on PATH.
+run_session_start() {
+  rm -f "$NET_LOG"
+  (
+    cd "$PROJECT" &&
+      PATH="$TEST_DIR/bin:$PATH" \
+      NET_LOG="$NET_LOG" \
+      PKG_LOG="$PKG_LOG" \
+      TMPDIR="$SESSION_TMP" \
+      RN_DEV_AGENT_RUNNER_CACHE="$1" \
+      RN_AGENT_IDB_STATE_DIR="$IDB_STATE" \
+      RN_AGENT_IDB_DRY_SPAWN=1 \
+      bash "$REPO_ROOT/packages/claude-plugin/hooks/detect-rn-project.sh"
+  ) > "$2" 2>&1
+  HOOK_STATUS=$?
+}
+
+assert_session_start_offline() {
+  local label="$1" out="$2"
+  if [ -s "$NET_LOG" ]; then
+    bad "SessionStart downloaded the maestro-runner ($label): $(tr '\n' '; ' < "$NET_LOG")"
+  else
+    ok "SessionStart does not download the maestro-runner ($label)"
+  fi
+  # Exit 0 matters: the hook's own contract makes a non-zero exit "logged,
+  # non-blocking", which would hide the install command from the agent.
+  if [ "$HOOK_STATUS" -eq 0 ]; then
+    ok "SessionStart hook exits 0 so its guidance is shown ($label)"
+  else
+    bad "SessionStart hook exited $HOOK_STATUS ($label)"
+  fi
+  if grep -qF "$EXPECTED_CMD" "$out"; then
+    ok "SessionStart prints the explicit pinned install command ($label)"
+  else
+    bad "SessionStart does not print '$EXPECTED_CMD' ($label)"
+  fi
+}
+
+# The hook's guidance is only correct if the verify mode itself refuses offline,
+# so pin that contract directly rather than inferring it from hook output.
+assert_verify_mode_refuses_offline() {
+  local label="$1" cache="$2" status=0
+  rm -f "$NET_LOG"
+  PATH="$TEST_DIR/bin:$PATH" NET_LOG="$NET_LOG" RN_DEV_AGENT_RUNNER_CACHE="$cache" \
+    bash "$REPO_ROOT/scripts/ensure-maestro-runner.sh" --print-bin > /dev/null 2>&1 || status=$?
+  if [ "$status" -ne 0 ] && [ ! -s "$NET_LOG" ]; then
+    ok "--print-bin refuses without downloading ($label)"
+  else
+    bad "--print-bin returned $status and logged '$(tr '\n' '; ' < "$NET_LOG")' ($label)"
+  fi
+}
+
+MISSING_OUT="$TEST_DIR/session-start-missing.out"
+run_session_start "$TEST_DIR/cache-missing" "$MISSING_OUT"
+assert_session_start_offline "runner absent" "$MISSING_OUT"
+assert_verify_mode_refuses_offline "runner absent" "$TEST_DIR/cache-missing"
+
+# A mismatched cached runner must not be "converged" over the network either.
+MISMATCH_CACHE="$TEST_DIR/cache-mismatch"
+MISMATCH_BIN="$MISMATCH_CACHE/maestro-runner/$PIN_VERSION/bin/maestro-runner"
+mkdir -p "$(dirname "$MISMATCH_BIN")"
+printf '#!/bin/sh\necho not-the-pinned-runner\n' > "$MISMATCH_BIN"
+chmod +x "$MISMATCH_BIN"
+MISMATCH_OUT="$TEST_DIR/session-start-mismatch.out"
+run_session_start "$MISMATCH_CACHE" "$MISMATCH_OUT"
+assert_session_start_offline "runner checksum mismatch" "$MISMATCH_OUT"
+assert_verify_mode_refuses_offline "runner checksum mismatch" "$MISMATCH_CACHE"
+if [ "$(cat "$MISMATCH_BIN")" = "$(printf '#!/bin/sh\necho not-the-pinned-runner\n')" ]; then
+  ok "SessionStart leaves a mismatched pin-cache byte-identical"
+else
+  bad "SessionStart rewrote the mismatched pin-cache binary"
+fi
+
+if [ -s "$IDB_STATE/spawn.log" ]; then
+  bad "SessionStart spawned the idb background installer: $(tr '\n' '; ' < "$IDB_STATE/spawn.log")"
+else
+  ok "SessionStart spawns no idb background installer"
+fi
+if [ -s "$PKG_LOG" ]; then
+  echo "note: SessionStart package-manager calls (pre-existing, outside GH#773): $(tr '\n' '; ' < "$PKG_LOG")"
 fi
 
 exit $fail
