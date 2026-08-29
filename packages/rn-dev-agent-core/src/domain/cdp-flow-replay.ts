@@ -2,7 +2,6 @@ export type ReplayStep =
   | { t: 'launch'; stopApp: boolean }
   | { t: 'tap'; id: string }
   | { t: 'type'; text: string }
-  | { t: 'assert'; id: string }
   | { t: 'waitVisible'; id: string; timeoutMs: number }
   | { t: 'wait'; timeoutMs: number }
   | { t: 'runFlow'; whenVisible: string; commands: ReplayStep[] };
@@ -60,6 +59,8 @@ const interp = (s: string, p: Record<string, string>): string =>
 const asString = (x: unknown): string | null => (typeof x === 'string' ? x : null);
 const isObj = (x: unknown): x is Record<string, unknown> =>
   typeof x === 'object' && x !== null && !Array.isArray(x);
+const DEFAULT_VISIBILITY_TIMEOUT_MS = 17_000;
+const VISIBILITY_POLL_INTERVAL_MS = 200;
 
 function refuseUnsupportedKeys(
   value: Record<string, unknown>,
@@ -120,7 +121,11 @@ export function normalizeSteps(body: unknown[], params: Record<string, string>):
         if (isObj(v)) refuseUnsupportedKeys(v, ['id'], 'assertVisible');
         const id = isObj(v) ? asString(v.id) : null;
         if (!id) throw new UnsupportedStepError('assertVisible (missing string id)');
-        out.push({ t: 'assert', id: interp(id, params) });
+        out.push({
+          t: 'waitVisible',
+          id: interp(id, params),
+          timeoutMs: DEFAULT_VISIBILITY_TIMEOUT_MS,
+        });
         break;
       }
       case 'extendedWaitUntil': {
@@ -129,12 +134,12 @@ export function normalizeSteps(body: unknown[], params: Record<string, string>):
           refuseUnsupportedKeys(v.visible, ['id'], 'extendedWaitUntil.visible');
         }
         const id = isObj(v) && isObj(v.visible) ? asString(v.visible.id) : null;
-        const timeoutMs = isObj(v) ? v.timeout : undefined;
-        if (!id || !Number.isSafeInteger(timeoutMs) || Number(timeoutMs) < 0)
+        const timeoutMs = isObj(v) && 'timeout' in v ? v.timeout : DEFAULT_VISIBILITY_TIMEOUT_MS;
+        if (!id || typeof timeoutMs !== 'number' || !Number.isFinite(timeoutMs) || timeoutMs < 0)
           throw new UnsupportedStepError(
-            'extendedWaitUntil (need visible.id + non-negative integer timeout)',
+            'extendedWaitUntil (need visible.id; timeout must be finite and non-negative when present)',
           );
-        out.push({ t: 'waitVisible', id: interp(id, params), timeoutMs: Number(timeoutMs) });
+        out.push({ t: 'waitVisible', id: interp(id, params), timeoutMs });
         break;
       }
       case 'waitForAnimationToEnd': {
@@ -258,48 +263,33 @@ export async function replayFlow(
           });
           break;
         }
-        case 'assert': {
-          const verdict = await dispatch.visibility(s.id);
-          requireNotAborted();
-          trace.push({
-            sourceIndex: sourceIndex(i),
-            t: s.t,
-            target: s.id,
-            ok: verdict.visible,
-            durationMs: Date.now() - startedAt,
-          });
-          if (!verdict.visible)
-            return fail(
-              i,
-              verdict.reason ?? `assertVisible: "${s.id}" is not frontmost`,
-              verdict.code ?? 'ASSERTION_FAILED',
-              verdict.meta,
-            );
-          break;
-        }
         case 'waitVisible': {
-          const deadline = Date.now() + s.timeoutMs;
-          let verdict = await dispatch.visibility(s.id);
-          requireNotAborted();
-          while (!verdict.visible && Date.now() < deadline) {
-            requireNotAborted();
-            await new Promise<void>((resolve) => setTimeout(resolve, 100));
+          const deadline = startedAt + s.timeoutMs;
+          let verdict: ReplayVisibility;
+          for (;;) {
             verdict = await dispatch.visibility(s.id);
             requireNotAborted();
+            if (verdict.visible) break;
+            const remainingMs = deadline - Date.now();
+            if (remainingMs <= 0) break;
+            await new Promise<void>((resolve) =>
+              setTimeout(resolve, Math.min(VISIBILITY_POLL_INTERVAL_MS, remainingMs)),
+            );
           }
+          const waitedMs = Date.now() - startedAt;
           trace.push({
             sourceIndex: sourceIndex(i),
             t: s.t,
             target: s.id,
             ok: verdict.visible,
-            durationMs: Date.now() - startedAt,
+            durationMs: waitedMs,
           });
           if (!verdict.visible)
             return fail(
               i,
-              verdict.reason ?? `extendedWaitUntil: "${s.id}" is not frontmost`,
+              verdict.reason ?? `waitVisible: "${s.id}" is not frontmost`,
               verdict.code ?? 'TESTID_NOT_FOUND',
-              verdict.meta,
+              { ...verdict.meta, failedSelector: s.id, waitedMs },
             );
           break;
         }
@@ -355,18 +345,20 @@ export async function replayFlow(
         }
       }
     } catch (e) {
+      const waitedMs = Date.now() - startedAt;
       trace.push({
         sourceIndex: sourceIndex(i),
         t: s.t,
         target: 'id' in s ? s.id : undefined,
         ok: false,
-        durationMs: Date.now() - startedAt,
+        durationMs: waitedMs,
       });
+      const dispatchMeta = e instanceof ReplayDispatchError ? e.meta : undefined;
       return fail(
         i,
         e instanceof Error ? e.message : String(e),
         e instanceof ReplayDispatchError ? e.code : undefined,
-        e instanceof ReplayDispatchError ? e.meta : undefined,
+        s.t === 'waitVisible' ? { ...dispatchMeta, failedSelector: s.id, waitedMs } : dispatchMeta,
       );
     }
   }

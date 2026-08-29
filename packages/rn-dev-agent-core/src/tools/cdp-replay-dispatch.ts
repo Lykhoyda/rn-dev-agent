@@ -48,20 +48,26 @@ export interface ReplayTreeEnvelope {
 export function replayTreeData(envelope: ReplayTreeEnvelope): unknown {
   const warning = typeof envelope.meta?.warning === 'string' ? envelope.meta.warning : undefined;
   const redbox = warning === 'APP_HAS_REDBOX';
-  if (envelope.ok === true && !redbox) return envelope.data;
-
   const data =
     envelope.data && typeof envelope.data === 'object' && !Array.isArray(envelope.data)
       ? (envelope.data as Record<string, unknown>)
       : null;
-  const message =
-    redbox && typeof data?.message === 'string'
+  const truncated = data !== null && data.__agent_truncated === true;
+  if (envelope.ok === true && !redbox && !truncated) return envelope.data;
+
+  const message = truncated
+    ? 'Component tree proof exceeded the readable payload budget'
+    : redbox && typeof data?.message === 'string'
       ? data.message.slice(0, 1000)
       : (envelope.error?.slice(0, 1000) ?? 'Component tree proof is unavailable');
   const code = redbox ? warning : (envelope.code ?? 'EVAL_FAILED');
   throw new ReplayDispatchError(code, message, {
     treeEnvelope: {
       ok: envelope.ok === true,
+      ...(truncated ? { truncated: true } : {}),
+      ...(truncated && typeof data.originalLength === 'number'
+        ? { originalLength: data.originalLength }
+        : {}),
       ...(envelope.code ? { code: envelope.code } : {}),
       ...(envelope.error ? { error: envelope.error.slice(0, 1000) } : {}),
       ...(warning ? { warning } : {}),

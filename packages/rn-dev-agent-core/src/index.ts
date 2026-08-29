@@ -392,13 +392,12 @@ const makeReplayDeps = (_args?: unknown, signal?: AbortSignal): CdpReplayDeps | 
           meta?: Record<string, unknown>;
         };
       let env = await fetchTree(false);
-      let data = replayTreeData(env);
       // Retry with the salient digest when the full filtered payload exceeds the helper bound.
-      const d = data as Record<string, unknown> | null;
+      const d = env.data as Record<string, unknown> | null;
       if (d && typeof d === 'object' && '__agent_truncated' in d) {
         env = await fetchTree(true);
-        data = replayTreeData(env);
       }
+      const data = replayTreeData(env);
       return unwrapTree(data);
     },
     frontmostFor: async (id: string) => {

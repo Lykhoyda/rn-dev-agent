@@ -14,7 +14,7 @@ import {
   executeMaestroAuthorityStages,
   runFlowParked,
 } from '../../dist/tools/maestro-run.js';
-import { runCdpReplayCommands } from '../../dist/tools/cdp-replay-dispatch.js';
+import { replayTreeData, runCdpReplayCommands } from '../../dist/tools/cdp-replay-dispatch.js';
 import { performReactTreeInput } from '../../dist/tools/device-interact.js';
 import { chooseMaestroDispatch } from '../../dist/tools/maestro-dispatch.js';
 import { buildReplayEngineStatus, MAESTRO_RUNNER_PIN } from '../../dist/domain/engine-pin.js';
@@ -233,6 +233,54 @@ test('mounted hidden extendedWaitUntil target is an assertion failure, not absen
   assert.match(replay.reason ?? '', /clipped/);
 });
 
+test('an omitted-timeout wait polls readable absence until the React target appears', async () => {
+  let treeReads = 0;
+  const replay = await runCdpReplayCommands(
+    [{ extendedWaitUntil: { visible: { id: 'otp' } } }],
+    {},
+    {
+      pressByTestId: async () => {},
+      typeByTestId: async () => {},
+      treeFor: async (id) => (++treeReads >= 3 ? { testID: id } : null),
+      frontmostFor: async () => ({ visible: true }),
+      launchApp: async () => {},
+      settle: async () => {},
+    },
+  );
+  assert.equal(replay.passed, true);
+  assert.equal(treeReads, 3);
+  assert.ok(replay.steps[0]!.durationMs >= 350);
+});
+
+test('an omitted-timeout wait preserves unreadable component-tree evidence', async () => {
+  const replay = await runCdpReplayCommands(
+    [{ extendedWaitUntil: { visible: { id: 'otp' } } }],
+    {},
+    {
+      pressByTestId: async () => {},
+      typeByTestId: async () => {},
+      treeFor: async () =>
+        replayTreeData({
+          ok: false,
+          code: 'RECONNECT_TIMEOUT',
+          error: 'Component tree connection timed out',
+          meta: { reconnectAttempted: true },
+        }),
+      launchApp: async () => {},
+      settle: async () => {},
+    },
+  );
+  assert.equal(replay.passed, false);
+  assert.equal(replay.failureCode, 'RECONNECT_TIMEOUT');
+  assert.equal(replay.failedStepIndex, 0);
+  assert.deepEqual(replay.failureMeta?.treeEnvelope, {
+    ok: false,
+    code: 'RECONNECT_TIMEOUT',
+    error: 'Component tree connection timed out',
+    meta: { reconnectAttempted: true },
+  });
+});
+
 test('ordinary missing React testID stays TESTID_NOT_FOUND without WDA', async () => {
   const handler = createMaestroRunHandler({
     chooseDispatch: () => {
@@ -252,8 +300,10 @@ test('ordinary missing React testID stays TESTID_NOT_FOUND without WDA', async (
       platform: 'ios',
       inlineYaml: `appId: com.example.app
 ---
-- assertVisible:
-    id: genuinely-missing
+- extendedWaitUntil:
+    visible:
+      id: genuinely-missing
+    timeout: 0
 `,
       ...callbacks,
     }),
@@ -284,8 +334,10 @@ test('React stage failures retain completed tap and launch evidence', async () =
 - tapOn:
     id: continue
 - launchApp: null
-- assertVisible:
-    id: missing
+- extendedWaitUntil:
+    visible:
+      id: missing
+    timeout: 0
 `,
     claimNativeOrigin: async () => {},
     completeNativeOrigin: async () => {},
@@ -302,7 +354,7 @@ test('React stage failures retain completed tap and launch evidence', async () =
   assert.deepEqual(calls, ['press:continue']);
   assert.deepEqual(
     env.meta?.steps?.map((step: { name: string }) => step.name),
-    ['launch', 'tap', 'launch', 'assert'],
+    ['launch', 'tap', 'launch', 'waitVisible'],
   );
 });
 
@@ -351,6 +403,19 @@ test('the real login shape partitions native prefix from exact React suffix', ()
       { domain: 'xctest-native', sourceIndices: [0, 1] },
       { domain: 'react-tree', sourceIndices: [2, 3, 4] },
     ],
+  );
+});
+
+test('an exact-id extended wait with omitted timeout plans in the React proof domain', () => {
+  const plan = planIosProofDomains(
+    [{ extendedWaitUntil: { visible: { id: 'otp_email-pressable' } } }],
+    {},
+  );
+  assert.equal(plan.ok, true);
+  if (!plan.ok) return;
+  assert.deepEqual(
+    plan.segments.map(({ domain, sourceIndices }) => ({ domain, sourceIndices })),
+    [{ domain: 'react-tree', sourceIndices: [0] }],
   );
 });
 
@@ -1189,6 +1254,75 @@ function nativeHandler(
   });
 }
 
+test('a partitioned saved flow resumes at an omitted-timeout wait without replaying its native prefix', async () => {
+  let nativeRuns = 0;
+  let treeReads = 0;
+  const mutations: string[] = [];
+  const handler = createMaestroRunHandler({
+    getActiveSession: () => ({
+      name: 'partitioned-otp-resume',
+      platform: 'ios',
+      deviceId: IOS_UDID,
+      appId: 'com.example.app',
+      openedAt: new Date(0).toISOString(),
+    }),
+    replayDeps: () => ({
+      pressByTestId: async (id) => mutations.push(id),
+      typeByTestId: async () => {},
+      treeFor: async (id) => {
+        treeReads += 1;
+        return treeReads >= 3 ? { testID: id } : null;
+      },
+      frontmostFor: async () => ({ visible: true }),
+      launchApp: async () => {},
+      settle: async () => {},
+    }),
+    chooseDispatch: () => nativeDispatch(),
+    parkFlow: async (run) => run(),
+    resolveEngineStatus: async () =>
+      buildReplayEngineStatus('pinned-ok', MAESTRO_RUNNER_PIN.version, false),
+    execFile: async () => {
+      nativeRuns += 1;
+      return {
+        stdout: nativeRunnerOutput('    ✓ assertVisible (0.1s)'),
+        stderr: '',
+      };
+    },
+  });
+  const env = envelope(
+    await handler({
+      platform: 'ios',
+      deviceId: IOS_UDID,
+      inlineYaml: `appId: com.example.app
+---
+- assertVisible: Native prefix
+- extendedWaitUntil:
+    visible:
+      id: otp_email-pressable
+- tapOn:
+    id: otp_email-pressable
+`,
+      ...callbacks,
+    }),
+  );
+  assert.equal(env.ok, true);
+  assert.equal(env.data?.proofDomain, 'partitioned');
+  assert.equal(nativeRuns, 1);
+  assert.deepEqual(mutations, ['otp_email-pressable']);
+  assert.deepEqual(
+    env.data?.steps.map((step: { index: number; verb: string; status: string }) => [
+      step.index,
+      step.verb,
+      step.status,
+    ]),
+    [
+      [0, 'assertVisible', 'pass'],
+      [1, 'waitVisible', 'pass'],
+      [2, 'tap', 'pass'],
+    ],
+  );
+});
+
 test('native-only blindness requires a WDA miss and same-screen native visibility', async () => {
   let comparisonRunnerStopped = false;
   const env = envelope(
@@ -1744,7 +1878,7 @@ test('partitioned React failures retain prior native proof evidence', async () =
     await handler({
       platform: 'ios',
       deviceId: IOS_UDID,
-      inlineYaml: `appId: com.example.app\n---\n- assertVisible: Native status\n- assertVisible:\n    id: missing-react-status\n`,
+      inlineYaml: `appId: com.example.app\n---\n- assertVisible: Native status\n- extendedWaitUntil:\n    visible:\n      id: missing-react-status\n    timeout: 0\n`,
       ...callbacks,
     }),
   );

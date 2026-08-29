@@ -138,12 +138,39 @@ test('React replay propagates a component-tree transport envelope without select
   );
   assert.equal(replay.passed, false);
   assert.equal(replay.failureCode, 'RECONNECT_TIMEOUT');
-  assert.equal(replay.failureMeta?.failedSelector, undefined);
+  assert.equal(replay.failureMeta?.failedSelector, 'ready');
+  assert.equal(typeof replay.failureMeta?.waitedMs, 'number');
   assert.deepEqual(replay.failureMeta?.treeEnvelope, {
     ok: false,
     code: 'RECONNECT_TIMEOUT',
     error: 'Component tree connection timed out',
     meta: { reconnectAttempted: true },
+  });
+});
+
+test('React replay refuses a truncated component tree distinctly from readable absence', async () => {
+  const replay = await runCdpReplayCommands(
+    [{ extendedWaitUntil: { visible: { id: 'otp' }, timeout: 250 } }],
+    {},
+    {
+      pressByTestId: async () => {},
+      typeByTestId: async () => {},
+      treeFor: async () =>
+        replayTreeData({
+          ok: true,
+          data: { __agent_truncated: true, originalLength: 75_000 },
+        }),
+      launchApp: async () => {},
+      settle: async () => {},
+    },
+  );
+  assert.equal(replay.passed, false);
+  assert.equal(replay.failureCode, 'EVAL_FAILED');
+  assert.equal(replay.failedStepIndex, 0);
+  assert.deepEqual(replay.failureMeta?.treeEnvelope, {
+    ok: true,
+    truncated: true,
+    originalLength: 75_000,
   });
 });
 

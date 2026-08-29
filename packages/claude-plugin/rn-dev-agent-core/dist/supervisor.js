@@ -80810,7 +80810,11 @@ function normalizeSteps(body, params) {
         const id = isObj(v) ? asString(v.id) : null;
         if (!id)
           throw new UnsupportedStepError("assertVisible (missing string id)");
-        out.push({ t: "assert", id: interp(id, params) });
+        out.push({
+          t: "waitVisible",
+          id: interp(id, params),
+          timeoutMs: DEFAULT_VISIBILITY_TIMEOUT_MS
+        });
         break;
       }
       case "extendedWaitUntil": {
@@ -80820,10 +80824,10 @@ function normalizeSteps(body, params) {
           refuseUnsupportedKeys(v.visible, ["id"], "extendedWaitUntil.visible");
         }
         const id = isObj(v) && isObj(v.visible) ? asString(v.visible.id) : null;
-        const timeoutMs = isObj(v) ? v.timeout : void 0;
-        if (!id || !Number.isSafeInteger(timeoutMs) || Number(timeoutMs) < 0)
-          throw new UnsupportedStepError("extendedWaitUntil (need visible.id + non-negative integer timeout)");
-        out.push({ t: "waitVisible", id: interp(id, params), timeoutMs: Number(timeoutMs) });
+        const timeoutMs = isObj(v) && "timeout" in v ? v.timeout : DEFAULT_VISIBILITY_TIMEOUT_MS;
+        if (!id || typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs) || timeoutMs < 0)
+          throw new UnsupportedStepError("extendedWaitUntil (need visible.id; timeout must be finite and non-negative when present)");
+        out.push({ t: "waitVisible", id: interp(id, params), timeoutMs });
         break;
       }
       case "waitForAnimationToEnd": {
@@ -80926,39 +80930,29 @@ async function replayFlow(steps, dispatch, opts = {}) {
           });
           break;
         }
-        case "assert": {
-          const verdict = await dispatch.visibility(s.id);
-          requireNotAborted();
-          trace.push({
-            sourceIndex: sourceIndex(i),
-            t: s.t,
-            target: s.id,
-            ok: verdict.visible,
-            durationMs: Date.now() - startedAt
-          });
-          if (!verdict.visible)
-            return fail3(i, verdict.reason ?? `assertVisible: "${s.id}" is not frontmost`, verdict.code ?? "ASSERTION_FAILED", verdict.meta);
-          break;
-        }
         case "waitVisible": {
-          const deadline = Date.now() + s.timeoutMs;
-          let verdict = await dispatch.visibility(s.id);
-          requireNotAborted();
-          while (!verdict.visible && Date.now() < deadline) {
-            requireNotAborted();
-            await new Promise((resolve22) => setTimeout(resolve22, 100));
+          const deadline = startedAt + s.timeoutMs;
+          let verdict;
+          for (; ; ) {
             verdict = await dispatch.visibility(s.id);
             requireNotAborted();
+            if (verdict.visible)
+              break;
+            const remainingMs = deadline - Date.now();
+            if (remainingMs <= 0)
+              break;
+            await new Promise((resolve22) => setTimeout(resolve22, Math.min(VISIBILITY_POLL_INTERVAL_MS, remainingMs)));
           }
+          const waitedMs = Date.now() - startedAt;
           trace.push({
             sourceIndex: sourceIndex(i),
             t: s.t,
             target: s.id,
             ok: verdict.visible,
-            durationMs: Date.now() - startedAt
+            durationMs: waitedMs
           });
           if (!verdict.visible)
-            return fail3(i, verdict.reason ?? `extendedWaitUntil: "${s.id}" is not frontmost`, verdict.code ?? "TESTID_NOT_FOUND", verdict.meta);
+            return fail3(i, verdict.reason ?? `waitVisible: "${s.id}" is not frontmost`, verdict.code ?? "TESTID_NOT_FOUND", { ...verdict.meta, failedSelector: s.id, waitedMs });
           break;
         }
         case "wait":
@@ -81008,14 +81002,16 @@ async function replayFlow(steps, dispatch, opts = {}) {
         }
       }
     } catch (e) {
+      const waitedMs = Date.now() - startedAt;
       trace.push({
         sourceIndex: sourceIndex(i),
         t: s.t,
         target: "id" in s ? s.id : void 0,
         ok: false,
-        durationMs: Date.now() - startedAt
+        durationMs: waitedMs
       });
-      return fail3(i, e instanceof Error ? e.message : String(e), e instanceof ReplayDispatchError ? e.code : void 0, e instanceof ReplayDispatchError ? e.meta : void 0);
+      const dispatchMeta = e instanceof ReplayDispatchError ? e.meta : void 0;
+      return fail3(i, e instanceof Error ? e.message : String(e), e instanceof ReplayDispatchError ? e.code : void 0, s.t === "waitVisible" ? { ...dispatchMeta, failedSelector: s.id, waitedMs } : dispatchMeta);
     }
   }
   if (opts.signal?.aborted) {
@@ -81023,7 +81019,7 @@ async function replayFlow(steps, dispatch, opts = {}) {
   }
   return { passed: true, finalFocusId: lastTapped, steps: trace };
 }
-var UnsupportedStepError, ReplayDispatchError, interp, asString, isObj;
+var UnsupportedStepError, ReplayDispatchError, interp, asString, isObj, DEFAULT_VISIBILITY_TIMEOUT_MS, VISIBILITY_POLL_INTERVAL_MS;
 var init_cdp_flow_replay = __esm({
   "packages/rn-dev-agent-core/dist/domain/cdp-flow-replay.js"() {
     "use strict";
@@ -81048,6 +81044,8 @@ var init_cdp_flow_replay = __esm({
     interp = (s, p) => s.replace(/\$\{([A-Z_][A-Z0-9_]*)(?:\s*\?\?\s*(['"])(.*?)\2)?\}/g, (match, key, _quote, fallback) => p[key] ?? fallback ?? match);
     asString = (x) => typeof x === "string" ? x : null;
     isObj = (x) => typeof x === "object" && x !== null && !Array.isArray(x);
+    DEFAULT_VISIBILITY_TIMEOUT_MS = 17e3;
+    VISIBILITY_POLL_INTERVAL_MS = 200;
   }
 });
 
@@ -81312,14 +81310,17 @@ function unwrapTree(data) {
 function replayTreeData(envelope) {
   const warning = typeof envelope.meta?.warning === "string" ? envelope.meta.warning : void 0;
   const redbox = warning === "APP_HAS_REDBOX";
-  if (envelope.ok === true && !redbox)
-    return envelope.data;
   const data = envelope.data && typeof envelope.data === "object" && !Array.isArray(envelope.data) ? envelope.data : null;
-  const message = redbox && typeof data?.message === "string" ? data.message.slice(0, 1e3) : envelope.error?.slice(0, 1e3) ?? "Component tree proof is unavailable";
+  const truncated = data !== null && data.__agent_truncated === true;
+  if (envelope.ok === true && !redbox && !truncated)
+    return envelope.data;
+  const message = truncated ? "Component tree proof exceeded the readable payload budget" : redbox && typeof data?.message === "string" ? data.message.slice(0, 1e3) : envelope.error?.slice(0, 1e3) ?? "Component tree proof is unavailable";
   const code = redbox ? warning : envelope.code ?? "EVAL_FAILED";
   throw new ReplayDispatchError(code, message, {
     treeEnvelope: {
       ok: envelope.ok === true,
+      ...truncated ? { truncated: true } : {},
+      ...truncated && typeof data.originalLength === "number" ? { originalLength: data.originalLength } : {},
       ...envelope.code ? { code: envelope.code } : {},
       ...envelope.error ? { error: envelope.error.slice(0, 1e3) } : {},
       ...warning ? { warning } : {},
@@ -96781,12 +96782,11 @@ var init_index = __esm({
             ...interactiveOnly ? { interactiveOnly: true } : {}
           })).content[0].text);
           let env = await fetchTree(false);
-          let data = replayTreeData(env);
-          const d = data;
+          const d = env.data;
           if (d && typeof d === "object" && "__agent_truncated" in d) {
             env = await fetchTree(true);
-            data = replayTreeData(env);
           }
+          const data = replayTreeData(env);
           return unwrapTree(data);
         },
         frontmostFor: async (id) => {
