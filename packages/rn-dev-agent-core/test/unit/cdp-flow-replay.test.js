@@ -26,7 +26,7 @@ test('normalizeSteps maps the supported subset with ${VAR} interpolation', () =>
     { t: 'launch', stopApp: false },
     { t: 'tap', id: 'wizard-title-input' },
     { t: 'type', text: 'Ship it' },
-    { t: 'waitVisible', id: 'wizard-step-1', timeoutMs: 17_000 },
+    { t: 'waitVisible', id: 'wizard-step-1', timeoutMs: 17_000, evidenceType: 'assert' },
     { t: 'tap', id: 'wizard-priority-high' },
     { t: 'wait', timeoutMs: 400 },
     {
@@ -81,7 +81,7 @@ test('id visibility commands normalize to one timed wait operation', () => {
     [
       { t: 'waitVisible', id: 'otp', timeoutMs: 17_000 },
       { t: 'waitVisible', id: 'slow-otp', timeoutMs: 750 },
-      { t: 'waitVisible', id: 'complete', timeoutMs: 17_000 },
+      { t: 'waitVisible', id: 'complete', timeoutMs: 17_000, evidenceType: 'assert' },
     ],
   );
 });
@@ -301,7 +301,31 @@ test('id-based assertVisible uses the same timed polling semantics', async () =>
   );
   assert.equal(result.passed, true);
   assert.equal(reads, 2);
+  assert.equal(result.steps[0].t, 'assert');
   assert.ok(result.steps[0].durationMs >= 150);
+});
+
+test('waitVisible reports no observation distinctly and does not dispatch its suffix', async () => {
+  const dispatch = mockDispatch();
+  dispatch.visibility = async () => {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    return { visible: false, code: 'TESTID_NOT_FOUND' };
+  };
+  const result = await replayFlow(
+    [
+      { t: 'waitVisible', id: 'unobserved', timeoutMs: 5 },
+      { t: 'tap', id: 'must-not-dispatch' },
+    ],
+    dispatch,
+  );
+  assert.equal(result.passed, false);
+  assert.equal(result.failureCode, 'RUNNER_TIMEOUT');
+  assert.equal(result.failureMeta?.failedSelector, 'unobserved');
+  assert.equal(result.steps[0].ok, false);
+  assert.equal(
+    dispatch.calls.some((call) => call[0] === 'press'),
+    false,
+  );
 });
 
 test('failed waitVisible preserves source index, selector, elapsed wait, and stops the suffix', async () => {

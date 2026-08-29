@@ -78820,7 +78820,8 @@ function normalizeSteps(body, params) {
         out.push({
           t: "waitVisible",
           id: interp(id, params),
-          timeoutMs: DEFAULT_VISIBILITY_TIMEOUT_MS
+          timeoutMs: DEFAULT_VISIBILITY_TIMEOUT_MS,
+          evidenceType: "assert"
         });
         break;
       }
@@ -78897,6 +78898,7 @@ async function replayFlow(steps, dispatch, opts = {}) {
   };
   for (let i = 0; i < steps.length; i++) {
     const s = steps[i];
+    const evidenceType = s.t === "waitVisible" ? s.evidenceType ?? s.t : s.t;
     const startedAt = Date.now();
     try {
       requireNotAborted();
@@ -78939,11 +78941,7 @@ async function replayFlow(steps, dispatch, opts = {}) {
         }
         case "waitVisible": {
           const deadline = startedAt + s.timeoutMs;
-          let verdict = {
-            visible: false,
-            code: "TESTID_NOT_FOUND",
-            reason: `testID "${s.id}" not present before the visibility deadline`
-          };
+          let verdict = null;
           for (; ; ) {
             const observed = await readVisibilityBeforeDeadline(dispatch, s.id, deadline);
             requireNotAborted();
@@ -78960,11 +78958,13 @@ async function replayFlow(steps, dispatch, opts = {}) {
           const waitedMs = Date.now() - startedAt;
           trace.push({
             sourceIndex: sourceIndex(i),
-            t: s.t,
+            t: evidenceType,
             target: s.id,
-            ok: verdict.visible,
+            ok: verdict?.visible === true,
             durationMs: waitedMs
           });
+          if (!verdict)
+            return fail3(i, `waitVisible: no readable visibility observation completed for "${s.id}" before the deadline`, "RUNNER_TIMEOUT", { failedSelector: s.id, waitedMs });
           if (!verdict.visible)
             return fail3(i, verdict.reason ?? `waitVisible: "${s.id}" is not frontmost`, verdict.code ?? "TESTID_NOT_FOUND", { ...verdict.meta, failedSelector: s.id, waitedMs });
           break;
@@ -79019,7 +79019,7 @@ async function replayFlow(steps, dispatch, opts = {}) {
       const waitedMs = Date.now() - startedAt;
       trace.push({
         sourceIndex: sourceIndex(i),
-        t: s.t,
+        t: evidenceType,
         target: "id" in s ? s.id : void 0,
         ok: false,
         durationMs: waitedMs
@@ -79311,8 +79311,10 @@ function replayTreeData(envelope, selector) {
   const verdict = envelope.meta?.treeVerdict && typeof envelope.meta.treeVerdict === "object" && !Array.isArray(envelope.meta.treeVerdict) ? envelope.meta.treeVerdict : null;
   const reasons = Array.isArray(verdict?.reasons) ? verdict.reasons : [];
   const truncated = data !== null && (data.__agent_truncated === true || data.truncated === true);
-  const complete = verdict?.state === "ok" && reasons.length === 0;
-  const completeFiltered = complete && verdict.path === "filter" && data !== null && "tree" in data;
+  const complete = verdict?.state === "ok" && reasons.length === 0 && typeof verdict.rootsSeeded === "number" && verdict.rootsSeeded > 0 && verdict.droppedSubtrees === 0 && verdict.collapsedChildLists === 0;
+  const filteredTree = data !== null && "tree" in data ? data.tree : void 0;
+  const serializedMatches = filteredTree && typeof filteredTree === "object" && !Array.isArray(filteredTree) && Array.isArray(filteredTree.matches) ? filteredTree.matches : [];
+  const completeFiltered = complete && verdict.path === "filter" && typeof selector === "string" && data !== null && "tree" in data && serializedMatches.length < 10 && (filteredTree === null || isExactPresent(filteredTree, selector));
   const completeInteractiveMatch = complete && verdict.path === "interactive" && typeof selector === "string" && isExactPresent(data, selector);
   const incomplete = envelope.ok === true && !redbox && !truncated && !completeFiltered && !completeInteractiveMatch;
   if (envelope.ok === true && !redbox && !truncated && !incomplete)

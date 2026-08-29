@@ -15224,7 +15224,8 @@ function normalizeSteps(body, params) {
         out.push({
           t: "waitVisible",
           id: interp(id, params),
-          timeoutMs: DEFAULT_VISIBILITY_TIMEOUT_MS
+          timeoutMs: DEFAULT_VISIBILITY_TIMEOUT_MS,
+          evidenceType: "assert"
         });
         break;
       }
@@ -15301,6 +15302,7 @@ async function replayFlow(steps, dispatch, opts = {}) {
   };
   for (let i = 0; i < steps.length; i++) {
     const s = steps[i];
+    const evidenceType = s.t === "waitVisible" ? s.evidenceType ?? s.t : s.t;
     const startedAt = Date.now();
     try {
       requireNotAborted();
@@ -15343,11 +15345,7 @@ async function replayFlow(steps, dispatch, opts = {}) {
         }
         case "waitVisible": {
           const deadline = startedAt + s.timeoutMs;
-          let verdict = {
-            visible: false,
-            code: "TESTID_NOT_FOUND",
-            reason: `testID "${s.id}" not present before the visibility deadline`
-          };
+          let verdict = null;
           for (; ; ) {
             const observed = await readVisibilityBeforeDeadline(dispatch, s.id, deadline);
             requireNotAborted();
@@ -15364,11 +15362,13 @@ async function replayFlow(steps, dispatch, opts = {}) {
           const waitedMs = Date.now() - startedAt;
           trace.push({
             sourceIndex: sourceIndex(i),
-            t: s.t,
+            t: evidenceType,
             target: s.id,
-            ok: verdict.visible,
+            ok: verdict?.visible === true,
             durationMs: waitedMs
           });
+          if (!verdict)
+            return fail(i, `waitVisible: no readable visibility observation completed for "${s.id}" before the deadline`, "RUNNER_TIMEOUT", { failedSelector: s.id, waitedMs });
           if (!verdict.visible)
             return fail(i, verdict.reason ?? `waitVisible: "${s.id}" is not frontmost`, verdict.code ?? "TESTID_NOT_FOUND", { ...verdict.meta, failedSelector: s.id, waitedMs });
           break;
@@ -15423,7 +15423,7 @@ async function replayFlow(steps, dispatch, opts = {}) {
       const waitedMs = Date.now() - startedAt;
       trace.push({
         sourceIndex: sourceIndex(i),
-        t: s.t,
+        t: evidenceType,
         target: "id" in s ? s.id : void 0,
         ok: false,
         durationMs: waitedMs

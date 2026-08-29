@@ -89,7 +89,16 @@ test('buildCdpDispatch uses a complete interactive fallback only for visibility'
           {
             ok: true,
             data: { interactive: [{ testID: 'otp' }] },
-            meta: { treeVerdict: { state: 'ok', path: 'interactive', reasons: [] } },
+            meta: {
+              treeVerdict: {
+                state: 'ok',
+                path: 'interactive',
+                reasons: [],
+                rootsSeeded: 1,
+                droppedSubtrees: 0,
+                collapsedChildLists: 0,
+              },
+            },
           },
           'otp',
         ),
@@ -145,13 +154,35 @@ test('unwrapTree returns the bare node for a single match and the matches wrappe
   assert.deepEqual(unwrapTree({ testID: 'x', children: [] }), { testID: 'x', children: [] });
 });
 
-test('replayTreeData accepts complete filtered absence and exact interactive presence', () => {
+test('replayTreeData accepts complete filtered proof and exact interactive presence', () => {
+  const completeFilterVerdict = {
+    state: 'ok',
+    path: 'filter',
+    reasons: [],
+    rootsSeeded: 1,
+    droppedSubtrees: 0,
+    collapsedChildLists: 0,
+  };
   assert.deepEqual(
-    replayTreeData({
-      ok: true,
-      data: { tree: null },
-      meta: { treeVerdict: { state: 'ok', path: 'filter', reasons: [] } },
-    }),
+    replayTreeData(
+      {
+        ok: true,
+        data: { tree: { testID: 'otp', children: [] } },
+        meta: { treeVerdict: completeFilterVerdict },
+      },
+      'otp',
+    ),
+    { tree: { testID: 'otp', children: [] } },
+  );
+  assert.deepEqual(
+    replayTreeData(
+      {
+        ok: true,
+        data: { tree: null },
+        meta: { treeVerdict: completeFilterVerdict },
+      },
+      'missing',
+    ),
     { tree: null },
   );
   assert.deepEqual(
@@ -159,12 +190,66 @@ test('replayTreeData accepts complete filtered absence and exact interactive pre
       {
         ok: true,
         data: { interactive: [{ testID: 'otp' }] },
-        meta: { treeVerdict: { state: 'ok', path: 'interactive', reasons: [] } },
+        meta: {
+          treeVerdict: {
+            state: 'ok',
+            path: 'interactive',
+            reasons: [],
+            rootsSeeded: 1,
+            droppedSubtrees: 0,
+            collapsedChildLists: 0,
+          },
+        },
       },
       'otp',
     ),
     { interactive: [{ testID: 'otp' }] },
   );
+});
+
+test('replayTreeData refuses filtered evidence that cannot prove exact-id absence', () => {
+  const treeVerdict = {
+    state: 'ok',
+    path: 'filter',
+    reasons: [],
+    rootsSeeded: 1,
+    droppedSubtrees: 0,
+    collapsedChildLists: 0,
+  };
+  for (const envelope of [
+    {
+      ok: true,
+      data: { tree: { name: 'otp-container', children: [] } },
+      meta: { treeVerdict },
+    },
+    {
+      ok: true,
+      data: { tree: null },
+      meta: { treeVerdict: { ...treeVerdict, droppedSubtrees: 1 } },
+    },
+    {
+      ok: true,
+      data: { tree: null },
+      meta: { treeVerdict: { ...treeVerdict, collapsedChildLists: 1 } },
+    },
+    {
+      ok: true,
+      data: { tree: null },
+      meta: { treeVerdict: { ...treeVerdict, rootsSeeded: 0 } },
+    },
+    {
+      ok: true,
+      data: {
+        tree: { matches: Array.from({ length: 10 }, () => ({ testID: 'otp' })) },
+      },
+      meta: { treeVerdict },
+    },
+  ]) {
+    assert.throws(
+      () => replayTreeData(envelope, 'otp'),
+      (error) => error.code === 'EVAL_FAILED' && error.meta?.treeEnvelope?.incomplete === true,
+    );
+  }
 });
 
 test('React replay propagates a component-tree transport envelope without selector repair evidence', async () => {
@@ -189,6 +274,7 @@ test('React replay propagates a component-tree transport envelope without select
   assert.equal(replay.failureCode, 'RECONNECT_TIMEOUT');
   assert.equal(replay.failureMeta?.failedSelector, 'ready');
   assert.equal(typeof replay.failureMeta?.waitedMs, 'number');
+  assert.equal(replay.steps[0].t, 'assert');
   assert.deepEqual(replay.failureMeta?.treeEnvelope, {
     ok: false,
     code: 'RECONNECT_TIMEOUT',

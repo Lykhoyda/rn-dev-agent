@@ -2,7 +2,7 @@ export type ReplayStep =
   | { t: 'launch'; stopApp: boolean }
   | { t: 'tap'; id: string }
   | { t: 'type'; text: string }
-  | { t: 'waitVisible'; id: string; timeoutMs: number }
+  | { t: 'waitVisible'; id: string; timeoutMs: number; evidenceType?: 'assert' }
   | { t: 'wait'; timeoutMs: number }
   | { t: 'runFlow'; whenVisible: string; commands: ReplayStep[] };
 
@@ -161,6 +161,7 @@ export function normalizeSteps(body: unknown[], params: Record<string, string>):
           t: 'waitVisible',
           id: interp(id, params),
           timeoutMs: DEFAULT_VISIBILITY_TIMEOUT_MS,
+          evidenceType: 'assert',
         });
         break;
       }
@@ -260,6 +261,7 @@ export async function replayFlow(
 
   for (let i = 0; i < steps.length; i++) {
     const s = steps[i];
+    const evidenceType = s.t === 'waitVisible' ? (s.evidenceType ?? s.t) : s.t;
     const startedAt = Date.now();
     try {
       requireNotAborted();
@@ -301,11 +303,7 @@ export async function replayFlow(
         }
         case 'waitVisible': {
           const deadline = startedAt + s.timeoutMs;
-          let verdict: ReplayVisibility = {
-            visible: false,
-            code: 'TESTID_NOT_FOUND',
-            reason: `testID "${s.id}" not present before the visibility deadline`,
-          };
+          let verdict: ReplayVisibility | null = null;
           for (;;) {
             const observed = await readVisibilityBeforeDeadline(dispatch, s.id, deadline);
             requireNotAborted();
@@ -321,11 +319,18 @@ export async function replayFlow(
           const waitedMs = Date.now() - startedAt;
           trace.push({
             sourceIndex: sourceIndex(i),
-            t: s.t,
+            t: evidenceType,
             target: s.id,
-            ok: verdict.visible,
+            ok: verdict?.visible === true,
             durationMs: waitedMs,
           });
+          if (!verdict)
+            return fail(
+              i,
+              `waitVisible: no readable visibility observation completed for "${s.id}" before the deadline`,
+              'RUNNER_TIMEOUT',
+              { failedSelector: s.id, waitedMs },
+            );
           if (!verdict.visible)
             return fail(
               i,
@@ -390,7 +395,7 @@ export async function replayFlow(
       const waitedMs = Date.now() - startedAt;
       trace.push({
         sourceIndex: sourceIndex(i),
-        t: s.t,
+        t: evidenceType,
         target: 'id' in s ? s.id : undefined,
         ok: false,
         durationMs: waitedMs,

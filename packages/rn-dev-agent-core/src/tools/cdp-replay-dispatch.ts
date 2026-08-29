@@ -60,8 +60,29 @@ export function replayTreeData(envelope: ReplayTreeEnvelope, selector?: string):
       : null;
   const reasons = Array.isArray(verdict?.reasons) ? verdict.reasons : [];
   const truncated = data !== null && (data.__agent_truncated === true || data.truncated === true);
-  const complete = verdict?.state === 'ok' && reasons.length === 0;
-  const completeFiltered = complete && verdict.path === 'filter' && data !== null && 'tree' in data;
+  const complete =
+    verdict?.state === 'ok' &&
+    reasons.length === 0 &&
+    typeof verdict.rootsSeeded === 'number' &&
+    verdict.rootsSeeded > 0 &&
+    verdict.droppedSubtrees === 0 &&
+    verdict.collapsedChildLists === 0;
+  const filteredTree = data !== null && 'tree' in data ? data.tree : undefined;
+  const serializedMatches =
+    filteredTree &&
+    typeof filteredTree === 'object' &&
+    !Array.isArray(filteredTree) &&
+    Array.isArray((filteredTree as Record<string, unknown>).matches)
+      ? ((filteredTree as Record<string, unknown>).matches as unknown[])
+      : [];
+  const completeFiltered =
+    complete &&
+    verdict.path === 'filter' &&
+    typeof selector === 'string' &&
+    data !== null &&
+    'tree' in data &&
+    serializedMatches.length < 10 &&
+    (filteredTree === null || isExactPresent(filteredTree, selector));
   const completeInteractiveMatch =
     complete &&
     verdict.path === 'interactive' &&
