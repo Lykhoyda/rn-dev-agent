@@ -206,6 +206,19 @@ export function maestroSelector(ev: RecordedEvent): string | null {
   return null;
 }
 
+export function parkedRecorderAnchorBlocker(events: readonly RecordedEvent[]): string | null {
+  for (const event of events) {
+    if ((event.type === 'tap' || event.type === 'type') && event.testID) return null;
+    if (
+      (event.type === 'tap' || event.type === 'long_press' || event.type === 'type') &&
+      maestroSelector(event) === null
+    ) {
+      return `recorded ${event.type} interaction before the park anchor had no testID or label`;
+    }
+  }
+  return null;
+}
+
 export function detoxSelector(ev: RecordedEvent): string | null {
   const tid = (ev as { testID?: string | null }).testID;
   const lbl = (ev as { label?: string | null }).label;
@@ -234,6 +247,10 @@ export function nextSelector(
 // --- Maestro YAML ---
 
 export function generateMaestro(events: RecordedEvent[], opts: GenerateOpts = {}): string {
+  const parkedAnchorBlocker = opts.entry === 'parked' ? parkedRecorderAnchorBlocker(events) : null;
+  if (parkedAnchorBlocker) {
+    throw new Error(`entry: parked cannot be generated because ${parkedAnchorBlocker}`);
+  }
   assertSafeGeneratedScalars(
     {
       ...opts,

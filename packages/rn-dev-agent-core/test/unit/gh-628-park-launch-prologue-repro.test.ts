@@ -16,7 +16,11 @@ import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, existsSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { executeMaestroAuthorityStages } from '../../dist/tools/maestro-run.js';
+import {
+  createMaestroRunHandler,
+  executeMaestroAuthorityStages,
+} from '../../dist/tools/maestro-run.js';
+import { createMaestroTestAllHandler } from '../../dist/tools/maestro-test-all.js';
 import { generateMaestro } from '../../dist/tools/test-recorder-generators.js';
 import {
   _resetState,
@@ -28,6 +32,7 @@ import { createSaveAsActionHandler } from '../../dist/tools/save-as-action.js';
 import { parseM7Header, serializeM7Header } from '../../dist/domain/reusable-action.js';
 import { parkedBodyViolation } from '../../dist/domain/park-entry.js';
 import { createParkAnchorProbe, type ParkProbeClient } from '../../dist/tools/park-probe.js';
+import { prepareActionVerificationSuite } from '../../dist/domain/action-verification-suite.js';
 import type { ParkAnchorProbe, RunActionArgs } from '../../dist/tools/run-action.js';
 import type { ToolResult } from '../../dist/utils.js';
 import { createPinnedRunActionHandler, createTmpProject } from '../helpers/tmp-project.js';
@@ -105,6 +110,34 @@ function sidecarRecords(id: string): Array<Record<string, unknown>> {
   if (!existsSync(path)) return [];
   return (JSON.parse(readFileSync(path, 'utf8')) as { runHistory: Array<Record<string, unknown>> })
     .runHistory;
+}
+
+function selectorFailure(
+  steps: Array<Record<string, unknown>>,
+  completedSteps: number,
+): ToolResult {
+  return {
+    content: [
+      {
+        type: 'text',
+        text: JSON.stringify({
+          ok: true,
+          data: {
+            passed: false,
+            output: 'Element with id "stale-selector" not found',
+            steps,
+            terminal: {
+              completedSteps,
+              failedStep: 'tapOn id: stale-selector',
+              exitClass: 'step-failure',
+              failureKind: 'SELECTOR_NOT_FOUND',
+              failureSelector: 'stale-selector',
+            },
+          },
+        }),
+      },
+    ],
+  };
 }
 
 // ─── Grammar ────────────────────────────────────────────────────────────────
@@ -486,6 +519,82 @@ test('GH #628: an empty subflow reference has a non-empty structured cause', asy
   assert.equal(calls.length, 0);
 });
 
+test('GH #628: a non-string runFlow file refuses with a structured cause', async () => {
+  project.seedAction(
+    'parked-sign-mandate',
+    parkedYaml([`- assertVisible:\n    id: "${PARK_ANCHOR}"`, '- runFlow:\n    file: 123']),
+    null,
+  );
+  const calls: Array<Record<string, unknown>> = [];
+  const handler = handlerWith(calls, { status: 'visible' });
+
+  const result = envelope(
+    await handler({ actionId: 'parked-sign-mandate', projectRoot: project.root }),
+  );
+
+  assert.equal(result.ok, false);
+  assert.equal(result.code, 'BAD_RECORDING');
+  assert.deepEqual(result.meta?.cause, { parkedRunFlowFile: '<invalid:number>' });
+  assert.equal(calls.length, 0);
+});
+
+test('GH #628: maestro_run refuses parked and invalid learned-action entry modes', async () => {
+  project.seedAction('parked-sign-mandate', parkedYaml(PARKED_BODY), null);
+  let spawned = false;
+  const handler = createMaestroRunHandler({
+    getActiveSession: () => null,
+    execFile: async () => {
+      spawned = true;
+      return { stdout: '', stderr: '' };
+    },
+  });
+
+  const parked = envelope(
+    await handler({ platform: 'ios', flowPath: project.yamlPath('parked-sign-mandate') }),
+  );
+  assert.equal(parked.ok, false);
+  assert.equal(parked.code, 'BAD_RECORDING');
+  assert.match(parked.error ?? '', /cdp_run_action/);
+
+  const invalid = envelope(
+    await handler({
+      platform: 'ios',
+      inlineYaml: '- tapOn:\n    id: "continue"\n',
+      actionMetadata: { id: 'invalid-entry', entry: 'parkd' as never },
+    }),
+  );
+  assert.equal(invalid.ok, false);
+  assert.equal(invalid.code, 'BAD_RECORDING');
+  assert.deepEqual(invalid.meta?.cause, { invalidEntry: 'parkd' });
+  assert.equal(spawned, false);
+});
+
+test('GH #628: suite executors refuse parked actions before execution', async () => {
+  project.seedAction('parked-sign-mandate', parkedYaml(PARKED_BODY), null);
+  let executed = false;
+  const suite = envelope(
+    await createMaestroTestAllHandler({
+      getActiveSession: () => null,
+      runFlow: async () => {
+        executed = true;
+        return { content: [{ type: 'text', text: JSON.stringify(PASS_ENV) }] };
+      },
+    })({ platform: 'ios', flowDir: project.actionsDir }),
+  );
+  assert.equal(suite.ok, false);
+  assert.equal(suite.code, 'BAD_RECORDING');
+
+  const verification = prepareActionVerificationSuite(
+    [project.yamlPath('parked-sign-mandate')],
+    project.actionsDir,
+    null,
+  );
+  assert.equal(verification.prepared.length, 0);
+  assert.equal(verification.errors[0]?.code, 'BAD_RECORDING');
+  assert.match(verification.errors[0]?.error ?? '', /cdp_run_action/);
+  assert.equal(executed, false);
+});
+
 test('GH #628: generated parked metadata refuses replay off the recorded start route', async () => {
   const generated = generateMaestro([{ type: 'tap', testID: PARK_ANCHOR, t: 1 }], {
     bundleId: 'com.test.app',
@@ -655,6 +764,35 @@ test('GH #628: parked save refuses a destination anchor reached after a label-on
   }
 });
 
+test('GH #628: parked save preserves a selectorless opening mutation as a refusal', async () => {
+  _setStoredEvents([
+    { type: 'tap', route: 'Start', t: 1 },
+    { type: 'navigate', from: 'Start', to: 'Destination', t: 2 },
+    { type: 'tap', testID: 'destination-anchor', route: 'Destination', t: 3 },
+  ]);
+  _setRecordingStartRoute('Start');
+  try {
+    const result = envelope(
+      await createSaveAsActionHandler()({
+        id: 'parked-selectorless-opening',
+        intent: 'continue after a selectorless opening interaction',
+        bundleId: 'com.test.app',
+        projectRoot: project.root,
+        entry: 'parked',
+      }),
+    );
+    assert.equal(result.ok, false);
+    assert.equal(result.code, 'BAD_RECORDING');
+    assert.match(
+      String((result.meta?.cause as Record<string, unknown>)?.parkedAnchorUnresolvable),
+      /recorded tap interaction.*no testID or label/,
+    );
+    assert.equal(project.yamlExists('parked-selectorless-opening'), false);
+  } finally {
+    _resetState();
+  }
+});
+
 test('GH #628: parked save accepts an opening parameterized anchor', async () => {
   _setStoredEvents([{ type: 'tap', testID: '${ANCHOR}', route: 'Start', t: 1 }]);
   _setRecordingStartRoute('Start');
@@ -673,6 +811,111 @@ test('GH #628: parked save accepts an opening parameterized anchor', async () =>
   } finally {
     _resetState();
   }
+});
+
+test('GH #628: parked auto-repair never retries after a completed mutation', async () => {
+  project.seedAction(
+    'parked-sign-mandate',
+    parkedYaml([
+      `- assertVisible:\n    id: "${PARK_ANCHOR}"`,
+      '- tapOn:\n    id: "delete-item"',
+      '- tapOn:\n    id: "stale-selector"',
+    ]),
+    null,
+  );
+  let maestroCalls = 0;
+  let repairCalls = 0;
+  const handler = createPinnedRunActionHandler({
+    probeParkAnchor: async () => ({ status: 'visible' as const }),
+    maestroRun: async () => {
+      maestroCalls += 1;
+      return selectorFailure(
+        [
+          { index: 0, verb: 'assertVisible', status: 'pass' },
+          { index: 1, verb: 'tapOn', status: 'pass' },
+          { index: 2, verb: 'tapOn', status: 'fail' },
+        ],
+        2,
+      );
+    },
+    repairAction: async () => {
+      repairCalls += 1;
+      throw new Error('repair must not run after a parked mutation');
+    },
+  });
+
+  const result = envelope(
+    await handler({ actionId: 'parked-sign-mandate', projectRoot: project.root }),
+  );
+
+  assert.equal(result.ok, false);
+  assert.equal(result.code, 'TESTID_NOT_FOUND');
+  assert.equal(
+    (result.meta?.autoRepair as Record<string, unknown>)?.refusedReason,
+    'NOT_REPAIRABLE_KIND',
+  );
+  assert.equal(maestroCalls, 1);
+  assert.equal(repairCalls, 0);
+});
+
+test('GH #628: parked auto-repair rechecks the park state before retry', async () => {
+  project.seedAction(
+    'parked-sign-mandate',
+    parkedYaml([
+      `- assertVisible:\n    id: "${PARK_ANCHOR}"`,
+      '- tapOn:\n    id: "stale-selector"',
+    ]),
+    null,
+  );
+  let maestroCalls = 0;
+  let repairCalls = 0;
+  let probeCalls = 0;
+  const handler = createPinnedRunActionHandler({
+    probeParkAnchor: async () => {
+      probeCalls += 1;
+      return probeCalls === 1
+        ? ({ status: 'visible' } as const)
+        : ({ status: 'anchor-missing', reason: 'opening screen was replaced' } as const);
+    },
+    maestroRun: async () => {
+      maestroCalls += 1;
+      return selectorFailure(
+        [
+          { index: 0, verb: 'assertVisible', status: 'pass' },
+          { index: 1, verb: 'tapOn', status: 'fail' },
+        ],
+        1,
+      );
+    },
+    repairAction: async () => {
+      repairCalls += 1;
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: JSON.stringify({
+              ok: true,
+              data: {
+                patched: true,
+                oldSelector: 'stale-selector',
+                newSelector: 'fresh-selector',
+              },
+            }),
+          },
+        ],
+      };
+    },
+  });
+
+  const result = envelope(
+    await handler({ actionId: 'parked-sign-mandate', projectRoot: project.root }),
+  );
+
+  assert.equal(result.ok, false);
+  assert.equal(result.code, 'PARK_STATE_MISSING');
+  assert.equal(probeCalls, 2);
+  assert.equal(maestroCalls, 1);
+  assert.equal(repairCalls, 1);
 });
 
 // ─── Cold-entry behavior unchanged ──────────────────────────────────────────

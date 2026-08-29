@@ -295,7 +295,14 @@ export interface ParseAndValidateOptions {
 // GH #186: recognize a single-key `runFlow` command and extract its shape.
 // Returns null for non-runFlow OR malformed runFlow (which validateCommand then
 // rejects), so expandRunFlows passes those through untouched.
-function asRunFlow(cmd: unknown): { file?: string; when?: unknown; commands?: unknown[] } | null {
+interface RunFlowShape {
+  file?: string;
+  invalidFile?: unknown;
+  when?: unknown;
+  commands?: unknown[];
+}
+
+function asRunFlow(cmd: unknown): RunFlowShape | null {
   if (!cmd || typeof cmd !== 'object' || Array.isArray(cmd)) return null;
   const keys = Object.keys(cmd as Record<string, unknown>);
   if (keys.length !== 1 || keys[0] !== 'runFlow') return null;
@@ -305,11 +312,17 @@ function asRunFlow(cmd: unknown): { file?: string; when?: unknown; commands?: un
     const o = v as Record<string, unknown>;
     return {
       file: typeof o.file === 'string' ? o.file : undefined,
+      ...('file' in o && typeof o.file !== 'string' ? { invalidFile: o.file } : {}),
       when: o.when,
       commands: Array.isArray(o.commands) ? o.commands : undefined,
     };
   }
-  return null;
+  return { invalidFile: v };
+}
+
+function invalidRunFlowFileReference(value: unknown): string {
+  const kind = value === null ? 'null' : Array.isArray(value) ? 'array' : typeof value;
+  return `<invalid:${kind}>`;
 }
 
 export function collectRunFlowFileReferences(yamlText: string): string[] {
@@ -380,6 +393,18 @@ export function expandRunFlows(commands: unknown[], opts: ParseAndValidateOption
       out.push(cmd);
       continue;
     }
+
+    if ('invalidFile' in rf) {
+      throw new MaestroValidationError('runFlow.file must be a non-empty string', {
+        runFlowFile: invalidRunFlowFileReference(rf.invalidFile),
+      });
+    }
+    if (rf.file !== undefined && rf.file.length === 0) {
+      throw new MaestroValidationError('runFlow.file must be a non-empty string', {
+        runFlowFile: rf.file,
+      });
+    }
+    validateRunFlowValue((cmd as Record<string, unknown>).runFlow);
 
     if (rf.file !== undefined) {
       try {

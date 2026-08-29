@@ -24101,11 +24101,16 @@ function asRunFlow(cmd) {
     const o = v;
     return {
       file: typeof o.file === "string" ? o.file : void 0,
+      ..."file" in o && typeof o.file !== "string" ? { invalidFile: o.file } : {},
       when: o.when,
       commands: Array.isArray(o.commands) ? o.commands : void 0
     };
   }
-  return null;
+  return { invalidFile: v };
+}
+function invalidRunFlowFileReference(value) {
+  const kind = value === null ? "null" : Array.isArray(value) ? "array" : typeof value;
+  return `<invalid:${kind}>`;
 }
 function collectRunFlowFileReferences(yamlText) {
   try {
@@ -24166,6 +24171,17 @@ function expandRunFlows(commands, opts) {
       out.push(cmd);
       continue;
     }
+    if ("invalidFile" in rf) {
+      throw new MaestroValidationError("runFlow.file must be a non-empty string", {
+        runFlowFile: invalidRunFlowFileReference(rf.invalidFile)
+      });
+    }
+    if (rf.file !== void 0 && rf.file.length === 0) {
+      throw new MaestroValidationError("runFlow.file must be a non-empty string", {
+        runFlowFile: rf.file
+      });
+    }
+    validateRunFlowValue(cmd.runFlow);
     if (rf.file !== void 0) {
       try {
         const depth = opts._depth ?? 0;
@@ -77117,6 +77133,16 @@ function maestroSelector(ev) {
     return `text: ${maestroScalar(lbl)}`;
   return null;
 }
+function parkedRecorderAnchorBlocker(events) {
+  for (const event of events) {
+    if ((event.type === "tap" || event.type === "type") && event.testID)
+      return null;
+    if ((event.type === "tap" || event.type === "long_press" || event.type === "type") && maestroSelector(event) === null) {
+      return `recorded ${event.type} interaction before the park anchor had no testID or label`;
+    }
+  }
+  return null;
+}
 function detoxSelector(ev) {
   const tid = ev.testID;
   const lbl = ev.label;
@@ -77138,6 +77164,10 @@ function nextSelector(events, fromIndex, selectorFn) {
   return null;
 }
 function generateMaestro(events, opts = {}) {
+  const parkedAnchorBlocker = opts.entry === "parked" ? parkedRecorderAnchorBlocker(events) : null;
+  if (parkedAnchorBlocker) {
+    throw new Error(`entry: parked cannot be generated because ${parkedAnchorBlocker}`);
+  }
   assertSafeGeneratedScalars({
     ...opts,
     testName: opts.testName != null ? stripNewlines(opts.testName) : void 0,
@@ -77623,6 +77653,23 @@ function resolveEntryMode(metadata) {
     return { ok: true, mode: raw };
   return { ok: false, raw: String(raw) };
 }
+function learnedActionEntryRefusal(metadata, parkPreflightPassed2) {
+  const entry = resolveEntryMode(metadata);
+  if (!entry.ok) {
+    return {
+      kind: "invalid-entry",
+      raw: entry.raw,
+      message: `Learned action declares unknown entry mode "${entry.raw}" \u2014 use "cold" or "parked".`
+    };
+  }
+  if (entry.mode === "parked" && !parkPreflightPassed2) {
+    return {
+      kind: "park-preflight-required",
+      message: "Learned action declares entry: parked and requires the read-only park preflight; replay it through cdp_run_action."
+    };
+  }
+  return null;
+}
 function commandName(command) {
   if (typeof command === "string")
     return command;
@@ -77682,12 +77729,22 @@ function parkedBodyViolation(commands) {
   return null;
 }
 var ANCHOR_COMMANDS = /* @__PURE__ */ new Set(["assertVisible", "extendedWaitUntil", "tapOn"]);
-var PRE_ANCHOR_READ_COMMANDS = /* @__PURE__ */ new Set([
+var PARKED_READ_ONLY_COMMANDS = /* @__PURE__ */ new Set([
   "assertVisible",
   "assertNotVisible",
   "extendedWaitUntil",
   "waitForAnimationToEnd"
 ]);
+function parkedCommandMayMutate(command) {
+  const name = commandName(command);
+  const composite = compositeShape(command);
+  if (composite?.kind === "file")
+    return true;
+  if (composite?.kind === "inline") {
+    return composite.commands.some((nested) => parkedCommandMayMutate(nested));
+  }
+  return name === null || !PARKED_READ_ONLY_COMMANDS.has(name);
+}
 function anchorIdOf(name, value) {
   if (!value || typeof value !== "object" || Array.isArray(value))
     return null;
@@ -77720,7 +77777,7 @@ function firstAnchorId(commands, canSupplyAnchor = true) {
         return nested;
       continue;
     }
-    if (name !== null && PRE_ANCHOR_READ_COMMANDS.has(name))
+    if (name !== null && PARKED_READ_ONLY_COMMANDS.has(name))
       continue;
     return { kind: "blocked" };
   }
@@ -77771,6 +77828,10 @@ function createSaveAsActionHandler() {
     }
     const status = args.status ?? "experimental";
     const startRoute = getRecordingStartRoute() ?? void 0;
+    const parkedAnchorBlocker = args.entry === "parked" ? parkedRecorderAnchorBlocker(events) : null;
+    if (parkedAnchorBlocker) {
+      return failResult(`cdp_record_test_save_as_action: entry: parked needs a probeable park anchor, but ${parkedAnchorBlocker}. Start the recording with a testID-bearing interaction or assertion, or save as entry: cold.`, "BAD_RECORDING", { cause: { parkedAnchorUnresolvable: parkedAnchorBlocker } });
+    }
     let yamlText;
     try {
       yamlText = generateMaestro(events, {
@@ -79646,6 +79707,20 @@ function assembleMaestroArgs(baseArgs, paramArgs) {
     return baseArgs;
   return [...baseArgs.slice(0, -1), ...paramArgs, baseArgs[baseArgs.length - 1]];
 }
+var parkPreflightPassed = /* @__PURE__ */ Symbol("parkPreflightPassed");
+function markParkPreflightPassed(args) {
+  Object.defineProperty(args, parkPreflightPassed, { value: true, enumerable: true });
+  return args;
+}
+function learnedActionEntryAdmissionResult(metadata, args) {
+  const refusal = learnedActionEntryRefusal(metadata, args[parkPreflightPassed] === true);
+  if (!refusal)
+    return null;
+  return failResult(refusal.message, "BAD_RECORDING", {
+    actionId: metadata.id,
+    ...refusal.kind === "invalid-entry" ? { cause: { invalidEntry: refusal.raw } } : {}
+  });
+}
 function nestedMaestroAuthorityCallbacks(args) {
   return {
     claimNativeOrigin: () => claimManagedNativeOriginAuthority(args),
@@ -79941,6 +80016,11 @@ function createMaestroRunHandler(deps = {}) {
       if (!capturedAction) {
         return failResult(`Action does not resolve uniquely to ${args.flowPath}.`, "BAD_RECORDING");
       }
+      if (capturedAction.metadata) {
+        const entryRefusal = learnedActionEntryAdmissionResult(capturedAction.metadata, args);
+        if (entryRefusal)
+          return entryRefusal;
+      }
       if (!capturedAction.replay.ok) {
         return failResult(capturedAction.replay.error, "BAD_RECORDING");
       }
@@ -79958,6 +80038,11 @@ function createMaestroRunHandler(deps = {}) {
       }
     } else {
       return failResult("Provide either flowPath or inlineYaml.");
+    }
+    if (!capturedAction && args.actionMetadata) {
+      const entryRefusal = learnedActionEntryAdmissionResult(args.actionMetadata, args);
+      if (entryRefusal)
+        return entryRefusal;
     }
     try {
       const runFlowOpts = args.flowPath && flowPathClassification === "outside" ? { flowDir: dirname21(args.flowPath), flowRoot: dirname21(args.flowPath) } : {};
@@ -81150,6 +81235,42 @@ function readMaestroTerminal(env) {
   const fromMeta = env.meta?.terminal;
   return fromMeta;
 }
+var PARKED_READ_ONLY_STEP_VERBS = /* @__PURE__ */ new Set([
+  "assertVisible",
+  "assertNotVisible",
+  "extendedWaitUntil",
+  "waitForAnimationToEnd",
+  "assert",
+  "waitVisible",
+  "wait"
+]);
+function completedParkedMutation(env, commands) {
+  const metaSteps = env.meta?.steps;
+  const steps = Array.isArray(env.data?.steps) ? env.data.steps : Array.isArray(metaSteps) ? metaSteps : [];
+  let passedSteps = 0;
+  for (const rawStep of steps) {
+    if (!rawStep || typeof rawStep !== "object")
+      continue;
+    const step = rawStep;
+    if (step.status !== "pass")
+      continue;
+    passedSteps += 1;
+    const verb = String(step.verb ?? step.name ?? "");
+    if (PARKED_READ_ONLY_STEP_VERBS.has(verb))
+      continue;
+    const index = Number(step.index);
+    if (verb === "runFlow" && Number.isSafeInteger(index) && commands[index] !== void 0) {
+      if (parkedCommandMayMutate(commands[index]))
+        return true;
+      continue;
+    }
+    return true;
+  }
+  const completedSteps = readMaestroTerminal(env)?.completedSteps ?? 0;
+  if (passedSteps >= completedSteps)
+    return false;
+  return commands.slice(0, Math.max(0, completedSteps)).some((command) => parkedCommandMayMutate(command));
+}
 function readMaestroOutput(env) {
   if (typeof env.data?.output === "string")
     return env.data.output;
@@ -81402,14 +81523,10 @@ function createRunActionHandler(deps = {}) {
     try {
       const strictExecutor = usesStrictRunActionPolicy(args);
       const strictRunRecordMeta = (outcome) => strictExecutor && outcome.persistedRunId ? { strictRunRecordId: outcome.persistedRunId } : {};
-      if (entryMode === "parked") {
+      const runParkPreflight = async (commands, metadata, autoRepair2, phase, disclosure) => {
+        if (entryMode !== "parked")
+          return null;
         const refuseParkState = async (cause, detail, headline) => {
-          const autoRepair2 = {
-            attempted: false,
-            outcome: "refused",
-            refusedReason: "NOT_REPAIRABLE_KIND",
-            phases: { firstAttemptMs: 0 }
-          };
           const persisted2 = await persistRunWithDevice({
             timestamp: (/* @__PURE__ */ new Date()).toISOString(),
             durationMs: Date.now() - t0,
@@ -81419,27 +81536,21 @@ function createRunActionHandler(deps = {}) {
             trigger,
             autoRepair: autoRepair2
           });
-          return failResult(`cdp_run_action: ${args.actionId} refused before any step ran \u2014 ${headline}. Drive the app to the action's park state and retry; the parked preflight never launches or navigates for you.`, "PARK_STATE_MISSING", {
+          return failResult(phase === "initial" ? `cdp_run_action: ${args.actionId} refused before any step ran \u2014 ${headline}. Drive the app to the action's park state and retry; the parked preflight never launches or navigates for you.` : `cdp_run_action: ${args.actionId} refused before auto-repair retry \u2014 ${headline}. No retry step ran; drive the app back to the action's park state and replay from the start.`, "PARK_STATE_MISSING", {
             actionId: args.actionId,
             failureKind: "PARK_STATE_MISSING",
             parkPreflight: { cause, ...detail },
             autoRepair: autoRepair2,
-            writes: writeDisclosure("none", persisted2),
+            writes: writeDisclosure(disclosure, persisted2),
             ...strictRunRecordMeta(persisted2)
           });
         };
-        const anchor = deriveParkAnchor(preflightCommands, args.params ?? {});
+        const anchor = deriveParkAnchor(commands, args.params ?? {});
         if (!anchor.ok) {
           return refuseParkState("anchor-missing", { reason: anchor.reason }, anchor.reason);
         }
         const bundleAdmitted = await claimBundleAuthority(args);
         const refuseParkUnverifiable = async (detail, headline) => {
-          const autoRepair2 = {
-            attempted: false,
-            outcome: "refused",
-            refusedReason: "NOT_REPAIRABLE_KIND",
-            phases: { firstAttemptMs: 0 }
-          };
           const persisted2 = await persistRunWithDevice({
             timestamp: (/* @__PURE__ */ new Date()).toISOString(),
             durationMs: Date.now() - t0,
@@ -81449,12 +81560,12 @@ function createRunActionHandler(deps = {}) {
             trigger,
             autoRepair: autoRepair2
           });
-          return failResult(`cdp_run_action: ${args.actionId} is entry: parked but the park state cannot be verified \u2014 ${headline}. No step ran.`, "CDP_NOT_CONNECTED", {
+          return failResult(`cdp_run_action: ${args.actionId} is entry: parked but the park state cannot be verified ${phase === "initial" ? "before replay" : "before auto-repair retry"} \u2014 ${headline}. ${phase === "initial" ? "No step ran." : "No retry step ran."}`, "CDP_NOT_CONNECTED", {
             actionId: args.actionId,
             failureKind: "CDP_NOT_CONNECTED",
             parkPreflight: detail,
             autoRepair: autoRepair2,
-            writes: writeDisclosure("none", persisted2),
+            writes: writeDisclosure(disclosure, persisted2),
             ...strictRunRecordMeta(persisted2)
           });
         };
@@ -81471,7 +81582,7 @@ function createRunActionHandler(deps = {}) {
         if (probe.status === "anchor-missing") {
           return refuseParkState("anchor-missing", { anchorId: anchor.anchorId, reason: probe.reason }, `park anchor "${anchor.anchorId}" is not on screen${probe.reason ? ` (${probe.reason})` : ""}`);
         }
-        const expectedSeq2 = action.metadata.expectedRouteSequence;
+        const expectedSeq2 = metadata.expectedRouteSequence;
         if (expectedSeq2 && expectedSeq2.length > 0) {
           const liveRoute = await getLiveRoute().catch(() => null);
           if (liveRoute === null) {
@@ -81481,7 +81592,16 @@ function createRunActionHandler(deps = {}) {
             return refuseParkState("route-mismatch", { anchorId: anchor.anchorId, expectedRoute: expectedSeq2[0], liveRoute }, `live route "${liveRoute}" is not the action's recorded start route "${expectedSeq2[0]}"`);
           }
         }
-      }
+        return null;
+      };
+      const firstParkRefusal = await runParkPreflight(preflightCommands, action.metadata, {
+        attempted: false,
+        outcome: "refused",
+        refusedReason: "NOT_REPAIRABLE_KIND",
+        phases: { firstAttemptMs: 0 }
+      }, "initial", "none");
+      if (firstParkRefusal)
+        return firstParkRefusal;
       const tBeforeFirst = Date.now();
       probeDeviceId = null;
       const firstCorpusRefusal = replayCorpusIdentityRefusal(loadContext, args.actionId);
@@ -81489,7 +81609,7 @@ function createRunActionHandler(deps = {}) {
         return firstCorpusRefusal;
       const initialAttemptId = randomUUID9();
       const maxAttempts = autoRepairEnabled ? 2 : 1;
-      const firstResult = await measureStep("maestro-first-attempt", () => maestroRun({
+      const firstRunArgs = {
         inlineYaml: replayYaml,
         actionMetadata: action.metadata,
         platform: args.platform,
@@ -81505,7 +81625,10 @@ function createRunActionHandler(deps = {}) {
         reproveManagedOrigin: () => reproveManagedOrigin(args),
         completeRunnerPark: (signal) => completeManagedRunnerParkAuthority(args, signal),
         reissueInstallReceipt: () => reissueInstallReceipt(args)
-      }));
+      };
+      if (entryMode === "parked")
+        markParkPreflightPassed(firstRunArgs);
+      const firstResult = await measureStep("maestro-first-attempt", () => maestroRun(firstRunArgs));
       const firstAttemptMs = Date.now() - tBeforeFirst;
       const firstEnv = parseEnvelope(firstResult, "maestro_run");
       const firstOutput = readMaestroOutput(firstEnv);
@@ -81729,6 +81852,34 @@ function createRunActionHandler(deps = {}) {
       if (failure.kind !== "SELECTOR_NOT_FOUND") {
         throw new Error("Internal: isAutoRepairable returned true for non-SELECTOR_NOT_FOUND failure");
       }
+      if (entryMode === "parked" && completedParkedMutation(firstEnv, preflightCommands)) {
+        const autoRepair2 = {
+          attempted: false,
+          outcome: "refused",
+          refusedReason: "NOT_REPAIRABLE_KIND",
+          phases: { firstAttemptMs }
+        };
+        const persisted2 = await persistRunWithDevice({
+          timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+          durationMs: Date.now() - t0,
+          status: "fail",
+          failureCode: "SELECTOR_NOT_FOUND",
+          failureDetail: firstFailureDetail.slice(0, 1e3),
+          trigger,
+          autoRepair: autoRepair2
+        });
+        return failResult(`cdp_run_action: ${args.actionId} failed with SELECTOR_NOT_FOUND (${failure.selector}) after a parked mutation completed; auto-repair retry refused because replaying the body could repeat that mutation.`, "TESTID_NOT_FOUND", {
+          actionId: args.actionId,
+          failureKind: failure.kind,
+          failureSelector: failure.selector,
+          underlyingFailure: firstFailureDetail,
+          terminal: readMaestroTerminal(firstEnv),
+          autoRepair: autoRepair2,
+          firstAttemptOutput: boundedOutput(firstOutput),
+          writes: writeDisclosure("none", persisted2),
+          ...strictRunRecordMeta(persisted2)
+        });
+      }
       const tBeforeRepair = Date.now();
       const repairResult = await measureStep("selector-repair", () => repairAction({
         actionId: args.actionId,
@@ -81793,13 +81944,21 @@ function createRunActionHandler(deps = {}) {
         return failResult(`cdp_run_action: repaired action is not valid Maestro YAML: ${reloadedAction.replay.error}`, "BAD_RECORDING", { actionId: args.actionId });
       }
       const retryYaml = reloadedAction.replay.yamlText;
+      const retryParkRefusal = await runParkPreflight(reloadedAction.replay.commands, reloadedAction.metadata, {
+        attempted: true,
+        outcome: "refused",
+        refusedReason: "NOT_REPAIRABLE_KIND",
+        phases: { firstAttemptMs, repairMs }
+      }, "retry", "auto-repair");
+      if (retryParkRefusal)
+        return retryParkRefusal;
       const tBeforeRetry = Date.now();
       probeDeviceId = null;
       const retryCorpusRefusal = replayCorpusIdentityRefusal(loadContext, args.actionId);
       if (retryCorpusRefusal)
         return retryCorpusRefusal;
       const repairedAttemptId = randomUUID9();
-      const retryResult = await measureStep("maestro-retry", () => maestroRun({
+      const retryRunArgs = {
         inlineYaml: retryYaml,
         actionMetadata: reloadedAction.metadata,
         platform: args.platform,
@@ -81821,7 +81980,10 @@ function createRunActionHandler(deps = {}) {
         reproveManagedOrigin: () => reproveManagedOrigin(args),
         completeRunnerPark: (signal) => completeManagedRunnerParkAuthority(args, signal),
         reissueInstallReceipt: () => reissueInstallReceipt(args)
-      }));
+      };
+      if (entryMode === "parked")
+        markParkPreflightPassed(retryRunArgs);
+      const retryResult = await measureStep("maestro-retry", () => maestroRun(retryRunArgs));
       const retryMs = Date.now() - tBeforeRetry;
       const retryEnv = parseEnvelope(retryResult, "maestro_run");
       const retryPassed = retryEnv.ok === true && retryEnv.data?.passed === true;
@@ -90607,6 +90769,18 @@ function createMaestroTestAllHandler(deps = {}) {
           throw new Error(`Refusing iOS proof-domain ambiguity at step ${iosProofPlan.sourceIndex}: ${iosProofPlan.reason}.`);
         }
         const requiresNativeRuntime = iosProofPlan?.ok !== true || iosProofPlan.segments.some((segment) => segment.domain === "xctest-native");
+        const entryRefusal = meta ? learnedActionEntryRefusal(meta, false) : null;
+        if (entryRefusal) {
+          preflightResults.push({
+            name,
+            passed: false,
+            durationMs: now() - start,
+            error: entryRefusal.message,
+            code: "BAD_RECORDING",
+            ...entryRefusal.kind === "invalid-entry" ? { cause: { invalidEntry: entryRefusal.raw } } : {}
+          });
+          continue;
+        }
         const preflight2 = replayCompatibilityPreflight({
           enginePin: meta?.enginePin,
           commands: parsedCommands,
@@ -90644,7 +90818,7 @@ function createMaestroTestAllHandler(deps = {}) {
       }
     }
     if (preflightResults.length > 0) {
-      return failResult(`Suite preflight refused ${preflightResults.length} of ${flows.length} flows before execution.`, {
+      const meta = {
         total: flows.length,
         executed: 0,
         passed: 0,
@@ -90654,7 +90828,9 @@ function createMaestroTestAllHandler(deps = {}) {
         runner: useSharedIosPlanner ? "semantic-proof-planner" : dispatch.runner,
         requestedDeviceId: requestedDeviceId ?? null,
         results: preflightResults
-      });
+      };
+      const entryRefusal = preflightResults.find((result) => result.code === "BAD_RECORDING");
+      return entryRefusal ? failResult(`Suite preflight refused ${preflightResults.length} of ${flows.length} flows before execution.`, "BAD_RECORDING", { ...meta, ...entryRefusal.cause ? { cause: entryRefusal.cause } : {} }) : failResult(`Suite preflight refused ${preflightResults.length} of ${flows.length} flows before execution.`, meta);
     }
     const timeout = args.timeoutPerFlow ?? 12e4;
     const managedAuthority = nestedMaestroAuthorityCallbacks(args);

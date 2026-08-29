@@ -25,6 +25,7 @@ import {
   replayCompatibilityPreflight,
 } from '../domain/action-engine-compat.js';
 import { parseM7Header, type M7Metadata } from '../domain/reusable-action.js';
+import { learnedActionEntryRefusal } from '../domain/park-entry.js';
 import { captureActionFromPath, type CapturedActionReplay } from '../domain/action-store.js';
 import { getActiveSession } from '../agent-device-wrapper.js';
 import { resolveBundleId, readExpoSlug } from '../project-config.js';
@@ -180,7 +181,10 @@ export function assembleMaestroArgs(baseArgs: string[], paramArgs: string[]): st
 export interface MaestroRunArgs {
   flowPath?: string;
   inlineYaml?: string;
-  actionMetadata?: Pick<M7Metadata, 'id' | 'enginePin' | 'tags' | 'expectedRouteSequence'>;
+  actionMetadata?: Pick<
+    M7Metadata,
+    'id' | 'enginePin' | 'tags' | 'expectedRouteSequence' | 'entry'
+  >;
   platform?: 'ios' | 'android';
   appId?: string;
   appFile?: string;
@@ -212,6 +216,30 @@ export interface MaestroRunArgs {
    * attempt. Not part of the public MCP schema.
    */
   attempt?: LedgerAttemptInput;
+}
+
+const parkPreflightPassed = Symbol('parkPreflightPassed');
+
+type ParkPreflightMarkedArgs = MaestroRunArgs & { [parkPreflightPassed]?: true };
+
+export function markParkPreflightPassed<T extends MaestroRunArgs>(args: T): T {
+  Object.defineProperty(args, parkPreflightPassed, { value: true, enumerable: true });
+  return args;
+}
+
+function learnedActionEntryAdmissionResult(
+  metadata: Pick<M7Metadata, 'id' | 'entry'>,
+  args: MaestroRunArgs,
+): ToolResult | null {
+  const refusal = learnedActionEntryRefusal(
+    metadata,
+    (args as ParkPreflightMarkedArgs)[parkPreflightPassed] === true,
+  );
+  if (!refusal) return null;
+  return failResult(refusal.message, 'BAD_RECORDING', {
+    actionId: metadata.id,
+    ...(refusal.kind === 'invalid-entry' ? { cause: { invalidEntry: refusal.raw } } : {}),
+  });
 }
 
 export interface MaestroAuthorityCallbacks {
@@ -726,6 +754,10 @@ export function createMaestroRunHandler(
       if (!capturedAction) {
         return failResult(`Action does not resolve uniquely to ${args.flowPath}.`, 'BAD_RECORDING');
       }
+      if (capturedAction.metadata) {
+        const entryRefusal = learnedActionEntryAdmissionResult(capturedAction.metadata, args);
+        if (entryRefusal) return entryRefusal;
+      }
       if (!capturedAction.replay.ok) {
         return failResult(capturedAction.replay.error, 'BAD_RECORDING');
       }
@@ -743,6 +775,11 @@ export function createMaestroRunHandler(
       }
     } else {
       return failResult('Provide either flowPath or inlineYaml.');
+    }
+
+    if (!capturedAction && args.actionMetadata) {
+      const entryRefusal = learnedActionEntryAdmissionResult(args.actionMetadata, args);
+      if (entryRefusal) return entryRefusal;
     }
 
     try {

@@ -16,7 +16,7 @@
 import { okResult, failResult } from '../utils.js';
 import type { ToolResult } from '../utils.js';
 import { getStoredEvents, getRecordingStartRoute } from './test-recorder.js';
-import { generateMaestro } from './test-recorder-generators.js';
+import { generateMaestro, parkedRecorderAnchorBlocker } from './test-recorder-generators.js';
 import {
   type ActionEntryMode,
   type ActionLifecycle,
@@ -126,6 +126,15 @@ export function createSaveAsActionHandler() {
     }
     const status: ActionLifecycle = args.status ?? 'experimental';
     const startRoute = getRecordingStartRoute() ?? undefined;
+    const parkedAnchorBlocker =
+      args.entry === 'parked' ? parkedRecorderAnchorBlocker(events) : null;
+    if (parkedAnchorBlocker) {
+      return failResult(
+        `cdp_record_test_save_as_action: entry: parked needs a probeable park anchor, but ${parkedAnchorBlocker}. Start the recording with a testID-bearing interaction or assertion, or save as entry: cold.`,
+        'BAD_RECORDING',
+        { cause: { parkedAnchorUnresolvable: parkedAnchorBlocker } },
+      );
+    }
 
     // generateMaestro emits the appId top section + M7 header + body
     // when bundleId + M7 fields are supplied. Mirrors what hand-authored

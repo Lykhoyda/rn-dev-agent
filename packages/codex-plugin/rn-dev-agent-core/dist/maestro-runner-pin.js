@@ -8028,11 +8028,16 @@ function asRunFlow(cmd2) {
     const o = v;
     return {
       file: typeof o.file === "string" ? o.file : void 0,
+      ..."file" in o && typeof o.file !== "string" ? { invalidFile: o.file } : {},
       when: o.when,
       commands: Array.isArray(o.commands) ? o.commands : void 0
     };
   }
-  return null;
+  return { invalidFile: v };
+}
+function invalidRunFlowFileReference(value) {
+  const kind = value === null ? "null" : Array.isArray(value) ? "array" : typeof value;
+  return `<invalid:${kind}>`;
 }
 function collectRunFlowFileReferences(yamlText) {
   try {
@@ -8093,6 +8098,17 @@ function expandRunFlows(commands, opts) {
       out.push(cmd2);
       continue;
     }
+    if ("invalidFile" in rf) {
+      throw new MaestroValidationError("runFlow.file must be a non-empty string", {
+        runFlowFile: invalidRunFlowFileReference(rf.invalidFile)
+      });
+    }
+    if (rf.file !== void 0 && rf.file.length === 0) {
+      throw new MaestroValidationError("runFlow.file must be a non-empty string", {
+        runFlowFile: rf.file
+      });
+    }
+    validateRunFlowValue(cmd2.runFlow);
     if (rf.file !== void 0) {
       try {
         const depth = opts._depth ?? 0;
@@ -13923,6 +13939,35 @@ function migrateLearnedActions(projectRoot) {
 import { readFileSync as readFileSync9 } from "node:fs";
 import { basename as basename6, dirname as dirname11, resolve as resolve7 } from "node:path";
 init_maestro_validator();
+
+// packages/rn-dev-agent-core/dist/domain/park-entry.js
+function resolveEntryMode(metadata) {
+  const raw = metadata.entry;
+  if (raw === void 0)
+    return { ok: true, mode: "cold" };
+  if (raw === "cold" || raw === "parked")
+    return { ok: true, mode: raw };
+  return { ok: false, raw: String(raw) };
+}
+function learnedActionEntryRefusal(metadata, parkPreflightPassed2) {
+  const entry = resolveEntryMode(metadata);
+  if (!entry.ok) {
+    return {
+      kind: "invalid-entry",
+      raw: entry.raw,
+      message: `Learned action declares unknown entry mode "${entry.raw}" \u2014 use "cold" or "parked".`
+    };
+  }
+  if (entry.mode === "parked" && !parkPreflightPassed2) {
+    return {
+      kind: "park-preflight-required",
+      message: "Learned action declares entry: parked and requires the read-only park preflight; replay it through cdp_run_action."
+    };
+  }
+  return null;
+}
+
+// packages/rn-dev-agent-core/dist/domain/action-verification-suite.js
 function prepareActionVerificationSuite(files, flowDir, engineStatus, context) {
   const prepared = [];
   const errors = [];
@@ -13964,6 +14009,16 @@ function prepareActionVerificationSuite(files, flowDir, engineStatus, context) {
         inlineYaml = parsed.raw;
         commands = parsed.commands;
         meta = parseM7Header(text, id);
+      }
+      const entryRefusal = meta ? learnedActionEntryRefusal(meta, false) : null;
+      if (entryRefusal) {
+        errors.push({
+          file,
+          error: entryRefusal.message,
+          code: "BAD_RECORDING",
+          ...entryRefusal.kind === "invalid-entry" ? { cause: { invalidEntry: entryRefusal.raw } } : {}
+        });
+        continue;
       }
       const refusal = replayCompatibilityPreflight({
         enginePin: meta?.enginePin,
@@ -15856,6 +15911,16 @@ function assembleMaestroArgs(baseArgs, paramArgs) {
     return baseArgs;
   return [...baseArgs.slice(0, -1), ...paramArgs, baseArgs[baseArgs.length - 1]];
 }
+var parkPreflightPassed = /* @__PURE__ */ Symbol("parkPreflightPassed");
+function learnedActionEntryAdmissionResult(metadata, args) {
+  const refusal = learnedActionEntryRefusal(metadata, args[parkPreflightPassed] === true);
+  if (!refusal)
+    return null;
+  return failResult(refusal.message, "BAD_RECORDING", {
+    actionId: metadata.id,
+    ...refusal.kind === "invalid-entry" ? { cause: { invalidEntry: refusal.raw } } : {}
+  });
+}
 function nestedMaestroAuthorityCallbacks(args) {
   return {
     claimNativeOrigin: () => claimManagedNativeOriginAuthority(args),
@@ -16151,6 +16216,11 @@ function createMaestroRunHandler(deps = {}) {
       if (!capturedAction) {
         return failResult(`Action does not resolve uniquely to ${args.flowPath}.`, "BAD_RECORDING");
       }
+      if (capturedAction.metadata) {
+        const entryRefusal = learnedActionEntryAdmissionResult(capturedAction.metadata, args);
+        if (entryRefusal)
+          return entryRefusal;
+      }
       if (!capturedAction.replay.ok) {
         return failResult(capturedAction.replay.error, "BAD_RECORDING");
       }
@@ -16168,6 +16238,11 @@ function createMaestroRunHandler(deps = {}) {
       }
     } else {
       return failResult("Provide either flowPath or inlineYaml.");
+    }
+    if (!capturedAction && args.actionMetadata) {
+      const entryRefusal = learnedActionEntryAdmissionResult(args.actionMetadata, args);
+      if (entryRefusal)
+        return entryRefusal;
     }
     try {
       const runFlowOpts = args.flowPath && flowPathClassification === "outside" ? { flowDir: dirname14(args.flowPath), flowRoot: dirname14(args.flowPath) } : {};

@@ -49,6 +49,7 @@ import {
   type AutoRepairOutcome,
   type AutoRepairRefusedReason,
   type ActionFailureCode,
+  type M7Metadata,
   appendRunRecord,
   shouldAutoPromoteToActive,
 } from '../domain/reusable-action.js';
@@ -57,7 +58,11 @@ import {
   isAutoRepairable,
   type MaestroFailure,
 } from '../domain/maestro-error-parser.js';
-import { createMaestroRunHandler } from './maestro-run.js';
+import {
+  createMaestroRunHandler,
+  markParkPreflightPassed,
+  type MaestroRunArgs,
+} from './maestro-run.js';
 import { createRepairActionHandler } from './repair-action.js';
 import { isValidActionId } from '../domain/path-safety.js';
 import { classifyRouteDriftAfterFailure } from '../nav-graph/route-sequence.js';
@@ -76,6 +81,7 @@ import { flowUsesClearState, resolveIosAppFile } from './resolve-ios-app-file.js
 import { actionReplayPreflight } from '../domain/action-engine-compat.js';
 import {
   deriveParkAnchor,
+  parkedCommandMayMutate,
   parkedBodyViolation,
   resolveEntryMode,
   type ParkRefusalCause,
@@ -384,6 +390,45 @@ function readMaestroTerminal(env: MaestroEnvelope): MaestroTerminal | undefined 
   if (fromData) return fromData;
   const fromMeta = (env.meta as { terminal?: MaestroTerminal } | undefined)?.terminal;
   return fromMeta;
+}
+
+const PARKED_READ_ONLY_STEP_VERBS = new Set([
+  'assertVisible',
+  'assertNotVisible',
+  'extendedWaitUntil',
+  'waitForAnimationToEnd',
+  'assert',
+  'waitVisible',
+  'wait',
+]);
+
+function completedParkedMutation(env: MaestroEnvelope, commands: readonly unknown[]): boolean {
+  const metaSteps = (env.meta as { steps?: unknown } | undefined)?.steps;
+  const steps = Array.isArray(env.data?.steps)
+    ? env.data.steps
+    : Array.isArray(metaSteps)
+      ? metaSteps
+      : [];
+  let passedSteps = 0;
+  for (const rawStep of steps) {
+    if (!rawStep || typeof rawStep !== 'object') continue;
+    const step = rawStep as { index?: unknown; verb?: unknown; name?: unknown; status?: unknown };
+    if (step.status !== 'pass') continue;
+    passedSteps += 1;
+    const verb = String(step.verb ?? step.name ?? '');
+    if (PARKED_READ_ONLY_STEP_VERBS.has(verb)) continue;
+    const index = Number(step.index);
+    if (verb === 'runFlow' && Number.isSafeInteger(index) && commands[index] !== undefined) {
+      if (parkedCommandMayMutate(commands[index])) return true;
+      continue;
+    }
+    return true;
+  }
+  const completedSteps = readMaestroTerminal(env)?.completedSteps ?? 0;
+  if (passedSteps >= completedSteps) return false;
+  return commands
+    .slice(0, Math.max(0, completedSteps))
+    .some((command) => parkedCommandMayMutate(command));
 }
 
 function readMaestroOutput(env: MaestroEnvelope): string {
@@ -833,22 +878,19 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
           ? { strictRunRecordId: outcome.persistedRunId }
           : {};
 
-      // ─── GH #628: parked-entry preflight (read-only, refuse-closed) ──
-      // Verifies the declared park state before anything can dispatch:
-      // zero steps run on refusal, and the preflight never launches,
-      // foregrounds, navigates, or repairs.
-      if (entryMode === 'parked') {
+      const runParkPreflight = async (
+        commands: readonly unknown[],
+        metadata: Pick<M7Metadata, 'expectedRouteSequence'>,
+        autoRepair: AutoRepairOutcome,
+        phase: 'initial' | 'retry',
+        disclosure: WriteDisclosureKind,
+      ): Promise<ToolResult | null> => {
+        if (entryMode !== 'parked') return null;
         const refuseParkState = async (
           cause: ParkRefusalCause,
           detail: Record<string, unknown>,
           headline: string,
         ): Promise<ToolResult> => {
-          const autoRepair: AutoRepairOutcome = {
-            attempted: false,
-            outcome: 'refused',
-            refusedReason: 'NOT_REPAIRABLE_KIND',
-            phases: { firstAttemptMs: 0 },
-          };
           const persisted = await persistRunWithDevice({
             timestamp: new Date().toISOString(),
             durationMs: Date.now() - t0,
@@ -859,35 +901,29 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
             autoRepair,
           });
           return failResult(
-            `cdp_run_action: ${args.actionId} refused before any step ran — ${headline}. Drive the app to the action's park state and retry; the parked preflight never launches or navigates for you.`,
+            phase === 'initial'
+              ? `cdp_run_action: ${args.actionId} refused before any step ran — ${headline}. Drive the app to the action's park state and retry; the parked preflight never launches or navigates for you.`
+              : `cdp_run_action: ${args.actionId} refused before auto-repair retry — ${headline}. No retry step ran; drive the app back to the action's park state and replay from the start.`,
             'PARK_STATE_MISSING',
             {
               actionId: args.actionId,
               failureKind: 'PARK_STATE_MISSING',
               parkPreflight: { cause, ...detail },
               autoRepair,
-              writes: writeDisclosure('none', persisted),
+              writes: writeDisclosure(disclosure, persisted),
               ...strictRunRecordMeta(persisted),
             },
           );
         };
-        const anchor = deriveParkAnchor(preflightCommands, args.params ?? {});
+        const anchor = deriveParkAnchor(commands, args.params ?? {});
         if (!anchor.ok) {
           return refuseParkState('anchor-missing', { reason: anchor.reason }, anchor.reason);
         }
-        // The probe reads only through the authority-admitted bundle plane —
-        // same admission the route-drift reader uses (GH #628 pairing review).
         const bundleAdmitted = await claimBundleAuthority(args);
         const refuseParkUnverifiable = async (
           detail: Record<string, unknown>,
           headline: string,
         ): Promise<ToolResult> => {
-          const autoRepair: AutoRepairOutcome = {
-            attempted: false,
-            outcome: 'refused',
-            refusedReason: 'NOT_REPAIRABLE_KIND',
-            phases: { firstAttemptMs: 0 },
-          };
           const persisted = await persistRunWithDevice({
             timestamp: new Date().toISOString(),
             durationMs: Date.now() - t0,
@@ -898,14 +934,14 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
             autoRepair,
           });
           return failResult(
-            `cdp_run_action: ${args.actionId} is entry: parked but the park state cannot be verified — ${headline}. No step ran.`,
+            `cdp_run_action: ${args.actionId} is entry: parked but the park state cannot be verified ${phase === 'initial' ? 'before replay' : 'before auto-repair retry'} — ${headline}. ${phase === 'initial' ? 'No step ran.' : 'No retry step ran.'}`,
             'CDP_NOT_CONNECTED',
             {
               actionId: args.actionId,
               failureKind: 'CDP_NOT_CONNECTED',
               parkPreflight: detail,
               autoRepair,
-              writes: writeDisclosure('none', persisted),
+              writes: writeDisclosure(disclosure, persisted),
               ...strictRunRecordMeta(persisted),
             },
           );
@@ -940,11 +976,9 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
             `park anchor "${anchor.anchorId}" is not on screen${probe.reason ? ` (${probe.reason})` : ''}`,
           );
         }
-        const expectedSeq = action.metadata.expectedRouteSequence;
+        const expectedSeq = metadata.expectedRouteSequence;
         if (expectedSeq && expectedSeq.length > 0) {
           const liveRoute = await getLiveRoute().catch(() => null);
-          // An unreadable route is not evidence of a wrong route — refuse
-          // under the connectivity distinction, not PARK_STATE_MISSING.
           if (liveRoute === null) {
             return refuseParkUnverifiable(
               { anchorId: anchor.anchorId, expectedRoute: expectedSeq[0] },
@@ -959,7 +993,22 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
             );
           }
         }
-      }
+        return null;
+      };
+
+      const firstParkRefusal = await runParkPreflight(
+        preflightCommands,
+        action.metadata,
+        {
+          attempted: false,
+          outcome: 'refused',
+          refusedReason: 'NOT_REPAIRABLE_KIND',
+          phases: { firstAttemptMs: 0 },
+        },
+        'initial',
+        'none',
+      );
+      if (firstParkRefusal) return firstParkRefusal;
 
       // ─── First attempt ───────────────────────────────────────────────
       // Issue #120: capture per-phase timing so MTTR analysis (#105) can
@@ -975,24 +1024,26 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
       // GH #623: the post-repair retry names this attempt as its parent.
       const initialAttemptId = randomUUID();
       const maxAttempts = autoRepairEnabled ? 2 : 1;
+      const firstRunArgs: MaestroRunArgs = {
+        inlineYaml: replayYaml,
+        actionMetadata: action.metadata,
+        platform: args.platform,
+        appId: args.appId,
+        ...(appFile ? { appFile } : {}),
+        deviceId: maestroDeviceId,
+        timeoutMs,
+        params: args.params,
+        attempt: { attemptId: initialAttemptId, ordinal: 1, maxAttempts, kind: 'initial' },
+        claimNativeOrigin: () => claimNativeOrigin(args),
+        completeNativeOrigin: (targetExpected) => completeNativeOrigin(args, targetExpected),
+        relaunchManagedApp: (stopApp) => relaunchManagedApp(args, stopApp),
+        reproveManagedOrigin: () => reproveManagedOrigin(args),
+        completeRunnerPark: (signal) => completeManagedRunnerParkAuthority(args, signal),
+        reissueInstallReceipt: () => reissueInstallReceipt(args),
+      };
+      if (entryMode === 'parked') markParkPreflightPassed(firstRunArgs);
       const firstResult = await measureStep('maestro-first-attempt', () =>
-        maestroRun({
-          inlineYaml: replayYaml,
-          actionMetadata: action.metadata,
-          platform: args.platform,
-          appId: args.appId,
-          ...(appFile ? { appFile } : {}),
-          deviceId: maestroDeviceId,
-          timeoutMs,
-          params: args.params,
-          attempt: { attemptId: initialAttemptId, ordinal: 1, maxAttempts, kind: 'initial' },
-          claimNativeOrigin: () => claimNativeOrigin(args),
-          completeNativeOrigin: (targetExpected) => completeNativeOrigin(args, targetExpected),
-          relaunchManagedApp: (stopApp) => relaunchManagedApp(args, stopApp),
-          reproveManagedOrigin: () => reproveManagedOrigin(args),
-          completeRunnerPark: (signal) => completeManagedRunnerParkAuthority(args, signal),
-          reissueInstallReceipt: () => reissueInstallReceipt(args),
-        }),
+        maestroRun(firstRunArgs),
       );
       const firstAttemptMs = Date.now() - tBeforeFirst;
       const firstEnv = parseEnvelope(firstResult, 'maestro_run');
@@ -1301,6 +1352,39 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
         );
       }
 
+      if (entryMode === 'parked' && completedParkedMutation(firstEnv, preflightCommands)) {
+        const autoRepair: AutoRepairOutcome = {
+          attempted: false,
+          outcome: 'refused',
+          refusedReason: 'NOT_REPAIRABLE_KIND',
+          phases: { firstAttemptMs },
+        };
+        const persisted = await persistRunWithDevice({
+          timestamp: new Date().toISOString(),
+          durationMs: Date.now() - t0,
+          status: 'fail',
+          failureCode: 'SELECTOR_NOT_FOUND',
+          failureDetail: firstFailureDetail.slice(0, 1000),
+          trigger,
+          autoRepair,
+        });
+        return failResult(
+          `cdp_run_action: ${args.actionId} failed with SELECTOR_NOT_FOUND (${failure.selector}) after a parked mutation completed; auto-repair retry refused because replaying the body could repeat that mutation.`,
+          'TESTID_NOT_FOUND',
+          {
+            actionId: args.actionId,
+            failureKind: failure.kind,
+            failureSelector: failure.selector,
+            underlyingFailure: firstFailureDetail,
+            terminal: readMaestroTerminal(firstEnv),
+            autoRepair,
+            firstAttemptOutput: boundedOutput(firstOutput),
+            writes: writeDisclosure('none', persisted),
+            ...strictRunRecordMeta(persisted),
+          },
+        );
+      }
+
       const tBeforeRepair = Date.now();
       const repairResult = await measureStep('selector-repair', () =>
         repairAction({
@@ -1395,36 +1479,50 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
       }
       const retryYaml = reloadedAction.replay.yamlText;
 
+      const retryParkRefusal = await runParkPreflight(
+        reloadedAction.replay.commands,
+        reloadedAction.metadata,
+        {
+          attempted: true,
+          outcome: 'refused',
+          refusedReason: 'NOT_REPAIRABLE_KIND',
+          phases: { firstAttemptMs, repairMs },
+        },
+        'retry',
+        'auto-repair',
+      );
+      if (retryParkRefusal) return retryParkRefusal;
+
       const tBeforeRetry = Date.now();
       probeDeviceId = null;
       const retryCorpusRefusal = replayCorpusIdentityRefusal(loadContext, args.actionId);
       if (retryCorpusRefusal) return retryCorpusRefusal;
       const repairedAttemptId = randomUUID();
-      const retryResult = await measureStep('maestro-retry', () =>
-        maestroRun({
-          inlineYaml: retryYaml,
-          actionMetadata: reloadedAction.metadata,
-          platform: args.platform,
-          appId: args.appId,
-          ...(appFile ? { appFile } : {}),
-          deviceId: maestroDeviceId,
-          timeoutMs,
-          params: args.params,
-          attempt: {
-            attemptId: repairedAttemptId,
-            ordinal: 2,
-            maxAttempts,
-            kind: 'repaired',
-            parentAttemptId: initialAttemptId,
-          },
-          claimNativeOrigin: () => claimNativeOrigin(args),
-          completeNativeOrigin: (targetExpected) => completeNativeOrigin(args, targetExpected),
-          relaunchManagedApp: (stopApp) => relaunchManagedApp(args, stopApp),
-          reproveManagedOrigin: () => reproveManagedOrigin(args),
-          completeRunnerPark: (signal) => completeManagedRunnerParkAuthority(args, signal),
-          reissueInstallReceipt: () => reissueInstallReceipt(args),
-        }),
-      );
+      const retryRunArgs: MaestroRunArgs = {
+        inlineYaml: retryYaml,
+        actionMetadata: reloadedAction.metadata,
+        platform: args.platform,
+        appId: args.appId,
+        ...(appFile ? { appFile } : {}),
+        deviceId: maestroDeviceId,
+        timeoutMs,
+        params: args.params,
+        attempt: {
+          attemptId: repairedAttemptId,
+          ordinal: 2,
+          maxAttempts,
+          kind: 'repaired',
+          parentAttemptId: initialAttemptId,
+        },
+        claimNativeOrigin: () => claimNativeOrigin(args),
+        completeNativeOrigin: (targetExpected) => completeNativeOrigin(args, targetExpected),
+        relaunchManagedApp: (stopApp) => relaunchManagedApp(args, stopApp),
+        reproveManagedOrigin: () => reproveManagedOrigin(args),
+        completeRunnerPark: (signal) => completeManagedRunnerParkAuthority(args, signal),
+        reissueInstallReceipt: () => reissueInstallReceipt(args),
+      };
+      if (entryMode === 'parked') markParkPreflightPassed(retryRunArgs);
+      const retryResult = await measureStep('maestro-retry', () => maestroRun(retryRunArgs));
       const retryMs = Date.now() - tBeforeRetry;
       const retryEnv = parseEnvelope(retryResult, 'maestro_run');
       const retryPassed = retryEnv.ok === true && retryEnv.data?.passed === true;

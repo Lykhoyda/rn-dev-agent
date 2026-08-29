@@ -41,6 +41,7 @@ import {
   replayCompatibilityPreflight,
 } from '../domain/action-engine-compat.js';
 import { parseM7Header } from '../domain/reusable-action.js';
+import { learnedActionEntryRefusal } from '../domain/park-entry.js';
 import {
   captureActionFromContext,
   openReadableActionLoadContext,
@@ -107,6 +108,7 @@ interface FlowResult {
   runner?: string;
   transport?: string;
   treeEnvelope?: Record<string, unknown>;
+  cause?: { invalidEntry: string };
 }
 
 interface PreparedFlow {
@@ -297,6 +299,20 @@ export function createMaestroTestAllHandler(
         const requiresNativeRuntime =
           iosProofPlan?.ok !== true ||
           iosProofPlan.segments.some((segment) => segment.domain === 'xctest-native');
+        const entryRefusal = meta ? learnedActionEntryRefusal(meta, false) : null;
+        if (entryRefusal) {
+          preflightResults.push({
+            name,
+            passed: false,
+            durationMs: now() - start,
+            error: entryRefusal.message,
+            code: 'BAD_RECORDING',
+            ...(entryRefusal.kind === 'invalid-entry'
+              ? { cause: { invalidEntry: entryRefusal.raw } }
+              : {}),
+          });
+          continue;
+        }
         const preflight = replayCompatibilityPreflight({
           enginePin: meta?.enginePin,
           commands: parsedCommands,
@@ -340,20 +356,28 @@ export function createMaestroTestAllHandler(
       }
     }
     if (preflightResults.length > 0) {
-      return failResult(
-        `Suite preflight refused ${preflightResults.length} of ${flows.length} flows before execution.`,
-        {
-          total: flows.length,
-          executed: 0,
-          passed: 0,
-          failed: preflightResults.length,
-          platform,
-          flowDir,
-          runner: useSharedIosPlanner ? 'semantic-proof-planner' : dispatch.runner,
-          requestedDeviceId: requestedDeviceId ?? null,
-          results: preflightResults,
-        },
-      );
+      const meta = {
+        total: flows.length,
+        executed: 0,
+        passed: 0,
+        failed: preflightResults.length,
+        platform,
+        flowDir,
+        runner: useSharedIosPlanner ? 'semantic-proof-planner' : dispatch.runner,
+        requestedDeviceId: requestedDeviceId ?? null,
+        results: preflightResults,
+      };
+      const entryRefusal = preflightResults.find((result) => result.code === 'BAD_RECORDING');
+      return entryRefusal
+        ? failResult(
+            `Suite preflight refused ${preflightResults.length} of ${flows.length} flows before execution.`,
+            'BAD_RECORDING',
+            { ...meta, ...(entryRefusal.cause ? { cause: entryRefusal.cause } : {}) },
+          )
+        : failResult(
+            `Suite preflight refused ${preflightResults.length} of ${flows.length} flows before execution.`,
+            meta,
+          );
     }
 
     const timeout = args.timeoutPerFlow ?? 120_000;

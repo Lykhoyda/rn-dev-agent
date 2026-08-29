@@ -11,12 +11,38 @@ export type ParkRefusalCause = 'anchor-missing' | 'route-mismatch' | 'app-backgr
 
 export type EntryModeResolution = { ok: true; mode: ActionEntryMode } | { ok: false; raw: string };
 
+export type LearnedActionEntryRefusal =
+  | { kind: 'invalid-entry'; raw: string; message: string }
+  | { kind: 'park-preflight-required'; message: string };
+
 /** Absent means cold; an unknown declared value is refused, never downgraded. */
 export function resolveEntryMode(metadata: Pick<M7Metadata, 'entry'>): EntryModeResolution {
   const raw = metadata.entry;
   if (raw === undefined) return { ok: true, mode: 'cold' };
   if (raw === 'cold' || raw === 'parked') return { ok: true, mode: raw };
   return { ok: false, raw: String(raw) };
+}
+
+export function learnedActionEntryRefusal(
+  metadata: Pick<M7Metadata, 'entry'>,
+  parkPreflightPassed: boolean,
+): LearnedActionEntryRefusal | null {
+  const entry = resolveEntryMode(metadata);
+  if (!entry.ok) {
+    return {
+      kind: 'invalid-entry',
+      raw: entry.raw,
+      message: `Learned action declares unknown entry mode "${entry.raw}" — use "cold" or "parked".`,
+    };
+  }
+  if (entry.mode === 'parked' && !parkPreflightPassed) {
+    return {
+      kind: 'park-preflight-required',
+      message:
+        'Learned action declares entry: parked and requires the read-only park preflight; replay it through cdp_run_action.',
+    };
+  }
+  return null;
 }
 
 function commandName(command: unknown): string | null {
@@ -88,12 +114,22 @@ export function parkedBodyViolation(commands: readonly unknown[]): ParkedBodyVio
 }
 
 const ANCHOR_COMMANDS = new Set(['assertVisible', 'extendedWaitUntil', 'tapOn']);
-const PRE_ANCHOR_READ_COMMANDS = new Set([
+const PARKED_READ_ONLY_COMMANDS = new Set([
   'assertVisible',
   'assertNotVisible',
   'extendedWaitUntil',
   'waitForAnimationToEnd',
 ]);
+
+export function parkedCommandMayMutate(command: unknown): boolean {
+  const name = commandName(command);
+  const composite = compositeShape(command);
+  if (composite?.kind === 'file') return true;
+  if (composite?.kind === 'inline') {
+    return composite.commands.some((nested) => parkedCommandMayMutate(nested));
+  }
+  return name === null || !PARKED_READ_ONLY_COMMANDS.has(name);
+}
 
 function anchorIdOf(name: string, value: unknown): string | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
@@ -140,7 +176,7 @@ function firstAnchorId(
       if (nested.kind !== 'continue') return nested;
       continue;
     }
-    if (name !== null && PRE_ANCHOR_READ_COMMANDS.has(name)) continue;
+    if (name !== null && PARKED_READ_ONLY_COMMANDS.has(name)) continue;
     return { kind: 'blocked' };
   }
   return { kind: 'continue' };

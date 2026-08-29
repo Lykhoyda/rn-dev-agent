@@ -14,16 +14,19 @@ import {
 } from './action-store.js';
 import { parseAndValidateFlow } from './maestro-validator.js';
 import { parseM7Header, type M7Metadata } from './reusable-action.js';
+import { learnedActionEntryRefusal } from './park-entry.js';
 
 export interface PreparedActionVerificationFlow {
   file: string;
   inlineYaml: string;
-  actionMetadata?: Pick<M7Metadata, 'id' | 'enginePin'>;
+  actionMetadata?: Pick<M7Metadata, 'id' | 'enginePin' | 'entry'>;
 }
 
 export interface ActionVerificationPreflightError {
   file: string;
   error: string;
+  code?: 'BAD_RECORDING';
+  cause?: { invalidEntry: string };
 }
 
 export function prepareActionVerificationSuite(
@@ -74,6 +77,18 @@ export function prepareActionVerificationSuite(
         inlineYaml = parsed.raw;
         commands = parsed.commands;
         meta = parseM7Header(text, id);
+      }
+      const entryRefusal = meta ? learnedActionEntryRefusal(meta, false) : null;
+      if (entryRefusal) {
+        errors.push({
+          file,
+          error: entryRefusal.message,
+          code: 'BAD_RECORDING',
+          ...(entryRefusal.kind === 'invalid-entry'
+            ? { cause: { invalidEntry: entryRefusal.raw } }
+            : {}),
+        });
+        continue;
       }
       const refusal = replayCompatibilityPreflight({
         enginePin: meta?.enginePin,
