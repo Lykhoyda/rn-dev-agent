@@ -569,6 +569,36 @@ test('GH #628: maestro_run refuses parked and invalid learned-action entry modes
   assert.equal(spawned, false);
 });
 
+test('GH #628: maestro_run admits external M7 flows only through the shared entry contract', async () => {
+  const parkedPath = join(project.root, 'external-parked.yaml');
+  const invalidPath = join(project.root, 'external-invalid.yaml');
+  writeFileSync(parkedPath, parkedYaml(PARKED_BODY), 'utf8');
+  writeFileSync(
+    invalidPath,
+    parkedYaml(PARKED_BODY).replace('# entry: parked', '# entry: parkd'),
+    'utf8',
+  );
+  let spawned = false;
+  const handler = createMaestroRunHandler({
+    getActiveSession: () => null,
+    execFile: async () => {
+      spawned = true;
+      return { stdout: '', stderr: '' };
+    },
+  });
+
+  const parked = envelope(await handler({ platform: 'ios', flowPath: parkedPath }));
+  assert.equal(parked.ok, false);
+  assert.equal(parked.code, 'BAD_RECORDING');
+  assert.match(parked.error ?? '', /cdp_run_action/);
+
+  const invalid = envelope(await handler({ platform: 'ios', flowPath: invalidPath }));
+  assert.equal(invalid.ok, false);
+  assert.equal(invalid.code, 'BAD_RECORDING');
+  assert.deepEqual(invalid.meta?.cause, { invalidEntry: 'parkd' });
+  assert.equal(spawned, false);
+});
+
 test('GH #628: suite executors refuse parked actions before execution', async () => {
   project.seedAction('parked-sign-mandate', parkedYaml(PARKED_BODY), null);
   let executed = false;
@@ -788,6 +818,34 @@ test('GH #628: parked save preserves a selectorless opening mutation as a refusa
       /recorded tap interaction.*no testID or label/,
     );
     assert.equal(project.yamlExists('parked-selectorless-opening'), false);
+  } finally {
+    _resetState();
+  }
+});
+
+test('GH #628: parked save refuses an unpaired navigation before its destination anchor', async () => {
+  _setStoredEvents([
+    { type: 'navigate', from: 'Start', to: 'Destination', t: 1 },
+    { type: 'tap', testID: 'destination-anchor', route: 'Destination', t: 2 },
+  ]);
+  _setRecordingStartRoute('Start');
+  try {
+    const result = envelope(
+      await createSaveAsActionHandler()({
+        id: 'parked-unpaired-navigation',
+        intent: 'continue after an unpaired recorded navigation',
+        bundleId: 'com.test.app',
+        projectRoot: project.root,
+        entry: 'parked',
+      }),
+    );
+    assert.equal(result.ok, false);
+    assert.equal(result.code, 'BAD_RECORDING');
+    assert.match(
+      String((result.meta?.cause as Record<string, unknown>)?.parkedAnchorUnresolvable),
+      /recorded navigation to Destination.*before a probeable park anchor/,
+    );
+    assert.equal(project.yamlExists('parked-unpaired-navigation'), false);
   } finally {
     _resetState();
   }

@@ -209,6 +209,9 @@ export function maestroSelector(ev: RecordedEvent): string | null {
 export function parkedRecorderAnchorBlocker(events: readonly RecordedEvent[]): string | null {
   for (const event of events) {
     if ((event.type === 'tap' || event.type === 'type') && event.testID) return null;
+    if (event.type === 'navigate') {
+      return `recorded navigation to ${event.to} occurred before a probeable park anchor`;
+    }
     if (
       (event.type === 'tap' || event.type === 'long_press' || event.type === 'type') &&
       maestroSelector(event) === null

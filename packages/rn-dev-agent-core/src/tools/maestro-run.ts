@@ -754,10 +754,6 @@ export function createMaestroRunHandler(
       if (!capturedAction) {
         return failResult(`Action does not resolve uniquely to ${args.flowPath}.`, 'BAD_RECORDING');
       }
-      if (capturedAction.metadata) {
-        const entryRefusal = learnedActionEntryAdmissionResult(capturedAction.metadata, args);
-        if (entryRefusal) return entryRefusal;
-      }
       if (!capturedAction.replay.ok) {
         return failResult(capturedAction.replay.error, 'BAD_RECORDING');
       }
@@ -777,8 +773,14 @@ export function createMaestroRunHandler(
       return failResult('Provide either flowPath or inlineYaml.');
     }
 
-    if (!capturedAction && args.actionMetadata) {
-      const entryRefusal = learnedActionEntryAdmissionResult(args.actionMetadata, args);
+    const semanticActionMeta =
+      capturedAction?.metadata ??
+      args.actionMetadata ??
+      (args.flowPath
+        ? parseM7Header(rawYaml, basename(args.flowPath).replace(/\.ya?ml$/i, ''))
+        : null);
+    if (semanticActionMeta) {
+      const entryRefusal = learnedActionEntryAdmissionResult(semanticActionMeta, args);
       if (entryRefusal) return entryRefusal;
     }
 
@@ -815,12 +817,6 @@ export function createMaestroRunHandler(
       throw err;
     }
 
-    const semanticActionMeta =
-      capturedAction?.metadata ??
-      args.actionMetadata ??
-      (args.flowPath
-        ? parseM7Header(rawYaml, basename(args.flowPath).replace(/\.ya?ml$/i, ''))
-        : null);
     const iosProofPlan =
       platform === 'ios' && replayFactory
         ? planIosProofDomains(validatedCommands, args.params ?? {})
