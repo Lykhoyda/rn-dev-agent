@@ -28,15 +28,31 @@ const APP_ID = process.env.MANAGED_METRO_PROOF_APP_ID ?? 'com.rndevagent.testapp
 const DEVICE_TYPE = process.env.MANAGED_METRO_PROOF_DEVICE_TYPE ?? 'iPhone 17';
 const RUNTIME = process.env.MANAGED_METRO_PROOF_RUNTIME;
 const FLEET_CAP = 5;
-// A task-owned authority registry: the shared one is contended by other live
-// sessions ("database is locked"), and an isolated root also guarantees this
-// proof cannot disturb them.
+// NOTE: this does NOT isolate the proof from other live sessions. The supervisor
+// tool path only forwards RN_DEV_AGENT_STATE_DIR into the integration manifest,
+// and resolveAuthorityStateLayout opens — never creates — an explicitly requested
+// home, so the supervisor still uses the shared default registry. Run this proof
+// only in a window where no other lane owns the app root.
 const STATE_DIR =
   process.env.MANAGED_METRO_PROOF_STATE_DIR ??
   mkdtempSync(join(tmpdir(), 'rn-managed-metro-proof-state-'));
 
 if (!APP_ROOT || !existsSync(join(APP_ROOT, 'package.json'))) {
   console.error('MANAGED_METRO_PROOF_APP must point at a React Native app root');
+  process.exit(1);
+}
+
+// A 200 from /index.bundle only proves Metro answered. This proof is falsifiable
+// only if the transform pipeline actually forks a descendant, so the fixture has
+// to carry one. NativeWind's Tailwind processor is that descendant; without it
+// the run would pass against the pre-fix fence too. The automated falsifiability
+// control is test/integration/managed-metro-product-bundle.test.ts, which drives
+// the forked-worker transport directly.
+if (!existsSync(join(APP_ROOT, 'node_modules', 'nativewind'))) {
+  console.error(
+    `MANAGED_METRO_PROOF_APP (${APP_ROOT}) has no installed nativewind, so its bundle ` +
+      'request would not fork the descendant this proof exists to exercise',
+  );
   process.exit(1);
 }
 
@@ -51,6 +67,24 @@ function bootedSimulatorCount(): number {
   return simctl(['list', 'devices', 'booted'])
     .split('\n')
     .filter((line) => line.includes('(Booted)')).length;
+}
+
+// SIGINT then a bounded wait then SIGKILL: the state directory must not be
+// removed while the supervisor can still write to it.
+async function stopSupervisor(supervisor: {
+  child: { kill: (signal: string) => boolean; exitCode: number | null };
+}): Promise<boolean> {
+  const settle = async (budgetMs: number): Promise<boolean> => {
+    for (let waited = 0; waited < budgetMs; waited += 100) {
+      if (supervisor.child.exitCode !== null) return true;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    return supervisor.child.exitCode !== null;
+  };
+  supervisor.child.kill('SIGINT');
+  if (await settle(10_000)) return true;
+  supervisor.child.kill('SIGKILL');
+  return settle(5_000);
 }
 
 function log(step: string, detail = ''): void {
@@ -110,14 +144,13 @@ async function main(): Promise<void> {
     '';
   assert.ok(runtime, 'no available iOS runtime for the task-owned simulator');
 
-  const udid = simctl(['create', deviceName, DEVICE_TYPE, runtime]);
-  log('created task-owned simulator', `${deviceName} ${udid}`);
-
   let stopEnvelope: Record<string, any> | null = null;
   let restoreEnvelope: Record<string, any> | null = null;
   let releaseEnvelope: Record<string, any> | null = null;
   let integrationApplied = false;
   let deviceRemoved = false;
+  let primaryError: unknown = null;
+  const cleanupFailures: string[] = [];
   const supervisor = startSupervisor({
     cwd: APP_ROOT,
     lineTimeoutMs: 180_000,
@@ -137,6 +170,21 @@ async function main(): Promise<void> {
       return text ? JSON.parse(text) : message.result;
     }
   };
+
+  // Allocated after the supervisor, so a throw from startSupervisor cannot leak a
+  // simulator that nothing is yet in scope to delete; a failure here has to take
+  // the supervisor down with it for the same reason.
+  let udid: string;
+  try {
+    udid = simctl(['create', deviceName, DEVICE_TYPE, runtime]);
+  } catch (error) {
+    await stopSupervisor(supervisor);
+    if (!process.env.MANAGED_METRO_PROOF_STATE_DIR) {
+      rmSync(STATE_DIR, { recursive: true, force: true });
+    }
+    throw error;
+  }
+  log('created task-owned simulator', `${deviceName} ${udid}`);
 
   try {
     // A brand-new simulator's first boot runs data migration; it routinely
@@ -183,6 +231,7 @@ async function main(): Promise<void> {
       cwd: APP_ROOT,
       encoding: 'utf8',
       timeout: 3_600_000,
+      maxBuffer: 64 * 1024 * 1024,
       env: { ...process.env, RN_DEV_AGENT_STATE_DIR: STATE_DIR, PATH: PINNED_PATH },
     });
     assert.equal(
@@ -236,7 +285,16 @@ async function main(): Promise<void> {
       ],
       { encoding: 'utf8', timeout: 660_000 },
     );
-    assert.equal(bundle.stdout.trim(), '200', `bundle request failed: ${bundle.stdout}`);
+    assert.equal(
+      bundle.status,
+      0,
+      `bundle request did not complete: ${bundle.stdout} ${bundle.stderr}`,
+    );
+    assert.equal(
+      bundle.stdout.trim(),
+      '200',
+      `bundle request failed: ${bundle.stdout} ${bundle.stderr}`,
+    );
     log('bundle request served');
 
     const afterBundle = (await call('rn_session', { action: 'status', projectRoot: APP_ROOT }))
@@ -248,11 +306,14 @@ async function main(): Promise<void> {
     );
     assert.equal(afterBundle?.metroTerminal ?? null, null);
     log('managed Metro survived the proof caller');
+  } catch (error) {
+    primaryError = error;
   } finally {
     // Cleanup must never throw: an exception here would mask the failure that
-    // brought us in. Outcomes are recorded and asserted after the block. Each
-    // step is judged on the tool's own {ok} envelope — call() resolves a failed
-    // envelope rather than rejecting, so catching alone proves nothing.
+    // brought us in. Every outcome is recorded and judged after the block, on the
+    // failure path too. Each step is judged on the tool's own {ok} envelope —
+    // call() resolves a failed envelope rather than rejecting, so catching alone
+    // proves nothing.
     try {
       stopEnvelope = await call('rn_session', { action: 'stop_metro', projectRoot: APP_ROOT });
       log('metro stopped', `ok=${stopEnvelope?.ok}`);
@@ -283,7 +344,9 @@ async function main(): Promise<void> {
     } catch (error) {
       log('session release failed', String(error));
     }
-    supervisor.child.kill('SIGINT');
+    if (!(await stopSupervisor(supervisor))) {
+      cleanupFailures.push('the proof supervisor did not exit');
+    }
     try {
       simctl(['shutdown', udid]);
     } catch {
@@ -294,30 +357,42 @@ async function main(): Promise<void> {
     } catch (error) {
       log('simulator delete failed', String(error));
     }
-    // Only this task's device is ours to account for; the fleet-wide count moves
-    // under concurrent lanes.
-    deviceRemoved = !simctl(['list', 'devices']).includes(udid);
-    log('task-owned simulator removed', String(deviceRemoved));
+    try {
+      // Only this task's device is ours to account for; the fleet-wide count moves
+      // under concurrent lanes.
+      deviceRemoved = !simctl(['list', 'devices']).includes(udid);
+      log('task-owned simulator removed', String(deviceRemoved));
+    } catch (error) {
+      cleanupFailures.push(`the device inventory could not be read: ${String(error)}`);
+    }
     if (!process.env.MANAGED_METRO_PROOF_STATE_DIR) {
-      rmSync(STATE_DIR, { recursive: true, force: true });
+      try {
+        rmSync(STATE_DIR, { recursive: true, force: true });
+      } catch (error) {
+        cleanupFailures.push(`the proof state directory was not removed: ${String(error)}`);
+      }
     }
   }
-  assert.ok(deviceRemoved, 'the task-owned simulator was not deleted');
-  assert.equal(
-    stopEnvelope?.ok,
-    true,
-    `managed Metro was not stopped: ${JSON.stringify(stopEnvelope)}`,
-  );
-  assert.equal(
-    restoreEnvelope?.ok,
-    true,
-    `the package integration was not restored: ${JSON.stringify(restoreEnvelope)}`,
-  );
-  assert.equal(
-    releaseEnvelope?.ok,
-    true,
-    `the session claim was not released: ${JSON.stringify(releaseEnvelope)}`,
-  );
+  if (!deviceRemoved) cleanupFailures.push('the task-owned simulator was not deleted');
+  if (stopEnvelope?.ok !== true) {
+    cleanupFailures.push(`managed Metro was not stopped: ${JSON.stringify(stopEnvelope)}`);
+  }
+  if (restoreEnvelope?.ok !== true) {
+    cleanupFailures.push(
+      `the package integration was not restored: ${JSON.stringify(restoreEnvelope)}`,
+    );
+  }
+  if (releaseEnvelope?.ok !== true) {
+    cleanupFailures.push(`the session claim was not released: ${JSON.stringify(releaseEnvelope)}`);
+  }
+  if (primaryError !== null) {
+    if (cleanupFailures.length === 0) throw primaryError;
+    throw new AggregateError(
+      [primaryError, new Error(cleanupFailures.join('; '))],
+      'the proof failed and its cleanup did not complete',
+    );
+  }
+  assert.deepEqual(cleanupFailures, [], cleanupFailures.join('; '));
   log('PROOF PASSED');
 }
 
