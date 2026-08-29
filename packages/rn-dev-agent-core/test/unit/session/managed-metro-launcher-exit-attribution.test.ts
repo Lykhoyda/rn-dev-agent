@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createHmac } from 'node:crypto';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -10,6 +10,7 @@ import {
   inspectManagedMetroLifecycle,
   startManagedMetro,
 } from '../../../dist/session/managed-metro.js';
+import { MAX_STRICT_PROOF_FILE_BYTES } from '../../../dist/session/strict-proof-limits.js';
 
 const SESSION_ID = 'session-a';
 const SIGNER = 'signer';
@@ -163,6 +164,46 @@ test('a managed Metro launcher that exits before bundle bind names its cause in 
   assert.doesNotMatch(inspection.attribution, new RegExp(INSTANCE_ID));
   assert.doesNotMatch(inspection.attribution, new RegExp(policyCapability));
   assert.ok(inspection.attribution.length <= 4_096);
+});
+
+test('a signed violation survives a valid evidence journal larger than two MiB', async () => {
+  const runtimeRoot = mkdtempSync(join(tmpdir(), 'rn-managed-metro-large-evidence-'));
+  const binding = await boundManagedMetro(runtimeRoot);
+  const policyCapability = runtimePolicyCapability(SIGNER);
+  const evidencePath = join(runtimeRoot, 'metro-runtime-evidence.jsonl');
+  const observations = Array.from({ length: 5_000 }, (_, index) => ({
+    kind: 'observation',
+    value: canonicalAuthorityJson({ index, padding: 'x'.repeat(256) }),
+  }));
+
+  writeSignedEvidence(evidencePath, policyCapability, [
+    ...observations,
+    {
+      kind: 'violation',
+      value: canonicalAuthorityJson({
+        code: 'RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION',
+        stage: 'native-spawn',
+      }),
+    },
+  ]);
+
+  const evidenceBytes = statSync(evidencePath).size;
+  assert.ok(evidenceBytes > 2 * 1024 * 1024);
+  assert.ok(evidenceBytes <= MAX_STRICT_PROOF_FILE_BYTES);
+
+  const inspection = inspectManagedMetroLifecycle(
+    binding as unknown as Record<string, unknown>,
+    { sessionId: SESSION_ID, signerCapability: SIGNER },
+    {
+      exists: () => true,
+      probeBirth: (pid: number) => (pid === LAUNCHER_PID ? { status: 'absent' } : liveBirth(pid)),
+      probeListener: () => ({ status: 'listening', pid: LISTENER_PID }),
+    } as never,
+  );
+
+  assert.equal(inspection.status, 'lost');
+  assert.equal(inspection.code, 'METRO_LAUNCHER_EXITED');
+  assert.match(inspection.attribution ?? '', /RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION/);
 });
 
 test('a launcher exit with no recorded evidence still reports a truthful bare refusal', async () => {

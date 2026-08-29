@@ -1,6 +1,14 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import test from 'node:test';
@@ -20,16 +28,24 @@ type WorkflowJob = {
     name?: string;
     env?: Record<string, string | number>;
     run?: string;
+    uses?: string;
+    with?: Record<string, string | number>;
   }>;
 };
 
-function loadCiJobs(): Record<string, WorkflowJob> {
-  const workflow = parse(
-    readFileSync(join(repositoryRoot, '.github', 'workflows', 'ci.yml'), 'utf8'),
-  ) as { jobs?: Record<string, WorkflowJob> };
+const workflowRoot = join(repositoryRoot, '.github', 'workflows');
+
+function loadWorkflowJobs(fileName: string): Record<string, WorkflowJob> {
+  const workflow = parse(readFileSync(join(workflowRoot, fileName), 'utf8')) as {
+    jobs?: Record<string, WorkflowJob>;
+  };
 
   assert.ok(workflow.jobs);
   return workflow.jobs;
+}
+
+function loadCiJobs(): Record<string, WorkflowJob> {
+  return loadWorkflowJobs('ci.yml');
 }
 
 function loadCoverageScript(): string {
@@ -230,6 +246,32 @@ test('the descendant spawn convention matrix brackets both Node calling conventi
     'packages/rn-dev-agent-core/test/unit/session/managed-metro-launcher-exit-attribution.test.ts',
     'packages/rn-dev-agent-core/test/unit/session/package-integration.test.ts',
   ]);
+});
+
+test('workflow Node runtimes satisfy the supported floor', () => {
+  const workflowFiles = readdirSync(workflowRoot).filter(
+    (fileName) => fileName.endsWith('.yml') || fileName.endsWith('.yaml'),
+  );
+
+  for (const fileName of workflowFiles) {
+    for (const [jobName, job] of Object.entries(loadWorkflowJobs(fileName))) {
+      for (const step of job.steps ?? []) {
+        if (!step.uses?.startsWith('actions/setup-node@')) continue;
+        const nodeVersion = step.with?.['node-version'];
+        assert.notEqual(nodeVersion, undefined, `${fileName}:${jobName} must select Node`);
+        const versions =
+          nodeVersion === '${{ matrix.node }}' ? (job.strategy?.matrix?.node ?? []) : [nodeVersion];
+        assert.notEqual(versions.length, 0, `${fileName}:${jobName} must define its Node matrix`);
+        for (const version of versions) {
+          const major = Number.parseInt(String(version), 10);
+          assert.ok(
+            Number.isSafeInteger(major) && major >= 24,
+            `${fileName}:${jobName} selects unsupported Node ${String(version)}`,
+          );
+        }
+      }
+    }
+  }
 });
 
 test('coverage command inserts the native shard option before authoritative discovery globs', () => {

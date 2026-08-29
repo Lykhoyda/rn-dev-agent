@@ -9759,6 +9759,16 @@ const processGroupExists = (pid) => {
   }
 });
 
+// packages/rn-dev-agent-core/dist/session/strict-proof-limits.js
+var MAX_STRICT_PROOF_FILE_BYTES, MAX_STRICT_PROOF_DEPENDENCY_ENTRIES;
+var init_strict_proof_limits = __esm({
+  "packages/rn-dev-agent-core/dist/session/strict-proof-limits.js"() {
+    "use strict";
+    MAX_STRICT_PROOF_FILE_BYTES = 16 * 1024 * 1024;
+    MAX_STRICT_PROOF_DEPENDENCY_ENTRIES = 5e4;
+  }
+});
+
 // packages/rn-dev-agent-core/dist/session/source-identity.js
 import { createHash as createHash4, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { execFileSync as execFileSync4 } from "node:child_process";
@@ -10446,7 +10456,7 @@ function strictProofSourceIdentity(identity2, dependencies = {}) {
     dirtyDigest: dirtyHash.digest("hex")
   };
 }
-var MAX_STRICT_PROOF_FILES, MAX_STRICT_PROOF_FILE_BYTES, MAX_STRICT_PROOF_TOTAL_BYTES, MAX_STRICT_PROOF_DEPENDENCY_ENTRIES, MAX_STRICT_PROOF_DEPENDENCY_DEPTH, MAX_STRICT_PROOF_DEPENDENCY_FILE_BYTES, MAX_STRICT_PROOF_DEPENDENCY_TOTAL_BYTES, STRICT_PROOF_READ_BUFFER_BYTES, DEPENDENCY_STORE_PATHS, EXCLUDED_RUNTIME_DIRECTORIES, IGNORED_RUNTIME_INPUT_PATHS, METRO_INTEGRATION_START, METRO_INTEGRATION_END, METRO_INTEGRATION_BLOCK, METRO_RUNTIME_POLICY, METRO_EVIDENCE_HEAD_CLIENT;
+var MAX_STRICT_PROOF_FILES, MAX_STRICT_PROOF_TOTAL_BYTES, MAX_STRICT_PROOF_DEPENDENCY_DEPTH, MAX_STRICT_PROOF_DEPENDENCY_FILE_BYTES, MAX_STRICT_PROOF_DEPENDENCY_TOTAL_BYTES, STRICT_PROOF_READ_BUFFER_BYTES, DEPENDENCY_STORE_PATHS, EXCLUDED_RUNTIME_DIRECTORIES, IGNORED_RUNTIME_INPUT_PATHS, METRO_INTEGRATION_START, METRO_INTEGRATION_END, METRO_INTEGRATION_BLOCK, METRO_RUNTIME_POLICY, METRO_EVIDENCE_HEAD_CLIENT;
 var init_source_identity = __esm({
   "packages/rn-dev-agent-core/dist/session/source-identity.js"() {
     "use strict";
@@ -10454,10 +10464,9 @@ var init_source_identity = __esm({
     init_authority_json();
     init_declared_source_contract();
     init_managed_metro_enforcement();
+    init_strict_proof_limits();
     MAX_STRICT_PROOF_FILES = 4096;
-    MAX_STRICT_PROOF_FILE_BYTES = 16 * 1024 * 1024;
     MAX_STRICT_PROOF_TOTAL_BYTES = 64 * 1024 * 1024;
-    MAX_STRICT_PROOF_DEPENDENCY_ENTRIES = 5e4;
     MAX_STRICT_PROOF_DEPENDENCY_DEPTH = 128;
     MAX_STRICT_PROOF_DEPENDENCY_FILE_BYTES = 128 * 1024 * 1024;
     MAX_STRICT_PROOF_DEPENDENCY_TOTAL_BYTES = 512 * 1024 * 1024;
@@ -12015,7 +12024,7 @@ function managedSandboxManagementProofV1(sessionId, authority, signerCapability)
 function latestSignedRuntimeViolation(path, capability, expected) {
   try {
     const bytes = readFileSync9(path);
-    if (bytes.byteLength > 2 * 1024 * 1024)
+    if (bytes.byteLength > MAX_STRICT_PROOF_FILE_BYTES)
       return null;
     let previousSignature = null;
     let sequence = 0;
@@ -12033,6 +12042,8 @@ function latestSignedRuntimeViolation(path, capability, expected) {
         return null;
       }
       sequence += 1;
+      if (sequence > MAX_STRICT_PROOF_DEPENDENCY_ENTRIES)
+        return null;
       previousSignature = signature;
       if (payload.kind === "violation" && typeof payload.value === "string") {
         latest = payload.value;
@@ -12303,6 +12314,7 @@ var init_managed_metro = __esm({
     init_process_birth();
     init_authority_json();
     init_managed_metro_enforcement();
+    init_strict_proof_limits();
     METRO_LAUNCHER_SOURCE = String.raw`
 const { spawn, spawnSync } = require('node:child_process');
 const { createHash, createHmac } = require('node:crypto');

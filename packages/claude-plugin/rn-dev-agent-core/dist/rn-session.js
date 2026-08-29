@@ -13308,6 +13308,10 @@ function runManagedMetroEnforcementPreflight(plan, dependencies = {}) {
   }
 }
 
+// packages/rn-dev-agent-core/dist/session/strict-proof-limits.js
+var MAX_STRICT_PROOF_FILE_BYTES = 16 * 1024 * 1024;
+var MAX_STRICT_PROOF_DEPENDENCY_ENTRIES = 5e4;
+
 // packages/rn-dev-agent-core/dist/session/managed-metro.js
 var METRO_LAUNCHER_SOURCE = String.raw`
 const { spawn, spawnSync } = require('node:child_process');
@@ -14706,7 +14710,7 @@ function canonicalRuntimeInput(path) {
 function latestSignedRuntimeViolation(path, capability, expected) {
   try {
     const bytes = readFileSync4(path);
-    if (bytes.byteLength > 2 * 1024 * 1024)
+    if (bytes.byteLength > MAX_STRICT_PROOF_FILE_BYTES)
       return null;
     let previousSignature = null;
     let sequence = 0;
@@ -14724,6 +14728,8 @@ function latestSignedRuntimeViolation(path, capability, expected) {
         return null;
       }
       sequence += 1;
+      if (sequence > MAX_STRICT_PROOF_DEPENDENCY_ENTRIES)
+        return null;
       previousSignature = signature;
       if (payload.kind === "violation" && typeof payload.value === "string") {
         latest = payload.value;
@@ -15380,7 +15386,6 @@ function digest2(parts) {
   }
   return hash.digest("hex");
 }
-var MAX_STRICT_PROOF_FILE_BYTES = 16 * 1024 * 1024;
 var MAX_STRICT_PROOF_TOTAL_BYTES = 64 * 1024 * 1024;
 var MAX_STRICT_PROOF_DEPENDENCY_FILE_BYTES = 128 * 1024 * 1024;
 var MAX_STRICT_PROOF_DEPENDENCY_TOTAL_BYTES = 512 * 1024 * 1024;

@@ -62547,6 +62547,10 @@ function verifyManagedMetroEnforcementReceipt(input, receipt2, dependencies = {}
   return plan.status === "enforced" && observed.version === 2 && observed.kind === plan.kind && observed.profileSha256 === plan.profileSha256 && observed.sandboxExecutableSha256 === plan.sandboxExecutableSha256 && observed.sandboxExecutableCdHash === plan.sandboxExecutableCdHash && observed.commandLaunchSha256 === plan.commandLaunchSha256 && observed.resolvedCommandSha256 === plan.resolvedCommandSha256 && observed.descendantCreationAllowed === true && observed.unauthorizedExecutableDenied === true && observed.unmanifestedReadDenied === true && observed.unmanifestedWriteDenied === true && observed.symlinkEscapeDenied === true && observed.unallocatedListenerDenied === true && observed.allocatedListenerAllowed === true && observed.networkOutboundDenied === true && observed.resolvedCommandAllowed === true && observed.commandCleanupConfirmed === true && observed.commandChainStable === true && canonicalAuthorityJson(observed.nodeRuntimeAttestation) === canonicalAuthorityJson(plan.nodeRuntimeAttestation) && canonicalAuthorityJson(observed.commandChainAttestation) === canonicalAuthorityJson(plan.commandChainAttestation);
 }
 
+// packages/rn-dev-agent-core/dist/session/strict-proof-limits.js
+var MAX_STRICT_PROOF_FILE_BYTES = 16 * 1024 * 1024;
+var MAX_STRICT_PROOF_DEPENDENCY_ENTRIES = 5e4;
+
 // packages/rn-dev-agent-core/dist/session/managed-metro.js
 var METRO_LAUNCHER_SOURCE = String.raw`
 const { spawn, spawnSync } = require('node:child_process');
@@ -63724,7 +63728,7 @@ function managedSandboxManagementProofV1(sessionId, authority, signerCapability)
 function latestSignedRuntimeViolation(path, capability, expected) {
   try {
     const bytes = readFileSync22(path);
-    if (bytes.byteLength > 2 * 1024 * 1024)
+    if (bytes.byteLength > MAX_STRICT_PROOF_FILE_BYTES)
       return null;
     let previousSignature = null;
     let sequence = 0;
@@ -63742,6 +63746,8 @@ function latestSignedRuntimeViolation(path, capability, expected) {
         return null;
       }
       sequence += 1;
+      if (sequence > MAX_STRICT_PROOF_DEPENDENCY_ENTRIES)
+        return null;
       previousSignature = signature;
       if (payload.kind === "violation" && typeof payload.value === "string") {
         latest = payload.value;
@@ -68398,9 +68404,7 @@ function digest2(parts) {
   return hash.digest("hex");
 }
 var MAX_STRICT_PROOF_FILES = 4096;
-var MAX_STRICT_PROOF_FILE_BYTES = 16 * 1024 * 1024;
 var MAX_STRICT_PROOF_TOTAL_BYTES = 64 * 1024 * 1024;
-var MAX_STRICT_PROOF_DEPENDENCY_ENTRIES = 5e4;
 var MAX_STRICT_PROOF_DEPENDENCY_DEPTH = 128;
 var MAX_STRICT_PROOF_DEPENDENCY_FILE_BYTES = 128 * 1024 * 1024;
 var MAX_STRICT_PROOF_DEPENDENCY_TOTAL_BYTES = 512 * 1024 * 1024;

@@ -7543,6 +7543,9 @@ const processGroupExists = (pid) => {
 })().catch(() => process.exit(1));
 `;
 
+// packages/rn-dev-agent-core/dist/session/strict-proof-limits.js
+var MAX_STRICT_PROOF_FILE_BYTES = 16 * 1024 * 1024;
+
 // packages/rn-dev-agent-core/dist/session/managed-metro.js
 var METRO_LAUNCHER_SOURCE = String.raw`
 const { spawn, spawnSync } = require('node:child_process');

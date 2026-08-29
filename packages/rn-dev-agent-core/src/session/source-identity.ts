@@ -23,6 +23,10 @@ import {
 } from './declared-source-contract.js';
 import type { MetroRuntimeEvidenceAuthority } from './managed-metro.js';
 import { verifyManagedMetroEnforcementReceipt } from './managed-metro-enforcement.js';
+import {
+  MAX_STRICT_PROOF_DEPENDENCY_ENTRIES,
+  MAX_STRICT_PROOF_FILE_BYTES,
+} from './strict-proof-limits.js';
 
 export interface GitSourceIdentity {
   kind: 'git';
@@ -75,9 +79,7 @@ function digest(parts: readonly (string | Buffer)[]): string {
 }
 
 const MAX_STRICT_PROOF_FILES = 4_096;
-const MAX_STRICT_PROOF_FILE_BYTES = 16 * 1024 * 1024;
 const MAX_STRICT_PROOF_TOTAL_BYTES = 64 * 1024 * 1024;
-const MAX_STRICT_PROOF_DEPENDENCY_ENTRIES = 50_000;
 const MAX_STRICT_PROOF_DEPENDENCY_DEPTH = 128;
 const MAX_STRICT_PROOF_DEPENDENCY_FILE_BYTES = 128 * 1024 * 1024;
 const MAX_STRICT_PROOF_DEPENDENCY_TOTAL_BYTES = 512 * 1024 * 1024;

@@ -38,6 +38,10 @@ import {
   type ManagedMetroEnforcementPlan,
   type ManagedMetroEnforcementReceipt,
 } from './managed-metro-enforcement.js';
+import {
+  MAX_STRICT_PROOF_DEPENDENCY_ENTRIES,
+  MAX_STRICT_PROOF_FILE_BYTES,
+} from './strict-proof-limits.js';
 
 export type MetroRuntimeEvidenceAuthority = 'reported-v1' | 'managed-sandbox-v1';
 
@@ -1756,7 +1760,7 @@ function latestSignedRuntimeViolation(
 ): string | null {
   try {
     const bytes = readFileSync(path);
-    if (bytes.byteLength > 2 * 1024 * 1024) return null;
+    if (bytes.byteLength > MAX_STRICT_PROOF_FILE_BYTES) return null;
     let previousSignature: string | null = null;
     let sequence = 0;
     let latest: string | null = null;
@@ -1781,6 +1785,7 @@ function latestSignedRuntimeViolation(
         return null;
       }
       sequence += 1;
+      if (sequence > MAX_STRICT_PROOF_DEPENDENCY_ENTRIES) return null;
       previousSignature = signature;
       if (payload.kind === 'violation' && typeof payload.value === 'string') {
         latest = payload.value;

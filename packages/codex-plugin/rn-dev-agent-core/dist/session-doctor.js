@@ -12508,6 +12508,9 @@ const processGroupExists = (pid) => {
 })().catch(() => process.exit(1));
 `;
 
+// packages/rn-dev-agent-core/dist/session/strict-proof-limits.js
+var MAX_STRICT_PROOF_FILE_BYTES = 16 * 1024 * 1024;
+
 // packages/rn-dev-agent-core/dist/session/source-identity.js
 function digest(parts) {
   const hash = createHash3("sha256");
@@ -12517,7 +12520,6 @@ function digest(parts) {
   }
   return hash.digest("hex");
 }
-var MAX_STRICT_PROOF_FILE_BYTES = 16 * 1024 * 1024;
 var MAX_STRICT_PROOF_TOTAL_BYTES = 64 * 1024 * 1024;
 var MAX_STRICT_PROOF_DEPENDENCY_FILE_BYTES = 128 * 1024 * 1024;
 var MAX_STRICT_PROOF_DEPENDENCY_TOTAL_BYTES = 512 * 1024 * 1024;
