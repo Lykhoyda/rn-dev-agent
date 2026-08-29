@@ -154,6 +154,7 @@ interface StagePlan {
   stdout?: string;
   throwWith?: Record<string, unknown>;
   skipReportWrite?: boolean;
+  waitForAbort?: boolean;
 }
 
 const invocationCounter = { count: 0 };
@@ -184,7 +185,7 @@ function trailingHandler(
     reproveManagedOrigin: async () => {},
     fastHealthCheck: options.fastHealthCheck ?? (async () => true),
     ...(options.now ? { now: options.now } : {}),
-    execFile: async (_file: string, args: string[]) => {
+    execFile: async (_file: string, args: string[], execOptions) => {
       // Count the ATTEMPT before the bounds check so a forbidden extra
       // invocation is visible even if its throw gets swallowed upstream.
       invocation++;
@@ -195,6 +196,15 @@ function trailingHandler(
       const plan = stagePlans[invocation - 1];
       const dir = reportDirFrom(args);
       if (!plan.skipReportWrite) writeStageReport(dir, plan.rows, invocation);
+      if (plan.waitForAbort) {
+        const signal = execOptions.signal;
+        assert.ok(signal);
+        if (!signal.aborted) {
+          await new Promise<void>((resolve) =>
+            signal.addEventListener('abort', () => resolve(), { once: true }),
+          );
+        }
+      }
       if (plan.throwWith) {
         throw Object.assign(new Error('runner exited 1'), {
           stdout: plan.stdout ?? '',
@@ -344,6 +354,27 @@ test('gh-623 regression: authority cleanup crossing the deadline does not veto a
   assert.ok(!body.error.includes(REBOOT_ADVICE), body.error);
 });
 
+test('gh-623 regression: an already-aborted deadline does not veto a self-exited runner', async () => {
+  const body = await runFlow(
+    trailingHandler([
+      TRAILING_STAGES[0],
+      {
+        ...TRAILING_STAGES[1],
+        waitForAbort: true,
+      },
+    ]),
+    undefined,
+    { timeoutMs: 20 },
+  );
+  assert.equal(body.ok, false);
+  assert.equal(body.meta.passed, false);
+  assert.equal(body.meta.timedOut, true);
+  assert.equal(body.meta.terminal.exitClass, 'timed-out');
+  assert.ok(isProvenTrailingVerificationQualifier(body.meta.trailingVerification));
+  assert.ok(body.error.includes(VERIFY_CAVEAT), body.error);
+  assert.ok(!body.error.includes(REBOOT_ADVICE), body.error);
+});
+
 test('gh-623 regression: a partial native partition forwards no whole-attempt ledger claims', async () => {
   let reactPresses = 0;
   let invocation = 0;
@@ -446,7 +477,7 @@ test('gh-623 negative control: an early mutating-step failure keeps hard failure
   assert.ok(!body.error.includes(VERIFY_CAVEAT), body.error);
 });
 
-test('gh-623 negative control: a killed runner (true wedge) keeps TIMEOUT class and reboot advice', async () => {
+test('gh-623 negative control: a runner killed by abort keeps TIMEOUT class and reboot advice', async () => {
   const body = await runFlow(
     trailingHandler([
       { rows: [['launchApp', 'passed']] },
@@ -454,8 +485,11 @@ test('gh-623 negative control: a killed runner (true wedge) keeps TIMEOUT class 
         rows: [...MAIN_STAGE_PASSING, ['extendedWaitUntil', 'failed']],
         stdout: TRAILING_FAIL_STDOUT,
         throwWith: { killed: true, signal: 'SIGTERM', code: null },
+        waitForAbort: true,
       },
     ]),
+    undefined,
+    { timeoutMs: 20 },
   );
   assert.equal(body.ok, false);
   assert.equal(body.meta.trailingVerification, undefined);

@@ -1342,7 +1342,7 @@ export function createMaestroRunHandler(
       return {
         exitCode: typeof raw?.code === 'number' ? raw.code : null,
         signal: typeof raw?.signal === 'string' ? raw.signal : null,
-        timedOut: errorClass.timedOut || flowAbort.signal.aborted,
+        timedOut: errorClass.timedOut,
         outputTruncated: errorClass.outputTruncated,
         bootstrapFailure: error instanceof RunnerCacheUnavailableError,
         transportFailure: isPreSpawnMaestroError(error),
