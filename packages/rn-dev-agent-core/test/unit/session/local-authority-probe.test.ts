@@ -61,6 +61,94 @@ test('runner authority rejects a dead or PID-reused bound process before health 
   assert.equal(healthProbed, false);
 });
 
+test('unreadable process birth stays unavailable across controller, Metro, and runner authority', async () => {
+  const workerBirth = readProcessBirth(process.pid);
+  assert.ok(workerBirth);
+  const contacted = [];
+  const controller = {
+    sessionId: 'session-a',
+    claimEpoch: 4,
+    authorityVersion: 9,
+    supervisor: { pid: 101, token: 'supervisor-birth' },
+    worker: { instanceId: 'worker', pid: process.pid, token: workerBirth.token },
+  };
+  const probe = createLocalAuthorityProbe(
+    dependencies({
+      runtime: {
+        requireAvailable: () => ({
+          registry: { getControllerBinding: () => controller },
+          session: { sessionId: 'session-a', claimEpoch: 4 },
+        }),
+      },
+      inspectOwner: ({ pid }) => (pid === controller.supervisor.pid ? 'match' : 'unknown'),
+      metroListenerPid: () => 202,
+      fetchText: async () => {
+        contacted.push('metro');
+        return 'packager-status:running';
+      },
+      fetchJson: async () => {
+        contacted.push('runner');
+        return { ok: true };
+      },
+    }),
+  );
+
+  for (const [axis, status] of [
+    ['C', statusWith({})],
+    ['M', statusWith({ metro: { port: 9200, pid: 202, birth: 'metro-birth' } })],
+    [
+      'R',
+      statusWith({
+        runner: {
+          port: 9300,
+          pid: 303,
+          processBirth: 'runner-birth',
+          capability: 'runner-capability',
+        },
+      }),
+    ],
+  ]) {
+    await assert.rejects(
+      () => probe({ axis, phase: 'preflight', status }),
+      (error) =>
+        error instanceof SessionAuthorityError &&
+        error.code === 'PROCESS_BIRTH_UNAVAILABLE' &&
+        error.details?.axis === axis &&
+        /process-birth probing/.test(String(error.details?.nextAction)),
+      axis,
+    );
+  }
+  assert.deepEqual(contacted, []);
+});
+
+test('controller authority keeps an actual process identity mismatch as owner loss', async () => {
+  const workerBirth = readProcessBirth(process.pid);
+  assert.ok(workerBirth);
+  const controller = {
+    sessionId: 'session-a',
+    claimEpoch: 4,
+    authorityVersion: 9,
+    supervisor: { pid: 101, token: 'supervisor-birth' },
+    worker: { instanceId: 'worker', pid: process.pid, token: workerBirth.token },
+  };
+  const probe = createLocalAuthorityProbe(
+    dependencies({
+      runtime: {
+        requireAvailable: () => ({
+          registry: { getControllerBinding: () => controller },
+          session: { sessionId: 'session-a', claimEpoch: 4 },
+        }),
+      },
+      inspectOwner: ({ pid }) => (pid === controller.supervisor.pid ? 'match' : 'mismatch'),
+    }),
+  );
+
+  await assert.rejects(
+    () => probe({ axis: 'C', phase: 'preflight', status: statusWith({}) }),
+    (error) => error instanceof SessionAuthorityError && error.code === 'SESSION_OWNER_LOST',
+  );
+});
+
 test('runner authority identity excludes mutable health diagnostics and array ordering', async () => {
   const runner = {
     platform: 'ios',
