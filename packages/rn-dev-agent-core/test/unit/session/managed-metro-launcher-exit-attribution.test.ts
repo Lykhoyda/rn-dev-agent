@@ -349,6 +349,7 @@ test(
     const syntheticBasename = `obviously-synthetic-sensitive-basename-${process.pid}.node`;
     const outsideAddonPath = join(root, '..', syntheticBasename);
     const outsideAddonBytes = Buffer.from('obviously synthetic native addon bytes');
+    const nativeAddonRequestId = 'c'.repeat(32);
     const genuineViolation = canonicalAuthorityJson({
       code: 'RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION',
       stage: 'native-spawn',
@@ -390,7 +391,7 @@ test(
       }),
     ];
     const nativeAddonRequest = canonicalAuthorityJson({
-      requestId: 'c'.repeat(32),
+      requestId: nativeAddonRequestId,
       path: outsideAddonPath,
       digest: createHash('sha256').update(outsideAddonBytes).digest('hex'),
     });
@@ -404,10 +405,27 @@ test(
     writeFileSync(
       executable,
       `#!/usr/bin/env node
-const { writeFileSync, writeSync } = require('node:fs');
+const { existsSync, watch, writeFileSync, writeSync } = require('node:fs');
 const { createServer } = require('node:net');
+const { join } = require('node:path');
 if (process.argv.includes('--version')) process.exit(0);
 const port = Number(process.argv[process.argv.indexOf('--port') + 1]);
+const acknowledgmentPath = join(
+  process.env.RN_DEV_AGENT_METRO_NATIVE_ADDON_ACK_ROOT,
+  ${JSON.stringify(`${nativeAddonRequestId}.json`)},
+);
+let activated = false;
+const activate = () => {
+  if (activated || !existsSync(acknowledgmentPath)) return;
+  activated = true;
+  acknowledgmentWatcher.close();
+  writeFileSync(${JSON.stringify(listenerPidPath)}, String(process.pid));
+  createServer(() => {}).listen(port, '127.0.0.1');
+};
+const acknowledgmentWatcher = watch(
+  process.env.RN_DEV_AGENT_METRO_NATIVE_ADDON_ACK_ROOT,
+  activate,
+);
 for (const [kind, value] of [
   ['violation', ${JSON.stringify(syntheticValue)}],
   ['violation', ${JSON.stringify(genuineViolation)}],
@@ -425,8 +443,7 @@ for (const [kind, value] of [
     digest: null,
   }) + '\\n');
 }
-writeFileSync(${JSON.stringify(listenerPidPath)}, String(process.pid));
-createServer(() => {}).listen(port, '127.0.0.1');
+activate();
 setInterval(() => {}, 1 << 30);
 `,
     );
