@@ -55,7 +55,10 @@ obligation such as `RUNNER_ADOPTION_REQUIRED` could not be discharged), or `owne
 false`, whose `ownerMismatch` says which: `app-root` (a proven-dead owner of a different app
 root in this worktree) or `source-identity` (the same app root under different declared
 manifests). Also
-report `abandonedContenders` when it is non-zero. The supported repair is
+report `abandonedContenders` when it is non-zero. When `startupCleanupBlocked.cause`
+is `managed-metro-stop-proof-missing`, report its cause and `nextAction` verbatim and
+do not print or run a restart or repair command; the canonical handling is in
+`using-rn-dev-agent` § "Session ownership recovery". Otherwise, the supported repair is
 `node "${CLAUDE_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}/rn-dev-agent-core/dist/session-doctor.js" repair`, which runs the
 same proven-dead startup cleanup a fresh transport runs; print it for the user to run, but do
 not execute it from doctor. Print it rooted where it can succeed: for `ownerMismatch: app-root` that is the
