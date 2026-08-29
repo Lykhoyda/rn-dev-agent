@@ -1,5 +1,14 @@
 # rn-dev-agent-plugin
 
+## 0.77.7
+
+### Patch Changes
+
+- b39903b: SessionStart no longer downloads the maestro-runner: it verifies the pin-cache offline and prints the explicit pinned install command instead.
+- 18b95ca: maestro_run now emits a canonical per-attempt run ledger and attaches a ledger-derived `trailingVerification` qualifier block (`trailingVerificationOnly: true`, existing failureKind unchanged) to a still-failed flow whose mutating commands all provably completed while only a trailing wait/assert timed out, and cdp_run_action consumes it to refuse selector auto-repair and swap the simulator-reboot advice for verify-first guidance (final goal state stays unproven; genuine wedges keep the existing reboot hint).
+- Updated dependencies [18b95ca]
+  - rn-dev-agent-core@0.72.7
+
 ## 0.77.6
 
 ### Patch Changes
