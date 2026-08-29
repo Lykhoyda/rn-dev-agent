@@ -175,6 +175,8 @@ test('gh-623 case 5: termination provenance gates the qualifier regardless of ro
   for (const bad of [
     { timedOut: true },
     { signal: 'SIGTERM' },
+    { exitCode: null },
+    { exitCode: Number.NaN },
     { outputTruncated: true },
     { bootstrapFailure: true },
     { transportFailure: true },
@@ -489,6 +491,8 @@ test('gh-623 defense: corrupt termination provenance refuses even with complete:
   for (const bad of [
     { timedOut: true },
     { signal: 'SIGTERM' },
+    { exitCode: null },
+    { exitCode: Number.NaN },
     { outputTruncated: true },
     { bootstrapFailure: true },
     { transportFailure: true },

@@ -272,6 +272,96 @@ test('gh-623 regression: trailing wait timeout emits the ledger qualifier, stays
   assert.ok(!body.error.includes(REBOOT_ADVICE), body.error);
 });
 
+test('gh-623 regression: renderer timeout wording does not veto clean producer termination', async () => {
+  const body = await runFlow(
+    trailingHandler([
+      TRAILING_STAGES[0],
+      {
+        ...TRAILING_STAGES[1],
+        stdout: `${TRAILING_FAIL_STDOUT}\n      ╰─ Timed out waiting for element "Welcome home"`,
+      },
+    ]),
+  );
+  assert.equal(body.ok, false);
+  assert.equal(body.meta.passed, false);
+  assert.equal(body.meta.terminal.failureKind, 'TIMEOUT');
+  assert.ok(isProvenTrailingVerificationQualifier(body.meta.trailingVerification));
+  assert.ok(body.error.includes(VERIFY_CAVEAT), body.error);
+  assert.ok(!body.error.includes(REBOOT_ADVICE), body.error);
+});
+
+test('gh-623 regression: a partial native partition forwards no whole-attempt ledger claims', async () => {
+  let reactPresses = 0;
+  let invocation = 0;
+  const handler = createMaestroRunHandler({
+    getActiveSession: () => ({
+      name: 'partitioned-trailing',
+      platform: 'ios',
+      deviceId: EXACT,
+      appId: APP_ID,
+      openedAt: new Date(0).toISOString(),
+    }),
+    replayDeps: () => ({
+      pressByTestId: async () => {
+        reactPresses++;
+      },
+      typeByTestId: async () => {},
+      treeFor: async (id: string) => ({ testID: id }),
+      frontmostFor: async () => ({ visible: true }),
+      launchApp: async () => {},
+      settle: async () => {},
+    }),
+    chooseDispatch: () => fakeRunnerDispatch(),
+    parkFlow: async (run: () => Promise<unknown>) => run(),
+    claimNativeOrigin: async () => {},
+    completeNativeOrigin: async () => {},
+    relaunchManagedApp: async () => {},
+    reproveManagedOrigin: async () => {},
+    fastHealthCheck: async () => true,
+    execFile: async (_file: string, args: string[]) => {
+      invocation++;
+      writeStageReport(
+        reportDirFrom(args),
+        [
+          ['tapOn', 'passed'],
+          ['extendedWaitUntil', 'failed'],
+        ],
+        invocation,
+      );
+      throw Object.assign(new Error('runner exited 1'), {
+        stdout: [
+          'maestro-runner 1.1.24',
+          `Starting WDA on device ${EXACT} (port: 8447)`,
+          '    ✓ tapOn: text="Native submit" (1.8s)',
+          '    ✗ extendedWaitUntil: visible text="Native done" (30.0s)',
+          '      ╰─ Timed out waiting for element "Native done"',
+        ].join('\n'),
+        stderr: '',
+        code: 1,
+      });
+    },
+  });
+  const result = await handler({
+    inlineYaml: [
+      '- tapOn: "Native submit"',
+      '- extendedWaitUntil:',
+      '    visible: "Native done"',
+      '    timeout: 30000',
+      '- tapOn:',
+      '    id: "react-later"',
+    ].join('\n'),
+    platform: 'ios',
+    appId: APP_ID,
+    attempt: { attemptId: 'att-partitioned', ordinal: 1, maxAttempts: 1, kind: 'initial' },
+  });
+  const body = JSON.parse(result.content[0].text);
+  assert.equal(body.ok, false);
+  assert.equal(body.meta.passed, false);
+  assert.equal(body.meta.trailingVerification, undefined);
+  assert.equal(body.meta.ledger, undefined);
+  assert.equal(reactPresses, 0);
+});
+
 test('gh-623 negative control: an early mutating-step failure keeps hard failure and verbatim reboot advice', async () => {
   const body = await runFlow(
     trailingHandler([

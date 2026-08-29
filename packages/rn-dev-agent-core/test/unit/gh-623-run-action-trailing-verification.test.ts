@@ -204,6 +204,7 @@ test('gh-623: a malformed qualifier never softens the failure — repair path ru
     { stageTerminations: [{ ...CLEAN_TERMINATION, outputTruncated: 0 }] },
     { stageTerminations: [{ ...CLEAN_TERMINATION, artifactFinalized: 'true' }] },
     { stageTerminations: [{ ...CLEAN_TERMINATION, exitCode: 'one' }] },
+    { stageTerminations: [{ ...CLEAN_TERMINATION, exitCode: null }] },
     { provenMutations: 0 },
     { mutationEvidence: 'partial' },
   ];
@@ -343,6 +344,64 @@ test('gh-623: a repaired retry that fails only trailing verification carries the
   assert.equal(run.status, 'fail');
   assert.deepEqual(run.trailingVerification.attempt, body.meta.trailingVerification.attempt);
   assert.equal(run.autoRepair.outcome, 'failed');
+});
+
+test('gh-623: a repaired qualifier with the wrong parent lineage is rejected', async () => {
+  project.seedAction('demo', fixtureYaml({ id: 'demo', selectors: ['fab-create-task'] }), null);
+  let invocation = 0;
+  const handler = createRunActionHandler({
+    maestroRun: async (args: { attempt?: Record<string, unknown> }) => {
+      invocation++;
+      if (invocation === 1) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({
+                ok: false,
+                data: {
+                  passed: false,
+                  output: "Element with id 'fab-create-task' not found",
+                  flowFile: 'x',
+                  platform: 'ios',
+                },
+              }),
+            },
+          ],
+          isError: true,
+        };
+      }
+      const retryEnv = trailingIdWaitEnv(
+        qualifier({
+          attempt: {
+            attemptId: args.attempt!.attemptId,
+            ordinal: args.attempt!.ordinal,
+            kind: args.attempt!.kind,
+            parentAttemptId: 'different-parent-attempt',
+          },
+        }),
+      );
+      return { content: [{ type: 'text', text: JSON.stringify(retryEnv) }], isError: true };
+    },
+    repairAction: fakeRepairAction({
+      ok: true,
+      data: {
+        patched: true,
+        actionId: 'demo',
+        oldSelector: 'fab-create-task',
+        newSelector: 'fab-create-task-btn',
+        score: 0.91,
+        replacements: 1,
+      },
+    }),
+  });
+  const result = await handler({ actionId: 'demo', projectRoot: project.root });
+  const body = JSON.parse(result.content[0].text);
+  assert.equal(body.ok, false);
+  assert.equal(body.meta.trailingVerification, undefined);
+  assert.doesNotMatch(body.error, /trailing verification only/);
+  const sidecar = JSON.parse(readFileSync(project.sidecarPath('demo'), 'utf8'));
+  assert.equal(sidecar.runHistory.at(-1).trailingVerification, undefined);
 });
 
 test('gh-623 negative control: an unqualified early selector failure still repairs as today', async () => {

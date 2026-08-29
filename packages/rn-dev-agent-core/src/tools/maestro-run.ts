@@ -859,7 +859,14 @@ export function createMaestroRunHandler(
             });
             const env = readToolEnvelope(nested);
             if (env.ok !== true || env.data?.passed !== true) {
-              const nestedMeta = { ...env.meta, ...env.data };
+              const nestedMeta: Record<string, unknown> = { ...env.meta, ...env.data };
+              const nativeSegmentCoversAttempt =
+                segment.sourceIndices.length === validatedCommands.length &&
+                segment.sourceIndices.every((sourceIndex, index) => sourceIndex === index);
+              if (!nativeSegmentCoversAttempt) {
+                delete nestedMeta.trailingVerification;
+                delete nestedMeta.ledger;
+              }
               combinedSteps.push(...remapNativeSteps(nestedMeta.steps, segment.sourceIndices));
               const uniqueProofDomains = [...new Set(proofDomains)];
               const proofDomain =
@@ -1759,6 +1766,7 @@ export function createMaestroRunHandler(
         timedOut = true;
         terminal = buildTerminalEvidence(combined, { timedOut, spawnError });
       }
+      const processTimedOut = timedOut;
       // A run that produced no output never reached the device, so there is no
       // authority verdict to render — reporting one would mask the spawn/park
       // failure behind DEVICE_AUTHORITY_MISMATCH and refuse auto-repair.
@@ -1904,7 +1912,7 @@ export function createMaestroRunHandler(
       // never-spawned run never classifies as trailing verification.
       const failLedger = buildAttemptLedger();
       const failTrailingVerification =
-        timedOut || spawnError ? null : classifyTrailingVerification(failLedger);
+        processTimedOut || spawnError ? null : classifyTrailingVerification(failLedger);
       // GH #263: a timeout/non-zero exit is also a failure surface — flag a
       // wedged runtime here too if the successful taps were degraded.
       const failAug = augmentFailureWithDegradation(

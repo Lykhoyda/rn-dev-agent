@@ -200,6 +200,7 @@ interface VerbClassEvidence {
 
 function terminationClean(t: LedgerInvocationTermination): boolean {
   return (
+    Number.isFinite(t.exitCode) &&
     !t.timedOut &&
     t.signal === null &&
     !t.outputTruncated &&
@@ -465,7 +466,8 @@ export function isProvenTrailingVerificationQualifier(
     (termination) =>
       termination !== null &&
       typeof termination === 'object' &&
-      (termination.exitCode === null || typeof termination.exitCode === 'number') &&
+      typeof termination.exitCode === 'number' &&
+      Number.isFinite(termination.exitCode) &&
       termination.signal === null &&
       termination.timedOut === false &&
       termination.outputTruncated === false &&

@@ -361,7 +361,12 @@ function readMaestroDeviceAuthority(env: MaestroEnvelope): MaestroDeviceAuthorit
 // GH #623: anything short of the fully validated proven shape reads as absent.
 function readTrailingVerification(
   env: MaestroEnvelope,
-  dispatched: { attemptId: string; ordinal: number; kind: 'initial' | 'repaired' },
+  dispatched: {
+    attemptId: string;
+    ordinal: number;
+    kind: 'initial' | 'repaired';
+    parentAttemptId?: string;
+  },
 ): TrailingVerificationQualifier | undefined {
   for (const source of [env.meta, env.data as Record<string, unknown> | undefined]) {
     const candidate = (source as { trailingVerification?: unknown })?.trailingVerification;
@@ -371,7 +376,8 @@ function readTrailingVerification(
     if (
       candidate.attempt.attemptId !== dispatched.attemptId ||
       candidate.attempt.ordinal !== dispatched.ordinal ||
-      candidate.attempt.kind !== dispatched.kind
+      candidate.attempt.kind !== dispatched.kind ||
+      candidate.attempt.parentAttemptId !== dispatched.parentAttemptId
     ) {
       continue;
     }
@@ -1278,6 +1284,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
             attemptId: repairedAttemptId,
             ordinal: 2,
             kind: 'repaired',
+            parentAttemptId: initialAttemptId,
           });
       const persisted = await persistRunWithDevice({
         timestamp: new Date().toISOString(),
