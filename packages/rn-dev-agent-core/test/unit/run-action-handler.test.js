@@ -215,6 +215,29 @@ test('run-action: first-attempt pass appends RunRecord with no auto-repair', asy
   );
 });
 
+test('run-action: forwards reprove abort options to session authority', async () => {
+  project.seedAction('demo', fixtureYaml({ id: 'demo', selectors: ['fab-create-task'] }));
+  const flowAbort = new AbortController();
+  let receivedReprove;
+  const handler = createRunActionHandler({
+    maestroRun: async (args) => {
+      await args.reproveManagedOrigin({ signal: flowAbort.signal });
+      return {
+        content: [{ type: 'text', text: JSON.stringify(PASS_ENV) }],
+      };
+    },
+    reproveManagedOrigin: async (args, options) => {
+      receivedReprove = { args, options };
+    },
+  });
+
+  const result = await handler({ actionId: 'demo', projectRoot: project.root });
+
+  assert.equal(result.isError, undefined);
+  assert.equal(receivedReprove.args.actionId, 'demo');
+  assert.equal(receivedReprove.options.signal, flowAbort.signal);
+});
+
 test('cdp_run_action preserves a typed native-blind refusal', async () => {
   project.seedAction('demo', fixtureYaml({ id: 'demo', selectors: ['fab-create-task'] }));
   const handler = createRunActionHandler({

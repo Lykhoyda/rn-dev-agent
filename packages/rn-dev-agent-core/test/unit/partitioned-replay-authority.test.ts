@@ -428,7 +428,8 @@ function partitionedHandoffFixture(opts: {
       }
     },
     relaunchManagedApp: async () => {},
-    reproveManagedOrigin: async () => {
+    reproveManagedOrigin: async ({ signal } = {}) => {
+      assert.equal(signal?.aborted, false);
       events.push('reprove');
       if (opts.reproveRestoresTarget) exactTargetConnected = true;
     },

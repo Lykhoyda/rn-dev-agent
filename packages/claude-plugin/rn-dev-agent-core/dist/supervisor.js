@@ -82512,7 +82512,7 @@ function createMaestroRunHandler(deps = {}) {
       });
       if (deferredNativeOriginTarget) {
         if (nativeOriginPreclaimed && (args.reproveManagedOrigin || deps.reproveManagedOrigin || replayFactory && hasManagedNativeOriginAuthority(args))) {
-          await reproveManagedOrigin();
+          await reproveManagedOrigin({ signal: flowAbort.signal });
         }
         await completeOrigin(true);
         nativeOriginPreclaimed = false;
@@ -83411,7 +83411,7 @@ function createRunActionHandler(deps = {}) {
         claimNativeOrigin: () => claimNativeOrigin(args),
         completeNativeOrigin: (targetExpected) => completeNativeOrigin(args, targetExpected),
         relaunchManagedApp: (stopApp) => relaunchManagedApp(args, stopApp),
-        reproveManagedOrigin: () => reproveManagedOrigin(args),
+        reproveManagedOrigin: (options) => reproveManagedOrigin(args, options),
         completeRunnerPark: (signal) => completeManagedRunnerParkAuthority(args, signal),
         reissueInstallReceipt: () => reissueInstallReceipt(args)
       }));
@@ -83727,7 +83727,7 @@ function createRunActionHandler(deps = {}) {
         claimNativeOrigin: () => claimNativeOrigin(args),
         completeNativeOrigin: (targetExpected) => completeNativeOrigin(args, targetExpected),
         relaunchManagedApp: (stopApp) => relaunchManagedApp(args, stopApp),
-        reproveManagedOrigin: () => reproveManagedOrigin(args),
+        reproveManagedOrigin: (options) => reproveManagedOrigin(args, options),
         completeRunnerPark: (signal) => completeManagedRunnerParkAuthority(args, signal),
         reissueInstallReceipt: () => reissueInstallReceipt(args)
       }));

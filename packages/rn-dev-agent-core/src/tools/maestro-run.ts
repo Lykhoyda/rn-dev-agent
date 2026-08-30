@@ -1593,7 +1593,7 @@ export function createMaestroRunHandler(
             deps.reproveManagedOrigin ||
             (replayFactory && hasManagedNativeOriginAuthority(args)))
         ) {
-          await reproveManagedOrigin();
+          await reproveManagedOrigin({ signal: flowAbort.signal });
         }
         await completeOrigin(true);
         nativeOriginPreclaimed = false;
