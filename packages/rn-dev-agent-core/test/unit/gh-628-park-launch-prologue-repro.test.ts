@@ -41,6 +41,11 @@ import { prepareActionVerificationSuite } from '../../dist/domain/action-verific
 import { loadAction, saveAction } from '../../dist/domain/action-store.js';
 import { applyRepair, attemptRepair } from '../../dist/domain/repair-engine.js';
 import { lockE2eTestCore } from '../../dist/tools/lock-e2e-test.js';
+import { createRepairActionHandler } from '../../dist/tools/repair-action.js';
+import {
+  resetActiveSessionInMemoryForTest,
+  setActiveSession,
+} from '../../dist/agent-device-wrapper.js';
 import type { ParkAnchorProbe, RunActionArgs } from '../../dist/tools/run-action.js';
 import type { ToolResult } from '../../dist/utils.js';
 import { createPinnedRunActionHandler, createTmpProject } from '../helpers/tmp-project.js';
@@ -193,6 +198,38 @@ test('GH #628: generateMaestro omits the launch prologue for parked and keeps it
   assert.equal(parseM7Header(routedCold)?.expectedRouteSequence, undefined);
 });
 
+test('GH #628: parked generation refuses comma-bearing recorded routes', () => {
+  const anchor = { type: 'tap', testID: PARK_ANCHOR, t: 1 } as const;
+  const navigate = {
+    type: 'navigate',
+    from: 'MandateSign',
+    to: 'Checkout,Express',
+    t: 2,
+  } as const;
+  for (const options of [
+    { startRoute: 'Checkout,Express', events: [anchor] },
+    { startRoute: 'MandateSign', events: [anchor, navigate] },
+  ]) {
+    assert.throws(
+      () =>
+        generateMaestro(options.events, {
+          id: 'p',
+          intent: 'x',
+          entry: 'parked',
+          startRoute: options.startRoute,
+        }),
+      /route "Checkout,Express" contains a comma/,
+    );
+  }
+  assert.doesNotThrow(() =>
+    generateMaestro([anchor], {
+      id: 'c',
+      intent: 'x',
+      startRoute: 'Checkout,Express',
+    }),
+  );
+});
+
 test('GH #628: parked generation refuses every mutation before the shared park anchor', () => {
   const anchor = { type: 'tap', testID: PARK_ANCHOR, t: 2 } as const;
   const openings = [
@@ -325,10 +362,7 @@ test('GH #628: a lifecycle command hidden in a subflow file still refuses BAD_RE
   });
 });
 
-test('GH #628: non-allowlisted composites refuse upstream; domain scan still catches nested lifecycle', async () => {
-  // `repeat` is not in the flow validator's allowlist, so it refuses as
-  // invalid YAML before the parked scan; the domain function remains
-  // defense-in-depth for any composite that carries a commands array.
+test('GH #628: parked lifecycle cause outranks unrelated command validation', async () => {
   project.seedAction(
     'parked-sign-mandate',
     parkedYaml([...PARKED_BODY, '- repeat:\n    times: 2\n    commands:\n      - killApp']),
@@ -343,6 +377,7 @@ test('GH #628: non-allowlisted composites refuse upstream; domain scan still cat
 
   assert.equal(result.ok, false);
   assert.equal(result.code, 'BAD_RECORDING');
+  assert.deepEqual(result.meta?.cause, { parkedActionLifecycle: 'killApp' });
   assert.equal(calls.length, 0, 'zero steps ran');
 
   assert.deepEqual(parkedBodyViolation([{ repeat: { times: 2, commands: ['killApp'] } }]), {
@@ -409,6 +444,37 @@ test('GH #628: repair preserves an empty entry declaration and its replay refusa
   assert.equal(result.code, 'BAD_RECORDING');
   assert.deepEqual(result.meta?.cause, { invalidEntry: '' });
   assert.equal(calls.length, 0);
+});
+
+test('GH #628: direct repair refuses duplicate entry declarations before side effects', async () => {
+  const duplicate = parkedYaml([
+    `- assertVisible:\n    id: "${PARK_ANCHOR}"`,
+    '- tapOn:\n    id: "stale-selector"',
+  ]).replace('# entry: parked', '# entry: cold\n# entry: cold');
+  project.seedAction('parked-sign-mandate', duplicate, null);
+
+  setActiveSession({
+    name: 'gh-628-repair',
+    platform: 'ios',
+    deviceId: 'GH-628-DEVICE',
+    openedAt: '2026-08-30T00:00:00.000Z',
+    appId: 'com.test.app',
+  });
+  try {
+    const result = envelope(
+      await createRepairActionHandler()({
+        actionId: 'parked-sign-mandate',
+        failedSelector: 'stale-selector',
+        projectRoot: project.root,
+      }),
+    );
+
+    assert.equal(result.code, 'BAD_RECORDING');
+    assert.deepEqual(result.meta?.cause, { invalidEntry: 'cold | cold' });
+    assert.equal(project.readYaml('parked-sign-mandate'), duplicate);
+  } finally {
+    resetActiveSessionInMemoryForTest();
+  }
 });
 
 // ─── Park preflight negative controls (PARK_STATE_MISSING) ──────────────────
@@ -612,23 +678,29 @@ test('GH #628: an empty subflow reference has a non-empty structured cause', asy
   assert.equal(calls.length, 0);
 });
 
-test('GH #628: a non-string runFlow file refuses with a structured cause', async () => {
-  project.seedAction(
-    'parked-sign-mandate',
-    parkedYaml([`- assertVisible:\n    id: "${PARK_ANCHOR}"`, '- runFlow:\n    file: 123']),
-    null,
-  );
-  const calls: Array<Record<string, unknown>> = [];
-  const handler = handlerWith(calls, { status: 'visible' });
+test('GH #628: malformed runFlow files preserve their exact structured reference', async () => {
+  for (const reference of [123, 456]) {
+    project.seedAction(
+      'parked-sign-mandate',
+      parkedYaml([
+        `- assertVisible:\n    id: "${PARK_ANCHOR}"`,
+        `- runFlow:\n    file: ${reference}`,
+      ]),
+      null,
+    );
+    const calls: Array<Record<string, unknown>> = [];
+    const result = envelope(
+      await handlerWith(calls, { status: 'visible' })({
+        actionId: 'parked-sign-mandate',
+        projectRoot: project.root,
+      }),
+    );
 
-  const result = envelope(
-    await handler({ actionId: 'parked-sign-mandate', projectRoot: project.root }),
-  );
-
-  assert.equal(result.ok, false);
-  assert.equal(result.code, 'BAD_RECORDING');
-  assert.deepEqual(result.meta?.cause, { parkedRunFlowFile: '<invalid:number>' });
-  assert.equal(calls.length, 0);
+    assert.equal(result.ok, false);
+    assert.equal(result.code, 'BAD_RECORDING');
+    assert.deepEqual(result.meta?.cause, { parkedRunFlowFile: String(reference) });
+    assert.equal(calls.length, 0);
+  }
 });
 
 test('GH #628: a nested invalid runFlow file preserves its structured cause', async () => {
@@ -648,7 +720,7 @@ test('GH #628: a nested invalid runFlow file preserves its structured cause', as
     }),
   );
   assert.equal(result.code, 'BAD_RECORDING');
-  assert.deepEqual(result.meta?.cause, { parkedRunFlowFile: '<invalid:number>' });
+  assert.deepEqual(result.meta?.cause, { parkedRunFlowFile: '123' });
   assert.equal(calls.length, 0);
 });
 
@@ -843,8 +915,10 @@ test('GH #628 control: an entry token in body text never triggers admission', as
     '- tapOn:\n    id: "sign-cta"',
     '',
   ].join('\n');
+  const flowStyleBodyYaml = '[{ tapOn: { id: "x" } }]\n# entry: parked\n';
 
   assert.equal(detectEntryDeclaration(bodyTextYaml), undefined, 'body comment is not a preamble');
+  assert.equal(detectEntryDeclaration(flowStyleBodyYaml), undefined);
   assert.equal(detectEntryDeclaration(PARTIAL_PARKED_YAML), 'parked');
   assert.equal(detectEntryDeclaration('# entry:\n- tapOn:\n    id: "x"\n'), '');
   assert.equal(detectEntryDeclaration('- tapOn:\n    id: "x"\n'), undefined);
@@ -876,21 +950,21 @@ test('GH #628 control: an entry token in body text never triggers admission', as
   // Every entry-admission refusal carries BAD_RECORDING with zero dispatch, so
   // any other outcome — including reaching the post-admission authority claim,
   // which throws in this session-less harness — proves admission passed.
-  let outcome: string;
-  try {
-    const result = envelope(await handler({ platform: 'ios', inlineYaml: bodyTextYaml }));
-    outcome = result.code ?? 'ok';
-    assert.ok(
-      !/cdp_run_action|entry mode|invalidEntry/.test(result.error ?? ''),
-      `body text must not trigger entry admission, got: ${result.error ?? 'ok'}`,
-    );
-    assert.equal(result.meta?.cause, undefined);
-  } catch (err) {
-    outcome = (err as { code?: string }).code ?? String(err);
+  for (const inlineYaml of [bodyTextYaml, flowStyleBodyYaml]) {
+    let outcome: string;
+    try {
+      const result = envelope(await handler({ platform: 'ios', inlineYaml }));
+      outcome = result.code ?? 'ok';
+      assert.ok(
+        !/cdp_run_action|entry mode|invalidEntry/.test(result.error ?? ''),
+        `body text must not trigger entry admission, got: ${result.error ?? 'ok'}`,
+      );
+      assert.equal(result.meta?.cause, undefined);
+    } catch (err) {
+      outcome = (err as { code?: string }).code ?? String(err);
+    }
+    assert.equal(outcome, 'METRO_ORIGIN_MISMATCH', `expected post-admission claim, got ${outcome}`);
   }
-  // The session-less harness throws exactly at the post-admission native-origin
-  // claim — reaching it is a deterministic proof the flow passed admission.
-  assert.equal(outcome, 'METRO_ORIGIN_MISMATCH', `expected post-admission claim, got ${outcome}`);
 });
 
 test('GH #628: suite executors refuse parked actions before execution', async () => {
@@ -1534,6 +1608,81 @@ test('GH #628 control: cold auto-repair still repairs and retries', async () => 
   assert.equal(maestroCalls, 2);
   assert.equal(repairCalls, 1);
   assert.equal(probeCalls, 0);
+});
+
+test('GH #628: repair retry re-admits invalid entry and parked lifecycle causes', async () => {
+  const scenarios = [
+    {
+      replacement: parkedYaml(['- runFlow:\n    file: 123']).replace(
+        '# entry: parked',
+        '# entry: parkd',
+      ),
+      cause: { invalidEntry: 'parkd' },
+    },
+    {
+      replacement: parkedYaml(['- launchApp', '- unsupportedCommand']),
+      cause: { parkedActionLifecycle: 'launchApp' },
+    },
+  ];
+
+  for (const scenario of scenarios) {
+    const retryProject = createTmpProject();
+    try {
+      retryProject.seedAction(
+        'parked-sign-mandate',
+        parkedYaml([
+          `- assertVisible:\n    id: "${PARK_ANCHOR}"`,
+          '- tapOn:\n    id: "stale-selector"',
+        ]).replace('# entry: parked', '# entry: cold'),
+        null,
+      );
+      let maestroCalls = 0;
+      const handler = createPinnedRunActionHandler({
+        maestroRun: async () => {
+          maestroCalls += 1;
+          return selectorFailure(
+            [
+              { index: 0, verb: 'assertVisible', status: 'pass' },
+              { index: 1, verb: 'tapOn', status: 'fail' },
+            ],
+            1,
+          );
+        },
+        repairAction: async () => {
+          writeFileSync(
+            retryProject.yamlPath('parked-sign-mandate'),
+            scenario.replacement,
+            'utf8',
+          );
+          return {
+            content: [
+              {
+                type: 'text' as const,
+                text: JSON.stringify({
+                  ok: true,
+                  data: {
+                    patched: true,
+                    oldSelector: 'stale-selector',
+                    newSelector: 'fresh-selector',
+                  },
+                }),
+              },
+            ],
+          };
+        },
+      });
+
+      const result = envelope(
+        await handler({ actionId: 'parked-sign-mandate', projectRoot: retryProject.root }),
+      );
+
+      assert.equal(result.code, 'BAD_RECORDING');
+      assert.deepEqual(result.meta?.cause, scenario.cause);
+      assert.equal(maestroCalls, 1);
+    } finally {
+      retryProject.cleanup();
+    }
+  }
 });
 
 // ─── Cold-entry behavior unchanged ──────────────────────────────────────────

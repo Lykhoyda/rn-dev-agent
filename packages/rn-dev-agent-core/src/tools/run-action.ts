@@ -83,6 +83,7 @@ import {
   deriveParkAnchor,
   parkedBodyViolation,
   declaredEntryMode,
+  learnedActionAdmissionRefusal,
   type ParkRefusalCause,
 } from '../domain/park-entry.js';
 import { planIosProofDomains } from '../domain/ios-proof-router.js';
@@ -676,6 +677,23 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
     // GH #628: entry comes from the bounded raw-preamble detection on the
     // original artifact text — the same shared admission source every
     // executor uses — never from identity-gated parsed metadata.
+    const initialAdmission = learnedActionAdmissionRefusal({
+      rawYaml: loaded.yamlText,
+      parkPreflightPassed: true,
+      inspectBody: () =>
+        loaded.replay.ok
+          ? { commands: loaded.replay.commands }
+          : loaded.replay.runFlowFile !== undefined
+            ? { runFlowFile: loaded.replay.runFlowFile }
+            : null,
+    });
+    if (initialAdmission && initialAdmission.kind !== 'park-preflight-required') {
+      return failResult(`cdp_run_action: ${initialAdmission.message}`, 'BAD_RECORDING', {
+        actionId: args.actionId,
+        fallback: 'none',
+        ...('cause' in initialAdmission ? { cause: initialAdmission.cause } : {}),
+      });
+    }
     const entryResolution = declaredEntryMode(loaded.yamlText);
     if (!entryResolution.ok) {
       return failResult(
@@ -1458,22 +1476,35 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
           'NO_PROJECT_ROOT',
         );
       }
+      const retryAdmission = learnedActionAdmissionRefusal({
+        rawYaml: reloadedAction.yamlText,
+        parkPreflightPassed: false,
+        inspectBody: () =>
+          reloadedAction.replay.ok
+            ? { commands: reloadedAction.replay.commands }
+            : reloadedAction.replay.runFlowFile !== undefined
+              ? { runFlowFile: reloadedAction.replay.runFlowFile }
+              : null,
+      });
+      if (retryAdmission?.kind === 'park-preflight-required') {
+        return failResult(
+          `cdp_run_action: ${args.actionId} became entry: parked during repair — parked actions cannot be retried; replay it afresh.`,
+          'BAD_RECORDING',
+          { actionId: args.actionId, fallback: 'none' },
+        );
+      }
+      if (retryAdmission) {
+        return failResult(`cdp_run_action: ${retryAdmission.message}`, 'BAD_RECORDING', {
+          actionId: args.actionId,
+          fallback: 'none',
+          ...('cause' in retryAdmission ? { cause: retryAdmission.cause } : {}),
+        });
+      }
       if (!reloadedAction.replay.ok) {
         return failResult(
           `cdp_run_action: repaired action is not valid Maestro YAML: ${reloadedAction.replay.error}`,
           'BAD_RECORDING',
           { actionId: args.actionId },
-        );
-      }
-      // GH #628: re-admit the reloaded artifact — repair or a concurrent edit
-      // could have introduced an entry declaration the retry must not dispatch.
-      const retryEntry = declaredEntryMode(reloadedAction.yamlText);
-      if (!retryEntry.ok) return invalidEntryRefusal(args.actionId, retryEntry.raw);
-      if (retryEntry.mode !== 'cold') {
-        return failResult(
-          `cdp_run_action: ${args.actionId} became entry: ${retryEntry.mode} during repair — parked actions cannot be retried; replay it afresh.`,
-          'BAD_RECORDING',
-          { actionId: args.actionId, fallback: 'none' },
         );
       }
       const retryYaml = reloadedAction.replay.yamlText;
@@ -1485,7 +1516,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
       const repairedAttemptId = randomUUID();
       const retryRunArgs: MaestroRunArgs = {
         inlineYaml: retryYaml,
-        actionMetadata: { ...reloadedAction.metadata, entry: retryEntry.mode },
+        actionMetadata: { ...reloadedAction.metadata, entry: 'cold' },
         platform: args.platform,
         appId: args.appId,
         ...(appFile ? { appFile } : {}),

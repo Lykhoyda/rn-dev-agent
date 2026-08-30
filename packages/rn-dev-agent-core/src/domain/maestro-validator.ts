@@ -220,7 +220,7 @@ function validateRunFlowValue(v: unknown): void {
     const file = obj.file;
     if (typeof file !== 'string') {
       throw new MaestroValidationError(`runFlow.file must be a safe scalar string`, {
-        runFlowFile: invalidRunFlowFileReference(file),
+        runFlowFile: renderRunFlowFileReference(file),
       });
     }
     if (!isSafeMaestroScalar(file)) {
@@ -331,14 +331,18 @@ function asRunFlow(cmd: unknown): RunFlowShape | null {
   return { invalidFile: v };
 }
 
-function invalidRunFlowFileReference(value: unknown): string {
-  const kind = value === null ? 'null' : Array.isArray(value) ? 'array' : typeof value;
-  return `<invalid:${kind}>`;
-}
-
-function renderRunFlowFileReference(file: string): string {
-  if (isSafeMaestroScalar(file) && file.length <= 240) return file;
-  const escaped = JSON.stringify(file)
+export function renderRunFlowFileReference(value: unknown): string {
+  let text: string;
+  if (typeof value === 'string') {
+    text = value;
+  } else {
+    try {
+      text = JSON.stringify(value) ?? String(value);
+    } catch {
+      text = String(value);
+    }
+  }
+  const escaped = JSON.stringify(text)
     .slice(1, -1)
     .replace(
       /[\u007F-\u009F\u2028\u2029]/g,
@@ -418,7 +422,7 @@ export function expandRunFlows(commands: unknown[], opts: ParseAndValidateOption
 
     if ('invalidFile' in rf) {
       throw new MaestroValidationError('runFlow.file must be a non-empty string', {
-        runFlowFile: invalidRunFlowFileReference(rf.invalidFile),
+        runFlowFile: renderRunFlowFileReference(rf.invalidFile),
       });
     }
     if (rf.file !== undefined && rf.file.length === 0) {

@@ -787,10 +787,10 @@ var require_directives = __commonJS({
     };
     var escapeTagName = (tn) => tn.replace(/[!,[\]{}]/g, (ch) => escapeChars[ch]);
     var Directives = class _Directives {
-      constructor(yaml2, tags) {
+      constructor(yaml3, tags) {
         this.docStart = null;
         this.docEnd = false;
-        this.yaml = Object.assign({}, _Directives.defaultYaml, yaml2);
+        this.yaml = Object.assign({}, _Directives.defaultYaml, yaml3);
         this.tags = Object.assign({}, _Directives.defaultTags, tags);
       }
       clone() {
@@ -7971,7 +7971,7 @@ function validateRunFlowValue(v) {
     const file = obj.file;
     if (typeof file !== "string") {
       throw new MaestroValidationError(`runFlow.file must be a safe scalar string`, {
-        runFlowFile: invalidRunFlowFileReference(file)
+        runFlowFile: renderRunFlowFileReference(file)
       });
     }
     if (!isSafeMaestroScalar(file)) {
@@ -8045,14 +8045,18 @@ function asRunFlow(cmd2) {
   }
   return { invalidFile: v };
 }
-function invalidRunFlowFileReference(value) {
-  const kind = value === null ? "null" : Array.isArray(value) ? "array" : typeof value;
-  return `<invalid:${kind}>`;
-}
-function renderRunFlowFileReference(file) {
-  if (isSafeMaestroScalar(file) && file.length <= 240)
-    return file;
-  const escaped = JSON.stringify(file).slice(1, -1).replace(/[\u007F-\u009F\u2028\u2029]/g, (character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`);
+function renderRunFlowFileReference(value) {
+  let text;
+  if (typeof value === "string") {
+    text = value;
+  } else {
+    try {
+      text = JSON.stringify(value) ?? String(value);
+    } catch {
+      text = String(value);
+    }
+  }
+  const escaped = JSON.stringify(text).slice(1, -1).replace(/[\u007F-\u009F\u2028\u2029]/g, (character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`);
   return escaped.length <= 240 ? escaped : `${escaped.slice(0, 237)}...`;
 }
 function collectRunFlowFileReferences(yamlText) {
@@ -8116,7 +8120,7 @@ function expandRunFlows(commands, opts) {
     }
     if ("invalidFile" in rf) {
       throw new MaestroValidationError("runFlow.file must be a non-empty string", {
-        runFlowFile: invalidRunFlowFileReference(rf.invalidFile)
+        runFlowFile: renderRunFlowFileReference(rf.invalidFile)
       });
     }
     if (rf.file !== void 0 && rf.file.length === 0) {
@@ -9017,11 +9021,11 @@ function findProjectRoot(opts = {}) {
   }
   return null;
 }
-var import_yaml2, STRIKE_COOLDOWN_MS;
+var import_yaml3, STRIKE_COOLDOWN_MS;
 var init_storage = __esm({
   "packages/rn-dev-agent-core/dist/nav-graph/storage.js"() {
     "use strict";
-    import_yaml2 = __toESM(require_dist(), 1);
+    import_yaml3 = __toESM(require_dist(), 1);
     STRIKE_COOLDOWN_MS = 5 * 60 * 1e3;
   }
 });
@@ -11310,7 +11314,7 @@ function detectEntryDeclaration(yamlText) {
       inTopSection = false;
       continue;
     }
-    if (inTopSection && !trimmed.startsWith("-"))
+    if (inTopSection && /^[a-zA-Z][\w-]*\s*:/.test(trimmed))
       continue;
     break;
   }
@@ -13985,9 +13989,17 @@ import { basename as basename6, dirname as dirname11, resolve as resolve7 } from
 init_maestro_validator();
 
 // packages/rn-dev-agent-core/dist/domain/park-entry.js
+var import_yaml2 = __toESM(require_dist(), 1);
+init_maestro_validator();
 var PARKED_FORBIDDEN_COMMANDS = /* @__PURE__ */ new Set(["launchApp", "stopApp", "killApp", "clearState"]);
 function learnedActionAdmissionRefusal(args) {
   const entry = detectEntryDeclaration(args.rawYaml);
+  const resolved = resolveEntryMode({ entry });
+  if (resolved.ok && resolved.mode === "parked") {
+    const violation = rawParkedBodyViolation(args.rawYaml);
+    if (violation?.kind === "lifecycle")
+      return parkedBodyRefusal(violation);
+  }
   return learnedActionEntryRefusal({ entry }, args.parkPreflightPassed, args.inspectBody);
 }
 function resolveEntryMode(metadata) {
@@ -14017,21 +14029,8 @@ function learnedActionEntryRefusal(metadata, parkPreflightPassed2, inspectBody) 
       };
     }
     const violation = inspection && "commands" in inspection ? parkedBodyViolation(inspection.commands) : inspection && "runFlowFile" in inspection ? { kind: "runflow-file", reference: inspection.runFlowFile } : null;
-    if (violation?.kind === "lifecycle") {
-      return {
-        kind: "parked-body",
-        message: `Learned action declares entry: parked but its body contains forbidden lifecycle command "${violation.command}".`,
-        cause: { parkedActionLifecycle: violation.command }
-      };
-    }
-    if (violation?.kind === "runflow-file") {
-      const reference = violation.reference.length > 0 ? violation.reference : "<empty>";
-      return {
-        kind: "parked-body",
-        message: `Learned action declares entry: parked but its body contains uninspectable runFlow file reference "${reference}".`,
-        cause: { parkedRunFlowFile: reference }
-      };
-    }
+    if (violation)
+      return parkedBodyRefusal(violation);
   }
   if (entry.mode === "parked" && !parkPreflightPassed2) {
     return {
@@ -14040,6 +14039,21 @@ function learnedActionEntryRefusal(metadata, parkPreflightPassed2, inspectBody) 
     };
   }
   return null;
+}
+function parkedBodyRefusal(violation) {
+  if (violation.kind === "lifecycle") {
+    return {
+      kind: "parked-body",
+      message: `Learned action declares entry: parked but its body contains forbidden lifecycle command "${violation.command}".`,
+      cause: { parkedActionLifecycle: violation.command }
+    };
+  }
+  const reference = violation.reference.length > 0 ? violation.reference : "<empty>";
+  return {
+    kind: "parked-body",
+    message: `Learned action declares entry: parked but its body contains uninspectable runFlow file reference "${reference}".`,
+    cause: { parkedRunFlowFile: reference }
+  };
 }
 function commandName(command) {
   if (typeof command === "string")
@@ -14055,16 +14069,21 @@ function compositeShape(command) {
     return null;
   const value = command[name];
   if (name === "runFlow") {
-    if (typeof value === "string")
-      return { kind: "file", reference: value };
+    if (typeof value === "string") {
+      return { kind: "file", reference: renderRunFlowFileReference(value) };
+    }
     if (!value || typeof value !== "object" || Array.isArray(value)) {
-      return { kind: "file", reference: String(value) };
+      return { kind: "file", reference: renderRunFlowFileReference(value) };
     }
     const record2 = value;
-    if (typeof record2.file === "string")
-      return { kind: "file", reference: record2.file };
+    if (typeof record2.file === "string") {
+      return { kind: "file", reference: renderRunFlowFileReference(record2.file) };
+    }
     if (record2.file !== void 0 || !Array.isArray(record2.commands)) {
-      return { kind: "file", reference: String(record2.file ?? "<malformed runFlow>") };
+      return {
+        kind: "file",
+        reference: renderRunFlowFileReference(record2.file ?? "<malformed runFlow>")
+      };
     }
     return {
       kind: "inline",
@@ -14084,6 +14103,14 @@ function compositeShape(command) {
     commands: record.commands,
     conditional: record.when !== void 0
   };
+}
+function rawParkedBodyViolation(rawYaml) {
+  try {
+    const body = import_yaml2.default.parseAllDocuments(rawYaml, { strict: true }).at(-1)?.toJS();
+    return Array.isArray(body) ? parkedBodyViolation(body) : null;
+  } catch {
+    return null;
+  }
 }
 function parkedBodyViolation(commands) {
   for (const command of commands) {

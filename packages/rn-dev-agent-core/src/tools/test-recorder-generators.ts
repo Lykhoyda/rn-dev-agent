@@ -146,6 +146,15 @@ function recordedRouteSequence(
   ];
 }
 
+function assertParkedRouteSequenceSerializable(expectedRouteSequence: readonly string[]): void {
+  const invalidRoute = expectedRouteSequence.find((route) => route.includes(','));
+  if (invalidRoute !== undefined) {
+    throw new Error(
+      `entry: parked cannot be generated because route ${JSON.stringify(stripNewlines(invalidRoute))} contains a comma.`,
+    );
+  }
+}
+
 // B137: window (ms) after a tap in which a subsequent `navigate` event is
 // considered to be caused by the tap. 1000ms handles human-pace UI transitions
 // plus async navigator resolution without false-positives spanning unrelated
@@ -255,6 +264,8 @@ export function generateMaestro(events: RecordedEvent[], opts: GenerateOpts = {}
   if (parkedAnchorBlocker) {
     throw new Error(`entry: parked cannot be generated because ${parkedAnchorBlocker}`);
   }
+  const expectedRouteSequence = recordedRouteSequence(events, opts);
+  if (expectedRouteSequence) assertParkedRouteSequenceSerializable(expectedRouteSequence);
   assertSafeGeneratedScalars(
     {
       ...opts,
@@ -273,7 +284,7 @@ export function generateMaestro(events: RecordedEvent[], opts: GenerateOpts = {}
     lines.push('---');
   }
   lines.push(`# ${stripNewlines(opts.testName ?? 'Recorded flow')}`);
-  for (const [k, v] of metaPairs(opts, recordedRouteSequence(events, opts))) {
+  for (const [k, v] of metaPairs(opts, expectedRouteSequence)) {
     lines.push(`# ${k}: ${v}`);
   }
   if (opts.startRoute) {

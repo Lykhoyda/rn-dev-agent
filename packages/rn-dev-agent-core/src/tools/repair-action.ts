@@ -19,6 +19,7 @@ import {
   DEFAULT_REPAIR_THRESHOLD,
 } from '../domain/repair-engine.js';
 import { repairBudgetAvailable, recentRepairCount } from '../domain/reusable-action.js';
+import { learnedActionAdmissionRefusal } from '../domain/park-entry.js';
 import { snapshotEnvelopeFailed } from './device-batch.js';
 import { isAgentDeviceRunnerSentinel, type RunnerLeakNode } from './runner-leak-recovery.js';
 import { stopFastRunner } from '../runners/rn-fast-runner-client.js';
@@ -130,6 +131,23 @@ export function createRepairActionHandler() {
           hint: 'Verify the action exists with /list-learned-actions, or pass projectRoot if cdp-bridge is invoked outside the project directory.',
         },
       );
+    }
+
+    const entryRefusal = learnedActionAdmissionRefusal({
+      rawYaml: action.yamlText,
+      parkPreflightPassed: false,
+      inspectBody: () =>
+        action.replay.ok
+          ? { commands: action.replay.commands }
+          : action.replay.runFlowFile !== undefined
+            ? { runFlowFile: action.replay.runFlowFile }
+            : null,
+    });
+    if (entryRefusal) {
+      return failResult(`cdp_repair_action: ${entryRefusal.message}`, 'BAD_RECORDING', {
+        actionId: args.actionId,
+        ...('cause' in entryRefusal ? { cause: entryRefusal.cause } : {}),
+      });
     }
 
     // Phase 129 guardrail #1: respect human edits.

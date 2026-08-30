@@ -2,8 +2,10 @@
 // lifecycle transitions and must be fully inspectable; replay verifies the
 // park anchor read-only before any step (run-action owns the probe).
 
+import yaml from 'yaml';
 import { detectEntryDeclaration } from './reusable-action.js';
 import type { ActionEntryMode, M7Metadata } from './reusable-action.js';
+import { renderRunFlowFileReference } from './maestro-validator.js';
 
 export const PARKED_FORBIDDEN_COMMANDS = new Set(['launchApp', 'stopApp', 'killApp', 'clearState']);
 
@@ -44,6 +46,11 @@ export function learnedActionAdmissionRefusal(
   args: LearnedActionAdmissionArgs,
 ): LearnedActionEntryRefusal | null {
   const entry = detectEntryDeclaration(args.rawYaml) as M7Metadata['entry'];
+  const resolved = resolveEntryMode({ entry });
+  if (resolved.ok && resolved.mode === 'parked') {
+    const violation = rawParkedBodyViolation(args.rawYaml);
+    if (violation?.kind === 'lifecycle') return parkedBodyRefusal(violation);
+  }
   return learnedActionEntryRefusal({ entry }, args.parkPreflightPassed, args.inspectBody);
 }
 
@@ -89,21 +96,7 @@ function learnedActionEntryRefusal(
         : inspection && 'runFlowFile' in inspection
           ? { kind: 'runflow-file' as const, reference: inspection.runFlowFile }
           : null;
-    if (violation?.kind === 'lifecycle') {
-      return {
-        kind: 'parked-body',
-        message: `Learned action declares entry: parked but its body contains forbidden lifecycle command "${violation.command}".`,
-        cause: { parkedActionLifecycle: violation.command },
-      };
-    }
-    if (violation?.kind === 'runflow-file') {
-      const reference = violation.reference.length > 0 ? violation.reference : '<empty>';
-      return {
-        kind: 'parked-body',
-        message: `Learned action declares entry: parked but its body contains uninspectable runFlow file reference "${reference}".`,
-        cause: { parkedRunFlowFile: reference },
-      };
-    }
+    if (violation) return parkedBodyRefusal(violation);
   }
   if (entry.mode === 'parked' && !parkPreflightPassed) {
     return {
@@ -113,6 +106,22 @@ function learnedActionEntryRefusal(
     };
   }
   return null;
+}
+
+function parkedBodyRefusal(violation: ParkedBodyViolation): LearnedActionEntryRefusal {
+  if (violation.kind === 'lifecycle') {
+    return {
+      kind: 'parked-body',
+      message: `Learned action declares entry: parked but its body contains forbidden lifecycle command "${violation.command}".`,
+      cause: { parkedActionLifecycle: violation.command },
+    };
+  }
+  const reference = violation.reference.length > 0 ? violation.reference : '<empty>';
+  return {
+    kind: 'parked-body',
+    message: `Learned action declares entry: parked but its body contains uninspectable runFlow file reference "${reference}".`,
+    cause: { parkedRunFlowFile: reference },
+  };
 }
 
 function commandName(command: unknown): string | null {
@@ -135,16 +144,23 @@ function compositeShape(command: unknown): CompositeShape {
   if (name === null || typeof command === 'string') return null;
   const value = (command as Record<string, unknown>)[name];
   if (name === 'runFlow') {
-    if (typeof value === 'string') return { kind: 'file', reference: value };
+    if (typeof value === 'string') {
+      return { kind: 'file', reference: renderRunFlowFileReference(value) };
+    }
     if (!value || typeof value !== 'object' || Array.isArray(value)) {
-      return { kind: 'file', reference: String(value) };
+      return { kind: 'file', reference: renderRunFlowFileReference(value) };
     }
     const record = value as Record<string, unknown>;
-    if (typeof record.file === 'string') return { kind: 'file', reference: record.file };
+    if (typeof record.file === 'string') {
+      return { kind: 'file', reference: renderRunFlowFileReference(record.file) };
+    }
     // Fail closed: a runFlow without a string file or a real commands array
     // (e.g. file: 123) is uninspectable, never an empty safe inline flow.
     if (record.file !== undefined || !Array.isArray(record.commands)) {
-      return { kind: 'file', reference: String(record.file ?? '<malformed runFlow>') };
+      return {
+        kind: 'file',
+        reference: renderRunFlowFileReference(record.file ?? '<malformed runFlow>'),
+      };
     }
     return {
       kind: 'inline',
@@ -167,6 +183,15 @@ function compositeShape(command: unknown): CompositeShape {
 export type ParkedBodyViolation =
   | { kind: 'lifecycle'; command: string }
   | { kind: 'runflow-file'; reference: string };
+
+function rawParkedBodyViolation(rawYaml: string): ParkedBodyViolation | null {
+  try {
+    const body = yaml.parseAllDocuments(rawYaml, { strict: true }).at(-1)?.toJS();
+    return Array.isArray(body) ? parkedBodyViolation(body) : null;
+  } catch {
+    return null;
+  }
+}
 
 /**
  * First rule-1/rule-2 violation in a parked body (inline subflows included,

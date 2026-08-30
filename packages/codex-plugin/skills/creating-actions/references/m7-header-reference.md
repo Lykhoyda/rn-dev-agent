@@ -7,7 +7,7 @@ The M7 header lives as `# key: value` comment lines above the Maestro YAML body.
 `parseM7Header` walks the file line by line:
 
 - Only `#`-prefixed lines are considered. Each is stripped of `# ` and **trimmed**, then matched against `^([a-zA-Z][\w-]*)\s*:\s*(.*)$`. Empty values are ignored except an explicit `# entry:`, which is preserved so replay refuses `BAD_RECORDING` instead of defaulting to cold.
-- A matching line whose key is **recognized** (table below) sets that field — **later occurrences overwrite earlier ones**. This is why embedded diagram/prose lines must never begin with a bare recognized key: `# status: shows spinner` would overwrite `status`.
+- A matching line whose key is **recognized** (table below) sets that field — **later occurrences overwrite earlier ones**, except `entry`: replay admission uses one identity-independent bounded pre-body scanner, and duplicate `entry` declarations are invalid rather than last-write-wins. This is why embedded diagram/prose lines must never begin with a bare recognized key: `# status: shows spinner` would overwrite `status`.
 - A matching line with an unrecognized key (e.g. `verify: cart-list`) is ignored — harmless but avoid relying on it.
 - Lines whose content starts with a non-letter glyph (`[`, `│`, `▼`, `(`, `-`) can never match — the safe shape for diagram lines.
 - A **fully blank line** (no `#`) after any metadata has been read ends the header. Keep the M7 block + diagram contiguous `#` lines.
@@ -25,7 +25,7 @@ The `appId: <bundle>` + `---` **top section** above the comments is Maestro's ow
 | `tags` | recommended | `[a, b, c]` lower-case kebab | Filter keywords. Conventions: feature area (`tasks`, `auth`, `cart`), operation (`create`, `update`, `delete`), markers (`smoke`, `regression`). |
 | `mutates` | recommended | `true` / `false` | `true` if the flow leaves persistent residue (created rows, toggled settings). Drives the `/run-action` confirmation gate. Missing → rendered as `-` in the inventory (`pre-M7` when the whole header predates M7); `?` marks a present value that failed to parse. |
 | `status` | yes (defaults `experimental`) | `experimental` \| `active` \| `deprecated` | Lifecycle. See transitions below. |
-| `entry` | optional (defaults `cold`) | `cold` \| `parked` | GH #628 — declared start state. `parked` actions omit `launchApp` (any lifecycle command in the body refuses `BAD_RECORDING`); replay verifies the first id-bearing anchor read-only and refuses `PARK_STATE_MISSING` when the park state is absent. An unknown value refuses instead of downgrading to cold. |
+| `entry` | optional (defaults `cold`) | `cold` \| `parked` | GH #628 — declared start state. `parked` actions omit `launchApp` (any lifecycle command in the body refuses `BAD_RECORDING`); replay verifies the first id-bearing anchor read-only and refuses `PARK_STATE_MISSING` when the park state is absent. An unknown, empty, or duplicate declaration refuses instead of downgrading to cold. |
 | `params` | when the body has `${VAR}` | `[KEY_A, KEY_B]`, keys `[A-Z_][A-Z0-9_]*` | The `-e KEY=VAL` surface. Auto-extracted from the body if absent, but declare explicitly so the replay pre-flight reports gaps clearly. |
 | `appId` | strongly recommended | bundle id | Replay pre-flight refuses cross-app replays when the connected target's bundle differs. Duplicate of the top-section value on purpose. |
 | `createdAt` | optional | ISO timestamp | Falls back to file ctime when absent. |
