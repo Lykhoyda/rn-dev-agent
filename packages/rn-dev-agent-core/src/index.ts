@@ -369,7 +369,11 @@ const makeReplayDeps = (_args?: unknown, signal?: AbortSignal): CdpReplayDeps | 
   const tree = createComponentTreeHandler(getClient);
   return {
     pressByTestId: async (id: string) => {
-      mustOk(await interact({ action: 'press', testID: id, animated: false }), `press "${id}"`);
+      // GH #869: walk to the pressable ancestor; type still re-resolves the exact input id.
+      mustOk(
+        await interact({ action: 'press', testID: id, animated: false, walkUp: true }),
+        `press "${id}"`,
+      );
     },
     typeByTestId: async (id: string, text: string) => {
       mustOk(await performReactTreeInput(id, text, getClient(), signal), `type "${id}"`);

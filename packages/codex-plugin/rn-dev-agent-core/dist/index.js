@@ -93930,7 +93930,7 @@ var makeReplayDeps = (_args, signal) => {
   const tree = createComponentTreeHandler(getClient);
   return {
     pressByTestId: async (id) => {
-      mustOk(await interact({ action: "press", testID: id, animated: false }), `press "${id}"`);
+      mustOk(await interact({ action: "press", testID: id, animated: false, walkUp: true }), `press "${id}"`);
     },
     typeByTestId: async (id, text) => {
       mustOk(await performReactTreeInput(id, text, getClient(), signal), `type "${id}"`);
