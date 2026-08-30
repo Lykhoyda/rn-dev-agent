@@ -79311,12 +79311,13 @@ function replayTreeData(envelope, selector) {
   const verdict = envelope.meta?.treeVerdict && typeof envelope.meta.treeVerdict === "object" && !Array.isArray(envelope.meta.treeVerdict) ? envelope.meta.treeVerdict : null;
   const reasons = Array.isArray(verdict?.reasons) ? verdict.reasons : [];
   const truncated = data !== null && (data.__agent_truncated === true || data.truncated === true);
-  const complete = verdict?.state === "ok" && reasons.length === 0 && typeof verdict.rootsSeeded === "number" && verdict.rootsSeeded > 0 && verdict.droppedSubtrees === 0 && verdict.collapsedChildLists === 0;
+  const completeAbsenceVerdict = verdict?.state === "ok" && reasons.length === 0 && typeof verdict.rootsSeeded === "number" && verdict.rootsSeeded > 0 && verdict.droppedSubtrees === 0 && verdict.collapsedChildLists === 0;
   const filteredTree = data !== null && "tree" in data ? data.tree : void 0;
   const serializedMatches = filteredTree && typeof filteredTree === "object" && !Array.isArray(filteredTree) && Array.isArray(filteredTree.matches) ? filteredTree.matches : [];
-  const completeFiltered = complete && verdict.path === "filter" && typeof selector === "string" && data !== null && "tree" in data && serializedMatches.length < 10 && (filteredTree === null || isExactPresent(filteredTree, selector));
-  const completeInteractiveMatch = complete && verdict.path === "interactive" && typeof selector === "string" && isExactPresent(data, selector);
-  const incomplete = envelope.ok === true && !redbox && !truncated && !completeFiltered && !completeInteractiveMatch;
+  const exactFilteredMatch = verdict?.path === "filter" && typeof selector === "string" && data !== null && "tree" in data && serializedMatches.length < 10 && isExactPresent(filteredTree, selector);
+  const completeFilteredAbsence = completeAbsenceVerdict && verdict.path === "filter" && typeof selector === "string" && data !== null && "tree" in data && filteredTree === null;
+  const exactInteractiveMatch = verdict?.path === "interactive" && typeof selector === "string" && isExactPresent(data, selector);
+  const incomplete = envelope.ok === true && !redbox && !truncated && !exactFilteredMatch && !completeFilteredAbsence && !exactInteractiveMatch;
   if (envelope.ok === true && !redbox && !truncated && !incomplete)
     return envelope.data;
   const message = truncated ? "Component tree proof exceeded the readable payload budget" : incomplete ? "Component tree proof is incomplete" : redbox && typeof data?.message === "string" ? data.message.slice(0, 1e3) : envelope.error?.slice(0, 1e3) ?? "Component tree proof is unavailable";

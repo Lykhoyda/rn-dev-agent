@@ -154,7 +154,7 @@ test('unwrapTree returns the bare node for a single match and the matches wrappe
   assert.deepEqual(unwrapTree({ testID: 'x', children: [] }), { testID: 'x', children: [] });
 });
 
-test('replayTreeData accepts complete filtered proof and exact interactive presence', () => {
+test('replayTreeData accepts exact presence independently and complete filtered absence', () => {
   const completeFilterVerdict = {
     state: 'ok',
     path: 'filter',
@@ -168,7 +168,7 @@ test('replayTreeData accepts complete filtered proof and exact interactive prese
       {
         ok: true,
         data: { tree: { testID: 'otp', children: [] } },
-        meta: { treeVerdict: completeFilterVerdict },
+        meta: { treeVerdict: { ...completeFilterVerdict, droppedSubtrees: 1 } },
       },
       'otp',
     ),
@@ -192,9 +192,9 @@ test('replayTreeData accepts complete filtered proof and exact interactive prese
         data: { interactive: [{ testID: 'otp' }] },
         meta: {
           treeVerdict: {
-            state: 'ok',
+            state: 'degraded',
             path: 'interactive',
-            reasons: [],
+            reasons: ['scan-budget-exhausted'],
             rootsSeeded: 1,
             droppedSubtrees: 0,
             collapsedChildLists: 0,
@@ -204,6 +204,24 @@ test('replayTreeData accepts complete filtered proof and exact interactive prese
       'otp',
     ),
     { interactive: [{ testID: 'otp' }] },
+  );
+  assert.throws(
+    () =>
+      replayTreeData(
+        {
+          ok: true,
+          data: { tree: null },
+          meta: {
+            treeVerdict: {
+              ...completeFilterVerdict,
+              state: 'degraded',
+              reasons: ['scan-budget-exhausted'],
+            },
+          },
+        },
+        'missing',
+      ),
+    (error) => error.code === 'EVAL_FAILED' && error.meta?.treeEnvelope?.incomplete === true,
   );
 });
 

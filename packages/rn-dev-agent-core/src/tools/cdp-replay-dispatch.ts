@@ -60,7 +60,7 @@ export function replayTreeData(envelope: ReplayTreeEnvelope, selector?: string):
       : null;
   const reasons = Array.isArray(verdict?.reasons) ? verdict.reasons : [];
   const truncated = data !== null && (data.__agent_truncated === true || data.truncated === true);
-  const complete =
+  const completeAbsenceVerdict =
     verdict?.state === 'ok' &&
     reasons.length === 0 &&
     typeof verdict.rootsSeeded === 'number' &&
@@ -75,21 +75,31 @@ export function replayTreeData(envelope: ReplayTreeEnvelope, selector?: string):
     Array.isArray((filteredTree as Record<string, unknown>).matches)
       ? ((filteredTree as Record<string, unknown>).matches as unknown[])
       : [];
-  const completeFiltered =
-    complete &&
-    verdict.path === 'filter' &&
+  const exactFilteredMatch =
+    verdict?.path === 'filter' &&
     typeof selector === 'string' &&
     data !== null &&
     'tree' in data &&
     serializedMatches.length < 10 &&
-    (filteredTree === null || isExactPresent(filteredTree, selector));
-  const completeInteractiveMatch =
-    complete &&
-    verdict.path === 'interactive' &&
+    isExactPresent(filteredTree, selector);
+  const completeFilteredAbsence =
+    completeAbsenceVerdict &&
+    verdict.path === 'filter' &&
+    typeof selector === 'string' &&
+    data !== null &&
+    'tree' in data &&
+    filteredTree === null;
+  const exactInteractiveMatch =
+    verdict?.path === 'interactive' &&
     typeof selector === 'string' &&
     isExactPresent(data, selector);
   const incomplete =
-    envelope.ok === true && !redbox && !truncated && !completeFiltered && !completeInteractiveMatch;
+    envelope.ok === true &&
+    !redbox &&
+    !truncated &&
+    !exactFilteredMatch &&
+    !completeFilteredAbsence &&
+    !exactInteractiveMatch;
   if (envelope.ok === true && !redbox && !truncated && !incomplete) return envelope.data;
 
   const message = truncated
