@@ -739,14 +739,21 @@ function wdaToolchainFingerprint(): string | null {
   return memoizedWdaToolchainFingerprint;
 }
 
-export function persistentWdaStoreBuildsRoot(): string | null {
+export function persistentWdaStoreBuildsRoot(platformKey = nodePlatformKey()): string | null {
   const fingerprint = wdaToolchainFingerprint();
-  if (!fingerprint) return null;
+  if (!fingerprint || !pinArchiveCoords(platformKey)) return null;
   const versionsRoot = runnerCacheVersionsRoot();
   const components = [
     join(versionsRoot, `.wda-store-${MAESTRO_RUNNER_PIN.version}`),
-    join(versionsRoot, `.wda-store-${MAESTRO_RUNNER_PIN.version}`, fingerprint),
-    join(versionsRoot, `.wda-store-${MAESTRO_RUNNER_PIN.version}`, fingerprint, 'wda-builds'),
+    join(versionsRoot, `.wda-store-${MAESTRO_RUNNER_PIN.version}`, platformKey),
+    join(versionsRoot, `.wda-store-${MAESTRO_RUNNER_PIN.version}`, platformKey, fingerprint),
+    join(
+      versionsRoot,
+      `.wda-store-${MAESTRO_RUNNER_PIN.version}`,
+      platformKey,
+      fingerprint,
+      'wda-builds',
+    ),
   ];
   // Symlink fence: an existing component that is not a real directory would
   // redirect seeding, publication, and eviction outside the store tree.
@@ -758,7 +765,7 @@ export function persistentWdaStoreBuildsRoot(): string | null {
       break;
     }
   }
-  return components[2]!;
+  return components[3]!;
 }
 
 // The runner's own reuse marker: build-for-testing emits the .xctestrun beside

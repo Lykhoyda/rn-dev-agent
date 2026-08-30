@@ -209,9 +209,10 @@ alive for such callers.
   failure) withhold the qualifier regardless of row states.
 - WDA build persistence has one owner: the best-effort seed/publish pair around
   the per-spawn runner cache in `src/domain/engine-pin.ts`, backed by the
-  persistent store `.wda-store-<runner>/<xcode fingerprint>/` beside the
-  pin-cache (atomic staged-rename publication; delete the store to force a cold
-  build). Seeding must stay AFTER the snapshot seal walk: recursive
+  persistent store
+  `.wda-store-<runner>/<host platform-architecture>/<xcode fingerprint>/`
+  beside the pin-cache (atomic staged-rename publication; delete the store to
+  force a cold build). Seeding must stay AFTER the snapshot seal walk: recursive
   `readdirSync` descends through the `cache` symlink, and sealed seed content
   breaks the runner's warm-path xctestrun port rewrite (EACCES, four retries,
   bootstrap failure).

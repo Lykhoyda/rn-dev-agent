@@ -10975,15 +10975,16 @@ function wdaToolchainFingerprint() {
   }
   return memoizedWdaToolchainFingerprint;
 }
-function persistentWdaStoreBuildsRoot() {
+function persistentWdaStoreBuildsRoot(platformKey = nodePlatformKey()) {
   const fingerprint = wdaToolchainFingerprint();
-  if (!fingerprint)
+  if (!fingerprint || !pinArchiveCoords(platformKey))
     return null;
   const versionsRoot = runnerCacheVersionsRoot();
   const components = [
     join2(versionsRoot, `.wda-store-${MAESTRO_RUNNER_PIN.version}`),
-    join2(versionsRoot, `.wda-store-${MAESTRO_RUNNER_PIN.version}`, fingerprint),
-    join2(versionsRoot, `.wda-store-${MAESTRO_RUNNER_PIN.version}`, fingerprint, "wda-builds")
+    join2(versionsRoot, `.wda-store-${MAESTRO_RUNNER_PIN.version}`, platformKey),
+    join2(versionsRoot, `.wda-store-${MAESTRO_RUNNER_PIN.version}`, platformKey, fingerprint),
+    join2(versionsRoot, `.wda-store-${MAESTRO_RUNNER_PIN.version}`, platformKey, fingerprint, "wda-builds")
   ];
   for (const component of components) {
     try {
@@ -10994,7 +10995,7 @@ function persistentWdaStoreBuildsRoot() {
       break;
     }
   }
-  return components[2];
+  return components[3];
 }
 function isCompleteWdaBuild(keyDir) {
   try {

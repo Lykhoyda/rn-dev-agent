@@ -128,7 +128,14 @@ test(
         );
 
       const storeBuilds = persistentWdaStoreBuildsRoot();
+      const arm64StoreBuilds = persistentWdaStoreBuildsRoot('darwin-arm64');
+      const x64StoreBuilds = persistentWdaStoreBuildsRoot('darwin-x64');
       assert.ok(storeBuilds);
+      assert.ok(arm64StoreBuilds);
+      assert.ok(x64StoreBuilds);
+      assert.notEqual(arm64StoreBuilds, x64StoreBuilds);
+      assert.match(arm64StoreBuilds!, /darwin-arm64/);
+      assert.match(x64StoreBuilds!, /darwin-x64/);
       assert.match(
         storeBuilds!,
         new RegExp(`\\.wda-store-${MAESTRO_RUNNER_PIN.version.replaceAll('.', '\\.')}`),
