@@ -67675,8 +67675,7 @@ var init_injected_helpers = __esm({
       });
     }
     function containsFiber(ancestor, candidate) {
-      // A fiber and its work-in-progress alternate are the same logical node;
-      // committed .return chains may thread through either half of the pair.
+      // React return chains may thread through either half of a fiber/alternate pair.
       var ancestorAlternate = ancestor.alternate || null;
       var current = candidate;
       var guard = 0;
