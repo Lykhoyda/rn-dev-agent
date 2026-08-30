@@ -70,11 +70,9 @@ export function replayTreeData(envelope: ReplayTreeEnvelope): unknown {
 export interface CdpReplayDeps {
   pressByTestId(id: string): Promise<void>;
   typeByTestId(id: string, text: string): Promise<void>;
-  // returns parsed readable getTree data filtered to `id`
+  // Returns parsed readable getTree data filtered to `id`.
   treeFor(id: string): Promise<unknown>;
-  // exact-ID oracle (injected isTestIdFrontmost): sole owner of presence,
-  // absence, match count, and frontmost evidence — matchCount 0 is complete
-  // readable absence; refusals carry no matchCount
+  // Exact-ID oracle; matchCount 0 proves absence, while refusals omit it.
   frontmostFor(id: string): Promise<{
     visible: boolean;
     reason?: string;
