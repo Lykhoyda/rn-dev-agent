@@ -58723,8 +58723,9 @@ function projectRootFromYaml(yamlFilePath) {
 
 // packages/rn-dev-agent-core/dist/domain/engine-pin.js
 init_process_birth();
+import { spawnSync } from "node:child_process";
 import { createHash as createHash7 } from "node:crypto";
-import { accessSync, chmodSync as chmodSync4, constants as constants2, copyFileSync as copyFileSync2, existsSync as existsSync18, lstatSync as lstatSync7, mkdirSync as mkdirSync12, mkdtempSync, readFileSync as readFileSync17, readdirSync as readdirSync7, readlinkSync as readlinkSync3, realpathSync as realpathSync7, rmSync as rmSync6, symlinkSync, unlinkSync as unlinkSync9 } from "node:fs";
+import { accessSync, chmodSync as chmodSync4, constants as constants2, copyFileSync as copyFileSync2, cpSync as cpSync2, existsSync as existsSync18, lstatSync as lstatSync7, mkdirSync as mkdirSync12, mkdtempSync, readFileSync as readFileSync17, readdirSync as readdirSync7, readlinkSync as readlinkSync3, realpathSync as realpathSync7, renameSync as renameSync4, rmSync as rmSync6, symlinkSync, unlinkSync as unlinkSync9 } from "node:fs";
 import { homedir as homedir6 } from "node:os";
 import { basename as basename5, dirname as dirname11, join as join25, relative as relative3, resolve as resolve4, sep as sep4 } from "node:path";
 import { gunzipSync } from "node:zlib";
@@ -59297,6 +59298,135 @@ function assertRunnerSnapshotCacheBinding(snapshotRoot, cacheRoot) {
     throw new RunnerCacheUnavailableError("cache", cacheErrno(error2));
   }
 }
+var memoizedWdaToolchainFingerprint;
+function wdaToolchainFingerprint() {
+  if (memoizedWdaToolchainFingerprint !== void 0)
+    return memoizedWdaToolchainFingerprint;
+  try {
+    const probe = spawnSync("xcodebuild", ["-version"], { encoding: "utf8", timeout: 15e3 });
+    const match = /Xcode\s+(\S+)[\s\S]*Build version\s+(\S+)/.exec(probe.stdout ?? "");
+    memoizedWdaToolchainFingerprint = probe.status === 0 && match && /^[\w.]+$/.test(match[1]) && /^[\w.]+$/.test(match[2]) ? `xcode-${match[1]}-${match[2]}` : null;
+  } catch {
+    memoizedWdaToolchainFingerprint = null;
+  }
+  return memoizedWdaToolchainFingerprint;
+}
+function persistentWdaStoreBuildsRoot() {
+  const fingerprint = wdaToolchainFingerprint();
+  if (!fingerprint)
+    return null;
+  const versionsRoot = runnerCacheVersionsRoot();
+  const components = [
+    join25(versionsRoot, `.wda-store-${MAESTRO_RUNNER_PIN.version}`),
+    join25(versionsRoot, `.wda-store-${MAESTRO_RUNNER_PIN.version}`, fingerprint),
+    join25(versionsRoot, `.wda-store-${MAESTRO_RUNNER_PIN.version}`, fingerprint, "wda-builds")
+  ];
+  for (const component of components) {
+    try {
+      const stat2 = lstatSync7(component);
+      if (!stat2.isDirectory() || stat2.isSymbolicLink())
+        return null;
+    } catch {
+      break;
+    }
+  }
+  return components[2];
+}
+function isCompleteWdaBuild(keyDir) {
+  try {
+    const products = join25(keyDir, "DerivedData", "Build", "Products");
+    const entries = readdirSync7(products, { withFileTypes: true });
+    return entries.some((entry) => entry.isFile() && entry.name.endsWith(".xctestrun")) && entries.some((entry) => entry.isDirectory() && readdirSync7(join25(products, entry.name)).some((name) => {
+      if (!name.endsWith(".app"))
+        return false;
+      try {
+        const executable = lstatSync7(join25(products, entry.name, name, name.slice(0, -".app".length)));
+        return executable.isFile() && !executable.isSymbolicLink();
+      } catch {
+        return false;
+      }
+    }));
+  } catch {
+    return false;
+  }
+}
+function copyWdaBuildKey(sourceKey, stagedKey) {
+  cpSync2(sourceKey, stagedKey, {
+    recursive: true,
+    mode: constants2.COPYFILE_FICLONE,
+    verbatimSymlinks: true
+  });
+  return isCompleteWdaBuild(stagedKey);
+}
+function seedRunnerSnapshotCacheFromStore(cacheRoot) {
+  let seeded = 0;
+  try {
+    const storeBuilds = persistentWdaStoreBuildsRoot();
+    if (!storeBuilds)
+      return 0;
+    const target = join25(cacheRoot, "wda-builds");
+    for (const entry of readdirSync7(storeBuilds, { withFileTypes: true })) {
+      if (!entry.isDirectory())
+        continue;
+      const sourceKey = join25(storeBuilds, entry.name);
+      if (!isCompleteWdaBuild(sourceKey))
+        continue;
+      mkdirSync12(target, { recursive: true });
+      const stagedKey = join25(target, `.seed-${entry.name}`);
+      try {
+        if (copyWdaBuildKey(sourceKey, stagedKey)) {
+          renameSync4(stagedKey, join25(target, entry.name));
+          seeded += 1;
+        } else {
+          rmSync6(stagedKey, { recursive: true, force: true });
+        }
+      } catch {
+        try {
+          rmSync6(stagedKey, { recursive: true, force: true });
+        } catch {
+        }
+      }
+    }
+  } catch {
+  }
+  return seeded;
+}
+function publishRunnerSnapshotCacheToStore(cacheRoot) {
+  let published = 0;
+  try {
+    const spawnBuilds = join25(cacheRoot, "wda-builds");
+    const storeBuilds = persistentWdaStoreBuildsRoot();
+    if (!storeBuilds)
+      return 0;
+    for (const entry of readdirSync7(spawnBuilds, { withFileTypes: true })) {
+      if (!entry.isDirectory() || entry.name.startsWith("."))
+        continue;
+      const sourceKey = join25(spawnBuilds, entry.name);
+      if (!isCompleteWdaBuild(sourceKey))
+        continue;
+      const storeKey = join25(storeBuilds, entry.name);
+      if (isCompleteWdaBuild(storeKey))
+        continue;
+      mkdirSync12(storeBuilds, { recursive: true, mode: 448 });
+      const stage = mkdtempSync(join25(storeBuilds, ".stage-"));
+      try {
+        const stagedKey = join25(stage, entry.name);
+        if (copyWdaBuildKey(sourceKey, stagedKey)) {
+          if (existsSync18(storeKey)) {
+            const evicted = join25(stage, "evicted");
+            renameSync4(storeKey, evicted);
+          }
+          renameSync4(stagedKey, storeKey);
+          published += 1;
+        }
+      } finally {
+        rmSync6(stage, { recursive: true, force: true });
+      }
+    }
+  } catch {
+  }
+  return published;
+}
 function provisionRunnerSnapshotCache(snapshotRoot, testHooks = {}, setOwnedCacheRoot = () => {
 }) {
   const cacheRoot = expectedRunnerCacheRoot(snapshotRoot);
@@ -59417,8 +59547,12 @@ async function withImmediatePinnedRunner(runnerPath, resolveStatus, execute2, pl
       }
     }
     chmodSync4(snapshotRoot, 320);
-    if (cacheRoot)
+    if (cacheRoot) {
       assertRunnerSnapshotCacheBinding(snapshotRoot, cacheRoot);
+      recordRunnerDiagnostic("cache-seed", {
+        seededBuilds: seedRunnerSnapshotCacheFromStore(cacheRoot)
+      });
+    }
     const openedRunner = lstatSync7(snapshotRunner);
     recordRunnerDiagnostic("runner-exec-begin", { runnerPinVersion: MAESTRO_RUNNER_PIN.version });
     if (platform === "ios") {
@@ -59444,6 +59578,11 @@ async function withImmediatePinnedRunner(runnerPath, resolveStatus, execute2, pl
           chmodSync4(entryPath, 384);
       }
     } catch {
+    }
+    if (cacheRoot) {
+      recordRunnerDiagnostic("cache-publish", {
+        publishedBuilds: publishRunnerSnapshotCacheToStore(cacheRoot)
+      });
     }
     removeRunnerSnapshotAndCache(snapshotRoot, cacheRoot);
   }
@@ -59607,14 +59746,14 @@ import { join as join28 } from "node:path";
 // packages/rn-dev-agent-core/dist/session/bound-directory.js
 import { spawn as spawn5 } from "node:child_process";
 import { randomUUID as randomUUID7 } from "node:crypto";
-import { closeSync as closeSync3, constants as constants3, existsSync as existsSync19, fstatSync as fstatSync2, lstatSync as lstatSync9, mkdtempSync as mkdtempSync2, openSync as openSync3, readFileSync as readFileSync19, realpathSync as realpathSync8, renameSync as renameSync5, rmSync as rmSync8, writeFileSync as writeFileSync10 } from "node:fs";
+import { closeSync as closeSync3, constants as constants3, existsSync as existsSync19, fstatSync as fstatSync2, lstatSync as lstatSync9, mkdtempSync as mkdtempSync2, openSync as openSync3, readFileSync as readFileSync19, realpathSync as realpathSync8, renameSync as renameSync6, rmSync as rmSync8, writeFileSync as writeFileSync10 } from "node:fs";
 import { tmpdir as tmpdir7 } from "node:os";
 import { join as join27 } from "node:path";
 
 // packages/rn-dev-agent-core/dist/session/state-root.js
 init_secure_state_file();
 import { randomBytes as randomBytes5, randomUUID as randomUUID6 } from "node:crypto";
-import { chmodSync as chmodSync5, linkSync, lstatSync as lstatSync8, mkdirSync as mkdirSync13, readFileSync as readFileSync18, renameSync as renameSync4, rmSync as rmSync7, statSync as statSync8, writeFileSync as writeFileSync9 } from "node:fs";
+import { chmodSync as chmodSync5, linkSync, lstatSync as lstatSync8, mkdirSync as mkdirSync13, readFileSync as readFileSync18, renameSync as renameSync5, rmSync as rmSync7, statSync as statSync8, writeFileSync as writeFileSync9 } from "node:fs";
 import { join as join26, resolve as resolve5 } from "node:path";
 function fail(code, detail) {
   throw new Error(`${code}: ${detail}`);
@@ -61003,7 +61142,7 @@ function sendOperation(directory, request2, timeoutMs) {
   const requestPath2 = join27(directory.worker.controlPath, `${prefix}.request`);
   const responsePath = join27(directory.worker.controlPath, `${prefix}.response`);
   writeFileSync10(pendingPath, JSON.stringify(request2), { flag: "wx", mode: 384 });
-  renameSync5(pendingPath, requestPath2);
+  renameSync6(pendingPath, requestPath2);
   if (!waitForFile(responsePath, timeoutMs)) {
     throw new Error("SESSION_INTEGRATION_WORKER_TIMEOUT");
   }
@@ -62080,7 +62219,7 @@ function canonicalAuthorityJson(value) {
 }
 
 // packages/rn-dev-agent-core/dist/session/managed-metro-enforcement.js
-import { spawnSync } from "node:child_process";
+import { spawnSync as spawnSync2 } from "node:child_process";
 import { createHash as createHash9 } from "node:crypto";
 import { closeSync as closeSync4, constants as constants4, existsSync as existsSync21, mkdirSync as mkdirSync14, openSync as openSync4, readFileSync as readFileSync21, realpathSync as realpathSync9, rmSync as rmSync9, statSync as statSync9, symlinkSync as symlinkSync2, writeSync as writeSync2 } from "node:fs";
 import { dirname as dirname12, resolve as resolve6 } from "node:path";
@@ -62090,7 +62229,7 @@ function sha256(value) {
   return createHash9("sha256").update(value).digest("hex");
 }
 function defaultRun2(command, args) {
-  const result = spawnSync(command, [...args], {
+  const result = spawnSync2(command, [...args], {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
     timeout: 25e3
@@ -74142,7 +74281,7 @@ import { basename as basename8, dirname as dirname19, isAbsolute as isAbsolute12
 
 // packages/rn-dev-agent-core/dist/domain/atomic-writer.js
 init_process_birth();
-import { writeFileSync as writeFileSync11, renameSync as renameSync6, statSync as statSync11, mkdirSync as mkdirSync17, existsSync as existsSync24, unlinkSync as unlinkSync10, readdirSync as readdirSync9, openSync as openSync9, closeSync as closeSync9, chmodSync as chmodSync6, fstatSync as fstatSync7, lstatSync as lstatSync12, readFileSync as readFileSync25, linkSync as linkSync2, constants as constants8 } from "node:fs";
+import { writeFileSync as writeFileSync11, renameSync as renameSync7, statSync as statSync11, mkdirSync as mkdirSync17, existsSync as existsSync24, unlinkSync as unlinkSync10, readdirSync as readdirSync9, openSync as openSync9, closeSync as closeSync9, chmodSync as chmodSync6, fstatSync as fstatSync7, lstatSync as lstatSync12, readFileSync as readFileSync25, linkSync as linkSync2, constants as constants8 } from "node:fs";
 import { dirname as dirname17, basename as basename7 } from "node:path";
 var FUTURE_MTIME_BUFFER_MS = 1e3;
 var ORPHAN_MAX_AGE_MS = 5 * 60 * 1e3;
@@ -74446,7 +74585,7 @@ var atomicWriter = {
   },
   /** Underlying `fs.renameSync(from, to)`. */
   _rename(from, to) {
-    renameSync6(from, to);
+    renameSync7(from, to);
   },
   /** Underlying `fs.statSync(path).mtimeMs`. */
   _statMtimeMs(path) {
@@ -74873,8 +75012,8 @@ function listUnfollowedDirectory(directoryPath, identity2) {
 init_maestro_validator();
 
 // packages/rn-dev-agent-core/dist/session/worktree-inheritance.js
-import { spawnSync as spawnSync2 } from "node:child_process";
-import { closeSync as closeSync10, constants as constants9, existsSync as existsSync25, fstatSync as fstatSync8, lstatSync as lstatSync14, mkdirSync as mkdirSync18, openSync as openSync10, readFileSync as readFileSync26, readlinkSync as readlinkSync5, realpathSync as realpathSync12, renameSync as renameSync7, statSync as statSync12, symlinkSync as symlinkSync3, unlinkSync as unlinkSync11 } from "node:fs";
+import { spawnSync as spawnSync3 } from "node:child_process";
+import { closeSync as closeSync10, constants as constants9, existsSync as existsSync25, fstatSync as fstatSync8, lstatSync as lstatSync14, mkdirSync as mkdirSync18, openSync as openSync10, readFileSync as readFileSync26, readlinkSync as readlinkSync5, realpathSync as realpathSync12, renameSync as renameSync8, statSync as statSync12, symlinkSync as symlinkSync3, unlinkSync as unlinkSync11 } from "node:fs";
 import { dirname as dirname18, isAbsolute as isAbsolute11, join as join37, relative as relative7, resolve as resolve14, sep as sep7 } from "node:path";
 
 // packages/rn-dev-agent-core/dist/session/worktree-repair-remedy.js
@@ -74913,7 +75052,7 @@ function gitEnvironment() {
   return env;
 }
 function git(cwd, args) {
-  const result = spawnSync2("git", args, {
+  const result = spawnSync3("git", args, {
     cwd,
     encoding: "utf8",
     env: gitEnvironment(),
@@ -75423,7 +75562,7 @@ function isTracked(worktreeRoot, relativePath) {
   return listed.ok && listed.stdout.trim().length > 0;
 }
 function isIgnoreSafe(worktreeRoot, relativePath) {
-  const result = spawnSync2("git", ["check-ignore", "--no-index", "-q", "--", relativePath], {
+  const result = spawnSync3("git", ["check-ignore", "--no-index", "-q", "--", relativePath], {
     cwd: worktreeRoot,
     encoding: "utf8",
     env: gitEnvironment(),
@@ -82201,7 +82340,7 @@ import { promisify as promisify19 } from "node:util";
 
 // packages/rn-dev-agent-core/dist/experience/evidence.js
 import { createHash as createHash16, randomBytes as randomBytes7, randomUUID as randomUUID10 } from "node:crypto";
-import { chmodSync as chmodSync7, existsSync as existsSync30, mkdirSync as mkdirSync19, readFileSync as readFileSync30, readdirSync as readdirSync12, renameSync as renameSync8, statSync as statSync14, unlinkSync as unlinkSync13, writeFileSync as writeFileSync13 } from "node:fs";
+import { chmodSync as chmodSync7, existsSync as existsSync30, mkdirSync as mkdirSync19, readFileSync as readFileSync30, readdirSync as readdirSync12, renameSync as renameSync9, statSync as statSync14, unlinkSync as unlinkSync13, writeFileSync as writeFileSync13 } from "node:fs";
 import { homedir as homedir9, platform as hostPlatform, release } from "node:os";
 import { dirname as dirname22, join as join43 } from "node:path";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
@@ -82502,7 +82641,7 @@ var ExperienceRecorder = class {
         flag: "wx",
         mode: 384
       });
-      renameSync8(temp, this.path);
+      renameSync9(temp, this.path);
       chmodSync7(this.path, 384);
     } catch (error2) {
       try {
@@ -82831,7 +82970,7 @@ function writeRunnerDiagnosticsBundle(directory, bundle) {
   }
   const temporary = join43(directory, `.runner-diagnostics.${process.pid}.${randomUUID10()}`);
   writeFileSync13(temporary, serialized, { encoding: "utf8", flag: "wx", mode: 384 });
-  renameSync8(temporary, outputPath);
+  renameSync9(temporary, outputPath);
   chmodSync7(outputPath, 384);
   const retained = runnerDiagnosticsFiles(directory).map((file) => ({
     file,
@@ -85555,7 +85694,7 @@ function createDeviceRecordHandler(deps = {}) {
 // packages/rn-dev-agent-core/dist/tools/proof-capture.js
 import { createHash as createHash19, randomUUID as randomUUID11 } from "node:crypto";
 import { execFileSync as execFileSync15 } from "node:child_process";
-import { chmodSync as chmodSync8, closeSync as closeSync11, existsSync as existsSync32, fsyncSync, lstatSync as lstatSync17, mkdirSync as mkdirSync20, openSync as openSync11, readFileSync as readFileSync32, realpathSync as realpathSync15, renameSync as renameSync9, unlinkSync as unlinkSync15, writeFileSync as writeFileSync15 } from "node:fs";
+import { chmodSync as chmodSync8, closeSync as closeSync11, existsSync as existsSync32, fsyncSync, lstatSync as lstatSync17, mkdirSync as mkdirSync20, openSync as openSync11, readFileSync as readFileSync32, realpathSync as realpathSync15, renameSync as renameSync10, unlinkSync as unlinkSync15, writeFileSync as writeFileSync15 } from "node:fs";
 import { basename as basename11, dirname as dirname24, extname, isAbsolute as isAbsolute14, join as join46, relative as relative9, resolve as resolve17, sep as sep10 } from "node:path";
 import { fileURLToPath as fileURLToPath5 } from "node:url";
 
@@ -86639,7 +86778,7 @@ function writeProofReceiptAtomic(path, receipt2) {
     fsyncSync(descriptor);
     closeSync11(descriptor);
     descriptor = null;
-    renameSync9(temporary, path);
+    renameSync10(temporary, path);
     chmodSync8(path, 384);
   } catch (error2) {
     if (descriptor !== null)
@@ -92258,7 +92397,7 @@ init_sources();
 
 // packages/rn-dev-agent-core/dist/domain/e2e-test.js
 import { dirname as dirname30, join as join56 } from "node:path";
-import { mkdirSync as mkdirSync22, writeFileSync as writeFileSync18, renameSync as renameSync10, readFileSync as readFileSync38, readdirSync as readdirSync17, existsSync as existsSync35 } from "node:fs";
+import { mkdirSync as mkdirSync22, writeFileSync as writeFileSync18, renameSync as renameSync11, readFileSync as readFileSync38, readdirSync as readdirSync17, existsSync as existsSync35 } from "node:fs";
 import { createHash as createHash22 } from "node:crypto";
 var FLOW_SENTINEL = "# e2e-locked-flow-below";
 function e2eDirFor(projectRoot) {
@@ -92310,7 +92449,7 @@ function freezeLockedTest(projectRoot, source, ctx) {
   };
   const tmp = `${filePath}.tmp`;
   writeFileSync18(tmp, serializeLockedTest(meta), "utf8");
-  renameSync10(tmp, filePath);
+  renameSync11(tmp, filePath);
   return { ...meta, filePath };
 }
 function loadLockedTest(projectRoot, id) {
@@ -92513,7 +92652,7 @@ function createLockE2eTestHandler(deps = {}) {
 
 // packages/rn-dev-agent-core/dist/domain/e2e-run.js
 import { join as join58 } from "node:path";
-import { mkdirSync as mkdirSync23, writeFileSync as writeFileSync19, renameSync as renameSync11, readFileSync as readFileSync40, existsSync as existsSync36 } from "node:fs";
+import { mkdirSync as mkdirSync23, writeFileSync as writeFileSync19, renameSync as renameSync12, readFileSync as readFileSync40, existsSync as existsSync36 } from "node:fs";
 function classifyFlowResult(input) {
   if (input.passed) {
     return {
@@ -92574,7 +92713,7 @@ function writeJsonAtomic(file, value) {
   mkdirSync23(join58(file, ".."), { recursive: true });
   const tmp = `${file}.tmp`;
   writeFileSync19(tmp, JSON.stringify(value, null, 2), "utf8");
-  renameSync11(tmp, file);
+  renameSync12(tmp, file);
 }
 function loadIndex(projectRoot) {
   const file = join58(e2eRunsDirFor(projectRoot), "index.json");
@@ -92622,7 +92761,7 @@ init_utils();
 
 // packages/rn-dev-agent-core/dist/domain/e2e-run-request.js
 import { join as join59 } from "node:path";
-import { mkdirSync as mkdirSync24, writeFileSync as writeFileSync20, renameSync as renameSync12, readFileSync as readFileSync41, readdirSync as readdirSync18, existsSync as existsSync37 } from "node:fs";
+import { mkdirSync as mkdirSync24, writeFileSync as writeFileSync20, renameSync as renameSync13, readFileSync as readFileSync41, readdirSync as readdirSync18, existsSync as existsSync37 } from "node:fs";
 var TERMINAL_STATUSES = /* @__PURE__ */ new Set([
   "done",
   "failed",
@@ -92641,7 +92780,7 @@ function writeRequest(projectRoot, req) {
   mkdirSync24(requestsDir(projectRoot), { recursive: true });
   const tmp = `${file}.tmp`;
   writeFileSync20(tmp, JSON.stringify(req, null, 2), "utf8");
-  renameSync12(tmp, file);
+  renameSync13(tmp, file);
 }
 function loadRequest(projectRoot, runId) {
   const file = requestPath(projectRoot, runId);

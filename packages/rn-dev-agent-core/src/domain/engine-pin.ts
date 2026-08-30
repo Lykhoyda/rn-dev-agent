@@ -6,12 +6,14 @@
 //   3. Reconcile knownQuirks (retest each listed quirk; add/remove entries).
 //   4. Update version + sha256 here AND in ensure-maestro-runner.sh; add a changeset.
 
+import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
   accessSync,
   chmodSync,
   constants,
   copyFileSync,
+  cpSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -20,6 +22,7 @@ import {
   readdirSync,
   readlinkSync,
   realpathSync,
+  renameSync,
   rmSync,
   symlinkSync,
   unlinkSync,
@@ -713,6 +716,154 @@ export function assertRunnerSnapshotCacheBinding(snapshotRoot: string, cacheRoot
   }
 }
 
+let memoizedWdaToolchainFingerprint: string | null | undefined;
+
+export function _setWdaToolchainFingerprintForTest(fingerprint: string | null | undefined): void {
+  memoizedWdaToolchainFingerprint = fingerprint;
+}
+
+// Xcode/SDK identity fences the persistent store: a toolchain change lands in a
+// fresh store slot and cold-builds instead of reusing artifacts of unknown drift.
+function wdaToolchainFingerprint(): string | null {
+  if (memoizedWdaToolchainFingerprint !== undefined) return memoizedWdaToolchainFingerprint;
+  try {
+    const probe = spawnSync('xcodebuild', ['-version'], { encoding: 'utf8', timeout: 15_000 });
+    const match = /Xcode\s+(\S+)[\s\S]*Build version\s+(\S+)/.exec(probe.stdout ?? '');
+    memoizedWdaToolchainFingerprint =
+      probe.status === 0 && match && /^[\w.]+$/.test(match[1]!) && /^[\w.]+$/.test(match[2]!)
+        ? `xcode-${match[1]}-${match[2]}`
+        : null;
+  } catch {
+    memoizedWdaToolchainFingerprint = null;
+  }
+  return memoizedWdaToolchainFingerprint;
+}
+
+export function persistentWdaStoreBuildsRoot(): string | null {
+  const fingerprint = wdaToolchainFingerprint();
+  if (!fingerprint) return null;
+  const versionsRoot = runnerCacheVersionsRoot();
+  const components = [
+    join(versionsRoot, `.wda-store-${MAESTRO_RUNNER_PIN.version}`),
+    join(versionsRoot, `.wda-store-${MAESTRO_RUNNER_PIN.version}`, fingerprint),
+    join(versionsRoot, `.wda-store-${MAESTRO_RUNNER_PIN.version}`, fingerprint, 'wda-builds'),
+  ];
+  // Symlink fence: an existing component that is not a real directory would
+  // redirect seeding, publication, and eviction outside the store tree.
+  for (const component of components) {
+    try {
+      const stat = lstatSync(component);
+      if (!stat.isDirectory() || stat.isSymbolicLink()) return null;
+    } catch {
+      break;
+    }
+  }
+  return components[2]!;
+}
+
+// The runner's own reuse marker: build-for-testing emits the .xctestrun beside
+// Build/Products once the products exist; require the test-host .app as well so
+// a torn copy or partial delete never counts as a cached build.
+export function isCompleteWdaBuild(keyDir: string): boolean {
+  try {
+    const products = join(keyDir, 'DerivedData', 'Build', 'Products');
+    const entries = readdirSync(products, { withFileTypes: true });
+    return (
+      entries.some((entry) => entry.isFile() && entry.name.endsWith('.xctestrun')) &&
+      entries.some(
+        (entry) =>
+          entry.isDirectory() &&
+          readdirSync(join(products, entry.name)).some((name) => {
+            if (!name.endsWith('.app')) return false;
+            try {
+              const executable = lstatSync(
+                join(products, entry.name, name, name.slice(0, -'.app'.length)),
+              );
+              return executable.isFile() && !executable.isSymbolicLink();
+            } catch {
+              return false;
+            }
+          }),
+      )
+    );
+  } catch {
+    return false;
+  }
+}
+
+function copyWdaBuildKey(sourceKey: string, stagedKey: string): boolean {
+  cpSync(sourceKey, stagedKey, {
+    recursive: true,
+    mode: constants.COPYFILE_FICLONE,
+    verbatimSymlinks: true,
+  });
+  return isCompleteWdaBuild(stagedKey);
+}
+
+function seedRunnerSnapshotCacheFromStore(cacheRoot: string): number {
+  let seeded = 0;
+  try {
+    const storeBuilds = persistentWdaStoreBuildsRoot();
+    if (!storeBuilds) return 0;
+    const target = join(cacheRoot, 'wda-builds');
+    for (const entry of readdirSync(storeBuilds, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const sourceKey = join(storeBuilds, entry.name);
+      if (!isCompleteWdaBuild(sourceKey)) continue;
+      mkdirSync(target, { recursive: true });
+      const stagedKey = join(target, `.seed-${entry.name}`);
+      try {
+        if (copyWdaBuildKey(sourceKey, stagedKey)) {
+          renameSync(stagedKey, join(target, entry.name));
+          seeded += 1;
+        } else {
+          rmSync(stagedKey, { recursive: true, force: true });
+        }
+      } catch {
+        try {
+          rmSync(stagedKey, { recursive: true, force: true });
+        } catch {}
+      }
+    }
+  } catch {}
+  return seeded;
+}
+
+function publishRunnerSnapshotCacheToStore(cacheRoot: string): number {
+  let published = 0;
+  try {
+    const spawnBuilds = join(cacheRoot, 'wda-builds');
+    const storeBuilds = persistentWdaStoreBuildsRoot();
+    if (!storeBuilds) return 0;
+    for (const entry of readdirSync(spawnBuilds, { withFileTypes: true })) {
+      if (!entry.isDirectory() || entry.name.startsWith('.')) continue;
+      const sourceKey = join(spawnBuilds, entry.name);
+      if (!isCompleteWdaBuild(sourceKey)) continue;
+      const storeKey = join(storeBuilds, entry.name);
+      if (isCompleteWdaBuild(storeKey)) continue;
+      mkdirSync(storeBuilds, { recursive: true, mode: 0o700 });
+      const stage = mkdtempSync(join(storeBuilds, '.stage-'));
+      try {
+        const stagedKey = join(stage, entry.name);
+        if (copyWdaBuildKey(sourceKey, stagedKey)) {
+          if (existsSync(storeKey)) {
+            // Atomic evict: readers never observe a half-deleted key path.
+            const evicted = join(stage, 'evicted');
+            renameSync(storeKey, evicted);
+          }
+          // No-clobber claim: a concurrent publisher that recreated the key
+          // wins (rename throws) and this spawn's copy is discarded with stage.
+          renameSync(stagedKey, storeKey);
+          published += 1;
+        }
+      } finally {
+        rmSync(stage, { recursive: true, force: true });
+      }
+    }
+  } catch {}
+  return published;
+}
+
 export interface RunnerSnapshotTestHooks {
   beforeCacheProvision?: (expectedCacheRoot: string) => void;
   beforeCacheBinding?: (ownedCacheRoot: string) => void;
@@ -864,7 +1015,15 @@ export async function withImmediatePinnedRunner<T>(
       }
     }
     chmodSync(snapshotRoot, 0o500);
-    if (cacheRoot) assertRunnerSnapshotCacheBinding(snapshotRoot, cacheRoot);
+    if (cacheRoot) {
+      assertRunnerSnapshotCacheBinding(snapshotRoot, cacheRoot);
+      // Seed strictly after sealing: the recursive seal walk descends through
+      // the cache symlink, and sealed seed content breaks the runner's own
+      // xctestrun port rewrite on the warm path.
+      recordRunnerDiagnostic('cache-seed', {
+        seededBuilds: seedRunnerSnapshotCacheFromStore(cacheRoot),
+      });
+    }
     const openedRunner = lstatSync(snapshotRunner);
     recordRunnerDiagnostic('runner-exec-begin', { runnerPinVersion: MAESTRO_RUNNER_PIN.version });
     if (platform === 'ios') {
@@ -887,6 +1046,11 @@ export async function withImmediatePinnedRunner<T>(
         else if (entry.isFile()) chmodSync(entryPath, 0o600);
       }
     } catch {}
+    if (cacheRoot) {
+      recordRunnerDiagnostic('cache-publish', {
+        publishedBuilds: publishRunnerSnapshotCacheToStore(cacheRoot),
+      });
+    }
     removeRunnerSnapshotAndCache(snapshotRoot, cacheRoot);
   }
 }

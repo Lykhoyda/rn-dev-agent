@@ -71304,8 +71304,9 @@ var init_maestro_runner_pin = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/domain/engine-pin.js
+import { spawnSync as spawnSync3 } from "node:child_process";
 import { createHash as createHash13 } from "node:crypto";
-import { accessSync, chmodSync as chmodSync5, constants as constants7, copyFileSync as copyFileSync2, existsSync as existsSync24, lstatSync as lstatSync12, mkdirSync as mkdirSync17, mkdtempSync as mkdtempSync2, readFileSync as readFileSync25, readdirSync as readdirSync8, readlinkSync as readlinkSync5, realpathSync as realpathSync13, rmSync as rmSync10, symlinkSync as symlinkSync3, unlinkSync as unlinkSync11 } from "node:fs";
+import { accessSync, chmodSync as chmodSync5, constants as constants7, copyFileSync as copyFileSync2, cpSync as cpSync2, existsSync as existsSync24, lstatSync as lstatSync12, mkdirSync as mkdirSync17, mkdtempSync as mkdtempSync2, readFileSync as readFileSync25, readdirSync as readdirSync8, readlinkSync as readlinkSync5, realpathSync as realpathSync13, renameSync as renameSync7, rmSync as rmSync10, symlinkSync as symlinkSync3, unlinkSync as unlinkSync11 } from "node:fs";
 import { homedir as homedir6 } from "node:os";
 import { basename as basename6, dirname as dirname17, join as join35, relative as relative7, resolve as resolve12, sep as sep6 } from "node:path";
 import { gunzipSync } from "node:zlib";
@@ -71716,6 +71717,134 @@ function assertRunnerSnapshotCacheBinding(snapshotRoot, cacheRoot) {
     throw new RunnerCacheUnavailableError("cache", cacheErrno(error2));
   }
 }
+function wdaToolchainFingerprint() {
+  if (memoizedWdaToolchainFingerprint !== void 0)
+    return memoizedWdaToolchainFingerprint;
+  try {
+    const probe = spawnSync3("xcodebuild", ["-version"], { encoding: "utf8", timeout: 15e3 });
+    const match = /Xcode\s+(\S+)[\s\S]*Build version\s+(\S+)/.exec(probe.stdout ?? "");
+    memoizedWdaToolchainFingerprint = probe.status === 0 && match && /^[\w.]+$/.test(match[1]) && /^[\w.]+$/.test(match[2]) ? `xcode-${match[1]}-${match[2]}` : null;
+  } catch {
+    memoizedWdaToolchainFingerprint = null;
+  }
+  return memoizedWdaToolchainFingerprint;
+}
+function persistentWdaStoreBuildsRoot() {
+  const fingerprint = wdaToolchainFingerprint();
+  if (!fingerprint)
+    return null;
+  const versionsRoot = runnerCacheVersionsRoot();
+  const components = [
+    join35(versionsRoot, `.wda-store-${MAESTRO_RUNNER_PIN.version}`),
+    join35(versionsRoot, `.wda-store-${MAESTRO_RUNNER_PIN.version}`, fingerprint),
+    join35(versionsRoot, `.wda-store-${MAESTRO_RUNNER_PIN.version}`, fingerprint, "wda-builds")
+  ];
+  for (const component of components) {
+    try {
+      const stat2 = lstatSync12(component);
+      if (!stat2.isDirectory() || stat2.isSymbolicLink())
+        return null;
+    } catch {
+      break;
+    }
+  }
+  return components[2];
+}
+function isCompleteWdaBuild(keyDir) {
+  try {
+    const products = join35(keyDir, "DerivedData", "Build", "Products");
+    const entries = readdirSync8(products, { withFileTypes: true });
+    return entries.some((entry) => entry.isFile() && entry.name.endsWith(".xctestrun")) && entries.some((entry) => entry.isDirectory() && readdirSync8(join35(products, entry.name)).some((name) => {
+      if (!name.endsWith(".app"))
+        return false;
+      try {
+        const executable = lstatSync12(join35(products, entry.name, name, name.slice(0, -".app".length)));
+        return executable.isFile() && !executable.isSymbolicLink();
+      } catch {
+        return false;
+      }
+    }));
+  } catch {
+    return false;
+  }
+}
+function copyWdaBuildKey(sourceKey, stagedKey) {
+  cpSync2(sourceKey, stagedKey, {
+    recursive: true,
+    mode: constants7.COPYFILE_FICLONE,
+    verbatimSymlinks: true
+  });
+  return isCompleteWdaBuild(stagedKey);
+}
+function seedRunnerSnapshotCacheFromStore(cacheRoot) {
+  let seeded = 0;
+  try {
+    const storeBuilds = persistentWdaStoreBuildsRoot();
+    if (!storeBuilds)
+      return 0;
+    const target = join35(cacheRoot, "wda-builds");
+    for (const entry of readdirSync8(storeBuilds, { withFileTypes: true })) {
+      if (!entry.isDirectory())
+        continue;
+      const sourceKey = join35(storeBuilds, entry.name);
+      if (!isCompleteWdaBuild(sourceKey))
+        continue;
+      mkdirSync17(target, { recursive: true });
+      const stagedKey = join35(target, `.seed-${entry.name}`);
+      try {
+        if (copyWdaBuildKey(sourceKey, stagedKey)) {
+          renameSync7(stagedKey, join35(target, entry.name));
+          seeded += 1;
+        } else {
+          rmSync10(stagedKey, { recursive: true, force: true });
+        }
+      } catch {
+        try {
+          rmSync10(stagedKey, { recursive: true, force: true });
+        } catch {
+        }
+      }
+    }
+  } catch {
+  }
+  return seeded;
+}
+function publishRunnerSnapshotCacheToStore(cacheRoot) {
+  let published = 0;
+  try {
+    const spawnBuilds = join35(cacheRoot, "wda-builds");
+    const storeBuilds = persistentWdaStoreBuildsRoot();
+    if (!storeBuilds)
+      return 0;
+    for (const entry of readdirSync8(spawnBuilds, { withFileTypes: true })) {
+      if (!entry.isDirectory() || entry.name.startsWith("."))
+        continue;
+      const sourceKey = join35(spawnBuilds, entry.name);
+      if (!isCompleteWdaBuild(sourceKey))
+        continue;
+      const storeKey = join35(storeBuilds, entry.name);
+      if (isCompleteWdaBuild(storeKey))
+        continue;
+      mkdirSync17(storeBuilds, { recursive: true, mode: 448 });
+      const stage = mkdtempSync2(join35(storeBuilds, ".stage-"));
+      try {
+        const stagedKey = join35(stage, entry.name);
+        if (copyWdaBuildKey(sourceKey, stagedKey)) {
+          if (existsSync24(storeKey)) {
+            const evicted = join35(stage, "evicted");
+            renameSync7(storeKey, evicted);
+          }
+          renameSync7(stagedKey, storeKey);
+          published += 1;
+        }
+      } finally {
+        rmSync10(stage, { recursive: true, force: true });
+      }
+    }
+  } catch {
+  }
+  return published;
+}
 function provisionRunnerSnapshotCache(snapshotRoot, testHooks = {}, setOwnedCacheRoot = () => {
 }) {
   const cacheRoot = expectedRunnerCacheRoot(snapshotRoot);
@@ -71836,8 +71965,12 @@ async function withImmediatePinnedRunner(runnerPath, resolveStatus, execute2, pl
       }
     }
     chmodSync5(snapshotRoot, 320);
-    if (cacheRoot)
+    if (cacheRoot) {
       assertRunnerSnapshotCacheBinding(snapshotRoot, cacheRoot);
+      recordRunnerDiagnostic("cache-seed", {
+        seededBuilds: seedRunnerSnapshotCacheFromStore(cacheRoot)
+      });
+    }
     const openedRunner = lstatSync12(snapshotRunner);
     recordRunnerDiagnostic("runner-exec-begin", { runnerPinVersion: MAESTRO_RUNNER_PIN.version });
     if (platform === "ios") {
@@ -71863,6 +71996,11 @@ async function withImmediatePinnedRunner(runnerPath, resolveStatus, execute2, pl
           chmodSync5(entryPath, 384);
       }
     } catch {
+    }
+    if (cacheRoot) {
+      recordRunnerDiagnostic("cache-publish", {
+        publishedBuilds: publishRunnerSnapshotCacheToStore(cacheRoot)
+      });
     }
     removeRunnerSnapshotAndCache(snapshotRoot, cacheRoot);
   }
@@ -71954,7 +72092,7 @@ function getEngineStatus(resolvers) {
     return Promise.resolve(testStatus);
   return detect(resolvers ?? {}).catch(() => buildReplayEngineStatus("unknown-version", null, false));
 }
-var MAESTRO_RUNNER_PIN, TRUSTED_DRIFT_SHA256, ACTION_ENGINE_PIN, ACTION_ENGINE_PIN_RE, HOST_PLUGIN_ROOT, PINNED_RUNNER_INSTALL_HINT, PINNED_RUNNER_DIAGNOSE_HINT, MAESTRO_RUNNER_MIN_ANDROID_API, PRE_O_REMEDY, OLDER_SDK_TOKEN, INSTALL_REJECT_CONTEXT, REGEX_METACHARACTERS, TEXT_SELECTOR_KEYS, RELATIVE_SELECTOR_KEYS, RunnerCacheUnavailableError, testStatus, testAttestation;
+var MAESTRO_RUNNER_PIN, TRUSTED_DRIFT_SHA256, ACTION_ENGINE_PIN, ACTION_ENGINE_PIN_RE, HOST_PLUGIN_ROOT, PINNED_RUNNER_INSTALL_HINT, PINNED_RUNNER_DIAGNOSE_HINT, MAESTRO_RUNNER_MIN_ANDROID_API, PRE_O_REMEDY, OLDER_SDK_TOKEN, INSTALL_REJECT_CONTEXT, REGEX_METACHARACTERS, TEXT_SELECTOR_KEYS, RELATIVE_SELECTOR_KEYS, RunnerCacheUnavailableError, memoizedWdaToolchainFingerprint, testStatus, testAttestation;
 var init_engine_pin = __esm({
   "packages/rn-dev-agent-core/dist/domain/engine-pin.js"() {
     "use strict";
@@ -76825,7 +76963,7 @@ var init_macro_asserts = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/domain/atomic-writer.js
-import { writeFileSync as writeFileSync12, renameSync as renameSync7, statSync as statSync13, mkdirSync as mkdirSync19, existsSync as existsSync26, unlinkSync as unlinkSync12, readdirSync as readdirSync9, openSync as openSync11, closeSync as closeSync11, chmodSync as chmodSync6, fstatSync as fstatSync8, lstatSync as lstatSync13, readFileSync as readFileSync27, linkSync as linkSync2, constants as constants9 } from "node:fs";
+import { writeFileSync as writeFileSync12, renameSync as renameSync8, statSync as statSync13, mkdirSync as mkdirSync19, existsSync as existsSync26, unlinkSync as unlinkSync12, readdirSync as readdirSync9, openSync as openSync11, closeSync as closeSync11, chmodSync as chmodSync6, fstatSync as fstatSync8, lstatSync as lstatSync13, readFileSync as readFileSync27, linkSync as linkSync2, constants as constants9 } from "node:fs";
 import { dirname as dirname20, basename as basename7 } from "node:path";
 function generateTmpStamp() {
   const rand = Math.random().toString(36).slice(2, 10);
@@ -77134,7 +77272,7 @@ var init_atomic_writer = __esm({
       },
       /** Underlying `fs.renameSync(from, to)`. */
       _rename(from, to) {
-        renameSync7(from, to);
+        renameSync8(from, to);
       },
       /** Underlying `fs.statSync(path).mtimeMs`. */
       _statMtimeMs(path) {
@@ -84369,7 +84507,7 @@ var init_interact = __esm({
 
 // packages/rn-dev-agent-core/dist/experience/evidence.js
 import { createHash as createHash18, randomBytes as randomBytes8, randomUUID as randomUUID11 } from "node:crypto";
-import { chmodSync as chmodSync7, existsSync as existsSync31, mkdirSync as mkdirSync20, readFileSync as readFileSync31, readdirSync as readdirSync12, renameSync as renameSync8, statSync as statSync15, unlinkSync as unlinkSync14, writeFileSync as writeFileSync14 } from "node:fs";
+import { chmodSync as chmodSync7, existsSync as existsSync31, mkdirSync as mkdirSync20, readFileSync as readFileSync31, readdirSync as readdirSync12, renameSync as renameSync9, statSync as statSync15, unlinkSync as unlinkSync14, writeFileSync as writeFileSync14 } from "node:fs";
 import { homedir as homedir9, platform as hostPlatform, release } from "node:os";
 import { dirname as dirname24, join as join45 } from "node:path";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
@@ -84710,7 +84848,7 @@ function writeRunnerDiagnosticsBundle(directory, bundle) {
   }
   const temporary = join45(directory, `.runner-diagnostics.${process.pid}.${randomUUID11()}`);
   writeFileSync14(temporary, serialized, { encoding: "utf8", flag: "wx", mode: 384 });
-  renameSync8(temporary, outputPath);
+  renameSync9(temporary, outputPath);
   chmodSync7(outputPath, 384);
   const retained = runnerDiagnosticsFiles(directory).map((file) => ({
     file,
@@ -85052,7 +85190,7 @@ var init_evidence = __esm({
             flag: "wx",
             mode: 384
           });
-          renameSync8(temp, this.path);
+          renameSync9(temp, this.path);
           chmodSync7(this.path, 384);
         } catch (error2) {
           try {
@@ -88350,7 +88488,7 @@ var init_startup_integrity = __esm({
 // packages/rn-dev-agent-core/dist/tools/proof-capture.js
 import { createHash as createHash21, randomUUID as randomUUID12 } from "node:crypto";
 import { execFileSync as execFileSync16 } from "node:child_process";
-import { chmodSync as chmodSync8, closeSync as closeSync12, existsSync as existsSync33, fsyncSync, lstatSync as lstatSync17, mkdirSync as mkdirSync21, openSync as openSync12, readFileSync as readFileSync33, realpathSync as realpathSync16, renameSync as renameSync9, unlinkSync as unlinkSync16, writeFileSync as writeFileSync16 } from "node:fs";
+import { chmodSync as chmodSync8, closeSync as closeSync12, existsSync as existsSync33, fsyncSync, lstatSync as lstatSync17, mkdirSync as mkdirSync21, openSync as openSync12, readFileSync as readFileSync33, realpathSync as realpathSync16, renameSync as renameSync10, unlinkSync as unlinkSync16, writeFileSync as writeFileSync16 } from "node:fs";
 import { basename as basename11, dirname as dirname26, extname, isAbsolute as isAbsolute14, join as join48, relative as relative9, resolve as resolve18, sep as sep10 } from "node:path";
 import { fileURLToPath as fileURLToPath5 } from "node:url";
 function proofActionPayload(unparsedArgs) {
@@ -88819,7 +88957,7 @@ function writeProofReceiptAtomic(path, receipt2) {
     fsyncSync(descriptor);
     closeSync12(descriptor);
     descriptor = null;
-    renameSync9(temporary, path);
+    renameSync10(temporary, path);
     chmodSync8(path, 384);
   } catch (error2) {
     if (descriptor !== null)
@@ -94380,7 +94518,7 @@ var init_target = __esm({
 
 // packages/rn-dev-agent-core/dist/domain/e2e-test.js
 import { dirname as dirname32, join as join57 } from "node:path";
-import { mkdirSync as mkdirSync22, writeFileSync as writeFileSync18, renameSync as renameSync10, readFileSync as readFileSync38, readdirSync as readdirSync17, existsSync as existsSync35 } from "node:fs";
+import { mkdirSync as mkdirSync22, writeFileSync as writeFileSync18, renameSync as renameSync11, readFileSync as readFileSync38, readdirSync as readdirSync17, existsSync as existsSync35 } from "node:fs";
 import { createHash as createHash23 } from "node:crypto";
 function e2eDirFor(projectRoot) {
   return join57(projectRoot, ".rn-agent", "e2e");
@@ -94431,7 +94569,7 @@ function freezeLockedTest(projectRoot, source, ctx) {
   };
   const tmp = `${filePath}.tmp`;
   writeFileSync18(tmp, serializeLockedTest(meta), "utf8");
-  renameSync10(tmp, filePath);
+  renameSync11(tmp, filePath);
   return { ...meta, filePath };
 }
 function loadLockedTest(projectRoot, id) {
@@ -94663,7 +94801,7 @@ var init_lock_e2e_test = __esm({
 
 // packages/rn-dev-agent-core/dist/domain/e2e-run.js
 import { join as join59 } from "node:path";
-import { mkdirSync as mkdirSync23, writeFileSync as writeFileSync19, renameSync as renameSync11, readFileSync as readFileSync40, existsSync as existsSync36 } from "node:fs";
+import { mkdirSync as mkdirSync23, writeFileSync as writeFileSync19, renameSync as renameSync12, readFileSync as readFileSync40, existsSync as existsSync36 } from "node:fs";
 function classifyFlowResult(input) {
   if (input.passed) {
     return {
@@ -94723,7 +94861,7 @@ function writeJsonAtomic(file, value) {
   mkdirSync23(join59(file, ".."), { recursive: true });
   const tmp = `${file}.tmp`;
   writeFileSync19(tmp, JSON.stringify(value, null, 2), "utf8");
-  renameSync11(tmp, file);
+  renameSync12(tmp, file);
 }
 function loadIndex(projectRoot) {
   const file = join59(e2eRunsDirFor(projectRoot), "index.json");
@@ -94776,7 +94914,7 @@ var init_e2e_run = __esm({
 
 // packages/rn-dev-agent-core/dist/domain/e2e-run-request.js
 import { join as join60 } from "node:path";
-import { mkdirSync as mkdirSync24, writeFileSync as writeFileSync20, renameSync as renameSync12, readFileSync as readFileSync41, readdirSync as readdirSync18, existsSync as existsSync37 } from "node:fs";
+import { mkdirSync as mkdirSync24, writeFileSync as writeFileSync20, renameSync as renameSync13, readFileSync as readFileSync41, readdirSync as readdirSync18, existsSync as existsSync37 } from "node:fs";
 function requestsDir(projectRoot) {
   return join60(e2eRunsDirFor(projectRoot), "requests");
 }
@@ -94789,7 +94927,7 @@ function writeRequest(projectRoot, req) {
   mkdirSync24(requestsDir(projectRoot), { recursive: true });
   const tmp = `${file}.tmp`;
   writeFileSync20(tmp, JSON.stringify(req, null, 2), "utf8");
-  renameSync12(tmp, file);
+  renameSync13(tmp, file);
 }
 function loadRequest(projectRoot, runId) {
   const file = requestPath(projectRoot, runId);

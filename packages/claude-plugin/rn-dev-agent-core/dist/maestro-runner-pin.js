@@ -8354,7 +8354,7 @@ var init_keyboard_guard = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/util/secure-state-file.js
-import { readFileSync as readFileSync10, writeFileSync as writeFileSync3, unlinkSync as unlinkSync6, mkdirSync as mkdirSync8, renameSync as renameSync3, lstatSync as lstatSync9 } from "node:fs";
+import { readFileSync as readFileSync10, writeFileSync as writeFileSync3, unlinkSync as unlinkSync6, mkdirSync as mkdirSync8, renameSync as renameSync4, lstatSync as lstatSync9 } from "node:fs";
 import { join as join12, dirname as dirname12 } from "node:path";
 import { homedir as homedir3 } from "node:os";
 function getStateDir() {
@@ -8384,7 +8384,7 @@ function writeJsonStateFileAtomic(path, value) {
   mkdirSync8(dirname12(path), { recursive: true });
   const tmpPath = `${path}.tmp.${process.pid}`;
   writeFileSync3(tmpPath, JSON.stringify(value), { encoding: "utf8", mode: 384 });
-  renameSync3(tmpPath, path);
+  renameSync4(tmpPath, path);
 }
 function deleteStateFile(path) {
   try {
@@ -8820,7 +8820,7 @@ var init_declared_source_contract = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/nav-graph/storage.js
-import { readFileSync as readFileSync11, writeFileSync as writeFileSync4, existsSync as existsSync12, renameSync as renameSync4, readdirSync as readdirSync5, lstatSync as lstatSync10, mkdirSync as mkdirSync9, realpathSync as realpathSync6 } from "node:fs";
+import { readFileSync as readFileSync11, writeFileSync as writeFileSync4, existsSync as existsSync12, renameSync as renameSync5, readdirSync as readdirSync5, lstatSync as lstatSync10, mkdirSync as mkdirSync9, realpathSync as realpathSync6 } from "node:fs";
 import { join as join15, dirname as dirname13 } from "node:path";
 function isRnProject(dir) {
   const pkgPath = join15(dir, "package.json");
@@ -10403,15 +10403,16 @@ var init_release_android_slot = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/maestro-runner-pin.js
-import { spawnSync as spawnSync2 } from "node:child_process";
+import { spawnSync as spawnSync3 } from "node:child_process";
 import { existsSync as existsSync18 } from "node:fs";
 import { dirname as dirname15, join as join24, resolve as resolve8 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 
 // packages/rn-dev-agent-core/dist/domain/engine-pin.js
 init_process_birth();
+import { spawnSync } from "node:child_process";
 import { createHash as createHash2 } from "node:crypto";
-import { accessSync, chmodSync as chmodSync2, constants as constants2, copyFileSync as copyFileSync2, existsSync as existsSync3, lstatSync as lstatSync2, mkdirSync, mkdtempSync, readFileSync as readFileSync2, readdirSync, readlinkSync, realpathSync as realpathSync2, rmSync, symlinkSync, unlinkSync as unlinkSync2 } from "node:fs";
+import { accessSync, chmodSync as chmodSync2, constants as constants2, copyFileSync as copyFileSync2, cpSync, existsSync as existsSync3, lstatSync as lstatSync2, mkdirSync, mkdtempSync, readFileSync as readFileSync2, readdirSync, readlinkSync, realpathSync as realpathSync2, renameSync, rmSync, symlinkSync, unlinkSync as unlinkSync2 } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname as dirname2, join as join2, relative, resolve, sep } from "node:path";
 import { gunzipSync } from "node:zlib";
@@ -10961,6 +10962,135 @@ function assertRunnerSnapshotCacheBinding(snapshotRoot, cacheRoot) {
     throw new RunnerCacheUnavailableError("cache", cacheErrno(error));
   }
 }
+var memoizedWdaToolchainFingerprint;
+function wdaToolchainFingerprint() {
+  if (memoizedWdaToolchainFingerprint !== void 0)
+    return memoizedWdaToolchainFingerprint;
+  try {
+    const probe = spawnSync("xcodebuild", ["-version"], { encoding: "utf8", timeout: 15e3 });
+    const match = /Xcode\s+(\S+)[\s\S]*Build version\s+(\S+)/.exec(probe.stdout ?? "");
+    memoizedWdaToolchainFingerprint = probe.status === 0 && match && /^[\w.]+$/.test(match[1]) && /^[\w.]+$/.test(match[2]) ? `xcode-${match[1]}-${match[2]}` : null;
+  } catch {
+    memoizedWdaToolchainFingerprint = null;
+  }
+  return memoizedWdaToolchainFingerprint;
+}
+function persistentWdaStoreBuildsRoot() {
+  const fingerprint = wdaToolchainFingerprint();
+  if (!fingerprint)
+    return null;
+  const versionsRoot = runnerCacheVersionsRoot();
+  const components = [
+    join2(versionsRoot, `.wda-store-${MAESTRO_RUNNER_PIN.version}`),
+    join2(versionsRoot, `.wda-store-${MAESTRO_RUNNER_PIN.version}`, fingerprint),
+    join2(versionsRoot, `.wda-store-${MAESTRO_RUNNER_PIN.version}`, fingerprint, "wda-builds")
+  ];
+  for (const component of components) {
+    try {
+      const stat = lstatSync2(component);
+      if (!stat.isDirectory() || stat.isSymbolicLink())
+        return null;
+    } catch {
+      break;
+    }
+  }
+  return components[2];
+}
+function isCompleteWdaBuild(keyDir) {
+  try {
+    const products = join2(keyDir, "DerivedData", "Build", "Products");
+    const entries = readdirSync(products, { withFileTypes: true });
+    return entries.some((entry) => entry.isFile() && entry.name.endsWith(".xctestrun")) && entries.some((entry) => entry.isDirectory() && readdirSync(join2(products, entry.name)).some((name) => {
+      if (!name.endsWith(".app"))
+        return false;
+      try {
+        const executable = lstatSync2(join2(products, entry.name, name, name.slice(0, -".app".length)));
+        return executable.isFile() && !executable.isSymbolicLink();
+      } catch {
+        return false;
+      }
+    }));
+  } catch {
+    return false;
+  }
+}
+function copyWdaBuildKey(sourceKey, stagedKey) {
+  cpSync(sourceKey, stagedKey, {
+    recursive: true,
+    mode: constants2.COPYFILE_FICLONE,
+    verbatimSymlinks: true
+  });
+  return isCompleteWdaBuild(stagedKey);
+}
+function seedRunnerSnapshotCacheFromStore(cacheRoot) {
+  let seeded = 0;
+  try {
+    const storeBuilds = persistentWdaStoreBuildsRoot();
+    if (!storeBuilds)
+      return 0;
+    const target = join2(cacheRoot, "wda-builds");
+    for (const entry of readdirSync(storeBuilds, { withFileTypes: true })) {
+      if (!entry.isDirectory())
+        continue;
+      const sourceKey = join2(storeBuilds, entry.name);
+      if (!isCompleteWdaBuild(sourceKey))
+        continue;
+      mkdirSync(target, { recursive: true });
+      const stagedKey = join2(target, `.seed-${entry.name}`);
+      try {
+        if (copyWdaBuildKey(sourceKey, stagedKey)) {
+          renameSync(stagedKey, join2(target, entry.name));
+          seeded += 1;
+        } else {
+          rmSync(stagedKey, { recursive: true, force: true });
+        }
+      } catch {
+        try {
+          rmSync(stagedKey, { recursive: true, force: true });
+        } catch {
+        }
+      }
+    }
+  } catch {
+  }
+  return seeded;
+}
+function publishRunnerSnapshotCacheToStore(cacheRoot) {
+  let published = 0;
+  try {
+    const spawnBuilds = join2(cacheRoot, "wda-builds");
+    const storeBuilds = persistentWdaStoreBuildsRoot();
+    if (!storeBuilds)
+      return 0;
+    for (const entry of readdirSync(spawnBuilds, { withFileTypes: true })) {
+      if (!entry.isDirectory() || entry.name.startsWith("."))
+        continue;
+      const sourceKey = join2(spawnBuilds, entry.name);
+      if (!isCompleteWdaBuild(sourceKey))
+        continue;
+      const storeKey = join2(storeBuilds, entry.name);
+      if (isCompleteWdaBuild(storeKey))
+        continue;
+      mkdirSync(storeBuilds, { recursive: true, mode: 448 });
+      const stage = mkdtempSync(join2(storeBuilds, ".stage-"));
+      try {
+        const stagedKey = join2(stage, entry.name);
+        if (copyWdaBuildKey(sourceKey, stagedKey)) {
+          if (existsSync3(storeKey)) {
+            const evicted = join2(stage, "evicted");
+            renameSync(storeKey, evicted);
+          }
+          renameSync(stagedKey, storeKey);
+          published += 1;
+        }
+      } finally {
+        rmSync(stage, { recursive: true, force: true });
+      }
+    }
+  } catch {
+  }
+  return published;
+}
 function provisionRunnerSnapshotCache(snapshotRoot, testHooks = {}, setOwnedCacheRoot = () => {
 }) {
   const cacheRoot = expectedRunnerCacheRoot(snapshotRoot);
@@ -11081,8 +11211,12 @@ async function withImmediatePinnedRunner(runnerPath, resolveStatus, execute, pla
       }
     }
     chmodSync2(snapshotRoot, 320);
-    if (cacheRoot)
+    if (cacheRoot) {
       assertRunnerSnapshotCacheBinding(snapshotRoot, cacheRoot);
+      recordRunnerDiagnostic("cache-seed", {
+        seededBuilds: seedRunnerSnapshotCacheFromStore(cacheRoot)
+      });
+    }
     const openedRunner = lstatSync2(snapshotRunner);
     recordRunnerDiagnostic("runner-exec-begin", { runnerPinVersion: MAESTRO_RUNNER_PIN.version });
     if (platform === "ios") {
@@ -11108,6 +11242,11 @@ async function withImmediatePinnedRunner(runnerPath, resolveStatus, execute, pla
           chmodSync2(entryPath, 384);
       }
     } catch {
+    }
+    if (cacheRoot) {
+      recordRunnerDiagnostic("cache-publish", {
+        publishedBuilds: publishRunnerSnapshotCacheToStore(cacheRoot)
+      });
     }
     removeRunnerSnapshotAndCache(snapshotRoot, cacheRoot);
   }
@@ -11394,7 +11533,7 @@ function loadOrInitSidecar(yamlFilePath, now = () => /* @__PURE__ */ new Date())
 
 // packages/rn-dev-agent-core/dist/domain/atomic-writer.js
 init_process_birth();
-import { writeFileSync as writeFileSync2, renameSync, statSync as statSync2, mkdirSync as mkdirSync4, existsSync as existsSync5, unlinkSync as unlinkSync3, readdirSync as readdirSync2, openSync as openSync2, closeSync as closeSync2, chmodSync as chmodSync4, fstatSync as fstatSync2, lstatSync as lstatSync4, readFileSync as readFileSync5, linkSync, constants as constants3 } from "node:fs";
+import { writeFileSync as writeFileSync2, renameSync as renameSync2, statSync as statSync2, mkdirSync as mkdirSync4, existsSync as existsSync5, unlinkSync as unlinkSync3, readdirSync as readdirSync2, openSync as openSync2, closeSync as closeSync2, chmodSync as chmodSync4, fstatSync as fstatSync2, lstatSync as lstatSync4, readFileSync as readFileSync5, linkSync, constants as constants3 } from "node:fs";
 import { dirname as dirname5, basename as basename2 } from "node:path";
 var FUTURE_MTIME_BUFFER_MS = 1e3;
 var ORPHAN_MAX_AGE_MS = 5 * 60 * 1e3;
@@ -11698,7 +11837,7 @@ var atomicWriter = {
   },
   /** Underlying `fs.renameSync(from, to)`. */
   _rename(from, to) {
-    renameSync(from, to);
+    renameSync2(from, to);
   },
   /** Underlying `fs.statSync(path).mtimeMs`. */
   _statMtimeMs(path) {
@@ -12482,8 +12621,8 @@ function projectRootFromYaml(yamlFilePath) {
 }
 
 // packages/rn-dev-agent-core/dist/session/worktree-inheritance.js
-import { spawnSync } from "node:child_process";
-import { closeSync as closeSync3, constants as constants4, existsSync as existsSync8, fstatSync as fstatSync3, lstatSync as lstatSync6, mkdirSync as mkdirSync7, openSync as openSync3, readFileSync as readFileSync7, readlinkSync as readlinkSync2, realpathSync as realpathSync4, renameSync as renameSync2, statSync as statSync3, symlinkSync as symlinkSync2, unlinkSync as unlinkSync4 } from "node:fs";
+import { spawnSync as spawnSync2 } from "node:child_process";
+import { closeSync as closeSync3, constants as constants4, existsSync as existsSync8, fstatSync as fstatSync3, lstatSync as lstatSync6, mkdirSync as mkdirSync7, openSync as openSync3, readFileSync as readFileSync7, readlinkSync as readlinkSync2, realpathSync as realpathSync4, renameSync as renameSync3, statSync as statSync3, symlinkSync as symlinkSync2, unlinkSync as unlinkSync4 } from "node:fs";
 import { dirname as dirname8, isAbsolute as isAbsolute3, join as join9, relative as relative2, resolve as resolve4, sep as sep5 } from "node:path";
 
 // packages/rn-dev-agent-core/dist/session/worktree-repair-remedy.js
@@ -12522,7 +12661,7 @@ function gitEnvironment() {
   return env;
 }
 function git(cwd, args) {
-  const result = spawnSync("git", args, {
+  const result = spawnSync2("git", args, {
     cwd,
     encoding: "utf8",
     env: gitEnvironment(),
@@ -13032,7 +13171,7 @@ function isTracked(worktreeRoot, relativePath) {
   return listed.ok && listed.stdout.trim().length > 0;
 }
 function isIgnoreSafe(worktreeRoot, relativePath) {
-  const result = spawnSync("git", ["check-ignore", "--no-index", "-q", "--", relativePath], {
+  const result = spawnSync2("git", ["check-ignore", "--no-index", "-q", "--", relativePath], {
     cwd: worktreeRoot,
     encoding: "utf8",
     env: gitEnvironment(),
@@ -14065,7 +14204,7 @@ function chooseMaestroDispatch(inputs) {
 
 // packages/rn-dev-agent-core/dist/tools/resolve-ios-app-file.js
 import { execFileSync as execFileSync3 } from "node:child_process";
-import { existsSync as existsSync14, cpSync, rmSync as rmSync2, mkdirSync as mkdirSync10, readdirSync as readdirSync6, statSync as statSync6 } from "node:fs";
+import { existsSync as existsSync14, cpSync as cpSync2, rmSync as rmSync2, mkdirSync as mkdirSync10, readdirSync as readdirSync6, statSync as statSync6 } from "node:fs";
 import { tmpdir as tmpdir2 } from "node:os";
 import { join as join20, basename as basename7 } from "node:path";
 function flowUsesClearState(flowText) {
@@ -14080,7 +14219,7 @@ function defaultSnapshotApp(appPath) {
     try {
       execFileSync3("cp", ["-Rc", appPath, dest], { timeout: 3e4, stdio: "ignore" });
     } catch {
-      cpSync(appPath, dest, { recursive: true });
+      cpSync2(appPath, dest, { recursive: true });
     }
     return dest;
   } catch {
@@ -17048,7 +17187,7 @@ async function diagnose(json2) {
   _resetEngineStatusForTest();
   const status = await getEngineStatus();
   const report = doctorPinnedRunner(status, nodePlatformKey());
-  const runtimeProbe = spawnSync2("xcrun", ["simctl", "list", "devices", "--json"], {
+  const runtimeProbe = spawnSync3("xcrun", ["simctl", "list", "devices", "--json"], {
     encoding: "utf8",
     timeout: 5e3
   });
@@ -17078,7 +17217,7 @@ async function diagnose(json2) {
 }
 function install() {
   const script = ensureScriptPath();
-  const result = spawnSync2("bash", [script], { stdio: "inherit" });
+  const result = spawnSync3("bash", [script], { stdio: "inherit" });
   return result.status === 0 ? 0 : 1;
 }
 function migrate(root2, json2) {
