@@ -214,8 +214,10 @@ alive for such callers.
   (`connectExactSessionTarget`, which waits for the target to re-register)
   reliably survives a WDA-driven segment, so the deferred-completion guard in
   `src/tools/maestro-run.ts` admits a caller-supplied reprove even in the
-  nested `replayDeps: undefined` handler. Park/resume handoff regressions are
-  pinned in `test/unit/partitioned-replay-authority.test.ts`.
+  nested `replayDeps: undefined` handler. Forward the parent flow's remaining
+  readiness budget and cancellation signal through that reproof and its
+  subsequent origin completion. Park/resume handoff regressions are pinned in
+  `test/unit/partitioned-replay-authority.test.ts`.
 - Trailing-verification classification (GH #623) has exactly one owner: the
   canonical per-attempt ledger built inside `maestro_run` from per-stage
   producer artifacts (`src/domain/maestro-run-ledger.ts`, artifact reader in
