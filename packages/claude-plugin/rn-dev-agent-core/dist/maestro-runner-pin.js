@@ -11231,6 +11231,11 @@ async function withImmediatePinnedRunner(runnerPath, resolveStatus, execute, pla
       "--"
     ]);
   } finally {
+    if (cacheRoot) {
+      recordRunnerDiagnostic("cache-publish", {
+        publishedBuilds: publishRunnerSnapshotCacheToStore(cacheRoot)
+      });
+    }
     try {
       chmodSync2(snapshotRoot, 448);
       for (const entry of readdirSync(snapshotRoot, { recursive: true, withFileTypes: true })) {
@@ -11243,11 +11248,6 @@ async function withImmediatePinnedRunner(runnerPath, resolveStatus, execute, pla
           chmodSync2(entryPath, 384);
       }
     } catch {
-    }
-    if (cacheRoot) {
-      recordRunnerDiagnostic("cache-publish", {
-        publishedBuilds: publishRunnerSnapshotCacheToStore(cacheRoot)
-      });
     }
     removeRunnerSnapshotAndCache(snapshotRoot, cacheRoot);
   }

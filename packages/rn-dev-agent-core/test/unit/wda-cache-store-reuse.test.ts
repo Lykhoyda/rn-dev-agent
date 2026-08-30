@@ -9,6 +9,7 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
@@ -41,12 +42,26 @@ const fixtureBinary =
 
 const WDA_KEY = 'sim-ios26.4-iphone';
 
+function wdaTestHostExecutable(keyDir: string): string {
+  return join(
+    keyDir,
+    'DerivedData',
+    'Build',
+    'Products',
+    'Debug-iphonesimulator',
+    'WebDriverAgentRunner-Runner.app',
+    'WebDriverAgentRunner-Runner',
+  );
+}
+
 function writeCompleteWdaBuild(keyDir: string): void {
   const products = join(keyDir, 'DerivedData', 'Build', 'Products');
   const app = join(products, 'Debug-iphonesimulator', 'WebDriverAgentRunner-Runner.app');
   mkdirSync(app, { recursive: true });
   writeFileSync(join(products, 'WebDriverAgentRunner_iphonesimulator26.5-arm64.xctestrun'), 'p');
-  writeFileSync(join(app, 'WebDriverAgentRunner-Runner'), 'binary');
+  const executable = wdaTestHostExecutable(keyDir);
+  writeFileSync(executable, 'binary');
+  chmodSync(executable, 0o755);
 }
 
 test('isCompleteWdaBuild requires the xctestrun and the test-host executable', () => {
@@ -56,15 +71,7 @@ test('isCompleteWdaBuild requires the xctestrun and the test-host executable', (
     assert.equal(isCompleteWdaBuild(keyDir), false);
     writeCompleteWdaBuild(keyDir);
     assert.equal(isCompleteWdaBuild(keyDir), true);
-    const executable = join(
-      keyDir,
-      'DerivedData',
-      'Build',
-      'Products',
-      'Debug-iphonesimulator',
-      'WebDriverAgentRunner-Runner.app',
-      'WebDriverAgentRunner-Runner',
-    );
+    const executable = wdaTestHostExecutable(keyDir);
     rmSync(executable);
     assert.equal(isCompleteWdaBuild(keyDir), false);
     mkdirSync(executable);
@@ -148,6 +155,7 @@ test(
         writeCompleteWdaBuild(join(cacheLink, 'wda-builds', WDA_KEY));
       });
       assert.equal(isCompleteWdaBuild(join(storeBuilds!, WDA_KEY)), true);
+      assert.notEqual(statSync(wdaTestHostExecutable(join(storeBuilds!, WDA_KEY))).mode & 0o111, 0);
 
       // Warm run: the spawn cache is pre-seeded before the runner starts, and
       // the seeded xctestrun stays writable — the runner rewrites it to inject

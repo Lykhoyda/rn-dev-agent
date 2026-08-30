@@ -1044,6 +1044,11 @@ export async function withImmediatePinnedRunner<T>(
       '--',
     ]);
   } finally {
+    if (cacheRoot) {
+      recordRunnerDiagnostic('cache-publish', {
+        publishedBuilds: publishRunnerSnapshotCacheToStore(cacheRoot),
+      });
+    }
     try {
       chmodSync(snapshotRoot, 0o700);
       for (const entry of readdirSync(snapshotRoot, { recursive: true, withFileTypes: true })) {
@@ -1053,11 +1058,6 @@ export async function withImmediatePinnedRunner<T>(
         else if (entry.isFile()) chmodSync(entryPath, 0o600);
       }
     } catch {}
-    if (cacheRoot) {
-      recordRunnerDiagnostic('cache-publish', {
-        publishedBuilds: publishRunnerSnapshotCacheToStore(cacheRoot),
-      });
-    }
     removeRunnerSnapshotAndCache(snapshotRoot, cacheRoot);
   }
 }
