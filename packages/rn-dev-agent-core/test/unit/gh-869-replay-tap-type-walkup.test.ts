@@ -287,6 +287,87 @@ test('#869 control: walk-up rechecks a host input disabled after tree proof', as
   assert.deepEqual(fixture.calls.typed, []);
 });
 
+test('#869 control: type rechecks a newly disabled selected host candidate', async () => {
+  const fixture = otpFixture();
+  delete fixture.inputHost.memoizedProps.testID;
+  let interactCalls = 0;
+  const agent = createAgent(fixture.root, (expression) => {
+    if (expression.startsWith('__RN_AGENT.interact(')) {
+      interactCalls += 1;
+      if (interactCalls === 2) fixture.inputHost.memoizedProps.editable = false;
+    }
+  });
+  const deps = buildDeps(agent);
+
+  const result = await runCdpReplayCommands(
+    [{ tapOn: { id: 'otp_email' } }, { inputText: '0451' }],
+    {},
+    deps,
+  );
+
+  assert.equal(interactCalls, 2);
+  assert.equal(result.passed, false);
+  assert.equal(result.failedStepIndex, 1);
+  assert.equal(result.failureCode, 'TEXT_ENTRY_UNVERIFIED');
+  assert.equal(fixture.calls.focus, 1);
+  assert.deepEqual(fixture.calls.typed, []);
+});
+
+test('#869 control: exact-ID lineage pointer and hidden state refuse tap and type', async (t) => {
+  const cases: Array<{
+    label: string;
+    apply: (fixture: ReturnType<typeof otpFixture>) => void;
+    reason: RegExp;
+  }> = [
+    {
+      label: 'host target box-none',
+      apply: (fixture) => {
+        fixture.inputHost.memoizedProps.pointerEvents = 'box-none';
+      },
+      reason: /pointerEvents/,
+    },
+    {
+      label: 'host beneath box-only composite',
+      apply: (fixture) => {
+        fixture.inputComposite.memoizedProps.pointerEvents = 'box-only';
+      },
+      reason: /pointerEvents/,
+    },
+    {
+      label: 'hidden host',
+      apply: (fixture) => {
+        fixture.inputHost.memoizedProps.style = { display: 'none' };
+      },
+      reason: /hidden/,
+    },
+  ];
+
+  for (const testCase of cases) {
+    await t.test(testCase.label, async () => {
+      const fixture = otpFixture();
+      testCase.apply(fixture);
+      const deps = buildDeps(createAgent(fixture.root));
+
+      const tapResult = await runCdpReplayCommands(
+        [{ tapOn: { id: 'otp_email' } }, { inputText: '0451' }],
+        {},
+        deps,
+      );
+      const typeResult = await runCdpReplayCommands([{ inputText: '0451' }], {}, deps, {
+        initialFocusId: 'otp_email',
+      });
+
+      assert.equal(tapResult.passed, false);
+      assert.equal(tapResult.failureCode, 'INTERACTION_NOT_ACTUATED');
+      assert.match(tapResult.reason ?? '', testCase.reason);
+      assert.equal(typeResult.passed, false);
+      assert.equal(typeResult.failureCode, 'TEXT_ENTRY_UNVERIFIED');
+      assert.equal(fixture.calls.focus, 0);
+      assert.deepEqual(fixture.calls.typed, []);
+    });
+  }
+});
+
 test('#869 projection: interactive fallback marks a non-editable host input disabled', async () => {
   const fixture = otpFixture();
   fixture.inputHost.memoizedProps.editable = false;

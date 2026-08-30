@@ -51543,7 +51543,7 @@ async function detectBridge(client2, evaluate = (expression) => client2.evaluate
 init_logger();
 
 // packages/rn-dev-agent-core/dist/injected-helpers.js
-var HELPERS_VERSION = 47;
+var HELPERS_VERSION = 48;
 var INJECTED_HELPERS = `
 (function() {
   var __HELPERS_VERSION__ = ${HELPERS_VERSION};
@@ -53673,6 +53673,7 @@ var INJECTED_HELPERS = `
     return {
       binding: bindings.length === 1 ? bindings[0] : null,
       sourceCount: sources.length,
+      sourceFibers: sources.map(function(source) { return source.fiber; }),
       firstSource: sources[0].fiber,
       state: state
     };
@@ -53694,6 +53695,31 @@ var INJECTED_HELPERS = `
       };
     }
     var text = opts.text !== undefined ? opts.text : '';
+    if (opts.testID) {
+      for (var typeSourceIndex = 0; typeSourceIndex < resolution.sourceFibers.length; typeSourceIndex++) {
+        var typeSource = resolution.sourceFibers[typeSourceIndex];
+        var typeSourceEligibility = exactFiberEligibility(typeSource);
+        if (!typeSourceEligibility.eligible) {
+          return {
+            error: typeSourceEligibility.error,
+            reason: typeSourceEligibility.reason,
+            component: typeTextFiberName(typeSource),
+            testID: selector,
+            handlerCalled: false
+          };
+        }
+      }
+      var typeCandidateEligibility = exactFiberEligibility(binding.candidateFiber);
+      if (!typeCandidateEligibility.eligible) {
+        return {
+          error: typeCandidateEligibility.error,
+          reason: typeCandidateEligibility.reason,
+          component: binding.component,
+          testID: selector,
+          handlerCalled: false
+        };
+      }
+    }
     try {
       if (binding.contract === 'onChangeText:string') binding.handler(text);
       else binding.handler({ nativeEvent: { text: text } });
@@ -54011,14 +54037,28 @@ var INJECTED_HELPERS = `
         var walkTarget = walkCandidates[0];
         var walkTargetName = walkFiberName(walkTarget.fiber);
         var walkTargetProps = walkTarget.fiber.memoizedProps || {};
-        if (walkTargetProps.disabled === true || (walkTargetProps.accessibilityState && walkTargetProps.accessibilityState.disabled === true)) {
-          return JSON.stringify({ error: 'Component is disabled', component: walkTargetName, testID: selector });
-        }
-        for (var ws = 0; ws < walkSources.length; ws++) {
-          var walkSource = walkSources[ws];
-          var walkSourceProps = walkSource.memoizedProps || {};
-          if (walkSourceProps.disabled === true || walkSourceProps.editable === false || (walkSourceProps.accessibilityState && walkSourceProps.accessibilityState.disabled === true)) {
-            return JSON.stringify({ error: 'Component is disabled', component: walkFiberName(walkSource), testID: selector });
+        if (opts.testID) {
+          var walkTargetEligibility = exactFiberEligibility(walkTarget.fiber);
+          if (!walkTargetEligibility.eligible) {
+            return JSON.stringify({ error: walkTargetEligibility.error, reason: walkTargetEligibility.reason, component: walkTargetName, testID: selector });
+          }
+          for (var ws = 0; ws < walkSources.length; ws++) {
+            var walkSource = walkSources[ws];
+            var walkSourceEligibility = exactFiberEligibility(walkSource);
+            if (!walkSourceEligibility.eligible) {
+              return JSON.stringify({ error: walkSourceEligibility.error, reason: walkSourceEligibility.reason, component: walkFiberName(walkSource), testID: selector });
+            }
+          }
+        } else {
+          if (walkTargetProps.disabled === true || (walkTargetProps.accessibilityState && walkTargetProps.accessibilityState.disabled === true)) {
+            return JSON.stringify({ error: 'Component is disabled', component: walkTargetName, testID: selector });
+          }
+          for (var labelSourceIndex = 0; labelSourceIndex < walkSources.length; labelSourceIndex++) {
+            var labelSource = walkSources[labelSourceIndex];
+            var labelSourceProps = labelSource.memoizedProps || {};
+            if (labelSourceProps.disabled === true || labelSourceProps.editable === false || (labelSourceProps.accessibilityState && labelSourceProps.accessibilityState.disabled === true)) {
+              return JSON.stringify({ error: 'Component is disabled', component: walkFiberName(labelSource), testID: selector });
+            }
           }
         }
         executedName = walkTargetName;
@@ -55213,6 +55253,37 @@ var INJECTED_HELPERS = `
       guard++;
     }
     return false;
+  }
+
+  function exactFiberEligibility(fiber) {
+    if (!fiber) {
+      return { eligible: false, error: 'Component eligibility could not be proven', reason: 'fiber unavailable' };
+    }
+    var props = fiber.memoizedProps || {};
+    if (props.disabled === true || props.editable === false || (props.accessibilityState && props.accessibilityState.disabled === true)) {
+      return { eligible: false, error: 'Component is disabled', reason: 'disabled exact-ID fiber' };
+    }
+    if (__hidden(fiber)) {
+      return { eligible: false, error: 'Component is hidden', reason: 'hidden exact-ID subtree' };
+    }
+    if (props.pointerEvents === 'none' || props.pointerEvents === 'box-none') {
+      return { eligible: false, error: 'Component is not user-interactable with pointerEvents="' + props.pointerEvents + '"', reason: 'exact-ID fiber has pointerEvents="' + props.pointerEvents + '"' };
+    }
+    var seen = new WeakSet();
+    var ancestor = fiber.return;
+    var depth = 0;
+    while (ancestor) {
+      if (++depth > 1000 || seen.has(ancestor)) {
+        return { eligible: false, error: 'Component eligibility could not be proven', reason: 'ancestor proof incomplete' };
+      }
+      seen.add(ancestor);
+      var ancestorProps = ancestor.memoizedProps || {};
+      if (ancestorProps.pointerEvents === 'none' || ancestorProps.pointerEvents === 'box-only') {
+        return { eligible: false, error: 'Component is not user-interactable beneath pointerEvents="' + ancestorProps.pointerEvents + '"', reason: 'exact-ID fiber is beneath pointerEvents="' + ancestorProps.pointerEvents + '"' };
+      }
+      ancestor = ancestor.return;
+    }
+    return { eligible: true };
   }
 
   function isTestIdFrontmost(testID) {
