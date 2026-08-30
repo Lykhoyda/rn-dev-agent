@@ -16767,9 +16767,12 @@ function createMaestroRunHandler(deps = {}) {
       });
       if (deferredNativeOriginTarget) {
         if (nativeOriginPreclaimed && (args.reproveManagedOrigin || deps.reproveManagedOrigin || replayFactory && hasManagedNativeOriginAuthority(args))) {
-          await reproveManagedOrigin({ signal: flowAbort.signal });
+          await reproveManagedOrigin({
+            signal: flowAbort.signal,
+            readinessTimeoutMs: Math.max(1, flowDeadline - now())
+          });
         }
-        await completeOrigin(true);
+        await completeOrigin(true, flowAbort.signal);
         nativeOriginPreclaimed = false;
       }
       await commitReinstalledInstall();

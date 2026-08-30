@@ -97,6 +97,7 @@ import {
   reissueManagedInstallAuthority,
   relaunchManagedNativeOriginApp,
   reproveManagedNativeOrigin,
+  type ManagedNativeOriginReproveOptions,
 } from '../session/authority-gate.js';
 import { SessionAuthorityError } from '../session/registry.js';
 import {
@@ -201,7 +202,7 @@ export interface MaestroRunArgs {
   completeNativeOrigin?: (targetExpected: boolean, signal?: AbortSignal) => Promise<void>;
   relaunchManagedApp?: (stopApp?: boolean) => Promise<void>;
   /** GH #708: re-prove the managed origin at flow end without relaunching. */
-  reproveManagedOrigin?: (options?: { signal?: AbortSignal }) => Promise<void>;
+  reproveManagedOrigin?: (options?: ManagedNativeOriginReproveOptions) => Promise<void>;
   completeRunnerPark?: (signal?: AbortSignal) => Promise<void>;
   /** GH #705: commit a new install receipt after a clearState reinstall. */
   reissueInstallReceipt?: (() => Promise<void>) | null;
@@ -218,7 +219,7 @@ export interface MaestroAuthorityCallbacks {
   claimNativeOrigin: () => Promise<void>;
   completeNativeOrigin: (targetExpected: boolean, signal?: AbortSignal) => Promise<void>;
   relaunchManagedApp: (stopApp?: boolean) => Promise<void>;
-  reproveManagedOrigin: (options?: { signal?: AbortSignal }) => Promise<void>;
+  reproveManagedOrigin: (options?: ManagedNativeOriginReproveOptions) => Promise<void>;
   completeRunnerPark: (signal?: AbortSignal) => Promise<void>;
   reissueInstallReceipt: (() => Promise<void>) | null;
 }
@@ -316,7 +317,7 @@ export async function executeMaestroAuthorityStages<T>(
   claimOrigin: () => Promise<void>,
   completeOrigin: (targetExpected: boolean, signal?: AbortSignal) => Promise<void>,
   relaunchManagedApp: (stopApp?: boolean) => Promise<void>,
-  reproveManagedOrigin?: (options?: { signal?: AbortSignal }) => Promise<void>,
+  reproveManagedOrigin?: (options?: ManagedNativeOriginReproveOptions) => Promise<void>,
   options: { firstOriginClaimed?: boolean; signal?: AbortSignal } = {},
 ): Promise<T[]> {
   const plan = planMaestroAuthorityStages(commands);
@@ -413,7 +414,7 @@ export interface MaestroRunDeps {
   claimNativeOrigin?: () => Promise<void>;
   completeNativeOrigin?: (targetExpected: boolean, signal?: AbortSignal) => Promise<void>;
   relaunchManagedApp?: () => Promise<void>;
-  reproveManagedOrigin?: (options?: { signal?: AbortSignal }) => Promise<void>;
+  reproveManagedOrigin?: (options?: ManagedNativeOriginReproveOptions) => Promise<void>;
   reissueInstallReceipt?: () => Promise<void>;
   now?: () => number;
   execFile?: (
@@ -1593,9 +1594,12 @@ export function createMaestroRunHandler(
             deps.reproveManagedOrigin ||
             (replayFactory && hasManagedNativeOriginAuthority(args)))
         ) {
-          await reproveManagedOrigin({ signal: flowAbort.signal });
+          await reproveManagedOrigin({
+            signal: flowAbort.signal,
+            readinessTimeoutMs: Math.max(1, flowDeadline - now()),
+          });
         }
-        await completeOrigin(true);
+        await completeOrigin(true, flowAbort.signal);
         nativeOriginPreclaimed = false;
       }
       await commitReinstalledInstall();

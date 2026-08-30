@@ -412,11 +412,13 @@ function partitionedHandoffFixture(opts: {
     platform: 'ios' as const,
     deviceId: DEVICE_ID,
     appId: APP_ID,
+    timeoutMs: 5_000,
     inlineYaml: `appId: ${APP_ID}\n---\n- assertVisible: Native status\n- assertVisible:\n    id: react-status\n`,
     claimNativeOrigin: async () => {
       events.push('claim');
     },
-    completeNativeOrigin: async (targetExpected: boolean) => {
+    completeNativeOrigin: async (targetExpected: boolean, signal?: AbortSignal) => {
+      if (targetExpected) assert.equal(signal?.aborted, false);
       events.push(`complete:${targetExpected}`);
       if (targetExpected && !exactTargetConnected) {
         throw (
@@ -428,8 +430,9 @@ function partitionedHandoffFixture(opts: {
       }
     },
     relaunchManagedApp: async () => {},
-    reproveManagedOrigin: async ({ signal } = {}) => {
+    reproveManagedOrigin: async ({ readinessTimeoutMs, signal } = {}) => {
       assert.equal(signal?.aborted, false);
+      assert.ok(readinessTimeoutMs && readinessTimeoutMs <= 5_000);
       events.push('reprove');
       if (opts.reproveRestoresTarget) exactTargetConnected = true;
     },

@@ -221,7 +221,7 @@ test('run-action: forwards reprove abort options to session authority', async ()
   let receivedReprove;
   const handler = createRunActionHandler({
     maestroRun: async (args) => {
-      await args.reproveManagedOrigin({ signal: flowAbort.signal });
+      await args.reproveManagedOrigin({ signal: flowAbort.signal, readinessTimeoutMs: 123 });
       return {
         content: [{ type: 'text', text: JSON.stringify(PASS_ENV) }],
       };
@@ -236,6 +236,7 @@ test('run-action: forwards reprove abort options to session authority', async ()
   assert.equal(result.isError, undefined);
   assert.equal(receivedReprove.args.actionId, 'demo');
   assert.equal(receivedReprove.options.signal, flowAbort.signal);
+  assert.equal(receivedReprove.options.readinessTimeoutMs, 123);
 });
 
 test('cdp_run_action preserves a typed native-blind refusal', async () => {

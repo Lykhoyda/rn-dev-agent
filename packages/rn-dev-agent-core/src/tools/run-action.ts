@@ -70,6 +70,7 @@ import {
   reissueManagedInstallAuthority,
   relaunchManagedNativeOriginApp,
   reproveManagedNativeOrigin,
+  type ManagedNativeOriginReproveOptions,
 } from '../session/authority-gate.js';
 import { getWorkerAuthorityRuntime } from '../session/runtime.js';
 import { flowUsesClearState, resolveIosAppFile } from './resolve-ios-app-file.js';
@@ -510,7 +511,7 @@ export interface RunActionDeps {
   relaunchManagedApp?: (args: RunActionArgs, stopApp?: boolean) => Promise<void>;
   reproveManagedOrigin?: (
     args: RunActionArgs,
-    options?: { signal?: AbortSignal },
+    options?: ManagedNativeOriginReproveOptions,
   ) => Promise<void>;
   reissueInstallReceipt?: (args: RunActionArgs) => Promise<void>;
   /** GH #705: the session's attested install receipt, for appFile auto-resolution. */
