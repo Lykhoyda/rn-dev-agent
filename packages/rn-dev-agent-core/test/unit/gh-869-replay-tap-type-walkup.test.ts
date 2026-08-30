@@ -39,7 +39,7 @@ function appendChild(parent: Fiber, child: Fiber): Fiber {
   return child;
 }
 
-function createAgent(root: Fiber) {
+function createAgent(root: Fiber, beforeEvaluate?: (expression: string) => void) {
   const sandbox: Record<string, unknown> = {
     Array,
     Object,
@@ -72,6 +72,7 @@ function createAgent(root: Fiber) {
   return {
     evaluate: async (expression: string): Promise<{ value?: unknown; error?: unknown }> => {
       try {
+        beforeEvaluate?.(expression);
         return { value: vm.runInContext(expression, sandbox) };
       } catch (error) {
         return { error };
@@ -208,7 +209,6 @@ test('#869 control: an input with no actionable ancestor still refuses the tap',
 
 test('#869 control: a non-editable input refuses from the projected tree', async () => {
   const fixture = otpFixture();
-  fixture.inputComposite.memoizedProps.editable = false;
   fixture.inputHost.memoizedProps.editable = false;
   const deps = buildDeps(createAgent(fixture.root));
 
@@ -223,11 +223,19 @@ test('#869 control: a non-editable input refuses from the projected tree', async
   assert.match(result.reason ?? '', /disabled/);
   assert.equal(fixture.calls.focus, 0, 'the walk-up press must never fire on a disabled target');
   assert.deepEqual(fixture.calls.typed, []);
+
+  const typeResult = await runCdpReplayCommands([{ inputText: '0451' }], {}, deps, {
+    initialFocusId: 'otp_email',
+  });
+
+  assert.equal(typeResult.passed, false);
+  assert.equal(typeResult.failureCode, 'INTERACTION_NOT_ACTUATED');
+  assert.match(typeResult.reason ?? '', /disabled/);
+  assert.deepEqual(fixture.calls.typed, []);
 });
 
 test('#869 control: an accessibility-disabled input refuses tap and type', async () => {
   const fixture = otpFixture();
-  fixture.inputComposite.memoizedProps.accessibilityState = { disabled: true };
   fixture.inputHost.memoizedProps.accessibilityState = { disabled: true };
   const deps = buildDeps(createAgent(fixture.root));
 
@@ -252,6 +260,48 @@ test('#869 control: an accessibility-disabled input refuses tap and type', async
   assert.match(typeResult.reason ?? '', /disabled/);
   assert.equal(fixture.calls.focus, 0);
   assert.deepEqual(fixture.calls.typed, []);
+});
+
+test('#869 control: walk-up rechecks a host input disabled after tree proof', async () => {
+  const fixture = otpFixture();
+  let disabledBeforeInteract = false;
+  const agent = createAgent(fixture.root, (expression) => {
+    if (!disabledBeforeInteract && expression.startsWith('__RN_AGENT.interact(')) {
+      fixture.inputHost.memoizedProps.editable = false;
+      disabledBeforeInteract = true;
+    }
+  });
+  const deps = buildDeps(agent);
+
+  const result = await runCdpReplayCommands(
+    [{ tapOn: { id: 'otp_email' } }, { inputText: '0451' }],
+    {},
+    deps,
+  );
+
+  assert.equal(disabledBeforeInteract, true);
+  assert.equal(result.passed, false);
+  assert.equal(result.failureCode, 'INTERACTION_NOT_ACTUATED');
+  assert.match(result.reason ?? '', /disabled/);
+  assert.equal(fixture.calls.focus, 0);
+  assert.deepEqual(fixture.calls.typed, []);
+});
+
+test('#869 projection: interactive fallback marks a non-editable host input disabled', async () => {
+  const fixture = otpFixture();
+  fixture.inputHost.memoizedProps.editable = false;
+  const result = await createAgent(fixture.root).evaluate(
+    '__RN_AGENT.getTree({"interactiveOnly":true})',
+  );
+  assert.equal(result.error, undefined);
+  const data = JSON.parse(result.value as string) as {
+    interactive: Array<{ testID?: string; disabled?: boolean }>;
+  };
+  const inputs = data.interactive.filter((entry) => entry.testID === 'otp_email');
+  assert.equal(
+    inputs.some((entry) => entry.disabled === true),
+    true,
+  );
 });
 
 test('#869 control: a disabled nearest pressable refuses without walking farther', async (t) => {

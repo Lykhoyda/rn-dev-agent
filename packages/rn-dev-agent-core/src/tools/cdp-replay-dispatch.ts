@@ -104,19 +104,24 @@ function countExactMatches(treeJson: unknown, id: string): number {
   return matches;
 }
 
-function nodeProps(treeJson: unknown, id: string): Record<string, unknown> | null {
-  // find the node whose testID === id or nativeID === id and return its props bag if exposed
+function hasDisabledExactMatch(treeJson: unknown, id: string): boolean {
   const stack: unknown[] = [treeJson];
   while (stack.length) {
     const n = stack.pop() as Record<string, unknown> | null;
     if (n && typeof n === 'object') {
-      if (n.testID === id || n.nativeID === id) return (n.props as Record<string, unknown>) ?? n;
+      if (n.testID === id || n.nativeID === id) {
+        const props =
+          n.props && typeof n.props === 'object' && !Array.isArray(n.props)
+            ? (n.props as Record<string, unknown>)
+            : null;
+        if (isDisabled(n) || isDisabled(props)) return true;
+      }
       if (n.tree) stack.push(n.tree);
       const kids = n.children ?? n.interactive ?? n.nodes ?? n.matches;
       if (Array.isArray(kids)) stack.push(...kids);
     }
   }
-  return null;
+  return false;
 }
 
 function nodePath(treeJson: unknown, id: string): Array<Record<string, unknown>> | null {
@@ -211,7 +216,7 @@ export function buildCdpDispatch(deps: CdpReplayDeps, signal?: AbortSignal): Rep
         frontmost.code ?? 'ASSERTION_FAILED',
         frontmost.reason ?? `testID "${id}" is mounted but not frontmost`,
       );
-    if (isDisabled(nodeProps(tree, id)))
+    if (hasDisabledExactMatch(tree, id))
       throw new ReplayDispatchError(
         'INTERACTION_NOT_ACTUATED',
         `testID "${id}" is disabled/non-interactable`,

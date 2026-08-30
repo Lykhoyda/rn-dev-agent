@@ -493,6 +493,7 @@ export const INJECTED_HELPERS = `
       var testID = fiber.memoizedProps && (fiber.memoizedProps.testID || fiber.memoizedProps.nativeID);
       var accessibilityLabel = fiber.memoizedProps && fiber.memoizedProps.accessibilityLabel;
       var isUserComponent = name && !name.startsWith('RCT') && /^[A-Z]/.test(name);
+      var fiberDisabled = fiber.memoizedProps && (fiber.memoizedProps.disabled === true || fiber.memoizedProps.editable === false || (fiber.memoizedProps.accessibilityState && fiber.memoizedProps.accessibilityState.disabled === true));
 
       var children = [];
       var child = fiber.child;
@@ -511,6 +512,7 @@ export const INJECTED_HELPERS = `
       var result = { component: name };
       if (testID) result.testID = testID;
       if (accessibilityLabel) result.accessibilityLabel = accessibilityLabel;
+      if (testID && fiberDisabled) result.disabled = true;
 
       if (isUserComponent && fiber.memoizedProps) {
         var props = {};
@@ -535,7 +537,7 @@ export const INJECTED_HELPERS = `
             props[k] = s && s.length > 200 ? s.substring(0, 200) + '...' : v;
           } catch(e) { props[k] = '[Unserializable]'; }
         }
-        if (fiber.memoizedProps.disabled === true || fiber.memoizedProps.editable === false || (fiber.memoizedProps.accessibilityState && fiber.memoizedProps.accessibilityState.disabled === true)) props.disabled = true;
+        if (fiberDisabled) props.disabled = true;
         if (Object.keys(props).length > 0) result.props = props;
       }
 
@@ -649,7 +651,7 @@ export const INJECTED_HELPERS = `
           if (iprops.placeholder) entry.placeholder = String(iprops.placeholder);
           // surface on/off state for toggles so the agent need not re-read before deciding
           if (entry.role === 'switch' && typeof iprops.value === 'boolean') entry.value = iprops.value;
-          if (iprops.disabled === true || (iprops.accessibilityState && iprops.accessibilityState.disabled === true)) entry.disabled = true;
+          if (iprops.disabled === true || iprops.editable === false || (iprops.accessibilityState && iprops.accessibilityState.disabled === true)) entry.disabled = true;
           salient.push(entry);
         }
         var ich = ifiber.child;
@@ -2471,6 +2473,13 @@ export const INJECTED_HELPERS = `
         var walkTargetProps = walkTarget.fiber.memoizedProps || {};
         if (walkTargetProps.disabled === true || (walkTargetProps.accessibilityState && walkTargetProps.accessibilityState.disabled === true)) {
           return JSON.stringify({ error: 'Component is disabled', component: walkTargetName, testID: selector });
+        }
+        for (var ws = 0; ws < walkSources.length; ws++) {
+          var walkSource = walkSources[ws];
+          var walkSourceProps = walkSource.memoizedProps || {};
+          if (walkSourceProps.disabled === true || walkSourceProps.editable === false || (walkSourceProps.accessibilityState && walkSourceProps.accessibilityState.disabled === true)) {
+            return JSON.stringify({ error: 'Component is disabled', component: walkFiberName(walkSource), testID: selector });
+          }
         }
         executedName = walkTargetName;
         if (opts.value !== undefined) {
