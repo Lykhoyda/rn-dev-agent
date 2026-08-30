@@ -200,7 +200,7 @@ function validateCommand(cmd: unknown): void {
  * critical difference from generic validateValue, which would let a nested
  * `runScript` slip through as a plain scalar key/value.
  */
-function validateRunFlowValue(v: unknown): void {
+function validateRunFlowValue(v: unknown, validateNestedCommands: boolean = true): void {
   if (typeof v === 'string') {
     if (!isSafeMaestroScalar(v)) {
       throw new MaestroValidationError(
@@ -234,7 +234,9 @@ function validateRunFlowValue(v: unknown): void {
     if (!Array.isArray(obj.commands)) {
       throw new MaestroValidationError(`runFlow.commands must be an array`);
     }
-    for (const c of obj.commands) validateCommand(c);
+    if (validateNestedCommands) {
+      for (const c of obj.commands) validateCommand(c);
+    }
   }
   // Any other keys (env/label/config) are validated as generic safe values.
   for (const [k, val] of Object.entries(obj)) {
@@ -471,7 +473,7 @@ export function expandRunFlows(commands: unknown[], opts: ParseAndValidateOption
         });
       }
     } else {
-      validateRunFlowValue((cmd as Record<string, unknown>).runFlow);
+      validateRunFlowValue((cmd as Record<string, unknown>).runFlow, false);
       // Inline runFlow (no file) — recurse into nested commands, keep the wrapper.
       const inner = rf.commands
         ? expandRunFlows(rf.commands, { ...opts, _depth: (opts._depth ?? 0) + 1 })

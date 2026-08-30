@@ -24029,7 +24029,7 @@ function validateCommand(cmd) {
   }
   validateValue(cmd[key]);
 }
-function validateRunFlowValue(v) {
+function validateRunFlowValue(v, validateNestedCommands = true) {
   if (typeof v === "string") {
     if (!isSafeMaestroScalar(v)) {
       throw new MaestroValidationError(`Unsafe runFlow file ref: ${JSON.stringify(v).slice(0, 80)}`, { runFlowFile: renderRunFlowFileReference(v) });
@@ -24059,8 +24059,10 @@ function validateRunFlowValue(v) {
     if (!Array.isArray(obj.commands)) {
       throw new MaestroValidationError(`runFlow.commands must be an array`);
     }
-    for (const c of obj.commands)
-      validateCommand(c);
+    if (validateNestedCommands) {
+      for (const c of obj.commands)
+        validateCommand(c);
+    }
   }
   for (const [k, val] of Object.entries(obj)) {
     if (k === "file" || k === "when" || k === "commands")
@@ -24241,7 +24243,7 @@ function expandRunFlows(commands, opts) {
         });
       }
     } else {
-      validateRunFlowValue(cmd.runFlow);
+      validateRunFlowValue(cmd.runFlow, false);
       const inner = rf.commands ? expandRunFlows(rf.commands, { ...opts, _depth: (opts._depth ?? 0) + 1 }) : [];
       const wrapped = { commands: inner };
       if (rf.when !== void 0)
@@ -58540,10 +58542,13 @@ function shouldAutoPromoteToActive(metadata, lastRun) {
 function shouldDemoteAfterRepair(metadata) {
   return metadata.status === "active";
 }
+function normalizeM7Source(yamlText) {
+  return yamlText.startsWith("\uFEFF") ? yamlText.slice(1) : yamlText;
+}
 function detectEntryDeclaration(yamlText) {
   let inTopSection = true;
   const declarations = [];
-  for (const line of yamlText.split("\n")) {
+  for (const line of normalizeM7Source(yamlText).split("\n")) {
     if (line.startsWith("#")) {
       const kv = line.replace(/^#\s?/, "").trim().match(/^entry\s*:\s*(.*)$/);
       if (kv)
@@ -58568,7 +58573,7 @@ function detectEntryDeclaration(yamlText) {
   return declarations.join(" | ");
 }
 function parseM7Header(yamlText, fallbackId) {
-  const lines = yamlText.split("\n");
+  const lines = normalizeM7Source(yamlText).split("\n");
   const meta = {};
   let inComment = false;
   for (const line of lines) {
@@ -76477,6 +76482,14 @@ function commandName(command) {
   const keys = Object.keys(command);
   return keys.length === 1 ? keys[0] : null;
 }
+function forbiddenLifecycleCommand(command) {
+  if (typeof command === "string") {
+    return PARKED_FORBIDDEN_COMMANDS.has(command) ? command : null;
+  }
+  if (!command || typeof command !== "object" || Array.isArray(command))
+    return null;
+  return Object.keys(command).find((key) => PARKED_FORBIDDEN_COMMANDS.has(key)) ?? null;
+}
 function compositeShape(command) {
   const name = commandName(command);
   if (name === null || typeof command === "string")
@@ -76528,9 +76541,9 @@ function rawParkedBodyViolation(rawYaml) {
 }
 function parkedBodyViolation(commands) {
   for (const command of commands) {
-    const name = commandName(command);
-    if (name !== null && PARKED_FORBIDDEN_COMMANDS.has(name)) {
-      return { kind: "lifecycle", command: name };
+    const lifecycle = forbiddenLifecycleCommand(command);
+    if (lifecycle !== null) {
+      return { kind: "lifecycle", command: lifecycle };
     }
     const composite = compositeShape(command);
     if (composite?.kind === "file")
@@ -77284,6 +77297,10 @@ function maestroScalar(value) {
   const safe = stripNewlines(value);
   return (0, import_yaml4.stringify)(safe).replace(/\n+$/, "");
 }
+function maestroBanner(value) {
+  const banner = stripNewlines(value);
+  return /^[a-zA-Z][\w-]*\s*:/.test(banner.trim()) ? `> ${banner}` : banner;
+}
 function assertSafeGeneratedScalars(value, path) {
   if (typeof value === "string") {
     if (!isSafeMaestroScalar(value))
@@ -77473,7 +77490,7 @@ function generateMaestro(events, opts = {}) {
     lines.push(`appId: ${maestroScalar(opts.bundleId)}`);
     lines.push("---");
   }
-  lines.push(`# ${stripNewlines(opts.testName ?? "Recorded flow")}`);
+  lines.push(`# ${maestroBanner(opts.testName ?? "Recorded flow")}`);
   for (const [k, v] of metaPairs(opts, expectedRouteSequence)) {
     lines.push(`# ${k}: ${v}`);
   }

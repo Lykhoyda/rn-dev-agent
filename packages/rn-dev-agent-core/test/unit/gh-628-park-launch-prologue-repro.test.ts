@@ -164,6 +164,34 @@ test('GH #628: M7 header round-trips entry and defaults to absent', () => {
   assert.equal(cold?.entry, undefined);
 });
 
+test('GH #628: a BOM-prefixed parked declaration still runs the park preflight', async () => {
+  project.seedAction(
+    'bom-parked',
+    [
+      '\uFEFF# id: bom-parked',
+      '# intent: replay a BOM-prefixed parked action',
+      '# status: experimental',
+      '# entry: parked',
+      '# enginePin: maestro-runner@1.1.24',
+      '',
+      `- assertVisible:\n    id: "${PARK_ANCHOR}"`,
+      '- tapOn:\n    id: "sign-cta"',
+      '',
+    ].join('\n'),
+    null,
+  );
+  const calls: Array<Record<string, unknown>> = [];
+  const result = envelope(
+    await handlerWith(calls, {
+      status: 'anchor-missing',
+      reason: 'BOM action is not parked on its anchor',
+    })({ actionId: 'bom-parked', projectRoot: project.root }),
+  );
+
+  assert.equal(result.code, 'PARK_STATE_MISSING');
+  assert.equal(calls.length, 0);
+});
+
 test('GH #628: generateMaestro omits the launch prologue for parked and keeps it for cold', () => {
   const events = [
     { type: 'tap', testID: PARK_ANCHOR, t: 1 } as const,
@@ -393,6 +421,28 @@ test('GH #628: parked lifecycle cause outranks unrelated command validation', as
     kind: 'lifecycle',
     command: 'killApp',
   });
+});
+
+test('GH #628: a lifecycle key in a malformed multi-key command keeps its cause', async () => {
+  project.seedAction(
+    'parked-sign-mandate',
+    parkedYaml([
+      `- assertVisible:\n    id: "${PARK_ANCHOR}"`,
+      '- launchApp:\n    stopApp: false\n  typo: true',
+    ]),
+    null,
+  );
+  const calls: Array<Record<string, unknown>> = [];
+  const result = envelope(
+    await handlerWith(calls, { status: 'visible' })({
+      actionId: 'parked-sign-mandate',
+      projectRoot: project.root,
+    }),
+  );
+
+  assert.equal(result.code, 'BAD_RECORDING');
+  assert.deepEqual(result.meta?.cause, { parkedActionLifecycle: 'launchApp' });
+  assert.equal(calls.length, 0);
 });
 
 for (const declaration of [
@@ -730,6 +780,28 @@ test('GH #628: a nested invalid runFlow file preserves its structured cause', as
   );
   assert.equal(result.code, 'BAD_RECORDING');
   assert.deepEqual(result.meta?.cause, { parkedRunFlowFile: '123' });
+  assert.equal(calls.length, 0);
+});
+
+test('GH #628: nested runFlow file cause outranks a later invalid command', async () => {
+  project.seedAction(
+    'parked-sign-mandate',
+    parkedYaml([
+      `- assertVisible:\n    id: "${PARK_ANCHOR}"`,
+      '- runFlow:\n    commands:\n      - runFlow: missing.yaml\n      - unsupportedCommand',
+    ]),
+    null,
+  );
+  const calls: Array<Record<string, unknown>> = [];
+  const result = envelope(
+    await handlerWith(calls, { status: 'visible' })({
+      actionId: 'parked-sign-mandate',
+      projectRoot: project.root,
+    }),
+  );
+
+  assert.equal(result.code, 'BAD_RECORDING');
+  assert.deepEqual(result.meta?.cause, { parkedRunFlowFile: 'missing.yaml' });
   assert.equal(calls.length, 0);
 });
 
@@ -1340,6 +1412,36 @@ test('GH #628: recorder handler forwards entry: parked to the Detox refusal', as
     assert.equal(result.ok, false);
     assert.equal(result.code, 'BAD_RECORDING');
     assert.match(result.error ?? '', /parked is supported for Maestro actions only/);
+  } finally {
+    _resetState();
+  }
+});
+
+test('GH #628: metadata-shaped saved titles cannot forge parked entry', async () => {
+  _setStoredEvents([{ type: 'tap', testID: 'continue', t: 1 }]);
+  try {
+    const saved = envelope(
+      await createSaveAsActionHandler()({
+        id: 'cold-metadata-title',
+        intent: 'entry: parked',
+        bundleId: 'com.test.app',
+        projectRoot: project.root,
+      }),
+    );
+    assert.equal(saved.ok, true);
+
+    const emitted = project.readYaml('cold-metadata-title');
+    assert.equal(detectEntryDeclaration(emitted), undefined);
+    const calls: Array<Record<string, unknown>> = [];
+    const replay = envelope(
+      await handlerWith(calls, async () => {
+        throw new Error('cold replay must not probe park state');
+      })({ actionId: 'cold-metadata-title', projectRoot: project.root }),
+    );
+
+    assert.equal(replay.ok, true);
+    assert.equal(calls.length, 1);
+    assert.match(String(calls[0]?.inlineYaml), /launchApp/);
   } finally {
     _resetState();
   }

@@ -540,10 +540,14 @@ export function shouldDemoteAfterRepair(metadata: M7Metadata): boolean {
  * declaration exists. The first command line ends detection, so body text is
  * never scanned.
  */
+function normalizeM7Source(yamlText: string): string {
+  return yamlText.startsWith('\uFEFF') ? yamlText.slice(1) : yamlText;
+}
+
 export function detectEntryDeclaration(yamlText: string): string | undefined {
   let inTopSection = true;
   const declarations: string[] = [];
-  for (const line of yamlText.split('\n')) {
+  for (const line of normalizeM7Source(yamlText).split('\n')) {
     if (line.startsWith('#')) {
       const kv = line
         .replace(/^#\s?/, '')
@@ -571,7 +575,7 @@ export function detectEntryDeclaration(yamlText: string): string | undefined {
 }
 
 export function parseM7Header(yamlText: string, fallbackId?: string): M7Metadata | null {
-  const lines = yamlText.split('\n');
+  const lines = normalizeM7Source(yamlText).split('\n');
   const meta: Record<string, unknown> = {};
   let inComment = false;
   for (const line of lines) {

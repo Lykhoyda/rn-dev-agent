@@ -131,6 +131,18 @@ function commandName(command: unknown): string | null {
   return keys.length === 1 ? keys[0]! : null;
 }
 
+function forbiddenLifecycleCommand(command: unknown): string | null {
+  if (typeof command === 'string') {
+    return PARKED_FORBIDDEN_COMMANDS.has(command) ? command : null;
+  }
+  if (!command || typeof command !== 'object' || Array.isArray(command)) return null;
+  return (
+    Object.keys(command as Record<string, unknown>).find((key) =>
+      PARKED_FORBIDDEN_COMMANDS.has(key),
+    ) ?? null
+  );
+}
+
 type CompositeShape =
   | { kind: 'inline'; name: string; commands: unknown[]; conditional: boolean }
   | { kind: 'file'; reference: string }
@@ -199,9 +211,9 @@ function rawParkedBodyViolation(rawYaml: string): ParkedBodyViolation | null {
  */
 export function parkedBodyViolation(commands: readonly unknown[]): ParkedBodyViolation | null {
   for (const command of commands) {
-    const name = commandName(command);
-    if (name !== null && PARKED_FORBIDDEN_COMMANDS.has(name)) {
-      return { kind: 'lifecycle', command: name };
+    const lifecycle = forbiddenLifecycleCommand(command);
+    if (lifecycle !== null) {
+      return { kind: 'lifecycle', command: lifecycle };
     }
     const composite = compositeShape(command);
     if (composite?.kind === 'file') return { kind: 'runflow-file', reference: composite.reference };

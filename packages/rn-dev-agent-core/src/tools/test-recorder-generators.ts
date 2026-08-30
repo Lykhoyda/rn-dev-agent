@@ -26,6 +26,11 @@ function maestroScalar(value: string): string {
   return yamlStringify(safe).replace(/\n+$/, '');
 }
 
+function maestroBanner(value: string): string {
+  const banner = stripNewlines(value);
+  return /^[a-zA-Z][\w-]*\s*:/.test(banner.trim()) ? `> ${banner}` : banner;
+}
+
 export interface GenerateOpts {
   testName?: string;
   bundleId?: string;
@@ -290,7 +295,7 @@ export function generateMaestro(events: RecordedEvent[], opts: GenerateOpts = {}
     lines.push(`appId: ${maestroScalar(opts.bundleId)}`);
     lines.push('---');
   }
-  lines.push(`# ${stripNewlines(opts.testName ?? 'Recorded flow')}`);
+  lines.push(`# ${maestroBanner(opts.testName ?? 'Recorded flow')}`);
   for (const [k, v] of metaPairs(opts, expectedRouteSequence)) {
     lines.push(`# ${k}: ${v}`);
   }
