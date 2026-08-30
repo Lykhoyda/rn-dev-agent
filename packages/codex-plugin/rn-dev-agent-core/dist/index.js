@@ -51588,11 +51588,7 @@ var INJECTED_HELPERS = `
     '_LogBoxInspectorContainer'
   ];
 
-  // Reset by every root-iteration pass; only valid when read synchronously
-  // after the pass that produced the tree (many helpers share the iterators).
-  // finished is true only when the renderer-ID loop finished without the
-  // empty-streak early-exit \u2014 empty roots are mounting evidence only then
-  // (GH #789).
+  // Synchronous scan result; finished stays false after the GH #789 empty-streak exit.
   var lastRootScan = { rendererErrors: 0, visited: {}, finished: false };
 
   function rootScanCoverage() {
