@@ -203,7 +203,12 @@ alive for such callers.
   complete readable absence; refusals carry no matchCount). `replayTreeData`
   (`src/tools/cdp-replay-dispatch.ts`) is a readability gate only (transport,
   redbox, truncation); `getTree(filter)` matches substrings, so never
-  reintroduce exact-ID presence/absence inference from its output.
+  reintroduce exact-ID presence/absence inference from its output. Fibers are
+  compared modulo `fiber.alternate` (React's double buffer) in `containsFiber`;
+  the end-to-end OTP login-resume smoke is device-bound and owned by
+  `corepack yarn gate:otp-omitted-timeout` (needs `OTP_FIXTURE_ROOT` and
+  `OTP_FIXTURE_DEVICE_ID`; not run in hosted CI), with the causal modal-
+  alternate regressions in `test/unit/ios-proof-domain-routing.test.ts`.
 - Trailing-verification classification (GH #623) has exactly one owner: the
   canonical per-attempt ledger built inside `maestro_run` from per-stage
   producer artifacts (`src/domain/maestro-run-ledger.ts`, artifact reader in

@@ -1164,6 +1164,151 @@ test('stacked visible modal roots fail closed when ordering is unavailable', () 
   assert.equal(verdict.modalCount, 2);
 });
 
+// React double-buffers fibers: after a commit, a child collected from the
+// current tree can carry a .return pointing at an ancestor's alternate.
+function modalAlternateSubtree(root: any, testID: string) {
+  const modalHost: any = {
+    type: { displayName: 'RCTModalHostView' },
+    memoizedProps: { visible: true },
+    return: root,
+    child: null,
+    sibling: null,
+  };
+  const modalHostAlternate: any = {
+    type: { displayName: 'RCTModalHostView' },
+    memoizedProps: { visible: true },
+    return: root,
+    child: null,
+    sibling: null,
+  };
+  modalHost.alternate = modalHostAlternate;
+  modalHostAlternate.alternate = modalHost;
+  modalHost.child = {
+    type: { displayName: 'View' },
+    memoizedProps: { testID },
+    return: modalHostAlternate,
+    child: null,
+    sibling: null,
+  };
+  return modalHost;
+}
+
+function modalAlternateTree(testID: string) {
+  const root: any = {
+    type: { displayName: 'Root' },
+    memoizedProps: {},
+    return: null,
+    child: null,
+    sibling: null,
+  };
+  root.child = modalAlternateSubtree(root, testID);
+  return root;
+}
+
+test('a modal-hosted target reached through the host fiber alternate is frontmost', () => {
+  const root = modalAlternateTree('otp_email-pressable');
+  const sandbox = makeFrontmostSandbox(root, { index: 0, routes: [{ name: 'Home' }] });
+  const verdict = JSON.parse(sandbox.__RN_AGENT.isTestIdFrontmost('otp_email-pressable'));
+  assert.equal(verdict.visible, true);
+  assert.equal(verdict.modalCount, 1);
+  assert.equal(verdict.matchCount, 1);
+});
+
+test('a target genuinely behind the active modal stays refused when the host has an alternate', () => {
+  const root = modalAlternateTree('otp_email-pressable');
+  root.child.sibling = {
+    type: { displayName: 'View' },
+    memoizedProps: { testID: 'behind_the_modal' },
+    return: root,
+    child: null,
+    sibling: null,
+  };
+  const sandbox = makeFrontmostSandbox(root, { index: 0, routes: [{ name: 'Home' }] });
+  const verdict = JSON.parse(sandbox.__RN_AGENT.isTestIdFrontmost('behind_the_modal'));
+  assert.equal(verdict.visible, false);
+  assert.match(verdict.reason, /behind the active modal/);
+  assert.equal(verdict.matchCount, 1);
+});
+
+test('an ordinary non-modal target is unaffected by ancestor alternates', () => {
+  const root = routeTree('coverage', 'home');
+  const screen = root.child;
+  const screenAlternate: any = {
+    type: { displayName: 'Screen' },
+    memoizedProps: { route: { name: 'home' } },
+    return: root,
+    child: null,
+    sibling: null,
+  };
+  screen.alternate = screenAlternate;
+  screenAlternate.alternate = screen;
+  screen.child.return = screenAlternate;
+  const sandbox = makeFrontmostSandbox(root, { index: 0, routes: [{ name: 'home' }] });
+  const verdict = JSON.parse(sandbox.__RN_AGENT.isTestIdFrontmost('coverage'));
+  assert.equal(verdict.visible, true);
+  assert.equal(verdict.matchCount, 1);
+});
+
+test('duplicate IDs in separate subtrees stay ambiguous when ancestors have alternates', () => {
+  const root = modalAlternateTree('otp_email-pressable');
+  const duplicate: any = {
+    type: { displayName: 'View' },
+    memoizedProps: { testID: 'otp_email-pressable' },
+    return: root,
+    child: null,
+    sibling: null,
+  };
+  root.child.sibling = duplicate;
+  const sandbox = makeFrontmostSandbox(root, { index: 0, routes: [{ name: 'Home' }] });
+  const verdict = JSON.parse(sandbox.__RN_AGENT.isTestIdFrontmost('otp_email-pressable'));
+  assert.equal(verdict.visible, false);
+  assert.match(verdict.reason, /ambiguous across mounted React trees/);
+  assert.equal(verdict.matchCount, 2);
+});
+
+test('a delayed modal-hosted target becomes frontmost through the timed wait', async () => {
+  const root: any = {
+    type: { displayName: 'Root' },
+    memoizedProps: {},
+    return: null,
+    child: null,
+    sibling: null,
+  };
+  const home: any = {
+    type: { displayName: 'View' },
+    memoizedProps: { testID: 'open_otp' },
+    return: root,
+    child: null,
+    sibling: null,
+  };
+  root.child = home;
+  const modalHost = modalAlternateSubtree(root, 'otp_email-pressable');
+  const sandbox = makeFrontmostSandbox(root, { index: 0, routes: [{ name: 'Home' }] });
+  let polls = 0;
+  const absentVerdicts: string[] = [];
+  const replay = await runCdpReplayCommands(
+    [{ extendedWaitUntil: { visible: { id: 'otp_email-pressable' }, timeout: 2000 } }],
+    {},
+    {
+      pressByTestId: async () => {},
+      typeByTestId: async () => {},
+      treeFor: async (id: string) => JSON.parse(sandbox.__RN_AGENT.getTree({ filter: id })),
+      frontmostFor: async (id: string) => {
+        polls++;
+        if (polls === 3) home.sibling = modalHost;
+        const verdict = JSON.parse(sandbox.__RN_AGENT.isTestIdFrontmost(id));
+        if (!verdict.visible) absentVerdicts.push(verdict.reason);
+        return verdict;
+      },
+      launchApp: async () => {},
+      settle: async () => {},
+    },
+  );
+  assert.equal(replay.passed, true);
+  assert.ok(polls >= 3, `expected the wait to poll through absence, saw ${polls} polls`);
+  assert.deepEqual([...new Set(absentVerdicts)], ['testID is not mounted']);
+});
+
 test('a matching route returned after the replay deadline cannot report success', async () => {
   let clock = 0;
   const handler = createMaestroRunHandler({

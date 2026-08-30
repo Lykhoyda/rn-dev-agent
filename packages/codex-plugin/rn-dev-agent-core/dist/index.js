@@ -51543,7 +51543,7 @@ async function detectBridge(client2, evaluate = (expression) => client2.evaluate
 init_logger();
 
 // packages/rn-dev-agent-core/dist/injected-helpers.js
-var HELPERS_VERSION = 48;
+var HELPERS_VERSION = 49;
 var INJECTED_HELPERS = `
 (function() {
   var __HELPERS_VERSION__ = ${HELPERS_VERSION};
@@ -55300,10 +55300,13 @@ var INJECTED_HELPERS = `
       });
     }
     function containsFiber(ancestor, candidate) {
+      // A fiber and its work-in-progress alternate are the same logical node;
+      // committed .return chains may thread through either half of the pair.
+      var ancestorAlternate = ancestor.alternate || null;
       var current = candidate;
       var guard = 0;
       while (current && guard++ < 1000) {
-        if (current === ancestor) return true;
+        if (current === ancestor || current === ancestorAlternate) return true;
         current = current.return;
       }
       return false;

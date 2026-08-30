@@ -2,7 +2,7 @@
 // whenever the injected surface changes; it flows into the IIFE's freshness
 // check (__RN_AGENT.__v) AND the post-injection log line, so they can never
 // drift (the log previously hard-coded a stale "v11").
-export const HELPERS_VERSION = 48;
+export const HELPERS_VERSION = 49;
 
 export const INJECTED_HELPERS = `
 (function() {
@@ -3760,10 +3760,13 @@ export const INJECTED_HELPERS = `
       });
     }
     function containsFiber(ancestor, candidate) {
+      // A fiber and its work-in-progress alternate are the same logical node;
+      // committed .return chains may thread through either half of the pair.
+      var ancestorAlternate = ancestor.alternate || null;
       var current = candidate;
       var guard = 0;
       while (current && guard++ < 1000) {
-        if (current === ancestor) return true;
+        if (current === ancestor || current === ancestorAlternate) return true;
         current = current.return;
       }
       return false;

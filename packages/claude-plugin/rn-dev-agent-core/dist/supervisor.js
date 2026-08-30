@@ -63917,7 +63917,7 @@ var HELPERS_VERSION, INJECTED_HELPERS, NETWORK_HOOK_SCRIPT, NETWORK_CB_BUFFERED_
 var init_injected_helpers = __esm({
   "packages/rn-dev-agent-core/dist/injected-helpers.js"() {
     "use strict";
-    HELPERS_VERSION = 48;
+    HELPERS_VERSION = 49;
     INJECTED_HELPERS = `
 (function() {
   var __HELPERS_VERSION__ = ${HELPERS_VERSION};
@@ -67674,10 +67674,13 @@ var init_injected_helpers = __esm({
       });
     }
     function containsFiber(ancestor, candidate) {
+      // A fiber and its work-in-progress alternate are the same logical node;
+      // committed .return chains may thread through either half of the pair.
+      var ancestorAlternate = ancestor.alternate || null;
       var current = candidate;
       var guard = 0;
       while (current && guard++ < 1000) {
-        if (current === ancestor) return true;
+        if (current === ancestor || current === ancestorAlternate) return true;
         current = current.return;
       }
       return false;
