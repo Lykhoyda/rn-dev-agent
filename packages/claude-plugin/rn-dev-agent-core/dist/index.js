@@ -79362,13 +79362,16 @@ function replayTreeData(envelope) {
   const redbox = warning === "APP_HAS_REDBOX";
   const data = envelope.data && typeof envelope.data === "object" && !Array.isArray(envelope.data) ? envelope.data : null;
   const truncated = data !== null && (data.__agent_truncated === true || data.truncated === true);
-  if (envelope.ok === true && !redbox && !truncated)
+  const agentError = typeof data?.__agent_error === "string" ? data.__agent_error.slice(0, 1e3) : void 0;
+  const serializationFailed = agentError !== void 0;
+  if (envelope.ok === true && !redbox && !truncated && !serializationFailed)
     return envelope.data;
-  const message = truncated ? "Component tree proof exceeded the readable payload budget" : redbox && typeof data?.message === "string" ? data.message.slice(0, 1e3) : envelope.error?.slice(0, 1e3) ?? "Component tree proof is unavailable";
-  const code = redbox ? warning : envelope.code ?? "EVAL_FAILED";
+  const message = serializationFailed ? agentError || "Component tree serialization failed" : truncated ? "Component tree proof exceeded the readable payload budget" : redbox && typeof data?.message === "string" ? data.message.slice(0, 1e3) : envelope.error?.slice(0, 1e3) ?? "Component tree proof is unavailable";
+  const code = serializationFailed ? "EVAL_FAILED" : redbox ? warning : envelope.code ?? "EVAL_FAILED";
   throw new ReplayDispatchError(code, message, {
     treeEnvelope: {
       ok: envelope.ok === true,
+      ...serializationFailed ? { agentError } : {},
       ...truncated ? { truncated: true } : {},
       ...truncated && typeof data.originalLength === "number" ? { originalLength: data.originalLength } : {},
       ...envelope.code ? { code: envelope.code } : {},

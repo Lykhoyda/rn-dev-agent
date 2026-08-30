@@ -24,10 +24,7 @@ export interface ReplayTreeEnvelope {
   meta?: Record<string, unknown>;
 }
 
-// Readability gate only: transport failures, redbox, and truncation reject with
-// their typed envelope. Exact-ID presence/absence is never inferred here — the
-// filtered tree is substring-matched, so that decision belongs to the injected
-// exact-ID oracle (isTestIdFrontmost) consumed through frontmostFor.
+// Readability gate only: transport, redbox, truncation, and serialization failures reject.
 export function replayTreeData(envelope: ReplayTreeEnvelope): unknown {
   const warning = typeof envelope.meta?.warning === 'string' ? envelope.meta.warning : undefined;
   const redbox = warning === 'APP_HAS_REDBOX';
@@ -36,17 +33,27 @@ export function replayTreeData(envelope: ReplayTreeEnvelope): unknown {
       ? (envelope.data as Record<string, unknown>)
       : null;
   const truncated = data !== null && (data.__agent_truncated === true || data.truncated === true);
-  if (envelope.ok === true && !redbox && !truncated) return envelope.data;
+  const agentError =
+    typeof data?.__agent_error === 'string' ? data.__agent_error.slice(0, 1000) : undefined;
+  const serializationFailed = agentError !== undefined;
+  if (envelope.ok === true && !redbox && !truncated && !serializationFailed) return envelope.data;
 
-  const message = truncated
-    ? 'Component tree proof exceeded the readable payload budget'
-    : redbox && typeof data?.message === 'string'
-      ? data.message.slice(0, 1000)
-      : (envelope.error?.slice(0, 1000) ?? 'Component tree proof is unavailable');
-  const code = redbox ? warning : (envelope.code ?? 'EVAL_FAILED');
+  const message = serializationFailed
+    ? agentError || 'Component tree serialization failed'
+    : truncated
+      ? 'Component tree proof exceeded the readable payload budget'
+      : redbox && typeof data?.message === 'string'
+        ? data.message.slice(0, 1000)
+        : (envelope.error?.slice(0, 1000) ?? 'Component tree proof is unavailable');
+  const code = serializationFailed
+    ? 'EVAL_FAILED'
+    : redbox
+      ? warning
+      : (envelope.code ?? 'EVAL_FAILED');
   throw new ReplayDispatchError(code, message, {
     treeEnvelope: {
       ok: envelope.ok === true,
+      ...(serializationFailed ? { agentError } : {}),
       ...(truncated ? { truncated: true } : {}),
       ...(truncated && typeof data.originalLength === 'number'
         ? { originalLength: data.originalLength }
@@ -63,8 +70,7 @@ export function replayTreeData(envelope: ReplayTreeEnvelope): unknown {
 export interface CdpReplayDeps {
   pressByTestId(id: string): Promise<void>;
   typeByTestId(id: string, text: string): Promise<void>;
-  // returns parsed readable getTree data filtered to `id`; transport, redbox,
-  // and truncation failures reject with their envelope
+  // returns parsed readable getTree data filtered to `id`
   treeFor(id: string): Promise<unknown>;
   // exact-ID oracle (injected isTestIdFrontmost): sole owner of presence,
   // absence, match count, and frontmost evidence — matchCount 0 is complete

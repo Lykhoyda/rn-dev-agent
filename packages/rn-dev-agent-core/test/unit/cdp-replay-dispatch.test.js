@@ -265,6 +265,37 @@ test('React replay refuses a truncated component tree distinctly from readable a
   });
 });
 
+test('React replay refuses a serialization sentinel distinctly from exact-ID absence', async () => {
+  let oracleReads = 0;
+  const replay = await runCdpReplayCommands(
+    [{ extendedWaitUntil: { visible: { id: 'otp' }, timeout: 250 } }],
+    {},
+    {
+      pressByTestId: async () => {},
+      typeByTestId: async () => {},
+      treeFor: async () =>
+        replayTreeData({
+          ok: true,
+          data: { __agent_error: 'Serialization failed: cyclic fiber value' },
+        }),
+      frontmostFor: async () => {
+        oracleReads += 1;
+        return { visible: false, matchCount: 0 };
+      },
+      launchApp: async () => {},
+      settle: async () => {},
+    },
+  );
+  assert.equal(replay.passed, false);
+  assert.equal(replay.failureCode, 'EVAL_FAILED');
+  assert.notEqual(replay.failureCode, 'TESTID_NOT_FOUND');
+  assert.equal(oracleReads, 0);
+  assert.deepEqual(replay.failureMeta?.treeEnvelope, {
+    ok: true,
+    agentError: 'Serialization failed: cyclic fiber value',
+  });
+});
+
 test('React replay refuses helper-truncated filtered evidence', async () => {
   const replay = await runCdpReplayCommands(
     [{ extendedWaitUntil: { visible: { id: 'otp' }, timeout: 250 } }],
