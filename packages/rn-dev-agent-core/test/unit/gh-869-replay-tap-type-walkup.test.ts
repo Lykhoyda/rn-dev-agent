@@ -1,38 +1,11 @@
-// GH #869: replay could not tap AND type a testID-bearing TextInput nested
-// under a Pressable — the press producer in src/index.ts never enabled the
-// bounded GH #525 walkUp, while `inputText` re-resolves the last-tapped id.
-// These tests execute the ACTUAL press-args literal extracted from
-// src/index.ts through the real injected helper and replay engine, so the
-// regression flips with the production call shape; the controls prove the
-// dispatch gates (disabled, occlusion, duplicates, no-focus type) hold.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
-import { readFileSync } from 'node:fs';
 
 import { INJECTED_HELPERS } from '../../dist/injected-helpers.js';
-import { ReplayDispatchError } from '../../dist/domain/cdp-flow-replay.js';
 import { runCdpReplayCommands, type CdpReplayDeps } from '../../dist/tools/cdp-replay-dispatch.js';
-import { createInteractHandler } from '../../dist/tools/interact.js';
-import { performReactTreeInput } from '../../dist/tools/device-interact.js';
+import { makeReplayDeps } from '../../dist/tools/cdp-replay-deps.js';
 import { createMockClient } from '../helpers/mock-cdp-client.js';
-
-const indexSource = readFileSync(new URL('../../src/index.ts', import.meta.url), 'utf8');
-assert.equal(
-  indexSource.match(/pressByTestId:/g)?.length,
-  1,
-  'expected exactly one pressByTestId producer in src/index.ts',
-);
-const producerBody = indexSource.match(/pressByTestId:([^]*?)typeByTestId:/)?.[1];
-assert.ok(producerBody, 'pressByTestId producer body not found in src/index.ts');
-const pressCalls = [...producerBody.matchAll(/interact\((\{[^)]*\})\)/g)];
-assert.equal(pressCalls.length, 1, 'expected exactly one interact() call in pressByTestId');
-const productionPressArgs = new Function('id', `return (${pressCalls[0]![1]});`) as (
-  id: string,
-) => Record<string, unknown>;
-const extractedShape = productionPressArgs('probe');
-assert.equal(extractedShape.action, 'press', 'extracted args are not the replay press call');
-assert.equal(extractedShape.testID, 'probe', 'extracted args must pass the tap id through');
 
 interface Fiber {
   tag: number;
@@ -107,56 +80,27 @@ function createAgent(root: Fiber) {
   };
 }
 
-function mustOk(res: { content: Array<{ text: string }> }, what: string): void {
-  const env = JSON.parse(res.content[0]!.text) as {
-    ok?: boolean;
-    code?: string;
-    error?: string;
-    meta?: Record<string, unknown>;
-  };
-  if (env.ok === false)
-    throw new ReplayDispatchError(
-      env.code ?? 'INTERACTION_NOT_ACTUATED',
-      `${what} failed: ${env.error ?? 'ok:false'}`,
-      env.meta,
-    );
-}
-
-function buildDeps(
-  agent: ReturnType<typeof createAgent>,
-  overrides: Partial<CdpReplayDeps> = {},
-): CdpReplayDeps {
+function buildDeps(agent: ReturnType<typeof createAgent>): CdpReplayDeps {
   const client = createMockClient({
     evaluate: (expr: string) => agent.evaluate(expr),
-    // The VM runs the real helpers, whose version differs from the mock's
-    // pinned probe value — report fresh so withConnection skips re-injection.
     probeHelperFreshness: async () => ({ fresh: true, version: 0, probed: true }),
   }) as never;
-  const interact = createInteractHandler(() => client);
-  return {
-    pressByTestId: async (id) =>
-      mustOk(await interact(productionPressArgs(id) as never), `press "${id}"`),
-    typeByTestId: async (id, text) =>
-      mustOk(await performReactTreeInput(id, text, client), `type "${id}"`),
-    treeFor: async (id) => ({ testID: id, children: [] }),
-    frontmostFor: async (id) => {
-      const result = await agent.evaluate(`__RN_AGENT.isTestIdFrontmost(${JSON.stringify(id)})`);
-      return JSON.parse(result.value as string) as {
-        visible: boolean;
-        reason?: string;
-        matchCount?: number;
-        code?: string;
-      };
-    },
-    launchApp: async () => {},
-    settle: async () => {},
-    ...overrides,
-  };
+  const deps = makeReplayDeps({
+    getActiveSession: () => ({
+      name: 'gh-869-test',
+      platform: 'ios',
+      deviceId: 'test-device',
+      appId: 'dev.rn.agent.fixture',
+      openedAt: '2026-08-30T00:00:00.000Z',
+    }),
+    getClient: () => client,
+    resolveIosUdid: async () => 'test-device',
+    execute: async () => undefined,
+  });
+  assert.ok(deps);
+  return deps;
 }
 
-// Pressable[otp_email-pressable, onPress:focus] > RCTView >
-// TextInput[otp_email] > RCTSinglelineTextInputView[otp_email] — the exact
-// issue #869 fixture shape (repo OTP fixture / react-hook-form TextField).
 function otpFixture() {
   const calls = { focus: 0, typed: [] as string[] };
   const root = makeFiber('Root');
@@ -174,8 +118,6 @@ function otpFixture() {
     ),
   );
   const pressableHost = appendChild(pressable, makeFiber('RCTView'));
-  // Wrapper composite carries the testID; only the host input is typeable —
-  // the fiber shape issue #840 established from real wrapped TextFields.
   const inputComposite = appendChild(
     pressableHost,
     makeFiber({ displayName: 'TextInput' }, { testID: 'otp_email' }),
@@ -188,7 +130,7 @@ function otpFixture() {
     calls.typed.push(value);
     inputHost.memoizedProps.value = value;
   };
-  return { root, app, calls, inputHost };
+  return { root, app, pressable, inputComposite, calls, inputHost };
 }
 
 test('#869 replay taps the Pressable-wrapped input by its exact testID, then types on that same input', async () => {
@@ -264,11 +206,11 @@ test('#869 control: an input with no actionable ancestor still refuses the tap',
   assert.deepEqual(typed, [], 'the type step must never run after a refused tap');
 });
 
-test('#869 control: a disabled input refuses before the press helper runs', async () => {
+test('#869 control: a non-editable input refuses from the projected tree', async () => {
   const fixture = otpFixture();
-  const deps = buildDeps(createAgent(fixture.root), {
-    treeFor: async (id) => ({ testID: id, disabled: true }),
-  });
+  fixture.inputComposite.memoizedProps.editable = false;
+  fixture.inputHost.memoizedProps.editable = false;
+  const deps = buildDeps(createAgent(fixture.root));
 
   const result = await runCdpReplayCommands(
     [{ tapOn: { id: 'otp_email' } }, { inputText: '0451' }],
@@ -283,10 +225,47 @@ test('#869 control: a disabled input refuses before the press helper runs', asyn
   assert.deepEqual(fixture.calls.typed, []);
 });
 
+test('#869 control: a disabled nearest pressable refuses without walking farther', async (t) => {
+  for (const [label, disabledProps] of [
+    ['disabled prop', { disabled: true }],
+    ['accessibility state', { accessibilityState: { disabled: true } }],
+  ] as const) {
+    await t.test(label, async () => {
+      const fixture = otpFixture();
+      let outerPresses = 0;
+      const outerPressable = makeFiber(
+        { displayName: 'Pressable' },
+        {
+          onPress: () => {
+            outerPresses += 1;
+          },
+        },
+      );
+      fixture.app.child = outerPressable;
+      outerPressable.return = fixture.app;
+      outerPressable.child = fixture.pressable;
+      fixture.pressable.return = outerPressable;
+      Object.assign(fixture.pressable.memoizedProps, disabledProps);
+      const deps = buildDeps(createAgent(fixture.root));
+
+      const result = await runCdpReplayCommands(
+        [{ tapOn: { id: 'otp_email' } }, { inputText: '0451' }],
+        {},
+        deps,
+      );
+
+      assert.equal(result.passed, false);
+      assert.equal(result.failureCode, 'INTERACTION_NOT_ACTUATED');
+      assert.match(result.reason ?? '', /disabled/);
+      assert.equal(fixture.calls.focus, 0);
+      assert.equal(outerPresses, 0);
+      assert.deepEqual(fixture.calls.typed, []);
+    });
+  }
+});
+
 test('#869 control: an input behind an active modal subtree refuses the tap', async () => {
   const fixture = otpFixture();
-  // The modal marker sits one level below the sibling branch so the target is
-  // refused by modal containment, not by the sibling aria-modal hidden rule.
   const sheetBranch = appendChild(fixture.app, makeFiber({ displayName: 'View' }));
   const modal = appendChild(
     sheetBranch,

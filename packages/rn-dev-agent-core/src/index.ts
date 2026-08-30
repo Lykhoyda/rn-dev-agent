@@ -43,9 +43,7 @@ import { createRepairActionHandler } from './tools/repair-action.js';
 import { createSaveAsActionHandler } from './tools/save-as-action.js';
 import { createRunActionHandler } from './tools/run-action.js';
 import { createLoginPrologueHandler } from './tools/login-prologue.js';
-import { replayTreeData, unwrapTree } from './tools/cdp-replay-dispatch.js';
-import type { CdpReplayDeps } from './tools/cdp-replay-dispatch.js';
-import { ReplayDispatchError } from './domain/cdp-flow-replay.js';
+import { makeReplayDeps } from './tools/cdp-replay-deps.js';
 import { createDispatchHandler } from './tools/dispatch.js';
 import { createMmkvHandler } from './tools/mmkv.js';
 import { createDevSettingsHandler } from './tools/dev-settings.js';
@@ -64,7 +62,6 @@ import {
   fetchSnapshotNodesForSameScreenProof,
   createDevicePressHandler,
   createDeviceFillHandler,
-  performReactTreeInput,
   createDeviceSwipeHandler,
   createDeviceScrollHandler,
   createDeviceScrollIntoViewHandler,
@@ -344,127 +341,6 @@ const createClient = (port: number): CDPClient => {
 };
 
 const execFileP = promisify(execFile);
-
-// Parse an MCP envelope; throw when the handler reported failure.
-const mustOk = (res: { content: { text: string }[] }, what: string): void => {
-  const env = JSON.parse(res.content[0].text) as {
-    ok?: boolean;
-    code?: string;
-    error?: string;
-    meta?: Record<string, unknown>;
-  };
-  if (env.ok === false)
-    throw new ReplayDispatchError(
-      env.code ?? 'INTERACTION_NOT_ACTUATED',
-      `${what} failed: ${env.error ?? 'ok:false'}`,
-      env.meta,
-    );
-};
-
-// Build exact-iOS React-tree replay dependencies from existing handlers.
-const makeReplayDeps = (_args?: unknown, signal?: AbortSignal): CdpReplayDeps | null => {
-  const session = getActiveSession();
-  if (!session || session.platform !== 'ios' || !session.appId) return null;
-  const interact = createInteractHandler(getClient);
-  const tree = createComponentTreeHandler(getClient);
-  return {
-    pressByTestId: async (id: string) => {
-      // GH #869: walk to the pressable ancestor; type still re-resolves the exact input id.
-      mustOk(
-        await interact({ action: 'press', testID: id, animated: false, walkUp: true }),
-        `press "${id}"`,
-      );
-    },
-    typeByTestId: async (id: string, text: string) => {
-      mustOk(await performReactTreeInput(id, text, getClient(), signal), `type "${id}"`);
-    },
-    treeFor: async (id: string) => {
-      const fetchTree = async (interactiveOnly: boolean) =>
-        JSON.parse(
-          (
-            await tree({
-              filter: id,
-              depth: 12,
-              ...(interactiveOnly ? { interactiveOnly: true } : {}),
-            })
-          ).content[0].text,
-        ) as {
-          ok?: boolean;
-          code?: string;
-          error?: string;
-          data?: unknown;
-          meta?: Record<string, unknown>;
-        };
-      let env = await fetchTree(false);
-      let data = replayTreeData(env);
-      // Retry with the salient digest when the full filtered payload exceeds the helper bound.
-      const d = data as Record<string, unknown> | null;
-      if (d && typeof d === 'object' && '__agent_truncated' in d) {
-        env = await fetchTree(true);
-        data = replayTreeData(env);
-      }
-      return unwrapTree(data);
-    },
-    frontmostFor: async (id: string) => {
-      const result = await getClient().evaluate(
-        getClient().bridgeWithFallback(`isTestIdFrontmost(${JSON.stringify(id)})`),
-      );
-      if (result.error || typeof result.value !== 'string') {
-        return {
-          visible: false,
-          reason: `frontmost route check failed for testID "${id}"`,
-          code: 'ASSERTION_FAILED',
-        };
-      }
-      try {
-        const parsed = JSON.parse(result.value) as {
-          visible?: boolean;
-          reason?: string;
-          matchCount?: number;
-          code?: string;
-        };
-        return {
-          visible: parsed.visible === true,
-          ...(parsed.reason ? { reason: parsed.reason } : {}),
-          ...(typeof parsed.matchCount === 'number' ? { matchCount: parsed.matchCount } : {}),
-          ...(parsed.code ? { code: parsed.code } : {}),
-        };
-      } catch {
-        return {
-          visible: false,
-          reason: `frontmost route check was unreadable for testID "${id}"`,
-          code: 'ASSERTION_FAILED',
-        };
-      }
-    },
-    launchApp: async (stopApp: boolean) => {
-      const udid = await resolveIosUdid(session.deviceId);
-      if (!udid) throw new Error('launchApp: could not resolve iOS udid');
-      if (stopApp) {
-        try {
-          await execFileP('xcrun', ['simctl', 'terminate', udid, session.appId!]);
-        } catch {
-          /* app not running — fine */
-        }
-      }
-      await execFileP('xcrun', ['simctl', 'launch', udid, session.appId!]);
-    },
-    settle: async (timeoutMs: number) => {
-      if (signal?.aborted) throw new ReplayDispatchError('RUNNER_TIMEOUT', 'Replay cancelled');
-      await new Promise<void>((resolve, reject) => {
-        const timer = setTimeout(resolve, timeoutMs);
-        signal?.addEventListener(
-          'abort',
-          () => {
-            clearTimeout(timer);
-            reject(new ReplayDispatchError('RUNNER_TIMEOUT', 'Replay cancelled'));
-          },
-          { once: true },
-        );
-      });
-    },
-  };
-};
 
 const probeNativeVision: NonNullable<MaestroRunDeps['nativeVisionProbe']> = async ({
   deviceId,
@@ -3416,7 +3292,16 @@ trackedTool(
 );
 
 const maestroRunHandler = createMaestroRunHandler({
-  replayDeps: (args, signal) => makeReplayDeps(args, signal),
+  replayDeps: (_args, signal) =>
+    makeReplayDeps(
+      {
+        getActiveSession,
+        getClient,
+        resolveIosUdid,
+        execute: (file, args) => execFileP(file, args),
+      },
+      signal,
+    ),
   getLiveRoute: () => readLiveRoute(getClient()),
   nativeVisionProbe: probeNativeVision,
 });

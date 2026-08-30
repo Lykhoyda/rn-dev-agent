@@ -66381,6 +66381,10 @@ var init_injected_helpers = __esm({
         }
         var walkTarget = walkCandidates[0];
         var walkTargetName = walkFiberName(walkTarget.fiber);
+        var walkTargetProps = walkTarget.fiber.memoizedProps || {};
+        if (walkTargetProps.disabled === true || (walkTargetProps.accessibilityState && walkTargetProps.accessibilityState.disabled === true)) {
+          return JSON.stringify({ error: 'Component is disabled', component: walkTargetName, testID: selector });
+        }
         executedName = walkTargetName;
         if (opts.value !== undefined) {
           walkTarget.fiber.memoizedProps.onPress(opts.value);
@@ -81406,7 +81410,7 @@ function isDisabled(props) {
   if (!props)
     return false;
   const a11y = props.accessibilityState;
-  return props.disabled === true || a11y?.disabled === true;
+  return props.disabled === true || props.editable === false || a11y?.disabled === true;
 }
 async function runCdpReplayCommands(commands, params, deps, opts = {}) {
   return replayFlow(normalizeSteps(commands, params), buildCdpDispatch(deps, opts.signal), {
@@ -83999,6 +84003,198 @@ var init_login_prologue2 = __esm({
   }
 });
 
+// packages/rn-dev-agent-core/dist/tools/interact.js
+function createInteractHandler(getClient2) {
+  return withConnection(getClient2, async (args, client2) => {
+    const hasLadderSelector = args.action === "typeText" ? Boolean(args.placeholder || args.role && args.name) : Boolean(args.role || args.text || args.placeholder);
+    if (!args.testID && !args.accessibilityLabel && !hasLadderSelector) {
+      return failResult("A selector is required: testID / accessibilityLabel, or a discovery-ladder selector (role / text / placeholder).");
+    }
+    if (args.action === "typeText" && args.text === void 0) {
+      return failResult("text parameter is required for typeText action");
+    }
+    if (args.action === "setFieldValue") {
+      if (args.name === void 0 || args.name.length === 0) {
+        return failResult("name parameter is required for setFieldValue action \u2014 the React Hook Form field name");
+      }
+      if (args.value === void 0) {
+        return failResult("value parameter is required for setFieldValue action");
+      }
+    }
+    const opts = { action: args.action };
+    if (args.testID !== void 0)
+      opts.testID = args.testID;
+    if (args.accessibilityLabel !== void 0)
+      opts.accessibilityLabel = args.accessibilityLabel;
+    if (args.text !== void 0)
+      opts.text = args.text;
+    if (args.scrollX !== void 0)
+      opts.scrollX = args.scrollX;
+    if (args.scrollY !== void 0)
+      opts.scrollY = args.scrollY;
+    opts.animated = args.animated;
+    if (args.name !== void 0)
+      opts.name = args.name;
+    if (args.value !== void 0)
+      opts.value = args.value;
+    if (args.shouldValidate !== void 0)
+      opts.shouldValidate = args.shouldValidate;
+    if (args.shouldDirty !== void 0)
+      opts.shouldDirty = args.shouldDirty;
+    if (args.role !== void 0)
+      opts.role = args.role;
+    if (args.placeholder !== void 0)
+      opts.placeholder = args.placeholder;
+    if (args.exact !== void 0)
+      opts.exact = args.exact;
+    if (args.includeHidden !== void 0)
+      opts.includeHidden = args.includeHidden;
+    if (args.walkUp !== void 0)
+      opts.walkUp = args.walkUp;
+    const result = await client2.evaluate(`__RN_AGENT.interact(${JSON.stringify(opts)})`);
+    if (result.error) {
+      return failResult(`Interact error: ${result.error}`);
+    }
+    if (typeof result.value !== "string") {
+      return failResult("Unexpected response from interact \u2014 expected JSON string");
+    }
+    let parsed;
+    try {
+      parsed = JSON.parse(result.value);
+    } catch {
+      return failResult(`Interact returned non-JSON: ${result.value.slice(0, 200)}`);
+    }
+    if (parsed.error) {
+      return failResult(`Interact failed: ${parsed.error}`, pickDefined(parsed, REFUSAL_FIELDS));
+    }
+    if (parsed.action_executed && parsed.handler_error) {
+      return failResult(`Action executed but handler threw: ${parsed.handler_error}`, {
+        actionExecuted: true,
+        handlerError: parsed.handler_error,
+        hint: "The app handler raised an exception \u2014 the screen may be in an error state. Check cdp_error_log before continuing."
+      });
+    }
+    return okResult(parsed);
+  });
+}
+var REFUSAL_FIELDS;
+var init_interact = __esm({
+  "packages/rn-dev-agent-core/dist/tools/interact.js"() {
+    "use strict";
+    init_utils();
+    REFUSAL_FIELDS = [
+      "hint",
+      "walkUpSearched",
+      "count",
+      "candidates",
+      "matches",
+      "truncated",
+      "reason",
+      "scanned",
+      "work",
+      "workLimit",
+      "handlerCalled"
+    ];
+  }
+});
+
+// packages/rn-dev-agent-core/dist/tools/cdp-replay-deps.js
+function makeReplayDeps(deps, signal) {
+  const session2 = deps.getActiveSession();
+  if (!session2 || session2.platform !== "ios" || !session2.appId)
+    return null;
+  const interact = createInteractHandler(deps.getClient);
+  const tree = createComponentTreeHandler(deps.getClient);
+  return {
+    pressByTestId: async (id) => {
+      mustOk(await interact({ action: "press", testID: id, animated: false, walkUp: true }), `press "${id}"`);
+    },
+    typeByTestId: async (id, text) => {
+      mustOk(await performReactTreeInput(id, text, deps.getClient(), signal), `type "${id}"`);
+    },
+    treeFor: async (id) => {
+      const fetchTree = async (interactiveOnly) => JSON.parse((await tree({
+        filter: id,
+        depth: 12,
+        ...interactiveOnly ? { interactiveOnly: true } : {}
+      })).content[0].text);
+      let env = await fetchTree(false);
+      let data = replayTreeData(env);
+      const treeData = data;
+      if (treeData && typeof treeData === "object" && "__agent_truncated" in treeData) {
+        env = await fetchTree(true);
+        data = replayTreeData(env);
+      }
+      return unwrapTree(data);
+    },
+    frontmostFor: async (id) => {
+      const client2 = deps.getClient();
+      const result = await client2.evaluate(client2.bridgeWithFallback(`isTestIdFrontmost(${JSON.stringify(id)})`));
+      if (result.error || typeof result.value !== "string") {
+        return {
+          visible: false,
+          reason: `frontmost route check failed for testID "${id}"`,
+          code: "ASSERTION_FAILED"
+        };
+      }
+      try {
+        const parsed = JSON.parse(result.value);
+        return {
+          visible: parsed.visible === true,
+          ...parsed.reason ? { reason: parsed.reason } : {},
+          ...typeof parsed.matchCount === "number" ? { matchCount: parsed.matchCount } : {},
+          ...parsed.code ? { code: parsed.code } : {}
+        };
+      } catch {
+        return {
+          visible: false,
+          reason: `frontmost route check was unreadable for testID "${id}"`,
+          code: "ASSERTION_FAILED"
+        };
+      }
+    },
+    launchApp: async (stopApp) => {
+      const udid = await deps.resolveIosUdid(session2.deviceId);
+      if (!udid)
+        throw new Error("launchApp: could not resolve iOS udid");
+      if (stopApp) {
+        try {
+          await deps.execute("xcrun", ["simctl", "terminate", udid, session2.appId]);
+        } catch {
+        }
+      }
+      await deps.execute("xcrun", ["simctl", "launch", udid, session2.appId]);
+    },
+    settle: async (timeoutMs) => {
+      if (signal?.aborted)
+        throw new ReplayDispatchError("RUNNER_TIMEOUT", "Replay cancelled");
+      await new Promise((resolve22, reject) => {
+        const timer = setTimeout(resolve22, timeoutMs);
+        signal?.addEventListener("abort", () => {
+          clearTimeout(timer);
+          reject(new ReplayDispatchError("RUNNER_TIMEOUT", "Replay cancelled"));
+        }, { once: true });
+      });
+    }
+  };
+}
+var mustOk;
+var init_cdp_replay_deps = __esm({
+  "packages/rn-dev-agent-core/dist/tools/cdp-replay-deps.js"() {
+    "use strict";
+    init_cdp_flow_replay();
+    init_component_tree();
+    init_cdp_replay_dispatch();
+    init_device_interact();
+    init_interact();
+    mustOk = (res, what) => {
+      const env = JSON.parse(res.content[0].text);
+      if (env.ok === false)
+        throw new ReplayDispatchError(env.code ?? "INTERACTION_NOT_ACTUATED", `${what} failed: ${env.error ?? "ok:false"}`, env.meta);
+    };
+  }
+});
+
 // packages/rn-dev-agent-core/dist/tools/dispatch.js
 function createDispatchHandler(getClient2) {
   return withConnection(getClient2, async (args, client2) => {
@@ -84269,101 +84465,6 @@ var init_dev_settings = __esm({
     return "no_method_available";
   })()`
     };
-  }
-});
-
-// packages/rn-dev-agent-core/dist/tools/interact.js
-function createInteractHandler(getClient2) {
-  return withConnection(getClient2, async (args, client2) => {
-    const hasLadderSelector = args.action === "typeText" ? Boolean(args.placeholder || args.role && args.name) : Boolean(args.role || args.text || args.placeholder);
-    if (!args.testID && !args.accessibilityLabel && !hasLadderSelector) {
-      return failResult("A selector is required: testID / accessibilityLabel, or a discovery-ladder selector (role / text / placeholder).");
-    }
-    if (args.action === "typeText" && args.text === void 0) {
-      return failResult("text parameter is required for typeText action");
-    }
-    if (args.action === "setFieldValue") {
-      if (args.name === void 0 || args.name.length === 0) {
-        return failResult("name parameter is required for setFieldValue action \u2014 the React Hook Form field name");
-      }
-      if (args.value === void 0) {
-        return failResult("value parameter is required for setFieldValue action");
-      }
-    }
-    const opts = { action: args.action };
-    if (args.testID !== void 0)
-      opts.testID = args.testID;
-    if (args.accessibilityLabel !== void 0)
-      opts.accessibilityLabel = args.accessibilityLabel;
-    if (args.text !== void 0)
-      opts.text = args.text;
-    if (args.scrollX !== void 0)
-      opts.scrollX = args.scrollX;
-    if (args.scrollY !== void 0)
-      opts.scrollY = args.scrollY;
-    opts.animated = args.animated;
-    if (args.name !== void 0)
-      opts.name = args.name;
-    if (args.value !== void 0)
-      opts.value = args.value;
-    if (args.shouldValidate !== void 0)
-      opts.shouldValidate = args.shouldValidate;
-    if (args.shouldDirty !== void 0)
-      opts.shouldDirty = args.shouldDirty;
-    if (args.role !== void 0)
-      opts.role = args.role;
-    if (args.placeholder !== void 0)
-      opts.placeholder = args.placeholder;
-    if (args.exact !== void 0)
-      opts.exact = args.exact;
-    if (args.includeHidden !== void 0)
-      opts.includeHidden = args.includeHidden;
-    if (args.walkUp !== void 0)
-      opts.walkUp = args.walkUp;
-    const result = await client2.evaluate(`__RN_AGENT.interact(${JSON.stringify(opts)})`);
-    if (result.error) {
-      return failResult(`Interact error: ${result.error}`);
-    }
-    if (typeof result.value !== "string") {
-      return failResult("Unexpected response from interact \u2014 expected JSON string");
-    }
-    let parsed;
-    try {
-      parsed = JSON.parse(result.value);
-    } catch {
-      return failResult(`Interact returned non-JSON: ${result.value.slice(0, 200)}`);
-    }
-    if (parsed.error) {
-      return failResult(`Interact failed: ${parsed.error}`, pickDefined(parsed, REFUSAL_FIELDS));
-    }
-    if (parsed.action_executed && parsed.handler_error) {
-      return failResult(`Action executed but handler threw: ${parsed.handler_error}`, {
-        actionExecuted: true,
-        handlerError: parsed.handler_error,
-        hint: "The app handler raised an exception \u2014 the screen may be in an error state. Check cdp_error_log before continuing."
-      });
-    }
-    return okResult(parsed);
-  });
-}
-var REFUSAL_FIELDS;
-var init_interact = __esm({
-  "packages/rn-dev-agent-core/dist/tools/interact.js"() {
-    "use strict";
-    init_utils();
-    REFUSAL_FIELDS = [
-      "hint",
-      "walkUpSearched",
-      "count",
-      "candidates",
-      "matches",
-      "truncated",
-      "reason",
-      "scanned",
-      "work",
-      "workLimit",
-      "handlerCalled"
-    ];
   }
 });
 
@@ -96575,7 +96676,7 @@ async function main() {
     });
   }
 }
-var pkgPath, pkgVersion, lockfile, diagnosticContractProbe, noLock, client, getClient, configureClientLifecycle, setClient, publishClient, createClient, execFileP, mustOk, makeReplayDeps, probeNativeVision, server2, strictProofMonitor, experienceRecorder, authorityRuntime, probeForegroundSurface, foreignMetroOriginScanner, createRuntimeAuthorityProbe, localAuthorityProbe, authorityGate, mirrorCfg, mirrorManager2, liveEnabled, liveDeps, registeredToolNames, isSessionRuntimeAbsent, persistedAuthorityStatus, getSessionSignerCapability, spawningSupervisorPid, requestWorkerRecycle, sessionHandler, disconnectClientHandler, connectBoundSession, resolveNativeProofDevice, proofReadiness, proofCaptureHandler, maestroRunHandler, runActionHandler, e2ePreflight, e2eReload, e2eSuiteHandler, e2eCsrfToken, observeRootResolver, projectRootFor, triggerE2eRun, observeRunActionHandler, observeTriggerRun, gatedObserveState, shutdown, stopParentWatch;
+var pkgPath, pkgVersion, lockfile, diagnosticContractProbe, noLock, client, getClient, configureClientLifecycle, setClient, publishClient, createClient, execFileP, probeNativeVision, server2, strictProofMonitor, experienceRecorder, authorityRuntime, probeForegroundSurface, foreignMetroOriginScanner, createRuntimeAuthorityProbe, localAuthorityProbe, authorityGate, mirrorCfg, mirrorManager2, liveEnabled, liveDeps, registeredToolNames, isSessionRuntimeAbsent, persistedAuthorityStatus, getSessionSignerCapability, spawningSupervisorPid, requestWorkerRecycle, sessionHandler, disconnectClientHandler, connectBoundSession, resolveNativeProofDevice, proofReadiness, proofCaptureHandler, maestroRunHandler, runActionHandler, e2ePreflight, e2eReload, e2eSuiteHandler, e2eCsrfToken, observeRootResolver, projectRootFor, triggerE2eRun, observeRunActionHandler, observeTriggerRun, gatedObserveState, shutdown, stopParentWatch;
 var init_index = __esm({
   "packages/rn-dev-agent-core/dist/index.js"() {
     "use strict";
@@ -96609,8 +96710,7 @@ var init_index = __esm({
     init_save_as_action();
     init_run_action();
     init_login_prologue2();
-    init_cdp_replay_dispatch();
-    init_cdp_flow_replay();
+    init_cdp_replay_deps();
     init_dispatch();
     init_mmkv();
     init_dev_settings();
@@ -96756,89 +96856,6 @@ var init_index = __esm({
       return configureClientLifecycle(status.available && status.bindings.bundle ? client.createReplacement(port) : new CDPClient(port));
     };
     execFileP = promisify26(execFile23);
-    mustOk = (res, what) => {
-      const env = JSON.parse(res.content[0].text);
-      if (env.ok === false)
-        throw new ReplayDispatchError(env.code ?? "INTERACTION_NOT_ACTUATED", `${what} failed: ${env.error ?? "ok:false"}`, env.meta);
-    };
-    makeReplayDeps = (_args, signal) => {
-      const session2 = getActiveSession();
-      if (!session2 || session2.platform !== "ios" || !session2.appId)
-        return null;
-      const interact = createInteractHandler(getClient);
-      const tree = createComponentTreeHandler(getClient);
-      return {
-        pressByTestId: async (id) => {
-          mustOk(await interact({ action: "press", testID: id, animated: false, walkUp: true }), `press "${id}"`);
-        },
-        typeByTestId: async (id, text) => {
-          mustOk(await performReactTreeInput(id, text, getClient(), signal), `type "${id}"`);
-        },
-        treeFor: async (id) => {
-          const fetchTree = async (interactiveOnly) => JSON.parse((await tree({
-            filter: id,
-            depth: 12,
-            ...interactiveOnly ? { interactiveOnly: true } : {}
-          })).content[0].text);
-          let env = await fetchTree(false);
-          let data = replayTreeData(env);
-          const d = data;
-          if (d && typeof d === "object" && "__agent_truncated" in d) {
-            env = await fetchTree(true);
-            data = replayTreeData(env);
-          }
-          return unwrapTree(data);
-        },
-        frontmostFor: async (id) => {
-          const result = await getClient().evaluate(getClient().bridgeWithFallback(`isTestIdFrontmost(${JSON.stringify(id)})`));
-          if (result.error || typeof result.value !== "string") {
-            return {
-              visible: false,
-              reason: `frontmost route check failed for testID "${id}"`,
-              code: "ASSERTION_FAILED"
-            };
-          }
-          try {
-            const parsed = JSON.parse(result.value);
-            return {
-              visible: parsed.visible === true,
-              ...parsed.reason ? { reason: parsed.reason } : {},
-              ...typeof parsed.matchCount === "number" ? { matchCount: parsed.matchCount } : {},
-              ...parsed.code ? { code: parsed.code } : {}
-            };
-          } catch {
-            return {
-              visible: false,
-              reason: `frontmost route check was unreadable for testID "${id}"`,
-              code: "ASSERTION_FAILED"
-            };
-          }
-        },
-        launchApp: async (stopApp) => {
-          const udid = await resolveIosUdid(session2.deviceId);
-          if (!udid)
-            throw new Error("launchApp: could not resolve iOS udid");
-          if (stopApp) {
-            try {
-              await execFileP("xcrun", ["simctl", "terminate", udid, session2.appId]);
-            } catch {
-            }
-          }
-          await execFileP("xcrun", ["simctl", "launch", udid, session2.appId]);
-        },
-        settle: async (timeoutMs) => {
-          if (signal?.aborted)
-            throw new ReplayDispatchError("RUNNER_TIMEOUT", "Replay cancelled");
-          await new Promise((resolve22, reject) => {
-            const timer = setTimeout(resolve22, timeoutMs);
-            signal?.addEventListener("abort", () => {
-              clearTimeout(timer);
-              reject(new ReplayDispatchError("RUNNER_TIMEOUT", "Replay cancelled"));
-            }, { once: true });
-          });
-        }
-      };
-    };
     probeNativeVision = async ({ deviceId, selectors, signal }) => {
       signal.throwIfAborted();
       const snapshot = await fetchSnapshotNodesForSameScreenProof();
@@ -97870,7 +97887,12 @@ var init_index = __esm({
       label: external_exports.string().optional().describe('Label for this proof step (e.g. "After adding item to cart")')
     }, createProofStepHandler(getClient));
     maestroRunHandler = createMaestroRunHandler({
-      replayDeps: (args, signal) => makeReplayDeps(args, signal),
+      replayDeps: (_args, signal) => makeReplayDeps({
+        getActiveSession,
+        getClient,
+        resolveIosUdid,
+        execute: (file, args) => execFileP(file, args)
+      }, signal),
       getLiveRoute: () => readLiveRoute(getClient()),
       nativeVisionProbe: probeNativeVision
     });

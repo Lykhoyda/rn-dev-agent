@@ -165,7 +165,7 @@ function pointerEventsBlock(treeJson: unknown, id: string): string | null {
 function isDisabled(props: Record<string, unknown> | null): boolean {
   if (!props) return false;
   const a11y = props.accessibilityState as { disabled?: boolean } | undefined;
-  return props.disabled === true || a11y?.disabled === true;
+  return props.disabled === true || props.editable === false || a11y?.disabled === true;
 }
 
 export async function runCdpReplayCommands(

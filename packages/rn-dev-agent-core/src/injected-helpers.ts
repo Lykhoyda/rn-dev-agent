@@ -2467,6 +2467,10 @@ export const INJECTED_HELPERS = `
         }
         var walkTarget = walkCandidates[0];
         var walkTargetName = walkFiberName(walkTarget.fiber);
+        var walkTargetProps = walkTarget.fiber.memoizedProps || {};
+        if (walkTargetProps.disabled === true || (walkTargetProps.accessibilityState && walkTargetProps.accessibilityState.disabled === true)) {
+          return JSON.stringify({ error: 'Component is disabled', component: walkTargetName, testID: selector });
+        }
         executedName = walkTargetName;
         if (opts.value !== undefined) {
           walkTarget.fiber.memoizedProps.onPress(opts.value);

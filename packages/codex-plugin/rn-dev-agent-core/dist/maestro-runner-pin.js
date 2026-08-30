@@ -15724,7 +15724,7 @@ function isDisabled(props) {
   if (!props)
     return false;
   const a11y = props.accessibilityState;
-  return props.disabled === true || a11y?.disabled === true;
+  return props.disabled === true || props.editable === false || a11y?.disabled === true;
 }
 async function runCdpReplayCommands(commands, params, deps, opts = {}) {
   return replayFlow(normalizeSteps(commands, params), buildCdpDispatch(deps, opts.signal), {
