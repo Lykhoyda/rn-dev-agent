@@ -10996,167 +10996,92 @@ function persistentWdaStoreBuildsRoot(platformKey = nodePlatformKey()) {
   }
   return components[3];
 }
-function parseAndNormalizeWdaXctestrun(source) {
-  let cursor = 0;
-  const skipWhitespace = () => {
-    while (/\s/.test(source[cursor] ?? ""))
-      cursor += 1;
-  };
-  const consume = (token2) => {
-    if (!source.startsWith(token2, cursor))
-      return false;
-    cursor += token2.length;
-    return true;
-  };
-  const consumePattern = (pattern) => {
-    const match = pattern.exec(source.slice(cursor));
-    if (!match || match.index !== 0)
-      return false;
-    cursor += match[0].length;
-    return true;
-  };
-  const parseTextElement = (tag) => {
-    if (consume(`<${tag}/>`))
-      return "";
-    if (!consume(`<${tag}>`))
-      return null;
-    const close = `</${tag}>`;
-    const end = source.indexOf(close, cursor);
-    if (end < 0)
-      return null;
-    const text = source.slice(cursor, end);
-    if (text.includes("<") || /&(?!(?:amp|lt|gt|quot|apos|#\d+|#x[\dA-Fa-f]+);)/.test(text)) {
-      return null;
-    }
-    cursor = end + close.length;
-    return text;
-  };
-  const validScalar = (tag, value) => {
-    if (tag === "string")
-      return true;
-    if (tag === "integer")
-      return /^[+-]?\d+$/.test(value);
-    if (tag === "real") {
-      return /^[+-]?(?:(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?|inf|nan)$/i.test(value);
-    }
-    if (tag === "date")
-      return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/.test(value);
-    const compact = value.replace(/\s/g, "");
-    return compact.length % 4 === 0 && /^[\dA-Za-z+/]*={0,2}$/.test(compact);
-  };
-  const parseValue = () => {
-    skipWhitespace();
-    const start = cursor;
-    if (consume("<dict/>"))
-      return { kind: "dict", start, end: cursor, entries: [] };
-    if (consume("<dict>")) {
-      const entries = [];
-      while (true) {
-        skipWhitespace();
-        if (consume("</dict>"))
-          return { kind: "dict", start, end: cursor, entries };
-        const entryStart = cursor;
-        const key = parseTextElement("key");
-        if (key === null)
-          return null;
-        const value = parseValue();
-        if (!value)
-          return null;
-        entries.push({ key, start: entryStart, end: value.end, value });
-      }
-    }
-    if (consume("<array/>"))
-      return { kind: "array", start, end: cursor, values: [] };
-    if (consume("<array>")) {
-      const values = [];
-      while (true) {
-        skipWhitespace();
-        if (consume("</array>"))
-          return { kind: "array", start, end: cursor, values };
-        const value = parseValue();
-        if (!value)
-          return null;
-        values.push(value);
-      }
-    }
-    if (consume("<true/>") || consume("<false/>"))
-      return { kind: "scalar", start, end: cursor };
-    for (const tag of ["string", "integer", "real", "date", "data"]) {
-      const before = cursor;
-      const value = parseTextElement(tag);
-      if (value !== null) {
-        return validScalar(tag, value) ? { kind: "scalar", start, end: cursor } : null;
-      }
-      cursor = before;
-    }
+var testWdaPlutil;
+function runWdaPlutil(args) {
+  if (process.platform !== "darwin" && !testWdaPlutil)
     return null;
-  };
-  skipWhitespace();
-  if (source.startsWith("<?xml", cursor) && !consumePattern(/^<\?xml[^?]*\?>/))
+  try {
+    const result = testWdaPlutil ? testWdaPlutil(args) : spawnSync("plutil", [...args], { encoding: "utf8", timeout: 15e3 });
+    return result.status === 0 ? result.stdout ?? "" : null;
+  } catch {
     return null;
-  skipWhitespace();
-  if (source.startsWith("<!DOCTYPE", cursor) && !consumePattern(/^<!DOCTYPE[^>]*>/))
-    return null;
-  skipWhitespace();
-  if (!consumePattern(/^<plist(?:\s+version="1\.0")?\s*>/))
-    return null;
-  const root2 = parseValue();
-  if (!root2 || root2.kind !== "dict")
-    return null;
-  skipWhitespace();
-  if (!consume("</plist>"))
-    return null;
-  skipWhitespace();
-  if (cursor !== source.length)
-    return null;
-  const portEntries = [];
-  const collectPortEntries = (value) => {
-    if (value.kind === "dict") {
-      for (const entry of value.entries) {
-        if (entry.key === "USE_PORT")
-          portEntries.push(entry);
-        else
-          collectPortEntries(entry.value);
-      }
-    } else if (value.kind === "array") {
-      for (const child of value.values)
-        collectPortEntries(child);
-    }
-  };
-  collectPortEntries(root2);
-  let normalized = source;
-  for (const entry of portEntries.sort((left, right) => right.start - left.start)) {
-    normalized = normalized.slice(0, entry.start) + normalized.slice(entry.end);
   }
-  return normalized;
+}
+function readWdaXctestrun(xctestrunPath) {
+  const json2 = runWdaPlutil(["-convert", "json", "-o", "-", xctestrunPath]);
+  if (json2 === null)
+    return null;
+  try {
+    const plist = JSON.parse(json2);
+    return plist !== null && typeof plist === "object" && !Array.isArray(plist) ? plist : null;
+  } catch {
+    return null;
+  }
+}
+function forEachWdaTestTarget(plist, visit) {
+  const configurations = plist.TestConfigurations;
+  if (Array.isArray(configurations)) {
+    for (const configuration of configurations) {
+      if (configuration === null || typeof configuration !== "object")
+        continue;
+      const targets = configuration.TestTargets;
+      if (!Array.isArray(targets))
+        continue;
+      for (const target of targets) {
+        if (target !== null && typeof target === "object" && !Array.isArray(target)) {
+          visit(target);
+        }
+      }
+    }
+    return;
+  }
+  for (const [key, target] of Object.entries(plist)) {
+    if (key !== "__xctestrun_metadata__" && target !== null && typeof target === "object" && !Array.isArray(target)) {
+      visit(target);
+    }
+  }
+}
+function hasInjectedWdaPort(plist) {
+  let found = false;
+  forEachWdaTestTarget(plist, (target) => {
+    const environment = target.EnvironmentVariables;
+    if (environment !== null && typeof environment === "object" && !Array.isArray(environment) && Object.hasOwn(environment, "USE_PORT")) {
+      found = true;
+    }
+  });
+  return found;
 }
 function isCompleteWdaBuild(keyDir) {
   try {
     const products = join2(keyDir, "DerivedData", "Build", "Products");
     const entries = readdirSync(products, { withFileTypes: true });
     const xctestruns = entries.filter((entry) => entry.name.endsWith(".xctestrun"));
-    return xctestruns.length > 0 && xctestruns.every((entry) => entry.isFile() && parseAndNormalizeWdaXctestrun(readFileSync2(join2(products, entry.name), "utf8")) !== null) && entries.some((entry) => entry.isDirectory() && readdirSync(join2(products, entry.name)).some((name) => {
-      if (!name.endsWith(".app"))
+    return xctestruns.length > 0 && xctestruns.every((entry) => entry.isFile() && readWdaXctestrun(join2(products, entry.name)) !== null) && entries.some((entry) => {
+      if (!entry.isDirectory())
         return false;
       try {
-        const executable = lstatSync2(join2(products, entry.name, name, name.slice(0, -".app".length)));
+        const executable = lstatSync2(join2(products, entry.name, "WebDriverAgentRunner-Runner.app", "WebDriverAgentRunner-Runner"));
         return executable.isFile() && !executable.isSymbolicLink() && (executable.mode & 73) !== 0;
       } catch {
         return false;
       }
-    }));
+    });
   } catch {
     return false;
   }
 }
 function removeInjectedWdaPort(xctestrunPath) {
-  const source = readFileSync2(xctestrunPath, "utf8");
-  const normalized = parseAndNormalizeWdaXctestrun(source);
-  if (normalized === null)
+  const plist = readWdaXctestrun(xctestrunPath);
+  if (!plist)
     return false;
-  if (normalized !== source)
-    writeFileSync(xctestrunPath, normalized);
-  return true;
+  forEachWdaTestTarget(plist, (target) => {
+    const environment = target.EnvironmentVariables;
+    if (environment !== null && typeof environment === "object" && !Array.isArray(environment)) {
+      delete environment.USE_PORT;
+    }
+  });
+  writeFileSync(xctestrunPath, JSON.stringify(plist, null, 2));
+  return runWdaPlutil(["-convert", "xml1", xctestrunPath]) !== null;
 }
 function isRealDirectory(path) {
   try {
@@ -11210,8 +11135,8 @@ function isReusableStoredWdaBuild(keyDir) {
     return readdirSync(products, { withFileTypes: true }).filter((entry) => entry.name.endsWith(".xctestrun")).every((entry) => {
       if (!entry.isFile())
         return false;
-      const source = readFileSync2(join2(products, entry.name), "utf8");
-      return parseAndNormalizeWdaXctestrun(source) === source;
+      const plist = readWdaXctestrun(join2(products, entry.name));
+      return plist !== null && !hasInjectedWdaPort(plist);
     });
   } catch {
     return false;

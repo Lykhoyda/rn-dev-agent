@@ -1,4 +1,4 @@
-import { test } from 'node:test';
+import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   chmodSync,
@@ -27,6 +27,7 @@ import {
   _resetEngineStatusForTest,
   _setEngineStatusForTest,
   _setPinnedRunnerAttestationForTest,
+  _setWdaPlutilForTest,
   _setWdaToolchainFingerprintForTest,
 } from '../../dist/domain/engine-pin.js';
 
@@ -91,6 +92,48 @@ function writeCompleteWdaBuild(keyDir: string, port?: number): void {
   chmodSync(executable, 0o755);
 }
 
+before(() => {
+  if (process.platform === 'darwin') return;
+  _setWdaPlutilForTest((args: ReadonlyArray<string>) => {
+    const xctestrunPath = args.at(-1);
+    if (!xctestrunPath) return { status: 1 };
+    const source = readFileSync(xctestrunPath, 'utf8');
+    if (args[1] === 'xml1') {
+      try {
+        JSON.parse(source);
+        return { status: 0 };
+      } catch {
+        return { status: 1 };
+      }
+    }
+    if (args[1] !== 'json' || source.includes('&#x110000;')) return { status: 1 };
+    if (source.trimStart().startsWith('{')) {
+      try {
+        JSON.parse(source);
+        return { status: 0, stdout: source };
+      } catch {
+        return { status: 1 };
+      }
+    }
+    if (!source.includes('<plist') || !source.trimEnd().endsWith('</plist>')) {
+      return { status: 1 };
+    }
+    const port = /<key>USE_PORT<\/key>\s*<string>([^<]+)<\/string>/.exec(source)?.[1];
+    return {
+      status: 0,
+      stdout: JSON.stringify({
+        WebDriverAgentRunner: {
+          EnvironmentVariables: port === undefined ? {} : { USE_PORT: port },
+        },
+      }),
+    };
+  });
+});
+
+after(() => {
+  _setWdaPlutilForTest(undefined);
+});
+
 test('isCompleteWdaBuild requires the xctestrun and the test-host executable', () => {
   const root = mkdtempSync(join(tmpdir(), 'wda-complete-'));
   try {
@@ -100,6 +143,11 @@ test('isCompleteWdaBuild requires the xctestrun and the test-host executable', (
     assert.equal(isCompleteWdaBuild(keyDir), true);
     writeFileSync(wdaXctestrunPath(keyDir), '<plist version="1.0"><dict>');
     assert.equal(isCompleteWdaBuild(keyDir), false, 'a truncated xctestrun is not reusable');
+    writeFileSync(
+      wdaXctestrunPath(keyDir),
+      wdaXctestrun().replace('</dict>', '<key>INVALID</key><string>&#x110000;</string></dict>'),
+    );
+    assert.equal(isCompleteWdaBuild(keyDir), false, 'an XML-invalid xctestrun is not reusable');
     writeFileSync(wdaXctestrunPath(keyDir), wdaXctestrun());
     assert.equal(isCompleteWdaBuild(keyDir), true);
     const executable = wdaTestHostExecutable(keyDir);
@@ -109,6 +157,11 @@ test('isCompleteWdaBuild requires the xctestrun and the test-host executable', (
     assert.equal(isCompleteWdaBuild(keyDir), true);
     rmSync(executable);
     assert.equal(isCompleteWdaBuild(keyDir), false);
+    const unrelatedExecutable = join(dirname(dirname(executable)), 'Unrelated.app', 'Unrelated');
+    mkdirSync(dirname(unrelatedExecutable), { recursive: true });
+    writeFileSync(unrelatedExecutable, 'binary');
+    chmodSync(unrelatedExecutable, 0o755);
+    assert.equal(isCompleteWdaBuild(keyDir), false, 'an unrelated app is not the WDA test host');
     mkdirSync(executable);
     assert.equal(isCompleteWdaBuild(keyDir), false, 'a directory is not an executable');
     rmSync(executable, { recursive: true });
