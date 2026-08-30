@@ -49,7 +49,7 @@ export function learnedActionAdmissionRefusal(
   const resolved = resolveEntryMode({ entry });
   if (resolved.ok && resolved.mode === 'parked') {
     const violation = rawParkedBodyViolation(args.rawYaml);
-    if (violation?.kind === 'lifecycle') return parkedBodyRefusal(violation);
+    if (violation !== null) return parkedBodyRefusal(violation);
   }
   return learnedActionEntryRefusal({ entry }, args.parkPreflightPassed, args.inspectBody);
 }
@@ -144,43 +144,50 @@ function forbiddenLifecycleCommand(command: unknown): string | null {
 }
 
 type CompositeShape =
-  | { kind: 'inline'; name: string; commands: unknown[]; conditional: boolean }
-  | { kind: 'file'; reference: string }
+  | {
+      kind: 'inline';
+      name: string;
+      commands: unknown[];
+      conditional: boolean;
+      fileReference?: string;
+    }
+  | { kind: 'file'; reference: string; refuseBeforeLoad: boolean }
   | null;
 
-// Any single-key command nesting a `commands` array is a traversable
-// composite (runFlow, repeat, retry, …); only runFlow can reference an
-// external file, which hides its command graph and must fail closed.
 function compositeShape(command: unknown): CompositeShape {
-  const name = commandName(command);
-  if (name === null || typeof command === 'string') return null;
-  const value = (command as Record<string, unknown>)[name];
-  if (name === 'runFlow') {
+  if (!command || typeof command !== 'object' || Array.isArray(command)) return null;
+  const commandRecord = command as Record<string, unknown>;
+  const keys = Object.keys(commandRecord);
+  if (Object.prototype.hasOwnProperty.call(commandRecord, 'runFlow')) {
+    const value = commandRecord.runFlow;
+    const refuseBeforeLoad = keys.length !== 1;
     if (typeof value === 'string') {
-      return { kind: 'file', reference: renderRunFlowFileReference(value) };
+      return { kind: 'file', reference: renderRunFlowFileReference(value), refuseBeforeLoad };
     }
     if (!value || typeof value !== 'object' || Array.isArray(value)) {
-      return { kind: 'file', reference: renderRunFlowFileReference(value) };
+      return { kind: 'file', reference: renderRunFlowFileReference(value), refuseBeforeLoad };
     }
     const record = value as Record<string, unknown>;
-    if (typeof record.file === 'string') {
-      return { kind: 'file', reference: renderRunFlowFileReference(record.file) };
-    }
-    // Fail closed: a runFlow without a string file or a real commands array
-    // (e.g. file: 123) is uninspectable, never an empty safe inline flow.
-    if (record.file !== undefined || !Array.isArray(record.commands)) {
+    const commands = Array.isArray(record.commands) ? record.commands : null;
+    const hasFile = Object.prototype.hasOwnProperty.call(record, 'file');
+    if (commands !== null) {
       return {
-        kind: 'file',
-        reference: renderRunFlowFileReference(record.file ?? '<malformed runFlow>'),
+        kind: 'inline',
+        name: 'runFlow',
+        commands,
+        conditional: record.when !== undefined,
+        ...(hasFile ? { fileReference: renderRunFlowFileReference(record.file) } : {}),
       };
     }
     return {
-      kind: 'inline',
-      name,
-      commands: record.commands,
-      conditional: record.when !== undefined,
+      kind: 'file',
+      reference: renderRunFlowFileReference(hasFile ? record.file : '<malformed runFlow>'),
+      refuseBeforeLoad,
     };
   }
+  const name = commandName(command);
+  if (name === null) return null;
+  const value = commandRecord[name];
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const record = value as Record<string, unknown>;
   if (!Array.isArray(record.commands)) return null;
@@ -196,10 +203,44 @@ export type ParkedBodyViolation =
   | { kind: 'lifecycle'; command: string }
   | { kind: 'runflow-file'; reference: string };
 
+type ParkedBodyScanResult =
+  | ParkedBodyViolation
+  | { kind: 'deferred-runflow-file'; reference: string }
+  | null;
+
+function scanParkedBody(
+  commands: readonly unknown[],
+  deferInspectableFiles: boolean,
+): ParkedBodyScanResult {
+  for (const command of commands) {
+    const lifecycle = forbiddenLifecycleCommand(command);
+    if (lifecycle !== null) {
+      return { kind: 'lifecycle', command: lifecycle };
+    }
+    const composite = compositeShape(command);
+    if (composite?.kind === 'file') {
+      return deferInspectableFiles && !composite.refuseBeforeLoad
+        ? { kind: 'deferred-runflow-file', reference: composite.reference }
+        : { kind: 'runflow-file', reference: composite.reference };
+    }
+    if (composite?.kind === 'inline') {
+      const nested = scanParkedBody(composite.commands, deferInspectableFiles);
+      if (nested !== null && nested.kind !== 'deferred-runflow-file') return nested;
+      if (composite.fileReference !== undefined) {
+        return { kind: 'runflow-file', reference: composite.fileReference };
+      }
+      if (nested !== null) return nested;
+    }
+  }
+  return null;
+}
+
 function rawParkedBodyViolation(rawYaml: string): ParkedBodyViolation | null {
   try {
     const body = yaml.parseAllDocuments(rawYaml, { strict: true }).at(-1)?.toJS();
-    return Array.isArray(body) ? parkedBodyViolation(body) : null;
+    if (!Array.isArray(body)) return null;
+    const violation = scanParkedBody(body, true);
+    return violation?.kind === 'deferred-runflow-file' ? null : violation;
   } catch {
     return null;
   }
@@ -210,19 +251,10 @@ function rawParkedBodyViolation(rawYaml: string): ParkedBodyViolation | null {
  * execution order), or null when the body is clean and fully inspectable.
  */
 export function parkedBodyViolation(commands: readonly unknown[]): ParkedBodyViolation | null {
-  for (const command of commands) {
-    const lifecycle = forbiddenLifecycleCommand(command);
-    if (lifecycle !== null) {
-      return { kind: 'lifecycle', command: lifecycle };
-    }
-    const composite = compositeShape(command);
-    if (composite?.kind === 'file') return { kind: 'runflow-file', reference: composite.reference };
-    if (composite?.kind === 'inline') {
-      const nested = parkedBodyViolation(composite.commands);
-      if (nested !== null) return nested;
-    }
-  }
-  return null;
+  const violation = scanParkedBody(commands, false);
+  return violation?.kind === 'deferred-runflow-file'
+    ? { kind: 'runflow-file', reference: violation.reference }
+    : violation;
 }
 
 const ANCHOR_COMMANDS = new Set(['assertVisible', 'extendedWaitUntil', 'tapOn']);
@@ -238,6 +270,7 @@ export function parkedCommandMayMutate(command: unknown): boolean {
   const composite = compositeShape(command);
   if (composite?.kind === 'file') return true;
   if (composite?.kind === 'inline') {
+    if (composite.fileReference !== undefined) return true;
     return composite.commands.some((nested) => parkedCommandMayMutate(nested));
   }
   return name === null || !PARKED_READ_ONLY_COMMANDS.has(name);
@@ -282,6 +315,7 @@ function firstAnchorId(
     }
     const composite = compositeShape(command);
     if (composite?.kind === 'inline') {
+      if (composite.fileReference !== undefined) return { kind: 'blocked' };
       const suppliesAnchor =
         canSupplyAnchor && composite.name === 'runFlow' && !composite.conditional;
       const nested = firstAnchorId(composite.commands, suppliesAnchor);

@@ -475,6 +475,74 @@ test('GH #628: a lifecycle key in a malformed multi-key command keeps its cause'
   assert.equal(calls.length, 0);
 });
 
+test('GH #628: a file-form runFlow cannot hide embedded lifecycle commands', async () => {
+  writeFileSync(join(project.actionsDir, 'safe-subflow.yaml'), '- tapOn:\n    id: "safe"\n');
+  project.seedAction(
+    'parked-sign-mandate',
+    parkedYaml([
+      `- assertVisible:\n    id: "${PARK_ANCHOR}"`,
+      '- runFlow:\n    file: safe-subflow.yaml\n    commands:\n      - launchApp',
+    ]),
+    null,
+  );
+  const calls: Array<Record<string, unknown>> = [];
+  const result = envelope(
+    await handlerWith(calls, { status: 'visible' })({
+      actionId: 'parked-sign-mandate',
+      projectRoot: project.root,
+    }),
+  );
+
+  assert.equal(result.code, 'BAD_RECORDING');
+  assert.deepEqual(result.meta?.cause, { parkedActionLifecycle: 'launchApp' });
+  assert.equal(calls.length, 0);
+});
+
+test('GH #628: an ambiguous file-and-commands runFlow stays uninspectable', async () => {
+  writeFileSync(join(project.actionsDir, 'safe-subflow.yaml'), '- tapOn:\n    id: "safe"\n');
+  project.seedAction(
+    'parked-sign-mandate',
+    parkedYaml([
+      `- assertVisible:\n    id: "${PARK_ANCHOR}"`,
+      '- runFlow:\n    file: safe-subflow.yaml\n    commands:\n      - assertVisible:\n          id: "nested"',
+    ]),
+    null,
+  );
+  const calls: Array<Record<string, unknown>> = [];
+  const result = envelope(
+    await handlerWith(calls, { status: 'visible' })({
+      actionId: 'parked-sign-mandate',
+      projectRoot: project.root,
+    }),
+  );
+
+  assert.equal(result.code, 'BAD_RECORDING');
+  assert.deepEqual(result.meta?.cause, { parkedRunFlowFile: 'safe-subflow.yaml' });
+  assert.equal(calls.length, 0);
+});
+
+test('GH #628: a multi-key runFlow keeps its file-reference cause', async () => {
+  project.seedAction(
+    'parked-sign-mandate',
+    parkedYaml([
+      `- assertVisible:\n    id: "${PARK_ANCHOR}"`,
+      '- runFlow: missing-subflow.yaml\n  typo: true',
+    ]),
+    null,
+  );
+  const calls: Array<Record<string, unknown>> = [];
+  const result = envelope(
+    await handlerWith(calls, { status: 'visible' })({
+      actionId: 'parked-sign-mandate',
+      projectRoot: project.root,
+    }),
+  );
+
+  assert.equal(result.code, 'BAD_RECORDING');
+  assert.deepEqual(result.meta?.cause, { parkedRunFlowFile: 'missing-subflow.yaml' });
+  assert.equal(calls.length, 0);
+});
+
 for (const declaration of [
   { header: '# entry: parkd', value: 'parkd', label: 'unknown' },
   { header: '# entry:', value: '', label: 'empty' },
