@@ -17,7 +17,7 @@ Render the stored recording as replayable test code. Formats: maestro (YAML, pri
 | `tags` | `array` | No |  |  | M7 filterable tags. When set, emitted as `# tags: [a, b, c]`. |
 | `mutates` | `boolean` | No |  |  | M7 side-effect flag. When set, emitted as `# mutates: true&#124;false`. |
 | `status` | `enum: experimental \| active \| deprecated` | No |  |  | M7 lifecycle status. When set, emitted as `# status: &lt;status&gt;`. |
-| `entry` | `enum: cold \| parked` | No |  |  | Start cold, or preserve and preflight an existing parked state. |
+| `entry` | `enum: cold \| parked` | No |  |  | "parked" is Maestro-only and requires a probeable anchor. |
 
 ## Usage
 

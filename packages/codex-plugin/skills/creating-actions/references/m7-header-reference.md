@@ -14,6 +14,8 @@ The M7 header lives as `# key: value` comment lines above the Maestro YAML body.
 - A non-comment line (the first flow step) also ends the header.
 - `id` and `intent` are required — if either is missing the whole file fails to load as an action (`loadAction` returns null; the inventory and `cdp_run_action` won't see it). `id` falls back to the filename without `.yaml`.
 
+Replay admission treats `entry` specially: it scans declarations only before the semantic start of the final YAML document's command sequence. Maestro top-section mappings, dividers, banner comments, and blank lines are tolerated, while comments inside or after the body can never declare an entry mode. If the YAML cannot be parsed, admission uses the same bounded lexical preamble as a conservative fallback; downstream validation still refuses the malformed body.
+
 The `appId: <bundle>` + `---` **top section** above the comments is Maestro's own header, not part of M7 — both are needed.
 
 ## Fields
@@ -25,13 +27,13 @@ The `appId: <bundle>` + `---` **top section** above the comments is Maestro's ow
 | `tags` | recommended | `[a, b, c]` lower-case kebab | Filter keywords. Conventions: feature area (`tasks`, `auth`, `cart`), operation (`create`, `update`, `delete`), markers (`smoke`, `regression`). |
 | `mutates` | recommended | `true` / `false` | `true` if the flow leaves persistent residue (created rows, toggled settings). Drives the `/run-action` confirmation gate. Missing → rendered as `-` in the inventory (`pre-M7` when the whole header predates M7); `?` marks a present value that failed to parse. |
 | `status` | yes (defaults `experimental`) | `experimental` \| `active` \| `deprecated` | Lifecycle. See transitions below. |
-| `entry` | optional (defaults `cold`) | `cold` \| `parked` | GH #628 — declared start state. `parked` actions omit `launchApp` (any lifecycle command in the body refuses `BAD_RECORDING`); replay verifies the first id-bearing anchor read-only and refuses `PARK_STATE_MISSING` when the park state is absent. An unknown, empty, or duplicate declaration refuses instead of downgrading to cold. |
+| `entry` | optional (defaults `cold`) | `cold` \| `parked` | GH #628 — declared start state. `parked` actions omit `launchApp`; lifecycle commands, including in inline subflows, and uninspectable or malformed file-form `runFlow` references refuse `BAD_RECORDING`. Replay verifies the first probeable pre-mutation anchor read-only and refuses `PARK_STATE_MISSING` when the park state is absent. Auto-repair is refused because its snapshot path relaunches the app. An unknown, empty, or duplicate declaration refuses instead of downgrading to cold. |
 | `params` | when the body has `${VAR}` | `[KEY_A, KEY_B]`, keys `[A-Z_][A-Z0-9_]*` | The `-e KEY=VAL` surface. Auto-extracted from the body if absent, but declare explicitly so the replay pre-flight reports gaps clearly. |
 | `appId` | strongly recommended | bundle id | Replay pre-flight refuses cross-app replays when the connected target's bundle differs. Duplicate of the top-section value on purpose. |
 | `createdAt` | optional | ISO timestamp | Falls back to file ctime when absent. |
 | `author` | optional | `auto` \| `human` \| `imported` | Provenance: `auto` = emitted by the recorder pipeline (`cdp_record_test_save_as_action`); `human` = hand-authored YAML (including agent-direct-authored); `imported` = landed via import. Drives diff-noise expectations and trust. |
 | `produces` | optional | `{ key: value, ... }` single line, primitive values, no commas/newlines inside values | State postconditions a clean run establishes (e.g. `{ authenticated: true, route: home }`). Enables hybrid composition: an agent needing that state replays this action as a prologue. |
-| `expectedRouteSequence` | optional | `[Route1, Route2]` | Ordered route names the flow walks (from `cdp_nav_graph` / nav events). Enables structural drift detection: a live route off this sequence reclassifies `SELECTOR_NOT_FOUND` as `ROUTE_DRIFT`, which correctly refuses fuzzy selector repair. |
+| `expectedRouteSequence` | optional | `[Route1, Route2]` | Ordered route names the flow walks (from `cdp_nav_graph` / nav events). Enables structural drift detection; for `entry: parked`, the preflight also verifies the first route when this field is present. Recorder-emitted parked actions seed the full recorded sequence when a start route is available, while hand-authored parked actions may omit it and rely on foreground-app plus anchor checks. |
 | `enginePin` | required for replay | `maestro-runner@1.1.24` or newer | Session pin floor the action was migrated or recorded against. `cdp_run_action` refuses a missing field or any pin older than 1.1.24. New recordings stamp `maestro-runner@1.1.24`. Migrate with `maestro-runner-pin.js migrate-actions`. Regex text selectors are also refused before any UI mutation. |
 
 ## Lifecycle transitions (enforced in code — do not hand-set)

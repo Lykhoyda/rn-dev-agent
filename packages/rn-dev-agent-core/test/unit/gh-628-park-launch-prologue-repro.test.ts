@@ -919,10 +919,7 @@ test('GH #628: malformed non-file runFlow values carry no file cause', async () 
   for (const value of ['[]', 'null', '123']) {
     project.seedAction(
       'parked-sign-mandate',
-      parkedYaml([
-        `- assertVisible:\n    id: "${PARK_ANCHOR}"`,
-        `- runFlow: ${value}`,
-      ]),
+      parkedYaml([`- assertVisible:\n    id: "${PARK_ANCHOR}"`, `- runFlow: ${value}`]),
       null,
     );
     const calls: Array<Record<string, unknown>> = [];
@@ -1946,11 +1943,7 @@ test('GH #628: repair retry re-admits invalid entry and parked lifecycle causes'
           );
         },
         repairAction: async () => {
-          writeFileSync(
-            retryProject.yamlPath('parked-sign-mandate'),
-            scenario.replacement,
-            'utf8',
-          );
+          writeFileSync(retryProject.yamlPath('parked-sign-mandate'), scenario.replacement, 'utf8');
           return {
             content: [
               {

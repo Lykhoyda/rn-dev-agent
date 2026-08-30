@@ -19,7 +19,7 @@ Promote the in-memory recording (started via cdp_record_test_start) into a first
 | `overwrite` | `boolean` | No |  |  | If an action with this id already exists, replace it. Default false (refuse with hint). |
 | `testName` | `string` | No |  |  | Optional one-line description shown as a comment above the M7 header. Falls back to intent. |
 | `produces` | `Record<string, unknown>` | No |  |  | D1209 — state postconditions this action establishes when it runs cleanly. Flat map of primitive values for hybrid composition (e.g. \{ authenticated: true, route: "home" \}). Optional. Values containing commas or newlines are not supported; use multiple keys instead. |
-| `entry` | `enum: cold \| parked` | No |  |  | "parked" omits launchApp; replay preflights the park anchor. |
+| `entry` | `enum: cold \| parked` | No |  |  | "parked" omits launchApp and requires a probeable pre-mutation anchor. |
 
 ## Usage
 

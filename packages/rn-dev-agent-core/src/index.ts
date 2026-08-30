@@ -3585,7 +3585,7 @@ trackedTool(
     entry: z
       .enum(['cold', 'parked'])
       .optional()
-      .describe('Start cold, or preserve and preflight an existing parked state.'),
+      .describe('"parked" is Maestro-only and requires a probeable anchor.'),
   },
   createRecordTestGenerateHandler(),
 );
@@ -3904,7 +3904,7 @@ trackedTool(
     entry: z
       .enum(['cold', 'parked'])
       .optional()
-      .describe('"parked" omits launchApp; replay preflights the park anchor.'),
+      .describe('"parked" omits launchApp and requires a probeable pre-mutation anchor.'),
   },
   createSaveAsActionHandler(),
 );
@@ -3973,7 +3973,7 @@ const runActionHandler = createRunActionHandler({
 
 trackedTool(
   'cdp_run_action',
-  'Replay a learned action by id with end-to-end auto-repair. On iOS, the validated flow is partitioned before execution: exact-testID commands use the authority-bound React-tree prover, while native-only commands use XCTest. The RunRecord and result preserve the reported proof domain, and a react-tree pass never promotes an experimental action to Maestro-certified active status. Ordinary missing React testIDs remain TESTID_NOT_FOUND; native selector misses remain ordinary Maestro failures unless direct bounded evidence proves a NATIVE_SURFACE_BLIND environment. An entry: parked action gets a read-only park preflight instead of a launch prologue — the declared park state absent refuses PARK_STATE_MISSING before any step runs (GH #628). Pass autoRepair=false to opt out of selector repair. proofReplay=true is reserved for proof-capture rehearsal and writes no runtime state. When the canonical run ledger proves every authored mutating command completed and only trailing verification (extendedWaitUntil/assert) failed, the result stays failed but carries meta.trailingVerification (mutationEvidence proven, attempt lineage, termination provenance) — verify the live goal state instead of retrying or rebooting; auto-repair refuses so a merely-slow selector is never rewritten.',
+  'Replay a learned action by id with end-to-end auto-repair for cold actions. On iOS, the validated flow is partitioned before execution: exact-testID commands use the authority-bound React-tree prover, while native-only commands use XCTest. The RunRecord and result preserve the reported proof domain, and a react-tree pass never promotes an experimental action to Maestro-certified active status. Ordinary missing React testIDs remain TESTID_NOT_FOUND; native selector misses remain ordinary Maestro failures unless direct bounded evidence proves a NATIVE_SURFACE_BLIND environment. An entry: parked action gets a read-only park preflight instead of a launch prologue — the declared park state absent refuses PARK_STATE_MISSING before any step runs (GH #628), and auto-repair is refused because repair would relaunch the app. Pass autoRepair=false to opt out of selector repair. proofReplay=true is reserved for proof-capture rehearsal and writes no runtime state. When the canonical run ledger proves every authored mutating command completed and only trailing verification (extendedWaitUntil/assert) failed, the result stays failed but carries meta.trailingVerification (mutationEvidence proven, attempt lineage, termination provenance) — verify the live goal state instead of retrying or rebooting; auto-repair refuses so a merely-slow selector is never rewritten.',
   {
     actionId: z.string().describe('Owned action id; resolves one .yaml or .yml file.'),
     projectRoot: z.string().optional().describe('Override project root (default: process.cwd()).'),
