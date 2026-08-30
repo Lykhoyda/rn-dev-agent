@@ -8,6 +8,7 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  renameSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -16,7 +17,7 @@ import {
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   MAESTRO_RUNNER_PIN,
@@ -55,6 +56,14 @@ function wdaTestHostExecutable(keyDir: string): string {
   );
 }
 
+function wdaTestHostApp(keyDir: string): string {
+  return dirname(wdaTestHostExecutable(keyDir));
+}
+
+function wdaTestBundlePath(keyDir: string): string {
+  return join(wdaTestHostApp(keyDir), 'PlugIns', 'WebDriverAgentRunner.xctest');
+}
+
 function wdaXctestrunPath(keyDir: string): string {
   return join(
     keyDir,
@@ -73,6 +82,10 @@ function wdaXctestrun(port?: number): string {
 <dict>
 \t<key>WebDriverAgentRunner</key>
 \t<dict>
+\t\t<key>TestHostPath</key>
+\t\t<string>__TESTROOT__/Debug-iphonesimulator/WebDriverAgentRunner-Runner.app</string>
+\t\t<key>TestBundlePath</key>
+\t\t<string>__TESTHOST__/PlugIns/WebDriverAgentRunner.xctest</string>
 \t\t<key>EnvironmentVariables</key>
 \t\t<dict>${environment}
 \t\t</dict>
@@ -86,6 +99,7 @@ function writeCompleteWdaBuild(keyDir: string, port?: number): void {
   const products = join(keyDir, 'DerivedData', 'Build', 'Products');
   const app = join(products, 'Debug-iphonesimulator', 'WebDriverAgentRunner-Runner.app');
   mkdirSync(app, { recursive: true });
+  mkdirSync(wdaTestBundlePath(keyDir), { recursive: true });
   writeFileSync(wdaXctestrunPath(keyDir), wdaXctestrun(port));
   const executable = wdaTestHostExecutable(keyDir);
   writeFileSync(executable, 'binary');
@@ -118,11 +132,16 @@ before(() => {
     if (!source.includes('<plist') || !source.trimEnd().endsWith('</plist>')) {
       return { status: 1 };
     }
+    if (!source.includes('<key>WebDriverAgentRunner</key>')) {
+      return { status: 0, stdout: '{}' };
+    }
     const port = /<key>USE_PORT<\/key>\s*<string>([^<]+)<\/string>/.exec(source)?.[1];
     return {
       status: 0,
       stdout: JSON.stringify({
         WebDriverAgentRunner: {
+          TestHostPath: '__TESTROOT__/Debug-iphonesimulator/WebDriverAgentRunner-Runner.app',
+          TestBundlePath: '__TESTHOST__/PlugIns/WebDriverAgentRunner.xctest',
           EnvironmentVariables: port === undefined ? {} : { USE_PORT: port },
         },
       }),
@@ -141,6 +160,8 @@ test('isCompleteWdaBuild requires the xctestrun and the test-host executable', (
     assert.equal(isCompleteWdaBuild(keyDir), false);
     writeCompleteWdaBuild(keyDir);
     assert.equal(isCompleteWdaBuild(keyDir), true);
+    writeFileSync(wdaXctestrunPath(keyDir), '<plist version="1.0"><dict/></plist>');
+    assert.equal(isCompleteWdaBuild(keyDir), false, 'an empty xctestrun is not reusable');
     writeFileSync(wdaXctestrunPath(keyDir), '<plist version="1.0"><dict>');
     assert.equal(isCompleteWdaBuild(keyDir), false, 'a truncated xctestrun is not reusable');
     writeFileSync(
@@ -150,6 +171,49 @@ test('isCompleteWdaBuild requires the xctestrun and the test-host executable', (
     assert.equal(isCompleteWdaBuild(keyDir), false, 'an XML-invalid xctestrun is not reusable');
     writeFileSync(wdaXctestrunPath(keyDir), wdaXctestrun());
     assert.equal(isCompleteWdaBuild(keyDir), true);
+    const testBundle = wdaTestBundlePath(keyDir);
+    rmSync(testBundle, { recursive: true });
+    assert.equal(isCompleteWdaBuild(keyDir), false, 'a missing referenced product is incomplete');
+    mkdirSync(testBundle, { recursive: true });
+    assert.equal(isCompleteWdaBuild(keyDir), true);
+
+    const frameworks = join(wdaTestHostApp(keyDir), 'Frameworks');
+    mkdirSync(frameworks);
+    const internalTarget = join(
+      keyDir,
+      'DerivedData',
+      'Build',
+      'Products',
+      'InternalSupport',
+      'payload',
+    );
+    mkdirSync(dirname(internalTarget), { recursive: true });
+    writeFileSync(internalTarget, 'internal');
+    const internalLink = join(frameworks, 'internal-link');
+    symlinkSync(relative(frameworks, internalTarget), internalLink);
+    assert.equal(isCompleteWdaBuild(keyDir), true, 'an internal relative symlink stays reusable');
+    rmSync(internalLink);
+
+    const absoluteEscape = join(frameworks, 'absolute-escape');
+    symlinkSync('/usr/bin/true', absoluteEscape);
+    assert.equal(isCompleteWdaBuild(keyDir), false, 'a deep absolute symlink escapes the key');
+    rmSync(absoluteEscape);
+    const externalTarget = join(root, 'external-product');
+    writeFileSync(externalTarget, 'external');
+    const relativeEscape = join(frameworks, 'relative-escape');
+    symlinkSync(relative(frameworks, externalTarget), relativeEscape);
+    assert.equal(isCompleteWdaBuild(keyDir), false, 'a deep relative symlink escapes the key');
+    rmSync(relativeEscape);
+
+    const app = wdaTestHostApp(keyDir);
+    const externalApp = join(root, 'external-WDA.app');
+    renameSync(app, externalApp);
+    symlinkSync(externalApp, app);
+    assert.equal(isCompleteWdaBuild(keyDir), false, 'the test-host app cannot escape the key');
+    rmSync(app);
+    renameSync(externalApp, app);
+    assert.equal(isCompleteWdaBuild(keyDir), true);
+
     const executable = wdaTestHostExecutable(keyDir);
     chmodSync(executable, 0o644);
     assert.equal(isCompleteWdaBuild(keyDir), false, 'a mode-stripped test host is not runnable');

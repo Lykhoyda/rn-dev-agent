@@ -29,7 +29,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, dirname, join, relative, resolve, sep } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { gunzipSync } from 'node:zlib';
 import { verifiedNativePublicationHelper } from '../session/process-birth.js';
 import { recordRunnerDiagnostic } from '../experience/runner-diagnostics.js';
@@ -805,6 +805,12 @@ function readWdaXctestrun(xctestrunPath: string): Record<string, unknown> | null
   }
 }
 
+function asWdaPlistRecord(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
 function forEachWdaTestTarget(
   plist: Record<string, unknown>,
   visit: (target: Record<string, unknown>) => void,
@@ -812,27 +818,43 @@ function forEachWdaTestTarget(
   const configurations = plist.TestConfigurations;
   if (Array.isArray(configurations)) {
     for (const configuration of configurations) {
-      if (configuration === null || typeof configuration !== 'object') continue;
-      const targets = (configuration as Record<string, unknown>).TestTargets;
+      const configurationRecord = asWdaPlistRecord(configuration);
+      if (!configurationRecord) continue;
+      const targets = configurationRecord.TestTargets;
       if (!Array.isArray(targets)) continue;
       for (const target of targets) {
-        if (target !== null && typeof target === 'object' && !Array.isArray(target)) {
-          visit(target as Record<string, unknown>);
-        }
+        const targetRecord = asWdaPlistRecord(target);
+        if (targetRecord) visit(targetRecord);
       }
     }
     return;
   }
   for (const [key, target] of Object.entries(plist)) {
-    if (
-      key !== '__xctestrun_metadata__' &&
-      target !== null &&
-      typeof target === 'object' &&
-      !Array.isArray(target)
-    ) {
-      visit(target as Record<string, unknown>);
-    }
+    const targetRecord = asWdaPlistRecord(target);
+    if (key !== '__xctestrun_metadata__' && targetRecord) visit(targetRecord);
   }
+}
+
+function findWdaTestTarget(plist: Record<string, unknown>): Record<string, unknown> | null {
+  const configurations = plist.TestConfigurations;
+  if (Array.isArray(configurations)) {
+    for (const configuration of configurations) {
+      const targets = asWdaPlistRecord(configuration)?.TestTargets;
+      if (!Array.isArray(targets)) continue;
+      for (const target of targets) {
+        const targetRecord = asWdaPlistRecord(target);
+        if (
+          targetRecord &&
+          (targetRecord.TestTargetName === 'WebDriverAgentRunner' ||
+            targetRecord.BlueprintName === 'WebDriverAgentRunner')
+        ) {
+          return targetRecord;
+        }
+      }
+    }
+    return null;
+  }
+  return asWdaPlistRecord(plist.WebDriverAgentRunner);
 }
 
 function hasInjectedWdaPort(plist: Record<string, unknown>): boolean {
@@ -851,41 +873,109 @@ function hasInjectedWdaPort(plist: Record<string, unknown>): boolean {
   return found;
 }
 
+function isWithinWdaKey(keyDir: string, candidate: string): boolean {
+  const path = relative(keyDir, candidate);
+  return path === '' || (path !== '..' && !path.startsWith(`..${sep}`) && !isAbsolute(path));
+}
+
+function isContainedWdaProductTree(keyDir: string, products: string): boolean {
+  const lexicalKey = resolve(keyDir);
+  const realKey = realpathSync(keyDir);
+  const visit = (directory: string): boolean => {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const path = join(directory, entry.name);
+      const stat = lstatSync(path);
+      if (stat.isSymbolicLink()) {
+        const target = readlinkSync(path);
+        if (
+          isAbsolute(target) ||
+          !isWithinWdaKey(lexicalKey, resolve(directory, target)) ||
+          !isWithinWdaKey(realKey, realpathSync(path))
+        ) {
+          return false;
+        }
+      } else if (stat.isDirectory() && !visit(path)) {
+        return false;
+      }
+    }
+    return true;
+  };
+  return visit(products);
+}
+
+function resolveWdaProductReference(
+  reference: unknown,
+  products: string,
+  testHost?: string,
+): string | null {
+  if (typeof reference !== 'string') return null;
+  if (reference.startsWith('__TESTROOT__/')) {
+    return resolve(products, reference.slice('__TESTROOT__/'.length));
+  }
+  if (testHost && reference.startsWith('__TESTHOST__/')) {
+    return resolve(testHost, reference.slice('__TESTHOST__/'.length));
+  }
+  return null;
+}
+
+interface CompleteWdaBuildManifest {
+  readonly products: string;
+  readonly selectedXctestrun: string;
+}
+
+function readCompleteWdaBuildManifest(keyDir: string): CompleteWdaBuildManifest | null {
+  try {
+    const derivedData = join(keyDir, 'DerivedData');
+    const build = join(derivedData, 'Build');
+    const products = join(build, 'Products');
+    if (
+      !isRealDirectory(keyDir) ||
+      !isRealDirectory(derivedData) ||
+      !isRealDirectory(build) ||
+      !isRealDirectory(products) ||
+      !isContainedWdaProductTree(keyDir, products)
+    ) {
+      return null;
+    }
+    const selected = readdirSync(products, { withFileTypes: true })
+      .filter((entry) => entry.name.endsWith('.xctestrun'))
+      .sort((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0))[0];
+    if (!selected?.isFile()) return null;
+    const selectedXctestrun = join(products, selected.name);
+    const plist = readWdaXctestrun(selectedXctestrun);
+    const target = plist && findWdaTestTarget(plist);
+    if (!target) return null;
+
+    const testHost = resolveWdaProductReference(target.TestHostPath, products);
+    if (!testHost) return null;
+    const hostPath = relative(products, testHost).split(sep);
+    if (
+      hostPath.length !== 2 ||
+      hostPath[1] !== 'WebDriverAgentRunner-Runner.app' ||
+      !isRealDirectory(join(products, hostPath[0]!)) ||
+      !isRealDirectory(testHost)
+    ) {
+      return null;
+    }
+    const executable = lstatSync(join(testHost, 'WebDriverAgentRunner-Runner'));
+    if (!executable.isFile() || executable.isSymbolicLink() || (executable.mode & 0o111) === 0) {
+      return null;
+    }
+    const testBundle = resolveWdaProductReference(target.TestBundlePath, products, testHost);
+    if (!testBundle || !isWithinWdaKey(resolve(keyDir), testBundle) || !existsSync(testBundle)) {
+      return null;
+    }
+    return { products, selectedXctestrun };
+  } catch {
+    return null;
+  }
+}
+
 // The runner's own reuse marker: build-for-testing emits the .xctestrun in
 // Build/Products once the products exist; require the real test-host executable
 // at its exact product path as well so a torn copy or partial delete never counts as cached.
 export function isCompleteWdaBuild(keyDir: string): boolean {
-  try {
-    const products = join(keyDir, 'DerivedData', 'Build', 'Products');
-    const entries = readdirSync(products, { withFileTypes: true });
-    const xctestruns = entries.filter((entry) => entry.name.endsWith('.xctestrun'));
-    return (
-      xctestruns.length > 0 &&
-      xctestruns.every(
-        (entry) => entry.isFile() && readWdaXctestrun(join(products, entry.name)) !== null,
-      ) &&
-      entries.some((entry) => {
-        if (!entry.isDirectory()) return false;
-        try {
-          const executable = lstatSync(
-            join(
-              products,
-              entry.name,
-              'WebDriverAgentRunner-Runner.app',
-              'WebDriverAgentRunner-Runner',
-            ),
-          );
-          return (
-            executable.isFile() && !executable.isSymbolicLink() && (executable.mode & 0o111) !== 0
-          );
-        } catch {
-          return false;
-        }
-      })
-    );
-  } catch {
-    return false;
-  }
+  return readCompleteWdaBuildManifest(keyDir) !== null;
 }
 
 function removeInjectedWdaPort(xctestrunPath: string): boolean {
@@ -911,15 +1001,9 @@ function isRealDirectory(path: string): boolean {
 }
 
 function copyReusableWdaBuild(sourceKey: string, stagedKey: string): boolean {
-  const sourceProducts = join(sourceKey, 'DerivedData', 'Build', 'Products');
-  if (
-    !isRealDirectory(sourceKey) ||
-    !isRealDirectory(join(sourceKey, 'DerivedData')) ||
-    !isRealDirectory(join(sourceKey, 'DerivedData', 'Build')) ||
-    !isRealDirectory(sourceProducts)
-  ) {
-    return false;
-  }
+  const manifest = readCompleteWdaBuildManifest(sourceKey);
+  if (!manifest) return false;
+  const sourceProducts = manifest.products;
   const stagedProducts = join(stagedKey, 'DerivedData', 'Build', 'Products');
   mkdirSync(dirname(stagedProducts), { recursive: true });
   cpSync(sourceProducts, stagedProducts, {

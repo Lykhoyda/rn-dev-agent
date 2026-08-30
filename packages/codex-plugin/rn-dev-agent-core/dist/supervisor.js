@@ -71308,7 +71308,7 @@ import { spawnSync as spawnSync3 } from "node:child_process";
 import { createHash as createHash13 } from "node:crypto";
 import { accessSync, chmodSync as chmodSync5, constants as constants7, copyFileSync as copyFileSync2, cpSync as cpSync2, existsSync as existsSync24, lstatSync as lstatSync12, mkdirSync as mkdirSync17, mkdtempSync as mkdtempSync2, readFileSync as readFileSync25, readdirSync as readdirSync8, readlinkSync as readlinkSync5, realpathSync as realpathSync13, renameSync as renameSync7, rmSync as rmSync10, symlinkSync as symlinkSync3, unlinkSync as unlinkSync11, writeFileSync as writeFileSync12 } from "node:fs";
 import { homedir as homedir6 } from "node:os";
-import { basename as basename6, dirname as dirname17, join as join35, relative as relative7, resolve as resolve12, sep as sep6 } from "node:path";
+import { basename as basename6, dirname as dirname17, isAbsolute as isAbsolute9, join as join35, relative as relative7, resolve as resolve12, sep as sep6 } from "node:path";
 import { gunzipSync } from "node:zlib";
 function parseActionEnginePinVersion(enginePin) {
   const match = ACTION_ENGINE_PIN_RE.exec(enginePin.trim());
@@ -71771,28 +71771,50 @@ function readWdaXctestrun(xctestrunPath) {
     return null;
   }
 }
+function asWdaPlistRecord(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value) ? value : null;
+}
 function forEachWdaTestTarget(plist, visit) {
   const configurations = plist.TestConfigurations;
   if (Array.isArray(configurations)) {
     for (const configuration of configurations) {
-      if (configuration === null || typeof configuration !== "object")
+      const configurationRecord = asWdaPlistRecord(configuration);
+      if (!configurationRecord)
         continue;
-      const targets = configuration.TestTargets;
+      const targets = configurationRecord.TestTargets;
       if (!Array.isArray(targets))
         continue;
       for (const target of targets) {
-        if (target !== null && typeof target === "object" && !Array.isArray(target)) {
-          visit(target);
-        }
+        const targetRecord = asWdaPlistRecord(target);
+        if (targetRecord)
+          visit(targetRecord);
       }
     }
     return;
   }
   for (const [key, target] of Object.entries(plist)) {
-    if (key !== "__xctestrun_metadata__" && target !== null && typeof target === "object" && !Array.isArray(target)) {
-      visit(target);
-    }
+    const targetRecord = asWdaPlistRecord(target);
+    if (key !== "__xctestrun_metadata__" && targetRecord)
+      visit(targetRecord);
   }
+}
+function findWdaTestTarget(plist) {
+  const configurations = plist.TestConfigurations;
+  if (Array.isArray(configurations)) {
+    for (const configuration of configurations) {
+      const targets = asWdaPlistRecord(configuration)?.TestTargets;
+      if (!Array.isArray(targets))
+        continue;
+      for (const target of targets) {
+        const targetRecord = asWdaPlistRecord(target);
+        if (targetRecord && (targetRecord.TestTargetName === "WebDriverAgentRunner" || targetRecord.BlueprintName === "WebDriverAgentRunner")) {
+          return targetRecord;
+        }
+      }
+    }
+    return null;
+  }
+  return asWdaPlistRecord(plist.WebDriverAgentRunner);
 }
 function hasInjectedWdaPort(plist) {
   let found = false;
@@ -71804,24 +71826,79 @@ function hasInjectedWdaPort(plist) {
   });
   return found;
 }
-function isCompleteWdaBuild(keyDir) {
-  try {
-    const products = join35(keyDir, "DerivedData", "Build", "Products");
-    const entries = readdirSync8(products, { withFileTypes: true });
-    const xctestruns = entries.filter((entry) => entry.name.endsWith(".xctestrun"));
-    return xctestruns.length > 0 && xctestruns.every((entry) => entry.isFile() && readWdaXctestrun(join35(products, entry.name)) !== null) && entries.some((entry) => {
-      if (!entry.isDirectory())
-        return false;
-      try {
-        const executable = lstatSync12(join35(products, entry.name, "WebDriverAgentRunner-Runner.app", "WebDriverAgentRunner-Runner"));
-        return executable.isFile() && !executable.isSymbolicLink() && (executable.mode & 73) !== 0;
-      } catch {
+function isWithinWdaKey(keyDir, candidate) {
+  const path = relative7(keyDir, candidate);
+  return path === "" || path !== ".." && !path.startsWith(`..${sep6}`) && !isAbsolute9(path);
+}
+function isContainedWdaProductTree(keyDir, products) {
+  const lexicalKey = resolve12(keyDir);
+  const realKey = realpathSync13(keyDir);
+  const visit = (directory) => {
+    for (const entry of readdirSync8(directory, { withFileTypes: true })) {
+      const path = join35(directory, entry.name);
+      const stat2 = lstatSync12(path);
+      if (stat2.isSymbolicLink()) {
+        const target = readlinkSync5(path);
+        if (isAbsolute9(target) || !isWithinWdaKey(lexicalKey, resolve12(directory, target)) || !isWithinWdaKey(realKey, realpathSync13(path))) {
+          return false;
+        }
+      } else if (stat2.isDirectory() && !visit(path)) {
         return false;
       }
-    });
-  } catch {
-    return false;
+    }
+    return true;
+  };
+  return visit(products);
+}
+function resolveWdaProductReference(reference, products, testHost) {
+  if (typeof reference !== "string")
+    return null;
+  if (reference.startsWith("__TESTROOT__/")) {
+    return resolve12(products, reference.slice("__TESTROOT__/".length));
   }
+  if (testHost && reference.startsWith("__TESTHOST__/")) {
+    return resolve12(testHost, reference.slice("__TESTHOST__/".length));
+  }
+  return null;
+}
+function readCompleteWdaBuildManifest(keyDir) {
+  try {
+    const derivedData = join35(keyDir, "DerivedData");
+    const build = join35(derivedData, "Build");
+    const products = join35(build, "Products");
+    if (!isRealDirectory(keyDir) || !isRealDirectory(derivedData) || !isRealDirectory(build) || !isRealDirectory(products) || !isContainedWdaProductTree(keyDir, products)) {
+      return null;
+    }
+    const selected = readdirSync8(products, { withFileTypes: true }).filter((entry) => entry.name.endsWith(".xctestrun")).sort((left, right) => left.name < right.name ? -1 : left.name > right.name ? 1 : 0)[0];
+    if (!selected?.isFile())
+      return null;
+    const selectedXctestrun = join35(products, selected.name);
+    const plist = readWdaXctestrun(selectedXctestrun);
+    const target = plist && findWdaTestTarget(plist);
+    if (!target)
+      return null;
+    const testHost = resolveWdaProductReference(target.TestHostPath, products);
+    if (!testHost)
+      return null;
+    const hostPath = relative7(products, testHost).split(sep6);
+    if (hostPath.length !== 2 || hostPath[1] !== "WebDriverAgentRunner-Runner.app" || !isRealDirectory(join35(products, hostPath[0])) || !isRealDirectory(testHost)) {
+      return null;
+    }
+    const executable = lstatSync12(join35(testHost, "WebDriverAgentRunner-Runner"));
+    if (!executable.isFile() || executable.isSymbolicLink() || (executable.mode & 73) === 0) {
+      return null;
+    }
+    const testBundle = resolveWdaProductReference(target.TestBundlePath, products, testHost);
+    if (!testBundle || !isWithinWdaKey(resolve12(keyDir), testBundle) || !existsSync24(testBundle)) {
+      return null;
+    }
+    return { products, selectedXctestrun };
+  } catch {
+    return null;
+  }
+}
+function isCompleteWdaBuild(keyDir) {
+  return readCompleteWdaBuildManifest(keyDir) !== null;
 }
 function removeInjectedWdaPort(xctestrunPath) {
   const plist = readWdaXctestrun(xctestrunPath);
@@ -71845,10 +71922,10 @@ function isRealDirectory(path) {
   }
 }
 function copyReusableWdaBuild(sourceKey, stagedKey) {
-  const sourceProducts = join35(sourceKey, "DerivedData", "Build", "Products");
-  if (!isRealDirectory(sourceKey) || !isRealDirectory(join35(sourceKey, "DerivedData")) || !isRealDirectory(join35(sourceKey, "DerivedData", "Build")) || !isRealDirectory(sourceProducts)) {
+  const manifest = readCompleteWdaBuildManifest(sourceKey);
+  if (!manifest)
     return false;
-  }
+  const sourceProducts = manifest.products;
   const stagedProducts = join35(stagedKey, "DerivedData", "Build", "Products");
   mkdirSync17(dirname17(stagedProducts), { recursive: true });
   cpSync2(sourceProducts, stagedProducts, {
@@ -72678,7 +72755,7 @@ var init_device_existence = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/tools/session.js
-import { dirname as dirname18, isAbsolute as isAbsolute9, join as join37, resolve as resolve13 } from "node:path";
+import { dirname as dirname18, isAbsolute as isAbsolute10, join as join37, resolve as resolve13 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 import { createHash as createHash15 } from "node:crypto";
 function sameAndroidMetroReverse(current, next) {
@@ -72764,7 +72841,7 @@ function sessionSourceResolver(status, dependencies) {
   return (root) => resolveSourceIdentity(root, stored?.kind === "declared-root" ? { declaredRoot: stored.contentRoot, declaredManifests: stored.declaredManifests } : {});
 }
 function anchorDeclaredProjectRoot(status, projectRoot) {
-  if (isAbsolute9(projectRoot))
+  if (isAbsolute10(projectRoot))
     return projectRoot;
   const boundAppRoot = status.source?.appRoot;
   return typeof boundAppRoot === "string" && boundAppRoot.length > 0 ? resolve13(boundAppRoot, projectRoot) : projectRoot;
@@ -75781,11 +75858,11 @@ var init_events = __esm({
 
 // packages/rn-dev-agent-core/dist/observability/recorder.js
 import { closeSync as closeSync10, constants as constants8, fstatSync as fstatSync7, openSync as openSync10, readSync as readSync4 } from "node:fs";
-import { isAbsolute as isAbsolute10 } from "node:path";
+import { isAbsolute as isAbsolute11 } from "node:path";
 function extractScreenshotPath(result) {
   const data = unwrapResult(result)?.data ?? result?.data;
   const p = data?.path ?? data?.message;
-  return typeof p === "string" && isAbsolute10(p) && (p.endsWith(".jpg") || p.endsWith(".jpeg") || p.endsWith(".png")) ? p : null;
+  return typeof p === "string" && isAbsolute11(p) && (p.endsWith(".jpg") || p.endsWith(".jpeg") || p.endsWith(".png")) ? p : null;
 }
 function readShotBounded(p) {
   let fd;
@@ -75878,7 +75955,7 @@ var init_recorder = __esm({
        * whatever path the pipeline actually captured to.
        */
       registerCapturedScreenshot(p) {
-        if (typeof p !== "string" || !isAbsolute10(p))
+        if (typeof p !== "string" || !isAbsolute11(p))
           return;
         this.trustedShotPaths.delete(p);
         this.trustedShotPaths.add(p);
@@ -77538,7 +77615,7 @@ var init_atomic_writer = __esm({
 // packages/rn-dev-agent-core/dist/domain/unfollowed-file.js
 import { execFileSync as execFileSync15 } from "node:child_process";
 import { lstatSync as lstatSync14 } from "node:fs";
-import { isAbsolute as isAbsolute11, join as join39 } from "node:path";
+import { isAbsolute as isAbsolute12, join as join39 } from "node:path";
 function createUnfollowedFileSnapshot(directoryPath, directoryIdentity2) {
   return { directoryPath, directoryIdentity: directoryIdentity2, fileIdentities: /* @__PURE__ */ new Map() };
 }
@@ -77636,7 +77713,7 @@ function readUnfollowedFiles(directoryPath, identity2, relativePaths, expectedId
       throw new Error("Selected file identities did not match the requested paths.");
     }
     const entries = relativePaths.map((relativePath, index) => {
-      if (isAbsolute11(relativePath) || relativePath.split("/").some((component) => !component || component === "." || component === "..")) {
+      if (isAbsolute12(relativePath) || relativePath.split("/").some((component) => !component || component === "." || component === "..")) {
         throw new Error(`Invalid relative path: ${relativePath}.`);
       }
       if (expectedIdentities) {
@@ -77824,7 +77901,7 @@ try {
 
 // packages/rn-dev-agent-core/dist/domain/action-store.js
 import { existsSync as existsSync27, lstatSync as lstatSync15, readFileSync as readFileSync28, statSync as statSync14, unlinkSync as unlinkSync13 } from "node:fs";
-import { basename as basename8, dirname as dirname21, isAbsolute as isAbsolute12, join as join40, relative as relative8, resolve as resolve16, sep as sep8 } from "node:path";
+import { basename as basename8, dirname as dirname21, isAbsolute as isAbsolute13, join as join40, relative as relative8, resolve as resolve16, sep as sep8 } from "node:path";
 function actionPathFor(projectRoot, actionId) {
   assertValidActionId(actionId, "actionPathFor");
   const actionsDir = join40(projectRoot, ".rn-agent", "actions");
@@ -77889,11 +77966,11 @@ function ownedActionPathIdentityMatches(entries) {
   }
 }
 function referencedActionPath(parentFile, reference) {
-  if (isAbsolute12(reference) || reference.split(/[\\/]/).includes("..") || !/\.ya?ml$/i.test(reference)) {
+  if (isAbsolute13(reference) || reference.split(/[\\/]/).includes("..") || !/\.ya?ml$/i.test(reference)) {
     return null;
   }
   const child = join40(dirname21(parentFile), reference);
-  if (child === ".." || child.startsWith(`..${sep8}`) || isAbsolute12(child))
+  if (child === ".." || child.startsWith(`..${sep8}`) || isAbsolute13(child))
     return null;
   return child;
 }
@@ -78128,7 +78205,7 @@ function captureActionFromContext(context, actionId) {
       flowRoot: snapshot.directory,
       readFileFn: (path) => {
         const child = relative8(snapshot.directory, path);
-        if (child === "" || child === ".." || child.startsWith(`..${sep8}`) || isAbsolute12(child)) {
+        if (child === "" || child === ".." || child.startsWith(`..${sep8}`) || isAbsolute13(child)) {
           throw new Error(`Refusing action flow outside ${snapshot.directory}.`);
         }
         const text2 = context.fileContents.get(child);
@@ -80463,7 +80540,7 @@ var init_maestro_device_authority = __esm({
 import { existsSync as existsSync29, readFileSync as readFileSync29, readdirSync as readdirSync11, realpathSync as realpathSync15, rmSync as rmSync11 } from "node:fs";
 import { createHash as createHash16 } from "node:crypto";
 import { tmpdir as tmpdir9 } from "node:os";
-import { isAbsolute as isAbsolute13, join as join43, sep as sep9 } from "node:path";
+import { isAbsolute as isAbsolute14, join as join43, sep as sep9 } from "node:path";
 function idsFrom(value, keys) {
   if (!value || typeof value !== "object")
     return [];
@@ -80602,7 +80679,7 @@ function readStructuredFlowArtifact(reportDir, previous) {
     if (typeof flow.dataFile !== "string" || flow.dataFile.length === 0)
       return unfinalized;
     const normalizedDataFile = flow.dataFile;
-    if (isAbsolute13(normalizedDataFile) || !/^flows\/[^/\\]+$/.test(normalizedDataFile)) {
+    if (isAbsolute14(normalizedDataFile) || !/^flows\/[^/\\]+$/.test(normalizedDataFile)) {
       return unfinalized;
     }
     const realDataFile = realpathSync15(join43(reportDir, normalizedDataFile));
@@ -88608,7 +88685,7 @@ var init_startup_integrity = __esm({
 import { createHash as createHash21, randomUUID as randomUUID12 } from "node:crypto";
 import { execFileSync as execFileSync16 } from "node:child_process";
 import { chmodSync as chmodSync8, closeSync as closeSync12, existsSync as existsSync33, fsyncSync, lstatSync as lstatSync17, mkdirSync as mkdirSync21, openSync as openSync12, readFileSync as readFileSync33, realpathSync as realpathSync16, renameSync as renameSync10, unlinkSync as unlinkSync16, writeFileSync as writeFileSync17 } from "node:fs";
-import { basename as basename11, dirname as dirname26, extname, isAbsolute as isAbsolute14, join as join48, relative as relative9, resolve as resolve18, sep as sep10 } from "node:path";
+import { basename as basename11, dirname as dirname26, extname, isAbsolute as isAbsolute15, join as join48, relative as relative9, resolve as resolve18, sep as sep10 } from "node:path";
 import { fileURLToPath as fileURLToPath5 } from "node:url";
 function proofActionPayload(unparsedArgs) {
   if (!unparsedArgs || typeof unparsedArgs !== "object" || Array.isArray(unparsedArgs)) {
@@ -88648,7 +88725,7 @@ function captureProofWorkerStartup(argv = process.argv, attestation = readStartu
   let loadedCoreBundlePath = null;
   let coreBundleSha256 = null;
   try {
-    if (typeof argv[1] === "string" && isAbsolute14(argv[1])) {
+    if (typeof argv[1] === "string" && isAbsolute15(argv[1])) {
       executedEntrypointPath = realpathSync16(argv[1]);
     }
   } catch {
@@ -88685,7 +88762,7 @@ function resolveProofCandidateEntrypoint(candidateRoot, argv) {
     return null;
   }
   const authorityArg = argv[1];
-  if (typeof authorityArg !== "string" || !isAbsolute14(authorityArg))
+  if (typeof authorityArg !== "string" || !isAbsolute15(authorityArg))
     return null;
   let arg;
   try {
@@ -88734,7 +88811,7 @@ function proofCandidateStartupMatches(entrypoint, startup, headCoreBundleSha256)
 }
 function proofCandidateEntrypointEnvironmentMatches(entrypoint, env) {
   const normalizedOverride = (value) => {
-    if (!value || !isAbsolute14(value))
+    if (!value || !isAbsolute15(value))
       return value ? null : "";
     try {
       return realpathSync16(value);
@@ -88873,11 +88950,11 @@ function readProofActionIdentity(appProjectRoot, actionId, dependencies = {}) {
   }
 }
 function isNormalizedDescendant(root, path) {
-  if (!isAbsolute14(root) || !isAbsolute14(path) || resolve18(root) !== root || resolve18(path) !== path) {
+  if (!isAbsolute15(root) || !isAbsolute15(path) || resolve18(root) !== root || resolve18(path) !== path) {
     return false;
   }
   const fromRoot = relative9(root, path);
-  return fromRoot.length > 0 && fromRoot !== ".." && !fromRoot.startsWith(`..${sep10}`) && !isAbsolute14(fromRoot);
+  return fromRoot.length > 0 && fromRoot !== ".." && !fromRoot.startsWith(`..${sep10}`) && !isAbsolute15(fromRoot);
 }
 function hasExistingSymlink(root, path) {
   const parts = relative9(root, path).split(sep10);
@@ -88926,7 +89003,7 @@ function proofRootExists(args) {
   }
 }
 function resolveProofWorktreeRoot(detectedProjectRoot) {
-  if (!detectedProjectRoot || !isAbsolute14(detectedProjectRoot) || resolve18(detectedProjectRoot) !== detectedProjectRoot) {
+  if (!detectedProjectRoot || !isAbsolute15(detectedProjectRoot) || resolve18(detectedProjectRoot) !== detectedProjectRoot) {
     return null;
   }
   try {
@@ -88934,7 +89011,7 @@ function resolveProofWorktreeRoot(detectedProjectRoot) {
       cwd: detectedProjectRoot,
       encoding: "utf8"
     }).trim();
-    return root && isAbsolute14(root) && resolve18(root) === root ? root : null;
+    return root && isAbsolute15(root) && resolve18(root) === root ? root : null;
   } catch {
     return null;
   }
@@ -89261,7 +89338,7 @@ function createProofCaptureHandler(deps) {
     ].map((path) => repositoryPath(active, path));
     const requiredOutputs = new Set(phase === "finalized" ? [...proofOutputs, repositoryPath(active, active.context.receiptPath)] : proofOutputs);
     const allowedOutputs = phase === "setup" ? observedSetupScreenshots(active) : phase === "clean" ? /* @__PURE__ */ new Set() : requiredOutputs;
-    const invalidChange = git2.changes.some((change) => isAbsolute14(change.path) || change.path === ".." || change.path.startsWith("../") || change.indexStatus !== "?" || change.worktreeStatus !== "?" || change.sourcePath !== void 0);
+    const invalidChange = git2.changes.some((change) => isAbsolute15(change.path) || change.path === ".." || change.path.startsWith("../") || change.indexStatus !== "?" || change.worktreeStatus !== "?" || change.sourcePath !== void 0);
     const changedPaths = new Set(git2.changes.map((change) => change.path.replaceAll("\\", "/")));
     const unrelated = [...changedPaths].some((path) => !allowedOutputs.has(path));
     const missing = (phase === "validation" || phase === "finalized") && [...requiredOutputs].some((path) => !changedPaths.has(path));
@@ -89876,7 +89953,7 @@ var init_proof_capture2 = __esm({
     init_proof_receipt();
     init_utils();
     init_startup_integrity();
-    absolutePathSchema = external_exports.string().min(1).refine(isAbsolute14, "path must be absolute");
+    absolutePathSchema = external_exports.string().min(1).refine(isAbsolute15, "path must be absolute");
     beginRehearsalSchema = external_exports.object({
       action: external_exports.literal("begin_rehearsal"),
       projectRoot: absolutePathSchema,
