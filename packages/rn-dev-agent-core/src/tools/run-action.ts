@@ -507,7 +507,11 @@ export interface RunActionDeps {
   } | null;
   claimBundleAuthority?: (args: RunActionArgs) => Promise<boolean>;
   claimNativeOrigin?: (args: RunActionArgs) => Promise<void>;
-  completeNativeOrigin?: (args: RunActionArgs, targetExpected: boolean) => Promise<void>;
+  completeNativeOrigin?: (
+    args: RunActionArgs,
+    targetExpected: boolean,
+    signal?: AbortSignal,
+  ) => Promise<void>;
   relaunchManagedApp?: (args: RunActionArgs, stopApp?: boolean) => Promise<void>;
   reproveManagedOrigin?: (
     args: RunActionArgs,
@@ -781,7 +785,8 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
           params: args.params,
           attempt: { attemptId: initialAttemptId, ordinal: 1, maxAttempts, kind: 'initial' },
           claimNativeOrigin: () => claimNativeOrigin(args),
-          completeNativeOrigin: (targetExpected) => completeNativeOrigin(args, targetExpected),
+          completeNativeOrigin: (targetExpected, signal) =>
+            completeNativeOrigin(args, targetExpected, signal),
           relaunchManagedApp: (stopApp) => relaunchManagedApp(args, stopApp),
           reproveManagedOrigin: (options) => reproveManagedOrigin(args, options),
           completeRunnerPark: (signal) => completeManagedRunnerParkAuthority(args, signal),
@@ -1212,7 +1217,8 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
             parentAttemptId: initialAttemptId,
           },
           claimNativeOrigin: () => claimNativeOrigin(args),
-          completeNativeOrigin: (targetExpected) => completeNativeOrigin(args, targetExpected),
+          completeNativeOrigin: (targetExpected, signal) =>
+            completeNativeOrigin(args, targetExpected, signal),
           relaunchManagedApp: (stopApp) => relaunchManagedApp(args, stopApp),
           reproveManagedOrigin: (options) => reproveManagedOrigin(args, options),
           completeRunnerPark: (signal) => completeManagedRunnerParkAuthority(args, signal),

@@ -81306,7 +81306,7 @@ function createRunActionHandler(deps = {}) {
         params: args.params,
         attempt: { attemptId: initialAttemptId, ordinal: 1, maxAttempts, kind: "initial" },
         claimNativeOrigin: () => claimNativeOrigin(args),
-        completeNativeOrigin: (targetExpected) => completeNativeOrigin(args, targetExpected),
+        completeNativeOrigin: (targetExpected, signal) => completeNativeOrigin(args, targetExpected, signal),
         relaunchManagedApp: (stopApp) => relaunchManagedApp(args, stopApp),
         reproveManagedOrigin: (options) => reproveManagedOrigin(args, options),
         completeRunnerPark: (signal) => completeManagedRunnerParkAuthority(args, signal),
@@ -81622,7 +81622,7 @@ function createRunActionHandler(deps = {}) {
           parentAttemptId: initialAttemptId
         },
         claimNativeOrigin: () => claimNativeOrigin(args),
-        completeNativeOrigin: (targetExpected) => completeNativeOrigin(args, targetExpected),
+        completeNativeOrigin: (targetExpected, signal) => completeNativeOrigin(args, targetExpected, signal),
         relaunchManagedApp: (stopApp) => relaunchManagedApp(args, stopApp),
         reproveManagedOrigin: (options) => reproveManagedOrigin(args, options),
         completeRunnerPark: (signal) => completeManagedRunnerParkAuthority(args, signal),
