@@ -2,7 +2,7 @@
 // whenever the injected surface changes; it flows into the IIFE's freshness
 // check (__RN_AGENT.__v) AND the post-injection log line, so they can never
 // drift (the log previously hard-coded a stale "v11").
-export const HELPERS_VERSION = 49;
+export const HELPERS_VERSION = 50;
 
 export const INJECTED_HELPERS = `
 (function() {
@@ -478,6 +478,7 @@ export const INJECTED_HELPERS = `
         droppedSubtrees: walkQuality.droppedSubtrees,
         collapsedChildLists: walkQuality.collapsedChildLists,
         complete: state === 'ok' && reasons.length === 0 && walkQuality.droppedSubtrees === 0 && walkQuality.collapsedChildLists === 0,
+        rendererErrors: lastRootScan.rendererErrors,
         unscannedRendererIds: coverage.unscannedRendererIds
       };
     }
@@ -3795,6 +3796,9 @@ export const INJECTED_HELPERS = `
       });
     }
     var target = logicalMatches[0];
+    var targetProps = target.memoizedProps || {};
+    var targetAccessibilityState = targetProps.accessibilityState || {};
+    var targetDisabled = targetProps.disabled === true || targetAccessibilityState.disabled === true;
     if (__hidden(target)) {
       return JSON.stringify({
         visible: false,
@@ -3803,7 +3807,7 @@ export const INJECTED_HELPERS = `
       });
     }
 
-    var targetPointerEvents = (target.memoizedProps || {}).pointerEvents;
+    var targetPointerEvents = targetProps.pointerEvents;
     if (targetPointerEvents === 'none' || targetPointerEvents === 'box-none') {
       return JSON.stringify({
         visible: false,
@@ -3969,7 +3973,8 @@ export const INJECTED_HELPERS = `
       route: routeOwner,
       activeRoute: activeRoute,
       modalCount: modals.length,
-      matchCount: 1
+      matchCount: 1,
+      disabled: targetDisabled
     });
   }
 

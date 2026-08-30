@@ -82,6 +82,7 @@ test('getTree: healthy full walk carries verdict.state ok', () => {
   assert.equal(result.verdict.path, 'full');
   assert.deepEqual(result.verdict.reasons, []);
   assert.equal(result.verdict.rootsSeeded, 1);
+  assert.equal(result.verdict.rendererErrors, 0);
   assert.equal(result.verdict.complete, true);
 });
 
@@ -102,6 +103,7 @@ test('getTree: a throwing renderer degrades the verdict (renderer-error)', () =>
   const result = JSON.parse(sandbox.__RN_AGENT.getTree({ maxDepth: 4 }));
   assert.equal(result.verdict.state, 'degraded');
   assert.ok(result.verdict.reasons.includes('renderer-error'));
+  assert.equal(result.verdict.rendererErrors, 1);
   assert.equal(result.verdict.complete, false);
   assert.ok(result.tree, 'partial tree is still returned, just marked degraded');
 });

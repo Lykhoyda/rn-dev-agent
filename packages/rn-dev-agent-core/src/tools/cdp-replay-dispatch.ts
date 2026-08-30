@@ -75,6 +75,7 @@ export interface CdpReplayDeps {
   // Exact-ID oracle; matchCount 0 proves absence, while refusals omit it.
   frontmostFor(id: string): Promise<{
     visible: boolean;
+    disabled?: boolean;
     reason?: string;
     matchCount?: number;
     code?: string;
@@ -189,7 +190,7 @@ export function buildCdpDispatch(deps: CdpReplayDeps, signal?: AbortSignal): Rep
         frontmost.code ?? 'ASSERTION_FAILED',
         frontmost.reason ?? `testID "${id}" is mounted but not frontmost`,
       );
-    if (isDisabled(nodeProps(tree, id)))
+    if (frontmost.disabled === true || isDisabled(nodeProps(tree, id)))
       throw new ReplayDispatchError(
         'INTERACTION_NOT_ACTUATED',
         `testID "${id}" is disabled/non-interactable`,

@@ -129,6 +129,22 @@ test('buildCdpDispatch revalidates a retained input target before mutation', asy
   assert.equal(mutations, 0);
 });
 
+test('exact oracle disabled state refuses mutation when the readable tree omits the target', async () => {
+  let mutations = 0;
+  const dispatch = buildCdpDispatch({
+    pressByTestId: async () => {
+      mutations += 1;
+    },
+    typeByTestId: async () => {},
+    treeFor: async () => ({ tree: { name: 'CollapsedScreen', children: [] } }),
+    frontmostFor: async () => ({ visible: true, disabled: true, matchCount: 1 }),
+    launchApp: async () => {},
+    settle: async () => {},
+  });
+  await assert.rejects(dispatch.press('disabled-action'), /disabled|non-interactable/);
+  assert.equal(mutations, 0);
+});
+
 test('buildCdpDispatch refuses duplicate oracle matches as ambiguous', async () => {
   const dispatch = buildCdpDispatch({
     pressByTestId: async () => {},

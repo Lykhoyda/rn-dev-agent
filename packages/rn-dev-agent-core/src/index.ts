@@ -414,12 +414,14 @@ const makeReplayDeps = (_args?: unknown, signal?: AbortSignal): CdpReplayDeps | 
       try {
         const parsed = JSON.parse(result.value) as {
           visible?: boolean;
+          disabled?: boolean;
           reason?: string;
           matchCount?: number;
           code?: string;
         };
         return {
           visible: parsed.visible === true,
+          ...(typeof parsed.disabled === 'boolean' ? { disabled: parsed.disabled } : {}),
           ...(parsed.reason ? { reason: parsed.reason } : {}),
           ...(typeof parsed.matchCount === 'number' ? { matchCount: parsed.matchCount } : {}),
           ...(parsed.code ? { code: parsed.code } : {}),

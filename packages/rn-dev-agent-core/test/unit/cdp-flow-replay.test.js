@@ -234,6 +234,22 @@ test('replayFlow cannot pass when an awaited final dispatch exceeds its deadline
   assert.equal(result.failureCode, 'RUNNER_TIMEOUT');
 });
 
+test('waitVisible aborts a stalled visibility read at the outer replay deadline', async () => {
+  const controller = new AbortController();
+  const dispatch = mockDispatch();
+  dispatch.visibility = async () => new Promise(() => {});
+  const startedAt = Date.now();
+  setTimeout(() => controller.abort(new Error('deadline')), 20);
+  const result = await replayFlow(
+    [{ t: 'waitVisible', id: 'stalled', timeoutMs: 17_000 }],
+    dispatch,
+    { signal: controller.signal },
+  );
+  assert.equal(result.passed, false);
+  assert.equal(result.failureCode, 'RUNNER_TIMEOUT');
+  assert.ok(Date.now() - startedAt < 500);
+});
+
 test('replayFlow fails the step when a target is disabled (no false green)', async () => {
   const d = mockDispatch({ pressThrows: ['save'] });
   const r = await replayFlow([{ t: 'tap', id: 'save' }], d);

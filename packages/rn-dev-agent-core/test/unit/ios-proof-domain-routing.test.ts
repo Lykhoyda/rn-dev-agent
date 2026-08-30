@@ -942,6 +942,19 @@ test('current-route ID is frontmost', () => {
   assert.equal(verdict.activeRoute, 'home');
 });
 
+test('frontmost exact-ID oracle carries disabled state from the matched fiber', () => {
+  const root = routeTree('save', 'home');
+  root.child.child.memoizedProps.accessibilityState = { disabled: true };
+  const sandbox = makeFrontmostSandbox(root, {
+    index: 0,
+    routes: [{ name: 'home' }],
+  });
+  const verdict = JSON.parse(sandbox.__RN_AGENT.isTestIdFrontmost('save'));
+  assert.equal(verdict.visible, true);
+  assert.equal(verdict.disabled, true);
+  assert.equal(verdict.matchCount, 1);
+});
+
 test('frontmost exact matches refuse incomplete renderer coverage', () => {
   const root = routeTree('coverage', 'home');
   const rootWithoutTarget = routeTree('other', 'home');

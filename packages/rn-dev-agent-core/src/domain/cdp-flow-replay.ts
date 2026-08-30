@@ -67,17 +67,36 @@ async function readVisibilityBeforeDeadline(
   dispatch: ReplayDispatch,
   id: string,
   deadline: number,
+  signal?: AbortSignal,
 ): Promise<ReplayVisibility | null> {
   const remainingMs = deadline - Date.now();
   if (remainingMs < 0) return null;
   return new Promise<ReplayVisibility | null>((resolve, reject) => {
     let settled = false;
-    let timer: ReturnType<typeof setTimeout>;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const cleanup = (): void => {
+      if (timer !== undefined) clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
+    };
     const finish = (value: ReplayVisibility | null): void => {
       if (settled) return;
       settled = true;
-      clearTimeout(timer);
+      cleanup();
       resolve(Date.now() <= deadline ? value : null);
+    };
+    const fail = (error: unknown): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(error);
+    };
+    const onAbort = (): void => {
+      fail(
+        new ReplayDispatchError(
+          'RUNNER_TIMEOUT',
+          'React-tree replay exceeded its execution deadline',
+        ),
+      );
     };
     const armDeadline = (): void => {
       const nextRemainingMs = deadline - Date.now();
@@ -86,6 +105,11 @@ async function readVisibilityBeforeDeadline(
         Math.min(Math.max(0, nextRemainingMs), MAX_TIMER_DELAY_MS),
       );
     };
+    signal?.addEventListener('abort', onAbort, { once: true });
+    if (signal?.aborted) {
+      onAbort();
+      return;
+    }
     armDeadline();
     Promise.resolve()
       .then(() => dispatch.visibility(id))
@@ -95,9 +119,7 @@ async function readVisibilityBeforeDeadline(
           finish(null);
           return;
         }
-        settled = true;
-        clearTimeout(timer);
-        reject(error);
+        fail(error);
       });
   });
 }
@@ -309,7 +331,12 @@ export async function replayFlow(
           const deadline = startedAt + s.timeoutMs;
           let verdict: ReplayVisibility | null = null;
           for (;;) {
-            const observed = await readVisibilityBeforeDeadline(dispatch, s.id, deadline);
+            const observed = await readVisibilityBeforeDeadline(
+              dispatch,
+              s.id,
+              deadline,
+              opts.signal,
+            );
             requireNotAborted();
             if (!observed) break;
             verdict = observed;

@@ -51543,7 +51543,7 @@ async function detectBridge(client2, evaluate = (expression) => client2.evaluate
 init_logger();
 
 // packages/rn-dev-agent-core/dist/injected-helpers.js
-var HELPERS_VERSION = 49;
+var HELPERS_VERSION = 50;
 var INJECTED_HELPERS = `
 (function() {
   var __HELPERS_VERSION__ = ${HELPERS_VERSION};
@@ -52018,6 +52018,7 @@ var INJECTED_HELPERS = `
         droppedSubtrees: walkQuality.droppedSubtrees,
         collapsedChildLists: walkQuality.collapsedChildLists,
         complete: state === 'ok' && reasons.length === 0 && walkQuality.droppedSubtrees === 0 && walkQuality.collapsedChildLists === 0,
+        rendererErrors: lastRootScan.rendererErrors,
         unscannedRendererIds: coverage.unscannedRendererIds
       };
     }
@@ -55335,6 +55336,9 @@ var INJECTED_HELPERS = `
       });
     }
     var target = logicalMatches[0];
+    var targetProps = target.memoizedProps || {};
+    var targetAccessibilityState = targetProps.accessibilityState || {};
+    var targetDisabled = targetProps.disabled === true || targetAccessibilityState.disabled === true;
     if (__hidden(target)) {
       return JSON.stringify({
         visible: false,
@@ -55343,7 +55347,7 @@ var INJECTED_HELPERS = `
       });
     }
 
-    var targetPointerEvents = (target.memoizedProps || {}).pointerEvents;
+    var targetPointerEvents = targetProps.pointerEvents;
     if (targetPointerEvents === 'none' || targetPointerEvents === 'box-none') {
       return JSON.stringify({
         visible: false,
@@ -55509,7 +55513,8 @@ var INJECTED_HELPERS = `
       route: routeOwner,
       activeRoute: activeRoute,
       modalCount: modals.length,
-      matchCount: 1
+      matchCount: 1,
+      disabled: targetDisabled
     });
   }
 
@@ -78802,24 +78807,44 @@ var isObj = (x) => typeof x === "object" && x !== null && !Array.isArray(x);
 var DEFAULT_VISIBILITY_TIMEOUT_MS = 17e3;
 var VISIBILITY_POLL_INTERVAL_MS = 200;
 var MAX_TIMER_DELAY_MS = 2147483647;
-async function readVisibilityBeforeDeadline(dispatch, id, deadline) {
+async function readVisibilityBeforeDeadline(dispatch, id, deadline, signal) {
   const remainingMs = deadline - Date.now();
   if (remainingMs < 0)
     return null;
   return new Promise((resolve21, reject) => {
     let settled = false;
     let timer;
+    const cleanup = () => {
+      if (timer !== void 0)
+        clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+    };
     const finish = (value) => {
       if (settled)
         return;
       settled = true;
-      clearTimeout(timer);
+      cleanup();
       resolve21(Date.now() <= deadline ? value : null);
+    };
+    const fail3 = (error2) => {
+      if (settled)
+        return;
+      settled = true;
+      cleanup();
+      reject(error2);
+    };
+    const onAbort = () => {
+      fail3(new ReplayDispatchError("RUNNER_TIMEOUT", "React-tree replay exceeded its execution deadline"));
     };
     const armDeadline = () => {
       const nextRemainingMs = deadline - Date.now();
       timer = setTimeout(() => Date.now() >= deadline ? finish(null) : armDeadline(), Math.min(Math.max(0, nextRemainingMs), MAX_TIMER_DELAY_MS));
     };
+    signal?.addEventListener("abort", onAbort, { once: true });
+    if (signal?.aborted) {
+      onAbort();
+      return;
+    }
     armDeadline();
     Promise.resolve().then(() => dispatch.visibility(id)).then(finish, (error2) => {
       if (settled)
@@ -78828,9 +78853,7 @@ async function readVisibilityBeforeDeadline(dispatch, id, deadline) {
         finish(null);
         return;
       }
-      settled = true;
-      clearTimeout(timer);
-      reject(error2);
+      fail3(error2);
     });
   });
 }
@@ -79014,7 +79037,7 @@ async function replayFlow(steps, dispatch, opts = {}) {
           const deadline = startedAt + s.timeoutMs;
           let verdict = null;
           for (; ; ) {
-            const observed = await readVisibilityBeforeDeadline(dispatch, s.id, deadline);
+            const observed = await readVisibilityBeforeDeadline(dispatch, s.id, deadline, opts.signal);
             requireNotAborted();
             if (!observed)
               break;
@@ -79470,7 +79493,7 @@ function buildCdpDispatch(deps, signal) {
       throw new ReplayDispatchError("AMBIGUOUS_TESTID", `testID "${id}" resolves to ${matches} mounted elements`, { matchCount: matches });
     if (!frontmost.visible)
       throw new ReplayDispatchError(frontmost.code ?? "ASSERTION_FAILED", frontmost.reason ?? `testID "${id}" is mounted but not frontmost`);
-    if (isDisabled(nodeProps(tree, id)))
+    if (frontmost.disabled === true || isDisabled(nodeProps(tree, id)))
       throw new ReplayDispatchError("INTERACTION_NOT_ACTUATED", `testID "${id}" is disabled/non-interactable`);
     const pointerEventsError = pointerEventsBlock(tree, id);
     if (pointerEventsError)
@@ -94054,6 +94077,7 @@ var makeReplayDeps = (_args, signal) => {
         const parsed = JSON.parse(result.value);
         return {
           visible: parsed.visible === true,
+          ...typeof parsed.disabled === "boolean" ? { disabled: parsed.disabled } : {},
           ...parsed.reason ? { reason: parsed.reason } : {},
           ...typeof parsed.matchCount === "number" ? { matchCount: parsed.matchCount } : {},
           ...parsed.code ? { code: parsed.code } : {}

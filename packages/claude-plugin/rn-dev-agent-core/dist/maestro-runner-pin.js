@@ -15139,24 +15139,44 @@ var isObj = (x) => typeof x === "object" && x !== null && !Array.isArray(x);
 var DEFAULT_VISIBILITY_TIMEOUT_MS = 17e3;
 var VISIBILITY_POLL_INTERVAL_MS = 200;
 var MAX_TIMER_DELAY_MS = 2147483647;
-async function readVisibilityBeforeDeadline(dispatch, id, deadline) {
+async function readVisibilityBeforeDeadline(dispatch, id, deadline, signal) {
   const remainingMs = deadline - Date.now();
   if (remainingMs < 0)
     return null;
   return new Promise((resolve9, reject) => {
     let settled = false;
     let timer;
+    const cleanup = () => {
+      if (timer !== void 0)
+        clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+    };
     const finish = (value) => {
       if (settled)
         return;
       settled = true;
-      clearTimeout(timer);
+      cleanup();
       resolve9(Date.now() <= deadline ? value : null);
+    };
+    const fail = (error) => {
+      if (settled)
+        return;
+      settled = true;
+      cleanup();
+      reject(error);
+    };
+    const onAbort = () => {
+      fail(new ReplayDispatchError("RUNNER_TIMEOUT", "React-tree replay exceeded its execution deadline"));
     };
     const armDeadline = () => {
       const nextRemainingMs = deadline - Date.now();
       timer = setTimeout(() => Date.now() >= deadline ? finish(null) : armDeadline(), Math.min(Math.max(0, nextRemainingMs), MAX_TIMER_DELAY_MS));
     };
+    signal?.addEventListener("abort", onAbort, { once: true });
+    if (signal?.aborted) {
+      onAbort();
+      return;
+    }
     armDeadline();
     Promise.resolve().then(() => dispatch.visibility(id)).then(finish, (error) => {
       if (settled)
@@ -15165,9 +15185,7 @@ async function readVisibilityBeforeDeadline(dispatch, id, deadline) {
         finish(null);
         return;
       }
-      settled = true;
-      clearTimeout(timer);
-      reject(error);
+      fail(error);
     });
   });
 }
@@ -15351,7 +15369,7 @@ async function replayFlow(steps, dispatch, opts = {}) {
           const deadline = startedAt + s.timeoutMs;
           let verdict = null;
           for (; ; ) {
-            const observed = await readVisibilityBeforeDeadline(dispatch, s.id, deadline);
+            const observed = await readVisibilityBeforeDeadline(dispatch, s.id, deadline, opts.signal);
             requireNotAborted();
             if (!observed)
               break;
@@ -15773,7 +15791,7 @@ function buildCdpDispatch(deps, signal) {
       throw new ReplayDispatchError("AMBIGUOUS_TESTID", `testID "${id}" resolves to ${matches} mounted elements`, { matchCount: matches });
     if (!frontmost.visible)
       throw new ReplayDispatchError(frontmost.code ?? "ASSERTION_FAILED", frontmost.reason ?? `testID "${id}" is mounted but not frontmost`);
-    if (isDisabled(nodeProps(tree, id)))
+    if (frontmost.disabled === true || isDisabled(nodeProps(tree, id)))
       throw new ReplayDispatchError("INTERACTION_NOT_ACTUATED", `testID "${id}" is disabled/non-interactable`);
     const pointerEventsError = pointerEventsBlock(tree, id);
     if (pointerEventsError)
