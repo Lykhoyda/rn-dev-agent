@@ -192,6 +192,36 @@ test('GH #628: a BOM-prefixed parked declaration still runs the park preflight',
   assert.equal(calls.length, 0);
 });
 
+test('GH #628: a flow-style top section still admits parked entry', async () => {
+  project.seedAction(
+    'flow-top-parked',
+    [
+      '{ appId: com.test.app }',
+      '---',
+      '# id: flow-top-parked',
+      '# intent: replay a parked action after a flow-style top section',
+      '# status: experimental',
+      '# entry: parked',
+      '# enginePin: maestro-runner@1.1.24',
+      '',
+      `- assertVisible:\n    id: "${PARK_ANCHOR}"`,
+      '- tapOn:\n    id: "sign-cta"',
+      '',
+    ].join('\n'),
+    null,
+  );
+  const calls: Array<Record<string, unknown>> = [];
+  const result = envelope(
+    await handlerWith(calls, {
+      status: 'anchor-missing',
+      reason: 'flow-style top-section action is not parked on its anchor',
+    })({ actionId: 'flow-top-parked', projectRoot: project.root }),
+  );
+
+  assert.equal(result.code, 'PARK_STATE_MISSING');
+  assert.equal(calls.length, 0);
+});
+
 test('GH #628: generateMaestro omits the launch prologue for parked and keeps it for cold', () => {
   const events = [
     { type: 'tap', testID: PARK_ANCHOR, t: 1 } as const,

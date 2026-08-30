@@ -71003,8 +71003,9 @@ function detectEntryDeclaration(yamlText) {
       inTopSection = false;
       continue;
     }
-    if (inTopSection && /^[a-zA-Z][\w-]*\s*:/.test(trimmed))
+    if (inTopSection && (/^[a-zA-Z][\w-]*\s*:/.test(trimmed) || /^\{.*\}(?:\s+#.*)?$/.test(trimmed))) {
       continue;
+    }
     break;
   }
   if (declarations.length === 0)

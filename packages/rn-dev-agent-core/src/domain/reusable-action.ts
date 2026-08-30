@@ -564,7 +564,12 @@ export function detectEntryDeclaration(yamlText: string): string | undefined {
     }
     // Top-section mapping lines (appId: …) are still preamble; any other
     // content line — a command or anything after the divider — ends detection.
-    if (inTopSection && /^[a-zA-Z][\w-]*\s*:/.test(trimmed)) continue;
+    if (
+      inTopSection &&
+      (/^[a-zA-Z][\w-]*\s*:/.test(trimmed) || /^\{.*\}(?:\s+#.*)?$/.test(trimmed))
+    ) {
+      continue;
+    }
     break;
   }
   if (declarations.length === 0) return undefined;
