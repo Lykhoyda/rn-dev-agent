@@ -768,9 +768,9 @@ export function persistentWdaStoreBuildsRoot(platformKey = nodePlatformKey()): s
   return components[3]!;
 }
 
-// The runner's own reuse marker: build-for-testing emits the .xctestrun beside
-// Build/Products once the products exist; require the test-host .app as well so
-// a torn copy or partial delete never counts as a cached build.
+// The runner's own reuse marker: build-for-testing emits the .xctestrun in
+// Build/Products once the products exist; require the real test-host executable
+// inside an .app as well so a torn copy or partial delete never counts as cached.
 export function isCompleteWdaBuild(keyDir: string): boolean {
   try {
     const products = join(keyDir, 'DerivedData', 'Build', 'Products');
