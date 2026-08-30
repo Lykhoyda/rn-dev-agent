@@ -2,6 +2,7 @@
 // lifecycle transitions and must be fully inspectable; replay verifies the
 // park anchor read-only before any step (run-action owns the probe).
 
+import { detectEntryDeclaration } from './reusable-action.js';
 import type { ActionEntryMode, M7Metadata } from './reusable-action.js';
 
 export const PARKED_FORBIDDEN_COMMANDS = new Set(['launchApp', 'stopApp', 'killApp', 'clearState']);
@@ -26,18 +27,43 @@ export type LearnedActionEntryRefusal =
   | { kind: 'parked-body'; message: string; cause: LearnedActionEntryCause }
   | { kind: 'park-preflight-required'; message: string };
 
+export interface LearnedActionAdmissionArgs {
+  /** Original artifact text; bounded preamble entry detection on it is authoritative. */
+  rawYaml: string;
+  parkPreflightPassed: boolean;
+  inspectBody: () => LearnedActionBodyInspection;
+}
+
+/**
+ * GH #628 structural admission — the ONE identity-independent decision point
+ * for entry declarations. Detection is bounded to the pre-body preamble, so a
+ * partial header (entry without id/intent) still admits and body text never
+ * can; metadata is never a source of entry here.
+ */
+export function learnedActionAdmissionRefusal(
+  args: LearnedActionAdmissionArgs,
+): LearnedActionEntryRefusal | null {
+  const entry = detectEntryDeclaration(args.rawYaml) as M7Metadata['entry'];
+  return learnedActionEntryRefusal({ entry }, args.parkPreflightPassed, args.inspectBody);
+}
+
+/** GH #628: the admission-authoritative entry mode for an original artifact text. */
+export function declaredEntryMode(yamlText: string): EntryModeResolution {
+  return resolveEntryMode({ entry: detectEntryDeclaration(yamlText) as M7Metadata['entry'] });
+}
+
 /** Absent means cold; an unknown declared value is refused, never downgraded. */
-export function resolveEntryMode(metadata: Pick<M7Metadata, 'entry'>): EntryModeResolution {
+function resolveEntryMode(metadata: Pick<M7Metadata, 'entry'>): EntryModeResolution {
   const raw = metadata.entry;
   if (raw === undefined) return { ok: true, mode: 'cold' };
   if (raw === 'cold' || raw === 'parked') return { ok: true, mode: raw };
   return { ok: false, raw: String(raw) };
 }
 
-export function learnedActionEntryRefusal(
+function learnedActionEntryRefusal(
   metadata: Pick<M7Metadata, 'entry'>,
   parkPreflightPassed: boolean,
-  inspectBody?: () => LearnedActionBodyInspection,
+  inspectBody: () => LearnedActionBodyInspection,
 ): LearnedActionEntryRefusal | null {
   const entry = resolveEntryMode(metadata);
   if (!entry.ok) {
@@ -49,12 +75,20 @@ export function learnedActionEntryRefusal(
     };
   }
   if (entry.mode === 'parked') {
-    const inspection = inspectBody?.() ?? null;
-    const violation = inspection && 'commands' in inspection
-      ? parkedBodyViolation(inspection.commands)
-      : inspection && 'runFlowFile' in inspection
-        ? { kind: 'runflow-file' as const, reference: inspection.runFlowFile }
-        : null;
+    const inspection = inspectBody() ?? null;
+    if (inspection === null && parkPreflightPassed) {
+      return {
+        kind: 'park-preflight-required',
+        message:
+          'Learned action declares entry: parked but its body could not be inspected for the parked contract; refusing fail-closed.',
+      };
+    }
+    const violation =
+      inspection && 'commands' in inspection
+        ? parkedBodyViolation(inspection.commands)
+        : inspection && 'runFlowFile' in inspection
+          ? { kind: 'runflow-file' as const, reference: inspection.runFlowFile }
+          : null;
     if (violation?.kind === 'lifecycle') {
       return {
         kind: 'parked-body',
@@ -107,10 +141,15 @@ function compositeShape(command: unknown): CompositeShape {
     }
     const record = value as Record<string, unknown>;
     if (typeof record.file === 'string') return { kind: 'file', reference: record.file };
+    // Fail closed: a runFlow without a string file or a real commands array
+    // (e.g. file: 123) is uninspectable, never an empty safe inline flow.
+    if (record.file !== undefined || !Array.isArray(record.commands)) {
+      return { kind: 'file', reference: String(record.file ?? '<malformed runFlow>') };
+    }
     return {
       kind: 'inline',
       name,
-      commands: Array.isArray(record.commands) ? record.commands : [],
+      commands: record.commands,
       conditional: record.when !== undefined,
     };
   }

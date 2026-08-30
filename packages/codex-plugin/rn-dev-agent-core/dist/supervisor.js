@@ -70977,6 +70977,33 @@ function shouldAutoPromoteToActive(metadata, lastRun) {
 function shouldDemoteAfterRepair(metadata) {
   return metadata.status === "active";
 }
+function detectEntryDeclaration(yamlText) {
+  let inTopSection = true;
+  const declarations = [];
+  for (const line of yamlText.split("\n")) {
+    if (line.startsWith("#")) {
+      const kv = line.replace(/^#\s?/, "").trim().match(/^entry\s*:\s*(.*)$/);
+      if (kv)
+        declarations.push(kv[1].trim());
+      continue;
+    }
+    const trimmed = line.trim();
+    if (trimmed === "")
+      continue;
+    if (trimmed === "---" && inTopSection) {
+      inTopSection = false;
+      continue;
+    }
+    if (inTopSection && !trimmed.startsWith("-"))
+      continue;
+    break;
+  }
+  if (declarations.length === 0)
+    return void 0;
+  if (declarations.length === 1)
+    return declarations[0];
+  return declarations.join(" | ");
+}
 function parseM7Header(yamlText, fallbackId) {
   const lines = yamlText.split("\n");
   const meta = {};
@@ -78918,6 +78945,13 @@ var init_test_recorder_helpers = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/domain/park-entry.js
+function learnedActionAdmissionRefusal(args) {
+  const entry = detectEntryDeclaration(args.rawYaml);
+  return learnedActionEntryRefusal({ entry }, args.parkPreflightPassed, args.inspectBody);
+}
+function declaredEntryMode(yamlText) {
+  return resolveEntryMode({ entry: detectEntryDeclaration(yamlText) });
+}
 function resolveEntryMode(metadata) {
   const raw = metadata.entry;
   if (raw === void 0)
@@ -78937,7 +78971,13 @@ function learnedActionEntryRefusal(metadata, parkPreflightPassed2, inspectBody) 
     };
   }
   if (entry.mode === "parked") {
-    const inspection = inspectBody?.() ?? null;
+    const inspection = inspectBody() ?? null;
+    if (inspection === null && parkPreflightPassed2) {
+      return {
+        kind: "park-preflight-required",
+        message: "Learned action declares entry: parked but its body could not be inspected for the parked contract; refusing fail-closed."
+      };
+    }
     const violation = inspection && "commands" in inspection ? parkedBodyViolation(inspection.commands) : inspection && "runFlowFile" in inspection ? { kind: "runflow-file", reference: inspection.runFlowFile } : null;
     if (violation?.kind === "lifecycle") {
       return {
@@ -78985,10 +79025,13 @@ function compositeShape(command) {
     const record3 = value;
     if (typeof record3.file === "string")
       return { kind: "file", reference: record3.file };
+    if (record3.file !== void 0 || !Array.isArray(record3.commands)) {
+      return { kind: "file", reference: String(record3.file ?? "<malformed runFlow>") };
+    }
     return {
       kind: "inline",
       name,
-      commands: Array.isArray(record3.commands) ? record3.commands : [],
+      commands: record3.commands,
       conditional: record3.when !== void 0
     };
   }
@@ -79082,6 +79125,7 @@ var PARKED_FORBIDDEN_COMMANDS, ANCHOR_COMMANDS, PARKED_READ_ONLY_COMMANDS;
 var init_park_entry = __esm({
   "packages/rn-dev-agent-core/dist/domain/park-entry.js"() {
     "use strict";
+    init_reusable_action();
     PARKED_FORBIDDEN_COMMANDS = /* @__PURE__ */ new Set(["launchApp", "stopApp", "killApp", "clearState"]);
     ANCHOR_COMMANDS = /* @__PURE__ */ new Set(["assertVisible", "extendedWaitUntil", "tapOn"]);
     PARKED_READ_ONLY_COMMANDS = /* @__PURE__ */ new Set([
@@ -81826,12 +81870,16 @@ function markParkPreflightPassed(args) {
   Object.defineProperty(args, parkPreflightPassed, { value: true, enumerable: true });
   return args;
 }
-function learnedActionEntryAdmissionResult(metadata, args, inspectBody) {
-  const refusal = learnedActionEntryRefusal(metadata, args[parkPreflightPassed] === true, inspectBody);
+function learnedActionEntryAdmissionResult(admission, args, inspectBody) {
+  const refusal = learnedActionAdmissionRefusal({
+    rawYaml: admission.rawYaml,
+    parkPreflightPassed: args[parkPreflightPassed] === true,
+    inspectBody
+  });
   if (!refusal)
     return null;
   return failResult(refusal.message, "BAD_RECORDING", {
-    actionId: metadata.id,
+    actionId: admission.id,
     ..."cause" in refusal ? { cause: refusal.cause } : {}
   });
 }
@@ -82120,10 +82168,15 @@ function createMaestroRunHandler(deps = {}) {
     } else {
       return failResult("Provide either flowPath or inlineYaml.");
     }
-    const semanticActionMeta = capturedAction?.metadata ?? args.actionMetadata ?? parseM7Header(rawYaml, args.flowPath ? basename10(args.flowPath).replace(/\.ya?ml$/i, "") : void 0);
+    const flowFallbackId = args.flowPath ? basename10(args.flowPath).replace(/\.ya?ml$/i, "") : void 0;
+    const semanticActionMeta = capturedAction?.metadata ?? args.actionMetadata ?? parseM7Header(rawYaml, flowFallbackId);
     const runFlowOpts = args.flowPath && flowPathClassification === "outside" ? { flowDir: dirname23(args.flowPath), flowRoot: dirname23(args.flowPath) } : {};
-    if (semanticActionMeta) {
-      const entryRefusal = learnedActionEntryAdmissionResult(semanticActionMeta, args, () => {
+    {
+      const entryRefusal = learnedActionEntryAdmissionResult({
+        id: semanticActionMeta?.id ?? flowFallbackId ?? "inline-flow",
+        // NOTE: always the ORIGINAL artifact text — captured actions execute regenerated header-stripped YAML.
+        rawYaml: capturedAction ? capturedAction.yamlText : rawYaml
+      }, args, () => {
         if (capturedAction) {
           return capturedAction.replay.ok ? { commands: capturedAction.replay.commands } : capturedAction.replay.runFlowFile !== void 0 ? { runFlowFile: capturedAction.replay.runFlowFile } : null;
         }
@@ -83270,6 +83323,9 @@ function sealStrictRunAction(args) {
 function usesStrictRunActionPolicy(args) {
   return args[strictRunActionPolicy] === true;
 }
+function invalidEntryRefusal(actionId, raw) {
+  return failResult(`cdp_run_action: ${actionId} declares unknown entry mode "${raw}" \u2014 use "cold" or "parked".`, "BAD_RECORDING", { actionId, fallback: "none", cause: { invalidEntry: raw } });
+}
 function parkedRunFlowFileRefusal(actionId, reference) {
   const reportedReference = reference.length > 0 ? reference : "<empty>";
   return failResult(`cdp_run_action: ${actionId} is entry: parked but references subflow file "${reportedReference}" \u2014 a parked body must be fully inspectable inline so no hidden lifecycle command can run.`, "BAD_RECORDING", {
@@ -83278,17 +83334,19 @@ function parkedRunFlowFileRefusal(actionId, reference) {
     cause: { parkedRunFlowFile: reportedReference }
   });
 }
-function loadParkedRunFlowReference(projectRoot, actionId) {
+function loadEntryUnderLoadError(projectRoot, actionId) {
   try {
     const context = openReadableActionLoadContext(projectRoot, {
       actionId,
       includeRunFlowFiles: false
     });
     const action = context ? loadActionFromContext(context, actionId) : null;
-    if (!action || action.replay.ok || action.replay.runFlowFile === void 0)
+    if (!action)
       return null;
-    const entry = resolveEntryMode(action.metadata);
-    return entry.ok && entry.mode === "parked" ? action.replay.runFlowFile : null;
+    return {
+      entry: declaredEntryMode(action.yamlText),
+      runFlowFile: action.replay.ok ? void 0 : action.replay.runFlowFile
+    };
   } catch {
     return null;
   }
@@ -83518,9 +83576,13 @@ function createRunActionHandler(deps = {}) {
       });
       loaded = openedContext ? loadActionFromContext(openedContext, args.actionId) : null;
     } catch (err) {
-      const reference = loadParkedRunFlowReference(projectRoot, args.actionId);
-      if (reference !== null)
-        return parkedRunFlowFileRefusal(args.actionId, reference);
+      const admitted = loadEntryUnderLoadError(projectRoot, args.actionId);
+      if (admitted && !admitted.entry.ok) {
+        return invalidEntryRefusal(args.actionId, admitted.entry.raw);
+      }
+      if (admitted?.entry.ok && admitted.entry.mode === "parked" && admitted.runFlowFile !== void 0) {
+        return parkedRunFlowFileRefusal(args.actionId, admitted.runFlowFile);
+      }
       return failResult(err instanceof Error ? err.message : String(err), "BAD_FILENAME", {
         actionId: args.actionId,
         fallback: "none"
@@ -83532,7 +83594,7 @@ function createRunActionHandler(deps = {}) {
       });
     }
     let loadContext = openedContext;
-    const entryResolution = resolveEntryMode(loaded.metadata);
+    const entryResolution = declaredEntryMode(loaded.yamlText);
     if (!entryResolution.ok) {
       return failResult(`cdp_run_action: ${args.actionId} declares unknown entry mode "${entryResolution.raw}" \u2014 use "cold" or "parked".`, "BAD_RECORDING", { actionId: args.actionId, fallback: "none", cause: { invalidEntry: entryResolution.raw } });
     }
@@ -83732,7 +83794,7 @@ function createRunActionHandler(deps = {}) {
       const maxAttempts = autoRepairEnabled ? 2 : 1;
       const firstRunArgs = {
         inlineYaml: replayYaml,
-        actionMetadata: action.metadata,
+        actionMetadata: { ...action.metadata, entry: entryMode },
         platform: args.platform,
         appId: args.appId,
         ...appFile ? { appFile } : {},
@@ -84064,6 +84126,12 @@ function createRunActionHandler(deps = {}) {
       if (!reloadedAction.replay.ok) {
         return failResult(`cdp_run_action: repaired action is not valid Maestro YAML: ${reloadedAction.replay.error}`, "BAD_RECORDING", { actionId: args.actionId });
       }
+      const retryEntry = declaredEntryMode(reloadedAction.yamlText);
+      if (!retryEntry.ok)
+        return invalidEntryRefusal(args.actionId, retryEntry.raw);
+      if (retryEntry.mode !== "cold") {
+        return failResult(`cdp_run_action: ${args.actionId} became entry: ${retryEntry.mode} during repair \u2014 parked actions cannot be retried; replay it afresh.`, "BAD_RECORDING", { actionId: args.actionId, fallback: "none" });
+      }
       const retryYaml = reloadedAction.replay.yamlText;
       const tBeforeRetry = Date.now();
       probeDeviceId = null;
@@ -84073,7 +84141,7 @@ function createRunActionHandler(deps = {}) {
       const repairedAttemptId = randomUUID10();
       const retryRunArgs = {
         inlineYaml: retryYaml,
-        actionMetadata: reloadedAction.metadata,
+        actionMetadata: { ...reloadedAction.metadata, entry: retryEntry.mode },
         platform: args.platform,
         appId: args.appId,
         ...appFile ? { appFile } : {},
@@ -92819,21 +92887,25 @@ function createMaestroTestAllHandler(deps = {}) {
           meta = parseM7Header(yamlText, flowId);
           requireEnginePin = meta !== null || isLearnedActionPath(flow);
         }
-        const entryRefusal = meta ? learnedActionEntryRefusal(meta, false, () => {
-          if (actionReplay) {
-            return actionReplay.replay.ok ? { commands: actionReplay.replay.commands } : actionReplay.replay.runFlowFile !== void 0 ? { runFlowFile: actionReplay.replay.runFlowFile } : null;
+        const entryRefusal = learnedActionAdmissionRefusal({
+          rawYaml: yamlText,
+          parkPreflightPassed: false,
+          inspectBody: () => {
+            if (actionReplay) {
+              return actionReplay.replay.ok ? { commands: actionReplay.replay.commands } : actionReplay.replay.runFlowFile !== void 0 ? { runFlowFile: actionReplay.replay.runFlowFile } : null;
+            }
+            try {
+              return {
+                commands: parseAndValidateFlow(yamlText, {
+                  flowDir: dirname30(flow),
+                  flowRoot: flowDir
+                }).commands
+              };
+            } catch (err) {
+              return err instanceof MaestroValidationError && err.runFlowFile !== void 0 ? { runFlowFile: err.runFlowFile } : null;
+            }
           }
-          try {
-            return {
-              commands: parseAndValidateFlow(yamlText, {
-                flowDir: dirname30(flow),
-                flowRoot: flowDir
-              }).commands
-            };
-          } catch (err) {
-            return err instanceof MaestroValidationError && err.runFlowFile !== void 0 ? { runFlowFile: err.runFlowFile } : null;
-          }
-        }) : null;
+        });
         if (entryRefusal) {
           preflightResults.push({
             name,
@@ -95213,7 +95285,11 @@ async function lockE2eTestCore(args, deps = {}) {
   const action = load(projectRoot, args.actionId);
   if (!action)
     return failResult(`Action '${args.actionId}' not found`, "NOT_FOUND");
-  const entryRefusal = learnedActionEntryRefusal(action.metadata, false, () => action.replay.ok ? { commands: action.replay.commands } : action.replay.runFlowFile !== void 0 ? { runFlowFile: action.replay.runFlowFile } : null);
+  const entryRefusal = learnedActionAdmissionRefusal({
+    rawYaml: action.yamlText,
+    parkPreflightPassed: false,
+    inspectBody: () => action.replay.ok ? { commands: action.replay.commands } : action.replay.runFlowFile !== void 0 ? { runFlowFile: action.replay.runFlowFile } : null
+  });
   if (entryRefusal) {
     return failResult(entryRefusal.message, "BAD_RECORDING", {
       actionId: args.actionId,

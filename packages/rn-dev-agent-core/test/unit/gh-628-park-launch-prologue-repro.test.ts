@@ -30,7 +30,11 @@ import {
   createRecordTestGenerateHandler,
 } from '../../dist/tools/test-recorder.js';
 import { createSaveAsActionHandler } from '../../dist/tools/save-as-action.js';
-import { parseM7Header, serializeM7Header } from '../../dist/domain/reusable-action.js';
+import {
+  detectEntryDeclaration,
+  parseM7Header,
+  serializeM7Header,
+} from '../../dist/domain/reusable-action.js';
 import { parkedBodyViolation } from '../../dist/domain/park-entry.js';
 import { createParkAnchorProbe, type ParkProbeClient } from '../../dist/tools/park-probe.js';
 import { prepareActionVerificationSuite } from '../../dist/domain/action-verification-suite.js';
@@ -700,10 +704,13 @@ test('GH #628: maestro_run refuses parked and invalid learned-action entry modes
   assert.equal(parked.code, 'BAD_RECORDING');
   assert.match(parked.error ?? '', /cdp_run_action/);
 
+  // The redesign made raw-preamble detection the only entry source: caller
+  // metadata alone (regenerated text, validated upstream by run-action) no
+  // longer drives admission, so the declaration must live in the artifact.
   const invalid = envelope(
     await handler({
       platform: 'ios',
-      inlineYaml: '- tapOn:\n    id: "continue"\n',
+      inlineYaml: '# entry: parkd\n- tapOn:\n    id: "continue"\n',
       actionMetadata: { id: 'invalid-entry', entry: 'parkd' as never },
     }),
   );
@@ -766,6 +773,124 @@ test('GH #628: maestro_run admits inline M7 flows through the shared entry contr
   assert.equal(invalid.code, 'BAD_RECORDING');
   assert.deepEqual(invalid.meta?.cause, { invalidEntry: 'parkd' });
   assert.equal(spawned, false);
+});
+
+const PARTIAL_PARKED_YAML = [
+  'appId: com.test.app',
+  '---',
+  '# entry: parked',
+  '',
+  `- assertVisible:\n    id: "${PARK_ANCHOR}"`,
+  '- tapOn:\n    id: "sign-cta"',
+  '',
+].join('\n');
+
+test('GH #628 regression: a partial parked declaration (no M7 identity) cannot bypass admission', async () => {
+  let spawned = false;
+  const handler = createMaestroRunHandler({
+    getActiveSession: () => null,
+    execFile: async () => {
+      spawned = true;
+      return { stdout: '', stderr: '' };
+    },
+  });
+
+  const inline = envelope(await handler({ platform: 'ios', inlineYaml: PARTIAL_PARKED_YAML }));
+  assert.equal(inline.ok, false);
+  assert.equal(inline.code, 'BAD_RECORDING');
+  assert.match(inline.error ?? '', /cdp_run_action/);
+
+  const filePath = join(project.root, 'partial-parked.yaml');
+  writeFileSync(filePath, PARTIAL_PARKED_YAML, 'utf8');
+  const file = envelope(await handler({ platform: 'ios', flowPath: filePath }));
+  assert.equal(file.code, 'BAD_RECORDING');
+  assert.match(file.error ?? '', /cdp_run_action/);
+
+  const invalid = envelope(
+    await handler({
+      platform: 'ios',
+      inlineYaml: PARTIAL_PARKED_YAML.replace('# entry: parked', '# entry: parkd'),
+    }),
+  );
+  assert.equal(invalid.code, 'BAD_RECORDING');
+  assert.deepEqual(invalid.meta?.cause, { invalidEntry: 'parkd' });
+
+  const empty = envelope(
+    await handler({
+      platform: 'ios',
+      inlineYaml: PARTIAL_PARKED_YAML.replace('# entry: parked', '# entry:'),
+    }),
+  );
+  assert.equal(empty.code, 'BAD_RECORDING');
+  assert.deepEqual(empty.meta?.cause, { invalidEntry: '' });
+
+  const suitePath = join(project.actionsDir, 'partial-parked.yaml');
+  writeFileSync(suitePath, PARTIAL_PARKED_YAML, 'utf8');
+  const verification = prepareActionVerificationSuite([suitePath], project.actionsDir, null);
+  assert.equal(verification.prepared.length, 0);
+  assert.equal(verification.errors[0]?.code, 'BAD_RECORDING');
+  assert.match(verification.errors[0]?.error ?? '', /cdp_run_action/);
+
+  assert.equal(spawned, false, 'no partial declaration reached execution');
+});
+
+test('GH #628 control: an entry token in body text never triggers admission', async () => {
+  const bodyTextYaml = [
+    'appId: com.test.app',
+    '---',
+    `- assertVisible:\n    id: "${PARK_ANCHOR}"`,
+    '# entry: parked',
+    '- tapOn:\n    id: "sign-cta"',
+    '',
+  ].join('\n');
+
+  assert.equal(detectEntryDeclaration(bodyTextYaml), undefined, 'body comment is not a preamble');
+  assert.equal(detectEntryDeclaration(PARTIAL_PARKED_YAML), 'parked');
+  assert.equal(detectEntryDeclaration('# entry:\n- tapOn:\n    id: "x"\n'), '');
+  assert.equal(detectEntryDeclaration('- tapOn:\n    id: "x"\n'), undefined);
+  assert.equal(
+    detectEntryDeclaration('# id: a\n# intent: b\n\n# entry: parked\n- tapOn:\n    id: "x"\n'),
+    'parked',
+    'a detached pre-body declaration still admits (fail-closed) — only body text never can',
+  );
+  assert.equal(
+    detectEntryDeclaration('# banner\nappId: com.x\n---\n# entry: parked\n- tapOn:\n    id: "x"\n'),
+    'parked',
+    'a top-section banner comment does not hide the M7 declaration after ---',
+  );
+  assert.equal(
+    detectEntryDeclaration('# entry: cold\n# entry: parked\n- tapOn:\n    id: "x"\n'),
+    'cold | parked',
+    'duplicate declarations never pick a winner — the joined value refuses downstream',
+  );
+  assert.equal(
+    detectEntryDeclaration('appId: com.x\n---\nfoo: bar\n# entry: parked\n- tapOn:\n    id: "x"\n'),
+    undefined,
+    'content after the divider ends detection before any later comment',
+  );
+
+  const handler = createMaestroRunHandler({
+    getActiveSession: () => null,
+    execFile: async () => ({ stdout: '', stderr: '' }),
+  });
+  // Every entry-admission refusal carries BAD_RECORDING with zero dispatch, so
+  // any other outcome — including reaching the post-admission authority claim,
+  // which throws in this session-less harness — proves admission passed.
+  let outcome: string;
+  try {
+    const result = envelope(await handler({ platform: 'ios', inlineYaml: bodyTextYaml }));
+    outcome = result.code ?? 'ok';
+    assert.ok(
+      !/cdp_run_action|entry mode|invalidEntry/.test(result.error ?? ''),
+      `body text must not trigger entry admission, got: ${result.error ?? 'ok'}`,
+    );
+    assert.equal(result.meta?.cause, undefined);
+  } catch (err) {
+    outcome = (err as { code?: string }).code ?? String(err);
+  }
+  // The session-less harness throws exactly at the post-admission native-origin
+  // claim — reaching it is a deterministic proof the flow passed admission.
+  assert.equal(outcome, 'METRO_ORIGIN_MISMATCH', `expected post-admission claim, got ${outcome}`);
 });
 
 test('GH #628: suite executors refuse parked actions before execution', async () => {

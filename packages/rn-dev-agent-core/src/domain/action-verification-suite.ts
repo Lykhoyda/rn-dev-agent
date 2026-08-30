@@ -14,7 +14,7 @@ import {
 } from './action-store.js';
 import { MaestroValidationError, parseAndValidateFlow } from './maestro-validator.js';
 import { parseM7Header, type M7Metadata } from './reusable-action.js';
-import { learnedActionEntryRefusal, type LearnedActionEntryCause } from './park-entry.js';
+import { learnedActionAdmissionRefusal, type LearnedActionEntryCause } from './park-entry.js';
 
 export interface PreparedActionVerificationFlow {
   file: string;
@@ -76,29 +76,32 @@ export function prepareActionVerificationSuite(
         sourceText = readFileSync(file, 'utf8');
         meta = parseM7Header(sourceText, id);
       }
-      const entryRefusal = meta
-        ? learnedActionEntryRefusal(meta, false, () => {
-            if (actionReplay) {
-              return actionReplay.replay.ok
-                ? { commands: actionReplay.replay.commands }
-                : actionReplay.replay.runFlowFile !== undefined
-                  ? { runFlowFile: actionReplay.replay.runFlowFile }
-                  : null;
-            }
-            try {
-              return {
-                commands: parseAndValidateFlow(sourceText, {
-                  flowDir: dirname(file),
-                  flowRoot: flowDir,
-                }).commands,
-              };
-            } catch (err) {
-              return err instanceof MaestroValidationError && err.runFlowFile !== undefined
-                ? { runFlowFile: err.runFlowFile }
+      // GH #628: shared raw-preamble admission — partial/invalid entry declarations refuse; body text never can.
+      const entryRefusal = learnedActionAdmissionRefusal({
+        rawYaml: sourceText,
+        parkPreflightPassed: false,
+        inspectBody: () => {
+          if (actionReplay) {
+            return actionReplay.replay.ok
+              ? { commands: actionReplay.replay.commands }
+              : actionReplay.replay.runFlowFile !== undefined
+                ? { runFlowFile: actionReplay.replay.runFlowFile }
                 : null;
-            }
-          })
-        : null;
+          }
+          try {
+            return {
+              commands: parseAndValidateFlow(sourceText, {
+                flowDir: dirname(file),
+                flowRoot: flowDir,
+              }).commands,
+            };
+          } catch (err) {
+            return err instanceof MaestroValidationError && err.runFlowFile !== undefined
+              ? { runFlowFile: err.runFlowFile }
+              : null;
+          }
+        },
+      });
       if (entryRefusal) {
         errors.push({
           file,

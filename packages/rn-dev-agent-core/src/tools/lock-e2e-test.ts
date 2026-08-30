@@ -18,7 +18,7 @@ import { okResult, failResult } from '../utils.js';
 import type { ToolResult } from '../utils.js';
 import type { SessionState } from '../types.js';
 import type { E2eConfig } from '../domain/e2e-config.js';
-import { learnedActionEntryRefusal } from '../domain/park-entry.js';
+import { learnedActionAdmissionRefusal } from '../domain/park-entry.js';
 
 export interface LockE2eTestArgs {
   actionId: string;
@@ -68,13 +68,17 @@ export async function lockE2eTestCore(
 
   const action = load(projectRoot, args.actionId);
   if (!action) return failResult(`Action '${args.actionId}' not found`, 'NOT_FOUND');
-  const entryRefusal = learnedActionEntryRefusal(action.metadata, false, () =>
-    action.replay.ok
-      ? { commands: action.replay.commands }
-      : action.replay.runFlowFile !== undefined
-        ? { runFlowFile: action.replay.runFlowFile }
-        : null,
-  );
+  // GH #628: shared raw-preamble admission — partial/invalid entry declarations refuse; body text never can.
+  const entryRefusal = learnedActionAdmissionRefusal({
+    rawYaml: action.yamlText,
+    parkPreflightPassed: false,
+    inspectBody: () =>
+      action.replay.ok
+        ? { commands: action.replay.commands }
+        : action.replay.runFlowFile !== undefined
+          ? { runFlowFile: action.replay.runFlowFile }
+          : null,
+  });
   if (entryRefusal) {
     return failResult(entryRefusal.message, 'BAD_RECORDING', {
       actionId: args.actionId,

@@ -532,6 +532,44 @@ export function shouldDemoteAfterRepair(metadata: M7Metadata): boolean {
  * Pure function — pass the file's text. Mirrors the parsing rules in
  * `packages/rn-dev-agent-core/src/learned-actions.ts` parseFlowMeta() so they stay in sync.
  */
+/**
+ * GH #628 structural admission — identity-independent entry detection, bounded
+ * to the pre-body preamble: the Maestro top-section, `---` dividers, blank
+ * lines, and every comment line before the first command line. Returns the raw
+ * declared value (including an explicit empty string) or undefined when no
+ * declaration exists. The first command line ends detection, so body text is
+ * never scanned.
+ */
+export function detectEntryDeclaration(yamlText: string): string | undefined {
+  let inTopSection = true;
+  const declarations: string[] = [];
+  for (const line of yamlText.split('\n')) {
+    if (line.startsWith('#')) {
+      const kv = line
+        .replace(/^#\s?/, '')
+        .trim()
+        .match(/^entry\s*:\s*(.*)$/);
+      if (kv) declarations.push(kv[1].trim());
+      continue;
+    }
+    const trimmed = line.trim();
+    if (trimmed === '') continue;
+    if (trimmed === '---' && inTopSection) {
+      inTopSection = false;
+      continue;
+    }
+    // Top-section mapping lines (appId: …) are still preamble; any other
+    // content line — a command or anything after the divider — ends detection.
+    if (inTopSection && !trimmed.startsWith('-')) continue;
+    break;
+  }
+  if (declarations.length === 0) return undefined;
+  if (declarations.length === 1) return declarations[0];
+  // Duplicate declarations never pick a winner — the joined value is not a
+  // valid mode, so the shared admission refuses it naming every declaration.
+  return declarations.join(' | ');
+}
+
 export function parseM7Header(yamlText: string, fallbackId?: string): M7Metadata | null {
   const lines = yamlText.split('\n');
   const meta: Record<string, unknown> = {};

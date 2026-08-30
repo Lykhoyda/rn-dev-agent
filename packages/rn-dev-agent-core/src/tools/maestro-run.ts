@@ -26,7 +26,7 @@ import {
 } from '../domain/action-engine-compat.js';
 import { parseM7Header, type M7Metadata } from '../domain/reusable-action.js';
 import {
-  learnedActionEntryRefusal,
+  learnedActionAdmissionRefusal,
   type LearnedActionBodyInspection,
 } from '../domain/park-entry.js';
 import { captureActionFromPath, type CapturedActionReplay } from '../domain/action-store.js';
@@ -231,18 +231,18 @@ export function markParkPreflightPassed<T extends MaestroRunArgs>(args: T): T {
 }
 
 function learnedActionEntryAdmissionResult(
-  metadata: Pick<M7Metadata, 'id' | 'entry'>,
+  admission: { id: string; rawYaml: string },
   args: MaestroRunArgs,
-  inspectBody?: () => LearnedActionBodyInspection,
+  inspectBody: () => LearnedActionBodyInspection,
 ): ToolResult | null {
-  const refusal = learnedActionEntryRefusal(
-    metadata,
-    (args as ParkPreflightMarkedArgs)[parkPreflightPassed] === true,
+  const refusal = learnedActionAdmissionRefusal({
+    rawYaml: admission.rawYaml,
+    parkPreflightPassed: (args as ParkPreflightMarkedArgs)[parkPreflightPassed] === true,
     inspectBody,
-  );
+  });
   if (!refusal) return null;
   return failResult(refusal.message, 'BAD_RECORDING', {
-    actionId: metadata.id,
+    actionId: admission.id,
     ...('cause' in refusal ? { cause: refusal.cause } : {}),
   });
 }
@@ -775,34 +775,41 @@ export function createMaestroRunHandler(
       return failResult('Provide either flowPath or inlineYaml.');
     }
 
+    const flowFallbackId = args.flowPath
+      ? basename(args.flowPath).replace(/\.ya?ml$/i, '')
+      : undefined;
     const semanticActionMeta =
-      capturedAction?.metadata ??
-      args.actionMetadata ??
-      parseM7Header(
-        rawYaml,
-        args.flowPath ? basename(args.flowPath).replace(/\.ya?ml$/i, '') : undefined,
-      );
+      capturedAction?.metadata ?? args.actionMetadata ?? parseM7Header(rawYaml, flowFallbackId);
     const runFlowOpts =
       args.flowPath && flowPathClassification === 'outside'
         ? { flowDir: dirname(args.flowPath), flowRoot: dirname(args.flowPath) }
         : {};
-    if (semanticActionMeta) {
-      const entryRefusal = learnedActionEntryAdmissionResult(semanticActionMeta, args, () => {
-        if (capturedAction) {
-          return capturedAction.replay.ok
-            ? { commands: capturedAction.replay.commands }
-            : capturedAction.replay.runFlowFile !== undefined
-              ? { runFlowFile: capturedAction.replay.runFlowFile }
+    // GH #628: shared raw-preamble admission — partial/invalid entry declarations refuse; body text never can.
+    {
+      const entryRefusal = learnedActionEntryAdmissionResult(
+        {
+          id: semanticActionMeta?.id ?? flowFallbackId ?? 'inline-flow',
+          // NOTE: always the ORIGINAL artifact text — captured actions execute regenerated header-stripped YAML.
+          rawYaml: capturedAction ? capturedAction.yamlText : rawYaml,
+        },
+        args,
+        () => {
+          if (capturedAction) {
+            return capturedAction.replay.ok
+              ? { commands: capturedAction.replay.commands }
+              : capturedAction.replay.runFlowFile !== undefined
+                ? { runFlowFile: capturedAction.replay.runFlowFile }
+                : null;
+          }
+          try {
+            return { commands: parseAndValidateFlow(rawYaml, runFlowOpts).commands };
+          } catch (err) {
+            return err instanceof MaestroValidationError && err.runFlowFile !== undefined
+              ? { runFlowFile: err.runFlowFile }
               : null;
-        }
-        try {
-          return { commands: parseAndValidateFlow(rawYaml, runFlowOpts).commands };
-        } catch (err) {
-          return err instanceof MaestroValidationError && err.runFlowFile !== undefined
-            ? { runFlowFile: err.runFlowFile }
-            : null;
-        }
-      });
+          }
+        },
+      );
       if (entryRefusal) return entryRefusal;
     }
     if (capturedAction && !capturedAction.replay.ok) {

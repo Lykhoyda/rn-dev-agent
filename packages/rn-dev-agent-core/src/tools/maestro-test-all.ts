@@ -42,7 +42,7 @@ import {
 } from '../domain/action-engine-compat.js';
 import { parseM7Header } from '../domain/reusable-action.js';
 import {
-  learnedActionEntryRefusal,
+  learnedActionAdmissionRefusal,
   type LearnedActionEntryCause,
 } from '../domain/park-entry.js';
 import {
@@ -288,29 +288,32 @@ export function createMaestroTestAllHandler(
           meta = parseM7Header(yamlText, flowId);
           requireEnginePin = meta !== null || isLearnedActionPath(flow);
         }
-        const entryRefusal = meta
-          ? learnedActionEntryRefusal(meta, false, () => {
-              if (actionReplay) {
-                return actionReplay.replay.ok
-                  ? { commands: actionReplay.replay.commands }
-                  : actionReplay.replay.runFlowFile !== undefined
-                    ? { runFlowFile: actionReplay.replay.runFlowFile }
-                    : null;
-              }
-              try {
-                return {
-                  commands: parseAndValidateFlow(yamlText, {
-                    flowDir: dirname(flow),
-                    flowRoot: flowDir,
-                  }).commands,
-                };
-              } catch (err) {
-                return err instanceof MaestroValidationError && err.runFlowFile !== undefined
-                  ? { runFlowFile: err.runFlowFile }
+        // GH #628: shared raw-preamble admission — partial/invalid entry declarations refuse; body text never can.
+        const entryRefusal = learnedActionAdmissionRefusal({
+          rawYaml: yamlText,
+          parkPreflightPassed: false,
+          inspectBody: () => {
+            if (actionReplay) {
+              return actionReplay.replay.ok
+                ? { commands: actionReplay.replay.commands }
+                : actionReplay.replay.runFlowFile !== undefined
+                  ? { runFlowFile: actionReplay.replay.runFlowFile }
                   : null;
-              }
-            })
-          : null;
+            }
+            try {
+              return {
+                commands: parseAndValidateFlow(yamlText, {
+                  flowDir: dirname(flow),
+                  flowRoot: flowDir,
+                }).commands,
+              };
+            } catch (err) {
+              return err instanceof MaestroValidationError && err.runFlowFile !== undefined
+                ? { runFlowFile: err.runFlowFile }
+                : null;
+            }
+          },
+        });
         if (entryRefusal) {
           preflightResults.push({
             name,

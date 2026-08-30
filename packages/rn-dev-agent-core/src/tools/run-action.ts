@@ -82,7 +82,7 @@ import { actionReplayPreflight } from '../domain/action-engine-compat.js';
 import {
   deriveParkAnchor,
   parkedBodyViolation,
-  resolveEntryMode,
+  declaredEntryMode,
   type ParkRefusalCause,
 } from '../domain/park-entry.js';
 import { planIosProofDomains } from '../domain/ios-proof-router.js';
@@ -116,6 +116,14 @@ function usesStrictRunActionPolicy(args: RunActionArgs): boolean {
   return (args as StrictRunActionArgs)[strictRunActionPolicy] === true;
 }
 
+function invalidEntryRefusal(actionId: string, raw: string): ToolResult {
+  return failResult(
+    `cdp_run_action: ${actionId} declares unknown entry mode "${raw}" — use "cold" or "parked".`,
+    'BAD_RECORDING',
+    { actionId, fallback: 'none', cause: { invalidEntry: raw } },
+  );
+}
+
 function parkedRunFlowFileRefusal(actionId: string, reference: string): ToolResult {
   const reportedReference = reference.length > 0 ? reference : '<empty>';
   return failResult(
@@ -129,16 +137,24 @@ function parkedRunFlowFileRefusal(actionId: string, reference: string): ToolResu
   );
 }
 
-function loadParkedRunFlowReference(projectRoot: string, actionId: string): string | null {
+// Error-path admission: one no-subflow load feeds the SAME shared declared-
+// entry detection, so invalid-entry precedence and the parked runFlow cause
+// survive a subflow load failure instead of collapsing into BAD_FILENAME.
+function loadEntryUnderLoadError(
+  projectRoot: string,
+  actionId: string,
+): { entry: ReturnType<typeof declaredEntryMode>; runFlowFile?: string } | null {
   try {
     const context = openReadableActionLoadContext(projectRoot, {
       actionId,
       includeRunFlowFiles: false,
     });
     const action = context ? loadActionFromContext(context, actionId) : null;
-    if (!action || action.replay.ok || action.replay.runFlowFile === undefined) return null;
-    const entry = resolveEntryMode(action.metadata);
-    return entry.ok && entry.mode === 'parked' ? action.replay.runFlowFile : null;
+    if (!action) return null;
+    return {
+      entry: declaredEntryMode(action.yamlText),
+      runFlowFile: action.replay.ok ? undefined : action.replay.runFlowFile,
+    };
   } catch {
     return null;
   }
@@ -631,8 +647,17 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
       });
       loaded = openedContext ? loadActionFromContext(openedContext, args.actionId) : null;
     } catch (err) {
-      const reference = loadParkedRunFlowReference(projectRoot, args.actionId);
-      if (reference !== null) return parkedRunFlowFileRefusal(args.actionId, reference);
+      const admitted = loadEntryUnderLoadError(projectRoot, args.actionId);
+      if (admitted && !admitted.entry.ok) {
+        return invalidEntryRefusal(args.actionId, admitted.entry.raw);
+      }
+      if (
+        admitted?.entry.ok &&
+        admitted.entry.mode === 'parked' &&
+        admitted.runFlowFile !== undefined
+      ) {
+        return parkedRunFlowFileRefusal(args.actionId, admitted.runFlowFile);
+      }
       return failResult(err instanceof Error ? err.message : String(err), 'BAD_FILENAME', {
         actionId: args.actionId,
         fallback: 'none',
@@ -648,7 +673,10 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
       );
     }
     let loadContext = openedContext;
-    const entryResolution = resolveEntryMode(loaded.metadata);
+    // GH #628: entry comes from the bounded raw-preamble detection on the
+    // original artifact text — the same shared admission source every
+    // executor uses — never from identity-gated parsed metadata.
+    const entryResolution = declaredEntryMode(loaded.yamlText);
     if (!entryResolution.ok) {
       return failResult(
         `cdp_run_action: ${args.actionId} declares unknown entry mode "${entryResolution.raw}" — use "cold" or "parked".`,
@@ -986,7 +1014,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
       const maxAttempts = autoRepairEnabled ? 2 : 1;
       const firstRunArgs: MaestroRunArgs = {
         inlineYaml: replayYaml,
-        actionMetadata: action.metadata,
+        actionMetadata: { ...action.metadata, entry: entryMode },
         platform: args.platform,
         appId: args.appId,
         ...(appFile ? { appFile } : {}),
@@ -1437,6 +1465,17 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
           { actionId: args.actionId },
         );
       }
+      // GH #628: re-admit the reloaded artifact — repair or a concurrent edit
+      // could have introduced an entry declaration the retry must not dispatch.
+      const retryEntry = declaredEntryMode(reloadedAction.yamlText);
+      if (!retryEntry.ok) return invalidEntryRefusal(args.actionId, retryEntry.raw);
+      if (retryEntry.mode !== 'cold') {
+        return failResult(
+          `cdp_run_action: ${args.actionId} became entry: ${retryEntry.mode} during repair — parked actions cannot be retried; replay it afresh.`,
+          'BAD_RECORDING',
+          { actionId: args.actionId, fallback: 'none' },
+        );
+      }
       const retryYaml = reloadedAction.replay.yamlText;
 
       const tBeforeRetry = Date.now();
@@ -1446,7 +1485,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
       const repairedAttemptId = randomUUID();
       const retryRunArgs: MaestroRunArgs = {
         inlineYaml: retryYaml,
-        actionMetadata: reloadedAction.metadata,
+        actionMetadata: { ...reloadedAction.metadata, entry: retryEntry.mode },
         platform: args.platform,
         appId: args.appId,
         ...(appFile ? { appFile } : {}),
