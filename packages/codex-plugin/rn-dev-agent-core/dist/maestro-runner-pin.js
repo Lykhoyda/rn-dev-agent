@@ -7967,6 +7967,9 @@ function validateRunFlowValue(v, validateNestedCommands = true) {
     throw new MaestroValidationError(`runFlow value must be a file string or an object, got ${Array.isArray(v) ? "array" : typeof v}`);
   }
   const obj = v;
+  if (!Object.prototype.hasOwnProperty.call(obj, "file") && !Array.isArray(obj.commands)) {
+    throw new MaestroValidationError(`runFlow object must declare file or commands`);
+  }
   if ("file" in obj) {
     const file = obj.file;
     if (typeof file !== "string") {
@@ -8045,7 +8048,7 @@ function asRunFlow(cmd2) {
       commands: Array.isArray(o.commands) ? o.commands : void 0
     };
   }
-  return { invalidFile: v };
+  return null;
 }
 function renderRunFlowFileReference(value) {
   let text;
@@ -8123,6 +8126,11 @@ function expandRunFlows(commands, opts) {
     if ("invalidFile" in rf) {
       throw new MaestroValidationError("runFlow.file must be a non-empty string", {
         runFlowFile: renderRunFlowFileReference(rf.invalidFile)
+      });
+    }
+    if (rf.file !== void 0 && rf.commands !== void 0) {
+      throw new MaestroValidationError("runFlow cannot declare both file and commands", {
+        runFlowFile: renderRunFlowFileReference(rf.file)
       });
     }
     if (rf.file !== void 0 && rf.file.length === 0) {
@@ -11319,7 +11327,7 @@ function detectEntryDeclaration(yamlText) {
       inTopSection = false;
       continue;
     }
-    if (inTopSection && (/^[a-zA-Z][\w-]*\s*:/.test(trimmed) || /^\{.*\}(?:\s+#.*)?$/.test(trimmed))) {
+    if (inTopSection && !trimmed.startsWith("[") && !trimmed.startsWith("-")) {
       continue;
     }
     break;
@@ -14089,7 +14097,7 @@ function compositeShape(command) {
       return { kind: "file", reference: renderRunFlowFileReference(value2), refuseBeforeLoad };
     }
     if (!value2 || typeof value2 !== "object" || Array.isArray(value2)) {
-      return { kind: "file", reference: renderRunFlowFileReference(value2), refuseBeforeLoad };
+      return null;
     }
     const record2 = value2;
     const commands = Array.isArray(record2.commands) ? record2.commands : null;
@@ -14103,11 +14111,7 @@ function compositeShape(command) {
         ...hasFile ? { fileReference: renderRunFlowFileReference(record2.file) } : {}
       };
     }
-    return {
-      kind: "file",
-      reference: renderRunFlowFileReference(hasFile ? record2.file : "<malformed runFlow>"),
-      refuseBeforeLoad
-    };
+    return hasFile ? { kind: "file", reference: renderRunFlowFileReference(record2.file), refuseBeforeLoad } : null;
   }
   const name = commandName(command);
   if (name === null)

@@ -216,6 +216,9 @@ function validateRunFlowValue(v: unknown, validateNestedCommands: boolean = true
     );
   }
   const obj = v as Record<string, unknown>;
+  if (!Object.prototype.hasOwnProperty.call(obj, 'file') && !Array.isArray(obj.commands)) {
+    throw new MaestroValidationError(`runFlow object must declare file or commands`);
+  }
   if ('file' in obj) {
     const file = obj.file;
     if (typeof file !== 'string') {
@@ -330,7 +333,7 @@ function asRunFlow(cmd: unknown): RunFlowShape | null {
       commands: Array.isArray(o.commands) ? o.commands : undefined,
     };
   }
-  return { invalidFile: v };
+  return null;
 }
 
 export function renderRunFlowFileReference(value: unknown): string {
@@ -425,6 +428,11 @@ export function expandRunFlows(commands: unknown[], opts: ParseAndValidateOption
     if ('invalidFile' in rf) {
       throw new MaestroValidationError('runFlow.file must be a non-empty string', {
         runFlowFile: renderRunFlowFileReference(rf.invalidFile),
+      });
+    }
+    if (rf.file !== undefined && rf.commands !== undefined) {
+      throw new MaestroValidationError('runFlow cannot declare both file and commands', {
+        runFlowFile: renderRunFlowFileReference(rf.file),
       });
     }
     if (rf.file !== undefined && rf.file.length === 0) {

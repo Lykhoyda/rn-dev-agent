@@ -222,6 +222,36 @@ test('GH #628: a flow-style top section still admits parked entry', async () => 
   assert.equal(calls.length, 0);
 });
 
+test('GH #628: a quoted top-section key still admits parked entry', async () => {
+  project.seedAction(
+    'quoted-top-parked',
+    [
+      '"appId": com.test.app',
+      '---',
+      '# id: quoted-top-parked',
+      '# intent: replay a parked action after a quoted top-section key',
+      '# status: experimental',
+      '# entry: parked',
+      '# enginePin: maestro-runner@1.1.24',
+      '',
+      `- assertVisible:\n    id: "${PARK_ANCHOR}"`,
+      '- tapOn:\n    id: "sign-cta"',
+      '',
+    ].join('\n'),
+    null,
+  );
+  const calls: Array<Record<string, unknown>> = [];
+  const result = envelope(
+    await handlerWith(calls, {
+      status: 'anchor-missing',
+      reason: 'quoted top-section action is not parked on its anchor',
+    })({ actionId: 'quoted-top-parked', projectRoot: project.root }),
+  );
+
+  assert.equal(result.code, 'PARK_STATE_MISSING');
+  assert.equal(calls.length, 0);
+});
+
 test('GH #628: generateMaestro omits the launch prologue for parked and keeps it for cold', () => {
   const events = [
     { type: 'tap', testID: PARK_ANCHOR, t: 1 } as const,
@@ -518,6 +548,31 @@ test('GH #628: an ambiguous file-and-commands runFlow stays uninspectable', asyn
 
   assert.equal(result.code, 'BAD_RECORDING');
   assert.deepEqual(result.meta?.cause, { parkedRunFlowFile: 'safe-subflow.yaml' });
+  assert.equal(calls.length, 0);
+});
+
+test('GH #628: a readable runFlow cannot mask a later ambiguous wrapper', async () => {
+  writeFileSync(join(project.actionsDir, 'first-subflow.yaml'), '- tapOn:\n    id: "first"\n');
+  writeFileSync(join(project.actionsDir, 'second-subflow.yaml'), '- tapOn:\n    id: "second"\n');
+  project.seedAction(
+    'parked-sign-mandate',
+    parkedYaml([
+      `- assertVisible:\n    id: "${PARK_ANCHOR}"`,
+      '- runFlow: first-subflow.yaml',
+      '- runFlow:\n    file: second-subflow.yaml\n    commands:\n      - launchApp',
+    ]),
+    null,
+  );
+  const calls: Array<Record<string, unknown>> = [];
+  const result = envelope(
+    await handlerWith(calls, { status: 'visible' })({
+      actionId: 'parked-sign-mandate',
+      projectRoot: project.root,
+    }),
+  );
+
+  assert.equal(result.code, 'BAD_RECORDING');
+  assert.deepEqual(result.meta?.cause, { parkedRunFlowFile: 'second-subflow.yaml' });
   assert.equal(calls.length, 0);
 });
 
@@ -856,6 +911,30 @@ test('GH #628: malformed runFlow files preserve their exact structured reference
     assert.equal(result.ok, false);
     assert.equal(result.code, 'BAD_RECORDING');
     assert.deepEqual(result.meta?.cause, { parkedRunFlowFile: String(reference) });
+    assert.equal(calls.length, 0);
+  }
+});
+
+test('GH #628: malformed non-file runFlow values carry no file cause', async () => {
+  for (const value of ['[]', 'null', '123']) {
+    project.seedAction(
+      'parked-sign-mandate',
+      parkedYaml([
+        `- assertVisible:\n    id: "${PARK_ANCHOR}"`,
+        `- runFlow: ${value}`,
+      ]),
+      null,
+    );
+    const calls: Array<Record<string, unknown>> = [];
+    const result = envelope(
+      await handlerWith(calls, { status: 'visible' })({
+        actionId: 'parked-sign-mandate',
+        projectRoot: project.root,
+      }),
+    );
+
+    assert.equal(result.code, 'BAD_RECORDING');
+    assert.equal(result.meta?.cause, undefined);
     assert.equal(calls.length, 0);
   }
 });

@@ -165,7 +165,7 @@ function compositeShape(command: unknown): CompositeShape {
       return { kind: 'file', reference: renderRunFlowFileReference(value), refuseBeforeLoad };
     }
     if (!value || typeof value !== 'object' || Array.isArray(value)) {
-      return { kind: 'file', reference: renderRunFlowFileReference(value), refuseBeforeLoad };
+      return null;
     }
     const record = value as Record<string, unknown>;
     const commands = Array.isArray(record.commands) ? record.commands : null;
@@ -179,11 +179,9 @@ function compositeShape(command: unknown): CompositeShape {
         ...(hasFile ? { fileReference: renderRunFlowFileReference(record.file) } : {}),
       };
     }
-    return {
-      kind: 'file',
-      reference: renderRunFlowFileReference(hasFile ? record.file : '<malformed runFlow>'),
-      refuseBeforeLoad,
-    };
+    return hasFile
+      ? { kind: 'file', reference: renderRunFlowFileReference(record.file), refuseBeforeLoad }
+      : null;
   }
   const name = commandName(command);
   if (name === null) return null;
