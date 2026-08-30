@@ -42,6 +42,7 @@ import { loadAction, saveAction } from '../../dist/domain/action-store.js';
 import { applyRepair, attemptRepair } from '../../dist/domain/repair-engine.js';
 import { lockE2eTestCore } from '../../dist/tools/lock-e2e-test.js';
 import { createRepairActionHandler } from '../../dist/tools/repair-action.js';
+import { buildReplayEngineStatus, MAESTRO_RUNNER_PIN } from '../../dist/domain/engine-pin.js';
 import {
   resetActiveSessionInMemoryForTest,
   setActiveSession,
@@ -1202,32 +1203,34 @@ test('GH #628 control: an entry token in body text never triggers admission', as
     'content after the divider ends detection before any later comment',
   );
 
+  let dispatches = 0;
   const handler = createMaestroRunHandler({
     getActiveSession: () => null,
-    execFile: async () => ({ stdout: '', stderr: '' }),
+    chooseDispatch: () => ({
+      runner: 'maestro-runner',
+      binPath: '/fake/maestro-runner',
+      buildArgs: (_platform, flowFile) => ['test', flowFile],
+    }),
+    parkFlow: async (run) => run(),
+    claimNativeOrigin: async () => {},
+    completeNativeOrigin: async () => {},
+    resolveEngineStatus: async () =>
+      buildReplayEngineStatus('pinned-ok', MAESTRO_RUNNER_PIN.version, false),
+    execFile: async () => {
+      dispatches += 1;
+      return { stdout: '', stderr: '' };
+    },
   });
-  // Every entry-admission refusal carries BAD_RECORDING with zero dispatch, so
-  // any other outcome — including reaching the post-admission authority claim,
-  // which throws in this session-less harness — proves admission passed.
   for (const inlineYaml of [
     bodyTextYaml,
     flowStyleBodyYaml,
     anchoredFlowStyleBodyYaml,
     taggedFlowStyleBodyYaml,
   ]) {
-    let outcome: string;
-    try {
-      const result = envelope(await handler({ platform: 'ios', inlineYaml }));
-      outcome = result.code ?? 'ok';
-      assert.ok(
-        !/cdp_run_action|entry mode|invalidEntry/.test(result.error ?? ''),
-        `body text must not trigger entry admission, got: ${result.error ?? 'ok'}`,
-      );
-      assert.equal(result.meta?.cause, undefined);
-    } catch (err) {
-      outcome = (err as { code?: string }).code ?? String(err);
-    }
-    assert.equal(outcome, 'METRO_ORIGIN_MISMATCH', `expected post-admission claim, got ${outcome}`);
+    const dispatchesBefore = dispatches;
+    const result = envelope(await handler({ platform: 'ios', inlineYaml }));
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.equal(dispatches, dispatchesBefore + 1, 'body text must reach the cold-flow runner');
   }
 });
 
