@@ -14,6 +14,8 @@
 // and runtime tools (run-action, future self-repair) all import from here.
 // Schema drift becomes a compile error.
 
+import yaml from 'yaml';
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Lifecycle + classification enums
 // ─────────────────────────────────────────────────────────────────────────────
@@ -544,18 +546,21 @@ function normalizeM7Source(yamlText: string): string {
   return yamlText.startsWith('\uFEFF') ? yamlText.slice(1) : yamlText;
 }
 
-export function detectEntryDeclaration(yamlText: string): string | undefined {
+function appendEntryDeclaration(line: string, declarations: string[]): boolean {
+  if (!line.startsWith('#')) return false;
+  const kv = line
+    .replace(/^#\s?/, '')
+    .trim()
+    .match(/^entry\s*:\s*(.*)$/);
+  if (kv) declarations.push(kv[1].trim());
+  return true;
+}
+
+function detectEntryDeclarationsLexically(source: string): string[] {
   let inTopSection = true;
   const declarations: string[] = [];
-  for (const line of normalizeM7Source(yamlText).split('\n')) {
-    if (line.startsWith('#')) {
-      const kv = line
-        .replace(/^#\s?/, '')
-        .trim()
-        .match(/^entry\s*:\s*(.*)$/);
-      if (kv) declarations.push(kv[1].trim());
-      continue;
-    }
+  for (const line of source.split('\n')) {
+    if (appendEntryDeclaration(line, declarations)) continue;
     const trimmed = line.trim();
     if (trimmed === '') continue;
     if (trimmed === '---' && inTopSection) {
@@ -566,6 +571,35 @@ export function detectEntryDeclaration(yamlText: string): string | undefined {
       continue;
     }
     break;
+  }
+  return declarations;
+}
+
+function parsedBodyStart(source: string): number | undefined {
+  try {
+    const documents = yaml.parseAllDocuments(source, { strict: true });
+    if (documents.length === 0 || documents.some((document) => document.errors.length > 0)) {
+      return undefined;
+    }
+    return documents.at(-1)?.contents?.range?.[0] ?? source.length;
+  } catch {
+    return undefined;
+  }
+}
+
+export function detectEntryDeclaration(yamlText: string): string | undefined {
+  const source = normalizeM7Source(yamlText);
+  const bodyStart = parsedBodyStart(source);
+  const declarations: string[] = [];
+  if (bodyStart === undefined) {
+    declarations.push(...detectEntryDeclarationsLexically(source));
+  } else {
+    let lineStart = 0;
+    for (const line of source.split('\n')) {
+      if (lineStart >= bodyStart) break;
+      appendEntryDeclaration(line, declarations);
+      lineStart += line.length + 1;
+    }
   }
   if (declarations.length === 0) return undefined;
   if (declarations.length === 1) return declarations[0];

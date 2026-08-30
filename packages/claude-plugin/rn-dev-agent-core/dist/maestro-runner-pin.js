@@ -787,10 +787,10 @@ var require_directives = __commonJS({
     };
     var escapeTagName = (tn) => tn.replace(/[!,[\]{}]/g, (ch) => escapeChars[ch]);
     var Directives = class _Directives {
-      constructor(yaml3, tags) {
+      constructor(yaml4, tags) {
         this.docStart = null;
         this.docEnd = false;
-        this.yaml = Object.assign({}, _Directives.defaultYaml, yaml3);
+        this.yaml = Object.assign({}, _Directives.defaultYaml, yaml4);
         this.tags = Object.assign({}, _Directives.defaultTags, tags);
       }
       clone() {
@@ -9031,11 +9031,11 @@ function findProjectRoot(opts = {}) {
   }
   return null;
 }
-var import_yaml3, STRIKE_COOLDOWN_MS;
+var import_yaml4, STRIKE_COOLDOWN_MS;
 var init_storage = __esm({
   "packages/rn-dev-agent-core/dist/nav-graph/storage.js"() {
     "use strict";
-    import_yaml3 = __toESM(require_dist(), 1);
+    import_yaml4 = __toESM(require_dist(), 1);
     STRIKE_COOLDOWN_MS = 5 * 60 * 1e3;
   }
 });
@@ -11290,6 +11290,7 @@ import { basename as basename5, dirname as dirname10, join as join11, resolve as
 init_maestro_validator();
 
 // packages/rn-dev-agent-core/dist/domain/reusable-action.js
+var import_yaml2 = __toESM(require_dist(), 1);
 function freshRuntimeState(now = () => /* @__PURE__ */ new Date(), mtimeMs = 0) {
   const ts = now().toISOString();
   return {
@@ -11310,16 +11311,20 @@ function freshRuntimeState(now = () => /* @__PURE__ */ new Date(), mtimeMs = 0) 
 function normalizeM7Source(yamlText) {
   return yamlText.startsWith("\uFEFF") ? yamlText.slice(1) : yamlText;
 }
-function detectEntryDeclaration(yamlText) {
+function appendEntryDeclaration(line, declarations) {
+  if (!line.startsWith("#"))
+    return false;
+  const kv = line.replace(/^#\s?/, "").trim().match(/^entry\s*:\s*(.*)$/);
+  if (kv)
+    declarations.push(kv[1].trim());
+  return true;
+}
+function detectEntryDeclarationsLexically(source) {
   let inTopSection = true;
   const declarations = [];
-  for (const line of normalizeM7Source(yamlText).split("\n")) {
-    if (line.startsWith("#")) {
-      const kv = line.replace(/^#\s?/, "").trim().match(/^entry\s*:\s*(.*)$/);
-      if (kv)
-        declarations.push(kv[1].trim());
+  for (const line of source.split("\n")) {
+    if (appendEntryDeclaration(line, declarations))
       continue;
-    }
     const trimmed = line.trim();
     if (trimmed === "")
       continue;
@@ -11331,6 +11336,34 @@ function detectEntryDeclaration(yamlText) {
       continue;
     }
     break;
+  }
+  return declarations;
+}
+function parsedBodyStart(source) {
+  try {
+    const documents = import_yaml2.default.parseAllDocuments(source, { strict: true });
+    if (documents.length === 0 || documents.some((document) => document.errors.length > 0)) {
+      return void 0;
+    }
+    return documents.at(-1)?.contents?.range?.[0] ?? source.length;
+  } catch {
+    return void 0;
+  }
+}
+function detectEntryDeclaration(yamlText) {
+  const source = normalizeM7Source(yamlText);
+  const bodyStart = parsedBodyStart(source);
+  const declarations = [];
+  if (bodyStart === void 0) {
+    declarations.push(...detectEntryDeclarationsLexically(source));
+  } else {
+    let lineStart = 0;
+    for (const line of source.split("\n")) {
+      if (lineStart >= bodyStart)
+        break;
+      appendEntryDeclaration(line, declarations);
+      lineStart += line.length + 1;
+    }
   }
   if (declarations.length === 0)
     return void 0;
@@ -14003,7 +14036,7 @@ import { basename as basename6, dirname as dirname11, resolve as resolve7 } from
 init_maestro_validator();
 
 // packages/rn-dev-agent-core/dist/domain/park-entry.js
-var import_yaml2 = __toESM(require_dist(), 1);
+var import_yaml3 = __toESM(require_dist(), 1);
 init_maestro_validator();
 var PARKED_FORBIDDEN_COMMANDS = /* @__PURE__ */ new Set(["launchApp", "stopApp", "killApp", "clearState"]);
 function learnedActionAdmissionRefusal(args) {
@@ -14154,7 +14187,7 @@ function scanParkedBody(commands, deferInspectableFiles) {
 }
 function rawParkedBodyViolation(rawYaml) {
   try {
-    const body = import_yaml2.default.parseAllDocuments(rawYaml, { strict: true }).at(-1)?.toJS();
+    const body = import_yaml3.default.parseAllDocuments(rawYaml, { strict: true }).at(-1)?.toJS();
     if (!Array.isArray(body))
       return null;
     const violation = scanParkedBody(body, true);

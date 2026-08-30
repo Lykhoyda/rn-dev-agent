@@ -1473,10 +1473,10 @@ var require_directives = __commonJS({
     };
     var escapeTagName = (tn) => tn.replace(/[!,[\]{}]/g, (ch) => escapeChars[ch]);
     var Directives = class _Directives {
-      constructor(yaml3, tags) {
+      constructor(yaml4, tags) {
         this.docStart = null;
         this.docEnd = false;
-        this.yaml = Object.assign({}, _Directives.defaultYaml, yaml3);
+        this.yaml = Object.assign({}, _Directives.defaultYaml, yaml4);
         this.tags = Object.assign({}, _Directives.defaultTags, tags);
       }
       clone() {
@@ -8798,8 +8798,8 @@ function writeGraph(projectRoot, graph) {
   const filePath = getGraphPath(projectRoot);
   mkdirSync3(dirname2(filePath), { recursive: true });
   const tmpPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
-  const yaml3 = (0, import_yaml.stringify)({ nav_graph: graph }, { lineWidth: 120 });
-  writeFileSync2(tmpPath, yaml3, "utf-8");
+  const yaml4 = (0, import_yaml.stringify)({ nav_graph: graph }, { lineWidth: 120 });
+  writeFileSync2(tmpPath, yaml4, "utf-8");
   renameSync(tmpPath, filePath);
   return filePath;
 }
@@ -70994,16 +70994,20 @@ function shouldDemoteAfterRepair(metadata) {
 function normalizeM7Source(yamlText) {
   return yamlText.startsWith("\uFEFF") ? yamlText.slice(1) : yamlText;
 }
-function detectEntryDeclaration(yamlText) {
+function appendEntryDeclaration(line, declarations) {
+  if (!line.startsWith("#"))
+    return false;
+  const kv = line.replace(/^#\s?/, "").trim().match(/^entry\s*:\s*(.*)$/);
+  if (kv)
+    declarations.push(kv[1].trim());
+  return true;
+}
+function detectEntryDeclarationsLexically(source) {
   let inTopSection = true;
   const declarations = [];
-  for (const line of normalizeM7Source(yamlText).split("\n")) {
-    if (line.startsWith("#")) {
-      const kv = line.replace(/^#\s?/, "").trim().match(/^entry\s*:\s*(.*)$/);
-      if (kv)
-        declarations.push(kv[1].trim());
+  for (const line of source.split("\n")) {
+    if (appendEntryDeclaration(line, declarations))
       continue;
-    }
     const trimmed = line.trim();
     if (trimmed === "")
       continue;
@@ -71015,6 +71019,34 @@ function detectEntryDeclaration(yamlText) {
       continue;
     }
     break;
+  }
+  return declarations;
+}
+function parsedBodyStart(source) {
+  try {
+    const documents = import_yaml3.default.parseAllDocuments(source, { strict: true });
+    if (documents.length === 0 || documents.some((document) => document.errors.length > 0)) {
+      return void 0;
+    }
+    return documents.at(-1)?.contents?.range?.[0] ?? source.length;
+  } catch {
+    return void 0;
+  }
+}
+function detectEntryDeclaration(yamlText) {
+  const source = normalizeM7Source(yamlText);
+  const bodyStart = parsedBodyStart(source);
+  const declarations = [];
+  if (bodyStart === void 0) {
+    declarations.push(...detectEntryDeclarationsLexically(source));
+  } else {
+    let lineStart = 0;
+    for (const line of source.split("\n")) {
+      if (lineStart >= bodyStart)
+        break;
+      appendEntryDeclaration(line, declarations);
+      lineStart += line.length + 1;
+    }
   }
   if (declarations.length === 0)
     return void 0;
@@ -71144,10 +71176,11 @@ function serializeM7Header(metadata) {
   }
   return lines.join("\n");
 }
-var REPAIR_BUDGET, HISTORY_LIMITS;
+var import_yaml3, REPAIR_BUDGET, HISTORY_LIMITS;
 var init_reusable_action = __esm({
   "packages/rn-dev-agent-core/dist/domain/reusable-action.js"() {
     "use strict";
+    import_yaml3 = __toESM(require_dist(), 1);
     REPAIR_BUDGET = {
       /** Max successful self-repairs allowed in a rolling 24h window. */
       ATTEMPTS_PER_24H: 3,
@@ -78142,18 +78175,18 @@ function promoteActionRuntimeWithCAS(expected, nextState) {
   }
   if (actionWasEditedExternally(expected))
     return { ok: false, conflict: "EXTERNAL_WRITE" };
-  const yaml3 = readFileSync28(expected.filePath, "utf8");
+  const yaml4 = readFileSync28(expected.filePath, "utf8");
   const marker = /^# status: experimental[ \t]*$/gm;
-  if ((yaml3.match(marker) ?? []).length !== 1)
+  if ((yaml4.match(marker) ?? []).length !== 1)
     return { ok: false, conflict: "EXTERNAL_WRITE" };
-  const promoted = yaml3.replace(marker, "# status: active");
+  const promoted = yaml4.replace(marker, "# status: active");
   const written = atomicWriter.pairWriteConditional(expected.filePath, promoted, sidecarPath, nextState, () => {
     try {
-      return runtimeBaselineMatches(expected.filePath, expected.state) && !actionWasEditedExternally(expected) && readFileSync28(expected.filePath, "utf8") === yaml3;
+      return runtimeBaselineMatches(expected.filePath, expected.state) && !actionWasEditedExternally(expected) && readFileSync28(expected.filePath, "utf8") === yaml4;
     } catch {
       return false;
     }
-  }, void 0, yaml3);
+  }, void 0, yaml4);
   if (!written)
     return { ok: false, conflict: "EXTERNAL_WRITE" };
   expected.state = { ...nextState, lastSeenMtimeMs: written.finalMtimeMs };
@@ -78535,7 +78568,7 @@ function scanParkedBody(commands, deferInspectableFiles) {
 }
 function rawParkedBodyViolation(rawYaml) {
   try {
-    const body = import_yaml3.default.parseAllDocuments(rawYaml, { strict: true }).at(-1)?.toJS();
+    const body = import_yaml4.default.parseAllDocuments(rawYaml, { strict: true }).at(-1)?.toJS();
     if (!Array.isArray(body))
       return null;
     const violation = scanParkedBody(body, true);
@@ -78607,11 +78640,11 @@ function deriveParkAnchor(commands, params = {}) {
   }
   return { ok: true, anchorId: substituted };
 }
-var import_yaml3, PARKED_FORBIDDEN_COMMANDS, ANCHOR_COMMANDS, PARKED_READ_ONLY_COMMANDS;
+var import_yaml4, PARKED_FORBIDDEN_COMMANDS, ANCHOR_COMMANDS, PARKED_READ_ONLY_COMMANDS;
 var init_park_entry = __esm({
   "packages/rn-dev-agent-core/dist/domain/park-entry.js"() {
     "use strict";
-    import_yaml3 = __toESM(require_dist(), 1);
+    import_yaml4 = __toESM(require_dist(), 1);
     init_reusable_action();
     init_maestro_validator();
     PARKED_FORBIDDEN_COMMANDS = /* @__PURE__ */ new Set(["launchApp", "stopApp", "killApp", "clearState"]);
@@ -79315,7 +79348,7 @@ var init_action_engine_compat = __esm({
 // packages/rn-dev-agent-core/dist/tools/test-recorder-generators.js
 function maestroScalar(value) {
   const safe = stripNewlines(value);
-  return (0, import_yaml4.stringify)(safe).replace(/\n+$/, "");
+  return (0, import_yaml5.stringify)(safe).replace(/\n+$/, "");
 }
 function maestroBanner(value) {
   const banner = stripNewlines(value);
@@ -79600,8 +79633,8 @@ function generateMaestro(events, opts = {}) {
         break;
     }
   }
-  const yaml3 = lines.join("\n") + "\n";
-  const bodyYaml = yaml3.replace(/^appId:[^\n]*\n---\n/, "");
+  const yaml4 = lines.join("\n") + "\n";
+  const bodyYaml = yaml4.replace(/^appId:[^\n]*\n---\n/, "");
   const commands = parseAndValidateFlow(bodyYaml).commands;
   assertRecorderCommandShapes(commands);
   if (opts.entry === "parked") {
@@ -79615,7 +79648,7 @@ function generateMaestro(events, opts = {}) {
     if (refusal)
       throw new Error(refusal);
   }
-  return yaml3;
+  return yaml4;
 }
 function generateDetox(events, opts = {}) {
   if (opts.entry === "parked") {
@@ -79710,11 +79743,11 @@ function generateDetox(events, opts = {}) {
   lines.push("});");
   return lines.join("\n") + "\n";
 }
-var import_yaml4, RECORDER_COMMANDS, TAP_TO_NAV_WINDOW_MS;
+var import_yaml5, RECORDER_COMMANDS, TAP_TO_NAV_WINDOW_MS;
 var init_test_recorder_generators = __esm({
   "packages/rn-dev-agent-core/dist/tools/test-recorder-generators.js"() {
     "use strict";
-    import_yaml4 = __toESM(require_dist(), 1);
+    import_yaml5 = __toESM(require_dist(), 1);
     init_engine_pin();
     init_reusable_action();
     init_park_entry();
@@ -87559,7 +87592,7 @@ function maestroRefusalResult(result, fallbackMessage, meta) {
     ...result.cleanupRefusal ? { cleanupRefusal: result.cleanupRefusal } : {}
   });
 }
-async function runMaestroInline(yaml3, opts, dependencies = {}) {
+async function runMaestroInline(yaml4, opts, dependencies = {}) {
   maestroInlineObserverForTest?.();
   const dispatch = (dependencies.chooseDispatch ?? chooseMaestroDispatch)({
     platform: opts.platform
@@ -87578,7 +87611,7 @@ async function runMaestroInline(yaml3, opts, dependencies = {}) {
   let content;
   let headerAppId;
   try {
-    const parsed = parseAndValidateFlow(yaml3, { rejectHeader: true });
+    const parsed = parseAndValidateFlow(yaml4, { rejectHeader: true });
     const selectorRefusal = replayCompatibilityPreflight({
       commands: parsed.commands,
       engineStatus,
@@ -87863,9 +87896,9 @@ function regexEscape(value) {
 }
 async function tapSystemDialog(labels, platform, totalTimeoutMs, slug, authorityArgs) {
   const selector = `^(?:${labels.map(regexEscape).join("|")})$`;
-  const yaml3 = `- tapOn:
+  const yaml4 = `- tapOn:
     text: "${yamlEscape(selector)}"`;
-  const result = await runMaestroInlineFn(yaml3, {
+  const result = await runMaestroInlineFn(yaml4, {
     platform,
     timeoutMs: totalTimeoutMs,
     slug,
@@ -90869,9 +90902,9 @@ function createDevicePickValueHandler(invoke = runMaestroInline) {
       });
     }
     const open = buildOpenPickerSteps(args.pickerTestId);
-    const yaml3 = `${open}- tapOn:
+    const yaml4 = `${open}- tapOn:
     text: "${yamlEscape(args.value)}"`;
-    const result = await invoke(yaml3, {
+    const result = await invoke(yaml4, {
       platform,
       timeoutMs: args.timeoutMs ?? DEFAULT_PICKER_TIMEOUT_MS,
       slug: "pick-value",
@@ -90917,11 +90950,11 @@ function createDevicePickDateHandler(invoke = runMaestroInline) {
       { name: "year", value: String(parsed.year) }
     ];
     const opener = args.openerTestId ?? args.pickerTestId;
-    const yaml3 = [
+    const yaml4 = [
       buildOpenPickerSteps(opener).trimEnd(),
       ...components.map((component) => dateTapStep(component.value, args.pickerScopeTestId))
     ].filter(Boolean).join("\n");
-    const result = await invoke(yaml3, {
+    const result = await invoke(yaml4, {
       platform,
       timeoutMs: args.timeoutMs ?? DEFAULT_PICKER_TIMEOUT_MS,
       slug: "pick-date",

@@ -1174,9 +1174,13 @@ test('GH #628 control: an entry token in body text never triggers admission', as
     '',
   ].join('\n');
   const flowStyleBodyYaml = '[{ tapOn: { id: "x" } }]\n# entry: parked\n';
+  const anchoredFlowStyleBodyYaml = '&steps [{ tapOn: { id: "x" } }]\n# entry: parked\n';
+  const taggedFlowStyleBodyYaml = '!!seq [{ tapOn: { id: "x" } }]\n# entry: parked\n';
 
   assert.equal(detectEntryDeclaration(bodyTextYaml), undefined, 'body comment is not a preamble');
   assert.equal(detectEntryDeclaration(flowStyleBodyYaml), undefined);
+  assert.equal(detectEntryDeclaration(anchoredFlowStyleBodyYaml), undefined);
+  assert.equal(detectEntryDeclaration(taggedFlowStyleBodyYaml), undefined);
   assert.equal(detectEntryDeclaration(PARTIAL_PARKED_YAML), 'parked');
   assert.equal(detectEntryDeclaration('# entry:\n- tapOn:\n    id: "x"\n'), '');
   assert.equal(detectEntryDeclaration('- tapOn:\n    id: "x"\n'), undefined);
@@ -1208,7 +1212,12 @@ test('GH #628 control: an entry token in body text never triggers admission', as
   // Every entry-admission refusal carries BAD_RECORDING with zero dispatch, so
   // any other outcome — including reaching the post-admission authority claim,
   // which throws in this session-less harness — proves admission passed.
-  for (const inlineYaml of [bodyTextYaml, flowStyleBodyYaml]) {
+  for (const inlineYaml of [
+    bodyTextYaml,
+    flowStyleBodyYaml,
+    anchoredFlowStyleBodyYaml,
+    taggedFlowStyleBodyYaml,
+  ]) {
     let outcome: string;
     try {
       const result = envelope(await handler({ platform: 'ios', inlineYaml }));
