@@ -77372,9 +77372,18 @@ function recordedRouteSequence(events, opts) {
   ];
 }
 function assertParkedRouteSequenceSerializable(expectedRouteSequence) {
-  const invalidRoute = expectedRouteSequence.find((route) => route.includes(","));
+  const invalidRoute = expectedRouteSequence.find((route) => {
+    if (route.includes("[") || route.includes("]"))
+      return true;
+    const serialized = `[${stripNewlines(route)}]`;
+    const parsed = parseM7Header(`# id: route-round-trip
+# intent: validate route
+# expectedRouteSequence: ${serialized}
+`)?.expectedRouteSequence;
+    return parsed?.length !== 1 || parsed[0] !== route;
+  });
   if (invalidRoute !== void 0) {
-    throw new Error(`entry: parked cannot be generated because route ${JSON.stringify(stripNewlines(invalidRoute))} contains a comma.`);
+    throw new Error(`entry: parked cannot be generated because route ${JSON.stringify(invalidRoute)} cannot round-trip through expectedRouteSequence metadata.`);
   }
 }
 var TAP_TO_NAV_WINDOW_MS = 1e3;

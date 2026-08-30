@@ -198,7 +198,7 @@ test('GH #628: generateMaestro omits the launch prologue for parked and keeps it
   assert.equal(parseM7Header(routedCold)?.expectedRouteSequence, undefined);
 });
 
-test('GH #628: parked generation refuses comma-bearing recorded routes', () => {
+test('GH #628: parked generation refuses routes that cannot round-trip through M7', () => {
   const anchor = { type: 'tap', testID: PARK_ANCHOR, t: 1 } as const;
   const navigate = {
     type: 'navigate',
@@ -209,6 +209,8 @@ test('GH #628: parked generation refuses comma-bearing recorded routes', () => {
   for (const options of [
     { startRoute: 'Checkout,Express', events: [anchor] },
     { startRoute: 'MandateSign', events: [anchor, navigate] },
+    { startRoute: ' Checkout', events: [anchor] },
+    { startRoute: '[Checkout]', events: [anchor] },
   ]) {
     assert.throws(
       () =>
@@ -218,9 +220,16 @@ test('GH #628: parked generation refuses comma-bearing recorded routes', () => {
           entry: 'parked',
           startRoute: options.startRoute,
         }),
-      /route "Checkout,Express" contains a comma/,
+      /cannot round-trip through expectedRouteSequence metadata/,
     );
   }
+  const normal = generateMaestro([anchor], {
+    id: 'p',
+    intent: 'x',
+    entry: 'parked',
+    startRoute: 'Checkout',
+  });
+  assert.deepEqual(parseM7Header(normal)?.expectedRouteSequence, ['Checkout']);
   assert.doesNotThrow(() =>
     generateMaestro([anchor], {
       id: 'c',

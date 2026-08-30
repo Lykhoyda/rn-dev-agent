@@ -7,7 +7,7 @@
 import { stringify as yamlStringify } from 'yaml';
 import type { RecordedEvent } from './test-recorder.js';
 import { ACTION_ENGINE_PIN } from '../domain/engine-pin.js';
-import type { ActionEntryMode } from '../domain/reusable-action.js';
+import { parseM7Header, type ActionEntryMode } from '../domain/reusable-action.js';
 import { deriveParkAnchor } from '../domain/park-entry.js';
 import { regexSelectorCapabilityRefusal } from '../domain/action-engine-compat.js';
 import { isSafeMaestroScalar, parseAndValidateFlow } from '../domain/maestro-validator.js';
@@ -147,10 +147,17 @@ function recordedRouteSequence(
 }
 
 function assertParkedRouteSequenceSerializable(expectedRouteSequence: readonly string[]): void {
-  const invalidRoute = expectedRouteSequence.find((route) => route.includes(','));
+  const invalidRoute = expectedRouteSequence.find((route) => {
+    if (route.includes('[') || route.includes(']')) return true;
+    const serialized = `[${stripNewlines(route)}]`;
+    const parsed = parseM7Header(
+      `# id: route-round-trip\n# intent: validate route\n# expectedRouteSequence: ${serialized}\n`,
+    )?.expectedRouteSequence;
+    return parsed?.length !== 1 || parsed[0] !== route;
+  });
   if (invalidRoute !== undefined) {
     throw new Error(
-      `entry: parked cannot be generated because route ${JSON.stringify(stripNewlines(invalidRoute))} contains a comma.`,
+      `entry: parked cannot be generated because route ${JSON.stringify(invalidRoute)} cannot round-trip through expectedRouteSequence metadata.`,
     );
   }
 }
