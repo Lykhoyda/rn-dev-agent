@@ -209,6 +209,13 @@ alive for such callers.
   `corepack yarn gate:otp-omitted-timeout` (needs `OTP_FIXTURE_ROOT` and
   `OTP_FIXTURE_DEVICE_ID`; not run in hosted CI), with the causal modal-
   alternate regressions in `test/unit/ios-proof-domain-routing.test.ts`.
+- The partitioned iOS native leg must re-prove the exact CDP target before
+  completing its deferred origin: only `reproveManagedOrigin`
+  (`connectExactSessionTarget`, which waits for the target to re-register)
+  reliably survives a WDA-driven segment, so the deferred-completion guard in
+  `src/tools/maestro-run.ts` admits a caller-supplied reprove even in the
+  nested `replayDeps: undefined` handler. Park/resume handoff regressions are
+  pinned in `test/unit/partitioned-replay-authority.test.ts`.
 - Trailing-verification classification (GH #623) has exactly one owner: the
   canonical per-attempt ledger built inside `maestro_run` from per-stage
   producer artifacts (`src/domain/maestro-run-ledger.ts`, artifact reader in

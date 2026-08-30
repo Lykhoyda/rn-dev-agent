@@ -81788,7 +81788,7 @@ function remapNativeSteps(steps, sourceIndices) {
     return mapped ? [mapped] : [];
   });
 }
-function partialNativeFailureMessage(meta) {
+function partialNativeFailureMessage(meta, nestedError) {
   const failedStep = remapNativeStep(meta.failedStep, 0, []);
   const lastStep = remapNativeStep(meta.lastStep, 0, []);
   const terminal = isRecord(meta.terminal) ? meta.terminal : null;
@@ -81797,7 +81797,12 @@ function partialNativeFailureMessage(meta) {
     kind: failureKind,
     selector: typeof terminal?.failureSelector === "string" ? terminal.failureSelector : null
   } : null;
-  const headline = formatFailureHeadline({ steps: [], failedStep, lastStep, reason }, { timedOut: meta.timedOut === true, outputTruncated: meta.outputTruncated === true }, "Native replay segment failed.");
+  const headline = formatFailureHeadline(
+    { steps: [], failedStep, lastStep, reason },
+    { timedOut: meta.timedOut === true, outputTruncated: meta.outputTruncated === true },
+    // Keep the nested envelope's own cause when no structured evidence exists.
+    nestedError?.replace(/^Maestro flow failed: /, "") || "Native replay segment failed."
+  );
   const runtimeDegradation = runtimeDegradationFromMetadata(meta.runtimeDegraded);
   return runtimeDegradation ? `${headline} \u2014 ${formatRuntimeDegradedHint(runtimeDegradation)}` : headline;
 }
@@ -82025,7 +82030,7 @@ function createMaestroRunHandler(deps = {}) {
               if (!nativeSegmentCoversAttempt) {
                 delete nestedMeta.trailingVerification;
                 delete nestedMeta.ledger;
-                nestedError = partialNativeFailureMessage(nestedMeta);
+                nestedError = partialNativeFailureMessage(nestedMeta, env.error);
               }
               combinedSteps.push(...remapNativeSteps(nestedMeta.steps, segment.sourceIndices));
               const uniqueProofDomains = [...new Set(proofDomains)];
@@ -82506,7 +82511,7 @@ function createMaestroRunHandler(deps = {}) {
         signal: flowAbort.signal
       });
       if (deferredNativeOriginTarget) {
-        if (nativeOriginPreclaimed && replayFactory && (args.reproveManagedOrigin || deps.reproveManagedOrigin || hasManagedNativeOriginAuthority(args))) {
+        if (nativeOriginPreclaimed && (args.reproveManagedOrigin || deps.reproveManagedOrigin || replayFactory && hasManagedNativeOriginAuthority(args))) {
           await reproveManagedOrigin();
         }
         await completeOrigin(true);

@@ -487,7 +487,7 @@ function remapNativeSteps(steps: unknown, sourceIndices: number[]): PartitionedR
   });
 }
 
-function partialNativeFailureMessage(meta: Record<string, unknown>): string {
+function partialNativeFailureMessage(meta: Record<string, unknown>, nestedError?: string): string {
   const failedStep = remapNativeStep(meta.failedStep, 0, []);
   const lastStep = remapNativeStep(meta.lastStep, 0, []);
   const terminal = isRecord(meta.terminal) ? meta.terminal : null;
@@ -504,7 +504,8 @@ function partialNativeFailureMessage(meta: Record<string, unknown>): string {
   const headline = formatFailureHeadline(
     { steps: [], failedStep, lastStep, reason },
     { timedOut: meta.timedOut === true, outputTruncated: meta.outputTruncated === true },
-    'Native replay segment failed.',
+    // Keep the nested envelope's own cause when no structured evidence exists.
+    nestedError?.replace(/^Maestro flow failed: /, '') || 'Native replay segment failed.',
   );
   const runtimeDegradation = runtimeDegradationFromMetadata(meta.runtimeDegraded);
   return runtimeDegradation
@@ -898,7 +899,7 @@ export function createMaestroRunHandler(
               if (!nativeSegmentCoversAttempt) {
                 delete nestedMeta.trailingVerification;
                 delete nestedMeta.ledger;
-                nestedError = partialNativeFailureMessage(nestedMeta);
+                nestedError = partialNativeFailureMessage(nestedMeta, env.error);
               }
               combinedSteps.push(...remapNativeSteps(nestedMeta.steps, segment.sourceIndices));
               const uniqueProofDomains = [...new Set(proofDomains)];
@@ -1585,12 +1586,12 @@ export function createMaestroRunHandler(
         },
       );
       if (deferredNativeOriginTarget) {
+        // A caller-supplied reprove must run even without local replayDeps (nested native leg).
         if (
           nativeOriginPreclaimed &&
-          replayFactory &&
           (args.reproveManagedOrigin ||
             deps.reproveManagedOrigin ||
-            hasManagedNativeOriginAuthority(args))
+            (replayFactory && hasManagedNativeOriginAuthority(args)))
         ) {
           await reproveManagedOrigin();
         }
