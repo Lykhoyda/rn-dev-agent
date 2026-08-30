@@ -59298,18 +59298,17 @@ function assertRunnerSnapshotCacheBinding(snapshotRoot, cacheRoot) {
     throw new RunnerCacheUnavailableError("cache", cacheErrno(error2));
   }
 }
-var memoizedWdaToolchainFingerprint;
+var testWdaToolchainFingerprint;
 function wdaToolchainFingerprint() {
-  if (memoizedWdaToolchainFingerprint !== void 0)
-    return memoizedWdaToolchainFingerprint;
+  if (testWdaToolchainFingerprint !== void 0)
+    return testWdaToolchainFingerprint;
   try {
     const probe = spawnSync("xcodebuild", ["-version"], { encoding: "utf8", timeout: 15e3 });
     const match = /Xcode\s+(\S+)[\s\S]*Build version\s+(\S+)/.exec(probe.stdout ?? "");
-    memoizedWdaToolchainFingerprint = probe.status === 0 && match && /^[\w.]+$/.test(match[1]) && /^[\w.]+$/.test(match[2]) ? `xcode-${match[1]}-${match[2]}` : null;
+    return probe.status === 0 && match && /^[\w.]+$/.test(match[1]) && /^[\w.]+$/.test(match[2]) ? `xcode-${match[1]}-${match[2]}` : null;
   } catch {
-    memoizedWdaToolchainFingerprint = null;
+    return null;
   }
-  return memoizedWdaToolchainFingerprint;
 }
 function persistentWdaStoreBuildsRoot(platformKey = nodePlatformKey()) {
   const fingerprint = wdaToolchainFingerprint();
@@ -59342,7 +59341,7 @@ function isCompleteWdaBuild(keyDir) {
         return false;
       try {
         const executable = lstatSync7(join25(products, entry.name, name, name.slice(0, -".app".length)));
-        return executable.isFile() && !executable.isSymbolicLink();
+        return executable.isFile() && !executable.isSymbolicLink() && (executable.mode & 73) !== 0;
       } catch {
         return false;
       }

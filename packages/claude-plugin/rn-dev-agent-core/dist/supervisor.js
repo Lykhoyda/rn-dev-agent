@@ -71718,16 +71718,15 @@ function assertRunnerSnapshotCacheBinding(snapshotRoot, cacheRoot) {
   }
 }
 function wdaToolchainFingerprint() {
-  if (memoizedWdaToolchainFingerprint !== void 0)
-    return memoizedWdaToolchainFingerprint;
+  if (testWdaToolchainFingerprint !== void 0)
+    return testWdaToolchainFingerprint;
   try {
     const probe = spawnSync3("xcodebuild", ["-version"], { encoding: "utf8", timeout: 15e3 });
     const match = /Xcode\s+(\S+)[\s\S]*Build version\s+(\S+)/.exec(probe.stdout ?? "");
-    memoizedWdaToolchainFingerprint = probe.status === 0 && match && /^[\w.]+$/.test(match[1]) && /^[\w.]+$/.test(match[2]) ? `xcode-${match[1]}-${match[2]}` : null;
+    return probe.status === 0 && match && /^[\w.]+$/.test(match[1]) && /^[\w.]+$/.test(match[2]) ? `xcode-${match[1]}-${match[2]}` : null;
   } catch {
-    memoizedWdaToolchainFingerprint = null;
+    return null;
   }
-  return memoizedWdaToolchainFingerprint;
 }
 function persistentWdaStoreBuildsRoot(platformKey = nodePlatformKey()) {
   const fingerprint = wdaToolchainFingerprint();
@@ -71760,7 +71759,7 @@ function isCompleteWdaBuild(keyDir) {
         return false;
       try {
         const executable = lstatSync12(join35(products, entry.name, name, name.slice(0, -".app".length)));
-        return executable.isFile() && !executable.isSymbolicLink();
+        return executable.isFile() && !executable.isSymbolicLink() && (executable.mode & 73) !== 0;
       } catch {
         return false;
       }
@@ -72093,7 +72092,7 @@ function getEngineStatus(resolvers) {
     return Promise.resolve(testStatus);
   return detect(resolvers ?? {}).catch(() => buildReplayEngineStatus("unknown-version", null, false));
 }
-var MAESTRO_RUNNER_PIN, TRUSTED_DRIFT_SHA256, ACTION_ENGINE_PIN, ACTION_ENGINE_PIN_RE, HOST_PLUGIN_ROOT, PINNED_RUNNER_INSTALL_HINT, PINNED_RUNNER_DIAGNOSE_HINT, MAESTRO_RUNNER_MIN_ANDROID_API, PRE_O_REMEDY, OLDER_SDK_TOKEN, INSTALL_REJECT_CONTEXT, REGEX_METACHARACTERS, TEXT_SELECTOR_KEYS, RELATIVE_SELECTOR_KEYS, RunnerCacheUnavailableError, memoizedWdaToolchainFingerprint, testStatus, testAttestation;
+var MAESTRO_RUNNER_PIN, TRUSTED_DRIFT_SHA256, ACTION_ENGINE_PIN, ACTION_ENGINE_PIN_RE, HOST_PLUGIN_ROOT, PINNED_RUNNER_INSTALL_HINT, PINNED_RUNNER_DIAGNOSE_HINT, MAESTRO_RUNNER_MIN_ANDROID_API, PRE_O_REMEDY, OLDER_SDK_TOKEN, INSTALL_REJECT_CONTEXT, REGEX_METACHARACTERS, TEXT_SELECTOR_KEYS, RELATIVE_SELECTOR_KEYS, RunnerCacheUnavailableError, testWdaToolchainFingerprint, testStatus, testAttestation;
 var init_engine_pin = __esm({
   "packages/rn-dev-agent-core/dist/domain/engine-pin.js"() {
     "use strict";

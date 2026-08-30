@@ -72,6 +72,10 @@ test('isCompleteWdaBuild requires the xctestrun and the test-host executable', (
     writeCompleteWdaBuild(keyDir);
     assert.equal(isCompleteWdaBuild(keyDir), true);
     const executable = wdaTestHostExecutable(keyDir);
+    chmodSync(executable, 0o644);
+    assert.equal(isCompleteWdaBuild(keyDir), false, 'a mode-stripped test host is not runnable');
+    chmodSync(executable, 0o755);
+    assert.equal(isCompleteWdaBuild(keyDir), true);
     rmSync(executable);
     assert.equal(isCompleteWdaBuild(keyDir), false);
     mkdirSync(executable);
@@ -83,6 +87,38 @@ test('isCompleteWdaBuild requires the xctestrun and the test-host executable', (
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test(
+  'a changed toolchain selects a different store slot on the very next probe',
+  { skip: process.platform === 'win32' ? 'POSIX shell shim' : false },
+  () => {
+    const shim = mkdtempSync(join(tmpdir(), 'wda-xcb-shim-'));
+    const cache = mkdtempSync(join(tmpdir(), 'wda-xcb-cache-'));
+    const previousPath = process.env.PATH;
+    const previousCache = process.env.RN_DEV_AGENT_RUNNER_CACHE;
+    _setWdaToolchainFingerprintForTest(undefined);
+    try {
+      process.env.RN_DEV_AGENT_RUNNER_CACHE = cache;
+      const fakeXcodebuild = join(shim, 'xcodebuild');
+      writeFileSync(fakeXcodebuild, '#!/bin/sh\necho "Xcode 1.0"\necho "Build version AAA1"\n');
+      chmodSync(fakeXcodebuild, 0o755);
+      process.env.PATH = `${shim}:${previousPath ?? ''}`;
+      const before = persistentWdaStoreBuildsRoot('darwin-arm64');
+      assert.match(before ?? '', /xcode-1\.0-AAA1/);
+      writeFileSync(fakeXcodebuild, '#!/bin/sh\necho "Xcode 2.0"\necho "Build version BBB2"\n');
+      const after = persistentWdaStoreBuildsRoot('darwin-arm64');
+      assert.match(after ?? '', /xcode-2\.0-BBB2/);
+      assert.notEqual(before, after);
+    } finally {
+      process.env.PATH = previousPath;
+      if (previousCache === undefined) delete process.env.RN_DEV_AGENT_RUNNER_CACHE;
+      else process.env.RN_DEV_AGENT_RUNNER_CACHE = previousCache;
+      _setWdaToolchainFingerprintForTest(undefined);
+      rmSync(shim, { recursive: true, force: true });
+      rmSync(cache, { recursive: true, force: true });
+    }
+  },
+);
 
 test(
   'consecutive iOS spawns reuse the published WDA build and controls rebuild cold',

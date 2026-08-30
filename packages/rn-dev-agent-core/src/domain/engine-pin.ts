@@ -716,27 +716,27 @@ export function assertRunnerSnapshotCacheBinding(snapshotRoot: string, cacheRoot
   }
 }
 
-let memoizedWdaToolchainFingerprint: string | null | undefined;
+let testWdaToolchainFingerprint: string | null | undefined;
 
 export function _setWdaToolchainFingerprintForTest(fingerprint: string | null | undefined): void {
-  memoizedWdaToolchainFingerprint = fingerprint;
+  testWdaToolchainFingerprint = fingerprint;
 }
 
 // Xcode/SDK identity fences the persistent store: a toolchain change lands in a
 // fresh store slot and cold-builds instead of reusing artifacts of unknown drift.
+// Probed on every call, never memoized: an xcode-select switch or in-place
+// Xcode update must change the store key for the very next spawn.
 function wdaToolchainFingerprint(): string | null {
-  if (memoizedWdaToolchainFingerprint !== undefined) return memoizedWdaToolchainFingerprint;
+  if (testWdaToolchainFingerprint !== undefined) return testWdaToolchainFingerprint;
   try {
     const probe = spawnSync('xcodebuild', ['-version'], { encoding: 'utf8', timeout: 15_000 });
     const match = /Xcode\s+(\S+)[\s\S]*Build version\s+(\S+)/.exec(probe.stdout ?? '');
-    memoizedWdaToolchainFingerprint =
-      probe.status === 0 && match && /^[\w.]+$/.test(match[1]!) && /^[\w.]+$/.test(match[2]!)
-        ? `xcode-${match[1]}-${match[2]}`
-        : null;
+    return probe.status === 0 && match && /^[\w.]+$/.test(match[1]!) && /^[\w.]+$/.test(match[2]!)
+      ? `xcode-${match[1]}-${match[2]}`
+      : null;
   } catch {
-    memoizedWdaToolchainFingerprint = null;
+    return null;
   }
-  return memoizedWdaToolchainFingerprint;
 }
 
 export function persistentWdaStoreBuildsRoot(platformKey = nodePlatformKey()): string | null {
@@ -786,7 +786,11 @@ export function isCompleteWdaBuild(keyDir: string): boolean {
               const executable = lstatSync(
                 join(products, entry.name, name, name.slice(0, -'.app'.length)),
               );
-              return executable.isFile() && !executable.isSymbolicLink();
+              return (
+                executable.isFile() &&
+                !executable.isSymbolicLink() &&
+                (executable.mode & 0o111) !== 0
+              );
             } catch {
               return false;
             }
