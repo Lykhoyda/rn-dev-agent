@@ -30,7 +30,7 @@ export function isExactPresent(treeJson: unknown, selector: string): boolean {
 // Unwrap getTree's `{ tree: <node>|{matches} }` envelope to the node(s) the
 // dispatch helpers walk. Returns the bare node for a single match, the
 // `{ matches: [...] }` wrapper for multiple, or the input unchanged when it is
-// already a node. Used at the treeFor boundary (index.ts).
+// already a node. Used at the treeFor boundary in cdp-replay-deps.ts.
 export function unwrapTree(data: unknown): unknown {
   if (!data || typeof data !== 'object') return null;
   const d = data as Record<string, unknown>;
