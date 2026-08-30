@@ -15684,37 +15684,6 @@ function loginPostconditionId(commands) {
 }
 
 // packages/rn-dev-agent-core/dist/tools/cdp-replay-dispatch.js
-function countExactMatches(treeJson, id) {
-  let matches = 0;
-  const root2 = treeJson && typeof treeJson === "object" && "tree" in treeJson ? treeJson.tree : treeJson;
-  const stack = [root2];
-  while (stack.length > 0) {
-    const node = stack.pop();
-    if (!node || typeof node !== "object")
-      continue;
-    const record = node;
-    if (record.testID === id || record.nativeID === id)
-      matches++;
-    const children = record.children ?? record.nodes ?? record.matches;
-    if (Array.isArray(children))
-      stack.push(...children);
-  }
-  return matches;
-}
-function countVisibilityMatches(treeJson, id) {
-  const treeMatches = countExactMatches(treeJson, id);
-  if (treeMatches > 0 || !treeJson || typeof treeJson !== "object")
-    return treeMatches;
-  const interactive = treeJson.interactive;
-  if (!Array.isArray(interactive))
-    return 0;
-  return interactive.filter((node) => {
-    if (!node || typeof node !== "object")
-      return false;
-    const record = node;
-    return record.testID === id || record.nativeID === id;
-  }).length;
-}
 function nodeProps(treeJson, id) {
   const stack = [treeJson];
   while (stack.length) {
@@ -15793,17 +15762,16 @@ function buildCdpDispatch(deps, signal) {
   const assertExactInteractable = async (id) => {
     const tree = await deps.treeFor(id);
     requireNotAborted();
-    const treeMatches = countExactMatches(tree, id);
-    if (treeMatches === 0)
+    const frontmost = await deps.frontmostFor(id);
+    requireNotAborted();
+    if (frontmost.matchCount === 0)
       throw new ReplayDispatchError("TESTID_NOT_FOUND", `testID "${id}" not present`, {
         failedSelector: id
       });
-    const frontmost = await deps.frontmostFor?.(id);
-    requireNotAborted();
-    const matches = frontmost ? frontmost.matchCount ?? 1 : treeMatches;
+    const matches = frontmost.matchCount ?? 1;
     if (matches > 1)
       throw new ReplayDispatchError("AMBIGUOUS_TESTID", `testID "${id}" resolves to ${matches} mounted elements`, { matchCount: matches });
-    if (frontmost && !frontmost.visible)
+    if (!frontmost.visible)
       throw new ReplayDispatchError(frontmost.code ?? "ASSERTION_FAILED", frontmost.reason ?? `testID "${id}" is mounted but not frontmost`);
     if (isDisabled(nodeProps(tree, id)))
       throw new ReplayDispatchError("INTERACTION_NOT_ACTUATED", `testID "${id}" is disabled/non-interactable`);
@@ -15823,24 +15791,23 @@ function buildCdpDispatch(deps, signal) {
       await deps.typeByTestId(id, text);
     },
     async visibility(id) {
-      const tree = await deps.treeFor(id);
-      const treeMatches = countVisibilityMatches(tree, id);
-      if (treeMatches === 0)
+      await deps.treeFor(id);
+      const frontmost = await deps.frontmostFor(id);
+      if (frontmost.matchCount === 0)
         return {
           visible: false,
           code: "TESTID_NOT_FOUND",
           reason: `testID "${id}" not present in the React tree`,
           meta: { failedSelector: id }
         };
-      const frontmost = await deps.frontmostFor?.(id);
-      const matches = frontmost ? frontmost.matchCount ?? 1 : treeMatches;
+      const matches = frontmost.matchCount ?? 1;
       if (matches > 1)
         return {
           visible: false,
           code: "AMBIGUOUS_TESTID",
           reason: `testID "${id}" resolves to ${matches} mounted elements`
         };
-      if (frontmost && !frontmost.visible)
+      if (!frontmost.visible)
         return {
           visible: false,
           code: frontmost.code ?? "ASSERTION_FAILED",

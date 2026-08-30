@@ -242,7 +242,10 @@ test('an omitted-timeout wait polls readable absence until the React target appe
       pressByTestId: async () => {},
       typeByTestId: async () => {},
       treeFor: async (id) => (++treeReads >= 3 ? { testID: id } : null),
-      frontmostFor: async () => ({ visible: true }),
+      frontmostFor: async () =>
+        treeReads >= 3
+          ? { visible: true, matchCount: 1 }
+          : { visible: false, matchCount: 0, reason: 'testID is not mounted' },
       launchApp: async () => {},
       settle: async () => {},
     },
@@ -266,6 +269,7 @@ test('an omitted-timeout wait preserves unreadable component-tree evidence', asy
           error: 'Component tree connection timed out',
           meta: { reconnectAttempted: true },
         }),
+      frontmostFor: async () => ({ visible: false }),
       launchApp: async () => {},
       settle: async () => {},
     },
@@ -290,7 +294,7 @@ test('ordinary missing React testID stays TESTID_NOT_FOUND without WDA', async (
       pressByTestId: async () => {},
       typeByTestId: async () => {},
       treeFor: async () => null,
-      frontmostFor: async () => ({ visible: false }),
+      frontmostFor: async () => ({ visible: false, matchCount: 0 }),
       launchApp: async () => {},
       settle: async () => {},
     }),
@@ -321,7 +325,8 @@ test('React stage failures retain completed tap and launch evidence', async () =
       pressByTestId: async (id) => calls.push(`press:${id}`),
       typeByTestId: async () => {},
       treeFor: async (id) => (id === 'missing' ? { tree: {} } : { testID: id }),
-      frontmostFor: async () => ({ visible: true }),
+      frontmostFor: async (id) =>
+        id === 'missing' ? { visible: false, matchCount: 0 } : { visible: true },
       launchApp: async () => calls.push('launch'),
       settle: async () => {},
     }),
@@ -1326,7 +1331,10 @@ test('a partitioned saved flow resumes at an omitted-timeout wait without replay
         treeReads += 1;
         return treeReads >= 3 ? { testID: id } : null;
       },
-      frontmostFor: async () => ({ visible: true }),
+      frontmostFor: async () =>
+        treeReads >= 3
+          ? { visible: true, matchCount: 1 }
+          : { visible: false, matchCount: 0, reason: 'testID is not mounted' },
       launchApp: async () => {},
       settle: async () => {},
     }),
@@ -1914,7 +1922,7 @@ test('partitioned React failures retain prior native proof evidence', async () =
       pressByTestId: async () => {},
       typeByTestId: async () => {},
       treeFor: async () => null,
-      frontmostFor: async () => ({ visible: false }),
+      frontmostFor: async () => ({ visible: false, matchCount: 0 }),
       launchApp: async () => {},
       settle: async () => {},
     }),

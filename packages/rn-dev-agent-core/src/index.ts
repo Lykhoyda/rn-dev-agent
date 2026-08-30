@@ -397,7 +397,7 @@ const makeReplayDeps = (_args?: unknown, signal?: AbortSignal): CdpReplayDeps | 
       if (d && typeof d === 'object' && '__agent_truncated' in d) {
         env = await fetchTree(true);
       }
-      const data = replayTreeData(env, id);
+      const data = replayTreeData(env);
       return unwrapTree(data);
     },
     frontmostFor: async (id: string) => {

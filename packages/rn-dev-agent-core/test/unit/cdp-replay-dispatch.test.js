@@ -1,27 +1,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  collectTestIds,
-  isExactPresent,
   buildCdpDispatch,
   replayTreeData,
   runCdpReplayCommands,
   unwrapTree,
 } from '../../dist/tools/cdp-replay-dispatch.js';
 
-const tree = {
-  name: 'View',
-  testID: 'screen',
-  children: [
-    { name: 'SubmitButton', testID: 'tab-tasks', children: [] },
-    { name: 'Text', accessibilityLabel: 'tab-tasks-label', children: [] },
-  ],
-};
-
 // Contract: the REAL __RN_AGENT.getTree() payload wraps the node under `.tree`
-// (single match) or `.tree.matches[]` (multi match). The oracle must see
-// testIDs through these wrappers — the boundary bug where it didn't made the
-// fallback inert in production despite a green unit suite.
+// (single match) or `.tree.matches[]` (multi match).
 const GETTREE_SINGLE = { tree: { testID: 'fab-create-task', children: [] }, totalNodes: 1 };
 const GETTREE_MULTI = {
   tree: {
@@ -32,33 +19,6 @@ const GETTREE_MULTI = {
   },
   totalNodes: 2,
 };
-
-test('isExactPresent sees a testID through the real getTree `{ tree: <node> }` wrapper', () => {
-  assert.equal(isExactPresent(GETTREE_SINGLE, 'fab-create-task'), true);
-  assert.equal(isExactPresent(GETTREE_SINGLE, 'nope'), false);
-});
-
-test('isExactPresent sees testIDs through the `{ tree: { matches: [...] } }` multi-match wrapper', () => {
-  assert.equal(isExactPresent(GETTREE_MULTI, 'tab-feed'), true);
-  assert.equal(isExactPresent(GETTREE_MULTI, 'tab-tasks'), true);
-  assert.equal(isExactPresent(GETTREE_MULTI, 'tab'), false); // substring, not verbatim
-});
-
-test('buildCdpDispatch counts the filtered tree once when the interactive digest repeats it', async () => {
-  const calls = [];
-  const dispatch = buildCdpDispatch({
-    pressByTestId: async (id) => calls.push(id),
-    typeByTestId: async () => {},
-    treeFor: async () => ({
-      tree: { testID: 'quick-add-fab', children: [] },
-      interactive: [{ testID: 'quick-add-fab' }],
-    }),
-    launchApp: async () => {},
-    settle: async () => {},
-  });
-  await dispatch.press('quick-add-fab');
-  assert.deepEqual(calls, ['quick-add-fab']);
-});
 
 test('buildCdpDispatch accepts propagated fiber matches collapsed by the frontmost oracle', async () => {
   const calls = [];
@@ -76,40 +36,81 @@ test('buildCdpDispatch accepts propagated fiber matches collapsed by the frontmo
   assert.deepEqual(calls, ['welcome']);
 });
 
-test('buildCdpDispatch uses a complete interactive fallback only for visibility', async () => {
-  let mutations = 0;
+test('visibility trusts the exact-ID oracle over substring-filtered tree evidence', async () => {
+  // A screen name substring-matches the selector, so the filtered tree is a
+  // complete non-null tree WITHOUT the exact testID. The pre-oracle gate threw
+  // EVAL_FAILED here and killed the timed wait on its first poll (review-22).
+  let mounted = false;
   const dispatch = buildCdpDispatch({
-    pressByTestId: async () => {
-      mutations += 1;
-    },
+    pressByTestId: async () => {},
     typeByTestId: async () => {},
     treeFor: async () =>
       unwrapTree(
-        replayTreeData(
-          {
-            ok: true,
-            data: { interactive: [{ testID: 'otp' }] },
-            meta: {
-              treeVerdict: {
-                state: 'ok',
-                path: 'interactive',
-                reasons: [],
-                rootsSeeded: 1,
-                droppedSubtrees: 0,
-                collapsedChildLists: 0,
-              },
+        replayTreeData({
+          ok: true,
+          data: { tree: { name: 'OtpScreen', children: [] } },
+          meta: {
+            treeVerdict: {
+              state: 'ok',
+              path: 'filter',
+              reasons: [],
+              rootsSeeded: 1,
+              complete: true,
+              droppedSubtrees: 0,
+              collapsedChildLists: 0,
             },
           },
-          'otp',
-        ),
+        }),
       ),
-    frontmostFor: async () => ({ visible: true }),
+    frontmostFor: async () =>
+      mounted
+        ? { visible: true, matchCount: 1 }
+        : { visible: false, matchCount: 0, reason: 'testID is not mounted' },
     launchApp: async () => {},
     settle: async () => {},
   });
+  const absent = await dispatch.visibility('otp');
+  assert.equal(absent.visible, false);
+  assert.equal(absent.code, 'TESTID_NOT_FOUND');
+  assert.equal(absent.meta?.failedSelector, 'otp');
+  mounted = true;
   assert.deepEqual(await dispatch.visibility('otp'), { visible: true });
-  await assert.rejects(dispatch.press('otp'), /not present/);
-  assert.equal(mutations, 0);
+});
+
+test('exact presence despite incomplete descendants proceeds to the frontmost decision', async () => {
+  const dispatch = buildCdpDispatch({
+    pressByTestId: async () => {},
+    typeByTestId: async () => {},
+    treeFor: async () =>
+      unwrapTree(
+        replayTreeData({
+          ok: true,
+          data: { tree: { testID: 'otp', children: [] } },
+          meta: {
+            treeVerdict: {
+              state: 'ok',
+              path: 'filter',
+              reasons: [],
+              rootsSeeded: 2,
+              complete: false,
+              droppedSubtrees: 1,
+              collapsedChildLists: 0,
+            },
+          },
+        }),
+      ),
+    frontmostFor: async () => ({
+      visible: false,
+      reason: 'testID is ambiguous across mounted React trees',
+      matchCount: 2,
+    }),
+    launchApp: async () => {},
+    settle: async () => {},
+  });
+  const verdict = await dispatch.visibility('otp');
+  assert.equal(verdict.visible, false);
+  assert.equal(verdict.code, 'AMBIGUOUS_TESTID');
+  assert.match(verdict.reason ?? '', /resolves to 2 mounted elements/);
 });
 
 test('buildCdpDispatch revalidates a retained input target before mutation', async () => {
@@ -128,12 +129,17 @@ test('buildCdpDispatch revalidates a retained input target before mutation', asy
   assert.equal(mutations, 0);
 });
 
-test('buildCdpDispatch refuses two distinct filtered tree matches as ambiguous', async () => {
+test('buildCdpDispatch refuses duplicate oracle matches as ambiguous', async () => {
   const dispatch = buildCdpDispatch({
     pressByTestId: async () => {},
     typeByTestId: async () => {},
     treeFor: async () => ({
       tree: { matches: [{ testID: 'duplicate' }, { testID: 'duplicate' }] },
+    }),
+    frontmostFor: async () => ({
+      visible: false,
+      reason: 'testID is ambiguous across mounted React trees',
+      matchCount: 2,
     }),
     launchApp: async () => {},
     settle: async () => {},
@@ -154,80 +160,9 @@ test('unwrapTree returns the bare node for a single match and the matches wrappe
   assert.deepEqual(unwrapTree({ testID: 'x', children: [] }), { testID: 'x', children: [] });
 });
 
-test('replayTreeData accepts exact presence independently and complete filtered absence', () => {
-  const completeFilterVerdict = {
-    state: 'ok',
-    path: 'filter',
-    reasons: [],
-    rootsSeeded: 1,
-    complete: true,
-    droppedSubtrees: 0,
-    collapsedChildLists: 0,
-  };
-  assert.deepEqual(
-    replayTreeData(
-      {
-        ok: true,
-        data: { tree: { testID: 'otp', children: [] } },
-        meta: { treeVerdict: { ...completeFilterVerdict, complete: false, droppedSubtrees: 1 } },
-      },
-      'otp',
-    ),
-    { tree: { testID: 'otp', children: [] } },
-  );
-  assert.deepEqual(
-    replayTreeData(
-      {
-        ok: true,
-        data: { tree: null },
-        meta: { treeVerdict: completeFilterVerdict },
-      },
-      'missing',
-    ),
-    { tree: null },
-  );
-  assert.deepEqual(
-    replayTreeData(
-      {
-        ok: true,
-        data: { interactive: [{ testID: 'otp' }] },
-        meta: {
-          treeVerdict: {
-            state: 'degraded',
-            path: 'interactive',
-            reasons: ['scan-budget-exhausted'],
-            rootsSeeded: 1,
-            droppedSubtrees: 0,
-            collapsedChildLists: 0,
-          },
-        },
-      },
-      'otp',
-    ),
-    { interactive: [{ testID: 'otp' }] },
-  );
-  assert.throws(
-    () =>
-      replayTreeData(
-        {
-          ok: true,
-          data: { tree: null },
-          meta: {
-            treeVerdict: {
-              ...completeFilterVerdict,
-              state: 'degraded',
-              complete: false,
-              reasons: ['scan-budget-exhausted'],
-            },
-          },
-        },
-        'missing',
-      ),
-    (error) => error.code === 'EVAL_FAILED' && error.meta?.treeEnvelope?.incomplete === true,
-  );
-});
-
-test('replayTreeData refuses filtered evidence that cannot prove exact-id absence', () => {
+test('replayTreeData returns readable envelopes without exact-id verdict gating', () => {
+  // Exact-ID presence/absence is oracle-owned; the substring-filtered tree may
+  // no longer refuse readable data based on verdict quality or match content.
   const treeVerdict = {
     state: 'ok',
     path: 'filter',
@@ -238,10 +173,20 @@ test('replayTreeData refuses filtered evidence that cannot prove exact-id absenc
     collapsedChildLists: 0,
   };
   for (const envelope of [
+    { ok: true, data: { tree: { testID: 'otp', children: [] } }, meta: { treeVerdict } },
+    { ok: true, data: { tree: { name: 'otp-container', children: [] } }, meta: { treeVerdict } },
+    { ok: true, data: { tree: null }, meta: { treeVerdict } },
     {
       ok: true,
-      data: { tree: { name: 'otp-container', children: [] } },
-      meta: { treeVerdict },
+      data: { tree: null },
+      meta: {
+        treeVerdict: {
+          ...treeVerdict,
+          state: 'degraded',
+          complete: false,
+          reasons: ['scan-budget-exhausted'],
+        },
+      },
     },
     {
       ok: true,
@@ -250,31 +195,16 @@ test('replayTreeData refuses filtered evidence that cannot prove exact-id absenc
     },
     {
       ok: true,
-      data: { tree: null },
-      meta: { treeVerdict: { ...treeVerdict, complete: false, collapsedChildLists: 1 } },
-    },
-    {
-      ok: true,
-      data: { tree: null },
-      meta: { treeVerdict: { ...treeVerdict, rootsSeeded: 0 } },
-    },
-    {
-      ok: true,
-      data: { tree: null },
-      meta: { treeVerdict: { ...treeVerdict, complete: undefined } },
-    },
-    {
-      ok: true,
-      data: {
-        tree: { matches: Array.from({ length: 10 }, () => ({ testID: 'otp' })) },
-      },
+      data: { tree: { matches: Array.from({ length: 10 }, () => ({ testID: 'otp' })) } },
       meta: { treeVerdict },
     },
+    {
+      ok: true,
+      data: { interactive: [{ testID: 'otp' }] },
+      meta: { treeVerdict: { ...treeVerdict, path: 'interactive' } },
+    },
   ]) {
-    assert.throws(
-      () => replayTreeData(envelope, 'otp'),
-      (error) => error.code === 'EVAL_FAILED' && error.meta?.treeEnvelope?.incomplete === true,
-    );
+    assert.deepEqual(replayTreeData(envelope), envelope.data);
   }
 });
 
@@ -363,7 +293,7 @@ test('React replay refuses helper-truncated filtered evidence', async () => {
   assert.equal(replay.failureMeta?.treeEnvelope?.truncated, true);
 });
 
-test('React replay refuses budget-exhausted absence as incomplete evidence', async () => {
+test('React replay refuses oracle budget exhaustion distinctly from absence', async () => {
   const replay = await runCdpReplayCommands(
     [{ extendedWaitUntil: { visible: { id: 'otp' }, timeout: 250 } }],
     {},
@@ -382,14 +312,41 @@ test('React replay refuses budget-exhausted absence as incomplete evidence', asy
             },
           },
         }),
+      frontmostFor: async () => ({
+        visible: false,
+        code: 'ASSERTION_FAILED',
+        reason: 'frontmost testID scan exceeded its bounded React-tree budget',
+      }),
       launchApp: async () => {},
       settle: async () => {},
     },
   );
   assert.equal(replay.passed, false);
-  assert.equal(replay.failureCode, 'EVAL_FAILED');
-  assert.equal(replay.failureMeta?.treeEnvelope?.incomplete, true);
+  assert.equal(replay.failureCode, 'ASSERTION_FAILED');
+  assert.match(replay.reason ?? '', /bounded React-tree budget/);
   assert.equal(replay.failureMeta?.failedSelector, 'otp');
+});
+
+test('React replay refuses oracle renderer-coverage gaps distinctly from absence', async () => {
+  const replay = await runCdpReplayCommands(
+    [{ extendedWaitUntil: { visible: { id: 'otp' }, timeout: 250 } }],
+    {},
+    {
+      pressByTestId: async () => {},
+      typeByTestId: async () => {},
+      treeFor: async () => ({ tree: null }),
+      frontmostFor: async () => ({
+        visible: false,
+        code: 'ASSERTION_FAILED',
+        reason: 'frontmost proof cannot cover every mounted renderer',
+      }),
+      launchApp: async () => {},
+      settle: async () => {},
+    },
+  );
+  assert.equal(replay.passed, false);
+  assert.equal(replay.failureCode, 'ASSERTION_FAILED');
+  assert.match(replay.reason ?? '', /cannot cover every mounted renderer/);
 });
 
 test('React replay propagates APP_HAS_REDBOX instead of reporting a missing testID', async () => {
@@ -431,6 +388,7 @@ test('disabled-guard fires on a node found through the getTree `.tree` wrapper',
       tree: { testID: 'save', disabled: true, children: [] },
       totalNodes: 1,
     }),
+    frontmostFor: async () => ({ visible: true, matchCount: 1 }),
     launchApp: async () => {},
     settle: async () => {},
   };
@@ -443,6 +401,7 @@ test('press refuses a child beneath pointerEvents none or box-only ancestors', a
   const base = {
     pressByTestId: async () => calls.push('press'),
     typeByTestId: async () => calls.push('type'),
+    frontmostFor: async () => ({ visible: true, matchCount: 1 }),
     launchApp: async () => {},
     settle: async () => {},
   };
@@ -470,6 +429,7 @@ test('text input preserves box-none and auto ancestors but rejects hidden hit-te
       pressByTestId: async () => {},
       typeByTestId: async () => calls.push('type'),
       treeFor: async () => tree(value),
+      frontmostFor: async () => ({ visible: true, matchCount: 1 }),
       launchApp: async () => {},
       settle: async () => {},
     });
@@ -485,27 +445,13 @@ test('target box-none refuses press and type without dispatch', async () => {
     pressByTestId: async () => calls.push('press'),
     typeByTestId: async () => calls.push('type'),
     treeFor: async () => ({ tree: { testID: 'target', props: { pointerEvents: 'box-none' } } }),
+    frontmostFor: async () => ({ visible: true, matchCount: 1 }),
     launchApp: async () => {},
     settle: async () => {},
   });
   await assert.rejects(dispatch.press('target'), /target has pointerEvents="box-none"/);
   await assert.rejects(dispatch.type('target', 'value'), /target has pointerEvents="box-none"/);
   assert.deepEqual(calls, []);
-});
-
-test('isExactPresent: verbatim testID match → true', () => {
-  assert.equal(isExactPresent(tree, 'tab-tasks'), true);
-});
-test('isExactPresent: absent testID → false', () => {
-  assert.equal(isExactPresent(tree, 'tab-feed'), false);
-});
-test('isExactPresent: substring / label / name coincidence → false (not a filtered hit)', () => {
-  assert.equal(isExactPresent(tree, 'tab'), false); // substring of tab-tasks
-  assert.equal(isExactPresent(tree, 'tab-tasks-label'), false); // label, not testID
-  assert.equal(isExactPresent(tree, 'SubmitButton'), false); // component name
-});
-test('collectTestIds gathers nested testIDs', () => {
-  assert.deepEqual([...collectTestIds(tree)].sort(), ['screen', 'tab-tasks']);
 });
 
 // Regression test for #317: disabled-guard must resolve nativeID-identified nodes
@@ -518,6 +464,7 @@ function deps(tree) {
     },
     typeByTestId: async () => {},
     treeFor: async () => tree,
+    frontmostFor: async () => ({ visible: true, matchCount: 1 }),
     launchApp: async () => {},
     settle: async () => {},
   };

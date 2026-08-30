@@ -125,6 +125,7 @@ async function run() {
   let adapter: ChildProcess | undefined;
   let runnerOpened = false;
   let primaryError: unknown;
+  const cleanupErrors: Error[] = [];
   let finalStatus: Awaited<ReturnType<typeof callTool>> | undefined;
 
   try {
@@ -327,7 +328,6 @@ async function run() {
     ]);
     teardown.push(['rn_session.release', 'rn_session', { action: 'release' }]);
     const cleanup: Record<string, unknown> = {};
-    const cleanupErrors: Error[] = [];
     for (const [label, name, args] of teardown) {
       try {
         const result = await callTool(supervisor, name, args);
@@ -400,15 +400,15 @@ async function run() {
     } catch (error) {
       cleanupErrors.push(error instanceof Error ? error : new Error(String(error)));
     }
-    if (primaryError && cleanupErrors.length > 0) {
-      throw new AggregateError(
-        [primaryError, ...cleanupErrors],
-        'OTP proof failed and reverse cleanup was incomplete',
-      );
-    }
-    if (cleanupErrors.length > 0) {
-      throw new AggregateError(cleanupErrors, 'OTP proof reverse cleanup was incomplete');
-    }
+  }
+  if (primaryError && cleanupErrors.length > 0) {
+    throw new AggregateError(
+      [primaryError, ...cleanupErrors],
+      'OTP proof failed and reverse cleanup was incomplete',
+    );
+  }
+  if (cleanupErrors.length > 0) {
+    throw new AggregateError(cleanupErrors, 'OTP proof reverse cleanup was incomplete');
   }
   if (primaryError) throw primaryError;
 }

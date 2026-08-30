@@ -196,6 +196,14 @@ alive for such callers.
   allowlist: a real actions directory, or the approved `.rn-agent/actions`
   symlink to the same-repo primary corpus. `isDirectNode` still refuses
   per-file action symlinks.
+- Exact-ID visibility in CDP/JS replay has exactly one owner: the injected
+  `isTestIdFrontmost` oracle (`src/injected-helpers.ts`), consumed through
+  `frontmostFor` — it scans fibers exactly and fail-closes on renderer
+  coverage and scan budget before any absence claim (`matchCount: 0` is
+  complete readable absence; refusals carry no matchCount). `replayTreeData`
+  (`src/tools/cdp-replay-dispatch.ts`) is a readability gate only (transport,
+  redbox, truncation); `getTree(filter)` matches substrings, so never
+  reintroduce exact-ID presence/absence inference from its output.
 - Trailing-verification classification (GH #623) has exactly one owner: the
   canonical per-attempt ledger built inside `maestro_run` from per-stage
   producer artifacts (`src/domain/maestro-run-ledger.ts`, artifact reader in
