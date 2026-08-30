@@ -939,6 +939,7 @@ test('current-route ID is frontmost', () => {
 
 test('frontmost exact matches refuse incomplete renderer coverage', () => {
   const root = routeTree('coverage', 'home');
+  const rootWithoutTarget = routeTree('other', 'home');
   const sandbox = makeFrontmostSandbox(root, {
     index: 0,
     routes: [{ name: 'home' }],
@@ -965,13 +966,18 @@ test('frontmost exact matches refuse incomplete renderer coverage', () => {
   };
   const unscannedRegistry = {
     renderers: {
-      keys: () => new Map([[1, {}]]).keys(),
+      keys: () => new Map([[40, {}]]).keys(),
       forEach: (callback: (value: object, id: number) => void) => {
         callback({}, 1);
+        callback({}, 30);
         callback({}, 40);
       },
     },
-    getFiberRoots: (id: number) => (id === 1 ? new Set([{ current: root }]) : new Set()),
+    getFiberRoots: (id: number) => {
+      if (id === 1) return new Set([{ current: rootWithoutTarget }]);
+      if (id === 30) return new Set([{ current: root }]);
+      return new Set();
+    },
   };
   for (const hook of [incompleteRegistry, rendererError, unscannedRegistry]) {
     sandbox.__REACT_DEVTOOLS_GLOBAL_HOOK__ = hook;

@@ -160,6 +160,7 @@ test('replayTreeData accepts exact presence independently and complete filtered 
     path: 'filter',
     reasons: [],
     rootsSeeded: 1,
+    complete: true,
     droppedSubtrees: 0,
     collapsedChildLists: 0,
   };
@@ -168,7 +169,7 @@ test('replayTreeData accepts exact presence independently and complete filtered 
       {
         ok: true,
         data: { tree: { testID: 'otp', children: [] } },
-        meta: { treeVerdict: { ...completeFilterVerdict, droppedSubtrees: 1 } },
+        meta: { treeVerdict: { ...completeFilterVerdict, complete: false, droppedSubtrees: 1 } },
       },
       'otp',
     ),
@@ -215,6 +216,7 @@ test('replayTreeData accepts exact presence independently and complete filtered 
             treeVerdict: {
               ...completeFilterVerdict,
               state: 'degraded',
+              complete: false,
               reasons: ['scan-budget-exhausted'],
             },
           },
@@ -231,6 +233,7 @@ test('replayTreeData refuses filtered evidence that cannot prove exact-id absenc
     path: 'filter',
     reasons: [],
     rootsSeeded: 1,
+    complete: true,
     droppedSubtrees: 0,
     collapsedChildLists: 0,
   };
@@ -243,17 +246,22 @@ test('replayTreeData refuses filtered evidence that cannot prove exact-id absenc
     {
       ok: true,
       data: { tree: null },
-      meta: { treeVerdict: { ...treeVerdict, droppedSubtrees: 1 } },
+      meta: { treeVerdict: { ...treeVerdict, complete: false, droppedSubtrees: 1 } },
     },
     {
       ok: true,
       data: { tree: null },
-      meta: { treeVerdict: { ...treeVerdict, collapsedChildLists: 1 } },
+      meta: { treeVerdict: { ...treeVerdict, complete: false, collapsedChildLists: 1 } },
     },
     {
       ok: true,
       data: { tree: null },
       meta: { treeVerdict: { ...treeVerdict, rootsSeeded: 0 } },
+    },
+    {
+      ok: true,
+      data: { tree: null },
+      meta: { treeVerdict: { ...treeVerdict, complete: undefined } },
     },
     {
       ok: true,

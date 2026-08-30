@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   normalizeSteps,
+  ReplayDispatchError,
   UnsupportedStepError,
   replayFlow,
 } from '../../dist/domain/cdp-flow-replay.js';
@@ -370,6 +371,36 @@ test('waitVisible cannot pass from an oracle result completed after its deadline
   assert.equal(result.failureCode, 'TESTID_NOT_FOUND');
   assert.equal(reads, 2);
   assert.ok(elapsedMs >= 225 && elapsedMs < 500, `deadline completed after ${elapsedMs}ms`);
+});
+
+test('waitVisible discards an oracle rejection completed after its deadline', async () => {
+  const dispatch = mockDispatch();
+  dispatch.visibility = async () => {
+    const blockedUntil = Date.now() + 30;
+    while (Date.now() < blockedUntil) {}
+    throw new ReplayDispatchError('RECONNECT_TIMEOUT', 'stale transport refusal');
+  };
+  const result = await replayFlow([{ t: 'waitVisible', id: 'late-error', timeoutMs: 5 }], dispatch);
+  assert.equal(result.passed, false);
+  assert.equal(result.failureCode, 'RUNNER_TIMEOUT');
+  assert.doesNotMatch(result.reason ?? '', /stale transport refusal/);
+});
+
+test('waitVisible preserves an oracle rejection completed before its deadline', async () => {
+  const dispatch = mockDispatch();
+  dispatch.visibility = async () => {
+    throw new ReplayDispatchError('RECONNECT_TIMEOUT', 'current transport refusal', {
+      reconnectAttempted: true,
+    });
+  };
+  const result = await replayFlow(
+    [{ t: 'waitVisible', id: 'current-error', timeoutMs: 100 }],
+    dispatch,
+  );
+  assert.equal(result.passed, false);
+  assert.equal(result.failureCode, 'RECONNECT_TIMEOUT');
+  assert.equal(result.reason, 'current transport refusal');
+  assert.equal(result.failureMeta?.reconnectAttempted, true);
 });
 
 test('waitVisible preserves finite timeouts above Node timer range', async () => {

@@ -15161,6 +15161,10 @@ async function readVisibilityBeforeDeadline(dispatch, id, deadline) {
     Promise.resolve().then(() => dispatch.visibility(id)).then(finish, (error) => {
       if (settled)
         return;
+      if (Date.now() > deadline) {
+        finish(null);
+        return;
+      }
       settled = true;
       clearTimeout(timer);
       reject(error);

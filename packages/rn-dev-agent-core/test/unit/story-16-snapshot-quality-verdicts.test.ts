@@ -82,6 +82,7 @@ test('getTree: healthy full walk carries verdict.state ok', () => {
   assert.equal(result.verdict.path, 'full');
   assert.deepEqual(result.verdict.reasons, []);
   assert.equal(result.verdict.rootsSeeded, 1);
+  assert.equal(result.verdict.complete, true);
 });
 
 test('getTree: a throwing renderer degrades the verdict (renderer-error)', () => {
@@ -101,7 +102,7 @@ test('getTree: a throwing renderer degrades the verdict (renderer-error)', () =>
   const result = JSON.parse(sandbox.__RN_AGENT.getTree({ maxDepth: 4 }));
   assert.equal(result.verdict.state, 'degraded');
   assert.ok(result.verdict.reasons.includes('renderer-error'));
-  assert.ok(result.verdict.rendererErrors >= 1);
+  assert.equal(result.verdict.complete, false);
   assert.ok(result.tree, 'partial tree is still returned, just marked degraded');
 });
 
@@ -120,11 +121,12 @@ test('getTree: renderer registered beyond the legacy early-exit window is scanne
   );
   assert.ok(result.tree, 'tree from the high-id renderer is returned');
   assert.equal(result.verdict.state, 'ok');
+  assert.equal(result.verdict.complete, true);
   assert.ok(!result.verdict.reasons.includes('renderers-unscanned'));
   assert.deepEqual(result.verdict.unscannedRendererIds ?? [], []);
 });
 
-test('getTree: early root enumeration marks filtered absence incomplete', () => {
+test('getTree: exact renderer membership marks an unvisited target renderer incomplete', () => {
   const earlyFiber = userComp('EarlyRenderer', null);
   const lateFiber = {
     tag: 1,
@@ -136,14 +138,16 @@ test('getTree: early root enumeration marks filtered absence incomplete', () => 
   };
   const hook = {
     renderers: {
-      keys: () => {
-        throw new Error('renderer registry is incomplete');
+      keys: () => new Map([[40, {}]]).keys(),
+      forEach: (callback: (value: object, id: number) => void) => {
+        callback({}, 1);
+        callback({}, 30);
+        callback({}, 40);
       },
-      forEach: () => {},
     },
     getFiberRoots: (id: number) => {
       if (id === 1) return new Set([{ current: earlyFiber }]);
-      if (id === 9) return new Set([{ current: lateFiber }]);
+      if (id === 30) return new Set([{ current: lateFiber }]);
       return new Set();
     },
   };
@@ -151,7 +155,38 @@ test('getTree: early root enumeration marks filtered absence incomplete', () => 
   const result = JSON.parse(sandbox.__RN_AGENT.getTree({ filter: 'late-target' }));
   assert.equal(result.tree, null);
   assert.equal(result.verdict.state, 'degraded');
-  assert.deepEqual(result.verdict.reasons, ['root-enumeration-incomplete']);
+  assert.deepEqual(result.verdict.reasons, ['renderers-unscanned']);
+  assert.deepEqual(result.verdict.unscannedRendererIds, [30]);
+  assert.equal(result.verdict.complete, false);
+});
+
+test('getTree: an unenumerable renderer registry refuses complete absence', () => {
+  const root = userComp('App', null);
+  const hook = {
+    renderers: {
+      keys: () => {
+        throw new Error('renderer registry is unreadable');
+      },
+      forEach: () => {},
+    },
+    getFiberRoots: (id: number) => (id === 1 ? new Set([{ current: root }]) : new Set()),
+  };
+  const sandbox = createSandbox({ hook });
+  const result = JSON.parse(sandbox.__RN_AGENT.getTree({ filter: 'missing' }));
+  assert.equal(result.tree, null);
+  assert.equal(result.verdict.state, 'degraded');
+  assert.ok(result.verdict.reasons.includes('renderer-error'));
+  assert.equal(result.verdict.complete, false);
+});
+
+test('getTree: a fully scanned filtered absence is complete', () => {
+  const sandbox = createSandbox({ fiberRoot: userComp('App', null) });
+  const result = JSON.parse(sandbox.__RN_AGENT.getTree({ filter: 'missing' }));
+  assert.equal(result.tree, null);
+  assert.equal(result.verdict.state, 'ok');
+  assert.deepEqual(result.verdict.reasons, []);
+  assert.equal(result.verdict.rootsSeeded, 1);
+  assert.equal(result.verdict.complete, true);
 });
 
 test('getTree: filter no-match after budget exhaustion is degraded, not a clean empty', () => {
@@ -165,6 +200,7 @@ test('getTree: filter no-match after budget exhaustion is degraded, not a clean 
   assert.equal(result.verdict.state, 'degraded');
   assert.ok(result.verdict.reasons.includes('scan-budget-exhausted'));
   assert.equal(result.verdict.path, 'filter');
+  assert.equal(result.verdict.complete, false);
 });
 
 test('getTree: depth-cap drops are counted in the verdict without flipping state', () => {
@@ -177,6 +213,7 @@ test('getTree: depth-cap drops are counted in the verdict without flipping state
   assert.equal(result.verdict.state, 'ok', 'a requested depth cap is not degradation');
   assert.ok(result.verdict.droppedSubtrees >= 1, 'but the drop must be visible');
   assert.equal(result.verdict.effectiveDepth, 2);
+  assert.equal(result.verdict.complete, false);
 });
 
 test('getTree: interactiveOnly cap marks the verdict degraded (scan-budget-exhausted)', () => {
@@ -207,6 +244,7 @@ test('getTree: interactiveOnly cap marks the verdict degraded (scan-budget-exhau
   assert.equal(result.verdict.state, 'degraded');
   assert.ok(result.verdict.reasons.includes('scan-budget-exhausted'));
   assert.equal(result.verdict.path, 'interactive');
+  assert.equal(result.verdict.complete, false);
 });
 
 test('getTree: missing hook fails with a no-renderer verdict', () => {
@@ -215,6 +253,7 @@ test('getTree: missing hook fails with a no-renderer verdict', () => {
   assert.ok(result.error);
   assert.equal(result.verdict.state, 'failed');
   assert.ok(result.verdict.reasons.includes('no-renderer'));
+  assert.equal(result.verdict.complete, false);
 });
 
 // ── cdp_component_tree renders the verdict as meta.treeVerdict ───────
@@ -224,7 +263,7 @@ test('component_tree: lifts the capture verdict into meta.treeVerdict', async ()
     tree: { component: 'App' },
     totalNodes: 12,
     rootsSeeded: 1,
-    verdict: { state: 'degraded', path: 'full', reasons: ['renderer-error'], rendererErrors: 1 },
+    verdict: { state: 'degraded', path: 'full', reasons: ['renderer-error'], complete: false },
   };
   const client = createMockClient({
     evaluate: async () => ({ value: JSON.stringify(payload) }),
@@ -235,6 +274,7 @@ test('component_tree: lifts the capture verdict into meta.treeVerdict', async ()
   assert.equal(env.ok, true);
   assert.equal(env.meta?.treeVerdict?.state, 'degraded');
   assert.deepEqual(env.meta?.treeVerdict?.reasons, ['renderer-error']);
+  assert.equal(env.meta?.treeVerdict?.complete, false);
   assert.equal(env.data.verdict, undefined, 'verdict renders once, in meta');
 });
 

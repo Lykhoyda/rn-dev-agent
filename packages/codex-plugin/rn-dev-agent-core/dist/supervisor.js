@@ -63917,7 +63917,7 @@ var HELPERS_VERSION, INJECTED_HELPERS, NETWORK_HOOK_SCRIPT, NETWORK_CB_BUFFERED_
 var init_injected_helpers = __esm({
   "packages/rn-dev-agent-core/dist/injected-helpers.js"() {
     "use strict";
-    HELPERS_VERSION = 47;
+    HELPERS_VERSION = 48;
     INJECTED_HELPERS = `
 (function() {
   var __HELPERS_VERSION__ = ${HELPERS_VERSION};
@@ -63964,21 +63964,77 @@ var init_injected_helpers = __esm({
 
   // Reset by every root-iteration pass; only valid when read synchronously
   // after the pass that produced the tree (many helpers share the iterators).
-  // complete is true only when the renderer-ID loop finished without the
+  // finished is true only when the renderer-ID loop finished without the
   // empty-streak early-exit \u2014 empty roots are mounting evidence only then
   // (GH #789).
-  var lastRootScan = { rendererErrors: 0, probedUpTo: 0, complete: false };
+  var lastRootScan = { rendererErrors: 0, visited: {}, finished: false };
 
-  function computeUnscannedRendererIds() {
-    try {
-      var hook = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
-      if (!hook || !hook.renderers || typeof hook.renderers.forEach !== 'function') return [];
-      var out = [];
-      hook.renderers.forEach(function(_v, id) {
-        if (typeof id === 'number' && id > lastRootScan.probedUpTo) out.push(id);
-      });
-      return out;
-    } catch (_) { return []; }
+  function rootScanCoverage() {
+    var reasons = [];
+    var registryIds = [];
+    var hook = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
+    var renderers = hook && hook.renderers;
+    if (renderers) {
+      if (typeof renderers.keys !== 'function' || typeof renderers.forEach !== 'function') {
+        registryIds = null;
+      } else {
+        try {
+          var iterator = renderers.keys();
+          if (!iterator || typeof iterator.next !== 'function') {
+            registryIds = null;
+          } else {
+            var step;
+            var iterations = 0;
+            while (registryIds !== null) {
+              step = iterator.next();
+              if (!step || typeof step !== 'object' || typeof step.done !== 'boolean') {
+                registryIds = null;
+                break;
+              }
+              if (step.done) break;
+              if (++iterations > MAX_REGISTERED_RENDERER_IDS || typeof step.value !== 'number') {
+                registryIds = null;
+                break;
+              }
+              if (registryIds.indexOf(step.value) === -1) registryIds.push(step.value);
+              if (registryIds.length > MAX_REGISTERED_RENDERER_IDS) registryIds = null;
+            }
+          }
+        } catch (_) {
+          registryIds = null;
+        }
+        if (registryIds !== null) {
+          try {
+            var forEachIterations = 0;
+            renderers.forEach(function(_v, id) {
+              if (registryIds === null) return;
+              if (++forEachIterations > MAX_REGISTERED_RENDERER_IDS || typeof id !== 'number') {
+                registryIds = null;
+                return;
+              }
+              if (registryIds.indexOf(id) === -1) registryIds.push(id);
+              if (registryIds.length > MAX_REGISTERED_RENDERER_IDS) registryIds = null;
+            });
+          } catch (_) {
+            registryIds = null;
+          }
+        }
+      }
+    }
+    var addReason = function(reason) {
+      if (reasons.indexOf(reason) === -1) reasons.push(reason);
+    };
+    if (lastRootScan.rendererErrors > 0 || registryIds === null) addReason('renderer-error');
+    if (!lastRootScan.finished) addReason('root-enumeration-incomplete');
+    var unscannedRendererIds = [];
+    if (registryIds !== null) {
+      for (var i = 0; i < registryIds.length; i++) {
+        var id = registryIds[i];
+        if (!lastRootScan.visited[id]) unscannedRendererIds.push(id);
+      }
+      if (unscannedRendererIds.length > 0) addReason('renderers-unscanned');
+    }
+    return { reasons: reasons, unscannedRendererIds: unscannedRendererIds };
   }
 
   // Read the renderer IDs React DevTools actually registered. A malformed or
@@ -64005,7 +64061,7 @@ var init_injected_helpers = __esm({
   }
 
   function findActiveRenderer() {
-    lastRootScan = { rendererErrors: 0, probedUpTo: 0, complete: false };
+    lastRootScan = { rendererErrors: 0, visited: {}, finished: false };
     var hook = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
     if (!hook || typeof hook.getFiberRoots !== 'function') return null;
     var rendererIds = getRegisteredRendererIds(hook);
@@ -64016,7 +64072,7 @@ var init_injected_helpers = __esm({
     var emptyStreak = 0;
     for (var rii = 0; rii < rendererIds.length; rii++) {
       var ri = rendererIds[rii];
-      if (ri > lastRootScan.probedUpTo) lastRootScan.probedUpTo = ri;
+      lastRootScan.visited[ri] = true;
       try {
         var roots = hook.getFiberRoots(ri);
         if (roots && roots.size > 0) {
@@ -64031,7 +64087,7 @@ var init_injected_helpers = __esm({
         lastRootScan.rendererErrors++;
       }
     }
-    lastRootScan.complete = true;
+    lastRootScan.finished = true;
     return null;
   }
 
@@ -64048,7 +64104,7 @@ var init_injected_helpers = __esm({
   // native renderer loop so user-registered portals stay lower priority
   // than React's own registry.
   function iterateAllRoots(cb) {
-    lastRootScan = { rendererErrors: 0, probedUpTo: 0, complete: false };
+    lastRootScan = { rendererErrors: 0, visited: {}, finished: false };
     var hook = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
     if (hook && typeof hook.getFiberRoots === 'function') {
       var rendererIds = getRegisteredRendererIds(hook);
@@ -64060,7 +64116,7 @@ var init_injected_helpers = __esm({
       var abortedEarly = false;
       for (var rii = 0; rii < rendererIds.length; rii++) {
         var ri = rendererIds[rii];
-        if (ri > lastRootScan.probedUpTo) lastRootScan.probedUpTo = ri;
+        lastRootScan.visited[ri] = true;
         try {
           var roots = hook.getFiberRoots(ri);
           if (roots && roots.size) {
@@ -64085,7 +64141,7 @@ var init_injected_helpers = __esm({
           lastRootScan.rendererErrors++;
         }
       }
-      lastRootScan.complete = !abortedEarly;
+      if (!abortedEarly) lastRootScan.finished = true;
     }
     // GH #126 Gap B \u2014 extra-roots step. Runs AFTER the native renderer
     // loop (above) so user-registered portals are lower priority than
@@ -64321,10 +64377,12 @@ var init_injected_helpers = __esm({
       o = o || {};
       var reasons = [];
       if (o.noRenderer) reasons.push('no-renderer');
-      if (lastRootScan.rendererErrors > 0) reasons.push('renderer-error');
-      if (!lastRootScan.complete) reasons.push('root-enumeration-incomplete');
-      var unscanned = computeUnscannedRendererIds();
-      if (unscanned.length > 0) reasons.push('renderers-unscanned');
+      var coverage = rootScanCoverage();
+      for (var coverageIndex = 0; coverageIndex < coverage.reasons.length; coverageIndex++) {
+        if (reasons.indexOf(coverage.reasons[coverageIndex]) === -1) {
+          reasons.push(coverage.reasons[coverageIndex]);
+        }
+      }
       if (o.scanBudgetExhausted) reasons.push('scan-budget-exhausted');
       if (o.outputTruncated) reasons.push('output-truncated');
       var state = (o.noRenderer || o.failed) ? 'failed' : (reasons.length > 0 ? 'degraded' : 'ok');
@@ -64337,8 +64395,8 @@ var init_injected_helpers = __esm({
         effectiveDepth: maxDepth,
         droppedSubtrees: walkQuality.droppedSubtrees,
         collapsedChildLists: walkQuality.collapsedChildLists,
-        rendererErrors: lastRootScan.rendererErrors,
-        unscannedRendererIds: unscanned
+        complete: state === 'ok' && reasons.length === 0 && walkQuality.droppedSubtrees === 0 && walkQuality.collapsedChildLists === 0,
+        unscannedRendererIds: coverage.unscannedRendererIds
       };
     }
 
@@ -64802,7 +64860,8 @@ var init_injected_helpers = __esm({
       var mountHookUsable = !!(mountHook && typeof mountHook.getFiberRoots === 'function');
       var mountRoots = mountHookUsable ? findAllRootFibers() : [];
       // Only a complete, clean scan is mounting evidence.
-      var mountScanClean = mountHookUsable && lastRootScan.complete && lastRootScan.rendererErrors === 0;
+      var mountCoverage = rootScanCoverage();
+      var mountScanClean = mountHookUsable && mountCoverage.reasons.length === 0;
       if (mountScanClean && mountRoots.length === 0) {
         return JSON.stringify({
           error: 'App is still mounting \u2014 no React fiber roots exist yet (the bundle is likely still loading). Retry in ~2s.',
@@ -64810,7 +64869,7 @@ var init_injected_helpers = __esm({
           retryInMs: 2000
         });
       }
-      if (mountHookUsable && !lastRootScan.complete && mountRoots.length === 0) {
+      if (mountHookUsable && mountCoverage.reasons.indexOf('root-enumeration-incomplete') !== -1 && mountRoots.length === 0) {
         return JSON.stringify({ error: 'Navigation state not found. Is React Navigation or Expo Router installed?' });
       }
       var navFw = navDetectBundledFramework();
@@ -67610,12 +67669,8 @@ var init_injected_helpers = __esm({
         truncated: true
       });
     }
-    var unscannedRendererIds = computeUnscannedRendererIds();
-    if (
-      lastRootScan.rendererErrors > 0 ||
-      !lastRootScan.complete ||
-      unscannedRendererIds.length > 0
-    ) {
+    var coverage = rootScanCoverage();
+    if (coverage.reasons.length > 0) {
       return JSON.stringify({
         visible: false,
         code: 'ASSERTION_FAILED',
@@ -80791,6 +80846,10 @@ async function readVisibilityBeforeDeadline(dispatch, id, deadline) {
     Promise.resolve().then(() => dispatch.visibility(id)).then(finish, (error2) => {
       if (settled)
         return;
+      if (Date.now() > deadline) {
+        finish(null);
+        return;
+      }
       settled = true;
       clearTimeout(timer);
       reject(error2);
@@ -81380,9 +81439,8 @@ function replayTreeData(envelope, selector) {
   const redbox = warning === "APP_HAS_REDBOX";
   const data = envelope.data && typeof envelope.data === "object" && !Array.isArray(envelope.data) ? envelope.data : null;
   const verdict = envelope.meta?.treeVerdict && typeof envelope.meta.treeVerdict === "object" && !Array.isArray(envelope.meta.treeVerdict) ? envelope.meta.treeVerdict : null;
-  const reasons = Array.isArray(verdict?.reasons) ? verdict.reasons : [];
   const truncated = data !== null && (data.__agent_truncated === true || data.truncated === true);
-  const completeAbsenceVerdict = verdict?.state === "ok" && reasons.length === 0 && typeof verdict.rootsSeeded === "number" && verdict.rootsSeeded > 0 && verdict.droppedSubtrees === 0 && verdict.collapsedChildLists === 0;
+  const completeAbsenceVerdict = verdict?.complete === true && typeof verdict.rootsSeeded === "number" && verdict.rootsSeeded > 0;
   const filteredTree = data !== null && "tree" in data ? data.tree : void 0;
   const serializedMatches = filteredTree && typeof filteredTree === "object" && !Array.isArray(filteredTree) && Array.isArray(filteredTree.matches) ? filteredTree.matches : [];
   const exactFilteredMatch = verdict?.path === "filter" && typeof selector === "string" && data !== null && "tree" in data && serializedMatches.length < 10 && isExactPresent(filteredTree, selector);

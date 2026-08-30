@@ -58,15 +58,11 @@ export function replayTreeData(envelope: ReplayTreeEnvelope, selector?: string):
     !Array.isArray(envelope.meta.treeVerdict)
       ? (envelope.meta.treeVerdict as Record<string, unknown>)
       : null;
-  const reasons = Array.isArray(verdict?.reasons) ? verdict.reasons : [];
   const truncated = data !== null && (data.__agent_truncated === true || data.truncated === true);
   const completeAbsenceVerdict =
-    verdict?.state === 'ok' &&
-    reasons.length === 0 &&
+    verdict?.complete === true &&
     typeof verdict.rootsSeeded === 'number' &&
-    verdict.rootsSeeded > 0 &&
-    verdict.droppedSubtrees === 0 &&
-    verdict.collapsedChildLists === 0;
+    verdict.rootsSeeded > 0;
   const filteredTree = data !== null && 'tree' in data ? data.tree : undefined;
   const serializedMatches =
     filteredTree &&
