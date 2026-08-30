@@ -26,6 +26,7 @@ import {
   rmSync,
   symlinkSync,
   unlinkSync,
+  writeFileSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
@@ -802,13 +803,90 @@ export function isCompleteWdaBuild(keyDir: string): boolean {
   }
 }
 
-function copyWdaBuildKey(sourceKey: string, stagedKey: string): boolean {
-  cpSync(sourceKey, stagedKey, {
+function removeInjectedWdaPort(xctestrunPath: string): boolean {
+  const source = readFileSync(xctestrunPath, 'utf8');
+  const normalized = source.replace(
+    /[ \t]*<key>USE_PORT<\/key>[\t\r\n ]*<string>[0-9]+<\/string>[ \t]*(?:\r?\n)?/g,
+    '',
+  );
+  if (normalized.includes('USE_PORT')) return false;
+  if (normalized !== source) writeFileSync(xctestrunPath, normalized);
+  return true;
+}
+
+function isRealDirectory(path: string): boolean {
+  try {
+    const stat = lstatSync(path);
+    return stat.isDirectory() && !stat.isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
+
+function copyReusableWdaBuild(sourceKey: string, stagedKey: string): boolean {
+  const sourceProducts = join(sourceKey, 'DerivedData', 'Build', 'Products');
+  if (
+    !isRealDirectory(sourceKey) ||
+    !isRealDirectory(join(sourceKey, 'DerivedData')) ||
+    !isRealDirectory(join(sourceKey, 'DerivedData', 'Build')) ||
+    !isRealDirectory(sourceProducts)
+  ) {
+    return false;
+  }
+  const stagedProducts = join(stagedKey, 'DerivedData', 'Build', 'Products');
+  mkdirSync(dirname(stagedProducts), { recursive: true });
+  cpSync(sourceProducts, stagedProducts, {
     recursive: true,
     mode: constants.COPYFILE_FICLONE,
     verbatimSymlinks: true,
   });
+  for (const entry of readdirSync(stagedProducts, { withFileTypes: true })) {
+    if (
+      entry.isFile() &&
+      entry.name.endsWith('.xctestrun') &&
+      !removeInjectedWdaPort(join(stagedProducts, entry.name))
+    ) {
+      return false;
+    }
+  }
   return isCompleteWdaBuild(stagedKey);
+}
+
+function isReusableStoredWdaBuild(keyDir: string): boolean {
+  try {
+    if (!isCompleteWdaBuild(keyDir)) return false;
+    const keyEntries = readdirSync(keyDir, { withFileTypes: true });
+    const derivedData = keyEntries[0];
+    if (
+      keyEntries.length !== 1 ||
+      derivedData?.name !== 'DerivedData' ||
+      !derivedData.isDirectory()
+    ) {
+      return false;
+    }
+    const derivedDataEntries = readdirSync(join(keyDir, 'DerivedData'), { withFileTypes: true });
+    const build = derivedDataEntries[0];
+    if (derivedDataEntries.length !== 1 || build?.name !== 'Build' || !build.isDirectory()) {
+      return false;
+    }
+    const buildEntries = readdirSync(join(keyDir, 'DerivedData', 'Build'), {
+      withFileTypes: true,
+    });
+    const productsEntry = buildEntries[0];
+    if (
+      buildEntries.length !== 1 ||
+      productsEntry?.name !== 'Products' ||
+      !productsEntry.isDirectory()
+    ) {
+      return false;
+    }
+    const products = join(keyDir, 'DerivedData', 'Build', 'Products');
+    return readdirSync(products, { withFileTypes: true })
+      .filter((entry) => entry.isFile() && entry.name.endsWith('.xctestrun'))
+      .every((entry) => !readFileSync(join(products, entry.name), 'utf8').includes('USE_PORT'));
+  } catch {
+    return false;
+  }
 }
 
 function seedRunnerSnapshotCacheFromStore(cacheRoot: string): number {
@@ -824,7 +902,7 @@ function seedRunnerSnapshotCacheFromStore(cacheRoot: string): number {
       mkdirSync(target, { recursive: true });
       const stagedKey = join(target, `.seed-${entry.name}`);
       try {
-        if (copyWdaBuildKey(sourceKey, stagedKey)) {
+        if (copyReusableWdaBuild(sourceKey, stagedKey)) {
           renameSync(stagedKey, join(target, entry.name));
           seeded += 1;
         } else {
@@ -851,12 +929,12 @@ function publishRunnerSnapshotCacheToStore(cacheRoot: string): number {
       const sourceKey = join(spawnBuilds, entry.name);
       if (!isCompleteWdaBuild(sourceKey)) continue;
       const storeKey = join(storeBuilds, entry.name);
-      if (isCompleteWdaBuild(storeKey)) continue;
+      if (isReusableStoredWdaBuild(storeKey)) continue;
       mkdirSync(storeBuilds, { recursive: true, mode: 0o700 });
       const stage = mkdtempSync(join(storeBuilds, '.stage-'));
       try {
         const stagedKey = join(stage, entry.name);
-        if (copyWdaBuildKey(sourceKey, stagedKey)) {
+        if (copyReusableWdaBuild(sourceKey, stagedKey)) {
           if (existsSync(storeKey)) {
             // Atomic evict: readers never observe a half-deleted key path.
             const evicted = join(stage, 'evicted');

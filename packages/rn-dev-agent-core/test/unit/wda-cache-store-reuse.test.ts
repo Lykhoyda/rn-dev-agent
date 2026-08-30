@@ -54,11 +54,38 @@ function wdaTestHostExecutable(keyDir: string): string {
   );
 }
 
-function writeCompleteWdaBuild(keyDir: string): void {
+function wdaXctestrunPath(keyDir: string): string {
+  return join(
+    keyDir,
+    'DerivedData',
+    'Build',
+    'Products',
+    'WebDriverAgentRunner_iphonesimulator26.5-arm64.xctestrun',
+  );
+}
+
+function wdaXctestrun(port?: number): string {
+  const environment =
+    port === undefined ? '' : `\n\t\t\t<key>USE_PORT</key>\n\t\t\t<string>${port}</string>`;
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+\t<key>WebDriverAgentRunner</key>
+\t<dict>
+\t\t<key>EnvironmentVariables</key>
+\t\t<dict>${environment}
+\t\t</dict>
+\t</dict>
+</dict>
+</plist>
+`;
+}
+
+function writeCompleteWdaBuild(keyDir: string, port?: number): void {
   const products = join(keyDir, 'DerivedData', 'Build', 'Products');
   const app = join(products, 'Debug-iphonesimulator', 'WebDriverAgentRunner-Runner.app');
   mkdirSync(app, { recursive: true });
-  writeFileSync(join(products, 'WebDriverAgentRunner_iphonesimulator26.5-arm64.xctestrun'), 'p');
+  writeFileSync(wdaXctestrunPath(keyDir), wdaXctestrun(port));
   const executable = wdaTestHostExecutable(keyDir);
   writeFileSync(executable, 'binary');
   chmodSync(executable, 0o755);
@@ -188,10 +215,20 @@ test(
       // Cold run: cache starts unseeded, the "runner" builds, publish captures it.
       await runIos((cacheLink) => {
         assert.equal(existsSync(join(cacheLink, 'wda-builds')), false);
-        writeCompleteWdaBuild(join(cacheLink, 'wda-builds', WDA_KEY));
+        const keyDir = join(cacheLink, 'wda-builds', WDA_KEY);
+        writeCompleteWdaBuild(keyDir, 8447);
+        mkdirSync(join(keyDir, 'logs'), { recursive: true });
+        writeFileSync(join(keyDir, 'logs', 'runner.log'), 'device output');
+        mkdirSync(join(keyDir, 'DerivedData', 'Logs', 'Test'), { recursive: true });
+        writeFileSync(join(keyDir, 'DerivedData', 'Logs', 'Test', 'run.xcresult'), 'run output');
+        writeFileSync(join(keyDir, 'session.json'), '{"device":"current"}');
       });
-      assert.equal(isCompleteWdaBuild(join(storeBuilds!, WDA_KEY)), true);
-      assert.notEqual(statSync(wdaTestHostExecutable(join(storeBuilds!, WDA_KEY))).mode & 0o111, 0);
+      const storeKey = join(storeBuilds!, WDA_KEY);
+      assert.equal(isCompleteWdaBuild(storeKey), true);
+      assert.notEqual(statSync(wdaTestHostExecutable(storeKey)).mode & 0o111, 0);
+      assert.doesNotMatch(readFileSync(wdaXctestrunPath(storeKey), 'utf8'), /USE_PORT|8447/);
+      assert.deepEqual(readdirSync(storeKey), ['DerivedData']);
+      assert.equal(existsSync(join(storeKey, 'DerivedData', 'Logs')), false);
 
       // Warm run: the spawn cache is pre-seeded before the runner starts, and
       // the seeded xctestrun stays writable — the runner rewrites it to inject
@@ -204,12 +241,25 @@ test(
         'WebDriverAgentRunner_iphonesimulator26.5-arm64.xctestrun',
       ] as const;
       let warmSeeded = false;
+      let warmSeedOmittedRunState = false;
+      let warmSeedHasNoPriorPort = false;
       await runIos((cacheLink) => {
-        warmSeeded = isCompleteWdaBuild(join(cacheLink, 'wda-builds', WDA_KEY));
-        writeFileSync(join(cacheLink, 'wda-builds', WDA_KEY, ...xctestrunTail), 'port-injected');
+        const keyDir = join(cacheLink, 'wda-builds', WDA_KEY);
+        warmSeeded = isCompleteWdaBuild(keyDir);
+        warmSeedOmittedRunState =
+          !existsSync(join(keyDir, 'logs')) && !existsSync(join(keyDir, 'DerivedData', 'Logs'));
+        warmSeedHasNoPriorPort = !/USE_PORT|8447/.test(
+          readFileSync(join(keyDir, ...xctestrunTail), 'utf8'),
+        );
+        writeFileSync(join(keyDir, ...xctestrunTail), wdaXctestrun(8558));
       });
       assert.equal(warmSeeded, true);
-      assert.equal(readFileSync(join(storeBuilds!, WDA_KEY, ...xctestrunTail), 'utf8'), 'p');
+      assert.equal(warmSeedOmittedRunState, true);
+      assert.equal(warmSeedHasNoPriorPort, true);
+      assert.doesNotMatch(
+        readFileSync(join(storeBuilds!, WDA_KEY, ...xctestrunTail), 'utf8'),
+        /USE_PORT|8447|8558/,
+      );
 
       // The per-spawn caches are still removed; only the store persists.
       const versionsRoot = join(cache, 'maestro-runner');

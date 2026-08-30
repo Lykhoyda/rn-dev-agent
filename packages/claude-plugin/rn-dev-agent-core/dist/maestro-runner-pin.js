@@ -8354,7 +8354,7 @@ var init_keyboard_guard = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/util/secure-state-file.js
-import { readFileSync as readFileSync10, writeFileSync as writeFileSync3, unlinkSync as unlinkSync6, mkdirSync as mkdirSync8, renameSync as renameSync4, lstatSync as lstatSync9 } from "node:fs";
+import { readFileSync as readFileSync10, writeFileSync as writeFileSync4, unlinkSync as unlinkSync6, mkdirSync as mkdirSync8, renameSync as renameSync4, lstatSync as lstatSync9 } from "node:fs";
 import { join as join12, dirname as dirname12 } from "node:path";
 import { homedir as homedir3 } from "node:os";
 function getStateDir() {
@@ -8383,7 +8383,7 @@ function readJsonStateFile(path) {
 function writeJsonStateFileAtomic(path, value) {
   mkdirSync8(dirname12(path), { recursive: true });
   const tmpPath = `${path}.tmp.${process.pid}`;
-  writeFileSync3(tmpPath, JSON.stringify(value), { encoding: "utf8", mode: 384 });
+  writeFileSync4(tmpPath, JSON.stringify(value), { encoding: "utf8", mode: 384 });
   renameSync4(tmpPath, path);
 }
 function deleteStateFile(path) {
@@ -8820,7 +8820,7 @@ var init_declared_source_contract = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/nav-graph/storage.js
-import { readFileSync as readFileSync11, writeFileSync as writeFileSync4, existsSync as existsSync12, renameSync as renameSync5, readdirSync as readdirSync5, lstatSync as lstatSync10, mkdirSync as mkdirSync9, realpathSync as realpathSync6 } from "node:fs";
+import { readFileSync as readFileSync11, writeFileSync as writeFileSync5, existsSync as existsSync12, renameSync as renameSync5, readdirSync as readdirSync5, lstatSync as lstatSync10, mkdirSync as mkdirSync9, realpathSync as realpathSync6 } from "node:fs";
 import { join as join15, dirname as dirname13 } from "node:path";
 function isRnProject(dir) {
   const pkgPath = join15(dir, "package.json");
@@ -10412,7 +10412,7 @@ import { fileURLToPath as fileURLToPath2 } from "node:url";
 init_process_birth();
 import { spawnSync } from "node:child_process";
 import { createHash as createHash2 } from "node:crypto";
-import { accessSync, chmodSync as chmodSync2, constants as constants2, copyFileSync as copyFileSync2, cpSync, existsSync as existsSync3, lstatSync as lstatSync2, mkdirSync, mkdtempSync, readFileSync as readFileSync2, readdirSync, readlinkSync, realpathSync as realpathSync2, renameSync, rmSync, symlinkSync, unlinkSync as unlinkSync2 } from "node:fs";
+import { accessSync, chmodSync as chmodSync2, constants as constants2, copyFileSync as copyFileSync2, cpSync, existsSync as existsSync3, lstatSync as lstatSync2, mkdirSync, mkdtempSync, readFileSync as readFileSync2, readdirSync, readlinkSync, realpathSync as realpathSync2, renameSync, rmSync, symlinkSync, unlinkSync as unlinkSync2, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname as dirname2, join as join2, relative, resolve, sep } from "node:path";
 import { gunzipSync } from "node:zlib";
@@ -11014,13 +11014,68 @@ function isCompleteWdaBuild(keyDir) {
     return false;
   }
 }
-function copyWdaBuildKey(sourceKey, stagedKey) {
-  cpSync(sourceKey, stagedKey, {
+function removeInjectedWdaPort(xctestrunPath) {
+  const source = readFileSync2(xctestrunPath, "utf8");
+  const normalized = source.replace(/[ \t]*<key>USE_PORT<\/key>[\t\r\n ]*<string>[0-9]+<\/string>[ \t]*(?:\r?\n)?/g, "");
+  if (normalized.includes("USE_PORT"))
+    return false;
+  if (normalized !== source)
+    writeFileSync(xctestrunPath, normalized);
+  return true;
+}
+function isRealDirectory(path) {
+  try {
+    const stat = lstatSync2(path);
+    return stat.isDirectory() && !stat.isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
+function copyReusableWdaBuild(sourceKey, stagedKey) {
+  const sourceProducts = join2(sourceKey, "DerivedData", "Build", "Products");
+  if (!isRealDirectory(sourceKey) || !isRealDirectory(join2(sourceKey, "DerivedData")) || !isRealDirectory(join2(sourceKey, "DerivedData", "Build")) || !isRealDirectory(sourceProducts)) {
+    return false;
+  }
+  const stagedProducts = join2(stagedKey, "DerivedData", "Build", "Products");
+  mkdirSync(dirname2(stagedProducts), { recursive: true });
+  cpSync(sourceProducts, stagedProducts, {
     recursive: true,
     mode: constants2.COPYFILE_FICLONE,
     verbatimSymlinks: true
   });
+  for (const entry of readdirSync(stagedProducts, { withFileTypes: true })) {
+    if (entry.isFile() && entry.name.endsWith(".xctestrun") && !removeInjectedWdaPort(join2(stagedProducts, entry.name))) {
+      return false;
+    }
+  }
   return isCompleteWdaBuild(stagedKey);
+}
+function isReusableStoredWdaBuild(keyDir) {
+  try {
+    if (!isCompleteWdaBuild(keyDir))
+      return false;
+    const keyEntries = readdirSync(keyDir, { withFileTypes: true });
+    const derivedData = keyEntries[0];
+    if (keyEntries.length !== 1 || derivedData?.name !== "DerivedData" || !derivedData.isDirectory()) {
+      return false;
+    }
+    const derivedDataEntries = readdirSync(join2(keyDir, "DerivedData"), { withFileTypes: true });
+    const build = derivedDataEntries[0];
+    if (derivedDataEntries.length !== 1 || build?.name !== "Build" || !build.isDirectory()) {
+      return false;
+    }
+    const buildEntries = readdirSync(join2(keyDir, "DerivedData", "Build"), {
+      withFileTypes: true
+    });
+    const productsEntry = buildEntries[0];
+    if (buildEntries.length !== 1 || productsEntry?.name !== "Products" || !productsEntry.isDirectory()) {
+      return false;
+    }
+    const products = join2(keyDir, "DerivedData", "Build", "Products");
+    return readdirSync(products, { withFileTypes: true }).filter((entry) => entry.isFile() && entry.name.endsWith(".xctestrun")).every((entry) => !readFileSync2(join2(products, entry.name), "utf8").includes("USE_PORT"));
+  } catch {
+    return false;
+  }
 }
 function seedRunnerSnapshotCacheFromStore(cacheRoot) {
   let seeded = 0;
@@ -11038,7 +11093,7 @@ function seedRunnerSnapshotCacheFromStore(cacheRoot) {
       mkdirSync(target, { recursive: true });
       const stagedKey = join2(target, `.seed-${entry.name}`);
       try {
-        if (copyWdaBuildKey(sourceKey, stagedKey)) {
+        if (copyReusableWdaBuild(sourceKey, stagedKey)) {
           renameSync(stagedKey, join2(target, entry.name));
           seeded += 1;
         } else {
@@ -11069,13 +11124,13 @@ function publishRunnerSnapshotCacheToStore(cacheRoot) {
       if (!isCompleteWdaBuild(sourceKey))
         continue;
       const storeKey = join2(storeBuilds, entry.name);
-      if (isCompleteWdaBuild(storeKey))
+      if (isReusableStoredWdaBuild(storeKey))
         continue;
       mkdirSync(storeBuilds, { recursive: true, mode: 448 });
       const stage = mkdtempSync(join2(storeBuilds, ".stage-"));
       try {
         const stagedKey = join2(stage, entry.name);
-        if (copyWdaBuildKey(sourceKey, stagedKey)) {
+        if (copyReusableWdaBuild(sourceKey, stagedKey)) {
           if (existsSync3(storeKey)) {
             const evicted = join2(stage, "evicted");
             renameSync(storeKey, evicted);
@@ -11471,7 +11526,7 @@ import { existsSync as existsSync9, lstatSync as lstatSync7, readFileSync as rea
 import { basename as basename4, dirname as dirname9, isAbsolute as isAbsolute4, join as join10, relative as relative3, resolve as resolve5, sep as sep6 } from "node:path";
 
 // packages/rn-dev-agent-core/dist/domain/sidecar-io.js
-import { existsSync as existsSync4, readFileSync as readFileSync4, writeFileSync, mkdirSync as mkdirSync3, statSync } from "node:fs";
+import { existsSync as existsSync4, readFileSync as readFileSync4, writeFileSync as writeFileSync2, mkdirSync as mkdirSync3, statSync } from "node:fs";
 import { join as join5, dirname as dirname4 } from "node:path";
 
 // packages/rn-dev-agent-core/dist/session/runtime-paths.js
@@ -11533,7 +11588,7 @@ function loadOrInitSidecar(yamlFilePath, now = () => /* @__PURE__ */ new Date())
 
 // packages/rn-dev-agent-core/dist/domain/atomic-writer.js
 init_process_birth();
-import { writeFileSync as writeFileSync2, renameSync as renameSync2, statSync as statSync2, mkdirSync as mkdirSync4, existsSync as existsSync5, unlinkSync as unlinkSync3, readdirSync as readdirSync2, openSync as openSync2, closeSync as closeSync2, chmodSync as chmodSync4, fstatSync as fstatSync2, lstatSync as lstatSync4, readFileSync as readFileSync5, linkSync, constants as constants3 } from "node:fs";
+import { writeFileSync as writeFileSync3, renameSync as renameSync2, statSync as statSync2, mkdirSync as mkdirSync4, existsSync as existsSync5, unlinkSync as unlinkSync3, readdirSync as readdirSync2, openSync as openSync2, closeSync as closeSync2, chmodSync as chmodSync4, fstatSync as fstatSync2, lstatSync as lstatSync4, readFileSync as readFileSync5, linkSync, constants as constants3 } from "node:fs";
 import { dirname as dirname5, basename as basename2 } from "node:path";
 var FUTURE_MTIME_BUFFER_MS = 1e3;
 var ORPHAN_MAX_AGE_MS = 5 * 60 * 1e3;
@@ -11583,7 +11638,7 @@ function withPairWriteLock(yamlPath, operation, acquisitionPrecondition) {
   const ownerPath = `${dirname5(yamlPath)}/.rn-action-write-owner.${generateTmpStamp()}`;
   const owner = currentLockOwner();
   const lockFd = openSync2(ownerPath, "wx", 384);
-  writeFileSync2(lockFd, `${JSON.stringify(owner)}
+  writeFileSync3(lockFd, `${JSON.stringify(owner)}
 `, "utf8");
   const deadline = Date.now() + ACTION_WRITE_LOCK_TIMEOUT_MS;
   let acquired = false;
@@ -11825,12 +11880,12 @@ function cleanupOrphans(yamlPath, sidecarPath) {
 var atomicWriter = {
   /** Underlying `fs.writeFileSync(path, content, 'utf8')`. */
   _writeFile(path, content) {
-    writeFileSync2(path, content, "utf8");
+    writeFileSync3(path, content, "utf8");
   },
   _writeFileWithMode(path, content, mode) {
     const fd = openSync2(path, "wx", mode);
     try {
-      writeFileSync2(fd, content, "utf8");
+      writeFileSync3(fd, content, "utf8");
     } finally {
       closeSync2(fd);
     }
@@ -14163,7 +14218,7 @@ function filterWithBoundedRegex(candidates, pattern, timeoutMs = 500) {
 init_utils();
 import { execFile as execFileCb10 } from "node:child_process";
 import { promisify as promisify13 } from "node:util";
-import { existsSync as existsSync17, readFileSync as readFileSync15, writeFileSync as writeFileSync5 } from "node:fs";
+import { existsSync as existsSync17, readFileSync as readFileSync15, writeFileSync as writeFileSync6 } from "node:fs";
 import { tmpdir as tmpdir4 } from "node:os";
 import { basename as basename8, join as join23, dirname as dirname14 } from "node:path";
 init_agent_device_wrapper();
@@ -16333,7 +16388,7 @@ function createMaestroRunHandler(deps = {}) {
           proofDomain: reactOnlyProof ? "react-tree" : "partitioned"
         });
       }
-      writeFileSync5(flowFile, validatedContent, "utf-8");
+      writeFileSync6(flowFile, validatedContent, "utf-8");
       if (isLoginMetadata(semanticActionMeta) && !loginPostconditionId(validatedCommands)) {
         return failResult("Refusing login replay without a final positive post-submit testID assertion. End the flow with assertVisible.id or extendedWaitUntil.visible.id.", "ASSERTION_FAILED", { proofDomain: "react-tree", postcondition: "missing" });
       }
@@ -16567,7 +16622,7 @@ function createMaestroRunHandler(deps = {}) {
         clearTimeout(deadlineTimer);
       }
     }
-    writeFileSync5(flowFile, validatedContent, "utf-8");
+    writeFileSync6(flowFile, validatedContent, "utf-8");
     const dispatch = selectDispatch({ platform, flowHasHideKeyboard });
     if ("error" in dispatch) {
       return failResult(dispatch.error);
@@ -16755,7 +16810,7 @@ function createMaestroRunHandler(deps = {}) {
         };
         try {
           const stageResult = await (async () => {
-            writeFileSync5(flowFile, buildMaestroFlow(headerAppId ? { appId: headerAppId } : {}, [...commands]), "utf-8");
+            writeFileSync6(flowFile, buildMaestroFlow(headerAppId ? { appId: headerAppId } : {}, [...commands]), "utf-8");
             const executeOnce = async (beforeDispatch) => {
               if (flowDeadline - now() <= 0) {
                 const error = new Error("Maestro flow timeout exhausted before the next stage");
@@ -17164,7 +17219,7 @@ function createMaestroRunHandler(deps = {}) {
     } finally {
       clearTimeout(flowAbortTimer);
       try {
-        writeFileSync5(flowFile, validatedContent, "utf-8");
+        writeFileSync6(flowFile, validatedContent, "utf-8");
       } finally {
         disposeRunnerReportDir(runnerReportDir);
       }
