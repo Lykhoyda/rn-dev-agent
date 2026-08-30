@@ -98,6 +98,10 @@ test('isCompleteWdaBuild requires the xctestrun and the test-host executable', (
     assert.equal(isCompleteWdaBuild(keyDir), false);
     writeCompleteWdaBuild(keyDir);
     assert.equal(isCompleteWdaBuild(keyDir), true);
+    writeFileSync(wdaXctestrunPath(keyDir), '<plist version="1.0"><dict>');
+    assert.equal(isCompleteWdaBuild(keyDir), false, 'a truncated xctestrun is not reusable');
+    writeFileSync(wdaXctestrunPath(keyDir), wdaXctestrun());
+    assert.equal(isCompleteWdaBuild(keyDir), true);
     const executable = wdaTestHostExecutable(keyDir);
     chmodSync(executable, 0o644);
     assert.equal(isCompleteWdaBuild(keyDir), false, 'a mode-stripped test host is not runnable');

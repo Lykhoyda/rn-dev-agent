@@ -59332,11 +59332,146 @@ function persistentWdaStoreBuildsRoot(platformKey = nodePlatformKey()) {
   }
   return components[3];
 }
+function parseAndNormalizeWdaXctestrun(source) {
+  let cursor = 0;
+  const skipWhitespace = () => {
+    while (/\s/.test(source[cursor] ?? ""))
+      cursor += 1;
+  };
+  const consume = (token2) => {
+    if (!source.startsWith(token2, cursor))
+      return false;
+    cursor += token2.length;
+    return true;
+  };
+  const consumePattern = (pattern) => {
+    const match = pattern.exec(source.slice(cursor));
+    if (!match || match.index !== 0)
+      return false;
+    cursor += match[0].length;
+    return true;
+  };
+  const parseTextElement = (tag) => {
+    if (consume(`<${tag}/>`))
+      return "";
+    if (!consume(`<${tag}>`))
+      return null;
+    const close = `</${tag}>`;
+    const end = source.indexOf(close, cursor);
+    if (end < 0)
+      return null;
+    const text = source.slice(cursor, end);
+    if (text.includes("<") || /&(?!(?:amp|lt|gt|quot|apos|#\d+|#x[\dA-Fa-f]+);)/.test(text)) {
+      return null;
+    }
+    cursor = end + close.length;
+    return text;
+  };
+  const validScalar = (tag, value) => {
+    if (tag === "string")
+      return true;
+    if (tag === "integer")
+      return /^[+-]?\d+$/.test(value);
+    if (tag === "real") {
+      return /^[+-]?(?:(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?|inf|nan)$/i.test(value);
+    }
+    if (tag === "date")
+      return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/.test(value);
+    const compact = value.replace(/\s/g, "");
+    return compact.length % 4 === 0 && /^[\dA-Za-z+/]*={0,2}$/.test(compact);
+  };
+  const parseValue = () => {
+    skipWhitespace();
+    const start = cursor;
+    if (consume("<dict/>"))
+      return { kind: "dict", start, end: cursor, entries: [] };
+    if (consume("<dict>")) {
+      const entries = [];
+      while (true) {
+        skipWhitespace();
+        if (consume("</dict>"))
+          return { kind: "dict", start, end: cursor, entries };
+        const entryStart = cursor;
+        const key = parseTextElement("key");
+        if (key === null)
+          return null;
+        const value = parseValue();
+        if (!value)
+          return null;
+        entries.push({ key, start: entryStart, end: value.end, value });
+      }
+    }
+    if (consume("<array/>"))
+      return { kind: "array", start, end: cursor, values: [] };
+    if (consume("<array>")) {
+      const values = [];
+      while (true) {
+        skipWhitespace();
+        if (consume("</array>"))
+          return { kind: "array", start, end: cursor, values };
+        const value = parseValue();
+        if (!value)
+          return null;
+        values.push(value);
+      }
+    }
+    if (consume("<true/>") || consume("<false/>"))
+      return { kind: "scalar", start, end: cursor };
+    for (const tag of ["string", "integer", "real", "date", "data"]) {
+      const before = cursor;
+      const value = parseTextElement(tag);
+      if (value !== null) {
+        return validScalar(tag, value) ? { kind: "scalar", start, end: cursor } : null;
+      }
+      cursor = before;
+    }
+    return null;
+  };
+  skipWhitespace();
+  if (source.startsWith("<?xml", cursor) && !consumePattern(/^<\?xml[^?]*\?>/))
+    return null;
+  skipWhitespace();
+  if (source.startsWith("<!DOCTYPE", cursor) && !consumePattern(/^<!DOCTYPE[^>]*>/))
+    return null;
+  skipWhitespace();
+  if (!consumePattern(/^<plist(?:\s+version="1\.0")?\s*>/))
+    return null;
+  const root = parseValue();
+  if (!root || root.kind !== "dict")
+    return null;
+  skipWhitespace();
+  if (!consume("</plist>"))
+    return null;
+  skipWhitespace();
+  if (cursor !== source.length)
+    return null;
+  const portEntries = [];
+  const collectPortEntries = (value) => {
+    if (value.kind === "dict") {
+      for (const entry of value.entries) {
+        if (entry.key === "USE_PORT")
+          portEntries.push(entry);
+        else
+          collectPortEntries(entry.value);
+      }
+    } else if (value.kind === "array") {
+      for (const child of value.values)
+        collectPortEntries(child);
+    }
+  };
+  collectPortEntries(root);
+  let normalized = source;
+  for (const entry of portEntries.sort((left, right) => right.start - left.start)) {
+    normalized = normalized.slice(0, entry.start) + normalized.slice(entry.end);
+  }
+  return normalized;
+}
 function isCompleteWdaBuild(keyDir) {
   try {
     const products = join25(keyDir, "DerivedData", "Build", "Products");
     const entries = readdirSync7(products, { withFileTypes: true });
-    return entries.some((entry) => entry.isFile() && entry.name.endsWith(".xctestrun")) && entries.some((entry) => entry.isDirectory() && readdirSync7(join25(products, entry.name)).some((name) => {
+    const xctestruns = entries.filter((entry) => entry.name.endsWith(".xctestrun"));
+    return xctestruns.length > 0 && xctestruns.every((entry) => entry.isFile() && parseAndNormalizeWdaXctestrun(readFileSync17(join25(products, entry.name), "utf8")) !== null) && entries.some((entry) => entry.isDirectory() && readdirSync7(join25(products, entry.name)).some((name) => {
       if (!name.endsWith(".app"))
         return false;
       try {
@@ -59352,8 +59487,8 @@ function isCompleteWdaBuild(keyDir) {
 }
 function removeInjectedWdaPort(xctestrunPath) {
   const source = readFileSync17(xctestrunPath, "utf8");
-  const normalized = source.replace(/[ \t]*<key>USE_PORT<\/key>[\t\r\n ]*<string>[0-9]+<\/string>[ \t]*(?:\r?\n)?/g, "");
-  if (normalized.includes("USE_PORT"))
+  const normalized = parseAndNormalizeWdaXctestrun(source);
+  if (normalized === null)
     return false;
   if (normalized !== source)
     writeFileSync9(xctestrunPath, normalized);
@@ -59408,7 +59543,12 @@ function isReusableStoredWdaBuild(keyDir) {
       return false;
     }
     const products = join25(keyDir, "DerivedData", "Build", "Products");
-    return readdirSync7(products, { withFileTypes: true }).filter((entry) => entry.isFile() && entry.name.endsWith(".xctestrun")).every((entry) => !readFileSync17(join25(products, entry.name), "utf8").includes("USE_PORT"));
+    return readdirSync7(products, { withFileTypes: true }).filter((entry) => entry.name.endsWith(".xctestrun")).every((entry) => {
+      if (!entry.isFile())
+        return false;
+      const source = readFileSync17(join25(products, entry.name), "utf8");
+      return parseAndNormalizeWdaXctestrun(source) === source;
+    });
   } catch {
     return false;
   }
