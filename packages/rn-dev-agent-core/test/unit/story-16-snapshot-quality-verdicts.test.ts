@@ -124,6 +124,36 @@ test('getTree: renderer registered beyond the legacy early-exit window is scanne
   assert.deepEqual(result.verdict.unscannedRendererIds ?? [], []);
 });
 
+test('getTree: early root enumeration marks filtered absence incomplete', () => {
+  const earlyFiber = userComp('EarlyRenderer', null);
+  const lateFiber = {
+    tag: 1,
+    type: { displayName: 'LateRenderer' },
+    memoizedProps: { testID: 'late-target' },
+    child: null,
+    sibling: null,
+    return: null,
+  };
+  const hook = {
+    renderers: {
+      keys: () => {
+        throw new Error('renderer registry is incomplete');
+      },
+      forEach: () => {},
+    },
+    getFiberRoots: (id: number) => {
+      if (id === 1) return new Set([{ current: earlyFiber }]);
+      if (id === 9) return new Set([{ current: lateFiber }]);
+      return new Set();
+    },
+  };
+  const sandbox = createSandbox({ hook });
+  const result = JSON.parse(sandbox.__RN_AGENT.getTree({ filter: 'late-target' }));
+  assert.equal(result.tree, null);
+  assert.equal(result.verdict.state, 'degraded');
+  assert.deepEqual(result.verdict.reasons, ['root-enumeration-incomplete']);
+});
+
 test('getTree: filter no-match after budget exhaustion is degraded, not a clean empty', () => {
   let node = null;
   for (let i = 0; i < 2500; i++) {

@@ -217,7 +217,7 @@ test('React-only learned replay ignores native runtime pin drift', async () => {
 
 test('mounted hidden extendedWaitUntil target is an assertion failure, not absence', async () => {
   const replay = await runCdpReplayCommands(
-    [{ extendedWaitUntil: { visible: { id: 'clipped' }, timeout: 0 } }],
+    [{ extendedWaitUntil: { visible: { id: 'clipped' }, timeout: 250 } }],
     {},
     {
       pressByTestId: async () => {},
@@ -303,7 +303,7 @@ test('ordinary missing React testID stays TESTID_NOT_FOUND without WDA', async (
 - extendedWaitUntil:
     visible:
       id: genuinely-missing
-    timeout: 0
+    timeout: 250
 `,
       ...callbacks,
     }),
@@ -337,7 +337,7 @@ test('React stage failures retain completed tap and launch evidence', async () =
 - extendedWaitUntil:
     visible:
       id: missing
-    timeout: 0
+    timeout: 250
 `,
     claimNativeOrigin: async () => {},
     completeNativeOrigin: async () => {},
@@ -935,6 +935,53 @@ test('current-route ID is frontmost', () => {
   const verdict = JSON.parse(sandbox.__RN_AGENT.isTestIdFrontmost('coverage'));
   assert.equal(verdict.visible, true);
   assert.equal(verdict.activeRoute, 'home');
+});
+
+test('frontmost exact matches refuse incomplete renderer coverage', () => {
+  const root = routeTree('coverage', 'home');
+  const sandbox = makeFrontmostSandbox(root, {
+    index: 0,
+    routes: [{ name: 'home' }],
+  });
+  const incompleteRegistry = {
+    renderers: {
+      keys: () => {
+        throw new Error('renderer registry is incomplete');
+      },
+      forEach: () => {},
+    },
+    getFiberRoots: (id: number) => (id === 1 ? new Set([{ current: root }]) : new Set()),
+  };
+  const rendererError = {
+    renderers: new Map([
+      [1, {}],
+      [2, {}],
+    ]),
+    getFiberRoots: (id: number) => {
+      if (id === 1) return new Set([{ current: root }]);
+      if (id === 2) throw new Error('renderer teardown');
+      return new Set();
+    },
+  };
+  const unscannedRegistry = {
+    renderers: {
+      keys: () => new Map([[1, {}]]).keys(),
+      forEach: (callback: (value: object, id: number) => void) => {
+        callback({}, 1);
+        callback({}, 40);
+      },
+    },
+    getFiberRoots: (id: number) => (id === 1 ? new Set([{ current: root }]) : new Set()),
+  };
+  for (const hook of [incompleteRegistry, rendererError, unscannedRegistry]) {
+    sandbox.__REACT_DEVTOOLS_GLOBAL_HOOK__ = hook;
+    const verdict = JSON.parse(sandbox.__RN_AGENT.isTestIdFrontmost('coverage'));
+    assert.deepEqual(verdict, {
+      visible: false,
+      code: 'ASSERTION_FAILED',
+      reason: 'frontmost proof cannot cover every mounted renderer',
+    });
+  }
 });
 
 test('a target owned by an active ancestor route remains frontmost', () => {
@@ -1878,7 +1925,7 @@ test('partitioned React failures retain prior native proof evidence', async () =
     await handler({
       platform: 'ios',
       deviceId: IOS_UDID,
-      inlineYaml: `appId: com.example.app\n---\n- assertVisible: Native status\n- extendedWaitUntil:\n    visible:\n      id: missing-react-status\n    timeout: 0\n`,
+      inlineYaml: `appId: com.example.app\n---\n- assertVisible: Native status\n- extendedWaitUntil:\n    visible:\n      id: missing-react-status\n    timeout: 250\n`,
       ...callbacks,
     }),
   );

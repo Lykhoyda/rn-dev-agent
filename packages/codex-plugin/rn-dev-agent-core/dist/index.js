@@ -51948,6 +51948,7 @@ var INJECTED_HELPERS = `
       var reasons = [];
       if (o.noRenderer) reasons.push('no-renderer');
       if (lastRootScan.rendererErrors > 0) reasons.push('renderer-error');
+      if (!lastRootScan.complete) reasons.push('root-enumeration-incomplete');
       var unscanned = computeUnscannedRendererIds();
       if (unscanned.length > 0) reasons.push('renderers-unscanned');
       if (o.scanBudgetExhausted) reasons.push('scan-budget-exhausted');
@@ -55233,6 +55234,18 @@ var INJECTED_HELPERS = `
         reason: 'frontmost testID scan exceeded its bounded React-tree budget',
         code: 'ASSERTION_FAILED',
         truncated: true
+      });
+    }
+    var unscannedRendererIds = computeUnscannedRendererIds();
+    if (
+      lastRootScan.rendererErrors > 0 ||
+      !lastRootScan.complete ||
+      unscannedRendererIds.length > 0
+    ) {
+      return JSON.stringify({
+        visible: false,
+        code: 'ASSERTION_FAILED',
+        reason: 'frontmost proof cannot cover every mounted renderer'
       });
     }
     function containsFiber(ancestor, candidate) {

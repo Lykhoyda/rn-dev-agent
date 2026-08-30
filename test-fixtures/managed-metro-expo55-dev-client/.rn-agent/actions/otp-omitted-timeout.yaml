@@ -4,7 +4,7 @@ appId: com.rndevagent.expo55devclient
 # intent: Complete the delayed OTP modal through an id-based wait with Maestro's default timeout.
 # tags: [auth, login, otp, regression]
 # mutates: false
-# status: active
+# status: experimental
 # enginePin: maestro-runner@1.1.24
 # appId: com.rndevagent.expo55devclient
 - assertVisible: Expo 55 dev client manifest fixture
