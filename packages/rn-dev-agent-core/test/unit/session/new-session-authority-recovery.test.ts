@@ -499,6 +499,18 @@ test('R5: transport-restart is promised only where it converges', async () => {
 
 test('GH#801: missing managed-Metro stop proof is reported as unrecoverable in-band', async () => {
   const missingProof = contenderFacing('mismatch');
+  const retainedRuntimeEvidencePath = join(missingProof.root, 'metro-runtime-evidence.jsonl');
+  writeFileSync(retainedRuntimeEvidencePath, '{"kind":"retained-runtime-evidence"}\n');
+  const metroBeforeCleanup = missingProof.registry.getSessionStatus('prior-owner')?.bindings.metro;
+  assert.ok(metroBeforeCleanup && typeof metroBeforeCleanup === 'object');
+  missingProof.registry.updateBindings(missingProof.owner, {
+    bindings: {
+      metro: {
+        ...(metroBeforeCleanup as Record<string, unknown>),
+        runtimeEvidencePath: retainedRuntimeEvidencePath,
+      },
+    },
+  });
   const outcome = await runStartupOwnerCleanup(cleanupInput(missingProof), {
     ...executorDeps(),
     stopManagedMetro: async () => false,
@@ -510,7 +522,6 @@ test('GH#801: missing managed-Metro stop proof is reported as unrecoverable in-b
       port: { status: 'absent' },
       evidenceSocket: 'absent',
     }),
-    managedMetroEvidenceExists: () => false,
   });
 
   assert.equal(outcome.status, 'refused');
@@ -595,7 +606,6 @@ test('GH#801: missing managed-Metro stop proof is reported as unrecoverable in-b
       port: { status: 'absent' },
       evidenceSocket: 'absent',
     }),
-    managedMetroEvidenceExists: () => false,
   });
   const legacyRequirement = legacy.registry.inspectRecoveryRequirement('contender');
   assert.equal(legacyRequirement.requirement, 'transport-restart');
@@ -613,7 +623,6 @@ test('GH#801: missing managed-Metro stop proof is reported as unrecoverable in-b
       port: { status: 'absent' },
       evidenceSocket: 'absent',
     }),
-    managedMetroEvidenceExists: () => true,
   });
   const retryableRequirement = retryable.registry.inspectRecoveryRequirement('contender');
   assert.equal(retryableRequirement.requirement, 'transport-restart');

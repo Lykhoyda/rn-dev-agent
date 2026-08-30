@@ -507,6 +507,69 @@ test('GH #792: the headless recovery path releases a wedged root from a real com
   assert.equal(run('report').sameRootOwner, 'absent');
 });
 
+test('GH #801: session-doctor reports unrecoverable cleanup without a repair remedy', () => {
+  const stateHome = temporaryStateHome();
+  const appRoot = join(stateHome, 'app');
+  mkdirSync(appRoot);
+  writeFileSync(join(appRoot, 'package.json'), '{"name":"gh-801-fixture"}');
+  const environment = {
+    ...process.env,
+    XDG_STATE_HOME: stateHome,
+    RN_DEV_AGENT_DECLARED_ROOT: appRoot,
+    RN_DEV_AGENT_DECLARED_MANIFESTS: 'package.json',
+  };
+  const source = resolveSourceIdentity(appRoot, {
+    declaredRoot: appRoot,
+    declaredManifests: ['package.json'],
+  });
+  const layout = createAuthorityStateLayout(join(stateHome, 'rn-dev-agent'));
+  const registry = openSessionRegistry(layout.registry, { ownerStatus: inspectSessionOwner });
+  const owner = registry.createSession({
+    sessionId: 'missing-metro-proof-owner',
+    sourceKey: source.sourceKey,
+    worktreeKey: source.worktreeKey,
+    appRootKey: source.appRootKey,
+    supervisor: { pid: 1, token: 'birth-of-the-dead-owner' },
+    source: { ...source, model: 'grouped-v1' },
+    bindings: {},
+  });
+  registry.claimResources(owner, [{ type: 'source', key: source.worktreeKey }]);
+  registry.updateBindings(owner, {
+    state: 'source_bound',
+    bindings: { metro: { mode: 'managed', port: 8300 } },
+  });
+  registry.beginStartupOwnerCleanup(owner);
+  const nextAction =
+    'Managed Metro stop proof is unavailable; preserve this authority state and report METRO_CLEANUP_PENDING.';
+  registry.recordStartupCleanupRefusal(owner, {
+    code: 'METRO_CLEANUP_PENDING',
+    reason: 'managed Metro could not be stopped with exact process authority',
+    cause: 'managed-metro-stop-proof-missing',
+    nextAction,
+  });
+  registry.close();
+
+  let stdout = '';
+  try {
+    stdout = execFileSync(
+      process.execPath,
+      [join(distRoot, 'session-doctor.js'), 'report', '--json'],
+      { cwd: appRoot, encoding: 'utf8', env: environment },
+    );
+  } catch (error) {
+    stdout = String((error as { stdout?: string }).stdout);
+  }
+  const report = JSON.parse(stdout) as Record<string, unknown>;
+  assert.equal(report.wedged, true);
+  assert.equal(report.repairable, false);
+  assert.equal(report.remedy, nextAction);
+  assert.equal(
+    (report.startupCleanupBlocked as { cause?: string }).cause,
+    'managed-metro-stop-proof-missing',
+  );
+  assert.doesNotMatch(String(report.remedy), /session-doctor\.js" repair|\/mcp|reconnect/i);
+});
+
 test('GH #792: every recovery remedy names an executable path for interactive and headless clients', () => {
   const owners = new Map<string, string>();
   const root = temporaryStateHome();

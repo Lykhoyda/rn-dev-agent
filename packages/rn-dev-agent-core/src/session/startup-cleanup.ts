@@ -1,5 +1,4 @@
 import { createHash } from 'node:crypto';
-import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { readJsonStateFile } from '../util/secure-state-file.js';
 import {
@@ -64,7 +63,6 @@ export interface StartupCleanupDependencies {
   ) => Promise<boolean>;
   inspectManagedMetroCleanupEvidence?: typeof inspectManagedMetroCleanupEvidence;
   verifyManagedMetroStopProof?: typeof verifyManagedMetroStopProof;
-  managedMetroEvidenceExists?: (path: string) => boolean;
   restoreIntegrationFiles?: (input: { appRoot: string; manifestSource?: string }) => void;
   readSessionSecret?: (sessionId: string) => Record<string, unknown> | null;
 }
@@ -232,11 +230,7 @@ function managedMetroStopProofMissing(
     const evidence = (
       dependencies.inspectManagedMetroCleanupEvidence ?? inspectManagedMetroCleanupEvidence
     )(binding);
-    const runtimeEvidencePath = binding.runtimeEvidencePath;
-    const evidenceExists = dependencies.managedMetroEvidenceExists ?? existsSync;
-    const runtimeEvidenceMissing =
-      typeof runtimeEvidencePath !== 'string' || !evidenceExists(runtimeEvidencePath);
-    return !authenticated && evidence.complete && runtimeEvidenceMissing;
+    return !authenticated && evidence.complete;
   } catch {
     return false;
   }

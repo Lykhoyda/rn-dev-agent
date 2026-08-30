@@ -12658,7 +12658,6 @@ function resolveSourceIdentity(inputRoot, dependencies = {}) {
 // packages/rn-dev-agent-core/dist/session/startup-cleanup.js
 init_secure_state_file();
 import { createHash as createHash6 } from "node:crypto";
-import { existsSync as existsSync8 } from "node:fs";
 import { join as join14 } from "node:path";
 
 // packages/rn-dev-agent-core/dist/session/managed-metro.js
@@ -16478,10 +16477,7 @@ function managedMetroStopProofMissing(binding, input, dependencies) {
   try {
     const authenticated = (dependencies.verifyManagedMetroStopProof ?? verifyManagedMetroStopProof)(binding, input);
     const evidence = (dependencies.inspectManagedMetroCleanupEvidence ?? inspectManagedMetroCleanupEvidence)(binding);
-    const runtimeEvidencePath = binding.runtimeEvidencePath;
-    const evidenceExists = dependencies.managedMetroEvidenceExists ?? existsSync8;
-    const runtimeEvidenceMissing = typeof runtimeEvidencePath !== "string" || !evidenceExists(runtimeEvidencePath);
-    return !authenticated && evidence.complete && runtimeEvidenceMissing;
+    return !authenticated && evidence.complete;
   } catch {
     return false;
   }
@@ -16620,6 +16616,9 @@ function remedyFor(ownership) {
   }
   if (ownership.startupCleanupBlocked) {
     const blocked = ownership.startupCleanupBlocked;
+    if (blocked.code === "METRO_CLEANUP_PENDING" && blocked.cause === "managed-metro-stop-proof-missing") {
+      return blocked.nextAction ?? UNRECOVERABLE_METRO_CLEANUP_NEXT_ACTION;
+    }
     return sessionCleanupObligationRemedy(`The prior owner is proven dead, but startup cleanup refused with ${blocked.code} and will refuse again until that is resolved: ${blocked.reason}.`);
   }
   return sessionRecoveryRemedy("The prior owner is proven dead and can be released now.");
