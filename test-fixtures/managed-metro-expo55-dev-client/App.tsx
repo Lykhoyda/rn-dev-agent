@@ -9,6 +9,16 @@ import {
   type TextInput as TextInputHandle,
 } from 'react-native';
 
+(globalThis as typeof globalThis & {
+  __NAV_REF__: {
+    navigate: () => void;
+    getRootState: () => { index: number; routes: { name: string }[] };
+  };
+}).__NAV_REF__ = {
+  navigate: () => {},
+  getRootState: () => ({ index: 0, routes: [{ name: 'Home' }] }),
+};
+
 export default function App() {
   const [code, setCode] = useState('');
   const [done, setDone] = useState(false);
