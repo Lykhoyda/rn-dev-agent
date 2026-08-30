@@ -394,7 +394,11 @@ const makeReplayDeps = (_args?: unknown, signal?: AbortSignal): CdpReplayDeps | 
       let env = await fetchTree(false);
       // Retry with the salient digest when the full filtered payload exceeds the helper bound.
       const d = env.data as Record<string, unknown> | null;
-      if (d && typeof d === 'object' && '__agent_truncated' in d) {
+      if (
+        d &&
+        typeof d === 'object' &&
+        ('__agent_truncated' in d || d.truncated === true)
+      ) {
         env = await fetchTree(true);
       }
       const data = replayTreeData(env);

@@ -96897,7 +96897,7 @@ var init_index = __esm({
           })).content[0].text);
           let env = await fetchTree(false);
           const d = env.data;
-          if (d && typeof d === "object" && "__agent_truncated" in d) {
+          if (d && typeof d === "object" && ("__agent_truncated" in d || d.truncated === true)) {
             env = await fetchTree(true);
           }
           const data = replayTreeData(env);
