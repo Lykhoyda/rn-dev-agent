@@ -225,6 +225,35 @@ test('#869 control: a non-editable input refuses from the projected tree', async
   assert.deepEqual(fixture.calls.typed, []);
 });
 
+test('#869 control: an accessibility-disabled input refuses tap and type', async () => {
+  const fixture = otpFixture();
+  fixture.inputComposite.memoizedProps.accessibilityState = { disabled: true };
+  fixture.inputHost.memoizedProps.accessibilityState = { disabled: true };
+  const deps = buildDeps(createAgent(fixture.root));
+
+  const tapResult = await runCdpReplayCommands(
+    [{ tapOn: { id: 'otp_email' } }, { inputText: '0451' }],
+    {},
+    deps,
+  );
+
+  assert.equal(tapResult.passed, false);
+  assert.equal(tapResult.failureCode, 'INTERACTION_NOT_ACTUATED');
+  assert.match(tapResult.reason ?? '', /disabled/);
+  assert.equal(fixture.calls.focus, 0);
+  assert.deepEqual(fixture.calls.typed, []);
+
+  const typeResult = await runCdpReplayCommands([{ inputText: '0451' }], {}, deps, {
+    initialFocusId: 'otp_email',
+  });
+
+  assert.equal(typeResult.passed, false);
+  assert.equal(typeResult.failureCode, 'INTERACTION_NOT_ACTUATED');
+  assert.match(typeResult.reason ?? '', /disabled/);
+  assert.equal(fixture.calls.focus, 0);
+  assert.deepEqual(fixture.calls.typed, []);
+});
+
 test('#869 control: a disabled nearest pressable refuses without walking farther', async (t) => {
   for (const [label, disabledProps] of [
     ['disabled prop', { disabled: true }],

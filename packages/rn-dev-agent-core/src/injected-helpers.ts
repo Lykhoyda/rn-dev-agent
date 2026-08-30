@@ -535,6 +535,7 @@ export const INJECTED_HELPERS = `
             props[k] = s && s.length > 200 ? s.substring(0, 200) + '...' : v;
           } catch(e) { props[k] = '[Unserializable]'; }
         }
+        if (fiber.memoizedProps.disabled === true || fiber.memoizedProps.editable === false || (fiber.memoizedProps.accessibilityState && fiber.memoizedProps.accessibilityState.disabled === true)) props.disabled = true;
         if (Object.keys(props).length > 0) result.props = props;
       }
 
