@@ -55,11 +55,11 @@ In an authority-fenced session, the sidecar lives at
 by default on macOS), not in this directory. `cdp_run_action` returns its exact
 location as `data.writes.runtimeStatePath` on success or
 `meta.writes.runtimeStatePath` on failure. A fresh fenced session starts at
-revision 1 with empty run and repair history; revisions and promotion history
-do not carry over. Canonical lifecycle status remains shared worktree
-knowledge, so later sessions see tracked YAML promoted to `active` without the
-earlier runtime history. The project-local `state/` path is only the unfenced
-compatibility fallback.
+revision 1 with empty run and repair history; sidecar histories and revisions
+do not carry over. Canonical lifecycle status remains shared worktree knowledge,
+so later sessions see tracked YAML promoted to `active` without the earlier
+runtime history. The project-local `state/` path is only the unfenced compatibility
+fallback.
 
 ## Linked Git worktrees
 

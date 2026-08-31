@@ -512,6 +512,6 @@ For a fenced replay that wrote runtime state, read the exact sidecar from
 `meta.writes.runtimeStatePath` on failure. It resolves under
 `<state-home>/v2/sessions/<sessionId>/runtime/state/`, not the project. A fresh
 session intentionally starts at revision 1 with empty run and repair history;
-earlier revisions and promotion history are session-private and do not carry
+earlier sidecar histories and revisions are session-private and do not carry
 over. The tracked YAML lifecycle status is shared worktree knowledge, so later
 sessions still see an action that an earlier clean replay promoted to `active`.

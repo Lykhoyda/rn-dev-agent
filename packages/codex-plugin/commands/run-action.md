@@ -152,8 +152,8 @@ $rn-dev-agent:run-action mark-all-done --no-auto-repair    # surface the raw fai
    `data.runRecord` in the response.
 
    Sidecars are isolated by session. A fresh fenced session starts the action
-   at revision 1 with empty run and repair history; revisions and promotion
-   history from an earlier session do not carry over. Canonical lifecycle
+   at revision 1 with empty run and repair history; sidecar histories and
+   revisions from an earlier session do not carry over. Canonical lifecycle
    status remains shared worktree knowledge: if an earlier clean replay updated
    the tracked YAML to `active`, the new session sees that status without the
    earlier runtime history.

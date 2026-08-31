@@ -153,12 +153,11 @@ persists runtime state, read the exact sidecar from
 root. Ordinary replays preserve tracked action YAML bytes.
 
 **Session reset is deliberate.** A fresh fenced session starts each action's
-runtime state at revision 1 with empty run and repair history. Revisions,
-promotion evidence, and promotion history do not carry over, preserving
-parallel-session and worktree isolation. Canonical lifecycle status remains
-shared worktree knowledge: once promotion updates the tracked YAML to `active`,
-later sessions see that status without inheriting the earlier session's runtime
-history.
+runtime state at revision 1 with empty run and repair history. Sidecar histories
+and revisions do not carry over, preserving parallel-session and worktree
+isolation. Canonical lifecycle status remains shared worktree knowledge: once
+promotion updates the tracked YAML to `active`, later sessions see that status
+without inheriting the earlier session's runtime history.
 
 **Status maturity.** New actions ship as `experimental`. The first clean
 replay auto-promotes them to `active`. Self-repair demotes back to
