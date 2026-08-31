@@ -58,6 +58,30 @@ test('a TextInput designation is consumed only by the adjacent type step', async
   ]);
 });
 
+test('an aborted designation remains focusOnly in the failed tap trace', async () => {
+  const controller = new AbortController();
+  const { dispatch, calls } = dispatchFor({ designations: ['email'] });
+  const press = dispatch.press;
+  dispatch.press = async (id) => {
+    const result = await press(id);
+    controller.abort();
+    return result;
+  };
+  const result = await replayFlow([{ t: 'tap', id: 'email' }], dispatch, {
+    signal: controller.signal,
+  });
+
+  assert.equal(result.passed, false);
+  assert.equal(result.failedStepIndex, 0);
+  assert.equal(result.failureCode, 'RUNNER_TIMEOUT');
+  assert.equal(result.steps[0].ok, false);
+  assert.equal(result.steps[0].focusOnly, true);
+  assert.deepEqual(calls, [
+    ['press', 'email'],
+    ['release', 'designation-email'],
+  ]);
+});
+
 test('a non-input tap invalidates an earlier TextInput designation', async () => {
   const { dispatch, calls } = dispatchFor({
     designations: ['email'],

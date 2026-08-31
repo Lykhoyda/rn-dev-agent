@@ -318,6 +318,7 @@ export async function replayFlow(
     const s = steps[i];
     const evidenceType = s.t === 'waitVisible' ? (s.evidenceType ?? s.t) : s.t;
     const startedAt = Date.now();
+    let stepFocusOnly: true | undefined;
     if (pendingDesignation && s.t !== 'type') {
       staleDesignation = staleDesignation ?? pendingDesignation.id;
       const staleToken = pendingDesignation.token;
@@ -342,6 +343,7 @@ export async function replayFlow(
           if (pressResult?.kind === 'designation') {
             lastTapped = null;
             pendingDesignation = { id: s.id, token: pressResult.token };
+            stepFocusOnly = true;
           } else {
             lastTapped = s.id;
           }
@@ -350,7 +352,7 @@ export async function replayFlow(
             sourceIndex: sourceIndex(i),
             t: s.t,
             target: s.id,
-            ...(pressResult?.kind === 'designation' ? { focusOnly: true as const } : {}),
+            ...(stepFocusOnly ? { focusOnly: stepFocusOnly } : {}),
             ok: true,
             durationMs: Date.now() - startedAt,
           });
@@ -486,6 +488,7 @@ export async function replayFlow(
         sourceIndex: sourceIndex(i),
         t: evidenceType,
         target: 'id' in s ? s.id : undefined,
+        ...(stepFocusOnly ? { focusOnly: stepFocusOnly } : {}),
         ok: false,
         durationMs: waitedMs,
       });
