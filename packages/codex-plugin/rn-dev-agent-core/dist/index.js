@@ -76667,7 +76667,7 @@ var START_RECORDING_JS = `(function() {
             var dx = e.nativeEvent.contentOffset.x - scrollStart.x;
             var dy = e.nativeEvent.contentOffset.y - scrollStart.y;
             if (Math.abs(dx) > 5 || Math.abs(dy) > 5) {
-              // Finger-direction (NOT metro-mcp's content-delta \u2014 see header).
+              // Finger direction matches the replayed gesture.
               // dy>0: contentOffset increased \u2192 finger went UP \u2192 'up'.
               var dir = Math.abs(dx) > Math.abs(dy)
                 ? (dx > 0 ? 'left'  : 'right')

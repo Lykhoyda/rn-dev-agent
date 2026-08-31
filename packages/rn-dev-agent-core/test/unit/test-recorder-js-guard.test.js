@@ -43,8 +43,8 @@ test('M6 JS guard: START retains fallback and registered renderer discovery', ()
   assert.match(START_RECORDING_JS, /hook\.getFiberRoots\(entry\.id\)/);
 });
 
-test('M6 JS guard: START documents the finger-direction deviation vs metro-mcp', () => {
-  // The deviation comment lives at the top of the file (header) and inline.
+test('M6 JS guard: START documents finger-direction semantics', () => {
+  // The direction contract is documented inline.
   assert.match(START_RECORDING_JS, /finger went UP/);
   // Sign convention asserts: dy>0 → up, dx>0 → left
   assert.match(START_RECORDING_JS, /dy > 0 \? 'up'\s*:\s*'down'/);
@@ -58,7 +58,7 @@ test('M6 JS guard: START enforces 500-event cap with eviction', () => {
   assert.match(START_RECORDING_JS, /'swipe' \|\| evts\[i\]\.type === 'type'/);
 });
 
-test('M6 JS guard: START wraps all 7 metro-mcp handlers', () => {
+test('M6 JS guard: START wraps all 7 recordable handlers', () => {
   for (const handler of [
     'onPress',
     'onLongPress',

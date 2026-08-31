@@ -1,34 +1,11 @@
-// M6 / Phase 112 (D669): test-recorder injected JS strings.
-//
-// Object.freeze interceptor that captures user-invoked handlers (onPress,
-// onLongPress, onChangeText, onSubmitEditing, onScroll*) at the moment React
-// freezes their props inside createElement. Adapted from metro-mcp
-// (src/plugins/test-recorder.ts) with three deliberate deviations:
-//
-//   1. Finger-direction swipes (NOT metro-mcp's content-delta semantic).
-//      contentOffset.y INCREASING means the user's finger swiped UP (content
-//      scrolled UP through the viewport) — this is what Maestro's `swipeUp`
-//      and Detox's `.swipe('up')` mean. metro-mcp emits the content-delta
-//      direction which produces inverted YAML when replayed.
-//
-//   2. 500-event cap with priority eviction. Long sessions on scroll-heavy
-//      screens can produce tens of thousands of events. We cap at 500 and
-//      drop the oldest scroll/type pair on overflow (taps + navigates carry
-//      higher information value). The `globalThis.__METRO_MCP_REC_TRUNCATED__`
-//      flag bubbles up to `cdp_record_test_stop`'s envelope.
-//
-//   3. Route caching via the commit hook closure. metro-mcp expects the user
-//      app to install `globalThis.__METRO_MCP_NAV_REF__`. We instead read
-//      `__RN_AGENT.getNavState()` inside our `onCommitFiberRoot` patch (which
-//      we install for navigate-event tracking anyway) and cache the active
-//      route into a closure variable. The Object.freeze hot-path reads the
-//      cached variable synchronously — zero CDP round-trips per event.
-//      Mirrored to `globalThis.__METRO_MCP_NAV_REF_CACHE__` so the annotation
-//      JS can reference the same value from a separate IIFE.
-//
-// Gating: cdp_record_test_start probes `__DEV__` first via DEV_CHECK_JS.
-// Release builds pre-freeze props at Metro bundling time so the interceptor
-// can never fire — better to fail fast than silently record nothing.
+// Captures user-invoked handlers before React freezes their props in development.
+// Finger-direction swipes match Maestro `swipeUp` and Detox `.swipe('up')`.
+
+// The 500-event cap evicts older swipe/type events before taps and navigation.
+
+// Commit-hook route caching keeps event handling synchronous without CDP round trips.
+
+// Development gating fails fast because release builds pre-freeze props.
 
 export const DEV_CHECK_JS = `(typeof __DEV__ !== 'undefined' && __DEV__ === true)`;
 
@@ -265,7 +242,7 @@ export const START_RECORDING_JS = `(function() {
             var dx = e.nativeEvent.contentOffset.x - scrollStart.x;
             var dy = e.nativeEvent.contentOffset.y - scrollStart.y;
             if (Math.abs(dx) > 5 || Math.abs(dy) > 5) {
-              // Finger-direction (NOT metro-mcp's content-delta — see header).
+              // Finger direction matches the replayed gesture.
               // dy>0: contentOffset increased → finger went UP → 'up'.
               var dir = Math.abs(dx) > Math.abs(dy)
                 ? (dx > 0 ? 'left'  : 'right')
