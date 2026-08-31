@@ -806,6 +806,7 @@ test('controlled input appends and succeeds only after exact fiber read-back', a
           value: JSON.stringify({
             controlled: true,
             handlerCalled: 'onChangeText',
+            text: value,
             valueBefore: before,
           }),
         };
