@@ -407,6 +407,40 @@ test('forceReload disclosure survives authority loss during replay', async () =>
   }
 });
 
+test('earlier runtime path remains disclosed when RunRecord persistence is refused', async () => {
+  const originalYaml = fixtureYaml({ id: 'demo', selectors: ['spinner-done'] });
+  project.seedAction('demo', originalYaml);
+  const runtimeRoot = mkdtempSync(join(tmpdir(), 'rn-session-runtime-'));
+  const priorRuntimeRoot = process.env.RN_DEV_AGENT_SESSION_RUNTIME_ROOT;
+  process.env.RN_DEV_AGENT_SESSION_RUNTIME_ROOT = runtimeRoot;
+  const expectedPath = join(runtimeRoot, 'state', 'demo.state.json');
+  mkdirSync(join(runtimeRoot, 'state'), { recursive: true });
+  writeFileSync(expectedPath, JSON.stringify(project.readSidecar('demo')), 'utf8');
+  project.simulateHumanEdit('demo', `${originalYaml}\n# operator edit\n`);
+
+  try {
+    const handler = createRunActionHandler({
+      maestroRun: async () => {
+        writeFileSync(expectedPath, '{', 'utf8');
+        return fakeMaestroRun([FAIL_TIMEOUT_ENV])();
+      },
+    });
+    const result = await handler({
+      actionId: 'demo',
+      projectRoot: project.root,
+      autoRepair: false,
+    });
+    const env = JSON.parse(result.content[0].text);
+
+    assert.equal(env.meta.writes.runtimeState, 'refused-external-write');
+    assert.equal(env.meta.writes.runtimeStatePath, expectedPath);
+  } finally {
+    if (priorRuntimeRoot === undefined) delete process.env.RN_DEV_AGENT_SESSION_RUNTIME_ROOT;
+    else process.env.RN_DEV_AGENT_SESSION_RUNTIME_ROOT = priorRuntimeRoot;
+    rmSync(runtimeRoot, { force: true, recursive: true });
+  }
+});
+
 test('successful repair write is disclosed when repaired YAML is invalid', async () => {
   const originalYaml = fixtureYaml({ id: 'demo', selectors: ['fab-create-task'] });
   project.seedAction('demo', originalYaml);
@@ -438,6 +472,81 @@ test('successful repair write is disclosed when repaired YAML is invalid', async
     assert.equal(env.code, 'BAD_RECORDING');
     assert.equal(env.meta.writes.runtimeStatePath, expectedPath);
     assert.equal(existsSync(expectedPath), true);
+  } finally {
+    if (priorRuntimeRoot === undefined) delete process.env.RN_DEV_AGENT_SESSION_RUNTIME_ROOT;
+    else process.env.RN_DEV_AGENT_SESSION_RUNTIME_ROOT = priorRuntimeRoot;
+    rmSync(runtimeRoot, { force: true, recursive: true });
+  }
+});
+
+test('repair YAML write remains disclosed when action metadata disappears', async () => {
+  project.seedAction('demo', fixtureYaml({ id: 'demo', selectors: ['fab-create-task'] }));
+  const runtimeRoot = mkdtempSync(join(tmpdir(), 'rn-session-runtime-'));
+  const priorRuntimeRoot = process.env.RN_DEV_AGENT_SESSION_RUNTIME_ROOT;
+  process.env.RN_DEV_AGENT_SESSION_RUNTIME_ROOT = runtimeRoot;
+  const expectedPath = join(runtimeRoot, 'state', 'demo.state.json');
+
+  try {
+    const handler = createRunActionHandler({
+      maestroRun: fakeMaestroRun([FAIL_SELECTOR_ENV]),
+      repairAction: async () => {
+        mkdirSync(join(runtimeRoot, 'state'), { recursive: true });
+        writeFileSync(expectedPath, JSON.stringify(project.readSidecar('demo')), 'utf8');
+        writeFileSync(project.yamlPath('demo'), 'appId: com.test.app\n---\n- launchApp\n', 'utf8');
+        return fakeRepairAction({
+          ...REPAIR_PATCHED_ENV,
+          data: { ...REPAIR_PATCHED_ENV.data, sidecarPath: expectedPath },
+        })();
+      },
+    });
+    const result = await handler({ actionId: 'demo', projectRoot: project.root });
+    const env = JSON.parse(result.content[0].text);
+
+    assert.equal(env.code, 'NO_PROJECT_ROOT');
+    assert.deepEqual(env.meta.writes.actionYaml, {
+      written: true,
+      authorized: true,
+      reason: 'auto-repair',
+    });
+    assert.equal(env.meta.writes.runtimeStatePath, expectedPath);
+  } finally {
+    if (priorRuntimeRoot === undefined) delete process.env.RN_DEV_AGENT_SESSION_RUNTIME_ROOT;
+    else process.env.RN_DEV_AGENT_SESSION_RUNTIME_ROOT = priorRuntimeRoot;
+    rmSync(runtimeRoot, { force: true, recursive: true });
+  }
+});
+
+test('repair YAML write remains disclosed when refresh throws', async () => {
+  project.seedAction('demo', fixtureYaml({ id: 'demo', selectors: ['fab-create-task'] }));
+  const runtimeRoot = mkdtempSync(join(tmpdir(), 'rn-session-runtime-'));
+  const priorRuntimeRoot = process.env.RN_DEV_AGENT_SESSION_RUNTIME_ROOT;
+  process.env.RN_DEV_AGENT_SESSION_RUNTIME_ROOT = runtimeRoot;
+  const expectedPath = join(runtimeRoot, 'state', 'demo.state.json');
+
+  try {
+    const handler = createRunActionHandler({
+      maestroRun: fakeMaestroRun([FAIL_SELECTOR_ENV]),
+      repairAction: async () => {
+        mkdirSync(join(runtimeRoot, 'state'), { recursive: true });
+        writeFileSync(expectedPath, JSON.stringify(project.readSidecar('demo')), 'utf8');
+        rmSync(project.actionsDir, { force: true, recursive: true });
+        mkdirSync(project.actionsDir, { recursive: true });
+        return fakeRepairAction({
+          ...REPAIR_PATCHED_ENV,
+          data: { ...REPAIR_PATCHED_ENV.data, sidecarPath: expectedPath },
+        })();
+      },
+    });
+    const result = await handler({ actionId: 'demo', projectRoot: project.root });
+    const env = JSON.parse(result.content[0].text);
+
+    assert.match(env.error, /uncaught exception during orchestration/);
+    assert.deepEqual(env.meta.writes.actionYaml, {
+      written: true,
+      authorized: true,
+      reason: 'auto-repair',
+    });
+    assert.equal(env.meta.writes.runtimeStatePath, expectedPath);
   } finally {
     if (priorRuntimeRoot === undefined) delete process.env.RN_DEV_AGENT_SESSION_RUNTIME_ROOT;
     else process.env.RN_DEV_AGENT_SESSION_RUNTIME_ROOT = priorRuntimeRoot;

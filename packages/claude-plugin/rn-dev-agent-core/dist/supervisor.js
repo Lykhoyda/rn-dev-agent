@@ -83679,7 +83679,7 @@ function createRunActionHandler(deps = {}) {
       const disclosedRuntimeStatePath = outcome?.runtimeStatePath ?? runtimeStatePath;
       return {
         actionYaml: actionYaml === "none" ? { written: false, reason: "repair-not-applied" } : actionYaml === "lifecycle-promotion-refused" ? { written: false, reason: "lifecycle-promotion-refused" } : { written: true, authorized: true, reason: actionYaml },
-        runtimeState: proofReplay ? "none" : disclosedRuntimeStatePath ? "sidecar" : outcome?.runtimeStateRefused ? "refused-external-write" : "sidecar",
+        runtimeState: proofReplay ? "none" : outcome?.runtimeStateRefused ? "refused-external-write" : "sidecar",
         ...disclosedRuntimeStatePath ? { runtimeStatePath: disclosedRuntimeStatePath } : {},
         databaseMirror: proofReplay ? "none" : "best-effort"
       };
@@ -84084,7 +84084,7 @@ function createRunActionHandler(deps = {}) {
         });
         return failResult(`cdp_run_action: action disappeared between repair and retry \u2014 investigate filesystem`, "NO_PROJECT_ROOT", {
           actionId: args.actionId,
-          writes: writeDisclosure("none", persisted2)
+          writes: writeDisclosure(actionYamlWrite, persisted2)
         });
       }
       if (!reloadedAction.replay.ok) {
@@ -84260,7 +84260,7 @@ function createRunActionHandler(deps = {}) {
         actionId: args.actionId,
         autoRepair,
         internalError: msg3.slice(0, 500),
-        ...persisted || runtimeStatePath ? { writes: writeDisclosure("none", persisted) } : {}
+        ...persisted || runtimeStatePath ? { writes: writeDisclosure(actionYamlWrite, persisted) } : {}
       });
     }
   };

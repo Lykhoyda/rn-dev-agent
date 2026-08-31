@@ -635,11 +635,9 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
               : { written: true, authorized: true, reason: actionYaml },
         runtimeState: proofReplay
           ? 'none'
-          : disclosedRuntimeStatePath
-            ? 'sidecar'
-            : outcome?.runtimeStateRefused
-              ? 'refused-external-write'
-              : 'sidecar',
+          : outcome?.runtimeStateRefused
+            ? 'refused-external-write'
+            : 'sidecar',
         ...(disclosedRuntimeStatePath ? { runtimeStatePath: disclosedRuntimeStatePath } : {}),
         databaseMirror: proofReplay ? 'none' : 'best-effort',
       };
@@ -1218,7 +1216,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
           'NO_PROJECT_ROOT',
           {
             actionId: args.actionId,
-            writes: writeDisclosure('none', persisted),
+            writes: writeDisclosure(actionYamlWrite, persisted),
           },
         );
       }
@@ -1461,7 +1459,9 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
           actionId: args.actionId,
           autoRepair,
           internalError: msg.slice(0, 500),
-          ...(persisted || runtimeStatePath ? { writes: writeDisclosure('none', persisted) } : {}),
+          ...(persisted || runtimeStatePath
+            ? { writes: writeDisclosure(actionYamlWrite, persisted) }
+            : {}),
         },
       );
     }
