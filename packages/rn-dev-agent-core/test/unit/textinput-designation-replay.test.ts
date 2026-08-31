@@ -21,6 +21,7 @@ type Fiber = {
   child: Fiber | null;
   sibling: Fiber | null;
   return: Fiber | null;
+  alternate: Fiber | null;
 };
 
 function fiber(type: Fiber['type'], memoizedProps: Record<string, unknown> = {}): Fiber {
@@ -31,6 +32,7 @@ function fiber(type: Fiber['type'], memoizedProps: Record<string, unknown> = {})
     child: null,
     sibling: null,
     return: null,
+    alternate: null,
   };
 }
 
@@ -54,6 +56,7 @@ function replayFixture(
     exactMiddleDisabled?: boolean;
     branchedDuplicate?: boolean;
     inputHidden?: boolean;
+    inputValue?: string;
     beforeDesignatedTypeDispatch?: (fixture: {
       root: Fiber;
       input: Fiber;
@@ -80,7 +83,7 @@ function replayFixture(
       testID: 'email',
       editable: options.editable ?? true,
       ...(options.inputHidden ? { style: { display: 'none' } } : {}),
-      value: '',
+      value: options.inputValue ?? '',
       onFocus: () => {
         calls.focus += 1;
       },
@@ -155,15 +158,19 @@ function replayFixture(
         return { error };
       }
     },
-    probeHelperFreshness: async () => ({ fresh: true, version: 52, probed: true }),
+    probeHelperFreshness: async () => ({ fresh: true, version: 53, probed: true }),
   });
   const interact = createInteractHandler(() => client);
   const deps: CdpReplayDeps = {
     pressByTestId: createReplayPressByTestId(interact),
     typeByTestId: async (id, text, context) => {
-      const result = await performReactTreeInput(id, text, client, undefined, {
-        requireLiveInputDesignation: context?.focusOnlyDesignation === true,
-      });
+      const result = await performReactTreeInput(
+        id,
+        text,
+        client,
+        undefined,
+        context ? { designationToken: context.designationToken } : {},
+      );
       const envelope = JSON.parse(result.content[0]?.text ?? '{}') as {
         ok?: boolean;
         code?: string;
@@ -177,6 +184,9 @@ function replayFixture(
           envelope.meta,
         );
       }
+    },
+    releaseInputDesignation: async (token) => {
+      await client.evaluate(`__RN_AGENT.releaseInputDesignation(${JSON.stringify(token)})`);
     },
     treeFor: async (id) => {
       const result = await client.evaluate(
@@ -210,6 +220,74 @@ test('replay designates a bare TextInput and types without press or focus dispat
   assert.equal(fixture.calls.press, 0);
   assert.deepEqual(fixture.calls.typed, ['person@example.test']);
   assert.equal(fixture.input.memoizedProps.value, 'person@example.test');
+});
+
+test('designation refuses a replacement input with the same selector and value shape', async () => {
+  let replacement: Fiber | null = null;
+  let replacementCalls = 0;
+  const fixture = replayFixture({
+    inputValue: 'a',
+    beforeDesignatedTypeDispatch: ({ input }) => {
+      const parent = input.return!;
+      replacement = fiber('RCTSinglelineTextInputView', {
+        testID: 'email',
+        editable: true,
+        value: 'b',
+        onChangeText: () => {
+          replacementCalls++;
+        },
+      });
+      replacement.return = parent;
+      replacement.sibling = input.sibling;
+      parent.child = replacement;
+      input.return = null;
+      input.sibling = null;
+    },
+  });
+  const result = await runCdpReplayCommands(
+    [{ tapOn: { id: 'email' } }, { inputText: 'x' }],
+    {},
+    fixture.deps,
+  );
+
+  assert.equal(result.passed, false);
+  assert.equal(result.failedStepIndex, 1);
+  assert.equal(result.failureCode, 'INTERACTION_NOT_ACTUATED');
+  assert.match(result.reason ?? '', /no longer owns the exact host input/);
+  assert.deepEqual(fixture.calls.typed, []);
+  assert.equal(replacementCalls, 0);
+  assert.equal(replacement?.memoizedProps.value, 'b');
+});
+
+test('designation follows the original input across its React alternate', async () => {
+  const alternateTyped: string[] = [];
+  const fixture = replayFixture({
+    inputValue: 'a',
+    beforeDesignatedTypeDispatch: ({ input }) => {
+      const parent = input.return!;
+      const alternate = fiber('RCTSinglelineTextInputView', {
+        ...input.memoizedProps,
+        value: 'b',
+        onChangeText: (value: string) => {
+          alternateTyped.push(value);
+          alternate.memoizedProps.value = value;
+        },
+      });
+      input.alternate = alternate;
+      alternate.alternate = input;
+      alternate.return = parent;
+      alternate.sibling = input.sibling;
+      parent.child = alternate;
+    },
+  });
+  const result = await runCdpReplayCommands(
+    [{ tapOn: { id: 'email' } }, { inputText: 'x' }],
+    {},
+    fixture.deps,
+  );
+
+  assert.equal(result.passed, true, JSON.stringify(result));
+  assert.deepEqual(alternateTyped, ['bx']);
 });
 
 test('an intervening non-input tap makes later text entry refuse without reaching the input', async () => {
@@ -536,13 +614,14 @@ test('maestro_run exposes designation in its public step trace', async () => {
     replayDeps: () => ({
       pressByTestId: async (id) => {
         calls.push(['press', id]);
-        return { kind: 'designation', focusOnly: true };
+        return { kind: 'designation', focusOnly: true, token: `designation-${id}` };
       },
       typeByTestId: async (id, text) => {
         calls.push(['type', id, text]);
       },
       treeFor: async (id) => ({ testID: id }),
       frontmostFor: async () => ({ visible: true }),
+      releaseInputDesignation: async () => {},
       async launchApp() {},
       async settle() {},
     }),

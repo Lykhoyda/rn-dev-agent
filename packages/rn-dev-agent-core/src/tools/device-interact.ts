@@ -1282,7 +1282,7 @@ export async function performReactTreeInput(
   text: string,
   client: CDPClient | null,
   signal?: AbortSignal,
-  options: { requireLiveInputDesignation?: boolean } = {},
+  options: { designationToken?: string } = {},
 ): Promise<ToolResult> {
   const pathsTried = ['react-tree'];
   if (!client) {
@@ -1315,23 +1315,31 @@ export async function performReactTreeInput(
       return null;
     }
   };
-  const before = await readInput();
-  if (signal?.aborted) {
-    return fillFailure('TEXT_ENTRY_UNVERIFIED', 'React-tree input was cancelled before mutation.', {
-      mutation: 'none',
-      pathsTried,
-    });
+  const designated = typeof options.designationToken === 'string';
+  let requestedText = text;
+  if (!designated) {
+    const before = await readInput();
+    if (signal?.aborted) {
+      return fillFailure(
+        'TEXT_ENTRY_UNVERIFIED',
+        'React-tree input was cancelled before mutation.',
+        {
+          mutation: 'none',
+          pathsTried,
+        },
+      );
+    }
+    if (!before?.controlled) {
+      return fillFailure(
+        'TEXT_ENTRY_UNVERIFIED',
+        `React-tree input "${testID}" is uncontrolled or unreadable. Run this native text-entry check on a WDA-healthy runtime; secure masked native values are not plaintext proof.`,
+        { mutation: 'none', pathsTried },
+      );
+    }
+    requestedText = `${before.value ?? ''}${text}`;
   }
-  if (!before?.controlled) {
-    return fillFailure(
-      'TEXT_ENTRY_UNVERIFIED',
-      `React-tree input "${testID}" is uncontrolled or unreadable. Run this native text-entry check on a WDA-healthy runtime; secure masked native values are not plaintext proof.`,
-      { mutation: 'none', pathsTried },
-    );
-  }
-  const expected = `${before.value ?? ''}${text}`;
   let dispatch:
-    | { handler: string }
+    | { handler: string; resultingText: string }
     | {
         error: string;
         mutation: 'none' | 'possible';
@@ -1344,9 +1352,14 @@ export async function performReactTreeInput(
         JSON.stringify({
           action: 'typeText',
           testID,
-          text: expected,
+          text: requestedText,
           verify: true,
-          ...(options.requireLiveInputDesignation ? { requireLiveInputDesignation: true } : {}),
+          ...(designated
+            ? {
+                requireLiveInputDesignation: true,
+                designationToken: options.designationToken,
+              }
+            : {}),
         }) +
         ')',
     );
@@ -1359,6 +1372,7 @@ export async function performReactTreeInput(
         focusOnly?: boolean;
         handlerCalled?: string | false;
         controlled?: boolean;
+        text?: string;
       } = JSON.parse(result.value);
       if (parsed.error) {
         const designationCode =
@@ -1373,8 +1387,12 @@ export async function performReactTreeInput(
           ...(designationCode ? { code: designationCode } : {}),
           ...(parsed.focusOnly === true ? { focusOnly: true } : {}),
         };
-      } else if (typeof parsed.handlerCalled === 'string' && parsed.controlled !== undefined) {
-        dispatch = { handler: parsed.handlerCalled };
+      } else if (
+        typeof parsed.handlerCalled === 'string' &&
+        parsed.controlled !== undefined &&
+        typeof parsed.text === 'string'
+      ) {
+        dispatch = { handler: parsed.handlerCalled, resultingText: parsed.text };
       } else {
         dispatch = { error: 'dispatch result is inconclusive', mutation: 'possible' };
       }
@@ -1409,6 +1427,7 @@ export async function performReactTreeInput(
       pathsTried,
     });
   }
+  const expected = dispatch.resultingText;
   let verification: 'exact' | 'mismatch' | 'unreadable' = 'unreadable';
   let previous: { value: string | null; controlled: boolean } | null = null;
   let last: { value: string | null; controlled: boolean } | null = null;

@@ -73,6 +73,7 @@ export function replayTreeData(envelope: ReplayTreeEnvelope): unknown {
 export interface CdpReplayDeps {
   pressByTestId(id: string): Promise<ReplayPressResult | void>;
   typeByTestId(id: string, text: string, context?: ReplayTypeContext): Promise<void>;
+  releaseInputDesignation?(token: string): Promise<void>;
   // Returns parsed readable getTree data filtered to `id`.
   treeFor(id: string): Promise<unknown>;
   // Exact-ID oracle; matchCount 0 proves absence, while refusals omit it.
@@ -101,7 +102,7 @@ export function createReplayPressByTestId(
       ok?: boolean;
       code?: string;
       error?: string;
-      data?: { action?: string; focusOnly?: boolean };
+      data?: { action?: string; focusOnly?: boolean; designationToken?: string };
       meta?: Record<string, unknown>;
     };
     if (envelope.ok === false) {
@@ -112,13 +113,21 @@ export function createReplayPressByTestId(
       );
     }
     if (envelope.data?.action !== 'designateTextInput') return { kind: 'press' };
-    if (envelope.data.focusOnly !== true) {
+    if (
+      envelope.data.focusOnly !== true ||
+      typeof envelope.data.designationToken !== 'string' ||
+      envelope.data.designationToken.length === 0
+    ) {
       throw new ReplayDispatchError(
         'INTERACTION_NOT_ACTUATED',
         `press "${id}" returned an invalid TextInput designation`,
       );
     }
-    return { kind: 'designation', focusOnly: true };
+    return {
+      kind: 'designation',
+      focusOnly: true,
+      token: envelope.data.designationToken,
+    };
   };
 }
 
@@ -251,6 +260,9 @@ export function buildCdpDispatch(deps: CdpReplayDeps, signal?: AbortSignal): Rep
       await assertExactInteractable(id);
       requireNotAborted();
       await deps.typeByTestId(id, text, context);
+    },
+    async releaseDesignation(token) {
+      await deps.releaseInputDesignation?.(token);
     },
     async visibility(id) {
       await deps.treeFor(id);

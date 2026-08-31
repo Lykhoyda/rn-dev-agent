@@ -2,7 +2,7 @@
 // whenever the injected surface changes; it flows into the IIFE's freshness
 // check (__RN_AGENT.__v) AND the post-injection log line, so they can never
 // drift (the log previously hard-coded a stale "v11").
-export const HELPERS_VERSION = 55;
+export const HELPERS_VERSION = 56;
 
 export const INJECTED_HELPERS = `
 (function() {
@@ -2255,6 +2255,48 @@ export const INJECTED_HELPERS = `
     return null;
   }
 
+  var activeTextInputDesignation = null;
+  var textInputDesignationSequence = 0;
+
+  function retainTextInputDesignation(input, selector) {
+    textInputDesignationSequence++;
+    var token = Date.now().toString(36) + '-' + textInputDesignationSequence.toString(36);
+    activeTextInputDesignation = {
+      token: token,
+      input: input,
+      selector: selector
+    };
+    return token;
+  }
+
+  function consumeTextInputDesignation(token, selector) {
+    var designation = activeTextInputDesignation;
+    if (
+      !designation
+      || designation.token !== token
+      || designation.selector !== selector
+    ) {
+      return null;
+    }
+    activeTextInputDesignation = null;
+    return designation;
+  }
+
+  function releaseInputDesignation(token) {
+    var released = !!activeTextInputDesignation
+      && activeTextInputDesignation.token === token;
+    if (released) activeTextInputDesignation = null;
+    return JSON.stringify({ released: released });
+  }
+
+  function isSameDesignatedInput(left, right) {
+    return !!left && !!right && (
+      left === right
+      || left.alternate === right
+      || right.alternate === left
+    );
+  }
+
   function resolveTextInputDesignation(owner, selector) {
     if (!owner) return null;
     var designationStack = [owner];
@@ -2361,13 +2403,28 @@ export const INJECTED_HELPERS = `
       action: 'designateTextInput',
       component: typeTextFiberName(designationInput),
       testID: selector,
-      focusOnly: true
+      focusOnly: true,
+      inputFiber: designationInput
     };
   }
 
   function executeTypeTextTransaction(opts) {
     var designationSelector = opts.testID;
+    var boundDesignation = null;
     if (opts.requireLiveInputDesignation === true) {
+      boundDesignation = consumeTextInputDesignation(
+        opts.designationToken,
+        designationSelector
+      );
+      if (!boundDesignation) {
+        return {
+          error: 'TextInput designation no longer owns the exact host input',
+          code: 'INTERACTION_NOT_ACTUATED',
+          testID: designationSelector,
+          focusOnly: true,
+          handlerCalled: false
+        };
+      }
       var liveFrontmost;
       try {
         liveFrontmost = JSON.parse(isTestIdFrontmost(designationSelector));
@@ -2470,6 +2527,18 @@ export const INJECTED_HELPERS = `
         liveDesignation.handlerCalled = false;
         return liveDesignation;
       }
+      if (
+        !isSameDesignatedInput(boundDesignation.input, binding.sourceFiber)
+        || !isSameDesignatedInput(boundDesignation.input, liveDesignation.inputFiber)
+      ) {
+        return {
+          error: 'TextInput designation no longer owns the exact host input',
+          code: 'INTERACTION_NOT_ACTUATED',
+          testID: designationSelector,
+          focusOnly: true,
+          handlerCalled: false
+        };
+      }
       var designationCandidateProps = binding.candidateFiber.memoizedProps || {};
       if (textInputDesignationDisabled(designationCandidateProps)) {
         return {
@@ -2481,8 +2550,18 @@ export const INJECTED_HELPERS = `
           handlerCalled: false
         };
       }
+      if (binding.controlled !== true) {
+        return {
+          error: 'TextInput designation is uncontrolled or unreadable',
+          code: 'INTERACTION_NOT_ACTUATED',
+          testID: designationSelector,
+          focusOnly: true,
+          handlerCalled: false
+        };
+      }
     }
     var text = opts.text !== undefined ? opts.text : '';
+    if (boundDesignation) text = (binding.valueBefore || '') + text;
     try {
       if (binding.contract === 'onChangeText:string') binding.handler(text);
       else binding.handler({ nativeEvent: { text: text } });
@@ -2818,7 +2897,16 @@ export const INJECTED_HELPERS = `
         if (typeof props.onPress !== 'function') {
           if (opts.allowInputDesignation === true && opts.testID) {
             var designation = resolveTextInputDesignation(found, selector);
-            if (designation) return JSON.stringify(designation);
+            if (designation) {
+              if (designation.success === true) {
+                designation.designationToken = retainTextInputDesignation(
+                  designation.inputFiber,
+                  selector
+                );
+                delete designation.inputFiber;
+              }
+              return JSON.stringify(designation);
+            }
           }
           return JSON.stringify({ error: 'Component has no onPress handler', component: typeName, testID: selector });
         }
@@ -4354,6 +4442,7 @@ export const INJECTED_HELPERS = `
     getStoreState: getStoreState,
     getComponentState: getComponentState,
     readInputValue: readInputValue,
+    releaseInputDesignation: releaseInputDesignation,
     dispatchAction: dispatchAction,
     getErrors: getErrors,
     clearErrors: clearErrors,

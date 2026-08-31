@@ -17,12 +17,15 @@ function dispatchFor(options: { designations?: string[]; nonInputs?: string[] } 
       async press(id): Promise<ReplayPressResult> {
         calls.push(['press', id]);
         return options.designations?.includes(id)
-          ? { kind: 'designation', focusOnly: true }
+          ? { kind: 'designation', focusOnly: true, token: `designation-${id}` }
           : { kind: 'press' };
       },
-      async type(id, text) {
-        calls.push(['type', id, text]);
+      async type(id, text, context) {
+        calls.push(['type', id, text, context?.designationToken ?? '']);
         if (options.nonInputs?.includes(id)) throw new Error('not a text input');
+      },
+      async releaseDesignation(token) {
+        calls.push(['release', token]);
       },
       async visibility(id) {
         calls.push(['visibility', id]);
@@ -50,7 +53,8 @@ test('a TextInput designation is consumed only by the adjacent type step', async
   assert.equal(result.steps[0].focusOnly, true);
   assert.deepEqual(calls, [
     ['press', 'email'],
-    ['type', 'email', 'person@example.test'],
+    ['type', 'email', 'person@example.test', 'designation-email'],
+    ['release', 'designation-email'],
   ]);
 });
 
@@ -74,8 +78,9 @@ test('a non-input tap invalidates an earlier TextInput designation', async () =>
   assert.equal(result.steps[1].focusOnly, undefined);
   assert.deepEqual(calls, [
     ['press', 'email'],
+    ['release', 'designation-email'],
     ['press', 'continue'],
-    ['type', 'continue', 'must-not-reach-email'],
+    ['type', 'continue', 'must-not-reach-email', ''],
   ]);
 });
 
@@ -88,7 +93,10 @@ test('an unconsumed designation refuses instead of masquerading as a successful 
   assert.equal(result.failureCode, 'INTERACTION_NOT_ACTUATED');
   assert.match(result.reason ?? '', /must be followed immediately by inputText/);
   assert.equal(result.steps[0].focusOnly, true);
-  assert.deepEqual(calls, [['press', 'email']]);
+  assert.deepEqual(calls, [
+    ['press', 'email'],
+    ['release', 'designation-email'],
+  ]);
 });
 
 test('an assertion cannot clear an unconsumed TextInput designation', async () => {
@@ -108,6 +116,7 @@ test('an assertion cannot clear an unconsumed TextInput designation', async () =
   assert.equal(result.steps[0].focusOnly, true);
   assert.deepEqual(calls, [
     ['press', 'email'],
+    ['release', 'designation-email'],
     ['visibility', 'continue'],
   ]);
 });

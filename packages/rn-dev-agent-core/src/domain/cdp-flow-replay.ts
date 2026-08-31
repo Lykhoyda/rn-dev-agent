@@ -16,15 +16,19 @@ export class UnsupportedStepError extends Error {
 export interface ReplayDispatch {
   press(id: string): Promise<ReplayPressResult | void>;
   type(id: string, text: string, context?: ReplayTypeContext): Promise<void>;
+  releaseDesignation?(token: string): Promise<void>;
   visibility(id: string): Promise<ReplayVisibility>;
   launch(stopApp: boolean): Promise<void>;
   settle(timeoutMs: number): Promise<void>;
 }
 
-export type ReplayPressResult = { kind: 'press' } | { kind: 'designation'; focusOnly: true };
+export type ReplayPressResult =
+  | { kind: 'press' }
+  | { kind: 'designation'; focusOnly: true; token: string };
 
 export interface ReplayTypeContext {
   focusOnlyDesignation: true;
+  designationToken: string;
 }
 
 export interface ReplayVisibility {
@@ -273,7 +277,7 @@ export async function replayFlow(
   const offset = opts.indexOffset ?? 0;
   const trace: ReplayResult['steps'] = [];
   let lastTapped: string | null = opts.initialFocusId ?? null;
-  let pendingDesignation: string | null = null;
+  let pendingDesignation: { id: string; token: string } | null = null;
   let staleDesignation: string | null = null;
   const sourceIndex = (i: number): number => opts.sourceIndex ?? i + offset;
 
@@ -299,14 +303,26 @@ export async function replayFlow(
       );
     }
   };
+  const releaseDesignation = async (token: string): Promise<void> => {
+    try {
+      await dispatch.releaseDesignation?.(token);
+    } catch {}
+  };
+  const releasePendingDesignation = async (): Promise<void> => {
+    const designation = pendingDesignation;
+    pendingDesignation = null;
+    if (designation) await releaseDesignation(designation.token);
+  };
 
   for (let i = 0; i < steps.length; i++) {
     const s = steps[i];
     const evidenceType = s.t === 'waitVisible' ? (s.evidenceType ?? s.t) : s.t;
     const startedAt = Date.now();
     if (pendingDesignation && s.t !== 'type') {
-      staleDesignation = staleDesignation ?? pendingDesignation;
+      staleDesignation = staleDesignation ?? pendingDesignation.id;
+      const staleToken = pendingDesignation.token;
       pendingDesignation = null;
+      await releaseDesignation(staleToken);
     }
     try {
       requireNotAborted();
@@ -323,13 +339,13 @@ export async function replayFlow(
           break;
         case 'tap':
           const pressResult = await dispatch.press(s.id);
-          requireNotAborted();
           if (pressResult?.kind === 'designation') {
             lastTapped = null;
-            pendingDesignation = s.id;
+            pendingDesignation = { id: s.id, token: pressResult.token };
           } else {
             lastTapped = s.id;
           }
+          requireNotAborted();
           trace.push({
             sourceIndex: sourceIndex(i),
             t: s.t,
@@ -340,15 +356,24 @@ export async function replayFlow(
           });
           break;
         case 'type': {
-          const target = pendingDesignation ?? lastTapped;
+          const designation = pendingDesignation;
+          const target = designation?.id ?? lastTapped;
           if (!target) return fail(i, 'inputText before any tapOn — no focus target');
-          const focusOnlyDesignation = pendingDesignation !== null;
           pendingDesignation = null;
-          await dispatch.type(
-            target,
-            s.text,
-            focusOnlyDesignation ? { focusOnlyDesignation: true } : undefined,
-          );
+          try {
+            await dispatch.type(
+              target,
+              s.text,
+              designation
+                ? {
+                    focusOnlyDesignation: true,
+                    designationToken: designation.token,
+                  }
+                : undefined,
+            );
+          } finally {
+            if (designation) await releaseDesignation(designation.token);
+          }
           requireNotAborted();
           trace.push({
             sourceIndex: sourceIndex(i),
@@ -456,6 +481,7 @@ export async function replayFlow(
       }
     } catch (e) {
       const waitedMs = Date.now() - startedAt;
+      await releasePendingDesignation();
       trace.push({
         sourceIndex: sourceIndex(i),
         t: evidenceType,
@@ -474,14 +500,18 @@ export async function replayFlow(
   }
 
   if (opts.signal?.aborted) {
+    await releasePendingDesignation();
     return fail(
       Math.max(0, steps.length - 1),
       'React-tree replay exceeded its execution deadline',
       'RUNNER_TIMEOUT',
     );
   }
-  const unconsumedDesignation = staleDesignation ?? pendingDesignation;
+  const unconsumedDesignation = staleDesignation ?? pendingDesignation?.id;
   if (unconsumedDesignation) {
+    if (pendingDesignation) {
+      await releasePendingDesignation();
+    }
     return fail(
       Math.max(0, steps.length - 1),
       `TextInput designation for "${unconsumedDesignation}" must be followed immediately by inputText`,

@@ -375,11 +375,20 @@ const makeReplayDeps = (_args?: unknown, signal?: AbortSignal): CdpReplayDeps | 
     pressByTestId: createReplayPressByTestId(interact),
     typeByTestId: async (id: string, text: string, context) => {
       mustOk(
-        await performReactTreeInput(id, text, getClient(), signal, {
-          requireLiveInputDesignation: context?.focusOnlyDesignation === true,
-        }),
+        await performReactTreeInput(
+          id,
+          text,
+          getClient(),
+          signal,
+          context ? { designationToken: context.designationToken } : {},
+        ),
         `type "${id}"`,
       );
+    },
+    releaseInputDesignation: async (token: string) => {
+      try {
+        await getClient().evaluate(`__RN_AGENT.releaseInputDesignation(${JSON.stringify(token)})`);
+      } catch {}
     },
     treeFor: async (id: string) => {
       const fetchTree = async (interactiveOnly: boolean) =>
