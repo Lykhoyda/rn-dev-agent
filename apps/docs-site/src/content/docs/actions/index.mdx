@@ -110,9 +110,11 @@ result instead of assuming `.rn-agent/state/`.
 
 Each fenced session owns its history. A fresh session starts an action at
 revision 1 with empty run and repair history. Revisions and promotion history
-do not carry over. At this session-private history boundary, promotion earned
-in one session is invisible to the next by design. This reset preserves
-isolation between parallel sessions and worktrees.
+do not carry over. Canonical lifecycle status remains shared worktree
+knowledge: when a clean replay promotes the tracked action YAML to `active`,
+later sessions see that status without inheriting the earlier session's
+runtime history. This reset preserves isolation between parallel sessions and
+worktrees.
 
 ## Creating an action
 

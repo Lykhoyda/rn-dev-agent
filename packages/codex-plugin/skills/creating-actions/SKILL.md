@@ -144,7 +144,7 @@ cdp_run_action({ actionId: "<id>", params: { PRODUCT_ID: "7" }, trigger: "agent"
 ```
 
 - First clean pass auto-promotes `experimental → active` and materialises the sidecar.
-- A fresh fenced session starts revision 1 with empty run and repair history. Revisions and promotion history do not cross session boundaries; at this session-private history boundary, promotion earned in one session is invisible to the next by design.
+- A fresh fenced session starts revision 1 with empty run and repair history. Revisions and promotion history do not cross session boundaries. Canonical lifecycle status remains shared worktree knowledge, so later sessions see tracked YAML promoted to `active` without inheriting the earlier runtime history.
 - Verify the outcome by **state, not pixels**: `cdp_store_state`, `expect_redux` / `expect_route` / `expect_visible_by_testid`.
 - `mutates: true` actions leave residue — clean up between runs or use timestamp-suffixed param values so repeated replays stay deterministic.
 - Exercise the variable branch (e.g. one on-screen and one off-screen `PRODUCT_ID`) before trusting the action.
