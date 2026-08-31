@@ -74,8 +74,7 @@ let recordingBundleId: string | null = null;
 // --- Pure helpers (easy to unit-test) ---
 
 // Collapse consecutive duplicates: same-testID type bursts keep the latest
-// value; identical-testID taps within 100ms collapse to one. Mirrors
-// metro-mcp's deduplicateEvents but with explicit type guards.
+// value; identical-testID taps within 100ms collapse to one.
 export function deduplicateEvents(events: RecordedEvent[]): RecordedEvent[] {
   const out: RecordedEvent[] = [];
   for (let i = 0; i < events.length; i++) {

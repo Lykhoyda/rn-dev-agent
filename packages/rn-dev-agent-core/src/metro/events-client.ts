@@ -46,9 +46,8 @@ export interface MetroEvent {
  *   }
  *
  * Bare Metro returns either a WebSocket upgrade error (400/426) or, for
- * newer Metro versions, a short ReporterEvent stream on HTTP (same shape
- * as metro-mcp's reference impl). Neither contains `runtimeVersion` or
- * `launchAsset` keys.
+ * newer Metro versions, a short ReporterEvent stream on HTTP. Neither contains
+ * `runtimeVersion` or `launchAsset` keys.
  *
  * Exported for unit testing without a live HTTP server.
  */

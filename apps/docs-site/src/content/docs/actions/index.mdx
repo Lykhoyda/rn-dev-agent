@@ -21,9 +21,7 @@ An **action** is a saved, parameterised flow through your app — login, navigat
 
 ## Why we have actions — the LLM/pragmatic hybrid
 
-LLM agents are great at **understanding intent and improvising on novel screens**. They are slow and stochastic at **re-deriving things they've already seen**. A login flow that took fourteen minutes to walk interactively the first time will take fourteen minutes again the next time, every time, if we don't record it.
-
-Pure-script approaches (Maestro, Detox, Appium) are the opposite: fast and deterministic on the happy path, but they don't adapt. A renamed `testID` breaks the script; a human re-records.
+The agent must **understand intent and improvise on novel screens** without re-deriving journeys it has already verified. A login flow that took fourteen minutes to walk interactively the first time should become a deterministic, seconds-long prologue on later runs.
 
 Actions sit deliberately in the middle. They are **emitted by the agent, not authored by humans** — the verification walk that proves the feature works is the same artefact that gets replayed next time. The agent is in charge of when to *use* an action versus when to discover something new.
 
@@ -45,15 +43,15 @@ A worked example. You ask: "tap the cart badge."
 
 A 3-step task-creation wizard took **13 min 55 s** as an interactive agent walk on first run; the same wizard replayed as an action runs in **~4 seconds** — a ~210× speed-up. Across 35 stories in the test app, average end-to-end time dropped from ~12 min to ~4 min once the corresponding actions existed. The latency win is most of the point, but the deeper one is **determinism**: replayed prologues take a fixed number of turns, so the LLM doesn't waste context re-orienting before getting to the actually-novel work.
 
-### How this compares with the alternatives
+### Action reliability contract
 
-| Failure mode | Pure script (Detox, Maestro) | Pure LLM (no actions) | This plugin |
-|---|---|---|---|
-| `testID` renamed in app | Breaks; human re-records | Re-discovers slowly each run | `cdp_repair_action` patches the YAML via fuzzy match against the live snapshot, retries, logs the diff |
-| Button moved / restyled | Breaks | Adapts but spends turns | Repair handles it; if structure changed, escalates |
-| Product logic changed | Passes anyway, masking the bug | Probabilistically catches it | Refuses to auto-patch a logical break; surfaces the failure to you |
-| Net-new behaviour to verify | n/a — can't author for unknown flows | Re-derives every session | Discovers interactively, then **the verified walk auto-saves as a new action** |
-| Cost over time | Linear (every drift needs a human) | Quadratic-ish (every session re-pays full walk) | Sub-linear (drift auto-absorbed, new flows compound the library) |
+| Situation | Required behaviour |
+|---|---|
+| `testID` renamed in app | `cdp_repair_action` patches the YAML via fuzzy match against the live snapshot, retries, and logs the diff |
+| Button moved or restyled | Repair absorbs bounded UI drift; structural changes escalate |
+| Product logic changed | The action refuses to auto-patch the logical break and surfaces the failure |
+| Net-new behaviour to verify | The agent discovers it interactively, then **auto-saves the verified walk as a new action** |
+| Repeated known journey | Replay uses the existing action so each verified flow compounds the reusable library |
 
 Said another way: actions are the **memory** of the LLM loop. Every successful verification adds one. Every drift gets quietly absorbed. Every truly broken flow escalates.
 

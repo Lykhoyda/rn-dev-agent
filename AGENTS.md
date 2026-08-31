@@ -36,6 +36,12 @@ sibling workspace only when explicitly requested.
 
 ## Editing Rules
 
+- Use first-party framing in code, docs, comments, tests, changesets, issue/PR
+  descriptions, review replies, and shipped artifacts: never name, quote, link
+  to, cite, or present behavior as copied from competing repositories or
+  implementation approaches. Keep comparative research private and translate
+  it into rn-dev-agent requirements, evidence, and rationale before it enters
+  this repository.
 - New source and test code must be TypeScript: `.ts` or `.tsx`. Existing
   grandfathered `.js`/`.mjs` files are tracked in
   `scripts/js-migration-baseline.txt`; do not grow that baseline casually.
