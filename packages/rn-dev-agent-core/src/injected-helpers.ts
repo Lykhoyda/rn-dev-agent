@@ -2,7 +2,7 @@
 // whenever the injected surface changes; it flows into the IIFE's freshness
 // check (__RN_AGENT.__v) AND the post-injection log line, so they can never
 // drift (the log previously hard-coded a stale "v11").
-export const HELPERS_VERSION = 52;
+export const HELPERS_VERSION = 53;
 
 export const INJECTED_HELPERS = `
 (function() {
@@ -2192,6 +2192,78 @@ export const INJECTED_HELPERS = `
     };
   }
 
+  function textInputDesignationDisabled(candidateProps) {
+    return candidateProps.disabled === true
+      || candidateProps.editable === false
+      || (candidateProps.accessibilityState && candidateProps.accessibilityState.disabled === true);
+  }
+
+  function resolveTextInputDesignation(owner, selector) {
+    if (!owner) return null;
+    var designationStack = [owner];
+    var designationSeen = new WeakSet();
+    var designationInputs = [];
+    var designationWork = 0;
+    while (designationStack.length > 0 && designationWork < 2000) {
+      var designationFiber = designationStack.pop();
+      if (designationSeen.has(designationFiber)) continue;
+      designationSeen.add(designationFiber);
+      designationWork++;
+      var designationProps = designationFiber.memoizedProps || {};
+      if (
+        designationFiber.tag === 5
+        && typeof designationFiber.type === 'string'
+        && hostKind(designationFiber) === 'textinput'
+        && (designationProps.testID === selector || designationProps.nativeID === selector)
+      ) {
+        designationInputs.push(designationFiber);
+      }
+      var designationChild = designationFiber.child;
+      while (designationChild) {
+        designationStack.push(designationChild);
+        designationChild = designationChild.sibling;
+      }
+    }
+    if (designationStack.length > 0) {
+      return {
+        error: 'TextInput designation resolution truncated',
+        testID: selector,
+        focusOnly: true
+      };
+    }
+    if (designationInputs.length > 1) {
+      return {
+        error: 'Ambiguous TextInput designation target',
+        testID: selector,
+        count: designationInputs.length,
+        focusOnly: true
+      };
+    }
+    if (designationInputs.length !== 1) return null;
+    var designationInput = designationInputs[0];
+    var designationOwnerProps = owner.memoizedProps || {};
+    var designationInputProps = designationInput.memoizedProps || {};
+    if (
+      textInputDesignationDisabled(designationOwnerProps)
+      || textInputDesignationDisabled(designationInputProps)
+    ) {
+      return {
+        error: 'TextInput is disabled or non-editable',
+        component: typeTextFiberName(designationInput),
+        testID: selector,
+        focusOnly: true
+      };
+    }
+    if (typeof designationInputProps.onPress === 'function') return null;
+    return {
+      success: true,
+      action: 'designateTextInput',
+      component: typeTextFiberName(designationInput),
+      testID: selector,
+      focusOnly: true
+    };
+  }
+
   function executeTypeTextTransaction(opts) {
     var designationSelector = opts.testID;
     if (opts.requireLiveInputDesignation === true) {
@@ -2250,16 +2322,55 @@ export const INJECTED_HELPERS = `
           handlerCalled: false
         };
       }
+      var designationOwner = binding.sourceFiber;
+      var designationOwnerCursor = binding.sourceFiber.return;
+      var designationOwnerSeen = new WeakSet();
+      var designationOwnerDepth = 0;
+      while (designationOwnerCursor && designationOwnerDepth < 1000) {
+        if (designationOwnerSeen.has(designationOwnerCursor)) {
+          designationOwnerCursor = null;
+          designationOwnerDepth = 1000;
+          break;
+        }
+        designationOwnerSeen.add(designationOwnerCursor);
+        designationOwnerDepth++;
+        var designationOwnerProps = designationOwnerCursor.memoizedProps || {};
+        if (
+          designationOwnerProps.testID === designationSelector
+          || designationOwnerProps.nativeID === designationSelector
+        ) {
+          designationOwner = designationOwnerCursor;
+        }
+        designationOwnerCursor = designationOwnerCursor.return;
+      }
+      if (designationOwnerCursor || designationOwnerDepth >= 1000) {
+        return {
+          error: 'TextInput designation ownership resolution truncated',
+          code: 'ASSERTION_FAILED',
+          testID: designationSelector,
+          focusOnly: true,
+          handlerCalled: false
+        };
+      }
+      var liveDesignation = resolveTextInputDesignation(designationOwner, designationSelector);
+      if (!liveDesignation || liveDesignation.success !== true) {
+        if (!liveDesignation) {
+          return {
+            error: 'TextInput designation no longer resolves to the exact host input',
+            code: 'INTERACTION_NOT_ACTUATED',
+            testID: designationSelector,
+            focusOnly: true,
+            handlerCalled: false
+          };
+        }
+        liveDesignation.code = liveDesignation.error === 'TextInput designation resolution truncated'
+          ? 'ASSERTION_FAILED'
+          : 'INTERACTION_NOT_ACTUATED';
+        liveDesignation.handlerCalled = false;
+        return liveDesignation;
+      }
       var designationCandidateProps = binding.candidateFiber.memoizedProps || {};
-      var designationIsDisabled = function(candidateProps) {
-        return candidateProps.disabled === true
-          || candidateProps.editable === false
-          || (candidateProps.accessibilityState && candidateProps.accessibilityState.disabled === true);
-      };
-      if (
-        designationIsDisabled(designationSourceProps)
-        || designationIsDisabled(designationCandidateProps)
-      ) {
+      if (textInputDesignationDisabled(designationCandidateProps)) {
         return {
           error: 'TextInput is disabled or non-editable',
           code: 'INTERACTION_NOT_ACTUATED',
@@ -2605,71 +2716,8 @@ export const INJECTED_HELPERS = `
       if (action === 'press') {
         if (typeof props.onPress !== 'function') {
           if (opts.allowInputDesignation === true && opts.testID) {
-            var designationStack = [found];
-            var designationSeen = new WeakSet();
-            var designationInputs = [];
-            var designationWork = 0;
-            while (designationStack.length > 0 && designationWork < 2000) {
-              var designationFiber = designationStack.pop();
-              if (designationSeen.has(designationFiber)) continue;
-              designationSeen.add(designationFiber);
-              designationWork++;
-              var designationProps = designationFiber.memoizedProps || {};
-              if (
-                designationFiber.tag === 5
-                && typeof designationFiber.type === 'string'
-                && hostKind(designationFiber) === 'textinput'
-                && (designationProps.testID === selector || designationProps.nativeID === selector)
-              ) {
-                designationInputs.push(designationFiber);
-              }
-              var designationChild = designationFiber.child;
-              while (designationChild) {
-                designationStack.push(designationChild);
-                designationChild = designationChild.sibling;
-              }
-            }
-            if (designationStack.length > 0) {
-              return JSON.stringify({
-                error: 'TextInput designation resolution truncated',
-                testID: selector,
-                focusOnly: true
-              });
-            }
-            if (designationInputs.length > 1) {
-              return JSON.stringify({
-                error: 'Ambiguous TextInput designation target',
-                testID: selector,
-                count: designationInputs.length,
-                focusOnly: true
-              });
-            }
-            if (designationInputs.length === 1) {
-              var designationInput = designationInputs[0];
-              var designationInputProps = designationInput.memoizedProps || {};
-              var designationDisabled = function(candidateProps) {
-                return candidateProps.disabled === true
-                  || candidateProps.editable === false
-                  || (candidateProps.accessibilityState && candidateProps.accessibilityState.disabled === true);
-              };
-              if (designationDisabled(props) || designationDisabled(designationInputProps)) {
-                return JSON.stringify({
-                  error: 'TextInput is disabled or non-editable',
-                  component: typeTextFiberName(designationInput),
-                  testID: selector,
-                  focusOnly: true
-                });
-              }
-              if (typeof designationInputProps.onPress !== 'function') {
-                return JSON.stringify({
-                  success: true,
-                  action: 'designateTextInput',
-                  component: typeTextFiberName(designationInput),
-                  testID: selector,
-                  focusOnly: true
-                });
-              }
-            }
+            var designation = resolveTextInputDesignation(found, selector);
+            if (designation) return JSON.stringify(designation);
           }
           return JSON.stringify({ error: 'Component has no onPress handler', component: typeName, testID: selector });
         }

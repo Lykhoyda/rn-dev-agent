@@ -49,13 +49,19 @@ function append(parent: Fiber, child: Fiber): Fiber {
 function replayFixture(
   options: {
     editable?: boolean;
-    beforeDesignatedTypeDispatch?: (fixture: { root: Fiber; input: Fiber }) => void;
+    wrapped?: boolean;
+    beforeDesignatedTypeDispatch?: (fixture: {
+      root: Fiber;
+      input: Fiber;
+      designationOwner: Fiber;
+    }) => void;
   } = {},
 ) {
   const calls = { focus: 0, press: 0, typed: [] as string[] };
   const root = fiber({ displayName: 'Root' });
+  const wrapper = options.wrapped ? append(root, fiber('RCTView', { testID: 'email' })) : null;
   const input = append(
-    root,
+    wrapper ?? root,
     fiber('RCTSinglelineTextInputView', {
       testID: 'email',
       editable: options.editable ?? true,
@@ -119,14 +125,18 @@ function replayFixture(
           JSON.parse(expression.slice(expression.indexOf('(') + 1, -1))
             .requireLiveInputDesignation === true
         ) {
-          options.beforeDesignatedTypeDispatch({ root, input });
+          options.beforeDesignatedTypeDispatch({
+            root,
+            input,
+            designationOwner: wrapper ?? input,
+          });
         }
         return { value: vm.runInContext(expression, sandbox) };
       } catch (error) {
         return { error };
       }
     },
-    probeHelperFreshness: async () => ({ fresh: true, version: 49, probed: true }),
+    probeHelperFreshness: async () => ({ fresh: true, version: 50, probed: true }),
   });
   const interact = createInteractHandler(() => client);
   const deps: CdpReplayDeps = {
@@ -277,6 +287,27 @@ test('designation preserves the frontmost and duplicate-target refusals', async 
 });
 
 test('designation rechecks live eligibility at the injected mutation boundary', async (t) => {
+  await t.test('matched wrapper becomes disabled', async () => {
+    const fixture = replayFixture({
+      wrapped: true,
+      beforeDesignatedTypeDispatch: ({ designationOwner }) => {
+        designationOwner.memoizedProps.disabled = true;
+      },
+    });
+    const result = await runCdpReplayCommands(
+      [{ tapOn: { id: 'email' } }, { inputText: 'blocked' }],
+      {},
+      fixture.deps,
+    );
+
+    assert.equal(result.passed, false);
+    assert.equal(result.failedStepIndex, 1);
+    assert.equal(result.failureCode, 'INTERACTION_NOT_ACTUATED');
+    assert.match(result.reason ?? '', /disabled or non-editable/);
+    assert.deepEqual(fixture.calls.typed, []);
+    assert.equal(fixture.input.memoizedProps.value, '');
+  });
+
   await t.test('input becomes non-editable', async () => {
     const fixture = replayFixture({
       beforeDesignatedTypeDispatch: ({ input }) => {
