@@ -86,9 +86,8 @@ export function loadOrInitSidecar(
 }
 
 /**
- * Persist a sidecar to disk. Creates the state/ directory if missing.
- * Always writes to the path derived from the YAML's location, never
- * accepts an explicit override — keeps the on-disk shape stable.
+ * Persist a sidecar to the current runtime state directory, creating it when
+ * missing. The YAML supplies the action id; callers cannot override the path.
  */
 export function saveSidecar(yamlFilePath: string, state: ActionRuntimeState): { path: string } {
   const path = sidecarPathFor(yamlFilePath);
