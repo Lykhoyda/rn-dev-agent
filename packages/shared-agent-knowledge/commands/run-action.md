@@ -130,7 +130,7 @@ Example calls:
        flowFile,
        writes: {
          runtimeState: 'sidecar' | 'refused-external-write' | 'none',
-         runtimeStatePath?: string      // exact path when the sidecar write succeeded
+         runtimeStatePath?: string      // exact path of an observed, disclosed sidecar write
        },
        firstAttemptOutput?: string,     // bounded maestro stdout/stderr: head + tail, 500 chars
        retryOutput?: string,            // present iff retriedAfterRepair === true
@@ -140,9 +140,12 @@ Example calls:
    ```
    When `data.writes.runtimeStatePath` on success or
    `meta.writes.runtimeStatePath` on failure is present, it is the exact
-   location of a successful runtime-state write. Follow that path rather than
-   inferring a write from `writes.runtimeState`: the `sidecar` label can be
-   present when no RunRecord was committed. In a fenced session this is
+   path of a runtime-state write observed and disclosed by that envelope. If
+   the path is absent, no runtime-state write was observed or disclosed by the
+   envelope; absence does not prove that no write occurred or that a write
+   failed. Follow a disclosed path rather than inferring a write from
+   `writes.runtimeState`: the `sidecar` label can be present when no RunRecord
+   was committed. In a fenced session this is
    `<state-home>/v2/sessions/<sessionId>/runtime/state/<actionId>.state.json`
    (`~/Library/Application Support/rn-dev-agent/v2/sessions/<sessionId>/runtime/state/<actionId>.state.json`
    by default on macOS), not `<project>/.rn-agent/state/`. The project-local
