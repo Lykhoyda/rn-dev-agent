@@ -81481,14 +81481,15 @@ function mapRefusedReason(repairCode, repairError) {
   }
   return "INTERNAL_ERROR";
 }
-function replayCorpusIdentityRefusal(context, actionId) {
+function replayCorpusIdentityRefusal(context, actionId, meta) {
   try {
     assertReadableActionLoadContextStable(context);
     return null;
   } catch (error2) {
     return failResult(error2 instanceof Error ? error2.message : String(error2), "BAD_FILENAME", {
       actionId,
-      fallback: "none"
+      fallback: "none",
+      ...meta
     });
   }
 }
@@ -81545,6 +81546,16 @@ function createRunActionHandler(deps = {}) {
     const preflightCommands = loaded.replay.commands;
     const forceReload = proofReplay ? false : args.forceReload !== false;
     const action = forceReload ? acknowledgeExternalEdit(loaded) : loaded;
+    let runtimeStatePath = action === loaded ? void 0 : sidecarPathFor(action.filePath);
+    const writeDisclosure = (actionYaml = "none", outcome) => {
+      const disclosedRuntimeStatePath = outcome?.runtimeStatePath ?? runtimeStatePath;
+      return {
+        actionYaml: actionYaml === "none" ? { written: false, reason: "repair-not-applied" } : actionYaml === "lifecycle-promotion-refused" ? { written: false, reason: "lifecycle-promotion-refused" } : { written: true, authorized: true, reason: actionYaml },
+        runtimeState: proofReplay ? "none" : disclosedRuntimeStatePath ? "sidecar" : outcome?.runtimeStateRefused ? "refused-external-write" : "sidecar",
+        ...disclosedRuntimeStatePath ? { runtimeStatePath: disclosedRuntimeStatePath } : {},
+        databaseMirror: proofReplay ? "none" : "best-effort"
+      };
+    };
     const activeTarget = targetContext();
     const replayPlatform = args.platform && activeTarget?.platform && args.platform !== activeTarget.platform ? void 0 : args.platform ?? activeTarget?.platform;
     const iosProofPlan = replayPlatform === "ios" ? planIosProofDomains(preflightCommands, args.params ?? {}) : null;
@@ -81556,7 +81567,8 @@ function createRunActionHandler(deps = {}) {
     } catch (err) {
       return failResult(err instanceof Error ? err.message : String(err), "BAD_FILENAME", {
         actionId: args.actionId,
-        fallback: "none"
+        fallback: "none",
+        ...runtimeStatePath ? { writes: writeDisclosure() } : {}
       });
     }
     const compatRefusal = actionReplayPreflight({
@@ -81571,7 +81583,8 @@ function createRunActionHandler(deps = {}) {
         fallback: "none",
         pin: engineStatus?.pin,
         selectedPath: engineStatus?.selectedPath ?? null,
-        provenance: engineStatus?.provenance ?? "none"
+        provenance: engineStatus?.provenance ?? "none",
+        ...runtimeStatePath ? { writes: writeDisclosure() } : {}
       });
     }
     const autoRepairEnabled = args.autoRepair !== false;
@@ -81596,7 +81609,11 @@ function createRunActionHandler(deps = {}) {
       }
     };
     if (args.platform && activeTarget?.platform && activeTarget.platform !== args.platform) {
-      return failResult(`cdp_run_action: requested ${args.platform}, but the active session is ${activeTarget.platform}; refusing cross-platform replay.`, "TARGET_SESSION_MISMATCH", { requestedPlatform: args.platform, activeSession: activeTarget });
+      return failResult(`cdp_run_action: requested ${args.platform}, but the active session is ${activeTarget.platform}; refusing cross-platform replay.`, "TARGET_SESSION_MISMATCH", {
+        requestedPlatform: args.platform,
+        activeSession: activeTarget,
+        ...runtimeStatePath ? { writes: writeDisclosure() } : {}
+      });
     }
     const maestroDeviceId = (!args.platform || activeTarget?.platform === args.platform) && activeTarget?.deviceId ? activeTarget.deviceId : void 0;
     const receipt2 = args.appFile ? null : installReceipt();
@@ -81621,18 +81638,12 @@ function createRunActionHandler(deps = {}) {
       };
       return persistRun(args.actionId, projectRoot, probeDeviceId ? { ...timedRecord, deviceId: probeDeviceId } : timedRecord);
     };
-    const writeDisclosure = (actionYaml = "none", outcome) => ({
-      actionYaml: actionYaml === "none" ? { written: false, reason: "repair-not-applied" } : actionYaml === "lifecycle-promotion-refused" ? { written: false, reason: "lifecycle-promotion-refused" } : { written: true, authorized: true, reason: actionYaml },
-      runtimeState: proofReplay ? "none" : outcome?.runtimeStateRefused ? "refused-external-write" : "sidecar",
-      ...outcome?.runtimeStatePath ? { runtimeStatePath: outcome.runtimeStatePath } : {},
-      databaseMirror: proofReplay ? "none" : "best-effort"
-    });
     try {
       const strictExecutor = usesStrictRunActionPolicy(args);
       const strictRunRecordMeta = (outcome) => strictExecutor && outcome.persistedRunId ? { strictRunRecordId: outcome.persistedRunId } : {};
       const tBeforeFirst = Date.now();
       probeDeviceId = null;
-      const firstCorpusRefusal = replayCorpusIdentityRefusal(loadContext, args.actionId);
+      const firstCorpusRefusal = replayCorpusIdentityRefusal(loadContext, args.actionId, runtimeStatePath ? { writes: writeDisclosure() } : void 0);
       if (firstCorpusRefusal)
         return firstCorpusRefusal;
       const initialAttemptId = randomUUID9();
@@ -81806,7 +81817,7 @@ function createRunActionHandler(deps = {}) {
       const expectedSeq = action.metadata.expectedRouteSequence;
       if (failure.kind === "SELECTOR_NOT_FOUND" && expectedSeq && expectedSeq.length > 0) {
         const bundleAuthorityClaimed = await claimBundleAuthority(args);
-        const routeCorpusRefusal = replayCorpusIdentityRefusal(loadContext, args.actionId);
+        const routeCorpusRefusal = replayCorpusIdentityRefusal(loadContext, args.actionId, runtimeStatePath ? { writes: writeDisclosure() } : void 0);
         if (routeCorpusRefusal)
           return routeCorpusRefusal;
         const liveRoute = bundleAuthorityClaimed ? await getLiveRoute().catch(() => null) : null;
@@ -81922,6 +81933,9 @@ function createRunActionHandler(deps = {}) {
         });
       }
       const repairData = repairEnv.data;
+      if (typeof repairData.sidecarPath === "string" && repairData.sidecarPath.length > 0) {
+        runtimeStatePath = repairData.sidecarPath;
+      }
       loadContext = refreshActionLoadContext(loadContext, args.actionId);
       const reloadedAction = loadActionFromContext(loadContext, args.actionId);
       if (!reloadedAction) {
@@ -81945,12 +81959,17 @@ function createRunActionHandler(deps = {}) {
         });
       }
       if (!reloadedAction.replay.ok) {
-        return failResult(`cdp_run_action: repaired action is not valid Maestro YAML: ${reloadedAction.replay.error}`, "BAD_RECORDING", { actionId: args.actionId });
+        return failResult(`cdp_run_action: repaired action is not valid Maestro YAML: ${reloadedAction.replay.error}`, "BAD_RECORDING", {
+          actionId: args.actionId,
+          writes: writeDisclosure("auto-repair")
+        });
       }
       const retryYaml = reloadedAction.replay.yamlText;
       const tBeforeRetry = Date.now();
       probeDeviceId = null;
-      const retryCorpusRefusal = replayCorpusIdentityRefusal(loadContext, args.actionId);
+      const retryCorpusRefusal = replayCorpusIdentityRefusal(loadContext, args.actionId, {
+        writes: writeDisclosure("auto-repair")
+      });
       if (retryCorpusRefusal)
         return retryCorpusRefusal;
       const repairedAttemptId = randomUUID9();
@@ -82108,7 +82127,7 @@ function createRunActionHandler(deps = {}) {
         actionId: args.actionId,
         autoRepair,
         internalError: msg3.slice(0, 500),
-        ...persisted ? { writes: writeDisclosure("none", persisted) } : {}
+        ...persisted || runtimeStatePath ? { writes: writeDisclosure("none", persisted) } : {}
       });
     }
   };

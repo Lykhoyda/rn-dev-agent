@@ -60,6 +60,7 @@ import {
 import { createMaestroRunHandler } from './maestro-run.js';
 import { createRepairActionHandler } from './repair-action.js';
 import { isValidActionId } from '../domain/path-safety.js';
+import { sidecarPathFor } from '../domain/sidecar-io.js';
 import { classifyRouteDriftAfterFailure } from '../nav-graph/route-sequence.js';
 import { SessionAuthorityError } from '../session/registry.js';
 import type { MaestroDeviceAuthority } from '../domain/maestro-device-authority.js';
@@ -527,6 +528,7 @@ export interface RunActionDeps {
 function replayCorpusIdentityRefusal(
   context: ReadableActionLoadContext,
   actionId: string,
+  meta?: Record<string, unknown>,
 ): ToolResult | null {
   try {
     assertReadableActionLoadContextStable(context);
@@ -535,6 +537,7 @@ function replayCorpusIdentityRefusal(
     return failResult(error instanceof Error ? error.message : String(error), 'BAD_FILENAME', {
       actionId,
       fallback: 'none',
+      ...meta,
     });
   }
 }
@@ -616,6 +619,30 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
     // get the strict Phase 129 "respect external edits" behavior back.
     const forceReload = proofReplay ? false : args.forceReload !== false;
     const action = forceReload ? acknowledgeExternalEdit(loaded) : loaded;
+    let runtimeStatePath = action === loaded ? undefined : sidecarPathFor(action.filePath);
+    const writeDisclosure = (
+      actionYaml: WriteDisclosureKind = 'none',
+      outcome?: PersistRunOutcome,
+    ) => {
+      const disclosedRuntimeStatePath = outcome?.runtimeStatePath ?? runtimeStatePath;
+      return {
+        actionYaml:
+          actionYaml === 'none'
+            ? { written: false, reason: 'repair-not-applied' }
+            : actionYaml === 'lifecycle-promotion-refused'
+              ? { written: false, reason: 'lifecycle-promotion-refused' }
+              : { written: true, authorized: true, reason: actionYaml },
+        runtimeState: proofReplay
+          ? 'none'
+          : disclosedRuntimeStatePath
+            ? 'sidecar'
+            : outcome?.runtimeStateRefused
+              ? 'refused-external-write'
+              : 'sidecar',
+        ...(disclosedRuntimeStatePath ? { runtimeStatePath: disclosedRuntimeStatePath } : {}),
+        databaseMirror: proofReplay ? 'none' : 'best-effort',
+      };
+    };
     const activeTarget = targetContext();
     const replayPlatform =
       args.platform && activeTarget?.platform && args.platform !== activeTarget.platform
@@ -635,6 +662,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
       return failResult(err instanceof Error ? err.message : String(err), 'BAD_FILENAME', {
         actionId: args.actionId,
         fallback: 'none',
+        ...(runtimeStatePath ? { writes: writeDisclosure() } : {}),
       });
     }
     const compatRefusal = actionReplayPreflight({
@@ -650,6 +678,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
         pin: engineStatus?.pin,
         selectedPath: engineStatus?.selectedPath ?? null,
         provenance: engineStatus?.provenance ?? 'none',
+        ...(runtimeStatePath ? { writes: writeDisclosure() } : {}),
       });
     }
 
@@ -678,7 +707,11 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
       return failResult(
         `cdp_run_action: requested ${args.platform}, but the active session is ${activeTarget.platform}; refusing cross-platform replay.`,
         'TARGET_SESSION_MISMATCH',
-        { requestedPlatform: args.platform, activeSession: activeTarget },
+        {
+          requestedPlatform: args.platform,
+          activeSession: activeTarget,
+          ...(runtimeStatePath ? { writes: writeDisclosure() } : {}),
+        },
       );
     }
     const maestroDeviceId =
@@ -729,25 +762,6 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
         probeDeviceId ? { ...timedRecord, deviceId: probeDeviceId } : timedRecord,
       );
     };
-    const writeDisclosure = (
-      actionYaml: WriteDisclosureKind = 'none',
-      outcome?: PersistRunOutcome,
-    ) => ({
-      actionYaml:
-        actionYaml === 'none'
-          ? { written: false, reason: 'repair-not-applied' }
-          : actionYaml === 'lifecycle-promotion-refused'
-            ? { written: false, reason: 'lifecycle-promotion-refused' }
-            : { written: true, authorized: true, reason: actionYaml },
-      runtimeState: proofReplay
-        ? 'none'
-        : outcome?.runtimeStateRefused
-          ? 'refused-external-write'
-          : 'sidecar',
-      ...(outcome?.runtimeStatePath ? { runtimeStatePath: outcome.runtimeStatePath } : {}),
-      databaseMirror: proofReplay ? 'none' : 'best-effort',
-    });
-
     // Multi-LLM review of PR #115 (Gemini conf 95): wrap the orchestration
     // body so a thrown exception (maestroRun timeout, repairAction
     // throwing through withSession, etc.) is caught and surfaces as a
@@ -769,7 +783,11 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
       // Requested/session metadata is not RunRecord authority. Clear it before
       // dispatch; only direct maestro-runner evidence may repopulate it.
       probeDeviceId = null;
-      const firstCorpusRefusal = replayCorpusIdentityRefusal(loadContext, args.actionId);
+      const firstCorpusRefusal = replayCorpusIdentityRefusal(
+        loadContext,
+        args.actionId,
+        runtimeStatePath ? { writes: writeDisclosure() } : undefined,
+      );
       if (firstCorpusRefusal) return firstCorpusRefusal;
       // GH #623: the post-repair retry names this attempt as its parent.
       const initialAttemptId = randomUUID();
@@ -1001,7 +1019,11 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
       const expectedSeq = action.metadata.expectedRouteSequence;
       if (failure.kind === 'SELECTOR_NOT_FOUND' && expectedSeq && expectedSeq.length > 0) {
         const bundleAuthorityClaimed = await claimBundleAuthority(args);
-        const routeCorpusRefusal = replayCorpusIdentityRefusal(loadContext, args.actionId);
+        const routeCorpusRefusal = replayCorpusIdentityRefusal(
+          loadContext,
+          args.actionId,
+          runtimeStatePath ? { writes: writeDisclosure() } : undefined,
+        );
         if (routeCorpusRefusal) return routeCorpusRefusal;
         const liveRoute = bundleAuthorityClaimed ? await getLiveRoute().catch(() => null) : null;
         const drift = classifyRouteDriftAfterFailure({ expectedSequence: expectedSeq, liveRoute });
@@ -1161,7 +1183,11 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
       const repairData = repairEnv.data as {
         oldSelector: string;
         newSelector: string;
+        sidecarPath?: unknown;
       };
+      if (typeof repairData.sidecarPath === 'string' && repairData.sidecarPath.length > 0) {
+        runtimeStatePath = repairData.sidecarPath;
+      }
 
       // The repair updated the action on disk. Re-load to pick up the
       // new body + bumped revision/state — saveAction's atomic pair-write
@@ -1198,14 +1224,19 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
         return failResult(
           `cdp_run_action: repaired action is not valid Maestro YAML: ${reloadedAction.replay.error}`,
           'BAD_RECORDING',
-          { actionId: args.actionId },
+          {
+            actionId: args.actionId,
+            writes: writeDisclosure('auto-repair'),
+          },
         );
       }
       const retryYaml = reloadedAction.replay.yamlText;
 
       const tBeforeRetry = Date.now();
       probeDeviceId = null;
-      const retryCorpusRefusal = replayCorpusIdentityRefusal(loadContext, args.actionId);
+      const retryCorpusRefusal = replayCorpusIdentityRefusal(loadContext, args.actionId, {
+        writes: writeDisclosure('auto-repair'),
+      });
       if (retryCorpusRefusal) return retryCorpusRefusal;
       const repairedAttemptId = randomUUID();
       const retryResult = await measureStep('maestro-retry', () =>
@@ -1423,7 +1454,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
           actionId: args.actionId,
           autoRepair,
           internalError: msg.slice(0, 500),
-          ...(persisted ? { writes: writeDisclosure('none', persisted) } : {}),
+          ...(persisted || runtimeStatePath ? { writes: writeDisclosure('none', persisted) } : {}),
         },
       );
     }
