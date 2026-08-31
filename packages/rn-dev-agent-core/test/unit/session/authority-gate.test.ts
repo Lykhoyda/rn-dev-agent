@@ -635,6 +635,33 @@ test('postflight drift rejects the result instead of returning a false success',
   assert.equal(envelope.data, undefined);
 });
 
+test('postflight authority failure preserves replay runtime writes', async () => {
+  const { runtime } = fixture();
+  const gate = createAuthorityGate(runtime, {
+    probe: async ({ axis, phase }) => ({
+      axis,
+      identity: phase === 'postflight' && axis === 'D' ? 'foreign-device' : `${axis}-identity`,
+    }),
+  });
+  const runtimeStatePath = '/session/runtime/state/demo.state.json';
+
+  const result = await gate.wrap('cdp_run_action', async () =>
+    okResult({
+      passed: true,
+      writes: {
+        actionYaml: { written: false, reason: 'repair-not-applied' },
+        runtimeState: 'sidecar',
+        runtimeStatePath,
+        databaseMirror: 'best-effort',
+      },
+    }),
+  )({});
+  const envelope = JSON.parse(result.content[0].text);
+
+  assert.equal(envelope.code, 'AUTHORITY_LOST_DURING_OPERATION');
+  assert.equal(envelope.meta.writes.runtimeStatePath, runtimeStatePath);
+});
+
 test('finalized proof is discarded when postflight authority changes', async () => {
   const { runtime, status } = fixture();
   const actions = [];

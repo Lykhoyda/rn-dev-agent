@@ -154,11 +154,9 @@ root. Ordinary replays preserve tracked action YAML bytes.
 
 **Session reset is deliberate.** A fresh fenced session starts each action's
 runtime state at revision 1 with empty run and repair history. Revisions,
-promotion evidence, and promotion history earned in one session are absent
-from the next, preserving parallel-session and worktree isolation. Canonical
-lifecycle status remains shared worktree knowledge: once promotion updates the
-tracked YAML to `active`, later sessions see that status without inheriting the
-earlier session's runtime history.
+promotion evidence, and promotion history do not carry over. At this
+session-private history boundary, promotion earned in one session is invisible
+to the next by design, preserving parallel-session and worktree isolation.
 
 **Status maturity.** New actions ship as `experimental`. The first clean
 replay auto-promotes them to `active`. Self-repair demotes back to

@@ -16,6 +16,7 @@ import {
   createTmpProject,
   fixtureYaml,
 } from '../helpers/tmp-project.js';
+import { authorityErrorMeta, SessionAuthorityError } from '../../dist/session/registry.js';
 
 let project;
 
@@ -362,6 +363,43 @@ test('forceReload disclosure survives a later target refusal', async () => {
     assert.equal(env.code, 'TARGET_SESSION_MISMATCH');
     assert.equal(env.meta.writes.runtimeStatePath, expectedPath);
     assert.equal(existsSync(expectedPath), true);
+  } finally {
+    if (priorRuntimeRoot === undefined) delete process.env.RN_DEV_AGENT_SESSION_RUNTIME_ROOT;
+    else process.env.RN_DEV_AGENT_SESSION_RUNTIME_ROOT = priorRuntimeRoot;
+    rmSync(runtimeRoot, { force: true, recursive: true });
+  }
+});
+
+test('forceReload disclosure survives authority loss during replay', async () => {
+  const originalYaml = fixtureYaml({ id: 'demo', selectors: ['spinner-done'] });
+  project.seedAction('demo', originalYaml);
+  const runtimeRoot = mkdtempSync(join(tmpdir(), 'rn-session-runtime-'));
+  const priorRuntimeRoot = process.env.RN_DEV_AGENT_SESSION_RUNTIME_ROOT;
+  process.env.RN_DEV_AGENT_SESSION_RUNTIME_ROOT = runtimeRoot;
+  const expectedPath = join(runtimeRoot, 'state', 'demo.state.json');
+  mkdirSync(join(runtimeRoot, 'state'), { recursive: true });
+  writeFileSync(expectedPath, JSON.stringify(project.readSidecar('demo')), 'utf8');
+  project.simulateHumanEdit('demo', `${originalYaml}\n# operator edit\n`);
+
+  try {
+    const handler = createRunActionHandler({
+      maestroRun: async () => {
+        throw new SessionAuthorityError(
+          'AUTHORITY_LOST_DURING_OPERATION',
+          'device authority changed during replay',
+        );
+      },
+    });
+
+    await assert.rejects(
+      () => handler({ actionId: 'demo', projectRoot: project.root }),
+      (error) => {
+        assert.ok(error instanceof SessionAuthorityError);
+        const writes = authorityErrorMeta(error).writes;
+        assert.equal(writes.runtimeStatePath, expectedPath);
+        return true;
+      },
+    );
   } finally {
     if (priorRuntimeRoot === undefined) delete process.env.RN_DEV_AGENT_SESSION_RUNTIME_ROOT;
     else process.env.RN_DEV_AGENT_SESSION_RUNTIME_ROOT = priorRuntimeRoot;

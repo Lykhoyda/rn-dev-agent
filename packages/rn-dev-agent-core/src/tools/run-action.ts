@@ -620,6 +620,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
     const forceReload = proofReplay ? false : args.forceReload !== false;
     const action = forceReload ? acknowledgeExternalEdit(loaded) : loaded;
     let runtimeStatePath = action === loaded ? undefined : sidecarPathFor(action.filePath);
+    let actionYamlWrite: WriteDisclosureKind = 'none';
     const writeDisclosure = (
       actionYaml: WriteDisclosureKind = 'none',
       outcome?: PersistRunOutcome,
@@ -1188,6 +1189,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
       if (typeof repairData.sidecarPath === 'string' && repairData.sidecarPath.length > 0) {
         runtimeStatePath = repairData.sidecarPath;
       }
+      actionYamlWrite = 'auto-repair';
 
       // The repair updated the action on disk. Re-load to pick up the
       // new body + bumped revision/state — saveAction's atomic pair-write
@@ -1420,7 +1422,12 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
         ? failResult(retryMessage, retryClassification.toolCode, retryMeta)
         : failResult(retryMessage, retryMeta);
     } catch (err) {
-      if (err instanceof SessionAuthorityError) throw err;
+      if (err instanceof SessionAuthorityError) {
+        if (runtimeStatePath) {
+          err.attachMeta({ writes: writeDisclosure(actionYamlWrite) });
+        }
+        throw err;
+      }
       // Multi-LLM review of PR #115 (Gemini conf 95): top-level catch
       // ensures any thrown exception during orchestration (maestroRun
       // timeout, repairAction throw through withSession, etc.) lands

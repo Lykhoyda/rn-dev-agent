@@ -33481,6 +33481,25 @@ function addMeta(result, meta) {
     return result;
   }
 }
+function replayRuntimeWriteMeta(tool, result) {
+  if (!isActionReplayTool(tool) || !result || typeof result !== "object")
+    return void 0;
+  const first = result.content?.[0];
+  if (!first?.text)
+    return void 0;
+  try {
+    const envelope = JSON.parse(first.text);
+    const writes = envelope.ok === true ? envelope.data?.writes : envelope.meta?.writes;
+    if (!writes || typeof writes !== "object" || Array.isArray(writes))
+      return void 0;
+    if (typeof writes.runtimeStatePath !== "string") {
+      return void 0;
+    }
+    return { writes };
+  } catch {
+    return void 0;
+  }
+}
 function resultSucceeded(result) {
   const first = result?.content?.[0];
   if (!first?.text)
@@ -33963,6 +33982,7 @@ function createAuthorityGate(runtime, dependencies) {
       let retainProofCleanupFence = false;
       let publishedProofFinalize = false;
       let stagedRuntimeRelaunch;
+      let handlerResult;
       try {
         const available = runtime.requireAvailable();
         registry2 = available.registry;
@@ -34327,6 +34347,7 @@ function createAuthorityGate(runtime, dependencies) {
         registry2.verifyOperation(operation);
         const snapshotCheckpoint = dependencies.snapshotCaptureCheckpoint?.();
         const result = await registry2.runWithOperation(operation, () => handler(...handlerArgs));
+        handlerResult = result;
         let runtimeTargetChanged = false;
         const postHandlerRecovery = await reconcileRecoverableRuntime(runtime, dependencies, registry2, operation, status, profile, resultSucceeded(result));
         operation = postHandlerRecovery.operation;
@@ -34521,7 +34542,9 @@ function createAuthorityGate(runtime, dependencies) {
             return authorityFailure(new AggregateError([error2, rollbackError], "PROOF_AUTHORITY_MISMATCH: finalized proof cleanup is unconfirmed"));
           }
         }
-        return addMeta(authorityFailure(error2), nativeOriginMeta(profile, false));
+        const failure = addMeta(authorityFailure(error2), nativeOriginMeta(profile, false));
+        const runtimeWriteMeta = replayRuntimeWriteMeta(tool, handlerResult);
+        return runtimeWriteMeta ? addMeta(failure, runtimeWriteMeta) : failure;
       } finally {
         stagedRuntimeRelaunch?.cancel();
         if (registry2 && operation && !retainProofCleanupFence) {
@@ -83651,6 +83674,7 @@ function createRunActionHandler(deps = {}) {
     const forceReload = proofReplay ? false : args.forceReload !== false;
     const action = forceReload ? acknowledgeExternalEdit(loaded) : loaded;
     let runtimeStatePath = action === loaded ? void 0 : sidecarPathFor(action.filePath);
+    let actionYamlWrite = "none";
     const writeDisclosure = (actionYaml = "none", outcome) => {
       const disclosedRuntimeStatePath = outcome?.runtimeStatePath ?? runtimeStatePath;
       return {
@@ -84040,6 +84064,7 @@ function createRunActionHandler(deps = {}) {
       if (typeof repairData.sidecarPath === "string" && repairData.sidecarPath.length > 0) {
         runtimeStatePath = repairData.sidecarPath;
       }
+      actionYamlWrite = "auto-repair";
       loadContext = refreshActionLoadContext(loadContext, args.actionId);
       const reloadedAction = loadActionFromContext(loadContext, args.actionId);
       if (!reloadedAction) {
@@ -84206,8 +84231,12 @@ function createRunActionHandler(deps = {}) {
       };
       return retryClassification?.toolCode ? failResult(retryMessage, retryClassification.toolCode, retryMeta) : failResult(retryMessage, retryMeta);
     } catch (err) {
-      if (err instanceof SessionAuthorityError)
+      if (err instanceof SessionAuthorityError) {
+        if (runtimeStatePath) {
+          err.attachMeta({ writes: writeDisclosure(actionYamlWrite) });
+        }
         throw err;
+      }
       const msg3 = err instanceof Error ? err.message : String(err);
       const autoRepair = {
         attempted: false,

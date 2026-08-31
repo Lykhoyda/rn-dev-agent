@@ -149,10 +149,9 @@ Example calls:
 
    Sidecars are isolated by session. A fresh fenced session starts the action
    at revision 1 with empty run and repair history; revisions and promotion
-   history from an earlier session do not carry over. Canonical lifecycle
-   status remains shared worktree knowledge: if an earlier clean replay updated
-   the tracked YAML to `active`, the new session sees that status without the
-   earlier runtime history.
+   history from an earlier session do not carry over. At this session-private
+   history boundary, promotion earned in one session is invisible to the next
+   by design.
 
    On failure (`ok: false`), the envelope's `error` message and
    `meta.underlyingFailure` carry the exact underlying Maestro failure
