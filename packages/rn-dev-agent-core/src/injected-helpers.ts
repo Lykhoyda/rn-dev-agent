@@ -2,7 +2,7 @@
 // whenever the injected surface changes; it flows into the IIFE's freshness
 // check (__RN_AGENT.__v) AND the post-injection log line, so they can never
 // drift (the log previously hard-coded a stale "v11").
-export const HELPERS_VERSION = 50;
+export const HELPERS_VERSION = 51;
 
 export const INJECTED_HELPERS = `
 (function() {
@@ -2541,6 +2541,73 @@ export const INJECTED_HELPERS = `
 
       if (action === 'press') {
         if (typeof props.onPress !== 'function') {
+          if (opts.allowInputDesignation === true && opts.testID) {
+            var designationStack = [found];
+            var designationSeen = new WeakSet();
+            var designationInputs = [];
+            var designationWork = 0;
+            while (designationStack.length > 0 && designationWork < 2000) {
+              var designationFiber = designationStack.pop();
+              if (designationSeen.has(designationFiber)) continue;
+              designationSeen.add(designationFiber);
+              designationWork++;
+              var designationProps = designationFiber.memoizedProps || {};
+              if (
+                designationFiber.tag === 5
+                && typeof designationFiber.type === 'string'
+                && hostKind(designationFiber) === 'textinput'
+                && (designationProps.testID === selector || designationProps.nativeID === selector)
+              ) {
+                designationInputs.push(designationFiber);
+              }
+              var designationChild = designationFiber.child;
+              while (designationChild) {
+                designationStack.push(designationChild);
+                designationChild = designationChild.sibling;
+              }
+            }
+            if (designationStack.length > 0) {
+              return JSON.stringify({
+                error: 'TextInput designation resolution truncated',
+                testID: selector,
+                focusOnly: true
+              });
+            }
+            if (designationInputs.length > 1) {
+              return JSON.stringify({
+                error: 'Ambiguous TextInput designation target',
+                testID: selector,
+                count: designationInputs.length,
+                focusOnly: true
+              });
+            }
+            if (designationInputs.length === 1) {
+              var designationInput = designationInputs[0];
+              var designationInputProps = designationInput.memoizedProps || {};
+              var designationDisabled = function(candidateProps) {
+                return candidateProps.disabled === true
+                  || candidateProps.editable === false
+                  || (candidateProps.accessibilityState && candidateProps.accessibilityState.disabled === true);
+              };
+              if (designationDisabled(props) || designationDisabled(designationInputProps)) {
+                return JSON.stringify({
+                  error: 'TextInput is disabled or non-editable',
+                  component: typeTextFiberName(designationInput),
+                  testID: selector,
+                  focusOnly: true
+                });
+              }
+              if (typeof designationInputProps.onPress !== 'function') {
+                return JSON.stringify({
+                  success: true,
+                  action: 'designateTextInput',
+                  component: typeTextFiberName(designationInput),
+                  testID: selector,
+                  focusOnly: true
+                });
+              }
+            }
+          }
           return JSON.stringify({ error: 'Component has no onPress handler', component: typeName, testID: selector });
         }
         if (opts.value !== undefined) {

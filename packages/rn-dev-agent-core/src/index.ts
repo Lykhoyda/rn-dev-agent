@@ -43,7 +43,11 @@ import { createRepairActionHandler } from './tools/repair-action.js';
 import { createSaveAsActionHandler } from './tools/save-as-action.js';
 import { createRunActionHandler } from './tools/run-action.js';
 import { createLoginPrologueHandler } from './tools/login-prologue.js';
-import { replayTreeData, unwrapTree } from './tools/cdp-replay-dispatch.js';
+import {
+  createReplayPressByTestId,
+  replayTreeData,
+  unwrapTree,
+} from './tools/cdp-replay-dispatch.js';
 import type { CdpReplayDeps } from './tools/cdp-replay-dispatch.js';
 import { ReplayDispatchError } from './domain/cdp-flow-replay.js';
 import { createDispatchHandler } from './tools/dispatch.js';
@@ -368,9 +372,7 @@ const makeReplayDeps = (_args?: unknown, signal?: AbortSignal): CdpReplayDeps | 
   const interact = createInteractHandler(getClient);
   const tree = createComponentTreeHandler(getClient);
   return {
-    pressByTestId: async (id: string) => {
-      mustOk(await interact({ action: 'press', testID: id, animated: false }), `press "${id}"`);
-    },
+    pressByTestId: createReplayPressByTestId(interact),
     typeByTestId: async (id: string, text: string) => {
       mustOk(await performReactTreeInput(id, text, getClient(), signal), `type "${id}"`);
     },

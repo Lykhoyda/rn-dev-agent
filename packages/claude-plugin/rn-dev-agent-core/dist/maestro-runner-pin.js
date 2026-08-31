@@ -15649,6 +15649,7 @@ async function replayFlow(steps, dispatch, opts = {}) {
   const offset = opts.indexOffset ?? 0;
   const trace = [];
   let lastTapped = opts.initialFocusId ?? null;
+  let pendingDesignation = null;
   const sourceIndex = (i) => opts.sourceIndex ?? i + offset;
   const fail = (i, reason, failureCode, failureMeta) => ({
     passed: false,
@@ -15667,6 +15668,8 @@ async function replayFlow(steps, dispatch, opts = {}) {
     const s = steps[i];
     const evidenceType = s.t === "waitVisible" ? s.evidenceType ?? s.t : s.t;
     const startedAt = Date.now();
+    if (pendingDesignation && s.t !== "type")
+      pendingDesignation = null;
     try {
       requireNotAborted();
       switch (s.t) {
@@ -15681,26 +15684,34 @@ async function replayFlow(steps, dispatch, opts = {}) {
           });
           break;
         case "tap":
-          await dispatch.press(s.id);
+          const pressResult = await dispatch.press(s.id);
           requireNotAborted();
-          lastTapped = s.id;
+          if (pressResult?.kind === "designation") {
+            lastTapped = null;
+            pendingDesignation = s.id;
+          } else {
+            lastTapped = s.id;
+          }
           trace.push({
             sourceIndex: sourceIndex(i),
             t: s.t,
             target: s.id,
+            ...pressResult?.kind === "designation" ? { focusOnly: true } : {},
             ok: true,
             durationMs: Date.now() - startedAt
           });
           break;
         case "type": {
-          if (!lastTapped)
+          const target = pendingDesignation ?? lastTapped;
+          if (!target)
             return fail(i, "inputText before any tapOn \u2014 no focus target");
-          await dispatch.type(lastTapped, s.text);
+          pendingDesignation = null;
+          await dispatch.type(target, s.text);
           requireNotAborted();
           trace.push({
             sourceIndex: sourceIndex(i),
             t: s.t,
-            target: lastTapped,
+            target,
             ok: true,
             durationMs: Date.now() - startedAt
           });
@@ -15797,6 +15808,9 @@ async function replayFlow(steps, dispatch, opts = {}) {
   }
   if (opts.signal?.aborted) {
     return fail(Math.max(0, steps.length - 1), "React-tree replay exceeded its execution deadline", "RUNNER_TIMEOUT");
+  }
+  if (pendingDesignation) {
+    return fail(Math.max(0, steps.length - 1), `TextInput designation for "${pendingDesignation}" must be followed immediately by inputText`, "INTERACTION_NOT_ACTUATED", { failedSelector: pendingDesignation, focusOnly: true });
   }
   return { passed: true, finalFocusId: lastTapped, steps: trace };
 }
@@ -16142,7 +16156,7 @@ function buildCdpDispatch(deps, signal) {
     async press(id) {
       await assertExactInteractable(id);
       requireNotAborted();
-      await deps.pressByTestId(id);
+      return deps.pressByTestId(id);
     },
     async type(id, text) {
       await assertExactInteractable(id);
@@ -16687,9 +16701,12 @@ function createMaestroRunHandler(deps = {}) {
             for (const step of replay.steps) {
               if (step.t === "launch")
                 reactFocusId = void 0;
-              if (step.t === "tap" && step.target)
-                reactFocusId = step.target;
+              if (step.t === "tap" && step.target) {
+                reactFocusId = step.focusOnly ? void 0 : step.target;
+              }
             }
+            if (replay.finalFocusId === null)
+              reactFocusId = void 0;
             return { replay, sourceIndices };
           }, claimOrigin, completeOrigin, relaunchManagedApp, reproveManagedOrigin, { signal: controller.signal });
           retainedReactFocusId = reactFocusId;
@@ -16699,6 +16716,7 @@ function createMaestroRunHandler(deps = {}) {
                 index: sourceIndices[step.sourceIndex] ?? step.sourceIndex,
                 name: step.t,
                 verb: step.t,
+                ...step.focusOnly ? { focusOnly: true } : {},
                 status: step.ok ? "pass" : "fail",
                 durationMs: step.durationMs
               });
@@ -16774,6 +16792,7 @@ function createMaestroRunHandler(deps = {}) {
                 name: String(record.t ?? "unknown"),
                 verb: String(record.t ?? "unknown"),
                 ...record.target !== void 0 ? { target: String(record.target) } : {},
+                ...record.focusOnly === true ? { focusOnly: true } : {},
                 status: record.ok === false ? "fail" : "pass",
                 durationMs: Number(record.durationMs ?? 0)
               });
@@ -16788,6 +16807,7 @@ function createMaestroRunHandler(deps = {}) {
               index: failure.sourceIndices[step.sourceIndex] ?? step.sourceIndex,
               name: step.t,
               verb: step.t,
+              ...step.focusOnly ? { focusOnly: true } : {},
               status: step.ok ? "pass" : "fail",
               durationMs: step.durationMs
             });

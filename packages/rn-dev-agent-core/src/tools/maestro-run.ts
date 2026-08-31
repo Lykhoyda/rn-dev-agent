@@ -454,6 +454,7 @@ interface PartitionedReplayStep {
   index: number;
   name: string;
   verb: string;
+  focusOnly?: true;
   status: 'pass' | 'fail';
   durationMs: number;
 }
@@ -992,8 +993,11 @@ export function createMaestroRunHandler(
               if (!replay.passed) throw new ReactReplayFailure(replay, sourceIndices);
               for (const step of replay.steps) {
                 if (step.t === 'launch') reactFocusId = undefined;
-                if (step.t === 'tap' && step.target) reactFocusId = step.target;
+                if (step.t === 'tap' && step.target) {
+                  reactFocusId = step.focusOnly ? undefined : step.target;
+                }
               }
+              if (replay.finalFocusId === null) reactFocusId = undefined;
               return { replay, sourceIndices };
             },
             claimOrigin,
@@ -1009,6 +1013,7 @@ export function createMaestroRunHandler(
                 index: sourceIndices[step.sourceIndex] ?? step.sourceIndex,
                 name: step.t,
                 verb: step.t,
+                ...(step.focusOnly ? { focusOnly: true as const } : {}),
                 status: step.ok ? 'pass' : 'fail',
                 durationMs: step.durationMs,
               });
@@ -1094,6 +1099,7 @@ export function createMaestroRunHandler(
                 sourceIndex?: number;
                 t?: unknown;
                 target?: unknown;
+                focusOnly?: unknown;
                 ok?: boolean;
                 durationMs?: number;
               };
@@ -1105,6 +1111,7 @@ export function createMaestroRunHandler(
                 name: String(record.t ?? 'unknown'),
                 verb: String(record.t ?? 'unknown'),
                 ...(record.target !== undefined ? { target: String(record.target) } : {}),
+                ...(record.focusOnly === true ? { focusOnly: true as const } : {}),
                 status: record.ok === false ? 'fail' : 'pass',
                 durationMs: Number(record.durationMs ?? 0),
               });
@@ -1122,6 +1129,7 @@ export function createMaestroRunHandler(
               index: failure.sourceIndices[step.sourceIndex] ?? step.sourceIndex,
               name: step.t,
               verb: step.t,
+              ...(step.focusOnly ? { focusOnly: true as const } : {}),
               status: step.ok ? 'pass' : 'fail',
               durationMs: step.durationMs,
             });

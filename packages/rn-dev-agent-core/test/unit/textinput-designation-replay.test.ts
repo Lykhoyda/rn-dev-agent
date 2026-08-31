@@ -1,0 +1,306 @@
+import assert from 'node:assert/strict';
+import { test } from 'node:test';
+import vm from 'node:vm';
+import { ReplayDispatchError } from '../../dist/domain/cdp-flow-replay.js';
+import { INJECTED_HELPERS } from '../../dist/injected-helpers.js';
+import {
+  createReplayPressByTestId,
+  runCdpReplayCommands,
+  unwrapTree,
+  type CdpReplayDeps,
+} from '../../dist/tools/cdp-replay-dispatch.js';
+import { performReactTreeInput } from '../../dist/tools/device-interact.js';
+import { createInteractHandler } from '../../dist/tools/interact.js';
+import { createMaestroRunHandler } from '../../dist/tools/maestro-run.js';
+import { createMockClient } from '../helpers/mock-cdp-client.js';
+
+type Fiber = {
+  tag: number;
+  type: string | { displayName: string };
+  memoizedProps: Record<string, unknown>;
+  child: Fiber | null;
+  sibling: Fiber | null;
+  return: Fiber | null;
+};
+
+function fiber(type: Fiber['type'], memoizedProps: Record<string, unknown> = {}): Fiber {
+  return {
+    tag: typeof type === 'string' ? 5 : 0,
+    type,
+    memoizedProps,
+    child: null,
+    sibling: null,
+    return: null,
+  };
+}
+
+function append(parent: Fiber, child: Fiber): Fiber {
+  child.return = parent;
+  if (!parent.child) {
+    parent.child = child;
+    return child;
+  }
+  let tail = parent.child;
+  while (tail.sibling) tail = tail.sibling;
+  tail.sibling = child;
+  return child;
+}
+
+function replayFixture(options: { editable?: boolean } = {}) {
+  const calls = { focus: 0, press: 0, typed: [] as string[] };
+  const root = fiber({ displayName: 'Root' });
+  const input = append(
+    root,
+    fiber('RCTSinglelineTextInputView', {
+      testID: 'email',
+      editable: options.editable ?? true,
+      value: '',
+      onFocus: () => {
+        calls.focus += 1;
+      },
+      onChangeText: (value: string) => {
+        calls.typed.push(value);
+        input.memoizedProps.value = value;
+      },
+    }),
+  );
+  append(
+    root,
+    fiber('RCTView', {
+      testID: 'continue',
+      onPress: () => {
+        calls.press += 1;
+      },
+    }),
+  );
+
+  const sandbox: Record<string, unknown> = {
+    Array,
+    Object,
+    JSON,
+    Map,
+    WeakSet,
+    Set,
+    Error,
+    Date,
+    RegExp,
+    Symbol,
+    parseInt,
+    parseFloat,
+    String,
+    Number,
+    Boolean,
+    Promise,
+    setTimeout,
+    clearTimeout,
+    console: { log() {}, error() {}, warn() {}, info() {}, debug() {} },
+  };
+  sandbox.globalThis = sandbox;
+  sandbox.__REACT_DEVTOOLS_GLOBAL_HOOK__ = {
+    renderers: new Map([[1, {}]]),
+    getFiberRoots: (rendererId: number) =>
+      rendererId === 1 ? new Set([{ current: root }]) : new Set(),
+  };
+  vm.createContext(sandbox);
+  vm.runInContext(INJECTED_HELPERS, sandbox);
+
+  const client = createMockClient({
+    evaluate: async (expression: string) => {
+      try {
+        return { value: vm.runInContext(expression, sandbox) };
+      } catch (error) {
+        return { error };
+      }
+    },
+    probeHelperFreshness: async () => ({ fresh: true, version: 48, probed: true }),
+  });
+  const interact = createInteractHandler(() => client);
+  const deps: CdpReplayDeps = {
+    pressByTestId: createReplayPressByTestId(interact),
+    typeByTestId: async (id, text) => {
+      const result = await performReactTreeInput(id, text, client);
+      const envelope = JSON.parse(result.content[0]?.text ?? '{}') as {
+        ok?: boolean;
+        code?: string;
+        error?: string;
+        meta?: Record<string, unknown>;
+      };
+      if (envelope.ok === false) {
+        throw new ReplayDispatchError(
+          envelope.code ?? 'TEXT_ENTRY_UNVERIFIED',
+          envelope.error ?? `type "${id}" failed`,
+          envelope.meta,
+        );
+      }
+    },
+    treeFor: async (id) => {
+      const result = await client.evaluate(
+        `__RN_AGENT.getTree(${JSON.stringify({ filter: id, depth: 12 })})`,
+      );
+      assert.equal(result.error, undefined);
+      assert.equal(typeof result.value, 'string');
+      return unwrapTree(JSON.parse(result.value as string));
+    },
+    frontmostFor: async () => ({ visible: true, matchCount: 1 }),
+    async launchApp() {},
+    async settle() {},
+  };
+
+  return { calls, input, deps };
+}
+
+test('replay designates a bare TextInput and types without press or focus dispatch', async () => {
+  const fixture = replayFixture();
+  const result = await runCdpReplayCommands(
+    [{ tapOn: { id: 'email' } }, { inputText: 'person@example.test' }],
+    {},
+    fixture.deps,
+  );
+
+  assert.equal(result.passed, true, JSON.stringify(result));
+  assert.equal(result.steps[0].focusOnly, true);
+  assert.equal(result.steps[1].target, 'email');
+  assert.equal(result.finalFocusId, null);
+  assert.equal(fixture.calls.focus, 0);
+  assert.equal(fixture.calls.press, 0);
+  assert.deepEqual(fixture.calls.typed, ['person@example.test']);
+  assert.equal(fixture.input.memoizedProps.value, 'person@example.test');
+});
+
+test('an intervening non-input tap makes later text entry refuse without reaching the input', async () => {
+  const fixture = replayFixture();
+  const result = await runCdpReplayCommands(
+    [
+      { tapOn: { id: 'email' } },
+      { tapOn: { id: 'continue' } },
+      { inputText: 'must-not-reach-email' },
+    ],
+    {},
+    fixture.deps,
+  );
+
+  assert.equal(result.passed, false);
+  assert.equal(result.failedStepIndex, 2);
+  assert.equal(result.steps[0].focusOnly, true);
+  assert.equal(result.steps[1].focusOnly, undefined);
+  assert.equal(fixture.calls.press, 1);
+  assert.equal(fixture.calls.focus, 0);
+  assert.deepEqual(fixture.calls.typed, []);
+  assert.equal(fixture.input.memoizedProps.value, '');
+});
+
+test('a designation without typing is explicit and refuses the replay', async () => {
+  const fixture = replayFixture();
+  const result = await runCdpReplayCommands([{ tapOn: { id: 'email' } }], {}, fixture.deps);
+
+  assert.equal(result.passed, false);
+  assert.equal(result.failedStepIndex, 0);
+  assert.equal(result.failureCode, 'INTERACTION_NOT_ACTUATED');
+  assert.match(result.reason ?? '', /must be followed immediately by inputText/);
+  assert.equal(result.steps[0].focusOnly, true);
+  assert.equal(fixture.calls.focus, 0);
+  assert.equal(fixture.calls.press, 0);
+  assert.deepEqual(fixture.calls.typed, []);
+});
+
+test('a non-editable bare TextInput refuses designation without callbacks', async () => {
+  const fixture = replayFixture({ editable: false });
+  const result = await runCdpReplayCommands(
+    [{ tapOn: { id: 'email' } }, { inputText: 'blocked' }],
+    {},
+    fixture.deps,
+  );
+
+  assert.equal(result.passed, false);
+  assert.equal(result.failedStepIndex, 0);
+  assert.equal(result.failureCode, 'INTERACTION_NOT_ACTUATED');
+  assert.match(result.reason ?? '', /disabled or non-editable/);
+  assert.equal(fixture.calls.focus, 0);
+  assert.equal(fixture.calls.press, 0);
+  assert.deepEqual(fixture.calls.typed, []);
+  assert.equal(fixture.input.memoizedProps.value, '');
+});
+
+test('designation preserves the frontmost and duplicate-target refusals', async (t) => {
+  await t.test('occluded input', async () => {
+    const fixture = replayFixture();
+    fixture.deps.frontmostFor = async () => ({
+      visible: false,
+      reason: 'target is covered by a modal',
+    });
+    const result = await runCdpReplayCommands(
+      [{ tapOn: { id: 'email' } }, { inputText: 'blocked' }],
+      {},
+      fixture.deps,
+    );
+
+    assert.equal(result.passed, false);
+    assert.equal(result.failedStepIndex, 0);
+    assert.match(result.reason ?? '', /covered by a modal/);
+    assert.equal(fixture.calls.focus, 0);
+    assert.equal(fixture.calls.press, 0);
+    assert.deepEqual(fixture.calls.typed, []);
+  });
+
+  await t.test('duplicate exact input', async () => {
+    const fixture = replayFixture();
+    fixture.deps.frontmostFor = async () => ({ visible: true, matchCount: 2 });
+    const result = await runCdpReplayCommands(
+      [{ tapOn: { id: 'email' } }, { inputText: 'blocked' }],
+      {},
+      fixture.deps,
+    );
+
+    assert.equal(result.passed, false);
+    assert.equal(result.failedStepIndex, 0);
+    assert.equal(result.failureCode, 'AMBIGUOUS_TESTID');
+    assert.equal(fixture.calls.focus, 0);
+    assert.equal(fixture.calls.press, 0);
+    assert.deepEqual(fixture.calls.typed, []);
+  });
+});
+
+test('maestro_run exposes designation in its public step trace', async () => {
+  const calls: string[][] = [];
+  const handler = createMaestroRunHandler({
+    replayDeps: () => ({
+      pressByTestId: async (id) => {
+        calls.push(['press', id]);
+        return { kind: 'designation', focusOnly: true };
+      },
+      typeByTestId: async (id, text) => {
+        calls.push(['type', id, text]);
+      },
+      treeFor: async (id) => ({ testID: id }),
+      frontmostFor: async () => ({ visible: true }),
+      async launchApp() {},
+      async settle() {},
+    }),
+  });
+  const result = await handler({
+    platform: 'ios',
+    inlineYaml: 'appId: com.example.app\n---\n- tapOn:\n    id: email\n- inputText: value\n',
+    claimNativeOrigin: async () => {},
+    completeNativeOrigin: async () => {},
+    relaunchManagedApp: async () => {},
+    reproveManagedOrigin: async () => {},
+    completeRunnerPark: async () => {},
+  });
+  const envelope = JSON.parse(result.content[0]?.text ?? '{}') as {
+    ok?: boolean;
+    data?: { steps?: Array<{ verb?: string; focusOnly?: boolean }> };
+  };
+
+  assert.equal(envelope.ok, true);
+  assert.deepEqual(calls, [
+    ['press', 'email'],
+    ['type', 'email', 'value'],
+  ]);
+  assert.deepEqual(
+    envelope.data?.steps?.map(({ verb, focusOnly }) => ({ verb, focusOnly })),
+    [
+      { verb: 'tap', focusOnly: true },
+      { verb: 'type', focusOnly: undefined },
+    ],
+  );
+});

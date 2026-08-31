@@ -3,8 +3,10 @@ import {
   replayFlow,
   ReplayDispatchError,
   type ReplayResult,
+  type ReplayPressResult,
 } from '../domain/cdp-flow-replay.js';
 import type { ReplayDispatch } from '../domain/cdp-flow-replay.js';
+import type { createInteractHandler } from './interact.js';
 
 // Unwrap getTree's `{ tree: <node>|{matches} }` envelope to the node(s) the
 // dispatch helpers walk. Returns the bare node for a single match, the
@@ -68,7 +70,7 @@ export function replayTreeData(envelope: ReplayTreeEnvelope): unknown {
 }
 
 export interface CdpReplayDeps {
-  pressByTestId(id: string): Promise<void>;
+  pressByTestId(id: string): Promise<ReplayPressResult | void>;
   typeByTestId(id: string, text: string): Promise<void>;
   // Returns parsed readable getTree data filtered to `id`.
   treeFor(id: string): Promise<unknown>;
@@ -82,6 +84,41 @@ export interface CdpReplayDeps {
   }>;
   launchApp(stopApp: boolean): Promise<void>;
   settle(timeoutMs: number): Promise<void>;
+}
+
+export function createReplayPressByTestId(
+  interact: ReturnType<typeof createInteractHandler>,
+): CdpReplayDeps['pressByTestId'] {
+  return async (id) => {
+    const result = await interact({
+      action: 'press',
+      testID: id,
+      animated: false,
+      allowInputDesignation: true,
+    });
+    const envelope = JSON.parse(result.content[0]?.text ?? '{}') as {
+      ok?: boolean;
+      code?: string;
+      error?: string;
+      data?: { action?: string; focusOnly?: boolean };
+      meta?: Record<string, unknown>;
+    };
+    if (envelope.ok === false) {
+      throw new ReplayDispatchError(
+        envelope.code ?? 'INTERACTION_NOT_ACTUATED',
+        `press "${id}" failed: ${envelope.error ?? 'ok:false'}`,
+        envelope.meta,
+      );
+    }
+    if (envelope.data?.action !== 'designateTextInput') return { kind: 'press' };
+    if (envelope.data.focusOnly !== true) {
+      throw new ReplayDispatchError(
+        'INTERACTION_NOT_ACTUATED',
+        `press "${id}" returned an invalid TextInput designation`,
+      );
+    }
+    return { kind: 'designation', focusOnly: true };
+  };
 }
 
 function nodeProps(treeJson: unknown, id: string): Record<string, unknown> | null {
@@ -207,7 +244,7 @@ export function buildCdpDispatch(deps: CdpReplayDeps, signal?: AbortSignal): Rep
     async press(id) {
       await assertExactInteractable(id);
       requireNotAborted();
-      await deps.pressByTestId(id);
+      return deps.pressByTestId(id);
     },
     async type(id, text) {
       await assertExactInteractable(id);

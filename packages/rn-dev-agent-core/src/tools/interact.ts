@@ -19,7 +19,7 @@ const REFUSAL_FIELDS = [
 
 type InteractAction = 'press' | 'longPress' | 'typeText' | 'scroll' | 'setFieldValue';
 
-interface InteractArgs {
+export interface InteractArgs {
   action: InteractAction;
   testID?: string;
   accessibilityLabel?: string;
@@ -39,6 +39,7 @@ interface InteractArgs {
   includeHidden?: boolean;
   // GH #525 — press-only opt-in pressable-ancestor discovery.
   walkUp?: boolean;
+  allowInputDesignation?: boolean;
 }
 
 export function createInteractHandler(getClient: () => CDPClient) {
@@ -82,6 +83,8 @@ export function createInteractHandler(getClient: () => CDPClient) {
     if (args.exact !== undefined) opts.exact = args.exact;
     if (args.includeHidden !== undefined) opts.includeHidden = args.includeHidden;
     if (args.walkUp !== undefined) opts.walkUp = args.walkUp;
+    if (args.allowInputDesignation !== undefined)
+      opts.allowInputDesignation = args.allowInputDesignation;
 
     const result = await client.evaluate(`__RN_AGENT.interact(${JSON.stringify(opts)})`);
 

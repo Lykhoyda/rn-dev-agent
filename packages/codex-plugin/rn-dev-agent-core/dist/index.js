@@ -51543,7 +51543,7 @@ async function detectBridge(client2, evaluate = (expression) => client2.evaluate
 init_logger();
 
 // packages/rn-dev-agent-core/dist/injected-helpers.js
-var HELPERS_VERSION = 50;
+var HELPERS_VERSION = 51;
 var INJECTED_HELPERS = `
 (function() {
   var __HELPERS_VERSION__ = ${HELPERS_VERSION};
@@ -54081,6 +54081,73 @@ var INJECTED_HELPERS = `
 
       if (action === 'press') {
         if (typeof props.onPress !== 'function') {
+          if (opts.allowInputDesignation === true && opts.testID) {
+            var designationStack = [found];
+            var designationSeen = new WeakSet();
+            var designationInputs = [];
+            var designationWork = 0;
+            while (designationStack.length > 0 && designationWork < 2000) {
+              var designationFiber = designationStack.pop();
+              if (designationSeen.has(designationFiber)) continue;
+              designationSeen.add(designationFiber);
+              designationWork++;
+              var designationProps = designationFiber.memoizedProps || {};
+              if (
+                designationFiber.tag === 5
+                && typeof designationFiber.type === 'string'
+                && hostKind(designationFiber) === 'textinput'
+                && (designationProps.testID === selector || designationProps.nativeID === selector)
+              ) {
+                designationInputs.push(designationFiber);
+              }
+              var designationChild = designationFiber.child;
+              while (designationChild) {
+                designationStack.push(designationChild);
+                designationChild = designationChild.sibling;
+              }
+            }
+            if (designationStack.length > 0) {
+              return JSON.stringify({
+                error: 'TextInput designation resolution truncated',
+                testID: selector,
+                focusOnly: true
+              });
+            }
+            if (designationInputs.length > 1) {
+              return JSON.stringify({
+                error: 'Ambiguous TextInput designation target',
+                testID: selector,
+                count: designationInputs.length,
+                focusOnly: true
+              });
+            }
+            if (designationInputs.length === 1) {
+              var designationInput = designationInputs[0];
+              var designationInputProps = designationInput.memoizedProps || {};
+              var designationDisabled = function(candidateProps) {
+                return candidateProps.disabled === true
+                  || candidateProps.editable === false
+                  || (candidateProps.accessibilityState && candidateProps.accessibilityState.disabled === true);
+              };
+              if (designationDisabled(props) || designationDisabled(designationInputProps)) {
+                return JSON.stringify({
+                  error: 'TextInput is disabled or non-editable',
+                  component: typeTextFiberName(designationInput),
+                  testID: selector,
+                  focusOnly: true
+                });
+              }
+              if (typeof designationInputProps.onPress !== 'function') {
+                return JSON.stringify({
+                  success: true,
+                  action: 'designateTextInput',
+                  component: typeTextFiberName(designationInput),
+                  testID: selector,
+                  focusOnly: true
+                });
+              }
+            }
+          }
           return JSON.stringify({ error: 'Component has no onPress handler', component: typeName, testID: selector });
         }
         if (opts.value !== undefined) {
@@ -79316,6 +79383,7 @@ async function replayFlow(steps, dispatch, opts = {}) {
   const offset = opts.indexOffset ?? 0;
   const trace = [];
   let lastTapped = opts.initialFocusId ?? null;
+  let pendingDesignation = null;
   const sourceIndex = (i) => opts.sourceIndex ?? i + offset;
   const fail3 = (i, reason, failureCode, failureMeta) => ({
     passed: false,
@@ -79334,6 +79402,8 @@ async function replayFlow(steps, dispatch, opts = {}) {
     const s = steps[i];
     const evidenceType = s.t === "waitVisible" ? s.evidenceType ?? s.t : s.t;
     const startedAt = Date.now();
+    if (pendingDesignation && s.t !== "type")
+      pendingDesignation = null;
     try {
       requireNotAborted();
       switch (s.t) {
@@ -79348,26 +79418,34 @@ async function replayFlow(steps, dispatch, opts = {}) {
           });
           break;
         case "tap":
-          await dispatch.press(s.id);
+          const pressResult = await dispatch.press(s.id);
           requireNotAborted();
-          lastTapped = s.id;
+          if (pressResult?.kind === "designation") {
+            lastTapped = null;
+            pendingDesignation = s.id;
+          } else {
+            lastTapped = s.id;
+          }
           trace.push({
             sourceIndex: sourceIndex(i),
             t: s.t,
             target: s.id,
+            ...pressResult?.kind === "designation" ? { focusOnly: true } : {},
             ok: true,
             durationMs: Date.now() - startedAt
           });
           break;
         case "type": {
-          if (!lastTapped)
+          const target = pendingDesignation ?? lastTapped;
+          if (!target)
             return fail3(i, "inputText before any tapOn \u2014 no focus target");
-          await dispatch.type(lastTapped, s.text);
+          pendingDesignation = null;
+          await dispatch.type(target, s.text);
           requireNotAborted();
           trace.push({
             sourceIndex: sourceIndex(i),
             t: s.t,
-            target: lastTapped,
+            target,
             ok: true,
             durationMs: Date.now() - startedAt
           });
@@ -79464,6 +79542,9 @@ async function replayFlow(steps, dispatch, opts = {}) {
   }
   if (opts.signal?.aborted) {
     return fail3(Math.max(0, steps.length - 1), "React-tree replay exceeded its execution deadline", "RUNNER_TIMEOUT");
+  }
+  if (pendingDesignation) {
+    return fail3(Math.max(0, steps.length - 1), `TextInput designation for "${pendingDesignation}" must be followed immediately by inputText`, "INTERACTION_NOT_ACTUATED", { failedSelector: pendingDesignation, focusOnly: true });
   }
   return { passed: true, finalFocusId: lastTapped, steps: trace };
 }
@@ -79744,6 +79825,26 @@ function replayTreeData(envelope) {
     }
   });
 }
+function createReplayPressByTestId(interact) {
+  return async (id) => {
+    const result = await interact({
+      action: "press",
+      testID: id,
+      animated: false,
+      allowInputDesignation: true
+    });
+    const envelope = JSON.parse(result.content[0]?.text ?? "{}");
+    if (envelope.ok === false) {
+      throw new ReplayDispatchError(envelope.code ?? "INTERACTION_NOT_ACTUATED", `press "${id}" failed: ${envelope.error ?? "ok:false"}`, envelope.meta);
+    }
+    if (envelope.data?.action !== "designateTextInput")
+      return { kind: "press" };
+    if (envelope.data.focusOnly !== true) {
+      throw new ReplayDispatchError("INTERACTION_NOT_ACTUATED", `press "${id}" returned an invalid TextInput designation`);
+    }
+    return { kind: "designation", focusOnly: true };
+  };
+}
 function nodeProps(treeJson, id) {
   const stack = [treeJson];
   while (stack.length) {
@@ -79843,7 +79944,7 @@ function buildCdpDispatch(deps, signal) {
     async press(id) {
       await assertExactInteractable(id);
       requireNotAborted();
-      await deps.pressByTestId(id);
+      return deps.pressByTestId(id);
     },
     async type(id, text) {
       await assertExactInteractable(id);
@@ -80388,9 +80489,12 @@ function createMaestroRunHandler(deps = {}) {
             for (const step of replay.steps) {
               if (step.t === "launch")
                 reactFocusId = void 0;
-              if (step.t === "tap" && step.target)
-                reactFocusId = step.target;
+              if (step.t === "tap" && step.target) {
+                reactFocusId = step.focusOnly ? void 0 : step.target;
+              }
             }
+            if (replay.finalFocusId === null)
+              reactFocusId = void 0;
             return { replay, sourceIndices };
           }, claimOrigin, completeOrigin, relaunchManagedApp, reproveManagedOrigin, { signal: controller.signal });
           retainedReactFocusId = reactFocusId;
@@ -80400,6 +80504,7 @@ function createMaestroRunHandler(deps = {}) {
                 index: sourceIndices[step.sourceIndex] ?? step.sourceIndex,
                 name: step.t,
                 verb: step.t,
+                ...step.focusOnly ? { focusOnly: true } : {},
                 status: step.ok ? "pass" : "fail",
                 durationMs: step.durationMs
               });
@@ -80475,6 +80580,7 @@ function createMaestroRunHandler(deps = {}) {
                 name: String(record2.t ?? "unknown"),
                 verb: String(record2.t ?? "unknown"),
                 ...record2.target !== void 0 ? { target: String(record2.target) } : {},
+                ...record2.focusOnly === true ? { focusOnly: true } : {},
                 status: record2.ok === false ? "fail" : "pass",
                 durationMs: Number(record2.durationMs ?? 0)
               });
@@ -80489,6 +80595,7 @@ function createMaestroRunHandler(deps = {}) {
               index: failure.sourceIndices[step.sourceIndex] ?? step.sourceIndex,
               name: step.t,
               verb: step.t,
+              ...step.focusOnly ? { focusOnly: true } : {},
               status: step.ok ? "pass" : "fail",
               durationMs: step.durationMs
             });
@@ -82629,6 +82736,8 @@ function createInteractHandler(getClient2) {
       opts.includeHidden = args.includeHidden;
     if (args.walkUp !== void 0)
       opts.walkUp = args.walkUp;
+    if (args.allowInputDesignation !== void 0)
+      opts.allowInputDesignation = args.allowInputDesignation;
     const result = await client2.evaluate(`__RN_AGENT.interact(${JSON.stringify(opts)})`);
     if (result.error) {
       return failResult(`Interact error: ${result.error}`);
@@ -94392,9 +94501,7 @@ var makeReplayDeps = (_args, signal) => {
   const interact = createInteractHandler(getClient);
   const tree = createComponentTreeHandler(getClient);
   return {
-    pressByTestId: async (id) => {
-      mustOk(await interact({ action: "press", testID: id, animated: false }), `press "${id}"`);
-    },
+    pressByTestId: createReplayPressByTestId(interact),
     typeByTestId: async (id, text) => {
       mustOk(await performReactTreeInput(id, text, getClient(), signal), `type "${id}"`);
     },
