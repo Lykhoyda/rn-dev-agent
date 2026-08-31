@@ -46,7 +46,12 @@ function append(parent: Fiber, child: Fiber): Fiber {
   return child;
 }
 
-function replayFixture(options: { editable?: boolean } = {}) {
+function replayFixture(
+  options: {
+    editable?: boolean;
+    beforeDesignatedTypeDispatch?: (fixture: { root: Fiber; input: Fiber }) => void;
+  } = {},
+) {
   const calls = { focus: 0, press: 0, typed: [] as string[] };
   const root = fiber({ displayName: 'Root' });
   const input = append(
@@ -96,6 +101,7 @@ function replayFixture(options: { editable?: boolean } = {}) {
     console: { log() {}, error() {}, warn() {}, info() {}, debug() {} },
   };
   sandbox.globalThis = sandbox;
+  sandbox.__expo_router_state__ = { routeName: 'ReplayFixture' };
   sandbox.__REACT_DEVTOOLS_GLOBAL_HOOK__ = {
     renderers: new Map([[1, {}]]),
     getFiberRoots: (rendererId: number) =>
@@ -107,18 +113,28 @@ function replayFixture(options: { editable?: boolean } = {}) {
   const client = createMockClient({
     evaluate: async (expression: string) => {
       try {
+        if (
+          options.beforeDesignatedTypeDispatch &&
+          expression.startsWith('__RN_AGENT.interact(') &&
+          JSON.parse(expression.slice(expression.indexOf('(') + 1, -1))
+            .requireLiveInputDesignation === true
+        ) {
+          options.beforeDesignatedTypeDispatch({ root, input });
+        }
         return { value: vm.runInContext(expression, sandbox) };
       } catch (error) {
         return { error };
       }
     },
-    probeHelperFreshness: async () => ({ fresh: true, version: 48, probed: true }),
+    probeHelperFreshness: async () => ({ fresh: true, version: 49, probed: true }),
   });
   const interact = createInteractHandler(() => client);
   const deps: CdpReplayDeps = {
     pressByTestId: createReplayPressByTestId(interact),
-    typeByTestId: async (id, text) => {
-      const result = await performReactTreeInput(id, text, client);
+    typeByTestId: async (id, text, context) => {
+      const result = await performReactTreeInput(id, text, client, undefined, {
+        requireLiveInputDesignation: context?.focusOnlyDesignation === true,
+      });
       const envelope = JSON.parse(result.content[0]?.text ?? '{}') as {
         ok?: boolean;
         code?: string;
@@ -257,6 +273,94 @@ test('designation preserves the frontmost and duplicate-target refusals', async 
     assert.equal(fixture.calls.focus, 0);
     assert.equal(fixture.calls.press, 0);
     assert.deepEqual(fixture.calls.typed, []);
+  });
+});
+
+test('designation rechecks live eligibility at the injected mutation boundary', async (t) => {
+  await t.test('input becomes non-editable', async () => {
+    const fixture = replayFixture({
+      beforeDesignatedTypeDispatch: ({ input }) => {
+        input.memoizedProps.editable = false;
+      },
+    });
+    const result = await runCdpReplayCommands(
+      [{ tapOn: { id: 'email' } }, { inputText: 'blocked' }],
+      {},
+      fixture.deps,
+    );
+
+    assert.equal(result.passed, false);
+    assert.equal(result.failedStepIndex, 1);
+    assert.equal(result.failureCode, 'INTERACTION_NOT_ACTUATED');
+    assert.match(result.reason ?? '', /disabled or non-editable/);
+    assert.deepEqual(fixture.calls.typed, []);
+    assert.equal(fixture.input.memoizedProps.value, '');
+  });
+
+  await t.test('exact target ceases to be a host TextInput', async () => {
+    const fixture = replayFixture({
+      beforeDesignatedTypeDispatch: ({ input }) => {
+        input.type = 'RCTView';
+      },
+    });
+    const result = await runCdpReplayCommands(
+      [{ tapOn: { id: 'email' } }, { inputText: 'blocked' }],
+      {},
+      fixture.deps,
+    );
+
+    assert.equal(result.passed, false);
+    assert.equal(result.failedStepIndex, 1);
+    assert.equal(result.failureCode, 'INTERACTION_NOT_ACTUATED');
+    assert.match(result.reason ?? '', /exact host input/);
+    assert.deepEqual(fixture.calls.typed, []);
+    assert.equal(fixture.input.memoizedProps.value, '');
+  });
+
+  await t.test('duplicate exact input mounts', async () => {
+    const fixture = replayFixture({
+      beforeDesignatedTypeDispatch: ({ root }) => {
+        append(
+          root,
+          fiber('RCTSinglelineTextInputView', {
+            testID: 'email',
+            editable: true,
+            value: '',
+            onChangeText() {},
+          }),
+        );
+      },
+    });
+    const result = await runCdpReplayCommands(
+      [{ tapOn: { id: 'email' } }, { inputText: 'blocked' }],
+      {},
+      fixture.deps,
+    );
+
+    assert.equal(result.passed, false);
+    assert.equal(result.failedStepIndex, 1);
+    assert.equal(result.failureCode, 'AMBIGUOUS_TESTID');
+    assert.deepEqual(fixture.calls.typed, []);
+    assert.equal(fixture.input.memoizedProps.value, '');
+  });
+
+  await t.test('modal covers the input', async () => {
+    const fixture = replayFixture({
+      beforeDesignatedTypeDispatch: ({ root }) => {
+        append(root, fiber('RCTModalHostView', { accessibilityViewIsModal: true }));
+      },
+    });
+    const result = await runCdpReplayCommands(
+      [{ tapOn: { id: 'email' } }, { inputText: 'blocked' }],
+      {},
+      fixture.deps,
+    );
+
+    assert.equal(result.passed, false);
+    assert.equal(result.failedStepIndex, 1);
+    assert.match(result.reason ?? '', /hidden subtree|behind the active modal/);
+    assert.deepEqual(fixture.calls.typed, []);
+    assert.equal(fixture.input.memoizedProps.value, '');
   });
 });
 

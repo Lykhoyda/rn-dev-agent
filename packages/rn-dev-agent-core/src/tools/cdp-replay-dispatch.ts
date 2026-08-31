@@ -4,6 +4,7 @@ import {
   ReplayDispatchError,
   type ReplayResult,
   type ReplayPressResult,
+  type ReplayTypeContext,
 } from '../domain/cdp-flow-replay.js';
 import type { ReplayDispatch } from '../domain/cdp-flow-replay.js';
 import type { createInteractHandler } from './interact.js';
@@ -71,7 +72,7 @@ export function replayTreeData(envelope: ReplayTreeEnvelope): unknown {
 
 export interface CdpReplayDeps {
   pressByTestId(id: string): Promise<ReplayPressResult | void>;
-  typeByTestId(id: string, text: string): Promise<void>;
+  typeByTestId(id: string, text: string, context?: ReplayTypeContext): Promise<void>;
   // Returns parsed readable getTree data filtered to `id`.
   treeFor(id: string): Promise<unknown>;
   // Exact-ID oracle; matchCount 0 proves absence, while refusals omit it.
@@ -246,10 +247,10 @@ export function buildCdpDispatch(deps: CdpReplayDeps, signal?: AbortSignal): Rep
       requireNotAborted();
       return deps.pressByTestId(id);
     },
-    async type(id, text) {
+    async type(id, text, context) {
       await assertExactInteractable(id);
       requireNotAborted();
-      await deps.typeByTestId(id, text);
+      await deps.typeByTestId(id, text, context);
     },
     async visibility(id) {
       await deps.treeFor(id);

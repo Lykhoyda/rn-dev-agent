@@ -373,8 +373,13 @@ const makeReplayDeps = (_args?: unknown, signal?: AbortSignal): CdpReplayDeps | 
   const tree = createComponentTreeHandler(getClient);
   return {
     pressByTestId: createReplayPressByTestId(interact),
-    typeByTestId: async (id: string, text: string) => {
-      mustOk(await performReactTreeInput(id, text, getClient(), signal), `type "${id}"`);
+    typeByTestId: async (id: string, text: string, context) => {
+      mustOk(
+        await performReactTreeInput(id, text, getClient(), signal, {
+          requireLiveInputDesignation: context?.focusOnlyDesignation === true,
+        }),
+        `type "${id}"`,
+      );
     },
     treeFor: async (id: string) => {
       const fetchTree = async (interactiveOnly: boolean) =>

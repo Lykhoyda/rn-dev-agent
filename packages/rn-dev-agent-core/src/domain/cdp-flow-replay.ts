@@ -15,13 +15,17 @@ export class UnsupportedStepError extends Error {
 
 export interface ReplayDispatch {
   press(id: string): Promise<ReplayPressResult | void>;
-  type(id: string, text: string): Promise<void>;
+  type(id: string, text: string, context?: ReplayTypeContext): Promise<void>;
   visibility(id: string): Promise<ReplayVisibility>;
   launch(stopApp: boolean): Promise<void>;
   settle(timeoutMs: number): Promise<void>;
 }
 
 export type ReplayPressResult = { kind: 'press' } | { kind: 'designation'; focusOnly: true };
+
+export interface ReplayTypeContext {
+  focusOnlyDesignation: true;
+}
 
 export interface ReplayVisibility {
   visible: boolean;
@@ -334,8 +338,13 @@ export async function replayFlow(
         case 'type': {
           const target = pendingDesignation ?? lastTapped;
           if (!target) return fail(i, 'inputText before any tapOn — no focus target');
+          const focusOnlyDesignation = pendingDesignation !== null;
           pendingDesignation = null;
-          await dispatch.type(target, s.text);
+          await dispatch.type(
+            target,
+            s.text,
+            focusOnlyDesignation ? { focusOnlyDesignation: true } : undefined,
+          );
           requireNotAborted();
           trace.push({
             sourceIndex: sourceIndex(i),

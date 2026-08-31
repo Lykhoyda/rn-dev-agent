@@ -1282,6 +1282,7 @@ export async function performReactTreeInput(
   text: string,
   client: CDPClient | null,
   signal?: AbortSignal,
+  options: { requireLiveInputDesignation?: boolean } = {},
 ): Promise<ToolResult> {
   const pathsTried = ['react-tree'];
   if (!client) {
@@ -1329,11 +1330,24 @@ export async function performReactTreeInput(
     );
   }
   const expected = `${before.value ?? ''}${text}`;
-  let dispatch: { handler: string } | { error: string; mutation: 'none' | 'possible' };
+  let dispatch:
+    | { handler: string }
+    | {
+        error: string;
+        mutation: 'none' | 'possible';
+        code?: 'AMBIGUOUS_TESTID' | 'ASSERTION_FAILED' | 'INTERACTION_NOT_ACTUATED';
+        focusOnly?: true;
+      };
   try {
     const result = await client.evaluate(
       '__RN_AGENT.interact(' +
-        JSON.stringify({ action: 'typeText', testID, text: expected, verify: true }) +
+        JSON.stringify({
+          action: 'typeText',
+          testID,
+          text: expected,
+          verify: true,
+          ...(options.requireLiveInputDesignation ? { requireLiveInputDesignation: true } : {}),
+        }) +
         ')',
     );
     if (result.error || typeof result.value !== 'string') {
@@ -1341,11 +1355,25 @@ export async function performReactTreeInput(
     } else {
       const parsed: {
         error?: string;
+        code?: unknown;
+        focusOnly?: boolean;
         handlerCalled?: string | false;
         controlled?: boolean;
       } = JSON.parse(result.value);
-      if (parsed.error) dispatch = { error: parsed.error, mutation: 'none' };
-      else if (typeof parsed.handlerCalled === 'string' && parsed.controlled !== undefined) {
+      if (parsed.error) {
+        const designationCode =
+          parsed.code === 'AMBIGUOUS_TESTID' ||
+          parsed.code === 'ASSERTION_FAILED' ||
+          parsed.code === 'INTERACTION_NOT_ACTUATED'
+            ? parsed.code
+            : undefined;
+        dispatch = {
+          error: parsed.error,
+          mutation: 'none',
+          ...(designationCode ? { code: designationCode } : {}),
+          ...(parsed.focusOnly === true ? { focusOnly: true } : {}),
+        };
+      } else if (typeof parsed.handlerCalled === 'string' && parsed.controlled !== undefined) {
         dispatch = { handler: parsed.handlerCalled };
       } else {
         dispatch = { error: 'dispatch result is inconclusive', mutation: 'possible' };
@@ -1355,6 +1383,18 @@ export async function performReactTreeInput(
     dispatch = { error: 'dispatch result is unavailable', mutation: 'possible' };
   }
   if ('error' in dispatch) {
+    if (dispatch.focusOnly) {
+      return failResult(
+        `React-tree input "${testID}" refused: ${dispatch.error}`,
+        dispatch.code ?? 'TEXT_ENTRY_UNVERIFIED',
+        {
+          mutation: dispatch.mutation,
+          pathsTried,
+          focusOnly: true,
+          hint: 'No text was entered. Refresh the snapshot (device_snapshot action=snapshot) and rebind the input before retrying.',
+        },
+      );
+    }
     return fillFailure(
       'TEXT_ENTRY_UNVERIFIED',
       dispatch.mutation === 'possible'

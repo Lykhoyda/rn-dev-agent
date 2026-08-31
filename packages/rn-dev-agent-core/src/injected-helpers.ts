@@ -2,7 +2,7 @@
 // whenever the injected surface changes; it flows into the IIFE's freshness
 // check (__RN_AGENT.__v) AND the post-injection log line, so they can never
 // drift (the log previously hard-coded a stale "v11").
-export const HELPERS_VERSION = 51;
+export const HELPERS_VERSION = 52;
 
 export const INJECTED_HELPERS = `
 (function() {
@@ -2193,6 +2193,30 @@ export const INJECTED_HELPERS = `
   }
 
   function executeTypeTextTransaction(opts) {
+    var designationSelector = opts.testID;
+    if (opts.requireLiveInputDesignation === true) {
+      var liveFrontmost;
+      try {
+        liveFrontmost = JSON.parse(isTestIdFrontmost(designationSelector));
+      } catch (_) {
+        liveFrontmost = null;
+      }
+      if (!liveFrontmost || liveFrontmost.visible !== true) {
+        return {
+          error: liveFrontmost && liveFrontmost.reason
+            ? liveFrontmost.reason
+            : 'TextInput designation frontmost state is unreadable',
+          code: liveFrontmost && liveFrontmost.code
+            ? liveFrontmost.code
+            : (liveFrontmost && liveFrontmost.matchCount > 1
+              ? 'AMBIGUOUS_TESTID'
+              : 'ASSERTION_FAILED'),
+          testID: designationSelector,
+          focusOnly: true,
+          handlerCalled: false
+        };
+      }
+    }
     var resolution = resolveTypeTextTarget(opts);
     if (resolution.error) return resolution;
     var binding = resolution.binding;
@@ -2206,6 +2230,45 @@ export const INJECTED_HELPERS = `
         visitedFibers: resolution.state.visitedFibers,
         hint: 'Inspected every matching fiber and its bounded ownership graph — no typeable handler exists. Use cdp_component_tree to inspect the field, or pass the inner field testID directly.'
       };
+    }
+    if (opts.requireLiveInputDesignation === true) {
+      var designationSourceProps = binding.sourceFiber.memoizedProps || {};
+      if (
+        typeof designationSelector !== 'string'
+        || !designationSelector
+        || hostKind(binding.sourceFiber) !== 'textinput'
+        || (
+          designationSourceProps.testID !== designationSelector
+          && designationSourceProps.nativeID !== designationSelector
+        )
+      ) {
+        return {
+          error: 'TextInput designation no longer resolves to the exact host input',
+          code: 'INTERACTION_NOT_ACTUATED',
+          testID: designationSelector,
+          focusOnly: true,
+          handlerCalled: false
+        };
+      }
+      var designationCandidateProps = binding.candidateFiber.memoizedProps || {};
+      var designationIsDisabled = function(candidateProps) {
+        return candidateProps.disabled === true
+          || candidateProps.editable === false
+          || (candidateProps.accessibilityState && candidateProps.accessibilityState.disabled === true);
+      };
+      if (
+        designationIsDisabled(designationSourceProps)
+        || designationIsDisabled(designationCandidateProps)
+      ) {
+        return {
+          error: 'TextInput is disabled or non-editable',
+          code: 'INTERACTION_NOT_ACTUATED',
+          component: binding.component,
+          testID: designationSelector,
+          focusOnly: true,
+          handlerCalled: false
+        };
+      }
     }
     var text = opts.text !== undefined ? opts.text : '';
     try {

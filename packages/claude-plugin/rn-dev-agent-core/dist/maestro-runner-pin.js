@@ -15705,8 +15705,9 @@ async function replayFlow(steps, dispatch, opts = {}) {
           const target = pendingDesignation ?? lastTapped;
           if (!target)
             return fail(i, "inputText before any tapOn \u2014 no focus target");
+          const focusOnlyDesignation = pendingDesignation !== null;
           pendingDesignation = null;
-          await dispatch.type(target, s.text);
+          await dispatch.type(target, s.text, focusOnlyDesignation ? { focusOnlyDesignation: true } : void 0);
           requireNotAborted();
           trace.push({
             sourceIndex: sourceIndex(i),
@@ -16158,10 +16159,10 @@ function buildCdpDispatch(deps, signal) {
       requireNotAborted();
       return deps.pressByTestId(id);
     },
-    async type(id, text) {
+    async type(id, text, context) {
       await assertExactInteractable(id);
       requireNotAborted();
-      await deps.typeByTestId(id, text);
+      await deps.typeByTestId(id, text, context);
     },
     async visibility(id) {
       await deps.treeFor(id);
