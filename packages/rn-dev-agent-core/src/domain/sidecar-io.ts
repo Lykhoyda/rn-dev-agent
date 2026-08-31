@@ -1,9 +1,7 @@
 // D1206 Tier 2 Sprint C / Phase 127 — Sidecar JSON I/O for ReusableAction.
 //
-// Read/write the per-action runtime state at
-// `<project>/.rn-agent/state/<id>.state.json`. Lightweight wrapper —
-// schema validation happens here so corrupted files surface a clear
-// error rather than crashing downstream consumers.
+// Read/write per-action state under the fenced session runtime root, or under
+// project-local .rn-agent/state only for an unfenced compatibility process.
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync } from 'node:fs';
 import { join, dirname } from 'node:path';
@@ -12,7 +10,7 @@ import { sessionStateDirectory } from '../session/runtime-paths.js';
 
 /** Return the canonical sidecar path for a given action YAML path. */
 export function sidecarPathFor(yamlFilePath: string): string {
-  // <project>/.rn-agent/actions/<id>.yaml → <project>/.rn-agent/state/<id>.state.json
+  // Action YAML maps to <current-runtime-state-directory>/<id>.state.json.
   // We don't assume the input is under .rn-agent/actions/ — instead derive
   // the sidecar by replacing the YAML's parent dir with sibling `state/`.
   //

@@ -128,16 +128,29 @@ Example calls:
        },
        durationMs,
        flowFile,
+       writes: {
+         runtimeState: 'sidecar' | 'refused-external-write' | 'none',
+         runtimeStatePath?: string      // exact path when the sidecar write succeeded
+       },
        firstAttemptOutput?: string,     // bounded maestro stdout/stderr: head + tail, 500 chars
        retryOutput?: string,            // present iff retriedAfterRepair === true
        retriedAfterRepair?: boolean
      }
    }
    ```
-   The persisted RunRecord lands in the sidecar at
-   `<project>/.rn-agent/state/<actionId>.state.json` — read it via
-   `cdp_run_action`'s side-effect, not from `data.runRecord` (which is
-   not present in the response).
+   When `writes.runtimeState` is `sidecar`, read the persisted RunRecord
+   location from `data.writes.runtimeStatePath` on success or
+   `meta.writes.runtimeStatePath` on failure. In a fenced session this is
+   `<state-home>/v2/sessions/<sessionId>/runtime/state/<actionId>.state.json`
+   (`~/Library/Application Support/rn-dev-agent/v2/sessions/<sessionId>/runtime/state/<actionId>.state.json`
+   by default on macOS), not `<project>/.rn-agent/state/`. The project-local
+   path is used only by an unfenced compatibility process. There is no
+   `data.runRecord` in the response.
+
+   Sidecars are isolated by session. A fresh fenced session starts the action
+   at revision 1 with empty run and repair history; revisions and promotion
+   history from an earlier session do not carry over, and a promotion earned
+   there is invisible in the new session by design.
 
    On failure (`ok: false`), the envelope's `error` message and
    `meta.underlyingFailure` carry the exact underlying Maestro failure

@@ -112,9 +112,13 @@ saving via `cdp_record_test_save_as_action`.
 ### Reusable Actions (the L3 corpus)
 
 An "action" is a Maestro YAML flow stored at `<project>/.rn-agent/actions/<id>.yaml`
-paired with a runtime sidecar at `<project>/.rn-agent/state/<id>.state.json`.
-The YAML is the executable test; the sidecar tracks `revision`, `status`
-(`experimental` / `active` / `deprecated`), `runHistory[]`, and `repairHistory[]`.
+paired with a runtime sidecar. In an authority-fenced session, mutable state is
+session-private at `<state-home>/v2/sessions/<sessionId>/runtime/state/<id>.state.json`
+(`~/Library/Application Support/rn-dev-agent/v2/sessions/<sessionId>/runtime/state/<id>.state.json`
+by default on macOS), not under the project. Only an unfenced compatibility
+process uses `<project>/.rn-agent/state/<id>.state.json`. The YAML is the
+executable test; the sidecar tracks `revision`, `runHistory[]`,
+`repairHistory[]`, and replay statistics.
 The plugin records, replays, and self-heals these flows so an identical user
 flow that took ~13 minutes the first time costs ~4 seconds on every replay
 afterward — discovery is a one-time cost, replay is the steady state.
@@ -124,7 +128,7 @@ afterward — discovery is a one-time cost, replay is the steady state.
 | Stage | Tool / command | What it does |
 |---|---|---|
 | **Discover** (record) | `cdp_record_test_start` → walk the app → `cdp_record_test_stop` | Buffers events to `.rn-agent/recordings/<id>.json` (pre-save) |
-| **Save** | `cdp_record_test_save_as_action` | Promotes a recording into a paired YAML + sidecar at `.rn-agent/actions/` + `.rn-agent/state/`. Auto-writes the M7 metadata header (`id`, `intent`, `tags`, `mutates`, `status`, required `enginePin`, optional `produces`) |
+| **Save** | `cdp_record_test_save_as_action` | Promotes a recording into action YAML at `.rn-agent/actions/`; mutable sidecar state follows the current session runtime root. Auto-writes the M7 metadata header (`id`, `intent`, `tags`, `mutates`, `status`, required `enginePin`, optional `produces`) |
 | **List** | `/rn-dev-agent:list-learned-actions [keyword]` | Browse the corpus by intent / tags / appId. Section B of the output shows actions, Section C shows the UI skeleton, Section A surfaces feedback memories |
 | **Run** | `/rn-dev-agent:run-action <id> [-e KEY=VALUE …]` (calls `cdp_run_action`) | Replays with safety pre-flights (mutates flag, appId match, parameter coverage) and auto-repair on `SELECTOR_NOT_FOUND` |
 | **Self-heal** | `cdp_repair_action <id>` | Fuzzy-matches the stale testID against the live snapshot, patches the YAML in place, bumps `revision`, demotes `status` to `experimental` until next clean replay. Bounded: max 3 attempts/24h, refuses on human edits (mtime check) |
@@ -142,8 +146,16 @@ replays it in ~4 seconds → if a testID drifted, `cdp_run_action` auto-invokes
 `cdp_repair_action`, patches the YAML, retries once, and persists the result
 to the sidecar's `runHistory[]` with auto-repair telemetry. Successful replay
 envelopes explicitly report `transport`, `transportVersion`, `fallback`,
-`repair`, per-step engine readback, and authorized `writes`; ordinary replays
-preserve tracked action YAML bytes.
+`repair`, per-step engine readback, and authorized `writes`. When replay
+persists runtime state, read the exact sidecar from
+`data.writes.runtimeStatePath` on success or
+`meta.writes.runtimeStatePath` on failure; never infer it from the project
+root. Ordinary replays preserve tracked action YAML bytes.
+
+**Session reset is deliberate.** A fresh fenced session starts each action's
+runtime state at revision 1 with empty run and repair history. Revisions,
+promotion evidence, and promotion history earned in one session are invisible
+to the next, preserving parallel-session and worktree isolation.
 
 **Status maturity.** New actions ship as `experimental`. The first clean
 replay auto-promotes them to `active`. Self-repair demotes back to

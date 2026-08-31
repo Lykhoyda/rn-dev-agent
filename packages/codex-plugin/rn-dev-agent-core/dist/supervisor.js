@@ -83728,6 +83728,7 @@ function createRunActionHandler(deps = {}) {
     const writeDisclosure = (actionYaml = "none", outcome) => ({
       actionYaml: actionYaml === "none" ? { written: false, reason: "repair-not-applied" } : actionYaml === "lifecycle-promotion-refused" ? { written: false, reason: "lifecycle-promotion-refused" } : { written: true, authorized: true, reason: actionYaml },
       runtimeState: proofReplay ? "none" : outcome?.runtimeStateRefused ? "refused-external-write" : "sidecar",
+      ...outcome?.runtimeStatePath ? { runtimeStatePath: outcome.runtimeStatePath } : {},
       databaseMirror: proofReplay ? "none" : "best-effort"
     });
     try {
@@ -83898,6 +83899,7 @@ function createRunActionHandler(deps = {}) {
           trailingVerification: firstTrailingVerification,
           ...firstRuntimeDegradation ? { runtimeDegraded: runtimeDegradationMetadata(firstRuntimeDegradation) } : {},
           autoRepair: autoRepair2,
+          writes: writeDisclosure("none", persisted2),
           firstAttemptOutput: boundedOutput(firstOutput),
           terminal: readMaestroTerminal(firstEnv),
           runnerResume: firstEnv.meta?.runnerResume,
@@ -83920,7 +83922,7 @@ function createRunActionHandler(deps = {}) {
             refusedReason: "ROUTE_DRIFT",
             phases: { firstAttemptMs }
           };
-          await persistRunWithDevice({
+          const persisted2 = await persistRunWithDevice({
             timestamp: (/* @__PURE__ */ new Date()).toISOString(),
             durationMs: Date.now() - t0,
             status: "fail",
@@ -83934,7 +83936,8 @@ function createRunActionHandler(deps = {}) {
             failureKind: "ROUTE_DRIFT",
             liveRoute: drift.liveRoute,
             expectedRouteSequence: expectedSeq,
-            autoRepair: autoRepair2
+            autoRepair: autoRepair2,
+            writes: writeDisclosure("none", persisted2)
           });
         }
       }
@@ -83968,6 +83971,7 @@ function createRunActionHandler(deps = {}) {
           ..."selector" in failure && failure.selector ? { failureSelector: failure.selector } : {},
           underlyingFailure: firstFailureDetail,
           autoRepair: autoRepair2,
+          writes: writeDisclosure("none", persisted2),
           firstAttemptOutput: boundedOutput(firstOutput),
           terminal: readMaestroTerminal(firstEnv),
           runnerResume: firstEnv.meta?.runnerResume,
@@ -83998,7 +84002,7 @@ function createRunActionHandler(deps = {}) {
           refusedReason,
           phases: { firstAttemptMs, repairMs }
         };
-        await persistRunWithDevice({
+        const persisted2 = await persistRunWithDevice({
           timestamp: (/* @__PURE__ */ new Date()).toISOString(),
           durationMs: Date.now() - t0,
           status: "fail",
@@ -84016,6 +84020,7 @@ function createRunActionHandler(deps = {}) {
           underlyingFailure: firstFailureDetail,
           terminal: readMaestroTerminal(firstEnv),
           autoRepair: autoRepair2,
+          writes: writeDisclosure("none", persisted2),
           repairError: repairEnv.error,
           firstAttemptOutput: boundedOutput(firstOutput)
         });
@@ -84024,7 +84029,7 @@ function createRunActionHandler(deps = {}) {
       loadContext = refreshActionLoadContext(loadContext, args.actionId);
       const reloadedAction = loadActionFromContext(loadContext, args.actionId);
       if (!reloadedAction) {
-        await persistRunWithDevice({
+        const persisted2 = await persistRunWithDevice({
           timestamp: (/* @__PURE__ */ new Date()).toISOString(),
           durationMs: Date.now() - t0,
           status: "fail",
@@ -84038,7 +84043,10 @@ function createRunActionHandler(deps = {}) {
             phases: { firstAttemptMs, repairMs }
           }
         });
-        return failResult(`cdp_run_action: action disappeared between repair and retry \u2014 investigate filesystem`, "NO_PROJECT_ROOT");
+        return failResult(`cdp_run_action: action disappeared between repair and retry \u2014 investigate filesystem`, "NO_PROJECT_ROOT", {
+          actionId: args.actionId,
+          writes: writeDisclosure("none", persisted2)
+        });
       }
       if (!reloadedAction.replay.ok) {
         return failResult(`cdp_run_action: repaired action is not valid Maestro YAML: ${reloadedAction.replay.error}`, "BAD_RECORDING", { actionId: args.actionId });
@@ -84091,7 +84099,7 @@ function createRunActionHandler(deps = {}) {
           outcome: "failed",
           phases: { firstAttemptMs, repairMs, retryMs }
         };
-        await persistRunWithDevice({
+        const persisted2 = await persistRunWithDevice({
           timestamp: (/* @__PURE__ */ new Date()).toISOString(),
           durationMs: Date.now() - t0,
           status: "fail",
@@ -84105,7 +84113,8 @@ function createRunActionHandler(deps = {}) {
           actionId: args.actionId,
           failureKind: typedCode,
           deviceAuthority: retryDeviceAuthority,
-          autoRepair: autoRepair2
+          autoRepair: autoRepair2,
+          writes: writeDisclosure("auto-repair", persisted2)
         });
       }
       const repairScore = repairEnv.data?.score;
@@ -84186,8 +84195,9 @@ function createRunActionHandler(deps = {}) {
         outcome: "refused",
         refusedReason: "INTERNAL_ERROR"
       };
+      let persisted;
       try {
-        await persistRunWithDevice({
+        persisted = await persistRunWithDevice({
           timestamp: (/* @__PURE__ */ new Date()).toISOString(),
           durationMs: Date.now() - t0,
           status: "fail",
@@ -84198,7 +84208,12 @@ function createRunActionHandler(deps = {}) {
         });
       } catch {
       }
-      return failResult(`cdp_run_action: ${args.actionId} threw an uncaught exception during orchestration: ${msg3.slice(0, 500)}`, { actionId: args.actionId, autoRepair, internalError: msg3.slice(0, 500) });
+      return failResult(`cdp_run_action: ${args.actionId} threw an uncaught exception during orchestration: ${msg3.slice(0, 500)}`, {
+        actionId: args.actionId,
+        autoRepair,
+        internalError: msg3.slice(0, 500),
+        ...persisted ? { writes: writeDisclosure("none", persisted) } : {}
+      });
     }
   };
 }
@@ -84217,7 +84232,7 @@ async function persistRun(actionId, projectRoot, record2) {
     }
     const nextState = appendRunRecord(fresh.state, record2);
     const promotes = shouldAutoPromoteToActive(fresh.metadata, record2);
-    const commit = (promoted, promotionRefused2) => {
+    const commit = (runtimeStatePath, promoted, promotionRefused2) => {
       mirrorToDb({
         yamlFilePath: fresh.filePath,
         state: fresh.state,
@@ -84228,13 +84243,15 @@ async function persistRun(actionId, projectRoot, record2) {
           path: fresh.filePath
         }
       });
-      return { promoted, promotionRefused: promotionRefused2, persistedRunId: record2.runId };
+      return { promoted, promotionRefused: promotionRefused2, runtimeStatePath, persistedRunId: record2.runId };
     };
-    const promotionRefused = promotes && !promoteActionRuntimeWithCAS(fresh, nextState).ok;
-    if (promotes && !promotionRefused)
-      return commit(true, false);
-    if (saveActionRuntimeWithCAS(fresh, nextState).ok)
-      return commit(false, promotionRefused);
+    const promotion = promotes ? promoteActionRuntimeWithCAS(fresh, nextState) : null;
+    const promotionRefused = promotion?.ok === false;
+    if (promotion?.ok)
+      return commit(promotion.sidecarPath, true, false);
+    const runtimeWrite = saveActionRuntimeWithCAS(fresh, nextState);
+    if (runtimeWrite.ok)
+      return commit(runtimeWrite.sidecarPath, false, promotionRefused);
     if (attempt === MAX_ATTEMPTS) {
       console.error(`cdp_run_action: persistRun for "${actionId}" hit ${MAX_ATTEMPTS} sidecar CAS conflicts; runtime state was not written (status=${record2.status}).`);
       return { promoted: false, promotionRefused, runtimeStateRefused: true };
@@ -98491,7 +98508,7 @@ var init_index = __esm({
       targetContext: getActiveSession,
       claimBundleAuthority: claimOptionalBundleAuthority
     });
-    trackedTool("cdp_run_action", "Replay a learned action by id with end-to-end auto-repair. On iOS, the validated flow is partitioned before execution: exact-testID commands use the authority-bound React-tree prover, while native-only commands use XCTest. The RunRecord and result preserve the reported proof domain, and a react-tree pass never promotes an experimental action to Maestro-certified active status. Ordinary missing React testIDs remain TESTID_NOT_FOUND; native selector misses remain ordinary Maestro failures unless direct bounded evidence proves a NATIVE_SURFACE_BLIND environment. Pass autoRepair=false to opt out of selector repair. proofReplay=true is reserved for proof-capture rehearsal and writes no runtime state. When the canonical run ledger proves every authored mutating command completed and only trailing verification (extendedWaitUntil/assert) failed, the result stays failed but carries meta.trailingVerification (mutationEvidence proven, attempt lineage, termination provenance) \u2014 verify the live goal state instead of retrying or rebooting; auto-repair refuses so a merely-slow selector is never rewritten.", {
+    trackedTool("cdp_run_action", "Replay a learned action by id with end-to-end auto-repair. On iOS, the validated flow is partitioned before execution: exact-testID commands use the authority-bound React-tree prover, while native-only commands use XCTest. The RunRecord and result preserve the reported proof domain, and a react-tree pass never promotes an experimental action to Maestro-certified active status. Ordinary missing React testIDs remain TESTID_NOT_FOUND; native selector misses remain ordinary Maestro failures unless direct bounded evidence proves a NATIVE_SURFACE_BLIND environment. Pass autoRepair=false to opt out of selector repair. Successful runtime writes return their exact session-private sidecar location as writes.runtimeStatePath. proofReplay=true is reserved for proof-capture rehearsal and writes no runtime state. When the canonical run ledger proves every authored mutating command completed and only trailing verification (extendedWaitUntil/assert) failed, the result stays failed but carries meta.trailingVerification (mutationEvidence proven, attempt lineage, termination provenance) \u2014 verify the live goal state instead of retrying or rebooting; auto-repair refuses so a merely-slow selector is never rewritten.", {
       actionId: external_exports.string().describe("Owned action id; resolves one .yaml or .yml file."),
       projectRoot: external_exports.string().optional().describe("Override project root (default: process.cwd())."),
       platform: external_exports.enum(["ios", "android"]).optional().describe("Force a specific platform; otherwise auto-detected from the active device session."),

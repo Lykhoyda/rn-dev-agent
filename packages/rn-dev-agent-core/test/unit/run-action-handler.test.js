@@ -8,7 +8,9 @@
 
 import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
   createPinnedRunActionHandler as createRunActionHandler,
   createTmpProject,
@@ -297,6 +299,41 @@ test('cdp_run_action records a typed runner deadline as TIMEOUT', async () => {
 
   assert.equal(env.code, 'RUNNER_TIMEOUT');
   assert.equal(project.readSidecar('demo').runHistory[0].failureCode, 'TIMEOUT');
+});
+
+test('failed replay discloses the session-private runtime sidecar path', async () => {
+  project.seedAction('demo', fixtureYaml({ id: 'demo', selectors: ['spinner-done'] }));
+  const runtimeRoot = mkdtempSync(join(tmpdir(), 'rn-session-runtime-'));
+  const priorRuntimeRoot = process.env.RN_DEV_AGENT_SESSION_RUNTIME_ROOT;
+  process.env.RN_DEV_AGENT_SESSION_RUNTIME_ROOT = runtimeRoot;
+
+  try {
+    const handler = createRunActionHandler({
+      maestroRun: fakeMaestroRun([FAIL_TIMEOUT_ENV]),
+      repairAction: fakeRepairAction(REPAIR_PATCHED_ENV),
+    });
+    const result = await handler({
+      actionId: 'demo',
+      projectRoot: project.root,
+      autoRepair: false,
+    });
+    const env = JSON.parse(result.content[0].text);
+    const expectedPath = join(runtimeRoot, 'state', 'demo.state.json');
+
+    assert.equal(env.ok, false);
+    assert.equal(env.meta.writes.runtimeState, 'sidecar');
+    assert.equal(env.meta.writes.runtimeStatePath, expectedPath);
+    assert.equal(existsSync(expectedPath), true);
+    const sessionState = JSON.parse(readFileSync(expectedPath, 'utf8'));
+    assert.equal(sessionState.revision, 1);
+    assert.equal(sessionState.runHistory.length, 1);
+    assert.equal(sessionState.runHistory[0].status, 'fail');
+    assert.equal(project.readSidecar('demo').runHistory.length, 0);
+  } finally {
+    if (priorRuntimeRoot === undefined) delete process.env.RN_DEV_AGENT_SESSION_RUNTIME_ROOT;
+    else process.env.RN_DEV_AGENT_SESSION_RUNTIME_ROOT = priorRuntimeRoot;
+    rmSync(runtimeRoot, { force: true, recursive: true });
+  }
 });
 
 test('run-action: proofReplay pass on an experimental action discloses no lifecycle-promotion write', async () => {

@@ -25,7 +25,7 @@ proof; lock and run the login e2e on the exact candidate for formal proof.
 │   └── *.yaml               each has a metadata header + state sidecar
 ├── fixtures/              ← seed data for replay (commit)
 ├── proposals/             ← repair proposals queued for review (commit)
-├── state/                 ← runtime state per action (gitignore)
+├── state/                 ← unfenced compatibility runtime state (gitignore)
 ├── recordings/            ← cdp_record_test buffers (gitignore)
 ├── snapshots/             ← debugging captures (gitignore)
 ├── diag/                  ← debug logs (gitignore)
@@ -36,10 +36,10 @@ proof; lock and run the login e2e on the exact candidate for formal proof.
 
 1. **Discovery** — `cdp_record_test_start` → `…_stop` buffers events to
    `recordings/<id>.json`.
-2. **Save** — `cdp_record_test_save_as_action` writes the paired
-   `actions/<id>.yaml` + `state/<id>.state.json` (sidecar). The YAML is
-   the executable test; the sidecar holds runtime metadata (revision,
-   status, `runHistory[]`, `repairHistory[]`).
+2. **Save** — `cdp_record_test_save_as_action` writes
+   `actions/<id>.yaml`; mutable sidecar state follows the current runtime root.
+   The YAML is the executable test; the sidecar holds revision,
+   `runHistory[]`, `repairHistory[]`, and replay statistics.
 3. **Replay** — `/run-action <id>` (calls `cdp_run_action`) runs the
    flow and updates the sidecar.
 4. **Self-heal** — on a `SELECTOR_NOT_FOUND` failure, `cdp_repair_action`
@@ -48,6 +48,17 @@ proof; lock and run the login e2e on the exact candidate for formal proof.
    next clean replay.
 Self-repair is bounded: max 3 attempts per action per 24h; failure codes
 other than `SELECTOR_NOT_FOUND` escalate without auto-fix.
+
+In an authority-fenced session, the sidecar lives at
+`<state-home>/v2/sessions/<sessionId>/runtime/state/<id>.state.json`
+(`~/Library/Application Support/rn-dev-agent/v2/sessions/<sessionId>/runtime/state/<id>.state.json`
+by default on macOS), not in this directory. `cdp_run_action` returns its exact
+location as `data.writes.runtimeStatePath` on success or
+`meta.writes.runtimeStatePath` on failure. A fresh fenced session starts at
+revision 1 with empty run and repair history; revisions and promotion history
+do not carry over, and a promotion earned in one session is invisible to the
+next. The project-local `state/` path is only the unfenced compatibility
+fallback.
 
 ## Linked Git worktrees
 

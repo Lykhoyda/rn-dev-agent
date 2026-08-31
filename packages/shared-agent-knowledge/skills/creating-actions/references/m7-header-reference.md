@@ -44,9 +44,9 @@ any ──(manual archival)──▶ deprecated                      (never auto
 - Promotion happens inside `cdp_run_action` (`shouldAutoPromoteToActive`); hand-setting `active` skips the validation the status claims.
 - Demotion after repair is intentional: a patched selector is a hypothesis until a replay proves it.
 
-## Sidecar (`.rn-agent/state/<id>.state.json`) — never hand-write
+## Runtime sidecar — never hand-write
 
-Created lazily by `loadOrInitSidecar` on first load. Holds `runHistory` (cap 50), `repairHistory` (cap 25), `stats`, `revision`, and `lastSeenMtimeMs`. That last field powers external-edit detection: hand-writing or pre-creating the sidecar desynchronizes it and triggers false `EXTERNAL_EDIT` repair refusals. Repair budget: 3 successful auto-repairs per rolling 24h per action; exceeding it returns `BUDGET_EXHAUSTED` and escalates to the user.
+Created lazily by `loadOrInitSidecar` on first load. In a fenced session it lives at `<state-home>/v2/sessions/<sessionId>/runtime/state/<id>.state.json`; only an unfenced compatibility process uses `<project>/.rn-agent/state/<id>.state.json`. Read the exact path from `cdp_run_action`'s `writes.runtimeStatePath`. It holds `runHistory` (cap 50), `repairHistory` (cap 25), `stats`, `revision`, and `lastSeenMtimeMs`. A fresh fenced session deliberately begins at revision 1 with empty histories, so revisions and promotion history do not cross sessions and a promotion earned in one session is invisible to the next. `lastSeenMtimeMs` powers external-edit detection: hand-writing or pre-creating the sidecar desynchronizes it and triggers false `EXTERNAL_EDIT` repair refusals. Repair budget: 3 successful auto-repairs per rolling 24h per action; exceeding it returns `BUDGET_EXHAUSTED` and escalates to the user.
 
 ## Failure codes seen at replay (what they mean for the author)
 

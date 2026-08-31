@@ -133,7 +133,7 @@ Show the diff before writing.
 
 ### D. `.rn-agent/` directory scaffold
 
-The plugin reads and writes only inside `<cwd>/.rn-agent/`. Without this directory, every plugin tool that persists state (action recordings, learned flows, nav-graph cache, sidecars) fails with `ENOENT` on first use. This step creates it from a versioned template.
+Project-owned action knowledge and scaffold files live inside `<cwd>/.rn-agent/`. Mutable sidecars and recordings from an authority-fenced session instead live under its private runtime root; only an unfenced compatibility process writes them under `.rn-agent/state/` and `.rn-agent/recordings/`. This step creates the project scaffold from a versioned template.
 
 The template lives at `${CLAUDE_PLUGIN_ROOT}/templates/rn-agent/` and contains: `README.md`, `.gitignore`, `.scaffold-version`, `skeleton.yaml`, `dev-bridge.ts`, `globals.d.ts`, `vercel-rules.config.json`, `actions/.gitkeep`, `fixtures/.gitkeep`, `proposals/.gitkeep`.
 
@@ -143,7 +143,7 @@ The template lives at `${CLAUDE_PLUGIN_ROOT}/templates/rn-agent/` and contains: 
 
 1. **Detect existing scaffold.** **Step 0 guard first:** `.rn-agent` itself must be a real local directory; never scaffold through a root symlink. `.rn-agent/actions` may be the supported inherited symlink. Exclude that subtree from first-time and partial-add copies, but scaffold every other file locally. Treat `<cwd>/.rn-agent/` as already scaffolded if ANY of these signals are present:
    - `.rn-agent/.scaffold-version` exists (canonical marker)
-   - Any of `.rn-agent/state/`, `.rn-agent/recordings/`, `.rn-agent/snapshots/`, `.rn-agent/diag/` exist (runtime dirs created by tools — proof the plugin has run)
+   - Any of `.rn-agent/state/`, `.rn-agent/recordings/`, `.rn-agent/snapshots/`, `.rn-agent/diag/` exist (unfenced compatibility runtime dirs — proof the plugin has run in that mode)
    - `.rn-agent/actions/` contains any `*.yaml` file
    - `<cwd>/.rn-agent/` exists as a directory at all (even if empty — falls into the partial-add path so we don't try to `mv tmp dst` over it)
    
