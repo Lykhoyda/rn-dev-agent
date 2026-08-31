@@ -530,7 +530,7 @@ test('repair YAML write remains disclosed when refresh throws', async () => {
         mkdirSync(join(runtimeRoot, 'state'), { recursive: true });
         writeFileSync(expectedPath, JSON.stringify(project.readSidecar('demo')), 'utf8');
         rmSync(project.actionsDir, { force: true, recursive: true });
-        mkdirSync(project.actionsDir, { recursive: true });
+        writeFileSync(project.actionsDir, 'replaced while refreshing', 'utf8');
         return fakeRepairAction({
           ...REPAIR_PATCHED_ENV,
           data: { ...REPAIR_PATCHED_ENV.data, sidecarPath: expectedPath },

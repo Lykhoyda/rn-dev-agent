@@ -2435,6 +2435,12 @@ test('real canonical action proof replay is read-only while normal replay persis
       assert.deepEqual((success.data as { writes: unknown }).writes, {
         actionYaml: { written: false, reason: 'repair-not-applied' },
         runtimeState: 'sidecar',
+        runtimeStatePath: join(
+          await realpath(root),
+          '.rn-agent',
+          'state',
+          'canonical-proof.state.json',
+        ),
         databaseMirror: 'best-effort',
       });
       assert.deepEqual(await readFile(actionPath), before, 'replay rewrote tracked action YAML');
