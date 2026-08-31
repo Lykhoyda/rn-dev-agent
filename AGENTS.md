@@ -202,6 +202,28 @@ alive for such callers.
   allowlist: a real actions directory, or the approved `.rn-agent/actions`
   symlink to the same-repo primary corpus. `isDirectNode` still refuses
   per-file action symlinks.
+- Exact-ID visibility in CDP/JS replay has exactly one owner: the injected
+  `isTestIdFrontmost` oracle (`src/injected-helpers.ts`), consumed through
+  `frontmostFor` — it scans fibers exactly and fail-closes on renderer
+  coverage and scan budget before any absence claim (`matchCount: 0` is
+  complete readable absence; refusals carry no matchCount). `replayTreeData`
+  (`src/tools/cdp-replay-dispatch.ts`) is a readability gate only (transport,
+  redbox, truncation); `getTree(filter)` matches substrings, so never
+  reintroduce exact-ID presence/absence inference from its output. Fibers are
+  compared modulo `fiber.alternate` (React's double buffer) in `containsFiber`;
+  the end-to-end OTP login-resume smoke is device-bound and owned by
+  `corepack yarn gate:otp-omitted-timeout` (needs `OTP_FIXTURE_ROOT` and
+  `OTP_FIXTURE_DEVICE_ID`; not run in hosted CI), with the causal modal-
+  alternate regressions in `test/unit/ios-proof-domain-routing.test.ts`.
+- The partitioned iOS native leg must re-prove the exact CDP target before
+  completing its deferred origin: only `reproveManagedOrigin`
+  (`connectExactSessionTarget`, which waits for the target to re-register)
+  reliably survives a WDA-driven segment, so the deferred-completion guard in
+  `src/tools/maestro-run.ts` admits a caller-supplied reprove even in the
+  nested `replayDeps: undefined` handler. Forward the parent flow's remaining
+  readiness budget and cancellation signal through that reproof and its
+  subsequent origin completion. Park/resume handoff regressions are pinned in
+  `test/unit/partitioned-replay-authority.test.ts`.
 - Trailing-verification classification (GH #623) has exactly one owner: the
   canonical per-attempt ledger built inside `maestro_run` from per-stage
   producer artifacts (`src/domain/maestro-run-ledger.ts`, artifact reader in

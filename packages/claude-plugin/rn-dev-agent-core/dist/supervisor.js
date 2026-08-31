@@ -63917,7 +63917,7 @@ var HELPERS_VERSION, INJECTED_HELPERS, NETWORK_HOOK_SCRIPT, NETWORK_CB_BUFFERED_
 var init_injected_helpers = __esm({
   "packages/rn-dev-agent-core/dist/injected-helpers.js"() {
     "use strict";
-    HELPERS_VERSION = 47;
+    HELPERS_VERSION = 50;
     INJECTED_HELPERS = `
 (function() {
   var __HELPERS_VERSION__ = ${HELPERS_VERSION};
@@ -63962,23 +63962,75 @@ var init_injected_helpers = __esm({
     '_LogBoxInspectorContainer'
   ];
 
-  // Reset by every root-iteration pass; only valid when read synchronously
-  // after the pass that produced the tree (many helpers share the iterators).
-  // complete is true only when the renderer-ID loop finished without the
-  // empty-streak early-exit \u2014 empty roots are mounting evidence only then
-  // (GH #789).
-  var lastRootScan = { rendererErrors: 0, probedUpTo: 0, complete: false };
+  // Synchronous scan result; finished stays false after the GH #789 empty-streak exit.
+  var lastRootScan = { rendererErrors: 0, visited: {}, finished: false };
 
-  function computeUnscannedRendererIds() {
-    try {
-      var hook = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
-      if (!hook || !hook.renderers || typeof hook.renderers.forEach !== 'function') return [];
-      var out = [];
-      hook.renderers.forEach(function(_v, id) {
-        if (typeof id === 'number' && id > lastRootScan.probedUpTo) out.push(id);
-      });
-      return out;
-    } catch (_) { return []; }
+  function rootScanCoverage() {
+    var reasons = [];
+    var registryIds = [];
+    var hook = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
+    var renderers = hook && hook.renderers;
+    if (renderers) {
+      if (typeof renderers.keys !== 'function' || typeof renderers.forEach !== 'function') {
+        registryIds = null;
+      } else {
+        try {
+          var iterator = renderers.keys();
+          if (!iterator || typeof iterator.next !== 'function') {
+            registryIds = null;
+          } else {
+            var step;
+            var iterations = 0;
+            while (registryIds !== null) {
+              step = iterator.next();
+              if (!step || typeof step !== 'object' || typeof step.done !== 'boolean') {
+                registryIds = null;
+                break;
+              }
+              if (step.done) break;
+              if (++iterations > MAX_REGISTERED_RENDERER_IDS || typeof step.value !== 'number') {
+                registryIds = null;
+                break;
+              }
+              if (registryIds.indexOf(step.value) === -1) registryIds.push(step.value);
+              if (registryIds.length > MAX_REGISTERED_RENDERER_IDS) registryIds = null;
+            }
+          }
+        } catch (_) {
+          registryIds = null;
+        }
+        if (registryIds !== null) {
+          try {
+            var forEachIterations = 0;
+            renderers.forEach(function(_v, id) {
+              if (registryIds === null) return;
+              if (++forEachIterations > MAX_REGISTERED_RENDERER_IDS || typeof id !== 'number') {
+                registryIds = null;
+                return;
+              }
+              if (registryIds.indexOf(id) === -1) registryIds.push(id);
+              if (registryIds.length > MAX_REGISTERED_RENDERER_IDS) registryIds = null;
+            });
+          } catch (_) {
+            registryIds = null;
+          }
+        }
+      }
+    }
+    var addReason = function(reason) {
+      if (reasons.indexOf(reason) === -1) reasons.push(reason);
+    };
+    if (lastRootScan.rendererErrors > 0 || registryIds === null) addReason('renderer-error');
+    if (!lastRootScan.finished) addReason('root-enumeration-incomplete');
+    var unscannedRendererIds = [];
+    if (registryIds !== null) {
+      for (var i = 0; i < registryIds.length; i++) {
+        var id = registryIds[i];
+        if (!lastRootScan.visited[id]) unscannedRendererIds.push(id);
+      }
+      if (unscannedRendererIds.length > 0) addReason('renderers-unscanned');
+    }
+    return { reasons: reasons, unscannedRendererIds: unscannedRendererIds };
   }
 
   // Read the renderer IDs React DevTools actually registered. A malformed or
@@ -64005,7 +64057,7 @@ var init_injected_helpers = __esm({
   }
 
   function findActiveRenderer() {
-    lastRootScan = { rendererErrors: 0, probedUpTo: 0, complete: false };
+    lastRootScan = { rendererErrors: 0, visited: {}, finished: false };
     var hook = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
     if (!hook || typeof hook.getFiberRoots !== 'function') return null;
     var rendererIds = getRegisteredRendererIds(hook);
@@ -64016,7 +64068,7 @@ var init_injected_helpers = __esm({
     var emptyStreak = 0;
     for (var rii = 0; rii < rendererIds.length; rii++) {
       var ri = rendererIds[rii];
-      if (ri > lastRootScan.probedUpTo) lastRootScan.probedUpTo = ri;
+      lastRootScan.visited[ri] = true;
       try {
         var roots = hook.getFiberRoots(ri);
         if (roots && roots.size > 0) {
@@ -64031,7 +64083,7 @@ var init_injected_helpers = __esm({
         lastRootScan.rendererErrors++;
       }
     }
-    lastRootScan.complete = true;
+    lastRootScan.finished = true;
     return null;
   }
 
@@ -64048,7 +64100,7 @@ var init_injected_helpers = __esm({
   // native renderer loop so user-registered portals stay lower priority
   // than React's own registry.
   function iterateAllRoots(cb) {
-    lastRootScan = { rendererErrors: 0, probedUpTo: 0, complete: false };
+    lastRootScan = { rendererErrors: 0, visited: {}, finished: false };
     var hook = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
     if (hook && typeof hook.getFiberRoots === 'function') {
       var rendererIds = getRegisteredRendererIds(hook);
@@ -64060,7 +64112,7 @@ var init_injected_helpers = __esm({
       var abortedEarly = false;
       for (var rii = 0; rii < rendererIds.length; rii++) {
         var ri = rendererIds[rii];
-        if (ri > lastRootScan.probedUpTo) lastRootScan.probedUpTo = ri;
+        lastRootScan.visited[ri] = true;
         try {
           var roots = hook.getFiberRoots(ri);
           if (roots && roots.size) {
@@ -64085,7 +64137,7 @@ var init_injected_helpers = __esm({
           lastRootScan.rendererErrors++;
         }
       }
-      lastRootScan.complete = !abortedEarly;
+      if (!abortedEarly) lastRootScan.finished = true;
     }
     // GH #126 Gap B \u2014 extra-roots step. Runs AFTER the native renderer
     // loop (above) so user-registered portals are lower priority than
@@ -64321,9 +64373,12 @@ var init_injected_helpers = __esm({
       o = o || {};
       var reasons = [];
       if (o.noRenderer) reasons.push('no-renderer');
-      if (lastRootScan.rendererErrors > 0) reasons.push('renderer-error');
-      var unscanned = computeUnscannedRendererIds();
-      if (unscanned.length > 0) reasons.push('renderers-unscanned');
+      var coverage = rootScanCoverage();
+      for (var coverageIndex = 0; coverageIndex < coverage.reasons.length; coverageIndex++) {
+        if (reasons.indexOf(coverage.reasons[coverageIndex]) === -1) {
+          reasons.push(coverage.reasons[coverageIndex]);
+        }
+      }
       if (o.scanBudgetExhausted) reasons.push('scan-budget-exhausted');
       if (o.outputTruncated) reasons.push('output-truncated');
       var state = (o.noRenderer || o.failed) ? 'failed' : (reasons.length > 0 ? 'degraded' : 'ok');
@@ -64336,8 +64391,9 @@ var init_injected_helpers = __esm({
         effectiveDepth: maxDepth,
         droppedSubtrees: walkQuality.droppedSubtrees,
         collapsedChildLists: walkQuality.collapsedChildLists,
+        complete: state === 'ok' && reasons.length === 0 && walkQuality.droppedSubtrees === 0 && walkQuality.collapsedChildLists === 0,
         rendererErrors: lastRootScan.rendererErrors,
-        unscannedRendererIds: unscanned
+        unscannedRendererIds: coverage.unscannedRendererIds
       };
     }
 
@@ -64801,7 +64857,8 @@ var init_injected_helpers = __esm({
       var mountHookUsable = !!(mountHook && typeof mountHook.getFiberRoots === 'function');
       var mountRoots = mountHookUsable ? findAllRootFibers() : [];
       // Only a complete, clean scan is mounting evidence.
-      var mountScanClean = mountHookUsable && lastRootScan.complete && lastRootScan.rendererErrors === 0;
+      var mountCoverage = rootScanCoverage();
+      var mountScanClean = mountHookUsable && mountCoverage.reasons.length === 0;
       if (mountScanClean && mountRoots.length === 0) {
         return JSON.stringify({
           error: 'App is still mounting \u2014 no React fiber roots exist yet (the bundle is likely still loading). Retry in ~2s.',
@@ -64809,7 +64866,7 @@ var init_injected_helpers = __esm({
           retryInMs: 2000
         });
       }
-      if (mountHookUsable && !lastRootScan.complete && mountRoots.length === 0) {
+      if (mountHookUsable && mountCoverage.reasons.indexOf('root-enumeration-incomplete') !== -1 && mountRoots.length === 0) {
         return JSON.stringify({ error: 'Navigation state not found. Is React Navigation or Expo Router installed?' });
       }
       var navFw = navDetectBundledFramework();
@@ -67609,11 +67666,21 @@ var init_injected_helpers = __esm({
         truncated: true
       });
     }
+    var coverage = rootScanCoverage();
+    if (coverage.reasons.length > 0) {
+      return JSON.stringify({
+        visible: false,
+        code: 'ASSERTION_FAILED',
+        reason: 'frontmost proof cannot cover every mounted renderer'
+      });
+    }
     function containsFiber(ancestor, candidate) {
+      // React return chains may thread through either half of a fiber/alternate pair.
+      var ancestorAlternate = ancestor.alternate || null;
       var current = candidate;
       var guard = 0;
       while (current && guard++ < 1000) {
-        if (current === ancestor) return true;
+        if (current === ancestor || current === ancestorAlternate) return true;
         current = current.return;
       }
       return false;
@@ -67642,6 +67709,9 @@ var init_injected_helpers = __esm({
       });
     }
     var target = logicalMatches[0];
+    var targetProps = target.memoizedProps || {};
+    var targetAccessibilityState = targetProps.accessibilityState || {};
+    var targetDisabled = targetProps.disabled === true || targetAccessibilityState.disabled === true;
     if (__hidden(target)) {
       return JSON.stringify({
         visible: false,
@@ -67650,7 +67720,7 @@ var init_injected_helpers = __esm({
       });
     }
 
-    var targetPointerEvents = (target.memoizedProps || {}).pointerEvents;
+    var targetPointerEvents = targetProps.pointerEvents;
     if (targetPointerEvents === 'none' || targetPointerEvents === 'box-none') {
       return JSON.stringify({
         visible: false,
@@ -67816,7 +67886,8 @@ var init_injected_helpers = __esm({
       route: routeOwner,
       activeRoute: activeRoute,
       modalCount: modals.length,
-      matchCount: 1
+      matchCount: 1,
+      disabled: targetDisabled
     });
   }
 
@@ -80756,6 +80827,56 @@ var init_maestro_run_ledger = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/domain/cdp-flow-replay.js
+async function readVisibilityBeforeDeadline(dispatch, id, deadline, signal) {
+  const remainingMs = deadline - Date.now();
+  if (remainingMs < 0)
+    return null;
+  return new Promise((resolve22, reject) => {
+    let settled = false;
+    let timer;
+    const cleanup = () => {
+      if (timer !== void 0)
+        clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+    };
+    const finish = (value) => {
+      if (settled)
+        return;
+      settled = true;
+      cleanup();
+      resolve22(Date.now() <= deadline ? value : null);
+    };
+    const fail3 = (error2) => {
+      if (settled)
+        return;
+      settled = true;
+      cleanup();
+      reject(error2);
+    };
+    const onAbort = () => {
+      fail3(new ReplayDispatchError("RUNNER_TIMEOUT", "React-tree replay exceeded its execution deadline"));
+    };
+    const armDeadline = () => {
+      const nextRemainingMs = deadline - Date.now();
+      timer = setTimeout(() => Date.now() >= deadline ? finish(null) : armDeadline(), Math.min(Math.max(0, nextRemainingMs), MAX_TIMER_DELAY_MS));
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+    if (signal?.aborted) {
+      onAbort();
+      return;
+    }
+    armDeadline();
+    Promise.resolve().then(() => dispatch.visibility(id)).then(finish, (error2) => {
+      if (settled)
+        return;
+      if (Date.now() > deadline) {
+        finish(null);
+        return;
+      }
+      fail3(error2);
+    });
+  });
+}
 function refuseUnsupportedKeys(value, allowed, label) {
   const unsupported = Object.keys(value).filter((key) => !allowed.includes(key));
   if (unsupported.length > 0) {
@@ -80810,7 +80931,12 @@ function normalizeSteps(body, params) {
         const id = isObj(v) ? asString(v.id) : null;
         if (!id)
           throw new UnsupportedStepError("assertVisible (missing string id)");
-        out.push({ t: "assert", id: interp(id, params) });
+        out.push({
+          t: "waitVisible",
+          id: interp(id, params),
+          timeoutMs: DEFAULT_VISIBILITY_TIMEOUT_MS,
+          evidenceType: "assert"
+        });
         break;
       }
       case "extendedWaitUntil": {
@@ -80820,10 +80946,10 @@ function normalizeSteps(body, params) {
           refuseUnsupportedKeys(v.visible, ["id"], "extendedWaitUntil.visible");
         }
         const id = isObj(v) && isObj(v.visible) ? asString(v.visible.id) : null;
-        const timeoutMs = isObj(v) ? v.timeout : void 0;
-        if (!id || !Number.isSafeInteger(timeoutMs) || Number(timeoutMs) < 0)
-          throw new UnsupportedStepError("extendedWaitUntil (need visible.id + non-negative integer timeout)");
-        out.push({ t: "waitVisible", id: interp(id, params), timeoutMs: Number(timeoutMs) });
+        const timeoutMs = isObj(v) && "timeout" in v ? v.timeout : DEFAULT_VISIBILITY_TIMEOUT_MS;
+        if (!id || typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs) || timeoutMs < 0)
+          throw new UnsupportedStepError("extendedWaitUntil (need visible.id; timeout must be finite and non-negative when present)");
+        out.push({ t: "waitVisible", id: interp(id, params), timeoutMs });
         break;
       }
       case "waitForAnimationToEnd": {
@@ -80886,6 +81012,7 @@ async function replayFlow(steps, dispatch, opts = {}) {
   };
   for (let i = 0; i < steps.length; i++) {
     const s = steps[i];
+    const evidenceType = s.t === "waitVisible" ? s.evidenceType ?? s.t : s.t;
     const startedAt = Date.now();
     try {
       requireNotAborted();
@@ -80926,39 +81053,34 @@ async function replayFlow(steps, dispatch, opts = {}) {
           });
           break;
         }
-        case "assert": {
-          const verdict = await dispatch.visibility(s.id);
-          requireNotAborted();
-          trace.push({
-            sourceIndex: sourceIndex(i),
-            t: s.t,
-            target: s.id,
-            ok: verdict.visible,
-            durationMs: Date.now() - startedAt
-          });
-          if (!verdict.visible)
-            return fail3(i, verdict.reason ?? `assertVisible: "${s.id}" is not frontmost`, verdict.code ?? "ASSERTION_FAILED", verdict.meta);
-          break;
-        }
         case "waitVisible": {
-          const deadline = Date.now() + s.timeoutMs;
-          let verdict = await dispatch.visibility(s.id);
-          requireNotAborted();
-          while (!verdict.visible && Date.now() < deadline) {
+          const deadline = startedAt + s.timeoutMs;
+          let verdict = null;
+          for (; ; ) {
+            const observed = await readVisibilityBeforeDeadline(dispatch, s.id, deadline, opts.signal);
             requireNotAborted();
-            await new Promise((resolve22) => setTimeout(resolve22, 100));
-            verdict = await dispatch.visibility(s.id);
-            requireNotAborted();
+            if (!observed)
+              break;
+            verdict = observed;
+            if (verdict.visible)
+              break;
+            const remainingMs = deadline - Date.now();
+            if (remainingMs <= 0)
+              break;
+            await new Promise((resolve22) => setTimeout(resolve22, Math.min(VISIBILITY_POLL_INTERVAL_MS, remainingMs)));
           }
+          const waitedMs = Date.now() - startedAt;
           trace.push({
             sourceIndex: sourceIndex(i),
-            t: s.t,
+            t: evidenceType,
             target: s.id,
-            ok: verdict.visible,
-            durationMs: Date.now() - startedAt
+            ok: verdict?.visible === true,
+            durationMs: waitedMs
           });
+          if (!verdict)
+            return fail3(i, `waitVisible: no readable visibility observation completed for "${s.id}" before the deadline`, "RUNNER_TIMEOUT", { failedSelector: s.id, waitedMs });
           if (!verdict.visible)
-            return fail3(i, verdict.reason ?? `extendedWaitUntil: "${s.id}" is not frontmost`, verdict.code ?? "TESTID_NOT_FOUND", verdict.meta);
+            return fail3(i, verdict.reason ?? `waitVisible: "${s.id}" is not frontmost`, verdict.code ?? "TESTID_NOT_FOUND", { ...verdict.meta, failedSelector: s.id, waitedMs });
           break;
         }
         case "wait":
@@ -81008,14 +81130,16 @@ async function replayFlow(steps, dispatch, opts = {}) {
         }
       }
     } catch (e) {
+      const waitedMs = Date.now() - startedAt;
       trace.push({
         sourceIndex: sourceIndex(i),
-        t: s.t,
+        t: evidenceType,
         target: "id" in s ? s.id : void 0,
         ok: false,
-        durationMs: Date.now() - startedAt
+        durationMs: waitedMs
       });
-      return fail3(i, e instanceof Error ? e.message : String(e), e instanceof ReplayDispatchError ? e.code : void 0, e instanceof ReplayDispatchError ? e.meta : void 0);
+      const dispatchMeta = e instanceof ReplayDispatchError ? e.meta : void 0;
+      return fail3(i, e instanceof Error ? e.message : String(e), e instanceof ReplayDispatchError ? e.code : void 0, s.t === "waitVisible" ? { ...dispatchMeta, failedSelector: s.id, waitedMs } : dispatchMeta);
     }
   }
   if (opts.signal?.aborted) {
@@ -81023,7 +81147,7 @@ async function replayFlow(steps, dispatch, opts = {}) {
   }
   return { passed: true, finalFocusId: lastTapped, steps: trace };
 }
-var UnsupportedStepError, ReplayDispatchError, interp, asString, isObj;
+var UnsupportedStepError, ReplayDispatchError, interp, asString, isObj, DEFAULT_VISIBILITY_TIMEOUT_MS, VISIBILITY_POLL_INTERVAL_MS, MAX_TIMER_DELAY_MS;
 var init_cdp_flow_replay = __esm({
   "packages/rn-dev-agent-core/dist/domain/cdp-flow-replay.js"() {
     "use strict";
@@ -81048,6 +81172,9 @@ var init_cdp_flow_replay = __esm({
     interp = (s, p) => s.replace(/\$\{([A-Z_][A-Z0-9_]*)(?:\s*\?\?\s*(['"])(.*?)\2)?\}/g, (match, key, _quote, fallback) => p[key] ?? fallback ?? match);
     asString = (x) => typeof x === "string" ? x : null;
     isObj = (x) => typeof x === "object" && x !== null && !Array.isArray(x);
+    DEFAULT_VISIBILITY_TIMEOUT_MS = 17e3;
+    VISIBILITY_POLL_INTERVAL_MS = 200;
+    MAX_TIMER_DELAY_MS = 2147483647;
   }
 });
 
@@ -81312,14 +81439,20 @@ function unwrapTree(data) {
 function replayTreeData(envelope) {
   const warning = typeof envelope.meta?.warning === "string" ? envelope.meta.warning : void 0;
   const redbox = warning === "APP_HAS_REDBOX";
-  if (envelope.ok === true && !redbox)
-    return envelope.data;
   const data = envelope.data && typeof envelope.data === "object" && !Array.isArray(envelope.data) ? envelope.data : null;
-  const message = redbox && typeof data?.message === "string" ? data.message.slice(0, 1e3) : envelope.error?.slice(0, 1e3) ?? "Component tree proof is unavailable";
-  const code = redbox ? warning : envelope.code ?? "EVAL_FAILED";
+  const truncated = data !== null && (data.__agent_truncated === true || data.truncated === true);
+  const agentError = typeof data?.__agent_error === "string" ? data.__agent_error.slice(0, 1e3) : void 0;
+  const serializationFailed = agentError !== void 0;
+  if (envelope.ok === true && !redbox && !truncated && !serializationFailed)
+    return envelope.data;
+  const message = serializationFailed ? agentError || "Component tree serialization failed" : truncated ? "Component tree proof exceeded the readable payload budget" : redbox && typeof data?.message === "string" ? data.message.slice(0, 1e3) : envelope.error?.slice(0, 1e3) ?? "Component tree proof is unavailable";
+  const code = serializationFailed ? "EVAL_FAILED" : redbox ? warning : envelope.code ?? "EVAL_FAILED";
   throw new ReplayDispatchError(code, message, {
     treeEnvelope: {
       ok: envelope.ok === true,
+      ...serializationFailed ? { agentError } : {},
+      ...truncated ? { truncated: true } : {},
+      ...truncated && typeof data.originalLength === "number" ? { originalLength: data.originalLength } : {},
       ...envelope.code ? { code: envelope.code } : {},
       ...envelope.error ? { error: envelope.error.slice(0, 1e3) } : {},
       ...warning ? { warning } : {},
@@ -81327,23 +81460,6 @@ function replayTreeData(envelope) {
       ...envelope.meta ? { meta: envelope.meta } : {}
     }
   });
-}
-function countExactMatches(treeJson, id) {
-  let matches = 0;
-  const root = treeJson && typeof treeJson === "object" && "tree" in treeJson ? treeJson.tree : treeJson;
-  const stack = [root];
-  while (stack.length > 0) {
-    const node = stack.pop();
-    if (!node || typeof node !== "object")
-      continue;
-    const record2 = node;
-    if (record2.testID === id || record2.nativeID === id)
-      matches++;
-    const children = record2.children ?? record2.nodes ?? record2.matches;
-    if (Array.isArray(children))
-      stack.push(...children);
-  }
-  return matches;
 }
 function nodeProps(treeJson, id) {
   const stack = [treeJson];
@@ -81423,19 +81539,18 @@ function buildCdpDispatch(deps, signal) {
   const assertExactInteractable = async (id) => {
     const tree = await deps.treeFor(id);
     requireNotAborted();
-    const treeMatches = countExactMatches(tree, id);
-    if (treeMatches === 0)
+    const frontmost = await deps.frontmostFor(id);
+    requireNotAborted();
+    if (frontmost.matchCount === 0)
       throw new ReplayDispatchError("TESTID_NOT_FOUND", `testID "${id}" not present`, {
         failedSelector: id
       });
-    const frontmost = await deps.frontmostFor?.(id);
-    requireNotAborted();
-    const matches = frontmost ? frontmost.matchCount ?? 1 : treeMatches;
+    const matches = frontmost.matchCount ?? 1;
     if (matches > 1)
       throw new ReplayDispatchError("AMBIGUOUS_TESTID", `testID "${id}" resolves to ${matches} mounted elements`, { matchCount: matches });
-    if (frontmost && !frontmost.visible)
+    if (!frontmost.visible)
       throw new ReplayDispatchError(frontmost.code ?? "ASSERTION_FAILED", frontmost.reason ?? `testID "${id}" is mounted but not frontmost`);
-    if (isDisabled(nodeProps(tree, id)))
+    if (frontmost.disabled === true || isDisabled(nodeProps(tree, id)))
       throw new ReplayDispatchError("INTERACTION_NOT_ACTUATED", `testID "${id}" is disabled/non-interactable`);
     const pointerEventsError = pointerEventsBlock(tree, id);
     if (pointerEventsError)
@@ -81453,24 +81568,23 @@ function buildCdpDispatch(deps, signal) {
       await deps.typeByTestId(id, text);
     },
     async visibility(id) {
-      const tree = await deps.treeFor(id);
-      const treeMatches = countExactMatches(tree, id);
-      if (treeMatches === 0)
+      await deps.treeFor(id);
+      const frontmost = await deps.frontmostFor(id);
+      if (frontmost.matchCount === 0)
         return {
           visible: false,
           code: "TESTID_NOT_FOUND",
           reason: `testID "${id}" not present in the React tree`,
           meta: { failedSelector: id }
         };
-      const frontmost = await deps.frontmostFor?.(id);
-      const matches = frontmost ? frontmost.matchCount ?? 1 : treeMatches;
+      const matches = frontmost.matchCount ?? 1;
       if (matches > 1)
         return {
           visible: false,
           code: "AMBIGUOUS_TESTID",
           reason: `testID "${id}" resolves to ${matches} mounted elements`
         };
-      if (frontmost && !frontmost.visible)
+      if (!frontmost.visible)
         return {
           visible: false,
           code: frontmost.code ?? "ASSERTION_FAILED",
@@ -81674,7 +81788,7 @@ function remapNativeSteps(steps, sourceIndices) {
     return mapped ? [mapped] : [];
   });
 }
-function partialNativeFailureMessage(meta) {
+function partialNativeFailureMessage(meta, nestedError) {
   const failedStep = remapNativeStep(meta.failedStep, 0, []);
   const lastStep = remapNativeStep(meta.lastStep, 0, []);
   const terminal = isRecord(meta.terminal) ? meta.terminal : null;
@@ -81683,7 +81797,12 @@ function partialNativeFailureMessage(meta) {
     kind: failureKind,
     selector: typeof terminal?.failureSelector === "string" ? terminal.failureSelector : null
   } : null;
-  const headline = formatFailureHeadline({ steps: [], failedStep, lastStep, reason }, { timedOut: meta.timedOut === true, outputTruncated: meta.outputTruncated === true }, "Native replay segment failed.");
+  const headline = formatFailureHeadline(
+    { steps: [], failedStep, lastStep, reason },
+    { timedOut: meta.timedOut === true, outputTruncated: meta.outputTruncated === true },
+    // Keep the nested envelope's own cause when no structured evidence exists.
+    nestedError?.replace(/^Maestro flow failed: /, "") || "Native replay segment failed."
+  );
   const runtimeDegradation = runtimeDegradationFromMetadata(meta.runtimeDegraded);
   return runtimeDegradation ? `${headline} \u2014 ${formatRuntimeDegradedHint(runtimeDegradation)}` : headline;
 }
@@ -81911,7 +82030,7 @@ function createMaestroRunHandler(deps = {}) {
               if (!nativeSegmentCoversAttempt) {
                 delete nestedMeta.trailingVerification;
                 delete nestedMeta.ledger;
-                nestedError = partialNativeFailureMessage(nestedMeta);
+                nestedError = partialNativeFailureMessage(nestedMeta, env.error);
               }
               combinedSteps.push(...remapNativeSteps(nestedMeta.steps, segment.sourceIndices));
               const uniqueProofDomains = [...new Set(proofDomains)];
@@ -82392,10 +82511,13 @@ function createMaestroRunHandler(deps = {}) {
         signal: flowAbort.signal
       });
       if (deferredNativeOriginTarget) {
-        if (nativeOriginPreclaimed && replayFactory && (args.reproveManagedOrigin || deps.reproveManagedOrigin || hasManagedNativeOriginAuthority(args))) {
-          await reproveManagedOrigin();
+        if (nativeOriginPreclaimed && (args.reproveManagedOrigin || deps.reproveManagedOrigin || replayFactory && hasManagedNativeOriginAuthority(args))) {
+          await reproveManagedOrigin({
+            signal: flowAbort.signal,
+            readinessTimeoutMs: Math.max(1, flowDeadline - now())
+          });
         }
-        await completeOrigin(true);
+        await completeOrigin(true, flowAbort.signal);
         nativeOriginPreclaimed = false;
       }
       await commitReinstalledInstall();
@@ -83290,9 +83412,9 @@ function createRunActionHandler(deps = {}) {
         params: args.params,
         attempt: { attemptId: initialAttemptId, ordinal: 1, maxAttempts, kind: "initial" },
         claimNativeOrigin: () => claimNativeOrigin(args),
-        completeNativeOrigin: (targetExpected) => completeNativeOrigin(args, targetExpected),
+        completeNativeOrigin: (targetExpected, signal) => completeNativeOrigin(args, targetExpected, signal),
         relaunchManagedApp: (stopApp) => relaunchManagedApp(args, stopApp),
-        reproveManagedOrigin: () => reproveManagedOrigin(args),
+        reproveManagedOrigin: (options) => reproveManagedOrigin(args, options),
         completeRunnerPark: (signal) => completeManagedRunnerParkAuthority(args, signal),
         reissueInstallReceipt: () => reissueInstallReceipt(args)
       }));
@@ -83606,9 +83728,9 @@ function createRunActionHandler(deps = {}) {
           parentAttemptId: initialAttemptId
         },
         claimNativeOrigin: () => claimNativeOrigin(args),
-        completeNativeOrigin: (targetExpected) => completeNativeOrigin(args, targetExpected),
+        completeNativeOrigin: (targetExpected, signal) => completeNativeOrigin(args, targetExpected, signal),
         relaunchManagedApp: (stopApp) => relaunchManagedApp(args, stopApp),
-        reproveManagedOrigin: () => reproveManagedOrigin(args),
+        reproveManagedOrigin: (options) => reproveManagedOrigin(args, options),
         completeRunnerPark: (signal) => completeManagedRunnerParkAuthority(args, signal),
         reissueInstallReceipt: () => reissueInstallReceipt(args)
       }));
@@ -96781,12 +96903,11 @@ var init_index = __esm({
             ...interactiveOnly ? { interactiveOnly: true } : {}
           })).content[0].text);
           let env = await fetchTree(false);
-          let data = replayTreeData(env);
-          const d = data;
-          if (d && typeof d === "object" && "__agent_truncated" in d) {
+          const d = env.data;
+          if (d && typeof d === "object" && ("__agent_truncated" in d || d.truncated === true)) {
             env = await fetchTree(true);
-            data = replayTreeData(env);
           }
+          const data = replayTreeData(env);
           return unwrapTree(data);
         },
         frontmostFor: async (id) => {
@@ -96802,6 +96923,7 @@ var init_index = __esm({
             const parsed = JSON.parse(result.value);
             return {
               visible: parsed.visible === true,
+              ...typeof parsed.disabled === "boolean" ? { disabled: parsed.disabled } : {},
               ...parsed.reason ? { reason: parsed.reason } : {},
               ...typeof parsed.matchCount === "number" ? { matchCount: parsed.matchCount } : {},
               ...parsed.code ? { code: parsed.code } : {}

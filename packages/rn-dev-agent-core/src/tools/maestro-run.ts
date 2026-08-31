@@ -97,6 +97,7 @@ import {
   reissueManagedInstallAuthority,
   relaunchManagedNativeOriginApp,
   reproveManagedNativeOrigin,
+  type ManagedNativeOriginReproveOptions,
 } from '../session/authority-gate.js';
 import { SessionAuthorityError } from '../session/registry.js';
 import {
@@ -201,7 +202,7 @@ export interface MaestroRunArgs {
   completeNativeOrigin?: (targetExpected: boolean, signal?: AbortSignal) => Promise<void>;
   relaunchManagedApp?: (stopApp?: boolean) => Promise<void>;
   /** GH #708: re-prove the managed origin at flow end without relaunching. */
-  reproveManagedOrigin?: (options?: { signal?: AbortSignal }) => Promise<void>;
+  reproveManagedOrigin?: (options?: ManagedNativeOriginReproveOptions) => Promise<void>;
   completeRunnerPark?: (signal?: AbortSignal) => Promise<void>;
   /** GH #705: commit a new install receipt after a clearState reinstall. */
   reissueInstallReceipt?: (() => Promise<void>) | null;
@@ -218,7 +219,7 @@ export interface MaestroAuthorityCallbacks {
   claimNativeOrigin: () => Promise<void>;
   completeNativeOrigin: (targetExpected: boolean, signal?: AbortSignal) => Promise<void>;
   relaunchManagedApp: (stopApp?: boolean) => Promise<void>;
-  reproveManagedOrigin: (options?: { signal?: AbortSignal }) => Promise<void>;
+  reproveManagedOrigin: (options?: ManagedNativeOriginReproveOptions) => Promise<void>;
   completeRunnerPark: (signal?: AbortSignal) => Promise<void>;
   reissueInstallReceipt: (() => Promise<void>) | null;
 }
@@ -316,7 +317,7 @@ export async function executeMaestroAuthorityStages<T>(
   claimOrigin: () => Promise<void>,
   completeOrigin: (targetExpected: boolean, signal?: AbortSignal) => Promise<void>,
   relaunchManagedApp: (stopApp?: boolean) => Promise<void>,
-  reproveManagedOrigin?: (options?: { signal?: AbortSignal }) => Promise<void>,
+  reproveManagedOrigin?: (options?: ManagedNativeOriginReproveOptions) => Promise<void>,
   options: { firstOriginClaimed?: boolean; signal?: AbortSignal } = {},
 ): Promise<T[]> {
   const plan = planMaestroAuthorityStages(commands);
@@ -413,7 +414,7 @@ export interface MaestroRunDeps {
   claimNativeOrigin?: () => Promise<void>;
   completeNativeOrigin?: (targetExpected: boolean, signal?: AbortSignal) => Promise<void>;
   relaunchManagedApp?: () => Promise<void>;
-  reproveManagedOrigin?: (options?: { signal?: AbortSignal }) => Promise<void>;
+  reproveManagedOrigin?: (options?: ManagedNativeOriginReproveOptions) => Promise<void>;
   reissueInstallReceipt?: () => Promise<void>;
   now?: () => number;
   execFile?: (
@@ -487,7 +488,7 @@ function remapNativeSteps(steps: unknown, sourceIndices: number[]): PartitionedR
   });
 }
 
-function partialNativeFailureMessage(meta: Record<string, unknown>): string {
+function partialNativeFailureMessage(meta: Record<string, unknown>, nestedError?: string): string {
   const failedStep = remapNativeStep(meta.failedStep, 0, []);
   const lastStep = remapNativeStep(meta.lastStep, 0, []);
   const terminal = isRecord(meta.terminal) ? meta.terminal : null;
@@ -504,7 +505,8 @@ function partialNativeFailureMessage(meta: Record<string, unknown>): string {
   const headline = formatFailureHeadline(
     { steps: [], failedStep, lastStep, reason },
     { timedOut: meta.timedOut === true, outputTruncated: meta.outputTruncated === true },
-    'Native replay segment failed.',
+    // Keep the nested envelope's own cause when no structured evidence exists.
+    nestedError?.replace(/^Maestro flow failed: /, '') || 'Native replay segment failed.',
   );
   const runtimeDegradation = runtimeDegradationFromMetadata(meta.runtimeDegraded);
   return runtimeDegradation
@@ -898,7 +900,7 @@ export function createMaestroRunHandler(
               if (!nativeSegmentCoversAttempt) {
                 delete nestedMeta.trailingVerification;
                 delete nestedMeta.ledger;
-                nestedError = partialNativeFailureMessage(nestedMeta);
+                nestedError = partialNativeFailureMessage(nestedMeta, env.error);
               }
               combinedSteps.push(...remapNativeSteps(nestedMeta.steps, segment.sourceIndices));
               const uniqueProofDomains = [...new Set(proofDomains)];
@@ -1585,16 +1587,19 @@ export function createMaestroRunHandler(
         },
       );
       if (deferredNativeOriginTarget) {
+        // A caller-supplied reprove must run even without local replayDeps (nested native leg).
         if (
           nativeOriginPreclaimed &&
-          replayFactory &&
           (args.reproveManagedOrigin ||
             deps.reproveManagedOrigin ||
-            hasManagedNativeOriginAuthority(args))
+            (replayFactory && hasManagedNativeOriginAuthority(args)))
         ) {
-          await reproveManagedOrigin();
+          await reproveManagedOrigin({
+            signal: flowAbort.signal,
+            readinessTimeoutMs: Math.max(1, flowDeadline - now()),
+          });
         }
-        await completeOrigin(true);
+        await completeOrigin(true, flowAbort.signal);
         nativeOriginPreclaimed = false;
       }
       await commitReinstalledInstall();

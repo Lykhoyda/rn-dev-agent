@@ -2,8 +2,7 @@ export type ReplayStep =
   | { t: 'launch'; stopApp: boolean }
   | { t: 'tap'; id: string }
   | { t: 'type'; text: string }
-  | { t: 'assert'; id: string }
-  | { t: 'waitVisible'; id: string; timeoutMs: number }
+  | { t: 'waitVisible'; id: string; timeoutMs: number; evidenceType?: 'assert' }
   | { t: 'wait'; timeoutMs: number }
   | { t: 'runFlow'; whenVisible: string; commands: ReplayStep[] };
 
@@ -60,6 +59,70 @@ const interp = (s: string, p: Record<string, string>): string =>
 const asString = (x: unknown): string | null => (typeof x === 'string' ? x : null);
 const isObj = (x: unknown): x is Record<string, unknown> =>
   typeof x === 'object' && x !== null && !Array.isArray(x);
+const DEFAULT_VISIBILITY_TIMEOUT_MS = 17_000;
+const VISIBILITY_POLL_INTERVAL_MS = 200;
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
+
+async function readVisibilityBeforeDeadline(
+  dispatch: ReplayDispatch,
+  id: string,
+  deadline: number,
+  signal?: AbortSignal,
+): Promise<ReplayVisibility | null> {
+  const remainingMs = deadline - Date.now();
+  if (remainingMs < 0) return null;
+  return new Promise<ReplayVisibility | null>((resolve, reject) => {
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const cleanup = (): void => {
+      if (timer !== undefined) clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
+    };
+    const finish = (value: ReplayVisibility | null): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(Date.now() <= deadline ? value : null);
+    };
+    const fail = (error: unknown): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(error);
+    };
+    const onAbort = (): void => {
+      fail(
+        new ReplayDispatchError(
+          'RUNNER_TIMEOUT',
+          'React-tree replay exceeded its execution deadline',
+        ),
+      );
+    };
+    const armDeadline = (): void => {
+      const nextRemainingMs = deadline - Date.now();
+      timer = setTimeout(
+        () => (Date.now() >= deadline ? finish(null) : armDeadline()),
+        Math.min(Math.max(0, nextRemainingMs), MAX_TIMER_DELAY_MS),
+      );
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
+    if (signal?.aborted) {
+      onAbort();
+      return;
+    }
+    armDeadline();
+    Promise.resolve()
+      .then(() => dispatch.visibility(id))
+      .then(finish, (error: unknown) => {
+        if (settled) return;
+        if (Date.now() > deadline) {
+          finish(null);
+          return;
+        }
+        fail(error);
+      });
+  });
+}
 
 function refuseUnsupportedKeys(
   value: Record<string, unknown>,
@@ -120,7 +183,12 @@ export function normalizeSteps(body: unknown[], params: Record<string, string>):
         if (isObj(v)) refuseUnsupportedKeys(v, ['id'], 'assertVisible');
         const id = isObj(v) ? asString(v.id) : null;
         if (!id) throw new UnsupportedStepError('assertVisible (missing string id)');
-        out.push({ t: 'assert', id: interp(id, params) });
+        out.push({
+          t: 'waitVisible',
+          id: interp(id, params),
+          timeoutMs: DEFAULT_VISIBILITY_TIMEOUT_MS,
+          evidenceType: 'assert',
+        });
         break;
       }
       case 'extendedWaitUntil': {
@@ -129,12 +197,12 @@ export function normalizeSteps(body: unknown[], params: Record<string, string>):
           refuseUnsupportedKeys(v.visible, ['id'], 'extendedWaitUntil.visible');
         }
         const id = isObj(v) && isObj(v.visible) ? asString(v.visible.id) : null;
-        const timeoutMs = isObj(v) ? v.timeout : undefined;
-        if (!id || !Number.isSafeInteger(timeoutMs) || Number(timeoutMs) < 0)
+        const timeoutMs = isObj(v) && 'timeout' in v ? v.timeout : DEFAULT_VISIBILITY_TIMEOUT_MS;
+        if (!id || typeof timeoutMs !== 'number' || !Number.isFinite(timeoutMs) || timeoutMs < 0)
           throw new UnsupportedStepError(
-            'extendedWaitUntil (need visible.id + non-negative integer timeout)',
+            'extendedWaitUntil (need visible.id; timeout must be finite and non-negative when present)',
           );
-        out.push({ t: 'waitVisible', id: interp(id, params), timeoutMs: Number(timeoutMs) });
+        out.push({ t: 'waitVisible', id: interp(id, params), timeoutMs });
         break;
       }
       case 'waitForAnimationToEnd': {
@@ -219,6 +287,7 @@ export async function replayFlow(
 
   for (let i = 0; i < steps.length; i++) {
     const s = steps[i];
+    const evidenceType = s.t === 'waitVisible' ? (s.evidenceType ?? s.t) : s.t;
     const startedAt = Date.now();
     try {
       requireNotAborted();
@@ -258,48 +327,47 @@ export async function replayFlow(
           });
           break;
         }
-        case 'assert': {
-          const verdict = await dispatch.visibility(s.id);
-          requireNotAborted();
-          trace.push({
-            sourceIndex: sourceIndex(i),
-            t: s.t,
-            target: s.id,
-            ok: verdict.visible,
-            durationMs: Date.now() - startedAt,
-          });
-          if (!verdict.visible)
-            return fail(
-              i,
-              verdict.reason ?? `assertVisible: "${s.id}" is not frontmost`,
-              verdict.code ?? 'ASSERTION_FAILED',
-              verdict.meta,
-            );
-          break;
-        }
         case 'waitVisible': {
-          const deadline = Date.now() + s.timeoutMs;
-          let verdict = await dispatch.visibility(s.id);
-          requireNotAborted();
-          while (!verdict.visible && Date.now() < deadline) {
+          const deadline = startedAt + s.timeoutMs;
+          let verdict: ReplayVisibility | null = null;
+          for (;;) {
+            const observed = await readVisibilityBeforeDeadline(
+              dispatch,
+              s.id,
+              deadline,
+              opts.signal,
+            );
             requireNotAborted();
-            await new Promise<void>((resolve) => setTimeout(resolve, 100));
-            verdict = await dispatch.visibility(s.id);
-            requireNotAborted();
+            if (!observed) break;
+            verdict = observed;
+            if (verdict.visible) break;
+            const remainingMs = deadline - Date.now();
+            if (remainingMs <= 0) break;
+            await new Promise<void>((resolve) =>
+              setTimeout(resolve, Math.min(VISIBILITY_POLL_INTERVAL_MS, remainingMs)),
+            );
           }
+          const waitedMs = Date.now() - startedAt;
           trace.push({
             sourceIndex: sourceIndex(i),
-            t: s.t,
+            t: evidenceType,
             target: s.id,
-            ok: verdict.visible,
-            durationMs: Date.now() - startedAt,
+            ok: verdict?.visible === true,
+            durationMs: waitedMs,
           });
+          if (!verdict)
+            return fail(
+              i,
+              `waitVisible: no readable visibility observation completed for "${s.id}" before the deadline`,
+              'RUNNER_TIMEOUT',
+              { failedSelector: s.id, waitedMs },
+            );
           if (!verdict.visible)
             return fail(
               i,
-              verdict.reason ?? `extendedWaitUntil: "${s.id}" is not frontmost`,
+              verdict.reason ?? `waitVisible: "${s.id}" is not frontmost`,
               verdict.code ?? 'TESTID_NOT_FOUND',
-              verdict.meta,
+              { ...verdict.meta, failedSelector: s.id, waitedMs },
             );
           break;
         }
@@ -355,18 +423,20 @@ export async function replayFlow(
         }
       }
     } catch (e) {
+      const waitedMs = Date.now() - startedAt;
       trace.push({
         sourceIndex: sourceIndex(i),
-        t: s.t,
+        t: evidenceType,
         target: 'id' in s ? s.id : undefined,
         ok: false,
-        durationMs: Date.now() - startedAt,
+        durationMs: waitedMs,
       });
+      const dispatchMeta = e instanceof ReplayDispatchError ? e.meta : undefined;
       return fail(
         i,
         e instanceof Error ? e.message : String(e),
         e instanceof ReplayDispatchError ? e.code : undefined,
-        e instanceof ReplayDispatchError ? e.meta : undefined,
+        s.t === 'waitVisible' ? { ...dispatchMeta, failedSelector: s.id, waitedMs } : dispatchMeta,
       );
     }
   }

@@ -2,7 +2,7 @@
 // whenever the injected surface changes; it flows into the IIFE's freshness
 // check (__RN_AGENT.__v) AND the post-injection log line, so they can never
 // drift (the log previously hard-coded a stale "v11").
-export const HELPERS_VERSION = 47;
+export const HELPERS_VERSION = 50;
 
 export const INJECTED_HELPERS = `
 (function() {
@@ -48,23 +48,75 @@ export const INJECTED_HELPERS = `
     '_LogBoxInspectorContainer'
   ];
 
-  // Reset by every root-iteration pass; only valid when read synchronously
-  // after the pass that produced the tree (many helpers share the iterators).
-  // complete is true only when the renderer-ID loop finished without the
-  // empty-streak early-exit — empty roots are mounting evidence only then
-  // (GH #789).
-  var lastRootScan = { rendererErrors: 0, probedUpTo: 0, complete: false };
+  // Synchronous scan result; finished stays false after the GH #789 empty-streak exit.
+  var lastRootScan = { rendererErrors: 0, visited: {}, finished: false };
 
-  function computeUnscannedRendererIds() {
-    try {
-      var hook = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
-      if (!hook || !hook.renderers || typeof hook.renderers.forEach !== 'function') return [];
-      var out = [];
-      hook.renderers.forEach(function(_v, id) {
-        if (typeof id === 'number' && id > lastRootScan.probedUpTo) out.push(id);
-      });
-      return out;
-    } catch (_) { return []; }
+  function rootScanCoverage() {
+    var reasons = [];
+    var registryIds = [];
+    var hook = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
+    var renderers = hook && hook.renderers;
+    if (renderers) {
+      if (typeof renderers.keys !== 'function' || typeof renderers.forEach !== 'function') {
+        registryIds = null;
+      } else {
+        try {
+          var iterator = renderers.keys();
+          if (!iterator || typeof iterator.next !== 'function') {
+            registryIds = null;
+          } else {
+            var step;
+            var iterations = 0;
+            while (registryIds !== null) {
+              step = iterator.next();
+              if (!step || typeof step !== 'object' || typeof step.done !== 'boolean') {
+                registryIds = null;
+                break;
+              }
+              if (step.done) break;
+              if (++iterations > MAX_REGISTERED_RENDERER_IDS || typeof step.value !== 'number') {
+                registryIds = null;
+                break;
+              }
+              if (registryIds.indexOf(step.value) === -1) registryIds.push(step.value);
+              if (registryIds.length > MAX_REGISTERED_RENDERER_IDS) registryIds = null;
+            }
+          }
+        } catch (_) {
+          registryIds = null;
+        }
+        if (registryIds !== null) {
+          try {
+            var forEachIterations = 0;
+            renderers.forEach(function(_v, id) {
+              if (registryIds === null) return;
+              if (++forEachIterations > MAX_REGISTERED_RENDERER_IDS || typeof id !== 'number') {
+                registryIds = null;
+                return;
+              }
+              if (registryIds.indexOf(id) === -1) registryIds.push(id);
+              if (registryIds.length > MAX_REGISTERED_RENDERER_IDS) registryIds = null;
+            });
+          } catch (_) {
+            registryIds = null;
+          }
+        }
+      }
+    }
+    var addReason = function(reason) {
+      if (reasons.indexOf(reason) === -1) reasons.push(reason);
+    };
+    if (lastRootScan.rendererErrors > 0 || registryIds === null) addReason('renderer-error');
+    if (!lastRootScan.finished) addReason('root-enumeration-incomplete');
+    var unscannedRendererIds = [];
+    if (registryIds !== null) {
+      for (var i = 0; i < registryIds.length; i++) {
+        var id = registryIds[i];
+        if (!lastRootScan.visited[id]) unscannedRendererIds.push(id);
+      }
+      if (unscannedRendererIds.length > 0) addReason('renderers-unscanned');
+    }
+    return { reasons: reasons, unscannedRendererIds: unscannedRendererIds };
   }
 
   // Read the renderer IDs React DevTools actually registered. A malformed or
@@ -91,7 +143,7 @@ export const INJECTED_HELPERS = `
   }
 
   function findActiveRenderer() {
-    lastRootScan = { rendererErrors: 0, probedUpTo: 0, complete: false };
+    lastRootScan = { rendererErrors: 0, visited: {}, finished: false };
     var hook = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
     if (!hook || typeof hook.getFiberRoots !== 'function') return null;
     var rendererIds = getRegisteredRendererIds(hook);
@@ -102,7 +154,7 @@ export const INJECTED_HELPERS = `
     var emptyStreak = 0;
     for (var rii = 0; rii < rendererIds.length; rii++) {
       var ri = rendererIds[rii];
-      if (ri > lastRootScan.probedUpTo) lastRootScan.probedUpTo = ri;
+      lastRootScan.visited[ri] = true;
       try {
         var roots = hook.getFiberRoots(ri);
         if (roots && roots.size > 0) {
@@ -117,7 +169,7 @@ export const INJECTED_HELPERS = `
         lastRootScan.rendererErrors++;
       }
     }
-    lastRootScan.complete = true;
+    lastRootScan.finished = true;
     return null;
   }
 
@@ -134,7 +186,7 @@ export const INJECTED_HELPERS = `
   // native renderer loop so user-registered portals stay lower priority
   // than React's own registry.
   function iterateAllRoots(cb) {
-    lastRootScan = { rendererErrors: 0, probedUpTo: 0, complete: false };
+    lastRootScan = { rendererErrors: 0, visited: {}, finished: false };
     var hook = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
     if (hook && typeof hook.getFiberRoots === 'function') {
       var rendererIds = getRegisteredRendererIds(hook);
@@ -146,7 +198,7 @@ export const INJECTED_HELPERS = `
       var abortedEarly = false;
       for (var rii = 0; rii < rendererIds.length; rii++) {
         var ri = rendererIds[rii];
-        if (ri > lastRootScan.probedUpTo) lastRootScan.probedUpTo = ri;
+        lastRootScan.visited[ri] = true;
         try {
           var roots = hook.getFiberRoots(ri);
           if (roots && roots.size) {
@@ -171,7 +223,7 @@ export const INJECTED_HELPERS = `
           lastRootScan.rendererErrors++;
         }
       }
-      lastRootScan.complete = !abortedEarly;
+      if (!abortedEarly) lastRootScan.finished = true;
     }
     // GH #126 Gap B — extra-roots step. Runs AFTER the native renderer
     // loop (above) so user-registered portals are lower priority than
@@ -407,9 +459,12 @@ export const INJECTED_HELPERS = `
       o = o || {};
       var reasons = [];
       if (o.noRenderer) reasons.push('no-renderer');
-      if (lastRootScan.rendererErrors > 0) reasons.push('renderer-error');
-      var unscanned = computeUnscannedRendererIds();
-      if (unscanned.length > 0) reasons.push('renderers-unscanned');
+      var coverage = rootScanCoverage();
+      for (var coverageIndex = 0; coverageIndex < coverage.reasons.length; coverageIndex++) {
+        if (reasons.indexOf(coverage.reasons[coverageIndex]) === -1) {
+          reasons.push(coverage.reasons[coverageIndex]);
+        }
+      }
       if (o.scanBudgetExhausted) reasons.push('scan-budget-exhausted');
       if (o.outputTruncated) reasons.push('output-truncated');
       var state = (o.noRenderer || o.failed) ? 'failed' : (reasons.length > 0 ? 'degraded' : 'ok');
@@ -422,8 +477,9 @@ export const INJECTED_HELPERS = `
         effectiveDepth: maxDepth,
         droppedSubtrees: walkQuality.droppedSubtrees,
         collapsedChildLists: walkQuality.collapsedChildLists,
+        complete: state === 'ok' && reasons.length === 0 && walkQuality.droppedSubtrees === 0 && walkQuality.collapsedChildLists === 0,
         rendererErrors: lastRootScan.rendererErrors,
-        unscannedRendererIds: unscanned
+        unscannedRendererIds: coverage.unscannedRendererIds
       };
     }
 
@@ -887,7 +943,8 @@ export const INJECTED_HELPERS = `
       var mountHookUsable = !!(mountHook && typeof mountHook.getFiberRoots === 'function');
       var mountRoots = mountHookUsable ? findAllRootFibers() : [];
       // Only a complete, clean scan is mounting evidence.
-      var mountScanClean = mountHookUsable && lastRootScan.complete && lastRootScan.rendererErrors === 0;
+      var mountCoverage = rootScanCoverage();
+      var mountScanClean = mountHookUsable && mountCoverage.reasons.length === 0;
       if (mountScanClean && mountRoots.length === 0) {
         return JSON.stringify({
           error: 'App is still mounting — no React fiber roots exist yet (the bundle is likely still loading). Retry in ~2s.',
@@ -895,7 +952,7 @@ export const INJECTED_HELPERS = `
           retryInMs: 2000
         });
       }
-      if (mountHookUsable && !lastRootScan.complete && mountRoots.length === 0) {
+      if (mountHookUsable && mountCoverage.reasons.indexOf('root-enumeration-incomplete') !== -1 && mountRoots.length === 0) {
         return JSON.stringify({ error: 'Navigation state not found. Is React Navigation or Expo Router installed?' });
       }
       var navFw = navDetectBundledFramework();
@@ -3695,11 +3752,21 @@ export const INJECTED_HELPERS = `
         truncated: true
       });
     }
+    var coverage = rootScanCoverage();
+    if (coverage.reasons.length > 0) {
+      return JSON.stringify({
+        visible: false,
+        code: 'ASSERTION_FAILED',
+        reason: 'frontmost proof cannot cover every mounted renderer'
+      });
+    }
     function containsFiber(ancestor, candidate) {
+      // React return chains may thread through either half of a fiber/alternate pair.
+      var ancestorAlternate = ancestor.alternate || null;
       var current = candidate;
       var guard = 0;
       while (current && guard++ < 1000) {
-        if (current === ancestor) return true;
+        if (current === ancestor || current === ancestorAlternate) return true;
         current = current.return;
       }
       return false;
@@ -3728,6 +3795,9 @@ export const INJECTED_HELPERS = `
       });
     }
     var target = logicalMatches[0];
+    var targetProps = target.memoizedProps || {};
+    var targetAccessibilityState = targetProps.accessibilityState || {};
+    var targetDisabled = targetProps.disabled === true || targetAccessibilityState.disabled === true;
     if (__hidden(target)) {
       return JSON.stringify({
         visible: false,
@@ -3736,7 +3806,7 @@ export const INJECTED_HELPERS = `
       });
     }
 
-    var targetPointerEvents = (target.memoizedProps || {}).pointerEvents;
+    var targetPointerEvents = targetProps.pointerEvents;
     if (targetPointerEvents === 'none' || targetPointerEvents === 'box-none') {
       return JSON.stringify({
         visible: false,
@@ -3902,7 +3972,8 @@ export const INJECTED_HELPERS = `
       route: routeOwner,
       activeRoute: activeRoute,
       modalCount: modals.length,
-      matchCount: 1
+      matchCount: 1,
+      disabled: targetDisabled
     });
   }
 

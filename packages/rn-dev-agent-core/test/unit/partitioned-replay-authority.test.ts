@@ -4,6 +4,7 @@ import { test } from 'node:test';
 import type { CDPClient } from '../../dist/cdp-client.js';
 import { buildReplayEngineStatus, MAESTRO_RUNNER_PIN } from '../../dist/domain/engine-pin.js';
 import { createAuthorityGate } from '../../dist/session/authority-gate.js';
+import { SessionAuthorityError } from '../../dist/session/registry.js';
 import { withRecoveredAuthoritativeRuntime } from '../../dist/session/runtime-connection-recovery.js';
 import { chooseMaestroDispatch } from '../../dist/tools/maestro-dispatch.js';
 import { createMaestroRunHandler } from '../../dist/tools/maestro-run.js';
@@ -350,4 +351,176 @@ test('ungated mixed replay does not acquire nested native authority', async () =
     (error: { code?: string }) => error.code === 'METRO_ORIGIN_MISMATCH',
   );
   assert.equal(nativeDispatches, 0);
+});
+
+// The live gate contract for the partitioned native leg: completing the
+// deferred origin with a target expected re-proves the exact CDP session
+// target, and only reproveManagedOrigin (connectExactSessionTarget with a
+// readiness wait) restores it after a WDA-driven segment dropped it.
+function partitionedHandoffFixture(opts: {
+  reproveRestoresTarget: boolean;
+  execFile?: () => Promise<{ stdout: string; stderr: string }>;
+  droppedTargetError?: () => Error;
+}) {
+  const events: string[] = [];
+  const reactSuffixRan = () => events.some((event) => event.startsWith('react:'));
+  let exactTargetConnected = true;
+  const handler = createMaestroRunHandler({
+    getActiveSession: () => ({
+      name: 'partitioned-handoff',
+      platform: 'ios',
+      deviceId: DEVICE_ID,
+      appId: APP_ID,
+      openedAt: new Date(0).toISOString(),
+    }),
+    replayDeps: () => ({
+      pressByTestId: async () => {},
+      typeByTestId: async () => {},
+      treeFor: async (id: string) => ({ testID: id }),
+      frontmostFor: async (id: string) => {
+        assert.equal(exactTargetConnected, true, 'React replay ran on a dropped target');
+        events.push(`react:${id}`);
+        return { visible: true };
+      },
+      launchApp: async () => {},
+      settle: async () => {},
+    }),
+    chooseDispatch: () => dispatch(),
+    parkFlow: async (run, options) => {
+      events.push('park');
+      assert.ok(options.completeRunnerPark, 'nested run must forward completeRunnerPark');
+      await options.completeRunnerPark(options.signal);
+      try {
+        return await run();
+      } finally {
+        events.push('resume');
+      }
+    },
+    stopFastRunner: async () => {},
+    fastHealthCheck: async () => false,
+    resolveEngineStatus: async () =>
+      buildReplayEngineStatus('pinned-ok', MAESTRO_RUNNER_PIN.version, false),
+    execFile:
+      opts.execFile ??
+      (async () => {
+        events.push('execute');
+        exactTargetConnected = false;
+        return { stdout: runnerOutput(), stderr: '' };
+      }),
+  });
+  const args = {
+    platform: 'ios' as const,
+    deviceId: DEVICE_ID,
+    appId: APP_ID,
+    timeoutMs: 5_000,
+    inlineYaml: `appId: ${APP_ID}\n---\n- assertVisible: Native status\n- assertVisible:\n    id: react-status\n`,
+    claimNativeOrigin: async () => {
+      events.push('claim');
+    },
+    completeNativeOrigin: async (targetExpected: boolean, signal?: AbortSignal) => {
+      if (targetExpected) assert.equal(signal?.aborted, false);
+      events.push(`complete:${targetExpected}`);
+      if (targetExpected && !exactTargetConnected) {
+        throw (
+          opts.droppedTargetError?.() ??
+          new Error(
+            'CDP_TARGET_AUTHORITY_MISMATCH: runtime reset did not reconnect the exact session target',
+          )
+        );
+      }
+    },
+    relaunchManagedApp: async () => {},
+    reproveManagedOrigin: async ({ readinessTimeoutMs, signal } = {}) => {
+      assert.equal(signal?.aborted, false);
+      assert.ok(readinessTimeoutMs && readinessTimeoutMs <= 5_000);
+      events.push('reprove');
+      if (opts.reproveRestoresTarget) exactTargetConnected = true;
+    },
+    completeRunnerPark: async () => {
+      events.push('runner-park');
+    },
+  };
+  return { handler, args, events, reactSuffixRan };
+}
+
+test('a partitioned native prefix survives park/resume and the React suffix completes', async () => {
+  const { handler, args, events } = partitionedHandoffFixture({
+    reproveRestoresTarget: true,
+  });
+  const envelope = JSON.parse((await handler(args)).content[0]!.text);
+
+  assert.equal(envelope.ok, true, envelope.error);
+  assert.equal(envelope.data?.passed, true);
+  assert.equal(envelope.data?.proofDomain, 'partitioned');
+  assert.deepEqual(envelope.data?.proofDomains, ['xctest-native', 'react-tree']);
+  assert.match(envelope.data?.output, /assertVisible/);
+  assert.deepEqual(
+    envelope.data?.steps.map((step: { index: number; status: string }) => [
+      step.index,
+      step.status,
+    ]),
+    [
+      [0, 'pass'],
+      [1, 'pass'],
+    ],
+  );
+  assert.deepEqual(events, [
+    'claim',
+    'park',
+    'runner-park',
+    'execute',
+    'resume',
+    'reprove',
+    'complete:true',
+    'claim',
+    'react:react-status',
+    'complete:true',
+  ]);
+});
+
+test('a residual handoff failure keeps the nested cause instead of the generic mask', async () => {
+  const { handler, args, events, reactSuffixRan } = partitionedHandoffFixture({
+    reproveRestoresTarget: false,
+  });
+  const envelope = JSON.parse((await handler(args)).content[0]!.text);
+
+  assert.equal(envelope.ok, false);
+  assert.match(envelope.error, /CDP_TARGET_AUTHORITY_MISMATCH/);
+  assert.equal(reactSuffixRan(), false);
+  assert.ok(events.includes('reprove'));
+});
+
+test('a session authority loss during the handoff escapes as a typed throw', async () => {
+  const authorityError = new SessionAuthorityError(
+    'CDP_TARGET_AUTHORITY_MISMATCH',
+    'session authority was lost during the handoff',
+  );
+  const { handler, args, reactSuffixRan } = partitionedHandoffFixture({
+    reproveRestoresTarget: false,
+    droppedTargetError: () => authorityError,
+  });
+  await assert.rejects(
+    () => handler(args),
+    (error: unknown) => error === authorityError && error instanceof SessionAuthorityError,
+  );
+  assert.equal(reactSuffixRan(), false);
+});
+
+test('a native prefix that genuinely fails before its first step is not rewritten', async () => {
+  const { handler, args, events, reactSuffixRan } = partitionedHandoffFixture({
+    reproveRestoresTarget: true,
+    execFile: async () => {
+      const error = new Error('maestro-runner exited 1 before any step output');
+      Object.assign(error, { code: 1, stdout: '', stderr: '' });
+      throw error;
+    },
+  });
+  const envelope = JSON.parse((await handler(args)).content[0]!.text);
+
+  assert.equal(envelope.ok, false);
+  assert.match(envelope.error, /exited 1 before any step output/);
+  assert.equal(envelope.meta?.terminal?.exitClass, 'before-first-step');
+  assert.equal(envelope.meta?.terminal?.completedSteps, 0);
+  assert.equal(reactSuffixRan(), false);
+  assert.deepEqual(events, ['claim', 'park', 'runner-park', 'complete:false', 'resume']);
 });

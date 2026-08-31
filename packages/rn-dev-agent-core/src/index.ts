@@ -392,13 +392,12 @@ const makeReplayDeps = (_args?: unknown, signal?: AbortSignal): CdpReplayDeps | 
           meta?: Record<string, unknown>;
         };
       let env = await fetchTree(false);
-      let data = replayTreeData(env);
       // Retry with the salient digest when the full filtered payload exceeds the helper bound.
-      const d = data as Record<string, unknown> | null;
-      if (d && typeof d === 'object' && '__agent_truncated' in d) {
+      const d = env.data as Record<string, unknown> | null;
+      if (d && typeof d === 'object' && ('__agent_truncated' in d || d.truncated === true)) {
         env = await fetchTree(true);
-        data = replayTreeData(env);
       }
+      const data = replayTreeData(env);
       return unwrapTree(data);
     },
     frontmostFor: async (id: string) => {
@@ -415,12 +414,14 @@ const makeReplayDeps = (_args?: unknown, signal?: AbortSignal): CdpReplayDeps | 
       try {
         const parsed = JSON.parse(result.value) as {
           visible?: boolean;
+          disabled?: boolean;
           reason?: string;
           matchCount?: number;
           code?: string;
         };
         return {
           visible: parsed.visible === true,
+          ...(typeof parsed.disabled === 'boolean' ? { disabled: parsed.disabled } : {}),
           ...(parsed.reason ? { reason: parsed.reason } : {}),
           ...(typeof parsed.matchCount === 'number' ? { matchCount: parsed.matchCount } : {}),
           ...(parsed.code ? { code: parsed.code } : {}),

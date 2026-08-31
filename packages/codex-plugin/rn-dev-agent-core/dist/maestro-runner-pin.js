@@ -15136,6 +15136,59 @@ var ReplayDispatchError = class extends Error {
 var interp = (s, p) => s.replace(/\$\{([A-Z_][A-Z0-9_]*)(?:\s*\?\?\s*(['"])(.*?)\2)?\}/g, (match, key, _quote, fallback) => p[key] ?? fallback ?? match);
 var asString = (x) => typeof x === "string" ? x : null;
 var isObj = (x) => typeof x === "object" && x !== null && !Array.isArray(x);
+var DEFAULT_VISIBILITY_TIMEOUT_MS = 17e3;
+var VISIBILITY_POLL_INTERVAL_MS = 200;
+var MAX_TIMER_DELAY_MS = 2147483647;
+async function readVisibilityBeforeDeadline(dispatch, id, deadline, signal) {
+  const remainingMs = deadline - Date.now();
+  if (remainingMs < 0)
+    return null;
+  return new Promise((resolve9, reject) => {
+    let settled = false;
+    let timer;
+    const cleanup = () => {
+      if (timer !== void 0)
+        clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+    };
+    const finish = (value) => {
+      if (settled)
+        return;
+      settled = true;
+      cleanup();
+      resolve9(Date.now() <= deadline ? value : null);
+    };
+    const fail = (error) => {
+      if (settled)
+        return;
+      settled = true;
+      cleanup();
+      reject(error);
+    };
+    const onAbort = () => {
+      fail(new ReplayDispatchError("RUNNER_TIMEOUT", "React-tree replay exceeded its execution deadline"));
+    };
+    const armDeadline = () => {
+      const nextRemainingMs = deadline - Date.now();
+      timer = setTimeout(() => Date.now() >= deadline ? finish(null) : armDeadline(), Math.min(Math.max(0, nextRemainingMs), MAX_TIMER_DELAY_MS));
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+    if (signal?.aborted) {
+      onAbort();
+      return;
+    }
+    armDeadline();
+    Promise.resolve().then(() => dispatch.visibility(id)).then(finish, (error) => {
+      if (settled)
+        return;
+      if (Date.now() > deadline) {
+        finish(null);
+        return;
+      }
+      fail(error);
+    });
+  });
+}
 function refuseUnsupportedKeys(value, allowed, label) {
   const unsupported = Object.keys(value).filter((key) => !allowed.includes(key));
   if (unsupported.length > 0) {
@@ -15190,7 +15243,12 @@ function normalizeSteps(body, params) {
         const id = isObj(v) ? asString(v.id) : null;
         if (!id)
           throw new UnsupportedStepError("assertVisible (missing string id)");
-        out.push({ t: "assert", id: interp(id, params) });
+        out.push({
+          t: "waitVisible",
+          id: interp(id, params),
+          timeoutMs: DEFAULT_VISIBILITY_TIMEOUT_MS,
+          evidenceType: "assert"
+        });
         break;
       }
       case "extendedWaitUntil": {
@@ -15200,10 +15258,10 @@ function normalizeSteps(body, params) {
           refuseUnsupportedKeys(v.visible, ["id"], "extendedWaitUntil.visible");
         }
         const id = isObj(v) && isObj(v.visible) ? asString(v.visible.id) : null;
-        const timeoutMs = isObj(v) ? v.timeout : void 0;
-        if (!id || !Number.isSafeInteger(timeoutMs) || Number(timeoutMs) < 0)
-          throw new UnsupportedStepError("extendedWaitUntil (need visible.id + non-negative integer timeout)");
-        out.push({ t: "waitVisible", id: interp(id, params), timeoutMs: Number(timeoutMs) });
+        const timeoutMs = isObj(v) && "timeout" in v ? v.timeout : DEFAULT_VISIBILITY_TIMEOUT_MS;
+        if (!id || typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs) || timeoutMs < 0)
+          throw new UnsupportedStepError("extendedWaitUntil (need visible.id; timeout must be finite and non-negative when present)");
+        out.push({ t: "waitVisible", id: interp(id, params), timeoutMs });
         break;
       }
       case "waitForAnimationToEnd": {
@@ -15266,6 +15324,7 @@ async function replayFlow(steps, dispatch, opts = {}) {
   };
   for (let i = 0; i < steps.length; i++) {
     const s = steps[i];
+    const evidenceType = s.t === "waitVisible" ? s.evidenceType ?? s.t : s.t;
     const startedAt = Date.now();
     try {
       requireNotAborted();
@@ -15306,39 +15365,34 @@ async function replayFlow(steps, dispatch, opts = {}) {
           });
           break;
         }
-        case "assert": {
-          const verdict = await dispatch.visibility(s.id);
-          requireNotAborted();
-          trace.push({
-            sourceIndex: sourceIndex(i),
-            t: s.t,
-            target: s.id,
-            ok: verdict.visible,
-            durationMs: Date.now() - startedAt
-          });
-          if (!verdict.visible)
-            return fail(i, verdict.reason ?? `assertVisible: "${s.id}" is not frontmost`, verdict.code ?? "ASSERTION_FAILED", verdict.meta);
-          break;
-        }
         case "waitVisible": {
-          const deadline = Date.now() + s.timeoutMs;
-          let verdict = await dispatch.visibility(s.id);
-          requireNotAborted();
-          while (!verdict.visible && Date.now() < deadline) {
+          const deadline = startedAt + s.timeoutMs;
+          let verdict = null;
+          for (; ; ) {
+            const observed = await readVisibilityBeforeDeadline(dispatch, s.id, deadline, opts.signal);
             requireNotAborted();
-            await new Promise((resolve9) => setTimeout(resolve9, 100));
-            verdict = await dispatch.visibility(s.id);
-            requireNotAborted();
+            if (!observed)
+              break;
+            verdict = observed;
+            if (verdict.visible)
+              break;
+            const remainingMs = deadline - Date.now();
+            if (remainingMs <= 0)
+              break;
+            await new Promise((resolve9) => setTimeout(resolve9, Math.min(VISIBILITY_POLL_INTERVAL_MS, remainingMs)));
           }
+          const waitedMs = Date.now() - startedAt;
           trace.push({
             sourceIndex: sourceIndex(i),
-            t: s.t,
+            t: evidenceType,
             target: s.id,
-            ok: verdict.visible,
-            durationMs: Date.now() - startedAt
+            ok: verdict?.visible === true,
+            durationMs: waitedMs
           });
+          if (!verdict)
+            return fail(i, `waitVisible: no readable visibility observation completed for "${s.id}" before the deadline`, "RUNNER_TIMEOUT", { failedSelector: s.id, waitedMs });
           if (!verdict.visible)
-            return fail(i, verdict.reason ?? `extendedWaitUntil: "${s.id}" is not frontmost`, verdict.code ?? "TESTID_NOT_FOUND", verdict.meta);
+            return fail(i, verdict.reason ?? `waitVisible: "${s.id}" is not frontmost`, verdict.code ?? "TESTID_NOT_FOUND", { ...verdict.meta, failedSelector: s.id, waitedMs });
           break;
         }
         case "wait":
@@ -15388,14 +15442,16 @@ async function replayFlow(steps, dispatch, opts = {}) {
         }
       }
     } catch (e) {
+      const waitedMs = Date.now() - startedAt;
       trace.push({
         sourceIndex: sourceIndex(i),
-        t: s.t,
+        t: evidenceType,
         target: "id" in s ? s.id : void 0,
         ok: false,
-        durationMs: Date.now() - startedAt
+        durationMs: waitedMs
       });
-      return fail(i, e instanceof Error ? e.message : String(e), e instanceof ReplayDispatchError ? e.code : void 0, e instanceof ReplayDispatchError ? e.meta : void 0);
+      const dispatchMeta = e instanceof ReplayDispatchError ? e.meta : void 0;
+      return fail(i, e instanceof Error ? e.message : String(e), e instanceof ReplayDispatchError ? e.code : void 0, s.t === "waitVisible" ? { ...dispatchMeta, failedSelector: s.id, waitedMs } : dispatchMeta);
     }
   }
   if (opts.signal?.aborted) {
@@ -15646,23 +15702,6 @@ function loginPostconditionId(commands) {
 }
 
 // packages/rn-dev-agent-core/dist/tools/cdp-replay-dispatch.js
-function countExactMatches(treeJson, id) {
-  let matches = 0;
-  const root2 = treeJson && typeof treeJson === "object" && "tree" in treeJson ? treeJson.tree : treeJson;
-  const stack = [root2];
-  while (stack.length > 0) {
-    const node = stack.pop();
-    if (!node || typeof node !== "object")
-      continue;
-    const record = node;
-    if (record.testID === id || record.nativeID === id)
-      matches++;
-    const children = record.children ?? record.nodes ?? record.matches;
-    if (Array.isArray(children))
-      stack.push(...children);
-  }
-  return matches;
-}
 function nodeProps(treeJson, id) {
   const stack = [treeJson];
   while (stack.length) {
@@ -15741,19 +15780,18 @@ function buildCdpDispatch(deps, signal) {
   const assertExactInteractable = async (id) => {
     const tree = await deps.treeFor(id);
     requireNotAborted();
-    const treeMatches = countExactMatches(tree, id);
-    if (treeMatches === 0)
+    const frontmost = await deps.frontmostFor(id);
+    requireNotAborted();
+    if (frontmost.matchCount === 0)
       throw new ReplayDispatchError("TESTID_NOT_FOUND", `testID "${id}" not present`, {
         failedSelector: id
       });
-    const frontmost = await deps.frontmostFor?.(id);
-    requireNotAborted();
-    const matches = frontmost ? frontmost.matchCount ?? 1 : treeMatches;
+    const matches = frontmost.matchCount ?? 1;
     if (matches > 1)
       throw new ReplayDispatchError("AMBIGUOUS_TESTID", `testID "${id}" resolves to ${matches} mounted elements`, { matchCount: matches });
-    if (frontmost && !frontmost.visible)
+    if (!frontmost.visible)
       throw new ReplayDispatchError(frontmost.code ?? "ASSERTION_FAILED", frontmost.reason ?? `testID "${id}" is mounted but not frontmost`);
-    if (isDisabled(nodeProps(tree, id)))
+    if (frontmost.disabled === true || isDisabled(nodeProps(tree, id)))
       throw new ReplayDispatchError("INTERACTION_NOT_ACTUATED", `testID "${id}" is disabled/non-interactable`);
     const pointerEventsError = pointerEventsBlock(tree, id);
     if (pointerEventsError)
@@ -15771,24 +15809,23 @@ function buildCdpDispatch(deps, signal) {
       await deps.typeByTestId(id, text);
     },
     async visibility(id) {
-      const tree = await deps.treeFor(id);
-      const treeMatches = countExactMatches(tree, id);
-      if (treeMatches === 0)
+      await deps.treeFor(id);
+      const frontmost = await deps.frontmostFor(id);
+      if (frontmost.matchCount === 0)
         return {
           visible: false,
           code: "TESTID_NOT_FOUND",
           reason: `testID "${id}" not present in the React tree`,
           meta: { failedSelector: id }
         };
-      const frontmost = await deps.frontmostFor?.(id);
-      const matches = frontmost ? frontmost.matchCount ?? 1 : treeMatches;
+      const matches = frontmost.matchCount ?? 1;
       if (matches > 1)
         return {
           visible: false,
           code: "AMBIGUOUS_TESTID",
           reason: `testID "${id}" resolves to ${matches} mounted elements`
         };
-      if (frontmost && !frontmost.visible)
+      if (!frontmost.visible)
         return {
           visible: false,
           code: frontmost.code ?? "ASSERTION_FAILED",
@@ -15995,7 +16032,7 @@ function remapNativeSteps(steps, sourceIndices) {
     return mapped ? [mapped] : [];
   });
 }
-function partialNativeFailureMessage(meta) {
+function partialNativeFailureMessage(meta, nestedError) {
   const failedStep = remapNativeStep(meta.failedStep, 0, []);
   const lastStep = remapNativeStep(meta.lastStep, 0, []);
   const terminal = isRecord(meta.terminal) ? meta.terminal : null;
@@ -16004,7 +16041,12 @@ function partialNativeFailureMessage(meta) {
     kind: failureKind,
     selector: typeof terminal?.failureSelector === "string" ? terminal.failureSelector : null
   } : null;
-  const headline = formatFailureHeadline({ steps: [], failedStep, lastStep, reason }, { timedOut: meta.timedOut === true, outputTruncated: meta.outputTruncated === true }, "Native replay segment failed.");
+  const headline = formatFailureHeadline(
+    { steps: [], failedStep, lastStep, reason },
+    { timedOut: meta.timedOut === true, outputTruncated: meta.outputTruncated === true },
+    // Keep the nested envelope's own cause when no structured evidence exists.
+    nestedError?.replace(/^Maestro flow failed: /, "") || "Native replay segment failed."
+  );
   const runtimeDegradation = runtimeDegradationFromMetadata(meta.runtimeDegraded);
   return runtimeDegradation ? `${headline} \u2014 ${formatRuntimeDegradedHint(runtimeDegradation)}` : headline;
 }
@@ -16243,7 +16285,7 @@ function createMaestroRunHandler(deps = {}) {
               if (!nativeSegmentCoversAttempt) {
                 delete nestedMeta.trailingVerification;
                 delete nestedMeta.ledger;
-                nestedError = partialNativeFailureMessage(nestedMeta);
+                nestedError = partialNativeFailureMessage(nestedMeta, env.error);
               }
               combinedSteps.push(...remapNativeSteps(nestedMeta.steps, segment.sourceIndices));
               const uniqueProofDomains = [...new Set(proofDomains)];
@@ -16724,10 +16766,13 @@ function createMaestroRunHandler(deps = {}) {
         signal: flowAbort.signal
       });
       if (deferredNativeOriginTarget) {
-        if (nativeOriginPreclaimed && replayFactory && (args.reproveManagedOrigin || deps.reproveManagedOrigin || hasManagedNativeOriginAuthority(args))) {
-          await reproveManagedOrigin();
+        if (nativeOriginPreclaimed && (args.reproveManagedOrigin || deps.reproveManagedOrigin || replayFactory && hasManagedNativeOriginAuthority(args))) {
+          await reproveManagedOrigin({
+            signal: flowAbort.signal,
+            readinessTimeoutMs: Math.max(1, flowDeadline - now())
+          });
         }
-        await completeOrigin(true);
+        await completeOrigin(true, flowAbort.signal);
         nativeOriginPreclaimed = false;
       }
       await commitReinstalledInstall();
