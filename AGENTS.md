@@ -212,10 +212,13 @@ alive for such callers.
   persistent store
   `.wda-store-<runner>/<host platform-architecture>/<xcode fingerprint>/`
   beside the pin-cache (atomic staged-rename publication; delete the store to
-  force a cold build). Seeding must stay AFTER the snapshot seal walk: recursive
-  `readdirSync` descends through the `cache` symlink, and sealed seed content
-  breaks the runner's warm-path xctestrun port rewrite (EACCES, four retries,
-  bootstrap failure).
+  force a cold build). Persist only contained `DerivedData/Build/Products`;
+  normalize the xctestrun port and exclude logs and other run-owned state.
+  Completeness is the runner-selected WDA target with its referenced products
+  and executable present. Seeding must stay AFTER the snapshot seal walk:
+  recursive `readdirSync` descends through the `cache` symlink, and sealed seed
+  content breaks the runner's warm-path xctestrun port rewrite (EACCES, four
+  retries, bootstrap failure).
 - Claude-only host behavior: edit `packages/claude-plugin/`.
 - Codex-only host behavior: edit `packages/codex-plugin/`.
 - Host-neutral workflow knowledge: edit `packages/shared-agent-knowledge/`,
