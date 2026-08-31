@@ -593,7 +593,7 @@ M6 / Phase 112 — Object.freeze test recorder. Closes the **last remaining Phas
 React's `createElement` calls `Object.freeze(props)` in dev mode before sealing them. `cdp_record_test_start` monkey-patches `Object.freeze` inside Hermes — when React asks to freeze a props object that has `onPress`/`onLongPress`/`onChangeText`/`onSubmitEditing`/`onScroll*`, we wrap each handler with event-emission BEFORE letting the freeze proceed. Already-mounted scroll containers are caught via a fiber re-render walk (`stateNode.forceUpdate()` for class, `renderer.overrideProps(fiber, ['__mcpInit'], 1)` for function). Route is captured via the `onCommitFiberRoot` hook reading `__RN_AGENT.getNavState()`, cached into a closure variable so the Object.freeze hot-path stays synchronous.
 
 ### Three recorder requirements
-1. **Finger-direction swipe semantics** — `dy > 0` (contentOffset increased; finger went UP) emits `direction: 'up'`, matching the generated replay gesture.
+1. **Finger-direction swipe semantics** — `dy > 0` (contentOffset increased; finger went UP) emits `direction: 'up'`, matching Maestro's `swipeUp` and Detox's `.swipe('up')` replay APIs.
 2. **500-event cap with priority eviction** — long sessions are capped; on overflow, oldest `swipe`/`type` events are dropped first (taps + navigates carry higher information value). `truncated: true` bubbles up to the `stop` envelope.
 3. **Route caching via the commit hook** — eliminates per-event CDP round-trips by reading `__RN_AGENT.getNavState()` once per React commit and caching the active route name in the IIFE closure.
 

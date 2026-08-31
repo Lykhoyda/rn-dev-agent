@@ -1,6 +1,11 @@
 // Captures user-invoked handlers before React freezes their props in development.
-// Swipes use finger direction, recording is capped at 500 events, and routes
-// are cached per commit.
+// Finger-direction swipes match Maestro `swipeUp` and Detox `.swipe('up')`.
+
+// The 500-event cap evicts older swipe/type events before taps and navigation.
+
+// Commit-hook route caching keeps event handling synchronous without CDP round trips.
+
+// Development gating fails fast because release builds pre-freeze props.
 
 export const DEV_CHECK_JS = `(typeof __DEV__ !== 'undefined' && __DEV__ === true)`;
 
