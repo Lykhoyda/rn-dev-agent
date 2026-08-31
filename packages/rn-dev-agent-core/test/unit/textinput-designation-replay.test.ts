@@ -50,19 +50,32 @@ function replayFixture(
   options: {
     editable?: boolean;
     wrapped?: boolean;
+    exactMiddle?: boolean;
+    exactMiddleDisabled?: boolean;
+    branchedDuplicate?: boolean;
     inputHidden?: boolean;
     beforeDesignatedTypeDispatch?: (fixture: {
       root: Fiber;
       input: Fiber;
       designationOwner: Fiber;
+      exactMiddle: Fiber | null;
     }) => void;
   } = {},
 ) {
   const calls = { focus: 0, press: 0, typed: [] as string[] };
   const root = fiber({ displayName: 'Root' });
   const wrapper = options.wrapped ? append(root, fiber('RCTView', { testID: 'email' })) : null;
+  const exactMiddle = options.exactMiddle
+    ? append(
+        wrapper ?? root,
+        fiber('RCTView', {
+          testID: 'email',
+          ...(options.exactMiddleDisabled ? { accessibilityState: { disabled: true } } : {}),
+        }),
+      )
+    : null;
   const input = append(
-    wrapper ?? root,
+    exactMiddle ?? wrapper ?? root,
     fiber('RCTSinglelineTextInputView', {
       testID: 'email',
       editable: options.editable ?? true,
@@ -77,6 +90,9 @@ function replayFixture(
       },
     }),
   );
+  if (options.branchedDuplicate) {
+    append(wrapper ?? root, fiber('RCTView', { testID: 'email' }));
+  }
   append(
     root,
     fiber('RCTView', {
@@ -131,6 +147,7 @@ function replayFixture(
             root,
             input,
             designationOwner: wrapper ?? input,
+            exactMiddle,
           });
         }
         return { value: vm.runInContext(expression, sandbox) };
@@ -138,7 +155,7 @@ function replayFixture(
         return { error };
       }
     },
-    probeHelperFreshness: async () => ({ fresh: true, version: 51, probed: true }),
+    probeHelperFreshness: async () => ({ fresh: true, version: 52, probed: true }),
   });
   const interact = createInteractHandler(() => client);
   const deps: CdpReplayDeps = {
@@ -265,6 +282,42 @@ test('a hidden host TextInput beneath a visible wrapper refuses designation', as
   assert.equal(fixture.input.memoizedProps.value, '');
 });
 
+test('a disabled intermediate exact target refuses designation', async () => {
+  const fixture = replayFixture({
+    wrapped: true,
+    exactMiddle: true,
+    exactMiddleDisabled: true,
+  });
+  const result = await runCdpReplayCommands(
+    [{ tapOn: { id: 'email' } }, { inputText: 'blocked' }],
+    {},
+    fixture.deps,
+  );
+
+  assert.equal(result.passed, false);
+  assert.equal(result.failedStepIndex, 0);
+  assert.equal(result.failureCode, 'INTERACTION_NOT_ACTUATED');
+  assert.match(result.reason ?? '', /disabled or non-editable/);
+  assert.deepEqual(fixture.calls.typed, []);
+  assert.equal(fixture.input.memoizedProps.value, '');
+});
+
+test('a branched duplicate exact target refuses designation', async () => {
+  const fixture = replayFixture({ wrapped: true, branchedDuplicate: true });
+  const result = await runCdpReplayCommands(
+    [{ tapOn: { id: 'email' } }, { inputText: 'blocked' }],
+    {},
+    fixture.deps,
+  );
+
+  assert.equal(result.passed, false);
+  assert.equal(result.failedStepIndex, 0);
+  assert.equal(result.failureCode, 'INTERACTION_NOT_ACTUATED');
+  assert.match(result.reason ?? '', /Ambiguous TextInput designation target/);
+  assert.deepEqual(fixture.calls.typed, []);
+  assert.equal(fixture.input.memoizedProps.value, '');
+});
+
 test('designation preserves the frontmost and duplicate-target refusals', async (t) => {
   await t.test('occluded input', async () => {
     const fixture = replayFixture();
@@ -343,6 +396,49 @@ test('designation rechecks live eligibility at the injected mutation boundary', 
     assert.equal(result.failedStepIndex, 1);
     assert.equal(result.failureCode, 'INTERACTION_NOT_ACTUATED');
     assert.match(result.reason ?? '', /disabled or non-editable/);
+    assert.deepEqual(fixture.calls.typed, []);
+    assert.equal(fixture.input.memoizedProps.value, '');
+  });
+
+  await t.test('intermediate exact target becomes disabled', async () => {
+    const fixture = replayFixture({
+      wrapped: true,
+      exactMiddle: true,
+      beforeDesignatedTypeDispatch: ({ exactMiddle }) => {
+        exactMiddle!.memoizedProps.accessibilityState = { disabled: true };
+      },
+    });
+    const result = await runCdpReplayCommands(
+      [{ tapOn: { id: 'email' } }, { inputText: 'blocked' }],
+      {},
+      fixture.deps,
+    );
+
+    assert.equal(result.passed, false);
+    assert.equal(result.failedStepIndex, 1);
+    assert.equal(result.failureCode, 'INTERACTION_NOT_ACTUATED');
+    assert.match(result.reason ?? '', /disabled or non-editable/);
+    assert.deepEqual(fixture.calls.typed, []);
+    assert.equal(fixture.input.memoizedProps.value, '');
+  });
+
+  await t.test('branched duplicate exact target mounts', async () => {
+    const fixture = replayFixture({
+      wrapped: true,
+      beforeDesignatedTypeDispatch: ({ designationOwner }) => {
+        append(designationOwner, fiber('RCTView', { testID: 'email' }));
+      },
+    });
+    const result = await runCdpReplayCommands(
+      [{ tapOn: { id: 'email' } }, { inputText: 'blocked' }],
+      {},
+      fixture.deps,
+    );
+
+    assert.equal(result.passed, false);
+    assert.equal(result.failedStepIndex, 1);
+    assert.equal(result.failureCode, 'INTERACTION_NOT_ACTUATED');
+    assert.match(result.reason ?? '', /Ambiguous TextInput designation target/);
     assert.deepEqual(fixture.calls.typed, []);
     assert.equal(fixture.input.memoizedProps.value, '');
   });

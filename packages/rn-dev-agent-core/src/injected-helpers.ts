@@ -2,7 +2,7 @@
 // whenever the injected surface changes; it flows into the IIFE's freshness
 // check (__RN_AGENT.__v) AND the post-injection log line, so they can never
 // drift (the log previously hard-coded a stale "v11").
-export const HELPERS_VERSION = 54;
+export const HELPERS_VERSION = 55;
 
 export const INJECTED_HELPERS = `
 (function() {
@@ -2259,6 +2259,7 @@ export const INJECTED_HELPERS = `
     if (!owner) return null;
     var designationStack = [owner];
     var designationSeen = new WeakSet();
+    var designationMatches = [];
     var designationInputs = [];
     var designationWork = 0;
     while (designationStack.length > 0 && designationWork < 2000) {
@@ -2267,11 +2268,16 @@ export const INJECTED_HELPERS = `
       designationSeen.add(designationFiber);
       designationWork++;
       var designationProps = designationFiber.memoizedProps || {};
+      var designationMatchesSelector = designationProps.testID === selector
+        || designationProps.nativeID === selector;
+      if (designationMatchesSelector) {
+        designationMatches.push(designationFiber);
+      }
       if (
         designationFiber.tag === 5
         && typeof designationFiber.type === 'string'
         && hostKind(designationFiber) === 'textinput'
-        && (designationProps.testID === selector || designationProps.nativeID === selector)
+        && designationMatchesSelector
       ) {
         designationInputs.push(designationFiber);
       }
@@ -2299,18 +2305,50 @@ export const INJECTED_HELPERS = `
     }
     if (designationInputs.length !== 1) return null;
     var designationInput = designationInputs[0];
-    var designationOwnerProps = owner.memoizedProps || {};
     var designationInputProps = designationInput.memoizedProps || {};
-    if (
-      textInputDesignationDisabled(designationOwnerProps)
-      || textInputDesignationDisabled(designationInputProps)
-    ) {
+    var designationLineage = new WeakSet();
+    var designationLineageFiber = designationInput;
+    var designationLineageDepth = 0;
+    while (designationLineageFiber && designationLineageDepth < 1000) {
+      if (designationLineage.has(designationLineageFiber)) {
+        return {
+          error: 'TextInput designation resolution truncated',
+          testID: selector,
+          focusOnly: true,
+          truncated: true
+        };
+      }
+      designationLineage.add(designationLineageFiber);
+      if (designationLineageFiber === owner) break;
+      designationLineageFiber = designationLineageFiber.return;
+      designationLineageDepth++;
+    }
+    if (designationLineageFiber !== owner) {
       return {
-        error: 'TextInput is disabled or non-editable',
-        component: typeTextFiberName(designationInput),
+        error: 'TextInput designation resolution truncated',
         testID: selector,
-        focusOnly: true
+        focusOnly: true,
+        truncated: true
       };
+    }
+    for (var designationIndex = 0; designationIndex < designationMatches.length; designationIndex++) {
+      var designationMatch = designationMatches[designationIndex];
+      if (!designationLineage.has(designationMatch)) {
+        return {
+          error: 'Ambiguous TextInput designation target',
+          testID: selector,
+          count: designationMatches.length,
+          focusOnly: true
+        };
+      }
+      if (textInputDesignationDisabled(designationMatch.memoizedProps || {})) {
+        return {
+          error: 'TextInput is disabled or non-editable',
+          component: typeTextFiberName(designationInput),
+          testID: selector,
+          focusOnly: true
+        };
+      }
     }
     var designationInteractivity = textInputDesignationInteractivity(
       designationInput,
