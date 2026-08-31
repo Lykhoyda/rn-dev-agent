@@ -73,7 +73,7 @@ shares **exactly one subpath**:
 | Path | Shared? | Why |
 |---|---|---|
 | `actions/` | **read-only inheritance** | A linked worktree may inventory and replay only the verified same-repository primary corpus; it never falls through to another worktree. Each inventory or replay freezes the link, corpus, repository, and selected YAML identities, then refuses the whole operation without partial results if any identity changes; the next operation resolves afresh. Migration, generation, repair, promotion, and every other YAML mutation refuse through the inherited link; make those changes in the owning worktree. |
-| `state/`, `recordings/`, `snapshots/`, `diag/`, `index.json`, `local/` | no | Per-worktree runtime state, including the action SQLite database and its WAL. The session runtime root must be a real directory. |
+| `state/`, `recordings/`, `snapshots/`, `diag/`, `index.json`, `local/` | no | Unshared runtime output. In a fenced session, mutable action state, including the action SQLite database and its WAL, uses the session runtime root; `.rn-agent/state/` is only the unfenced compatibility fallback. The session runtime root must be a real directory. |
 | `integration/` | no | Session integration refuses any symlinked component under it and fails closed on one. |
 | `nav-graph.yaml`, `skeleton.yaml` | no | Derived from the app source on *this* branch; sharing them across branches serves stale data. |
 | `config.json`, `e2e.config.json`, `fixtures/`, `proposals/`, `dev-bridge.ts`, `globals.d.ts`, `.scaffold-version` | no | Project scaffold and per-worktree output. |
