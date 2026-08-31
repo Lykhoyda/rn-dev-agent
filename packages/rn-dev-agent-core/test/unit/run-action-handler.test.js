@@ -218,6 +218,54 @@ test('run-action: first-attempt pass appends RunRecord with no auto-repair', asy
   );
 });
 
+test('successful fenced replays disclose isolated sidecars while YAML promotion carries forward', async () => {
+  project.seedAction('demo', fixtureYaml({ id: 'demo', selectors: ['fab-create-task'] }));
+  const firstRuntimeRoot = mkdtempSync(join(tmpdir(), 'rn-session-runtime-a-'));
+  const secondRuntimeRoot = mkdtempSync(join(tmpdir(), 'rn-session-runtime-b-'));
+  const priorRuntimeRoot = process.env.RN_DEV_AGENT_SESSION_RUNTIME_ROOT;
+
+  try {
+    process.env.RN_DEV_AGENT_SESSION_RUNTIME_ROOT = firstRuntimeRoot;
+    const firstResult = await createRunActionHandler({
+      maestroRun: fakeMaestroRun([PASS_ENV]),
+    })({ actionId: 'demo', projectRoot: project.root });
+    const firstEnvelope = JSON.parse(firstResult.content[0].text);
+    const firstPath = join(firstRuntimeRoot, 'state', 'demo.state.json');
+
+    assert.equal(firstEnvelope.ok, true);
+    assert.equal(firstEnvelope.data.writes.runtimeStatePath, firstPath);
+    assert.equal(readFileSync(project.yamlPath('demo'), 'utf8').includes('# status: active'), true);
+
+    process.env.RN_DEV_AGENT_SESSION_RUNTIME_ROOT = secondRuntimeRoot;
+    const secondResult = await createRunActionHandler({
+      maestroRun: fakeMaestroRun([PASS_ENV]),
+    })({ actionId: 'demo', projectRoot: project.root });
+    const secondEnvelope = JSON.parse(secondResult.content[0].text);
+    const secondPath = join(secondRuntimeRoot, 'state', 'demo.state.json');
+    const firstState = JSON.parse(readFileSync(firstPath, 'utf8'));
+    const secondState = JSON.parse(readFileSync(secondPath, 'utf8'));
+
+    assert.equal(secondEnvelope.ok, true);
+    assert.equal(secondEnvelope.data.writes.runtimeStatePath, secondPath);
+    assert.notEqual(secondPath, firstPath);
+    assert.equal(firstState.revision, 1);
+    assert.equal(secondState.revision, 1);
+    assert.equal(firstState.runHistory.length, 1);
+    assert.equal(secondState.runHistory.length, 1);
+    assert.deepEqual(secondState.repairHistory, []);
+    assert.deepEqual(secondEnvelope.data.writes.actionYaml, {
+      written: false,
+      reason: 'repair-not-applied',
+    });
+    assert.equal(project.readSidecar('demo').runHistory.length, 0);
+  } finally {
+    if (priorRuntimeRoot === undefined) delete process.env.RN_DEV_AGENT_SESSION_RUNTIME_ROOT;
+    else process.env.RN_DEV_AGENT_SESSION_RUNTIME_ROOT = priorRuntimeRoot;
+    rmSync(firstRuntimeRoot, { force: true, recursive: true });
+    rmSync(secondRuntimeRoot, { force: true, recursive: true });
+  }
+});
+
 test('run-action: forwards handoff cancellation to session authority', async () => {
   project.seedAction('demo', fixtureYaml({ id: 'demo', selectors: ['fab-create-task'] }));
   const flowAbort = new AbortController();

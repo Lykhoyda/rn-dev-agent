@@ -3,4 +3,4 @@
 "rn-dev-agent-plugin": patch
 ---
 
-Expose each replay's session-private runtime-state path and document that fresh sessions start with isolated action history.
+Expose observed replay runtime-state writes with session-private paths and document that fresh sessions start with isolated action history.

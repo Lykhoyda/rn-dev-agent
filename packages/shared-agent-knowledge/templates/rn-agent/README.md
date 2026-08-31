@@ -52,8 +52,9 @@ other than `SELECTOR_NOT_FOUND` escalate without auto-fix.
 In an authority-fenced session, the sidecar lives at
 `<state-home>/v2/sessions/<sessionId>/runtime/state/<id>.state.json`
 (`~/Library/Application Support/rn-dev-agent/v2/sessions/<sessionId>/runtime/state/<id>.state.json`
-by default on macOS), not in this directory. `cdp_run_action` returns its exact
-location as `data.writes.runtimeStatePath` on success or
+by default on macOS), not in this directory. When a replay envelope observes
+and discloses a runtime-state write, `cdp_run_action` returns its exact location
+as `data.writes.runtimeStatePath` on success or
 `meta.writes.runtimeStatePath` on failure. A fresh fenced session starts at
 revision 1 with empty run and repair history; sidecar histories and revisions
 do not carry over. Canonical lifecycle status remains shared worktree knowledge,
