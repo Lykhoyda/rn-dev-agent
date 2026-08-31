@@ -164,9 +164,9 @@ An **action** is a saved Maestro flow the agent **emits** when verification pass
 | **Run one** | `/rn-dev-agent:run-action <name>` — the agent also picks actions automatically when it needs a known state |
 | **Self-repair** | If a `testID` changes, `cdp_repair_action` fuzzy-matches against the live snapshot, patches the YAML, and retries. Small UI drift is absorbed; broken product logic is surfaced, never auto-fixed |
 | **Lock it in** | `/rn-dev-agent:lock-e2e` freezes a passing action into `.rn-agent/e2e/` — locked tests run strict (no repair) via `cdp_run_e2e_suite` |
-| **Why hybrid** | Actions preserve successful verification as reusable execution, repair bounded UI drift, and surface product-logic failures instead of masking them |
+| **Why hybrid** | Pure scripts don't adapt; pure LLM re-derives everything every session. Actions are the memory of the LLM loop — every successful verification adds one, every drift gets quietly absorbed, every truly broken flow escalates |
 
-[Full actions guide — why the hybrid matters, its reliability contract, and the tool surface](https://lykhoyda.github.io/rn-dev-agent/actions/)
+[Full actions guide — why the hybrid matters, tool surface, comparison vs Detox/Maestro/pure-LLM](https://lykhoyda.github.io/rn-dev-agent/actions/)
 
 ## MCP tools
 
