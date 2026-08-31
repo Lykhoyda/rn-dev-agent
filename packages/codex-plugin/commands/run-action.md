@@ -140,9 +140,11 @@ $rn-dev-agent:run-action mark-all-done --no-auto-repair    # surface the raw fai
      }
    }
    ```
-   When `writes.runtimeState` is `sidecar`, read the persisted RunRecord
-   location from `data.writes.runtimeStatePath` on success or
-   `meta.writes.runtimeStatePath` on failure. In a fenced session this is
+   When `data.writes.runtimeStatePath` on success or
+   `meta.writes.runtimeStatePath` on failure is present, it is the exact
+   location of a successful runtime-state write. Follow that path rather than
+   inferring a write from `writes.runtimeState`: the `sidecar` label can be
+   present when no RunRecord was committed. In a fenced session this is
    `<state-home>/v2/sessions/<sessionId>/runtime/state/<actionId>.state.json`
    (`~/Library/Application Support/rn-dev-agent/v2/sessions/<sessionId>/runtime/state/<actionId>.state.json`
    by default on macOS), not `<project>/.rn-agent/state/`. The project-local
