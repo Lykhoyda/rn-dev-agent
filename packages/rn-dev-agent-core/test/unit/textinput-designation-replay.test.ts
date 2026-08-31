@@ -50,6 +50,7 @@ function replayFixture(
   options: {
     editable?: boolean;
     wrapped?: boolean;
+    inputHidden?: boolean;
     beforeDesignatedTypeDispatch?: (fixture: {
       root: Fiber;
       input: Fiber;
@@ -65,6 +66,7 @@ function replayFixture(
     fiber('RCTSinglelineTextInputView', {
       testID: 'email',
       editable: options.editable ?? true,
+      ...(options.inputHidden ? { style: { display: 'none' } } : {}),
       value: '',
       onFocus: () => {
         calls.focus += 1;
@@ -136,7 +138,7 @@ function replayFixture(
         return { error };
       }
     },
-    probeHelperFreshness: async () => ({ fresh: true, version: 50, probed: true }),
+    probeHelperFreshness: async () => ({ fresh: true, version: 51, probed: true }),
   });
   const interact = createInteractHandler(() => client);
   const deps: CdpReplayDeps = {
@@ -247,6 +249,22 @@ test('a non-editable bare TextInput refuses designation without callbacks', asyn
   assert.equal(fixture.input.memoizedProps.value, '');
 });
 
+test('a hidden host TextInput beneath a visible wrapper refuses designation', async () => {
+  const fixture = replayFixture({ wrapped: true, inputHidden: true });
+  const result = await runCdpReplayCommands(
+    [{ tapOn: { id: 'email' } }, { inputText: 'blocked' }],
+    {},
+    fixture.deps,
+  );
+
+  assert.equal(result.passed, false);
+  assert.equal(result.failedStepIndex, 0);
+  assert.equal(result.failureCode, 'INTERACTION_NOT_ACTUATED');
+  assert.match(result.reason ?? '', /hidden or occluded/);
+  assert.deepEqual(fixture.calls.typed, []);
+  assert.equal(fixture.input.memoizedProps.value, '');
+});
+
 test('designation preserves the frontmost and duplicate-target refusals', async (t) => {
   await t.test('occluded input', async () => {
     const fixture = replayFixture();
@@ -287,6 +305,27 @@ test('designation preserves the frontmost and duplicate-target refusals', async 
 });
 
 test('designation rechecks live eligibility at the injected mutation boundary', async (t) => {
+  await t.test('host input stops accepting pointer events', async () => {
+    const fixture = replayFixture({
+      wrapped: true,
+      beforeDesignatedTypeDispatch: ({ input }) => {
+        input.memoizedProps.pointerEvents = 'none';
+      },
+    });
+    const result = await runCdpReplayCommands(
+      [{ tapOn: { id: 'email' } }, { inputText: 'blocked' }],
+      {},
+      fixture.deps,
+    );
+
+    assert.equal(result.passed, false);
+    assert.equal(result.failedStepIndex, 1);
+    assert.equal(result.failureCode, 'INTERACTION_NOT_ACTUATED');
+    assert.match(result.reason ?? '', /pointerEvents="none"/);
+    assert.deepEqual(fixture.calls.typed, []);
+    assert.equal(fixture.input.memoizedProps.value, '');
+  });
+
   await t.test('matched wrapper becomes disabled', async () => {
     const fixture = replayFixture({
       wrapped: true,

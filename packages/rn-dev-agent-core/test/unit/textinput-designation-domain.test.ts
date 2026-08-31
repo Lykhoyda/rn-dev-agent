@@ -90,3 +90,24 @@ test('an unconsumed designation refuses instead of masquerading as a successful 
   assert.equal(result.steps[0].focusOnly, true);
   assert.deepEqual(calls, [['press', 'email']]);
 });
+
+test('an assertion cannot clear an unconsumed TextInput designation', async () => {
+  const { dispatch, calls } = dispatchFor({ designations: ['email'] });
+  const result = await replayFlow(
+    [
+      { t: 'tap', id: 'email' },
+      { t: 'assert', id: 'continue' },
+    ],
+    dispatch,
+  );
+
+  assert.equal(result.passed, false);
+  assert.equal(result.failedStepIndex, 1);
+  assert.equal(result.failureCode, 'INTERACTION_NOT_ACTUATED');
+  assert.match(result.reason ?? '', /must be followed immediately by inputText/);
+  assert.equal(result.steps[0].focusOnly, true);
+  assert.deepEqual(calls, [
+    ['press', 'email'],
+    ['visibility', 'continue'],
+  ]);
+});

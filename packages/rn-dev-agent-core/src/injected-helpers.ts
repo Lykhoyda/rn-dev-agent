@@ -2,7 +2,7 @@
 // whenever the injected surface changes; it flows into the IIFE's freshness
 // check (__RN_AGENT.__v) AND the post-injection log line, so they can never
 // drift (the log previously hard-coded a stale "v11").
-export const HELPERS_VERSION = 53;
+export const HELPERS_VERSION = 54;
 
 export const INJECTED_HELPERS = `
 (function() {
@@ -2198,6 +2198,63 @@ export const INJECTED_HELPERS = `
       || (candidateProps.accessibilityState && candidateProps.accessibilityState.disabled === true);
   }
 
+  function textInputDesignationInteractivity(input, selector) {
+    var current = input;
+    var seen = new WeakSet();
+    var depth = 0;
+    while (current && depth < 1000) {
+      if (seen.has(current)) {
+        return {
+          error: 'TextInput designation interactivity resolution truncated',
+          testID: selector,
+          focusOnly: true,
+          truncated: true
+        };
+      }
+      seen.add(current);
+      if (isSubtreeInaccessible(current)) {
+        return {
+          error: 'TextInput designation target is hidden or occluded',
+          testID: selector,
+          focusOnly: true
+        };
+      }
+      var props = current.memoizedProps || {};
+      var pointerEvents = props.pointerEvents;
+      if (
+        current === input
+        && (pointerEvents === 'none' || pointerEvents === 'box-none')
+      ) {
+        return {
+          error: 'TextInput designation target is not user-interactable with pointerEvents="' + pointerEvents + '"',
+          testID: selector,
+          focusOnly: true
+        };
+      }
+      if (
+        current !== input
+        && (pointerEvents === 'none' || pointerEvents === 'box-only')
+      ) {
+        return {
+          error: 'TextInput designation target is blocked beneath pointerEvents="' + pointerEvents + '"',
+          testID: selector,
+          focusOnly: true
+        };
+      }
+      current = current.return;
+      depth++;
+    }
+    if (current) {
+      return {
+        error: 'TextInput designation interactivity resolution truncated',
+        testID: selector,
+        focusOnly: true,
+        truncated: true
+      };
+    }
+    return null;
+  }
+
   function resolveTextInputDesignation(owner, selector) {
     if (!owner) return null;
     var designationStack = [owner];
@@ -2228,7 +2285,8 @@ export const INJECTED_HELPERS = `
       return {
         error: 'TextInput designation resolution truncated',
         testID: selector,
-        focusOnly: true
+        focusOnly: true,
+        truncated: true
       };
     }
     if (designationInputs.length > 1) {
@@ -2254,6 +2312,11 @@ export const INJECTED_HELPERS = `
         focusOnly: true
       };
     }
+    var designationInteractivity = textInputDesignationInteractivity(
+      designationInput,
+      selector
+    );
+    if (designationInteractivity) return designationInteractivity;
     if (typeof designationInputProps.onPress === 'function') return null;
     return {
       success: true,
@@ -2363,7 +2426,7 @@ export const INJECTED_HELPERS = `
             handlerCalled: false
           };
         }
-        liveDesignation.code = liveDesignation.error === 'TextInput designation resolution truncated'
+        liveDesignation.code = liveDesignation.truncated === true
           ? 'ASSERTION_FAILED'
           : 'INTERACTION_NOT_ACTUATED';
         liveDesignation.handlerCalled = false;

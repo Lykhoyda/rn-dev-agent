@@ -274,6 +274,7 @@ export async function replayFlow(
   const trace: ReplayResult['steps'] = [];
   let lastTapped: string | null = opts.initialFocusId ?? null;
   let pendingDesignation: string | null = null;
+  let staleDesignation: string | null = null;
   const sourceIndex = (i: number): number => opts.sourceIndex ?? i + offset;
 
   const fail = (
@@ -303,7 +304,10 @@ export async function replayFlow(
     const s = steps[i];
     const evidenceType = s.t === 'waitVisible' ? (s.evidenceType ?? s.t) : s.t;
     const startedAt = Date.now();
-    if (pendingDesignation && s.t !== 'type') pendingDesignation = null;
+    if (pendingDesignation && s.t !== 'type') {
+      staleDesignation = staleDesignation ?? pendingDesignation;
+      pendingDesignation = null;
+    }
     try {
       requireNotAborted();
       switch (s.t) {
@@ -476,12 +480,13 @@ export async function replayFlow(
       'RUNNER_TIMEOUT',
     );
   }
-  if (pendingDesignation) {
+  const unconsumedDesignation = staleDesignation ?? pendingDesignation;
+  if (unconsumedDesignation) {
     return fail(
       Math.max(0, steps.length - 1),
-      `TextInput designation for "${pendingDesignation}" must be followed immediately by inputText`,
+      `TextInput designation for "${unconsumedDesignation}" must be followed immediately by inputText`,
       'INTERACTION_NOT_ACTUATED',
-      { failedSelector: pendingDesignation, focusOnly: true },
+      { failedSelector: unconsumedDesignation, focusOnly: true },
     );
   }
   return { passed: true, finalFocusId: lastTapped, steps: trace };

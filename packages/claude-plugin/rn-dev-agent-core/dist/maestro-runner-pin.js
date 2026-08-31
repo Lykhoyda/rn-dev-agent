@@ -15650,6 +15650,7 @@ async function replayFlow(steps, dispatch, opts = {}) {
   const trace = [];
   let lastTapped = opts.initialFocusId ?? null;
   let pendingDesignation = null;
+  let staleDesignation = null;
   const sourceIndex = (i) => opts.sourceIndex ?? i + offset;
   const fail = (i, reason, failureCode, failureMeta) => ({
     passed: false,
@@ -15668,8 +15669,10 @@ async function replayFlow(steps, dispatch, opts = {}) {
     const s = steps[i];
     const evidenceType = s.t === "waitVisible" ? s.evidenceType ?? s.t : s.t;
     const startedAt = Date.now();
-    if (pendingDesignation && s.t !== "type")
+    if (pendingDesignation && s.t !== "type") {
+      staleDesignation = staleDesignation ?? pendingDesignation;
       pendingDesignation = null;
+    }
     try {
       requireNotAborted();
       switch (s.t) {
@@ -15810,8 +15813,9 @@ async function replayFlow(steps, dispatch, opts = {}) {
   if (opts.signal?.aborted) {
     return fail(Math.max(0, steps.length - 1), "React-tree replay exceeded its execution deadline", "RUNNER_TIMEOUT");
   }
-  if (pendingDesignation) {
-    return fail(Math.max(0, steps.length - 1), `TextInput designation for "${pendingDesignation}" must be followed immediately by inputText`, "INTERACTION_NOT_ACTUATED", { failedSelector: pendingDesignation, focusOnly: true });
+  const unconsumedDesignation = staleDesignation ?? pendingDesignation;
+  if (unconsumedDesignation) {
+    return fail(Math.max(0, steps.length - 1), `TextInput designation for "${unconsumedDesignation}" must be followed immediately by inputText`, "INTERACTION_NOT_ACTUATED", { failedSelector: unconsumedDesignation, focusOnly: true });
   }
   return { passed: true, finalFocusId: lastTapped, steps: trace };
 }
