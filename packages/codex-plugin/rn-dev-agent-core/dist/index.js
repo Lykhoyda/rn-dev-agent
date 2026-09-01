@@ -51571,7 +51571,7 @@ async function detectBridge(client2, evaluate = (expression) => client2.evaluate
 init_logger();
 
 // packages/rn-dev-agent-core/dist/injected-helpers.js
-var HELPERS_VERSION = 58;
+var HELPERS_VERSION = 59;
 var INJECTED_HELPERS = `
 (function() {
   var __HELPERS_VERSION__ = ${HELPERS_VERSION};
@@ -53724,6 +53724,38 @@ var INJECTED_HELPERS = `
         });
       }
     }
+
+    function bindingDescendsFrom(descendant, ancestor) {
+      var cursor = descendant.candidateFiber.return;
+      var returnSeen = new WeakSet();
+      while (cursor) {
+        if (!consumeWork()) return false;
+        if (returnSeen.has(cursor)) {
+          state.truncated = true;
+          state.reason = 'cycle';
+          return false;
+        }
+        returnSeen.add(cursor);
+        if (sameTypeTextFiber(cursor, ancestor.candidateFiber)) return true;
+        cursor = cursor.return;
+      }
+      return false;
+    }
+
+    // RN TextInput renders one element as a composite fiber plus its host child sharing one handler; keep the deepest (press's match-deepest-only rule).
+    function collapseLineageBindings(all) {
+      return all.filter(function(binding) {
+        return !all.some(function(other) {
+          return !state.truncated
+            && other !== binding
+            && other.handler === binding.handler
+            && other.contract === binding.contract
+            && bindingDescendsFrom(other, binding);
+        });
+      });
+    }
+
+    if (!state.truncated && bindings.length > 1) bindings = collapseLineageBindings(bindings);
 
     if (state.truncated) return typeTextTruncation(state);
     if (bindings.length > 1) {

@@ -59,6 +59,7 @@ function replayFixture(
     inputHidden?: boolean;
     inputValue?: string;
     oversizedDesignationSubtree?: boolean;
+    stockTextInput?: boolean;
     beforeDesignatedTypeDispatch?: (fixture: {
       root: Fiber;
       input: Fiber;
@@ -79,21 +80,29 @@ function replayFixture(
         }),
       )
     : null;
+  const userProps = {
+    testID: 'email',
+    editable: options.editable ?? true,
+    ...(options.readOnly ? { readOnly: true } : {}),
+    ...(options.inputHidden ? { style: { display: 'none' } } : {}),
+    value: options.inputValue ?? '',
+    onFocus: () => {
+      calls.focus += 1;
+    },
+    onChangeText: (value: string) => {
+      calls.typed.push(value);
+      input.memoizedProps.value = value;
+    },
+  };
+  const composite = options.stockTextInput
+    ? append(exactMiddle ?? wrapper ?? root, fiber({ displayName: 'TextInput' }, { ...userProps }))
+    : null;
+  if (composite) composite.tag = 11;
   const input = append(
-    exactMiddle ?? wrapper ?? root,
+    composite ?? exactMiddle ?? wrapper ?? root,
     fiber('RCTSinglelineTextInputView', {
-      testID: 'email',
-      editable: options.editable ?? true,
-      ...(options.readOnly ? { readOnly: true } : {}),
-      ...(options.inputHidden ? { style: { display: 'none' } } : {}),
-      value: options.inputValue ?? '',
-      onFocus: () => {
-        calls.focus += 1;
-      },
-      onChangeText: (value: string) => {
-        calls.typed.push(value);
-        input.memoizedProps.value = value;
-      },
+      ...userProps,
+      ...(composite ? { onChange: () => {}, text: userProps.value } : {}),
     }),
   );
   if (options.branchedDuplicate) {
@@ -228,6 +237,24 @@ test('replay designates a bare TextInput and types without press or focus dispat
   assert.equal(fixture.calls.press, 0);
   assert.deepEqual(fixture.calls.typed, ['person@example.test']);
   assert.equal(fixture.input.memoizedProps.value, 'person@example.test');
+});
+
+test('replay designates and types into a stock TextInput rendered as composite plus host', async () => {
+  const fixture = replayFixture({ stockTextInput: true, inputValue: 'a' });
+  const result = await runCdpReplayCommands(
+    [{ tapOn: { id: 'email' } }, { inputText: 'b' }],
+    {},
+    fixture.deps,
+  );
+
+  assert.equal(result.passed, true, JSON.stringify(result));
+  assert.equal(result.steps[0].focusOnly, true);
+  assert.equal(result.steps[1].ok, true);
+  assert.equal(result.finalFocusId, null);
+  assert.equal(fixture.calls.focus, 0);
+  assert.equal(fixture.calls.press, 0);
+  assert.deepEqual(fixture.calls.typed, ['ab']);
+  assert.equal(fixture.input.memoizedProps.value, 'ab');
 });
 
 test('a truncated designation scan refuses the press as an unproven assertion', async () => {
