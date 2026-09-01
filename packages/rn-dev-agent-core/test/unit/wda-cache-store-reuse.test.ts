@@ -197,6 +197,9 @@ test('isCompleteWdaBuild requires runnable WDA host and bundle executables', () 
     chmodSync(wdaTestBundleExecutable(keyDir), 0o755);
     assert.equal(isCompleteWdaBuild(keyDir), true);
     rmSync(wdaTestBundleExecutable(keyDir));
+    mkdirSync(wdaTestBundleExecutable(keyDir));
+    assert.equal(isCompleteWdaBuild(keyDir), false, 'a directory is not a bundle runner');
+    rmSync(wdaTestBundleExecutable(keyDir), { recursive: true });
     symlinkSync(
       relative(wdaTestBundlePath(keyDir), wdaTestHostExecutable(keyDir)),
       wdaTestBundleExecutable(keyDir),
