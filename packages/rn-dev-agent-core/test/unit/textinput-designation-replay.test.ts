@@ -51,6 +51,7 @@ function append(parent: Fiber, child: Fiber): Fiber {
 function replayFixture(
   options: {
     editable?: boolean;
+    readOnly?: boolean;
     wrapped?: boolean;
     exactMiddle?: boolean;
     exactMiddleDisabled?: boolean;
@@ -82,6 +83,7 @@ function replayFixture(
     fiber('RCTSinglelineTextInputView', {
       testID: 'email',
       editable: options.editable ?? true,
+      ...(options.readOnly ? { readOnly: true } : {}),
       ...(options.inputHidden ? { style: { display: 'none' } } : {}),
       value: options.inputValue ?? '',
       onFocus: () => {
@@ -158,7 +160,7 @@ function replayFixture(
         return { error };
       }
     },
-    probeHelperFreshness: async () => ({ fresh: true, version: 53, probed: true }),
+    probeHelperFreshness: async () => ({ fresh: true, version: 57, probed: true }),
   });
   const interact = createInteractHandler(() => client);
   const deps: CdpReplayDeps = {
@@ -328,6 +330,24 @@ test('a designation without typing is explicit and refuses the replay', async ()
 
 test('a non-editable bare TextInput refuses designation without callbacks', async () => {
   const fixture = replayFixture({ editable: false });
+  const result = await runCdpReplayCommands(
+    [{ tapOn: { id: 'email' } }, { inputText: 'blocked' }],
+    {},
+    fixture.deps,
+  );
+
+  assert.equal(result.passed, false);
+  assert.equal(result.failedStepIndex, 0);
+  assert.equal(result.failureCode, 'INTERACTION_NOT_ACTUATED');
+  assert.match(result.reason ?? '', /disabled or non-editable/);
+  assert.equal(fixture.calls.focus, 0);
+  assert.equal(fixture.calls.press, 0);
+  assert.deepEqual(fixture.calls.typed, []);
+  assert.equal(fixture.input.memoizedProps.value, '');
+});
+
+test('a read-only bare TextInput refuses designation without callbacks', async () => {
+  const fixture = replayFixture({ readOnly: true });
   const result = await runCdpReplayCommands(
     [{ tapOn: { id: 'email' } }, { inputText: 'blocked' }],
     {},
@@ -525,6 +545,26 @@ test('designation rechecks live eligibility at the injected mutation boundary', 
     const fixture = replayFixture({
       beforeDesignatedTypeDispatch: ({ input }) => {
         input.memoizedProps.editable = false;
+      },
+    });
+    const result = await runCdpReplayCommands(
+      [{ tapOn: { id: 'email' } }, { inputText: 'blocked' }],
+      {},
+      fixture.deps,
+    );
+
+    assert.equal(result.passed, false);
+    assert.equal(result.failedStepIndex, 1);
+    assert.equal(result.failureCode, 'INTERACTION_NOT_ACTUATED');
+    assert.match(result.reason ?? '', /disabled or non-editable/);
+    assert.deepEqual(fixture.calls.typed, []);
+    assert.equal(fixture.input.memoizedProps.value, '');
+  });
+
+  await t.test('input becomes read-only', async () => {
+    const fixture = replayFixture({
+      beforeDesignatedTypeDispatch: ({ input }) => {
+        input.memoizedProps.readOnly = true;
       },
     });
     const result = await runCdpReplayCommands(

@@ -51571,7 +51571,7 @@ async function detectBridge(client2, evaluate = (expression) => client2.evaluate
 init_logger();
 
 // packages/rn-dev-agent-core/dist/injected-helpers.js
-var HELPERS_VERSION = 56;
+var HELPERS_VERSION = 57;
 var INJECTED_HELPERS = `
 (function() {
   var __HELPERS_VERSION__ = ${HELPERS_VERSION};
@@ -53763,6 +53763,7 @@ var INJECTED_HELPERS = `
   function textInputDesignationDisabled(candidateProps) {
     return candidateProps.disabled === true
       || candidateProps.editable === false
+      || candidateProps.readOnly === true
       || (candidateProps.accessibilityState && candidateProps.accessibilityState.disabled === true);
   }
 

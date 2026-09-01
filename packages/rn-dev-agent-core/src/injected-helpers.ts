@@ -2,7 +2,7 @@
 // whenever the injected surface changes; it flows into the IIFE's freshness
 // check (__RN_AGENT.__v) AND the post-injection log line, so they can never
 // drift (the log previously hard-coded a stale "v11").
-export const HELPERS_VERSION = 56;
+export const HELPERS_VERSION = 57;
 
 export const INJECTED_HELPERS = `
 (function() {
@@ -2195,6 +2195,7 @@ export const INJECTED_HELPERS = `
   function textInputDesignationDisabled(candidateProps) {
     return candidateProps.disabled === true
       || candidateProps.editable === false
+      || candidateProps.readOnly === true
       || (candidateProps.accessibilityState && candidateProps.accessibilityState.disabled === true);
   }
 

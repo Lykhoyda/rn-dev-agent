@@ -63945,7 +63945,7 @@ var HELPERS_VERSION, INJECTED_HELPERS, NETWORK_HOOK_SCRIPT, NETWORK_CB_BUFFERED_
 var init_injected_helpers = __esm({
   "packages/rn-dev-agent-core/dist/injected-helpers.js"() {
     "use strict";
-    HELPERS_VERSION = 56;
+    HELPERS_VERSION = 57;
     INJECTED_HELPERS = `
 (function() {
   var __HELPERS_VERSION__ = ${HELPERS_VERSION};
@@ -66137,6 +66137,7 @@ var init_injected_helpers = __esm({
   function textInputDesignationDisabled(candidateProps) {
     return candidateProps.disabled === true
       || candidateProps.editable === false
+      || candidateProps.readOnly === true
       || (candidateProps.accessibilityState && candidateProps.accessibilityState.disabled === true);
   }
 
