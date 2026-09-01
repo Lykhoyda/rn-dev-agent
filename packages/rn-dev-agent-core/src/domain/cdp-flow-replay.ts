@@ -277,8 +277,8 @@ export async function replayFlow(
   const offset = opts.indexOffset ?? 0;
   const trace: ReplayResult['steps'] = [];
   let lastTapped: string | null = opts.initialFocusId ?? null;
-  let pendingDesignation: { id: string; token: string } | null = null;
-  let staleDesignation: string | null = null;
+  let pendingDesignation: { id: string; token: string; index: number } | null = null;
+  let staleDesignation: { id: string; index: number } | null = null;
   const sourceIndex = (i: number): number => opts.sourceIndex ?? i + offset;
 
   const fail = (
@@ -320,7 +320,10 @@ export async function replayFlow(
     const startedAt = Date.now();
     let stepFocusOnly: true | undefined;
     if (pendingDesignation && s.t !== 'type') {
-      staleDesignation = staleDesignation ?? pendingDesignation.id;
+      staleDesignation = staleDesignation ?? {
+        id: pendingDesignation.id,
+        index: pendingDesignation.index,
+      };
       const staleToken = pendingDesignation.token;
       pendingDesignation = null;
       await releaseDesignation(staleToken);
@@ -342,7 +345,7 @@ export async function replayFlow(
           const pressResult = await dispatch.press(s.id);
           if (pressResult?.kind === 'designation') {
             lastTapped = null;
-            pendingDesignation = { id: s.id, token: pressResult.token };
+            pendingDesignation = { id: s.id, token: pressResult.token, index: i };
             stepFocusOnly = true;
           } else {
             lastTapped = s.id;
@@ -510,16 +513,16 @@ export async function replayFlow(
       'RUNNER_TIMEOUT',
     );
   }
-  const unconsumedDesignation = staleDesignation ?? pendingDesignation?.id;
+  const unconsumedDesignation = staleDesignation ?? pendingDesignation;
   if (unconsumedDesignation) {
     if (pendingDesignation) {
       await releasePendingDesignation();
     }
     return fail(
-      Math.max(0, steps.length - 1),
-      `TextInput designation for "${unconsumedDesignation}" must be followed immediately by inputText`,
+      unconsumedDesignation.index,
+      `TextInput designation for "${unconsumedDesignation.id}" must be followed immediately by inputText`,
       'INTERACTION_NOT_ACTUATED',
-      { failedSelector: unconsumedDesignation, focusOnly: true },
+      { failedSelector: unconsumedDesignation.id, focusOnly: true },
     );
   }
   return { passed: true, finalFocusId: lastTapped, steps: trace };

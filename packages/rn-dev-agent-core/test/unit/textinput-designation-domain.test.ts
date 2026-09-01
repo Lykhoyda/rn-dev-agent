@@ -128,16 +128,17 @@ test('an assertion cannot clear an unconsumed TextInput designation', async () =
   const result = await replayFlow(
     [
       { t: 'tap', id: 'email' },
-      { t: 'assert', id: 'continue' },
+      { t: 'waitVisible', id: 'continue', timeoutMs: 0, evidenceType: 'assert' },
     ],
     dispatch,
   );
 
   assert.equal(result.passed, false);
-  assert.equal(result.failedStepIndex, 1);
+  assert.equal(result.failedStepIndex, 0);
   assert.equal(result.failureCode, 'INTERACTION_NOT_ACTUATED');
   assert.match(result.reason ?? '', /must be followed immediately by inputText/);
   assert.equal(result.steps[0].focusOnly, true);
+  assert.equal(result.steps[1].ok, true);
   assert.deepEqual(calls, [
     ['press', 'email'],
     ['release', 'designation-email'],

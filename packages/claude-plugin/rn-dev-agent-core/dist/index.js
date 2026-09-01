@@ -79747,7 +79747,10 @@ async function replayFlow(steps, dispatch, opts = {}) {
     const startedAt = Date.now();
     let stepFocusOnly;
     if (pendingDesignation && s.t !== "type") {
-      staleDesignation = staleDesignation ?? pendingDesignation.id;
+      staleDesignation = staleDesignation ?? {
+        id: pendingDesignation.id,
+        index: pendingDesignation.index
+      };
       const staleToken = pendingDesignation.token;
       pendingDesignation = null;
       await releaseDesignation(staleToken);
@@ -79769,7 +79772,7 @@ async function replayFlow(steps, dispatch, opts = {}) {
           const pressResult = await dispatch.press(s.id);
           if (pressResult?.kind === "designation") {
             lastTapped = null;
-            pendingDesignation = { id: s.id, token: pressResult.token };
+            pendingDesignation = { id: s.id, token: pressResult.token, index: i };
             stepFocusOnly = true;
           } else {
             lastTapped = s.id;
@@ -79904,12 +79907,12 @@ async function replayFlow(steps, dispatch, opts = {}) {
     await releasePendingDesignation();
     return fail3(Math.max(0, steps.length - 1), "React-tree replay exceeded its execution deadline", "RUNNER_TIMEOUT");
   }
-  const unconsumedDesignation = staleDesignation ?? pendingDesignation?.id;
+  const unconsumedDesignation = staleDesignation ?? pendingDesignation;
   if (unconsumedDesignation) {
     if (pendingDesignation) {
       await releasePendingDesignation();
     }
-    return fail3(Math.max(0, steps.length - 1), `TextInput designation for "${unconsumedDesignation}" must be followed immediately by inputText`, "INTERACTION_NOT_ACTUATED", { failedSelector: unconsumedDesignation, focusOnly: true });
+    return fail3(unconsumedDesignation.index, `TextInput designation for "${unconsumedDesignation.id}" must be followed immediately by inputText`, "INTERACTION_NOT_ACTUATED", { failedSelector: unconsumedDesignation.id, focusOnly: true });
   }
   return { passed: true, finalFocusId: lastTapped, steps: trace };
 }
