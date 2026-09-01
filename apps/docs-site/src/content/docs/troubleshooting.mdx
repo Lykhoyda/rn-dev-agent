@@ -474,6 +474,14 @@ The iOS Maestro driver (WebDriverAgent) failed to bootstrap before the
 first replay step ran, so the flow was refused and no self-repair was attempted.
 The verified runner payload remains sealed; rn-dev-agent provisions a separate
 per-spawn WDA cache and removes it with the runner snapshot after the attempt.
+Completed WDA builds are kept in a persistent store next to the pin-cache
+(`.wda-store-<runner version>/<host platform-architecture>/<xcode fingerprint>/`)
+and seed later compatible spawns best-effort, so subsequent invocations can
+reuse a completed build instead of rebuilding. Incomplete, corrupt, or
+incompatible entries are skipped and rebuild cold. A seeding failure also falls
+back to a cold build; a publication failure leaves the current run result intact
+but may make a later invocation build cold again. If a reused build misbehaves,
+delete that store directory to force a cold rebuild.
 Re-run the replay (bootstrap retries itself), check network access, and re-run
 setup to verify the pin-cache maestro-runner. If the failure detail includes
 `RUNNER_CACHE_UNAVAILABLE`, verify that the runner cache parent is writable;
