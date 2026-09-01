@@ -985,9 +985,8 @@ function readCompleteWdaBuildManifest(keyDir: string): CompleteWdaBuildManifest 
   }
 }
 
-// The runner's own reuse marker: build-for-testing emits the .xctestrun in
-// Build/Products once the products exist; require the real test-host executable
-// at its exact product path as well so a torn copy or partial delete never counts as cached.
+// Build-for-testing emits the .xctestrun after its products exist; require the
+// exact real host and bundle executables so torn or partial builds never qualify.
 export function isCompleteWdaBuild(keyDir: string): boolean {
   return readCompleteWdaBuildManifest(keyDir) !== null;
 }

@@ -242,8 +242,11 @@ alive for such callers.
   beside the pin-cache (atomic staged-rename publication; delete the store to
   force a cold build). Persist only contained `DerivedData/Build/Products`;
   normalize the xctestrun port and exclude logs and other run-owned state.
-  Completeness is the runner-selected WDA target with its referenced products
-  and executable present. Seeding must stay AFTER the snapshot seal walk:
+  Completeness is the runner-selected WDA target with real referenced products
+  and regular, non-symlink, executable host and bundle binaries. Capture one
+  toolchain fingerprint for the spawn and use it for seeding and publication;
+  re-probe before publication and skip it if the fingerprint changed. Seeding
+  must stay AFTER the snapshot seal walk:
   recursive `readdirSync` descends through the `cache` symlink, and sealed seed
   content breaks the runner's warm-path xctestrun port rewrite (EACCES, four
   retries, bootstrap failure).
