@@ -75,7 +75,7 @@ The UI serves no general mutation surface — you can't edit files, change state
 - Rejects cross-origin requests via Host-header and `Sec-Fetch-Site` checks.
 - Tool arguments are deep-redacted **fail-closed** before reaching the stream — tokens, passwords, and PII render as `[REDACTED_*]`.
 - Text the agent types into the app never reaches the stream verbatim, whatever it contains. `device_fill`, `fill` steps inside `device_batch`, and `cdp_interact` `typeText` / `setFieldValue` have their text replaced with `[REDACTED:string]` plus a `textLength` (or `valueLength`) count, and the `text` echoed back in a `device_fill` result is redacted the same way. Ordering, the target element, status, and every other diagnostic field stay visible, so the timeline is still readable for debugging.
-- The event timeline lives in a small bounded in-memory ring buffer — the observability stream itself never touches disk. (Action and E2E replays you trigger from the UI still write their normal run records under `.rn-agent/`, exactly as a CLI-triggered replay would.)
+- The event timeline lives in a small bounded in-memory ring buffer — the observability stream itself never touches disk. (Action replays write RunRecords to the fenced session's own state directory; an unfenced compatibility process uses `.rn-agent/state/`. Locked E2E replay output remains under `.rn-agent/e2e/`.)
 
 ## When to use
 
