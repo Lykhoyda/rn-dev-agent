@@ -7,6 +7,8 @@ export type RunnerDiagnosticEventType =
   | 'spawn-begin'
   | 'payload-verify'
   | 'cache-provision'
+  | 'cache-seed'
+  | 'cache-publish'
   | 'runner-exec-begin'
   | 'wda-bootstrap-begin'
   | 'typed-failure'

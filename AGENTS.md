@@ -235,6 +235,21 @@ alive for such callers.
   ledger evidence and any unclean or incomplete termination provenance
   (unfinalized artifact, truncation, signal, timeout, bootstrap/transport
   failure) withhold the qualifier regardless of row states.
+- WDA build persistence has one owner: the best-effort seed/publish pair around
+  the per-spawn runner cache in `src/domain/engine-pin.ts`, backed by the
+  persistent store
+  `.wda-store-<runner>/<host platform-architecture>/<xcode fingerprint>/`
+  beside the pin-cache (atomic staged-rename publication; delete the store to
+  force a cold build). Persist only contained `DerivedData/Build/Products`;
+  normalize the xctestrun port and exclude logs and other run-owned state.
+  Completeness is the runner-selected WDA target with real referenced products
+  and regular, non-symlink, executable host and bundle binaries. Capture one
+  toolchain fingerprint for the spawn and use it for seeding and publication;
+  re-probe before publication and skip it if the fingerprint changed. Seeding
+  must stay AFTER the snapshot seal walk:
+  recursive `readdirSync` descends through the `cache` symlink, and sealed seed
+  content breaks the runner's warm-path xctestrun port rewrite (EACCES, four
+  retries, bootstrap failure).
 - Claude-only host behavior: edit `packages/claude-plugin/`.
 - Codex-only host behavior: edit `packages/codex-plugin/`.
 - Host-neutral workflow knowledge: edit `packages/shared-agent-knowledge/`,

@@ -7884,7 +7884,7 @@ var require_dist = __commonJS({
 });
 
 // packages/rn-dev-agent-core/dist/domain/maestro-validator.js
-import { join as join3, dirname as dirname3, isAbsolute, sep as sep2 } from "node:path";
+import { join as join3, dirname as dirname3, isAbsolute as isAbsolute2, sep as sep2 } from "node:path";
 import { readFileSync as readFileSync3, realpathSync as realpathSync3 } from "node:fs";
 function isValidBundleId(s) {
   if (typeof s !== "string")
@@ -8062,7 +8062,7 @@ function resolveRunFlowTarget(file, opts) {
   if (!opts.flowDir || !opts.flowRoot) {
     throw new MaestroValidationError(`runFlow file ref "${file}" requires a flow root context (flowDir + flowRoot)`);
   }
-  if (isAbsolute(file)) {
+  if (isAbsolute2(file)) {
     throw new MaestroValidationError(`runFlow file ref must be relative, got absolute: ${file}`);
   }
   if (file.split(/[\\/]/).includes("..")) {
@@ -8354,7 +8354,7 @@ var init_keyboard_guard = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/util/secure-state-file.js
-import { readFileSync as readFileSync10, writeFileSync as writeFileSync3, unlinkSync as unlinkSync6, mkdirSync as mkdirSync8, renameSync as renameSync3, lstatSync as lstatSync9 } from "node:fs";
+import { readFileSync as readFileSync10, writeFileSync as writeFileSync4, unlinkSync as unlinkSync6, mkdirSync as mkdirSync8, renameSync as renameSync4, lstatSync as lstatSync9 } from "node:fs";
 import { join as join12, dirname as dirname12 } from "node:path";
 import { homedir as homedir3 } from "node:os";
 function getStateDir() {
@@ -8383,8 +8383,8 @@ function readJsonStateFile(path) {
 function writeJsonStateFileAtomic(path, value) {
   mkdirSync8(dirname12(path), { recursive: true });
   const tmpPath = `${path}.tmp.${process.pid}`;
-  writeFileSync3(tmpPath, JSON.stringify(value), { encoding: "utf8", mode: 384 });
-  renameSync3(tmpPath, path);
+  writeFileSync4(tmpPath, JSON.stringify(value), { encoding: "utf8", mode: 384 });
+  renameSync4(tmpPath, path);
 }
 function deleteStateFile(path) {
   try {
@@ -8820,7 +8820,7 @@ var init_declared_source_contract = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/nav-graph/storage.js
-import { readFileSync as readFileSync11, writeFileSync as writeFileSync4, existsSync as existsSync12, renameSync as renameSync4, readdirSync as readdirSync5, lstatSync as lstatSync10, mkdirSync as mkdirSync9, realpathSync as realpathSync6 } from "node:fs";
+import { readFileSync as readFileSync11, writeFileSync as writeFileSync5, existsSync as existsSync12, renameSync as renameSync5, readdirSync as readdirSync5, lstatSync as lstatSync10, mkdirSync as mkdirSync9, realpathSync as realpathSync6 } from "node:fs";
 import { join as join15, dirname as dirname13 } from "node:path";
 function isRnProject(dir) {
   const pkgPath = join15(dir, "package.json");
@@ -10403,17 +10403,18 @@ var init_release_android_slot = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/maestro-runner-pin.js
-import { spawnSync as spawnSync2 } from "node:child_process";
+import { spawnSync as spawnSync3 } from "node:child_process";
 import { existsSync as existsSync18 } from "node:fs";
 import { dirname as dirname15, join as join24, resolve as resolve8 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 
 // packages/rn-dev-agent-core/dist/domain/engine-pin.js
 init_process_birth();
+import { spawnSync } from "node:child_process";
 import { createHash as createHash2 } from "node:crypto";
-import { accessSync, chmodSync as chmodSync2, constants as constants2, copyFileSync as copyFileSync2, existsSync as existsSync3, lstatSync as lstatSync2, mkdirSync, mkdtempSync, readFileSync as readFileSync2, readdirSync, readlinkSync, realpathSync as realpathSync2, rmSync, symlinkSync, unlinkSync as unlinkSync2 } from "node:fs";
+import { accessSync, chmodSync as chmodSync2, constants as constants2, copyFileSync as copyFileSync2, cpSync, existsSync as existsSync3, lstatSync as lstatSync2, mkdirSync, mkdtempSync, readFileSync as readFileSync2, readdirSync, readlinkSync, realpathSync as realpathSync2, renameSync, rmSync, symlinkSync, unlinkSync as unlinkSync2, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname as dirname2, join as join2, relative, resolve, sep } from "node:path";
+import { basename, dirname as dirname2, isAbsolute, join as join2, relative, resolve, sep } from "node:path";
 import { gunzipSync } from "node:zlib";
 
 // packages/rn-dev-agent-core/dist/experience/runner-diagnostics.js
@@ -10961,6 +10962,335 @@ function assertRunnerSnapshotCacheBinding(snapshotRoot, cacheRoot) {
     throw new RunnerCacheUnavailableError("cache", cacheErrno(error));
   }
 }
+var testWdaToolchainFingerprint;
+function wdaToolchainFingerprint() {
+  if (testWdaToolchainFingerprint !== void 0)
+    return testWdaToolchainFingerprint;
+  try {
+    const probe = spawnSync("xcodebuild", ["-version"], { encoding: "utf8", timeout: 15e3 });
+    const match = /Xcode\s+(\S+)[\s\S]*Build version\s+(\S+)/.exec(probe.stdout ?? "");
+    return probe.status === 0 && match && /^[\w.]+$/.test(match[1]) && /^[\w.]+$/.test(match[2]) ? `xcode-${match[1]}-${match[2]}` : null;
+  } catch {
+    return null;
+  }
+}
+function persistentWdaStoreBuildsRoot(platformKey = nodePlatformKey(), fingerprint = wdaToolchainFingerprint()) {
+  if (!fingerprint || !pinArchiveCoords(platformKey))
+    return null;
+  const versionsRoot = runnerCacheVersionsRoot();
+  const components = [
+    join2(versionsRoot, `.wda-store-${MAESTRO_RUNNER_PIN.version}`),
+    join2(versionsRoot, `.wda-store-${MAESTRO_RUNNER_PIN.version}`, platformKey),
+    join2(versionsRoot, `.wda-store-${MAESTRO_RUNNER_PIN.version}`, platformKey, fingerprint),
+    join2(versionsRoot, `.wda-store-${MAESTRO_RUNNER_PIN.version}`, platformKey, fingerprint, "wda-builds")
+  ];
+  for (const component of components) {
+    try {
+      const stat = lstatSync2(component);
+      if (!stat.isDirectory() || stat.isSymbolicLink())
+        return null;
+    } catch {
+      break;
+    }
+  }
+  return components[3];
+}
+var testWdaPlutil;
+function runWdaPlutil(args) {
+  if (process.platform !== "darwin" && !testWdaPlutil)
+    return null;
+  try {
+    const result = testWdaPlutil ? testWdaPlutil(args) : spawnSync("plutil", [...args], { encoding: "utf8", timeout: 15e3 });
+    return result.status === 0 ? result.stdout ?? "" : null;
+  } catch {
+    return null;
+  }
+}
+function readWdaXctestrun(xctestrunPath) {
+  const json2 = runWdaPlutil(["-convert", "json", "-o", "-", xctestrunPath]);
+  if (json2 === null)
+    return null;
+  try {
+    const plist = JSON.parse(json2);
+    return plist !== null && typeof plist === "object" && !Array.isArray(plist) ? plist : null;
+  } catch {
+    return null;
+  }
+}
+function asWdaPlistRecord(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value) ? value : null;
+}
+function forEachWdaTestTarget(plist, visit) {
+  const configurations = plist.TestConfigurations;
+  if (Array.isArray(configurations)) {
+    for (const configuration of configurations) {
+      const configurationRecord = asWdaPlistRecord(configuration);
+      if (!configurationRecord)
+        continue;
+      const targets = configurationRecord.TestTargets;
+      if (!Array.isArray(targets))
+        continue;
+      for (const target of targets) {
+        const targetRecord = asWdaPlistRecord(target);
+        if (targetRecord)
+          visit(targetRecord);
+      }
+    }
+    return;
+  }
+  for (const [key, target] of Object.entries(plist)) {
+    const targetRecord = asWdaPlistRecord(target);
+    if (key !== "__xctestrun_metadata__" && targetRecord)
+      visit(targetRecord);
+  }
+}
+function findWdaTestTarget(plist) {
+  const configurations = plist.TestConfigurations;
+  if (Array.isArray(configurations)) {
+    for (const configuration of configurations) {
+      const targets = asWdaPlistRecord(configuration)?.TestTargets;
+      if (!Array.isArray(targets))
+        continue;
+      for (const target of targets) {
+        const targetRecord = asWdaPlistRecord(target);
+        if (targetRecord && (targetRecord.TestTargetName === "WebDriverAgentRunner" || targetRecord.BlueprintName === "WebDriverAgentRunner")) {
+          return targetRecord;
+        }
+      }
+    }
+    return null;
+  }
+  return asWdaPlistRecord(plist.WebDriverAgentRunner);
+}
+function hasInjectedWdaPort(plist) {
+  let found = false;
+  forEachWdaTestTarget(plist, (target) => {
+    const environment = target.EnvironmentVariables;
+    if (environment !== null && typeof environment === "object" && !Array.isArray(environment) && Object.hasOwn(environment, "USE_PORT")) {
+      found = true;
+    }
+  });
+  return found;
+}
+function isWithinWdaKey(keyDir, candidate) {
+  const path = relative(keyDir, candidate);
+  return path === "" || path !== ".." && !path.startsWith(`..${sep}`) && !isAbsolute(path);
+}
+function isContainedWdaProductTree(keyDir, products) {
+  const lexicalKey = resolve(keyDir);
+  const realKey = realpathSync2(keyDir);
+  const visit = (directory) => {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const path = join2(directory, entry.name);
+      const stat = lstatSync2(path);
+      if (stat.isSymbolicLink()) {
+        const target = readlinkSync(path);
+        if (isAbsolute(target) || !isWithinWdaKey(lexicalKey, resolve(directory, target)) || !isWithinWdaKey(realKey, realpathSync2(path))) {
+          return false;
+        }
+      } else if (stat.isDirectory() && !visit(path)) {
+        return false;
+      }
+    }
+    return true;
+  };
+  return visit(products);
+}
+function resolveWdaProductReference(reference, products, testHost) {
+  if (typeof reference !== "string")
+    return null;
+  if (reference.startsWith("__TESTROOT__/")) {
+    return resolve(products, reference.slice("__TESTROOT__/".length));
+  }
+  if (testHost && reference.startsWith("__TESTHOST__/")) {
+    return resolve(testHost, reference.slice("__TESTHOST__/".length));
+  }
+  return null;
+}
+function readCompleteWdaBuildManifest(keyDir) {
+  try {
+    const derivedData = join2(keyDir, "DerivedData");
+    const build = join2(derivedData, "Build");
+    const products = join2(build, "Products");
+    if (!isRealDirectory(keyDir) || !isRealDirectory(derivedData) || !isRealDirectory(build) || !isRealDirectory(products) || !isContainedWdaProductTree(keyDir, products)) {
+      return null;
+    }
+    const selected = readdirSync(products, { withFileTypes: true }).filter((entry) => entry.name.endsWith(".xctestrun")).sort((left, right) => left.name < right.name ? -1 : left.name > right.name ? 1 : 0)[0];
+    if (!selected?.isFile())
+      return null;
+    const selectedXctestrun = join2(products, selected.name);
+    const plist = readWdaXctestrun(selectedXctestrun);
+    const target = plist && findWdaTestTarget(plist);
+    if (!target)
+      return null;
+    const testHost = resolveWdaProductReference(target.TestHostPath, products);
+    if (!testHost)
+      return null;
+    const hostPath = relative(products, testHost).split(sep);
+    if (hostPath.length !== 2 || hostPath[1] !== "WebDriverAgentRunner-Runner.app" || !isRealDirectory(join2(products, hostPath[0])) || !isRealDirectory(testHost)) {
+      return null;
+    }
+    const executable = lstatSync2(join2(testHost, "WebDriverAgentRunner-Runner"));
+    if (!executable.isFile() || executable.isSymbolicLink() || (executable.mode & 73) === 0) {
+      return null;
+    }
+    const testBundle = resolveWdaProductReference(target.TestBundlePath, products, testHost);
+    if (!testBundle || !isWithinWdaKey(resolve(keyDir), testBundle) || !isRealDirectory(testBundle)) {
+      return null;
+    }
+    const bundleExecutable = lstatSync2(join2(testBundle, "WebDriverAgentRunner"));
+    if (!bundleExecutable.isFile() || bundleExecutable.isSymbolicLink() || (bundleExecutable.mode & 73) === 0) {
+      return null;
+    }
+    return { products, selectedXctestrun };
+  } catch {
+    return null;
+  }
+}
+function isCompleteWdaBuild(keyDir) {
+  return readCompleteWdaBuildManifest(keyDir) !== null;
+}
+function removeInjectedWdaPort(xctestrunPath) {
+  const plist = readWdaXctestrun(xctestrunPath);
+  if (!plist)
+    return false;
+  forEachWdaTestTarget(plist, (target) => {
+    const environment = target.EnvironmentVariables;
+    if (environment !== null && typeof environment === "object" && !Array.isArray(environment)) {
+      delete environment.USE_PORT;
+    }
+  });
+  writeFileSync(xctestrunPath, JSON.stringify(plist, null, 2));
+  return runWdaPlutil(["-convert", "xml1", xctestrunPath]) !== null;
+}
+function isRealDirectory(path) {
+  try {
+    const stat = lstatSync2(path);
+    return stat.isDirectory() && !stat.isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
+function copyReusableWdaBuild(sourceKey, stagedKey) {
+  const manifest = readCompleteWdaBuildManifest(sourceKey);
+  if (!manifest)
+    return false;
+  const sourceProducts = manifest.products;
+  const stagedProducts = join2(stagedKey, "DerivedData", "Build", "Products");
+  mkdirSync(dirname2(stagedProducts), { recursive: true });
+  cpSync(sourceProducts, stagedProducts, {
+    recursive: true,
+    mode: constants2.COPYFILE_FICLONE,
+    verbatimSymlinks: true
+  });
+  for (const entry of readdirSync(stagedProducts, { withFileTypes: true })) {
+    if (entry.isFile() && entry.name.endsWith(".xctestrun") && !removeInjectedWdaPort(join2(stagedProducts, entry.name))) {
+      return false;
+    }
+  }
+  return isCompleteWdaBuild(stagedKey);
+}
+function isReusableStoredWdaBuild(keyDir) {
+  try {
+    if (!isCompleteWdaBuild(keyDir))
+      return false;
+    const keyEntries = readdirSync(keyDir, { withFileTypes: true });
+    const derivedData = keyEntries[0];
+    if (keyEntries.length !== 1 || derivedData?.name !== "DerivedData" || !derivedData.isDirectory()) {
+      return false;
+    }
+    const derivedDataEntries = readdirSync(join2(keyDir, "DerivedData"), { withFileTypes: true });
+    const build = derivedDataEntries[0];
+    if (derivedDataEntries.length !== 1 || build?.name !== "Build" || !build.isDirectory()) {
+      return false;
+    }
+    const buildEntries = readdirSync(join2(keyDir, "DerivedData", "Build"), {
+      withFileTypes: true
+    });
+    const productsEntry = buildEntries[0];
+    if (buildEntries.length !== 1 || productsEntry?.name !== "Products" || !productsEntry.isDirectory()) {
+      return false;
+    }
+    const products = join2(keyDir, "DerivedData", "Build", "Products");
+    return readdirSync(products, { withFileTypes: true }).filter((entry) => entry.name.endsWith(".xctestrun")).every((entry) => {
+      if (!entry.isFile())
+        return false;
+      const plist = readWdaXctestrun(join2(products, entry.name));
+      return plist !== null && !hasInjectedWdaPort(plist);
+    });
+  } catch {
+    return false;
+  }
+}
+function seedRunnerSnapshotCacheFromStore(cacheRoot, fingerprint) {
+  let seeded = 0;
+  try {
+    const storeBuilds = persistentWdaStoreBuildsRoot(nodePlatformKey(), fingerprint);
+    if (!storeBuilds)
+      return 0;
+    const target = join2(cacheRoot, "wda-builds");
+    for (const entry of readdirSync(storeBuilds, { withFileTypes: true })) {
+      if (!entry.isDirectory())
+        continue;
+      const sourceKey = join2(storeBuilds, entry.name);
+      if (!isCompleteWdaBuild(sourceKey))
+        continue;
+      mkdirSync(target, { recursive: true });
+      const stagedKey = join2(target, `.seed-${entry.name}`);
+      try {
+        if (copyReusableWdaBuild(sourceKey, stagedKey)) {
+          renameSync(stagedKey, join2(target, entry.name));
+          seeded += 1;
+        } else {
+          rmSync(stagedKey, { recursive: true, force: true });
+        }
+      } catch {
+        try {
+          rmSync(stagedKey, { recursive: true, force: true });
+        } catch {
+        }
+      }
+    }
+  } catch {
+  }
+  return seeded;
+}
+function publishRunnerSnapshotCacheToStore(cacheRoot, fingerprint) {
+  let published = 0;
+  try {
+    const spawnBuilds = join2(cacheRoot, "wda-builds");
+    const storeBuilds = persistentWdaStoreBuildsRoot(nodePlatformKey(), fingerprint);
+    if (!storeBuilds)
+      return 0;
+    for (const entry of readdirSync(spawnBuilds, { withFileTypes: true })) {
+      if (!entry.isDirectory() || entry.name.startsWith("."))
+        continue;
+      const sourceKey = join2(spawnBuilds, entry.name);
+      if (!isCompleteWdaBuild(sourceKey))
+        continue;
+      const storeKey = join2(storeBuilds, entry.name);
+      if (isReusableStoredWdaBuild(storeKey))
+        continue;
+      mkdirSync(storeBuilds, { recursive: true, mode: 448 });
+      const stage = mkdtempSync(join2(storeBuilds, ".stage-"));
+      try {
+        const stagedKey = join2(stage, entry.name);
+        if (copyReusableWdaBuild(sourceKey, stagedKey)) {
+          if (existsSync3(storeKey)) {
+            const evicted = join2(stage, "evicted");
+            renameSync(storeKey, evicted);
+          }
+          renameSync(stagedKey, storeKey);
+          published += 1;
+        }
+      } finally {
+        rmSync(stage, { recursive: true, force: true });
+      }
+    }
+  } catch {
+  }
+  return published;
+}
 function provisionRunnerSnapshotCache(snapshotRoot, testHooks = {}, setOwnedCacheRoot = () => {
 }) {
   const cacheRoot = expectedRunnerCacheRoot(snapshotRoot);
@@ -11017,6 +11347,7 @@ async function withImmediatePinnedRunner(runnerPath, resolveStatus, execute, pla
   if (!expectedSha256) {
     throw new Error("RUNNER_PIN_CHANGED: runner checksum is unavailable for this platform.");
   }
+  const wdaStoreFingerprint = platform === "ios" ? wdaToolchainFingerprint() : null;
   const snapshotRoot = mkdtempSync(join2(runnerCacheVersionsRoot(), `.spawn-${MAESTRO_RUNNER_PIN.version}-`));
   let cacheRoot = null;
   recordRunnerDiagnostic("spawn-begin", {
@@ -11081,8 +11412,12 @@ async function withImmediatePinnedRunner(runnerPath, resolveStatus, execute, pla
       }
     }
     chmodSync2(snapshotRoot, 320);
-    if (cacheRoot)
+    if (cacheRoot) {
       assertRunnerSnapshotCacheBinding(snapshotRoot, cacheRoot);
+      recordRunnerDiagnostic("cache-seed", {
+        seededBuilds: seedRunnerSnapshotCacheFromStore(cacheRoot, wdaStoreFingerprint)
+      });
+    }
     const openedRunner = lstatSync2(snapshotRunner);
     recordRunnerDiagnostic("runner-exec-begin", { runnerPinVersion: MAESTRO_RUNNER_PIN.version });
     if (platform === "ios") {
@@ -11096,6 +11431,12 @@ async function withImmediatePinnedRunner(runnerPath, resolveStatus, execute, pla
       "--"
     ]);
   } finally {
+    if (cacheRoot) {
+      const currentWdaFingerprint = platform === "ios" ? wdaToolchainFingerprint() : null;
+      recordRunnerDiagnostic("cache-publish", {
+        publishedBuilds: wdaStoreFingerprint !== null && currentWdaFingerprint === wdaStoreFingerprint ? publishRunnerSnapshotCacheToStore(cacheRoot, wdaStoreFingerprint) : 0
+      });
+    }
     try {
       chmodSync2(snapshotRoot, 448);
       for (const entry of readdirSync(snapshotRoot, { recursive: true, withFileTypes: true })) {
@@ -11329,10 +11670,10 @@ function parseProducesMap(raw) {
 
 // packages/rn-dev-agent-core/dist/domain/action-store.js
 import { existsSync as existsSync9, lstatSync as lstatSync7, readFileSync as readFileSync8, statSync as statSync4, unlinkSync as unlinkSync5 } from "node:fs";
-import { basename as basename4, dirname as dirname9, isAbsolute as isAbsolute4, join as join10, relative as relative3, resolve as resolve5, sep as sep6 } from "node:path";
+import { basename as basename4, dirname as dirname9, isAbsolute as isAbsolute5, join as join10, relative as relative3, resolve as resolve5, sep as sep6 } from "node:path";
 
 // packages/rn-dev-agent-core/dist/domain/sidecar-io.js
-import { existsSync as existsSync4, readFileSync as readFileSync4, writeFileSync, mkdirSync as mkdirSync3, statSync } from "node:fs";
+import { existsSync as existsSync4, readFileSync as readFileSync4, writeFileSync as writeFileSync2, mkdirSync as mkdirSync3, statSync } from "node:fs";
 import { join as join5, dirname as dirname4 } from "node:path";
 
 // packages/rn-dev-agent-core/dist/session/runtime-paths.js
@@ -11394,7 +11735,7 @@ function loadOrInitSidecar(yamlFilePath, now = () => /* @__PURE__ */ new Date())
 
 // packages/rn-dev-agent-core/dist/domain/atomic-writer.js
 init_process_birth();
-import { writeFileSync as writeFileSync2, renameSync, statSync as statSync2, mkdirSync as mkdirSync4, existsSync as existsSync5, unlinkSync as unlinkSync3, readdirSync as readdirSync2, openSync as openSync2, closeSync as closeSync2, chmodSync as chmodSync4, fstatSync as fstatSync2, lstatSync as lstatSync4, readFileSync as readFileSync5, linkSync, constants as constants3 } from "node:fs";
+import { writeFileSync as writeFileSync3, renameSync as renameSync2, statSync as statSync2, mkdirSync as mkdirSync4, existsSync as existsSync5, unlinkSync as unlinkSync3, readdirSync as readdirSync2, openSync as openSync2, closeSync as closeSync2, chmodSync as chmodSync4, fstatSync as fstatSync2, lstatSync as lstatSync4, readFileSync as readFileSync5, linkSync, constants as constants3 } from "node:fs";
 import { dirname as dirname5, basename as basename2 } from "node:path";
 var FUTURE_MTIME_BUFFER_MS = 1e3;
 var ORPHAN_MAX_AGE_MS = 5 * 60 * 1e3;
@@ -11444,7 +11785,7 @@ function withPairWriteLock(yamlPath, operation, acquisitionPrecondition) {
   const ownerPath = `${dirname5(yamlPath)}/.rn-action-write-owner.${generateTmpStamp()}`;
   const owner = currentLockOwner();
   const lockFd = openSync2(ownerPath, "wx", 384);
-  writeFileSync2(lockFd, `${JSON.stringify(owner)}
+  writeFileSync3(lockFd, `${JSON.stringify(owner)}
 `, "utf8");
   const deadline = Date.now() + ACTION_WRITE_LOCK_TIMEOUT_MS;
   let acquired = false;
@@ -11686,19 +12027,19 @@ function cleanupOrphans(yamlPath, sidecarPath) {
 var atomicWriter = {
   /** Underlying `fs.writeFileSync(path, content, 'utf8')`. */
   _writeFile(path, content) {
-    writeFileSync2(path, content, "utf8");
+    writeFileSync3(path, content, "utf8");
   },
   _writeFileWithMode(path, content, mode) {
     const fd = openSync2(path, "wx", mode);
     try {
-      writeFileSync2(fd, content, "utf8");
+      writeFileSync3(fd, content, "utf8");
     } finally {
       closeSync2(fd);
     }
   },
   /** Underlying `fs.renameSync(from, to)`. */
   _rename(from, to) {
-    renameSync(from, to);
+    renameSync2(from, to);
   },
   /** Underlying `fs.statSync(path).mtimeMs`. */
   _statMtimeMs(path) {
@@ -11880,7 +12221,7 @@ function assertWithinDir(child, baseDir) {
 init_process_birth();
 import { execFileSync as execFileSync2 } from "node:child_process";
 import { lstatSync as lstatSync5 } from "node:fs";
-import { isAbsolute as isAbsolute2, join as join6 } from "node:path";
+import { isAbsolute as isAbsolute3, join as join6 } from "node:path";
 function createUnfollowedFileSnapshot(directoryPath, directoryIdentity) {
   return { directoryPath, directoryIdentity, fileIdentities: /* @__PURE__ */ new Map() };
 }
@@ -12066,7 +12407,7 @@ function readUnfollowedFiles(directoryPath, identity, relativePaths, expectedIde
       throw new Error("Selected file identities did not match the requested paths.");
     }
     const entries = relativePaths.map((relativePath, index) => {
-      if (isAbsolute2(relativePath) || relativePath.split("/").some((component) => !component || component === "." || component === "..")) {
+      if (isAbsolute3(relativePath) || relativePath.split("/").some((component) => !component || component === "." || component === "..")) {
         throw new Error(`Invalid relative path: ${relativePath}.`);
       }
       if (expectedIdentities) {
@@ -12482,9 +12823,9 @@ function projectRootFromYaml(yamlFilePath) {
 }
 
 // packages/rn-dev-agent-core/dist/session/worktree-inheritance.js
-import { spawnSync } from "node:child_process";
-import { closeSync as closeSync3, constants as constants4, existsSync as existsSync8, fstatSync as fstatSync3, lstatSync as lstatSync6, mkdirSync as mkdirSync7, openSync as openSync3, readFileSync as readFileSync7, readlinkSync as readlinkSync2, realpathSync as realpathSync4, renameSync as renameSync2, statSync as statSync3, symlinkSync as symlinkSync2, unlinkSync as unlinkSync4 } from "node:fs";
-import { dirname as dirname8, isAbsolute as isAbsolute3, join as join9, relative as relative2, resolve as resolve4, sep as sep5 } from "node:path";
+import { spawnSync as spawnSync2 } from "node:child_process";
+import { closeSync as closeSync3, constants as constants4, existsSync as existsSync8, fstatSync as fstatSync3, lstatSync as lstatSync6, mkdirSync as mkdirSync7, openSync as openSync3, readFileSync as readFileSync7, readlinkSync as readlinkSync2, realpathSync as realpathSync4, renameSync as renameSync3, statSync as statSync3, symlinkSync as symlinkSync2, unlinkSync as unlinkSync4 } from "node:fs";
+import { dirname as dirname8, isAbsolute as isAbsolute4, join as join9, relative as relative2, resolve as resolve4, sep as sep5 } from "node:path";
 
 // packages/rn-dev-agent-core/dist/session/worktree-repair-remedy.js
 var WORKTREE_REPAIR_ENTRY = '"${CLAUDE_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}/rn-dev-agent-core/dist/worktree-inheritance.js"';
@@ -12522,7 +12863,7 @@ function gitEnvironment() {
   return env;
 }
 function git(cwd, args) {
-  const result = spawnSync("git", args, {
+  const result = spawnSync2("git", args, {
     cwd,
     encoding: "utf8",
     env: gitEnvironment(),
@@ -12543,7 +12884,7 @@ function contained(parent, child) {
   if (parent === child)
     return true;
   const rel = relative2(parent, child);
-  return rel !== "" && !rel.startsWith(`..${sep5}`) && rel !== ".." && !isAbsolute3(rel);
+  return rel !== "" && !rel.startsWith(`..${sep5}`) && rel !== ".." && !isAbsolute4(rel);
 }
 function toPosix(path) {
   return sep5 === "/" ? path : path.split(sep5).join("/");
@@ -12679,7 +13020,7 @@ function resolveWorktreeLayout(input) {
 }
 function classifySource(path, type, boundary) {
   const rel = relative2(boundary, path);
-  if (rel === ".." || rel.startsWith(`..${sep5}`) || isAbsolute3(rel)) {
+  if (rel === ".." || rel.startsWith(`..${sep5}`) || isAbsolute4(rel)) {
     return { state: "WRONG_TYPE" };
   }
   const paths = [boundary];
@@ -13032,7 +13373,7 @@ function isTracked(worktreeRoot, relativePath) {
   return listed.ok && listed.stdout.trim().length > 0;
 }
 function isIgnoreSafe(worktreeRoot, relativePath) {
-  const result = spawnSync("git", ["check-ignore", "--no-index", "-q", "--", relativePath], {
+  const result = spawnSync2("git", ["check-ignore", "--no-index", "-q", "--", relativePath], {
     cwd: worktreeRoot,
     encoding: "utf8",
     env: gitEnvironment(),
@@ -13260,11 +13601,11 @@ function actionFileExists(path) {
   return true;
 }
 function referencedActionPath(parentFile, reference) {
-  if (isAbsolute4(reference) || reference.split(/[\\/]/).includes("..") || !/\.ya?ml$/i.test(reference)) {
+  if (isAbsolute5(reference) || reference.split(/[\\/]/).includes("..") || !/\.ya?ml$/i.test(reference)) {
     return null;
   }
   const child = join10(dirname9(parentFile), reference);
-  if (child === ".." || child.startsWith(`..${sep6}`) || isAbsolute4(child))
+  if (child === ".." || child.startsWith(`..${sep6}`) || isAbsolute5(child))
     return null;
   return child;
 }
@@ -13441,7 +13782,7 @@ function captureActionFromContext(context, actionId) {
       flowRoot: snapshot.directory,
       readFileFn: (path) => {
         const child = relative3(snapshot.directory, path);
-        if (child === "" || child === ".." || child.startsWith(`..${sep6}`) || isAbsolute4(child)) {
+        if (child === "" || child === ".." || child.startsWith(`..${sep6}`) || isAbsolute5(child)) {
           throw new Error(`Refusing action flow outside ${snapshot.directory}.`);
         }
         const text2 = context.fileContents.get(child);
@@ -14024,7 +14365,7 @@ function filterWithBoundedRegex(candidates, pattern, timeoutMs = 500) {
 init_utils();
 import { execFile as execFileCb10 } from "node:child_process";
 import { promisify as promisify13 } from "node:util";
-import { existsSync as existsSync17, readFileSync as readFileSync15, writeFileSync as writeFileSync5 } from "node:fs";
+import { existsSync as existsSync17, readFileSync as readFileSync15, writeFileSync as writeFileSync6 } from "node:fs";
 import { tmpdir as tmpdir4 } from "node:os";
 import { basename as basename8, join as join23, dirname as dirname14 } from "node:path";
 init_agent_device_wrapper();
@@ -14065,7 +14406,7 @@ function chooseMaestroDispatch(inputs) {
 
 // packages/rn-dev-agent-core/dist/tools/resolve-ios-app-file.js
 import { execFileSync as execFileSync3 } from "node:child_process";
-import { existsSync as existsSync14, cpSync, rmSync as rmSync2, mkdirSync as mkdirSync10, readdirSync as readdirSync6, statSync as statSync6 } from "node:fs";
+import { existsSync as existsSync14, cpSync as cpSync2, rmSync as rmSync2, mkdirSync as mkdirSync10, readdirSync as readdirSync6, statSync as statSync6 } from "node:fs";
 import { tmpdir as tmpdir2 } from "node:os";
 import { join as join20, basename as basename7 } from "node:path";
 function flowUsesClearState(flowText) {
@@ -14080,7 +14421,7 @@ function defaultSnapshotApp(appPath) {
     try {
       execFileSync3("cp", ["-Rc", appPath, dest], { timeout: 3e4, stdio: "ignore" });
     } catch {
-      cpSync(appPath, dest, { recursive: true });
+      cpSync2(appPath, dest, { recursive: true });
     }
     return dest;
   } catch {
@@ -14598,7 +14939,7 @@ function maestroAuthorityRefusal(authority, underlyingError) {
 import { existsSync as existsSync16, readFileSync as readFileSync14, readdirSync as readdirSync7, realpathSync as realpathSync7, rmSync as rmSync3 } from "node:fs";
 import { createHash as createHash4 } from "node:crypto";
 import { tmpdir as tmpdir3 } from "node:os";
-import { isAbsolute as isAbsolute5, join as join22, sep as sep7 } from "node:path";
+import { isAbsolute as isAbsolute6, join as join22, sep as sep7 } from "node:path";
 var DIRECT_DEVICE_ID_RE = /^[A-Za-z0-9._:-]{1,256}$/;
 var DEVICE_ID_KEYS = ["udid", "deviceId", "serial"];
 var WEAK_DEVICE_ID_KEYS = ["id"];
@@ -14749,7 +15090,7 @@ function readStructuredFlowArtifact(reportDir, previous) {
     if (typeof flow.dataFile !== "string" || flow.dataFile.length === 0)
       return unfinalized;
     const normalizedDataFile = flow.dataFile;
-    if (isAbsolute5(normalizedDataFile) || !/^flows\/[^/\\]+$/.test(normalizedDataFile)) {
+    if (isAbsolute6(normalizedDataFile) || !/^flows\/[^/\\]+$/.test(normalizedDataFile)) {
       return unfinalized;
     }
     const realDataFile = realpathSync7(join22(reportDir, normalizedDataFile));
@@ -16236,7 +16577,7 @@ function createMaestroRunHandler(deps = {}) {
           proofDomain: reactOnlyProof ? "react-tree" : "partitioned"
         });
       }
-      writeFileSync5(flowFile, validatedContent, "utf-8");
+      writeFileSync6(flowFile, validatedContent, "utf-8");
       if (isLoginMetadata(semanticActionMeta) && !loginPostconditionId(validatedCommands)) {
         return failResult("Refusing login replay without a final positive post-submit testID assertion. End the flow with assertVisible.id or extendedWaitUntil.visible.id.", "ASSERTION_FAILED", { proofDomain: "react-tree", postcondition: "missing" });
       }
@@ -16470,7 +16811,7 @@ function createMaestroRunHandler(deps = {}) {
         clearTimeout(deadlineTimer);
       }
     }
-    writeFileSync5(flowFile, validatedContent, "utf-8");
+    writeFileSync6(flowFile, validatedContent, "utf-8");
     const dispatch = selectDispatch({ platform, flowHasHideKeyboard });
     if ("error" in dispatch) {
       return failResult(dispatch.error);
@@ -16658,7 +16999,7 @@ function createMaestroRunHandler(deps = {}) {
         };
         try {
           const stageResult = await (async () => {
-            writeFileSync5(flowFile, buildMaestroFlow(headerAppId ? { appId: headerAppId } : {}, [...commands]), "utf-8");
+            writeFileSync6(flowFile, buildMaestroFlow(headerAppId ? { appId: headerAppId } : {}, [...commands]), "utf-8");
             const executeOnce = async (beforeDispatch) => {
               if (flowDeadline - now() <= 0) {
                 const error = new Error("Maestro flow timeout exhausted before the next stage");
@@ -17070,7 +17411,7 @@ function createMaestroRunHandler(deps = {}) {
     } finally {
       clearTimeout(flowAbortTimer);
       try {
-        writeFileSync5(flowFile, validatedContent, "utf-8");
+        writeFileSync6(flowFile, validatedContent, "utf-8");
       } finally {
         disposeRunnerReportDir(runnerReportDir);
       }
@@ -17093,7 +17434,7 @@ async function diagnose(json2) {
   _resetEngineStatusForTest();
   const status = await getEngineStatus();
   const report = doctorPinnedRunner(status, nodePlatformKey());
-  const runtimeProbe = spawnSync2("xcrun", ["simctl", "list", "devices", "--json"], {
+  const runtimeProbe = spawnSync3("xcrun", ["simctl", "list", "devices", "--json"], {
     encoding: "utf8",
     timeout: 5e3
   });
@@ -17123,7 +17464,7 @@ async function diagnose(json2) {
 }
 function install() {
   const script = ensureScriptPath();
-  const result = spawnSync2("bash", [script], { stdio: "inherit" });
+  const result = spawnSync3("bash", [script], { stdio: "inherit" });
   return result.status === 0 ? 0 : 1;
 }
 function migrate(root2, json2) {
