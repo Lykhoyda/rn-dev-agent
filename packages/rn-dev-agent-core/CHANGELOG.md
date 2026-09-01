@@ -1,5 +1,14 @@
 # rn-dev-agent-core
 
+## 1.0.1
+
+### Patch Changes
+
+- 7911ebd: Recognize a modal-hosted testID as frontmost when its React return chain threads through the modal host fiber's alternate, instead of refusing it as behind the active modal.
+- 7911ebd: Re-prove the exact CDP session target before completing a partitioned native segment's deferred origin, so a passing native prefix survives the runner park/resume handoff into the React-tree suffix instead of failing with an empty before-first-step envelope.
+- 7911ebd: Resume id-based iOS action waits through the React tree with Maestro-compatible timed visibility semantics.
+- d30f866: Reuse completed WebDriverAgent builds across maestro-runner spawns through a toolchain-fingerprinted persistent store with atomic publication, removing the ~75 s per-invocation WDA rebuild while keeping per-spawn cache isolation, corruption fallback, and cold-build behavior.
+
 ## 1.0.0
 
 ### Major Changes
