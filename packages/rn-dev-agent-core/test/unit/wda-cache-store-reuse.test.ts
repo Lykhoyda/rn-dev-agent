@@ -64,6 +64,10 @@ function wdaTestBundlePath(keyDir: string): string {
   return join(wdaTestHostApp(keyDir), 'PlugIns', 'WebDriverAgentRunner.xctest');
 }
 
+function wdaTestBundleExecutable(keyDir: string): string {
+  return join(wdaTestBundlePath(keyDir), 'WebDriverAgentRunner');
+}
+
 function wdaXctestrunPath(keyDir: string): string {
   return join(
     keyDir,
@@ -100,6 +104,8 @@ function writeCompleteWdaBuild(keyDir: string, port?: number): void {
   const app = join(products, 'Debug-iphonesimulator', 'WebDriverAgentRunner-Runner.app');
   mkdirSync(app, { recursive: true });
   mkdirSync(wdaTestBundlePath(keyDir), { recursive: true });
+  writeFileSync(wdaTestBundleExecutable(keyDir), 'binary');
+  chmodSync(wdaTestBundleExecutable(keyDir), 0o755);
   writeFileSync(wdaXctestrunPath(keyDir), wdaXctestrun(port));
   const executable = wdaTestHostExecutable(keyDir);
   writeFileSync(executable, 'binary');
@@ -153,7 +159,7 @@ after(() => {
   _setWdaPlutilForTest(undefined);
 });
 
-test('isCompleteWdaBuild requires the xctestrun and the test-host executable', () => {
+test('isCompleteWdaBuild requires runnable WDA host and bundle executables', () => {
   const root = mkdtempSync(join(tmpdir(), 'wda-complete-'));
   try {
     const keyDir = join(root, WDA_KEY);
@@ -175,6 +181,36 @@ test('isCompleteWdaBuild requires the xctestrun and the test-host executable', (
     rmSync(testBundle, { recursive: true });
     assert.equal(isCompleteWdaBuild(keyDir), false, 'a missing referenced product is incomplete');
     mkdirSync(testBundle, { recursive: true });
+    assert.equal(isCompleteWdaBuild(keyDir), false, 'an empty test bundle is incomplete');
+    rmSync(testBundle, { recursive: true });
+    writeFileSync(testBundle, 'not a bundle');
+    assert.equal(isCompleteWdaBuild(keyDir), false, 'a regular file is not a test bundle');
+    rmSync(testBundle);
+    mkdirSync(testBundle);
+    writeFileSync(wdaTestBundleExecutable(keyDir), 'binary');
+    chmodSync(wdaTestBundleExecutable(keyDir), 0o644);
+    assert.equal(
+      isCompleteWdaBuild(keyDir),
+      false,
+      'a mode-stripped bundle runner is not runnable',
+    );
+    chmodSync(wdaTestBundleExecutable(keyDir), 0o755);
+    assert.equal(isCompleteWdaBuild(keyDir), true);
+    rmSync(wdaTestBundleExecutable(keyDir));
+    symlinkSync(
+      relative(wdaTestBundlePath(keyDir), wdaTestHostExecutable(keyDir)),
+      wdaTestBundleExecutable(keyDir),
+    );
+    assert.equal(isCompleteWdaBuild(keyDir), false, 'a symlink is not a bundle runner');
+    rmSync(wdaTestBundleExecutable(keyDir));
+    writeFileSync(wdaTestBundleExecutable(keyDir), 'binary');
+    chmodSync(wdaTestBundleExecutable(keyDir), 0o755);
+    const linkedTestBundle = join(wdaTestHostApp(keyDir), 'LinkedWebDriverAgentRunner.xctest');
+    renameSync(testBundle, linkedTestBundle);
+    symlinkSync(relative(dirname(testBundle), linkedTestBundle), testBundle);
+    assert.equal(isCompleteWdaBuild(keyDir), false, 'the test bundle must be a real directory');
+    rmSync(testBundle);
+    renameSync(linkedTestBundle, testBundle);
     assert.equal(isCompleteWdaBuild(keyDir), true);
 
     const frameworks = join(wdaTestHostApp(keyDir), 'Frameworks');
@@ -382,6 +418,16 @@ test(
         /USE_PORT|8447|8558/,
       );
 
+      // A toolchain change after seeding refuses publication under the new fingerprint.
+      await runIos((cacheLink) => {
+        assert.equal(isCompleteWdaBuild(join(cacheLink, 'wda-builds', WDA_KEY)), true);
+        _setWdaToolchainFingerprintForTest('xcode-27.0-99Z99z');
+      });
+      const changedDuringSpawnStore = persistentWdaStoreBuildsRoot();
+      assert.ok(changedDuringSpawnStore);
+      assert.equal(existsSync(join(changedDuringSpawnStore!, WDA_KEY)), false);
+      _setWdaToolchainFingerprintForTest('xcode-26.5-23F81a');
+
       // The per-spawn caches are still removed; only the store persists.
       const versionsRoot = join(cache, 'maestro-runner');
       const leftovers = readdirSync(versionsRoot).filter(
@@ -409,25 +455,14 @@ test(
       assert.deepEqual(readdirSync(versionsRoot).sort(), rootBefore);
       _setWdaToolchainFingerprintForTest('xcode-26.5-23F81a');
 
-      // Control: a corrupt store artifact is not seeded and is replaced on the
-      // next complete publish instead of being consumed.
-      rmSync(
-        join(
-          storeBuilds!,
-          WDA_KEY,
-          'DerivedData',
-          'Build',
-          'Products',
-          'Debug-iphonesimulator',
-          'WebDriverAgentRunner-Runner.app',
-          'WebDriverAgentRunner-Runner',
-        ),
-      );
+      // A damaged bundle runner is replaced by the next complete cold build.
+      chmodSync(wdaTestBundleExecutable(storeKey), 0o644);
       await runIos((cacheLink) => {
         assert.equal(existsSync(join(cacheLink, 'wda-builds', WDA_KEY)), false);
         writeCompleteWdaBuild(join(cacheLink, 'wda-builds', WDA_KEY));
       });
       assert.equal(isCompleteWdaBuild(join(storeBuilds!, WDA_KEY)), true);
+      assert.notEqual(statSync(wdaTestBundleExecutable(storeKey)).mode & 0o111, 0);
 
       // Control: an unreadable store never masks the runner result — the run
       // still succeeds cold and best-effort persistence swallows the failure.

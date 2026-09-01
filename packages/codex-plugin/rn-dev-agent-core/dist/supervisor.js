@@ -71799,8 +71799,7 @@ function wdaToolchainFingerprint() {
     return null;
   }
 }
-function persistentWdaStoreBuildsRoot(platformKey = nodePlatformKey()) {
-  const fingerprint = wdaToolchainFingerprint();
+function persistentWdaStoreBuildsRoot(platformKey = nodePlatformKey(), fingerprint = wdaToolchainFingerprint()) {
   if (!fingerprint || !pinArchiveCoords(platformKey))
     return null;
   const versionsRoot = runnerCacheVersionsRoot();
@@ -71960,7 +71959,11 @@ function readCompleteWdaBuildManifest(keyDir) {
       return null;
     }
     const testBundle = resolveWdaProductReference(target.TestBundlePath, products, testHost);
-    if (!testBundle || !isWithinWdaKey(resolve12(keyDir), testBundle) || !existsSync24(testBundle)) {
+    if (!testBundle || !isWithinWdaKey(resolve12(keyDir), testBundle) || !isRealDirectory(testBundle)) {
+      return null;
+    }
+    const bundleExecutable = lstatSync12(join35(testBundle, "WebDriverAgentRunner"));
+    if (!bundleExecutable.isFile() || bundleExecutable.isSymbolicLink() || (bundleExecutable.mode & 73) === 0) {
       return null;
     }
     return { products, selectedXctestrun };
@@ -72043,10 +72046,10 @@ function isReusableStoredWdaBuild(keyDir) {
     return false;
   }
 }
-function seedRunnerSnapshotCacheFromStore(cacheRoot) {
+function seedRunnerSnapshotCacheFromStore(cacheRoot, fingerprint) {
   let seeded = 0;
   try {
-    const storeBuilds = persistentWdaStoreBuildsRoot();
+    const storeBuilds = persistentWdaStoreBuildsRoot(nodePlatformKey(), fingerprint);
     if (!storeBuilds)
       return 0;
     const target = join35(cacheRoot, "wda-builds");
@@ -72076,11 +72079,11 @@ function seedRunnerSnapshotCacheFromStore(cacheRoot) {
   }
   return seeded;
 }
-function publishRunnerSnapshotCacheToStore(cacheRoot) {
+function publishRunnerSnapshotCacheToStore(cacheRoot, fingerprint) {
   let published = 0;
   try {
     const spawnBuilds = join35(cacheRoot, "wda-builds");
-    const storeBuilds = persistentWdaStoreBuildsRoot();
+    const storeBuilds = persistentWdaStoreBuildsRoot(nodePlatformKey(), fingerprint);
     if (!storeBuilds)
       return 0;
     for (const entry of readdirSync8(spawnBuilds, { withFileTypes: true })) {
@@ -72168,6 +72171,7 @@ async function withImmediatePinnedRunner(runnerPath, resolveStatus, execute2, pl
   if (!expectedSha256) {
     throw new Error("RUNNER_PIN_CHANGED: runner checksum is unavailable for this platform.");
   }
+  const wdaStoreFingerprint = platform === "ios" ? wdaToolchainFingerprint() : null;
   const snapshotRoot = mkdtempSync2(join35(runnerCacheVersionsRoot(), `.spawn-${MAESTRO_RUNNER_PIN.version}-`));
   let cacheRoot = null;
   recordRunnerDiagnostic("spawn-begin", {
@@ -72235,7 +72239,7 @@ async function withImmediatePinnedRunner(runnerPath, resolveStatus, execute2, pl
     if (cacheRoot) {
       assertRunnerSnapshotCacheBinding(snapshotRoot, cacheRoot);
       recordRunnerDiagnostic("cache-seed", {
-        seededBuilds: seedRunnerSnapshotCacheFromStore(cacheRoot)
+        seededBuilds: seedRunnerSnapshotCacheFromStore(cacheRoot, wdaStoreFingerprint)
       });
     }
     const openedRunner = lstatSync12(snapshotRunner);
@@ -72252,8 +72256,9 @@ async function withImmediatePinnedRunner(runnerPath, resolveStatus, execute2, pl
     ]);
   } finally {
     if (cacheRoot) {
+      const currentWdaFingerprint = platform === "ios" ? wdaToolchainFingerprint() : null;
       recordRunnerDiagnostic("cache-publish", {
-        publishedBuilds: publishRunnerSnapshotCacheToStore(cacheRoot)
+        publishedBuilds: wdaStoreFingerprint !== null && currentWdaFingerprint === wdaStoreFingerprint ? publishRunnerSnapshotCacheToStore(cacheRoot, wdaStoreFingerprint) : 0
       });
     }
     try {
