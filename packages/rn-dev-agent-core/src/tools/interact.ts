@@ -104,7 +104,10 @@ export function createInteractHandler(getClient: () => CDPClient) {
     }
 
     if (parsed.error) {
-      return failResult(`Interact failed: ${parsed.error}`, pickDefined(parsed, REFUSAL_FIELDS));
+      const refusal = pickDefined(parsed, REFUSAL_FIELDS);
+      return parsed.code === 'ASSERTION_FAILED'
+        ? failResult(`Interact failed: ${parsed.error}`, 'ASSERTION_FAILED', refusal)
+        : failResult(`Interact failed: ${parsed.error}`, refusal);
     }
 
     // GH#250: a handler throw is an app-side failure, not a warning — the action

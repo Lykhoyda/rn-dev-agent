@@ -2,7 +2,7 @@
 // whenever the injected surface changes; it flows into the IIFE's freshness
 // check (__RN_AGENT.__v) AND the post-injection log line, so they can never
 // drift (the log previously hard-coded a stale "v11").
-export const HELPERS_VERSION = 57;
+export const HELPERS_VERSION = 58;
 
 export const INJECTED_HELPERS = `
 (function() {
@@ -2207,6 +2207,7 @@ export const INJECTED_HELPERS = `
       if (seen.has(current)) {
         return {
           error: 'TextInput designation interactivity resolution truncated',
+          code: 'ASSERTION_FAILED',
           testID: selector,
           focusOnly: true,
           truncated: true
@@ -2248,6 +2249,7 @@ export const INJECTED_HELPERS = `
     if (current) {
       return {
         error: 'TextInput designation interactivity resolution truncated',
+        code: 'ASSERTION_FAILED',
         testID: selector,
         focusOnly: true,
         truncated: true
@@ -2333,6 +2335,7 @@ export const INJECTED_HELPERS = `
     if (designationStack.length > 0) {
       return {
         error: 'TextInput designation resolution truncated',
+        code: 'ASSERTION_FAILED',
         testID: selector,
         focusOnly: true,
         truncated: true
@@ -2356,6 +2359,7 @@ export const INJECTED_HELPERS = `
       if (designationLineage.has(designationLineageFiber)) {
         return {
           error: 'TextInput designation resolution truncated',
+          code: 'ASSERTION_FAILED',
           testID: selector,
           focusOnly: true,
           truncated: true
@@ -2369,6 +2373,7 @@ export const INJECTED_HELPERS = `
     if (designationLineageFiber !== owner) {
       return {
         error: 'TextInput designation resolution truncated',
+        code: 'ASSERTION_FAILED',
         testID: selector,
         focusOnly: true,
         truncated: true

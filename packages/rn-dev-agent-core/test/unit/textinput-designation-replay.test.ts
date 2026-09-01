@@ -58,6 +58,7 @@ function replayFixture(
     branchedDuplicate?: boolean;
     inputHidden?: boolean;
     inputValue?: string;
+    oversizedDesignationSubtree?: boolean;
     beforeDesignatedTypeDispatch?: (fixture: {
       root: Fiber;
       input: Fiber;
@@ -97,6 +98,11 @@ function replayFixture(
   );
   if (options.branchedDuplicate) {
     append(wrapper ?? root, fiber('RCTView', { testID: 'email' }));
+  }
+  if (options.oversizedDesignationSubtree) {
+    for (let filler = 0; filler < 2_100; filler++) {
+      append(wrapper ?? root, fiber('RCTView', { testID: `filler-${filler}` }));
+    }
   }
   append(
     root,
@@ -222,6 +228,22 @@ test('replay designates a bare TextInput and types without press or focus dispat
   assert.equal(fixture.calls.press, 0);
   assert.deepEqual(fixture.calls.typed, ['person@example.test']);
   assert.equal(fixture.input.memoizedProps.value, 'person@example.test');
+});
+
+test('a truncated designation scan refuses the press as an unproven assertion', async () => {
+  const fixture = replayFixture({ wrapped: true, oversizedDesignationSubtree: true });
+
+  const error = await fixture.deps.pressByTestId('email').then(
+    () => null,
+    (thrown: unknown) => thrown,
+  );
+
+  assert.ok(error instanceof ReplayDispatchError, `expected a refusal, got ${String(error)}`);
+  assert.equal(error.code, 'ASSERTION_FAILED');
+  assert.match(error.message, /TextInput designation resolution truncated/);
+  assert.equal(fixture.calls.focus, 0);
+  assert.equal(fixture.calls.press, 0);
+  assert.deepEqual(fixture.calls.typed, []);
 });
 
 test('designation refuses a replacement input with the same selector and value shape', async () => {

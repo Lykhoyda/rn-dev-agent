@@ -51571,7 +51571,7 @@ async function detectBridge(client2, evaluate = (expression) => client2.evaluate
 init_logger();
 
 // packages/rn-dev-agent-core/dist/injected-helpers.js
-var HELPERS_VERSION = 57;
+var HELPERS_VERSION = 58;
 var INJECTED_HELPERS = `
 (function() {
   var __HELPERS_VERSION__ = ${HELPERS_VERSION};
@@ -53775,6 +53775,7 @@ var INJECTED_HELPERS = `
       if (seen.has(current)) {
         return {
           error: 'TextInput designation interactivity resolution truncated',
+          code: 'ASSERTION_FAILED',
           testID: selector,
           focusOnly: true,
           truncated: true
@@ -53816,6 +53817,7 @@ var INJECTED_HELPERS = `
     if (current) {
       return {
         error: 'TextInput designation interactivity resolution truncated',
+        code: 'ASSERTION_FAILED',
         testID: selector,
         focusOnly: true,
         truncated: true
@@ -53901,6 +53903,7 @@ var INJECTED_HELPERS = `
     if (designationStack.length > 0) {
       return {
         error: 'TextInput designation resolution truncated',
+        code: 'ASSERTION_FAILED',
         testID: selector,
         focusOnly: true,
         truncated: true
@@ -53924,6 +53927,7 @@ var INJECTED_HELPERS = `
       if (designationLineage.has(designationLineageFiber)) {
         return {
           error: 'TextInput designation resolution truncated',
+          code: 'ASSERTION_FAILED',
           testID: selector,
           focusOnly: true,
           truncated: true
@@ -53937,6 +53941,7 @@ var INJECTED_HELPERS = `
     if (designationLineageFiber !== owner) {
       return {
         error: 'TextInput designation resolution truncated',
+        code: 'ASSERTION_FAILED',
         testID: selector,
         focusOnly: true,
         truncated: true
@@ -83130,7 +83135,8 @@ function createInteractHandler(getClient2) {
       return failResult(`Interact returned non-JSON: ${result.value.slice(0, 200)}`);
     }
     if (parsed.error) {
-      return failResult(`Interact failed: ${parsed.error}`, pickDefined(parsed, REFUSAL_FIELDS));
+      const refusal = pickDefined(parsed, REFUSAL_FIELDS);
+      return parsed.code === "ASSERTION_FAILED" ? failResult(`Interact failed: ${parsed.error}`, "ASSERTION_FAILED", refusal) : failResult(`Interact failed: ${parsed.error}`, refusal);
     }
     if (parsed.action_executed && parsed.handler_error) {
       return failResult(`Action executed but handler threw: ${parsed.handler_error}`, {
