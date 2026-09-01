@@ -57,13 +57,14 @@ export function createLoginPrologueHandler(deps: LoginPrologueDependencies) {
       }
     };
 
-    const unresolved = (detail: string): ToolResult =>
+    const unresolved = (detail: string, writes?: Record<string, unknown>): ToolResult =>
       failResult(`cdp_login_prologue: ${detail}`, 'LOAD_FAILED', {
         role: ACTION_LOGIN_HELPER,
         alias: LOGIN_PROLOGUE_ALIAS,
+        ...(writes ? { writes } : {}),
       });
 
-    const missingAuthoritativeRunRecord = (): ToolResult =>
+    const missingAuthoritativeRunRecord = (writes?: Record<string, unknown>): ToolResult =>
       failResult(
         `cdp_login_prologue: ${LOGIN_PROLOGUE_ALIAS} reported success without a fresh passing RunRecord.`,
         'LOAD_FAILED',
@@ -72,6 +73,7 @@ export function createLoginPrologueHandler(deps: LoginPrologueDependencies) {
           alias: LOGIN_PROLOGUE_ALIAS,
           actionId: LOGIN_PROLOGUE_ALIAS,
           failureKind: 'AUTHORITATIVE_RUN_RECORD_MISSING',
+          ...(writes ? { writes } : {}),
         },
       );
 
@@ -121,7 +123,13 @@ export function createLoginPrologueHandler(deps: LoginPrologueDependencies) {
     const replayResult = await measure('replay', () => deps.runAction(replayArgs));
     const replay = parseEnvelope(replayResult);
     if (replay.ok !== true) return replayResult;
-    if (replay.data?.passed !== true) return missingAuthoritativeRunRecord();
+    const replayWrites =
+      replay.data?.writes &&
+      typeof replay.data.writes === 'object' &&
+      !Array.isArray(replay.data.writes)
+        ? (replay.data.writes as Record<string, unknown>)
+        : undefined;
+    if (replay.data?.passed !== true) return missingAuthoritativeRunRecord(replayWrites);
 
     const strictRunRecordId =
       typeof replay.data.strictRunRecordId === 'string'
@@ -142,10 +150,11 @@ export function createLoginPrologueHandler(deps: LoginPrologueDependencies) {
         `could not verify the exact ${LOGIN_PROLOGUE_ALIAS} learned action: ${
           error instanceof Error ? error.message : String(error)
         }`,
+        replayWrites,
       );
     }
     if (!freshRecord || freshRecord.status !== 'pass') {
-      return missingAuthoritativeRunRecord();
+      return missingAuthoritativeRunRecord(replayWrites);
     }
 
     const ended = now();
@@ -160,6 +169,7 @@ export function createLoginPrologueHandler(deps: LoginPrologueDependencies) {
       steps,
       inventory: { count: inventory.length, actionIds: inventory.map((entry) => entry.id) },
       runRecord: freshRecord,
+      ...(replayWrites ? { writes: replayWrites } : {}),
       actionResult: {
         transport: replay.data.transport,
         transportVersion: replay.data.transportVersion,

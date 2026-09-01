@@ -84438,15 +84438,17 @@ function createLoginPrologueHandler(deps) {
         });
       }
     };
-    const unresolved = (detail) => failResult(`cdp_login_prologue: ${detail}`, "LOAD_FAILED", {
+    const unresolved = (detail, writes) => failResult(`cdp_login_prologue: ${detail}`, "LOAD_FAILED", {
       role: ACTION_LOGIN_HELPER,
-      alias: LOGIN_PROLOGUE_ALIAS
+      alias: LOGIN_PROLOGUE_ALIAS,
+      ...writes ? { writes } : {}
     });
-    const missingAuthoritativeRunRecord = () => failResult(`cdp_login_prologue: ${LOGIN_PROLOGUE_ALIAS} reported success without a fresh passing RunRecord.`, "LOAD_FAILED", {
+    const missingAuthoritativeRunRecord = (writes) => failResult(`cdp_login_prologue: ${LOGIN_PROLOGUE_ALIAS} reported success without a fresh passing RunRecord.`, "LOAD_FAILED", {
       role: ACTION_LOGIN_HELPER,
       alias: LOGIN_PROLOGUE_ALIAS,
       actionId: LOGIN_PROLOGUE_ALIAS,
-      failureKind: "AUTHORITATIVE_RUN_RECORD_MISSING"
+      failureKind: "AUTHORITATIVE_RUN_RECORD_MISSING",
+      ...writes ? { writes } : {}
     });
     let action;
     try {
@@ -84478,8 +84480,9 @@ function createLoginPrologueHandler(deps) {
     const replay = parseEnvelope2(replayResult);
     if (replay.ok !== true)
       return replayResult;
+    const replayWrites = replay.data?.writes && typeof replay.data.writes === "object" && !Array.isArray(replay.data.writes) ? replay.data.writes : void 0;
     if (replay.data?.passed !== true)
-      return missingAuthoritativeRunRecord();
+      return missingAuthoritativeRunRecord(replayWrites);
     const strictRunRecordId = typeof replay.data.strictRunRecordId === "string" ? replay.data.strictRunRecordId : typeof replay.meta?.strictRunRecordId === "string" ? replay.meta.strictRunRecordId : void 0;
     let freshRecord;
     try {
@@ -84488,10 +84491,10 @@ function createLoginPrologueHandler(deps) {
         freshRecord = strictRunRecordId ? reloaded?.state.runHistory.find((record2) => record2.runId === strictRunRecordId) : void 0;
       });
     } catch (error2) {
-      return unresolved(`could not verify the exact ${LOGIN_PROLOGUE_ALIAS} learned action: ${error2 instanceof Error ? error2.message : String(error2)}`);
+      return unresolved(`could not verify the exact ${LOGIN_PROLOGUE_ALIAS} learned action: ${error2 instanceof Error ? error2.message : String(error2)}`, replayWrites);
     }
     if (!freshRecord || freshRecord.status !== "pass") {
-      return missingAuthoritativeRunRecord();
+      return missingAuthoritativeRunRecord(replayWrites);
     }
     const ended = now();
     const outcome = {
@@ -84505,6 +84508,7 @@ function createLoginPrologueHandler(deps) {
       steps,
       inventory: { count: inventory.length, actionIds: inventory.map((entry) => entry.id) },
       runRecord: freshRecord,
+      ...replayWrites ? { writes: replayWrites } : {},
       actionResult: {
         transport: replay.data.transport,
         transportVersion: replay.data.transportVersion,

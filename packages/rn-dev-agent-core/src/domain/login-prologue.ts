@@ -21,6 +21,7 @@ export interface LoginPrologueOutcome {
   steps: LoginPrologueStepTiming[];
   inventory: { count: number; actionIds: string[] };
   runRecord: RunRecord;
+  writes?: Record<string, unknown>;
   actionResult?: {
     transport?: unknown;
     transportVersion?: unknown;
