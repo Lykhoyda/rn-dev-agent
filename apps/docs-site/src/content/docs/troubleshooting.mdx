@@ -510,8 +510,9 @@ That directory is the runtime-state fallback for an unfenced compatibility proce
 For a fenced replay that wrote runtime state, read the exact sidecar from
 `data.writes.runtimeStatePath` on success or
 `meta.writes.runtimeStatePath` on failure. It resolves under
-`<state-home>/v2/sessions/<sessionId>/runtime/state/`, not the project. A fresh
-session intentionally starts at revision 1 with empty run and repair history;
-earlier sidecar histories and revisions are session-private and do not carry
-over. The tracked YAML lifecycle status is shared worktree knowledge, so later
-sessions still see an action that an earlier clean replay promoted to `active`.
+`<state-home>/v2/sessions/<sessionId>/runtime/state/`, not the project. With the
+current storage layout, a new fenced session starts at revision 1 with empty run
+and repair history and does not read sidecar history or revisions from an
+earlier session. The tracked YAML lifecycle status is shared worktree
+knowledge, so later sessions still see an action that an earlier clean replay
+promoted to `active`.

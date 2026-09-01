@@ -154,9 +154,9 @@ $rn-dev-agent:run-action mark-all-done --no-auto-repair    # surface the raw fai
    path is used only by an unfenced compatibility process. There is no
    `data.runRecord` in the response.
 
-   Sidecars are isolated by session. A fresh fenced session starts the action
-   at revision 1 with empty run and repair history; sidecar histories and
-   revisions from an earlier session do not carry over. Canonical lifecycle
+   With the current storage layout, a new fenced session starts the action at
+   revision 1 with empty run and repair history and does not read sidecar
+   history or revisions from an earlier session. Canonical lifecycle
    status remains shared worktree knowledge: if an earlier clean replay updated
    the tracked YAML to `active`, the new session sees that status without the
    earlier runtime history.
