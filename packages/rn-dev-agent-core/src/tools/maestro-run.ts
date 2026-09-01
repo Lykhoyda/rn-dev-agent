@@ -866,7 +866,7 @@ export function createMaestroRunHandler(
       const proofDomains: Array<'react-tree' | 'xctest-native'> = [];
       let nativeTransportVersion: unknown = null;
       let nativeOutput = '';
-      let retainedReactFocusId: string | undefined;
+      let retainedReactFocusId: string | null | undefined;
       try {
         for (const segment of iosProofPlan.segments) {
           if (controller.signal.aborted || deadline - now() <= 0) {
@@ -972,7 +972,8 @@ export function createMaestroRunHandler(
             );
           }
           let stageCursor = 0;
-          let reactFocusId = retainedReactFocusId ?? segment.initialReactFocusId;
+          let reactFocusId: string | null | undefined =
+            retainedReactFocusId === undefined ? segment.initialReactFocusId : retainedReactFocusId;
           const stageResults = await executeMaestroAuthorityStages(
             segment.commands,
             async (commands) => {
@@ -988,16 +989,16 @@ export function createMaestroRunHandler(
                   ...replayDependencies,
                   launchApp: async () => {},
                 },
-                { signal: controller.signal, initialFocusId: reactFocusId },
+                { signal: controller.signal, initialFocusId: reactFocusId ?? undefined },
               );
               if (!replay.passed) throw new ReactReplayFailure(replay, sourceIndices);
               for (const step of replay.steps) {
                 if (step.t === 'launch') reactFocusId = undefined;
                 if (step.t === 'tap' && step.target) {
-                  reactFocusId = step.focusOnly ? undefined : step.target;
+                  reactFocusId = step.focusOnly ? null : step.target;
                 }
               }
-              if (replay.finalFocusId === null) reactFocusId = undefined;
+              if (replay.finalFocusId === null) reactFocusId = null;
               return { replay, sourceIndices };
             },
             claimOrigin,

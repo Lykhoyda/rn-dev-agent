@@ -81734,6 +81734,7 @@ async function replayFlow(steps, dispatch, opts = {}) {
   let lastTapped = opts.initialFocusId ?? null;
   let pendingDesignation = null;
   let staleDesignation = null;
+  let consumedDesignationId = null;
   const sourceIndex = (i) => opts.sourceIndex ?? i + offset;
   const fail3 = (i, reason, failureCode, failureMeta) => ({
     passed: false,
@@ -81810,8 +81811,10 @@ async function replayFlow(steps, dispatch, opts = {}) {
           const designation = pendingDesignation;
           const target = designation?.id ?? lastTapped;
           if (!target)
-            return fail3(i, "inputText before any tapOn \u2014 no focus target");
+            return fail3(i, consumedDesignationId ? `the TextInput designation for "${consumedDesignationId}" was already consumed \u2014 tapOn the field again before typing` : "inputText before any tapOn \u2014 no focus target");
           pendingDesignation = null;
+          if (designation)
+            consumedDesignationId = designation.id;
           try {
             await dispatch.type(target, s.text, designation ? {
               focusOnlyDesignation: true,
@@ -82892,7 +82895,7 @@ function createMaestroRunHandler(deps = {}) {
             });
           }
           let stageCursor = 0;
-          let reactFocusId = retainedReactFocusId ?? segment.initialReactFocusId;
+          let reactFocusId = retainedReactFocusId === void 0 ? segment.initialReactFocusId : retainedReactFocusId;
           const stageResults = await executeMaestroAuthorityStages(segment.commands, async (commands) => {
             const sourceIndices = segment.sourceIndices.slice(stageCursor, stageCursor + commands.length);
             stageCursor += commands.length;
@@ -82900,18 +82903,18 @@ function createMaestroRunHandler(deps = {}) {
               ...replayDependencies,
               launchApp: async () => {
               }
-            }, { signal: controller.signal, initialFocusId: reactFocusId });
+            }, { signal: controller.signal, initialFocusId: reactFocusId ?? void 0 });
             if (!replay.passed)
               throw new ReactReplayFailure(replay, sourceIndices);
             for (const step of replay.steps) {
               if (step.t === "launch")
                 reactFocusId = void 0;
               if (step.t === "tap" && step.target) {
-                reactFocusId = step.focusOnly ? void 0 : step.target;
+                reactFocusId = step.focusOnly ? null : step.target;
               }
             }
             if (replay.finalFocusId === null)
-              reactFocusId = void 0;
+              reactFocusId = null;
             return { replay, sourceIndices };
           }, claimOrigin, completeOrigin, relaunchManagedApp, reproveManagedOrigin, { signal: controller.signal });
           retainedReactFocusId = reactFocusId;

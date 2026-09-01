@@ -279,6 +279,7 @@ export async function replayFlow(
   let lastTapped: string | null = opts.initialFocusId ?? null;
   let pendingDesignation: { id: string; token: string; index: number } | null = null;
   let staleDesignation: { id: string; index: number } | null = null;
+  let consumedDesignationId: string | null = null;
   const sourceIndex = (i: number): number => opts.sourceIndex ?? i + offset;
 
   const fail = (
@@ -363,8 +364,15 @@ export async function replayFlow(
         case 'type': {
           const designation = pendingDesignation;
           const target = designation?.id ?? lastTapped;
-          if (!target) return fail(i, 'inputText before any tapOn — no focus target');
+          if (!target)
+            return fail(
+              i,
+              consumedDesignationId
+                ? `the TextInput designation for "${consumedDesignationId}" was already consumed — tapOn the field again before typing`
+                : 'inputText before any tapOn — no focus target',
+            );
           pendingDesignation = null;
+          if (designation) consumedDesignationId = designation.id;
           try {
             await dispatch.type(
               target,

@@ -50,6 +50,7 @@ test('a TextInput designation is consumed only by the adjacent type step', async
 
   assert.equal(result.passed, false);
   assert.equal(result.failedStepIndex, 2);
+  assert.match(result.reason ?? '', /designation for "email" was already consumed/);
   assert.equal(result.steps[0].focusOnly, true);
   assert.deepEqual(calls, [
     ['press', 'email'],
@@ -128,7 +129,7 @@ test('an assertion cannot clear an unconsumed TextInput designation', async () =
   const result = await replayFlow(
     [
       { t: 'tap', id: 'email' },
-      { t: 'waitVisible', id: 'continue', timeoutMs: 0, evidenceType: 'assert' },
+      { t: 'waitVisible', id: 'continue', timeoutMs: 1_000, evidenceType: 'assert' },
     ],
     dispatch,
   );
