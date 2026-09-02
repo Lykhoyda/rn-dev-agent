@@ -2621,6 +2621,7 @@ export const INJECTED_HELPERS = `
           return {
             error: typeSourceEligibility.error,
             reason: typeSourceEligibility.reason,
+            code: 'INTERACTION_NOT_ACTUATED',
             component: typeTextFiberName(typeSource),
             testID: selector,
             handlerCalled: false
@@ -2632,6 +2633,7 @@ export const INJECTED_HELPERS = `
         return {
           error: typeCandidateEligibility.error,
           reason: typeCandidateEligibility.reason,
+          code: 'INTERACTION_NOT_ACTUATED',
           component: binding.component,
           testID: selector,
           handlerCalled: false
@@ -2910,6 +2912,11 @@ export const INJECTED_HELPERS = `
             ? f.type
             : (f.type.displayName || f.type.name))) || 'Unknown';
         };
+        // A real tap on a text field never reaches an ancestor Pressable, so designation wins over the walk.
+        if (opts.allowInputDesignation === true && opts.testID) {
+          var walkDesignation = designateTextInputPress(found, selector);
+          if (walkDesignation) return walkDesignation;
+        }
         var walkSources = walkUpMatches.length > 0 ? walkUpMatches : [found];
         var walkCandidates = [];
         for (var wi = 0; wi < walkSources.length; wi++) {
@@ -2933,10 +2940,6 @@ export const INJECTED_HELPERS = `
           }
         }
         if (walkCandidates.length === 0) {
-          if (opts.allowInputDesignation === true && opts.testID) {
-            var walkDesignation = designateTextInputPress(found, selector);
-            if (walkDesignation) return walkDesignation;
-          }
           return JSON.stringify({ error: 'Component has no onPress handler', component: walkFiberName(found), testID: selector, walkUpSearched: WALK_UP_MAX });
         }
         if (walkCandidates.length > 1) {

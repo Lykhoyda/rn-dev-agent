@@ -30590,6 +30590,12 @@ async function performReactTreeInput(testID, text, client2, signal, options = {}
         hint: "No text was entered. Refresh the snapshot (device_snapshot action=snapshot) and rebind the input before retrying."
       });
     }
+    if (dispatch.code) {
+      return failResult(`React-tree input "${testID}" refused: ${dispatch.error}`, dispatch.code, {
+        mutation: dispatch.mutation,
+        pathsTried
+      });
+    }
     return fillFailure("TEXT_ENTRY_UNVERIFIED", dispatch.mutation === "possible" ? `React-tree input "${testID}" may have mutated but its onChangeText result is unknown.` : `React-tree input "${testID}" has no verifiable controlled onChangeText path.`, { mutation: dispatch.mutation, pathsTried });
   }
   if (signal?.aborted) {
@@ -54189,6 +54195,7 @@ var INJECTED_HELPERS = `
           return {
             error: typeSourceEligibility.error,
             reason: typeSourceEligibility.reason,
+            code: 'INTERACTION_NOT_ACTUATED',
             component: typeTextFiberName(typeSource),
             testID: selector,
             handlerCalled: false
@@ -54200,6 +54207,7 @@ var INJECTED_HELPERS = `
         return {
           error: typeCandidateEligibility.error,
           reason: typeCandidateEligibility.reason,
+          code: 'INTERACTION_NOT_ACTUATED',
           component: binding.component,
           testID: selector,
           handlerCalled: false
@@ -54478,6 +54486,11 @@ var INJECTED_HELPERS = `
             ? f.type
             : (f.type.displayName || f.type.name))) || 'Unknown';
         };
+        // A real tap on a text field never reaches an ancestor Pressable, so designation wins over the walk.
+        if (opts.allowInputDesignation === true && opts.testID) {
+          var walkDesignation = designateTextInputPress(found, selector);
+          if (walkDesignation) return walkDesignation;
+        }
         var walkSources = walkUpMatches.length > 0 ? walkUpMatches : [found];
         var walkCandidates = [];
         for (var wi = 0; wi < walkSources.length; wi++) {
@@ -54501,10 +54514,6 @@ var INJECTED_HELPERS = `
           }
         }
         if (walkCandidates.length === 0) {
-          if (opts.allowInputDesignation === true && opts.testID) {
-            var walkDesignation = designateTextInputPress(found, selector);
-            if (walkDesignation) return walkDesignation;
-          }
           return JSON.stringify({ error: 'Component has no onPress handler', component: walkFiberName(found), testID: selector, walkUpSearched: WALK_UP_MAX });
         }
         if (walkCandidates.length > 1) {

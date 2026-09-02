@@ -205,10 +205,11 @@ alive for such callers.
 - React-tree replay presses (`createReplayPressByTestId` in
   `src/tools/cdp-replay-dispatch.ts`) opt into both `walkUp` and
   `allowInputDesignation` at the `InteractArgs` boundary. Inside the injected
-  helper the bounded ancestor walk runs first and TextInput designation is only
-  the zero-candidate fallback: a pressable-wrapped exact-ID input presses its
-  wrapper and the following `inputText` types into the exact input, while a bare
-  input keeps focus-only designation. Both orders are pinned by
+  helper TextInput designation runs first: an exact-ID editable input without
+  `onPress` is designated focus-only for the immediately following `inputText`,
+  even under a press wrapper, because a real tap on a text field never reaches an
+  ancestor Pressable. The bounded ancestor walk applies only when the exact
+  target is not such an input. Both orders are pinned by
   `test/unit/gh-869-replay-tap-type-walkup.test.ts` and
   `test/unit/textinput-designation-replay.test.ts`.
 - Exact-ID visibility in CDP/JS replay has exactly one owner: the injected

@@ -134,7 +134,7 @@ function otpFixture() {
   return { root, app, pressable, inputComposite, calls, inputHost };
 }
 
-test('#869 replay taps the Pressable-wrapped input by its exact testID, then types on that same input', async () => {
+test('#869 replay designates the Pressable-wrapped input by its exact testID, then types on that same input', async () => {
   const fixture = otpFixture();
   const deps = buildDeps(createAgent(fixture.root));
 
@@ -152,13 +152,41 @@ test('#869 replay taps the Pressable-wrapped input by its exact testID, then typ
       { t: 'type', target: 'otp_email', ok: true },
     ],
   );
-  assert.equal(fixture.calls.focus, 1, 'the wrapper onPress must fire exactly once');
+  assert.equal(result.steps[0].focusOnly, true);
+  assert.equal(fixture.calls.focus, 0, 'the wrapper onPress must never fire for an input target');
   assert.deepEqual(fixture.calls.typed, ['0451']);
   assert.equal(
     fixture.inputHost.memoizedProps.value,
     '0451',
     'the type step must land on the exact matched input fiber',
   );
+  assert.equal(result.finalFocusId, null);
+});
+
+test('#869 replay walks up to the nearest pressable for a non-input exact-ID target', async () => {
+  let wrapperPresses = 0;
+  const root = makeFiber('Root');
+  const app = appendChild(root, makeFiber({ displayName: 'App' }));
+  const pressable = appendChild(
+    app,
+    makeFiber(
+      { displayName: 'Pressable' },
+      {
+        onPress: () => {
+          wrapperPresses += 1;
+        },
+      },
+    ),
+  );
+  const pressableHost = appendChild(pressable, makeFiber('RCTView'));
+  appendChild(pressableHost, makeFiber({ displayName: 'Text' }, { testID: 'submit_label' }));
+  const deps = buildDeps(createAgent(root));
+
+  const result = await runCdpReplayCommands([{ tapOn: { id: 'submit_label' } }], {}, deps);
+
+  assert.equal(result.passed, true, JSON.stringify(result));
+  assert.equal(wrapperPresses, 1);
+  assert.notEqual(result.steps[0].focusOnly, true);
 });
 
 test('#869 control: a directly pressable testID still presses without walking', async () => {
@@ -272,7 +300,7 @@ test('#869 control: an accessibility-disabled input refuses tap and type', async
   assert.deepEqual(fixture.calls.typed, []);
 });
 
-test('#869 control: walk-up rechecks a host input disabled after tree proof', async () => {
+test('#869 control: the live gate rechecks a host input disabled after tree proof', async () => {
   const fixture = otpFixture();
   let disabledBeforeInteract = false;
   const agent = createAgent(fixture.root, (expression) => {
@@ -318,7 +346,8 @@ test('#869 control: type rechecks a newly disabled selected host candidate', asy
   assert.equal(interactCalls, 2);
   assert.equal(result.passed, false);
   assert.equal(result.failedStepIndex, 1);
-  assert.equal(result.failureCode, 'TEXT_ENTRY_UNVERIFIED');
+  assert.equal(result.failureCode, 'INTERACTION_NOT_ACTUATED');
+  assert.match(result.reason ?? '', /disabled/);
   assert.equal(fixture.calls.focus, 1);
   assert.deepEqual(fixture.calls.typed, []);
 });
@@ -371,7 +400,8 @@ test('#869 control: exact-ID lineage pointer and hidden state refuse tap and typ
       assert.equal(tapResult.failureCode, 'INTERACTION_NOT_ACTUATED');
       assert.match(tapResult.reason ?? '', testCase.reason);
       assert.equal(typeResult.passed, false);
-      assert.equal(typeResult.failureCode, 'TEXT_ENTRY_UNVERIFIED');
+      assert.equal(typeResult.failureCode, 'INTERACTION_NOT_ACTUATED');
+      assert.match(typeResult.reason ?? '', testCase.reason);
       assert.equal(fixture.calls.focus, 0);
       assert.deepEqual(fixture.calls.typed, []);
     });
@@ -401,35 +431,44 @@ test('#869 control: a disabled nearest pressable refuses without walking farther
     ['accessibility state', { accessibilityState: { disabled: true } }],
   ] as const) {
     await t.test(label, async () => {
-      const fixture = otpFixture();
       let outerPresses = 0;
-      const outerPressable = makeFiber(
-        { displayName: 'Pressable' },
-        {
-          onPress: () => {
-            outerPresses += 1;
+      const root = makeFiber('Root');
+      const app = appendChild(root, makeFiber({ displayName: 'App' }));
+      const outerPressable = appendChild(
+        app,
+        makeFiber(
+          { displayName: 'Pressable' },
+          {
+            onPress: () => {
+              outerPresses += 1;
+            },
           },
-        },
+        ),
       );
-      fixture.app.child = outerPressable;
-      outerPressable.return = fixture.app;
-      outerPressable.child = fixture.pressable;
-      fixture.pressable.return = outerPressable;
-      Object.assign(fixture.pressable.memoizedProps, disabledProps);
-      const deps = buildDeps(createAgent(fixture.root));
+      let innerPresses = 0;
+      const innerPressable = appendChild(
+        outerPressable,
+        makeFiber(
+          { displayName: 'Pressable' },
+          {
+            ...disabledProps,
+            onPress: () => {
+              innerPresses += 1;
+            },
+          },
+        ),
+      );
+      const innerHost = appendChild(innerPressable, makeFiber('RCTView'));
+      appendChild(innerHost, makeFiber({ displayName: 'Text' }, { testID: 'submit_label' }));
+      const deps = buildDeps(createAgent(root));
 
-      const result = await runCdpReplayCommands(
-        [{ tapOn: { id: 'otp_email' } }, { inputText: '0451' }],
-        {},
-        deps,
-      );
+      const result = await runCdpReplayCommands([{ tapOn: { id: 'submit_label' } }], {}, deps);
 
       assert.equal(result.passed, false);
       assert.equal(result.failureCode, 'INTERACTION_NOT_ACTUATED');
       assert.match(result.reason ?? '', /disabled/);
-      assert.equal(fixture.calls.focus, 0);
-      assert.equal(outerPresses, 0);
-      assert.deepEqual(fixture.calls.typed, []);
+      assert.equal(innerPresses, 0);
+      assert.equal(outerPresses, 0, 'the walk must not skip past a disabled nearest pressable');
     });
   }
 });
