@@ -2,7 +2,7 @@
 // whenever the injected surface changes; it flows into the IIFE's freshness
 // check (__RN_AGENT.__v) AND the post-injection log line, so they can never
 // drift (the log previously hard-coded a stale "v11").
-export const HELPERS_VERSION = 50;
+export const HELPERS_VERSION = 59;
 
 export const INJECTED_HELPERS = `
 (function() {
@@ -2157,6 +2157,38 @@ export const INJECTED_HELPERS = `
       }
     }
 
+    function bindingDescendsFrom(descendant, ancestor) {
+      var cursor = descendant.candidateFiber.return;
+      var returnSeen = new WeakSet();
+      while (cursor) {
+        if (!consumeWork()) return false;
+        if (returnSeen.has(cursor)) {
+          state.truncated = true;
+          state.reason = 'cycle';
+          return false;
+        }
+        returnSeen.add(cursor);
+        if (sameTypeTextFiber(cursor, ancestor.candidateFiber)) return true;
+        cursor = cursor.return;
+      }
+      return false;
+    }
+
+    // RN TextInput renders one element as a composite fiber plus its host child sharing one handler; keep the deepest (press's match-deepest-only rule).
+    function collapseLineageBindings(all) {
+      return all.filter(function(binding) {
+        return !all.some(function(other) {
+          return !state.truncated
+            && other !== binding
+            && other.handler === binding.handler
+            && other.contract === binding.contract
+            && bindingDescendsFrom(other, binding);
+        });
+      });
+    }
+
+    if (!state.truncated && bindings.length > 1) bindings = collapseLineageBindings(bindings);
+
     if (state.truncated) return typeTextTruncation(state);
     if (bindings.length > 1) {
       var ambiguousHandler = bindings[0].contract === 'onChangeText:string' ? 'onChangeText' : 'onChange';
@@ -2192,7 +2224,267 @@ export const INJECTED_HELPERS = `
     };
   }
 
+  function textInputDesignationDisabled(candidateProps) {
+    return candidateProps.disabled === true
+      || candidateProps.editable === false
+      || candidateProps.readOnly === true
+      || (candidateProps.accessibilityState && candidateProps.accessibilityState.disabled === true);
+  }
+
+  function textInputDesignationInteractivity(input, selector) {
+    var current = input;
+    var seen = new WeakSet();
+    var depth = 0;
+    while (current && depth < 1000) {
+      if (seen.has(current)) {
+        return {
+          error: 'TextInput designation interactivity resolution truncated',
+          code: 'ASSERTION_FAILED',
+          testID: selector,
+          focusOnly: true,
+          truncated: true
+        };
+      }
+      seen.add(current);
+      if (isSubtreeInaccessible(current)) {
+        return {
+          error: 'TextInput designation target is hidden or occluded',
+          testID: selector,
+          focusOnly: true
+        };
+      }
+      var props = current.memoizedProps || {};
+      var pointerEvents = props.pointerEvents;
+      if (
+        current === input
+        && (pointerEvents === 'none' || pointerEvents === 'box-none')
+      ) {
+        return {
+          error: 'TextInput designation target is not user-interactable with pointerEvents="' + pointerEvents + '"',
+          testID: selector,
+          focusOnly: true
+        };
+      }
+      if (
+        current !== input
+        && (pointerEvents === 'none' || pointerEvents === 'box-only')
+      ) {
+        return {
+          error: 'TextInput designation target is blocked beneath pointerEvents="' + pointerEvents + '"',
+          testID: selector,
+          focusOnly: true
+        };
+      }
+      current = current.return;
+      depth++;
+    }
+    if (current) {
+      return {
+        error: 'TextInput designation interactivity resolution truncated',
+        code: 'ASSERTION_FAILED',
+        testID: selector,
+        focusOnly: true,
+        truncated: true
+      };
+    }
+    return null;
+  }
+
+  var activeTextInputDesignation = null;
+  var textInputDesignationSequence = 0;
+
+  function retainTextInputDesignation(input, selector) {
+    textInputDesignationSequence++;
+    var token = Date.now().toString(36) + '-' + textInputDesignationSequence.toString(36);
+    activeTextInputDesignation = {
+      token: token,
+      input: input,
+      selector: selector
+    };
+    return token;
+  }
+
+  function consumeTextInputDesignation(token, selector) {
+    var designation = activeTextInputDesignation;
+    if (
+      !designation
+      || designation.token !== token
+      || designation.selector !== selector
+    ) {
+      return null;
+    }
+    activeTextInputDesignation = null;
+    return designation;
+  }
+
+  function releaseInputDesignation(token) {
+    var released = !!activeTextInputDesignation
+      && activeTextInputDesignation.token === token;
+    if (released) activeTextInputDesignation = null;
+    return JSON.stringify({ released: released });
+  }
+
+  function isSameDesignatedInput(left, right) {
+    return !!left && !!right && (
+      left === right
+      || left.alternate === right
+      || right.alternate === left
+    );
+  }
+
+  function resolveTextInputDesignation(owner, selector) {
+    if (!owner) return null;
+    var designationStack = [owner];
+    var designationSeen = new WeakSet();
+    var designationMatches = [];
+    var designationInputs = [];
+    var designationWork = 0;
+    while (designationStack.length > 0 && designationWork < 2000) {
+      var designationFiber = designationStack.pop();
+      if (designationSeen.has(designationFiber)) continue;
+      designationSeen.add(designationFiber);
+      designationWork++;
+      var designationProps = designationFiber.memoizedProps || {};
+      var designationMatchesSelector = designationProps.testID === selector
+        || designationProps.nativeID === selector;
+      if (designationMatchesSelector) {
+        designationMatches.push(designationFiber);
+      }
+      if (
+        designationFiber.tag === 5
+        && typeof designationFiber.type === 'string'
+        && hostKind(designationFiber) === 'textinput'
+        && designationMatchesSelector
+      ) {
+        designationInputs.push(designationFiber);
+      }
+      var designationChild = designationFiber.child;
+      while (designationChild) {
+        designationStack.push(designationChild);
+        designationChild = designationChild.sibling;
+      }
+    }
+    if (designationStack.length > 0) {
+      return {
+        error: 'TextInput designation resolution truncated',
+        code: 'ASSERTION_FAILED',
+        testID: selector,
+        focusOnly: true,
+        truncated: true
+      };
+    }
+    if (designationInputs.length > 1) {
+      return {
+        error: 'Ambiguous TextInput designation target',
+        testID: selector,
+        count: designationInputs.length,
+        focusOnly: true
+      };
+    }
+    if (designationInputs.length !== 1) return null;
+    var designationInput = designationInputs[0];
+    var designationInputProps = designationInput.memoizedProps || {};
+    var designationLineage = new WeakSet();
+    var designationLineageFiber = designationInput;
+    var designationLineageDepth = 0;
+    while (designationLineageFiber && designationLineageDepth < 1000) {
+      if (designationLineage.has(designationLineageFiber)) {
+        return {
+          error: 'TextInput designation resolution truncated',
+          code: 'ASSERTION_FAILED',
+          testID: selector,
+          focusOnly: true,
+          truncated: true
+        };
+      }
+      designationLineage.add(designationLineageFiber);
+      if (designationLineageFiber === owner) break;
+      designationLineageFiber = designationLineageFiber.return;
+      designationLineageDepth++;
+    }
+    if (designationLineageFiber !== owner) {
+      return {
+        error: 'TextInput designation resolution truncated',
+        code: 'ASSERTION_FAILED',
+        testID: selector,
+        focusOnly: true,
+        truncated: true
+      };
+    }
+    for (var designationIndex = 0; designationIndex < designationMatches.length; designationIndex++) {
+      var designationMatch = designationMatches[designationIndex];
+      if (!designationLineage.has(designationMatch)) {
+        return {
+          error: 'Ambiguous TextInput designation target',
+          testID: selector,
+          count: designationMatches.length,
+          focusOnly: true
+        };
+      }
+      if (textInputDesignationDisabled(designationMatch.memoizedProps || {})) {
+        return {
+          error: 'TextInput is disabled or non-editable',
+          component: typeTextFiberName(designationInput),
+          testID: selector,
+          focusOnly: true
+        };
+      }
+    }
+    var designationInteractivity = textInputDesignationInteractivity(
+      designationInput,
+      selector
+    );
+    if (designationInteractivity) return designationInteractivity;
+    if (typeof designationInputProps.onPress === 'function') return null;
+    return {
+      success: true,
+      action: 'designateTextInput',
+      component: typeTextFiberName(designationInput),
+      testID: selector,
+      focusOnly: true,
+      inputFiber: designationInput
+    };
+  }
+
   function executeTypeTextTransaction(opts) {
+    var designationSelector = opts.testID;
+    var boundDesignation = null;
+    if (opts.requireLiveInputDesignation === true) {
+      boundDesignation = consumeTextInputDesignation(
+        opts.designationToken,
+        designationSelector
+      );
+      if (!boundDesignation) {
+        return {
+          error: 'TextInput designation no longer owns the exact host input',
+          code: 'INTERACTION_NOT_ACTUATED',
+          testID: designationSelector,
+          focusOnly: true,
+          handlerCalled: false
+        };
+      }
+      var liveFrontmost;
+      try {
+        liveFrontmost = JSON.parse(isTestIdFrontmost(designationSelector));
+      } catch (_) {
+        liveFrontmost = null;
+      }
+      if (!liveFrontmost || liveFrontmost.visible !== true) {
+        return {
+          error: liveFrontmost && liveFrontmost.reason
+            ? liveFrontmost.reason
+            : 'TextInput designation frontmost state is unreadable',
+          code: liveFrontmost && liveFrontmost.code
+            ? liveFrontmost.code
+            : (liveFrontmost && liveFrontmost.matchCount > 1
+              ? 'AMBIGUOUS_TESTID'
+              : 'ASSERTION_FAILED'),
+          testID: designationSelector,
+          focusOnly: true,
+          handlerCalled: false
+        };
+      }
+    }
     var resolution = resolveTypeTextTarget(opts);
     if (resolution.error) return resolution;
     var binding = resolution.binding;
@@ -2207,7 +2499,107 @@ export const INJECTED_HELPERS = `
         hint: 'Inspected every matching fiber and its bounded ownership graph — no typeable handler exists. Use cdp_component_tree to inspect the field, or pass the inner field testID directly.'
       };
     }
+    if (opts.requireLiveInputDesignation === true) {
+      var designationSourceProps = binding.sourceFiber.memoizedProps || {};
+      if (
+        typeof designationSelector !== 'string'
+        || !designationSelector
+        || hostKind(binding.sourceFiber) !== 'textinput'
+        || (
+          designationSourceProps.testID !== designationSelector
+          && designationSourceProps.nativeID !== designationSelector
+        )
+      ) {
+        return {
+          error: 'TextInput designation no longer resolves to the exact host input',
+          code: 'INTERACTION_NOT_ACTUATED',
+          testID: designationSelector,
+          focusOnly: true,
+          handlerCalled: false
+        };
+      }
+      var designationOwner = binding.sourceFiber;
+      var designationOwnerCursor = binding.sourceFiber.return;
+      var designationOwnerSeen = new WeakSet();
+      var designationOwnerDepth = 0;
+      while (designationOwnerCursor && designationOwnerDepth < 1000) {
+        if (designationOwnerSeen.has(designationOwnerCursor)) {
+          designationOwnerCursor = null;
+          designationOwnerDepth = 1000;
+          break;
+        }
+        designationOwnerSeen.add(designationOwnerCursor);
+        designationOwnerDepth++;
+        var designationOwnerProps = designationOwnerCursor.memoizedProps || {};
+        if (
+          designationOwnerProps.testID === designationSelector
+          || designationOwnerProps.nativeID === designationSelector
+        ) {
+          designationOwner = designationOwnerCursor;
+        }
+        designationOwnerCursor = designationOwnerCursor.return;
+      }
+      if (designationOwnerCursor || designationOwnerDepth >= 1000) {
+        return {
+          error: 'TextInput designation ownership resolution truncated',
+          code: 'ASSERTION_FAILED',
+          testID: designationSelector,
+          focusOnly: true,
+          handlerCalled: false
+        };
+      }
+      var liveDesignation = resolveTextInputDesignation(designationOwner, designationSelector);
+      if (!liveDesignation || liveDesignation.success !== true) {
+        if (!liveDesignation) {
+          return {
+            error: 'TextInput designation no longer resolves to the exact host input',
+            code: 'INTERACTION_NOT_ACTUATED',
+            testID: designationSelector,
+            focusOnly: true,
+            handlerCalled: false
+          };
+        }
+        liveDesignation.code = liveDesignation.truncated === true
+          ? 'ASSERTION_FAILED'
+          : 'INTERACTION_NOT_ACTUATED';
+        liveDesignation.handlerCalled = false;
+        return liveDesignation;
+      }
+      if (
+        !isSameDesignatedInput(boundDesignation.input, binding.sourceFiber)
+        || !isSameDesignatedInput(boundDesignation.input, liveDesignation.inputFiber)
+      ) {
+        return {
+          error: 'TextInput designation no longer owns the exact host input',
+          code: 'INTERACTION_NOT_ACTUATED',
+          testID: designationSelector,
+          focusOnly: true,
+          handlerCalled: false
+        };
+      }
+      var designationCandidateProps = binding.candidateFiber.memoizedProps || {};
+      if (textInputDesignationDisabled(designationCandidateProps)) {
+        return {
+          error: 'TextInput is disabled or non-editable',
+          code: 'INTERACTION_NOT_ACTUATED',
+          component: binding.component,
+          testID: designationSelector,
+          focusOnly: true,
+          handlerCalled: false
+        };
+      }
+      if (binding.controlled !== true) {
+        return {
+          error: 'TextInput designation is uncontrolled or unreadable',
+          code: 'INTERACTION_NOT_ACTUATED',
+          testID: designationSelector,
+          focusOnly: true,
+          handlerCalled: false
+        };
+      }
+    }
     var text = opts.text !== undefined ? opts.text : '';
+    if (boundDesignation) text = (binding.valueBefore || '') + text;
     try {
       if (binding.contract === 'onChangeText:string') binding.handler(text);
       else binding.handler({ nativeEvent: { text: text } });
@@ -2541,6 +2933,19 @@ export const INJECTED_HELPERS = `
 
       if (action === 'press') {
         if (typeof props.onPress !== 'function') {
+          if (opts.allowInputDesignation === true && opts.testID) {
+            var designation = resolveTextInputDesignation(found, selector);
+            if (designation) {
+              if (designation.success === true) {
+                designation.designationToken = retainTextInputDesignation(
+                  designation.inputFiber,
+                  selector
+                );
+                delete designation.inputFiber;
+              }
+              return JSON.stringify(designation);
+            }
+          }
           return JSON.stringify({ error: 'Component has no onPress handler', component: typeName, testID: selector });
         }
         if (opts.value !== undefined) {
@@ -4075,6 +4480,7 @@ export const INJECTED_HELPERS = `
     getStoreState: getStoreState,
     getComponentState: getComponentState,
     readInputValue: readInputValue,
+    releaseInputDesignation: releaseInputDesignation,
     dispatchAction: dispatchAction,
     getErrors: getErrors,
     clearErrors: clearErrors,

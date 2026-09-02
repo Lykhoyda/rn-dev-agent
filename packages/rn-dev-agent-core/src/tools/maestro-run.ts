@@ -454,6 +454,7 @@ interface PartitionedReplayStep {
   index: number;
   name: string;
   verb: string;
+  focusOnly?: true;
   status: 'pass' | 'fail';
   durationMs: number;
 }
@@ -865,7 +866,7 @@ export function createMaestroRunHandler(
       const proofDomains: Array<'react-tree' | 'xctest-native'> = [];
       let nativeTransportVersion: unknown = null;
       let nativeOutput = '';
-      let retainedReactFocusId: string | undefined;
+      let retainedReactFocusId: string | null | undefined;
       try {
         for (const segment of iosProofPlan.segments) {
           if (controller.signal.aborted || deadline - now() <= 0) {
@@ -971,7 +972,8 @@ export function createMaestroRunHandler(
             );
           }
           let stageCursor = 0;
-          let reactFocusId = retainedReactFocusId ?? segment.initialReactFocusId;
+          let reactFocusId: string | null | undefined =
+            retainedReactFocusId === undefined ? segment.initialReactFocusId : retainedReactFocusId;
           const stageResults = await executeMaestroAuthorityStages(
             segment.commands,
             async (commands) => {
@@ -987,13 +989,16 @@ export function createMaestroRunHandler(
                   ...replayDependencies,
                   launchApp: async () => {},
                 },
-                { signal: controller.signal, initialFocusId: reactFocusId },
+                { signal: controller.signal, initialFocusId: reactFocusId ?? undefined },
               );
               if (!replay.passed) throw new ReactReplayFailure(replay, sourceIndices);
               for (const step of replay.steps) {
                 if (step.t === 'launch') reactFocusId = undefined;
-                if (step.t === 'tap' && step.target) reactFocusId = step.target;
+                if (step.t === 'tap' && step.target) {
+                  reactFocusId = step.focusOnly ? null : step.target;
+                }
               }
+              if (replay.finalFocusId === null) reactFocusId = null;
               return { replay, sourceIndices };
             },
             claimOrigin,
@@ -1009,6 +1014,7 @@ export function createMaestroRunHandler(
                 index: sourceIndices[step.sourceIndex] ?? step.sourceIndex,
                 name: step.t,
                 verb: step.t,
+                ...(step.focusOnly ? { focusOnly: true as const } : {}),
                 status: step.ok ? 'pass' : 'fail',
                 durationMs: step.durationMs,
               });
@@ -1094,6 +1100,7 @@ export function createMaestroRunHandler(
                 sourceIndex?: number;
                 t?: unknown;
                 target?: unknown;
+                focusOnly?: unknown;
                 ok?: boolean;
                 durationMs?: number;
               };
@@ -1105,6 +1112,7 @@ export function createMaestroRunHandler(
                 name: String(record.t ?? 'unknown'),
                 verb: String(record.t ?? 'unknown'),
                 ...(record.target !== undefined ? { target: String(record.target) } : {}),
+                ...(record.focusOnly === true ? { focusOnly: true as const } : {}),
                 status: record.ok === false ? 'fail' : 'pass',
                 durationMs: Number(record.durationMs ?? 0),
               });
@@ -1122,6 +1130,7 @@ export function createMaestroRunHandler(
               index: failure.sourceIndices[step.sourceIndex] ?? step.sourceIndex,
               name: step.t,
               verb: step.t,
+              ...(step.focusOnly ? { focusOnly: true as const } : {}),
               status: step.ok ? 'pass' : 'fail',
               durationMs: step.durationMs,
             });

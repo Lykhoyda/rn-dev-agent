@@ -1282,6 +1282,7 @@ export async function performReactTreeInput(
   text: string,
   client: CDPClient | null,
   signal?: AbortSignal,
+  options: { designationToken?: string } = {},
 ): Promise<ToolResult> {
   const pathsTried = ['react-tree'];
   if (!client) {
@@ -1314,26 +1315,52 @@ export async function performReactTreeInput(
       return null;
     }
   };
-  const before = await readInput();
-  if (signal?.aborted) {
-    return fillFailure('TEXT_ENTRY_UNVERIFIED', 'React-tree input was cancelled before mutation.', {
-      mutation: 'none',
-      pathsTried,
-    });
+  const designated = typeof options.designationToken === 'string';
+  let requestedText = text;
+  if (!designated) {
+    const before = await readInput();
+    if (signal?.aborted) {
+      return fillFailure(
+        'TEXT_ENTRY_UNVERIFIED',
+        'React-tree input was cancelled before mutation.',
+        {
+          mutation: 'none',
+          pathsTried,
+        },
+      );
+    }
+    if (!before?.controlled) {
+      return fillFailure(
+        'TEXT_ENTRY_UNVERIFIED',
+        `React-tree input "${testID}" is uncontrolled or unreadable. Run this native text-entry check on a WDA-healthy runtime; secure masked native values are not plaintext proof.`,
+        { mutation: 'none', pathsTried },
+      );
+    }
+    requestedText = `${before.value ?? ''}${text}`;
   }
-  if (!before?.controlled) {
-    return fillFailure(
-      'TEXT_ENTRY_UNVERIFIED',
-      `React-tree input "${testID}" is uncontrolled or unreadable. Run this native text-entry check on a WDA-healthy runtime; secure masked native values are not plaintext proof.`,
-      { mutation: 'none', pathsTried },
-    );
-  }
-  const expected = `${before.value ?? ''}${text}`;
-  let dispatch: { handler: string } | { error: string; mutation: 'none' | 'possible' };
+  let dispatch:
+    | { handler: string; resultingText: string }
+    | {
+        error: string;
+        mutation: 'none' | 'possible';
+        code?: 'AMBIGUOUS_TESTID' | 'ASSERTION_FAILED' | 'INTERACTION_NOT_ACTUATED';
+        focusOnly?: true;
+      };
   try {
     const result = await client.evaluate(
       '__RN_AGENT.interact(' +
-        JSON.stringify({ action: 'typeText', testID, text: expected, verify: true }) +
+        JSON.stringify({
+          action: 'typeText',
+          testID,
+          text: requestedText,
+          verify: true,
+          ...(designated
+            ? {
+                requireLiveInputDesignation: true,
+                designationToken: options.designationToken,
+              }
+            : {}),
+        }) +
         ')',
     );
     if (result.error || typeof result.value !== 'string') {
@@ -1341,12 +1368,31 @@ export async function performReactTreeInput(
     } else {
       const parsed: {
         error?: string;
+        code?: unknown;
+        focusOnly?: boolean;
         handlerCalled?: string | false;
         controlled?: boolean;
+        text?: string;
       } = JSON.parse(result.value);
-      if (parsed.error) dispatch = { error: parsed.error, mutation: 'none' };
-      else if (typeof parsed.handlerCalled === 'string' && parsed.controlled !== undefined) {
-        dispatch = { handler: parsed.handlerCalled };
+      if (parsed.error) {
+        const designationCode =
+          parsed.code === 'AMBIGUOUS_TESTID' ||
+          parsed.code === 'ASSERTION_FAILED' ||
+          parsed.code === 'INTERACTION_NOT_ACTUATED'
+            ? parsed.code
+            : undefined;
+        dispatch = {
+          error: parsed.error,
+          mutation: 'none',
+          ...(designationCode ? { code: designationCode } : {}),
+          ...(parsed.focusOnly === true ? { focusOnly: true } : {}),
+        };
+      } else if (
+        typeof parsed.handlerCalled === 'string' &&
+        parsed.controlled !== undefined &&
+        typeof parsed.text === 'string'
+      ) {
+        dispatch = { handler: parsed.handlerCalled, resultingText: parsed.text };
       } else {
         dispatch = { error: 'dispatch result is inconclusive', mutation: 'possible' };
       }
@@ -1355,6 +1401,18 @@ export async function performReactTreeInput(
     dispatch = { error: 'dispatch result is unavailable', mutation: 'possible' };
   }
   if ('error' in dispatch) {
+    if (dispatch.focusOnly) {
+      return failResult(
+        `React-tree input "${testID}" refused: ${dispatch.error}`,
+        dispatch.code ?? 'TEXT_ENTRY_UNVERIFIED',
+        {
+          mutation: dispatch.mutation,
+          pathsTried,
+          focusOnly: true,
+          hint: 'No text was entered. Refresh the snapshot (device_snapshot action=snapshot) and rebind the input before retrying.',
+        },
+      );
+    }
     return fillFailure(
       'TEXT_ENTRY_UNVERIFIED',
       dispatch.mutation === 'possible'
@@ -1369,6 +1427,7 @@ export async function performReactTreeInput(
       pathsTried,
     });
   }
+  const expected = dispatch.resultingText;
   let verification: 'exact' | 'mismatch' | 'unreadable' = 'unreadable';
   let previous: { value: string | null; controlled: boolean } | null = null;
   let last: { value: string | null; controlled: boolean } | null = null;

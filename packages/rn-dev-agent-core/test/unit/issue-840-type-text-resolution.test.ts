@@ -144,6 +144,57 @@ test('typeText keeps the proven shallow wrapped-field path typeable', () => {
   assert.equal(leaf.memoizedProps.value, '');
 });
 
+test('typeText collapses a stock TextInput composite and host that share one onChangeText', () => {
+  const calls: string[] = [];
+  const onChangeText = (value: string) => {
+    calls.push(value);
+  };
+  const root = makeFiber('Root');
+  const userProps = { testID: 'login_email', value: 'a', editable: true, onChangeText };
+  const composite = appendChild(root, makeFiber({ displayName: 'TextInput' }, { ...userProps }));
+  composite.tag = 11;
+  const host = appendChild(
+    composite,
+    makeFiber('RCTSinglelineTextInputView', { ...userProps, onChange() {}, text: 'a' }),
+  );
+
+  const result = runInteract(root, { action: 'typeText', testID: 'login_email', text: 'b' });
+
+  assert.equal(result.success, true, JSON.stringify(result));
+  assert.equal(result.handlerCalled, 'onChangeText');
+  assert.equal(result.controlled, true);
+  assert.equal(result.valueBefore, 'a');
+  assert.match(String(result.resolvedFrom), /^RCTSinglelineTextInputView/);
+  assert.deepEqual(calls, ['b']);
+  assert.equal(host.memoizedProps.value, 'a');
+});
+
+test('typeText keeps a stock-shaped composite and host ambiguous when they own distinct onChangeText functions', () => {
+  const calls: string[] = [];
+  const outer = (value: string) => {
+    calls.push(`outer:${value}`);
+  };
+  const inner = (value: string) => {
+    calls.push(`inner:${value}`);
+  };
+  const root = makeFiber('Root');
+  const composite = appendChild(
+    root,
+    makeFiber({ displayName: 'TextInput' }, { testID: 'login_email', onChangeText: outer }),
+  );
+  composite.tag = 11;
+  appendChild(
+    composite,
+    makeFiber('RCTSinglelineTextInputView', { testID: 'login_email', onChangeText: inner }),
+  );
+
+  const result = runInteract(root, { action: 'typeText', testID: 'login_email', text: 'unsafe' });
+
+  assert.equal(result.error, 'Ambiguous typeText resolution');
+  assert.equal(result.count, 2);
+  assert.deepEqual(calls, []);
+});
+
 test('typeText searches every same-testID match and selects the sole typeable target', () => {
   const calls: string[] = [];
   const root = makeFiber('Root');

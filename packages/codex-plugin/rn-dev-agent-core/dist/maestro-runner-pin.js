@@ -15649,6 +15649,9 @@ async function replayFlow(steps, dispatch, opts = {}) {
   const offset = opts.indexOffset ?? 0;
   const trace = [];
   let lastTapped = opts.initialFocusId ?? null;
+  let pendingDesignation = null;
+  let staleDesignation = null;
+  let consumedDesignationId = null;
   const sourceIndex = (i) => opts.sourceIndex ?? i + offset;
   const fail = (i, reason, failureCode, failureMeta) => ({
     passed: false,
@@ -15663,10 +15666,32 @@ async function replayFlow(steps, dispatch, opts = {}) {
       throw new ReplayDispatchError("RUNNER_TIMEOUT", "React-tree replay exceeded its execution deadline");
     }
   };
+  const releaseDesignation = async (token2) => {
+    try {
+      await dispatch.releaseDesignation?.(token2);
+    } catch {
+    }
+  };
+  const releasePendingDesignation = async () => {
+    const designation = pendingDesignation;
+    pendingDesignation = null;
+    if (designation)
+      await releaseDesignation(designation.token);
+  };
   for (let i = 0; i < steps.length; i++) {
     const s = steps[i];
     const evidenceType = s.t === "waitVisible" ? s.evidenceType ?? s.t : s.t;
     const startedAt = Date.now();
+    let stepFocusOnly;
+    if (pendingDesignation && s.t !== "type") {
+      staleDesignation = staleDesignation ?? {
+        id: pendingDesignation.id,
+        index: pendingDesignation.index
+      };
+      const staleToken = pendingDesignation.token;
+      pendingDesignation = null;
+      await releaseDesignation(staleToken);
+    }
     try {
       requireNotAborted();
       switch (s.t) {
@@ -15681,26 +15706,46 @@ async function replayFlow(steps, dispatch, opts = {}) {
           });
           break;
         case "tap":
-          await dispatch.press(s.id);
+          const pressResult = await dispatch.press(s.id);
+          if (pressResult?.kind === "designation") {
+            lastTapped = null;
+            pendingDesignation = { id: s.id, token: pressResult.token, index: i };
+            stepFocusOnly = true;
+          } else {
+            lastTapped = s.id;
+          }
           requireNotAborted();
-          lastTapped = s.id;
           trace.push({
             sourceIndex: sourceIndex(i),
             t: s.t,
             target: s.id,
+            ...stepFocusOnly ? { focusOnly: stepFocusOnly } : {},
             ok: true,
             durationMs: Date.now() - startedAt
           });
           break;
         case "type": {
-          if (!lastTapped)
-            return fail(i, "inputText before any tapOn \u2014 no focus target");
-          await dispatch.type(lastTapped, s.text);
+          const designation = pendingDesignation;
+          const target = designation?.id ?? lastTapped;
+          if (!target)
+            return fail(i, consumedDesignationId ? `the TextInput designation for "${consumedDesignationId}" was already consumed \u2014 tapOn the field again before typing` : "inputText before any tapOn \u2014 no focus target");
+          pendingDesignation = null;
+          if (designation)
+            consumedDesignationId = designation.id;
+          try {
+            await dispatch.type(target, s.text, designation ? {
+              focusOnlyDesignation: true,
+              designationToken: designation.token
+            } : void 0);
+          } finally {
+            if (designation)
+              await releaseDesignation(designation.token);
+          }
           requireNotAborted();
           trace.push({
             sourceIndex: sourceIndex(i),
             t: s.t,
-            target: lastTapped,
+            target,
             ok: true,
             durationMs: Date.now() - startedAt
           });
@@ -15784,10 +15829,12 @@ async function replayFlow(steps, dispatch, opts = {}) {
       }
     } catch (e) {
       const waitedMs = Date.now() - startedAt;
+      await releasePendingDesignation();
       trace.push({
         sourceIndex: sourceIndex(i),
         t: evidenceType,
         target: "id" in s ? s.id : void 0,
+        ...stepFocusOnly ? { focusOnly: stepFocusOnly } : {},
         ok: false,
         durationMs: waitedMs
       });
@@ -15796,7 +15843,15 @@ async function replayFlow(steps, dispatch, opts = {}) {
     }
   }
   if (opts.signal?.aborted) {
+    await releasePendingDesignation();
     return fail(Math.max(0, steps.length - 1), "React-tree replay exceeded its execution deadline", "RUNNER_TIMEOUT");
+  }
+  const unconsumedDesignation = staleDesignation ?? pendingDesignation;
+  if (unconsumedDesignation) {
+    if (pendingDesignation) {
+      await releasePendingDesignation();
+    }
+    return fail(unconsumedDesignation.index, `TextInput designation for "${unconsumedDesignation.id}" must be followed immediately by inputText`, "INTERACTION_NOT_ACTUATED", { failedSelector: unconsumedDesignation.id, focusOnly: true });
   }
   return { passed: true, finalFocusId: lastTapped, steps: trace };
 }
@@ -16142,12 +16197,15 @@ function buildCdpDispatch(deps, signal) {
     async press(id) {
       await assertExactInteractable(id);
       requireNotAborted();
-      await deps.pressByTestId(id);
+      return deps.pressByTestId(id);
     },
-    async type(id, text) {
+    async type(id, text, context) {
       await assertExactInteractable(id);
       requireNotAborted();
-      await deps.typeByTestId(id, text);
+      await deps.typeByTestId(id, text, context);
+    },
+    async releaseDesignation(token2) {
+      await deps.releaseInputDesignation?.(token2);
     },
     async visibility(id) {
       await deps.treeFor(id);
@@ -16673,7 +16731,7 @@ function createMaestroRunHandler(deps = {}) {
             });
           }
           let stageCursor = 0;
-          let reactFocusId = retainedReactFocusId ?? segment.initialReactFocusId;
+          let reactFocusId = retainedReactFocusId === void 0 ? segment.initialReactFocusId : retainedReactFocusId;
           const stageResults = await executeMaestroAuthorityStages(segment.commands, async (commands) => {
             const sourceIndices = segment.sourceIndices.slice(stageCursor, stageCursor + commands.length);
             stageCursor += commands.length;
@@ -16681,15 +16739,18 @@ function createMaestroRunHandler(deps = {}) {
               ...replayDependencies,
               launchApp: async () => {
               }
-            }, { signal: controller.signal, initialFocusId: reactFocusId });
+            }, { signal: controller.signal, initialFocusId: reactFocusId ?? void 0 });
             if (!replay.passed)
               throw new ReactReplayFailure(replay, sourceIndices);
             for (const step of replay.steps) {
               if (step.t === "launch")
                 reactFocusId = void 0;
-              if (step.t === "tap" && step.target)
-                reactFocusId = step.target;
+              if (step.t === "tap" && step.target) {
+                reactFocusId = step.focusOnly ? null : step.target;
+              }
             }
+            if (replay.finalFocusId === null)
+              reactFocusId = null;
             return { replay, sourceIndices };
           }, claimOrigin, completeOrigin, relaunchManagedApp, reproveManagedOrigin, { signal: controller.signal });
           retainedReactFocusId = reactFocusId;
@@ -16699,6 +16760,7 @@ function createMaestroRunHandler(deps = {}) {
                 index: sourceIndices[step.sourceIndex] ?? step.sourceIndex,
                 name: step.t,
                 verb: step.t,
+                ...step.focusOnly ? { focusOnly: true } : {},
                 status: step.ok ? "pass" : "fail",
                 durationMs: step.durationMs
               });
@@ -16774,6 +16836,7 @@ function createMaestroRunHandler(deps = {}) {
                 name: String(record.t ?? "unknown"),
                 verb: String(record.t ?? "unknown"),
                 ...record.target !== void 0 ? { target: String(record.target) } : {},
+                ...record.focusOnly === true ? { focusOnly: true } : {},
                 status: record.ok === false ? "fail" : "pass",
                 durationMs: Number(record.durationMs ?? 0)
               });
@@ -16788,6 +16851,7 @@ function createMaestroRunHandler(deps = {}) {
               index: failure.sourceIndices[step.sourceIndex] ?? step.sourceIndex,
               name: step.t,
               verb: step.t,
+              ...step.focusOnly ? { focusOnly: true } : {},
               status: step.ok ? "pass" : "fail",
               durationMs: step.durationMs
             });

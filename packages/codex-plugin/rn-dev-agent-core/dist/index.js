@@ -30509,7 +30509,7 @@ async function performExactFill(args, _client, tiers) {
     verification
   });
 }
-async function performReactTreeInput(testID, text, client2, signal) {
+async function performReactTreeInput(testID, text, client2, signal, options = {}) {
   const pathsTried = ["react-tree"];
   if (!client2) {
     return fillFailure("TEXT_ENTRY_UNVERIFIED", `React-tree input "${testID}" cannot be verified because the authoritative bundle is unavailable.`, { mutation: "none", pathsTried });
@@ -30533,28 +30533,47 @@ async function performReactTreeInput(testID, text, client2, signal) {
       return null;
     }
   };
-  const before = await readInput();
-  if (signal?.aborted) {
-    return fillFailure("TEXT_ENTRY_UNVERIFIED", "React-tree input was cancelled before mutation.", {
-      mutation: "none",
-      pathsTried
-    });
+  const designated = typeof options.designationToken === "string";
+  let requestedText = text;
+  if (!designated) {
+    const before = await readInput();
+    if (signal?.aborted) {
+      return fillFailure("TEXT_ENTRY_UNVERIFIED", "React-tree input was cancelled before mutation.", {
+        mutation: "none",
+        pathsTried
+      });
+    }
+    if (!before?.controlled) {
+      return fillFailure("TEXT_ENTRY_UNVERIFIED", `React-tree input "${testID}" is uncontrolled or unreadable. Run this native text-entry check on a WDA-healthy runtime; secure masked native values are not plaintext proof.`, { mutation: "none", pathsTried });
+    }
+    requestedText = `${before.value ?? ""}${text}`;
   }
-  if (!before?.controlled) {
-    return fillFailure("TEXT_ENTRY_UNVERIFIED", `React-tree input "${testID}" is uncontrolled or unreadable. Run this native text-entry check on a WDA-healthy runtime; secure masked native values are not plaintext proof.`, { mutation: "none", pathsTried });
-  }
-  const expected = `${before.value ?? ""}${text}`;
   let dispatch;
   try {
-    const result = await client2.evaluate("__RN_AGENT.interact(" + JSON.stringify({ action: "typeText", testID, text: expected, verify: true }) + ")");
+    const result = await client2.evaluate("__RN_AGENT.interact(" + JSON.stringify({
+      action: "typeText",
+      testID,
+      text: requestedText,
+      verify: true,
+      ...designated ? {
+        requireLiveInputDesignation: true,
+        designationToken: options.designationToken
+      } : {}
+    }) + ")");
     if (result.error || typeof result.value !== "string") {
       dispatch = { error: "dispatch result is unavailable", mutation: "possible" };
     } else {
       const parsed = JSON.parse(result.value);
-      if (parsed.error)
-        dispatch = { error: parsed.error, mutation: "none" };
-      else if (typeof parsed.handlerCalled === "string" && parsed.controlled !== void 0) {
-        dispatch = { handler: parsed.handlerCalled };
+      if (parsed.error) {
+        const designationCode = parsed.code === "AMBIGUOUS_TESTID" || parsed.code === "ASSERTION_FAILED" || parsed.code === "INTERACTION_NOT_ACTUATED" ? parsed.code : void 0;
+        dispatch = {
+          error: parsed.error,
+          mutation: "none",
+          ...designationCode ? { code: designationCode } : {},
+          ...parsed.focusOnly === true ? { focusOnly: true } : {}
+        };
+      } else if (typeof parsed.handlerCalled === "string" && parsed.controlled !== void 0 && typeof parsed.text === "string") {
+        dispatch = { handler: parsed.handlerCalled, resultingText: parsed.text };
       } else {
         dispatch = { error: "dispatch result is inconclusive", mutation: "possible" };
       }
@@ -30563,6 +30582,14 @@ async function performReactTreeInput(testID, text, client2, signal) {
     dispatch = { error: "dispatch result is unavailable", mutation: "possible" };
   }
   if ("error" in dispatch) {
+    if (dispatch.focusOnly) {
+      return failResult(`React-tree input "${testID}" refused: ${dispatch.error}`, dispatch.code ?? "TEXT_ENTRY_UNVERIFIED", {
+        mutation: dispatch.mutation,
+        pathsTried,
+        focusOnly: true,
+        hint: "No text was entered. Refresh the snapshot (device_snapshot action=snapshot) and rebind the input before retrying."
+      });
+    }
     return fillFailure("TEXT_ENTRY_UNVERIFIED", dispatch.mutation === "possible" ? `React-tree input "${testID}" may have mutated but its onChangeText result is unknown.` : `React-tree input "${testID}" has no verifiable controlled onChangeText path.`, { mutation: dispatch.mutation, pathsTried });
   }
   if (signal?.aborted) {
@@ -30571,6 +30598,7 @@ async function performReactTreeInput(testID, text, client2, signal) {
       pathsTried
     });
   }
+  const expected = dispatch.resultingText;
   let verification = "unreadable";
   let previous = null;
   let last = null;
@@ -51543,7 +51571,7 @@ async function detectBridge(client2, evaluate = (expression) => client2.evaluate
 init_logger();
 
 // packages/rn-dev-agent-core/dist/injected-helpers.js
-var HELPERS_VERSION = 50;
+var HELPERS_VERSION = 59;
 var INJECTED_HELPERS = `
 (function() {
   var __HELPERS_VERSION__ = ${HELPERS_VERSION};
@@ -53697,6 +53725,38 @@ var INJECTED_HELPERS = `
       }
     }
 
+    function bindingDescendsFrom(descendant, ancestor) {
+      var cursor = descendant.candidateFiber.return;
+      var returnSeen = new WeakSet();
+      while (cursor) {
+        if (!consumeWork()) return false;
+        if (returnSeen.has(cursor)) {
+          state.truncated = true;
+          state.reason = 'cycle';
+          return false;
+        }
+        returnSeen.add(cursor);
+        if (sameTypeTextFiber(cursor, ancestor.candidateFiber)) return true;
+        cursor = cursor.return;
+      }
+      return false;
+    }
+
+    // RN TextInput renders one element as a composite fiber plus its host child sharing one handler; keep the deepest (press's match-deepest-only rule).
+    function collapseLineageBindings(all) {
+      return all.filter(function(binding) {
+        return !all.some(function(other) {
+          return !state.truncated
+            && other !== binding
+            && other.handler === binding.handler
+            && other.contract === binding.contract
+            && bindingDescendsFrom(other, binding);
+        });
+      });
+    }
+
+    if (!state.truncated && bindings.length > 1) bindings = collapseLineageBindings(bindings);
+
     if (state.truncated) return typeTextTruncation(state);
     if (bindings.length > 1) {
       var ambiguousHandler = bindings[0].contract === 'onChangeText:string' ? 'onChangeText' : 'onChange';
@@ -53732,7 +53792,267 @@ var INJECTED_HELPERS = `
     };
   }
 
+  function textInputDesignationDisabled(candidateProps) {
+    return candidateProps.disabled === true
+      || candidateProps.editable === false
+      || candidateProps.readOnly === true
+      || (candidateProps.accessibilityState && candidateProps.accessibilityState.disabled === true);
+  }
+
+  function textInputDesignationInteractivity(input, selector) {
+    var current = input;
+    var seen = new WeakSet();
+    var depth = 0;
+    while (current && depth < 1000) {
+      if (seen.has(current)) {
+        return {
+          error: 'TextInput designation interactivity resolution truncated',
+          code: 'ASSERTION_FAILED',
+          testID: selector,
+          focusOnly: true,
+          truncated: true
+        };
+      }
+      seen.add(current);
+      if (isSubtreeInaccessible(current)) {
+        return {
+          error: 'TextInput designation target is hidden or occluded',
+          testID: selector,
+          focusOnly: true
+        };
+      }
+      var props = current.memoizedProps || {};
+      var pointerEvents = props.pointerEvents;
+      if (
+        current === input
+        && (pointerEvents === 'none' || pointerEvents === 'box-none')
+      ) {
+        return {
+          error: 'TextInput designation target is not user-interactable with pointerEvents="' + pointerEvents + '"',
+          testID: selector,
+          focusOnly: true
+        };
+      }
+      if (
+        current !== input
+        && (pointerEvents === 'none' || pointerEvents === 'box-only')
+      ) {
+        return {
+          error: 'TextInput designation target is blocked beneath pointerEvents="' + pointerEvents + '"',
+          testID: selector,
+          focusOnly: true
+        };
+      }
+      current = current.return;
+      depth++;
+    }
+    if (current) {
+      return {
+        error: 'TextInput designation interactivity resolution truncated',
+        code: 'ASSERTION_FAILED',
+        testID: selector,
+        focusOnly: true,
+        truncated: true
+      };
+    }
+    return null;
+  }
+
+  var activeTextInputDesignation = null;
+  var textInputDesignationSequence = 0;
+
+  function retainTextInputDesignation(input, selector) {
+    textInputDesignationSequence++;
+    var token = Date.now().toString(36) + '-' + textInputDesignationSequence.toString(36);
+    activeTextInputDesignation = {
+      token: token,
+      input: input,
+      selector: selector
+    };
+    return token;
+  }
+
+  function consumeTextInputDesignation(token, selector) {
+    var designation = activeTextInputDesignation;
+    if (
+      !designation
+      || designation.token !== token
+      || designation.selector !== selector
+    ) {
+      return null;
+    }
+    activeTextInputDesignation = null;
+    return designation;
+  }
+
+  function releaseInputDesignation(token) {
+    var released = !!activeTextInputDesignation
+      && activeTextInputDesignation.token === token;
+    if (released) activeTextInputDesignation = null;
+    return JSON.stringify({ released: released });
+  }
+
+  function isSameDesignatedInput(left, right) {
+    return !!left && !!right && (
+      left === right
+      || left.alternate === right
+      || right.alternate === left
+    );
+  }
+
+  function resolveTextInputDesignation(owner, selector) {
+    if (!owner) return null;
+    var designationStack = [owner];
+    var designationSeen = new WeakSet();
+    var designationMatches = [];
+    var designationInputs = [];
+    var designationWork = 0;
+    while (designationStack.length > 0 && designationWork < 2000) {
+      var designationFiber = designationStack.pop();
+      if (designationSeen.has(designationFiber)) continue;
+      designationSeen.add(designationFiber);
+      designationWork++;
+      var designationProps = designationFiber.memoizedProps || {};
+      var designationMatchesSelector = designationProps.testID === selector
+        || designationProps.nativeID === selector;
+      if (designationMatchesSelector) {
+        designationMatches.push(designationFiber);
+      }
+      if (
+        designationFiber.tag === 5
+        && typeof designationFiber.type === 'string'
+        && hostKind(designationFiber) === 'textinput'
+        && designationMatchesSelector
+      ) {
+        designationInputs.push(designationFiber);
+      }
+      var designationChild = designationFiber.child;
+      while (designationChild) {
+        designationStack.push(designationChild);
+        designationChild = designationChild.sibling;
+      }
+    }
+    if (designationStack.length > 0) {
+      return {
+        error: 'TextInput designation resolution truncated',
+        code: 'ASSERTION_FAILED',
+        testID: selector,
+        focusOnly: true,
+        truncated: true
+      };
+    }
+    if (designationInputs.length > 1) {
+      return {
+        error: 'Ambiguous TextInput designation target',
+        testID: selector,
+        count: designationInputs.length,
+        focusOnly: true
+      };
+    }
+    if (designationInputs.length !== 1) return null;
+    var designationInput = designationInputs[0];
+    var designationInputProps = designationInput.memoizedProps || {};
+    var designationLineage = new WeakSet();
+    var designationLineageFiber = designationInput;
+    var designationLineageDepth = 0;
+    while (designationLineageFiber && designationLineageDepth < 1000) {
+      if (designationLineage.has(designationLineageFiber)) {
+        return {
+          error: 'TextInput designation resolution truncated',
+          code: 'ASSERTION_FAILED',
+          testID: selector,
+          focusOnly: true,
+          truncated: true
+        };
+      }
+      designationLineage.add(designationLineageFiber);
+      if (designationLineageFiber === owner) break;
+      designationLineageFiber = designationLineageFiber.return;
+      designationLineageDepth++;
+    }
+    if (designationLineageFiber !== owner) {
+      return {
+        error: 'TextInput designation resolution truncated',
+        code: 'ASSERTION_FAILED',
+        testID: selector,
+        focusOnly: true,
+        truncated: true
+      };
+    }
+    for (var designationIndex = 0; designationIndex < designationMatches.length; designationIndex++) {
+      var designationMatch = designationMatches[designationIndex];
+      if (!designationLineage.has(designationMatch)) {
+        return {
+          error: 'Ambiguous TextInput designation target',
+          testID: selector,
+          count: designationMatches.length,
+          focusOnly: true
+        };
+      }
+      if (textInputDesignationDisabled(designationMatch.memoizedProps || {})) {
+        return {
+          error: 'TextInput is disabled or non-editable',
+          component: typeTextFiberName(designationInput),
+          testID: selector,
+          focusOnly: true
+        };
+      }
+    }
+    var designationInteractivity = textInputDesignationInteractivity(
+      designationInput,
+      selector
+    );
+    if (designationInteractivity) return designationInteractivity;
+    if (typeof designationInputProps.onPress === 'function') return null;
+    return {
+      success: true,
+      action: 'designateTextInput',
+      component: typeTextFiberName(designationInput),
+      testID: selector,
+      focusOnly: true,
+      inputFiber: designationInput
+    };
+  }
+
   function executeTypeTextTransaction(opts) {
+    var designationSelector = opts.testID;
+    var boundDesignation = null;
+    if (opts.requireLiveInputDesignation === true) {
+      boundDesignation = consumeTextInputDesignation(
+        opts.designationToken,
+        designationSelector
+      );
+      if (!boundDesignation) {
+        return {
+          error: 'TextInput designation no longer owns the exact host input',
+          code: 'INTERACTION_NOT_ACTUATED',
+          testID: designationSelector,
+          focusOnly: true,
+          handlerCalled: false
+        };
+      }
+      var liveFrontmost;
+      try {
+        liveFrontmost = JSON.parse(isTestIdFrontmost(designationSelector));
+      } catch (_) {
+        liveFrontmost = null;
+      }
+      if (!liveFrontmost || liveFrontmost.visible !== true) {
+        return {
+          error: liveFrontmost && liveFrontmost.reason
+            ? liveFrontmost.reason
+            : 'TextInput designation frontmost state is unreadable',
+          code: liveFrontmost && liveFrontmost.code
+            ? liveFrontmost.code
+            : (liveFrontmost && liveFrontmost.matchCount > 1
+              ? 'AMBIGUOUS_TESTID'
+              : 'ASSERTION_FAILED'),
+          testID: designationSelector,
+          focusOnly: true,
+          handlerCalled: false
+        };
+      }
+    }
     var resolution = resolveTypeTextTarget(opts);
     if (resolution.error) return resolution;
     var binding = resolution.binding;
@@ -53747,7 +54067,107 @@ var INJECTED_HELPERS = `
         hint: 'Inspected every matching fiber and its bounded ownership graph \u2014 no typeable handler exists. Use cdp_component_tree to inspect the field, or pass the inner field testID directly.'
       };
     }
+    if (opts.requireLiveInputDesignation === true) {
+      var designationSourceProps = binding.sourceFiber.memoizedProps || {};
+      if (
+        typeof designationSelector !== 'string'
+        || !designationSelector
+        || hostKind(binding.sourceFiber) !== 'textinput'
+        || (
+          designationSourceProps.testID !== designationSelector
+          && designationSourceProps.nativeID !== designationSelector
+        )
+      ) {
+        return {
+          error: 'TextInput designation no longer resolves to the exact host input',
+          code: 'INTERACTION_NOT_ACTUATED',
+          testID: designationSelector,
+          focusOnly: true,
+          handlerCalled: false
+        };
+      }
+      var designationOwner = binding.sourceFiber;
+      var designationOwnerCursor = binding.sourceFiber.return;
+      var designationOwnerSeen = new WeakSet();
+      var designationOwnerDepth = 0;
+      while (designationOwnerCursor && designationOwnerDepth < 1000) {
+        if (designationOwnerSeen.has(designationOwnerCursor)) {
+          designationOwnerCursor = null;
+          designationOwnerDepth = 1000;
+          break;
+        }
+        designationOwnerSeen.add(designationOwnerCursor);
+        designationOwnerDepth++;
+        var designationOwnerProps = designationOwnerCursor.memoizedProps || {};
+        if (
+          designationOwnerProps.testID === designationSelector
+          || designationOwnerProps.nativeID === designationSelector
+        ) {
+          designationOwner = designationOwnerCursor;
+        }
+        designationOwnerCursor = designationOwnerCursor.return;
+      }
+      if (designationOwnerCursor || designationOwnerDepth >= 1000) {
+        return {
+          error: 'TextInput designation ownership resolution truncated',
+          code: 'ASSERTION_FAILED',
+          testID: designationSelector,
+          focusOnly: true,
+          handlerCalled: false
+        };
+      }
+      var liveDesignation = resolveTextInputDesignation(designationOwner, designationSelector);
+      if (!liveDesignation || liveDesignation.success !== true) {
+        if (!liveDesignation) {
+          return {
+            error: 'TextInput designation no longer resolves to the exact host input',
+            code: 'INTERACTION_NOT_ACTUATED',
+            testID: designationSelector,
+            focusOnly: true,
+            handlerCalled: false
+          };
+        }
+        liveDesignation.code = liveDesignation.truncated === true
+          ? 'ASSERTION_FAILED'
+          : 'INTERACTION_NOT_ACTUATED';
+        liveDesignation.handlerCalled = false;
+        return liveDesignation;
+      }
+      if (
+        !isSameDesignatedInput(boundDesignation.input, binding.sourceFiber)
+        || !isSameDesignatedInput(boundDesignation.input, liveDesignation.inputFiber)
+      ) {
+        return {
+          error: 'TextInput designation no longer owns the exact host input',
+          code: 'INTERACTION_NOT_ACTUATED',
+          testID: designationSelector,
+          focusOnly: true,
+          handlerCalled: false
+        };
+      }
+      var designationCandidateProps = binding.candidateFiber.memoizedProps || {};
+      if (textInputDesignationDisabled(designationCandidateProps)) {
+        return {
+          error: 'TextInput is disabled or non-editable',
+          code: 'INTERACTION_NOT_ACTUATED',
+          component: binding.component,
+          testID: designationSelector,
+          focusOnly: true,
+          handlerCalled: false
+        };
+      }
+      if (binding.controlled !== true) {
+        return {
+          error: 'TextInput designation is uncontrolled or unreadable',
+          code: 'INTERACTION_NOT_ACTUATED',
+          testID: designationSelector,
+          focusOnly: true,
+          handlerCalled: false
+        };
+      }
+    }
     var text = opts.text !== undefined ? opts.text : '';
+    if (boundDesignation) text = (binding.valueBefore || '') + text;
     try {
       if (binding.contract === 'onChangeText:string') binding.handler(text);
       else binding.handler({ nativeEvent: { text: text } });
@@ -54081,6 +54501,19 @@ var INJECTED_HELPERS = `
 
       if (action === 'press') {
         if (typeof props.onPress !== 'function') {
+          if (opts.allowInputDesignation === true && opts.testID) {
+            var designation = resolveTextInputDesignation(found, selector);
+            if (designation) {
+              if (designation.success === true) {
+                designation.designationToken = retainTextInputDesignation(
+                  designation.inputFiber,
+                  selector
+                );
+                delete designation.inputFiber;
+              }
+              return JSON.stringify(designation);
+            }
+          }
           return JSON.stringify({ error: 'Component has no onPress handler', component: typeName, testID: selector });
         }
         if (opts.value !== undefined) {
@@ -55615,6 +56048,7 @@ var INJECTED_HELPERS = `
     getStoreState: getStoreState,
     getComponentState: getComponentState,
     readInputValue: readInputValue,
+    releaseInputDesignation: releaseInputDesignation,
     dispatchAction: dispatchAction,
     getErrors: getErrors,
     clearErrors: clearErrors,
@@ -79316,6 +79750,9 @@ async function replayFlow(steps, dispatch, opts = {}) {
   const offset = opts.indexOffset ?? 0;
   const trace = [];
   let lastTapped = opts.initialFocusId ?? null;
+  let pendingDesignation = null;
+  let staleDesignation = null;
+  let consumedDesignationId = null;
   const sourceIndex = (i) => opts.sourceIndex ?? i + offset;
   const fail3 = (i, reason, failureCode, failureMeta) => ({
     passed: false,
@@ -79330,10 +79767,32 @@ async function replayFlow(steps, dispatch, opts = {}) {
       throw new ReplayDispatchError("RUNNER_TIMEOUT", "React-tree replay exceeded its execution deadline");
     }
   };
+  const releaseDesignation = async (token2) => {
+    try {
+      await dispatch.releaseDesignation?.(token2);
+    } catch {
+    }
+  };
+  const releasePendingDesignation = async () => {
+    const designation = pendingDesignation;
+    pendingDesignation = null;
+    if (designation)
+      await releaseDesignation(designation.token);
+  };
   for (let i = 0; i < steps.length; i++) {
     const s = steps[i];
     const evidenceType = s.t === "waitVisible" ? s.evidenceType ?? s.t : s.t;
     const startedAt = Date.now();
+    let stepFocusOnly;
+    if (pendingDesignation && s.t !== "type") {
+      staleDesignation = staleDesignation ?? {
+        id: pendingDesignation.id,
+        index: pendingDesignation.index
+      };
+      const staleToken = pendingDesignation.token;
+      pendingDesignation = null;
+      await releaseDesignation(staleToken);
+    }
     try {
       requireNotAborted();
       switch (s.t) {
@@ -79348,26 +79807,46 @@ async function replayFlow(steps, dispatch, opts = {}) {
           });
           break;
         case "tap":
-          await dispatch.press(s.id);
+          const pressResult = await dispatch.press(s.id);
+          if (pressResult?.kind === "designation") {
+            lastTapped = null;
+            pendingDesignation = { id: s.id, token: pressResult.token, index: i };
+            stepFocusOnly = true;
+          } else {
+            lastTapped = s.id;
+          }
           requireNotAborted();
-          lastTapped = s.id;
           trace.push({
             sourceIndex: sourceIndex(i),
             t: s.t,
             target: s.id,
+            ...stepFocusOnly ? { focusOnly: stepFocusOnly } : {},
             ok: true,
             durationMs: Date.now() - startedAt
           });
           break;
         case "type": {
-          if (!lastTapped)
-            return fail3(i, "inputText before any tapOn \u2014 no focus target");
-          await dispatch.type(lastTapped, s.text);
+          const designation = pendingDesignation;
+          const target = designation?.id ?? lastTapped;
+          if (!target)
+            return fail3(i, consumedDesignationId ? `the TextInput designation for "${consumedDesignationId}" was already consumed \u2014 tapOn the field again before typing` : "inputText before any tapOn \u2014 no focus target");
+          pendingDesignation = null;
+          if (designation)
+            consumedDesignationId = designation.id;
+          try {
+            await dispatch.type(target, s.text, designation ? {
+              focusOnlyDesignation: true,
+              designationToken: designation.token
+            } : void 0);
+          } finally {
+            if (designation)
+              await releaseDesignation(designation.token);
+          }
           requireNotAborted();
           trace.push({
             sourceIndex: sourceIndex(i),
             t: s.t,
-            target: lastTapped,
+            target,
             ok: true,
             durationMs: Date.now() - startedAt
           });
@@ -79451,10 +79930,12 @@ async function replayFlow(steps, dispatch, opts = {}) {
       }
     } catch (e) {
       const waitedMs = Date.now() - startedAt;
+      await releasePendingDesignation();
       trace.push({
         sourceIndex: sourceIndex(i),
         t: evidenceType,
         target: "id" in s ? s.id : void 0,
+        ...stepFocusOnly ? { focusOnly: stepFocusOnly } : {},
         ok: false,
         durationMs: waitedMs
       });
@@ -79463,7 +79944,15 @@ async function replayFlow(steps, dispatch, opts = {}) {
     }
   }
   if (opts.signal?.aborted) {
+    await releasePendingDesignation();
     return fail3(Math.max(0, steps.length - 1), "React-tree replay exceeded its execution deadline", "RUNNER_TIMEOUT");
+  }
+  const unconsumedDesignation = staleDesignation ?? pendingDesignation;
+  if (unconsumedDesignation) {
+    if (pendingDesignation) {
+      await releasePendingDesignation();
+    }
+    return fail3(unconsumedDesignation.index, `TextInput designation for "${unconsumedDesignation.id}" must be followed immediately by inputText`, "INTERACTION_NOT_ACTUATED", { failedSelector: unconsumedDesignation.id, focusOnly: true });
   }
   return { passed: true, finalFocusId: lastTapped, steps: trace };
 }
@@ -79744,6 +80233,30 @@ function replayTreeData(envelope) {
     }
   });
 }
+function createReplayPressByTestId(interact) {
+  return async (id) => {
+    const result = await interact({
+      action: "press",
+      testID: id,
+      animated: false,
+      allowInputDesignation: true
+    });
+    const envelope = JSON.parse(result.content[0]?.text ?? "{}");
+    if (envelope.ok === false) {
+      throw new ReplayDispatchError(envelope.code ?? "INTERACTION_NOT_ACTUATED", `press "${id}" failed: ${envelope.error ?? "ok:false"}`, envelope.meta);
+    }
+    if (envelope.data?.action !== "designateTextInput")
+      return { kind: "press" };
+    if (envelope.data.focusOnly !== true || typeof envelope.data.designationToken !== "string" || envelope.data.designationToken.length === 0) {
+      throw new ReplayDispatchError("INTERACTION_NOT_ACTUATED", `press "${id}" returned an invalid TextInput designation`);
+    }
+    return {
+      kind: "designation",
+      focusOnly: true,
+      token: envelope.data.designationToken
+    };
+  };
+}
 function nodeProps(treeJson, id) {
   const stack = [treeJson];
   while (stack.length) {
@@ -79843,12 +80356,15 @@ function buildCdpDispatch(deps, signal) {
     async press(id) {
       await assertExactInteractable(id);
       requireNotAborted();
-      await deps.pressByTestId(id);
+      return deps.pressByTestId(id);
     },
-    async type(id, text) {
+    async type(id, text, context) {
       await assertExactInteractable(id);
       requireNotAborted();
-      await deps.typeByTestId(id, text);
+      await deps.typeByTestId(id, text, context);
+    },
+    async releaseDesignation(token2) {
+      await deps.releaseInputDesignation?.(token2);
     },
     async visibility(id) {
       await deps.treeFor(id);
@@ -80374,7 +80890,7 @@ function createMaestroRunHandler(deps = {}) {
             });
           }
           let stageCursor = 0;
-          let reactFocusId = retainedReactFocusId ?? segment.initialReactFocusId;
+          let reactFocusId = retainedReactFocusId === void 0 ? segment.initialReactFocusId : retainedReactFocusId;
           const stageResults = await executeMaestroAuthorityStages(segment.commands, async (commands) => {
             const sourceIndices = segment.sourceIndices.slice(stageCursor, stageCursor + commands.length);
             stageCursor += commands.length;
@@ -80382,15 +80898,18 @@ function createMaestroRunHandler(deps = {}) {
               ...replayDependencies,
               launchApp: async () => {
               }
-            }, { signal: controller.signal, initialFocusId: reactFocusId });
+            }, { signal: controller.signal, initialFocusId: reactFocusId ?? void 0 });
             if (!replay.passed)
               throw new ReactReplayFailure(replay, sourceIndices);
             for (const step of replay.steps) {
               if (step.t === "launch")
                 reactFocusId = void 0;
-              if (step.t === "tap" && step.target)
-                reactFocusId = step.target;
+              if (step.t === "tap" && step.target) {
+                reactFocusId = step.focusOnly ? null : step.target;
+              }
             }
+            if (replay.finalFocusId === null)
+              reactFocusId = null;
             return { replay, sourceIndices };
           }, claimOrigin, completeOrigin, relaunchManagedApp, reproveManagedOrigin, { signal: controller.signal });
           retainedReactFocusId = reactFocusId;
@@ -80400,6 +80919,7 @@ function createMaestroRunHandler(deps = {}) {
                 index: sourceIndices[step.sourceIndex] ?? step.sourceIndex,
                 name: step.t,
                 verb: step.t,
+                ...step.focusOnly ? { focusOnly: true } : {},
                 status: step.ok ? "pass" : "fail",
                 durationMs: step.durationMs
               });
@@ -80475,6 +80995,7 @@ function createMaestroRunHandler(deps = {}) {
                 name: String(record2.t ?? "unknown"),
                 verb: String(record2.t ?? "unknown"),
                 ...record2.target !== void 0 ? { target: String(record2.target) } : {},
+                ...record2.focusOnly === true ? { focusOnly: true } : {},
                 status: record2.ok === false ? "fail" : "pass",
                 durationMs: Number(record2.durationMs ?? 0)
               });
@@ -80489,6 +81010,7 @@ function createMaestroRunHandler(deps = {}) {
               index: failure.sourceIndices[step.sourceIndex] ?? step.sourceIndex,
               name: step.t,
               verb: step.t,
+              ...step.focusOnly ? { focusOnly: true } : {},
               status: step.ok ? "pass" : "fail",
               durationMs: step.durationMs
             });
@@ -82629,6 +83151,8 @@ function createInteractHandler(getClient2) {
       opts.includeHidden = args.includeHidden;
     if (args.walkUp !== void 0)
       opts.walkUp = args.walkUp;
+    if (args.allowInputDesignation !== void 0)
+      opts.allowInputDesignation = args.allowInputDesignation;
     const result = await client2.evaluate(`__RN_AGENT.interact(${JSON.stringify(opts)})`);
     if (result.error) {
       return failResult(`Interact error: ${result.error}`);
@@ -82643,7 +83167,8 @@ function createInteractHandler(getClient2) {
       return failResult(`Interact returned non-JSON: ${result.value.slice(0, 200)}`);
     }
     if (parsed.error) {
-      return failResult(`Interact failed: ${parsed.error}`, pickDefined(parsed, REFUSAL_FIELDS));
+      const refusal = pickDefined(parsed, REFUSAL_FIELDS);
+      return parsed.code === "ASSERTION_FAILED" ? failResult(`Interact failed: ${parsed.error}`, "ASSERTION_FAILED", refusal) : failResult(`Interact failed: ${parsed.error}`, refusal);
     }
     if (parsed.action_executed && parsed.handler_error) {
       return failResult(`Action executed but handler threw: ${parsed.handler_error}`, {
@@ -94392,11 +94917,15 @@ var makeReplayDeps = (_args, signal) => {
   const interact = createInteractHandler(getClient);
   const tree = createComponentTreeHandler(getClient);
   return {
-    pressByTestId: async (id) => {
-      mustOk(await interact({ action: "press", testID: id, animated: false }), `press "${id}"`);
+    pressByTestId: createReplayPressByTestId(interact),
+    typeByTestId: async (id, text, context) => {
+      mustOk(await performReactTreeInput(id, text, getClient(), signal, context ? { designationToken: context.designationToken } : {}), `type "${id}"`);
     },
-    typeByTestId: async (id, text) => {
-      mustOk(await performReactTreeInput(id, text, getClient(), signal), `type "${id}"`);
+    releaseInputDesignation: async (token2) => {
+      try {
+        await getClient().evaluate(`__RN_AGENT.releaseInputDesignation(${JSON.stringify(token2)})`);
+      } catch {
+      }
     },
     treeFor: async (id) => {
       const fetchTree = async (interactiveOnly) => JSON.parse((await tree({

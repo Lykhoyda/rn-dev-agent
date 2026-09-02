@@ -14,11 +14,21 @@ export class UnsupportedStepError extends Error {
 }
 
 export interface ReplayDispatch {
-  press(id: string): Promise<void>;
-  type(id: string, text: string): Promise<void>;
+  press(id: string): Promise<ReplayPressResult | void>;
+  type(id: string, text: string, context?: ReplayTypeContext): Promise<void>;
+  releaseDesignation?(token: string): Promise<void>;
   visibility(id: string): Promise<ReplayVisibility>;
   launch(stopApp: boolean): Promise<void>;
   settle(timeoutMs: number): Promise<void>;
+}
+
+export type ReplayPressResult =
+  | { kind: 'press' }
+  | { kind: 'designation'; focusOnly: true; token: string };
+
+export interface ReplayTypeContext {
+  focusOnlyDesignation: true;
+  designationToken: string;
 }
 
 export interface ReplayVisibility {
@@ -46,7 +56,14 @@ export interface ReplayResult {
   failureCode?: string;
   failureMeta?: Record<string, unknown>;
   reason?: string;
-  steps: { sourceIndex: number; t: string; target?: string; ok: boolean; durationMs: number }[];
+  steps: {
+    sourceIndex: number;
+    t: string;
+    target?: string;
+    focusOnly?: true;
+    ok: boolean;
+    durationMs: number;
+  }[];
 }
 
 const interp = (s: string, p: Record<string, string>): string =>
@@ -260,6 +277,9 @@ export async function replayFlow(
   const offset = opts.indexOffset ?? 0;
   const trace: ReplayResult['steps'] = [];
   let lastTapped: string | null = opts.initialFocusId ?? null;
+  let pendingDesignation: { id: string; token: string; index: number } | null = null;
+  let staleDesignation: { id: string; index: number } | null = null;
+  let consumedDesignationId: string | null = null;
   const sourceIndex = (i: number): number => opts.sourceIndex ?? i + offset;
 
   const fail = (
@@ -284,11 +304,31 @@ export async function replayFlow(
       );
     }
   };
+  const releaseDesignation = async (token: string): Promise<void> => {
+    try {
+      await dispatch.releaseDesignation?.(token);
+    } catch {}
+  };
+  const releasePendingDesignation = async (): Promise<void> => {
+    const designation = pendingDesignation;
+    pendingDesignation = null;
+    if (designation) await releaseDesignation(designation.token);
+  };
 
   for (let i = 0; i < steps.length; i++) {
     const s = steps[i];
     const evidenceType = s.t === 'waitVisible' ? (s.evidenceType ?? s.t) : s.t;
     const startedAt = Date.now();
+    let stepFocusOnly: true | undefined;
+    if (pendingDesignation && s.t !== 'type') {
+      staleDesignation = staleDesignation ?? {
+        id: pendingDesignation.id,
+        index: pendingDesignation.index,
+      };
+      const staleToken = pendingDesignation.token;
+      pendingDesignation = null;
+      await releaseDesignation(staleToken);
+    }
     try {
       requireNotAborted();
       switch (s.t) {
@@ -303,25 +343,55 @@ export async function replayFlow(
           });
           break;
         case 'tap':
-          await dispatch.press(s.id);
+          const pressResult = await dispatch.press(s.id);
+          if (pressResult?.kind === 'designation') {
+            lastTapped = null;
+            pendingDesignation = { id: s.id, token: pressResult.token, index: i };
+            stepFocusOnly = true;
+          } else {
+            lastTapped = s.id;
+          }
           requireNotAborted();
-          lastTapped = s.id;
           trace.push({
             sourceIndex: sourceIndex(i),
             t: s.t,
             target: s.id,
+            ...(stepFocusOnly ? { focusOnly: stepFocusOnly } : {}),
             ok: true,
             durationMs: Date.now() - startedAt,
           });
           break;
         case 'type': {
-          if (!lastTapped) return fail(i, 'inputText before any tapOn — no focus target');
-          await dispatch.type(lastTapped, s.text);
+          const designation = pendingDesignation;
+          const target = designation?.id ?? lastTapped;
+          if (!target)
+            return fail(
+              i,
+              consumedDesignationId
+                ? `the TextInput designation for "${consumedDesignationId}" was already consumed — tapOn the field again before typing`
+                : 'inputText before any tapOn — no focus target',
+            );
+          pendingDesignation = null;
+          if (designation) consumedDesignationId = designation.id;
+          try {
+            await dispatch.type(
+              target,
+              s.text,
+              designation
+                ? {
+                    focusOnlyDesignation: true,
+                    designationToken: designation.token,
+                  }
+                : undefined,
+            );
+          } finally {
+            if (designation) await releaseDesignation(designation.token);
+          }
           requireNotAborted();
           trace.push({
             sourceIndex: sourceIndex(i),
             t: s.t,
-            target: lastTapped,
+            target,
             ok: true,
             durationMs: Date.now() - startedAt,
           });
@@ -424,10 +494,12 @@ export async function replayFlow(
       }
     } catch (e) {
       const waitedMs = Date.now() - startedAt;
+      await releasePendingDesignation();
       trace.push({
         sourceIndex: sourceIndex(i),
         t: evidenceType,
         target: 'id' in s ? s.id : undefined,
+        ...(stepFocusOnly ? { focusOnly: stepFocusOnly } : {}),
         ok: false,
         durationMs: waitedMs,
       });
@@ -442,10 +514,23 @@ export async function replayFlow(
   }
 
   if (opts.signal?.aborted) {
+    await releasePendingDesignation();
     return fail(
       Math.max(0, steps.length - 1),
       'React-tree replay exceeded its execution deadline',
       'RUNNER_TIMEOUT',
+    );
+  }
+  const unconsumedDesignation = staleDesignation ?? pendingDesignation;
+  if (unconsumedDesignation) {
+    if (pendingDesignation) {
+      await releasePendingDesignation();
+    }
+    return fail(
+      unconsumedDesignation.index,
+      `TextInput designation for "${unconsumedDesignation.id}" must be followed immediately by inputText`,
+      'INTERACTION_NOT_ACTUATED',
+      { failedSelector: unconsumedDesignation.id, focusOnly: true },
     );
   }
   return { passed: true, finalFocusId: lastTapped, steps: trace };

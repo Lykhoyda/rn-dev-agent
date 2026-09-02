@@ -689,6 +689,55 @@ test('partitioned replay carries nested React focus across a native segment', as
   assert.deepEqual(calls, ['press:outer-field', 'press:inner-field', 'type:inner-field']);
 });
 
+test('a designation-only tap cannot be revived as static React focus after a native segment', async () => {
+  const calls: string[] = [];
+  const handler = createMaestroRunHandler({
+    getActiveSession: () => ({
+      name: 'designation-across-native',
+      platform: 'ios',
+      deviceId: IOS_UDID,
+      appId: 'com.example.app',
+      openedAt: new Date(0).toISOString(),
+    }),
+    replayDeps: () => ({
+      pressByTestId: async (id) => {
+        calls.push(`press:${id}`);
+        return { kind: 'designation', focusOnly: true, token: `designation-${id}` };
+      },
+      typeByTestId: async (id, text) => calls.push(`type:${id}:${text}`),
+      treeFor: async (id) => ({ testID: id }),
+      frontmostFor: async () => ({ visible: true }),
+      releaseInputDesignation: async () => {},
+      launchApp: async () => {},
+      settle: async () => {},
+    }),
+    chooseDispatch: () => nativeDispatch(),
+    parkFlow: async (run) => run(),
+    resolveEngineStatus: async () =>
+      buildReplayEngineStatus('pinned-ok', MAESTRO_RUNNER_PIN.version, false),
+    execFile: async () => ({ stdout: nativeRunnerOutput(), stderr: '' }),
+  });
+  const env = envelope(
+    await handler({
+      platform: 'ios',
+      deviceId: IOS_UDID,
+      inlineYaml: `appId: com.example.app
+---
+- tapOn:
+    id: email
+- inputText: first
+- assertVisible: Native status
+- inputText: second
+`,
+      ...callbacks,
+    }),
+  );
+
+  assert.equal(env.ok, false);
+  assert.match(env.error ?? '', /no focus target/);
+  assert.deepEqual(calls, ['press:email', 'type:email:first']);
+});
+
 test('inputText follows a nested native tap instead of reviving stale React focus', () => {
   const plan = planIosProofDomains(
     [
@@ -806,6 +855,7 @@ test('controlled input appends and succeeds only after exact fiber read-back', a
           value: JSON.stringify({
             controlled: true,
             handlerCalled: 'onChangeText',
+            text: value,
             valueBefore: before,
           }),
         };
