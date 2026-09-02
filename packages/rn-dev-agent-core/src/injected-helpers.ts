@@ -593,7 +593,6 @@ export const INJECTED_HELPERS = `
             props[k] = s && s.length > 200 ? s.substring(0, 200) + '...' : v;
           } catch(e) { props[k] = '[Unserializable]'; }
         }
-        if (fiberDisabled) props.disabled = true;
         if (Object.keys(props).length > 0) result.props = props;
       }
 
@@ -2616,7 +2615,7 @@ export const INJECTED_HELPERS = `
     if (opts.testID) {
       for (var typeSourceIndex = 0; typeSourceIndex < resolution.sourceFibers.length; typeSourceIndex++) {
         var typeSource = resolution.sourceFibers[typeSourceIndex];
-        var typeSourceEligibility = exactFiberEligibility(typeSource);
+        var typeSourceEligibility = exactFiberEligibility(typeSource, typeSource !== binding.candidateFiber);
         if (!typeSourceEligibility.eligible) {
           return {
             error: typeSourceEligibility.error,
@@ -2962,7 +2961,6 @@ export const INJECTED_HELPERS = `
         }
         var walkTarget = walkCandidates[0];
         var walkTargetName = walkFiberName(walkTarget.fiber);
-        var walkTargetProps = walkTarget.fiber.memoizedProps || {};
         if (opts.testID) {
           var walkTargetEligibility = exactFiberEligibility(walkTarget.fiber);
           if (!walkTargetEligibility.eligible) {
@@ -2973,17 +2971,6 @@ export const INJECTED_HELPERS = `
             var walkSourceEligibility = exactFiberEligibility(walkSource);
             if (!walkSourceEligibility.eligible) {
               return JSON.stringify({ error: walkSourceEligibility.error, reason: walkSourceEligibility.reason, component: walkFiberName(walkSource), testID: selector });
-            }
-          }
-        } else {
-          if (walkTargetProps.disabled === true || (walkTargetProps.accessibilityState && walkTargetProps.accessibilityState.disabled === true)) {
-            return JSON.stringify({ error: 'Component is disabled', component: walkTargetName, testID: selector });
-          }
-          for (var labelSourceIndex = 0; labelSourceIndex < walkSources.length; labelSourceIndex++) {
-            var labelSource = walkSources[labelSourceIndex];
-            var labelSourceProps = labelSource.memoizedProps || {};
-            if (labelSourceProps.disabled === true || labelSourceProps.editable === false || (labelSourceProps.accessibilityState && labelSourceProps.accessibilityState.disabled === true)) {
-              return JSON.stringify({ error: 'Component is disabled', component: walkFiberName(labelSource), testID: selector });
             }
           }
         }
@@ -4185,7 +4172,7 @@ export const INJECTED_HELPERS = `
     return false;
   }
 
-  function exactFiberEligibility(fiber) {
+  function exactFiberEligibility(fiber, wrapperSource) {
     if (!fiber) {
       return { eligible: false, error: 'Component eligibility could not be proven', reason: 'fiber unavailable' };
     }
@@ -4196,7 +4183,9 @@ export const INJECTED_HELPERS = `
     if (__hidden(fiber)) {
       return { eligible: false, error: 'Component is hidden', reason: 'hidden exact-ID subtree' };
     }
-    if (props.pointerEvents === 'none' || props.pointerEvents === 'box-none') {
+    // box-none only removes the fiber itself from the touch path, so a wrapper that merely
+    // carries the exact ID stays eligible while the actuated fiber does not.
+    if (props.pointerEvents === 'none' || (props.pointerEvents === 'box-none' && wrapperSource !== true)) {
       return { eligible: false, error: 'Component is not user-interactable with pointerEvents="' + props.pointerEvents + '"', reason: 'exact-ID fiber has pointerEvents="' + props.pointerEvents + '"' };
     }
     var seen = new WeakSet();

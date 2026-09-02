@@ -5,7 +5,7 @@ import { INJECTED_HELPERS } from '../../dist/injected-helpers.js';
 import { performReactTreeInput } from '../../dist/tools/device-interact.js';
 import { createInteractHandler } from '../../dist/tools/interact.js';
 import { createMockClient } from '../helpers/mock-cdp-client.js';
-import { expectOk } from '../helpers/result-helpers.js';
+import { expectOk, parseEnvelope } from '../helpers/result-helpers.js';
 
 type Fiber = {
   tag: number;
@@ -264,6 +264,53 @@ test('React replay types through a wrapper and verifies the same controlled inpu
 
   assert.deepEqual(expectOk(result), { filled: true, method: 'js-onChangeText', length: 1 });
   assert.equal(input.memoizedProps.value, '045');
+});
+
+test('typeText types through a box-none wrapper testID onto the inner input', async () => {
+  const root = makeFiber('Root');
+  const wrapper = appendChild(
+    root,
+    makeFiber('View', { testID: 'box_none_field', pointerEvents: 'box-none' }),
+  );
+  const input = appendChild(
+    wrapper,
+    makeFiber('AndroidTextInput', {
+      value: '',
+      onChangeText(value: string) {
+        input.memoizedProps.value = value;
+      },
+    }),
+  );
+  const agent = createAgent(root);
+
+  const result = await performReactTreeInput('box_none_field', 'abc', agent as never);
+
+  assert.deepEqual(expectOk(result), { filled: true, method: 'js-onChangeText', length: 3 });
+  assert.equal(input.memoizedProps.value, 'abc');
+});
+
+test('typeText refuses when the selected input itself is box-none', async () => {
+  const root = makeFiber('Root');
+  const wrapper = appendChild(root, makeFiber('View', { testID: 'box_none_input' }));
+  const input = appendChild(
+    wrapper,
+    makeFiber('AndroidTextInput', {
+      value: '',
+      pointerEvents: 'box-none',
+      onChangeText(value: string) {
+        input.memoizedProps.value = value;
+      },
+    }),
+  );
+  const agent = createAgent(root);
+
+  const result = await performReactTreeInput('box_none_input', 'abc', agent as never);
+  const envelope = parseEnvelope(result);
+
+  assert.equal(envelope.ok, false);
+  assert.equal(envelope.code, 'INTERACTION_NOT_ACTUATED');
+  assert.match(envelope.error ?? '', /pointerEvents/);
+  assert.equal(input.memoizedProps.value, '');
 });
 
 test('typeText searches matching fibers across every registered renderer', () => {
