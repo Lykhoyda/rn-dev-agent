@@ -1,5 +1,13 @@
 # rn-dev-agent-plugin
 
+## 1.0.3
+
+### Patch Changes
+
+- 7652515: Walk up to the nearest pressable ancestor for React-tree replay taps whose exact target is not a designatable TextInput, keeping input designation first and reporting type-path eligibility refusals as `INTERACTION_NOT_ACTUATED` with the helper's reason, with pointer-event eligibility read on host views only and inherited root-to-leaf.
+- Updated dependencies [7652515]
+  - rn-dev-agent-core@1.0.3
+
 ## 1.0.2
 
 ### Patch Changes
