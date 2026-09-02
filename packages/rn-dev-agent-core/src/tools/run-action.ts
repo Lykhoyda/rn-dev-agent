@@ -70,6 +70,7 @@ import {
   reissueManagedInstallAuthority,
   relaunchManagedNativeOriginApp,
   reproveManagedNativeOrigin,
+  type ManagedNativeOriginReproveOptions,
 } from '../session/authority-gate.js';
 import { getWorkerAuthorityRuntime } from '../session/runtime.js';
 import { flowUsesClearState, resolveIosAppFile } from './resolve-ios-app-file.js';
@@ -506,9 +507,16 @@ export interface RunActionDeps {
   } | null;
   claimBundleAuthority?: (args: RunActionArgs) => Promise<boolean>;
   claimNativeOrigin?: (args: RunActionArgs) => Promise<void>;
-  completeNativeOrigin?: (args: RunActionArgs, targetExpected: boolean) => Promise<void>;
+  completeNativeOrigin?: (
+    args: RunActionArgs,
+    targetExpected: boolean,
+    signal?: AbortSignal,
+  ) => Promise<void>;
   relaunchManagedApp?: (args: RunActionArgs, stopApp?: boolean) => Promise<void>;
-  reproveManagedOrigin?: (args: RunActionArgs) => Promise<void>;
+  reproveManagedOrigin?: (
+    args: RunActionArgs,
+    options?: ManagedNativeOriginReproveOptions,
+  ) => Promise<void>;
   reissueInstallReceipt?: (args: RunActionArgs) => Promise<void>;
   /** GH #705: the session's attested install receipt, for appFile auto-resolution. */
   installReceipt?: () => { platform?: unknown; deviceId?: unknown; appId?: unknown } | null;
@@ -777,9 +785,10 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
           params: args.params,
           attempt: { attemptId: initialAttemptId, ordinal: 1, maxAttempts, kind: 'initial' },
           claimNativeOrigin: () => claimNativeOrigin(args),
-          completeNativeOrigin: (targetExpected) => completeNativeOrigin(args, targetExpected),
+          completeNativeOrigin: (targetExpected, signal) =>
+            completeNativeOrigin(args, targetExpected, signal),
           relaunchManagedApp: (stopApp) => relaunchManagedApp(args, stopApp),
-          reproveManagedOrigin: () => reproveManagedOrigin(args),
+          reproveManagedOrigin: (options) => reproveManagedOrigin(args, options),
           completeRunnerPark: (signal) => completeManagedRunnerParkAuthority(args, signal),
           reissueInstallReceipt: () => reissueInstallReceipt(args),
         }),
@@ -1208,9 +1217,10 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
             parentAttemptId: initialAttemptId,
           },
           claimNativeOrigin: () => claimNativeOrigin(args),
-          completeNativeOrigin: (targetExpected) => completeNativeOrigin(args, targetExpected),
+          completeNativeOrigin: (targetExpected, signal) =>
+            completeNativeOrigin(args, targetExpected, signal),
           relaunchManagedApp: (stopApp) => relaunchManagedApp(args, stopApp),
-          reproveManagedOrigin: () => reproveManagedOrigin(args),
+          reproveManagedOrigin: (options) => reproveManagedOrigin(args, options),
           completeRunnerPark: (signal) => completeManagedRunnerParkAuthority(args, signal),
           reissueInstallReceipt: () => reissueInstallReceipt(args),
         }),

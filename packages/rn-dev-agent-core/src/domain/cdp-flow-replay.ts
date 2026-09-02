@@ -2,8 +2,7 @@ export type ReplayStep =
   | { t: 'launch'; stopApp: boolean }
   | { t: 'tap'; id: string }
   | { t: 'type'; text: string }
-  | { t: 'assert'; id: string }
-  | { t: 'waitVisible'; id: string; timeoutMs: number }
+  | { t: 'waitVisible'; id: string; timeoutMs: number; evidenceType?: 'assert' }
   | { t: 'wait'; timeoutMs: number }
   | { t: 'runFlow'; whenVisible: string; commands: ReplayStep[] };
 
@@ -15,11 +14,21 @@ export class UnsupportedStepError extends Error {
 }
 
 export interface ReplayDispatch {
-  press(id: string): Promise<void>;
-  type(id: string, text: string): Promise<void>;
+  press(id: string): Promise<ReplayPressResult | void>;
+  type(id: string, text: string, context?: ReplayTypeContext): Promise<void>;
+  releaseDesignation?(token: string): Promise<void>;
   visibility(id: string): Promise<ReplayVisibility>;
   launch(stopApp: boolean): Promise<void>;
   settle(timeoutMs: number): Promise<void>;
+}
+
+export type ReplayPressResult =
+  | { kind: 'press' }
+  | { kind: 'designation'; focusOnly: true; token: string };
+
+export interface ReplayTypeContext {
+  focusOnlyDesignation: true;
+  designationToken: string;
 }
 
 export interface ReplayVisibility {
@@ -47,7 +56,14 @@ export interface ReplayResult {
   failureCode?: string;
   failureMeta?: Record<string, unknown>;
   reason?: string;
-  steps: { sourceIndex: number; t: string; target?: string; ok: boolean; durationMs: number }[];
+  steps: {
+    sourceIndex: number;
+    t: string;
+    target?: string;
+    focusOnly?: true;
+    ok: boolean;
+    durationMs: number;
+  }[];
 }
 
 const interp = (s: string, p: Record<string, string>): string =>
@@ -60,6 +76,70 @@ const interp = (s: string, p: Record<string, string>): string =>
 const asString = (x: unknown): string | null => (typeof x === 'string' ? x : null);
 const isObj = (x: unknown): x is Record<string, unknown> =>
   typeof x === 'object' && x !== null && !Array.isArray(x);
+const DEFAULT_VISIBILITY_TIMEOUT_MS = 17_000;
+const VISIBILITY_POLL_INTERVAL_MS = 200;
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
+
+async function readVisibilityBeforeDeadline(
+  dispatch: ReplayDispatch,
+  id: string,
+  deadline: number,
+  signal?: AbortSignal,
+): Promise<ReplayVisibility | null> {
+  const remainingMs = deadline - Date.now();
+  if (remainingMs < 0) return null;
+  return new Promise<ReplayVisibility | null>((resolve, reject) => {
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const cleanup = (): void => {
+      if (timer !== undefined) clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
+    };
+    const finish = (value: ReplayVisibility | null): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(Date.now() <= deadline ? value : null);
+    };
+    const fail = (error: unknown): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(error);
+    };
+    const onAbort = (): void => {
+      fail(
+        new ReplayDispatchError(
+          'RUNNER_TIMEOUT',
+          'React-tree replay exceeded its execution deadline',
+        ),
+      );
+    };
+    const armDeadline = (): void => {
+      const nextRemainingMs = deadline - Date.now();
+      timer = setTimeout(
+        () => (Date.now() >= deadline ? finish(null) : armDeadline()),
+        Math.min(Math.max(0, nextRemainingMs), MAX_TIMER_DELAY_MS),
+      );
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
+    if (signal?.aborted) {
+      onAbort();
+      return;
+    }
+    armDeadline();
+    Promise.resolve()
+      .then(() => dispatch.visibility(id))
+      .then(finish, (error: unknown) => {
+        if (settled) return;
+        if (Date.now() > deadline) {
+          finish(null);
+          return;
+        }
+        fail(error);
+      });
+  });
+}
 
 function refuseUnsupportedKeys(
   value: Record<string, unknown>,
@@ -120,7 +200,12 @@ export function normalizeSteps(body: unknown[], params: Record<string, string>):
         if (isObj(v)) refuseUnsupportedKeys(v, ['id'], 'assertVisible');
         const id = isObj(v) ? asString(v.id) : null;
         if (!id) throw new UnsupportedStepError('assertVisible (missing string id)');
-        out.push({ t: 'assert', id: interp(id, params) });
+        out.push({
+          t: 'waitVisible',
+          id: interp(id, params),
+          timeoutMs: DEFAULT_VISIBILITY_TIMEOUT_MS,
+          evidenceType: 'assert',
+        });
         break;
       }
       case 'extendedWaitUntil': {
@@ -129,12 +214,12 @@ export function normalizeSteps(body: unknown[], params: Record<string, string>):
           refuseUnsupportedKeys(v.visible, ['id'], 'extendedWaitUntil.visible');
         }
         const id = isObj(v) && isObj(v.visible) ? asString(v.visible.id) : null;
-        const timeoutMs = isObj(v) ? v.timeout : undefined;
-        if (!id || !Number.isSafeInteger(timeoutMs) || Number(timeoutMs) < 0)
+        const timeoutMs = isObj(v) && 'timeout' in v ? v.timeout : DEFAULT_VISIBILITY_TIMEOUT_MS;
+        if (!id || typeof timeoutMs !== 'number' || !Number.isFinite(timeoutMs) || timeoutMs < 0)
           throw new UnsupportedStepError(
-            'extendedWaitUntil (need visible.id + non-negative integer timeout)',
+            'extendedWaitUntil (need visible.id; timeout must be finite and non-negative when present)',
           );
-        out.push({ t: 'waitVisible', id: interp(id, params), timeoutMs: Number(timeoutMs) });
+        out.push({ t: 'waitVisible', id: interp(id, params), timeoutMs });
         break;
       }
       case 'waitForAnimationToEnd': {
@@ -192,6 +277,9 @@ export async function replayFlow(
   const offset = opts.indexOffset ?? 0;
   const trace: ReplayResult['steps'] = [];
   let lastTapped: string | null = opts.initialFocusId ?? null;
+  let pendingDesignation: { id: string; token: string; index: number } | null = null;
+  let staleDesignation: { id: string; index: number } | null = null;
+  let consumedDesignationId: string | null = null;
   const sourceIndex = (i: number): number => opts.sourceIndex ?? i + offset;
 
   const fail = (
@@ -216,10 +304,31 @@ export async function replayFlow(
       );
     }
   };
+  const releaseDesignation = async (token: string): Promise<void> => {
+    try {
+      await dispatch.releaseDesignation?.(token);
+    } catch {}
+  };
+  const releasePendingDesignation = async (): Promise<void> => {
+    const designation = pendingDesignation;
+    pendingDesignation = null;
+    if (designation) await releaseDesignation(designation.token);
+  };
 
   for (let i = 0; i < steps.length; i++) {
     const s = steps[i];
+    const evidenceType = s.t === 'waitVisible' ? (s.evidenceType ?? s.t) : s.t;
     const startedAt = Date.now();
+    let stepFocusOnly: true | undefined;
+    if (pendingDesignation && s.t !== 'type') {
+      staleDesignation = staleDesignation ?? {
+        id: pendingDesignation.id,
+        index: pendingDesignation.index,
+      };
+      const staleToken = pendingDesignation.token;
+      pendingDesignation = null;
+      await releaseDesignation(staleToken);
+    }
     try {
       requireNotAborted();
       switch (s.t) {
@@ -234,72 +343,101 @@ export async function replayFlow(
           });
           break;
         case 'tap':
-          await dispatch.press(s.id);
+          const pressResult = await dispatch.press(s.id);
+          if (pressResult?.kind === 'designation') {
+            lastTapped = null;
+            pendingDesignation = { id: s.id, token: pressResult.token, index: i };
+            stepFocusOnly = true;
+          } else {
+            lastTapped = s.id;
+          }
           requireNotAborted();
-          lastTapped = s.id;
           trace.push({
             sourceIndex: sourceIndex(i),
             t: s.t,
             target: s.id,
+            ...(stepFocusOnly ? { focusOnly: stepFocusOnly } : {}),
             ok: true,
             durationMs: Date.now() - startedAt,
           });
           break;
         case 'type': {
-          if (!lastTapped) return fail(i, 'inputText before any tapOn — no focus target');
-          await dispatch.type(lastTapped, s.text);
+          const designation = pendingDesignation;
+          const target = designation?.id ?? lastTapped;
+          if (!target)
+            return fail(
+              i,
+              consumedDesignationId
+                ? `the TextInput designation for "${consumedDesignationId}" was already consumed — tapOn the field again before typing`
+                : 'inputText before any tapOn — no focus target',
+            );
+          pendingDesignation = null;
+          if (designation) consumedDesignationId = designation.id;
+          try {
+            await dispatch.type(
+              target,
+              s.text,
+              designation
+                ? {
+                    focusOnlyDesignation: true,
+                    designationToken: designation.token,
+                  }
+                : undefined,
+            );
+          } finally {
+            if (designation) await releaseDesignation(designation.token);
+          }
           requireNotAborted();
           trace.push({
             sourceIndex: sourceIndex(i),
             t: s.t,
-            target: lastTapped,
+            target,
             ok: true,
             durationMs: Date.now() - startedAt,
           });
           break;
         }
-        case 'assert': {
-          const verdict = await dispatch.visibility(s.id);
-          requireNotAborted();
-          trace.push({
-            sourceIndex: sourceIndex(i),
-            t: s.t,
-            target: s.id,
-            ok: verdict.visible,
-            durationMs: Date.now() - startedAt,
-          });
-          if (!verdict.visible)
-            return fail(
-              i,
-              verdict.reason ?? `assertVisible: "${s.id}" is not frontmost`,
-              verdict.code ?? 'ASSERTION_FAILED',
-              verdict.meta,
-            );
-          break;
-        }
         case 'waitVisible': {
-          const deadline = Date.now() + s.timeoutMs;
-          let verdict = await dispatch.visibility(s.id);
-          requireNotAborted();
-          while (!verdict.visible && Date.now() < deadline) {
+          const deadline = startedAt + s.timeoutMs;
+          let verdict: ReplayVisibility | null = null;
+          for (;;) {
+            const observed = await readVisibilityBeforeDeadline(
+              dispatch,
+              s.id,
+              deadline,
+              opts.signal,
+            );
             requireNotAborted();
-            await new Promise<void>((resolve) => setTimeout(resolve, 100));
-            verdict = await dispatch.visibility(s.id);
-            requireNotAborted();
+            if (!observed) break;
+            verdict = observed;
+            if (verdict.visible) break;
+            const remainingMs = deadline - Date.now();
+            if (remainingMs <= 0) break;
+            await new Promise<void>((resolve) =>
+              setTimeout(resolve, Math.min(VISIBILITY_POLL_INTERVAL_MS, remainingMs)),
+            );
           }
+          const waitedMs = Date.now() - startedAt;
           trace.push({
             sourceIndex: sourceIndex(i),
-            t: s.t,
+            t: evidenceType,
             target: s.id,
-            ok: verdict.visible,
-            durationMs: Date.now() - startedAt,
+            ok: verdict?.visible === true,
+            durationMs: waitedMs,
           });
+          if (!verdict)
+            return fail(
+              i,
+              `waitVisible: no readable visibility observation completed for "${s.id}" before the deadline`,
+              'RUNNER_TIMEOUT',
+              { failedSelector: s.id, waitedMs },
+            );
           if (!verdict.visible)
             return fail(
               i,
-              verdict.reason ?? `extendedWaitUntil: "${s.id}" is not frontmost`,
+              verdict.reason ?? `waitVisible: "${s.id}" is not frontmost`,
               verdict.code ?? 'TESTID_NOT_FOUND',
-              verdict.meta,
+              { ...verdict.meta, failedSelector: s.id, waitedMs },
             );
           break;
         }
@@ -355,27 +493,44 @@ export async function replayFlow(
         }
       }
     } catch (e) {
+      const waitedMs = Date.now() - startedAt;
+      await releasePendingDesignation();
       trace.push({
         sourceIndex: sourceIndex(i),
-        t: s.t,
+        t: evidenceType,
         target: 'id' in s ? s.id : undefined,
+        ...(stepFocusOnly ? { focusOnly: stepFocusOnly } : {}),
         ok: false,
-        durationMs: Date.now() - startedAt,
+        durationMs: waitedMs,
       });
+      const dispatchMeta = e instanceof ReplayDispatchError ? e.meta : undefined;
       return fail(
         i,
         e instanceof Error ? e.message : String(e),
         e instanceof ReplayDispatchError ? e.code : undefined,
-        e instanceof ReplayDispatchError ? e.meta : undefined,
+        s.t === 'waitVisible' ? { ...dispatchMeta, failedSelector: s.id, waitedMs } : dispatchMeta,
       );
     }
   }
 
   if (opts.signal?.aborted) {
+    await releasePendingDesignation();
     return fail(
       Math.max(0, steps.length - 1),
       'React-tree replay exceeded its execution deadline',
       'RUNNER_TIMEOUT',
+    );
+  }
+  const unconsumedDesignation = staleDesignation ?? pendingDesignation;
+  if (unconsumedDesignation) {
+    if (pendingDesignation) {
+      await releasePendingDesignation();
+    }
+    return fail(
+      unconsumedDesignation.index,
+      `TextInput designation for "${unconsumedDesignation.id}" must be followed immediately by inputText`,
+      'INTERACTION_NOT_ACTUATED',
+      { failedSelector: unconsumedDesignation.id, focusOnly: true },
     );
   }
   return { passed: true, finalFocusId: lastTapped, steps: trace };

@@ -190,4 +190,50 @@ check "git-mode renamed changeset-only PR fails" 1 $?
 env -u CHANGED_FILES -u ADDED_FILES REPO_ROOT="$gitrepo" BASE_REF=main bash "$GUARD" >/dev/null 2>&1
 check "git-mode changeset deletion passes" 0 $?
 
+# 7c. Git mode distinguishes comment-only TypeScript maintenance from release
+# changes, including JavaScript comments embedded in an injected program.
+comment_repo="$(mktemp -d)"
+trap 'rm -rf "$tmp" "$gitrepo" "$comment_repo"' EXIT
+(
+  set -e
+  cd "$comment_repo"
+  git init -q -b main .
+  git config user.email test@example.com
+  git config user.name test
+  mkdir -p .changeset packages/rn-dev-agent-core/src/tools
+  echo "# changesets readme" > .changeset/README.md
+  printf '%s\n' \
+    '/**' \
+    ' * old rationale' \
+    ' */' \
+    'export const injected = `(function() {' \
+    '  // old injected rationale' \
+    '  return 1;' \
+    '})()`;' > packages/rn-dev-agent-core/src/tools/example.ts
+  git add -A
+  git commit -qm base
+  git checkout -qb comments
+  printf '%s\n' \
+    '/**' \
+    ' * first-party rationale' \
+    ' */' \
+    'export const injected = `(function() {' \
+    '  // first-party injected rationale' \
+    '  return 1;' \
+    '})()`;' > packages/rn-dev-agent-core/src/tools/example.ts
+  git commit -qam comments
+) >/dev/null 2>&1
+env -u CHANGED_FILES -u ADDED_FILES REPO_ROOT="$comment_repo" BASE_REF=main bash "$GUARD" >/dev/null 2>&1
+check "git-mode comment-only src change passes" 0 $?
+
+(
+  set -e
+  cd "$comment_repo"
+  sed -i.bak 's/return 1/return 2/' packages/rn-dev-agent-core/src/tools/example.ts
+  rm packages/rn-dev-agent-core/src/tools/example.ts.bak
+  git commit -qam behavior
+) >/dev/null 2>&1
+env -u CHANGED_FILES -u ADDED_FILES REPO_ROOT="$comment_repo" BASE_REF=main bash "$GUARD" >/dev/null 2>&1
+check "git-mode code plus comments still requires changeset" 1 $?
+
 if [ "$fail" = 0 ]; then echo "ALL PASS"; else echo "FAILURES"; exit 1; fi

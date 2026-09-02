@@ -3,29 +3,11 @@ import {
   replayFlow,
   ReplayDispatchError,
   type ReplayResult,
+  type ReplayPressResult,
+  type ReplayTypeContext,
 } from '../domain/cdp-flow-replay.js';
 import type { ReplayDispatch } from '../domain/cdp-flow-replay.js';
-
-// __RN_AGENT.getTree() wraps the node tree under a top-level `.tree` key —
-// `{ tree: <node> | { matches: [...] }, totalNodes, rootsSeeded }` — and the
-// interactive digest under `.interactive`. collectTestIds descends through all
-// of those container shapes so it works on the real handler payload, not only
-// on a bare node. (Boundary bug fix: treeFor used to hand the wrapper straight
-// to isExactPresent, which then saw zero testIDs and the fallback never fired.)
-export function collectTestIds(node: unknown, acc: Set<string> = new Set()): Set<string> {
-  if (!node || typeof node !== 'object') return acc;
-  const n = node as Record<string, unknown>;
-  if (typeof n.testID === 'string') acc.add(n.testID);
-  if (typeof n.nativeID === 'string') acc.add(n.nativeID);
-  if (n.tree) collectTestIds(n.tree, acc);
-  const kids = n.children ?? n.interactive ?? n.nodes ?? n.matches;
-  if (Array.isArray(kids)) for (const c of kids) collectTestIds(c, acc);
-  return acc;
-}
-
-export function isExactPresent(treeJson: unknown, selector: string): boolean {
-  return collectTestIds(treeJson).has(selector);
-}
+import type { createInteractHandler } from './interact.js';
 
 // Unwrap getTree's `{ tree: <node>|{matches} }` envelope to the node(s) the
 // dispatch helpers walk. Returns the bare node for a single match, the
@@ -45,23 +27,40 @@ export interface ReplayTreeEnvelope {
   meta?: Record<string, unknown>;
 }
 
+// Readability gate only: transport, redbox, truncation, and serialization failures reject.
 export function replayTreeData(envelope: ReplayTreeEnvelope): unknown {
   const warning = typeof envelope.meta?.warning === 'string' ? envelope.meta.warning : undefined;
   const redbox = warning === 'APP_HAS_REDBOX';
-  if (envelope.ok === true && !redbox) return envelope.data;
-
   const data =
     envelope.data && typeof envelope.data === 'object' && !Array.isArray(envelope.data)
       ? (envelope.data as Record<string, unknown>)
       : null;
-  const message =
-    redbox && typeof data?.message === 'string'
-      ? data.message.slice(0, 1000)
-      : (envelope.error?.slice(0, 1000) ?? 'Component tree proof is unavailable');
-  const code = redbox ? warning : (envelope.code ?? 'EVAL_FAILED');
+  const truncated = data !== null && (data.__agent_truncated === true || data.truncated === true);
+  const agentError =
+    typeof data?.__agent_error === 'string' ? data.__agent_error.slice(0, 1000) : undefined;
+  const serializationFailed = agentError !== undefined;
+  if (envelope.ok === true && !redbox && !truncated && !serializationFailed) return envelope.data;
+
+  const message = serializationFailed
+    ? agentError || 'Component tree serialization failed'
+    : truncated
+      ? 'Component tree proof exceeded the readable payload budget'
+      : redbox && typeof data?.message === 'string'
+        ? data.message.slice(0, 1000)
+        : (envelope.error?.slice(0, 1000) ?? 'Component tree proof is unavailable');
+  const code = serializationFailed
+    ? 'EVAL_FAILED'
+    : redbox
+      ? warning
+      : (envelope.code ?? 'EVAL_FAILED');
   throw new ReplayDispatchError(code, message, {
     treeEnvelope: {
       ok: envelope.ok === true,
+      ...(serializationFailed ? { agentError } : {}),
+      ...(truncated ? { truncated: true } : {}),
+      ...(truncated && typeof data.originalLength === 'number'
+        ? { originalLength: data.originalLength }
+        : {}),
       ...(envelope.code ? { code: envelope.code } : {}),
       ...(envelope.error ? { error: envelope.error.slice(0, 1000) } : {}),
       ...(warning ? { warning } : {}),
@@ -72,12 +71,15 @@ export function replayTreeData(envelope: ReplayTreeEnvelope): unknown {
 }
 
 export interface CdpReplayDeps {
-  pressByTestId(id: string): Promise<void>;
-  typeByTestId(id: string, text: string): Promise<void>;
-  // returns parsed successful getTree data filtered to `id`; failures reject with their envelope
+  pressByTestId(id: string): Promise<ReplayPressResult | void>;
+  typeByTestId(id: string, text: string, context?: ReplayTypeContext): Promise<void>;
+  releaseInputDesignation?(token: string): Promise<void>;
+  // Returns parsed readable getTree data filtered to `id`.
   treeFor(id: string): Promise<unknown>;
-  frontmostFor?(id: string): Promise<{
+  // Exact-ID oracle; matchCount 0 proves absence, while refusals omit it.
+  frontmostFor(id: string): Promise<{
     visible: boolean;
+    disabled?: boolean;
     reason?: string;
     matchCount?: number;
     code?: string;
@@ -86,22 +88,48 @@ export interface CdpReplayDeps {
   settle(timeoutMs: number): Promise<void>;
 }
 
-function countExactMatches(treeJson: unknown, id: string): number {
-  let matches = 0;
-  const root =
-    treeJson && typeof treeJson === 'object' && 'tree' in treeJson
-      ? (treeJson as Record<string, unknown>).tree
-      : treeJson;
-  const stack: unknown[] = [root];
-  while (stack.length > 0) {
-    const node = stack.pop();
-    if (!node || typeof node !== 'object') continue;
-    const record = node as Record<string, unknown>;
-    if (record.testID === id || record.nativeID === id) matches++;
-    const children = record.children ?? record.nodes ?? record.matches;
-    if (Array.isArray(children)) stack.push(...children);
-  }
-  return matches;
+export function createReplayPressByTestId(
+  interact: ReturnType<typeof createInteractHandler>,
+): CdpReplayDeps['pressByTestId'] {
+  return async (id) => {
+    const result = await interact({
+      action: 'press',
+      testID: id,
+      animated: false,
+      walkUp: true,
+      allowInputDesignation: true,
+    });
+    const envelope = JSON.parse(result.content[0]?.text ?? '{}') as {
+      ok?: boolean;
+      code?: string;
+      error?: string;
+      data?: { action?: string; focusOnly?: boolean; designationToken?: string };
+      meta?: Record<string, unknown>;
+    };
+    if (envelope.ok === false) {
+      throw new ReplayDispatchError(
+        envelope.code ?? 'INTERACTION_NOT_ACTUATED',
+        `press "${id}" failed: ${envelope.error ?? 'ok:false'}`,
+        envelope.meta,
+      );
+    }
+    if (envelope.data?.action !== 'designateTextInput') return { kind: 'press' };
+    if (
+      envelope.data.focusOnly !== true ||
+      typeof envelope.data.designationToken !== 'string' ||
+      envelope.data.designationToken.length === 0
+    ) {
+      throw new ReplayDispatchError(
+        'INTERACTION_NOT_ACTUATED',
+        `press "${id}" returned an invalid TextInput designation`,
+      );
+    }
+    return {
+      kind: 'designation',
+      focusOnly: true,
+      token: envelope.data.designationToken,
+    };
+  };
 }
 
 function hasDisabledExactMatch(treeJson: unknown, id: string): boolean {
@@ -197,26 +225,25 @@ export function buildCdpDispatch(deps: CdpReplayDeps, signal?: AbortSignal): Rep
   const assertExactInteractable = async (id: string): Promise<void> => {
     const tree = await deps.treeFor(id);
     requireNotAborted();
-    const treeMatches = countExactMatches(tree, id);
-    if (treeMatches === 0)
+    const frontmost = await deps.frontmostFor(id);
+    requireNotAborted();
+    if (frontmost.matchCount === 0)
       throw new ReplayDispatchError('TESTID_NOT_FOUND', `testID "${id}" not present`, {
         failedSelector: id,
       });
-    const frontmost = await deps.frontmostFor?.(id);
-    requireNotAborted();
-    const matches = frontmost ? (frontmost.matchCount ?? 1) : treeMatches;
+    const matches = frontmost.matchCount ?? 1;
     if (matches > 1)
       throw new ReplayDispatchError(
         'AMBIGUOUS_TESTID',
         `testID "${id}" resolves to ${matches} mounted elements`,
         { matchCount: matches },
       );
-    if (frontmost && !frontmost.visible)
+    if (!frontmost.visible)
       throw new ReplayDispatchError(
         frontmost.code ?? 'ASSERTION_FAILED',
         frontmost.reason ?? `testID "${id}" is mounted but not frontmost`,
       );
-    if (hasDisabledExactMatch(tree, id))
+    if (frontmost.disabled === true || hasDisabledExactMatch(tree, id))
       throw new ReplayDispatchError(
         'INTERACTION_NOT_ACTUATED',
         `testID "${id}" is disabled/non-interactable`,
@@ -233,32 +260,34 @@ export function buildCdpDispatch(deps: CdpReplayDeps, signal?: AbortSignal): Rep
     async press(id) {
       await assertExactInteractable(id);
       requireNotAborted();
-      await deps.pressByTestId(id);
+      return deps.pressByTestId(id);
     },
-    async type(id, text) {
+    async type(id, text, context) {
       await assertExactInteractable(id);
       requireNotAborted();
-      await deps.typeByTestId(id, text);
+      await deps.typeByTestId(id, text, context);
+    },
+    async releaseDesignation(token) {
+      await deps.releaseInputDesignation?.(token);
     },
     async visibility(id) {
-      const tree = await deps.treeFor(id);
-      const treeMatches = countExactMatches(tree, id);
-      if (treeMatches === 0)
+      await deps.treeFor(id);
+      const frontmost = await deps.frontmostFor(id);
+      if (frontmost.matchCount === 0)
         return {
           visible: false,
           code: 'TESTID_NOT_FOUND',
           reason: `testID "${id}" not present in the React tree`,
           meta: { failedSelector: id },
         };
-      const frontmost = await deps.frontmostFor?.(id);
-      const matches = frontmost ? (frontmost.matchCount ?? 1) : treeMatches;
+      const matches = frontmost.matchCount ?? 1;
       if (matches > 1)
         return {
           visible: false,
           code: 'AMBIGUOUS_TESTID',
           reason: `testID "${id}" resolves to ${matches} mounted elements`,
         };
-      if (frontmost && !frontmost.visible)
+      if (!frontmost.visible)
         return {
           visible: false,
           code: frontmost.code ?? 'ASSERTION_FAILED',

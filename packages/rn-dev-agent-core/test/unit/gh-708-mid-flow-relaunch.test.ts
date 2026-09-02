@@ -248,5 +248,6 @@ test('GH#708: maestro_run reports a passing relaunch flow as passing', async () 
 
   assert.equal(envelope.ok, true, `expected a passing run, got: ${JSON.stringify(envelope)}`);
   assert.equal(envelope.data.passed, true);
-  assert.equal(reproves, 1);
+  // Once for the failed relaunch, once before completing the deferred target.
+  assert.equal(reproves, 2);
 });

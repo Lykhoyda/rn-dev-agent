@@ -14,7 +14,7 @@ import {
   executeMaestroAuthorityStages,
   runFlowParked,
 } from '../../dist/tools/maestro-run.js';
-import { runCdpReplayCommands } from '../../dist/tools/cdp-replay-dispatch.js';
+import { replayTreeData, runCdpReplayCommands } from '../../dist/tools/cdp-replay-dispatch.js';
 import { performReactTreeInput } from '../../dist/tools/device-interact.js';
 import { chooseMaestroDispatch } from '../../dist/tools/maestro-dispatch.js';
 import { buildReplayEngineStatus, MAESTRO_RUNNER_PIN } from '../../dist/domain/engine-pin.js';
@@ -217,7 +217,7 @@ test('React-only learned replay ignores native runtime pin drift', async () => {
 
 test('mounted hidden extendedWaitUntil target is an assertion failure, not absence', async () => {
   const replay = await runCdpReplayCommands(
-    [{ extendedWaitUntil: { visible: { id: 'clipped' }, timeout: 0 } }],
+    [{ extendedWaitUntil: { visible: { id: 'clipped' }, timeout: 250 } }],
     {},
     {
       pressByTestId: async () => {},
@@ -233,6 +233,58 @@ test('mounted hidden extendedWaitUntil target is an assertion failure, not absen
   assert.match(replay.reason ?? '', /clipped/);
 });
 
+test('an omitted-timeout wait polls readable absence until the React target appears', async () => {
+  let treeReads = 0;
+  const replay = await runCdpReplayCommands(
+    [{ extendedWaitUntil: { visible: { id: 'otp' } } }],
+    {},
+    {
+      pressByTestId: async () => {},
+      typeByTestId: async () => {},
+      treeFor: async (id) => (++treeReads >= 3 ? { testID: id } : null),
+      frontmostFor: async () =>
+        treeReads >= 3
+          ? { visible: true, matchCount: 1 }
+          : { visible: false, matchCount: 0, reason: 'testID is not mounted' },
+      launchApp: async () => {},
+      settle: async () => {},
+    },
+  );
+  assert.equal(replay.passed, true);
+  assert.equal(treeReads, 3);
+  assert.ok(replay.steps[0]!.durationMs >= 350);
+});
+
+test('an omitted-timeout wait preserves unreadable component-tree evidence', async () => {
+  const replay = await runCdpReplayCommands(
+    [{ extendedWaitUntil: { visible: { id: 'otp' } } }],
+    {},
+    {
+      pressByTestId: async () => {},
+      typeByTestId: async () => {},
+      treeFor: async () =>
+        replayTreeData({
+          ok: false,
+          code: 'RECONNECT_TIMEOUT',
+          error: 'Component tree connection timed out',
+          meta: { reconnectAttempted: true },
+        }),
+      frontmostFor: async () => ({ visible: false }),
+      launchApp: async () => {},
+      settle: async () => {},
+    },
+  );
+  assert.equal(replay.passed, false);
+  assert.equal(replay.failureCode, 'RECONNECT_TIMEOUT');
+  assert.equal(replay.failedStepIndex, 0);
+  assert.deepEqual(replay.failureMeta?.treeEnvelope, {
+    ok: false,
+    code: 'RECONNECT_TIMEOUT',
+    error: 'Component tree connection timed out',
+    meta: { reconnectAttempted: true },
+  });
+});
+
 test('ordinary missing React testID stays TESTID_NOT_FOUND without WDA', async () => {
   const handler = createMaestroRunHandler({
     chooseDispatch: () => {
@@ -242,7 +294,7 @@ test('ordinary missing React testID stays TESTID_NOT_FOUND without WDA', async (
       pressByTestId: async () => {},
       typeByTestId: async () => {},
       treeFor: async () => null,
-      frontmostFor: async () => ({ visible: false }),
+      frontmostFor: async () => ({ visible: false, matchCount: 0 }),
       launchApp: async () => {},
       settle: async () => {},
     }),
@@ -252,8 +304,10 @@ test('ordinary missing React testID stays TESTID_NOT_FOUND without WDA', async (
       platform: 'ios',
       inlineYaml: `appId: com.example.app
 ---
-- assertVisible:
-    id: genuinely-missing
+- extendedWaitUntil:
+    visible:
+      id: genuinely-missing
+    timeout: 250
 `,
       ...callbacks,
     }),
@@ -271,7 +325,8 @@ test('React stage failures retain completed tap and launch evidence', async () =
       pressByTestId: async (id) => calls.push(`press:${id}`),
       typeByTestId: async () => {},
       treeFor: async (id) => (id === 'missing' ? { tree: {} } : { testID: id }),
-      frontmostFor: async () => ({ visible: true }),
+      frontmostFor: async (id) =>
+        id === 'missing' ? { visible: false, matchCount: 0 } : { visible: true },
       launchApp: async () => calls.push('launch'),
       settle: async () => {},
     }),
@@ -284,8 +339,10 @@ test('React stage failures retain completed tap and launch evidence', async () =
 - tapOn:
     id: continue
 - launchApp: null
-- assertVisible:
-    id: missing
+- extendedWaitUntil:
+    visible:
+      id: missing
+    timeout: 250
 `,
     claimNativeOrigin: async () => {},
     completeNativeOrigin: async () => {},
@@ -302,7 +359,7 @@ test('React stage failures retain completed tap and launch evidence', async () =
   assert.deepEqual(calls, ['press:continue']);
   assert.deepEqual(
     env.meta?.steps?.map((step: { name: string }) => step.name),
-    ['launch', 'tap', 'launch', 'assert'],
+    ['launch', 'tap', 'launch', 'waitVisible'],
   );
 });
 
@@ -351,6 +408,19 @@ test('the real login shape partitions native prefix from exact React suffix', ()
       { domain: 'xctest-native', sourceIndices: [0, 1] },
       { domain: 'react-tree', sourceIndices: [2, 3, 4] },
     ],
+  );
+});
+
+test('an exact-id extended wait with omitted timeout plans in the React proof domain', () => {
+  const plan = planIosProofDomains(
+    [{ extendedWaitUntil: { visible: { id: 'otp_email-pressable' } } }],
+    {},
+  );
+  assert.equal(plan.ok, true);
+  if (!plan.ok) return;
+  assert.deepEqual(
+    plan.segments.map(({ domain, sourceIndices }) => ({ domain, sourceIndices })),
+    [{ domain: 'react-tree', sourceIndices: [0] }],
   );
 });
 
@@ -619,6 +689,55 @@ test('partitioned replay carries nested React focus across a native segment', as
   assert.deepEqual(calls, ['press:outer-field', 'press:inner-field', 'type:inner-field']);
 });
 
+test('a designation-only tap cannot be revived as static React focus after a native segment', async () => {
+  const calls: string[] = [];
+  const handler = createMaestroRunHandler({
+    getActiveSession: () => ({
+      name: 'designation-across-native',
+      platform: 'ios',
+      deviceId: IOS_UDID,
+      appId: 'com.example.app',
+      openedAt: new Date(0).toISOString(),
+    }),
+    replayDeps: () => ({
+      pressByTestId: async (id) => {
+        calls.push(`press:${id}`);
+        return { kind: 'designation', focusOnly: true, token: `designation-${id}` };
+      },
+      typeByTestId: async (id, text) => calls.push(`type:${id}:${text}`),
+      treeFor: async (id) => ({ testID: id }),
+      frontmostFor: async () => ({ visible: true }),
+      releaseInputDesignation: async () => {},
+      launchApp: async () => {},
+      settle: async () => {},
+    }),
+    chooseDispatch: () => nativeDispatch(),
+    parkFlow: async (run) => run(),
+    resolveEngineStatus: async () =>
+      buildReplayEngineStatus('pinned-ok', MAESTRO_RUNNER_PIN.version, false),
+    execFile: async () => ({ stdout: nativeRunnerOutput(), stderr: '' }),
+  });
+  const env = envelope(
+    await handler({
+      platform: 'ios',
+      deviceId: IOS_UDID,
+      inlineYaml: `appId: com.example.app
+---
+- tapOn:
+    id: email
+- inputText: first
+- assertVisible: Native status
+- inputText: second
+`,
+      ...callbacks,
+    }),
+  );
+
+  assert.equal(env.ok, false);
+  assert.match(env.error ?? '', /no focus target/);
+  assert.deepEqual(calls, ['press:email', 'type:email:first']);
+});
+
 test('inputText follows a nested native tap instead of reviving stale React focus', () => {
   const plan = planIosProofDomains(
     [
@@ -736,6 +855,7 @@ test('controlled input appends and succeeds only after exact fiber read-back', a
           value: JSON.stringify({
             controlled: true,
             handlerCalled: 'onChangeText',
+            text: value,
             valueBefore: before,
           }),
         };
@@ -870,6 +990,72 @@ test('current-route ID is frontmost', () => {
   const verdict = JSON.parse(sandbox.__RN_AGENT.isTestIdFrontmost('coverage'));
   assert.equal(verdict.visible, true);
   assert.equal(verdict.activeRoute, 'home');
+});
+
+test('frontmost exact-ID oracle carries disabled state from the matched fiber', () => {
+  const root = routeTree('save', 'home');
+  root.child.child.memoizedProps.accessibilityState = { disabled: true };
+  const sandbox = makeFrontmostSandbox(root, {
+    index: 0,
+    routes: [{ name: 'home' }],
+  });
+  const verdict = JSON.parse(sandbox.__RN_AGENT.isTestIdFrontmost('save'));
+  assert.equal(verdict.visible, true);
+  assert.equal(verdict.disabled, true);
+  assert.equal(verdict.matchCount, 1);
+});
+
+test('frontmost exact matches refuse incomplete renderer coverage', () => {
+  const root = routeTree('coverage', 'home');
+  const rootWithoutTarget = routeTree('other', 'home');
+  const sandbox = makeFrontmostSandbox(root, {
+    index: 0,
+    routes: [{ name: 'home' }],
+  });
+  const incompleteRegistry = {
+    renderers: {
+      keys: () => {
+        throw new Error('renderer registry is incomplete');
+      },
+      forEach: () => {},
+    },
+    getFiberRoots: (id: number) => (id === 1 ? new Set([{ current: root }]) : new Set()),
+  };
+  const rendererError = {
+    renderers: new Map([
+      [1, {}],
+      [2, {}],
+    ]),
+    getFiberRoots: (id: number) => {
+      if (id === 1) return new Set([{ current: root }]);
+      if (id === 2) throw new Error('renderer teardown');
+      return new Set();
+    },
+  };
+  const unscannedRegistry = {
+    renderers: {
+      keys: () => new Map([[40, {}]]).keys(),
+      forEach: (callback: (value: object, id: number) => void) => {
+        callback({}, 1);
+        callback({}, 30);
+        callback({}, 40);
+      },
+    },
+    getFiberRoots: (id: number) => {
+      if (id === 1) return new Set([{ current: rootWithoutTarget }]);
+      if (id === 30) return new Set([{ current: root }]);
+      return new Set();
+    },
+  };
+  for (const hook of [incompleteRegistry, rendererError, unscannedRegistry]) {
+    sandbox.__REACT_DEVTOOLS_GLOBAL_HOOK__ = hook;
+    const verdict = JSON.parse(sandbox.__RN_AGENT.isTestIdFrontmost('coverage'));
+    assert.deepEqual(verdict, {
+      visible: false,
+      code: 'ASSERTION_FAILED',
+      reason: 'frontmost proof cannot cover every mounted renderer',
+    });
+  }
 });
 
 test('a target owned by an active ancestor route remains frontmost', () => {
@@ -1041,6 +1227,151 @@ test('stacked visible modal roots fail closed when ordering is unavailable', () 
   assert.equal(verdict.modalCount, 2);
 });
 
+// React double-buffers fibers: after a commit, a child collected from the
+// current tree can carry a .return pointing at an ancestor's alternate.
+function modalAlternateSubtree(root: any, testID: string) {
+  const modalHost: any = {
+    type: { displayName: 'RCTModalHostView' },
+    memoizedProps: { visible: true },
+    return: root,
+    child: null,
+    sibling: null,
+  };
+  const modalHostAlternate: any = {
+    type: { displayName: 'RCTModalHostView' },
+    memoizedProps: { visible: true },
+    return: root,
+    child: null,
+    sibling: null,
+  };
+  modalHost.alternate = modalHostAlternate;
+  modalHostAlternate.alternate = modalHost;
+  modalHost.child = {
+    type: { displayName: 'View' },
+    memoizedProps: { testID },
+    return: modalHostAlternate,
+    child: null,
+    sibling: null,
+  };
+  return modalHost;
+}
+
+function modalAlternateTree(testID: string) {
+  const root: any = {
+    type: { displayName: 'Root' },
+    memoizedProps: {},
+    return: null,
+    child: null,
+    sibling: null,
+  };
+  root.child = modalAlternateSubtree(root, testID);
+  return root;
+}
+
+test('a modal-hosted target reached through the host fiber alternate is frontmost', () => {
+  const root = modalAlternateTree('otp_email-pressable');
+  const sandbox = makeFrontmostSandbox(root, { index: 0, routes: [{ name: 'Home' }] });
+  const verdict = JSON.parse(sandbox.__RN_AGENT.isTestIdFrontmost('otp_email-pressable'));
+  assert.equal(verdict.visible, true);
+  assert.equal(verdict.modalCount, 1);
+  assert.equal(verdict.matchCount, 1);
+});
+
+test('a target genuinely behind the active modal stays refused when the host has an alternate', () => {
+  const root = modalAlternateTree('otp_email-pressable');
+  root.child.sibling = {
+    type: { displayName: 'View' },
+    memoizedProps: { testID: 'behind_the_modal' },
+    return: root,
+    child: null,
+    sibling: null,
+  };
+  const sandbox = makeFrontmostSandbox(root, { index: 0, routes: [{ name: 'Home' }] });
+  const verdict = JSON.parse(sandbox.__RN_AGENT.isTestIdFrontmost('behind_the_modal'));
+  assert.equal(verdict.visible, false);
+  assert.match(verdict.reason, /behind the active modal/);
+  assert.equal(verdict.matchCount, 1);
+});
+
+test('an ordinary non-modal target is unaffected by ancestor alternates', () => {
+  const root = routeTree('coverage', 'home');
+  const screen = root.child;
+  const screenAlternate: any = {
+    type: { displayName: 'Screen' },
+    memoizedProps: { route: { name: 'home' } },
+    return: root,
+    child: null,
+    sibling: null,
+  };
+  screen.alternate = screenAlternate;
+  screenAlternate.alternate = screen;
+  screen.child.return = screenAlternate;
+  const sandbox = makeFrontmostSandbox(root, { index: 0, routes: [{ name: 'home' }] });
+  const verdict = JSON.parse(sandbox.__RN_AGENT.isTestIdFrontmost('coverage'));
+  assert.equal(verdict.visible, true);
+  assert.equal(verdict.matchCount, 1);
+});
+
+test('duplicate IDs in separate subtrees stay ambiguous when ancestors have alternates', () => {
+  const root = modalAlternateTree('otp_email-pressable');
+  const duplicate: any = {
+    type: { displayName: 'View' },
+    memoizedProps: { testID: 'otp_email-pressable' },
+    return: root,
+    child: null,
+    sibling: null,
+  };
+  root.child.sibling = duplicate;
+  const sandbox = makeFrontmostSandbox(root, { index: 0, routes: [{ name: 'Home' }] });
+  const verdict = JSON.parse(sandbox.__RN_AGENT.isTestIdFrontmost('otp_email-pressable'));
+  assert.equal(verdict.visible, false);
+  assert.match(verdict.reason, /ambiguous across mounted React trees/);
+  assert.equal(verdict.matchCount, 2);
+});
+
+test('a delayed modal-hosted target becomes frontmost through the timed wait', async () => {
+  const root: any = {
+    type: { displayName: 'Root' },
+    memoizedProps: {},
+    return: null,
+    child: null,
+    sibling: null,
+  };
+  const home: any = {
+    type: { displayName: 'View' },
+    memoizedProps: { testID: 'open_otp' },
+    return: root,
+    child: null,
+    sibling: null,
+  };
+  root.child = home;
+  const modalHost = modalAlternateSubtree(root, 'otp_email-pressable');
+  const sandbox = makeFrontmostSandbox(root, { index: 0, routes: [{ name: 'Home' }] });
+  let polls = 0;
+  const absentVerdicts: string[] = [];
+  const replay = await runCdpReplayCommands(
+    [{ extendedWaitUntil: { visible: { id: 'otp_email-pressable' }, timeout: 2000 } }],
+    {},
+    {
+      pressByTestId: async () => {},
+      typeByTestId: async () => {},
+      treeFor: async (id: string) => JSON.parse(sandbox.__RN_AGENT.getTree({ filter: id })),
+      frontmostFor: async (id: string) => {
+        polls++;
+        if (polls === 3) home.sibling = modalHost;
+        const verdict = JSON.parse(sandbox.__RN_AGENT.isTestIdFrontmost(id));
+        if (!verdict.visible) absentVerdicts.push(verdict.reason);
+        return verdict;
+      },
+      launchApp: async () => {},
+      settle: async () => {},
+    },
+  );
+  assert.equal(replay.passed, true);
+  assert.ok(polls >= 3, `expected the wait to poll through absence, saw ${polls} polls`);
+  assert.deepEqual([...new Set(absentVerdicts)], ['testID is not mounted']);
+});
+
 test('a matching route returned after the replay deadline cannot report success', async () => {
   let clock = 0;
   const handler = createMaestroRunHandler({
@@ -1188,6 +1519,78 @@ function nativeHandler(
     },
   });
 }
+
+test('a partitioned saved flow resumes at an omitted-timeout wait without replaying its native prefix', async () => {
+  let nativeRuns = 0;
+  let treeReads = 0;
+  const mutations: string[] = [];
+  const handler = createMaestroRunHandler({
+    getActiveSession: () => ({
+      name: 'partitioned-otp-resume',
+      platform: 'ios',
+      deviceId: IOS_UDID,
+      appId: 'com.example.app',
+      openedAt: new Date(0).toISOString(),
+    }),
+    replayDeps: () => ({
+      pressByTestId: async (id) => mutations.push(id),
+      typeByTestId: async () => {},
+      treeFor: async (id) => {
+        treeReads += 1;
+        return treeReads >= 3 ? { testID: id } : null;
+      },
+      frontmostFor: async () =>
+        treeReads >= 3
+          ? { visible: true, matchCount: 1 }
+          : { visible: false, matchCount: 0, reason: 'testID is not mounted' },
+      launchApp: async () => {},
+      settle: async () => {},
+    }),
+    chooseDispatch: () => nativeDispatch(),
+    parkFlow: async (run) => run(),
+    resolveEngineStatus: async () =>
+      buildReplayEngineStatus('pinned-ok', MAESTRO_RUNNER_PIN.version, false),
+    execFile: async () => {
+      nativeRuns += 1;
+      return {
+        stdout: nativeRunnerOutput('    ✓ assertVisible (0.1s)'),
+        stderr: '',
+      };
+    },
+  });
+  const env = envelope(
+    await handler({
+      platform: 'ios',
+      deviceId: IOS_UDID,
+      inlineYaml: `appId: com.example.app
+---
+- assertVisible: Native prefix
+- extendedWaitUntil:
+    visible:
+      id: otp_email-pressable
+- tapOn:
+    id: otp_email-pressable
+`,
+      ...callbacks,
+    }),
+  );
+  assert.equal(env.ok, true);
+  assert.equal(env.data?.proofDomain, 'partitioned');
+  assert.equal(nativeRuns, 1);
+  assert.deepEqual(mutations, ['otp_email-pressable']);
+  assert.deepEqual(
+    env.data?.steps.map((step: { index: number; verb: string; status: string }) => [
+      step.index,
+      step.verb,
+      step.status,
+    ]),
+    [
+      [0, 'assertVisible', 'pass'],
+      [1, 'waitVisible', 'pass'],
+      [2, 'tap', 'pass'],
+    ],
+  );
+});
 
 test('native-only blindness requires a WDA miss and same-screen native visibility', async () => {
   let comparisonRunnerStopped = false;
@@ -1727,7 +2130,7 @@ test('partitioned React failures retain prior native proof evidence', async () =
       pressByTestId: async () => {},
       typeByTestId: async () => {},
       treeFor: async () => null,
-      frontmostFor: async () => ({ visible: false }),
+      frontmostFor: async () => ({ visible: false, matchCount: 0 }),
       launchApp: async () => {},
       settle: async () => {},
     }),
@@ -1744,7 +2147,7 @@ test('partitioned React failures retain prior native proof evidence', async () =
     await handler({
       platform: 'ios',
       deviceId: IOS_UDID,
-      inlineYaml: `appId: com.example.app\n---\n- assertVisible: Native status\n- assertVisible:\n    id: missing-react-status\n`,
+      inlineYaml: `appId: com.example.app\n---\n- assertVisible: Native status\n- extendedWaitUntil:\n    visible:\n      id: missing-react-status\n    timeout: 250\n`,
       ...callbacks,
     }),
   );

@@ -215,6 +215,38 @@ test('run-action: first-attempt pass appends RunRecord with no auto-repair', asy
   );
 });
 
+test('run-action: forwards handoff cancellation to session authority', async () => {
+  project.seedAction('demo', fixtureYaml({ id: 'demo', selectors: ['fab-create-task'] }));
+  const flowAbort = new AbortController();
+  let receivedCompletion;
+  let receivedReprove;
+  const handler = createRunActionHandler({
+    maestroRun: async (args) => {
+      await args.reproveManagedOrigin({ signal: flowAbort.signal, readinessTimeoutMs: 123 });
+      await args.completeNativeOrigin(true, flowAbort.signal);
+      return {
+        content: [{ type: 'text', text: JSON.stringify(PASS_ENV) }],
+      };
+    },
+    completeNativeOrigin: async (args, targetExpected, signal) => {
+      receivedCompletion = { args, targetExpected, signal };
+    },
+    reproveManagedOrigin: async (args, options) => {
+      receivedReprove = { args, options };
+    },
+  });
+
+  const result = await handler({ actionId: 'demo', projectRoot: project.root });
+
+  assert.equal(result.isError, undefined);
+  assert.equal(receivedReprove.args.actionId, 'demo');
+  assert.equal(receivedReprove.options.signal, flowAbort.signal);
+  assert.equal(receivedReprove.options.readinessTimeoutMs, 123);
+  assert.equal(receivedCompletion.args.actionId, 'demo');
+  assert.equal(receivedCompletion.targetExpected, true);
+  assert.equal(receivedCompletion.signal, flowAbort.signal);
+});
+
 test('cdp_run_action preserves a typed native-blind refusal', async () => {
   project.seedAction('demo', fixtureYaml({ id: 'demo', selectors: ['fab-create-task'] }));
   const handler = createRunActionHandler({

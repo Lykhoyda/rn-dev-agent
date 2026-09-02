@@ -209,8 +209,7 @@ test('getStoreState: no-store error includes Jotai hint', () => {
 });
 
 // ── M8: findActiveRenderer 1..5 probe ────────────────────────────────
-// Mirrors metro-mcp src/utils/fiber.ts FIBER_ROOT_JS. Proves the probe
-// finds fiber roots regardless of hook.renderers population state.
+// Proves the probe finds fiber roots regardless of hook.renderers population state.
 
 test('M8: findActiveRenderer finds root at renderer ID 1 (happy path, no regression)', () => {
   const fiber = { type: { name: 'App' }, child: null, sibling: null };

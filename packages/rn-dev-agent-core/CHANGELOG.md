@@ -1,5 +1,30 @@
 # rn-dev-agent-core
 
+## 1.0.2
+
+### Patch Changes
+
+- f76cd30: Allow React-tree replay taps to designate an exact editable TextInput for only the adjacent inputText step without dispatching press or focus callbacks, and resolve a stock TextInput whose composite and host fibers share one onChangeText as a single typeText target instead of refusing it as ambiguous.
+
+## 1.0.1
+
+### Patch Changes
+
+- 7911ebd: Recognize a modal-hosted testID as frontmost when its React return chain threads through the modal host fiber's alternate, instead of refusing it as behind the active modal.
+- 7911ebd: Re-prove the exact CDP session target before completing a partitioned native segment's deferred origin, so a passing native prefix survives the runner park/resume handoff into the React-tree suffix instead of failing with an empty before-first-step envelope.
+- 7911ebd: Resume id-based iOS action waits through the React tree with Maestro-compatible timed visibility semantics.
+- d30f866: Reuse completed WebDriverAgent builds across maestro-runner spawns through a toolchain-fingerprinted persistent store with atomic publication, removing the ~75 s per-invocation WDA rebuild while keeping per-spawn cache isolation, corruption fallback, and cold-build behavior.
+
+## 1.0.0
+
+### Major Changes
+
+- 52f183f: Require Node 24 or newer and authenticate both Node calling conventions for managed-Metro descendant spawns so supported runtimes bind Metro without weakening strict proof.
+
+### Patch Changes
+
+- 4c417dc: Report unreadable process births as unavailable while preserving genuine authority identity-mismatch refusals.
+
 ## 0.72.7
 
 ### Patch Changes

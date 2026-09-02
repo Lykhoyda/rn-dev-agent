@@ -2,7 +2,7 @@
 // whenever the injected surface changes; it flows into the IIFE's freshness
 // check (__RN_AGENT.__v) AND the post-injection log line, so they can never
 // drift (the log previously hard-coded a stale "v11").
-export const HELPERS_VERSION = 48;
+export const HELPERS_VERSION = 60;
 
 export const INJECTED_HELPERS = `
 (function() {
@@ -48,23 +48,75 @@ export const INJECTED_HELPERS = `
     '_LogBoxInspectorContainer'
   ];
 
-  // Reset by every root-iteration pass; only valid when read synchronously
-  // after the pass that produced the tree (many helpers share the iterators).
-  // complete is true only when the renderer-ID loop finished without the
-  // empty-streak early-exit — empty roots are mounting evidence only then
-  // (GH #789).
-  var lastRootScan = { rendererErrors: 0, probedUpTo: 0, complete: false };
+  // Synchronous scan result; finished stays false after the GH #789 empty-streak exit.
+  var lastRootScan = { rendererErrors: 0, visited: {}, finished: false };
 
-  function computeUnscannedRendererIds() {
-    try {
-      var hook = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
-      if (!hook || !hook.renderers || typeof hook.renderers.forEach !== 'function') return [];
-      var out = [];
-      hook.renderers.forEach(function(_v, id) {
-        if (typeof id === 'number' && id > lastRootScan.probedUpTo) out.push(id);
-      });
-      return out;
-    } catch (_) { return []; }
+  function rootScanCoverage() {
+    var reasons = [];
+    var registryIds = [];
+    var hook = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
+    var renderers = hook && hook.renderers;
+    if (renderers) {
+      if (typeof renderers.keys !== 'function' || typeof renderers.forEach !== 'function') {
+        registryIds = null;
+      } else {
+        try {
+          var iterator = renderers.keys();
+          if (!iterator || typeof iterator.next !== 'function') {
+            registryIds = null;
+          } else {
+            var step;
+            var iterations = 0;
+            while (registryIds !== null) {
+              step = iterator.next();
+              if (!step || typeof step !== 'object' || typeof step.done !== 'boolean') {
+                registryIds = null;
+                break;
+              }
+              if (step.done) break;
+              if (++iterations > MAX_REGISTERED_RENDERER_IDS || typeof step.value !== 'number') {
+                registryIds = null;
+                break;
+              }
+              if (registryIds.indexOf(step.value) === -1) registryIds.push(step.value);
+              if (registryIds.length > MAX_REGISTERED_RENDERER_IDS) registryIds = null;
+            }
+          }
+        } catch (_) {
+          registryIds = null;
+        }
+        if (registryIds !== null) {
+          try {
+            var forEachIterations = 0;
+            renderers.forEach(function(_v, id) {
+              if (registryIds === null) return;
+              if (++forEachIterations > MAX_REGISTERED_RENDERER_IDS || typeof id !== 'number') {
+                registryIds = null;
+                return;
+              }
+              if (registryIds.indexOf(id) === -1) registryIds.push(id);
+              if (registryIds.length > MAX_REGISTERED_RENDERER_IDS) registryIds = null;
+            });
+          } catch (_) {
+            registryIds = null;
+          }
+        }
+      }
+    }
+    var addReason = function(reason) {
+      if (reasons.indexOf(reason) === -1) reasons.push(reason);
+    };
+    if (lastRootScan.rendererErrors > 0 || registryIds === null) addReason('renderer-error');
+    if (!lastRootScan.finished) addReason('root-enumeration-incomplete');
+    var unscannedRendererIds = [];
+    if (registryIds !== null) {
+      for (var i = 0; i < registryIds.length; i++) {
+        var id = registryIds[i];
+        if (!lastRootScan.visited[id]) unscannedRendererIds.push(id);
+      }
+      if (unscannedRendererIds.length > 0) addReason('renderers-unscanned');
+    }
+    return { reasons: reasons, unscannedRendererIds: unscannedRendererIds };
   }
 
   // Read the renderer IDs React DevTools actually registered. A malformed or
@@ -91,7 +143,7 @@ export const INJECTED_HELPERS = `
   }
 
   function findActiveRenderer() {
-    lastRootScan = { rendererErrors: 0, probedUpTo: 0, complete: false };
+    lastRootScan = { rendererErrors: 0, visited: {}, finished: false };
     var hook = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
     if (!hook || typeof hook.getFiberRoots !== 'function') return null;
     var rendererIds = getRegisteredRendererIds(hook);
@@ -102,7 +154,7 @@ export const INJECTED_HELPERS = `
     var emptyStreak = 0;
     for (var rii = 0; rii < rendererIds.length; rii++) {
       var ri = rendererIds[rii];
-      if (ri > lastRootScan.probedUpTo) lastRootScan.probedUpTo = ri;
+      lastRootScan.visited[ri] = true;
       try {
         var roots = hook.getFiberRoots(ri);
         if (roots && roots.size > 0) {
@@ -117,7 +169,7 @@ export const INJECTED_HELPERS = `
         lastRootScan.rendererErrors++;
       }
     }
-    lastRootScan.complete = true;
+    lastRootScan.finished = true;
     return null;
   }
 
@@ -134,7 +186,7 @@ export const INJECTED_HELPERS = `
   // native renderer loop so user-registered portals stay lower priority
   // than React's own registry.
   function iterateAllRoots(cb) {
-    lastRootScan = { rendererErrors: 0, probedUpTo: 0, complete: false };
+    lastRootScan = { rendererErrors: 0, visited: {}, finished: false };
     var hook = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
     if (hook && typeof hook.getFiberRoots === 'function') {
       var rendererIds = getRegisteredRendererIds(hook);
@@ -146,7 +198,7 @@ export const INJECTED_HELPERS = `
       var abortedEarly = false;
       for (var rii = 0; rii < rendererIds.length; rii++) {
         var ri = rendererIds[rii];
-        if (ri > lastRootScan.probedUpTo) lastRootScan.probedUpTo = ri;
+        lastRootScan.visited[ri] = true;
         try {
           var roots = hook.getFiberRoots(ri);
           if (roots && roots.size) {
@@ -171,7 +223,7 @@ export const INJECTED_HELPERS = `
           lastRootScan.rendererErrors++;
         }
       }
-      lastRootScan.complete = !abortedEarly;
+      if (!abortedEarly) lastRootScan.finished = true;
     }
     // GH #126 Gap B — extra-roots step. Runs AFTER the native renderer
     // loop (above) so user-registered portals are lower priority than
@@ -407,9 +459,12 @@ export const INJECTED_HELPERS = `
       o = o || {};
       var reasons = [];
       if (o.noRenderer) reasons.push('no-renderer');
-      if (lastRootScan.rendererErrors > 0) reasons.push('renderer-error');
-      var unscanned = computeUnscannedRendererIds();
-      if (unscanned.length > 0) reasons.push('renderers-unscanned');
+      var coverage = rootScanCoverage();
+      for (var coverageIndex = 0; coverageIndex < coverage.reasons.length; coverageIndex++) {
+        if (reasons.indexOf(coverage.reasons[coverageIndex]) === -1) {
+          reasons.push(coverage.reasons[coverageIndex]);
+        }
+      }
       if (o.scanBudgetExhausted) reasons.push('scan-budget-exhausted');
       if (o.outputTruncated) reasons.push('output-truncated');
       var state = (o.noRenderer || o.failed) ? 'failed' : (reasons.length > 0 ? 'degraded' : 'ok');
@@ -422,8 +477,9 @@ export const INJECTED_HELPERS = `
         effectiveDepth: maxDepth,
         droppedSubtrees: walkQuality.droppedSubtrees,
         collapsedChildLists: walkQuality.collapsedChildLists,
+        complete: state === 'ok' && reasons.length === 0 && walkQuality.droppedSubtrees === 0 && walkQuality.collapsedChildLists === 0,
         rendererErrors: lastRootScan.rendererErrors,
-        unscannedRendererIds: unscanned
+        unscannedRendererIds: coverage.unscannedRendererIds
       };
     }
 
@@ -890,7 +946,8 @@ export const INJECTED_HELPERS = `
       var mountHookUsable = !!(mountHook && typeof mountHook.getFiberRoots === 'function');
       var mountRoots = mountHookUsable ? findAllRootFibers() : [];
       // Only a complete, clean scan is mounting evidence.
-      var mountScanClean = mountHookUsable && lastRootScan.complete && lastRootScan.rendererErrors === 0;
+      var mountCoverage = rootScanCoverage();
+      var mountScanClean = mountHookUsable && mountCoverage.reasons.length === 0;
       if (mountScanClean && mountRoots.length === 0) {
         return JSON.stringify({
           error: 'App is still mounting — no React fiber roots exist yet (the bundle is likely still loading). Retry in ~2s.',
@@ -898,7 +955,7 @@ export const INJECTED_HELPERS = `
           retryInMs: 2000
         });
       }
-      if (mountHookUsable && !lastRootScan.complete && mountRoots.length === 0) {
+      if (mountHookUsable && mountCoverage.reasons.indexOf('root-enumeration-incomplete') !== -1 && mountRoots.length === 0) {
         return JSON.stringify({ error: 'Navigation state not found. Is React Navigation or Expo Router installed?' });
       }
       var navFw = navDetectBundledFramework();
@@ -2103,6 +2160,38 @@ export const INJECTED_HELPERS = `
       }
     }
 
+    function bindingDescendsFrom(descendant, ancestor) {
+      var cursor = descendant.candidateFiber.return;
+      var returnSeen = new WeakSet();
+      while (cursor) {
+        if (!consumeWork()) return false;
+        if (returnSeen.has(cursor)) {
+          state.truncated = true;
+          state.reason = 'cycle';
+          return false;
+        }
+        returnSeen.add(cursor);
+        if (sameTypeTextFiber(cursor, ancestor.candidateFiber)) return true;
+        cursor = cursor.return;
+      }
+      return false;
+    }
+
+    // RN TextInput renders one element as a composite fiber plus its host child sharing one handler; keep the deepest (press's match-deepest-only rule).
+    function collapseLineageBindings(all) {
+      return all.filter(function(binding) {
+        return !all.some(function(other) {
+          return !state.truncated
+            && other !== binding
+            && other.handler === binding.handler
+            && other.contract === binding.contract
+            && bindingDescendsFrom(other, binding);
+        });
+      });
+    }
+
+    if (!state.truncated && bindings.length > 1) bindings = collapseLineageBindings(bindings);
+
     if (state.truncated) return typeTextTruncation(state);
     if (bindings.length > 1) {
       var ambiguousHandler = bindings[0].contract === 'onChangeText:string' ? 'onChangeText' : 'onChange';
@@ -2139,7 +2228,277 @@ export const INJECTED_HELPERS = `
     };
   }
 
+  function textInputDesignationDisabled(candidateProps) {
+    return candidateProps.disabled === true
+      || candidateProps.editable === false
+      || candidateProps.readOnly === true
+      || (candidateProps.accessibilityState && candidateProps.accessibilityState.disabled === true);
+  }
+
+  function textInputDesignationInteractivity(input, selector) {
+    var current = input;
+    var seen = new WeakSet();
+    var depth = 0;
+    while (current && depth < 1000) {
+      if (seen.has(current)) {
+        return {
+          error: 'TextInput designation interactivity resolution truncated',
+          code: 'ASSERTION_FAILED',
+          testID: selector,
+          focusOnly: true,
+          truncated: true
+        };
+      }
+      seen.add(current);
+      if (isSubtreeInaccessible(current)) {
+        return {
+          error: 'TextInput designation target is hidden or occluded',
+          testID: selector,
+          focusOnly: true
+        };
+      }
+      var props = current.memoizedProps || {};
+      var pointerEvents = props.pointerEvents;
+      if (
+        current === input
+        && (pointerEvents === 'none' || pointerEvents === 'box-none')
+      ) {
+        return {
+          error: 'TextInput designation target is not user-interactable with pointerEvents="' + pointerEvents + '"',
+          testID: selector,
+          focusOnly: true
+        };
+      }
+      if (
+        current !== input
+        && (pointerEvents === 'none' || pointerEvents === 'box-only')
+      ) {
+        return {
+          error: 'TextInput designation target is blocked beneath pointerEvents="' + pointerEvents + '"',
+          testID: selector,
+          focusOnly: true
+        };
+      }
+      current = current.return;
+      depth++;
+    }
+    if (current) {
+      return {
+        error: 'TextInput designation interactivity resolution truncated',
+        code: 'ASSERTION_FAILED',
+        testID: selector,
+        focusOnly: true,
+        truncated: true
+      };
+    }
+    return null;
+  }
+
+  var activeTextInputDesignation = null;
+  var textInputDesignationSequence = 0;
+
+  function retainTextInputDesignation(input, selector) {
+    textInputDesignationSequence++;
+    var token = Date.now().toString(36) + '-' + textInputDesignationSequence.toString(36);
+    activeTextInputDesignation = {
+      token: token,
+      input: input,
+      selector: selector
+    };
+    return token;
+  }
+
+  function consumeTextInputDesignation(token, selector) {
+    var designation = activeTextInputDesignation;
+    if (
+      !designation
+      || designation.token !== token
+      || designation.selector !== selector
+    ) {
+      return null;
+    }
+    activeTextInputDesignation = null;
+    return designation;
+  }
+
+  function designateTextInputPress(found, selector) {
+    var designation = resolveTextInputDesignation(found, selector);
+    if (!designation) return null;
+    if (designation.success === true) {
+      designation.designationToken = retainTextInputDesignation(designation.inputFiber, selector);
+      delete designation.inputFiber;
+    }
+    return JSON.stringify(designation);
+  }
+
+  function releaseInputDesignation(token) {
+    var released = !!activeTextInputDesignation
+      && activeTextInputDesignation.token === token;
+    if (released) activeTextInputDesignation = null;
+    return JSON.stringify({ released: released });
+  }
+
+  function isSameDesignatedInput(left, right) {
+    return !!left && !!right && (
+      left === right
+      || left.alternate === right
+      || right.alternate === left
+    );
+  }
+
+  function resolveTextInputDesignation(owner, selector) {
+    if (!owner) return null;
+    var designationStack = [owner];
+    var designationSeen = new WeakSet();
+    var designationMatches = [];
+    var designationInputs = [];
+    var designationWork = 0;
+    while (designationStack.length > 0 && designationWork < 2000) {
+      var designationFiber = designationStack.pop();
+      if (designationSeen.has(designationFiber)) continue;
+      designationSeen.add(designationFiber);
+      designationWork++;
+      var designationProps = designationFiber.memoizedProps || {};
+      var designationMatchesSelector = designationProps.testID === selector
+        || designationProps.nativeID === selector;
+      if (designationMatchesSelector) {
+        designationMatches.push(designationFiber);
+      }
+      if (
+        designationFiber.tag === 5
+        && typeof designationFiber.type === 'string'
+        && hostKind(designationFiber) === 'textinput'
+        && designationMatchesSelector
+      ) {
+        designationInputs.push(designationFiber);
+      }
+      var designationChild = designationFiber.child;
+      while (designationChild) {
+        designationStack.push(designationChild);
+        designationChild = designationChild.sibling;
+      }
+    }
+    if (designationStack.length > 0) {
+      return {
+        error: 'TextInput designation resolution truncated',
+        code: 'ASSERTION_FAILED',
+        testID: selector,
+        focusOnly: true,
+        truncated: true
+      };
+    }
+    if (designationInputs.length > 1) {
+      return {
+        error: 'Ambiguous TextInput designation target',
+        testID: selector,
+        count: designationInputs.length,
+        focusOnly: true
+      };
+    }
+    if (designationInputs.length !== 1) return null;
+    var designationInput = designationInputs[0];
+    var designationInputProps = designationInput.memoizedProps || {};
+    var designationLineage = new WeakSet();
+    var designationLineageFiber = designationInput;
+    var designationLineageDepth = 0;
+    while (designationLineageFiber && designationLineageDepth < 1000) {
+      if (designationLineage.has(designationLineageFiber)) {
+        return {
+          error: 'TextInput designation resolution truncated',
+          code: 'ASSERTION_FAILED',
+          testID: selector,
+          focusOnly: true,
+          truncated: true
+        };
+      }
+      designationLineage.add(designationLineageFiber);
+      if (designationLineageFiber === owner) break;
+      designationLineageFiber = designationLineageFiber.return;
+      designationLineageDepth++;
+    }
+    if (designationLineageFiber !== owner) {
+      return {
+        error: 'TextInput designation resolution truncated',
+        code: 'ASSERTION_FAILED',
+        testID: selector,
+        focusOnly: true,
+        truncated: true
+      };
+    }
+    for (var designationIndex = 0; designationIndex < designationMatches.length; designationIndex++) {
+      var designationMatch = designationMatches[designationIndex];
+      if (!designationLineage.has(designationMatch)) {
+        return {
+          error: 'Ambiguous TextInput designation target',
+          testID: selector,
+          count: designationMatches.length,
+          focusOnly: true
+        };
+      }
+      if (textInputDesignationDisabled(designationMatch.memoizedProps || {})) {
+        return {
+          error: 'TextInput is disabled or non-editable',
+          component: typeTextFiberName(designationInput),
+          testID: selector,
+          focusOnly: true
+        };
+      }
+    }
+    var designationInteractivity = textInputDesignationInteractivity(
+      designationInput,
+      selector
+    );
+    if (designationInteractivity) return designationInteractivity;
+    if (typeof designationInputProps.onPress === 'function') return null;
+    return {
+      success: true,
+      action: 'designateTextInput',
+      component: typeTextFiberName(designationInput),
+      testID: selector,
+      focusOnly: true,
+      inputFiber: designationInput
+    };
+  }
+
   function executeTypeTextTransaction(opts) {
+    var designationSelector = opts.testID;
+    var boundDesignation = null;
+    if (opts.requireLiveInputDesignation === true) {
+      boundDesignation = consumeTextInputDesignation(
+        opts.designationToken,
+        designationSelector
+      );
+      if (!boundDesignation) {
+        return {
+          error: 'TextInput designation no longer owns the exact host input',
+          code: 'INTERACTION_NOT_ACTUATED',
+          testID: designationSelector,
+          focusOnly: true,
+          handlerCalled: false
+        };
+      }
+      var liveFrontmost;
+      try {
+        liveFrontmost = JSON.parse(isTestIdFrontmost(designationSelector));
+      } catch (_) {
+        liveFrontmost = null;
+      }
+      if (!liveFrontmost || liveFrontmost.visible !== true) {
+        return {
+          error: liveFrontmost && liveFrontmost.reason
+            ? liveFrontmost.reason
+            : 'TextInput designation frontmost state is unreadable',
+          code: liveFrontmost && liveFrontmost.code
+            ? liveFrontmost.code
+            : (liveFrontmost && liveFrontmost.matchCount > 1
+              ? 'AMBIGUOUS_TESTID'
+              : 'ASSERTION_FAILED'),
+          testID: designationSelector,
+          focusOnly: true,
+          handlerCalled: false
+        };
+      }
+    }
     var resolution = resolveTypeTextTarget(opts);
     if (resolution.error) return resolution;
     var binding = resolution.binding;
@@ -2153,6 +2512,105 @@ export const INJECTED_HELPERS = `
         visitedFibers: resolution.state.visitedFibers,
         hint: 'Inspected every matching fiber and its bounded ownership graph — no typeable handler exists. Use cdp_component_tree to inspect the field, or pass the inner field testID directly.'
       };
+    }
+    if (opts.requireLiveInputDesignation === true) {
+      var designationSourceProps = binding.sourceFiber.memoizedProps || {};
+      if (
+        typeof designationSelector !== 'string'
+        || !designationSelector
+        || hostKind(binding.sourceFiber) !== 'textinput'
+        || (
+          designationSourceProps.testID !== designationSelector
+          && designationSourceProps.nativeID !== designationSelector
+        )
+      ) {
+        return {
+          error: 'TextInput designation no longer resolves to the exact host input',
+          code: 'INTERACTION_NOT_ACTUATED',
+          testID: designationSelector,
+          focusOnly: true,
+          handlerCalled: false
+        };
+      }
+      var designationOwner = binding.sourceFiber;
+      var designationOwnerCursor = binding.sourceFiber.return;
+      var designationOwnerSeen = new WeakSet();
+      var designationOwnerDepth = 0;
+      while (designationOwnerCursor && designationOwnerDepth < 1000) {
+        if (designationOwnerSeen.has(designationOwnerCursor)) {
+          designationOwnerCursor = null;
+          designationOwnerDepth = 1000;
+          break;
+        }
+        designationOwnerSeen.add(designationOwnerCursor);
+        designationOwnerDepth++;
+        var designationOwnerProps = designationOwnerCursor.memoizedProps || {};
+        if (
+          designationOwnerProps.testID === designationSelector
+          || designationOwnerProps.nativeID === designationSelector
+        ) {
+          designationOwner = designationOwnerCursor;
+        }
+        designationOwnerCursor = designationOwnerCursor.return;
+      }
+      if (designationOwnerCursor || designationOwnerDepth >= 1000) {
+        return {
+          error: 'TextInput designation ownership resolution truncated',
+          code: 'ASSERTION_FAILED',
+          testID: designationSelector,
+          focusOnly: true,
+          handlerCalled: false
+        };
+      }
+      var liveDesignation = resolveTextInputDesignation(designationOwner, designationSelector);
+      if (!liveDesignation || liveDesignation.success !== true) {
+        if (!liveDesignation) {
+          return {
+            error: 'TextInput designation no longer resolves to the exact host input',
+            code: 'INTERACTION_NOT_ACTUATED',
+            testID: designationSelector,
+            focusOnly: true,
+            handlerCalled: false
+          };
+        }
+        liveDesignation.code = liveDesignation.truncated === true
+          ? 'ASSERTION_FAILED'
+          : 'INTERACTION_NOT_ACTUATED';
+        liveDesignation.handlerCalled = false;
+        return liveDesignation;
+      }
+      if (
+        !isSameDesignatedInput(boundDesignation.input, binding.sourceFiber)
+        || !isSameDesignatedInput(boundDesignation.input, liveDesignation.inputFiber)
+      ) {
+        return {
+          error: 'TextInput designation no longer owns the exact host input',
+          code: 'INTERACTION_NOT_ACTUATED',
+          testID: designationSelector,
+          focusOnly: true,
+          handlerCalled: false
+        };
+      }
+      var designationCandidateProps = binding.candidateFiber.memoizedProps || {};
+      if (textInputDesignationDisabled(designationCandidateProps)) {
+        return {
+          error: 'TextInput is disabled or non-editable',
+          code: 'INTERACTION_NOT_ACTUATED',
+          component: binding.component,
+          testID: designationSelector,
+          focusOnly: true,
+          handlerCalled: false
+        };
+      }
+      if (binding.controlled !== true) {
+        return {
+          error: 'TextInput designation is uncontrolled or unreadable',
+          code: 'INTERACTION_NOT_ACTUATED',
+          testID: designationSelector,
+          focusOnly: true,
+          handlerCalled: false
+        };
+      }
     }
     var text = opts.text !== undefined ? opts.text : '';
     if (opts.testID) {
@@ -2180,6 +2638,7 @@ export const INJECTED_HELPERS = `
         };
       }
     }
+    if (boundDesignation) text = (binding.valueBefore || '') + text;
     try {
       if (binding.contract === 'onChangeText:string') binding.handler(text);
       else binding.handler({ nativeEvent: { text: text } });
@@ -2474,6 +2933,10 @@ export const INJECTED_HELPERS = `
           }
         }
         if (walkCandidates.length === 0) {
+          if (opts.allowInputDesignation === true && opts.testID) {
+            var walkDesignation = designateTextInputPress(found, selector);
+            if (walkDesignation) return walkDesignation;
+          }
           return JSON.stringify({ error: 'Component has no onPress handler', component: walkFiberName(found), testID: selector, walkUpSearched: WALK_UP_MAX });
         }
         if (walkCandidates.length > 1) {
@@ -2538,6 +3001,10 @@ export const INJECTED_HELPERS = `
 
       if (action === 'press') {
         if (typeof props.onPress !== 'function') {
+          if (opts.allowInputDesignation === true && opts.testID) {
+            var pressDesignation = designateTextInputPress(found, selector);
+            if (pressDesignation) return pressDesignation;
+          }
           return JSON.stringify({ error: 'Component has no onPress handler', component: typeName, testID: selector });
         }
         if (opts.value !== undefined) {
@@ -3780,11 +4247,21 @@ export const INJECTED_HELPERS = `
         truncated: true
       });
     }
+    var coverage = rootScanCoverage();
+    if (coverage.reasons.length > 0) {
+      return JSON.stringify({
+        visible: false,
+        code: 'ASSERTION_FAILED',
+        reason: 'frontmost proof cannot cover every mounted renderer'
+      });
+    }
     function containsFiber(ancestor, candidate) {
+      // React return chains may thread through either half of a fiber/alternate pair.
+      var ancestorAlternate = ancestor.alternate || null;
       var current = candidate;
       var guard = 0;
       while (current && guard++ < 1000) {
-        if (current === ancestor) return true;
+        if (current === ancestor || current === ancestorAlternate) return true;
         current = current.return;
       }
       return false;
@@ -3813,6 +4290,9 @@ export const INJECTED_HELPERS = `
       });
     }
     var target = logicalMatches[0];
+    var targetProps = target.memoizedProps || {};
+    var targetAccessibilityState = targetProps.accessibilityState || {};
+    var targetDisabled = targetProps.disabled === true || targetAccessibilityState.disabled === true;
     if (__hidden(target)) {
       return JSON.stringify({
         visible: false,
@@ -3821,7 +4301,7 @@ export const INJECTED_HELPERS = `
       });
     }
 
-    var targetPointerEvents = (target.memoizedProps || {}).pointerEvents;
+    var targetPointerEvents = targetProps.pointerEvents;
     if (targetPointerEvents === 'none' || targetPointerEvents === 'box-none') {
       return JSON.stringify({
         visible: false,
@@ -3987,7 +4467,8 @@ export const INJECTED_HELPERS = `
       route: routeOwner,
       activeRoute: activeRoute,
       modalCount: modals.length,
-      matchCount: 1
+      matchCount: 1,
+      disabled: targetDisabled
     });
   }
 
@@ -4089,6 +4570,7 @@ export const INJECTED_HELPERS = `
     getStoreState: getStoreState,
     getComponentState: getComponentState,
     readInputValue: readInputValue,
+    releaseInputDesignation: releaseInputDesignation,
     dispatchAction: dispatchAction,
     getErrors: getErrors,
     clearErrors: clearErrors,

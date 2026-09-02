@@ -343,7 +343,7 @@ test('gh-623 regression: authority cleanup crossing the deadline does not veto a
       },
     }),
     undefined,
-    { timeoutMs: 20 },
+    { timeoutMs: 1_000 },
   );
   assert.equal(body.ok, false);
   assert.equal(body.meta.passed, false);
@@ -364,7 +364,7 @@ test('gh-623 regression: an already-aborted deadline does not veto a self-exited
       },
     ]),
     undefined,
-    { timeoutMs: 20 },
+    { timeoutMs: 1_000 },
   );
   assert.equal(body.ok, false);
   assert.equal(body.meta.passed, false);
@@ -489,7 +489,7 @@ test('gh-623 negative control: a runner killed by abort keeps TIMEOUT class and 
       },
     ]),
     undefined,
-    { timeoutMs: 20 },
+    { timeoutMs: 1_000 },
   );
   assert.equal(body.ok, false);
   assert.equal(body.meta.trailingVerification, undefined);

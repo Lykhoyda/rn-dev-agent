@@ -22,11 +22,14 @@ BASE_REF="${BASE_REF:-origin/main}"
 # and the rn-dev-agent-core/scripts build-output mirrors stay excluded.
 WATCHED='^packages/rn-dev-agent-core/src/|^packages/(claude-plugin|codex-plugin|shared-agent-knowledge)/(commands|hooks|agents|skills)/'
 
+git_diff_mode=false
 if [ -n "${CHANGED_FILES+x}" ]; then
   changed="$CHANGED_FILES"
 elif ! changed="$(git -C "$ROOT" diff --name-only "${BASE_REF}...HEAD")"; then
   echo "ERROR: require-changeset: git diff against ${BASE_REF} failed — refusing to pass without a changed-file list." >&2
   exit 1
+else
+  git_diff_mode=true
 fi
 
 # Inverse guard (GH #578 phantom-0.70.5 post-mortem): a PR that ADDS a changeset
@@ -59,6 +62,48 @@ MSG
 fi
 
 src_changed="$(printf '%s\n' "$changed" | grep -E "$WATCHED" || true)"
+
+# Source comments ship in bundled artifacts but do not change product behavior.
+# Seam-driven tests stay conservative because they provide paths, not diff content.
+if [ "$git_diff_mode" = true ] && [ -n "$src_changed" ]; then
+  release_src_changed=""
+  while IFS= read -r source_file; do
+    [ -n "$source_file" ] || continue
+    if [[ "$source_file" != packages/rn-dev-agent-core/src/*.ts ]] ||
+      ! git -C "$ROOT" diff --no-ext-diff --unified=999999 \
+        "${BASE_REF}...HEAD" -- "$source_file" |
+        awk '
+          function visit(stream, line, changed, trimmed, comment, close_at, tail) {
+            trimmed = line
+            sub(/^[[:space:]]*/, "", trimmed)
+            comment = in_block[stream] || trimmed ~ /^\/\*/
+            if (comment) {
+              close_at = index(trimmed, "*/")
+              if (close_at) {
+                tail = substr(trimmed, close_at + 2)
+                in_block[stream] = 0
+                if (tail !~ /^[[:space:]]*$/) comment = 0
+              } else {
+                in_block[stream] = 1
+              }
+            }
+            if (changed && line !~ /^[[:space:]]*$/ && trimmed !~ /^\/\// && !comment) bad = 1
+          }
+          /^@@ / { in_hunk = 1; next }
+          !in_hunk { next }
+          /^-/ { visit("old", substr($0, 2), 1); next }
+          /^\+/ { visit("new", substr($0, 2), 1); next }
+          /^ / {
+            visit("old", substr($0, 2), 0)
+            visit("new", substr($0, 2), 0)
+          }
+          END { exit bad }
+        '; then
+      release_src_changed="${release_src_changed}${release_src_changed:+$'\n'}${source_file}"
+    fi
+  done < <(printf '%s\n' "$src_changed")
+  src_changed="$release_src_changed"
+fi
 
 if [ -z "$src_changed" ]; then
   echo "require-changeset: no shippable src changes — changeset not required."

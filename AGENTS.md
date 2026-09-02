@@ -36,6 +36,12 @@ sibling workspace only when explicitly requested.
 
 ## Editing Rules
 
+- Use first-party framing in code, docs, comments, tests, changesets, issue/PR
+  descriptions, review replies, and shipped artifacts: never name, quote, link
+  to, cite, or present behavior as copied from competing repositories or
+  implementation approaches. Keep comparative research private and translate
+  it into rn-dev-agent requirements, evidence, and rationale before it enters
+  this repository.
 - New source and test code must be TypeScript: `.ts` or `.tsx`. Existing
   grandfathered `.js`/`.mjs` files are tracked in
   `scripts/js-migration-baseline.txt`; do not grow that baseline casually.
@@ -196,6 +202,37 @@ alive for such callers.
   allowlist: a real actions directory, or the approved `.rn-agent/actions`
   symlink to the same-repo primary corpus. `isDirectNode` still refuses
   per-file action symlinks.
+- React-tree replay presses (`createReplayPressByTestId` in
+  `src/tools/cdp-replay-dispatch.ts`) opt into both `walkUp` and
+  `allowInputDesignation` at the `InteractArgs` boundary. Inside the injected
+  helper the bounded ancestor walk runs first and TextInput designation is only
+  the zero-candidate fallback: a pressable-wrapped exact-ID input presses its
+  wrapper and the following `inputText` types into the exact input, while a bare
+  input keeps focus-only designation. Both orders are pinned by
+  `test/unit/gh-869-replay-tap-type-walkup.test.ts` and
+  `test/unit/textinput-designation-replay.test.ts`.
+- Exact-ID visibility in CDP/JS replay has exactly one owner: the injected
+  `isTestIdFrontmost` oracle (`src/injected-helpers.ts`), consumed through
+  `frontmostFor` — it scans fibers exactly and fail-closes on renderer
+  coverage and scan budget before any absence claim (`matchCount: 0` is
+  complete readable absence; refusals carry no matchCount). `replayTreeData`
+  (`src/tools/cdp-replay-dispatch.ts`) is a readability gate only (transport,
+  redbox, truncation); `getTree(filter)` matches substrings, so never
+  reintroduce exact-ID presence/absence inference from its output. Fibers are
+  compared modulo `fiber.alternate` (React's double buffer) in `containsFiber`;
+  the end-to-end OTP login-resume smoke is device-bound and owned by
+  `corepack yarn gate:otp-omitted-timeout` (needs `OTP_FIXTURE_ROOT` and
+  `OTP_FIXTURE_DEVICE_ID`; not run in hosted CI), with the causal modal-
+  alternate regressions in `test/unit/ios-proof-domain-routing.test.ts`.
+- The partitioned iOS native leg must re-prove the exact CDP target before
+  completing its deferred origin: only `reproveManagedOrigin`
+  (`connectExactSessionTarget`, which waits for the target to re-register)
+  reliably survives a WDA-driven segment, so the deferred-completion guard in
+  `src/tools/maestro-run.ts` admits a caller-supplied reprove even in the
+  nested `replayDeps: undefined` handler. Forward the parent flow's remaining
+  readiness budget and cancellation signal through that reproof and its
+  subsequent origin completion. Park/resume handoff regressions are pinned in
+  `test/unit/partitioned-replay-authority.test.ts`.
 - Trailing-verification classification (GH #623) has exactly one owner: the
   canonical per-attempt ledger built inside `maestro_run` from per-stage
   producer artifacts (`src/domain/maestro-run-ledger.ts`, artifact reader in
@@ -207,6 +244,21 @@ alive for such callers.
   ledger evidence and any unclean or incomplete termination provenance
   (unfinalized artifact, truncation, signal, timeout, bootstrap/transport
   failure) withhold the qualifier regardless of row states.
+- WDA build persistence has one owner: the best-effort seed/publish pair around
+  the per-spawn runner cache in `src/domain/engine-pin.ts`, backed by the
+  persistent store
+  `.wda-store-<runner>/<host platform-architecture>/<xcode fingerprint>/`
+  beside the pin-cache (atomic staged-rename publication; delete the store to
+  force a cold build). Persist only contained `DerivedData/Build/Products`;
+  normalize the xctestrun port and exclude logs and other run-owned state.
+  Completeness is the runner-selected WDA target with real referenced products
+  and regular, non-symlink, executable host and bundle binaries. Capture one
+  toolchain fingerprint for the spawn and use it for seeding and publication;
+  re-probe before publication and skip it if the fingerprint changed. Seeding
+  must stay AFTER the snapshot seal walk:
+  recursive `readdirSync` descends through the `cache` symlink, and sealed seed
+  content breaks the runner's warm-path xctestrun port rewrite (EACCES, four
+  retries, bootstrap failure).
 - Claude-only host behavior: edit `packages/claude-plugin/`.
 - Codex-only host behavior: edit `packages/codex-plugin/`.
 - Host-neutral workflow knowledge: edit `packages/shared-agent-knowledge/`,

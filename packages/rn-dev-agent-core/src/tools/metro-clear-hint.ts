@@ -4,8 +4,7 @@
 // for more than METRO_CLEAR_HINT_THRESHOLD_MS, suggest restarting Metro
 // with a cache clear. The common failure mode this targets is a stale
 // bundle cache — app logs/requests happen but never reach the MCP because
-// a mismatched bundle is running. Source: metro-mcp troubleshooting
-// "Empty Results or Stale Data" (top-3 issue).
+// a mismatched bundle is running.
 
 export const METRO_CLEAR_HINT_THRESHOLD_MS = 60_000;
 

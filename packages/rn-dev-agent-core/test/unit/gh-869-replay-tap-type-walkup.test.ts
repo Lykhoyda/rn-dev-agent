@@ -184,27 +184,37 @@ test('#869 control: a directly pressable testID still presses without walking', 
   assert.equal(fired, 1);
 });
 
-test('#869 control: an input with no actionable ancestor still refuses the tap', async () => {
+test('#869 control: a non-input target with no actionable ancestor still refuses the tap', async () => {
   const root = makeFiber('Root');
   const view = appendChild(root, makeFiber({ displayName: 'View' }));
-  const input = appendChild(
-    view,
-    makeFiber({ displayName: 'TextInput' }, { testID: 'orphan_input', value: '' }),
-  );
-  const typed: string[] = [];
-  input.memoizedProps.onChangeText = (value: string) => typed.push(value);
+  appendChild(view, makeFiber({ displayName: 'Text' }, { testID: 'orphan_label' }));
   const deps = buildDeps(createAgent(root));
 
-  const result = await runCdpReplayCommands(
-    [{ tapOn: { id: 'orphan_input' } }, { inputText: 'x' }],
-    {},
-    deps,
-  );
+  const result = await runCdpReplayCommands([{ tapOn: { id: 'orphan_label' } }], {}, deps);
 
   assert.equal(result.passed, false);
   assert.equal(result.failedStepIndex, 0);
   assert.match(result.reason ?? '', /no onPress handler/);
-  assert.deepEqual(typed, [], 'the type step must never run after a refused tap');
+});
+
+test('#869 control: a bare TextInput with no actionable ancestor is still designated, not pressed', async () => {
+  const fixture = otpFixture();
+  delete fixture.pressable.memoizedProps.onPress;
+  const deps = buildDeps(createAgent(fixture.root));
+
+  const result = await runCdpReplayCommands(
+    [{ tapOn: { id: 'otp_email' } }, { inputText: '0451' }],
+    {},
+    deps,
+  );
+
+  assert.equal(result.passed, true, JSON.stringify(result));
+  assert.equal(result.steps[0].focusOnly, true);
+  assert.equal(result.steps[1].target, 'otp_email');
+  assert.equal(result.finalFocusId, null);
+  assert.equal(fixture.calls.focus, 0);
+  assert.deepEqual(fixture.calls.typed, ['0451']);
+  assert.equal(fixture.inputHost.memoizedProps.value, '0451');
 });
 
 test('#869 control: a non-editable input refuses from the projected tree', async () => {

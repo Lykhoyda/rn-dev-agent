@@ -2,7 +2,12 @@ import type { CDPClient } from '../cdp-client.js';
 import { ReplayDispatchError } from '../domain/cdp-flow-replay.js';
 import type { SessionState } from '../types.js';
 import { createComponentTreeHandler } from './component-tree.js';
-import { replayTreeData, unwrapTree, type CdpReplayDeps } from './cdp-replay-dispatch.js';
+import {
+  createReplayPressByTestId,
+  replayTreeData,
+  unwrapTree,
+  type CdpReplayDeps,
+} from './cdp-replay-dispatch.js';
 import { performReactTreeInput } from './device-interact.js';
 import { createInteractHandler } from './interact.js';
 
@@ -37,14 +42,25 @@ export function makeReplayDeps(
   const interact = createInteractHandler(deps.getClient);
   const tree = createComponentTreeHandler(deps.getClient);
   return {
-    pressByTestId: async (id: string) => {
+    pressByTestId: createReplayPressByTestId(interact),
+    typeByTestId: async (id: string, text: string, context) => {
       mustOk(
-        await interact({ action: 'press', testID: id, animated: false, walkUp: true }),
-        `press "${id}"`,
+        await performReactTreeInput(
+          id,
+          text,
+          deps.getClient(),
+          signal,
+          context ? { designationToken: context.designationToken } : {},
+        ),
+        `type "${id}"`,
       );
     },
-    typeByTestId: async (id: string, text: string) => {
-      mustOk(await performReactTreeInput(id, text, deps.getClient(), signal), `type "${id}"`);
+    releaseInputDesignation: async (token: string) => {
+      try {
+        await deps
+          .getClient()
+          .evaluate(`__RN_AGENT.releaseInputDesignation(${JSON.stringify(token)})`);
+      } catch {}
     },
     treeFor: async (id: string) => {
       const fetchTree = async (interactiveOnly: boolean) =>
@@ -64,13 +80,12 @@ export function makeReplayDeps(
           meta?: Record<string, unknown>;
         };
       let env = await fetchTree(false);
-      let data = replayTreeData(env);
-      const treeData = data as Record<string, unknown> | null;
-      if (treeData && typeof treeData === 'object' && '__agent_truncated' in treeData) {
+      // Retry with the salient digest when the full filtered payload exceeds the helper bound.
+      const d = env.data as Record<string, unknown> | null;
+      if (d && typeof d === 'object' && ('__agent_truncated' in d || d.truncated === true)) {
         env = await fetchTree(true);
-        data = replayTreeData(env);
       }
-      return unwrapTree(data);
+      return unwrapTree(replayTreeData(env));
     },
     frontmostFor: async (id: string) => {
       const client = deps.getClient();
@@ -87,12 +102,14 @@ export function makeReplayDeps(
       try {
         const parsed = JSON.parse(result.value) as {
           visible?: boolean;
+          disabled?: boolean;
           reason?: string;
           matchCount?: number;
           code?: string;
         };
         return {
           visible: parsed.visible === true,
+          ...(typeof parsed.disabled === 'boolean' ? { disabled: parsed.disabled } : {}),
           ...(parsed.reason ? { reason: parsed.reason } : {}),
           ...(typeof parsed.matchCount === 'number' ? { matchCount: parsed.matchCount } : {}),
           ...(parsed.code ? { code: parsed.code } : {}),

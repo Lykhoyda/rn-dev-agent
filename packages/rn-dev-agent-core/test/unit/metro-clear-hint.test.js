@@ -6,9 +6,7 @@ import {
   METRO_CLEAR_HINT_TEXT,
 } from '../../dist/tools/metro-clear-hint.js';
 
-// M11 / D665 — pure helper tests. Mirrors metro-mcp's troubleshooting
-// "Empty Results or Stale Data" signal but surfaces it inline in tool
-// results when the buffer has been empty for > threshold.
+// M11 / D665 — pure helper tests for the empty-buffer recovery hint.
 
 const NOW = 10_000_000;
 const stub = (nowValue) => () => nowValue;

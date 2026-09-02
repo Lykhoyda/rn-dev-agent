@@ -587,18 +587,18 @@ test app and is outside the scope of this code-only PR.
 
 ## [0.42.0] — 2026-04-22
 
-M6 / Phase 112 — Object.freeze test recorder. Closes the **last remaining Phase 90 metro-mcp pattern-adoption story**. Adds a new `cdp_record_test_*` tool family (7 tools) that records real user interactions on the running app and emits replayable Maestro YAML or Detox JS — without any app code changes. Bumps MCP server to 0.36.0 (new tools). All Phase 90 Tier 3 + Tier 4 (M6-M11) now shipped.
+M6 / Phase 112 — Object.freeze test recorder. Closes the **last remaining Phase 90 recorder story**. Adds a new `cdp_record_test_*` tool family (7 tools) that records real user interactions on the running app and emits replayable Maestro YAML or Detox JS — without any app code changes. Bumps MCP server to 0.36.0 (new tools). All Phase 90 Tier 3 + Tier 4 (M6-M11) now shipped.
 
 ### How it works
 React's `createElement` calls `Object.freeze(props)` in dev mode before sealing them. `cdp_record_test_start` monkey-patches `Object.freeze` inside Hermes — when React asks to freeze a props object that has `onPress`/`onLongPress`/`onChangeText`/`onSubmitEditing`/`onScroll*`, we wrap each handler with event-emission BEFORE letting the freeze proceed. Already-mounted scroll containers are caught via a fiber re-render walk (`stateNode.forceUpdate()` for class, `renderer.overrideProps(fiber, ['__mcpInit'], 1)` for function). Route is captured via the `onCommitFiberRoot` hook reading `__RN_AGENT.getNavState()`, cached into a closure variable so the Object.freeze hot-path stays synchronous.
 
-### Three deliberate deviations from metro-mcp's reference
-1. **Finger-direction swipe semantics** — `dy > 0` (contentOffset increased; finger went UP) emits `direction: 'up'`, matching Maestro's `swipeUp` and Detox's `.swipe('up')`. metro-mcp emits the inverted content-delta direction, producing YAML that replays in the wrong direction.
+### Three recorder requirements
+1. **Finger-direction swipe semantics** — `dy > 0` (contentOffset increased; finger went UP) emits `direction: 'up'`, matching Maestro's `swipeUp` and Detox's `.swipe('up')` replay APIs.
 2. **500-event cap with priority eviction** — long sessions are capped; on overflow, oldest `swipe`/`type` events are dropped first (taps + navigates carry higher information value). `truncated: true` bubbles up to the `stop` envelope.
-3. **Route caching via the commit hook** — eliminates per-event CDP round-trips. metro-mcp expects the user app to install `globalThis.__METRO_MCP_NAV_REF__`; we instead read our existing `__RN_AGENT.getNavState()` once per React commit and cache the active route name in the IIFE closure.
+3. **Route caching via the commit hook** — eliminates per-event CDP round-trips by reading `__RN_AGENT.getNavState()` once per React commit and caching the active route name in the IIFE closure.
 
 ### Added
-- **NEW `scripts/cdp-bridge/src/cdp/test-recorder-helpers.ts`** — five injected JS string constants (`DEV_CHECK_JS`, `START_RECORDING_JS`, `STOP_RECORDING_JS`, `READ_EVENTS_JS`, `buildAnnotationJs(note)` template). The Object.freeze interceptor IIFE is ~250 lines, mirrors metro-mcp's structure with the deviations above. Includes the M8 1..5 renderer-loop port for fiber root resolution and a session-token (`__METRO_MCP_REC_SESSION__`) so stale wrappers from a prior start-stop cycle gracefully no-op when a new session begins.
+- **NEW `scripts/cdp-bridge/src/cdp/test-recorder-helpers.ts`** — five injected JS string constants (`DEV_CHECK_JS`, `START_RECORDING_JS`, `STOP_RECORDING_JS`, `READ_EVENTS_JS`, `buildAnnotationJs(note)` template). The Object.freeze interceptor IIFE implements the requirements above. Includes the M8 1..5 renderer-loop for fiber root resolution and a session-token (`__METRO_MCP_REC_SESSION__`) so stale wrappers from a prior start-stop cycle gracefully no-op when a new session begins.
 - **NEW `scripts/cdp-bridge/src/tools/test-recorder.ts`** — 7 handler factories (`createRecordTestStartHandler`, `createRecordTestStopHandler`, `createRecordTestGenerateHandler`, `createRecordTestAnnotateHandler`, `createRecordTestSaveHandler`, `createRecordTestLoadHandler`, `createRecordTestListHandler`), the `RecordedEvent` discriminated union, module-level `storedEvents` state, and pure helpers (`deduplicateEvents`, `sanitizeFilename`, `getRecordingsDir`, `typeCounts`). Test-only DI hooks (`_resetState`, `_setStoredEvents`, `_getStoredEvents`) for hermetic integration tests.
 - **NEW `scripts/cdp-bridge/src/tools/test-recorder-generators.ts`** — `generateMaestro` + `generateDetox` + selector helpers (`maestroSelector`, `detoxSelector`, `nextSelector`). All user-controlled string interpolation (annotations, testName, bundleId, route names) goes through `stripNewlines()` to prevent comment-context escape (Gemini/Codex review).
 - **7 new tools registered in `src/index.ts`**: `cdp_record_test_start`, `cdp_record_test_stop`, `cdp_record_test_generate`, `cdp_record_test_annotate`, `cdp_record_test_save`, `cdp_record_test_load`, `cdp_record_test_list`. Storage location: `<projectRoot>/.rn-agent/recordings/<sanitized>.json`. Appium format accepted in zod schema but returns `NOT_IMPLEMENTED` at runtime — Maestro + Detox cover our use cases.
@@ -626,7 +626,7 @@ Multi-LLM (Gemini + Codex). Three high-confidence findings, all applied inline b
 
 ## [0.41.0] — 2026-04-22
 
-M9 / Phase 111 — `/rn-dev-agent:setup` now detects USB-connected physical devices and applies (or hints at) the required prerequisites. Closes the Phase 90 Tier 4 M9 story. Auto-runs `adb reverse tcp:8081 tcp:8081` on each physical Android so the device can reach Metro. Checks for `idb-companion` on physical iOS and prints `brew install idb-companion` when missing. Documents WiFi-debugging as unsupported (matching metro-mcp's stance).
+M9 / Phase 111 — `/rn-dev-agent:setup` now detects USB-connected physical devices and applies (or hints at) the required prerequisites. Closes the Phase 90 Tier 4 M9 story. Auto-runs `adb reverse tcp:8081 tcp:8081` on each physical Android so the device can reach Metro. Checks for `idb-companion` on physical iOS and prints `brew install idb-companion` when missing. Documents WiFi debugging as unsupported.
 
 **MCP server unchanged** — this is the first story in the Phase 90 pattern-adoption batch with no `scripts/cdp-bridge/` changes. MCP stays at 0.35.0.
 
@@ -654,11 +654,11 @@ Ran on dev machine with no physical devices connected. First run misreported the
 ### Known limits
 - **`adb reverse` auto-run is stateful** — idempotent per-device port-forwarding, but still a side effect. Documented as expected setup behavior.
 - **`idb-companion` not auto-installed** — brew installs are slow and can fail; hint-only is the canonical pattern for missing deps in this skill.
-- **WiFi debugging not supported automatically** — matches metro-mcp. Users can `adb connect <ip>` manually and the script runs `adb reverse` over the TCP transport.
+- **WiFi debugging not supported automatically** — users can `adb connect <ip>` manually and the script runs `adb reverse` over the TCP transport.
 - **Structural-only tests** — no `bats` dependency. Live smoke during `/setup` is the functional validation.
 
 ### Refs
-[D668](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/DECISIONS.md?plain=1#L3433) in workspace decisions. Phase 111 in the [workspace roadmap](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/ROADMAP.md). metro-mcp reference: troubleshooting "Physical Device Setup".
+[D668](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/DECISIONS.md?plain=1#L3433) in workspace decisions. Phase 111 in the [workspace roadmap](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/ROADMAP.md).
 
 ## [0.40.0] — 2026-04-22
 
@@ -693,7 +693,7 @@ Multi-LLM (Gemini + Codex). Both clean — zero high-confidence findings. Indepe
 
 ## [0.39.0] — 2026-04-22
 
-M11 / Phase 108 — Metro `--clear` hint on empty buffers. Closes the Phase 90 Tier 4 UX story from the metro-mcp pattern adoption audit. When `cdp_console_log` or `cdp_network_log` return empty results AND the CDP session has been idle for more than 60s (measured as `max(connectedAt, lastEventAt)`), the tool result now includes `meta.hint` suggesting `npx expo start --clear` / `npx react-native start --reset-cache`. This surfaces a failure mode (stale Metro bundle cache) that previously required users to find it in a troubleshooting doc. MCP server bumped to 0.34.0.
+M11 / Phase 108 — Metro `--clear` hint on empty buffers. Closes the Phase 90 Tier 4 UX story. When `cdp_console_log` or `cdp_network_log` return empty results AND the CDP session has been idle for more than 60s (measured as `max(connectedAt, lastEventAt)`), the tool result now includes `meta.hint` suggesting `npx expo start --clear` / `npx react-native start --reset-cache`. This surfaces a failure mode (stale Metro bundle cache) that previously required users to find it in a troubleshooting doc. MCP server bumped to 0.34.0.
 
 Version note: M11 was originally tagged 0.37.0 (reserved before M7 shipped). Main moved to 0.38.0 before this PR merged, so M11 rebased to 0.39.0 above M7. The 0.37.0 reservation was abandoned; no `## [0.37.0]` entry exists.
 
@@ -720,7 +720,7 @@ Multi-LLM (Gemini + Codex) on original PR. Both clean. Gemini verified the B132 
 - **Stateless — fires every call past threshold** on genuinely idle apps. Accepted per design; LLM context usually absorbs repeated hints.
 
 ### Refs
-[D665](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/DECISIONS.md?plain=1#L3260) in workspace decisions. Phase 108 in the [workspace roadmap](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/ROADMAP.md). metro-mcp reference: troubleshooting "Empty Results or Stale Data" (top-3 user issue).
+[D665](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/DECISIONS.md?plain=1#L3260) in workspace decisions. Phase 108 in the [workspace roadmap](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/ROADMAP.md).
 
 ## [0.38.0] — 2026-04-22
 
@@ -758,7 +758,7 @@ Multi-LLM (Gemini + Codex). Two findings applied. Codex (confidence 90): the `fa
 Story R3 ("fast-runner restart") from Phase 85 was marked DONE during the Phase 92 stability sweep with the note that the implementation shape differed from the original spec (PID probe instead of `/ping`; restart integrated into session open). M7 ships the full spec: tri-state `/health` probe, explicit stale detection, graceful reap. The functional gap R3 left is closed.
 
 ### Refs
-[D666](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/DECISIONS.md?plain=1#L3303) in workspace decisions. Phase 109 in the [workspace roadmap](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/ROADMAP.md). metro-mcp reference: `src/plugins/devtools.ts::tryFocusExisting`.
+[D666](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/DECISIONS.md?plain=1#L3303) in workspace decisions. Phase 109 in the [workspace roadmap](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/ROADMAP.md).
 
 ## [0.36.1] — 2026-04-21
 
@@ -783,7 +783,7 @@ Multi-LLM (Gemini + Codex). Both clean. Gemini validated the fix matches what th
 
 ## [0.36.0] — 2026-04-21
 
-M8 / Phase 106 — renderer 1..5 probe for fiber root resolution. Closes the Tier 3 story from the Phase 90 metro-mcp pattern adoption audit. Two places in the plugin gated React introspection on `__REACT_DEVTOOLS_GLOBAL_HOOK__.renderers.size > 0` — `injected-helpers.ts::findActiveRenderer` (used by 9 downstream consumers) and `cdp/setup.ts::waitForReact` (the 30s readiness gate before helper injection). Both now brute-probe `getFiberRoots(i)` for i in 1..5, mirroring metro-mcp's `FIBER_ROOT_JS` pattern. Apps where `hook.renderers` is empty or missing (React Native macros, Reanimated worklets, React DevTools loaded ahead of first render) now return live fiber trees instead of silent empties. MCP server bumped to 0.31.0.
+M8 / Phase 106 — renderer 1..5 probe for fiber root resolution. Closes the Tier 3 story from the Phase 90 audit. Two places in the plugin gated React introspection on `__REACT_DEVTOOLS_GLOBAL_HOOK__.renderers.size > 0` — `injected-helpers.ts::findActiveRenderer` (used by 9 downstream consumers) and `cdp/setup.ts::waitForReact` (the 30s readiness gate before helper injection). Both now brute-probe `getFiberRoots(i)` for i in 1..5. Apps where `hook.renderers` is empty or missing (React Native macros, Reanimated worklets, React DevTools loaded ahead of first render) now return live fiber trees instead of silent empties. MCP server bumped to 0.31.0.
 
 ### Added
 - **`REACT_READY_PROBE_JS` exported constant** in `scripts/cdp-bridge/src/injected-helpers.ts`. Eval-ready IIFE string with the same 1..5 `getFiberRoots` probe as `findActiveRenderer`. Single source of truth for the cross-file readiness invariant — `setup.ts` now imports and awaits it directly instead of reconstructing a narrower inline check.
@@ -796,14 +796,14 @@ M8 / Phase 106 — renderer 1..5 probe for fiber root resolution. Closes the Tie
 - **10 new tests** in `scripts/cdp-bridge/test/unit/injected-helpers.test.js`. 5 for `findActiveRenderer` (happy-path, skip-to-renderer-4, renderers-map-empty, all-empty, missing-getFiberRoots) and 5 for `REACT_READY_PROBE_JS` (run in isolated `vm` sandboxes — pin the probe's public behavior so helper + probe can't silently diverge). Running total: 475 → **485**, zero failures.
 
 ### Known limits
-- **Renderer IDs 6+ unreachable** — matches metro-mcp's identical bound. Never observed in practice.
+- **Renderer IDs 6+ unreachable** — never observed in practice.
 - **`cdp_set_shared_value` in `src/index.ts:359-363`** still uses the `hook.renderers.keys()` pattern. Out-of-scope for M8; filed as **B133** for a separate PR. Low-severity since `cdp_set_shared_value` is a niche proof-capture tool.
 
 ### Review
 Multi-LLM (Gemini + Codex). Codex clean. Gemini flagged `setup.ts`'s sibling readiness gate at confidence 85 — originally scoped out of M8, folded in on user direction to preserve end-to-end benefit. Would have shipped as half-a-fix otherwise.
 
 ### Refs
-[D663](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/DECISIONS.md?plain=1#L3161) in workspace decisions. Phase 106 in the [workspace roadmap](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/ROADMAP.md). metro-mcp reference pattern: `src/utils/fiber.ts` FIBER_ROOT_JS.
+[D663](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/DECISIONS.md?plain=1#L3161) in workspace decisions. Phase 106 in the [workspace roadmap](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/ROADMAP.md).
 
 ## [0.35.0] — 2026-04-21
 
@@ -873,7 +873,7 @@ Stale `hermesUrl` after target change or bundle reload — multiplexer captures 
 
 ## [0.33.0] — 2026-04-21
 
-Phase 90 metro-mcp pattern adoption (Tier 1 + Tier 2) plus story-driven bug sweep. MCP server bumped to 0.28.0. Seven PRs merged on main since v0.25.0 without intermediate public releases; v0.33.0 is the first public-release checkpoint for all of it.
+Phase 90 Tier 1 + Tier 2 work plus story-driven bug sweep. MCP server bumped to 0.28.0. Seven PRs merged on main since v0.25.0 without intermediate public releases; v0.33.0 is the first public-release checkpoint for all of it.
 
 ### Added
 - **`cdp_metro_events` MCP tool** (M5 / D656). Read Metro reporter events (`bundle_build_started` / `bundle_build_done` / `bundle_build_failed`, reloads) captured by the `MetroEventsClient` attached alongside every CDP session. Accepts `limit` / `type` filter / `clearErrors`. Returns `{ eventsConnected, lastBuild, buildErrors, events, count, eventsReason?, hint? }`.
