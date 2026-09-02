@@ -211,7 +211,12 @@ alive for such callers.
   ancestor Pressable. The bounded ancestor walk applies only when the exact
   target is not such an input. Both orders are pinned by
   `test/unit/gh-869-replay-tap-type-walkup.test.ts` and
-  `test/unit/textinput-designation-replay.test.ts`.
+  `test/unit/textinput-designation-replay.test.ts`. Exact-ID replay eligibility
+  (`pointerEvents`, hidden) is read on host fibers (`tag === 5`) only, inherited
+  root-to-leaf, and evaluated at the element's deepest same-ID host inside the
+  resolution traversal that finds the selector; never reintroduce an upward
+  ancestor scan or read pointer props off composite fibers. Modal and overlap
+  occlusion stay owned by the frontmost oracle.
 - Exact-ID visibility in CDP/JS replay has exactly one owner: the injected
   `isTestIdFrontmost` oracle (`src/injected-helpers.ts`), consumed through
   `frontmostFor` — it scans fibers exactly and fail-closes on renderer
