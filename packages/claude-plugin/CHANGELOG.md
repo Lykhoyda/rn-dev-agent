@@ -1,5 +1,13 @@
 # rn-dev-agent-plugin
 
+## 1.0.2
+
+### Patch Changes
+
+- f76cd30: Allow React-tree replay taps to designate an exact editable TextInput for only the adjacent inputText step without dispatching press or focus callbacks, and resolve a stock TextInput whose composite and host fibers share one onChangeText as a single typeText target instead of refusing it as ambiguous.
+- Updated dependencies [f76cd30]
+  - rn-dev-agent-core@1.0.2
+
 ## 1.0.1
 
 ### Patch Changes
