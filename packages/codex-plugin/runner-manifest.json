@@ -1,18 +1,18 @@
 {
-  "version": "1.0.1",
+  "version": "1.0.2",
   "assets": {
     "ios": [
       {
-        "name": "rn-fast-runner-1.0.1-sim.zip",
-        "sha256": "605bdc0ac6611d3fa841ccc7126f84508e2e5c131c0f99e9634a7e197b619e77",
-        "bytes": 6843576
+        "name": "rn-fast-runner-1.0.2-sim.zip",
+        "sha256": "51290021bdc2e7cf20aa04844c4726d49e6edb37a3836c601057033a2df00967",
+        "bytes": 6844999
       }
     ],
     "android": [
       {
-        "name": "rn-android-runner-1.0.1.zip",
-        "sha256": "11fc73577a93ee8fa308b6c2e7d7f3c26a8b38216a0ca90d625267e764aba68b",
-        "bytes": 1860203
+        "name": "rn-android-runner-1.0.2.zip",
+        "sha256": "6591256bf43c66986648c0e83f763d45bab971c87ea9215534933199a1b6ad30",
+        "bytes": 1860202
       }
     ]
   }
