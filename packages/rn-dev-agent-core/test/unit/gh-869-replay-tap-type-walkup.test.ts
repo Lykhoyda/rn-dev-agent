@@ -222,8 +222,12 @@ test('#869 control: a box-only ancestor outside the exact-ID lineage still refus
     root,
     makeFiber({ displayName: 'View' }, { testID: 'shell', pointerEvents: 'box-only' }),
   );
-  const composite = appendChild(
+  const blockerHost = appendChild(
     blocker,
+    makeFiber('RCTView', { testID: 'shell', pointerEvents: 'box-only' }),
+  );
+  const composite = appendChild(
+    blockerHost,
     makeFiber({ displayName: 'Pressable' }, { testID: 'btn', onPress }),
   );
   appendChild(composite, makeFiber('RCTView', { testID: 'btn', onPress }));
@@ -287,6 +291,72 @@ test('#869 a TextInput carrying its own onPress presses once, then types', async
       assert.equal(host.memoizedProps.value, '0451');
     });
   }
+});
+
+test('#869 a same-ID box-only host above a same-ID pressable still refuses', async () => {
+  let fired = 0;
+  const root = makeFiber('Root');
+  const outer = appendChild(
+    root,
+    makeFiber({ displayName: 'View' }, { testID: 'x', pointerEvents: 'box-only' }),
+  );
+  const outerHost = appendChild(
+    outer,
+    makeFiber('RCTView', { testID: 'x', pointerEvents: 'box-only' }),
+  );
+  const onPress = (): void => {
+    fired += 1;
+  };
+  const pressable = appendChild(
+    outerHost,
+    makeFiber({ displayName: 'Pressable' }, { testID: 'x', onPress }),
+  );
+  const pressableView = appendChild(
+    pressable,
+    makeFiber({ displayName: 'View' }, { testID: 'x', onPress }),
+  );
+  appendChild(pressableView, makeFiber('RCTView', { testID: 'x', onPress }));
+  const deps = buildDeps(createAgent(root));
+
+  const result = await runCdpReplayCommands([{ tapOn: { id: 'x' } }], {}, deps);
+
+  assert.equal(result.passed, false);
+  assert.equal(result.failureCode, 'INTERACTION_NOT_ACTUATED');
+  assert.match(result.reason ?? '', /pointerEvents/);
+  assert.equal(fired, 0);
+});
+
+test('#869 eligibility reads the root-down tree, not a stale return pointer', async () => {
+  const calls = { typed: [] as string[] };
+  const root = makeFiber('Root');
+  const app = appendChild(root, makeFiber('RCTView'));
+  const blockerHost = appendChild(app, makeFiber('RCTView', { pointerEvents: 'box-only' }));
+  const inputComposite = appendChild(
+    blockerHost,
+    makeFiber({ displayName: 'TextInput' }, { testID: 'otp_email' }),
+  );
+  const inputHost = appendChild(
+    inputComposite,
+    makeFiber('RCTSinglelineTextInputView', { testID: 'otp_email', value: '' }),
+  );
+  inputHost.memoizedProps.onChangeText = (value: string): void => {
+    calls.typed.push(value);
+    inputHost.memoizedProps.value = value;
+  };
+  const cleanStandIn = makeFiber('RCTView');
+  cleanStandIn.return = app;
+  inputComposite.return = cleanStandIn;
+  const deps = buildDeps(createAgent(root));
+
+  const result = await runCdpReplayCommands([{ inputText: '0451' }], {}, deps, {
+    initialFocusId: 'otp_email',
+  });
+
+  assert.equal(result.passed, false);
+  assert.equal(result.failureCode, 'INTERACTION_NOT_ACTUATED');
+  assert.match(result.reason ?? '', /pointerEvents/);
+  assert.deepEqual(calls.typed, []);
+  assert.equal(inputHost.memoizedProps.value, '');
 });
 
 test('#869 control: a directly pressable testID still presses without walking', async () => {

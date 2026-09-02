@@ -289,6 +289,30 @@ test('typeText types through a box-none wrapper testID onto the inner input', as
   assert.equal(input.memoizedProps.value, 'abc');
 });
 
+test('typeText refuses when a host ancestor of the input is box-only', async () => {
+  const root = makeFiber('Root');
+  const blocker = appendChild(root, makeFiber('View', { pointerEvents: 'box-only' }));
+  const wrapper = appendChild(blocker, makeFiber('View', { testID: 'blocked_field' }));
+  const input = appendChild(
+    wrapper,
+    makeFiber('AndroidTextInput', {
+      value: '',
+      onChangeText(value: string) {
+        input.memoizedProps.value = value;
+      },
+    }),
+  );
+  const agent = createAgent(root);
+
+  const result = await performReactTreeInput('blocked_field', 'abc', agent as never);
+  const envelope = parseEnvelope(result);
+
+  assert.equal(envelope.ok, false);
+  assert.equal(envelope.code, 'INTERACTION_NOT_ACTUATED');
+  assert.match(envelope.error ?? '', /pointerEvents/);
+  assert.equal(input.memoizedProps.value, '');
+});
+
 test('typeText refuses when the selected input itself is box-none', async () => {
   const root = makeFiber('Root');
   const wrapper = appendChild(root, makeFiber('View', { testID: 'box_none_input' }));
