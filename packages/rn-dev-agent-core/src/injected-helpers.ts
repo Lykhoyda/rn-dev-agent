@@ -2,7 +2,7 @@
 // whenever the injected surface changes; it flows into the IIFE's freshness
 // check (__RN_AGENT.__v) AND the post-injection log line, so they can never
 // drift (the log previously hard-coded a stale "v11").
-export const HELPERS_VERSION = 59;
+export const HELPERS_VERSION = 60;
 
 export const INJECTED_HELPERS = `
 (function() {
@@ -549,6 +549,7 @@ export const INJECTED_HELPERS = `
       var testID = fiber.memoizedProps && (fiber.memoizedProps.testID || fiber.memoizedProps.nativeID);
       var accessibilityLabel = fiber.memoizedProps && fiber.memoizedProps.accessibilityLabel;
       var isUserComponent = name && !name.startsWith('RCT') && /^[A-Z]/.test(name);
+      var fiberDisabled = fiber.memoizedProps && (fiber.memoizedProps.disabled === true || fiber.memoizedProps.editable === false || (fiber.memoizedProps.accessibilityState && fiber.memoizedProps.accessibilityState.disabled === true));
 
       var children = [];
       var child = fiber.child;
@@ -567,6 +568,7 @@ export const INJECTED_HELPERS = `
       var result = { component: name };
       if (testID) result.testID = testID;
       if (accessibilityLabel) result.accessibilityLabel = accessibilityLabel;
+      if (testID && fiberDisabled) result.disabled = true;
 
       if (isUserComponent && fiber.memoizedProps) {
         var props = {};
@@ -704,7 +706,7 @@ export const INJECTED_HELPERS = `
           if (iprops.placeholder) entry.placeholder = String(iprops.placeholder);
           // surface on/off state for toggles so the agent need not re-read before deciding
           if (entry.role === 'switch' && typeof iprops.value === 'boolean') entry.value = iprops.value;
-          if (iprops.disabled === true || (iprops.accessibilityState && iprops.accessibilityState.disabled === true)) entry.disabled = true;
+          if (iprops.disabled === true || iprops.editable === false || (iprops.accessibilityState && iprops.accessibilityState.disabled === true)) entry.disabled = true;
           salient.push(entry);
         }
         var ich = ifiber.child;
@@ -1688,7 +1690,7 @@ export const INJECTED_HELPERS = `
       target.push(source);
     }
 
-    function addCandidate(fiber) {
+    function addCandidate(fiber, inherited) {
       if (!consumeWork()) return;
       if (candidateIdentitySeen.has(fiber) || (fiber.alternate && candidateIdentitySeen.has(fiber.alternate))) return;
       var props = fiber.memoizedProps || {};
@@ -1706,6 +1708,7 @@ export const INJECTED_HELPERS = `
       if (fiber.alternate) candidateIdentitySeen.add(fiber.alternate);
       candidates.push({
         fiber: fiber,
+        inherited: inherited,
         alternate: fiber.alternate || null,
         props: props,
         name: typeTextFiberName(fiber),
@@ -1995,13 +1998,14 @@ export const INJECTED_HELPERS = `
       if (!state.truncated && !hidden) addSource(sources, source);
     }
 
-    function collectSource(fiber) {
+    function collectSource(fiber, inherited) {
       if (!consumeWork()) return;
       var props = fiber.memoizedProps || {};
       if (selectorKind === 'testID') {
         if (props.testID === opts.testID || props.nativeID === opts.testID) {
           addSource(sources, {
             fiber: fiber,
+            inherited: inherited,
             evidence: { testID: props.testID, nativeID: props.nativeID, selectorBundle: null }
           });
         }
@@ -2072,8 +2076,10 @@ export const INJECTED_HELPERS = `
       var localSeen = new WeakSet();
       if (!consumeWork()) return TYPE_TEXT_ABORT;
       var stack = [rootFiber];
+      var inheritStack = [ELIGIBILITY_CLEAR];
       while (stack.length > 0 && !state.truncated) {
         var node = stack.pop();
+        var nodeInherited = inheritStack.pop();
         if (!consumeWork()) break;
         if (!consumeWork()) break;
         if (localSeen.has(node)) {
@@ -2085,17 +2091,19 @@ export const INJECTED_HELPERS = `
         if (completed.has(node)) continue;
         completed.add(node);
         state.visitedFibers++;
-        collectSource(node);
+        collectSource(node, nodeInherited);
         if (state.truncated) break;
-        addCandidate(node);
+        addCandidate(node, nodeInherited);
         if (state.truncated) break;
         if (node.sibling) {
           if (!consumeWork()) break;
           stack.push(node.sibling);
+          inheritStack.push(nodeInherited);
         }
         if (node.child) {
           if (!consumeWork()) break;
           stack.push(node.child);
+          inheritStack.push(eligibilityDescend(nodeInherited, node));
         }
       }
       return state.truncated ? TYPE_TEXT_ABORT : null;
@@ -2144,6 +2152,7 @@ export const INJECTED_HELPERS = `
       if (source) {
         bindings.push({
           candidateFiber: candidate.fiber,
+          candidateInherited: candidate.inherited,
           candidateAlternate: candidate.alternate,
           sourceFiber: source.fiber,
           contract: candidate.contract,
@@ -2219,6 +2228,8 @@ export const INJECTED_HELPERS = `
     return {
       binding: bindings.length === 1 ? bindings[0] : null,
       sourceCount: sources.length,
+      sourceFibers: sources.map(function(source) { return source.fiber; }),
+      sources: sources,
       firstSource: sources[0].fiber,
       state: state
     };
@@ -2315,6 +2326,16 @@ export const INJECTED_HELPERS = `
     }
     activeTextInputDesignation = null;
     return designation;
+  }
+
+  function designateTextInputPress(found, selector) {
+    var designation = resolveTextInputDesignation(found, selector);
+    if (!designation) return null;
+    if (designation.success === true) {
+      designation.designationToken = retainTextInputDesignation(designation.inputFiber, selector);
+      delete designation.inputFiber;
+    }
+    return JSON.stringify(designation);
   }
 
   function releaseInputDesignation(token) {
@@ -2599,6 +2620,37 @@ export const INJECTED_HELPERS = `
       }
     }
     var text = opts.text !== undefined ? opts.text : '';
+    if (opts.testID) {
+      for (var typeSourceIndex = 0; typeSourceIndex < resolution.sources.length; typeSourceIndex++) {
+        var typeSource = resolution.sources[typeSourceIndex];
+        var typeSourceEligibility = eligibilityDisabled(typeSource.fiber)
+          ? { eligible: false, error: 'Component is disabled', reason: 'disabled exact-ID fiber' }
+          : eligibilityHiddenVerdict(typeSource.fiber, typeSource.inherited, opts.testID);
+        if (!typeSourceEligibility.eligible) {
+          return {
+            error: typeSourceEligibility.error,
+            reason: typeSourceEligibility.reason,
+            code: 'INTERACTION_NOT_ACTUATED',
+            component: typeTextFiberName(typeSource.fiber),
+            testID: selector,
+            handlerCalled: false
+          };
+        }
+      }
+      var typeCandidateEligibility = eligibilityDisabled(binding.candidateFiber)
+        ? { eligible: false, error: 'Component is disabled', reason: 'disabled exact-ID fiber' }
+        : eligibilityVerdict(binding.candidateFiber, binding.candidateInherited, opts.testID);
+      if (!typeCandidateEligibility.eligible) {
+        return {
+          error: typeCandidateEligibility.error,
+          reason: typeCandidateEligibility.reason,
+          code: 'INTERACTION_NOT_ACTUATED',
+          component: binding.component,
+          testID: selector,
+          handlerCalled: false
+        };
+      }
+    }
     if (boundDesignation) text = (binding.valueBefore || '') + text;
     try {
       if (binding.contract === 'onChangeText:string') binding.handler(text);
@@ -2731,13 +2783,16 @@ export const INJECTED_HELPERS = `
     // GH #525 — walkUp collects every strict-testID match so duplicates can refuse.
     var walkUpCollect = opts.walkUp === true && !isLabelMatch;
     var walkUpMatches = [];
+    var walkUpInherited = new WeakMap();
     var findSeen = null;
     var findCycleDetected = false;
 
     function findFiber(fiber) {
       var findStack = [fiber];
+      var findInheritStack = [ELIGIBILITY_CLEAR];
       while (findStack.length > 0) {
         var current = findStack.pop();
+        var currentInherited = findInheritStack.pop();
         if (findTruncated) return;
         if (findSeen.has(current)) {
           findCycleDetected = true;
@@ -2755,6 +2810,7 @@ export const INJECTED_HELPERS = `
             if (props[matchField] === selector) {
               if (walkUpCollect) {
                 walkUpMatches.push(current);
+                walkUpInherited.set(current, currentInherited);
               } else {
                 found = current;
                 return;
@@ -2776,8 +2832,14 @@ export const INJECTED_HELPERS = `
             }
           }
         }
-        if (current.sibling) findStack.push(current.sibling);
-        if (current.child) findStack.push(current.child);
+        if (current.sibling) {
+          findStack.push(current.sibling);
+          findInheritStack.push(currentInherited);
+        }
+        if (current.child) {
+          findStack.push(current.child);
+          findInheritStack.push(eligibilityDescend(currentInherited, current));
+        }
       }
     }
 
@@ -2871,6 +2933,30 @@ export const INJECTED_HELPERS = `
             ? f.type
             : (f.type.displayName || f.type.name))) || 'Unknown';
         };
+        // A real tap on a text field never reaches an ancestor Pressable, so designation wins over the walk.
+        if (opts.allowInputDesignation === true && opts.testID) {
+          var walkDesignation = designateTextInputPress(found, selector);
+          if (walkDesignation) return walkDesignation;
+        }
+        var walkAncestorOf = function(outer, inner) {
+          var node = inner.return;
+          var steps = 0;
+          while (node && steps < 1000) {
+            if (node === outer) return true;
+            node = node.return;
+            steps++;
+          }
+          return false;
+        };
+        // RN forwards testID and onPress down one element's composite/host stack; those fibers are
+        // the same logical target, so they collapse onto the outermost the way a direct press fires it.
+        var walkForwarded = function(a, b) {
+          var ap = a.memoizedProps, bp = b.memoizedProps;
+          if (!ap || !bp) return false;
+          if (ap[matchField] !== selector || bp[matchField] !== selector) return false;
+          if (ap.onPress !== bp.onPress) return false;
+          return walkAncestorOf(a, b) || walkAncestorOf(b, a);
+        };
         var walkSources = walkUpMatches.length > 0 ? walkUpMatches : [found];
         var walkCandidates = [];
         for (var wi = 0; wi < walkSources.length; wi++) {
@@ -2885,9 +2971,13 @@ export const INJECTED_HELPERS = `
           if (!walkNode || walkHops > WALK_UP_MAX) continue;
           var existing = null;
           for (var wj = 0; wj < walkCandidates.length; wj++) {
-            if (walkCandidates[wj].fiber === walkNode) { existing = walkCandidates[wj]; break; }
+            if (walkCandidates[wj].fiber === walkNode || walkForwarded(walkCandidates[wj].fiber, walkNode)) {
+              existing = walkCandidates[wj];
+              break;
+            }
           }
           if (existing) {
+            if (walkAncestorOf(walkNode, existing.fiber)) existing.fiber = walkNode;
             if (walkHops < existing.hops) { existing.hops = walkHops; existing.source = walkSources[wi]; }
           } else {
             walkCandidates.push({ fiber: walkNode, hops: walkHops, source: walkSources[wi] });
@@ -2916,6 +3006,21 @@ export const INJECTED_HELPERS = `
         }
         var walkTarget = walkCandidates[0];
         var walkTargetName = walkFiberName(walkTarget.fiber);
+        if (opts.testID) {
+          if (eligibilityDisabled(walkTarget.fiber)) {
+            return JSON.stringify({ error: 'Component is disabled', reason: 'disabled walk target', component: walkTargetName, testID: selector });
+          }
+          for (var ws = 0; ws < walkSources.length; ws++) {
+            var walkSource = walkSources[ws];
+            if (eligibilityDisabled(walkSource)) {
+              return JSON.stringify({ error: 'Component is disabled', reason: 'disabled exact-ID fiber', component: walkFiberName(walkSource), testID: selector });
+            }
+            var walkSourceEligibility = eligibilityVerdict(walkSource, walkUpInherited.get(walkSource), selector);
+            if (!walkSourceEligibility.eligible) {
+              return JSON.stringify({ error: walkSourceEligibility.error, reason: walkSourceEligibility.reason, component: walkFiberName(walkSource), testID: selector });
+            }
+          }
+        }
         executedName = walkTargetName;
         if (opts.value !== undefined) {
           walkTarget.fiber.memoizedProps.onPress(opts.value);
@@ -2934,17 +3039,8 @@ export const INJECTED_HELPERS = `
       if (action === 'press') {
         if (typeof props.onPress !== 'function') {
           if (opts.allowInputDesignation === true && opts.testID) {
-            var designation = resolveTextInputDesignation(found, selector);
-            if (designation) {
-              if (designation.success === true) {
-                designation.designationToken = retainTextInputDesignation(
-                  designation.inputFiber,
-                  selector
-                );
-                delete designation.inputFiber;
-              }
-              return JSON.stringify(designation);
-            }
+            var pressDesignation = designateTextInputPress(found, selector);
+            if (pressDesignation) return pressDesignation;
           }
           return JSON.stringify({ error: 'Component has no onPress handler', component: typeName, testID: selector });
         }
@@ -4121,6 +4217,97 @@ export const INJECTED_HELPERS = `
       guard++;
     }
     return false;
+  }
+
+  var ELIGIBILITY_CLEAR = { blocked: false, blockedBy: null, hidden: false };
+
+  function eligibilityPointerEvents(fiber) {
+    var props = fiber.memoizedProps;
+    if (!props) return null;
+    if (typeof props.pointerEvents === 'string') return props.pointerEvents;
+    if (props.style == null) return null;
+    var flat = flattenStyle(props.style);
+    return typeof flat.pointerEvents === 'string' ? flat.pointerEvents : null;
+  }
+
+  // Only host fibers are views, and only a view decides pointerEvents/hidden in hitTest.
+  function eligibilityDescend(inherited, fiber) {
+    if (!fiber || fiber.tag !== 5) return inherited;
+    var blocked = inherited.blocked;
+    var blockedBy = inherited.blockedBy;
+    var hidden = inherited.hidden;
+    if (!blocked) {
+      var pointerEvents = eligibilityPointerEvents(fiber);
+      if (pointerEvents === 'none' || pointerEvents === 'box-only') {
+        blocked = true;
+        blockedBy = pointerEvents;
+      }
+    }
+    if (!hidden && isSubtreeInaccessible(fiber)) hidden = true;
+    if (blocked === inherited.blocked && hidden === inherited.hidden) return inherited;
+    return { blocked: blocked, blockedBy: blockedBy, hidden: hidden };
+  }
+
+  function eligibilitySameSelector(fiber, selector) {
+    var props = fiber && fiber.memoizedProps;
+    if (!props || selector === undefined || selector === null) return false;
+    return props.testID === selector || props.nativeID === selector;
+  }
+
+  // The logical element is evaluated at the deepest host reached by a downward
+  // single-child chain of same-selector fibers.
+  function eligibilityEvaluate(fiber, inherited, selector) {
+    var state = inherited || ELIGIBILITY_CLEAR;
+    var host = fiber && fiber.tag === 5 ? fiber : null;
+    var hostInherited = state;
+    var node = fiber;
+    var steps = 0;
+    while (node && steps < 1000) {
+      var child = node.child;
+      if (!child || child.sibling || !eligibilitySameSelector(child, selector)) break;
+      state = eligibilityDescend(state, node);
+      node = child;
+      if (node.tag === 5) {
+        host = node;
+        hostInherited = state;
+      }
+      steps++;
+    }
+    return { host: host, inherited: hostInherited };
+  }
+
+  function eligibilityDisabled(fiber) {
+    var props = (fiber && fiber.memoizedProps) || {};
+    return props.disabled === true
+      || props.editable === false
+      || (props.accessibilityState && props.accessibilityState.disabled === true);
+  }
+
+  function eligibilityHiddenVerdict(fiber, inherited, selector) {
+    if (!fiber) {
+      return { eligible: false, error: 'Component eligibility could not be proven', reason: 'fiber unavailable' };
+    }
+    var evaluated = eligibilityEvaluate(fiber, inherited, selector);
+    if (evaluated.inherited.hidden || (evaluated.host && isSubtreeInaccessible(evaluated.host))) {
+      return { eligible: false, error: 'Component is hidden', reason: 'hidden exact-ID subtree' };
+    }
+    return { eligible: true, evaluated: evaluated };
+  }
+
+  function eligibilityVerdict(fiber, inherited, selector) {
+    var verdict = eligibilityHiddenVerdict(fiber, inherited, selector);
+    if (!verdict.eligible) return verdict;
+    var evaluated = verdict.evaluated;
+    if (evaluated.inherited.blocked) {
+      return { eligible: false, error: 'Component is not user-interactable beneath pointerEvents="' + evaluated.inherited.blockedBy + '"', reason: 'exact-ID fiber is beneath pointerEvents="' + evaluated.inherited.blockedBy + '"' };
+    }
+    if (evaluated.host) {
+      var pointerEvents = eligibilityPointerEvents(evaluated.host);
+      if (pointerEvents === 'none' || pointerEvents === 'box-none') {
+        return { eligible: false, error: 'Component is not user-interactable with pointerEvents="' + pointerEvents + '"', reason: 'exact-ID fiber has pointerEvents="' + pointerEvents + '"' };
+      }
+    }
+    return { eligible: true };
   }
 
   function isTestIdFrontmost(testID) {

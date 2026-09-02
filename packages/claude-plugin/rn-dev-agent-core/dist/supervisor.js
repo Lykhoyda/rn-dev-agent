@@ -31806,6 +31806,12 @@ async function performReactTreeInput(testID, text, client2, signal, options = {}
         hint: "No text was entered. Refresh the snapshot (device_snapshot action=snapshot) and rebind the input before retrying."
       });
     }
+    if (dispatch.code) {
+      return failResult(`React-tree input "${testID}" refused: ${dispatch.error}`, dispatch.code, {
+        mutation: dispatch.mutation,
+        pathsTried
+      });
+    }
     return fillFailure("TEXT_ENTRY_UNVERIFIED", dispatch.mutation === "possible" ? `React-tree input "${testID}" may have mutated but its onChangeText result is unknown.` : `React-tree input "${testID}" has no verifiable controlled onChangeText path.`, { mutation: dispatch.mutation, pathsTried });
   }
   if (signal?.aborted) {
@@ -63945,7 +63951,7 @@ var HELPERS_VERSION, INJECTED_HELPERS, NETWORK_HOOK_SCRIPT, NETWORK_CB_BUFFERED_
 var init_injected_helpers = __esm({
   "packages/rn-dev-agent-core/dist/injected-helpers.js"() {
     "use strict";
-    HELPERS_VERSION = 59;
+    HELPERS_VERSION = 60;
     INJECTED_HELPERS = `
 (function() {
   var __HELPERS_VERSION__ = ${HELPERS_VERSION};
@@ -64491,6 +64497,7 @@ var init_injected_helpers = __esm({
       var testID = fiber.memoizedProps && (fiber.memoizedProps.testID || fiber.memoizedProps.nativeID);
       var accessibilityLabel = fiber.memoizedProps && fiber.memoizedProps.accessibilityLabel;
       var isUserComponent = name && !name.startsWith('RCT') && /^[A-Z]/.test(name);
+      var fiberDisabled = fiber.memoizedProps && (fiber.memoizedProps.disabled === true || fiber.memoizedProps.editable === false || (fiber.memoizedProps.accessibilityState && fiber.memoizedProps.accessibilityState.disabled === true));
 
       var children = [];
       var child = fiber.child;
@@ -64509,6 +64516,7 @@ var init_injected_helpers = __esm({
       var result = { component: name };
       if (testID) result.testID = testID;
       if (accessibilityLabel) result.accessibilityLabel = accessibilityLabel;
+      if (testID && fiberDisabled) result.disabled = true;
 
       if (isUserComponent && fiber.memoizedProps) {
         var props = {};
@@ -64646,7 +64654,7 @@ var init_injected_helpers = __esm({
           if (iprops.placeholder) entry.placeholder = String(iprops.placeholder);
           // surface on/off state for toggles so the agent need not re-read before deciding
           if (entry.role === 'switch' && typeof iprops.value === 'boolean') entry.value = iprops.value;
-          if (iprops.disabled === true || (iprops.accessibilityState && iprops.accessibilityState.disabled === true)) entry.disabled = true;
+          if (iprops.disabled === true || iprops.editable === false || (iprops.accessibilityState && iprops.accessibilityState.disabled === true)) entry.disabled = true;
           salient.push(entry);
         }
         var ich = ifiber.child;
@@ -65630,7 +65638,7 @@ var init_injected_helpers = __esm({
       target.push(source);
     }
 
-    function addCandidate(fiber) {
+    function addCandidate(fiber, inherited) {
       if (!consumeWork()) return;
       if (candidateIdentitySeen.has(fiber) || (fiber.alternate && candidateIdentitySeen.has(fiber.alternate))) return;
       var props = fiber.memoizedProps || {};
@@ -65648,6 +65656,7 @@ var init_injected_helpers = __esm({
       if (fiber.alternate) candidateIdentitySeen.add(fiber.alternate);
       candidates.push({
         fiber: fiber,
+        inherited: inherited,
         alternate: fiber.alternate || null,
         props: props,
         name: typeTextFiberName(fiber),
@@ -65937,13 +65946,14 @@ var init_injected_helpers = __esm({
       if (!state.truncated && !hidden) addSource(sources, source);
     }
 
-    function collectSource(fiber) {
+    function collectSource(fiber, inherited) {
       if (!consumeWork()) return;
       var props = fiber.memoizedProps || {};
       if (selectorKind === 'testID') {
         if (props.testID === opts.testID || props.nativeID === opts.testID) {
           addSource(sources, {
             fiber: fiber,
+            inherited: inherited,
             evidence: { testID: props.testID, nativeID: props.nativeID, selectorBundle: null }
           });
         }
@@ -66014,8 +66024,10 @@ var init_injected_helpers = __esm({
       var localSeen = new WeakSet();
       if (!consumeWork()) return TYPE_TEXT_ABORT;
       var stack = [rootFiber];
+      var inheritStack = [ELIGIBILITY_CLEAR];
       while (stack.length > 0 && !state.truncated) {
         var node = stack.pop();
+        var nodeInherited = inheritStack.pop();
         if (!consumeWork()) break;
         if (!consumeWork()) break;
         if (localSeen.has(node)) {
@@ -66027,17 +66039,19 @@ var init_injected_helpers = __esm({
         if (completed.has(node)) continue;
         completed.add(node);
         state.visitedFibers++;
-        collectSource(node);
+        collectSource(node, nodeInherited);
         if (state.truncated) break;
-        addCandidate(node);
+        addCandidate(node, nodeInherited);
         if (state.truncated) break;
         if (node.sibling) {
           if (!consumeWork()) break;
           stack.push(node.sibling);
+          inheritStack.push(nodeInherited);
         }
         if (node.child) {
           if (!consumeWork()) break;
           stack.push(node.child);
+          inheritStack.push(eligibilityDescend(nodeInherited, node));
         }
       }
       return state.truncated ? TYPE_TEXT_ABORT : null;
@@ -66086,6 +66100,7 @@ var init_injected_helpers = __esm({
       if (source) {
         bindings.push({
           candidateFiber: candidate.fiber,
+          candidateInherited: candidate.inherited,
           candidateAlternate: candidate.alternate,
           sourceFiber: source.fiber,
           contract: candidate.contract,
@@ -66161,6 +66176,8 @@ var init_injected_helpers = __esm({
     return {
       binding: bindings.length === 1 ? bindings[0] : null,
       sourceCount: sources.length,
+      sourceFibers: sources.map(function(source) { return source.fiber; }),
+      sources: sources,
       firstSource: sources[0].fiber,
       state: state
     };
@@ -66257,6 +66274,16 @@ var init_injected_helpers = __esm({
     }
     activeTextInputDesignation = null;
     return designation;
+  }
+
+  function designateTextInputPress(found, selector) {
+    var designation = resolveTextInputDesignation(found, selector);
+    if (!designation) return null;
+    if (designation.success === true) {
+      designation.designationToken = retainTextInputDesignation(designation.inputFiber, selector);
+      delete designation.inputFiber;
+    }
+    return JSON.stringify(designation);
   }
 
   function releaseInputDesignation(token) {
@@ -66541,6 +66568,37 @@ var init_injected_helpers = __esm({
       }
     }
     var text = opts.text !== undefined ? opts.text : '';
+    if (opts.testID) {
+      for (var typeSourceIndex = 0; typeSourceIndex < resolution.sources.length; typeSourceIndex++) {
+        var typeSource = resolution.sources[typeSourceIndex];
+        var typeSourceEligibility = eligibilityDisabled(typeSource.fiber)
+          ? { eligible: false, error: 'Component is disabled', reason: 'disabled exact-ID fiber' }
+          : eligibilityHiddenVerdict(typeSource.fiber, typeSource.inherited, opts.testID);
+        if (!typeSourceEligibility.eligible) {
+          return {
+            error: typeSourceEligibility.error,
+            reason: typeSourceEligibility.reason,
+            code: 'INTERACTION_NOT_ACTUATED',
+            component: typeTextFiberName(typeSource.fiber),
+            testID: selector,
+            handlerCalled: false
+          };
+        }
+      }
+      var typeCandidateEligibility = eligibilityDisabled(binding.candidateFiber)
+        ? { eligible: false, error: 'Component is disabled', reason: 'disabled exact-ID fiber' }
+        : eligibilityVerdict(binding.candidateFiber, binding.candidateInherited, opts.testID);
+      if (!typeCandidateEligibility.eligible) {
+        return {
+          error: typeCandidateEligibility.error,
+          reason: typeCandidateEligibility.reason,
+          code: 'INTERACTION_NOT_ACTUATED',
+          component: binding.component,
+          testID: selector,
+          handlerCalled: false
+        };
+      }
+    }
     if (boundDesignation) text = (binding.valueBefore || '') + text;
     try {
       if (binding.contract === 'onChangeText:string') binding.handler(text);
@@ -66673,13 +66731,16 @@ var init_injected_helpers = __esm({
     // GH #525 \u2014 walkUp collects every strict-testID match so duplicates can refuse.
     var walkUpCollect = opts.walkUp === true && !isLabelMatch;
     var walkUpMatches = [];
+    var walkUpInherited = new WeakMap();
     var findSeen = null;
     var findCycleDetected = false;
 
     function findFiber(fiber) {
       var findStack = [fiber];
+      var findInheritStack = [ELIGIBILITY_CLEAR];
       while (findStack.length > 0) {
         var current = findStack.pop();
+        var currentInherited = findInheritStack.pop();
         if (findTruncated) return;
         if (findSeen.has(current)) {
           findCycleDetected = true;
@@ -66697,6 +66758,7 @@ var init_injected_helpers = __esm({
             if (props[matchField] === selector) {
               if (walkUpCollect) {
                 walkUpMatches.push(current);
+                walkUpInherited.set(current, currentInherited);
               } else {
                 found = current;
                 return;
@@ -66718,8 +66780,14 @@ var init_injected_helpers = __esm({
             }
           }
         }
-        if (current.sibling) findStack.push(current.sibling);
-        if (current.child) findStack.push(current.child);
+        if (current.sibling) {
+          findStack.push(current.sibling);
+          findInheritStack.push(currentInherited);
+        }
+        if (current.child) {
+          findStack.push(current.child);
+          findInheritStack.push(eligibilityDescend(currentInherited, current));
+        }
       }
     }
 
@@ -66813,6 +66881,30 @@ var init_injected_helpers = __esm({
             ? f.type
             : (f.type.displayName || f.type.name))) || 'Unknown';
         };
+        // A real tap on a text field never reaches an ancestor Pressable, so designation wins over the walk.
+        if (opts.allowInputDesignation === true && opts.testID) {
+          var walkDesignation = designateTextInputPress(found, selector);
+          if (walkDesignation) return walkDesignation;
+        }
+        var walkAncestorOf = function(outer, inner) {
+          var node = inner.return;
+          var steps = 0;
+          while (node && steps < 1000) {
+            if (node === outer) return true;
+            node = node.return;
+            steps++;
+          }
+          return false;
+        };
+        // RN forwards testID and onPress down one element's composite/host stack; those fibers are
+        // the same logical target, so they collapse onto the outermost the way a direct press fires it.
+        var walkForwarded = function(a, b) {
+          var ap = a.memoizedProps, bp = b.memoizedProps;
+          if (!ap || !bp) return false;
+          if (ap[matchField] !== selector || bp[matchField] !== selector) return false;
+          if (ap.onPress !== bp.onPress) return false;
+          return walkAncestorOf(a, b) || walkAncestorOf(b, a);
+        };
         var walkSources = walkUpMatches.length > 0 ? walkUpMatches : [found];
         var walkCandidates = [];
         for (var wi = 0; wi < walkSources.length; wi++) {
@@ -66827,9 +66919,13 @@ var init_injected_helpers = __esm({
           if (!walkNode || walkHops > WALK_UP_MAX) continue;
           var existing = null;
           for (var wj = 0; wj < walkCandidates.length; wj++) {
-            if (walkCandidates[wj].fiber === walkNode) { existing = walkCandidates[wj]; break; }
+            if (walkCandidates[wj].fiber === walkNode || walkForwarded(walkCandidates[wj].fiber, walkNode)) {
+              existing = walkCandidates[wj];
+              break;
+            }
           }
           if (existing) {
+            if (walkAncestorOf(walkNode, existing.fiber)) existing.fiber = walkNode;
             if (walkHops < existing.hops) { existing.hops = walkHops; existing.source = walkSources[wi]; }
           } else {
             walkCandidates.push({ fiber: walkNode, hops: walkHops, source: walkSources[wi] });
@@ -66858,6 +66954,21 @@ var init_injected_helpers = __esm({
         }
         var walkTarget = walkCandidates[0];
         var walkTargetName = walkFiberName(walkTarget.fiber);
+        if (opts.testID) {
+          if (eligibilityDisabled(walkTarget.fiber)) {
+            return JSON.stringify({ error: 'Component is disabled', reason: 'disabled walk target', component: walkTargetName, testID: selector });
+          }
+          for (var ws = 0; ws < walkSources.length; ws++) {
+            var walkSource = walkSources[ws];
+            if (eligibilityDisabled(walkSource)) {
+              return JSON.stringify({ error: 'Component is disabled', reason: 'disabled exact-ID fiber', component: walkFiberName(walkSource), testID: selector });
+            }
+            var walkSourceEligibility = eligibilityVerdict(walkSource, walkUpInherited.get(walkSource), selector);
+            if (!walkSourceEligibility.eligible) {
+              return JSON.stringify({ error: walkSourceEligibility.error, reason: walkSourceEligibility.reason, component: walkFiberName(walkSource), testID: selector });
+            }
+          }
+        }
         executedName = walkTargetName;
         if (opts.value !== undefined) {
           walkTarget.fiber.memoizedProps.onPress(opts.value);
@@ -66876,17 +66987,8 @@ var init_injected_helpers = __esm({
       if (action === 'press') {
         if (typeof props.onPress !== 'function') {
           if (opts.allowInputDesignation === true && opts.testID) {
-            var designation = resolveTextInputDesignation(found, selector);
-            if (designation) {
-              if (designation.success === true) {
-                designation.designationToken = retainTextInputDesignation(
-                  designation.inputFiber,
-                  selector
-                );
-                delete designation.inputFiber;
-              }
-              return JSON.stringify(designation);
-            }
+            var pressDesignation = designateTextInputPress(found, selector);
+            if (pressDesignation) return pressDesignation;
           }
           return JSON.stringify({ error: 'Component has no onPress handler', component: typeName, testID: selector });
         }
@@ -68063,6 +68165,97 @@ var init_injected_helpers = __esm({
       guard++;
     }
     return false;
+  }
+
+  var ELIGIBILITY_CLEAR = { blocked: false, blockedBy: null, hidden: false };
+
+  function eligibilityPointerEvents(fiber) {
+    var props = fiber.memoizedProps;
+    if (!props) return null;
+    if (typeof props.pointerEvents === 'string') return props.pointerEvents;
+    if (props.style == null) return null;
+    var flat = flattenStyle(props.style);
+    return typeof flat.pointerEvents === 'string' ? flat.pointerEvents : null;
+  }
+
+  // Only host fibers are views, and only a view decides pointerEvents/hidden in hitTest.
+  function eligibilityDescend(inherited, fiber) {
+    if (!fiber || fiber.tag !== 5) return inherited;
+    var blocked = inherited.blocked;
+    var blockedBy = inherited.blockedBy;
+    var hidden = inherited.hidden;
+    if (!blocked) {
+      var pointerEvents = eligibilityPointerEvents(fiber);
+      if (pointerEvents === 'none' || pointerEvents === 'box-only') {
+        blocked = true;
+        blockedBy = pointerEvents;
+      }
+    }
+    if (!hidden && isSubtreeInaccessible(fiber)) hidden = true;
+    if (blocked === inherited.blocked && hidden === inherited.hidden) return inherited;
+    return { blocked: blocked, blockedBy: blockedBy, hidden: hidden };
+  }
+
+  function eligibilitySameSelector(fiber, selector) {
+    var props = fiber && fiber.memoizedProps;
+    if (!props || selector === undefined || selector === null) return false;
+    return props.testID === selector || props.nativeID === selector;
+  }
+
+  // The logical element is evaluated at the deepest host reached by a downward
+  // single-child chain of same-selector fibers.
+  function eligibilityEvaluate(fiber, inherited, selector) {
+    var state = inherited || ELIGIBILITY_CLEAR;
+    var host = fiber && fiber.tag === 5 ? fiber : null;
+    var hostInherited = state;
+    var node = fiber;
+    var steps = 0;
+    while (node && steps < 1000) {
+      var child = node.child;
+      if (!child || child.sibling || !eligibilitySameSelector(child, selector)) break;
+      state = eligibilityDescend(state, node);
+      node = child;
+      if (node.tag === 5) {
+        host = node;
+        hostInherited = state;
+      }
+      steps++;
+    }
+    return { host: host, inherited: hostInherited };
+  }
+
+  function eligibilityDisabled(fiber) {
+    var props = (fiber && fiber.memoizedProps) || {};
+    return props.disabled === true
+      || props.editable === false
+      || (props.accessibilityState && props.accessibilityState.disabled === true);
+  }
+
+  function eligibilityHiddenVerdict(fiber, inherited, selector) {
+    if (!fiber) {
+      return { eligible: false, error: 'Component eligibility could not be proven', reason: 'fiber unavailable' };
+    }
+    var evaluated = eligibilityEvaluate(fiber, inherited, selector);
+    if (evaluated.inherited.hidden || (evaluated.host && isSubtreeInaccessible(evaluated.host))) {
+      return { eligible: false, error: 'Component is hidden', reason: 'hidden exact-ID subtree' };
+    }
+    return { eligible: true, evaluated: evaluated };
+  }
+
+  function eligibilityVerdict(fiber, inherited, selector) {
+    var verdict = eligibilityHiddenVerdict(fiber, inherited, selector);
+    if (!verdict.eligible) return verdict;
+    var evaluated = verdict.evaluated;
+    if (evaluated.inherited.blocked) {
+      return { eligible: false, error: 'Component is not user-interactable beneath pointerEvents="' + evaluated.inherited.blockedBy + '"', reason: 'exact-ID fiber is beneath pointerEvents="' + evaluated.inherited.blockedBy + '"' };
+    }
+    if (evaluated.host) {
+      var pointerEvents = eligibilityPointerEvents(evaluated.host);
+      if (pointerEvents === 'none' || pointerEvents === 'box-none') {
+        return { eligible: false, error: 'Component is not user-interactable with pointerEvents="' + pointerEvents + '"', reason: 'exact-ID fiber has pointerEvents="' + pointerEvents + '"' };
+      }
+    }
+    return { eligible: true };
   }
 
   function isTestIdFrontmost(testID) {
@@ -82295,6 +82488,7 @@ function createReplayPressByTestId(interact) {
       action: "press",
       testID: id,
       animated: false,
+      walkUp: true,
       allowInputDesignation: true
     });
     const envelope = JSON.parse(result.content[0]?.text ?? "{}");
@@ -82313,13 +82507,16 @@ function createReplayPressByTestId(interact) {
     };
   };
 }
-function nodeProps(treeJson, id) {
+function hasDisabledExactMatch(treeJson, id) {
   const stack = [treeJson];
   while (stack.length) {
     const n = stack.pop();
     if (n && typeof n === "object") {
-      if (n.testID === id || n.nativeID === id)
-        return n.props ?? n;
+      if (n.testID === id || n.nativeID === id) {
+        const props = n.props && typeof n.props === "object" && !Array.isArray(n.props) ? n.props : null;
+        if (isDisabled(n) || isDisabled(props))
+          return true;
+      }
       if (n.tree)
         stack.push(n.tree);
       const kids = n.children ?? n.interactive ?? n.nodes ?? n.matches;
@@ -82327,7 +82524,7 @@ function nodeProps(treeJson, id) {
         stack.push(...kids);
     }
   }
-  return null;
+  return false;
 }
 function nodePath(treeJson, id) {
   const root = treeJson && typeof treeJson === "object" && "tree" in treeJson ? treeJson.tree : treeJson;
@@ -82374,7 +82571,7 @@ function isDisabled(props) {
   if (!props)
     return false;
   const a11y = props.accessibilityState;
-  return props.disabled === true || a11y?.disabled === true;
+  return props.disabled === true || props.editable === false || a11y?.disabled === true;
 }
 async function runCdpReplayCommands(commands, params, deps, opts = {}) {
   return replayFlow(normalizeSteps(commands, params), buildCdpDispatch(deps, opts.signal), {
@@ -82402,7 +82599,7 @@ function buildCdpDispatch(deps, signal) {
       throw new ReplayDispatchError("AMBIGUOUS_TESTID", `testID "${id}" resolves to ${matches} mounted elements`, { matchCount: matches });
     if (!frontmost.visible)
       throw new ReplayDispatchError(frontmost.code ?? "ASSERTION_FAILED", frontmost.reason ?? `testID "${id}" is mounted but not frontmost`);
-    if (frontmost.disabled === true || isDisabled(nodeProps(tree, id)))
+    if (frontmost.disabled === true || hasDisabledExactMatch(tree, id))
       throw new ReplayDispatchError("INTERACTION_NOT_ACTUATED", `testID "${id}" is disabled/non-interactable`);
     const pointerEventsError = pointerEventsBlock(tree, id);
     if (pointerEventsError)
@@ -84982,6 +85179,204 @@ var init_login_prologue2 = __esm({
   }
 });
 
+// packages/rn-dev-agent-core/dist/tools/interact.js
+function createInteractHandler(getClient2) {
+  return withConnection(getClient2, async (args, client2) => {
+    const hasLadderSelector = args.action === "typeText" ? Boolean(args.placeholder || args.role && args.name) : Boolean(args.role || args.text || args.placeholder);
+    if (!args.testID && !args.accessibilityLabel && !hasLadderSelector) {
+      return failResult("A selector is required: testID / accessibilityLabel, or a discovery-ladder selector (role / text / placeholder).");
+    }
+    if (args.action === "typeText" && args.text === void 0) {
+      return failResult("text parameter is required for typeText action");
+    }
+    if (args.action === "setFieldValue") {
+      if (args.name === void 0 || args.name.length === 0) {
+        return failResult("name parameter is required for setFieldValue action \u2014 the React Hook Form field name");
+      }
+      if (args.value === void 0) {
+        return failResult("value parameter is required for setFieldValue action");
+      }
+    }
+    const opts = { action: args.action };
+    if (args.testID !== void 0)
+      opts.testID = args.testID;
+    if (args.accessibilityLabel !== void 0)
+      opts.accessibilityLabel = args.accessibilityLabel;
+    if (args.text !== void 0)
+      opts.text = args.text;
+    if (args.scrollX !== void 0)
+      opts.scrollX = args.scrollX;
+    if (args.scrollY !== void 0)
+      opts.scrollY = args.scrollY;
+    opts.animated = args.animated;
+    if (args.name !== void 0)
+      opts.name = args.name;
+    if (args.value !== void 0)
+      opts.value = args.value;
+    if (args.shouldValidate !== void 0)
+      opts.shouldValidate = args.shouldValidate;
+    if (args.shouldDirty !== void 0)
+      opts.shouldDirty = args.shouldDirty;
+    if (args.role !== void 0)
+      opts.role = args.role;
+    if (args.placeholder !== void 0)
+      opts.placeholder = args.placeholder;
+    if (args.exact !== void 0)
+      opts.exact = args.exact;
+    if (args.includeHidden !== void 0)
+      opts.includeHidden = args.includeHidden;
+    if (args.walkUp !== void 0)
+      opts.walkUp = args.walkUp;
+    if (args.allowInputDesignation !== void 0)
+      opts.allowInputDesignation = args.allowInputDesignation;
+    const result = await client2.evaluate(`__RN_AGENT.interact(${JSON.stringify(opts)})`);
+    if (result.error) {
+      return failResult(`Interact error: ${result.error}`);
+    }
+    if (typeof result.value !== "string") {
+      return failResult("Unexpected response from interact \u2014 expected JSON string");
+    }
+    let parsed;
+    try {
+      parsed = JSON.parse(result.value);
+    } catch {
+      return failResult(`Interact returned non-JSON: ${result.value.slice(0, 200)}`);
+    }
+    if (parsed.error) {
+      const refusal = pickDefined(parsed, REFUSAL_FIELDS);
+      return parsed.code === "ASSERTION_FAILED" ? failResult(`Interact failed: ${parsed.error}`, "ASSERTION_FAILED", refusal) : failResult(`Interact failed: ${parsed.error}`, refusal);
+    }
+    if (parsed.action_executed && parsed.handler_error) {
+      return failResult(`Action executed but handler threw: ${parsed.handler_error}`, {
+        actionExecuted: true,
+        handlerError: parsed.handler_error,
+        hint: "The app handler raised an exception \u2014 the screen may be in an error state. Check cdp_error_log before continuing."
+      });
+    }
+    return okResult(parsed);
+  });
+}
+var REFUSAL_FIELDS;
+var init_interact = __esm({
+  "packages/rn-dev-agent-core/dist/tools/interact.js"() {
+    "use strict";
+    init_utils();
+    REFUSAL_FIELDS = [
+      "hint",
+      "walkUpSearched",
+      "count",
+      "candidates",
+      "matches",
+      "truncated",
+      "reason",
+      "scanned",
+      "work",
+      "workLimit",
+      "handlerCalled"
+    ];
+  }
+});
+
+// packages/rn-dev-agent-core/dist/tools/cdp-replay-deps.js
+function makeReplayDeps(deps, signal) {
+  const session2 = deps.getActiveSession();
+  if (!session2 || session2.platform !== "ios" || !session2.appId)
+    return null;
+  const interact = createInteractHandler(deps.getClient);
+  const tree = createComponentTreeHandler(deps.getClient);
+  return {
+    pressByTestId: createReplayPressByTestId(interact),
+    typeByTestId: async (id, text, context) => {
+      mustOk(await performReactTreeInput(id, text, deps.getClient(), signal, context ? { designationToken: context.designationToken } : {}), `type "${id}"`);
+    },
+    releaseInputDesignation: async (token2) => {
+      try {
+        await deps.getClient().evaluate(`__RN_AGENT.releaseInputDesignation(${JSON.stringify(token2)})`);
+      } catch {
+      }
+    },
+    treeFor: async (id) => {
+      const fetchTree = async (interactiveOnly) => JSON.parse((await tree({
+        filter: id,
+        depth: 12,
+        ...interactiveOnly ? { interactiveOnly: true } : {}
+      })).content[0].text);
+      let env = await fetchTree(false);
+      const d = env.data;
+      if (d && typeof d === "object" && ("__agent_truncated" in d || d.truncated === true)) {
+        env = await fetchTree(true);
+      }
+      return unwrapTree(replayTreeData(env));
+    },
+    frontmostFor: async (id) => {
+      const client2 = deps.getClient();
+      const result = await client2.evaluate(client2.bridgeWithFallback(`isTestIdFrontmost(${JSON.stringify(id)})`));
+      if (result.error || typeof result.value !== "string") {
+        return {
+          visible: false,
+          reason: `frontmost route check failed for testID "${id}"`,
+          code: "ASSERTION_FAILED"
+        };
+      }
+      try {
+        const parsed = JSON.parse(result.value);
+        return {
+          visible: parsed.visible === true,
+          ...typeof parsed.disabled === "boolean" ? { disabled: parsed.disabled } : {},
+          ...parsed.reason ? { reason: parsed.reason } : {},
+          ...typeof parsed.matchCount === "number" ? { matchCount: parsed.matchCount } : {},
+          ...parsed.code ? { code: parsed.code } : {}
+        };
+      } catch {
+        return {
+          visible: false,
+          reason: `frontmost route check was unreadable for testID "${id}"`,
+          code: "ASSERTION_FAILED"
+        };
+      }
+    },
+    launchApp: async (stopApp) => {
+      const udid = await deps.resolveIosUdid(session2.deviceId);
+      if (!udid)
+        throw new Error("launchApp: could not resolve iOS udid");
+      if (stopApp) {
+        try {
+          await deps.execute("xcrun", ["simctl", "terminate", udid, session2.appId]);
+        } catch {
+        }
+      }
+      await deps.execute("xcrun", ["simctl", "launch", udid, session2.appId]);
+    },
+    settle: async (timeoutMs) => {
+      if (signal?.aborted)
+        throw new ReplayDispatchError("RUNNER_TIMEOUT", "Replay cancelled");
+      await new Promise((resolve22, reject) => {
+        const timer = setTimeout(resolve22, timeoutMs);
+        signal?.addEventListener("abort", () => {
+          clearTimeout(timer);
+          reject(new ReplayDispatchError("RUNNER_TIMEOUT", "Replay cancelled"));
+        }, { once: true });
+      });
+    }
+  };
+}
+var mustOk;
+var init_cdp_replay_deps = __esm({
+  "packages/rn-dev-agent-core/dist/tools/cdp-replay-deps.js"() {
+    "use strict";
+    init_cdp_flow_replay();
+    init_component_tree();
+    init_cdp_replay_dispatch();
+    init_device_interact();
+    init_interact();
+    mustOk = (res, what) => {
+      const env = JSON.parse(res.content[0].text);
+      if (env.ok === false)
+        throw new ReplayDispatchError(env.code ?? "INTERACTION_NOT_ACTUATED", `${what} failed: ${env.error ?? "ok:false"}`, env.meta);
+    };
+  }
+});
+
 // packages/rn-dev-agent-core/dist/tools/dispatch.js
 function createDispatchHandler(getClient2) {
   return withConnection(getClient2, async (args, client2) => {
@@ -85252,104 +85647,6 @@ var init_dev_settings = __esm({
     return "no_method_available";
   })()`
     };
-  }
-});
-
-// packages/rn-dev-agent-core/dist/tools/interact.js
-function createInteractHandler(getClient2) {
-  return withConnection(getClient2, async (args, client2) => {
-    const hasLadderSelector = args.action === "typeText" ? Boolean(args.placeholder || args.role && args.name) : Boolean(args.role || args.text || args.placeholder);
-    if (!args.testID && !args.accessibilityLabel && !hasLadderSelector) {
-      return failResult("A selector is required: testID / accessibilityLabel, or a discovery-ladder selector (role / text / placeholder).");
-    }
-    if (args.action === "typeText" && args.text === void 0) {
-      return failResult("text parameter is required for typeText action");
-    }
-    if (args.action === "setFieldValue") {
-      if (args.name === void 0 || args.name.length === 0) {
-        return failResult("name parameter is required for setFieldValue action \u2014 the React Hook Form field name");
-      }
-      if (args.value === void 0) {
-        return failResult("value parameter is required for setFieldValue action");
-      }
-    }
-    const opts = { action: args.action };
-    if (args.testID !== void 0)
-      opts.testID = args.testID;
-    if (args.accessibilityLabel !== void 0)
-      opts.accessibilityLabel = args.accessibilityLabel;
-    if (args.text !== void 0)
-      opts.text = args.text;
-    if (args.scrollX !== void 0)
-      opts.scrollX = args.scrollX;
-    if (args.scrollY !== void 0)
-      opts.scrollY = args.scrollY;
-    opts.animated = args.animated;
-    if (args.name !== void 0)
-      opts.name = args.name;
-    if (args.value !== void 0)
-      opts.value = args.value;
-    if (args.shouldValidate !== void 0)
-      opts.shouldValidate = args.shouldValidate;
-    if (args.shouldDirty !== void 0)
-      opts.shouldDirty = args.shouldDirty;
-    if (args.role !== void 0)
-      opts.role = args.role;
-    if (args.placeholder !== void 0)
-      opts.placeholder = args.placeholder;
-    if (args.exact !== void 0)
-      opts.exact = args.exact;
-    if (args.includeHidden !== void 0)
-      opts.includeHidden = args.includeHidden;
-    if (args.walkUp !== void 0)
-      opts.walkUp = args.walkUp;
-    if (args.allowInputDesignation !== void 0)
-      opts.allowInputDesignation = args.allowInputDesignation;
-    const result = await client2.evaluate(`__RN_AGENT.interact(${JSON.stringify(opts)})`);
-    if (result.error) {
-      return failResult(`Interact error: ${result.error}`);
-    }
-    if (typeof result.value !== "string") {
-      return failResult("Unexpected response from interact \u2014 expected JSON string");
-    }
-    let parsed;
-    try {
-      parsed = JSON.parse(result.value);
-    } catch {
-      return failResult(`Interact returned non-JSON: ${result.value.slice(0, 200)}`);
-    }
-    if (parsed.error) {
-      const refusal = pickDefined(parsed, REFUSAL_FIELDS);
-      return parsed.code === "ASSERTION_FAILED" ? failResult(`Interact failed: ${parsed.error}`, "ASSERTION_FAILED", refusal) : failResult(`Interact failed: ${parsed.error}`, refusal);
-    }
-    if (parsed.action_executed && parsed.handler_error) {
-      return failResult(`Action executed but handler threw: ${parsed.handler_error}`, {
-        actionExecuted: true,
-        handlerError: parsed.handler_error,
-        hint: "The app handler raised an exception \u2014 the screen may be in an error state. Check cdp_error_log before continuing."
-      });
-    }
-    return okResult(parsed);
-  });
-}
-var REFUSAL_FIELDS;
-var init_interact = __esm({
-  "packages/rn-dev-agent-core/dist/tools/interact.js"() {
-    "use strict";
-    init_utils();
-    REFUSAL_FIELDS = [
-      "hint",
-      "walkUpSearched",
-      "count",
-      "candidates",
-      "matches",
-      "truncated",
-      "reason",
-      "scanned",
-      "work",
-      "workLimit",
-      "handlerCalled"
-    ];
   }
 });
 
@@ -97561,7 +97858,7 @@ async function main() {
     });
   }
 }
-var pkgPath, pkgVersion, lockfile, diagnosticContractProbe, noLock, client, getClient, configureClientLifecycle, setClient, publishClient, createClient, execFileP, mustOk, makeReplayDeps, probeNativeVision, server2, strictProofMonitor, experienceRecorder, authorityRuntime, probeForegroundSurface, foreignMetroOriginScanner, createRuntimeAuthorityProbe, localAuthorityProbe, authorityGate, mirrorCfg, mirrorManager2, liveEnabled, liveDeps, registeredToolNames, isSessionRuntimeAbsent, persistedAuthorityStatus, getSessionSignerCapability, spawningSupervisorPid, requestWorkerRecycle, sessionHandler, disconnectClientHandler, connectBoundSession, resolveNativeProofDevice, proofReadiness, proofCaptureHandler, maestroRunHandler, runActionHandler, e2ePreflight, e2eReload, e2eSuiteHandler, e2eCsrfToken, observeRootResolver, projectRootFor, triggerE2eRun, observeRunActionHandler, observeTriggerRun, gatedObserveState, shutdown, stopParentWatch;
+var pkgPath, pkgVersion, lockfile, diagnosticContractProbe, noLock, client, getClient, configureClientLifecycle, setClient, publishClient, createClient, execFileP, probeNativeVision, server2, strictProofMonitor, experienceRecorder, authorityRuntime, probeForegroundSurface, foreignMetroOriginScanner, createRuntimeAuthorityProbe, localAuthorityProbe, authorityGate, mirrorCfg, mirrorManager2, liveEnabled, liveDeps, registeredToolNames, isSessionRuntimeAbsent, persistedAuthorityStatus, getSessionSignerCapability, spawningSupervisorPid, requestWorkerRecycle, sessionHandler, disconnectClientHandler, connectBoundSession, resolveNativeProofDevice, proofReadiness, proofCaptureHandler, maestroRunHandler, runActionHandler, e2ePreflight, e2eReload, e2eSuiteHandler, e2eCsrfToken, observeRootResolver, projectRootFor, triggerE2eRun, observeRunActionHandler, observeTriggerRun, gatedObserveState, shutdown, stopParentWatch;
 var init_index = __esm({
   "packages/rn-dev-agent-core/dist/index.js"() {
     "use strict";
@@ -97595,8 +97892,7 @@ var init_index = __esm({
     init_save_as_action();
     init_run_action();
     init_login_prologue2();
-    init_cdp_replay_dispatch();
-    init_cdp_flow_replay();
+    init_cdp_replay_deps();
     init_dispatch();
     init_mmkv();
     init_dev_settings();
@@ -97742,93 +98038,6 @@ var init_index = __esm({
       return configureClientLifecycle(status.available && status.bindings.bundle ? client.createReplacement(port) : new CDPClient(port));
     };
     execFileP = promisify26(execFile23);
-    mustOk = (res, what) => {
-      const env = JSON.parse(res.content[0].text);
-      if (env.ok === false)
-        throw new ReplayDispatchError(env.code ?? "INTERACTION_NOT_ACTUATED", `${what} failed: ${env.error ?? "ok:false"}`, env.meta);
-    };
-    makeReplayDeps = (_args, signal) => {
-      const session2 = getActiveSession();
-      if (!session2 || session2.platform !== "ios" || !session2.appId)
-        return null;
-      const interact = createInteractHandler(getClient);
-      const tree = createComponentTreeHandler(getClient);
-      return {
-        pressByTestId: createReplayPressByTestId(interact),
-        typeByTestId: async (id, text, context) => {
-          mustOk(await performReactTreeInput(id, text, getClient(), signal, context ? { designationToken: context.designationToken } : {}), `type "${id}"`);
-        },
-        releaseInputDesignation: async (token2) => {
-          try {
-            await getClient().evaluate(`__RN_AGENT.releaseInputDesignation(${JSON.stringify(token2)})`);
-          } catch {
-          }
-        },
-        treeFor: async (id) => {
-          const fetchTree = async (interactiveOnly) => JSON.parse((await tree({
-            filter: id,
-            depth: 12,
-            ...interactiveOnly ? { interactiveOnly: true } : {}
-          })).content[0].text);
-          let env = await fetchTree(false);
-          const d = env.data;
-          if (d && typeof d === "object" && ("__agent_truncated" in d || d.truncated === true)) {
-            env = await fetchTree(true);
-          }
-          const data = replayTreeData(env);
-          return unwrapTree(data);
-        },
-        frontmostFor: async (id) => {
-          const result = await getClient().evaluate(getClient().bridgeWithFallback(`isTestIdFrontmost(${JSON.stringify(id)})`));
-          if (result.error || typeof result.value !== "string") {
-            return {
-              visible: false,
-              reason: `frontmost route check failed for testID "${id}"`,
-              code: "ASSERTION_FAILED"
-            };
-          }
-          try {
-            const parsed = JSON.parse(result.value);
-            return {
-              visible: parsed.visible === true,
-              ...typeof parsed.disabled === "boolean" ? { disabled: parsed.disabled } : {},
-              ...parsed.reason ? { reason: parsed.reason } : {},
-              ...typeof parsed.matchCount === "number" ? { matchCount: parsed.matchCount } : {},
-              ...parsed.code ? { code: parsed.code } : {}
-            };
-          } catch {
-            return {
-              visible: false,
-              reason: `frontmost route check was unreadable for testID "${id}"`,
-              code: "ASSERTION_FAILED"
-            };
-          }
-        },
-        launchApp: async (stopApp) => {
-          const udid = await resolveIosUdid(session2.deviceId);
-          if (!udid)
-            throw new Error("launchApp: could not resolve iOS udid");
-          if (stopApp) {
-            try {
-              await execFileP("xcrun", ["simctl", "terminate", udid, session2.appId]);
-            } catch {
-            }
-          }
-          await execFileP("xcrun", ["simctl", "launch", udid, session2.appId]);
-        },
-        settle: async (timeoutMs) => {
-          if (signal?.aborted)
-            throw new ReplayDispatchError("RUNNER_TIMEOUT", "Replay cancelled");
-          await new Promise((resolve22, reject) => {
-            const timer = setTimeout(resolve22, timeoutMs);
-            signal?.addEventListener("abort", () => {
-              clearTimeout(timer);
-              reject(new ReplayDispatchError("RUNNER_TIMEOUT", "Replay cancelled"));
-            }, { once: true });
-          });
-        }
-      };
-    };
     probeNativeVision = async ({ deviceId, selectors, signal }) => {
       signal.throwIfAborted();
       const snapshot = await fetchSnapshotNodesForSameScreenProof();
@@ -98860,7 +99069,12 @@ var init_index = __esm({
       label: external_exports.string().optional().describe('Label for this proof step (e.g. "After adding item to cart")')
     }, createProofStepHandler(getClient));
     maestroRunHandler = createMaestroRunHandler({
-      replayDeps: (args, signal) => makeReplayDeps(args, signal),
+      replayDeps: (_args, signal) => makeReplayDeps({
+        getActiveSession,
+        getClient,
+        resolveIosUdid,
+        execute: (file, args) => execFileP(file, args)
+      }, signal),
       getLiveRoute: () => readLiveRoute(getClient()),
       nativeVisionProbe: probeNativeVision
     });

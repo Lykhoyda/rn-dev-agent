@@ -388,7 +388,7 @@ test('a non-editable bare TextInput refuses designation without callbacks', asyn
   assert.equal(result.passed, false);
   assert.equal(result.failedStepIndex, 0);
   assert.equal(result.failureCode, 'INTERACTION_NOT_ACTUATED');
-  assert.match(result.reason ?? '', /disabled or non-editable/);
+  assert.match(result.reason ?? '', /disabled/);
   assert.equal(fixture.calls.focus, 0);
   assert.equal(fixture.calls.press, 0);
   assert.deepEqual(fixture.calls.typed, []);
@@ -444,7 +444,7 @@ test('a disabled intermediate exact target refuses designation', async () => {
   assert.equal(result.passed, false);
   assert.equal(result.failedStepIndex, 0);
   assert.equal(result.failureCode, 'INTERACTION_NOT_ACTUATED');
-  assert.match(result.reason ?? '', /disabled or non-editable/);
+  assert.match(result.reason ?? '', /disabled/);
   assert.deepEqual(fixture.calls.typed, []);
   assert.equal(fixture.input.memoizedProps.value, '');
 });

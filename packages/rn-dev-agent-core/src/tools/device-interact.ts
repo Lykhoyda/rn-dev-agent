@@ -1413,6 +1413,12 @@ export async function performReactTreeInput(
         },
       );
     }
+    if (dispatch.code) {
+      return failResult(`React-tree input "${testID}" refused: ${dispatch.error}`, dispatch.code, {
+        mutation: dispatch.mutation,
+        pathsTried,
+      });
+    }
     return fillFailure(
       'TEXT_ENTRY_UNVERIFIED',
       dispatch.mutation === 'possible'

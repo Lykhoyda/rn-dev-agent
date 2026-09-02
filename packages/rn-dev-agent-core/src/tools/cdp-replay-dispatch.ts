@@ -12,7 +12,7 @@ import type { createInteractHandler } from './interact.js';
 // Unwrap getTree's `{ tree: <node>|{matches} }` envelope to the node(s) the
 // dispatch helpers walk. Returns the bare node for a single match, the
 // `{ matches: [...] }` wrapper for multiple, or the input unchanged when it is
-// already a node. Used at the treeFor boundary (index.ts).
+// already a node. Used at the treeFor boundary in cdp-replay-deps.ts.
 export function unwrapTree(data: unknown): unknown {
   if (!data || typeof data !== 'object') return null;
   const d = data as Record<string, unknown>;
@@ -96,6 +96,7 @@ export function createReplayPressByTestId(
       action: 'press',
       testID: id,
       animated: false,
+      walkUp: true,
       allowInputDesignation: true,
     });
     const envelope = JSON.parse(result.content[0]?.text ?? '{}') as {
@@ -131,19 +132,24 @@ export function createReplayPressByTestId(
   };
 }
 
-function nodeProps(treeJson: unknown, id: string): Record<string, unknown> | null {
-  // find the node whose testID === id or nativeID === id and return its props bag if exposed
+function hasDisabledExactMatch(treeJson: unknown, id: string): boolean {
   const stack: unknown[] = [treeJson];
   while (stack.length) {
     const n = stack.pop() as Record<string, unknown> | null;
     if (n && typeof n === 'object') {
-      if (n.testID === id || n.nativeID === id) return (n.props as Record<string, unknown>) ?? n;
+      if (n.testID === id || n.nativeID === id) {
+        const props =
+          n.props && typeof n.props === 'object' && !Array.isArray(n.props)
+            ? (n.props as Record<string, unknown>)
+            : null;
+        if (isDisabled(n) || isDisabled(props)) return true;
+      }
       if (n.tree) stack.push(n.tree);
       const kids = n.children ?? n.interactive ?? n.nodes ?? n.matches;
       if (Array.isArray(kids)) stack.push(...kids);
     }
   }
-  return null;
+  return false;
 }
 
 function nodePath(treeJson: unknown, id: string): Array<Record<string, unknown>> | null {
@@ -192,7 +198,7 @@ function pointerEventsBlock(treeJson: unknown, id: string): string | null {
 function isDisabled(props: Record<string, unknown> | null): boolean {
   if (!props) return false;
   const a11y = props.accessibilityState as { disabled?: boolean } | undefined;
-  return props.disabled === true || a11y?.disabled === true;
+  return props.disabled === true || props.editable === false || a11y?.disabled === true;
 }
 
 export async function runCdpReplayCommands(
@@ -237,7 +243,7 @@ export function buildCdpDispatch(deps: CdpReplayDeps, signal?: AbortSignal): Rep
         frontmost.code ?? 'ASSERTION_FAILED',
         frontmost.reason ?? `testID "${id}" is mounted but not frontmost`,
       );
-    if (frontmost.disabled === true || isDisabled(nodeProps(tree, id)))
+    if (frontmost.disabled === true || hasDisabledExactMatch(tree, id))
       throw new ReplayDispatchError(
         'INTERACTION_NOT_ACTUATED',
         `testID "${id}" is disabled/non-interactable`,
