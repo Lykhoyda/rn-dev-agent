@@ -54490,6 +54490,25 @@ var INJECTED_HELPERS = `
           var walkDesignation = designateTextInputPress(found, selector);
           if (walkDesignation) return walkDesignation;
         }
+        var walkAncestorOf = function(outer, inner) {
+          var node = inner.return;
+          var steps = 0;
+          while (node && steps < 1000) {
+            if (node === outer) return true;
+            node = node.return;
+            steps++;
+          }
+          return false;
+        };
+        // RN forwards testID and onPress down one element's composite/host stack; those fibers are
+        // the same logical target, so they collapse onto the outermost the way a direct press fires it.
+        var walkForwarded = function(a, b) {
+          var ap = a.memoizedProps, bp = b.memoizedProps;
+          if (!ap || !bp) return false;
+          if (ap[matchField] !== selector || bp[matchField] !== selector) return false;
+          if (ap.onPress !== bp.onPress) return false;
+          return walkAncestorOf(a, b) || walkAncestorOf(b, a);
+        };
         var walkSources = walkUpMatches.length > 0 ? walkUpMatches : [found];
         var walkCandidates = [];
         for (var wi = 0; wi < walkSources.length; wi++) {
@@ -54504,9 +54523,13 @@ var INJECTED_HELPERS = `
           if (!walkNode || walkHops > WALK_UP_MAX) continue;
           var existing = null;
           for (var wj = 0; wj < walkCandidates.length; wj++) {
-            if (walkCandidates[wj].fiber === walkNode) { existing = walkCandidates[wj]; break; }
+            if (walkCandidates[wj].fiber === walkNode || walkForwarded(walkCandidates[wj].fiber, walkNode)) {
+              existing = walkCandidates[wj];
+              break;
+            }
           }
           if (existing) {
+            if (walkAncestorOf(walkNode, existing.fiber)) existing.fiber = walkNode;
             if (walkHops < existing.hops) { existing.hops = walkHops; existing.source = walkSources[wi]; }
           } else {
             walkCandidates.push({ fiber: walkNode, hops: walkHops, source: walkSources[wi] });
@@ -55762,6 +55785,9 @@ var INJECTED_HELPERS = `
     if (props.pointerEvents === 'none' || (props.pointerEvents === 'box-none' && wrapperSource !== true)) {
       return { eligible: false, error: 'Component is not user-interactable with pointerEvents="' + props.pointerEvents + '"', reason: 'exact-ID fiber has pointerEvents="' + props.pointerEvents + '"' };
     }
+    // RN forwards testID and pointerEvents down a single element's composite/host stack, so a
+    // same-selector ancestor is that element's own fiber, not an occluding parent.
+    var ownId = props.testID !== undefined && props.testID !== null ? props.testID : props.nativeID;
     var seen = new WeakSet();
     var ancestor = fiber.return;
     var depth = 0;
@@ -55771,7 +55797,9 @@ var INJECTED_HELPERS = `
       }
       seen.add(ancestor);
       var ancestorProps = ancestor.memoizedProps || {};
-      if (ancestorProps.pointerEvents === 'none' || ancestorProps.pointerEvents === 'box-only') {
+      var ancestorForwarded = ownId !== undefined && ownId !== null
+        && (ancestorProps.testID === ownId || ancestorProps.nativeID === ownId);
+      if (!ancestorForwarded && (ancestorProps.pointerEvents === 'none' || ancestorProps.pointerEvents === 'box-only')) {
         return { eligible: false, error: 'Component is not user-interactable beneath pointerEvents="' + ancestorProps.pointerEvents + '"', reason: 'exact-ID fiber is beneath pointerEvents="' + ancestorProps.pointerEvents + '"' };
       }
       ancestor = ancestor.return;

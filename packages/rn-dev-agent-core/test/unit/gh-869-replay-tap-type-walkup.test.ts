@@ -131,7 +131,7 @@ function otpFixture() {
     calls.typed.push(value);
     inputHost.memoizedProps.value = value;
   };
-  return { root, app, pressable, inputComposite, calls, inputHost };
+  return { root, app, pressable, pressableHost, inputComposite, calls, inputHost };
 }
 
 test('#869 replay designates the Pressable-wrapped input by its exact testID, then types on that same input', async () => {
@@ -187,6 +187,106 @@ test('#869 replay walks up to the nearest pressable for a non-input exact-ID tar
   assert.equal(result.passed, true, JSON.stringify(result));
   assert.equal(wrapperPresses, 1);
   assert.notEqual(result.steps[0].focusOnly, true);
+});
+
+test('#869 a forwarded same-ID composite/host pressable stack presses exactly once', async () => {
+  let fired = 0;
+  const onPress = (): void => {
+    fired += 1;
+  };
+  const root = makeFiber('Root');
+  const composite = appendChild(
+    root,
+    makeFiber({ displayName: 'Pressable' }, { testID: 'btn', pointerEvents: 'box-only', onPress }),
+  );
+  const view = appendChild(
+    composite,
+    makeFiber({ displayName: 'View' }, { testID: 'btn', pointerEvents: 'box-only', onPress }),
+  );
+  appendChild(view, makeFiber('RCTView', { testID: 'btn', pointerEvents: 'box-only', onPress }));
+  const deps = buildDeps(createAgent(root));
+
+  const result = await runCdpReplayCommands([{ tapOn: { id: 'btn' } }], {}, deps);
+
+  assert.equal(result.passed, true, JSON.stringify(result));
+  assert.equal(fired, 1);
+});
+
+test('#869 control: a box-only ancestor outside the exact-ID lineage still refuses', async () => {
+  let fired = 0;
+  const onPress = (): void => {
+    fired += 1;
+  };
+  const root = makeFiber('Root');
+  const blocker = appendChild(
+    root,
+    makeFiber({ displayName: 'View' }, { testID: 'shell', pointerEvents: 'box-only' }),
+  );
+  const composite = appendChild(
+    blocker,
+    makeFiber({ displayName: 'Pressable' }, { testID: 'btn', onPress }),
+  );
+  appendChild(composite, makeFiber('RCTView', { testID: 'btn', onPress }));
+  const deps = buildDeps(createAgent(root));
+
+  const result = await runCdpReplayCommands([{ tapOn: { id: 'btn' } }], {}, deps);
+
+  assert.equal(result.passed, false);
+  assert.equal(result.failureCode, 'INTERACTION_NOT_ACTUATED');
+  assert.match(result.reason ?? '', /pointerEvents/);
+  assert.equal(fired, 0);
+});
+
+test('#869 a TextInput carrying its own onPress presses once, then types', async (t) => {
+  for (const wrapped of [false, true]) {
+    await t.test(wrapped ? 'under a Pressable wrapper' : 'bare', async () => {
+      const calls = { input: 0, wrapper: 0, typed: [] as string[] };
+      const onPress = (): void => {
+        calls.input += 1;
+      };
+      const root = makeFiber('Root');
+      const app = appendChild(root, makeFiber({ displayName: 'App' }));
+      const parent = wrapped
+        ? appendChild(
+            app,
+            makeFiber(
+              { displayName: 'Pressable' },
+              {
+                testID: 'otp_email-pressable',
+                onPress: () => {
+                  calls.wrapper += 1;
+                },
+              },
+            ),
+          )
+        : app;
+      const composite = appendChild(
+        parent,
+        makeFiber({ displayName: 'TextInput' }, { testID: 'otp_email', onPress }),
+      );
+      const host = appendChild(
+        composite,
+        makeFiber('RCTSinglelineTextInputView', { testID: 'otp_email', value: '', onPress }),
+      );
+      host.memoizedProps.onChangeText = (value: string): void => {
+        calls.typed.push(value);
+        host.memoizedProps.value = value;
+      };
+      const deps = buildDeps(createAgent(root));
+
+      const result = await runCdpReplayCommands(
+        [{ tapOn: { id: 'otp_email' } }, { inputText: '0451' }],
+        {},
+        deps,
+      );
+
+      assert.equal(result.passed, true, JSON.stringify(result));
+      assert.equal(calls.input, 1, "the input's own onPress must fire exactly once");
+      assert.equal(calls.wrapper, 0);
+      assert.deepEqual(calls.typed, ['0451']);
+      assert.equal(host.memoizedProps.value, '0451');
+    });
+  }
 });
 
 test('#869 control: a directly pressable testID still presses without walking', async () => {
@@ -366,9 +466,9 @@ test('#869 control: exact-ID lineage pointer and hidden state refuse tap and typ
       reason: /pointerEvents/,
     },
     {
-      label: 'host beneath box-only composite',
+      label: 'input beneath an out-of-lineage box-only host',
       apply: (fixture) => {
-        fixture.inputComposite.memoizedProps.pointerEvents = 'box-only';
+        fixture.pressableHost.memoizedProps.pointerEvents = 'box-only';
       },
       reason: /pointerEvents/,
     },
