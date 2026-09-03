@@ -4,10 +4,8 @@
 // (M7 metadata header in the YAML), the mutable runtime state (sidecar
 // JSON), and the lifecycle transitions between them.
 //
-// Storage layout (per D1208 single-folder doctrine, supersedes D1207):
-//   <project>/.rn-agent/actions/<id>.yaml          — the YAML body + M7 header
-//   <project>/.rn-agent/state/<id>.state.json      — sidecar (this entity's
-//                                                     ActionRuntimeState)
+// YAML stays in <project>/.rn-agent/actions; mutable state follows the current
+// session state directory, with .rn-agent/state as the unfenced fallback.
 //
 // This file is the ONLY place that defines the schema. Emitters
 // (test-recorder-generators, maestro-generate), parsers (learned-actions),
@@ -323,11 +321,7 @@ export interface ActionStats {
   lastFailureAt?: string;
 }
 
-/**
- * Sidecar JSON — read/written at
- * `<project>/.rn-agent/state/<id>.state.json`. High-churn, may be
- * gitignored per `.rn-agent/.gitignore` defaults.
- */
+/** High-churn sidecar JSON stored in the current session state directory. */
 export interface ActionRuntimeState {
   /** Schema version — bump when ActionRuntimeState shape changes. */
   schemaVersion: 1;

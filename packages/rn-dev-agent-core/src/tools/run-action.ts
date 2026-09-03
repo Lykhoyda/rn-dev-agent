@@ -60,6 +60,7 @@ import {
 import { createMaestroRunHandler } from './maestro-run.js';
 import { createRepairActionHandler } from './repair-action.js';
 import { isValidActionId } from '../domain/path-safety.js';
+import { sidecarPathFor } from '../domain/sidecar-io.js';
 import { classifyRouteDriftAfterFailure } from '../nav-graph/route-sequence.js';
 import { SessionAuthorityError } from '../session/registry.js';
 import type { MaestroDeviceAuthority } from '../domain/maestro-device-authority.js';
@@ -527,6 +528,7 @@ export interface RunActionDeps {
 function replayCorpusIdentityRefusal(
   context: ReadableActionLoadContext,
   actionId: string,
+  meta?: Record<string, unknown>,
 ): ToolResult | null {
   try {
     assertReadableActionLoadContextStable(context);
@@ -535,6 +537,7 @@ function replayCorpusIdentityRefusal(
     return failResult(error instanceof Error ? error.message : String(error), 'BAD_FILENAME', {
       actionId,
       fallback: 'none',
+      ...meta,
     });
   }
 }
@@ -616,6 +619,29 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
     // get the strict Phase 129 "respect external edits" behavior back.
     const forceReload = proofReplay ? false : args.forceReload !== false;
     const action = forceReload ? acknowledgeExternalEdit(loaded) : loaded;
+    let runtimeStatePath = action === loaded ? undefined : sidecarPathFor(action.filePath);
+    let actionYamlWrite: WriteDisclosureKind = 'none';
+    const writeDisclosure = (
+      actionYaml: WriteDisclosureKind = 'none',
+      outcome?: PersistRunOutcome,
+    ) => {
+      const disclosedRuntimeStatePath = outcome?.runtimeStatePath ?? runtimeStatePath;
+      return {
+        actionYaml:
+          actionYaml === 'none'
+            ? { written: false, reason: 'repair-not-applied' }
+            : actionYaml === 'lifecycle-promotion-refused'
+              ? { written: false, reason: 'lifecycle-promotion-refused' }
+              : { written: true, authorized: true, reason: actionYaml },
+        runtimeState: proofReplay
+          ? 'none'
+          : outcome?.runtimeStateRefused
+            ? 'refused-external-write'
+            : 'sidecar',
+        ...(disclosedRuntimeStatePath ? { runtimeStatePath: disclosedRuntimeStatePath } : {}),
+        databaseMirror: proofReplay ? 'none' : 'best-effort',
+      };
+    };
     const activeTarget = targetContext();
     const replayPlatform =
       args.platform && activeTarget?.platform && args.platform !== activeTarget.platform
@@ -635,6 +661,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
       return failResult(err instanceof Error ? err.message : String(err), 'BAD_FILENAME', {
         actionId: args.actionId,
         fallback: 'none',
+        ...(runtimeStatePath ? { writes: writeDisclosure() } : {}),
       });
     }
     const compatRefusal = actionReplayPreflight({
@@ -650,6 +677,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
         pin: engineStatus?.pin,
         selectedPath: engineStatus?.selectedPath ?? null,
         provenance: engineStatus?.provenance ?? 'none',
+        ...(runtimeStatePath ? { writes: writeDisclosure() } : {}),
       });
     }
 
@@ -678,7 +706,11 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
       return failResult(
         `cdp_run_action: requested ${args.platform}, but the active session is ${activeTarget.platform}; refusing cross-platform replay.`,
         'TARGET_SESSION_MISMATCH',
-        { requestedPlatform: args.platform, activeSession: activeTarget },
+        {
+          requestedPlatform: args.platform,
+          activeSession: activeTarget,
+          ...(runtimeStatePath ? { writes: writeDisclosure() } : {}),
+        },
       );
     }
     const maestroDeviceId =
@@ -729,24 +761,6 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
         probeDeviceId ? { ...timedRecord, deviceId: probeDeviceId } : timedRecord,
       );
     };
-    const writeDisclosure = (
-      actionYaml: WriteDisclosureKind = 'none',
-      outcome?: PersistRunOutcome,
-    ) => ({
-      actionYaml:
-        actionYaml === 'none'
-          ? { written: false, reason: 'repair-not-applied' }
-          : actionYaml === 'lifecycle-promotion-refused'
-            ? { written: false, reason: 'lifecycle-promotion-refused' }
-            : { written: true, authorized: true, reason: actionYaml },
-      runtimeState: proofReplay
-        ? 'none'
-        : outcome?.runtimeStateRefused
-          ? 'refused-external-write'
-          : 'sidecar',
-      databaseMirror: proofReplay ? 'none' : 'best-effort',
-    });
-
     // Multi-LLM review of PR #115 (Gemini conf 95): wrap the orchestration
     // body so a thrown exception (maestroRun timeout, repairAction
     // throwing through withSession, etc.) is caught and surfaces as a
@@ -768,7 +782,11 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
       // Requested/session metadata is not RunRecord authority. Clear it before
       // dispatch; only direct maestro-runner evidence may repopulate it.
       probeDeviceId = null;
-      const firstCorpusRefusal = replayCorpusIdentityRefusal(loadContext, args.actionId);
+      const firstCorpusRefusal = replayCorpusIdentityRefusal(
+        loadContext,
+        args.actionId,
+        runtimeStatePath ? { writes: writeDisclosure() } : undefined,
+      );
       if (firstCorpusRefusal) return firstCorpusRefusal;
       // GH #623: the post-repair retry names this attempt as its parent.
       const initialAttemptId = randomUUID();
@@ -982,6 +1000,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
             ? { runtimeDegraded: runtimeDegradationMetadata(firstRuntimeDegradation) }
             : {}),
           autoRepair,
+          writes: writeDisclosure('none', persisted),
           firstAttemptOutput: boundedOutput(firstOutput),
           terminal: readMaestroTerminal(firstEnv),
           runnerResume: (firstEnv.meta as { runnerResume?: unknown } | undefined)?.runnerResume,
@@ -999,7 +1018,11 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
       const expectedSeq = action.metadata.expectedRouteSequence;
       if (failure.kind === 'SELECTOR_NOT_FOUND' && expectedSeq && expectedSeq.length > 0) {
         const bundleAuthorityClaimed = await claimBundleAuthority(args);
-        const routeCorpusRefusal = replayCorpusIdentityRefusal(loadContext, args.actionId);
+        const routeCorpusRefusal = replayCorpusIdentityRefusal(
+          loadContext,
+          args.actionId,
+          runtimeStatePath ? { writes: writeDisclosure() } : undefined,
+        );
         if (routeCorpusRefusal) return routeCorpusRefusal;
         const liveRoute = bundleAuthorityClaimed ? await getLiveRoute().catch(() => null) : null;
         const drift = classifyRouteDriftAfterFailure({ expectedSequence: expectedSeq, liveRoute });
@@ -1010,7 +1033,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
             refusedReason: 'ROUTE_DRIFT',
             phases: { firstAttemptMs },
           };
-          await persistRunWithDevice({
+          const persisted = await persistRunWithDevice({
             timestamp: new Date().toISOString(),
             durationMs: Date.now() - t0,
             status: 'fail',
@@ -1028,6 +1051,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
               liveRoute: drift.liveRoute,
               expectedRouteSequence: expectedSeq,
               autoRepair,
+              writes: writeDisclosure('none', persisted),
             },
           );
         }
@@ -1072,6 +1096,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
             : {}),
           underlyingFailure: firstFailureDetail,
           autoRepair,
+          writes: writeDisclosure('none', persisted),
           firstAttemptOutput: boundedOutput(firstOutput),
           terminal: readMaestroTerminal(firstEnv),
           runnerResume: (firstEnv.meta as { runnerResume?: unknown } | undefined)?.runnerResume,
@@ -1125,7 +1150,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
           refusedReason,
           phases: { firstAttemptMs, repairMs },
         };
-        await persistRunWithDevice({
+        const persisted = await persistRunWithDevice({
           timestamp: new Date().toISOString(),
           durationMs: Date.now() - t0,
           status: 'fail',
@@ -1146,6 +1171,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
             underlyingFailure: firstFailureDetail,
             terminal: readMaestroTerminal(firstEnv),
             autoRepair,
+            writes: writeDisclosure('none', persisted),
             repairError: repairEnv.error,
             firstAttemptOutput: boundedOutput(firstOutput),
           },
@@ -1156,7 +1182,12 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
       const repairData = repairEnv.data as {
         oldSelector: string;
         newSelector: string;
+        sidecarPath?: unknown;
       };
+      if (typeof repairData.sidecarPath === 'string' && repairData.sidecarPath.length > 0) {
+        runtimeStatePath = repairData.sidecarPath;
+      }
+      actionYamlWrite = 'auto-repair';
 
       // The repair updated the action on disk. Re-load to pick up the
       // new body + bumped revision/state — saveAction's atomic pair-write
@@ -1166,7 +1197,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
       if (!reloadedAction) {
         // Shouldn't happen — repair just wrote it. Defensive surface.
         // Persist the failure RunRecord so MTTR sees the outcome.
-        await persistRunWithDevice({
+        const persisted = await persistRunWithDevice({
           timestamp: new Date().toISOString(),
           durationMs: Date.now() - t0,
           status: 'fail',
@@ -1183,20 +1214,29 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
         return failResult(
           `cdp_run_action: action disappeared between repair and retry — investigate filesystem`,
           'NO_PROJECT_ROOT',
+          {
+            actionId: args.actionId,
+            writes: writeDisclosure(actionYamlWrite, persisted),
+          },
         );
       }
       if (!reloadedAction.replay.ok) {
         return failResult(
           `cdp_run_action: repaired action is not valid Maestro YAML: ${reloadedAction.replay.error}`,
           'BAD_RECORDING',
-          { actionId: args.actionId },
+          {
+            actionId: args.actionId,
+            writes: writeDisclosure('auto-repair'),
+          },
         );
       }
       const retryYaml = reloadedAction.replay.yamlText;
 
       const tBeforeRetry = Date.now();
       probeDeviceId = null;
-      const retryCorpusRefusal = replayCorpusIdentityRefusal(loadContext, args.actionId);
+      const retryCorpusRefusal = replayCorpusIdentityRefusal(loadContext, args.actionId, {
+        writes: writeDisclosure('auto-repair'),
+      });
       if (retryCorpusRefusal) return retryCorpusRefusal;
       const repairedAttemptId = randomUUID();
       const retryResult = await measureStep('maestro-retry', () =>
@@ -1246,7 +1286,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
           outcome: 'failed',
           phases: { firstAttemptMs, repairMs, retryMs },
         };
-        await persistRunWithDevice({
+        const persisted = await persistRunWithDevice({
           timestamp: new Date().toISOString(),
           durationMs: Date.now() - t0,
           status: 'fail',
@@ -1264,6 +1304,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
             failureKind: typedCode,
             deviceAuthority: retryDeviceAuthority,
             autoRepair,
+            writes: writeDisclosure('auto-repair', persisted),
           },
         );
       }
@@ -1379,7 +1420,12 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
         ? failResult(retryMessage, retryClassification.toolCode, retryMeta)
         : failResult(retryMessage, retryMeta);
     } catch (err) {
-      if (err instanceof SessionAuthorityError) throw err;
+      if (err instanceof SessionAuthorityError) {
+        if (runtimeStatePath) {
+          err.attachMeta({ writes: writeDisclosure(actionYamlWrite) });
+        }
+        throw err;
+      }
       // Multi-LLM review of PR #115 (Gemini conf 95): top-level catch
       // ensures any thrown exception during orchestration (maestroRun
       // timeout, repairAction throw through withSession, etc.) lands
@@ -1392,8 +1438,9 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
         outcome: 'refused',
         refusedReason: 'INTERNAL_ERROR',
       };
+      let persisted: PersistRunOutcome | undefined;
       try {
-        await persistRunWithDevice({
+        persisted = await persistRunWithDevice({
           timestamp: new Date().toISOString(),
           durationMs: Date.now() - t0,
           status: 'fail',
@@ -1408,7 +1455,14 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
       }
       return failResult(
         `cdp_run_action: ${args.actionId} threw an uncaught exception during orchestration: ${msg.slice(0, 500)}`,
-        { actionId: args.actionId, autoRepair, internalError: msg.slice(0, 500) },
+        {
+          actionId: args.actionId,
+          autoRepair,
+          internalError: msg.slice(0, 500),
+          ...(persisted || runtimeStatePath
+            ? { writes: writeDisclosure(actionYamlWrite, persisted) }
+            : {}),
+        },
       );
     }
   };
@@ -1431,6 +1485,7 @@ interface PersistRunOutcome {
   promoted: boolean;
   promotionRefused: boolean;
   runtimeStateRefused?: boolean;
+  runtimeStatePath?: string;
   persistedRunId?: string;
 }
 
@@ -1470,7 +1525,11 @@ async function persistRun(
     const promotes = shouldAutoPromoteToActive(fresh.metadata, record);
     // Runtime telemetry is sidecar-only. A replay that did not apply repair
     // must preserve tracked YAML bytes (including documentation comments).
-    const commit = (promoted: boolean, promotionRefused: boolean): PersistRunOutcome => {
+    const commit = (
+      runtimeStatePath: string,
+      promoted: boolean,
+      promotionRefused: boolean,
+    ): PersistRunOutcome => {
       mirrorToDb({
         yamlFilePath: fresh.filePath,
         state: fresh.state,
@@ -1481,14 +1540,16 @@ async function persistRun(
           path: fresh.filePath,
         },
       });
-      return { promoted, promotionRefused, persistedRunId: record.runId };
+      return { promoted, promotionRefused, runtimeStatePath, persistedRunId: record.runId };
     };
     // A promotion refusal is deterministic (externally edited YAML, or a missing
     // `# status: experimental` marker) — retrying cannot clear it, so degrade to
     // the sidecar-only append instead of failing an otherwise successful replay.
-    const promotionRefused = promotes && !promoteActionRuntimeWithCAS(fresh, nextState).ok;
-    if (promotes && !promotionRefused) return commit(true, false);
-    if (saveActionRuntimeWithCAS(fresh, nextState).ok) return commit(false, promotionRefused);
+    const promotion = promotes ? promoteActionRuntimeWithCAS(fresh, nextState) : null;
+    const promotionRefused = promotion?.ok === false;
+    if (promotion?.ok) return commit(promotion.sidecarPath, true, false);
+    const runtimeWrite = saveActionRuntimeWithCAS(fresh, nextState);
+    if (runtimeWrite.ok) return commit(runtimeWrite.sidecarPath, false, promotionRefused);
     // Sidecar CAS conflict — another writer raced us. Reload and retry.
     // Exhausting the retries is NOT necessarily a race: a truncated or foreign
     // sidecar is refused deterministically while loadOrInitSidecar keeps

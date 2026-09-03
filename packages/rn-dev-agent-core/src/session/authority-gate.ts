@@ -870,6 +870,30 @@ function addMeta(result: unknown, meta: Record<string, unknown>): unknown {
   }
 }
 
+function replayRuntimeWriteMeta(
+  tool: string,
+  result: unknown,
+): { writes: Record<string, unknown> } | undefined {
+  if (!isActionReplayTool(tool) || !result || typeof result !== 'object') return undefined;
+  const first = (result as ToolResult).content?.[0];
+  if (!first?.text) return undefined;
+  try {
+    const envelope = JSON.parse(first.text) as {
+      ok?: unknown;
+      data?: { writes?: unknown };
+      meta?: { writes?: unknown };
+    };
+    const writes = envelope.ok === true ? envelope.data?.writes : envelope.meta?.writes;
+    if (!writes || typeof writes !== 'object' || Array.isArray(writes)) return undefined;
+    if (typeof (writes as { runtimeStatePath?: unknown }).runtimeStatePath !== 'string') {
+      return undefined;
+    }
+    return { writes: writes as Record<string, unknown> };
+  } catch {
+    return undefined;
+  }
+}
+
 function resultSucceeded(result: unknown): boolean {
   const first = (result as ToolResult | undefined)?.content?.[0];
   if (!first?.text) return false;
@@ -1672,6 +1696,7 @@ export function createAuthorityGate(
         let retainProofCleanupFence = false;
         let publishedProofFinalize = false;
         let stagedRuntimeRelaunch: StagedRuntimeRelaunch | undefined;
+        let handlerResult: unknown;
         try {
           const available = runtime.requireAvailable();
           registry = available.registry;
@@ -2126,6 +2151,7 @@ export function createAuthorityGate(
           registry.verifyOperation(operation);
           const snapshotCheckpoint = dependencies.snapshotCaptureCheckpoint?.();
           const result = await registry.runWithOperation(operation, () => handler(...handlerArgs));
+          handlerResult = result;
           let runtimeTargetChanged = false;
           const postHandlerRecovery = await reconcileRecoverableRuntime(
             runtime,
@@ -2431,7 +2457,9 @@ export function createAuthorityGate(
               );
             }
           }
-          return addMeta(authorityFailure(error), nativeOriginMeta(profile, false));
+          const failure = addMeta(authorityFailure(error), nativeOriginMeta(profile, false));
+          const runtimeWriteMeta = replayRuntimeWriteMeta(tool, handlerResult);
+          return runtimeWriteMeta ? addMeta(failure, runtimeWriteMeta) : failure;
         } finally {
           stagedRuntimeRelaunch?.cancel();
           if (registry && operation && !retainProofCleanupFence) {

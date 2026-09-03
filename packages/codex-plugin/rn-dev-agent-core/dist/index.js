@@ -32299,6 +32299,25 @@ function addMeta2(result, meta) {
     return result;
   }
 }
+function replayRuntimeWriteMeta(tool, result) {
+  if (!isActionReplayTool(tool) || !result || typeof result !== "object")
+    return void 0;
+  const first = result.content?.[0];
+  if (!first?.text)
+    return void 0;
+  try {
+    const envelope = JSON.parse(first.text);
+    const writes = envelope.ok === true ? envelope.data?.writes : envelope.meta?.writes;
+    if (!writes || typeof writes !== "object" || Array.isArray(writes))
+      return void 0;
+    if (typeof writes.runtimeStatePath !== "string") {
+      return void 0;
+    }
+    return { writes };
+  } catch {
+    return void 0;
+  }
+}
 function resultSucceeded(result) {
   const first = result?.content?.[0];
   if (!first?.text)
@@ -32781,6 +32800,7 @@ function createAuthorityGate(runtime, dependencies) {
       let retainProofCleanupFence = false;
       let publishedProofFinalize = false;
       let stagedRuntimeRelaunch;
+      let handlerResult;
       try {
         const available = runtime.requireAvailable();
         registry2 = available.registry;
@@ -33145,6 +33165,7 @@ function createAuthorityGate(runtime, dependencies) {
         registry2.verifyOperation(operation);
         const snapshotCheckpoint = dependencies.snapshotCaptureCheckpoint?.();
         const result = await registry2.runWithOperation(operation, () => handler(...handlerArgs));
+        handlerResult = result;
         let runtimeTargetChanged = false;
         const postHandlerRecovery = await reconcileRecoverableRuntime(runtime, dependencies, registry2, operation, status, profile, resultSucceeded(result));
         operation = postHandlerRecovery.operation;
@@ -33339,7 +33360,9 @@ function createAuthorityGate(runtime, dependencies) {
             return authorityFailure(new AggregateError([error2, rollbackError], "PROOF_AUTHORITY_MISMATCH: finalized proof cleanup is unconfirmed"));
           }
         }
-        return addMeta2(authorityFailure(error2), nativeOriginMeta(profile, false));
+        const failure = addMeta2(authorityFailure(error2), nativeOriginMeta(profile, false));
+        const runtimeWriteMeta = replayRuntimeWriteMeta(tool, handlerResult);
+        return runtimeWriteMeta ? addMeta2(failure, runtimeWriteMeta) : failure;
       } finally {
         stagedRuntimeRelaunch?.cancel();
         if (registry2 && operation && !retainProofCleanupFence) {
@@ -82200,14 +82223,15 @@ function mapRefusedReason(repairCode, repairError) {
   }
   return "INTERNAL_ERROR";
 }
-function replayCorpusIdentityRefusal(context, actionId) {
+function replayCorpusIdentityRefusal(context, actionId, meta) {
   try {
     assertReadableActionLoadContextStable(context);
     return null;
   } catch (error2) {
     return failResult(error2 instanceof Error ? error2.message : String(error2), "BAD_FILENAME", {
       actionId,
-      fallback: "none"
+      fallback: "none",
+      ...meta
     });
   }
 }
@@ -82264,6 +82288,17 @@ function createRunActionHandler(deps = {}) {
     const preflightCommands = loaded.replay.commands;
     const forceReload = proofReplay ? false : args.forceReload !== false;
     const action = forceReload ? acknowledgeExternalEdit(loaded) : loaded;
+    let runtimeStatePath = action === loaded ? void 0 : sidecarPathFor(action.filePath);
+    let actionYamlWrite = "none";
+    const writeDisclosure = (actionYaml = "none", outcome) => {
+      const disclosedRuntimeStatePath = outcome?.runtimeStatePath ?? runtimeStatePath;
+      return {
+        actionYaml: actionYaml === "none" ? { written: false, reason: "repair-not-applied" } : actionYaml === "lifecycle-promotion-refused" ? { written: false, reason: "lifecycle-promotion-refused" } : { written: true, authorized: true, reason: actionYaml },
+        runtimeState: proofReplay ? "none" : outcome?.runtimeStateRefused ? "refused-external-write" : "sidecar",
+        ...disclosedRuntimeStatePath ? { runtimeStatePath: disclosedRuntimeStatePath } : {},
+        databaseMirror: proofReplay ? "none" : "best-effort"
+      };
+    };
     const activeTarget = targetContext();
     const replayPlatform = args.platform && activeTarget?.platform && args.platform !== activeTarget.platform ? void 0 : args.platform ?? activeTarget?.platform;
     const iosProofPlan = replayPlatform === "ios" ? planIosProofDomains(preflightCommands, args.params ?? {}) : null;
@@ -82275,7 +82310,8 @@ function createRunActionHandler(deps = {}) {
     } catch (err) {
       return failResult(err instanceof Error ? err.message : String(err), "BAD_FILENAME", {
         actionId: args.actionId,
-        fallback: "none"
+        fallback: "none",
+        ...runtimeStatePath ? { writes: writeDisclosure() } : {}
       });
     }
     const compatRefusal = actionReplayPreflight({
@@ -82290,7 +82326,8 @@ function createRunActionHandler(deps = {}) {
         fallback: "none",
         pin: engineStatus?.pin,
         selectedPath: engineStatus?.selectedPath ?? null,
-        provenance: engineStatus?.provenance ?? "none"
+        provenance: engineStatus?.provenance ?? "none",
+        ...runtimeStatePath ? { writes: writeDisclosure() } : {}
       });
     }
     const autoRepairEnabled = args.autoRepair !== false;
@@ -82315,7 +82352,11 @@ function createRunActionHandler(deps = {}) {
       }
     };
     if (args.platform && activeTarget?.platform && activeTarget.platform !== args.platform) {
-      return failResult(`cdp_run_action: requested ${args.platform}, but the active session is ${activeTarget.platform}; refusing cross-platform replay.`, "TARGET_SESSION_MISMATCH", { requestedPlatform: args.platform, activeSession: activeTarget });
+      return failResult(`cdp_run_action: requested ${args.platform}, but the active session is ${activeTarget.platform}; refusing cross-platform replay.`, "TARGET_SESSION_MISMATCH", {
+        requestedPlatform: args.platform,
+        activeSession: activeTarget,
+        ...runtimeStatePath ? { writes: writeDisclosure() } : {}
+      });
     }
     const maestroDeviceId = (!args.platform || activeTarget?.platform === args.platform) && activeTarget?.deviceId ? activeTarget.deviceId : void 0;
     const receipt2 = args.appFile ? null : installReceipt();
@@ -82340,17 +82381,12 @@ function createRunActionHandler(deps = {}) {
       };
       return persistRun(args.actionId, projectRoot, probeDeviceId ? { ...timedRecord, deviceId: probeDeviceId } : timedRecord);
     };
-    const writeDisclosure = (actionYaml = "none", outcome) => ({
-      actionYaml: actionYaml === "none" ? { written: false, reason: "repair-not-applied" } : actionYaml === "lifecycle-promotion-refused" ? { written: false, reason: "lifecycle-promotion-refused" } : { written: true, authorized: true, reason: actionYaml },
-      runtimeState: proofReplay ? "none" : outcome?.runtimeStateRefused ? "refused-external-write" : "sidecar",
-      databaseMirror: proofReplay ? "none" : "best-effort"
-    });
     try {
       const strictExecutor = usesStrictRunActionPolicy(args);
       const strictRunRecordMeta = (outcome) => strictExecutor && outcome.persistedRunId ? { strictRunRecordId: outcome.persistedRunId } : {};
       const tBeforeFirst = Date.now();
       probeDeviceId = null;
-      const firstCorpusRefusal = replayCorpusIdentityRefusal(loadContext, args.actionId);
+      const firstCorpusRefusal = replayCorpusIdentityRefusal(loadContext, args.actionId, runtimeStatePath ? { writes: writeDisclosure() } : void 0);
       if (firstCorpusRefusal)
         return firstCorpusRefusal;
       const initialAttemptId = randomUUID9();
@@ -82513,6 +82549,7 @@ function createRunActionHandler(deps = {}) {
           trailingVerification: firstTrailingVerification,
           ...firstRuntimeDegradation ? { runtimeDegraded: runtimeDegradationMetadata(firstRuntimeDegradation) } : {},
           autoRepair: autoRepair2,
+          writes: writeDisclosure("none", persisted2),
           firstAttemptOutput: boundedOutput(firstOutput),
           terminal: readMaestroTerminal(firstEnv),
           runnerResume: firstEnv.meta?.runnerResume,
@@ -82523,7 +82560,7 @@ function createRunActionHandler(deps = {}) {
       const expectedSeq = action.metadata.expectedRouteSequence;
       if (failure.kind === "SELECTOR_NOT_FOUND" && expectedSeq && expectedSeq.length > 0) {
         const bundleAuthorityClaimed = await claimBundleAuthority(args);
-        const routeCorpusRefusal = replayCorpusIdentityRefusal(loadContext, args.actionId);
+        const routeCorpusRefusal = replayCorpusIdentityRefusal(loadContext, args.actionId, runtimeStatePath ? { writes: writeDisclosure() } : void 0);
         if (routeCorpusRefusal)
           return routeCorpusRefusal;
         const liveRoute = bundleAuthorityClaimed ? await getLiveRoute().catch(() => null) : null;
@@ -82535,7 +82572,7 @@ function createRunActionHandler(deps = {}) {
             refusedReason: "ROUTE_DRIFT",
             phases: { firstAttemptMs }
           };
-          await persistRunWithDevice({
+          const persisted2 = await persistRunWithDevice({
             timestamp: (/* @__PURE__ */ new Date()).toISOString(),
             durationMs: Date.now() - t0,
             status: "fail",
@@ -82549,7 +82586,8 @@ function createRunActionHandler(deps = {}) {
             failureKind: "ROUTE_DRIFT",
             liveRoute: drift.liveRoute,
             expectedRouteSequence: expectedSeq,
-            autoRepair: autoRepair2
+            autoRepair: autoRepair2,
+            writes: writeDisclosure("none", persisted2)
           });
         }
       }
@@ -82583,6 +82621,7 @@ function createRunActionHandler(deps = {}) {
           ..."selector" in failure && failure.selector ? { failureSelector: failure.selector } : {},
           underlyingFailure: firstFailureDetail,
           autoRepair: autoRepair2,
+          writes: writeDisclosure("none", persisted2),
           firstAttemptOutput: boundedOutput(firstOutput),
           terminal: readMaestroTerminal(firstEnv),
           runnerResume: firstEnv.meta?.runnerResume,
@@ -82613,7 +82652,7 @@ function createRunActionHandler(deps = {}) {
           refusedReason,
           phases: { firstAttemptMs, repairMs }
         };
-        await persistRunWithDevice({
+        const persisted2 = await persistRunWithDevice({
           timestamp: (/* @__PURE__ */ new Date()).toISOString(),
           durationMs: Date.now() - t0,
           status: "fail",
@@ -82631,15 +82670,20 @@ function createRunActionHandler(deps = {}) {
           underlyingFailure: firstFailureDetail,
           terminal: readMaestroTerminal(firstEnv),
           autoRepair: autoRepair2,
+          writes: writeDisclosure("none", persisted2),
           repairError: repairEnv.error,
           firstAttemptOutput: boundedOutput(firstOutput)
         });
       }
       const repairData = repairEnv.data;
+      if (typeof repairData.sidecarPath === "string" && repairData.sidecarPath.length > 0) {
+        runtimeStatePath = repairData.sidecarPath;
+      }
+      actionYamlWrite = "auto-repair";
       loadContext = refreshActionLoadContext(loadContext, args.actionId);
       const reloadedAction = loadActionFromContext(loadContext, args.actionId);
       if (!reloadedAction) {
-        await persistRunWithDevice({
+        const persisted2 = await persistRunWithDevice({
           timestamp: (/* @__PURE__ */ new Date()).toISOString(),
           durationMs: Date.now() - t0,
           status: "fail",
@@ -82653,15 +82697,23 @@ function createRunActionHandler(deps = {}) {
             phases: { firstAttemptMs, repairMs }
           }
         });
-        return failResult(`cdp_run_action: action disappeared between repair and retry \u2014 investigate filesystem`, "NO_PROJECT_ROOT");
+        return failResult(`cdp_run_action: action disappeared between repair and retry \u2014 investigate filesystem`, "NO_PROJECT_ROOT", {
+          actionId: args.actionId,
+          writes: writeDisclosure(actionYamlWrite, persisted2)
+        });
       }
       if (!reloadedAction.replay.ok) {
-        return failResult(`cdp_run_action: repaired action is not valid Maestro YAML: ${reloadedAction.replay.error}`, "BAD_RECORDING", { actionId: args.actionId });
+        return failResult(`cdp_run_action: repaired action is not valid Maestro YAML: ${reloadedAction.replay.error}`, "BAD_RECORDING", {
+          actionId: args.actionId,
+          writes: writeDisclosure("auto-repair")
+        });
       }
       const retryYaml = reloadedAction.replay.yamlText;
       const tBeforeRetry = Date.now();
       probeDeviceId = null;
-      const retryCorpusRefusal = replayCorpusIdentityRefusal(loadContext, args.actionId);
+      const retryCorpusRefusal = replayCorpusIdentityRefusal(loadContext, args.actionId, {
+        writes: writeDisclosure("auto-repair")
+      });
       if (retryCorpusRefusal)
         return retryCorpusRefusal;
       const repairedAttemptId = randomUUID9();
@@ -82706,7 +82758,7 @@ function createRunActionHandler(deps = {}) {
           outcome: "failed",
           phases: { firstAttemptMs, repairMs, retryMs }
         };
-        await persistRunWithDevice({
+        const persisted2 = await persistRunWithDevice({
           timestamp: (/* @__PURE__ */ new Date()).toISOString(),
           durationMs: Date.now() - t0,
           status: "fail",
@@ -82720,7 +82772,8 @@ function createRunActionHandler(deps = {}) {
           actionId: args.actionId,
           failureKind: typedCode,
           deviceAuthority: retryDeviceAuthority,
-          autoRepair: autoRepair2
+          autoRepair: autoRepair2,
+          writes: writeDisclosure("auto-repair", persisted2)
         });
       }
       const repairScore = repairEnv.data?.score;
@@ -82793,16 +82846,21 @@ function createRunActionHandler(deps = {}) {
       };
       return retryClassification?.toolCode ? failResult(retryMessage, retryClassification.toolCode, retryMeta) : failResult(retryMessage, retryMeta);
     } catch (err) {
-      if (err instanceof SessionAuthorityError)
+      if (err instanceof SessionAuthorityError) {
+        if (runtimeStatePath) {
+          err.attachMeta({ writes: writeDisclosure(actionYamlWrite) });
+        }
         throw err;
+      }
       const msg3 = err instanceof Error ? err.message : String(err);
       const autoRepair = {
         attempted: false,
         outcome: "refused",
         refusedReason: "INTERNAL_ERROR"
       };
+      let persisted;
       try {
-        await persistRunWithDevice({
+        persisted = await persistRunWithDevice({
           timestamp: (/* @__PURE__ */ new Date()).toISOString(),
           durationMs: Date.now() - t0,
           status: "fail",
@@ -82813,7 +82871,12 @@ function createRunActionHandler(deps = {}) {
         });
       } catch {
       }
-      return failResult(`cdp_run_action: ${args.actionId} threw an uncaught exception during orchestration: ${msg3.slice(0, 500)}`, { actionId: args.actionId, autoRepair, internalError: msg3.slice(0, 500) });
+      return failResult(`cdp_run_action: ${args.actionId} threw an uncaught exception during orchestration: ${msg3.slice(0, 500)}`, {
+        actionId: args.actionId,
+        autoRepair,
+        internalError: msg3.slice(0, 500),
+        ...persisted || runtimeStatePath ? { writes: writeDisclosure(actionYamlWrite, persisted) } : {}
+      });
     }
   };
 }
@@ -82832,7 +82895,7 @@ async function persistRun(actionId, projectRoot, record2) {
     }
     const nextState = appendRunRecord(fresh.state, record2);
     const promotes = shouldAutoPromoteToActive(fresh.metadata, record2);
-    const commit = (promoted, promotionRefused2) => {
+    const commit = (runtimeStatePath, promoted, promotionRefused2) => {
       mirrorToDb({
         yamlFilePath: fresh.filePath,
         state: fresh.state,
@@ -82843,13 +82906,15 @@ async function persistRun(actionId, projectRoot, record2) {
           path: fresh.filePath
         }
       });
-      return { promoted, promotionRefused: promotionRefused2, persistedRunId: record2.runId };
+      return { promoted, promotionRefused: promotionRefused2, runtimeStatePath, persistedRunId: record2.runId };
     };
-    const promotionRefused = promotes && !promoteActionRuntimeWithCAS(fresh, nextState).ok;
-    if (promotes && !promotionRefused)
-      return commit(true, false);
-    if (saveActionRuntimeWithCAS(fresh, nextState).ok)
-      return commit(false, promotionRefused);
+    const promotion = promotes ? promoteActionRuntimeWithCAS(fresh, nextState) : null;
+    const promotionRefused = promotion?.ok === false;
+    if (promotion?.ok)
+      return commit(promotion.sidecarPath, true, false);
+    const runtimeWrite = saveActionRuntimeWithCAS(fresh, nextState);
+    if (runtimeWrite.ok)
+      return commit(runtimeWrite.sidecarPath, false, promotionRefused);
     if (attempt === MAX_ATTEMPTS) {
       console.error(`cdp_run_action: persistRun for "${actionId}" hit ${MAX_ATTEMPTS} sidecar CAS conflicts; runtime state was not written (status=${record2.status}).`);
       return { promoted: false, promotionRefused, runtimeStateRefused: true };
@@ -82948,15 +83013,17 @@ function createLoginPrologueHandler(deps) {
         });
       }
     };
-    const unresolved = (detail) => failResult(`cdp_login_prologue: ${detail}`, "LOAD_FAILED", {
+    const unresolved = (detail, writes) => failResult(`cdp_login_prologue: ${detail}`, "LOAD_FAILED", {
       role: ACTION_LOGIN_HELPER,
-      alias: LOGIN_PROLOGUE_ALIAS
+      alias: LOGIN_PROLOGUE_ALIAS,
+      ...writes ? { writes } : {}
     });
-    const missingAuthoritativeRunRecord = () => failResult(`cdp_login_prologue: ${LOGIN_PROLOGUE_ALIAS} reported success without a fresh passing RunRecord.`, "LOAD_FAILED", {
+    const missingAuthoritativeRunRecord = (writes) => failResult(`cdp_login_prologue: ${LOGIN_PROLOGUE_ALIAS} reported success without a fresh passing RunRecord.`, "LOAD_FAILED", {
       role: ACTION_LOGIN_HELPER,
       alias: LOGIN_PROLOGUE_ALIAS,
       actionId: LOGIN_PROLOGUE_ALIAS,
-      failureKind: "AUTHORITATIVE_RUN_RECORD_MISSING"
+      failureKind: "AUTHORITATIVE_RUN_RECORD_MISSING",
+      ...writes ? { writes } : {}
     });
     let action;
     try {
@@ -82988,8 +83055,9 @@ function createLoginPrologueHandler(deps) {
     const replay = parseEnvelope2(replayResult);
     if (replay.ok !== true)
       return replayResult;
+    const replayWrites = replay.data?.writes && typeof replay.data.writes === "object" && !Array.isArray(replay.data.writes) ? replay.data.writes : void 0;
     if (replay.data?.passed !== true)
-      return missingAuthoritativeRunRecord();
+      return missingAuthoritativeRunRecord(replayWrites);
     const strictRunRecordId = typeof replay.data.strictRunRecordId === "string" ? replay.data.strictRunRecordId : typeof replay.meta?.strictRunRecordId === "string" ? replay.meta.strictRunRecordId : void 0;
     let freshRecord;
     try {
@@ -82998,10 +83066,10 @@ function createLoginPrologueHandler(deps) {
         freshRecord = strictRunRecordId ? reloaded?.state.runHistory.find((record2) => record2.runId === strictRunRecordId) : void 0;
       });
     } catch (error2) {
-      return unresolved(`could not verify the exact ${LOGIN_PROLOGUE_ALIAS} learned action: ${error2 instanceof Error ? error2.message : String(error2)}`);
+      return unresolved(`could not verify the exact ${LOGIN_PROLOGUE_ALIAS} learned action: ${error2 instanceof Error ? error2.message : String(error2)}`, replayWrites);
     }
     if (!freshRecord || freshRecord.status !== "pass") {
-      return missingAuthoritativeRunRecord();
+      return missingAuthoritativeRunRecord(replayWrites);
     }
     const ended = now();
     const outcome = {
@@ -83015,6 +83083,7 @@ function createLoginPrologueHandler(deps) {
       steps,
       inventory: { count: inventory.length, actionIds: inventory.map((entry) => entry.id) },
       runRecord: freshRecord,
+      ...replayWrites ? { writes: replayWrites } : {},
       actionResult: {
         transport: replay.data.transport,
         transportVersion: replay.data.transportVersion,
@@ -96836,7 +96905,7 @@ var runActionHandler = createRunActionHandler({
   targetContext: getActiveSession,
   claimBundleAuthority: claimOptionalBundleAuthority
 });
-trackedTool("cdp_run_action", "Replay a learned action by id with end-to-end auto-repair. On iOS, the validated flow is partitioned before execution: exact-testID commands use the authority-bound React-tree prover, while native-only commands use XCTest. The RunRecord and result preserve the reported proof domain, and a react-tree pass never promotes an experimental action to Maestro-certified active status. Ordinary missing React testIDs remain TESTID_NOT_FOUND; native selector misses remain ordinary Maestro failures unless direct bounded evidence proves a NATIVE_SURFACE_BLIND environment. Pass autoRepair=false to opt out of selector repair. proofReplay=true is reserved for proof-capture rehearsal and writes no runtime state. When the canonical run ledger proves every authored mutating command completed and only trailing verification (extendedWaitUntil/assert) failed, the result stays failed but carries meta.trailingVerification (mutationEvidence proven, attempt lineage, termination provenance) \u2014 verify the live goal state instead of retrying or rebooting; auto-repair refuses so a merely-slow selector is never rewritten.", {
+trackedTool("cdp_run_action", "Replay a learned action by id with end-to-end auto-repair. On iOS, the validated flow is partitioned before execution: exact-testID commands use the authority-bound React-tree prover, while native-only commands use XCTest. The RunRecord and result preserve the reported proof domain, and a react-tree pass never promotes an experimental action to Maestro-certified active status. Ordinary missing React testIDs remain TESTID_NOT_FOUND; native selector misses remain ordinary Maestro failures unless direct bounded evidence proves a NATIVE_SURFACE_BLIND environment. Pass autoRepair=false to opt out of selector repair. Successful runtime writes return their exact runtime sidecar path as writes.runtimeStatePath: fenced sessions use session-private state, while an unfenced compatibility process uses project-local .rn-agent/state. proofReplay=true is reserved for proof-capture rehearsal and writes no runtime state. When the canonical run ledger proves every authored mutating command completed and only trailing verification (extendedWaitUntil/assert) failed, the result stays failed but carries meta.trailingVerification (mutationEvidence proven, attempt lineage, termination provenance) \u2014 verify the live goal state instead of retrying or rebooting; auto-repair refuses so a merely-slow selector is never rewritten.", {
   actionId: external_exports.string().describe("Owned action id; resolves one .yaml or .yml file."),
   projectRoot: external_exports.string().optional().describe("Override project root (default: process.cwd())."),
   platform: external_exports.enum(["ios", "android"]).optional().describe("Force a specific platform; otherwise auto-detected from the active device session."),

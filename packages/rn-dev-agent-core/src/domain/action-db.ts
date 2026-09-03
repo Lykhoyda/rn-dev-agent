@@ -1,7 +1,7 @@
 // Action DB — node:sqlite wrapper for the action corpus store.
 //
-// Opens (or creates) the per-project `.rn-agent/state/actions.db` SQLite
-// database, runs schema migrations, and sets WAL + busy_timeout PRAGMAs.
+// Opens the action mirror in the current session state directory, using
+// project-local `.rn-agent/state` only for an unfenced compatibility process.
 //
 // Gracefully degrades: when `node:sqlite` is unavailable (Node < 22.5 or
 // missing flag) `openActionDb` returns null without throwing so callers
@@ -86,7 +86,7 @@ export interface ActionDb {
    */
   recentRepairCount(actionId: string, sinceIso: string): number;
   /**
-   * One-time import of legacy JSON sidecars from `<projectRoot>/.rn-agent/state/<id>.state.json`
+   * One-time import of JSON sidecars from the current runtime state directory
    * into the DB. Skips any `<id>` that already has an `actions_index` row (idempotent).
    * Skips corrupt JSON and files with schemaVersion !== 1 (caught, never thrown).
    * Returns the count of sidecars that were successfully imported on this call.
@@ -169,7 +169,7 @@ export function loadSqlite(): DatabaseSyncCtor | null {
 // ─── Open + initialize ────────────────────────────────────────────────────────
 
 /**
- * Opens the action DB at `<projectRoot>/.rn-agent/state/actions.db`,
+ * Opens the action DB in the current runtime state directory,
  * runs the schema (CREATE TABLE IF NOT EXISTS + indexes), and sets
  * PRAGMA busy_timeout + journal_mode=WAL.
  *

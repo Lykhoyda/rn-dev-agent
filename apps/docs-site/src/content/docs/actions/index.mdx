@@ -82,13 +82,13 @@ In practice this means a session opens with `/list-learned-actions` (or its prog
 
 ## Where actions live
 
-The plugin's home in your project is `.rn-agent/`. Actions live in the `actions/` subdirectory; sibling folders hold supporting state.
+The plugin's home in your project is `.rn-agent/`. Actions live in the `actions/` subdirectory; the project-local state folder is the unfenced compatibility fallback.
 
 ```
 .rn-agent/
 ├── actions/                ← saved actions (commit)
 │   └── *.yaml
-├── state/                  ← run history, repair history (gitignore)
+├── state/                  ← unfenced compatibility runtime state (gitignore)
 ├── recordings/             ← raw captures from cdp_record_test (gitignore)
 ├── skeleton.yaml           ← UI semantic-name → testID map (commit)
 ├── nav-graph.yaml          ← persisted navigation graph (commit, optional)
@@ -99,7 +99,21 @@ The plugin's home in your project is `.rn-agent/`. Actions live in the `actions/
 
 `/rn-dev-agent:setup` scaffolds the entire directory on first onboarding; [`/doctor`](../commands/doctor/) reports on its health.
 
-The plugin's entire footprint is `.rn-agent/`. It does not read or write anywhere else in your project.
+In an authority-fenced session, mutable action state lives at
+`<state-home>/v2/sessions/<sessionId>/runtime/state/<id>.state.json`
+(`~/Library/Application Support/rn-dev-agent/v2/sessions/<sessionId>/runtime/state/<id>.state.json`
+by default on macOS), not under the project. When replay persists runtime
+state, its result names the exact sidecar as
+`data.writes.runtimeStatePath` on success or
+`meta.writes.runtimeStatePath` on failure, so diagnostics should follow the
+result instead of assuming `.rn-agent/state/`.
+
+With the current storage layout, a new fenced session starts an action at
+revision 1 with empty run and repair history and does not read an earlier
+session's sidecar history or revision. Canonical lifecycle status remains
+shared worktree knowledge:
+when a clean replay promotes the tracked action YAML to `active`, later sessions
+see that status without inheriting the earlier session's runtime history.
 
 ## Creating an action
 
@@ -145,7 +159,7 @@ The replay shows up live on the device mirror as the taps play out. That makes t
 
 ## Self-repair, in plain words
 
-When a `testID` gets renamed in your app and the action references the old name, replay fails with `SELECTOR_NOT_FOUND`. The plugin doesn't give up: it looks at the live UI, finds the most likely new `testID` via fuzzy matching, patches the YAML, and retries. The repair gets logged to the action's sidecar file so you can see what changed.
+When a `testID` gets renamed in your app and the action references the old name, replay fails with `SELECTOR_NOT_FOUND`. The plugin doesn't give up: it looks at the live UI, finds the most likely new `testID` via fuzzy matching, patches the YAML, and retries. The repair gets logged to the runtime sidecar whose exact path is returned in `writes.runtimeStatePath`.
 
 <Aside type="caution" title="Self-repair has limits">
 Self-repair handles **small UI drift** (a renamed `testID`, a moved button), not broken product logic. It refuses to touch files you've hand-edited (`mtime` check). It refuses after 3 repairs on the same action in 24h to avoid runaway patching. Failures escalate to you.

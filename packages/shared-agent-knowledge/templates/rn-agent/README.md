@@ -25,7 +25,7 @@ proof; lock and run the login e2e on the exact candidate for formal proof.
 │   └── *.yaml               each has a metadata header + state sidecar
 ├── fixtures/              ← seed data for replay (commit)
 ├── proposals/             ← repair proposals queued for review (commit)
-├── state/                 ← runtime state per action (gitignore)
+├── state/                 ← unfenced compatibility runtime state (gitignore)
 ├── recordings/            ← cdp_record_test buffers (gitignore)
 ├── snapshots/             ← debugging captures (gitignore)
 ├── diag/                  ← debug logs (gitignore)
@@ -36,10 +36,10 @@ proof; lock and run the login e2e on the exact candidate for formal proof.
 
 1. **Discovery** — `cdp_record_test_start` → `…_stop` buffers events to
    `recordings/<id>.json`.
-2. **Save** — `cdp_record_test_save_as_action` writes the paired
-   `actions/<id>.yaml` + `state/<id>.state.json` (sidecar). The YAML is
-   the executable test; the sidecar holds runtime metadata (revision,
-   status, `runHistory[]`, `repairHistory[]`).
+2. **Save** — `cdp_record_test_save_as_action` writes
+   `actions/<id>.yaml`; mutable sidecar state follows the current runtime root.
+   The YAML is the executable test; the sidecar holds revision,
+   `runHistory[]`, `repairHistory[]`, and replay statistics.
 3. **Replay** — `/run-action <id>` (calls `cdp_run_action`) runs the
    flow and updates the sidecar.
 4. **Self-heal** — on a `SELECTOR_NOT_FOUND` failure, `cdp_repair_action`
@@ -48,6 +48,19 @@ proof; lock and run the login e2e on the exact candidate for formal proof.
    next clean replay.
 Self-repair is bounded: max 3 attempts per action per 24h; failure codes
 other than `SELECTOR_NOT_FOUND` escalate without auto-fix.
+
+In an authority-fenced session, the sidecar lives at
+`<state-home>/v2/sessions/<sessionId>/runtime/state/<id>.state.json`
+(`~/Library/Application Support/rn-dev-agent/v2/sessions/<sessionId>/runtime/state/<id>.state.json`
+by default on macOS), not in this directory. When a replay envelope observes
+and discloses a runtime-state write, `cdp_run_action` returns its exact location
+as `data.writes.runtimeStatePath` on success or
+`meta.writes.runtimeStatePath` on failure. With the current storage layout, a
+new fenced session starts at revision 1 with empty run and repair history and
+does not read an earlier session's sidecar history or revision. Canonical
+lifecycle status remains shared worktree knowledge, so later sessions see
+tracked YAML promoted to `active` without the earlier runtime history. The
+project-local `state/` path is only the unfenced compatibility fallback.
 
 ## Linked Git worktrees
 
@@ -61,7 +74,7 @@ shares **exactly one subpath**:
 | Path | Shared? | Why |
 |---|---|---|
 | `actions/` | **read-only inheritance** | A linked worktree may inventory and replay only the verified same-repository primary corpus; it never falls through to another worktree. Each inventory or replay freezes the link, corpus, repository, and selected YAML identities, then refuses the whole operation without partial results if any identity changes; the next operation resolves afresh. Migration, generation, repair, promotion, and every other YAML mutation refuse through the inherited link; make those changes in the owning worktree. |
-| `state/`, `recordings/`, `snapshots/`, `diag/`, `index.json`, `local/` | no | Per-worktree runtime state, including the action SQLite database and its WAL. The session runtime root must be a real directory. |
+| `state/`, `recordings/`, `snapshots/`, `diag/`, `index.json`, `local/` | no | Unshared runtime output. In a fenced session, mutable action state, including the action SQLite database and its WAL, uses the session runtime root; `.rn-agent/state/` is only the unfenced compatibility fallback. The session runtime root must be a real directory. |
 | `integration/` | no | Session integration refuses any symlinked component under it and fails closed on one. |
 | `nav-graph.yaml`, `skeleton.yaml` | no | Derived from the app source on *this* branch; sharing them across branches serves stale data. |
 | `config.json`, `e2e.config.json`, `fixtures/`, `proposals/`, `dev-bridge.ts`, `globals.d.ts`, `.scaffold-version` | no | Project scaffold and per-worktree output. |

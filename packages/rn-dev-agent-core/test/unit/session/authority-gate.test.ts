@@ -14,6 +14,8 @@ import { failResult, okResult } from '../../../dist/utils.js';
 import { arbiterWrap, DeviceSessionArbiter } from '../../../dist/lifecycle/device-arbiter.js';
 import { runMaestroInline } from '../../../dist/maestro-invoke.js';
 import { buildReplayEngineStatus, MAESTRO_RUNNER_PIN } from '../../../dist/domain/engine-pin.js';
+import { createLoginPrologueHandler } from '../../../dist/tools/login-prologue.js';
+import { appendRunRecordToSidecar } from '../../helpers/action-state.ts';
 import {
   createPinnedRunActionHandler,
   createTmpProject,
@@ -633,6 +635,85 @@ test('postflight drift rejects the result instead of returning a false success',
   assert.equal(envelope.ok, false);
   assert.equal(envelope.code, 'AUTHORITY_LOST_DURING_OPERATION');
   assert.equal(envelope.data, undefined);
+});
+
+test('postflight authority failure preserves replay runtime writes', async () => {
+  const { runtime } = fixture();
+  const gate = createAuthorityGate(runtime, {
+    probe: async ({ axis, phase }) => ({
+      axis,
+      identity: phase === 'postflight' && axis === 'D' ? 'foreign-device' : `${axis}-identity`,
+    }),
+  });
+  const runtimeStatePath = '/session/runtime/state/demo.state.json';
+
+  const result = await gate.wrap('cdp_run_action', async () =>
+    okResult({
+      passed: true,
+      writes: {
+        actionYaml: { written: false, reason: 'repair-not-applied' },
+        runtimeState: 'sidecar',
+        runtimeStatePath,
+        databaseMirror: 'best-effort',
+      },
+    }),
+  )({});
+  const envelope = JSON.parse(result.content[0].text);
+
+  assert.equal(envelope.code, 'AUTHORITY_LOST_DURING_OPERATION');
+  assert.equal(envelope.meta.writes.runtimeStatePath, runtimeStatePath);
+});
+
+test('login prologue postflight replacement preserves nested replay runtime writes', async (t) => {
+  const project = createTmpProject();
+  t.after(() => project.cleanup());
+  project.seedAction(
+    'user-login',
+    fixtureYaml({ id: 'user-login', intent: 'restore an authenticated fixture state' }),
+    null,
+  );
+  const { runtime, status } = fixture();
+  status.source.appRoot = project.root;
+  const runtimeStatePath = '/session/runtime/state/user-login.state.json';
+  const prologue = createLoginPrologueHandler({
+    runAction: async () => {
+      appendRunRecordToSidecar(project.root, 'user-login', {
+        runId: 'login-run-1',
+        timestamp: '2026-08-21T10:00:01.000Z',
+        durationMs: 125,
+        status: 'pass',
+        trigger: 'agent',
+        timing: {
+          startedAt: '2026-08-21T10:00:01.000Z',
+          endedAt: '2026-08-21T10:00:01.125Z',
+          elapsedMs: 125,
+          steps: [],
+        },
+      });
+      return okResult({
+        passed: true,
+        strictRunRecordId: 'login-run-1',
+        writes: {
+          actionYaml: { written: false, reason: 'repair-not-applied' },
+          runtimeState: 'sidecar',
+          runtimeStatePath,
+          databaseMirror: 'best-effort',
+        },
+      });
+    },
+  });
+  const gate = createAuthorityGate(runtime, {
+    probe: async ({ axis, phase }) => ({
+      axis,
+      identity: phase === 'postflight' && axis === 'D' ? 'foreign-device' : `${axis}-identity`,
+    }),
+  });
+
+  const result = await gate.wrap('cdp_login_prologue', prologue)({ projectRoot: project.root });
+  const envelope = JSON.parse(result.content[0].text);
+
+  assert.equal(envelope.code, 'AUTHORITY_LOST_DURING_OPERATION');
+  assert.equal(envelope.meta.writes.runtimeStatePath, runtimeStatePath);
 });
 
 test('finalized proof is discarded when postflight authority changes', async () => {

@@ -505,4 +505,14 @@ Re-run `/rn-dev-agent:setup`. It's idempotent — already-injected blocks are de
 
 ### .rn-agent/state/ showing up in git status
 
-That directory holds runtime state (run history, repair history) — not config. Check that `.rn-agent/.gitignore` exists and contains `state/`, `recordings/`, `snapshots/`, `diag/`, `index.json`. The `/setup` scaffold ships this file; if it's missing, regenerate via `/setup` (idempotent — only the missing pieces are added).
+That directory is the runtime-state fallback for an unfenced compatibility process, not the run-history location for an authority-fenced session. Check that `.rn-agent/.gitignore` contains `state/`, `recordings/`, `snapshots/`, `diag/`, and `index.json`; `/setup` restores missing scaffold files.
+
+For a fenced replay that wrote runtime state, read the exact sidecar from
+`data.writes.runtimeStatePath` on success or
+`meta.writes.runtimeStatePath` on failure. It resolves under
+`<state-home>/v2/sessions/<sessionId>/runtime/state/`, not the project. With the
+current storage layout, a new fenced session starts at revision 1 with empty run
+and repair history and does not read sidecar history or revisions from an
+earlier session. The tracked YAML lifecycle status is shared worktree
+knowledge, so later sessions still see an action that an earlier clean replay
+promoted to `active`.

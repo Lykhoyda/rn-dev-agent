@@ -1,9 +1,7 @@
 // D1206 Tier 2 Sprint C / Phase 127 — Sidecar JSON I/O for ReusableAction.
 //
-// Read/write the per-action runtime state at
-// `<project>/.rn-agent/state/<id>.state.json`. Lightweight wrapper —
-// schema validation happens here so corrupted files surface a clear
-// error rather than crashing downstream consumers.
+// Read/write per-action state under the fenced session runtime root, or under
+// project-local .rn-agent/state only for an unfenced compatibility process.
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync } from 'node:fs';
 import { join, dirname } from 'node:path';
@@ -12,9 +10,9 @@ import { sessionStateDirectory } from '../session/runtime-paths.js';
 
 /** Return the canonical sidecar path for a given action YAML path. */
 export function sidecarPathFor(yamlFilePath: string): string {
-  // <project>/.rn-agent/actions/<id>.yaml → <project>/.rn-agent/state/<id>.state.json
-  // We don't assume the input is under .rn-agent/actions/ — instead derive
-  // the sidecar by replacing the YAML's parent dir with sibling `state/`.
+  // Action YAML maps to <current-runtime-state-directory>/<id>.state.json.
+  // A fenced process uses its configured session runtime state directory;
+  // only the unfenced fallback derives sibling .rn-agent/state from the YAML.
   //
   // GH #112: split on BOTH POSIX and Windows separators. The original
   // `split('/').pop()` returned the entire backslash-containing path as a
@@ -88,9 +86,8 @@ export function loadOrInitSidecar(
 }
 
 /**
- * Persist a sidecar to disk. Creates the state/ directory if missing.
- * Always writes to the path derived from the YAML's location, never
- * accepts an explicit override — keeps the on-disk shape stable.
+ * Persist a sidecar to the current runtime state directory, creating it when
+ * missing. The YAML supplies the action id; callers cannot override the path.
  */
 export function saveSidecar(yamlFilePath: string, state: ActionRuntimeState): { path: string } {
   const path = sidecarPathFor(yamlFilePath);

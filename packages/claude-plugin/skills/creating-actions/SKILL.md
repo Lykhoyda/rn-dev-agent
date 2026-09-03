@@ -114,7 +114,7 @@ Contract rules (violations break replay, repair, or inventory):
 - **Params**: keys match `[A-Z_][A-Z0-9_]*`; every `${VAR}` in the steps is listed in `# params`, and vice versa. The inventory scanner counts `${...}` occurrences **anywhere in the file, comments included** — so the diagram may mark real step params as `${PRODUCT_ID}`, but prose (e.g. the `intent` line) uses bare names, and no comment may mention a `${VAR}` the steps don't use.
 - **Body**: `launchApp: { stopApp: false }` self-bootstrap (works cold or warm, preserves login); conditional prologues via `runFlow: { when: { visible: ... } }`; `waitForAnimationToEnd` after transitions; the diagram's anchor `assertVisible` after each screen change; `scrollUntilVisible` for potentially off-screen targets.
 - **Never `clearState: true`** on an Expo Dev Client build — it wipes the Metro URL and strands the launcher (GH #8).
-- Do **not** hand-write the sidecar (`.rn-agent/state/<id>.state.json`) — it is created lazily on first load/replay.
+- Do **not** hand-write the runtime sidecar — it is created lazily on first load/replay. In a fenced session, use the exact `writes.runtimeStatePath` returned by `cdp_run_action`; it is session-private, not project-local.
 
 Copy-adapt the complete worked example: `examples/add-product-to-cart.yaml`.
 
@@ -140,6 +140,7 @@ cdp_run_action({ actionId: "<id>", params: { PRODUCT_ID: "7" }, trigger: "agent"
 ```
 
 - First clean pass auto-promotes `experimental → active` and materialises the sidecar.
+- With the current storage layout, a new fenced session starts revision 1 with empty run and repair history and does not read an earlier session's sidecar history or revision. Canonical lifecycle status remains shared worktree knowledge, so later sessions see tracked YAML promoted to `active` without inheriting the earlier runtime history.
 - Verify the outcome by **state, not pixels**: `cdp_store_state`, `expect_redux` / `expect_route` / `expect_visible_by_testid`.
 - `mutates: true` actions leave residue — clean up between runs or use timestamp-suffixed param values so repeated replays stay deterministic.
 - Exercise the variable branch (e.g. one on-screen and one off-screen `PRODUCT_ID`) before trusting the action.
@@ -186,7 +187,7 @@ consult it before inventing a workaround.
 | What | Where / Rule |
 |---|---|
 | Action file | `<project>/.rn-agent/actions/<id>.yaml` |
-| Sidecar (auto-created) | `<project>/.rn-agent/state/<id>.state.json` |
+| Sidecar (auto-created) | Fenced: `<state-home>/v2/sessions/<sessionId>/runtime/state/<id>.state.json`; unfenced compatibility: `<project>/.rn-agent/state/<id>.state.json`; replay returns the exact `writes.runtimeStatePath` |
 | id regex | `^[a-z0-9][a-z0-9-]*$` |
 | param key regex | `[A-Z_][A-Z0-9_]*` |
 | Inventory / dedup | `packages/rn-dev-agent-core/src/learned-actions.ts` (built → `dist/learned-actions.js`) or `/rn-dev-agent:list-learned-actions` |
