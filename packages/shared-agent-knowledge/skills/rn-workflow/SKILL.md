@@ -109,6 +109,7 @@ happens".
 | `attach` | live | Close the other session or work in a separate worktree. Never kill it, never adopt it. |
 | `attach` | unknown | Unprovable identity is treated as live — same as above; re-run once its process state is observable. |
 | `transport-restart` | proven dead (current sessions) | Run the remedy `nextAction` names — `/mcp` interactively, the packaged recovery command headlessly; startup cleanup releases the dead owner either way. See `using-rn-dev-agent` § "Session ownership recovery". |
+| `unrecoverable-in-band` | proven dead, required cleanup evidence missing | Preserve the authority state and report `startupCleanupBlocked`; no supported restart or repair can discharge the obligation. |
 | `adoption` | proven dead (legacy sessions only) | `adopt_stale` with the advertised handle; a refusal (e.g. missing restoration manifest) is surfaced verbatim, not worked around. |
 | outstanding stale-device journal | — | The identifier-free `release_stale_device` resume action named by status. |
 
@@ -232,7 +233,7 @@ got:
 | `PROJECT_MANIFEST_INVALID` / `PACKAGE_MANAGER_UNSUPPORTED` | Manifest cannot grant package-manager authority | Repair `package.json`; never infer from lockfiles |
 | `PACKAGE_MANAGER_CONFLICT` / `_UNDECLARED` | Ambiguous install authority | Report both facts; user resolves |
 | `attach` (live/unknown owner) | Another session owns the worktree | Close it or use another worktree |
-| Non-convergent `transport-restart` | Startup cleanup is refusing | Report the manual remedy facts |
+| Non-convergent `transport-restart` / `unrecoverable-in-band` | Startup cleanup is refusing | Report the manual remedy facts per the recovery table above; `unrecoverable-in-band` has no restart or repair remedy |
 | Multiple booted devices, none named | Ambient ambiguity | Ask the user to name one |
 | `AUTOMATION_CLEANUP_UNPROVEN` | Process-group absence unproven | Run the returned manual command, retry once |
 

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, createHmac } from 'node:crypto';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -495,6 +495,177 @@ test('R5: transport-restart is promised only where it converges', async () => {
   assert.equal(outcome.status, 'clean');
   assert.deepEqual(outcome.released, ['prior-owner']);
   assert.equal(ordinary.registry.getClaim('source', 'worktree-1'), null);
+});
+
+test('GH#801: missing managed-Metro stop proof is reported as unrecoverable in-band', async () => {
+  const missingProof = contenderFacing('mismatch');
+  const retainedRuntimeEvidencePath = join(missingProof.root, 'metro-runtime-evidence.jsonl');
+  writeFileSync(retainedRuntimeEvidencePath, '{"kind":"retained-runtime-evidence"}\n');
+  const metroBeforeCleanup = missingProof.registry.getSessionStatus('prior-owner')?.bindings.metro;
+  assert.ok(metroBeforeCleanup && typeof metroBeforeCleanup === 'object');
+  missingProof.registry.updateBindings(missingProof.owner, {
+    bindings: {
+      metro: {
+        ...(metroBeforeCleanup as Record<string, unknown>),
+        runtimeEvidencePath: retainedRuntimeEvidencePath,
+      },
+    },
+  });
+  const outcome = await runStartupOwnerCleanup(cleanupInput(missingProof), {
+    ...executorDeps(),
+    stopManagedMetro: async () => false,
+    verifyManagedMetroStopProof: () => false,
+    inspectManagedMetroCleanupEvidence: () => ({
+      complete: true,
+      launcher: 'absent',
+      listener: 'absent',
+      port: { status: 'absent' },
+      evidenceSocket: 'absent',
+    }),
+  });
+
+  assert.equal(outcome.status, 'refused');
+  assert.equal(outcome.refusal?.code, 'METRO_CLEANUP_PENDING');
+  const missingRequirement = missingProof.registry.inspectRecoveryRequirement('contender');
+  assert.equal(missingRequirement.requirement, 'unrecoverable-in-band');
+  assert.equal(missingRequirement.priorOwner, 'stale');
+  assert.equal(missingRequirement.startupCleanupBlocked?.code, 'METRO_CLEANUP_PENDING');
+  assert.equal(missingRequirement.startupCleanupBlocked?.cause, 'managed-metro-stop-proof-missing');
+  assert.match(missingRequirement.nextAction, /no supported in-band recovery/i);
+  assert.doesNotMatch(
+    missingRequirement.nextAction,
+    /reconnect|restart|session-doctor\.js" repair/i,
+  );
+  assert.doesNotMatch(missingRequirement.nextAction, /may still be running/i);
+  const priorStatus = missingProof.registry.getSessionStatus('prior-owner');
+  assert.ok(priorStatus);
+  assert.equal(
+    (
+      priorStatus.bindings.startupCleanup as {
+        obligations?: { metro?: { completedAt?: number | null } };
+      }
+    ).obligations?.metro?.completedAt,
+    null,
+    'the diagnostic does not discharge the cleanup obligation',
+  );
+  assert.equal(
+    missingProof.registry.getClaim('source', 'worktree-1')?.sessionId,
+    'prior-owner',
+    'the diagnostic does not release authority',
+  );
+  const projected = statusOf(missingProof, 'contender');
+  assert.equal(
+    (projected.recoveryRequirement as { requirement?: string }).requirement,
+    'unrecoverable-in-band',
+  );
+  assert.equal(
+    (projected.startupCleanupBlocked as { cause?: string }).cause,
+    'managed-metro-stop-proof-missing',
+  );
+
+  const liveListener = contenderFacing('mismatch');
+  const liveOutcome = await runStartupOwnerCleanup(cleanupInput(liveListener), {
+    ...executorDeps(),
+    stopManagedMetro: async () => false,
+    verifyManagedMetroStopProof: () => false,
+    inspectManagedMetroCleanupEvidence: () => ({
+      complete: false,
+      launcher: 'present',
+      listener: 'present',
+      port: { status: 'listening', pid: 9914 },
+      evidenceSocket: 'present',
+    }),
+  });
+  assert.equal(liveOutcome.status, 'refused');
+  assert.equal(liveOutcome.refusal?.code, 'METRO_CLEANUP_PENDING');
+  const liveRequirement = liveListener.registry.inspectRecoveryRequirement('contender');
+  assert.equal(liveRequirement.requirement, 'unrecoverable-in-band');
+  assert.equal(liveRequirement.startupCleanupBlocked?.cause, 'managed-metro-stop-proof-missing');
+  assert.match(liveRequirement.nextAction, /no supported in-band recovery/i);
+  assert.match(liveRequirement.nextAction, /may still be running/i);
+  assert.doesNotMatch(liveRequirement.nextAction, /reconnect|restart|session-doctor\.js" repair/i);
+  const liveOwnerStatus = liveListener.registry.getSessionStatus('prior-owner');
+  assert.ok(liveOwnerStatus);
+  assert.equal(
+    (
+      liveOwnerStatus.bindings.startupCleanup as {
+        obligations?: { metro?: { completedAt?: number | null } };
+      }
+    ).obligations?.metro?.completedAt,
+    null,
+    'a still-running listener does not discharge the cleanup obligation',
+  );
+  assert.equal(
+    liveListener.registry.getClaim('source', 'worktree-1')?.sessionId,
+    'prior-owner',
+    'a still-running listener does not release authority',
+  );
+
+  const legacy = contenderFacing('mismatch');
+  const legacyMetro = {
+    mode: 'managed',
+    port: 8300,
+    pid: 9914,
+    birth: 'metro-birth',
+    launcherPid: 9915,
+    launcherBirth: 'launcher-birth',
+    instanceId: 'metro-instance',
+    runtimeEvidencePath: join(legacy.root, 'missing-runtime-evidence.jsonl'),
+    runtimeEvidenceSocket: join(legacy.root, 'missing-runtime-evidence.sock'),
+  };
+  legacy.registry.updateBindings(legacy.owner, {
+    bindings: {
+      metro: {
+        ...legacyMetro,
+        managementProof: createHmac('sha256', 'dead-signer-capability')
+          .update(
+            [
+              'prior-owner',
+              legacyMetro.port,
+              legacyMetro.pid,
+              legacyMetro.birth,
+              legacyMetro.launcherPid,
+              legacyMetro.launcherBirth,
+              legacyMetro.instanceId,
+              legacyMetro.runtimeEvidencePath,
+              legacyMetro.runtimeEvidenceSocket,
+            ].join('\0'),
+          )
+          .digest('hex'),
+      },
+    },
+  });
+  await runStartupOwnerCleanup(cleanupInput(legacy), {
+    ...executorDeps(),
+    stopManagedMetro: async () => false,
+    inspectManagedMetroCleanupEvidence: () => ({
+      complete: true,
+      launcher: 'absent',
+      listener: 'absent',
+      port: { status: 'absent' },
+      evidenceSocket: 'absent',
+    }),
+  });
+  const legacyRequirement = legacy.registry.inspectRecoveryRequirement('contender');
+  assert.equal(legacyRequirement.requirement, 'transport-restart');
+  assert.equal(legacyRequirement.startupCleanupBlocked?.cause, undefined);
+
+  const retryable = contenderFacing('mismatch');
+  await runStartupOwnerCleanup(cleanupInput(retryable), {
+    ...executorDeps(),
+    stopManagedMetro: async () => false,
+    verifyManagedMetroStopProof: () => true,
+    inspectManagedMetroCleanupEvidence: () => ({
+      complete: false,
+      launcher: 'present',
+      listener: 'absent',
+      port: { status: 'absent' },
+      evidenceSocket: 'absent',
+    }),
+  });
+  const retryableRequirement = retryable.registry.inspectRecoveryRequirement('contender');
+  assert.equal(retryableRequirement.requirement, 'transport-restart');
+  assert.equal(retryableRequirement.startupCleanupBlocked?.cause, undefined);
 });
 
 test('R6: repeated restarts surface the same refusal and release nothing', async () => {

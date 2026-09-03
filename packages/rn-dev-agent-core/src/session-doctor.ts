@@ -7,6 +7,7 @@ import {
   openSessionRegistry,
   SessionAuthorityError,
   type SourceOwnershipInspection,
+  UNRECOVERABLE_METRO_CLEANUP_NEXT_ACTION,
 } from './session/registry.js';
 import {
   HEADLESS_SESSION_RECOVERY_COMMAND,
@@ -70,6 +71,12 @@ function remedyFor(ownership: SourceOwnershipInspection): string {
   }
   if (ownership.startupCleanupBlocked) {
     const blocked = ownership.startupCleanupBlocked;
+    if (
+      blocked.code === 'METRO_CLEANUP_PENDING' &&
+      blocked.cause === 'managed-metro-stop-proof-missing'
+    ) {
+      return blocked.nextAction ?? UNRECOVERABLE_METRO_CLEANUP_NEXT_ACTION;
+    }
     return sessionCleanupObligationRemedy(
       `The prior owner is proven dead, but startup cleanup refused with ${blocked.code} and will refuse again until that is resolved: ${blocked.reason}.`,
     );

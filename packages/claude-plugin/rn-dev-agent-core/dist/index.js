@@ -25356,6 +25356,7 @@ function readStartupCleanupBlocker(bindingsJson) {
   return {
     code: record2.code,
     reason: record2.reason,
+    ...record2.cause === "managed-metro-stop-proof-missing" ? { cause: record2.cause } : {},
     ...typeof record2.nextAction === "string" ? { nextAction: record2.nextAction } : {}
   };
 }
@@ -25381,7 +25382,7 @@ function openSessionRegistry(path, dependencies) {
     throw error2;
   }
 }
-var OWNER_IDENTITY_REFUSAL_REASONS, INITIALIZATION_WAIT2, AUTHORITY_REGISTRY_SCHEMA_VERSION, SessionAuthorityError, RECOVERY_HANDLE_TTL_MS, RECOVERY_HANDLE_RENEW_MS, errorAxes, errorNextActions, conflictCodes, SessionRegistry;
+var OWNER_IDENTITY_REFUSAL_REASONS, INITIALIZATION_WAIT2, AUTHORITY_REGISTRY_SCHEMA_VERSION, SessionAuthorityError, RECOVERY_HANDLE_TTL_MS, RECOVERY_HANDLE_RENEW_MS, UNRECOVERABLE_METRO_CLEANUP_NEXT_ACTION, UNRECOVERABLE_LIVE_METRO_CLEANUP_NEXT_ACTION, errorAxes, errorNextActions, conflictCodes, SessionRegistry;
 var init_registry = __esm({
   "packages/rn-dev-agent-core/dist/session/registry.js"() {
     "use strict";
@@ -25418,6 +25419,8 @@ var init_registry = __esm({
     };
     RECOVERY_HANDLE_TTL_MS = 5 * 6e4;
     RECOVERY_HANDLE_RENEW_MS = 6e4;
+    UNRECOVERABLE_METRO_CLEANUP_NEXT_ACTION = "Managed Metro cleanup cannot be discharged because its authenticated stop proof is unavailable. No supported in-band recovery action can reconstruct that proof; preserve the authority state and report METRO_CLEANUP_PENDING.";
+    UNRECOVERABLE_LIVE_METRO_CLEANUP_NEXT_ACTION = "Managed Metro cleanup cannot be discharged because its authenticated stop proof is unavailable, and the recorded Metro listener may still be running on its recorded port. No supported in-band recovery action can reconstruct that proof; preserve the authority state and report METRO_CLEANUP_PENDING.";
     errorAxes = {
       SESSION_AUTHORITY_REQUIRED: "C",
       SESSION_OWNER_LOST: "C",
@@ -25854,6 +25857,14 @@ var init_registry = __esm({
             }
             const blocked = readStartupCleanupBlocker(prior.bindings_json);
             if (blocked) {
+              if (blocked.code === "METRO_CLEANUP_PENDING" && blocked.cause === "managed-metro-stop-proof-missing") {
+                return {
+                  requirement: "unrecoverable-in-band",
+                  priorOwner: "stale",
+                  startupCleanupBlocked: blocked,
+                  nextAction: blocked.nextAction ?? UNRECOVERABLE_METRO_CLEANUP_NEXT_ACTION
+                };
+              }
               return {
                 requirement: "transport-restart",
                 priorOwner: "stale",
@@ -26342,7 +26353,7 @@ var init_registry = __esm({
           if (typeof journal.finishedAt === "number")
             return;
           const existing = journal.refusal;
-          if (existing && existing.code === refusal.code && existing.reason === refusal.reason && existing.nextAction === refusal.nextAction) {
+          if (existing && existing.code === refusal.code && existing.reason === refusal.reason && existing.cause === refusal.cause && existing.nextAction === refusal.nextAction) {
             return;
           }
           this.#database.prepare(`UPDATE sessions SET bindings_json = ?, updated_ms = ?
@@ -26353,6 +26364,7 @@ var init_registry = __esm({
               refusal: {
                 code: refusal.code,
                 reason: refusal.reason,
+                ...refusal.cause ? { cause: refusal.cause } : {},
                 ...refusal.nextAction ? { nextAction: refusal.nextAction } : {}
               }
             }
@@ -62717,6 +62729,7 @@ function projectPublicAuthorityStatus(status, options = {}) {
       startupCleanupBlocked: {
         code: options.recoveryRequirement.startupCleanupBlocked.code,
         reason: options.recoveryRequirement.startupCleanupBlocked.reason,
+        ...options.recoveryRequirement.startupCleanupBlocked.cause ? { cause: options.recoveryRequirement.startupCleanupBlocked.cause } : {},
         nextAction: options.recoveryRequirement.nextAction
       }
     } : {},
@@ -65066,6 +65079,22 @@ async function stopManagedMetroProcesses(input, dependencies) {
   }
 }
 async function stopManagedMetro(binding, input, dependencies = {}) {
+  if (!verifyManagedMetroStopProof(binding, input))
+    return false;
+  const authenticatedBinding = binding;
+  const stopped = await stopManagedMetroProcesses({
+    port: authenticatedBinding.port,
+    launcher: {
+      pid: authenticatedBinding.launcherPid,
+      birth: authenticatedBinding.launcherBirth
+    },
+    listener: { pid: authenticatedBinding.pid, birth: authenticatedBinding.birth }
+  }, dependencies);
+  if (!stopped)
+    return false;
+  return removeManagedMetroEvidenceSocketSafely(authenticatedBinding.runtimeEvidenceSocket, dependencies);
+}
+function verifyManagedMetroStopProof(binding, input) {
   if (binding?.mode !== "managed" || typeof binding.port !== "number" || typeof binding.pid !== "number" || typeof binding.birth !== "string" || typeof binding.launcherPid !== "number" || typeof binding.launcherBirth !== "string" || typeof binding.instanceId !== "string" || typeof binding.runtimeEvidencePath !== "string" || typeof binding.runtimeEvidenceSocket !== "string" || binding.runtimeEvidenceAuthority !== void 0 && binding.runtimeEvidenceAuthority !== "reported-v1" && binding.runtimeEvidenceAuthority !== "managed-sandbox-v1" || binding.runtimeEvidenceAuthority === "managed-sandbox-v1" && binding.runtimeEvidenceProtocol !== 2 || typeof binding.managementProof !== "string") {
     return false;
   }
@@ -65117,17 +65146,10 @@ async function stopManagedMetro(binding, input, dependencies = {}) {
   })) {
     return false;
   }
-  const stopped = await stopManagedMetroProcesses({
-    port: binding.port,
-    launcher: { pid: binding.launcherPid, birth: binding.launcherBirth },
-    listener: { pid: binding.pid, birth: binding.birth }
-  }, dependencies);
-  if (!stopped)
-    return false;
-  return removeManagedMetroEvidenceSocketSafely(binding.runtimeEvidenceSocket, dependencies);
+  return true;
 }
 async function stopManagedMetroWithEvidence(binding, input, dependencies = {}) {
-  const proofAuthenticated = binding !== null && binding !== void 0 && verifyManagedMetroManagementProof(binding, input);
+  const proofAuthenticated = binding !== null && binding !== void 0 && verifyManagedMetroStopProof(binding, input);
   const stopped = await stopManagedMetro(binding, input, dependencies);
   const authenticated = proofAuthenticated || stopped;
   let evidence = inspectManagedMetroCleanupEvidence(binding ?? {}, dependencies);
@@ -70859,11 +70881,37 @@ async function completeObligations(registry2, prior, dependencies) {
       const stop = dependencies.stopManagedMetro ?? ((binding, stopInput) => stopManagedMetro(binding, stopInput));
       const stopped = await stop(entry, { sessionId: prior.sessionId, signerCapability });
       if (!stopped) {
+        const proofMissing = managedMetroStopProofMissing(entry, { sessionId: prior.sessionId, signerCapability }, dependencies);
+        if (proofMissing) {
+          throw new SessionAuthorityError("METRO_CLEANUP_PENDING", "managed Metro could not be stopped with exact process authority", void 0, {
+            cause: "managed-metro-stop-proof-missing",
+            nextAction: proofMissing.nextAction
+          });
+        }
         throw new SessionAuthorityError("METRO_CLEANUP_PENDING", "managed Metro could not be stopped with exact process authority");
       }
     }
     registry2.completeStartupOwnerObligation(prior, resource);
   }
+}
+function managedMetroStopProofMissing(binding, input, dependencies) {
+  let authenticated;
+  try {
+    authenticated = (dependencies.verifyManagedMetroStopProof ?? verifyManagedMetroStopProof)(binding, input);
+  } catch {
+    return null;
+  }
+  if (authenticated)
+    return null;
+  let stopObserved = false;
+  try {
+    stopObserved = (dependencies.inspectManagedMetroCleanupEvidence ?? inspectManagedMetroCleanupEvidence)(binding).complete;
+  } catch {
+    stopObserved = false;
+  }
+  return {
+    nextAction: stopObserved ? UNRECOVERABLE_METRO_CLEANUP_NEXT_ACTION : UNRECOVERABLE_LIVE_METRO_CLEANUP_NEXT_ACTION
+  };
 }
 function restoreDeadOwnerIntegration(input, prior, plan, dependencies) {
   if (!plan.integration || typeof plan.integration.completedAt === "number")
@@ -70910,6 +70958,7 @@ function retainRefusal(registry2, prior, refusal) {
     registry2.recordStartupCleanupRefusal(prior, {
       code: refusal.code,
       reason: refusal.message,
+      ...refusal.cause ? { cause: refusal.cause } : {},
       ...refusal.nextAction ? { nextAction: refusal.nextAction } : {}
     });
   } catch {
@@ -70943,6 +70992,7 @@ function publicRefusal(refusal) {
   return {
     code: refusal.code,
     message: authored ? sentence : `startup cleanup refused with ${refusal.code} and preserved the prior owner binding`,
+    ...refusal.code === "METRO_CLEANUP_PENDING" && refusal.cause === "managed-metro-stop-proof-missing" ? { cause: refusal.cause } : {},
     nextAction: authored ? refusal.nextAction ?? fallback : fallback
   };
 }
@@ -70951,6 +71001,7 @@ function refusalOf(error2) {
     return publicRefusal({
       code: error2.code,
       message: error2.message,
+      ...error2.details?.cause === "managed-metro-stop-proof-missing" ? { cause: error2.details.cause } : {},
       ...error2.details?.nextAction ? { nextAction: error2.details.nextAction } : {}
     });
   }

@@ -2675,6 +2675,41 @@ export async function stopManagedMetro(
     'probeBirth' | 'probeListener' | 'removeEvidenceSocket' | 'signalTree' | 'wait'
   > = {},
 ): Promise<boolean> {
+  if (!verifyManagedMetroStopProof(binding, input)) return false;
+  const authenticatedBinding = binding as Partial<ManagedMetroBinding> & {
+    mode: 'managed';
+    port: number;
+    pid: number;
+    birth: string;
+    launcherPid: number;
+    launcherBirth: string;
+    instanceId: string;
+    runtimeEvidencePath: string;
+    runtimeEvidenceSocket: string;
+    managementProof: string;
+  };
+  const stopped = await stopManagedMetroProcesses(
+    {
+      port: authenticatedBinding.port,
+      launcher: {
+        pid: authenticatedBinding.launcherPid,
+        birth: authenticatedBinding.launcherBirth,
+      },
+      listener: { pid: authenticatedBinding.pid, birth: authenticatedBinding.birth },
+    },
+    dependencies,
+  );
+  if (!stopped) return false;
+  return removeManagedMetroEvidenceSocketSafely(
+    authenticatedBinding.runtimeEvidenceSocket,
+    dependencies,
+  );
+}
+
+export function verifyManagedMetroStopProof(
+  binding: Partial<ManagedMetroBinding> | Record<string, unknown> | null | undefined,
+  input: { sessionId: string; signerCapability: string },
+): boolean {
   if (
     binding?.mode !== 'managed' ||
     typeof binding.port !== 'number' ||
@@ -2777,16 +2812,7 @@ export async function stopManagedMetro(
   ) {
     return false;
   }
-  const stopped = await stopManagedMetroProcesses(
-    {
-      port: binding.port,
-      launcher: { pid: binding.launcherPid, birth: binding.launcherBirth },
-      listener: { pid: binding.pid, birth: binding.birth },
-    },
-    dependencies,
-  );
-  if (!stopped) return false;
-  return removeManagedMetroEvidenceSocketSafely(binding.runtimeEvidenceSocket, dependencies);
+  return true;
 }
 
 export async function stopManagedMetroWithEvidence(
@@ -2804,9 +2830,7 @@ export async function stopManagedMetroWithEvidence(
   > = {},
 ): Promise<ManagedMetroCleanupResult> {
   const proofAuthenticated =
-    binding !== null &&
-    binding !== undefined &&
-    verifyManagedMetroManagementProof(binding as Record<string, unknown>, input);
+    binding !== null && binding !== undefined && verifyManagedMetroStopProof(binding, input);
   const stopped = await stopManagedMetro(binding, input, dependencies);
   const authenticated = proofAuthenticated || stopped;
   let evidence = inspectManagedMetroCleanupEvidence(

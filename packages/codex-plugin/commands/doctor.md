@@ -83,7 +83,10 @@ is conservatively treated as live), `startupCleanupBlocked` (the owner is proven
 an obligation such as `RUNNER_ADOPTION_REQUIRED` could not be discharged), or
 `ownerIsThisRoot: false`, whose `ownerMismatch` says which: `app-root` (a proven-dead owner
 of another app root in this worktree) or `source-identity` (the same app root under different
-declared manifests). Report a non-zero `abandonedContenders` too. Print the supported repair,
+declared manifests). Report a non-zero `abandonedContenders` too. When
+`startupCleanupBlocked.cause` is `managed-metro-stop-proof-missing`, report its cause and
+`nextAction` verbatim and do not print or run a restart or repair command; follow the
+`using-rn-dev-agent` skill section "Session ownership recovery". Otherwise, print the supported repair,
 `node <package-root>/rn-dev-agent-core/dist/session-doctor.js repair`, but do not execute
 it from doctor. Print it rooted where it can succeed: for `ownerMismatch: app-root` that is
 the reported `ownerAppRoot`, because repair from the current root can never release another

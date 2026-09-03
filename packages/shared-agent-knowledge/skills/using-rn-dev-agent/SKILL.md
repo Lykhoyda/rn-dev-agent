@@ -296,6 +296,7 @@ grouped sessions do not.
 | `recoveryRequirement.requirement` | What it means | What to do |
 |---|---|---|
 | `transport-restart` | the blocking claim is gone, or its owner is proven dead | run the remedy the `nextAction` names — interactive clients reconnect with `/mcp`, headless clients run the packaged recovery command (below). **Unless `startupCleanupBlocked` is also present**, which means startup cleanup refused for a stated reason and another restart will not clear it. Resolve that reason first. |
+| `unrecoverable-in-band` | the proven-dead owner's cleanup obligation has lost evidence that no supported action can reconstruct | preserve the authority state and report the `startupCleanupBlocked` code, cause, and guidance; restarting or running repair cannot discharge it |
 | `attach` | the prior owner is live, or its identity cannot be proven | use that session, or work in a separate worktree. A live or unprovable owner is never adopted |
 | `adoption` (legacy sessions only) | the prior owner is proven dead and minted an adoption handle | follow the handle named in the `nextAction` |
 

@@ -38,8 +38,9 @@ green, yellow (a proven-dead owner of this exact root, which the next transport
 start releases on its own), or red. A red report names the exact wedge — an
 owner whose process identity cannot be proven, a retained `startupCleanupBlocked`
 obligation, or an owner belonging to a different app root — instead of a generic
-stale-lock story, and names the supported repair command rooted where it can
-succeed. Only a *proven*-dead owner is ever released; see
+stale-lock story. It names the supported repair command when recovery remains
+possible; `managed-metro-stop-proof-missing` is diagnostics-only and must be
+reported without running repair. Only a *proven*-dead owner is ever released; see
 [recovering a wedged source root](../../session-authority/#recovering-a-wedged-source-root).
 
 <Aside type="caution" title="Strictly read-only">
