@@ -32,6 +32,7 @@ import {
   type StartupCleanupBlockerCause,
   type StartupCleanupResource,
   type StartupOwnerCleanupPlan,
+  UNRECOVERABLE_LIVE_METRO_CLEANUP_NEXT_ACTION,
   UNRECOVERABLE_METRO_CLEANUP_NEXT_ACTION,
 } from './registry.js';
 import type { SourceIdentity } from './source-identity.js';
@@ -190,20 +191,19 @@ async function completeObligations(
         ) => stopManagedMetro(binding as Partial<ManagedMetroBinding>, stopInput));
       const stopped = await stop(entry, { sessionId: prior.sessionId, signerCapability });
       if (!stopped) {
-        if (
-          managedMetroStopProofMissing(
-            entry,
-            { sessionId: prior.sessionId, signerCapability },
-            dependencies,
-          )
-        ) {
+        const proofMissing = managedMetroStopProofMissing(
+          entry,
+          { sessionId: prior.sessionId, signerCapability },
+          dependencies,
+        );
+        if (proofMissing) {
           throw new SessionAuthorityError(
             'METRO_CLEANUP_PENDING',
             'managed Metro could not be stopped with exact process authority',
             undefined,
             {
               cause: 'managed-metro-stop-proof-missing',
-              nextAction: UNRECOVERABLE_METRO_CLEANUP_NEXT_ACTION,
+              nextAction: proofMissing.nextAction,
             },
           );
         }
@@ -217,23 +217,35 @@ async function completeObligations(
   }
 }
 
+/** Proof loss is classified on its own; completed cleanup only softens the wording. */
 function managedMetroStopProofMissing(
   binding: Record<string, unknown>,
   input: { sessionId: string; signerCapability: string },
   dependencies: StartupCleanupDependencies,
-): boolean {
+): { nextAction: string } | null {
+  let authenticated: boolean;
   try {
-    const authenticated = (dependencies.verifyManagedMetroStopProof ?? verifyManagedMetroStopProof)(
+    authenticated = (dependencies.verifyManagedMetroStopProof ?? verifyManagedMetroStopProof)(
       binding,
       input,
     );
-    const evidence = (
-      dependencies.inspectManagedMetroCleanupEvidence ?? inspectManagedMetroCleanupEvidence
-    )(binding);
-    return !authenticated && evidence.complete;
   } catch {
-    return false;
+    return null;
   }
+  if (authenticated) return null;
+  let stopObserved = false;
+  try {
+    stopObserved = (
+      dependencies.inspectManagedMetroCleanupEvidence ?? inspectManagedMetroCleanupEvidence
+    )(binding).complete;
+  } catch {
+    stopObserved = false;
+  }
+  return {
+    nextAction: stopObserved
+      ? UNRECOVERABLE_METRO_CLEANUP_NEXT_ACTION
+      : UNRECOVERABLE_LIVE_METRO_CLEANUP_NEXT_ACTION,
+  };
 }
 
 function restoreDeadOwnerIntegration(

@@ -258,6 +258,10 @@ export type StartupCleanupBlockerCause = 'managed-metro-stop-proof-missing';
 export const UNRECOVERABLE_METRO_CLEANUP_NEXT_ACTION =
   'Managed Metro cleanup cannot be discharged because its authenticated stop proof is unavailable. No supported in-band recovery action can reconstruct that proof; preserve the authority state and report METRO_CLEANUP_PENDING.';
 
+// The proof is gone either way; only the observed liveness of the recorded Metro differs.
+export const UNRECOVERABLE_LIVE_METRO_CLEANUP_NEXT_ACTION =
+  'Managed Metro cleanup cannot be discharged because its authenticated stop proof is unavailable, and the recorded Metro listener may still be running on its recorded port. No supported in-band recovery action can reconstruct that proof; preserve the authority state and report METRO_CLEANUP_PENDING.';
+
 export interface StartupCleanupBlocker {
   code: string;
   reason: string;

@@ -536,6 +536,7 @@ test('GH#801: missing managed-Metro stop proof is reported as unrecoverable in-b
     missingRequirement.nextAction,
     /reconnect|restart|session-doctor\.js" repair/i,
   );
+  assert.doesNotMatch(missingRequirement.nextAction, /may still be running/i);
   const priorStatus = missingProof.registry.getSessionStatus('prior-owner');
   assert.ok(priorStatus);
   assert.equal(
@@ -560,6 +561,44 @@ test('GH#801: missing managed-Metro stop proof is reported as unrecoverable in-b
   assert.equal(
     (projected.startupCleanupBlocked as { cause?: string }).cause,
     'managed-metro-stop-proof-missing',
+  );
+
+  const liveListener = contenderFacing('mismatch');
+  const liveOutcome = await runStartupOwnerCleanup(cleanupInput(liveListener), {
+    ...executorDeps(),
+    stopManagedMetro: async () => false,
+    verifyManagedMetroStopProof: () => false,
+    inspectManagedMetroCleanupEvidence: () => ({
+      complete: false,
+      launcher: 'present',
+      listener: 'present',
+      port: { status: 'listening', pid: 9914 },
+      evidenceSocket: 'present',
+    }),
+  });
+  assert.equal(liveOutcome.status, 'refused');
+  assert.equal(liveOutcome.refusal?.code, 'METRO_CLEANUP_PENDING');
+  const liveRequirement = liveListener.registry.inspectRecoveryRequirement('contender');
+  assert.equal(liveRequirement.requirement, 'unrecoverable-in-band');
+  assert.equal(liveRequirement.startupCleanupBlocked?.cause, 'managed-metro-stop-proof-missing');
+  assert.match(liveRequirement.nextAction, /no supported in-band recovery/i);
+  assert.match(liveRequirement.nextAction, /may still be running/i);
+  assert.doesNotMatch(liveRequirement.nextAction, /reconnect|restart|session-doctor\.js" repair/i);
+  const liveOwnerStatus = liveListener.registry.getSessionStatus('prior-owner');
+  assert.ok(liveOwnerStatus);
+  assert.equal(
+    (
+      liveOwnerStatus.bindings.startupCleanup as {
+        obligations?: { metro?: { completedAt?: number | null } };
+      }
+    ).obligations?.metro?.completedAt,
+    null,
+    'a still-running listener does not discharge the cleanup obligation',
+  );
+  assert.equal(
+    liveListener.registry.getClaim('source', 'worktree-1')?.sessionId,
+    'prior-owner',
+    'a still-running listener does not release authority',
   );
 
   const legacy = contenderFacing('mismatch');

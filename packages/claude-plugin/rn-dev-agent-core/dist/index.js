@@ -25382,7 +25382,7 @@ function openSessionRegistry(path, dependencies) {
     throw error2;
   }
 }
-var OWNER_IDENTITY_REFUSAL_REASONS, INITIALIZATION_WAIT2, AUTHORITY_REGISTRY_SCHEMA_VERSION, SessionAuthorityError, RECOVERY_HANDLE_TTL_MS, RECOVERY_HANDLE_RENEW_MS, UNRECOVERABLE_METRO_CLEANUP_NEXT_ACTION, errorAxes, errorNextActions, conflictCodes, SessionRegistry;
+var OWNER_IDENTITY_REFUSAL_REASONS, INITIALIZATION_WAIT2, AUTHORITY_REGISTRY_SCHEMA_VERSION, SessionAuthorityError, RECOVERY_HANDLE_TTL_MS, RECOVERY_HANDLE_RENEW_MS, UNRECOVERABLE_METRO_CLEANUP_NEXT_ACTION, UNRECOVERABLE_LIVE_METRO_CLEANUP_NEXT_ACTION, errorAxes, errorNextActions, conflictCodes, SessionRegistry;
 var init_registry = __esm({
   "packages/rn-dev-agent-core/dist/session/registry.js"() {
     "use strict";
@@ -25420,6 +25420,7 @@ var init_registry = __esm({
     RECOVERY_HANDLE_TTL_MS = 5 * 6e4;
     RECOVERY_HANDLE_RENEW_MS = 6e4;
     UNRECOVERABLE_METRO_CLEANUP_NEXT_ACTION = "Managed Metro cleanup cannot be discharged because its authenticated stop proof is unavailable. No supported in-band recovery action can reconstruct that proof; preserve the authority state and report METRO_CLEANUP_PENDING.";
+    UNRECOVERABLE_LIVE_METRO_CLEANUP_NEXT_ACTION = "Managed Metro cleanup cannot be discharged because its authenticated stop proof is unavailable, and the recorded Metro listener may still be running on its recorded port. No supported in-band recovery action can reconstruct that proof; preserve the authority state and report METRO_CLEANUP_PENDING.";
     errorAxes = {
       SESSION_AUTHORITY_REQUIRED: "C",
       SESSION_OWNER_LOST: "C",
@@ -70880,10 +70881,11 @@ async function completeObligations(registry2, prior, dependencies) {
       const stop = dependencies.stopManagedMetro ?? ((binding, stopInput) => stopManagedMetro(binding, stopInput));
       const stopped = await stop(entry, { sessionId: prior.sessionId, signerCapability });
       if (!stopped) {
-        if (managedMetroStopProofMissing(entry, { sessionId: prior.sessionId, signerCapability }, dependencies)) {
+        const proofMissing = managedMetroStopProofMissing(entry, { sessionId: prior.sessionId, signerCapability }, dependencies);
+        if (proofMissing) {
           throw new SessionAuthorityError("METRO_CLEANUP_PENDING", "managed Metro could not be stopped with exact process authority", void 0, {
             cause: "managed-metro-stop-proof-missing",
-            nextAction: UNRECOVERABLE_METRO_CLEANUP_NEXT_ACTION
+            nextAction: proofMissing.nextAction
           });
         }
         throw new SessionAuthorityError("METRO_CLEANUP_PENDING", "managed Metro could not be stopped with exact process authority");
@@ -70893,13 +70895,23 @@ async function completeObligations(registry2, prior, dependencies) {
   }
 }
 function managedMetroStopProofMissing(binding, input, dependencies) {
+  let authenticated;
   try {
-    const authenticated = (dependencies.verifyManagedMetroStopProof ?? verifyManagedMetroStopProof)(binding, input);
-    const evidence = (dependencies.inspectManagedMetroCleanupEvidence ?? inspectManagedMetroCleanupEvidence)(binding);
-    return !authenticated && evidence.complete;
+    authenticated = (dependencies.verifyManagedMetroStopProof ?? verifyManagedMetroStopProof)(binding, input);
   } catch {
-    return false;
+    return null;
   }
+  if (authenticated)
+    return null;
+  let stopObserved = false;
+  try {
+    stopObserved = (dependencies.inspectManagedMetroCleanupEvidence ?? inspectManagedMetroCleanupEvidence)(binding).complete;
+  } catch {
+    stopObserved = false;
+  }
+  return {
+    nextAction: stopObserved ? UNRECOVERABLE_METRO_CLEANUP_NEXT_ACTION : UNRECOVERABLE_LIVE_METRO_CLEANUP_NEXT_ACTION
+  };
 }
 function restoreDeadOwnerIntegration(input, prior, plan, dependencies) {
   if (!plan.integration || typeof plan.integration.completedAt === "number")
