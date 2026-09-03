@@ -15,7 +15,10 @@ function baseDeps(over = {}) {
     captureScreenshot: async (_p, path) => ({ ok: true, path }),
     readRoute: async () => 'Home',
     readShotFile: () => ({ buf: Buffer.from([1]), contentType: 'image/jpeg' }),
-    pushLive: (f) => pushed.push(f),
+    pushLive: (f) => {
+      pushed.push(f);
+      return { shot: !!f.shot, route: !!f.route };
+    },
     tmpPath: () => '/tmp/x.jpg',
     ...over,
   };
@@ -25,7 +28,8 @@ function baseDeps(over = {}) {
 test('captures shot + route and pushes once', async () => {
   _resetLiveCaptureForTest();
   const { deps, pushed } = baseDeps();
-  await maybeCaptureLiveFrame(deps);
+  const outcome = await maybeCaptureLiveFrame(deps);
+  assert.deepEqual(outcome, { ok: true, pushed: 'frame' });
   assert.equal(pushed.length, 1);
   assert.equal(pushed[0].route, 'Home');
   assert.ok(pushed[0].shot);
@@ -59,7 +63,8 @@ test('refuses truthfully when no device target is resolvable', async () => {
 test('route read failure (CDP down) still pushes the shot', async () => {
   _resetLiveCaptureForTest();
   const { deps, pushed } = baseDeps({ readRoute: async () => null });
-  await maybeCaptureLiveFrame(deps);
+  const outcome = await maybeCaptureLiveFrame(deps);
+  assert.deepEqual(outcome, { ok: true, pushed: 'frame' });
   assert.equal(pushed.length, 1);
   assert.ok(pushed[0].shot);
   assert.equal(pushed[0].route, undefined);
@@ -68,7 +73,8 @@ test('route read failure (CDP down) still pushes the shot', async () => {
 test('screenshot failure still pushes the route', async () => {
   _resetLiveCaptureForTest();
   const { deps, pushed } = baseDeps({ captureScreenshot: async () => ({ ok: false }) });
-  await maybeCaptureLiveFrame(deps);
+  const outcome = await maybeCaptureLiveFrame(deps);
+  assert.deepEqual(outcome, { ok: true, pushed: 'frame' });
   assert.equal(pushed.length, 1);
   assert.equal(pushed[0].shot, undefined);
   assert.equal(pushed[0].route, 'Home');

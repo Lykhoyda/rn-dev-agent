@@ -25,7 +25,10 @@ function deps({ mirrorActive, route = '/home', screenshotAvailable = true }) {
         return route;
       },
       readShotFile: () => ({ buf: Buffer.from('x'), contentType: 'image/jpeg' }),
-      pushLive: (f) => calls.pushed.push(f),
+      pushLive: (f) => {
+        calls.pushed.push(f);
+        return { shot: !!f.shot, route: !!f.route };
+      },
       tmpPath: () => '/tmp/x.jpg',
       isMirrorActive: () => mirrorActive,
       reportBlocked: (outcome) => calls.blocked.push(outcome),
@@ -36,7 +39,8 @@ function deps({ mirrorActive, route = '/home', screenshotAvailable = true }) {
 test('mirror streaming → screenshot skipped, route still read and pushed', async () => {
   _resetLiveCaptureForTest();
   const { calls, deps: d } = deps({ mirrorActive: true });
-  await maybeCaptureLiveFrame(d);
+  const outcome = await maybeCaptureLiveFrame(d);
+  assert.deepEqual(outcome, { ok: true, pushed: 'frame' });
   assert.equal(calls.screenshot, 0, 'redundant screenshot skipped while mirroring');
   assert.equal(calls.route, 1);
   assert.deepEqual(calls.pushed, [{ route: '/home' }]);
@@ -45,7 +49,8 @@ test('mirror streaming → screenshot skipped, route still read and pushed', asy
 test('mirror not streaming → screenshot captured as before', async () => {
   _resetLiveCaptureForTest();
   const { calls, deps: d } = deps({ mirrorActive: false });
-  await maybeCaptureLiveFrame(d);
+  const outcome = await maybeCaptureLiveFrame(d);
+  assert.deepEqual(outcome, { ok: true, pushed: 'frame' });
   assert.equal(calls.screenshot, 1);
   assert.equal(calls.pushed.length, 1);
   assert.ok(calls.pushed[0].shot);
