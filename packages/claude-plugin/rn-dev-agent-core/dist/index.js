@@ -74029,25 +74029,25 @@ var Recorder = class {
   }
   pushLive(frame) {
     const ev = { type: "live" };
-    let changed = false;
+    const emitted = { shot: false, route: false };
     if (frame.shot && frame.shot.buf.length > 0 && frame.shot.buf.length <= MAX_SHOT_BYTES) {
       this.liveShotData = frame.shot;
       ev.shotSeq = ++this.liveSeqVal;
-      changed = true;
+      emitted.shot = true;
     }
     if (typeof frame.route === "string" && frame.route.length > 0) {
       ev.route = frame.route;
-      changed = true;
+      emitted.route = true;
     }
-    if (!changed)
-      return false;
+    if (!emitted.shot && !emitted.route)
+      return emitted;
     for (const fn of this.subs) {
       try {
         fn(ev);
       } catch {
       }
     }
-    return true;
+    return emitted;
   }
   push(ev) {
     for (const fn of this.subs) {
@@ -92265,7 +92265,7 @@ async function runCapture(deps) {
     try {
       const route = await deps.readRoute();
       if (route) {
-        if (deps.pushLive({ route }))
+        if (deps.pushLive({ route }).route)
           return { ok: true, pushed: "frame" };
       }
     } catch {
@@ -92312,9 +92312,12 @@ async function runCapture(deps) {
   } catch {
   }
   if (frame.shot || frame.route) {
-    if (deps.pushLive(frame))
+    const emitted = deps.pushLive(frame);
+    if (frame.shot && !emitted.shot) {
+      captureDetail = "the Recorder rejected the captured frame as empty or oversized";
+    } else if (emitted.shot || emitted.route) {
       return { ok: true, pushed: "frame" };
-    captureDetail = "the Recorder rejected the captured frame as empty or oversized";
+    }
   }
   return { ok: false, code: "LIVE_FRAME_UNAVAILABLE", reason: captureDetail };
 }

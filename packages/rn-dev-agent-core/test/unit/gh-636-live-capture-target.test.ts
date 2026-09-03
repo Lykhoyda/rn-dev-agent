@@ -168,3 +168,26 @@ test('the route leg alone still lands a frame when pixels are unavailable', asyn
   assert.deepEqual(outcome, { ok: true, pushed: 'frame' });
   assert.equal(blocked.length, 0);
 });
+
+test('a rejected oversized shot is blocked even when a good route lands in the same call', async () => {
+  _resetLiveCaptureForTest();
+  const { deps, recorder, blocked } = liveDepsFor({
+    getClient: () => ({ isConnected: true, connectedTarget: null }),
+    captureScreenshot: async (_platform, path) => ({ ok: true, path }),
+    readShotFile: () => ({ buf: Buffer.alloc(4_000_001), contentType: 'image/jpeg' }),
+    readRoute: async () => 'Home',
+  });
+  const events: Array<{ shotSeq?: number }> = [];
+  recorder.attach((ev) => events.push(ev as { shotSeq?: number }));
+  const outcome = await maybeCaptureLiveFrame(deps);
+  assert.equal(outcome.ok, false);
+  if (outcome.ok) assert.fail('a rejected shot must not report a pushed frame');
+  assert.equal(outcome.code, 'LIVE_FRAME_UNAVAILABLE');
+  assert.match(outcome.reason, /empty or oversized/);
+  assert.deepEqual(blocked, [{ code: outcome.code, reason: outcome.reason }]);
+  assert.equal(recorder.getLiveScreenshot(), undefined, 'no pixels stored');
+  assert.ok(
+    events.every((ev) => ev.shotSeq === undefined),
+    'shotSeq never advanced',
+  );
+});

@@ -11,7 +11,7 @@ test('pushLive stores latest frame + route and emits a {type:live} event, not a 
 
   const emitted = rec.pushLive({ shot: { buf, contentType: 'image/jpeg' }, route: 'Home' });
 
-  assert.equal(emitted, true);
+  assert.deepEqual(emitted, { shot: true, route: true });
   assert.equal(got.length, 1, 'one subscriber event');
   assert.equal(got[0].type, 'live');
   assert.equal(got[0].route, 'Home');
@@ -38,7 +38,7 @@ test('pushLive with neither shot nor route is a no-op (no event)', () => {
   const got = [];
   rec.attach((ev) => got.push(ev));
   const emitted = rec.pushLive({});
-  assert.equal(emitted, false);
+  assert.deepEqual(emitted, { shot: false, route: false });
   assert.equal(got.length, 0);
 });
 
@@ -48,7 +48,7 @@ test('pushLive rejects empty and oversized screenshots without a route', () => {
     const got = [];
     rec.attach((ev) => got.push(ev));
     const emitted = rec.pushLive({ shot: { buf, contentType: 'image/jpeg' } });
-    assert.equal(emitted, false);
+    assert.deepEqual(emitted, { shot: false, route: false });
     assert.equal(rec.getLiveScreenshot(), undefined);
     assert.deepEqual(got, []);
   }
@@ -71,13 +71,13 @@ test('clear() resets the live slot', () => {
   assert.equal(rec.getLiveScreenshot(), undefined);
 });
 
-test('pushLive drops an oversized shot but still pushes the route', () => {
+test('pushLive drops an oversized shot but still pushes the route, reporting each leg', () => {
   const rec = new Recorder();
   const got = [];
   rec.attach((ev) => got.push(ev));
   const huge = Buffer.alloc(4_000_001); // > MAX_SHOT_BYTES
   const emitted = rec.pushLive({ shot: { buf: huge, contentType: 'image/jpeg' }, route: 'Big' });
-  assert.equal(emitted, true);
+  assert.deepEqual(emitted, { shot: false, route: true });
   assert.equal(rec.getLiveScreenshot(), undefined, 'oversized shot not stored');
   assert.equal(got.length, 1);
   assert.equal(got[0].shotSeq, undefined, 'no shotSeq when shot dropped');

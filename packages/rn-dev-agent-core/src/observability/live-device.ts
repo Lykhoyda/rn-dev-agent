@@ -171,7 +171,10 @@ export interface LiveCaptureDeps {
   ) => Promise<{ ok: true; path: string } | { ok: false }>;
   readRoute: () => Promise<string | null>;
   readShotFile: (path: string) => { buf: Buffer; contentType: string } | null;
-  pushLive: (frame: { shot?: { buf: Buffer; contentType: string }; route?: string }) => boolean;
+  pushLive: (frame: { shot?: { buf: Buffer; contentType: string }; route?: string }) => {
+    shot: boolean;
+    route: boolean;
+  };
   tmpPath: () => string;
   /** Skip redundant screenshots while the MJPEG mirror supplies pixels. */
   isMirrorActive?: () => boolean;
@@ -226,7 +229,7 @@ async function runCapture(deps: LiveCaptureDeps): Promise<LiveCaptureOutcome> {
     try {
       const route = await deps.readRoute();
       if (route) {
-        if (deps.pushLive({ route })) return { ok: true, pushed: 'frame' };
+        if (deps.pushLive({ route }).route) return { ok: true, pushed: 'frame' };
       }
     } catch {
       return { ok: true, pushed: 'skipped', reason: 'mirror-active' };
@@ -271,8 +274,12 @@ async function runCapture(deps: LiveCaptureDeps): Promise<LiveCaptureOutcome> {
     /* route best-effort — CDP is stale by design right after a flow */
   }
   if (frame.shot || frame.route) {
-    if (deps.pushLive(frame)) return { ok: true, pushed: 'frame' };
-    captureDetail = 'the Recorder rejected the captured frame as empty or oversized';
+    const emitted = deps.pushLive(frame);
+    if (frame.shot && !emitted.shot) {
+      captureDetail = 'the Recorder rejected the captured frame as empty or oversized';
+    } else if (emitted.shot || emitted.route) {
+      return { ok: true, pushed: 'frame' };
+    }
   }
   return { ok: false, code: 'LIVE_FRAME_UNAVAILABLE', reason: captureDetail };
 }
