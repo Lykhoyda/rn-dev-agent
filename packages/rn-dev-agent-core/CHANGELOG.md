@@ -1,5 +1,13 @@
 # rn-dev-agent-core
 
+## 1.0.4
+
+### Patch Changes
+
+- abd7562: Report managed-Metro cleanup obligations with missing stop-proof evidence as unrecoverable in-band while preserving the obligation and authority fence.
+- 4047a2e: Resolve the Observe Device pane's live frame through the same authority-fenced device target as the mirror, so a parked runner or stale CDP no longer leaves the pane blank after `cdp_run_action`.
+- fa85d1f: Expose observed replay runtime-state writes with exact sidecar paths—session-private when fenced and project-local under `.rn-agent/state` for unfenced compatibility—and document the current fresh-session action history.
+
 ## 1.0.3
 
 ### Patch Changes
