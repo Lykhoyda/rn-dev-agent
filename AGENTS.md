@@ -174,6 +174,13 @@ alive for such callers.
   but must not pass it as a gate argument, since `bindSourcePaths` fences
   a supplied `projectRoot` to `status.source.appRoot` and would refuse the
   sibling-workspace primary checkout.
+- The Observe Device pane has exactly one device-target owner:
+  `buildMirrorTargetResolver` (`src/observability/mirror/target.ts`), shared by
+  the MJPEG mirror and the per-tool live frame (`maybeCaptureLiveFrame`). It
+  prefers the authority-proven device binding, so a parked runner or a stale CDP
+  target cannot erase the device; pixels then come from `tryRawScreenshot`
+  (simctl/adb), which needs neither. Never reintroduce a second platform/device
+  resolution for Observe capture, and never push a frame the resolver refused.
 - Metro/bundle authority has exactly one owner: `pinExactDevClient`
   (`src/session/dev-client-authority.ts`), which binds only when the actual
   first bundle exposes this session's signed marker for this Metro instance.

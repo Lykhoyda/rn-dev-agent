@@ -11,19 +11,18 @@ import { Recorder } from '../../dist/observability/recorder.js';
 const baseInput = (over = {}) => ({
   recorder: { hasSubscribers: () => true, pushLive: () => {} },
   isFlowActive: () => false,
-  getActiveSession: () => null,
-  getClient: () => ({ isConnected: true, connectedTarget: null }),
+  resolveTarget: async () => ({ ok: false, reason: 'no device' }),
+  getClient: () => ({ isConnected: true }),
   captureScreenshot: async () => ({ ok: false }),
   readRoute: async () => null,
   readShotFile: () => null,
   ...over,
 });
 
-test('getPlatform prefers a valid agent-device session platform', () => {
-  const deps = buildLiveDeps(
-    baseInput({ getActiveSession: () => ({ platform: 'ios', deviceId: 'UDID-1' }) }),
-  );
-  assert.equal(deps.getPlatform(), 'ios');
+test('resolveTarget is passed straight through to the capture deps', async () => {
+  const resolution = { ok: true, target: { platform: 'ios', deviceId: 'UDID-1' } };
+  const deps = buildLiveDeps(baseInput({ resolveTarget: async () => resolution }));
+  assert.deepEqual(await deps.resolveTarget(), resolution);
 });
 
 // Regression: buildLiveDeps must pass a BOUND pushLive. A raw `recorder.pushLive`
@@ -37,8 +36,8 @@ test('pushLive is bound to the recorder — real frame lands via the capture pat
   const deps = buildLiveDeps({
     recorder: rec,
     isFlowActive: () => false,
-    getActiveSession: () => ({ platform: 'ios' }),
-    getClient: () => ({ isConnected: false, connectedTarget: { platform: 'ios' } }),
+    resolveTarget: async () => ({ ok: true, target: { platform: 'ios', deviceId: 'UDID-1' } }),
+    getClient: () => ({ isConnected: false }),
     captureScreenshot: async (_p, path) => ({ ok: true, path }),
     readRoute: async () => null,
     readShotFile: () => ({ buf: Buffer.from([0xff, 0xd8, 0xff]), contentType: 'image/jpeg' }),
@@ -49,31 +48,11 @@ test('pushLive is bound to the recorder — real frame lands via the capture pat
   assert.deepEqual(shot.buf, Buffer.from([0xff, 0xd8, 0xff]));
 });
 
-test('getPlatform falls back to the connected CDP target when there is no session (the reporter flow)', () => {
-  const deps = buildLiveDeps(
-    baseInput({
-      getActiveSession: () => null,
-      getClient: () => ({ isConnected: true, connectedTarget: { platform: 'ios' } }),
-    }),
-  );
-  assert.equal(deps.getPlatform(), 'ios');
-});
-
-test('getPlatform returns null when neither session nor CDP target yields ios/android', () => {
-  const deps = buildLiveDeps(
-    baseInput({
-      getActiveSession: () => ({ platform: 'web' }),
-      getClient: () => ({ isConnected: true, connectedTarget: { platform: undefined } }),
-    }),
-  );
-  assert.equal(deps.getPlatform(), null);
-});
-
 test('readRoute returns null when CDP disconnected (no eval attempted)', async () => {
   let called = false;
   const deps = buildLiveDeps(
     baseInput({
-      getClient: () => ({ isConnected: false, connectedTarget: null }),
+      getClient: () => ({ isConnected: false }),
       readRoute: async () => {
         called = true;
         return 'X';

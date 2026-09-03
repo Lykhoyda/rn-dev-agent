@@ -2,6 +2,7 @@
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { classifyFamily } from './events.js';
+import type { MirrorTargetResolution } from './mirror/target.js';
 
 /**
  * GH #206: does THIS tool call change on-screen state (→ trigger a live
@@ -150,21 +151,35 @@ export function mayTriggerLiveCapture(tool: string): boolean {
   );
 }
 
+export type LiveCaptureOutcome =
+  | { ok: true; pushed: 'frame' }
+  | {
+      ok: true;
+      pushed: 'skipped';
+      reason: 'no-observers' | 'flow-active' | 'coalesced' | 'mirror-active';
+    }
+  | { ok: false; code: string; reason: string };
+
 export interface LiveCaptureDeps {
   hasObservers: () => boolean;
   isFlowActive: () => boolean;
-  getPlatform: () => 'ios' | 'android' | null;
+  resolveTarget: () => Promise<MirrorTargetResolution>;
   captureScreenshot: (
     platform: 'ios' | 'android',
     path: string,
+    deviceId: string,
   ) => Promise<{ ok: true; path: string } | { ok: false }>;
   readRoute: () => Promise<string | null>;
   readShotFile: (path: string) => { buf: Buffer; contentType: string } | null;
-  pushLive: (frame: { shot?: { buf: Buffer; contentType: string }; route?: string }) => void;
+  pushLive: (frame: { shot?: { buf: Buffer; contentType: string }; route?: string }) => {
+    shot: boolean;
+    route: boolean;
+  };
   tmpPath: () => string;
-  /** GH #206 + mirror spec: while the MJPEG mirror is streaming, the per-tool
-   * screenshot is redundant — the browser already sees live pixels. */
+  /** Skip redundant screenshots while the MJPEG mirror supplies pixels. */
   isMirrorActive?: () => boolean;
+  /** Truthful reporting seam: an unprovable frame is announced, never faked. */
+  reportBlocked?: (outcome: { code: string; reason: string }) => void;
 }
 
 let inFlight = false;
@@ -176,19 +191,21 @@ export function _resetLiveCaptureForTest(): void {
   pending = false;
 }
 
-export async function maybeCaptureLiveFrame(deps: LiveCaptureDeps): Promise<void> {
+export async function maybeCaptureLiveFrame(deps: LiveCaptureDeps): Promise<LiveCaptureOutcome> {
   try {
-    if (!deps.hasObservers() || deps.isFlowActive()) return;
+    if (!deps.hasObservers()) return { ok: true, pushed: 'skipped', reason: 'no-observers' };
+    if (deps.isFlowActive()) return { ok: true, pushed: 'skipped', reason: 'flow-active' };
     if (inFlight) {
       pending = true;
-      return;
+      return { ok: true, pushed: 'skipped', reason: 'coalesced' };
     }
     inFlight = true;
   } catch {
-    return;
+    return { ok: true, pushed: 'skipped', reason: 'no-observers' };
   }
+  let outcome: LiveCaptureOutcome;
   try {
-    await runCapture(deps);
+    outcome = await runCapture(deps);
   } finally {
     inFlight = false;
     if (pending) {
@@ -196,56 +213,94 @@ export async function maybeCaptureLiveFrame(deps: LiveCaptureDeps): Promise<void
       void maybeCaptureLiveFrame(deps);
     }
   }
+  if (!outcome.ok) {
+    try {
+      deps.reportBlocked?.({ code: outcome.code, reason: outcome.reason });
+    } catch {
+      /* reporting is best-effort; it must never mask the capture outcome */
+    }
+  }
+  return outcome;
 }
 
-async function runCapture(deps: LiveCaptureDeps): Promise<void> {
-  const platform = deps.getPlatform();
-  if (!platform) return;
-  const frame: { shot?: { buf: Buffer; contentType: string }; route?: string } = {};
-  if (!deps.isMirrorActive?.()) {
+async function runCapture(deps: LiveCaptureDeps): Promise<LiveCaptureOutcome> {
+  const mirrorActive = deps.isMirrorActive?.() === true;
+  if (mirrorActive) {
     try {
-      const shot = await deps.captureScreenshot(platform, deps.tmpPath());
-      if (shot.ok) {
-        const bytes = deps.readShotFile(shot.path);
-        if (bytes) frame.shot = bytes;
+      const route = await deps.readRoute();
+      if (route) {
+        if (deps.pushLive({ route }).route) return { ok: true, pushed: 'frame' };
       }
     } catch {
-      /* screenshot best-effort */
+      return { ok: true, pushed: 'skipped', reason: 'mirror-active' };
     }
+    return { ok: true, pushed: 'skipped', reason: 'mirror-active' };
+  }
+
+  let resolution: MirrorTargetResolution;
+  try {
+    resolution = await deps.resolveTarget();
+  } catch (error) {
+    return {
+      ok: false,
+      code: 'LIVE_TARGET_UNRESOLVED',
+      reason: error instanceof Error ? error.message : String(error),
+    };
+  }
+  if (!resolution.ok) {
+    return {
+      ok: false,
+      code: resolution.code ?? 'LIVE_TARGET_UNRESOLVED',
+      reason: resolution.reason,
+    };
+  }
+  const { platform, deviceId } = resolution.target;
+  const frame: { shot?: { buf: Buffer; contentType: string }; route?: string } = {};
+  let captureDetail = `the supported ${platform === 'ios' ? 'simctl' : 'adb'} capture produced no frame`;
+  try {
+    const shot = await deps.captureScreenshot(platform, deps.tmpPath(), deviceId);
+    if (shot.ok) {
+      const bytes = deps.readShotFile(shot.path);
+      if (bytes) frame.shot = bytes;
+      else captureDetail = 'the captured file could not be read back';
+    }
+  } catch (error) {
+    captureDetail = error instanceof Error ? error.message : String(error);
   }
   try {
     const route = await deps.readRoute();
     if (route) frame.route = route;
   } catch {
-    /* route best-effort */
+    /* route best-effort — CDP is stale by design right after a flow */
   }
-  if (frame.shot || frame.route) deps.pushLive(frame);
+  if (frame.shot || frame.route) {
+    const emitted = deps.pushLive(frame);
+    if (frame.shot && !emitted.shot) {
+      captureDetail = 'the Recorder rejected the captured frame as empty or oversized';
+    } else if (emitted.shot || emitted.route) {
+      return { ok: true, pushed: 'frame' };
+    }
+  }
+  return { ok: false, code: 'LIVE_FRAME_UNAVAILABLE', reason: captureDetail };
 }
 
 interface BuildLiveDepsInput {
   recorder: { hasSubscribers: () => boolean; pushLive: LiveCaptureDeps['pushLive'] };
   isFlowActive: () => boolean;
-  getActiveSession: () => { platform?: string } | null;
-  getClient: () => { isConnected: boolean; connectedTarget: { platform?: string } | null };
+  resolveTarget: () => Promise<MirrorTargetResolution>;
+  getClient: () => { isConnected: boolean };
   captureScreenshot: LiveCaptureDeps['captureScreenshot'];
   readRoute: (client: unknown) => Promise<string | null>;
   readShotFile: LiveCaptureDeps['readShotFile'];
   isMirrorActive?: () => boolean;
-}
-
-function asDevicePlatform(p: string | undefined): 'ios' | 'android' | null {
-  return p === 'ios' || p === 'android' ? p : null;
+  reportBlocked?: LiveCaptureDeps['reportBlocked'];
 }
 
 export function buildLiveDeps(input: BuildLiveDepsInput): LiveCaptureDeps {
   return {
     hasObservers: () => input.recorder.hasSubscribers(),
     isFlowActive: () => input.isFlowActive(),
-    getPlatform: () => {
-      const fromSession = asDevicePlatform(input.getActiveSession()?.platform);
-      if (fromSession) return fromSession;
-      return asDevicePlatform(input.getClient().connectedTarget?.platform);
-    },
+    resolveTarget: () => input.resolveTarget(),
     captureScreenshot: input.captureScreenshot,
     readRoute: async () => {
       const c = input.getClient();
@@ -253,12 +308,10 @@ export function buildLiveDeps(input: BuildLiveDepsInput): LiveCaptureDeps {
       return input.readRoute(c);
     },
     readShotFile: input.readShotFile,
-    // Arrow-wrap, NOT a bare method reference: `input.recorder.pushLive`
-    // detaches `this`, so the real Recorder.pushLive throws "this.subs is not
-    // iterable" when invoked as deps.pushLive(...). The live device gate caught
-    // this — the unit fakes used standalone arrows and missed it.
+    // Preserve Recorder.pushLive's `this` binding.
     pushLive: (frame) => input.recorder.pushLive(frame),
     tmpPath: () => join(tmpdir(), `rn-observe-live-${process.pid}.jpg`),
     isMirrorActive: input.isMirrorActive,
+    reportBlocked: input.reportBlocked,
   };
 }

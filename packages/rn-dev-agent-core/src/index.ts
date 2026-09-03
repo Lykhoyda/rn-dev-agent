@@ -710,33 +710,34 @@ setForeignGateUdidProvider(() => {
 const mirrorCfg = diagnosticContractProbe
   ? { enabled: false as const, fps: 0 }
   : resolveMirrorConfig();
+// Share one authority-fenced target resolver across both Device pane capture paths.
+const observeTargetResolver = buildMirrorTargetResolver({
+  getPlatform: () => {
+    const p = getActiveSession()?.platform ?? getClient().connectedTarget?.platform;
+    return p === 'ios' || p === 'android' ? p : null;
+  },
+  getSessionDeviceId: () => getActiveSession()?.deviceId ?? undefined,
+  // Keep authority sessions fail-closed when their device binding is missing.
+  getRegistryDeviceBinding: () =>
+    mapRegistryDeviceBinding(authorityRuntime.status(), authorityRuntime.available),
+  resolveIosUdid: () => resolveIosUdid(),
+  listAndroidSerials: async () => {
+    try {
+      const { stdout } = await execFileP('adb', ['devices'], {
+        timeout: 5000,
+        maxBuffer: 1024 * 1024,
+      });
+      return parseAllAdbDevices(stdout)
+        .filter((d) => d.state === 'device')
+        .map((d) => d.serial);
+    } catch {
+      return [];
+    }
+  },
+});
 const mirrorManager = mirrorCfg.enabled
   ? new MirrorManager({
-      resolveTarget: buildMirrorTargetResolver({
-        getPlatform: () => {
-          const p = getActiveSession()?.platform ?? getClient().connectedTarget?.platform;
-          return p === 'ios' || p === 'android' ? p : null;
-        },
-        getSessionDeviceId: () => getActiveSession()?.deviceId ?? undefined,
-        // GH #791: same fence as cdp discovery (PR #786) — an authority session
-        // without a proven device binding blocks the mirror instead of guessing.
-        getRegistryDeviceBinding: () =>
-          mapRegistryDeviceBinding(authorityRuntime.status(), authorityRuntime.available),
-        resolveIosUdid: () => resolveIosUdid(),
-        listAndroidSerials: async () => {
-          try {
-            const { stdout } = await execFileP('adb', ['devices'], {
-              timeout: 5000,
-              maxBuffer: 1024 * 1024,
-            });
-            return parseAllAdbDevices(stdout)
-              .filter((d) => d.state === 'device')
-              .map((d) => d.serial);
-          } catch {
-            return [];
-          }
-        },
-      }),
+      resolveTarget: observeTargetResolver,
       createSource: (t) =>
         createMirrorSource(t, mirrorCfg.fps, {
           firstFrameTimeoutMs: mirrorCfg.firstFrameTimeoutMs,
@@ -763,18 +764,10 @@ const liveEnabled = !diagnosticContractProbe && process.env.RN_OBSERVE_LIVE !== 
 const liveDeps = buildLiveDeps({
   recorder,
   isFlowActive: () => arbiter.flowActive || foreignFlowGate.lastActive,
-  getActiveSession,
+  resolveTarget: observeTargetResolver,
   getClient: () => getClient(),
-  captureScreenshot: (platform, path) => {
-    // GH #422: bind the live panel to the session device too — raw resolution
-    // refuses on multi-sim ambiguity instead of first-pick now.
-    const session = getActiveSession();
-    return tryRawScreenshot(
-      platform,
-      path,
-      session && session.platform === platform ? session.deviceId : undefined,
-    );
-  },
+  // Capture only the exact resolver-approved device.
+  captureScreenshot: (platform, path, deviceId) => tryRawScreenshot(platform, path, deviceId),
   readRoute: (c) => readLiveRoute(c as Parameters<typeof readLiveRoute>[0]),
   readShotFile: (path) => {
     try {
@@ -790,6 +783,8 @@ const liveDeps = buildLiveDeps({
     }
   },
   isMirrorActive: () => mirrorManager?.isStreaming() ?? false,
+  reportBlocked: ({ code, reason }) =>
+    logger.warn('Observe', `live frame unavailable (${code}): ${reason}`),
 });
 
 const registeredToolNames: string[] = [];

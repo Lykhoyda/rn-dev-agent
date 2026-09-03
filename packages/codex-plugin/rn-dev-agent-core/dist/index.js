@@ -74052,24 +74052,25 @@ var Recorder = class {
   }
   pushLive(frame) {
     const ev = { type: "live" };
-    let changed = false;
-    if (frame.shot && frame.shot.buf.length <= MAX_SHOT_BYTES) {
+    const emitted = { shot: false, route: false };
+    if (frame.shot && frame.shot.buf.length > 0 && frame.shot.buf.length <= MAX_SHOT_BYTES) {
       this.liveShotData = frame.shot;
       ev.shotSeq = ++this.liveSeqVal;
-      changed = true;
+      emitted.shot = true;
     }
     if (typeof frame.route === "string" && frame.route.length > 0) {
       ev.route = frame.route;
-      changed = true;
+      emitted.route = true;
     }
-    if (!changed)
-      return;
+    if (!emitted.shot && !emitted.route)
+      return emitted;
     for (const fn of this.subs) {
       try {
         fn(ev);
       } catch {
       }
     }
+    return emitted;
   }
   push(ev) {
     for (const fn of this.subs) {
@@ -92297,18 +92298,21 @@ var inFlight = false;
 var pending = false;
 async function maybeCaptureLiveFrame(deps) {
   try {
-    if (!deps.hasObservers() || deps.isFlowActive())
-      return;
+    if (!deps.hasObservers())
+      return { ok: true, pushed: "skipped", reason: "no-observers" };
+    if (deps.isFlowActive())
+      return { ok: true, pushed: "skipped", reason: "flow-active" };
     if (inFlight) {
       pending = true;
-      return;
+      return { ok: true, pushed: "skipped", reason: "coalesced" };
     }
     inFlight = true;
   } catch {
-    return;
+    return { ok: true, pushed: "skipped", reason: "no-observers" };
   }
+  let outcome;
   try {
-    await runCapture(deps);
+    outcome = await runCapture(deps);
   } finally {
     inFlight = false;
     if (pending) {
@@ -92316,22 +92320,59 @@ async function maybeCaptureLiveFrame(deps) {
       void maybeCaptureLiveFrame(deps);
     }
   }
-}
-async function runCapture(deps) {
-  const platform = deps.getPlatform();
-  if (!platform)
-    return;
-  const frame = {};
-  if (!deps.isMirrorActive?.()) {
+  if (!outcome.ok) {
     try {
-      const shot = await deps.captureScreenshot(platform, deps.tmpPath());
-      if (shot.ok) {
-        const bytes = deps.readShotFile(shot.path);
-        if (bytes)
-          frame.shot = bytes;
-      }
+      deps.reportBlocked?.({ code: outcome.code, reason: outcome.reason });
     } catch {
     }
+  }
+  return outcome;
+}
+async function runCapture(deps) {
+  const mirrorActive = deps.isMirrorActive?.() === true;
+  if (mirrorActive) {
+    try {
+      const route = await deps.readRoute();
+      if (route) {
+        if (deps.pushLive({ route }).route)
+          return { ok: true, pushed: "frame" };
+      }
+    } catch {
+      return { ok: true, pushed: "skipped", reason: "mirror-active" };
+    }
+    return { ok: true, pushed: "skipped", reason: "mirror-active" };
+  }
+  let resolution;
+  try {
+    resolution = await deps.resolveTarget();
+  } catch (error2) {
+    return {
+      ok: false,
+      code: "LIVE_TARGET_UNRESOLVED",
+      reason: error2 instanceof Error ? error2.message : String(error2)
+    };
+  }
+  if (!resolution.ok) {
+    return {
+      ok: false,
+      code: resolution.code ?? "LIVE_TARGET_UNRESOLVED",
+      reason: resolution.reason
+    };
+  }
+  const { platform, deviceId } = resolution.target;
+  const frame = {};
+  let captureDetail = `the supported ${platform === "ios" ? "simctl" : "adb"} capture produced no frame`;
+  try {
+    const shot = await deps.captureScreenshot(platform, deps.tmpPath(), deviceId);
+    if (shot.ok) {
+      const bytes = deps.readShotFile(shot.path);
+      if (bytes)
+        frame.shot = bytes;
+      else
+        captureDetail = "the captured file could not be read back";
+    }
+  } catch (error2) {
+    captureDetail = error2 instanceof Error ? error2.message : String(error2);
   }
   try {
     const route = await deps.readRoute();
@@ -92339,22 +92380,21 @@ async function runCapture(deps) {
       frame.route = route;
   } catch {
   }
-  if (frame.shot || frame.route)
-    deps.pushLive(frame);
-}
-function asDevicePlatform(p) {
-  return p === "ios" || p === "android" ? p : null;
+  if (frame.shot || frame.route) {
+    const emitted = deps.pushLive(frame);
+    if (frame.shot && !emitted.shot) {
+      captureDetail = "the Recorder rejected the captured frame as empty or oversized";
+    } else if (emitted.shot || emitted.route) {
+      return { ok: true, pushed: "frame" };
+    }
+  }
+  return { ok: false, code: "LIVE_FRAME_UNAVAILABLE", reason: captureDetail };
 }
 function buildLiveDeps(input) {
   return {
     hasObservers: () => input.recorder.hasSubscribers(),
     isFlowActive: () => input.isFlowActive(),
-    getPlatform: () => {
-      const fromSession = asDevicePlatform(input.getActiveSession()?.platform);
-      if (fromSession)
-        return fromSession;
-      return asDevicePlatform(input.getClient().connectedTarget?.platform);
-    },
+    resolveTarget: () => input.resolveTarget(),
     captureScreenshot: input.captureScreenshot,
     readRoute: async () => {
       const c = input.getClient();
@@ -92363,13 +92403,11 @@ function buildLiveDeps(input) {
       return input.readRoute(c);
     },
     readShotFile: input.readShotFile,
-    // Arrow-wrap, NOT a bare method reference: `input.recorder.pushLive`
-    // detaches `this`, so the real Recorder.pushLive throws "this.subs is not
-    // iterable" when invoked as deps.pushLive(...). The live device gate caught
-    // this — the unit fakes used standalone arrows and missed it.
+    // Preserve Recorder.pushLive's `this` binding.
     pushLive: (frame) => input.recorder.pushLive(frame),
     tmpPath: () => join53(tmpdir14(), `rn-observe-live-${process.pid}.jpg`),
-    isMirrorActive: input.isMirrorActive
+    isMirrorActive: input.isMirrorActive,
+    reportBlocked: input.reportBlocked
   };
 }
 
@@ -95541,29 +95579,29 @@ setForeignGateUdidProvider(() => {
   return s?.platform === "ios" && s.deviceId ? s.deviceId : null;
 });
 var mirrorCfg = diagnosticContractProbe ? { enabled: false, fps: 0 } : resolveMirrorConfig();
-var mirrorManager2 = mirrorCfg.enabled ? new MirrorManager({
-  resolveTarget: buildMirrorTargetResolver({
-    getPlatform: () => {
-      const p = getActiveSession()?.platform ?? getClient().connectedTarget?.platform;
-      return p === "ios" || p === "android" ? p : null;
-    },
-    getSessionDeviceId: () => getActiveSession()?.deviceId ?? void 0,
-    // GH #791: same fence as cdp discovery (PR #786) — an authority session
-    // without a proven device binding blocks the mirror instead of guessing.
-    getRegistryDeviceBinding: () => mapRegistryDeviceBinding(authorityRuntime.status(), authorityRuntime.available),
-    resolveIosUdid: () => resolveIosUdid(),
-    listAndroidSerials: async () => {
-      try {
-        const { stdout } = await execFileP("adb", ["devices"], {
-          timeout: 5e3,
-          maxBuffer: 1024 * 1024
-        });
-        return parseAllAdbDevices(stdout).filter((d) => d.state === "device").map((d) => d.serial);
-      } catch {
-        return [];
-      }
+var observeTargetResolver = buildMirrorTargetResolver({
+  getPlatform: () => {
+    const p = getActiveSession()?.platform ?? getClient().connectedTarget?.platform;
+    return p === "ios" || p === "android" ? p : null;
+  },
+  getSessionDeviceId: () => getActiveSession()?.deviceId ?? void 0,
+  // Keep authority sessions fail-closed when their device binding is missing.
+  getRegistryDeviceBinding: () => mapRegistryDeviceBinding(authorityRuntime.status(), authorityRuntime.available),
+  resolveIosUdid: () => resolveIosUdid(),
+  listAndroidSerials: async () => {
+    try {
+      const { stdout } = await execFileP("adb", ["devices"], {
+        timeout: 5e3,
+        maxBuffer: 1024 * 1024
+      });
+      return parseAllAdbDevices(stdout).filter((d) => d.state === "device").map((d) => d.serial);
+    } catch {
+      return [];
     }
-  }),
+  }
+});
+var mirrorManager2 = mirrorCfg.enabled ? new MirrorManager({
+  resolveTarget: observeTargetResolver,
   createSource: (t) => createMirrorSource(t, mirrorCfg.fps, {
     firstFrameTimeoutMs: mirrorCfg.firstFrameTimeoutMs
   }),
@@ -95588,12 +95626,10 @@ var liveEnabled = !diagnosticContractProbe && process.env.RN_OBSERVE_LIVE !== "0
 var liveDeps = buildLiveDeps({
   recorder,
   isFlowActive: () => arbiter.flowActive || foreignFlowGate.lastActive,
-  getActiveSession,
+  resolveTarget: observeTargetResolver,
   getClient: () => getClient(),
-  captureScreenshot: (platform, path) => {
-    const session2 = getActiveSession();
-    return tryRawScreenshot(platform, path, session2 && session2.platform === platform ? session2.deviceId : void 0);
-  },
+  // Capture only the exact resolver-approved device.
+  captureScreenshot: (platform, path, deviceId) => tryRawScreenshot(platform, path, deviceId),
   readRoute: (c) => readLiveRoute(c),
   readShotFile: (path) => {
     try {
@@ -95604,7 +95640,8 @@ var liveDeps = buildLiveDeps({
       return null;
     }
   },
-  isMirrorActive: () => mirrorManager2?.isStreaming() ?? false
+  isMirrorActive: () => mirrorManager2?.isStreaming() ?? false,
+  reportBlocked: ({ code, reason }) => logger.warn("Observe", `live frame unavailable (${code}): ${reason}`)
 });
 var registeredToolNames = [];
 function trackedTool(name, desc, schema, handler, afterAuthority) {
