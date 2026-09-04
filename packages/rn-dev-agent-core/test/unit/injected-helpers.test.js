@@ -55,6 +55,19 @@ function createSandbox(opts = {}) {
   return sandbox;
 }
 
+function createSingleChildFiberChain(depth, leaf) {
+  let fiber = leaf;
+  for (let index = 0; index < depth; index++) {
+    fiber = {
+      type: { name: 'ContextProvider' },
+      memoizedProps: {},
+      child: fiber,
+      sibling: null,
+    };
+  }
+  return fiber;
+}
+
 // ── B3: Navigation state hook walker ─────────────────────────────────
 
 test('getNavState: finds nav state in first hook position', () => {
@@ -201,15 +214,171 @@ test('getStoreState: skips Jotai when store lacks get function', () => {
   assert.ok(result.__agent_error, 'Should return no-store error when Jotai store lacks get()');
 });
 
-test('getStoreState: no-store error includes Jotai hint', () => {
+test('getStoreState: no-store error includes global exposure hints', () => {
   const sandbox = createSandbox({});
   const result = JSON.parse(sandbox.__RN_AGENT.getStoreState());
+  assert.match(result.hint2, /__REDUX_STORE__/);
   assert.ok(result.hint3, 'hint3 should exist for Jotai');
   assert.match(result.hint3, /JOTAI_STORE/);
 });
 
-// ── M8: findActiveRenderer 1..5 probe ────────────────────────────────
-// Proves the probe finds fiber roots regardless of hook.renderers population state.
+test('getStoreState: reads Redux state from a Provider at depth 60 explicitly and by default', () => {
+  const fiberRoot = createSingleChildFiberChain(60, {
+    type: { name: 'Provider' },
+    memoizedProps: {
+      store: {
+        getState: () => ({ cmsApi: { queries: { featured: { status: 'fulfilled' } } } }),
+      },
+    },
+    child: null,
+    sibling: null,
+  });
+  const sandbox = createSandbox({ fiberRoot });
+
+  const result = JSON.parse(sandbox.__RN_AGENT.getStoreState('cmsApi.queries', 'redux'));
+
+  assert.deepEqual(result, {
+    type: 'redux',
+    state: { featured: { status: 'fulfilled' } },
+  });
+  assert.deepEqual(JSON.parse(sandbox.__RN_AGENT.getStoreState('cmsApi.queries')), result);
+});
+
+test('dispatchAction: dispatches through a Redux Provider at depth 60', () => {
+  const actions = [];
+  const fiberRoot = createSingleChildFiberChain(60, {
+    type: { name: 'Provider' },
+    memoizedProps: { store: { dispatch: (action) => actions.push(action) } },
+    child: null,
+    sibling: null,
+  });
+  const sandbox = createSandbox({ fiberRoot });
+
+  const result = JSON.parse(
+    sandbox.__RN_AGENT.dispatchAction({ action: 'cms/refetch', payload: { id: 'featured' } }),
+  );
+
+  assert.deepEqual(result, { dispatched: true });
+  assert.deepEqual(JSON.parse(JSON.stringify(actions)), [
+    { type: 'cms/refetch', payload: { id: 'featured' } },
+  ]);
+});
+
+test('getStoreState: preserves Redux Provider detection at depth 20', () => {
+  const fiberRoot = createSingleChildFiberChain(20, {
+    type: { name: 'Provider' },
+    memoizedProps: { store: { getState: () => ({ session: { ready: true } }) } },
+    child: null,
+    sibling: null,
+  });
+  const sandbox = createSandbox({ fiberRoot });
+
+  const result = JSON.parse(sandbox.__RN_AGENT.getStoreState('session.ready', 'redux'));
+
+  assert.deepEqual(result, { type: 'redux', state: true });
+});
+
+test('getStoreState: finds a Redux Provider after a non-matching sibling', () => {
+  const provider = {
+    type: { name: 'Provider' },
+    memoizedProps: { store: { getState: () => ({ siblingStore: true }) } },
+    child: null,
+    sibling: null,
+  };
+  const fiberRoot = {
+    type: { name: 'App' },
+    memoizedProps: {},
+    child: {
+      type: { name: 'FirstBranch' },
+      memoizedProps: {},
+      child: null,
+      sibling: provider,
+    },
+    sibling: null,
+  };
+  const sandbox = createSandbox({ fiberRoot });
+
+  const result = JSON.parse(sandbox.__RN_AGENT.getStoreState(undefined, 'redux'));
+
+  assert.deepEqual(result, { type: 'redux', state: { siblingStore: true } });
+});
+
+test('getStoreState: prefers an outer Redux Provider', () => {
+  const fiberRoot = {
+    type: { name: 'Provider' },
+    memoizedProps: { store: { getState: () => ({ selected: 'outer' }) } },
+    child: {
+      type: { name: 'Provider' },
+      memoizedProps: { store: { getState: () => ({ selected: 'inner' }) } },
+      child: null,
+      sibling: null,
+    },
+    sibling: null,
+  };
+  const sandbox = createSandbox({ fiberRoot });
+
+  const result = JSON.parse(sandbox.__RN_AGENT.getStoreState(undefined, 'redux'));
+
+  assert.deepEqual(result, { type: 'redux', state: { selected: 'outer' } });
+});
+
+test('getStoreState: preserves renderer order when the earlier Provider is deeper', () => {
+  const earlierRoot = createSingleChildFiberChain(60, {
+    type: { name: 'Provider' },
+    memoizedProps: { store: { getState: () => ({ selected: 'earlier' }) } },
+    child: null,
+    sibling: null,
+  });
+  const laterRoot = createSingleChildFiberChain(1, {
+    type: { name: 'Provider' },
+    memoizedProps: { store: { getState: () => ({ selected: 'later' }) } },
+    child: null,
+    sibling: null,
+  });
+  const hook = {
+    renderers: new Map([
+      [1, {}],
+      [2, {}],
+    ]),
+    getFiberRoots: (id) =>
+      new Set(id === 1 ? [{ current: earlierRoot }] : id === 2 ? [{ current: laterRoot }] : []),
+  };
+  const sandbox = createSandbox({ hook });
+
+  const result = JSON.parse(sandbox.__RN_AGENT.getStoreState(undefined, 'redux'));
+
+  assert.deepEqual(result, { type: 'redux', state: { selected: 'earlier' } });
+});
+
+test('getStoreState: reads React Query state from a Provider at depth 60', () => {
+  const fiberRoot = createSingleChildFiberChain(60, {
+    type: { name: 'QueryClientProvider' },
+    memoizedProps: {
+      client: {
+        getQueryCache: () => ({
+          getAll: () => [
+            {
+              queryKey: ['featured'],
+              state: { data: { id: 7 }, status: 'success', dataUpdatedAt: 123 },
+            },
+          ],
+        }),
+      },
+    },
+    child: null,
+    sibling: null,
+  });
+  const sandbox = createSandbox({ fiberRoot });
+
+  const result = JSON.parse(sandbox.__RN_AGENT.getStoreState());
+
+  assert.deepEqual(result, {
+    type: 'react-query',
+    state: {
+      '["featured"]': { data: { id: 7 }, status: 'success', dataUpdatedAt: 123 },
+    },
+  });
+});
 
 test('M8: findActiveRenderer finds root at renderer ID 1 (happy path, no regression)', () => {
   const fiber = { type: { name: 'App' }, child: null, sibling: null };
