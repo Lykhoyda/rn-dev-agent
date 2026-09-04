@@ -63,35 +63,14 @@ test('GH #126 + #597: iterateAllRoots primitive owns the renderer-loop invariant
   assert.match(slice, /if \(result\) return result;/, 'iterateAllRoots short-circuit missing');
 });
 
-test('B145: getStoreState redux fiber walk uses forEachRootFiber (not single-renderer)', () => {
-  // findFiberReduxStore is called via forEachRootFiber, not via a direct
-  // single-root walk. We look for the wrapper pattern.
-  const src = INJECTED_HELPERS;
-  const idx = src.indexOf('findFiberReduxStore');
-  assert.ok(idx >= 0, 'findFiberReduxStore inner fn missing');
-  // The invocation site should be inside a forEachRootFiber callback.
-  assert.match(
-    src,
-    /forEachRootFiber\(function\(rootFiber\)\s*\{\s*return findFiberReduxStore\(rootFiber\);/,
-    'getStoreState redux path not migrated to forEachRootFiber',
-  );
-});
+test('GH #865: store discovery consumers share the multi-renderer Provider traversal', () => {
+  const references = INJECTED_HELPERS.match(/findProviderStore/g) || [];
+  assert.equal(references.length, 4, 'expected one definition and three store consumers');
 
-test('B145: getStoreState generic store walk uses forEachRootFiber', () => {
-  // findStore is wrapped in a forEachRootFiber callback.
-  assert.match(
-    INJECTED_HELPERS,
-    /forEachRootFiber\(function\(rootFiber\)\s*\{\s*return findStore\(rootFiber\);/,
-    'getStoreState generic path not migrated to forEachRootFiber',
-  );
-});
-
-test('B145: dispatchAction Provider lookup uses forEachRootFiber', () => {
-  assert.match(
-    INJECTED_HELPERS,
-    /forEachRootFiber\(function\(rootFiber\)\s*\{\s*return findDispatchStore\(rootFiber\);/,
-    'dispatchAction not migrated to forEachRootFiber',
-  );
+  const start = INJECTED_HELPERS.indexOf('function findProviderStore');
+  const end = INJECTED_HELPERS.indexOf('// B143:', start);
+  const slice = INJECTED_HELPERS.slice(start, end);
+  assert.match(slice, /forEachRootFiber\(function\(rootFiber\)/);
 });
 
 test('B145: getNavState NavigationContainer walk uses forEachRootFiber', () => {
