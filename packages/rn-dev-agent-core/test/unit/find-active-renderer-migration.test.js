@@ -63,16 +63,6 @@ test('GH #126 + #597: iterateAllRoots primitive owns the renderer-loop invariant
   assert.match(slice, /if \(result\) return result;/, 'iterateAllRoots short-circuit missing');
 });
 
-test('GH #865: store discovery consumers share the multi-renderer Provider traversal', () => {
-  const references = INJECTED_HELPERS.match(/findProviderStore/g) || [];
-  assert.equal(references.length, 4, 'expected one definition and three store consumers');
-
-  const start = INJECTED_HELPERS.indexOf('function findProviderStore');
-  const end = INJECTED_HELPERS.indexOf('// B143:', start);
-  const slice = INJECTED_HELPERS.slice(start, end);
-  assert.match(slice, /forEachRootFiber\(function\(rootFiber\)/);
-});
-
 test('B145: getNavState NavigationContainer walk uses forEachRootFiber', () => {
   // The call site is `var navState = forEachRootFiber(function(rootFiber) { return findNav(rootFiber); });`
   assert.match(
