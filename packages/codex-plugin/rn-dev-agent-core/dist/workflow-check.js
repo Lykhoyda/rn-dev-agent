@@ -7391,7 +7391,8 @@ const startedAt = performance.now();
 const elapsed = () => Math.round(performance.now() - startedAt);
 const timings = {};
 let commandExit = null;
-let commandStderrTail = '';
+let commandStderrTail = null;
+const diagnosticInputLimit = 65536;
 const denied = (run) => {
   try {
     run();
@@ -7465,26 +7466,38 @@ const processGroupExists = (pid) => {
   timings.allocatedMs = elapsed();
   if (!allocated.ok) throw new Error('allocated listener unavailable before command');
   const commandEnvironment = JSON.parse(readFileSync(input.preflightEnvironmentPath, 'utf8'));
-  const stderrDescriptor = openSync(input.commandStderrPath, 'w', 0o600);
-  const stdio = ['ignore', 'ignore', stderrDescriptor, 'ipc'];
+  let stderrDescriptor;
+  try {
+    stderrDescriptor = openSync(input.commandStderrPath, 'w', 0o600);
+  } catch {}
+  const stdio = ['ignore', 'ignore', stderrDescriptor ?? 'ignore', 'ipc'];
   while (stdio.length < 9) stdio.push('ignore');
   stdio[8] = 'pipe';
   stdio.push('pipe');
   stdio.push(...commandSnapshots.map(() => 'pipe'));
-  const command = spawn(
-    input.commandExecutable,
-    input.commandArguments.map((argument) =>
-      argument.startsWith(logicalArgumentPrefix)
-        ? argument.slice(logicalArgumentPrefix.length)
-        : boundPaths.get(argument) ?? argument,
-    ),
-    {
-    cwd: input.appRoot,
-    detached: true,
-    env: commandEnvironment,
-    stdio,
-    },
-  );
+  let command;
+  try {
+    command = spawn(
+      input.commandExecutable,
+      input.commandArguments.map((argument) =>
+        argument.startsWith(logicalArgumentPrefix)
+          ? argument.slice(logicalArgumentPrefix.length)
+          : boundPaths.get(argument) ?? argument,
+      ),
+      {
+        cwd: input.appRoot,
+        detached: true,
+        env: commandEnvironment,
+        stdio,
+      },
+    );
+  } finally {
+    if (stderrDescriptor !== undefined) {
+      try {
+        closeSync(stderrDescriptor);
+      } catch {}
+    }
+  }
   command.stdio[8].end('admitted\n');
   for (let index = 0; index < commandSnapshots.length; index += 1) {
     command.stdio[10 + index].end(commandSnapshots[index]);
@@ -7524,12 +7537,31 @@ const processGroupExists = (pid) => {
   const released = await listen(input.port);
   commandCleanupConfirmed = commandCleanupConfirmed && released.ok;
   timings.cleanupMs = elapsed();
-  try {
-    closeSync(stderrDescriptor);
-  } catch {}
-  try {
-    commandStderrTail = readFileSync(input.commandStderrPath, 'utf8').slice(-8192);
-  } catch {}
+  if (stderrDescriptor !== undefined) {
+    let readDescriptor;
+    try {
+      readDescriptor = openSync(input.commandStderrPath, constants.O_RDONLY | constants.O_NOFOLLOW);
+      const metadata = fstatSync(readDescriptor);
+      if (metadata.isFile() && metadata.size <= diagnosticInputLimit) {
+        const contents = Buffer.alloc(metadata.size);
+        let offset = 0;
+        while (offset < contents.length) {
+          const count = readSync(readDescriptor, contents, offset, contents.length - offset, offset);
+          if (count === 0) break;
+          offset += count;
+        }
+        if (offset === contents.length && fstatSync(readDescriptor).size === contents.length) {
+          commandStderrTail = contents.toString('utf8');
+        }
+      }
+    } catch {} finally {
+      if (readDescriptor !== undefined) {
+        try {
+          closeSync(readDescriptor);
+        } catch {}
+      }
+    }
+  }
   const commandChainStable = true;
   const descendantCreationAllowed = resolvedCommandAllowed && commandCleanupConfirmed;
   const unallocated = await listen(input.unallocatedPort);
@@ -7570,7 +7602,9 @@ const processGroupExists = (pid) => {
           timings,
           commandExit,
           commandStderrTail,
-          exception: String((error && error.message) || error).slice(0, 512),
+          exception: String((error && error.message) || error).length <= diagnosticInputLimit
+            ? String((error && error.message) || error)
+            : null,
         },
       }),
     );

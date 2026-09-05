@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { EventEmitter } from 'node:events';
+import * as fs from 'node:fs';
 import { createRequire } from 'node:module';
 import { createServer } from 'node:net';
 import {
@@ -17,6 +19,7 @@ import {
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, test } from 'node:test';
+import { runInNewContext } from 'node:vm';
 import {
   prepareManagedMetroEnforcement,
   runManagedMetroEnforcementPreflight,
@@ -527,6 +530,270 @@ test('managed Metro preflight observation stays truthful without changing outcom
     },
   });
   assert.equal(swallowed.resolvedCommandAllowed, true, 'observer failure does not change outcome');
+
+  for (const { name, result, expectError } of cases) {
+    const removed: string[] = [];
+    const emitted: unknown[] = [];
+    const runPreflight = () =>
+      runManagedMetroEnforcementPreflight(plan, {
+        writeCanary: () => {},
+        removeCanary: (path) => removed.push(path),
+        run: () => result,
+        sanitize: () => {
+          throw new Error('sanitizer failure');
+        },
+        observe: (observation) => emitted.push(observation),
+      });
+    if (expectError) assert.throws(runPreflight, { message: expectError }, name);
+    else assert.deepEqual(runPreflight(), swallowed, name);
+    assert.deepEqual(emitted, [], name);
+    assert.deepEqual(removed, [plan.preflightEnvironmentPath, plan.canaryPath], name);
+    assert.equal(fs.existsSync(plan.symlinkCanaryPath), false, name);
+  }
+
+  const setupError = new Error('canary setup failed');
+  const emittedSetupFailures: unknown[] = [];
+  assert.throws(
+    () =>
+      runManagedMetroEnforcementPreflight(plan, {
+        writeCanary: () => {
+          throw setupError;
+        },
+        sanitize: () => {
+          throw new Error('sanitizer failure');
+        },
+        observe: (observation) => emittedSetupFailures.push(observation),
+      }),
+    (error: unknown) => {
+      assert.ok(error instanceof Error);
+      assert.equal(
+        error.message,
+        'METRO_RUNTIME_ENFORCEMENT_UNAVAILABLE: sandbox preflight is invalid',
+      );
+      assert.equal(error.cause, setupError);
+      return true;
+    },
+  );
+  assert.deepEqual(emittedSetupFailures, []);
+
+  mkdirSync(plan.commandStderrPath);
+  for (const { name, result, expectError } of cases) {
+    const removed: string[] = [];
+    const runPreflight = () =>
+      runManagedMetroEnforcementPreflight(plan, {
+        writeCanary: () => {},
+        removeCanary: (path) => removed.push(path),
+        run: () => result,
+      });
+    if (expectError) assert.throws(runPreflight, { message: expectError }, name);
+    else assert.deepEqual(runPreflight(), swallowed, name);
+    assert.deepEqual(removed, [plan.preflightEnvironmentPath, plan.canaryPath], name);
+    assert.equal(fs.existsSync(plan.symlinkCanaryPath), false, name);
+    assert.equal(fs.statSync(plan.commandStderrPath).isDirectory(), true, name);
+  }
+});
+
+test('managed Metro preflight diagnostic capture bounds input and survives I/O failures', async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'rn-metro-preflight-capture-')));
+  roots.push(root);
+  const prepared = prepareManagedMetroEnforcement(
+    { ...fixtureInput(), runtimeRoot: root },
+    verifiedRuntime,
+  );
+  assert.equal(prepared.status, 'enforced');
+  if (prepared.status !== 'enforced') return;
+  const plan = { ...prepared, commandChainAttestation: [] };
+  const expectedFlags = {
+    descendantCreationAllowed: true,
+    unauthorizedExecutableDenied: true,
+    unmanifestedReadDenied: true,
+    unmanifestedWriteDenied: true,
+    symlinkEscapeDenied: true,
+    unallocatedListenerDenied: true,
+    allocatedListenerAllowed: true,
+    networkOutboundDenied: true,
+    resolvedCommandAllowed: true,
+    commandCleanupConfirmed: true,
+    commandChainStable: true,
+  };
+  let preflightSource = '';
+  let preflightInput = '';
+  const baselineReceipt = runManagedMetroEnforcementPreflight(plan, {
+    writeCanary: () => {},
+    removeCanary: () => {},
+    run: (_command, args) => {
+      preflightSource = args[4];
+      preflightInput = args[5];
+      return { status: 0, stdout: JSON.stringify(expectedFlags), stderr: '' };
+    },
+  });
+  const scenarios = [
+    'split secret',
+    'unicode stderr',
+    'exception split secret',
+    'noisy stderr',
+    'open write failure',
+    'open read failure',
+    'stat failure',
+    'read failure',
+    'short read',
+    'close failure',
+  ];
+  for (const scenario of scenarios) {
+    const result = { status: -1, stdout: '', stderr: '' };
+    const readSizes: number[] = [];
+    let unboundedReads = 0;
+    let listenerCount = 0;
+    let stderrMode: unknown;
+    const ioError = () => Object.assign(new Error('diagnostic I/O failure'), { code: 'EACCES' });
+    const command = Object.assign(new EventEmitter(), {
+      pid: 424242,
+      exitCode: null as number | null,
+      stdio: Array.from({ length: 10 }, () => ({ end: () => {}, resume: () => {} })),
+      kill: () => {
+        command.exitCode = 0;
+        command.emit('exit', 0, 'SIGTERM');
+      },
+    });
+    await runInNewContext(preflightSource, {
+      Buffer,
+      performance,
+      setTimeout,
+      process: {
+        argv: ['node', preflightInput],
+        exit: (status: number) => {
+          result.status = status;
+        },
+        kill: () => {
+          throw Object.assign(new Error('no process group'), { code: 'ESRCH' });
+        },
+      },
+      require: (name: string) => {
+        if (name === 'node:child_process') {
+          return {
+            spawnSync: () => ({ status: null, error: ioError() }),
+            spawn: (_executable: string, _args: string[], options: { stdio: unknown[] }) => {
+              stderrMode = options.stdio[2];
+              if (typeof stderrMode === 'number') {
+                fs.writeSync(
+                  stderrMode,
+                  scenario === 'unicode stderr'
+                    ? '€'.repeat(3000)
+                    : `API_TOKEN=hunter2${'.'.repeat(8186)}`,
+                );
+                if (scenario === 'noisy stderr') fs.ftruncateSync(stderrMode, 256 * 1024 * 1024);
+              }
+              return command;
+            },
+          };
+        }
+        if (name === 'node:fs') {
+          return {
+            ...fs,
+            openSync: (path: string, flags: string | number, mode?: number) => {
+              if (
+                (scenario === 'open write failure' && flags === 'w') ||
+                (scenario === 'open read failure' && flags !== 'w')
+              )
+                throw ioError();
+              return fs.openSync(path, flags, mode);
+            },
+            closeSync: (descriptor: number) => {
+              fs.closeSync(descriptor);
+              if (scenario === 'close failure') throw ioError();
+            },
+            fstatSync: (descriptor: number) => {
+              if (scenario === 'stat failure') throw ioError();
+              return fs.fstatSync(descriptor);
+            },
+            readSync: (
+              descriptor: number,
+              buffer: Buffer,
+              offset: number,
+              length: number,
+              position: number,
+            ) => {
+              readSizes.push(length);
+              if (scenario === 'read failure') throw ioError();
+              if (scenario === 'short read') return 0;
+              return fs.readSync(descriptor, buffer, offset, length, position);
+            },
+            readFileSync: (path: string) => {
+              if (path === plan.preflightEnvironmentPath) {
+                if (scenario === 'exception split secret') {
+                  throw new Error(`${'x'.repeat(510)}hunter2`);
+                }
+                return '{}';
+              }
+              if (path === plan.commandStderrPath) unboundedReads += 1;
+              throw ioError();
+            },
+            writeFileSync: (path: string | number, data: string) => {
+              if (path === 1) result.stdout = data;
+              else throw ioError();
+            },
+          };
+        }
+        if (name === 'node:net') {
+          return {
+            createServer: () => {
+              const server = Object.assign(new EventEmitter(), {
+                listen: (_port: number, _host: string, callback: () => void) => {
+                  listenerCount += 1;
+                  queueMicrotask(() => {
+                    if (listenerCount === 2 || listenerCount === 4) {
+                      server.emit('error', { code: listenerCount === 2 ? 'EADDRINUSE' : 'EPERM' });
+                    } else callback();
+                  });
+                },
+                close: (callback: () => void) => callback(),
+              });
+              return server;
+            },
+            createConnection: () => {
+              const connection = new EventEmitter();
+              queueMicrotask(() => connection.emit('error', ioError()));
+              return connection;
+            },
+          };
+        }
+        return requireFromTest(name);
+      },
+    });
+    assert.equal(result.status, scenario === 'exception split secret' ? 1 : 0, scenario);
+    assert.equal(unboundedReads, 0, scenario);
+    assert.ok(
+      readSizes.every((size) => size <= 65536),
+      scenario,
+    );
+    if (scenario === 'noisy stderr') assert.deepEqual(readSizes, [], scenario);
+    if (scenario === 'open write failure') assert.equal(stderrMode, 'ignore', scenario);
+    const observations: Array<{ commandStderrTail: string | null; exception: string | null }> = [];
+    const runPreflight = () =>
+      runManagedMetroEnforcementPreflight(plan, {
+        writeCanary: () => {},
+        removeCanary: () => {},
+        run: () => result,
+        sanitize: (value) => value.replaceAll('hunter2', '<redacted>'),
+        observe: (observation) => observations.push(observation),
+      });
+    if (scenario === 'exception split secret') {
+      assert.throws(runPreflight, {
+        message: 'METRO_RUNTIME_ENFORCEMENT_UNAVAILABLE: sandbox preflight failed',
+      });
+      assert.equal(observations[0].exception, `${'x'.repeat(510)}<r`, scenario);
+    } else assert.deepEqual(runPreflight(), baselineReceipt, scenario);
+    assert.equal(observations.length, 1, scenario);
+    const tail = observations[0].commandStderrTail;
+    if (scenario === 'split secret' || scenario === 'close failure') {
+      assert.equal(tail, `acted>${'.'.repeat(8186)}`, scenario);
+      assert.ok(!tail.includes('unter2'), scenario);
+      assert.equal(Buffer.byteLength(tail), 8192, scenario);
+    } else if (scenario === 'unicode stderr') {
+      assert.equal(tail, '€'.repeat(2730), scenario);
+      assert.ok(Buffer.byteLength(tail) <= 8192, scenario);
+    } else assert.equal(tail, null, scenario);
+  }
 });
 
 test('managed Metro derives a deterministic descendant-capable Darwin profile', () => {
