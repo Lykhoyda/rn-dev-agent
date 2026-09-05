@@ -61,8 +61,15 @@ node <plugin-root>/rn-dev-agent-core/dist/workflow-check.js preflight --project 
 (`<plugin-root>` = `${CLAUDE_PLUGIN_ROOT}` on Claude, the Codex package root on
 Codex.) It reports `packageManager` (the `packageManager` field wins, lockfile
 inference is the fallback), the exact `installCommand`, `nodeModulesPresent`,
-the Claude instruction block, and the private-state-root kind and existence, with at
-most ONE actionable `stop`.
+`claudeMdBlock`, `claudeMdSentinel`, and the private-state-root kind and
+existence, with at most ONE actionable `stop`.
+
+The Claude facts are read-only: the exact heading in either instruction file
+from Step 0 marks the block present, including legacy heading-only blocks.
+The sentinel fact is true only when a heading and sentinel occur in the same
+file. These facts do not replace Step 0's onboarding decision.
+An instruction-file read error other than a missing file exits 2 with a
+stderr diagnostic and no JSON result; surface it and stop.
 
 In a monorepo the checker resolves the package-manager facts from the nearest
 ancestor that declares `packageManager` or holds a lockfile (bounded by the git
