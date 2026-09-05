@@ -18,6 +18,10 @@ import { canonicalAuthorityJson } from './authority-json.js';
 
 const DARWIN_SANDBOX_EXECUTABLE = '/usr/bin/sandbox-exec';
 const DARWIN_CODESIGN_EXECUTABLE = '/usr/bin/codesign';
+const DARWIN_PLATFORM_SIGNING_LEAF_AUTHORITIES = [
+  'Authority=Software Signing',
+  'Authority=macOS Software Signing',
+];
 
 interface CommandResult {
   status: number | null;
@@ -204,7 +208,7 @@ function verifiedSandboxExecutable(dependencies: ManagedMetroEnforcementDependen
       field(details.stderr, 'Identifier') !== 'com.apple.sandbox-exec' ||
       !/^\d+$/.test(field(details.stderr, 'Platform identifier') ?? '') ||
       !/^[a-f0-9]{40,64}$/.test(cdHash ?? '') ||
-      !authorities.includes('Authority=Software Signing') ||
+      !DARWIN_PLATFORM_SIGNING_LEAF_AUTHORITIES.some((leaf) => authorities.includes(leaf)) ||
       !authorities.includes('Authority=Apple Code Signing Certification Authority') ||
       !authorities.includes('Authority=Apple Root CA')
     ) {

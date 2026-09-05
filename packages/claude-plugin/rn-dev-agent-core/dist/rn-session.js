@@ -12774,6 +12774,10 @@ import { closeSync as closeSync2, constants as constants2, existsSync as existsS
 import { dirname as dirname2, resolve as resolve2 } from "node:path";
 var DARWIN_SANDBOX_EXECUTABLE = "/usr/bin/sandbox-exec";
 var DARWIN_CODESIGN_EXECUTABLE = "/usr/bin/codesign";
+var DARWIN_PLATFORM_SIGNING_LEAF_AUTHORITIES = [
+  "Authority=Software Signing",
+  "Authority=macOS Software Signing"
+];
 function sha256(value) {
   return createHash3("sha256").update(value).digest("hex");
 }
@@ -12821,7 +12825,7 @@ function verifiedSandboxExecutable(dependencies) {
     ]);
     const authorities = details.stderr.split("\n").filter((line) => line.startsWith("Authority="));
     const cdHash = field(details.stderr, "CDHash");
-    if (details.status !== 0 || field(details.stderr, "Identifier") !== "com.apple.sandbox-exec" || !/^\d+$/.test(field(details.stderr, "Platform identifier") ?? "") || !/^[a-f0-9]{40,64}$/.test(cdHash ?? "") || !authorities.includes("Authority=Software Signing") || !authorities.includes("Authority=Apple Code Signing Certification Authority") || !authorities.includes("Authority=Apple Root CA")) {
+    if (details.status !== 0 || field(details.stderr, "Identifier") !== "com.apple.sandbox-exec" || !/^\d+$/.test(field(details.stderr, "Platform identifier") ?? "") || !/^[a-f0-9]{40,64}$/.test(cdHash ?? "") || !DARWIN_PLATFORM_SIGNING_LEAF_AUTHORITIES.some((leaf) => authorities.includes(leaf)) || !authorities.includes("Authority=Apple Code Signing Certification Authority") || !authorities.includes("Authority=Apple Root CA")) {
       return null;
     }
     return {

@@ -108,6 +108,53 @@ test('managed Metro refuses an unverified Darwin sandbox executable', () => {
   );
 });
 
+function platformBinaryWithSandboxLeaf(leaf: string) {
+  return {
+    ...verifiedRuntime,
+    run: (_command: string, args: readonly string[]) => {
+      if (args[0] === '--verify') return { status: 0, stdout: '', stderr: '' };
+      return {
+        status: 0,
+        stdout: '',
+        stderr: [
+          'Identifier=com.apple.sandbox-exec',
+          'Platform identifier=26',
+          'CDHash=0123456789abcdef0123456789abcdef01234567',
+          `Authority=${leaf}`,
+          'Authority=Apple Code Signing Certification Authority',
+          'Authority=Apple Root CA',
+        ].join('\n'),
+      };
+    },
+  };
+}
+
+test('managed Metro accepts every Apple platform signing leaf authority', () => {
+  for (const leaf of ['Software Signing', 'macOS Software Signing']) {
+    assert.equal(
+      prepareManagedMetroEnforcement(fixtureInput(), platformBinaryWithSandboxLeaf(leaf)).status,
+      'enforced',
+      leaf,
+    );
+  }
+});
+
+test('managed Metro refuses sandbox leaf authorities outside the Apple platform set', () => {
+  for (const leaf of [
+    'Developer ID Application: Example Corp (AB12CD34EF)',
+    'Apple Development: someone@example.com (AB12CD34EF)',
+    'Evil macOS Software Signing',
+    'macOS Software Signing Services',
+    'Software',
+  ]) {
+    assert.deepEqual(
+      prepareManagedMetroEnforcement(fixtureInput(), platformBinaryWithSandboxLeaf(leaf)),
+      { status: 'unsupported', reason: 'sandbox-executable-unverified' },
+      leaf,
+    );
+  }
+});
+
 test('managed Metro derives a deterministic descendant-capable Darwin profile', () => {
   const first = prepareManagedMetroEnforcement(fixtureInput(), verifiedRuntime);
   const second = prepareManagedMetroEnforcement(fixtureInput(), verifiedRuntime);
