@@ -11357,7 +11357,7 @@ var init_registry = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/util/secure-state-file.js
-import { readFileSync as readFileSync6, writeFileSync, unlinkSync as unlinkSync2, mkdirSync as mkdirSync4, renameSync, lstatSync as lstatSync6 } from "node:fs";
+import { readFileSync as readFileSync6, writeFileSync as writeFileSync2, unlinkSync as unlinkSync2, mkdirSync as mkdirSync4, renameSync, lstatSync as lstatSync6 } from "node:fs";
 import { join as join5, dirname as dirname6 } from "node:path";
 import { homedir } from "node:os";
 function getStateDir() {
@@ -11382,7 +11382,7 @@ function readJsonStateFile(path) {
 function writeJsonStateFileAtomic(path, value) {
   mkdirSync4(dirname6(path), { recursive: true });
   const tmpPath = `${path}.tmp.${process.pid}`;
-  writeFileSync(tmpPath, JSON.stringify(value), { encoding: "utf8", mode: 384 });
+  writeFileSync2(tmpPath, JSON.stringify(value), { encoding: "utf8", mode: 384 });
   renameSync(tmpPath, path);
 }
 var init_secure_state_file = __esm({
@@ -12675,7 +12675,7 @@ init_process_birth();
 import { execFileSync as execFileSync6, spawn } from "node:child_process";
 import { createHash as createHash4, createHmac as createHmac3, timingSafeEqual as timingSafeEqual3 } from "node:crypto";
 import { createRequire } from "node:module";
-import { closeSync as closeSync3, existsSync as existsSync4, fstatSync as fstatSync2, mkdirSync as mkdirSync2, openSync as openSync3, readFileSync as readFileSync4, readSync as readSync2, realpathSync as realpathSync5, rmSync as rmSync2 } from "node:fs";
+import { closeSync as closeSync3, existsSync as existsSync4, fstatSync as fstatSync2, mkdirSync as mkdirSync2, openSync as openSync3, readFileSync as readFileSync4, readSync as readSync2, realpathSync as realpathSync5, rmSync as rmSync2, writeFileSync } from "node:fs";
 import { dirname as dirname3, isAbsolute as isAbsolute2, join as join3, relative as relative2, resolve as resolve3 } from "node:path";
 
 // packages/rn-dev-agent-core/dist/session/authority-json.js
@@ -12791,7 +12791,9 @@ function defaultRun2(command, args) {
   return {
     status: result.status,
     stdout: result.stdout ?? "",
-    stderr: result.stderr ?? result.error?.message ?? ""
+    stderr: result.stderr ?? result.error?.message ?? "",
+    signal: result.signal ?? null,
+    timedOut: result.error?.code === "ETIMEDOUT"
   };
 }
 function field(details, name) {
@@ -13089,6 +13091,7 @@ function prepareManagedMetroEnforcement(input, dependencies = {}) {
     canaryPath: `/private/tmp/rn-dev-agent-metro-${canaryId}.canary`,
     descendantCanaryPath: resolve2(runtimeRoot, `descendant-${canaryId}.cjs`),
     symlinkCanaryPath: resolve2(runtimeRoot, `enforcement-${canaryId}.canary`),
+    commandStderrPath: resolve2(runtimeRoot, `preflight-stderr-${canaryId}.log`),
     port: input.port,
     unallocatedPort: 0,
     nodeExecutable,
@@ -13108,6 +13111,11 @@ const { closeSync, constants, fstatSync, openSync, readFileSync, readSync, write
 const { createConnection, createServer } = require('node:net');
 const input = JSON.parse(process.argv[1]);
 const logicalArgumentPrefix = 'rn-dev-agent-logical-path:';
+const startedAt = performance.now();
+const elapsed = () => Math.round(performance.now() - startedAt);
+const timings = {};
+let commandExit = null;
+let commandStderrTail = '';
 const denied = (run) => {
   try {
     run();
@@ -13178,9 +13186,11 @@ const processGroupExists = (pid) => {
     commandSnapshots.push(snapshot);
   }
   const allocated = await listen(input.port);
+  timings.allocatedMs = elapsed();
   if (!allocated.ok) throw new Error('allocated listener unavailable before command');
   const commandEnvironment = JSON.parse(readFileSync(input.preflightEnvironmentPath, 'utf8'));
-  const stdio = ['ignore', 'ignore', 'ignore', 'ipc'];
+  const stderrDescriptor = openSync(input.commandStderrPath, 'w', 0o600);
+  const stdio = ['ignore', 'ignore', stderrDescriptor, 'ipc'];
   while (stdio.length < 9) stdio.push('ignore');
   stdio[8] = 'pipe';
   stdio.push('pipe');
@@ -13204,11 +13214,16 @@ const processGroupExists = (pid) => {
     command.stdio[10 + index].end(commandSnapshots[index]);
   }
   command.stdio[9].resume();
+  command.once('exit', (code, signal) => {
+    commandExit = { code, signal, atMs: elapsed() };
+  });
   command.once('error', () => {});
+  timings.spawnedMs = elapsed();
   const resolvedCommandAllowed = await waitUntil(async () => {
     const probe = await listen(input.port);
     return !probe.ok && probe.code === 'EADDRINUSE';
   }, 15000);
+  timings.occupancyMs = elapsed();
   let commandCleanupConfirmed = false;
   if (Number.isSafeInteger(command.pid)) {
     try {
@@ -13232,6 +13247,13 @@ const processGroupExists = (pid) => {
   }
   const released = await listen(input.port);
   commandCleanupConfirmed = commandCleanupConfirmed && released.ok;
+  timings.cleanupMs = elapsed();
+  try {
+    closeSync(stderrDescriptor);
+  } catch {}
+  try {
+    commandStderrTail = readFileSync(input.commandStderrPath, 'utf8').slice(-8192);
+  } catch {}
   const commandChainStable = true;
   const descendantCreationAllowed = resolvedCommandAllowed && commandCleanupConfirmed;
   const unallocated = await listen(input.unallocatedPort);
@@ -13259,10 +13281,78 @@ const processGroupExists = (pid) => {
     commandCleanupConfirmed,
     commandChainStable,
   };
-  process.stdout.write(JSON.stringify(receipt));
+  timings.totalMs = elapsed();
+  writeFileSync(1, JSON.stringify({ ...receipt, diagnostic: { timings, commandExit, commandStderrTail } }));
   process.exit(Object.values(receipt).every(Boolean) ? 0 : 1);
-})().catch(() => process.exit(1));
+})().catch((error) => {
+  try {
+    timings.totalMs = elapsed();
+    writeFileSync(
+      1,
+      JSON.stringify({
+        diagnostic: {
+          timings,
+          commandExit,
+          commandStderrTail,
+          exception: String((error && error.message) || error).slice(0, 512),
+        },
+      }),
+    );
+  } catch {}
+  process.exit(1);
+});
 `;
+var PREFLIGHT_FLAGS = [
+  "descendantCreationAllowed",
+  "unauthorizedExecutableDenied",
+  "unmanifestedReadDenied",
+  "unmanifestedWriteDenied",
+  "symlinkEscapeDenied",
+  "unallocatedListenerDenied",
+  "allocatedListenerAllowed",
+  "networkOutboundDenied",
+  "resolvedCommandAllowed",
+  "commandCleanupConfirmed",
+  "commandChainStable"
+];
+var OBSERVATION_TAIL_BYTES = 8192;
+function observationTail(value, sanitize) {
+  if (typeof value !== "string" || !sanitize)
+    return null;
+  const bytes = Buffer.from(sanitize(value), "utf8");
+  return bytes.subarray(Math.max(0, bytes.length - OBSERVATION_TAIL_BYTES)).toString("utf8");
+}
+function preflightObservation(result, elapsedMs, sanitize) {
+  let parsed = null;
+  try {
+    parsed = result.stdout ? JSON.parse(result.stdout) : null;
+  } catch {
+    parsed = null;
+  }
+  const flags = parsed && PREFLIGHT_FLAGS.every((flag) => typeof parsed[flag] === "boolean") ? Object.fromEntries(PREFLIGHT_FLAGS.map((flag) => [flag, parsed[flag]])) : null;
+  const diagnostic2 = parsed && parsed.diagnostic && typeof parsed.diagnostic === "object" ? parsed.diagnostic : null;
+  const timings = diagnostic2 && diagnostic2.timings && typeof diagnostic2.timings === "object" ? Object.fromEntries(Object.entries(diagnostic2.timings).filter((entry) => Number.isFinite(entry[1]))) : null;
+  const exit = diagnostic2 && diagnostic2.commandExit && typeof diagnostic2.commandExit === "object" ? diagnostic2.commandExit : null;
+  return {
+    version: 1,
+    outcome: result.status !== 0 ? "failed" : flags && PREFLIGHT_FLAGS.every((flag) => flags[flag]) ? "receipt" : "incomplete",
+    complete: result.status !== null && result.timedOut !== true && parsed !== null,
+    status: result.status,
+    signal: result.signal ?? null,
+    outerTimedOut: result.timedOut === true,
+    elapsedMs,
+    flags,
+    timings,
+    commandExit: exit ? {
+      code: typeof exit.code === "number" ? exit.code : null,
+      signal: typeof exit.signal === "string" ? exit.signal : null,
+      atMs: typeof exit.atMs === "number" ? exit.atMs : -1
+    } : null,
+    commandStderrTail: observationTail(diagnostic2?.commandStderrTail, sanitize),
+    preflightStderrTail: observationTail(result.stderr, sanitize),
+    exception: typeof diagnostic2?.exception === "string" && sanitize ? sanitize(diagnostic2.exception).slice(0, 512) : null
+  };
+}
 function runManagedMetroEnforcementPreflight(plan, dependencies = {}) {
   const writeCanary = dependencies.writeCanary ?? ((path, contents) => {
     const descriptor = openSync2(path, constants2.O_WRONLY | constants2.O_CREAT | constants2.O_EXCL | (constants2.O_NOFOLLOW ?? 0), 384);
@@ -13274,6 +13364,14 @@ function runManagedMetroEnforcementPreflight(plan, dependencies = {}) {
   });
   const removeCanary = dependencies.removeCanary ?? ((path) => rmSync(path, { force: true }));
   const run = dependencies.run ?? defaultRun2;
+  const observe2 = (observation) => {
+    try {
+      dependencies.observe?.(observation);
+    } catch {
+    }
+  };
+  const startedAt = performance.now();
+  let observationEmitted = false;
   let canaryCreated = false;
   let environmentCreated = false;
   let symlinkCreated = false;
@@ -13305,10 +13403,13 @@ function runManagedMetroEnforcementPreflight(plan, dependencies = {}) {
         commandChainAttestation: plan.commandChainAttestation,
         preflightEnvironmentPath: plan.preflightEnvironmentPath,
         appRoot: plan.appRoot,
+        commandStderrPath: plan.commandStderrPath,
         port: plan.port,
         unallocatedPort: plan.unallocatedPort
       })
     ]);
+    observationEmitted = true;
+    observe2(preflightObservation(result, Math.round(performance.now() - startedAt), dependencies.sanitize));
     if (result.status !== 0) {
       throw new Error("METRO_RUNTIME_ENFORCEMENT_UNAVAILABLE: sandbox preflight failed");
     }
@@ -13339,6 +13440,24 @@ function runManagedMetroEnforcementPreflight(plan, dependencies = {}) {
       commandChainAttestation: plan.commandChainAttestation
     };
   } catch (error) {
+    if (!observationEmitted) {
+      observationEmitted = true;
+      observe2({
+        version: 1,
+        outcome: "invalid",
+        complete: false,
+        status: null,
+        signal: null,
+        outerTimedOut: false,
+        elapsedMs: Math.round(performance.now() - startedAt),
+        flags: null,
+        timings: null,
+        commandExit: null,
+        commandStderrTail: null,
+        preflightStderrTail: null,
+        exception: dependencies.sanitize ? dependencies.sanitize(error instanceof Error ? error.message : String(error)).slice(0, 512) : null
+      });
+    }
     if (error instanceof Error && error.message.startsWith("METRO_RUNTIME_ENFORCEMENT_")) {
       throw error;
     }
@@ -13346,6 +13465,7 @@ function runManagedMetroEnforcementPreflight(plan, dependencies = {}) {
       cause: error
     });
   } finally {
+    rmSync(plan.commandStderrPath, { force: true });
     if (symlinkCreated)
       rmSync(plan.symlinkCanaryPath, { force: true });
     if (environmentCreated)
@@ -14928,6 +15048,22 @@ function sanitizeManagedMetroStartupDetailValue(value, redactions) {
 function sanitizeManagedMetroStartupDetail(value, redactions) {
   return sanitizeManagedMetroStartupDetailValue(value, redactions).slice(-4096);
 }
+function writeManagedMetroEnforcementDiagnostic(input) {
+  try {
+    const observation = input.observation;
+    writeFileSync(input.path, JSON.stringify({
+      version: 1,
+      sessionId: input.sessionId,
+      metroInstanceId: input.metroInstanceId,
+      buildGeneration: input.buildGeneration,
+      environmentDigest: input.environmentDigest,
+      preparation: input.prepared.status === "enforced" ? { status: "enforced", profileSha256: input.prepared.profileSha256 } : { status: "unsupported", reason: input.prepared.reason },
+      preflight: observation,
+      recordComplete: input.prepared.status !== "enforced" ? true : observation?.complete ?? false
+    }), { encoding: "utf8", mode: 384 });
+  } catch {
+  }
+}
 function boundedManagedMetroStartupMessage(code, details) {
   const compactDetails = details.filter((detail) => Boolean(detail));
   const suffix = compactDetails.length > 0 ? ` (${compactDetails.join("; ")})` : "";
@@ -15146,12 +15282,29 @@ async function startManagedMetro(input, dependencies = {}) {
     instanceId,
     runtimeInputs
   });
+  const enforcementRedactions = [
+    input.appRoot,
+    input.sourceRoot,
+    input.runtimeRoot,
+    input.sessionId,
+    instanceId,
+    input.signerCapability,
+    runtimePolicyCapability,
+    ...Object.entries(childEnvironment).filter(([name, value]) => value !== void 0 && (MANAGED_METRO_SENSITIVE_ENVIRONMENT_NAME.test(name) || /^[a-z][a-z0-9+.-]*:\/\/[^/\s@]+@/i.test(value))).map(([, value]) => value)
+  ];
+  let preflightObservation2 = null;
   let runtimeEnforcement = preparedEnforcement;
   if (preparedEnforcement.status === "enforced") {
     try {
       runtimeEnforcement = {
         ...preparedEnforcement,
-        receipt: preflightEnforcement(preparedEnforcement, { environment: childEnvironment })
+        receipt: preflightEnforcement(preparedEnforcement, {
+          environment: childEnvironment,
+          observe: (observation) => {
+            preflightObservation2 = observation;
+          },
+          sanitize: (value) => sanitizeManagedMetroStartupDetailValue(value, enforcementRedactions)
+        })
       };
     } catch {
       runtimeEnforcement = {
@@ -15160,6 +15313,15 @@ async function startManagedMetro(input, dependencies = {}) {
       };
     }
   }
+  writeManagedMetroEnforcementDiagnostic({
+    path: join3(input.runtimeRoot, `metro-enforcement-diagnostic-${instanceId}.json`),
+    sessionId: input.sessionId,
+    metroInstanceId: instanceId,
+    buildGeneration: input.buildGeneration,
+    environmentDigest: runtimeManifest.environmentDigest,
+    prepared: preparedEnforcement,
+    observation: preflightObservation2
+  });
   const runtimeEvidenceAuthority = runtimeEnforcement.status === "enforced" ? "managed-sandbox-v1" : "reported-v1";
   const requiresSandboxAdmission = runtimeEnforcement.status === "enforced";
   const enforcementReceiptForAdmission = runtimeEnforcement.status === "enforced" && "receipt" in runtimeEnforcement ? runtimeEnforcement.receipt : null;
@@ -15659,7 +15821,7 @@ function resolveSourceIdentity(inputRoot, dependencies = {}) {
 // packages/rn-dev-agent-core/dist/session/state-root.js
 init_secure_state_file();
 import { randomBytes as randomBytes3, randomUUID } from "node:crypto";
-import { chmodSync as chmodSync3, linkSync, lstatSync as lstatSync7, mkdirSync as mkdirSync5, readFileSync as readFileSync7, renameSync as renameSync2, rmSync as rmSync3, statSync as statSync4, writeFileSync as writeFileSync2 } from "node:fs";
+import { chmodSync as chmodSync3, linkSync, lstatSync as lstatSync7, mkdirSync as mkdirSync5, readFileSync as readFileSync7, renameSync as renameSync2, rmSync as rmSync3, statSync as statSync4, writeFileSync as writeFileSync3 } from "node:fs";
 import { join as join6, resolve as resolve5 } from "node:path";
 function fail(code, detail) {
   throw new Error(`${code}: ${detail}`);
@@ -15741,7 +15903,7 @@ function getBoundDirectoryJournalKey(layout = createAuthorityStateLayout()) {
   const temporary = join6(layout.root, `.bound-directory.${randomUUID()}.key`);
   try {
     try {
-      writeFileSync2(temporary, randomBytes3(32), { flag: "wx", mode: 384, flush: true });
+      writeFileSync3(temporary, randomBytes3(32), { flag: "wx", mode: 384, flush: true });
       try {
         linkSync(temporary, path);
       } catch (error) {
@@ -15780,7 +15942,7 @@ import { join as join8 } from "node:path";
 // packages/rn-dev-agent-core/dist/session/bound-directory.js
 import { spawn as spawn2 } from "node:child_process";
 import { randomUUID as randomUUID2 } from "node:crypto";
-import { closeSync as closeSync5, constants as constants4, existsSync as existsSync6, fstatSync as fstatSync4, lstatSync as lstatSync8, mkdtempSync, openSync as openSync5, readFileSync as readFileSync8, realpathSync as realpathSync7, renameSync as renameSync3, rmSync as rmSync4, writeFileSync as writeFileSync3 } from "node:fs";
+import { closeSync as closeSync5, constants as constants4, existsSync as existsSync6, fstatSync as fstatSync4, lstatSync as lstatSync8, mkdtempSync, openSync as openSync5, readFileSync as readFileSync8, realpathSync as realpathSync7, renameSync as renameSync3, rmSync as rmSync4, writeFileSync as writeFileSync4 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join as join7 } from "node:path";
 var WAIT_BUFFER = new Int32Array(new SharedArrayBuffer(4));
@@ -16894,7 +17056,7 @@ function stopWorker(worker, signal = "SIGTERM") {
   const stoppedPath = join7(worker.controlPath, "stopped");
   if (signal === "SIGTERM") {
     try {
-      writeFileSync3(join7(worker.controlPath, "stop"), "", { flag: "wx", mode: 384 });
+      writeFileSync4(join7(worker.controlPath, "stop"), "", { flag: "wx", mode: 384 });
     } catch {
     }
     if (waitForFile(stoppedPath, 1e3)) {
@@ -16905,7 +17067,7 @@ function stopWorker(worker, signal = "SIGTERM") {
     }
   }
   try {
-    writeFileSync3(join7(worker.controlPath, "terminate"), JSON.stringify({
+    writeFileSync4(join7(worker.controlPath, "terminate"), JSON.stringify({
       lifecycleCapability: worker.lifecycleCapability,
       signal: "SIGKILL"
     }), { flag: "wx", mode: 384 });
@@ -17070,7 +17232,7 @@ function sendOperation(directory, request, timeoutMs) {
   const pendingPath = join7(directory.worker.controlPath, `${prefix}.pending`);
   const requestPath = join7(directory.worker.controlPath, `${prefix}.request`);
   const responsePath = join7(directory.worker.controlPath, `${prefix}.response`);
-  writeFileSync3(pendingPath, JSON.stringify(request), { flag: "wx", mode: 384 });
+  writeFileSync4(pendingPath, JSON.stringify(request), { flag: "wx", mode: 384 });
   renameSync3(pendingPath, requestPath);
   if (!waitForFile(responsePath, timeoutMs)) {
     throw new Error("SESSION_INTEGRATION_WORKER_TIMEOUT");

@@ -12364,6 +12364,11 @@ const { closeSync, constants, fstatSync, openSync, readFileSync, readSync, write
 const { createConnection, createServer } = require('node:net');
 const input = JSON.parse(process.argv[1]);
 const logicalArgumentPrefix = 'rn-dev-agent-logical-path:';
+const startedAt = performance.now();
+const elapsed = () => Math.round(performance.now() - startedAt);
+const timings = {};
+let commandExit = null;
+let commandStderrTail = '';
 const denied = (run) => {
   try {
     run();
@@ -12434,9 +12439,11 @@ const processGroupExists = (pid) => {
     commandSnapshots.push(snapshot);
   }
   const allocated = await listen(input.port);
+  timings.allocatedMs = elapsed();
   if (!allocated.ok) throw new Error('allocated listener unavailable before command');
   const commandEnvironment = JSON.parse(readFileSync(input.preflightEnvironmentPath, 'utf8'));
-  const stdio = ['ignore', 'ignore', 'ignore', 'ipc'];
+  const stderrDescriptor = openSync(input.commandStderrPath, 'w', 0o600);
+  const stdio = ['ignore', 'ignore', stderrDescriptor, 'ipc'];
   while (stdio.length < 9) stdio.push('ignore');
   stdio[8] = 'pipe';
   stdio.push('pipe');
@@ -12460,11 +12467,16 @@ const processGroupExists = (pid) => {
     command.stdio[10 + index].end(commandSnapshots[index]);
   }
   command.stdio[9].resume();
+  command.once('exit', (code, signal) => {
+    commandExit = { code, signal, atMs: elapsed() };
+  });
   command.once('error', () => {});
+  timings.spawnedMs = elapsed();
   const resolvedCommandAllowed = await waitUntil(async () => {
     const probe = await listen(input.port);
     return !probe.ok && probe.code === 'EADDRINUSE';
   }, 15000);
+  timings.occupancyMs = elapsed();
   let commandCleanupConfirmed = false;
   if (Number.isSafeInteger(command.pid)) {
     try {
@@ -12488,6 +12500,13 @@ const processGroupExists = (pid) => {
   }
   const released = await listen(input.port);
   commandCleanupConfirmed = commandCleanupConfirmed && released.ok;
+  timings.cleanupMs = elapsed();
+  try {
+    closeSync(stderrDescriptor);
+  } catch {}
+  try {
+    commandStderrTail = readFileSync(input.commandStderrPath, 'utf8').slice(-8192);
+  } catch {}
   const commandChainStable = true;
   const descendantCreationAllowed = resolvedCommandAllowed && commandCleanupConfirmed;
   const unallocated = await listen(input.unallocatedPort);
@@ -12515,9 +12534,26 @@ const processGroupExists = (pid) => {
     commandCleanupConfirmed,
     commandChainStable,
   };
-  process.stdout.write(JSON.stringify(receipt));
+  timings.totalMs = elapsed();
+  writeFileSync(1, JSON.stringify({ ...receipt, diagnostic: { timings, commandExit, commandStderrTail } }));
   process.exit(Object.values(receipt).every(Boolean) ? 0 : 1);
-})().catch(() => process.exit(1));
+})().catch((error) => {
+  try {
+    timings.totalMs = elapsed();
+    writeFileSync(
+      1,
+      JSON.stringify({
+        diagnostic: {
+          timings,
+          commandExit,
+          commandStderrTail,
+          exception: String((error && error.message) || error).slice(0, 512),
+        },
+      }),
+    );
+  } catch {}
+  process.exit(1);
+});
 `;
 
 // packages/rn-dev-agent-core/dist/session/strict-proof-limits.js
@@ -12664,7 +12700,7 @@ import { join as join14 } from "node:path";
 // packages/rn-dev-agent-core/dist/session/managed-metro.js
 import { execFileSync as execFileSync4, spawn } from "node:child_process";
 import { createHash as createHash4, createHmac as createHmac2, timingSafeEqual as timingSafeEqual3 } from "node:crypto";
-import { closeSync as closeSync3, existsSync as existsSync4, fstatSync as fstatSync3, mkdirSync as mkdirSync3, openSync as openSync3, readFileSync as readFileSync4, readSync as readSync3, realpathSync as realpathSync3, rmSync } from "node:fs";
+import { closeSync as closeSync3, existsSync as existsSync4, fstatSync as fstatSync3, mkdirSync as mkdirSync3, openSync as openSync3, readFileSync as readFileSync4, readSync as readSync3, realpathSync as realpathSync3, rmSync, writeFileSync as writeFileSync2 } from "node:fs";
 init_metro_binding();
 init_trusted_system_executable();
 init_process_birth();
@@ -13973,14 +14009,14 @@ import { basename, isAbsolute as isAbsolute2, join as join6, relative as relativ
 // packages/rn-dev-agent-core/dist/session/bound-directory.js
 import { spawn as spawn2 } from "node:child_process";
 import { randomUUID as randomUUID2 } from "node:crypto";
-import { closeSync as closeSync4, constants as constants3, existsSync as existsSync5, fstatSync as fstatSync4, lstatSync as lstatSync6, mkdtempSync, openSync as openSync4, readFileSync as readFileSync6, realpathSync as realpathSync4, renameSync as renameSync3, rmSync as rmSync3, writeFileSync as writeFileSync3 } from "node:fs";
+import { closeSync as closeSync4, constants as constants3, existsSync as existsSync5, fstatSync as fstatSync4, lstatSync as lstatSync6, mkdtempSync, openSync as openSync4, readFileSync as readFileSync6, realpathSync as realpathSync4, renameSync as renameSync3, rmSync as rmSync3, writeFileSync as writeFileSync4 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join as join5 } from "node:path";
 
 // packages/rn-dev-agent-core/dist/session/state-root.js
 init_secure_state_file();
 import { randomBytes as randomBytes3, randomUUID } from "node:crypto";
-import { chmodSync as chmodSync3, linkSync, lstatSync as lstatSync5, mkdirSync as mkdirSync4, readFileSync as readFileSync5, renameSync as renameSync2, rmSync as rmSync2, statSync as statSync2, writeFileSync as writeFileSync2 } from "node:fs";
+import { chmodSync as chmodSync3, linkSync, lstatSync as lstatSync5, mkdirSync as mkdirSync4, readFileSync as readFileSync5, renameSync as renameSync2, rmSync as rmSync2, statSync as statSync2, writeFileSync as writeFileSync3 } from "node:fs";
 import { join as join4, resolve as resolve2 } from "node:path";
 function fail(code, detail) {
   throw new Error(`${code}: ${detail}`);
@@ -14054,7 +14090,7 @@ function getBoundDirectoryJournalKey(layout = createAuthorityStateLayout()) {
   const temporary = join4(layout.root, `.bound-directory.${randomUUID()}.key`);
   try {
     try {
-      writeFileSync2(temporary, randomBytes3(32), { flag: "wx", mode: 384, flush: true });
+      writeFileSync3(temporary, randomBytes3(32), { flag: "wx", mode: 384, flush: true });
       try {
         linkSync(temporary, path);
       } catch (error) {
@@ -15192,7 +15228,7 @@ function stopWorker(worker, signal = "SIGTERM") {
   const stoppedPath = join5(worker.controlPath, "stopped");
   if (signal === "SIGTERM") {
     try {
-      writeFileSync3(join5(worker.controlPath, "stop"), "", { flag: "wx", mode: 384 });
+      writeFileSync4(join5(worker.controlPath, "stop"), "", { flag: "wx", mode: 384 });
     } catch {
     }
     if (waitForFile(stoppedPath, 1e3)) {
@@ -15203,7 +15239,7 @@ function stopWorker(worker, signal = "SIGTERM") {
     }
   }
   try {
-    writeFileSync3(join5(worker.controlPath, "terminate"), JSON.stringify({
+    writeFileSync4(join5(worker.controlPath, "terminate"), JSON.stringify({
       lifecycleCapability: worker.lifecycleCapability,
       signal: "SIGKILL"
     }), { flag: "wx", mode: 384 });
@@ -15368,7 +15404,7 @@ function sendOperation(directory, request, timeoutMs) {
   const pendingPath = join5(directory.worker.controlPath, `${prefix}.pending`);
   const requestPath = join5(directory.worker.controlPath, `${prefix}.request`);
   const responsePath = join5(directory.worker.controlPath, `${prefix}.response`);
-  writeFileSync3(pendingPath, JSON.stringify(request), { flag: "wx", mode: 384 });
+  writeFileSync4(pendingPath, JSON.stringify(request), { flag: "wx", mode: 384 });
   renameSync3(pendingPath, requestPath);
   if (!waitForFile(responsePath, timeoutMs)) {
     throw new Error("SESSION_INTEGRATION_WORKER_TIMEOUT");
