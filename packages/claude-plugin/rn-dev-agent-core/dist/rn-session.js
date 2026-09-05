@@ -8090,8 +8090,8 @@ var init_metro_binding = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/session/authority-store.js
-import { chmodSync as chmodSync2, lstatSync as lstatSync3, mkdirSync as mkdirSync3, statSync as statSync3 } from "node:fs";
-import { createRequire } from "node:module";
+import { chmodSync as chmodSync2, lstatSync as lstatSync4, mkdirSync as mkdirSync3, statSync as statSync3 } from "node:fs";
+import { createRequire as createRequire2 } from "node:module";
 import { dirname as dirname4 } from "node:path";
 function loadAuthoritySqlite() {
   try {
@@ -8103,7 +8103,7 @@ function loadAuthoritySqlite() {
 }
 function assertPrivateDirectory(path) {
   mkdirSync3(path, { mode: 448, recursive: true });
-  const link = lstatSync3(path);
+  const link = lstatSync4(path);
   if (link.isSymbolicLink() || !link.isDirectory()) {
     throw new Error("authority state root must be a real directory");
   }
@@ -8116,7 +8116,7 @@ function assertPrivateDirectory(path) {
 function secureDatabaseFiles(path) {
   for (const candidate of [path, `${path}-wal`, `${path}-shm`]) {
     try {
-      const link = lstatSync3(candidate);
+      const link = lstatSync4(candidate);
       if (link.isSymbolicLink() || !link.isFile()) {
         throw new Error("authority database path is not a regular file");
       }
@@ -8175,7 +8175,7 @@ function openAuthorityStore(path, options = {}) {
   try {
     assertPrivateDirectory(dirname4(path));
     try {
-      const existing = lstatSync3(path);
+      const existing = lstatSync4(path);
       if (existing.isSymbolicLink() || !existing.isFile()) {
         throw new Error("authority database path is not a regular file");
       }
@@ -8235,7 +8235,7 @@ var require2, INITIALIZATION_WAIT, INITIALIZATION_TIMEOUT_MS, DATABASE_OPERATION
 var init_authority_store = __esm({
   "packages/rn-dev-agent-core/dist/session/authority-store.js"() {
     "use strict";
-    require2 = createRequire(import.meta.url);
+    require2 = createRequire2(import.meta.url);
     INITIALIZATION_WAIT = new Int32Array(new SharedArrayBuffer(4));
     INITIALIZATION_TIMEOUT_MS = 1e3;
     DATABASE_OPERATION_TIMEOUT_MS = 1e3;
@@ -11357,7 +11357,7 @@ var init_registry = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/util/secure-state-file.js
-import { readFileSync as readFileSync6, writeFileSync, unlinkSync as unlinkSync2, mkdirSync as mkdirSync4, renameSync, lstatSync as lstatSync5 } from "node:fs";
+import { readFileSync as readFileSync6, writeFileSync, unlinkSync as unlinkSync2, mkdirSync as mkdirSync4, renameSync, lstatSync as lstatSync6 } from "node:fs";
 import { join as join5, dirname as dirname6 } from "node:path";
 import { homedir } from "node:os";
 function getStateDir() {
@@ -11371,7 +11371,7 @@ function getStateDir() {
 }
 function readJsonStateFile(path) {
   try {
-    const stat = lstatSync5(path);
+    const stat = lstatSync6(path);
     if (stat.isSymbolicLink())
       return null;
     return JSON.parse(readFileSync6(path, "utf8"));
@@ -12674,6 +12674,7 @@ init_trusted_system_executable();
 init_process_birth();
 import { execFileSync as execFileSync6, spawn } from "node:child_process";
 import { createHash as createHash4, createHmac as createHmac3, timingSafeEqual as timingSafeEqual3 } from "node:crypto";
+import { createRequire } from "node:module";
 import { closeSync as closeSync3, existsSync as existsSync4, fstatSync as fstatSync2, mkdirSync as mkdirSync2, openSync as openSync3, readFileSync as readFileSync4, readSync as readSync2, realpathSync as realpathSync5, rmSync as rmSync2 } from "node:fs";
 import { dirname as dirname3, isAbsolute as isAbsolute2, join as join3, relative as relative2, resolve as resolve3 } from "node:path";
 
@@ -12770,8 +12771,8 @@ function canonicalAuthorityJson(value) {
 // packages/rn-dev-agent-core/dist/session/managed-metro-enforcement.js
 import { spawnSync } from "node:child_process";
 import { createHash as createHash3 } from "node:crypto";
-import { closeSync as closeSync2, constants as constants2, existsSync as existsSync3, mkdirSync, openSync as openSync2, readFileSync as readFileSync3, realpathSync as realpathSync4, rmSync, statSync as statSync2, symlinkSync, writeSync } from "node:fs";
-import { dirname as dirname2, resolve as resolve2 } from "node:path";
+import { closeSync as closeSync2, constants as constants2, existsSync as existsSync3, lstatSync as lstatSync3, mkdirSync, openSync as openSync2, readFileSync as readFileSync3, realpathSync as realpathSync4, rmSync, statSync as statSync2, symlinkSync, writeSync } from "node:fs";
+import { basename, dirname as dirname2, resolve as resolve2 } from "node:path";
 var DARWIN_SANDBOX_EXECUTABLE = "/usr/bin/sandbox-exec";
 var DARWIN_CODESIGN_EXECUTABLE = "/usr/bin/codesign";
 var DARWIN_PLATFORM_SIGNING_LEAF_AUTHORITIES = [
@@ -12939,6 +12940,36 @@ function pathFilters(paths) {
     `    (subpath ${sandboxString(path)})`
   ]).join("\n");
 }
+function ownedCssInteropCacheRoot(candidate, owner, canonicalize, lstat) {
+  if (!candidate)
+    return null;
+  const packageRoot = dirname2(candidate);
+  const overlaps = (a, b) => a === b || a.startsWith(`${b}/`) || b.startsWith(`${a}/`);
+  try {
+    if (basename(candidate) !== ".cache")
+      return null;
+    if (basename(packageRoot) !== "react-native-css-interop")
+      return null;
+    if (canonicalize(packageRoot) !== packageRoot)
+      return null;
+    if (![owner.sourceRoot, owner.appRoot].some((root) => packageRoot.startsWith(`${root}/`))) {
+      return null;
+    }
+    if ([owner.runtimeRoot, ...owner.protectedRuntimeRoots].some((root) => overlaps(candidate, root))) {
+      return null;
+    }
+    try {
+      if (lstat(candidate).isSymbolicLink())
+        return null;
+    } catch (error) {
+      if (error.code !== "ENOENT")
+        return null;
+    }
+    return candidate;
+  } catch {
+    return null;
+  }
+}
 function managedMetroSandboxProfile(input) {
   const readRoots = [...new Set(input.readRoots)].sort();
   const writeRoots = [...new Set(input.writeRoots)].sort();
@@ -12996,6 +13027,7 @@ function prepareManagedMetroEnforcement(input, dependencies = {}) {
   const nativeAddonRoots = (input.nativeAddonRoots ?? [sourceRoot, appRoot]).map((path) => canonicalPath(path, canonicalize));
   const runtimeInputs = input.runtimeInputs.map((path) => canonicalPath(path, canonicalize));
   const expoStateRoot = resolve2(appRoot, ".expo");
+  const cssInteropCacheRoot2 = ownedCssInteropCacheRoot(input.cssInteropCacheRoot, { sourceRoot, appRoot, runtimeRoot, protectedRuntimeRoots }, canonicalize, dependencies.lstat ?? lstatSync3);
   const readRoots = [
     "/dev/fd",
     sourceRoot,
@@ -13030,7 +13062,7 @@ function prepareManagedMetroEnforcement(input, dependencies = {}) {
   }
   const profile = managedMetroSandboxProfile({
     readRoots,
-    writeRoots: [runtimeRoot, expoStateRoot],
+    writeRoots: [runtimeRoot, expoStateRoot, ...cssInteropCacheRoot2 ? [cssInteropCacheRoot2] : []],
     executablePaths,
     executableMapPaths: [
       ...nodeRuntimeAttestation.loadedRuntimeFiles.map((entry) => entry.path),
@@ -14785,6 +14817,20 @@ function dependencyRoots(appRoot, sourceRoot, exists) {
   }
   return [...roots].sort();
 }
+function cssInteropCacheRoot(appRoot) {
+  try {
+    const configRequire = createRequire(join3(appRoot, "metro.config.js"));
+    let packageJson;
+    try {
+      packageJson = createRequire(configRequire.resolve("nativewind/metro")).resolve("react-native-css-interop/package.json");
+    } catch {
+      packageJson = configRequire.resolve("react-native-css-interop/package.json");
+    }
+    return join3(realpathSync5(dirname3(packageJson)), ".cache");
+  } catch {
+    return null;
+  }
+}
 function canonicalRuntimeInput(path) {
   try {
     return realpathSync5(path);
@@ -15057,6 +15103,7 @@ async function startManagedMetro(input, dependencies = {}) {
     commandChainInputs: commandChainInputs.map(canonicalRuntimeInput),
     protectedRuntimeRoots: [...launchCommand.protectedRuntimeRoots, nativeAddonAcknowledgmentRoot].map(canonicalRuntimeInput).filter((value, index, entries) => entries.indexOf(value) === index),
     nativeAddonRoots: allowedCodeRoots,
+    cssInteropCacheRoot: cssInteropCacheRoot(input.appRoot),
     nodeExecutable: canonicalRuntimeInput(launchCommand.nodeExecutable),
     nodeVersion: process.version,
     port: input.port,
@@ -15094,6 +15141,7 @@ async function startManagedMetro(input, dependencies = {}) {
     commandChainInputs,
     protectedRuntimeRoots: runtimeManifest.protectedRuntimeRoots,
     nativeAddonRoots: allowedCodeRoots,
+    cssInteropCacheRoot: runtimeManifest.cssInteropCacheRoot,
     port: input.port,
     instanceId,
     runtimeInputs
@@ -15473,7 +15521,7 @@ init_registry();
 init_metro_cwd();
 import { createHash as createHash6, createHmac as createHmac4, randomBytes as randomBytes2, timingSafeEqual as timingSafeEqual5 } from "node:crypto";
 import { execFileSync as execFileSync7 } from "node:child_process";
-import { closeSync as closeSync4, constants as constants3, existsSync as existsSync5, fstatSync as fstatSync3, lstatSync as lstatSync4, openSync as openSync4, readdirSync as readdirSync2, readFileSync as readFileSync5, readlinkSync as readlinkSync3, readSync as readSync3, realpathSync as realpathSync6 } from "node:fs";
+import { closeSync as closeSync4, constants as constants3, existsSync as existsSync5, fstatSync as fstatSync3, lstatSync as lstatSync5, openSync as openSync4, readdirSync as readdirSync2, readFileSync as readFileSync5, readlinkSync as readlinkSync3, readSync as readSync3, realpathSync as realpathSync6 } from "node:fs";
 import { dirname as dirname5, isAbsolute as isAbsolute3, join as join4, relative as relative3, resolve as resolve4 } from "node:path";
 init_declared_source_contract();
 function digest2(parts) {
@@ -15611,7 +15659,7 @@ function resolveSourceIdentity(inputRoot, dependencies = {}) {
 // packages/rn-dev-agent-core/dist/session/state-root.js
 init_secure_state_file();
 import { randomBytes as randomBytes3, randomUUID } from "node:crypto";
-import { chmodSync as chmodSync3, linkSync, lstatSync as lstatSync6, mkdirSync as mkdirSync5, readFileSync as readFileSync7, renameSync as renameSync2, rmSync as rmSync3, statSync as statSync4, writeFileSync as writeFileSync2 } from "node:fs";
+import { chmodSync as chmodSync3, linkSync, lstatSync as lstatSync7, mkdirSync as mkdirSync5, readFileSync as readFileSync7, renameSync as renameSync2, rmSync as rmSync3, statSync as statSync4, writeFileSync as writeFileSync2 } from "node:fs";
 import { join as join6, resolve as resolve5 } from "node:path";
 function fail(code, detail) {
   throw new Error(`${code}: ${detail}`);
@@ -15619,7 +15667,7 @@ function fail(code, detail) {
 function ensurePrivateDirectory(path) {
   try {
     mkdirSync5(path, { recursive: true, mode: 448 });
-    const link = lstatSync6(path);
+    const link = lstatSync7(path);
     const stat = statSync4(path);
     if (link.isSymbolicLink() || !link.isDirectory() || typeof process.getuid === "function" && stat.uid !== process.getuid()) {
       fail("AUTHORITY_STATE_ROOT_UNSAFE", "state directory is not private and user-owned");
@@ -15665,7 +15713,7 @@ function createAuthorityStateLayout(stateDir = getStateDir()) {
 function openAuthorityStateLayout(stateDir) {
   const layout = authorityStateLayout(stateDir);
   try {
-    const registry = lstatSync6(layout.registry);
+    const registry = lstatSync7(layout.registry);
     if (registry.isSymbolicLink() || !registry.isFile()) {
       fail("AUTHORITY_STATE_HOME_UNKNOWN", "requested state home has no regular authority registry");
     }
@@ -15703,7 +15751,7 @@ function getBoundDirectoryJournalKey(layout = createAuthorityStateLayout()) {
     } finally {
       rmSync3(temporary, { force: true });
     }
-    const link = lstatSync6(path);
+    const link = lstatSync7(path);
     const stat = statSync4(path);
     const key = readFileSync7(path);
     if (link.isSymbolicLink() || !link.isFile() || key.length !== 32 || typeof process.getuid === "function" && stat.uid !== process.getuid()) {
@@ -15732,7 +15780,7 @@ import { join as join8 } from "node:path";
 // packages/rn-dev-agent-core/dist/session/bound-directory.js
 import { spawn as spawn2 } from "node:child_process";
 import { randomUUID as randomUUID2 } from "node:crypto";
-import { closeSync as closeSync5, constants as constants4, existsSync as existsSync6, fstatSync as fstatSync4, lstatSync as lstatSync7, mkdtempSync, openSync as openSync5, readFileSync as readFileSync8, realpathSync as realpathSync7, renameSync as renameSync3, rmSync as rmSync4, writeFileSync as writeFileSync3 } from "node:fs";
+import { closeSync as closeSync5, constants as constants4, existsSync as existsSync6, fstatSync as fstatSync4, lstatSync as lstatSync8, mkdtempSync, openSync as openSync5, readFileSync as readFileSync8, realpathSync as realpathSync7, renameSync as renameSync3, rmSync as rmSync4, writeFileSync as writeFileSync3 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join as join7 } from "node:path";
 var WAIT_BUFFER = new Int32Array(new SharedArrayBuffer(4));
@@ -17054,7 +17102,7 @@ function runBoundOperation(directory, request, dependencies = {}) {
   let current;
   let currentRealPath;
   try {
-    current = lstatSync7(directory.path, { bigint: true });
+    current = lstatSync8(directory.path, { bigint: true });
     currentRealPath = realpathSync7(directory.path);
   } catch {
     throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: bound directory path is unavailable");
@@ -17171,13 +17219,13 @@ function openValidatedDirectory(path, expected) {
   let descriptor;
   let worker;
   try {
-    const before = lstatSync7(path, { bigint: true });
+    const before = lstatSync8(path, { bigint: true });
     if (!before.isDirectory() || before.isSymbolicLink()) {
       throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: integration ancestor is not a directory");
     }
     descriptor = openSync5(path, constants4.O_RDONLY | (constants4.O_DIRECTORY ?? 0) | (constants4.O_NOFOLLOW ?? 0));
     const opened = fstatSync4(descriptor, { bigint: true });
-    const after = lstatSync7(path, { bigint: true });
+    const after = lstatSync8(path, { bigint: true });
     const realPath = realpathSync7(path);
     if (!opened.isDirectory() || !sameIdentity(before, opened) || !sameIdentity(after, opened) || expected !== void 0 && (!sameIdentity(expected.identity, opened) || expected.realPath !== realPath)) {
       throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: integration ancestor changed while opening");

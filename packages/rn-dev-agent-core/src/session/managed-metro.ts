@@ -1,5 +1,6 @@
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
+import { createRequire } from 'node:module';
 import {
   closeSync,
   existsSync,
@@ -1815,6 +1816,23 @@ function dependencyRoots(
   return [...roots].sort();
 }
 
+function cssInteropCacheRoot(appRoot: string): string | null {
+  try {
+    const configRequire = createRequire(join(appRoot, 'metro.config.js'));
+    let packageJson: string;
+    try {
+      packageJson = createRequire(configRequire.resolve('nativewind/metro')).resolve(
+        'react-native-css-interop/package.json',
+      );
+    } catch {
+      packageJson = configRequire.resolve('react-native-css-interop/package.json');
+    }
+    return join(realpathSync(dirname(packageJson)), '.cache');
+  } catch {
+    return null;
+  }
+}
+
 function canonicalRuntimeInput(path: string): string {
   try {
     return realpathSync(path);
@@ -2221,6 +2239,7 @@ export async function startManagedMetro(
       .map(canonicalRuntimeInput)
       .filter((value, index, entries) => entries.indexOf(value) === index),
     nativeAddonRoots: allowedCodeRoots,
+    cssInteropCacheRoot: cssInteropCacheRoot(input.appRoot),
     nodeExecutable: canonicalRuntimeInput(launchCommand.nodeExecutable),
     nodeVersion: process.version,
     port: input.port,
@@ -2261,6 +2280,7 @@ export async function startManagedMetro(
     commandChainInputs,
     protectedRuntimeRoots: runtimeManifest.protectedRuntimeRoots,
     nativeAddonRoots: allowedCodeRoots,
+    cssInteropCacheRoot: runtimeManifest.cssInteropCacheRoot,
     port: input.port,
     instanceId,
     runtimeInputs,
