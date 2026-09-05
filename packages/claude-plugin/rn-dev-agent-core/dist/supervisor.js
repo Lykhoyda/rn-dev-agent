@@ -9336,7 +9336,7 @@ function verifiedSandboxExecutable(dependencies) {
     ]);
     const authorities = details.stderr.split("\n").filter((line) => line.startsWith("Authority="));
     const cdHash = field(details.stderr, "CDHash");
-    if (details.status !== 0 || field(details.stderr, "Identifier") !== "com.apple.sandbox-exec" || !/^\d+$/.test(field(details.stderr, "Platform identifier") ?? "") || !/^[a-f0-9]{40,64}$/.test(cdHash ?? "") || !authorities.includes("Authority=Software Signing") || !authorities.includes("Authority=Apple Code Signing Certification Authority") || !authorities.includes("Authority=Apple Root CA")) {
+    if (details.status !== 0 || field(details.stderr, "Identifier") !== "com.apple.sandbox-exec" || !/^\d+$/.test(field(details.stderr, "Platform identifier") ?? "") || !/^[a-f0-9]{40,64}$/.test(cdHash ?? "") || !DARWIN_PLATFORM_SIGNING_LEAF_AUTHORITIES.some((leaf) => authorities.includes(leaf)) || !authorities.includes("Authority=Apple Code Signing Certification Authority") || !authorities.includes("Authority=Apple Root CA")) {
       return null;
     }
     return {
@@ -9587,13 +9587,17 @@ function verifyManagedMetroEnforcementReceipt(input, receipt2, dependencies = {}
   const plan = prepareManagedMetroEnforcement(input, dependencies);
   return plan.status === "enforced" && observed.version === 2 && observed.kind === plan.kind && observed.profileSha256 === plan.profileSha256 && observed.sandboxExecutableSha256 === plan.sandboxExecutableSha256 && observed.sandboxExecutableCdHash === plan.sandboxExecutableCdHash && observed.commandLaunchSha256 === plan.commandLaunchSha256 && observed.resolvedCommandSha256 === plan.resolvedCommandSha256 && observed.descendantCreationAllowed === true && observed.unauthorizedExecutableDenied === true && observed.unmanifestedReadDenied === true && observed.unmanifestedWriteDenied === true && observed.symlinkEscapeDenied === true && observed.unallocatedListenerDenied === true && observed.allocatedListenerAllowed === true && observed.networkOutboundDenied === true && observed.resolvedCommandAllowed === true && observed.commandCleanupConfirmed === true && observed.commandChainStable === true && canonicalAuthorityJson(observed.nodeRuntimeAttestation) === canonicalAuthorityJson(plan.nodeRuntimeAttestation) && canonicalAuthorityJson(observed.commandChainAttestation) === canonicalAuthorityJson(plan.commandChainAttestation);
 }
-var DARWIN_SANDBOX_EXECUTABLE, DARWIN_CODESIGN_EXECUTABLE, PREFLIGHT_SOURCE;
+var DARWIN_SANDBOX_EXECUTABLE, DARWIN_CODESIGN_EXECUTABLE, DARWIN_PLATFORM_SIGNING_LEAF_AUTHORITIES, PREFLIGHT_SOURCE;
 var init_managed_metro_enforcement = __esm({
   "packages/rn-dev-agent-core/dist/session/managed-metro-enforcement.js"() {
     "use strict";
     init_authority_json();
     DARWIN_SANDBOX_EXECUTABLE = "/usr/bin/sandbox-exec";
     DARWIN_CODESIGN_EXECUTABLE = "/usr/bin/codesign";
+    DARWIN_PLATFORM_SIGNING_LEAF_AUTHORITIES = [
+      "Authority=Software Signing",
+      "Authority=macOS Software Signing"
+    ];
     PREFLIGHT_SOURCE = String.raw`
 const { spawn, spawnSync } = require('node:child_process');
 const { createHash } = require('node:crypto');
