@@ -13115,7 +13115,8 @@ const startedAt = performance.now();
 const elapsed = () => Math.round(performance.now() - startedAt);
 const timings = {};
 let commandExit = null;
-let commandStderrTail = '';
+let commandStderrTail = null;
+const diagnosticInputLimit = 65536;
 const denied = (run) => {
   try {
     run();
@@ -13189,26 +13190,38 @@ const processGroupExists = (pid) => {
   timings.allocatedMs = elapsed();
   if (!allocated.ok) throw new Error('allocated listener unavailable before command');
   const commandEnvironment = JSON.parse(readFileSync(input.preflightEnvironmentPath, 'utf8'));
-  const stderrDescriptor = openSync(input.commandStderrPath, 'w', 0o600);
-  const stdio = ['ignore', 'ignore', stderrDescriptor, 'ipc'];
+  let stderrDescriptor;
+  try {
+    stderrDescriptor = openSync(input.commandStderrPath, 'w', 0o600);
+  } catch {}
+  const stdio = ['ignore', 'ignore', stderrDescriptor ?? 'ignore', 'ipc'];
   while (stdio.length < 9) stdio.push('ignore');
   stdio[8] = 'pipe';
   stdio.push('pipe');
   stdio.push(...commandSnapshots.map(() => 'pipe'));
-  const command = spawn(
-    input.commandExecutable,
-    input.commandArguments.map((argument) =>
-      argument.startsWith(logicalArgumentPrefix)
-        ? argument.slice(logicalArgumentPrefix.length)
-        : boundPaths.get(argument) ?? argument,
-    ),
-    {
-    cwd: input.appRoot,
-    detached: true,
-    env: commandEnvironment,
-    stdio,
-    },
-  );
+  let command;
+  try {
+    command = spawn(
+      input.commandExecutable,
+      input.commandArguments.map((argument) =>
+        argument.startsWith(logicalArgumentPrefix)
+          ? argument.slice(logicalArgumentPrefix.length)
+          : boundPaths.get(argument) ?? argument,
+      ),
+      {
+        cwd: input.appRoot,
+        detached: true,
+        env: commandEnvironment,
+        stdio,
+      },
+    );
+  } finally {
+    if (stderrDescriptor !== undefined) {
+      try {
+        closeSync(stderrDescriptor);
+      } catch {}
+    }
+  }
   command.stdio[8].end('admitted\n');
   for (let index = 0; index < commandSnapshots.length; index += 1) {
     command.stdio[10 + index].end(commandSnapshots[index]);
@@ -13248,12 +13261,31 @@ const processGroupExists = (pid) => {
   const released = await listen(input.port);
   commandCleanupConfirmed = commandCleanupConfirmed && released.ok;
   timings.cleanupMs = elapsed();
-  try {
-    closeSync(stderrDescriptor);
-  } catch {}
-  try {
-    commandStderrTail = readFileSync(input.commandStderrPath, 'utf8').slice(-8192);
-  } catch {}
+  if (stderrDescriptor !== undefined) {
+    let readDescriptor;
+    try {
+      readDescriptor = openSync(input.commandStderrPath, constants.O_RDONLY | constants.O_NOFOLLOW);
+      const metadata = fstatSync(readDescriptor);
+      if (metadata.isFile() && metadata.size <= diagnosticInputLimit) {
+        const contents = Buffer.alloc(metadata.size);
+        let offset = 0;
+        while (offset < contents.length) {
+          const count = readSync(readDescriptor, contents, offset, contents.length - offset, offset);
+          if (count === 0) break;
+          offset += count;
+        }
+        if (offset === contents.length && fstatSync(readDescriptor).size === contents.length) {
+          commandStderrTail = contents.toString('utf8');
+        }
+      }
+    } catch {} finally {
+      if (readDescriptor !== undefined) {
+        try {
+          closeSync(readDescriptor);
+        } catch {}
+      }
+    }
+  }
   const commandChainStable = true;
   const descendantCreationAllowed = resolvedCommandAllowed && commandCleanupConfirmed;
   const unallocated = await listen(input.unallocatedPort);
@@ -13294,7 +13326,9 @@ const processGroupExists = (pid) => {
           timings,
           commandExit,
           commandStderrTail,
-          exception: String((error && error.message) || error).slice(0, 512),
+          exception: String((error && error.message) || error).length <= diagnosticInputLimit
+            ? String((error && error.message) || error)
+            : null,
         },
       }),
     );
@@ -13320,7 +13354,10 @@ function observationTail(value, sanitize) {
   if (typeof value !== "string" || !sanitize)
     return null;
   const bytes = Buffer.from(sanitize(value), "utf8");
-  return bytes.subarray(Math.max(0, bytes.length - OBSERVATION_TAIL_BYTES)).toString("utf8");
+  let start = Math.max(0, bytes.length - OBSERVATION_TAIL_BYTES);
+  while (start < bytes.length && (bytes[start] & 192) === 128)
+    start += 1;
+  return bytes.subarray(start).toString("utf8");
 }
 function preflightObservation(result, elapsedMs, sanitize) {
   let parsed = null;
@@ -13364,9 +13401,9 @@ function runManagedMetroEnforcementPreflight(plan, dependencies = {}) {
   });
   const removeCanary = dependencies.removeCanary ?? ((path) => rmSync(path, { force: true }));
   const run = dependencies.run ?? defaultRun2;
-  const observe2 = (observation) => {
+  const observe2 = (createObservation) => {
     try {
-      dependencies.observe?.(observation);
+      dependencies.observe?.(createObservation());
     } catch {
     }
   };
@@ -13409,7 +13446,7 @@ function runManagedMetroEnforcementPreflight(plan, dependencies = {}) {
       })
     ]);
     observationEmitted = true;
-    observe2(preflightObservation(result, Math.round(performance.now() - startedAt), dependencies.sanitize));
+    observe2(() => preflightObservation(result, Math.round(performance.now() - startedAt), dependencies.sanitize));
     if (result.status !== 0) {
       throw new Error("METRO_RUNTIME_ENFORCEMENT_UNAVAILABLE: sandbox preflight failed");
     }
@@ -13442,7 +13479,7 @@ function runManagedMetroEnforcementPreflight(plan, dependencies = {}) {
   } catch (error) {
     if (!observationEmitted) {
       observationEmitted = true;
-      observe2({
+      observe2(() => ({
         version: 1,
         outcome: "invalid",
         complete: false,
@@ -13456,7 +13493,7 @@ function runManagedMetroEnforcementPreflight(plan, dependencies = {}) {
         commandStderrTail: null,
         preflightStderrTail: null,
         exception: dependencies.sanitize ? dependencies.sanitize(error instanceof Error ? error.message : String(error)).slice(0, 512) : null
-      });
+      }));
     }
     if (error instanceof Error && error.message.startsWith("METRO_RUNTIME_ENFORCEMENT_")) {
       throw error;
@@ -13465,7 +13502,10 @@ function runManagedMetroEnforcementPreflight(plan, dependencies = {}) {
       cause: error
     });
   } finally {
-    rmSync(plan.commandStderrPath, { force: true });
+    try {
+      rmSync(plan.commandStderrPath, { force: true });
+    } catch {
+    }
     if (symlinkCreated)
       rmSync(plan.symlinkCanaryPath, { force: true });
     if (environmentCreated)
