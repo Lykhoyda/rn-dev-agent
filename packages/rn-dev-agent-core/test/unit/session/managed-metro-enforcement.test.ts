@@ -398,7 +398,7 @@ test('managed Metro preflight observation stays truthful without changing outcom
   const diagnostic = {
     timings: { allocatedMs: 3, spawnedMs: 9, occupancyMs: 15012, cleanupMs: 15040, totalMs: 15044 },
     commandExit: { code: 1, signal: null, atMs: 800 },
-    commandStderrTail: `${'x'.repeat(9000)}token=hunter2 EPERM: operation not permitted`,
+    commandCauses: ['EPERM'],
   };
   const cases: Array<{
     name: string;
@@ -454,7 +454,7 @@ test('managed Metro preflight observation stays truthful without changing outcom
         stderr: '',
       },
       expectError: 'METRO_RUNTIME_ENFORCEMENT_UNAVAILABLE: sandbox preflight is incomplete',
-      expect: { outcome: 'incomplete', complete: true, timings: null },
+      expect: { outcome: 'incomplete', complete: false, timings: null },
     },
   ];
   for (const { name, result, expectError, expect } of cases) {
@@ -465,7 +465,6 @@ test('managed Metro preflight observation stays truthful without changing outcom
         removeCanary: () => {},
         run: () => result,
         observe: (observation) => observations.push(observation),
-        sanitize: (value) => value.replaceAll('hunter2', '<redacted>'),
       });
     if (expectError) assert.throws(runPreflight, { message: expectError }, name);
     else assert.equal(runPreflight().resolvedCommandAllowed, true, name);
@@ -477,32 +476,45 @@ test('managed Metro preflight observation stays truthful without changing outcom
     if (result.stdout.includes('"diagnostic"')) {
       assert.deepEqual(observation.timings, diagnostic.timings, name);
       assert.deepEqual(observation.commandExit, diagnostic.commandExit, name);
-      const tail = observation.commandStderrTail as string;
-      assert.ok(Buffer.byteLength(tail) <= 8192, name);
-      assert.ok(tail.endsWith('EPERM: operation not permitted'), name);
-      assert.ok(!tail.includes('hunter2'), `${name}: stderr tail is redacted`);
-      assert.ok(tail.includes('<redacted>'), `${name}: redaction applied`);
+      assert.deepEqual(observation.commandCauses, ['EPERM'], name);
     }
   }
-  const unsanitized: unknown[] = [];
+  const projected: unknown[] = [];
   runManagedMetroEnforcementPreflight(plan, {
     writeCanary: () => {},
     removeCanary: () => {},
-    run: () => ({ status: 0, stdout: JSON.stringify({ ...allTrue, diagnostic }), stderr: 'raw' }),
-    observe: (observation) => unsanitized.push(observation),
+    run: () => ({
+      status: 0,
+      signal: 'secret-signal',
+      stdout: JSON.stringify({
+        ...allTrue,
+        diagnostic: {
+          timings: { ...diagnostic.timings, 'API_TOKEN=hunter2': 123 },
+          commandExit: { code: 'hunter2', signal: 'secret-signal', atMs: -1 },
+          commandCauses: ['EPERM', 'RN_DEV_AGENT_PRIVATE', 'abcédef', 'PRIVATE'],
+          exceptionCause: 'secret exception message',
+        },
+      }),
+      stderr:
+        'abcPRIVATE abcédef RN_DEV_AGENT_PRIVATE Node.js v123.456.789 JavaScript heap out of memory',
+    }),
+    observe: (observation) => projected.push(observation),
   });
-  const withoutSanitizer = unsanitized[0] as Record<string, unknown>;
-  assert.equal(withoutSanitizer.commandStderrTail, null, 'no sanitizer emits no command stderr');
-  assert.equal(
-    withoutSanitizer.preflightStderrTail,
-    null,
-    'no sanitizer emits no preflight stderr',
-  );
-  assert.deepEqual(
-    withoutSanitizer.timings,
-    diagnostic.timings,
-    'timings remain without sanitizer',
-  );
+  assert.deepEqual(projected[0], {
+    version: 1,
+    outcome: 'receipt',
+    complete: true,
+    status: 0,
+    signal: 'unknown',
+    outerTimedOut: false,
+    elapsedMs: (projected[0] as { elapsedMs: number }).elapsedMs,
+    flags: allTrue,
+    timings: diagnostic.timings,
+    commandExit: { code: null, signal: 'unknown', atMs: -1 },
+    commandCauses: ['EPERM'],
+    preflightCauses: ['RN_DEV_AGENT', 'NODE_RUNTIME', 'OUT_OF_MEMORY'],
+    exceptionCause: 'unknown',
+  });
   const setupFailures: unknown[] = [];
   assert.throws(
     () =>
@@ -538,10 +550,12 @@ test('managed Metro preflight observation stays truthful without changing outcom
       runManagedMetroEnforcementPreflight(plan, {
         writeCanary: () => {},
         removeCanary: (path) => removed.push(path),
-        run: () => result,
-        sanitize: () => {
-          throw new Error('sanitizer failure');
-        },
+        run: () => ({
+          ...result,
+          get stderr() {
+            throw new Error('observation construction failure');
+          },
+        }),
         observe: (observation) => emitted.push(observation),
       });
     if (expectError) assert.throws(runPreflight, { message: expectError }, name);
@@ -559,9 +573,6 @@ test('managed Metro preflight observation stays truthful without changing outcom
         writeCanary: () => {
           throw setupError;
         },
-        sanitize: () => {
-          throw new Error('sanitizer failure');
-        },
         observe: (observation) => emittedSetupFailures.push(observation),
       }),
     (error: unknown) => {
@@ -574,7 +585,8 @@ test('managed Metro preflight observation stays truthful without changing outcom
       return true;
     },
   );
-  assert.deepEqual(emittedSetupFailures, []);
+  assert.equal((emittedSetupFailures[0] as { exceptionCause: string }).exceptionCause, 'unknown');
+  assert.ok(!JSON.stringify(emittedSetupFailures).includes(setupError.message));
 
   mkdirSync(plan.commandStderrPath);
   for (const { name, result, expectError } of cases) {
@@ -629,39 +641,14 @@ test('managed Metro preflight diagnostic capture bounds input and survives I/O f
   });
   const finalDiagnostic = '\nEPERM: operation not permitted\n';
   const longSecret = `${'private-credential-line\n'.repeat(6000)}credential-end-abcédef`;
-  let sanitize: ((value: string, truncatedStart?: boolean) => string) | undefined;
-  await assert.rejects(
-    startManagedMetro(
-      {
-        appRoot: root,
-        runtimeRoot: root,
-        sourceRoot: root,
-        sessionId: 'diagnostic-session',
-        instanceId: 'diagnostic-metro',
-        buildGeneration: 1,
-        signerCapability: 'diagnostic-signer',
-        port: 8341,
-      },
-      {
-        environment: { API_TOKEN: 'hunter2', SERVICE_SECRET: longSecret, OTHER_TOKEN: 'abcédef' },
-        exists: () => true,
-        readText: () => JSON.stringify({ dependencies: { expo: '1' } }),
-        prepareEnforcement: () => plan,
-        preflightEnforcement: (_plan, dependencies) => {
-          sanitize = dependencies?.sanitize;
-          return baselineReceipt;
-        },
-        spawnProcess: () => new ChildProcess(),
-      },
-    ),
-    { message: 'METRO_START_UNAVAILABLE: package-local Metro process did not start' },
-  );
-  assert.ok(sanitize);
+  let persistedResult = { status: 0, stdout: '', stderr: '' };
   const scenarios = [
     'split secret',
     'unicode stderr',
     'exception split secret',
     'noisy stderr',
+    'single long line',
+    'overlapping secrets',
     'read boundary secret',
     'long multiline secret',
     'non-ASCII secret',
@@ -709,15 +696,19 @@ test('managed Metro preflight diagnostic capture bounds input and survives I/O f
               stderrMode = options.stdio[2];
               if (typeof stderrMode === 'number') {
                 const output =
-                  scenario === 'unicode stderr'
-                    ? '€'.repeat(3000)
-                    : scenario === 'read boundary secret'
-                      ? `API_TOKEN=hunter2${'.'.repeat(65536 - 6 - finalDiagnostic.length)}${finalDiagnostic}`
-                      : scenario === 'long multiline secret'
-                        ? `Rejected value ${longSecret}${finalDiagnostic}`
-                        : scenario === 'non-ASCII secret'
-                          ? `Rejected value abcédef${finalDiagnostic}`
-                          : `API_TOKEN=hunter2${'.'.repeat(8186)}`;
+                  scenario === 'single long line'
+                    ? `${'x'.repeat(70000)} EPERM: operation not permitted\n`
+                    : scenario === 'overlapping secrets'
+                      ? `${'x'.repeat(70000)}\nabcPRIVATE\nEPERM\n`
+                      : scenario === 'unicode stderr'
+                        ? '€'.repeat(3000)
+                        : scenario === 'read boundary secret'
+                          ? `API_TOKEN=hunter2${'.'.repeat(65536 - 6 - finalDiagnostic.length)}${finalDiagnostic}`
+                          : scenario === 'long multiline secret'
+                            ? `Rejected value ${longSecret}${finalDiagnostic}`
+                            : scenario === 'non-ASCII secret'
+                              ? `Rejected value abcédef${finalDiagnostic}`
+                              : `API_TOKEN=hunter2${'.'.repeat(8186)}`;
                 fs.writeSync(stderrMode, output);
                 if (scenario === 'noisy stderr') {
                   const size = 256 * 1024 * 1024;
@@ -807,45 +798,79 @@ test('managed Metro preflight diagnostic capture bounds input and survives I/O f
     assert.ok(readSizes.reduce((total, size) => total + size, 0) <= 65536, scenario);
     if (scenario === 'noisy stderr') assert.deepEqual(readSizes, [65536], scenario);
     if (scenario === 'open write failure') assert.equal(stderrMode, 'ignore', scenario);
-    const observations: Array<{ commandStderrTail: string | null; exception: string | null }> = [];
+    const observations: Array<{ commandCauses: string[]; exceptionCause: string | null }> = [];
     const runPreflight = () =>
       runManagedMetroEnforcementPreflight(plan, {
         writeCanary: () => {},
         removeCanary: () => {},
         run: () => result,
-        sanitize: [
-          'noisy stderr',
-          'read boundary secret',
-          'long multiline secret',
-          'non-ASCII secret',
-        ].includes(scenario)
-          ? sanitize
-          : (value) => value.replaceAll('hunter2', '<redacted>'),
         observe: (observation) => observations.push(observation),
       });
     if (scenario === 'exception split secret') {
       assert.throws(runPreflight, {
         message: 'METRO_RUNTIME_ENFORCEMENT_UNAVAILABLE: sandbox preflight failed',
       });
-      assert.equal(observations[0].exception, `${'x'.repeat(510)}<r`, scenario);
+      assert.equal(observations[0].exceptionCause, 'unknown', scenario);
     } else assert.deepEqual(runPreflight(), baselineReceipt, scenario);
     assert.equal(observations.length, 1, scenario);
-    const tail = observations[0].commandStderrTail;
-    if (scenario === 'split secret' || scenario === 'close failure') {
-      assert.equal(tail, `acted>${'.'.repeat(8186)}`, scenario);
-      assert.ok(!tail.includes('unter2'), scenario);
-      assert.equal(Buffer.byteLength(tail), 8192, scenario);
-    } else if (scenario === 'unicode stderr') {
-      assert.equal(tail, '€'.repeat(2730), scenario);
-      assert.ok(Buffer.byteLength(tail) <= 8192, scenario);
-    } else if (scenario === 'noisy stderr' || scenario === 'read boundary secret') {
-      assert.equal(tail, finalDiagnostic.trim(), scenario);
-    } else if (scenario === 'long multiline secret') {
-      assert.equal(tail, `<redacted>${finalDiagnostic.trimEnd()}`, scenario);
-    } else if (scenario === 'non-ASCII secret') {
-      assert.equal(tail, `Rejected value <redacted>${finalDiagnostic.trimEnd()}`, scenario);
-    } else assert.equal(tail, null, scenario);
+    const expectedCauses = [
+      'noisy stderr',
+      'single long line',
+      'overlapping secrets',
+      'read boundary secret',
+      'long multiline secret',
+      'non-ASCII secret',
+    ].includes(scenario)
+      ? ['EPERM']
+      : ['unknown'];
+    assert.deepEqual(observations[0].commandCauses, expectedCauses, scenario);
+    assert.doesNotMatch(JSON.stringify(observations), /hunter2|PRIVATE|abc[é?]def/);
+    assert.doesNotMatch(result.stdout, /hunter2|PRIVATE|abc[é?]def/);
+    if (scenario === 'single long line') persistedResult = result;
   }
+  await assert.rejects(
+    startManagedMetro(
+      {
+        appRoot: root,
+        runtimeRoot: root,
+        sourceRoot: root,
+        sessionId: 'diagnostic-session',
+        instanceId: 'diagnostic-metro',
+        buildGeneration: 1,
+        signerCapability: 'diagnostic-signer',
+        port: 8341,
+      },
+      {
+        environment: {
+          API_TOKEN: 'prefixabc',
+          SERVICE_SECRET: 'bcPRIVATE',
+          OTHER_TOKEN: 'abcédef',
+        },
+        exists: () => true,
+        readText: () => JSON.stringify({ dependencies: { expo: '1' } }),
+        prepareEnforcement: () => plan,
+        preflightEnforcement: (input, dependencies) =>
+          runManagedMetroEnforcementPreflight(input, {
+            ...dependencies,
+            writeCanary: () => {},
+            removeCanary: () => {},
+            run: () => persistedResult,
+          }),
+        spawnProcess: () => new ChildProcess(),
+      },
+    ),
+    { message: 'METRO_START_UNAVAILABLE: package-local Metro process did not start' },
+  );
+  const record = JSON.parse(
+    readFileSync(join(root, 'metro-enforcement-diagnostic-diagnostic-metro.json'), 'utf8'),
+  );
+  assert.equal(record.recordComplete, true);
+  assert.deepEqual(record.preflight.commandCauses, ['EPERM']);
+  assert.equal(record.preflight.outcome, 'receipt');
+  assert.doesNotMatch(
+    JSON.stringify(record),
+    /prefixabc|PRIVATE|abc[é?]def|operation not permitted/,
+  );
 });
 
 test('managed Metro derives a deterministic descendant-capable Darwin profile', () => {
