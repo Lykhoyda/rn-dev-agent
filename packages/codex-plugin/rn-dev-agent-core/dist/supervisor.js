@@ -85790,7 +85790,15 @@ function createDispatchHandler(getClient2) {
       payload,
       readPath: args.readPath
     });
-    const result = await client2.evaluate(client2.helperExpr(`dispatchAction(${opts})`));
+    const call = `dispatchAction(${opts})`;
+    const expression = client2.bridgeDetected ? `(function() {
+            if (typeof __RN_DEV_BRIDGE__.dispatchAction !== 'function') return __RN_AGENT.${call};
+            var r = ${client2.helperExpr(call)};
+            var p; try { p = JSON.parse(r); } catch(e) { return r; }
+            if (p && p.error === 'No Redux store' && p.dispatched !== true) return __RN_AGENT.${call};
+            return r;
+          })()` : client2.helperExpr(call);
+    const result = await client2.evaluate(expression);
     if (result.error) {
       return failResult(`Dispatch error: ${result.error}`);
     }
@@ -85807,6 +85815,9 @@ function createDispatchHandler(getClient2) {
       const obj = parsed;
       if ("__agent_error" in obj) {
         return failResult(String(obj.__agent_error));
+      }
+      if ("error" in obj) {
+        return failResult(String(obj.error));
       }
     }
     return okResult(parsed);

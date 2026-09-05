@@ -3,4 +3,4 @@
 "rn-dev-agent-plugin": patch
 ---
 
-Discover Redux and React Query stores beneath deeply nested React providers.
+Discover deeply nested Redux and React Query stores and dispatch Redux actions through their Provider when an app bridge has no registered store.

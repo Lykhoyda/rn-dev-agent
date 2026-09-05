@@ -23,7 +23,18 @@ export function createDispatchHandler(getClient: () => CDPClient) {
         payload: payload,
         readPath: args.readPath,
       });
-      const result = await client.evaluate(client.helperExpr(`dispatchAction(${opts})`));
+      const call = `dispatchAction(${opts})`;
+      // Only a pre-dispatch miss can retry safely; other bridge failures may follow a mutation.
+      const expression = client.bridgeDetected
+        ? `(function() {
+            if (typeof __RN_DEV_BRIDGE__.dispatchAction !== 'function') return __RN_AGENT.${call};
+            var r = ${client.helperExpr(call)};
+            var p; try { p = JSON.parse(r); } catch(e) { return r; }
+            if (p && p.error === 'No Redux store' && p.dispatched !== true) return __RN_AGENT.${call};
+            return r;
+          })()`
+        : client.helperExpr(call);
+      const result = await client.evaluate(expression);
 
       if (result.error) {
         return failResult(`Dispatch error: ${result.error}`);
@@ -44,6 +55,9 @@ export function createDispatchHandler(getClient: () => CDPClient) {
         const obj = parsed as Record<string, unknown>;
         if ('__agent_error' in obj) {
           return failResult(String(obj.__agent_error));
+        }
+        if ('error' in obj) {
+          return failResult(String(obj.error));
         }
       }
 
