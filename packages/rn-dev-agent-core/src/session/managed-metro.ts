@@ -1900,10 +1900,7 @@ function boundedMetroLogTail(path: string, maxBytes = 4_096): string | null {
     if (length === 0) return null;
     const buffer = Buffer.alloc(length);
     readSync(descriptor, buffer, 0, length, size - length);
-    const tail = buffer
-      .toString('utf8')
-      .replace(/[^\t\n\r\x20-\x7e]/g, '?')
-      .trim();
+    const tail = buffer.toString('utf8');
     return tail || null;
   } catch {
     return null;
@@ -1956,15 +1953,40 @@ function managedMetroFirstPartyLogCauses(path: string): string | null {
   return causes.length > 0 ? causes.join(', ') : null;
 }
 
+function redactedTruncatedPrefixLength(value: string, redactions: readonly string[]): number {
+  if (!value) return 0;
+  const prefixes = new Uint32Array(value.length);
+  for (let index = 1, matched = 0; index < value.length; index += 1) {
+    while (matched > 0 && value[index] !== value[matched]) matched = prefixes[matched - 1];
+    if (value[index] === value[matched]) matched += 1;
+    prefixes[index] = matched;
+  }
+  let longest = 0;
+  for (const redaction of redactions) {
+    let matched = 0;
+    for (let index = 0; index < redaction.length; index += 1) {
+      while (matched > 0 && (matched === value.length || redaction[index] !== value[matched])) {
+        matched = prefixes[matched - 1];
+      }
+      if (redaction[index] === value[matched]) matched += 1;
+    }
+    longest = Math.max(longest, matched);
+  }
+  return longest;
+}
+
 function sanitizeManagedMetroStartupDetailValue(
   value: string,
   redactions: readonly string[],
+  truncatedStart = false,
 ): string {
-  let sanitized = value.replace(/[^\t\n\r\x20-\x7e]/g, '?');
+  const prefixLength = truncatedStart ? redactedTruncatedPrefixLength(value, redactions) : 0;
+  let sanitized = prefixLength > 0 ? `<redacted>${value.slice(prefixLength)}` : value;
   for (const redaction of [...redactions].sort((left, right) => right.length - left.length)) {
     if (redaction) sanitized = sanitized.replaceAll(redaction, '<redacted>');
   }
   return sanitized
+    .replace(/[^\t\n\r\x20-\x7e]/g, '?')
     .replace(/\b(?:Basic|Bearer)\s+\S+/gi, '<redacted-authorization>')
     .replace(
       /(\b[A-Za-z_][A-Za-z0-9_.-]*(?:access[-_]?key|token|secret|password|passwd|pwd|credential|api[-_]?key|authorization|auth|cookie|private[-_]?key)[A-Za-z0-9_.-]*\b["']?\s*[:=]\s*["']?)[^"'\s,;}]+/gi,
@@ -2351,7 +2373,8 @@ export async function startManagedMetro(
           observe: (observation) => {
             preflightObservation = observation;
           },
-          sanitize: (value) => sanitizeManagedMetroStartupDetailValue(value, enforcementRedactions),
+          sanitize: (value, truncatedStart) =>
+            sanitizeManagedMetroStartupDetailValue(value, enforcementRedactions, truncatedStart),
         }),
       };
     } catch {

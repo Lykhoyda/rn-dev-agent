@@ -13116,6 +13116,7 @@ const elapsed = () => Math.round(performance.now() - startedAt);
 const timings = {};
 let commandExit = null;
 let commandStderrTail = null;
+let commandStderrTruncated = false;
 const diagnosticInputLimit = 65536;
 const denied = (run) => {
   try {
@@ -13266,16 +13267,21 @@ const processGroupExists = (pid) => {
     try {
       readDescriptor = openSync(input.commandStderrPath, constants.O_RDONLY | constants.O_NOFOLLOW);
       const metadata = fstatSync(readDescriptor);
-      if (metadata.isFile() && metadata.size <= diagnosticInputLimit) {
-        const contents = Buffer.alloc(metadata.size);
+      if (metadata.isFile()) {
+        const position = Math.max(0, metadata.size - diagnosticInputLimit);
+        const contents = Buffer.alloc(Math.min(metadata.size, diagnosticInputLimit));
         let offset = 0;
         while (offset < contents.length) {
-          const count = readSync(readDescriptor, contents, offset, contents.length - offset, offset);
+          const count = readSync(readDescriptor, contents, offset, contents.length - offset, position + offset);
           if (count === 0) break;
           offset += count;
         }
-        if (offset === contents.length && fstatSync(readDescriptor).size === contents.length) {
-          commandStderrTail = contents.toString('utf8');
+        if (offset === contents.length && fstatSync(readDescriptor).size === metadata.size) {
+          commandStderrTruncated = position > 0;
+          const lineStart = commandStderrTruncated ? contents.indexOf(10) + 1 : 0;
+          commandStderrTail = commandStderrTruncated && lineStart === 0
+            ? ''
+            : contents.subarray(lineStart).toString('utf8');
         }
       }
     } catch {} finally {
@@ -13314,7 +13320,7 @@ const processGroupExists = (pid) => {
     commandChainStable,
   };
   timings.totalMs = elapsed();
-  writeFileSync(1, JSON.stringify({ ...receipt, diagnostic: { timings, commandExit, commandStderrTail } }));
+  writeFileSync(1, JSON.stringify({ ...receipt, diagnostic: { timings, commandExit, commandStderrTail, commandStderrTruncated } }));
   process.exit(Object.values(receipt).every(Boolean) ? 0 : 1);
 })().catch((error) => {
   try {
@@ -13326,6 +13332,7 @@ const processGroupExists = (pid) => {
           timings,
           commandExit,
           commandStderrTail,
+          commandStderrTruncated,
           exception: String((error && error.message) || error).length <= diagnosticInputLimit
             ? String((error && error.message) || error)
             : null,
@@ -13350,10 +13357,10 @@ var PREFLIGHT_FLAGS = [
   "commandChainStable"
 ];
 var OBSERVATION_TAIL_BYTES = 8192;
-function observationTail(value, sanitize) {
+function observationTail(value, sanitize, truncatedStart = false) {
   if (typeof value !== "string" || !sanitize)
     return null;
-  const bytes = Buffer.from(sanitize(value), "utf8");
+  const bytes = Buffer.from(sanitize(value, truncatedStart), "utf8");
   let start = Math.max(0, bytes.length - OBSERVATION_TAIL_BYTES);
   while (start < bytes.length && (bytes[start] & 192) === 128)
     start += 1;
@@ -13385,7 +13392,7 @@ function preflightObservation(result, elapsedMs, sanitize) {
       signal: typeof exit.signal === "string" ? exit.signal : null,
       atMs: typeof exit.atMs === "number" ? exit.atMs : -1
     } : null,
-    commandStderrTail: observationTail(diagnostic2?.commandStderrTail, sanitize),
+    commandStderrTail: observationTail(diagnostic2?.commandStderrTail, sanitize, diagnostic2?.commandStderrTruncated === true),
     preflightStderrTail: observationTail(result.stderr, sanitize),
     exception: typeof diagnostic2?.exception === "string" && sanitize ? sanitize(diagnostic2.exception).slice(0, 512) : null
   };
@@ -15045,7 +15052,7 @@ function boundedMetroLogTail(path, maxBytes = 4096) {
       return null;
     const buffer = Buffer.alloc(length);
     readSync2(descriptor, buffer, 0, length, size - length);
-    const tail = buffer.toString("utf8").replace(/[^\t\n\r\x20-\x7e]/g, "?").trim();
+    const tail = buffer.toString("utf8");
     return tail || null;
   } catch {
     return null;
@@ -15077,13 +15084,39 @@ function managedMetroFirstPartyLogCauses(path) {
   const causes = [...new Set(tail.match(MANAGED_METRO_FIRST_PARTY_LOG_CAUSE) ?? [])].slice(0, 16);
   return causes.length > 0 ? causes.join(", ") : null;
 }
-function sanitizeManagedMetroStartupDetailValue(value, redactions) {
-  let sanitized = value.replace(/[^\t\n\r\x20-\x7e]/g, "?");
+function redactedTruncatedPrefixLength(value, redactions) {
+  if (!value)
+    return 0;
+  const prefixes = new Uint32Array(value.length);
+  for (let index = 1, matched = 0; index < value.length; index += 1) {
+    while (matched > 0 && value[index] !== value[matched])
+      matched = prefixes[matched - 1];
+    if (value[index] === value[matched])
+      matched += 1;
+    prefixes[index] = matched;
+  }
+  let longest = 0;
+  for (const redaction of redactions) {
+    let matched = 0;
+    for (let index = 0; index < redaction.length; index += 1) {
+      while (matched > 0 && (matched === value.length || redaction[index] !== value[matched])) {
+        matched = prefixes[matched - 1];
+      }
+      if (redaction[index] === value[matched])
+        matched += 1;
+    }
+    longest = Math.max(longest, matched);
+  }
+  return longest;
+}
+function sanitizeManagedMetroStartupDetailValue(value, redactions, truncatedStart = false) {
+  const prefixLength = truncatedStart ? redactedTruncatedPrefixLength(value, redactions) : 0;
+  let sanitized = prefixLength > 0 ? `<redacted>${value.slice(prefixLength)}` : value;
   for (const redaction of [...redactions].sort((left, right) => right.length - left.length)) {
     if (redaction)
       sanitized = sanitized.replaceAll(redaction, "<redacted>");
   }
-  return sanitized.replace(/\b(?:Basic|Bearer)\s+\S+/gi, "<redacted-authorization>").replace(/(\b[A-Za-z_][A-Za-z0-9_.-]*(?:access[-_]?key|token|secret|password|passwd|pwd|credential|api[-_]?key|authorization|auth|cookie|private[-_]?key)[A-Za-z0-9_.-]*\b["']?\s*[:=]\s*["']?)[^"'\s,;}]+/gi, "$1<redacted>").replace(/\b([a-z][a-z0-9+.-]*:\/\/)[^/\s@]+@/gi, "$1<redacted>@").replace(/[A-Za-z]:\\(?:[^\\\s]+\\)*[^\\\s]*/g, "<path>").replace(/(?:\/[A-Za-z0-9._@%+~=-]+){2,}/g, "<path>").trim();
+  return sanitized.replace(/[^\t\n\r\x20-\x7e]/g, "?").replace(/\b(?:Basic|Bearer)\s+\S+/gi, "<redacted-authorization>").replace(/(\b[A-Za-z_][A-Za-z0-9_.-]*(?:access[-_]?key|token|secret|password|passwd|pwd|credential|api[-_]?key|authorization|auth|cookie|private[-_]?key)[A-Za-z0-9_.-]*\b["']?\s*[:=]\s*["']?)[^"'\s,;}]+/gi, "$1<redacted>").replace(/\b([a-z][a-z0-9+.-]*:\/\/)[^/\s@]+@/gi, "$1<redacted>@").replace(/[A-Za-z]:\\(?:[^\\\s]+\\)*[^\\\s]*/g, "<path>").replace(/(?:\/[A-Za-z0-9._@%+~=-]+){2,}/g, "<path>").trim();
 }
 function sanitizeManagedMetroStartupDetail(value, redactions) {
   return sanitizeManagedMetroStartupDetailValue(value, redactions).slice(-4096);
@@ -15343,7 +15376,7 @@ async function startManagedMetro(input, dependencies = {}) {
           observe: (observation) => {
             preflightObservation2 = observation;
           },
-          sanitize: (value) => sanitizeManagedMetroStartupDetailValue(value, enforcementRedactions)
+          sanitize: (value, truncatedStart) => sanitizeManagedMetroStartupDetailValue(value, enforcementRedactions, truncatedStart)
         })
       };
     } catch {
