@@ -1372,6 +1372,7 @@ test('managed Metro surfaces a bounded sanitized pre-evidence launcher diagnosti
             DATABASE_URL: 'postgres://user:database-password@example.test/service',
             NPM_TOKEN: 'inherited-npm-secret',
             SERVICE_CREDENTIAL: 'inherited-service-credential',
+            API_TOKEN: 'abcédef',
           },
           readText: () => JSON.stringify({ dependencies: { expo: '1' } }),
           exists: () => true,
@@ -1401,7 +1402,7 @@ test('managed Metro surfaces a bounded sanitized pre-evidence launcher diagnosti
             );
             writeFileSync(
               join(runtimeRoot, 'metro.log'),
-              `${appRoot}/private-entry.cjs secret-session-id secret-signer-capability\nAWS_ACCESS_KEY_ID=inherited-access-key\nDATABASE_URL=postgres://user:database-password@example.test/service\nNPM_TOKEN=inherited-npm-secret\nSERVICE_CREDENTIAL: inherited-service-credential\nAuthorization: Bearer child-controlled-credential\n`,
+              `${appRoot}/private-entry.cjs secret-session-id secret-signer-capability\nAWS_ACCESS_KEY_ID=inherited-access-key\nDATABASE_URL=postgres://user:database-password@example.test/service\nNPM_TOKEN=inherited-npm-secret\nSERVICE_CREDENTIAL: inherited-service-credential\nAuthorization: Bearer child-controlled-credential\nRejected value abcédef\n`,
               { flag: 'a' },
             );
             child.exitCode = 1;
@@ -1434,6 +1435,8 @@ test('managed Metro surfaces a bounded sanitized pre-evidence launcher diagnosti
     assert.match(failure.message, /NPM_TOKEN=<redacted>/);
     assert.match(failure.message, /SERVICE_CREDENTIAL: <redacted>/);
     assert.match(failure.message, /Authorization: <redacted-authorization>/);
+    assert.match(failure.message, /Rejected value <redacted>/);
+    assert.doesNotMatch(failure.message, /abc[é?]def/);
     assert.ok(failure.message.length <= 4_096);
   } finally {
     rmSync(runtimeRoot, { force: true, recursive: true });

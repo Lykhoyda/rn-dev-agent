@@ -4,6 +4,7 @@ import {
   closeSync,
   constants,
   existsSync,
+  lstatSync,
   mkdirSync,
   openSync,
   readFileSync,
@@ -13,16 +14,23 @@ import {
   symlinkSync,
   writeSync,
 } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { basename, dirname, resolve } from 'node:path';
+import { constants as osConstants } from 'node:os';
 import { canonicalAuthorityJson } from './authority-json.js';
 
 const DARWIN_SANDBOX_EXECUTABLE = '/usr/bin/sandbox-exec';
 const DARWIN_CODESIGN_EXECUTABLE = '/usr/bin/codesign';
+const DARWIN_PLATFORM_SIGNING_LEAF_AUTHORITIES = [
+  'Authority=Software Signing',
+  'Authority=macOS Software Signing',
+];
 
 interface CommandResult {
   status: number | null;
   stdout: string;
   stderr: string;
+  signal?: string | null;
+  timedOut?: boolean;
 }
 
 interface FileMetadata {
@@ -35,6 +43,7 @@ interface ManagedMetroEnforcementDependencies {
   exists?: (path: string) => boolean;
   canonicalize?: (path: string) => string;
   stat?: (path: string) => FileMetadata;
+  lstat?: (path: string) => { isSymbolicLink(): boolean };
   readBytes?: (path: string) => Buffer;
   run?: (command: string, args: readonly string[]) => CommandResult;
   runtimeCache?: () => string | null;
@@ -57,6 +66,7 @@ export interface ManagedMetroEnforcementInput {
   commandChainInputs?: readonly string[];
   protectedRuntimeRoots?: readonly string[];
   nativeAddonRoots?: readonly string[];
+  cssInteropCacheRoot?: string | null;
   port: number;
   instanceId: string;
   runtimeInputs: readonly string[];
@@ -120,6 +130,7 @@ export interface ManagedMetroEnforcementPlan {
   canaryPath: string;
   descendantCanaryPath: string;
   symlinkCanaryPath: string;
+  commandStderrPath: string;
   port: number;
   unallocatedPort: number;
   nodeExecutable: string;
@@ -157,6 +168,8 @@ function defaultRun(command: string, args: readonly string[]): CommandResult {
     status: result.status,
     stdout: result.stdout ?? '',
     stderr: result.stderr ?? result.error?.message ?? '',
+    signal: result.signal ?? null,
+    timedOut: (result.error as NodeJS.ErrnoException | undefined)?.code === 'ETIMEDOUT',
   };
 }
 
@@ -204,7 +217,7 @@ function verifiedSandboxExecutable(dependencies: ManagedMetroEnforcementDependen
       field(details.stderr, 'Identifier') !== 'com.apple.sandbox-exec' ||
       !/^\d+$/.test(field(details.stderr, 'Platform identifier') ?? '') ||
       !/^[a-f0-9]{40,64}$/.test(cdHash ?? '') ||
-      !authorities.includes('Authority=Software Signing') ||
+      !DARWIN_PLATFORM_SIGNING_LEAF_AUTHORITIES.some((leaf) => authorities.includes(leaf)) ||
       !authorities.includes('Authority=Apple Code Signing Certification Authority') ||
       !authorities.includes('Authority=Apple Root CA')
     ) {
@@ -368,6 +381,44 @@ function pathFilters(paths: readonly string[]): string {
     .join('\n');
 }
 
+function ownedCssInteropCacheRoot(
+  candidate: string | null | undefined,
+  owner: {
+    sourceRoot: string;
+    appRoot: string;
+    runtimeRoot: string;
+    protectedRuntimeRoots: readonly string[];
+  },
+  canonicalize: (path: string) => string,
+  lstat: (path: string) => { isSymbolicLink(): boolean },
+): string | null {
+  if (!candidate) return null;
+  const packageRoot = dirname(candidate);
+  const overlaps = (a: string, b: string) =>
+    a === b || a.startsWith(`${b}/`) || b.startsWith(`${a}/`);
+  try {
+    if (basename(candidate) !== '.cache') return null;
+    if (basename(packageRoot) !== 'react-native-css-interop') return null;
+    if (canonicalize(packageRoot) !== packageRoot) return null;
+    if (![owner.sourceRoot, owner.appRoot].some((root) => packageRoot.startsWith(`${root}/`))) {
+      return null;
+    }
+    if (
+      [owner.runtimeRoot, ...owner.protectedRuntimeRoots].some((root) => overlaps(candidate, root))
+    ) {
+      return null;
+    }
+    try {
+      if (lstat(candidate).isSymbolicLink()) return null;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return null;
+    }
+    return candidate;
+  } catch {
+    return null;
+  }
+}
+
 function managedMetroSandboxProfile(input: {
   readRoots: readonly string[];
   writeRoots: readonly string[];
@@ -453,6 +504,12 @@ export function prepareManagedMetroEnforcement(
   );
   const runtimeInputs = input.runtimeInputs.map((path) => canonicalPath(path, canonicalize));
   const expoStateRoot = resolve(appRoot, '.expo');
+  const cssInteropCacheRoot = ownedCssInteropCacheRoot(
+    input.cssInteropCacheRoot,
+    { sourceRoot, appRoot, runtimeRoot, protectedRuntimeRoots },
+    canonicalize,
+    dependencies.lstat ?? lstatSync,
+  );
   const readRoots = [
     '/dev/fd',
     sourceRoot,
@@ -493,7 +550,7 @@ export function prepareManagedMetroEnforcement(
   }
   const profile = managedMetroSandboxProfile({
     readRoots,
-    writeRoots: [runtimeRoot, expoStateRoot],
+    writeRoots: [runtimeRoot, expoStateRoot, ...(cssInteropCacheRoot ? [cssInteropCacheRoot] : [])],
     executablePaths,
     executableMapPaths: [
       ...nodeRuntimeAttestation.loadedRuntimeFiles.map((entry) => entry.path),
@@ -524,6 +581,7 @@ export function prepareManagedMetroEnforcement(
     canaryPath: `/private/tmp/rn-dev-agent-metro-${canaryId}.canary`,
     descendantCanaryPath: resolve(runtimeRoot, `descendant-${canaryId}.cjs`),
     symlinkCanaryPath: resolve(runtimeRoot, `enforcement-${canaryId}.canary`),
+    commandStderrPath: resolve(runtimeRoot, `preflight-stderr-${canaryId}.log`),
     port: input.port,
     unallocatedPort: 0,
     nodeExecutable,
@@ -537,6 +595,33 @@ export function prepareManagedMetroEnforcement(
   };
 }
 
+function preflightDiagnosticCauses(value: unknown): string[] {
+  const codes = [
+    'EPERM',
+    'EADDRINUSE',
+    'EADDRNOTAVAIL',
+    'EACCES',
+    'EMFILE',
+    'ENFILE',
+    'ENOMEM',
+    'ENOSPC',
+    'EPIPE',
+  ];
+  const categories = [...codes, 'RN_DEV_AGENT', 'NODE_RUNTIME', 'OUT_OF_MEMORY'];
+  if (Array.isArray(value)) {
+    const bounded = value.slice(0, 16);
+    const observed = categories.filter((category) => bounded.includes(category));
+    return observed.length > 0 ? observed : ['unknown'];
+  }
+  if (typeof value !== 'string') return ['unknown'];
+  const window = value.slice(-65_536);
+  const observed = codes.filter((code) => new RegExp('\\b' + code + '\\b').test(window));
+  if (/\bRN_DEV_AGENT_[A-Z0-9_]+\b/.test(window)) observed.push('RN_DEV_AGENT');
+  if (/\bNode\.js v\d+\.\d+\.\d+\b/.test(window)) observed.push('NODE_RUNTIME');
+  if (/\bJavaScript heap out of memory\b/.test(window)) observed.push('OUT_OF_MEMORY');
+  return observed.length > 0 ? observed : ['unknown'];
+}
+
 const PREFLIGHT_SOURCE = String.raw`
 const { spawn, spawnSync } = require('node:child_process');
 const { createHash } = require('node:crypto');
@@ -544,6 +629,13 @@ const { closeSync, constants, fstatSync, openSync, readFileSync, readSync, write
 const { createConnection, createServer } = require('node:net');
 const input = JSON.parse(process.argv[1]);
 const logicalArgumentPrefix = 'rn-dev-agent-logical-path:';
+const startedAt = performance.now();
+const elapsed = () => Math.round(performance.now() - startedAt);
+const timings = {};
+let commandExit = null;
+let commandCauses = ['unknown'];
+const diagnosticCauses = ${preflightDiagnosticCauses.toString()};
+const diagnosticInputLimit = 65536;
 const denied = (run) => {
   try {
     run();
@@ -614,37 +706,56 @@ const processGroupExists = (pid) => {
     commandSnapshots.push(snapshot);
   }
   const allocated = await listen(input.port);
+  timings.allocatedMs = elapsed();
   if (!allocated.ok) throw new Error('allocated listener unavailable before command');
   const commandEnvironment = JSON.parse(readFileSync(input.preflightEnvironmentPath, 'utf8'));
-  const stdio = ['ignore', 'ignore', 'ignore', 'ipc'];
+  let stderrDescriptor;
+  try {
+    stderrDescriptor = openSync(input.commandStderrPath, 'w', 0o600);
+  } catch {}
+  const stdio = ['ignore', 'ignore', stderrDescriptor ?? 'ignore', 'ipc'];
   while (stdio.length < 9) stdio.push('ignore');
   stdio[8] = 'pipe';
   stdio.push('pipe');
   stdio.push(...commandSnapshots.map(() => 'pipe'));
-  const command = spawn(
-    input.commandExecutable,
-    input.commandArguments.map((argument) =>
-      argument.startsWith(logicalArgumentPrefix)
-        ? argument.slice(logicalArgumentPrefix.length)
-        : boundPaths.get(argument) ?? argument,
-    ),
-    {
-    cwd: input.appRoot,
-    detached: true,
-    env: commandEnvironment,
-    stdio,
-    },
-  );
+  let command;
+  try {
+    command = spawn(
+      input.commandExecutable,
+      input.commandArguments.map((argument) =>
+        argument.startsWith(logicalArgumentPrefix)
+          ? argument.slice(logicalArgumentPrefix.length)
+          : boundPaths.get(argument) ?? argument,
+      ),
+      {
+        cwd: input.appRoot,
+        detached: true,
+        env: commandEnvironment,
+        stdio,
+      },
+    );
+  } finally {
+    if (stderrDescriptor !== undefined) {
+      try {
+        closeSync(stderrDescriptor);
+      } catch {}
+    }
+  }
   command.stdio[8].end('admitted\n');
   for (let index = 0; index < commandSnapshots.length; index += 1) {
     command.stdio[10 + index].end(commandSnapshots[index]);
   }
   command.stdio[9].resume();
+  command.once('exit', (code, signal) => {
+    commandExit = { code, signal, atMs: elapsed() };
+  });
   command.once('error', () => {});
+  timings.spawnedMs = elapsed();
   const resolvedCommandAllowed = await waitUntil(async () => {
     const probe = await listen(input.port);
     return !probe.ok && probe.code === 'EADDRINUSE';
   }, 15000);
+  timings.occupancyMs = elapsed();
   let commandCleanupConfirmed = false;
   if (Number.isSafeInteger(command.pid)) {
     try {
@@ -668,6 +779,33 @@ const processGroupExists = (pid) => {
   }
   const released = await listen(input.port);
   commandCleanupConfirmed = commandCleanupConfirmed && released.ok;
+  timings.cleanupMs = elapsed();
+  if (stderrDescriptor !== undefined) {
+    let readDescriptor;
+    try {
+      readDescriptor = openSync(input.commandStderrPath, constants.O_RDONLY | constants.O_NOFOLLOW);
+      const metadata = fstatSync(readDescriptor);
+      if (metadata.isFile()) {
+        const position = Math.max(0, metadata.size - diagnosticInputLimit);
+        const contents = Buffer.alloc(Math.min(metadata.size, diagnosticInputLimit));
+        let offset = 0;
+        while (offset < contents.length) {
+          const count = readSync(readDescriptor, contents, offset, contents.length - offset, position + offset);
+          if (count === 0) break;
+          offset += count;
+        }
+        if (offset === contents.length && fstatSync(readDescriptor).size === metadata.size) {
+          commandCauses = diagnosticCauses(contents.toString('utf8'));
+        }
+      }
+    } catch {} finally {
+      if (readDescriptor !== undefined) {
+        try {
+          closeSync(readDescriptor);
+        } catch {}
+      }
+    }
+  }
   const commandChainStable = true;
   const descendantCreationAllowed = resolvedCommandAllowed && commandCleanupConfirmed;
   const unallocated = await listen(input.unallocatedPort);
@@ -695,16 +833,153 @@ const processGroupExists = (pid) => {
     commandCleanupConfirmed,
     commandChainStable,
   };
-  process.stdout.write(JSON.stringify(receipt));
+  timings.totalMs = elapsed();
+  writeFileSync(1, JSON.stringify({ ...receipt, diagnostic: { timings, commandExit, commandCauses } }));
   process.exit(Object.values(receipt).every(Boolean) ? 0 : 1);
-})().catch(() => process.exit(1));
+})().catch((error) => {
+  try {
+    timings.totalMs = elapsed();
+    writeFileSync(
+      1,
+      JSON.stringify({
+        diagnostic: {
+          timings,
+          commandExit,
+          commandCauses,
+          exceptionCause: 'unknown',
+        },
+      }),
+    );
+  } catch {}
+  process.exit(1);
+});
 `;
+
+const PREFLIGHT_FLAGS = [
+  'descendantCreationAllowed',
+  'unauthorizedExecutableDenied',
+  'unmanifestedReadDenied',
+  'unmanifestedWriteDenied',
+  'symlinkEscapeDenied',
+  'unallocatedListenerDenied',
+  'allocatedListenerAllowed',
+  'networkOutboundDenied',
+  'resolvedCommandAllowed',
+  'commandCleanupConfirmed',
+  'commandChainStable',
+] as const;
+
+const PREFLIGHT_TIMINGS = [
+  'allocatedMs',
+  'spawnedMs',
+  'occupancyMs',
+  'cleanupMs',
+  'totalMs',
+] as const;
+
+function diagnosticSignal(value: unknown): string | null {
+  if (value === null || value === undefined) return null;
+  return typeof value === 'string' && Object.hasOwn(osConstants.signals, value) ? value : 'unknown';
+}
+
+function diagnosticExitCode(value: unknown): number | null {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : null;
+}
+
+export interface ManagedMetroPreflightObservation {
+  version: 1;
+  outcome: 'receipt' | 'incomplete' | 'failed' | 'invalid';
+  complete: boolean;
+  status: number | null;
+  signal: string | null;
+  outerTimedOut: boolean;
+  elapsedMs: number;
+  flags: Record<(typeof PREFLIGHT_FLAGS)[number], boolean> | null;
+  timings: Partial<Record<(typeof PREFLIGHT_TIMINGS)[number], number>> | null;
+  commandExit: { code: number | null; signal: string | null; atMs: number } | null;
+  commandCauses: string[];
+  preflightCauses: string[];
+  exceptionCause: 'unknown' | null;
+}
 
 interface ManagedMetroPreflightDependencies {
   writeCanary?: (path: string, contents: string) => void;
   removeCanary?: (path: string) => void;
   run?: (command: string, args: readonly string[]) => CommandResult;
   environment?: NodeJS.ProcessEnv;
+  observe?: (observation: ManagedMetroPreflightObservation) => void;
+}
+
+function preflightObservation(
+  result: CommandResult,
+  elapsedMs: number,
+): ManagedMetroPreflightObservation {
+  let parsed: Record<string, unknown> | null = null;
+  try {
+    parsed = result.stdout ? (JSON.parse(result.stdout) as Record<string, unknown>) : null;
+  } catch {
+    parsed = null;
+  }
+  const flags =
+    parsed && PREFLIGHT_FLAGS.every((flag) => typeof parsed[flag] === 'boolean')
+      ? (Object.fromEntries(
+          PREFLIGHT_FLAGS.map((flag) => [flag, parsed[flag] as boolean]),
+        ) as ManagedMetroPreflightObservation['flags'])
+      : null;
+  const diagnostic =
+    parsed && parsed.diagnostic && typeof parsed.diagnostic === 'object'
+      ? (parsed.diagnostic as Record<string, unknown>)
+      : null;
+  const timings =
+    diagnostic && diagnostic.timings && typeof diagnostic.timings === 'object'
+      ? Object.fromEntries(
+          PREFLIGHT_TIMINGS.map((name) => [
+            name,
+            (diagnostic.timings as Record<string, unknown>)[name],
+          ]).filter(
+            (entry): entry is [string, number] =>
+              typeof entry[1] === 'number' && Number.isFinite(entry[1]) && entry[1] >= 0,
+          ),
+        )
+      : null;
+  const exit =
+    diagnostic && diagnostic.commandExit && typeof diagnostic.commandExit === 'object'
+      ? (diagnostic.commandExit as Record<string, unknown>)
+      : null;
+  return {
+    version: 1,
+    outcome:
+      result.status !== 0
+        ? 'failed'
+        : flags && PREFLIGHT_FLAGS.every((flag) => flags[flag])
+          ? 'receipt'
+          : 'incomplete',
+    complete:
+      result.status !== null &&
+      result.timedOut !== true &&
+      flags !== null &&
+      timings !== null &&
+      PREFLIGHT_TIMINGS.every((name) => name in timings),
+    status: diagnosticExitCode(result.status),
+    signal: diagnosticSignal(result.signal),
+    outerTimedOut: result.timedOut === true,
+    elapsedMs,
+    flags,
+    timings,
+    commandExit: exit
+      ? {
+          code: diagnosticExitCode(exit.code),
+          signal: diagnosticSignal(exit.signal),
+          atMs:
+            typeof exit.atMs === 'number' && Number.isFinite(exit.atMs) && exit.atMs >= 0
+              ? exit.atMs
+              : -1,
+        }
+      : null,
+    commandCauses: preflightDiagnosticCauses(diagnostic?.commandCauses),
+    preflightCauses: preflightDiagnosticCauses(result.stderr),
+    exceptionCause: diagnostic?.exceptionCause == null ? null : 'unknown',
+  };
 }
 
 export function runManagedMetroEnforcementPreflight(
@@ -728,6 +1003,13 @@ export function runManagedMetroEnforcementPreflight(
   const removeCanary =
     dependencies.removeCanary ?? ((path: string) => rmSync(path, { force: true }));
   const run = dependencies.run ?? defaultRun;
+  const observe = (createObservation: () => ManagedMetroPreflightObservation) => {
+    try {
+      dependencies.observe?.(createObservation());
+    } catch {}
+  };
+  const startedAt = performance.now();
+  let observationEmitted = false;
   let canaryCreated = false;
   let environmentCreated = false;
   let symlinkCreated = false;
@@ -761,10 +1043,13 @@ export function runManagedMetroEnforcementPreflight(
         commandChainAttestation: plan.commandChainAttestation,
         preflightEnvironmentPath: plan.preflightEnvironmentPath,
         appRoot: plan.appRoot,
+        commandStderrPath: plan.commandStderrPath,
         port: plan.port,
         unallocatedPort: plan.unallocatedPort,
       }),
     ]);
+    observationEmitted = true;
+    observe(() => preflightObservation(result, Math.round(performance.now() - startedAt)));
     if (result.status !== 0) {
       throw new Error('METRO_RUNTIME_ENFORCEMENT_UNAVAILABLE: sandbox preflight failed');
     }
@@ -807,6 +1092,24 @@ export function runManagedMetroEnforcementPreflight(
       commandChainAttestation: plan.commandChainAttestation,
     };
   } catch (error) {
+    if (!observationEmitted) {
+      observationEmitted = true;
+      observe(() => ({
+        version: 1,
+        outcome: 'invalid',
+        complete: false,
+        status: null,
+        signal: null,
+        outerTimedOut: false,
+        elapsedMs: Math.round(performance.now() - startedAt),
+        flags: null,
+        timings: null,
+        commandExit: null,
+        commandCauses: ['unknown'],
+        preflightCauses: ['unknown'],
+        exceptionCause: 'unknown',
+      }));
+    }
     if (error instanceof Error && error.message.startsWith('METRO_RUNTIME_ENFORCEMENT_')) {
       throw error;
     }
@@ -814,6 +1117,9 @@ export function runManagedMetroEnforcementPreflight(
       cause: error,
     });
   } finally {
+    try {
+      rmSync(plan.commandStderrPath, { force: true });
+    } catch {}
     if (symlinkCreated) rmSync(plan.symlinkCanaryPath, { force: true });
     if (environmentCreated) removeCanary(plan.preflightEnvironmentPath);
     if (canaryCreated) removeCanary(plan.canaryPath);
