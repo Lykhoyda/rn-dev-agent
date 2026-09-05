@@ -373,7 +373,7 @@ test('managed Metro grants writes only to the owned css-interop cache directory'
   }
 });
 
-test('managed Metro preflight observation stays truthful without changing outcomes', () => {
+test('managed Metro preflight observation stays truthful without changing outcomes', (t) => {
   const root = mkdtempSync(join(tmpdir(), 'rn-metro-preflight-observe-'));
   roots.push(root);
   const runtimeRoot = realpathSync(root);
@@ -470,6 +470,7 @@ test('managed Metro preflight observation stays truthful without changing outcom
     else assert.equal(runPreflight().resolvedCommandAllowed, true, name);
     assert.equal(observations.length, 1, name);
     const observation = observations[0] as Record<string, unknown>;
+    t.diagnostic(JSON.stringify({ scenario: name, observation }));
     for (const [key, value] of Object.entries(expect)) {
       assert.deepEqual(observation[key], value, `${name}: ${key}`);
     }
@@ -605,7 +606,7 @@ test('managed Metro preflight observation stays truthful without changing outcom
   }
 });
 
-test('managed Metro preflight diagnostic capture bounds input and survives I/O failures', async () => {
+test('managed Metro preflight diagnostic capture bounds input and survives I/O failures', async (t) => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'rn-metro-preflight-capture-')));
   roots.push(root);
   const prepared = prepareManagedMetroEnforcement(
@@ -826,6 +827,7 @@ test('managed Metro preflight diagnostic capture bounds input and survives I/O f
     assert.deepEqual(observations[0].commandCauses, expectedCauses, scenario);
     assert.doesNotMatch(JSON.stringify(observations), /hunter2|PRIVATE|abc[é?]def/);
     assert.doesNotMatch(result.stdout, /hunter2|PRIVATE|abc[é?]def/);
+    t.diagnostic(JSON.stringify({ scenario, readSizes, observation: observations[0] }));
     if (scenario === 'single long line') persistedResult = result;
   }
   await assert.rejects(
@@ -865,12 +867,17 @@ test('managed Metro preflight diagnostic capture bounds input and survives I/O f
     readFileSync(join(root, 'metro-enforcement-diagnostic-diagnostic-metro.json'), 'utf8'),
   );
   assert.equal(record.recordComplete, true);
+  assert.equal(
+    fs.statSync(join(root, 'metro-enforcement-diagnostic-diagnostic-metro.json')).mode & 0o777,
+    0o600,
+  );
   assert.deepEqual(record.preflight.commandCauses, ['EPERM']);
   assert.equal(record.preflight.outcome, 'receipt');
   assert.doesNotMatch(
     JSON.stringify(record),
     /prefixabc|PRIVATE|abc[é?]def|operation not permitted/,
   );
+  t.diagnostic(JSON.stringify({ persistedDiagnostic: record, mode: '0600' }));
 });
 
 test('managed Metro derives a deterministic descendant-capable Darwin profile', () => {
