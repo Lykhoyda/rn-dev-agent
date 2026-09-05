@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { ChildProcess, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import * as fs from 'node:fs';
@@ -627,11 +627,44 @@ test('managed Metro preflight diagnostic capture bounds input and survives I/O f
       return { status: 0, stdout: JSON.stringify(expectedFlags), stderr: '' };
     },
   });
+  const finalDiagnostic = '\nEPERM: operation not permitted\n';
+  const longSecret = `${'private-credential-line\n'.repeat(6000)}credential-end-abcédef`;
+  let sanitize: ((value: string, truncatedStart?: boolean) => string) | undefined;
+  await assert.rejects(
+    startManagedMetro(
+      {
+        appRoot: root,
+        runtimeRoot: root,
+        sourceRoot: root,
+        sessionId: 'diagnostic-session',
+        instanceId: 'diagnostic-metro',
+        buildGeneration: 1,
+        signerCapability: 'diagnostic-signer',
+        port: 8341,
+      },
+      {
+        environment: { API_TOKEN: 'hunter2', SERVICE_SECRET: longSecret, OTHER_TOKEN: 'abcédef' },
+        exists: () => true,
+        readText: () => JSON.stringify({ dependencies: { expo: '1' } }),
+        prepareEnforcement: () => plan,
+        preflightEnforcement: (_plan, dependencies) => {
+          sanitize = dependencies?.sanitize;
+          return baselineReceipt;
+        },
+        spawnProcess: () => new ChildProcess(),
+      },
+    ),
+    { message: 'METRO_START_UNAVAILABLE: package-local Metro process did not start' },
+  );
+  assert.ok(sanitize);
   const scenarios = [
     'split secret',
     'unicode stderr',
     'exception split secret',
     'noisy stderr',
+    'read boundary secret',
+    'long multiline secret',
+    'non-ASCII secret',
     'open write failure',
     'open read failure',
     'stat failure',
@@ -675,13 +708,22 @@ test('managed Metro preflight diagnostic capture bounds input and survives I/O f
             spawn: (_executable: string, _args: string[], options: { stdio: unknown[] }) => {
               stderrMode = options.stdio[2];
               if (typeof stderrMode === 'number') {
-                fs.writeSync(
-                  stderrMode,
+                const output =
                   scenario === 'unicode stderr'
                     ? '€'.repeat(3000)
-                    : `API_TOKEN=hunter2${'.'.repeat(8186)}`,
-                );
-                if (scenario === 'noisy stderr') fs.ftruncateSync(stderrMode, 256 * 1024 * 1024);
+                    : scenario === 'read boundary secret'
+                      ? `API_TOKEN=hunter2${'.'.repeat(65536 - 6 - finalDiagnostic.length)}${finalDiagnostic}`
+                      : scenario === 'long multiline secret'
+                        ? `Rejected value ${longSecret}${finalDiagnostic}`
+                        : scenario === 'non-ASCII secret'
+                          ? `Rejected value abcédef${finalDiagnostic}`
+                          : `API_TOKEN=hunter2${'.'.repeat(8186)}`;
+                fs.writeSync(stderrMode, output);
+                if (scenario === 'noisy stderr') {
+                  const size = 256 * 1024 * 1024;
+                  fs.ftruncateSync(stderrMode, size);
+                  fs.writeSync(stderrMode, finalDiagnostic, size - finalDiagnostic.length);
+                }
               }
               return command;
             },
@@ -762,11 +804,8 @@ test('managed Metro preflight diagnostic capture bounds input and survives I/O f
     });
     assert.equal(result.status, scenario === 'exception split secret' ? 1 : 0, scenario);
     assert.equal(unboundedReads, 0, scenario);
-    assert.ok(
-      readSizes.every((size) => size <= 65536),
-      scenario,
-    );
-    if (scenario === 'noisy stderr') assert.deepEqual(readSizes, [], scenario);
+    assert.ok(readSizes.reduce((total, size) => total + size, 0) <= 65536, scenario);
+    if (scenario === 'noisy stderr') assert.deepEqual(readSizes, [65536], scenario);
     if (scenario === 'open write failure') assert.equal(stderrMode, 'ignore', scenario);
     const observations: Array<{ commandStderrTail: string | null; exception: string | null }> = [];
     const runPreflight = () =>
@@ -774,7 +813,14 @@ test('managed Metro preflight diagnostic capture bounds input and survives I/O f
         writeCanary: () => {},
         removeCanary: () => {},
         run: () => result,
-        sanitize: (value) => value.replaceAll('hunter2', '<redacted>'),
+        sanitize: [
+          'noisy stderr',
+          'read boundary secret',
+          'long multiline secret',
+          'non-ASCII secret',
+        ].includes(scenario)
+          ? sanitize
+          : (value) => value.replaceAll('hunter2', '<redacted>'),
         observe: (observation) => observations.push(observation),
       });
     if (scenario === 'exception split secret') {
@@ -792,6 +838,12 @@ test('managed Metro preflight diagnostic capture bounds input and survives I/O f
     } else if (scenario === 'unicode stderr') {
       assert.equal(tail, '€'.repeat(2730), scenario);
       assert.ok(Buffer.byteLength(tail) <= 8192, scenario);
+    } else if (scenario === 'noisy stderr' || scenario === 'read boundary secret') {
+      assert.equal(tail, finalDiagnostic.trim(), scenario);
+    } else if (scenario === 'long multiline secret') {
+      assert.equal(tail, `<redacted>${finalDiagnostic.trimEnd()}`, scenario);
+    } else if (scenario === 'non-ASCII secret') {
+      assert.equal(tail, `Rejected value <redacted>${finalDiagnostic.trimEnd()}`, scenario);
     } else assert.equal(tail, null, scenario);
   }
 });

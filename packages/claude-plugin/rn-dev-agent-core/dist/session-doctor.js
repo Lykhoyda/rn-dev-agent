@@ -12369,6 +12369,7 @@ const elapsed = () => Math.round(performance.now() - startedAt);
 const timings = {};
 let commandExit = null;
 let commandStderrTail = null;
+let commandStderrTruncated = false;
 const diagnosticInputLimit = 65536;
 const denied = (run) => {
   try {
@@ -12519,16 +12520,21 @@ const processGroupExists = (pid) => {
     try {
       readDescriptor = openSync(input.commandStderrPath, constants.O_RDONLY | constants.O_NOFOLLOW);
       const metadata = fstatSync(readDescriptor);
-      if (metadata.isFile() && metadata.size <= diagnosticInputLimit) {
-        const contents = Buffer.alloc(metadata.size);
+      if (metadata.isFile()) {
+        const position = Math.max(0, metadata.size - diagnosticInputLimit);
+        const contents = Buffer.alloc(Math.min(metadata.size, diagnosticInputLimit));
         let offset = 0;
         while (offset < contents.length) {
-          const count = readSync(readDescriptor, contents, offset, contents.length - offset, offset);
+          const count = readSync(readDescriptor, contents, offset, contents.length - offset, position + offset);
           if (count === 0) break;
           offset += count;
         }
-        if (offset === contents.length && fstatSync(readDescriptor).size === contents.length) {
-          commandStderrTail = contents.toString('utf8');
+        if (offset === contents.length && fstatSync(readDescriptor).size === metadata.size) {
+          commandStderrTruncated = position > 0;
+          const lineStart = commandStderrTruncated ? contents.indexOf(10) + 1 : 0;
+          commandStderrTail = commandStderrTruncated && lineStart === 0
+            ? ''
+            : contents.subarray(lineStart).toString('utf8');
         }
       }
     } catch {} finally {
@@ -12567,7 +12573,7 @@ const processGroupExists = (pid) => {
     commandChainStable,
   };
   timings.totalMs = elapsed();
-  writeFileSync(1, JSON.stringify({ ...receipt, diagnostic: { timings, commandExit, commandStderrTail } }));
+  writeFileSync(1, JSON.stringify({ ...receipt, diagnostic: { timings, commandExit, commandStderrTail, commandStderrTruncated } }));
   process.exit(Object.values(receipt).every(Boolean) ? 0 : 1);
 })().catch((error) => {
   try {
@@ -12579,6 +12585,7 @@ const processGroupExists = (pid) => {
           timings,
           commandExit,
           commandStderrTail,
+          commandStderrTruncated,
           exception: String((error && error.message) || error).length <= diagnosticInputLimit
             ? String((error && error.message) || error)
             : null,

@@ -606,6 +606,7 @@ const elapsed = () => Math.round(performance.now() - startedAt);
 const timings = {};
 let commandExit = null;
 let commandStderrTail = null;
+let commandStderrTruncated = false;
 const diagnosticInputLimit = 65536;
 const denied = (run) => {
   try {
@@ -756,16 +757,21 @@ const processGroupExists = (pid) => {
     try {
       readDescriptor = openSync(input.commandStderrPath, constants.O_RDONLY | constants.O_NOFOLLOW);
       const metadata = fstatSync(readDescriptor);
-      if (metadata.isFile() && metadata.size <= diagnosticInputLimit) {
-        const contents = Buffer.alloc(metadata.size);
+      if (metadata.isFile()) {
+        const position = Math.max(0, metadata.size - diagnosticInputLimit);
+        const contents = Buffer.alloc(Math.min(metadata.size, diagnosticInputLimit));
         let offset = 0;
         while (offset < contents.length) {
-          const count = readSync(readDescriptor, contents, offset, contents.length - offset, offset);
+          const count = readSync(readDescriptor, contents, offset, contents.length - offset, position + offset);
           if (count === 0) break;
           offset += count;
         }
-        if (offset === contents.length && fstatSync(readDescriptor).size === contents.length) {
-          commandStderrTail = contents.toString('utf8');
+        if (offset === contents.length && fstatSync(readDescriptor).size === metadata.size) {
+          commandStderrTruncated = position > 0;
+          const lineStart = commandStderrTruncated ? contents.indexOf(10) + 1 : 0;
+          commandStderrTail = commandStderrTruncated && lineStart === 0
+            ? ''
+            : contents.subarray(lineStart).toString('utf8');
         }
       }
     } catch {} finally {
@@ -804,7 +810,7 @@ const processGroupExists = (pid) => {
     commandChainStable,
   };
   timings.totalMs = elapsed();
-  writeFileSync(1, JSON.stringify({ ...receipt, diagnostic: { timings, commandExit, commandStderrTail } }));
+  writeFileSync(1, JSON.stringify({ ...receipt, diagnostic: { timings, commandExit, commandStderrTail, commandStderrTruncated } }));
   process.exit(Object.values(receipt).every(Boolean) ? 0 : 1);
 })().catch((error) => {
   try {
@@ -816,6 +822,7 @@ const processGroupExists = (pid) => {
           timings,
           commandExit,
           commandStderrTail,
+          commandStderrTruncated,
           exception: String((error && error.message) || error).length <= diagnosticInputLimit
             ? String((error && error.message) || error)
             : null,
@@ -864,17 +871,18 @@ interface ManagedMetroPreflightDependencies {
   environment?: NodeJS.ProcessEnv;
   observe?: (observation: ManagedMetroPreflightObservation) => void;
   // Without a sanitizer every process-output tail is dropped, so raw stderr cannot escape.
-  sanitize?: (value: string) => string;
+  sanitize?: (value: string, truncatedStart?: boolean) => string;
 }
 
 const OBSERVATION_TAIL_BYTES = 8_192;
 
 function observationTail(
   value: unknown,
-  sanitize: ((value: string) => string) | undefined,
+  sanitize: ManagedMetroPreflightDependencies['sanitize'],
+  truncatedStart = false,
 ): string | null {
   if (typeof value !== 'string' || !sanitize) return null;
-  const bytes = Buffer.from(sanitize(value), 'utf8');
+  const bytes = Buffer.from(sanitize(value, truncatedStart), 'utf8');
   let start = Math.max(0, bytes.length - OBSERVATION_TAIL_BYTES);
   while (start < bytes.length && (bytes[start] & 0xc0) === 0x80) start += 1;
   return bytes.subarray(start).toString('utf8');
@@ -883,7 +891,7 @@ function observationTail(
 function preflightObservation(
   result: CommandResult,
   elapsedMs: number,
-  sanitize: ((value: string) => string) | undefined,
+  sanitize: ManagedMetroPreflightDependencies['sanitize'],
 ): ManagedMetroPreflightObservation {
   let parsed: Record<string, unknown> | null = null;
   try {
@@ -935,7 +943,11 @@ function preflightObservation(
           atMs: typeof exit.atMs === 'number' ? exit.atMs : -1,
         }
       : null,
-    commandStderrTail: observationTail(diagnostic?.commandStderrTail, sanitize),
+    commandStderrTail: observationTail(
+      diagnostic?.commandStderrTail,
+      sanitize,
+      diagnostic?.commandStderrTruncated === true,
+    ),
     preflightStderrTail: observationTail(result.stderr, sanitize),
     exception:
       typeof diagnostic?.exception === 'string' && sanitize
