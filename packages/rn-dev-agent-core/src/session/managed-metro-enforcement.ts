@@ -4,6 +4,7 @@ import {
   closeSync,
   constants,
   existsSync,
+  lstatSync,
   mkdirSync,
   openSync,
   readFileSync,
@@ -13,7 +14,7 @@ import {
   symlinkSync,
   writeSync,
 } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { basename, dirname, resolve } from 'node:path';
 import { canonicalAuthorityJson } from './authority-json.js';
 
 const DARWIN_SANDBOX_EXECUTABLE = '/usr/bin/sandbox-exec';
@@ -39,6 +40,7 @@ interface ManagedMetroEnforcementDependencies {
   exists?: (path: string) => boolean;
   canonicalize?: (path: string) => string;
   stat?: (path: string) => FileMetadata;
+  lstat?: (path: string) => { isSymbolicLink(): boolean };
   readBytes?: (path: string) => Buffer;
   run?: (command: string, args: readonly string[]) => CommandResult;
   runtimeCache?: () => string | null;
@@ -61,6 +63,7 @@ export interface ManagedMetroEnforcementInput {
   commandChainInputs?: readonly string[];
   protectedRuntimeRoots?: readonly string[];
   nativeAddonRoots?: readonly string[];
+  cssInteropCacheRoot?: string | null;
   port: number;
   instanceId: string;
   runtimeInputs: readonly string[];
@@ -372,6 +375,44 @@ function pathFilters(paths: readonly string[]): string {
     .join('\n');
 }
 
+function ownedCssInteropCacheRoot(
+  candidate: string | null | undefined,
+  owner: {
+    sourceRoot: string;
+    appRoot: string;
+    runtimeRoot: string;
+    protectedRuntimeRoots: readonly string[];
+  },
+  canonicalize: (path: string) => string,
+  lstat: (path: string) => { isSymbolicLink(): boolean },
+): string | null {
+  if (!candidate) return null;
+  const packageRoot = dirname(candidate);
+  const overlaps = (a: string, b: string) =>
+    a === b || a.startsWith(`${b}/`) || b.startsWith(`${a}/`);
+  try {
+    if (basename(candidate) !== '.cache') return null;
+    if (basename(packageRoot) !== 'react-native-css-interop') return null;
+    if (canonicalize(packageRoot) !== packageRoot) return null;
+    if (![owner.sourceRoot, owner.appRoot].some((root) => packageRoot.startsWith(`${root}/`))) {
+      return null;
+    }
+    if (
+      [owner.runtimeRoot, ...owner.protectedRuntimeRoots].some((root) => overlaps(candidate, root))
+    ) {
+      return null;
+    }
+    try {
+      if (lstat(candidate).isSymbolicLink()) return null;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return null;
+    }
+    return candidate;
+  } catch {
+    return null;
+  }
+}
+
 function managedMetroSandboxProfile(input: {
   readRoots: readonly string[];
   writeRoots: readonly string[];
@@ -457,6 +498,12 @@ export function prepareManagedMetroEnforcement(
   );
   const runtimeInputs = input.runtimeInputs.map((path) => canonicalPath(path, canonicalize));
   const expoStateRoot = resolve(appRoot, '.expo');
+  const cssInteropCacheRoot = ownedCssInteropCacheRoot(
+    input.cssInteropCacheRoot,
+    { sourceRoot, appRoot, runtimeRoot, protectedRuntimeRoots },
+    canonicalize,
+    dependencies.lstat ?? lstatSync,
+  );
   const readRoots = [
     '/dev/fd',
     sourceRoot,
@@ -497,7 +544,7 @@ export function prepareManagedMetroEnforcement(
   }
   const profile = managedMetroSandboxProfile({
     readRoots,
-    writeRoots: [runtimeRoot, expoStateRoot],
+    writeRoots: [runtimeRoot, expoStateRoot, ...(cssInteropCacheRoot ? [cssInteropCacheRoot] : [])],
     executablePaths,
     executableMapPaths: [
       ...nodeRuntimeAttestation.loadedRuntimeFiles.map((entry) => entry.path),

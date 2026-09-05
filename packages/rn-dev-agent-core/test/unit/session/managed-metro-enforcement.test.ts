@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { createServer } from 'node:net';
@@ -35,6 +36,22 @@ const requireFromTest = createRequire(import.meta.url);
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { force: true, recursive: true });
 });
+
+function freePort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const server = createServer();
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address();
+      if (!address || typeof address === 'string') {
+        server.close();
+        reject(new Error('test port unavailable'));
+        return;
+      }
+      server.close((error) => (error ? reject(error) : resolve(address.port)));
+    });
+  });
+}
 
 function fixtureInput(platform: NodeJS.Platform = 'darwin') {
   return {
@@ -254,6 +271,100 @@ test('managed Metro preserves sandbox signature, identity, and filesystem refusa
     assert.deepEqual(
       result,
       { status: 'unsupported', reason: 'sandbox-executable-unverified' },
+      name,
+    );
+  }
+});
+
+const ownedCssInteropCache =
+  '/repo/apps/mobile/node_modules/.pnpm/react-native-css-interop@1.0.0/node_modules/react-native-css-interop/.cache';
+
+function writeGrants(plan: ReturnType<typeof prepareManagedMetroEnforcement>): string[] {
+  if (plan.status !== 'enforced') return [];
+  const block = plan.profile.match(/\(allow file-write\* file-test-existence\n([\s\S]*?\))\)\n/);
+  return [...(block?.[1] ?? '').matchAll(/\(subpath ("(?:[^"\\]|\\.)*")\)/g)]
+    .map((match) => JSON.parse(match[1]) as string)
+    .sort();
+}
+
+test('managed Metro grants writes only to the owned css-interop cache directory', () => {
+  const baseWriteRoots = ['/repo/apps/mobile/.expo', '/runtime/session'];
+  const granted = prepareManagedMetroEnforcement(
+    { ...fixtureInput(), cssInteropCacheRoot: ownedCssInteropCache },
+    verifiedRuntime,
+  );
+  assert.deepEqual(writeGrants(granted), [...baseWriteRoots, ownedCssInteropCache].sort());
+  assert.deepEqual(
+    writeGrants(prepareManagedMetroEnforcement(fixtureInput(), verifiedRuntime)),
+    baseWriteRoots,
+  );
+  const symlink = { lstat: () => ({ isSymbolicLink: () => true }) };
+  const refused: Array<{
+    name: string;
+    candidate: string;
+    runtimeRoot?: string;
+    protectedRuntimeRoots?: string[];
+    canonicalize?: (path: string) => string;
+    lstat?: (path: string) => { isSymbolicLink(): boolean };
+  }> = [
+    {
+      name: 'runtime root equals the cache',
+      candidate: ownedCssInteropCache,
+      runtimeRoot: ownedCssInteropCache,
+    },
+    {
+      name: 'runtime root contains the cache',
+      candidate: ownedCssInteropCache,
+      runtimeRoot: dirname(ownedCssInteropCache),
+    },
+    {
+      name: 'shared package store',
+      candidate: '/Users/dev/Library/pnpm/store/v3/react-native-css-interop/.cache',
+    },
+    { name: 'other package cache', candidate: '/repo/apps/mobile/node_modules/nativewind/.cache' },
+    {
+      name: 'package source directory',
+      candidate: '/repo/apps/mobile/node_modules/react-native-css-interop/dist',
+    },
+    {
+      name: 'protected runtime root',
+      candidate: ownedCssInteropCache,
+      protectedRuntimeRoots: [dirname(ownedCssInteropCache)],
+    },
+    { name: 'symlinked cache directory', candidate: ownedCssInteropCache, ...symlink },
+    {
+      name: 'unreadable cache directory',
+      candidate: ownedCssInteropCache,
+      lstat: () => {
+        throw Object.assign(new Error('EACCES'), { code: 'EACCES' });
+      },
+    },
+    {
+      name: 'symlinked package directory',
+      candidate: ownedCssInteropCache,
+      canonicalize: (path: string) =>
+        path === dirname(ownedCssInteropCache) ? '/elsewhere/react-native-css-interop' : path,
+    },
+  ];
+  for (const {
+    name,
+    candidate,
+    runtimeRoot,
+    protectedRuntimeRoots,
+    canonicalize,
+    lstat,
+  } of refused) {
+    const input = { ...fixtureInput(), cssInteropCacheRoot: candidate, protectedRuntimeRoots };
+    if (runtimeRoot) input.runtimeRoot = runtimeRoot;
+    const plan = prepareManagedMetroEnforcement(input, {
+      ...verifiedRuntime,
+      ...(canonicalize ? { canonicalize } : {}),
+      ...(lstat ? { lstat } : {}),
+    });
+    assert.equal(plan.status, 'enforced', name);
+    assert.deepEqual(
+      writeGrants(plan),
+      ['/repo/apps/mobile/.expo', runtimeRoot ?? '/runtime/session'].sort(),
       name,
     );
   }
@@ -525,6 +636,125 @@ test(
 );
 
 test(
+  'managed Metro sandbox admits only the owned css-interop cache write',
+  { skip: process.platform !== 'darwin' },
+  async (t) => {
+    const root = mkdtempSync(join(tmpdir(), 'rn-metro-cache-grant-'));
+    roots.push(root);
+    const outside = mkdtempSync(join(tmpdir(), 'rn-metro-shared-store-'));
+    roots.push(outside);
+    const appRoot = realpathSync(root);
+    const runtimeRoot = join(appRoot, 'runtime');
+    const protectedRoot = join(appRoot, '.rn-agent', 'integration');
+    const pnpmRoot = join(appRoot, 'node_modules', '.pnpm');
+    const cssInteropRoot = join(
+      pnpmRoot,
+      'react-native-css-interop@1.0.0',
+      'node_modules',
+      'react-native-css-interop',
+    );
+    const nativeWindRoot = join(pnpmRoot, 'nativewind@1.0.0', 'node_modules', 'nativewind');
+    const sharedStoreCache = join(realpathSync(outside), 'react-native-css-interop', '.cache');
+    for (const directory of [
+      runtimeRoot,
+      protectedRoot,
+      join(cssInteropRoot, '.cache'),
+      nativeWindRoot,
+      dirname(sharedStoreCache),
+    ]) {
+      mkdirSync(directory, { recursive: true });
+    }
+    writeFileSync(join(cssInteropRoot, 'index.js'), 'module.exports = {};\n');
+    symlinkSync(
+      join(realpathSync(outside), 'escape-target'),
+      join(cssInteropRoot, '.cache', 'escape'),
+    );
+    const command = join(appRoot, 'metro-entry.js');
+    writeFileSync(
+      command,
+      "require('node:net').createServer(() => {}).listen(Number(process.argv[2]), '127.0.0.1'); setInterval(() => {}, 1 << 30);",
+    );
+    const port = await freePort();
+    const planFor = (cssInteropCacheRoot: string | null) =>
+      prepareManagedMetroEnforcement({
+        platform: process.platform,
+        appRoot,
+        sourceRoot: appRoot,
+        runtimeRoot,
+        nodeExecutable: process.execPath,
+        nodeVersion: process.version,
+        commandExecutable: process.execPath,
+        commandArguments: [command, String(port)],
+        commandProbeArguments: [command, '--version'],
+        commandChainInputs: [process.execPath, command],
+        protectedRuntimeRoots: [protectedRoot],
+        cssInteropCacheRoot,
+        port,
+        instanceId: 'cache-grant',
+        runtimeInputs: [command],
+      });
+    const attempts = {
+      ownedCache: join(cssInteropRoot, '.cache', 'ios.js'),
+      otherPackageCache: join(nativeWindRoot, '.cache', 'native.js'),
+      packageSource: join(cssInteropRoot, 'index.js'),
+      escapedTarget: join(cssInteropRoot, '.cache', 'escape'),
+      sharedStore: join(sharedStoreCache, 'ios.js'),
+      protectedRoot: join(protectedRoot, 'ios.js'),
+    };
+    const probe = (cssInteropCacheRoot: string | null) => {
+      const plan = planFor(cssInteropCacheRoot);
+      assert.equal(plan.status, 'enforced');
+      if (plan.status !== 'enforced') throw new Error('unreachable');
+      const result = spawnSync(
+        plan.sandboxExecutable,
+        [
+          '-p',
+          plan.profile,
+          plan.nodeExecutable,
+          '-e',
+          `const fs = require('node:fs');
+const { dirname } = require('node:path');
+const results = {};
+for (const [name, path] of Object.entries(JSON.parse(process.env.RN_TEST_WRITE_ATTEMPTS))) {
+  try {
+    fs.mkdirSync(dirname(path), { recursive: true });
+    fs.writeFileSync(path, 'generated');
+    results[name] = 'written';
+  } catch (error) {
+    results[name] = error.code;
+  }
+}
+process.stdout.write(JSON.stringify(results));`,
+        ],
+        {
+          encoding: 'utf8',
+          env: {
+            ...process.env,
+            NODE_OPTIONS: '',
+            RN_TEST_WRITE_ATTEMPTS: JSON.stringify(attempts),
+          },
+        },
+      );
+      assert.equal(result.status, 0, result.stderr);
+      const observed = JSON.parse(result.stdout) as Record<string, string>;
+      t.diagnostic(JSON.stringify({ cssInteropCacheRoot, observed }));
+      return observed;
+    };
+
+    assert.deepEqual(probe(join(cssInteropRoot, '.cache')), {
+      ownedCache: 'written',
+      otherPackageCache: 'EPERM',
+      packageSource: 'EPERM',
+      escapedTarget: 'EPERM',
+      sharedStore: 'EPERM',
+      protectedRoot: 'EPERM',
+    });
+    assert.equal(probe(null).ownedCache, 'EPERM');
+    assert.equal(probe(sharedStoreCache).sharedStore, 'EPERM');
+  },
+);
+
+test(
   'managed Metro earns managed-sandbox-v1 only after an attested sandbox launch',
   { skip: process.platform !== 'darwin', timeout: 30_000 },
   async (t) => {
@@ -557,6 +787,47 @@ test(
     );
     writeFileSync(join(cssInteropRoot, 'index.js'), "module.exports = require('lightningcss');\n");
     writeFileSync(
+      join(nativeWindRoot, 'package.json'),
+      JSON.stringify({ name: 'nativewind', version: '1.0.0' }),
+    );
+    mkdirSync(join(nativeWindRoot, 'metro'), { recursive: true });
+    writeFileSync(
+      join(nativeWindRoot, 'metro', 'package.json'),
+      JSON.stringify({ main: '../dist/metro' }),
+    );
+    mkdirSync(join(nativeWindRoot, 'dist', 'metro'), { recursive: true });
+    writeFileSync(
+      join(nativeWindRoot, 'dist', 'metro', 'index.js'),
+      "module.exports = require('react-native-css-interop/metro');\n",
+    );
+    symlinkSync(
+      cssInteropRoot,
+      join(pnpmRoot, 'nativewind@1.0.0', 'node_modules', 'react-native-css-interop'),
+      'dir',
+    );
+    writeFileSync(
+      join(cssInteropRoot, 'package.json'),
+      JSON.stringify({ name: 'react-native-css-interop', version: '1.0.0' }),
+    );
+    mkdirSync(join(cssInteropRoot, 'metro'), { recursive: true });
+    writeFileSync(
+      join(cssInteropRoot, 'metro', 'package.json'),
+      JSON.stringify({ main: '../dist/metro/index.js' }),
+    );
+    mkdirSync(join(cssInteropRoot, 'dist', 'metro'), { recursive: true });
+    writeFileSync(
+      join(cssInteropRoot, 'dist', 'metro', 'index.js'),
+      [
+        "const fs = require('node:fs');",
+        "const path = require('node:path');",
+        "const outputDirectory = path.resolve(__dirname, '../../.cache');",
+        'fs.mkdirSync(outputDirectory, { recursive: true });',
+        "fs.writeFileSync(path.join(outputDirectory, 'ios.js'), 'generated');",
+        'module.exports = {};',
+      ].join('\n'),
+    );
+    const cssInteropCachePath = join(cssInteropRoot, '.cache', 'ios.js');
+    writeFileSync(
       join(lightningCssRoot, 'index.js'),
       "module.exports = require('./lightningcss.node');\n",
     );
@@ -565,8 +836,25 @@ test(
       requireFromTest.resolve('@oxfmt/binding-darwin-arm64/oxfmt.darwin-arm64.node'),
       addonPath,
     );
+    const alternateCssInteropRoot = join(
+      pnpmRoot,
+      'react-native-css-interop@2.0.0',
+      'node_modules',
+      'react-native-css-interop',
+    );
+    mkdirSync(join(alternateCssInteropRoot, '.cache'), { recursive: true });
+    writeFileSync(
+      join(alternateCssInteropRoot, 'package.json'),
+      JSON.stringify({ name: 'react-native-css-interop', version: '2.0.0' }),
+    );
+    writeFileSync(join(alternateCssInteropRoot, 'index.js'), 'module.exports = {};\n');
+    const alternateCacheWriteResult = join(runtimeRoot, 'alternate-cache-write.json');
     symlinkSync(nativeWindRoot, join(appRoot, 'node_modules', 'nativewind'), 'dir');
-    symlinkSync(cssInteropRoot, join(appRoot, 'node_modules', 'react-native-css-interop'), 'dir');
+    symlinkSync(
+      alternateCssInteropRoot,
+      join(appRoot, 'node_modules', 'react-native-css-interop'),
+      'dir',
+    );
     symlinkSync(lightningCssRoot, join(appRoot, 'node_modules', 'lightningcss'), 'dir');
     const descendantEntry = join(appRoot, 'metro-descendant.cjs');
     writeFileSync(descendantEntry, 'process.exit(0);\n');
@@ -583,6 +871,14 @@ if (process.argv.includes('--version')) {
 }
 const port = Number(process.argv[process.argv.indexOf('--port') + 1]);
 require('nativewind');
+require('nativewind/metro');
+let alternateCacheWrite = 'written';
+try {
+  require('node:fs').writeFileSync(${JSON.stringify(join(alternateCssInteropRoot, '.cache', 'ios.js'))}, 'generated');
+} catch (error) {
+  alternateCacheWrite = error.code;
+}
+require('node:fs').writeFileSync(${JSON.stringify(alternateCacheWriteResult)}, JSON.stringify(alternateCacheWrite));
 const descendant = spawnSync(process.execPath, [${JSON.stringify(descendantEntry)}]);
 if (descendant.status !== 0) process.exit(descendant.status || 1);
 createServer(() => {}).listen(port, '127.0.0.1');
@@ -663,6 +959,9 @@ exec node "$basedir/../expo/bin/cli" "$@"
         }),
       );
       assert.equal(policy.runtimeEnforcement, 'os-enforced-v1');
+      assert.equal(runtimeManifest.cssInteropCacheRoot, join(cssInteropRoot, '.cache'));
+      assert.equal(readFileSync(cssInteropCachePath, 'utf8'), 'generated');
+      assert.equal(JSON.parse(readFileSync(alternateCacheWriteResult, 'utf8')), 'EPERM');
       assert.ok(
         (runtimeManifest.commandChainInputs as string[]).includes(
           join(integrationRoot, 'rn-session-metro.cjs'),
@@ -686,6 +985,7 @@ exec node "$basedir/../expo/bin/cli" "$@"
         commandChainInputs: runtimeManifest.commandChainInputs as string[],
         protectedRuntimeRoots: runtimeManifest.protectedRuntimeRoots as string[],
         nativeAddonRoots: runtimeManifest.nativeAddonRoots as string[],
+        cssInteropCacheRoot: runtimeManifest.cssInteropCacheRoot as string,
         port: runtimeManifest.port as number,
         instanceId: 'integration-metro',
         runtimeInputs: policy.runtimeInputs as string[],
