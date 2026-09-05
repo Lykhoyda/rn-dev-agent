@@ -42,9 +42,11 @@ There is no internal state to track — the only state ever consulted is a fresh
 
 ### Step 0 — Read the authoritative local instructions
 
-Read the project's injected CLAUDE.md block (from
+Read the project's injected block in `CLAUDE.md` or `CLAUDE.local.md` (from
 `## React Native Development (rn-dev-agent)` through
 `<!-- rn-dev-agent:template-end -->`) and `.rn-agent/local/troubleshooting.md`.
+Either instruction file can supply the block; keep shared instructions untouched
+when the block lives in `CLAUDE.local.md`.
 If the block is absent → stop: "project not onboarded — run
 `/rn-dev-agent:setup`". Never start device work on an un-onboarded project.
 
@@ -59,7 +61,7 @@ node <plugin-root>/rn-dev-agent-core/dist/workflow-check.js preflight --project 
 (`<plugin-root>` = `${CLAUDE_PLUGIN_ROOT}` on Claude, the Codex package root on
 Codex.) It reports `packageManager` (the `packageManager` field wins, lockfile
 inference is the fallback), the exact `installCommand`, `nodeModulesPresent`,
-the CLAUDE.md block, and the private-state-root kind and existence, with at
+the Claude instruction block, and the private-state-root kind and existence, with at
 most ONE actionable `stop`.
 
 In a monorepo the checker resolves the package-manager facts from the nearest

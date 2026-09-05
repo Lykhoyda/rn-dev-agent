@@ -54,7 +54,9 @@ plugin-root environment variable, marketplace source path, or cache scan.
 Read the project's injected agent-instruction block (for Codex projects the
 `AGENTS.md` block between `<!-- rn-dev-agent:codex-template-start -->` and
 `<!-- rn-dev-agent:codex-template-end -->`; a Claude-onboarded project carries
-the equivalent CLAUDE.md block) and `.rn-agent/local/troubleshooting.md`.
+the equivalent block in either `CLAUDE.md` or `CLAUDE.local.md`) and
+`.rn-agent/local/troubleshooting.md`. Keep shared instructions untouched when
+the block lives in `CLAUDE.local.md`.
 If no injected block exists → stop: "project not onboarded — run
 `$rn-dev-agent:setup`". Never start device work on an un-onboarded project.
 

@@ -1,7 +1,15 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+  rmSync,
+} from 'node:fs';
 import { tmpdir, homedir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -224,6 +232,70 @@ test('preflight reports an absent CLAUDE.md block without owning onboarding poli
   assert.equal(stopCode(body), null);
   assert.equal(facts(body).claudeMdBlock, 'absent');
   rmSync(root, { recursive: true, force: true });
+});
+
+test('preflight recognizes instruction blocks in either file without changing their bytes', () => {
+  const heading = '## React Native Development (rn-dev-agent)\n';
+  const sentinel = '<!-- rn-dev-agent:template-end -->\n';
+  const malformed = '## React Native Development (rn-dev-agen)\nbody\n';
+  const cases: Array<[string | null, string | null, string, boolean]> = [
+    [null, ONBOARDED_CLAUDE_MD, 'present', true],
+    ['# Shared company instructions\n', ONBOARDED_CLAUDE_MD, 'present', true],
+    [ONBOARDED_CLAUDE_MD, null, 'present', true],
+    [ONBOARDED_CLAUDE_MD, ONBOARDED_CLAUDE_MD, 'present', true],
+    [null, null, 'absent', false],
+    [malformed, malformed, 'absent', false],
+    [null, sentinel, 'absent', false],
+    [sentinel, null, 'absent', false],
+    [heading, null, 'present', false],
+    [null, heading, 'present', false],
+    [heading, sentinel, 'present', false],
+    [sentinel, heading, 'present', false],
+    [heading, ONBOARDED_CLAUDE_MD, 'present', true],
+    [ONBOARDED_CLAUDE_MD, heading, 'present', true],
+    [malformed, ONBOARDED_CLAUDE_MD, 'present', true],
+    [ONBOARDED_CLAUDE_MD, malformed, 'present', true],
+  ];
+  for (const [shared, local, block, complete] of cases) {
+    const root = makeProject({ lockfile: 'yarn.lock', claudeMd: shared });
+    if (local !== null) writeFileSync(join(root, 'CLAUDE.local.md'), local);
+    try {
+      const { result, body } = run(['preflight', '--project', root]);
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(stopCode(body), null);
+      assert.equal(facts(body).claudeMdBlock, block);
+      assert.equal(facts(body).claudeMdSentinel, complete);
+      for (const [file, content] of [
+        ['CLAUDE.md', shared],
+        ['CLAUDE.local.md', local],
+      ] as const) {
+        if (content === null) assert.equal(existsSync(join(root, file)), false);
+        else assert.deepEqual(readFileSync(join(root, file)), Buffer.from(content));
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+});
+
+test('preflight does not hide an instruction-file read error behind another valid block', () => {
+  for (const file of ['CLAUDE.md', 'CLAUDE.local.md']) {
+    const root = makeProject({ lockfile: 'yarn.lock' });
+    writeFileSync(join(root, 'CLAUDE.local.md'), ONBOARDED_CLAUDE_MD);
+    chmodSync(join(root, file), 0);
+    try {
+      const { result, body } = run(['preflight', '--project', root]);
+      assert.equal(result.status, 2);
+      assert.equal(body, null);
+      assert.equal(result.stderr.trim(), `workflow-check: cannot read ${file}`);
+    } finally {
+      chmodSync(join(root, file), 0o600);
+      for (const name of ['CLAUDE.md', 'CLAUDE.local.md']) {
+        assert.deepEqual(readFileSync(join(root, name)), Buffer.from(ONBOARDED_CLAUDE_MD));
+      }
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
 });
 
 test('preflight stops when package.json is missing entirely', () => {
