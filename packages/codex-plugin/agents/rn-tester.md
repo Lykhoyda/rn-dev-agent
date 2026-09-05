@@ -337,7 +337,7 @@ For EACH step in the flow:
    device_screenshot
    cdp_component_tree(filter="CartBadge", depth=2)
    ```
-   Check that props/state match expectations.
+   Check that the component structure and props summaries match expectations.
 
 4. **Verify Data**: Check internal state:
    ```

@@ -2,7 +2,7 @@
 // whenever the injected surface changes; it flows into the IIFE's freshness
 // check (__RN_AGENT.__v) AND the post-injection log line, so they can never
 // drift (the log previously hard-coded a stale "v11").
-export const HELPERS_VERSION = 60;
+export const HELPERS_VERSION = 61;
 
 export const INJECTED_HELPERS = `
 (function() {
@@ -596,28 +596,6 @@ export const INJECTED_HELPERS = `
         if (Object.keys(props).length > 0) result.props = props;
       }
 
-      if (isUserComponent && fiber.memoizedState !== null) {
-        try {
-          var hookState = fiber.memoizedState;
-          var states = [];
-          while (hookState) {
-            if (hookState.queue && hookState.memoizedState !== undefined) {
-              var hs = hookState.memoizedState;
-              if (typeof hs === 'function') {
-                states.push('[Function]');
-              } else if (typeof hs === 'object' && hs !== null) {
-                try { JSON.stringify(hs); states.push(hs); }
-                catch(e) { states.push('[Circular]'); }
-              } else {
-                states.push(hs);
-              }
-            }
-            hookState = hookState.next;
-          }
-          if (states.length > 0) result.hookStates = states.slice(0, 5);
-        } catch(e) {}
-      }
-
       if (children.length > 0) {
         if (children.length > 20) walkQuality.collapsedChildLists++;
         result.children = children.length > 20
@@ -628,11 +606,7 @@ export const INJECTED_HELPERS = `
       return result;
     }
 
-    // GH #321 (quick win #3): salient digest — a compact "what can I act on
-    // here?" list of ONLY actionable nodes (+ their text), dropping props /
-    // hookStates / nesting. Cuts the live-perception payload from ~thousands of
-    // tokens (full tree) to hundreds. BFS over every renderer root like the
-    // filter branch.
+    // Compact actionable nodes across every renderer root.
     if (opts.interactiveOnly) {
       var INTERACTIVE_NAMES = { Pressable: 1, TouchableOpacity: 1, TouchableHighlight: 1, TouchableWithoutFeedback: 1, TouchableNativeFeedback: 1, Button: 1, TextInput: 1, Switch: 1, Link: 1 };
       var INTERACTIVE_ROLES = { button: 1, link: 1, switch: 1, checkbox: 1, radio: 1, menuitem: 1, tab: 1, togglebutton: 1, imagebutton: 1, search: 1, adjustable: 1 };
