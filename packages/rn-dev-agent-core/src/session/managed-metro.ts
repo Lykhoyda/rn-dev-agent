@@ -1953,35 +1953,11 @@ function managedMetroFirstPartyLogCauses(path: string): string | null {
   return causes.length > 0 ? causes.join(', ') : null;
 }
 
-function redactedTruncatedPrefixLength(value: string, redactions: readonly string[]): number {
-  if (!value) return 0;
-  const prefixes = new Uint32Array(value.length);
-  for (let index = 1, matched = 0; index < value.length; index += 1) {
-    while (matched > 0 && value[index] !== value[matched]) matched = prefixes[matched - 1];
-    if (value[index] === value[matched]) matched += 1;
-    prefixes[index] = matched;
-  }
-  let longest = 0;
-  for (const redaction of redactions) {
-    let matched = 0;
-    for (let index = 0; index < redaction.length; index += 1) {
-      while (matched > 0 && (matched === value.length || redaction[index] !== value[matched])) {
-        matched = prefixes[matched - 1];
-      }
-      if (redaction[index] === value[matched]) matched += 1;
-    }
-    longest = Math.max(longest, matched);
-  }
-  return longest;
-}
-
 function sanitizeManagedMetroStartupDetailValue(
   value: string,
   redactions: readonly string[],
-  truncatedStart = false,
 ): string {
-  const prefixLength = truncatedStart ? redactedTruncatedPrefixLength(value, redactions) : 0;
-  let sanitized = prefixLength > 0 ? `<redacted>${value.slice(prefixLength)}` : value;
+  let sanitized = value;
   for (const redaction of [...redactions].sort((left, right) => right.length - left.length)) {
     if (redaction) sanitized = sanitized.replaceAll(redaction, '<redacted>');
   }
@@ -2342,23 +2318,6 @@ export async function startManagedMetro(
     instanceId,
     runtimeInputs,
   });
-  const enforcementRedactions = [
-    input.appRoot,
-    input.sourceRoot,
-    input.runtimeRoot,
-    input.sessionId,
-    instanceId,
-    input.signerCapability,
-    runtimePolicyCapability,
-    ...Object.entries(childEnvironment)
-      .filter(
-        ([name, value]) =>
-          value !== undefined &&
-          (MANAGED_METRO_SENSITIVE_ENVIRONMENT_NAME.test(name) ||
-            /^[a-z][a-z0-9+.-]*:\/\/[^/\s@]+@/i.test(value)),
-      )
-      .map(([, value]) => value as string),
-  ];
   let preflightObservation: ManagedMetroPreflightObservation | null = null;
   let runtimeEnforcement:
     | ManagedMetroEnforcement
@@ -2373,8 +2332,6 @@ export async function startManagedMetro(
           observe: (observation) => {
             preflightObservation = observation;
           },
-          sanitize: (value, truncatedStart) =>
-            sanitizeManagedMetroStartupDetailValue(value, enforcementRedactions, truncatedStart),
         }),
       };
     } catch {

@@ -12773,6 +12773,7 @@ import { spawnSync } from "node:child_process";
 import { createHash as createHash3 } from "node:crypto";
 import { closeSync as closeSync2, constants as constants2, existsSync as existsSync3, lstatSync as lstatSync3, mkdirSync, openSync as openSync2, readFileSync as readFileSync3, realpathSync as realpathSync4, rmSync, statSync as statSync2, symlinkSync, writeSync } from "node:fs";
 import { basename, dirname as dirname2, resolve as resolve2 } from "node:path";
+import { constants as osConstants } from "node:os";
 var DARWIN_SANDBOX_EXECUTABLE = "/usr/bin/sandbox-exec";
 var DARWIN_CODESIGN_EXECUTABLE = "/usr/bin/codesign";
 var DARWIN_PLATFORM_SIGNING_LEAF_AUTHORITIES = [
@@ -13104,6 +13105,36 @@ function prepareManagedMetroEnforcement(input, dependencies = {}) {
     commandChainAttestation
   };
 }
+function preflightDiagnosticCauses(value) {
+  const codes = [
+    "EPERM",
+    "EADDRINUSE",
+    "EADDRNOTAVAIL",
+    "EACCES",
+    "EMFILE",
+    "ENFILE",
+    "ENOMEM",
+    "ENOSPC",
+    "EPIPE"
+  ];
+  const categories = [...codes, "RN_DEV_AGENT", "NODE_RUNTIME", "OUT_OF_MEMORY"];
+  if (Array.isArray(value)) {
+    const bounded = value.slice(0, 16);
+    const observed2 = categories.filter((category) => bounded.includes(category));
+    return observed2.length > 0 ? observed2 : ["unknown"];
+  }
+  if (typeof value !== "string")
+    return ["unknown"];
+  const window = value.slice(-65536);
+  const observed = codes.filter((code) => new RegExp("\\b" + code + "\\b").test(window));
+  if (/\bRN_DEV_AGENT_[A-Z0-9_]+\b/.test(window))
+    observed.push("RN_DEV_AGENT");
+  if (/\bNode\.js v\d+\.\d+\.\d+\b/.test(window))
+    observed.push("NODE_RUNTIME");
+  if (/\bJavaScript heap out of memory\b/.test(window))
+    observed.push("OUT_OF_MEMORY");
+  return observed.length > 0 ? observed : ["unknown"];
+}
 var PREFLIGHT_SOURCE = String.raw`
 const { spawn, spawnSync } = require('node:child_process');
 const { createHash } = require('node:crypto');
@@ -13115,8 +13146,8 @@ const startedAt = performance.now();
 const elapsed = () => Math.round(performance.now() - startedAt);
 const timings = {};
 let commandExit = null;
-let commandStderrTail = null;
-let commandStderrTruncated = false;
+let commandCauses = ['unknown'];
+const diagnosticCauses = ${preflightDiagnosticCauses.toString()};
 const diagnosticInputLimit = 65536;
 const denied = (run) => {
   try {
@@ -13277,11 +13308,7 @@ const processGroupExists = (pid) => {
           offset += count;
         }
         if (offset === contents.length && fstatSync(readDescriptor).size === metadata.size) {
-          commandStderrTruncated = position > 0;
-          const lineStart = commandStderrTruncated ? contents.indexOf(10) + 1 : 0;
-          commandStderrTail = commandStderrTruncated && lineStart === 0
-            ? ''
-            : contents.subarray(lineStart).toString('utf8');
+          commandCauses = diagnosticCauses(contents.toString('utf8'));
         }
       }
     } catch {} finally {
@@ -13320,7 +13347,7 @@ const processGroupExists = (pid) => {
     commandChainStable,
   };
   timings.totalMs = elapsed();
-  writeFileSync(1, JSON.stringify({ ...receipt, diagnostic: { timings, commandExit, commandStderrTail, commandStderrTruncated } }));
+  writeFileSync(1, JSON.stringify({ ...receipt, diagnostic: { timings, commandExit, commandCauses } }));
   process.exit(Object.values(receipt).every(Boolean) ? 0 : 1);
 })().catch((error) => {
   try {
@@ -13331,11 +13358,8 @@ const processGroupExists = (pid) => {
         diagnostic: {
           timings,
           commandExit,
-          commandStderrTail,
-          commandStderrTruncated,
-          exception: String((error && error.message) || error).length <= diagnosticInputLimit
-            ? String((error && error.message) || error)
-            : null,
+          commandCauses,
+          exceptionCause: 'unknown',
         },
       }),
     );
@@ -13356,17 +13380,22 @@ var PREFLIGHT_FLAGS = [
   "commandCleanupConfirmed",
   "commandChainStable"
 ];
-var OBSERVATION_TAIL_BYTES = 8192;
-function observationTail(value, sanitize, truncatedStart = false) {
-  if (typeof value !== "string" || !sanitize)
+var PREFLIGHT_TIMINGS = [
+  "allocatedMs",
+  "spawnedMs",
+  "occupancyMs",
+  "cleanupMs",
+  "totalMs"
+];
+function diagnosticSignal(value) {
+  if (value === null || value === void 0)
     return null;
-  const bytes = Buffer.from(sanitize(value, truncatedStart), "utf8");
-  let start = Math.max(0, bytes.length - OBSERVATION_TAIL_BYTES);
-  while (start < bytes.length && (bytes[start] & 192) === 128)
-    start += 1;
-  return bytes.subarray(start).toString("utf8");
+  return typeof value === "string" && Object.hasOwn(osConstants.signals, value) ? value : "unknown";
 }
-function preflightObservation(result, elapsedMs, sanitize) {
+function diagnosticExitCode(value) {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
+}
+function preflightObservation(result, elapsedMs) {
   let parsed = null;
   try {
     parsed = result.stdout ? JSON.parse(result.stdout) : null;
@@ -13375,26 +13404,29 @@ function preflightObservation(result, elapsedMs, sanitize) {
   }
   const flags = parsed && PREFLIGHT_FLAGS.every((flag) => typeof parsed[flag] === "boolean") ? Object.fromEntries(PREFLIGHT_FLAGS.map((flag) => [flag, parsed[flag]])) : null;
   const diagnostic2 = parsed && parsed.diagnostic && typeof parsed.diagnostic === "object" ? parsed.diagnostic : null;
-  const timings = diagnostic2 && diagnostic2.timings && typeof diagnostic2.timings === "object" ? Object.fromEntries(Object.entries(diagnostic2.timings).filter((entry) => Number.isFinite(entry[1]))) : null;
+  const timings = diagnostic2 && diagnostic2.timings && typeof diagnostic2.timings === "object" ? Object.fromEntries(PREFLIGHT_TIMINGS.map((name) => [
+    name,
+    diagnostic2.timings[name]
+  ]).filter((entry) => typeof entry[1] === "number" && Number.isFinite(entry[1]) && entry[1] >= 0)) : null;
   const exit = diagnostic2 && diagnostic2.commandExit && typeof diagnostic2.commandExit === "object" ? diagnostic2.commandExit : null;
   return {
     version: 1,
     outcome: result.status !== 0 ? "failed" : flags && PREFLIGHT_FLAGS.every((flag) => flags[flag]) ? "receipt" : "incomplete",
-    complete: result.status !== null && result.timedOut !== true && parsed !== null,
-    status: result.status,
-    signal: result.signal ?? null,
+    complete: result.status !== null && result.timedOut !== true && flags !== null && timings !== null && PREFLIGHT_TIMINGS.every((name) => name in timings),
+    status: diagnosticExitCode(result.status),
+    signal: diagnosticSignal(result.signal),
     outerTimedOut: result.timedOut === true,
     elapsedMs,
     flags,
     timings,
     commandExit: exit ? {
-      code: typeof exit.code === "number" ? exit.code : null,
-      signal: typeof exit.signal === "string" ? exit.signal : null,
-      atMs: typeof exit.atMs === "number" ? exit.atMs : -1
+      code: diagnosticExitCode(exit.code),
+      signal: diagnosticSignal(exit.signal),
+      atMs: typeof exit.atMs === "number" && Number.isFinite(exit.atMs) && exit.atMs >= 0 ? exit.atMs : -1
     } : null,
-    commandStderrTail: observationTail(diagnostic2?.commandStderrTail, sanitize, diagnostic2?.commandStderrTruncated === true),
-    preflightStderrTail: observationTail(result.stderr, sanitize),
-    exception: typeof diagnostic2?.exception === "string" && sanitize ? sanitize(diagnostic2.exception).slice(0, 512) : null
+    commandCauses: preflightDiagnosticCauses(diagnostic2?.commandCauses),
+    preflightCauses: preflightDiagnosticCauses(result.stderr),
+    exceptionCause: diagnostic2?.exceptionCause == null ? null : "unknown"
   };
 }
 function runManagedMetroEnforcementPreflight(plan, dependencies = {}) {
@@ -13453,7 +13485,7 @@ function runManagedMetroEnforcementPreflight(plan, dependencies = {}) {
       })
     ]);
     observationEmitted = true;
-    observe2(() => preflightObservation(result, Math.round(performance.now() - startedAt), dependencies.sanitize));
+    observe2(() => preflightObservation(result, Math.round(performance.now() - startedAt)));
     if (result.status !== 0) {
       throw new Error("METRO_RUNTIME_ENFORCEMENT_UNAVAILABLE: sandbox preflight failed");
     }
@@ -13497,9 +13529,9 @@ function runManagedMetroEnforcementPreflight(plan, dependencies = {}) {
         flags: null,
         timings: null,
         commandExit: null,
-        commandStderrTail: null,
-        preflightStderrTail: null,
-        exception: dependencies.sanitize ? dependencies.sanitize(error instanceof Error ? error.message : String(error)).slice(0, 512) : null
+        commandCauses: ["unknown"],
+        preflightCauses: ["unknown"],
+        exceptionCause: "unknown"
       }));
     }
     if (error instanceof Error && error.message.startsWith("METRO_RUNTIME_ENFORCEMENT_")) {
@@ -15084,34 +15116,8 @@ function managedMetroFirstPartyLogCauses(path) {
   const causes = [...new Set(tail.match(MANAGED_METRO_FIRST_PARTY_LOG_CAUSE) ?? [])].slice(0, 16);
   return causes.length > 0 ? causes.join(", ") : null;
 }
-function redactedTruncatedPrefixLength(value, redactions) {
-  if (!value)
-    return 0;
-  const prefixes = new Uint32Array(value.length);
-  for (let index = 1, matched = 0; index < value.length; index += 1) {
-    while (matched > 0 && value[index] !== value[matched])
-      matched = prefixes[matched - 1];
-    if (value[index] === value[matched])
-      matched += 1;
-    prefixes[index] = matched;
-  }
-  let longest = 0;
-  for (const redaction of redactions) {
-    let matched = 0;
-    for (let index = 0; index < redaction.length; index += 1) {
-      while (matched > 0 && (matched === value.length || redaction[index] !== value[matched])) {
-        matched = prefixes[matched - 1];
-      }
-      if (redaction[index] === value[matched])
-        matched += 1;
-    }
-    longest = Math.max(longest, matched);
-  }
-  return longest;
-}
-function sanitizeManagedMetroStartupDetailValue(value, redactions, truncatedStart = false) {
-  const prefixLength = truncatedStart ? redactedTruncatedPrefixLength(value, redactions) : 0;
-  let sanitized = prefixLength > 0 ? `<redacted>${value.slice(prefixLength)}` : value;
+function sanitizeManagedMetroStartupDetailValue(value, redactions) {
+  let sanitized = value;
   for (const redaction of [...redactions].sort((left, right) => right.length - left.length)) {
     if (redaction)
       sanitized = sanitized.replaceAll(redaction, "<redacted>");
@@ -15355,16 +15361,6 @@ async function startManagedMetro(input, dependencies = {}) {
     instanceId,
     runtimeInputs
   });
-  const enforcementRedactions = [
-    input.appRoot,
-    input.sourceRoot,
-    input.runtimeRoot,
-    input.sessionId,
-    instanceId,
-    input.signerCapability,
-    runtimePolicyCapability,
-    ...Object.entries(childEnvironment).filter(([name, value]) => value !== void 0 && (MANAGED_METRO_SENSITIVE_ENVIRONMENT_NAME.test(name) || /^[a-z][a-z0-9+.-]*:\/\/[^/\s@]+@/i.test(value))).map(([, value]) => value)
-  ];
   let preflightObservation2 = null;
   let runtimeEnforcement = preparedEnforcement;
   if (preparedEnforcement.status === "enforced") {
@@ -15375,8 +15371,7 @@ async function startManagedMetro(input, dependencies = {}) {
           environment: childEnvironment,
           observe: (observation) => {
             preflightObservation2 = observation;
-          },
-          sanitize: (value, truncatedStart) => sanitizeManagedMetroStartupDetailValue(value, enforcementRedactions, truncatedStart)
+          }
         })
       };
     } catch {

@@ -9614,6 +9614,36 @@ function prepareManagedMetroEnforcement(input, dependencies = {}) {
     commandChainAttestation
   };
 }
+function preflightDiagnosticCauses(value) {
+  const codes = [
+    "EPERM",
+    "EADDRINUSE",
+    "EADDRNOTAVAIL",
+    "EACCES",
+    "EMFILE",
+    "ENFILE",
+    "ENOMEM",
+    "ENOSPC",
+    "EPIPE"
+  ];
+  const categories = [...codes, "RN_DEV_AGENT", "NODE_RUNTIME", "OUT_OF_MEMORY"];
+  if (Array.isArray(value)) {
+    const bounded = value.slice(0, 16);
+    const observed2 = categories.filter((category) => bounded.includes(category));
+    return observed2.length > 0 ? observed2 : ["unknown"];
+  }
+  if (typeof value !== "string")
+    return ["unknown"];
+  const window = value.slice(-65536);
+  const observed = codes.filter((code) => new RegExp("\\b" + code + "\\b").test(window));
+  if (/\bRN_DEV_AGENT_[A-Z0-9_]+\b/.test(window))
+    observed.push("RN_DEV_AGENT");
+  if (/\bNode\.js v\d+\.\d+\.\d+\b/.test(window))
+    observed.push("NODE_RUNTIME");
+  if (/\bJavaScript heap out of memory\b/.test(window))
+    observed.push("OUT_OF_MEMORY");
+  return observed.length > 0 ? observed : ["unknown"];
+}
 function verifyManagedMetroEnforcementReceipt(input, receipt2, dependencies = {}) {
   if (!receipt2 || typeof receipt2 !== "object")
     return false;
@@ -9643,8 +9673,8 @@ const startedAt = performance.now();
 const elapsed = () => Math.round(performance.now() - startedAt);
 const timings = {};
 let commandExit = null;
-let commandStderrTail = null;
-let commandStderrTruncated = false;
+let commandCauses = ['unknown'];
+const diagnosticCauses = ${preflightDiagnosticCauses.toString()};
 const diagnosticInputLimit = 65536;
 const denied = (run) => {
   try {
@@ -9805,11 +9835,7 @@ const processGroupExists = (pid) => {
           offset += count;
         }
         if (offset === contents.length && fstatSync(readDescriptor).size === metadata.size) {
-          commandStderrTruncated = position > 0;
-          const lineStart = commandStderrTruncated ? contents.indexOf(10) + 1 : 0;
-          commandStderrTail = commandStderrTruncated && lineStart === 0
-            ? ''
-            : contents.subarray(lineStart).toString('utf8');
+          commandCauses = diagnosticCauses(contents.toString('utf8'));
         }
       }
     } catch {} finally {
@@ -9848,7 +9874,7 @@ const processGroupExists = (pid) => {
     commandChainStable,
   };
   timings.totalMs = elapsed();
-  writeFileSync(1, JSON.stringify({ ...receipt, diagnostic: { timings, commandExit, commandStderrTail, commandStderrTruncated } }));
+  writeFileSync(1, JSON.stringify({ ...receipt, diagnostic: { timings, commandExit, commandCauses } }));
   process.exit(Object.values(receipt).every(Boolean) ? 0 : 1);
 })().catch((error) => {
   try {
@@ -9859,11 +9885,8 @@ const processGroupExists = (pid) => {
         diagnostic: {
           timings,
           commandExit,
-          commandStderrTail,
-          commandStderrTruncated,
-          exception: String((error && error.message) || error).length <= diagnosticInputLimit
-            ? String((error && error.message) || error)
-            : null,
+          commandCauses,
+          exceptionCause: 'unknown',
         },
       }),
     );
@@ -12214,34 +12237,8 @@ function managedMetroFirstPartyLogCauses(path) {
   const causes = [...new Set(tail.match(MANAGED_METRO_FIRST_PARTY_LOG_CAUSE) ?? [])].slice(0, 16);
   return causes.length > 0 ? causes.join(", ") : null;
 }
-function redactedTruncatedPrefixLength(value, redactions) {
-  if (!value)
-    return 0;
-  const prefixes = new Uint32Array(value.length);
-  for (let index = 1, matched = 0; index < value.length; index += 1) {
-    while (matched > 0 && value[index] !== value[matched])
-      matched = prefixes[matched - 1];
-    if (value[index] === value[matched])
-      matched += 1;
-    prefixes[index] = matched;
-  }
-  let longest = 0;
-  for (const redaction of redactions) {
-    let matched = 0;
-    for (let index = 0; index < redaction.length; index += 1) {
-      while (matched > 0 && (matched === value.length || redaction[index] !== value[matched])) {
-        matched = prefixes[matched - 1];
-      }
-      if (redaction[index] === value[matched])
-        matched += 1;
-    }
-    longest = Math.max(longest, matched);
-  }
-  return longest;
-}
-function sanitizeManagedMetroStartupDetailValue(value, redactions, truncatedStart = false) {
-  const prefixLength = truncatedStart ? redactedTruncatedPrefixLength(value, redactions) : 0;
-  let sanitized = prefixLength > 0 ? `<redacted>${value.slice(prefixLength)}` : value;
+function sanitizeManagedMetroStartupDetailValue(value, redactions) {
+  let sanitized = value;
   for (const redaction of [...redactions].sort((left, right) => right.length - left.length)) {
     if (redaction)
       sanitized = sanitized.replaceAll(redaction, "<redacted>");

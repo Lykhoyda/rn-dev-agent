@@ -7380,6 +7380,36 @@ var intrinsicWeakSetDelete = WeakSet.prototype.delete;
 var intrinsicWeakSetHas = WeakSet.prototype.has;
 
 // packages/rn-dev-agent-core/dist/session/managed-metro-enforcement.js
+function preflightDiagnosticCauses(value) {
+  const codes = [
+    "EPERM",
+    "EADDRINUSE",
+    "EADDRNOTAVAIL",
+    "EACCES",
+    "EMFILE",
+    "ENFILE",
+    "ENOMEM",
+    "ENOSPC",
+    "EPIPE"
+  ];
+  const categories = [...codes, "RN_DEV_AGENT", "NODE_RUNTIME", "OUT_OF_MEMORY"];
+  if (Array.isArray(value)) {
+    const bounded = value.slice(0, 16);
+    const observed2 = categories.filter((category) => bounded.includes(category));
+    return observed2.length > 0 ? observed2 : ["unknown"];
+  }
+  if (typeof value !== "string")
+    return ["unknown"];
+  const window = value.slice(-65536);
+  const observed = codes.filter((code) => new RegExp("\\b" + code + "\\b").test(window));
+  if (/\bRN_DEV_AGENT_[A-Z0-9_]+\b/.test(window))
+    observed.push("RN_DEV_AGENT");
+  if (/\bNode\.js v\d+\.\d+\.\d+\b/.test(window))
+    observed.push("NODE_RUNTIME");
+  if (/\bJavaScript heap out of memory\b/.test(window))
+    observed.push("OUT_OF_MEMORY");
+  return observed.length > 0 ? observed : ["unknown"];
+}
 var PREFLIGHT_SOURCE = String.raw`
 const { spawn, spawnSync } = require('node:child_process');
 const { createHash } = require('node:crypto');
@@ -7391,8 +7421,8 @@ const startedAt = performance.now();
 const elapsed = () => Math.round(performance.now() - startedAt);
 const timings = {};
 let commandExit = null;
-let commandStderrTail = null;
-let commandStderrTruncated = false;
+let commandCauses = ['unknown'];
+const diagnosticCauses = ${preflightDiagnosticCauses.toString()};
 const diagnosticInputLimit = 65536;
 const denied = (run) => {
   try {
@@ -7553,11 +7583,7 @@ const processGroupExists = (pid) => {
           offset += count;
         }
         if (offset === contents.length && fstatSync(readDescriptor).size === metadata.size) {
-          commandStderrTruncated = position > 0;
-          const lineStart = commandStderrTruncated ? contents.indexOf(10) + 1 : 0;
-          commandStderrTail = commandStderrTruncated && lineStart === 0
-            ? ''
-            : contents.subarray(lineStart).toString('utf8');
+          commandCauses = diagnosticCauses(contents.toString('utf8'));
         }
       }
     } catch {} finally {
@@ -7596,7 +7622,7 @@ const processGroupExists = (pid) => {
     commandChainStable,
   };
   timings.totalMs = elapsed();
-  writeFileSync(1, JSON.stringify({ ...receipt, diagnostic: { timings, commandExit, commandStderrTail, commandStderrTruncated } }));
+  writeFileSync(1, JSON.stringify({ ...receipt, diagnostic: { timings, commandExit, commandCauses } }));
   process.exit(Object.values(receipt).every(Boolean) ? 0 : 1);
 })().catch((error) => {
   try {
@@ -7607,11 +7633,8 @@ const processGroupExists = (pid) => {
         diagnostic: {
           timings,
           commandExit,
-          commandStderrTail,
-          commandStderrTruncated,
-          exception: String((error && error.message) || error).length <= diagnosticInputLimit
-            ? String((error && error.message) || error)
-            : null,
+          commandCauses,
+          exceptionCause: 'unknown',
         },
       }),
     );
