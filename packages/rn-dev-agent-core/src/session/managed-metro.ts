@@ -11,6 +11,7 @@ import {
   readSync,
   realpathSync,
   rmSync,
+  writeFileSync,
 } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import {
@@ -38,6 +39,7 @@ import {
   type ManagedMetroEnforcement,
   type ManagedMetroEnforcementPlan,
   type ManagedMetroEnforcementReceipt,
+  type ManagedMetroPreflightObservation,
 } from './managed-metro-enforcement.js';
 import {
   MAX_STRICT_PROOF_DEPENDENCY_ENTRIES,
@@ -1978,6 +1980,39 @@ function sanitizeManagedMetroStartupDetail(value: string, redactions: readonly s
   return sanitizeManagedMetroStartupDetailValue(value, redactions).slice(-4_096);
 }
 
+// Observation only: this record never grants enforcement authority, so any failure is swallowed.
+function writeManagedMetroEnforcementDiagnostic(input: {
+  path: string;
+  sessionId: string;
+  metroInstanceId: string;
+  buildGeneration: number;
+  environmentDigest: string;
+  prepared: ManagedMetroEnforcement;
+  observation: ManagedMetroPreflightObservation | null;
+}): void {
+  try {
+    const observation = input.observation;
+    writeFileSync(
+      input.path,
+      JSON.stringify({
+        version: 1,
+        sessionId: input.sessionId,
+        metroInstanceId: input.metroInstanceId,
+        buildGeneration: input.buildGeneration,
+        environmentDigest: input.environmentDigest,
+        preparation:
+          input.prepared.status === 'enforced'
+            ? { status: 'enforced', profileSha256: input.prepared.profileSha256 }
+            : { status: 'unsupported', reason: input.prepared.reason },
+        preflight: observation,
+        recordComplete:
+          input.prepared.status !== 'enforced' ? true : (observation?.complete ?? false),
+      }),
+      { encoding: 'utf8', mode: 0o600 },
+    );
+  } catch {}
+}
+
 function boundedManagedMetroStartupMessage(
   code: string,
   details: readonly (string | null | undefined)[],
@@ -2285,6 +2320,24 @@ export async function startManagedMetro(
     instanceId,
     runtimeInputs,
   });
+  const enforcementRedactions = [
+    input.appRoot,
+    input.sourceRoot,
+    input.runtimeRoot,
+    input.sessionId,
+    instanceId,
+    input.signerCapability,
+    runtimePolicyCapability,
+    ...Object.entries(childEnvironment)
+      .filter(
+        ([name, value]) =>
+          value !== undefined &&
+          (MANAGED_METRO_SENSITIVE_ENVIRONMENT_NAME.test(name) ||
+            /^[a-z][a-z0-9+.-]*:\/\/[^/\s@]+@/i.test(value)),
+      )
+      .map(([, value]) => value as string),
+  ];
+  let preflightObservation: ManagedMetroPreflightObservation | null = null;
   let runtimeEnforcement:
     | ManagedMetroEnforcement
     | (ManagedMetroEnforcementPlan & { receipt: ManagedMetroEnforcementReceipt }) =
@@ -2293,7 +2346,13 @@ export async function startManagedMetro(
     try {
       runtimeEnforcement = {
         ...preparedEnforcement,
-        receipt: preflightEnforcement(preparedEnforcement, { environment: childEnvironment }),
+        receipt: preflightEnforcement(preparedEnforcement, {
+          environment: childEnvironment,
+          observe: (observation) => {
+            preflightObservation = observation;
+          },
+          sanitize: (value) => sanitizeManagedMetroStartupDetailValue(value, enforcementRedactions),
+        }),
       };
     } catch {
       runtimeEnforcement = {
@@ -2302,6 +2361,15 @@ export async function startManagedMetro(
       };
     }
   }
+  writeManagedMetroEnforcementDiagnostic({
+    path: join(input.runtimeRoot, `metro-enforcement-diagnostic-${instanceId}.json`),
+    sessionId: input.sessionId,
+    metroInstanceId: instanceId,
+    buildGeneration: input.buildGeneration,
+    environmentDigest: runtimeManifest.environmentDigest,
+    prepared: preparedEnforcement,
+    observation: preflightObservation,
+  });
   const runtimeEvidenceAuthority: MetroRuntimeEvidenceAuthority =
     runtimeEnforcement.status === 'enforced' ? 'managed-sandbox-v1' : 'reported-v1';
   const requiresSandboxAdmission = runtimeEnforcement.status === 'enforced';

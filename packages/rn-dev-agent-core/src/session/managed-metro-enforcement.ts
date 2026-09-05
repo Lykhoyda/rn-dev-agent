@@ -28,6 +28,8 @@ interface CommandResult {
   status: number | null;
   stdout: string;
   stderr: string;
+  signal?: string | null;
+  timedOut?: boolean;
 }
 
 interface FileMetadata {
@@ -127,6 +129,7 @@ export interface ManagedMetroEnforcementPlan {
   canaryPath: string;
   descendantCanaryPath: string;
   symlinkCanaryPath: string;
+  commandStderrPath: string;
   port: number;
   unallocatedPort: number;
   nodeExecutable: string;
@@ -164,6 +167,8 @@ function defaultRun(command: string, args: readonly string[]): CommandResult {
     status: result.status,
     stdout: result.stdout ?? '',
     stderr: result.stderr ?? result.error?.message ?? '',
+    signal: result.signal ?? null,
+    timedOut: (result.error as NodeJS.ErrnoException | undefined)?.code === 'ETIMEDOUT',
   };
 }
 
@@ -575,6 +580,7 @@ export function prepareManagedMetroEnforcement(
     canaryPath: `/private/tmp/rn-dev-agent-metro-${canaryId}.canary`,
     descendantCanaryPath: resolve(runtimeRoot, `descendant-${canaryId}.cjs`),
     symlinkCanaryPath: resolve(runtimeRoot, `enforcement-${canaryId}.canary`),
+    commandStderrPath: resolve(runtimeRoot, `preflight-stderr-${canaryId}.log`),
     port: input.port,
     unallocatedPort: 0,
     nodeExecutable,
@@ -595,6 +601,11 @@ const { closeSync, constants, fstatSync, openSync, readFileSync, readSync, write
 const { createConnection, createServer } = require('node:net');
 const input = JSON.parse(process.argv[1]);
 const logicalArgumentPrefix = 'rn-dev-agent-logical-path:';
+const startedAt = performance.now();
+const elapsed = () => Math.round(performance.now() - startedAt);
+const timings = {};
+let commandExit = null;
+let commandStderrTail = '';
 const denied = (run) => {
   try {
     run();
@@ -665,9 +676,11 @@ const processGroupExists = (pid) => {
     commandSnapshots.push(snapshot);
   }
   const allocated = await listen(input.port);
+  timings.allocatedMs = elapsed();
   if (!allocated.ok) throw new Error('allocated listener unavailable before command');
   const commandEnvironment = JSON.parse(readFileSync(input.preflightEnvironmentPath, 'utf8'));
-  const stdio = ['ignore', 'ignore', 'ignore', 'ipc'];
+  const stderrDescriptor = openSync(input.commandStderrPath, 'w', 0o600);
+  const stdio = ['ignore', 'ignore', stderrDescriptor, 'ipc'];
   while (stdio.length < 9) stdio.push('ignore');
   stdio[8] = 'pipe';
   stdio.push('pipe');
@@ -691,11 +704,16 @@ const processGroupExists = (pid) => {
     command.stdio[10 + index].end(commandSnapshots[index]);
   }
   command.stdio[9].resume();
+  command.once('exit', (code, signal) => {
+    commandExit = { code, signal, atMs: elapsed() };
+  });
   command.once('error', () => {});
+  timings.spawnedMs = elapsed();
   const resolvedCommandAllowed = await waitUntil(async () => {
     const probe = await listen(input.port);
     return !probe.ok && probe.code === 'EADDRINUSE';
   }, 15000);
+  timings.occupancyMs = elapsed();
   let commandCleanupConfirmed = false;
   if (Number.isSafeInteger(command.pid)) {
     try {
@@ -719,6 +737,13 @@ const processGroupExists = (pid) => {
   }
   const released = await listen(input.port);
   commandCleanupConfirmed = commandCleanupConfirmed && released.ok;
+  timings.cleanupMs = elapsed();
+  try {
+    closeSync(stderrDescriptor);
+  } catch {}
+  try {
+    commandStderrTail = readFileSync(input.commandStderrPath, 'utf8').slice(-8192);
+  } catch {}
   const commandChainStable = true;
   const descendantCreationAllowed = resolvedCommandAllowed && commandCleanupConfirmed;
   const unallocated = await listen(input.unallocatedPort);
@@ -746,16 +771,141 @@ const processGroupExists = (pid) => {
     commandCleanupConfirmed,
     commandChainStable,
   };
-  process.stdout.write(JSON.stringify(receipt));
+  timings.totalMs = elapsed();
+  writeFileSync(1, JSON.stringify({ ...receipt, diagnostic: { timings, commandExit, commandStderrTail } }));
   process.exit(Object.values(receipt).every(Boolean) ? 0 : 1);
-})().catch(() => process.exit(1));
+})().catch((error) => {
+  try {
+    timings.totalMs = elapsed();
+    writeFileSync(
+      1,
+      JSON.stringify({
+        diagnostic: {
+          timings,
+          commandExit,
+          commandStderrTail,
+          exception: String((error && error.message) || error).slice(0, 512),
+        },
+      }),
+    );
+  } catch {}
+  process.exit(1);
+});
 `;
+
+const PREFLIGHT_FLAGS = [
+  'descendantCreationAllowed',
+  'unauthorizedExecutableDenied',
+  'unmanifestedReadDenied',
+  'unmanifestedWriteDenied',
+  'symlinkEscapeDenied',
+  'unallocatedListenerDenied',
+  'allocatedListenerAllowed',
+  'networkOutboundDenied',
+  'resolvedCommandAllowed',
+  'commandCleanupConfirmed',
+  'commandChainStable',
+] as const;
+
+export interface ManagedMetroPreflightObservation {
+  version: 1;
+  outcome: 'receipt' | 'incomplete' | 'failed' | 'invalid';
+  complete: boolean;
+  status: number | null;
+  signal: string | null;
+  outerTimedOut: boolean;
+  elapsedMs: number;
+  flags: Record<(typeof PREFLIGHT_FLAGS)[number], boolean> | null;
+  timings: Record<string, number> | null;
+  commandExit: { code: number | null; signal: string | null; atMs: number } | null;
+  commandStderrTail: string | null;
+  preflightStderrTail: string | null;
+  exception: string | null;
+}
 
 interface ManagedMetroPreflightDependencies {
   writeCanary?: (path: string, contents: string) => void;
   removeCanary?: (path: string) => void;
   run?: (command: string, args: readonly string[]) => CommandResult;
   environment?: NodeJS.ProcessEnv;
+  observe?: (observation: ManagedMetroPreflightObservation) => void;
+  // Without a sanitizer every process-output tail is dropped, so raw stderr cannot escape.
+  sanitize?: (value: string) => string;
+}
+
+const OBSERVATION_TAIL_BYTES = 8_192;
+
+function observationTail(
+  value: unknown,
+  sanitize: ((value: string) => string) | undefined,
+): string | null {
+  if (typeof value !== 'string' || !sanitize) return null;
+  const bytes = Buffer.from(sanitize(value), 'utf8');
+  return bytes.subarray(Math.max(0, bytes.length - OBSERVATION_TAIL_BYTES)).toString('utf8');
+}
+
+function preflightObservation(
+  result: CommandResult,
+  elapsedMs: number,
+  sanitize: ((value: string) => string) | undefined,
+): ManagedMetroPreflightObservation {
+  let parsed: Record<string, unknown> | null = null;
+  try {
+    parsed = result.stdout ? (JSON.parse(result.stdout) as Record<string, unknown>) : null;
+  } catch {
+    parsed = null;
+  }
+  const flags =
+    parsed && PREFLIGHT_FLAGS.every((flag) => typeof parsed[flag] === 'boolean')
+      ? (Object.fromEntries(
+          PREFLIGHT_FLAGS.map((flag) => [flag, parsed[flag] as boolean]),
+        ) as ManagedMetroPreflightObservation['flags'])
+      : null;
+  const diagnostic =
+    parsed && parsed.diagnostic && typeof parsed.diagnostic === 'object'
+      ? (parsed.diagnostic as Record<string, unknown>)
+      : null;
+  const timings =
+    diagnostic && diagnostic.timings && typeof diagnostic.timings === 'object'
+      ? Object.fromEntries(
+          Object.entries(diagnostic.timings as Record<string, unknown>).filter(
+            (entry): entry is [string, number] => Number.isFinite(entry[1]),
+          ),
+        )
+      : null;
+  const exit =
+    diagnostic && diagnostic.commandExit && typeof diagnostic.commandExit === 'object'
+      ? (diagnostic.commandExit as Record<string, unknown>)
+      : null;
+  return {
+    version: 1,
+    outcome:
+      result.status !== 0
+        ? 'failed'
+        : flags && PREFLIGHT_FLAGS.every((flag) => flags[flag])
+          ? 'receipt'
+          : 'incomplete',
+    complete: result.status !== null && result.timedOut !== true && parsed !== null,
+    status: result.status,
+    signal: result.signal ?? null,
+    outerTimedOut: result.timedOut === true,
+    elapsedMs,
+    flags,
+    timings,
+    commandExit: exit
+      ? {
+          code: typeof exit.code === 'number' ? exit.code : null,
+          signal: typeof exit.signal === 'string' ? exit.signal : null,
+          atMs: typeof exit.atMs === 'number' ? exit.atMs : -1,
+        }
+      : null,
+    commandStderrTail: observationTail(diagnostic?.commandStderrTail, sanitize),
+    preflightStderrTail: observationTail(result.stderr, sanitize),
+    exception:
+      typeof diagnostic?.exception === 'string' && sanitize
+        ? sanitize(diagnostic.exception).slice(0, 512)
+        : null,
+  };
 }
 
 export function runManagedMetroEnforcementPreflight(
@@ -779,6 +929,13 @@ export function runManagedMetroEnforcementPreflight(
   const removeCanary =
     dependencies.removeCanary ?? ((path: string) => rmSync(path, { force: true }));
   const run = dependencies.run ?? defaultRun;
+  const observe = (observation: ManagedMetroPreflightObservation) => {
+    try {
+      dependencies.observe?.(observation);
+    } catch {}
+  };
+  const startedAt = performance.now();
+  let observationEmitted = false;
   let canaryCreated = false;
   let environmentCreated = false;
   let symlinkCreated = false;
@@ -812,10 +969,19 @@ export function runManagedMetroEnforcementPreflight(
         commandChainAttestation: plan.commandChainAttestation,
         preflightEnvironmentPath: plan.preflightEnvironmentPath,
         appRoot: plan.appRoot,
+        commandStderrPath: plan.commandStderrPath,
         port: plan.port,
         unallocatedPort: plan.unallocatedPort,
       }),
     ]);
+    observationEmitted = true;
+    observe(
+      preflightObservation(
+        result,
+        Math.round(performance.now() - startedAt),
+        dependencies.sanitize,
+      ),
+    );
     if (result.status !== 0) {
       throw new Error('METRO_RUNTIME_ENFORCEMENT_UNAVAILABLE: sandbox preflight failed');
     }
@@ -858,6 +1024,28 @@ export function runManagedMetroEnforcementPreflight(
       commandChainAttestation: plan.commandChainAttestation,
     };
   } catch (error) {
+    if (!observationEmitted) {
+      observationEmitted = true;
+      observe({
+        version: 1,
+        outcome: 'invalid',
+        complete: false,
+        status: null,
+        signal: null,
+        outerTimedOut: false,
+        elapsedMs: Math.round(performance.now() - startedAt),
+        flags: null,
+        timings: null,
+        commandExit: null,
+        commandStderrTail: null,
+        preflightStderrTail: null,
+        exception: dependencies.sanitize
+          ? dependencies
+              .sanitize(error instanceof Error ? error.message : String(error))
+              .slice(0, 512)
+          : null,
+      });
+    }
     if (error instanceof Error && error.message.startsWith('METRO_RUNTIME_ENFORCEMENT_')) {
       throw error;
     }
@@ -865,6 +1053,7 @@ export function runManagedMetroEnforcementPreflight(
       cause: error,
     });
   } finally {
+    rmSync(plan.commandStderrPath, { force: true });
     if (symlinkCreated) rmSync(plan.symlinkCanaryPath, { force: true });
     if (environmentCreated) removeCanary(plan.preflightEnvironmentPath);
     if (canaryCreated) removeCanary(plan.canaryPath);

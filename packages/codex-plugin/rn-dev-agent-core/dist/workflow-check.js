@@ -7387,6 +7387,11 @@ const { closeSync, constants, fstatSync, openSync, readFileSync, readSync, write
 const { createConnection, createServer } = require('node:net');
 const input = JSON.parse(process.argv[1]);
 const logicalArgumentPrefix = 'rn-dev-agent-logical-path:';
+const startedAt = performance.now();
+const elapsed = () => Math.round(performance.now() - startedAt);
+const timings = {};
+let commandExit = null;
+let commandStderrTail = '';
 const denied = (run) => {
   try {
     run();
@@ -7457,9 +7462,11 @@ const processGroupExists = (pid) => {
     commandSnapshots.push(snapshot);
   }
   const allocated = await listen(input.port);
+  timings.allocatedMs = elapsed();
   if (!allocated.ok) throw new Error('allocated listener unavailable before command');
   const commandEnvironment = JSON.parse(readFileSync(input.preflightEnvironmentPath, 'utf8'));
-  const stdio = ['ignore', 'ignore', 'ignore', 'ipc'];
+  const stderrDescriptor = openSync(input.commandStderrPath, 'w', 0o600);
+  const stdio = ['ignore', 'ignore', stderrDescriptor, 'ipc'];
   while (stdio.length < 9) stdio.push('ignore');
   stdio[8] = 'pipe';
   stdio.push('pipe');
@@ -7483,11 +7490,16 @@ const processGroupExists = (pid) => {
     command.stdio[10 + index].end(commandSnapshots[index]);
   }
   command.stdio[9].resume();
+  command.once('exit', (code, signal) => {
+    commandExit = { code, signal, atMs: elapsed() };
+  });
   command.once('error', () => {});
+  timings.spawnedMs = elapsed();
   const resolvedCommandAllowed = await waitUntil(async () => {
     const probe = await listen(input.port);
     return !probe.ok && probe.code === 'EADDRINUSE';
   }, 15000);
+  timings.occupancyMs = elapsed();
   let commandCleanupConfirmed = false;
   if (Number.isSafeInteger(command.pid)) {
     try {
@@ -7511,6 +7523,13 @@ const processGroupExists = (pid) => {
   }
   const released = await listen(input.port);
   commandCleanupConfirmed = commandCleanupConfirmed && released.ok;
+  timings.cleanupMs = elapsed();
+  try {
+    closeSync(stderrDescriptor);
+  } catch {}
+  try {
+    commandStderrTail = readFileSync(input.commandStderrPath, 'utf8').slice(-8192);
+  } catch {}
   const commandChainStable = true;
   const descendantCreationAllowed = resolvedCommandAllowed && commandCleanupConfirmed;
   const unallocated = await listen(input.unallocatedPort);
@@ -7538,9 +7557,26 @@ const processGroupExists = (pid) => {
     commandCleanupConfirmed,
     commandChainStable,
   };
-  process.stdout.write(JSON.stringify(receipt));
+  timings.totalMs = elapsed();
+  writeFileSync(1, JSON.stringify({ ...receipt, diagnostic: { timings, commandExit, commandStderrTail } }));
   process.exit(Object.values(receipt).every(Boolean) ? 0 : 1);
-})().catch(() => process.exit(1));
+})().catch((error) => {
+  try {
+    timings.totalMs = elapsed();
+    writeFileSync(
+      1,
+      JSON.stringify({
+        diagnostic: {
+          timings,
+          commandExit,
+          commandStderrTail,
+          exception: String((error && error.message) || error).slice(0, 512),
+        },
+      }),
+    );
+  } catch {}
+  process.exit(1);
+});
 `;
 
 // packages/rn-dev-agent-core/dist/session/strict-proof-limits.js

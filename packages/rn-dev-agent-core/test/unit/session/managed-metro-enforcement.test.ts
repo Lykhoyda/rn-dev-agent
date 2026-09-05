@@ -370,6 +370,165 @@ test('managed Metro grants writes only to the owned css-interop cache directory'
   }
 });
 
+test('managed Metro preflight observation stays truthful without changing outcomes', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-metro-preflight-observe-'));
+  roots.push(root);
+  const runtimeRoot = realpathSync(root);
+  const plan = prepareManagedMetroEnforcement({ ...fixtureInput(), runtimeRoot }, verifiedRuntime);
+  assert.equal(plan.status, 'enforced');
+  if (plan.status !== 'enforced') return;
+  const allTrue = Object.fromEntries(
+    [
+      'descendantCreationAllowed',
+      'unauthorizedExecutableDenied',
+      'unmanifestedReadDenied',
+      'unmanifestedWriteDenied',
+      'symlinkEscapeDenied',
+      'unallocatedListenerDenied',
+      'allocatedListenerAllowed',
+      'networkOutboundDenied',
+      'resolvedCommandAllowed',
+      'commandCleanupConfirmed',
+      'commandChainStable',
+    ].map((flag) => [flag, true]),
+  );
+  const diagnostic = {
+    timings: { allocatedMs: 3, spawnedMs: 9, occupancyMs: 15012, cleanupMs: 15040, totalMs: 15044 },
+    commandExit: { code: 1, signal: null, atMs: 800 },
+    commandStderrTail: `${'x'.repeat(9000)}token=hunter2 EPERM: operation not permitted`,
+  };
+  const cases: Array<{
+    name: string;
+    result: {
+      status: number | null;
+      stdout: string;
+      stderr: string;
+      signal?: string | null;
+      timedOut?: boolean;
+    };
+    expectError: string | null;
+    expect: Record<string, unknown>;
+  }> = [
+    {
+      name: 'success',
+      result: { status: 0, stdout: JSON.stringify({ ...allTrue, diagnostic }), stderr: '' },
+      expectError: null,
+      expect: { outcome: 'receipt', complete: true, status: 0, outerTimedOut: false },
+    },
+    {
+      name: 'nonzero with failed flag',
+      result: {
+        status: 1,
+        stdout: JSON.stringify({ ...allTrue, resolvedCommandAllowed: false, diagnostic }),
+        stderr: '',
+      },
+      expectError: 'METRO_RUNTIME_ENFORCEMENT_UNAVAILABLE: sandbox preflight failed',
+      expect: { outcome: 'failed', complete: true, status: 1 },
+    },
+    {
+      name: 'early child exit without receipt',
+      result: { status: 1, stdout: '', stderr: 'node: bad option\n' },
+      expectError: 'METRO_RUNTIME_ENFORCEMENT_UNAVAILABLE: sandbox preflight failed',
+      expect: { outcome: 'failed', complete: false, flags: null, timings: null },
+    },
+    {
+      name: 'outer timeout',
+      result: { status: null, stdout: '', stderr: '', signal: 'SIGTERM', timedOut: true },
+      expectError: 'METRO_RUNTIME_ENFORCEMENT_UNAVAILABLE: sandbox preflight failed',
+      expect: {
+        outcome: 'failed',
+        complete: false,
+        status: null,
+        signal: 'SIGTERM',
+        outerTimedOut: true,
+      },
+    },
+    {
+      name: 'zero exit with incomplete flags',
+      result: {
+        status: 0,
+        stdout: JSON.stringify({ ...allTrue, symlinkEscapeDenied: false }),
+        stderr: '',
+      },
+      expectError: 'METRO_RUNTIME_ENFORCEMENT_UNAVAILABLE: sandbox preflight is incomplete',
+      expect: { outcome: 'incomplete', complete: true, timings: null },
+    },
+  ];
+  for (const { name, result, expectError, expect } of cases) {
+    const observations: unknown[] = [];
+    const runPreflight = () =>
+      runManagedMetroEnforcementPreflight(plan, {
+        writeCanary: () => {},
+        removeCanary: () => {},
+        run: () => result,
+        observe: (observation) => observations.push(observation),
+        sanitize: (value) => value.replaceAll('hunter2', '<redacted>'),
+      });
+    if (expectError) assert.throws(runPreflight, { message: expectError }, name);
+    else assert.equal(runPreflight().resolvedCommandAllowed, true, name);
+    assert.equal(observations.length, 1, name);
+    const observation = observations[0] as Record<string, unknown>;
+    for (const [key, value] of Object.entries(expect)) {
+      assert.deepEqual(observation[key], value, `${name}: ${key}`);
+    }
+    if (result.stdout.includes('"diagnostic"')) {
+      assert.deepEqual(observation.timings, diagnostic.timings, name);
+      assert.deepEqual(observation.commandExit, diagnostic.commandExit, name);
+      const tail = observation.commandStderrTail as string;
+      assert.ok(Buffer.byteLength(tail) <= 8192, name);
+      assert.ok(tail.endsWith('EPERM: operation not permitted'), name);
+      assert.ok(!tail.includes('hunter2'), `${name}: stderr tail is redacted`);
+      assert.ok(tail.includes('<redacted>'), `${name}: redaction applied`);
+    }
+  }
+  const unsanitized: unknown[] = [];
+  runManagedMetroEnforcementPreflight(plan, {
+    writeCanary: () => {},
+    removeCanary: () => {},
+    run: () => ({ status: 0, stdout: JSON.stringify({ ...allTrue, diagnostic }), stderr: 'raw' }),
+    observe: (observation) => unsanitized.push(observation),
+  });
+  const withoutSanitizer = unsanitized[0] as Record<string, unknown>;
+  assert.equal(withoutSanitizer.commandStderrTail, null, 'no sanitizer emits no command stderr');
+  assert.equal(
+    withoutSanitizer.preflightStderrTail,
+    null,
+    'no sanitizer emits no preflight stderr',
+  );
+  assert.deepEqual(
+    withoutSanitizer.timings,
+    diagnostic.timings,
+    'timings remain without sanitizer',
+  );
+  const setupFailures: unknown[] = [];
+  assert.throws(
+    () =>
+      runManagedMetroEnforcementPreflight(plan, {
+        writeCanary: () => {
+          throw Object.assign(new Error('EEXIST: canary exists'), { code: 'EEXIST' });
+        },
+        removeCanary: () => {},
+        run: () => ({ status: 0, stdout: '', stderr: '' }),
+        observe: (observation) => setupFailures.push(observation),
+      }),
+    { message: 'METRO_RUNTIME_ENFORCEMENT_UNAVAILABLE: sandbox preflight is invalid' },
+  );
+  assert.deepEqual(
+    (setupFailures[0] as Record<string, unknown>).outcome,
+    'invalid',
+    'setup failure observed',
+  );
+  const swallowed = runManagedMetroEnforcementPreflight(plan, {
+    writeCanary: () => {},
+    removeCanary: () => {},
+    run: () => ({ status: 0, stdout: JSON.stringify({ ...allTrue, diagnostic }), stderr: '' }),
+    observe: () => {
+      throw new Error('sink failure');
+    },
+  });
+  assert.equal(swallowed.resolvedCommandAllowed, true, 'observer failure does not change outcome');
+});
+
 test('managed Metro derives a deterministic descendant-capable Darwin profile', () => {
   const first = prepareManagedMetroEnforcement(fixtureInput(), verifiedRuntime);
   const second = prepareManagedMetroEnforcement(fixtureInput(), verifiedRuntime);
@@ -936,6 +1095,16 @@ exec node "$basedir/../expo/bin/cli" "$@"
 
     try {
       t.diagnostic(JSON.stringify({ runtimeEvidenceAuthority: binding.runtimeEvidenceAuthority }));
+      try {
+        t.diagnostic(
+          readFileSync(
+            join(runtimeRoot, 'metro-enforcement-diagnostic-integration-metro.json'),
+            'utf8',
+          ).slice(0, 3000),
+        );
+      } catch {
+        t.diagnostic('no enforcement diagnostic recorded');
+      }
       assert.equal(
         binding.runtimeEvidenceAuthority,
         'managed-sandbox-v1',
@@ -962,6 +1131,32 @@ exec node "$basedir/../expo/bin/cli" "$@"
       assert.equal(runtimeManifest.cssInteropCacheRoot, join(cssInteropRoot, '.cache'));
       assert.equal(readFileSync(cssInteropCachePath, 'utf8'), 'generated');
       assert.equal(JSON.parse(readFileSync(alternateCacheWriteResult, 'utf8')), 'EPERM');
+      const enforcementDiagnostic = JSON.parse(
+        readFileSync(
+          join(runtimeRoot, 'metro-enforcement-diagnostic-integration-metro.json'),
+          'utf8',
+        ),
+      ) as Record<string, unknown>;
+      t.diagnostic(JSON.stringify({ enforcementDiagnostic }));
+      assert.equal(enforcementDiagnostic.metroInstanceId, 'integration-metro');
+      assert.equal(enforcementDiagnostic.sessionId, 'integration-session');
+      assert.deepEqual(enforcementDiagnostic.preparation, {
+        status: 'enforced',
+        profileSha256: (policy.runtimeEnforcementReceipt as Record<string, unknown>).profileSha256,
+      });
+      const preflight = enforcementDiagnostic.preflight as Record<string, unknown>;
+      assert.equal(preflight.outcome, 'receipt');
+      assert.equal(preflight.complete, true);
+      const timings = preflight.timings as Record<string, number>;
+      const phases = ['allocatedMs', 'spawnedMs', 'occupancyMs', 'cleanupMs', 'totalMs'];
+      for (const phase of phases) assert.ok(Number.isFinite(timings[phase]), phase);
+      const observedTimings = phases.map((phase) => timings[phase]);
+      assert.deepEqual(
+        observedTimings,
+        [...observedTimings].sort((left, right) => left - right),
+        'phase timings are monotonic',
+      );
+      assert.equal(enforcementDiagnostic.recordComplete, true);
       assert.ok(
         (runtimeManifest.commandChainInputs as string[]).includes(
           join(integrationRoot, 'rn-session-metro.cjs'),
