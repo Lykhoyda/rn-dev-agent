@@ -129,17 +129,18 @@ function platformBinaryWithSandboxLeaf(leaf: string) {
   };
 }
 
-test('managed Metro accepts every Apple platform signing leaf authority', () => {
+test('managed Metro accepts every Apple platform signing leaf authority', (t) => {
   for (const leaf of ['Software Signing', 'macOS Software Signing']) {
-    assert.equal(
-      prepareManagedMetroEnforcement(fixtureInput(), platformBinaryWithSandboxLeaf(leaf)).status,
-      'enforced',
-      leaf,
+    const result = prepareManagedMetroEnforcement(
+      fixtureInput(),
+      platformBinaryWithSandboxLeaf(leaf),
     );
+    t.diagnostic(JSON.stringify({ leaf, status: result.status }));
+    assert.equal(result.status, 'enforced', leaf);
   }
 });
 
-test('managed Metro refuses sandbox leaf authorities outside the Apple platform set', () => {
+test('managed Metro refuses sandbox leaf authorities outside the Apple platform set', (t) => {
   for (const leaf of [
     'Developer ID Application: Example Corp (AB12CD34EF)',
     'Apple Development: someone@example.com (AB12CD34EF)',
@@ -147,10 +148,113 @@ test('managed Metro refuses sandbox leaf authorities outside the Apple platform 
     'macOS Software Signing Services',
     'Software',
   ]) {
+    const result = prepareManagedMetroEnforcement(
+      fixtureInput(),
+      platformBinaryWithSandboxLeaf(leaf),
+    );
+    t.diagnostic(JSON.stringify({ leaf, result }));
     assert.deepEqual(
-      prepareManagedMetroEnforcement(fixtureInput(), platformBinaryWithSandboxLeaf(leaf)),
+      result,
       { status: 'unsupported', reason: 'sandbox-executable-unverified' },
       leaf,
+    );
+  }
+});
+
+test('managed Metro preserves sandbox signature, identity, and filesystem refusals', (t) => {
+  const runtime = platformBinaryWithSandboxLeaf('macOS Software Signing');
+  const details = runtime.run('/usr/bin/codesign', ['-dv']).stderr;
+  const signingDetails = (stderr: string, status = 0) => ({
+    run: (_command: string, args: readonly string[]) =>
+      args[0] === '--verify'
+        ? { status: 0, stdout: '', stderr: '' }
+        : { status, stdout: '', stderr },
+  });
+  const cases: Array<{
+    name: string;
+    dependencies: NonNullable<Parameters<typeof prepareManagedMetroEnforcement>[1]>;
+  }> = [
+    { name: 'missing executable', dependencies: { exists: () => false } },
+    {
+      name: 'noncanonical executable',
+      dependencies: { canonicalize: () => '/other/sandbox-exec' },
+    },
+    {
+      name: 'directory',
+      dependencies: { stat: () => ({ isFile: () => false, uid: 0, mode: 0o755 }) },
+    },
+    {
+      name: 'nonroot owner',
+      dependencies: { stat: () => ({ isFile: () => true, uid: 501, mode: 0o755 }) },
+    },
+    {
+      name: 'group writable',
+      dependencies: { stat: () => ({ isFile: () => true, uid: 0, mode: 0o775 }) },
+    },
+    {
+      name: 'other writable',
+      dependencies: { stat: () => ({ isFile: () => true, uid: 0, mode: 0o757 }) },
+    },
+    {
+      name: 'unsigned',
+      dependencies: {
+        run: () => ({ status: 1, stdout: '', stderr: 'code object is not signed at all' }),
+      },
+    },
+    {
+      name: 'invalid signature',
+      dependencies: { run: () => ({ status: 1, stdout: '', stderr: 'invalid signature' }) },
+    },
+    {
+      name: 'ad-hoc signature',
+      dependencies: signingDetails(
+        details
+          .split('\n')
+          .filter((line) => !line.startsWith('Authority='))
+          .concat('Signature=adhoc')
+          .join('\n'),
+      ),
+    },
+    { name: 'details command failure', dependencies: signingDetails(details, 1) },
+    {
+      name: 'wrong identifier',
+      dependencies: signingDetails(details.replace('com.apple.sandbox-exec', 'com.apple.other')),
+    },
+    {
+      name: 'invalid platform identifier',
+      dependencies: signingDetails(
+        details.replace('Platform identifier=26', 'Platform identifier=unknown'),
+      ),
+    },
+    {
+      name: 'invalid CDHash',
+      dependencies: signingDetails(
+        details.replace('0123456789abcdef0123456789abcdef01234567', 'invalid'),
+      ),
+    },
+    {
+      name: 'wrong intermediate',
+      dependencies: signingDetails(
+        details.replace(
+          'Authority=Apple Code Signing Certification Authority',
+          'Authority=Other Intermediate',
+        ),
+      ),
+    },
+    {
+      name: 'wrong root',
+      dependencies: signingDetails(
+        details.replace('Authority=Apple Root CA', 'Authority=Other Root'),
+      ),
+    },
+  ];
+  for (const { name, dependencies } of cases) {
+    const result = prepareManagedMetroEnforcement(fixtureInput(), { ...runtime, ...dependencies });
+    t.diagnostic(JSON.stringify({ rejection: name, result }));
+    assert.deepEqual(
+      result,
+      { status: 'unsupported', reason: 'sandbox-executable-unverified' },
+      name,
     );
   }
 });
@@ -349,7 +453,7 @@ test('managed Metro rejects a receipt after Node executable bytes change', () =>
 test(
   'managed Metro Darwin preflight proves allowed bind and denied escapes',
   { skip: process.platform !== 'darwin' },
-  async () => {
+  async (t) => {
     const root = mkdtempSync(join(tmpdir(), 'rn-metro-enforcement-'));
     roots.push(root);
     const sourceRoot = realpathSync(root);
@@ -388,9 +492,11 @@ test(
       runtimeInputs: [commandExecutable],
     });
 
+    t.diagnostic(JSON.stringify({ sandboxPlan: plan.status }));
     assert.equal(plan.status, 'enforced');
     if (plan.status !== 'enforced') return;
     const receipt = runManagedMetroEnforcementPreflight(plan);
+    t.diagnostic(JSON.stringify({ sandboxExecutable: plan.sandboxExecutable, receipt }));
 
     assert.deepEqual(receipt, {
       version: 2,
@@ -421,7 +527,7 @@ test(
 test(
   'managed Metro earns managed-sandbox-v1 only after an attested sandbox launch',
   { skip: process.platform !== 'darwin', timeout: 30_000 },
-  async () => {
+  async (t) => {
     const root = mkdtempSync(join(tmpdir(), 'rn-metro-managed-sandbox-'));
     roots.push(root);
     const appRoot = realpathSync(root);
@@ -533,6 +639,7 @@ exec node "$basedir/../expo/bin/cli" "$@"
     );
 
     try {
+      t.diagnostic(JSON.stringify({ runtimeEvidenceAuthority: binding.runtimeEvidenceAuthority }));
       assert.equal(
         binding.runtimeEvidenceAuthority,
         'managed-sandbox-v1',
@@ -549,6 +656,12 @@ exec node "$basedir/../expo/bin/cli" "$@"
         readFileSync(join(integrationRoot, 'metro-runtime-policy.json'), 'utf8'),
       ) as Record<string, unknown>;
       const runtimeManifest = policy.runtimeManifest as Record<string, unknown>;
+      t.diagnostic(
+        JSON.stringify({
+          runtimeEnforcement: policy.runtimeEnforcement,
+          receipt: policy.runtimeEnforcementReceipt,
+        }),
+      );
       assert.equal(policy.runtimeEnforcement, 'os-enforced-v1');
       assert.ok(
         (runtimeManifest.commandChainInputs as string[]).includes(
@@ -664,6 +777,7 @@ exec node "$basedir/../expo/bin/cli" "$@"
       }
       assert.equal(probeProcessBirth(binding.launcherPid).status, 'absent');
       assert.equal(probeProcessBirth(binding.pid).status, 'absent');
+      t.diagnostic('Managed Metro listener and launcher cleanup confirmed.');
     }
   },
 );
