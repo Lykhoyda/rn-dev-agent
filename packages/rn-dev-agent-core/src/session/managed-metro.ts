@@ -1,5 +1,6 @@
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
+import { createRequire } from 'node:module';
 import {
   closeSync,
   existsSync,
@@ -10,6 +11,7 @@ import {
   readSync,
   realpathSync,
   rmSync,
+  writeFileSync,
 } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import {
@@ -37,6 +39,7 @@ import {
   type ManagedMetroEnforcement,
   type ManagedMetroEnforcementPlan,
   type ManagedMetroEnforcementReceipt,
+  type ManagedMetroPreflightObservation,
 } from './managed-metro-enforcement.js';
 import {
   MAX_STRICT_PROOF_DEPENDENCY_ENTRIES,
@@ -1815,6 +1818,23 @@ function dependencyRoots(
   return [...roots].sort();
 }
 
+function cssInteropCacheRoot(appRoot: string): string | null {
+  try {
+    const configRequire = createRequire(join(appRoot, 'metro.config.js'));
+    let packageJson: string;
+    try {
+      packageJson = createRequire(configRequire.resolve('nativewind/metro')).resolve(
+        'react-native-css-interop/package.json',
+      );
+    } catch {
+      packageJson = configRequire.resolve('react-native-css-interop/package.json');
+    }
+    return join(realpathSync(dirname(packageJson)), '.cache');
+  } catch {
+    return null;
+  }
+}
+
 function canonicalRuntimeInput(path: string): string {
   try {
     return realpathSync(path);
@@ -1880,10 +1900,7 @@ function boundedMetroLogTail(path: string, maxBytes = 4_096): string | null {
     if (length === 0) return null;
     const buffer = Buffer.alloc(length);
     readSync(descriptor, buffer, 0, length, size - length);
-    const tail = buffer
-      .toString('utf8')
-      .replace(/[^\t\n\r\x20-\x7e]/g, '?')
-      .trim();
+    const tail = buffer.toString('utf8');
     return tail || null;
   } catch {
     return null;
@@ -1940,11 +1957,12 @@ function sanitizeManagedMetroStartupDetailValue(
   value: string,
   redactions: readonly string[],
 ): string {
-  let sanitized = value.replace(/[^\t\n\r\x20-\x7e]/g, '?');
+  let sanitized = value;
   for (const redaction of [...redactions].sort((left, right) => right.length - left.length)) {
     if (redaction) sanitized = sanitized.replaceAll(redaction, '<redacted>');
   }
   return sanitized
+    .replace(/[^\t\n\r\x20-\x7e]/g, '?')
     .replace(/\b(?:Basic|Bearer)\s+\S+/gi, '<redacted-authorization>')
     .replace(
       /(\b[A-Za-z_][A-Za-z0-9_.-]*(?:access[-_]?key|token|secret|password|passwd|pwd|credential|api[-_]?key|authorization|auth|cookie|private[-_]?key)[A-Za-z0-9_.-]*\b["']?\s*[:=]\s*["']?)[^"'\s,;}]+/gi,
@@ -1958,6 +1976,39 @@ function sanitizeManagedMetroStartupDetailValue(
 
 function sanitizeManagedMetroStartupDetail(value: string, redactions: readonly string[]): string {
   return sanitizeManagedMetroStartupDetailValue(value, redactions).slice(-4_096);
+}
+
+// Observation only: this record never grants enforcement authority, so any failure is swallowed.
+function writeManagedMetroEnforcementDiagnostic(input: {
+  path: string;
+  sessionId: string;
+  metroInstanceId: string;
+  buildGeneration: number;
+  environmentDigest: string;
+  prepared: ManagedMetroEnforcement;
+  observation: ManagedMetroPreflightObservation | null;
+}): void {
+  try {
+    const observation = input.observation;
+    writeFileSync(
+      input.path,
+      JSON.stringify({
+        version: 1,
+        sessionId: input.sessionId,
+        metroInstanceId: input.metroInstanceId,
+        buildGeneration: input.buildGeneration,
+        environmentDigest: input.environmentDigest,
+        preparation:
+          input.prepared.status === 'enforced'
+            ? { status: 'enforced', profileSha256: input.prepared.profileSha256 }
+            : { status: 'unsupported', reason: input.prepared.reason },
+        preflight: observation,
+        recordComplete:
+          input.prepared.status !== 'enforced' ? true : (observation?.complete ?? false),
+      }),
+      { encoding: 'utf8', mode: 0o600 },
+    );
+  } catch {}
 }
 
 function boundedManagedMetroStartupMessage(
@@ -2221,6 +2272,7 @@ export async function startManagedMetro(
       .map(canonicalRuntimeInput)
       .filter((value, index, entries) => entries.indexOf(value) === index),
     nativeAddonRoots: allowedCodeRoots,
+    cssInteropCacheRoot: cssInteropCacheRoot(input.appRoot),
     nodeExecutable: canonicalRuntimeInput(launchCommand.nodeExecutable),
     nodeVersion: process.version,
     port: input.port,
@@ -2261,10 +2313,12 @@ export async function startManagedMetro(
     commandChainInputs,
     protectedRuntimeRoots: runtimeManifest.protectedRuntimeRoots,
     nativeAddonRoots: allowedCodeRoots,
+    cssInteropCacheRoot: runtimeManifest.cssInteropCacheRoot,
     port: input.port,
     instanceId,
     runtimeInputs,
   });
+  let preflightObservation: ManagedMetroPreflightObservation | null = null;
   let runtimeEnforcement:
     | ManagedMetroEnforcement
     | (ManagedMetroEnforcementPlan & { receipt: ManagedMetroEnforcementReceipt }) =
@@ -2273,7 +2327,12 @@ export async function startManagedMetro(
     try {
       runtimeEnforcement = {
         ...preparedEnforcement,
-        receipt: preflightEnforcement(preparedEnforcement, { environment: childEnvironment }),
+        receipt: preflightEnforcement(preparedEnforcement, {
+          environment: childEnvironment,
+          observe: (observation) => {
+            preflightObservation = observation;
+          },
+        }),
       };
     } catch {
       runtimeEnforcement = {
@@ -2282,6 +2341,15 @@ export async function startManagedMetro(
       };
     }
   }
+  writeManagedMetroEnforcementDiagnostic({
+    path: join(input.runtimeRoot, `metro-enforcement-diagnostic-${instanceId}.json`),
+    sessionId: input.sessionId,
+    metroInstanceId: instanceId,
+    buildGeneration: input.buildGeneration,
+    environmentDigest: runtimeManifest.environmentDigest,
+    prepared: preparedEnforcement,
+    observation: preflightObservation,
+  });
   const runtimeEvidenceAuthority: MetroRuntimeEvidenceAuthority =
     runtimeEnforcement.status === 'enforced' ? 'managed-sandbox-v1' : 'reported-v1';
   const requiresSandboxAdmission = runtimeEnforcement.status === 'enforced';

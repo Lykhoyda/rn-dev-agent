@@ -405,6 +405,8 @@ function metroRuntimeInputs(
     runtimeManifest.commandChainInputs.some((entry) => typeof entry !== 'string') ||
     !Array.isArray(runtimeManifest.protectedRuntimeRoots) ||
     runtimeManifest.protectedRuntimeRoots.some((entry) => typeof entry !== 'string') ||
+    (runtimeManifest.cssInteropCacheRoot != null &&
+      typeof runtimeManifest.cssInteropCacheRoot !== 'string') ||
     typeof runtimeManifest.nodeOptions !== 'string' ||
     typeof runtimeManifest.environmentDigest !== 'string' ||
     !/^[a-f0-9]{64}$/.test(runtimeManifest.environmentDigest) ||
@@ -469,6 +471,7 @@ function metroRuntimeInputs(
           commandExecutableMappings: runtimeManifest.commandExecutableMappings as string[],
           commandChainInputs: runtimeManifest.commandChainInputs as string[],
           protectedRuntimeRoots: runtimeManifest.protectedRuntimeRoots as string[],
+          cssInteropCacheRoot: (runtimeManifest.cssInteropCacheRoot as string | undefined) ?? null,
           port: runtimeManifest.port as number,
           instanceId: authority.metroInstanceId,
           runtimeInputs: receipt.runtimeInputs as string[],
