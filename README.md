@@ -49,16 +49,17 @@ Codex users: replace `/rn-dev-agent:<name>` with `$rn-dev-agent:<name>`. [Instal
 ## Coding agents ship blind
 
 They are good at writing React Native code and bad at knowing whether it runs. This plugin closes
-that loop — and everything below is measured on a real Expo app, not a synthetic benchmark.
+that loop — and the numbers below come from real features built on a real Expo app, not synthetic
+benchmarks.
 
 | | |
 |---|---|
 | **Verified, not claimed** | After implementing, the agent connects over CDP, walks the screen, reads the component tree and store, exercises the interaction, and screenshots the result — before it says "done" |
 | **210× faster replays** | A 3-step wizard that took ~14 min as an interactive walk replays in **~4 s** as a saved action. Average session time across the measured features dropped from ~12 min to ~4 min once actions existed |
 | **Flows that repair themselves** | When a `testID` drifts, the saved action fuzzy-matches the live snapshot, patches its own YAML, and retries. Cosmetic drift is absorbed; genuinely broken product logic is surfaced, never auto-fixed |
-| **3–25 min, description → verified** | Simple features land in 3–5 min, complex multi-step flows in 11–25 min — **zero crashes across 38 measured stories** |
+| **Minutes, not sessions** | Simple features land in 3–5 min, complex multi-step flows in 11–25 min; heavy glass-UI work runs longer. **Zero crashes across all 38 measured stories** |
 | **iOS and Android, one contract** | In-tree XCTest and UiAutomator runners give real taps, typing, scrolling, and screenshots — shipped as prebuilt artifacts so first use skips the cold build |
-| **Both hosts, full parity** | Claude Code: 16 slash commands + 11 skills + 5 agents. Codex: 27 native skills (16 workflow + 11 domain). 81 MCP tools and 118 best-practice rules on both |
+| **Both hosts, full parity** | Claude Code: 16 slash commands + 11 skills + 5 agents. Codex: 27 native skills (16 workflow + 11 domain). The same 81 MCP tools on both |
 
 [Full benchmarks and methodology →](https://lykhoyda.github.io/rn-dev-agent/benchmarks/)
 
@@ -166,7 +167,9 @@ as prologues to reach a known state before fresh interactive work.
 
 ## Under the hood
 
-Everything the commands above are built from — expand what you need.
+Everything the commands above are built from — expand what you need. The architecture and review
+phases also apply a bundled set of React Native and React
+[best-practice rules](https://lykhoyda.github.io/rn-dev-agent/best-practices/).
 
 <details>
 <summary><strong>81 MCP tools across six families</strong></summary>
@@ -193,17 +196,6 @@ can't silently drift. [Full tool reference →](https://lykhoyda.github.io/rn-de
 - **Quiescence bypass (iOS)** — XCTest's private idle-wait is disabled by default so apps with Reanimated or looping animations can't hang queries. Opt out with `RN_QUIESCENCE_BYPASS=0`.
 - **Engine pinning** — setup installs attested [maestro-runner](https://github.com/devicelab-dev/maestro-runner) `1.1.24` in the versioned pin-cache (floor `>= 1.1.24`) and verifies its checksum fail-closed; replay and `/doctor` refuse missing, older, or unattested engines.
 - **Degraded-runtime detection** — when taps succeed but the app doesn't respond, results carry a "simulator likely wedged, reboot it" hint instead of a misleading "element not found."
-
-</details>
-
-<details>
-<summary><strong>118 curated best-practice rules</strong></summary>
-
-48 React Native + 70 React/web rules, indexed and applied during architecture and review — crash
-prevention, list performance, animations, state management. Integrated from
-[Vercel's agent skills](https://github.com/vercel-labs/agent-skills); run
-`/rn-dev-agent:check-vercel-rules` to see drift against upstream.
-[Best practices →](https://lykhoyda.github.io/rn-dev-agent/best-practices/)
 
 </details>
 
@@ -493,9 +485,7 @@ must update the golden registry (`node scripts/update-tool-registry.mjs`).
 
 ### Stop taking your agent's word for it.
 
-```text
-/plugin marketplace add Lykhoyda/rn-dev-agent
-```
+**[Install it in 60 seconds →](#see-it-in-60-seconds)**
 
 **[Read the docs](https://lykhoyda.github.io/rn-dev-agent/)** · **[Star the repo](https://github.com/Lykhoyda/rn-dev-agent)** · **[Report a bug](https://github.com/Lykhoyda/rn-dev-agent/issues/new)** or run `/rn-dev-agent:send-feedback`
 
