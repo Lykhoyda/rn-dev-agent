@@ -12506,10 +12506,10 @@ const processGroupExists = (pid) => {
       } catch {}
     }
   }
-  command.stdio[8].end('admitted\n');
   for (let index = 0; index < commandSnapshots.length; index += 1) {
     command.stdio[10 + index].end(commandSnapshots[index]);
   }
+  command.stdio[8].end('admitted\n');
   command.stdio[9].resume();
   command.once('exit', (code, signal) => {
     commandExit = { code, signal, atMs: elapsed() };

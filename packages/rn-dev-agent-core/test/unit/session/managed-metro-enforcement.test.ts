@@ -1266,7 +1266,7 @@ process.stdout.write(JSON.stringify(results));`,
 
 test(
   'managed Metro earns managed-sandbox-v1 only after an attested sandbox launch',
-  { skip: process.platform !== 'darwin', timeout: 30_000 },
+  { skip: process.platform !== 'darwin', timeout: 120_000 },
   async (t) => {
     const root = mkdtempSync(join(tmpdir(), 'rn-metro-managed-sandbox-'));
     roots.push(root);
@@ -1444,6 +1444,7 @@ exec node "$basedir/../expo/bin/cli" "$@"
       },
     );
 
+    let attestedPlan: ReturnType<typeof prepareManagedMetroEnforcement> | null = null;
     try {
       t.diagnostic(JSON.stringify({ runtimeEvidenceAuthority: binding.runtimeEvidenceAuthority }));
       try {
@@ -1537,6 +1538,7 @@ exec node "$basedir/../expo/bin/cli" "$@"
         runtimeInputs: policy.runtimeInputs as string[],
       };
       const reconstructed = prepareManagedMetroEnforcement(verificationInput);
+      attestedPlan = reconstructed;
       assert.equal(reconstructed.status, 'enforced');
       if (reconstructed.status !== 'enforced') return;
       assert.deepEqual(
@@ -1624,6 +1626,23 @@ exec node "$basedir/../expo/bin/cli" "$@"
       assert.equal(probeProcessBirth(binding.launcherPid).status, 'absent');
       assert.equal(probeProcessBirth(binding.pid).status, 'absent');
       t.diagnostic('Managed Metro listener and launcher cleanup confirmed.');
+    }
+    assert.ok(attestedPlan && attestedPlan.status === 'enforced');
+    if (!attestedPlan || attestedPlan.status !== 'enforced') return;
+    for (let attempt = 1; attempt <= 8; attempt += 1) {
+      let observation: unknown = null;
+      const receipt = runManagedMetroEnforcementPreflight(attestedPlan, {
+        environment: { ...process.env, NODE_OPTIONS: attestedPlan.baseNodeOptions },
+        observe: (value) => {
+          observation = value;
+        },
+      });
+      t.diagnostic(JSON.stringify({ snapshotOrderAttempt: attempt, observation }));
+      assert.equal(
+        receipt.resolvedCommandAllowed,
+        true,
+        `attempt ${attempt}: the shell shim must receive the attested snapshot before admission; observed ${JSON.stringify(observation)}`,
+      );
     }
   },
 );
