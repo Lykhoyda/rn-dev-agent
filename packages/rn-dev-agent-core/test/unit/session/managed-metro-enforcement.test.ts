@@ -1146,6 +1146,89 @@ test(
 );
 
 test(
+  'managed Metro sandbox lets Metro watch an app-scale tree natively without watchman',
+  { skip: process.platform !== 'darwin', timeout: 120_000 },
+  async (t) => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'rn-metro-watch-scale-')));
+    roots.push(root);
+    const runtimeRoot = join(root, 'runtime');
+    const watchedRoot = join(runtimeRoot, 'tree');
+    mkdirSync(runtimeRoot, { recursive: true });
+    for (let index = 0; index < 14_000; index += 1) {
+      mkdirSync(join(watchedRoot, `pkg-${index % 140}`, `dir-${index}`), { recursive: true });
+    }
+    const command = join(root, 'metro-entry.js');
+    writeFileSync(command, 'process.exit(0);');
+    const plan = prepareManagedMetroEnforcement({
+      platform: process.platform,
+      appRoot: root,
+      sourceRoot: root,
+      runtimeRoot,
+      nodeExecutable: process.execPath,
+      nodeVersion: process.version,
+      commandExecutable: process.execPath,
+      commandArguments: [command],
+      commandProbeArguments: [command],
+      commandChainInputs: [process.execPath, command],
+      port: await freePort(),
+      instanceId: 'watch-scale',
+      runtimeInputs: [command],
+    });
+    assert.equal(plan.status, 'enforced');
+    if (plan.status !== 'enforced') return;
+    const probe = spawnSync(
+      plan.sandboxExecutable,
+      [
+        '-p',
+        plan.profile,
+        plan.nodeExecutable,
+        '-e',
+        `const fs = require('node:fs');
+const { spawnSync } = require('node:child_process');
+const result = { watch: 'pending', event: 'none', watchman: null };
+const watchman = spawnSync('/opt/homebrew/bin/watchman', ['version'], { encoding: 'utf8' });
+result.watchman = watchman.error ? watchman.error.code : 'exit ' + watchman.status;
+let watcher;
+try {
+  watcher = fs.watch(process.env.RN_TEST_WATCH_ROOT, { recursive: true }, (eventType, filename) => {
+    if (result.event === 'none' && filename) result.event = eventType;
+  });
+  watcher.on('error', (error) => { result.watch = 'ERR ' + error.code; });
+  result.watch = 'started';
+} catch (error) {
+  result.watch = 'ERR ' + error.code;
+}
+setTimeout(() => {
+  fs.writeFileSync(process.env.RN_TEST_WATCH_ROOT + '/pkg-0/dir-0/changed.txt', 'x');
+}, 400);
+setTimeout(() => {
+  if (watcher) watcher.close();
+  process.stdout.write(JSON.stringify(result));
+  process.exit(0);
+}, 2000);`,
+      ],
+      {
+        encoding: 'utf8',
+        timeout: 30_000,
+        env: { ...process.env, NODE_OPTIONS: '', RN_TEST_WATCH_ROOT: watchedRoot },
+      },
+    );
+    t.diagnostic(
+      JSON.stringify({
+        status: probe.status,
+        stdout: probe.stdout,
+        stderr: probe.stderr.slice(-400),
+      }),
+    );
+    assert.equal(probe.status, 0, probe.stderr);
+    const observed = JSON.parse(probe.stdout) as { watch: string; event: string; watchman: string };
+    assert.equal(observed.watch, 'started', 'recursive watch must not exhaust descriptors');
+    assert.equal(observed.event, 'rename', 'native watcher must deliver a change event');
+    assert.equal(observed.watchman, 'EPERM', 'watchman executable stays denied');
+  },
+);
+
+test(
   'managed Metro sandbox admits only the owned css-interop cache write',
   { skip: process.platform !== 'darwin' },
   async (t) => {

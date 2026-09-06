@@ -441,6 +441,8 @@ function managedMetroSandboxProfile(input: {
 (allow process-fork)
 (allow signal (target children))
 (deny network-outbound)
+(allow mach-lookup
+    (global-name "com.apple.FSEvents"))
 (allow file-map-executable
 ${executableMapPaths.map((path) => `    (literal ${sandboxString(path)})`).join('\n')})
 (allow file-map-executable
