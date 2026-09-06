@@ -13,6 +13,7 @@ import { SessionAuthorityError } from '../../../dist/session/registry.js';
 import { failResult, okResult } from '../../../dist/utils.js';
 import { arbiterWrap, DeviceSessionArbiter } from '../../../dist/lifecycle/device-arbiter.js';
 import { runMaestroInline } from '../../../dist/maestro-invoke.js';
+import { _setActiveSessionForTest } from '../../../dist/agent-device-wrapper.js';
 import { buildReplayEngineStatus, MAESTRO_RUNNER_PIN } from '../../../dist/domain/engine-pin.js';
 import { createLoginPrologueHandler } from '../../../dist/tools/login-prologue.js';
 import { appendRunRecordToSidecar } from '../../helpers/action-state.ts';
@@ -1146,6 +1147,7 @@ test('inline Maestro parking tolerates its own authenticated controller generati
 
 test('inline Maestro forwards its bounded deadline signal into managed runner cleanup', async () => {
   const { runtime, registry, status } = fixture();
+  _setActiveSessionForTest(null);
   status.bindings.runner = {
     platform: 'ios',
     deviceId: 'device',
