@@ -1,3 +1,8 @@
+import {
+  captureRunnerFailure,
+  createRunnerFailureEvidence,
+  type RunnerFailureEvidence,
+} from '../domain/runner-failure-evidence.js';
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
@@ -26,7 +31,7 @@ import {
 } from '../domain/action-engine-compat.js';
 import { parseM7Header, type M7Metadata } from '../domain/reusable-action.js';
 import { captureActionFromPath, type CapturedActionReplay } from '../domain/action-store.js';
-import { getActiveSession } from '../agent-device-wrapper.js';
+import { attachMeta, getActiveSession } from '../agent-device-wrapper.js';
 import { resolveBundleId, readExpoSlug } from '../project-config.js';
 import {
   chooseMaestroDispatch,
@@ -629,7 +634,10 @@ export function createMaestroRunHandler(
   const nativeOnlyHandler = replayFactory
     ? createMaestroRunHandler({ ...deps, replayDeps: undefined })
     : null;
-  return async (args) => {
+  const run = async (
+    args: MaestroRunArgs,
+    evidence: RunnerFailureEvidence,
+  ): Promise<ToolResult> => {
     // GH #116: validate params shape FIRST so a malformed payload is rejected
     // regardless of platform / dispatch-tier availability. CI envs without
     // maestro-runner or Maestro CLI would otherwise short-circuit at
@@ -1345,6 +1353,7 @@ export function createMaestroRunHandler(
     })();
     const stageCaptures: LedgerStageCaptureInput[] = [];
     let ledgerStageCursor = 0;
+    let invocationOrdinal = 0;
     const stageTerminationFromError = (
       error: unknown,
     ): Omit<LedgerInvocationTermination, 'artifactFinalized'> => {
@@ -1451,10 +1460,11 @@ export function createMaestroRunHandler(
                       Object.assign(error, { code: 'ETIMEDOUT' });
                       throw error;
                     }
-                    const executeRunner = (
+                    const executeRunner = async (
                       runnerPath: string,
                       prefixArgs: readonly string[] = [],
                     ) => {
+                      const fingerprint = runnerReportFingerprint(runnerReportDir);
                       beforeDispatch?.();
                       const remainingTimeout = flowDeadline - now();
                       if (remainingTimeout <= 0) {
@@ -1464,12 +1474,49 @@ export function createMaestroRunHandler(
                         Object.assign(error, { code: 'ETIMEDOUT' });
                         throw error;
                       }
-                      return execute(runnerPath, [...prefixArgs, ...finalArgs], {
-                        timeout: remainingTimeout,
-                        encoding: 'utf8',
-                        maxBuffer: 10 * 1024 * 1024,
-                        signal: flowAbort.signal,
-                      });
+                      const invocation = ++invocationOrdinal;
+                      try {
+                        const result = await execute(runnerPath, [...prefixArgs, ...finalArgs], {
+                          timeout: remainingTimeout,
+                          encoding: 'utf8',
+                          maxBuffer: 10 * 1024 * 1024,
+                          signal: flowAbort.signal,
+                        });
+                        if (
+                          outputIndicatesFlowFailure(
+                            combineRunnerOutput(result.stdout, result.stderr),
+                          )
+                        ) {
+                          captureRunnerFailure(
+                            evidence,
+                            runnerReportDir,
+                            fingerprint,
+                            ledgerStageIndex,
+                            invocation,
+                            {
+                              exitCode: 0,
+                              signal: null,
+                              timedOut: false,
+                              outputTruncated: false,
+                              bootstrapFailure: false,
+                              transportFailure: false,
+                            },
+                            ledgerAttempt.ordinal,
+                          );
+                        }
+                        return result;
+                      } catch (error) {
+                        captureRunnerFailure(
+                          evidence,
+                          runnerReportDir,
+                          fingerprint,
+                          ledgerStageIndex,
+                          invocation,
+                          stageTerminationFromError(error),
+                          ledgerAttempt.ordinal,
+                        );
+                        throw error;
+                      }
                     };
                     if (deps.execFile) {
                       const immediateStatus = await resolveEngineStatus();
@@ -2030,6 +2077,20 @@ export function createMaestroRunHandler(
       } finally {
         disposeRunnerReportDir(runnerReportDir);
       }
+    }
+  };
+  return async (args) => {
+    const evidence = createRunnerFailureEvidence();
+    try {
+      const result = await run(args, evidence);
+      return evidence.captures.length
+        ? attachMeta(result, { runnerFailureEvidence: evidence })
+        : result;
+    } catch (error) {
+      if (error instanceof SessionAuthorityError && evidence.captures.length) {
+        error.attachMeta({ runnerFailureEvidence: evidence });
+      }
+      throw error;
     }
   };
 }

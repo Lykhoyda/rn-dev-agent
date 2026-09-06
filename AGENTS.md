@@ -344,6 +344,15 @@ Several suite tests fail only on macOS because `$TMPDIR` resolves through the
 They fail identically on `main`; confirm against `main` before treating a local
 failure in those files as a regression.
 
+Every `cdp_run_action` RunRecord write goes through the proven-identity action
+write lock (`src/domain/atomic-writer.ts`, `currentLockOwner`). A shell that
+cannot execute setuid `/bin/ps` or read `kern.bootsessionuuid` (the Codex
+`workspace-write` sandbox does both) makes `probeProcessBirth` return `unknown`,
+so persistence throws, the outer catch in `src/tools/run-action.ts` swallows it,
+and handler-driven tests report zero RunRecords with a code-less envelope. Run
+those tests from an unsandboxed shell before treating that as a regression; do
+not weaken the identity requirement.
+
 Native runner checks:
 
 ```bash
