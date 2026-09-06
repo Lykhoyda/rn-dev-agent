@@ -64169,7 +64169,7 @@ var HELPERS_VERSION, INJECTED_HELPERS, NETWORK_HOOK_SCRIPT, NETWORK_CB_BUFFERED_
 var init_injected_helpers = __esm({
   "packages/rn-dev-agent-core/dist/injected-helpers.js"() {
     "use strict";
-    HELPERS_VERSION = 61;
+    HELPERS_VERSION = 62;
     INJECTED_HELPERS = `
 (function() {
   var __HELPERS_VERSION__ = ${HELPERS_VERSION};
@@ -64425,6 +64425,23 @@ var init_injected_helpers = __esm({
   // iterateAllRoots() for the consolidated iteration logic.
   function forEachRootFiber(cb) {
     return iterateAllRoots(cb);
+  }
+
+  function findProviderStore(match) {
+    return forEachRootFiber(function(rootFiber) {
+      var stack = [rootFiber];
+      var visits = 0;
+      while (stack.length > 0 && visits < 50000) {
+        var current = stack.pop();
+        visits++;
+        var name = current.type && (current.type.displayName || current.type.name);
+        var result = match(name, current.memoizedProps);
+        if (result) return result;
+        if (current.sibling) stack.push(current.sibling);
+        if (current.child) stack.push(current.child);
+      }
+      return null;
+    });
   }
 
   // B143: public collector returning Array<{rendererId, fiber}> across
@@ -65420,27 +65437,11 @@ var init_injected_helpers = __esm({
     var state = null;
     var storeType = null;
 
-    // B91 fix: Try fiber-walked store FIRST for Redux, then fall back to global.
-    // After Dev Client rebuilds, __REDUX_STORE__ may reference the old store instance
-    // while the fiber tree always reflects the current React context.
     if (!requestedType || requestedType === 'redux') {
-      function findFiberReduxStore(fiber, depth) {
-        var current = fiber;
-        while (current) {
-          if ((depth || 0) > 30) return null;
-          var name = current.type && (current.type.displayName || current.type.name);
-          if (name === 'Provider' && current.memoizedProps && current.memoizedProps.store && current.memoizedProps.store.getState) {
-            return current.memoizedProps.store;
-          }
-          var found = findFiberReduxStore(current.child, (depth || 0) + 1);
-          if (found) return found;
-          current = current.sibling;
-        }
-        return null;
-      }
-      // B145: walk all renderers for the Redux Provider \u2014 first match wins.
-      var fiberStore = forEachRootFiber(function(rootFiber) {
-        return findFiberReduxStore(rootFiber);
+      var fiberStore = findProviderStore(function(name, props) {
+        return name === 'Provider' && props && props.store && props.store.getState
+          ? props.store
+          : null;
       });
       if (fiberStore) {
         state = fiberStore.getState();
@@ -65481,36 +65482,22 @@ var init_injected_helpers = __esm({
     }
 
     if (!state) {
-      function findStore(fiber, depth) {
-        var current = fiber;
-        while (current) {
-          if ((depth || 0) > 30) return null;
-          var name = current.type && (current.type.displayName || current.type.name);
-          var props = current.memoizedProps;
-          if (name === 'Provider' && props && props.store && props.store.getState) {
-            return { store: props.store.getState(), type: 'redux' };
-          }
-          if (name === 'QueryClientProvider' && props && props.client && typeof props.client.getQueryCache === 'function') {
-            try {
-              var queries = props.client.getQueryCache().getAll();
-              var mapped = {};
-              for (var q = 0; q < queries.length; q++) {
-                var key = JSON.stringify(queries[q].queryKey);
-                mapped[key] = { data: queries[q].state.data, status: queries[q].state.status, dataUpdatedAt: queries[q].state.dataUpdatedAt };
-              }
-              return { store: mapped, type: 'react-query' };
-            } catch(e) { /* fall through */ }
-          }
-          var found = findStore(current.child, (depth || 0) + 1);
-          if (found) return found;
-          current = current.sibling;
+      var found = findProviderStore(function(name, props) {
+        if (name === 'Provider' && props && props.store && props.store.getState) {
+          return { store: props.store.getState(), type: 'redux' };
+        }
+        if (name === 'QueryClientProvider' && props && props.client && typeof props.client.getQueryCache === 'function') {
+          try {
+            var queries = props.client.getQueryCache().getAll();
+            var mapped = {};
+            for (var q = 0; q < queries.length; q++) {
+              var key = JSON.stringify(queries[q].queryKey);
+              mapped[key] = { data: queries[q].state.data, status: queries[q].state.status, dataUpdatedAt: queries[q].state.dataUpdatedAt };
+            }
+            return { store: mapped, type: 'react-query' };
+          } catch(e) {}
         }
         return null;
-      }
-
-      // B145: walk all renderers for Provider / QueryClientProvider.
-      var found = forEachRootFiber(function(rootFiber) {
-        return findStore(rootFiber);
       });
       if (found) { state = found.store; storeType = found.type; }
     }
@@ -65519,7 +65506,7 @@ var init_injected_helpers = __esm({
       return JSON.stringify({
         __agent_error: 'No store found.',
         hint: 'For Zustand, add to app entry: if (__DEV__) global.__ZUSTAND_STORES__ = { myStore }',
-        hint2: 'For Redux, the Provider is auto-detected. Check it is mounted.',
+        hint2: 'For Redux, the Provider is auto-detected from the fiber tree. If it still is not found, expose it: if (__DEV__) global.__REDUX_STORE__ = store',
         hint3: 'For Jotai, add: if (__DEV__) { global.__JOTAI_STORE__ = store; global.__JOTAI_ATOMS__ = { count: countAtom } }'
       });
     }
@@ -67406,31 +67393,10 @@ var init_injected_helpers = __esm({
 
     if (!actionType) return JSON.stringify({ __agent_error: 'action is required (e.g. "tasks/softDelete")' });
 
-    // B90 fix: Prefer fiber-walked store over __REDUX_STORE__ global.
-    // After Dev Client rebuilds, the global may reference the OLD store instance
-    // while the fiber tree always reflects the CURRENT React context.
-    //
-    // B125 fix: also check current.type.name as a fallback when displayName
-    // is missing \u2014 common for minified/bundled Providers. Mirrors what
-    // findFiberReduxStore already does for getStoreState. Without this,
-    // cdp_store_state succeeds but cdp_dispatch fails on the same app.
-    function findDispatchStore(fiber, depth) {
-      var current = fiber;
-      while (current) {
-        if ((depth || 0) > 30) return null;
-        var typeName = current.type && (current.type.displayName || current.type.name);
-        if (typeName === 'Provider' && current.memoizedProps && current.memoizedProps.store && current.memoizedProps.store.dispatch) {
-          return current.memoizedProps.store;
-        }
-        var found = findDispatchStore(current.child, (depth || 0) + 1);
-        if (found) return found;
-        current = current.sibling;
-      }
-      return null;
-    }
-    // B145: walk all renderers for the Redux Provider.
-    var store = forEachRootFiber(function(rootFiber) {
-      return findDispatchStore(rootFiber);
+    var store = findProviderStore(function(name, props) {
+      return name === 'Provider' && props && props.store && props.store.dispatch
+        ? props.store
+        : null;
     });
 
     if (!store && globalThis.__REDUX_STORE__ && globalThis.__REDUX_STORE__.dispatch) {
@@ -85824,7 +85790,15 @@ function createDispatchHandler(getClient2) {
       payload,
       readPath: args.readPath
     });
-    const result = await client2.evaluate(client2.helperExpr(`dispatchAction(${opts})`));
+    const call = `dispatchAction(${opts})`;
+    const expression = client2.bridgeDetected ? `(function() {
+            if (typeof __RN_DEV_BRIDGE__.dispatchAction !== 'function') return __RN_AGENT.${call};
+            var r = ${client2.helperExpr(call)};
+            var p; try { p = JSON.parse(r); } catch(e) { return r; }
+            if (p && p.error === 'No Redux store' && p.dispatched !== true) return __RN_AGENT.${call};
+            return r;
+          })()` : client2.helperExpr(call);
+    const result = await client2.evaluate(expression);
     if (result.error) {
       return failResult(`Dispatch error: ${result.error}`);
     }
@@ -85841,6 +85815,9 @@ function createDispatchHandler(getClient2) {
       const obj = parsed;
       if ("__agent_error" in obj) {
         return failResult(String(obj.__agent_error));
+      }
+      if ("error" in obj) {
+        return failResult(String(obj.error));
       }
     }
     return okResult(parsed);
