@@ -1,135 +1,116 @@
+<div align="center">
+
 # rn-dev-agent
+
+### Your agent writes the code. This proves it runs.
+
+A plugin for **Claude Code** and **Codex** that turns your coding agent into a React Native
+development partner — one that reads your running app's component tree, store state, and
+navigation over the Chrome DevTools Protocol, taps real UI on iOS and Android, and **records the
+evidence** that the feature actually works.
 
 [![CI](https://github.com/Lykhoyda/rn-dev-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/Lykhoyda/rn-dev-agent/actions/workflows/ci.yml)
 [![Docs](https://img.shields.io/badge/docs-lykhoyda.github.io%2Frn--dev--agent-blue)](https://lykhoyda.github.io/rn-dev-agent/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
-A coding-agent plugin for **Claude Code** and **Codex** that turns an AI agent into a React Native development partner. It explores your codebase, designs architecture, implements features — then **proves everything works live on the simulator** by reading the component tree, store state, and navigation stack through the Chrome DevTools Protocol, driving the app like a user, and recording the evidence.
+**[Get started](#see-it-in-60-seconds)** · **[Documentation](https://lykhoyda.github.io/rn-dev-agent/)** · **[Benchmarks](https://lykhoyda.github.io/rn-dev-agent/benchmarks/)** · **[Tools](https://lykhoyda.github.io/rn-dev-agent/tools/)**
 
-**MCP tools for live React Native development** · **Claude: 16 slash commands + 11 skills** · **Codex: 16 explicit workflow skills + 11 domain skills (27 total)** · **118 best-practice rules** · [Full documentation](https://lykhoyda.github.io/rn-dev-agent/)
-
----
-
-## Why this exists
-
-Coding agents are good at writing React Native code and bad at knowing whether it actually works. This plugin closes that loop:
-
-- **Live verification, not "trust me it works."** After implementing a feature, the agent connects to your running app via CDP, navigates to the screen, checks the component tree, exercises interactions, and confirms store state — before declaring victory.
-- **Replayable actions.** Every verified flow is saved as a parameterised Maestro action in `.rn-agent/actions/`. A 3-step wizard that took ~14 minutes as an interactive walk replays in **~4 seconds** (~210× faster). Actions self-repair when `testID`s drift.
-- **Native device control on both platforms.** In-tree XCTest (iOS) and UiAutomator (Android) runners give the agent real taps, typing, scrolling, and screenshots — with prebuilt artifacts so first use skips the multi-minute cold build.
-- **Curated best practices.** 118 indexed rules (48 React Native + 70 React/web, integrated from [Vercel's agent skills](https://github.com/vercel-labs/agent-skills)) applied during architecture and review — crash prevention, list performance, animations, state management.
-- **Watch it work.** The [Observe workflow](https://lykhoyda.github.io/rn-dev-agent/commands/observe/) serves a local web UI with a live tool-call timeline, device mirror, and route/store/component-tree panels — plus Actions and E2E tabs to replay saved flows straight from the browser.
+</div>
 
 ![The observe UI live: inspecting a failed flow, checking store state, replaying a saved action, and running the locked E2E suite — all from the browser](apps/docs-site/public/observe/observe-demo.gif)
 
-## Quick start
+---
 
-### 1. Install
+## See it in 60 seconds
 
-Jump to your host: **[Claude Code](#claude-code)** · **[Codex](#codex)**
-
-#### Claude Code
-
-Published marketplace:
-
-```bash
+```text
+# 1. Install (Claude Code — Codex below)
 /plugin marketplace add Lykhoyda/rn-dev-agent
 /plugin install rn-dev-agent@rn-dev-agent
 /reload-plugins
 ```
 
-Local checkout: `claude --plugin-dir /path/to/rn-dev-agent` (the root `.claude-plugin/marketplace.json` resolves the plugin package from `packages/claude-plugin/`).
-
-#### Codex
-
-Published marketplace:
-
-```bash
-codex plugin marketplace add Lykhoyda/rn-dev-agent
-codex plugin add rn-dev-agent@rn-dev-agent
-```
-
-Local checkout: register the package directory `/path/to/rn-dev-agent/packages/codex-plugin` — not the repository root. The Codex package is self-contained (bundled MCP runtime, native runner sources, helpers, and runner manifest) and loads the same `cdp` MCP server from its `.mcp.json`. Codex does not load Claude Code hooks — `No plugin hooks` is expected. Codex 0.145.0 is the live-refresh floor; older hosts are restart-only. An external CLI/manual plugin change always requires exiting and relaunching Codex.
-
-### 2. Set up your project
-
-```bash
-cd /path/to/your-rn-app
-```
-
-Invoke setup for your host:
-
 ```text
-Claude: /rn-dev-agent:setup
-Codex:  $rn-dev-agent:setup
+# 2. Onboard your app — checks the toolchain, writes the project config
+/rn-dev-agent:setup
+
+# 3. Ask for a feature. Get it back verified on the simulator.
+/rn-dev-agent:rn-feature-dev add a shopping cart with badge, item list, and checkout flow
 ```
 
-Claude setup manages `CLAUDE.md`; Codex setup manages an idempotent sentinel-
-bounded `AGENTS.md` block. Codex runs strictly read-only package/recovery
-diagnostics first and previews every later project write for consent.
+The agent explores your codebase, designs the change, implements it — then connects to the running
+app, navigates to the screen, checks the component tree and store state, taps through the flow, and
+saves the walk as a replayable test. You get working code **and** the proof.
 
-Setup checks the full toolchain. Claude hooks and normal runtime use can perform
-the automatic handling shown below; Codex setup keeps recovery diagnosis
-read-only and prints the exact commands for the user to confirm and run.
+Codex users: replace `/rn-dev-agent:<name>` with `$rn-dev-agent:<name>`. [Install steps →](#install)
 
-| Check | Required | Automatic handling |
-|-------|----------|--------------|
-| Node.js ≥ 24 | Yes | No |
-| CDP bridge deps | Yes | Yes |
-| rn-fast-runner (iOS) | iOS targets only | Prebuilt artifact on releases; one-time `xcodebuild build-for-testing` fallback |
-| rn-android-runner (Android) | Android targets only | Prebuilt artifact on releases; Gradle build fallback on first use |
-| [maestro-runner](https://github.com/devicelab-dev/maestro-runner) | Yes | Yes (pin-cache engine `>= 1.1.24`, attested 1.1.24 checksum-verified) |
-| iOS Simulator / Android Emulator | One platform | No |
-| Session-bound Metro | Yes | Project integration starts or validates it through literal `pnpm ios` / `pnpm android` |
-| CDP connection | Yes | `rn_session` owns the binding; `cdp_status` is passive and `cdp_connect` pins the exact target |
-| ffmpeg | Optional (proof videos) | Yes |
-| idb + idb-companion | Optional (smooth observe-UI mirroring) | Yes |
+---
 
-Claude automation failures and Codex missing prerequisites are reported with
-step-by-step manual instructions. [Full setup guide](https://lykhoyda.github.io/rn-dev-agent/getting-started/)
+## Coding agents ship blind
 
-**Prebuilt runners:** on a released version, the device runners install from a verified prebuilt artifact (SHA-256-checked local cache, then the GitHub Release asset for your exact plugin version), so the first `device_snapshot action=open` skips the cold build. Resolution is fail-open — offline, a checksum mismatch, or a dev checkout falls back transparently to the on-machine build (the host's `doctor` workflow reports which one you got). Force local builds with `RN_RUNNER_BUILD=local`.
+They are good at writing React Native code and bad at knowing whether it runs. This plugin closes
+that loop — and everything below is measured on a real Expo app, not a synthetic benchmark.
 
-### 3. Build something
+| | |
+|---|---|
+| **Verified, not claimed** | After implementing, the agent connects over CDP, walks the screen, reads the component tree and store, exercises the interaction, and screenshots the result — before it says "done" |
+| **210× faster replays** | A 3-step wizard that took ~14 min as an interactive walk replays in **~4 s** as a saved action. Average session time across the measured features dropped from ~12 min to ~4 min once actions existed |
+| **Flows that repair themselves** | When a `testID` drifts, the saved action fuzzy-matches the live snapshot, patches its own YAML, and retries. Cosmetic drift is absorbed; genuinely broken product logic is surfaced, never auto-fixed |
+| **3–25 min, description → verified** | Simple features land in 3–5 min, complex multi-step flows in 11–25 min — **zero crashes across 38 measured stories** |
+| **iOS and Android, one contract** | In-tree XCTest and UiAutomator runners give real taps, typing, scrolling, and screenshots — shipped as prebuilt artifacts so first use skips the cold build |
+| **Both hosts, full parity** | Claude Code: 16 slash commands + 11 skills + 5 agents. Codex: 27 native skills (16 workflow + 11 domain). 81 MCP tools and 118 best-practice rules on both |
 
-```text
-Claude: /rn-dev-agent:rn-feature-dev add a shopping cart with badge, item list, and checkout flow
-Codex:  $rn-dev-agent:rn-feature-dev add a shopping cart with badge, item list, and checkout flow
+[Full benchmarks and methodology →](https://lykhoyda.github.io/rn-dev-agent/benchmarks/)
+
+## Is this for you?
+
+**Yes, if** you build React Native or Expo apps with a coding agent, you run an iOS Simulator or
+Android Emulator locally, and you are tired of reviewing changes that were never actually opened.
+It pays off most on apps with real navigation, real state, and flows you re-walk every session.
+
+**Not yet, if** you work on web-only React, have no local simulator or emulator, or need an agent
+pointed at production or store-signed builds — that last one is deliberately out of scope, see
+[Security](#security).
+
+---
+
+## How it works
+
+```
+  /rn-dev-agent:rn-feature-dev "<what you want>"
+        │
+        ├─ 1 Discover    understand the feature, plan the work
+        ├─ 2 Explore     parallel agents map screens, store, navigation, conventions
+        ├─ 3 Question    clarify edge cases, error states, data flow
+        ├─ 4 Architect   design the change against your existing patterns
+        ├─ 5 Implement   store, components, navigation, testIDs
+        ├─ 5.5 VERIFY    ◀── CDP health · component tree · store state · interaction · screenshot
+        ├─ 6 Review      parallel agents check correctness and RN conventions
+        └─ 7 PROOF       ◀── rehearse off camera, persist the action, record a clean replay
+                                                            │
+                                    working code  +  video  +  screenshots  +  PR body
 ```
 
-## The pipeline
+Phase 5.5 is the one that makes the difference: nothing is reported as working until it has been
+observed working. Phase 7 rehearses first, so discovery fumbling never ends up in the recording.
 
-`/rn-feature-dev` runs an [8-phase pipeline](https://lykhoyda.github.io/rn-dev-agent/commands/rn-feature-dev/) — from understanding your codebase to verified code with proof recordings:
+[The 8-phase pipeline in detail →](https://lykhoyda.github.io/rn-dev-agent/commands/rn-feature-dev/)
 
-| Phase | What happens |
-|-------|--------------|
-| 1. Discovery | Understand the feature, create a task plan |
-| 2. Exploration | Parallel agents map screens, store, navigation, conventions |
-| 3. Questions | Clarify edge cases, error states, data flow |
-| 4. Architecture | Design the implementation with the architect agent |
-| 5. Implementation | Build the feature — store, components, navigation, testIDs |
-| 5.5. Verification | **Prove it works live** — CDP health, component tree, store state, interaction, screenshot |
-| 6. Review | Parallel review agents check correctness and RN conventions |
-| 7. Proof | **Rehearse off camera**, persist a Maestro action, then record a deterministic replay — discovery never appears in the video |
+## Commands
 
-## Workflows
-
-The tables use Claude spelling. Codex provides native explicit parity for every
-row: replace `/rn-dev-agent:<name>` with `$rn-dev-agent:<name>`. Codex exposes
-exactly these 16 workflow skills plus 11 domain skills; install-time
-`source-command-*` migration is deliberately disabled.
-
-**Develop & test:**
+Claude spelling shown. Codex has native parity for every row — use `$rn-dev-agent:<name>`.
 
 | Command | Purpose |
 |---------|---------|
-| `/rn-dev-agent:run-workflow <journey>` | Establish the proven operating sequence before a real device journey |
-| `/rn-dev-agent:rn-feature-dev <desc>` | Full 8-phase feature pipeline (above) |
+| `/rn-dev-agent:rn-feature-dev <desc>` | Full 8-phase feature pipeline |
 | `/rn-dev-agent:test-feature <desc>` | Test an already-implemented feature; auto-replays a matching saved action |
 | `/rn-dev-agent:debug-screen` | Diagnose and fix a broken screen — parallel evidence from CDP + native logs + component tree |
-| `/rn-dev-agent:build-and-test <desc>` | Build the app (local or EAS), install on device, then test |
 | `/rn-dev-agent:proof-capture <desc>` | Rehearsal-gated video + screenshots + generated PR body |
-| `/rn-dev-agent:observe` | Local web UI to **watch the agent live** — tool-call timeline, device mirror, route/store/component-tree panels, browser-triggered action + E2E replays ([guide](https://lykhoyda.github.io/rn-dev-agent/commands/observe/)) |
+| `/rn-dev-agent:observe` | Local web UI to **watch the agent live** — tool-call timeline, device mirror, route/store/component-tree panels, browser-triggered action and E2E replays ([guide](https://lykhoyda.github.io/rn-dev-agent/commands/observe/)) |
+| `/rn-dev-agent:setup` | Onboard a project — Claude manages `CLAUDE.md`, Codex manages `AGENTS.md`; every project write is previewed |
+
+<details>
+<summary><strong>The other 10 commands — actions, regression, build, diagnostics</strong></summary>
 
 **Actions & regression:**
 
@@ -139,38 +120,56 @@ exactly these 16 workflow skills plus 11 domain skills; install-time
 | `/rn-dev-agent:run-action <name>` | Replay a saved action with auto-repair and structured run records |
 | `/rn-dev-agent:lock-e2e <name>` | Promote a verified action into a **frozen, locked e2e regression test** (strict no-repair run required) |
 
-**Setup & diagnostics:**
+**Build & session:**
 
 | Command | Purpose |
 |---------|---------|
-| `/rn-dev-agent:setup` | Onboard a project — Claude manages `CLAUDE.md`; Codex manages `AGENTS.md`; nav/store/scaffold writes are previewed |
+| `/rn-dev-agent:run-workflow <journey>` | Establish the proven operating sequence before a real device journey |
+| `/rn-dev-agent:build-and-test <desc>` | Build the app (local or EAS), install on device, then test |
+
+**Diagnostics:**
+
+| Command | Purpose |
+|---------|---------|
 | `/rn-dev-agent:doctor` | Strictly read-only multi-axis plugin/MCP/schema/task/environment diagnosis; recommends but never executes recovery |
 | `/rn-dev-agent:check-env` | Quick environment-readiness check |
 | `/rn-dev-agent:nav-graph` | Extract and inspect the app navigation graph |
 | `/rn-dev-agent:check-vercel-rules` | Report drift between bundled best-practice rules and upstream |
 | `/rn-dev-agent:send-feedback` | Open a GitHub issue with sanitized environment context |
 
-The plugin also keeps a gitignored per-project troubleshooting memory (`.rn-agent/local/troubleshooting.md`) — auto-captured failures and config notes, read at session start.
+Codex exposes exactly these 16 workflow skills plus 11 domain skills; install-time
+`source-command-*` migration is deliberately disabled.
 
-## Actions: replayable flows + the LLM/pragmatic hybrid
+The plugin also keeps a gitignored per-project troubleshooting memory
+(`.rn-agent/local/troubleshooting.md`) — auto-captured failures and config notes, read at session start.
 
-An **action** is a saved Maestro flow the agent **emits** when verification passes — not something you author. Each task then splits into two regimes: **pragmatic reusable actions** for the predictable parts (login, navigation, multi-step setup) and **LLM-driven discovery** for the part that's actually new. Actions serve as prologues to reach a known state before fresh interactive work.
+</details>
+
+## Actions: the memory of the loop
+
+An **action** is a saved Maestro flow the agent **emits** when verification passes — not something
+you author. Each task then splits in two: **replayable actions** for the predictable parts (login,
+navigation, multi-step setup) and **live discovery** for the part that is actually new. Actions run
+as prologues to reach a known state before fresh interactive work.
 
 | | |
 |---|---|
 | **What** | A saved, parameterised flow with a metadata header and `${KEY}` placeholders |
 | **Where** | `.rn-agent/actions/<name>.yaml` — the plugin's home in your project is `.rn-agent/` |
 | **Create one** | Run `/rn-dev-agent:test-feature <description>`; the verified walk is saved automatically |
-| **Run one** | `/rn-dev-agent:run-action <name>` — the agent also picks actions automatically when it needs a known state |
+| **Run one** | `/rn-dev-agent:run-action <name>` — the agent also picks actions itself when it needs a known state |
 | **Self-repair** | If a `testID` changes, `cdp_repair_action` fuzzy-matches against the live snapshot, patches the YAML, and retries. Small UI drift is absorbed; broken product logic is surfaced, never auto-fixed |
 | **Lock it in** | `/rn-dev-agent:lock-e2e` freezes a passing action into `.rn-agent/e2e/` — locked tests run strict (no repair) via `cdp_run_e2e_suite` |
-| **Why hybrid** | Pure scripts don't adapt; pure LLM re-derives everything every session. Actions are the memory of the LLM loop — every successful verification adds one, every drift gets quietly absorbed, every truly broken flow escalates |
+| **Why it works** | Pure scripts don't adapt; a pure LLM re-derives everything every session. Every successful verification adds an action, every drift gets quietly absorbed, every truly broken flow escalates |
 
-[Full actions guide — why the hybrid matters, tool surface, comparison vs Detox/Maestro/pure-LLM](https://lykhoyda.github.io/rn-dev-agent/actions/)
+[Full actions guide →](https://lykhoyda.github.io/rn-dev-agent/actions/)
 
-## MCP tools
+## Under the hood
 
-The plugin exposes MCP tools across six families ([full reference](https://lykhoyda.github.io/rn-dev-agent/tools/)):
+Everything the commands above are built from — expand what you need.
+
+<details>
+<summary><strong>81 MCP tools across six families</strong></summary>
 
 | Family | What it's for | Examples |
 |---|---|---|
@@ -181,44 +180,50 @@ The plugin exposes MCP tools across six families ([full reference](https://lykho
 | **Testing** | E2E replay and PR-ready proof | `proof_step`, `cross_platform_verify`, `maestro_run`, `maestro_test_all` (`cdp_auto_login` is legacy per-call recovery, not a failed-login fallback or PR proof) |
 | **Macro-Asserts** | State-assertive replays — internal state, not pixels | `expect_redux`, `expect_route`, `expect_visible_by_testid`, `expect_text` |
 
-The committed tool surface is asserted in CI against a golden registry (`packages/rn-dev-agent-core/test/fixtures/tool-registry.json`), so tool additions and removals can't silently drift.
+The committed tool surface is asserted in CI against a golden registry
+(`packages/rn-dev-agent-core/test/fixtures/tool-registry.json`), so tool additions and removals
+can't silently drift. [Full tool reference →](https://lykhoyda.github.io/rn-dev-agent/tools/)
 
-**Reliability features baked into the tool layer:**
+</details>
+
+<details>
+<summary><strong>Reliability baked into the tool layer</strong></summary>
 
 - **Self-healing taps** — a stale `@ref` is re-bound by identity (testID/label/role, unique match only). Opt out with `RN_SELF_HEAL=0`. A dispatched tap is never replayed because its effect is uncertain: on iOS an unchanged tap stays a success carrying `meta.noUiChange`, and on Android a tap whose effect cannot be observed fails (`INTERACTION_EFFECT_UNVERIFIED`, `mutation: possible`) rather than reporting success.
-- **Quiescence bypass (iOS)** — XCTest's private idle-wait is disabled by default so apps with Reanimated/looping animations can't hang queries (the same WebDriverAgent-lineage technique Maestro uses). Opt out with `RN_QUIESCENCE_BYPASS=0`.
-- **Engine pinning** — setup installs attested maestro-runner `1.1.24` in the versioned pin-cache (floor `>= 1.1.24`) and verifies its checksum fail-closed; replay and `/doctor` refuse missing, older, or unattested engines.
+- **Quiescence bypass (iOS)** — XCTest's private idle-wait is disabled by default so apps with Reanimated or looping animations can't hang queries. Opt out with `RN_QUIESCENCE_BYPASS=0`.
+- **Engine pinning** — setup installs attested [maestro-runner](https://github.com/devicelab-dev/maestro-runner) `1.1.24` in the versioned pin-cache (floor `>= 1.1.24`) and verifies its checksum fail-closed; replay and `/doctor` refuse missing, older, or unattested engines.
 - **Degraded-runtime detection** — when taps succeed but the app doesn't respond, results carry a "simulator likely wedged, reboot it" hint instead of a misleading "element not found."
 
-## Specialized agents
+</details>
 
-Five agents, each running a focused protocol: [tester](https://lykhoyda.github.io/rn-dev-agent/agents/rn-tester/), [debugger](https://lykhoyda.github.io/rn-dev-agent/agents/rn-debugger/), [code explorer](https://lykhoyda.github.io/rn-dev-agent/agents/rn-code-explorer/), [architect](https://lykhoyda.github.io/rn-dev-agent/agents/rn-code-architect/), [reviewer](https://lykhoyda.github.io/rn-dev-agent/agents/rn-code-reviewer/).
+<details>
+<summary><strong>118 curated best-practice rules</strong></summary>
 
-> **Note:** `rn-tester` and `rn-debugger` need MCP tools, which don't propagate to spawned subagents — use `/rn-dev-agent:test-feature` and `/rn-dev-agent:debug-screen`, which run the protocols inline (GH #31).
+48 React Native + 70 React/web rules, indexed and applied during architecture and review — crash
+prevention, list performance, animations, state management. Integrated from
+[Vercel's agent skills](https://github.com/vercel-labs/agent-skills); run
+`/rn-dev-agent:check-vercel-rules` to see drift against upstream.
+[Best practices →](https://lykhoyda.github.io/rn-dev-agent/best-practices/)
 
-## App setup
+</details>
 
-**Most apps need zero setup** — the plugin reads the React fiber tree directly via Metro's CDP endpoint.
+<details>
+<summary><strong>Five specialized agents</strong></summary>
 
-**Zustand stores** — one line in your app entry ([details](https://lykhoyda.github.io/rn-dev-agent/getting-started/#zustand-stores-one-line)):
+Each runs a focused protocol: [tester](https://lykhoyda.github.io/rn-dev-agent/agents/rn-tester/),
+[debugger](https://lykhoyda.github.io/rn-dev-agent/agents/rn-debugger/),
+[code explorer](https://lykhoyda.github.io/rn-dev-agent/agents/rn-code-explorer/),
+[architect](https://lykhoyda.github.io/rn-dev-agent/agents/rn-code-architect/),
+[reviewer](https://lykhoyda.github.io/rn-dev-agent/agents/rn-code-reviewer/).
 
-```typescript
-if (__DEV__) {
-  global.__ZUSTAND_STORES__ = { auth: useAuthStore, cart: useCartStore };
-}
-```
+> **Note:** `rn-tester` and `rn-debugger` need MCP tools, which don't propagate to spawned
+> subagents — use `/rn-dev-agent:test-feature` and `/rn-dev-agent:debug-screen`, which run the
+> protocols inline (GH #31).
 
-**Redux** — auto-detected, no setup needed.
+</details>
 
-**testIDs** — add to interactive elements for reliable queries:
-
-```tsx
-<Pressable testID="checkout-button" onPress={handleCheckout}>
-  <Text testID="cart-badge">{itemCount}</Text>
-</Pressable>
-```
-
-## Architecture
+<details>
+<summary><strong>Architecture</strong></summary>
 
 ```
 Claude Code / Codex
@@ -241,11 +246,110 @@ Claude Code / Codex
       E2E test execution: maestro-runner 1.1.24 (pin-cache only)
 ```
 
-[Architecture details](https://lykhoyda.github.io/rn-dev-agent/architecture/)
+[Architecture details →](https://lykhoyda.github.io/rn-dev-agent/architecture/)
+
+</details>
+
+---
+
+## Install
+
+### Claude Code
+
+```text
+/plugin marketplace add Lykhoyda/rn-dev-agent
+/plugin install rn-dev-agent@rn-dev-agent
+/reload-plugins
+```
+
+Local checkout: `claude --plugin-dir /path/to/rn-dev-agent` (the root `.claude-plugin/marketplace.json`
+resolves the plugin package from `packages/claude-plugin/`).
+
+### Codex
+
+```bash
+codex plugin marketplace add Lykhoyda/rn-dev-agent
+codex plugin add rn-dev-agent@rn-dev-agent
+```
+
+Local checkout: register the package directory `/path/to/rn-dev-agent/packages/codex-plugin` — not
+the repository root. The Codex package is self-contained (bundled MCP runtime, native runner
+sources, helpers, and runner manifest) and loads the same `cdp` MCP server from its `.mcp.json`.
+Codex does not load Claude Code hooks — `No plugin hooks` is expected. Codex 0.145.0 is the
+live-refresh floor; older hosts are restart-only. An external CLI or manual plugin change always
+requires exiting and relaunching Codex.
+
+### Then set up your project
+
+```text
+cd /path/to/your-rn-app
+
+Claude: /rn-dev-agent:setup
+Codex:  $rn-dev-agent:setup
+```
+
+Claude setup manages `CLAUDE.md`; Codex setup manages an idempotent sentinel-bounded `AGENTS.md`
+block, runs strictly read-only package/recovery diagnostics first, and previews every later
+project write for consent. [Full setup guide →](https://lykhoyda.github.io/rn-dev-agent/getting-started/)
+
+<details>
+<summary><strong>What setup checks, and what it fixes for you</strong></summary>
+
+Claude hooks and normal runtime use can perform the automatic handling below; Codex setup keeps
+recovery diagnosis read-only and prints the exact commands for you to confirm and run.
+
+| Check | Required | Automatic handling |
+|-------|----------|--------------|
+| Node.js ≥ 24 | Yes | No |
+| CDP bridge deps | Yes | Yes |
+| rn-fast-runner (iOS) | iOS targets only | Prebuilt artifact on releases; one-time `xcodebuild build-for-testing` fallback |
+| rn-android-runner (Android) | Android targets only | Prebuilt artifact on releases; Gradle build fallback on first use |
+| [maestro-runner](https://github.com/devicelab-dev/maestro-runner) | Yes | Yes (pin-cache engine `>= 1.1.24`, attested 1.1.24 checksum-verified) |
+| iOS Simulator / Android Emulator | One platform | No |
+| Session-bound Metro | Yes | Project integration starts or validates it through literal `pnpm ios` / `pnpm android` |
+| CDP connection | Yes | `rn_session` owns the binding; `cdp_status` is passive and `cdp_connect` pins the exact target |
+| ffmpeg | Optional (proof videos) | Yes |
+| idb + idb-companion | Optional (smooth observe-UI mirroring) | Yes |
+
+Claude automation failures and Codex missing prerequisites are reported with step-by-step manual
+instructions.
+
+**Prebuilt runners:** on a released version, the device runners install from a verified prebuilt
+artifact (SHA-256-checked local cache, then the GitHub Release asset for your exact plugin
+version), so the first `device_snapshot action=open` skips the cold build. Resolution is fail-open
+— offline, a checksum mismatch, or a dev checkout falls back transparently to the on-machine build
+(the host's `doctor` workflow reports which one you got). Force local builds with
+`RN_RUNNER_BUILD=local`.
+
+</details>
+
+### What your app needs
+
+**Most apps need zero setup** — the plugin reads the React fiber tree directly via Metro's CDP
+endpoint. Redux is auto-detected.
+
+**Zustand stores** — one line in your app entry
+([details](https://lykhoyda.github.io/rn-dev-agent/getting-started/#zustand-stores-one-line)):
+
+```typescript
+if (__DEV__) {
+  global.__ZUSTAND_STORES__ = { auth: useAuthStore, cart: useCartStore };
+}
+```
+
+**testIDs** — add to interactive elements for reliable queries:
+
+```tsx
+<Pressable testID="checkout-button" onPress={handleCheckout}>
+  <Text testID="cart-badge">{itemCount}</Text>
+</Pressable>
+```
+
+---
 
 ## Benchmarks
 
-38 stories completed on the test app (35 Ralph Loop + 3 Liquid Glass). [Full benchmarks](https://lykhoyda.github.io/rn-dev-agent/benchmarks/)
+38 stories completed on the public test app (35 Ralph Loop + 3 Liquid Glass).
 
 | Complexity | Time | Crashes | Manual interventions |
 |-----------|------|---------|---------------------|
@@ -254,7 +358,51 @@ Claude Code / Codex
 | Complex (3-step wizard, onboarding) | 11–25 min | 0 | 0 |
 | Glass UI (BlurView, Reanimated, haptics) | 27–90 min | 0 | 1 (Metro restart) |
 
-**Libraries tested:** react-hook-form, zod, @tanstack/react-query, @gorhom/bottom-sheet, @shopify/flash-list, zustand, react-native-svg, expo-notifications, react-native-reanimated, react-native-gesture-handler, expo-haptics, expo-blur
+**Libraries verified end-to-end:** react-hook-form, zod, @tanstack/react-query,
+@gorhom/bottom-sheet, @shopify/flash-list, zustand, react-native-svg, expo-notifications,
+react-native-reanimated, react-native-gesture-handler, expo-haptics, expo-blur
+
+[Full benchmarks →](https://lykhoyda.github.io/rn-dev-agent/benchmarks/)
+
+## Security
+
+The `cdp_evaluate` tool runs arbitrary JavaScript in your app's Hermes runtime with full access to
+the component tree, store state, AsyncStorage, and any in-memory secrets. This is **intentional** —
+runtime introspection is what makes the plugin useful — but it means **only run this plugin against
+apps where you trust the agent's prompts**.
+
+- **Local dev environments only.** Do not point the plugin at production builds, store-signed apps, or any app holding real user data.
+- **Treat the agent like a developer with shell access to your laptop.** Any prompt that reaches `cdp_evaluate` (directly or through another tool) can read or mutate your app's runtime state.
+- **Use the fenced session as CDP authority.** `rn_session` binds the intended worktree, Metro, app, and device; `cdp_targets` may explain ambient Hermes processes but never authorizes selecting one. See [Parallel session authority](https://lykhoyda.github.io/rn-dev-agent/session-authority/).
+
+The plugin makes no attempt to sandbox `cdp_evaluate`. If you need that, gate tool access through
+your agent's permission prompts rather than trusting the tool layer.
+
+<details>
+<summary><strong>What the observability UI and the local evidence store record</strong></summary>
+
+The **observability UI** ([`/rn-dev-agent:observe`](https://lykhoyda.github.io/rn-dev-agent/commands/observe/))
+binds to `127.0.0.1` only and rejects cross-origin requests via Host-header + `Sec-Fetch-Site`
+checks. It is read-only except for two deliberate, CSRF-token-gated endpoints that trigger action
+and locked-E2E replays. Tool arguments are deep-redacted fail-closed before reaching the stream and
+typed fill text is never streamed verbatim (see the
+[security posture](https://lykhoyda.github.io/rn-dev-agent/commands/observe/#security-posture) for
+what is redacted and what stays visible), and the recorder keeps only a small bounded in-memory
+ring buffer — the event stream itself never touches disk (action RunRecords and locked-E2E run
+output follow the session state directory: fenced sessions use their session-private runtime state,
+while an unfenced process uses `.rn-agent/state/` for actions and `.rn-agent/state/e2e-runs/` for
+E2E history; `.rn-agent/e2e/` contains the locked test definitions).
+
+Meaningful tool failures and immediate successful retries also feed a separate, local-only evidence
+store at `~/.claude/rn-agent/experience/patterns.jsonl`. Records are sanitized before writing,
+deduplicated, capped at 500 patterns, and retained for 14 days; ordinary successful calls are never
+stored. Runner failures may also retain up to five sanitized diagnostics bundles alongside that
+store, each capped at 200 typed lifecycle events and 256 KB for reviewed feedback or an explicit
+`collect_logs` export. From an installed plugin package, inspect the read-only trend report with
+`node <plugin-package>/rn-dev-agent-core/dist/experience-trends.js --since <previous-report-ISO-timestamp>`
+(omit `--since` for the last 24 hours). The command never updates the evidence store or uploads data.
+
+</details>
 
 ## Troubleshooting
 
@@ -265,42 +413,28 @@ Claude Code / Codex
 | CDP rejected (1006) | Close React Native DevTools, Flipper, or Chrome DevTools |
 | Zustand store error | Add `global.__ZUSTAND_STORES__` ([setup](https://lykhoyda.github.io/rn-dev-agent/getting-started/#zustand-stores-one-line)) |
 | Plugin not detected (Claude) | `/plugin install rn-dev-agent@rn-dev-agent` then `/reload-plugins` |
-| Plugin not detected (Codex) | Inspect with `codex plugin list --json` and `/mcp verbose`; user-confirm `codex plugin add rn-dev-agent@rn-dev-agent --json`, then relaunch after external changes |
-| Codex tools fail after upgrade | `/mcp verbose` inspects only. Relaunch Codex for external/manual changes or legacy hosts; never kill another host's bridge |
 | Subagent says "MCP tools unavailable" | Never spawn `rn-tester`/`rn-debugger` via the Task tool — use `/rn-dev-agent:test-feature` or `/rn-dev-agent:debug-screen` instead (GH #31) |
-| Blank white screen after many reloads | NativeWind stylesheet corruption after 5+ `cdp_reload` cycles — kill and restart Metro, relaunch the app |
 
 <details>
-<summary><strong>Advanced: device-runner issues</strong></summary>
+<summary><strong>More: host recovery, device runners, wedged simulators</strong></summary>
 
 | Problem | Solution |
 |---------|----------|
+| Plugin not detected (Codex) | Inspect with `codex plugin list --json` and `/mcp verbose`; user-confirm `codex plugin add rn-dev-agent@rn-dev-agent --json`, then relaunch after external changes |
+| Codex tools fail after upgrade | `/mcp verbose` inspects only. Relaunch Codex for external/manual changes or legacy hosts; never kill another host's bridge |
+| Blank white screen after many reloads | NativeWind stylesheet corruption after 5+ `cdp_reload` cycles — kill and restart Metro, relaunch the app |
 | `device_scroll` times out on Reanimated screens | A `waitForIdle` round-trip can deadlock against Reanimated worklets; scroll routes through the in-tree runner's HID synthesis instead. Ensure the runner is healthy via the device session |
 | Legacy `AgentDeviceRunner` re-appears on iOS | Stale `~/.agent-device/daemon.json` respawns the upstream runner. The plugin terminates stale processes at session-open (opt out: `RN_DEVICE_KILL_LEGACY=0`); manual cleanup: `pkill -f AgentDeviceRunner && rm -f ~/.agent-device/daemon.{json,lock}` |
 | iOS "rn-fast-runner did not become ready" | The runner self-build timed out or failed. In a source checkout, pre-build once: `cd packages/rn-fast-runner/RnFastRunner && xcodebuild build-for-testing -project RnFastRunner.xcodeproj -scheme RnFastRunner -destination "platform=iOS Simulator,id=<UDID>" -derivedDataPath ../build/DerivedData` |
-| `device_fill` reports `TEXT_ENTRY_UNVERIFIED` | A fill attempt ran, but stable exact read-back could not prove the requested value. Check `meta.mutation`: retry from a fresh snapshot only when it is `none`; for `observed` or `possible`, read and rebind the field before correcting it so a blind retry cannot double-type. |
-| Need an intentional coordinate tap | Use `device_press({x, y})` (or a batch press step with `x`/`y`). With a visible iOS keyboard, raw coordinates are geometry-unknown: the keyboard is proven hidden before the one tap. Prefer fresh refs for normal UI controls. |
-| Native logs include another device/app | Reopen the exact device session. `collect_logs` pins Android to that session's adb serial and iOS to that simulator plus the current target-app PID; it fails closed when exact scope cannot be resolved. When the probe runs and proves the app is not running, the stream stays pinned to that simulator and reports `scopes.native_ios.process = app-not-running-device-scoped` so a crash trail is still captured. |
+| `device_fill` reports `TEXT_ENTRY_UNVERIFIED` | A fill attempt ran, but stable exact read-back could not prove the requested value. Check `meta.mutation`: retry from a fresh snapshot only when it is `none`; for `observed` or `possible`, read and rebind the field before correcting it so a blind retry cannot double-type |
+| Need an intentional coordinate tap | Use `device_press({x, y})` (or a batch press step with `x`/`y`). With a visible iOS keyboard, raw coordinates are geometry-unknown: the keyboard is proven hidden before the one tap. Prefer fresh refs for normal UI controls |
+| Native logs include another device/app | Reopen the exact device session. `collect_logs` pins Android to that session's adb serial and iOS to that simulator plus the current target-app PID; it fails closed when exact scope cannot be resolved. When the probe runs and proves the app is not running, the stream stays pinned to that simulator and reports `scopes.native_ios.process = app-not-running-device-scoped` so a crash trail is still captured |
 | Want XCTest's stock idle-waits back | Kill the running runner (`pkill -f RnFastRunnerUITests`), set `RN_QUIESCENCE_BYPASS=0`, reopen the device session, and inspect the next device result's `meta.quiescenceBypass` |
 | Seeing `meta.reResolved` / `meta.noUiChange` | Stale-ref healing at work; `meta.noUiChange` means the iOS tap was dispatched but changed nothing. Disable ref healing with `RN_SELF_HEAL=0` (`retryIfNoChange` is a deprecated no-op — taps are never replayed) |
 
 </details>
 
-[Full troubleshooting guide](https://lykhoyda.github.io/rn-dev-agent/troubleshooting/)
-
-## Security
-
-The `cdp_evaluate` tool runs arbitrary JavaScript in your app's Hermes runtime with full access to the component tree, store state, AsyncStorage, and any in-memory secrets. This is **intentional** — runtime introspection is what makes the plugin useful — but it means **only run this plugin against apps where you trust the agent's prompts**.
-
-- **Local dev environments only.** Do not point the plugin at production builds, store-signed apps, or any app holding real user data.
-- **Treat the agent like a developer with shell access to your laptop.** Any prompt that reaches `cdp_evaluate` (directly or through another tool) can read or mutate your app's runtime state.
-- **Use the fenced session as CDP authority.** `rn_session` binds the intended worktree, Metro, app, and device; `cdp_targets` may explain ambient Hermes processes but never authorizes selecting one. See [Parallel session authority](https://lykhoyda.github.io/rn-dev-agent/session-authority/).
-
-The plugin makes no attempt to sandbox `cdp_evaluate`. If you need that, gate tool access through your agent's permission prompts rather than trusting the tool layer.
-
-The **observability UI** ([`/rn-dev-agent:observe`](https://lykhoyda.github.io/rn-dev-agent/commands/observe/)) binds to `127.0.0.1` only and rejects cross-origin requests via Host-header + `Sec-Fetch-Site` checks. It is read-only except for two deliberate, CSRF-token-gated endpoints that trigger action and locked-E2E replays. Tool arguments are deep-redacted fail-closed before reaching the stream and typed fill text is never streamed verbatim (see the [security posture](https://lykhoyda.github.io/rn-dev-agent/commands/observe/#security-posture) for what is redacted and what stays visible), and the recorder keeps only a small bounded in-memory ring buffer — the event stream itself never touches disk (action RunRecords and locked-E2E run output follow the session state directory: fenced sessions use their session-private runtime state, while an unfenced process uses `.rn-agent/state/` for actions and `.rn-agent/state/e2e-runs/` for E2E history; `.rn-agent/e2e/` contains the locked test definitions).
-
-Meaningful tool failures and immediate successful retries also feed a separate, local-only evidence store at `~/.claude/rn-agent/experience/patterns.jsonl`. Records are sanitized before writing, deduplicated, capped at 500 patterns, and retained for 14 days; ordinary successful calls are never stored. Runner failures may also retain up to five sanitized diagnostics bundles alongside that store, each capped at 200 typed lifecycle events and 256 KB for reviewed feedback or an explicit `collect_logs` export. From an installed plugin package, inspect the read-only trend report with `node <plugin-package>/rn-dev-agent-core/dist/experience-trends.js --since <previous-report-ISO-timestamp>` (omit `--since` for the last 24 hours). The command never updates the evidence store or uploads data.
+[Full troubleshooting guide →](https://lykhoyda.github.io/rn-dev-agent/troubleshooting/)
 
 ## Keeping up to date
 
@@ -316,7 +450,8 @@ Codex:  codex plugin marketplace upgrade rn-dev-agent
 
 Release notes: [GitHub Releases](https://github.com/Lykhoyda/rn-dev-agent/releases) · [core changelog](packages/rn-dev-agent-core/CHANGELOG.md)
 
-## Development
+<details>
+<summary><strong>Development — building from source</strong></summary>
 
 This is a Yarn workspace monorepo:
 
@@ -338,7 +473,8 @@ corepack yarn install --immutable
 corepack yarn build:host-runtimes   # builds core + generates both host packages
 ```
 
-Run locally: `claude --plugin-dir /path/to/rn-dev-agent` (Claude Code) or register `packages/codex-plugin` (Codex).
+Run locally: `claude --plugin-dir /path/to/rn-dev-agent` (Claude Code) or register
+`packages/codex-plugin` (Codex).
 
 ```bash
 corepack yarn test          # complete unit-test suite
@@ -346,8 +482,23 @@ corepack yarn lint          # oxlint
 corepack yarn format:check  # oxfmt
 ```
 
-Versioning uses [changesets](https://github.com/changesets/changesets); every tool-surface change must update the golden registry (`node scripts/update-tool-registry.mjs`).
+Versioning uses [changesets](https://github.com/changesets/changesets); every tool-surface change
+must update the golden registry (`node scripts/update-tool-registry.mjs`).
 
-## License
+</details>
 
-MIT
+---
+
+<div align="center">
+
+### Stop taking your agent's word for it.
+
+```text
+/plugin marketplace add Lykhoyda/rn-dev-agent
+```
+
+**[Read the docs](https://lykhoyda.github.io/rn-dev-agent/)** · **[Star the repo](https://github.com/Lykhoyda/rn-dev-agent)** · **[Report a bug](https://github.com/Lykhoyda/rn-dev-agent/issues/new)** or run `/rn-dev-agent:send-feedback`
+
+Free · open source · MIT
+
+</div>
