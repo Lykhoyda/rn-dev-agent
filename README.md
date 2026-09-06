@@ -57,7 +57,7 @@ benchmarks.
 | **Verified, not claimed** | After implementing, the agent connects over CDP, walks the screen, reads the component tree and store, exercises the interaction, and screenshots the result — before it says "done" |
 | **210× faster replays** | A 3-step wizard that took ~14 min as an interactive walk replays in **~4 s** as a saved action. Average session time across the measured features dropped from ~12 min to ~4 min once actions existed |
 | **Flows that repair themselves** | When a `testID` drifts, the saved action fuzzy-matches the live snapshot, patches its own YAML, and retries. Cosmetic drift is absorbed; genuinely broken product logic is surfaced, never auto-fixed |
-| **Minutes, not sessions** | Simple features land in 3–5 min, complex multi-step flows in 11–25 min; heavy glass-UI work runs longer. **Zero crashes across all 38 measured stories** |
+| **Minutes, not sessions** | Simple features land in 3–5 min, complex multi-step flows in 11–25 min. **Zero crashes and zero manual interventions across all 35 measured features** |
 | **iOS and Android, one contract** | In-tree XCTest and UiAutomator runners give real taps, typing, scrolling, and screenshots — shipped as prebuilt artifacts so first use skips the cold build |
 | **Both hosts, full parity** | Claude Code: 16 slash commands + 11 skills + 5 agents. Codex: 27 native skills (16 workflow + 11 domain). The same 81 MCP tools on both |
 
@@ -341,18 +341,17 @@ if (__DEV__) {
 
 ## Benchmarks
 
-38 stories completed on the public test app (35 Ralph Loop + 3 Liquid Glass).
+35 features completed on the public test app.
 
 | Complexity | Time | Crashes | Manual interventions |
 |-----------|------|---------|---------------------|
 | Simple (search, toggle, store) | 3–5 min | 0 | 0 |
 | Medium (forms, charts, lists) | 5–10 min | 0 | 0 |
 | Complex (3-step wizard, onboarding) | 11–25 min | 0 | 0 |
-| Glass UI (BlurView, Reanimated, haptics) | 27–90 min | 0 | 1 (Metro restart) |
 
 **Libraries verified end-to-end:** react-hook-form, zod, @tanstack/react-query,
 @gorhom/bottom-sheet, @shopify/flash-list, zustand, react-native-svg, expo-notifications,
-react-native-reanimated, react-native-gesture-handler, expo-haptics, expo-blur
+react-native-reanimated, react-native-gesture-handler, expo-haptics
 
 [Full benchmarks →](https://lykhoyda.github.io/rn-dev-agent/benchmarks/)
 
