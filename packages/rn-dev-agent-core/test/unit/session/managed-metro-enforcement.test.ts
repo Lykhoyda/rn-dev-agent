@@ -1631,18 +1631,26 @@ exec node "$basedir/../expo/bin/cli" "$@"
     if (!attestedPlan || attestedPlan.status !== 'enforced') return;
     for (let attempt = 1; attempt <= 8; attempt += 1) {
       let observation: unknown = null;
-      const receipt = runManagedMetroEnforcementPreflight(attestedPlan, {
-        environment: { ...process.env, NODE_OPTIONS: attestedPlan.baseNodeOptions },
-        observe: (value) => {
-          observation = value;
-        },
-      });
+      let receipt: ReturnType<typeof runManagedMetroEnforcementPreflight> | null = null;
+      let failure: unknown = null;
+      try {
+        receipt = runManagedMetroEnforcementPreflight(attestedPlan, {
+          environment: { ...process.env, NODE_OPTIONS: attestedPlan.baseNodeOptions },
+          observe: (value) => {
+            observation = value;
+          },
+        });
+      } catch (error) {
+        failure = error;
+      }
       t.diagnostic(JSON.stringify({ snapshotOrderAttempt: attempt, observation }));
-      assert.equal(
-        receipt.resolvedCommandAllowed,
-        true,
-        `attempt ${attempt}: the shell shim must receive the attested snapshot before admission; observed ${JSON.stringify(observation)}`,
-      );
+      const evidence = `attempt ${attempt}: the shell shim must receive the attested snapshot before admission; observed ${JSON.stringify(observation)}`;
+      if (failure !== null) {
+        assert.fail(
+          `${evidence}; preflight threw ${failure instanceof Error ? failure.message : String(failure)}`,
+        );
+      }
+      assert.equal(receipt?.resolvedCommandAllowed, true, evidence);
     }
   },
 );
