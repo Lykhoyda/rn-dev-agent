@@ -9694,14 +9694,21 @@ const unauthorizedExecutableDenied =
 const unmanifestedReadDenied = denied(() => readFileSync(input.canaryPath));
 const unmanifestedWriteDenied = denied(() => writeFileSync(input.canaryPath, 'forged'));
 const symlinkEscapeDenied = denied(() => readFileSync(input.symlinkCanaryPath));
-const listen = (port) =>
+const listen = (port, host = '127.0.0.1') =>
   new Promise((resolve) => {
     const server = createServer();
     server.once('error', (error) => resolve({ ok: false, code: error.code }));
-    server.listen(port, '127.0.0.1', () =>
+    server.listen(port, host, () =>
       server.close((error) => resolve({ ok: !error, code: error && error.code })),
     );
   });
+const occupied = async (port) => {
+  for (const host of ['127.0.0.1', '0.0.0.0', '::1']) {
+    const probe = await listen(port, host);
+    if (!probe.ok && probe.code === 'EADDRINUSE') return true;
+  }
+  return false;
+};
 const waitUntil = async (predicate, timeoutMs) => {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -9793,10 +9800,7 @@ const processGroupExists = (pid) => {
   });
   command.once('error', () => {});
   timings.spawnedMs = elapsed();
-  const resolvedCommandAllowed = await waitUntil(async () => {
-    const probe = await listen(input.port);
-    return !probe.ok && probe.code === 'EADDRINUSE';
-  }, 15000);
+  const resolvedCommandAllowed = await waitUntil(() => occupied(input.port), 15000);
   timings.occupancyMs = elapsed();
   let commandCleanupConfirmed = false;
   if (Number.isSafeInteger(command.pid)) {
@@ -9819,8 +9823,8 @@ const processGroupExists = (pid) => {
       commandCleanupConfirmed = !processGroupExists(command.pid);
     }
   }
-  const released = await listen(input.port);
-  commandCleanupConfirmed = commandCleanupConfirmed && released.ok;
+  const released = !(await occupied(input.port));
+  commandCleanupConfirmed = commandCleanupConfirmed && released;
   timings.cleanupMs = elapsed();
   if (stderrDescriptor !== undefined) {
     let readDescriptor;

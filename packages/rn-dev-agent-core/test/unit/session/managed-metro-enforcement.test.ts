@@ -664,7 +664,8 @@ test('managed Metro preflight diagnostic capture bounds input and survives I/O f
     const result = { status: -1, stdout: '', stderr: '' };
     const readSizes: number[] = [];
     let unboundedReads = 0;
-    let listenerCount = 0;
+    let commandSpawned = false;
+    let commandKilled = false;
     let stderrMode: unknown;
     const ioError = () => Object.assign(new Error('diagnostic I/O failure'), { code: 'EACCES' });
     const command = Object.assign(new EventEmitter(), {
@@ -672,6 +673,7 @@ test('managed Metro preflight diagnostic capture bounds input and survives I/O f
       exitCode: null as number | null,
       stdio: Array.from({ length: 10 }, () => ({ end: () => {}, resume: () => {} })),
       kill: () => {
+        commandKilled = true;
         command.exitCode = 0;
         command.emit('exit', 0, 'SIGTERM');
       },
@@ -694,6 +696,7 @@ test('managed Metro preflight diagnostic capture bounds input and survives I/O f
           return {
             spawnSync: () => ({ status: null, error: ioError() }),
             spawn: (_executable: string, _args: string[], options: { stdio: unknown[] }) => {
+              commandSpawned = true;
               stderrMode = options.stdio[2];
               if (typeof stderrMode === 'number') {
                 const output =
@@ -772,11 +775,11 @@ test('managed Metro preflight diagnostic capture bounds input and survives I/O f
           return {
             createServer: () => {
               const server = Object.assign(new EventEmitter(), {
-                listen: (_port: number, _host: string, callback: () => void) => {
-                  listenerCount += 1;
+                listen: (port: number, _host: string, callback: () => void) => {
                   queueMicrotask(() => {
-                    if (listenerCount === 2 || listenerCount === 4) {
-                      server.emit('error', { code: listenerCount === 2 ? 'EADDRINUSE' : 'EPERM' });
+                    if (port === plan.unallocatedPort) server.emit('error', { code: 'EPERM' });
+                    else if (commandSpawned && !commandKilled) {
+                      server.emit('error', { code: 'EADDRINUSE' });
                     } else callback();
                   });
                 },
@@ -1474,7 +1477,7 @@ try {
 require('node:fs').writeFileSync(${JSON.stringify(alternateCacheWriteResult)}, JSON.stringify(alternateCacheWrite));
 const descendant = spawnSync(process.execPath, [${JSON.stringify(descendantEntry)}]);
 if (descendant.status !== 0) process.exit(descendant.status || 1);
-createServer(() => {}).listen(port, '127.0.0.1');
+createServer(() => {}).listen(port);
 setInterval(() => {}, 1 << 30);
 `,
     );
