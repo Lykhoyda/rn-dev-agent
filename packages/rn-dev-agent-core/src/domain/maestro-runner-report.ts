@@ -172,6 +172,7 @@ export function runnerReportFingerprint(reportDir: string | null): RunnerReportF
 export function readStructuredFlowArtifact(
   reportDir: string | null,
   previous?: RunnerReportFingerprint,
+  readText: (path: string) => string = (path) => readFileSync(path, 'utf8'),
 ): StructuredFlowArtifact | null {
   if (!reportDir) return null;
   const reportPath = join(reportDir, 'report.json');
@@ -182,7 +183,7 @@ export function readStructuredFlowArtifact(
     commands: [],
   };
   try {
-    const reportText = readFileSync(reportPath, 'utf8');
+    const reportText = readText(reportPath);
     if (previous) {
       // An inconclusive baseline can prove nothing about freshness.
       if (Object.values(previous).includes(FINGERPRINT_INCONCLUSIVE)) return unfinalized;
@@ -215,7 +216,7 @@ export function readStructuredFlowArtifact(
     // report tree, not merely have a clean lexical path.
     const realDataFile = realpathSync(join(reportDir, normalizedDataFile));
     if (!realDataFile.startsWith(realpathSync(reportDir) + sep)) return unfinalized;
-    const dataText = readFileSync(realDataFile, 'utf8');
+    const dataText = readText(realDataFile);
     if (previous) {
       const dataHash = createHash('sha256').update(dataText).digest('hex');
       // A fresh report.json referencing a data file the invocation did NOT

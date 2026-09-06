@@ -169,6 +169,13 @@ $rn-dev-agent:run-action mark-all-done --no-auto-repair    # surface the raw fai
    temporary artifact that is deleted after every run — no report path is
    returned, and none should be looked for.
 
+   A failed replay may also carry `meta.runnerFailureEvidence`, persisted on
+   the RunRecord: a bounded closed-vocabulary projection of each runner
+   failure (exit code, timeout/signal flags, report state, per-command
+   status) marked `incomplete: true`, with text, screenshots, and terminal
+   output withheld. It is diagnostic context only and never changes the
+   outcome, refusal, or auto-repair decision.
+
    When `meta.trailingVerification.trailingVerificationOnly === true`, the
    result remains failed and the goal state remains unproven, but the ledger
    proved every authored mutation completed and only trailing verification

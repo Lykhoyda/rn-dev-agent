@@ -256,6 +256,8 @@ export interface AutoRepairOutcome {
 
 /** A single replay attempt's outcome. Append-only; oldest dropped at limit. */
 export interface RunRecord {
+  /** Bounded closed-vocabulary projection of runner failures; text, images, and terminal output are withheld. */
+  runnerFailureEvidence?: import('./runner-failure-evidence.js').RunnerFailureEvidence;
   /** Unique replay identity, used to prove that a prologue produced a fresh record. */
   runId?: string;
   timestamp: string; // ISO

@@ -1,3 +1,9 @@
+import { attachMeta } from '../agent-device-wrapper.js';
+import {
+  collectRunnerFailureEvidence,
+  createRunnerFailureEvidence,
+  type RunnerFailureEvidence,
+} from '../domain/runner-failure-evidence.js';
 // Issue #104 — `cdp_run_action` MCP tool. Replays a learned action's
 // Maestro flow, parses failures, optionally auto-repairs on
 // SELECTOR_NOT_FOUND, and persists a RunRecord with auto-repair
@@ -558,7 +564,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
     deps.resolveAppFile ??
     ((appId: string, deviceId: string) => resolveIosAppFile(appId, { deviceId }));
   const resolveEngineStatus = deps.engineStatus ?? (() => getEngineStatus().catch(() => null));
-  return async (args: RunActionArgs): Promise<ToolResult> => {
+  const run = async (args: RunActionArgs, evidence: RunnerFailureEvidence): Promise<ToolResult> => {
     if (!args.actionId || typeof args.actionId !== 'string') {
       return failResult('cdp_run_action requires actionId', 'BAD_FILENAME');
     }
@@ -747,6 +753,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
       const endedMs = Date.now();
       const timedRecord: RunRecord = {
         ...record,
+        ...(evidence.captures.length ? { runnerFailureEvidence: structuredClone(evidence) } : {}),
         runId,
         timing: {
           startedAt,
@@ -813,6 +820,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
       );
       const firstAttemptMs = Date.now() - tBeforeFirst;
       const firstEnv = parseEnvelope(firstResult, 'maestro_run');
+      collectRunnerFailureEvidence(evidence, firstEnv.meta?.runnerFailureEvidence);
       const firstOutput = readMaestroOutput(firstEnv);
       const firstFailureDetail = readMaestroFailureDetail(firstEnv, firstOutput);
       const firstDeviceAuthority = readMaestroDeviceAuthority(firstEnv);
@@ -1267,6 +1275,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
       );
       const retryMs = Date.now() - tBeforeRetry;
       const retryEnv = parseEnvelope(retryResult, 'maestro_run');
+      collectRunnerFailureEvidence(evidence, retryEnv.meta?.runnerFailureEvidence);
       const retryPassed = retryEnv.ok === true && retryEnv.data?.passed === true;
       const retryOutput = readMaestroOutput(retryEnv);
       const retryFailureDetail = readMaestroFailureDetail(retryEnv, retryOutput);
@@ -1464,6 +1473,20 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
             : {}),
         },
       );
+    }
+  };
+  return async (args: RunActionArgs): Promise<ToolResult> => {
+    const evidence = createRunnerFailureEvidence();
+    try {
+      const result = await run(args, evidence);
+      return evidence.captures.length
+        ? attachMeta(result, { runnerFailureEvidence: evidence })
+        : result;
+    } catch (error) {
+      if (error instanceof SessionAuthorityError && evidence.captures.length) {
+        error.attachMeta({ runnerFailureEvidence: evidence });
+      }
+      throw error;
     }
   };
 }

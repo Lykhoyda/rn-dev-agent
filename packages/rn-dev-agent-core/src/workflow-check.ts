@@ -97,12 +97,15 @@ function fail(code: number, message: string): never {
   process.exit(code);
 }
 
-function readTextIfFile(filePath: string): string | null {
+function readTextIfFile(filePath: string, reportReadError = false): string | null {
   try {
     const stat = fs.lstatSync(filePath);
     if (!stat.isFile()) return null;
     return fs.readFileSync(filePath, 'utf8');
-  } catch {
+  } catch (error) {
+    if (reportReadError && (error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      fail(2, `workflow-check: cannot read ${path.basename(filePath)}`);
+    }
     return null;
   }
 }
@@ -227,9 +230,9 @@ function preflight(projectRoot: string): { facts: PreflightFacts; stop: Stop | n
   const inferredLock = declaration.kind === 'absent' && lockManagers.size === 1 ? locks[0] : null;
   const matchingLock =
     field === null ? inferredLock : (locks.find((lock) => lock.manager === field) ?? null);
-  const claudeMd = readTextIfFile(path.join(projectRoot, 'CLAUDE.md'));
-  const claudeMdBlock =
-    claudeMd !== null && claudeMd.includes(TEMPLATE_HEADING) ? 'present' : 'absent';
+  const claudeMdBlocks = ['CLAUDE.md', 'CLAUDE.local.md']
+    .map((file) => readTextIfFile(path.join(projectRoot, file), true))
+    .filter((text): text is string => text !== null && text.includes(TEMPLATE_HEADING));
 
   const resolvedManager = field ?? inferredLock?.manager ?? null;
   const relativeWorkspaceRoot = redactedWorkspaceRoot(projectRoot, workspaceRoot);
@@ -245,8 +248,8 @@ function preflight(projectRoot: string): { facts: PreflightFacts; stop: Stop | n
     nodeModulesPresent: modulesPresent,
     yarnPnpPresent: pnpPresent,
     dependenciesReady: modulesPresent || (resolvedManager === 'yarn' && pnpPresent),
-    claudeMdBlock,
-    claudeMdSentinel: claudeMd !== null && claudeMd.includes(TEMPLATE_SENTINEL),
+    claudeMdBlock: claudeMdBlocks.length > 0 ? 'present' : 'absent',
+    claudeMdSentinel: claudeMdBlocks.some((text) => text.includes(TEMPLATE_SENTINEL)),
     stateRoot: stateRootFacts(),
   };
 
