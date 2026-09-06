@@ -51612,7 +51612,7 @@ async function detectBridge(client2, evaluate = (expression) => client2.evaluate
 init_logger();
 
 // packages/rn-dev-agent-core/dist/injected-helpers.js
-var HELPERS_VERSION = 61;
+var HELPERS_VERSION = 62;
 var INJECTED_HELPERS = `
 (function() {
   var __HELPERS_VERSION__ = ${HELPERS_VERSION};

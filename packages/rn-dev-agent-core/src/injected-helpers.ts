@@ -2,7 +2,7 @@
 // whenever the injected surface changes; it flows into the IIFE's freshness
 // check (__RN_AGENT.__v) AND the post-injection log line, so they can never
 // drift (the log previously hard-coded a stale "v11").
-export const HELPERS_VERSION = 61;
+export const HELPERS_VERSION = 62;
 
 export const INJECTED_HELPERS = `
 (function() {
