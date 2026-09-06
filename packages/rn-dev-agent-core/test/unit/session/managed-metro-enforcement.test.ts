@@ -659,6 +659,7 @@ test('managed Metro preflight diagnostic capture bounds input and survives I/O f
     'read failure',
     'short read',
     'close failure',
+    'post-cleanup probe error',
   ];
   for (const scenario of scenarios) {
     const result = { status: -1, stdout: '', stderr: '' };
@@ -775,11 +776,17 @@ test('managed Metro preflight diagnostic capture bounds input and survives I/O f
           return {
             createServer: () => {
               const server = Object.assign(new EventEmitter(), {
-                listen: (port: number, _host: string, callback: () => void) => {
+                listen: (port: number, host: string, callback: () => void) => {
                   queueMicrotask(() => {
                     if (port === plan.unallocatedPort) server.emit('error', { code: 'EPERM' });
                     else if (commandSpawned && !commandKilled) {
                       server.emit('error', { code: 'EADDRINUSE' });
+                    } else if (
+                      commandKilled &&
+                      host === '127.0.0.1' &&
+                      scenario === 'post-cleanup probe error'
+                    ) {
+                      server.emit('error', { code: 'EPERM' });
                     } else callback();
                   });
                 },
@@ -797,7 +804,8 @@ test('managed Metro preflight diagnostic capture bounds input and survives I/O f
         return requireFromTest(name);
       },
     });
-    assert.equal(result.status, scenario === 'exception split secret' ? 1 : 0, scenario);
+    const failing = ['exception split secret', 'post-cleanup probe error'].includes(scenario);
+    assert.equal(result.status, failing ? 1 : 0, scenario);
     assert.equal(unboundedReads, 0, scenario);
     assert.ok(readSizes.reduce((total, size) => total + size, 0) <= 65536, scenario);
     if (scenario === 'noisy stderr') assert.deepEqual(readSizes, [65536], scenario);
@@ -810,12 +818,21 @@ test('managed Metro preflight diagnostic capture bounds input and survives I/O f
         run: () => result,
         observe: (observation) => observations.push(observation),
       });
-    if (scenario === 'exception split secret') {
+    if (failing) {
       assert.throws(runPreflight, {
         message: 'METRO_RUNTIME_ENFORCEMENT_UNAVAILABLE: sandbox preflight failed',
       });
-      assert.equal(observations[0].exceptionCause, 'unknown', scenario);
     } else assert.deepEqual(runPreflight(), baselineReceipt, scenario);
+    if (scenario === 'exception split secret') {
+      assert.equal(observations[0].exceptionCause, 'unknown', scenario);
+    }
+    if (scenario === 'post-cleanup probe error') {
+      assert.deepEqual(
+        observations[0].flags,
+        { ...expectedFlags, descendantCreationAllowed: false, commandCleanupConfirmed: false },
+        scenario,
+      );
+    }
     assert.equal(observations.length, 1, scenario);
     const expectedCauses = [
       'noisy stderr',

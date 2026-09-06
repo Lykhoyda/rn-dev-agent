@@ -12546,7 +12546,7 @@ const processGroupExists = (pid) => {
       commandCleanupConfirmed = !processGroupExists(command.pid);
     }
   }
-  const released = !(await occupied(input.port));
+  const released = (await listen(input.port)).ok && !(await occupied(input.port));
   commandCleanupConfirmed = commandCleanupConfirmed && released;
   timings.cleanupMs = elapsed();
   if (stderrDescriptor !== undefined) {
