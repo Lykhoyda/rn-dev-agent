@@ -1550,6 +1550,8 @@ interface RunnerSnapshotNode {
   type?: string;
   label?: string;
   identifier?: string;
+  value?: string;
+  focused?: boolean;
   rect?: { x: number; y: number; width: number; height: number };
   enabled?: boolean;
   hittable?: boolean;
@@ -1930,6 +1932,8 @@ function mapRunnerNodesToFlat(nodes: RunnerSnapshotNode[]): FlatNode[] {
     };
     if (n.label !== undefined) flat.label = n.label;
     if (n.identifier !== undefined) flat.identifier = n.identifier;
+    if (n.value !== undefined) flat.value = n.value;
+    if (n.focused !== undefined) flat.focused = n.focused;
     if (n.enabled !== undefined) flat.enabled = n.enabled;
     if (n.hittable !== undefined) flat.hittable = n.hittable;
     out.push(flat);

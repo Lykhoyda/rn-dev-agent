@@ -24,6 +24,8 @@ export interface FlatNode {
   type: string;
   label?: string;
   identifier?: string;
+  value?: string;
+  focused?: boolean;
   packageName?: string;
   checked?: boolean;
   rect: ElementRect;

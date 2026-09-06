@@ -19511,6 +19511,8 @@ function normalizeNodeForHash(node) {
     node.identifier ?? "",
     node.type,
     node.label ?? "",
+    node.value ?? "",
+    node.focused ?? null,
     q(node.rect.x),
     q(node.rect.y),
     q(node.rect.width),
@@ -21663,6 +21665,10 @@ function mapRunnerNodesToFlat(nodes) {
       flat.label = n.label;
     if (n.identifier !== void 0)
       flat.identifier = n.identifier;
+    if (n.value !== void 0)
+      flat.value = n.value;
+    if (n.focused !== void 0)
+      flat.focused = n.focused;
     if (n.enabled !== void 0)
       flat.enabled = n.enabled;
     if (n.hittable !== void 0)
@@ -35892,6 +35898,10 @@ function mapRunnerNodesToFlat2(nodes) {
       flat.label = n.label;
     if (n.identifier !== void 0)
       flat.identifier = n.identifier;
+    if (n.value !== void 0)
+      flat.value = n.value;
+    if (n.focused !== void 0)
+      flat.focused = n.focused;
     if (n.packageName !== void 0)
       flat.packageName = n.packageName;
     if (n.checked !== void 0)

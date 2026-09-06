@@ -170,6 +170,24 @@ test('gh-581: wrapper binds its inner input and dispatches one exact native oper
   assert.equal(verify.cliArgs[1], '@e2');
 });
 
+test('gh-443: Android long and unsafe text use the native fill settling path without a pre-tap', async () => {
+  for (const text of ['x'.repeat(256), 'quotes " and spaces / unicode λ']) {
+    const { result, calls } = await withFillSeam({ platform: 'android' }, () =>
+      performExactFill({ ref: '@e3', text, settleTimeoutMs: 1_234 }, null, NATIVE_ONLY),
+    );
+
+    assert.ok(!(result as { isError?: boolean }).isError, envelope(result as never).error);
+    assert.equal(calls.filter((call) => call.cliArgs[0] === 'fill').length, 1);
+    assert.equal(
+      calls.some((call) => call.cliArgs[0] === 'press'),
+      false,
+    );
+    assert.deepEqual(calls.find((call) => call.cliArgs[0] === 'fill')?.opts.settle, {
+      timeoutMs: 1_234,
+    });
+  }
+});
+
 test('gh-581: direct testID ref binds without a wrapper', async () => {
   const { result, calls } = await withFillSeam({}, () =>
     performExactFill({ ref: 'last-name', text: 'Ng' }, null, NATIVE_ONLY),

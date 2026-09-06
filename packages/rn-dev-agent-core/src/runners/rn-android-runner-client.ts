@@ -183,6 +183,8 @@ interface RunnerSnapshotNode {
   type?: string;
   label?: string;
   identifier?: string;
+  value?: string;
+  focused?: boolean;
   packageName?: string;
   checked?: boolean;
   rect?: { x: number; y: number; width: number; height: number };
@@ -1882,6 +1884,8 @@ function mapRunnerNodesToFlat(nodes: RunnerSnapshotNode[]): FlatNode[] {
     const flat: FlatNode = { ref, type: n.type ?? '', rect: n.rect };
     if (n.label !== undefined) flat.label = n.label;
     if (n.identifier !== undefined) flat.identifier = n.identifier;
+    if (n.value !== undefined) flat.value = n.value;
+    if (n.focused !== undefined) flat.focused = n.focused;
     if (n.packageName !== undefined) flat.packageName = n.packageName;
     if (n.checked !== undefined) flat.checked = n.checked;
     if (n.enabled !== undefined) flat.enabled = n.enabled;

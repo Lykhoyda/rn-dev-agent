@@ -9,9 +9,9 @@ import type { FlatNode } from '../fast-runner-ref-map.js';
 // sub-bucket jitter at the screen edge flip the hash every poll, defeating
 // the quantization. `checked` is included because Android Switch state can
 // change without moving or relabeling the node; omitting it made a proven
-// toggle look like a swallowed tap. Value/focus remain unavailable on every
-// runner, so the snapshot-eq fallback can still miss changes limited to those
-// fields; primary pixel/window probes cover current runner artifacts.
+// toggle look like a swallowed tap. Value and focus are included because
+// legacy artifacts without the primary probes can otherwise false-settle when
+// only a text value or input focus changes.
 const BOUNDS_QUANTUM_PX = 4;
 
 export function normalizeNodeForHash(node: FlatNode): string {
@@ -23,6 +23,8 @@ export function normalizeNodeForHash(node: FlatNode): string {
     node.identifier ?? '',
     node.type,
     node.label ?? '',
+    node.value ?? '',
+    node.focused ?? null,
     q(node.rect.x),
     q(node.rect.y),
     q(node.rect.width),

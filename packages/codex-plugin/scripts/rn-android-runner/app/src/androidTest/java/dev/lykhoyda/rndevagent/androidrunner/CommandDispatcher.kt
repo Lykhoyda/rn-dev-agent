@@ -241,6 +241,7 @@ class CommandDispatcher(
                         val className = parser.getAttributeValue(null, "class").orEmpty()
                         val packageName = parser.getAttributeValue(null, "package").orEmpty()
                         val checked = parser.getAttributeValue(null, "checked") == "true"
+                        val focused = parser.getAttributeValue(null, "focused") == "true"
                         val visible = parser.getAttributeValue(null, "visible-to-user") != "false"
                         val enabled = parser.getAttributeValue(null, "enabled") != "false"
                         val secure = parser.getAttributeValue(null, "password") == "true"
@@ -251,6 +252,8 @@ class CommandDispatcher(
                             .put("type", className)
                             .put("label", text.ifBlank { desc })
                             .put("identifier", identifier)
+                            .put("value", text)
+                            .put("focused", focused)
                             .put("packageName", packageName)
                             .put("checked", checked)
                             .put("rect", JSONObject().put("x", bounds.left).put("y", bounds.top).put("width", bounds.width()).put("height", bounds.height()))
