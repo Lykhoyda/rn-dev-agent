@@ -1,5 +1,20 @@
 # rn-dev-agent-core
 
+## 1.0.5
+
+### Patch Changes
+
+- 6d6dc39: Allow the managed-Metro Darwin sandbox to write the resolved, run-owned `react-native-css-interop/.cache` directory while preserving all other sandbox restrictions and enforcement checks.
+- 6d6dc39: Accept the renamed Apple platform code-signing leaf authority during managed-Metro sandbox verification while preserving the trusted Apple chain, identity, and rejection requirements.
+- 5008fd6: Discover deeply nested Redux and React Query stores and dispatch Redux actions through their Provider when an app bridge has no registered store.
+- 6d6dc39: Record private per-attempt managed-Metro enforcement diagnostics with preparation outcomes, fixed-schema flags, timings, exits and predefined error categories without retaining arbitrary stderr text or changing permissions, timeouts or fallback behavior.
+- 6d6dc39: Deliver the attested command snapshot to the managed-Metro sandbox preflight shim before signaling admission, so a shell-shim command no longer intermittently sources an empty snapshot and degrades enforcement to reported-v1.
+- 6d6dc39: Detect a wildcard-bound Metro listener in the managed-Metro sandbox preflight by probing every local address shape, so a real Expo server that listens on all interfaces no longer reads as unoccupied and falls back to reported-v1.
+- cc992e6: Omit automatic hook state from component trees while preserving existing explicit component-state inspection.
+- e0d25c8: Retain a bounded closed-vocabulary projection of runner failure evidence on `maestro_run` results and `cdp_run_action` RunRecords before the temporary report tree is deleted, withholding text, images, terminal output and original artifacts.
+- 6d6dc39: Allow the managed-Metro Darwin sandbox to look up the FSEvents service so Metro's native file watcher works on app-scale trees under enforcement instead of exhausting descriptors, without adding any executable, file, or network permission.
+- e0d25c8: Recognize the rn-dev-agent instruction block in CLAUDE.local.md during workflow preflight without modifying either Claude instruction file or hiding read errors.
+
 ## 1.0.4
 
 ### Patch Changes
