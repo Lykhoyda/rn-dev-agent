@@ -64024,7 +64024,7 @@ var HELPERS_VERSION, INJECTED_HELPERS, NETWORK_HOOK_SCRIPT, NETWORK_CB_BUFFERED_
 var init_injected_helpers = __esm({
   "packages/rn-dev-agent-core/dist/injected-helpers.js"() {
     "use strict";
-    HELPERS_VERSION = 60;
+    HELPERS_VERSION = 61;
     INJECTED_HELPERS = `
 (function() {
   var __HELPERS_VERSION__ = ${HELPERS_VERSION};
@@ -64617,28 +64617,6 @@ var init_injected_helpers = __esm({
         if (Object.keys(props).length > 0) result.props = props;
       }
 
-      if (isUserComponent && fiber.memoizedState !== null) {
-        try {
-          var hookState = fiber.memoizedState;
-          var states = [];
-          while (hookState) {
-            if (hookState.queue && hookState.memoizedState !== undefined) {
-              var hs = hookState.memoizedState;
-              if (typeof hs === 'function') {
-                states.push('[Function]');
-              } else if (typeof hs === 'object' && hs !== null) {
-                try { JSON.stringify(hs); states.push(hs); }
-                catch(e) { states.push('[Circular]'); }
-              } else {
-                states.push(hs);
-              }
-            }
-            hookState = hookState.next;
-          }
-          if (states.length > 0) result.hookStates = states.slice(0, 5);
-        } catch(e) {}
-      }
-
       if (children.length > 0) {
         if (children.length > 20) walkQuality.collapsedChildLists++;
         result.children = children.length > 20
@@ -64649,11 +64627,7 @@ var init_injected_helpers = __esm({
       return result;
     }
 
-    // GH #321 (quick win #3): salient digest \u2014 a compact "what can I act on
-    // here?" list of ONLY actionable nodes (+ their text), dropping props /
-    // hookStates / nesting. Cuts the live-perception payload from ~thousands of
-    // tokens (full tree) to hundreds. BFS over every renderer root like the
-    // filter branch.
+    // Compact actionable nodes across every renderer root.
     if (opts.interactiveOnly) {
       var INTERACTIVE_NAMES = { Pressable: 1, TouchableOpacity: 1, TouchableHighlight: 1, TouchableWithoutFeedback: 1, TouchableNativeFeedback: 1, Button: 1, TextInput: 1, Switch: 1, Link: 1 };
       var INTERACTIVE_ROLES = { button: 1, link: 1, switch: 1, checkbox: 1, radio: 1, menuitem: 1, tab: 1, togglebutton: 1, imagebutton: 1, search: 1, adjustable: 1 };
@@ -98658,10 +98632,10 @@ var init_index = __esm({
     trackedTool("cdp_reload", "Reload the authority-bound app and atomically replace its exact Hermes target claim. Recovery uses only the session device/app/Metro bindings and returns a failure unless the signed runtime marker is re-proven.", {
       full: external_exports.boolean().default(true).describe("Always performs a full reload via DevSettings.reload()")
     }, createReloadHandler(getClient, setClient, createClient));
-    trackedTool("cdp_component_tree", 'Get React component tree. Returns components with props, state, testIDs. Use filter to scope to a specific subtree \u2014 NEVER request full tree unless necessary (saves tokens). Detects RedBox and warns. Pass interactiveOnly=true for a compact "what can I act on here?" digest (only tappable/editable elements + their text, no props/state) \u2014 the cheapest way to perceive a novel screen for live interaction.', {
+    trackedTool("cdp_component_tree", 'Get React component tree. Returns components with props summaries and testIDs; hook state is omitted. Explicit cdp_component_state inspection remains available and may expose sensitive values. Use filter to scope to a specific subtree \u2014 NEVER request full tree unless necessary (saves tokens). Detects RedBox and warns. Pass interactiveOnly=true for a compact "what can I act on here?" digest (only tappable/editable elements + their text, no props/state) \u2014 the cheapest way to perceive a novel screen for live interaction.', {
       filter: external_exports.string().optional().describe('Case-insensitive substring match against component name, testID/nativeID, or accessibilityLabel (e.g. "CartBadge", "product-list", "Continue")'),
       depth: external_exports.number().int().min(1).max(12).default(4).describe("Max depth (default 4, max 12)"),
-      interactiveOnly: external_exports.boolean().optional().describe("Return a compact salient digest: only actionable nodes (Pressable/Button/TextInput/Switch/Link + accessibilityRole controls) with {testID, role, text, label}, dropping props/hookStates/nesting. Ignores filter/depth. Use to cheaply see what is tappable on the current screen.")
+      interactiveOnly: external_exports.boolean().optional().describe("Only actionable nodes with testID, role, text and label; ignores filter/depth.")
     }, createComponentTreeHandler(getClient));
     trackedTool("cdp_navigation_state", "Get current navigation state: active route, params, stack history, nested navigators, active tab. Works with React Navigation and Expo Router.", {}, createNavigationStateHandler(getClient));
     trackedTool("cdp_nav_graph", 'Navigation graph tool. PRIMARY: action="go" \u2014 navigates to any screen in ONE call (auto-scans if stale, plans path, executes via __NAV_REF__, verifies arrival, records outcome, returns heal advice on failure). Other actions for manual control: scan, read, navigate (plan only), record, staleness, playbook, heal.', {
@@ -98757,7 +98731,7 @@ var init_index = __esm({
         mutationMethods: cfg.mutationMethods
       });
     }));
-    trackedTool("cdp_component_state", "Inspect a specific component's full hook state by testID. Returns props, all hook values (useState, useRef, useForm, etc.), and auto-detects react-hook-form control objects. Use when cdp_store_state misses non-Redux state (forms, local state, atoms).", {
+    trackedTool("cdp_component_state", "Inspect a specific component's full hook state by testID. Returns props, all hook values (useState, useRef, useForm, etc.), and auto-detects react-hook-form control objects. Use when cdp_store_state misses non-Redux state (forms, local state, atoms). Explicit inspection may return credentials and personal data held in state.", {
       testID: external_exports.string().describe("testID of the target component")
     }, withConnection(getClient, async (args, client2) => {
       const result = await client2.evaluate(`__RN_AGENT.getComponentState(${JSON.stringify(args.testID)})`);

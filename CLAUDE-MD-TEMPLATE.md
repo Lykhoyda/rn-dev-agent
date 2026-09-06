@@ -346,7 +346,7 @@ error health.
 #### "I need to see what's on screen"
 - **Accessibility tree (for interaction):** `device_snapshot` — returns the full UI tree with @ref handles you can tap/fill. **First action on any new screen.**
 - **"What can I tap here?" on a novel screen:** `cdp_component_tree(interactiveOnly: true)` — a salient digest of only the actionable nodes (`{testID, role, text, label, placeholder, disabled}`). Hundreds of tokens instead of the full fiber tree's thousands.
-- **React component tree (for debugging):** `cdp_component_tree(filter="<testID>")` — returns fiber tree with props/state. **Always filter or use `interactiveOnly`** — never dump the full tree (wastes 10K+ tokens)
+- **React component tree (for debugging):** `cdp_component_tree(filter="<testID>")` — returns fiber tree with props summaries and testIDs (hook state omitted; use `cdp_component_state` for it). **Always filter or use `interactiveOnly`** — never dump the full tree (wastes 10K+ tokens)
 - **Visual screenshot:** `device_screenshot` — captures the screen as an image
 - Repeated `device_find` calls on an unchanged screen are near-free — the snapshot is cached and auto-invalidated by any mutating tool call, so don't contort call order to avoid a re-find.
 

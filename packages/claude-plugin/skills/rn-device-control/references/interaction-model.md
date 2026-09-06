@@ -69,7 +69,7 @@ Three levels of UI interaction, each with distinct trade-offs. Choose based on w
 | Form input (known testID) | `device_batch` with `fill` step + `testID=` (Tier 2) |
 | Form input (unknown element) | `device_snapshot` → `device_fill(ref="@eN", text=…)` (Tier 2) |
 | Verify element exists | `device_find` (Tier 2) |
-| Read component state after tap | `device_press` → `cdp_component_tree` (Tier 2 + CDP) |
+| Read component state after tap | `device_press` → `cdp_component_state` (Tier 2 + CDP) |
 
 ## When to choose `cdp_interact` vs `device_batch.testID` (D1206 Tier 2 / Phase 125)
 
