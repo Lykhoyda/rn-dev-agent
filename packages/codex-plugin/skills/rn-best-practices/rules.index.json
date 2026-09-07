@@ -2444,7 +2444,7 @@
     ],
     "checkerRule": null,
     "checkable": false,
-    "upstream_path": "packages/shared-agent-knowledge/skills/rn-best-practices/references/rn-dev-agent/navigation-transparent-modal.md",
+    "upstream_path": "skills/rn-best-practices/references/rn-dev-agent/navigation-transparent-modal.md",
     "applicable_when": "silent visual breakage — component tree renders correctly but native view is opaque white"
   },
   {
@@ -2465,7 +2465,7 @@
     ],
     "checkerRule": null,
     "checkable": false,
-    "upstream_path": "packages/shared-agent-knowledge/skills/rn-best-practices/references/rn-dev-agent/query-cache-reactive.md",
+    "upstream_path": "skills/rn-best-practices/references/rn-dev-agent/query-cache-reactive.md",
     "applicable_when": "prevents stale search/filter results"
   },
   {
@@ -2486,7 +2486,7 @@
     ],
     "checkerRule": null,
     "checkable": false,
-    "upstream_path": "packages/shared-agent-knowledge/skills/rn-best-practices/references/rn-dev-agent/reanimated-in-lists.md",
+    "upstream_path": "skills/rn-best-practices/references/rn-dev-agent/reanimated-in-lists.md",
     "applicable_when": "prevents recycling breakage and layout jumping"
   },
   {
@@ -2508,7 +2508,7 @@
     ],
     "checkerRule": null,
     "checkable": false,
-    "upstream_path": "packages/shared-agent-knowledge/skills/rn-best-practices/references/rn-dev-agent/theme-memoization-lists.md",
+    "upstream_path": "skills/rn-best-practices/references/rn-dev-agent/theme-memoization-lists.md",
     "applicable_when": "prevents full list re-render on theme changes"
   }
 ]

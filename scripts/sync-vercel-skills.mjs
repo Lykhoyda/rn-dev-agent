@@ -299,7 +299,7 @@ function buildRulesIndex(lock) {
         fileGlobs: ['**/*.{tsx,jsx}'],
         checkerRule: null,
         checkable: false,
-        upstream_path: `packages/shared-agent-knowledge/skills/rn-best-practices/references/rn-dev-agent/${file}`,
+        upstream_path: `skills/rn-best-practices/references/rn-dev-agent/${file}`,
         applicable_when: fm.impactDescription || '',
       });
     }
