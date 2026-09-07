@@ -15517,8 +15517,11 @@ function boundedManagedMetroStartupMessage(code, details) {
   const suffix = compactDetails.length > 0 ? ` (${compactDetails.join("; ")})` : "";
   return `${code}: managed Metro launcher failed before runtime evidence${suffix}`.slice(0, 4096);
 }
+function managedMetroLauncherWasAlive(input) {
+  return input.exitCode === null && input.signalCode == null;
+}
 function managedMetroLauncherDetail(input) {
-  if (input.launcherAliveAtDeadline)
+  if (managedMetroLauncherWasAlive(input))
     return "launcher alive at deadline";
   if (input.exitCode !== null)
     return `launcher exit ${input.exitCode}`;
@@ -15529,13 +15532,16 @@ function managedMetroLauncherDetail(input) {
 function managedMetroReadinessDetail(readiness) {
   return `readiness deadline ${readiness.budgetMs} ms expired: listener absent ${readiness.absentProbes} probes, probe unknown ${readiness.unknownProbes}, unowned listener ${readiness.unownedListenerPid ?? "none"}`;
 }
+function managedMetroUnprovenReadinessDetail(input) {
+  return managedMetroLauncherWasAlive(input) && !input.readiness.listenerObserved ? managedMetroReadinessDetail(input.readiness) : null;
+}
 function managedMetroStartupError(input) {
   const violation = latestSignedRuntimeViolation(input.runtimeEvidencePath, input.runtimePolicyCapability, {
     sessionId: input.sessionId,
     metroInstanceId: input.metroInstanceId
   });
   const childOutcome = managedMetroLauncherDetail(input);
-  const readinessOutcome = input.launcherAliveAtDeadline && !input.readiness.listenerObserved ? managedMetroReadinessDetail(input.readiness) : null;
+  const readinessOutcome = managedMetroUnprovenReadinessDetail(input);
   const launcherDiagnostic = readManagedMetroLauncherDiagnostic(input.launcherDiagnosticPath);
   const redactions = [
     input.appRoot,
@@ -15924,13 +15930,13 @@ async function startManagedMetro(input, dependencies = {}) {
     listener: listenerIdentity
   }, dependencies);
   if (!cleanupProven) {
-    const launcherAliveAtDeadline = preKill.exitCode === null && preKill.signalCode == null;
-    const childOutcome = managedMetroLauncherDetail({
-      launcherAliveAtDeadline,
+    const childOutcome = managedMetroLauncherDetail(preKill);
+    const readinessDetail = managedMetroUnprovenReadinessDetail({
       exitCode: preKill.exitCode,
-      signalCode: preKill.signalCode
+      signalCode: preKill.signalCode,
+      readiness
     });
-    const readinessOutcome = launcherAliveAtDeadline && !readiness.listenerObserved ? sanitizeManagedMetroStartupDetail(managedMetroReadinessDetail(readiness), [
+    const readinessOutcome = readinessDetail ? sanitizeManagedMetroStartupDetail(readinessDetail, [
       input.appRoot,
       input.sourceRoot,
       input.runtimeRoot,
@@ -15955,7 +15961,6 @@ async function startManagedMetro(input, dependencies = {}) {
     credentialRedactions: Object.entries(childEnvironment).filter(([name, value]) => value !== void 0 && (MANAGED_METRO_SENSITIVE_ENVIRONMENT_NAME.test(name) || /^[a-z][a-z0-9+.-]*:\/\/[^/\s@]+@/i.test(value))).map(([, value]) => value),
     exitCode: preKill.exitCode,
     signalCode: preKill.signalCode,
-    launcherAliveAtDeadline: preKill.exitCode === null && preKill.signalCode == null,
     logTailSource: preKill.logTail,
     readiness,
     lastError
