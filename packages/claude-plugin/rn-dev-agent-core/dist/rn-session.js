@@ -15418,12 +15418,9 @@ async function startManagedMetro(input, dependencies = {}) {
     EXPO_UNSTABLE_HEADLESS: "1",
     RCT_METRO_PORT: String(input.port)
   });
-  const pathPrefixes = [launchCommand.binPath, manifestUtilityGit ? metroBinRoot : null].filter((entry) => Boolean(entry));
   const childEnvironment = {
     ...metroEnvironment,
-    ...pathPrefixes.length > 0 ? {
-      PATH: [...pathPrefixes, metroEnvironment.PATH].filter(Boolean).join(":")
-    } : {},
+    ...manifestUtilityGit ? { PATH: [metroBinRoot, metroEnvironment.PATH].filter(Boolean).join(":") } : {},
     NODE_OPTIONS: authorityNodeOptions,
     RN_DEV_AGENT_METRO_EVIDENCE_FD: "9",
     RN_DEV_AGENT_SESSION_ID: input.sessionId,

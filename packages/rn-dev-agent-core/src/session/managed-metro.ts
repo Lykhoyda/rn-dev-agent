@@ -1345,7 +1345,6 @@ export interface ManagedMetroLaunchCommand {
   executableMappings: string[];
   chainInputs: string[];
   protectedRuntimeRoots: string[];
-  binPath?: string;
 }
 
 function resolveManagedMetroLaunchCommand(
@@ -2230,15 +2229,10 @@ export async function startManagedMetro(
   });
   // NOTE: expo-updates resolves `git` through PATH, and the /usr/bin/git xcrun shim cannot run
   // under the sandbox profile, so a shim holding only the admitted git wins the lookup.
-  const pathPrefixes = [launchCommand.binPath, manifestUtilityGit ? metroBinRoot : null].filter(
-    (entry): entry is string => Boolean(entry),
-  );
   const childEnvironment = {
     ...metroEnvironment,
-    ...(pathPrefixes.length > 0
-      ? {
-          PATH: [...pathPrefixes, metroEnvironment.PATH].filter(Boolean).join(':'),
-        }
+    ...(manifestUtilityGit
+      ? { PATH: [metroBinRoot, metroEnvironment.PATH].filter(Boolean).join(':') }
       : {}),
     NODE_OPTIONS: authorityNodeOptions,
     RN_DEV_AGENT_METRO_EVIDENCE_FD: '9',
