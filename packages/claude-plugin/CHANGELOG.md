@@ -1,5 +1,14 @@
 # rn-dev-agent-plugin
 
+## 1.0.6
+
+### Patch Changes
+
+- 8517ebc: Admit the canonical `expo-updates` runtime-version CLI and the verified developer `git` it shells out to in the Darwin managed-Metro sandbox profile, so Expo dev-client manifests under a `fingerprint` runtime-version policy stop failing with `spawn EPERM`.
+- a7e439f: Re-pin the vendored `vercel-labs/agent-skills` best-practice corpus to upstream commit `063bee94` and regenerate the rules routing index.
+- Updated dependencies [8517ebc]
+  - rn-dev-agent-core@1.0.6
+
 ## 1.0.5
 
 ### Patch Changes
