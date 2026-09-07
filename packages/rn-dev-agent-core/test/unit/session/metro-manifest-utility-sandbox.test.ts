@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
 import {
   chmodSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   realpathSync,
@@ -132,7 +133,10 @@ console.log(JSON.stringify({ cli: run(${JSON.stringify(
   };
 }
 
-function enforcementPlan(harness: Harness): ManagedMetroEnforcementPlan | null {
+function enforcementPlan(
+  harness: Harness,
+  protectedRuntimeRoots: readonly string[] = [],
+): ManagedMetroEnforcementPlan | null {
   const enforcement = prepareManagedMetroEnforcement({
     platform: 'darwin',
     appRoot: harness.root,
@@ -142,6 +146,7 @@ function enforcementPlan(harness: Harness): ManagedMetroEnforcementPlan | null {
     nodeVersion: process.version,
     commandExecutable: harness.commandPath,
     commandArguments: [],
+    protectedRuntimeRoots,
     port: 8099,
     instanceId: 'manifest-utility-sandbox',
     runtimeInputs: [],
@@ -440,6 +445,65 @@ test(
       assert.equal(untrusted.outcome, 'developer-git-untrusted');
       assert.equal(untrusted.git, null);
       assert.equal(untrusted.expoUpdatesCli, cli);
+    } finally {
+      rmSync(harness.base, { force: true, recursive: true });
+    }
+  },
+);
+
+test(
+  'the sandboxed Metro child cannot remove or repoint the launcher-owned git shim',
+  { skip: unsupportedPlatform },
+  () => {
+    const harness = createHarness();
+    try {
+      const shim = join(harness.metroBinRoot, 'git');
+      rmSync(shim, { force: true });
+      symlinkSync('/usr/bin/true', shim);
+      assert.ok(existsSync(shim), 'the launcher creates the shim outside the sandbox');
+
+      const plan = enforcementPlan(harness, [harness.metroBinRoot]);
+      if (!plan) return;
+      writeFileSync(harness.profilePath, plan.profile);
+
+      const probePath = join(harness.root, 'shim-write-probe.cjs');
+      writeFileSync(
+        probePath,
+        `const { unlinkSync, writeFileSync } = require('node:fs');
+const attempt = (run) => {
+  try {
+    run();
+    return null;
+  } catch (error) {
+    return error.code;
+  }
+};
+console.log(
+  JSON.stringify({
+    unlinkShim: attempt(() => unlinkSync(${JSON.stringify(shim)})),
+    createInBinRoot: attempt(() =>
+      writeFileSync(${JSON.stringify(join(harness.metroBinRoot, 'intruder'))}, 'x'),
+    ),
+    writeElsewhereInRuntimeRoot: attempt(() =>
+      writeFileSync(${JSON.stringify(join(harness.runtimeRoot, 'control.txt'))}, 'x'),
+    ),
+  }),
+);
+`,
+      );
+
+      const result = spawnSync(
+        '/usr/bin/sandbox-exec',
+        ['-f', harness.profilePath, realpathSync(process.execPath), probePath],
+        { cwd: harness.root, encoding: 'utf8', env: { ...process.env, HOME: harness.metroHome } },
+      );
+      assert.equal(result.status, 0, result.stderr);
+      assert.deepEqual(JSON.parse(result.stdout.trim()), {
+        unlinkShim: 'EPERM',
+        createInBinRoot: 'EPERM',
+        writeElsewhereInRuntimeRoot: null,
+      });
+      assert.ok(existsSync(shim), 'the shim survives the sandboxed write attempts');
     } finally {
       rmSync(harness.base, { force: true, recursive: true });
     }

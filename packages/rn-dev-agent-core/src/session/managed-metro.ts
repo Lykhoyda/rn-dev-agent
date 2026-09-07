@@ -2274,7 +2274,11 @@ export async function startManagedMetro(
     commandProbeArguments: launchCommand.probeArgs,
     commandExecutableMappings: launchCommand.executableMappings.map(canonicalRuntimeInput),
     commandChainInputs: commandChainInputs.map(canonicalRuntimeInput),
-    protectedRuntimeRoots: [...launchCommand.protectedRuntimeRoots, nativeAddonAcknowledgmentRoot]
+    protectedRuntimeRoots: [
+      ...launchCommand.protectedRuntimeRoots,
+      nativeAddonAcknowledgmentRoot,
+      metroBinRoot,
+    ]
       .map(canonicalRuntimeInput)
       .filter((value, index, entries) => entries.indexOf(value) === index),
     nativeAddonRoots: allowedCodeRoots,

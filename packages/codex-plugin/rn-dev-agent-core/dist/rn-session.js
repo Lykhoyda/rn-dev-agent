@@ -15453,7 +15453,11 @@ async function startManagedMetro(input, dependencies = {}) {
     commandProbeArguments: launchCommand.probeArgs,
     commandExecutableMappings: launchCommand.executableMappings.map(canonicalRuntimeInput),
     commandChainInputs: commandChainInputs.map(canonicalRuntimeInput),
-    protectedRuntimeRoots: [...launchCommand.protectedRuntimeRoots, nativeAddonAcknowledgmentRoot].map(canonicalRuntimeInput).filter((value, index, entries) => entries.indexOf(value) === index),
+    protectedRuntimeRoots: [
+      ...launchCommand.protectedRuntimeRoots,
+      nativeAddonAcknowledgmentRoot,
+      metroBinRoot
+    ].map(canonicalRuntimeInput).filter((value, index, entries) => entries.indexOf(value) === index),
     nativeAddonRoots: allowedCodeRoots,
     cssInteropCacheRoot: cssInteropCacheRoot(input.appRoot),
     nodeExecutable: canonicalRuntimeInput(launchCommand.nodeExecutable),
