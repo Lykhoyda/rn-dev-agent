@@ -212,6 +212,17 @@ alive for such callers.
   allowlist: a real actions directory, or the approved `.rn-agent/actions`
   symlink to the same-repo primary corpus. `isDirectNode` still refuses
   per-file action symlinks.
+- Managed dev-client `clearState` replay has exactly one refusal owner:
+ `isDevClientLaunchShape` in `src/tools/run-action.ts` reads only the existing
+ install binding (`buildKind === 'expo'` or a `devClientUrl`) and refuses
+ `DEV_CLIENT_CLEARSTATE_REFUSED` before any runner call, origin claim, or park;
+ `cdp_login_prologue` inherits it through `cdp_run_action`, bare-RN sessions
+ keep the GH #705 reinstall path, and `cdp_auto_login` keeps its own
+ `containsClearState` check for legacy `.maestro/` flows. A
+ `METRO_ORIGIN_MISMATCH` raised after a flow-owned `launchApp` is attributed to
+ that relaunch by `attributeOriginFailureToFlowRelaunch`
+ (`src/tools/maestro-run.ts`) as message + `meta.flowRelaunch` only — never let
+ it change the error instance, code, axis, or the GH #708 abort-vs-defer flow.
 - React-tree replay presses (`createReplayPressByTestId` in
   `src/tools/cdp-replay-dispatch.ts`) opt into both `walkUp` and
   `allowInputDesignation` at the `InteractArgs` boundary. Inside the injected
