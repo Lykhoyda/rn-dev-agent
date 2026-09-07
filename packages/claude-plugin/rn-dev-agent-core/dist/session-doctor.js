@@ -12768,7 +12768,7 @@ import { join as join14 } from "node:path";
 // packages/rn-dev-agent-core/dist/session/managed-metro.js
 import { execFileSync as execFileSync4, spawn } from "node:child_process";
 import { createHash as createHash4, createHmac as createHmac2, timingSafeEqual as timingSafeEqual3 } from "node:crypto";
-import { closeSync as closeSync3, existsSync as existsSync4, fstatSync as fstatSync3, mkdirSync as mkdirSync3, openSync as openSync3, readFileSync as readFileSync4, readSync as readSync3, realpathSync as realpathSync3, rmSync, writeFileSync as writeFileSync2 } from "node:fs";
+import { closeSync as closeSync3, existsSync as existsSync4, fstatSync as fstatSync3, mkdirSync as mkdirSync3, openSync as openSync3, readFileSync as readFileSync4, readSync as readSync3, realpathSync as realpathSync3, rmSync, symlinkSync, writeFileSync as writeFileSync2 } from "node:fs";
 init_metro_binding();
 init_trusted_system_executable();
 init_process_birth();
@@ -13111,6 +13111,7 @@ let managedSandbox =
   enforcementReceipt?.version === 2 &&
   enforcementReceipt.kind === runtimeEnforcement.kind &&
   enforcementReceipt.profileSha256 === runtimeEnforcement.profileSha256 &&
+  enforcementReceipt.manifestUtility === runtimeEnforcement.manifestUtility &&
   enforcementReceipt.sandboxExecutableSha256 ===
     runtimeEnforcement.sandboxExecutableSha256 &&
   enforcementReceipt.sandboxExecutableCdHash ===
@@ -13941,7 +13942,10 @@ async function stopManagedMetro(binding, input, dependencies = {}) {
       pid: authenticatedBinding.launcherPid,
       birth: authenticatedBinding.launcherBirth
     },
-    listener: { pid: authenticatedBinding.pid, birth: authenticatedBinding.birth }
+    listener: {
+      pid: authenticatedBinding.pid,
+      birth: authenticatedBinding.birth
+    }
   }, dependencies);
   if (!stopped)
     return false;

@@ -1,5 +1,5 @@
-import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import {
   closeSync,
   constants,
@@ -13,21 +13,21 @@ import {
   statSync,
   symlinkSync,
   writeSync,
-} from "node:fs";
-import { basename, dirname, join, resolve } from "node:path";
-import { createRequire } from "node:module";
-import { constants as osConstants } from "node:os";
-import { canonicalAuthorityJson } from "./authority-json.js";
+} from 'node:fs';
+import { basename, dirname, join, resolve } from 'node:path';
+import { createRequire } from 'node:module';
+import { constants as osConstants } from 'node:os';
+import { canonicalAuthorityJson } from './authority-json.js';
 
-const DARWIN_SANDBOX_EXECUTABLE = "/usr/bin/sandbox-exec";
-const DARWIN_CODESIGN_EXECUTABLE = "/usr/bin/codesign";
-const DARWIN_DEVELOPER_DIR_EXECUTABLE = "/usr/bin/xcode-select";
-const DARWIN_UTILITY_PROBE_ENVIRONMENT = { PATH: "/usr/bin:/bin" };
-const DARWIN_GIT_SIGNING_IDENTIFIER = "com.apple.git";
-const EXPO_UPDATES_CLI_SPECIFIER = "expo-updates/bin/cli.js";
+const DARWIN_SANDBOX_EXECUTABLE = '/usr/bin/sandbox-exec';
+const DARWIN_CODESIGN_EXECUTABLE = '/usr/bin/codesign';
+const DARWIN_DEVELOPER_DIR_EXECUTABLE = '/usr/bin/xcode-select';
+const DARWIN_UTILITY_PROBE_ENVIRONMENT = { PATH: '/usr/bin:/bin' };
+const DARWIN_GIT_SIGNING_IDENTIFIER = 'com.apple.git';
+const EXPO_UPDATES_CLI_SPECIFIER = 'expo-updates/bin/cli.js';
 const DARWIN_PLATFORM_SIGNING_LEAF_AUTHORITIES = [
-  "Authority=Software Signing",
-  "Authority=macOS Software Signing",
+  'Authority=Software Signing',
+  'Authority=macOS Software Signing',
 ];
 
 interface CommandResult {
@@ -41,7 +41,7 @@ interface CommandResult {
 type RunCommand = (
   command: string,
   args: readonly string[],
-  environment?: NodeJS.ProcessEnv
+  environment?: NodeJS.ProcessEnv,
 ) => CommandResult;
 
 interface FileMetadata {
@@ -64,13 +64,13 @@ interface ManagedMetroEnforcementDependencies {
 }
 
 export type ManagedMetroManifestUtilityOutcome =
-  | "admitted"
-  | "host-unsupported"
-  | "expo-updates-cli-unresolved"
-  | "expo-updates-cli-unowned"
-  | "developer-dir-unavailable"
-  | "developer-git-untrusted"
-  | "developer-git-unsigned";
+  | 'admitted'
+  | 'host-unsupported'
+  | 'expo-updates-cli-unresolved'
+  | 'expo-updates-cli-unowned'
+  | 'developer-dir-unavailable'
+  | 'developer-git-untrusted'
+  | 'developer-git-unsigned';
 
 export interface ManagedMetroManifestUtility {
   outcome: ManagedMetroManifestUtilityOutcome;
@@ -124,7 +124,7 @@ export interface ManagedMetroNodeRuntimeAttestation {
 
 export interface ManagedMetroEnforcementReceipt {
   version: 2;
-  kind: "darwin-seatbelt-v2";
+  kind: 'darwin-seatbelt-v2';
   profileSha256: string;
   manifestUtility: ManagedMetroManifestUtilityOutcome;
   sandboxExecutableSha256: string;
@@ -147,9 +147,9 @@ export interface ManagedMetroEnforcementReceipt {
 }
 
 export interface ManagedMetroEnforcementPlan {
-  status: "enforced";
-  kind: "darwin-seatbelt-v2";
-  sandboxExecutable: "/usr/bin/sandbox-exec";
+  status: 'enforced';
+  kind: 'darwin-seatbelt-v2';
+  sandboxExecutable: '/usr/bin/sandbox-exec';
   sandboxExecutableSha256: string;
   sandboxExecutableCdHash: string;
   commandLaunchSha256: string;
@@ -176,36 +176,35 @@ export interface ManagedMetroEnforcementPlan {
 export type ManagedMetroEnforcement =
   | ManagedMetroEnforcementPlan
   | {
-      status: "unsupported";
+      status: 'unsupported';
       reason:
-        | "host-enforcement-unavailable"
-        | "sandbox-executable-unverified"
-        | "node-runtime-unverified"
-        | "sandbox-preflight-failed";
+        | 'host-enforcement-unavailable'
+        | 'sandbox-executable-unverified'
+        | 'node-runtime-unverified'
+        | 'sandbox-preflight-failed';
     };
 
 function sha256(value: string | Buffer): string {
-  return createHash("sha256").update(value).digest("hex");
+  return createHash('sha256').update(value).digest('hex');
 }
 
 function defaultRun(
   command: string,
   args: readonly string[],
-  environment?: NodeJS.ProcessEnv
+  environment?: NodeJS.ProcessEnv,
 ): CommandResult {
   const result = spawnSync(command, [...args], {
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"],
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
     timeout: 25_000,
     ...(environment ? { env: environment } : {}),
   });
   return {
     status: result.status,
-    stdout: result.stdout ?? "",
-    stderr: result.stderr ?? result.error?.message ?? "",
+    stdout: result.stdout ?? '',
+    stderr: result.stderr ?? result.error?.message ?? '',
     signal: result.signal ?? null,
-    timedOut:
-      (result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT",
+    timedOut: (result.error as NodeJS.ErrnoException | undefined)?.code === 'ETIMEDOUT',
   };
 }
 
@@ -213,7 +212,7 @@ function field(details: string, name: string): string | null {
   const prefix = `${name}=`;
   return (
     details
-      .split("\n")
+      .split('\n')
       .find((line) => line.startsWith(prefix))
       ?.slice(prefix.length)
       .trim() ?? null
@@ -223,40 +222,28 @@ function field(details: string, name: string): string | null {
 function appleSignedExecutable(
   path: string,
   identifier: string,
-  run: RunCommand
+  run: RunCommand,
 ): { cdHash: string; details: string } | null {
-  const verification = run(DARWIN_CODESIGN_EXECUTABLE, [
-    "--verify",
-    "--strict",
-    path,
-  ]);
+  const verification = run(DARWIN_CODESIGN_EXECUTABLE, ['--verify', '--strict', path]);
   if (verification.status !== 0) return null;
-  const details = run(DARWIN_CODESIGN_EXECUTABLE, ["-dv", "--verbose=4", path]);
-  const authorities = details.stderr
-    .split("\n")
-    .filter((line) => line.startsWith("Authority="));
-  const cdHash = field(details.stderr, "CDHash");
+  const details = run(DARWIN_CODESIGN_EXECUTABLE, ['-dv', '--verbose=4', path]);
+  const authorities = details.stderr.split('\n').filter((line) => line.startsWith('Authority='));
+  const cdHash = field(details.stderr, 'CDHash');
   if (
     details.status !== 0 ||
-    field(details.stderr, "Identifier") !== identifier ||
-    !/^[a-f0-9]{40,64}$/.test(cdHash ?? "") ||
-    !DARWIN_PLATFORM_SIGNING_LEAF_AUTHORITIES.some((leaf) =>
-      authorities.includes(leaf)
-    ) ||
-    !authorities.includes(
-      "Authority=Apple Code Signing Certification Authority"
-    ) ||
-    !authorities.includes("Authority=Apple Root CA")
+    field(details.stderr, 'Identifier') !== identifier ||
+    !/^[a-f0-9]{40,64}$/.test(cdHash ?? '') ||
+    !DARWIN_PLATFORM_SIGNING_LEAF_AUTHORITIES.some((leaf) => authorities.includes(leaf)) ||
+    !authorities.includes('Authority=Apple Code Signing Certification Authority') ||
+    !authorities.includes('Authority=Apple Root CA')
   ) {
     return null;
   }
   return { cdHash: cdHash!, details: details.stderr };
 }
 
-function verifiedSandboxExecutable(
-  dependencies: ManagedMetroEnforcementDependencies
-): {
-  path: "/usr/bin/sandbox-exec";
+function verifiedSandboxExecutable(dependencies: ManagedMetroEnforcementDependencies): {
+  path: '/usr/bin/sandbox-exec';
   sha256: string;
   cdHash: string;
 } | null {
@@ -267,23 +254,16 @@ function verifiedSandboxExecutable(
   const run = dependencies.run ?? defaultRun;
   try {
     if (!exists(DARWIN_SANDBOX_EXECUTABLE)) return null;
-    if (canonicalize(DARWIN_SANDBOX_EXECUTABLE) !== DARWIN_SANDBOX_EXECUTABLE)
-      return null;
+    if (canonicalize(DARWIN_SANDBOX_EXECUTABLE) !== DARWIN_SANDBOX_EXECUTABLE) return null;
     const metadata = stat(DARWIN_SANDBOX_EXECUTABLE);
-    if (
-      !metadata.isFile() ||
-      metadata.uid !== 0 ||
-      (metadata.mode & 0o022) !== 0
-    )
-      return null;
+    if (!metadata.isFile() || metadata.uid !== 0 || (metadata.mode & 0o022) !== 0) return null;
     const signature = appleSignedExecutable(
       DARWIN_SANDBOX_EXECUTABLE,
-      "com.apple.sandbox-exec",
-      run
+      'com.apple.sandbox-exec',
+      run,
     );
     if (!signature) return null;
-    if (!/^\d+$/.test(field(signature.details, "Platform identifier") ?? ""))
-      return null;
+    if (!/^\d+$/.test(field(signature.details, 'Platform identifier') ?? '')) return null;
     return {
       path: DARWIN_SANDBOX_EXECUTABLE,
       sha256: sha256(readBytes(DARWIN_SANDBOX_EXECUTABLE)),
@@ -294,62 +274,44 @@ function verifiedSandboxExecutable(
   }
 }
 
-function signingIdentity(
-  path: string,
-  run: RunCommand
-): ManagedMetroSigningIdentity | null {
-  const verification = run(DARWIN_CODESIGN_EXECUTABLE, [
-    "--verify",
-    "--strict",
-    path,
-  ]);
+function signingIdentity(path: string, run: RunCommand): ManagedMetroSigningIdentity | null {
+  const verification = run(DARWIN_CODESIGN_EXECUTABLE, ['--verify', '--strict', path]);
   if (verification.status !== 0) return null;
-  const details = run(DARWIN_CODESIGN_EXECUTABLE, ["-dv", "--verbose=4", path]);
-  const identifier = field(details.stderr, "Identifier");
-  const cdHash = field(details.stderr, "CDHash");
-  if (
-    details.status !== 0 ||
-    !identifier ||
-    !/^[a-f0-9]{40,64}$/.test(cdHash ?? "")
-  ) {
+  const details = run(DARWIN_CODESIGN_EXECUTABLE, ['-dv', '--verbose=4', path]);
+  const identifier = field(details.stderr, 'Identifier');
+  const cdHash = field(details.stderr, 'CDHash');
+  if (details.status !== 0 || !identifier || !/^[a-f0-9]{40,64}$/.test(cdHash ?? '')) {
     return null;
   }
   return {
     identifier,
     cdHash: cdHash!,
     authorities: details.stderr
-      .split("\n")
-      .filter((line) => line.startsWith("Authority="))
-      .map((line) => line.slice("Authority=".length))
+      .split('\n')
+      .filter((line) => line.startsWith('Authority='))
+      .map((line) => line.slice('Authority='.length))
       .sort(),
   };
 }
 
-function defaultRuntimeVersion(
-  nodeExecutable: string,
-  run: RunCommand
-): string {
-  const result = run(nodeExecutable, ["--version"]);
-  if (result.status !== 0) throw new Error("node version unavailable");
+function defaultRuntimeVersion(nodeExecutable: string, run: RunCommand): string {
+  const result = run(nodeExecutable, ['--version']);
+  if (result.status !== 0) throw new Error('node version unavailable');
   return result.stdout.trim();
 }
 
-function defaultRuntimeFiles(
-  nodeExecutable: string,
-  run: RunCommand
-): string[] {
-  const result = run("/usr/bin/otool", ["-L", nodeExecutable]);
-  if (result.status !== 0)
-    throw new Error("node runtime dependencies unavailable");
+function defaultRuntimeFiles(nodeExecutable: string, run: RunCommand): string[] {
+  const result = run('/usr/bin/otool', ['-L', nodeExecutable]);
+  if (result.status !== 0) throw new Error('node runtime dependencies unavailable');
   return result.stdout
-    .split("\n")
+    .split('\n')
     .slice(1)
     .map((line) => line.trim().split(/\s+\(/, 1)[0])
-    .filter((path) => path.startsWith("/"));
+    .filter((path) => path.startsWith('/'));
 }
 
 function defaultRuntimeCache(exists: (path: string) => boolean): string | null {
-  const architecture = process.arch === "arm64" ? "arm64e" : process.arch;
+  const architecture = process.arch === 'arm64' ? 'arm64e' : process.arch;
   return (
     [
       `/System/Volumes/Preboot/Cryptexes/OS/System/Library/dyld/dyld_shared_cache_${architecture}`,
@@ -360,14 +322,14 @@ function defaultRuntimeCache(exists: (path: string) => boolean): string | null {
 
 function attestRuntimeFile(
   path: string,
-  dependencies: ManagedMetroEnforcementDependencies
+  dependencies: ManagedMetroEnforcementDependencies,
 ): ManagedMetroRuntimeFileAttestation {
   const canonicalize = dependencies.canonicalize ?? realpathSync;
   const stat = dependencies.stat ?? statSync;
   const readBytes = dependencies.readBytes ?? readFileSync;
   const run = dependencies.run ?? defaultRun;
   const canonical = canonicalize(path);
-  if (!stat(canonical).isFile()) throw new Error("runtime input is not a file");
+  if (!stat(canonical).isFile()) throw new Error('runtime input is not a file');
   return {
     path: canonical,
     sha256: sha256(readBytes(canonical)),
@@ -378,7 +340,7 @@ function attestRuntimeFile(
 function attestNodeRuntime(
   input: ManagedMetroEnforcementInput,
   executableMappings: readonly string[],
-  dependencies: ManagedMetroEnforcementDependencies
+  dependencies: ManagedMetroEnforcementDependencies,
 ): ManagedMetroNodeRuntimeAttestation | null {
   const run = dependencies.run ?? defaultRun;
   const exists = dependencies.exists ?? existsSync;
@@ -390,31 +352,24 @@ function attestNodeRuntime(
     const executable = attestRuntimeFile(input.nodeExecutable, dependencies);
     const linkedRuntimePaths = [
       ...new Set(
-        dependencies.runtimeFiles?.(executable.path) ??
-          defaultRuntimeFiles(executable.path, run)
+        dependencies.runtimeFiles?.(executable.path) ?? defaultRuntimeFiles(executable.path, run),
       ),
     ].sort();
     if (linkedRuntimePaths.length === 0) return null;
-    const missingRuntimePaths = linkedRuntimePaths.filter(
-      (path) => !exists(path)
-    );
+    const missingRuntimePaths = linkedRuntimePaths.filter((path) => !exists(path));
     if (
       missingRuntimePaths.some(
-        (path) =>
-          !path.startsWith("/System/Library/") && !path.startsWith("/usr/lib/")
+        (path) => !path.startsWith('/System/Library/') && !path.startsWith('/usr/lib/'),
       )
     ) {
       return null;
     }
     const runtimeCachePath =
       missingRuntimePaths.length > 0
-        ? dependencies.runtimeCache?.() ?? defaultRuntimeCache(exists)
+        ? (dependencies.runtimeCache?.() ?? defaultRuntimeCache(exists))
         : null;
     if (missingRuntimePaths.length > 0 && !runtimeCachePath) return null;
-    const loadedRuntimeFiles = [
-      executable.path,
-      ...linkedRuntimePaths.filter(exists),
-    ]
+    const loadedRuntimeFiles = [executable.path, ...linkedRuntimePaths.filter(exists)]
       .sort()
       .map((path) => attestRuntimeFile(path, dependencies));
     const mappings = [...new Set(executableMappings)]
@@ -437,15 +392,11 @@ function attestNodeRuntime(
 }
 
 function sandboxString(value: string): string {
-  if (value.includes("\0"))
-    throw new Error("METRO_RUNTIME_ENFORCEMENT_PATH_INVALID");
+  if (value.includes('\0')) throw new Error('METRO_RUNTIME_ENFORCEMENT_PATH_INVALID');
   return JSON.stringify(value);
 }
 
-function canonicalPath(
-  path: string,
-  canonicalize: (path: string) => string
-): string {
+function canonicalPath(path: string, canonicalize: (path: string) => string): string {
   try {
     return canonicalize(path);
   } catch {
@@ -459,7 +410,7 @@ function pathFilters(paths: readonly string[]): string {
       `    (literal ${sandboxString(path)})`,
       `    (subpath ${sandboxString(path)})`,
     ])
-    .join("\n");
+    .join('\n');
 }
 
 function ownedCssInteropCacheRoot(
@@ -471,34 +422,28 @@ function ownedCssInteropCacheRoot(
     protectedRuntimeRoots: readonly string[];
   },
   canonicalize: (path: string) => string,
-  lstat: (path: string) => { isSymbolicLink(): boolean }
+  lstat: (path: string) => { isSymbolicLink(): boolean },
 ): string | null {
   if (!candidate) return null;
   const packageRoot = dirname(candidate);
   const overlaps = (a: string, b: string) =>
     a === b || a.startsWith(`${b}/`) || b.startsWith(`${a}/`);
   try {
-    if (basename(candidate) !== ".cache") return null;
-    if (basename(packageRoot) !== "react-native-css-interop") return null;
+    if (basename(candidate) !== '.cache') return null;
+    if (basename(packageRoot) !== 'react-native-css-interop') return null;
     if (canonicalize(packageRoot) !== packageRoot) return null;
-    if (
-      ![owner.sourceRoot, owner.appRoot].some((root) =>
-        packageRoot.startsWith(`${root}/`)
-      )
-    ) {
+    if (![owner.sourceRoot, owner.appRoot].some((root) => packageRoot.startsWith(`${root}/`))) {
       return null;
     }
     if (
-      [owner.runtimeRoot, ...owner.protectedRuntimeRoots].some((root) =>
-        overlaps(candidate, root)
-      )
+      [owner.runtimeRoot, ...owner.protectedRuntimeRoots].some((root) => overlaps(candidate, root))
     ) {
       return null;
     }
     try {
       if (lstat(candidate).isSymbolicLink()) return null;
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") return null;
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return null;
     }
     return candidate;
   } catch {
@@ -509,13 +454,13 @@ function ownedCssInteropCacheRoot(
 export function dependencyRoots(
   appRoot: string,
   sourceRoot: string,
-  exists: (path: string) => boolean
+  exists: (path: string) => boolean,
 ): string[] {
   const roots = new Set<string>();
   for (const start of [resolve(appRoot), resolve(sourceRoot)]) {
     let current = start;
     while (true) {
-      const candidate = join(current, "node_modules");
+      const candidate = join(current, 'node_modules');
       if (exists(candidate)) roots.add(candidate);
       const parent = dirname(current);
       if (parent === current) break;
@@ -523,9 +468,9 @@ export function dependencyRoots(
     }
   }
   for (const candidate of [
-    join(sourceRoot, ".yarn", "cache"),
-    join(sourceRoot, ".yarn", "unplugged"),
-    join(sourceRoot, ".pnpm"),
+    join(sourceRoot, '.yarn', 'cache'),
+    join(sourceRoot, '.yarn', 'unplugged'),
+    join(sourceRoot, '.pnpm'),
   ]) {
     if (exists(candidate)) roots.add(resolve(candidate));
   }
@@ -537,38 +482,30 @@ function contained(path: string, roots: readonly string[]): boolean {
 }
 
 function defaultResolveFrom(root: string, specifier: string): string {
-  return createRequire(resolve(root, "package.json")).resolve(specifier);
+  return createRequire(resolve(root, 'package.json')).resolve(specifier);
 }
 
 function resolvedExpoUpdatesCli(
   roots: readonly string[],
   resolveFrom: (root: string, specifier: string) => string,
-  canonicalize: (path: string) => string
+  canonicalize: (path: string) => string,
 ): string | null {
   for (const root of roots) {
     try {
-      return canonicalPath(
-        resolveFrom(root, EXPO_UPDATES_CLI_SPECIFIER),
-        canonicalize
-      );
+      return canonicalPath(resolveFrom(root, EXPO_UPDATES_CLI_SPECIFIER), canonicalize);
     } catch {}
   }
   return null;
 }
 
 type DeveloperGit =
-  | { git: string; outcome: "admitted" }
+  | { git: string; outcome: 'admitted' }
   | {
       git: null;
-      outcome:
-        | "developer-dir-unavailable"
-        | "developer-git-untrusted"
-        | "developer-git-unsigned";
+      outcome: 'developer-dir-unavailable' | 'developer-git-untrusted' | 'developer-git-unsigned';
     };
 
-function verifiedDeveloperGit(
-  dependencies: ManagedMetroEnforcementDependencies
-): DeveloperGit {
+function verifiedDeveloperGit(dependencies: ManagedMetroEnforcementDependencies): DeveloperGit {
   const run = dependencies.run ?? defaultRun;
   const canonicalize = dependencies.canonicalize ?? realpathSync;
   const stat = dependencies.stat ?? statSync;
@@ -576,73 +513,63 @@ function verifiedDeveloperGit(
   try {
     const developerDir = run(
       DARWIN_DEVELOPER_DIR_EXECUTABLE,
-      ["-p"],
-      DARWIN_UTILITY_PROBE_ENVIRONMENT
+      ['-p'],
+      DARWIN_UTILITY_PROBE_ENVIRONMENT,
     );
     const root = developerDir.stdout.trim();
-    if (developerDir.status !== 0 || !root.startsWith("/")) {
-      return { git: null, outcome: "developer-dir-unavailable" };
+    if (developerDir.status !== 0 || !root.startsWith('/')) {
+      return { git: null, outcome: 'developer-dir-unavailable' };
     }
-    git = canonicalize(resolve(root, "usr/bin/git"));
-    if (!git.startsWith("/"))
-      return { git: null, outcome: "developer-dir-unavailable" };
+    git = canonicalize(resolve(root, 'usr/bin/git'));
+    if (!git.startsWith('/')) return { git: null, outcome: 'developer-dir-unavailable' };
   } catch {
-    return { git: null, outcome: "developer-dir-unavailable" };
+    return { git: null, outcome: 'developer-dir-unavailable' };
   }
   try {
     const metadata = stat(git);
-    if (
-      !metadata.isFile() ||
-      metadata.uid !== 0 ||
-      (metadata.mode & 0o022) !== 0
-    ) {
-      return { git: null, outcome: "developer-git-untrusted" };
+    if (!metadata.isFile() || metadata.uid !== 0 || (metadata.mode & 0o022) !== 0) {
+      return { git: null, outcome: 'developer-git-untrusted' };
     }
   } catch {
-    return { git: null, outcome: "developer-git-untrusted" };
+    return { git: null, outcome: 'developer-git-untrusted' };
   }
   if (!appleSignedExecutable(git, DARWIN_GIT_SIGNING_IDENTIFIER, run)) {
-    return { git: null, outcome: "developer-git-unsigned" };
+    return { git: null, outcome: 'developer-git-unsigned' };
   }
-  return { git, outcome: "admitted" };
+  return { git, outcome: 'admitted' };
 }
 
 function gitRepositoryRoots(
   sourceRoot: string,
   canonicalize: (path: string) => string,
   stat: (path: string) => FileMetadata,
-  readBytes: (path: string) => Buffer
+  readBytes: (path: string) => Buffer,
 ): string[] {
   const roots: string[] = [];
-  const pointer = resolve(sourceRoot, ".git");
+  const pointer = resolve(sourceRoot, '.git');
   try {
     if (!stat(pointer).isFile()) return roots;
-    const gitDirEntry = /^gitdir:[ \t]*(.+)$/m.exec(
-      readBytes(pointer).toString("utf8")
-    )?.[1];
+    const gitDirEntry = /^gitdir:[ \t]*(.+)$/m.exec(readBytes(pointer).toString('utf8'))?.[1];
     if (!gitDirEntry) return roots;
     const gitDir = canonicalize(resolve(sourceRoot, gitDirEntry.trim()));
     roots.push(gitDir);
-    const commonEntry = readBytes(resolve(gitDir, "commondir"))
-      .toString("utf8")
-      .trim();
+    const commonEntry = readBytes(resolve(gitDir, 'commondir')).toString('utf8').trim();
     if (commonEntry) roots.push(canonicalize(resolve(gitDir, commonEntry)));
   } catch {}
   return roots.filter((root) => !contained(root, [sourceRoot]));
 }
 
 function unadmittedManifestUtility(
-  outcome: Exclude<ManagedMetroManifestUtilityOutcome, "admitted">
+  outcome: Exclude<ManagedMetroManifestUtilityOutcome, 'admitted'>,
 ): ManagedMetroManifestUtility {
   return { outcome, expoUpdatesCli: null, git: null, gitRepositoryRoots: [] };
 }
 
 export function resolveManagedMetroManifestUtility(
   input: { platform: NodeJS.Platform; appRoot: string; sourceRoot: string },
-  dependencies: ManagedMetroEnforcementDependencies = {}
+  dependencies: ManagedMetroEnforcementDependencies = {},
 ): ManagedMetroManifestUtility {
-  if (input.platform !== "darwin")
-    return unadmittedManifestUtility("host-unsupported");
+  if (input.platform !== 'darwin') return unadmittedManifestUtility('host-unsupported');
   const canonicalize = dependencies.canonicalize ?? realpathSync;
   const appRoot = canonicalPath(input.appRoot, canonicalize);
   const sourceRoot = canonicalPath(input.sourceRoot, canonicalize);
@@ -650,20 +577,17 @@ export function resolveManagedMetroManifestUtility(
   const expoUpdatesCli = resolvedExpoUpdatesCli(
     projectRoots,
     dependencies.resolveFrom ?? defaultResolveFrom,
-    canonicalize
+    canonicalize,
   );
-  if (!expoUpdatesCli)
-    return unadmittedManifestUtility("expo-updates-cli-unresolved");
+  if (!expoUpdatesCli) return unadmittedManifestUtility('expo-updates-cli-unresolved');
   const ownerRoots = [
     ...projectRoots,
-    ...dependencyRoots(
-      appRoot,
-      sourceRoot,
-      dependencies.exists ?? existsSync
-    ).map((root) => canonicalPath(root, canonicalize)),
+    ...dependencyRoots(appRoot, sourceRoot, dependencies.exists ?? existsSync).map((root) =>
+      canonicalPath(root, canonicalize),
+    ),
   ];
   if (!contained(expoUpdatesCli, ownerRoots)) {
-    return unadmittedManifestUtility("expo-updates-cli-unowned");
+    return unadmittedManifestUtility('expo-updates-cli-unowned');
   }
   const developerGit = verifiedDeveloperGit(dependencies);
   return {
@@ -675,7 +599,7 @@ export function resolveManagedMetroManifestUtility(
           sourceRoot,
           canonicalize,
           dependencies.stat ?? statSync,
-          dependencies.readBytes ?? readFileSync
+          dependencies.readBytes ?? readFileSync,
         )
       : [],
   };
@@ -695,9 +619,7 @@ function managedMetroSandboxProfile(input: {
   const executablePaths = [...new Set(input.executablePaths)].sort();
   const executableMapPaths = [...new Set(input.executableMapPaths)].sort();
   const nativeAddonRoots = [...new Set(input.nativeAddonRoots)].sort();
-  const protectedRuntimeRoots = [
-    ...new Set(input.protectedRuntimeRoots),
-  ].sort();
+  const protectedRuntimeRoots = [...new Set(input.protectedRuntimeRoots)].sort();
   const pathAncestors = [...new Set([...readRoots, ...writeRoots])].sort();
   return `(version 1)
 (deny default)
@@ -708,34 +630,28 @@ function managedMetroSandboxProfile(input: {
 (allow mach-lookup
     (global-name "com.apple.FSEvents"))
 (allow file-map-executable
-${executableMapPaths
-  .map((path) => `    (literal ${sandboxString(path)})`)
-  .join("\n")})
+${executableMapPaths.map((path) => `    (literal ${sandboxString(path)})`).join('\n')})
 (allow file-map-executable
 ${nativeAddonRoots
   .map(
     (path) => `    (require-all
       (subpath ${sandboxString(path)})
-      (extension "node"))`
+      (extension "node"))`,
   )
-  .join("\n")})
+  .join('\n')})
 (allow process-exec
-${executablePaths
-  .map((path) => `    (literal ${sandboxString(path)})`)
-  .join("\n")})
+${executablePaths.map((path) => `    (literal ${sandboxString(path)})`).join('\n')})
 (allow file-read* file-test-existence
 ${pathFilters(readRoots)})
 (allow file-read-metadata file-test-existence
-${pathAncestors
-  .map((path) => `    (path-ancestors ${sandboxString(path)})`)
-  .join("\n")})
+${pathAncestors.map((path) => `    (path-ancestors ${sandboxString(path)})`).join('\n')})
 (allow file-write* file-test-existence
 ${pathFilters(writeRoots)})
 ${
   protectedRuntimeRoots.length > 0
     ? `(deny file-write*
 ${pathFilters(protectedRuntimeRoots)})`
-    : ""
+    : ''
 }
 (allow network-bind
     (local tcp ${sandboxString(`*:${input.port}`)}))
@@ -746,69 +662,55 @@ ${pathFilters(protectedRuntimeRoots)})`
 
 export function prepareManagedMetroEnforcement(
   input: ManagedMetroEnforcementInput,
-  dependencies: ManagedMetroEnforcementDependencies = {}
+  dependencies: ManagedMetroEnforcementDependencies = {},
 ): ManagedMetroEnforcement {
-  if (input.platform !== "darwin") {
-    return { status: "unsupported", reason: "host-enforcement-unavailable" };
+  if (input.platform !== 'darwin') {
+    return { status: 'unsupported', reason: 'host-enforcement-unavailable' };
   }
   const sandbox = verifiedSandboxExecutable(dependencies);
   if (!sandbox) {
-    return { status: "unsupported", reason: "sandbox-executable-unverified" };
+    return { status: 'unsupported', reason: 'sandbox-executable-unverified' };
   }
   const canonicalize = dependencies.canonicalize ?? realpathSync;
   const sourceRoot = canonicalPath(input.sourceRoot, canonicalize);
   const appRoot = canonicalPath(input.appRoot, canonicalize);
   const runtimeRoot = canonicalPath(input.runtimeRoot, canonicalize);
   const nodeExecutable = canonicalPath(input.nodeExecutable, canonicalize);
-  const commandExecutable = canonicalPath(
-    input.commandExecutable,
-    canonicalize
-  );
+  const commandExecutable = canonicalPath(input.commandExecutable, canonicalize);
   const commandArguments = [...(input.commandArguments ?? [])];
-  const commandExecutableMappings = (input.commandExecutableMappings ?? []).map(
-    (path) => canonicalPath(path, canonicalize)
+  const commandExecutableMappings = (input.commandExecutableMappings ?? []).map((path) =>
+    canonicalPath(path, canonicalize),
   );
   const commandChainInputs = (input.commandChainInputs ?? []).map((path) =>
-    canonicalPath(path, canonicalize)
+    canonicalPath(path, canonicalize),
   );
-  const protectedRuntimeRoots = (input.protectedRuntimeRoots ?? []).map(
-    (path) => canonicalPath(path, canonicalize)
+  const protectedRuntimeRoots = (input.protectedRuntimeRoots ?? []).map((path) =>
+    canonicalPath(path, canonicalize),
   );
-  const nativeAddonRoots = (
-    input.nativeAddonRoots ?? [sourceRoot, appRoot]
-  ).map((path) => canonicalPath(path, canonicalize));
-  const runtimeInputs = input.runtimeInputs.map((path) =>
-    canonicalPath(path, canonicalize)
+  const nativeAddonRoots = (input.nativeAddonRoots ?? [sourceRoot, appRoot]).map((path) =>
+    canonicalPath(path, canonicalize),
   );
-  const expoStateRoot = resolve(appRoot, ".expo");
+  const runtimeInputs = input.runtimeInputs.map((path) => canonicalPath(path, canonicalize));
+  const expoStateRoot = resolve(appRoot, '.expo');
   const cssInteropCacheRoot = ownedCssInteropCacheRoot(
     input.cssInteropCacheRoot,
     { sourceRoot, appRoot, runtimeRoot, protectedRuntimeRoots },
     canonicalize,
-    dependencies.lstat ?? lstatSync
+    dependencies.lstat ?? lstatSync,
   );
   const manifestUtility = resolveManagedMetroManifestUtility(
     { platform: input.platform, appRoot, sourceRoot },
-    dependencies
+    dependencies,
   );
-  const manifestUtilityExecutables = [
-    manifestUtility.expoUpdatesCli,
-    manifestUtility.git,
-  ].filter((path): path is string => path !== null);
+  const manifestUtilityExecutables = [manifestUtility.expoUpdatesCli, manifestUtility.git].filter(
+    (path): path is string => path !== null,
+  );
   // NOTE: every git invocation, including rev-parse and check-ignore, reads this system config.
   const manifestUtilityReadRoots = manifestUtility.git
-    ? [
-        resolve(
-          dirname(manifestUtility.git),
-          "..",
-          "share",
-          "git-core",
-          "gitconfig"
-        ),
-      ]
+    ? [resolve(dirname(manifestUtility.git), '..', 'share', 'git-core', 'gitconfig')]
     : [];
   const readRoots = [
-    "/dev/fd",
+    '/dev/fd',
     sourceRoot,
     appRoot,
     runtimeRoot,
@@ -825,7 +727,7 @@ export function prepareManagedMetroEnforcement(
     nodeExecutable,
     commandExecutable,
     ...commandExecutableMappings,
-    "/usr/bin/env",
+    '/usr/bin/env',
     ...manifestUtilityExecutables,
   ];
   const nodeRuntimeAttestation = attestNodeRuntime(
@@ -836,10 +738,10 @@ export function prepareManagedMetroEnforcement(
       runtimeInputs,
     },
     executablePaths,
-    dependencies
+    dependencies,
   );
   if (!nodeRuntimeAttestation) {
-    return { status: "unsupported", reason: "node-runtime-unverified" };
+    return { status: 'unsupported', reason: 'node-runtime-unverified' };
   }
   let commandChainAttestation: ManagedMetroRuntimeFileAttestation[];
   try {
@@ -847,15 +749,11 @@ export function prepareManagedMetroEnforcement(
       .sort()
       .map((path) => attestRuntimeFile(path, dependencies));
   } catch {
-    return { status: "unsupported", reason: "node-runtime-unverified" };
+    return { status: 'unsupported', reason: 'node-runtime-unverified' };
   }
   const profile = managedMetroSandboxProfile({
     readRoots,
-    writeRoots: [
-      runtimeRoot,
-      expoStateRoot,
-      ...(cssInteropCacheRoot ? [cssInteropCacheRoot] : []),
-    ],
+    writeRoots: [runtimeRoot, expoStateRoot, ...(cssInteropCacheRoot ? [cssInteropCacheRoot] : [])],
     executablePaths,
     executableMapPaths: [
       ...nodeRuntimeAttestation.loadedRuntimeFiles.map((entry) => entry.path),
@@ -867,8 +765,8 @@ export function prepareManagedMetroEnforcement(
   });
   const canaryId = sha256(`${input.instanceId}\0${input.port}`).slice(0, 32);
   return {
-    status: "enforced",
-    kind: "darwin-seatbelt-v2",
+    status: 'enforced',
+    kind: 'darwin-seatbelt-v2',
     sandboxExecutable: sandbox.path,
     sandboxExecutableSha256: sandbox.sha256,
     sandboxExecutableCdHash: sandbox.cdHash,
@@ -876,13 +774,13 @@ export function prepareManagedMetroEnforcement(
       canonicalAuthorityJson({
         executable: commandExecutable,
         arguments: commandArguments,
-      })
+      }),
     ),
     resolvedCommandSha256: sha256(
       canonicalAuthorityJson({
         executable: commandExecutable,
         arguments: commandArguments,
-      })
+      }),
     ),
     profile,
     profileSha256: sha256(profile),
@@ -897,11 +795,8 @@ export function prepareManagedMetroEnforcement(
     appRoot,
     commandExecutable,
     commandArguments,
-    baseNodeOptions: input.baseNodeOptions ?? "",
-    preflightEnvironmentPath: resolve(
-      runtimeRoot,
-      `preflight-environment-${canaryId}.json`
-    ),
+    baseNodeOptions: input.baseNodeOptions ?? '',
+    preflightEnvironmentPath: resolve(runtimeRoot, `preflight-environment-${canaryId}.json`),
     nodeRuntimeAttestation,
     commandChainAttestation,
   };
@@ -909,39 +804,29 @@ export function prepareManagedMetroEnforcement(
 
 function preflightDiagnosticCauses(value: unknown): string[] {
   const codes = [
-    "EPERM",
-    "EADDRINUSE",
-    "EADDRNOTAVAIL",
-    "EACCES",
-    "EMFILE",
-    "ENFILE",
-    "ENOMEM",
-    "ENOSPC",
-    "EPIPE",
+    'EPERM',
+    'EADDRINUSE',
+    'EADDRNOTAVAIL',
+    'EACCES',
+    'EMFILE',
+    'ENFILE',
+    'ENOMEM',
+    'ENOSPC',
+    'EPIPE',
   ];
-  const categories = [
-    ...codes,
-    "RN_DEV_AGENT",
-    "NODE_RUNTIME",
-    "OUT_OF_MEMORY",
-  ];
+  const categories = [...codes, 'RN_DEV_AGENT', 'NODE_RUNTIME', 'OUT_OF_MEMORY'];
   if (Array.isArray(value)) {
     const bounded = value.slice(0, 16);
-    const observed = categories.filter((category) =>
-      bounded.includes(category)
-    );
-    return observed.length > 0 ? observed : ["unknown"];
+    const observed = categories.filter((category) => bounded.includes(category));
+    return observed.length > 0 ? observed : ['unknown'];
   }
-  if (typeof value !== "string") return ["unknown"];
+  if (typeof value !== 'string') return ['unknown'];
   const window = value.slice(-65_536);
-  const observed = codes.filter((code) =>
-    new RegExp("\\b" + code + "\\b").test(window)
-  );
-  if (/\bRN_DEV_AGENT_[A-Z0-9_]+\b/.test(window)) observed.push("RN_DEV_AGENT");
-  if (/\bNode\.js v\d+\.\d+\.\d+\b/.test(window)) observed.push("NODE_RUNTIME");
-  if (/\bJavaScript heap out of memory\b/.test(window))
-    observed.push("OUT_OF_MEMORY");
-  return observed.length > 0 ? observed : ["unknown"];
+  const observed = codes.filter((code) => new RegExp('\\b' + code + '\\b').test(window));
+  if (/\bRN_DEV_AGENT_[A-Z0-9_]+\b/.test(window)) observed.push('RN_DEV_AGENT');
+  if (/\bNode\.js v\d+\.\d+\.\d+\b/.test(window)) observed.push('NODE_RUNTIME');
+  if (/\bJavaScript heap out of memory\b/.test(window)) observed.push('OUT_OF_MEMORY');
+  return observed.length > 0 ? observed : ['unknown'];
 }
 
 const PREFLIGHT_SOURCE = String.raw`
@@ -1182,43 +1067,39 @@ const processGroupExists = (pid) => {
 `;
 
 const PREFLIGHT_FLAGS = [
-  "descendantCreationAllowed",
-  "unauthorizedExecutableDenied",
-  "unmanifestedReadDenied",
-  "unmanifestedWriteDenied",
-  "symlinkEscapeDenied",
-  "unallocatedListenerDenied",
-  "allocatedListenerAllowed",
-  "networkOutboundDenied",
-  "resolvedCommandAllowed",
-  "commandCleanupConfirmed",
-  "commandChainStable",
+  'descendantCreationAllowed',
+  'unauthorizedExecutableDenied',
+  'unmanifestedReadDenied',
+  'unmanifestedWriteDenied',
+  'symlinkEscapeDenied',
+  'unallocatedListenerDenied',
+  'allocatedListenerAllowed',
+  'networkOutboundDenied',
+  'resolvedCommandAllowed',
+  'commandCleanupConfirmed',
+  'commandChainStable',
 ] as const;
 
 const PREFLIGHT_TIMINGS = [
-  "allocatedMs",
-  "spawnedMs",
-  "occupancyMs",
-  "cleanupMs",
-  "totalMs",
+  'allocatedMs',
+  'spawnedMs',
+  'occupancyMs',
+  'cleanupMs',
+  'totalMs',
 ] as const;
 
 function diagnosticSignal(value: unknown): string | null {
   if (value === null || value === undefined) return null;
-  return typeof value === "string" && Object.hasOwn(osConstants.signals, value)
-    ? value
-    : "unknown";
+  return typeof value === 'string' && Object.hasOwn(osConstants.signals, value) ? value : 'unknown';
 }
 
 function diagnosticExitCode(value: unknown): number | null {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
-    ? value
-    : null;
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : null;
 }
 
 export interface ManagedMetroPreflightObservation {
   version: 1;
-  outcome: "receipt" | "incomplete" | "failed" | "invalid";
+  outcome: 'receipt' | 'incomplete' | 'failed' | 'invalid';
   complete: boolean;
   status: number | null;
   signal: string | null;
@@ -1233,7 +1114,7 @@ export interface ManagedMetroPreflightObservation {
   } | null;
   commandCauses: string[];
   preflightCauses: string[];
-  exceptionCause: "unknown" | null;
+  exceptionCause: 'unknown' | null;
 }
 
 interface ManagedMetroPreflightDependencies {
@@ -1246,54 +1127,48 @@ interface ManagedMetroPreflightDependencies {
 
 function preflightObservation(
   result: CommandResult,
-  elapsedMs: number
+  elapsedMs: number,
 ): ManagedMetroPreflightObservation {
   let parsed: Record<string, unknown> | null = null;
   try {
-    parsed = result.stdout
-      ? (JSON.parse(result.stdout) as Record<string, unknown>)
-      : null;
+    parsed = result.stdout ? (JSON.parse(result.stdout) as Record<string, unknown>) : null;
   } catch {
     parsed = null;
   }
   const flags =
-    parsed && PREFLIGHT_FLAGS.every((flag) => typeof parsed[flag] === "boolean")
+    parsed && PREFLIGHT_FLAGS.every((flag) => typeof parsed[flag] === 'boolean')
       ? (Object.fromEntries(
-          PREFLIGHT_FLAGS.map((flag) => [flag, parsed[flag] as boolean])
-        ) as ManagedMetroPreflightObservation["flags"])
+          PREFLIGHT_FLAGS.map((flag) => [flag, parsed[flag] as boolean]),
+        ) as ManagedMetroPreflightObservation['flags'])
       : null;
   const diagnostic =
-    parsed && parsed.diagnostic && typeof parsed.diagnostic === "object"
+    parsed && parsed.diagnostic && typeof parsed.diagnostic === 'object'
       ? (parsed.diagnostic as Record<string, unknown>)
       : null;
   const timings =
-    diagnostic && diagnostic.timings && typeof diagnostic.timings === "object"
+    diagnostic && diagnostic.timings && typeof diagnostic.timings === 'object'
       ? Object.fromEntries(
           PREFLIGHT_TIMINGS.map((name) => [
             name,
             (diagnostic.timings as Record<string, unknown>)[name],
           ]).filter(
             (entry): entry is [string, number] =>
-              typeof entry[1] === "number" &&
-              Number.isFinite(entry[1]) &&
-              entry[1] >= 0
-          )
+              typeof entry[1] === 'number' && Number.isFinite(entry[1]) && entry[1] >= 0,
+          ),
         )
       : null;
   const exit =
-    diagnostic &&
-    diagnostic.commandExit &&
-    typeof diagnostic.commandExit === "object"
+    diagnostic && diagnostic.commandExit && typeof diagnostic.commandExit === 'object'
       ? (diagnostic.commandExit as Record<string, unknown>)
       : null;
   return {
     version: 1,
     outcome:
       result.status !== 0
-        ? "failed"
+        ? 'failed'
         : flags && PREFLIGHT_FLAGS.every((flag) => flags[flag])
-        ? "receipt"
-        : "incomplete",
+          ? 'receipt'
+          : 'incomplete',
     complete:
       result.status !== null &&
       result.timedOut !== true &&
@@ -1311,33 +1186,28 @@ function preflightObservation(
           code: diagnosticExitCode(exit.code),
           signal: diagnosticSignal(exit.signal),
           atMs:
-            typeof exit.atMs === "number" &&
-            Number.isFinite(exit.atMs) &&
-            exit.atMs >= 0
+            typeof exit.atMs === 'number' && Number.isFinite(exit.atMs) && exit.atMs >= 0
               ? exit.atMs
               : -1,
         }
       : null,
     commandCauses: preflightDiagnosticCauses(diagnostic?.commandCauses),
     preflightCauses: preflightDiagnosticCauses(result.stderr),
-    exceptionCause: diagnostic?.exceptionCause == null ? null : "unknown",
+    exceptionCause: diagnostic?.exceptionCause == null ? null : 'unknown',
   };
 }
 
 export function runManagedMetroEnforcementPreflight(
   plan: ManagedMetroEnforcementPlan,
-  dependencies: ManagedMetroPreflightDependencies = {}
+  dependencies: ManagedMetroPreflightDependencies = {},
 ): ManagedMetroEnforcementReceipt {
   const writeCanary =
     dependencies.writeCanary ??
     ((path: string, contents: string) => {
       const descriptor = openSync(
         path,
-        constants.O_WRONLY |
-          constants.O_CREAT |
-          constants.O_EXCL |
-          (constants.O_NOFOLLOW ?? 0),
-        0o600
+        constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0),
+        0o600,
       );
       try {
         writeSync(descriptor, contents);
@@ -1346,12 +1216,9 @@ export function runManagedMetroEnforcementPreflight(
       }
     });
   const removeCanary =
-    dependencies.removeCanary ??
-    ((path: string) => rmSync(path, { force: true }));
+    dependencies.removeCanary ?? ((path: string) => rmSync(path, { force: true }));
   const run = dependencies.run ?? defaultRun;
-  const observe = (
-    createObservation: () => ManagedMetroPreflightObservation
-  ) => {
+  const observe = (createObservation: () => ManagedMetroPreflightObservation) => {
     try {
       dependencies.observe?.(createObservation());
     } catch {}
@@ -1362,29 +1229,26 @@ export function runManagedMetroEnforcementPreflight(
   let environmentCreated = false;
   let symlinkCreated = false;
   try {
-    writeCanary(plan.canaryPath, "rn-dev-agent sandbox canary");
+    writeCanary(plan.canaryPath, 'rn-dev-agent sandbox canary');
     canaryCreated = true;
     mkdirSync(dirname(plan.preflightEnvironmentPath), { recursive: true });
     const preflightEnvironment = Object.fromEntries(
-      Object.entries(dependencies.environment ?? process.env)
+      Object.entries(dependencies.environment ?? process.env),
     );
     preflightEnvironment.NODE_OPTIONS = plan.baseNodeOptions;
     delete preflightEnvironment.RN_DEV_AGENT_METRO_EVIDENCE_FD;
     delete preflightEnvironment.RN_DEV_AGENT_METRO_NATIVE_ADDON_ACK_ROOT;
-    writeCanary(
-      plan.preflightEnvironmentPath,
-      canonicalAuthorityJson(preflightEnvironment)
-    );
+    writeCanary(plan.preflightEnvironmentPath, canonicalAuthorityJson(preflightEnvironment));
     environmentCreated = true;
     mkdirSync(dirname(plan.symlinkCanaryPath), { recursive: true });
     rmSync(plan.symlinkCanaryPath, { force: true });
     symlinkSync(plan.canaryPath, plan.symlinkCanaryPath);
     symlinkCreated = true;
     const result = run(plan.sandboxExecutable, [
-      "-p",
+      '-p',
       plan.profile,
       plan.nodeExecutable,
-      "-e",
+      '-e',
       PREFLIGHT_SOURCE,
       JSON.stringify({
         canaryPath: plan.canaryPath,
@@ -1400,13 +1264,9 @@ export function runManagedMetroEnforcementPreflight(
       }),
     ]);
     observationEmitted = true;
-    observe(() =>
-      preflightObservation(result, Math.round(performance.now() - startedAt))
-    );
+    observe(() => preflightObservation(result, Math.round(performance.now() - startedAt)));
     if (result.status !== 0) {
-      throw new Error(
-        "METRO_RUNTIME_ENFORCEMENT_UNAVAILABLE: sandbox preflight failed"
-      );
+      throw new Error('METRO_RUNTIME_ENFORCEMENT_UNAVAILABLE: sandbox preflight failed');
     }
     const observed = JSON.parse(result.stdout) as Record<string, unknown>;
     if (
@@ -1422,9 +1282,7 @@ export function runManagedMetroEnforcementPreflight(
       observed.commandCleanupConfirmed !== true ||
       observed.commandChainStable !== true
     ) {
-      throw new Error(
-        "METRO_RUNTIME_ENFORCEMENT_UNAVAILABLE: sandbox preflight is incomplete"
-      );
+      throw new Error('METRO_RUNTIME_ENFORCEMENT_UNAVAILABLE: sandbox preflight is incomplete');
     }
     return {
       version: 2,
@@ -1454,7 +1312,7 @@ export function runManagedMetroEnforcementPreflight(
       observationEmitted = true;
       observe(() => ({
         version: 1,
-        outcome: "invalid",
+        outcome: 'invalid',
         complete: false,
         status: null,
         signal: null,
@@ -1463,23 +1321,17 @@ export function runManagedMetroEnforcementPreflight(
         flags: null,
         timings: null,
         commandExit: null,
-        commandCauses: ["unknown"],
-        preflightCauses: ["unknown"],
-        exceptionCause: "unknown",
+        commandCauses: ['unknown'],
+        preflightCauses: ['unknown'],
+        exceptionCause: 'unknown',
       }));
     }
-    if (
-      error instanceof Error &&
-      error.message.startsWith("METRO_RUNTIME_ENFORCEMENT_")
-    ) {
+    if (error instanceof Error && error.message.startsWith('METRO_RUNTIME_ENFORCEMENT_')) {
       throw error;
     }
-    throw new Error(
-      "METRO_RUNTIME_ENFORCEMENT_UNAVAILABLE: sandbox preflight is invalid",
-      {
-        cause: error,
-      }
-    );
+    throw new Error('METRO_RUNTIME_ENFORCEMENT_UNAVAILABLE: sandbox preflight is invalid', {
+      cause: error,
+    });
   } finally {
     try {
       rmSync(plan.commandStderrPath, { force: true });
@@ -1493,13 +1345,13 @@ export function runManagedMetroEnforcementPreflight(
 export function verifyManagedMetroEnforcementReceipt(
   input: ManagedMetroEnforcementInput,
   receipt: unknown,
-  dependencies: ManagedMetroEnforcementDependencies = {}
+  dependencies: ManagedMetroEnforcementDependencies = {},
 ): receipt is ManagedMetroEnforcementReceipt {
-  if (!receipt || typeof receipt !== "object") return false;
+  if (!receipt || typeof receipt !== 'object') return false;
   const observed = receipt as Partial<ManagedMetroEnforcementReceipt>;
   const plan = prepareManagedMetroEnforcement(input, dependencies);
   return (
-    plan.status === "enforced" &&
+    plan.status === 'enforced' &&
     observed.version === 2 &&
     observed.kind === plan.kind &&
     observed.profileSha256 === plan.profileSha256 &&

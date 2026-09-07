@@ -1,6 +1,6 @@
-import { execFileSync, spawn, type ChildProcess } from "node:child_process";
-import { createHash, createHmac, timingSafeEqual } from "node:crypto";
-import { createRequire } from "node:module";
+import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
+import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
+import { createRequire } from 'node:module';
 import {
   closeSync,
   existsSync,
@@ -13,8 +13,8 @@ import {
   rmSync,
   symlinkSync,
   writeFileSync,
-} from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+} from 'node:fs';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import {
   captureMetroBinding,
   metroListenerPid,
@@ -22,18 +22,18 @@ import {
   type MetroBinding,
   type MetroListenerExecutableDependencies,
   type MetroListenerProbe,
-} from "./metro-binding.js";
+} from './metro-binding.js';
 import {
   resolveTrustedSystemExecutable,
   type TrustedSystemExecutableDependencies,
-} from "../util/trusted-system-executable.js";
+} from '../util/trusted-system-executable.js';
 import {
   probeProcessBirth,
   readProcessBirth,
   type ProcessBirth,
   type ProcessBirthProbe,
-} from "./process-birth.js";
-import { canonicalAuthorityJson } from "./authority-json.js";
+} from './process-birth.js';
+import { canonicalAuthorityJson } from './authority-json.js';
 import {
   dependencyRoots,
   prepareManagedMetroEnforcement,
@@ -43,18 +43,16 @@ import {
   type ManagedMetroEnforcementPlan,
   type ManagedMetroEnforcementReceipt,
   type ManagedMetroPreflightObservation,
-} from "./managed-metro-enforcement.js";
+} from './managed-metro-enforcement.js';
 import {
   MAX_STRICT_PROOF_DEPENDENCY_ENTRIES,
   MAX_STRICT_PROOF_FILE_BYTES,
-} from "./strict-proof-limits.js";
+} from './strict-proof-limits.js';
 
-export type MetroRuntimeEvidenceAuthority =
-  | "reported-v1"
-  | "managed-sandbox-v1";
+export type MetroRuntimeEvidenceAuthority = 'reported-v1' | 'managed-sandbox-v1';
 
 export interface ManagedMetroBinding extends MetroBinding {
-  mode: "managed";
+  mode: 'managed';
   launcherPid: number;
   launcherBirth: string;
   managementProof: string;
@@ -72,13 +70,10 @@ interface ManagedMetroDependencies {
   spawnProcess?: (
     executable: string,
     args: string[],
-    options: Parameters<typeof spawn>[2]
+    options: Parameters<typeof spawn>[2],
   ) => ChildProcess;
   listenerPid?: (port: number) => number | null;
-  listenerOwnedByLauncher?: (
-    listenerPid: number,
-    launcherPid: number
-  ) => boolean;
+  listenerOwnedByLauncher?: (listenerPid: number, launcherPid: number) => boolean;
   capture?: typeof captureMetroBinding;
   readBirth?: (pid: number) => ProcessBirth | null;
   probeBirth?: (pid: number) => ProcessBirthProbe;
@@ -89,7 +84,7 @@ interface ManagedMetroDependencies {
   verifyRuntimeAdmission?: (
     path: string,
     capability: string,
-    expected: ManagedMetroRuntimeAdmissionExpectation
+    expected: ManagedMetroRuntimeAdmissionExpectation,
   ) => boolean;
   prepareEnforcement?: typeof prepareManagedMetroEnforcement;
   preflightEnforcement?: typeof runManagedMetroEnforcementPreflight;
@@ -1119,16 +1114,16 @@ setInterval(() => {}, 1 << 30);
 
 export function parseNodeOptions(value: string): string[] {
   const tokens: string[] = [];
-  let token = "";
+  let token = '';
   let quoted = false;
   for (let index = 0; index < value.length; index += 1) {
     let character = value[index]!;
-    if (character === "\\" && quoted) {
+    if (character === '\\' && quoted) {
       if (index + 1 === value.length) return tokens;
       character = value[(index += 1)]!;
-    } else if (character === " " && !quoted) {
+    } else if (character === ' ' && !quoted) {
       if (token) tokens.push(token);
-      token = "";
+      token = '';
       continue;
     } else if (character === '"') {
       quoted = !quoted;
@@ -1142,48 +1137,41 @@ export function parseNodeOptions(value: string): string[] {
 
 export function hasNodeLoaderOption(value: string): boolean {
   return parseNodeOptions(value).some((token) => {
-    const equals = token.indexOf("=");
+    const equals = token.indexOf('=');
     const option = equals < 0 ? token : token.slice(0, equals);
-    return [
-      "--require",
-      "-r",
-      "--import",
-      "--loader",
-      "--experimental-loader",
-    ].includes(option.replaceAll("_", "-"));
+    return ['--require', '-r', '--import', '--loader', '--experimental-loader'].includes(
+      option.replaceAll('_', '-'),
+    );
   });
 }
 
 export function hasUnsupportedNodeOption(value: string): boolean {
   const booleanOptions = new Set([
-    "--enable-source-maps",
-    "--experimental-strip-types",
-    "--experimental-transform-types",
-    "--no-deprecation",
-    "--no-warnings",
-    "--preserve-symlinks",
-    "--preserve-symlinks-main",
-    "--trace-deprecation",
-    "--trace-uncaught",
-    "--trace-warnings",
+    '--enable-source-maps',
+    '--experimental-strip-types',
+    '--experimental-transform-types',
+    '--no-deprecation',
+    '--no-warnings',
+    '--preserve-symlinks',
+    '--preserve-symlinks-main',
+    '--trace-deprecation',
+    '--trace-uncaught',
+    '--trace-warnings',
   ]);
   const valueOptions = new Set([
-    "--conditions",
-    "--dns-result-order",
-    "--max-old-space-size",
-    "--max-semi-space-size",
-    "--stack-trace-limit",
-    "--title",
-    "--unhandled-rejections",
+    '--conditions',
+    '--dns-result-order',
+    '--max-old-space-size',
+    '--max-semi-space-size',
+    '--stack-trace-limit',
+    '--title',
+    '--unhandled-rejections',
   ]);
   const tokens = parseNodeOptions(value);
   for (let index = 0; index < tokens.length; index += 1) {
     const token = tokens[index]!;
-    const equals = token.indexOf("=");
-    const option = (equals < 0 ? token : token.slice(0, equals)).replaceAll(
-      "_",
-      "-"
-    );
+    const equals = token.indexOf('=');
+    const option = (equals < 0 ? token : token.slice(0, equals)).replaceAll('_', '-');
     if (booleanOptions.has(option)) {
       if (equals >= 0) return true;
       continue;
@@ -1194,7 +1182,7 @@ export function hasUnsupportedNodeOption(value: string): boolean {
       continue;
     }
     const optionValue = tokens[index + 1];
-    if (!optionValue || optionValue.startsWith("-")) return true;
+    if (!optionValue || optionValue.startsWith('-')) return true;
     index += 1;
   }
   return false;
@@ -1204,34 +1192,34 @@ export function managedMetroParentPid(
   pid: number,
   platform: NodeJS.Platform = process.platform,
   execute: typeof execFileSync = execFileSync,
-  executableDependencies: TrustedSystemExecutableDependencies = {}
+  executableDependencies: TrustedSystemExecutableDependencies = {},
 ): number | null {
   const executable = resolveTrustedSystemExecutable(
-    platform === "win32" ? "powershell" : "ps",
+    platform === 'win32' ? 'powershell' : 'ps',
     platform,
-    executableDependencies
+    executableDependencies,
   );
   if (!executable) return null;
   try {
     const output =
-      platform === "win32"
+      platform === 'win32'
         ? execute(
             executable,
             [
-              "-NoProfile",
-              "-NonInteractive",
-              "-Command",
+              '-NoProfile',
+              '-NonInteractive',
+              '-Command',
               `(Get-CimInstance Win32_Process -Filter "ProcessId=${pid}").ParentProcessId`,
             ],
             {
-              encoding: "utf8",
-              stdio: ["ignore", "pipe", "ignore"],
+              encoding: 'utf8',
+              stdio: ['ignore', 'pipe', 'ignore'],
               timeout: 2_000,
-            }
+            },
           )
-        : execute(executable, ["-p", String(pid), "-o", "ppid="], {
-            encoding: "utf8",
-            stdio: ["ignore", "pipe", "ignore"],
+        : execute(executable, ['-p', String(pid), '-o', 'ppid='], {
+            encoding: 'utf8',
+            stdio: ['ignore', 'pipe', 'ignore'],
             timeout: 2_000,
           });
     const parsed = Number(output.trim());
@@ -1241,10 +1229,7 @@ export function managedMetroParentPid(
   }
 }
 
-function listenerOwnedByLauncher(
-  listenerPid: number,
-  launcherPid: number
-): boolean {
+function listenerOwnedByLauncher(listenerPid: number, launcherPid: number): boolean {
   let current: number | null = listenerPid;
   const visited = new Set<number>();
   while (current && !visited.has(current)) {
@@ -1259,7 +1244,7 @@ export function managedMetroListenerPid(
   port: number,
   platform: NodeJS.Platform = process.platform,
   execute: typeof execFileSync = execFileSync,
-  executableDependencies: MetroListenerExecutableDependencies = {}
+  executableDependencies: MetroListenerExecutableDependencies = {},
 ): number | null {
   return metroListenerPid(port, platform, execute, executableDependencies);
 }
@@ -1270,72 +1255,50 @@ export function probeManagedMetroListener(
   port: number,
   platform: NodeJS.Platform = process.platform,
   execute: typeof execFileSync = execFileSync,
-  executableDependencies: MetroListenerExecutableDependencies = {}
+  executableDependencies: MetroListenerExecutableDependencies = {},
 ): ManagedMetroListenerProbe {
   return probeMetroListener(port, platform, execute, executableDependencies);
 }
 
 export function resolveManagedMetroCommand(
   appRoot: string,
-  dependencies: Pick<
-    ManagedMetroDependencies,
-    "exists" | "platform" | "readText"
-  > = {}
+  dependencies: Pick<ManagedMetroDependencies, 'exists' | 'platform' | 'readText'> = {},
 ): { executable: string; args: string[] } {
   const exists = dependencies.exists ?? existsSync;
-  const readText =
-    dependencies.readText ?? ((path: string) => readFileSync(path, "utf8"));
+  const readText = dependencies.readText ?? ((path: string) => readFileSync(path, 'utf8'));
   const platform = dependencies.platform ?? process.platform;
-  const packageJson = JSON.parse(readText(join(appRoot, "package.json"))) as {
+  const packageJson = JSON.parse(readText(join(appRoot, 'package.json'))) as {
     dependencies?: Record<string, unknown>;
     devDependencies?: Record<string, unknown>;
   };
   const all = { ...packageJson.dependencies, ...packageJson.devDependencies };
   if (all.expo) {
-    if (platform === "win32") {
-      return resolveWindowsPackageCommand(
-        appRoot,
-        "expo",
-        "expo",
-        ["start", "--dev-client"],
-        {
-          exists,
-          readText,
-        }
-      );
+    if (platform === 'win32') {
+      return resolveWindowsPackageCommand(appRoot, 'expo', 'expo', ['start', '--dev-client'], {
+        exists,
+        readText,
+      });
     }
-    const executable = join(appRoot, "node_modules", ".bin", "expo");
+    const executable = join(appRoot, 'node_modules', '.bin', 'expo');
     if (!exists(executable)) {
-      throw new Error(
-        "METRO_START_UNAVAILABLE: package-local Expo CLI is unavailable"
-      );
+      throw new Error('METRO_START_UNAVAILABLE: package-local Expo CLI is unavailable');
     }
-    return { executable, args: ["start", "--dev-client"] };
+    return { executable, args: ['start', '--dev-client'] };
   }
-  if (all["react-native"]) {
-    if (platform === "win32") {
-      return resolveWindowsPackageCommand(
-        appRoot,
-        "react-native",
-        "react-native",
-        ["start"],
-        {
-          exists,
-          readText,
-        }
-      );
+  if (all['react-native']) {
+    if (platform === 'win32') {
+      return resolveWindowsPackageCommand(appRoot, 'react-native', 'react-native', ['start'], {
+        exists,
+        readText,
+      });
     }
-    const executable = join(appRoot, "node_modules", ".bin", "react-native");
+    const executable = join(appRoot, 'node_modules', '.bin', 'react-native');
     if (!exists(executable)) {
-      throw new Error(
-        "METRO_START_UNAVAILABLE: package-local React Native CLI is unavailable"
-      );
+      throw new Error('METRO_START_UNAVAILABLE: package-local React Native CLI is unavailable');
     }
-    return { executable, args: ["start"] };
+    return { executable, args: ['start'] };
   }
-  throw new Error(
-    "METRO_START_UNAVAILABLE: project is neither Expo nor bare React Native"
-  );
+  throw new Error('METRO_START_UNAVAILABLE: project is neither Expo nor bare React Native');
 }
 
 function resolveWindowsPackageCommand(
@@ -1343,38 +1306,32 @@ function resolveWindowsPackageCommand(
   packageName: string,
   commandName: string,
   args: string[],
-  dependencies: Required<Pick<ManagedMetroDependencies, "exists" | "readText">>
+  dependencies: Required<Pick<ManagedMetroDependencies, 'exists' | 'readText'>>,
 ): { executable: string; args: string[] } {
-  const packageRoot = resolve(appRoot, "node_modules", packageName);
-  const manifest = JSON.parse(
-    dependencies.readText(join(packageRoot, "package.json"))
-  ) as {
+  const packageRoot = resolve(appRoot, 'node_modules', packageName);
+  const manifest = JSON.parse(dependencies.readText(join(packageRoot, 'package.json'))) as {
     bin?: string | Record<string, unknown>;
   };
   const bin =
-    typeof manifest.bin === "string"
+    typeof manifest.bin === 'string'
       ? manifest.bin
-      : typeof manifest.bin?.[commandName] === "string"
-      ? manifest.bin[commandName]
-      : null;
+      : typeof manifest.bin?.[commandName] === 'string'
+        ? manifest.bin[commandName]
+        : null;
   if (!bin) {
-    throw new Error(
-      `METRO_START_UNAVAILABLE: package-local ${commandName} CLI is unavailable`
-    );
+    throw new Error(`METRO_START_UNAVAILABLE: package-local ${commandName} CLI is unavailable`);
   }
   const executable = resolve(packageRoot, bin);
   const relativeExecutable = relative(packageRoot, executable);
   if (
     !relativeExecutable ||
-    relativeExecutable === ".." ||
-    relativeExecutable.startsWith("../") ||
-    relativeExecutable.startsWith("..\\") ||
+    relativeExecutable === '..' ||
+    relativeExecutable.startsWith('../') ||
+    relativeExecutable.startsWith('..\\') ||
     isAbsolute(relativeExecutable) ||
     !dependencies.exists(executable)
   ) {
-    throw new Error(
-      `METRO_START_UNAVAILABLE: package-local ${commandName} CLI is unavailable`
-    );
+    throw new Error(`METRO_START_UNAVAILABLE: package-local ${commandName} CLI is unavailable`);
   }
   return { executable, args };
 }
@@ -1393,25 +1350,21 @@ export interface ManagedMetroLaunchCommand {
 
 function resolveManagedMetroLaunchCommand(
   command: { executable: string; args: string[] },
-  dependencies: Pick<
-    ManagedMetroDependencies,
-    "exists" | "platform" | "readText"
-  >
+  dependencies: Pick<ManagedMetroDependencies, 'exists' | 'platform' | 'readText'>,
 ): ManagedMetroLaunchCommand {
   const exists = dependencies.exists ?? existsSync;
-  const readText =
-    dependencies.readText ?? ((path: string) => readFileSync(path, "utf8"));
+  const readText = dependencies.readText ?? ((path: string) => readFileSync(path, 'utf8'));
   const platform = dependencies.platform ?? process.platform;
-  let firstLine = "";
+  let firstLine = '';
   try {
-    firstLine = readText(command.executable).split(/\r?\n/, 1)[0] ?? "";
+    firstLine = readText(command.executable).split(/\r?\n/, 1)[0] ?? '';
   } catch {
     return {
       sourceExecutable: command.executable,
       executable: command.executable,
       nodeExecutable: process.execPath,
       args: command.args,
-      probeArgs: ["--version"],
+      probeArgs: ['--version'],
       executableMappings: [],
       chainInputs: [command.executable],
       protectedRuntimeRoots: [],
@@ -1423,23 +1376,19 @@ function resolveManagedMetroLaunchCommand(
       executable: process.execPath,
       nodeExecutable: process.execPath,
       args: [command.executable, ...command.args],
-      probeArgs: [command.executable, "--version"],
+      probeArgs: [command.executable, '--version'],
       executableMappings: [],
       chainInputs: [command.executable, process.execPath],
       protectedRuntimeRoots: [],
     };
   }
   if (
-    platform !== "win32" &&
-    /^#!\s*(?:\/bin\/sh|\/usr\/bin\/env\s+sh|\/bin\/bash)(?:\s|$)/.test(
-      firstLine
-    )
+    platform !== 'win32' &&
+    /^#!\s*(?:\/bin\/sh|\/usr\/bin\/env\s+sh|\/bin\/bash)(?:\s|$)/.test(firstLine)
   ) {
-    const shellSelector = exists("/private/var/select/sh")
-      ? "/private/var/select/sh"
-      : "/bin/sh";
+    const shellSelector = exists('/private/var/select/sh') ? '/private/var/select/sh' : '/bin/sh';
     const shellExecutable = canonicalRuntimeInput(shellSelector);
-    const shellHelpers = ["/usr/bin/dirname", "/usr/bin/sed", "/usr/bin/uname"]
+    const shellHelpers = ['/usr/bin/dirname', '/usr/bin/sed', '/usr/bin/uname']
       .filter(exists)
       .map(canonicalRuntimeInput);
     return {
@@ -1447,26 +1396,21 @@ function resolveManagedMetroLaunchCommand(
       executable: shellExecutable,
       nodeExecutable: process.execPath,
       args: [
-        "-c",
+        '-c',
         'read -r rn_dev_agent_admission <&8; script=$1; shift; . "$script"',
         `rn-dev-agent-logical-path:${command.executable}`,
         command.executable,
         ...command.args,
       ],
       probeArgs: [
-        "-c",
+        '-c',
         'script=$1; shift; . "$script"',
         `rn-dev-agent-logical-path:${command.executable}`,
         command.executable,
-        "--version",
+        '--version',
       ],
       executableMappings: [process.execPath, ...shellHelpers],
-      chainInputs: [
-        command.executable,
-        shellExecutable,
-        process.execPath,
-        ...shellHelpers,
-      ],
+      chainInputs: [command.executable, shellExecutable, process.execPath, ...shellHelpers],
       protectedRuntimeRoots: [],
     };
   }
@@ -1475,7 +1419,7 @@ function resolveManagedMetroLaunchCommand(
     executable: command.executable,
     nodeExecutable: process.execPath,
     args: command.args,
-    probeArgs: ["--version"],
+    probeArgs: ['--version'],
     executableMappings: [],
     chainInputs: [command.executable],
     protectedRuntimeRoots: [],
@@ -1498,9 +1442,9 @@ function managementProof(
     servingRoot: string;
     buildGeneration: number;
   },
-  signerCapability: string
+  signerCapability: string,
 ): string {
-  return createHmac("sha256", signerCapability)
+  return createHmac('sha256', signerCapability)
     .update(
       canonicalAuthorityJson({
         sessionId,
@@ -1516,48 +1460,36 @@ function managementProof(
         runtimeEvidenceProtocol: authority.runtimeEvidenceProtocol,
         servingRoot: authority.servingRoot,
         buildGeneration: authority.buildGeneration,
-      })
+      }),
     )
-    .digest("hex");
+    .digest('hex');
 }
 
-export function managedMetroChildEnvironment(
-  environment: NodeJS.ProcessEnv
-): NodeJS.ProcessEnv {
+export function managedMetroChildEnvironment(environment: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return Object.fromEntries(
     Object.entries(environment).filter(
-      ([name, value]) =>
-        value !== undefined &&
-        name !== "CI" &&
-        !name.startsWith("RN_DEV_AGENT_")
-    )
+      ([name, value]) => value !== undefined && name !== 'CI' && !name.startsWith('RN_DEV_AGENT_'),
+    ),
   );
 }
 
 function verifyManagedMetroRuntimeAdmission(
   path: string,
   capability: string,
-  expected: ManagedMetroRuntimeAdmissionExpectation
+  expected: ManagedMetroRuntimeAdmissionExpectation,
 ): boolean {
   try {
-    const admission = JSON.parse(readFileSync(path, "utf8")) as Record<
-      string,
-      unknown
-    >;
+    const admission = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>;
     const signature = admission.signature;
-    if (typeof signature !== "string" || !/^[a-f0-9]{64}$/.test(signature))
-      return false;
+    if (typeof signature !== 'string' || !/^[a-f0-9]{64}$/.test(signature)) return false;
     const payload = { ...admission };
     delete payload.signature;
-    const computed = createHmac("sha256", capability)
+    const computed = createHmac('sha256', capability)
       .update(canonicalAuthorityJson(payload))
-      .digest("hex");
-    const computedBytes = Buffer.from(computed, "hex");
-    const signatureBytes = Buffer.from(signature, "hex");
-    const observedManifest = structuredClone(payload.runtimeManifest) as Record<
-      string,
-      unknown
-    >;
+      .digest('hex');
+    const computedBytes = Buffer.from(computed, 'hex');
+    const signatureBytes = Buffer.from(signature, 'hex');
+    const observedManifest = structuredClone(payload.runtimeManifest) as Record<string, unknown>;
     const expectedManifest = structuredClone(expected.runtimeManifest);
     const observedDescendantAuthority = observedManifest.descendantAuthority as
       | Record<string, unknown>
@@ -1568,7 +1500,7 @@ function verifyManagedMetroRuntimeAdmission(
     if (
       !observedDescendantAuthority ||
       !expectedDescendantAuthority ||
-      typeof observedDescendantAuthority.rootIdentity !== "string" ||
+      typeof observedDescendantAuthority.rootIdentity !== 'string' ||
       !/^process:\d+$/.test(observedDescendantAuthority.rootIdentity)
     ) {
       return false;
@@ -1578,16 +1510,15 @@ function verifyManagedMetroRuntimeAdmission(
     return (
       computedBytes.length === signatureBytes.length &&
       timingSafeEqual(computedBytes, signatureBytes) &&
-      payload.runtimeEvidenceAuthority === "managed-sandbox-v1" &&
-      payload.runtimeEnforcement === "os-enforced-v1" &&
+      payload.runtimeEvidenceAuthority === 'managed-sandbox-v1' &&
+      payload.runtimeEnforcement === 'os-enforced-v1' &&
       payload.sessionId === expected.sessionId &&
       payload.metroInstanceId === expected.metroInstanceId &&
       payload.contentRoot === expected.contentRoot &&
       payload.appRoot === expected.appRoot &&
       Array.isArray(payload.violations) &&
       payload.violations.length === 0 &&
-      canonicalAuthorityJson(observedManifest) ===
-        canonicalAuthorityJson(expectedManifest) &&
+      canonicalAuthorityJson(observedManifest) === canonicalAuthorityJson(expectedManifest) &&
       canonicalAuthorityJson(payload.runtimeEnforcementReceipt) ===
         canonicalAuthorityJson(expected.enforcementReceipt)
     );
@@ -1598,25 +1529,25 @@ function verifyManagedMetroRuntimeAdmission(
 
 export function verifyManagedMetroManagementProof(
   binding: Record<string, unknown>,
-  input: { sessionId: string; signerCapability: string }
+  input: { sessionId: string; signerCapability: string },
 ): binding is Record<string, unknown> & ManagedMetroBinding {
   if (
-    binding.mode !== "managed" ||
-    typeof binding.port !== "number" ||
-    typeof binding.pid !== "number" ||
-    typeof binding.birth !== "string" ||
-    typeof binding.launcherPid !== "number" ||
-    typeof binding.launcherBirth !== "string" ||
-    typeof binding.instanceId !== "string" ||
-    typeof binding.runtimeEvidencePath !== "string" ||
-    typeof binding.runtimeEvidenceSocket !== "string" ||
-    typeof binding.servingRoot !== "string" ||
+    binding.mode !== 'managed' ||
+    typeof binding.port !== 'number' ||
+    typeof binding.pid !== 'number' ||
+    typeof binding.birth !== 'string' ||
+    typeof binding.launcherPid !== 'number' ||
+    typeof binding.launcherBirth !== 'string' ||
+    typeof binding.instanceId !== 'string' ||
+    typeof binding.runtimeEvidencePath !== 'string' ||
+    typeof binding.runtimeEvidenceSocket !== 'string' ||
+    typeof binding.servingRoot !== 'string' ||
     !Number.isSafeInteger(binding.buildGeneration) ||
     (binding.buildGeneration as number) < 0 ||
-    (binding.runtimeEvidenceAuthority !== "managed-sandbox-v1" &&
-      binding.runtimeEvidenceAuthority !== "reported-v1") ||
+    (binding.runtimeEvidenceAuthority !== 'managed-sandbox-v1' &&
+      binding.runtimeEvidenceAuthority !== 'reported-v1') ||
     binding.runtimeEvidenceProtocol !== 2 ||
-    typeof binding.managementProof !== "string"
+    typeof binding.managementProof !== 'string'
   ) {
     return false;
   }
@@ -1636,10 +1567,10 @@ export function verifyManagedMetroManagementProof(
       servingRoot: binding.servingRoot,
       buildGeneration: binding.buildGeneration as number,
     },
-    input.signerCapability
+    input.signerCapability,
   );
-  const expectedBuffer = Buffer.from(expected, "hex");
-  const observedBuffer = Buffer.from(binding.managementProof, "hex");
+  const expectedBuffer = Buffer.from(expected, 'hex');
+  const observedBuffer = Buffer.from(binding.managementProof, 'hex');
   return (
     expectedBuffer.length === observedBuffer.length &&
     timingSafeEqual(expectedBuffer, observedBuffer)
@@ -1647,44 +1578,42 @@ export function verifyManagedMetroManagementProof(
 }
 
 export type ManagedMetroLifecycleInspection =
-  | { status: "live" }
+  | { status: 'live' }
   | {
-      status: "lost";
+      status: 'lost';
       code:
-        | "METRO_MANAGEMENT_PROOF_INVALID"
-        | "METRO_LAUNCHER_EXITED"
-        | "METRO_LAUNCHER_IDENTITY_CHANGED"
-        | "METRO_LAUNCHER_UNVERIFIABLE"
-        | "METRO_LISTENER_EXITED"
-        | "METRO_LISTENER_IDENTITY_CHANGED"
-        | "METRO_LISTENER_UNVERIFIABLE"
-        | "METRO_PORT_RELEASED"
-        | "METRO_PORT_OWNER_CHANGED"
-        | "METRO_PORT_UNVERIFIABLE"
-        | "METRO_EVIDENCE_SOCKET_MISSING";
+        | 'METRO_MANAGEMENT_PROOF_INVALID'
+        | 'METRO_LAUNCHER_EXITED'
+        | 'METRO_LAUNCHER_IDENTITY_CHANGED'
+        | 'METRO_LAUNCHER_UNVERIFIABLE'
+        | 'METRO_LISTENER_EXITED'
+        | 'METRO_LISTENER_IDENTITY_CHANGED'
+        | 'METRO_LISTENER_UNVERIFIABLE'
+        | 'METRO_PORT_RELEASED'
+        | 'METRO_PORT_OWNER_CHANGED'
+        | 'METRO_PORT_UNVERIFIABLE'
+        | 'METRO_EVIDENCE_SOCKET_MISSING';
       reason: string;
       attribution?: string;
     };
 
 export function managedMetroExitAttribution(
   binding: { runtimeEvidencePath: string; instanceId: string },
-  input: { sessionId: string; signerCapability: string }
+  input: { sessionId: string; signerCapability: string },
 ): string | null {
   const runtimeRoot = dirname(binding.runtimeEvidencePath);
-  const runtimePolicyCapability = createHmac("sha256", input.signerCapability)
-    .update("metro-runtime-policy")
-    .digest("base64url");
+  const runtimePolicyCapability = createHmac('sha256', input.signerCapability)
+    .update('metro-runtime-policy')
+    .digest('base64url');
   const violation = latestSignedRuntimeViolation(
     binding.runtimeEvidencePath,
     runtimePolicyCapability,
-    { sessionId: input.sessionId, metroInstanceId: binding.instanceId }
+    { sessionId: input.sessionId, metroInstanceId: binding.instanceId },
   );
   const diagnostic = readManagedMetroLauncherDiagnostic(
-    join(runtimeRoot, "metro-launcher-diagnostic.json")
+    join(runtimeRoot, 'metro-launcher-diagnostic.json'),
   );
-  const logCauses = managedMetroFirstPartyLogCauses(
-    join(runtimeRoot, "metro.log")
-  );
+  const logCauses = managedMetroFirstPartyLogCauses(join(runtimeRoot, 'metro.log'));
   const redactions = [
     runtimeRoot,
     input.sessionId,
@@ -1694,56 +1623,52 @@ export function managedMetroExitAttribution(
   ];
   const details = [
     diagnostic
-      ? sanitizeManagedMetroStartupDetailValue(
-          `stage ${diagnostic.stage}`,
-          redactions
-        )
+      ? sanitizeManagedMetroStartupDetailValue(`stage ${diagnostic.stage}`, redactions)
       : null,
     diagnostic?.detail
       ? sanitizeManagedMetroStartupDetailValue(diagnostic.detail, redactions)
       : null,
     violation
-      ? sanitizeManagedMetroStartupDetailValue(
-          `runtime violation: ${violation}`,
-          redactions
-        ).slice(0, 2_048)
+      ? sanitizeManagedMetroStartupDetailValue(`runtime violation: ${violation}`, redactions).slice(
+          0,
+          2_048,
+        )
       : null,
   ].filter((detail): detail is string => Boolean(detail));
   if (logCauses) {
-    const prefix = "Metro log causes: ";
-    const used = details.join("; ").length;
+    const prefix = 'Metro log causes: ';
+    const used = details.join('; ').length;
     const available = 4_096 - used - (used > 0 ? 2 : 0) - prefix.length;
-    if (available > 0)
-      details.push(`${prefix}${logCauses.slice(0, available)}`);
+    if (available > 0) details.push(`${prefix}${logCauses.slice(0, available)}`);
   }
   if (details.length === 0) return null;
-  return details.join("; ");
+  return details.join('; ');
 }
 
 function exactManagedProcessInspection(
-  role: "launcher" | "listener",
+  role: 'launcher' | 'listener',
   pid: number,
   birth: string,
-  probe: ProcessBirthProbe
+  probe: ProcessBirthProbe,
 ): ManagedMetroLifecycleInspection | null {
-  const prefix = role === "launcher" ? "METRO_LAUNCHER" : "METRO_LISTENER";
-  if (probe.status === "absent") {
+  const prefix = role === 'launcher' ? 'METRO_LAUNCHER' : 'METRO_LISTENER';
+  if (probe.status === 'absent') {
     return {
-      status: "lost",
+      status: 'lost',
       code: `${prefix}_EXITED`,
       reason: `authenticated managed Metro ${role} exited`,
     };
   }
-  if (probe.status === "unknown") {
+  if (probe.status === 'unknown') {
     return {
-      status: "lost",
+      status: 'lost',
       code: `${prefix}_UNVERIFIABLE`,
       reason: `authenticated managed Metro ${role} process identity is unavailable`,
     };
   }
   if (probe.birth.pid !== pid || probe.birth.token !== birth) {
     return {
-      status: "lost",
+      status: 'lost',
       code: `${prefix}_IDENTITY_CHANGED`,
       reason: `authenticated managed Metro ${role} process identity changed`,
     };
@@ -1754,73 +1679,65 @@ function exactManagedProcessInspection(
 export function inspectManagedMetroLifecycle(
   binding: Record<string, unknown>,
   input: { sessionId: string; signerCapability: string },
-  dependencies: Pick<
-    ManagedMetroDependencies,
-    "exists" | "probeBirth" | "probeListener"
-  > = {}
+  dependencies: Pick<ManagedMetroDependencies, 'exists' | 'probeBirth' | 'probeListener'> = {},
 ): ManagedMetroLifecycleInspection {
   if (!verifyManagedMetroManagementProof(binding, input)) {
     return {
-      status: "lost",
-      code: "METRO_MANAGEMENT_PROOF_INVALID",
-      reason:
-        "managed Metro lifecycle evidence is not authenticated by this session",
+      status: 'lost',
+      code: 'METRO_MANAGEMENT_PROOF_INVALID',
+      reason: 'managed Metro lifecycle evidence is not authenticated by this session',
     };
   }
   const probeBirth = dependencies.probeBirth ?? probeProcessBirth;
   const attributed = (inspection: ManagedMetroLifecycleInspection) => {
-    if (inspection.status === "live" || !inspection.code.endsWith("_EXITED"))
-      return inspection;
+    if (inspection.status === 'live' || !inspection.code.endsWith('_EXITED')) return inspection;
     const attribution = managedMetroExitAttribution(binding, input);
     return attribution ? { ...inspection, attribution } : inspection;
   };
   const launcher = exactManagedProcessInspection(
-    "launcher",
+    'launcher',
     binding.launcherPid,
     binding.launcherBirth,
-    probeBirth(binding.launcherPid)
+    probeBirth(binding.launcherPid),
   );
   if (launcher) return attributed(launcher);
   const listener = exactManagedProcessInspection(
-    "listener",
+    'listener',
     binding.pid,
     binding.birth,
-    probeBirth(binding.pid)
+    probeBirth(binding.pid),
   );
   if (listener) return attributed(listener);
-  const port = (dependencies.probeListener ?? probeManagedMetroListener)(
-    binding.port
-  );
-  if (port.status === "absent") {
+  const port = (dependencies.probeListener ?? probeManagedMetroListener)(binding.port);
+  if (port.status === 'absent') {
     return {
-      status: "lost",
-      code: "METRO_PORT_RELEASED",
-      reason:
-        "authenticated managed Metro no longer owns its allocated listener port",
+      status: 'lost',
+      code: 'METRO_PORT_RELEASED',
+      reason: 'authenticated managed Metro no longer owns its allocated listener port',
     };
   }
-  if (port.status === "unknown") {
+  if (port.status === 'unknown') {
     return {
-      status: "lost",
-      code: "METRO_PORT_UNVERIFIABLE",
-      reason: "managed Metro listener port ownership is unavailable",
+      status: 'lost',
+      code: 'METRO_PORT_UNVERIFIABLE',
+      reason: 'managed Metro listener port ownership is unavailable',
     };
   }
   if (port.pid !== binding.pid) {
     return {
-      status: "lost",
-      code: "METRO_PORT_OWNER_CHANGED",
-      reason: "allocated managed Metro port is owned by a different process",
+      status: 'lost',
+      code: 'METRO_PORT_OWNER_CHANGED',
+      reason: 'allocated managed Metro port is owned by a different process',
     };
   }
   if (!(dependencies.exists ?? existsSync)(binding.runtimeEvidenceSocket)) {
     return {
-      status: "lost",
-      code: "METRO_EVIDENCE_SOCKET_MISSING",
-      reason: "managed Metro runtime evidence socket is missing",
+      status: 'lost',
+      code: 'METRO_EVIDENCE_SOCKET_MISSING',
+      reason: 'managed Metro runtime evidence socket is missing',
     };
   }
-  return { status: "live" };
+  return { status: 'live' };
 }
 
 export function refreshManagedMetroBuildGeneration(
@@ -1829,28 +1746,21 @@ export function refreshManagedMetroBuildGeneration(
     sessionId: string;
     buildGeneration: number;
     signerCapability: string;
-  }
+  },
 ): ManagedMetroBinding {
   if (
     !Number.isSafeInteger(input.buildGeneration) ||
     input.buildGeneration < binding.buildGeneration ||
-    !verifyManagedMetroManagementProof(
-      binding as unknown as Record<string, unknown>,
-      input
-    )
+    !verifyManagedMetroManagementProof(binding as unknown as Record<string, unknown>, input)
   ) {
     throw new Error(
-      "METRO_AUTHORITY_MISMATCH: managed Metro build generation cannot rotate from unverified authority"
+      'METRO_AUTHORITY_MISMATCH: managed Metro build generation cannot rotate from unverified authority',
     );
   }
   const refreshed = { ...binding, buildGeneration: input.buildGeneration };
   return {
     ...refreshed,
-    managementProof: managementProof(
-      input.sessionId,
-      refreshed,
-      input.signerCapability
-    ),
+    managementProof: managementProof(input.sessionId, refreshed, input.signerCapability),
   };
 }
 
@@ -1858,14 +1768,11 @@ function legacyManagementProof(
   sessionId: string,
   authority: Omit<
     Parameters<typeof managementProof>[1],
-    | "runtimeEvidenceAuthority"
-    | "runtimeEvidenceProtocol"
-    | "servingRoot"
-    | "buildGeneration"
+    'runtimeEvidenceAuthority' | 'runtimeEvidenceProtocol' | 'servingRoot' | 'buildGeneration'
   >,
-  signerCapability: string
+  signerCapability: string,
 ): string {
-  return createHmac("sha256", signerCapability)
+  return createHmac('sha256', signerCapability)
     .update(
       [
         sessionId,
@@ -1877,43 +1784,38 @@ function legacyManagementProof(
         authority.instanceId,
         authority.runtimeEvidencePath,
         authority.runtimeEvidenceSocket,
-      ].join("\0")
+      ].join('\0'),
     )
-    .digest("hex");
+    .digest('hex');
 }
 
 function managedSandboxManagementProofV1(
   sessionId: string,
-  authority: Omit<
-    Parameters<typeof managementProof>[1],
-    "servingRoot" | "buildGeneration"
-  >,
-  signerCapability: string
+  authority: Omit<Parameters<typeof managementProof>[1], 'servingRoot' | 'buildGeneration'>,
+  signerCapability: string,
 ): string {
-  return createHmac("sha256", signerCapability)
+  return createHmac('sha256', signerCapability)
     .update(
       canonicalAuthorityJson({
         sessionId,
         ...authority,
-      })
+      }),
     )
-    .digest("hex");
+    .digest('hex');
 }
 
 function cssInteropCacheRoot(appRoot: string): string | null {
   try {
-    const configRequire = createRequire(join(appRoot, "metro.config.js"));
+    const configRequire = createRequire(join(appRoot, 'metro.config.js'));
     let packageJson: string;
     try {
-      packageJson = createRequire(
-        configRequire.resolve("nativewind/metro")
-      ).resolve("react-native-css-interop/package.json");
-    } catch {
-      packageJson = configRequire.resolve(
-        "react-native-css-interop/package.json"
+      packageJson = createRequire(configRequire.resolve('nativewind/metro')).resolve(
+        'react-native-css-interop/package.json',
       );
+    } catch {
+      packageJson = configRequire.resolve('react-native-css-interop/package.json');
     }
-    return join(realpathSync(dirname(packageJson)), ".cache");
+    return join(realpathSync(dirname(packageJson)), '.cache');
   } catch {
     return null;
   }
@@ -1930,7 +1832,7 @@ function canonicalRuntimeInput(path: string): string {
 function latestSignedRuntimeViolation(
   path: string,
   capability: string,
-  expected: { sessionId: string; metroInstanceId: string }
+  expected: { sessionId: string; metroInstanceId: string },
 ): string | null {
   try {
     const bytes = readFileSync(path);
@@ -1939,16 +1841,16 @@ function latestSignedRuntimeViolation(
     let sequence = 0;
     let latest: string | null = null;
     let latestFirstParty: string | null = null;
-    for (const line of bytes.toString("utf8").split("\n").filter(Boolean)) {
+    for (const line of bytes.toString('utf8').split('\n').filter(Boolean)) {
       const observed = JSON.parse(line) as Record<string, unknown>;
       const signature = observed.signature;
-      if (typeof signature !== "string") return null;
+      if (typeof signature !== 'string') return null;
       const { signature: _signature, ...payload } = observed;
-      const expectedSignature = createHmac("sha256", capability)
+      const expectedSignature = createHmac('sha256', capability)
         .update(canonicalAuthorityJson(payload))
-        .digest("hex");
-      const actualBytes = Buffer.from(signature, "hex");
-      const expectedBytes = Buffer.from(expectedSignature, "hex");
+        .digest('hex');
+      const actualBytes = Buffer.from(signature, 'hex');
+      const expectedBytes = Buffer.from(expectedSignature, 'hex');
       if (
         actualBytes.length !== expectedBytes.length ||
         !timingSafeEqual(actualBytes, expectedBytes) ||
@@ -1962,7 +1864,7 @@ function latestSignedRuntimeViolation(
       sequence += 1;
       if (sequence > MAX_STRICT_PROOF_DEPENDENCY_ENTRIES) return null;
       previousSignature = signature;
-      if (payload.kind === "violation" && typeof payload.value === "string") {
+      if (payload.kind === 'violation' && typeof payload.value === 'string') {
         latest = payload.value;
         if (/\bRN_DEV_AGENT_[A-Z0-9_]+\b/.test(payload.value)) {
           latestFirstParty = payload.value;
@@ -1978,13 +1880,13 @@ function latestSignedRuntimeViolation(
 function boundedMetroLogTail(path: string, maxBytes = 4_096): string | null {
   let descriptor: number | undefined;
   try {
-    descriptor = openSync(path, "r");
+    descriptor = openSync(path, 'r');
     const size = fstatSync(descriptor).size;
     const length = Math.min(size, maxBytes);
     if (length === 0) return null;
     const buffer = Buffer.alloc(length);
     readSync(descriptor, buffer, 0, length, size - length);
-    const tail = buffer.toString("utf8");
+    const tail = buffer.toString('utf8');
     return tail || null;
   } catch {
     return null;
@@ -2003,20 +1905,18 @@ interface ManagedMetroLauncherDiagnostic {
 const MANAGED_METRO_SENSITIVE_ENVIRONMENT_NAME =
   /(?:access[_-]?key|token|secret|password|passwd|pwd|credential|api[_-]?key|authorization|auth|cookie|private[_-]?key)/i;
 
-function readManagedMetroLauncherDiagnostic(
-  path: string
-): ManagedMetroLauncherDiagnostic | null {
+function readManagedMetroLauncherDiagnostic(path: string): ManagedMetroLauncherDiagnostic | null {
   try {
-    const source = readFileSync(path, "utf8");
+    const source = readFileSync(path, 'utf8');
     if (Buffer.byteLength(source) > 4_096) return null;
     const diagnostic = JSON.parse(source) as Record<string, unknown>;
     if (
       diagnostic.version !== 1 ||
-      typeof diagnostic.code !== "string" ||
+      typeof diagnostic.code !== 'string' ||
       !/^METRO_LAUNCHER_[A-Z0-9_]+$/.test(diagnostic.code) ||
-      typeof diagnostic.stage !== "string" ||
+      typeof diagnostic.stage !== 'string' ||
       !/^[a-z0-9-]{1,64}$/.test(diagnostic.stage) ||
-      typeof diagnostic.detail !== "string" ||
+      typeof diagnostic.detail !== 'string' ||
       !/^[a-z0-9-]{1,96}$/.test(diagnostic.detail)
     ) {
       return null;
@@ -2035,42 +1935,33 @@ function managedMetroFirstPartyLogCauses(path: string): string | null {
   // The token allowlist makes a wider window safe when bundle chatter buries a fatal cause.
   const tail = boundedMetroLogTail(path, 65_536);
   if (!tail) return null;
-  const causes = [
-    ...new Set(tail.match(MANAGED_METRO_FIRST_PARTY_LOG_CAUSE) ?? []),
-  ].slice(0, 16);
-  return causes.length > 0 ? causes.join(", ") : null;
+  const causes = [...new Set(tail.match(MANAGED_METRO_FIRST_PARTY_LOG_CAUSE) ?? [])].slice(0, 16);
+  return causes.length > 0 ? causes.join(', ') : null;
 }
 
 function sanitizeManagedMetroStartupDetailValue(
   value: string,
-  redactions: readonly string[]
+  redactions: readonly string[],
 ): string {
   let sanitized = value;
-  for (const redaction of [...redactions].sort(
-    (left, right) => right.length - left.length
-  )) {
-    if (redaction) sanitized = sanitized.replaceAll(redaction, "<redacted>");
+  for (const redaction of [...redactions].sort((left, right) => right.length - left.length)) {
+    if (redaction) sanitized = sanitized.replaceAll(redaction, '<redacted>');
   }
   return sanitized
-    .replace(/[^\t\n\r\x20-\x7e]/g, "?")
-    .replace(/\b(?:Basic|Bearer)\s+\S+/gi, "<redacted-authorization>")
+    .replace(/[^\t\n\r\x20-\x7e]/g, '?')
+    .replace(/\b(?:Basic|Bearer)\s+\S+/gi, '<redacted-authorization>')
     .replace(
       /(\b[A-Za-z_][A-Za-z0-9_.-]*(?:access[-_]?key|token|secret|password|passwd|pwd|credential|api[-_]?key|authorization|auth|cookie|private[-_]?key)[A-Za-z0-9_.-]*\b["']?\s*[:=]\s*["']?)[^"'\s,;}]+/gi,
-      "$1<redacted>"
+      '$1<redacted>',
     )
-    .replace(/\b([a-z][a-z0-9+.-]*:\/\/)[^/\s@]+@/gi, "$1<redacted>@")
-    .replace(/[A-Za-z]:\\(?:[^\\\s]+\\)*[^\\\s]*/g, "<path>")
-    .replace(/(?:\/[A-Za-z0-9._@%+~=-]+){2,}/g, "<path>")
+    .replace(/\b([a-z][a-z0-9+.-]*:\/\/)[^/\s@]+@/gi, '$1<redacted>@')
+    .replace(/[A-Za-z]:\\(?:[^\\\s]+\\)*[^\\\s]*/g, '<path>')
+    .replace(/(?:\/[A-Za-z0-9._@%+~=-]+){2,}/g, '<path>')
     .trim();
 }
 
-function sanitizeManagedMetroStartupDetail(
-  value: string,
-  redactions: readonly string[]
-): string {
-  return sanitizeManagedMetroStartupDetailValue(value, redactions).slice(
-    -4_096
-  );
+function sanitizeManagedMetroStartupDetail(value: string, redactions: readonly string[]): string {
+  return sanitizeManagedMetroStartupDetailValue(value, redactions).slice(-4_096);
 }
 
 // Observation only: this record never grants enforcement authority, so any failure is swallowed.
@@ -2094,37 +1985,29 @@ function writeManagedMetroEnforcementDiagnostic(input: {
         buildGeneration: input.buildGeneration,
         environmentDigest: input.environmentDigest,
         preparation:
-          input.prepared.status === "enforced"
+          input.prepared.status === 'enforced'
             ? {
-                status: "enforced",
+                status: 'enforced',
                 profileSha256: input.prepared.profileSha256,
                 manifestUtility: input.prepared.manifestUtility,
               }
-            : { status: "unsupported", reason: input.prepared.reason },
+            : { status: 'unsupported', reason: input.prepared.reason },
         preflight: observation,
         recordComplete:
-          input.prepared.status !== "enforced"
-            ? true
-            : observation?.complete ?? false,
+          input.prepared.status !== 'enforced' ? true : (observation?.complete ?? false),
       }),
-      { encoding: "utf8", mode: 0o600 }
+      { encoding: 'utf8', mode: 0o600 },
     );
   } catch {}
 }
 
 function boundedManagedMetroStartupMessage(
   code: string,
-  details: readonly (string | null | undefined)[]
+  details: readonly (string | null | undefined)[],
 ): string {
-  const compactDetails = details.filter((detail): detail is string =>
-    Boolean(detail)
-  );
-  const suffix =
-    compactDetails.length > 0 ? ` (${compactDetails.join("; ")})` : "";
-  return `${code}: managed Metro launcher failed before runtime evidence${suffix}`.slice(
-    0,
-    4_096
-  );
+  const compactDetails = details.filter((detail): detail is string => Boolean(detail));
+  const suffix = compactDetails.length > 0 ? ` (${compactDetails.join('; ')})` : '';
+  return `${code}: managed Metro launcher failed before runtime evidence${suffix}`.slice(0, 4_096);
 }
 
 function managedMetroStartupError(input: {
@@ -2149,17 +2032,15 @@ function managedMetroStartupError(input: {
     {
       sessionId: input.sessionId,
       metroInstanceId: input.metroInstanceId,
-    }
+    },
   );
   const childOutcome =
     input.exitCode !== null
       ? `launcher exit ${input.exitCode}`
       : input.signalCode
-      ? `launcher signal ${input.signalCode}`
-      : null;
-  const launcherDiagnostic = readManagedMetroLauncherDiagnostic(
-    input.launcherDiagnosticPath
-  );
+        ? `launcher signal ${input.signalCode}`
+        : null;
+  const launcherDiagnostic = readManagedMetroLauncherDiagnostic(input.launcherDiagnosticPath);
   const redactions = [
     input.appRoot,
     input.sourceRoot,
@@ -2186,39 +2067,36 @@ function managedMetroStartupError(input: {
     logTail ? `Metro log tail:\n${logTail}` : null,
   ].filter((detail): detail is string => Boolean(detail));
   if (launcherDiagnostic) {
-    return new Error(
-      boundedManagedMetroStartupMessage(launcherDiagnostic.code, details)
-    );
+    return new Error(boundedManagedMetroStartupMessage(launcherDiagnostic.code, details));
   }
   if (violation && /^[A-Z][A-Z0-9_]+:/.test(violation)) {
     return new Error(
       `${sanitizeManagedMetroStartupDetail(violation, redactions)}${
-        details.length > 0 ? `; ${details.join("; ")}` : ""
-      }`.slice(0, 4_096)
+        details.length > 0 ? `; ${details.join('; ')}` : ''
+      }`.slice(0, 4_096),
     );
   }
   let runtimeEvidenceInitialized = false;
   let runtimeEvidenceDescriptor: number | null = null;
   try {
-    runtimeEvidenceDescriptor = openSync(input.runtimeEvidencePath, "r");
+    runtimeEvidenceDescriptor = openSync(input.runtimeEvidencePath, 'r');
     runtimeEvidenceInitialized = fstatSync(runtimeEvidenceDescriptor).size > 0;
   } catch {
   } finally {
-    if (runtimeEvidenceDescriptor !== null)
-      closeSync(runtimeEvidenceDescriptor);
+    if (runtimeEvidenceDescriptor !== null) closeSync(runtimeEvidenceDescriptor);
   }
   if (!runtimeEvidenceInitialized) {
     return new Error(
-      boundedManagedMetroStartupMessage("METRO_LAUNCHER_PRE_EVIDENCE_FAILED", [
-        "stage node-startup",
+      boundedManagedMetroStartupMessage('METRO_LAUNCHER_PRE_EVIDENCE_FAILED', [
+        'stage node-startup',
         ...details,
-      ])
+      ]),
     );
   }
   return new Error(
     `METRO_START_UNAVAILABLE: allocated Metro did not become authoritative${
-      details.length > 0 ? ` (${details.join("; ")})` : ""
-    }`.slice(0, 4_096)
+      details.length > 0 ? ` (${details.join('; ')})` : ''
+    }`.slice(0, 4_096),
   );
 }
 
@@ -2226,22 +2104,21 @@ async function stopSpawnedProcessGroup(
   input: { launcherPid: number; port: number },
   dependencies: Pick<
     ManagedMetroDependencies,
-    "probeBirth" | "probeListener" | "signalTree" | "wait"
-  >
+    'probeBirth' | 'probeListener' | 'signalTree' | 'wait'
+  >,
 ): Promise<boolean> {
   const probeBirth = dependencies.probeBirth ?? probeProcessBirth;
   const probeListener = dependencies.probeListener ?? probeManagedMetroListener;
   const signalTree = dependencies.signalTree ?? signalProcessTree;
   const wait =
-    dependencies.wait ??
-    ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
+    dependencies.wait ?? ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
   let signalFailed = false;
   try {
     signalTree({
       launcherPid: input.launcherPid,
       listenerPid: input.launcherPid,
       launcherPresent: true,
-      signal: "SIGTERM",
+      signal: 'SIGTERM',
     });
   } catch {
     signalFailed = true;
@@ -2250,9 +2127,8 @@ async function stopSpawnedProcessGroup(
   while (true) {
     const launcher = probeBirth(input.launcherPid);
     const port = probeListener(input.port);
-    if (launcher.status === "unknown" || port.status === "unknown")
-      return false;
-    if (launcher.status === "absent" && port.status === "absent") return true;
+    if (launcher.status === 'unknown' || port.status === 'unknown') return false;
+    if (launcher.status === 'absent' && port.status === 'absent') return true;
     if (signalFailed) return false;
     if (Date.now() >= deadline) return false;
     await wait(25);
@@ -2270,91 +2146,64 @@ export async function startManagedMetro(
     buildGeneration: number;
     signerCapability: string;
   },
-  dependencies: ManagedMetroDependencies = {}
+  dependencies: ManagedMetroDependencies = {},
 ): Promise<ManagedMetroBinding> {
   const command = resolveManagedMetroCommand(input.appRoot, dependencies);
-  const resolvedLaunchCommand = resolveManagedMetroLaunchCommand(
-    command,
-    dependencies
-  );
+  const resolvedLaunchCommand = resolveManagedMetroLaunchCommand(command, dependencies);
   const launchCommand = resolvedLaunchCommand;
   const instanceId = input.instanceId;
-  const runtimePolicyCapability = createHmac("sha256", input.signerCapability)
-    .update("metro-runtime-policy")
-    .digest("base64url");
-  const baseNodeOptions = (process.env.NODE_OPTIONS ?? "").trim();
-  if (
-    hasNodeLoaderOption(baseNodeOptions) ||
-    hasUnsupportedNodeOption(baseNodeOptions)
-  ) {
-    throw new Error(
-      "METRO_START_UNAVAILABLE: NODE_OPTIONS contain unsupported execution inputs"
-    );
+  const runtimePolicyCapability = createHmac('sha256', input.signerCapability)
+    .update('metro-runtime-policy')
+    .digest('base64url');
+  const baseNodeOptions = (process.env.NODE_OPTIONS ?? '').trim();
+  if (hasNodeLoaderOption(baseNodeOptions) || hasUnsupportedNodeOption(baseNodeOptions)) {
+    throw new Error('METRO_START_UNAVAILABLE: NODE_OPTIONS contain unsupported execution inputs');
   }
-  const authorityPreload = join(
-    input.appRoot,
-    ".rn-agent",
-    "integration",
-    "rn-session-metro.cjs"
-  );
-  const runtimeEvidencePath = join(
-    input.runtimeRoot,
-    "metro-runtime-evidence.jsonl"
-  );
-  const launcherDiagnosticPath = join(
-    input.runtimeRoot,
-    "metro-launcher-diagnostic.json"
-  );
-  const nativeAddonAcknowledgmentRoot = join(
-    input.runtimeRoot,
-    "native-addon-acknowledgments"
-  );
+  const authorityPreload = join(input.appRoot, '.rn-agent', 'integration', 'rn-session-metro.cjs');
+  const runtimeEvidencePath = join(input.runtimeRoot, 'metro-runtime-evidence.jsonl');
+  const launcherDiagnosticPath = join(input.runtimeRoot, 'metro-launcher-diagnostic.json');
+  const nativeAddonAcknowledgmentRoot = join(input.runtimeRoot, 'native-addon-acknowledgments');
   const runtimePolicyPath = join(
     input.appRoot,
-    ".rn-agent",
-    "integration",
-    "metro-runtime-policy.json"
+    '.rn-agent',
+    'integration',
+    'metro-runtime-policy.json',
   );
-  const runtimeEvidenceEndpointId = createHmac("sha256", input.signerCapability)
+  const runtimeEvidenceEndpointId = createHmac('sha256', input.signerCapability)
     .update(`metro-runtime-evidence\0${instanceId}`)
-    .digest("hex")
+    .digest('hex')
     .slice(0, 32);
   const runtimeEvidenceSocket =
-    process.platform === "win32"
+    process.platform === 'win32'
       ? `\\\\.\\pipe\\rn-dev-agent-${runtimeEvidenceEndpointId}`
       : `/tmp/rn-dev-agent-${runtimeEvidenceEndpointId}.sock`;
-  const authorityNodeOptions = [
-    baseNodeOptions,
-    `--require=${JSON.stringify(authorityPreload)}`,
-  ]
+  const authorityNodeOptions = [baseNodeOptions, `--require=${JSON.stringify(authorityPreload)}`]
     .filter(Boolean)
-    .join(" ");
+    .join(' ');
   const exists = dependencies.exists ?? existsSync;
-  const resolvedDependencyRoots = dependencyRoots(
-    input.appRoot,
-    input.sourceRoot,
-    exists
-  ).map(canonicalRuntimeInput);
+  const resolvedDependencyRoots = dependencyRoots(input.appRoot, input.sourceRoot, exists).map(
+    canonicalRuntimeInput,
+  );
   const allowedCodeRoots = [
     canonicalRuntimeInput(input.sourceRoot),
     canonicalRuntimeInput(input.appRoot),
     ...resolvedDependencyRoots,
   ].filter((value, index, entries) => entries.indexOf(value) === index);
-  const authorityRootNonce = createHmac("sha256", input.signerCapability)
+  const authorityRootNonce = createHmac('sha256', input.signerCapability)
     .update(`metro-descendant-root\0${instanceId}`)
-    .digest("hex")
+    .digest('hex')
     .slice(0, 32);
-  const metroArgs = [...launchCommand.args, "--port", String(input.port)];
-  const metroHome = join(input.runtimeRoot, "metro-home");
-  const metroTemporaryRoot = join(input.runtimeRoot, "metro-tmp");
-  const metroCacheRoot = join(input.runtimeRoot, "metro-cache");
-  const metroBinRoot = join(input.runtimeRoot, "metro-bin");
+  const metroArgs = [...launchCommand.args, '--port', String(input.port)];
+  const metroHome = join(input.runtimeRoot, 'metro-home');
+  const metroTemporaryRoot = join(input.runtimeRoot, 'metro-tmp');
+  const metroCacheRoot = join(input.runtimeRoot, 'metro-cache');
+  const metroBinRoot = join(input.runtimeRoot, 'metro-bin');
   for (const path of [
     metroHome,
     metroTemporaryRoot,
     metroCacheRoot,
     metroBinRoot,
-    join(input.appRoot, ".expo"),
+    join(input.appRoot, '.expo'),
     nativeAddonAcknowledgmentRoot,
   ]) {
     if (!exists(path)) mkdirSync(path, { recursive: true, mode: 0o700 });
@@ -2365,7 +2214,7 @@ export async function startManagedMetro(
     sourceRoot: input.sourceRoot,
   });
   const manifestUtilityGit = manifestUtility.git;
-  const gitShimPath = join(metroBinRoot, "git");
+  const gitShimPath = join(metroBinRoot, 'git');
   rmSync(gitShimPath, { force: true, recursive: true });
   if (manifestUtilityGit) symlinkSync(manifestUtilityGit, gitShimPath);
   const metroEnvironment = managedMetroChildEnvironment({
@@ -2375,42 +2224,36 @@ export async function startManagedMetro(
     TMP: metroTemporaryRoot,
     TEMP: metroTemporaryRoot,
     XDG_CACHE_HOME: metroCacheRoot,
-    EXPO_OFFLINE: "1",
-    EXPO_UNSTABLE_HEADLESS: "1",
+    EXPO_OFFLINE: '1',
+    EXPO_UNSTABLE_HEADLESS: '1',
     RCT_METRO_PORT: String(input.port),
   });
   // NOTE: expo-updates resolves `git` through PATH, and the /usr/bin/git xcrun shim cannot run
   // under the sandbox profile, so a shim holding only the admitted git wins the lookup.
-  const pathPrefixes = [
-    launchCommand.binPath,
-    manifestUtilityGit ? metroBinRoot : null,
-  ].filter((entry): entry is string => Boolean(entry));
+  const pathPrefixes = [launchCommand.binPath, manifestUtilityGit ? metroBinRoot : null].filter(
+    (entry): entry is string => Boolean(entry),
+  );
   const childEnvironment = {
     ...metroEnvironment,
     ...(pathPrefixes.length > 0
       ? {
-          PATH: [...pathPrefixes, metroEnvironment.PATH]
-            .filter(Boolean)
-            .join(":"),
+          PATH: [...pathPrefixes, metroEnvironment.PATH].filter(Boolean).join(':'),
         }
       : {}),
     NODE_OPTIONS: authorityNodeOptions,
-    RN_DEV_AGENT_METRO_EVIDENCE_FD: "9",
+    RN_DEV_AGENT_METRO_EVIDENCE_FD: '9',
     RN_DEV_AGENT_SESSION_ID: input.sessionId,
     RN_DEV_AGENT_METRO_INSTANCE_ID: instanceId,
     RN_DEV_AGENT_METRO_AUTHORITY_PRELOAD: authorityPreload,
     RN_DEV_AGENT_METRO_BASE_NODE_OPTIONS: baseNodeOptions,
     RN_DEV_AGENT_METRO_CONTENT_ROOT: canonicalRuntimeInput(input.sourceRoot),
     RN_DEV_AGENT_METRO_APP_ROOT: canonicalRuntimeInput(input.appRoot),
-    RN_DEV_AGENT_METRO_ALLOWED_CODE_ROOTS:
-      canonicalAuthorityJson(allowedCodeRoots),
+    RN_DEV_AGENT_METRO_ALLOWED_CODE_ROOTS: canonicalAuthorityJson(allowedCodeRoots),
     RN_DEV_AGENT_METRO_AUTHORITY_ROOT_NONCE: authorityRootNonce,
     RN_DEV_AGENT_METRO_NATIVE_ADDON_ACK_ROOT: nativeAddonAcknowledgmentRoot,
   };
-  const packageInputs = [
-    canonicalRuntimeInput(join(input.appRoot, "package.json")),
-  ];
-  const metroConfigInputs = ["metro.config.js", "metro.config.cjs"]
+  const packageInputs = [canonicalRuntimeInput(join(input.appRoot, 'package.json'))];
+  const metroConfigInputs = ['metro.config.js', 'metro.config.cjs']
     .map((name) => join(input.appRoot, name))
     .filter(exists)
     .map(canonicalRuntimeInput);
@@ -2421,23 +2264,17 @@ export async function startManagedMetro(
     ...metroConfigInputs,
     ...resolvedDependencyRoots,
   ].filter((value, index, entries) => entries.indexOf(value) === index);
-  const commandChainInputs = [
-    ...launchCommand.chainInputs,
-    authorityPreload,
-  ].filter((value, index, entries) => entries.indexOf(value) === index);
+  const commandChainInputs = [...launchCommand.chainInputs, authorityPreload].filter(
+    (value, index, entries) => entries.indexOf(value) === index,
+  );
   const runtimeManifest = {
     version: 1,
     executable: canonicalRuntimeInput(launchCommand.executable),
     sourceExecutable: canonicalRuntimeInput(launchCommand.sourceExecutable),
     commandProbeArguments: launchCommand.probeArgs,
-    commandExecutableMappings: launchCommand.executableMappings.map(
-      canonicalRuntimeInput
-    ),
+    commandExecutableMappings: launchCommand.executableMappings.map(canonicalRuntimeInput),
     commandChainInputs: commandChainInputs.map(canonicalRuntimeInput),
-    protectedRuntimeRoots: [
-      ...launchCommand.protectedRuntimeRoots,
-      nativeAddonAcknowledgmentRoot,
-    ]
+    protectedRuntimeRoots: [...launchCommand.protectedRuntimeRoots, nativeAddonAcknowledgmentRoot]
       .map(canonicalRuntimeInput)
       .filter((value, index, entries) => entries.indexOf(value) === index),
     nativeAddonRoots: allowedCodeRoots,
@@ -2447,9 +2284,9 @@ export async function startManagedMetro(
     port: input.port,
     args: metroArgs,
     nodeOptions: authorityNodeOptions,
-    environmentDigest: createHash("sha256")
+    environmentDigest: createHash('sha256')
       .update(canonicalAuthorityJson(childEnvironment))
-      .digest("hex"),
+      .digest('hex'),
     contentRoot: resolve(input.sourceRoot),
     appRoot: resolve(input.appRoot),
     servingRoot: resolve(input.sourceRoot),
@@ -2464,8 +2301,7 @@ export async function startManagedMetro(
       allowedCodeRoots,
     },
   };
-  const prepareEnforcement =
-    dependencies.prepareEnforcement ?? prepareManagedMetroEnforcement;
+  const prepareEnforcement = dependencies.prepareEnforcement ?? prepareManagedMetroEnforcement;
   const preflightEnforcement =
     dependencies.preflightEnforcement ?? runManagedMetroEnforcementPreflight;
   const preparedEnforcement = prepareEnforcement({
@@ -2494,7 +2330,7 @@ export async function startManagedMetro(
     | (ManagedMetroEnforcementPlan & {
         receipt: ManagedMetroEnforcementReceipt;
       }) = preparedEnforcement;
-  if (preparedEnforcement.status === "enforced") {
+  if (preparedEnforcement.status === 'enforced') {
     try {
       runtimeEnforcement = {
         ...preparedEnforcement,
@@ -2507,16 +2343,13 @@ export async function startManagedMetro(
       };
     } catch {
       runtimeEnforcement = {
-        status: "unsupported",
-        reason: "sandbox-preflight-failed",
+        status: 'unsupported',
+        reason: 'sandbox-preflight-failed',
       };
     }
   }
   writeManagedMetroEnforcementDiagnostic({
-    path: join(
-      input.runtimeRoot,
-      `metro-enforcement-diagnostic-${instanceId}.json`
-    ),
+    path: join(input.runtimeRoot, `metro-enforcement-diagnostic-${instanceId}.json`),
     sessionId: input.sessionId,
     metroInstanceId: instanceId,
     buildGeneration: input.buildGeneration,
@@ -2525,20 +2358,18 @@ export async function startManagedMetro(
     observation: preflightObservation,
   });
   const runtimeEvidenceAuthority: MetroRuntimeEvidenceAuthority =
-    runtimeEnforcement.status === "enforced"
-      ? "managed-sandbox-v1"
-      : "reported-v1";
-  const requiresSandboxAdmission = runtimeEnforcement.status === "enforced";
+    runtimeEnforcement.status === 'enforced' ? 'managed-sandbox-v1' : 'reported-v1';
+  const requiresSandboxAdmission = runtimeEnforcement.status === 'enforced';
   const enforcementReceiptForAdmission =
-    runtimeEnforcement.status === "enforced" && "receipt" in runtimeEnforcement
+    runtimeEnforcement.status === 'enforced' && 'receipt' in runtimeEnforcement
       ? runtimeEnforcement.receipt
       : null;
-  const logPath = join(input.runtimeRoot, "metro.log");
+  const logPath = join(input.runtimeRoot, 'metro.log');
   rmSync(launcherDiagnosticPath, { force: true });
-  const log = openSync(logPath, "w", 0o600);
+  const log = openSync(logPath, 'w', 0o600);
   const child = (dependencies.spawnProcess ?? spawn)(
     launchCommand.nodeExecutable,
-    ["-e", METRO_LAUNCHER_SOURCE],
+    ['-e', METRO_LAUNCHER_SOURCE],
     {
       cwd: input.appRoot,
       env: {
@@ -2557,60 +2388,45 @@ export async function startManagedMetro(
         RN_DEV_AGENT_METRO_CONTENT_ROOT: input.sourceRoot,
         RN_DEV_AGENT_METRO_APP_ROOT: input.appRoot,
         RN_DEV_AGENT_METRO_CHILD_ENVIRONMENT: JSON.stringify(childEnvironment),
-        RN_DEV_AGENT_METRO_RUNTIME_MANIFEST:
-          canonicalAuthorityJson(runtimeManifest),
-        RN_DEV_AGENT_METRO_RUNTIME_ENFORCEMENT:
-          canonicalAuthorityJson(runtimeEnforcement),
+        RN_DEV_AGENT_METRO_RUNTIME_MANIFEST: canonicalAuthorityJson(runtimeManifest),
+        RN_DEV_AGENT_METRO_RUNTIME_ENFORCEMENT: canonicalAuthorityJson(runtimeEnforcement),
         RN_DEV_AGENT_METRO_CHILD_NODE_OPTIONS: authorityNodeOptions,
         RN_DEV_AGENT_METRO_NATIVE_ADDON_ACK_ROOT: nativeAddonAcknowledgmentRoot,
         NODE_OPTIONS: baseNodeOptions,
       },
       detached: true,
-      stdio: ["ignore", log, log],
-    }
+      stdio: ['ignore', log, log],
+    },
   );
   closeSync(log);
   if (!child.pid) {
-    throw new Error(
-      "METRO_START_UNAVAILABLE: package-local Metro process did not start"
-    );
+    throw new Error('METRO_START_UNAVAILABLE: package-local Metro process did not start');
   }
   const readBirth = dependencies.readBirth ?? readProcessBirth;
   const launcherBirth = readBirth(child.pid);
   if (!launcherBirth) {
     const cleanupProven = await stopSpawnedProcessGroup(
       { launcherPid: child.pid, port: input.port },
-      dependencies
+      dependencies,
     );
     if (!cleanupProven) {
       throw new Error(
-        "METRO_START_CLEANUP_UNPROVEN: Metro launcher birth and cleanup could not be proven"
+        'METRO_START_CLEANUP_UNPROVEN: Metro launcher birth and cleanup could not be proven',
       );
     }
-    if (
-      !removeManagedMetroEvidenceSocketSafely(
-        runtimeEvidenceSocket,
-        dependencies
-      )
-    ) {
-      throw new Error(
-        "METRO_START_CLEANUP_UNPROVEN: Metro evidence socket cleanup failed"
-      );
+    if (!removeManagedMetroEvidenceSocketSafely(runtimeEvidenceSocket, dependencies)) {
+      throw new Error('METRO_START_CLEANUP_UNPROVEN: Metro evidence socket cleanup failed');
     }
-    throw new Error(
-      "PROCESS_BIRTH_UNAVAILABLE: Metro launcher birth could not be proven"
-    );
+    throw new Error('PROCESS_BIRTH_UNAVAILABLE: Metro launcher birth could not be proven');
   }
   child.unref();
 
   const listenerPid = dependencies.listenerPid ?? managedMetroListenerPid;
-  const ownsListener =
-    dependencies.listenerOwnedByLauncher ?? listenerOwnedByLauncher;
+  const ownsListener = dependencies.listenerOwnedByLauncher ?? listenerOwnedByLauncher;
   const capture = dependencies.capture ?? captureMetroBinding;
   const probeBirth = dependencies.probeBirth ?? probeProcessBirth;
   const wait =
-    dependencies.wait ??
-    ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
+    dependencies.wait ?? ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
   const deadline = Date.now() + 20_000;
   let lastError: unknown = null;
   let listenerIdentity: ManagedMetroProcessIdentity | null = null;
@@ -2619,27 +2435,28 @@ export async function startManagedMetro(
     const pid = listenerPid(input.port);
     if (pid && ownsListener(pid, child.pid)) {
       const listenerBirth = probeBirth(pid);
-      if (listenerBirth.status === "present") {
+      if (listenerBirth.status === 'present') {
         listenerIdentity = { pid, birth: listenerBirth.birth.token };
       }
       try {
         if (
           requiresSandboxAdmission &&
           (!enforcementReceiptForAdmission ||
-            !(
-              dependencies.verifyRuntimeAdmission ??
-              verifyManagedMetroRuntimeAdmission
-            )(runtimePolicyPath, runtimePolicyCapability, {
-              sessionId: input.sessionId,
-              metroInstanceId: instanceId,
-              contentRoot: resolve(input.sourceRoot),
-              appRoot: resolve(input.appRoot),
-              runtimeManifest,
-              enforcementReceipt: enforcementReceiptForAdmission,
-            }))
+            !(dependencies.verifyRuntimeAdmission ?? verifyManagedMetroRuntimeAdmission)(
+              runtimePolicyPath,
+              runtimePolicyCapability,
+              {
+                sessionId: input.sessionId,
+                metroInstanceId: instanceId,
+                contentRoot: resolve(input.sourceRoot),
+                appRoot: resolve(input.appRoot),
+                runtimeManifest,
+                enforcementReceipt: enforcementReceiptForAdmission,
+              },
+            ))
         ) {
           throw new Error(
-            "METRO_RUNTIME_ADMISSION_UNAVAILABLE: launcher did not admit managed sandbox"
+            'METRO_RUNTIME_ADMISSION_UNAVAILABLE: launcher did not admit managed sandbox',
           );
         }
         const binding = await capture(
@@ -2650,25 +2467,21 @@ export async function startManagedMetro(
             sourceRoot: input.sourceRoot,
             buildGeneration: input.buildGeneration,
           },
-          { servingRoot: () => input.sourceRoot }
+          { servingRoot: () => input.sourceRoot },
         );
         const authority = {
           ...binding,
-          mode: "managed",
+          mode: 'managed',
           launcherPid: child.pid,
           launcherBirth: launcherBirth.token,
           runtimeEvidencePath,
           runtimeEvidenceSocket,
           runtimeEvidenceAuthority,
           runtimeEvidenceProtocol: 2,
-        } satisfies Omit<ManagedMetroBinding, "managementProof">;
+        } satisfies Omit<ManagedMetroBinding, 'managementProof'>;
         return {
           ...authority,
-          managementProof: managementProof(
-            input.sessionId,
-            authority,
-            input.signerCapability
-          ),
+          managementProof: managementProof(input.sessionId, authority, input.signerCapability),
         };
       } catch (error) {
         lastError = error;
@@ -2682,19 +2495,15 @@ export async function startManagedMetro(
       launcher: { pid: child.pid, birth: launcherBirth.token },
       listener: listenerIdentity,
     },
-    dependencies
+    dependencies,
   );
   if (!cleanupProven) {
     throw new Error(
-      "METRO_START_CLEANUP_UNPROVEN: failed Metro startup left process or listener state ambiguous"
+      'METRO_START_CLEANUP_UNPROVEN: failed Metro startup left process or listener state ambiguous',
     );
   }
-  if (
-    !removeManagedMetroEvidenceSocketSafely(runtimeEvidenceSocket, dependencies)
-  ) {
-    throw new Error(
-      "METRO_START_CLEANUP_UNPROVEN: Metro evidence socket cleanup failed"
-    );
+  if (!removeManagedMetroEvidenceSocketSafely(runtimeEvidenceSocket, dependencies)) {
+    throw new Error('METRO_START_CLEANUP_UNPROVEN: Metro evidence socket cleanup failed');
   }
   throw managedMetroStartupError({
     runtimeEvidencePath,
@@ -2712,7 +2521,7 @@ export async function startManagedMetro(
         ([name, value]) =>
           value !== undefined &&
           (MANAGED_METRO_SENSITIVE_ENVIRONMENT_NAME.test(name) ||
-            /^[a-z][a-z0-9+.-]*:\/\/[^/\s@]+@/i.test(value))
+            /^[a-z][a-z0-9+.-]*:\/\/[^/\s@]+@/i.test(value)),
       )
       .map(([, value]) => value as string),
     exitCode: child.exitCode,
@@ -2725,18 +2534,14 @@ export function signalManagedMetroProcessTree(
   input: ManagedMetroSignal,
   platform: NodeJS.Platform = process.platform,
   execute: typeof execFileSync = execFileSync,
-  executableDependencies: TrustedSystemExecutableDependencies = {}
+  executableDependencies: TrustedSystemExecutableDependencies = {},
 ): void {
-  if (platform === "win32") {
-    const executable = resolveTrustedSystemExecutable(
-      "taskkill",
-      platform,
-      executableDependencies
-    );
-    if (!executable) throw new Error("METRO_CLEANUP_EXECUTABLE_UNAVAILABLE");
+  if (platform === 'win32') {
+    const executable = resolveTrustedSystemExecutable('taskkill', platform, executableDependencies);
+    if (!executable) throw new Error('METRO_CLEANUP_EXECUTABLE_UNAVAILABLE');
     const pid = input.launcherPresent ? input.launcherPid : input.listenerPid;
-    execute(executable, ["/PID", String(pid), "/T"], {
-      stdio: "ignore",
+    execute(executable, ['/PID', String(pid), '/T'], {
+      stdio: 'ignore',
       timeout: 2_000,
     });
     return;
@@ -2748,51 +2553,43 @@ const signalProcessTree = signalManagedMetroProcessTree;
 const MANAGED_METRO_STOP_TIMEOUT_MS = 5_000;
 
 function removeManagedMetroEvidenceSocket(path: string): void {
-  if (process.platform === "win32") return;
+  if (process.platform === 'win32') return;
   if (!/^\/tmp\/rn-dev-agent-[a-f0-9]{32}\.sock$/.test(path)) {
-    throw new Error("METRO_EVIDENCE_SOCKET_INVALID");
+    throw new Error('METRO_EVIDENCE_SOCKET_INVALID');
   }
   rmSync(path, { force: true });
 }
 
 function removeManagedMetroEvidenceSocketSafely(
   path: string,
-  dependencies: Pick<ManagedMetroDependencies, "removeEvidenceSocket">
+  dependencies: Pick<ManagedMetroDependencies, 'removeEvidenceSocket'>,
 ): boolean {
   if (
-    (process.platform === "win32" &&
-      !/^\\\\\.\\pipe\\rn-dev-agent-[a-f0-9]{32}$/.test(path)) ||
-    (process.platform !== "win32" &&
-      !/^\/tmp\/rn-dev-agent-[a-f0-9]{32}\.sock$/.test(path))
+    (process.platform === 'win32' && !/^\\\\\.\\pipe\\rn-dev-agent-[a-f0-9]{32}$/.test(path)) ||
+    (process.platform !== 'win32' && !/^\/tmp\/rn-dev-agent-[a-f0-9]{32}\.sock$/.test(path))
   ) {
     return false;
   }
   try {
-    (dependencies.removeEvidenceSocket ?? removeManagedMetroEvidenceSocket)(
-      path
-    );
+    (dependencies.removeEvidenceSocket ?? removeManagedMetroEvidenceSocket)(path);
     return true;
   } catch {
     return false;
   }
 }
 
-type ExactProcessState = "present" | "stopped" | "unknown";
+type ExactProcessState = 'present' | 'stopped' | 'unknown';
 
 function exactProcessState(
   expected: ManagedMetroProcessIdentity,
-  probe: ProcessBirthProbe
+  probe: ProcessBirthProbe,
 ): ExactProcessState {
-  if (probe.status === "unknown") return "unknown";
-  if (probe.status === "absent") return "stopped";
-  return probe.birth.token === expected.birth ? "present" : "stopped";
+  if (probe.status === 'unknown') return 'unknown';
+  if (probe.status === 'absent') return 'stopped';
+  return probe.birth.token === expected.birth ? 'present' : 'stopped';
 }
 
-export type ManagedMetroCleanupPresence =
-  | "absent"
-  | "present"
-  | "unknown"
-  | "not-applicable";
+export type ManagedMetroCleanupPresence = 'absent' | 'present' | 'unknown' | 'not-applicable';
 
 export interface ManagedMetroCleanupEvidence {
   complete: boolean;
@@ -2811,66 +2608,52 @@ export interface ManagedMetroCleanupResult {
 function cleanupProcessPresence(
   pid: unknown,
   birth: unknown,
-  probeBirth: (pid: number) => ProcessBirthProbe
+  probeBirth: (pid: number) => ProcessBirthProbe,
 ): ManagedMetroCleanupPresence {
-  if (typeof pid !== "number" || typeof birth !== "string") return "unknown";
+  if (typeof pid !== 'number' || typeof birth !== 'string') return 'unknown';
   const state = exactProcessState({ pid, birth }, probeBirth(pid));
-  return state === "stopped" ? "absent" : state;
+  return state === 'stopped' ? 'absent' : state;
 }
 
 function cleanupSocketPresence(
   path: unknown,
-  exists: (path: string) => boolean
+  exists: (path: string) => boolean,
 ): ManagedMetroCleanupPresence {
-  if (typeof path !== "string") return "unknown";
+  if (typeof path !== 'string') return 'unknown';
   try {
-    return exists(path) ? "present" : "absent";
+    return exists(path) ? 'present' : 'absent';
   } catch {
-    return "unknown";
+    return 'unknown';
   }
 }
 
 export function inspectManagedMetroCleanupEvidence(
   binding: Record<string, unknown>,
-  dependencies: Pick<
-    ManagedMetroDependencies,
-    "exists" | "probeBirth" | "probeListener"
-  > = {}
+  dependencies: Pick<ManagedMetroDependencies, 'exists' | 'probeBirth' | 'probeListener'> = {},
 ): ManagedMetroCleanupEvidence {
   const probeBirth = dependencies.probeBirth ?? probeProcessBirth;
   const probeListener = dependencies.probeListener ?? probeManagedMetroListener;
-  const managed = binding.mode === "managed";
+  const managed = binding.mode === 'managed';
   const launcher = managed
-    ? cleanupProcessPresence(
-        binding.launcherPid,
-        binding.launcherBirth,
-        probeBirth
-      )
-    : "not-applicable";
-  const listener = cleanupProcessPresence(
-    binding.pid,
-    binding.birth,
-    probeBirth
-  );
-  let port: ManagedMetroListenerProbe = { status: "unknown" };
-  if (typeof binding.port === "number") {
+    ? cleanupProcessPresence(binding.launcherPid, binding.launcherBirth, probeBirth)
+    : 'not-applicable';
+  const listener = cleanupProcessPresence(binding.pid, binding.birth, probeBirth);
+  let port: ManagedMetroListenerProbe = { status: 'unknown' };
+  if (typeof binding.port === 'number') {
     try {
       port = probeListener(binding.port);
     } catch {}
   }
   const evidenceSocket = managed
-    ? cleanupSocketPresence(
-        binding.runtimeEvidenceSocket,
-        dependencies.exists ?? existsSync
-      )
-    : "not-applicable";
+    ? cleanupSocketPresence(binding.runtimeEvidenceSocket, dependencies.exists ?? existsSync)
+    : 'not-applicable';
   const complete =
-    launcher !== "present" &&
-    launcher !== "unknown" &&
-    listener === "absent" &&
-    port.status === "absent" &&
-    evidenceSocket !== "present" &&
-    evidenceSocket !== "unknown";
+    launcher !== 'present' &&
+    launcher !== 'unknown' &&
+    listener === 'absent' &&
+    port.status === 'absent' &&
+    evidenceSocket !== 'present' &&
+    evidenceSocket !== 'unknown';
   return { complete, launcher, listener, port, evidenceSocket };
 }
 
@@ -2882,47 +2665,42 @@ async function stopManagedMetroProcesses(
   },
   dependencies: Pick<
     ManagedMetroDependencies,
-    "probeBirth" | "probeListener" | "signalTree" | "wait"
-  >
+    'probeBirth' | 'probeListener' | 'signalTree' | 'wait'
+  >,
 ): Promise<boolean> {
   const probeBirth = dependencies.probeBirth ?? probeProcessBirth;
   const probeListener = dependencies.probeListener ?? probeManagedMetroListener;
   const signalTree = dependencies.signalTree ?? signalProcessTree;
   const wait =
-    dependencies.wait ??
-    ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
+    dependencies.wait ?? ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
   const inspect = () => {
-    const launcher = exactProcessState(
-      input.launcher,
-      probeBirth(input.launcher.pid)
-    );
+    const launcher = exactProcessState(input.launcher, probeBirth(input.launcher.pid));
     const listener = input.listener
       ? exactProcessState(input.listener, probeBirth(input.listener.pid))
-      : "stopped";
+      : 'stopped';
     const port = probeListener(input.port);
     return { launcher, listener, port };
   };
   const initial = inspect();
   if (
-    initial.launcher === "unknown" ||
-    initial.listener === "unknown" ||
-    initial.port.status === "unknown"
+    initial.launcher === 'unknown' ||
+    initial.listener === 'unknown' ||
+    initial.port.status === 'unknown'
   ) {
     return false;
   }
   if (
-    initial.port.status === "listening" &&
+    initial.port.status === 'listening' &&
     (input.listener
-      ? initial.port.pid !== input.listener.pid ||
-        initial.listener !== "present"
-      : initial.launcher !== "present")
+      ? initial.port.pid !== input.listener.pid || initial.listener !== 'present'
+      : initial.launcher !== 'present')
   ) {
     return false;
   }
   if (
-    initial.launcher === "stopped" &&
-    initial.listener === "stopped" &&
-    initial.port.status === "absent"
+    initial.launcher === 'stopped' &&
+    initial.listener === 'stopped' &&
+    initial.port.status === 'absent'
   ) {
     return true;
   }
@@ -2930,8 +2708,8 @@ async function stopManagedMetroProcesses(
     signalTree({
       launcherPid: input.launcher.pid,
       listenerPid: input.listener?.pid ?? input.launcher.pid,
-      launcherPresent: initial.launcher === "present",
-      signal: "SIGTERM",
+      launcherPresent: initial.launcher === 'present',
+      signal: 'SIGTERM',
     });
   } catch {
     return false;
@@ -2940,22 +2718,21 @@ async function stopManagedMetroProcesses(
   while (true) {
     const current = inspect();
     const uncertain =
-      current.launcher === "unknown" ||
-      current.listener === "unknown" ||
-      current.port.status === "unknown";
+      current.launcher === 'unknown' ||
+      current.listener === 'unknown' ||
+      current.port.status === 'unknown';
     if (!uncertain) {
       if (
-        current.launcher === "stopped" &&
-        current.listener === "stopped" &&
-        current.port.status === "absent"
+        current.launcher === 'stopped' &&
+        current.listener === 'stopped' &&
+        current.port.status === 'absent'
       ) {
         return true;
       }
       if (
-        current.port.status === "listening" &&
+        current.port.status === 'listening' &&
         input.listener &&
-        (current.port.pid !== input.listener.pid ||
-          current.listener !== "present")
+        (current.port.pid !== input.listener.pid || current.listener !== 'present')
       ) {
         return false;
       }
@@ -2970,16 +2747,12 @@ export async function stopManagedMetro(
   input: { sessionId: string; signerCapability: string },
   dependencies: Pick<
     ManagedMetroDependencies,
-    | "probeBirth"
-    | "probeListener"
-    | "removeEvidenceSocket"
-    | "signalTree"
-    | "wait"
-  > = {}
+    'probeBirth' | 'probeListener' | 'removeEvidenceSocket' | 'signalTree' | 'wait'
+  > = {},
 ): Promise<boolean> {
   if (!verifyManagedMetroStopProof(binding, input)) return false;
   const authenticatedBinding = binding as Partial<ManagedMetroBinding> & {
-    mode: "managed";
+    mode: 'managed';
     port: number;
     pid: number;
     birth: string;
@@ -3002,39 +2775,35 @@ export async function stopManagedMetro(
         birth: authenticatedBinding.birth,
       },
     },
-    dependencies
+    dependencies,
   );
   if (!stopped) return false;
   return removeManagedMetroEvidenceSocketSafely(
     authenticatedBinding.runtimeEvidenceSocket,
-    dependencies
+    dependencies,
   );
 }
 
 export function verifyManagedMetroStopProof(
-  binding:
-    | Partial<ManagedMetroBinding>
-    | Record<string, unknown>
-    | null
-    | undefined,
-  input: { sessionId: string; signerCapability: string }
+  binding: Partial<ManagedMetroBinding> | Record<string, unknown> | null | undefined,
+  input: { sessionId: string; signerCapability: string },
 ): boolean {
   if (
-    binding?.mode !== "managed" ||
-    typeof binding.port !== "number" ||
-    typeof binding.pid !== "number" ||
-    typeof binding.birth !== "string" ||
-    typeof binding.launcherPid !== "number" ||
-    typeof binding.launcherBirth !== "string" ||
-    typeof binding.instanceId !== "string" ||
-    typeof binding.runtimeEvidencePath !== "string" ||
-    typeof binding.runtimeEvidenceSocket !== "string" ||
+    binding?.mode !== 'managed' ||
+    typeof binding.port !== 'number' ||
+    typeof binding.pid !== 'number' ||
+    typeof binding.birth !== 'string' ||
+    typeof binding.launcherPid !== 'number' ||
+    typeof binding.launcherBirth !== 'string' ||
+    typeof binding.instanceId !== 'string' ||
+    typeof binding.runtimeEvidencePath !== 'string' ||
+    typeof binding.runtimeEvidenceSocket !== 'string' ||
     (binding.runtimeEvidenceAuthority !== undefined &&
-      binding.runtimeEvidenceAuthority !== "reported-v1" &&
-      binding.runtimeEvidenceAuthority !== "managed-sandbox-v1") ||
-    (binding.runtimeEvidenceAuthority === "managed-sandbox-v1" &&
+      binding.runtimeEvidenceAuthority !== 'reported-v1' &&
+      binding.runtimeEvidenceAuthority !== 'managed-sandbox-v1') ||
+    (binding.runtimeEvidenceAuthority === 'managed-sandbox-v1' &&
       binding.runtimeEvidenceProtocol !== 2) ||
-    typeof binding.managementProof !== "string"
+    typeof binding.managementProof !== 'string'
   ) {
     return false;
   }
@@ -3048,77 +2817,71 @@ export function verifyManagedMetroStopProof(
     runtimeEvidencePath: binding.runtimeEvidencePath,
     runtimeEvidenceSocket: binding.runtimeEvidenceSocket,
   };
-  const observedBuffer = Buffer.from(binding.managementProof, "hex");
+  const observedBuffer = Buffer.from(binding.managementProof, 'hex');
   const expectedProofs =
     binding.runtimeEvidenceAuthority === undefined
-      ? [
-          legacyManagementProof(
-            input.sessionId,
-            legacyAuthority,
-            input.signerCapability
-          ),
-        ]
-      : binding.runtimeEvidenceAuthority === "reported-v1"
-      ? [
-          createHmac("sha256", input.signerCapability)
-            .update(
-              canonicalAuthorityJson({
-                sessionId: input.sessionId,
+      ? [legacyManagementProof(input.sessionId, legacyAuthority, input.signerCapability)]
+      : binding.runtimeEvidenceAuthority === 'reported-v1'
+        ? [
+            createHmac('sha256', input.signerCapability)
+              .update(
+                canonicalAuthorityJson({
+                  sessionId: input.sessionId,
+                  ...legacyAuthority,
+                  runtimeEvidenceAuthority: binding.runtimeEvidenceAuthority,
+                }),
+              )
+              .digest('hex'),
+            ...(binding.runtimeEvidenceProtocol === 2 &&
+            typeof binding.servingRoot === 'string' &&
+            Number.isSafeInteger(binding.buildGeneration) &&
+            (binding.buildGeneration as number) >= 0
+              ? [
+                  managementProof(
+                    input.sessionId,
+                    {
+                      ...legacyAuthority,
+                      runtimeEvidenceAuthority: binding.runtimeEvidenceAuthority,
+                      runtimeEvidenceProtocol: 2,
+                      servingRoot: binding.servingRoot,
+                      buildGeneration: binding.buildGeneration as number,
+                    },
+                    input.signerCapability,
+                  ),
+                ]
+              : []),
+          ]
+        : [
+            managedSandboxManagementProofV1(
+              input.sessionId,
+              {
                 ...legacyAuthority,
                 runtimeEvidenceAuthority: binding.runtimeEvidenceAuthority,
-              })
-            )
-            .digest("hex"),
-          ...(binding.runtimeEvidenceProtocol === 2 &&
-          typeof binding.servingRoot === "string" &&
-          Number.isSafeInteger(binding.buildGeneration) &&
-          (binding.buildGeneration as number) >= 0
-            ? [
-                managementProof(
-                  input.sessionId,
-                  {
-                    ...legacyAuthority,
-                    runtimeEvidenceAuthority: binding.runtimeEvidenceAuthority,
-                    runtimeEvidenceProtocol: 2,
-                    servingRoot: binding.servingRoot,
-                    buildGeneration: binding.buildGeneration as number,
-                  },
-                  input.signerCapability
-                ),
-              ]
-            : []),
-        ]
-      : [
-          managedSandboxManagementProofV1(
-            input.sessionId,
-            {
-              ...legacyAuthority,
-              runtimeEvidenceAuthority: binding.runtimeEvidenceAuthority,
-              runtimeEvidenceProtocol: 2,
-            },
-            input.signerCapability
-          ),
-          ...(typeof binding.servingRoot === "string" &&
-          Number.isSafeInteger(binding.buildGeneration) &&
-          (binding.buildGeneration as number) >= 0
-            ? [
-                managementProof(
-                  input.sessionId,
-                  {
-                    ...legacyAuthority,
-                    runtimeEvidenceAuthority: binding.runtimeEvidenceAuthority,
-                    runtimeEvidenceProtocol: 2,
-                    servingRoot: binding.servingRoot,
-                    buildGeneration: binding.buildGeneration as number,
-                  },
-                  input.signerCapability
-                ),
-              ]
-            : []),
-        ];
+                runtimeEvidenceProtocol: 2,
+              },
+              input.signerCapability,
+            ),
+            ...(typeof binding.servingRoot === 'string' &&
+            Number.isSafeInteger(binding.buildGeneration) &&
+            (binding.buildGeneration as number) >= 0
+              ? [
+                  managementProof(
+                    input.sessionId,
+                    {
+                      ...legacyAuthority,
+                      runtimeEvidenceAuthority: binding.runtimeEvidenceAuthority,
+                      runtimeEvidenceProtocol: 2,
+                      servingRoot: binding.servingRoot,
+                      buildGeneration: binding.buildGeneration as number,
+                    },
+                    input.signerCapability,
+                  ),
+                ]
+              : []),
+          ];
   if (
     !expectedProofs.some((expected) => {
-      const expectedBuffer = Buffer.from(expected, "hex");
+      const expectedBuffer = Buffer.from(expected, 'hex');
       return (
         expectedBuffer.length === observedBuffer.length &&
         timingSafeEqual(expectedBuffer, observedBuffer)
@@ -3135,50 +2898,40 @@ export async function stopManagedMetroWithEvidence(
   input: { sessionId: string; signerCapability: string },
   dependencies: Pick<
     ManagedMetroDependencies,
-    | "authorizeEvidenceSocketRemoval"
-    | "exists"
-    | "probeBirth"
-    | "probeListener"
-    | "removeEvidenceSocket"
-    | "signalTree"
-    | "wait"
-  > = {}
+    | 'authorizeEvidenceSocketRemoval'
+    | 'exists'
+    | 'probeBirth'
+    | 'probeListener'
+    | 'removeEvidenceSocket'
+    | 'signalTree'
+    | 'wait'
+  > = {},
 ): Promise<ManagedMetroCleanupResult> {
   const proofAuthenticated =
-    binding !== null &&
-    binding !== undefined &&
-    verifyManagedMetroStopProof(binding, input);
+    binding !== null && binding !== undefined && verifyManagedMetroStopProof(binding, input);
   const stopped = await stopManagedMetro(binding, input, dependencies);
   const authenticated = proofAuthenticated || stopped;
   let evidence = inspectManagedMetroCleanupEvidence(
     (binding ?? {}) as Record<string, unknown>,
-    dependencies
+    dependencies,
   );
   let recoveryAuthorized = false;
-  if (!authenticated && typeof binding?.runtimeEvidenceSocket === "string") {
+  if (!authenticated && typeof binding?.runtimeEvidenceSocket === 'string') {
     try {
       recoveryAuthorized =
-        dependencies.authorizeEvidenceSocketRemoval?.(
-          binding.runtimeEvidenceSocket
-        ) === true;
+        dependencies.authorizeEvidenceSocketRemoval?.(binding.runtimeEvidenceSocket) === true;
     } catch {}
   }
   if (
     (authenticated || recoveryAuthorized) &&
-    evidence.launcher === "absent" &&
-    evidence.listener === "absent" &&
-    evidence.port.status === "absent" &&
-    evidence.evidenceSocket === "present" &&
-    typeof binding?.runtimeEvidenceSocket === "string"
+    evidence.launcher === 'absent' &&
+    evidence.listener === 'absent' &&
+    evidence.port.status === 'absent' &&
+    evidence.evidenceSocket === 'present' &&
+    typeof binding?.runtimeEvidenceSocket === 'string'
   ) {
-    removeManagedMetroEvidenceSocketSafely(
-      binding.runtimeEvidenceSocket,
-      dependencies
-    );
-    evidence = inspectManagedMetroCleanupEvidence(
-      binding as Record<string, unknown>,
-      dependencies
-    );
+    removeManagedMetroEvidenceSocketSafely(binding.runtimeEvidenceSocket, dependencies);
+    evidence = inspectManagedMetroCleanupEvidence(binding as Record<string, unknown>, dependencies);
   }
   return {
     authenticated,
