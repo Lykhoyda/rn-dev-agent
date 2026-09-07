@@ -323,6 +323,10 @@ async function ensureManagedMetro(status: ReturnType<typeof resolveStatus>): Pro
     );
   }
   const signerCapability = readSigner(status);
+  const appRoot = String(status.source.appRoot);
+  const readiness = resolveMetroReadinessTimeout({
+    readConfig: () => readRnAgentConfig(appRoot),
+  });
   const existing = status.bindings.metro as Partial<ManagedMetroBinding> | undefined;
   const retainedCleanup = status.bindings.metroCleanup as
     | Partial<ManagedMetroBinding>
@@ -417,12 +421,6 @@ async function ensureManagedMetro(status: ReturnType<typeof resolveStatus>): Pro
         });
       }
 
-      // Resolved before any marker or advisory is written so a malformed
-      // `.rn-agent/config.json` value refuses loudly instead of being ignored.
-      const appRoot = String(status.source.appRoot);
-      const readiness = resolveMetroReadinessTimeout({
-        readConfig: () => readRnAgentConfig(appRoot),
-      });
       const instanceId = randomUUID();
       restarted = true;
       const install = status.bindings.install as Record<string, unknown> | undefined;

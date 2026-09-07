@@ -19053,6 +19053,10 @@ async function ensureManagedMetro(status) {
     throw new SessionAuthorityError("BUNDLE_HANDSHAKE_UNAVAILABLE", "session package and Metro integration must be applied before managed Metro starts");
   }
   const signerCapability = readSigner(status);
+  const appRoot = String(status.source.appRoot);
+  const readiness = resolveMetroReadinessTimeout({
+    readConfig: () => readRnAgentConfig(appRoot)
+  });
   const existing = status.bindings.metro;
   const retainedCleanup = status.bindings.metroCleanup;
   const operation = beginCliOperation(status, "rn-session ensure-metro", "transition:ensure-metro");
@@ -19117,10 +19121,6 @@ async function ensureManagedMetro(status) {
           bindings: { metro: null, bundle: null }
         });
       }
-      const appRoot = String(status.source.appRoot);
-      const readiness = resolveMetroReadinessTimeout({
-        readConfig: () => readRnAgentConfig(appRoot)
-      });
       const instanceId = randomUUID3();
       restarted = true;
       const install = status.bindings.install;

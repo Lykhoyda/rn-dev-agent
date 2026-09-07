@@ -19839,7 +19839,7 @@ let sessionCli = null;
 let buildCapability = null;
 let buildKind = null;
 const MANAGED_BUILD_SIGNALS = ['SIGINT', 'SIGTERM', 'SIGHUP'];
-const SESSION_CLI_TIMEOUT_MS = 120000;
+const SESSION_CLI_TIMEOUT_MS = ${SESSION_CLI_TIMEOUT_MS};
 const buildRecovery = { abortAttempted: false, abortFailure: null, released: false, completed: false };
 function abortPendingBuild() {
   if (!buildCapability || !sessionCli) return null;
@@ -20229,7 +20229,7 @@ function managedMetroProxyUrl(binding) {
 })().catch((error) => {
   failBuild(1, 'rn-session-adapter: unexpected failure: ' + (error && error.message ? error.message : String(error)));
 });
-`.replace("const SESSION_CLI_TIMEOUT_MS = 120000;", `const SESSION_CLI_TIMEOUT_MS = ${SESSION_CLI_TIMEOUT_MS};`);
+`;
 }
 function snapshotBoundFiles(directory, directoryPath, names) {
   return readBoundDirectoryFiles(directory, names).map((snapshot) => ({

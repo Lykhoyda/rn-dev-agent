@@ -49,6 +49,7 @@ async function withFirstBuildSession(
     appRoot: string;
     ensureMetro: () => ReturnType<typeof spawnSync<string>>;
   }) => Promise<void> | void,
+  extraBindings: Record<string, unknown> = {},
 ): Promise<void> {
   const root = mkdtempSync(join(tmpdir(), prefix));
   const appRoot = join(root, 'app');
@@ -87,7 +88,7 @@ async function withFirstBuildSession(
         device: { platform: 'ios', deviceId: 'SIM-FIRST', appId: 'dev.example' },
       },
     });
-    registry.updateBindings(session, { state: 'device_bound', bindings: {} });
+    registry.updateBindings(session, { state: 'device_bound', bindings: extraBindings });
     registry.close();
     writeSessionSecret(layout, session.sessionId, {
       signerCapability: 'signer',
@@ -210,4 +211,33 @@ test('GH #992: resolve-metro-readiness reports the derived adapter timeout witho
   } finally {
     rmSync(root, { force: true, recursive: true });
   }
+});
+
+test('GH #992: a malformed readiness budget refuses before any Metro binding is touched', async () => {
+  await withFirstBuildSession(
+    'rn-session-cli-bad-timeout-retained-',
+    ({ appRoot, ensureMetro }) => {
+      writeFileSync(
+        join(appRoot, '.rn-agent', 'config.json'),
+        '{ "metro": { "readinessTimeoutMs": "90s" } }\n',
+      );
+      const result = ensureMetro();
+
+      assert.notEqual(result.status, 0);
+      assert.match(result.stderr, /^METRO_READINESS_TIMEOUT_INVALID:/m);
+      assert.doesNotMatch(
+        result.stderr,
+        /METRO_AUTHORITY_MISMATCH/,
+        'a configuration typo must refuse before the retained Metro cleanup is inspected or stopped',
+      );
+    },
+    {
+      metroCleanup: {
+        pid: 999_999,
+        port: 8_099,
+        instanceId: 'retained-instance',
+        buildGeneration: 1,
+      },
+    },
+  );
 });
