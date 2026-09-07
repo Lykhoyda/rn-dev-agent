@@ -67,36 +67,59 @@ function matchesAuthPattern(routeName: string): boolean {
 
 interface SimplifiedNavState {
   routeName?: string;
+  params?: { screen?: unknown };
   stack?: string[];
   nested?: SimplifiedNavState;
   error?: string;
 }
 
-function getDeepestRouteName(state: SimplifiedNavState): string | null {
-  if (state.nested) return getDeepestRouteName(state.nested);
-  return state.routeName ?? null;
+/**
+ * GH #993: the route chain root→leaf. A leaf named `intro` under a navigator
+ * named `auth` is an auth screen; matching only the leaf discarded the one
+ * level that would have matched. `params.screen` is included where present so
+ * a navigator that has not yet mounted its child still names it.
+ */
+export function routeChain(state: SimplifiedNavState): string[] {
+  const chain: string[] = [];
+  let cursor: SimplifiedNavState | undefined = state;
+  while (cursor) {
+    if (typeof cursor.routeName === 'string' && cursor.routeName) chain.push(cursor.routeName);
+    const screen: unknown = cursor.params?.screen;
+    if (typeof screen === 'string' && screen && cursor.nested?.routeName !== screen) {
+      chain.push(screen);
+    }
+    cursor = cursor.nested;
+  }
+  return chain;
 }
 
-export async function isOnAuthScreen(client: CDPClient): Promise<boolean> {
-  if (!client.isConnected || !client.helpersInjected) return false;
+export function isAuthRouteChain(chain: readonly string[]): boolean {
+  return chain.some(matchesAuthPattern);
+}
+
+async function readRouteChain(client: CDPClient): Promise<string[] | null> {
+  if (!client.isConnected || !client.helpersInjected) return null;
 
   try {
     const expr = client.bridgeDetected
       ? '__RN_DEV_BRIDGE__.getNavState()'
       : '__RN_AGENT.getNavState()';
     const result = await client.evaluate(expr);
-    if (result.error || typeof result.value !== 'string') return false;
+    if (result.error || typeof result.value !== 'string') return null;
 
     const state = JSON.parse(result.value) as SimplifiedNavState;
-    if (state.error) return false;
+    if (state.error) return null;
 
-    const route = getDeepestRouteName(state);
-    if (!route) return false;
-
-    return matchesAuthPattern(route);
+    const chain = routeChain(state);
+    return chain.length > 0 ? chain : null;
   } catch {
-    return false;
+    return null;
   }
+}
+
+export async function isOnAuthScreen(client: CDPClient): Promise<boolean> {
+  const chain = await readRouteChain(client);
+  return chain !== null && isAuthRouteChain(chain);
 }
 
 function findLoginFlow(projectRoot: string): string | null {
@@ -198,9 +221,12 @@ export async function handleAutoLogin(
 ): Promise<AutoLoginResult | null> {
   if (!client.isConnected || !client.helpersInjected) return null;
 
-  const onAuth = await isOnAuthScreen(client);
-  if (!onAuth) {
-    return { loggedIn: false, reason: 'App is not on an auth screen' };
+  const chain = await readRouteChain(client);
+  if (chain === null || !isAuthRouteChain(chain)) {
+    // GH #993: name what was compared so a false negative is checkable against
+    // cdp_navigation_state instead of contradicting it silently.
+    const observed = chain === null ? 'unavailable' : chain.join(' › ');
+    return { loggedIn: false, reason: `App is not on an auth screen (route: ${observed})` };
   }
 
   const session = (deps.getSession ?? getActiveSession)();

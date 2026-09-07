@@ -14,7 +14,7 @@ import {
   MaestroStageExecutionError,
 } from '../../dist/tools/maestro-run.js';
 import { chooseMaestroDispatch } from '../../dist/tools/maestro-dispatch.js';
-import { SessionAuthorityError } from '../../dist/session/registry.js';
+import { authorityErrorMeta, SessionAuthorityError } from '../../dist/session/registry.js';
 import {
   _resetEngineStatusForTest,
   _setEngineStatusForTest,
@@ -180,6 +180,169 @@ test('GH#708: a revoked session claim aborts immediately instead of deferring', 
   assert.equal(trace.stages.length, 2, 'no further stage may drive the device');
   assert.equal(trace.reproves, 0);
   assert.deepEqual(trace.completed, [false]);
+});
+
+// GH #993 / #990 defect (2): the project's login action starts with
+// `launchApp: {clearState: true, stopApp: true}` and only then `openLink`. When
+// the relaunched dev client is not attached at the next claim, the A probe raises
+// METRO_ORIGIN_MISMATCH — a truthful axis, but the message blamed the binding
+// and said "repair the named authority axis". The failure now names the flow's
+// own relaunch as the cause while keeping the code, axis and control flow.
+const CLEARSTATE_LOGIN_FLOW = [
+  { launchApp: { clearState: true, stopApp: true } },
+  { openLink: '${DEV_CLIENT_URL}' },
+  { tapOn: { id: 'login-email' } },
+];
+
+function notAttached(): SessionAuthorityError {
+  return new SessionAuthorityError(
+    'METRO_ORIGIN_MISMATCH',
+    'the claimed device app is not attached to the authority-bound Metro',
+  );
+}
+
+test('GH#993 D2.b: an origin claim failing after the flow relaunch is attributed to the flow', async () => {
+  const stages: string[] = [];
+  const completed: boolean[] = [];
+  await assert.rejects(
+    executeMaestroAuthorityStages(
+      CLEARSTATE_LOGIN_FLOW,
+      async (commands: readonly unknown[]) => {
+        stages.push(commands.map((c) => Object.keys(c as object)[0]!).join('+'));
+        return 'ok';
+      },
+      async () => {
+        throw notAttached();
+      },
+      async (targetExpected: boolean) => {
+        completed.push(targetExpected);
+      },
+      async () => {},
+      async () => {},
+    ),
+    (error: unknown) => {
+      assert.ok(error instanceof SessionAuthorityError, 'the error instance is unchanged');
+      assert.equal(error.code, 'METRO_ORIGIN_MISMATCH', 'the code is unchanged');
+      assert.equal(authorityErrorMeta(error).axis, 'A', 'the axis attribution is unchanged');
+      assert.match(error.message, /^METRO_ORIGIN_MISMATCH: the claimed device app is not attached/);
+      assert.match(error.message, /flow's own launchApp \(clearState: true\) relaunched the app/);
+      assert.match(error.message, /did not re-register on the authority-bound Metro/);
+      assert.match(error.message, /device_reset_state/);
+      assert.match(error.message, /EG_DEV_CLIENT_CLEARSTATE/);
+      const meta = authorityErrorMeta(error) as { flowRelaunch?: Record<string, unknown> };
+      assert.deepEqual(
+        { ...meta.flowRelaunch, cause: undefined, nextAction: undefined },
+        {
+          command: 'launchApp',
+          clearState: true,
+          stopApp: true,
+          cause: undefined,
+          nextAction: undefined,
+        },
+      );
+      assert.match(String(meta.flowRelaunch?.nextAction), /device_reset_state/);
+      return true;
+    },
+  );
+  assert.deepEqual(
+    stages,
+    ['launchApp'],
+    'no origin-requiring stage ran (openLink never executed)',
+  );
+  assert.deepEqual(completed, [], 'the probe failure still propagates raw from the claim');
+});
+
+test('GH#993: an origin claim failing with no preceding flow relaunch is not attributed', async () => {
+  await assert.rejects(
+    executeMaestroAuthorityStages(
+      [{ tapOn: { id: 'login-email' } }],
+      async () => 'ok',
+      async () => {
+        throw notAttached();
+      },
+      async () => {},
+      async () => {},
+      async () => {},
+    ),
+    (error: unknown) => {
+      assert.ok(error instanceof SessionAuthorityError);
+      assert.equal(
+        error.message,
+        'METRO_ORIGIN_MISMATCH: the claimed device app is not attached to the authority-bound Metro',
+      );
+      assert.equal('flowRelaunch' in authorityErrorMeta(error), false);
+      return true;
+    },
+  );
+});
+
+test('GH#993 D2.e: a relaunch that itself raises METRO_ORIGIN_MISMATCH keeps GH#708 abort semantics and is attributed', async () => {
+  const stages: string[] = [];
+  const completed: boolean[] = [];
+  let reproves = 0;
+  await assert.rejects(
+    executeMaestroAuthorityStages(
+      CLEARSTATE_LOGIN_FLOW,
+      async (commands: readonly unknown[]) => {
+        stages.push(commands.map((c) => Object.keys(c as object)[0]!).join('+'));
+        return 'ok';
+      },
+      async () => {},
+      async (targetExpected: boolean) => {
+        completed.push(targetExpected);
+      },
+      async () => {
+        throw new SessionAuthorityError(
+          'METRO_ORIGIN_MISMATCH',
+          'managed native origin relaunch is unavailable',
+        );
+      },
+      async () => {
+        reproves += 1;
+      },
+    ),
+    (error: unknown) => {
+      assert.ok(
+        error instanceof MaestroStageExecutionError,
+        'still wrapped like every stage abort',
+      );
+      const inner = error.stageError;
+      assert.ok(inner instanceof SessionAuthorityError);
+      assert.equal(inner.code, 'METRO_ORIGIN_MISMATCH');
+      assert.match(inner.message, /flow's own launchApp \(clearState: true\)/);
+      return true;
+    },
+  );
+  assert.deepEqual(
+    stages,
+    ['launchApp'],
+    'a SessionAuthorityError relaunch still aborts before openLink',
+  );
+  assert.equal(reproves, 0, 'no GH#708 deferral for an authority error');
+  assert.deepEqual(completed, [false]);
+});
+
+test('GH#993: a plain relaunch failure is still deferred (GH#708) and stays unattributed', async () => {
+  const trace = newTrace();
+  await assert.rejects(
+    runStages(
+      trace,
+      async () => {
+        throw AUTHORITY_ERROR;
+      },
+      async () => {
+        throw new Error('reconnect refused');
+      },
+    ),
+    (error: unknown) => {
+      assert.ok(error instanceof MaestroStageExecutionError);
+      assert.equal(error.stageError, AUTHORITY_ERROR);
+      assert.equal((error.stageError as Error).message, AUTHORITY_ERROR.message);
+      return true;
+    },
+  );
+  assert.equal(trace.stages.length, 3);
+  assert.equal(trace.reproves, 1);
 });
 
 function runnerLog(): string {

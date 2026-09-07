@@ -113,8 +113,19 @@ function usesStrictRunActionPolicy(args: RunActionArgs): boolean {
   return (args as StrictRunActionArgs)[strictRunActionPolicy] === true;
 }
 
+/** The install binding facts cdp_run_action reads (GH #705 appFile, GH #993 launch shape). */
+export interface RunActionInstallReceipt {
+  platform?: unknown;
+  deviceId?: unknown;
+  appId?: unknown;
+  /** Build command provenance: `expo` means the app is an Expo dev client. */
+  buildKind?: unknown;
+  /** Present when the managed launch opens the app through a dev-client URL. */
+  devClientUrl?: unknown;
+}
+
 /** GH #705: the session's attested install receipt, or null outside a session. */
-function boundInstallReceipt(): { platform?: unknown; deviceId?: unknown; appId?: unknown } | null {
+function boundInstallReceipt(): RunActionInstallReceipt | null {
   try {
     const status = getWorkerAuthorityRuntime().status();
     if (!status.available) return null;
@@ -124,6 +135,27 @@ function boundInstallReceipt(): { platform?: unknown; deviceId?: unknown; appId?
     return null;
   }
 }
+
+/**
+ * GH #993 / #990: the managed launch shape of a dev-client session. The gate
+ * relaunches an Expo dev client through `--initialUrl` (iOS) or the bound
+ * dev-client URL (Android) after every flow-owned `launchApp`; a `clearState`
+ * uninstall leaves that relaunch at the dev-client picker with no bundle, so the
+ * origin can never re-attach. Read only from the existing install binding —
+ * bare React Native sessions and unmanaged replay keep GH #705 behaviour.
+ */
+export function isDevClientLaunchShape(install: RunActionInstallReceipt | null): boolean {
+  if (!install) return false;
+  return install.buildKind === 'expo' || typeof install.devClientUrl === 'string';
+}
+
+export const DEV_CLIENT_CLEARSTATE_REFUSAL =
+  'Refusing to replay a flow containing clearState on a managed dev-client session. The ' +
+  'clearState relaunch uninstalls the app and strands the dev client at its picker, so the ' +
+  'relaunched app cannot re-attach to the authority-bound Metro (EG_DEV_CLIENT_CLEARSTATE). ' +
+  'No runner was invoked and the app was not touched. Remove launchApp clearState from the ' +
+  'action so it starts from the attached app; when a state reset is needed, run ' +
+  'device_reset_state before cdp_run_action or cdp_login_prologue.';
 
 /**
  * Map a parsed Maestro failure kind to an `ActionFailureCode` (for
@@ -526,7 +558,7 @@ export interface RunActionDeps {
   ) => Promise<void>;
   reissueInstallReceipt?: (args: RunActionArgs) => Promise<void>;
   /** GH #705: the session's attested install receipt, for appFile auto-resolution. */
-  installReceipt?: () => { platform?: unknown; deviceId?: unknown; appId?: unknown } | null;
+  installReceipt?: () => RunActionInstallReceipt | null;
   resolveAppFile?: (appId: string, deviceId: string) => string | null;
   engineStatus?: () => Promise<ReplayEngineStatus | null>;
 }
@@ -724,14 +756,31 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
         ? activeTarget.deviceId
         : undefined;
 
+    const install = installReceipt();
+    const usesClearState = flowUsesClearState(replayYaml);
+    // GH #993 / #990 (Option A): on a managed dev-client session a clearState
+    // flow is refused here, before any runner call, origin claim, or park —
+    // fail-closed and side-effect-free, the position cdp_auto_login already
+    // holds for the same flow content. cdp_login_prologue inherits this.
+    if (usesClearState && isDevClientLaunchShape(install)) {
+      return failResult(DEV_CLIENT_CLEARSTATE_REFUSAL, 'DEV_CLIENT_CLEARSTATE_REFUSED', {
+        actionId: args.actionId,
+        fallback: 'none',
+        launchShape: 'dev-client',
+        nextAction:
+          'Rewrite the action without launchApp clearState (start from the attached app) and, if a reset is needed, run device_reset_state first.',
+        ...(runtimeStatePath ? { writes: writeDisclosure() } : {}),
+      });
+    }
+
     // GH #705: a clearState flow uninstalls the app, so Maestro needs the
     // bundle to reinstall from. Resolve it off the session's attested install
     // receipt — the exact device and appId it was signed for — so the
     // "Pass appFile=<path>" advice is followable through this tool.
-    const receipt = args.appFile ? null : installReceipt();
+    const receipt = args.appFile ? null : install;
     const appFile =
       args.appFile ??
-      (flowUsesClearState(replayYaml) &&
+      (usesClearState &&
       receipt?.platform === 'ios' &&
       typeof receipt.appId === 'string' &&
       typeof receipt.deviceId === 'string'

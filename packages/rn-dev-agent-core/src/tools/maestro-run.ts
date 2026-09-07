@@ -284,6 +284,70 @@ function nestedLifecycleCommandOrSelf(command: unknown): boolean {
   return (name !== null && lifecycleCommands.has(name)) || nestedLifecycleCommand(command);
 }
 
+/** GH #993: the launch options of a flow-owned `launchApp` stage that relaunched the app. */
+export interface FlowRelaunchFacts {
+  clearState: boolean;
+  stopApp: boolean;
+}
+
+export function flowRelaunchFacts(command: unknown): FlowRelaunchFacts | null {
+  if (commandName(command) !== 'launchApp') return null;
+  const options =
+    command && typeof command === 'object' && !Array.isArray(command)
+      ? (command as { launchApp?: unknown }).launchApp
+      : undefined;
+  const launch =
+    options && typeof options === 'object' && !Array.isArray(options)
+      ? (options as { clearState?: unknown; stopApp?: unknown })
+      : {};
+  return {
+    clearState: launch.clearState === true,
+    stopApp: typeof launch.stopApp === 'boolean' ? launch.stopApp : true,
+  };
+}
+
+export function lastFlowRelaunch(commands: readonly unknown[]): FlowRelaunchFacts | null {
+  let last: FlowRelaunchFacts | null = null;
+  for (const command of commands) last = flowRelaunchFacts(command) ?? last;
+  return last;
+}
+
+export const FLOW_RELAUNCH_NEXT_ACTION =
+  'Do not relaunch a dev-client app from inside a learned action (EG_DEV_CLIENT_CLEARSTATE): ' +
+  'start the action from the attached app, and reset state with device_reset_state before ' +
+  'cdp_run_action or cdp_login_prologue instead of launchApp clearState.';
+
+/**
+ * GH #993 / #990: a `METRO_ORIGIN_MISMATCH` raised right after the flow's own
+ * `launchApp` stage is the relaunched app failing to re-register on the bound
+ * Metro within the readiness window — not a broken authority binding. Name that
+ * cause on the error. Message and supplemental metadata only: the error
+ * instance, its code, and its axis mapping are unchanged, so abort-vs-defer
+ * handling and the registry's axis attribution are untouched.
+ */
+export function attributeOriginFailureToFlowRelaunch(
+  error: unknown,
+  relaunch: FlowRelaunchFacts,
+): void {
+  if (!(error instanceof SessionAuthorityError) || error.code !== 'METRO_ORIGIN_MISMATCH') return;
+  if ('flowRelaunch' in error.getSupplementalMeta()) return;
+  const launch = `launchApp${relaunch.clearState ? ' (clearState: true)' : ''}`;
+  const cause =
+    `The flow's own ${launch} relaunched the app and it did not re-register on the ` +
+    `authority-bound Metro within the readiness window; the axis is reporting that relaunch, ` +
+    `not a broken binding.`;
+  error.attachMeta({
+    flowRelaunch: {
+      command: 'launchApp',
+      clearState: relaunch.clearState,
+      stopApp: relaunch.stopApp,
+      cause,
+      nextAction: FLOW_RELAUNCH_NEXT_ACTION,
+    },
+  });
+  error.message = `${error.message} ${cause} ${FLOW_RELAUNCH_NEXT_ACTION}`;
+}
+
 export function planMaestroAuthorityStages(commands: readonly unknown[]): {
   stages: AuthorityStage[];
   targetExpected: boolean;
@@ -323,7 +387,12 @@ export async function executeMaestroAuthorityStages<T>(
   completeOrigin: (targetExpected: boolean, signal?: AbortSignal) => Promise<void>,
   relaunchManagedApp: (stopApp?: boolean) => Promise<void>,
   reproveManagedOrigin?: (options?: ManagedNativeOriginReproveOptions) => Promise<void>,
-  options: { firstOriginClaimed?: boolean; signal?: AbortSignal } = {},
+  options: {
+    firstOriginClaimed?: boolean;
+    signal?: AbortSignal;
+    /** GH #993: a flow-owned launchApp that ran in an earlier segment of this same flow. */
+    priorRelaunch?: FlowRelaunchFacts | null;
+  } = {},
 ): Promise<T[]> {
   const plan = planMaestroAuthorityStages(commands);
   const results: T[] = [];
@@ -333,28 +402,34 @@ export async function executeMaestroAuthorityStages<T>(
   // run can report success.
   let pendingOriginError: unknown;
   let originClaimed = options.firstOriginClaimed === true;
+  // GH #993: the most recent flow-owned relaunch, so an origin failure that
+  // follows it can be attributed to the flow rather than to the authority axis.
+  let priorRelaunch: FlowRelaunchFacts | null = options.priorRelaunch ?? null;
   for (const stage of plan.stages) {
     if (stage.requiresOrigin && pendingOriginError === undefined) {
-      if (!originClaimed) await claimOrigin();
+      if (!originClaimed) {
+        try {
+          await claimOrigin();
+        } catch (error) {
+          if (priorRelaunch) attributeOriginFailureToFlowRelaunch(error, priorRelaunch);
+          throw error;
+        }
+      }
       originClaimed = false;
     }
     try {
       results.push(await executeStage(stage.commands));
-      if (stage.commands.length === 1 && commandName(stage.commands[0]) === 'launchApp') {
+      const relaunch = stage.commands.length === 1 ? flowRelaunchFacts(stage.commands[0]) : null;
+      if (relaunch) {
+        priorRelaunch = relaunch;
         try {
-          const launch = stage.commands[0] as { launchApp?: unknown };
-          const launchOptions =
-            launch.launchApp &&
-            typeof launch.launchApp === 'object' &&
-            !Array.isArray(launch.launchApp)
-              ? (launch.launchApp as { stopApp?: unknown })
-              : undefined;
-          await relaunchManagedApp(
-            typeof launchOptions?.stopApp === 'boolean' ? launchOptions.stopApp : true,
-          );
+          await relaunchManagedApp(relaunch.stopApp);
           pendingOriginError = undefined;
         } catch (error) {
-          if (!reproveManagedOrigin || error instanceof SessionAuthorityError) throw error;
+          if (!reproveManagedOrigin || error instanceof SessionAuthorityError) {
+            attributeOriginFailureToFlowRelaunch(error, relaunch);
+            throw error;
+          }
           pendingOriginError = error;
         }
       }
@@ -876,7 +951,12 @@ export function createMaestroRunHandler(
       let nativeOutput = '';
       let retainedReactFocusId: string | null | undefined;
       try {
-        for (const segment of iosProofPlan.segments) {
+        for (const [segmentIndex, segment] of iosProofPlan.segments.entries()) {
+          // GH #993: a launchApp in an earlier native segment is still the cause
+          // of an origin failure in this segment's claim.
+          const priorRelaunch = lastFlowRelaunch(
+            iosProofPlan.segments.slice(0, segmentIndex).flatMap((prior) => prior.commands),
+          );
           if (controller.signal.aborted || deadline - now() <= 0) {
             return failResult('Partitioned iOS replay exceeded its deadline.', 'RUNNER_TIMEOUT', {
               proofDomains,
@@ -1013,7 +1093,7 @@ export function createMaestroRunHandler(
             completeOrigin,
             relaunchManagedApp,
             reproveManagedOrigin,
-            { signal: controller.signal },
+            { signal: controller.signal, priorRelaunch },
           );
           retainedReactFocusId = reactFocusId;
           for (const { replay, sourceIndices } of stageResults) {
@@ -1643,19 +1723,26 @@ export function createMaestroRunHandler(
         },
       );
       if (deferredNativeOriginTarget) {
-        // A caller-supplied reprove must run even without local replayDeps (nested native leg).
-        if (
-          nativeOriginPreclaimed &&
-          (args.reproveManagedOrigin ||
-            deps.reproveManagedOrigin ||
-            (replayFactory && hasManagedNativeOriginAuthority(args)))
-        ) {
-          await reproveManagedOrigin({
-            signal: flowAbort.signal,
-            readinessTimeoutMs: Math.max(1, flowDeadline - now()),
-          });
+        try {
+          // A caller-supplied reprove must run even without local replayDeps (nested native leg).
+          if (
+            nativeOriginPreclaimed &&
+            (args.reproveManagedOrigin ||
+              deps.reproveManagedOrigin ||
+              (replayFactory && hasManagedNativeOriginAuthority(args)))
+          ) {
+            await reproveManagedOrigin({
+              signal: flowAbort.signal,
+              readinessTimeoutMs: Math.max(1, flowDeadline - now()),
+            });
+          }
+          await completeOrigin(true, flowAbort.signal);
+        } catch (error) {
+          // GH #993: message/metadata only — the error and its code are rethrown as-is.
+          const relaunch = lastFlowRelaunch(validatedCommands);
+          if (relaunch) attributeOriginFailureToFlowRelaunch(error, relaunch);
+          throw error;
         }
-        await completeOrigin(true, flowAbort.signal);
         nativeOriginPreclaimed = false;
       }
       await commitReinstalledInstall();

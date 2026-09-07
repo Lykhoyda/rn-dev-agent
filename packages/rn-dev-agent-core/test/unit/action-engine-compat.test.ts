@@ -110,6 +110,68 @@ test('regex text selectors are refused before any runner spawn', () => {
   assert.match(msg, /No UI mutation/);
 });
 
+// GH #993 defect (4): an unpinned action with regex text selectors used to get
+// the header refusal first ("run migrate-actions"), and migrate-actions then
+// refused it as incompatible — a dead-end remedy. The terminal reason wins.
+test('GH#993: unpinned regex action gets the terminal regex refusal, not the migrate remedy', () => {
+  const warmLoginShape = [
+    { launchApp: { stopApp: false } },
+    {
+      runFlow: {
+        when: { visible: { text: '.*Getsafe.*http://.*' } },
+        commands: [{ tapOn: { text: '.*Getsafe.*http://.*' } }],
+      },
+    },
+    { tapOn: { id: 'login-email' } },
+    { assertVisible: { id: 'home-screen' } },
+  ];
+  const unpinnedRegex = actionReplayPreflight({
+    enginePin: undefined,
+    commands: warmLoginShape,
+    engineStatus: PINNED(),
+    requireRuntimePin: true,
+  });
+  assert.ok(unpinnedRegex);
+  assert.match(unpinnedRegex, /regex text selectors \(\.\*Getsafe\.\*http:\/\/\.\*\)/);
+  assert.match(unpinnedRegex, /Rewrite as id or literal text selectors/);
+  assert.doesNotMatch(unpinnedRegex, /migrate-actions/);
+
+  // Unpinned + literal selectors: the header remedy is still the right advice,
+  // and it now says what an `incompatible` migration result means.
+  const unpinnedLiteral = actionReplayPreflight({
+    enginePin: undefined,
+    commands: [{ launchApp: { stopApp: false } }, { tapOn: { text: 'Getsafe' } }],
+    engineStatus: PINNED(),
+    requireRuntimePin: true,
+  });
+  assert.ok(unpinnedLiteral);
+  assert.match(unpinnedLiteral, /not migrated/);
+  assert.match(unpinnedLiteral, /migrate-actions/);
+  assert.match(unpinnedLiteral, /reports the action as incompatible, rewrite it/);
+
+  // The runtime pin still comes first: a drifted runner is refused before
+  // either action-shape refusal.
+  const drifted = buildReplayEngineStatus('drift-newer', '1.1.30', false);
+  assert.match(
+    String(
+      actionReplayPreflight({
+        enginePin: undefined,
+        commands: warmLoginShape,
+        engineStatus: drifted,
+        requireRuntimePin: true,
+      }),
+    ),
+    /newer/,
+  );
+
+  // Documented, not "fixed": a literal Metro URL is itself regex-shaped because
+  // `.` is a metacharacter — a rewrite must use id selectors or text without `.`.
+  assert.notEqual(
+    regexSelectorCapabilityRefusal([{ tapOn: { text: 'http://127.0.0.1:8081' } }]),
+    null,
+  );
+});
+
 test('wildcard regex text selectors such as Log.n are refused', () => {
   assert.match(String(regexSelectorCapabilityRefusal([{ tapOn: 'Log.n' }])), /regex/);
 });

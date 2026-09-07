@@ -1234,8 +1234,7 @@ function planResource(layout: WorktreeLayout, resource: ResourceSpec): ResourceP
       regime,
       state: 'LINK_FOREIGN',
       action: 'none',
-      remediation:
-        'Destination is a symlink to something else; /rn-dev-agent:setup can re-point it after explicit confirmation.',
+      remediation: foreignLinkRemediation(regime, base.destination),
     };
   }
   if (destinationState === 'LINK_STALE') {
@@ -1289,6 +1288,26 @@ function planResource(layout: WorktreeLayout, resource: ResourceSpec): ResourceP
 }
 
 const LOCAL_CONTENT = 'Local real content is present; it is never overwritten and is not shared.';
+
+// GH #993: a foreign link is compared against exactly one accepted target, the
+// same-repository primary corpus. The remediation must say which target and
+// whether it exists; "re-point it" is only followable when there is something
+// to re-point to. The target is named relative to the primary worktree because
+// the CLI never prints absolute private source paths.
+function foreignLinkRemediation(regime: Regime, destination: string): string {
+  const target = `<primary worktree>/${destination}`;
+  if (regime === 'PRIVATE_SOURCE_AVAILABLE') {
+    return (
+      `Destination is a symlink to something other than the only accepted target ${target}; ` +
+      `/rn-dev-agent:setup can re-point it there after explicit confirmation.`
+    );
+  }
+  return (
+    `Destination is a symlink, but the only accepted target ${target} does not exist, so there is ` +
+    `nothing to re-point it to. Supported shapes: replace the link with a real actions directory ` +
+    `in this worktree, or create the corpus at ${target} and re-run /rn-dev-agent:setup.`
+  );
+}
 
 function ignoreRemediation(destination: string): string {
   return `Git would see this path. Add the file-form rule "/${destination}" (no trailing slash) to your own local ignore policy, then re-run.`;

@@ -13524,7 +13524,7 @@ function planResource(layout, resource) {
       regime,
       state: "LINK_FOREIGN",
       action: "none",
-      remediation: "Destination is a symlink to something else; /rn-dev-agent:setup can re-point it after explicit confirmation."
+      remediation: foreignLinkRemediation(regime, base.destination)
     };
   }
   if (destinationState === "LINK_STALE") {
@@ -13575,6 +13575,13 @@ function planResource(layout, resource) {
   return { ...base, regime, state: "DEST_MISSING", action: "link" };
 }
 var LOCAL_CONTENT = "Local real content is present; it is never overwritten and is not shared.";
+function foreignLinkRemediation(regime, destination) {
+  const target = `<primary worktree>/${destination}`;
+  if (regime === "PRIVATE_SOURCE_AVAILABLE") {
+    return `Destination is a symlink to something other than the only accepted target ${target}; /rn-dev-agent:setup can re-point it there after explicit confirmation.`;
+  }
+  return `Destination is a symlink, but the only accepted target ${target} does not exist, so there is nothing to re-point it to. Supported shapes: replace the link with a real actions directory in this worktree, or create the corpus at ${target} and re-run /rn-dev-agent:setup.`;
+}
 function ignoreRemediation(destination) {
   return `Git would see this path. Add the file-form rule "/${destination}" (no trailing slash) to your own local ignore policy, then re-run.`;
 }
@@ -13969,7 +13976,7 @@ function assertActionMetadataIdentity(filePath, metadata) {
 // packages/rn-dev-agent-core/dist/domain/action-engine-compat.js
 function actionEnginePinRefusal(enginePin) {
   if (!enginePin) {
-    return `Action is not migrated to ${ACTION_ENGINE_PIN} or newer. Run node <plugin-root>/rn-dev-agent-core/dist/maestro-runner-pin.js migrate-actions --root <app> before replay. Incompatible actions are terminal \u2014 no manual fallback.`;
+    return `Action is not migrated to ${ACTION_ENGINE_PIN} or newer. Run node <plugin-root>/rn-dev-agent-core/dist/maestro-runner-pin.js migrate-actions --root <app> before replay. Incompatible actions are terminal \u2014 no manual fallback. If migrate-actions reports the action as incompatible, rewrite it with id or literal text selectors (no regex metacharacters); there is no pin-side remedy.`;
   }
   const version = parseActionEnginePinVersion(enginePin);
   if (!version) {
@@ -13999,12 +14006,15 @@ function replayCompatibilityPreflight(opts) {
     if (pin)
       return pin;
   }
+  const selectors = regexSelectorCapabilityRefusal(opts.commands);
+  if (selectors)
+    return selectors;
   if (opts.requireEnginePin) {
     const format = actionEnginePinRefusal(opts.enginePin);
     if (format)
       return format;
   }
-  return regexSelectorCapabilityRefusal(opts.commands);
+  return null;
 }
 function isLearnedActionPath(path) {
   return classifyLearnedActionPath(path) === "action";
@@ -16436,6 +16446,41 @@ function nestedLifecycleCommandOrSelf(command) {
   const name = commandName2(command);
   return name !== null && lifecycleCommands.has(name) || nestedLifecycleCommand(command);
 }
+function flowRelaunchFacts(command) {
+  if (commandName2(command) !== "launchApp")
+    return null;
+  const options = command && typeof command === "object" && !Array.isArray(command) ? command.launchApp : void 0;
+  const launch = options && typeof options === "object" && !Array.isArray(options) ? options : {};
+  return {
+    clearState: launch.clearState === true,
+    stopApp: typeof launch.stopApp === "boolean" ? launch.stopApp : true
+  };
+}
+function lastFlowRelaunch(commands) {
+  let last = null;
+  for (const command of commands)
+    last = flowRelaunchFacts(command) ?? last;
+  return last;
+}
+var FLOW_RELAUNCH_NEXT_ACTION = "Do not relaunch a dev-client app from inside a learned action (EG_DEV_CLIENT_CLEARSTATE): start the action from the attached app, and reset state with device_reset_state before cdp_run_action or cdp_login_prologue instead of launchApp clearState.";
+function attributeOriginFailureToFlowRelaunch(error, relaunch) {
+  if (!(error instanceof SessionAuthorityError) || error.code !== "METRO_ORIGIN_MISMATCH")
+    return;
+  if ("flowRelaunch" in error.getSupplementalMeta())
+    return;
+  const launch = `launchApp${relaunch.clearState ? " (clearState: true)" : ""}`;
+  const cause = `The flow's own ${launch} relaunched the app and it did not re-register on the authority-bound Metro within the readiness window; the axis is reporting that relaunch, not a broken binding.`;
+  error.attachMeta({
+    flowRelaunch: {
+      command: "launchApp",
+      clearState: relaunch.clearState,
+      stopApp: relaunch.stopApp,
+      cause,
+      nextAction: FLOW_RELAUNCH_NEXT_ACTION
+    }
+  });
+  error.message = `${error.message} ${cause} ${FLOW_RELAUNCH_NEXT_ACTION}`;
+}
 function planMaestroAuthorityStages(commands) {
   const stages = [];
   let pending = [];
@@ -16467,23 +16512,33 @@ async function executeMaestroAuthorityStages(commands, executeStage, claimOrigin
   const results = [];
   let pendingOriginError;
   let originClaimed = options.firstOriginClaimed === true;
+  let priorRelaunch = options.priorRelaunch ?? null;
   for (const stage of plan.stages) {
     if (stage.requiresOrigin && pendingOriginError === void 0) {
-      if (!originClaimed)
-        await claimOrigin();
+      if (!originClaimed) {
+        try {
+          await claimOrigin();
+        } catch (error) {
+          if (priorRelaunch)
+            attributeOriginFailureToFlowRelaunch(error, priorRelaunch);
+          throw error;
+        }
+      }
       originClaimed = false;
     }
     try {
       results.push(await executeStage(stage.commands));
-      if (stage.commands.length === 1 && commandName2(stage.commands[0]) === "launchApp") {
+      const relaunch = stage.commands.length === 1 ? flowRelaunchFacts(stage.commands[0]) : null;
+      if (relaunch) {
+        priorRelaunch = relaunch;
         try {
-          const launch = stage.commands[0];
-          const launchOptions = launch.launchApp && typeof launch.launchApp === "object" && !Array.isArray(launch.launchApp) ? launch.launchApp : void 0;
-          await relaunchManagedApp(typeof launchOptions?.stopApp === "boolean" ? launchOptions.stopApp : true);
+          await relaunchManagedApp(relaunch.stopApp);
           pendingOriginError = void 0;
         } catch (error) {
-          if (!reproveManagedOrigin || error instanceof SessionAuthorityError)
+          if (!reproveManagedOrigin || error instanceof SessionAuthorityError) {
+            attributeOriginFailureToFlowRelaunch(error, relaunch);
             throw error;
+          }
           pendingOriginError = error;
         }
       }
@@ -16775,7 +16830,8 @@ function createMaestroRunHandler(deps = {}) {
       let nativeOutput = "";
       let retainedReactFocusId;
       try {
-        for (const segment of iosProofPlan.segments) {
+        for (const [segmentIndex, segment] of iosProofPlan.segments.entries()) {
+          const priorRelaunch = lastFlowRelaunch(iosProofPlan.segments.slice(0, segmentIndex).flatMap((prior) => prior.commands));
           if (controller.signal.aborted || deadline - now() <= 0) {
             return failResult("Partitioned iOS replay exceeded its deadline.", "RUNNER_TIMEOUT", {
               proofDomains
@@ -16871,7 +16927,7 @@ function createMaestroRunHandler(deps = {}) {
             if (replay.finalFocusId === null)
               reactFocusId = null;
             return { replay, sourceIndices };
-          }, claimOrigin, completeOrigin, relaunchManagedApp, reproveManagedOrigin, { signal: controller.signal });
+          }, claimOrigin, completeOrigin, relaunchManagedApp, reproveManagedOrigin, { signal: controller.signal, priorRelaunch });
           retainedReactFocusId = reactFocusId;
           for (const { replay, sourceIndices } of stageResults) {
             for (const step of replay.steps) {
@@ -17309,13 +17365,20 @@ function createMaestroRunHandler(deps = {}) {
         signal: flowAbort.signal
       });
       if (deferredNativeOriginTarget) {
-        if (nativeOriginPreclaimed && (args.reproveManagedOrigin || deps.reproveManagedOrigin || replayFactory && hasManagedNativeOriginAuthority(args))) {
-          await reproveManagedOrigin({
-            signal: flowAbort.signal,
-            readinessTimeoutMs: Math.max(1, flowDeadline - now())
-          });
+        try {
+          if (nativeOriginPreclaimed && (args.reproveManagedOrigin || deps.reproveManagedOrigin || replayFactory && hasManagedNativeOriginAuthority(args))) {
+            await reproveManagedOrigin({
+              signal: flowAbort.signal,
+              readinessTimeoutMs: Math.max(1, flowDeadline - now())
+            });
+          }
+          await completeOrigin(true, flowAbort.signal);
+        } catch (error) {
+          const relaunch = lastFlowRelaunch(validatedCommands);
+          if (relaunch)
+            attributeOriginFailureToFlowRelaunch(error, relaunch);
+          throw error;
         }
-        await completeOrigin(true, flowAbort.signal);
         nativeOriginPreclaimed = false;
       }
       await commitReinstalledInstall();

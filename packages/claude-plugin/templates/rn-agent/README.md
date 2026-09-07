@@ -80,6 +80,16 @@ shares **exactly one subpath**:
 | `config.json`, `e2e.config.json`, `fixtures/`, `proposals/`, `dev-bridge.ts`, `globals.d.ts`, `.scaffold-version` | no | Project scaffold and per-worktree output. |
 | `.rn-agent/` itself | **never** | It is the mutable per-worktree security boundary. Session integration rejects a root symlink; setup can migrate the recognized legacy layout without copying integration, state, recordings, or runtime data. |
 
+The link has exactly one accepted target: the same repository's **primary
+worktree** `.rn-agent/actions` (the first entry of `git worktree list`). A link
+to any other corpus — another clone of the app, a sibling worktree, a shared
+directory — is classified `LINK_FOREIGN` and every inventory or replay refuses
+it; there is no confirmation flag that admits a foreign corpus. If the primary
+worktree has no `.rn-agent/actions`, there is nothing to inherit and nothing to
+re-point the link to: either replace the link with a real `actions/` directory
+in this worktree, or create the corpus in the primary worktree and re-run
+`/rn-dev-agent:setup`.
+
 Because `actions/` is linked *inside* a real local `.rn-agent/` directory, the
 common directory-form ignore rule (`.rn-agent/`) already hides it, so `git
 status` stays clean. The link is a read-only replay source: runtime state stays

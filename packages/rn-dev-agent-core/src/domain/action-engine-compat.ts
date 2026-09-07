@@ -25,7 +25,9 @@ export function actionEnginePinRefusal(enginePin: string | undefined): string | 
     return (
       `Action is not migrated to ${ACTION_ENGINE_PIN} or newer. Run ` +
       `node <plugin-root>/rn-dev-agent-core/dist/maestro-runner-pin.js migrate-actions --root <app> ` +
-      `before replay. Incompatible actions are terminal — no manual fallback.`
+      `before replay. Incompatible actions are terminal — no manual fallback. If migrate-actions ` +
+      `reports the action as incompatible, rewrite it with id or literal text selectors (no regex ` +
+      `metacharacters); there is no pin-side remedy.`
     );
   }
   const version = parseActionEnginePinVersion(enginePin);
@@ -78,11 +80,16 @@ export function replayCompatibilityPreflight(opts: {
     const pin = exactPinRefusal(opts.engineStatus);
     if (pin) return pin;
   }
+  // GH #993: the regex fence is terminal, the header refusal prescribes a remedy
+  // (migrate-actions) that refuses regex actions. Report the terminal reason
+  // first so an unpinned regex action is never sent to a dead-end remedy.
+  const selectors = regexSelectorCapabilityRefusal(opts.commands);
+  if (selectors) return selectors;
   if (opts.requireEnginePin) {
     const format = actionEnginePinRefusal(opts.enginePin);
     if (format) return format;
   }
-  return regexSelectorCapabilityRefusal(opts.commands);
+  return null;
 }
 
 export function isLearnedActionPath(path: string): boolean {
