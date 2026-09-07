@@ -20,9 +20,15 @@ import { dirname, join } from 'node:path';
 import { test } from 'node:test';
 import { applyPackageIntegration } from '../../dist/session/package-integration.js';
 import { stopManagedMetro } from '../../dist/session/managed-metro.js';
-import { resolveMetroReadinessTimeout } from '../../dist/project-config.js';
+import {
+  deriveEnsureMetroCliTimeoutMs,
+  resolveMetroReadinessTimeout,
+} from '../../dist/project-config.js';
 
-const READINESS_TIMEOUT_MS = resolveMetroReadinessTimeout({ readConfig: () => null }).timeoutMs;
+const READINESS = resolveMetroReadinessTimeout({ readConfig: () => null });
+const READINESS_TIMEOUT_MS = READINESS.timeoutMs;
+const READINESS_SOURCE = READINESS.source;
+const ENSURE_METRO_CLI_TIMEOUT_MS = deriveEnsureMetroCliTimeoutMs(READINESS_TIMEOUT_MS);
 
 const requireFromTest = createRequire(import.meta.url);
 const managedMetroModuleUrl = new URL('../../dist/session/managed-metro.js', import.meta.url).href;
@@ -264,6 +270,14 @@ const metroModule = ${JSON.stringify(managedMetroModuleUrl)};
       metroPort: Number(process.env.FIXTURE_METRO_PORT),
       sessionId: 'fixture-session',
       buildToken: process.argv[4]
+    }));
+    return;
+  }
+  if (command === 'resolve-metro-readiness') {
+    process.stdout.write(JSON.stringify({
+      readinessTimeoutMs: ${READINESS_TIMEOUT_MS},
+      source: ${JSON.stringify(READINESS_SOURCE)},
+      ensureMetroCliTimeoutMs: ${ENSURE_METRO_CLI_TIMEOUT_MS},
     }));
     return;
   }
