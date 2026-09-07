@@ -971,6 +971,20 @@ test('GH #992: a persistent unowned listener is named on METRO_START_CLEANUP_UNP
   assert.doesNotMatch(outcome.message, /EPIPE/);
 });
 
+test('GH #992: an observed listener never reports an all-zero readiness tally', async (t) => {
+  const outcome = await expiredManagedMetroReadiness(t, {
+    probeListener: () => ({ status: 'listening', pid: 202 }),
+    listenerOwnedByLauncher: () => true,
+    persistProbe: true,
+    readinessTimeoutMs: 5_000,
+  });
+
+  assert.match(outcome.message, /^METRO_START_CLEANUP_UNPROVEN:/);
+  assert.match(outcome.message, /launcher alive at deadline/);
+  assert.doesNotMatch(outcome.message, /readiness deadline/);
+  assert.doesNotMatch(outcome.message, /listener absent 0 probes/);
+});
+
 test('GH #992: an early launcher exit never claims the readiness deadline expired', async (t) => {
   const outcome = await expiredManagedMetroReadiness(t, {
     probeListener: () => ({ status: 'listening', pid: 999 }),

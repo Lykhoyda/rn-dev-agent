@@ -2568,15 +2568,16 @@ export async function startManagedMetro(
       exitCode: preKill.exitCode,
       signalCode: preKill.signalCode,
     });
-    const readinessOutcome = launcherAliveAtDeadline
-      ? sanitizeManagedMetroStartupDetail(managedMetroReadinessDetail(readiness), [
-          input.appRoot,
-          input.sourceRoot,
-          input.runtimeRoot,
-          input.sessionId,
-          instanceId,
-        ])
-      : null;
+    const readinessOutcome =
+      launcherAliveAtDeadline && !readiness.listenerObserved
+        ? sanitizeManagedMetroStartupDetail(managedMetroReadinessDetail(readiness), [
+            input.appRoot,
+            input.sourceRoot,
+            input.runtimeRoot,
+            input.sessionId,
+            instanceId,
+          ])
+        : null;
     throw new Error(
       `METRO_START_CLEANUP_UNPROVEN: failed Metro startup left process or listener state ambiguous${
         childOutcome || readinessOutcome

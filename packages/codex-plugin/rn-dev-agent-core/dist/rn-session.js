@@ -15931,7 +15931,7 @@ async function startManagedMetro(input, dependencies = {}) {
       exitCode: preKill.exitCode,
       signalCode: preKill.signalCode
     });
-    const readinessOutcome = launcherAliveAtDeadline ? sanitizeManagedMetroStartupDetail(managedMetroReadinessDetail(readiness), [
+    const readinessOutcome = launcherAliveAtDeadline && !readiness.listenerObserved ? sanitizeManagedMetroStartupDetail(managedMetroReadinessDetail(readiness), [
       input.appRoot,
       input.sourceRoot,
       input.runtimeRoot,
