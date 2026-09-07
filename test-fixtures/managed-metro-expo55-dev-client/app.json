@@ -5,7 +5,7 @@
     "version": "1.0.0",
     "scheme": "rnda55",
     "platforms": ["ios"],
-    "runtimeVersion": { "policy": "appVersion" },
+    "runtimeVersion": { "policy": "fingerprint" },
     "updates": { "url": "https://u.expo.dev/00000000-0000-0000-0000-000000000000" },
     "ios": {
       "bundleIdentifier": "com.rndevagent.expo55devclient",

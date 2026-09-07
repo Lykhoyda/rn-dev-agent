@@ -11,6 +11,7 @@ const unsupportedPlatform = process.platform === 'win32';
 interface Harness {
   adapterPath: string;
   environment: NodeJS.ProcessEnv;
+  expoFingerprintWorkflowPath: string;
   expoManifestModulePath: string;
   expoUpdatesCliPath: string;
   integration: string;
@@ -62,6 +63,29 @@ function createHarness(name: string): Harness {
 exports.ExpoGoManifestHandlerMiddleware = ExpoGoManifestHandlerMiddleware;
 `,
   );
+  const expoFingerprintRoot = join(root, 'node_modules', '@expo', 'fingerprint');
+  const expoFingerprintWorkflowPath = join(expoFingerprintRoot, 'build', 'ProjectWorkflow.js');
+  mkdirSync(dirname(expoFingerprintWorkflowPath), { recursive: true });
+  writeFileSync(
+    join(expoFingerprintRoot, 'package.json'),
+    JSON.stringify({ name: '@expo/fingerprint' }),
+  );
+  writeFileSync(
+    expoFingerprintWorkflowPath,
+    `async function resolveProjectWorkflowAsync(projectRoot, platform, operation) {
+  await new Promise((resolve) => setTimeout(resolve, 1));
+  return operation();
+}
+async function resolveProjectWorkflowPerPlatformAsync(projectRoot, operation) {
+  return operation();
+}
+exports.resolveProjectWorkflowAsync = resolveProjectWorkflowAsync;
+exports.resolveProjectWorkflowPerPlatformAsync = resolveProjectWorkflowPerPlatformAsync;
+`,
+  );
+  writeFileSync(join(root, '.gitignore'), 'ignored.txt\n');
+  writeFileSync(join(root, 'ignored.txt'), 'ignored');
+  writeFileSync(join(root, 'tracked.txt'), 'tracked');
   const expoUpdatesRoot = join(root, 'node_modules', 'expo-updates');
   const expoUpdatesCliPath = join(expoUpdatesRoot, 'bin', 'cli.js');
   mkdirSync(dirname(expoUpdatesCliPath), { recursive: true });
@@ -94,6 +118,7 @@ if (process.env.PROBE_SLEEP === '1') setTimeout(() => {}, 30000);
   return {
     adapterPath,
     environment: metroPolicyEnvironment(adapterPath),
+    expoFingerprintWorkflowPath,
     expoManifestModulePath,
     expoUpdatesCliPath,
     integration,
@@ -121,6 +146,18 @@ function readObservations(harness: Harness): Array<{ kind: string; value: string
 
 const composePreamble = (harness: Harness) =>
   `const compose = require(${JSON.stringify(harness.adapterPath)}); const childProcess = require('node:child_process'); const config = compose({});`;
+
+const fingerprintPreamble = (harness: Harness) =>
+  `${composePreamble(harness)}
+const workflow = require(${JSON.stringify(harness.expoFingerprintWorkflowPath)});
+const runWorkflow = (operation) => workflow.resolveProjectWorkflowAsync(${JSON.stringify(harness.root)}, 'ios', operation);
+const spawnGit = (args) => new Promise((resolve) => {
+  try {
+    const child = childProcess.spawn('git', args, { cwd: ${JSON.stringify(harness.root)} });
+    child.once('error', (error) => resolve({ code: error.code }));
+    child.once('exit', (status) => resolve({ status }));
+  } catch (error) { resolve({ code: error?.code }); }
+});`;
 
 const manifestPreamble = (harness: Harness) =>
   `${composePreamble(harness)}
@@ -417,6 +454,120 @@ runManifest(() => {
   child.once('exit', () => process.exit(0));
 });
 setTimeout(() => process.exit(4), 10000);`,
+      );
+      assert.equal(result.status, 0, result.stderr);
+    } finally {
+      rmSync(harness.root, { force: true, recursive: true });
+    }
+  },
+);
+
+test(
+  'the fingerprint workflow lane admits the exact git probes @expo/fingerprint runs',
+  { skip: unsupportedPlatform },
+  () => {
+    const harness = createHarness('fingerprint-lane');
+    try {
+      const result = runFenced(
+        harness,
+        `${fingerprintPreamble(harness)}
+runWorkflow(async () => {
+  const observed = {
+    help: await spawnGit(['--help']),
+    root: await spawnGit(['rev-parse', '--show-toplevel']),
+    ignored: await spawnGit(['check-ignore', '-q', 'ignored.txt']),
+    tracked: await spawnGit(['check-ignore', '-q', 'tracked.txt']),
+    nested: await spawnGit(['check-ignore', '-q', 'nested/dir/file..txt']),
+  };
+  console.log(JSON.stringify(observed));
+});`,
+      );
+      assert.equal(result.status, 0, result.stderr);
+      assert.deepEqual(JSON.parse(result.stdout.trim()), {
+        help: { status: 0 },
+        root: { status: 0 },
+        ignored: { status: 0 },
+        tracked: { status: 1 },
+        nested: { status: 1 },
+      });
+      const utilities = readObservations(harness)
+        .filter((entry) => entry.kind === 'unattested-utility')
+        .map((entry) => JSON.parse(entry.value) as { lane: string; proofBearing: boolean });
+      assert.equal(utilities.length, 5);
+      assert.ok(utilities.every((entry) => entry.lane === 'fingerprint-utility'));
+      assert.ok(utilities.every((entry) => entry.proofBearing === false));
+      assert.equal(
+        readObservations(harness).some((entry) => entry.kind === 'launch'),
+        false,
+        'a fingerprint git probe must never be recorded as an attested descendant launch',
+      );
+    } finally {
+      rmSync(harness.root, { force: true, recursive: true });
+    }
+  },
+);
+
+test(
+  'the fingerprint workflow lane refuses other executables, argument drift, and path escapes',
+  { skip: unsupportedPlatform },
+  () => {
+    const harness = createHarness('fingerprint-refusals');
+    try {
+      const result = runFenced(
+        harness,
+        `${fingerprintPreamble(harness)}
+const probe = ${JSON.stringify(harness.probePath)};
+const refusals = [];
+const attempt = (run) => { try { run(); refusals.push('accepted'); } catch (error) { refusals.push(error?.code); } };
+runWorkflow(() => {
+  attempt(() => childProcess.spawn(probe, []));
+  attempt(() => childProcess.spawn('/bin/sh', ['-c', 'git --help']));
+  attempt(() => childProcess.spawn('git', ['status']));
+  attempt(() => childProcess.spawn('git', ['rev-parse', 'HEAD']));
+  attempt(() => childProcess.spawn('git', ['check-ignore', '-q', '../escape.txt']));
+  attempt(() => childProcess.spawn('git', ['check-ignore', '-q', 'nested/../escape.txt']));
+  attempt(() => childProcess.spawn('git', ['check-ignore', '-q', '/etc/passwd']));
+  attempt(() => childProcess.spawn('git', ['check-ignore', '-q', '--stdin']));
+  attempt(() => childProcess.spawn('git', ['--help'], { shell: true }));
+  attempt(() => childProcess.spawnSync('git', ['--help']));
+  attempt(() => childProcess.spawn(${JSON.stringify(harness.expoUpdatesCliPath)}, ['runtimeversion:resolve', '--platform', 'ios']));
+  if (refusals.length !== 11 || refusals.some((code) => code !== 'RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION')) {
+    console.error(JSON.stringify(refusals));
+    process.exit(3);
+  }
+});`,
+      );
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(
+        readObservations(harness).some((entry) => entry.kind === 'unattested-utility'),
+        false,
+      );
+    } finally {
+      rmSync(harness.root, { force: true, recursive: true });
+    }
+  },
+);
+
+test(
+  'git stays refused outside the fingerprint workflow boundary',
+  { skip: unsupportedPlatform },
+  () => {
+    const harness = createHarness('fingerprint-closed');
+    try {
+      const result = runFenced(
+        harness,
+        `${composePreamble(harness)}
+const refusals = [];
+const attempt = (run) => { try { run(); refusals.push('accepted'); } catch (error) { refusals.push(error?.code); } };
+attempt(() => childProcess.spawn('git', ['--help']));
+const scoped = compose({
+  transformer: { getTransformOptions: () => { attempt(() => childProcess.spawn('git', ['rev-parse', '--show-toplevel'])); return {}; } },
+});
+scoped.transformer.getTransformOptions([], {}, () => []);
+if (refusals.length !== 2 || refusals.some((code) => code !== 'RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION')) {
+  console.error(JSON.stringify(refusals));
+  process.exit(3);
+}`,
       );
       assert.equal(result.status, 0, result.stderr);
     } finally {

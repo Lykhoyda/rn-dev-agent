@@ -923,6 +923,10 @@ test('managed Metro derives a deterministic descendant-capable Darwin profile', 
   assert.match(first.profile, /\(deny network-outbound\)/);
   assert.match(first.profile, /\(extension "node"\)/);
   assert.match(first.profile, /\(subpath "\/repo\/node_modules"\)/);
+  assert.match(
+    first.profile,
+    /\(literal "\/repo\/apps\/mobile\/node_modules\/expo-updates\/bin\/cli\.js"\)/,
+  );
   assert.deepEqual(first.nodeRuntimeAttestation, {
     version: 1,
     executable: {
@@ -956,6 +960,21 @@ test('managed Metro derives a deterministic descendant-capable Darwin profile', 
         path: '/repo/apps/mobile/node_modules/.bin/expo',
         sha256: createHash('sha256')
           .update('/repo/apps/mobile/node_modules/.bin/expo')
+          .digest('hex'),
+        signingIdentity: {
+          authorities: [
+            'Apple Code Signing Certification Authority',
+            'Apple Root CA',
+            'Software Signing',
+          ],
+          cdHash: '0123456789abcdef0123456789abcdef01234567',
+          identifier: 'com.apple.sandbox-exec',
+        },
+      },
+      {
+        path: '/repo/apps/mobile/node_modules/expo-updates/bin/cli.js',
+        sha256: createHash('sha256')
+          .update('/repo/apps/mobile/node_modules/expo-updates/bin/cli.js')
           .digest('hex'),
         signingIdentity: {
           authorities: [

@@ -35,6 +35,7 @@ import {
 import { canonicalAuthorityJson } from './authority-json.js';
 import {
   prepareManagedMetroEnforcement,
+  resolveManagedMetroManifestUtility,
   runManagedMetroEnforcementPreflight,
   type ManagedMetroEnforcement,
   type ManagedMetroEnforcementPlan,
@@ -2227,11 +2228,22 @@ export async function startManagedMetro(
     EXPO_UNSTABLE_HEADLESS: '1',
     RCT_METRO_PORT: String(input.port),
   });
+  const manifestUtility = resolveManagedMetroManifestUtility({
+    platform: process.platform,
+    appRoot: input.appRoot,
+    sourceRoot: input.sourceRoot,
+  });
+  // NOTE: expo-updates resolves `git` through PATH, and the /usr/bin/git xcrun shim cannot run
+  // under the sandbox profile, so the admitted git binary has to win the lookup.
+  const pathPrefixes = [
+    launchCommand.binPath,
+    manifestUtility.git ? dirname(manifestUtility.git) : null,
+  ].filter((entry): entry is string => Boolean(entry));
   const childEnvironment = {
     ...metroEnvironment,
-    ...(launchCommand.binPath
+    ...(pathPrefixes.length > 0
       ? {
-          PATH: [launchCommand.binPath, metroEnvironment.PATH].filter(Boolean).join(':'),
+          PATH: [...pathPrefixes, metroEnvironment.PATH].filter(Boolean).join(':'),
         }
       : {}),
     NODE_OPTIONS: authorityNodeOptions,

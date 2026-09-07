@@ -20,6 +20,8 @@ import { canonicalAuthorityJson } from './authority-json.js';
 
 const DARWIN_SANDBOX_EXECUTABLE = '/usr/bin/sandbox-exec';
 const DARWIN_CODESIGN_EXECUTABLE = '/usr/bin/codesign';
+const DARWIN_DEVELOPER_DIR_EXECUTABLE = '/usr/bin/xcode-select';
+const EXPO_UPDATES_CLI_RELATIVE_PATH = 'node_modules/expo-updates/bin/cli.js';
 const DARWIN_PLATFORM_SIGNING_LEAF_AUTHORITIES = [
   'Authority=Software Signing',
   'Authority=macOS Software Signing',
@@ -49,6 +51,12 @@ interface ManagedMetroEnforcementDependencies {
   runtimeCache?: () => string | null;
   runtimeFiles?: (nodeExecutable: string) => readonly string[];
   runtimeVersion?: (nodeExecutable: string) => string;
+}
+
+export interface ManagedMetroManifestUtility {
+  expoUpdatesCli: string | null;
+  git: string | null;
+  gitConfigRoot: string | null;
 }
 
 export interface ManagedMetroEnforcementInput {
@@ -419,6 +427,69 @@ function ownedCssInteropCacheRoot(
   }
 }
 
+function ownedExpoUpdatesCli(
+  roots: readonly string[],
+  canonicalize: (path: string) => string,
+  stat: (path: string) => FileMetadata,
+): string | null {
+  for (const root of roots) {
+    try {
+      const canonical = canonicalize(resolve(root, EXPO_UPDATES_CLI_RELATIVE_PATH));
+      if (!stat(canonical).isFile()) continue;
+      if (roots.some((owner) => canonical === owner || canonical.startsWith(`${owner}/`))) {
+        return canonical;
+      }
+    } catch {}
+  }
+  return null;
+}
+
+function verifiedDeveloperGit(
+  dependencies: ManagedMetroEnforcementDependencies,
+): { git: string; configRoot: string } | null {
+  const run = dependencies.run ?? defaultRun;
+  const canonicalize = dependencies.canonicalize ?? realpathSync;
+  const stat = dependencies.stat ?? statSync;
+  try {
+    const developerDir = run(DARWIN_DEVELOPER_DIR_EXECUTABLE, ['-p']);
+    const root = developerDir.stdout.trim();
+    if (developerDir.status !== 0 || !root.startsWith('/')) return null;
+    const git = canonicalize(resolve(root, 'usr/bin/git'));
+    const metadata = stat(git);
+    if (!metadata.isFile() || metadata.uid !== 0 || (metadata.mode & 0o022) !== 0) return null;
+    return { git, configRoot: canonicalize(resolve(root, 'usr/share/git-core')) };
+  } catch {
+    return null;
+  }
+}
+
+export function resolveManagedMetroManifestUtility(
+  input: { platform: NodeJS.Platform; appRoot: string; sourceRoot: string },
+  dependencies: ManagedMetroEnforcementDependencies = {},
+): ManagedMetroManifestUtility {
+  const absent: ManagedMetroManifestUtility = {
+    expoUpdatesCli: null,
+    git: null,
+    gitConfigRoot: null,
+  };
+  if (input.platform !== 'darwin') return absent;
+  const canonicalize = dependencies.canonicalize ?? realpathSync;
+  const roots = [
+    ...new Set([
+      canonicalPath(input.appRoot, canonicalize),
+      canonicalPath(input.sourceRoot, canonicalize),
+    ]),
+  ];
+  const expoUpdatesCli = ownedExpoUpdatesCli(roots, canonicalize, dependencies.stat ?? statSync);
+  if (!expoUpdatesCli) return absent;
+  const developerGit = verifiedDeveloperGit(dependencies);
+  return {
+    expoUpdatesCli,
+    git: developerGit?.git ?? null,
+    gitConfigRoot: developerGit?.configRoot ?? null,
+  };
+}
+
 function managedMetroSandboxProfile(input: {
   readRoots: readonly string[];
   writeRoots: readonly string[];
@@ -512,6 +583,13 @@ export function prepareManagedMetroEnforcement(
     canonicalize,
     dependencies.lstat ?? lstatSync,
   );
+  const manifestUtility = resolveManagedMetroManifestUtility(
+    { platform: input.platform, appRoot, sourceRoot },
+    dependencies,
+  );
+  const manifestUtilityExecutables = [manifestUtility.expoUpdatesCli, manifestUtility.git].filter(
+    (path): path is string => path !== null,
+  );
   const readRoots = [
     '/dev/fd',
     sourceRoot,
@@ -522,12 +600,15 @@ export function prepareManagedMetroEnforcement(
     ...commandExecutableMappings,
     ...commandChainInputs,
     ...runtimeInputs,
+    ...manifestUtilityExecutables,
+    ...(manifestUtility.gitConfigRoot ? [manifestUtility.gitConfigRoot] : []),
   ];
   const executablePaths = [
     nodeExecutable,
     commandExecutable,
     ...commandExecutableMappings,
     '/usr/bin/env',
+    ...manifestUtilityExecutables,
   ];
   const nodeRuntimeAttestation = attestNodeRuntime(
     {

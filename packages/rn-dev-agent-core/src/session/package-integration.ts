@@ -1365,6 +1365,15 @@ function withinManifestUtilityBoundary() {
     workerThreads.isMainThread
   );
 }
+const fingerprintUtilityCapability = Object.freeze({});
+const fingerprintUtilityScope = new AsyncLocalStorage();
+function withinFingerprintUtilityBoundary() {
+  return (
+    fingerprintUtilityScope.getStore() === fingerprintUtilityCapability &&
+    !descendantNonce &&
+    workerThreads.isMainThread
+  );
+}
 const libcProbeCapability = Object.freeze({});
 const libcProbeScope = new AsyncLocalStorage();
 function withinLibcProbeBoundary() {
@@ -1436,6 +1445,34 @@ function isExpoUpdatesRuntimeVersionInvocation(command, args, cwd, environmentEn
   }
   return args.length === 3 || args[3] === '--debug';
 }
+function isFingerprintGitInvocation(command, args, cwd, environmentEntries) {
+  if (!intrinsicArrayIsArray(args) || args.length < 1 || args.length > 3) return false;
+  const resolvedCommand = resolveInvocationExecutable(command, cwd, environmentEntries);
+  if (
+    !resolvedCommand ||
+    path.basename(resolvedCommand) !== 'git' ||
+    resolvedCommand !== resolveInvocationExecutable('git', cwd, environmentEntries)
+  ) {
+    return false;
+  }
+  const projectRoots = [authorityContentRoot, authorityAppRoot];
+  for (let index = 0; index < projectRoots.length; index += 1) {
+    if (projectRoots[index] && resolvedCommand.startsWith(projectRoots[index] + path.sep)) {
+      return false;
+    }
+  }
+  if (args.length === 1) return args[0] === '--help';
+  if (args.length === 2) return args[0] === 'rev-parse' && args[1] === '--show-toplevel';
+  return (
+    args[0] === 'check-ignore' &&
+    args[1] === '-q' &&
+    typeof args[2] === 'string' &&
+    args[2].length > 0 &&
+    !args[2].startsWith('-') &&
+    !path.isAbsolute(args[2]) &&
+    !/(^|[\\\\/])\\.\\.([\\\\/]|$)/.test(args[2])
+  );
+}
 function isLinuxLibcProbeInvocation(command, args, cwd, environmentEntries) {
   if (!intrinsicArrayIsArray(args) || args.length !== 1 || typeof args[0] !== 'string') {
     return false;
@@ -1472,6 +1509,11 @@ const canonicalLoadTargets = privateArrayMap(
       packageName: '@expo/cli',
       relativePath: 'build/src/start/server/middleware/ExpoGoManifestHandlerMiddleware.js',
     },
+    {
+      boundary: 'expo-fingerprint-workflow',
+      packageName: '@expo/fingerprint',
+      relativePath: 'build/ProjectWorkflow.js',
+    },
   ],
   (target) => ({ ...target, fileName: path.basename(target.relativePath) }),
 );
@@ -1486,6 +1528,27 @@ function canonicalLoadBoundary(resolvedFile) {
     }
   }
   return null;
+}
+function fencedFingerprintWorkflow(loaded, wrapped) {
+  if (!loaded || typeof loaded !== 'object' || privateWeakSetHas(wrapped, loaded)) return loaded;
+  privateWeakSetAdd(wrapped, loaded);
+  const names = ['resolveProjectWorkflowAsync', 'resolveProjectWorkflowPerPlatformAsync'];
+  for (let index = 0; index < names.length; index += 1) {
+    const name = names[index];
+    const original = loaded[name];
+    if (typeof original !== 'function') throw descendantError();
+    intrinsicDefineProperty(loaded, name, {
+      configurable: false,
+      enumerable: true,
+      value(...args) {
+        return fingerprintUtilityScope.run(fingerprintUtilityCapability, () =>
+          intrinsicReflectApply(original, this, args),
+        );
+      },
+      writable: false,
+    });
+  }
+  return loaded;
 }
 function installExpoManifestUtilityBoundary() {
   const originalLoad = moduleApi._load;
@@ -1510,6 +1573,9 @@ function installExpoManifestUtilityBoundary() {
       const load = () => intrinsicReflectApply(originalLoad, this, [request, parent, isMain]);
       const loaded =
         boundary === 'libc-probe' ? libcProbeScope.run(libcProbeCapability, load) : load();
+      if (boundary === 'expo-fingerprint-workflow') {
+        return fencedFingerprintWorkflow(loaded, wrappedConstructors);
+      }
       if (boundary !== 'expo-manifest-middleware') {
         return loaded;
       }
@@ -1629,6 +1695,13 @@ function admitsManifestUtility(mode, args, cwd, environmentEntries) {
     isExpoUpdatesRuntimeVersionInvocation(args[0], args[1], cwd, environmentEntries)
   );
 }
+function admitsFingerprintUtility(mode, args, cwd, environmentEntries) {
+  return (
+    mode === 'node' &&
+    withinFingerprintUtilityBoundary() &&
+    isFingerprintGitInvocation(args[0], args[1], cwd, environmentEntries)
+  );
+}
 function admitsLibcProbe(mode, args, cwd, environmentEntries) {
   return (
     mode === 'sync' &&
@@ -1637,12 +1710,24 @@ function admitsLibcProbe(mode, args, cwd, environmentEntries) {
   );
 }
 function runManifestUtility(original, receiver, args, optionsIndex, mode) {
+  return runLifecycleUtility(original, receiver, args, optionsIndex, mode, {
+    lane: 'manifest-utility',
+    admits: admitsManifestUtility,
+  });
+}
+function runFingerprintUtility(original, receiver, args, optionsIndex, mode) {
+  return runLifecycleUtility(original, receiver, args, optionsIndex, mode, {
+    lane: 'fingerprint-utility',
+    admits: admitsFingerprintUtility,
+  });
+}
+function runLifecycleUtility(original, receiver, args, optionsIndex, mode, lane) {
   const { utilityArgs, utilityOptions } = admittedUtilityInvocation(
     args,
     optionsIndex,
     mode,
-    'manifest-utility',
-    admitsManifestUtility,
+    lane.lane,
+    lane.admits,
   );
   const nonce = randomBytes(16).toString('hex');
   const spawnAuthorization =
@@ -2311,6 +2396,9 @@ function fenceChildProcessMethod(name, optionsIndex, mode) {
       }
       if (mode !== 'fork' && withinManifestUtilityBoundary()) {
         return runManifestUtility(original, this, args, index, mode);
+      }
+      if (mode !== 'fork' && withinFingerprintUtilityBoundary()) {
+        return runFingerprintUtility(original, this, args, index, mode);
       }
       const nonce = randomBytes(16).toString('hex');
       const candidate = args[index];
