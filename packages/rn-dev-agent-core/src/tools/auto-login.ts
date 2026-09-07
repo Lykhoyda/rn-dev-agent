@@ -94,8 +94,16 @@ export function routeChain(state: SimplifiedNavState): string[] {
   return chain;
 }
 
+// The leaf is the screen the user is on, so a substring match names it
+// (`loginScreen`, `sign-in`). An ancestor only qualifies as a whole segment, so
+// an `Authenticated` navigator that stays mounted after login is not auth.
 export function isAuthRouteChain(chain: readonly string[]): boolean {
-  return chain.some(matchesAuthPattern);
+  const leaf = chain.at(-1);
+  if (leaf === undefined) return false;
+  return (
+    matchesAuthPattern(leaf) ||
+    chain.slice(0, -1).some((level) => AUTH_ROUTE_PATTERNS.includes(level.toLowerCase()))
+  );
 }
 
 async function readRouteChain(client: CDPClient): Promise<string[] | null> {

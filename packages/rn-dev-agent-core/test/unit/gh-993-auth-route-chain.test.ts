@@ -88,6 +88,28 @@ test('GH#993: controls — flat login/auth still match, non-auth nesting does no
   assert.equal(await isOnAuthScreen(fakeClient({ error: 'nav state unavailable' })), false);
 });
 
+test('GH#993: an Authenticated ancestor that only contains a pattern is not an auth screen', async () => {
+  // An `Authenticated` navigator that stays mounted after login contains `auth`
+  // as a substring; as an ancestor that is not enough. As the leaf it still
+  // matches — leaf substring matching is unchanged by the chain walk.
+  assert.equal(await isOnAuthScreen(fakeClient({ routeName: 'Authenticated' })), true);
+  assert.equal(
+    await isOnAuthScreen(
+      fakeClient({ routeName: 'AuthenticatedStack', nested: { routeName: 'Home' } }),
+    ),
+    false,
+  );
+  assert.equal(isAuthRouteChain(['AuthenticatedStack', 'Dashboard']), false);
+  const result = await handleAutoLogin(
+    fakeClient({ routeName: 'AuthenticatedStack', nested: { routeName: 'Home' } }),
+    { platform: 'ios', deviceId: 'SIM' },
+  );
+  assert.equal(result?.loggedIn, false);
+  assert.equal(result?.reason, 'App is not on an auth screen (route: AuthenticatedStack › Home)');
+  // A parent literally named `auth` still matches — defect (3) stays fixed.
+  assert.equal(isAuthRouteChain(['__root', 'auth', 'intro']), true);
+});
+
 test('GH#993: the negative reason carries the observed route chain', async () => {
   const result = await handleAutoLogin(
     fakeClient({

@@ -293,7 +293,7 @@ export interface FlowRelaunchFacts {
   stopApp: boolean;
 }
 
-export function flowRelaunchFacts(command: unknown): FlowRelaunchFacts | null {
+function flowRelaunchFacts(command: unknown): FlowRelaunchFacts | null {
   if (commandName(command) !== 'launchApp') return null;
   const options =
     command && typeof command === 'object' && !Array.isArray(command)
@@ -314,7 +314,7 @@ export function flowRelaunchFacts(command: unknown): FlowRelaunchFacts | null {
  * only a stop or a clearState launch restarts the app and can be blamed for the
  * origin failure that follows it.
  */
-export function relaunchesApp(launch: FlowRelaunchFacts): boolean {
+function relaunchesApp(launch: FlowRelaunchFacts): boolean {
   return launch.clearState || launch.stopApp;
 }
 
@@ -360,7 +360,7 @@ export const FLOW_RELAUNCH_NEXT_ACTION =
  * A proven foreign-Metro mismatch already names its cause and remedy and is
  * returned untouched, as is every other error.
  */
-export function attributeOriginFailureToFlowRelaunch(
+function attributeOriginFailureToFlowRelaunch(
   error: unknown,
   relaunch: FlowRelaunchFacts,
 ): unknown {

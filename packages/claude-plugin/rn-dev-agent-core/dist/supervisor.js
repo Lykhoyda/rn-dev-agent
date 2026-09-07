@@ -93184,7 +93184,10 @@ function routeChain(state) {
   return chain;
 }
 function isAuthRouteChain(chain) {
-  return chain.some(matchesAuthPattern);
+  const leaf = chain.at(-1);
+  if (leaf === void 0)
+    return false;
+  return matchesAuthPattern(leaf) || chain.slice(0, -1).some((level) => AUTH_ROUTE_PATTERNS.includes(level.toLowerCase()));
 }
 async function readRouteChain(client2) {
   if (!client2.isConnected || !client2.helpersInjected)
