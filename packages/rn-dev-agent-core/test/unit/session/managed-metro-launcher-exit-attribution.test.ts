@@ -82,7 +82,7 @@ async function boundManagedMetro(runtimeRoot: string) {
         kill: () => true,
         unref: () => {},
       }),
-      listenerPid: () => LISTENER_PID,
+      probeListener: () => ({ status: 'listening', pid: LISTENER_PID }),
       listenerOwnedByLauncher: () => true,
       readBirth: (pid: number) => ({ pid, source: 'linux-proc', token: `birth-${pid}` }),
       capture: async (input: Record<string, unknown>) => ({
@@ -467,11 +467,12 @@ setInterval(() => {}, 1 << 30);
             status: 'unsupported',
             reason: 'host-enforcement-unavailable',
           }),
-          listenerPid: () => {
+          probeListener: () => {
             try {
-              return Number(readFileSync(listenerPidPath, 'utf8')) || null;
+              const pid = Number(readFileSync(listenerPidPath, 'utf8'));
+              return pid > 0 ? { status: 'listening', pid } : { status: 'absent' };
             } catch {
-              return null;
+              return { status: 'absent' };
             }
           },
           listenerOwnedByLauncher: () => true,

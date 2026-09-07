@@ -14807,9 +14807,6 @@ function listenerOwnedByLauncher(listenerPid, launcherPid) {
   }
   return false;
 }
-function managedMetroListenerPid(port, platform = process.platform, execute2 = execFileSync6, executableDependencies = {}) {
-  return metroListenerPid(port, platform, execute2, executableDependencies);
-}
 function probeManagedMetroListener(port, platform = process.platform, execute2 = execFileSync6, executableDependencies = {}) {
   return probeMetroListener(port, platform, execute2, executableDependencies);
 }
@@ -15273,7 +15270,8 @@ function managedMetroStartupError(input) {
     sessionId: input.sessionId,
     metroInstanceId: input.metroInstanceId
   });
-  const childOutcome = input.exitCode !== null ? `launcher exit ${input.exitCode}` : input.signalCode ? `launcher signal ${input.signalCode}` : null;
+  const childOutcome = input.launcherAliveAtDeadline ? "launcher alive at deadline" : input.exitCode !== null ? `launcher exit ${input.exitCode}` : input.signalCode ? `launcher signal ${input.signalCode}` : null;
+  const readinessOutcome = input.launcherAliveAtDeadline && input.readiness && !input.readiness.listenerObserved ? `readiness deadline ${input.readiness.budgetMs} ms expired: listener absent ${input.readiness.absentProbes} probes, probe unknown ${input.readiness.unknownProbes}, unowned listener ${input.readiness.unownedListenerPid ?? "none"}` : null;
   const launcherDiagnostic = readManagedMetroLauncherDiagnostic(input.launcherDiagnosticPath);
   const redactions = [
     input.appRoot,
@@ -15286,12 +15284,13 @@ function managedMetroStartupError(input) {
     ...input.credentialRedactions
   ];
   const lastError = input.lastError instanceof Error ? sanitizeManagedMetroStartupDetail(input.lastError.message, redactions) : null;
-  const logTailSource = boundedMetroLogTail(input.logPath);
+  const logTailSource = input.logTailSource !== void 0 ? input.logTailSource : boundedMetroLogTail(input.logPath);
   const logTail = logTailSource ? sanitizeManagedMetroStartupDetail(logTailSource, redactions) : null;
   const details = [
     launcherDiagnostic ? `stage ${launcherDiagnostic.stage}` : null,
     childOutcome,
     launcherDiagnostic?.detail,
+    readinessOutcome ? sanitizeManagedMetroStartupDetail(readinessOutcome, redactions) : null,
     lastError,
     logTail ? `Metro log tail:
 ${logTail}` : null
@@ -15578,19 +15577,35 @@ async function startManagedMetro(input, dependencies = {}) {
     throw new Error("PROCESS_BIRTH_UNAVAILABLE: Metro launcher birth could not be proven");
   }
   child.unref();
-  const listenerPid = dependencies.listenerPid ?? managedMetroListenerPid;
+  const probeListener = dependencies.probeListener ?? probeManagedMetroListener;
   const ownsListener = dependencies.listenerOwnedByLauncher ?? listenerOwnedByLauncher;
   const capture = dependencies.capture ?? captureMetroBinding;
   const probeBirth = dependencies.probeBirth ?? probeProcessBirth;
   const wait = dependencies.wait ?? ((ms) => new Promise((resolve6) => setTimeout(resolve6, ms)));
-  const deadline = Date.now() + 2e4;
+  const deadline = Date.now() + MANAGED_METRO_READINESS_TIMEOUT_MS;
   let lastError = null;
   let listenerIdentity = null;
+  const readiness = {
+    budgetMs: MANAGED_METRO_READINESS_TIMEOUT_MS,
+    absentProbes: 0,
+    unknownProbes: 0,
+    unownedListenerPid: null,
+    listenerObserved: false
+  };
   while (Date.now() < deadline) {
     if (child.exitCode !== null || child.signalCode != null)
       break;
-    const pid = listenerPid(input.port);
-    if (pid && ownsListener(pid, child.pid)) {
+    const probe = probeListener(input.port);
+    if (probe.status === "absent")
+      readiness.absentProbes++;
+    else if (probe.status === "unknown")
+      readiness.unknownProbes++;
+    const pid = probe.status === "listening" ? probe.pid : null;
+    const owned = pid !== null && ownsListener(pid, child.pid);
+    if (pid !== null && !owned)
+      readiness.unownedListenerPid = pid;
+    if (pid !== null && owned) {
+      readiness.listenerObserved = true;
       const listenerBirth = probeBirth(pid);
       if (listenerBirth.status === "present") {
         listenerIdentity = { pid, birth: listenerBirth.birth.token };
@@ -15633,6 +15648,11 @@ async function startManagedMetro(input, dependencies = {}) {
     }
     await wait(100);
   }
+  const preKill = {
+    exitCode: child.exitCode,
+    signalCode: child.signalCode,
+    logTail: boundedMetroLogTail(logPath)
+  };
   const cleanupProven = await stopManagedMetroProcesses({
     port: input.port,
     launcher: { pid: child.pid, birth: launcherBirth.token },
@@ -15656,8 +15676,11 @@ async function startManagedMetro(input, dependencies = {}) {
     metroInstanceId: instanceId,
     signerCapability: input.signerCapability,
     credentialRedactions: Object.entries(childEnvironment).filter(([name, value]) => value !== void 0 && (MANAGED_METRO_SENSITIVE_ENVIRONMENT_NAME.test(name) || /^[a-z][a-z0-9+.-]*:\/\/[^/\s@]+@/i.test(value))).map(([, value]) => value),
-    exitCode: child.exitCode,
-    signalCode: child.signalCode,
+    exitCode: preKill.exitCode,
+    signalCode: preKill.signalCode,
+    launcherAliveAtDeadline: preKill.exitCode === null && preKill.signalCode == null,
+    logTailSource: preKill.logTail,
+    readiness,
     lastError
   });
 }
@@ -15677,6 +15700,7 @@ function signalManagedMetroProcessTree(input, platform = process.platform, execu
 }
 var signalProcessTree = signalManagedMetroProcessTree;
 var MANAGED_METRO_STOP_TIMEOUT_MS = 5e3;
+var MANAGED_METRO_READINESS_TIMEOUT_MS = 9e4;
 function removeManagedMetroEvidenceSocket(path) {
   if (process.platform === "win32")
     return;

@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { canonicalAuthorityJson } from '../../../dist/session/authority-json.js';
 import {
+  MANAGED_METRO_READINESS_TIMEOUT_MS,
   hasNodeLoaderOption,
   hasUnsupportedNodeOption,
   inspectManagedMetroLifecycle,
@@ -394,7 +395,7 @@ test('managed Metro binds the actual listener rather than the launcher shim', as
         calls.push({ executable, args, env: options.env });
         return child;
       },
-      listenerPid: () => 4242,
+      probeListener: () => ({ status: 'listening', pid: 4242 }),
       listenerOwnedByLauncher: () => true,
       readBirth: (pid) => ({ pid, source: 'linux-proc', token: `birth-${pid}` }),
       capture: async (input) => ({
@@ -599,7 +600,7 @@ test('managed Metro cannot claim managed sandbox when enforcement is unavailable
         calls.push(options.env ?? {});
         return child;
       },
-      listenerPid: () => 4242,
+      probeListener: () => ({ status: 'listening', pid: 4242 }),
       listenerOwnedByLauncher: () => true,
       readBirth: (pid) => ({ pid, source: 'linux-proc', token: `birth-${pid}` }),
       capture: async (input) => ({
@@ -647,7 +648,7 @@ test('managed Metro proves a cross-platform listener belongs to the spawned laun
       readText: () => JSON.stringify({ dependencies: { expo: '1' } }),
       exists: () => true,
       spawnProcess: () => child,
-      listenerPid: () => 202,
+      probeListener: () => ({ status: 'listening', pid: 202 }),
       listenerOwnedByLauncher: (listenerPid, launcherPid) => {
         ownershipChecked = true;
         return listenerPid === 202 && launcherPid === 101;
@@ -715,13 +716,12 @@ test('managed Metro stops polling when the launcher exits by signal', async () =
               kill: () => true,
               unref: () => {},
             }),
-            listenerPid: () => {
-              listenerProbes++;
-              return null;
-            },
             readBirth: (pid) => ({ pid, source: 'linux-proc', token: `birth-${pid}` }),
             probeBirth: () => ({ status: 'absent' }),
-            probeListener: () => ({ status: 'absent' }),
+            probeListener: () => {
+              listenerProbes++;
+              return { status: 'absent' };
+            },
             wait: async () =>
               assert.fail('signalled launcher must not wait for the startup deadline'),
           },
@@ -732,10 +732,181 @@ test('managed Metro stops polling when the launcher exits by signal', async () =
         return true;
       },
     );
-    assert.equal(listenerProbes, 0);
+    // The readiness loop never probed (it breaks on the signalled launcher and
+    // its `wait` guard above would have fired); the single probe is the
+    // post-loop cleanup proof that the port is free.
+    assert.equal(listenerProbes, 1);
   } finally {
     rmSync(runtimeRoot, { force: true, recursive: true });
   }
+});
+
+// GH #992: the readiness deadline expires while the launcher is still alive.
+// The supervisor then SIGTERMs the launcher's process group; the launcher dies
+// first and closes its end of the evidence socket, and Metro — which outlives
+// it for a moment — fails a late loader write with EPIPE. Both the EPIPE line
+// and the launcher's `signalCode` are therefore artifacts of the kill. This
+// harness reproduces that exact order through the injection seams: the fake
+// `signalTree` is the kill, and it is the kill that appends EPIPE to the log.
+async function expiredManagedMetroReadiness(
+  t: { mock: { timers: { enable: (options: unknown) => void; tick: (ms: number) => void } } },
+  overrides: {
+    probeListener: () => ReturnType<typeof probeManagedMetroListener>;
+    listenerOwnedByLauncher?: (listenerPid: number, launcherPid: number) => boolean;
+  },
+): Promise<{ message: string; postKillLog: string; kills: number; probesBeforeKill: number }> {
+  t.mock.timers.enable({ apis: ['Date'] });
+  const runtimeRoot = mkdtempSync(join(tmpdir(), 'rn-managed-metro-readiness-'));
+  const logPath = join(runtimeRoot, 'metro.log');
+  // Early loader records already reached the launcher: the evidence journal is
+  // non-empty, so the failure is METRO_START_UNAVAILABLE, not PRE_EVIDENCE.
+  writeFileSync(
+    join(runtimeRoot, 'metro-runtime-evidence.jsonl'),
+    '{"kind":"semantics","value":"early record"}\n',
+  );
+  const child = {
+    pid: 101,
+    exitCode: null as number | null,
+    signalCode: null as NodeJS.Signals | null,
+    kill: () => true,
+    unref: () => {},
+  };
+  let killed = false;
+  let kills = 0;
+  let probesBeforeKill = 0;
+  // The override describes the port during the readiness window only; once the
+  // fake clock has consumed the budget the cleanup proof sees a free port (the
+  // stop path refuses to signal on an `unknown` probe by design).
+  let elapsedMs = 0;
+  const withinReadinessBudget = () => elapsedMs < MANAGED_METRO_READINESS_TIMEOUT_MS;
+  try {
+    let failure: Error | undefined;
+    try {
+      await startManagedMetro(
+        {
+          appRoot: '/app',
+          runtimeRoot,
+          sourceRoot: '/app',
+          sessionId: 'session-a',
+          port: 8341,
+          instanceId: 'metro-a',
+          buildGeneration: 1,
+          signerCapability: 'signer',
+        },
+        {
+          readText: () => JSON.stringify({ dependencies: { expo: '1' } }),
+          exists: () => true,
+          spawnProcess: () => child,
+          readBirth: (pid) => ({ pid, source: 'linux-proc', token: `birth-${pid}` }),
+          probeBirth: (pid) =>
+            killed
+              ? { status: 'absent' }
+              : { status: 'present', birth: { pid, source: 'linux-proc', token: `birth-${pid}` } },
+          probeListener: () => {
+            if (killed || !withinReadinessBudget()) return { status: 'absent' };
+            probesBeforeKill++;
+            return overrides.probeListener();
+          },
+          listenerOwnedByLauncher: overrides.listenerOwnedByLauncher ?? (() => false),
+          signalTree: ({ signal }) => {
+            // The group kill. The handler-less launcher dies at once and closes
+            // the evidence socket; Metro's pending transformer construction
+            // then fails its evidence write — after the deadline, never before.
+            kills++;
+            killed = true;
+            child.signalCode = signal;
+            writeFileSync(
+              logPath,
+              "Failed to construct transformer:  Error: EPIPE: broken pipe, write\n    at Object.writeSync (node:fs)\n    at writeRuntimeLoad {\n  errno: -32,\n  syscall: 'write',\n  code: 'EPIPE'\n}\n",
+              { flag: 'a' },
+            );
+          },
+          wait: async (ms) => {
+            if (!killed && elapsedMs === 0) {
+              writeFileSync(logPath, 'Starting Metro Bundler\nfile-map crawl in progress\n', {
+                flag: 'a',
+              });
+            }
+            elapsedMs += ms;
+            t.mock.timers.tick(ms);
+          },
+        },
+      );
+    } catch (error) {
+      failure = error instanceof Error ? error : new Error(String(error));
+    }
+    assert.ok(failure, 'expired readiness must refuse');
+    return {
+      message: failure.message,
+      postKillLog: readFileSync(logPath, 'utf8'),
+      kills,
+      probesBeforeKill,
+    };
+  } finally {
+    rmSync(runtimeRoot, { force: true, recursive: true });
+  }
+}
+
+test('GH #992: an expired readiness deadline reports the pre-kill log tail, not the kill-induced EPIPE', async (t) => {
+  const outcome = await expiredManagedMetroReadiness(t, {
+    probeListener: () => ({ status: 'absent' }),
+  });
+
+  assert.equal(outcome.kills, 1, 'the supervisor kills the group exactly once');
+  assert.ok(outcome.probesBeforeKill > 1, 'the loop polled the port until the deadline');
+  assert.match(
+    outcome.message,
+    /^METRO_START_UNAVAILABLE: allocated Metro did not become authoritative/,
+  );
+  assert.match(outcome.message, /launcher alive at deadline/);
+  assert.equal(MANAGED_METRO_READINESS_TIMEOUT_MS, 90_000, 'the provisional budget (GH #992)');
+  assert.match(
+    outcome.message,
+    new RegExp(
+      `readiness deadline ${MANAGED_METRO_READINESS_TIMEOUT_MS} ms expired: listener absent \\d+ probes, probe unknown 0, unowned listener none`,
+    ),
+  );
+  assert.match(outcome.message, /Starting Metro Bundler/);
+  assert.match(outcome.message, /file-map crawl in progress/);
+  // The falsifier: the kill's own consequences must not be presented as cause.
+  assert.doesNotMatch(outcome.message, /EPIPE/);
+  assert.doesNotMatch(outcome.message, /Failed to construct transformer/);
+  assert.doesNotMatch(outcome.message, /launcher signal SIGTERM/);
+  // ...while the post-kill log really does carry them (what the old code read).
+  assert.match(outcome.postKillLog, /Failed to construct transformer:.*EPIPE/);
+});
+
+test('GH #992: unknown listener probes are named in the expired-readiness refusal', async (t) => {
+  const outcome = await expiredManagedMetroReadiness(t, {
+    probeListener: () => ({ status: 'unknown' }),
+  });
+
+  assert.match(outcome.message, /^METRO_START_UNAVAILABLE:/);
+  assert.match(
+    outcome.message,
+    /listener absent 0 probes, probe unknown [1-9]\d*, unowned listener none/,
+  );
+  assert.match(outcome.message, /launcher alive at deadline/);
+  assert.doesNotMatch(outcome.message, /EPIPE/);
+});
+
+test('GH #992: a listener the launcher does not own is named and never admitted', async (t) => {
+  let ownershipChecks = 0;
+  const outcome = await expiredManagedMetroReadiness(t, {
+    probeListener: () => ({ status: 'listening', pid: 999 }),
+    listenerOwnedByLauncher: (listenerPid, launcherPid) => {
+      ownershipChecks++;
+      assert.equal(listenerPid, 999);
+      assert.equal(launcherPid, 101);
+      return false;
+    },
+  });
+
+  assert.ok(ownershipChecks > 0);
+  assert.match(outcome.message, /^METRO_START_UNAVAILABLE:/);
+  assert.match(outcome.message, /unowned listener 999/);
+  assert.match(outcome.message, /launcher alive at deadline/);
+  assert.doesNotMatch(outcome.message, /EPIPE/);
 });
 
 test('managed Metro stops its owned process tree and proves the listener is gone', async () => {
@@ -759,7 +930,7 @@ test('managed Metro stops its owned process tree and proves the listener is gone
         kill: () => true,
         unref: () => {},
       }),
-      listenerPid: () => 202,
+      probeListener: () => ({ status: 'listening', pid: 202 }),
       listenerOwnedByLauncher: () => true,
       readBirth: (pid) => ({ pid, source: 'linux-proc', token: `birth-${pid}` }),
       capture: async (input) => ({
@@ -822,7 +993,7 @@ test('managed Metro lifecycle inspection fails closed for every lost authority s
         kill: () => true,
         unref: () => {},
       }),
-      listenerPid: () => 202,
+      probeListener: () => ({ status: 'listening', pid: 202 }),
       listenerOwnedByLauncher: () => true,
       readBirth: (pid) => ({ pid, source: 'linux-proc', token: `birth-${pid}` }),
       capture: async (input) => ({
@@ -918,7 +1089,7 @@ test('managed Metro proof authenticates every cleanup authority field', async ()
         kill: () => true,
         unref: () => {},
       }),
-      listenerPid: () => 202,
+      probeListener: () => ({ status: 'listening', pid: 202 }),
       listenerOwnedByLauncher: () => true,
       readBirth: (pid) => ({ pid, source: 'linux-proc', token: `birth-${pid}` }),
       capture: async (input) => ({
@@ -970,7 +1141,7 @@ test('managed Metro build-generation rotation preserves authenticated shutdown a
         kill: () => true,
         unref: () => {},
       }),
-      listenerPid: () => 202,
+      probeListener: () => ({ status: 'listening', pid: 202 }),
       listenerOwnedByLauncher: () => true,
       readBirth: (pid) => ({ pid, source: 'linux-proc', token: `birth-${pid}` }),
       capture: async (input) => ({
@@ -1030,7 +1201,7 @@ test('managed Metro accepts authenticated cleanup when processes and port are al
         kill: () => true,
         unref: () => {},
       }),
-      listenerPid: () => 202,
+      probeListener: () => ({ status: 'listening', pid: 202 }),
       listenerOwnedByLauncher: () => true,
       readBirth: (pid) => ({ pid, source: 'linux-proc', token: `birth-${pid}` }),
       capture: async (input) => ({
@@ -1079,7 +1250,7 @@ test('managed Metro refuses cleanup when process absence is unknown', async () =
         kill: () => true,
         unref: () => {},
       }),
-      listenerPid: () => 202,
+      probeListener: () => ({ status: 'listening', pid: 202 }),
       listenerOwnedByLauncher: () => true,
       readBirth: (pid) => ({ pid, source: 'linux-proc', token: `birth-${pid}` }),
       capture: async (input) => ({
@@ -1123,7 +1294,7 @@ test('managed Metro cleanup evidence retains live processes and sockets', async 
         kill: () => true,
         unref: () => {},
       }),
-      listenerPid: () => 202,
+      probeListener: () => ({ status: 'listening', pid: 202 }),
       listenerOwnedByLauncher: () => true,
       readBirth: (pid) => ({ pid, source: 'linux-proc', token: `birth-${pid}` }),
       capture: async (input) => ({
@@ -1235,7 +1406,7 @@ test('managed Metro stops an exact listener after transient post-signal uncertai
         kill: () => true,
         unref: () => {},
       }),
-      listenerPid: () => 202,
+      probeListener: () => ({ status: 'listening', pid: 202 }),
       listenerOwnedByLauncher: () => true,
       readBirth: (pid) => ({ pid, source: 'linux-proc', token: `birth-${pid}` }),
       capture: async (input) => ({
@@ -1311,7 +1482,6 @@ test('managed Metro startup failure stops the owned tree before returning', asyn
         readText: () => JSON.stringify({ dependencies: { expo: '1' } }),
         exists: () => true,
         spawnProcess: () => child,
-        listenerPid: () => 202,
         listenerOwnedByLauncher: () => true,
         readBirth: (pid) => ({ pid, source: 'linux-proc', token: `birth-${pid}` }),
         probeBirth: (pid) =>
@@ -1377,7 +1547,6 @@ test('managed Metro surfaces a bounded sanitized pre-evidence launcher diagnosti
           readText: () => JSON.stringify({ dependencies: { expo: '1' } }),
           exists: () => true,
           spawnProcess: () => child,
-          listenerPid: () => null,
           readBirth: (pid) => ({ pid, source: 'linux-proc', token: `birth-${pid}` }),
           probeBirth: () =>
             stopped
@@ -1510,7 +1679,6 @@ test('managed Metro startup cleanup signals its group before listener birth is k
         readText: () => JSON.stringify({ dependencies: { expo: '1' } }),
         exists: () => true,
         spawnProcess: () => child,
-        listenerPid: () => 202,
         listenerOwnedByLauncher: () => true,
         readBirth: (pid) => ({ pid, source: 'linux-proc', token: `birth-${pid}` }),
         probeBirth: (pid) => {
@@ -1568,7 +1736,6 @@ test('managed Metro startup cleanup rejects an unproven listener after launcher 
         readText: () => JSON.stringify({ dependencies: { expo: '1' } }),
         exists: () => true,
         spawnProcess: () => child,
-        listenerPid: () => 202,
         listenerOwnedByLauncher: () => true,
         readBirth: (pid) => ({ pid, source: 'linux-proc', token: `birth-${pid}` }),
         probeBirth: (pid) =>

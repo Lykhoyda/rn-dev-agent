@@ -72,7 +72,6 @@ interface ManagedMetroDependencies {
     args: string[],
     options: Parameters<typeof spawn>[2],
   ) => ChildProcess;
-  listenerPid?: (port: number) => number | null;
   listenerOwnedByLauncher?: (listenerPid: number, launcherPid: number) => boolean;
   capture?: typeof captureMetroBinding;
   readBirth?: (pid: number) => ProcessBirth | null;
@@ -101,6 +100,18 @@ interface ManagedMetroSignal {
 interface ManagedMetroProcessIdentity {
   pid: number;
   birth: string;
+}
+
+// Tally of what the readiness loop observed on the allocated port. Only a
+// `listening` probe whose pid the launcher owns can enter the verification
+// branch; `absent` and `unknown` are counted so the startup error can name why
+// the deadline expired instead of implying Metro was never there (GH #992).
+interface ManagedMetroReadinessOutcome {
+  budgetMs: number;
+  absentProbes: number;
+  unknownProbes: number;
+  unownedListenerPid: number | null;
+  listenerObserved: boolean;
 }
 
 interface ManagedMetroRuntimeAdmissionExpectation {
@@ -2023,6 +2034,13 @@ function managedMetroStartupError(input: {
   credentialRedactions: readonly string[];
   exitCode: number | null;
   signalCode: NodeJS.Signals | null;
+  // True when the launcher was still running when the readiness deadline
+  // expired; the exit/signal pair is then the supervisor's own kill, not a cause.
+  launcherAliveAtDeadline?: boolean;
+  // Pre-kill snapshot of the Metro log. When supplied it replaces the file
+  // read, which would otherwise report what Metro printed while being killed.
+  logTailSource?: string | null;
+  readiness?: ManagedMetroReadinessOutcome;
   lastError: unknown;
 }): Error {
   const violation = latestSignedRuntimeViolation(
@@ -2033,12 +2051,23 @@ function managedMetroStartupError(input: {
       metroInstanceId: input.metroInstanceId,
     },
   );
-  const childOutcome =
-    input.exitCode !== null
+  const childOutcome = input.launcherAliveAtDeadline
+    ? 'launcher alive at deadline'
+    : input.exitCode !== null
       ? `launcher exit ${input.exitCode}`
       : input.signalCode
         ? `launcher signal ${input.signalCode}`
         : null;
+  // Only an expiry with no owned listener is a readiness outcome; a launcher
+  // that died earlier already names its own cause above.
+  const readinessOutcome =
+    input.launcherAliveAtDeadline && input.readiness && !input.readiness.listenerObserved
+      ? `readiness deadline ${input.readiness.budgetMs} ms expired: listener absent ${
+          input.readiness.absentProbes
+        } probes, probe unknown ${input.readiness.unknownProbes}, unowned listener ${
+          input.readiness.unownedListenerPid ?? 'none'
+        }`
+      : null;
   const launcherDiagnostic = readManagedMetroLauncherDiagnostic(input.launcherDiagnosticPath);
   const redactions = [
     input.appRoot,
@@ -2054,7 +2083,8 @@ function managedMetroStartupError(input: {
     input.lastError instanceof Error
       ? sanitizeManagedMetroStartupDetail(input.lastError.message, redactions)
       : null;
-  const logTailSource = boundedMetroLogTail(input.logPath);
+  const logTailSource =
+    input.logTailSource !== undefined ? input.logTailSource : boundedMetroLogTail(input.logPath);
   const logTail = logTailSource
     ? sanitizeManagedMetroStartupDetail(logTailSource, redactions)
     : null;
@@ -2062,6 +2092,7 @@ function managedMetroStartupError(input: {
     launcherDiagnostic ? `stage ${launcherDiagnostic.stage}` : null,
     childOutcome,
     launcherDiagnostic?.detail,
+    readinessOutcome ? sanitizeManagedMetroStartupDetail(readinessOutcome, redactions) : null,
     lastError,
     logTail ? `Metro log tail:\n${logTail}` : null,
   ].filter((detail): detail is string => Boolean(detail));
@@ -2426,19 +2457,32 @@ export async function startManagedMetro(
   }
   child.unref();
 
-  const listenerPid = dependencies.listenerPid ?? managedMetroListenerPid;
+  const probeListener = dependencies.probeListener ?? probeManagedMetroListener;
   const ownsListener = dependencies.listenerOwnedByLauncher ?? listenerOwnedByLauncher;
   const capture = dependencies.capture ?? captureMetroBinding;
   const probeBirth = dependencies.probeBirth ?? probeProcessBirth;
   const wait =
     dependencies.wait ?? ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
-  const deadline = Date.now() + 20_000;
+  const deadline = Date.now() + MANAGED_METRO_READINESS_TIMEOUT_MS;
   let lastError: unknown = null;
   let listenerIdentity: ManagedMetroProcessIdentity | null = null;
+  const readiness: ManagedMetroReadinessOutcome = {
+    budgetMs: MANAGED_METRO_READINESS_TIMEOUT_MS,
+    absentProbes: 0,
+    unknownProbes: 0,
+    unownedListenerPid: null,
+    listenerObserved: false,
+  };
   while (Date.now() < deadline) {
     if (child.exitCode !== null || child.signalCode != null) break;
-    const pid = listenerPid(input.port);
-    if (pid && ownsListener(pid, child.pid)) {
+    const probe = probeListener(input.port);
+    if (probe.status === 'absent') readiness.absentProbes++;
+    else if (probe.status === 'unknown') readiness.unknownProbes++;
+    const pid = probe.status === 'listening' ? probe.pid : null;
+    const owned = pid !== null && ownsListener(pid, child.pid);
+    if (pid !== null && !owned) readiness.unownedListenerPid = pid;
+    if (pid !== null && owned) {
+      readiness.listenerObserved = true;
       const listenerBirth = probeBirth(pid);
       if (listenerBirth.status === 'present') {
         listenerIdentity = { pid, birth: listenerBirth.birth.token };
@@ -2494,6 +2538,16 @@ export async function startManagedMetro(
     }
     await wait(100);
   }
+  // Snapshot the launcher state and the Metro log BEFORE the group SIGTERM.
+  // Everything Metro prints while dying (its evidence socket is closed by the
+  // launcher's own death, so a late loader write fails with EPIPE) and the
+  // launcher's post-kill `signalCode` are consequences of that kill, not the
+  // reason the deadline expired (GH #992).
+  const preKill = {
+    exitCode: child.exitCode,
+    signalCode: child.signalCode,
+    logTail: boundedMetroLogTail(logPath),
+  };
   const cleanupProven = await stopManagedMetroProcesses(
     {
       port: input.port,
@@ -2529,8 +2583,11 @@ export async function startManagedMetro(
             /^[a-z][a-z0-9+.-]*:\/\/[^/\s@]+@/i.test(value)),
       )
       .map(([, value]) => value as string),
-    exitCode: child.exitCode,
-    signalCode: child.signalCode,
+    exitCode: preKill.exitCode,
+    signalCode: preKill.signalCode,
+    launcherAliveAtDeadline: preKill.exitCode === null && preKill.signalCode == null,
+    logTailSource: preKill.logTail,
+    readiness,
     lastError,
   });
 }
@@ -2556,6 +2613,13 @@ export function signalManagedMetroProcessTree(
 
 const signalProcessTree = signalManagedMetroProcessTree;
 const MANAGED_METRO_STOP_TIMEOUT_MS = 5_000;
+// How long startManagedMetro waits for a launcher-owned Metro listener before
+// it tears the process group down (GH #992). A cold per-session cache on a
+// loaded host needs well over the former 20 s; the loop still returns the
+// instant the listener is proven and still exits early when the launcher dies,
+// so raising it only lengthens a genuinely broken start. The value is
+// provisional pending the cold-start measurement on the reporter's host.
+export const MANAGED_METRO_READINESS_TIMEOUT_MS = 90_000;
 
 function removeManagedMetroEvidenceSocket(path: string): void {
   if (process.platform === 'win32') return;
