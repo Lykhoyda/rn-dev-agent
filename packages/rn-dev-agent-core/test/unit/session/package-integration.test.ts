@@ -4721,4 +4721,7 @@ test('every stdio-capturing session-CLI wait in the adapter is bounded', () => {
     'a timed-out complete-build must fail instead of reading as a truncated success',
   );
   assert.match(adapter, /SESSION_CLI_TIMEOUT/);
+  assert.match(adapter, /resolve-metro-readiness/);
+  assert.match(adapter, /timeout: ensureMetroTimeoutMs/);
+  assert.match(adapter, /failOnSessionCliError\(metro, 'ensure-metro', ensureMetroTimeoutMs\)/);
 });

@@ -15906,6 +15906,7 @@ function retryBoundDirectoryCleanup(directory, obligation, dependencies = {}) {
 }
 
 // packages/rn-dev-agent-core/dist/session/package-integration.js
+init_project_config();
 var ADAPTER = ".rn-agent/integration/rn-session-adapter.cjs";
 var METRO_RUNTIME_LOADS = ".rn-agent/integration/metro-runtime-loads.jsonl";
 var METRO_START = "// rn-dev-agent session integration: begin";

@@ -23939,7 +23939,7 @@ function resolveMirrorConfig(deps = {}) {
     return { enabled: cfgEnabled, fps, firstFrameTimeoutMs, source: "config" };
   return { enabled: true, fps, firstFrameTimeoutMs, source: "default" };
 }
-var warnedBadConfig, DEFAULT_OBSERVE_PORT, DEFAULT_MIRROR_FPS, MIRROR_FPS_MIN, MIRROR_FPS_MAX, MIRROR_FIRST_FRAME_TIMEOUT_MIN_MS, MIRROR_FIRST_FRAME_TIMEOUT_MAX_MS;
+var warnedBadConfig, DEFAULT_OBSERVE_PORT, DEFAULT_MIRROR_FPS, MIRROR_FPS_MIN, MIRROR_FPS_MAX, MIRROR_FIRST_FRAME_TIMEOUT_MIN_MS, MIRROR_FIRST_FRAME_TIMEOUT_MAX_MS, SESSION_CLI_TIMEOUT_MS;
 var init_project_config = __esm({
   "packages/rn-dev-agent-core/dist/project-config.js"() {
     "use strict";
@@ -23953,6 +23953,7 @@ var init_project_config = __esm({
     MIRROR_FPS_MAX = 30;
     MIRROR_FIRST_FRAME_TIMEOUT_MIN_MS = 1e3;
     MIRROR_FIRST_FRAME_TIMEOUT_MAX_MS = 12e4;
+    SESSION_CLI_TIMEOUT_MS = 12e4;
   }
 });
 
@@ -65454,6 +65455,7 @@ function createBootErrorCaptureModule() {
 }
 
 // packages/rn-dev-agent-core/dist/session/package-integration.js
+init_project_config();
 var ADAPTER = ".rn-agent/integration/rn-session-adapter.cjs";
 var METRO_ADAPTER = ".rn-agent/integration/rn-session-metro.cjs";
 var AUTHORITY_MODULE = ".rn-agent/integration/authority-marker.js";
@@ -68962,12 +68964,36 @@ function failBuild(code, message) {
   reportAbortOutcome(abortFailure);
   process.exit(code);
 }
-async function failOnSessionCliError(result, label) {
+async function failOnSessionCliError(result, label, timeoutMs) {
   if (!result.error) return;
   await drainBuildTerminationSignals();
+  const bound = Number.isInteger(timeoutMs) ? timeoutMs : SESSION_CLI_TIMEOUT_MS;
   failBuild(2, result.error.code === 'ETIMEDOUT'
-    ? 'SESSION_CLI_TIMEOUT: rn-session ' + label + ' did not return within ' + (SESSION_CLI_TIMEOUT_MS / 1000) + 's'
+    ? 'SESSION_CLI_TIMEOUT: rn-session ' + label + ' did not return within ' + (bound / 1000) + 's'
     : 'SESSION_AUTHORITY_REQUIRED: rn-session ' + label + ' failed: ' + result.error.message);
+}
+function resolveEnsureMetroCliTimeoutMs() {
+  const resolved = spawnSync(process.execPath, [...sqliteFlag, manifest.sessionCli, 'resolve-metro-readiness'], {
+    cwd: process.cwd(),
+    env: authorityEnvironment,
+    encoding: 'utf8',
+    timeout: SESSION_CLI_TIMEOUT_MS,
+    killSignal: 'SIGKILL',
+  });
+  if (resolved.error) {
+    failBuild(2, resolved.error.code === 'ETIMEDOUT'
+      ? 'SESSION_CLI_TIMEOUT: rn-session resolve-metro-readiness did not return within ' + (SESSION_CLI_TIMEOUT_MS / 1000) + 's'
+      : 'SESSION_AUTHORITY_REQUIRED: rn-session resolve-metro-readiness failed: ' + resolved.error.message);
+  }
+  if (resolved.status !== 0) {
+    failBuild(2, String(resolved.stderr).trim() || 'METRO_READINESS_TIMEOUT_INVALID: could not resolve managed Metro readiness timeout');
+  }
+  let parsed = null;
+  try { parsed = JSON.parse(String(resolved.stdout)); } catch {}
+  if (!parsed || !Number.isInteger(parsed.ensureMetroCliTimeoutMs) || parsed.ensureMetroCliTimeoutMs < SESSION_CLI_TIMEOUT_MS || !Number.isInteger(parsed.readinessTimeoutMs) || parsed.ensureMetroCliTimeoutMs < parsed.readinessTimeoutMs) {
+    failBuild(2, 'METRO_READINESS_TIMEOUT_INVALID: resolver output is not a usable ensure-metro timeout');
+  }
+  return parsed.ensureMetroCliTimeoutMs;
 }
 function exitForBuildSignal(signal) {
   for (const name of MANAGED_BUILD_SIGNALS) process.removeAllListeners(name);
@@ -69119,14 +69145,15 @@ function managedMetroProxyUrl(binding) {
     });
     await failOnSessionCliError(probe, 'prepare-build');
     if (probe.status !== 0 && String(probe.stderr).includes('live Metro binding')) {
+      const ensureMetroTimeoutMs = resolveEnsureMetroCliTimeoutMs();
       const metro = spawnSync(process.execPath, [...sqliteFlag, manifest.sessionCli, 'ensure-metro'], {
         cwd: process.cwd(),
         env: authorityEnvironment,
         encoding: 'utf8',
-        timeout: SESSION_CLI_TIMEOUT_MS,
+        timeout: ensureMetroTimeoutMs,
         killSignal: 'SIGKILL',
       });
-      await failOnSessionCliError(metro, 'ensure-metro');
+      await failOnSessionCliError(metro, 'ensure-metro', ensureMetroTimeoutMs);
       if (metro.status !== 0) {
         await drainBuildTerminationSignals();
         failBuild(2, String(metro.stderr).trim() || 'METRO_START_UNAVAILABLE: managed Metro failed');
@@ -69284,7 +69311,7 @@ function managedMetroProxyUrl(binding) {
 })().catch((error) => {
   failBuild(1, 'rn-session-adapter: unexpected failure: ' + (error && error.message ? error.message : String(error)));
 });
-`;
+`.replace("const SESSION_CLI_TIMEOUT_MS = 120000;", `const SESSION_CLI_TIMEOUT_MS = ${SESSION_CLI_TIMEOUT_MS};`);
 }
 function snapshotBoundFiles(directory, directoryPath, names) {
   return readBoundDirectoryFiles(directory, names).map((snapshot) => ({

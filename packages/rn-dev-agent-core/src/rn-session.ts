@@ -43,7 +43,11 @@ import {
   openBoundSubdirectory,
   writeBoundDirectoryFile,
 } from './session/bound-directory.js';
-import { readRnAgentConfig, resolveMetroReadinessTimeout } from './project-config.js';
+import {
+  readRnAgentConfig,
+  resolveMetroReadinessTimeout,
+  deriveEnsureMetroCliTimeoutMs,
+} from './project-config.js';
 
 type SessionMetroBinding =
   | Partial<ManagedMetroBinding>
@@ -529,6 +533,19 @@ async function ensureManagedMetro(status: ReturnType<typeof resolveStatus>): Pro
 
 async function main(): Promise<void> {
   const command = process.argv[2] ?? 'status';
+  if (command === 'resolve-metro-readiness') {
+    const readiness = resolveMetroReadinessTimeout({
+      readConfig: () => readRnAgentConfig(process.cwd()),
+    });
+    process.stdout.write(
+      `${JSON.stringify({
+        readinessTimeoutMs: readiness.timeoutMs,
+        source: readiness.source,
+        ensureMetroCliTimeoutMs: deriveEnsureMetroCliTimeoutMs(readiness.timeoutMs),
+      })}\n`,
+    );
+    return;
+  }
   let status = resolveStatus();
   try {
     if (command === 'status' || command === 'feedback-json' || command === 'prepare-build') {

@@ -8373,9 +8373,17 @@ function readRnAgentConfig(projectRoot) {
     return null;
   }
 }
+function isPlainConfigObject(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
 function resolveMetroReadinessTimeout(deps = {}) {
   const cfg = (deps.readConfig ?? readRnAgentConfig)();
-  const raw = cfg?.metro?.readinessTimeoutMs;
+  if (cfg == null)
+    return { timeoutMs: DEFAULT_METRO_READINESS_TIMEOUT_MS, source: "default" };
+  if (cfg.metro !== void 0 && !isPlainConfigObject(cfg.metro)) {
+    throw new Error(`METRO_READINESS_TIMEOUT_INVALID: .rn-agent/config.json metro must be an object (got ${JSON.stringify(cfg.metro)}); fix or remove the key to use the ${DEFAULT_METRO_READINESS_TIMEOUT_MS} ms default`);
+  }
+  const raw = cfg.metro?.readinessTimeoutMs;
   if (raw === void 0)
     return { timeoutMs: DEFAULT_METRO_READINESS_TIMEOUT_MS, source: "default" };
   if (typeof raw !== "number" || !Number.isInteger(raw) || raw < METRO_READINESS_TIMEOUT_MIN_MS || raw > METRO_READINESS_TIMEOUT_MAX_MS) {
@@ -8383,7 +8391,10 @@ function resolveMetroReadinessTimeout(deps = {}) {
   }
   return { timeoutMs: raw, source: "config" };
 }
-var warnedBadConfig, DEFAULT_METRO_READINESS_TIMEOUT_MS, METRO_READINESS_TIMEOUT_MIN_MS, METRO_READINESS_TIMEOUT_MAX_MS;
+function deriveEnsureMetroCliTimeoutMs(readinessTimeoutMs) {
+  return Math.max(SESSION_CLI_TIMEOUT_MS, readinessTimeoutMs + METRO_ENSURE_CLI_CLEANUP_MARGIN_MS);
+}
+var warnedBadConfig, DEFAULT_METRO_READINESS_TIMEOUT_MS, METRO_READINESS_TIMEOUT_MIN_MS, METRO_READINESS_TIMEOUT_MAX_MS, SESSION_CLI_TIMEOUT_MS, METRO_ENSURE_CLI_CLEANUP_MARGIN_MS;
 var init_project_config = __esm({
   "packages/rn-dev-agent-core/dist/project-config.js"() {
     "use strict";
@@ -8394,6 +8405,8 @@ var init_project_config = __esm({
     DEFAULT_METRO_READINESS_TIMEOUT_MS = 9e4;
     METRO_READINESS_TIMEOUT_MIN_MS = 1e3;
     METRO_READINESS_TIMEOUT_MAX_MS = 6e5;
+    SESSION_CLI_TIMEOUT_MS = 12e4;
+    METRO_ENSURE_CLI_CLEANUP_MARGIN_MS = 25e3;
   }
 });
 
@@ -15508,13 +15521,25 @@ function boundedManagedMetroStartupMessage(code, details) {
   const suffix = compactDetails.length > 0 ? ` (${compactDetails.join("; ")})` : "";
   return `${code}: managed Metro launcher failed before runtime evidence${suffix}`.slice(0, 4096);
 }
+function managedMetroLauncherDetail(input) {
+  if (input.launcherAliveAtDeadline)
+    return "launcher alive at deadline";
+  if (input.exitCode !== null)
+    return `launcher exit ${input.exitCode}`;
+  if (input.signalCode)
+    return `launcher signal ${input.signalCode}`;
+  return null;
+}
+function managedMetroReadinessDetail(readiness) {
+  return `readiness deadline ${readiness.budgetMs} ms expired: listener absent ${readiness.absentProbes} probes, probe unknown ${readiness.unknownProbes}, unowned listener ${readiness.unownedListenerPid ?? "none"}`;
+}
 function managedMetroStartupError(input) {
   const violation = latestSignedRuntimeViolation(input.runtimeEvidencePath, input.runtimePolicyCapability, {
     sessionId: input.sessionId,
     metroInstanceId: input.metroInstanceId
   });
-  const childOutcome = input.launcherAliveAtDeadline ? "launcher alive at deadline" : input.exitCode !== null ? `launcher exit ${input.exitCode}` : input.signalCode ? `launcher signal ${input.signalCode}` : null;
-  const readinessOutcome = input.launcherAliveAtDeadline && input.readiness && !input.readiness.listenerObserved ? `readiness deadline ${input.readiness.budgetMs} ms expired: listener absent ${input.readiness.absentProbes} probes, probe unknown ${input.readiness.unknownProbes}, unowned listener ${input.readiness.unownedListenerPid ?? "none"}` : null;
+  const childOutcome = managedMetroLauncherDetail(input);
+  const readinessOutcome = input.launcherAliveAtDeadline && !input.readiness.listenerObserved ? managedMetroReadinessDetail(input.readiness) : null;
   const launcherDiagnostic = readManagedMetroLauncherDiagnostic(input.launcherDiagnosticPath);
   const redactions = [
     input.appRoot,
@@ -15527,7 +15552,7 @@ function managedMetroStartupError(input) {
     ...input.credentialRedactions
   ];
   const lastError = input.lastError instanceof Error ? sanitizeManagedMetroStartupDetail(input.lastError.message, redactions) : null;
-  const logTailSource = input.logTailSource !== void 0 ? input.logTailSource : boundedMetroLogTail(input.logPath);
+  const logTailSource = input.logTailSource;
   const logTail = logTailSource ? sanitizeManagedMetroStartupDetail(logTailSource, redactions) : null;
   const details = [
     launcherDiagnostic ? `stage ${launcherDiagnostic.stage}` : null,
@@ -15903,7 +15928,13 @@ async function startManagedMetro(input, dependencies = {}) {
     listener: listenerIdentity
   }, dependencies);
   if (!cleanupProven) {
-    throw new Error("METRO_START_CLEANUP_UNPROVEN: failed Metro startup left process or listener state ambiguous");
+    const childOutcome = managedMetroLauncherDetail({
+      launcherAliveAtDeadline: preKill.exitCode === null && preKill.signalCode == null,
+      exitCode: preKill.exitCode,
+      signalCode: preKill.signalCode
+    });
+    const readinessOutcome = sanitizeManagedMetroStartupDetail(managedMetroReadinessDetail(readiness), [input.appRoot, input.sourceRoot, input.runtimeRoot, input.sessionId, instanceId]);
+    throw new Error(`METRO_START_CLEANUP_UNPROVEN: failed Metro startup left process or listener state ambiguous${childOutcome || readinessOutcome ? ` (${[childOutcome, readinessOutcome].filter(Boolean).join("; ")})` : ""}`.slice(0, 4096));
   }
   if (!removeManagedMetroEvidenceSocketSafely(runtimeEvidenceSocket, dependencies)) {
     throw new Error("METRO_START_CLEANUP_UNPROVEN: Metro evidence socket cleanup failed");
@@ -15912,7 +15943,6 @@ async function startManagedMetro(input, dependencies = {}) {
     runtimeEvidencePath,
     runtimePolicyCapability,
     launcherDiagnosticPath,
-    logPath,
     appRoot: input.appRoot,
     sourceRoot: input.sourceRoot,
     runtimeRoot: input.runtimeRoot,
@@ -19189,6 +19219,18 @@ async function ensureManagedMetro(status) {
 }
 async function main() {
   const command = process.argv[2] ?? "status";
+  if (command === "resolve-metro-readiness") {
+    const readiness = resolveMetroReadinessTimeout({
+      readConfig: () => readRnAgentConfig(process.cwd())
+    });
+    process.stdout.write(`${JSON.stringify({
+      readinessTimeoutMs: readiness.timeoutMs,
+      source: readiness.source,
+      ensureMetroCliTimeoutMs: deriveEnsureMetroCliTimeoutMs(readiness.timeoutMs)
+    })}
+`);
+    return;
+  }
   let status = resolveStatus();
   try {
     if (command === "status" || command === "feedback-json" || command === "prepare-build") {

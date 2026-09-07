@@ -176,3 +176,38 @@ test('GH #992: a valid metro.readinessTimeoutMs is accepted and Metro startup pr
     assert.match(result.stderr, /^METRO_START_UNAVAILABLE:/m);
   });
 });
+
+test('GH #992: resolve-metro-readiness reports the derived adapter timeout without a session', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-session-cli-resolve-timeout-'));
+  try {
+    writeFileSync(join(root, 'package.json'), '{}\n');
+    const absent = spawnSync(process.execPath, [cliPath, 'resolve-metro-readiness'], {
+      cwd: root,
+      encoding: 'utf8',
+    });
+    assert.equal(absent.status, 0, absent.stderr);
+    assert.deepEqual(JSON.parse(absent.stdout), {
+      readinessTimeoutMs: 90_000,
+      source: 'default',
+      ensureMetroCliTimeoutMs: 120_000,
+    });
+
+    mkdirSync(join(root, '.rn-agent'), { recursive: true });
+    writeFileSync(
+      join(root, '.rn-agent', 'config.json'),
+      '{ "metro": { "readinessTimeoutMs": 150000 } }\n',
+    );
+    const configured = spawnSync(process.execPath, [cliPath, 'resolve-metro-readiness'], {
+      cwd: root,
+      encoding: 'utf8',
+    });
+    assert.equal(configured.status, 0, configured.stderr);
+    assert.deepEqual(JSON.parse(configured.stdout), {
+      readinessTimeoutMs: 150_000,
+      source: 'config',
+      ensureMetroCliTimeoutMs: 175_000,
+    });
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
+});

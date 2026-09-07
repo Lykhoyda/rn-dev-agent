@@ -754,6 +754,7 @@ async function expiredManagedMetroReadiness(
     probeListener: () => ReturnType<typeof probeManagedMetroListener>;
     listenerOwnedByLauncher?: (listenerPid: number, launcherPid: number) => boolean;
     readinessTimeoutMs?: number;
+    persistProbe?: boolean;
   },
 ): Promise<{ message: string; postKillLog: string; kills: number; probesBeforeKill: number }> {
   const budgetMs = overrides.readinessTimeoutMs ?? DEFAULT_METRO_READINESS_TIMEOUT_MS;
@@ -806,8 +807,10 @@ async function expiredManagedMetroReadiness(
               ? { status: 'absent' }
               : { status: 'present', birth: { pid, source: 'linux-proc', token: `birth-${pid}` } },
           probeListener: () => {
-            if (killed || !withinReadinessBudget()) return { status: 'absent' };
-            probesBeforeKill++;
+            if (!overrides.persistProbe && (killed || !withinReadinessBudget())) {
+              return { status: 'absent' };
+            }
+            if (!killed) probesBeforeKill++;
             return overrides.probeListener();
           },
           listenerOwnedByLauncher: overrides.listenerOwnedByLauncher ?? (() => false),
@@ -925,6 +928,33 @@ test('GH #992: a configured readiness budget bounds the wait and is named in the
     String(outcome.probesBeforeKill),
   );
   assert.match(outcome.message, /readiness deadline 5000 ms expired: listener absent \d+ probes/);
+  assert.doesNotMatch(outcome.message, /EPIPE/);
+});
+
+test('GH #992: a persistently unknown probe carries the tally on METRO_START_CLEANUP_UNPROVEN', async (t) => {
+  const outcome = await expiredManagedMetroReadiness(t, {
+    probeListener: () => ({ status: 'unknown' }),
+    persistProbe: true,
+    readinessTimeoutMs: 5_000,
+  });
+
+  assert.match(outcome.message, /^METRO_START_CLEANUP_UNPROVEN:/);
+  assert.match(outcome.message, /launcher alive at deadline/);
+  assert.match(outcome.message, /probe unknown [1-9]\d*/);
+  assert.doesNotMatch(outcome.message, /EPIPE/);
+});
+
+test('GH #992: a persistent unowned listener is named on METRO_START_CLEANUP_UNPROVEN', async (t) => {
+  const outcome = await expiredManagedMetroReadiness(t, {
+    probeListener: () => ({ status: 'listening', pid: 999 }),
+    listenerOwnedByLauncher: () => false,
+    persistProbe: true,
+    readinessTimeoutMs: 5_000,
+  });
+
+  assert.match(outcome.message, /^METRO_START_CLEANUP_UNPROVEN:/);
+  assert.match(outcome.message, /launcher alive at deadline/);
+  assert.match(outcome.message, /unowned listener 999/);
   assert.doesNotMatch(outcome.message, /EPIPE/);
 });
 
