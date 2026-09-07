@@ -34,6 +34,7 @@ import {
   type ProcessBirthProbe,
 } from './process-birth.js';
 import { canonicalAuthorityJson } from './authority-json.js';
+import { DEFAULT_METRO_READINESS_TIMEOUT_MS } from '../project-config.js';
 import {
   dependencyRoots,
   prepareManagedMetroEnforcement,
@@ -2175,6 +2176,9 @@ export async function startManagedMetro(
     instanceId: string;
     buildGeneration: number;
     signerCapability: string;
+    // Readiness budget resolved by the caller from `.rn-agent/config.json`
+    // (`resolveMetroReadinessTimeout`); a timeout only, never an authority input.
+    readinessTimeoutMs?: number;
   },
   dependencies: ManagedMetroDependencies = {},
 ): Promise<ManagedMetroBinding> {
@@ -2463,11 +2467,12 @@ export async function startManagedMetro(
   const probeBirth = dependencies.probeBirth ?? probeProcessBirth;
   const wait =
     dependencies.wait ?? ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
-  const deadline = Date.now() + MANAGED_METRO_READINESS_TIMEOUT_MS;
+  const readinessTimeoutMs = input.readinessTimeoutMs ?? DEFAULT_METRO_READINESS_TIMEOUT_MS;
+  const deadline = Date.now() + readinessTimeoutMs;
   let lastError: unknown = null;
   let listenerIdentity: ManagedMetroProcessIdentity | null = null;
   const readiness: ManagedMetroReadinessOutcome = {
-    budgetMs: MANAGED_METRO_READINESS_TIMEOUT_MS,
+    budgetMs: readinessTimeoutMs,
     absentProbes: 0,
     unknownProbes: 0,
     unownedListenerPid: null,
@@ -2613,13 +2618,6 @@ export function signalManagedMetroProcessTree(
 
 const signalProcessTree = signalManagedMetroProcessTree;
 const MANAGED_METRO_STOP_TIMEOUT_MS = 5_000;
-// How long startManagedMetro waits for a launcher-owned Metro listener before
-// it tears the process group down (GH #992). A cold per-session cache on a
-// loaded host needs well over the former 20 s; the loop still returns the
-// instant the listener is proven and still exits early when the launcher dies,
-// so raising it only lengthens a genuinely broken start. The value is
-// provisional pending the cold-start measurement on the reporter's host.
-export const MANAGED_METRO_READINESS_TIMEOUT_MS = 90_000;
 
 function removeManagedMetroEvidenceSocket(path: string): void {
   if (process.platform === 'win32') return;

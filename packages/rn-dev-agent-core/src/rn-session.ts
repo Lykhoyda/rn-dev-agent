@@ -43,6 +43,7 @@ import {
   openBoundSubdirectory,
   writeBoundDirectoryFile,
 } from './session/bound-directory.js';
+import { readRnAgentConfig, resolveMetroReadinessTimeout } from './project-config.js';
 
 type SessionMetroBinding =
   | Partial<ManagedMetroBinding>
@@ -412,6 +413,12 @@ async function ensureManagedMetro(status: ReturnType<typeof resolveStatus>): Pro
         });
       }
 
+      // Resolved before any marker or advisory is written so a malformed
+      // `.rn-agent/config.json` value refuses loudly instead of being ignored.
+      const appRoot = String(status.source.appRoot);
+      const readiness = resolveMetroReadinessTimeout({
+        readConfig: () => readRnAgentConfig(appRoot),
+      });
       const instanceId = randomUUID();
       restarted = true;
       const install = status.bindings.install as Record<string, unknown> | undefined;
@@ -453,7 +460,7 @@ async function ensureManagedMetro(status: ReturnType<typeof resolveStatus>): Pro
       });
       status.registry.verifyOperation(currentOperation);
       startedBinding = await startManagedMetro({
-        appRoot: String(status.source.appRoot),
+        appRoot,
         runtimeRoot: sessionRuntimeDirectory(status.layout, status.sessionId),
         sourceRoot: String(status.source.contentRoot),
         sessionId: status.sessionId,
@@ -461,6 +468,7 @@ async function ensureManagedMetro(status: ReturnType<typeof resolveStatus>): Pro
         instanceId,
         buildGeneration,
         signerCapability,
+        readinessTimeoutMs: readiness.timeoutMs,
       });
       currentOperation = status.registry.replaceBindingsDuringOperation(currentOperation, {
         bindings: { metroCleanup: startedBinding },

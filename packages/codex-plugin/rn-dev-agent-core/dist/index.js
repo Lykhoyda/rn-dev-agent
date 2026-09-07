@@ -63094,6 +63094,9 @@ function canonicalAuthorityJson(value) {
   return encode(value);
 }
 
+// packages/rn-dev-agent-core/dist/session/managed-metro.js
+init_project_config();
+
 // packages/rn-dev-agent-core/dist/session/managed-metro-enforcement.js
 import { spawnSync as spawnSync2 } from "node:child_process";
 import { createHash as createHash9 } from "node:crypto";

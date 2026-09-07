@@ -12044,11 +12044,578 @@ var init_metro_binding = __esm({
   }
 });
 
+// packages/rn-dev-agent-core/dist/observability/mirror/jpeg-stream.js
+var MAX_FRAME_BYTES, SOI, EOI, JpegFrameExtractor;
+var init_jpeg_stream = __esm({
+  "packages/rn-dev-agent-core/dist/observability/mirror/jpeg-stream.js"() {
+    "use strict";
+    MAX_FRAME_BYTES = 8e6;
+    SOI = Buffer.from([255, 216]);
+    EOI = Buffer.from([255, 217]);
+    JpegFrameExtractor = class {
+      acc = Buffer.alloc(0);
+      /** Sticky: a SOI without EOI exceeded MAX_FRAME_BYTES. Process liveness is not a valid frame. */
+      overflowed = false;
+      push(chunk) {
+        this.acc = this.acc.length === 0 ? chunk : Buffer.concat([this.acc, chunk]);
+        const frames = [];
+        for (; ; ) {
+          const soi = this.acc.indexOf(SOI);
+          if (soi === -1) {
+            this.acc = this.acc.length > 0 && this.acc[this.acc.length - 1] === 255 ? this.acc.subarray(this.acc.length - 1) : Buffer.alloc(0);
+            break;
+          }
+          if (soi > 0)
+            this.acc = this.acc.subarray(soi);
+          const eoi = this.acc.indexOf(EOI, SOI.length);
+          if (eoi === -1) {
+            if (this.acc.length > MAX_FRAME_BYTES) {
+              this.overflowed = true;
+              this.acc = Buffer.alloc(0);
+            }
+            break;
+          }
+          frames.push(this.acc.subarray(0, eoi + EOI.length));
+          this.acc = this.acc.subarray(eoi + EOI.length);
+        }
+        return frames;
+      }
+    };
+  }
+});
+
+// packages/rn-dev-agent-core/dist/observability/mirror/sources.js
+import { spawn, execFile } from "node:child_process";
+import { readFile, unlink } from "node:fs/promises";
+import { tmpdir as tmpdir3 } from "node:os";
+import { join as join11 } from "node:path";
+function idbDemotionHint(cause) {
+  if (cause?.hint)
+    return cause.hint;
+  if (cause?.reason)
+    return `${cause.reason} \u2014 using simctl screenshot loop`;
+  return IDB_STREAM_UNHEALTHY_HINT;
+}
+async function probeIdbClient(execFileFn = execFile) {
+  return new Promise((resolve22) => {
+    execFileFn("idb", ["--help"], { timeout: 3e3 }, (err) => {
+      if (!err)
+        return resolve22("ready");
+      resolve22(isEnoent(err) ? "absent" : "broken");
+    });
+  });
+}
+function isEnoent(err) {
+  return !!err && typeof err === "object" && err.code === "ENOENT";
+}
+function defaultExecJpeg(cmd, args, signal) {
+  const outPath = args[args.length - 1];
+  return new Promise((resolve22, reject) => {
+    execFile(cmd, args, { maxBuffer: 16 * 1024 * 1024, timeout: 1e4, signal }, (err) => {
+      if (err) {
+        reject(err);
+        return;
+      }
+      readFile(outPath).then((buf) => {
+        void unlink(outPath).catch(() => {
+        });
+        resolve22(buf);
+      }).catch((readErr) => {
+        void unlink(outPath).catch(() => {
+        });
+        reject(readErr);
+      });
+    });
+  });
+}
+async function createMirrorSource(target, fps, opts = {}) {
+  if (target.platform === "android") {
+    return new AndroidScreenrecordSource(target.deviceId);
+  }
+  const state = await probeIdbClient();
+  if (state === "ready") {
+    return new IosIdbSource(target.deviceId, fps, {
+      firstFrameTimeoutMs: opts.firstFrameTimeoutMs
+    });
+  }
+  const idbHint = state === "broken" ? SIMCTL_BROKEN_IDB_HINT : SIMCTL_HINT;
+  return new IosSimctlLoopSource(target.deviceId, {
+    degradedHint: idbHint,
+    failureHint: idbHint
+  });
+}
+var RestartGate, IDB_INSTALL_COMMAND, SIMCTL_HINT, SIMCTL_BROKEN_IDB_HINT, IDB_NO_FIRST_FRAME_REASON, IDB_MALFORMED_FRAME_REASON, IDB_STREAM_UNHEALTHY_HINT, DEFAULT_IDB_FIRST_FRAME_TIMEOUT_MS, IDB_HINT, FFMPEG_HINT, sleep, scheduleAfter, defaultSpawn, IosIdbSource, IosSimctlLoopSource, AndroidScreenrecordSource;
+var init_sources = __esm({
+  "packages/rn-dev-agent-core/dist/observability/mirror/sources.js"() {
+    "use strict";
+    init_jpeg_stream();
+    RestartGate = class {
+      limit;
+      windowMs;
+      now;
+      exits = [];
+      constructor(limit = 3, windowMs = 1e4, now = Date.now) {
+        this.limit = limit;
+        this.windowMs = windowMs;
+        this.now = now;
+      }
+      record() {
+        const t = this.now();
+        this.exits = this.exits.filter((e) => t - e < this.windowMs);
+        this.exits.push(t);
+        return this.exits.length < this.limit;
+      }
+    };
+    IDB_INSTALL_COMMAND = "brew install python@3.13 && brew tap facebook/fb && brew trust facebook/fb && brew install idb-companion && pipx install --python python3.13 --force fb-idb";
+    SIMCTL_HINT = `install idb for smoother mirroring (${IDB_INSTALL_COMMAND})`;
+    SIMCTL_BROKEN_IDB_HINT = "idb is installed but did not respond successfully \u2014 most likely fb-idb 1.1.7 under Python 3.14, which removed the asyncio.get_event_loop() it needs. Reinstall it under a supported interpreter: pipx install --python python3.13 --force fb-idb";
+    IDB_NO_FIRST_FRAME_REASON = "idb video-stream produced no first frame";
+    IDB_MALFORMED_FRAME_REASON = "idb video-stream produced a malformed frame";
+    IDB_STREAM_UNHEALTHY_HINT = "idb video-stream produced no usable frame \u2014 using simctl screenshot loop";
+    DEFAULT_IDB_FIRST_FRAME_TIMEOUT_MS = 3e4;
+    IDB_HINT = `idb not found \u2014 ${IDB_INSTALL_COMMAND}`;
+    FFMPEG_HINT = "ffmpeg not found \u2014 run scripts/ensure-ffmpeg.sh or brew install ffmpeg";
+    sleep = (ms) => new Promise((resolve22) => setTimeout(resolve22, ms));
+    scheduleAfter = (fn, delayMs) => {
+      if (delayMs <= 0)
+        setImmediate(fn);
+      else
+        setTimeout(fn, delayMs);
+    };
+    defaultSpawn = (cmd, args) => spawn(cmd, args, {
+      stdio: ["pipe", "pipe", "pipe"]
+    });
+    IosIdbSource = class {
+      udid;
+      pipeline = "idb";
+      nominalFps;
+      active = false;
+      proc = null;
+      firstFrameTimer = null;
+      spawnFn;
+      gate;
+      restartDelayMs;
+      firstFrameTimeoutMs;
+      constructor(udid, fps, opts = {}) {
+        this.udid = udid;
+        this.nominalFps = fps;
+        this.spawnFn = opts.spawnFn ?? defaultSpawn;
+        this.gate = new RestartGate(3, 1e4, opts.now ?? Date.now);
+        this.restartDelayMs = opts.restartDelayMs ?? 300;
+        this.firstFrameTimeoutMs = opts.firstFrameTimeoutMs ?? DEFAULT_IDB_FIRST_FRAME_TIMEOUT_MS;
+      }
+      start(sink) {
+        this.active = true;
+        this.spawnOnce(sink);
+      }
+      spawnOnce(sink) {
+        const extractor = new JpegFrameExtractor();
+        let gotFrame = false;
+        const proc = this.spawnFn("idb", [
+          "video-stream",
+          "--udid",
+          this.udid,
+          "--fps",
+          String(this.nominalFps),
+          "--format",
+          "mjpeg",
+          "--compression-quality",
+          "0.7"
+        ]);
+        this.proc = proc;
+        proc.stderr?.resume();
+        this.armFirstFrameTimer(sink);
+        proc.stdout.on("data", (chunk) => {
+          if (!this.active)
+            return;
+          for (const frame of extractor.push(chunk)) {
+            gotFrame = true;
+            this.clearFirstFrameTimer();
+            if (this.active)
+              sink.onFrame(frame);
+          }
+          if (this.active && extractor.overflowed && !gotFrame) {
+            this.fail(sink, IDB_MALFORMED_FRAME_REASON);
+          }
+        });
+        proc.on("error", (err) => {
+          if (!this.active)
+            return;
+          if (isEnoent(err)) {
+            this.fail(sink, "idb not found", IDB_HINT);
+          }
+        });
+        proc.on("close", () => {
+          if (!this.active)
+            return;
+          this.clearFirstFrameTimer();
+          if (this.gate.record()) {
+            scheduleAfter(() => {
+              if (!this.active)
+                return;
+              sink.onRestart?.();
+              this.spawnOnce(sink);
+            }, this.restartDelayMs);
+          } else {
+            this.fail(sink, "idb video-stream keeps exiting");
+          }
+        });
+      }
+      armFirstFrameTimer(sink) {
+        this.clearFirstFrameTimer();
+        this.firstFrameTimer = setTimeout(() => {
+          this.firstFrameTimer = null;
+          if (!this.active)
+            return;
+          this.fail(sink, IDB_NO_FIRST_FRAME_REASON, IDB_STREAM_UNHEALTHY_HINT);
+        }, this.firstFrameTimeoutMs);
+      }
+      fail(sink, reason, hint) {
+        if (!this.active)
+          return;
+        this.active = false;
+        this.clearFirstFrameTimer();
+        this.proc?.kill();
+        sink.onExit({ reason, hint });
+      }
+      clearFirstFrameTimer() {
+        if (this.firstFrameTimer) {
+          clearTimeout(this.firstFrameTimer);
+          this.firstFrameTimer = null;
+        }
+      }
+      stop() {
+        this.active = false;
+        this.clearFirstFrameTimer();
+        this.proc?.kill();
+      }
+    };
+    IosSimctlLoopSource = class {
+      udid;
+      pipeline = "simctl";
+      nominalFps = 6;
+      degradedHint;
+      failureHint;
+      active = false;
+      inFlight = null;
+      execJpeg;
+      gate;
+      idleDelayMs;
+      failurePauseMs;
+      tmpPath;
+      constructor(udid, opts = {}) {
+        this.udid = udid;
+        this.execJpeg = opts.execJpeg ?? defaultExecJpeg;
+        this.gate = new RestartGate(3, 1e4, opts.now ?? Date.now);
+        this.idleDelayMs = opts.idleDelayMs ?? 25;
+        this.failurePauseMs = opts.failurePauseMs ?? 500;
+        this.tmpPath = opts.tmpPath ?? (() => join11(tmpdir3(), "rn-mirror-simctl-" + process.pid + ".jpg"));
+        this.degradedHint = opts.degradedHint ?? SIMCTL_HINT;
+        this.failureHint = opts.failureHint;
+      }
+      start(sink) {
+        this.active = true;
+        void this.loop(sink);
+      }
+      async loop(sink) {
+        while (this.active) {
+          const controller = new AbortController();
+          this.inFlight = controller;
+          try {
+            const buf = await this.execJpeg("xcrun", ["simctl", "io", this.udid, "screenshot", "--type=jpeg", this.tmpPath()], controller.signal);
+            sink.onFrame(buf);
+            if (!this.active)
+              break;
+            await sleep(this.idleDelayMs);
+          } catch {
+            if (!this.active)
+              break;
+            if (!this.gate.record()) {
+              if (this.active)
+                sink.onExit({
+                  reason: "simctl screenshot failing",
+                  hint: this.failureHint
+                });
+              this.active = false;
+              break;
+            }
+            await sleep(this.failurePauseMs);
+          } finally {
+            this.inFlight = null;
+          }
+        }
+      }
+      stop() {
+        this.active = false;
+        this.inFlight?.abort();
+      }
+    };
+    AndroidScreenrecordSource = class {
+      serial;
+      pipeline = "screenrecord";
+      nominalFps = 25;
+      active = false;
+      adb = null;
+      ffmpeg = null;
+      spawnFn;
+      gate;
+      restartDelayMs;
+      constructor(serial, opts = {}) {
+        this.serial = serial;
+        this.spawnFn = opts.spawnFn ?? defaultSpawn;
+        this.gate = new RestartGate(3, 1e4, opts.now ?? Date.now);
+        this.restartDelayMs = opts.restartDelayMs ?? 300;
+      }
+      start(sink) {
+        this.active = true;
+        this.spawnCycle(sink);
+      }
+      spawnCycle(sink) {
+        let cycleDone = false;
+        const extractor = new JpegFrameExtractor();
+        const adb2 = this.spawnFn("adb", [
+          "-s",
+          this.serial,
+          "exec-out",
+          "screenrecord",
+          "--output-format=h264",
+          "--time-limit=179",
+          "-"
+        ]);
+        const ffmpeg = this.spawnFn("ffmpeg", [
+          "-loglevel",
+          "error",
+          "-fflags",
+          "nobuffer",
+          "-f",
+          "h264",
+          "-i",
+          "pipe:0",
+          "-q:v",
+          "7",
+          "-f",
+          "mjpeg",
+          "pipe:1"
+        ]);
+        this.adb = adb2;
+        this.ffmpeg = ffmpeg;
+        adb2.stderr?.resume();
+        ffmpeg.stderr?.resume();
+        if (ffmpeg.stdin) {
+          ffmpeg.stdin.on("error", () => {
+          });
+          adb2.stdout.pipe(ffmpeg.stdin);
+        }
+        ffmpeg.stdout.on("data", (chunk) => {
+          if (!this.active)
+            return;
+          for (const frame of extractor.push(chunk)) {
+            if (this.active)
+              sink.onFrame(frame);
+          }
+        });
+        const killSibling = (self) => {
+          if (self === "adb")
+            ffmpeg.kill();
+          else
+            adb2.kill();
+        };
+        adb2.on("error", (err) => {
+          if (!this.active || cycleDone)
+            return;
+          if (isEnoent(err)) {
+            cycleDone = true;
+            this.active = false;
+            killSibling("adb");
+            sink.onExit({ reason: "adb not found" });
+          }
+        });
+        ffmpeg.on("error", (err) => {
+          if (!this.active || cycleDone)
+            return;
+          if (isEnoent(err)) {
+            cycleDone = true;
+            this.active = false;
+            killSibling("ffmpeg");
+            sink.onExit({ reason: "ffmpeg not found", hint: FFMPEG_HINT });
+          }
+        });
+        const onClose = (self) => {
+          if (!this.active || cycleDone)
+            return;
+          cycleDone = true;
+          killSibling(self);
+          if (this.gate.record()) {
+            scheduleAfter(() => {
+              if (!this.active)
+                return;
+              sink.onRestart?.();
+              this.spawnCycle(sink);
+            }, this.restartDelayMs);
+          } else {
+            this.active = false;
+            sink.onExit({ reason: "screen capture pipeline keeps exiting" });
+          }
+        };
+        adb2.on("close", () => onClose("adb"));
+        ffmpeg.on("close", () => onClose("ffmpeg"));
+      }
+      stop() {
+        this.active = false;
+        this.adb?.kill();
+        this.ffmpeg?.kill();
+      }
+    };
+  }
+});
+
+// packages/rn-dev-agent-core/dist/project-config.js
+import { existsSync as existsSync9, readFileSync as readFileSync9 } from "node:fs";
+import { join as join12 } from "node:path";
+function readAppId(projectRoot, platform) {
+  for (const filename of ["app.json", "app.config.json"]) {
+    const p = join12(projectRoot, filename);
+    if (!existsSync9(p))
+      continue;
+    try {
+      const raw = JSON.parse(readFileSync9(p, "utf-8"));
+      const expo = raw.expo ?? raw;
+      const iosBundleId = expo?.ios?.bundleIdentifier;
+      const androidPkg = expo?.android?.package;
+      if (platform === "android")
+        return androidPkg ?? iosBundleId ?? null;
+      return iosBundleId ?? androidPkg ?? null;
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+function resolveBundleId(platform) {
+  const projectRoot = findProjectRoot();
+  if (!projectRoot)
+    return null;
+  return readAppId(projectRoot, platform);
+}
+function readExpoSlug() {
+  const projectRoot = findProjectRoot();
+  if (!projectRoot)
+    return null;
+  for (const filename of ["app.json", "app.config.json"]) {
+    const p = join12(projectRoot, filename);
+    if (!existsSync9(p))
+      continue;
+    try {
+      const raw = JSON.parse(readFileSync9(p, "utf-8"));
+      return raw.expo?.slug ?? null;
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+function readRnAgentConfig(projectRoot) {
+  const root = projectRoot ?? findProjectRoot();
+  if (!root)
+    return null;
+  const p = join12(root, ".rn-agent", "config.json");
+  if (!existsSync9(p))
+    return null;
+  try {
+    return JSON.parse(readFileSync9(p, "utf-8"));
+  } catch (err) {
+    if (!warnedBadConfig) {
+      warnedBadConfig = true;
+      logger.warn("CONFIG", `.rn-agent/config.json is unreadable \u2014 ignoring it: ${err instanceof Error ? err.message : err}`);
+    }
+    return null;
+  }
+}
+function resolveAutoConnect(deps = {}) {
+  const envRaw = "env" in deps ? deps.env : process.env.RN_CDP_AUTOCONNECT;
+  if (envRaw === "0" || envRaw === "false")
+    return { enabled: false, source: "env" };
+  if (envRaw === "1" || envRaw === "true")
+    return { enabled: true, source: "env" };
+  const cfg = (deps.readConfig ?? readRnAgentConfig)();
+  if (typeof cfg?.cdp?.autoConnect === "boolean") {
+    return { enabled: cfg.cdp.autoConnect, source: "config" };
+  }
+  return { enabled: true, source: "default" };
+}
+function parsePort(raw) {
+  if (!raw)
+    return void 0;
+  const n = Number.parseInt(raw, 10);
+  return Number.isInteger(n) && n > 0 && n <= 65535 ? n : void 0;
+}
+function resolveObserveAutostart(deps = {}) {
+  const envRaw = "env" in deps ? deps.env : process.env.RN_AGENT_OBSERVE_AUTOSTART;
+  if (envRaw === "0" || envRaw === "false")
+    return { enabled: false, source: "env" };
+  if (envRaw === "1" || envRaw === "true")
+    return { enabled: true, source: "env" };
+  const cfg = (deps.readConfig ?? readRnAgentConfig)();
+  if (typeof cfg?.observe?.autoStart === "boolean") {
+    return { enabled: cfg.observe.autoStart, source: "config" };
+  }
+  return { enabled: true, source: "default" };
+}
+function resolveObservePort(deps = {}) {
+  const envRaw = "env" in deps ? deps.env : process.env.RN_AGENT_OBSERVE_PORT;
+  const envPort = parsePort(envRaw);
+  if (envPort !== void 0)
+    return { port: envPort, source: "env" };
+  const cfg = (deps.readConfig ?? readRnAgentConfig)();
+  const cfgPort = cfg?.observe?.port;
+  if (typeof cfgPort === "number" && Number.isInteger(cfgPort) && cfgPort > 0 && cfgPort <= 65535) {
+    return { port: cfgPort, source: "config" };
+  }
+  return { port: DEFAULT_OBSERVE_PORT, source: "default" };
+}
+function resolveMirrorConfig(deps = {}) {
+  const envRaw = "env" in deps ? deps.env : process.env.RN_AGENT_OBSERVE_MIRROR;
+  let cfg = null;
+  try {
+    cfg = (deps.readConfig ?? readRnAgentConfig)();
+  } catch {
+    cfg = null;
+  }
+  const rawFps = cfg?.observe?.mirror?.fps;
+  const fps = typeof rawFps === "number" && Number.isFinite(rawFps) ? Math.min(MIRROR_FPS_MAX, Math.max(MIRROR_FPS_MIN, Math.round(rawFps))) : DEFAULT_MIRROR_FPS;
+  const rawTimeout = cfg?.observe?.mirror?.firstFrameTimeoutMs;
+  const firstFrameTimeoutMs = typeof rawTimeout === "number" && Number.isFinite(rawTimeout) ? Math.min(MIRROR_FIRST_FRAME_TIMEOUT_MAX_MS, Math.max(MIRROR_FIRST_FRAME_TIMEOUT_MIN_MS, Math.round(rawTimeout))) : DEFAULT_IDB_FIRST_FRAME_TIMEOUT_MS;
+  if (envRaw === "0" || envRaw === "false")
+    return { enabled: false, fps, firstFrameTimeoutMs, source: "env" };
+  if (envRaw === "1" || envRaw === "true")
+    return { enabled: true, fps, firstFrameTimeoutMs, source: "env" };
+  const cfgEnabled = cfg?.observe?.mirror?.enabled;
+  if (typeof cfgEnabled === "boolean")
+    return { enabled: cfgEnabled, fps, firstFrameTimeoutMs, source: "config" };
+  return { enabled: true, fps, firstFrameTimeoutMs, source: "default" };
+}
+var warnedBadConfig, DEFAULT_OBSERVE_PORT, DEFAULT_MIRROR_FPS, MIRROR_FPS_MIN, MIRROR_FPS_MAX, MIRROR_FIRST_FRAME_TIMEOUT_MIN_MS, MIRROR_FIRST_FRAME_TIMEOUT_MAX_MS;
+var init_project_config = __esm({
+  "packages/rn-dev-agent-core/dist/project-config.js"() {
+    "use strict";
+    init_storage();
+    init_logger();
+    init_sources();
+    warnedBadConfig = false;
+    DEFAULT_OBSERVE_PORT = 7333;
+    DEFAULT_MIRROR_FPS = 20;
+    MIRROR_FPS_MIN = 5;
+    MIRROR_FPS_MAX = 30;
+    MIRROR_FIRST_FRAME_TIMEOUT_MIN_MS = 1e3;
+    MIRROR_FIRST_FRAME_TIMEOUT_MAX_MS = 12e4;
+  }
+});
+
 // packages/rn-dev-agent-core/dist/session/managed-metro.js
-import { execFileSync as execFileSync6, spawn } from "node:child_process";
+import { execFileSync as execFileSync6, spawn as spawn2 } from "node:child_process";
 import { createHash as createHash5, createHmac as createHmac2, timingSafeEqual as timingSafeEqual2 } from "node:crypto";
-import { closeSync as closeSync6, existsSync as existsSync9, fstatSync as fstatSync4, mkdirSync as mkdirSync8, openSync as openSync6, readFileSync as readFileSync9, readSync as readSync3, realpathSync as realpathSync8, rmSync as rmSync3, symlinkSync as symlinkSync3, writeFileSync as writeFileSync5 } from "node:fs";
-import { dirname as dirname7, isAbsolute as isAbsolute3, join as join11, relative as relative3, resolve as resolve8 } from "node:path";
+import { closeSync as closeSync6, existsSync as existsSync10, fstatSync as fstatSync4, mkdirSync as mkdirSync8, openSync as openSync6, readFileSync as readFileSync10, readSync as readSync3, realpathSync as realpathSync8, rmSync as rmSync3, symlinkSync as symlinkSync3, writeFileSync as writeFileSync5 } from "node:fs";
+import { dirname as dirname7, isAbsolute as isAbsolute3, join as join13, relative as relative3, resolve as resolve8 } from "node:path";
 function parseNodeOptions(value) {
   const tokens = [];
   let token2 = "";
@@ -12173,8 +12740,8 @@ function managedMetroExitAttribution(binding, input) {
   const runtimeRoot = dirname7(binding.runtimeEvidencePath);
   const runtimePolicyCapability = createHmac2("sha256", input.signerCapability).update("metro-runtime-policy").digest("base64url");
   const violation = latestSignedRuntimeViolation(binding.runtimeEvidencePath, runtimePolicyCapability, { sessionId: input.sessionId, metroInstanceId: binding.instanceId });
-  const diagnostic2 = readManagedMetroLauncherDiagnostic(join11(runtimeRoot, "metro-launcher-diagnostic.json"));
-  const logCauses = managedMetroFirstPartyLogCauses(join11(runtimeRoot, "metro.log"));
+  const diagnostic2 = readManagedMetroLauncherDiagnostic(join13(runtimeRoot, "metro-launcher-diagnostic.json"));
+  const logCauses = managedMetroFirstPartyLogCauses(join13(runtimeRoot, "metro.log"));
   const redactions = [
     runtimeRoot,
     input.sessionId,
@@ -12266,7 +12833,7 @@ function inspectManagedMetroLifecycle(binding, input, dependencies = {}) {
       reason: "allocated managed Metro port is owned by a different process"
     };
   }
-  if (!(dependencies.exists ?? existsSync9)(binding.runtimeEvidenceSocket)) {
+  if (!(dependencies.exists ?? existsSync10)(binding.runtimeEvidenceSocket)) {
     return {
       status: "lost",
       code: "METRO_EVIDENCE_SOCKET_MISSING",
@@ -12296,7 +12863,7 @@ function managedSandboxManagementProofV1(sessionId, authority, signerCapability)
 }
 function latestSignedRuntimeViolation(path, capability, expected) {
   try {
-    const bytes = readFileSync9(path);
+    const bytes = readFileSync10(path);
     if (bytes.byteLength > MAX_STRICT_PROOF_FILE_BYTES)
       return null;
     let previousSignature = null;
@@ -12352,7 +12919,7 @@ function boundedMetroLogTail(path, maxBytes = 4096) {
 }
 function readManagedMetroLauncherDiagnostic(path) {
   try {
-    const source = readFileSync9(path, "utf8");
+    const source = readFileSync10(path, "utf8");
     if (Buffer.byteLength(source) > 4096)
       return null;
     const diagnostic2 = JSON.parse(source);
@@ -12447,7 +13014,7 @@ function inspectManagedMetroCleanupEvidence(binding, dependencies = {}) {
     } catch {
     }
   }
-  const evidenceSocket = managed ? cleanupSocketPresence(binding.runtimeEvidenceSocket, dependencies.exists ?? existsSync9) : "not-applicable";
+  const evidenceSocket = managed ? cleanupSocketPresence(binding.runtimeEvidenceSocket, dependencies.exists ?? existsSync10) : "not-applicable";
   const complete = launcher !== "present" && launcher !== "unknown" && listener === "absent" && port.status === "absent" && evidenceSocket !== "present" && evidenceSocket !== "unknown";
   return { complete, launcher, listener, port, evidenceSocket };
 }
@@ -12602,6 +13169,7 @@ var init_managed_metro = __esm({
     init_trusted_system_executable();
     init_process_birth();
     init_authority_json();
+    init_project_config();
     init_managed_metro_enforcement();
     init_strict_proof_limits();
     METRO_LAUNCHER_SOURCE = String.raw`
@@ -14023,39 +14591,39 @@ var init_build_adapter = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/session/bound-directory.js
-import { spawn as spawn2 } from "node:child_process";
+import { spawn as spawn3 } from "node:child_process";
 import { randomUUID as randomUUID2 } from "node:crypto";
-import { closeSync as closeSync7, constants as constants5, existsSync as existsSync10, fstatSync as fstatSync5, lstatSync as lstatSync8, mkdtempSync, openSync as openSync7, readFileSync as readFileSync10, realpathSync as realpathSync9, renameSync as renameSync5, rmSync as rmSync4, writeFileSync as writeFileSync6 } from "node:fs";
-import { tmpdir as tmpdir3 } from "node:os";
-import { join as join12 } from "node:path";
+import { closeSync as closeSync7, constants as constants5, existsSync as existsSync11, fstatSync as fstatSync5, lstatSync as lstatSync8, mkdtempSync, openSync as openSync7, readFileSync as readFileSync11, realpathSync as realpathSync9, renameSync as renameSync5, rmSync as rmSync4, writeFileSync as writeFileSync6 } from "node:fs";
+import { tmpdir as tmpdir4 } from "node:os";
+import { join as join14 } from "node:path";
 function sameIdentity(left, right) {
   return left.dev === right.dev && left.ino === right.ino;
 }
 function waitForFile(path, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (existsSync10(path))
+    if (existsSync11(path))
       return true;
     Atomics.wait(WAIT_BUFFER, 0, 0, 5);
   }
-  return existsSync10(path);
+  return existsSync11(path);
 }
 function stopWorker(worker, signal = "SIGTERM") {
-  const stoppedPath = join12(worker.controlPath, "stopped");
+  const stoppedPath = join14(worker.controlPath, "stopped");
   if (signal === "SIGTERM") {
     try {
-      writeFileSync6(join12(worker.controlPath, "stop"), "", { flag: "wx", mode: 384 });
+      writeFileSync6(join14(worker.controlPath, "stop"), "", { flag: "wx", mode: 384 });
     } catch {
     }
     if (waitForFile(stoppedPath, 1e3)) {
-      if (!existsSync10(join12(worker.controlPath, "lock-retained"))) {
+      if (!existsSync11(join14(worker.controlPath, "lock-retained"))) {
         rmSync4(worker.controlPath, { force: true, recursive: true });
       }
       return;
     }
   }
   try {
-    writeFileSync6(join12(worker.controlPath, "terminate"), JSON.stringify({
+    writeFileSync6(join14(worker.controlPath, "terminate"), JSON.stringify({
       lifecycleCapability: worker.lifecycleCapability,
       signal: "SIGKILL"
     }), { flag: "wx", mode: 384 });
@@ -14064,7 +14632,7 @@ function stopWorker(worker, signal = "SIGTERM") {
   if (!waitForFile(stoppedPath, 1e4)) {
     throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: bound-directory worker exit was not confirmed");
   }
-  if (!existsSync10(join12(worker.controlPath, "lock-retained"))) {
+  if (!existsSync11(join14(worker.controlPath, "lock-retained"))) {
     rmSync4(worker.controlPath, { force: true, recursive: true });
   }
 }
@@ -14086,13 +14654,13 @@ function bindWorker(controlPath, child, owner, childId, lifecycleCapability = ""
     }
     throw new Error(message);
   };
-  const readyPath = join12(controlPath, "ready");
+  const readyPath = join14(controlPath, "ready");
   if (!waitForFile(readyPath, WORKER_READY_TIMEOUT_MS)) {
     rejectWorker("SESSION_INTEGRATION_PATH_UNSAFE: bound-directory worker unavailable");
   }
   let ready = {};
   try {
-    ready = JSON.parse(readFileSync10(readyPath, "utf8"));
+    ready = JSON.parse(readFileSync11(readyPath, "utf8"));
   } catch {
     rejectWorker("SESSION_INTEGRATION_PATH_UNSAFE: bound-directory worker unavailable");
   }
@@ -14111,7 +14679,7 @@ function bindWorker(controlPath, child, owner, childId, lifecycleCapability = ""
   };
 }
 function startWorker(path, identity2, realPath) {
-  const controlPath = mkdtempSync(join12(tmpdir3(), "rn-bound-directory-"));
+  const controlPath = mkdtempSync(join14(tmpdir4(), "rn-bound-directory-"));
   const lifecycleCapability = randomUUID2();
   const binding = Buffer.from(JSON.stringify({
     dev: identity2.dev.toString(),
@@ -14130,7 +14698,7 @@ function startWorker(path, identity2, realPath) {
     publicPath: path,
     realPath
   })).toString("base64url");
-  const child = spawn2(process.execPath, ["-e", BOUND_DIRECTORY_WORKER, controlPath, binding], {
+  const child = spawn3(process.execPath, ["-e", BOUND_DIRECTORY_WORKER, controlPath, binding], {
     cwd: path,
     stdio: ["ignore", "ignore", "ignore", "ipc"]
   });
@@ -14141,7 +14709,7 @@ function startWorker(path, identity2, realPath) {
   return bindWorker(controlPath, child, void 0, void 0, lifecycleCapability);
 }
 function startSubdirectoryWorker(parent, name, expectedIdentity, expectedRealPath) {
-  const controlPath = mkdtempSync(join12(tmpdir3(), "rn-bound-directory-"));
+  const controlPath = mkdtempSync(join14(tmpdir4(), "rn-bound-directory-"));
   const childId = randomUUID2();
   const lifecycleCapability = randomUUID2();
   let worker;
@@ -14153,7 +14721,7 @@ function startSubdirectoryWorker(parent, name, expectedIdentity, expectedRealPat
       controlPath,
       lifecycleCapability,
       name,
-      publicPath: join12(parent.path, name),
+      publicPath: join14(parent.path, name),
       create: false,
       mode: 448
     });
@@ -14217,9 +14785,9 @@ function rebindDescendants(directory) {
 function sendOperation(directory, request2, timeoutMs) {
   const sequence = ++directory.worker.sequence;
   const prefix = String(sequence).padStart(8, "0");
-  const pendingPath = join12(directory.worker.controlPath, `${prefix}.pending`);
-  const requestPath2 = join12(directory.worker.controlPath, `${prefix}.request`);
-  const responsePath = join12(directory.worker.controlPath, `${prefix}.response`);
+  const pendingPath = join14(directory.worker.controlPath, `${prefix}.pending`);
+  const requestPath2 = join14(directory.worker.controlPath, `${prefix}.request`);
+  const responsePath = join14(directory.worker.controlPath, `${prefix}.response`);
   writeFileSync6(pendingPath, JSON.stringify(request2), { flag: "wx", mode: 384 });
   renameSync5(pendingPath, requestPath2);
   if (!waitForFile(responsePath, timeoutMs)) {
@@ -14227,7 +14795,7 @@ function sendOperation(directory, request2, timeoutMs) {
   }
   let result;
   try {
-    result = JSON.parse(readFileSync10(responsePath, "utf8"));
+    result = JSON.parse(readFileSync11(responsePath, "utf8"));
   } catch {
     throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: bound-directory operation returned invalid output");
   } finally {
@@ -14481,7 +15049,7 @@ function assertBoundDirectoryCurrent(directory) {
   runBoundOperation(directory, { operation: "identity" });
 }
 function openBoundSubdirectoryInternal(parent, name, options = {}) {
-  const controlPath = mkdtempSync(join12(tmpdir3(), "rn-bound-directory-"));
+  const controlPath = mkdtempSync(join14(tmpdir4(), "rn-bound-directory-"));
   const childId = randomUUID2();
   const lifecycleCapability = randomUUID2();
   let worker;
@@ -14493,7 +15061,7 @@ function openBoundSubdirectoryInternal(parent, name, options = {}) {
       controlPath,
       lifecycleCapability,
       name,
-      publicPath: join12(parent.path, name),
+      publicPath: join14(parent.path, name),
       create: options.create ?? false,
       mode: options.mode ?? 448,
       optional: options.optional ?? false,
@@ -14517,7 +15085,7 @@ function openBoundSubdirectoryInternal(parent, name, options = {}) {
       },
       name,
       parent,
-      path: join12(parent.path, name),
+      path: join14(parent.path, name),
       pendingCleanups: /* @__PURE__ */ new Map(),
       realPath: result.directoryIdentity.realPath,
       worker,
@@ -15815,8 +16383,8 @@ var init_metro_authority = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/session/package-integration.js
-import { closeSync as closeSync8, constants as constants6, fstatSync as fstatSync6, lstatSync as lstatSync9, openSync as openSync8, readFileSync as readFileSync11 } from "node:fs";
-import { basename as basename2, isAbsolute as isAbsolute4, join as join13, relative as relative4, resolve as resolve9, sep as sep3 } from "node:path";
+import { closeSync as closeSync8, constants as constants6, fstatSync as fstatSync6, lstatSync as lstatSync9, openSync as openSync8, readFileSync as readFileSync12 } from "node:fs";
+import { basename as basename2, isAbsolute as isAbsolute4, join as join15, relative as relative4, resolve as resolve9, sep as sep3 } from "node:path";
 function serializePackageIntegrationManifest(manifest) {
   return `${JSON.stringify(manifest, null, 2)}
 `;
@@ -19640,7 +20208,7 @@ function managedMetroProxyUrl(binding) {
 function snapshotBoundFiles(directory, directoryPath, names) {
   return readBoundDirectoryFiles(directory, names).map((snapshot) => ({
     ...snapshot,
-    path: join13(directoryPath, snapshot.name)
+    path: join15(directoryPath, snapshot.name)
   }));
 }
 function casReplaceBoundBatch(directory, writes, dependencies = {}) {
@@ -19665,7 +20233,7 @@ function assertNoSymlinkPath(root, candidate) {
   }
   let current = root;
   for (const component of [root, ...child.split(sep3).filter(Boolean)]) {
-    current = component === root ? root : join13(current, component);
+    current = component === root ? root : join15(current, component);
     try {
       if (lstatSync9(current).isSymbolicLink()) {
         throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: integration path is symlinked");
@@ -19694,7 +20262,7 @@ function readRegularFile(root, candidate) {
     if (!opened.isFile() || before.dev !== opened.dev || before.ino !== opened.ino || after.dev !== opened.dev || after.ino !== opened.ino) {
       throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: integration input changed while opening");
     }
-    return readFileSync11(descriptor, "utf8");
+    return readFileSync12(descriptor, "utf8");
   } finally {
     closeSync8(descriptor);
   }
@@ -19740,7 +20308,7 @@ function readPackageIntegrationInputs(appRootInput, dependencies = {}) {
       packageJson: packageSnapshot.contents.toString("utf8"),
       metroConfig: {
         contents: metroSnapshot.contents.toString("utf8"),
-        path: join13(appRoot, metroSnapshot.name)
+        path: join15(appRoot, metroSnapshot.name)
       },
       ...manifest ? { manifest: manifest.toString("utf8") } : {}
     };
@@ -19861,9 +20429,9 @@ function rollbackWrites(writes, dependencies) {
 }
 function applyPackageIntegration(input, dependencies = {}) {
   const appRoot = resolve9(input.appRoot);
-  const packagePath = join13(appRoot, "package.json");
+  const packagePath = join15(appRoot, "package.json");
   let metroConfigPath;
-  for (const path of ["metro.config.js", "metro.config.cjs"].map((name) => join13(appRoot, name))) {
+  for (const path of ["metro.config.js", "metro.config.cjs"].map((name) => join15(appRoot, name))) {
     if (readOptionalRegularFileNoFollow(appRoot, path) !== void 0) {
       metroConfigPath = path;
       break;
@@ -19996,7 +20564,7 @@ function applyPackageIntegration(input, dependencies = {}) {
 }
 function restorePackageIntegrationFiles(input, dependencies = {}) {
   const appRoot = resolve9(input.appRoot);
-  const packagePath = join13(appRoot, "package.json");
+  const packagePath = join15(appRoot, "package.json");
   const directories = openIntegrationDirectories(appRoot);
   const generatedNames = [
     "rn-session-integration.json",
@@ -20024,7 +20592,7 @@ function restorePackageIntegrationFiles(input, dependencies = {}) {
     if (metroConfig !== "metro.config.js" && metroConfig !== "metro.config.cjs") {
       throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: manifest Metro config is not an expected app-root config");
     }
-    const metroConfigPath = join13(appRoot, metroConfig);
+    const metroConfigPath = join15(appRoot, metroConfig);
     const [packageSnapshot, metroSnapshot] = snapshotBoundFiles(directories.app, appRoot, [
       basename2(packagePath),
       basename2(metroConfigPath)
@@ -20649,8 +21217,8 @@ var init_keyboard_guard = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/runners/runtime-paths.js
-import { existsSync as existsSync11, statSync as statSync5 } from "node:fs";
-import { join as join14 } from "node:path";
+import { existsSync as existsSync12, statSync as statSync5 } from "node:fs";
+import { join as join16 } from "node:path";
 function compactUnique(paths) {
   const out = [];
   for (const path of paths) {
@@ -20673,21 +21241,21 @@ function candidateNativeRunnerDirs(runnerName, baseDir = import.meta.dirname) {
   const codexPluginRoot = process.env.RN_DEV_AGENT_CODEX_PLUGIN_ROOT;
   const claudePluginRoot = process.env.CLAUDE_PLUGIN_ROOT;
   return compactUnique([
-    runnerRoot ? join14(runnerRoot, runnerName) : void 0,
-    repoRoot ? join14(repoRoot, "packages", runnerName) : void 0,
-    repoRoot ? join14(repoRoot, "scripts", runnerName) : void 0,
-    codexPluginRoot ? join14(codexPluginRoot, "scripts", runnerName) : void 0,
-    claudePluginRoot ? join14(claudePluginRoot, "..", runnerName) : void 0,
-    claudePluginRoot ? join14(claudePluginRoot, "..", "..", "packages", runnerName) : void 0,
-    claudePluginRoot ? join14(claudePluginRoot, "..", "..", "scripts", runnerName) : void 0,
-    claudePluginRoot ? join14(claudePluginRoot, "scripts", runnerName) : void 0,
+    runnerRoot ? join16(runnerRoot, runnerName) : void 0,
+    repoRoot ? join16(repoRoot, "packages", runnerName) : void 0,
+    repoRoot ? join16(repoRoot, "scripts", runnerName) : void 0,
+    codexPluginRoot ? join16(codexPluginRoot, "scripts", runnerName) : void 0,
+    claudePluginRoot ? join16(claudePluginRoot, "..", runnerName) : void 0,
+    claudePluginRoot ? join16(claudePluginRoot, "..", "..", "packages", runnerName) : void 0,
+    claudePluginRoot ? join16(claudePluginRoot, "..", "..", "scripts", runnerName) : void 0,
+    claudePluginRoot ? join16(claudePluginRoot, "scripts", runnerName) : void 0,
     // Bundled Codex runtime: <plugin>/rn-dev-agent-core/dist.
-    join14(baseDir, "..", "..", "scripts", runnerName),
+    join16(baseDir, "..", "..", "scripts", runnerName),
     // Source checkout: packages/rn-dev-agent-core/dist/runners.
     // Also covers the legacy scripts/cdp-bridge/dist/runners layout.
-    join14(baseDir, "..", "..", "..", runnerName),
+    join16(baseDir, "..", "..", "..", runnerName),
     // Legacy source checkout: packages/rn-dev-agent-core/dist/runners before runner package split.
-    join14(baseDir, "..", "..", "..", "..", "scripts", runnerName)
+    join16(baseDir, "..", "..", "..", "..", "scripts", runnerName)
   ]);
 }
 function resolveNativeRunnerDir(runnerName, baseDir = import.meta.dirname) {
@@ -20700,16 +21268,16 @@ function candidateRunnerManifestFiles(baseDir = import.meta.dirname) {
   const claudePluginRoot = process.env.CLAUDE_PLUGIN_ROOT;
   return compactUnique([
     process.env.RN_DEV_AGENT_RUNNER_MANIFEST,
-    repoRoot ? join14(repoRoot, "runner-manifest.json") : void 0,
-    codexPluginRoot ? join14(codexPluginRoot, "runner-manifest.json") : void 0,
-    claudePluginRoot ? join14(claudePluginRoot, "..", "..", "runner-manifest.json") : void 0,
-    claudePluginRoot ? join14(claudePluginRoot, "runner-manifest.json") : void 0,
+    repoRoot ? join16(repoRoot, "runner-manifest.json") : void 0,
+    codexPluginRoot ? join16(codexPluginRoot, "runner-manifest.json") : void 0,
+    claudePluginRoot ? join16(claudePluginRoot, "..", "..", "runner-manifest.json") : void 0,
+    claudePluginRoot ? join16(claudePluginRoot, "runner-manifest.json") : void 0,
     // Bundled Codex runtime: <plugin>/rn-dev-agent-core/dist.
-    join14(baseDir, "..", "..", "runner-manifest.json"),
+    join16(baseDir, "..", "..", "runner-manifest.json"),
     // Migrated source checkout: packages/rn-dev-agent-core/dist/runners.
-    join14(baseDir, "..", "..", "..", "..", "runner-manifest.json"),
+    join16(baseDir, "..", "..", "..", "..", "runner-manifest.json"),
     // Legacy source checkout: scripts/cdp-bridge/dist/runners.
-    join14(baseDir, "..", "..", "..", "runner-manifest.json")
+    join16(baseDir, "..", "..", "..", "runner-manifest.json")
   ]);
 }
 function candidatePluginManifestFiles(baseDir = import.meta.dirname) {
@@ -20717,21 +21285,21 @@ function candidatePluginManifestFiles(baseDir = import.meta.dirname) {
   const claudePluginRoot = process.env.CLAUDE_PLUGIN_ROOT;
   return compactUnique([
     process.env.RN_DEV_AGENT_PLUGIN_MANIFEST,
-    codexPluginRoot ? join14(codexPluginRoot, ".codex-plugin", "plugin.json") : void 0,
-    claudePluginRoot ? join14(claudePluginRoot, ".claude-plugin", "plugin.json") : void 0,
-    claudePluginRoot ? join14(claudePluginRoot, "plugin.json") : void 0,
+    codexPluginRoot ? join16(codexPluginRoot, ".codex-plugin", "plugin.json") : void 0,
+    claudePluginRoot ? join16(claudePluginRoot, ".claude-plugin", "plugin.json") : void 0,
+    claudePluginRoot ? join16(claudePluginRoot, "plugin.json") : void 0,
     // Bundled Codex runtime: <plugin>/rn-dev-agent-core/dist.
-    join14(baseDir, "..", "..", ".codex-plugin", "plugin.json"),
+    join16(baseDir, "..", "..", ".codex-plugin", "plugin.json"),
     // Migrated source checkout: packages/rn-dev-agent-core/dist/runners.
-    join14(baseDir, "..", "..", "..", "claude-plugin", ".claude-plugin", "plugin.json"),
-    join14(baseDir, "..", "..", "..", "claude-plugin", "plugin.json"),
+    join16(baseDir, "..", "..", "..", "claude-plugin", ".claude-plugin", "plugin.json"),
+    join16(baseDir, "..", "..", "..", "claude-plugin", "plugin.json"),
     // Core package fallback. This is enough for artifact versioning in Codex.
-    join14(baseDir, "..", "package.json"),
-    join14(baseDir, "..", "..", "package.json")
+    join16(baseDir, "..", "package.json"),
+    join16(baseDir, "..", "..", "package.json")
   ]);
 }
 function firstExistingFile(candidates) {
-  return candidates.find((path) => existsSync11(path)) ?? null;
+  return candidates.find((path) => existsSync12(path)) ?? null;
 }
 var init_runtime_paths = __esm({
   "packages/rn-dev-agent-core/dist/runners/runtime-paths.js"() {
@@ -20740,7 +21308,7 @@ var init_runtime_paths = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/runners/protocol.js
-import { readFileSync as readFileSync12 } from "node:fs";
+import { readFileSync as readFileSync13 } from "node:fs";
 function classifyRunnerCompatibility(health, pluginVersion, requiredCommands, requiredFeatures) {
   if (health.protocolVersion === void 0)
     return { compatible: false, reason: "legacy" };
@@ -20778,7 +21346,7 @@ function getPluginVersion() {
       cachedPluginVersion = null;
       return cachedPluginVersion;
     }
-    const parsed = JSON.parse(readFileSync12(manifestPath, "utf-8"));
+    const parsed = JSON.parse(readFileSync13(manifestPath, "utf-8"));
     cachedPluginVersion = typeof parsed.version === "string" ? parsed.version : null;
   } catch {
     cachedPluginVersion = null;
@@ -20847,9 +21415,9 @@ var init_quiescence = __esm({
 // packages/rn-dev-agent-core/dist/runners/runner-artifacts.js
 import { execFileSync as execFileSync9 } from "node:child_process";
 import { createHash as createHash7 } from "node:crypto";
-import { existsSync as existsSync12, mkdirSync as mkdirSync9, readdirSync as readdirSync3, readFileSync as readFileSync13, rmSync as rmSync5, writeFileSync as writeFileSync7 } from "node:fs";
+import { existsSync as existsSync13, mkdirSync as mkdirSync9, readdirSync as readdirSync3, readFileSync as readFileSync14, rmSync as rmSync5, writeFileSync as writeFileSync7 } from "node:fs";
 import { homedir as homedir3 } from "node:os";
-import { dirname as dirname8, join as join15 } from "node:path";
+import { dirname as dirname8, join as join17 } from "node:path";
 function resolveArtifactDecision(input) {
   if (input.envOverride)
     return "build-local";
@@ -20883,8 +21451,8 @@ function releaseAssetUrl(repo, version2, assetName) {
   return `https://github.com/${repo}/releases/download/v${version2}/${assetName}`;
 }
 function cacheDirFor(home, platformOS, version2, platform) {
-  const root = platformOS === "darwin" ? join15(home, "Library", "Caches", "rn-dev-agent", "runners") : join15(home, ".cache", "rn-dev-agent", "runners");
-  return join15(root, version2, platform);
+  const root = platformOS === "darwin" ? join17(home, "Library", "Caches", "rn-dev-agent", "runners") : join17(home, ".cache", "rn-dev-agent", "runners");
+  return join17(root, version2, platform);
 }
 function formatArtifactSize(bytes) {
   return `~${Math.max(1, Math.round(bytes / 1e6))} MB`;
@@ -20902,11 +21470,11 @@ async function acquireArtifact(platform, version2, deps, extractedOk) {
   if (assets.length === 0)
     return { provenance: "build-local" };
   const cacheDir = deps.cacheDir(version2, platform);
-  const productsDir = join15(cacheDir, "products");
+  const productsDir = join17(cacheDir, "products");
   const actualByName = {};
   let allZipsPresent = true;
   for (const a of assets) {
-    const zp = join15(cacheDir, a.name);
+    const zp = join17(cacheDir, a.name);
     if (deps.existsSync(zp)) {
       try {
         actualByName[a.name] = deps.sha256File(zp);
@@ -20928,7 +21496,7 @@ async function acquireArtifact(platform, version2, deps, extractedOk) {
   try {
     deps.mkdirp(cacheDir);
     for (const a of assets) {
-      const zp = join15(cacheDir, a.name);
+      const zp = join17(cacheDir, a.name);
       await deps.fetchToFile(releaseAssetUrl(RUNNER_REPO, version2, a.name), zp, {
         timeoutMs: DOWNLOAD_TIMEOUT_MS,
         maxBytes: a.bytes + DOWNLOAD_SIZE_SLACK_BYTES
@@ -20961,10 +21529,10 @@ async function acquireArtifact(platform, version2, deps, extractedOk) {
   }
 }
 function iosExtractedOk(deps) {
-  return (productsDir) => deps.listFiles(join15(productsDir, "Build", "Products")).some((f) => f.endsWith(".xctestrun"));
+  return (productsDir) => deps.listFiles(join17(productsDir, "Build", "Products")).some((f) => f.endsWith(".xctestrun"));
 }
 function androidExtractedOk(deps) {
-  return (productsDir) => deps.existsSync(join15(productsDir, ANDROID_APP_APK_NAME)) && deps.existsSync(join15(productsDir, ANDROID_TEST_APK_NAME));
+  return (productsDir) => deps.existsSync(join17(productsDir, ANDROID_APP_APK_NAME)) && deps.existsSync(join17(productsDir, ANDROID_TEST_APK_NAME));
 }
 async function resolveIosRunnerArtifacts(version2, localDerivedDataPath, deps = defaultArtifactDeps(), forceLocalBuild = false) {
   if (forceLocalBuild) {
@@ -20984,8 +21552,8 @@ async function resolveAndroidRunnerArtifacts(version2, local, deps = defaultArti
   }
   return {
     provenance: r.provenance,
-    appApk: join15(r.productsDir, ANDROID_APP_APK_NAME),
-    testApk: join15(r.productsDir, ANDROID_TEST_APK_NAME),
+    appApk: join17(r.productsDir, ANDROID_APP_APK_NAME),
+    testApk: join17(r.productsDir, ANDROID_TEST_APK_NAME),
     note: r.note
   };
 }
@@ -20994,7 +21562,7 @@ function readCommittedManifest() {
     const manifestPath = firstExistingFile(candidateRunnerManifestFiles());
     if (!manifestPath)
       return null;
-    const parsed = JSON.parse(readFileSync13(manifestPath, "utf-8"));
+    const parsed = JSON.parse(readFileSync14(manifestPath, "utf-8"));
     if (parsed && typeof parsed === "object" && parsed.assets)
       return parsed;
     return null;
@@ -21003,7 +21571,7 @@ function readCommittedManifest() {
   }
 }
 function sha256File(p) {
-  return createHash7("sha256").update(readFileSync13(p)).digest("hex");
+  return createHash7("sha256").update(readFileSync14(p)).digest("hex");
 }
 async function fetchToFile(url, dest, opts) {
   const controller = new AbortController();
@@ -21045,7 +21613,7 @@ function defaultArtifactDeps() {
     env: process.env,
     readManifest: readCommittedManifest,
     cacheDir: (version2, platform) => cacheDirFor(homedir3(), process.platform, version2, platform),
-    existsSync: existsSync12,
+    existsSync: existsSync13,
     sha256File,
     listFiles: (dir) => {
       try {
@@ -21214,10 +21782,10 @@ __export(rn_fast_runner_client_exports, {
   stopFastRunner: () => stopFastRunner,
   verifyTypeResultAfterSettle: () => verifyTypeResultAfterSettle
 });
-import { spawn as spawn3 } from "node:child_process";
-import { join as join16 } from "node:path";
+import { spawn as spawn4 } from "node:child_process";
+import { join as join18 } from "node:path";
 import { randomBytes as randomBytes3, randomUUID as randomUUID4 } from "node:crypto";
-import { existsSync as existsSync13, readdirSync as readdirSync4, mkdirSync as mkdirSync10, rmSync as rmSync6, statSync as statSync6, readFileSync as readFileSync14, writeFileSync as writeFileSync8 } from "node:fs";
+import { existsSync as existsSync14, readdirSync as readdirSync4, mkdirSync as mkdirSync10, rmSync as rmSync6, statSync as statSync6, readFileSync as readFileSync15, writeFileSync as writeFileSync8 } from "node:fs";
 function resolveReadyTimeoutMs() {
   const raw = Number(process.env.RN_FAST_RUNNER_READY_TIMEOUT_MS);
   return Number.isFinite(raw) && raw > 0 ? raw : 3e4;
@@ -21420,8 +21988,8 @@ function resolveRunnerStartPlan(opts) {
 }
 function hasBuiltTestProduct(derivedDataPath) {
   try {
-    const productsDir = join16(derivedDataPath, "Build", "Products");
-    if (!existsSync13(productsDir))
+    const productsDir = join18(derivedDataPath, "Build", "Products");
+    if (!existsSync14(productsDir))
       return false;
     return readdirSync4(productsDir).some((entry) => entry.endsWith(".xctestrun"));
   } catch {
@@ -21429,7 +21997,7 @@ function hasBuiltTestProduct(derivedDataPath) {
   }
 }
 function derivedDataPathForRunner() {
-  return join16(FAST_RUNNER_PROJECT, "build", "DerivedData");
+  return join18(FAST_RUNNER_PROJECT, "build", "DerivedData");
 }
 function acquireRunnerRebuildLock() {
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -21550,7 +22118,7 @@ function buildRunnerTestFaultEnv(env) {
 }
 function runXcodebuildToExit(args, timeoutMs) {
   return new Promise((resolve22, reject) => {
-    const child = spawn3("xcodebuild", args, { stdio: ["ignore", "ignore", "pipe"] });
+    const child = spawn4("xcodebuild", args, { stdio: ["ignore", "ignore", "pipe"] });
     let stderrTail = "";
     const timer = setTimeout(() => {
       child.kill("SIGTERM");
@@ -21584,8 +22152,8 @@ async function startFastRunner(deviceId, bundleId, port, opts = {}) {
     await stopFastRunner(deviceId);
   const authority = runnerAuthorityFromEnvironment(true);
   const desired = resolveRunnerRequestedPort(port);
-  const projectPath = join16(FAST_RUNNER_PROJECT, "RnFastRunner", "RnFastRunner.xcodeproj");
-  if (!existsSync13(projectPath)) {
+  const projectPath = join18(FAST_RUNNER_PROJECT, "RnFastRunner", "RnFastRunner.xcodeproj");
+  if (!existsSync14(projectPath)) {
     throw new Error(`RnFastRunner.xcodeproj not found at ${projectPath}.`);
   }
   const artifacts = await resolveIosRunnerArtifacts(getPluginVersion(), derivedDataPathForRunner(), void 0, opts.forceLocalBuild);
@@ -21609,7 +22177,7 @@ async function startFastRunner(deviceId, bundleId, port, opts = {}) {
   const launch = plan[plan.length - 1];
   const runnerTestFaultEnv = runnerTestFaultForwarded ? {} : buildRunnerTestFaultEnv(process.env);
   return new Promise((resolve22, reject) => {
-    const child = spawn3("xcodebuild", launch.args, {
+    const child = spawn4("xcodebuild", launch.args, {
       env: {
         ...process.env,
         ...buildRunnerPortEnv(desired),
@@ -22580,13 +23148,13 @@ var init_rn_fast_runner_client = __esm({
     lastKnownCapabilities = [];
     quiescenceAnnouncementPending = false;
     QUIESCENCE_STATUSES = /* @__PURE__ */ new Set(["active", "disabled", "unavailable"]);
-    REBUILD_LOCK_DIR = join16(FAST_RUNNER_PROJECT, "build", ".rebuild-lock");
+    REBUILD_LOCK_DIR = join18(FAST_RUNNER_PROJECT, "build", ".rebuild-lock");
     REBUILD_LOCK_STALE_MS = 15 * 6e4;
-    REBUILD_BUDGET_FILE = join16(FAST_RUNNER_PROJECT, "build", "commands-rebuild.json");
+    REBUILD_BUDGET_FILE = join18(FAST_RUNNER_PROJECT, "build", "commands-rebuild.json");
     runnerRebuildBudget = {
       alreadyRebuiltFor(pluginVersion) {
         try {
-          const parsed = JSON.parse(readFileSync14(REBUILD_BUDGET_FILE, "utf8"));
+          const parsed = JSON.parse(readFileSync15(REBUILD_BUDGET_FILE, "utf8"));
           return parsed.pluginVersion === pluginVersion;
         } catch {
           return false;
@@ -22594,14 +23162,14 @@ var init_rn_fast_runner_client = __esm({
       },
       recordRebuild(pluginVersion) {
         try {
-          mkdirSync10(join16(FAST_RUNNER_PROJECT, "build"), { recursive: true });
+          mkdirSync10(join18(FAST_RUNNER_PROJECT, "build"), { recursive: true });
           writeFileSync8(REBUILD_BUDGET_FILE, JSON.stringify({ pluginVersion, at: (/* @__PURE__ */ new Date()).toISOString() }));
         } catch {
         }
       },
       reset(pluginVersion) {
         try {
-          const parsed = JSON.parse(readFileSync14(REBUILD_BUDGET_FILE, "utf8"));
+          const parsed = JSON.parse(readFileSync15(REBUILD_BUDGET_FILE, "utf8"));
           if (parsed.pluginVersion === pluginVersion) {
             rmSync6(REBUILD_BUDGET_FILE, { force: true });
           }
@@ -25976,9 +26544,9 @@ var init_public_diagnostics = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/tools/device-screenshot-raw.js
-import { execFile, spawn as spawn4 } from "node:child_process";
+import { execFile as execFile2, spawn as spawn5 } from "node:child_process";
 import { createWriteStream as createWriteStream2, renameSync as renameSync6, statSync as statSync8, unlinkSync as unlinkSync5 } from "node:fs";
-import { basename as basename4, dirname as dirname10, join as join17 } from "node:path";
+import { basename as basename4, dirname as dirname10, join as join19 } from "node:path";
 import { promisify } from "node:util";
 function parseSimctlBootedAll(jsonText) {
   let data;
@@ -26131,7 +26699,7 @@ function resolveCaptureOutcome(streamFinished, procCode) {
   return procCode === 0 ? "success" : "failure";
 }
 function rawTempPath(finalPath, uniq) {
-  return join17(dirname10(finalPath), `.${basename4(finalPath)}.${uniq}.rawtmp`);
+  return join19(dirname10(finalPath), `.${basename4(finalPath)}.${uniq}.rawtmp`);
 }
 function nextCaptureSuffix() {
   captureCounter += 1;
@@ -26165,7 +26733,7 @@ var init_device_screenshot_raw = __esm({
   "packages/rn-dev-agent-core/dist/tools/device-screenshot-raw.js"() {
     "use strict";
     init_public_diagnostics();
-    execFileAsync = promisify(execFile);
+    execFileAsync = promisify(execFile2);
     EMU_LINE = /^(emulator-\d+)\s+device\b/;
     defaultIosResolver = async () => {
       try {
@@ -26182,7 +26750,7 @@ var init_device_screenshot_raw = __esm({
     defaultAndroidResolver = () => resolveAndroidEmu();
     defaultIosCapturer = captureIosScreenshot;
     captureCounter = 0;
-    defaultAndroidSpawn = (emuId) => spawn4("adb", ["-s", emuId, "exec-out", "screencap", "-p"], {
+    defaultAndroidSpawn = (emuId) => spawn5("adb", ["-s", emuId, "exec-out", "screencap", "-p"], {
       stdio: ["ignore", "pipe", "pipe"]
     });
     androidSpawn = defaultAndroidSpawn;
@@ -26275,573 +26843,6 @@ var init_no_change_tracker = __esm({
     WEDGED_DISTINCT_TARGETS = 3;
     WEDGED_RUNTIME_HINT = `${WEDGED_DISTINCT_TARGETS} consecutive taps on distinct targets produced no UI change \u2014 the app runtime may be wedged (JS thread paused or touch events swallowed). Run cdp_status (iOS auto-recovers a paused JS thread), then cdp_restart with hardReset=true if it persists.`;
     streak = [];
-  }
-});
-
-// packages/rn-dev-agent-core/dist/observability/mirror/jpeg-stream.js
-var MAX_FRAME_BYTES, SOI, EOI, JpegFrameExtractor;
-var init_jpeg_stream = __esm({
-  "packages/rn-dev-agent-core/dist/observability/mirror/jpeg-stream.js"() {
-    "use strict";
-    MAX_FRAME_BYTES = 8e6;
-    SOI = Buffer.from([255, 216]);
-    EOI = Buffer.from([255, 217]);
-    JpegFrameExtractor = class {
-      acc = Buffer.alloc(0);
-      /** Sticky: a SOI without EOI exceeded MAX_FRAME_BYTES. Process liveness is not a valid frame. */
-      overflowed = false;
-      push(chunk) {
-        this.acc = this.acc.length === 0 ? chunk : Buffer.concat([this.acc, chunk]);
-        const frames = [];
-        for (; ; ) {
-          const soi = this.acc.indexOf(SOI);
-          if (soi === -1) {
-            this.acc = this.acc.length > 0 && this.acc[this.acc.length - 1] === 255 ? this.acc.subarray(this.acc.length - 1) : Buffer.alloc(0);
-            break;
-          }
-          if (soi > 0)
-            this.acc = this.acc.subarray(soi);
-          const eoi = this.acc.indexOf(EOI, SOI.length);
-          if (eoi === -1) {
-            if (this.acc.length > MAX_FRAME_BYTES) {
-              this.overflowed = true;
-              this.acc = Buffer.alloc(0);
-            }
-            break;
-          }
-          frames.push(this.acc.subarray(0, eoi + EOI.length));
-          this.acc = this.acc.subarray(eoi + EOI.length);
-        }
-        return frames;
-      }
-    };
-  }
-});
-
-// packages/rn-dev-agent-core/dist/observability/mirror/sources.js
-import { spawn as spawn5, execFile as execFile2 } from "node:child_process";
-import { readFile, unlink } from "node:fs/promises";
-import { tmpdir as tmpdir4 } from "node:os";
-import { join as join18 } from "node:path";
-function idbDemotionHint(cause) {
-  if (cause?.hint)
-    return cause.hint;
-  if (cause?.reason)
-    return `${cause.reason} \u2014 using simctl screenshot loop`;
-  return IDB_STREAM_UNHEALTHY_HINT;
-}
-async function probeIdbClient(execFileFn = execFile2) {
-  return new Promise((resolve22) => {
-    execFileFn("idb", ["--help"], { timeout: 3e3 }, (err) => {
-      if (!err)
-        return resolve22("ready");
-      resolve22(isEnoent(err) ? "absent" : "broken");
-    });
-  });
-}
-function isEnoent(err) {
-  return !!err && typeof err === "object" && err.code === "ENOENT";
-}
-function defaultExecJpeg(cmd, args, signal) {
-  const outPath = args[args.length - 1];
-  return new Promise((resolve22, reject) => {
-    execFile2(cmd, args, { maxBuffer: 16 * 1024 * 1024, timeout: 1e4, signal }, (err) => {
-      if (err) {
-        reject(err);
-        return;
-      }
-      readFile(outPath).then((buf) => {
-        void unlink(outPath).catch(() => {
-        });
-        resolve22(buf);
-      }).catch((readErr) => {
-        void unlink(outPath).catch(() => {
-        });
-        reject(readErr);
-      });
-    });
-  });
-}
-async function createMirrorSource(target, fps, opts = {}) {
-  if (target.platform === "android") {
-    return new AndroidScreenrecordSource(target.deviceId);
-  }
-  const state = await probeIdbClient();
-  if (state === "ready") {
-    return new IosIdbSource(target.deviceId, fps, {
-      firstFrameTimeoutMs: opts.firstFrameTimeoutMs
-    });
-  }
-  const idbHint = state === "broken" ? SIMCTL_BROKEN_IDB_HINT : SIMCTL_HINT;
-  return new IosSimctlLoopSource(target.deviceId, {
-    degradedHint: idbHint,
-    failureHint: idbHint
-  });
-}
-var RestartGate, IDB_INSTALL_COMMAND, SIMCTL_HINT, SIMCTL_BROKEN_IDB_HINT, IDB_NO_FIRST_FRAME_REASON, IDB_MALFORMED_FRAME_REASON, IDB_STREAM_UNHEALTHY_HINT, DEFAULT_IDB_FIRST_FRAME_TIMEOUT_MS, IDB_HINT, FFMPEG_HINT, sleep, scheduleAfter, defaultSpawn, IosIdbSource, IosSimctlLoopSource, AndroidScreenrecordSource;
-var init_sources = __esm({
-  "packages/rn-dev-agent-core/dist/observability/mirror/sources.js"() {
-    "use strict";
-    init_jpeg_stream();
-    RestartGate = class {
-      limit;
-      windowMs;
-      now;
-      exits = [];
-      constructor(limit = 3, windowMs = 1e4, now = Date.now) {
-        this.limit = limit;
-        this.windowMs = windowMs;
-        this.now = now;
-      }
-      record() {
-        const t = this.now();
-        this.exits = this.exits.filter((e) => t - e < this.windowMs);
-        this.exits.push(t);
-        return this.exits.length < this.limit;
-      }
-    };
-    IDB_INSTALL_COMMAND = "brew install python@3.13 && brew tap facebook/fb && brew trust facebook/fb && brew install idb-companion && pipx install --python python3.13 --force fb-idb";
-    SIMCTL_HINT = `install idb for smoother mirroring (${IDB_INSTALL_COMMAND})`;
-    SIMCTL_BROKEN_IDB_HINT = "idb is installed but did not respond successfully \u2014 most likely fb-idb 1.1.7 under Python 3.14, which removed the asyncio.get_event_loop() it needs. Reinstall it under a supported interpreter: pipx install --python python3.13 --force fb-idb";
-    IDB_NO_FIRST_FRAME_REASON = "idb video-stream produced no first frame";
-    IDB_MALFORMED_FRAME_REASON = "idb video-stream produced a malformed frame";
-    IDB_STREAM_UNHEALTHY_HINT = "idb video-stream produced no usable frame \u2014 using simctl screenshot loop";
-    DEFAULT_IDB_FIRST_FRAME_TIMEOUT_MS = 3e4;
-    IDB_HINT = `idb not found \u2014 ${IDB_INSTALL_COMMAND}`;
-    FFMPEG_HINT = "ffmpeg not found \u2014 run scripts/ensure-ffmpeg.sh or brew install ffmpeg";
-    sleep = (ms) => new Promise((resolve22) => setTimeout(resolve22, ms));
-    scheduleAfter = (fn, delayMs) => {
-      if (delayMs <= 0)
-        setImmediate(fn);
-      else
-        setTimeout(fn, delayMs);
-    };
-    defaultSpawn = (cmd, args) => spawn5(cmd, args, {
-      stdio: ["pipe", "pipe", "pipe"]
-    });
-    IosIdbSource = class {
-      udid;
-      pipeline = "idb";
-      nominalFps;
-      active = false;
-      proc = null;
-      firstFrameTimer = null;
-      spawnFn;
-      gate;
-      restartDelayMs;
-      firstFrameTimeoutMs;
-      constructor(udid, fps, opts = {}) {
-        this.udid = udid;
-        this.nominalFps = fps;
-        this.spawnFn = opts.spawnFn ?? defaultSpawn;
-        this.gate = new RestartGate(3, 1e4, opts.now ?? Date.now);
-        this.restartDelayMs = opts.restartDelayMs ?? 300;
-        this.firstFrameTimeoutMs = opts.firstFrameTimeoutMs ?? DEFAULT_IDB_FIRST_FRAME_TIMEOUT_MS;
-      }
-      start(sink) {
-        this.active = true;
-        this.spawnOnce(sink);
-      }
-      spawnOnce(sink) {
-        const extractor = new JpegFrameExtractor();
-        let gotFrame = false;
-        const proc = this.spawnFn("idb", [
-          "video-stream",
-          "--udid",
-          this.udid,
-          "--fps",
-          String(this.nominalFps),
-          "--format",
-          "mjpeg",
-          "--compression-quality",
-          "0.7"
-        ]);
-        this.proc = proc;
-        proc.stderr?.resume();
-        this.armFirstFrameTimer(sink);
-        proc.stdout.on("data", (chunk) => {
-          if (!this.active)
-            return;
-          for (const frame of extractor.push(chunk)) {
-            gotFrame = true;
-            this.clearFirstFrameTimer();
-            if (this.active)
-              sink.onFrame(frame);
-          }
-          if (this.active && extractor.overflowed && !gotFrame) {
-            this.fail(sink, IDB_MALFORMED_FRAME_REASON);
-          }
-        });
-        proc.on("error", (err) => {
-          if (!this.active)
-            return;
-          if (isEnoent(err)) {
-            this.fail(sink, "idb not found", IDB_HINT);
-          }
-        });
-        proc.on("close", () => {
-          if (!this.active)
-            return;
-          this.clearFirstFrameTimer();
-          if (this.gate.record()) {
-            scheduleAfter(() => {
-              if (!this.active)
-                return;
-              sink.onRestart?.();
-              this.spawnOnce(sink);
-            }, this.restartDelayMs);
-          } else {
-            this.fail(sink, "idb video-stream keeps exiting");
-          }
-        });
-      }
-      armFirstFrameTimer(sink) {
-        this.clearFirstFrameTimer();
-        this.firstFrameTimer = setTimeout(() => {
-          this.firstFrameTimer = null;
-          if (!this.active)
-            return;
-          this.fail(sink, IDB_NO_FIRST_FRAME_REASON, IDB_STREAM_UNHEALTHY_HINT);
-        }, this.firstFrameTimeoutMs);
-      }
-      fail(sink, reason, hint) {
-        if (!this.active)
-          return;
-        this.active = false;
-        this.clearFirstFrameTimer();
-        this.proc?.kill();
-        sink.onExit({ reason, hint });
-      }
-      clearFirstFrameTimer() {
-        if (this.firstFrameTimer) {
-          clearTimeout(this.firstFrameTimer);
-          this.firstFrameTimer = null;
-        }
-      }
-      stop() {
-        this.active = false;
-        this.clearFirstFrameTimer();
-        this.proc?.kill();
-      }
-    };
-    IosSimctlLoopSource = class {
-      udid;
-      pipeline = "simctl";
-      nominalFps = 6;
-      degradedHint;
-      failureHint;
-      active = false;
-      inFlight = null;
-      execJpeg;
-      gate;
-      idleDelayMs;
-      failurePauseMs;
-      tmpPath;
-      constructor(udid, opts = {}) {
-        this.udid = udid;
-        this.execJpeg = opts.execJpeg ?? defaultExecJpeg;
-        this.gate = new RestartGate(3, 1e4, opts.now ?? Date.now);
-        this.idleDelayMs = opts.idleDelayMs ?? 25;
-        this.failurePauseMs = opts.failurePauseMs ?? 500;
-        this.tmpPath = opts.tmpPath ?? (() => join18(tmpdir4(), "rn-mirror-simctl-" + process.pid + ".jpg"));
-        this.degradedHint = opts.degradedHint ?? SIMCTL_HINT;
-        this.failureHint = opts.failureHint;
-      }
-      start(sink) {
-        this.active = true;
-        void this.loop(sink);
-      }
-      async loop(sink) {
-        while (this.active) {
-          const controller = new AbortController();
-          this.inFlight = controller;
-          try {
-            const buf = await this.execJpeg("xcrun", ["simctl", "io", this.udid, "screenshot", "--type=jpeg", this.tmpPath()], controller.signal);
-            sink.onFrame(buf);
-            if (!this.active)
-              break;
-            await sleep(this.idleDelayMs);
-          } catch {
-            if (!this.active)
-              break;
-            if (!this.gate.record()) {
-              if (this.active)
-                sink.onExit({
-                  reason: "simctl screenshot failing",
-                  hint: this.failureHint
-                });
-              this.active = false;
-              break;
-            }
-            await sleep(this.failurePauseMs);
-          } finally {
-            this.inFlight = null;
-          }
-        }
-      }
-      stop() {
-        this.active = false;
-        this.inFlight?.abort();
-      }
-    };
-    AndroidScreenrecordSource = class {
-      serial;
-      pipeline = "screenrecord";
-      nominalFps = 25;
-      active = false;
-      adb = null;
-      ffmpeg = null;
-      spawnFn;
-      gate;
-      restartDelayMs;
-      constructor(serial, opts = {}) {
-        this.serial = serial;
-        this.spawnFn = opts.spawnFn ?? defaultSpawn;
-        this.gate = new RestartGate(3, 1e4, opts.now ?? Date.now);
-        this.restartDelayMs = opts.restartDelayMs ?? 300;
-      }
-      start(sink) {
-        this.active = true;
-        this.spawnCycle(sink);
-      }
-      spawnCycle(sink) {
-        let cycleDone = false;
-        const extractor = new JpegFrameExtractor();
-        const adb2 = this.spawnFn("adb", [
-          "-s",
-          this.serial,
-          "exec-out",
-          "screenrecord",
-          "--output-format=h264",
-          "--time-limit=179",
-          "-"
-        ]);
-        const ffmpeg = this.spawnFn("ffmpeg", [
-          "-loglevel",
-          "error",
-          "-fflags",
-          "nobuffer",
-          "-f",
-          "h264",
-          "-i",
-          "pipe:0",
-          "-q:v",
-          "7",
-          "-f",
-          "mjpeg",
-          "pipe:1"
-        ]);
-        this.adb = adb2;
-        this.ffmpeg = ffmpeg;
-        adb2.stderr?.resume();
-        ffmpeg.stderr?.resume();
-        if (ffmpeg.stdin) {
-          ffmpeg.stdin.on("error", () => {
-          });
-          adb2.stdout.pipe(ffmpeg.stdin);
-        }
-        ffmpeg.stdout.on("data", (chunk) => {
-          if (!this.active)
-            return;
-          for (const frame of extractor.push(chunk)) {
-            if (this.active)
-              sink.onFrame(frame);
-          }
-        });
-        const killSibling = (self) => {
-          if (self === "adb")
-            ffmpeg.kill();
-          else
-            adb2.kill();
-        };
-        adb2.on("error", (err) => {
-          if (!this.active || cycleDone)
-            return;
-          if (isEnoent(err)) {
-            cycleDone = true;
-            this.active = false;
-            killSibling("adb");
-            sink.onExit({ reason: "adb not found" });
-          }
-        });
-        ffmpeg.on("error", (err) => {
-          if (!this.active || cycleDone)
-            return;
-          if (isEnoent(err)) {
-            cycleDone = true;
-            this.active = false;
-            killSibling("ffmpeg");
-            sink.onExit({ reason: "ffmpeg not found", hint: FFMPEG_HINT });
-          }
-        });
-        const onClose = (self) => {
-          if (!this.active || cycleDone)
-            return;
-          cycleDone = true;
-          killSibling(self);
-          if (this.gate.record()) {
-            scheduleAfter(() => {
-              if (!this.active)
-                return;
-              sink.onRestart?.();
-              this.spawnCycle(sink);
-            }, this.restartDelayMs);
-          } else {
-            this.active = false;
-            sink.onExit({ reason: "screen capture pipeline keeps exiting" });
-          }
-        };
-        adb2.on("close", () => onClose("adb"));
-        ffmpeg.on("close", () => onClose("ffmpeg"));
-      }
-      stop() {
-        this.active = false;
-        this.adb?.kill();
-        this.ffmpeg?.kill();
-      }
-    };
-  }
-});
-
-// packages/rn-dev-agent-core/dist/project-config.js
-import { existsSync as existsSync14, readFileSync as readFileSync15 } from "node:fs";
-import { join as join19 } from "node:path";
-function readAppId(projectRoot, platform) {
-  for (const filename of ["app.json", "app.config.json"]) {
-    const p = join19(projectRoot, filename);
-    if (!existsSync14(p))
-      continue;
-    try {
-      const raw = JSON.parse(readFileSync15(p, "utf-8"));
-      const expo = raw.expo ?? raw;
-      const iosBundleId = expo?.ios?.bundleIdentifier;
-      const androidPkg = expo?.android?.package;
-      if (platform === "android")
-        return androidPkg ?? iosBundleId ?? null;
-      return iosBundleId ?? androidPkg ?? null;
-    } catch {
-      continue;
-    }
-  }
-  return null;
-}
-function resolveBundleId(platform) {
-  const projectRoot = findProjectRoot();
-  if (!projectRoot)
-    return null;
-  return readAppId(projectRoot, platform);
-}
-function readExpoSlug() {
-  const projectRoot = findProjectRoot();
-  if (!projectRoot)
-    return null;
-  for (const filename of ["app.json", "app.config.json"]) {
-    const p = join19(projectRoot, filename);
-    if (!existsSync14(p))
-      continue;
-    try {
-      const raw = JSON.parse(readFileSync15(p, "utf-8"));
-      return raw.expo?.slug ?? null;
-    } catch {
-      continue;
-    }
-  }
-  return null;
-}
-function readRnAgentConfig(projectRoot) {
-  const root = projectRoot ?? findProjectRoot();
-  if (!root)
-    return null;
-  const p = join19(root, ".rn-agent", "config.json");
-  if (!existsSync14(p))
-    return null;
-  try {
-    return JSON.parse(readFileSync15(p, "utf-8"));
-  } catch (err) {
-    if (!warnedBadConfig) {
-      warnedBadConfig = true;
-      logger.warn("CONFIG", `.rn-agent/config.json is unreadable \u2014 ignoring it: ${err instanceof Error ? err.message : err}`);
-    }
-    return null;
-  }
-}
-function resolveAutoConnect(deps = {}) {
-  const envRaw = "env" in deps ? deps.env : process.env.RN_CDP_AUTOCONNECT;
-  if (envRaw === "0" || envRaw === "false")
-    return { enabled: false, source: "env" };
-  if (envRaw === "1" || envRaw === "true")
-    return { enabled: true, source: "env" };
-  const cfg = (deps.readConfig ?? readRnAgentConfig)();
-  if (typeof cfg?.cdp?.autoConnect === "boolean") {
-    return { enabled: cfg.cdp.autoConnect, source: "config" };
-  }
-  return { enabled: true, source: "default" };
-}
-function parsePort(raw) {
-  if (!raw)
-    return void 0;
-  const n = Number.parseInt(raw, 10);
-  return Number.isInteger(n) && n > 0 && n <= 65535 ? n : void 0;
-}
-function resolveObserveAutostart(deps = {}) {
-  const envRaw = "env" in deps ? deps.env : process.env.RN_AGENT_OBSERVE_AUTOSTART;
-  if (envRaw === "0" || envRaw === "false")
-    return { enabled: false, source: "env" };
-  if (envRaw === "1" || envRaw === "true")
-    return { enabled: true, source: "env" };
-  const cfg = (deps.readConfig ?? readRnAgentConfig)();
-  if (typeof cfg?.observe?.autoStart === "boolean") {
-    return { enabled: cfg.observe.autoStart, source: "config" };
-  }
-  return { enabled: true, source: "default" };
-}
-function resolveObservePort(deps = {}) {
-  const envRaw = "env" in deps ? deps.env : process.env.RN_AGENT_OBSERVE_PORT;
-  const envPort = parsePort(envRaw);
-  if (envPort !== void 0)
-    return { port: envPort, source: "env" };
-  const cfg = (deps.readConfig ?? readRnAgentConfig)();
-  const cfgPort = cfg?.observe?.port;
-  if (typeof cfgPort === "number" && Number.isInteger(cfgPort) && cfgPort > 0 && cfgPort <= 65535) {
-    return { port: cfgPort, source: "config" };
-  }
-  return { port: DEFAULT_OBSERVE_PORT, source: "default" };
-}
-function resolveMirrorConfig(deps = {}) {
-  const envRaw = "env" in deps ? deps.env : process.env.RN_AGENT_OBSERVE_MIRROR;
-  let cfg = null;
-  try {
-    cfg = (deps.readConfig ?? readRnAgentConfig)();
-  } catch {
-    cfg = null;
-  }
-  const rawFps = cfg?.observe?.mirror?.fps;
-  const fps = typeof rawFps === "number" && Number.isFinite(rawFps) ? Math.min(MIRROR_FPS_MAX, Math.max(MIRROR_FPS_MIN, Math.round(rawFps))) : DEFAULT_MIRROR_FPS;
-  const rawTimeout = cfg?.observe?.mirror?.firstFrameTimeoutMs;
-  const firstFrameTimeoutMs = typeof rawTimeout === "number" && Number.isFinite(rawTimeout) ? Math.min(MIRROR_FIRST_FRAME_TIMEOUT_MAX_MS, Math.max(MIRROR_FIRST_FRAME_TIMEOUT_MIN_MS, Math.round(rawTimeout))) : DEFAULT_IDB_FIRST_FRAME_TIMEOUT_MS;
-  if (envRaw === "0" || envRaw === "false")
-    return { enabled: false, fps, firstFrameTimeoutMs, source: "env" };
-  if (envRaw === "1" || envRaw === "true")
-    return { enabled: true, fps, firstFrameTimeoutMs, source: "env" };
-  const cfgEnabled = cfg?.observe?.mirror?.enabled;
-  if (typeof cfgEnabled === "boolean")
-    return { enabled: cfgEnabled, fps, firstFrameTimeoutMs, source: "config" };
-  return { enabled: true, fps, firstFrameTimeoutMs, source: "default" };
-}
-var warnedBadConfig, DEFAULT_OBSERVE_PORT, DEFAULT_MIRROR_FPS, MIRROR_FPS_MIN, MIRROR_FPS_MAX, MIRROR_FIRST_FRAME_TIMEOUT_MIN_MS, MIRROR_FIRST_FRAME_TIMEOUT_MAX_MS;
-var init_project_config = __esm({
-  "packages/rn-dev-agent-core/dist/project-config.js"() {
-    "use strict";
-    init_storage();
-    init_logger();
-    init_sources();
-    warnedBadConfig = false;
-    DEFAULT_OBSERVE_PORT = 7333;
-    DEFAULT_MIRROR_FPS = 20;
-    MIRROR_FPS_MIN = 5;
-    MIRROR_FPS_MAX = 30;
-    MIRROR_FIRST_FRAME_TIMEOUT_MIN_MS = 1e3;
-    MIRROR_FIRST_FRAME_TIMEOUT_MAX_MS = 12e4;
   }
 });
 

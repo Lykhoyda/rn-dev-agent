@@ -6,8 +6,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { canonicalAuthorityJson } from '../../../dist/session/authority-json.js';
+import { DEFAULT_METRO_READINESS_TIMEOUT_MS } from '../../../dist/project-config.js';
 import {
-  MANAGED_METRO_READINESS_TIMEOUT_MS,
   hasNodeLoaderOption,
   hasUnsupportedNodeOption,
   inspectManagedMetroLifecycle,
@@ -753,8 +753,10 @@ async function expiredManagedMetroReadiness(
   overrides: {
     probeListener: () => ReturnType<typeof probeManagedMetroListener>;
     listenerOwnedByLauncher?: (listenerPid: number, launcherPid: number) => boolean;
+    readinessTimeoutMs?: number;
   },
 ): Promise<{ message: string; postKillLog: string; kills: number; probesBeforeKill: number }> {
+  const budgetMs = overrides.readinessTimeoutMs ?? DEFAULT_METRO_READINESS_TIMEOUT_MS;
   t.mock.timers.enable({ apis: ['Date'] });
   const runtimeRoot = mkdtempSync(join(tmpdir(), 'rn-managed-metro-readiness-'));
   const logPath = join(runtimeRoot, 'metro.log');
@@ -778,7 +780,7 @@ async function expiredManagedMetroReadiness(
   // fake clock has consumed the budget the cleanup proof sees a free port (the
   // stop path refuses to signal on an `unknown` probe by design).
   let elapsedMs = 0;
-  const withinReadinessBudget = () => elapsedMs < MANAGED_METRO_READINESS_TIMEOUT_MS;
+  const withinReadinessBudget = () => elapsedMs < budgetMs;
   try {
     let failure: Error | undefined;
     try {
@@ -792,6 +794,7 @@ async function expiredManagedMetroReadiness(
           instanceId: 'metro-a',
           buildGeneration: 1,
           signerCapability: 'signer',
+          readinessTimeoutMs: overrides.readinessTimeoutMs,
         },
         {
           readText: () => JSON.stringify({ dependencies: { expo: '1' } }),
@@ -859,11 +862,11 @@ test('GH #992: an expired readiness deadline reports the pre-kill log tail, not 
     /^METRO_START_UNAVAILABLE: allocated Metro did not become authoritative/,
   );
   assert.match(outcome.message, /launcher alive at deadline/);
-  assert.equal(MANAGED_METRO_READINESS_TIMEOUT_MS, 90_000, 'the provisional budget (GH #992)');
+  assert.equal(DEFAULT_METRO_READINESS_TIMEOUT_MS, 90_000, 'the provisional default (GH #992)');
   assert.match(
     outcome.message,
     new RegExp(
-      `readiness deadline ${MANAGED_METRO_READINESS_TIMEOUT_MS} ms expired: listener absent \\d+ probes, probe unknown 0, unowned listener none`,
+      `readiness deadline ${DEFAULT_METRO_READINESS_TIMEOUT_MS} ms expired: listener absent \\d+ probes, probe unknown 0, unowned listener none`,
     ),
   );
   assert.match(outcome.message, /Starting Metro Bundler/);
@@ -906,6 +909,22 @@ test('GH #992: a listener the launcher does not own is named and never admitted'
   assert.match(outcome.message, /^METRO_START_UNAVAILABLE:/);
   assert.match(outcome.message, /unowned listener 999/);
   assert.match(outcome.message, /launcher alive at deadline/);
+  assert.doesNotMatch(outcome.message, /EPIPE/);
+});
+
+test('GH #992: a configured readiness budget bounds the wait and is named in the refusal', async (t) => {
+  const outcome = await expiredManagedMetroReadiness(t, {
+    probeListener: () => ({ status: 'absent' }),
+    readinessTimeoutMs: 5_000,
+  });
+
+  // The loop polls every 100 ms: a 5 s budget is ~50 probes, not the ~900 of
+  // the default — the configured value, not the constant, drove the deadline.
+  assert.ok(
+    outcome.probesBeforeKill >= 45 && outcome.probesBeforeKill <= 55,
+    String(outcome.probesBeforeKill),
+  );
+  assert.match(outcome.message, /readiness deadline 5000 ms expired: listener absent \d+ probes/);
   assert.doesNotMatch(outcome.message, /EPIPE/);
 });
 

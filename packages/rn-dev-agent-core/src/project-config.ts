@@ -99,6 +99,7 @@ export interface RnAgentConfig {
     port?: number;
     mirror?: { enabled?: boolean; fps?: number; firstFrameTimeoutMs?: number };
   };
+  metro?: { readinessTimeoutMs?: number };
 }
 
 let warnedBadConfig = false;
@@ -247,4 +248,45 @@ export function resolveMirrorConfig(
   if (typeof cfgEnabled === 'boolean')
     return { enabled: cfgEnabled, fps, firstFrameTimeoutMs, source: 'config' };
   return { enabled: true, fps, firstFrameTimeoutMs, source: 'default' };
+}
+
+// How long `startManagedMetro` waits for a launcher-owned Metro listener before
+// it tears the process group down (GH #992). A cold per-session cache on a
+// loaded host needs well over the former 20 s; the loop still returns the
+// instant the listener is proven and still exits early when the launcher dies,
+// so a larger budget only lengthens a genuinely broken start. The default is
+// provisional pending the cold-start measurement on the reporter's host.
+export const DEFAULT_METRO_READINESS_TIMEOUT_MS = 90_000;
+const METRO_READINESS_TIMEOUT_MIN_MS = 1_000;
+const METRO_READINESS_TIMEOUT_MAX_MS = 600_000;
+
+export interface MetroReadinessTimeoutResolution {
+  timeoutMs: number;
+  source: 'config' | 'default';
+}
+
+/**
+ * `.rn-agent/config.json` → `metro.readinessTimeoutMs`. A timeout only: it
+ * never gates or relaxes any authority proof. Unlike the observe knobs above, a
+ * malformed value is refused rather than silently replaced by the default — a
+ * quietly ignored timeout is exactly the wrongness GH #992 exists to remove.
+ */
+export function resolveMetroReadinessTimeout(
+  deps: { readConfig?: () => RnAgentConfig | null } = {},
+): MetroReadinessTimeoutResolution {
+  const cfg = (deps.readConfig ?? readRnAgentConfig)();
+  const raw = cfg?.metro?.readinessTimeoutMs;
+  if (raw === undefined)
+    return { timeoutMs: DEFAULT_METRO_READINESS_TIMEOUT_MS, source: 'default' };
+  if (
+    typeof raw !== 'number' ||
+    !Number.isInteger(raw) ||
+    raw < METRO_READINESS_TIMEOUT_MIN_MS ||
+    raw > METRO_READINESS_TIMEOUT_MAX_MS
+  ) {
+    throw new Error(
+      `METRO_READINESS_TIMEOUT_INVALID: .rn-agent/config.json metro.readinessTimeoutMs must be an integer between ${METRO_READINESS_TIMEOUT_MIN_MS} and ${METRO_READINESS_TIMEOUT_MAX_MS} milliseconds (got ${JSON.stringify(raw)}); fix or remove the key to use the ${DEFAULT_METRO_READINESS_TIMEOUT_MS} ms default`,
+    );
+  }
+  return { timeoutMs: raw, source: 'config' };
 }

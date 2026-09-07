@@ -7379,6 +7379,45 @@ var intrinsicWeakSetAdd = WeakSet.prototype.add;
 var intrinsicWeakSetDelete = WeakSet.prototype.delete;
 var intrinsicWeakSetHas = WeakSet.prototype.has;
 
+// packages/rn-dev-agent-core/dist/logger.js
+import { createWriteStream, mkdirSync, existsSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir, homedir } from "node:os";
+var configuredLevel = process.env.LOG_LEVEL ?? process.env.RN_DEV_AGENT_LOG_LEVEL ?? "warn";
+function resolveLogPath() {
+  if (process.argv.includes("--diagnostic-contract-probe"))
+    return null;
+  if (configuredLevel !== "debug" && configuredLevel !== "info")
+    return null;
+  const pluginData = process.env.CLAUDE_PLUGIN_DATA;
+  if (pluginData) {
+    try {
+      if (!existsSync(pluginData))
+        mkdirSync(pluginData, { recursive: true });
+      return join(pluginData, "cdp-bridge.log");
+    } catch {
+    }
+  }
+  const fallbackDir = join(homedir(), ".claude", "logs");
+  try {
+    if (!existsSync(fallbackDir))
+      mkdirSync(fallbackDir, { recursive: true });
+    return join(fallbackDir, "rn-dev-agent-cdp-bridge.log");
+  } catch {
+  }
+  return join(tmpdir(), "rn-dev-agent-cdp-bridge.log");
+}
+var logFilePath = resolveLogPath();
+
+// packages/rn-dev-agent-core/dist/observability/mirror/jpeg-stream.js
+var SOI = Buffer.from([255, 216]);
+var EOI = Buffer.from([255, 217]);
+
+// packages/rn-dev-agent-core/dist/observability/mirror/sources.js
+var IDB_INSTALL_COMMAND = "brew install python@3.13 && brew tap facebook/fb && brew trust facebook/fb && brew install idb-companion && pipx install --python python3.13 --force fb-idb";
+var SIMCTL_HINT = `install idb for smoother mirroring (${IDB_INSTALL_COMMAND})`;
+var IDB_HINT = `idb not found \u2014 ${IDB_INSTALL_COMMAND}`;
+
 // packages/rn-dev-agent-core/dist/session/managed-metro-enforcement.js
 function preflightDiagnosticCauses(value) {
   const codes = [
@@ -8652,31 +8691,31 @@ setInterval(() => {}, 1 << 30);
 `;
 
 // packages/rn-dev-agent-core/dist/session/package-integration.js
-import { basename, isAbsolute, join as join4, relative, resolve as resolve2, sep } from "node:path";
+import { basename, isAbsolute, join as join5, relative, resolve as resolve2, sep } from "node:path";
 
 // packages/rn-dev-agent-core/dist/session/bound-directory.js
 import { spawn } from "node:child_process";
 import { randomUUID as randomUUID2 } from "node:crypto";
-import { closeSync, constants, existsSync, fstatSync, lstatSync as lstatSync2, mkdtempSync, openSync, readFileSync as readFileSync2, realpathSync, renameSync as renameSync2, rmSync as rmSync2, writeFileSync as writeFileSync2 } from "node:fs";
-import { tmpdir } from "node:os";
-import { join as join3 } from "node:path";
+import { closeSync, constants, existsSync as existsSync2, fstatSync, lstatSync as lstatSync2, mkdtempSync, openSync, readFileSync as readFileSync2, realpathSync, renameSync as renameSync2, rmSync as rmSync2, writeFileSync as writeFileSync2 } from "node:fs";
+import { tmpdir as tmpdir2 } from "node:os";
+import { join as join4 } from "node:path";
 
 // packages/rn-dev-agent-core/dist/session/state-root.js
 import { randomBytes, randomUUID } from "node:crypto";
-import { chmodSync, linkSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { join as join2, resolve } from "node:path";
+import { chmodSync, linkSync, lstatSync, mkdirSync as mkdirSync2, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { join as join3, resolve } from "node:path";
 
 // packages/rn-dev-agent-core/dist/util/secure-state-file.js
-import { join, dirname } from "node:path";
-import { homedir } from "node:os";
+import { join as join2, dirname } from "node:path";
+import { homedir as homedir2 } from "node:os";
 function getStateDir() {
   if (process.env.XDG_STATE_HOME) {
-    return join(process.env.XDG_STATE_HOME, "rn-dev-agent");
+    return join2(process.env.XDG_STATE_HOME, "rn-dev-agent");
   }
   if (process.platform === "darwin") {
-    return join(homedir(), "Library", "Application Support", "rn-dev-agent");
+    return join2(homedir2(), "Library", "Application Support", "rn-dev-agent");
   }
-  return join(homedir(), ".rn-dev-agent");
+  return join2(homedir2(), ".rn-dev-agent");
 }
 
 // packages/rn-dev-agent-core/dist/session/state-root.js
@@ -8685,7 +8724,7 @@ function fail(code, detail) {
 }
 function ensurePrivateDirectory(path2) {
   try {
-    mkdirSync(path2, { recursive: true, mode: 448 });
+    mkdirSync2(path2, { recursive: true, mode: 448 });
     const link = lstatSync(path2);
     const stat = statSync(path2);
     if (link.isSymbolicLink() || !link.isDirectory() || typeof process.getuid === "function" && stat.uid !== process.getuid()) {
@@ -8701,14 +8740,14 @@ function ensurePrivateDirectory(path2) {
 }
 function authorityStateLayout(stateDir) {
   const resolvedStateDir = resolve(stateDir);
-  const root = join2(resolvedStateDir, "v2");
+  const root = join3(resolvedStateDir, "v2");
   return {
     root,
-    registry: join2(root, "registry.sqlite3"),
-    sessions: join2(root, "sessions"),
-    runners: join2(root, "runner"),
-    observe: join2(root, "observe"),
-    migrations: join2(root, "migrations")
+    registry: join3(root, "registry.sqlite3"),
+    sessions: join3(root, "sessions"),
+    runners: join3(root, "runner"),
+    observe: join3(root, "observe"),
+    migrations: join3(root, "migrations")
   };
 }
 function createAuthorityStateLayout(stateDir = getStateDir()) {
@@ -8722,8 +8761,8 @@ function createAuthorityStateLayout(stateDir = getStateDir()) {
   return layout;
 }
 function getBoundDirectoryJournalKey(layout = createAuthorityStateLayout()) {
-  const path2 = join2(layout.root, "bound-directory.key");
-  const temporary = join2(layout.root, `.bound-directory.${randomUUID()}.key`);
+  const path2 = join3(layout.root, "bound-directory.key");
+  const temporary = join3(layout.root, `.bound-directory.${randomUUID()}.key`);
   try {
     try {
       writeFileSync(temporary, randomBytes(32), { flag: "wx", mode: 384, flush: true });
@@ -9854,28 +9893,28 @@ function sameIdentity(left, right) {
 function waitForFile(path2, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (existsSync(path2))
+    if (existsSync2(path2))
       return true;
     Atomics.wait(WAIT_BUFFER, 0, 0, 5);
   }
-  return existsSync(path2);
+  return existsSync2(path2);
 }
 function stopWorker(worker, signal = "SIGTERM") {
-  const stoppedPath = join3(worker.controlPath, "stopped");
+  const stoppedPath = join4(worker.controlPath, "stopped");
   if (signal === "SIGTERM") {
     try {
-      writeFileSync2(join3(worker.controlPath, "stop"), "", { flag: "wx", mode: 384 });
+      writeFileSync2(join4(worker.controlPath, "stop"), "", { flag: "wx", mode: 384 });
     } catch {
     }
     if (waitForFile(stoppedPath, 1e3)) {
-      if (!existsSync(join3(worker.controlPath, "lock-retained"))) {
+      if (!existsSync2(join4(worker.controlPath, "lock-retained"))) {
         rmSync2(worker.controlPath, { force: true, recursive: true });
       }
       return;
     }
   }
   try {
-    writeFileSync2(join3(worker.controlPath, "terminate"), JSON.stringify({
+    writeFileSync2(join4(worker.controlPath, "terminate"), JSON.stringify({
       lifecycleCapability: worker.lifecycleCapability,
       signal: "SIGKILL"
     }), { flag: "wx", mode: 384 });
@@ -9884,7 +9923,7 @@ function stopWorker(worker, signal = "SIGTERM") {
   if (!waitForFile(stoppedPath, 1e4)) {
     throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: bound-directory worker exit was not confirmed");
   }
-  if (!existsSync(join3(worker.controlPath, "lock-retained"))) {
+  if (!existsSync2(join4(worker.controlPath, "lock-retained"))) {
     rmSync2(worker.controlPath, { force: true, recursive: true });
   }
 }
@@ -9906,7 +9945,7 @@ function bindWorker(controlPath, child, owner, childId, lifecycleCapability = ""
     }
     throw new Error(message);
   };
-  const readyPath = join3(controlPath, "ready");
+  const readyPath = join4(controlPath, "ready");
   if (!waitForFile(readyPath, WORKER_READY_TIMEOUT_MS)) {
     rejectWorker("SESSION_INTEGRATION_PATH_UNSAFE: bound-directory worker unavailable");
   }
@@ -9931,7 +9970,7 @@ function bindWorker(controlPath, child, owner, childId, lifecycleCapability = ""
   };
 }
 function startWorker(path2, identity, realPath) {
-  const controlPath = mkdtempSync(join3(tmpdir(), "rn-bound-directory-"));
+  const controlPath = mkdtempSync(join4(tmpdir2(), "rn-bound-directory-"));
   const lifecycleCapability = randomUUID2();
   const binding = Buffer.from(JSON.stringify({
     dev: identity.dev.toString(),
@@ -9961,7 +10000,7 @@ function startWorker(path2, identity, realPath) {
   return bindWorker(controlPath, child, void 0, void 0, lifecycleCapability);
 }
 function startSubdirectoryWorker(parent, name, expectedIdentity, expectedRealPath) {
-  const controlPath = mkdtempSync(join3(tmpdir(), "rn-bound-directory-"));
+  const controlPath = mkdtempSync(join4(tmpdir2(), "rn-bound-directory-"));
   const childId = randomUUID2();
   const lifecycleCapability = randomUUID2();
   let worker;
@@ -9973,7 +10012,7 @@ function startSubdirectoryWorker(parent, name, expectedIdentity, expectedRealPat
       controlPath,
       lifecycleCapability,
       name,
-      publicPath: join3(parent.path, name),
+      publicPath: join4(parent.path, name),
       create: false,
       mode: 448
     });
@@ -10037,9 +10076,9 @@ function rebindDescendants(directory) {
 function sendOperation(directory, request, timeoutMs) {
   const sequence = ++directory.worker.sequence;
   const prefix = String(sequence).padStart(8, "0");
-  const pendingPath = join3(directory.worker.controlPath, `${prefix}.pending`);
-  const requestPath = join3(directory.worker.controlPath, `${prefix}.request`);
-  const responsePath = join3(directory.worker.controlPath, `${prefix}.response`);
+  const pendingPath = join4(directory.worker.controlPath, `${prefix}.pending`);
+  const requestPath = join4(directory.worker.controlPath, `${prefix}.request`);
+  const responsePath = join4(directory.worker.controlPath, `${prefix}.response`);
   writeFileSync2(pendingPath, JSON.stringify(request), { flag: "wx", mode: 384 });
   renameSync2(pendingPath, requestPath);
   if (!waitForFile(responsePath, timeoutMs)) {
@@ -10298,7 +10337,7 @@ function closeBoundDirectories(directories, primaryError) {
   throw new AggregateError(errors, "bound-directory cleanup failed");
 }
 function openBoundSubdirectoryInternal(parent, name, options = {}) {
-  const controlPath = mkdtempSync(join3(tmpdir(), "rn-bound-directory-"));
+  const controlPath = mkdtempSync(join4(tmpdir2(), "rn-bound-directory-"));
   const childId = randomUUID2();
   const lifecycleCapability = randomUUID2();
   let worker;
@@ -10310,7 +10349,7 @@ function openBoundSubdirectoryInternal(parent, name, options = {}) {
       controlPath,
       lifecycleCapability,
       name,
-      publicPath: join3(parent.path, name),
+      publicPath: join4(parent.path, name),
       create: options.create ?? false,
       mode: options.mode ?? 448,
       optional: options.optional ?? false,
@@ -10334,7 +10373,7 @@ function openBoundSubdirectoryInternal(parent, name, options = {}) {
       },
       name,
       parent,
-      path: join3(parent.path, name),
+      path: join4(parent.path, name),
       pendingCleanups: /* @__PURE__ */ new Map(),
       realPath: result.directoryIdentity.realPath,
       worker,

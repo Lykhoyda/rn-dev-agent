@@ -2,13 +2,14 @@
 // preserved (no-install-receipt)` as a second defect next to the Metro startup
 // failure. It is not: the line is an advisory printed BEFORE Metro starts, on
 // the first build of every session (no receipt exists until `complete-build`
-// issues one after a successful platform build). This test pins that the
-// advisory is emitted as stderr guidance only and that the command's terminal
-// failure is the Metro startup refusal, never the missing receipt.
+// issues one after a successful platform build). These tests pin that the
+// advisory is emitted as stderr guidance only, that the command's terminal
+// failure is the Metro startup refusal, never the missing receipt, and that a
+// malformed `.rn-agent/config.json` readiness budget refuses before either.
 
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -23,6 +24,8 @@ import { readProcessBirth } from '../../../dist/session/process-birth.js';
 
 const cliPath = new URL('../../../dist/rn-session.js', import.meta.url).pathname;
 const supervisorBirthToken = readProcessBirth(process.pid)?.token ?? 'fixture';
+const ADVISORY =
+  /^rn-session ensure-metro: install receipt generation not preserved \(no-install-receipt\); pin_dev_client will refuse until the receipt and Metro generations agree — rebuild to reissue the install receipt$/m;
 
 async function freePort(): Promise<number> {
   const server = createServer();
@@ -36,8 +39,18 @@ async function freePort(): Promise<number> {
   return address.port;
 }
 
-test('GH #992: no-install-receipt is a pre-start advisory, not an independent failure', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'rn-session-cli-no-receipt-'));
+// A fresh session on the first managed build: device bound, port allocated, no
+// Metro binding and no install receipt yet. `package.json` is neither Expo nor
+// bare RN so Metro startup refuses deterministically without spawning anything,
+// standing in for the reporter's startup failure.
+async function withFirstBuildSession(
+  prefix: string,
+  run: (fixture: {
+    appRoot: string;
+    ensureMetro: () => ReturnType<typeof spawnSync<string>>;
+  }) => Promise<void> | void,
+): Promise<void> {
+  const root = mkdtempSync(join(tmpdir(), prefix));
   const appRoot = join(root, 'app');
   const stateHome = join(root, 'state');
   const previousStateHome = process.env.XDG_STATE_HOME;
@@ -45,8 +58,6 @@ test('GH #992: no-install-receipt is a pre-start advisory, not an independent fa
     execFileSync('git', ['init', '-q', appRoot]);
     execFileSync('git', ['-C', appRoot, 'config', 'user.email', 'test@example.invalid']);
     execFileSync('git', ['-C', appRoot, 'config', 'user.name', 'Test']);
-    // Neither Expo nor bare RN: Metro startup refuses deterministically without
-    // spawning anything, which stands in for the reporter's startup failure.
     writeFileSync(join(appRoot, 'package.json'), '{}\n');
     execFileSync('git', ['-C', appRoot, 'add', 'package.json']);
     execFileSync('git', ['-C', appRoot, '-c', 'commit.gpgsign=false', 'commit', '-qm', 'fixture']);
@@ -64,8 +75,6 @@ test('GH #992: no-install-receipt is a pre-start advisory, not an independent fa
       listenerStatus: () => 'absent',
     });
     const metroPort = await freePort();
-    // A fresh session: device bound, port allocated, no Metro and no install
-    // receipt yet — exactly the state of the first managed build.
     const session = registry.createSession({
       sessionId: 'session-first-build',
       sourceKey: source.sourceKey,
@@ -86,23 +95,33 @@ test('GH #992: no-install-receipt is a pre-start advisory, not an independent fa
       recoveryCapability: 'recovery',
     });
 
-    const result = spawnSync(process.execPath, [cliPath, 'ensure-metro'], {
-      cwd: appRoot,
-      env: {
-        ...process.env,
-        XDG_STATE_HOME: stateHome,
-        RN_DEV_AGENT_SESSION_ID: session.sessionId,
-      },
-      encoding: 'utf8',
+    await run({
+      appRoot,
+      ensureMetro: () =>
+        spawnSync(process.execPath, [cliPath, 'ensure-metro'], {
+          cwd: appRoot,
+          env: {
+            ...process.env,
+            XDG_STATE_HOME: stateHome,
+            RN_DEV_AGENT_SESSION_ID: session.sessionId,
+          },
+          encoding: 'utf8',
+        }),
     });
+  } finally {
+    if (previousStateHome === undefined) delete process.env.XDG_STATE_HOME;
+    else process.env.XDG_STATE_HOME = previousStateHome;
+    rmSync(root, { force: true, recursive: true });
+  }
+}
+
+test('GH #992: no-install-receipt is a pre-start advisory, not an independent failure', async () => {
+  await withFirstBuildSession('rn-session-cli-no-receipt-', ({ ensureMetro }) => {
+    const result = ensureMetro();
 
     assert.notEqual(result.status, 0);
     const lines = result.stderr.split('\n').filter(Boolean);
-    const advisoryIndex = lines.findIndex((line) =>
-      /^rn-session ensure-metro: install receipt generation not preserved \(no-install-receipt\); pin_dev_client will refuse until the receipt and Metro generations agree — rebuild to reissue the install receipt$/.test(
-        line,
-      ),
-    );
+    const advisoryIndex = lines.findIndex((line) => ADVISORY.test(line));
     assert.notEqual(advisoryIndex, -1, `advisory missing from stderr:\n${result.stderr}`);
     // The terminal failure is Metro's, printed after the advisory, and does
     // not name the receipt: the receipt is a consequence of the build never
@@ -117,9 +136,43 @@ test('GH #992: no-install-receipt is a pre-start advisory, not an independent fa
       'the receipt is mentioned once, as guidance',
     );
     assert.equal(result.stdout, '', 'no ensure-metro success record is written');
-  } finally {
-    if (previousStateHome === undefined) delete process.env.XDG_STATE_HOME;
-    else process.env.XDG_STATE_HOME = previousStateHome;
-    rmSync(root, { force: true, recursive: true });
-  }
+  });
+});
+
+test('GH #992: a malformed metro.readinessTimeoutMs refuses ensure-metro before any marker or advisory', async () => {
+  await withFirstBuildSession('rn-session-cli-bad-timeout-', ({ appRoot, ensureMetro }) => {
+    writeFileSync(
+      join(appRoot, '.rn-agent', 'config.json'),
+      '{ "metro": { "readinessTimeoutMs": "90s" } }\n',
+    );
+    const result = ensureMetro();
+
+    assert.notEqual(result.status, 0);
+    assert.match(
+      result.stderr,
+      /^METRO_READINESS_TIMEOUT_INVALID: \.rn-agent\/config\.json metro\.readinessTimeoutMs must be an integer between 1000 and 600000 milliseconds \(got "90s"\); fix or remove the key to use the 90000 ms default$/m,
+    );
+    assert.doesNotMatch(result.stderr, ADVISORY, 'refused before the receipt advisory');
+    assert.doesNotMatch(result.stderr, /METRO_START_UNAVAILABLE/, 'Metro was never started');
+    assert.equal(
+      existsSync(join(appRoot, '.rn-agent', 'integration', 'authority-marker.js')),
+      false,
+      'no authority marker is written for a refused configuration',
+    );
+  });
+});
+
+test('GH #992: a valid metro.readinessTimeoutMs is accepted and Metro startup proceeds', async () => {
+  await withFirstBuildSession('rn-session-cli-good-timeout-', ({ appRoot, ensureMetro }) => {
+    writeFileSync(
+      join(appRoot, '.rn-agent', 'config.json'),
+      '{ "metro": { "readinessTimeoutMs": 120000 } }\n',
+    );
+    const result = ensureMetro();
+
+    assert.notEqual(result.status, 0);
+    assert.doesNotMatch(result.stderr, /METRO_READINESS_TIMEOUT_INVALID/);
+    assert.match(result.stderr, ADVISORY);
+    assert.match(result.stderr, /^METRO_START_UNAVAILABLE:/m);
+  });
 });
