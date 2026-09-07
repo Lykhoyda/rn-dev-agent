@@ -3593,7 +3593,7 @@ async function failOnSessionCliError(result, label, timeoutMs) {
     ? 'SESSION_CLI_TIMEOUT: rn-session ' + label + ' did not return within ' + (bound / 1000) + 's'
     : 'SESSION_AUTHORITY_REQUIRED: rn-session ' + label + ' failed: ' + result.error.message);
 }
-function resolveEnsureMetroCliTimeoutMs() {
+async function resolveEnsureMetroCliTimeoutMs() {
   const resolved = spawnSync(process.execPath, [...sqliteFlag, manifest.sessionCli, 'resolve-metro-readiness'], {
     cwd: process.cwd(),
     env: authorityEnvironment,
@@ -3602,16 +3602,19 @@ function resolveEnsureMetroCliTimeoutMs() {
     killSignal: 'SIGKILL',
   });
   if (resolved.error) {
+    await drainBuildTerminationSignals();
     failBuild(2, resolved.error.code === 'ETIMEDOUT'
       ? 'SESSION_CLI_TIMEOUT: rn-session resolve-metro-readiness did not return within ' + (SESSION_CLI_TIMEOUT_MS / 1000) + 's'
       : 'SESSION_AUTHORITY_REQUIRED: rn-session resolve-metro-readiness failed: ' + resolved.error.message);
   }
   if (resolved.status !== 0) {
+    await drainBuildTerminationSignals();
     failBuild(2, String(resolved.stderr).trim() || 'METRO_READINESS_TIMEOUT_INVALID: could not resolve managed Metro readiness timeout');
   }
   let parsed = null;
   try { parsed = JSON.parse(String(resolved.stdout)); } catch {}
   if (!parsed || !Number.isInteger(parsed.ensureMetroCliTimeoutMs) || parsed.ensureMetroCliTimeoutMs < SESSION_CLI_TIMEOUT_MS || !Number.isInteger(parsed.readinessTimeoutMs) || parsed.ensureMetroCliTimeoutMs < parsed.readinessTimeoutMs) {
+    await drainBuildTerminationSignals();
     failBuild(2, 'METRO_READINESS_TIMEOUT_INVALID: resolver output is not a usable ensure-metro timeout');
   }
   return parsed.ensureMetroCliTimeoutMs;
@@ -3766,7 +3769,7 @@ function managedMetroProxyUrl(binding) {
     });
     await failOnSessionCliError(probe, 'prepare-build');
     if (probe.status !== 0 && String(probe.stderr).includes('live Metro binding')) {
-      const ensureMetroTimeoutMs = resolveEnsureMetroCliTimeoutMs();
+      const ensureMetroTimeoutMs = await resolveEnsureMetroCliTimeoutMs();
       const metro = spawnSync(process.execPath, [...sqliteFlag, manifest.sessionCli, 'ensure-metro'], {
         cwd: process.cwd(),
         env: authorityEnvironment,

@@ -33,6 +33,9 @@ import { metroListenerPid } from '../../dist/session/metro-binding.js';
 import { stopManagedMetro, type ManagedMetroBinding } from '../../dist/session/managed-metro.js';
 import { readProcessBirth } from '../../dist/session/process-birth.js';
 import { resolveSourceIdentity } from '../../dist/session/source-identity.js';
+import { resolveMetroReadinessTimeout } from '../../dist/project-config.js';
+
+const READINESS_TIMEOUT_MS = resolveMetroReadinessTimeout({ readConfig: () => null }).timeoutMs;
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
 const fixtureRoot = join(repositoryRoot, 'test-fixtures', 'managed-metro-installed-expo');
@@ -552,6 +555,7 @@ async function writeMarker(buildGeneration) {
       instanceId,
       buildGeneration: 1,
       signerCapability,
+      readinessTimeoutMs: ${READINESS_TIMEOUT_MS},
     });
     fs.writeFileSync(bindingPath, JSON.stringify(binding));
     return;

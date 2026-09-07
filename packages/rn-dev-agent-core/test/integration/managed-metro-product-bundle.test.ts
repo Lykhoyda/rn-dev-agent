@@ -30,6 +30,9 @@ import {
   restorePackageIntegrationFiles,
 } from '../../dist/session/package-integration.js';
 import { resolveSourceIdentity } from '../../dist/session/source-identity.js';
+import { resolveMetroReadinessTimeout } from '../../dist/project-config.js';
+
+const READINESS_TIMEOUT_MS = resolveMetroReadinessTimeout({ readConfig: () => null }).timeoutMs;
 
 // Metro is launched through the package bin, which pnpm and npm generate as a /bin/sh shim
 // that re-resolves `node` from PATH — process.execPath only selects the launcher. Pinning this
@@ -358,6 +361,7 @@ for (const transport of [
           instanceId,
           buildGeneration: 1,
           signerCapability,
+          readinessTimeoutMs: READINESS_TIMEOUT_MS,
         });
 
         const listenerExecutable = processExecutable(binding.pid);

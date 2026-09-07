@@ -33,6 +33,9 @@ import {
   restorePackageIntegrationFiles,
 } from '../../dist/session/package-integration.js';
 import { resolveSourceIdentity } from '../../dist/session/source-identity.js';
+import { resolveMetroReadinessTimeout } from '../../dist/project-config.js';
+
+const READINESS_TIMEOUT_MS = resolveMetroReadinessTimeout({ readConfig: () => null }).timeoutMs;
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
 const fixtureRoot = join(repositoryRoot, 'test-fixtures', 'managed-metro-expo55-dev-client');
@@ -178,6 +181,7 @@ test(
         instanceId,
         buildGeneration: 1,
         signerCapability,
+        readinessTimeoutMs: READINESS_TIMEOUT_MS,
       });
 
       const origin = `http://127.0.0.1:${port}`;

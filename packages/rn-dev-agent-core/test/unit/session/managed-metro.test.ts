@@ -6,7 +6,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { canonicalAuthorityJson } from '../../../dist/session/authority-json.js';
-import { DEFAULT_METRO_READINESS_TIMEOUT_MS } from '../../../dist/project-config.js';
+import {
+  DEFAULT_METRO_READINESS_TIMEOUT_MS,
+  resolveMetroReadinessTimeout,
+} from '../../../dist/project-config.js';
 import {
   hasNodeLoaderOption,
   hasUnsupportedNodeOption,
@@ -23,6 +26,8 @@ import {
   stopManagedMetroWithEvidence,
   verifyManagedMetroManagementProof,
 } from '../../../dist/session/managed-metro.js';
+
+const READINESS_TIMEOUT_MS = resolveMetroReadinessTimeout({ readConfig: () => null }).timeoutMs;
 
 const listenerExecutableDependencies = {
   exists: () => true,
@@ -347,6 +352,7 @@ test('managed Metro binds the actual listener rather than the launcher shim', as
       instanceId: 'metro-a',
       buildGeneration: 1,
       signerCapability: 'signer',
+      readinessTimeoutMs: READINESS_TIMEOUT_MS,
     },
     {
       readText: () => JSON.stringify({ dependencies: { expo: '1' } }),
@@ -588,6 +594,7 @@ test('managed Metro cannot claim managed sandbox when enforcement is unavailable
       instanceId: 'metro-a',
       buildGeneration: 1,
       signerCapability: 'signer',
+      readinessTimeoutMs: READINESS_TIMEOUT_MS,
     },
     {
       readText: () => JSON.stringify({ dependencies: { expo: '1' } }),
@@ -643,6 +650,7 @@ test('managed Metro proves a cross-platform listener belongs to the spawned laun
       instanceId: 'metro-a',
       buildGeneration: 1,
       signerCapability: 'signer',
+      readinessTimeoutMs: READINESS_TIMEOUT_MS,
     },
     {
       readText: () => JSON.stringify({ dependencies: { expo: '1' } }),
@@ -705,6 +713,7 @@ test('managed Metro stops polling when the launcher exits by signal', async () =
             instanceId: 'metro-a',
             buildGeneration: 1,
             signerCapability: 'signer',
+            readinessTimeoutMs: READINESS_TIMEOUT_MS,
           },
           {
             readText: () => JSON.stringify({ dependencies: { expo: '1' } }),
@@ -755,9 +764,10 @@ async function expiredManagedMetroReadiness(
     listenerOwnedByLauncher?: (listenerPid: number, launcherPid: number) => boolean;
     readinessTimeoutMs?: number;
     persistProbe?: boolean;
+    launcherExitCode?: number;
   },
 ): Promise<{ message: string; postKillLog: string; kills: number; probesBeforeKill: number }> {
-  const budgetMs = overrides.readinessTimeoutMs ?? DEFAULT_METRO_READINESS_TIMEOUT_MS;
+  const budgetMs = overrides.readinessTimeoutMs ?? READINESS_TIMEOUT_MS;
   t.mock.timers.enable({ apis: ['Date'] });
   const runtimeRoot = mkdtempSync(join(tmpdir(), 'rn-managed-metro-readiness-'));
   const logPath = join(runtimeRoot, 'metro.log');
@@ -795,7 +805,7 @@ async function expiredManagedMetroReadiness(
           instanceId: 'metro-a',
           buildGeneration: 1,
           signerCapability: 'signer',
-          readinessTimeoutMs: overrides.readinessTimeoutMs,
+          readinessTimeoutMs: budgetMs,
         },
         {
           readText: () => JSON.stringify({ dependencies: { expo: '1' } }),
@@ -832,6 +842,9 @@ async function expiredManagedMetroReadiness(
               writeFileSync(logPath, 'Starting Metro Bundler\nfile-map crawl in progress\n', {
                 flag: 'a',
               });
+              if (overrides.launcherExitCode !== undefined) {
+                child.exitCode = overrides.launcherExitCode;
+              }
             }
             elapsedMs += ms;
             t.mock.timers.tick(ms);
@@ -958,6 +971,21 @@ test('GH #992: a persistent unowned listener is named on METRO_START_CLEANUP_UNP
   assert.doesNotMatch(outcome.message, /EPIPE/);
 });
 
+test('GH #992: an early launcher exit never claims the readiness deadline expired', async (t) => {
+  const outcome = await expiredManagedMetroReadiness(t, {
+    probeListener: () => ({ status: 'listening', pid: 999 }),
+    listenerOwnedByLauncher: () => false,
+    persistProbe: true,
+    readinessTimeoutMs: 5_000,
+    launcherExitCode: 1,
+  });
+
+  assert.match(outcome.message, /^METRO_START_CLEANUP_UNPROVEN:/);
+  assert.match(outcome.message, /launcher exit 1/);
+  assert.doesNotMatch(outcome.message, /readiness deadline/);
+  assert.doesNotMatch(outcome.message, /launcher alive at deadline/);
+});
+
 test('managed Metro stops its owned process tree and proves the listener is gone', async () => {
   const binding = await startManagedMetro(
     {
@@ -969,6 +997,7 @@ test('managed Metro stops its owned process tree and proves the listener is gone
       instanceId: 'metro-a',
       buildGeneration: 1,
       signerCapability: 'signer',
+      readinessTimeoutMs: READINESS_TIMEOUT_MS,
     },
     {
       readText: () => JSON.stringify({ dependencies: { expo: '1' } }),
@@ -1031,6 +1060,7 @@ test('managed Metro lifecycle inspection fails closed for every lost authority s
       instanceId: 'metro-a',
       buildGeneration: 1,
       signerCapability: 'signer',
+      readinessTimeoutMs: READINESS_TIMEOUT_MS,
     },
     {
       readText: () => JSON.stringify({ dependencies: { expo: '1' } }),
@@ -1128,6 +1158,7 @@ test('managed Metro proof authenticates every cleanup authority field', async ()
       instanceId: 'metro-a',
       buildGeneration: 1,
       signerCapability: 'signer',
+      readinessTimeoutMs: READINESS_TIMEOUT_MS,
     },
     {
       readText: () => JSON.stringify({ dependencies: { expo: '1' } }),
@@ -1180,6 +1211,7 @@ test('managed Metro build-generation rotation preserves authenticated shutdown a
       instanceId: 'metro-a',
       buildGeneration: 1,
       signerCapability: 'signer',
+      readinessTimeoutMs: READINESS_TIMEOUT_MS,
     },
     {
       readText: () => JSON.stringify({ dependencies: { expo: '1' } }),
@@ -1240,6 +1272,7 @@ test('managed Metro accepts authenticated cleanup when processes and port are al
       instanceId: 'metro-a',
       buildGeneration: 1,
       signerCapability: 'signer',
+      readinessTimeoutMs: READINESS_TIMEOUT_MS,
     },
     {
       readText: () => JSON.stringify({ dependencies: { expo: '1' } }),
@@ -1289,6 +1322,7 @@ test('managed Metro refuses cleanup when process absence is unknown', async () =
       instanceId: 'metro-a',
       buildGeneration: 1,
       signerCapability: 'signer',
+      readinessTimeoutMs: READINESS_TIMEOUT_MS,
     },
     {
       readText: () => JSON.stringify({ dependencies: { expo: '1' } }),
@@ -1333,6 +1367,7 @@ test('managed Metro cleanup evidence retains live processes and sockets', async 
       instanceId: 'metro-a',
       buildGeneration: 1,
       signerCapability: 'signer',
+      readinessTimeoutMs: READINESS_TIMEOUT_MS,
     },
     {
       readText: () => JSON.stringify({ dependencies: { expo: '1' } }),
@@ -1445,6 +1480,7 @@ test('managed Metro stops an exact listener after transient post-signal uncertai
       instanceId: 'metro-a',
       buildGeneration: 1,
       signerCapability: 'signer',
+      readinessTimeoutMs: READINESS_TIMEOUT_MS,
     },
     {
       readText: () => JSON.stringify({ dependencies: { expo: '1' } }),
@@ -1526,6 +1562,7 @@ test('managed Metro startup failure stops the owned tree before returning', asyn
         instanceId: 'metro-a',
         buildGeneration: 1,
         signerCapability: 'signer',
+        readinessTimeoutMs: READINESS_TIMEOUT_MS,
       },
       {
         readText: () => JSON.stringify({ dependencies: { expo: '1' } }),
@@ -1584,6 +1621,7 @@ test('managed Metro surfaces a bounded sanitized pre-evidence launcher diagnosti
           instanceId: 'secret-metro-instance',
           buildGeneration: 1,
           signerCapability: 'secret-signer-capability',
+          readinessTimeoutMs: READINESS_TIMEOUT_MS,
         },
         {
           environment: {
@@ -1676,6 +1714,7 @@ test('managed Metro cleans the spawned group when launcher birth is unavailable'
         instanceId: 'metro-a',
         buildGeneration: 1,
         signerCapability: 'signer',
+        readinessTimeoutMs: READINESS_TIMEOUT_MS,
       },
       {
         readText: () => JSON.stringify({ dependencies: { expo: '1' } }),
@@ -1723,6 +1762,7 @@ test('managed Metro startup cleanup signals its group before listener birth is k
         instanceId: 'metro-a',
         buildGeneration: 1,
         signerCapability: 'signer',
+        readinessTimeoutMs: READINESS_TIMEOUT_MS,
       },
       {
         readText: () => JSON.stringify({ dependencies: { expo: '1' } }),
@@ -1780,6 +1820,7 @@ test('managed Metro startup cleanup rejects an unproven listener after launcher 
         instanceId: 'metro-a',
         buildGeneration: 1,
         signerCapability: 'signer',
+        readinessTimeoutMs: READINESS_TIMEOUT_MS,
       },
       {
         readText: () => JSON.stringify({ dependencies: { expo: '1' } }),

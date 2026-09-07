@@ -34,7 +34,6 @@ import {
   type ProcessBirthProbe,
 } from './process-birth.js';
 import { canonicalAuthorityJson } from './authority-json.js';
-import { DEFAULT_METRO_READINESS_TIMEOUT_MS } from '../project-config.js';
 import {
   dependencyRoots,
   prepareManagedMetroEnforcement,
@@ -2179,7 +2178,7 @@ export async function startManagedMetro(
     signerCapability: string;
     // Readiness budget resolved by the caller from `.rn-agent/config.json`
     // (`resolveMetroReadinessTimeout`); a timeout only, never an authority input.
-    readinessTimeoutMs?: number;
+    readinessTimeoutMs: number;
   },
   dependencies: ManagedMetroDependencies = {},
 ): Promise<ManagedMetroBinding> {
@@ -2468,7 +2467,7 @@ export async function startManagedMetro(
   const probeBirth = dependencies.probeBirth ?? probeProcessBirth;
   const wait =
     dependencies.wait ?? ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
-  const readinessTimeoutMs = input.readinessTimeoutMs ?? DEFAULT_METRO_READINESS_TIMEOUT_MS;
+  const readinessTimeoutMs = input.readinessTimeoutMs;
   const deadline = Date.now() + readinessTimeoutMs;
   let lastError: unknown = null;
   let listenerIdentity: ManagedMetroProcessIdentity | null = null;
@@ -2563,15 +2562,21 @@ export async function startManagedMetro(
     dependencies,
   );
   if (!cleanupProven) {
+    const launcherAliveAtDeadline = preKill.exitCode === null && preKill.signalCode == null;
     const childOutcome = managedMetroLauncherDetail({
-      launcherAliveAtDeadline: preKill.exitCode === null && preKill.signalCode == null,
+      launcherAliveAtDeadline,
       exitCode: preKill.exitCode,
       signalCode: preKill.signalCode,
     });
-    const readinessOutcome = sanitizeManagedMetroStartupDetail(
-      managedMetroReadinessDetail(readiness),
-      [input.appRoot, input.sourceRoot, input.runtimeRoot, input.sessionId, instanceId],
-    );
+    const readinessOutcome = launcherAliveAtDeadline
+      ? sanitizeManagedMetroStartupDetail(managedMetroReadinessDetail(readiness), [
+          input.appRoot,
+          input.sourceRoot,
+          input.runtimeRoot,
+          input.sessionId,
+          instanceId,
+        ])
+      : null;
     throw new Error(
       `METRO_START_CLEANUP_UNPROVEN: failed Metro startup left process or listener state ambiguous${
         childOutcome || readinessOutcome

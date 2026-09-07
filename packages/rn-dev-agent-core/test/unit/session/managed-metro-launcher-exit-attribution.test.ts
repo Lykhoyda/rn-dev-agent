@@ -21,6 +21,9 @@ import {
 } from '../../../dist/session/managed-metro.js';
 import { probeProcessBirth, readProcessBirth } from '../../../dist/session/process-birth.js';
 import { MAX_STRICT_PROOF_FILE_BYTES } from '../../../dist/session/strict-proof-limits.js';
+import { resolveMetroReadinessTimeout } from '../../../dist/project-config.js';
+
+const READINESS_TIMEOUT_MS = resolveMetroReadinessTimeout({ readConfig: () => null }).timeoutMs;
 
 const SESSION_ID = 'session-a';
 const SIGNER = 'signer';
@@ -71,6 +74,7 @@ async function boundManagedMetro(runtimeRoot: string) {
       instanceId: INSTANCE_ID,
       buildGeneration: 1,
       signerCapability: SIGNER,
+      readinessTimeoutMs: READINESS_TIMEOUT_MS,
     },
     {
       readText: () => JSON.stringify({ dependencies: { expo: '1' } }),
@@ -461,6 +465,7 @@ setInterval(() => {}, 1 << 30);
           instanceId: INSTANCE_ID,
           buildGeneration: 1,
           signerCapability: SIGNER,
+          readinessTimeoutMs: READINESS_TIMEOUT_MS,
         },
         {
           prepareEnforcement: () => ({

@@ -20,6 +20,9 @@ import { dirname, join } from 'node:path';
 import { test } from 'node:test';
 import { applyPackageIntegration } from '../../dist/session/package-integration.js';
 import { stopManagedMetro } from '../../dist/session/managed-metro.js';
+import { resolveMetroReadinessTimeout } from '../../dist/project-config.js';
+
+const READINESS_TIMEOUT_MS = resolveMetroReadinessTimeout({ readConfig: () => null }).timeoutMs;
 
 const requireFromTest = createRequire(import.meta.url);
 const managedMetroModuleUrl = new URL('../../dist/session/managed-metro.js', import.meta.url).href;
@@ -275,6 +278,7 @@ const metroModule = ${JSON.stringify(managedMetroModuleUrl)};
       instanceId: 'fixture-metro',
       buildGeneration: 1,
       signerCapability: ${JSON.stringify(signerCapability)}
+      readinessTimeoutMs: READINESS_TIMEOUT_MS,
     });
     fs.writeFileSync(bindingPath, JSON.stringify(binding));
     return;
