@@ -82,6 +82,7 @@ function fixtureInput(platform: NodeJS.Platform = 'darwin') {
 const verifiedPlatformBinary = {
   exists: () => true,
   canonicalize: (path: string) => path,
+  resolveFrom: (root: string, specifier: string) => join(root, 'node_modules', specifier),
   stat: () => ({ isFile: () => true, uid: 0, mode: 0o100755 }),
   readBytes: () => Buffer.from('sandbox-exec'),
   run: (_command: string, args: readonly string[]) => {

@@ -14,14 +14,17 @@ import {
   symlinkSync,
   writeSync,
 } from 'node:fs';
-import { basename, dirname, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
+import { createRequire } from 'node:module';
 import { constants as osConstants } from 'node:os';
 import { canonicalAuthorityJson } from './authority-json.js';
 
 const DARWIN_SANDBOX_EXECUTABLE = '/usr/bin/sandbox-exec';
 const DARWIN_CODESIGN_EXECUTABLE = '/usr/bin/codesign';
 const DARWIN_DEVELOPER_DIR_EXECUTABLE = '/usr/bin/xcode-select';
-const EXPO_UPDATES_CLI_RELATIVE_PATH = 'node_modules/expo-updates/bin/cli.js';
+const DARWIN_UTILITY_PROBE_ENVIRONMENT = { PATH: '/usr/bin:/bin' };
+const DARWIN_GIT_SIGNING_IDENTIFIER = 'com.apple.git';
+const EXPO_UPDATES_CLI_SPECIFIER = 'expo-updates/bin/cli.js';
 const DARWIN_PLATFORM_SIGNING_LEAF_AUTHORITIES = [
   'Authority=Software Signing',
   'Authority=macOS Software Signing',
@@ -35,6 +38,12 @@ interface CommandResult {
   timedOut?: boolean;
 }
 
+type RunCommand = (
+  command: string,
+  args: readonly string[],
+  environment?: NodeJS.ProcessEnv,
+) => CommandResult;
+
 interface FileMetadata {
   isFile(): boolean;
   uid: number;
@@ -47,17 +56,23 @@ interface ManagedMetroEnforcementDependencies {
   stat?: (path: string) => FileMetadata;
   lstat?: (path: string) => { isSymbolicLink(): boolean };
   readBytes?: (path: string) => Buffer;
-  run?: (command: string, args: readonly string[]) => CommandResult;
+  run?: RunCommand;
+  resolveFrom?: (root: string, specifier: string) => string;
   runtimeCache?: () => string | null;
   runtimeFiles?: (nodeExecutable: string) => readonly string[];
   runtimeVersion?: (nodeExecutable: string) => string;
 }
 
-export interface ManagedMetroManifestUtility {
-  expoUpdatesCli: string | null;
-  git: string | null;
-  gitConfigRoot: string | null;
-}
+export type ManagedMetroManifestUtility =
+  | { status: 'absent' }
+  | { status: 'unowned' }
+  | {
+      status: 'admitted';
+      expoUpdatesCli: string;
+      git: string | null;
+      gitConfigRoot: string | null;
+      gitRepositoryRoots: readonly string[];
+    };
 
 export interface ManagedMetroEnforcementInput {
   platform: NodeJS.Platform;
@@ -159,6 +174,7 @@ export type ManagedMetroEnforcement =
         | 'host-enforcement-unavailable'
         | 'sandbox-executable-unverified'
         | 'node-runtime-unverified'
+        | 'manifest-utility-unowned'
         | 'sandbox-preflight-failed';
     };
 
@@ -166,11 +182,16 @@ function sha256(value: string | Buffer): string {
   return createHash('sha256').update(value).digest('hex');
 }
 
-function defaultRun(command: string, args: readonly string[]): CommandResult {
+function defaultRun(
+  command: string,
+  args: readonly string[],
+  environment?: NodeJS.ProcessEnv,
+): CommandResult {
   const result = spawnSync(command, [...args], {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
     timeout: 25_000,
+    ...(environment ? { env: environment } : {}),
   });
   return {
     status: result.status,
@@ -192,6 +213,29 @@ function field(details: string, name: string): string | null {
   );
 }
 
+function appleSignedExecutable(
+  path: string,
+  identifier: string,
+  run: RunCommand,
+): { cdHash: string; details: string } | null {
+  const verification = run(DARWIN_CODESIGN_EXECUTABLE, ['--verify', '--strict', path]);
+  if (verification.status !== 0) return null;
+  const details = run(DARWIN_CODESIGN_EXECUTABLE, ['-dv', '--verbose=4', path]);
+  const authorities = details.stderr.split('\n').filter((line) => line.startsWith('Authority='));
+  const cdHash = field(details.stderr, 'CDHash');
+  if (
+    details.status !== 0 ||
+    field(details.stderr, 'Identifier') !== identifier ||
+    !/^[a-f0-9]{40,64}$/.test(cdHash ?? '') ||
+    !DARWIN_PLATFORM_SIGNING_LEAF_AUTHORITIES.some((leaf) => authorities.includes(leaf)) ||
+    !authorities.includes('Authority=Apple Code Signing Certification Authority') ||
+    !authorities.includes('Authority=Apple Root CA')
+  ) {
+    return null;
+  }
+  return { cdHash: cdHash!, details: details.stderr };
+}
+
 function verifiedSandboxExecutable(dependencies: ManagedMetroEnforcementDependencies): {
   path: '/usr/bin/sandbox-exec';
   sha256: string;
@@ -207,44 +251,24 @@ function verifiedSandboxExecutable(dependencies: ManagedMetroEnforcementDependen
     if (canonicalize(DARWIN_SANDBOX_EXECUTABLE) !== DARWIN_SANDBOX_EXECUTABLE) return null;
     const metadata = stat(DARWIN_SANDBOX_EXECUTABLE);
     if (!metadata.isFile() || metadata.uid !== 0 || (metadata.mode & 0o022) !== 0) return null;
-    const verification = run(DARWIN_CODESIGN_EXECUTABLE, [
-      '--verify',
-      '--strict',
+    const signature = appleSignedExecutable(
       DARWIN_SANDBOX_EXECUTABLE,
-    ]);
-    if (verification.status !== 0) return null;
-    const details = run(DARWIN_CODESIGN_EXECUTABLE, [
-      '-dv',
-      '--verbose=4',
-      DARWIN_SANDBOX_EXECUTABLE,
-    ]);
-    const authorities = details.stderr.split('\n').filter((line) => line.startsWith('Authority='));
-    const cdHash = field(details.stderr, 'CDHash');
-    if (
-      details.status !== 0 ||
-      field(details.stderr, 'Identifier') !== 'com.apple.sandbox-exec' ||
-      !/^\d+$/.test(field(details.stderr, 'Platform identifier') ?? '') ||
-      !/^[a-f0-9]{40,64}$/.test(cdHash ?? '') ||
-      !DARWIN_PLATFORM_SIGNING_LEAF_AUTHORITIES.some((leaf) => authorities.includes(leaf)) ||
-      !authorities.includes('Authority=Apple Code Signing Certification Authority') ||
-      !authorities.includes('Authority=Apple Root CA')
-    ) {
-      return null;
-    }
+      'com.apple.sandbox-exec',
+      run,
+    );
+    if (!signature) return null;
+    if (!/^\d+$/.test(field(signature.details, 'Platform identifier') ?? '')) return null;
     return {
       path: DARWIN_SANDBOX_EXECUTABLE,
       sha256: sha256(readBytes(DARWIN_SANDBOX_EXECUTABLE)),
-      cdHash: cdHash!,
+      cdHash: signature.cdHash,
     };
   } catch {
     return null;
   }
 }
 
-function signingIdentity(
-  path: string,
-  run: (command: string, args: readonly string[]) => CommandResult,
-): ManagedMetroSigningIdentity | null {
+function signingIdentity(path: string, run: RunCommand): ManagedMetroSigningIdentity | null {
   const verification = run(DARWIN_CODESIGN_EXECUTABLE, ['--verify', '--strict', path]);
   if (verification.status !== 0) return null;
   const details = run(DARWIN_CODESIGN_EXECUTABLE, ['-dv', '--verbose=4', path]);
@@ -264,19 +288,13 @@ function signingIdentity(
   };
 }
 
-function defaultRuntimeVersion(
-  nodeExecutable: string,
-  run: (command: string, args: readonly string[]) => CommandResult,
-): string {
+function defaultRuntimeVersion(nodeExecutable: string, run: RunCommand): string {
   const result = run(nodeExecutable, ['--version']);
   if (result.status !== 0) throw new Error('node version unavailable');
   return result.stdout.trim();
 }
 
-function defaultRuntimeFiles(
-  nodeExecutable: string,
-  run: (command: string, args: readonly string[]) => CommandResult,
-): string[] {
+function defaultRuntimeFiles(nodeExecutable: string, run: RunCommand): string[] {
   const result = run('/usr/bin/otool', ['-L', nodeExecutable]);
   if (result.status !== 0) throw new Error('node runtime dependencies unavailable');
   return result.stdout
@@ -427,18 +445,48 @@ function ownedCssInteropCacheRoot(
   }
 }
 
-function ownedExpoUpdatesCli(
+export function dependencyRoots(
+  appRoot: string,
+  sourceRoot: string,
+  exists: (path: string) => boolean,
+): string[] {
+  const roots = new Set<string>();
+  for (const start of [resolve(appRoot), resolve(sourceRoot)]) {
+    let current = start;
+    while (true) {
+      const candidate = join(current, 'node_modules');
+      if (exists(candidate)) roots.add(candidate);
+      const parent = dirname(current);
+      if (parent === current) break;
+      current = parent;
+    }
+  }
+  for (const candidate of [
+    join(sourceRoot, '.yarn', 'cache'),
+    join(sourceRoot, '.yarn', 'unplugged'),
+    join(sourceRoot, '.pnpm'),
+  ]) {
+    if (exists(candidate)) roots.add(resolve(candidate));
+  }
+  return [...roots].sort();
+}
+
+function contained(path: string, roots: readonly string[]): boolean {
+  return roots.some((root) => path === root || path.startsWith(`${root}/`));
+}
+
+function defaultResolveFrom(root: string, specifier: string): string {
+  return createRequire(resolve(root, 'package.json')).resolve(specifier);
+}
+
+function resolvedExpoUpdatesCli(
   roots: readonly string[],
+  resolveFrom: (root: string, specifier: string) => string,
   canonicalize: (path: string) => string,
-  stat: (path: string) => FileMetadata,
 ): string | null {
   for (const root of roots) {
     try {
-      const canonical = canonicalize(resolve(root, EXPO_UPDATES_CLI_RELATIVE_PATH));
-      if (!stat(canonical).isFile()) continue;
-      if (roots.some((owner) => canonical === owner || canonical.startsWith(`${owner}/`))) {
-        return canonical;
-      }
+      return canonicalPath(resolveFrom(root, EXPO_UPDATES_CLI_SPECIFIER), canonicalize);
     } catch {}
   }
   return null;
@@ -451,42 +499,82 @@ function verifiedDeveloperGit(
   const canonicalize = dependencies.canonicalize ?? realpathSync;
   const stat = dependencies.stat ?? statSync;
   try {
-    const developerDir = run(DARWIN_DEVELOPER_DIR_EXECUTABLE, ['-p']);
+    const developerDir = run(
+      DARWIN_DEVELOPER_DIR_EXECUTABLE,
+      ['-p'],
+      DARWIN_UTILITY_PROBE_ENVIRONMENT,
+    );
     const root = developerDir.stdout.trim();
     if (developerDir.status !== 0 || !root.startsWith('/')) return null;
-    const git = canonicalize(resolve(root, 'usr/bin/git'));
+    const git = resolve(root, 'usr/bin/git');
+    if (canonicalize(git) !== git) return null;
     const metadata = stat(git);
     if (!metadata.isFile() || metadata.uid !== 0 || (metadata.mode & 0o022) !== 0) return null;
-    return { git, configRoot: canonicalize(resolve(root, 'usr/share/git-core')) };
+    if (!appleSignedExecutable(git, DARWIN_GIT_SIGNING_IDENTIFIER, run)) return null;
+    const configRoot = resolve(root, 'usr/share/git-core');
+    if (canonicalize(configRoot) !== configRoot) return null;
+    return { git, configRoot };
   } catch {
     return null;
   }
+}
+
+function gitRepositoryRoots(
+  sourceRoot: string,
+  canonicalize: (path: string) => string,
+  stat: (path: string) => FileMetadata,
+  readBytes: (path: string) => Buffer,
+): string[] {
+  const roots: string[] = [];
+  const pointer = resolve(sourceRoot, '.git');
+  try {
+    if (!stat(pointer).isFile()) return roots;
+    const gitDirEntry = /^gitdir:[ \t]*(.+)$/m.exec(readBytes(pointer).toString('utf8'))?.[1];
+    if (!gitDirEntry) return roots;
+    const gitDir = canonicalize(resolve(sourceRoot, gitDirEntry.trim()));
+    roots.push(gitDir);
+    const commonEntry = readBytes(resolve(gitDir, 'commondir')).toString('utf8').trim();
+    if (commonEntry) roots.push(canonicalize(resolve(gitDir, commonEntry)));
+  } catch {}
+  return roots.filter((root) => !contained(root, [sourceRoot]));
 }
 
 export function resolveManagedMetroManifestUtility(
   input: { platform: NodeJS.Platform; appRoot: string; sourceRoot: string },
   dependencies: ManagedMetroEnforcementDependencies = {},
 ): ManagedMetroManifestUtility {
-  const absent: ManagedMetroManifestUtility = {
-    expoUpdatesCli: null,
-    git: null,
-    gitConfigRoot: null,
-  };
-  if (input.platform !== 'darwin') return absent;
+  if (input.platform !== 'darwin') return { status: 'absent' };
   const canonicalize = dependencies.canonicalize ?? realpathSync;
-  const roots = [
-    ...new Set([
-      canonicalPath(input.appRoot, canonicalize),
-      canonicalPath(input.sourceRoot, canonicalize),
-    ]),
+  const appRoot = canonicalPath(input.appRoot, canonicalize);
+  const sourceRoot = canonicalPath(input.sourceRoot, canonicalize);
+  const projectRoots = [...new Set([appRoot, sourceRoot])];
+  const expoUpdatesCli = resolvedExpoUpdatesCli(
+    projectRoots,
+    dependencies.resolveFrom ?? defaultResolveFrom,
+    canonicalize,
+  );
+  if (!expoUpdatesCli) return { status: 'absent' };
+  const ownerRoots = [
+    ...projectRoots,
+    ...dependencyRoots(appRoot, sourceRoot, dependencies.exists ?? existsSync).map((root) =>
+      canonicalPath(root, canonicalize),
+    ),
   ];
-  const expoUpdatesCli = ownedExpoUpdatesCli(roots, canonicalize, dependencies.stat ?? statSync);
-  if (!expoUpdatesCli) return absent;
+  if (!contained(expoUpdatesCli, ownerRoots)) return { status: 'unowned' };
   const developerGit = verifiedDeveloperGit(dependencies);
   return {
+    status: 'admitted',
     expoUpdatesCli,
     git: developerGit?.git ?? null,
     gitConfigRoot: developerGit?.configRoot ?? null,
+    gitRepositoryRoots: developerGit
+      ? gitRepositoryRoots(
+          sourceRoot,
+          canonicalize,
+          dependencies.stat ?? statSync,
+          dependencies.readBytes ?? readFileSync,
+        )
+      : [],
   };
 }
 
@@ -587,9 +675,22 @@ export function prepareManagedMetroEnforcement(
     { platform: input.platform, appRoot, sourceRoot },
     dependencies,
   );
-  const manifestUtilityExecutables = [manifestUtility.expoUpdatesCli, manifestUtility.git].filter(
-    (path): path is string => path !== null,
-  );
+  if (manifestUtility.status === 'unowned') {
+    return { status: 'unsupported', reason: 'manifest-utility-unowned' };
+  }
+  const manifestUtilityExecutables =
+    manifestUtility.status === 'admitted'
+      ? [manifestUtility.expoUpdatesCli, manifestUtility.git].filter(
+          (path): path is string => path !== null,
+        )
+      : [];
+  const manifestUtilityReadRoots =
+    manifestUtility.status === 'admitted'
+      ? [
+          ...(manifestUtility.gitConfigRoot ? [manifestUtility.gitConfigRoot] : []),
+          ...manifestUtility.gitRepositoryRoots,
+        ]
+      : [];
   const readRoots = [
     '/dev/fd',
     sourceRoot,
@@ -601,7 +702,7 @@ export function prepareManagedMetroEnforcement(
     ...commandChainInputs,
     ...runtimeInputs,
     ...manifestUtilityExecutables,
-    ...(manifestUtility.gitConfigRoot ? [manifestUtility.gitConfigRoot] : []),
+    ...manifestUtilityReadRoots,
   ];
   const executablePaths = [
     nodeExecutable,
@@ -992,7 +1093,7 @@ export interface ManagedMetroPreflightObservation {
 interface ManagedMetroPreflightDependencies {
   writeCanary?: (path: string, contents: string) => void;
   removeCanary?: (path: string) => void;
-  run?: (command: string, args: readonly string[]) => CommandResult;
+  run?: RunCommand;
   environment?: NodeJS.ProcessEnv;
   observe?: (observation: ManagedMetroPreflightObservation) => void;
 }

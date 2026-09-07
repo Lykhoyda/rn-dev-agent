@@ -11,6 +11,7 @@ import {
   readSync,
   realpathSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
@@ -34,6 +35,7 @@ import {
 } from './process-birth.js';
 import { canonicalAuthorityJson } from './authority-json.js';
 import {
+  dependencyRoots,
   prepareManagedMetroEnforcement,
   resolveManagedMetroManifestUtility,
   runManagedMetroEnforcementPreflight,
@@ -1793,32 +1795,6 @@ function managedSandboxManagementProofV1(
     .digest('hex');
 }
 
-function dependencyRoots(
-  appRoot: string,
-  sourceRoot: string,
-  exists: (path: string) => boolean,
-): string[] {
-  const roots = new Set<string>();
-  for (const start of [resolve(appRoot), resolve(sourceRoot)]) {
-    let current = start;
-    while (true) {
-      const candidate = join(current, 'node_modules');
-      if (exists(candidate)) roots.add(candidate);
-      const parent = dirname(current);
-      if (parent === current) break;
-      current = parent;
-    }
-  }
-  for (const candidate of [
-    join(sourceRoot, '.yarn', 'cache'),
-    join(sourceRoot, '.yarn', 'unplugged'),
-    join(sourceRoot, '.pnpm'),
-  ]) {
-    if (exists(candidate)) roots.add(resolve(candidate));
-  }
-  return [...roots].sort();
-}
-
 function cssInteropCacheRoot(appRoot: string): string | null {
   try {
     const configRequire = createRequire(join(appRoot, 'metro.config.js'));
@@ -2208,15 +2184,26 @@ export async function startManagedMetro(
   const metroHome = join(input.runtimeRoot, 'metro-home');
   const metroTemporaryRoot = join(input.runtimeRoot, 'metro-tmp');
   const metroCacheRoot = join(input.runtimeRoot, 'metro-cache');
+  const metroBinRoot = join(input.runtimeRoot, 'metro-bin');
   for (const path of [
     metroHome,
     metroTemporaryRoot,
     metroCacheRoot,
+    metroBinRoot,
     join(input.appRoot, '.expo'),
     nativeAddonAcknowledgmentRoot,
   ]) {
     if (!exists(path)) mkdirSync(path, { recursive: true, mode: 0o700 });
   }
+  const manifestUtility = resolveManagedMetroManifestUtility({
+    platform: process.platform,
+    appRoot: input.appRoot,
+    sourceRoot: input.sourceRoot,
+  });
+  const manifestUtilityGit = manifestUtility.status === 'admitted' ? manifestUtility.git : null;
+  const gitShimPath = join(metroBinRoot, 'git');
+  rmSync(gitShimPath, { force: true, recursive: true });
+  if (manifestUtilityGit) symlinkSync(manifestUtilityGit, gitShimPath);
   const metroEnvironment = managedMetroChildEnvironment({
     ...(dependencies.environment ?? process.env),
     HOME: metroHome,
@@ -2228,17 +2215,11 @@ export async function startManagedMetro(
     EXPO_UNSTABLE_HEADLESS: '1',
     RCT_METRO_PORT: String(input.port),
   });
-  const manifestUtility = resolveManagedMetroManifestUtility({
-    platform: process.platform,
-    appRoot: input.appRoot,
-    sourceRoot: input.sourceRoot,
-  });
   // NOTE: expo-updates resolves `git` through PATH, and the /usr/bin/git xcrun shim cannot run
-  // under the sandbox profile, so the admitted git binary has to win the lookup.
-  const pathPrefixes = [
-    launchCommand.binPath,
-    manifestUtility.git ? dirname(manifestUtility.git) : null,
-  ].filter((entry): entry is string => Boolean(entry));
+  // under the sandbox profile, so a shim holding only the admitted git wins the lookup.
+  const pathPrefixes = [launchCommand.binPath, manifestUtilityGit ? metroBinRoot : null].filter(
+    (entry): entry is string => Boolean(entry),
+  );
   const childEnvironment = {
     ...metroEnvironment,
     ...(pathPrefixes.length > 0
