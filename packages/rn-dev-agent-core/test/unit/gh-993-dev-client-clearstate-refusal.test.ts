@@ -233,8 +233,11 @@ test('GH#993: a prose comment mentioning clearState: true is not a clearState fl
 test('GH#993: the bare `clearState: <appId>` spelling is refused, not just clearState: true', async (t) => {
   // Maestro's documented standalone spelling wipes the same dev-client state as
   // launchApp{clearState: true}; the refusal must not turn on the literal `true`.
-  const yaml = fixtureYaml({ id: 'user-login', intent: 'warm login', selectors: ['login-submit'] })
-    .replace('- launchApp\n', `- launchApp:\n    stopApp: false\n- clearState: ${APP_ID}\n`);
+  const yaml = fixtureYaml({
+    id: 'user-login',
+    intent: 'warm login',
+    selectors: ['login-submit'],
+  }).replace('- launchApp\n', `- launchApp:\n    stopApp: false\n- clearState: ${APP_ID}\n`);
   const { trace, runAction, project } = harness(t, EXPO_INSTALL, { yaml });
   const envelope = parse(
     await runAction({ actionId: 'user-login', projectRoot: project.root, autoRepair: false }),
@@ -269,8 +272,10 @@ test('GH#993: a selector whose testID is literally clearState is not a clearStat
 });
 
 test('GH#993: the bare clearState command is still refused', async (t) => {
-  const yaml = clearStateLoginYaml()
-    .replace('- launchApp:\n    clearState: true\n    stopApp: true', '- launchApp\n- clearState');
+  const yaml = clearStateLoginYaml().replace(
+    '- launchApp:\n    clearState: true\n    stopApp: true',
+    '- launchApp\n- clearState',
+  );
   const { trace, runAction, project } = harness(t, EXPO_INSTALL, { yaml });
   const envelope = parse(
     await runAction({ actionId: 'user-login', projectRoot: project.root, autoRepair: false }),
