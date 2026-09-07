@@ -573,19 +573,15 @@ export function resolveManagedMetroManifestUtility(
   const canonicalize = dependencies.canonicalize ?? realpathSync;
   const appRoot = canonicalPath(input.appRoot, canonicalize);
   const sourceRoot = canonicalPath(input.sourceRoot, canonicalize);
-  const projectRoots = [...new Set([appRoot, sourceRoot])];
   const expoUpdatesCli = resolvedExpoUpdatesCli(
-    projectRoots,
+    [appRoot],
     dependencies.resolveFrom ?? defaultResolveFrom,
     canonicalize,
   );
   if (!expoUpdatesCli) return unadmittedManifestUtility('expo-updates-cli-unresolved');
-  const ownerRoots = [
-    ...projectRoots,
-    ...dependencyRoots(appRoot, sourceRoot, dependencies.exists ?? existsSync).map((root) =>
-      canonicalPath(root, canonicalize),
-    ),
-  ];
+  const ownerRoots = dependencyRoots(appRoot, sourceRoot, dependencies.exists ?? existsSync).map(
+    (root) => canonicalPath(root, canonicalize),
+  );
   if (!contained(expoUpdatesCli, ownerRoots)) {
     return unadmittedManifestUtility('expo-updates-cli-unowned');
   }

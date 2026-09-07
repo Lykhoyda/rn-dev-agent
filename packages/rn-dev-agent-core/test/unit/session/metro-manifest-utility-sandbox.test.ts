@@ -236,7 +236,7 @@ for (const layout of ['plain', 'linked'] as const) {
           JSON.stringify(utility.gitRepositoryRoots),
         );
 
-        const plan = enforcementPlan(harness);
+        const plan = enforcementPlan(harness, [harness.metroBinRoot]);
         if (!plan) return;
         const result = runManifestLane(harness, plan, utility.git);
         assert.equal(result.status, 0, result.stderr);
@@ -273,8 +273,7 @@ test(
       );
       const plan = enforcementPlan(harness);
       if (!plan) return;
-      assert.equal(plan.profile.includes('expo-updates'), false);
-      assert.equal(plan.profile.includes('/usr/bin/git'), false);
+      assert.equal(plan.manifestUtility, 'expo-updates-cli-unresolved');
     } finally {
       rmSync(harness.base, { force: true, recursive: true });
     }
@@ -289,8 +288,10 @@ test(
     try {
       const external = join(harness.base, 'external', 'expo-updates', 'bin');
       mkdirSync(external, { recursive: true });
-      writeFileSync(join(external, 'cli.js'), 'module.exports = {};\n');
-      const resolveFrom = () => join(external, 'cli.js');
+      const externalCli = join(external, 'cli.js');
+      writeFileSync(externalCli, '#!/usr/bin/env node\nconsole.log("external");\n');
+      chmodSync(externalCli, 0o755);
+      const resolveFrom = () => externalCli;
       assert.deepEqual(
         resolveManagedMetroManifestUtility(
           {
@@ -332,8 +333,25 @@ test(
         return;
       }
       assert.equal(enforcement.manifestUtility, 'expo-updates-cli-unowned');
-      assert.equal(enforcement.profile.includes('expo-updates'), false);
-      assert.match(enforcement.profile, /\(deny network-outbound\)/);
+
+      writeFileSync(harness.profilePath, enforcement.profile);
+      const probePath = join(harness.root, 'external-cli-probe.cjs');
+      writeFileSync(
+        probePath,
+        `const { spawnSync } = require('node:child_process');
+const result = spawnSync(${JSON.stringify(externalCli)}, ['runtimeversion:resolve', '--platform', 'ios'], {
+  encoding: 'utf8',
+});
+console.log(JSON.stringify({ code: result.error ? result.error.code : null, status: result.status }));
+`,
+      );
+      const probe = spawnSync(
+        '/usr/bin/sandbox-exec',
+        ['-f', harness.profilePath, realpathSync(process.execPath), probePath],
+        { cwd: harness.root, encoding: 'utf8', env: { ...process.env, HOME: harness.metroHome } },
+      );
+      assert.equal(probe.status, 0, probe.stderr);
+      assert.deepEqual(JSON.parse(probe.stdout.trim()), { code: 'EPERM', status: null });
     } finally {
       rmSync(harness.base, { force: true, recursive: true });
     }
