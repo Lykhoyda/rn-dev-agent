@@ -2020,12 +2020,18 @@ function boundedManagedMetroStartupMessage(
   return `${code}: managed Metro launcher failed before runtime evidence${suffix}`.slice(0, 4_096);
 }
 
+function managedMetroLauncherWasAlive(input: {
+  exitCode: number | null;
+  signalCode: NodeJS.Signals | null;
+}): boolean {
+  return input.exitCode === null && input.signalCode == null;
+}
+
 function managedMetroLauncherDetail(input: {
-  launcherAliveAtDeadline: boolean;
   exitCode: number | null;
   signalCode: NodeJS.Signals | null;
 }): string | null {
-  if (input.launcherAliveAtDeadline) return 'launcher alive at deadline';
+  if (managedMetroLauncherWasAlive(input)) return 'launcher alive at deadline';
   if (input.exitCode !== null) return `launcher exit ${input.exitCode}`;
   if (input.signalCode) return `launcher signal ${input.signalCode}`;
   return null;
@@ -2037,6 +2043,16 @@ function managedMetroReadinessDetail(readiness: ManagedMetroReadinessOutcome): s
   } probes, probe unknown ${readiness.unknownProbes}, unowned listener ${
     readiness.unownedListenerPid ?? 'none'
   }`;
+}
+
+function managedMetroUnprovenReadinessDetail(input: {
+  exitCode: number | null;
+  signalCode: NodeJS.Signals | null;
+  readiness: ManagedMetroReadinessOutcome;
+}): string | null {
+  return managedMetroLauncherWasAlive(input) && !input.readiness.listenerObserved
+    ? managedMetroReadinessDetail(input.readiness)
+    : null;
 }
 
 function managedMetroStartupError(input: {
@@ -2052,7 +2068,6 @@ function managedMetroStartupError(input: {
   credentialRedactions: readonly string[];
   exitCode: number | null;
   signalCode: NodeJS.Signals | null;
-  launcherAliveAtDeadline: boolean;
   logTailSource: string | null;
   readiness: ManagedMetroReadinessOutcome;
   lastError: unknown;
@@ -2066,10 +2081,7 @@ function managedMetroStartupError(input: {
     },
   );
   const childOutcome = managedMetroLauncherDetail(input);
-  const readinessOutcome =
-    input.launcherAliveAtDeadline && !input.readiness.listenerObserved
-      ? managedMetroReadinessDetail(input.readiness)
-      : null;
+  const readinessOutcome = managedMetroUnprovenReadinessDetail(input);
   const launcherDiagnostic = readManagedMetroLauncherDiagnostic(input.launcherDiagnosticPath);
   const redactions = [
     input.appRoot,
@@ -2562,22 +2574,21 @@ export async function startManagedMetro(
     dependencies,
   );
   if (!cleanupProven) {
-    const launcherAliveAtDeadline = preKill.exitCode === null && preKill.signalCode == null;
-    const childOutcome = managedMetroLauncherDetail({
-      launcherAliveAtDeadline,
+    const childOutcome = managedMetroLauncherDetail(preKill);
+    const readinessDetail = managedMetroUnprovenReadinessDetail({
       exitCode: preKill.exitCode,
       signalCode: preKill.signalCode,
+      readiness,
     });
-    const readinessOutcome =
-      launcherAliveAtDeadline && !readiness.listenerObserved
-        ? sanitizeManagedMetroStartupDetail(managedMetroReadinessDetail(readiness), [
-            input.appRoot,
-            input.sourceRoot,
-            input.runtimeRoot,
-            input.sessionId,
-            instanceId,
-          ])
-        : null;
+    const readinessOutcome = readinessDetail
+      ? sanitizeManagedMetroStartupDetail(readinessDetail, [
+          input.appRoot,
+          input.sourceRoot,
+          input.runtimeRoot,
+          input.sessionId,
+          instanceId,
+        ])
+      : null;
     throw new Error(
       `METRO_START_CLEANUP_UNPROVEN: failed Metro startup left process or listener state ambiguous${
         childOutcome || readinessOutcome
@@ -2609,7 +2620,6 @@ export async function startManagedMetro(
       .map(([, value]) => value as string),
     exitCode: preKill.exitCode,
     signalCode: preKill.signalCode,
-    launcherAliveAtDeadline: preKill.exitCode === null && preKill.signalCode == null,
     logTailSource: preKill.logTail,
     readiness,
     lastError,
