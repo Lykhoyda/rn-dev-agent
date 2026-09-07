@@ -1,5 +1,5 @@
-import assert from 'node:assert/strict';
-import { execFileSync, spawnSync } from 'node:child_process';
+import assert from "node:assert/strict";
+import { execFileSync, spawnSync } from "node:child_process";
 import {
   chmodSync,
   mkdirSync,
@@ -8,17 +8,17 @@ import {
   rmSync,
   symlinkSync,
   writeFileSync,
-} from 'node:fs';
-import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
-import { test } from 'node:test';
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { test } from "node:test";
 import {
   prepareManagedMetroEnforcement,
   resolveManagedMetroManifestUtility,
   type ManagedMetroEnforcementPlan,
-} from '../../../dist/session/managed-metro-enforcement.js';
+} from "../../../dist/session/managed-metro-enforcement.js";
 
-const unsupportedPlatform = process.platform !== 'darwin';
+const unsupportedPlatform = process.platform !== "darwin";
 
 interface Harness {
   base: string;
@@ -33,44 +33,56 @@ interface Harness {
 
 function git(cwd: string, args: readonly string[]): void {
   execFileSync(
-    'git',
-    ['-c', 'user.email=fixture@example.com', '-c', 'user.name=Fixture', ...args],
+    "git",
+    [
+      "-c",
+      "user.email=fixture@example.com",
+      "-c",
+      "user.name=Fixture",
+      ...args,
+    ],
     {
       cwd,
-      stdio: 'ignore',
-    },
+      stdio: "ignore",
+    }
   );
 }
 
-function createHarness(layout: 'plain' | 'linked' = 'plain'): Harness {
-  const base = realpathSync(mkdtempSync(join(tmpdir(), 'rn-manifest-sandbox-')));
-  const primary = join(base, 'primary');
+function createHarness(layout: "plain" | "linked" = "plain"): Harness {
+  const base = realpathSync(
+    mkdtempSync(join(tmpdir(), "rn-manifest-sandbox-"))
+  );
+  const primary = join(base, "primary");
   mkdirSync(primary, { recursive: true });
-  execFileSync('git', ['init', '-q', primary]);
-  writeFileSync(join(primary, '.gitignore'), 'ignored.txt\n');
-  writeFileSync(join(primary, 'tracked.txt'), 'tracked');
-  git(primary, ['add', '-A']);
-  git(primary, ['commit', '-qm', 'fixture']);
+  execFileSync("git", ["init", "-q", primary]);
+  writeFileSync(join(primary, ".gitignore"), "ignored.txt\n");
+  writeFileSync(join(primary, "tracked.txt"), "tracked");
+  git(primary, ["add", "-A"]);
+  git(primary, ["commit", "-qm", "fixture"]);
 
   let root = primary;
-  if (layout === 'linked') {
-    root = join(base, 'linked');
-    git(primary, ['worktree', 'add', '-q', '-b', 'linked-fixture', root]);
+  if (layout === "linked") {
+    root = join(base, "linked");
+    git(primary, ["worktree", "add", "-q", "-b", "linked-fixture", root]);
   }
-  writeFileSync(join(root, 'ignored.txt'), 'ignored');
+  writeFileSync(join(root, "ignored.txt"), "ignored");
 
-  const runtimeRoot = join(root, '.rn-agent', 'runtime');
-  const metroHome = join(runtimeRoot, 'metro-home');
-  const metroBinRoot = join(runtimeRoot, 'metro-bin');
+  const runtimeRoot = join(root, ".rn-agent", "runtime");
+  const metroHome = join(runtimeRoot, "metro-home");
+  const metroBinRoot = join(runtimeRoot, "metro-bin");
   mkdirSync(metroHome, { recursive: true });
   mkdirSync(metroBinRoot, { recursive: true });
 
-  const expoUpdatesRoot = join(root, 'node_modules', 'expo-updates');
-  const cliPath = join(expoUpdatesRoot, 'bin', 'cli.js');
+  const expoUpdatesRoot = join(root, "node_modules", "expo-updates");
+  const cliPath = join(expoUpdatesRoot, "bin", "cli.js");
   mkdirSync(dirname(cliPath), { recursive: true });
   writeFileSync(
-    join(expoUpdatesRoot, 'package.json'),
-    JSON.stringify({ name: 'expo-updates', version: '0.0.0', main: 'bin/cli.js' }),
+    join(expoUpdatesRoot, "package.json"),
+    JSON.stringify({
+      name: "expo-updates",
+      version: "0.0.0",
+      main: "bin/cli.js",
+    })
   );
   // Stands in for `runtimeversion:resolve` under the fingerprint policy: @expo/fingerprint shells
   // out to git through PATH to read the repository root and the ignore rules.
@@ -91,15 +103,18 @@ console.log(
     tracked: git(['check-ignore', '-q', 'tracked.txt']),
   }),
 );
-`,
+`
   );
   chmodSync(cliPath, 0o755);
 
-  const intruderPath = join(expoUpdatesRoot, 'bin', 'intruder.js');
-  writeFileSync(intruderPath, '#!/usr/bin/env node\nconsole.log("intruder");\n');
+  const intruderPath = join(expoUpdatesRoot, "bin", "intruder.js");
+  writeFileSync(
+    intruderPath,
+    '#!/usr/bin/env node\nconsole.log("intruder");\n'
+  );
   chmodSync(intruderPath, 0o755);
 
-  const commandPath = join(root, 'metro-command.cjs');
+  const commandPath = join(root, "metro-command.cjs");
   writeFileSync(
     commandPath,
     `const { spawnSync } = require('node:child_process');
@@ -110,8 +125,10 @@ const run = (executable) => {
   });
   return { code: result.error ? result.error.code : null, status: result.status, stdout: (result.stdout || '').trim() };
 };
-console.log(JSON.stringify({ cli: run(${JSON.stringify(cliPath)}), intruder: run(${JSON.stringify(intruderPath)}) }));
-`,
+console.log(JSON.stringify({ cli: run(${JSON.stringify(
+      cliPath
+    )}), intruder: run(${JSON.stringify(intruderPath)}) }));
+`
   );
 
   return {
@@ -120,7 +137,7 @@ console.log(JSON.stringify({ cli: run(${JSON.stringify(cliPath)}), intruder: run
     intruderPath,
     metroBinRoot,
     metroHome,
-    profilePath: join(runtimeRoot, 'profile.sb'),
+    profilePath: join(runtimeRoot, "profile.sb"),
     root,
     runtimeRoot,
   };
@@ -128,7 +145,7 @@ console.log(JSON.stringify({ cli: run(${JSON.stringify(cliPath)}), intruder: run
 
 function enforcementPlan(harness: Harness): ManagedMetroEnforcementPlan | null {
   const enforcement = prepareManagedMetroEnforcement({
-    platform: 'darwin',
+    platform: "darwin",
     appRoot: harness.root,
     sourceRoot: harness.root,
     runtimeRoot: harness.runtimeRoot,
@@ -137,37 +154,50 @@ function enforcementPlan(harness: Harness): ManagedMetroEnforcementPlan | null {
     commandExecutable: harness.commandPath,
     commandArguments: [],
     port: 8099,
-    instanceId: 'manifest-utility-sandbox',
+    instanceId: "manifest-utility-sandbox",
     runtimeInputs: [],
   });
-  if (enforcement.status !== 'enforced') {
+  if (enforcement.status !== "enforced") {
     // This host cannot enforce at all, so manifest-utility admission is not provable here.
     assert.ok(
-      ['sandbox-executable-unverified', 'node-runtime-unverified'].includes(enforcement.reason),
-      JSON.stringify(enforcement),
+      ["sandbox-executable-unverified", "node-runtime-unverified"].includes(
+        enforcement.reason
+      ),
+      JSON.stringify(enforcement)
     );
     return null;
   }
   return enforcement;
 }
 
-function runManifestLane(harness: Harness, plan: ManagedMetroEnforcementPlan, gitPath: string) {
+function runManifestLane(
+  harness: Harness,
+  plan: ManagedMetroEnforcementPlan,
+  gitPath: string
+) {
   writeFileSync(harness.profilePath, plan.profile);
-  const shim = join(harness.metroBinRoot, 'git');
+  const shim = join(harness.metroBinRoot, "git");
   rmSync(shim, { force: true });
   symlinkSync(gitPath, shim);
   return spawnSync(
-    '/usr/bin/sandbox-exec',
-    ['-f', harness.profilePath, realpathSync(process.execPath), harness.commandPath],
+    "/usr/bin/sandbox-exec",
+    [
+      "-f",
+      harness.profilePath,
+      realpathSync(process.execPath),
+      harness.commandPath,
+    ],
     {
       cwd: harness.root,
-      encoding: 'utf8',
+      encoding: "utf8",
       env: {
         ...process.env,
         HOME: harness.metroHome,
-        PATH: [harness.metroBinRoot, process.env.PATH].filter(Boolean).join(':'),
+        PATH: [harness.metroBinRoot, process.env.PATH]
+          .filter(Boolean)
+          .join(":"),
       },
-    },
+    }
   );
 }
 
@@ -176,7 +206,11 @@ function assertFingerprintProbesSucceeded(stdout: string): void {
     cli: { code: string | null; status: number | null; stdout: string };
     intruder: { code: string | null; status: number | null };
   };
-  assert.equal(observed.cli.code, null, 'the expo-updates CLI must be admitted, not EPERM');
+  assert.equal(
+    observed.cli.code,
+    null,
+    "the expo-updates CLI must be admitted, not EPERM"
+  );
   assert.equal(observed.cli.status, 0);
   const resolved = JSON.parse(observed.cli.stdout) as {
     args: string[];
@@ -185,19 +219,23 @@ function assertFingerprintProbesSucceeded(stdout: string): void {
     ignored: { code: string | null; status: number | null };
     tracked: { code: string | null; status: number | null };
   };
-  assert.deepEqual(resolved.args, ['runtimeversion:resolve', '--platform', 'ios']);
+  assert.deepEqual(resolved.args, [
+    "runtimeversion:resolve",
+    "--platform",
+    "ios",
+  ]);
   assert.deepEqual(resolved.help, { code: null, status: 0 });
   assert.deepEqual(resolved.root, { code: null, status: 0 });
   assert.deepEqual(resolved.ignored, { code: null, status: 0 });
   assert.deepEqual(resolved.tracked, { code: null, status: 1 });
   assert.equal(
     observed.intruder.code,
-    'EPERM',
-    'only the canonical expo-updates CLI may execute in the manifest utility lane',
+    "EPERM",
+    "only the canonical expo-updates CLI may execute in the manifest utility lane"
   );
 }
 
-for (const layout of ['plain', 'linked'] as const) {
+for (const layout of ["plain", "linked"] as const) {
   test(
     `the manifest utility lane resolves a fingerprint runtime version under the enforced profile in a ${layout} git repository`,
     { skip: unsupportedPlatform },
@@ -205,24 +243,26 @@ for (const layout of ['plain', 'linked'] as const) {
       const harness = createHarness(layout);
       try {
         const utility = resolveManagedMetroManifestUtility({
-          platform: 'darwin',
+          platform: "darwin",
           appRoot: harness.root,
           sourceRoot: harness.root,
         });
-        assert.equal(utility.status, 'admitted', JSON.stringify(utility));
-        if (utility.status !== 'admitted') return;
         assert.equal(
           utility.expoUpdatesCli,
-          realpathSync(join(harness.root, 'node_modules', 'expo-updates', 'bin', 'cli.js')),
+          realpathSync(
+            join(harness.root, "node_modules", "expo-updates", "bin", "cli.js")
+          )
         );
         if (!utility.git) {
           // No verified developer git on this host: the lane cannot be proven end to end here.
+          assert.notEqual(utility.outcome, "admitted", JSON.stringify(utility));
           return;
         }
+        assert.equal(utility.outcome, "admitted", JSON.stringify(utility));
         assert.equal(
           utility.gitRepositoryRoots.length > 0,
-          layout === 'linked',
-          JSON.stringify(utility.gitRepositoryRoots),
+          layout === "linked",
+          JSON.stringify(utility.gitRepositoryRoots)
         );
 
         const plan = enforcementPlan(harness);
@@ -233,53 +273,73 @@ for (const layout of ['plain', 'linked'] as const) {
       } finally {
         rmSync(harness.base, { force: true, recursive: true });
       }
-    },
+    }
   );
 }
 
 test(
-  'projects without expo-updates admit no manifest utility executables',
+  "projects without expo-updates admit no manifest utility executables",
   { skip: unsupportedPlatform },
   () => {
     const harness = createHarness();
     try {
-      rmSync(join(harness.root, 'node_modules'), { force: true, recursive: true });
+      rmSync(join(harness.root, "node_modules"), {
+        force: true,
+        recursive: true,
+      });
       assert.deepEqual(
         resolveManagedMetroManifestUtility({
-          platform: 'darwin',
+          platform: "darwin",
           appRoot: harness.root,
           sourceRoot: harness.root,
         }),
-        { status: 'absent' },
+        {
+          outcome: "expo-updates-cli-unresolved",
+          expoUpdatesCli: null,
+          git: null,
+          gitRepositoryRoots: [],
+        }
       );
       const plan = enforcementPlan(harness);
       if (!plan) return;
-      assert.equal(plan.profile.includes('expo-updates'), false);
-      assert.equal(plan.profile.includes('/usr/bin/git'), false);
+      assert.equal(plan.profile.includes("expo-updates"), false);
+      assert.equal(plan.profile.includes("/usr/bin/git"), false);
     } finally {
       rmSync(harness.base, { force: true, recursive: true });
     }
-  },
+  }
 );
 
 test(
-  'an expo-updates CLI outside the supported dependency roots refuses enforcement instead of failing silently',
+  "an expo-updates CLI outside the supported dependency roots adds no grant and keeps enforcement on",
   { skip: unsupportedPlatform },
   () => {
     const harness = createHarness();
     try {
-      const external = join(harness.base, 'external', 'expo-updates', 'bin');
+      const external = join(harness.base, "external", "expo-updates", "bin");
       mkdirSync(external, { recursive: true });
-      writeFileSync(join(external, 'cli.js'), 'module.exports = {};\n');
-      const utility = resolveManagedMetroManifestUtility(
-        { platform: 'darwin', appRoot: harness.root, sourceRoot: harness.root },
-        { resolveFrom: () => join(external, 'cli.js') },
+      writeFileSync(join(external, "cli.js"), "module.exports = {};\n");
+      const resolveFrom = () => join(external, "cli.js");
+      assert.deepEqual(
+        resolveManagedMetroManifestUtility(
+          {
+            platform: "darwin",
+            appRoot: harness.root,
+            sourceRoot: harness.root,
+          },
+          { resolveFrom }
+        ),
+        {
+          outcome: "expo-updates-cli-unowned",
+          expoUpdatesCli: null,
+          git: null,
+          gitRepositoryRoots: [],
+        }
       );
-      assert.deepEqual(utility, { status: 'unowned' });
 
       const enforcement = prepareManagedMetroEnforcement(
         {
-          platform: 'darwin',
+          platform: "darwin",
           appRoot: harness.root,
           sourceRoot: harness.root,
           runtimeRoot: harness.runtimeRoot,
@@ -288,17 +348,149 @@ test(
           commandExecutable: harness.commandPath,
           commandArguments: [],
           port: 8099,
-          instanceId: 'manifest-utility-unowned',
+          instanceId: "manifest-utility-unowned",
           runtimeInputs: [],
         },
-        { resolveFrom: () => join(external, 'cli.js') },
+        { resolveFrom }
       );
-      assert.deepEqual(enforcement, {
-        status: 'unsupported',
-        reason: 'manifest-utility-unowned',
-      });
+      if (enforcement.status !== "enforced") {
+        assert.ok(
+          ["sandbox-executable-unverified", "node-runtime-unverified"].includes(
+            enforcement.reason
+          ),
+          JSON.stringify(enforcement)
+        );
+        return;
+      }
+      assert.equal(enforcement.manifestUtility, "expo-updates-cli-unowned");
+      assert.equal(enforcement.profile.includes("expo-updates"), false);
+      assert.match(enforcement.profile, /\(deny network-outbound\)/);
     } finally {
       rmSync(harness.base, { force: true, recursive: true });
     }
-  },
+  }
+);
+
+function developerDirProbes(harness: Harness, developerRoot: string) {
+  return {
+    run: (command: string, args: readonly string[]) => {
+      if (command === "/usr/bin/xcode-select") {
+        return {
+          status: 0,
+          stdout: `${developerRoot}\n`,
+          stderr: "",
+          signal: null,
+        };
+      }
+      if (command === "/usr/bin/codesign" && args[0] === "--verify") {
+        return { status: 0, stdout: "", stderr: "", signal: null };
+      }
+      return {
+        status: 0,
+        stdout: "",
+        stderr: [
+          "Identifier=com.apple.git",
+          "CDHash=0123456789abcdef0123456789abcdef01234567",
+          "Authority=Software Signing",
+          "Authority=Apple Code Signing Certification Authority",
+          "Authority=Apple Root CA",
+        ].join("\n"),
+        signal: null,
+      };
+    },
+    stat: (path: string) => ({
+      isFile: () => true,
+      uid: path.endsWith("/usr/bin/git") ? 0 : 501,
+      mode: 0o100755,
+    }),
+    readBytes: () => Buffer.from(`gitdir: ${join(harness.root, ".git")}\n`),
+  };
+}
+
+test(
+  "a developer directory reached through a symlink still admits the canonical git",
+  { skip: unsupportedPlatform },
+  () => {
+    const harness = createHarness();
+    try {
+      const versioned = join(
+        harness.base,
+        "Xcode-16.4.0.app",
+        "Contents",
+        "Developer"
+      );
+      mkdirSync(join(versioned, "usr", "bin"), { recursive: true });
+      writeFileSync(
+        join(versioned, "usr", "bin", "git"),
+        "#!/bin/sh\nexit 0\n"
+      );
+      const linked = join(harness.base, "Xcode.app");
+      symlinkSync(join(harness.base, "Xcode-16.4.0.app"), linked);
+
+      const utility = resolveManagedMetroManifestUtility(
+        { platform: "darwin", appRoot: harness.root, sourceRoot: harness.root },
+        developerDirProbes(harness, join(linked, "Contents", "Developer"))
+      );
+
+      assert.equal(utility.outcome, "admitted", JSON.stringify(utility));
+      assert.equal(utility.git, join(versioned, "usr", "bin", "git"));
+    } finally {
+      rmSync(harness.base, { force: true, recursive: true });
+    }
+  }
+);
+
+test(
+  "an unverifiable developer git names the reason instead of reporting a silent admission",
+  { skip: unsupportedPlatform },
+  () => {
+    const harness = createHarness();
+    const cli = realpathSync(
+      join(harness.root, "node_modules", "expo-updates", "bin", "cli.js")
+    );
+    try {
+      assert.deepEqual(
+        resolveManagedMetroManifestUtility(
+          {
+            platform: "darwin",
+            appRoot: harness.root,
+            sourceRoot: harness.root,
+          },
+          {
+            run: () => ({
+              status: 1,
+              stdout: "",
+              stderr: "no developer dir",
+              signal: null,
+            }),
+          }
+        ),
+        {
+          outcome: "developer-dir-unavailable",
+          expoUpdatesCli: cli,
+          git: null,
+          gitRepositoryRoots: [],
+        }
+      );
+
+      const developerRoot = join(harness.base, "Developer");
+      mkdirSync(join(developerRoot, "usr", "bin"), { recursive: true });
+      writeFileSync(
+        join(developerRoot, "usr", "bin", "git"),
+        "#!/bin/sh\nexit 0\n"
+      );
+      const untrusted = resolveManagedMetroManifestUtility(
+        { platform: "darwin", appRoot: harness.root, sourceRoot: harness.root },
+        {
+          ...developerDirProbes(harness, developerRoot),
+          stat: () => ({ isFile: () => true, uid: 501, mode: 0o100777 }),
+        }
+      );
+      assert.equal(untrusted.outcome, "developer-git-untrusted");
+      assert.equal(untrusted.git, null);
+      assert.equal(untrusted.expoUpdatesCli, cli);
+    } finally {
+      rmSync(harness.base, { force: true, recursive: true });
+    }
+  }
 );
