@@ -149,6 +149,23 @@ export function isDevClientLaunchShape(install: RunActionInstallReceipt | null):
   return install.buildKind === 'expo' || typeof install.devClientUrl === 'string';
 }
 
+/**
+ * True when the parsed flow clears app state: `launchApp: { clearState: true }`
+ * or the bare `clearState` command, at any nesting (inlined runFlow subflows).
+ * Decided from the command tree, never from the YAML text, so prose comments
+ * mentioning clearState do not count.
+ */
+function flowCommandsClearState(commands: readonly unknown[]): boolean {
+  const optionsClearState = (options: unknown): boolean => {
+    if (Array.isArray(options)) return flowCommandsClearState(options);
+    if (!options || typeof options !== 'object') return false;
+    return Object.entries(options).some(
+      ([key, nested]) => (key === 'clearState' && nested === true) || optionsClearState(nested),
+    );
+  };
+  return commands.some((command) => command === 'clearState' || optionsClearState(command));
+}
+
 export const DEV_CLIENT_CLEARSTATE_REFUSAL =
   'Refusing to replay a flow containing clearState on a managed dev-client session. The ' +
   'clearState relaunch uninstalls the app and strands the dev client at its picker, so the ' +
@@ -691,6 +708,25 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
       iosProofPlan?.ok !== true ||
       iosProofPlan.segments.some((segment) => segment.domain === 'xctest-native');
 
+    const install = installReceipt();
+    // GH #993 / #990 (Option A): on a managed dev-client session a clearState
+    // flow is refused here, before the compat preflight and before any runner
+    // call, origin claim, or park — fail-closed and side-effect-free, the
+    // position cdp_auto_login already holds for the same flow content. It is
+    // decided on the parsed commands, so an unpinned clearState action gets
+    // this terminal reason instead of migrate-actions. cdp_login_prologue
+    // inherits this.
+    if (isDevClientLaunchShape(install) && flowCommandsClearState(preflightCommands)) {
+      return failResult(DEV_CLIENT_CLEARSTATE_REFUSAL, 'DEV_CLIENT_CLEARSTATE_REFUSED', {
+        actionId: args.actionId,
+        fallback: 'none',
+        launchShape: 'dev-client',
+        nextAction:
+          'Rewrite the action without launchApp clearState (start from the attached app) and, if a reset is needed, run device_reset_state first.',
+        ...(runtimeStatePath ? { writes: writeDisclosure() } : {}),
+      });
+    }
+
     let engineStatus: ReplayEngineStatus | null;
     try {
       engineStatus = await resolveEngineStatus();
@@ -756,23 +792,6 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
         ? activeTarget.deviceId
         : undefined;
 
-    const install = installReceipt();
-    const usesClearState = flowUsesClearState(replayYaml);
-    // GH #993 / #990 (Option A): on a managed dev-client session a clearState
-    // flow is refused here, before any runner call, origin claim, or park —
-    // fail-closed and side-effect-free, the position cdp_auto_login already
-    // holds for the same flow content. cdp_login_prologue inherits this.
-    if (usesClearState && isDevClientLaunchShape(install)) {
-      return failResult(DEV_CLIENT_CLEARSTATE_REFUSAL, 'DEV_CLIENT_CLEARSTATE_REFUSED', {
-        actionId: args.actionId,
-        fallback: 'none',
-        launchShape: 'dev-client',
-        nextAction:
-          'Rewrite the action without launchApp clearState (start from the attached app) and, if a reset is needed, run device_reset_state first.',
-        ...(runtimeStatePath ? { writes: writeDisclosure() } : {}),
-      });
-    }
-
     // GH #705: a clearState flow uninstalls the app, so Maestro needs the
     // bundle to reinstall from. Resolve it off the session's attested install
     // receipt — the exact device and appId it was signed for — so the
@@ -780,7 +799,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
     const receipt = args.appFile ? null : install;
     const appFile =
       args.appFile ??
-      (usesClearState &&
+      (flowUsesClearState(replayYaml) &&
       receipt?.platform === 'ios' &&
       typeof receipt.appId === 'string' &&
       typeof receipt.deviceId === 'string'

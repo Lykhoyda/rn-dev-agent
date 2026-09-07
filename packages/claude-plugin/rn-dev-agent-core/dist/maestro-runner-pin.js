@@ -13984,7 +13984,7 @@ function assertActionMetadataIdentity(filePath, metadata) {
 // packages/rn-dev-agent-core/dist/domain/action-engine-compat.js
 function actionEnginePinRefusal(enginePin) {
   if (!enginePin) {
-    return `Action is not migrated to ${ACTION_ENGINE_PIN} or newer. Run node <plugin-root>/rn-dev-agent-core/dist/maestro-runner-pin.js migrate-actions --root <app> before replay. Incompatible actions are terminal \u2014 no manual fallback. If migrate-actions reports the action as incompatible, rewrite it with id or literal text selectors (no regex metacharacters); there is no pin-side remedy.`;
+    return `Action is not migrated to ${ACTION_ENGINE_PIN} or newer. Run node <plugin-root>/rn-dev-agent-core/dist/maestro-runner-pin.js migrate-actions --root <app> before replay. Incompatible actions are terminal \u2014 no manual fallback.`;
   }
   const version = parseActionEnginePinVersion(enginePin);
   if (!version) {
@@ -16468,14 +16468,20 @@ function flowRelaunchFacts(command) {
 function relaunchesApp(launch) {
   return launch.clearState || launch.stopApp;
 }
-function lastFlowRelaunch(commands) {
-  let last = null;
-  for (const command of commands) {
-    const launch = flowRelaunchFacts(command);
-    if (launch && relaunchesApp(launch))
-      last = launch;
-  }
-  return last;
+function createFlowRelaunchTracker() {
+  let unclaimed = null;
+  return {
+    launched(launch) {
+      if (relaunchesApp(launch))
+        unclaimed = launch;
+    },
+    claimed() {
+      unclaimed = null;
+    },
+    attribute(error) {
+      return unclaimed ? attributeOriginFailureToFlowRelaunch(error, unclaimed) : error;
+    }
+  };
 }
 var FLOW_RELAUNCH_NEXT_ACTION = "Do not relaunch a dev-client app from inside a learned action (EG_DEV_CLIENT_CLEARSTATE): start the action from the attached app, and reset state with device_reset_state before cdp_run_action or cdp_login_prologue instead of launchApp clearState.";
 function attributeOriginFailureToFlowRelaunch(error, relaunch) {
@@ -16497,9 +16503,7 @@ function attributeOriginFailureToFlowRelaunch(error, relaunch) {
     flowRelaunch: {
       command: "launchApp",
       clearState: relaunch.clearState,
-      stopApp: relaunch.stopApp,
-      cause,
-      nextAction: FLOW_RELAUNCH_NEXT_ACTION
+      stopApp: relaunch.stopApp
     }
   });
   return attributed;
@@ -16535,15 +16539,16 @@ async function executeMaestroAuthorityStages(commands, executeStage, claimOrigin
   const results = [];
   let pendingOriginError;
   let originClaimed = options.firstOriginClaimed === true;
-  let priorRelaunch = options.priorRelaunch ?? null;
+  const relaunches = options.relaunches ?? createFlowRelaunchTracker();
   for (const stage of plan.stages) {
     if (stage.requiresOrigin && pendingOriginError === void 0) {
       if (!originClaimed) {
         try {
           await claimOrigin();
         } catch (error) {
-          throw priorRelaunch ? attributeOriginFailureToFlowRelaunch(error, priorRelaunch) : error;
+          throw relaunches.attribute(error);
         }
+        relaunches.claimed();
       }
       originClaimed = false;
     }
@@ -16551,15 +16556,13 @@ async function executeMaestroAuthorityStages(commands, executeStage, claimOrigin
       results.push(await executeStage(stage.commands));
       const launch = stage.commands.length === 1 ? flowRelaunchFacts(stage.commands[0]) : null;
       if (launch) {
-        const relaunch = relaunchesApp(launch) ? launch : null;
-        if (relaunch)
-          priorRelaunch = relaunch;
+        relaunches.launched(launch);
         try {
           await relaunchManagedApp(launch.stopApp);
           pendingOriginError = void 0;
         } catch (error) {
           if (!reproveManagedOrigin || error instanceof SessionAuthorityError) {
-            throw relaunch ? attributeOriginFailureToFlowRelaunch(error, relaunch) : error;
+            throw relaunches.attribute(error);
           }
           pendingOriginError = error;
         }
@@ -16576,8 +16579,13 @@ async function executeMaestroAuthorityStages(commands, executeStage, claimOrigin
       await completeOrigin(false, options.signal);
       throw new MaestroStageExecutionError(results, pendingOriginError);
     }
+    relaunches.claimed();
   }
-  await completeOrigin(plan.targetExpected, options.signal);
+  try {
+    await completeOrigin(plan.targetExpected, options.signal);
+  } catch (error) {
+    throw relaunches.attribute(error);
+  }
   return results;
 }
 function resolveMaestroFlowAppId(boundAppId, parsedAppId) {
@@ -16846,14 +16854,19 @@ function createMaestroRunHandler(deps = {}) {
       const reproveManagedOrigin = args.reproveManagedOrigin ?? deps.reproveManagedOrigin ?? managedAuthority.reproveManagedOrigin;
       const completeRunnerPark = args.completeRunnerPark ?? managedAuthority.completeRunnerPark;
       const reissueInstallReceipt2 = args.reissueInstallReceipt ?? deps.reissueInstallReceipt ?? managedAuthority.reissueInstallReceipt;
+      const flowRelaunches = createFlowRelaunchTracker();
+      const completeClaimedOrigin = async (targetExpected, signal) => {
+        await completeOrigin(targetExpected, signal);
+        if (targetExpected)
+          flowRelaunches.claimed();
+      };
       const combinedSteps = [];
       const proofDomains = [];
       let nativeTransportVersion = null;
       let nativeOutput = "";
       let retainedReactFocusId;
       try {
-        for (const [segmentIndex, segment] of iosProofPlan.segments.entries()) {
-          const priorRelaunch = lastFlowRelaunch(iosProofPlan.segments.slice(0, segmentIndex).flatMap((prior) => prior.commands));
+        for (const segment of iosProofPlan.segments) {
           if (controller.signal.aborted || deadline - now() <= 0) {
             return failResult("Partitioned iOS replay exceeded its deadline.", "RUNNER_TIMEOUT", {
               proofDomains
@@ -16867,11 +16880,12 @@ function createMaestroRunHandler(deps = {}) {
               inlineYaml: buildMaestroFlow(headerAppId ? { appId: headerAppId } : {}, segment.commands),
               timeoutMs: Math.max(1, deadline - now()),
               claimNativeOrigin: claimOrigin,
-              completeNativeOrigin: completeOrigin,
+              completeNativeOrigin: completeClaimedOrigin,
               relaunchManagedApp,
               reproveManagedOrigin,
               completeRunnerPark,
-              reissueInstallReceipt: reissueInstallReceipt2
+              reissueInstallReceipt: reissueInstallReceipt2,
+              flowRelaunches
             });
             const env = readToolEnvelope(nested);
             if (env.ok !== true || env.data?.passed !== true) {
@@ -16949,7 +16963,7 @@ function createMaestroRunHandler(deps = {}) {
             if (replay.finalFocusId === null)
               reactFocusId = null;
             return { replay, sourceIndices };
-          }, claimOrigin, completeOrigin, relaunchManagedApp, reproveManagedOrigin, { signal: controller.signal, priorRelaunch });
+          }, claimOrigin, completeClaimedOrigin, relaunchManagedApp, reproveManagedOrigin, { signal: controller.signal, relaunches: flowRelaunches });
           retainedReactFocusId = reactFocusId;
           for (const { replay, sourceIndices } of stageResults) {
             for (const step of replay.steps) {
@@ -17229,8 +17243,14 @@ function createMaestroRunHandler(deps = {}) {
       const completeOrigin = args.completeNativeOrigin ?? deps.completeNativeOrigin ?? managedAuthority.completeNativeOrigin;
       const relaunchManagedApp = args.relaunchManagedApp ?? deps.relaunchManagedApp ?? managedAuthority.relaunchManagedApp;
       const reproveManagedOrigin = args.reproveManagedOrigin ?? deps.reproveManagedOrigin ?? managedAuthority.reproveManagedOrigin;
+      const flowRelaunches = args.flowRelaunches ?? createFlowRelaunchTracker();
       if (platform === "ios" && authorityPlan.stages[0]?.requiresOrigin) {
-        await claimOrigin();
+        try {
+          await claimOrigin();
+        } catch (error) {
+          throw flowRelaunches.attribute(error);
+        }
+        flowRelaunches.claimed();
         nativeOriginPreclaimed = true;
       }
       const completeTrackedOrigin = async (targetExpected, signal) => {
@@ -17377,7 +17397,11 @@ function createMaestroRunHandler(deps = {}) {
           captureStageInvocation(failedInvocationTermination ?? stageTerminationFromError(stageInvocationError));
           throw stageInvocationError;
         }
-      }, claimOrigin, completeTrackedOrigin, relaunchManagedApp, reproveManagedOrigin, { firstOriginClaimed: nativeOriginPreclaimed, signal: flowAbort.signal }), {
+      }, claimOrigin, completeTrackedOrigin, relaunchManagedApp, reproveManagedOrigin, {
+        firstOriginClaimed: nativeOriginPreclaimed,
+        signal: flowAbort.signal,
+        relaunches: flowRelaunches
+      }), {
         platform,
         deviceId: requestedDeviceId,
         releaseAndroidSlot,
@@ -17393,12 +17417,13 @@ function createMaestroRunHandler(deps = {}) {
               signal: flowAbort.signal,
               readinessTimeoutMs: Math.max(1, flowDeadline - now())
             });
+            flowRelaunches.claimed();
           }
           await completeOrigin(true, flowAbort.signal);
         } catch (error) {
-          const relaunch = lastFlowRelaunch(validatedCommands);
-          throw relaunch ? attributeOriginFailureToFlowRelaunch(error, relaunch) : error;
+          throw flowRelaunches.attribute(error);
         }
+        flowRelaunches.claimed();
         nativeOriginPreclaimed = false;
       }
       await commitReinstalledInstall();

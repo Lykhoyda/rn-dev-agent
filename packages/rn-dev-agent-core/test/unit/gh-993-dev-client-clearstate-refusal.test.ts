@@ -6,6 +6,7 @@
 // cdp_auto_login already refuses the same flow content up front.
 
 import assert from 'node:assert/strict';
+import { writeFileSync } from 'node:fs';
 import { test, type TestContext } from 'node:test';
 import { createLoginPrologueHandler } from '../../dist/tools/login-prologue.js';
 import { isDevClientLaunchShape } from '../../dist/tools/run-action.js';
@@ -202,6 +203,86 @@ test('GH#993: a warm (non-clearState) action on a dev-client session is unaffect
   assert.notEqual(envelope.code, 'DEV_CLIENT_CLEARSTATE_REFUSED');
   assert.equal(trace.maestroRuns, 1);
   assert.equal(trace.appFileResolutions, 0);
+});
+
+test('GH#993: a prose comment mentioning clearState: true is not a clearState flow', async (t) => {
+  // The creating-actions skill tells authors this exact rule; the refusal is
+  // decided on the parsed commands, not on the YAML text.
+  const yaml = fixtureYaml({ id: 'user-login', intent: 'warm login', selectors: ['login-submit'] })
+    .replace('- launchApp', '# never use clearState: true here\n- launchApp')
+    .replace('- launchApp\n', '- launchApp:\n    stopApp: false\n');
+  const { trace, runAction, project } = harness(t, EXPO_INSTALL, { yaml });
+  const envelope = parse(
+    await runAction({ actionId: 'user-login', projectRoot: project.root, autoRepair: false }),
+  );
+  assert.notEqual(envelope.code, 'DEV_CLIENT_CLEARSTATE_REFUSED');
+  assert.equal(trace.maestroRuns, 1, 'the warm flow runs');
+});
+
+test('GH#993: a clearState relaunch inlined in a runFlow subflow is refused', async (t) => {
+  const yaml = [
+    `appId: ${APP_ID}`,
+    '---',
+    '# id: user-login',
+    '# intent: conditional reset',
+    '# tags: [auth]',
+    '# mutates: true',
+    '# status: active',
+    '# enginePin: maestro-runner@1.1.24',
+    '',
+    '- runFlow:',
+    '    when:',
+    '      visible:',
+    '        id: "stale-session"',
+    '    commands:',
+    '      - launchApp:',
+    '          clearState: true',
+    '- tapOn:',
+    '    id: "login-email"',
+    '',
+  ].join('\n');
+  const { trace, runAction, project } = harness(t, EXPO_INSTALL, { yaml });
+  const envelope = parse(
+    await runAction({ actionId: 'user-login', projectRoot: project.root, autoRepair: false }),
+  );
+  assert.equal(envelope.code, 'DEV_CLIENT_CLEARSTATE_REFUSED');
+  assert.equal(trace.maestroRuns, 0);
+});
+
+test('GH#993: an unpinned clearState action on a dev-client session gets the terminal refusal first', async (t) => {
+  // Both refusals are pre-execution; the dev-client one names the rewrite the
+  // action needs regardless of its pin, so it must not hide behind
+  // migrate-actions the way the regex fence used to.
+  const unpinned = clearStateLoginYaml().replace('# enginePin: maestro-runner@1.1.24\n', '');
+  assert.doesNotMatch(unpinned, /enginePin/);
+  const devClient = harness(t, EXPO_INSTALL);
+  writeFileSync(devClient.project.yamlPath('user-login'), unpinned, 'utf8');
+  const refused = parse(
+    await devClient.runAction({
+      actionId: 'user-login',
+      projectRoot: devClient.project.root,
+      autoRepair: false,
+    }),
+  );
+  assert.equal(refused.code, 'DEV_CLIENT_CLEARSTATE_REFUSED');
+  assert.equal(devClient.trace.maestroRuns, 0);
+
+  const bare = harness(t, {
+    platform: 'ios',
+    deviceId: SIM,
+    appId: APP_ID,
+    buildKind: 'bare-react-native',
+  });
+  writeFileSync(bare.project.yamlPath('user-login'), unpinned, 'utf8');
+  const pinRefusal = parse(
+    await bare.runAction({
+      actionId: 'user-login',
+      projectRoot: bare.project.root,
+      autoRepair: false,
+    }),
+  );
+  assert.equal(pinRefusal.code, 'ENGINE_PIN_MISMATCH', 'the same action is otherwise unpinned');
+  assert.equal(bare.trace.maestroRuns, 0);
 });
 
 test('GH#993: outside a session (no install binding) the refusal does not apply', async (t) => {

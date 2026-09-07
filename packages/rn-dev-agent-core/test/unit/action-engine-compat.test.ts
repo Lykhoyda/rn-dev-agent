@@ -136,8 +136,7 @@ test('GH#993: unpinned regex action gets the terminal regex refusal, not the mig
   assert.match(unpinnedRegex, /Rewrite as id or literal text selectors/);
   assert.doesNotMatch(unpinnedRegex, /migrate-actions/);
 
-  // Unpinned + literal selectors: the header remedy is still the right advice,
-  // and it now says what an `incompatible` migration result means.
+  // Unpinned + literal selectors: the header remedy is still the right advice.
   const unpinnedLiteral = actionReplayPreflight({
     enginePin: undefined,
     commands: [{ launchApp: { stopApp: false } }, { tapOn: { text: 'Getsafe' } }],
@@ -147,7 +146,6 @@ test('GH#993: unpinned regex action gets the terminal regex refusal, not the mig
   assert.ok(unpinnedLiteral);
   assert.match(unpinnedLiteral, /not migrated/);
   assert.match(unpinnedLiteral, /migrate-actions/);
-  assert.match(unpinnedLiteral, /reports the action as incompatible, rewrite it/);
 
   // The runtime pin still comes first: a drifted runner is refused before
   // either action-shape refusal.

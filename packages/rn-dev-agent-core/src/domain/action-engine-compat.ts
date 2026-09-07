@@ -25,9 +25,7 @@ export function actionEnginePinRefusal(enginePin: string | undefined): string | 
     return (
       `Action is not migrated to ${ACTION_ENGINE_PIN} or newer. Run ` +
       `node <plugin-root>/rn-dev-agent-core/dist/maestro-runner-pin.js migrate-actions --root <app> ` +
-      `before replay. Incompatible actions are terminal — no manual fallback. If migrate-actions ` +
-      `reports the action as incompatible, rewrite it with id or literal text selectors (no regex ` +
-      `metacharacters); there is no pin-side remedy.`
+      `before replay. Incompatible actions are terminal — no manual fallback.`
     );
   }
   const version = parseActionEnginePinVersion(enginePin);

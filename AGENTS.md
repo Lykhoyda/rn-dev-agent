@@ -215,19 +215,27 @@ alive for such callers.
 - Managed dev-client `clearState` replay has exactly one refusal owner:
  `isDevClientLaunchShape` in `src/tools/run-action.ts` reads only the existing
  install binding (`buildKind === 'expo'` or a `devClientUrl`) and refuses
- `DEV_CLIENT_CLEARSTATE_REFUSED` before any runner call, origin claim, or park;
- `cdp_login_prologue` inherits it through `cdp_run_action`, bare-RN sessions
- keep the GH #705 reinstall path, and `cdp_auto_login` keeps its own
- `containsClearState` check for legacy `.maestro/` flows. A
- `METRO_ORIGIN_MISMATCH` raised after a flow-owned relaunch (`launchApp` with
- `clearState: true` or `stopApp !== false`; a warm `stopApp: false` launch is
- not one) is attributed to that relaunch by
- `attributeOriginFailureToFlowRelaunch` (`src/tools/maestro-run.ts`), which
- returns a replacement `SessionAuthorityError` carrying the same code, holder
- and axis plus the cause in its message, `details.nextAction`, and
- `meta.flowRelaunch`. It leaves a proven foreign-Metro mismatch
- (`isProvenMetroOriginMismatch`) untouched and never changes the code, axis,
- `authorityErrorMeta` precedence, or the GH #708 abort-vs-defer flow.
+ `DEV_CLIENT_CLEARSTATE_REFUSED` ahead of the compat preflight (so an unpinned
+ clearState action gets this terminal reason, not migrate-actions) and before
+ any runner call, origin claim, or park. It decides from the parsed commands
+ (`launchApp.clearState === true` or a bare `clearState`, nested runFlow
+ included), never from the YAML text; the GH #705 appFile path keeps its
+ regex helper. `cdp_login_prologue` inherits it through `cdp_run_action`,
+ bare-RN sessions keep the GH #705 reinstall path, and `cdp_auto_login` keeps
+ its own `containsClearState` check for legacy `.maestro/` flows. A
+ `METRO_ORIGIN_MISMATCH` is attributed to a flow-owned relaunch (`launchApp`
+ with `clearState: true` or `stopApp !== false`; a warm `stopApp: false`
+ launch is not one) only while no origin claim or reprove has succeeded since
+ it: `createFlowRelaunchTracker` (`src/tools/maestro-run.ts`) is the single
+ runtime-fact owner, shared across partitioned iOS segments (nested native leg
+ via `args.flowRelaunches`) and the deferred completion — never a static scan
+ of the command list. `attributeOriginFailureToFlowRelaunch` returns a
+ replacement `SessionAuthorityError` carrying the same code, holder and axis
+ plus the cause in its message, `details.nextAction`, and the facts in
+ `meta.flowRelaunch` (`command`, `clearState`, `stopApp`). It leaves a proven
+ foreign-Metro mismatch (`isProvenMetroOriginMismatch`) untouched and never
+ changes the code, axis, `authorityErrorMeta` precedence, or the GH #708
+ abort-vs-defer flow.
 - React-tree replay presses (`createReplayPressByTestId` in
   `src/tools/cdp-replay-dispatch.ts`) opt into both `walkUp` and
   `allowInputDesignation` at the `InteractArgs` boundary. Inside the injected

@@ -9,6 +9,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
+  createFlowRelaunchTracker,
   createMaestroRunHandler,
   executeMaestroAuthorityStages,
   FLOW_RELAUNCH_NEXT_ACTION,
@@ -236,17 +237,11 @@ test('GH#993 D2.b: an origin claim failing after the flow relaunch is attributed
       assert.match(error.message, /did not re-register on the authority-bound Metro/);
       assert.match(error.message, /device_reset_state/);
       assert.match(error.message, /EG_DEV_CLIENT_CLEARSTATE/);
-      assert.deepEqual(
-        { ...meta.flowRelaunch, cause: undefined, nextAction: undefined },
-        {
-          command: 'launchApp',
-          clearState: true,
-          stopApp: true,
-          cause: undefined,
-          nextAction: undefined,
-        },
-      );
-      assert.match(String(meta.flowRelaunch?.nextAction), /device_reset_state/);
+      assert.deepEqual(meta.flowRelaunch, {
+        command: 'launchApp',
+        clearState: true,
+        stopApp: true,
+      });
       // The top-level nextAction every caller reads points at the flow, not the axis.
       assert.equal(meta.nextAction, FLOW_RELAUNCH_NEXT_ACTION);
       assert.doesNotMatch(String(meta.nextAction), /repair the named authority axis/);
@@ -418,6 +413,122 @@ test('GH#993: a plain relaunch failure is still deferred (GH#708) and stays unat
   assert.equal(trace.reproves, 1);
 });
 
+function assertUnattributed(error: unknown): void {
+  assert.ok(error instanceof SessionAuthorityError);
+  assert.equal(error.code, 'METRO_ORIGIN_MISMATCH');
+  assert.equal(
+    error.message,
+    'METRO_ORIGIN_MISMATCH: the claimed device app is not attached to the authority-bound Metro',
+  );
+  const meta = authorityErrorMeta(error);
+  assert.equal('flowRelaunch' in meta, false);
+  assert.notEqual(meta.nextAction, FLOW_RELAUNCH_NEXT_ACTION);
+}
+
+function assertAttributed(error: unknown, clearState: boolean): void {
+  assert.ok(error instanceof SessionAuthorityError);
+  assert.equal(error.code, 'METRO_ORIGIN_MISMATCH');
+  const meta = authorityErrorMeta(error);
+  assert.deepEqual(meta.flowRelaunch, { command: 'launchApp', clearState, stopApp: true });
+  assert.equal(meta.nextAction, FLOW_RELAUNCH_NEXT_ACTION);
+}
+
+// The attribution is a runtime fact, not a scan of the command list: once an
+// origin claim passes after the relaunch, the app did re-register, and a later
+// mismatch (here: after a WDA-driven native leg disturbed the target) is not
+// the launchApp's doing.
+test('GH#993: a claim that passes after the relaunch clears the attribution for a later segment', async () => {
+  const relaunches = createFlowRelaunchTracker();
+  let claims = 0;
+  const claim = async () => {
+    claims += 1;
+    if (claims === 2) throw notAttached();
+  };
+  const noop = async () => {};
+  const segment = (commands: unknown[]) =>
+    executeMaestroAuthorityStages(commands, async () => 'ok', claim, noop, noop, noop, {
+      relaunches,
+    });
+
+  await segment([{ launchApp: {} }, { tapOn: { id: 'a' } }]);
+  await assert.rejects(segment([{ tapOn: { id: 'b' } }]), (error: unknown) => {
+    assertUnattributed(error);
+    return true;
+  });
+  assert.equal(claims, 2);
+});
+
+test('GH#993: a relaunch in an earlier segment with no passing claim since is still blamed', async () => {
+  const relaunches = createFlowRelaunchTracker();
+  const noop = async () => {};
+  await executeMaestroAuthorityStages(
+    [{ launchApp: {} }],
+    async () => 'ok',
+    noop,
+    noop,
+    noop,
+    noop,
+    {
+      relaunches,
+    },
+  );
+  await assert.rejects(
+    executeMaestroAuthorityStages(
+      [{ tapOn: { id: 'b' } }],
+      async () => 'ok',
+      async () => {
+        throw notAttached();
+      },
+      noop,
+      noop,
+      noop,
+      { relaunches },
+    ),
+    (error: unknown) => {
+      assertAttributed(error, false);
+      return true;
+    },
+  );
+});
+
+test('GH#993: a trailing relaunch whose completion claim fails is attributed to the flow', async () => {
+  await assert.rejects(
+    executeMaestroAuthorityStages(
+      [{ tapOn: { id: 'submit' } }, { launchApp: { clearState: true } }],
+      async () => 'ok',
+      async () => {},
+      async (targetExpected: boolean) => {
+        if (targetExpected) throw notAttached();
+      },
+      async () => {},
+      async () => {},
+    ),
+    (error: unknown) => {
+      assertAttributed(error, true);
+      return true;
+    },
+  );
+});
+
+test('GH#993: a completion claim failing with no relaunch since the last passing claim is not attributed', async () => {
+  await assert.rejects(
+    executeMaestroAuthorityStages(
+      [{ launchApp: {} }, { tapOn: { id: 'a' } }],
+      async () => 'ok',
+      async () => {},
+      async (targetExpected: boolean) => {
+        if (targetExpected) throw notAttached();
+      },
+      async () => {},
+      async () => {},
+    ),
+    (error: unknown) => {
+      assertUnattributed(error);
+      return true;
+    },
+  );
+});
+
 function runnerLog(): string {
   return [
     'Single device execution mode',
@@ -486,4 +597,74 @@ test('GH#708: maestro_run reports a passing relaunch flow as passing', async () 
   assert.equal(envelope.data.passed, true);
   // Once for the failed relaunch, once before completing the deferred target.
   assert.equal(reproves, 2);
+});
+
+function relaunchFlowHandler(options: {
+  claim: () => Promise<void>;
+  complete: (targetExpected: boolean) => Promise<void>;
+}) {
+  return createMaestroRunHandler({
+    getActiveSession: () => ({
+      name: 'exact',
+      platform: 'ios',
+      deviceId: EXACT,
+      appId: APP_ID,
+      openedAt: new Date(0).toISOString(),
+    }),
+    chooseDispatch: () => fakeRunnerDispatch(),
+    parkFlow: async (run: () => Promise<unknown>) => run(),
+    claimNativeOrigin: options.claim,
+    completeNativeOrigin: options.complete,
+    relaunchManagedApp: async () => {},
+    reproveManagedOrigin: async () => {},
+    execFile: async (_file: string, args: string[]) => {
+      const dir = args[args.indexOf('--output') + 1]!;
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, 'maestro-runner.log'), runnerLog(), 'utf8');
+      writeFileSync(
+        join(dir, 'report.json'),
+        JSON.stringify({
+          device: { id: EXACT, platform: 'ios' },
+          flows: [{ device: { id: EXACT, platform: 'ios' } }],
+        }),
+        'utf8',
+      );
+      return { stdout: runnerLog(), stderr: '' };
+    },
+  });
+}
+
+test('GH#993: the deferred iOS completion is not blamed on a relaunch a later claim already proved', async () => {
+  const handler = relaunchFlowHandler({
+    claim: async () => {},
+    complete: async (targetExpected) => {
+      if (targetExpected) throw notAttached();
+    },
+  });
+  await assert.rejects(
+    handler({ inlineYaml: RELAUNCH_FLOW, platform: 'ios', appId: APP_ID, deviceId: EXACT }),
+    (error: unknown) => {
+      assertUnattributed(error);
+      return true;
+    },
+  );
+});
+
+test('GH#993: the native leg claim failing right after the relaunch is blamed on it', async () => {
+  let claims = 0;
+  const handler = relaunchFlowHandler({
+    claim: async () => {
+      claims += 1;
+      if (claims === 2) throw notAttached();
+    },
+    complete: async () => {},
+  });
+  await assert.rejects(
+    handler({ inlineYaml: RELAUNCH_FLOW, platform: 'ios', appId: APP_ID, deviceId: EXACT }),
+    (error: unknown) => {
+      assertAttributed(error, false);
+      return true;
+    },
+  );
+  assert.equal(claims, 2, 'the pre-claim passed and the post-relaunch claim failed');
 });
