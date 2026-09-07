@@ -882,7 +882,7 @@ test('GH #992: an expired readiness deadline reports the pre-kill log tail, not 
   assert.match(
     outcome.message,
     new RegExp(
-      `readiness deadline ${DEFAULT_METRO_READINESS_TIMEOUT_MS} ms expired: listener absent \\d+ probes, probe unknown 0, unowned listener none`,
+      `readiness deadline ${DEFAULT_METRO_READINESS_TIMEOUT_MS} ms expired: listener absent [1-9]\\d* probes, probe unknown 0, unowned listener none`,
     ),
   );
   assert.match(outcome.message, /Starting Metro Bundler/);
@@ -940,7 +940,10 @@ test('GH #992: a configured readiness budget bounds the wait and is named in the
     outcome.probesBeforeKill >= 45 && outcome.probesBeforeKill <= 55,
     String(outcome.probesBeforeKill),
   );
-  assert.match(outcome.message, /readiness deadline 5000 ms expired: listener absent \d+ probes/);
+  assert.match(
+    outcome.message,
+    /readiness deadline 5000 ms expired: listener absent [1-9]\d* probes/,
+  );
   assert.doesNotMatch(outcome.message, /EPIPE/);
 });
 
