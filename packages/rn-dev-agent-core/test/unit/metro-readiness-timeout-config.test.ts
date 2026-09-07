@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
   DEFAULT_METRO_READINESS_TIMEOUT_MS,
-  METRO_ENSURE_CLI_CLEANUP_MARGIN_MS,
+  METRO_ENSURE_CLI_PRE_READINESS_HEADROOM_MS,
   METRO_READINESS_TIMEOUT_MAX_MS,
   SESSION_CLI_TIMEOUT_MS,
   deriveEnsureMetroCliTimeoutMs,
@@ -59,23 +59,25 @@ test('metro.readinessTimeoutMs: a malformed metro container refuses instead of f
   }
 });
 
-test('ensure-metro CLI timeout is derived from the budget plus cleanup margin, floored at 120 s', () => {
+test('ensure-metro CLI timeout is the budget plus the pre-readiness headroom', () => {
   assert.equal(SESSION_CLI_TIMEOUT_MS, 120_000);
-  assert.equal(METRO_ENSURE_CLI_CLEANUP_MARGIN_MS, 25_000);
-  const atDefault = deriveEnsureMetroCliTimeoutMs(DEFAULT_METRO_READINESS_TIMEOUT_MS);
-  assert.equal(atDefault, 120_000, '90 s + 25 s margin still sits under the 120 s floor');
-  assert.ok(atDefault >= DEFAULT_METRO_READINESS_TIMEOUT_MS + METRO_ENSURE_CLI_CLEANUP_MARGIN_MS);
-  const configured = deriveEnsureMetroCliTimeoutMs(150_000);
-  assert.equal(configured, 175_000);
+  assert.equal(METRO_ENSURE_CLI_PRE_READINESS_HEADROOM_MS, 100_000);
+  assert.equal(
+    deriveEnsureMetroCliTimeoutMs(20_000),
+    SESSION_CLI_TIMEOUT_MS,
+    'the pre-GH #992 20 s budget still derives the historical 120 s bound',
+  );
+  assert.equal(deriveEnsureMetroCliTimeoutMs(DEFAULT_METRO_READINESS_TIMEOUT_MS), 190_000);
+  assert.equal(deriveEnsureMetroCliTimeoutMs(150_000), 250_000);
   assert.equal(
     deriveEnsureMetroCliTimeoutMs(METRO_READINESS_TIMEOUT_MAX_MS),
-    METRO_READINESS_TIMEOUT_MAX_MS + METRO_ENSURE_CLI_CLEANUP_MARGIN_MS,
+    METRO_READINESS_TIMEOUT_MAX_MS + METRO_ENSURE_CLI_PRE_READINESS_HEADROOM_MS,
   );
-  assert.equal(deriveEnsureMetroCliTimeoutMs(1_000), SESSION_CLI_TIMEOUT_MS);
-  for (const budget of [1_000, 90_000, 150_000, 600_000]) {
-    const timeout = deriveEnsureMetroCliTimeoutMs(budget);
-    assert.ok(timeout >= SESSION_CLI_TIMEOUT_MS);
-    assert.ok(timeout >= budget + METRO_ENSURE_CLI_CLEANUP_MARGIN_MS);
+  for (const budget of [1_000, 20_000, 90_000, 150_000, 600_000]) {
+    assert.equal(
+      deriveEnsureMetroCliTimeoutMs(budget),
+      budget + METRO_ENSURE_CLI_PRE_READINESS_HEADROOM_MS,
+    );
   }
 });
 

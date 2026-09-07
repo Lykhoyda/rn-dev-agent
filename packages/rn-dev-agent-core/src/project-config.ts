@@ -259,16 +259,15 @@ export function resolveMirrorConfig(
 export const DEFAULT_METRO_READINESS_TIMEOUT_MS = 90_000;
 export const METRO_READINESS_TIMEOUT_MIN_MS = 1_000;
 export const METRO_READINESS_TIMEOUT_MAX_MS = 600_000;
-// Floor for every session-CLI spawnSync in the generated project adapter
+// Bound for every session-CLI spawnSync in the generated project adapter
 // (prepare-build, complete-build, abort-build, …). ensure-metro is the
 // exception: its SIGKILL bound is derived from the configured readiness
 // budget so a slow host cannot be truncated into SESSION_CLI_TIMEOUT.
 export const SESSION_CLI_TIMEOUT_MS = 120_000;
-// Two stopManagedMetro proofs (stale live Metro + failed-start cleanup),
-// each MANAGED_METRO_STOP_TIMEOUT_MS = 5 s, plus a bounded install-artifact
-// probe and restart-generation work. Explicit so the adapter timeout and
-// the budget cannot drift apart in prose.
-export const METRO_ENSURE_CLI_CLEANUP_MARGIN_MS = 25_000;
+// Everything ensure-metro does outside the readiness loop: retained-cleanup
+// stopManagedMetro, stale-binding captureMetroBinding + stopManagedMetro,
+// the installed-artifact hash and `xcrun simctl get_app_container`.
+export const METRO_ENSURE_CLI_PRE_READINESS_HEADROOM_MS = 100_000;
 
 export interface MetroReadinessTimeoutResolution {
   timeoutMs: number;
@@ -312,5 +311,5 @@ export function resolveMetroReadinessTimeout(
 }
 
 export function deriveEnsureMetroCliTimeoutMs(readinessTimeoutMs: number): number {
-  return Math.max(SESSION_CLI_TIMEOUT_MS, readinessTimeoutMs + METRO_ENSURE_CLI_CLEANUP_MARGIN_MS);
+  return readinessTimeoutMs + METRO_ENSURE_CLI_PRE_READINESS_HEADROOM_MS;
 }

@@ -190,7 +190,7 @@ test('GH #992: resolve-metro-readiness reports the derived adapter timeout witho
     assert.deepEqual(JSON.parse(absent.stdout), {
       readinessTimeoutMs: 90_000,
       source: 'default',
-      ensureMetroCliTimeoutMs: 120_000,
+      ensureMetroCliTimeoutMs: 190_000,
     });
 
     mkdirSync(join(root, '.rn-agent'), { recursive: true });
@@ -206,7 +206,7 @@ test('GH #992: resolve-metro-readiness reports the derived adapter timeout witho
     assert.deepEqual(JSON.parse(configured.stdout), {
       readinessTimeoutMs: 150_000,
       source: 'config',
-      ensureMetroCliTimeoutMs: 175_000,
+      ensureMetroCliTimeoutMs: 250_000,
     });
   } finally {
     rmSync(root, { force: true, recursive: true });

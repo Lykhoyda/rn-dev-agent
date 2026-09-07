@@ -68989,7 +68989,7 @@ async function resolveEnsureMetroCliTimeoutMs() {
   }
   let parsed = null;
   try { parsed = JSON.parse(String(resolved.stdout)); } catch {}
-  if (!parsed || !Number.isInteger(parsed.ensureMetroCliTimeoutMs) || parsed.ensureMetroCliTimeoutMs < SESSION_CLI_TIMEOUT_MS || !Number.isInteger(parsed.readinessTimeoutMs) || parsed.ensureMetroCliTimeoutMs < parsed.readinessTimeoutMs) {
+  if (!parsed || !Number.isInteger(parsed.ensureMetroCliTimeoutMs) || !Number.isInteger(parsed.readinessTimeoutMs) || parsed.ensureMetroCliTimeoutMs < parsed.readinessTimeoutMs) {
     await drainBuildTerminationSignals();
     failBuild(2, 'METRO_READINESS_TIMEOUT_INVALID: resolver output is not a usable ensure-metro timeout');
   }

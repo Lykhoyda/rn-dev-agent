@@ -4832,21 +4832,21 @@ process.exit(3);
     });
     assert.equal(
       boundOf(defaultRun.spawns, 'ensure-metro'),
-      SESSION_CLI_TIMEOUT_MS,
-      'at the 90 s default the derived bound is exactly the accepted floor',
+      deriveEnsureMetroCliTimeoutMs(DEFAULT_METRO_READINESS_TIMEOUT_MS),
+      'the 90 s default carries its own headroom rather than a fixed bound',
     );
 
-    const belowFloor = runAdapter({
+    const belowBudget = runAdapter({
       readinessTimeoutMs: DEFAULT_METRO_READINESS_TIMEOUT_MS,
       source: 'default',
-      ensureMetroCliTimeoutMs: SESSION_CLI_TIMEOUT_MS - 1,
+      ensureMetroCliTimeoutMs: DEFAULT_METRO_READINESS_TIMEOUT_MS - 1,
     });
-    assert.equal(belowFloor.result.status, 2);
-    assert.match(belowFloor.result.stderr, /METRO_READINESS_TIMEOUT_INVALID/);
+    assert.equal(belowBudget.result.status, 2);
+    assert.match(belowBudget.result.stderr, /METRO_READINESS_TIMEOUT_INVALID/);
     assert.equal(
-      boundOf(belowFloor.spawns, 'ensure-metro'),
+      boundOf(belowBudget.spawns, 'ensure-metro'),
       undefined,
-      'a resolver bound below the session-CLI floor must refuse instead of spawning ensure-metro',
+      'a resolver bound that cannot cover the readiness budget must refuse instead of spawning ensure-metro',
     );
   } finally {
     rmSync(root, { force: true, recursive: true });

@@ -277,8 +277,8 @@ const metroModule = ${JSON.stringify(managedMetroModuleUrl)};
       port: Number(process.env.FIXTURE_METRO_PORT),
       instanceId: 'fixture-metro',
       buildGeneration: 1,
-      signerCapability: ${JSON.stringify(signerCapability)}
-      readinessTimeoutMs: READINESS_TIMEOUT_MS,
+      signerCapability: ${JSON.stringify(signerCapability)},
+      readinessTimeoutMs: ${READINESS_TIMEOUT_MS},
     });
     fs.writeFileSync(bindingPath, JSON.stringify(binding));
     return;

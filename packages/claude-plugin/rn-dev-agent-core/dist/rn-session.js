@@ -11858,9 +11858,9 @@ function resolveMetroReadinessTimeout(deps = {}) {
   return { timeoutMs: raw, source: "config" };
 }
 function deriveEnsureMetroCliTimeoutMs(readinessTimeoutMs) {
-  return Math.max(SESSION_CLI_TIMEOUT_MS, readinessTimeoutMs + METRO_ENSURE_CLI_CLEANUP_MARGIN_MS);
+  return readinessTimeoutMs + METRO_ENSURE_CLI_PRE_READINESS_HEADROOM_MS;
 }
-var warnedBadConfig, DEFAULT_METRO_READINESS_TIMEOUT_MS, METRO_READINESS_TIMEOUT_MIN_MS, METRO_READINESS_TIMEOUT_MAX_MS, SESSION_CLI_TIMEOUT_MS, METRO_ENSURE_CLI_CLEANUP_MARGIN_MS;
+var warnedBadConfig, DEFAULT_METRO_READINESS_TIMEOUT_MS, METRO_READINESS_TIMEOUT_MIN_MS, METRO_READINESS_TIMEOUT_MAX_MS, METRO_ENSURE_CLI_PRE_READINESS_HEADROOM_MS;
 var init_project_config = __esm({
   "packages/rn-dev-agent-core/dist/project-config.js"() {
     "use strict";
@@ -11871,8 +11871,7 @@ var init_project_config = __esm({
     DEFAULT_METRO_READINESS_TIMEOUT_MS = 9e4;
     METRO_READINESS_TIMEOUT_MIN_MS = 1e3;
     METRO_READINESS_TIMEOUT_MAX_MS = 6e5;
-    SESSION_CLI_TIMEOUT_MS = 12e4;
-    METRO_ENSURE_CLI_CLEANUP_MARGIN_MS = 25e3;
+    METRO_ENSURE_CLI_PRE_READINESS_HEADROOM_MS = 1e5;
   }
 });
 
