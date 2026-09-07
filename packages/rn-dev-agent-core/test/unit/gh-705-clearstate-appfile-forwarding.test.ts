@@ -233,15 +233,25 @@ test('GH#705 an explicit cdp_run_action appFile wins over auto-resolution', asyn
   try {
     project.seedAction('login-en', clearStateAction('login-en'), null);
     const forwarded: Record<string, unknown>[] = [];
+    let resolutions = 0;
     const handler = createRunActionHandler({
       maestroRun: async (args: Record<string, unknown>) => {
         forwarded.push(args);
         return passEnvelope();
       },
-      installReceipt: () => {
-        throw new Error('the receipt must not be read when appFile is explicit');
+      // GH #993: the install binding is read for every clearState flow to decide
+      // the dev-client refusal, so the pin is that auto-resolution never runs —
+      // not that the binding is never read.
+      installReceipt: () => ({
+        platform: 'ios',
+        deviceId: EXACT,
+        appId: APP_ID,
+        buildKind: 'bare-react-native',
+      }),
+      resolveAppFile: () => {
+        resolutions += 1;
+        return APP_FILE;
       },
-      resolveAppFile: () => APP_FILE,
       reissueInstallReceipt: async () => {},
       claimNativeOrigin: async () => {},
       completeNativeOrigin: async () => {},
@@ -253,6 +263,7 @@ test('GH#705 an explicit cdp_run_action appFile wins over auto-resolution', asyn
       appFile: '/explicit/Other.app',
     });
     assert.equal(forwarded[0].appFile, '/explicit/Other.app');
+    assert.equal(resolutions, 0, 'an explicit appFile bypasses auto-resolution');
   } finally {
     project.cleanup();
   }

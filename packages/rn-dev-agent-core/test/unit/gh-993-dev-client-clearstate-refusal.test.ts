@@ -135,6 +135,21 @@ test('GH#993: a clearState action on a dev-client session is refused with zero r
   );
 });
 
+test('GH#993: an explicit appFile does not bypass the dev-client refusal', async (t) => {
+  // A reinstall bundle does not rescue a dev client stranded at its picker.
+  const { trace, runAction, project } = harness(t, EXPO_INSTALL);
+  const envelope = parse(
+    await runAction({
+      actionId: 'user-login',
+      projectRoot: project.root,
+      autoRepair: false,
+      appFile: '/explicit/Other.app',
+    }),
+  );
+  assert.equal(envelope.code, 'DEV_CLIENT_CLEARSTATE_REFUSED');
+  assert.equal(trace.maestroRuns, 0);
+});
+
 test('GH#993: a dev-client URL launch (Android shape) is refused the same way', async (t) => {
   const { trace, runAction, project } = harness(t, {
     platform: 'android',
