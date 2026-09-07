@@ -28319,6 +28319,15 @@ function isSafeMaestroScalar(s) {
     return false;
   return true;
 }
+function containsClearState(value) {
+  if (value === "clearState")
+    return true;
+  if (Array.isArray(value))
+    return value.some(containsClearState);
+  if (!value || typeof value !== "object")
+    return false;
+  return Object.entries(value).some(([key, nested]) => key === "clearState" || containsClearState(nested));
+}
 function buildMaestroFlow(opts, commands) {
   if (opts.appId !== void 0) {
     assertValidBundleId(opts.appId, "appId header");
@@ -84713,16 +84722,6 @@ function isDevClientLaunchShape(install) {
     return false;
   return install.buildKind === "expo" || typeof install.devClientUrl === "string";
 }
-function flowCommandsClearState(commands) {
-  const optionsClearState = (options) => {
-    if (Array.isArray(options))
-      return flowCommandsClearState(options);
-    if (!options || typeof options !== "object")
-      return false;
-    return Object.entries(options).some(([key, nested]) => key === "clearState" && nested === true || optionsClearState(nested));
-  };
-  return commands.some((command) => command === "clearState" || optionsClearState(command));
-}
 function classifyFailure(failure) {
   switch (failure.kind) {
     case "SELECTOR_NOT_FOUND":
@@ -84968,7 +84967,7 @@ function createRunActionHandler(deps = {}) {
     const iosProofPlan = replayPlatform === "ios" ? planIosProofDomains(preflightCommands, args.params ?? {}) : null;
     const requiresNativeRuntime = iosProofPlan?.ok !== true || iosProofPlan.segments.some((segment) => segment.domain === "xctest-native");
     const install = installReceipt();
-    if (isDevClientLaunchShape(install) && flowCommandsClearState(preflightCommands)) {
+    if (isDevClientLaunchShape(install) && containsClearState(preflightCommands)) {
       return failResult(DEV_CLIENT_CLEARSTATE_REFUSAL, "DEV_CLIENT_CLEARSTATE_REFUSED", {
         actionId: args.actionId,
         fallback: "none",
@@ -85624,6 +85623,7 @@ var init_run_action = __esm({
     init_maestro_error_parser();
     init_maestro_run();
     init_repair_action();
+    init_maestro_validator();
     init_path_safety();
     init_sidecar_io();
     init_route_sequence();
@@ -93251,15 +93251,6 @@ function assertLegacyLoginFlow(projectRoot, flowPath) {
     throw new Error(`Refusing legacy login flow outside ${maestroDir}.`);
   }
   return resolvedFlow;
-}
-function containsClearState(value) {
-  if (value === "clearState")
-    return true;
-  if (Array.isArray(value))
-    return value.some(containsClearState);
-  if (!value || typeof value !== "object")
-    return false;
-  return Object.entries(value).some(([key, nested]) => key === "clearState" || containsClearState(nested));
 }
 function boundSessionProjectRoot() {
   const status = getWorkerAuthorityRuntime().status();

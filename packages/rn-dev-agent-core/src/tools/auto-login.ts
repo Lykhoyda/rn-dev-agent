@@ -8,6 +8,7 @@ import { findProjectRoot } from '../nav-graph/storage.js';
 import { readAppId } from '../project-config.js';
 import {
   buildMaestroFlow,
+  containsClearState,
   parseAndValidateFlow,
   isValidBundleId,
   MaestroValidationError,
@@ -167,15 +168,6 @@ function assertLegacyLoginFlow(projectRoot: string, flowPath: string): string {
     throw new Error(`Refusing legacy login flow outside ${maestroDir}.`);
   }
   return resolvedFlow;
-}
-
-function containsClearState(value: unknown): boolean {
-  if (value === 'clearState') return true;
-  if (Array.isArray(value)) return value.some(containsClearState);
-  if (!value || typeof value !== 'object') return false;
-  return Object.entries(value).some(
-    ([key, nested]) => key === 'clearState' || containsClearState(nested),
-  );
 }
 
 interface AutoLoginDeps {

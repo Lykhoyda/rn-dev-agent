@@ -129,6 +129,19 @@ const DENIED_COMMANDS = new Set<string>([
   'stopRecording',
 ]);
 
+// True when parsed commands clear app state, at any nesting (inlined runFlow
+// subflows): the bare `clearState` command, `clearState: <appId>`, or a
+// `clearState` key under `launchApp`. Decided from the command tree, never the
+// YAML text, so prose comments mentioning clearState do not count.
+export function containsClearState(value: unknown): boolean {
+  if (value === 'clearState') return true;
+  if (Array.isArray(value)) return value.some(containsClearState);
+  if (!value || typeof value !== 'object') return false;
+  return Object.entries(value).some(
+    ([key, nested]) => key === 'clearState' || containsClearState(nested),
+  );
+}
+
 // ── Builder ─────────────────────────────────────────────────────────
 
 export interface MaestroFlowOptions {

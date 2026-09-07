@@ -23981,6 +23981,15 @@ function isSafeMaestroScalar(s) {
     return false;
   return true;
 }
+function containsClearState(value) {
+  if (value === "clearState")
+    return true;
+  if (Array.isArray(value))
+    return value.some(containsClearState);
+  if (!value || typeof value !== "object")
+    return false;
+  return Object.entries(value).some(([key, nested]) => key === "clearState" || containsClearState(nested));
+}
 function buildMaestroFlow(opts, commands) {
   if (opts.appId !== void 0) {
     assertValidBundleId(opts.appId, "appId header");
@@ -82404,6 +82413,9 @@ function createMaestroRunHandler(deps = {}) {
   };
 }
 
+// packages/rn-dev-agent-core/dist/tools/run-action.js
+init_maestro_validator();
+
 // packages/rn-dev-agent-core/dist/nav-graph/route-sequence.js
 function classifyRouteDriftAfterFailure(input) {
   const { expectedSequence, liveRoute } = input;
@@ -82602,16 +82614,6 @@ function isDevClientLaunchShape(install) {
   if (!install)
     return false;
   return install.buildKind === "expo" || typeof install.devClientUrl === "string";
-}
-function flowCommandsClearState(commands) {
-  const optionsClearState = (options) => {
-    if (Array.isArray(options))
-      return flowCommandsClearState(options);
-    if (!options || typeof options !== "object")
-      return false;
-    return Object.entries(options).some(([key, nested]) => key === "clearState" && nested === true || optionsClearState(nested));
-  };
-  return commands.some((command) => command === "clearState" || optionsClearState(command));
 }
 var DEV_CLIENT_CLEARSTATE_REFUSAL = "Refusing to replay a flow containing clearState on a managed dev-client session. The clearState relaunch uninstalls the app and strands the dev client at its picker, so the relaunched app cannot re-attach to the authority-bound Metro (EG_DEV_CLIENT_CLEARSTATE). No runner was invoked and the app was not touched. Remove launchApp clearState from the action so it starts from the attached app; when a state reset is needed, run device_reset_state before cdp_run_action or cdp_login_prologue.";
 function classifyFailure(failure) {
@@ -82862,7 +82864,7 @@ function createRunActionHandler(deps = {}) {
     const iosProofPlan = replayPlatform === "ios" ? planIosProofDomains(preflightCommands, args.params ?? {}) : null;
     const requiresNativeRuntime = iosProofPlan?.ok !== true || iosProofPlan.segments.some((segment) => segment.domain === "xctest-native");
     const install = installReceipt();
-    if (isDevClientLaunchShape(install) && flowCommandsClearState(preflightCommands)) {
+    if (isDevClientLaunchShape(install) && containsClearState(preflightCommands)) {
       return failResult(DEV_CLIENT_CLEARSTATE_REFUSAL, "DEV_CLIENT_CLEARSTATE_REFUSED", {
         actionId: args.actionId,
         fallback: "none",
@@ -90962,15 +90964,6 @@ function assertLegacyLoginFlow(projectRoot, flowPath) {
     throw new Error(`Refusing legacy login flow outside ${maestroDir}.`);
   }
   return resolvedFlow;
-}
-function containsClearState(value) {
-  if (value === "clearState")
-    return true;
-  if (Array.isArray(value))
-    return value.some(containsClearState);
-  if (!value || typeof value !== "object")
-    return false;
-  return Object.entries(value).some(([key, nested]) => key === "clearState" || containsClearState(nested));
 }
 function boundSessionProjectRoot() {
   const status = getWorkerAuthorityRuntime().status();

@@ -218,11 +218,12 @@ alive for such callers.
  `DEV_CLIENT_CLEARSTATE_REFUSED` ahead of the compat preflight (so an unpinned
  clearState action gets this terminal reason, not migrate-actions) and before
  any runner call, origin claim, or park. It decides from the parsed commands
- (`launchApp.clearState === true` or a bare `clearState`, nested runFlow
- included), never from the YAML text; the GH #705 appFile path keeps its
- regex helper. `cdp_login_prologue` inherits it through `cdp_run_action`,
- bare-RN sessions keep the GH #705 reinstall path, and `cdp_auto_login` keeps
- its own `containsClearState` check for legacy `.maestro/` flows. A
+ via the single `containsClearState` predicate in `src/domain/maestro-validator.ts`
+ (any `clearState` key, `clearState: <appId>`, or a bare `clearState`, nested
+ runFlow included), never from the YAML text; the GH #705 appFile path keeps
+ its regex helper. `cdp_login_prologue` inherits it through `cdp_run_action`,
+ bare-RN sessions keep the GH #705 reinstall path, and `cdp_auto_login` calls
+ that same predicate for legacy `.maestro/` flows. A
  `METRO_ORIGIN_MISMATCH` is attributed to a flow-owned relaunch (`launchApp`
  with `clearState: true` or `stopApp !== false`; a warm `stopApp: false`
  launch is not one) only while no origin claim or reprove has succeeded since

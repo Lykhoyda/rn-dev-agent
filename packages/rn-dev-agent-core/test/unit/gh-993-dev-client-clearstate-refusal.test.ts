@@ -219,6 +219,19 @@ test('GH#993: a prose comment mentioning clearState: true is not a clearState fl
   assert.equal(trace.maestroRuns, 1, 'the warm flow runs');
 });
 
+test('GH#993: the bare `clearState: <appId>` spelling is refused, not just clearState: true', async (t) => {
+  // Maestro's documented standalone spelling wipes the same dev-client state as
+  // launchApp{clearState: true}; the refusal must not turn on the literal `true`.
+  const yaml = fixtureYaml({ id: 'user-login', intent: 'warm login', selectors: ['login-submit'] })
+    .replace('- launchApp\n', `- launchApp:\n    stopApp: false\n- clearState: ${APP_ID}\n`);
+  const { trace, runAction, project } = harness(t, EXPO_INSTALL, { yaml });
+  const envelope = parse(
+    await runAction({ actionId: 'user-login', projectRoot: project.root, autoRepair: false }),
+  );
+  assert.equal(envelope.code, 'DEV_CLIENT_CLEARSTATE_REFUSED');
+  assert.deepEqual(trace, { maestroRuns: 0, claims: 0, relaunches: 0, appFileResolutions: 0 });
+});
+
 test('GH#993: a clearState relaunch inlined in a runFlow subflow is refused', async (t) => {
   const yaml = [
     `appId: ${APP_ID}`,

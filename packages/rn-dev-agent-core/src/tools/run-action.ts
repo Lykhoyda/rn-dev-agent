@@ -65,6 +65,7 @@ import {
 } from '../domain/maestro-error-parser.js';
 import { createMaestroRunHandler } from './maestro-run.js';
 import { createRepairActionHandler } from './repair-action.js';
+import { containsClearState } from '../domain/maestro-validator.js';
 import { isValidActionId } from '../domain/path-safety.js';
 import { sidecarPathFor } from '../domain/sidecar-io.js';
 import { classifyRouteDriftAfterFailure } from '../nav-graph/route-sequence.js';
@@ -147,23 +148,6 @@ function boundInstallReceipt(): RunActionInstallReceipt | null {
 export function isDevClientLaunchShape(install: RunActionInstallReceipt | null): boolean {
   if (!install) return false;
   return install.buildKind === 'expo' || typeof install.devClientUrl === 'string';
-}
-
-/**
- * True when the parsed flow clears app state: `launchApp: { clearState: true }`
- * or the bare `clearState` command, at any nesting (inlined runFlow subflows).
- * Decided from the command tree, never from the YAML text, so prose comments
- * mentioning clearState do not count.
- */
-function flowCommandsClearState(commands: readonly unknown[]): boolean {
-  const optionsClearState = (options: unknown): boolean => {
-    if (Array.isArray(options)) return flowCommandsClearState(options);
-    if (!options || typeof options !== 'object') return false;
-    return Object.entries(options).some(
-      ([key, nested]) => (key === 'clearState' && nested === true) || optionsClearState(nested),
-    );
-  };
-  return commands.some((command) => command === 'clearState' || optionsClearState(command));
 }
 
 export const DEV_CLIENT_CLEARSTATE_REFUSAL =
@@ -716,7 +700,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
     // decided on the parsed commands, so an unpinned clearState action gets
     // this terminal reason instead of migrate-actions. cdp_login_prologue
     // inherits this.
-    if (isDevClientLaunchShape(install) && flowCommandsClearState(preflightCommands)) {
+    if (isDevClientLaunchShape(install) && containsClearState(preflightCommands)) {
       return failResult(DEV_CLIENT_CLEARSTATE_REFUSAL, 'DEV_CLIENT_CLEARSTATE_REFUSED', {
         actionId: args.actionId,
         fallback: 'none',
