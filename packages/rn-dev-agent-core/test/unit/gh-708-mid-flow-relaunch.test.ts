@@ -11,10 +11,12 @@ import { join } from 'node:path';
 import {
   createMaestroRunHandler,
   executeMaestroAuthorityStages,
+  FLOW_RELAUNCH_NEXT_ACTION,
   MaestroStageExecutionError,
 } from '../../dist/tools/maestro-run.js';
 import { chooseMaestroDispatch } from '../../dist/tools/maestro-dispatch.js';
 import { authorityErrorMeta, SessionAuthorityError } from '../../dist/session/registry.js';
+import { provenMetroOriginMismatch } from '../../dist/session/metro-origin.js';
 import {
   _resetEngineStatusForTest,
   _setEngineStatusForTest,
@@ -221,15 +223,19 @@ test('GH#993 D2.b: an origin claim failing after the flow relaunch is attributed
       async () => {},
     ),
     (error: unknown) => {
-      assert.ok(error instanceof SessionAuthorityError, 'the error instance is unchanged');
+      assert.ok(error instanceof SessionAuthorityError, 'still a SessionAuthorityError');
       assert.equal(error.code, 'METRO_ORIGIN_MISMATCH', 'the code is unchanged');
-      assert.equal(authorityErrorMeta(error).axis, 'A', 'the axis attribution is unchanged');
+      const meta = authorityErrorMeta(error) as {
+        axis?: string;
+        nextAction?: string;
+        flowRelaunch?: Record<string, unknown>;
+      };
+      assert.equal(meta.axis, 'A', 'the axis attribution is unchanged');
       assert.match(error.message, /^METRO_ORIGIN_MISMATCH: the claimed device app is not attached/);
       assert.match(error.message, /flow's own launchApp \(clearState: true\) relaunched the app/);
       assert.match(error.message, /did not re-register on the authority-bound Metro/);
       assert.match(error.message, /device_reset_state/);
       assert.match(error.message, /EG_DEV_CLIENT_CLEARSTATE/);
-      const meta = authorityErrorMeta(error) as { flowRelaunch?: Record<string, unknown> };
       assert.deepEqual(
         { ...meta.flowRelaunch, cause: undefined, nextAction: undefined },
         {
@@ -241,6 +247,9 @@ test('GH#993 D2.b: an origin claim failing after the flow relaunch is attributed
         },
       );
       assert.match(String(meta.flowRelaunch?.nextAction), /device_reset_state/);
+      // The top-level nextAction every caller reads points at the flow, not the axis.
+      assert.equal(meta.nextAction, FLOW_RELAUNCH_NEXT_ACTION);
+      assert.doesNotMatch(String(meta.nextAction), /repair the named authority axis/);
       return true;
     },
   );
@@ -250,6 +259,70 @@ test('GH#993 D2.b: an origin claim failing after the flow relaunch is attributed
     'no origin-requiring stage ran (openLink never executed)',
   );
   assert.deepEqual(completed, [], 'the probe failure still propagates raw from the claim');
+});
+
+test('GH#993: a warm launchApp {stopApp: false} is not a relaunch and is not blamed', async () => {
+  const relaunches: Array<boolean | undefined> = [];
+  await assert.rejects(
+    executeMaestroAuthorityStages(
+      [{ launchApp: { stopApp: false } }, { tapOn: { id: 'login-email' } }],
+      async () => 'ok',
+      async () => {
+        throw notAttached();
+      },
+      async () => {},
+      async (stopApp?: boolean) => {
+        relaunches.push(stopApp);
+      },
+      async () => {},
+    ),
+    (error: unknown) => {
+      assert.ok(error instanceof SessionAuthorityError);
+      assert.equal(
+        error.message,
+        'METRO_ORIGIN_MISMATCH: the claimed device app is not attached to the authority-bound Metro',
+      );
+      const meta = authorityErrorMeta(error);
+      assert.equal('flowRelaunch' in meta, false);
+      assert.doesNotMatch(String(meta.nextAction), /device_reset_state/);
+      return true;
+    },
+  );
+  assert.deepEqual(relaunches, [false], 'the warm launch still runs through the gate');
+});
+
+test('GH#993: a proven foreign-Metro mismatch keeps its own cause and remedy', async () => {
+  const proven = () =>
+    provenMetroOriginMismatch(
+      8081,
+      { platform: 'ios', deviceId: EXACT, appId: 'com.example.app' },
+      { port: 8082, targetDeviceName: 'iPhone 16' },
+    );
+  const expected = proven();
+  await assert.rejects(
+    executeMaestroAuthorityStages(
+      CLEARSTATE_LOGIN_FLOW,
+      async () => 'ok',
+      async () => {
+        throw proven();
+      },
+      async () => {},
+      async () => {},
+      async () => {},
+    ),
+    (error: unknown) => {
+      assert.ok(error instanceof SessionAuthorityError);
+      assert.equal(error.code, 'METRO_ORIGIN_MISMATCH');
+      assert.equal(error.message, expected.message);
+      assert.doesNotMatch(error.message, /not a broken binding/);
+      const meta = authorityErrorMeta(error);
+      assert.equal(meta.metroOriginPinning, 'proven-foreign-metro');
+      assert.equal(meta.foreignMetroPort, 8082);
+      assert.equal('flowRelaunch' in meta, false);
+      assert.equal(meta.nextAction, expected.details?.nextAction);
+      return true;
+    },
+  );
 });
 
 test('GH#993: an origin claim failing with no preceding flow relaunch is not attributed', async () => {

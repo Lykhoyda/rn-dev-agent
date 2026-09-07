@@ -39,6 +39,21 @@ test('GH#993: routeChain walks root→leaf and includes params.screen once', () 
   assert.deepEqual(routeChain({}), []);
 });
 
+test('GH#993: a stale params.screen on a parent with a mounted child is not reported', async () => {
+  // React Navigation keeps `{screen: 'Login'}` on Root after the user logged in
+  // and the nested navigator moved to Home; the mounted child is the truth.
+  const loggedIn = {
+    routeName: 'Root',
+    params: { screen: 'Login' },
+    nested: { routeName: 'Home' },
+  };
+  assert.deepEqual(routeChain(loggedIn), ['Root', 'Home']);
+  assert.equal(await isOnAuthScreen(fakeClient(loggedIn)), false);
+  const result = await handleAutoLogin(fakeClient(loggedIn), { platform: 'ios', deviceId: 'SIM' });
+  assert.equal(result?.loggedIn, false);
+  assert.equal(result?.reason, 'App is not on an auth screen (route: Root › Home)');
+});
+
 test('GH#993: the reported auth › intro state is an auth screen', async () => {
   assert.equal(await isOnAuthScreen(fakeClient(REPORTED)), true);
   assert.equal(isAuthRouteChain(['__root', 'auth', 'intro']), true);

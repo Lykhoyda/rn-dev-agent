@@ -76,8 +76,10 @@ interface SimplifiedNavState {
 /**
  * GH #993: the route chain root→leaf. A leaf named `intro` under a navigator
  * named `auth` is an auth screen; matching only the leaf discarded the one
- * level that would have matched. `params.screen` is included where present so
- * a navigator that has not yet mounted its child still names it.
+ * level that would have matched. `params.screen` names the child only while the
+ * navigator has not mounted one: React Navigation keeps the parent's
+ * `params.screen` after the nested navigator moves on, so once a child is
+ * mounted its own `routeName` is the truth.
  */
 export function routeChain(state: SimplifiedNavState): string[] {
   const chain: string[] = [];
@@ -85,9 +87,7 @@ export function routeChain(state: SimplifiedNavState): string[] {
   while (cursor) {
     if (typeof cursor.routeName === 'string' && cursor.routeName) chain.push(cursor.routeName);
     const screen: unknown = cursor.params?.screen;
-    if (typeof screen === 'string' && screen && cursor.nested?.routeName !== screen) {
-      chain.push(screen);
-    }
+    if (!cursor.nested && typeof screen === 'string' && screen) chain.push(screen);
     cursor = cursor.nested;
   }
   return chain;

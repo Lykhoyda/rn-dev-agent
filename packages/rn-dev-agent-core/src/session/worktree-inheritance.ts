@@ -1234,7 +1234,7 @@ function planResource(layout: WorktreeLayout, resource: ResourceSpec): ResourceP
       regime,
       state: 'LINK_FOREIGN',
       action: 'none',
-      remediation: foreignLinkRemediation(regime, base.destination),
+      remediation: foreignLinkRemediation(sourceState, base.destination),
     };
   }
   if (destinationState === 'LINK_STALE') {
@@ -1291,21 +1291,26 @@ const LOCAL_CONTENT = 'Local real content is present; it is never overwritten an
 
 // GH #993: a foreign link is compared against exactly one accepted target, the
 // same-repository primary corpus. The remediation must say which target and
-// whether it exists; "re-point it" is only followable when there is something
+// what state it is in; "re-point it" is only followable when there is something
 // to re-point to. The target is named relative to the primary worktree because
 // the CLI never prints absolute private source paths.
-function foreignLinkRemediation(regime: Regime, destination: string): string {
+function foreignLinkRemediation(sourceState: SourceState, destination: string): string {
   const target = `<primary worktree>/${destination}`;
-  if (regime === 'PRIVATE_SOURCE_AVAILABLE') {
+  if (sourceState === 'AVAILABLE') {
     return (
       `Destination is a symlink to something other than the only accepted target ${target}; ` +
       `/rn-dev-agent:setup can re-point it there after explicit confirmation.`
     );
   }
+  const wrongType = sourceState === 'WRONG_TYPE';
+  const problem = wrongType ? 'exists but is not a directory' : 'does not exist';
+  const remedy = wrongType
+    ? `replace ${target} with a real actions directory`
+    : `create the corpus at ${target}`;
   return (
-    `Destination is a symlink, but the only accepted target ${target} does not exist, so there is ` +
+    `Destination is a symlink, but the only accepted target ${target} ${problem}, so there is ` +
     `nothing to re-point it to. Supported shapes: replace the link with a real actions directory ` +
-    `in this worktree, or create the corpus at ${target} and re-run /rn-dev-agent:setup.`
+    `in this worktree, or ${remedy} and re-run /rn-dev-agent:setup.`
   );
 }
 

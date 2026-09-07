@@ -11452,7 +11452,7 @@ function planResource(layout, resource) {
       regime,
       state: "LINK_FOREIGN",
       action: "none",
-      remediation: foreignLinkRemediation(regime, base.destination)
+      remediation: foreignLinkRemediation(sourceState2, base.destination)
     };
   }
   if (destinationState === "LINK_STALE") {
@@ -11502,12 +11502,15 @@ function planResource(layout, resource) {
   }
   return { ...base, regime, state: "DEST_MISSING", action: "link" };
 }
-function foreignLinkRemediation(regime, destination) {
+function foreignLinkRemediation(sourceState2, destination) {
   const target = `<primary worktree>/${destination}`;
-  if (regime === "PRIVATE_SOURCE_AVAILABLE") {
+  if (sourceState2 === "AVAILABLE") {
     return `Destination is a symlink to something other than the only accepted target ${target}; /rn-dev-agent:setup can re-point it there after explicit confirmation.`;
   }
-  return `Destination is a symlink, but the only accepted target ${target} does not exist, so there is nothing to re-point it to. Supported shapes: replace the link with a real actions directory in this worktree, or create the corpus at ${target} and re-run /rn-dev-agent:setup.`;
+  const wrongType = sourceState2 === "WRONG_TYPE";
+  const problem = wrongType ? "exists but is not a directory" : "does not exist";
+  const remedy = wrongType ? `replace ${target} with a real actions directory` : `create the corpus at ${target}`;
+  return `Destination is a symlink, but the only accepted target ${target} ${problem}, so there is nothing to re-point it to. Supported shapes: replace the link with a real actions directory in this worktree, or ${remedy} and re-run /rn-dev-agent:setup.`;
 }
 function ignoreRemediation(destination) {
   return `Git would see this path. Add the file-form rule "/${destination}" (no trailing slash) to your own local ignore policy, then re-run.`;
@@ -83180,20 +83183,34 @@ function flowRelaunchFacts(command) {
     stopApp: typeof launch.stopApp === "boolean" ? launch.stopApp : true
   };
 }
+function relaunchesApp(launch) {
+  return launch.clearState || launch.stopApp;
+}
 function lastFlowRelaunch(commands) {
   let last = null;
-  for (const command of commands)
-    last = flowRelaunchFacts(command) ?? last;
+  for (const command of commands) {
+    const launch = flowRelaunchFacts(command);
+    if (launch && relaunchesApp(launch))
+      last = launch;
+  }
   return last;
 }
 function attributeOriginFailureToFlowRelaunch(error2, relaunch) {
-  if (!(error2 instanceof SessionAuthorityError) || error2.code !== "METRO_ORIGIN_MISMATCH")
-    return;
-  if ("flowRelaunch" in error2.getSupplementalMeta())
-    return;
+  if (!(error2 instanceof SessionAuthorityError) || error2.code !== "METRO_ORIGIN_MISMATCH") {
+    return error2;
+  }
+  if (isProvenMetroOriginMismatch(error2))
+    return error2;
+  const meta = error2.getSupplementalMeta();
+  if ("flowRelaunch" in meta)
+    return error2;
   const launch = `launchApp${relaunch.clearState ? " (clearState: true)" : ""}`;
   const cause = `The flow's own ${launch} relaunched the app and it did not re-register on the authority-bound Metro within the readiness window; the axis is reporting that relaunch, not a broken binding.`;
-  error2.attachMeta({
+  const prefix = `${error2.code}: `;
+  const detail = error2.message.startsWith(prefix) ? error2.message.slice(prefix.length) : error2.message;
+  const attributed = new SessionAuthorityError(error2.code, `${detail} ${cause} ${FLOW_RELAUNCH_NEXT_ACTION}`, error2.holder, { ...error2.details, nextAction: FLOW_RELAUNCH_NEXT_ACTION });
+  attributed.attachMeta({
+    ...meta,
     flowRelaunch: {
       command: "launchApp",
       clearState: relaunch.clearState,
@@ -83202,7 +83219,7 @@ function attributeOriginFailureToFlowRelaunch(error2, relaunch) {
       nextAction: FLOW_RELAUNCH_NEXT_ACTION
     }
   });
-  error2.message = `${error2.message} ${cause} ${FLOW_RELAUNCH_NEXT_ACTION}`;
+  return attributed;
 }
 function planMaestroAuthorityStages(commands) {
   const stages = [];
@@ -83242,25 +83259,24 @@ async function executeMaestroAuthorityStages(commands, executeStage, claimOrigin
         try {
           await claimOrigin();
         } catch (error2) {
-          if (priorRelaunch)
-            attributeOriginFailureToFlowRelaunch(error2, priorRelaunch);
-          throw error2;
+          throw priorRelaunch ? attributeOriginFailureToFlowRelaunch(error2, priorRelaunch) : error2;
         }
       }
       originClaimed = false;
     }
     try {
       results.push(await executeStage(stage.commands));
-      const relaunch = stage.commands.length === 1 ? flowRelaunchFacts(stage.commands[0]) : null;
-      if (relaunch) {
-        priorRelaunch = relaunch;
+      const launch = stage.commands.length === 1 ? flowRelaunchFacts(stage.commands[0]) : null;
+      if (launch) {
+        const relaunch = relaunchesApp(launch) ? launch : null;
+        if (relaunch)
+          priorRelaunch = relaunch;
         try {
-          await relaunchManagedApp(relaunch.stopApp);
+          await relaunchManagedApp(launch.stopApp);
           pendingOriginError = void 0;
         } catch (error2) {
           if (!reproveManagedOrigin || error2 instanceof SessionAuthorityError) {
-            attributeOriginFailureToFlowRelaunch(error2, relaunch);
-            throw error2;
+            throw relaunch ? attributeOriginFailureToFlowRelaunch(error2, relaunch) : error2;
           }
           pendingOriginError = error2;
         }
@@ -84086,9 +84102,7 @@ function createMaestroRunHandler(deps = {}) {
           await completeOrigin(true, flowAbort.signal);
         } catch (error2) {
           const relaunch = lastFlowRelaunch(validatedCommands);
-          if (relaunch)
-            attributeOriginFailureToFlowRelaunch(error2, relaunch);
-          throw error2;
+          throw relaunch ? attributeOriginFailureToFlowRelaunch(error2, relaunch) : error2;
         }
         nativeOriginPreclaimed = false;
       }
@@ -84434,6 +84448,7 @@ var init_maestro_run = __esm({
     init_maestro_run_ledger();
     init_authority_gate();
     init_registry();
+    init_metro_origin();
     init_ios_proof_router();
     init_cdp_replay_dispatch();
     defaultExecFile2 = promisify18(execFileCb14);
@@ -93131,9 +93146,8 @@ function routeChain(state) {
     if (typeof cursor.routeName === "string" && cursor.routeName)
       chain.push(cursor.routeName);
     const screen = cursor.params?.screen;
-    if (typeof screen === "string" && screen && cursor.nested?.routeName !== screen) {
+    if (!cursor.nested && typeof screen === "string" && screen)
       chain.push(screen);
-    }
     cursor = cursor.nested;
   }
   return chain;

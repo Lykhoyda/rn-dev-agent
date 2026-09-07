@@ -254,6 +254,20 @@ test('GH#993: LINK_FOREIGN remediation names the accepted target per regime', ()
     assert.match(noSource.remediation ?? '', /create the corpus at/);
     assert.doesNotMatch(noSource.remediation ?? '', /can re-point it/);
 
+    // S1b: the primary's actions path is occupied by a file, so it is not
+    // "missing" and cannot be "created"; it has to be replaced.
+    mkdirSync(join(fixture.primary, '.rn-agent'), { recursive: true });
+    writeFileSync(join(fixture.primary, '.rn-agent', 'actions'), 'not a directory\n');
+    const wrongType = planInheritance({ cwd: worktree, appRoot: worktree, host: 'claude' })
+      .resources[0]!;
+    assert.equal(wrongType.state, 'LINK_FOREIGN');
+    assert.equal(wrongType.sourceState, 'WRONG_TYPE');
+    assert.match(wrongType.remediation ?? '', /exists but is not a directory/);
+    assert.match(wrongType.remediation ?? '', /replace <primary worktree>\/\.rn-agent\/actions/);
+    assert.doesNotMatch(wrongType.remediation ?? '', /does not exist/);
+    assert.doesNotMatch(wrongType.remediation ?? '', /create the corpus at/);
+    rmSync(join(fixture.primary, '.rn-agent', 'actions'));
+
     // S2: the primary now owns a corpus, so re-pointing is a real remedy.
     seedPrivateCorpus(fixture);
     const withSource = planInheritance({ cwd: worktree, appRoot: worktree, host: 'claude' })

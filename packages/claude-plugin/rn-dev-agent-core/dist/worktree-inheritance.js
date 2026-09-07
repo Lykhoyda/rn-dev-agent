@@ -472,7 +472,7 @@ function planResource(layout, resource) {
       regime,
       state: "LINK_FOREIGN",
       action: "none",
-      remediation: foreignLinkRemediation(regime, base.destination)
+      remediation: foreignLinkRemediation(sourceState, base.destination)
     };
   }
   if (destinationState === "LINK_STALE") {
@@ -523,12 +523,15 @@ function planResource(layout, resource) {
   return { ...base, regime, state: "DEST_MISSING", action: "link" };
 }
 var LOCAL_CONTENT = "Local real content is present; it is never overwritten and is not shared.";
-function foreignLinkRemediation(regime, destination) {
+function foreignLinkRemediation(sourceState, destination) {
   const target = `<primary worktree>/${destination}`;
-  if (regime === "PRIVATE_SOURCE_AVAILABLE") {
+  if (sourceState === "AVAILABLE") {
     return `Destination is a symlink to something other than the only accepted target ${target}; /rn-dev-agent:setup can re-point it there after explicit confirmation.`;
   }
-  return `Destination is a symlink, but the only accepted target ${target} does not exist, so there is nothing to re-point it to. Supported shapes: replace the link with a real actions directory in this worktree, or create the corpus at ${target} and re-run /rn-dev-agent:setup.`;
+  const wrongType = sourceState === "WRONG_TYPE";
+  const problem = wrongType ? "exists but is not a directory" : "does not exist";
+  const remedy = wrongType ? `replace ${target} with a real actions directory` : `create the corpus at ${target}`;
+  return `Destination is a symlink, but the only accepted target ${target} ${problem}, so there is nothing to re-point it to. Supported shapes: replace the link with a real actions directory in this worktree, or ${remedy} and re-run /rn-dev-agent:setup.`;
 }
 function ignoreRemediation(destination) {
   return `Git would see this path. Add the file-form rule "/${destination}" (no trailing slash) to your own local ignore policy, then re-run.`;

@@ -105,6 +105,7 @@ import {
   type ManagedNativeOriginReproveOptions,
 } from '../session/authority-gate.js';
 import { SessionAuthorityError } from '../session/registry.js';
+import { isProvenMetroOriginMismatch } from '../session/metro-origin.js';
 import {
   planIosProofDomains,
   loginPostconditionId,
@@ -284,7 +285,7 @@ function nestedLifecycleCommandOrSelf(command: unknown): boolean {
   return (name !== null && lifecycleCommands.has(name)) || nestedLifecycleCommand(command);
 }
 
-/** GH #993: the launch options of a flow-owned `launchApp` stage that relaunched the app. */
+/** GH #993: the launch options of a flow-owned `launchApp` stage. */
 export interface FlowRelaunchFacts {
   clearState: boolean;
   stopApp: boolean;
@@ -306,9 +307,21 @@ export function flowRelaunchFacts(command: unknown): FlowRelaunchFacts | null {
   };
 }
 
+/**
+ * A warm `launchApp: { stopApp: false }` on an attached app starts nothing over;
+ * only a stop or a clearState launch restarts the app and can be blamed for the
+ * origin failure that follows it.
+ */
+export function relaunchesApp(launch: FlowRelaunchFacts): boolean {
+  return launch.clearState || launch.stopApp;
+}
+
 export function lastFlowRelaunch(commands: readonly unknown[]): FlowRelaunchFacts | null {
   let last: FlowRelaunchFacts | null = null;
-  for (const command of commands) last = flowRelaunchFacts(command) ?? last;
+  for (const command of commands) {
+    const launch = flowRelaunchFacts(command);
+    if (launch && relaunchesApp(launch)) last = launch;
+  }
   return last;
 }
 
@@ -318,25 +331,42 @@ export const FLOW_RELAUNCH_NEXT_ACTION =
   'cdp_run_action or cdp_login_prologue instead of launchApp clearState.';
 
 /**
- * GH #993 / #990: a `METRO_ORIGIN_MISMATCH` raised right after the flow's own
- * `launchApp` stage is the relaunched app failing to re-register on the bound
- * Metro within the readiness window — not a broken authority binding. Name that
- * cause on the error. Message and supplemental metadata only: the error
- * instance, its code, and its axis mapping are unchanged, so abort-vs-defer
- * handling and the registry's axis attribution are untouched.
+ * GH #993 / #990: an unproven `METRO_ORIGIN_MISMATCH` raised right after the
+ * flow's own `launchApp` stage is the relaunched app failing to re-register on
+ * the bound Metro within the readiness window — not a broken authority binding.
+ * Returns a `SessionAuthorityError` with the same code, holder, and axis whose
+ * message, `details.nextAction`, and `meta.flowRelaunch` name that cause, so
+ * the public envelope's `nextAction` points at the flow instead of the axis.
+ * A proven foreign-Metro mismatch already names its cause and remedy and is
+ * returned untouched, as is every other error.
  */
 export function attributeOriginFailureToFlowRelaunch(
   error: unknown,
   relaunch: FlowRelaunchFacts,
-): void {
-  if (!(error instanceof SessionAuthorityError) || error.code !== 'METRO_ORIGIN_MISMATCH') return;
-  if ('flowRelaunch' in error.getSupplementalMeta()) return;
+): unknown {
+  if (!(error instanceof SessionAuthorityError) || error.code !== 'METRO_ORIGIN_MISMATCH') {
+    return error;
+  }
+  if (isProvenMetroOriginMismatch(error)) return error;
+  const meta = error.getSupplementalMeta();
+  if ('flowRelaunch' in meta) return error;
   const launch = `launchApp${relaunch.clearState ? ' (clearState: true)' : ''}`;
   const cause =
     `The flow's own ${launch} relaunched the app and it did not re-register on the ` +
     `authority-bound Metro within the readiness window; the axis is reporting that relaunch, ` +
     `not a broken binding.`;
-  error.attachMeta({
+  const prefix = `${error.code}: `;
+  const detail = error.message.startsWith(prefix)
+    ? error.message.slice(prefix.length)
+    : error.message;
+  const attributed = new SessionAuthorityError(
+    error.code,
+    `${detail} ${cause} ${FLOW_RELAUNCH_NEXT_ACTION}`,
+    error.holder,
+    { ...error.details, nextAction: FLOW_RELAUNCH_NEXT_ACTION },
+  );
+  attributed.attachMeta({
+    ...meta,
     flowRelaunch: {
       command: 'launchApp',
       clearState: relaunch.clearState,
@@ -345,7 +375,7 @@ export function attributeOriginFailureToFlowRelaunch(
       nextAction: FLOW_RELAUNCH_NEXT_ACTION,
     },
   });
-  error.message = `${error.message} ${cause} ${FLOW_RELAUNCH_NEXT_ACTION}`;
+  return attributed;
 }
 
 export function planMaestroAuthorityStages(commands: readonly unknown[]): {
@@ -411,24 +441,23 @@ export async function executeMaestroAuthorityStages<T>(
         try {
           await claimOrigin();
         } catch (error) {
-          if (priorRelaunch) attributeOriginFailureToFlowRelaunch(error, priorRelaunch);
-          throw error;
+          throw priorRelaunch ? attributeOriginFailureToFlowRelaunch(error, priorRelaunch) : error;
         }
       }
       originClaimed = false;
     }
     try {
       results.push(await executeStage(stage.commands));
-      const relaunch = stage.commands.length === 1 ? flowRelaunchFacts(stage.commands[0]) : null;
-      if (relaunch) {
-        priorRelaunch = relaunch;
+      const launch = stage.commands.length === 1 ? flowRelaunchFacts(stage.commands[0]) : null;
+      if (launch) {
+        const relaunch = relaunchesApp(launch) ? launch : null;
+        if (relaunch) priorRelaunch = relaunch;
         try {
-          await relaunchManagedApp(relaunch.stopApp);
+          await relaunchManagedApp(launch.stopApp);
           pendingOriginError = undefined;
         } catch (error) {
           if (!reproveManagedOrigin || error instanceof SessionAuthorityError) {
-            attributeOriginFailureToFlowRelaunch(error, relaunch);
-            throw error;
+            throw relaunch ? attributeOriginFailureToFlowRelaunch(error, relaunch) : error;
           }
           pendingOriginError = error;
         }
@@ -1738,10 +1767,8 @@ export function createMaestroRunHandler(
           }
           await completeOrigin(true, flowAbort.signal);
         } catch (error) {
-          // GH #993: message/metadata only — the error and its code are rethrown as-is.
           const relaunch = lastFlowRelaunch(validatedCommands);
-          if (relaunch) attributeOriginFailureToFlowRelaunch(error, relaunch);
-          throw error;
+          throw relaunch ? attributeOriginFailureToFlowRelaunch(error, relaunch) : error;
         }
         nativeOriginPreclaimed = false;
       }
