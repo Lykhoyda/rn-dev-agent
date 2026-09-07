@@ -220,11 +220,13 @@ alive for such callers.
  any runner call, origin claim, or park. It decides from the parsed commands
  via the single `containsClearState` predicate in `src/domain/maestro-validator.ts`
  (`clearState: <appId>`, `launchApp: { clearState: true }`, or a bare
- `clearState`, nested runFlow included; an explicit `clearState: false` clears
- nothing and does not match), never from the YAML text; the GH #705 appFile path
- keeps its regex helper. `cdp_login_prologue` inherits it through `cdp_run_action`,
- bare-RN sessions keep the GH #705 reinstall path, and `cdp_auto_login` calls
- that same predicate for legacy `.maestro/` flows. A
+ `clearState`, nested runFlow included). It is positional: the bare form counts
+ only as a command, so `tapOn: { id: "clearState" }` does not match, and an
+ explicit `clearState: false` clears nothing and does not either. Never decided
+ from the YAML text; the GH #705 appFile path keeps its regex helper.
+ `cdp_login_prologue` inherits it through `cdp_run_action`, bare-RN sessions
+ keep the GH #705 reinstall path, and `cdp_auto_login` calls that same
+ predicate for legacy `.maestro/` flows. A
  `METRO_ORIGIN_MISMATCH` is attributed to a flow-owned relaunch (`launchApp`
  with `clearState: true` or `stopApp !== false`; a warm `stopApp: false`
  launch is not one) only while no origin claim or reprove has succeeded since

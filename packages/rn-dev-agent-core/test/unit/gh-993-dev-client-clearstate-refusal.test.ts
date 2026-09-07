@@ -254,6 +254,31 @@ test('GH#993: an explicit launchApp clearState: false clears nothing and is not 
   assert.equal(trace.appFileResolutions, 0, 'no reinstall bundle is resolved either');
 });
 
+test('GH#993: a selector whose testID is literally clearState is not a clearState flow', async (t) => {
+  // The refusal is positional: `clearState` counts as a command, not as any
+  // string reachable in the tree.
+  const { trace, runAction, project } = harness(t, EXPO_INSTALL, {
+    yaml: fixtureYaml({ id: 'user-login', intent: 'warm login', selectors: ['clearState'] }),
+  });
+  const envelope = parse(
+    await runAction({ actionId: 'user-login', projectRoot: project.root, autoRepair: false }),
+  );
+  assert.notEqual(envelope.code, 'DEV_CLIENT_CLEARSTATE_REFUSED');
+  assert.equal(trace.maestroRuns, 1, 'the warm flow runs');
+  assert.equal(trace.appFileResolutions, 0);
+});
+
+test('GH#993: the bare clearState command is still refused', async (t) => {
+  const yaml = clearStateLoginYaml()
+    .replace('- launchApp:\n    clearState: true\n    stopApp: true', '- launchApp\n- clearState');
+  const { trace, runAction, project } = harness(t, EXPO_INSTALL, { yaml });
+  const envelope = parse(
+    await runAction({ actionId: 'user-login', projectRoot: project.root, autoRepair: false }),
+  );
+  assert.equal(envelope.code, 'DEV_CLIENT_CLEARSTATE_REFUSED');
+  assert.equal(trace.maestroRuns, 0);
+});
+
 test('GH#993: a clearState relaunch inlined in a runFlow subflow is refused', async (t) => {
   const yaml = [
     `appId: ${APP_ID}`,

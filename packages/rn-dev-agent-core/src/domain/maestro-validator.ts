@@ -131,12 +131,15 @@ const DENIED_COMMANDS = new Set<string>([
 
 // True when parsed commands clear app state, at any nesting (inlined runFlow
 // subflows): the bare `clearState` command, `clearState: <appId>`, or a
-// `clearState` key under `launchApp`. An explicit `clearState: false` clears
-// nothing and does not match. Decided from the command tree, never the YAML
-// text, so prose comments mentioning clearState do not count.
+// `clearState` key under `launchApp`. Positional — the bare form counts only as
+// a command (an array element), so a selector like `tapOn: { id: "clearState" }`
+// does not, and an explicit `clearState: false` clears nothing and does not
+// either. Decided from the command tree, never the YAML text, so prose comments
+// mentioning clearState do not count.
 export function containsClearState(value: unknown): boolean {
-  if (value === 'clearState') return true;
-  if (Array.isArray(value)) return value.some(containsClearState);
+  if (Array.isArray(value)) {
+    return value.some((command) => command === 'clearState' || containsClearState(command));
+  }
   if (!value || typeof value !== 'object') return false;
   return Object.entries(value).some(
     ([key, nested]) => (key === 'clearState' && nested !== false) || containsClearState(nested),

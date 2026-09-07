@@ -28320,10 +28320,9 @@ function isSafeMaestroScalar(s) {
   return true;
 }
 function containsClearState(value) {
-  if (value === "clearState")
-    return true;
-  if (Array.isArray(value))
-    return value.some(containsClearState);
+  if (Array.isArray(value)) {
+    return value.some((command) => command === "clearState" || containsClearState(command));
+  }
   if (!value || typeof value !== "object")
     return false;
   return Object.entries(value).some(([key, nested]) => key === "clearState" && nested !== false || containsClearState(nested));

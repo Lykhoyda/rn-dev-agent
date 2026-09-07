@@ -121,8 +121,6 @@ export interface RunActionInstallReceipt {
   appId?: unknown;
   /** Build command provenance: `expo` means the app is an Expo dev client. */
   buildKind?: unknown;
-  /** Present when the managed launch opens the app through a dev-client URL. */
-  devClientUrl?: unknown;
 }
 
 /** GH #705: the session's attested install receipt, or null outside a session. */
