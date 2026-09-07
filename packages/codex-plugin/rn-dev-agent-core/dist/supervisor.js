@@ -28326,7 +28326,7 @@ function containsClearState(value) {
     return value.some(containsClearState);
   if (!value || typeof value !== "object")
     return false;
-  return Object.entries(value).some(([key, nested]) => key === "clearState" || containsClearState(nested));
+  return Object.entries(value).some(([key, nested]) => key === "clearState" && nested !== false || containsClearState(nested));
 }
 function buildMaestroFlow(opts, commands) {
   if (opts.appId !== void 0) {
@@ -84718,9 +84718,7 @@ function boundInstallReceipt() {
   }
 }
 function isDevClientLaunchShape(install) {
-  if (!install)
-    return false;
-  return install.buildKind === "expo" || typeof install.devClientUrl === "string";
+  return install?.buildKind === "expo";
 }
 function classifyFailure(failure) {
   switch (failure.kind) {

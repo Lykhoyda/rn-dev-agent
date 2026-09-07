@@ -103,13 +103,6 @@ test('GH#993: isDevClientLaunchShape reads only the existing install binding', (
   assert.equal(isDevClientLaunchShape(null), false);
   assert.equal(isDevClientLaunchShape({ buildKind: 'bare-react-native' }), false);
   assert.equal(isDevClientLaunchShape({ buildKind: 'expo' }), true);
-  assert.equal(
-    isDevClientLaunchShape({
-      buildKind: 'bare-react-native',
-      devClientUrl: 'exp+app://expo-development-client/?url=http%3A%2F%2F10.0.0.2%3A8081',
-    }),
-    true,
-  );
 });
 
 test('GH#993: a clearState action on a dev-client session is refused with zero runner invocations', async (t) => {
@@ -156,7 +149,7 @@ test('GH#993: a dev-client URL launch (Android shape) is refused the same way', 
     platform: 'android',
     deviceId: 'emulator-5554',
     appId: APP_ID,
-    buildKind: 'bare-react-native',
+    buildKind: 'expo',
     devClientUrl: 'exp+app://expo-development-client/?url=http%3A%2F%2F10.0.2.2%3A8081',
   });
   const envelope = parse(
@@ -164,6 +157,24 @@ test('GH#993: a dev-client URL launch (Android shape) is refused the same way', 
   );
   assert.equal(envelope.code, 'DEV_CLIENT_CLEARSTATE_REFUSED');
   assert.equal(trace.maestroRuns, 0);
+});
+
+test('GH#993: a bare-RN install that merely declares a devClientUrl is not a dev-client session', async (t) => {
+  // The signed build provenance decides; dev-client-authority already refuses to
+  // bind a bare-react-native runtime that carries a devClientUrl.
+  const { trace, runAction, project } = harness(t, {
+    platform: 'ios',
+    deviceId: SIM,
+    appId: APP_ID,
+    buildKind: 'bare-react-native',
+    devClientUrl: 'exp+app://expo-development-client/?url=http%3A%2F%2F10.0.0.2%3A8081',
+  });
+  const envelope = parse(
+    await runAction({ actionId: 'user-login', projectRoot: project.root, autoRepair: false }),
+  );
+  assert.notEqual(envelope.code, 'DEV_CLIENT_CLEARSTATE_REFUSED');
+  assert.equal(trace.maestroRuns, 1, 'the GH#705 clearState path still runs');
+  assert.equal(trace.appFileResolutions, 1);
 });
 
 test('GH#993: cdp_login_prologue inherits the refusal without executing anything', async (t) => {
@@ -230,6 +241,17 @@ test('GH#993: the bare `clearState: <appId>` spelling is refused, not just clear
   );
   assert.equal(envelope.code, 'DEV_CLIENT_CLEARSTATE_REFUSED');
   assert.deepEqual(trace, { maestroRuns: 0, claims: 0, relaunches: 0, appFileResolutions: 0 });
+});
+
+test('GH#993: an explicit launchApp clearState: false clears nothing and is not refused', async (t) => {
+  const yaml = clearStateLoginYaml().replace('    clearState: true', '    clearState: false');
+  const { trace, runAction, project } = harness(t, EXPO_INSTALL, { yaml });
+  const envelope = parse(
+    await runAction({ actionId: 'user-login', projectRoot: project.root, autoRepair: false }),
+  );
+  assert.notEqual(envelope.code, 'DEV_CLIENT_CLEARSTATE_REFUSED');
+  assert.equal(trace.maestroRuns, 1, 'the flow runs past the refusal');
+  assert.equal(trace.appFileResolutions, 0, 'no reinstall bundle is resolved either');
 });
 
 test('GH#993: a clearState relaunch inlined in a runFlow subflow is refused', async (t) => {

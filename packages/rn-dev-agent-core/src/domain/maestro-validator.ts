@@ -131,14 +131,15 @@ const DENIED_COMMANDS = new Set<string>([
 
 // True when parsed commands clear app state, at any nesting (inlined runFlow
 // subflows): the bare `clearState` command, `clearState: <appId>`, or a
-// `clearState` key under `launchApp`. Decided from the command tree, never the
-// YAML text, so prose comments mentioning clearState do not count.
+// `clearState` key under `launchApp`. An explicit `clearState: false` clears
+// nothing and does not match. Decided from the command tree, never the YAML
+// text, so prose comments mentioning clearState do not count.
 export function containsClearState(value: unknown): boolean {
   if (value === 'clearState') return true;
   if (Array.isArray(value)) return value.some(containsClearState);
   if (!value || typeof value !== 'object') return false;
   return Object.entries(value).some(
-    ([key, nested]) => key === 'clearState' || containsClearState(nested),
+    ([key, nested]) => (key === 'clearState' && nested !== false) || containsClearState(nested),
   );
 }
 

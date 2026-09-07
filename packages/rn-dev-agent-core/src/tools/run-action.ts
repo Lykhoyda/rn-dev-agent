@@ -146,8 +146,7 @@ function boundInstallReceipt(): RunActionInstallReceipt | null {
  * bare React Native sessions and unmanaged replay keep GH #705 behaviour.
  */
 export function isDevClientLaunchShape(install: RunActionInstallReceipt | null): boolean {
-  if (!install) return false;
-  return install.buildKind === 'expo' || typeof install.devClientUrl === 'string';
+  return install?.buildKind === 'expo';
 }
 
 export const DEV_CLIENT_CLEARSTATE_REFUSAL =

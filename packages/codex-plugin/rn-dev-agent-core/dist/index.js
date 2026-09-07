@@ -23988,7 +23988,7 @@ function containsClearState(value) {
     return value.some(containsClearState);
   if (!value || typeof value !== "object")
     return false;
-  return Object.entries(value).some(([key, nested]) => key === "clearState" || containsClearState(nested));
+  return Object.entries(value).some(([key, nested]) => key === "clearState" && nested !== false || containsClearState(nested));
 }
 function buildMaestroFlow(opts, commands) {
   if (opts.appId !== void 0) {
@@ -82611,9 +82611,7 @@ function boundInstallReceipt() {
   }
 }
 function isDevClientLaunchShape(install) {
-  if (!install)
-    return false;
-  return install.buildKind === "expo" || typeof install.devClientUrl === "string";
+  return install?.buildKind === "expo";
 }
 var DEV_CLIENT_CLEARSTATE_REFUSAL = "Refusing to replay a flow containing clearState on a managed dev-client session. The clearState relaunch uninstalls the app and strands the dev client at its picker, so the relaunched app cannot re-attach to the authority-bound Metro (EG_DEV_CLIENT_CLEARSTATE). No runner was invoked and the app was not touched. Remove launchApp clearState from the action so it starts from the attached app; when a state reset is needed, run device_reset_state before cdp_run_action or cdp_login_prologue.";
 function classifyFailure(failure) {

@@ -213,15 +213,16 @@ alive for such callers.
   symlink to the same-repo primary corpus. `isDirectNode` still refuses
   per-file action symlinks.
 - Managed dev-client `clearState` replay has exactly one refusal owner:
- `isDevClientLaunchShape` in `src/tools/run-action.ts` reads only the existing
- install binding (`buildKind === 'expo'` or a `devClientUrl`) and refuses
+ `isDevClientLaunchShape` in `src/tools/run-action.ts` reads only the signed
+ `buildKind === 'expo'` provenance on the existing install binding and refuses
  `DEV_CLIENT_CLEARSTATE_REFUSED` ahead of the compat preflight (so an unpinned
  clearState action gets this terminal reason, not migrate-actions) and before
  any runner call, origin claim, or park. It decides from the parsed commands
  via the single `containsClearState` predicate in `src/domain/maestro-validator.ts`
- (any `clearState` key, `clearState: <appId>`, or a bare `clearState`, nested
- runFlow included), never from the YAML text; the GH #705 appFile path keeps
- its regex helper. `cdp_login_prologue` inherits it through `cdp_run_action`,
+ (`clearState: <appId>`, `launchApp: { clearState: true }`, or a bare
+ `clearState`, nested runFlow included; an explicit `clearState: false` clears
+ nothing and does not match), never from the YAML text; the GH #705 appFile path
+ keeps its regex helper. `cdp_login_prologue` inherits it through `cdp_run_action`,
  bare-RN sessions keep the GH #705 reinstall path, and `cdp_auto_login` calls
  that same predicate for legacy `.maestro/` flows. A
  `METRO_ORIGIN_MISMATCH` is attributed to a flow-owned relaunch (`launchApp`
