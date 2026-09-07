@@ -11,6 +11,7 @@ import {
   readSync,
   realpathSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
@@ -34,7 +35,9 @@ import {
 } from './process-birth.js';
 import { canonicalAuthorityJson } from './authority-json.js';
 import {
+  dependencyRoots,
   prepareManagedMetroEnforcement,
+  resolveManagedMetroManifestUtility,
   runManagedMetroEnforcementPreflight,
   type ManagedMetroEnforcement,
   type ManagedMetroEnforcementPlan,
@@ -448,6 +451,7 @@ let managedSandbox =
   enforcementReceipt?.version === 2 &&
   enforcementReceipt.kind === runtimeEnforcement.kind &&
   enforcementReceipt.profileSha256 === runtimeEnforcement.profileSha256 &&
+  enforcementReceipt.manifestUtility === runtimeEnforcement.manifestUtility &&
   enforcementReceipt.sandboxExecutableSha256 ===
     runtimeEnforcement.sandboxExecutableSha256 &&
   enforcementReceipt.sandboxExecutableCdHash ===
@@ -1207,7 +1211,11 @@ export function managedMetroParentPid(
               '-Command',
               `(Get-CimInstance Win32_Process -Filter "ProcessId=${pid}").ParentProcessId`,
             ],
-            { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 2_000 },
+            {
+              encoding: 'utf8',
+              stdio: ['ignore', 'pipe', 'ignore'],
+              timeout: 2_000,
+            },
           )
         : execute(executable, ['-p', String(pid), '-o', 'ppid='], {
             encoding: 'utf8',
@@ -1337,7 +1345,6 @@ export interface ManagedMetroLaunchCommand {
   executableMappings: string[];
   chainInputs: string[];
   protectedRuntimeRoots: string[];
-  binPath?: string;
 }
 
 function resolveManagedMetroLaunchCommand(
@@ -1734,7 +1741,11 @@ export function inspectManagedMetroLifecycle(
 
 export function refreshManagedMetroBuildGeneration(
   binding: ManagedMetroBinding,
-  input: { sessionId: string; buildGeneration: number; signerCapability: string },
+  input: {
+    sessionId: string;
+    buildGeneration: number;
+    signerCapability: string;
+  },
 ): ManagedMetroBinding {
   if (
     !Number.isSafeInteger(input.buildGeneration) ||
@@ -1790,32 +1801,6 @@ function managedSandboxManagementProofV1(
       }),
     )
     .digest('hex');
-}
-
-function dependencyRoots(
-  appRoot: string,
-  sourceRoot: string,
-  exists: (path: string) => boolean,
-): string[] {
-  const roots = new Set<string>();
-  for (const start of [resolve(appRoot), resolve(sourceRoot)]) {
-    let current = start;
-    while (true) {
-      const candidate = join(current, 'node_modules');
-      if (exists(candidate)) roots.add(candidate);
-      const parent = dirname(current);
-      if (parent === current) break;
-      current = parent;
-    }
-  }
-  for (const candidate of [
-    join(sourceRoot, '.yarn', 'cache'),
-    join(sourceRoot, '.yarn', 'unplugged'),
-    join(sourceRoot, '.pnpm'),
-  ]) {
-    if (exists(candidate)) roots.add(resolve(candidate));
-  }
-  return [...roots].sort();
 }
 
 function cssInteropCacheRoot(appRoot: string): string | null {
@@ -2000,7 +1985,11 @@ function writeManagedMetroEnforcementDiagnostic(input: {
         environmentDigest: input.environmentDigest,
         preparation:
           input.prepared.status === 'enforced'
-            ? { status: 'enforced', profileSha256: input.prepared.profileSha256 }
+            ? {
+                status: 'enforced',
+                profileSha256: input.prepared.profileSha256,
+                manifestUtility: input.prepared.manifestUtility,
+              }
             : { status: 'unsupported', reason: input.prepared.reason },
         preflight: observation,
         recordComplete:
@@ -2207,14 +2196,31 @@ export async function startManagedMetro(
   const metroHome = join(input.runtimeRoot, 'metro-home');
   const metroTemporaryRoot = join(input.runtimeRoot, 'metro-tmp');
   const metroCacheRoot = join(input.runtimeRoot, 'metro-cache');
+  const metroBinRoot = join(input.runtimeRoot, 'metro-bin');
   for (const path of [
     metroHome,
     metroTemporaryRoot,
     metroCacheRoot,
+    metroBinRoot,
     join(input.appRoot, '.expo'),
     nativeAddonAcknowledgmentRoot,
   ]) {
     if (!exists(path)) mkdirSync(path, { recursive: true, mode: 0o700 });
+  }
+  const manifestUtility = resolveManagedMetroManifestUtility({
+    platform: process.platform,
+    appRoot: input.appRoot,
+    sourceRoot: input.sourceRoot,
+  });
+  const manifestUtilityGit = manifestUtility.git;
+  const metroBinShims: Record<string, string> = manifestUtilityGit
+    ? { git: manifestUtilityGit, node: canonicalRuntimeInput(launchCommand.nodeExecutable) }
+    : {};
+  for (const name of ['git', 'node']) {
+    const shimPath = join(metroBinRoot, name);
+    rmSync(shimPath, { force: true, recursive: true });
+    const target = metroBinShims[name];
+    if (target) symlinkSync(target, shimPath);
   }
   const metroEnvironment = managedMetroChildEnvironment({
     ...(dependencies.environment ?? process.env),
@@ -2227,12 +2233,13 @@ export async function startManagedMetro(
     EXPO_UNSTABLE_HEADLESS: '1',
     RCT_METRO_PORT: String(input.port),
   });
+  // NOTE: expo-updates resolves `git` and @expo/fingerprint resolves `node` through PATH, and
+  // execvp aborts the whole search with EPERM at the first host PATH entry the profile denies, so
+  // a shim holding only the already-admitted binaries has to win the lookup.
   const childEnvironment = {
     ...metroEnvironment,
-    ...(launchCommand.binPath
-      ? {
-          PATH: [launchCommand.binPath, metroEnvironment.PATH].filter(Boolean).join(':'),
-        }
+    ...(manifestUtilityGit
+      ? { PATH: [metroBinRoot, metroEnvironment.PATH].filter(Boolean).join(':') }
       : {}),
     NODE_OPTIONS: authorityNodeOptions,
     RN_DEV_AGENT_METRO_EVIDENCE_FD: '9',
@@ -2268,7 +2275,11 @@ export async function startManagedMetro(
     commandProbeArguments: launchCommand.probeArgs,
     commandExecutableMappings: launchCommand.executableMappings.map(canonicalRuntimeInput),
     commandChainInputs: commandChainInputs.map(canonicalRuntimeInput),
-    protectedRuntimeRoots: [...launchCommand.protectedRuntimeRoots, nativeAddonAcknowledgmentRoot]
+    protectedRuntimeRoots: [
+      ...launchCommand.protectedRuntimeRoots,
+      nativeAddonAcknowledgmentRoot,
+      metroBinRoot,
+    ]
       .map(canonicalRuntimeInput)
       .filter((value, index, entries) => entries.indexOf(value) === index),
     nativeAddonRoots: allowedCodeRoots,
@@ -2321,8 +2332,9 @@ export async function startManagedMetro(
   let preflightObservation: ManagedMetroPreflightObservation | null = null;
   let runtimeEnforcement:
     | ManagedMetroEnforcement
-    | (ManagedMetroEnforcementPlan & { receipt: ManagedMetroEnforcementReceipt }) =
-    preparedEnforcement;
+    | (ManagedMetroEnforcementPlan & {
+        receipt: ManagedMetroEnforcementReceipt;
+      }) = preparedEnforcement;
   if (preparedEnforcement.status === 'enforced') {
     try {
       runtimeEnforcement = {
@@ -2763,7 +2775,10 @@ export async function stopManagedMetro(
         pid: authenticatedBinding.launcherPid,
         birth: authenticatedBinding.launcherBirth,
       },
-      listener: { pid: authenticatedBinding.pid, birth: authenticatedBinding.birth },
+      listener: {
+        pid: authenticatedBinding.pid,
+        birth: authenticatedBinding.birth,
+      },
     },
     dependencies,
   );

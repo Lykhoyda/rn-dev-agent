@@ -198,6 +198,29 @@ test(
           },
         },
       ];
+      const resolved = spawnSync(
+        process.execPath,
+        [
+          join(root, 'node_modules', 'expo-updates', 'bin', 'cli.js'),
+          'runtimeversion:resolve',
+          '--platform',
+          'ios',
+        ],
+        { cwd: root, encoding: 'utf8' },
+      );
+      assert.equal(
+        resolved.status,
+        0,
+        `runtimeversion:resolve failed outside the sandbox: ${resolved.stderr}`,
+      );
+      const expectedRuntimeVersion = (JSON.parse(resolved.stdout) as { runtimeVersion?: string })
+        .runtimeVersion;
+      assert.match(
+        expectedRuntimeVersion ?? '',
+        /^[a-f0-9]{16,}$/,
+        `expected a fingerprint runtime version, got ${resolved.stdout.slice(0, 200)}`,
+      );
+
       let launchAssetUrl = '';
       for (const request of manifestRequests) {
         const manifest = await fetchBounded(origin, 300_000, request.headers);
@@ -208,6 +231,11 @@ test(
         );
         const parsed = parseExpoManifestBody(manifest.body.toString('utf8'));
         assert.ok(parsed);
+        assert.equal(
+          parsed.runtimeVersion,
+          expectedRuntimeVersion,
+          `${request.name} served a runtime version computed from a different ignore basis than the unsandboxed CLI`,
+        );
         launchAssetUrl = (parsed.launchAsset as { url: string }).url;
         console.log(
           JSON.stringify({

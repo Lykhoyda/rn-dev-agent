@@ -96,7 +96,10 @@ itself* usually does not: `resolveManagedMetroLaunchCommand` only re-executes
 node`, and pnpm and npm generate `node_modules/.bin/<tool>` as a `#!/bin/sh`
 shim, whose own `exec node` line re-resolves `node` from `PATH`. So it is the
 operator's `PATH` node, not CI's and not necessarily the supervisor's, that the
-descendant fence must survive.
+descendant fence must survive. The one exception is a Darwin run whose
+manifest-utility `git` is admitted: the child `PATH` then starts with the
+runtime-owned `metro-bin` directory, whose `node` link points at the
+supervisor's `process.execPath`.
 
 A test that does not pin `PATH` and assert the Metro listener's actual
 executable cannot distinguish the fixed fence from the unfixed one — it passes

@@ -424,3 +424,39 @@ setTimeout(() => process.exit(4), 10000);`,
     }
   },
 );
+
+// SDK 55 topology: every fingerprint git probe belongs to the unattested expo-updates CLI child.
+// If a future Expo inlines fingerprinting into Metro, this pin has to be revisited, not worked around.
+test(
+  'SDK 55: git is not needed inside the Metro process; the expo-updates CLI child owns it',
+  { skip: unsupportedPlatform },
+  () => {
+    const harness = createHarness('git-refused');
+    try {
+      const result = runFenced(
+        harness,
+        `${composePreamble(harness)}
+const refusals = [];
+const attempt = (run) => { try { run(); refusals.push('accepted'); } catch (error) { refusals.push(error?.code); } };
+attempt(() => childProcess.spawn('git', ['--help']));
+attempt(() => childProcess.spawn('git', ['rev-parse', '--show-toplevel']));
+attempt(() => childProcess.spawn('git', ['check-ignore', '-q', 'app.json']));
+const scoped = compose({
+  transformer: { getTransformOptions: () => { attempt(() => childProcess.spawn('git', ['--help'])); return {}; } },
+});
+scoped.transformer.getTransformOptions([], {}, () => []);
+if (refusals.length !== 4 || refusals.some((code) => code !== 'RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION')) {
+  console.error(JSON.stringify(refusals));
+  process.exit(3);
+}`,
+      );
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(
+        readObservations(harness).some((entry) => entry.kind === 'unattested-utility'),
+        false,
+      );
+    } finally {
+      rmSync(harness.root, { force: true, recursive: true });
+    }
+  },
+);

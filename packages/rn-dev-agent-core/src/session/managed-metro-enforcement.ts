@@ -14,12 +14,17 @@ import {
   symlinkSync,
   writeSync,
 } from 'node:fs';
-import { basename, dirname, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
+import { createRequire } from 'node:module';
 import { constants as osConstants } from 'node:os';
 import { canonicalAuthorityJson } from './authority-json.js';
 
 const DARWIN_SANDBOX_EXECUTABLE = '/usr/bin/sandbox-exec';
 const DARWIN_CODESIGN_EXECUTABLE = '/usr/bin/codesign';
+const DARWIN_DEVELOPER_DIR_EXECUTABLE = '/usr/bin/xcode-select';
+const DARWIN_UTILITY_PROBE_ENVIRONMENT = { PATH: '/usr/bin:/bin' };
+const DARWIN_GIT_SIGNING_IDENTIFIER = 'com.apple.git';
+const EXPO_UPDATES_CLI_SPECIFIER = 'expo-updates/bin/cli.js';
 const DARWIN_PLATFORM_SIGNING_LEAF_AUTHORITIES = [
   'Authority=Software Signing',
   'Authority=macOS Software Signing',
@@ -33,6 +38,12 @@ interface CommandResult {
   timedOut?: boolean;
 }
 
+type RunCommand = (
+  command: string,
+  args: readonly string[],
+  environment?: NodeJS.ProcessEnv,
+) => CommandResult;
+
 interface FileMetadata {
   isFile(): boolean;
   uid: number;
@@ -45,10 +56,27 @@ interface ManagedMetroEnforcementDependencies {
   stat?: (path: string) => FileMetadata;
   lstat?: (path: string) => { isSymbolicLink(): boolean };
   readBytes?: (path: string) => Buffer;
-  run?: (command: string, args: readonly string[]) => CommandResult;
+  run?: RunCommand;
+  resolveFrom?: (root: string, specifier: string) => string;
   runtimeCache?: () => string | null;
   runtimeFiles?: (nodeExecutable: string) => readonly string[];
   runtimeVersion?: (nodeExecutable: string) => string;
+}
+
+export type ManagedMetroManifestUtilityOutcome =
+  | 'admitted'
+  | 'host-unsupported'
+  | 'expo-updates-cli-unresolved'
+  | 'expo-updates-cli-unowned'
+  | 'developer-dir-unavailable'
+  | 'developer-git-untrusted'
+  | 'developer-git-unsigned';
+
+export interface ManagedMetroManifestUtility {
+  outcome: ManagedMetroManifestUtilityOutcome;
+  expoUpdatesCli: string | null;
+  git: string | null;
+  gitRepositoryRoots: readonly string[];
 }
 
 export interface ManagedMetroEnforcementInput {
@@ -98,6 +126,7 @@ export interface ManagedMetroEnforcementReceipt {
   version: 2;
   kind: 'darwin-seatbelt-v2';
   profileSha256: string;
+  manifestUtility: ManagedMetroManifestUtilityOutcome;
   sandboxExecutableSha256: string;
   sandboxExecutableCdHash: string;
   commandLaunchSha256: string;
@@ -127,6 +156,7 @@ export interface ManagedMetroEnforcementPlan {
   resolvedCommandSha256: string;
   profile: string;
   profileSha256: string;
+  manifestUtility: ManagedMetroManifestUtilityOutcome;
   canaryPath: string;
   descendantCanaryPath: string;
   symlinkCanaryPath: string;
@@ -158,11 +188,16 @@ function sha256(value: string | Buffer): string {
   return createHash('sha256').update(value).digest('hex');
 }
 
-function defaultRun(command: string, args: readonly string[]): CommandResult {
+function defaultRun(
+  command: string,
+  args: readonly string[],
+  environment?: NodeJS.ProcessEnv,
+): CommandResult {
   const result = spawnSync(command, [...args], {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
     timeout: 25_000,
+    ...(environment ? { env: environment } : {}),
   });
   return {
     status: result.status,
@@ -184,6 +219,29 @@ function field(details: string, name: string): string | null {
   );
 }
 
+function appleSignedExecutable(
+  path: string,
+  identifier: string,
+  run: RunCommand,
+): { cdHash: string; details: string } | null {
+  const verification = run(DARWIN_CODESIGN_EXECUTABLE, ['--verify', '--strict', path]);
+  if (verification.status !== 0) return null;
+  const details = run(DARWIN_CODESIGN_EXECUTABLE, ['-dv', '--verbose=4', path]);
+  const authorities = details.stderr.split('\n').filter((line) => line.startsWith('Authority='));
+  const cdHash = field(details.stderr, 'CDHash');
+  if (
+    details.status !== 0 ||
+    field(details.stderr, 'Identifier') !== identifier ||
+    !/^[a-f0-9]{40,64}$/.test(cdHash ?? '') ||
+    !DARWIN_PLATFORM_SIGNING_LEAF_AUTHORITIES.some((leaf) => authorities.includes(leaf)) ||
+    !authorities.includes('Authority=Apple Code Signing Certification Authority') ||
+    !authorities.includes('Authority=Apple Root CA')
+  ) {
+    return null;
+  }
+  return { cdHash: cdHash!, details: details.stderr };
+}
+
 function verifiedSandboxExecutable(dependencies: ManagedMetroEnforcementDependencies): {
   path: '/usr/bin/sandbox-exec';
   sha256: string;
@@ -199,44 +257,24 @@ function verifiedSandboxExecutable(dependencies: ManagedMetroEnforcementDependen
     if (canonicalize(DARWIN_SANDBOX_EXECUTABLE) !== DARWIN_SANDBOX_EXECUTABLE) return null;
     const metadata = stat(DARWIN_SANDBOX_EXECUTABLE);
     if (!metadata.isFile() || metadata.uid !== 0 || (metadata.mode & 0o022) !== 0) return null;
-    const verification = run(DARWIN_CODESIGN_EXECUTABLE, [
-      '--verify',
-      '--strict',
+    const signature = appleSignedExecutable(
       DARWIN_SANDBOX_EXECUTABLE,
-    ]);
-    if (verification.status !== 0) return null;
-    const details = run(DARWIN_CODESIGN_EXECUTABLE, [
-      '-dv',
-      '--verbose=4',
-      DARWIN_SANDBOX_EXECUTABLE,
-    ]);
-    const authorities = details.stderr.split('\n').filter((line) => line.startsWith('Authority='));
-    const cdHash = field(details.stderr, 'CDHash');
-    if (
-      details.status !== 0 ||
-      field(details.stderr, 'Identifier') !== 'com.apple.sandbox-exec' ||
-      !/^\d+$/.test(field(details.stderr, 'Platform identifier') ?? '') ||
-      !/^[a-f0-9]{40,64}$/.test(cdHash ?? '') ||
-      !DARWIN_PLATFORM_SIGNING_LEAF_AUTHORITIES.some((leaf) => authorities.includes(leaf)) ||
-      !authorities.includes('Authority=Apple Code Signing Certification Authority') ||
-      !authorities.includes('Authority=Apple Root CA')
-    ) {
-      return null;
-    }
+      'com.apple.sandbox-exec',
+      run,
+    );
+    if (!signature) return null;
+    if (!/^\d+$/.test(field(signature.details, 'Platform identifier') ?? '')) return null;
     return {
       path: DARWIN_SANDBOX_EXECUTABLE,
       sha256: sha256(readBytes(DARWIN_SANDBOX_EXECUTABLE)),
-      cdHash: cdHash!,
+      cdHash: signature.cdHash,
     };
   } catch {
     return null;
   }
 }
 
-function signingIdentity(
-  path: string,
-  run: (command: string, args: readonly string[]) => CommandResult,
-): ManagedMetroSigningIdentity | null {
+function signingIdentity(path: string, run: RunCommand): ManagedMetroSigningIdentity | null {
   const verification = run(DARWIN_CODESIGN_EXECUTABLE, ['--verify', '--strict', path]);
   if (verification.status !== 0) return null;
   const details = run(DARWIN_CODESIGN_EXECUTABLE, ['-dv', '--verbose=4', path]);
@@ -256,19 +294,13 @@ function signingIdentity(
   };
 }
 
-function defaultRuntimeVersion(
-  nodeExecutable: string,
-  run: (command: string, args: readonly string[]) => CommandResult,
-): string {
+function defaultRuntimeVersion(nodeExecutable: string, run: RunCommand): string {
   const result = run(nodeExecutable, ['--version']);
   if (result.status !== 0) throw new Error('node version unavailable');
   return result.stdout.trim();
 }
 
-function defaultRuntimeFiles(
-  nodeExecutable: string,
-  run: (command: string, args: readonly string[]) => CommandResult,
-): string[] {
+function defaultRuntimeFiles(nodeExecutable: string, run: RunCommand): string[] {
   const result = run('/usr/bin/otool', ['-L', nodeExecutable]);
   if (result.status !== 0) throw new Error('node runtime dependencies unavailable');
   return result.stdout
@@ -419,6 +451,156 @@ function ownedCssInteropCacheRoot(
   }
 }
 
+export function dependencyRoots(
+  appRoot: string,
+  sourceRoot: string,
+  exists: (path: string) => boolean,
+): string[] {
+  const roots = new Set<string>();
+  for (const start of [resolve(appRoot), resolve(sourceRoot)]) {
+    let current = start;
+    while (true) {
+      const candidate = join(current, 'node_modules');
+      if (exists(candidate)) roots.add(candidate);
+      const parent = dirname(current);
+      if (parent === current) break;
+      current = parent;
+    }
+  }
+  for (const candidate of [
+    join(sourceRoot, '.yarn', 'cache'),
+    join(sourceRoot, '.yarn', 'unplugged'),
+    join(sourceRoot, '.pnpm'),
+  ]) {
+    if (exists(candidate)) roots.add(resolve(candidate));
+  }
+  return [...roots].sort();
+}
+
+function contained(path: string, roots: readonly string[]): boolean {
+  return roots.some((root) => path === root || path.startsWith(`${root}/`));
+}
+
+function defaultResolveFrom(root: string, specifier: string): string {
+  return createRequire(resolve(root, 'package.json')).resolve(specifier);
+}
+
+function resolvedExpoUpdatesCli(
+  roots: readonly string[],
+  resolveFrom: (root: string, specifier: string) => string,
+  canonicalize: (path: string) => string,
+): string | null {
+  for (const root of roots) {
+    try {
+      return canonicalPath(resolveFrom(root, EXPO_UPDATES_CLI_SPECIFIER), canonicalize);
+    } catch {}
+  }
+  return null;
+}
+
+type DeveloperGit =
+  | { git: string; outcome: 'admitted' }
+  | {
+      git: null;
+      outcome: 'developer-dir-unavailable' | 'developer-git-untrusted' | 'developer-git-unsigned';
+    };
+
+function verifiedDeveloperGit(dependencies: ManagedMetroEnforcementDependencies): DeveloperGit {
+  const run = dependencies.run ?? defaultRun;
+  const canonicalize = dependencies.canonicalize ?? realpathSync;
+  const stat = dependencies.stat ?? statSync;
+  let git: string;
+  try {
+    const developerDir = run(
+      DARWIN_DEVELOPER_DIR_EXECUTABLE,
+      ['-p'],
+      DARWIN_UTILITY_PROBE_ENVIRONMENT,
+    );
+    const root = developerDir.stdout.trim();
+    if (developerDir.status !== 0 || !root.startsWith('/')) {
+      return { git: null, outcome: 'developer-dir-unavailable' };
+    }
+    git = canonicalize(resolve(root, 'usr/bin/git'));
+    if (!git.startsWith('/')) return { git: null, outcome: 'developer-dir-unavailable' };
+  } catch {
+    return { git: null, outcome: 'developer-dir-unavailable' };
+  }
+  try {
+    const metadata = stat(git);
+    if (!metadata.isFile() || metadata.uid !== 0 || (metadata.mode & 0o022) !== 0) {
+      return { git: null, outcome: 'developer-git-untrusted' };
+    }
+  } catch {
+    return { git: null, outcome: 'developer-git-untrusted' };
+  }
+  if (!appleSignedExecutable(git, DARWIN_GIT_SIGNING_IDENTIFIER, run)) {
+    return { git: null, outcome: 'developer-git-unsigned' };
+  }
+  return { git, outcome: 'admitted' };
+}
+
+function gitRepositoryRoots(
+  sourceRoot: string,
+  canonicalize: (path: string) => string,
+  stat: (path: string) => FileMetadata,
+  readBytes: (path: string) => Buffer,
+): string[] {
+  const roots: string[] = [];
+  const pointer = resolve(sourceRoot, '.git');
+  try {
+    if (!stat(pointer).isFile()) return roots;
+    const gitDirEntry = /^gitdir:[ \t]*(.+)$/m.exec(readBytes(pointer).toString('utf8'))?.[1];
+    if (!gitDirEntry) return roots;
+    const gitDir = canonicalize(resolve(sourceRoot, gitDirEntry.trim()));
+    roots.push(gitDir);
+    const commonEntry = readBytes(resolve(gitDir, 'commondir')).toString('utf8').trim();
+    if (commonEntry) roots.push(canonicalize(resolve(gitDir, commonEntry)));
+  } catch {}
+  return roots.filter((root) => !contained(root, [sourceRoot]));
+}
+
+function unadmittedManifestUtility(
+  outcome: Exclude<ManagedMetroManifestUtilityOutcome, 'admitted'>,
+): ManagedMetroManifestUtility {
+  return { outcome, expoUpdatesCli: null, git: null, gitRepositoryRoots: [] };
+}
+
+export function resolveManagedMetroManifestUtility(
+  input: { platform: NodeJS.Platform; appRoot: string; sourceRoot: string },
+  dependencies: ManagedMetroEnforcementDependencies = {},
+): ManagedMetroManifestUtility {
+  if (input.platform !== 'darwin') return unadmittedManifestUtility('host-unsupported');
+  const canonicalize = dependencies.canonicalize ?? realpathSync;
+  const appRoot = canonicalPath(input.appRoot, canonicalize);
+  const sourceRoot = canonicalPath(input.sourceRoot, canonicalize);
+  const expoUpdatesCli = resolvedExpoUpdatesCli(
+    [appRoot],
+    dependencies.resolveFrom ?? defaultResolveFrom,
+    canonicalize,
+  );
+  if (!expoUpdatesCli) return unadmittedManifestUtility('expo-updates-cli-unresolved');
+  const ownerRoots = dependencyRoots(appRoot, sourceRoot, dependencies.exists ?? existsSync).map(
+    (root) => canonicalPath(root, canonicalize),
+  );
+  if (!contained(expoUpdatesCli, ownerRoots)) {
+    return unadmittedManifestUtility('expo-updates-cli-unowned');
+  }
+  const developerGit = verifiedDeveloperGit(dependencies);
+  return {
+    outcome: developerGit.outcome,
+    expoUpdatesCli,
+    git: developerGit.git,
+    gitRepositoryRoots: developerGit.git
+      ? gitRepositoryRoots(
+          sourceRoot,
+          canonicalize,
+          dependencies.stat ?? statSync,
+          dependencies.readBytes ?? readFileSync,
+        )
+      : [],
+  };
+}
+
 function managedMetroSandboxProfile(input: {
   readRoots: readonly string[];
   writeRoots: readonly string[];
@@ -512,6 +694,17 @@ export function prepareManagedMetroEnforcement(
     canonicalize,
     dependencies.lstat ?? lstatSync,
   );
+  const manifestUtility = resolveManagedMetroManifestUtility(
+    { platform: input.platform, appRoot, sourceRoot },
+    dependencies,
+  );
+  const manifestUtilityExecutables = [manifestUtility.expoUpdatesCli, manifestUtility.git].filter(
+    (path): path is string => path !== null,
+  );
+  // NOTE: every git invocation, including rev-parse and check-ignore, reads this system config.
+  const manifestUtilityReadRoots = manifestUtility.git
+    ? [resolve(dirname(manifestUtility.git), '..', 'share', 'git-core', 'gitconfig')]
+    : [];
   const readRoots = [
     '/dev/fd',
     sourceRoot,
@@ -522,12 +715,16 @@ export function prepareManagedMetroEnforcement(
     ...commandExecutableMappings,
     ...commandChainInputs,
     ...runtimeInputs,
+    ...manifestUtilityExecutables,
+    ...manifestUtilityReadRoots,
+    ...manifestUtility.gitRepositoryRoots,
   ];
   const executablePaths = [
     nodeExecutable,
     commandExecutable,
     ...commandExecutableMappings,
     '/usr/bin/env',
+    ...manifestUtilityExecutables,
   ];
   const nodeRuntimeAttestation = attestNodeRuntime(
     {
@@ -570,7 +767,10 @@ export function prepareManagedMetroEnforcement(
     sandboxExecutableSha256: sandbox.sha256,
     sandboxExecutableCdHash: sandbox.cdHash,
     commandLaunchSha256: sha256(
-      canonicalAuthorityJson({ executable: commandExecutable, arguments: commandArguments }),
+      canonicalAuthorityJson({
+        executable: commandExecutable,
+        arguments: commandArguments,
+      }),
     ),
     resolvedCommandSha256: sha256(
       canonicalAuthorityJson({
@@ -580,6 +780,7 @@ export function prepareManagedMetroEnforcement(
     ),
     profile,
     profileSha256: sha256(profile),
+    manifestUtility: manifestUtility.outcome,
     canaryPath: `/private/tmp/rn-dev-agent-metro-${canaryId}.canary`,
     descendantCanaryPath: resolve(runtimeRoot, `descendant-${canaryId}.cjs`),
     symlinkCanaryPath: resolve(runtimeRoot, `enforcement-${canaryId}.canary`),
@@ -902,7 +1103,11 @@ export interface ManagedMetroPreflightObservation {
   elapsedMs: number;
   flags: Record<(typeof PREFLIGHT_FLAGS)[number], boolean> | null;
   timings: Partial<Record<(typeof PREFLIGHT_TIMINGS)[number], number>> | null;
-  commandExit: { code: number | null; signal: string | null; atMs: number } | null;
+  commandExit: {
+    code: number | null;
+    signal: string | null;
+    atMs: number;
+  } | null;
   commandCauses: string[];
   preflightCauses: string[];
   exceptionCause: 'unknown' | null;
@@ -911,7 +1116,7 @@ export interface ManagedMetroPreflightObservation {
 interface ManagedMetroPreflightDependencies {
   writeCanary?: (path: string, contents: string) => void;
   removeCanary?: (path: string) => void;
-  run?: (command: string, args: readonly string[]) => CommandResult;
+  run?: RunCommand;
   environment?: NodeJS.ProcessEnv;
   observe?: (observation: ManagedMetroPreflightObservation) => void;
 }
@@ -1079,6 +1284,7 @@ export function runManagedMetroEnforcementPreflight(
       version: 2,
       kind: plan.kind,
       profileSha256: plan.profileSha256,
+      manifestUtility: plan.manifestUtility,
       sandboxExecutableSha256: plan.sandboxExecutableSha256,
       sandboxExecutableCdHash: plan.sandboxExecutableCdHash,
       commandLaunchSha256: plan.commandLaunchSha256,
@@ -1145,6 +1351,7 @@ export function verifyManagedMetroEnforcementReceipt(
     observed.version === 2 &&
     observed.kind === plan.kind &&
     observed.profileSha256 === plan.profileSha256 &&
+    observed.manifestUtility === plan.manifestUtility &&
     observed.sandboxExecutableSha256 === plan.sandboxExecutableSha256 &&
     observed.sandboxExecutableCdHash === plan.sandboxExecutableCdHash &&
     observed.commandLaunchSha256 === plan.commandLaunchSha256 &&

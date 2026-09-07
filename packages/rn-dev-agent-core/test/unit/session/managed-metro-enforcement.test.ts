@@ -82,6 +82,7 @@ function fixtureInput(platform: NodeJS.Platform = 'darwin') {
 const verifiedPlatformBinary = {
   exists: () => true,
   canonicalize: (path: string) => path,
+  resolveFrom: (root: string, specifier: string) => join(root, 'node_modules', specifier),
   stat: () => ({ isFile: () => true, uid: 0, mode: 0o100755 }),
   readBytes: () => Buffer.from('sandbox-exec'),
   run: (_command: string, args: readonly string[]) => {
@@ -201,29 +202,43 @@ test('managed Metro preserves sandbox signature, identity, and filesystem refusa
     },
     {
       name: 'directory',
-      dependencies: { stat: () => ({ isFile: () => false, uid: 0, mode: 0o755 }) },
+      dependencies: {
+        stat: () => ({ isFile: () => false, uid: 0, mode: 0o755 }),
+      },
     },
     {
       name: 'nonroot owner',
-      dependencies: { stat: () => ({ isFile: () => true, uid: 501, mode: 0o755 }) },
+      dependencies: {
+        stat: () => ({ isFile: () => true, uid: 501, mode: 0o755 }),
+      },
     },
     {
       name: 'group writable',
-      dependencies: { stat: () => ({ isFile: () => true, uid: 0, mode: 0o775 }) },
+      dependencies: {
+        stat: () => ({ isFile: () => true, uid: 0, mode: 0o775 }),
+      },
     },
     {
       name: 'other writable',
-      dependencies: { stat: () => ({ isFile: () => true, uid: 0, mode: 0o757 }) },
+      dependencies: {
+        stat: () => ({ isFile: () => true, uid: 0, mode: 0o757 }),
+      },
     },
     {
       name: 'unsigned',
       dependencies: {
-        run: () => ({ status: 1, stdout: '', stderr: 'code object is not signed at all' }),
+        run: () => ({
+          status: 1,
+          stdout: '',
+          stderr: 'code object is not signed at all',
+        }),
       },
     },
     {
       name: 'invalid signature',
-      dependencies: { run: () => ({ status: 1, stdout: '', stderr: 'invalid signature' }) },
+      dependencies: {
+        run: () => ({ status: 1, stdout: '', stderr: 'invalid signature' }),
+      },
     },
     {
       name: 'ad-hoc signature',
@@ -235,7 +250,10 @@ test('managed Metro preserves sandbox signature, identity, and filesystem refusa
           .join('\n'),
       ),
     },
-    { name: 'details command failure', dependencies: signingDetails(details, 1) },
+    {
+      name: 'details command failure',
+      dependencies: signingDetails(details, 1),
+    },
     {
       name: 'wrong identifier',
       dependencies: signingDetails(details.replace('com.apple.sandbox-exec', 'com.apple.other')),
@@ -269,7 +287,10 @@ test('managed Metro preserves sandbox signature, identity, and filesystem refusa
     },
   ];
   for (const { name, dependencies } of cases) {
-    const result = prepareManagedMetroEnforcement(fixtureInput(), { ...runtime, ...dependencies });
+    const result = prepareManagedMetroEnforcement(fixtureInput(), {
+      ...runtime,
+      ...dependencies,
+    });
     t.diagnostic(JSON.stringify({ rejection: name, result }));
     assert.deepEqual(
       result,
@@ -324,7 +345,10 @@ test('managed Metro grants writes only to the owned css-interop cache directory'
       name: 'shared package store',
       candidate: '/Users/dev/Library/pnpm/store/v3/react-native-css-interop/.cache',
     },
-    { name: 'other package cache', candidate: '/repo/apps/mobile/node_modules/nativewind/.cache' },
+    {
+      name: 'other package cache',
+      candidate: '/repo/apps/mobile/node_modules/nativewind/.cache',
+    },
     {
       name: 'package source directory',
       candidate: '/repo/apps/mobile/node_modules/react-native-css-interop/dist',
@@ -334,7 +358,11 @@ test('managed Metro grants writes only to the owned css-interop cache directory'
       candidate: ownedCssInteropCache,
       protectedRuntimeRoots: [dirname(ownedCssInteropCache)],
     },
-    { name: 'symlinked cache directory', candidate: ownedCssInteropCache, ...symlink },
+    {
+      name: 'symlinked cache directory',
+      candidate: ownedCssInteropCache,
+      ...symlink,
+    },
     {
       name: 'unreadable cache directory',
       candidate: ownedCssInteropCache,
@@ -357,7 +385,11 @@ test('managed Metro grants writes only to the owned css-interop cache directory'
     canonicalize,
     lstat,
   } of refused) {
-    const input = { ...fixtureInput(), cssInteropCacheRoot: candidate, protectedRuntimeRoots };
+    const input = {
+      ...fixtureInput(),
+      cssInteropCacheRoot: candidate,
+      protectedRuntimeRoots,
+    };
     if (runtimeRoot) input.runtimeRoot = runtimeRoot;
     const plan = prepareManagedMetroEnforcement(input, {
       ...verifiedRuntime,
@@ -396,7 +428,13 @@ test('managed Metro preflight observation stays truthful without changing outcom
     ].map((flag) => [flag, true]),
   );
   const diagnostic = {
-    timings: { allocatedMs: 3, spawnedMs: 9, occupancyMs: 15012, cleanupMs: 15040, totalMs: 15044 },
+    timings: {
+      allocatedMs: 3,
+      spawnedMs: 9,
+      occupancyMs: 15012,
+      cleanupMs: 15040,
+      totalMs: 15044,
+    },
     commandExit: { code: 1, signal: null, atMs: 800 },
     commandCauses: ['EPERM'],
   };
@@ -414,15 +452,28 @@ test('managed Metro preflight observation stays truthful without changing outcom
   }> = [
     {
       name: 'success',
-      result: { status: 0, stdout: JSON.stringify({ ...allTrue, diagnostic }), stderr: '' },
+      result: {
+        status: 0,
+        stdout: JSON.stringify({ ...allTrue, diagnostic }),
+        stderr: '',
+      },
       expectError: null,
-      expect: { outcome: 'receipt', complete: true, status: 0, outerTimedOut: false },
+      expect: {
+        outcome: 'receipt',
+        complete: true,
+        status: 0,
+        outerTimedOut: false,
+      },
     },
     {
       name: 'nonzero with failed flag',
       result: {
         status: 1,
-        stdout: JSON.stringify({ ...allTrue, resolvedCommandAllowed: false, diagnostic }),
+        stdout: JSON.stringify({
+          ...allTrue,
+          resolvedCommandAllowed: false,
+          diagnostic,
+        }),
         stderr: '',
       },
       expectError: 'METRO_RUNTIME_ENFORCEMENT_UNAVAILABLE: sandbox preflight failed',
@@ -432,11 +483,22 @@ test('managed Metro preflight observation stays truthful without changing outcom
       name: 'early child exit without receipt',
       result: { status: 1, stdout: '', stderr: 'node: bad option\n' },
       expectError: 'METRO_RUNTIME_ENFORCEMENT_UNAVAILABLE: sandbox preflight failed',
-      expect: { outcome: 'failed', complete: false, flags: null, timings: null },
+      expect: {
+        outcome: 'failed',
+        complete: false,
+        flags: null,
+        timings: null,
+      },
     },
     {
       name: 'outer timeout',
-      result: { status: null, stdout: '', stderr: '', signal: 'SIGTERM', timedOut: true },
+      result: {
+        status: null,
+        stdout: '',
+        stderr: '',
+        signal: 'SIGTERM',
+        timedOut: true,
+      },
       expectError: 'METRO_RUNTIME_ENFORCEMENT_UNAVAILABLE: sandbox preflight failed',
       expect: {
         outcome: 'failed',
@@ -521,13 +583,17 @@ test('managed Metro preflight observation stays truthful without changing outcom
     () =>
       runManagedMetroEnforcementPreflight(plan, {
         writeCanary: () => {
-          throw Object.assign(new Error('EEXIST: canary exists'), { code: 'EEXIST' });
+          throw Object.assign(new Error('EEXIST: canary exists'), {
+            code: 'EEXIST',
+          });
         },
         removeCanary: () => {},
         run: () => ({ status: 0, stdout: '', stderr: '' }),
         observe: (observation) => setupFailures.push(observation),
       }),
-    { message: 'METRO_RUNTIME_ENFORCEMENT_UNAVAILABLE: sandbox preflight is invalid' },
+    {
+      message: 'METRO_RUNTIME_ENFORCEMENT_UNAVAILABLE: sandbox preflight is invalid',
+    },
   );
   assert.deepEqual(
     (setupFailures[0] as Record<string, unknown>).outcome,
@@ -537,7 +603,11 @@ test('managed Metro preflight observation stays truthful without changing outcom
   const swallowed = runManagedMetroEnforcementPreflight(plan, {
     writeCanary: () => {},
     removeCanary: () => {},
-    run: () => ({ status: 0, stdout: JSON.stringify({ ...allTrue, diagnostic }), stderr: '' }),
+    run: () => ({
+      status: 0,
+      stdout: JSON.stringify({ ...allTrue, diagnostic }),
+      stderr: '',
+    }),
     observe: () => {
       throw new Error('sink failure');
     },
@@ -672,7 +742,10 @@ test('managed Metro preflight diagnostic capture bounds input and survives I/O f
     const command = Object.assign(new EventEmitter(), {
       pid: 424242,
       exitCode: null as number | null,
-      stdio: Array.from({ length: 10 }, () => ({ end: () => {}, resume: () => {} })),
+      stdio: Array.from({ length: 10 }, () => ({
+        end: () => {},
+        resume: () => {},
+      })),
       kill: () => {
         commandKilled = true;
         command.exitCode = 0;
@@ -708,7 +781,9 @@ test('managed Metro preflight diagnostic capture bounds input and survives I/O f
                       : scenario === 'unicode stderr'
                         ? '€'.repeat(3000)
                         : scenario === 'read boundary secret'
-                          ? `API_TOKEN=hunter2${'.'.repeat(65536 - 6 - finalDiagnostic.length)}${finalDiagnostic}`
+                          ? `API_TOKEN=hunter2${'.'.repeat(
+                              65536 - 6 - finalDiagnostic.length,
+                            )}${finalDiagnostic}`
                           : scenario === 'long multiline secret'
                             ? `Rejected value ${longSecret}${finalDiagnostic}`
                             : scenario === 'non-ASCII secret'
@@ -810,7 +885,10 @@ test('managed Metro preflight diagnostic capture bounds input and survives I/O f
     assert.ok(readSizes.reduce((total, size) => total + size, 0) <= 65536, scenario);
     if (scenario === 'noisy stderr') assert.deepEqual(readSizes, [65536], scenario);
     if (scenario === 'open write failure') assert.equal(stderrMode, 'ignore', scenario);
-    const observations: Array<{ commandCauses: string[]; exceptionCause: string | null }> = [];
+    const observations: Array<{
+      commandCauses: string[];
+      exceptionCause: string | null;
+    }> = [];
     const runPreflight = () =>
       runManagedMetroEnforcementPreflight(plan, {
         writeCanary: () => {},
@@ -829,7 +907,11 @@ test('managed Metro preflight diagnostic capture bounds input and survives I/O f
     if (scenario === 'post-cleanup probe error') {
       assert.deepEqual(
         observations[0].flags,
-        { ...expectedFlags, descendantCreationAllowed: false, commandCleanupConfirmed: false },
+        {
+          ...expectedFlags,
+          descendantCreationAllowed: false,
+          commandCleanupConfirmed: false,
+        },
         scenario,
       );
     }
@@ -881,7 +963,9 @@ test('managed Metro preflight diagnostic capture bounds input and survives I/O f
         spawnProcess: () => new ChildProcess(),
       },
     ),
-    { message: 'METRO_START_UNAVAILABLE: package-local Metro process did not start' },
+    {
+      message: 'METRO_START_UNAVAILABLE: package-local Metro process did not start',
+    },
   );
   const record = JSON.parse(
     readFileSync(join(root, 'metro-enforcement-diagnostic-diagnostic-metro.json'), 'utf8'),
@@ -923,6 +1007,10 @@ test('managed Metro derives a deterministic descendant-capable Darwin profile', 
   assert.match(first.profile, /\(deny network-outbound\)/);
   assert.match(first.profile, /\(extension "node"\)/);
   assert.match(first.profile, /\(subpath "\/repo\/node_modules"\)/);
+  assert.match(
+    first.profile,
+    /\(literal "\/repo\/apps\/mobile\/node_modules\/expo-updates\/bin\/cli\.js"\)/,
+  );
   assert.deepEqual(first.nodeRuntimeAttestation, {
     version: 1,
     executable: {
@@ -956,6 +1044,21 @@ test('managed Metro derives a deterministic descendant-capable Darwin profile', 
         path: '/repo/apps/mobile/node_modules/.bin/expo',
         sha256: createHash('sha256')
           .update('/repo/apps/mobile/node_modules/.bin/expo')
+          .digest('hex'),
+        signingIdentity: {
+          authorities: [
+            'Apple Code Signing Certification Authority',
+            'Apple Root CA',
+            'Software Signing',
+          ],
+          cdHash: '0123456789abcdef0123456789abcdef01234567',
+          identifier: 'com.apple.sandbox-exec',
+        },
+      },
+      {
+        path: '/repo/apps/mobile/node_modules/expo-updates/bin/cli.js',
+        sha256: createHash('sha256')
+          .update('/repo/apps/mobile/node_modules/expo-updates/bin/cli.js')
           .digest('hex'),
         signingIdentity: {
           authorities: [
@@ -1043,6 +1146,7 @@ test('managed Metro rejects a receipt after Node executable bytes change', () =>
     version: 2,
     kind: plan.kind,
     profileSha256: plan.profileSha256,
+    manifestUtility: plan.manifestUtility,
     sandboxExecutableSha256: plan.sandboxExecutableSha256,
     sandboxExecutableCdHash: plan.sandboxExecutableCdHash,
     commandLaunchSha256: plan.commandLaunchSha256,
@@ -1143,6 +1247,7 @@ test(
       version: 2,
       kind: 'darwin-seatbelt-v2',
       profileSha256: plan.profileSha256,
+      manifestUtility: plan.manifestUtility,
       sandboxExecutableSha256: plan.sandboxExecutableSha256,
       sandboxExecutableCdHash: plan.sandboxExecutableCdHash,
       commandLaunchSha256: plan.commandLaunchSha256,
@@ -1175,7 +1280,9 @@ test(
     const watchedRoot = join(runtimeRoot, 'tree');
     mkdirSync(runtimeRoot, { recursive: true });
     for (let index = 0; index < 14_000; index += 1) {
-      mkdirSync(join(watchedRoot, `pkg-${index % 140}`, `dir-${index}`), { recursive: true });
+      mkdirSync(join(watchedRoot, `pkg-${index % 140}`, `dir-${index}`), {
+        recursive: true,
+      });
     }
     const command = join(root, 'metro-entry.js');
     writeFileSync(command, 'process.exit(0);');
@@ -1230,7 +1337,11 @@ setTimeout(() => {
       {
         encoding: 'utf8',
         timeout: 30_000,
-        env: { ...process.env, NODE_OPTIONS: '', RN_TEST_WATCH_ROOT: watchedRoot },
+        env: {
+          ...process.env,
+          NODE_OPTIONS: '',
+          RN_TEST_WATCH_ROOT: watchedRoot,
+        },
       },
     );
     t.diagnostic(
@@ -1241,7 +1352,11 @@ setTimeout(() => {
       }),
     );
     assert.equal(probe.status, 0, probe.stderr);
-    const observed = JSON.parse(probe.stdout) as { watch: string; event: string; watchman: string };
+    const observed = JSON.parse(probe.stdout) as {
+      watch: string;
+      event: string;
+      watchman: string;
+    };
     assert.equal(observed.watch, 'started', 'recursive watch must not exhaust descriptors');
     assert.equal(observed.event, 'rename', 'native watcher must deliver a change event');
     assert.equal(observed.watchman, 'EPERM', 'watchman executable stays denied');
@@ -1487,11 +1602,15 @@ require('nativewind');
 require('nativewind/metro');
 let alternateCacheWrite = 'written';
 try {
-  require('node:fs').writeFileSync(${JSON.stringify(join(alternateCssInteropRoot, '.cache', 'ios.js'))}, 'generated');
+  require('node:fs').writeFileSync(${JSON.stringify(
+    join(alternateCssInteropRoot, '.cache', 'ios.js'),
+  )}, 'generated');
 } catch (error) {
   alternateCacheWrite = error.code;
 }
-require('node:fs').writeFileSync(${JSON.stringify(alternateCacheWriteResult)}, JSON.stringify(alternateCacheWrite));
+require('node:fs').writeFileSync(${JSON.stringify(
+        alternateCacheWriteResult,
+      )}, JSON.stringify(alternateCacheWrite));
 const descendant = spawnSync(process.execPath, [${JSON.stringify(descendantEntry)}]);
 if (descendant.status !== 0) process.exit(descendant.status || 1);
 createServer(() => {}).listen(port);
@@ -1549,7 +1668,11 @@ exec node "$basedir/../expo/bin/cli" "$@"
 
     let attestedPlan: ReturnType<typeof prepareManagedMetroEnforcement> | null = null;
     try {
-      t.diagnostic(JSON.stringify({ runtimeEvidenceAuthority: binding.runtimeEvidenceAuthority }));
+      t.diagnostic(
+        JSON.stringify({
+          runtimeEvidenceAuthority: binding.runtimeEvidenceAuthority,
+        }),
+      );
       try {
         t.diagnostic(
           readFileSync(
@@ -1598,6 +1721,8 @@ exec node "$basedir/../expo/bin/cli" "$@"
       assert.deepEqual(enforcementDiagnostic.preparation, {
         status: 'enforced',
         profileSha256: (policy.runtimeEnforcementReceipt as Record<string, unknown>).profileSha256,
+        manifestUtility: (policy.runtimeEnforcementReceipt as Record<string, unknown>)
+          .manifestUtility,
       });
       const preflight = enforcementDiagnostic.preflight as Record<string, unknown>;
       assert.equal(preflight.outcome, 'receipt');
@@ -1738,7 +1863,10 @@ exec node "$basedir/../expo/bin/cli" "$@"
       let failure: unknown = null;
       try {
         receipt = runManagedMetroEnforcementPreflight(attestedPlan, {
-          environment: { ...process.env, NODE_OPTIONS: attestedPlan.baseNodeOptions },
+          environment: {
+            ...process.env,
+            NODE_OPTIONS: attestedPlan.baseNodeOptions,
+          },
           observe: (value) => {
             observation = value;
           },
@@ -1747,10 +1875,14 @@ exec node "$basedir/../expo/bin/cli" "$@"
         failure = error;
       }
       t.diagnostic(JSON.stringify({ snapshotOrderAttempt: attempt, observation }));
-      const evidence = `attempt ${attempt}: the shell shim must receive the attested snapshot before admission; observed ${JSON.stringify(observation)}`;
+      const evidence = `attempt ${attempt}: the shell shim must receive the attested snapshot before admission; observed ${JSON.stringify(
+        observation,
+      )}`;
       if (failure !== null) {
         assert.fail(
-          `${evidence}; preflight threw ${failure instanceof Error ? failure.message : String(failure)}`,
+          `${evidence}; preflight threw ${
+            failure instanceof Error ? failure.message : String(failure)
+          }`,
         );
       }
       assert.equal(receipt?.resolvedCommandAllowed, true, evidence);

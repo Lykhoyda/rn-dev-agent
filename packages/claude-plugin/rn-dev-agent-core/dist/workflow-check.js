@@ -7990,6 +7990,7 @@ let managedSandbox =
   enforcementReceipt?.version === 2 &&
   enforcementReceipt.kind === runtimeEnforcement.kind &&
   enforcementReceipt.profileSha256 === runtimeEnforcement.profileSha256 &&
+  enforcementReceipt.manifestUtility === runtimeEnforcement.manifestUtility &&
   enforcementReceipt.sandboxExecutableSha256 ===
     runtimeEnforcement.sandboxExecutableSha256 &&
   enforcementReceipt.sandboxExecutableCdHash ===
