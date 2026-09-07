@@ -83287,7 +83287,7 @@ async function executeMaestroAuthorityStages(commands, executeStage, claimOrigin
           pendingOriginError = void 0;
         } catch (error2) {
           if (!reproveManagedOrigin || error2 instanceof SessionAuthorityError) {
-            throw relaunches.attribute(error2);
+            throw error2;
           }
           pendingOriginError = error2;
         }
@@ -93170,26 +93170,26 @@ function matchesAuthPattern(routeName) {
   const lower = routeName.toLowerCase();
   return AUTH_ROUTE_PATTERNS.some((p) => lower.includes(p));
 }
-function routeChain(state) {
-  const chain = [];
+function routeLevels(state) {
+  const levels = [];
   let cursor = state;
   while (cursor) {
-    if (typeof cursor.routeName === "string" && cursor.routeName)
-      chain.push(cursor.routeName);
+    const hasChild = Boolean(cursor.nested);
+    if (typeof cursor.routeName === "string" && cursor.routeName) {
+      levels.push({ name: cursor.routeName, hasChild });
+    }
     const screen = cursor.params?.screen;
-    if (!cursor.nested && typeof screen === "string" && screen)
-      chain.push(screen);
+    if (!hasChild && typeof screen === "string" && screen) {
+      levels.push({ name: screen, hasChild: false });
+    }
     cursor = cursor.nested;
   }
-  return chain;
+  return levels;
 }
-function isAuthRouteChain(chain) {
-  const leaf = chain.at(-1);
-  if (leaf === void 0)
-    return false;
-  return matchesAuthPattern(leaf) || chain.slice(0, -1).some((level) => AUTH_ROUTE_PATTERNS.includes(level.toLowerCase()));
+function isAuthRouteLevels(levels) {
+  return levels.some((level) => level.hasChild ? AUTH_ROUTE_PATTERNS.includes(level.name.toLowerCase()) : matchesAuthPattern(level.name));
 }
-async function readRouteChain(client2) {
+async function readRouteLevels(client2) {
   if (!client2.isConnected || !client2.helpersInjected)
     return null;
   try {
@@ -93200,15 +93200,15 @@ async function readRouteChain(client2) {
     const state = JSON.parse(result.value);
     if (state.error)
       return null;
-    const chain = routeChain(state);
-    return chain.length > 0 ? chain : null;
+    const levels = routeLevels(state);
+    return levels.length > 0 ? levels : null;
   } catch {
     return null;
   }
 }
 async function isOnAuthScreen(client2) {
-  const chain = await readRouteChain(client2);
-  return chain !== null && isAuthRouteChain(chain);
+  const levels = await readRouteLevels(client2);
+  return levels !== null && isAuthRouteLevels(levels);
 }
 function findLoginFlow(projectRoot) {
   const maestroDir = join52(projectRoot, ".maestro");
@@ -93276,9 +93276,9 @@ function maestroRunFailure(result) {
 async function handleAutoLogin(client2, opts = {}, deps = {}) {
   if (!client2.isConnected || !client2.helpersInjected)
     return null;
-  const chain = await readRouteChain(client2);
-  if (chain === null || !isAuthRouteChain(chain)) {
-    const observed = chain === null ? "unavailable" : chain.join(" \u203A ");
+  const levels = await readRouteLevels(client2);
+  if (levels === null || !isAuthRouteLevels(levels)) {
+    const observed = levels === null ? "unavailable" : levels.map((l) => l.name).join(" \u203A ");
     return { loggedIn: false, reason: `App is not on an auth screen (route: ${observed})` };
   }
   const session2 = (deps.getSession ?? getActiveSession)();

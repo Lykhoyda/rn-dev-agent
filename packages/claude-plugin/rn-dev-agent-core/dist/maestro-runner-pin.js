@@ -16562,7 +16562,7 @@ async function executeMaestroAuthorityStages(commands, executeStage, claimOrigin
           pendingOriginError = void 0;
         } catch (error) {
           if (!reproveManagedOrigin || error instanceof SessionAuthorityError) {
-            throw relaunches.attribute(error);
+            throw error;
           }
           pendingOriginError = error;
         }

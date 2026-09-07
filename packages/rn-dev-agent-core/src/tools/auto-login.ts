@@ -74,6 +74,11 @@ interface SimplifiedNavState {
   error?: string;
 }
 
+interface RouteLevel {
+  name: string;
+  hasChild: boolean;
+}
+
 /**
  * GH #993: the route chain root→leaf. A leaf named `intro` under a navigator
  * named `auth` is an auth screen; matching only the leaf discarded the one
@@ -82,31 +87,40 @@ interface SimplifiedNavState {
  * `params.screen` after the nested navigator moves on, so once a child is
  * mounted its own `routeName` is the truth.
  */
-export function routeChain(state: SimplifiedNavState): string[] {
-  const chain: string[] = [];
+function routeLevels(state: SimplifiedNavState): RouteLevel[] {
+  const levels: RouteLevel[] = [];
   let cursor: SimplifiedNavState | undefined = state;
   while (cursor) {
-    if (typeof cursor.routeName === 'string' && cursor.routeName) chain.push(cursor.routeName);
+    const hasChild = Boolean(cursor.nested);
+    if (typeof cursor.routeName === 'string' && cursor.routeName) {
+      levels.push({ name: cursor.routeName, hasChild });
+    }
     const screen: unknown = cursor.params?.screen;
-    if (!cursor.nested && typeof screen === 'string' && screen) chain.push(screen);
+    if (!hasChild && typeof screen === 'string' && screen) {
+      levels.push({ name: screen, hasChild: false });
+    }
     cursor = cursor.nested;
   }
-  return chain;
+  return levels;
 }
 
-// The leaf is the screen the user is on, so a substring match names it
-// (`loginScreen`, `sign-in`). An ancestor only qualifies as a whole segment, so
-// an `Authenticated` navigator that stays mounted after login is not auth.
-export function isAuthRouteChain(chain: readonly string[]): boolean {
-  const leaf = chain.at(-1);
-  if (leaf === undefined) return false;
-  return (
-    matchesAuthPattern(leaf) ||
-    chain.slice(0, -1).some((level) => AUTH_ROUTE_PATTERNS.includes(level.toLowerCase()))
+export function routeChain(state: SimplifiedNavState): string[] {
+  return routeLevels(state).map((level) => level.name);
+}
+
+// A level with no mounted child is the screen the user is on, so a substring
+// match names it (`loginScreen`, `sign-in`, an `AuthStack` whose child has not
+// mounted). A level that does have a child is a container and only qualifies as
+// a whole segment, so an `Authenticated` navigator over `Home` is not auth.
+function isAuthRouteLevels(levels: readonly RouteLevel[]): boolean {
+  return levels.some((level) =>
+    level.hasChild
+      ? AUTH_ROUTE_PATTERNS.includes(level.name.toLowerCase())
+      : matchesAuthPattern(level.name),
   );
 }
 
-async function readRouteChain(client: CDPClient): Promise<string[] | null> {
+async function readRouteLevels(client: CDPClient): Promise<RouteLevel[] | null> {
   if (!client.isConnected || !client.helpersInjected) return null;
 
   try {
@@ -119,16 +133,16 @@ async function readRouteChain(client: CDPClient): Promise<string[] | null> {
     const state = JSON.parse(result.value) as SimplifiedNavState;
     if (state.error) return null;
 
-    const chain = routeChain(state);
-    return chain.length > 0 ? chain : null;
+    const levels = routeLevels(state);
+    return levels.length > 0 ? levels : null;
   } catch {
     return null;
   }
 }
 
 export async function isOnAuthScreen(client: CDPClient): Promise<boolean> {
-  const chain = await readRouteChain(client);
-  return chain !== null && isAuthRouteChain(chain);
+  const levels = await readRouteLevels(client);
+  return levels !== null && isAuthRouteLevels(levels);
 }
 
 function findLoginFlow(projectRoot: string): string | null {
@@ -221,11 +235,11 @@ export async function handleAutoLogin(
 ): Promise<AutoLoginResult | null> {
   if (!client.isConnected || !client.helpersInjected) return null;
 
-  const chain = await readRouteChain(client);
-  if (chain === null || !isAuthRouteChain(chain)) {
+  const levels = await readRouteLevels(client);
+  if (levels === null || !isAuthRouteLevels(levels)) {
     // GH #993: name what was compared so a false negative is checkable against
     // cdp_navigation_state instead of contradicting it silently.
-    const observed = chain === null ? 'unavailable' : chain.join(' › ');
+    const observed = levels === null ? 'unavailable' : levels.map((l) => l.name).join(' › ');
     return { loggedIn: false, reason: `App is not on an auth screen (route: ${observed})` };
   }
 

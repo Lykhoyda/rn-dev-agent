@@ -473,7 +473,7 @@ export async function executeMaestroAuthorityStages<T>(
           pendingOriginError = undefined;
         } catch (error) {
           if (!reproveManagedOrigin || error instanceof SessionAuthorityError) {
-            throw relaunches.attribute(error);
+            throw error;
           }
           pendingOriginError = error;
         }

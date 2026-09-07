@@ -6,12 +6,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { CDPClient } from '../../dist/cdp-client.js';
-import {
-  handleAutoLogin,
-  isAuthRouteChain,
-  isOnAuthScreen,
-  routeChain,
-} from '../../dist/tools/auto-login.js';
+import { handleAutoLogin, isOnAuthScreen, routeChain } from '../../dist/tools/auto-login.js';
 
 function fakeClient(navState: unknown): CDPClient {
   return {
@@ -56,7 +51,6 @@ test('GH#993: a stale params.screen on a parent with a mounted child is not repo
 
 test('GH#993: the reported auth › intro state is an auth screen', async () => {
   assert.equal(await isOnAuthScreen(fakeClient(REPORTED)), true);
-  assert.equal(isAuthRouteChain(['__root', 'auth', 'intro']), true);
 });
 
 test('GH#993: controls — flat login/auth still match, non-auth nesting does not', async () => {
@@ -99,7 +93,6 @@ test('GH#993: an Authenticated ancestor that only contains a pattern is not an a
     ),
     false,
   );
-  assert.equal(isAuthRouteChain(['AuthenticatedStack', 'Dashboard']), false);
   const result = await handleAutoLogin(
     fakeClient({ routeName: 'AuthenticatedStack', nested: { routeName: 'Home' } }),
     { platform: 'ios', deviceId: 'SIM' },
@@ -107,7 +100,30 @@ test('GH#993: an Authenticated ancestor that only contains a pattern is not an a
   assert.equal(result?.loggedIn, false);
   assert.equal(result?.reason, 'App is not on an auth screen (route: AuthenticatedStack › Home)');
   // A parent literally named `auth` still matches — defect (3) stays fixed.
-  assert.equal(isAuthRouteChain(['__root', 'auth', 'intro']), true);
+  assert.equal(await isOnAuthScreen(fakeClient(REPORTED)), true);
+});
+
+test('GH#993: a navigator whose child has not mounted is judged as the screen, not a container', async () => {
+  // The window `params.screen` exists to serve: `AuthStack` has no mounted
+  // child, so it is what the user is looking at and substring-matches `auth`.
+  const unmounted = { routeName: 'AuthStack', params: { screen: 'Intro' } };
+  assert.deepEqual(routeChain(unmounted), ['AuthStack', 'Intro']);
+  assert.equal(await isOnAuthScreen(fakeClient(unmounted)), true);
+  const result = await handleAutoLogin(fakeClient(unmounted), {
+    platform: 'ios',
+    deviceId: 'SIM',
+  });
+  assert.notEqual(result?.reason, 'App is not on an auth screen (route: AuthStack › Intro)');
+
+  assert.equal(
+    await isOnAuthScreen(fakeClient({ routeName: 'onboardingStack', params: { screen: 'Step1' } })),
+    true,
+  );
+  // A mounted child still demotes its parent to a container.
+  assert.equal(
+    await isOnAuthScreen(fakeClient({ routeName: 'AuthStack', nested: { routeName: 'Home' } })),
+    false,
+  );
 });
 
 test('GH#993: the negative reason carries the observed route chain', async () => {

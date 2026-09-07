@@ -344,7 +344,7 @@ test('GH#993: an origin claim failing with no preceding flow relaunch is not att
   );
 });
 
-test('GH#993 D2.e: a relaunch that itself raises METRO_ORIGIN_MISMATCH keeps GH#708 abort semantics and is attributed', async () => {
+test('GH#993 D2.e: a relaunch that itself raises METRO_ORIGIN_MISMATCH keeps GH#708 abort semantics', async () => {
   const stages: string[] = [];
   const completed: boolean[] = [];
   let reproves = 0;
@@ -377,7 +377,11 @@ test('GH#993 D2.e: a relaunch that itself raises METRO_ORIGIN_MISMATCH keeps GH#
       const inner = error.stageError;
       assert.ok(inner instanceof SessionAuthorityError);
       assert.equal(inner.code, 'METRO_ORIGIN_MISMATCH');
-      assert.match(inner.message, /flow's own launchApp \(clearState: true\)/);
+      assert.doesNotMatch(
+        inner.message,
+        /flow's own launchApp/,
+        'a relaunch the gate refused is not a relaunch that happened',
+      );
       return true;
     },
   );
