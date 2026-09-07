@@ -66,6 +66,17 @@ function createHarness(layout: 'plain' | 'linked' = 'plain'): Harness {
   mkdirSync(metroHome, { recursive: true });
   mkdirSync(metroBinRoot, { recursive: true });
 
+  const autolinkingCliPath = join(
+    root,
+    'node_modules',
+    'expo-modules-autolinking',
+    'bin',
+    'expo-modules-autolinking.js',
+  );
+  mkdirSync(dirname(autolinkingCliPath), { recursive: true });
+  writeFileSync(autolinkingCliPath, '#!/usr/bin/env node\nconsole.log("autolinking");\n');
+  chmodSync(autolinkingCliPath, 0o755);
+
   const expoUpdatesRoot = join(root, 'node_modules', 'expo-updates');
   const cliPath = join(expoUpdatesRoot, 'bin', 'cli.js');
   mkdirSync(dirname(cliPath), { recursive: true });
@@ -78,15 +89,18 @@ function createHarness(layout: 'plain' | 'linked' = 'plain'): Harness {
     }),
   );
   // Stands in for `runtimeversion:resolve` under the fingerprint policy: @expo/fingerprint shells
-  // out to git through PATH to read the repository root and the ignore rules.
+  // out to git through PATH for the repository root and ignore rules, and to `node <autolinking
+  // cli>` through PATH for the core autolinking sources. Both names must resolve to an admitted
+  // binary before execvp reaches a host PATH entry the profile denies.
   writeFileSync(
     cliPath,
     `#!/usr/bin/env node
 const { spawnSync } = require('node:child_process');
-const git = (args) => {
-  const result = spawnSync('git', args, { cwd: process.cwd(), encoding: 'utf8' });
+const probe = (command, args) => {
+  const result = spawnSync(command, args, { cwd: process.cwd(), encoding: 'utf8' });
   return { code: result.error ? result.error.code : null, status: result.status };
 };
+const git = (args) => probe('git', args);
 console.log(
   JSON.stringify({
     args: process.argv.slice(2),
@@ -94,6 +108,13 @@ console.log(
     root: git(['rev-parse', '--show-toplevel']),
     ignored: git(['check-ignore', '-q', 'ignored.txt']),
     tracked: git(['check-ignore', '-q', 'tracked.txt']),
+    autolinking: probe('node', [
+      ${JSON.stringify(autolinkingCliPath)},
+      'react-native-config',
+      '--json',
+      '--platform',
+      'ios',
+    ]),
   }),
 );
 `,
@@ -164,9 +185,14 @@ function enforcementPlan(
 
 function runManifestLane(harness: Harness, plan: ManagedMetroEnforcementPlan, gitPath: string) {
   writeFileSync(harness.profilePath, plan.profile);
-  const shim = join(harness.metroBinRoot, 'git');
-  rmSync(shim, { force: true });
-  symlinkSync(gitPath, shim);
+  for (const [name, target] of [
+    ['git', gitPath],
+    ['node', realpathSync(process.execPath)],
+  ]) {
+    const shim = join(harness.metroBinRoot, name);
+    rmSync(shim, { force: true });
+    symlinkSync(target, shim);
+  }
   return spawnSync(
     '/usr/bin/sandbox-exec',
     ['-f', harness.profilePath, realpathSync(process.execPath), harness.commandPath],
@@ -195,12 +221,18 @@ function assertFingerprintProbesSucceeded(stdout: string): void {
     root: { code: string | null; status: number | null };
     ignored: { code: string | null; status: number | null };
     tracked: { code: string | null; status: number | null };
+    autolinking: { code: string | null; status: number | null };
   };
   assert.deepEqual(resolved.args, ['runtimeversion:resolve', '--platform', 'ios']);
   assert.deepEqual(resolved.help, { code: null, status: 0 });
   assert.deepEqual(resolved.root, { code: null, status: 0 });
   assert.deepEqual(resolved.ignored, { code: null, status: 0 });
   assert.deepEqual(resolved.tracked, { code: null, status: 1 });
+  assert.deepEqual(
+    resolved.autolinking,
+    { code: null, status: 0 },
+    'the core autolinking sources must be computed, not silently dropped on a denied spawn',
+  );
   assert.equal(
     observed.intruder.code,
     'EPERM',

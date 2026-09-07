@@ -2213,9 +2213,15 @@ export async function startManagedMetro(
     sourceRoot: input.sourceRoot,
   });
   const manifestUtilityGit = manifestUtility.git;
-  const gitShimPath = join(metroBinRoot, 'git');
-  rmSync(gitShimPath, { force: true, recursive: true });
-  if (manifestUtilityGit) symlinkSync(manifestUtilityGit, gitShimPath);
+  const metroBinShims: Record<string, string> = manifestUtilityGit
+    ? { git: manifestUtilityGit, node: canonicalRuntimeInput(launchCommand.nodeExecutable) }
+    : {};
+  for (const name of ['git', 'node']) {
+    const shimPath = join(metroBinRoot, name);
+    rmSync(shimPath, { force: true, recursive: true });
+    const target = metroBinShims[name];
+    if (target) symlinkSync(target, shimPath);
+  }
   const metroEnvironment = managedMetroChildEnvironment({
     ...(dependencies.environment ?? process.env),
     HOME: metroHome,
@@ -2227,8 +2233,9 @@ export async function startManagedMetro(
     EXPO_UNSTABLE_HEADLESS: '1',
     RCT_METRO_PORT: String(input.port),
   });
-  // NOTE: expo-updates resolves `git` through PATH, and the /usr/bin/git xcrun shim cannot run
-  // under the sandbox profile, so a shim holding only the admitted git wins the lookup.
+  // NOTE: expo-updates resolves `git` and @expo/fingerprint resolves `node` through PATH, and
+  // execvp aborts the whole search with EPERM at the first host PATH entry the profile denies, so
+  // a shim holding only the already-admitted binaries has to win the lookup.
   const childEnvironment = {
     ...metroEnvironment,
     ...(manifestUtilityGit

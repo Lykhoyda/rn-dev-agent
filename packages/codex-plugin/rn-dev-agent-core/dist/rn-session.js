@@ -15399,10 +15399,14 @@ async function startManagedMetro(input, dependencies = {}) {
     sourceRoot: input.sourceRoot
   });
   const manifestUtilityGit = manifestUtility.git;
-  const gitShimPath = join4(metroBinRoot, "git");
-  rmSync2(gitShimPath, { force: true, recursive: true });
-  if (manifestUtilityGit)
-    symlinkSync2(manifestUtilityGit, gitShimPath);
+  const metroBinShims = manifestUtilityGit ? { git: manifestUtilityGit, node: canonicalRuntimeInput(launchCommand.nodeExecutable) } : {};
+  for (const name of ["git", "node"]) {
+    const shimPath = join4(metroBinRoot, name);
+    rmSync2(shimPath, { force: true, recursive: true });
+    const target = metroBinShims[name];
+    if (target)
+      symlinkSync2(target, shimPath);
+  }
   const metroEnvironment = managedMetroChildEnvironment({
     ...dependencies.environment ?? process.env,
     HOME: metroHome,
