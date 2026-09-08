@@ -271,6 +271,20 @@ test('GH#993: a selector whose testID is literally clearState is not a clearStat
   assert.equal(trace.appFileResolutions, 0);
 });
 
+test('dev-client replay accepts a launch argument named clearState without resolving a reinstall', async (t) => {
+  const yaml = clearStateLoginYaml().replace(
+    '    clearState: true\n    stopApp: true',
+    '    stopApp: false\n    arguments:\n      clearState: fixture-value',
+  );
+  const { trace, runAction, project } = harness(t, EXPO_INSTALL, { yaml });
+  const envelope = parse(
+    await runAction({ actionId: 'user-login', projectRoot: project.root, autoRepair: false }),
+  );
+  assert.equal(envelope.ok, true, JSON.stringify(envelope));
+  assert.equal(trace.maestroRuns, 1);
+  assert.equal(trace.appFileResolutions, 0);
+});
+
 test('GH#993: the bare clearState command is still refused', async (t) => {
   const yaml = clearStateLoginYaml().replace(
     '- launchApp:\n    clearState: true\n    stopApp: true',

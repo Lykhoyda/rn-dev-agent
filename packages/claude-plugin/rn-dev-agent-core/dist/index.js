@@ -23983,12 +23983,23 @@ function isSafeMaestroScalar(s) {
   return true;
 }
 function containsClearState(value) {
-  if (Array.isArray(value)) {
-    return value.some((command) => command === "clearState" || containsClearState(command));
-  }
-  if (!value || typeof value !== "object")
+  if (!Array.isArray(value))
     return false;
-  return Object.entries(value).some(([key, nested]) => key === "clearState" && nested !== false || containsClearState(nested));
+  return value.some((command) => {
+    if (command === "clearState")
+      return true;
+    if (!command || typeof command !== "object" || Array.isArray(command))
+      return false;
+    if ("clearState" in command && command.clearState !== false)
+      return true;
+    if ("launchApp" in command) {
+      const launch = command.launchApp;
+      if (launch && typeof launch === "object" && "clearState" in launch) {
+        return launch.clearState !== false;
+      }
+    }
+    return containsClearState(asRunFlow(command)?.commands);
+  });
 }
 function buildMaestroFlow(opts, commands) {
   if (opts.appId !== void 0) {
