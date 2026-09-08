@@ -84,10 +84,12 @@ The link has exactly one accepted target: the same repository's **primary
 worktree** `.rn-agent/actions` (the first entry of `git worktree list`). A link
 to any other corpus — another clone of the app, a sibling worktree, a shared
 directory — is classified `LINK_FOREIGN` and every inventory or replay refuses
-it; there is no confirmation flag that admits a foreign corpus. If the primary
-worktree has no `.rn-agent/actions`, there is nothing to inherit and nothing to
-re-point the link to: either replace the link with a real `actions/` directory
-in this worktree, or create the corpus in the primary worktree and re-run
+it; there is no confirmation flag that admits a foreign corpus. The same
+refusal stands when the primary worktree's `.rn-agent/actions` is missing, or is
+not a real directory — a symlinked `.rn-agent` parent counts — because there is
+then nothing to inherit and nothing to re-point the link to: either replace the
+link with a real `actions/` directory in this worktree, or give the primary
+worktree a real `actions/` directory inside a real `.rn-agent/` and re-run
 `/rn-dev-agent:setup`.
 
 Because `actions/` is linked *inside* a real local `.rn-agent/` directory, the

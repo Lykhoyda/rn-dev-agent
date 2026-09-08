@@ -500,6 +500,19 @@ does not have a validated implementation for them. Run setup to converge the
 runner and migrate compatible actions, or rewrite the selector as literal text
 or an `id`; no UI mutation occurs before these checks pass.
 
+### Replay refused with DEV_CLIENT_CLEARSTATE_REFUSED
+
+`cdp_run_action` — and `cdp_login_prologue` through it — refuses a flow that
+clears app state when the session's install receipt attests an Expo dev-client
+build: the `clearState` relaunch uninstalls the app and strands the dev client
+at its picker, so the relaunched app cannot re-attach to the authority-bound
+Metro. No runner is invoked and the app is not touched. Remove `clearState`
+from the action so it starts from the attached app, and run
+`device_reset_state` before the replay when a state reset is needed. The
+reinstall path stays open to `maestro_run`, `maestro_test_all`, and
+`cdp_run_action` on a `bare-react-native` install — see
+[parallel session authority](/rn-dev-agent/session-authority/).
+
 ### `/setup` skipped a step
 
 Re-run `/rn-dev-agent:setup`. It's idempotent — already-injected blocks are detected and skipped, so only the missing pieces get applied.
