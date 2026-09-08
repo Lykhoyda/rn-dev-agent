@@ -55,3 +55,20 @@ test('clearState: a selector value or explicit false does not force a reinstall'
   );
   assert.deepEqual(resolution, { ok: true });
 });
+
+// GH #993 review: a parse failure must never be answered as "does not clear
+// state" — that is the GH#201 failure (uninstall with no reinstall bundle).
+test('clearState: an unparseable flow surfaces the failure instead of answering false', () => {
+  assert.throws(() => flowUsesClearState('- launchApp\n- *missingAnchor\n'), ReferenceError);
+  assert.throws(
+    () =>
+      resolveAppFileForClearState(
+        'ios',
+        '- launchApp\n- *missingAnchor\n',
+        'com.test.app',
+        undefined,
+        { getAppContainer: () => assert.fail('no app file lookup on an unparseable flow') },
+      ),
+    ReferenceError,
+  );
+});
