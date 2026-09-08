@@ -1298,11 +1298,8 @@ function foreignLinkRemediation(sourceState: SourceState, destination: string): 
       `/rn-dev-agent:setup can re-point it there after explicit confirmation.`
     );
   }
-  const parentIndex = destination.lastIndexOf('/');
-  const realShape =
-    parentIndex > 0
-      ? `a real directory under a real <primary worktree>/${destination.slice(0, parentIndex)}`
-      : 'a real directory';
+  const parent = destination.slice(0, destination.lastIndexOf('/'));
+  const realShape = `a real directory under a real <primary worktree>/${parent}`;
   const wrongType = sourceState === 'WRONG_TYPE';
   const problem = wrongType
     ? 'is not a usable real directory (a path component may be a symlink, not a directory, or ' +
