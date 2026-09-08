@@ -65,6 +65,7 @@ import {
 } from '../domain/maestro-error-parser.js';
 import { createMaestroRunHandler } from './maestro-run.js';
 import { createRepairActionHandler } from './repair-action.js';
+import { containsClearState } from '../domain/maestro-validator.js';
 import { isValidActionId } from '../domain/path-safety.js';
 import { sidecarPathFor } from '../domain/sidecar-io.js';
 import { classifyRouteDriftAfterFailure } from '../nav-graph/route-sequence.js';
@@ -113,8 +114,17 @@ function usesStrictRunActionPolicy(args: RunActionArgs): boolean {
   return (args as StrictRunActionArgs)[strictRunActionPolicy] === true;
 }
 
+/** The install binding facts cdp_run_action reads (GH #705 appFile, GH #993 launch shape). */
+export interface RunActionInstallReceipt {
+  platform?: unknown;
+  deviceId?: unknown;
+  appId?: unknown;
+  /** Build command provenance: `expo` means the app is an Expo dev client. */
+  buildKind?: unknown;
+}
+
 /** GH #705: the session's attested install receipt, or null outside a session. */
-function boundInstallReceipt(): { platform?: unknown; deviceId?: unknown; appId?: unknown } | null {
+function boundInstallReceipt(): RunActionInstallReceipt | null {
   try {
     const status = getWorkerAuthorityRuntime().status();
     if (!status.available) return null;
@@ -124,6 +134,19 @@ function boundInstallReceipt(): { platform?: unknown; deviceId?: unknown; appId?
     return null;
   }
 }
+
+// Use attested build provenance; bare and unmanaged replay retain reinstall support.
+export function isDevClientLaunchShape(install: RunActionInstallReceipt | null): boolean {
+  return install?.buildKind === 'expo';
+}
+
+export const DEV_CLIENT_CLEARSTATE_REFUSAL =
+  'Refusing to replay a flow containing clearState on a managed dev-client session. The ' +
+  'clearState relaunch uninstalls the app and strands the dev client at its picker, so the ' +
+  'relaunched app cannot re-attach to the authority-bound Metro (EG_DEV_CLIENT_CLEARSTATE). ' +
+  'No runner was invoked and the app was not touched. Remove launchApp clearState from the ' +
+  'action so it starts from the attached app; when a state reset is needed, run ' +
+  'device_reset_state before cdp_run_action or cdp_login_prologue.';
 
 /**
  * Map a parsed Maestro failure kind to an `ActionFailureCode` (for
@@ -526,7 +549,7 @@ export interface RunActionDeps {
   ) => Promise<void>;
   reissueInstallReceipt?: (args: RunActionArgs) => Promise<void>;
   /** GH #705: the session's attested install receipt, for appFile auto-resolution. */
-  installReceipt?: () => { platform?: unknown; deviceId?: unknown; appId?: unknown } | null;
+  installReceipt?: () => RunActionInstallReceipt | null;
   resolveAppFile?: (appId: string, deviceId: string) => string | null;
   engineStatus?: () => Promise<ReplayEngineStatus | null>;
 }
@@ -659,6 +682,19 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
       iosProofPlan?.ok !== true ||
       iosProofPlan.segments.some((segment) => segment.domain === 'xctest-native');
 
+    const install = installReceipt();
+    // Refuse before compatibility advice or any runner, claim, or park operation.
+    if (isDevClientLaunchShape(install) && containsClearState(preflightCommands)) {
+      return failResult(DEV_CLIENT_CLEARSTATE_REFUSAL, 'DEV_CLIENT_CLEARSTATE_REFUSED', {
+        actionId: args.actionId,
+        fallback: 'none',
+        launchShape: 'dev-client',
+        nextAction:
+          'Rewrite the action without launchApp clearState (start from the attached app) and, if a reset is needed, run device_reset_state first.',
+        ...(runtimeStatePath ? { writes: writeDisclosure() } : {}),
+      });
+    }
+
     let engineStatus: ReplayEngineStatus | null;
     try {
       engineStatus = await resolveEngineStatus();
@@ -728,7 +764,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
     // bundle to reinstall from. Resolve it off the session's attested install
     // receipt — the exact device and appId it was signed for — so the
     // "Pass appFile=<path>" advice is followable through this tool.
-    const receipt = args.appFile ? null : installReceipt();
+    const receipt = args.appFile ? null : install;
     const appFile =
       args.appFile ??
       (flowUsesClearState(replayYaml) &&

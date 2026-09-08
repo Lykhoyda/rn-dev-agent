@@ -117,7 +117,8 @@ Contract rules (violations break replay, repair, or inventory):
 - **Header**: `id`, `intent`, `tags`, `mutates`, `status` are the 5 inventory keys, and `enginePin: maestro-runner@1.1.24` (or newer) is required for replay — a missing `mutates` renders as `-` in `/list-learned-actions` (`pre-M7` when the whole header predates M7; `?` marks a present value that failed to parse). Always `status: experimental` at creation; promotion to `active` is earned by a clean replay, never hand-set. Full field glossary (incl. `produces`, `expectedRouteSequence`, `author`): `references/m7-header-reference.md`.
 - **Params**: keys match `[A-Z_][A-Z0-9_]*`; every `${VAR}` in the steps is listed in `# params`, and vice versa. The inventory scanner counts `${...}` occurrences **anywhere in the file, comments included** — so the diagram may mark real step params as `${PRODUCT_ID}`, but prose (e.g. the `intent` line) uses bare names, and no comment may mention a `${VAR}` the steps don't use.
 - **Body**: `launchApp: { stopApp: false }` self-bootstrap (works cold or warm, preserves login); conditional prologues via `runFlow: { when: { visible: ... } }`; `waitForAnimationToEnd` after transitions; the diagram's anchor `assertVisible` after each screen change; `scrollUntilVisible` for potentially off-screen targets.
-- **Never `clearState: true`** on an Expo Dev Client build — it wipes the Metro URL and strands the launcher (GH #8).
+- **Never `clearState: true`** on an Expo Dev Client build — it wipes the Metro URL and strands the launcher (GH #8). Managed dev-client replay (`cdp_run_action`, and `cdp_login_prologue` through it) refuses such an action before any runner call with `DEV_CLIENT_CLEARSTATE_REFUSED` (GH #993/#990); it never runs the destructive stage first.
+- **A `login` action on a dev client must be warm**: start from the attached app (`launchApp: { stopApp: false }`, no relaunch, no `openLink` to the dev-client URL) and use `id:` or literal text selectors — never regex text selectors, and note `.` is a regex metacharacter, so a Metro URL like `http://127.0.0.1:8081` is regex-shaped and refused. When a state reset is needed, run `device_reset_state` before the replay instead of `clearState`.
 - Do **not** hand-write the runtime sidecar — it is created lazily on first load/replay. In a fenced session, use the exact `writes.runtimeStatePath` returned by `cdp_run_action`; it is session-private, not project-local.
 
 Copy-adapt the complete worked example: `examples/add-product-to-cart.yaml`.
@@ -210,7 +211,8 @@ consult it before inventing a workaround.
 | Diagram line starting with a bare `word:` | Silently overwrites M7 metadata (e.g. `status`) |
 | Blank (non-`#`) line inside the header | Parser stops early; later M7 keys ignored |
 | `${VAR}` in a comment that no step uses | Inventory synthesizes a phantom `-e VAR=...`; replay pre-flight demands a param the flow ignores |
-| `clearState: true` on Dev Client | App strands on the Dev Client launcher (GH #8) |
+| `clearState: true` on Dev Client | Refused before any runner call (`DEV_CLIENT_CLEARSTATE_REFUSED`); the relaunch would strand the Dev Client launcher (GH #8, #993). Reset with `device_reset_state` first |
+| Regex text selectors (`.*Server.*`, or any text containing `.`) | `ENGINE_PIN_MISMATCH` regex refusal; `migrate-actions` reports `incompatible` — rewrite with `id:` or literal text, there is no pin-side remedy |
 | Raw `maestro_run` for a saved action | No RunRecord, no auto-repair, no promotion |
 | Hand-writing the sidecar | Stale `lastSeenMtimeMs` → false `EXTERNAL_EDIT` repair refusals |
 

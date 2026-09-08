@@ -129,6 +129,17 @@ const DENIED_COMMANDS = new Set<string>([
   'stopRecording',
 ]);
 
+// Inspect command positions so selector values and explicit false do not count.
+export function containsClearState(value: unknown): boolean {
+  if (Array.isArray(value)) {
+    return value.some((command) => command === 'clearState' || containsClearState(command));
+  }
+  if (!value || typeof value !== 'object') return false;
+  return Object.entries(value).some(
+    ([key, nested]) => (key === 'clearState' && nested !== false) || containsClearState(nested),
+  );
+}
+
 // ── Builder ─────────────────────────────────────────────────────────
 
 export interface MaestroFlowOptions {

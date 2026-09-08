@@ -347,6 +347,8 @@ export type ToolErrorCode =
   // GH #397 Phase 1: RN_ENGINE_PIN_STRICT=1 and the engine pin status is a
   // proven divergence (drift-newer / drift-older / checksum-mismatch).
   | 'ENGINE_PIN_MISMATCH'
+  // Managed dev-client replay refuses state clearing before runner invocation.
+  | 'DEV_CLIENT_CLEARSTATE_REFUSED'
   // GH #105 / iOS-MVP §3.1: runIOS press/fill with a @ref no longer in the
   // ref-map (snapshot is stale / UI re-rendered). Caller must device_snapshot
   // to refresh refs, then retry.

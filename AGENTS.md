@@ -212,6 +212,14 @@ alive for such callers.
   allowlist: a real actions directory, or the approved `.rn-agent/actions`
   symlink to the same-repo primary corpus. `isDirectNode` still refuses
   per-file action symlinks.
+- Login replay refusal is owned by `src/tools/run-action.ts`, using attested
+  install provenance and `containsClearState` in `src/domain/maestro-validator.ts`;
+  `cdp_login_prologue` inherits it. Keep it before runner, claim, and park effects.
+  Flow-relaunch attribution is owned by `createFlowRelaunchTracker` in
+  `src/tools/maestro-run.ts`, shared across iOS segments; successful origin proof
+  clears attribution, and proven foreign-Metro failures retain their own remedy.
+  The login regressions live in `test/unit/gh-993-*.test.ts` and
+  `test/unit/gh-708-mid-flow-relaunch.test.ts`.
 - React-tree replay presses (`createReplayPressByTestId` in
   `src/tools/cdp-replay-dispatch.ts`) opt into both `walkUp` and
   `allowInputDesignation` at the `InteractArgs` boundary. Inside the injected

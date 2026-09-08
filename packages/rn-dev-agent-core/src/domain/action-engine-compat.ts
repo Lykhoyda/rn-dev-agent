@@ -78,11 +78,14 @@ export function replayCompatibilityPreflight(opts: {
     const pin = exactPinRefusal(opts.engineStatus);
     if (pin) return pin;
   }
+  // Migration cannot repair regex selectors, so report their terminal refusal first.
+  const selectors = regexSelectorCapabilityRefusal(opts.commands);
+  if (selectors) return selectors;
   if (opts.requireEnginePin) {
     const format = actionEnginePinRefusal(opts.enginePin);
     if (format) return format;
   }
-  return regexSelectorCapabilityRefusal(opts.commands);
+  return null;
 }
 
 export function isLearnedActionPath(path: string): boolean {
