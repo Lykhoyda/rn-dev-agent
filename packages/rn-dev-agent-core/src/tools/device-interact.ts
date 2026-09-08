@@ -39,6 +39,7 @@ import {
   getCachedSignature,
   isRefMapFresh,
   lookupRef,
+  pinnedElementRef,
   refCenter,
   type RefSignature,
 } from '../fast-runner-ref-map.js';
@@ -76,7 +77,7 @@ export interface FindCandidate {
 
 function candidateFromNode(n: SnapshotNode): FindCandidate {
   return {
-    ref: n.ref,
+    ref: pinnedElementRef(n.ref),
     label: n.label,
     testID: n.identifier,
     type: n.type,

@@ -2388,7 +2388,7 @@ trackedTool(
     ref: z
       .string()
       .optional()
-      .describe('Element ref from device_snapshot (e.g. "e3" or "@e3"). Omit when using x/y.'),
+      .describe('Snapshot element ref "@e3" ("e3" accepted). Omit when using x/y.'),
     x: z.number().optional().describe('Raw tap X coordinate; requires y and no ref'),
     y: z.number().optional().describe('Raw tap Y coordinate; requires x and no ref'),
     doubleTap: z.boolean().optional().describe('Use double-tap gesture'),
@@ -3161,7 +3161,7 @@ trackedTool(
             .string()
             .optional()
             .describe(
-              '(press/fill) Element ref from snapshot (e.g. "e5"). Beware: refs can go stale across step transitions; prefer testID for cross-step actions.',
+              '(press/fill) Snapshot ref "@e5" ("e5" accepted). Refs go stale across steps; prefer testID.',
             ),
           x: z
             .number()

@@ -42,6 +42,7 @@ import {
   getLastSnapshotHash,
   getLastSnapshotHashForPackage,
   invalidateLastSnapshotHash,
+  pinnedElementRef,
   type FlatNode,
   type RefreshOutcome,
 } from './fast-runner-ref-map.js';
@@ -507,7 +508,7 @@ export function buildRunIOSArgs(
   switch (cmd) {
     case 'press':
     case 'tap': {
-      const ref = positionals[0];
+      const ref = positionals[0] && pinnedElementRef(positionals[0]);
       if (ref && ref.startsWith('@')) {
         const center = isRefMapFresh() ? refCenter(ref) : null;
         if (!center) {
@@ -561,7 +562,7 @@ export function buildRunIOSArgs(
       // attached by runNative's exact-target decoration), proves focus, and
       // types in one native operation. Shape: [verb, ref, rawText, ...flags] —
       // text is a raw slot so leading '-' values are never eaten as flags.
-      const ref = cliArgs[1];
+      const ref = cliArgs[1] && pinnedElementRef(cliArgs[1]);
       const text = cliArgs[2] ?? '';
       const flagArgs = cliArgs.slice(3);
       const delayRaw = optionValue(flagArgs, '--delay-ms');
@@ -806,7 +807,7 @@ export function buildRunAndroidArgs(
   switch (cmd) {
     case 'press':
     case 'tap': {
-      const ref = positionals[0];
+      const ref = positionals[0] && pinnedElementRef(positionals[0]);
       if (ref && ref.startsWith('@')) {
         const includeSystemUi = cliArgs.includes('--include-system-ui');
         const center = isRefMapFresh() ? refCenter(ref) : null;
@@ -845,7 +846,7 @@ export function buildRunAndroidArgs(
     }
     case 'fill':
     case 'type': {
-      const ref = cliArgs[1];
+      const ref = cliArgs[1] && pinnedElementRef(cliArgs[1]);
       const text = cliArgs[2] ?? '';
       // Story 04 (#385) M2 guard — mirrors buildRunIOSArgs: a --at-x/--at-y pin
       // bypasses @ref re-resolution so a settle-refreshed map can't retarget.
@@ -902,7 +903,8 @@ export function buildRunAndroidArgs(
     }
 
     case 'longpress': {
-      const [target, yOrDuration, durationMaybe] = positionals;
+      const [rawTarget, yOrDuration, durationMaybe] = positionals;
+      const target = rawTarget && pinnedElementRef(rawTarget);
       if (target?.startsWith('@')) {
         const duration = Number(yOrDuration);
         // Final-review fix (#386): mirrors the tap/type cases in this same
@@ -1584,7 +1586,7 @@ export function tapRetryPolicy(
   y: number | undefined,
   _opts: { retryIfNoChange?: boolean },
 ): TapRetryPolicy {
-  const ref = cliArgs[1];
+  const ref = cliArgs[1] && pinnedElementRef(cliArgs[1]);
   const exactTarget = ref?.startsWith('@') ? getFreshRefTarget(ref) : null;
   // 'Key'/'Keyboard' are iOS XCUIElement type names; an Android IME key carries
   // a Java class name instead, so device_focus_next marks its verified
@@ -1737,10 +1739,11 @@ function staleRefFail(
   cachedMetadata: ReturnType<typeof getCachedMetadata>,
   candidates: FlatNode[] = [],
 ): ToolResult {
+  const pinned = pinnedElementRef(ref);
   const message =
     reason === 'ambiguous'
-      ? `Element at ref ${ref} is stale and re-resolution matched ${candidates.length} elements — refusing to guess-tap`
-      : `Element at ref ${ref} no longer hittable — UI re-rendered since snapshot`;
+      ? `Element at ref ${pinned} is stale and re-resolution matched ${candidates.length} elements — refusing to guess-tap`
+      : `Element at ref ${pinned} no longer hittable — UI re-rendered since snapshot`;
   const hint =
     reason === 'ambiguous'
       ? 'Multiple elements share the cached identity. The ref-map was refreshed by this call — pick the intended ref from `candidates` and retry.'

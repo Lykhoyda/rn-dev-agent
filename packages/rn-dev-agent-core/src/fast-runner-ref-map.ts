@@ -203,6 +203,11 @@ export function updateRefMap(nodes: SnapshotNode[]): void {
   lastUpdated = Date.now();
 }
 
+/** Printed form for a snapshot id: `e3` → `@e3`; testIDs pass through. */
+export function pinnedElementRef(ref: string): string {
+  return /^e\d+$/.test(ref) ? `@${ref}` : ref;
+}
+
 export function lookupRef(ref: string): ElementRect | null {
   const clean = ref.startsWith('@') ? ref.slice(1) : ref;
   return refMap.get(clean) ?? null;
