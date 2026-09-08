@@ -102,10 +102,6 @@ interface ManagedMetroProcessIdentity {
   birth: string;
 }
 
-// Tally of what the readiness loop observed on the allocated port. Only a
-// `listening` probe whose pid the launcher owns can enter the verification
-// branch; `absent` and `unknown` are counted so the startup error can name why
-// the deadline expired instead of implying Metro was never there (GH #992).
 interface ManagedMetroReadinessOutcome {
   budgetMs: number;
   absentProbes: number;
@@ -2188,8 +2184,7 @@ export async function startManagedMetro(
     instanceId: string;
     buildGeneration: number;
     signerCapability: string;
-    // Readiness budget resolved by the caller from `.rn-agent/config.json`
-    // (`resolveMetroReadinessTimeout`); a timeout only, never an authority input.
+    // Resolved by resolveMetroReadinessTimeout; does not alter authority proof.
     readinessTimeoutMs: number;
   },
   dependencies: ManagedMetroDependencies = {},
@@ -2555,11 +2550,7 @@ export async function startManagedMetro(
     }
     await wait(100);
   }
-  // Snapshot the launcher state and the Metro log BEFORE the group SIGTERM.
-  // Everything Metro prints while dying (its evidence socket is closed by the
-  // launcher's own death, so a late loader write fails with EPIPE) and the
-  // launcher's post-kill `signalCode` are consequences of that kill, not the
-  // reason the deadline expired (GH #992).
+  // Shutdown can produce EPIPE and SIGTERM; preserve the initiating failure first.
   const preKill = {
     exitCode: child.exitCode,
     signalCode: child.signalCode,

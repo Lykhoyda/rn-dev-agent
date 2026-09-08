@@ -250,23 +250,12 @@ export function resolveMirrorConfig(
   return { enabled: true, fps, firstFrameTimeoutMs, source: 'default' };
 }
 
-// How long `startManagedMetro` waits for a launcher-owned Metro listener before
-// it tears the process group down (GH #992). A cold per-session cache on a
-// loaded host needs well over the former 20 s; the loop still returns the
-// instant the listener is proven and still exits early when the launcher dies,
-// so a larger budget only lengthens a genuinely broken start. The default is
-// provisional pending the cold-start measurement on the reporter's host.
+// Provisional until independent QA measures a real cold start.
 export const DEFAULT_METRO_READINESS_TIMEOUT_MS = 90_000;
 export const METRO_READINESS_TIMEOUT_MIN_MS = 1_000;
 export const METRO_READINESS_TIMEOUT_MAX_MS = 600_000;
-// Bound for every session-CLI spawnSync in the generated project adapter
-// (prepare-build, complete-build, abort-build, …). ensure-metro is the
-// exception: its SIGKILL bound is derived from the configured readiness
-// budget so a slow host cannot be truncated into SESSION_CLI_TIMEOUT.
 export const SESSION_CLI_TIMEOUT_MS = 120_000;
-// Everything ensure-metro does outside the readiness loop: retained-cleanup
-// stopManagedMetro, stale-binding captureMetroBinding + stopManagedMetro,
-// the installed-artifact hash and `xcrun simctl get_app_container`.
+// Covers cleanup, binding capture, and installed-artifact inspection outside readiness.
 export const METRO_ENSURE_CLI_PRE_READINESS_HEADROOM_MS = 100_000;
 
 export interface MetroReadinessTimeoutResolution {
@@ -278,12 +267,6 @@ function isPlainConfigObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-/**
- * `.rn-agent/config.json` → `metro.readinessTimeoutMs`. A timeout only: it
- * never gates or relaxes any authority proof. Unlike the observe knobs above, a
- * malformed value is refused rather than silently replaced by the default — a
- * quietly ignored timeout is exactly the wrongness GH #992 exists to remove.
- */
 export function resolveMetroReadinessTimeout(
   deps: { readConfig?: () => RnAgentConfig | null } = {},
 ): MetroReadinessTimeoutResolution {
