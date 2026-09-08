@@ -11507,8 +11507,8 @@ function foreignLinkRemediation(sourceState2, destination) {
   if (sourceState2 === "AVAILABLE") {
     return `Destination is a symlink to something other than the only accepted target ${target}; /rn-dev-agent:setup can re-point it there after explicit confirmation.`;
   }
-  const parentIndex = destination.lastIndexOf("/");
-  const realShape = parentIndex > 0 ? `a real directory under a real <primary worktree>/${destination.slice(0, parentIndex)}` : "a real directory";
+  const parent = destination.slice(0, destination.lastIndexOf("/"));
+  const realShape = `a real directory under a real <primary worktree>/${parent}`;
   const wrongType = sourceState2 === "WRONG_TYPE";
   const problem = wrongType ? "is not a usable real directory (a path component may be a symlink, not a directory, or unstable while being inspected)" : "does not exist";
   const remedy = wrongType ? `make ${target} ${realShape}` : `create the corpus at ${target}`;
@@ -71467,11 +71467,7 @@ import { existsSync as existsSync21, cpSync, rmSync as rmSync9, mkdirSync as mkd
 import { tmpdir as tmpdir8 } from "node:os";
 import { join as join32, basename as basename5 } from "node:path";
 function flowUsesClearState(flowText) {
-  try {
-    return import_yaml3.default.parseAllDocuments(flowText).some((doc) => containsClearState(doc.toJS()));
-  } catch {
-    return false;
-  }
+  return import_yaml3.default.parseAllDocuments(flowText).some((doc) => containsClearState(doc.toJS()));
 }
 function defaultSnapshotApp(appPath) {
   try {
