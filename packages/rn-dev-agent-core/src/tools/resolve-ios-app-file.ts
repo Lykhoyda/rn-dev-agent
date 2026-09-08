@@ -2,16 +2,23 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, cpSync, rmSync, mkdirSync, readdirSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, basename } from 'node:path';
+import yaml from 'yaml';
 import type { SnapshotHint } from '../cdp/app-installed-probe.js';
+import { containsClearState } from '../domain/maestro-validator.js';
 
 /**
- * GH#201: true when the flow clears app state. Two Maestro forms both uninstall
- * (and so need `--app-file` to reinstall on maestro-runner):
- *   - `launchApp: { clearState: true }`
- *   - the standalone `- clearState` command (in the validator allowlist)
+ * GH#201: true when the flow clears app state and so needs `--app-file` to
+ * reinstall on maestro-runner. Every caller passes validator-canonical YAML, so
+ * this decides on the parsed command structure via the shared predicate rather
+ * than on the flow text — the `- clearState: <appId>` argument form counts, and
+ * `clearState: false` or a selector value spelled `clearState` does not.
  */
 export function flowUsesClearState(flowText: string): boolean {
-  return /clearState:\s*true\b/.test(flowText) || /^[ \t]*-[ \t]*clearState[ \t]*$/m.test(flowText);
+  try {
+    return yaml.parseAllDocuments(flowText).some((doc) => containsClearState(doc.toJS()));
+  } catch {
+    return false;
+  }
 }
 
 export interface ResolveAppFileDeps {

@@ -97,10 +97,6 @@ function routeLevels(state: SimplifiedNavState): RouteLevel[] {
   return levels;
 }
 
-export function routeChain(state: SimplifiedNavState): string[] {
-  return routeLevels(state).map((level) => level.name);
-}
-
 // Only mounted ancestors require whole-name matching; leaves retain substring matching.
 function isAuthRouteLevels(levels: readonly RouteLevel[]): boolean {
   return levels.some((level) =>

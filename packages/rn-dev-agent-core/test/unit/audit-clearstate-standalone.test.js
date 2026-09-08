@@ -1,6 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { flowUsesClearState } from '../../dist/tools/resolve-ios-app-file.js';
+import {
+  flowUsesClearState,
+  resolveAppFileForClearState,
+} from '../../dist/tools/resolve-ios-app-file.js';
 
 // Audit (needs-runtime bucket): flowUsesClearState only matched
 // `launchApp: { clearState: true }`, missing the standalone `- clearState`
@@ -22,4 +25,33 @@ test('clearState: a comment mentioning clearState does not false-trigger the sta
   // The standalone matcher anchors on a list item, so prose/comment mentions
   // (no leading `- `) do not match.
   assert.equal(flowUsesClearState('# we used to clearState here\n- launchApp\n'), false);
+});
+
+// GH #993 review: the text matcher missed Maestro's `- clearState: <appId>`
+// argument form, so an iOS flow in that shape uninstalled with no reinstall
+// bundle. Detection now runs on the parsed command structure.
+test('clearState: the appId-argument command form resolves a reinstall app file', () => {
+  const resolution = resolveAppFileForClearState(
+    'ios',
+    'appId: com.test.app\n---\n- launchApp\n- clearState: com.test.app\n',
+    'com.test.app',
+    undefined,
+    {
+      getAppContainer: () => '/sim/MyApp.app',
+      exists: () => true,
+      snapshotApp: () => '/tmp/rn-appfile-snapshots/MyApp.app',
+    },
+  );
+  assert.deepEqual(resolution, { ok: true, appFile: '/tmp/rn-appfile-snapshots/MyApp.app' });
+});
+
+test('clearState: a selector value or explicit false does not force a reinstall', () => {
+  const resolution = resolveAppFileForClearState(
+    'ios',
+    'appId: com.test.app\n---\n- tapOn:\n    text: clearState\n- launchApp:\n    clearState: false\n',
+    'com.test.app',
+    undefined,
+    { getAppContainer: () => assert.fail('no app file should be resolved') },
+  );
+  assert.deepEqual(resolution, { ok: true });
 });

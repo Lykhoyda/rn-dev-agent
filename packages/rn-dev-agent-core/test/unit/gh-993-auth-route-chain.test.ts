@@ -6,7 +6,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { CDPClient } from '../../dist/cdp-client.js';
-import { handleAutoLogin, isOnAuthScreen, routeChain } from '../../dist/tools/auto-login.js';
+import { handleAutoLogin, isOnAuthScreen } from '../../dist/tools/auto-login.js';
 
 function fakeClient(navState: unknown): CDPClient {
   return {
@@ -23,17 +23,6 @@ const REPORTED = {
   nested: { routeName: 'auth', params: { screen: 'intro' }, nested: { routeName: 'intro' } },
 };
 
-test('GH#993: routeChain walks root→leaf and includes params.screen once', () => {
-  assert.deepEqual(routeChain(REPORTED), ['__root', 'auth', 'intro']);
-  // A navigator that has not mounted its child yet still names it via params.screen.
-  assert.deepEqual(
-    routeChain({ routeName: '__root', nested: { routeName: 'auth', params: { screen: 'intro' } } }),
-    ['__root', 'auth', 'intro'],
-  );
-  assert.deepEqual(routeChain({ routeName: 'auth' }), ['auth']);
-  assert.deepEqual(routeChain({}), []);
-});
-
 test('GH#993: a stale params.screen on a parent with a mounted child is not reported', async () => {
   // React Navigation keeps `{screen: 'Login'}` on Root after the user logged in
   // and the nested navigator moved to Home; the mounted child is the truth.
@@ -42,7 +31,6 @@ test('GH#993: a stale params.screen on a parent with a mounted child is not repo
     params: { screen: 'Login' },
     nested: { routeName: 'Home' },
   };
-  assert.deepEqual(routeChain(loggedIn), ['Root', 'Home']);
   assert.equal(await isOnAuthScreen(fakeClient(loggedIn)), false);
   const result = await handleAutoLogin(fakeClient(loggedIn), { platform: 'ios', deviceId: 'SIM' });
   assert.equal(result?.loggedIn, false);
@@ -107,7 +95,6 @@ test('GH#993: a navigator whose child has not mounted is judged as the screen, n
   // The window `params.screen` exists to serve: `AuthStack` has no mounted
   // child, so it is what the user is looking at and substring-matches `auth`.
   const unmounted = { routeName: 'AuthStack', params: { screen: 'Intro' } };
-  assert.deepEqual(routeChain(unmounted), ['AuthStack', 'Intro']);
   assert.equal(await isOnAuthScreen(fakeClient(unmounted)), true);
   const result = await handleAutoLogin(fakeClient(unmounted), {
     platform: 'ios',
@@ -126,15 +113,22 @@ test('GH#993: a navigator whose child has not mounted is judged as the screen, n
   );
 });
 
-test('GH#993: the negative reason carries the observed route chain', async () => {
-  const result = await handleAutoLogin(
-    fakeClient({
+test('GH#993: the negative reason carries the whole observed chain root→leaf', async () => {
+  const reason = async (navState: unknown): Promise<string | undefined> =>
+    (await handleAutoLogin(fakeClient(navState), { platform: 'ios', deviceId: 'SIM' }))?.reason;
+
+  assert.equal(
+    await reason({
       routeName: '__root',
       nested: { routeName: 'app', nested: { routeName: 'home' } },
     }),
-    { platform: 'ios', deviceId: 'SIM' },
+    'App is not on an auth screen (route: __root › app › home)',
   );
-  assert.ok(result);
-  assert.equal(result.loggedIn, false);
-  assert.equal(result.reason, 'App is not on an auth screen (route: __root › app › home)');
+  // A navigator that has not mounted its child yet still names it via params.screen, once.
+  assert.equal(
+    await reason({ routeName: '__root', nested: { routeName: 'app', params: { screen: 'home' } } }),
+    'App is not on an auth screen (route: __root › app › home)',
+  );
+  assert.equal(await reason({ routeName: 'app' }), 'App is not on an auth screen (route: app)');
+  assert.equal(await reason({}), 'App is not on an auth screen (route: unavailable)');
 });

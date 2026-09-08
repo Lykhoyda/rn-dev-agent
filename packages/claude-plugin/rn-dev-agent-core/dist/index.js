@@ -15800,10 +15800,10 @@ var require_directives = __commonJS({
     };
     var escapeTagName = (tn) => tn.replace(/[!,[\]{}]/g, (ch) => escapeChars[ch]);
     var Directives = class _Directives {
-      constructor(yaml2, tags) {
+      constructor(yaml3, tags) {
         this.docStart = null;
         this.docEnd = false;
-        this.yaml = Object.assign({}, _Directives.defaultYaml, yaml2);
+        this.yaml = Object.assign({}, _Directives.defaultYaml, yaml3);
         this.tags = Object.assign({}, _Directives.defaultTags, tags);
       }
       clone() {
@@ -23125,8 +23125,8 @@ function writeGraph(projectRoot, graph) {
   const filePath = getGraphPath(projectRoot);
   mkdirSync6(dirname5(filePath), { recursive: true });
   const tmpPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
-  const yaml2 = (0, import_yaml.stringify)({ nav_graph: graph }, { lineWidth: 120 });
-  writeFileSync6(tmpPath, yaml2, "utf-8");
+  const yaml3 = (0, import_yaml.stringify)({ nav_graph: graph }, { lineWidth: 120 });
+  writeFileSync6(tmpPath, yaml3, "utf-8");
   renameSync2(tmpPath, filePath);
   return filePath;
 }
@@ -58659,12 +58659,18 @@ init_recover_detached();
 init_app_installed_probe();
 
 // packages/rn-dev-agent-core/dist/tools/resolve-ios-app-file.js
+var import_yaml3 = __toESM(require_dist2(), 1);
+init_maestro_validator();
 import { execFileSync as execFileSync8 } from "node:child_process";
 import { existsSync as existsSync15, cpSync, rmSync as rmSync5, mkdirSync as mkdirSync8, readdirSync as readdirSync5, statSync as statSync6 } from "node:fs";
 import { tmpdir as tmpdir6 } from "node:os";
 import { join as join21, basename as basename3 } from "node:path";
 function flowUsesClearState(flowText) {
-  return /clearState:\s*true\b/.test(flowText) || /^[ \t]*-[ \t]*clearState[ \t]*$/m.test(flowText);
+  try {
+    return import_yaml3.default.parseAllDocuments(flowText).some((doc) => containsClearState(doc.toJS()));
+  } catch {
+    return false;
+  }
 }
 function defaultSnapshotApp(appPath) {
   try {
@@ -77478,18 +77484,18 @@ function promoteActionRuntimeWithCAS(expected, nextState) {
   }
   if (actionWasEditedExternally(expected))
     return { ok: false, conflict: "EXTERNAL_WRITE" };
-  const yaml2 = readFileSync27(expected.filePath, "utf8");
+  const yaml3 = readFileSync27(expected.filePath, "utf8");
   const marker = /^# status: experimental[ \t]*$/gm;
-  if ((yaml2.match(marker) ?? []).length !== 1)
+  if ((yaml3.match(marker) ?? []).length !== 1)
     return { ok: false, conflict: "EXTERNAL_WRITE" };
-  const promoted = yaml2.replace(marker, "# status: active");
+  const promoted = yaml3.replace(marker, "# status: active");
   const written = atomicWriter.pairWriteConditional(expected.filePath, promoted, sidecarPath, nextState, () => {
     try {
-      return runtimeBaselineMatches(expected.filePath, expected.state) && !actionWasEditedExternally(expected) && readFileSync27(expected.filePath, "utf8") === yaml2;
+      return runtimeBaselineMatches(expected.filePath, expected.state) && !actionWasEditedExternally(expected) && readFileSync27(expected.filePath, "utf8") === yaml3;
     } catch {
       return false;
     }
-  }, void 0, yaml2);
+  }, void 0, yaml3);
   if (!written)
     return { ok: false, conflict: "EXTERNAL_WRITE" };
   expected.state = { ...nextState, lastSeenMtimeMs: written.finalMtimeMs };
@@ -78261,7 +78267,7 @@ function buildAnnotationJs(note) {
 }
 
 // packages/rn-dev-agent-core/dist/tools/test-recorder-generators.js
-var import_yaml3 = __toESM(require_dist2(), 1);
+var import_yaml4 = __toESM(require_dist2(), 1);
 
 // packages/rn-dev-agent-core/dist/domain/action-engine-compat.js
 import { existsSync as existsSync27, lstatSync as lstatSync17, readdirSync as readdirSync10, realpathSync as realpathSync13 } from "node:fs";
@@ -78357,7 +78363,7 @@ var ENGINE_PIN_LINE = new RegExp(`^#\\s*enginePin\\s*:\\s*.+$`);
 init_maestro_validator();
 function maestroScalar(value) {
   const safe = stripNewlines(value);
-  return (0, import_yaml3.stringify)(safe).replace(/\n+$/, "");
+  return (0, import_yaml4.stringify)(safe).replace(/\n+$/, "");
 }
 function assertSafeGeneratedScalars(value, path) {
   if (typeof value === "string") {
@@ -78603,8 +78609,8 @@ function generateMaestro(events, opts = {}) {
         break;
     }
   }
-  const yaml2 = lines.join("\n") + "\n";
-  const bodyYaml = yaml2.replace(/^appId:[^\n]*\n---\n/, "");
+  const yaml3 = lines.join("\n") + "\n";
+  const bodyYaml = yaml3.replace(/^appId:[^\n]*\n---\n/, "");
   const commands = parseAndValidateFlow(bodyYaml).commands;
   assertRecorderCommandShapes(commands);
   if (opts.id && opts.intent) {
@@ -78612,7 +78618,7 @@ function generateMaestro(events, opts = {}) {
     if (refusal)
       throw new Error(refusal);
   }
-  return yaml2;
+  return yaml3;
 }
 function generateDetox(events, opts = {}) {
   const lines = [];
@@ -86550,7 +86556,7 @@ function maestroRefusalResult(result, fallbackMessage, meta) {
   });
 }
 var maestroInlineObserverForTest = null;
-async function runMaestroInline(yaml2, opts, dependencies = {}) {
+async function runMaestroInline(yaml3, opts, dependencies = {}) {
   maestroInlineObserverForTest?.();
   const dispatch = (dependencies.chooseDispatch ?? chooseMaestroDispatch)({
     platform: opts.platform
@@ -86569,7 +86575,7 @@ async function runMaestroInline(yaml2, opts, dependencies = {}) {
   let content;
   let headerAppId;
   try {
-    const parsed = parseAndValidateFlow(yaml2, { rejectHeader: true });
+    const parsed = parseAndValidateFlow(yaml3, { rejectHeader: true });
     const selectorRefusal = replayCompatibilityPreflight({
       commands: parsed.commands,
       engineStatus,
@@ -86873,9 +86879,9 @@ function regexEscape(value) {
 }
 async function tapSystemDialog(labels, platform, totalTimeoutMs, slug, authorityArgs) {
   const selector = `^(?:${labels.map(regexEscape).join("|")})$`;
-  const yaml2 = `- tapOn:
+  const yaml3 = `- tapOn:
     text: "${yamlEscape(selector)}"`;
-  const result = await runMaestroInlineFn(yaml2, {
+  const result = await runMaestroInlineFn(yaml3, {
     platform,
     timeoutMs: totalTimeoutMs,
     slug,
@@ -89794,9 +89800,9 @@ function createDevicePickValueHandler(invoke = runMaestroInline) {
       });
     }
     const open = buildOpenPickerSteps(args.pickerTestId);
-    const yaml2 = `${open}- tapOn:
+    const yaml3 = `${open}- tapOn:
     text: "${yamlEscape(args.value)}"`;
-    const result = await invoke(yaml2, {
+    const result = await invoke(yaml3, {
       platform,
       timeoutMs: args.timeoutMs ?? DEFAULT_PICKER_TIMEOUT_MS,
       slug: "pick-value",
@@ -89842,11 +89848,11 @@ function createDevicePickDateHandler(invoke = runMaestroInline) {
       { name: "year", value: String(parsed.year) }
     ];
     const opener = args.openerTestId ?? args.pickerTestId;
-    const yaml2 = [
+    const yaml3 = [
       buildOpenPickerSteps(opener).trimEnd(),
       ...components.map((component) => dateTapStep(component.value, args.pickerScopeTestId))
     ].filter(Boolean).join("\n");
-    const result = await invoke(yaml2, {
+    const result = await invoke(yaml3, {
       platform,
       timeoutMs: args.timeoutMs ?? DEFAULT_PICKER_TIMEOUT_MS,
       slug: "pick-date",

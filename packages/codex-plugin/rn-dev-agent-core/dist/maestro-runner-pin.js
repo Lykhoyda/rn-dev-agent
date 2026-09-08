@@ -787,10 +787,10 @@ var require_directives = __commonJS({
     };
     var escapeTagName = (tn) => tn.replace(/[!,[\]{}]/g, (ch) => escapeChars[ch]);
     var Directives = class _Directives {
-      constructor(yaml2, tags) {
+      constructor(yaml3, tags) {
         this.docStart = null;
         this.docEnd = false;
-        this.yaml = Object.assign({}, _Directives.defaultYaml, yaml2);
+        this.yaml = Object.assign({}, _Directives.defaultYaml, yaml3);
         this.tags = Object.assign({}, _Directives.defaultTags, tags);
       }
       clone() {
@@ -7908,6 +7908,14 @@ function isSafeMaestroScalar(s) {
     return false;
   return true;
 }
+function containsClearState(value) {
+  if (Array.isArray(value)) {
+    return value.some((command) => command === "clearState" || containsClearState(command));
+  }
+  if (!value || typeof value !== "object")
+    return false;
+  return Object.entries(value).some(([key, nested]) => key === "clearState" && nested !== false || containsClearState(nested));
+}
 function buildMaestroFlow(opts, commands) {
   if (opts.appId !== void 0) {
     assertValidBundleId(opts.appId, "appId header");
@@ -14753,12 +14761,18 @@ function chooseMaestroDispatch(inputs) {
 }
 
 // packages/rn-dev-agent-core/dist/tools/resolve-ios-app-file.js
+var import_yaml3 = __toESM(require_dist(), 1);
+init_maestro_validator();
 import { execFileSync as execFileSync3 } from "node:child_process";
 import { existsSync as existsSync15, cpSync as cpSync2, rmSync as rmSync3, mkdirSync as mkdirSync10, readdirSync as readdirSync7, statSync as statSync6 } from "node:fs";
 import { tmpdir as tmpdir3 } from "node:os";
 import { join as join22, basename as basename7 } from "node:path";
 function flowUsesClearState(flowText) {
-  return /clearState:\s*true\b/.test(flowText) || /^[ \t]*-[ \t]*clearState[ \t]*$/m.test(flowText);
+  try {
+    return import_yaml3.default.parseAllDocuments(flowText).some((doc) => containsClearState(doc.toJS()));
+  } catch {
+    return false;
+  }
 }
 function defaultSnapshotApp(appPath) {
   try {
