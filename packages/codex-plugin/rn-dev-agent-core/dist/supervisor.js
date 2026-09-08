@@ -11507,9 +11507,11 @@ function foreignLinkRemediation(sourceState2, destination) {
   if (sourceState2 === "AVAILABLE") {
     return `Destination is a symlink to something other than the only accepted target ${target}; /rn-dev-agent:setup can re-point it there after explicit confirmation.`;
   }
+  const parentIndex = destination.lastIndexOf("/");
+  const realShape = parentIndex > 0 ? `a real directory under a real <primary worktree>/${destination.slice(0, parentIndex)}` : "a real directory";
   const wrongType = sourceState2 === "WRONG_TYPE";
-  const problem = wrongType ? "exists but is not a directory" : "does not exist";
-  const remedy = wrongType ? `replace ${target} with a real actions directory` : `create the corpus at ${target}`;
+  const problem = wrongType ? "is not a usable real directory (a path component may be a symlink, not a directory, or unstable while being inspected)" : "does not exist";
+  const remedy = wrongType ? `make ${target} ${realShape}` : `create the corpus at ${target}`;
   return `Destination is a symlink, but the only accepted target ${target} ${problem}, so there is nothing to re-point it to. Supported shapes: replace the link with a real actions directory in this worktree, or ${remedy} and re-run /rn-dev-agent:setup.`;
 }
 function ignoreRemediation(destination) {

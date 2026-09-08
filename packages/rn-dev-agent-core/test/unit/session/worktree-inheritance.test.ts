@@ -262,8 +262,11 @@ test('GH#993: LINK_FOREIGN remediation names the accepted target per regime', ()
       .resources[0]!;
     assert.equal(wrongType.state, 'LINK_FOREIGN');
     assert.equal(wrongType.sourceState, 'WRONG_TYPE');
-    assert.match(wrongType.remediation ?? '', /exists but is not a directory/);
-    assert.match(wrongType.remediation ?? '', /replace <primary worktree>\/\.rn-agent\/actions/);
+    assert.match(wrongType.remediation ?? '', /is not a usable real directory/);
+    assert.match(
+      wrongType.remediation ?? '',
+      /make <primary worktree>\/\.rn-agent\/actions a real directory under a real <primary worktree>\/\.rn-agent/,
+    );
     assert.doesNotMatch(wrongType.remediation ?? '', /does not exist/);
     assert.doesNotMatch(wrongType.remediation ?? '', /create the corpus at/);
     rmSync(join(fixture.primary, '.rn-agent', 'actions'));
@@ -286,6 +289,40 @@ test('GH#993: LINK_FOREIGN remediation names the accepted target per regime', ()
       new RegExp(fixture.root.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
     );
     assert.match(result.stdout, /only accepted target/);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+// GH#993 review: WRONG_TYPE is also returned when a parent component of the
+// primary corpus path is a symlink (the legacy whole-`.rn-agent` layout). The
+// remediation must not claim the actions path itself exists as a non-directory,
+// and must name the real parent the operator actually has to fix.
+test('GH#993: a symlinked .rn-agent parent gets a remediation that names the parent', () => {
+  const fixture = makeFixture();
+  try {
+    const worktree = addWorktree(fixture);
+    const foreignCorpus = join(fixture.root, 'other-clone', '.rn-agent', 'actions');
+    mkdirSync(foreignCorpus, { recursive: true });
+    mkdirSync(join(worktree, '.rn-agent'));
+    symlinkSync(foreignCorpus, join(worktree, '.rn-agent', 'actions'), 'dir');
+
+    // The primary carries `.rn-agent` as a symlink, so the actions path under it
+    // never exists as a file — only its parent is wrong.
+    const relocated = join(fixture.root, 'relocated-agent');
+    mkdirSync(join(relocated, 'actions'), { recursive: true });
+    symlinkSync(relocated, join(fixture.primary, '.rn-agent'), 'dir');
+
+    const plan = planInheritance({ cwd: worktree, appRoot: worktree, host: 'claude' })
+      .resources[0]!;
+    assert.equal(plan.state, 'LINK_FOREIGN');
+    assert.equal(plan.sourceState, 'WRONG_TYPE');
+    assert.match(plan.remediation ?? '', /is not a usable real directory/);
+    assert.match(
+      plan.remediation ?? '',
+      /make <primary worktree>\/\.rn-agent\/actions a real directory under a real <primary worktree>\/\.rn-agent/,
+    );
+    assert.doesNotMatch(plan.remediation ?? '', /does not exist/);
   } finally {
     fixture.cleanup();
   }
