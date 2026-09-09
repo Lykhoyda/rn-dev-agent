@@ -8652,7 +8652,7 @@ setInterval(() => {}, 1 << 30);
 `;
 
 // packages/rn-dev-agent-core/dist/session/package-integration.js
-import { basename, isAbsolute, join as join4, relative, resolve as resolve2, sep } from "node:path";
+import { basename, isAbsolute, join as join5, relative, resolve as resolve2, sep } from "node:path";
 
 // packages/rn-dev-agent-core/dist/session/bound-directory.js
 import { spawn } from "node:child_process";
@@ -10418,6 +10418,45 @@ function retryBoundDirectoryCleanup(directory, obligation, dependencies = {}) {
   }
   directory.pendingCleanups.delete(obligation.transactionId);
 }
+
+// packages/rn-dev-agent-core/dist/logger.js
+import { createWriteStream, mkdirSync as mkdirSync2, existsSync as existsSync2 } from "node:fs";
+import { join as join4 } from "node:path";
+import { tmpdir as tmpdir2, homedir as homedir2 } from "node:os";
+var configuredLevel = process.env.LOG_LEVEL ?? process.env.RN_DEV_AGENT_LOG_LEVEL ?? "warn";
+function resolveLogPath() {
+  if (process.argv.includes("--diagnostic-contract-probe"))
+    return null;
+  if (configuredLevel !== "debug" && configuredLevel !== "info")
+    return null;
+  const pluginData = process.env.CLAUDE_PLUGIN_DATA;
+  if (pluginData) {
+    try {
+      if (!existsSync2(pluginData))
+        mkdirSync2(pluginData, { recursive: true });
+      return join4(pluginData, "cdp-bridge.log");
+    } catch {
+    }
+  }
+  const fallbackDir = join4(homedir2(), ".claude", "logs");
+  try {
+    if (!existsSync2(fallbackDir))
+      mkdirSync2(fallbackDir, { recursive: true });
+    return join4(fallbackDir, "rn-dev-agent-cdp-bridge.log");
+  } catch {
+  }
+  return join4(tmpdir2(), "rn-dev-agent-cdp-bridge.log");
+}
+var logFilePath = resolveLogPath();
+
+// packages/rn-dev-agent-core/dist/observability/mirror/jpeg-stream.js
+var SOI = Buffer.from([255, 216]);
+var EOI = Buffer.from([255, 217]);
+
+// packages/rn-dev-agent-core/dist/observability/mirror/sources.js
+var IDB_INSTALL_COMMAND = "brew install python@3.13 && brew tap facebook/fb && brew trust facebook/fb && brew install idb-companion && pipx install --python python3.13 --force fb-idb";
+var SIMCTL_HINT = `install idb for smoother mirroring (${IDB_INSTALL_COMMAND})`;
+var IDB_HINT = `idb not found \u2014 ${IDB_INSTALL_COMMAND}`;
 
 // packages/rn-dev-agent-core/dist/session/package-integration.js
 var ADAPTER = ".rn-agent/integration/rn-session-adapter.cjs";

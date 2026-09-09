@@ -35,6 +35,11 @@ import {
   restorePackageIntegration,
 } from '../../../dist/session/package-integration.js';
 import {
+  DEFAULT_METRO_READINESS_TIMEOUT_MS,
+  SESSION_CLI_TIMEOUT_MS,
+  deriveEnsureMetroCliTimeoutMs,
+} from '../../../dist/project-config.js';
+import {
   casBoundDirectoryFiles,
   closeBoundDirectories,
   closeBoundDirectory,
@@ -4721,4 +4726,129 @@ test('every stdio-capturing session-CLI wait in the adapter is bounded', () => {
     'a timed-out complete-build must fail instead of reading as a truncated success',
   );
   assert.match(adapter, /SESSION_CLI_TIMEOUT/);
+});
+
+test('the adapter bounds ensure-metro by the resolver-derived readiness timeout', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-session-ensure-metro-bound-'));
+  try {
+    const integrationRoot = join(root, '.rn-agent', 'integration');
+    mkdirSync(integrationRoot, { recursive: true });
+    const adapterPath = join(integrationRoot, 'rn-session-adapter.cjs');
+    const sessionCliPath = join(root, 'rn-session.cjs');
+    const preloadPath = join(root, 'record-spawn.cjs');
+    const recordPath = join(root, 'spawns.jsonl');
+    writeFileSync(adapterPath, renderProjectAdapter(), { mode: 0o755 });
+    writeFileSync(
+      join(integrationRoot, 'rn-session-integration.json'),
+      JSON.stringify({
+        version: 1,
+        adapter: '.rn-agent/integration/rn-session-adapter.cjs',
+        sessionCli: sessionCliPath,
+        originalScripts: {
+          ios: ['npx', 'expo', 'run:ios'],
+          android: ['npx', 'expo', 'run:android'],
+        },
+      }),
+    );
+    writeFileSync(
+      preloadPath,
+      `const fs = require('node:fs');
+const childProcess = require('node:child_process');
+const cli = ${JSON.stringify(sessionCliPath)};
+const spawnSyncOriginal = childProcess.spawnSync;
+childProcess.spawnSync = function (file, args, options) {
+  if (Array.isArray(args) && args.includes(cli)) {
+    fs.appendFileSync(process.env.SPAWN_RECORD, JSON.stringify({
+      subcommand: args[args.indexOf(cli) + 1],
+      timeout: options ? options.timeout : undefined,
+    }) + '\\n');
+  }
+  return spawnSyncOriginal(file, args, options);
+};
+`,
+    );
+    writeFileSync(
+      sessionCliPath,
+      `const args = process.argv.slice(2);
+if (args[0] === 'resolve-metro-readiness') {
+  process.stdout.write(process.env.STUB_READINESS_JSON);
+  process.exit(0);
+}
+if (args[0] === 'prepare-build') {
+  process.stderr.write('SESSION_AUTHORITY_REQUIRED: no live Metro binding for this session\\n');
+  process.exit(3);
+}
+process.stderr.write('METRO_START_UNAVAILABLE: stub refuses to start Metro\\n');
+process.exit(3);
+`,
+    );
+
+    const runAdapter = (readiness: Record<string, unknown>) => {
+      if (existsSync(recordPath)) rmSync(recordPath);
+      const result = spawnSync(process.execPath, [adapterPath, 'ios'], {
+        cwd: root,
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          NODE_OPTIONS: `--require=${JSON.stringify(preloadPath)}`,
+          SPAWN_RECORD: recordPath,
+          STUB_READINESS_JSON: JSON.stringify(readiness),
+        },
+      });
+      const spawns = existsSync(recordPath)
+        ? readFileSync(recordPath, 'utf8')
+            .trim()
+            .split('\n')
+            .filter(Boolean)
+            .map((line) => JSON.parse(line) as { subcommand: string; timeout?: number })
+        : [];
+      return { result, spawns };
+    };
+    const boundOf = (spawns: { subcommand: string; timeout?: number }[], subcommand: string) =>
+      spawns.find((spawn) => spawn.subcommand === subcommand)?.timeout;
+
+    const configured = 300_000;
+    const configuredRun = runAdapter({
+      readinessTimeoutMs: configured,
+      source: 'config',
+      ensureMetroCliTimeoutMs: deriveEnsureMetroCliTimeoutMs(configured),
+    });
+    assert.equal(
+      boundOf(configuredRun.spawns, 'ensure-metro'),
+      deriveEnsureMetroCliTimeoutMs(configured),
+      `ensure-metro must be spawned with the derived bound: ${configuredRun.result.stderr}`,
+    );
+    assert.equal(
+      boundOf(configuredRun.spawns, 'prepare-build'),
+      SESSION_CLI_TIMEOUT_MS,
+      'every other session-CLI call keeps the unchanged 120 s bound',
+    );
+    assert.match(configuredRun.result.stderr, /METRO_START_UNAVAILABLE/);
+
+    const defaultRun = runAdapter({
+      readinessTimeoutMs: DEFAULT_METRO_READINESS_TIMEOUT_MS,
+      source: 'default',
+      ensureMetroCliTimeoutMs: deriveEnsureMetroCliTimeoutMs(DEFAULT_METRO_READINESS_TIMEOUT_MS),
+    });
+    assert.equal(
+      boundOf(defaultRun.spawns, 'ensure-metro'),
+      deriveEnsureMetroCliTimeoutMs(DEFAULT_METRO_READINESS_TIMEOUT_MS),
+      'the 90 s default carries its own headroom rather than a fixed bound',
+    );
+
+    const belowBudget = runAdapter({
+      readinessTimeoutMs: DEFAULT_METRO_READINESS_TIMEOUT_MS,
+      source: 'default',
+      ensureMetroCliTimeoutMs: DEFAULT_METRO_READINESS_TIMEOUT_MS - 1,
+    });
+    assert.equal(belowBudget.result.status, 2);
+    assert.match(belowBudget.result.stderr, /METRO_READINESS_TIMEOUT_INVALID/);
+    assert.equal(
+      boundOf(belowBudget.spawns, 'ensure-metro'),
+      undefined,
+      'a resolver bound that cannot cover the readiness budget must refuse instead of spawning ensure-metro',
+    );
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
 });
