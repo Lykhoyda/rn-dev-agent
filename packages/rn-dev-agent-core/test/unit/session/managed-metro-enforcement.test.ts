@@ -32,6 +32,9 @@ import {
 } from '../../../dist/session/managed-metro.js';
 import { renderMetroIntegrationAdapter } from '../../../dist/session/package-integration.js';
 import { probeProcessBirth, readProcessBirth } from '../../../dist/session/process-birth.js';
+import { resolveMetroReadinessTimeout } from '../../../dist/project-config.js';
+
+const READINESS_TIMEOUT_MS = resolveMetroReadinessTimeout({ readConfig: () => null }).timeoutMs;
 
 const roots: string[] = [];
 const requireFromTest = createRequire(import.meta.url);
@@ -942,6 +945,7 @@ test('managed Metro preflight diagnostic capture bounds input and survives I/O f
         instanceId: 'diagnostic-metro',
         buildGeneration: 1,
         signerCapability: 'diagnostic-signer',
+        readinessTimeoutMs: READINESS_TIMEOUT_MS,
         port: 8341,
       },
       {
@@ -1652,6 +1656,7 @@ exec node "$basedir/../expo/bin/cli" "$@"
         instanceId: 'integration-metro',
         buildGeneration: 1,
         signerCapability: 'integration-signer',
+        readinessTimeoutMs: READINESS_TIMEOUT_MS,
       },
       {
         capture: async (input) => {

@@ -33,6 +33,15 @@ import { metroListenerPid } from '../../dist/session/metro-binding.js';
 import { stopManagedMetro, type ManagedMetroBinding } from '../../dist/session/managed-metro.js';
 import { readProcessBirth } from '../../dist/session/process-birth.js';
 import { resolveSourceIdentity } from '../../dist/session/source-identity.js';
+import {
+  deriveEnsureMetroCliTimeoutMs,
+  resolveMetroReadinessTimeout,
+} from '../../dist/project-config.js';
+
+const READINESS = resolveMetroReadinessTimeout({ readConfig: () => null });
+const READINESS_TIMEOUT_MS = READINESS.timeoutMs;
+const READINESS_SOURCE = READINESS.source;
+const ENSURE_METRO_CLI_TIMEOUT_MS = deriveEnsureMetroCliTimeoutMs(READINESS_TIMEOUT_MS);
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
 const fixtureRoot = join(repositoryRoot, 'test-fixtures', 'managed-metro-installed-expo');
@@ -541,6 +550,14 @@ async function writeMarker(buildGeneration) {
     }));
     return;
   }
+  if (command === 'resolve-metro-readiness') {
+    process.stdout.write(JSON.stringify({
+      readinessTimeoutMs: ${READINESS_TIMEOUT_MS},
+      source: ${JSON.stringify(READINESS_SOURCE)},
+      ensureMetroCliTimeoutMs: ${ENSURE_METRO_CLI_TIMEOUT_MS},
+    }));
+    return;
+  }
   if (command === 'ensure-metro') {
     await writeMarker(1);
     const binding = await metro.startManagedMetro({
@@ -552,6 +569,7 @@ async function writeMarker(buildGeneration) {
       instanceId,
       buildGeneration: 1,
       signerCapability,
+      readinessTimeoutMs: ${READINESS_TIMEOUT_MS},
     });
     fs.writeFileSync(bindingPath, JSON.stringify(binding));
     return;

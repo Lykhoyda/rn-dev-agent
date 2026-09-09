@@ -43,6 +43,11 @@ import {
   openBoundSubdirectory,
   writeBoundDirectoryFile,
 } from './session/bound-directory.js';
+import {
+  readRnAgentConfig,
+  resolveMetroReadinessTimeout,
+  deriveEnsureMetroCliTimeoutMs,
+} from './project-config.js';
 
 type SessionMetroBinding =
   | Partial<ManagedMetroBinding>
@@ -318,6 +323,10 @@ async function ensureManagedMetro(status: ReturnType<typeof resolveStatus>): Pro
     );
   }
   const signerCapability = readSigner(status);
+  const appRoot = String(status.source.appRoot);
+  const readiness = resolveMetroReadinessTimeout({
+    readConfig: () => readRnAgentConfig(appRoot),
+  });
   const existing = status.bindings.metro as Partial<ManagedMetroBinding> | undefined;
   const retainedCleanup = status.bindings.metroCleanup as
     | Partial<ManagedMetroBinding>
@@ -453,7 +462,7 @@ async function ensureManagedMetro(status: ReturnType<typeof resolveStatus>): Pro
       });
       status.registry.verifyOperation(currentOperation);
       startedBinding = await startManagedMetro({
-        appRoot: String(status.source.appRoot),
+        appRoot,
         runtimeRoot: sessionRuntimeDirectory(status.layout, status.sessionId),
         sourceRoot: String(status.source.contentRoot),
         sessionId: status.sessionId,
@@ -461,6 +470,7 @@ async function ensureManagedMetro(status: ReturnType<typeof resolveStatus>): Pro
         instanceId,
         buildGeneration,
         signerCapability,
+        readinessTimeoutMs: readiness.timeoutMs,
       });
       currentOperation = status.registry.replaceBindingsDuringOperation(currentOperation, {
         bindings: { metroCleanup: startedBinding },
@@ -521,6 +531,19 @@ async function ensureManagedMetro(status: ReturnType<typeof resolveStatus>): Pro
 
 async function main(): Promise<void> {
   const command = process.argv[2] ?? 'status';
+  if (command === 'resolve-metro-readiness') {
+    const readiness = resolveMetroReadinessTimeout({
+      readConfig: () => readRnAgentConfig(process.cwd()),
+    });
+    process.stdout.write(
+      `${JSON.stringify({
+        readinessTimeoutMs: readiness.timeoutMs,
+        source: readiness.source,
+        ensureMetroCliTimeoutMs: deriveEnsureMetroCliTimeoutMs(readiness.timeoutMs),
+      })}\n`,
+    );
+    return;
+  }
   let status = resolveStatus();
   try {
     if (command === 'status' || command === 'feedback-json' || command === 'prepare-build') {

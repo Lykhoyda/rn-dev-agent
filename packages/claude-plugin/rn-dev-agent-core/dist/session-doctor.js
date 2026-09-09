@@ -11083,6 +11083,74 @@ var init_secure_state_file = __esm({
   }
 });
 
+// packages/rn-dev-agent-core/dist/logger.js
+import { createWriteStream, mkdirSync as mkdirSync5, existsSync as existsSync6 } from "node:fs";
+import { join as join6 } from "node:path";
+import { tmpdir as tmpdir2, homedir as homedir2 } from "node:os";
+function resolveLogPath() {
+  if (process.argv.includes("--diagnostic-contract-probe"))
+    return null;
+  if (configuredLevel !== "debug" && configuredLevel !== "info")
+    return null;
+  const pluginData = process.env.CLAUDE_PLUGIN_DATA;
+  if (pluginData) {
+    try {
+      if (!existsSync6(pluginData))
+        mkdirSync5(pluginData, { recursive: true });
+      return join6(pluginData, "cdp-bridge.log");
+    } catch {
+    }
+  }
+  const fallbackDir = join6(homedir2(), ".claude", "logs");
+  try {
+    if (!existsSync6(fallbackDir))
+      mkdirSync5(fallbackDir, { recursive: true });
+    return join6(fallbackDir, "rn-dev-agent-cdp-bridge.log");
+  } catch {
+  }
+  return join6(tmpdir2(), "rn-dev-agent-cdp-bridge.log");
+}
+var configuredLevel, logFilePath;
+var init_logger = __esm({
+  "packages/rn-dev-agent-core/dist/logger.js"() {
+    "use strict";
+    configuredLevel = process.env.LOG_LEVEL ?? process.env.RN_DEV_AGENT_LOG_LEVEL ?? "warn";
+    logFilePath = resolveLogPath();
+  }
+});
+
+// packages/rn-dev-agent-core/dist/observability/mirror/jpeg-stream.js
+var SOI, EOI;
+var init_jpeg_stream = __esm({
+  "packages/rn-dev-agent-core/dist/observability/mirror/jpeg-stream.js"() {
+    "use strict";
+    SOI = Buffer.from([255, 216]);
+    EOI = Buffer.from([255, 217]);
+  }
+});
+
+// packages/rn-dev-agent-core/dist/observability/mirror/sources.js
+var IDB_INSTALL_COMMAND, SIMCTL_HINT, IDB_HINT;
+var init_sources = __esm({
+  "packages/rn-dev-agent-core/dist/observability/mirror/sources.js"() {
+    "use strict";
+    init_jpeg_stream();
+    IDB_INSTALL_COMMAND = "brew install python@3.13 && brew tap facebook/fb && brew trust facebook/fb && brew install idb-companion && pipx install --python python3.13 --force fb-idb";
+    SIMCTL_HINT = `install idb for smoother mirroring (${IDB_INSTALL_COMMAND})`;
+    IDB_HINT = `idb not found \u2014 ${IDB_INSTALL_COMMAND}`;
+  }
+});
+
+// packages/rn-dev-agent-core/dist/project-config.js
+var init_project_config = __esm({
+  "packages/rn-dev-agent-core/dist/project-config.js"() {
+    "use strict";
+    init_storage();
+    init_logger();
+    init_sources();
+  }
+});
+
 // packages/rn-dev-agent-core/dist/lifecycle/settle-hash.js
 var init_settle_hash = __esm({
   "packages/rn-dev-agent-core/dist/lifecycle/settle-hash.js"() {
@@ -11107,8 +11175,8 @@ var init_keyboard_guard = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/runners/runtime-paths.js
-import { existsSync as existsSync6, statSync as statSync3 } from "node:fs";
-import { join as join7 } from "node:path";
+import { existsSync as existsSync7, statSync as statSync3 } from "node:fs";
+import { join as join8 } from "node:path";
 function compactUnique(paths) {
   const out = [];
   for (const path of paths) {
@@ -11131,21 +11199,21 @@ function candidateNativeRunnerDirs(runnerName, baseDir = import.meta.dirname) {
   const codexPluginRoot = process.env.RN_DEV_AGENT_CODEX_PLUGIN_ROOT;
   const claudePluginRoot = process.env.CLAUDE_PLUGIN_ROOT;
   return compactUnique([
-    runnerRoot ? join7(runnerRoot, runnerName) : void 0,
-    repoRoot ? join7(repoRoot, "packages", runnerName) : void 0,
-    repoRoot ? join7(repoRoot, "scripts", runnerName) : void 0,
-    codexPluginRoot ? join7(codexPluginRoot, "scripts", runnerName) : void 0,
-    claudePluginRoot ? join7(claudePluginRoot, "..", runnerName) : void 0,
-    claudePluginRoot ? join7(claudePluginRoot, "..", "..", "packages", runnerName) : void 0,
-    claudePluginRoot ? join7(claudePluginRoot, "..", "..", "scripts", runnerName) : void 0,
-    claudePluginRoot ? join7(claudePluginRoot, "scripts", runnerName) : void 0,
+    runnerRoot ? join8(runnerRoot, runnerName) : void 0,
+    repoRoot ? join8(repoRoot, "packages", runnerName) : void 0,
+    repoRoot ? join8(repoRoot, "scripts", runnerName) : void 0,
+    codexPluginRoot ? join8(codexPluginRoot, "scripts", runnerName) : void 0,
+    claudePluginRoot ? join8(claudePluginRoot, "..", runnerName) : void 0,
+    claudePluginRoot ? join8(claudePluginRoot, "..", "..", "packages", runnerName) : void 0,
+    claudePluginRoot ? join8(claudePluginRoot, "..", "..", "scripts", runnerName) : void 0,
+    claudePluginRoot ? join8(claudePluginRoot, "scripts", runnerName) : void 0,
     // Bundled Codex runtime: <plugin>/rn-dev-agent-core/dist.
-    join7(baseDir, "..", "..", "scripts", runnerName),
+    join8(baseDir, "..", "..", "scripts", runnerName),
     // Source checkout: packages/rn-dev-agent-core/dist/runners.
     // Also covers the legacy scripts/cdp-bridge/dist/runners layout.
-    join7(baseDir, "..", "..", "..", runnerName),
+    join8(baseDir, "..", "..", "..", runnerName),
     // Legacy source checkout: packages/rn-dev-agent-core/dist/runners before runner package split.
-    join7(baseDir, "..", "..", "..", "..", "scripts", runnerName)
+    join8(baseDir, "..", "..", "..", "..", "scripts", runnerName)
   ]);
 }
 function resolveNativeRunnerDir(runnerName, baseDir = import.meta.dirname) {
@@ -11189,7 +11257,7 @@ var init_transport_recovery = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/runners/rn-fast-runner-client.js
-import { join as join8 } from "node:path";
+import { join as join9 } from "node:path";
 function resolveReadyTimeoutMs() {
   const raw = Number(process.env.RN_FAST_RUNNER_READY_TIMEOUT_MS);
   return Number.isFinite(raw) && raw > 0 ? raw : 3e4;
@@ -11210,9 +11278,9 @@ var init_rn_fast_runner_client = __esm({
     init_process_birth();
     READY_TIMEOUT_MS = resolveReadyTimeoutMs();
     FAST_RUNNER_PROJECT = resolveNativeRunnerDir("rn-fast-runner");
-    REBUILD_LOCK_DIR = join8(FAST_RUNNER_PROJECT, "build", ".rebuild-lock");
+    REBUILD_LOCK_DIR = join9(FAST_RUNNER_PROJECT, "build", ".rebuild-lock");
     REBUILD_LOCK_STALE_MS = 15 * 6e4;
-    REBUILD_BUDGET_FILE = join8(FAST_RUNNER_PROJECT, "build", "commands-rebuild.json");
+    REBUILD_BUDGET_FILE = join9(FAST_RUNNER_PROJECT, "build", "commands-rebuild.json");
     fetchImpl = globalThis.fetch;
   }
 });
@@ -11244,74 +11312,6 @@ var init_no_change_tracker = __esm({
     "use strict";
     WEDGED_DISTINCT_TARGETS = 3;
     WEDGED_RUNTIME_HINT = `${WEDGED_DISTINCT_TARGETS} consecutive taps on distinct targets produced no UI change \u2014 the app runtime may be wedged (JS thread paused or touch events swallowed). Run cdp_status (iOS auto-recovers a paused JS thread), then cdp_restart with hardReset=true if it persists.`;
-  }
-});
-
-// packages/rn-dev-agent-core/dist/logger.js
-import { createWriteStream, mkdirSync as mkdirSync5, existsSync as existsSync7 } from "node:fs";
-import { join as join9 } from "node:path";
-import { tmpdir as tmpdir2, homedir as homedir2 } from "node:os";
-function resolveLogPath() {
-  if (process.argv.includes("--diagnostic-contract-probe"))
-    return null;
-  if (configuredLevel !== "debug" && configuredLevel !== "info")
-    return null;
-  const pluginData = process.env.CLAUDE_PLUGIN_DATA;
-  if (pluginData) {
-    try {
-      if (!existsSync7(pluginData))
-        mkdirSync5(pluginData, { recursive: true });
-      return join9(pluginData, "cdp-bridge.log");
-    } catch {
-    }
-  }
-  const fallbackDir = join9(homedir2(), ".claude", "logs");
-  try {
-    if (!existsSync7(fallbackDir))
-      mkdirSync5(fallbackDir, { recursive: true });
-    return join9(fallbackDir, "rn-dev-agent-cdp-bridge.log");
-  } catch {
-  }
-  return join9(tmpdir2(), "rn-dev-agent-cdp-bridge.log");
-}
-var configuredLevel, logFilePath;
-var init_logger = __esm({
-  "packages/rn-dev-agent-core/dist/logger.js"() {
-    "use strict";
-    configuredLevel = process.env.LOG_LEVEL ?? process.env.RN_DEV_AGENT_LOG_LEVEL ?? "warn";
-    logFilePath = resolveLogPath();
-  }
-});
-
-// packages/rn-dev-agent-core/dist/observability/mirror/jpeg-stream.js
-var SOI, EOI;
-var init_jpeg_stream = __esm({
-  "packages/rn-dev-agent-core/dist/observability/mirror/jpeg-stream.js"() {
-    "use strict";
-    SOI = Buffer.from([255, 216]);
-    EOI = Buffer.from([255, 217]);
-  }
-});
-
-// packages/rn-dev-agent-core/dist/observability/mirror/sources.js
-var IDB_INSTALL_COMMAND, SIMCTL_HINT, IDB_HINT;
-var init_sources = __esm({
-  "packages/rn-dev-agent-core/dist/observability/mirror/sources.js"() {
-    "use strict";
-    init_jpeg_stream();
-    IDB_INSTALL_COMMAND = "brew install python@3.13 && brew tap facebook/fb && brew trust facebook/fb && brew install idb-companion && pipx install --python python3.13 --force fb-idb";
-    SIMCTL_HINT = `install idb for smoother mirroring (${IDB_INSTALL_COMMAND})`;
-    IDB_HINT = `idb not found \u2014 ${IDB_INSTALL_COMMAND}`;
-  }
-});
-
-// packages/rn-dev-agent-core/dist/project-config.js
-var init_project_config = __esm({
-  "packages/rn-dev-agent-core/dist/project-config.js"() {
-    "use strict";
-    init_storage();
-    init_logger();
-    init_sources();
   }
 });
 
@@ -14076,7 +14076,7 @@ function removeAndroidMetroReverse(binding, dependencies = {}) {
 }
 
 // packages/rn-dev-agent-core/dist/session/package-integration.js
-import { basename, isAbsolute as isAbsolute2, join as join6, relative as relative2, resolve as resolve3, sep } from "node:path";
+import { basename, isAbsolute as isAbsolute2, join as join7, relative as relative2, resolve as resolve3, sep } from "node:path";
 
 // packages/rn-dev-agent-core/dist/session/bound-directory.js
 import { spawn as spawn2 } from "node:child_process";
@@ -15905,6 +15905,7 @@ function retryBoundDirectoryCleanup(directory, obligation, dependencies = {}) {
 }
 
 // packages/rn-dev-agent-core/dist/session/package-integration.js
+init_project_config();
 var ADAPTER = ".rn-agent/integration/rn-session-adapter.cjs";
 var METRO_RUNTIME_LOADS = ".rn-agent/integration/metro-runtime-loads.jsonl";
 var METRO_START = "// rn-dev-agent session integration: begin";
@@ -15950,7 +15951,7 @@ function restorePackageIntegration(packageJson, manifest) {
 function snapshotBoundFiles(directory, directoryPath, names) {
   return readBoundDirectoryFiles(directory, names).map((snapshot) => ({
     ...snapshot,
-    path: join6(directoryPath, snapshot.name)
+    path: join7(directoryPath, snapshot.name)
   }));
 }
 function casReplaceBoundBatch(directory, writes, dependencies = {}) {
@@ -15997,7 +15998,7 @@ function readPackageIntegrationInputs(appRootInput, dependencies = {}) {
       packageJson: packageSnapshot.contents.toString("utf8"),
       metroConfig: {
         contents: metroSnapshot.contents.toString("utf8"),
-        path: join6(appRoot, metroSnapshot.name)
+        path: join7(appRoot, metroSnapshot.name)
       },
       ...manifest ? { manifest: manifest.toString("utf8") } : {}
     };
@@ -16055,7 +16056,7 @@ function rollbackWrites(writes, dependencies) {
 }
 function restorePackageIntegrationFiles(input, dependencies = {}) {
   const appRoot = resolve3(input.appRoot);
-  const packagePath = join6(appRoot, "package.json");
+  const packagePath = join7(appRoot, "package.json");
   const directories = openIntegrationDirectories(appRoot);
   const generatedNames = [
     "rn-session-integration.json",
@@ -16083,7 +16084,7 @@ function restorePackageIntegrationFiles(input, dependencies = {}) {
     if (metroConfig !== "metro.config.js" && metroConfig !== "metro.config.cjs") {
       throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: manifest Metro config is not an expected app-root config");
     }
-    const metroConfigPath = join6(appRoot, metroConfig);
+    const metroConfigPath = join7(appRoot, metroConfig);
     const [packageSnapshot, metroSnapshot] = snapshotBoundFiles(directories.app, appRoot, [
       basename(packagePath),
       basename(metroConfigPath)
