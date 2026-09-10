@@ -59,6 +59,7 @@ function harness(
   t.after(() => project.cleanup());
   project.seedAction('user-login', options.yaml ?? clearStateLoginYaml(), null);
   const trace: Trace = { maestroRuns: 0, claims: 0, relaunches: 0, appFileResolutions: 0 };
+  const replays: Array<{ devClientReplay?: boolean }> = [];
   const runAction = createPinnedRunActionHandler({
     targetContext: () => ({ platform: 'ios', deviceId: SIM, appId: APP_ID }),
     installReceipt: () => install,
@@ -75,8 +76,9 @@ function harness(
     },
     reproveManagedOrigin: async () => {},
     reissueInstallReceipt: async () => {},
-    maestroRun: async () => {
+    maestroRun: async (args: { devClientReplay?: boolean }) => {
       trace.maestroRuns += 1;
+      replays.push(args);
       return {
         content: [
           {
@@ -90,7 +92,7 @@ function harness(
       };
     },
   });
-  return { project, trace, runAction };
+  return { project, trace, replays, runAction };
 }
 
 function parse(result: { content: Array<{ text?: string }> }) {
@@ -190,7 +192,7 @@ test('GH#993: cdp_login_prologue inherits the refusal without executing anything
 });
 
 test('GH#993: a clearState action on a bare React Native session keeps GH#705 behaviour', async (t) => {
-  const { trace, runAction, project } = harness(t, {
+  const { trace, replays, runAction, project } = harness(t, {
     platform: 'ios',
     deviceId: SIM,
     appId: APP_ID,
@@ -202,10 +204,11 @@ test('GH#993: a clearState action on a bare React Native session keeps GH#705 be
   assert.notEqual(envelope.code, 'DEV_CLIENT_CLEARSTATE_REFUSED');
   assert.equal(trace.maestroRuns, 1, 'the flow still runs');
   assert.equal(trace.appFileResolutions, 1, 'the GH#705 reinstall bundle is still resolved');
+  assert.equal(replays[0]?.devClientReplay, false, 'no dev-client relaunch attribution');
 });
 
 test('GH#993: a warm (non-clearState) action on a dev-client session is unaffected', async (t) => {
-  const { trace, runAction, project } = harness(t, EXPO_INSTALL, {
+  const { trace, replays, runAction, project } = harness(t, EXPO_INSTALL, {
     yaml: fixtureYaml({ id: 'user-login', intent: 'warm login', selectors: ['login-submit'] }),
   });
   const envelope = parse(
@@ -214,6 +217,7 @@ test('GH#993: a warm (non-clearState) action on a dev-client session is unaffect
   assert.notEqual(envelope.code, 'DEV_CLIENT_CLEARSTATE_REFUSED');
   assert.equal(trace.maestroRuns, 1);
   assert.equal(trace.appFileResolutions, 0);
+  assert.equal(replays[0]?.devClientReplay, true, 'the replay is scoped for relaunch attribution');
 });
 
 test('GH#993: a prose comment mentioning clearState: true is not a clearState flow', async (t) => {

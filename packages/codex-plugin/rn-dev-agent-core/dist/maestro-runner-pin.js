@@ -16491,11 +16491,11 @@ function flowRelaunchFacts(command) {
 function relaunchesApp(launch) {
   return launch.clearState || launch.stopApp;
 }
-function createFlowRelaunchTracker() {
+function createFlowRelaunchTracker(devClientReplay) {
   let unclaimed = null;
   return {
     launched(launch) {
-      if (relaunchesApp(launch))
+      if (devClientReplay && relaunchesApp(launch))
         unclaimed = launch;
     },
     claimed() {
@@ -16520,7 +16520,7 @@ function attributeOriginFailureToFlowRelaunch(error, relaunch) {
   const cause = `The flow's own ${launch} relaunched the app and it did not re-register on the authority-bound Metro within the readiness window; the axis is reporting that relaunch, not a broken binding.`;
   const prefix = `${error.code}: `;
   const detail = error.message.startsWith(prefix) ? error.message.slice(prefix.length) : error.message;
-  const attributed = new SessionAuthorityError(error.code, `${detail} ${cause} ${FLOW_RELAUNCH_NEXT_ACTION}`, error.holder, { ...error.details, nextAction: FLOW_RELAUNCH_NEXT_ACTION });
+  const attributed = new SessionAuthorityError(error.code, `${detail} ${cause} ${FLOW_RELAUNCH_NEXT_ACTION}`, error.holder, error.details);
   attributed.attachMeta({
     ...meta,
     flowRelaunch: {
@@ -16562,7 +16562,7 @@ async function executeMaestroAuthorityStages(commands, executeStage, claimOrigin
   const results = [];
   let pendingOriginError;
   let originClaimed = options.firstOriginClaimed === true;
-  const relaunches = options.relaunches ?? createFlowRelaunchTracker();
+  const relaunches = options.relaunches ?? createFlowRelaunchTracker(false);
   for (const stage of plan.stages) {
     if (stage.requiresOrigin && pendingOriginError === void 0) {
       if (!originClaimed) {
@@ -16877,7 +16877,7 @@ function createMaestroRunHandler(deps = {}) {
       const reproveManagedOrigin = args.reproveManagedOrigin ?? deps.reproveManagedOrigin ?? managedAuthority.reproveManagedOrigin;
       const completeRunnerPark = args.completeRunnerPark ?? managedAuthority.completeRunnerPark;
       const reissueInstallReceipt2 = args.reissueInstallReceipt ?? deps.reissueInstallReceipt ?? managedAuthority.reissueInstallReceipt;
-      const flowRelaunches = createFlowRelaunchTracker();
+      const flowRelaunches = createFlowRelaunchTracker(args.devClientReplay === true);
       const completeClaimedOrigin = async (targetExpected, signal) => {
         await completeOrigin(targetExpected, signal);
         if (targetExpected)
@@ -17266,7 +17266,7 @@ function createMaestroRunHandler(deps = {}) {
       const completeOrigin = args.completeNativeOrigin ?? deps.completeNativeOrigin ?? managedAuthority.completeNativeOrigin;
       const relaunchManagedApp = args.relaunchManagedApp ?? deps.relaunchManagedApp ?? managedAuthority.relaunchManagedApp;
       const reproveManagedOrigin = args.reproveManagedOrigin ?? deps.reproveManagedOrigin ?? managedAuthority.reproveManagedOrigin;
-      const flowRelaunches = args.flowRelaunches ?? createFlowRelaunchTracker();
+      const flowRelaunches = args.flowRelaunches ?? createFlowRelaunchTracker(args.devClientReplay === true);
       if (platform === "ios" && authorityPlan.stages[0]?.requiresOrigin) {
         try {
           await claimOrigin();

@@ -214,6 +214,8 @@ export interface MaestroRunArgs {
   reissueInstallReceipt?: (() => Promise<void>) | null;
   /** GH #993: the partitioned parent's flow-wide relaunch tracker (nested native leg). */
   flowRelaunches?: FlowRelaunchTracker;
+  /** GH #993: managed learned-action replay on a dev client; scopes flow-relaunch attribution. */
+  devClientReplay?: boolean;
   /**
    * GH #623: attempt lineage for the canonical run ledger. cdp_run_action
    * passes kind 'repaired' + parentAttemptId on its post-repair retry so one
@@ -321,11 +323,11 @@ export interface FlowRelaunchTracker {
   attribute(error: unknown): unknown;
 }
 
-export function createFlowRelaunchTracker(): FlowRelaunchTracker {
+export function createFlowRelaunchTracker(devClientReplay: boolean): FlowRelaunchTracker {
   let unclaimed: FlowRelaunchFacts | null = null;
   return {
     launched(launch) {
-      if (relaunchesApp(launch)) unclaimed = launch;
+      if (devClientReplay && relaunchesApp(launch)) unclaimed = launch;
     },
     claimed() {
       unclaimed = null;
@@ -365,7 +367,7 @@ function attributeOriginFailureToFlowRelaunch(
     error.code,
     `${detail} ${cause} ${FLOW_RELAUNCH_NEXT_ACTION}`,
     error.holder,
-    { ...error.details, nextAction: FLOW_RELAUNCH_NEXT_ACTION },
+    error.details,
   );
   attributed.attachMeta({
     ...meta,
@@ -432,7 +434,7 @@ export async function executeMaestroAuthorityStages<T>(
   // run can report success.
   let pendingOriginError: unknown;
   let originClaimed = options.firstOriginClaimed === true;
-  const relaunches = options.relaunches ?? createFlowRelaunchTracker();
+  const relaunches = options.relaunches ?? createFlowRelaunchTracker(false);
   for (const stage of plan.stages) {
     if (stage.requiresOrigin && pendingOriginError === undefined) {
       if (!originClaimed) {
@@ -977,7 +979,7 @@ export function createMaestroRunHandler(
         args.reissueInstallReceipt ??
         deps.reissueInstallReceipt ??
         managedAuthority.reissueInstallReceipt;
-      const flowRelaunches = createFlowRelaunchTracker();
+      const flowRelaunches = createFlowRelaunchTracker(args.devClientReplay === true);
       const completeClaimedOrigin = async (
         targetExpected: boolean,
         signal?: AbortSignal,
@@ -1517,7 +1519,8 @@ export function createMaestroRunHandler(
         args.reproveManagedOrigin ??
         deps.reproveManagedOrigin ??
         managedAuthority.reproveManagedOrigin;
-      const flowRelaunches = args.flowRelaunches ?? createFlowRelaunchTracker();
+      const flowRelaunches =
+        args.flowRelaunches ?? createFlowRelaunchTracker(args.devClientReplay === true);
       if (platform === 'ios' && authorityPlan.stages[0]?.requiresOrigin) {
         try {
           await claimOrigin();

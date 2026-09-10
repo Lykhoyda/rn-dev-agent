@@ -216,8 +216,10 @@ alive for such callers.
   install provenance and `containsClearState` in `src/domain/maestro-validator.ts`;
   `cdp_login_prologue` inherits it. Keep it before runner, claim, and park effects.
   Flow-relaunch attribution is owned by `createFlowRelaunchTracker` in
-  `src/tools/maestro-run.ts`, shared across iOS segments; successful origin proof
-  clears attribution, and proven foreign-Metro failures retain their own remedy.
+  `src/tools/maestro-run.ts`, shared across iOS segments and enabled only for
+  `cdp_run_action` dev-client replay (`devClientReplay`); it appends to the message
+  and keeps the original `nextAction`. Successful origin proof clears attribution,
+  and proven foreign-Metro failures retain their own remedy.
   The login regressions live in `test/unit/gh-993-*.test.ts` and
   `test/unit/gh-708-mid-flow-relaunch.test.ts`.
 - React-tree replay presses (`createReplayPressByTestId` in

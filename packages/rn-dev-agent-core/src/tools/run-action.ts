@@ -852,6 +852,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
           reproveManagedOrigin: (options) => reproveManagedOrigin(args, options),
           completeRunnerPark: (signal) => completeManagedRunnerParkAuthority(args, signal),
           reissueInstallReceipt: () => reissueInstallReceipt(args),
+          devClientReplay: isDevClientLaunchShape(install),
         }),
       );
       const firstAttemptMs = Date.now() - tBeforeFirst;
@@ -1307,6 +1308,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
           reproveManagedOrigin: (options) => reproveManagedOrigin(args, options),
           completeRunnerPark: (signal) => completeManagedRunnerParkAuthority(args, signal),
           reissueInstallReceipt: () => reissueInstallReceipt(args),
+          devClientReplay: isDevClientLaunchShape(install),
         }),
       );
       const retryMs = Date.now() - tBeforeRetry;
