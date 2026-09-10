@@ -14781,7 +14781,11 @@ import { existsSync as existsSync15, cpSync as cpSync2, rmSync as rmSync3, mkdir
 import { tmpdir as tmpdir3 } from "node:os";
 import { join as join22, basename as basename7 } from "node:path";
 function flowUsesClearState(flowText) {
-  return import_yaml3.default.parseAllDocuments(flowText).some((doc) => containsClearState(doc.toJS()));
+  return import_yaml3.default.parseAllDocuments(flowText).some((doc) => {
+    if (doc.errors.length > 0)
+      throw doc.errors[0];
+    return containsClearState(doc.toJS());
+  });
 }
 function defaultSnapshotApp(appPath) {
   try {

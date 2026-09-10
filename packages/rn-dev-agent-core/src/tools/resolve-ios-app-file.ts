@@ -14,7 +14,10 @@ import { containsClearState } from '../domain/maestro-validator.js';
  * `clearState: false` or a selector value spelled `clearState` does not.
  */
 export function flowUsesClearState(flowText: string): boolean {
-  return yaml.parseAllDocuments(flowText).some((doc) => containsClearState(doc.toJS()));
+  return yaml.parseAllDocuments(flowText).some((doc) => {
+    if (doc.errors.length > 0) throw doc.errors[0];
+    return containsClearState(doc.toJS());
+  });
 }
 
 export interface ResolveAppFileDeps {

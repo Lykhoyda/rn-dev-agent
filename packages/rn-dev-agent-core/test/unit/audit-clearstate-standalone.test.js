@@ -72,3 +72,13 @@ test('clearState: an unparseable flow surfaces the failure instead of answering 
     ReferenceError,
   );
 });
+
+// yaml records syntax errors on the document instead of throwing, and toJS()
+// returns partial content that can drop a real clearState.
+test('clearState: a YAML syntax error before a clearState surfaces instead of answering false', () => {
+  const unclosedQuote = '- tapOn: "unclosed\n- launchApp:\n    clearState: true\n';
+  const tabIndent = '- tapOn:\n\tid: x\n- launchApp:\n    clearState: true\n';
+  for (const flow of [unclosedQuote, tabIndent]) {
+    assert.throws(() => flowUsesClearState(flow), { name: 'YAMLParseError' });
+  }
+});
