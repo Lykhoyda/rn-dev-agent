@@ -11512,7 +11512,7 @@ function foreignLinkRemediation(sourceState2, destination) {
   const wrongType = sourceState2 === "WRONG_TYPE";
   const problem = wrongType ? "is not a usable real directory (a path component may be a symlink, not a directory, or unstable while being inspected)" : "does not exist";
   const remedy = wrongType ? `make ${target} ${realShape}` : `create the corpus at ${target}`;
-  return `Destination is a symlink, but the only accepted target ${target} ${problem}, so there is nothing to re-point it to. Supported shapes: replace the link with a real actions directory in this worktree, or ${remedy} and re-run /rn-dev-agent:setup.`;
+  return `Destination is a symlink, but the only accepted target ${target} ${problem}, so there is nothing to re-point it to. Supported shapes: stop the session's Metro first (rn_session stop_metro), then replace the link with a real actions directory in this worktree, or ${remedy} and re-run /rn-dev-agent:setup.`;
 }
 function ignoreRemediation(destination) {
   return `Git would see this path. Add the file-form rule "/${destination}" (no trailing slash) to your own local ignore policy, then re-run.`;

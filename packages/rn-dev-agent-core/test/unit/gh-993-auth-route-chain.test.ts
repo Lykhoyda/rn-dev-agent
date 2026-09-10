@@ -111,6 +111,14 @@ test('GH#993: a navigator whose child has not mounted is judged as the screen, n
     await isOnAuthScreen(fakeClient({ routeName: 'AuthStack', nested: { routeName: 'Home' } })),
     false,
   );
+  // Accepted gap: a mounted `AuthStack › Intro` is not an auth screen, and the reason says so.
+  const mountedIntro = { routeName: 'AuthStack', nested: { routeName: 'Intro' } };
+  assert.equal(await isOnAuthScreen(fakeClient(mountedIntro)), false);
+  const mountedResult = await handleAutoLogin(fakeClient(mountedIntro), {
+    platform: 'ios',
+    deviceId: 'SIM',
+  });
+  assert.equal(mountedResult?.reason, 'App is not on an auth screen (route: AuthStack › Intro)');
 });
 
 test('GH#993: the negative reason carries the whole observed chain root→leaf', async () => {

@@ -1308,7 +1308,8 @@ function foreignLinkRemediation(sourceState: SourceState, destination: string): 
   const remedy = wrongType ? `make ${target} ${realShape}` : `create the corpus at ${target}`;
   return (
     `Destination is a symlink, but the only accepted target ${target} ${problem}, so there is ` +
-    `nothing to re-point it to. Supported shapes: replace the link with a real actions directory ` +
+    `nothing to re-point it to. Supported shapes: stop the session's Metro first ` +
+    `(rn_session stop_metro), then replace the link with a real actions directory ` +
     `in this worktree, or ${remedy} and re-run /rn-dev-agent:setup.`
   );
 }
