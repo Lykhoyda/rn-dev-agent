@@ -81176,19 +81176,13 @@ function flowRelaunchFacts(command) {
     return null;
   const options = command && typeof command === "object" && !Array.isArray(command) ? command.launchApp : void 0;
   const launch = options && typeof options === "object" && !Array.isArray(options) ? options : {};
-  return {
-    clearState: launch.clearState === true,
-    stopApp: typeof launch.stopApp === "boolean" ? launch.stopApp : true
-  };
-}
-function relaunchesApp(launch) {
-  return launch.clearState || launch.stopApp;
+  return { stopApp: typeof launch.stopApp === "boolean" ? launch.stopApp : true };
 }
 function createFlowRelaunchTracker(devClientReplay) {
   let unclaimed = null;
   return {
     launched(launch) {
-      if (devClientReplay && relaunchesApp(launch))
+      if (devClientReplay && launch.stopApp)
         unclaimed = launch;
     },
     claimed() {
@@ -81199,7 +81193,7 @@ function createFlowRelaunchTracker(devClientReplay) {
     }
   };
 }
-var FLOW_RELAUNCH_NEXT_ACTION = "Do not relaunch a dev-client app from inside a learned action (EG_DEV_CLIENT_CLEARSTATE): start the action from the attached app, and reset state with device_reset_state before cdp_run_action or cdp_login_prologue instead of launchApp clearState.";
+var FLOW_RELAUNCH_NEXT_ACTION = "Do not relaunch a dev-client app from inside a learned action: start the action from the attached app with launchApp stopApp: false, and reset state with device_reset_state before cdp_run_action or cdp_login_prologue.";
 function attributeOriginFailureToFlowRelaunch(error2, relaunch) {
   if (!(error2 instanceof SessionAuthorityError) || error2.code !== "METRO_ORIGIN_MISMATCH") {
     return error2;
@@ -81209,8 +81203,7 @@ function attributeOriginFailureToFlowRelaunch(error2, relaunch) {
   const meta = error2.getSupplementalMeta();
   if ("flowRelaunch" in meta)
     return error2;
-  const launch = `launchApp${relaunch.clearState ? " (clearState: true)" : ""}`;
-  const cause = `The flow's own ${launch} relaunched the app and it did not re-register on the authority-bound Metro within the readiness window; the axis is reporting that relaunch, not a broken binding.`;
+  const cause = `The flow's own launchApp relaunched the app and it did not re-register on the authority-bound Metro within the readiness window; the axis is reporting that relaunch, not a broken binding.`;
   const prefix = `${error2.code}: `;
   const detail = error2.message.startsWith(prefix) ? error2.message.slice(prefix.length) : error2.message;
   const attributed = new SessionAuthorityError(error2.code, `${detail} ${cause} ${FLOW_RELAUNCH_NEXT_ACTION}`, error2.holder, error2.details);
@@ -81218,7 +81211,6 @@ function attributeOriginFailureToFlowRelaunch(error2, relaunch) {
     ...meta,
     flowRelaunch: {
       command: "launchApp",
-      clearState: relaunch.clearState,
       stopApp: relaunch.stopApp
     }
   });

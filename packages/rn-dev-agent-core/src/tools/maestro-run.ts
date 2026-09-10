@@ -291,7 +291,6 @@ function nestedLifecycleCommandOrSelf(command: unknown): boolean {
 
 /** GH #993: the launch options of a flow-owned `launchApp` stage. */
 export interface FlowRelaunchFacts {
-  clearState: boolean;
   stopApp: boolean;
 }
 
@@ -303,17 +302,9 @@ function flowRelaunchFacts(command: unknown): FlowRelaunchFacts | null {
       : undefined;
   const launch =
     options && typeof options === 'object' && !Array.isArray(options)
-      ? (options as { clearState?: unknown; stopApp?: unknown })
+      ? (options as { stopApp?: unknown })
       : {};
-  return {
-    clearState: launch.clearState === true,
-    stopApp: typeof launch.stopApp === 'boolean' ? launch.stopApp : true,
-  };
-}
-
-// A warm launch does not restart an attached app.
-function relaunchesApp(launch: FlowRelaunchFacts): boolean {
-  return launch.clearState || launch.stopApp;
+  return { stopApp: typeof launch.stopApp === 'boolean' ? launch.stopApp : true };
 }
 
 // Track only relaunches without a subsequent successful origin proof, across segments.
@@ -327,7 +318,7 @@ export function createFlowRelaunchTracker(devClientReplay: boolean): FlowRelaunc
   let unclaimed: FlowRelaunchFacts | null = null;
   return {
     launched(launch) {
-      if (devClientReplay && relaunchesApp(launch)) unclaimed = launch;
+      if (devClientReplay && launch.stopApp) unclaimed = launch;
     },
     claimed() {
       unclaimed = null;
@@ -339,9 +330,9 @@ export function createFlowRelaunchTracker(devClientReplay: boolean): FlowRelaunc
 }
 
 export const FLOW_RELAUNCH_NEXT_ACTION =
-  'Do not relaunch a dev-client app from inside a learned action (EG_DEV_CLIENT_CLEARSTATE): ' +
-  'start the action from the attached app, and reset state with device_reset_state before ' +
-  'cdp_run_action or cdp_login_prologue instead of launchApp clearState.';
+  'Do not relaunch a dev-client app from inside a learned action: start the action from the ' +
+  'attached app with launchApp stopApp: false, and reset state with device_reset_state before ' +
+  'cdp_run_action or cdp_login_prologue.';
 
 // Preserve authority identity and proven foreign-Metro failures when adding flow context.
 function attributeOriginFailureToFlowRelaunch(
@@ -354,9 +345,8 @@ function attributeOriginFailureToFlowRelaunch(
   if (isProvenMetroOriginMismatch(error)) return error;
   const meta = error.getSupplementalMeta();
   if ('flowRelaunch' in meta) return error;
-  const launch = `launchApp${relaunch.clearState ? ' (clearState: true)' : ''}`;
   const cause =
-    `The flow's own ${launch} relaunched the app and it did not re-register on the ` +
+    `The flow's own launchApp relaunched the app and it did not re-register on the ` +
     `authority-bound Metro within the readiness window; the axis is reporting that relaunch, ` +
     `not a broken binding.`;
   const prefix = `${error.code}: `;
@@ -373,7 +363,6 @@ function attributeOriginFailureToFlowRelaunch(
     ...meta,
     flowRelaunch: {
       command: 'launchApp',
-      clearState: relaunch.clearState,
       stopApp: relaunch.stopApp,
     },
   });

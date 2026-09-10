@@ -185,14 +185,14 @@ test('GH#708: a revoked session claim aborts immediately instead of deferring', 
   assert.deepEqual(trace.completed, [false]);
 });
 
-// GH #993 / #990 defect (2): the project's login action starts with
-// `launchApp: {clearState: true, stopApp: true}` and only then `openLink`. When
+// GH #993 / #990 defect (2): a dev-client login action starts with a cold
+// `launchApp: {stopApp: true}` and only then `openLink`. When
 // the relaunched dev client is not attached at the next claim, the A probe raises
 // METRO_ORIGIN_MISMATCH — a truthful axis, but the message blamed the binding
 // and said "repair the named authority axis". The failure now names the flow's
 // own relaunch as the cause while keeping the code, axis and control flow.
-const CLEARSTATE_LOGIN_FLOW = [
-  { launchApp: { clearState: true, stopApp: true } },
+const RELAUNCH_LOGIN_FLOW = [
+  { launchApp: { stopApp: true } },
   { openLink: '${DEV_CLIENT_URL}' },
   { tapOn: { id: 'login-email' } },
 ];
@@ -209,7 +209,7 @@ test('GH#993 D2.b: an origin claim failing after the flow relaunch is attributed
   const completed: boolean[] = [];
   await assert.rejects(
     executeMaestroAuthorityStages(
-      CLEARSTATE_LOGIN_FLOW,
+      RELAUNCH_LOGIN_FLOW,
       async (commands: readonly unknown[]) => {
         stages.push(commands.map((c) => Object.keys(c as object)[0]!).join('+'));
         return 'ok';
@@ -234,15 +234,10 @@ test('GH#993 D2.b: an origin claim failing after the flow relaunch is attributed
       };
       assert.equal(meta.axis, 'A', 'the axis attribution is unchanged');
       assert.match(error.message, /^METRO_ORIGIN_MISMATCH: the claimed device app is not attached/);
-      assert.match(error.message, /flow's own launchApp \(clearState: true\) relaunched the app/);
+      assert.match(error.message, /flow's own launchApp relaunched the app/);
       assert.match(error.message, /did not re-register on the authority-bound Metro/);
       assert.match(error.message, /device_reset_state/);
-      assert.match(error.message, /EG_DEV_CLIENT_CLEARSTATE/);
-      assert.deepEqual(meta.flowRelaunch, {
-        command: 'launchApp',
-        clearState: true,
-        stopApp: true,
-      });
+      assert.deepEqual(meta.flowRelaunch, { command: 'launchApp', stopApp: true });
       assert.ok(error.message.endsWith(FLOW_RELAUNCH_NEXT_ACTION));
       assert.equal(meta.nextAction, authorityErrorMeta(notAttached()).nextAction);
       return true;
@@ -297,7 +292,7 @@ test('GH#993: a proven foreign-Metro mismatch keeps its own cause and remedy', a
   const expected = proven();
   await assert.rejects(
     executeMaestroAuthorityStages(
-      CLEARSTATE_LOGIN_FLOW,
+      RELAUNCH_LOGIN_FLOW,
       async () => 'ok',
       async () => {
         throw proven();
@@ -353,7 +348,7 @@ test('GH#993 D2.e: a relaunch that itself raises METRO_ORIGIN_MISMATCH keeps GH#
   let reproves = 0;
   await assert.rejects(
     executeMaestroAuthorityStages(
-      CLEARSTATE_LOGIN_FLOW,
+      RELAUNCH_LOGIN_FLOW,
       async (commands: readonly unknown[]) => {
         stages.push(commands.map((c) => Object.keys(c as object)[0]!).join('+'));
         return 'ok';
@@ -433,11 +428,11 @@ function assertUnattributed(error: unknown): void {
   assert.notEqual(meta.nextAction, FLOW_RELAUNCH_NEXT_ACTION);
 }
 
-function assertAttributed(error: unknown, clearState: boolean): void {
+function assertAttributed(error: unknown): void {
   assert.ok(error instanceof SessionAuthorityError);
   assert.equal(error.code, 'METRO_ORIGIN_MISMATCH');
   const meta = authorityErrorMeta(error);
-  assert.deepEqual(meta.flowRelaunch, { command: 'launchApp', clearState, stopApp: true });
+  assert.deepEqual(meta.flowRelaunch, { command: 'launchApp', stopApp: true });
   assert.ok(error.message.endsWith(FLOW_RELAUNCH_NEXT_ACTION));
   assert.equal(meta.nextAction, authorityErrorMeta(notAttached()).nextAction);
 }
@@ -494,7 +489,7 @@ test('GH#993: a relaunch in an earlier segment with no passing claim since is st
       { relaunches },
     ),
     (error: unknown) => {
-      assertAttributed(error, false);
+      assertAttributed(error);
       return true;
     },
   );
@@ -503,7 +498,7 @@ test('GH#993: a relaunch in an earlier segment with no passing claim since is st
 test('GH#993: a trailing relaunch whose completion claim fails is attributed to the flow', async () => {
   await assert.rejects(
     executeMaestroAuthorityStages(
-      [{ tapOn: { id: 'submit' } }, { launchApp: { clearState: true } }],
+      [{ tapOn: { id: 'submit' } }, { launchApp: {} }],
       async () => 'ok',
       async () => {},
       async (targetExpected: boolean) => {
@@ -514,7 +509,7 @@ test('GH#993: a trailing relaunch whose completion claim fails is attributed to 
       { relaunches: createFlowRelaunchTracker(true) },
     ),
     (error: unknown) => {
-      assertAttributed(error, true);
+      assertAttributed(error);
       return true;
     },
   );
@@ -685,7 +680,7 @@ test('GH#993: the native leg claim failing right after the relaunch is blamed on
       devClientReplay: true,
     }),
     (error: unknown) => {
-      assertAttributed(error, false);
+      assertAttributed(error);
       return true;
     },
   );
@@ -709,7 +704,7 @@ test('GH#993: a raw maestro_run relaunch failure keeps its original nextAction a
         authorityErrorMeta(error as SessionAuthorityError).nextAction,
         authorityErrorMeta(notAttached()).nextAction,
       );
-      assert.doesNotMatch((error as Error).message, /dev-client|EG_DEV_CLIENT_CLEARSTATE/);
+      assert.doesNotMatch((error as Error).message, /dev-client/);
       return true;
     },
   );
