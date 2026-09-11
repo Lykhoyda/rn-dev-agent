@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { logger } from '../../dist/logger.js';
 import { readRnAgentConfig, resolveAutoHideDevMenu } from '../../dist/project-config.js';
 
-const resolveWith = (autoHideDevMenu) =>
+const resolveWith = (autoHideDevMenu: unknown) =>
   resolveAutoHideDevMenu({ readConfig: () => ({ autoHideDevMenu }) });
 
 test('resolveAutoHideDevMenu: absent key hides on every target by default', () => {
