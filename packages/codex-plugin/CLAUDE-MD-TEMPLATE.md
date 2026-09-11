@@ -417,11 +417,14 @@ Use `cdp_reload` — triggers a full reload with automatic reconnect and target 
 navigation, take a fresh `device_snapshot`. If it reports
 `meta.foregroundSurface: "expo_dev_menu"`, call
 `cdp_dev_settings({ action: "hideDevMenu" })`, then take another fresh snapshot
-and require the app surface. This remedy is only for the Expo Developer Menu,
-not the React Native core dev menu, Expo `Development servers` picker, system
-dialogs, or app-owned native overlays. Follow `/rn-dev-agent:check-env` for
-their separate routes; never substitute coordinates, screen-wide label search,
-raw shell UI, or a generic native-window action.
+and require the app surface. Every managed launch and relaunch already
+disables the Expo dev-menu onboarding tutorial, so `hideDevMenu` is for
+gesture-opened menus and the one-time shows-at-launch menu only. This remedy
+is only for the Expo Developer Menu, not the React Native core dev menu, Expo
+`Development servers` picker, system dialogs, or app-owned native overlays.
+Follow `/rn-dev-agent:check-env` for their separate routes; never substitute
+coordinates, screen-wide label search, raw shell UI, or a generic
+native-window action.
 
 #### "I need to manage device permissions"
 - **Query:** `device_permission(action="query", permission="notifications")`

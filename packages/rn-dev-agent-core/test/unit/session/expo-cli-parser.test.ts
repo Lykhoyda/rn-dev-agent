@@ -78,7 +78,7 @@ test('repaired build plan passes the shipped Expo CLI resolution with managed au
     assert.equal(plan.env.EXPO_PACKAGER_PROXY_URL, 'http://127.0.0.1:8248');
     assert.deepEqual(plan.postInstall?.command.slice(-2), [
       '--initialUrl',
-      'http://127.0.0.1:8248',
+      'http://127.0.0.1:8248/?disableOnboarding=1',
     ]);
   }
 });
@@ -176,7 +176,7 @@ test('generated adapter argv passes the shipped Expo CLI resolution end to end',
       'F66756F3-A867-47EB-97E1-2B85D1902D4E',
       'com.rndevagent.testapp',
       '--initialUrl',
-      'http://127.0.0.1:8248',
+      'http://127.0.0.1:8248/?disableOnboarding=1',
     ]);
   } finally {
     rmSync(root, { force: true, recursive: true });

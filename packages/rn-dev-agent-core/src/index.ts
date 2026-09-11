@@ -58,6 +58,10 @@ import {
 import { releaseDeviceLockForSession } from './tools/device-session.js';
 import { createSessionRuntimeAbsenceProbe } from './session/session-runtime-absence.js';
 import {
+  DEV_MENU_NO_AUTO_LAUNCH_EXTRAS,
+  withDevMenuOnboardingDisabled,
+} from './session/dev-client-onboarding.js';
+import {
   createDeviceFindHandler,
   fetchSnapshotNodesForSameScreenProof,
   createDevicePressHandler,
@@ -930,7 +934,10 @@ async function pinSessionDevClient(
           if (platform === 'ios') {
             await execFileP('xcrun', ['simctl', 'openurl', deviceId, url]);
           } else {
-            await execFileP('adb', androidDeeplinkCommandArgs(url, undefined, deviceId));
+            await execFileP(
+              'adb',
+              androidDeeplinkCommandArgs(url, undefined, deviceId, DEV_MENU_NO_AUTO_LAUNCH_EXTRAS),
+            );
           }
         },
         launchExactApp: async (platform, deviceId, appId) => {
@@ -1208,7 +1215,7 @@ async function relaunchSessionRuntime(
       deviceId,
       appId,
       '--initialUrl',
-      `http://127.0.0.1:${String(metroPort)}`,
+      withDevMenuOnboardingDisabled(`http://127.0.0.1:${String(metroPort)}`),
     ]);
     await connectExactSessionTarget(
       { metroPort, platform, appId, deviceId },
@@ -1223,7 +1230,12 @@ async function relaunchSessionRuntime(
     );
   }
   await execFileP('adb', [
-    ...androidDeeplinkCommandArgs(boundDevClientUrl, undefined, deviceId),
+    ...androidDeeplinkCommandArgs(
+      withDevMenuOnboardingDisabled(boundDevClientUrl),
+      undefined,
+      deviceId,
+      DEV_MENU_NO_AUTO_LAUNCH_EXTRAS,
+    ),
     '-p',
     appId,
   ]);
@@ -2107,7 +2119,7 @@ trackedTool(
 
 trackedTool(
   'cdp_dev_settings',
-  'Control React Native dev settings programmatically (no visual dev menu needed). dismissRedBox clears LogBox overlays and RedBox errors via a 4-tier fallback chain. disableDevMenu suppresses the React Native core dev menu gesture. hideDevMenu calls ExpoDevMenu hideMenu or closeMenu over CDP on iOS or Android, with at most one retry and a five-second bound per attempt; it verifies the foreground surface and returns hidden, no_menu_present, DEV_MENU_HIDE_FAILED when no close call was sent, or DEV_MENU_HIDE_UNVERIFIED when a sent call is not proven clean. For reload with auto-reconnect, use cdp_reload instead.',
+  'Control React Native dev settings programmatically (no visual dev menu needed). dismissRedBox clears LogBox overlays and RedBox errors via a 4-tier fallback chain. disableDevMenu suppresses the React Native core dev menu gesture. hideDevMenu calls ExpoDevMenu hideMenu or closeMenu over CDP on iOS or Android, with at most one retry and a five-second bound per attempt; it verifies the foreground surface and returns hidden, no_menu_present, DEV_MENU_HIDE_FAILED when no close call was sent, or DEV_MENU_HIDE_UNVERIFIED when a sent call is not proven clean. Managed launches and relaunches disable the Expo dev-menu onboarding tutorial by construction, so hideDevMenu is for gesture-opened menus and the one-time shows-at-launch menu. For reload with auto-reconnect, use cdp_reload instead.',
   {
     action: z
       .enum([

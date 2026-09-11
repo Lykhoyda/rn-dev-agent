@@ -3956,7 +3956,7 @@ test('copied adapter accepts build identity only from the package-local session 
       'session-ios-device',
       'dev.example',
       '--initialUrl',
-      'http://127.0.0.1:8341',
+      'http://127.0.0.1:8341/?disableOnboarding=1',
     ]);
     assert.match(result.stdout, /"receipt":true/);
     assert.equal(existsSync(abortPath), false);

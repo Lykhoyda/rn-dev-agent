@@ -67,7 +67,10 @@ test('dev-client pin opens only the declared URL on the exact device and binds i
   );
 
   assert.equal(calls[0][2], 'IOS-UUID');
-  assert.equal(calls[0][3], binding.devClientUrl);
+  assert.equal(
+    calls[0][3],
+    'example://expo-development-client/?url=http%3A%2F%2Flocalhost%3A8341%2F%3FdisableOnboarding%3D1',
+  );
   assert.equal(binding.targetId, 'target-a');
   assert.equal(binding.sourceFidelity, 'not-proven');
 });
@@ -196,7 +199,7 @@ test('dev-client endpoint is launch data and cannot bind without the signed bund
     ),
     /BUNDLE_HANDSHAKE_UNAVAILABLE/,
   );
-  assert.deepEqual(calls, [['open', 'example://foreign']]);
+  assert.deepEqual(calls, [['open', 'example://foreign?disableOnboarding=1']]);
 });
 
 test('bare RN pin launches the exact claimed app without inventing a dev-client URL', async () => {
@@ -269,7 +272,12 @@ test('receipted iOS Expo pin launches through the authority-bound Metro without 
   );
 
   assert.deepEqual(calls, [
-    ['launch-with-initial-url', 'IOS-UUID', 'com.example.app', 'http://127.0.0.1:8341'],
+    [
+      'launch-with-initial-url',
+      'IOS-UUID',
+      'com.example.app',
+      'http://127.0.0.1:8341/?disableOnboarding=1',
+    ],
   ]);
   assert.equal(binding.targetId, 'target-expo');
   assert.equal(binding.devClientUrl, undefined, 'a bare Metro URL is not a dev-client deep link');

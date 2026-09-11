@@ -24,7 +24,7 @@ supported point-of-need recommendation is
 |--------------------|---------------|
 | Expo Developer Menu sheet | `cdp_dev_settings(action="hideDevMenu")` |
 | Expo `Development servers` picker | `cdp_dismiss_dev_client_picker` |
-| Expo first-run tutorial | Replay the compatible owned locked/helper action through `cdp_run_action` |
+| Expo first-run tutorial | Prevented at launch by every managed launch and relaunch; if it still appears the app was launched outside the managed path (Expo CLI's first Android open, or a URL-less launch): see GH #1016. A reload never reopens the menu once onboarding is stored finished; a menu that reappears after reload means onboarding was never finished for that install |
 | React Native core dev menu | Stop: no authority-approved close remedy exists |
 | App | None |
 

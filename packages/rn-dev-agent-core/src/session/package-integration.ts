@@ -3713,6 +3713,21 @@ function authorityBoundReverseTunnel(binding) {
     && reverse.local === exact
     && reverse.remote === exact;
 }
+function withDevMenuOnboardingDisabled(url) {
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return url;
+  }
+  const inner = parsed.host === 'expo-development-client' ? parsed.searchParams.get('url') : null;
+  if (inner !== null) {
+    parsed.searchParams.set('url', withDevMenuOnboardingDisabled(inner));
+  } else {
+    parsed.searchParams.set('disableOnboarding', '1');
+  }
+  return parsed.toString();
+}
 function managedMetroProxyUrl(binding) {
   if (binding.platform === 'ios') return 'http://127.0.0.1:' + binding.metroPort;
   if (/^emulator-\d+$/.test(binding.deviceId)) return 'http://10.0.2.2:' + binding.metroPort;
@@ -3888,9 +3903,10 @@ function managedMetroProxyUrl(binding) {
     if (installed.error || installed.status !== 0 || !String(installed.stdout).trim()) {
       failBuild(2, 'DEV_CLIENT_STARTUP_UNCONFIRMED: exact simulator app installation could not be proven');
     }
+    const launchUrl = withDevMenuOnboardingDisabled(expoProxyUrl);
     process.stdout.write(
       'rn-session-adapter: starting ' + session.appId + ' on simulator ' + session.deviceId +
-      ' with --initialUrl ' + expoProxyUrl + '\n'
+      ' with --initialUrl ' + launchUrl + '\n'
     );
     const startup = spawnSync('xcrun', [
       'simctl',
@@ -3899,7 +3915,7 @@ function managedMetroProxyUrl(binding) {
       session.deviceId,
       session.appId,
       '--initialUrl',
-      expoProxyUrl,
+      launchUrl,
     ], {
       cwd: process.cwd(),
       env: authorityEnvironment,

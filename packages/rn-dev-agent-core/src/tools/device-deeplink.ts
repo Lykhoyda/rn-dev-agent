@@ -72,6 +72,7 @@ export function androidDeeplinkCommandArgs(
   url: string,
   packageName?: string,
   deviceId?: string,
+  extras: readonly string[] = [],
 ): string[] {
   if (!deviceId) throw new Error('DEVICE_AUTHORITY_MISMATCH: exact Android deviceId is required');
   const serial = ['-s', deviceId];
@@ -85,6 +86,7 @@ export function androidDeeplinkCommandArgs(
     'android.intent.action.VIEW',
     '-d',
     quotedUrl,
+    ...extras,
   ];
   if (packageName) args.push('-n', packageName);
   return args;

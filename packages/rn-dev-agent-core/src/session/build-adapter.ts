@@ -4,6 +4,7 @@ import {
   resolveExpoAndroidDevice,
   type ExpoAndroidDeviceBinding,
 } from './expo-android-device.js';
+import { withDevMenuOnboardingDisabled } from './dev-client-onboarding.js';
 
 export interface SessionBuildBinding {
   platform: 'ios' | 'android';
@@ -202,7 +203,7 @@ export function createBuildLaunchPlan(input: {
             input.session.deviceId,
             input.session.appId ?? conflict('appId is required for simulator Dev Client startup'),
             '--initialUrl',
-            managedMetroProxyUrl(input.session),
+            withDevMenuOnboardingDisabled(managedMetroProxyUrl(input.session)),
           ],
           timeoutMs: 30_000,
         }

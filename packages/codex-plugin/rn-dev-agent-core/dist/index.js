@@ -62864,6 +62864,29 @@ function assertStableExpoAndroidDevice(initial, immediatePreSpawn) {
   return immediatePreSpawn;
 }
 
+// packages/rn-dev-agent-core/dist/session/dev-client-onboarding.js
+var DEV_CLIENT_HOST = "expo-development-client";
+var DEV_MENU_NO_AUTO_LAUNCH_EXTRAS = [
+  "--ez",
+  "EXDevMenuDisableAutoLaunch",
+  "true"
+];
+function withDevMenuOnboardingDisabled(url) {
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return url;
+  }
+  const inner = parsed.host === DEV_CLIENT_HOST ? parsed.searchParams.get("url") : null;
+  if (inner !== null) {
+    parsed.searchParams.set("url", withDevMenuOnboardingDisabled(inner));
+  } else {
+    parsed.searchParams.set("disableOnboarding", "1");
+  }
+  return parsed.toString();
+}
+
 // packages/rn-dev-agent-core/dist/session/build-adapter.js
 function conflict(flag) {
   throw new Error(`SESSION_BUILD_IDENTITY_CONFLICT: ${flag} contradicts the active session`);
@@ -63014,7 +63037,7 @@ function createBuildLaunchPlan(input) {
       input.session.deviceId,
       input.session.appId ?? conflict("appId is required for simulator Dev Client startup"),
       "--initialUrl",
-      managedMetroProxyUrl(input.session)
+      withDevMenuOnboardingDisabled(managedMetroProxyUrl(input.session))
     ],
     timeoutMs: 3e4
   } : void 0;
@@ -69119,6 +69142,21 @@ function authorityBoundReverseTunnel(binding) {
     && reverse.local === exact
     && reverse.remote === exact;
 }
+function withDevMenuOnboardingDisabled(url) {
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return url;
+  }
+  const inner = parsed.host === 'expo-development-client' ? parsed.searchParams.get('url') : null;
+  if (inner !== null) {
+    parsed.searchParams.set('url', withDevMenuOnboardingDisabled(inner));
+  } else {
+    parsed.searchParams.set('disableOnboarding', '1');
+  }
+  return parsed.toString();
+}
 function managedMetroProxyUrl(binding) {
   if (binding.platform === 'ios') return 'http://127.0.0.1:' + binding.metroPort;
   if (/^emulator-\d+$/.test(binding.deviceId)) return 'http://10.0.2.2:' + binding.metroPort;
@@ -69294,9 +69332,10 @@ function managedMetroProxyUrl(binding) {
     if (installed.error || installed.status !== 0 || !String(installed.stdout).trim()) {
       failBuild(2, 'DEV_CLIENT_STARTUP_UNCONFIRMED: exact simulator app installation could not be proven');
     }
+    const launchUrl = withDevMenuOnboardingDisabled(expoProxyUrl);
     process.stdout.write(
       'rn-session-adapter: starting ' + session.appId + ' on simulator ' + session.deviceId +
-      ' with --initialUrl ' + expoProxyUrl + '\n'
+      ' with --initialUrl ' + launchUrl + '\n'
     );
     const startup = spawnSync('xcrun', [
       'simctl',
@@ -69305,7 +69344,7 @@ function managedMetroProxyUrl(binding) {
       session.deviceId,
       session.appId,
       '--initialUrl',
-      expoProxyUrl,
+      launchUrl,
     ], {
       cwd: process.cwd(),
       env: authorityEnvironment,
@@ -87005,7 +87044,7 @@ async function openIosDeeplink(url, deviceId) {
 function posixSingleQuote2(s) {
   return `'${s.replace(/'/g, "'\\''")}'`;
 }
-function androidDeeplinkCommandArgs(url, packageName, deviceId) {
+function androidDeeplinkCommandArgs(url, packageName, deviceId, extras = []) {
   if (!deviceId)
     throw new Error("DEVICE_AUTHORITY_MISMATCH: exact Android deviceId is required");
   const serial = ["-s", deviceId];
@@ -87018,7 +87057,8 @@ function androidDeeplinkCommandArgs(url, packageName, deviceId) {
     "-a",
     "android.intent.action.VIEW",
     "-d",
-    quotedUrl
+    quotedUrl,
+    ...extras
   ];
   if (packageName)
     args.push("-n", packageName);
@@ -95456,12 +95496,12 @@ async function pinExactDevClient(input, dependencies) {
   if (!Number.isSafeInteger(input.metroPort) || input.metroPort < 1 || input.metroPort > 65535) {
     throw new Error("DEV_CLIENT_ENDPOINT_NOT_FOUND: authority-bound Metro port is unavailable");
   }
-  const derivedIosExpoLaunchTarget = input.platform === "ios" && input.runtimeKind === "expo-dev-client" ? managedMetroProxyUrl(input) : void 0;
+  const derivedIosExpoLaunchTarget = input.platform === "ios" && input.runtimeKind === "expo-dev-client" ? withDevMenuOnboardingDisabled(managedMetroProxyUrl(input)) : void 0;
   if (input.runtimeKind === "bare-react-native" && input.devClientUrl) {
     throw new Error("DEV_CLIENT_ENDPOINT_NOT_FOUND: launch kind contradicts the signed build provenance");
   }
   if (input.devClientUrl) {
-    await dependencies.openUrl(input.platform, input.deviceId, input.devClientUrl, input.appId);
+    await dependencies.openUrl(input.platform, input.deviceId, withDevMenuOnboardingDisabled(input.devClientUrl), input.appId);
     if (input.platform === "ios")
       await dependencies.acceptIosOpenDialog(input.deviceId);
   } else if (derivedIosExpoLaunchTarget) {
@@ -96369,7 +96409,7 @@ async function pinSessionDevClient(status, options, commitBundle) {
         if (platform === "ios") {
           await execFileP("xcrun", ["simctl", "openurl", deviceId, url]);
         } else {
-          await execFileP("adb", androidDeeplinkCommandArgs(url, void 0, deviceId));
+          await execFileP("adb", androidDeeplinkCommandArgs(url, void 0, deviceId, DEV_MENU_NO_AUTO_LAUNCH_EXTRAS));
         }
       },
       launchExactApp: async (platform, deviceId, appId) => {
@@ -96554,7 +96594,7 @@ async function relaunchSessionRuntime(status, stopApp = true) {
       deviceId,
       appId,
       "--initialUrl",
-      `http://127.0.0.1:${String(metroPort)}`
+      withDevMenuOnboardingDisabled(`http://127.0.0.1:${String(metroPort)}`)
     ]);
     await connectExactSessionTarget2({ metroPort, platform, appId, deviceId }, exactSessionTargetReadinessTimeoutMs(platform));
     return;
@@ -96563,7 +96603,7 @@ async function relaunchSessionRuntime(status, stopApp = true) {
     throw new Error("DEV_CLIENT_ENDPOINT_NOT_FOUND: managed Android replay requires the exact Dev Client URL");
   }
   await execFileP("adb", [
-    ...androidDeeplinkCommandArgs(boundDevClientUrl, void 0, deviceId),
+    ...androidDeeplinkCommandArgs(withDevMenuOnboardingDisabled(boundDevClientUrl), void 0, deviceId, DEV_MENU_NO_AUTO_LAUNCH_EXTRAS),
     "-p",
     appId
   ]);
@@ -96969,7 +97009,7 @@ trackedTool("cdp_mmkv", `Read/write the app's MMKV storage from Hermes. Closes t
   type: external_exports.enum(["string", "number", "boolean"]).optional().describe("Value type for get/set (default: string)"),
   instanceId: external_exports.string().optional().describe('MMKV instance id (default: "mmkv.default")')
 }, createMmkvHandler(getClient));
-trackedTool("cdp_dev_settings", "Control React Native dev settings programmatically (no visual dev menu needed). dismissRedBox clears LogBox overlays and RedBox errors via a 4-tier fallback chain. disableDevMenu suppresses the React Native core dev menu gesture. hideDevMenu calls ExpoDevMenu hideMenu or closeMenu over CDP on iOS or Android, with at most one retry and a five-second bound per attempt; it verifies the foreground surface and returns hidden, no_menu_present, DEV_MENU_HIDE_FAILED when no close call was sent, or DEV_MENU_HIDE_UNVERIFIED when a sent call is not proven clean. For reload with auto-reconnect, use cdp_reload instead.", {
+trackedTool("cdp_dev_settings", "Control React Native dev settings programmatically (no visual dev menu needed). dismissRedBox clears LogBox overlays and RedBox errors via a 4-tier fallback chain. disableDevMenu suppresses the React Native core dev menu gesture. hideDevMenu calls ExpoDevMenu hideMenu or closeMenu over CDP on iOS or Android, with at most one retry and a five-second bound per attempt; it verifies the foreground surface and returns hidden, no_menu_present, DEV_MENU_HIDE_FAILED when no close call was sent, or DEV_MENU_HIDE_UNVERIFIED when a sent call is not proven clean. Managed launches and relaunches disable the Expo dev-menu onboarding tutorial by construction, so hideDevMenu is for gesture-opened menus and the one-time shows-at-launch menu. For reload with auto-reconnect, use cdp_reload instead.", {
   action: external_exports.enum([
     "reload",
     "toggleInspector",

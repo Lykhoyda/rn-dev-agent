@@ -67,7 +67,7 @@ test('Expo iOS launches through its exact managed Metro proxy without starting a
       iosSession.deviceId,
       iosSession.appId,
       '--initialUrl',
-      'http://127.0.0.1:8341',
+      'http://127.0.0.1:8341/?disableOnboarding=1',
     ],
     timeoutMs: 30_000,
   });

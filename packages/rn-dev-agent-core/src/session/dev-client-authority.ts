@@ -1,4 +1,5 @@
 import { managedMetroProxyUrl } from './build-adapter.js';
+import { withDevMenuOnboardingDisabled } from './dev-client-onboarding.js';
 import type { MetroAuthorityBinding, MetroAuthorityMarker } from './metro-authority.js';
 import { verifyMetroAuthorityMarker } from './metro-authority.js';
 import type { SessionStatus } from './registry.js';
@@ -183,7 +184,7 @@ export async function pinExactDevClient(
   }
   const derivedIosExpoLaunchTarget =
     input.platform === 'ios' && input.runtimeKind === 'expo-dev-client'
-      ? managedMetroProxyUrl(input)
+      ? withDevMenuOnboardingDisabled(managedMetroProxyUrl(input))
       : undefined;
   if (input.runtimeKind === 'bare-react-native' && input.devClientUrl) {
     throw new Error(
@@ -191,7 +192,12 @@ export async function pinExactDevClient(
     );
   }
   if (input.devClientUrl) {
-    await dependencies.openUrl(input.platform, input.deviceId, input.devClientUrl, input.appId);
+    await dependencies.openUrl(
+      input.platform,
+      input.deviceId,
+      withDevMenuOnboardingDisabled(input.devClientUrl),
+      input.appId,
+    );
     if (input.platform === 'ios') await dependencies.acceptIosOpenDialog(input.deviceId);
   } else if (derivedIosExpoLaunchTarget) {
     await dependencies.launchExactAppWithInitialUrl(
