@@ -24,6 +24,17 @@ test('qa-pr workflow is registered and parent-session-only', () => {
   assert.match(agent, /gh pr view/);
   assert.match(agent, /bind_device/);
   assert.match(agent, /isolated/);
+  assert.match(agent, /gh pr comment/);
+  assert.match(agent, /--attach/);
+  assert.match(agent, /width="720"/);
+  assert.match(agent, /!\[\]\(/);
+
+  const sharedCommand = readFileSync(
+    join(root, 'packages/shared-agent-knowledge/commands/qa-pr.md'),
+    'utf8',
+  );
+  assert.match(sharedCommand, /--attach/);
+  assert.match(sharedCommand, /width="720"/);
 
   for (const host of ['shared-agent-knowledge', 'claude-plugin', 'codex-plugin'] as const) {
     const command = join(root, 'packages', host, 'commands/qa-pr.md');
@@ -35,6 +46,7 @@ test('qa-pr workflow is registered and parent-session-only', () => {
     );
     assert.equal(existsSync(command), true, command);
     assert.equal(existsSync(agentPath), true, agentPath);
+    assert.match(readFileSync(command, 'utf8'), /--attach/);
   }
 
   const claudeManifest = JSON.parse(

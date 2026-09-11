@@ -34,7 +34,7 @@ Like `rn-tester`, this protocol needs MCP tools. **Do not spawn it via the Task 
 4. **Inventory** through `rn-workflow` steps 0–2, then `rn_session(action="status")`. `device_list` diagnoses; it does not choose.
 5. **Per selected target** (`ios`, `android`, `device`, or `all`): exact `bind_device` → reversible integration → managed `<pm> run ios|android` from the app root → `pin_dev_client` → artifact-first exercise (`cdp_run_action`, `cdp_login_prologue` for auth).
 6. **Cleanup** in reverse: runner close → `stop_metro` → `restore_integration` → `release`.
-7. **Report** a per-target table. Missing hardware is SKIP with the exact remaining setup, not FAIL.
+7. **Report** a per-target table. Missing hardware is SKIP with the exact remaining setup, not FAIL. Host screenshots and videos with `gh pr comment --attach`, then rewrite screenshots to `<img … width="720">`.
 
 ## Circuit breaker
 

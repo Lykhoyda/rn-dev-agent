@@ -13,8 +13,8 @@ QA this React Native pull request: $ARGUMENTS
 > MCP tools (`rn_session`, `cdp_*`, `device_*`) are not available in spawned
 > subagents. Execute the protocol in this parent session.
 
-Load `rn-workflow`, `rn-testing`, and `rn-device-control`. Follow
-`agents/rn-pr-qa.md` in this session. Summary:
+Load `rn-workflow`, `rn-testing`, `rn-device-control`, and
+`capturing-proof`. Follow `agents/rn-pr-qa.md` in this session. Summary:
 
 1. **Parse `$ARGUMENTS`.** Require a GitHub PR URL, `owner/repo#n`, or
    number. Optional `--platform ios|android|device|all` (default `all`).
@@ -35,8 +35,12 @@ Load `rn-workflow`, `rn-testing`, and `rn-device-control`. Follow
    PR change (artifact-first; `cdp_login_prologue` for auth).
 7. **Cleanup** reverse-order: runner close → `stop_metro` →
    `restore_integration` → `release`. Remove only the worktree you added.
-8. **Report** a per-target table (PASS / FAIL / SKIP) with screenshot
-   paths, repro steps, and `cdp_error_log` on failures.
+8. **Report** on the PR with `gh pr comment --body-file` plus
+   `--attach` for every screenshot and video (GitHub CLI attaching-files
+   flow). Then rewrite screenshot markdown to
+   `<img src="…" alt="…" width="720">` via `--edit-last`. In-session,
+   print the verdict table and the comment URL. Never leave unhosted
+   `/tmp` paths as the reviewer-visible proof.
 
 ## Examples
 
@@ -48,7 +52,7 @@ Load `rn-workflow`, `rn-testing`, and `rn-device-control`. Follow
 
 ## Prerequisites
 
-- `gh` authenticated for the PR's repository
+- `gh` ≥ 2.99 with push access (`gh pr comment --help` lists `--attach`)
 - App (or workspace test-app) onboarded with `/rn-dev-agent:setup`
 - For iOS: Xcode + a simulator runtime
 - For Android emulator: Android SDK + a booted or bootable AVD
@@ -61,4 +65,5 @@ Load `rn-workflow`, `rn-testing`, and `rn-device-control`. Follow
 - Stand-alone verdict for the PR URL + head SHA
 - Per-target PASS / FAIL / SKIP with evidence
 - Repro steps a human can follow
-- Screenshot and log paths the tools actually wrote
+- GitHub comment with hosted screenshots (`<img width="720">`) and
+  attached videos (player embed), not raw local paths

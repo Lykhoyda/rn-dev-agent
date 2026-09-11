@@ -34,17 +34,21 @@ Default platform is `all` — every target that can be proven present. A request
 | 4 | Establish the [run-workflow](../run-workflow/) operating sequence |
 | 5 | Bind one exact device, apply integration, run the managed package script |
 | 6 | Exercise the change (artifact-first; login via `cdp_login_prologue`) |
-| 7 | Reverse cleanup and print a per-target verdict table |
+| 7 | Reverse cleanup and post a GitHub comment with hosted screenshots and video |
 
 ## Output
 
 - Verdict for the PR URL + head SHA (`PASS` / `FAIL` / `PARTIAL` / `SKIP`)
-- Per-target evidence (screenshot path, route, error count)
+- Per-target evidence (hosted screenshot + video, route, error count)
 - Repro steps a human can follow
+- A `gh pr comment` with `--attach` for every screenshot and video, then
+  screenshot markdown rewritten to `<img … width="720">` so they are
+  reasonably large on GitHub. Videos stay as GitHub player embeds. Never
+  leave unhosted local paths as the reviewer-visible proof.
 
 ## Prerequisites
 
-- `gh` authenticated for the PR's repository
+- `gh` ≥ 2.99 with push access (`gh pr comment --help` lists `--attach`)
 - Project onboarded (`/rn-dev-agent:setup` or `$rn-dev-agent:setup`)
 - iOS: Xcode + a simulator runtime
 - Android emulator: Android SDK + AVD
