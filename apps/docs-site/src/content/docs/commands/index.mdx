@@ -1,18 +1,18 @@
 ---
 title: Workflows
-description: 16 Claude slash commands with native explicit Codex skill parity.
+description: 17 Claude slash commands with native explicit Codex skill parity.
 ---
 
 ## Host invocation
 
-All sixteen workflows are first-class on both hosts:
+All seventeen workflows are first-class on both hosts:
 
 ```text
 Claude: /rn-dev-agent:<workflow> [arguments]
 Codex:  $rn-dev-agent:<workflow> [request text]
 ```
 
-Codex also has eleven domain skills, for exactly 27 native skills. Its workflow
+Codex also has eleven domain skills, for exactly 28 native skills. Its workflow
 skills are explicit-only and best-effort `source-command-*` migration is
 disabled. The primary workflow is `rn-feature-dev`; the same names below apply
 to both hosts.
@@ -22,6 +22,7 @@ to both hosts.
 | [`run-workflow`](/rn-dev-agent/commands/run-workflow/) | Establish the proven operating sequence before any real device journey |
 | [`rn-feature-dev`](/rn-dev-agent/commands/rn-feature-dev/) | Build a complete feature with the 8-phase pipeline |
 | [`test-feature`](/rn-dev-agent/commands/test-feature/) | Test an already-implemented feature end-to-end |
+| [`qa-pr`](/rn-dev-agent/commands/qa-pr/) | Device-test a GitHub PR on simulator, emulator, and/or physical device |
 | [`build-and-test`](/rn-dev-agent/commands/build-and-test/) | Build the app first, then test |
 | [`debug-screen`](/rn-dev-agent/commands/debug-screen/) | Diagnose a broken screen — gather evidence, apply fix |
 | [`observe`](/rn-dev-agent/commands/observe/) | Watch the agent live in a web UI — timeline, device mirror, state panels, browser-run actions |

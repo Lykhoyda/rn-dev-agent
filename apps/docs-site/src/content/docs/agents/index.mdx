@@ -1,9 +1,9 @@
 ---
 title: Agents
-description: 5 specialized agents — 3 spawnable for parallel codebase analysis, 2 parent-session-only for live device testing and debugging.
+description: 6 specialized agents — 3 spawnable for parallel codebase analysis, 3 parent-session-only for live device testing, PR QA, and debugging.
 ---
 
-The plugin has **5 agents** split into two categories based on what tools they need.
+The plugin has **6 agents** split into two categories based on what tools they need.
 
 ## Spawnable agents (read-only)
 
@@ -22,6 +22,7 @@ These agents' protocols require `cdp_*` / `device_*` MCP tools. **Do NOT spawn t
 | Agent | Model | Purpose | How to invoke |
 |-------|-------|---------|---------------|
 | [`rn-tester`](/rn-dev-agent/agents/rn-tester/) | Opus | 7-step test verification protocol | `/rn-dev-agent:test-feature` — runs inline |
+| [`rn-pr-qa`](/rn-dev-agent/agents/rn-pr-qa/) | Opus | Device-test a GitHub PR on simulator, emulator, and/or physical device | `/rn-dev-agent:qa-pr` — runs inline |
 | [`rn-debugger`](/rn-dev-agent/agents/rn-debugger/) | Opus | Parallel evidence gathering + targeted fix | `/rn-dev-agent:debug-screen` — runs inline |
 
 ## When agents are used
@@ -36,3 +37,4 @@ In the `rn-feature-dev` pipeline:
 Standalone:
 - `/rn-dev-agent:debug-screen` — runs the `rn-debugger` protocol inline
 - `/rn-dev-agent:test-feature` — runs the `rn-tester` protocol inline
+- `/rn-dev-agent:qa-pr` — runs the `rn-pr-qa` protocol inline

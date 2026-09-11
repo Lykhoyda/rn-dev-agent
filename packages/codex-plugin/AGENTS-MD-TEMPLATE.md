@@ -10,7 +10,7 @@ never be replaced.
 
 This project uses **rn-dev-agent** for React Native development, device control,
 live CDP introspection, reusable-action replay, and evidence capture. Codex uses
-the `cdp` MCP server, eleven domain skills, and sixteen explicit workflow skills.
+the `cdp` MCP server, eleven domain skills, and seventeen explicit workflow skills.
 Invoke a workflow as `$rn-dev-agent:<workflow> [request text]`.
 
 ### Mandatory preflight before app/device interaction
@@ -39,6 +39,7 @@ For a full build, test, or proof journey, run
 | Check the active app environment | `$rn-dev-agent:check-env` |
 | Build a feature | `$rn-dev-agent:rn-feature-dev <description>` |
 | Test an existing feature | `$rn-dev-agent:test-feature <description>` |
+| Device-test a GitHub PR | `$rn-dev-agent:qa-pr <PR URL or number>` |
 | Build/install then test | `$rn-dev-agent:build-and-test [--eas profile] <description>` |
 | Diagnose a broken screen | `$rn-dev-agent:debug-screen` |
 | List/replay reusable actions | `$rn-dev-agent:list-learned-actions` / `$rn-dev-agent:run-action` |

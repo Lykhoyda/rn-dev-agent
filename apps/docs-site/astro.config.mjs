@@ -12,7 +12,7 @@ export default defineConfig({
       plugins: [starlightLlmsTxt()],
       title: 'rn-dev-agent',
       description:
-        'Claude Code and Codex plugin for React Native development — 78 MCP tools, 5 agents, 16 commands. Explore, build, verify, and test features live on iOS Simulator and Android Emulator via Chrome DevTools Protocol.',
+        'Claude Code and Codex plugin for React Native development — 78 MCP tools, 6 agents, 17 commands. Explore, build, verify, and test features live on iOS Simulator and Android Emulator via Chrome DevTools Protocol.',
       social: [
         { icon: 'github', label: 'GitHub', href: 'https://github.com/Lykhoyda/rn-dev-agent' },
       ],
@@ -105,6 +105,7 @@ export default defineConfig({
                 { label: 'run-workflow', slug: 'commands/run-workflow' },
                 { label: 'rn-feature-dev', slug: 'commands/rn-feature-dev' },
                 { label: 'test-feature', slug: 'commands/test-feature' },
+                { label: 'qa-pr', slug: 'commands/qa-pr' },
                 { label: 'build-and-test', slug: 'commands/build-and-test' },
                 { label: 'debug-screen', slug: 'commands/debug-screen' },
                 { label: 'check-env', slug: 'commands/check-env' },
@@ -143,6 +144,7 @@ export default defineConfig({
               items: [
                 { label: 'Overview', slug: 'agents' },
                 { label: 'rn-tester', slug: 'agents/rn-tester' },
+                { label: 'rn-pr-qa', slug: 'agents/rn-pr-qa' },
                 { label: 'rn-debugger', slug: 'agents/rn-debugger' },
                 { label: 'rn-code-explorer', slug: 'agents/rn-code-explorer' },
                 { label: 'rn-code-architect', slug: 'agents/rn-code-architect' },
