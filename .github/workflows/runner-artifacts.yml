@@ -140,9 +140,11 @@ jobs:
           VERSION: ${{ steps.v.outputs.version }}
         run: |
           if ! gh release view "v$VERSION" >/dev/null 2>&1; then
+            # Notes from this version's CHANGELOG section; falls back to the fixed one-liner.
+            bash scripts/release-notes-from-changelog.sh "$VERSION" > release-notes.md
             gh release create "v$VERSION" \
               --title "v$VERSION" \
-              --notes "Prebuilt runner artifacts for v$VERSION (rn-fast-runner iOS, rn-android-runner)."
+              --notes-file release-notes.md
           fi
 
   build-ios:

@@ -302,7 +302,11 @@ function createFixture(options: FixtureOptions = {}): Fixture {
   }
   // Unrelated tracked file: a manifest commit must never carry anything else.
   write(seed, 'README.md', 'unrelated repository content\n');
-  for (const script of ['build-runner-manifest.mts', 'runner-manifest-publication.mts']) {
+  for (const script of [
+    'build-runner-manifest.mts',
+    'runner-manifest-publication.mts',
+    'release-notes-from-changelog.sh',
+  ]) {
     mkdirSync(join(seed, 'scripts'), { recursive: true });
     copyFileSync(join(repoRoot, 'scripts', script), join(seed, 'scripts', script));
   }
