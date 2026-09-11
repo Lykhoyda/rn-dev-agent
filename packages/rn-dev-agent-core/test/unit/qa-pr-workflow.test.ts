@@ -27,7 +27,12 @@ test('qa-pr workflow is registered and parent-session-only', () => {
 
   for (const host of ['shared-agent-knowledge', 'claude-plugin', 'codex-plugin'] as const) {
     const command = join(root, 'packages', host, 'commands/qa-pr.md');
-    const agentPath = join(root, 'packages', host === 'shared-agent-knowledge' ? 'shared-agent-knowledge' : host, 'agents/rn-pr-qa.md');
+    const agentPath = join(
+      root,
+      'packages',
+      host === 'shared-agent-knowledge' ? 'shared-agent-knowledge' : host,
+      'agents/rn-pr-qa.md',
+    );
     assert.equal(existsSync(command), true, command);
     assert.equal(existsSync(agentPath), true, agentPath);
   }
