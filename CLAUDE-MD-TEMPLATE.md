@@ -645,6 +645,7 @@ After implementing any feature, in this order:
 | `/rn-dev-agent:run-workflow [journey]` | Before any real device journey — validates and establishes the proven operating sequence (declared package manager + deps, typed session recovery, one exclusive device, managed Metro, reverse cleanup) |
 | `/rn-dev-agent:rn-feature-dev <desc>` | Building a new feature end-to-end (8-phase pipeline: explore, design, implement, verify) |
 | `/rn-dev-agent:test-feature` | Feature is implemented, need to verify it works on simulator |
+| `/rn-dev-agent:qa-pr <PR>` | Device-test a GitHub PR on simulator, emulator, and/or physical device |
 | `/rn-dev-agent:build-and-test` | Need to build from scratch (EAS/local), install, and test |
 | `/rn-dev-agent:debug-screen` | Screen is broken, blank, or showing unexpected content |
 | `/rn-dev-agent:check-env` | Verify Metro, CDP, simulator are ready before starting work |

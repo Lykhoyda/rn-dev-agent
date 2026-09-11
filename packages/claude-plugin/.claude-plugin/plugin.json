@@ -34,12 +34,14 @@
   ],
   "agents": [
     "./agents/rn-tester.md",
+    "./agents/rn-pr-qa.md",
     "./agents/rn-debugger.md",
     "./agents/rn-code-explorer.md",
     "./agents/rn-code-architect.md",
     "./agents/rn-code-reviewer.md"
   ],
   "commands": [
+    "./commands/qa-pr.md",
     "./commands/test-feature.md",
     "./commands/debug-screen.md",
     "./commands/check-env.md",

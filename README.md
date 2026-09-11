@@ -59,7 +59,7 @@ benchmarks.
 | **Flows that repair themselves** | When a `testID` drifts, the saved action fuzzy-matches the live snapshot, patches its own YAML, and retries. Cosmetic drift is absorbed; genuinely broken product logic is surfaced, never auto-fixed |
 | **Minutes, not sessions** | Simple features land in 3–5 min, complex multi-step flows in 11–25 min. **Zero crashes and zero manual interventions across all 35 measured features** |
 | **iOS and Android, one contract** | In-tree XCTest and UiAutomator runners give real taps, typing, scrolling, and screenshots — shipped as prebuilt artifacts so first use skips the cold build |
-| **Both hosts, full parity** | Claude Code: 16 slash commands + 11 skills + 5 agents. Codex: 27 native skills (16 workflow + 11 domain). The same 81 MCP tools on both |
+| **Both hosts, full parity** | Claude Code: 17 slash commands + 11 skills + 6 agents. Codex: 28 native skills (17 workflow + 11 domain). The same 81 MCP tools on both |
 
 [Full benchmarks and methodology →](https://lykhoyda.github.io/rn-dev-agent/benchmarks/)
 
@@ -105,6 +105,7 @@ Claude spelling shown. Codex has native parity for every row — use `$rn-dev-ag
 |---------|---------|
 | `/rn-dev-agent:rn-feature-dev <desc>` | Full 8-phase feature pipeline |
 | `/rn-dev-agent:test-feature <desc>` | Test an already-implemented feature; auto-replays a matching saved action |
+| `/rn-dev-agent:qa-pr <PR>` | Device-test a GitHub PR on iOS simulator, Android emulator, and/or physical device |
 | `/rn-dev-agent:debug-screen` | Diagnose and fix a broken screen — parallel evidence from CDP + native logs + component tree |
 | `/rn-dev-agent:proof-capture <desc>` | Rehearsal-gated video + screenshots + generated PR body |
 | `/rn-dev-agent:observe` | Local web UI to **watch the agent live** — tool-call timeline, device mirror, route/store/component-tree panels, browser-triggered action and E2E replays ([guide](https://lykhoyda.github.io/rn-dev-agent/commands/observe/)) |
@@ -138,7 +139,7 @@ Claude spelling shown. Codex has native parity for every row — use `$rn-dev-ag
 | `/rn-dev-agent:check-vercel-rules` | Report drift between bundled best-practice rules and upstream |
 | `/rn-dev-agent:send-feedback` | Open a GitHub issue with sanitized environment context |
 
-Codex exposes exactly these 16 workflow skills plus 11 domain skills; install-time
+Codex exposes exactly these 17 workflow skills plus 11 domain skills; install-time
 `source-command-*` migration is deliberately disabled.
 
 The plugin also keeps a gitignored per-project troubleshooting memory
@@ -200,16 +201,17 @@ can't silently drift. [Full tool reference →](https://lykhoyda.github.io/rn-de
 </details>
 
 <details>
-<summary><strong>Five specialized agents</strong></summary>
+<summary><strong>Six specialized agents</strong></summary>
 
 Each runs a focused protocol: [tester](https://lykhoyda.github.io/rn-dev-agent/agents/rn-tester/),
+[PR QA](https://lykhoyda.github.io/rn-dev-agent/agents/rn-pr-qa/),
 [debugger](https://lykhoyda.github.io/rn-dev-agent/agents/rn-debugger/),
 [code explorer](https://lykhoyda.github.io/rn-dev-agent/agents/rn-code-explorer/),
 [architect](https://lykhoyda.github.io/rn-dev-agent/agents/rn-code-architect/),
 [reviewer](https://lykhoyda.github.io/rn-dev-agent/agents/rn-code-reviewer/).
 
-> **Note:** `rn-tester` and `rn-debugger` need MCP tools, which don't propagate to spawned
-> subagents — use `/rn-dev-agent:test-feature` and `/rn-dev-agent:debug-screen`, which run the
+> **Note:** `rn-tester`, `rn-pr-qa`, and `rn-debugger` need MCP tools, which don't propagate to spawned
+> subagents — use `/rn-dev-agent:test-feature`, `/rn-dev-agent:qa-pr`, and `/rn-dev-agent:debug-screen`, which run the
 > protocols inline (GH #31).
 
 </details>
@@ -404,7 +406,7 @@ store, each capped at 200 typed lifecycle events and 256 KB for reviewed feedbac
 | CDP rejected (1006) | Close React Native DevTools, Flipper, or Chrome DevTools |
 | Zustand store error | Add `global.__ZUSTAND_STORES__` ([setup](https://lykhoyda.github.io/rn-dev-agent/getting-started/#zustand-stores-one-bridge-call)) |
 | Plugin not detected (Claude) | `/plugin install rn-dev-agent@rn-dev-agent` then `/reload-plugins` |
-| Subagent says "MCP tools unavailable" | Never spawn `rn-tester`/`rn-debugger` via the Task tool — use `/rn-dev-agent:test-feature` or `/rn-dev-agent:debug-screen` instead (GH #31) |
+| Subagent says "MCP tools unavailable" | Never spawn `rn-tester`/`rn-pr-qa`/`rn-debugger` via the Task tool — use `/rn-dev-agent:test-feature`, `/rn-dev-agent:qa-pr`, or `/rn-dev-agent:debug-screen` instead (GH #31) |
 
 <details>
 <summary><strong>More: host recovery, device runners, wedged simulators</strong></summary>

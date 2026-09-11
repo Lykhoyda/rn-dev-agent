@@ -18,6 +18,7 @@ var WORKFLOW_SKILLS = [
   "nav-graph",
   "observe",
   "proof-capture",
+  "qa-pr",
   "rn-feature-dev",
   "run-action",
   "run-workflow",

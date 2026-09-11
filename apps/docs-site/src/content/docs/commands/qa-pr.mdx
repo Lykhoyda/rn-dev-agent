@@ -1,0 +1,54 @@
+---
+title: "qa-pr"
+description: "Device-test a GitHub pull request on simulator, emulator, and/or physical device."
+sidebar:
+  order: 1.5
+---
+
+Device-test a GitHub pull request. Pins the PR head in an isolated copy, installs through the rn-dev-agent session, exercises the change, and reports pass/fail with repro steps and screenshots.
+
+## Usage
+
+```
+Claude: /rn-dev-agent:qa-pr <PR URL or number> [--platform ios|android|device|all]
+Codex:  $rn-dev-agent:qa-pr <PR URL or number> [ios|android|device|all]
+```
+
+Default platform is `all` — every target that can be proven present. A requested target that is not on the machine is **SKIP** with the setup gap, not FAIL.
+
+## Examples
+
+```
+/rn-dev-agent:qa-pr 812
+/rn-dev-agent:qa-pr https://github.com/acme/app/pull/42 --platform ios
+/rn-dev-agent:qa-pr 42 --platform device
+```
+
+## What it does
+
+| Step | What happens |
+|------|-------------|
+| 1 | Fetch the PR with `gh pr view` |
+| 2 | Classify app-facing vs docs-only vs plugin-under-test-app |
+| 3 | Pin the head SHA in a disposable git worktree |
+| 4 | Establish the [run-workflow](../run-workflow/) operating sequence |
+| 5 | Bind one exact device, apply integration, run the managed package script |
+| 6 | Exercise the change (artifact-first; login via `cdp_login_prologue`) |
+| 7 | Reverse cleanup and print a per-target verdict table |
+
+## Output
+
+- Verdict for the PR URL + head SHA (`PASS` / `FAIL` / `PARTIAL` / `SKIP`)
+- Per-target evidence (screenshot path, route, error count)
+- Repro steps a human can follow
+
+## Prerequisites
+
+- `gh` authenticated for the PR's repository
+- Project onboarded (`/rn-dev-agent:setup` or `$rn-dev-agent:setup`)
+- iOS: Xcode + a simulator runtime
+- Android emulator: Android SDK + AVD
+- Physical: USB debugging, exclusive claim, exact serial
+- Pin-cache maestro-runner `>= 1.1.24`
+
+This command runs the [`rn-pr-qa`](../../agents/rn-pr-qa/) protocol inline in the parent session (GH #31).

@@ -43,10 +43,10 @@ if (!codexAdaptation) {
 const CODEX_COMMAND_SKILLS = codexAdaptation.commandSkills;
 if (
   !Array.isArray(CODEX_COMMAND_SKILLS) ||
-  CODEX_COMMAND_SKILLS.length !== 16 ||
-  new Set(CODEX_COMMAND_SKILLS).size !== 16
+  CODEX_COMMAND_SKILLS.length !== 17 ||
+  new Set(CODEX_COMMAND_SKILLS).size !== 17
 ) {
-  console.error('build-host-runtimes: Codex command-skill inventory must contain 16 unique names');
+  console.error('build-host-runtimes: Codex command-skill inventory must contain 17 unique names');
   process.exit(1);
 }
 const CODEX_DOMAIN_SKILLS = new Set(codexAdaptation.adaptedDomainSkills ?? []);
@@ -224,7 +224,7 @@ for (const file of RUNTIME_ENTRIES) {
   copyFileSync(join(codexRuntimeRoot, 'dist', file), join(claudeRuntimeRoot, 'dist', file));
 }
 
-// Generate the exact sixteen explicit-only Codex workflow skill adapters. The
+// Generate the exact seventeen explicit-only Codex workflow skill adapters. The
 // long workflow bodies stay in package-local commands/*.md; these marker-owned
 // wrappers provide a native $skill surface without relying on Codex's
 // best-effort command migration.

@@ -10,7 +10,7 @@ description: >
 
 # Using rn-dev-agent
 
-The Codex rn-dev-agent surface provides an MCP tool suite, **16 explicit workflow skills**, and **11 implicit domain skills**—exactly **27 native Codex skills**. The five packaged agent files are inline playbooks, not a native Codex subagent contract.
+The Codex rn-dev-agent surface provides an MCP tool suite, **17 explicit workflow skills**, and **11 implicit domain skills**—exactly **28 native Codex skills**. The six packaged agent files are inline playbooks, not a native Codex subagent contract.
 
 This skill is your front door. Before starting any RN work, use the decision tree below to route the user's intent to the right tool.
 
@@ -20,7 +20,7 @@ This skill is your front door. Before starting any RN work, use the decision tre
 
 Codex loads `.codex-plugin/plugin.json`, package-local `skills/`, and stable MCP
 server key `cdp` from `.mcp.json`. `No plugin hooks` is expected. Packaged
-`commands/*.md` are complete workflow playbooks reached through the sixteen
+`commands/*.md` are complete workflow playbooks reached through the seventeen
 native `$rn-dev-agent:<workflow>` skills; best-effort command migration is
 explicitly disabled, so `source-command-*` is not a supported vocabulary.
 
@@ -64,6 +64,11 @@ What is the user asking for?
 │   └─► $rn-dev-agent:test-feature <description>
 │       (Runs rn-tester protocol INLINE in parent session — MCP tools required.
 │        Step 0 is automatic artifact-first scan via list-learned-actions.)
+│
+├── QA a GitHub pull request on device
+│   └─► $rn-dev-agent:qa-pr <PR URL or number> [ios|android|device|all]
+│       (Runs rn-pr-qa protocol INLINE — pins the PR head, installs via
+│        rn-dev-agent, exercises the change on simulator/emulator/device.)
 │
 ├── BUILD + TEST (app not yet installed)
 │   └─► $rn-dev-agent:build-and-test <description>
@@ -192,8 +197,9 @@ read them as reference, execute the steps INLINE in the parent session.
 
 | Agent | Model | Purpose | How to invoke |
 |-------|-------|---------|-----------|
-| `rn-tester` | opus | Verify feature works live on device | Run `/test-feature` — protocol executes inline in parent session |
-| `rn-debugger` | opus | Diagnose broken screen, apply fix | Run `/debug-screen` — protocol executes inline in parent session |
+| `rn-tester` | opus | Verify feature works live on device | Run `$rn-dev-agent:test-feature` — protocol executes inline in parent session |
+| `rn-pr-qa` | opus | Device-test a GitHub PR on simulator, emulator, and/or physical device | Run `$rn-dev-agent:qa-pr` — protocol executes inline in parent session |
+| `rn-debugger` | opus | Diagnose broken screen, apply fix | Run `$rn-dev-agent:debug-screen` — protocol executes inline in parent session |
 
 ### Spawnable agents (read-only — safe to use via Task tool)
 
@@ -219,7 +225,7 @@ Agents skip this skill at the start of conversations. Don't.
 | "The user asked a specific question — I'll answer directly without routing" | You lose the workflow gates. `/rn-feature-dev` wouldn't skip Phase 5.5; neither should an ad-hoc answer. |
 | "I know what `cdp_store_state` does — skip reading rn-debugging" | Skills are not API docs. They contain the process knowledge (when to combine tools, when to fallback). You need that context. |
 | "The user said 'fix the bug' — I'll just edit the file directly" | Route to `$rn-dev-agent:debug-screen` which runs the rn-debugger protocol inline in the parent session. Enforces reproduce → diagnose → fix → verify. Never spawn `rn-debugger` via Task tool — MCP tools won't work (GH #31). |
-| "I'll spawn `rn-tester` via Task to verify while I work on something else" | You can't — MCP stdio doesn't propagate to Task-spawned subagents (GH #31). rn-tester and rn-debugger are parent-session-only protocol playbooks. Only `rn-code-explorer`, `rn-code-architect`, `rn-code-reviewer` are safe to spawn (they're read-only, no MCP). |
+| "I'll spawn `rn-tester` via Task to verify while I work on something else" | You can't — MCP stdio doesn't propagate to Task-spawned subagents (GH #31). rn-tester, rn-pr-qa, and rn-debugger are parent-session-only protocol playbooks. Only `rn-code-explorer`, `rn-code-architect`, `rn-code-reviewer` are safe to spawn (they're read-only, no MCP). |
 | "This is a trivial change — I'll skip Phase 5.5 verification" | Trivial changes are where verification gates matter most. They're the ones you tell yourself don't need testing. They do. |
 | "I got `HELPERS_NOT_INJECTED` — let me retry `cdp_status`" | Retrying `cdp_status` does NOT re-run helper injection if the bridge thinks it's connected; it just returns status. The plugin auto-retries injection internally on every gated call (see "Recovering from HELPERS_NOT_INJECTED" in the rn-debugging skill). If the auto-retry exhausted, switch to `device_*` tools (XCTest path — no helpers required) or call `cdp_reload`. Don't spin on `cdp_status`. |
 
@@ -234,7 +240,7 @@ If you notice yourself doing any of these at the start of an RN task, stop:
 - About to claim "feature works" without any `device_screenshot` or `cdp_*` output
 - Skipping `$rn-dev-agent:setup` because "tools probably work"
 - Starting feature development without `$rn-dev-agent:rn-feature-dev`
-- Spawning `rn-tester` or `rn-debugger` via Task tool — their protocols need MCP tools that don't propagate to subagents (GH #31). Run `/test-feature` or `/debug-screen` instead; the protocol executes inline in the parent session.
+- Spawning `rn-tester`, `rn-pr-qa`, or `rn-debugger` via Task tool — their protocols need MCP tools that don't propagate to subagents (GH #31). Run `$rn-dev-agent:test-feature`, `$rn-dev-agent:qa-pr`, or `$rn-dev-agent:debug-screen` instead; the protocol executes inline in the parent session.
 - Spawning an agent without the matching skill loaded in context
 - Answering "is this broken?" without running `cdp_status` first
 
