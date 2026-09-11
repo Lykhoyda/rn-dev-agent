@@ -104,7 +104,7 @@ test('batch find WITHOUT tap returns first match + ambiguity info instead of ref
     const env = JSON.parse(result.content[0].text);
     const step = batchResults(env)[0];
     assert.equal(step.success, true);
-    assert.equal(step.data.resolved, 'e0');
+    assert.equal(step.data.resolved, '@e0');
     assert.equal(step.data.ambiguous, true);
     assert.deepEqual(step.data.candidates, ['@e0', '@e1']);
   } finally {

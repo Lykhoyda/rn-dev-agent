@@ -10901,6 +10901,9 @@ function resolveScreenRect(entries) {
   }
   return extentToRect(right, bottom) ?? extentToRect(allRight, allBottom);
 }
+function pinnedElementRef(ref) {
+  return /^e\d+$/.test(ref) ? `@${ref}` : ref;
+}
 function lookupRef(ref) {
   const clean = ref.startsWith("@") ? ref.slice(1) : ref;
   return refMap.get(clean) ?? null;
@@ -29816,7 +29819,7 @@ import { execFile as execFileCb9 } from "node:child_process";
 import { promisify as promisify11 } from "node:util";
 function candidateFromNode(n) {
   return {
-    ref: n.ref,
+    ref: pinnedElementRef(n.ref),
     label: n.label,
     testID: n.identifier,
     type: n.type,
@@ -34602,7 +34605,7 @@ function buildRunIOSArgs(cliArgs, bundleId) {
   switch (cmd) {
     case "press":
     case "tap": {
-      const ref = positionals[0];
+      const ref = positionals[0] && pinnedElementRef(positionals[0]);
       if (ref && ref.startsWith("@")) {
         const center = isRefMapFresh() ? refCenter(ref) : null;
         if (!center) {
@@ -34640,7 +34643,7 @@ function buildRunIOSArgs(cliArgs, bundleId) {
     }
     case "fill":
     case "type": {
-      const ref = cliArgs[1];
+      const ref = cliArgs[1] && pinnedElementRef(cliArgs[1]);
       const text = cliArgs[2] ?? "";
       const flagArgs = cliArgs.slice(3);
       const delayRaw = optionValue(flagArgs, "--delay-ms");
@@ -34858,7 +34861,7 @@ function buildRunAndroidArgs(cliArgs, bundleId) {
   switch (cmd) {
     case "press":
     case "tap": {
-      const ref = positionals[0];
+      const ref = positionals[0] && pinnedElementRef(positionals[0]);
       if (ref && ref.startsWith("@")) {
         const includeSystemUi = cliArgs.includes("--include-system-ui");
         const center = isRefMapFresh() ? refCenter(ref) : null;
@@ -34893,7 +34896,7 @@ function buildRunAndroidArgs(cliArgs, bundleId) {
     }
     case "fill":
     case "type": {
-      const ref = cliArgs[1];
+      const ref = cliArgs[1] && pinnedElementRef(cliArgs[1]);
       const text = cliArgs[2] ?? "";
       const atX = optionValue(cliArgs, "--at-x");
       const atY = optionValue(cliArgs, "--at-y");
@@ -34939,7 +34942,8 @@ function buildRunAndroidArgs(cliArgs, bundleId) {
       return args;
     }
     case "longpress": {
-      const [target, yOrDuration, durationMaybe] = positionals;
+      const [rawTarget, yOrDuration, durationMaybe] = positionals;
+      const target = rawTarget && pinnedElementRef(rawTarget);
       if (target?.startsWith("@")) {
         const duration3 = Number(yOrDuration);
         const center = isRefMapFresh() ? refCenter(target) : null;
@@ -35290,7 +35294,7 @@ function selfHealEnabled(env) {
   return v !== "0" && v !== "false";
 }
 function tapRetryPolicy(cliArgs, builtCommand, x, y, _opts) {
-  const ref = cliArgs[1];
+  const ref = cliArgs[1] && pinnedElementRef(cliArgs[1]);
   const exactTarget = ref?.startsWith("@") ? getFreshRefTarget(ref) : null;
   const keyboardTarget = exactTarget?.snapshotElementType === "Key" || exactTarget?.snapshotElementType === "Keyboard" || cliArgs.includes(IME_KEY_FLAG);
   const verificationRequired = !keyboardTarget && RETRYABLE_TAP_COMMANDS.has(builtCommand) && !cliArgs.includes("--double-tap") && !cliArgs.includes("--count") && !cliArgs.includes("--hold-ms") && x !== void 0 && y !== void 0;
@@ -35365,7 +35369,8 @@ async function settleWithRetryIfNoChange(firstResult, _dispatch, ctx, policy, de
   return failClosed ? unverifiedInteractionResult(first.result, policy.targetKey, "no-ui-change") : flagNoUiChange(first.result, policy.targetKey);
 }
 function staleRefFail(ref, reason, cachedMetadata, candidates = []) {
-  const message = reason === "ambiguous" ? `Element at ref ${ref} is stale and re-resolution matched ${candidates.length} elements \u2014 refusing to guess-tap` : `Element at ref ${ref} no longer hittable \u2014 UI re-rendered since snapshot`;
+  const pinned = pinnedElementRef(ref);
+  const message = reason === "ambiguous" ? `Element at ref ${pinned} is stale and re-resolution matched ${candidates.length} elements \u2014 refusing to guess-tap` : `Element at ref ${pinned} no longer hittable \u2014 UI re-rendered since snapshot`;
   const hint = reason === "ambiguous" ? "Multiple elements share the cached identity. The ref-map was refreshed by this call \u2014 pick the intended ref from `candidates` and retry." : reason === "snapshot-failed" ? "Snapshot infrastructure failed during re-resolution. Check cdp_status / reopen the device session, then retry." : "Element not re-resolvable by identity (it changed or unmounted). Call device_snapshot action=snapshot and re-find the target.";
   return failResult(message, "STALE_REF", {
     cachedMetadata,
@@ -74684,6 +74689,7 @@ function createDeviceScreenshotHandler(_getClient) {
 }
 
 // packages/rn-dev-agent-core/dist/tools/device-batch.js
+init_fast_runner_ref_map();
 var INTERACTIVE_A11Y_TYPES = /* @__PURE__ */ new Set([
   "Button",
   "TextField",
@@ -74716,7 +74722,7 @@ function salientizeSnapshotData(data) {
       continue;
     const entry = {};
     if (n.ref)
-      entry.ref = n.ref;
+      entry.ref = pinnedElementRef(String(n.ref));
     if (type)
       entry.type = type;
     if (typeof n.label === "string" && n.label)
@@ -74783,7 +74789,7 @@ async function resolveTestIDViaSnapshot(testID) {
 function ambiguousTestIDFail(testID, refs) {
   return failResult(`testID "${testID}" matches ${refs.length} elements \u2014 refusing to guess-tap`, "AMBIGUOUS_TESTID", {
     testID,
-    candidates: refs.slice(0, 5).map((r) => `@${r}`),
+    candidates: refs.slice(0, 5).map((r) => pinnedElementRef(r)),
     hint: "Make the testID unique, or target a specific @ref from device_snapshot instead."
   });
 }
@@ -74846,11 +74852,11 @@ async function executeStep(step, getClient2, abortSignal) {
           });
         }
         if (step.tap)
-          return guardedBatchPress(["press", `@${ref}`], stepSettleOpts(step), getClient2);
+          return guardedBatchPress(["press", pinnedElementRef(ref)], stepSettleOpts(step), getClient2);
         return okResult({
-          resolved: ref,
+          resolved: pinnedElementRef(ref),
           testID: step.testID,
-          ...refs.length > 1 ? { ambiguous: true, candidates: refs.slice(0, 5).map((r) => `@${r}`) } : {},
+          ...refs.length > 1 ? { ambiguous: true, candidates: refs.slice(0, 5).map((r) => pinnedElementRef(r)) } : {},
           snapshotEnvelopePreviewBytes: envelope?.length ?? 0
         });
       }
@@ -74891,7 +74897,7 @@ async function executeStep(step, getClient2, abortSignal) {
             testID: step.testID
           });
         }
-        return guardedBatchPress(["press", `@${ref}`], stepSettleOpts(step), getClient2);
+        return guardedBatchPress(["press", pinnedElementRef(ref)], stepSettleOpts(step), getClient2);
       }
       if (step.ref) {
         const ref = step.ref.startsWith("@") ? step.ref : `@${step.ref}`;
@@ -97052,7 +97058,7 @@ trackedTool("device_find", 'Find a UI element by visible text and optionally int
   includeSystemUi: external_exports.boolean().optional().describe("Include Android system UI in matching (default false; may leave the app).")
 }, createDeviceFindHandler(getClient));
 trackedTool("device_press", 'Tap a UI element by its @ref from device_snapshot, or at explicit raw x/y coordinates. Exact raw control can operate without a managed Metro target and always labels meta.originAuthority as proven or not-proven; not-proven results are never strict source evidence. Pass exactly one target form. On iOS, a latest-snapshot Key/Keyboard ref is runner-validated against the current live keyboard and activated exactly once (meta.keyboardGuard="keyboard_target"); stale, forged, missing-keyboard, or raw-coordinate targets never receive that exemption. Ordinary app-content taps dismiss only through a safe native hide/dismiss control or optional JS tier, then refresh and uniquely re-resolve before one tap. Supports double-tap, repeated taps, long hold, and post-tap focus settle. Requires an open session. Stale ordinary app @refs self-heal by identity re-resolution (meta.reResolved); stale iOS Key/Keyboard refs refuse with KEYBOARD_TARGET_STALE and mutation:none. A command is never replayed after a possible dispatch; uncertain Android effects fail with one-attempt typed uncertainty. On Android the tap is scoped to the owned app window: a @ref belonging to another package (system navigation, IME, dialogs) is refused with OUTSIDE_APP_WINDOW \u2014 use device_find with includeSystemUi=true and action="click" for system UI.', {
-  ref: external_exports.string().optional().describe('Element ref from device_snapshot (e.g. "e3" or "@e3"). Omit when using x/y.'),
+  ref: external_exports.string().optional().describe('Snapshot element ref "@e3" ("e3" accepted). Omit when using x/y.'),
   x: external_exports.number().optional().describe("Raw tap X coordinate; requires y and no ref"),
   y: external_exports.number().optional().describe("Raw tap Y coordinate; requires x and no ref"),
   doubleTap: external_exports.boolean().optional().describe("Use double-tap gesture"),
@@ -97388,7 +97394,7 @@ trackedTool("device_batch", "Execute a sequence of exact-device UI interactions 
       "screenshot"
     ]).describe("Step action"),
     text: external_exports.string().optional().describe("(find) Visible text to match. (fill) Text to type into the field."),
-    ref: external_exports.string().optional().describe('(press/fill) Element ref from snapshot (e.g. "e5"). Beware: refs can go stale across step transitions; prefer testID for cross-step actions.'),
+    ref: external_exports.string().optional().describe('(press/fill) Snapshot ref "@e5" ("e5" accepted). Refs go stale across steps; prefer testID.'),
     x: external_exports.number().optional().describe("(press) Raw X coordinate; requires y and no ref/testID"),
     y: external_exports.number().optional().describe("(press) Raw Y coordinate; requires x and no ref/testID"),
     testID: external_exports.string().optional().describe("(find/press/fill) PREFERRED exact identity. Fill still requires text and calls the same exact-fill coordinator as device_fill."),

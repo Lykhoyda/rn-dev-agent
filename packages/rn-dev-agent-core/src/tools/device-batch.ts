@@ -16,6 +16,7 @@ import {
   surfaceKeyboardGuard,
 } from '../runners/keyboard-guard.js';
 import { captureAndResizeScreenshot } from './device-list.js';
+import { pinnedElementRef } from '../fast-runner-ref-map.js';
 
 export interface BatchStep {
   action:
@@ -126,7 +127,7 @@ export function salientizeSnapshotData(data: unknown): unknown {
     // alone would strand the agent ("nothing to tap here") on a real control.
     if (!INTERACTIVE_A11Y_TYPES.has(type) && !identifier) continue;
     const entry: Record<string, unknown> = {};
-    if (n.ref) entry.ref = n.ref;
+    if (n.ref) entry.ref = pinnedElementRef(String(n.ref));
     if (type) entry.type = type;
     if (typeof n.label === 'string' && n.label) entry.label = n.label;
     if (identifier) entry.identifier = identifier;
@@ -248,7 +249,7 @@ function ambiguousTestIDFail(testID: string, refs: string[]): ToolResult {
     'AMBIGUOUS_TESTID',
     {
       testID,
-      candidates: refs.slice(0, 5).map((r) => `@${r}`),
+      candidates: refs.slice(0, 5).map((r) => pinnedElementRef(r)),
       hint: 'Make the testID unique, or target a specific @ref from device_snapshot instead.',
     },
   );
@@ -353,12 +354,16 @@ async function executeStep(
           );
         }
         if (step.tap)
-          return guardedBatchPress(['press', `@${ref}`], stepSettleOpts(step), getClient);
+          return guardedBatchPress(
+            ['press', pinnedElementRef(ref)],
+            stepSettleOpts(step),
+            getClient,
+          );
         return okResult({
-          resolved: ref,
+          resolved: pinnedElementRef(ref),
           testID: step.testID,
           ...(refs.length > 1
-            ? { ambiguous: true, candidates: refs.slice(0, 5).map((r) => `@${r}`) }
+            ? { ambiguous: true, candidates: refs.slice(0, 5).map((r) => pinnedElementRef(r)) }
             : {}),
           snapshotEnvelopePreviewBytes: envelope?.length ?? 0,
         });
@@ -405,7 +410,7 @@ async function executeStep(
             },
           );
         }
-        return guardedBatchPress(['press', `@${ref}`], stepSettleOpts(step), getClient);
+        return guardedBatchPress(['press', pinnedElementRef(ref)], stepSettleOpts(step), getClient);
       }
       if (step.ref) {
         const ref = step.ref.startsWith('@') ? step.ref : `@${step.ref}`;
