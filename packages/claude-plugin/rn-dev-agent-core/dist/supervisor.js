@@ -13874,7 +13874,17 @@ function iosSimulatorDevMenuDefaultsArgs(deviceId, appId) {
   return [
     ["EXDevMenuShowsAtLaunch", "NO"],
     ["EXDevMenuIsOnboardingFinished", "YES"]
-  ].map(([key, value]) => ["simctl", "spawn", deviceId, "defaults", "write", appId, key, "-bool", value]);
+  ].map(([key, value]) => [
+    "simctl",
+    "spawn",
+    deviceId,
+    "defaults",
+    "write",
+    appId,
+    key,
+    "-bool",
+    value
+  ]);
 }
 function withDevMenuOnboardingDisabled(url) {
   let parsed;
