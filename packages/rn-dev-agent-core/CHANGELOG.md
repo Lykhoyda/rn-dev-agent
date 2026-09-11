@@ -1,5 +1,12 @@
 # rn-dev-agent-core
 
+## 1.0.8
+
+### Patch Changes
+
+- f1d414e: Print snapshot and find element refs as `@eN`, matching the pinned form the current frame authorises for press, and accept a copied bare `eN` at the argv boundary (GH #979).
+- fa2cd21: Refuse managed-dev-client replay of flows that clear app state, and make login-path refusals name the actual next step.
+
 ## 1.0.7
 
 ### Patch Changes

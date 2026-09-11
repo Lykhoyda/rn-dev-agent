@@ -1,6 +1,6 @@
 {
   "name": "rn-dev-agent-core",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "type": "module",
   "main": "dist/index.js",
   "bin": {
